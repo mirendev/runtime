@@ -82,6 +82,57 @@ func TestASM(t *testing.T) {
 		r.Equal(s.Thing.name, "blah")
 	})
 
+	t.Run("can resolve a pointer directly", func(t *testing.T) {
+		type thing struct {
+			Name string `asm:"name"`
+		}
+
+		r := require.New(t)
+
+		var reg Registry
+		reg.Provide(func() *thing { return &thing{} })
+		reg.Register("name", "blah")
+
+		var x *thing
+
+		err := reg.Resolve(&x)
+		r.NoError(err)
+
+		r.NotNil(x)
+		r.Equal(x.Name, "blah")
+	})
+
+	t.Run("returns the same value when using a provider", func(t *testing.T) {
+		type thing struct {
+			Name string `asm:"name"`
+		}
+
+		r := require.New(t)
+
+		var reg Registry
+		reg.Provide(func() *thing { return &thing{} })
+		reg.Register("name", "blah")
+
+		var s struct {
+			Thing *thing
+		}
+
+		err := reg.Populate(&s)
+		r.NoError(err)
+
+		r.NotNil(s.Thing)
+		r.Equal(s.Thing.Name, "blah")
+
+		var s2 struct {
+			Thing *thing
+		}
+
+		err = reg.Populate(&s2)
+		r.NoError(err)
+
+		r.Same(s.Thing, s2.Thing)
+	})
+
 	t.Run("can build and populate all at once", func(t *testing.T) {
 		type thing struct {
 			Name string `asm:"name"`
@@ -90,7 +141,7 @@ func TestASM(t *testing.T) {
 		r := require.New(t)
 
 		var reg Registry
-		reg.Add(func() *thing { return &thing{} })
+		reg.Provide(func() *thing { return &thing{} })
 		reg.Register("name", "blah")
 
 		var s struct {
@@ -112,7 +163,7 @@ func TestASM(t *testing.T) {
 		r := require.New(t)
 
 		var reg Registry
-		reg.Add(func() (*thing, error) { return &thing{}, nil })
+		reg.Provide(func() (*thing, error) { return &thing{}, nil })
 		reg.Register("name", "blah")
 
 		var s struct {
@@ -134,7 +185,7 @@ func TestASM(t *testing.T) {
 		r := require.New(t)
 
 		var reg Registry
-		reg.Add(func() (*thing, error) { return &thing{}, fmt.Errorf("errrer") })
+		reg.Provide(func() (*thing, error) { return &thing{}, fmt.Errorf("errrer") })
 		reg.Register("name", "blah")
 
 		var s struct {

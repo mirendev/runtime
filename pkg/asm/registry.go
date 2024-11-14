@@ -7,7 +7,9 @@ import (
 
 type Registry struct {
 	components map[string]interface{}
-	builders   map[reflect.Type]reflect.Value
+
+	built    []reflect.Value
+	builders map[reflect.Type]reflect.Value
 }
 
 func (r *Registry) Register(name string, component interface{}) {
@@ -18,6 +20,12 @@ func (r *Registry) Register(name string, component interface{}) {
 }
 
 func (r *Registry) buildByType(field reflect.Value) (reflect.Value, error) {
+	for _, v := range r.built {
+		if isAssignableTo(v.Type(), field.Type()) {
+			return v, nil
+		}
+	}
+
 	builder, ok := r.builders[field.Type()]
 	if !ok {
 		return reflect.Value{}, fmt.Errorf("no builder for %q", field.Type())
@@ -31,6 +39,8 @@ func (r *Registry) buildByType(field reflect.Value) (reflect.Value, error) {
 	}
 
 	ret := result[0]
+
+	r.built = append(r.built, ret)
 
 	err := r.Populate(ret.Interface())
 	if err != nil {
@@ -83,6 +93,16 @@ func (r *Registry) RunHooks(s any) error {
 	return nil
 }
 
+func (r *Registry) Resolve(s interface{}) error {
+	rv := reflect.ValueOf(s)
+
+	if rv.Kind() != reflect.Ptr {
+		return fmt.Errorf("expected a pointer, got %T", s)
+	}
+
+	return r.populateByType(rv.Elem())
+}
+
 func (r *Registry) Populate(s interface{}) error {
 	rv := reflect.ValueOf(s)
 
@@ -129,7 +149,7 @@ fields:
 	return r.RunHooks(s)
 }
 
-func (r *Registry) Add(f interface{}) {
+func (r *Registry) Provide(f interface{}) {
 	v := reflect.ValueOf(f)
 	t := v.Type()
 
@@ -146,4 +166,10 @@ func (r *Registry) Add(f interface{}) {
 	}
 
 	r.builders[t.Out(0)] = v
+}
+
+func Pick[T any](r *Registry) (T, error) {
+	var t T
+	err := r.Resolve(&t)
+	return t, err
 }

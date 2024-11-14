@@ -6,6 +6,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+
+	"github.com/tonistiigi/fsutil"
 )
 
 func MakeTar(dir string) (io.Reader, error) {
@@ -93,4 +95,43 @@ func TarToMap(r io.Reader) (map[string][]byte, error) {
 	}
 
 	return m, nil
+}
+
+func TarFS(r io.Reader, dir string) (fsutil.FS, error) {
+	gzr, err := gzip.NewReader(r)
+	if err != nil {
+		return nil, err
+	}
+
+	tr := tar.NewReader(gzr)
+
+	for {
+		th, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return nil, err
+		}
+
+		path := filepath.Join(dir, th.Name)
+		if th.Typeflag == tar.TypeDir {
+			if err := os.Mkdir(path, 0755); err != nil {
+				return nil, err
+			}
+		}
+
+		if th.Typeflag == tar.TypeReg {
+			f, err := os.Create(path)
+			if err != nil {
+				return nil, err
+			}
+
+			if _, err := io.Copy(f, tr); err != nil {
+				return nil, err
+			}
+		}
+	}
+
+	return fsutil.NewFS(dir)
 }

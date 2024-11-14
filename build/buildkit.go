@@ -1,19 +1,16 @@
 package build
 
 import (
-	"archive/tar"
-	"compress/gzip"
 	"context"
 	"io"
 	"os"
-	"path/filepath"
+	"sync"
 
 	"github.com/moby/buildkit/client"
 	gateway "github.com/moby/buildkit/frontend/gateway/client"
 	"github.com/moby/buildkit/identity"
 	"github.com/moby/buildkit/util/progress/progresswriter"
 
-	"github.com/pkg/errors"
 	"github.com/tonistiigi/fsutil"
 )
 
@@ -30,59 +27,39 @@ func NewBuildkit(ctx context.Context, cl *client.Client, tempdir string) (*Build
 	return bk, nil
 }
 
-func (b *Buildkit) Transform(ctx context.Context, r io.Reader) (io.Reader, error) {
-	gzr, err := gzip.NewReader(r)
-	if err != nil {
-		return nil, err
+type tarOutput struct {
+	rc    io.ReadCloser
+	mu    sync.Mutex
+	bgErr error
+}
+
+func (t *tarOutput) Read(p []byte) (int, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	if t.bgErr != nil {
+		return 0, t.bgErr
+	}
+	return t.rc.Read(p)
+}
+
+func (t *tarOutput) Close() error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	pe := t.rc.Close()
+
+	if t.bgErr != nil {
+		return t.bgErr
 	}
 
-	tr := tar.NewReader(gzr)
+	return pe
+}
 
-	dir, err := os.MkdirTemp(b.dir, "build")
-	if err != nil {
-		return nil, err
-	}
-
-	defer os.RemoveAll(dir)
-
-	for {
-		th, err := tr.Next()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return nil, err
-		}
-
-		path := filepath.Join(dir, th.Name)
-		if th.Typeflag == tar.TypeDir {
-			if err := os.Mkdir(path, 0755); err != nil {
-				return nil, err
-			}
-		}
-
-		if th.Typeflag == tar.TypeReg {
-			f, err := os.Create(path)
-			if err != nil {
-				return nil, err
-			}
-
-			if _, err := io.Copy(f, tr); err != nil {
-				return nil, err
-			}
-		}
-	}
-
-	mounts := map[string]fsutil.FS{}
-
-	mounts["dockerfile"], err = fsutil.NewFS(dir)
-	if err != nil {
-		return nil, errors.WithStack(err)
-	}
-
-	mounts["context"], err = fsutil.NewFS(dir)
-	if err != nil {
-		return nil, errors.WithStack(err)
+func (b *Buildkit) Transform(ctx context.Context, dfs fsutil.FS) (io.ReadCloser, error) {
+	mounts := map[string]fsutil.FS{
+		"dockerfile": dfs,
+		"context":    dfs,
 	}
 
 	r, w, err := os.Pipe()
@@ -104,6 +81,12 @@ func (b *Buildkit) Transform(ctx context.Context, r io.Reader) (io.Reader, error
 		LocalMounts: mounts,
 		Frontend:    "dockerfile.v0",
 		Ref:         ref,
+		/*
+			TODO(emp): add this when we're ready to support verifying and/or displaying sbom
+					FrontendAttrs: map[string]string{
+						"attest:sbom": "",
+					},
+		*/
 	}
 
 	sreq := gateway.SolveRequest{
@@ -119,17 +102,25 @@ func (b *Buildkit) Transform(ctx context.Context, r io.Reader) (io.Reader, error
 
 	mw := progresswriter.NewMultiWriter(pw)
 
-	_, err = b.cl.Build(ctx, solveOpt, "buildctl", func(ctx context.Context, c gateway.Client) (*gateway.Result, error) {
-		res, err := c.Solve(ctx, sreq)
-		if err != nil {
-			return nil, err
-		}
+	var to tarOutput
+	to.rc = r
 
-		return res, nil
-	}, progresswriter.ResetTime(mw.WithPrefix("", false)).Status())
-	if err != nil {
-		return nil, err
-	}
+	go func() {
+		defer w.Close()
 
-	return r, nil
+		_, err = b.cl.Build(ctx, solveOpt, "miren", func(ctx context.Context, c gateway.Client) (*gateway.Result, error) {
+			res, err := c.Solve(ctx, sreq)
+			if err != nil {
+				return nil, err
+			}
+
+			return res, nil
+		}, progresswriter.ResetTime(mw.WithPrefix("", false)).Status())
+
+		to.mu.Lock()
+		to.bgErr = err
+		to.mu.Unlock()
+	}()
+
+	return &to, nil
 }
