@@ -20,6 +20,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"miren.dev/runtime/build"
+	"miren.dev/runtime/observability"
 	"miren.dev/runtime/pkg/asm"
 	"miren.dev/runtime/pkg/testutils"
 )
@@ -84,7 +85,7 @@ func TestContainerd(t *testing.T) {
 
 		reg := testutils.Registry()
 
-		var lm LogsMaintainer
+		var lm observability.LogsMaintainer
 
 		err := reg.Populate(&lm)
 		r.NoError(err)
@@ -217,7 +218,7 @@ func TestContainerd(t *testing.T) {
 
 		r.True(found, "address wasn't assigned")
 
-		var lr LogReader
+		var lr observability.LogReader
 
 		err = reg.Populate(&lr)
 		r.NoError(err)

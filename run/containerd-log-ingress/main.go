@@ -12,7 +12,7 @@ import (
 
 	"github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/containerd/containerd/runtime/v2/logging"
-	"miren.dev/runtime/run"
+	"miren.dev/runtime/observability"
 )
 
 var (
@@ -38,7 +38,7 @@ func main() {
 
 	fmt.Fprintf(f, "%q %q\n", *fDB, *fEnt)
 
-	var lw run.LogWriter
+	var lw observability.LogWriter
 	lw.DB = clickhouse.OpenDB(&clickhouse.Options{
 		Addr: []string{*fDB},
 		Auth: clickhouse.Auth{
