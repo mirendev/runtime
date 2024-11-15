@@ -5,6 +5,7 @@ import (
 	"io"
 	"log/slog"
 	"net/netip"
+	"os/exec"
 
 	containerd "github.com/containerd/containerd/v2/client"
 	tarchive "github.com/containerd/containerd/v2/core/transfer/archive"
@@ -15,6 +16,7 @@ import (
 	"github.com/containerd/platforms"
 	_ "github.com/moby/buildkit/client/connhelper/dockercontainer"
 	"github.com/moby/buildkit/identity"
+	"github.com/pkg/errors"
 )
 
 type ImageImporter struct {
@@ -70,14 +72,14 @@ func (c *ContainerRunner) RunContainer(ctx context.Context, config *ContainerCon
 
 	container, err := c.CC.NewContainer(ctx, config.Id, opts...)
 	if err != nil {
-		return "", err
+		return "", errors.Wrapf(err, "failed to create container %s", config.Id)
 	}
 
 	err = c.bootInitialTask(ctx, config, container)
 	if err != nil {
-		err = container.Delete(ctx, containerd.WithSnapshotCleanup)
-		if err != nil {
-			c.Log.Error("failed to cleanup container", "id", config.Id, "err", err)
+		derr := container.Delete(ctx, containerd.WithSnapshotCleanup)
+		if derr != nil {
+			c.Log.Error("failed to cleanup container", "id", config.Id, "err", derr)
 		}
 		return "", err
 	}
@@ -116,13 +118,17 @@ func (c *ContainerRunner) buildSpec(ctx context.Context, config *ContainerConfig
 
 func (c *ContainerRunner) bootInitialTask(ctx context.Context, config *ContainerConfig, container containerd.Container) error {
 	c.Log.Info("booting task")
-	task, err := container.NewTask(ctx, cio.LogFile("/tmp/containerd.log"))
-	/*
-		cio.BinaryIO(uri.Path, map[string]string{
-			"-d": db.DBPath(),
-			"-e": strconv.Itoa(int(cd.EntityId)),
+
+	exe, err := exec.LookPath("containerd-log-ingress")
+	if err != nil {
+		return err
+	}
+
+	task, err := container.NewTask(ctx,
+		cio.BinaryIO(exe, map[string]string{
+			"-d": "clickhouse:9000",
+			"-e": config.Id,
 		}))
-	*/
 	if err != nil {
 		return err
 	}

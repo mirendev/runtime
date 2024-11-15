@@ -26,7 +26,7 @@ func TestBuildKitLocal(t *testing.T) {
 
 		r := require.New(t)
 
-		cl, err := client.New(ctx, "docker-container://test-buildkit")
+		cl, err := client.New(ctx, "") // "docker-container://test-buildkit")
 		r.NoError(err)
 
 		bkl, err := NewBuildkit(ctx, cl, t.TempDir())
@@ -101,7 +101,7 @@ func TestBuildKitLocal(t *testing.T) {
 
 		r := require.New(t)
 
-		cl, err := client.New(ctx, "docker-container://test-buildkit")
+		cl, err := client.New(ctx, "") // "docker-container://test-buildkit")
 		r.NoError(err)
 
 		bkl, err := NewBuildkit(ctx, cl, t.TempDir())

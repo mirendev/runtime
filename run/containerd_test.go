@@ -1,16 +1,22 @@
 package run
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"net/netip"
 	"os"
+	"slices"
 	"testing"
 	"time"
 
 	containerd "github.com/containerd/containerd/v2/client"
+	"github.com/containerd/containerd/v2/pkg/cio"
 	"github.com/containerd/containerd/v2/pkg/namespaces"
+	"github.com/davecgh/go-spew/spew"
 	buildkit "github.com/moby/buildkit/client"
 	_ "github.com/moby/buildkit/client/connhelper/dockercontainer"
+	"github.com/opencontainers/runtime-spec/specs-go"
 
 	"github.com/stretchr/testify/require"
 	"miren.dev/runtime/build"
@@ -30,7 +36,7 @@ func TestContainerd(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 
-		cl, err := buildkit.New(ctx, "docker-container://test-buildkit")
+		cl, err := buildkit.New(ctx, "")
 		r.NoError(err)
 
 		bkl, err := build.NewBuildkit(ctx, cl, t.TempDir())
@@ -73,15 +79,23 @@ func TestContainerd(t *testing.T) {
 	t.Run("can run a container", func(t *testing.T) {
 		r := require.New(t)
 
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+
 		reg := testutils.Registry()
+
+		var lm LogsMaintainer
+
+		err := reg.Populate(&lm)
+		r.NoError(err)
+
+		err = lm.Setup(ctx)
+		r.NoError(err)
 
 		cc, err := asm.Pick[*containerd.Client](reg)
 		r.NoError(err)
 
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-
-		cl, err := buildkit.New(ctx, "docker-container://test-buildkit")
+		cl, err := buildkit.New(ctx, "")
 		r.NoError(err)
 
 		bkl, err := build.NewBuildkit(ctx, cl, t.TempDir())
@@ -109,6 +123,11 @@ func TestContainerd(t *testing.T) {
 		err = ii.ImportImage(ctx, o, "mn-nginx:latest")
 		r.NoError(err)
 
+		ctx = namespaces.WithNamespace(ctx, ii.Namespace)
+
+		_, err = cc.GetImage(ctx, "mn-nginx:latest")
+		r.NoError(err)
+
 		var cr ContainerRunner
 
 		err = reg.Populate(&cr)
@@ -133,11 +152,79 @@ func TestContainerd(t *testing.T) {
 		id, err := cr.RunContainer(ctx, config)
 		r.NoError(err)
 
-		ctx = namespaces.WithNamespace(ctx, ii.Namespace)
+		spew.Dump(config)
 
 		c, err := cc.LoadContainer(ctx, id)
 		r.NoError(err)
 
 		r.NotNil(c)
+
+		task, err := c.Task(ctx, nil)
+		r.NoError(err)
+
+		var output bytes.Buffer
+
+		ioc := cio.NewCreator(cio.WithStreams(os.Stdin, &output, os.Stderr))
+
+		proc, err := task.Exec(ctx, "test", &specs.Process{
+			Args: []string{"ip", "-j", "addr"},
+			Env:  []string{"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"},
+			Cwd:  "/",
+		}, ioc)
+		r.NoError(err)
+
+		err = proc.Start(ctx)
+		r.NoError(err)
+
+		ch, err := proc.Wait(ctx)
+		r.NoError(err)
+
+		select {
+		case <-ctx.Done():
+			r.NoError(ctx.Err())
+		case <-ch:
+			// ok
+		}
+
+		type ai struct {
+			Label   string `json:"label"`
+			Address string `json:"local"`
+		}
+
+		type iface struct {
+			Name      string `json:"ifname"`
+			Addresses []ai   `json:"addr_info"`
+		}
+
+		var ais []iface
+
+		err = json.Unmarshal(output.Bytes(), &ais)
+		r.NoError(err)
+
+		i := slices.IndexFunc(ais, func(iface iface) bool {
+			return iface.Name == "eth0"
+		})
+
+		r.NotEqual(-1, i)
+
+		var found bool
+
+		for _, ai := range ais[i].Addresses {
+			if ai.Address == ca.Addr().String() {
+				found = true
+			}
+		}
+
+		r.True(found, "address wasn't assigned")
+
+		var lr LogReader
+
+		err = reg.Populate(&lr)
+		r.NoError(err)
+
+		entries, err := lr.Read(ctx, id)
+		r.NoError(err)
+
+		r.NotEmpty(entries)
 	})
 }

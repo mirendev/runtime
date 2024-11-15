@@ -1,19 +1,23 @@
 package testutils
 
 import (
+	"database/sql"
 	"log/slog"
 	"os"
+	"time"
 
 	containerd "github.com/containerd/containerd/v2/client"
 	"miren.dev/runtime/pkg/asm"
 	"miren.dev/runtime/pkg/slogfmt"
+
+	clickhouse "github.com/ClickHouse/clickhouse-go/v2"
 )
 
 func Registry() *asm.Registry {
 	var r asm.Registry
 
 	r.Provide(func() (*containerd.Client, error) {
-		return containerd.New("/home/evanphx/tmp/miren-tmp/containerd/container.sock")
+		return containerd.New("/run/containerd.sock")
 	})
 
 	r.Register("namespace", "miren-test")
@@ -23,6 +27,22 @@ func Registry() *asm.Registry {
 	}))
 
 	r.Register("log", log)
+
+	r.ProvideName("clickhouse", func() *sql.DB {
+		return clickhouse.OpenDB(&clickhouse.Options{
+			Addr: []string{"clickhouse:9000"},
+			Auth: clickhouse.Auth{
+				Database: "default",
+				Username: "default",
+				Password: "",
+			},
+			DialTimeout: time.Second * 30,
+			Compression: &clickhouse.Compression{
+				Method: clickhouse.CompressionLZ4,
+			},
+			Debug: true,
+		})
+	})
 
 	return &r
 }

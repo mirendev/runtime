@@ -5,11 +5,21 @@ import (
 	"reflect"
 )
 
+type builderKey struct {
+	typ  reflect.Type
+	name string
+}
+
+type builtValue struct {
+	val  reflect.Value
+	name string
+}
+
 type Registry struct {
 	components map[string]interface{}
 
-	built    []reflect.Value
-	builders map[reflect.Type]reflect.Value
+	built    []builtValue
+	builders map[builderKey]reflect.Value
 }
 
 func (r *Registry) Register(name string, component interface{}) {
@@ -19,14 +29,18 @@ func (r *Registry) Register(name string, component interface{}) {
 	r.components[name] = component
 }
 
-func (r *Registry) buildByType(field reflect.Value) (reflect.Value, error) {
+func canPopulate(rv reflect.Value) bool {
+	return reflect.Indirect(rv).Kind() == reflect.Struct
+}
+
+func (r *Registry) buildByType(field reflect.Value, tag string) (reflect.Value, error) {
 	for _, v := range r.built {
-		if isAssignableTo(v.Type(), field.Type()) {
-			return v, nil
+		if isAssignableTo(v.val.Type(), field.Type()) {
+			return v.val, nil
 		}
 	}
 
-	builder, ok := r.builders[field.Type()]
+	builder, ok := r.builders[builderKey{field.Type(), tag}]
 	if !ok {
 		return reflect.Value{}, fmt.Errorf("no builder for %q", field.Type())
 	}
@@ -40,11 +54,13 @@ func (r *Registry) buildByType(field reflect.Value) (reflect.Value, error) {
 
 	ret := result[0]
 
-	r.built = append(r.built, ret)
+	r.built = append(r.built, builtValue{ret, tag})
 
-	err := r.Populate(ret.Interface())
-	if err != nil {
-		return reflect.Value{}, err
+	if canPopulate(ret) {
+		err := r.Populate(ret.Interface())
+		if err != nil {
+			return reflect.Value{}, err
+		}
 	}
 
 	return ret, nil
@@ -62,7 +78,7 @@ func isAssignableTo(a, b reflect.Type) bool {
 	return a.AssignableTo(b)
 }
 
-func (r *Registry) populateByType(field reflect.Value) error {
+func (r *Registry) populateByType(field reflect.Value, tag string) error {
 	for _, v := range r.components {
 		cv := reflect.ValueOf(v)
 
@@ -72,7 +88,7 @@ func (r *Registry) populateByType(field reflect.Value) error {
 		}
 	}
 
-	ret, err := r.buildByType(field)
+	ret, err := r.buildByType(field, tag)
 	if err == nil {
 		field.Set(ret)
 		return nil
@@ -100,7 +116,7 @@ func (r *Registry) Resolve(s interface{}) error {
 		return fmt.Errorf("expected a pointer, got %T", s)
 	}
 
-	return r.populateByType(rv.Elem())
+	return r.populateByType(rv.Elem(), "")
 }
 
 func (r *Registry) Populate(s interface{}) error {
@@ -123,7 +139,7 @@ fields:
 
 		tag, ok := fieldType.Tag.Lookup("asm")
 		if !ok {
-			err := r.populateByType(field)
+			err := r.populateByType(field, "")
 			if err != nil {
 				return err
 			}
@@ -132,7 +148,7 @@ fields:
 
 		component, ok := r.components[tag]
 		if !ok {
-			err := r.populateByType(field)
+			err := r.populateByType(field, tag)
 			if err != nil {
 				return err
 			}
@@ -149,7 +165,7 @@ fields:
 	return r.RunHooks(s)
 }
 
-func (r *Registry) Provide(f interface{}) {
+func (r *Registry) ProvideName(name string, f interface{}) {
 	v := reflect.ValueOf(f)
 	t := v.Type()
 
@@ -162,10 +178,18 @@ func (r *Registry) Provide(f interface{}) {
 	}
 
 	if r.builders == nil {
-		r.builders = make(map[reflect.Type]reflect.Value)
+		r.builders = make(map[builderKey]reflect.Value)
 	}
 
-	r.builders[t.Out(0)] = v
+	if _, ok := r.builders[builderKey{t.Out(0), name}]; ok {
+		panic("existing builder for type: " + t.Out(0).String())
+	}
+
+	r.builders[builderKey{t.Out(0), name}] = v
+}
+
+func (r *Registry) Provide(f interface{}) {
+	r.ProvideName("", f)
 }
 
 func Pick[T any](r *Registry) (T, error) {

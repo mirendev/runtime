@@ -102,6 +102,25 @@ func TestASM(t *testing.T) {
 		r.Equal(x.Name, "blah")
 	})
 
+	t.Run("considers the name when running a provider", func(t *testing.T) {
+		type thing struct {
+			Name string `asm:"name"`
+		}
+
+		r := require.New(t)
+
+		var reg Registry
+		reg.ProvideName("name", func() string { return "miren" })
+		reg.ProvideName("blah", func() string { return "blah" })
+
+		var x thing
+
+		err := reg.Populate(&x)
+		r.NoError(err)
+
+		r.Equal(x.Name, "miren")
+	})
+
 	t.Run("returns the same value when using a provider", func(t *testing.T) {
 		type thing struct {
 			Name string `asm:"name"`
