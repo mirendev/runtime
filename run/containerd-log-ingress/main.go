@@ -38,7 +38,7 @@ func main() {
 
 	fmt.Fprintf(f, "%q %q\n", *fDB, *fEnt)
 
-	var lw observability.LogWriter
+	var lw observability.PersistentLogWriter
 	lw.DB = clickhouse.OpenDB(&clickhouse.Options{
 		Addr: []string{*fDB},
 		Auth: clickhouse.Auth{

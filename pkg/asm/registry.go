@@ -40,7 +40,23 @@ func (r *Registry) buildByType(field reflect.Value, tag string) (reflect.Value, 
 		}
 	}
 
-	builder, ok := r.builders[builderKey{field.Type(), tag}]
+	var (
+		builder reflect.Value
+		ok      bool
+	)
+
+	for k, v := range r.builders {
+		if tag != "" && k.name != tag {
+			continue
+		}
+
+		if isAssignableTo(field.Type(), k.typ) {
+			ok = true
+			builder = v
+			break
+		}
+	}
+
 	if !ok {
 		return reflect.Value{}, fmt.Errorf("no builder for %q", field.Type())
 	}
@@ -109,14 +125,32 @@ func (r *Registry) RunHooks(s any) error {
 	return nil
 }
 
-func (r *Registry) Resolve(s interface{}) error {
+func (r *Registry) Resolve(s any) error {
 	rv := reflect.ValueOf(s)
 
 	if rv.Kind() != reflect.Ptr {
 		return fmt.Errorf("expected a pointer, got %T", s)
 	}
 
-	return r.populateByType(rv.Elem(), "")
+	err := r.populateByType(rv.Elem(), "")
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+var injectFuncType = reflect.TypeFor[func(*Registry) error]()
+
+func (r *Registry) Init(values ...any) error {
+	for _, v := range values {
+		err := r.Resolve(v)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 func (r *Registry) Populate(s interface{}) error {

@@ -2,27 +2,31 @@ package build
 
 import (
 	"context"
+	"encoding/json"
 	"io"
+	"log/slog"
 	"os"
 	"sync"
+	"time"
 
 	"github.com/moby/buildkit/client"
 	gateway "github.com/moby/buildkit/frontend/gateway/client"
 	"github.com/moby/buildkit/identity"
-	"github.com/moby/buildkit/util/progress/progresswriter"
+	"miren.dev/runtime/observability"
 
 	"github.com/tonistiigi/fsutil"
 )
 
 type Buildkit struct {
-	cl  *client.Client
-	dir string
+	Client *client.Client
+
+	Log       *slog.Logger
+	LogWriter observability.LogWriter
 }
 
 func NewBuildkit(ctx context.Context, cl *client.Client, tempdir string) (*Buildkit, error) {
 	bk := &Buildkit{
-		cl:  cl,
-		dir: tempdir,
+		Client: cl,
 	}
 	return bk, nil
 }
@@ -95,12 +99,12 @@ func (b *Buildkit) Transform(ctx context.Context, dfs fsutil.FS) (io.ReadCloser,
 	}
 
 	// not using shared context to not disrupt display but let is finish reporting errors
-	pw, err := progresswriter.NewPrinter(ctx, os.Stderr, "plain")
-	if err != nil {
-		return nil, err
-	}
+	//pw, err := progresswriter.NewPrinter(ctx, os.Stderr, "rawjson")
+	//if err != nil {
+	//return nil, err
+	//}
 
-	mw := progresswriter.NewMultiWriter(pw)
+	//mw := progresswriter.NewMultiWriter(pw)
 
 	var to tarOutput
 	to.rc = r
@@ -108,14 +112,38 @@ func (b *Buildkit) Transform(ctx context.Context, dfs fsutil.FS) (io.ReadCloser,
 	go func() {
 		defer w.Close()
 
-		_, err = b.cl.Build(ctx, solveOpt, "miren", func(ctx context.Context, c gateway.Client) (*gateway.Result, error) {
+		ctx, cancel := context.WithCancel(ctx)
+		defer cancel()
+
+		ssProgress := make(chan *client.SolveStatus, 1)
+
+		go func() {
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case ss := <-ssProgress:
+					if data, err := json.Marshal(ss); err != nil {
+						err := b.LogWriter.WriteEntry("build", ref, observability.LogEntry{
+							Timestamp: time.Now(),
+							Body:      string(data),
+						})
+						if err != nil {
+							b.Log.Error("failed to write log entry", "err", err)
+						}
+					}
+				}
+			}
+		}()
+
+		_, err = b.Client.Build(ctx, solveOpt, "miren", func(ctx context.Context, c gateway.Client) (*gateway.Result, error) {
 			res, err := c.Solve(ctx, sreq)
 			if err != nil {
 				return nil, err
 			}
 
 			return res, nil
-		}, progresswriter.ResetTime(mw.WithPrefix("", false)).Status())
+		}, ssProgress)
 
 		to.mu.Lock()
 		to.bgErr = err

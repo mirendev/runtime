@@ -3,6 +3,7 @@ package observability
 import (
 	"context"
 	"database/sql"
+	"log/slog"
 	"time"
 )
 
@@ -11,20 +12,20 @@ type LogEntry struct {
 	Body      string
 }
 
-type LogWriter struct {
+type PersistentLogWriter struct {
 	DB *sql.DB `asm:"clickhouse"`
 }
 
-func (l *LogWriter) WriteEntry(id string, body string) error {
+func (l *PersistentLogWriter) WriteEntry(id string, body string) error {
 	_, err := l.DB.Exec("INSERT INTO logs (timestamp, container_id, body) VALUES (NOW(), ?, ?)", id, body)
 	return err
 }
 
-type LogReader struct {
+type PersistentLogReader struct {
 	DB *sql.DB `asm:"clickhouse"`
 }
 
-func (l *LogReader) Read(ctx context.Context, id string) ([]LogEntry, error) {
+func (l *PersistentLogReader) Read(ctx context.Context, id string) ([]LogEntry, error) {
 	rows, err := l.DB.QueryContext(ctx, "SELECT timestamp, body FROM logs WHERE container_id = ?", id)
 	if err != nil {
 		return nil, err
@@ -62,4 +63,17 @@ ORDER BY (container_id, toUnixTimestamp(timestamp))
 `)
 
 	return err
+}
+
+type LogWriter interface {
+	WriteEntry(etype string, entity string, le LogEntry) error
+}
+
+type DebugLogWriter struct {
+	Log *slog.Logger
+}
+
+func (d *DebugLogWriter) WriteEntry(etype string, entity string, le LogEntry) error {
+	d.Log.Debug(le.Body, "etype", etype, "entity", entity)
+	return nil
 }

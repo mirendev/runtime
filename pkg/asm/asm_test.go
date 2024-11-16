@@ -121,6 +121,43 @@ func TestASM(t *testing.T) {
 		r.Equal(x.Name, "miren")
 	})
 
+	t.Run("providers can satisfy interfaces", func(t *testing.T) {
+		type thing struct {
+			Writer io.Writer `asm:"stdout"`
+		}
+
+		r := require.New(t)
+
+		var reg Registry
+
+		reg.ProvideName("stdout", func() *os.File { return os.Stdout })
+
+		var x thing
+
+		err := reg.Populate(&x)
+		r.NoError(err)
+
+		r.Same(x.Writer, os.Stdout)
+	})
+
+	t.Run("named providers can be used without a name", func(t *testing.T) {
+		type thing struct {
+			Name string
+		}
+
+		r := require.New(t)
+
+		var reg Registry
+		reg.ProvideName("name", func() string { return "miren" })
+
+		var x thing
+
+		err := reg.Populate(&x)
+		r.NoError(err)
+
+		r.Equal(x.Name, "miren")
+	})
+
 	t.Run("returns the same value when using a provider", func(t *testing.T) {
 		type thing struct {
 			Name string `asm:"name"`

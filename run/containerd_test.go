@@ -14,14 +14,12 @@ import (
 	"github.com/containerd/containerd/v2/pkg/cio"
 	"github.com/containerd/containerd/v2/pkg/namespaces"
 	"github.com/davecgh/go-spew/spew"
-	buildkit "github.com/moby/buildkit/client"
 	_ "github.com/moby/buildkit/client/connhelper/dockercontainer"
 	"github.com/opencontainers/runtime-spec/specs-go"
 
 	"github.com/stretchr/testify/require"
 	"miren.dev/runtime/build"
 	"miren.dev/runtime/observability"
-	"miren.dev/runtime/pkg/asm"
 	"miren.dev/runtime/pkg/testutils"
 )
 
@@ -29,27 +27,21 @@ func TestContainerd(t *testing.T) {
 	t.Run("can import an image", func(t *testing.T) {
 		r := require.New(t)
 
-		reg := testutils.Registry()
-
-		cc, err := asm.Pick[*containerd.Client](reg)
-		r.NoError(err)
-
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 
-		cl, err := buildkit.New(ctx, "")
-		r.NoError(err)
+		reg := testutils.Registry(observability.TestInject, build.TestInject)
 
-		bkl, err := build.NewBuildkit(ctx, cl, t.TempDir())
+		var (
+			cc  *containerd.Client
+			bkl *build.Buildkit
+		)
+
+		err := reg.Init(&cc, &bkl)
 		r.NoError(err)
 
 		dfr, err := build.MakeTar("testdata/nginx")
 		r.NoError(err)
-
-		f, err := os.Create("../tmp/nginx.tar")
-		r.NoError(err)
-
-		defer f.Close()
 
 		datafs, err := build.TarFS(dfr, t.TempDir())
 		r.NoError(err)
@@ -82,33 +74,26 @@ func TestContainerd(t *testing.T) {
 
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
+		reg := testutils.Registry(observability.TestInject, build.TestInject)
 
-		reg := testutils.Registry()
+		var (
+			cc  *containerd.Client
+			bkl *build.Buildkit
+		)
+
+		err := reg.Init(&cc, &bkl)
+		r.NoError(err)
 
 		var lm observability.LogsMaintainer
 
-		err := reg.Populate(&lm)
+		err = reg.Populate(&lm)
 		r.NoError(err)
 
 		err = lm.Setup(ctx)
 		r.NoError(err)
 
-		cc, err := asm.Pick[*containerd.Client](reg)
-		r.NoError(err)
-
-		cl, err := buildkit.New(ctx, "")
-		r.NoError(err)
-
-		bkl, err := build.NewBuildkit(ctx, cl, t.TempDir())
-		r.NoError(err)
-
 		dfr, err := build.MakeTar("testdata/nginx")
 		r.NoError(err)
-
-		f, err := os.Create("../tmp/nginx.tar")
-		r.NoError(err)
-
-		defer f.Close()
 
 		datafs, err := build.TarFS(dfr, t.TempDir())
 		r.NoError(err)
@@ -218,7 +203,7 @@ func TestContainerd(t *testing.T) {
 
 		r.True(found, "address wasn't assigned")
 
-		var lr observability.LogReader
+		var lr observability.PersistentLogReader
 
 		err = reg.Populate(&lr)
 		r.NoError(err)

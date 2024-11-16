@@ -13,10 +13,11 @@ import (
 	"time"
 
 	"github.com/davecgh/go-spew/spew"
-	"github.com/moby/buildkit/client"
 	_ "github.com/moby/buildkit/client/connhelper/dockercontainer"
 	"github.com/stretchr/testify/require"
 	"github.com/tonistiigi/fsutil"
+	"miren.dev/runtime/observability"
+	"miren.dev/runtime/pkg/testutils"
 )
 
 func TestBuildKitLocal(t *testing.T) {
@@ -26,10 +27,11 @@ func TestBuildKitLocal(t *testing.T) {
 
 		r := require.New(t)
 
-		cl, err := client.New(ctx, "") // "docker-container://test-buildkit")
-		r.NoError(err)
+		reg := testutils.Registry(observability.TestInject, TestInject)
 
-		bkl, err := NewBuildkit(ctx, cl, t.TempDir())
+		var bkl *Buildkit
+
+		err := reg.Init(&bkl)
 		r.NoError(err)
 
 		dfr, err := MakeTar("testdata/df1")
@@ -101,10 +103,11 @@ func TestBuildKitLocal(t *testing.T) {
 
 		r := require.New(t)
 
-		cl, err := client.New(ctx, "") // "docker-container://test-buildkit")
-		r.NoError(err)
+		reg := testutils.Registry(observability.TestInject, TestInject)
 
-		bkl, err := NewBuildkit(ctx, cl, t.TempDir())
+		var bkl *Buildkit
+
+		err := reg.Init(&bkl)
 		r.NoError(err)
 
 		datafs, err := fsutil.NewFS("testdata/df-large")

@@ -1,23 +1,29 @@
 package testutils
 
 import (
+	"context"
 	"database/sql"
 	"log/slog"
 	"os"
 	"time"
 
 	containerd "github.com/containerd/containerd/v2/client"
+	buildkit "github.com/moby/buildkit/client"
 	"miren.dev/runtime/pkg/asm"
 	"miren.dev/runtime/pkg/slogfmt"
 
 	clickhouse "github.com/ClickHouse/clickhouse-go/v2"
 )
 
-func Registry() *asm.Registry {
+func Registry(extra ...func(*asm.Registry)) *asm.Registry {
 	var r asm.Registry
 
 	r.Provide(func() (*containerd.Client, error) {
 		return containerd.New("/run/containerd.sock")
+	})
+
+	r.Provide(func() (*buildkit.Client, error) {
+		return buildkit.New(context.TODO(), "")
 	})
 
 	r.Register("namespace", "miren-test")
@@ -43,6 +49,10 @@ func Registry() *asm.Registry {
 			Debug: true,
 		})
 	})
+
+	for _, fn := range extra {
+		fn(&r)
+	}
 
 	return &r
 }
