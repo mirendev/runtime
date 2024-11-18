@@ -51,7 +51,7 @@ type LogsMaintainer struct {
 
 func (m *LogsMaintainer) Setup(ctx context.Context) error {
 	_, err := m.DB.ExecContext(ctx, `
-CREATE TABLE logs
+CREATE TABLE IF NOT EXISTS logs
 (
     timestamp DateTime64(9) CODEC(Delta(8), ZSTD(1)),
     container_id LowCardinality(String) CODEC(ZSTD(1)),

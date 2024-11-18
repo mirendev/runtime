@@ -140,6 +140,21 @@ func (r *Registry) Resolve(s any) error {
 	return nil
 }
 
+func (r *Registry) ResolveNamed(s any, name string) error {
+	rv := reflect.ValueOf(s)
+
+	if rv.Kind() != reflect.Ptr {
+		return fmt.Errorf("expected a pointer, got %T", s)
+	}
+
+	err := r.populateByType(rv.Elem(), name)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
 var injectFuncType = reflect.TypeFor[func(*Registry) error]()
 
 func (r *Registry) Init(values ...any) error {
