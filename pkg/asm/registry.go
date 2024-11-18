@@ -95,12 +95,14 @@ func isAssignableTo(a, b reflect.Type) bool {
 }
 
 func (r *Registry) populateByType(field reflect.Value, tag string) error {
-	for _, v := range r.components {
-		cv := reflect.ValueOf(v)
+	if tag == "" {
+		for _, v := range r.components {
+			cv := reflect.ValueOf(v)
 
-		if isAssignableTo(cv.Type(), field.Type()) {
-			field.Set(cv)
-			return nil
+			if isAssignableTo(cv.Type(), field.Type()) {
+				field.Set(cv)
+				return nil
+			}
 		}
 	}
 

@@ -61,7 +61,7 @@ func TestASM(t *testing.T) {
 		r.Equal(s.Thing.name, "blah")
 	})
 
-	t.Run("can populate based only on type and wrong name", func(t *testing.T) {
+	t.Run("will not populate based only on type and wrong name", func(t *testing.T) {
 		type thing struct {
 			name string
 		}
@@ -76,10 +76,7 @@ func TestASM(t *testing.T) {
 		}
 
 		err := reg.Populate(&s)
-		r.NoError(err)
-
-		r.NotNil(s.Thing)
-		r.Equal(s.Thing.name, "blah")
+		r.Error(err)
 	})
 
 	t.Run("can resolve a pointer directly", func(t *testing.T) {
