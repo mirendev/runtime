@@ -11,7 +11,6 @@ import (
 
 	containerd "github.com/containerd/containerd/v2/client"
 	"github.com/containerd/containerd/v2/pkg/namespaces"
-	"github.com/davecgh/go-spew/spew"
 	"github.com/stretchr/testify/require"
 
 	"miren.dev/runtime/build"
@@ -101,7 +100,7 @@ func TestContainer(t *testing.T) {
 
 		r.NotNil(c)
 
-		defer c.Delete(ctx, containerd.WithSnapshotCleanup)
+		defer testutils.ClearContainer(ctx, c)
 
 		var (
 			contDisc discovery.Containerd
@@ -126,8 +125,117 @@ func TestContainer(t *testing.T) {
 		ingress.ServeHTTP(rw, req)
 
 		r.Equal(http.StatusOK, rw.Code)
+	})
 
-		spew.Dump(rw.Body.String())
+	t.Run("runs a container and serves a static file", func(t *testing.T) {
+		r := require.New(t)
+
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		reg := testutils.Registry(observability.TestInject, build.TestInject, ingress.TestInject, discovery.TestInject)
+
+		var (
+			cc  *containerd.Client
+			bkl *build.Buildkit
+		)
+
+		err := reg.Init(&cc, &bkl)
+		r.NoError(err)
+
+		var lm observability.LogsMaintainer
+
+		err = reg.Populate(&lm)
+		r.NoError(err)
+
+		err = lm.Setup(ctx)
+		r.NoError(err)
+
+		dfr, err := build.MakeTar("testdata/files")
+		r.NoError(err)
+
+		datafs, err := build.TarFS(dfr, t.TempDir())
+		r.NoError(err)
+
+		o, err := bkl.Transform(ctx, datafs)
+		r.NoError(err)
+
+		var ii run.ImageImporter
+
+		err = reg.Populate(&ii)
+		r.NoError(err)
+
+		err = ii.ImportImage(ctx, o, "mn-nginx:latest")
+		r.NoError(err)
+
+		r.NoError(testutils.ClearContainers(cc, ii.Namespace))
+
+		ctx = namespaces.WithNamespace(ctx, ii.Namespace)
+
+		_, err = cc.GetImage(ctx, "mn-nginx:latest")
+		r.NoError(err)
+
+		var cr run.ContainerRunner
+
+		err = reg.Populate(&cr)
+		r.NoError(err)
+
+		sa, err := netip.ParsePrefix("172.16.8.1/24")
+		r.NoError(err)
+
+		ca, err := netip.ParsePrefix("172.16.8.2/24")
+		r.NoError(err)
+
+		config := &run.ContainerConfig{
+			App:   "mn-nginx2",
+			Image: "mn-nginx:latest",
+			IPs:   []netip.Prefix{ca},
+			Subnet: &run.Subnet{
+				Id:     "sub",
+				IP:     []netip.Prefix{sa},
+				OSName: "mtest",
+			},
+
+			StaticDir: "/public",
+		}
+
+		id, err := cr.RunContainer(ctx, config)
+		r.NoError(err)
+
+		// Let it boot up
+		time.Sleep(time.Second)
+
+		c, err := cc.LoadContainer(ctx, id)
+		r.NoError(err)
+
+		r.NotNil(c)
+
+		defer testutils.ClearContainer(ctx, c)
+
+		var (
+			contDisc discovery.Containerd
+			ingress  ingress.HTTP
+		)
+
+		err = reg.Populate(&contDisc)
+		r.NoError(err)
+
+		err = reg.Populate(&ingress)
+		r.NoError(err)
+
+		ingress.Lookup = &contDisc
+
+		req, err := http.NewRequest("GET", "/foo.html", strings.NewReader(""))
+		r.NoError(err)
+
+		req.Host = "mn-nginx2.miren.test"
+
+		rw := httptest.NewRecorder()
+
+		ingress.ServeHTTP(rw, req)
+
+		r.Equal(http.StatusOK, rw.Code)
+
+		r.Equal("this is a static html file\n", rw.Body.String())
 
 	})
 }

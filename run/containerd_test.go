@@ -143,7 +143,7 @@ func TestContainerd(t *testing.T) {
 
 		r.NotNil(c)
 
-		defer c.Delete(ctx, containerd.WithSnapshotCleanup)
+		defer testutils.ClearContainer(ctx, c)
 
 		lbls, err := c.Labels(ctx)
 		r.NoError(err)

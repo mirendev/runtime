@@ -36,14 +36,31 @@ func (c *Containerd) lookupBG(ctx context.Context, app string, ch chan Backgroun
 		return
 	}
 
-	for _, c := range containers {
-		labels, err := c.Labels(ctx)
+	for _, container := range containers {
+		labels, err := container.Labels(ctx)
 		if err == nil {
 			if labels["app"] == app {
 				if host, ok := labels["http_host"]; ok {
-					ep := &HTTPEndpoint{
-						Host: "http://" + host,
+					var ep Endpoint
+
+					if dir, ok := labels["static_dir"]; ok {
+						c.Log.Info("using local container endpoint for static_dir", "id", container.ID())
+						ep = &LocalContainerEndpoint{
+							Log: c.Log,
+							HTTP: HTTPEndpoint{
+								Host: "http://" + host,
+							},
+							Client:    c.Client,
+							Namespace: c.Namespace,
+							Dir:       dir,
+							Id:        container.ID(),
+						}
+					} else {
+						ep = &HTTPEndpoint{
+							Host: "http://" + host,
+						}
 					}
+
 					ch <- BackgroundLookup{Endpoint: ep}
 					return
 				}

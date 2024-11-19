@@ -57,6 +57,8 @@ type ContainerConfig struct {
 	Image  string
 	IPs    []netip.Prefix
 	Subnet *Subnet
+
+	StaticDir string
 }
 
 func (c *ContainerRunner) RunContainer(ctx context.Context, config *ContainerConfig) (string, error) {
@@ -78,6 +80,11 @@ func (c *ContainerRunner) RunContainer(ctx context.Context, config *ContainerCon
 
 	err = c.bootInitialTask(ctx, config, container)
 	if err != nil {
+		task, _ := container.Task(ctx, nil)
+		if task != nil {
+			task.Delete(ctx, containerd.WithProcessKill)
+		}
+
 		derr := container.Delete(ctx, containerd.WithSnapshotCleanup)
 		if derr != nil {
 			c.Log.Error("failed to cleanup container", "id", config.Id, "err", derr)
@@ -105,6 +112,15 @@ func (c *ContainerRunner) buildSpec(ctx context.Context, config *ContainerConfig
 		opts []containerd.NewContainerOpts
 	)
 
+	lbls := map[string]string{
+		"app":       config.App,
+		"http_host": config.IPs[0].Addr().String() + ":3000",
+	}
+
+	if config.StaticDir != "" {
+		lbls["static_dir"] = config.StaticDir
+	}
+
 	opts = append(opts,
 		containerd.WithNewSnapshot(config.Id, img),
 		containerd.WithNewSpec(
@@ -113,10 +129,7 @@ func (c *ContainerRunner) buildSpec(ctx context.Context, config *ContainerConfig
 			//oci.WithMounts(mounts),
 		),
 		containerd.WithRuntime("io.containerd.runc.v2", nil),
-		containerd.WithAdditionalContainerLabels(map[string]string{
-			"app":       config.App,
-			"http_host": config.IPs[0].Addr().String() + ":3000",
-		}),
+		containerd.WithAdditionalContainerLabels(lbls),
 	)
 
 	return opts, nil

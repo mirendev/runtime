@@ -54,7 +54,7 @@ func TestLogs(t *testing.T) {
 
 		var count int
 
-		err = db.QueryRow("SELECT count() FROM logs").Scan(&count)
+		err = db.QueryRow("SELECT count() FROM logs WHERE container_id = ?", "test").Scan(&count)
 		r.NoError(err)
 
 		r.Equal(1, count)

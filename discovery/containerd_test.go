@@ -29,7 +29,7 @@ func TestContainerd(t *testing.T) {
 		}))
 		r.NoError(err)
 
-		defer cont.Delete(ctx, containerd.WithSnapshotCleanup)
+		defer testutils.ClearContainer(ctx, cont)
 
 		ep, ch, err := cl.Lookup(ctx, "test")
 		r.NoError(err)
