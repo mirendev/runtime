@@ -6,6 +6,7 @@ import (
 	"log/slog"
 
 	containerd "github.com/containerd/containerd/v2/client"
+	"github.com/containerd/containerd/v2/pkg/namespaces"
 )
 
 type Containerd struct {
@@ -26,6 +27,8 @@ var ErrNotFound = errors.New("no endpoints found")
 
 func (c *Containerd) lookupBG(ctx context.Context, app string, ch chan BackgroundLookup) {
 	defer close(ch)
+
+	ctx = namespaces.WithNamespace(ctx, c.Namespace)
 
 	containers, err := c.Client.Containers(ctx)
 	if err != nil {

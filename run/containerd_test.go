@@ -13,7 +13,6 @@ import (
 	containerd "github.com/containerd/containerd/v2/client"
 	"github.com/containerd/containerd/v2/pkg/cio"
 	"github.com/containerd/containerd/v2/pkg/namespaces"
-	"github.com/davecgh/go-spew/spew"
 	_ "github.com/moby/buildkit/client/connhelper/dockercontainer"
 	"github.com/opencontainers/runtime-spec/specs-go"
 
@@ -126,6 +125,7 @@ func TestContainerd(t *testing.T) {
 		r.NoError(err)
 
 		config := &ContainerConfig{
+			App:   "mn-nginx",
 			Image: "mn-nginx:latest",
 			IPs:   []netip.Prefix{ca},
 			Subnet: &Subnet{
@@ -138,12 +138,18 @@ func TestContainerd(t *testing.T) {
 		id, err := cr.RunContainer(ctx, config)
 		r.NoError(err)
 
-		spew.Dump(config)
-
 		c, err := cc.LoadContainer(ctx, id)
 		r.NoError(err)
 
 		r.NotNil(c)
+
+		defer c.Delete(ctx, containerd.WithSnapshotCleanup)
+
+		lbls, err := c.Labels(ctx)
+		r.NoError(err)
+
+		r.Equal("mn-nginx", lbls["app"])
+		r.Equal(ca.Addr().String()+":3000", lbls["http_host"])
 
 		task, err := c.Task(ctx, nil)
 		r.NoError(err)

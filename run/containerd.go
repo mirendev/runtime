@@ -53,6 +53,7 @@ type ContainerRunner struct {
 
 type ContainerConfig struct {
 	Id     string
+	App    string
 	Image  string
 	IPs    []netip.Prefix
 	Subnet *Subnet
@@ -108,9 +109,14 @@ func (c *ContainerRunner) buildSpec(ctx context.Context, config *ContainerConfig
 		containerd.WithNewSnapshot(config.Id, img),
 		containerd.WithNewSpec(
 			oci.WithImageConfig(img),
+			oci.WithEnv([]string{"PORT=3000"}),
 			//oci.WithMounts(mounts),
 		),
 		containerd.WithRuntime("io.containerd.runc.v2", nil),
+		containerd.WithAdditionalContainerLabels(map[string]string{
+			"app":       config.App,
+			"http_host": config.IPs[0].Addr().String() + ":3000",
+		}),
 	)
 
 	return opts, nil

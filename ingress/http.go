@@ -66,7 +66,7 @@ func (h *HTTP) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		w.WriteHeader(http.StatusGatewayTimeout)
 	case ep := <-ready:
 		if ep.Error != nil {
-			h.Log.Error("error looking up endpoint for application in background", "error", err, "app", app)
+			h.Log.Error("error looking up endpoint for application in background", "error", ep.Error, "app", app)
 			w.WriteHeader(http.StatusInternalServerError)
 		} else {
 			ep.Endpoint.ServeHTTP(w, req)
