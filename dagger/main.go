@@ -21,7 +21,17 @@ func (m *Runtime) WithServices(dir *dagger.Directory) *dagger.Container {
 		WithExposedPort(9000).
 		AsService()
 
-	return m.BuildEnv(dir).WithServiceBinding("clickhouse", ch)
+	pg := dag.Container().
+		From("postgres:17").
+		WithEnvVariable("POSTGRES_DB", "miren_test").
+		WithEnvVariable("POSTGRES_USER", "postgres").
+		WithEnvVariable("POSTGRES_HOST_AUTH_METHOD", "trust").
+		WithExposedPort(5432).
+		AsService()
+
+	return m.BuildEnv(dir).
+		WithServiceBinding("clickhouse", ch).
+		WithServiceBinding("postgres", pg)
 }
 
 func (m *Runtime) BuildEnv(dir *dagger.Directory) *dagger.Container {

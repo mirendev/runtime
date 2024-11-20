@@ -3,6 +3,8 @@ package asm
 import (
 	"fmt"
 	"reflect"
+
+	"github.com/pkg/errors"
 )
 
 type builderKey struct {
@@ -112,7 +114,7 @@ func (r *Registry) populateByType(field reflect.Value, tag string) error {
 		return nil
 	}
 
-	return fmt.Errorf("no component of type %s available", field.Type())
+	return errors.Wrapf(err, "error building component of type %s available", field.Type())
 }
 
 type HasPopulated interface {
