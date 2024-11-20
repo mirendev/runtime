@@ -271,6 +271,23 @@ func TestASM(t *testing.T) {
 		r.Equal(th.Writer, os.Stdout)
 	})
 
+	t.Run("doesn't confuse provider types", func(t *testing.T) {
+		type thing struct {
+			Writer *os.File
+		}
+
+		r := require.New(t)
+
+		var reg Registry
+
+		reg.ProvideName("writer", func() io.Writer { return nil })
+
+		var th thing
+
+		err := reg.Populate(&th)
+		r.Error(err)
+	})
+
 	t.Run("runs a populated hook after populating", func(t *testing.T) {
 		r := require.New(t)
 		var reg Registry

@@ -15,6 +15,10 @@ type AppAccess struct {
 	tx pgx.Tx
 }
 
+func (a *AppAccess) UseTx(tx pgx.Tx) {
+	a.tx = tx
+}
+
 type AppConfig struct {
 	Id        uint64
 	Name      string
@@ -141,6 +145,10 @@ type AppVersion struct {
 	App *AppConfig
 }
 
+func (av *AppVersion) ImageName() string {
+	return av.App.Name + ":" + av.Version
+}
+
 func (a *AppAccess) CreateVersion(ctx context.Context, av *AppVersion) error {
 	now := time.Now()
 
@@ -169,6 +177,23 @@ func (a *AppAccess) LoadVersion(ctx context.Context, ac *AppConfig, version stri
 	err := a.inTx(ctx, func(tx pgx.Tx) error {
 		return tx.QueryRow(ctx,
 			"SELECT id, application_id, version, created_at, updated_at, static_dir FROM application_versions WHERE application_id = $1 AND version = $2", ac.Id, version,
+		).Scan(&appVersion.Id, &appVersion.AppId, &appVersion.Version, &appVersion.CreatedAt, &appVersion.UpdatedAt, &appVersion.StaticDir)
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	appVersion.App = ac
+
+	return &appVersion, nil
+}
+
+func (a *AppAccess) MostRecentVersion(ctx context.Context, ac *AppConfig) (*AppVersion, error) {
+	var appVersion AppVersion
+
+	err := a.inTx(ctx, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx,
+			"SELECT id, application_id, version, created_at, updated_at, static_dir FROM application_versions WHERE application_id = $1 ORDER BY created_at DESC LIMIT 1", ac.Id,
 		).Scan(&appVersion.Id, &appVersion.AppId, &appVersion.Version, &appVersion.CreatedAt, &appVersion.UpdatedAt, &appVersion.StaticDir)
 	})
 	if err != nil {

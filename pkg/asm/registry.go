@@ -37,7 +37,8 @@ func canPopulate(rv reflect.Value) bool {
 
 func (r *Registry) buildByType(field reflect.Value, tag string) (reflect.Value, error) {
 	for _, v := range r.built {
-		if isAssignableTo(v.val.Type(), field.Type()) {
+		if isAssignableTo(field.Type(), v.val.Type()) {
+			fmt.Println("found built value", v.val.Type(), field.Type())
 			return v.val, nil
 		}
 	}
@@ -93,7 +94,7 @@ func isAssignableTo(a, b reflect.Type) bool {
 		return b.Implements(a)
 	}
 
-	return a.AssignableTo(b)
+	return b.AssignableTo(a)
 }
 
 func (r *Registry) populateByType(field reflect.Value, tag string) error {
@@ -101,7 +102,7 @@ func (r *Registry) populateByType(field reflect.Value, tag string) error {
 		for _, v := range r.components {
 			cv := reflect.ValueOf(v)
 
-			if isAssignableTo(cv.Type(), field.Type()) {
+			if isAssignableTo(field.Type(), cv.Type()) {
 				field.Set(cv)
 				return nil
 			}
@@ -109,7 +110,7 @@ func (r *Registry) populateByType(field reflect.Value, tag string) error {
 	}
 
 	ret, err := r.buildByType(field, tag)
-	if err == nil {
+	if err == nil && isAssignableTo(field.Type(), ret.Type()) {
 		field.Set(ret)
 		return nil
 	}
@@ -208,7 +209,7 @@ fields:
 			continue fields
 		}
 
-		if !isAssignableTo(reflect.TypeOf(component), field.Type()) {
+		if !isAssignableTo(field.Type(), reflect.TypeOf(component)) {
 			return fmt.Errorf("component %q is of type %T, expected %s", tag, component, field.Type())
 		}
 

@@ -13,5 +13,9 @@ func TestInject(reg *asm.Registry) {
 		}
 	})
 
+	reg.Provide(func() *Containerd {
+		return &Containerd{}
+	})
+
 	reg.Register("lookup_timeout", 5*time.Second)
 }

@@ -84,5 +84,10 @@ func TestAppAccess(t *testing.T) {
 		r.NoError(err)
 
 		r.Equal("1.0.0", ver.Version)
+
+		mrv, err := aa.MostRecentVersion(ctx, app)
+		r.NoError(err)
+
+		r.Equal("1.0.0", mrv.Version)
 	})
 }

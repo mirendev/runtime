@@ -28,12 +28,21 @@ var ErrNotFound = errors.New("no endpoints found")
 func (c *Containerd) lookupBG(ctx context.Context, app string, ch chan BackgroundLookup) {
 	defer close(ch)
 
+	ep, err := c.FindInContainerd(ctx, app)
+	if err == nil {
+		ch <- BackgroundLookup{Endpoint: ep}
+		return
+	}
+
+	ch <- BackgroundLookup{Endpoint: ep}
+}
+
+func (c *Containerd) FindInContainerd(ctx context.Context, app string) (Endpoint, error) {
 	ctx = namespaces.WithNamespace(ctx, c.Namespace)
 
 	containers, err := c.Client.Containers(ctx)
 	if err != nil {
-		ch <- BackgroundLookup{Error: err}
-		return
+		return nil, err
 	}
 
 	for _, container := range containers {
@@ -61,12 +70,11 @@ func (c *Containerd) lookupBG(ctx context.Context, app string, ch chan Backgroun
 						}
 					}
 
-					ch <- BackgroundLookup{Endpoint: ep}
-					return
+					return ep, nil
 				}
 			}
 		}
 	}
 
-	ch <- BackgroundLookup{Error: ErrNotFound}
+	return nil, ErrNotFound
 }
