@@ -11,4 +11,4 @@ sleep 1
 
 cd /src
 
-gotestsum --format testname ./...
+gotestsum --format testname "$@"

@@ -7,6 +7,7 @@ import (
 	"net/netip"
 	"os/exec"
 
+	"github.com/containerd/containerd/api/types/runc/options"
 	containerd "github.com/containerd/containerd/v2/client"
 	tarchive "github.com/containerd/containerd/v2/core/transfer/archive"
 	"github.com/containerd/containerd/v2/core/transfer/image"
@@ -92,6 +93,8 @@ func (c *ContainerRunner) RunContainer(ctx context.Context, config *ContainerCon
 		return "", err
 	}
 
+	c.Log.Info("container started", "id", config.Id, "namespace", c.Namespace)
+
 	return config.Id, nil
 }
 
@@ -128,7 +131,9 @@ func (c *ContainerRunner) buildSpec(ctx context.Context, config *ContainerConfig
 			oci.WithEnv([]string{"PORT=3000"}),
 			//oci.WithMounts(mounts),
 		),
-		containerd.WithRuntime("io.containerd.runc.v2", nil),
+		containerd.WithRuntime("io.containerd.runc.v2", &options.Options{
+			BinaryName: "runsc-ignore",
+		}),
 		containerd.WithAdditionalContainerLabels(lbls),
 	)
 

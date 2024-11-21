@@ -38,7 +38,6 @@ func canPopulate(rv reflect.Value) bool {
 func (r *Registry) buildByType(field reflect.Value, tag string) (reflect.Value, error) {
 	for _, v := range r.built {
 		if isAssignableTo(field.Type(), v.val.Type()) {
-			fmt.Println("found built value", v.val.Type(), field.Type())
 			return v.val, nil
 		}
 	}

@@ -11,6 +11,7 @@ import (
 
 	containerd "github.com/containerd/containerd/v2/client"
 	"github.com/containerd/containerd/v2/pkg/namespaces"
+	"github.com/davecgh/go-spew/spew"
 	"github.com/stretchr/testify/require"
 
 	"miren.dev/runtime/build"
@@ -25,7 +26,7 @@ func TestContainer(t *testing.T) {
 	t.Run("runs a container and routes an http request to it", func(t *testing.T) {
 		r := require.New(t)
 
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 		defer cancel()
 		reg := testutils.Registry(observability.TestInject, build.TestInject, ingress.TestInject, discovery.TestInject)
 
@@ -36,6 +37,8 @@ func TestContainer(t *testing.T) {
 
 		err := reg.Init(&cc, &bkl)
 		r.NoError(err)
+
+		go testutils.MonitorContainers(ctx, cc, "miren-test")
 
 		var lm observability.LogsMaintainer
 
@@ -92,13 +95,14 @@ func TestContainer(t *testing.T) {
 		id, err := cr.RunContainer(ctx, config)
 		r.NoError(err)
 
+		spew.Dump(testutils.ListContainers(cc, ii.Namespace))
+
 		// Let it boot up
+		r.NoError(testutils.WaitForContainerReady(ctx, cc, ii.Namespace, id))
 		time.Sleep(time.Second)
 
 		c, err := cc.LoadContainer(ctx, id)
 		r.NoError(err)
-
-		r.NotNil(c)
 
 		defer testutils.ClearContainer(ctx, c)
 

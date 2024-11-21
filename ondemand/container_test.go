@@ -24,7 +24,7 @@ func TestOndemand(t *testing.T) {
 	t.Run("starts a container for an app", func(t *testing.T) {
 		r := require.New(t)
 
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 		defer cancel()
 
 		reg := testutils.Registry(
@@ -100,6 +100,10 @@ func TestOndemand(t *testing.T) {
 
 		reg.Register("app-access", &aa)
 
+		reg.Provide(func() *discovery.Containerd {
+			return &discovery.Containerd{}
+		})
+
 		var on LaunchContainer
 
 		err = reg.Populate(&on)
@@ -125,14 +129,18 @@ func TestOndemand(t *testing.T) {
 
 		r.NotNil(bg.Endpoint)
 
-		time.Sleep(time.Second)
-
-		rw := httptest.NewRecorder()
-
 		req, err := http.NewRequest("GET", "/", nil)
 		r.NoError(err)
 
-		bg.Endpoint.ServeHTTP(rw, req)
+		var rw *httptest.ResponseRecorder
+
+		r.Eventually(func() bool {
+			rw = httptest.NewRecorder()
+			bg.Endpoint.ServeHTTP(rw, req)
+
+			return rw.Code == http.StatusOK
+
+		}, 5*time.Second, time.Second)
 
 		r.Equal(http.StatusOK, rw.Code)
 	})

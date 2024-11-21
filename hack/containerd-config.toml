@@ -1,0 +1,3 @@
+[plugins]
+  [plugins."io.containerd.snapshotter.v1.overlayfs"]
+    upperdir_label = true

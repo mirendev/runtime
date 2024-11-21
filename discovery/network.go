@@ -2,7 +2,6 @@ package discovery
 
 import (
 	"errors"
-	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httputil"
@@ -38,7 +37,13 @@ type LocalContainerEndpoint struct {
 	Id        string
 }
 
+const upperdirLabel = "containerd.io/snapshot/overlay.upperdir"
+
 func (h *LocalContainerEndpoint) readFile(w http.ResponseWriter, req *http.Request) error {
+	if containsDotDot(req.URL.Path) {
+		return errors.New("illegal path request")
+	}
+
 	h.Log.Debug("trying to serve file", "path", req.URL.Path)
 
 	ctx := namespaces.WithNamespace(req.Context(), h.Namespace)
@@ -48,38 +53,40 @@ func (h *LocalContainerEndpoint) readFile(w http.ResponseWriter, req *http.Reque
 		return err
 	}
 
-	task, err := cont.Task(ctx, nil)
+	ci, err := cont.Info(ctx)
 	if err != nil {
 		return err
 	}
 
-	status, err := task.Status(ctx)
+	si, err := h.Client.SnapshotService(ci.Snapshotter).Stat(ctx, ci.SnapshotKey)
 	if err != nil {
 		return err
 	}
 
-	if status.Status != containerd.Running {
-		return errors.New("task is not running")
+	p, err := h.Client.SnapshotService(ci.Snapshotter).Stat(ctx, si.Parent)
+	if err != nil {
+		return err
 	}
 
-	if containsDotDot(req.URL.Path) {
-		return errors.New("illegal path request")
+	root, ok := p.Labels[upperdirLabel]
+	if !ok {
+		return os.ErrNotExist
 	}
 
 	path := filepath.Join(
-		fmt.Sprintf("/proc/%d/root", task.Pid()),
+		root,
 		h.Dir, req.URL.Path)
 
 	f, err := os.Open(path)
 	if err != nil {
-		return ErrNotFound
+		return err
 	}
 
 	defer f.Close()
 
 	fi, err := f.Stat()
 	if err != nil {
-		return ErrNotFound
+		return err
 	}
 
 	h.Log.Debug("serving file", "path", path)
@@ -108,6 +115,8 @@ func (h *LocalContainerEndpoint) ServeHTTP(w http.ResponseWriter, req *http.Requ
 	if err == nil {
 		return
 	}
+
+	h.Log.Debug("unable to serve static file", "error", err, "path", req.URL.Path)
 
 	h.HTTP.ServeHTTP(w, req)
 }
