@@ -41,8 +41,8 @@ func (i *IPPool) Init(cidr string, allocRouter bool) error {
 	return nil
 }
 
-func (i *IPPool) Router() netip.Addr {
-	return i.router
+func (i *IPPool) Router() netip.Prefix {
+	return netip.PrefixFrom(i.router, i.prefix.Bits())
 }
 
 var ErrAddressesExhausted = errors.New("no more addresses")

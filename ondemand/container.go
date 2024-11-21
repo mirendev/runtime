@@ -7,6 +7,7 @@ import (
 
 	"miren.dev/runtime/app"
 	"miren.dev/runtime/discovery"
+	"miren.dev/runtime/network"
 	"miren.dev/runtime/run"
 )
 
@@ -15,6 +16,7 @@ type LaunchContainer struct {
 	AppAccess *app.AppAccess
 	CR        *run.ContainerRunner
 	CD        *discovery.Containerd
+	IPPool    *network.IPPool
 }
 
 func (l *LaunchContainer) Lookup(ctx context.Context, app string) (discovery.Endpoint, chan discovery.BackgroundLookup, error) {
@@ -54,13 +56,10 @@ func (l *LaunchContainer) launch(
 	ac *app.AppConfig,
 	mrv *app.AppVersion,
 ) (discovery.Endpoint, error) {
-	// TODO implement a network address pool to allocate IPs from
-	sa, err := netip.ParsePrefix("172.16.8.1/24")
-	if err != nil {
-		return nil, err
-	}
 
-	ca, err := netip.ParsePrefix("172.16.8.2/24")
+	sa := l.IPPool.Router()
+
+	ca, err := l.IPPool.Allocate()
 	if err != nil {
 		return nil, err
 	}

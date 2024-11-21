@@ -14,6 +14,7 @@ import (
 	"miren.dev/runtime/build"
 	"miren.dev/runtime/discovery"
 	"miren.dev/runtime/ingress"
+	"miren.dev/runtime/network"
 	"miren.dev/runtime/observability"
 	"miren.dev/runtime/pkg/testutils"
 	"miren.dev/runtime/run"
@@ -32,6 +33,7 @@ func TestOndemand(t *testing.T) {
 			ingress.TestInject,
 			discovery.TestInject,
 			run.TestInject,
+			network.TestInject,
 		)
 
 		var (

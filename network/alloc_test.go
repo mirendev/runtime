@@ -15,7 +15,7 @@ func TestAllocation(t *testing.T) {
 		err := pool.Init("172.16.8.0/24", true)
 		r.NoError(err)
 
-		r.Equal("172.16.8.1", pool.Router().String())
+		r.Equal("172.16.8.1/24", pool.Router().String())
 
 		addr, err := pool.Allocate()
 		r.NoError(err)
@@ -31,7 +31,7 @@ func TestAllocation(t *testing.T) {
 		err := pool.Init("172.16.8.0/30", true)
 		r.NoError(err)
 
-		r.Equal("172.16.8.1", pool.Router().String())
+		r.Equal("172.16.8.1/30", pool.Router().String())
 
 		addr, err := pool.Allocate()
 		r.NoError(err)
@@ -50,7 +50,7 @@ func TestAllocation(t *testing.T) {
 		err := pool.Init("172.16.8.0/30", true)
 		r.NoError(err)
 
-		r.Equal("172.16.8.1", pool.Router().String())
+		r.Equal("172.16.8.1/30", pool.Router().String())
 
 		addr, err := pool.Allocate()
 		r.NoError(err)
@@ -77,7 +77,7 @@ func TestAllocation(t *testing.T) {
 		err := pool.Init("172.16.8.0/24", true)
 		r.NoError(err)
 
-		r.Equal("172.16.8.1", pool.Router().String())
+		r.Equal("172.16.8.1/24", pool.Router().String())
 
 		addr, err := pool.Allocate()
 		r.NoError(err)
