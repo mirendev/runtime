@@ -12,6 +12,8 @@ import (
 type AppAccess struct {
 	DB *pgxpool.Pool
 
+	OrgId uint64 `asm:"org_id"`
+
 	tx pgx.Tx
 }
 
@@ -21,9 +23,11 @@ func (a *AppAccess) UseTx(tx pgx.Tx) {
 
 type AppConfig struct {
 	Id        uint64
-	Name      string
 	CreatedAt time.Time
 	UpdatedAt time.Time
+
+	OrgId uint64
+	Name  string
 }
 
 func (a *AppAccess) inTx(ctx context.Context, f func(tx pgx.Tx) error) error {
@@ -50,12 +54,17 @@ func (a *AppAccess) LoadApp(ctx context.Context, name string) (*AppConfig, error
 
 	err := a.inTx(ctx, func(tx pgx.Tx) error {
 		return tx.QueryRow(ctx,
-			"SELECT id, name, created_at, updated_at FROM applications WHERE name = $1", name,
+			`SELECT id, name, created_at, updated_at 
+       FROM applications 
+       WHERE organization_id = $1
+			   AND name = $2`, a.OrgId, name,
 		).Scan(&app.Id, &app.Name, &app.CreatedAt, &app.UpdatedAt)
 	})
 	if err != nil {
 		return nil, err
 	}
+
+	app.OrgId = a.OrgId
 
 	return &app, nil
 }
@@ -73,8 +82,8 @@ func (a *AppAccess) CreateApp(ctx context.Context, app *AppConfig) error {
 
 	err := a.inTx(ctx, func(tx pgx.Tx) error {
 		_, err := tx.Exec(ctx,
-			"INSERT INTO applications (name, created_at, updated_at) VALUES ($1, $2, $3)",
-			app.Name, app.CreatedAt, app.UpdatedAt,
+			"INSERT INTO applications (name, created_at, updated_at, organization_id) VALUES ($1, $2, $3, $4)",
+			app.Name, app.CreatedAt, app.UpdatedAt, a.OrgId,
 		)
 		return err
 	})
@@ -108,7 +117,10 @@ func (a *AppAccess) ListApps(ctx context.Context) ([]*AppConfig, error) {
 
 	err := a.inTx(ctx, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx,
-			"SELECT id, name, created_at, updated_at FROM applications",
+			`SELECT id, name, created_at, updated_at 
+       FROM applications
+			 WHERE organization_id = $1`,
+			a.OrgId,
 		)
 		if err != nil {
 			return err
@@ -120,6 +132,7 @@ func (a *AppAccess) ListApps(ctx context.Context) ([]*AppConfig, error) {
 			if err != nil {
 				return err
 			}
+			app.OrgId = a.OrgId
 			apps = append(apps, &app)
 		}
 

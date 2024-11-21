@@ -61,7 +61,10 @@ func (r *Registry) buildByType(field reflect.Value, tag string) (reflect.Value, 
 	}
 
 	if !ok {
-		return reflect.Value{}, fmt.Errorf("no builder for %q", field.Type())
+		if tag == "" {
+			return reflect.Value{}, fmt.Errorf("no builder for %q", field.Type())
+		}
+		return reflect.Value{}, fmt.Errorf("no builder for %q with tag %s", field.Type(), tag)
 	}
 
 	result := builder.Call(nil)

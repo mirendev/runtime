@@ -30,6 +30,7 @@ func Registry(extra ...func(*asm.Registry)) *asm.Registry {
 	})
 
 	r.Register("namespace", "miren-test")
+	r.Register("org_id", uint64(1))
 
 	log := slog.New(slogfmt.NewTextHandler(os.Stderr, &slog.HandlerOptions{
 		Level: slog.LevelDebug,
