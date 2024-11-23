@@ -113,10 +113,24 @@ func TestContainerd(t *testing.T) {
 		_, err = cc.GetImage(ctx, "mn-nginx:latest")
 		r.NoError(err)
 
-		var cr ContainerRunner
+		var (
+			cr  ContainerRunner
+			mon observability.RunSCMonitor
+		)
 
 		err = reg.Populate(&cr)
 		r.NoError(err)
+
+		err = reg.Populate(&mon)
+		r.NoError(err)
+
+		err = mon.WritePodInit("/run/runsc-init.json")
+		r.NoError(err)
+
+		err = mon.Monitor(ctx)
+		r.NoError(err)
+
+		defer mon.Close()
 
 		sa, err := netip.ParsePrefix("172.16.8.1/24")
 		r.NoError(err)
@@ -209,6 +223,9 @@ func TestContainerd(t *testing.T) {
 
 		r.True(found, "address wasn't assigned")
 
+		// Let nginx startup
+		time.Sleep(3 * time.Second)
+
 		var lr observability.PersistentLogReader
 
 		err = reg.Populate(&lr)
@@ -218,5 +235,10 @@ func TestContainerd(t *testing.T) {
 		r.NoError(err)
 
 		r.NotEmpty(entries)
+
+		ports, err := mon.SM.EntityBoundPorts(id)
+		r.NoError(err)
+
+		r.Len(ports, 2)
 	})
 }

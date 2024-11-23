@@ -1,3 +1,7 @@
 #!/bin/bash
 
+if test -e "/run/runsc-init.json"; then
+  exec runsc -ignore-cgroups -pod-init-config /run/runsc-init.json "$@"
+fi
+
 exec runsc -ignore-cgroups "$@"

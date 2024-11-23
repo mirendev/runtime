@@ -11,7 +11,6 @@ import (
 
 	containerd "github.com/containerd/containerd/v2/client"
 	"github.com/containerd/containerd/v2/pkg/namespaces"
-	"github.com/davecgh/go-spew/spew"
 	"github.com/stretchr/testify/require"
 
 	"miren.dev/runtime/build"
@@ -94,8 +93,6 @@ func TestContainer(t *testing.T) {
 
 		id, err := cr.RunContainer(ctx, config)
 		r.NoError(err)
-
-		spew.Dump(testutils.ListContainers(cc, ii.Namespace))
 
 		// Let it boot up
 		r.NoError(testutils.WaitForContainerReady(ctx, cc, ii.Namespace, id))
