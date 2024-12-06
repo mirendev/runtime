@@ -16,4 +16,4 @@ jobs:
       uses: dagger/dagger-for-github@v7
       with:
         verb: call
-        args: --dir=.
+        args: test --dir=.
