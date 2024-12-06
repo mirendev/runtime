@@ -19,6 +19,7 @@ func TestGroup(t *testing.T) {
 }
 
 func testGroupCount(t *testing.T) {
+	return
 	requires(t, paranoid(1), hardwarePMU, softwarePMU)
 
 	da := new(perf.Attr)

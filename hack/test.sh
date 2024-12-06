@@ -1,3 +1,5 @@
+set -e
+
 mkdir -p /data /run
 
 # Compile in the background while containerd starts
@@ -5,6 +7,10 @@ go build -o /bin/containerd-log-ingress ./run/containerd-log-ingress &
 
 containerd --root /data --state /data/state --address /run/containerd.sock -l trace &
 buildkitd --root /data/buildkit &
+
+mount -t debugfs nodev /sys/kernel/debug
+mount -t tracefs nodev /sys/kernel/debug/tracing
+mount -t tracefs nodev /sys/kernel/tracing
 
 # Wait for containerd and buildkitd to start
 sleep 1
