@@ -1,0 +1,19 @@
+name: Dagger
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+
+  build:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Hello
+      uses: dagger/dagger-for-github@v6
+      with:
+        module: github.com/shykes/daggerverse/hello
+        call: test --dir=.
