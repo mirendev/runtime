@@ -16,3 +16,4 @@ jobs:
       with:
         verb: call
         args: test --dir=.
+        cloud-token: ${{ secrets.DAGGER_CLOUD_TOKEN }}
