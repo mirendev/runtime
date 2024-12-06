@@ -13,7 +13,7 @@ jobs:
     steps:
     - uses: actions/checkout@v4
     - name: Hello
-      uses: dagger/dagger-for-github@v6
+      uses: dagger/dagger-for-github@v7
       with:
         verb: call
         args: --dir=.
