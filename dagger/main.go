@@ -5,17 +5,44 @@ package main
 import (
 	"context"
 	"dagger/runtime/internal/dagger"
+	"runtime"
 )
 
 type Runtime struct{}
 
 var (
-	containerd = "https://github.com/containerd/containerd/releases/download/v2.0.0/containerd-2.0.0-linux-arm64.tar.gz"
-	buildkit   = "https://github.com/moby/buildkit/releases/download/v0.17.1/buildkit-v0.17.1.linux-arm64.tar.gz"
-	runc       = "https://github.com/opencontainers/runc/releases/download/v1.2.1/runc.arm64"
-	runsc      = "https://storage.googleapis.com/gvisor/releases/release/latest/aarch64/runsc"
-	runscshim  = "https://storage.googleapis.com/gvisor/releases/release/latest/aarch64/containerd-shim-runsc-v1"
+	arm_containerd = "https://github.com/containerd/containerd/releases/download/v2.0.0/containerd-2.0.0-linux-arm64.tar.gz"
+	arm_buildkit   = "https://github.com/moby/buildkit/releases/download/v0.17.1/buildkit-v0.17.1.linux-arm64.tar.gz"
+	arm_runc       = "https://github.com/opencontainers/runc/releases/download/v1.2.2/runc.arm64"
+	arm_runsc      = "https://storage.googleapis.com/gvisor/releases/release/latest/aarch64/runsc"
+	arm_runscshim  = "https://storage.googleapis.com/gvisor/releases/release/latest/aarch64/containerd-shim-runsc-v1"
 )
+
+var (
+	amd_containerd = "https://github.com/containerd/containerd/releases/download/v2.0.0/containerd-2.0.0-linux-amd64.tar.gz"
+	amd_buildkit   = "https://github.com/moby/buildkit/releases/download/v0.17.1/buildkit-v0.17.1.linux-amd64.tar.gz"
+	amd_runc       = "https://github.com/opencontainers/runc/releases/download/v1.2.2/runc.amd64"
+	amd_runsc      = "https://storage.googleapis.com/gvisor/releases/release/latest/x86_64/runsc"
+	amd_runscshim  = "https://storage.googleapis.com/gvisor/releases/release/latest/x86_64/containerd-shim-runsc-v1"
+)
+
+var containerd, buildkit, runc, runsc, runscshim string
+
+func init() {
+	if runtime.GOARCH == "arm64" {
+		containerd = arm_containerd
+		buildkit = arm_buildkit
+		runc = arm_runc
+		runsc = arm_runsc
+		runscshim = arm_runscshim
+	} else {
+		containerd = amd_containerd
+		buildkit = amd_buildkit
+		runc = amd_runc
+		runsc = amd_runsc
+		runscshim = amd_runscshim
+	}
+}
 
 func (m *Runtime) WithServices(dir *dagger.Directory) *dagger.Container {
 	ch := dag.Container().
