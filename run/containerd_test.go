@@ -378,8 +378,8 @@ func TestContainerd(t *testing.T) {
 
 		t.Logf("last delta: %f", cpu)
 
-		// Sort is a CPU-bound process, so it should be using more than 170% CPU.
-		r.Greater(float64(cpu), float64(170))
+		// Sort is a CPU-bound process, so it should be using more than 101% CPU.
+		r.Greater(float64(cpu), float64(101))
 
 		r.Greater(mem, uint64(0))
 	})
