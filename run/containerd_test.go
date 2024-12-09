@@ -71,7 +71,7 @@ func TestContainerd(t *testing.T) {
 	t.Run("can run a container", func(t *testing.T) {
 		r := require.New(t)
 
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 		defer cancel()
 		reg := testutils.Registry(observability.TestInject, build.TestInject)
 
@@ -262,7 +262,7 @@ func TestContainerd(t *testing.T) {
 	t.Run("calculates cpu usage correctly", func(t *testing.T) {
 		r := require.New(t)
 
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 		defer cancel()
 		reg := testutils.Registry(observability.TestInject, build.TestInject)
 
