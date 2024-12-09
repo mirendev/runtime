@@ -61,12 +61,14 @@ func TestContainer(t *testing.T) {
 		err = reg.Populate(&ii)
 		r.NoError(err)
 
-		err = ii.ImportImage(ctx, o, "mn-nginx:latest")
+		imgeName := "mn-nginx-int:latest"
+
+		err = ii.ImportImage(ctx, o, imgeName)
 		r.NoError(err)
 
 		ctx = namespaces.WithNamespace(ctx, ii.Namespace)
 
-		_, err = cc.GetImage(ctx, "mn-nginx:latest")
+		_, err = cc.GetImage(ctx, imgeName)
 		r.NoError(err)
 
 		var cr run.ContainerRunner
@@ -82,7 +84,7 @@ func TestContainer(t *testing.T) {
 
 		config := &run.ContainerConfig{
 			App:   "mn-nginx",
-			Image: "mn-nginx:latest",
+			Image: imgeName,
 			IPs:   []netip.Prefix{ca},
 			Subnet: &run.Subnet{
 				Id:     "sub",

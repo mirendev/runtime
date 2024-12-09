@@ -83,12 +83,21 @@ func TestContainerd(t *testing.T) {
 		err := reg.Init(&cc, &bkl)
 		r.NoError(err)
 
-		var lm observability.LogsMaintainer
+		var (
+			lm observability.LogsMaintainer
+			rm observability.ResourcesMonitor
+		)
 
 		err = reg.Populate(&lm)
 		r.NoError(err)
 
 		err = lm.Setup(ctx)
+		r.NoError(err)
+
+		err = reg.Populate(&rm)
+		r.NoError(err)
+
+		err = rm.Setup(ctx)
 		r.NoError(err)
 
 		dfr, err := build.MakeTar("testdata/nginx")
@@ -168,6 +177,14 @@ func TestContainerd(t *testing.T) {
 		task, err := c.Task(ctx, nil)
 		r.NoError(err)
 
+		cgroupPath, err := observability.CGroupPathForPid(task.Pid())
+		r.NoError(err)
+
+		go func() {
+			err := rm.Monitor(ctx, id, cgroupPath)
+			r.NoError(err)
+		}()
+
 		var output bytes.Buffer
 
 		ioc := cio.NewCreator(cio.WithStreams(os.Stdin, &output, os.Stderr))
@@ -240,5 +257,130 @@ func TestContainerd(t *testing.T) {
 		r.NoError(err)
 
 		r.Len(ports, 2)
+	})
+
+	t.Run("calculates cpu usage correctly", func(t *testing.T) {
+		r := require.New(t)
+
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		reg := testutils.Registry(observability.TestInject, build.TestInject)
+
+		var (
+			cc  *containerd.Client
+			bkl *build.Buildkit
+		)
+
+		err := reg.Init(&cc, &bkl)
+		r.NoError(err)
+
+		var (
+			lm observability.LogsMaintainer
+			rm observability.ResourcesMonitor
+		)
+
+		err = reg.Populate(&lm)
+		r.NoError(err)
+
+		err = lm.Setup(ctx)
+		r.NoError(err)
+
+		err = reg.Populate(&rm)
+		r.NoError(err)
+
+		err = rm.Setup(ctx)
+		r.NoError(err)
+
+		dfr, err := build.MakeTar("testdata/sort")
+		r.NoError(err)
+
+		datafs, err := build.TarFS(dfr, t.TempDir())
+		r.NoError(err)
+
+		o, err := bkl.Transform(ctx, datafs)
+		r.NoError(err)
+
+		var ii ImageImporter
+
+		err = reg.Populate(&ii)
+		r.NoError(err)
+
+		err = ii.ImportImage(ctx, o, "mn-sort:latest")
+		r.NoError(err)
+
+		ctx = namespaces.WithNamespace(ctx, ii.Namespace)
+
+		_, err = cc.GetImage(ctx, "mn-sort:latest")
+		r.NoError(err)
+
+		var (
+			cr  ContainerRunner
+			mon observability.RunSCMonitor
+		)
+
+		err = reg.Populate(&cr)
+		r.NoError(err)
+
+		err = reg.Populate(&mon)
+		r.NoError(err)
+
+		err = mon.WritePodInit("/run/runsc-init.json")
+		r.NoError(err)
+
+		err = mon.Monitor(ctx)
+		r.NoError(err)
+
+		defer mon.Close()
+
+		sa, err := netip.ParsePrefix("172.16.8.1/24")
+		r.NoError(err)
+
+		ca, err := netip.ParsePrefix("172.16.8.2/24")
+		r.NoError(err)
+
+		config := &ContainerConfig{
+			App:   "mn-sort",
+			Image: "mn-sort:latest",
+			IPs:   []netip.Prefix{ca},
+			Subnet: &Subnet{
+				Id:     "sub",
+				IP:     []netip.Prefix{sa},
+				OSName: "mtest",
+			},
+		}
+
+		id, err := cr.RunContainer(ctx, config)
+		r.NoError(err)
+
+		c, err := cc.LoadContainer(ctx, id)
+		r.NoError(err)
+
+		r.NotNil(c)
+
+		defer testutils.ClearContainer(ctx, c)
+
+		task, err := c.Task(ctx, nil)
+		r.NoError(err)
+
+		cgroupPath, err := observability.CGroupPathForPid(task.Pid())
+		r.NoError(err)
+
+		go func() {
+			err := rm.Monitor(ctx, id, cgroupPath)
+			r.NoError(err)
+		}()
+
+		// Let sort ... sort.
+		time.Sleep(3 * time.Second)
+
+		cpu, mem, err := rm.LastestUsage(id)
+		r.NoError(err)
+
+		t.Logf("last delta: %f", cpu)
+
+		// Sort is a CPU-bound process, so it should be using more than 170% CPU.
+		r.Greater(float64(cpu), float64(170))
+
+		r.Greater(mem, uint64(0))
 	})
 }
