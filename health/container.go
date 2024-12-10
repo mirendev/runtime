@@ -263,7 +263,7 @@ func (c *ContainerMonitor) WaitReady(ctx context.Context, id string) error {
 	}
 }
 
-func (c *ContainerMonitor) WaitForPortBound(ctx context.Context, id string, port int) error {
+func (c *ContainerMonitor) WaitForPortActive(ctx context.Context, id string, port int) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
