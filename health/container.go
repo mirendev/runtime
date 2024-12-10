@@ -78,12 +78,14 @@ func parseLabelValue(val string) []LabelKV {
 	return labels
 }
 
+const endpointPrefix = "miren.dev/endpoint:"
+
 func setupEndpoints(labels map[string]string) map[string]*Endpoint {
 	endpoints := make(map[string]*Endpoint)
 
 	for k, v := range labels {
-		if strings.HasPrefix(k, "endpoint:") {
-			name := strings.TrimPrefix(k, "endpoint:")
+		if strings.HasPrefix(k, endpointPrefix) {
+			name := strings.TrimPrefix(k, endpointPrefix)
 
 			kvs := parseLabelValue(v)
 
@@ -305,6 +307,8 @@ func (c *ContainerMonitor) Status(ctx context.Context, id string) (*ContainerSta
 	return c.status[id], nil
 }
 
+const ipLabel = "miren.dev/ip"
+
 func (c *ContainerMonitor) SetPortStatus(id string, bp observability.BoundPort, status observability.PortStatus) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -334,7 +338,7 @@ func (c *ContainerMonitor) SetPortStatus(id string, bp observability.BoundPort, 
 			cs.Endpoints[name] = curEp
 		}
 
-		ip := cs.Labels["ip"]
+		ip := cs.Labels[ipLabel]
 
 		if status == observability.PortStatusBound && ip != "" {
 			switch curEp.Type {

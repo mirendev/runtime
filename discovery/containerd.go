@@ -37,6 +37,12 @@ func (c *Containerd) lookupBG(ctx context.Context, app string, ch chan Backgroun
 	ch <- BackgroundLookup{Endpoint: ep}
 }
 
+const (
+	appLabel       = "miren.dev/app"
+	httpHostLabel  = "miren.dev/http_host"
+	staticDirLabel = "miren.dev/static_dir"
+)
+
 func (c *Containerd) FindInContainerd(ctx context.Context, app string) (Endpoint, error) {
 	ctx = namespaces.WithNamespace(ctx, c.Namespace)
 
@@ -48,11 +54,11 @@ func (c *Containerd) FindInContainerd(ctx context.Context, app string) (Endpoint
 	for _, container := range containers {
 		labels, err := container.Labels(ctx)
 		if err == nil {
-			if labels["app"] == app {
-				if host, ok := labels["http_host"]; ok {
+			if labels[appLabel] == app {
+				if host, ok := labels[httpHostLabel]; ok {
 					var ep Endpoint
 
-					if dir, ok := labels["static_dir"]; ok {
+					if dir, ok := labels[staticDirLabel]; ok {
 						c.Log.Info("using local container endpoint for static_dir", "id", container.ID())
 						ep = &LocalContainerEndpoint{
 							Log: c.Log,

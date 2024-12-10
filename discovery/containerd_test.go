@@ -24,8 +24,8 @@ func TestContainerd(t *testing.T) {
 		ctx := namespaces.WithNamespace(context.Background(), cl.Namespace)
 
 		cont, err := cl.Client.NewContainer(ctx, "test", containerd.WithAdditionalContainerLabels(map[string]string{
-			"app":       "test",
-			"http_host": "127.0.0.1:8888",
+			"miren.dev/app":       "test",
+			"miren.dev/http_host": "127.0.0.1:8888",
 		}))
 		r.NoError(err)
 

@@ -120,12 +120,9 @@ func TestContainer(t *testing.T) {
 
 		go ch.MonitorEvents(ctx)
 
+		// Let it boot up
 		err = ch.WaitForPortActive(ctx, id, 3000)
 		r.NoError(err)
-
-		// Let it boot up
-		//r.NoError(testutils.WaitForContainerReady(ctx, cc, ii.Namespace, id))
-		time.Sleep(time.Second)
 
 		cs, err := ch.Status(ctx, id)
 		r.NoError(err)
