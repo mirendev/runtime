@@ -136,6 +136,8 @@ func TestContainerd(t *testing.T) {
 		err = mon.WritePodInit("/run/runsc-init.json")
 		r.NoError(err)
 
+		defer os.Remove("/run/runsc-init.json")
+
 		err = mon.Monitor(ctx)
 		r.NoError(err)
 
@@ -253,7 +255,7 @@ func TestContainerd(t *testing.T) {
 
 		r.NotEmpty(entries)
 
-		ports, err := mon.SM.EntityBoundPorts(id)
+		ports, err := mon.Ports.(*observability.StatusMonitor).EntityBoundPorts(id)
 		r.NoError(err)
 
 		r.Len(ports, 2)
@@ -326,6 +328,8 @@ func TestContainerd(t *testing.T) {
 
 		err = mon.WritePodInit("/run/runsc-init.json")
 		r.NoError(err)
+
+		defer os.Remove("/run/runsc-init.json")
 
 		err = mon.Monitor(ctx)
 		r.NoError(err)

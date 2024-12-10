@@ -29,6 +29,8 @@ func TestRunSCMonitor(t *testing.T) {
 		err = m.WritePodInit(path)
 		r.NoError(err)
 
+		defer os.Remove("/run/runsc-mon.sock")
+
 		f, err := os.Open(path)
 		r.NoError(err)
 

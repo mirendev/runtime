@@ -180,7 +180,7 @@ func (s *CommonServer) handleClient(client client) {
 			}
 
 			s.Log.Error("error reading from client", "error", err)
-			continue
+			return
 		}
 
 		if read < HeaderStructSize {

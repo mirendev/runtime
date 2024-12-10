@@ -11,6 +11,7 @@ type PortStatus string
 const (
 	PortStatusBound   PortStatus = "bound"
 	PortStatusUnbound PortStatus = "unbound"
+	PortStatusActive  PortStatus = "active"
 )
 
 type BoundPort struct {
@@ -35,7 +36,7 @@ type StatusMonitor struct {
 	entities map[string]*EntityStatus
 }
 
-func (s *StatusMonitor) EmitPortStatus(entity string, port BoundPort, status PortStatus) error {
+func (s *StatusMonitor) SetPortStatus(entity string, port BoundPort, status PortStatus) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -60,8 +61,6 @@ func (s *StatusMonitor) EmitPortStatus(entity string, port BoundPort, status Por
 	case PortStatusUnbound:
 		delete(es.boundPorts, port)
 	}
-
-	return nil
 }
 
 func (s *StatusMonitor) FindBoundPort(bp BoundPort) ([]*EntityStatus, error) {

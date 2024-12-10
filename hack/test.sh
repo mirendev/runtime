@@ -5,8 +5,8 @@ mkdir -p /data /run
 # Compile in the background while containerd starts
 go build -o /bin/containerd-log-ingress ./run/containerd-log-ingress &
 
-containerd --root /data --state /data/state --address /run/containerd.sock -l trace &
-buildkitd --root /data/buildkit &
+containerd --root /data --state /data/state --address /run/containerd.sock -l trace > /dev/null 2>&1 &
+buildkitd --root /data/buildkit > /dev/null 2>&1 &
 
 mount -t debugfs nodev /sys/kernel/debug
 mount -t tracefs nodev /sys/kernel/debug/tracing

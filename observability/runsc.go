@@ -14,6 +14,7 @@ import (
 	"google.golang.org/protobuf/proto"
 	"miren.dev/runtime/pkg/runsc"
 	"miren.dev/runtime/pkg/runsc/monitor"
+
 	"miren.dev/runtime/pkg/runsc/pb"
 )
 
@@ -27,9 +28,13 @@ var MonitorPoints = []string{
 	runsc.SentryTaskExit,
 }
 
+type PortTracker interface {
+	SetPortStatus(containerID string, bp BoundPort, status PortStatus)
+}
+
 type RunSCMonitor struct {
-	Log *slog.Logger
-	SM  *StatusMonitor
+	Log   *slog.Logger
+	Ports PortTracker
 
 	cs       *monitor.CommonServer
 	messages atomic.Uint64
@@ -100,7 +105,7 @@ func (c *clientHandler) Message(raw []byte, hdr monitor.Header, payload []byte) 
 	case uint16(pb.MessageType_MESSAGE_SENTRY_CLONE):
 		msg = &pb.Clone{}
 	case uint16(pb.MessageType_MESSAGE_SENTRY_EXEC):
-		msg = &pb.Execve{}
+		msg = &pb.ExecveInfo{}
 	case uint16(pb.MessageType_MESSAGE_SENTRY_TASK_EXIT):
 		msg = &pb.TaskExit{}
 	case uint16(pb.MessageType_MESSAGE_SYSCALL_ACCEPT):
@@ -140,7 +145,8 @@ func (c *clientHandler) Message(raw []byte, hdr monitor.Header, payload []byte) 
 				Addr: ip.Address(),
 				Port: ip.Port(),
 			}
-			c.r.SM.EmitPortStatus(v.ContextData.ContainerId, bp, PortStatusBound)
+
+			c.r.Ports.SetPortStatus(v.ContextData.ContainerId, bp, PortStatusBound)
 		}
 	}
 

@@ -116,8 +116,10 @@ func (c *ContainerRunner) buildSpec(ctx context.Context, config *ContainerConfig
 	)
 
 	lbls := map[string]string{
-		"app":       config.App,
-		"http_host": config.IPs[0].Addr().String() + ":3000",
+		"app":           config.App,
+		"http_host":     config.IPs[0].Addr().String() + ":3000",
+		"ip":            config.IPs[0].Addr().String(),
+		"endpoint:http": "port=3000,type=http",
 	}
 
 	if config.StaticDir != "" {

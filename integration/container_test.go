@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -15,6 +16,7 @@ import (
 
 	"miren.dev/runtime/build"
 	"miren.dev/runtime/discovery"
+	"miren.dev/runtime/health"
 	"miren.dev/runtime/ingress"
 	"miren.dev/runtime/observability"
 	"miren.dev/runtime/pkg/testutils"
@@ -25,7 +27,7 @@ func TestContainer(t *testing.T) {
 	t.Run("runs a container and routes an http request to it", func(t *testing.T) {
 		r := require.New(t)
 
-		ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		reg := testutils.Registry(observability.TestInject, build.TestInject, ingress.TestInject, discovery.TestInject)
 
@@ -37,7 +39,7 @@ func TestContainer(t *testing.T) {
 		err := reg.Init(&cc, &bkl)
 		r.NoError(err)
 
-		go testutils.MonitorContainers(ctx, cc, "miren-test")
+		//go testutils.MonitorContainers(ctx, cc, "miren-test")
 
 		var lm observability.LogsMaintainer
 
@@ -71,10 +73,30 @@ func TestContainer(t *testing.T) {
 		_, err = cc.GetImage(ctx, imgeName)
 		r.NoError(err)
 
-		var cr run.ContainerRunner
+		var (
+			cr  run.ContainerRunner
+			ch  health.ContainerMonitor
+			mon observability.RunSCMonitor
+		)
 
 		err = reg.Populate(&cr)
 		r.NoError(err)
+
+		err = reg.Populate(&ch)
+		r.NoError(err)
+
+		reg.Register("ports", observability.PortTracker(&ch))
+
+		err = reg.Populate(&mon)
+		r.NoError(err)
+
+		err = mon.WritePodInit("/run/runsc-init.json")
+		r.NoError(err)
+
+		defer os.Remove("/run/runsc-init.json")
+
+		defer mon.Close()
+		go mon.Monitor(ctx)
 
 		sa, err := netip.ParsePrefix("172.16.8.1/24")
 		r.NoError(err)
@@ -96,9 +118,26 @@ func TestContainer(t *testing.T) {
 		id, err := cr.RunContainer(ctx, config)
 		r.NoError(err)
 
+		go ch.MonitorEvents(ctx)
+
+		err = ch.WaitForPortActive(ctx, id, 3000)
+		r.NoError(err)
+
 		// Let it boot up
-		r.NoError(testutils.WaitForContainerReady(ctx, cc, ii.Namespace, id))
+		//r.NoError(testutils.WaitForContainerReady(ctx, cc, ii.Namespace, id))
 		time.Sleep(time.Second)
+
+		cs, err := ch.Status(ctx, id)
+		r.NoError(err)
+
+		r.True(cs.Running)
+
+		ep, ok := cs.Endpoints["http"]
+		r.True(ok)
+
+		r.Equal(3000, ep.Port)
+		r.Equal("http", ep.Type)
+		r.Equal(observability.PortStatusActive, ep.Status)
 
 		c, err := cc.LoadContainer(ctx, id)
 		r.NoError(err)
@@ -239,6 +278,5 @@ func TestContainer(t *testing.T) {
 		r.Equal(http.StatusOK, rw.Code)
 
 		r.Equal("this is a static html file\n", rw.Body.String())
-
 	})
 }
