@@ -7,6 +7,7 @@ import (
 
 	"miren.dev/runtime/app"
 	"miren.dev/runtime/discovery"
+	"miren.dev/runtime/health"
 	"miren.dev/runtime/network"
 	"miren.dev/runtime/run"
 )
@@ -17,6 +18,7 @@ type LaunchContainer struct {
 	CR        *run.ContainerRunner
 	CD        *discovery.Containerd
 	IPPool    *network.IPPool
+	Health    *health.ContainerMonitor
 }
 
 func (l *LaunchContainer) Lookup(ctx context.Context, app string) (discovery.Endpoint, chan discovery.BackgroundLookup, error) {
@@ -80,7 +82,10 @@ func (l *LaunchContainer) launch(
 		return nil, err
 	}
 
-	// TODO wait for the container to be ready
+	err = l.Health.WaitForReady(ctx, config.Id)
+	if err != nil {
+		return nil, err
+	}
 
 	return l.CD.FindInContainerd(ctx, ac.Name)
 }

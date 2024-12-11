@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"testing"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 	"miren.dev/runtime/app"
 	"miren.dev/runtime/build"
 	"miren.dev/runtime/discovery"
+	"miren.dev/runtime/health"
 	"miren.dev/runtime/ingress"
 	"miren.dev/runtime/network"
 	"miren.dev/runtime/observability"
@@ -44,13 +46,35 @@ func TestOndemand(t *testing.T) {
 		err := reg.Init(&cc, &bkl)
 		r.NoError(err)
 
-		var lm observability.LogsMaintainer
+		var (
+			lm  observability.LogsMaintainer
+			cm  health.ContainerMonitor
+			mon observability.RunSCMonitor
+		)
 
 		err = reg.Populate(&lm)
 		r.NoError(err)
 
 		err = lm.Setup(ctx)
 		r.NoError(err)
+
+		err = reg.Populate(&cm)
+		r.NoError(err)
+
+		go cm.MonitorEvents(ctx)
+
+		reg.Register("ports", observability.PortTracker(&cm))
+
+		err = reg.Populate(&mon)
+		r.NoError(err)
+
+		err = mon.WritePodInit("/run/runsc-init.json")
+		r.NoError(err)
+
+		defer os.Remove("/run/runsc-init.json")
+
+		defer mon.Close()
+		go mon.Monitor(ctx)
 
 		dfr, err := build.MakeTar("testdata/nginx")
 		r.NoError(err)

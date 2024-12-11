@@ -158,16 +158,14 @@ func (c *ContainerMonitor) refreshStatus(ctx context.Context) {
 	}
 
 	for _, cont := range containers {
-		task, err := cont.Task(ctx, nil)
-		if err != nil {
-			c.Log.Error("failed to get task", "error", err)
-			continue
-		}
+		var status containerd.Status
 
-		status, err := task.Status(ctx)
-		if err != nil {
-			c.Log.Error("failed to get task status", "error", err)
-			continue
+		task, err := cont.Task(ctx, nil)
+		if err == nil {
+			status, err = task.Status(ctx)
+			if err != nil {
+				c.Log.Error("failed to get task status", "error", err)
+			}
 		}
 
 		c.mu.Lock()
@@ -212,8 +210,7 @@ func (c *ContainerMonitor) MonitorEvents(ctx context.Context) error {
 			c.Log.Error("containerd event error", "error", err)
 			return err
 		case e := <-envelopes:
-			c.Log.Info("containerd event", "event", e)
-			c.processEvent(e)
+			c.processEvent(ctx, e)
 		case <-ticker.C:
 			// TODO should we run this in the background?
 			c.refreshStatus(ctx)
@@ -221,14 +218,27 @@ func (c *ContainerMonitor) MonitorEvents(ctx context.Context) error {
 	}
 }
 
-func (c *ContainerMonitor) processEvent(ev *events.Envelope) {
+func (c *ContainerMonitor) processEvent(ctx context.Context, ev *events.Envelope) {
 	v, err := typeurl.UnmarshalAny(ev.Event)
 	if err != nil {
 		c.Log.Error("failed to unmarshal event", "error", err)
 		return
 	}
 
+	//c.Log.Info("containerd event", "type", fmt.Sprintf("%T", v), "event", v)
+
 	switch e := v.(type) {
+	case *aevents.ContainerCreate:
+		c.Log.Info("container created", "id", e.ID)
+		c.refreshStatus(ctx)
+
+	case *aevents.ContainerDelete:
+		c.Log.Info("container deleted", "id", e.ID)
+
+		c.mu.Lock()
+		defer c.mu.Unlock()
+
+		delete(c.status, e.ID)
 	case *aevents.TaskExit:
 		c.mu.Lock()
 		defer c.mu.Unlock()
@@ -263,6 +273,49 @@ func (c *ContainerMonitor) WaitReady(ctx context.Context, id string) error {
 
 		c.cond.Wait()
 	}
+}
+
+func (c *ContainerMonitor) WaitForReady(ctx context.Context, id string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.Log.Info("waiting for container", "id", id)
+
+	sub, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	var err error
+
+	go func() {
+		<-sub.Done()
+		err = sub.Err()
+
+		c.mu.Lock()
+		c.cond.Broadcast()
+		c.mu.Unlock()
+	}()
+
+	for err == nil {
+		status, ok := c.status[id]
+
+		if ok && status.Running {
+			var stillWaiting bool
+
+			for _, ep := range status.Endpoints {
+				if !ep.Ready() {
+					stillWaiting = true
+				}
+			}
+
+			if !stillWaiting {
+				return nil
+			}
+		}
+
+		c.cond.Wait()
+	}
+
+	return err
 }
 
 func (c *ContainerMonitor) WaitForPortActive(ctx context.Context, id string, port int) error {
@@ -388,6 +441,8 @@ func (c *ContainerMonitor) checkPort(ctx context.Context, addr string, dur time.
 			c.mu.Unlock()
 			return nil
 		}
+
+		time.Sleep(500 * time.Millisecond)
 	}
 
 	return nil
@@ -415,6 +470,8 @@ func (c *ContainerMonitor) checkHTTP(ctx context.Context, addr string, dur time.
 			c.mu.Unlock()
 			return nil
 		}
+
+		time.Sleep(500 * time.Millisecond)
 	}
 
 	return nil

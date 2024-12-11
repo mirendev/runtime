@@ -98,6 +98,8 @@ func TestContainer(t *testing.T) {
 		defer mon.Close()
 		go mon.Monitor(ctx)
 
+		go ch.MonitorEvents(ctx)
+
 		sa, err := netip.ParsePrefix("172.16.8.1/24")
 		r.NoError(err)
 
@@ -117,8 +119,6 @@ func TestContainer(t *testing.T) {
 
 		id, err := cr.RunContainer(ctx, config)
 		r.NoError(err)
-
-		go ch.MonitorEvents(ctx)
 
 		// Let it boot up
 		err = ch.WaitForPortActive(ctx, id, 3000)
