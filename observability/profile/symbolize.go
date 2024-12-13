@@ -207,8 +207,11 @@ func (s *Symbolizer) resolveFunc(addr uint64) (*FuncSymbol, error) {
 			lowPC, okLow := entry.Val(dwarf.AttrLowpc).(uint64)
 			highPC, okHigh := entry.Val(dwarf.AttrHighpc).(uint64)
 			if okLow && okHigh && lowPC <= addr && addr < highPC {
+				sv := entry.Val(dwarf.AttrName)
+				if sv != nil {
+					sym.Name = sv.(string)
+				}
 
-				sym.Name = entry.Val(dwarf.AttrName).(string)
 				sym.Lo = lowPC
 				sym.Hi = highPC
 

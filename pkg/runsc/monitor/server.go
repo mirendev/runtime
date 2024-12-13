@@ -26,6 +26,7 @@ import (
 	"net"
 	"os"
 	"sync"
+	"time"
 
 	"golang.org/x/sys/unix"
 	"google.golang.org/protobuf/proto"
@@ -77,7 +78,10 @@ type CommonServer struct {
 
 	handler ClientHandler
 
-	cond sync.Cond
+	mu   sync.Mutex
+	cond *sync.Cond
+
+	ts time.Time
 
 	// +checklocks:cond.L
 	clients []client
@@ -88,11 +92,16 @@ func (s *CommonServer) Init(log *slog.Logger, path string, handler ClientHandler
 	s.Log = log
 	s.Endpoint = path
 	s.handler = handler
-	s.cond = sync.Cond{L: &sync.Mutex{}}
+
+	s.cond = sync.NewCond(&s.mu)
 }
 
 // Start creates the socket file and listens for new connections.
 func (s *CommonServer) Start() error {
+	if s.Endpoint == "/run/runsc-mon.sock" {
+		panic("gtfo")
+	}
+
 	li, err := net.Listen("unixpacket", s.Endpoint)
 	if err != nil {
 		return err
@@ -100,6 +109,9 @@ func (s *CommonServer) Start() error {
 
 	s.listener = li
 
+	s.ts = time.Now()
+
+	s.Log.Warn("starting runsc monitor", "token", s.ts.UnixMicro(), "endpoint", s.Endpoint)
 	go s.run()
 	return nil
 }
@@ -205,8 +217,10 @@ func (s *CommonServer) handleClient(client client) {
 func (s *CommonServer) closeClient(client client) {
 	client.close()
 
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	// Stop tracking this client.
-	s.cond.L.Lock()
 	for i, c := range s.clients {
 		if c == client {
 			s.clients = append(s.clients[:i], s.clients[i+1:]...)
@@ -214,28 +228,34 @@ func (s *CommonServer) closeClient(client client) {
 		}
 	}
 	s.cond.Broadcast()
-	s.cond.L.Unlock()
 }
 
 // Close stops listening and closes all connections.
 func (s *CommonServer) Close() {
+	s.Log.Warn("closing runsc monitor", "token", s.ts.UnixMicro(), "li2", s.listener != nil)
+
 	if s.listener != nil {
 		_ = s.listener.Close()
 	}
-	s.cond.L.Lock()
+
+	err := os.Remove(s.Endpoint)
+	s.Log.Warn("removed runsc monitor endpoint", "endpoint", s.Endpoint, "error", err)
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	for _, client := range s.clients {
 		client.close()
 	}
 	s.clients = nil
 	s.cond.Broadcast()
-	s.cond.L.Unlock()
-	_ = os.Remove(s.Endpoint)
 }
 
 // WaitForNoClients waits until the number of clients connected reaches 0.
 func (s *CommonServer) WaitForNoClients() {
-	s.cond.L.Lock()
-	defer s.cond.L.Unlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	for len(s.clients) > 0 {
 		s.cond.Wait()
 	}

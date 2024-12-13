@@ -4,7 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
-	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -68,13 +68,17 @@ func TestOndemand(t *testing.T) {
 		err = reg.Populate(&mon)
 		r.NoError(err)
 
-		err = mon.WritePodInit("/run/runsc-init.json")
+		mon.SetEndpoint(filepath.Join(t.TempDir(), "runsc-mon.sock"))
+
+		runscBin, podInit := testutils.SetupRunsc(t.TempDir())
+
+		err = mon.WritePodInit(podInit)
 		r.NoError(err)
 
-		defer os.Remove("/run/runsc-init.json")
+		err = mon.Monitor(ctx)
+		r.NoError(err)
 
 		defer mon.Close()
-		go mon.Monitor(ctx)
 
 		dfr, err := build.MakeTar("testdata/nginx")
 		r.NoError(err)
@@ -132,6 +136,8 @@ func TestOndemand(t *testing.T) {
 
 		err = reg.Populate(&on)
 		r.NoError(err)
+
+		on.CR.RunscBinary = runscBin
 
 		r.NoError(testutils.ClearContainers(cc, on.CD.Namespace))
 

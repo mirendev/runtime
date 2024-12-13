@@ -3,15 +3,21 @@ package testutils
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
 	containerd "github.com/containerd/containerd/v2/client"
 	"github.com/containerd/containerd/v2/pkg/namespaces"
 	"github.com/containerd/typeurl/v2"
 	"github.com/davecgh/go-spew/spew"
+	"github.com/vishvananda/netlink"
 )
 
 func ClearContainers(cl *containerd.Client, ns string) error {
+	defer NukeBridges()
+
 	ctx := namespaces.WithNamespace(context.Background(), ns)
 	containers, err := cl.Containers(ctx)
 	if err != nil {
@@ -24,9 +30,7 @@ func ClearContainers(cl *containerd.Client, ns string) error {
 			task.Delete(ctx, containerd.WithProcessKill)
 		}
 
-		if err := container.Delete(ctx, containerd.WithSnapshotCleanup); err != nil {
-			return err
-		}
+		container.Delete(ctx, containerd.WithSnapshotCleanup)
 	}
 
 	return nil
@@ -101,4 +105,43 @@ func WaitForContainerReady(ctx context.Context, cl *containerd.Client, ns, id st
 		err = fmt.Errorf("timed out waiting for container %s", id)
 	}
 	return err
+}
+
+func SetupRunsc(dir string) (string, string) {
+	path := filepath.Join(dir, "runsc-entry")
+	pic := filepath.Join(dir, "pod-init-config.json")
+
+	f, err := os.Create(path)
+	if err != nil {
+		panic(err)
+	}
+
+	fmt.Fprintf(f,
+		"#!/bin/bash\nexec runsc -pod-init-config \"%s\" \"$@\"\n", pic)
+
+	defer f.Close()
+
+	err = os.Chmod(path, 0755)
+	if err != nil {
+		panic(err)
+	}
+
+	return path, pic
+}
+
+func NukeBridges() {
+	links, err := netlink.LinkList()
+	if err != nil {
+		panic(err)
+	}
+
+	for _, link := range links {
+		if link.Type() != "bridge" {
+			continue
+		}
+
+		if strings.HasPrefix(link.Attrs().Name, "miren-") {
+			netlink.LinkDel(link)
+		}
+	}
 }

@@ -3,8 +3,8 @@ package asm
 import (
 	"fmt"
 	"reflect"
-
-	"github.com/pkg/errors"
+	"slices"
+	"strings"
 )
 
 type builderKey struct {
@@ -99,14 +99,14 @@ func isAssignableTo(a, b reflect.Type) bool {
 	return b.AssignableTo(a)
 }
 
-func (r *Registry) populateByType(field reflect.Value, tag string) error {
+func (r *Registry) populateByType(field reflect.Value, tag string) bool {
 	if tag == "" {
 		for _, v := range r.components {
 			cv := reflect.ValueOf(v)
 
 			if isAssignableTo(field.Type(), cv.Type()) {
 				field.Set(cv)
-				return nil
+				return true
 			}
 		}
 	}
@@ -114,10 +114,10 @@ func (r *Registry) populateByType(field reflect.Value, tag string) error {
 	ret, err := r.buildByType(field, tag)
 	if err == nil && isAssignableTo(field.Type(), ret.Type()) {
 		field.Set(ret)
-		return nil
+		return true
 	}
 
-	return errors.Wrapf(err, "error building component of type %s available", field.Type())
+	return false
 }
 
 type HasPopulated interface {
@@ -139,9 +139,8 @@ func (r *Registry) Resolve(s any) error {
 		return fmt.Errorf("expected a pointer, got %T", s)
 	}
 
-	err := r.populateByType(rv.Elem(), "")
-	if err != nil {
-		return err
+	if !r.populateByType(rv.Elem(), "") {
+		return fmt.Errorf("unable to find component of type %s available", rv.Elem().Type())
 	}
 
 	return nil
@@ -154,9 +153,8 @@ func (r *Registry) ResolveNamed(s any, name string) error {
 		return fmt.Errorf("expected a pointer, got %T", s)
 	}
 
-	err := r.populateByType(rv.Elem(), name)
-	if err != nil {
-		return err
+	if !r.populateByType(rv.Elem(), name) {
+		return fmt.Errorf("unable to find component of type %s available", rv.Elem().Type())
 	}
 
 	return nil
@@ -173,6 +171,21 @@ func (r *Registry) Init(values ...any) error {
 	}
 
 	return nil
+}
+
+func parseTag(tag string) (string, bool) {
+	comma := strings.IndexByte(tag, ',')
+	if comma == -1 {
+		return tag, false
+	}
+
+	name := tag[:comma]
+
+	f := strings.Fields(tag[comma+1:])
+
+	optional := slices.Contains(f, "optional")
+
+	return name, optional
 }
 
 func (r *Registry) Populate(s interface{}) error {
@@ -195,18 +208,20 @@ fields:
 
 		tag, ok := fieldType.Tag.Lookup("asm")
 		if !ok {
-			err := r.populateByType(field, "")
-			if err != nil {
-				return err
+			if !r.populateByType(field, "") {
+				return fmt.Errorf("unable to find component of type %s available", field.Type())
 			}
 			continue
 		}
 
+		tag, optional := parseTag(tag)
+
 		component, ok := r.components[tag]
 		if !ok {
-			err := r.populateByType(field, tag)
-			if err != nil {
-				return err
+			if !r.populateByType(field, tag) {
+				if !optional {
+					return fmt.Errorf("unable to find component of type %s available", field.Type())
+				}
 			}
 			continue fields
 		}

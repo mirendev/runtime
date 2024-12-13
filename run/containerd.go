@@ -47,9 +47,18 @@ func (i *ImageImporter) ImportImage(ctx context.Context, r io.Reader, indexName 
 }
 
 type ContainerRunner struct {
-	Log       *slog.Logger
-	CC        *containerd.Client
-	Namespace string `asm:"namespace"`
+	Log         *slog.Logger
+	CC          *containerd.Client
+	Namespace   string `asm:"namespace"`
+	RunscBinary string `asm:"runsc_binary,optional"`
+}
+
+func (c *ContainerRunner) Populated() error {
+	if c.RunscBinary == "" {
+		c.RunscBinary = "runsc-ignore"
+	}
+
+	return nil
 }
 
 type ContainerConfig struct {
@@ -60,6 +69,8 @@ type ContainerConfig struct {
 	Subnet *Subnet
 
 	StaticDir string
+
+	CGroupPath string
 }
 
 func (c *ContainerRunner) RunContainer(ctx context.Context, config *ContainerConfig) (string, error) {
@@ -78,6 +89,13 @@ func (c *ContainerRunner) RunContainer(ctx context.Context, config *ContainerCon
 	if err != nil {
 		return "", errors.Wrapf(err, "failed to create container %s", config.Id)
 	}
+
+	spec, err := container.Spec(ctx)
+	if err != nil {
+		return "", errors.Wrapf(err, "failed to get container spec %s", config.Id)
+	}
+
+	config.CGroupPath = spec.Linux.CgroupsPath
 
 	err = c.bootInitialTask(ctx, config, container)
 	if err != nil {
@@ -134,7 +152,7 @@ func (c *ContainerRunner) buildSpec(ctx context.Context, config *ContainerConfig
 			//oci.WithMounts(mounts),
 		),
 		containerd.WithRuntime("io.containerd.runc.v2", &options.Options{
-			BinaryName: "runsc-ignore",
+			BinaryName: c.RunscBinary,
 		}),
 		containerd.WithAdditionalContainerLabels(lbls),
 	)

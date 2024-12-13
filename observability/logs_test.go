@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/moby/buildkit/identity"
 	"github.com/stretchr/testify/require"
 	"miren.dev/runtime/pkg/testutils"
 )
@@ -37,10 +38,12 @@ func TestLogs(t *testing.T) {
 		err = lm.Setup(ctx)
 		r.NoError(err)
 
-		err = pw.WriteEntry("test", "this is a log line")
+		id := identity.NewID()
+
+		err = pw.WriteEntry(id, "this is a log line")
 		r.NoError(err)
 
-		entries, err := pr.Read(ctx, "test")
+		entries, err := pr.Read(ctx, id)
 		r.NoError(err)
 
 		r.Len(entries, 1)
@@ -54,7 +57,7 @@ func TestLogs(t *testing.T) {
 
 		var count int
 
-		err = db.QueryRow("SELECT count() FROM logs WHERE container_id = ?", "test").Scan(&count)
+		err = db.QueryRow("SELECT count() FROM logs WHERE container_id = ?", id).Scan(&count)
 		r.NoError(err)
 
 		r.Equal(1, count)

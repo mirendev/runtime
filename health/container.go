@@ -329,9 +329,9 @@ func (c *ContainerMonitor) WaitForPortActive(ctx context.Context, id string, por
 
 	go func() {
 		<-sub.Done()
-		err = sub.Err()
 
 		c.mu.Lock()
+		err = sub.Err()
 		c.cond.Broadcast()
 		c.mu.Unlock()
 	}()

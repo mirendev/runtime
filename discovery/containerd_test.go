@@ -6,6 +6,7 @@ import (
 
 	containerd "github.com/containerd/containerd/v2/client"
 	"github.com/containerd/containerd/v2/pkg/namespaces"
+	"github.com/moby/buildkit/identity"
 	"github.com/stretchr/testify/require"
 	"miren.dev/runtime/pkg/testutils"
 )
@@ -23,15 +24,17 @@ func TestContainerd(t *testing.T) {
 
 		ctx := namespaces.WithNamespace(context.Background(), cl.Namespace)
 
-		cont, err := cl.Client.NewContainer(ctx, "test", containerd.WithAdditionalContainerLabels(map[string]string{
-			"miren.dev/app":       "test",
+		id := identity.NewID()
+
+		cont, err := cl.Client.NewContainer(ctx, id, containerd.WithAdditionalContainerLabels(map[string]string{
+			"miren.dev/app":       id,
 			"miren.dev/http_host": "127.0.0.1:8888",
 		}))
 		r.NoError(err)
 
 		defer testutils.ClearContainer(ctx, cont)
 
-		ep, ch, err := cl.Lookup(ctx, "test")
+		ep, ch, err := cl.Lookup(ctx, id)
 		r.NoError(err)
 
 		r.Nil(ep)

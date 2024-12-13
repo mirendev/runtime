@@ -36,11 +36,21 @@ type RunSCMonitor struct {
 	Log   *slog.Logger
 	Ports PortTracker
 
+	endpoint string
+
 	cs       *monitor.CommonServer
 	messages atomic.Uint64
 }
 
+func (r *RunSCMonitor) SetEndpoint(endpoint string) {
+	r.endpoint = endpoint
+}
+
 func (r *RunSCMonitor) WritePodInit(path string) error {
+	if r.endpoint == "" {
+		r.endpoint = "/run/runsc-mon.sock"
+	}
+
 	cfg := runsc.InitConfig{
 		TraceSession: runsc.SessionConfig{
 			Name: "Default",
@@ -48,7 +58,7 @@ func (r *RunSCMonitor) WritePodInit(path string) error {
 				{
 					Name: "remote",
 					Config: map[string]interface{}{
-						"endpoint": "/run/runsc-mon.sock",
+						"endpoint": r.endpoint,
 					},
 				},
 			},
@@ -68,9 +78,13 @@ func (r *RunSCMonitor) WritePodInit(path string) error {
 }
 
 func (r *RunSCMonitor) Monitor(ctx context.Context) error {
+	if r.endpoint == "" {
+		r.endpoint = "/run/runsc-mon.sock"
+	}
+
 	var cs monitor.CommonServer
 
-	cs.Init(r.Log, "/run/runsc-mon.sock", r)
+	cs.Init(r.Log, r.endpoint, r)
 
 	r.cs = &cs
 

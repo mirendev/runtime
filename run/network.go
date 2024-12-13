@@ -177,7 +177,7 @@ func setupBridge(n *BridgeConfig) (*netlink.Bridge, *current.Interface, error) {
 	}
 
 	return br, &current.Interface{
-		Name: br.Attrs().Name,
+		Name: "miren-" + br.Attrs().Name,
 		Mac:  br.Attrs().HardwareAddr.String(),
 	}, nil
 }

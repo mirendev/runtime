@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
-	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -27,7 +27,7 @@ func TestContainer(t *testing.T) {
 	t.Run("runs a container and routes an http request to it", func(t *testing.T) {
 		r := require.New(t)
 
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 		defer cancel()
 		reg := testutils.Registry(observability.TestInject, build.TestInject, ingress.TestInject, discovery.TestInject)
 
@@ -90,20 +90,26 @@ func TestContainer(t *testing.T) {
 		err = reg.Populate(&mon)
 		r.NoError(err)
 
-		err = mon.WritePodInit("/run/runsc-init.json")
+		mon.SetEndpoint(filepath.Join(t.TempDir(), "runsc-mon.sock"))
+
+		runscBin, podInit := testutils.SetupRunsc(t.TempDir())
+
+		cr.RunscBinary = runscBin
+
+		err = mon.WritePodInit(podInit)
 		r.NoError(err)
 
-		defer os.Remove("/run/runsc-init.json")
+		err = mon.Monitor(ctx)
+		r.NoError(err)
 
 		defer mon.Close()
-		go mon.Monitor(ctx)
 
 		go ch.MonitorEvents(ctx)
 
-		sa, err := netip.ParsePrefix("172.16.8.1/24")
+		sa, err := netip.ParsePrefix("172.16.9.1/24")
 		r.NoError(err)
 
-		ca, err := netip.ParsePrefix("172.16.8.2/24")
+		ca, err := netip.ParsePrefix("172.16.9.2/24")
 		r.NoError(err)
 
 		config := &run.ContainerConfig{
@@ -218,10 +224,10 @@ func TestContainer(t *testing.T) {
 		err = reg.Populate(&cr)
 		r.NoError(err)
 
-		sa, err := netip.ParsePrefix("172.16.8.1/24")
+		sa, err := netip.ParsePrefix("172.16.9.1/24")
 		r.NoError(err)
 
-		ca, err := netip.ParsePrefix("172.16.8.2/24")
+		ca, err := netip.ParsePrefix("172.16.9.3/24")
 		r.NoError(err)
 
 		config := &run.ContainerConfig{

@@ -29,8 +29,6 @@ func TestRunSCMonitor(t *testing.T) {
 		err = m.WritePodInit(path)
 		r.NoError(err)
 
-		defer os.Remove("/run/runsc-mon.sock")
-
 		f, err := os.Open(path)
 		r.NoError(err)
 
@@ -54,6 +52,5 @@ func TestRunSCMonitor(t *testing.T) {
 
 		r.Equal("remote", cfg.TraceSession.Sinks[0].Name)
 		r.Equal("/run/runsc-mon.sock", cfg.TraceSession.Sinks[0].Config["endpoint"])
-
 	})
 }

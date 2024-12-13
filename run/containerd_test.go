@@ -1,11 +1,11 @@
 package run
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"net/netip"
 	"os"
+	"path/filepath"
 	"slices"
 	"testing"
 	"time"
@@ -133,10 +133,14 @@ func TestContainerd(t *testing.T) {
 		err = reg.Populate(&mon)
 		r.NoError(err)
 
-		err = mon.WritePodInit("/run/runsc-init.json")
-		r.NoError(err)
+		mon.SetEndpoint(filepath.Join(t.TempDir(), "runsc-mon.sock"))
 
-		defer os.Remove("/run/runsc-init.json")
+		runscBin, podInit := testutils.SetupRunsc(t.TempDir())
+
+		cr.RunscBinary = runscBin
+
+		err = mon.WritePodInit(podInit)
+		r.NoError(err)
 
 		err = mon.Monitor(ctx)
 		r.NoError(err)
@@ -187,9 +191,13 @@ func TestContainerd(t *testing.T) {
 			r.NoError(err)
 		}()
 
-		var output bytes.Buffer
+		pr, pw, err := os.Pipe()
+		r.NoError(err)
 
-		ioc := cio.NewCreator(cio.WithStreams(os.Stdin, &output, os.Stderr))
+		defer pr.Close()
+		defer pw.Close()
+
+		ioc := cio.NewCreator(cio.WithStreams(os.Stdin, pw, os.Stderr))
 
 		proc, err := task.Exec(ctx, "test", &specs.Process{
 			Args: []string{"ip", "-j", "addr"},
@@ -223,7 +231,7 @@ func TestContainerd(t *testing.T) {
 
 		var ais []iface
 
-		err = json.Unmarshal(output.Bytes(), &ais)
+		err = json.NewDecoder(pr).Decode(&ais)
 		r.NoError(err)
 
 		i := slices.IndexFunc(ais, func(iface iface) bool {
@@ -326,10 +334,14 @@ func TestContainerd(t *testing.T) {
 		err = reg.Populate(&mon)
 		r.NoError(err)
 
-		err = mon.WritePodInit("/run/runsc-init.json")
-		r.NoError(err)
+		mon.SetEndpoint(filepath.Join(t.TempDir(), "runsc-mon.sock"))
 
-		defer os.Remove("/run/runsc-init.json")
+		runscBin, podInit := testutils.SetupRunsc(t.TempDir())
+
+		cr.RunscBinary = runscBin
+
+		err = mon.WritePodInit(podInit)
+		r.NoError(err)
 
 		err = mon.Monitor(ctx)
 		r.NoError(err)
@@ -355,6 +367,15 @@ func TestContainerd(t *testing.T) {
 
 		id, err := cr.RunContainer(ctx, config)
 		r.NoError(err)
+
+		r.NotEmpty(config.Id)
+		r.NotEmpty(config.CGroupPath)
+
+		path := filepath.Join("/sys/fs/cgroup", config.CGroupPath, "cpu.stat")
+		fi, err := os.Stat(path)
+		r.NoError(err)
+
+		r.True(fi.Mode().IsRegular())
 
 		c, err := cc.LoadContainer(ctx, id)
 		r.NoError(err)

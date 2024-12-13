@@ -6,6 +6,8 @@ import (
 	"context"
 	"dagger/runtime/internal/dagger"
 	"runtime"
+	"strconv"
+	"strings"
 )
 
 type Runtime struct{}
@@ -103,6 +105,8 @@ func (m *Runtime) Test(
 	shell bool,
 	// +optional
 	tests string,
+	// +optional
+	count int,
 ) (string, error) {
 	w := m.WithServices(dir).
 		WithDirectory("/src", dir).
@@ -118,9 +122,19 @@ func (m *Runtime) Test(
 			InsecureRootCapabilities: true,
 		})
 	} else {
-		w = w.WithExec([]string{"sh", "/src/hack/test.sh", tests}, dagger.ContainerWithExecOpts{
-			InsecureRootCapabilities:      true,
-			ExperimentalPrivilegedNesting: true,
+		args := []string{"sh", "/src/hack/test.sh"}
+
+		for _, t := range strings.Split(tests, " ") {
+			args = append(args, t)
+		}
+
+		if count > 0 {
+			//args = append(args, "--")
+			args = append(args, "-count", strconv.Itoa(count))
+		}
+
+		w = w.WithExec(args, dagger.ContainerWithExecOpts{
+			InsecureRootCapabilities: true,
 		})
 	}
 
