@@ -220,6 +220,7 @@ func TestContainer(t *testing.T) {
 		r.NoError(err)
 
 		var cr run.ContainerRunner
+		cr.RunscBinary = "runsc"
 
 		err = reg.Populate(&cr)
 		r.NoError(err)
