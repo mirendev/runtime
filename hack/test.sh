@@ -13,6 +13,8 @@ sed -e 's/ / +/g' -e 's/^/+/' < /sys/fs/cgroup/cgroup.controllers > /sys/fs/cgro
 
 mkdir -p /data /run
 
+export OTEL_SDK_DISABLED=true
+
 # Compile in the background while containerd starts
 go build -o /bin/containerd-log-ingress ./run/containerd-log-ingress &
 
