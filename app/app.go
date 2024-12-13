@@ -7,6 +7,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/pkg/errors"
 )
 
 type AppAccess struct {
@@ -61,7 +62,7 @@ func (a *AppAccess) LoadApp(ctx context.Context, name string) (*AppConfig, error
 		).Scan(&app.Id, &app.Name, &app.CreatedAt, &app.UpdatedAt)
 	})
 	if err != nil {
-		return nil, err
+		return nil, errors.Wrapf(err, "failed to load app %s", name)
 	}
 
 	app.OrgId = a.OrgId
