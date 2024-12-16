@@ -184,3 +184,33 @@ func (c *ContainerRunner) bootInitialTask(ctx context.Context, config *Container
 
 	return task.Start(ctx)
 }
+
+func (c *ContainerRunner) StopContainer(ctx context.Context, id string) error {
+	ctx = namespaces.WithNamespace(ctx, c.Namespace)
+
+	container, err := c.CC.LoadContainer(ctx, id)
+	if err != nil {
+		return err
+	}
+
+	task, err := container.Task(ctx, nil)
+	if err != nil {
+		return err
+	}
+
+	if task != nil {
+		_, err = task.Delete(ctx, containerd.WithProcessKill)
+		if err != nil {
+			return err
+		}
+	}
+
+	err = container.Delete(ctx, containerd.WithSnapshotCleanup)
+	if err != nil {
+		return err
+	}
+
+	c.Log.Info("container stopped", "id", id)
+
+	return nil
+}

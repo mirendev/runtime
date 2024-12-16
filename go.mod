@@ -18,7 +18,7 @@ require (
 	github.com/fatih/color v1.18.0
 	github.com/google/pprof v0.0.0-20241203143554-1e3fdc7de467
 	github.com/ironpark/skiplist v0.0.0-20230103051251-d63941a7d606
-	github.com/jackc/pgx/v5 v5.5.5
+	github.com/jackc/pgx/v5 v5.7.1
 	github.com/jackc/tern/v2 v2.2.3
 	github.com/mitchellh/go-testing-interface v1.14.1
 	github.com/moby/buildkit v0.17.1
@@ -73,8 +73,8 @@ require (
 	github.com/huandu/xstrings v1.5.0 // indirect
 	github.com/in-toto/in-toto-golang v0.5.0 // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect
-	github.com/jackc/pgservicefile v0.0.0-20231201235250-de7065d80cb9 // indirect
-	github.com/jackc/puddle/v2 v2.2.1 // indirect
+	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
+	github.com/jackc/puddle/v2 v2.2.2 // indirect
 	github.com/klauspost/compress v1.17.11 // indirect
 	github.com/mattn/go-colorable v0.1.13 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
