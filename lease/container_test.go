@@ -188,6 +188,25 @@ func TestLeaseContainer(t *testing.T) {
 			r.NotZero(li.Usage)
 
 			r.False(lc.App.idle.Empty(), "container should be idle")
+			r.True(lc.App.windows.Empty(), "window should be removed")
+		})
+
+		t.Run("closed windows emit reconds to clickhouse", func(t *testing.T) {
+			r := require.New(t)
+
+			var (
+				usage  uint64
+				leases uint32
+			)
+
+			err := on.DB.QueryRow(
+				"SELECT usage, leases FROM container_usage WHERE app = $1", app.name,
+			).Scan(&usage, &leases)
+
+			r.NoError(err)
+
+			r.NotZero(usage)
+			r.Equal(uint32(2), leases)
 		})
 
 		t.Run("idle containers are shutdown after a period of time", func(t *testing.T) {

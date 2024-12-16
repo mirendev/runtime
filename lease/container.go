@@ -2,6 +2,7 @@ package lease
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"log/slog"
 	"net/netip"
@@ -26,6 +27,7 @@ type LaunchContainer struct {
 	CD        *discovery.Containerd
 	IPPool    *network.IPPool
 	Health    *health.ContainerMonitor
+	DB        *sql.DB `asm:"clickhouse"`
 
 	MaxLeasesPerContainer int           `asm:"max_leases_per_container,optional"`
 	MaxContainersPerApp   int           `asm:"max_containers_per_app,optional"`
@@ -53,7 +55,19 @@ func (l *LaunchContainer) Populated() error {
 		l.IdleTimeout = 1 * time.Hour
 	}
 
-	return nil
+	_, err := l.DB.Exec(
+		`
+CREATE TABLE IF NOT EXISTS container_usage (
+    timestamp DateTime64(9) CODEC(Delta(8), ZSTD(1)),
+    app LowCardinality(String) CODEC(ZSTD(1)),
+		usage UInt64,
+		leases UInt32,
+) 
+		ENGINE = MergeTree
+		ORDER BY (app, toUnixTimestamp(timestamp))
+`)
+
+	return err
 }
 
 type pendingContainer struct {
@@ -191,7 +205,8 @@ type UsageWindow struct {
 
 	Start, End uint64
 
-	Leases set.Set[*LeasedContainer]
+	Leases      set.Set[*LeasedContainer]
+	TotalLeases uint32
 
 	container *runningContainer
 }
@@ -234,6 +249,7 @@ func (l *LaunchContainer) Lease(ctx context.Context, name string) (*LeasedContai
 			Start:  start,
 		}
 
+		win.TotalLeases++
 		win.Leases.Add(lc)
 
 		return lc, nil
@@ -253,10 +269,11 @@ func (l *LaunchContainer) Lease(ctx context.Context, name string) (*LeasedContai
 		l.Log.Debug("beginning new usage window", "app", app.name, "start", start)
 
 		win = &UsageWindow{
-			App:    app.name,
-			Id:     identity.NewID(),
-			Start:  start,
-			Leases: set.New[*LeasedContainer](),
+			App:         app.name,
+			Id:          identity.NewID(),
+			Start:       start,
+			Leases:      set.New[*LeasedContainer](),
+			TotalLeases: 1,
 
 			container: rc,
 		}
@@ -352,10 +369,11 @@ func (l *LaunchContainer) Lease(ctx context.Context, name string) (*LeasedContai
 	}
 
 	win = &UsageWindow{
-		App:    app.name,
-		Id:     winId,
-		Start:  0,
-		Leases: set.New[*LeasedContainer](),
+		App:         app.name,
+		Id:          winId,
+		Start:       0,
+		Leases:      set.New[*LeasedContainer](),
+		TotalLeases: 1,
 
 		container: rc,
 	}
@@ -399,9 +417,9 @@ func (l *LaunchContainer) ReleaseLease(ctx context.Context, lc *LeasedContainer)
 	}
 
 	if lc.Window.Leases.Empty() {
-		lc.Window.End = ts
+		err = l.closeWindow(ctx, lc.Window, ts)
 		lc.App.idle.Add(lc.Window.container)
-		lc.Window.container.idleSince = time.Now()
+		lc.App.windows.Remove(lc.Window)
 		l.Log.Info("usage window closed", "window", lc.Window.Id, "app", lc.Window.App)
 	}
 
@@ -410,6 +428,22 @@ func (l *LaunchContainer) ReleaseLease(ctx context.Context, lc *LeasedContainer)
 	}
 
 	return i, nil
+}
+
+func (l *LaunchContainer) closeWindow(ctx context.Context, w *UsageWindow, ts uint64) error {
+	l.Log.Info("closing window", "window", w.Id, "app", w.App)
+
+	w.End = ts
+	w.container.idleSince = time.Now()
+
+	usage := ts - w.Start
+
+	_, err := l.DB.Exec(
+		"INSERT INTO container_usage (app, usage, leases) VALUES (?, ?, ?)",
+		w.App, usage, w.TotalLeases,
+	)
+
+	return err
 }
 
 func (l *LaunchContainer) launch(
