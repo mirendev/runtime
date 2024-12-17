@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/moby/buildkit/identity"
@@ -38,10 +39,16 @@ type LaunchContainer struct {
 	applications map[string]*application
 
 	pending map[string]chan struct{}
+
+	lattrack *LatencyTracker
+	rif      atomic.Int32
 }
 
 func (l *LaunchContainer) Populated() error {
 	l.applications = make(map[string]*application)
+
+	// TODO make the alpha configurable?
+	l.lattrack = NewLatencyTracker(DefaultAlpha)
 
 	if l.MaxLeasesPerContainer == 0 {
 		l.MaxLeasesPerContainer = 80
@@ -68,6 +75,11 @@ CREATE TABLE IF NOT EXISTS container_usage (
 `)
 
 	return err
+}
+
+func (l *LaunchContainer) LatencyEstimate() (int32, float64) {
+	rif := l.rif.Load()
+	return rif, l.lattrack.GetLatencyEstimate(rif)
 }
 
 type pendingContainer struct {
@@ -212,7 +224,8 @@ type UsageWindow struct {
 }
 
 type LeasedContainer struct {
-	App *application
+	App       *application
+	StartTime time.Time
 
 	Start  uint64
 	Window *UsageWindow
@@ -244,13 +257,16 @@ func (l *LaunchContainer) Lease(ctx context.Context, name string) (*LeasedContai
 		l.Log.Info("adding lease to existing window", "window", win.Id)
 
 		lc := &LeasedContainer{
-			App:    app,
-			Window: win,
-			Start:  start,
+			App:       app,
+			StartTime: time.Now(),
+			Window:    win,
+			Start:     start,
 		}
 
 		win.TotalLeases++
 		win.Leases.Add(lc)
+
+		l.rif.Add(1)
 
 		return lc, nil
 	}
@@ -280,12 +296,15 @@ func (l *LaunchContainer) Lease(ctx context.Context, name string) (*LeasedContai
 
 		lc := &LeasedContainer{
 			App:           app,
+			StartTime:     time.Now(),
 			Window:        win,
 			Start:         start,
 			StartedWindow: true,
 		}
 
 		win.Leases.Add(lc)
+
+		l.rif.Add(1)
 
 		return lc, nil
 	}
@@ -320,12 +339,14 @@ func (l *LaunchContainer) Lease(ctx context.Context, name string) (*LeasedContai
 			}
 
 			lc := &LeasedContainer{
-				App:    app,
-				Window: win,
-				Start:  win.Start,
+				App:       app,
+				StartTime: time.Now(),
+				Window:    win,
+				Start:     win.Start,
 			}
 
 			win.Leases.Add(lc)
+			l.rif.Add(1)
 
 			return lc, nil
 		}
@@ -382,12 +403,14 @@ func (l *LaunchContainer) Lease(ctx context.Context, name string) (*LeasedContai
 
 	lc := &LeasedContainer{
 		App:           app,
+		StartTime:     time.Now(),
 		Window:        win,
 		Start:         win.Start,
 		StartedWindow: true,
 	}
 
 	win.Leases.Add(lc)
+	l.rif.Add(1)
 
 	for ch := range pc.waiters {
 		select {
@@ -410,6 +433,10 @@ func (l *LaunchContainer) ReleaseLease(ctx context.Context, lc *LeasedContainer)
 	defer lc.App.mu.Unlock()
 
 	lc.Window.Leases.Remove(lc)
+
+	l.lattrack.RecordLatency(l.rif.Load(), time.Since(lc.StartTime).Seconds())
+
+	l.rif.Add(-1)
 
 	ts, err := lc.Window.container.cpuUsage()
 	if err != nil {

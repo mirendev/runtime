@@ -2,6 +2,7 @@ package lease
 
 import (
 	"context"
+	"math"
 	"path/filepath"
 	"testing"
 	"time"
@@ -189,6 +190,40 @@ func TestLeaseContainer(t *testing.T) {
 
 			r.False(lc.App.idle.Empty(), "container should be idle")
 			r.True(lc.App.windows.Empty(), "window should be removed")
+		})
+
+		t.Run("lease operations manage the rif latency", func(t *testing.T) {
+			r := require.New(t)
+
+			val2 := on.lattrack.GetLatencyEstimate(2)
+			r.NotZero(val2)
+			r.False(math.IsNaN(val2))
+
+			val1 := on.lattrack.GetLatencyEstimate(1)
+			r.NotZero(val1)
+			r.False(math.IsNaN(val1))
+
+			// Exploit the above sleeps to ensure that latencies are differing
+			// and are based on wall clock.
+			r.Greater(val1, val2)
+		})
+
+		t.Run("reports the current rif and latency", func(t *testing.T) {
+			r := require.New(t)
+
+			lc3, err := on.Lease(ctx, "test")
+			r.NoError(err)
+
+			rif, latency := on.LatencyEstimate()
+
+			r.Equal(int32(1), rif)
+			r.NotZero(latency)
+			r.False(math.IsNaN(latency))
+
+			val1 := on.lattrack.GetLatencyEstimate(1)
+			r.Equal(val1, latency)
+
+			on.ReleaseLease(ctx, lc3)
 		})
 
 		t.Run("closed windows emit reconds to clickhouse", func(t *testing.T) {
