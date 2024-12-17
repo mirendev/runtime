@@ -208,24 +208,6 @@ func TestLeaseContainer(t *testing.T) {
 			r.Greater(val1, val2)
 		})
 
-		t.Run("reports the current rif and latency", func(t *testing.T) {
-			r := require.New(t)
-
-			lc3, err := on.Lease(ctx, "test")
-			r.NoError(err)
-
-			rif, latency := on.LatencyEstimate()
-
-			r.Equal(int32(1), rif)
-			r.NotZero(latency)
-			r.False(math.IsNaN(latency))
-
-			val1 := on.lattrack.GetLatencyEstimate(1)
-			r.Equal(val1, latency)
-
-			on.ReleaseLease(ctx, lc3)
-		})
-
 		t.Run("closed windows emit reconds to clickhouse", func(t *testing.T) {
 			r := require.New(t)
 
@@ -242,6 +224,24 @@ func TestLeaseContainer(t *testing.T) {
 
 			r.NotZero(usage)
 			r.Equal(uint32(2), leases)
+		})
+
+		t.Run("reports the current rif and latency", func(t *testing.T) {
+			r := require.New(t)
+
+			lc3, err := on.Lease(ctx, "test")
+			r.NoError(err)
+
+			rif, latency := on.LatencyEstimate()
+
+			r.Equal(int32(1), rif)
+			r.NotZero(latency)
+			r.False(math.IsNaN(latency))
+
+			val1 := on.lattrack.GetLatencyEstimate(1)
+			r.Equal(val1, latency)
+
+			on.ReleaseLease(ctx, lc3)
 		})
 
 		t.Run("idle containers are shutdown after a period of time", func(t *testing.T) {
