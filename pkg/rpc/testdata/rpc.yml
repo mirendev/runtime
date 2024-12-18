@@ -1,0 +1,44 @@
+apiVersion: miren.dev/rpc/v1
+kind: IDL
+types:
+  - type: Hero
+    fields:
+      - name: age
+        type: int32
+        index: 0
+      - name: power
+        type: float32
+        index: 1
+
+interfaces:
+  - name: Town
+    methods:
+      - name: getHero
+        index: 0
+        parameters:
+          - name: name
+            type: string
+        results:
+          - name: hero
+            type: Hero
+          - name: empower
+            type: Empower
+      - name: hireHero
+        index: 1
+        parameters:
+          - name: name
+            type: string
+        results:
+          - name: assigned
+            type: bool
+
+  - name: Empower
+    methods:
+      - name: increasePower
+        index: 0
+        parameters:
+          - name: power
+            type: int32
+        results:
+          - name: level
+            type: int32

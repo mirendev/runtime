@@ -1,0 +1,11 @@
+apiVersion: miren.dev/rpc/v1
+kind: IDL
+types:
+- type: Hero
+  fields:
+    - name: age
+      type: int32
+      index: 0
+    - name: power
+      type: float32
+      index: 1

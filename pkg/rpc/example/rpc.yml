@@ -1,0 +1,46 @@
+apiVersion: miren.dev/rpc/v1
+kind: IDL
+types:
+  - type: Reading
+    fields:
+      - name: temperature
+        type: float32
+        index: 0
+      - name: seconds
+        type: int32
+        index: 1
+      - name: meter
+        type: string
+        index: 2
+
+interfaces:
+  - name: Meter
+    methods:
+      - name: readTemperature
+        index: 0
+        parameters:
+          - name: name
+            type: string
+        results:
+          - name: reading
+            type: Reading
+      - name: getSetter
+        index: 1
+        parameters:
+          - name: name
+            type: string
+        results:
+          - name: setter
+            type: SetTemp
+
+  - name: SetTemp
+    methods:
+      - name: setTemp
+        index: 0
+        parameters:
+          - name: temp
+            type: int32
+        results:
+          - name: temp
+            type: int32
+

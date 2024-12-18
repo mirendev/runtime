@@ -1,0 +1,13 @@
+types:
+- type: Hero
+  fields:
+    - name: age
+      type: int32
+      index: 0
+    - name: name
+      type: string
+      index: 1
+    - name: people
+      type: list
+      element: string
+      index: 2
