@@ -181,7 +181,7 @@ func (v *MeterGetSetterArgs) UnmarshalJSON(data []byte) error {
 }
 
 type meterGetSetterResultsData struct {
-	Setter rpc.OID `cbor:"0,keyasint,omitempty" json:"setter,omitempty"`
+	Setter *rpc.Capability `cbor:"0,keyasint,omitempty" json:"setter,omitempty"`
 }
 
 type MeterGetSetterResults struct {
@@ -190,7 +190,7 @@ type MeterGetSetterResults struct {
 }
 
 func (v *MeterGetSetterResults) SetSetter(setter SetTemp) {
-	v.data.Setter = v.call.NewOID(AdaptSetTemp(setter))
+	v.data.Setter = v.call.NewCapability(AdaptSetTemp(setter))
 }
 
 func (v *MeterGetSetterResults) MarshalCBOR() ([]byte, error) {
@@ -484,4 +484,253 @@ func (v SetTempClient) SetTemp(ctx context.Context, temp int32) (*SetTempClientS
 	}
 
 	return &SetTempClientSetTempResults{client: v.Client, data: ret}, nil
+}
+
+type updateReceiverUpdateArgsData struct {
+	Reading *Reading `cbor:"0,keyasint,omitempty" json:"reading,omitempty"`
+}
+
+type UpdateReceiverUpdateArgs struct {
+	call *rpc.Call
+	data updateReceiverUpdateArgsData
+}
+
+func (v *UpdateReceiverUpdateArgs) HasReading() bool {
+	return v.data.Reading != nil
+}
+
+func (v *UpdateReceiverUpdateArgs) Reading() *Reading {
+	return v.data.Reading
+}
+
+func (v *UpdateReceiverUpdateArgs) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *UpdateReceiverUpdateArgs) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *UpdateReceiverUpdateArgs) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *UpdateReceiverUpdateArgs) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type updateReceiverUpdateResultsData struct{}
+
+type UpdateReceiverUpdateResults struct {
+	call *rpc.Call
+	data updateReceiverUpdateResultsData
+}
+
+func (v *UpdateReceiverUpdateResults) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *UpdateReceiverUpdateResults) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *UpdateReceiverUpdateResults) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *UpdateReceiverUpdateResults) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type UpdateReceiverUpdate struct {
+	*rpc.Call
+	args    UpdateReceiverUpdateArgs
+	results UpdateReceiverUpdateResults
+}
+
+func (t *UpdateReceiverUpdate) Args() *UpdateReceiverUpdateArgs {
+	args := &t.args
+	if args.call != nil {
+		return args
+	}
+	args.call = t.Call
+	t.Call.Args(args)
+	return args
+}
+
+func (t *UpdateReceiverUpdate) Results() *UpdateReceiverUpdateResults {
+	results := &t.results
+	if results.call != nil {
+		return results
+	}
+	results.call = t.Call
+	t.Call.Results(results)
+	return results
+}
+
+type UpdateReceiver interface {
+	Update(ctx context.Context, state *UpdateReceiverUpdate) error
+}
+
+func AdaptUpdateReceiver(t UpdateReceiver) *rpc.Interface {
+	methods := []rpc.Method{
+		{
+			Name:  "update",
+			Index: 0,
+			Handler: func(ctx context.Context, call *rpc.Call) error {
+				return t.Update(ctx, &UpdateReceiverUpdate{Call: call})
+			},
+		},
+	}
+
+	return rpc.NewInterface(methods)
+}
+
+type UpdateReceiverClient struct {
+	*rpc.Client
+}
+
+type UpdateReceiverClientUpdateResults struct {
+	client *rpc.Client
+	data   updateReceiverUpdateResultsData
+}
+
+func (v UpdateReceiverClient) Update(ctx context.Context, reading *Reading) (*UpdateReceiverClientUpdateResults, error) {
+	args := UpdateReceiverUpdateArgs{}
+	args.data.Reading = reading
+
+	var ret updateReceiverUpdateResultsData
+
+	err := v.Client.Call(ctx, "update", &args, &ret)
+	if err != nil {
+		return nil, err
+	}
+
+	return &UpdateReceiverClientUpdateResults{client: v.Client, data: ret}, nil
+}
+
+type meterUpdatesRegisterUpdatesArgsData struct {
+	Recv *rpc.Capability `cbor:"0,keyasint,omitempty" json:"recv,omitempty"`
+}
+
+type MeterUpdatesRegisterUpdatesArgs struct {
+	call *rpc.Call
+	data meterUpdatesRegisterUpdatesArgsData
+}
+
+func (v *MeterUpdatesRegisterUpdatesArgs) HasRecv() bool {
+	return v.data.Recv != nil
+}
+
+func (v *MeterUpdatesRegisterUpdatesArgs) Recv() *UpdateReceiverClient {
+	if v.data.Recv == nil {
+		return nil
+	}
+	return &UpdateReceiverClient{Client: v.call.NewClient(v.data.Recv)}
+}
+
+func (v *MeterUpdatesRegisterUpdatesArgs) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *MeterUpdatesRegisterUpdatesArgs) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *MeterUpdatesRegisterUpdatesArgs) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *MeterUpdatesRegisterUpdatesArgs) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type meterUpdatesRegisterUpdatesResultsData struct{}
+
+type MeterUpdatesRegisterUpdatesResults struct {
+	call *rpc.Call
+	data meterUpdatesRegisterUpdatesResultsData
+}
+
+func (v *MeterUpdatesRegisterUpdatesResults) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *MeterUpdatesRegisterUpdatesResults) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *MeterUpdatesRegisterUpdatesResults) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *MeterUpdatesRegisterUpdatesResults) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type MeterUpdatesRegisterUpdates struct {
+	*rpc.Call
+	args    MeterUpdatesRegisterUpdatesArgs
+	results MeterUpdatesRegisterUpdatesResults
+}
+
+func (t *MeterUpdatesRegisterUpdates) Args() *MeterUpdatesRegisterUpdatesArgs {
+	args := &t.args
+	if args.call != nil {
+		return args
+	}
+	args.call = t.Call
+	t.Call.Args(args)
+	return args
+}
+
+func (t *MeterUpdatesRegisterUpdates) Results() *MeterUpdatesRegisterUpdatesResults {
+	results := &t.results
+	if results.call != nil {
+		return results
+	}
+	results.call = t.Call
+	t.Call.Results(results)
+	return results
+}
+
+type MeterUpdates interface {
+	RegisterUpdates(ctx context.Context, state *MeterUpdatesRegisterUpdates) error
+}
+
+func AdaptMeterUpdates(t MeterUpdates) *rpc.Interface {
+	methods := []rpc.Method{
+		{
+			Name:  "registerUpdates",
+			Index: 0,
+			Handler: func(ctx context.Context, call *rpc.Call) error {
+				return t.RegisterUpdates(ctx, &MeterUpdatesRegisterUpdates{Call: call})
+			},
+		},
+	}
+
+	return rpc.NewInterface(methods)
+}
+
+type MeterUpdatesClient struct {
+	*rpc.Client
+}
+
+type MeterUpdatesClientRegisterUpdatesResults struct {
+	client *rpc.Client
+	data   meterUpdatesRegisterUpdatesResultsData
+}
+
+func (v MeterUpdatesClient) RegisterUpdates(ctx context.Context, recv UpdateReceiver) (*MeterUpdatesClientRegisterUpdatesResults, error) {
+	args := MeterUpdatesRegisterUpdatesArgs{}
+	args.data.Recv = v.Client.NewCapability(AdaptUpdateReceiver(recv))
+
+	var ret meterUpdatesRegisterUpdatesResultsData
+
+	err := v.Client.Call(ctx, "registerUpdates", &args, &ret)
+	if err != nil {
+		return nil, err
+	}
+
+	return &MeterUpdatesClientRegisterUpdatesResults{client: v.Client, data: ret}, nil
 }

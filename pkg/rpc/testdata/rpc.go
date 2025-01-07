@@ -100,8 +100,8 @@ func (v *TownGetHeroArgs) UnmarshalJSON(data []byte) error {
 }
 
 type townGetHeroResultsData struct {
-	Hero    *Hero   `cbor:"0,keyasint,omitempty" json:"hero,omitempty"`
-	Empower rpc.OID `cbor:"1,keyasint,omitempty" json:"empower,omitempty"`
+	Hero    *Hero           `cbor:"0,keyasint,omitempty" json:"hero,omitempty"`
+	Empower *rpc.Capability `cbor:"1,keyasint,omitempty" json:"empower,omitempty"`
 }
 
 type TownGetHeroResults struct {
@@ -114,7 +114,7 @@ func (v *TownGetHeroResults) SetHero(hero *Hero) {
 }
 
 func (v *TownGetHeroResults) SetEmpower(empower Empower) {
-	v.data.Empower = v.call.NewOID(AdaptEmpower(empower))
+	v.data.Empower = v.call.NewCapability(AdaptEmpower(empower))
 }
 
 func (v *TownGetHeroResults) MarshalCBOR() ([]byte, error) {

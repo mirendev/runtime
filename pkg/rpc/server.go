@@ -2,15 +2,13 @@ package rpc
 
 import (
 	"context"
-	"crypto/tls"
 	"fmt"
-	"log/slog"
 	"net/http"
 	"os"
+	"runtime/debug"
 	"strings"
 
 	"github.com/fxamacker/cbor/v2"
-	"github.com/quic-go/quic-go/http3"
 )
 
 func init() {
@@ -28,10 +26,11 @@ func init() {
 }
 
 type Server struct {
+	state   *State
 	objects map[OID]*Interface
 }
 
-func NewServer() *Server {
+func newServer() *Server {
 	return &Server{
 		objects: make(map[OID]*Interface),
 	}
@@ -64,43 +63,31 @@ func (s *Server) ExposeValue(oid OID, iface *Interface) {
 	}
 
 	s.objects[oid] = iface
-
 }
 
-func (s *Server) Serve(addr string) error {
-	// If there is only one object, make it the bootstrap object
-	if len(s.objects) == 1 {
-		for _, iface := range s.objects {
-			s.objects[BootstrapOID] = iface
-		}
+func (s *Server) NewClient(capa *Capability) *Client {
+	return &Client{
+		State:  s.state,
+		oid:    capa.OID,
+		remote: capa.Address,
 	}
-
-	cert, err := generateSelfSignedCert()
-	if err != nil {
-		return err
-	}
-
-	serv := &http3.Server{
-		Addr:    addr,
-		Handler: http.HandlerFunc(s.handleCalls),
-		TLSConfig: &tls.Config{
-			Certificates: []tls.Certificate{cert},
-			NextProtos:   []string{http3.NextProtoH3},
-		},
-		Logger: slog.Default(),
-	}
-
-	return serv.ListenAndServe()
 }
 
 const BootstrapOID = "!bootstrap"
 
-func (s *Server) AssignOID(i *Interface) OID {
+func (s *Server) AssignCapability(i *Interface) *Capability {
 	oid := OID("blah")
 
 	s.ExposeValue(oid, i)
 
-	return oid
+	return &Capability{
+		OID:     oid,
+		Address: s.state.transport.Conn.LocalAddr().String(),
+	}
+}
+
+func (s *Server) attachClient(w http.ResponseWriter, r *http.Request) {
+
 }
 
 func (s *Server) handleCalls(w http.ResponseWriter, r *http.Request) {
@@ -137,6 +124,8 @@ func (s *Server) handleCalls(w http.ResponseWriter, r *http.Request) {
 
 		defer func() {
 			if r := recover(); r != nil {
+				fmt.Println(r)
+				debug.PrintStack()
 				w.Header().Add("rpc-status", "panic")
 				w.Header().Add("rpc-error", fmt.Sprint(r))
 				panic(r)

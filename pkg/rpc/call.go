@@ -25,6 +25,10 @@ func (c *Call) Results(v any) {
 	c.results = v
 }
 
-func (c *Call) NewOID(i *Interface) OID {
-	return c.s.AssignOID(i)
+func (c *Call) NewCapability(i *Interface) *Capability {
+	return c.s.AssignCapability(i)
+}
+
+func (c *Call) NewClient(capa *Capability) *Client {
+	return c.s.NewClient(capa)
 }

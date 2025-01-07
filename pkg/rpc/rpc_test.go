@@ -40,27 +40,56 @@ func (m *exampleMeter) SetTemp(ctx context.Context, call *example.SetTempSetTemp
 	return nil
 }
 
+type exampleUpdate struct {
+	gotIt   bool
+	reading *example.Reading
+}
+
+func (m *exampleUpdate) Update(ctx context.Context, call *example.UpdateReceiverUpdate) error {
+	args := call.Args()
+
+	m.reading = args.Reading()
+
+	m.gotIt = true
+
+	return nil
+}
+
+type exampleMU struct {
+}
+
+func (m *exampleMU) RegisterUpdates(ctx context.Context, call *example.MeterUpdatesRegisterUpdates) error {
+	args := call.Args()
+
+	reader := new(example.Reading)
+
+	reader.SetMeter("test")
+	reader.SetTemperature(42)
+
+	_, err := args.Recv().Update(ctx, reader)
+	return err
+}
+
 func TestRPC(t *testing.T) {
 	t.Run("serves an interface over rpc", func(t *testing.T) {
 		r := require.New(t)
 
-		ctx := context.Background()
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
 
 		s := example.AdaptMeter(&exampleMeter{})
 
-		serv := rpc.NewServer()
+		ss, err := rpc.NewState(ctx, "localhost:7873")
+		r.NoError(err)
+
+		serv := ss.Server()
 
 		serv.ExposeValue("meter", s)
 
-		go func() {
-			err := serv.Serve("localhost:7873")
-			r.NoError(err)
-		}()
-
-		cs, err := rpc.NewState("localhost:7873")
+		cs, err := rpc.NewState(ctx, "")
 		r.NoError(err)
 
-		c := cs.NewClient("meter")
+		c := cs.Connect("localhost:7873", "meter")
 
 		mc := &example.MeterClient{Client: c}
 
@@ -77,6 +106,38 @@ func TestRPC(t *testing.T) {
 		r.NoError(err)
 
 		r.Equal(int32(100), res3.Temp())
+	})
 
+	t.Run("handles passing a local object to a remote object", func(t *testing.T) {
+		r := require.New(t)
+
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		s := example.AdaptMeterUpdates(&exampleMU{})
+
+		ss, err := rpc.NewState(ctx, "localhost:7874")
+		r.NoError(err)
+
+		serv := ss.Server()
+
+		serv.ExposeValue("meter", s)
+
+		cs, err := rpc.NewState(ctx, "")
+		r.NoError(err)
+
+		c := cs.Connect("localhost:7874", "meter")
+
+		mc := &example.MeterUpdatesClient{Client: c}
+
+		var up exampleUpdate
+
+		_, err = mc.RegisterUpdates(context.Background(), &up)
+		r.NoError(err)
+
+		r.True(up.gotIt)
+
+		r.Equal("test", up.reading.Meter())
+		r.Equal(float32(42), up.reading.Temperature())
 	})
 }

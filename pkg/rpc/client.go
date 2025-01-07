@@ -38,20 +38,37 @@ func init() {
 }
 
 type State struct {
-	addr string
-
 	transport *quic.Transport
 
 	tlsCfg *tls.Config
+
+	server *Server
+	li     *quic.EarlyListener
+	cert   tls.Certificate
 }
 
 type Client struct {
 	*State
-	oid OID
+
+	remote string
+	oid    OID
 }
 
-func NewState(addr string) (*State, error) {
-	udpConn, err := net.ListenUDP("udp", nil)
+func (c *Client) String() string {
+	return fmt.Sprintf("Client(remote: %s, oid: %s)", c.remote, c.oid)
+}
+
+func NewState(ctx context.Context, addr string) (*State, error) {
+	if addr == "" {
+		addr = "localhost:0"
+	}
+
+	up, err := net.ResolveUDPAddr("udp", addr)
+	if err != nil {
+		return nil, err
+	}
+
+	udpConn, err := net.ListenUDP("udp", up)
 	if err != nil {
 		return nil, err
 	}
@@ -61,17 +78,83 @@ func NewState(addr string) (*State, error) {
 		NextProtos:         []string{http3.NextProtoH3},
 	}
 
-	return &State{
-		addr:      addr,
+	s := &State{
 		transport: &quic.Transport{Conn: udpConn},
 		tlsCfg:    tlsCfg,
-	}, nil
+		server:    newServer(),
+	}
+
+	err = s.startListener(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	return s, nil
 }
 
-func (s *State) NewClient(oid OID) *Client {
+func (s *State) Server() *Server {
+	return s.server
+}
+
+func (s *State) setupServer() error {
+	cert, err := generateSelfSignedCert()
+	if err != nil {
+		return err
+	}
+
+	s.cert = cert
+
+	tlsCfg := &tls.Config{
+		Certificates: []tls.Certificate{cert},
+		NextProtos:   []string{http3.NextProtoH3},
+	}
+
+	ec, err := s.transport.ListenEarly(tlsCfg, &DefaultQUICConfig)
+	if err != nil {
+		return err
+	}
+
+	s.li = ec
+	s.server.state = s
+
+	return nil
+}
+
+func (s *State) startListener(ctx context.Context) error {
+	err := s.setupServer()
+	if err != nil {
+		return err
+	}
+
+	serv := &http3.Server{
+		Handler:   http.HandlerFunc(s.server.handleCalls),
+		TLSConfig: s.tlsCfg,
+		Logger:    slog.Default(),
+	}
+
+	go func() {
+		<-ctx.Done()
+		serv.Shutdown(context.Background())
+	}()
+
+	go serv.ServeListener(s.li)
+
+	return nil
+}
+
+func (s *State) Connect(remote string, oid OID) *Client {
 	return &Client{
-		State: s,
-		oid:   oid,
+		State:  s,
+		oid:    oid,
+		remote: remote,
+	}
+}
+
+func (s *State) NewClient(capa *Capability) *Client {
+	return &Client{
+		State:  s,
+		oid:    capa.OID,
+		remote: capa.Address,
 	}
 }
 
@@ -142,8 +225,12 @@ type ResultProcessor interface {
 	processResult(hr *http.Response)
 }
 
+func (c *Client) NewCapability(i *Interface) *Capability {
+	return c.server.AssignCapability(i)
+}
+
 func (c *Client) CallFuture(ctx context.Context, oid, method string, args any, rp ResultProcessor) {
-	udpAddr, err := net.ResolveUDPAddr("udp", c.addr)
+	udpAddr, err := net.ResolveUDPAddr("udp", c.remote)
 	if err != nil {
 		rp.processError(err)
 		return
@@ -172,7 +259,7 @@ func (c *Client) CallFuture(ctx context.Context, oid, method string, args any, r
 		return
 	}
 
-	url := "https://" + c.addr + "/" + oid + "/" + method
+	url := "https://" + c.remote + "/" + oid + "/" + method
 	req, err := http.NewRequest(http.MethodPost, url, nil)
 	if err != nil {
 		rp.processError(err)
@@ -239,7 +326,7 @@ func (c *Client) CallFuture(ctx context.Context, oid, method string, args any, r
 }
 
 func (c *Client) Call(ctx context.Context, method string, args, result any) error {
-	udpAddr, err := net.ResolveUDPAddr("udp", c.addr)
+	udpAddr, err := net.ResolveUDPAddr("udp", c.remote)
 	if err != nil {
 		return err
 	}
@@ -269,7 +356,7 @@ func (c *Client) Call(ctx context.Context, method string, args, result any) erro
 		return err
 	}
 
-	url := "https://" + c.addr + "/" + string(c.oid) + "/" + method
+	url := "https://" + c.remote + "/" + string(c.oid) + "/" + method
 	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(data))
 	if err != nil {
 		return err

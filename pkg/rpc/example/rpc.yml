@@ -44,3 +44,18 @@ interfaces:
           - name: temp
             type: int32
 
+  - name: UpdateReceiver
+    methods:
+      - name: update
+        index: 0
+        parameters:
+          - name: reading
+            type: Reading
+
+  - name: MeterUpdates
+    methods:
+      - name: registerUpdates
+        index: 0
+        parameters:
+          - name: recv
+            type: UpdateReceiver
