@@ -269,15 +269,17 @@ type Meter interface {
 func AdaptMeter(t Meter) *rpc.Interface {
 	methods := []rpc.Method{
 		{
-			Name:  "readTemperature",
-			Index: 0,
+			Name:          "readTemperature",
+			InterfaceName: "Meter",
+			Index:         0,
 			Handler: func(ctx context.Context, call *rpc.Call) error {
 				return t.ReadTemperature(ctx, &MeterReadTemperature{Call: call})
 			},
 		},
 		{
-			Name:  "getSetter",
-			Index: 1,
+			Name:          "getSetter",
+			InterfaceName: "Meter",
+			Index:         1,
 			Handler: func(ctx context.Context, call *rpc.Call) error {
 				return t.GetSetter(ctx, &MeterGetSetter{Call: call})
 			},
@@ -441,8 +443,9 @@ type SetTemp interface {
 func AdaptSetTemp(t SetTemp) *rpc.Interface {
 	methods := []rpc.Method{
 		{
-			Name:  "setTemp",
-			Index: 0,
+			Name:          "setTemp",
+			InterfaceName: "SetTemp",
+			Index:         0,
 			Handler: func(ctx context.Context, call *rpc.Call) error {
 				return t.SetTemp(ctx, &SetTempSetTemp{Call: call})
 			},
@@ -575,8 +578,9 @@ type UpdateReceiver interface {
 func AdaptUpdateReceiver(t UpdateReceiver) *rpc.Interface {
 	methods := []rpc.Method{
 		{
-			Name:  "update",
-			Index: 0,
+			Name:          "update",
+			InterfaceName: "UpdateReceiver",
+			Index:         0,
 			Handler: func(ctx context.Context, call *rpc.Call) error {
 				return t.Update(ctx, &UpdateReceiverUpdate{Call: call})
 			},
@@ -701,8 +705,9 @@ type MeterUpdates interface {
 func AdaptMeterUpdates(t MeterUpdates) *rpc.Interface {
 	methods := []rpc.Method{
 		{
-			Name:  "registerUpdates",
-			Index: 0,
+			Name:          "registerUpdates",
+			InterfaceName: "MeterUpdates",
+			Index:         0,
 			Handler: func(ctx context.Context, call *rpc.Call) error {
 				return t.RegisterUpdates(ctx, &MeterUpdatesRegisterUpdates{Call: call})
 			},

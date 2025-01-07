@@ -9,6 +9,8 @@ import (
 	"strings"
 
 	"github.com/fxamacker/cbor/v2"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/propagation"
 )
 
 func init() {
@@ -37,9 +39,10 @@ func newServer() *Server {
 }
 
 type Method struct {
-	Name    string
-	Index   int
-	Handler func(ctx context.Context, call *Call) error
+	Name          string
+	InterfaceName string
+	Index         int
+	Handler       func(ctx context.Context, call *Call) error
 }
 
 type Interface struct {
@@ -131,6 +134,16 @@ func (s *Server) handleCalls(w http.ResponseWriter, r *http.Request) {
 				panic(r)
 			}
 		}()
+
+		ctx = Propagator().Extract(ctx, propagation.HeaderCarrier(r.Header))
+
+		tracer := Tracer()
+
+		ctx, span := tracer.Start(ctx, "rpc.handle."+mm.InterfaceName+"."+mm.Name)
+
+		defer span.End()
+
+		span.SetAttributes(attribute.String("oid", string(oid)))
 
 		err := mm.Handler(ctx, call)
 		if err != nil {

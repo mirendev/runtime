@@ -258,15 +258,17 @@ type Town interface {
 func AdaptTown(t Town) *rpc.Interface {
 	methods := []rpc.Method{
 		{
-			Name:  "getHero",
-			Index: 0,
+			Name:          "getHero",
+			InterfaceName: "Town",
+			Index:         0,
 			Handler: func(ctx context.Context, call *rpc.Call) error {
 				return t.GetHero(ctx, &TownGetHero{Call: call})
 			},
 		},
 		{
-			Name:  "hireHero",
-			Index: 1,
+			Name:          "hireHero",
+			InterfaceName: "Town",
+			Index:         1,
 			Handler: func(ctx context.Context, call *rpc.Call) error {
 				return t.HireHero(ctx, &TownHireHero{Call: call})
 			},
@@ -441,8 +443,9 @@ type Empower interface {
 func AdaptEmpower(t Empower) *rpc.Interface {
 	methods := []rpc.Method{
 		{
-			Name:  "increasePower",
-			Index: 0,
+			Name:          "increasePower",
+			InterfaceName: "Empower",
+			Index:         0,
 			Handler: func(ctx context.Context, call *rpc.Call) error {
 				return t.IncreasePower(ctx, &EmpowerIncreasePower{Call: call})
 			},

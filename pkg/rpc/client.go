@@ -16,6 +16,8 @@ import (
 	"github.com/pkg/errors"
 	"github.com/quic-go/quic-go"
 	"github.com/quic-go/quic-go/http3"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/propagation"
 )
 
 var (
@@ -326,6 +328,11 @@ func (c *Client) CallFuture(ctx context.Context, oid, method string, args any, r
 }
 
 func (c *Client) Call(ctx context.Context, method string, args, result any) error {
+	ctx, span := Tracer().Start(ctx, "rpc.call."+method)
+	defer span.End()
+
+	span.SetAttributes(attribute.String("oid", string(c.oid)))
+
 	udpAddr, err := net.ResolveUDPAddr("udp", c.remote)
 	if err != nil {
 		return err
@@ -361,6 +368,8 @@ func (c *Client) Call(ctx context.Context, method string, args, result any) erro
 	if err != nil {
 		return err
 	}
+
+	Propagator().Inject(ctx, propagation.HeaderCarrier(req.Header))
 
 	err = rs.SendRequestHeader(req)
 	if err != nil {

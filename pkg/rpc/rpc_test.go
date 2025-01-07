@@ -114,6 +114,13 @@ func TestRPC(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 
+		/*
+			shutdown, err := rpc.SetupOTelSDK(ctx)
+			r.NoError(err)
+
+			defer shutdown(ctx)
+		*/
+
 		s := example.AdaptMeterUpdates(&exampleMU{})
 
 		ss, err := rpc.NewState(ctx, "localhost:7874")

@@ -826,6 +826,7 @@ func (g *Generator) generateInterfaces(f *j.File) error {
 
 					g.Line().ValuesFunc(func(g *j.Group) {
 						g.Line().Id("Name").Op(":").Lit(m.Name)
+						g.Line().Id("InterfaceName").Op(":").Lit(i.Name)
 						g.Line().Id("Index").Op(":").Lit(m.Index)
 						g.Line().Id("Handler").Op(":").Func().Params(
 							j.Id("ctx").Qual("context", "Context"),
