@@ -54,6 +54,10 @@ type State struct {
 	cert   tls.Certificate
 }
 
+func (s *State) ListenAddr() string {
+	return s.transport.Conn.LocalAddr().String()
+}
+
 type Client struct {
 	*State
 
@@ -238,8 +242,19 @@ type ResultProcessor interface {
 	processResult(hr *http.Response)
 }
 
-func (c *Client) NewCapability(i *Interface) *Capability {
-	return c.server.AssignCapability(i)
+func (c *Client) reexportCapability(cl *Client) *Capability {
+	return &Capability{
+		OID:     cl.oid,
+		Address: cl.remote,
+	}
+}
+
+func (c *Client) NewCapability(i *Interface, lower any) *Capability {
+	if rc, ok := lower.(interface{ CapabilityClient() *Client }); ok {
+		return c.reexportCapability(rc.CapabilityClient())
+	} else {
+		return c.server.AssignCapability(i)
+	}
 }
 
 func (c *Client) CallFuture(ctx context.Context, oid, method string, args any, rp ResultProcessor) {

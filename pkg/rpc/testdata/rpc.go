@@ -255,6 +255,22 @@ type Town interface {
 	HireHero(ctx context.Context, state *TownHireHero) error
 }
 
+type reexportTown struct {
+	client *rpc.Client
+}
+
+func (_ reexportTown) GetHero(ctx context.Context, state *TownGetHero) error {
+	panic("not implemented")
+}
+
+func (_ reexportTown) HireHero(ctx context.Context, state *TownHireHero) error {
+	panic("not implemented")
+}
+
+func (t reexportTown) CapabilityClient() *rpc.Client {
+	return t.client
+}
+
 func AdaptTown(t Town) *rpc.Interface {
 	methods := []rpc.Method{
 		{
@@ -280,6 +296,10 @@ func AdaptTown(t Town) *rpc.Interface {
 
 type TownClient struct {
 	*rpc.Client
+}
+
+func (c TownClient) Export() Town {
+	return reexportTown{client: c.Client}
 }
 
 type TownClientGetHeroResults struct {
@@ -440,6 +460,18 @@ type Empower interface {
 	IncreasePower(ctx context.Context, state *EmpowerIncreasePower) error
 }
 
+type reexportEmpower struct {
+	client *rpc.Client
+}
+
+func (_ reexportEmpower) IncreasePower(ctx context.Context, state *EmpowerIncreasePower) error {
+	panic("not implemented")
+}
+
+func (t reexportEmpower) CapabilityClient() *rpc.Client {
+	return t.client
+}
+
 func AdaptEmpower(t Empower) *rpc.Interface {
 	methods := []rpc.Method{
 		{
@@ -457,6 +489,10 @@ func AdaptEmpower(t Empower) *rpc.Interface {
 
 type EmpowerClient struct {
 	*rpc.Client
+}
+
+func (c EmpowerClient) Export() Empower {
+	return reexportEmpower{client: c.Client}
 }
 
 type EmpowerClientIncreasePowerResults struct {

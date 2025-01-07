@@ -661,6 +661,15 @@ func (g *Generator) generateClient(f *j.File, i *DescInterface) error {
 
 	f.Line()
 
+	f.Func().Params(
+		j.Id("c").Id(expName),
+	).Id("Export").Params().Id(capitalize(i.Name)).Block(
+		j.Return(j.Id("reexport" + capitalize(i.Name)).Values(
+			j.Id("client").Op(":").Id("c").Dot("Client"))),
+	)
+
+	f.Line()
+
 	for _, m := range i.Method {
 		tn := expName + capitalize(m.Name)
 
@@ -714,7 +723,8 @@ func (g *Generator) generateClient(f *j.File, i *DescInterface) error {
 			for _, p := range m.Parameters {
 				if g.typeInfo[p.Type].isInterface {
 					gr.Id("args").Dot("data").Dot(capitalize(p.Name)).Op("=").Id("v").Dot("Client").Dot("NewCapability").Call(
-						j.Id("Adapt" + capitalize(p.Type)).Call(j.Id(private(p.Name))),
+						j.Id("Adapt"+capitalize(p.Type)).Call(j.Id(private(p.Name))),
+						j.Id(private(p.Name)),
 					)
 				} else if g.typeInfo[p.Type].isMessage {
 					gr.Id("args").Dot("data").Dot(capitalize(p.Name)).Op("=").Id(private(p.Name))
@@ -816,6 +826,32 @@ func (g *Generator) generateInterfaces(f *j.File) error {
 				).Error()
 			}
 		})
+
+		f.Line()
+
+		f.Type().Id("reexport" + expName).Struct(
+			j.Id("client").Op("*").Qual(rpc, "Client"),
+		)
+
+		for _, m := range i.Method {
+			methodName := capitalize(m.Name)
+
+			f.Func().Params(j.Id("_").Id("reexport"+expName)).Id(methodName).Params(
+				j.Id("ctx").Qual("context", "Context"),
+				j.Id("state").Op("*").Id(expName+capitalize(m.Name)),
+			).Error().Block(
+				j.Panic(j.Lit("not implemented")),
+			)
+
+			f.Line()
+		}
+
+		f.Func().Params(j.Id("t").Id("reexport" + expName)).Id("CapabilityClient").
+			Params().Params(j.Op("*").Qual(rpc, "Client")).Block(
+			j.Return(j.Id("t").Dot("client")),
+		)
+
+		f.Line()
 
 		f.Func().Id("Adapt"+expName).Params(
 			j.Id("t").Id(expName),

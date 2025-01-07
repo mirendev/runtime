@@ -10,6 +10,7 @@ import (
 )
 
 type exampleMeter struct {
+	temp float32
 }
 
 func (m *exampleMeter) ReadTemperature(ctx context.Context, call *example.MeterReadTemperature) error {
@@ -19,7 +20,7 @@ func (m *exampleMeter) ReadTemperature(ctx context.Context, call *example.MeterR
 	args := call.Args()
 
 	reading.SetMeter(args.Name())
-	reading.SetTemperature(42)
+	reading.SetTemperature(m.temp)
 
 	res.SetReading(reading)
 
@@ -36,6 +37,7 @@ func (m *exampleMeter) SetTemp(ctx context.Context, call *example.SetTempSetTemp
 	args := call.Args()
 	res := call.Results()
 
+	m.temp = float32(args.Temp())
 	res.SetTemp(args.Temp())
 	return nil
 }
@@ -80,6 +82,19 @@ func (m *exampleMU) RegisterUpdates(ctx context.Context, call *example.MeterUpda
 	return err
 }
 
+type exampleAT struct {
+}
+
+func (m *exampleAT) Adjust(ctx context.Context, call *example.AdjustTempAdjust) error {
+	args := call.Args()
+
+	setter := args.Setter()
+
+	setter.SetTemp(ctx, 72)
+
+	return nil
+}
+
 func TestRPC(t *testing.T) {
 	t.Run("serves an interface over rpc", func(t *testing.T) {
 		r := require.New(t)
@@ -87,7 +102,7 @@ func TestRPC(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 
-		s := example.AdaptMeter(&exampleMeter{})
+		s := example.AdaptMeter(&exampleMeter{temp: 42})
 
 		ss, err := rpc.NewState(ctx, "localhost:7873")
 		r.NoError(err)
@@ -160,5 +175,55 @@ func TestRPC(t *testing.T) {
 		r.Equal(float32(42), up.reading.Temperature())
 
 		r.True(up.closed)
+	})
+
+	t.Run("a capability can be passed to a 3rd party", func(t *testing.T) {
+		r := require.New(t)
+
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		var em exampleMeter
+		em.temp = 42
+
+		s := example.AdaptMeter(&em)
+
+		ss, err := rpc.NewState(ctx, "localhost:7875")
+		r.NoError(err)
+
+		serv := ss.Server()
+
+		serv.ExposeValue("meter", s)
+
+		cs, err := rpc.NewState(ctx, "")
+		r.NoError(err)
+
+		c, err := cs.Connect("localhost:7875", "meter")
+		r.NoError(err)
+
+		mc := &example.MeterClient{Client: c}
+
+		res, err := mc.ReadTemperature(context.Background(), "test")
+		r.NoError(err)
+
+		r.Equal("test", res.Reading().Meter())
+		r.Equal(float32(42), res.Reading().Temperature())
+
+		res2, err := mc.GetSetter(context.Background(), "test")
+		r.NoError(err)
+
+		s2, err := rpc.NewState(ctx, "")
+		r.NoError(err)
+
+		s2.Server().ExposeValue("adjust", example.AdaptAdjustTemp(&exampleAT{}))
+
+		c2, err := s2.Connect(s2.ListenAddr(), "adjust")
+		r.NoError(err)
+
+		ac := &example.AdjustTempClient{Client: c2}
+
+		_, err = ac.Adjust(context.Background(), res2.Setter().Export())
+
+		r.Equal(float32(72), em.temp)
 	})
 }

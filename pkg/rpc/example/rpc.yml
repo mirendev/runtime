@@ -59,3 +59,11 @@ interfaces:
         parameters:
           - name: recv
             type: UpdateReceiver
+
+  - name: AdjustTemp
+    methods:
+      - name: adjust
+        index: 0
+        parameters:
+          - name: setter
+            type: SetTemp

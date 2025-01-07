@@ -266,6 +266,22 @@ type Meter interface {
 	GetSetter(ctx context.Context, state *MeterGetSetter) error
 }
 
+type reexportMeter struct {
+	client *rpc.Client
+}
+
+func (_ reexportMeter) ReadTemperature(ctx context.Context, state *MeterReadTemperature) error {
+	panic("not implemented")
+}
+
+func (_ reexportMeter) GetSetter(ctx context.Context, state *MeterGetSetter) error {
+	panic("not implemented")
+}
+
+func (t reexportMeter) CapabilityClient() *rpc.Client {
+	return t.client
+}
+
 func AdaptMeter(t Meter) *rpc.Interface {
 	methods := []rpc.Method{
 		{
@@ -291,6 +307,10 @@ func AdaptMeter(t Meter) *rpc.Interface {
 
 type MeterClient struct {
 	*rpc.Client
+}
+
+func (c MeterClient) Export() Meter {
+	return reexportMeter{client: c.Client}
 }
 
 type MeterClientReadTemperatureResults struct {
@@ -440,6 +460,18 @@ type SetTemp interface {
 	SetTemp(ctx context.Context, state *SetTempSetTemp) error
 }
 
+type reexportSetTemp struct {
+	client *rpc.Client
+}
+
+func (_ reexportSetTemp) SetTemp(ctx context.Context, state *SetTempSetTemp) error {
+	panic("not implemented")
+}
+
+func (t reexportSetTemp) CapabilityClient() *rpc.Client {
+	return t.client
+}
+
 func AdaptSetTemp(t SetTemp) *rpc.Interface {
 	methods := []rpc.Method{
 		{
@@ -457,6 +489,10 @@ func AdaptSetTemp(t SetTemp) *rpc.Interface {
 
 type SetTempClient struct {
 	*rpc.Client
+}
+
+func (c SetTempClient) Export() SetTemp {
+	return reexportSetTemp{client: c.Client}
 }
 
 type SetTempClientSetTempResults struct {
@@ -575,6 +611,18 @@ type UpdateReceiver interface {
 	Update(ctx context.Context, state *UpdateReceiverUpdate) error
 }
 
+type reexportUpdateReceiver struct {
+	client *rpc.Client
+}
+
+func (_ reexportUpdateReceiver) Update(ctx context.Context, state *UpdateReceiverUpdate) error {
+	panic("not implemented")
+}
+
+func (t reexportUpdateReceiver) CapabilityClient() *rpc.Client {
+	return t.client
+}
+
 func AdaptUpdateReceiver(t UpdateReceiver) *rpc.Interface {
 	methods := []rpc.Method{
 		{
@@ -592,6 +640,10 @@ func AdaptUpdateReceiver(t UpdateReceiver) *rpc.Interface {
 
 type UpdateReceiverClient struct {
 	*rpc.Client
+}
+
+func (c UpdateReceiverClient) Export() UpdateReceiver {
+	return reexportUpdateReceiver{client: c.Client}
 }
 
 type UpdateReceiverClientUpdateResults struct {
@@ -702,6 +754,18 @@ type MeterUpdates interface {
 	RegisterUpdates(ctx context.Context, state *MeterUpdatesRegisterUpdates) error
 }
 
+type reexportMeterUpdates struct {
+	client *rpc.Client
+}
+
+func (_ reexportMeterUpdates) RegisterUpdates(ctx context.Context, state *MeterUpdatesRegisterUpdates) error {
+	panic("not implemented")
+}
+
+func (t reexportMeterUpdates) CapabilityClient() *rpc.Client {
+	return t.client
+}
+
 func AdaptMeterUpdates(t MeterUpdates) *rpc.Interface {
 	methods := []rpc.Method{
 		{
@@ -721,6 +785,10 @@ type MeterUpdatesClient struct {
 	*rpc.Client
 }
 
+func (c MeterUpdatesClient) Export() MeterUpdates {
+	return reexportMeterUpdates{client: c.Client}
+}
+
 type MeterUpdatesClientRegisterUpdatesResults struct {
 	client *rpc.Client
 	data   meterUpdatesRegisterUpdatesResultsData
@@ -728,7 +796,7 @@ type MeterUpdatesClientRegisterUpdatesResults struct {
 
 func (v MeterUpdatesClient) RegisterUpdates(ctx context.Context, recv UpdateReceiver) (*MeterUpdatesClientRegisterUpdatesResults, error) {
 	args := MeterUpdatesRegisterUpdatesArgs{}
-	args.data.Recv = v.Client.NewCapability(AdaptUpdateReceiver(recv))
+	args.data.Recv = v.Client.NewCapability(AdaptUpdateReceiver(recv), recv)
 
 	var ret meterUpdatesRegisterUpdatesResultsData
 
@@ -738,4 +806,147 @@ func (v MeterUpdatesClient) RegisterUpdates(ctx context.Context, recv UpdateRece
 	}
 
 	return &MeterUpdatesClientRegisterUpdatesResults{client: v.Client, data: ret}, nil
+}
+
+type adjustTempAdjustArgsData struct {
+	Setter *rpc.Capability `cbor:"0,keyasint,omitempty" json:"setter,omitempty"`
+}
+
+type AdjustTempAdjustArgs struct {
+	call *rpc.Call
+	data adjustTempAdjustArgsData
+}
+
+func (v *AdjustTempAdjustArgs) HasSetter() bool {
+	return v.data.Setter != nil
+}
+
+func (v *AdjustTempAdjustArgs) Setter() *SetTempClient {
+	if v.data.Setter == nil {
+		return nil
+	}
+	return &SetTempClient{Client: v.call.NewClient(v.data.Setter)}
+}
+
+func (v *AdjustTempAdjustArgs) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *AdjustTempAdjustArgs) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *AdjustTempAdjustArgs) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *AdjustTempAdjustArgs) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type adjustTempAdjustResultsData struct{}
+
+type AdjustTempAdjustResults struct {
+	call *rpc.Call
+	data adjustTempAdjustResultsData
+}
+
+func (v *AdjustTempAdjustResults) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *AdjustTempAdjustResults) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *AdjustTempAdjustResults) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *AdjustTempAdjustResults) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type AdjustTempAdjust struct {
+	*rpc.Call
+	args    AdjustTempAdjustArgs
+	results AdjustTempAdjustResults
+}
+
+func (t *AdjustTempAdjust) Args() *AdjustTempAdjustArgs {
+	args := &t.args
+	if args.call != nil {
+		return args
+	}
+	args.call = t.Call
+	t.Call.Args(args)
+	return args
+}
+
+func (t *AdjustTempAdjust) Results() *AdjustTempAdjustResults {
+	results := &t.results
+	if results.call != nil {
+		return results
+	}
+	results.call = t.Call
+	t.Call.Results(results)
+	return results
+}
+
+type AdjustTemp interface {
+	Adjust(ctx context.Context, state *AdjustTempAdjust) error
+}
+
+type reexportAdjustTemp struct {
+	client *rpc.Client
+}
+
+func (_ reexportAdjustTemp) Adjust(ctx context.Context, state *AdjustTempAdjust) error {
+	panic("not implemented")
+}
+
+func (t reexportAdjustTemp) CapabilityClient() *rpc.Client {
+	return t.client
+}
+
+func AdaptAdjustTemp(t AdjustTemp) *rpc.Interface {
+	methods := []rpc.Method{
+		{
+			Name:          "adjust",
+			InterfaceName: "AdjustTemp",
+			Index:         0,
+			Handler: func(ctx context.Context, call *rpc.Call) error {
+				return t.Adjust(ctx, &AdjustTempAdjust{Call: call})
+			},
+		},
+	}
+
+	return rpc.NewInterface(methods, t)
+}
+
+type AdjustTempClient struct {
+	*rpc.Client
+}
+
+func (c AdjustTempClient) Export() AdjustTemp {
+	return reexportAdjustTemp{client: c.Client}
+}
+
+type AdjustTempClientAdjustResults struct {
+	client *rpc.Client
+	data   adjustTempAdjustResultsData
+}
+
+func (v AdjustTempClient) Adjust(ctx context.Context, setter SetTemp) (*AdjustTempClientAdjustResults, error) {
+	args := AdjustTempAdjustArgs{}
+	args.data.Setter = v.Client.NewCapability(AdaptSetTemp(setter), setter)
+
+	var ret adjustTempAdjustResultsData
+
+	err := v.Client.Call(ctx, "adjust", &args, &ret)
+	if err != nil {
+		return nil, err
+	}
+
+	return &AdjustTempClientAdjustResults{client: v.Client, data: ret}, nil
 }
