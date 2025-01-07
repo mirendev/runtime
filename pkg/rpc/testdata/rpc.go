@@ -275,7 +275,7 @@ func AdaptTown(t Town) *rpc.Interface {
 		},
 	}
 
-	return rpc.NewInterface(methods)
+	return rpc.NewInterface(methods, t)
 }
 
 type TownClient struct {
@@ -452,7 +452,7 @@ func AdaptEmpower(t Empower) *rpc.Interface {
 		},
 	}
 
-	return rpc.NewInterface(methods)
+	return rpc.NewInterface(methods, t)
 }
 
 type EmpowerClient struct {

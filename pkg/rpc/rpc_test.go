@@ -43,6 +43,8 @@ func (m *exampleMeter) SetTemp(ctx context.Context, call *example.SetTempSetTemp
 type exampleUpdate struct {
 	gotIt   bool
 	reading *example.Reading
+
+	closed bool
 }
 
 func (m *exampleUpdate) Update(ctx context.Context, call *example.UpdateReceiverUpdate) error {
@@ -52,6 +54,11 @@ func (m *exampleUpdate) Update(ctx context.Context, call *example.UpdateReceiver
 
 	m.gotIt = true
 
+	return nil
+}
+
+func (m *exampleUpdate) Close() error {
+	m.closed = true
 	return nil
 }
 
@@ -66,7 +73,10 @@ func (m *exampleMU) RegisterUpdates(ctx context.Context, call *example.MeterUpda
 	reader.SetMeter("test")
 	reader.SetTemperature(42)
 
-	_, err := args.Recv().Update(ctx, reader)
+	ur := args.Recv()
+	defer ur.Close()
+
+	_, err := ur.Update(ctx, reader)
 	return err
 }
 
@@ -89,7 +99,8 @@ func TestRPC(t *testing.T) {
 		cs, err := rpc.NewState(ctx, "")
 		r.NoError(err)
 
-		c := cs.Connect("localhost:7873", "meter")
+		c, err := cs.Connect("localhost:7873", "meter")
+		r.NoError(err)
 
 		mc := &example.MeterClient{Client: c}
 
@@ -133,7 +144,8 @@ func TestRPC(t *testing.T) {
 		cs, err := rpc.NewState(ctx, "")
 		r.NoError(err)
 
-		c := cs.Connect("localhost:7874", "meter")
+		c, err := cs.Connect("localhost:7874", "meter")
+		r.NoError(err)
 
 		mc := &example.MeterUpdatesClient{Client: c}
 
@@ -146,5 +158,7 @@ func TestRPC(t *testing.T) {
 
 		r.Equal("test", up.reading.Meter())
 		r.Equal(float32(42), up.reading.Temperature())
+
+		r.True(up.closed)
 	})
 }

@@ -286,7 +286,7 @@ func AdaptMeter(t Meter) *rpc.Interface {
 		},
 	}
 
-	return rpc.NewInterface(methods)
+	return rpc.NewInterface(methods, t)
 }
 
 type MeterClient struct {
@@ -452,7 +452,7 @@ func AdaptSetTemp(t SetTemp) *rpc.Interface {
 		},
 	}
 
-	return rpc.NewInterface(methods)
+	return rpc.NewInterface(methods, t)
 }
 
 type SetTempClient struct {
@@ -587,7 +587,7 @@ func AdaptUpdateReceiver(t UpdateReceiver) *rpc.Interface {
 		},
 	}
 
-	return rpc.NewInterface(methods)
+	return rpc.NewInterface(methods, t)
 }
 
 type UpdateReceiverClient struct {
@@ -714,7 +714,7 @@ func AdaptMeterUpdates(t MeterUpdates) *rpc.Interface {
 		},
 	}
 
-	return rpc.NewInterface(methods)
+	return rpc.NewInterface(methods, t)
 }
 
 type MeterUpdatesClient struct {

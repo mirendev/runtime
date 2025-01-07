@@ -845,7 +845,7 @@ func (g *Generator) generateInterfaces(f *j.File) error {
 
 			g.Line()
 
-			g.Return(j.Qual(rpc, "NewInterface").Call(j.Id("methods")))
+			g.Return(j.Qual(rpc, "NewInterface").Call(j.Id("methods"), j.Id("t")))
 		})
 
 		f.Line()

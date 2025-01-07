@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -28,8 +29,12 @@ var (
 func init() {
 	DefaultTransport.EnableDatagrams = true
 	DefaultTransport.Logger = slog.Default()
+	DefaultTransport.TLSClientConfig = &tls.Config{
+		InsecureSkipVerify: true,
+	}
 
 	DefaultQUICConfig = quic.Config{
+		EnableDatagrams:       true,
 		MaxIncomingStreams:    1000,
 		MaxIncomingUniStreams: 1000,
 		Allow0RTT:             true,
@@ -129,7 +134,7 @@ func (s *State) startListener(ctx context.Context) error {
 	}
 
 	serv := &http3.Server{
-		Handler:   http.HandlerFunc(s.server.handleCalls),
+		Handler:   s.server,
 		TLSConfig: s.tlsCfg,
 		Logger:    slog.Default(),
 	}
@@ -144,12 +149,18 @@ func (s *State) startListener(ctx context.Context) error {
 	return nil
 }
 
-func (s *State) Connect(remote string, oid OID) *Client {
-	return &Client{
+func (s *State) Connect(remote string, name string) (*Client, error) {
+	c := &Client{
 		State:  s,
-		oid:    oid,
 		remote: remote,
 	}
+
+	err := c.resolveOID(name)
+	if err != nil {
+		return nil, err
+	}
+
+	return c, nil
 }
 
 func (s *State) NewClient(capa *Capability) *Client {
@@ -261,7 +272,7 @@ func (c *Client) CallFuture(ctx context.Context, oid, method string, args any, r
 		return
 	}
 
-	url := "https://" + c.remote + "/" + oid + "/" + method
+	url := "https://" + c.remote + "/_rpc/call/" + oid + "/" + method
 	req, err := http.NewRequest(http.MethodPost, url, nil)
 	if err != nil {
 		rp.processError(err)
@@ -327,6 +338,90 @@ func (c *Client) CallFuture(ctx context.Context, oid, method string, args any, r
 	}()
 }
 
+func (c *Client) resolveOID(name string) error {
+	url := "https://" + c.remote + "/_rpc/lookup/" + name
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		return err
+	}
+
+	resp, err := DefaultTransport.RoundTrip(req)
+	if err != nil {
+		return err
+	}
+
+	var lr lookupResponse
+
+	err = json.NewDecoder(resp.Body).Decode(&lr)
+	if err != nil {
+		return err
+	}
+
+	if lr.Error != "" {
+		return errors.New(lr.Error)
+	}
+
+	c.oid = OID(lr.OID)
+
+	return nil
+}
+
+func (c *Client) refOID(oid OID) error {
+	url := "https://" + c.remote + "/_rpc/ref/" + string(oid)
+	req, err := http.NewRequest(http.MethodPost, url, nil)
+	if err != nil {
+		return err
+	}
+
+	resp, err := DefaultTransport.RoundTrip(req)
+	if err != nil {
+		return err
+	}
+
+	var lr refResponse
+
+	err = json.NewDecoder(resp.Body).Decode(&lr)
+	if err != nil {
+		return err
+	}
+
+	if lr.Error != "" {
+		return errors.New(lr.Error)
+	}
+
+	return nil
+}
+
+func (c *Client) derefOID(oid OID) error {
+	url := "https://" + c.remote + "/_rpc/deref/" + string(oid)
+	req, err := http.NewRequest(http.MethodPost, url, nil)
+	if err != nil {
+		return err
+	}
+
+	resp, err := DefaultTransport.RoundTrip(req)
+	if err != nil {
+		return err
+	}
+
+	var lr refResponse
+
+	err = json.NewDecoder(resp.Body).Decode(&lr)
+	if err != nil {
+		return err
+	}
+
+	if lr.Error != "" {
+		return errors.New(lr.Error)
+	}
+
+	return nil
+}
+
+func (c *Client) Close() error {
+	return c.derefOID(c.oid)
+}
+
 func (c *Client) Call(ctx context.Context, method string, args, result any) error {
 	ctx, span := Tracer().Start(ctx, "rpc.call."+method)
 	defer span.End()
@@ -363,7 +458,7 @@ func (c *Client) Call(ctx context.Context, method string, args, result any) erro
 		return err
 	}
 
-	url := "https://" + c.remote + "/" + string(c.oid) + "/" + method
+	url := "https://" + c.remote + "/_rpc/call/" + string(c.oid) + "/" + method
 	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(data))
 	if err != nil {
 		return err
