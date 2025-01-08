@@ -1,7 +1,9 @@
 package rpc
 
 import (
+	"bytes"
 	"context"
+	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/json"
 	"fmt"
@@ -40,16 +42,22 @@ type Server struct {
 	objects  map[OID]*heldCapability
 	registry map[string]OID
 
+	persistent map[string]*Interface
+
 	mux *http.ServeMux
 }
 
-type heldCapability struct {
+type heldInterface struct {
 	*Interface
+	refs atomic.Int32
+}
+
+type heldCapability struct {
+	*heldInterface
 
 	lastContact time.Time
 
-	persistent bool
-	refs       atomic.Int32
+	pub ed25519.PublicKey
 }
 
 func (h *heldCapability) touch() {
@@ -66,8 +74,9 @@ func (h *heldCapability) Close() error {
 
 func newServer() *Server {
 	s := &Server{
-		objects:  make(map[OID]*heldCapability),
-		registry: make(map[string]OID),
+		objects:    make(map[OID]*heldCapability),
+		registry:   make(map[string]OID),
+		persistent: make(map[string]*Interface),
 	}
 
 	s.setupMux()
@@ -105,12 +114,17 @@ func NewInterface(methods []Method, obj any) *Interface {
 }
 
 func (s *Server) ExposeValue(name string, iface *Interface) {
-	capa := s.AssignCapability(iface)
-
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	s.registry[name] = capa.OID
+	s.persistent[name] = iface
+
+	//capa := s.AssignCapability(iface)
+
+	//s.mu.Lock()
+	//defer s.mu.Unlock()
+
+	//s.registry[name] = capa.OID
 }
 
 func (s *Server) NewClient(capa *Capability) *Client {
@@ -123,7 +137,11 @@ func (s *Server) NewClient(capa *Capability) *Client {
 
 const BootstrapOID = "!bootstrap"
 
-func (s *Server) AssignCapability(i *Interface) *Capability {
+func (s *Server) assignCapability(i *Interface, pub ed25519.PublicKey) *Capability {
+	if len(pub) != ed25519.PublicKeySize {
+		panic("bad key!!!")
+	}
+
 	buf := make([]byte, 16)
 
 	_, err := io.ReadFull(rand.Reader, buf)
@@ -135,15 +153,47 @@ func (s *Server) AssignCapability(i *Interface) *Capability {
 
 	capa := &Capability{
 		OID:     oid,
+		User:    pub,
+		Issuer:  s.state.pubkey,
 		Address: s.state.transport.Conn.LocalAddr().String(),
 	}
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	hc := &heldCapability{
+		heldInterface: &heldInterface{
+			Interface: i,
+		},
+		lastContact: time.Now(),
+		pub:         pub,
+	}
+
+	hc.refs.Add(1)
+
+	s.objects[oid] = hc
+
+	return capa
+}
+
+func (s *Server) reexportCapability(target OID, cur *heldCapability, pub ed25519.PublicKey) *Capability {
+	buf := make([]byte, 16)
+
+	_, err := io.ReadFull(rand.Reader, buf)
+	if err != nil {
+		panic(err)
+	}
+
+	oid := OID(base58.Encode(buf))
+
+	capa := &Capability{
+		OID:     oid,
+		User:    pub,
+		Issuer:  s.state.pubkey,
+		Address: s.state.transport.Conn.LocalAddr().String(),
+	}
 
 	hc := &heldCapability{
-		Interface:   i,
-		lastContact: time.Now(),
+		heldInterface: cur.heldInterface,
+		lastContact:   time.Now(),
+		pub:           pub,
 	}
 
 	hc.refs.Add(1)
@@ -157,7 +207,8 @@ func (s *Server) setupMux() {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("POST /_rpc/call/{oid}/{method}", s.handleCalls)
-	mux.HandleFunc("GET /_rpc/lookup/{name}", s.lookup)
+	mux.HandleFunc("POST /_rpc/lookup/{name}", s.lookup)
+	mux.HandleFunc("POST /_rpc/reexport/{oid}", s.reexport)
 	mux.HandleFunc("POST /_rpc/ref/{oid}", s.refCapa)
 	mux.HandleFunc("POST /_rpc/deref/{oid}", s.derefCapa)
 
@@ -165,29 +216,77 @@ func (s *Server) setupMux() {
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	s.state.log.Info("HTTP Request", "method", r.Method, "path", r.URL.Path)
 	s.mux.ServeHTTP(w, r)
 }
 
+func (s *Server) reexport(w http.ResponseWriter, r *http.Request) {
+	oid := OID(r.PathValue("oid"))
+
+	pk := r.Header.Get("rpc-target-public-key")
+	if pk == "" {
+		http.Error(w, "public key not provided", http.StatusForbidden)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if hc, ok := s.objects[oid]; ok {
+		data, err := base58.Decode(pk)
+		if err != nil {
+			json.NewEncoder(w).Encode(lookupResponse{Error: "invalid public key"})
+			return
+		}
+
+		capa := s.reexportCapability(oid, hc, ed25519.PublicKey(data))
+
+		cbor.NewEncoder(w).Encode(lookupResponse{Capability: capa})
+	} else {
+		cbor.NewEncoder(w).Encode(lookupResponse{
+			Error: "unknown capability: " + string(oid),
+		})
+	}
+}
+
 type lookupResponse struct {
-	OID   string `json:"oid,omitempty"`
-	Error string `json:"error,omitempty"`
+	Capability *Capability `json:"capability,omitempty"`
+	Error      string      `json:"error,omitempty"`
 }
 
 func (s *Server) lookup(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
+
+	pk := r.Header.Get("rpc-public-key")
+	if pk == "" {
+		http.Error(w, "public key not provided", http.StatusForbidden)
+		return
+	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	w.WriteHeader(http.StatusOK)
 
-	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Content-Type", "application/cbor")
 
-	oid, ok := s.registry[name]
+	s.state.log.Info("Lookup", "name", name)
+
+	iface, ok := s.persistent[name]
 	if !ok {
 		json.NewEncoder(w).Encode(lookupResponse{Error: "unknown object: " + name})
 	} else {
-		json.NewEncoder(w).Encode(lookupResponse{OID: string(oid)})
+		data, err := base58.Decode(pk)
+		if err != nil {
+			json.NewEncoder(w).Encode(lookupResponse{Error: "invalid public key"})
+			return
+		}
+
+		capa := s.assignCapability(iface, ed25519.PublicKey(data))
+
+		cbor.NewEncoder(w).Encode(lookupResponse{Capability: capa})
 	}
 }
 
@@ -205,9 +304,7 @@ func (s *Server) refCapa(w http.ResponseWriter, r *http.Request) {
 	defer s.mu.Unlock()
 
 	if hc, ok := s.objects[oid]; ok {
-		if !hc.persistent {
-			hc.refs.Add(1)
-		}
+		hc.refs.Add(1)
 		json.NewEncoder(w).Encode(refResponse{Status: "ok"})
 	} else {
 		json.NewEncoder(w).Encode(refResponse{Error: "unknown capability: " + string(oid)})
@@ -225,9 +322,7 @@ func (s *Server) derefCapa(w http.ResponseWriter, r *http.Request) {
 	if hc, ok := s.objects[oid]; ok {
 		var rep refResponse
 
-		if hc.persistent {
-			rep.Status = "persistent"
-		} else if hc.refs.Add(-1) == 0 {
+		if hc.refs.Add(-1) == 0 {
 			delete(s.objects, oid)
 			go hc.Close()
 
@@ -242,16 +337,72 @@ func (s *Server) derefCapa(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (s *Server) authRequest(r *http.Request, oid OID) (ed25519.PublicKey, bool) {
+	ts := r.Header.Get("rpc-timestamp")
+
+	t, err := time.Parse(time.RFC3339Nano, ts)
+	if err != nil {
+		s.state.log.Info("Failed to parse timestamp", "error", err)
+		return nil, false
+	}
+
+	if time.Since(t) > 10*time.Minute {
+		s.state.log.Info("Timestamp too old", "timestamp", t)
+		return nil, false
+	}
+
+	sign := r.Header.Get("rpc-signature")
+	if sign == "" {
+		s.state.log.Info("No signature provided")
+		return nil, false
+	}
+
+	s.mu.Lock()
+	capa, ok := s.objects[oid]
+	s.mu.Unlock()
+
+	if !ok {
+		s.state.log.Info("Found capability", "oid", oid)
+		return nil, false
+	}
+
+	var buf bytes.Buffer
+
+	fmt.Fprintf(&buf, "%s %s %s", r.Method, r.URL.Path, ts)
+
+	bsign, err := base58.Decode(sign)
+	if err != nil {
+		s.state.log.Info("Failed to decode signature", "error", err)
+		return nil, false
+	}
+
+	if len(capa.pub) != ed25519.PublicKeySize {
+		s.state.log.Info("Invalid public key size", "size", len(capa.pub))
+		panic("bad key!!!")
+	}
+
+	if !ed25519.Verify(capa.pub, buf.Bytes(), bsign) {
+		s.state.log.Info("Failed to verify signature")
+		return nil, false
+	}
+
+	return capa.pub, true
+}
+
 func (s *Server) handleCalls(w http.ResponseWriter, r *http.Request) {
 	oid := OID(r.PathValue("oid"))
+
+	s.state.log.Info("RPC Call", "oid", oid)
+
+	user, ok := s.authRequest(r, oid)
+	if !ok {
+		w.WriteHeader(http.StatusForbidden)
+		return
+	}
+
 	method := r.PathValue("method")
 
-	//fields := strings.SplitN(r.URL.Path, "/", 4)
-
 	w.Header().Set("Trailer", "rpc-status, rpc-error")
-
-	//oid := OID(fields[1])
-	//method := fields[2]
 
 	ctx := r.Context()
 
@@ -260,6 +411,7 @@ func (s *Server) handleCalls(w http.ResponseWriter, r *http.Request) {
 		r:      r,
 		oid:    oid,
 		method: method,
+		caller: user,
 	}
 
 	defer r.Body.Close()

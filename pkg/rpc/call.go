@@ -1,6 +1,7 @@
 package rpc
 
 import (
+	"crypto/ed25519"
 	"net/http"
 
 	"github.com/fxamacker/cbor/v2"
@@ -14,6 +15,8 @@ type Call struct {
 	oid    OID
 	method string
 
+	caller ed25519.PublicKey
+
 	results any
 }
 
@@ -26,7 +29,7 @@ func (c *Call) Results(v any) {
 }
 
 func (c *Call) NewCapability(i *Interface) *Capability {
-	return c.s.AssignCapability(i)
+	return c.s.assignCapability(i, c.caller)
 }
 
 func (c *Call) NewClient(capa *Capability) *Client {

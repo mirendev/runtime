@@ -503,8 +503,8 @@ func (s *handleState) appendAttr(a slog.Attr) bool {
 		if a.Value.Kind() == slog.KindString {
 			str := a.Value.String()
 			if strings.Contains(str, "\n") {
-				s.appendRawString("\n  ")
 				s.appendKey(a.Key)
+				s.appendRawString("\n")
 				writeIndent(s, str, "  │ ")
 				return true
 			}

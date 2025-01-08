@@ -3,6 +3,9 @@ package rpc
 import (
 	"bytes"
 	"context"
+	"crypto"
+	"crypto/ed25519"
+	"crypto/rand"
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
@@ -10,15 +13,18 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"os"
 	"sync"
 	"time"
 
 	"github.com/fxamacker/cbor/v2"
+	"github.com/mr-tron/base58"
 	"github.com/pkg/errors"
 	"github.com/quic-go/quic-go"
 	"github.com/quic-go/quic-go/http3"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/propagation"
+	"miren.dev/runtime/pkg/slogfmt"
 )
 
 var (
@@ -45,6 +51,7 @@ func init() {
 }
 
 type State struct {
+	log       *slog.Logger
 	transport *quic.Transport
 
 	tlsCfg *tls.Config
@@ -52,6 +59,9 @@ type State struct {
 	server *Server
 	li     *quic.EarlyListener
 	cert   tls.Certificate
+
+	privkey ed25519.PrivateKey
+	pubkey  ed25519.PublicKey
 }
 
 func (s *State) ListenAddr() string {
@@ -61,6 +71,7 @@ func (s *State) ListenAddr() string {
 type Client struct {
 	*State
 
+	capa   *Capability
 	remote string
 	oid    OID
 }
@@ -89,10 +100,22 @@ func NewState(ctx context.Context, addr string) (*State, error) {
 		NextProtos:         []string{http3.NextProtoH3},
 	}
 
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		return nil, err
+	}
+
+	log := slog.New(slogfmt.NewTextHandler(os.Stdout, &slog.HandlerOptions{
+		Level: slog.LevelDebug,
+	}))
+
 	s := &State{
+		log:       log,
 		transport: &quic.Transport{Conn: udpConn},
 		tlsCfg:    tlsCfg,
 		server:    newServer(),
+		privkey:   priv,
+		pubkey:    pub,
 	}
 
 	err = s.startListener(ctx)
@@ -140,7 +163,7 @@ func (s *State) startListener(ctx context.Context) error {
 	serv := &http3.Server{
 		Handler:   s.server,
 		TLSConfig: s.tlsCfg,
-		Logger:    slog.Default(),
+		Logger:    s.log,
 	}
 
 	go func() {
@@ -159,8 +182,9 @@ func (s *State) Connect(remote string, name string) (*Client, error) {
 		remote: remote,
 	}
 
-	err := c.resolveOID(name)
+	err := c.resolveCapability(name)
 	if err != nil {
+		c.log.Error("rpc.connect", "error", err)
 		return nil, err
 	}
 
@@ -170,6 +194,7 @@ func (s *State) Connect(remote string, name string) (*Client, error) {
 func (s *State) NewClient(capa *Capability) *Client {
 	return &Client{
 		State:  s,
+		capa:   capa,
 		oid:    capa.OID,
 		remote: capa.Address,
 	}
@@ -242,18 +267,23 @@ type ResultProcessor interface {
 	processResult(hr *http.Response)
 }
 
-func (c *Client) reexportCapability(cl *Client) *Capability {
-	return &Capability{
-		OID:     cl.oid,
-		Address: cl.remote,
-	}
+func (c *Client) reexportCapability(cl *Client) (*Capability, error) {
+	// We need to re-export the capability held by +cl+ so that it can
+	// be used by the entities that we're calling.
+
+	return cl.requestReexportCapability(cl.capa, c.capa.Issuer)
 }
 
 func (c *Client) NewCapability(i *Interface, lower any) *Capability {
 	if rc, ok := lower.(interface{ CapabilityClient() *Client }); ok {
-		return c.reexportCapability(rc.CapabilityClient())
+		capa, err := c.reexportCapability(rc.CapabilityClient())
+		if err != nil {
+			panic(err)
+		}
+
+		return capa
 	} else {
-		return c.server.AssignCapability(i)
+		return c.server.assignCapability(i, c.capa.Issuer)
 	}
 }
 
@@ -353,21 +383,30 @@ func (c *Client) CallFuture(ctx context.Context, oid, method string, args any, r
 	}()
 }
 
-func (c *Client) resolveOID(name string) error {
+func (c *Client) resolveCapability(name string) error {
+	c.log.Info("rpc.resolve", "name", name)
 	url := "https://" + c.remote + "/_rpc/lookup/" + name
-	req, err := http.NewRequest(http.MethodGet, url, nil)
+	req, err := http.NewRequest(http.MethodPost, url, nil)
 	if err != nil {
 		return err
 	}
+
+	req.Header.Set("rpc-public-key", base58.Encode(c.pubkey))
 
 	resp, err := DefaultTransport.RoundTrip(req)
 	if err != nil {
 		return err
 	}
 
+	c.log.Debug("rpc.resolve", "status", resp.StatusCode)
+
+	if resp.StatusCode != http.StatusOK {
+		return errors.Errorf("unexpected status code: %d", resp.StatusCode)
+	}
+
 	var lr lookupResponse
 
-	err = json.NewDecoder(resp.Body).Decode(&lr)
+	err = cbor.NewDecoder(resp.Body).Decode(&lr)
 	if err != nil {
 		return err
 	}
@@ -376,9 +415,42 @@ func (c *Client) resolveOID(name string) error {
 		return errors.New(lr.Error)
 	}
 
-	c.oid = OID(lr.OID)
+	c.capa = lr.Capability
+	c.oid = lr.Capability.OID
 
 	return nil
+}
+
+func (c *Client) requestReexportCapability(capa *Capability, target ed25519.PublicKey) (*Capability, error) {
+	url := "https://" + c.remote + "/_rpc/reexport/" + string(capa.OID)
+	req, err := http.NewRequest(http.MethodPost, url, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Set("rpc-target-public-key", base58.Encode(target))
+
+	resp, err := DefaultTransport.RoundTrip(req)
+	if err != nil {
+		return nil, err
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, errors.Errorf("unexpected status code: %d", resp.StatusCode)
+	}
+
+	var lr lookupResponse
+
+	err = cbor.NewDecoder(resp.Body).Decode(&lr)
+	if err != nil {
+		return nil, err
+	}
+
+	if lr.Error != "" {
+		return nil, errors.New(lr.Error)
+	}
+
+	return lr.Capability, nil
 }
 
 func (c *Client) refOID(oid OID) error {
@@ -438,6 +510,8 @@ func (c *Client) Close() error {
 }
 
 func (c *Client) Call(ctx context.Context, method string, args, result any) error {
+	c.log.InfoContext(ctx, "rpc.call", "method", method, "oid", string(c.oid))
+
 	ctx, span := Tracer().Start(ctx, "rpc.call."+method)
 	defer span.End()
 
@@ -480,6 +554,23 @@ func (c *Client) Call(ctx context.Context, method string, args, result any) erro
 	}
 
 	Propagator().Inject(ctx, propagation.HeaderCarrier(req.Header))
+
+	ts := time.Now()
+
+	tss := ts.Format(time.RFC3339Nano)
+
+	req.Header.Set("rpc-timestamp", tss)
+
+	var buf bytes.Buffer
+
+	fmt.Fprintf(&buf, "POST /_rpc/call/%s/%s %s", c.oid, method, tss)
+
+	sign, err := c.privkey.Sign(rand.Reader, buf.Bytes(), crypto.Hash(0))
+	if err != nil {
+		return err
+	}
+
+	req.Header.Set("rpc-signature", base58.Encode(sign))
 
 	err = rs.SendRequestHeader(req)
 	if err != nil {
