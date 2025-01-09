@@ -104,7 +104,7 @@ func TestRPC(t *testing.T) {
 
 		s := example.AdaptMeter(&exampleMeter{temp: 42})
 
-		ss, err := rpc.NewState(ctx, "localhost:7873")
+		ss, err := rpc.NewState(ctx, "")
 		r.NoError(err)
 
 		serv := ss.Server()
@@ -114,7 +114,7 @@ func TestRPC(t *testing.T) {
 		cs, err := rpc.NewState(ctx, "")
 		r.NoError(err)
 
-		c, err := cs.Connect("localhost:7873", "meter")
+		c, err := cs.Connect(ss.ListenAddr(), "meter")
 		r.NoError(err)
 
 		mc := &example.MeterClient{Client: c}
@@ -149,7 +149,7 @@ func TestRPC(t *testing.T) {
 
 		s := example.AdaptMeterUpdates(&exampleMU{})
 
-		ss, err := rpc.NewState(ctx, "localhost:7874")
+		ss, err := rpc.NewState(ctx, "")
 		r.NoError(err)
 
 		serv := ss.Server()
@@ -159,7 +159,7 @@ func TestRPC(t *testing.T) {
 		cs, err := rpc.NewState(ctx, "")
 		r.NoError(err)
 
-		c, err := cs.Connect("localhost:7874", "meter")
+		c, err := cs.Connect(ss.ListenAddr(), "meter")
 		r.NoError(err)
 
 		mc := &example.MeterUpdatesClient{Client: c}
@@ -188,7 +188,7 @@ func TestRPC(t *testing.T) {
 
 		s := example.AdaptMeter(&em)
 
-		ss, err := rpc.NewState(ctx, "localhost:7875")
+		ss, err := rpc.NewState(ctx, "")
 		r.NoError(err)
 
 		serv := ss.Server()
@@ -198,7 +198,7 @@ func TestRPC(t *testing.T) {
 		cs, err := rpc.NewState(ctx, "")
 		r.NoError(err)
 
-		c, err := cs.Connect("localhost:7875", "meter")
+		c, err := cs.Connect(ss.ListenAddr(), "meter")
 		r.NoError(err)
 
 		mc := &example.MeterClient{Client: c}
@@ -226,4 +226,35 @@ func TestRPC(t *testing.T) {
 
 		r.Equal(float32(72), em.temp)
 	})
+}
+
+func BenchmarkRPC(b *testing.B) {
+	r := require.New(b)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	s := example.AdaptMeter(&exampleMeter{temp: 42})
+
+	ss, err := rpc.NewState(ctx, "")
+	r.NoError(err)
+
+	serv := ss.Server()
+
+	serv.ExposeValue("meter", s)
+
+	cs, err := rpc.NewState(ctx, "")
+	r.NoError(err)
+
+	c, err := cs.Connect(ss.ListenAddr(), "meter")
+	r.NoError(err)
+
+	mc := &example.MeterClient{Client: c}
+
+	b.ResetTimer()
+
+	for i := 0; i < b.N; i++ {
+		_, err := mc.ReadTemperature(context.Background(), "test")
+		r.NoError(err)
+	}
 }

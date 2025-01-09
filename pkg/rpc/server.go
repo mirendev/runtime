@@ -10,7 +10,6 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"runtime/debug"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -216,12 +215,18 @@ func (s *Server) setupMux() {
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	s.state.log.Info("HTTP Request", "method", r.Method, "path", r.URL.Path)
+	//s.state.log.Info("HTTP Request", "method", r.Method, "path", r.URL.Path)
 	s.mux.ServeHTTP(w, r)
 }
 
 func (s *Server) reexport(w http.ResponseWriter, r *http.Request) {
 	oid := OID(r.PathValue("oid"))
+
+	_, ok := s.authRequest(r, oid)
+	if !ok {
+		w.WriteHeader(http.StatusForbidden)
+		return
+	}
 
 	pk := r.Header.Get("rpc-target-public-key")
 	if pk == "" {
@@ -272,7 +277,7 @@ func (s *Server) lookup(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/cbor")
 
-	s.state.log.Info("Lookup", "name", name)
+	//s.state.log.Info("Lookup", "name", name)
 
 	iface, ok := s.persistent[name]
 	if !ok {
@@ -298,6 +303,12 @@ type refResponse struct {
 func (s *Server) refCapa(w http.ResponseWriter, r *http.Request) {
 	oid := OID(r.PathValue("oid"))
 
+	_, ok := s.authRequest(r, oid)
+	if !ok {
+		w.WriteHeader(http.StatusForbidden)
+		return
+	}
+
 	w.WriteHeader(http.StatusOK)
 
 	s.mu.Lock()
@@ -313,6 +324,12 @@ func (s *Server) refCapa(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) derefCapa(w http.ResponseWriter, r *http.Request) {
 	oid := OID(r.PathValue("oid"))
+
+	_, ok := s.authRequest(r, oid)
+	if !ok {
+		w.WriteHeader(http.StatusForbidden)
+		return
+	}
 
 	w.WriteHeader(http.StatusOK)
 
@@ -392,8 +409,6 @@ func (s *Server) authRequest(r *http.Request, oid OID) (ed25519.PublicKey, bool)
 func (s *Server) handleCalls(w http.ResponseWriter, r *http.Request) {
 	oid := OID(r.PathValue("oid"))
 
-	s.state.log.Info("RPC Call", "oid", oid)
-
 	user, ok := s.authRequest(r, oid)
 	if !ok {
 		w.WriteHeader(http.StatusForbidden)
@@ -429,12 +444,8 @@ func (s *Server) handleCalls(w http.ResponseWriter, r *http.Request) {
 
 		w.WriteHeader(http.StatusOK)
 
-		fmt.Printf("Calling %s.%s\n", oid, method)
-
 		defer func() {
 			if r := recover(); r != nil {
-				fmt.Println(r)
-				debug.PrintStack()
 				w.Header().Add("rpc-status", "panic")
 				w.Header().Add("rpc-error", fmt.Sprint(r))
 				panic(r)

@@ -51,6 +51,7 @@ func init() {
 }
 
 type State struct {
+	top       context.Context
 	log       *slog.Logger
 	transport *quic.Transport
 
@@ -62,10 +63,17 @@ type State struct {
 
 	privkey ed25519.PrivateKey
 	pubkey  ed25519.PublicKey
+
+	qc quic.Config
 }
 
 func (s *State) ListenAddr() string {
 	return s.transport.Conn.LocalAddr().String()
+}
+
+type cachedConn struct {
+	ec quic.EarlyConnection
+	hc *http3.ClientConn
 }
 
 type Client struct {
@@ -74,6 +82,8 @@ type Client struct {
 	capa   *Capability
 	remote string
 	oid    OID
+
+	cachedConn *cachedConn
 }
 
 func (c *Client) String() string {
@@ -106,10 +116,11 @@ func NewState(ctx context.Context, addr string) (*State, error) {
 	}
 
 	log := slog.New(slogfmt.NewTextHandler(os.Stdout, &slog.HandlerOptions{
-		Level: slog.LevelDebug,
+		Level: slog.LevelError,
 	}))
 
 	s := &State{
+		top:       ctx,
 		log:       log,
 		transport: &quic.Transport{Conn: udpConn},
 		tlsCfg:    tlsCfg,
@@ -117,6 +128,16 @@ func NewState(ctx context.Context, addr string) (*State, error) {
 		privkey:   priv,
 		pubkey:    pub,
 	}
+
+	qc := quic.Config{
+		EnableDatagrams:       true,
+		MaxIncomingStreams:    1000,
+		MaxIncomingUniStreams: 1000,
+		Allow0RTT:             true,
+		KeepAlivePeriod:       10 * time.Second,
+	}
+
+	s.qc = qc
 
 	err = s.startListener(ctx)
 	if err != nil {
@@ -143,7 +164,7 @@ func (s *State) setupServer() error {
 		NextProtos:   []string{http3.NextProtoH3},
 	}
 
-	ec, err := s.transport.ListenEarly(tlsCfg, &DefaultQUICConfig)
+	ec, err := s.transport.ListenEarly(tlsCfg, &s.qc)
 	if err != nil {
 		return err
 	}
@@ -271,7 +292,7 @@ func (c *Client) reexportCapability(cl *Client) (*Capability, error) {
 	// We need to re-export the capability held by +cl+ so that it can
 	// be used by the entities that we're calling.
 
-	return cl.requestReexportCapability(cl.capa, c.capa.Issuer)
+	return cl.requestReexportCapability(c.top, cl.capa, c.capa.Issuer)
 }
 
 func (c *Client) NewCapability(i *Interface, lower any) *Capability {
@@ -421,9 +442,14 @@ func (c *Client) resolveCapability(name string) error {
 	return nil
 }
 
-func (c *Client) requestReexportCapability(capa *Capability, target ed25519.PublicKey) (*Capability, error) {
+func (c *Client) requestReexportCapability(ctx context.Context, capa *Capability, target ed25519.PublicKey) (*Capability, error) {
 	url := "https://" + c.remote + "/_rpc/reexport/" + string(capa.OID)
-	req, err := http.NewRequest(http.MethodPost, url, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	err = c.prepareRequest(ctx, req)
 	if err != nil {
 		return nil, err
 	}
@@ -453,9 +479,14 @@ func (c *Client) requestReexportCapability(capa *Capability, target ed25519.Publ
 	return lr.Capability, nil
 }
 
-func (c *Client) refOID(oid OID) error {
+func (c *Client) refOID(ctx context.Context, oid OID) error {
 	url := "https://" + c.remote + "/_rpc/ref/" + string(oid)
 	req, err := http.NewRequest(http.MethodPost, url, nil)
+	if err != nil {
+		return err
+	}
+
+	err = c.prepareRequest(ctx, req)
 	if err != nil {
 		return err
 	}
@@ -479,9 +510,14 @@ func (c *Client) refOID(oid OID) error {
 	return nil
 }
 
-func (c *Client) derefOID(oid OID) error {
+func (c *Client) derefOID(ctx context.Context, oid OID) error {
 	url := "https://" + c.remote + "/_rpc/deref/" + string(oid)
 	req, err := http.NewRequest(http.MethodPost, url, nil)
+	if err != nil {
+		return err
+	}
+
+	err = c.prepareRequest(ctx, req)
 	if err != nil {
 		return err
 	}
@@ -506,7 +542,63 @@ func (c *Client) derefOID(oid OID) error {
 }
 
 func (c *Client) Close() error {
-	return c.derefOID(c.oid)
+	return c.derefOID(c.top, c.oid)
+}
+
+func (c *Client) conn(ctx context.Context) (*http3.ClientConn, error) {
+	if c.cachedConn != nil {
+		return c.cachedConn.hc, nil
+	}
+
+	udpAddr, err := net.ResolveUDPAddr("udp", c.remote)
+	if err != nil {
+		return nil, err
+	}
+
+	ec, err := c.transport.DialEarly(context.Background(), udpAddr, c.tlsCfg, &DefaultQUICConfig)
+	if err != nil {
+		return nil, err
+	}
+
+	// wait for the handshake to complete. We can't use 0rtt because the request
+	// data needs to be secure.
+	select {
+	case <-ec.HandshakeComplete():
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+
+	hc := DefaultTransport.NewClientConn(ec)
+
+	c.cachedConn = &cachedConn{
+		ec: ec,
+		hc: hc,
+	}
+
+	return hc, nil
+}
+
+func (c *Client) prepareRequest(ctx context.Context, req *http.Request) error {
+	Propagator().Inject(ctx, propagation.HeaderCarrier(req.Header))
+
+	ts := time.Now()
+
+	tss := ts.Format(time.RFC3339Nano)
+
+	req.Header.Set("rpc-timestamp", tss)
+
+	var buf bytes.Buffer
+
+	fmt.Fprintf(&buf, "POST %s %s", req.URL.Path, tss)
+
+	sign, err := c.privkey.Sign(rand.Reader, buf.Bytes(), crypto.Hash(0))
+	if err != nil {
+		return err
+	}
+
+	req.Header.Set("rpc-signature", base58.Encode(sign))
+
+	return nil
 }
 
 func (c *Client) Call(ctx context.Context, method string, args, result any) error {
@@ -517,25 +609,10 @@ func (c *Client) Call(ctx context.Context, method string, args, result any) erro
 
 	span.SetAttributes(attribute.String("oid", string(c.oid)))
 
-	udpAddr, err := net.ResolveUDPAddr("udp", c.remote)
+	hc, err := c.conn(ctx)
 	if err != nil {
 		return err
 	}
-
-	ec, err := c.transport.DialEarly(ctx, udpAddr, c.tlsCfg, &DefaultQUICConfig)
-	if err != nil {
-		return err
-	}
-
-	// wait for the handshake to complete. We can't use 0rtt because the request
-	// data needs to be secure.
-	select {
-	case <-ec.HandshakeComplete():
-	case <-ctx.Done():
-		return ctx.Err()
-	}
-
-	hc := DefaultTransport.NewClientConn(ec)
 
 	rs, err := hc.OpenRequestStream(ctx)
 	if err != nil {
@@ -548,29 +625,15 @@ func (c *Client) Call(ctx context.Context, method string, args, result any) erro
 	}
 
 	url := "https://" + c.remote + "/_rpc/call/" + string(c.oid) + "/" + method
-	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(data))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(data))
 	if err != nil {
 		return err
 	}
 
-	Propagator().Inject(ctx, propagation.HeaderCarrier(req.Header))
-
-	ts := time.Now()
-
-	tss := ts.Format(time.RFC3339Nano)
-
-	req.Header.Set("rpc-timestamp", tss)
-
-	var buf bytes.Buffer
-
-	fmt.Fprintf(&buf, "POST /_rpc/call/%s/%s %s", c.oid, method, tss)
-
-	sign, err := c.privkey.Sign(rand.Reader, buf.Bytes(), crypto.Hash(0))
+	err = c.prepareRequest(ctx, req)
 	if err != nil {
 		return err
 	}
-
-	req.Header.Set("rpc-signature", base58.Encode(sign))
 
 	err = rs.SendRequestHeader(req)
 	if err != nil {

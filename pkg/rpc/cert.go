@@ -1,8 +1,8 @@
 package rpc
 
 import (
+	"crypto/ed25519"
 	"crypto/rand"
-	"crypto/rsa"
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
@@ -18,7 +18,7 @@ import (
 // and returns a tls.Certificate ready to be used in a server.
 func generateSelfSignedCert() (tls.Certificate, error) {
 	// Generate a private key.
-	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	pubkey, privateKey, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		return tls.Certificate{}, fmt.Errorf("failed to generate private key: %v", err)
 	}
@@ -51,18 +51,23 @@ func generateSelfSignedCert() (tls.Certificate, error) {
 		rand.Reader,
 		&certTemplate,
 		&certTemplate,
-		&privateKey.PublicKey,
+		pubkey,
 		privateKey,
 	)
 	if err != nil {
 		return tls.Certificate{}, fmt.Errorf("failed to create certificate: %v", err)
 	}
 
+	pkbytes, err := x509.MarshalPKCS8PrivateKey(privateKey)
+	if err != nil {
+		return tls.Certificate{}, fmt.Errorf("failed to marshal private key: %v", err)
+	}
+
 	// Encode the private key into PEM format.
 	privateKeyPEM := pem.EncodeToMemory(
 		&pem.Block{
-			Type:  "RSA PRIVATE KEY",
-			Bytes: x509.MarshalPKCS1PrivateKey(privateKey),
+			Type:  "EC PRIVATE KEY",
+			Bytes: pkbytes,
 		},
 	)
 
