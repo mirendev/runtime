@@ -43,6 +43,8 @@ type Server struct {
 
 	persistent map[string]*Interface
 
+	knownAddresses map[string]string
+
 	mux *http.ServeMux
 }
 
@@ -73,9 +75,10 @@ func (h *heldCapability) Close() error {
 
 func newServer() *Server {
 	s := &Server{
-		objects:    make(map[OID]*heldCapability),
-		registry:   make(map[string]OID),
-		persistent: make(map[string]*Interface),
+		objects:        make(map[OID]*heldCapability),
+		registry:       make(map[string]OID),
+		persistent:     make(map[string]*Interface),
+		knownAddresses: make(map[string]string),
 	}
 
 	s.setupMux()
@@ -117,16 +120,15 @@ func (s *Server) ExposeValue(name string, iface *Interface) {
 	defer s.mu.Unlock()
 
 	s.persistent[name] = iface
-
-	//capa := s.AssignCapability(iface)
-
-	//s.mu.Lock()
-	//defer s.mu.Unlock()
-
-	//s.registry[name] = capa.OID
 }
 
 func (s *Server) NewClient(capa *Capability) *Client {
+	// see if we have the issuer of this capa in our knownAddresses table,
+	// and if so, we use that as it's remote address rather than the one
+	// in the capability.
+	// We do this because the address that client has for itself can be
+	// different than the address that this server sees, likely due to NAT.
+
 	return &Client{
 		State:  s.state,
 		oid:    capa.OID,
@@ -136,7 +138,7 @@ func (s *Server) NewClient(capa *Capability) *Client {
 
 const BootstrapOID = "!bootstrap"
 
-func (s *Server) assignCapability(i *Interface, pub ed25519.PublicKey) *Capability {
+func (s *Server) assignCapability(i *Interface, pub ed25519.PublicKey, contactAddr string) *Capability {
 	if len(pub) != ed25519.PublicKeySize {
 		panic("bad key!!!")
 	}
@@ -150,11 +152,15 @@ func (s *Server) assignCapability(i *Interface, pub ed25519.PublicKey) *Capabili
 
 	oid := OID(base58.Encode(buf))
 
+	if contactAddr == "" {
+		contactAddr = s.state.transport.Conn.LocalAddr().String()
+	}
+
 	capa := &Capability{
 		OID:     oid,
 		User:    pub,
 		Issuer:  s.state.pubkey,
-		Address: s.state.transport.Conn.LocalAddr().String(),
+		Address: contactAddr,
 	}
 
 	hc := &heldCapability{
@@ -172,7 +178,7 @@ func (s *Server) assignCapability(i *Interface, pub ed25519.PublicKey) *Capabili
 	return capa
 }
 
-func (s *Server) reexportCapability(target OID, cur *heldCapability, pub ed25519.PublicKey) *Capability {
+func (s *Server) reexportCapability(target OID, cur *heldCapability, pub ed25519.PublicKey, contactAddr string) *Capability {
 	buf := make([]byte, 16)
 
 	_, err := io.ReadFull(rand.Reader, buf)
@@ -182,11 +188,15 @@ func (s *Server) reexportCapability(target OID, cur *heldCapability, pub ed25519
 
 	oid := OID(base58.Encode(buf))
 
+	if contactAddr == "" {
+		contactAddr = s.state.transport.Conn.LocalAddr().String()
+	}
+
 	capa := &Capability{
 		OID:     oid,
 		User:    pub,
 		Issuer:  s.state.pubkey,
-		Address: s.state.transport.Conn.LocalAddr().String(),
+		Address: contactAddr,
 	}
 
 	hc := &heldCapability{
@@ -210,6 +220,7 @@ func (s *Server) setupMux() {
 	mux.HandleFunc("POST /_rpc/reexport/{oid}", s.reexport)
 	mux.HandleFunc("POST /_rpc/ref/{oid}", s.refCapa)
 	mux.HandleFunc("POST /_rpc/deref/{oid}", s.derefCapa)
+	mux.HandleFunc("POST /_rpc/identify", s.clientIdentify)
 
 	s.mux = mux
 }
@@ -217,6 +228,82 @@ func (s *Server) setupMux() {
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	//s.state.log.Info("HTTP Request", "method", r.Method, "path", r.URL.Path)
 	s.mux.ServeHTTP(w, r)
+}
+
+type identifyResponse struct {
+	Ok       bool   `json:"ok,omitempty"`
+	Error    string `json:"error,omitempty"`
+	Address  string `json:"address,omitempty"`
+	Identity string `json:"identity,omitempty"`
+}
+
+func (s *Server) checkIdentity(r *http.Request) (string, bool) {
+	ts := r.Header.Get("rpc-timestamp")
+
+	t, err := time.Parse(time.RFC3339Nano, ts)
+	if err != nil {
+		s.state.log.Info("Failed to parse timestamp", "error", err)
+		return "", false
+	}
+
+	if time.Since(t) > 10*time.Minute {
+		s.state.log.Info("Timestamp too old", "timestamp", t)
+		return "", false
+	}
+
+	sign := r.Header.Get("rpc-signature")
+	if sign == "" {
+		s.state.log.Info("No signature provided")
+		return "", false
+	}
+
+	var buf bytes.Buffer
+
+	fmt.Fprintf(&buf, "%s %s %s", r.Method, r.URL.Path, ts)
+
+	bsign, err := base58.Decode(sign)
+	if err != nil {
+		s.state.log.Info("Failed to decode signature", "error", err)
+		return "", false
+	}
+
+	spkey := r.Header.Get("rpc-public-key")
+
+	key, err := base58.Decode(spkey)
+	if err != nil {
+		return "", false
+	}
+
+	pub := ed25519.PublicKey(key)
+
+	if len(pub) != ed25519.PublicKeySize {
+		s.state.log.Info("Invalid public key size", "size", len(pub))
+		return "", false
+	}
+
+	if !ed25519.Verify(pub, buf.Bytes(), bsign) {
+		s.state.log.Info("Failed to verify signature")
+		return "", false
+	}
+
+	return base58.Encode(pub), true
+}
+
+func (s *Server) clientIdentify(w http.ResponseWriter, r *http.Request) {
+	id, ok := s.checkIdentity(r)
+	if !ok {
+		cbor.NewEncoder(w).Encode(identifyResponse{Error: "invalid identity"})
+		return
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	cbor.NewEncoder(w).Encode(identifyResponse{
+		Ok:       true,
+		Address:  r.RemoteAddr,
+		Identity: id,
+	})
 }
 
 func (s *Server) reexport(w http.ResponseWriter, r *http.Request) {
@@ -234,6 +321,18 @@ func (s *Server) reexport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// having the client provide the contact address allows the server
+	// to provide capabilities for OTHER servers rather than just itself.
+	// in this way, the client doesn't have to assume that just because it
+	// looked up the capability here, the functionality is also here.
+	//
+	// NOTE: We don't actually support that atm, but this provides future
+	// abilities.
+	ca := r.Header.Get("rpc-contact-addr")
+	if ca != "" {
+		ca = s.state.transport.Conn.LocalAddr().String()
+	}
+
 	w.WriteHeader(http.StatusOK)
 
 	s.mu.Lock()
@@ -246,7 +345,7 @@ func (s *Server) reexport(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		capa := s.reexportCapability(oid, hc, ed25519.PublicKey(data))
+		capa := s.reexportCapability(oid, hc, ed25519.PublicKey(data), ca)
 
 		cbor.NewEncoder(w).Encode(lookupResponse{Capability: capa})
 	} else {
@@ -277,6 +376,18 @@ func (s *Server) lookup(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/cbor")
 
+	// having the client provide the contact address allows the server
+	// to provide capabilities for OTHER servers rather than just itself.
+	// in this way, the client doesn't have to assume that just because it
+	// looked up the capability here, the functionality is also here.
+	//
+	// NOTE: We don't actually support that atm, but this provides future
+	// abilities.
+	ca := r.Header.Get("rpc-contact-addr")
+	if ca != "" {
+		ca = s.state.transport.Conn.LocalAddr().String()
+	}
+
 	//s.state.log.Info("Lookup", "name", name)
 
 	iface, ok := s.persistent[name]
@@ -289,7 +400,7 @@ func (s *Server) lookup(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		capa := s.assignCapability(iface, ed25519.PublicKey(data))
+		capa := s.assignCapability(iface, ed25519.PublicKey(data), ca)
 
 		cbor.NewEncoder(w).Encode(lookupResponse{Capability: capa})
 	}

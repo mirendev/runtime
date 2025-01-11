@@ -6,75 +6,20 @@ import (
 	"crypto"
 	"crypto/ed25519"
 	"crypto/rand"
-	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
-	"log/slog"
 	"net"
 	"net/http"
-	"os"
-	"sync"
 	"time"
 
 	"github.com/fxamacker/cbor/v2"
 	"github.com/mr-tron/base58"
 	"github.com/pkg/errors"
-	"github.com/quic-go/quic-go"
 	"github.com/quic-go/quic-go/http3"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/propagation"
-	"miren.dev/runtime/pkg/slogfmt"
 )
-
-var (
-	DefaultTransport  http3.Transport
-	DefaultQUICConfig quic.Config
-)
-
-func init() {
-	DefaultTransport.EnableDatagrams = true
-	DefaultTransport.Logger = slog.Default()
-	DefaultTransport.TLSClientConfig = &tls.Config{
-		InsecureSkipVerify: true,
-	}
-
-	DefaultQUICConfig = quic.Config{
-		EnableDatagrams:       true,
-		MaxIncomingStreams:    1000,
-		MaxIncomingUniStreams: 1000,
-		Allow0RTT:             true,
-		KeepAlivePeriod:       10 * time.Second,
-	}
-
-	DefaultTransport.QUICConfig = &DefaultQUICConfig
-}
-
-type State struct {
-	top       context.Context
-	log       *slog.Logger
-	transport *quic.Transport
-
-	tlsCfg *tls.Config
-
-	server *Server
-	li     *quic.EarlyListener
-	cert   tls.Certificate
-
-	privkey ed25519.PrivateKey
-	pubkey  ed25519.PublicKey
-
-	qc quic.Config
-}
-
-func (s *State) ListenAddr() string {
-	return s.transport.Conn.LocalAddr().String()
-}
-
-type cachedConn struct {
-	ec quic.EarlyConnection
-	hc *http3.ClientConn
-}
 
 type Client struct {
 	*State
@@ -83,6 +28,11 @@ type Client struct {
 	remote string
 	oid    OID
 
+	// This is the remote address that the server
+	// observes this client as coming from. We use this address
+	// to populate any capabilites that we pass to the server.
+	serverObservedAddress string
+
 	cachedConn *cachedConn
 }
 
@@ -90,209 +40,11 @@ func (c *Client) String() string {
 	return fmt.Sprintf("Client(remote: %s, oid: %s)", c.remote, c.oid)
 }
 
-func NewState(ctx context.Context, addr string) (*State, error) {
-	if addr == "" {
-		addr = "localhost:0"
-	}
-
-	up, err := net.ResolveUDPAddr("udp", addr)
-	if err != nil {
-		return nil, err
-	}
-
-	udpConn, err := net.ListenUDP("udp", up)
-	if err != nil {
-		return nil, err
-	}
-
-	tlsCfg := &tls.Config{
-		InsecureSkipVerify: true,
-		NextProtos:         []string{http3.NextProtoH3},
-	}
-
-	pub, priv, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		return nil, err
-	}
-
-	log := slog.New(slogfmt.NewTextHandler(os.Stdout, &slog.HandlerOptions{
-		Level: slog.LevelError,
-	}))
-
-	s := &State{
-		top:       ctx,
-		log:       log,
-		transport: &quic.Transport{Conn: udpConn},
-		tlsCfg:    tlsCfg,
-		server:    newServer(),
-		privkey:   priv,
-		pubkey:    pub,
-	}
-
-	qc := quic.Config{
-		EnableDatagrams:       true,
-		MaxIncomingStreams:    1000,
-		MaxIncomingUniStreams: 1000,
-		Allow0RTT:             true,
-		KeepAlivePeriod:       10 * time.Second,
-	}
-
-	s.qc = qc
-
-	err = s.startListener(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	return s, nil
-}
-
-func (s *State) Server() *Server {
-	return s.server
-}
-
-func (s *State) setupServer() error {
-	cert, err := generateSelfSignedCert()
-	if err != nil {
-		return err
-	}
-
-	s.cert = cert
-
-	tlsCfg := &tls.Config{
-		Certificates: []tls.Certificate{cert},
-		NextProtos:   []string{http3.NextProtoH3},
-	}
-
-	ec, err := s.transport.ListenEarly(tlsCfg, &s.qc)
-	if err != nil {
-		return err
-	}
-
-	s.li = ec
-	s.server.state = s
-
-	return nil
-}
-
-func (s *State) startListener(ctx context.Context) error {
-	err := s.setupServer()
-	if err != nil {
-		return err
-	}
-
-	serv := &http3.Server{
-		Handler:   s.server,
-		TLSConfig: s.tlsCfg,
-		Logger:    s.log,
-	}
-
-	go func() {
-		<-ctx.Done()
-		serv.Shutdown(context.Background())
-	}()
-
-	go serv.ServeListener(s.li)
-
-	return nil
-}
-
-func (s *State) Connect(remote string, name string) (*Client, error) {
-	c := &Client{
-		State:  s,
-		remote: remote,
-	}
-
-	err := c.resolveCapability(name)
-	if err != nil {
-		c.log.Error("rpc.connect", "error", err)
-		return nil, err
-	}
-
-	return c, nil
-}
-
-func (s *State) NewClient(capa *Capability) *Client {
-	return &Client{
-		State:  s,
-		capa:   capa,
-		oid:    capa.OID,
-		remote: capa.Address,
-	}
-}
-
-type CallResult struct {
-	err error
-	res chan *CallResult
-}
-
-type Future[T any] struct {
-	done chan struct{}
-
-	mu       sync.Mutex
-	resolved bool
-	err      error
-	result   *T
-}
-
-func (f *Future[T]) Wait() {
-	<-f.done
-}
-
-func (f *Future[T]) Done() <-chan struct{} {
-	return f.done
-}
-
-func (f *Future[T]) Result() (*T, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-
-	if !f.resolved {
-		return nil, errors.New("future not resolved")
-	}
-
-	return f.result, f.err
-}
-
-func (f *Future[T]) processResult(hr *http.Response) {
-	defer close(f.done)
-
-	var v T
-
-	err := cbor.NewDecoder(hr.Body).Decode(&v)
-
-	f.mu.Lock()
-	defer f.mu.Unlock()
-
-	f.resolved = true
-
-	if err != nil {
-		f.err = err
-	} else {
-		f.result = &v
-	}
-}
-
-func (f *Future[T]) processError(err error) {
-	defer close(f.done)
-
-	f.mu.Lock()
-	defer f.mu.Unlock()
-
-	f.resolved = true
-	f.err = err
-}
-
-type ResultProcessor interface {
-	processError(err error)
-	processResult(hr *http.Response)
-}
-
-func (c *Client) reexportCapability(cl *Client) (*Capability, error) {
+func (c *Client) reexportCapability(origin *Client) (*Capability, error) {
 	// We need to re-export the capability held by +cl+ so that it can
 	// be used by the entities that we're calling.
 
-	return cl.requestReexportCapability(c.top, cl.capa, c.capa.Issuer)
+	return origin.requestReexportCapability(c.top, origin.capa, c.capa.Issuer)
 }
 
 func (c *Client) NewCapability(i *Interface, lower any) *Capability {
@@ -304,104 +56,76 @@ func (c *Client) NewCapability(i *Interface, lower any) *Capability {
 
 		return capa
 	} else {
-		return c.server.assignCapability(i, c.capa.Issuer)
+		return c.server.assignCapability(i, c.capa.Issuer, c.serverObservedAddress)
 	}
 }
 
-func (c *Client) CallFuture(ctx context.Context, oid, method string, args any, rp ResultProcessor) {
-	udpAddr, err := net.ResolveUDPAddr("udp", c.remote)
+func (c *Client) roundTrip(r *http.Request) (*http.Response, error) {
+	hc, err := c.conn(context.Background())
 	if err != nil {
-		rp.processError(err)
-		return
+		return nil, err
 	}
 
-	ec, err := c.transport.DialEarly(ctx, udpAddr, c.tlsCfg, &DefaultQUICConfig)
+	return hc.RoundTrip(r)
+}
+
+func (c *Client) sendIdentity(ctx context.Context) error {
+	url := "https://" + c.remote + "/_rpc/identify"
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, nil)
 	if err != nil {
-		rp.processError(err)
-		return
+		return err
 	}
 
-	// wait for the handshake to complete. We can't use 0rtt because the request
-	// data needs to be secure.
-	select {
-	case <-ec.HandshakeComplete():
-	case <-ctx.Done():
-		rp.processError(ctx.Err())
-		return
-	}
+	req.Header.Set("rpc-public-key", base58.Encode(c.pubkey))
 
-	hc := DefaultTransport.NewClientConn(ec)
+	Propagator().Inject(ctx, propagation.HeaderCarrier(req.Header))
 
-	rs, err := hc.OpenRequestStream(ctx)
+	ts := time.Now()
+
+	tss := ts.Format(time.RFC3339Nano)
+
+	req.Header.Set("rpc-timestamp", tss)
+
+	var buf bytes.Buffer
+
+	fmt.Fprintf(&buf, "POST %s %s", req.URL.Path, tss)
+
+	sign, err := c.privkey.Sign(rand.Reader, buf.Bytes(), crypto.Hash(0))
 	if err != nil {
-		rp.processError(err)
-		return
+		return err
 	}
 
-	url := "https://" + c.remote + "/_rpc/call/" + oid + "/" + method
-	req, err := http.NewRequest(http.MethodPost, url, nil)
+	req.Header.Set("rpc-signature", base58.Encode(sign))
+
+	resp, err := c.roundTrip(req)
 	if err != nil {
-		rp.processError(err)
-		return
+		return err
 	}
 
-	err = rs.SendRequestHeader(req)
+	c.log.Debug("rpc.identify", "status", resp.StatusCode)
+
+	if resp.StatusCode != http.StatusOK {
+		return errors.Errorf("unexpected status code: %d", resp.StatusCode)
+	}
+
+	var lr identifyResponse
+
+	err = cbor.NewDecoder(resp.Body).Decode(&lr)
 	if err != nil {
-		rp.processError(err)
-		return
+		return err
 	}
 
-	err = cbor.NewEncoder(rs).Encode(args)
-	if err != nil {
-		rp.processError(err)
-		return
+	if lr.Error != "" {
+		return errors.New(lr.Error)
 	}
 
-	err = rs.Close()
+	if !lr.Ok {
+		return errors.New("identity rejected")
+	}
 
-	go func() {
-		num1xx := 0               // number of informational 1xx headers received
-		const max1xxResponses = 5 // arbitrary bound on number of informational responses
+	c.serverObservedAddress = lr.Address
 
-		var (
-			hr  *http.Response
-			err error
-		)
-
-		for {
-			hr, err = rs.ReadResponse()
-			if err != nil {
-				rp.processError(err)
-				return
-			}
-
-			// Dup'd from http3/client.go
-			resCode := hr.StatusCode
-			is1xx := 100 <= resCode && resCode <= 199
-			// treat 101 as a terminal status, see https://github.com/golang/go/issues/26161
-			is1xxNonTerminal := is1xx && resCode != http.StatusSwitchingProtocols
-			if is1xxNonTerminal {
-				num1xx++
-				if num1xx > max1xxResponses {
-					err = errors.New("http: too many 1xx informational responses")
-					rp.processError(err)
-					return
-				}
-				continue
-			}
-			break
-		}
-
-		defer hr.Body.Close()
-
-		if hr.StatusCode != http.StatusOK {
-			err = errors.Errorf("unexpected status code: %d", hr.StatusCode)
-			rp.processError(err)
-			return
-		}
-
-		rp.processResult(hr)
-	}()
+	return nil
 }
 
 func (c *Client) resolveCapability(name string) error {
@@ -413,8 +137,9 @@ func (c *Client) resolveCapability(name string) error {
 	}
 
 	req.Header.Set("rpc-public-key", base58.Encode(c.pubkey))
+	req.Header.Set("rpc-contact-addr", c.remote)
 
-	resp, err := DefaultTransport.RoundTrip(req)
+	resp, err := c.roundTrip(req)
 	if err != nil {
 		return err
 	}
@@ -455,8 +180,9 @@ func (c *Client) requestReexportCapability(ctx context.Context, capa *Capability
 	}
 
 	req.Header.Set("rpc-target-public-key", base58.Encode(target))
+	req.Header.Set("rpc-contact-addr", c.remote)
 
-	resp, err := DefaultTransport.RoundTrip(req)
+	resp, err := c.roundTrip(req)
 	if err != nil {
 		return nil, err
 	}
@@ -491,7 +217,7 @@ func (c *Client) refOID(ctx context.Context, oid OID) error {
 		return err
 	}
 
-	resp, err := DefaultTransport.RoundTrip(req)
+	resp, err := c.roundTrip(req)
 	if err != nil {
 		return err
 	}
@@ -522,7 +248,7 @@ func (c *Client) derefOID(ctx context.Context, oid OID) error {
 		return err
 	}
 
-	resp, err := DefaultTransport.RoundTrip(req)
+	resp, err := c.roundTrip(req)
 	if err != nil {
 		return err
 	}

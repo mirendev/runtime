@@ -104,14 +104,14 @@ func TestRPC(t *testing.T) {
 
 		s := example.AdaptMeter(&exampleMeter{temp: 42})
 
-		ss, err := rpc.NewState(ctx, "")
+		ss, err := rpc.NewState(ctx, rpc.WithSkipVerify)
 		r.NoError(err)
 
 		serv := ss.Server()
 
 		serv.ExposeValue("meter", s)
 
-		cs, err := rpc.NewState(ctx, "")
+		cs, err := rpc.NewState(ctx, rpc.WithSkipVerify)
 		r.NoError(err)
 
 		c, err := cs.Connect(ss.ListenAddr(), "meter")
@@ -149,14 +149,14 @@ func TestRPC(t *testing.T) {
 
 		s := example.AdaptMeterUpdates(&exampleMU{})
 
-		ss, err := rpc.NewState(ctx, "")
+		ss, err := rpc.NewState(ctx, rpc.WithSkipVerify)
 		r.NoError(err)
 
 		serv := ss.Server()
 
 		serv.ExposeValue("meter", s)
 
-		cs, err := rpc.NewState(ctx, "")
+		cs, err := rpc.NewState(ctx, rpc.WithSkipVerify)
 		r.NoError(err)
 
 		c, err := cs.Connect(ss.ListenAddr(), "meter")
@@ -188,14 +188,14 @@ func TestRPC(t *testing.T) {
 
 		s := example.AdaptMeter(&em)
 
-		ss, err := rpc.NewState(ctx, "")
+		ss, err := rpc.NewState(ctx, rpc.WithSkipVerify)
 		r.NoError(err)
 
 		serv := ss.Server()
 
 		serv.ExposeValue("meter", s)
 
-		cs, err := rpc.NewState(ctx, "")
+		cs, err := rpc.NewState(ctx, rpc.WithSkipVerify)
 		r.NoError(err)
 
 		c, err := cs.Connect(ss.ListenAddr(), "meter")
@@ -212,7 +212,7 @@ func TestRPC(t *testing.T) {
 		res2, err := mc.GetSetter(context.Background(), "test")
 		r.NoError(err)
 
-		s2, err := rpc.NewState(ctx, "")
+		s2, err := rpc.NewState(ctx, rpc.WithSkipVerify)
 		r.NoError(err)
 
 		s2.Server().ExposeValue("adjust", example.AdaptAdjustTemp(&exampleAT{}))
@@ -236,14 +236,14 @@ func BenchmarkRPC(b *testing.B) {
 
 	s := example.AdaptMeter(&exampleMeter{temp: 42})
 
-	ss, err := rpc.NewState(ctx, "")
+	ss, err := rpc.NewState(ctx, rpc.WithSkipVerify)
 	r.NoError(err)
 
 	serv := ss.Server()
 
 	serv.ExposeValue("meter", s)
 
-	cs, err := rpc.NewState(ctx, "")
+	cs, err := rpc.NewState(ctx, rpc.WithSkipVerify)
 	r.NoError(err)
 
 	c, err := cs.Connect(ss.ListenAddr(), "meter")

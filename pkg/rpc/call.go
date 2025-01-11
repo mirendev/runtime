@@ -28,8 +28,12 @@ func (c *Call) Results(v any) {
 	c.results = v
 }
 
+func (c *Call) RemoteAddr() string {
+	return c.r.RemoteAddr
+}
+
 func (c *Call) NewCapability(i *Interface) *Capability {
-	return c.s.assignCapability(i, c.caller)
+	return c.s.assignCapability(i, c.caller, "")
 }
 
 func (c *Call) NewClient(capa *Capability) *Client {
