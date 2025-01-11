@@ -18,8 +18,8 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/fatih/color"
 	testing "github.com/mitchellh/go-testing-interface"
+	"miren.dev/runtime/pkg/color"
 )
 
 var (
@@ -30,11 +30,11 @@ var (
 	Error = slog.LevelError
 
 	_levelToName = map[slog.Level]string{
-		Trace:           "TRACE",
-		slog.LevelDebug: "DEBUG",
-		slog.LevelInfo:  "INFO",
-		slog.LevelWarn:  "WARN",
-		slog.LevelError: "ERROR",
+		Trace:           " [TRACE]",
+		slog.LevelDebug: " [DEBUG]",
+		slog.LevelInfo:  " [INFO] ",
+		slog.LevelWarn:  " [WARN] ",
+		slog.LevelError: " [ERROR]",
 	}
 
 	_levelToColor = map[slog.Level]*color.Color{
@@ -251,11 +251,6 @@ func (h *commonHandler) handle(r slog.Record) error {
 		str = spec
 	}
 
-	str = " [" + str + "]"
-	for len(str) < 9 {
-		str += " "
-	}
-
 	if col, ok := _levelToColor[val]; ok {
 		str = col.Sprint(str)
 	}
@@ -272,7 +267,7 @@ func (h *commonHandler) handle(r slog.Record) error {
 	if rep == nil {
 		state.appendRawString(msg)
 		if r.NumAttrs() > 0 || len(state.h.preformattedAttrs) > 0 {
-			state.appendRawString(": ")
+			state.appendRawString(" │ ")
 		}
 	} else {
 		state.appendAttr(slog.String(key, msg))
@@ -537,11 +532,14 @@ func (s *handleState) appendError(err error) {
 	s.appendString(fmt.Sprintf("!ERROR:%v", err))
 }
 
-var faintBoldColor = color.New(color.Faint, color.Bold)
+var (
+	faintBoldColor = color.New(color.Faint, color.Bold)
+	boldColor      = color.New(color.Bold)
+)
 
 func (s *handleState) appendKey(key string) {
 	s.buf.WriteString(s.sep)
-	key = faintBoldColor.Sprint(key + "=")
+	key = faintBoldColor.Colorize(key) + boldColor.Colorize(": ")
 
 	if s.prefix != nil && len(*s.prefix) > 0 {
 		// TODO: optimize by avoiding allocation.
