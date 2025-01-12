@@ -13,6 +13,18 @@ types:
         type: string
         index: 2
 
+  - type: Value
+    fields:
+      - name: v
+        type: union
+        union:
+          - name: i
+            index: 0
+            type: int64
+          - name: s
+            index: 1
+            type: string
+
 interfaces:
   - name: Meter
     methods:

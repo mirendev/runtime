@@ -79,6 +79,81 @@ func (v *Reading) UnmarshalJSON(data []byte) error {
 	return json.Unmarshal(data, &v.data)
 }
 
+type ValueV interface {
+	Which() string
+	I() int64
+	SetI(int64)
+	S() string
+	SetS(string)
+}
+
+type valueV struct {
+	U_I *int64  `cbor:"0,keyasint,omitempty" json:"i,omitempty"`
+	U_S *string `cbor:"1,keyasint,omitempty" json:"s,omitempty"`
+}
+
+func (v *valueV) Which() string {
+	if v.U_I != nil {
+		return "i"
+	}
+	if v.U_S != nil {
+		return "s"
+	}
+	return ""
+}
+
+func (v *valueV) I() int64 {
+	if v.U_I == nil {
+		return 0
+	}
+	return *v.U_I
+}
+
+func (v *valueV) SetI(val int64) {
+	v.U_S = nil
+	v.U_I = &val
+}
+
+func (v *valueV) S() string {
+	if v.U_S == nil {
+		return ""
+	}
+	return *v.U_S
+}
+
+func (v *valueV) SetS(val string) {
+	v.U_I = nil
+	v.U_S = &val
+}
+
+type valueData struct {
+	valueV
+}
+
+type Value struct {
+	data valueData
+}
+
+func (v *Value) V() ValueV {
+	return &v.data.valueV
+}
+
+func (v *Value) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *Value) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *Value) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *Value) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
 type meterReadTemperatureArgsData struct {
 	Name *string `cbor:"0,keyasint,omitempty" json:"name,omitempty"`
 }

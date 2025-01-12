@@ -362,11 +362,134 @@ func (g *Generator) writeForField(f *j.File, t *DescType, field *DescField) {
 	f.Line()
 }
 
+// Helper to generate the correct type for a union field
+func (g *Generator) typeForUnion(u UnionField) j.Code {
+	switch u.Type {
+	case "bool", "int32", "int64", "float32", "float64", "string":
+		return j.Id(u.Type)
+	case "list":
+		return j.Index().Id(u.Element)
+	default:
+		if g.typeInfo[u.Type].isInterface {
+			return j.Id(u.Type)
+		}
+		return j.Op("*").Id(u.Type)
+	}
+}
+
+func (g *Generator) generateUnionInterface(f *j.File, typ, name string, fields []UnionField) {
+	interfaceName := capitalize(typ) + capitalize(name)
+	f.Type().Id(interfaceName).InterfaceFunc(func(gr *j.Group) {
+		gr.Id("Which").Params().String()
+		for _, field := range fields {
+			fieldName := capitalize(field.Name)
+			gr.Id(fieldName).Params().Add(g.typeForUnion(field))
+			gr.Id("Set" + fieldName).Params(g.typeForUnion(field))
+		}
+	})
+	f.Line()
+}
+
+func (g *Generator) generateUnionStruct(f *j.File, typ, name string, fields []UnionField) {
+	structName := private(typ) + capitalize(name)
+
+	// Generate the struct
+	f.Type().Id(structName).StructFunc(func(gr *j.Group) {
+		for _, field := range fields {
+			fieldType := g.typeForUnion(field)
+			gr.Id("U_" + capitalize(field.Name)).Op("*").Add(fieldType).Tag(map[string]string{
+				"cbor": fmt.Sprintf("%d,keyasint,omitempty", field.Index),
+				"json": field.Name + ",omitempty",
+			})
+		}
+	})
+	f.Line()
+
+	// Generate Which method
+	f.Func().Params(
+		j.Id("v").Op("*").Id(structName),
+	).Id("Which").Params().String().BlockFunc(func(g *j.Group) {
+		for _, field := range fields {
+			g.If(j.Id("v").Dot("U_" + capitalize(field.Name)).Op("!=").Nil()).Block(
+				j.Return(j.Lit(field.Name)),
+			)
+		}
+		g.Return(j.Lit(""))
+	})
+	f.Line()
+
+	// Generate getters and setters
+	for _, field := range fields {
+		fieldName := capitalize(field.Name)
+		methodName := fieldName
+
+		fieldName = "U_" + fieldName
+
+		// Getter
+		f.Func().Params(
+			j.Id("v").Op("*").Id(structName),
+		).Id(methodName).Params().Add(g.typeForUnion(field)).Block(
+			j.If(j.Id("v").Dot(fieldName).Op("==").Nil()).Block(
+				j.Return(g.zeroValue(field)),
+			),
+			j.Return(j.Op("*").Id("v").Dot(fieldName)),
+		)
+		f.Line()
+
+		// Setter
+		f.Func().Params(
+			j.Id("v").Op("*").Id(structName),
+		).Id("Set" + methodName).Params(
+			j.Id("val").Add(g.typeForUnion(field)),
+		).BlockFunc(func(g *j.Group) {
+			// Clear all other fields
+			for _, other := range fields {
+				if other.Name != field.Name {
+					g.Id("v").Dot("U_" + capitalize(other.Name)).Op("=").Nil()
+				}
+			}
+
+			// Set the new value
+			if field.Type == "list" {
+				g.Id("x").Op(":=").Qual("slices", "Clone").Call(j.Id("val"))
+				g.Id("v").Dot(fieldName).Op("=").Op("&").Id("x")
+
+			} else {
+				g.Id("v").Dot(fieldName).Op("=").Op("&").Id("val")
+			}
+		})
+		f.Line()
+	}
+}
+
+func (g *Generator) zeroValue(field UnionField) j.Code {
+	switch field.Type {
+	case "bool":
+		return j.Lit(false)
+	case "int32", "int64":
+		return j.Lit(0)
+	case "string":
+		return j.Lit("")
+	case "list":
+		return j.Nil()
+	default:
+		return j.Nil()
+	}
+}
+
 func (g *Generator) generateStruct(f *j.File) error {
 	f.ImportName("github.com/fxamacker/cbor/v2", "cbor")
 	rpc := "miren.dev/runtime/pkg/rpc"
 
 	for _, t := range g.Types {
+		// Generate union interfaces and structs first
+		for _, field := range t.Fields {
+			if field.Type == "union" {
+				g.generateUnionInterface(f, t.Type, field.Name, field.Union)
+				g.generateUnionStruct(f, t.Type, field.Name, field.Union)
+			}
+		}
+
 		expName := capitalize(t.Type)
 
 		f.Type().Id(private(t.Type) + "Data").StructFunc(func(g *j.Group) {
@@ -377,6 +500,8 @@ func (g *Generator) generateStruct(f *j.File) error {
 						"json": field.Name + ",omitempty",
 					})
 
+				} else if field.Type == "union" {
+					g.Id(private(t.Type) + capitalize(field.Name))
 				} else {
 					typ := j.Op("*").Id(field.Type)
 
@@ -535,6 +660,14 @@ func (g *Generator) generateStruct(f *j.File) error {
 						j.Id("v").Dot("data").Dot(name).Op("=").Op("&").Id("x"),
 					)
 				}
+			case "union":
+				f.Func().Params(
+					j.Id("v").Op("*").Id(expName),
+				).Id(name).Params().Id(capitalize(t.Type) + capitalize(field.Name)).Block(
+					j.Return(j.Op("&").Id("v").Dot("data").Dot(private(t.Type) + capitalize(field.Name))),
+				)
+
+				f.Line()
 
 			default:
 				if g.typeInfo[field.Type].isInterface {
@@ -1054,12 +1187,20 @@ type DescField struct {
 	Type  string `yaml:"type"`
 	Index int    `yaml:"index"`
 
-	Element string `yaml:"element"`
+	Element string       `yaml:"element"`
+	Union   []UnionField `yaml:"union,omitempty"`
 
 	dataOffset int
 	wordOffset int
 
 	isInterface bool
+}
+
+type UnionField struct {
+	Name    string `yaml:"name"`
+	Index   int    `yaml:"index"`
+	Type    string `yaml:"type"`
+	Element string `yaml:"element,omitempty"`
 }
 
 type DescInterface struct {
