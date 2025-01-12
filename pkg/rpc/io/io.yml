@@ -1,0 +1,34 @@
+interfaces:
+  - name: Reader
+    methods:
+      - name: Read
+        parameters:
+          - name: count
+            type: int32
+        results:
+          - name: data
+            type: bytes
+
+  - name: ReaderAt
+    methods:
+      - name: ReadAt
+        parameters:
+          - name: count
+            type: int32
+          - name: offset
+            type: int64
+        results:
+          - name: data
+            type: bytes
+
+  - name: Writer
+    methods:
+      - name: Write
+        parameters:
+          - name: data
+            type: bytes
+        results:
+          - name: count
+            type: int32
+        
+
