@@ -79,3 +79,12 @@ interfaces:
         parameters:
           - name: setter
             type: SetTemp
+
+  - name: SetTempG
+    generic:
+      - T
+    methods:
+      - name: setTemp
+        parameters:
+          - name: temp
+            type: T

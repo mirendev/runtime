@@ -1,0 +1,22 @@
+
+types:
+  - type: Container
+    generic:
+      - T
+    fields:
+      - name: value
+        type: T
+        index: 0
+      - name: description
+        type: string
+        index: 1
+
+interfaces:
+  - name: Reader
+    generic:
+      - T
+    methods:
+      - name: read
+        parameters:
+          - name: value
+            type: Container[T]

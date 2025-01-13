@@ -1025,3 +1025,143 @@ func (v AdjustTempClient) Adjust(ctx context.Context, setter SetTemp) (*AdjustTe
 
 	return &AdjustTempClientAdjustResults{client: v.Client, data: ret}, nil
 }
+
+type setTempGSetTempArgsData[T any] struct {
+	Temp *T `cbor:"0,keyasint,omitempty" json:"temp,omitempty"`
+}
+
+type SetTempGSetTempArgs[T any] struct {
+	call *rpc.Call
+	data setTempGSetTempArgsData[T]
+}
+
+func (v *SetTempGSetTempArgs[T]) HasTemp() bool {
+	return v.data.Temp != nil
+}
+
+func (v *SetTempGSetTempArgs[T]) Temp() *T {
+	return v.data.Temp
+}
+
+func (v *SetTempGSetTempArgs[T]) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *SetTempGSetTempArgs[T]) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *SetTempGSetTempArgs[T]) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *SetTempGSetTempArgs[T]) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type setTempGSetTempResultsData[T any] struct{}
+
+type SetTempGSetTempResults[T any] struct {
+	call *rpc.Call
+	data setTempGSetTempResultsData[T]
+}
+
+func (v *SetTempGSetTempResults[T]) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *SetTempGSetTempResults[T]) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *SetTempGSetTempResults[T]) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *SetTempGSetTempResults[T]) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type SetTempGSetTemp[T any] struct {
+	*rpc.Call
+	args    SetTempGSetTempArgs[T]
+	results SetTempGSetTempResults[T]
+}
+
+func (t *SetTempGSetTemp[T]) Args() *SetTempGSetTempArgs[T] {
+	args := &t.args
+	if args.call != nil {
+		return args
+	}
+	args.call = t.Call
+	t.Call.Args(args)
+	return args
+}
+
+func (t *SetTempGSetTemp[T]) Results() *SetTempGSetTempResults[T] {
+	results := &t.results
+	if results.call != nil {
+		return results
+	}
+	results.call = t.Call
+	t.Call.Results(results)
+	return results
+}
+
+type SetTempG[T any] interface {
+	SetTemp(ctx context.Context, state *SetTempGSetTemp[T]) error
+}
+
+type reexportSetTempG[T any] struct {
+	client *rpc.Client
+}
+
+func (_ reexportSetTempG[T]) SetTemp(ctx context.Context, state *SetTempGSetTemp[T]) error {
+	panic("not implemented")
+}
+
+func (t reexportSetTempG[T]) CapabilityClient() *rpc.Client {
+	return t.client
+}
+
+func AdaptSetTempG[T any](t SetTempG[T]) *rpc.Interface {
+	methods := []rpc.Method{
+		{
+			Name:          "setTemp",
+			InterfaceName: "SetTempG",
+			Index:         0,
+			Handler: func(ctx context.Context, call *rpc.Call) error {
+				return t.SetTemp(ctx, &SetTempGSetTemp[T]{Call: call})
+			},
+		},
+	}
+
+	return rpc.NewInterface(methods, t)
+}
+
+type SetTempGClient[T any] struct {
+	*rpc.Client
+}
+
+func (c SetTempGClient[T]) Export() SetTempG[T] {
+	return reexportSetTempG[T]{client: c.Client}
+}
+
+type SetTempGClientSetTempResults[T any] struct {
+	client *rpc.Client
+	data   setTempGSetTempResultsData[T]
+}
+
+func (v SetTempGClient[T]) SetTemp(ctx context.Context, temp T) (*SetTempGClientSetTempResults[T], error) {
+	args := SetTempGSetTempArgs[T]{}
+	args.data.Temp = &temp
+
+	var ret setTempGSetTempResultsData[T]
+
+	err := v.Client.Call(ctx, "setTemp", &args, &ret)
+	if err != nil {
+		return nil, err
+	}
+
+	return &SetTempGClientSetTempResults[T]{client: v.Client, data: ret}, nil
+}
