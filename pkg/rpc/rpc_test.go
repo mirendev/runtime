@@ -3,10 +3,12 @@ package rpc_test
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 	"miren.dev/runtime/pkg/rpc"
 	"miren.dev/runtime/pkg/rpc/example"
+	"miren.dev/runtime/pkg/rpc/stream"
 )
 
 type exampleMeter struct {
@@ -91,6 +93,19 @@ func (m *exampleAT) Adjust(ctx context.Context, call *example.AdjustTempAdjust) 
 	setter := args.Setter()
 
 	setter.SetTemp(ctx, 72)
+
+	return nil
+}
+
+type exampleEmit struct{}
+
+func (m *exampleEmit) Emit(ctx context.Context, call *example.EmitTempsEmit) error {
+	args := call.Args()
+
+	emit := args.Emitter()
+
+	emit.Send(ctx, 42.0)
+	emit.Send(ctx, 100.0)
 
 	return nil
 }
@@ -225,6 +240,44 @@ func TestRPC(t *testing.T) {
 		_, err = ac.Adjust(context.Background(), res2.Setter().Export())
 
 		r.Equal(float32(72), em.temp)
+	})
+
+	t.Run("can deal with a stream", func(t *testing.T) {
+		r := require.New(t)
+
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		s := example.AdaptEmitTemps(&exampleEmit{})
+
+		ss, err := rpc.NewState(ctx, rpc.WithSkipVerify)
+		r.NoError(err)
+
+		serv := ss.Server()
+
+		serv.ExposeValue("meter", s)
+
+		cs, err := rpc.NewState(ctx, rpc.WithSkipVerify)
+		r.NoError(err)
+
+		c, err := cs.Connect(ss.ListenAddr(), "meter")
+		r.NoError(err)
+
+		mc := &example.EmitTempsClient{Client: c}
+
+		var vals []float32
+
+		recv := stream.StreamRecv(func(val float32) error {
+			vals = append(vals, val)
+			return nil
+		})
+
+		_, err = mc.Emit(ctx, recv)
+		r.NoError(err)
+
+		time.Sleep(time.Second)
+
+		r.Equal([]float32{42, 100}, vals)
 	})
 }
 

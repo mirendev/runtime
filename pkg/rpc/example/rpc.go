@@ -6,6 +6,7 @@ import (
 
 	"github.com/fxamacker/cbor/v2"
 	rpc "miren.dev/runtime/pkg/rpc"
+	"miren.dev/runtime/pkg/rpc/stream"
 )
 
 type readingData struct {
@@ -1039,8 +1040,8 @@ func (v *SetTempGSetTempArgs[T]) HasTemp() bool {
 	return v.data.Temp != nil
 }
 
-func (v *SetTempGSetTempArgs[T]) Temp() *T {
-	return v.data.Temp
+func (v *SetTempGSetTempArgs[T]) Temp() T {
+	return *v.data.Temp
 }
 
 func (v *SetTempGSetTempArgs[T]) MarshalCBOR() ([]byte, error) {
@@ -1164,4 +1165,147 @@ func (v SetTempGClient[T]) SetTemp(ctx context.Context, temp T) (*SetTempGClient
 	}
 
 	return &SetTempGClientSetTempResults[T]{client: v.Client, data: ret}, nil
+}
+
+type emitTempsEmitArgsData struct {
+	Emitter *rpc.Capability `cbor:"0,keyasint,omitempty" json:"emitter,omitempty"`
+}
+
+type EmitTempsEmitArgs struct {
+	call *rpc.Call
+	data emitTempsEmitArgsData
+}
+
+func (v *EmitTempsEmitArgs) HasEmitter() bool {
+	return v.data.Emitter != nil
+}
+
+func (v *EmitTempsEmitArgs) Emitter() *stream.SendStreamClient[float32] {
+	if v.data.Emitter == nil {
+		return nil
+	}
+	return &stream.SendStreamClient[float32]{Client: v.call.NewClient(v.data.Emitter)}
+}
+
+func (v *EmitTempsEmitArgs) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *EmitTempsEmitArgs) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *EmitTempsEmitArgs) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *EmitTempsEmitArgs) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type emitTempsEmitResultsData struct{}
+
+type EmitTempsEmitResults struct {
+	call *rpc.Call
+	data emitTempsEmitResultsData
+}
+
+func (v *EmitTempsEmitResults) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *EmitTempsEmitResults) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *EmitTempsEmitResults) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *EmitTempsEmitResults) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type EmitTempsEmit struct {
+	*rpc.Call
+	args    EmitTempsEmitArgs
+	results EmitTempsEmitResults
+}
+
+func (t *EmitTempsEmit) Args() *EmitTempsEmitArgs {
+	args := &t.args
+	if args.call != nil {
+		return args
+	}
+	args.call = t.Call
+	t.Call.Args(args)
+	return args
+}
+
+func (t *EmitTempsEmit) Results() *EmitTempsEmitResults {
+	results := &t.results
+	if results.call != nil {
+		return results
+	}
+	results.call = t.Call
+	t.Call.Results(results)
+	return results
+}
+
+type EmitTemps interface {
+	Emit(ctx context.Context, state *EmitTempsEmit) error
+}
+
+type reexportEmitTemps struct {
+	client *rpc.Client
+}
+
+func (_ reexportEmitTemps) Emit(ctx context.Context, state *EmitTempsEmit) error {
+	panic("not implemented")
+}
+
+func (t reexportEmitTemps) CapabilityClient() *rpc.Client {
+	return t.client
+}
+
+func AdaptEmitTemps(t EmitTemps) *rpc.Interface {
+	methods := []rpc.Method{
+		{
+			Name:          "emit",
+			InterfaceName: "EmitTemps",
+			Index:         0,
+			Handler: func(ctx context.Context, call *rpc.Call) error {
+				return t.Emit(ctx, &EmitTempsEmit{Call: call})
+			},
+		},
+	}
+
+	return rpc.NewInterface(methods, t)
+}
+
+type EmitTempsClient struct {
+	*rpc.Client
+}
+
+func (c EmitTempsClient) Export() EmitTemps {
+	return reexportEmitTemps{client: c.Client}
+}
+
+type EmitTempsClientEmitResults struct {
+	client *rpc.Client
+	data   emitTempsEmitResultsData
+}
+
+func (v EmitTempsClient) Emit(ctx context.Context, emitter stream.SendStream[float32]) (*EmitTempsClientEmitResults, error) {
+	args := EmitTempsEmitArgs{}
+	args.data.Emitter = v.Client.NewCapability(stream.AdaptSendStream[float32](emitter), emitter)
+
+	var ret emitTempsEmitResultsData
+
+	err := v.Client.Call(ctx, "emit", &args, &ret)
+	if err != nil {
+		return nil, err
+	}
+
+	return &EmitTempsClientEmitResults{client: v.Client, data: ret}, nil
 }

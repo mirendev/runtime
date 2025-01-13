@@ -1,0 +1,19 @@
+interfaces:
+  - name: SendStream
+    generic:
+      - T
+    methods:
+      - name: send
+        parameters:
+          - name: value
+            type: T
+
+  - name: RecvStream
+    generic:
+      - T
+    methods:
+      - name: recv
+        results:
+          - name: value
+            type: T
+

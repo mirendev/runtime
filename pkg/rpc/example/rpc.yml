@@ -1,5 +1,9 @@
 apiVersion: miren.dev/rpc/v1
 kind: IDL
+imports:
+  stream:
+    path: ../stream/stream.yml
+    import: miren.dev/runtime/pkg/rpc/stream
 types:
   - type: Reading
     fields:
@@ -88,3 +92,10 @@ interfaces:
         parameters:
           - name: temp
             type: T
+
+  - name: EmitTemps
+    methods:
+      - name: emit
+        parameters:
+          - name: emitter
+            type: stream.SendStream[float32]

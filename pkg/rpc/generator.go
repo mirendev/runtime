@@ -5,6 +5,7 @@ import (
 	"cmp"
 	"fmt"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 
@@ -15,16 +16,25 @@ import (
 )
 
 type Generator struct {
+	Imports    map[string]Import
 	Types      []*DescType
 	Interfaces []*DescInterface
+
+	importedGenerators map[string]*Generator
 
 	typeInfo map[string]typeInfo
 }
 
 func NewGenerator() (*Generator, error) {
 	return &Generator{
-		typeInfo: make(map[string]typeInfo),
+		typeInfo:           make(map[string]typeInfo),
+		importedGenerators: make(map[string]*Generator),
 	}, nil
+}
+
+type Import struct {
+	Path   string `yaml:"path"`
+	Import string `yaml:"import"`
 }
 
 func (g *Generator) Read(path string) error {
@@ -40,10 +50,16 @@ func (g *Generator) Read(path string) error {
 		return err
 	}
 
+	g.Imports = df.Imports
 	g.Types = df.Types
 	g.Interfaces = df.Interfaces
 
-	g.createInterfaceArgs()
+	err = g.processImports(path)
+	if err != nil {
+		return err
+	}
+
+	g.populateTypeInfo()
 
 	ut := make(map[string]*DescType)
 
@@ -58,13 +74,67 @@ func (g *Generator) Read(path string) error {
 	return nil
 }
 
+func (g *Generator) processImports(src string) error {
+	for name, path := range g.Imports {
+		relPath := filepath.Join(src, "..", path.Path)
+
+		sg, err := NewGenerator()
+		if err != nil {
+			return err
+		}
+
+		err = sg.Read(relPath)
+		if err != nil {
+			return err
+		}
+
+		g.importedGenerators[name] = sg
+	}
+
+	return nil
+}
+
 func (g *Generator) ti(name string) typeInfo {
 	idx := strings.IndexByte(name, '[')
 	if idx != -1 {
 		name = name[:idx]
 	}
 
+	dot := strings.LastIndexByte(name, '.')
+	if dot != -1 {
+		imp, ok := g.importedGenerators[name[:dot]]
+		if !ok {
+			panic("missing import for " + name[:dot])
+		}
+
+		return imp.typeInfo[name[dot+1:]]
+	}
+
 	return g.typeInfo[name]
+}
+
+func (g *Generator) splitType(name string) (string, string) {
+	idx := strings.LastIndexByte(name, '.')
+	if idx != -1 {
+		return name[:idx], name[idx+1:]
+	}
+
+	return name, ""
+}
+
+func (g *Generator) isImported(name string) bool {
+	dot := strings.LastIndexByte(name, '.')
+
+	if dot != -1 {
+		_, ok := g.importedGenerators[name[:dot]]
+		if !ok {
+			panic("missing import for " + name[:dot])
+		}
+
+		return true
+	}
+
+	return false
 }
 
 func capitalize(s string) string {
@@ -135,6 +205,31 @@ func (t *DescType) addGeneric(name string) (*j.Statement, *j.Statement) {
 	return base, recv
 }
 
+func (g *Generator) properType(name string) *j.Statement {
+	dot := strings.LastIndexByte(name, '.')
+
+	if dot != -1 {
+		imp, ok := g.Imports[name[:dot]]
+		if !ok {
+			panic("missing import for " + name[:dot])
+		}
+
+		return j.Qual(imp.Import, name[dot+1:])
+	}
+
+	return j.Id(name)
+}
+
+func (g *Generator) deriveType(base, sub string) string {
+	bracket := strings.IndexByte(base, '[')
+
+	if bracket == -1 {
+		return base + sub
+	}
+
+	return base[:bracket] + sub + base[bracket:]
+}
+
 func (g *Generator) generateServerStructs(f *j.File, t *DescInterface) error {
 	// Generate the Args and Results structs
 
@@ -159,7 +254,7 @@ func (g *Generator) generateServerStructs(f *j.File, t *DescInterface) error {
 						"json": p.Name + ",omitempty",
 					})
 				} else {
-					gr.Id(capitalize(p.Name)).Op("*").Id(p.Type).Tag(map[string]string{
+					gr.Id(capitalize(p.Name)).Op("*").Add(g.properType(p.Type)).Tag(map[string]string{
 						"cbor": fmt.Sprintf("%d,keyasint,omitempty", idx),
 						"json": p.Name + ",omitempty",
 					})
@@ -209,7 +304,7 @@ func (g *Generator) generateServerStructs(f *j.File, t *DescInterface) error {
 						"json": p.Name + ",omitempty",
 					})
 				} else {
-					gr.Id(capitalize(p.Name)).Op("*").Id(p.Type).Tag(map[string]string{
+					gr.Id(capitalize(p.Name)).Op("*").Add(g.properType(p.Type)).Tag(map[string]string{
 						"cbor": fmt.Sprintf("%d,keyasint,omitempty", idx),
 						"json": p.Name + ",omitempty",
 					})
@@ -362,13 +457,13 @@ func (g *Generator) readForField(f *j.File, t *DescType, field *DescField) {
 
 			f.Func().Params(
 				j.Id("v").Op("*").Add(recv),
-			).Id(name).Params().Op("*").Id(field.Type+"Client").Block(
+			).Id(name).Params().Op("*").Id(g.deriveType(field.Type, "Client")).Block(
 				j.If(j.Id("v").Dot("data").Dot(name).Op("==").Nil()).Block(
 					j.Return(j.Nil()),
 				),
 
 				j.Return(
-					j.Op("&").Id(field.Type+"Client").Values(
+					j.Op("&").Id(g.deriveType(field.Type, "Client")).Values(
 						j.Id("Client").Op(":").Id("v").Dot("call").Dot("NewClient").Call(
 							j.Id("v").Dot("data").Dot(name),
 						),
@@ -380,19 +475,55 @@ func (g *Generator) readForField(f *j.File, t *DescType, field *DescField) {
 			return
 		}
 
-		f.Func().Params(
-			j.Id("v").Op("*").Add(recv),
-		).Id("Has" + name).Params().Bool().Block(
-			j.Return(j.Id("v").Dot("data").Dot(name).Op("!=").Nil()),
-		)
+		if slices.Contains(t.Generic, field.Type) {
+			f.Func().Params(
+				j.Id("v").Op("*").Add(recv),
+			).Id("Has" + name).Params().Bool().Block(
+				j.Return(j.Id("v").Dot("data").Dot(name).Op("!=").Nil()),
+			)
 
-		f.Line()
+			f.Line()
 
-		f.Func().Params(
-			j.Id("v").Op("*").Add(recv),
-		).Id(name).Params().Op("*").Id(field.Type).Block(
-			j.Return(j.Id("v").Dot("data").Dot(name)),
-		)
+			f.Func().Params(
+				j.Id("v").Op("*").Add(recv),
+			).Id(name).Params().Id(field.Type).Block(
+				j.Return(j.Op("*").Id("v").Dot("data").Dot(name)),
+			)
+
+			f.Line()
+			return
+		}
+
+		if g.ti(field.Type).isMessage {
+			f.Func().Params(
+				j.Id("v").Op("*").Add(recv),
+			).Id("Has" + name).Params().Bool().Block(
+				j.Return(j.Id("v").Dot("data").Dot(name).Op("!=").Nil()),
+			)
+
+			f.Line()
+
+			f.Func().Params(
+				j.Id("v").Op("*").Add(recv),
+			).Id(name).Params().Op("*").Add(g.properType(field.Type)).Block(
+				j.Return(j.Id("v").Dot("data").Dot(name)),
+			)
+
+		} else {
+			f.Func().Params(
+				j.Id("v").Op("*").Add(recv),
+			).Id("Has" + name).Params().Bool().Block(
+				j.Return(j.Id("v").Dot("data").Dot(name).Op("!=").Nil()),
+			)
+
+			f.Line()
+
+			f.Func().Params(
+				j.Id("v").Op("*").Add(recv),
+			).Id(name).Params().Add(g.properType(field.Type)).Block(
+				j.Return(j.Op("*").Id("v").Dot("data").Dot(name)),
+			)
+		}
 
 		f.Line()
 
@@ -462,9 +593,14 @@ func (g *Generator) writeForField(f *j.File, t *DescType, field *DescField) {
 			).Id("Set" + name).Params(
 				j.Id(field.Name).Id(field.Type),
 			).Block(
-				j.Id("v").Dot("data").Dot(name).Op("=").Id("v").Dot("call").Dot("NewCapability").Call(
-					j.Id("Adapt" + field.Type).Call(j.Id(field.Name)),
-				),
+				j.Id("v").Dot("data").Dot(name).Op("=").Id("v").Dot("call").Dot("NewCapability").CallFunc(func(gr *j.Group) {
+					if g.isImported(field.Type) {
+						iname, tname := g.splitType(field.Type)
+						gr.Qual(g.Imports[iname].Import, "Adapt"+tname).Call(j.Id(field.Name))
+					} else {
+						gr.Id("Adapt" + field.Type).Call(j.Id(field.Name))
+					}
+				}),
 			)
 
 			f.Line()
@@ -475,7 +611,7 @@ func (g *Generator) writeForField(f *j.File, t *DescType, field *DescField) {
 		f.Func().Params(
 			j.Id("v").Op("*").Add(recv),
 		).Id("Set" + name).Params(
-			j.Id(field.Name).Op("*").Id(field.Type),
+			j.Id(field.Name).Op("*").Add(g.properType(field.Type)),
 		).Block(
 			j.Id("v").Dot("data").Dot(name).Op("=").Id(field.Name),
 		)
@@ -497,7 +633,7 @@ func (g *Generator) typeForUnion(u UnionField) j.Code {
 		if g.ti(u.Type).isInterface {
 			return j.Id(u.Type)
 		}
-		return j.Op("*").Id(u.Type)
+		return j.Op("*").Add(g.properType(u.Type))
 	}
 }
 
@@ -619,24 +755,24 @@ func (g *Generator) generateStruct(f *j.File) error {
 		// Generate data struct with optional type parameter
 		dataType, dataRecv := t.addGeneric(private(t.Type) + "Data")
 
-		f.Type().Add(dataType).StructFunc(func(g *j.Group) {
+		f.Type().Add(dataType).StructFunc(func(gr *j.Group) {
 			for _, field := range t.Fields {
 				if field.Type == "list" {
-					g.Id(capitalize(field.Name)).Op("*").Index().Id(field.Element).Tag(map[string]string{
+					gr.Id(capitalize(field.Name)).Op("*").Index().Id(field.Element).Tag(map[string]string{
 						"cbor": fmt.Sprintf("%d,keyasint,omitempty", field.Index),
 						"json": field.Name + ",omitempty",
 					})
 
 				} else if field.Type == "union" {
-					g.Id(private(t.Type) + capitalize(field.Name))
+					gr.Id(private(t.Type) + capitalize(field.Name))
 				} else {
-					typ := j.Op("*").Id(field.Type)
+					typ := j.Op("*").Add(g.properType(field.Type))
 
 					if field.isInterface {
 						typ = j.Op("*").Qual(rpc, "Capability")
 					}
 
-					g.Id(capitalize(field.Name)).Add(typ).Tag(map[string]string{
+					gr.Id(capitalize(field.Name)).Add(typ).Tag(map[string]string{
 						"cbor": fmt.Sprintf("%d,keyasint,omitempty", field.Index),
 						"json": field.Name + ",omitempty",
 					})
@@ -706,7 +842,7 @@ func (g *Generator) generateStruct(f *j.File) error {
 
 					f.Func().Params(
 						j.Id("v").Op("*").Add(recv),
-					).Id(name).Params().Id(field.Type).Block(
+					).Id(name).Params().Add(g.properType(field.Type)).Block(
 						j.If(j.Id("v").Dot("data").Dot(name).Op("==").Nil()).Block(
 							j.Return(j.Lit(0)),
 						),
@@ -720,7 +856,7 @@ func (g *Generator) generateStruct(f *j.File) error {
 					f.Func().Params(
 						j.Id("v").Op("*").Add(recv),
 					).Id("Set" + name).Params(
-						j.Id(field.Name).Id(field.Type),
+						j.Id(field.Name).Add(g.properType(field.Type)),
 					).Block(
 						j.Id("v").Dot("data").Dot(name).Op("=").Op("&").Id(field.Name),
 					)
@@ -844,7 +980,7 @@ func (g *Generator) generateStruct(f *j.File) error {
 
 						f.Func().Params(
 							j.Id("v").Op("*").Add(recv),
-						).Id(name).Params().Id(field.Type).Block(
+						).Id(name).Params().Add(g.properType(field.Type)).Block(
 							j.If(j.Id("v").Dot("data").Dot(name).Op("==").Nil()).Block(
 								j.Return(j.Nil()),
 							),
@@ -859,11 +995,16 @@ func (g *Generator) generateStruct(f *j.File) error {
 						f.Func().Params(
 							j.Id("v").Op("*").Add(recv),
 						).Id("Set" + name).Params(
-							j.Id(field.Name).Id(field.Type),
+							j.Id(field.Name).Add(g.properType(field.Type)),
 						).Block(
-							j.Id("v").Dot("data").Dot(name).Op("=").Id("v").Dot("call").Dot("NewCapability").Call(
-								j.Id("Adapt" + field.Type).Call(j.Id(field.Name)),
-							),
+							j.Id("v").Dot("data").Dot(name).Op("=").Id("v").Dot("call").Dot("NewCapability").CallFunc(func(gr *j.Group) {
+								if g.isImported(field.Type) {
+									iname, tname := g.splitType(field.Type)
+									gr.Qual(g.Imports[iname].Import, "Adapt"+tname).Call(j.Id(field.Name))
+								} else {
+									j.Id("Adapt" + field.Type).Call(j.Id(field.Name))
+								}
+							}),
 						)
 					}
 
@@ -883,7 +1024,7 @@ func (g *Generator) generateStruct(f *j.File) error {
 
 					f.Func().Params(
 						j.Id("v").Op("*").Add(recv),
-					).Id(name).Params().Op("*").Id(field.Type).Block(
+					).Id(name).Params().Op("*").Add(g.properType(field.Type)).Block(
 						j.Return(j.Id("v").Dot("data").Dot(name)),
 					)
 
@@ -894,7 +1035,7 @@ func (g *Generator) generateStruct(f *j.File) error {
 					f.Func().Params(
 						j.Id("v").Op("*").Add(recv),
 					).Id("Set" + name).Params(
-						j.Id(field.Name).Op("*").Id(field.Type),
+						j.Id(field.Name).Op("*").Add(g.properType(field.Type)),
 					).Block(
 						j.Id("v").Dot("data").Dot(name).Op("=").Id(field.Name),
 					)
@@ -987,8 +1128,8 @@ func (g *Generator) generateClient(f *j.File, i *DescInterface) error {
 			if g.ti(p.Type).isInterface {
 				f.Func().Params(
 					j.Id("v").Op("*").Add(i.typeName(tn + "Results")),
-				).Id(name).Params().Id(p.Type + "Client").Block(
-					j.Return(j.Id(p.Type+"Client").Values(
+				).Id(name).Params().Id(g.deriveType(p.Type, "Client")).Block(
+					j.Return(j.Id(g.deriveType(p.Type, "Client")).Values(
 						j.Line().Id("Client").Op(":").Id("v").Dot("client").Dot("NewClient").Call(j.Id("v").Dot("data").Dot(name)),
 						j.Line(),
 					),
@@ -996,7 +1137,7 @@ func (g *Generator) generateClient(f *j.File, i *DescInterface) error {
 				)
 			} else {
 				g.readForField(f,
-					&DescType{Type: tn + "Results"},
+					&DescType{Type: tn + "Results", Generic: i.Generic},
 					&DescField{
 						Name:  p.Name,
 						Type:  p.Type,
@@ -1013,11 +1154,11 @@ func (g *Generator) generateClient(f *j.File, i *DescInterface) error {
 
 			for _, p := range m.Parameters {
 				if g.ti(p.Type).isMessage {
-					gr.Id(private(p.Name)).Op("*").Id(p.Type)
+					gr.Id(private(p.Name)).Op("*").Add(g.properType(p.Type))
 				} else if p.Type == "bytes" {
 					gr.Id(private(p.Name)).Index().Byte()
 				} else {
-					gr.Id(private(p.Name)).Id(p.Type)
+					gr.Id(private(p.Name)).Add(g.properType(p.Type))
 				}
 			}
 		}).Params(j.Op("*").Add(i.typeName(tn+"Results")), j.Error()).BlockFunc(func(gr *j.Group) {
@@ -1025,10 +1166,15 @@ func (g *Generator) generateClient(f *j.File, i *DescInterface) error {
 
 			for _, p := range m.Parameters {
 				if g.ti(p.Type).isInterface {
-					gr.Id("args").Dot("data").Dot(capitalize(p.Name)).Op("=").Id("v").Dot("Client").Dot("NewCapability").Call(
-						j.Id("Adapt"+capitalize(p.Type)).Call(j.Id(private(p.Name))),
-						j.Id(private(p.Name)),
-					)
+					gr.Id("args").Dot("data").Dot(capitalize(p.Name)).Op("=").Id("v").Dot("Client").Dot("NewCapability").CallFunc(func(gr *j.Group) {
+						if g.isImported(p.Type) {
+							iname, tname := g.splitType(p.Type)
+							gr.Qual(g.Imports[iname].Import, "Adapt"+tname).Call(j.Id(p.Name))
+						} else {
+							gr.Id("Adapt" + capitalize(p.Type)).Call(j.Id(private(p.Name)))
+						}
+						gr.Id(private(p.Name))
+					})
 				} else if g.ti(p.Type).isMessage {
 					gr.Id("args").Dot("data").Dot(capitalize(p.Name)).Op("=").Id(private(p.Name))
 				} else {
@@ -1206,6 +1352,10 @@ func (g *Generator) generateInterfaces(f *j.File) error {
 func (g *Generator) Generate(name string) (string, error) {
 	f := j.NewFile(name)
 
+	for name, imp := range g.Imports {
+		f.ImportName(imp.Import, name)
+	}
+
 	err := g.generateStruct(f)
 	if err != nil {
 		return "", err
@@ -1232,7 +1382,7 @@ func (g *Generator) Generate(name string) (string, error) {
 	return string(code), nil
 }
 
-func (g *Generator) createInterfaceArgs() error {
+func (g *Generator) populateTypeInfo() error {
 	for _, i := range g.Interfaces {
 		name := i.Name
 		idx := strings.IndexByte(name, '[')
@@ -1264,8 +1414,9 @@ type typeInfo struct {
 }
 
 type DescFile struct {
-	Types      []*DescType      `yaml:"types"`
-	Interfaces []*DescInterface `yaml:"interfaces"`
+	Imports    map[string]Import `yaml:"imports"`
+	Types      []*DescType       `yaml:"types"`
+	Interfaces []*DescInterface  `yaml:"interfaces"`
 }
 
 const (
