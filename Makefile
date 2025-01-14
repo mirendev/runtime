@@ -6,3 +6,9 @@ test-i:
 
 test-shell:
 	dagger call -q test --dir=. --shell
+
+clean:
+	rm bin/miren
+
+bin/miren:
+	@bash ./hack/build.sh

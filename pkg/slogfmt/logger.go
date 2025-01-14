@@ -30,11 +30,11 @@ var (
 	Error = slog.LevelError
 
 	_levelToName = map[slog.Level]string{
-		Trace:           " [TRACE]",
-		slog.LevelDebug: " [DEBUG]",
-		slog.LevelInfo:  " [INFO] ",
-		slog.LevelWarn:  " [WARN] ",
-		slog.LevelError: " [ERROR]",
+		Trace:           " [TRACE] ",
+		slog.LevelDebug: " [DEBUG] ",
+		slog.LevelInfo:  " [INFO]  ",
+		slog.LevelWarn:  " [WARN]  ",
+		slog.LevelError: " [ERROR] ",
 	}
 
 	_levelToColor = map[slog.Level]*color.Color{
