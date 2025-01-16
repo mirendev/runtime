@@ -27,7 +27,9 @@ func TestBuildKitLocal(t *testing.T) {
 
 		r := require.New(t)
 
-		reg := testutils.Registry(observability.TestInject, TestInject)
+		reg, cleanup := testutils.Registry(observability.TestInject, TestInject)
+
+		defer cleanup()
 
 		var bkl *Buildkit
 
@@ -103,7 +105,8 @@ func TestBuildKitLocal(t *testing.T) {
 
 		r := require.New(t)
 
-		reg := testutils.Registry(observability.TestInject, TestInject)
+		reg, cleanup := testutils.Registry(observability.TestInject, TestInject)
+		defer cleanup()
 
 		var bkl *Buildkit
 

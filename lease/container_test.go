@@ -15,6 +15,7 @@ import (
 	"miren.dev/runtime/build"
 	"miren.dev/runtime/discovery"
 	"miren.dev/runtime/health"
+	"miren.dev/runtime/image"
 	"miren.dev/runtime/ingress"
 	"miren.dev/runtime/network"
 	"miren.dev/runtime/observability"
@@ -29,7 +30,7 @@ func TestLeaseContainer(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 		defer cancel()
 
-		reg := testutils.Registry(
+		reg, cleanup := testutils.Registry(
 			observability.TestInject,
 			build.TestInject,
 			ingress.TestInject,
@@ -37,6 +38,8 @@ func TestLeaseContainer(t *testing.T) {
 			run.TestInject,
 			network.TestInject,
 		)
+
+		defer cleanup()
 
 		var (
 			cc  *containerd.Client
@@ -118,7 +121,7 @@ func TestLeaseContainer(t *testing.T) {
 		mrv, err := aa.MostRecentVersion(ctx, ac)
 		r.NoError(err)
 
-		var ii run.ImageImporter
+		var ii image.ImageImporter
 
 		err = reg.Populate(&ii)
 		r.NoError(err)
@@ -267,7 +270,7 @@ func TestLeaseContainer(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 		defer cancel()
 
-		reg := testutils.Registry(
+		reg, cleanup := testutils.Registry(
 			observability.TestInject,
 			build.TestInject,
 			ingress.TestInject,
@@ -275,6 +278,8 @@ func TestLeaseContainer(t *testing.T) {
 			run.TestInject,
 			network.TestInject,
 		)
+
+		defer cleanup()
 
 		var (
 			cc  *containerd.Client
@@ -356,7 +361,7 @@ func TestLeaseContainer(t *testing.T) {
 		mrv, err := aa.MostRecentVersion(ctx, ac)
 		r.NoError(err)
 
-		var ii run.ImageImporter
+		var ii image.ImageImporter
 
 		err = reg.Populate(&ii)
 		r.NoError(err)
@@ -419,7 +424,7 @@ func TestLeaseContainer(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 		defer cancel()
 
-		reg := testutils.Registry(
+		reg, cleanup := testutils.Registry(
 			observability.TestInject,
 			build.TestInject,
 			ingress.TestInject,
@@ -427,6 +432,8 @@ func TestLeaseContainer(t *testing.T) {
 			run.TestInject,
 			network.TestInject,
 		)
+
+		defer cleanup()
 
 		var (
 			cc  *containerd.Client
@@ -508,7 +515,7 @@ func TestLeaseContainer(t *testing.T) {
 		mrv, err := aa.MostRecentVersion(ctx, ac)
 		r.NoError(err)
 
-		var ii run.ImageImporter
+		var ii image.ImageImporter
 
 		err = reg.Populate(&ii)
 		r.NoError(err)

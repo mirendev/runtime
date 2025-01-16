@@ -2,60 +2,35 @@ package run
 
 import (
 	"context"
-	"io"
 	"log/slog"
 	"net/netip"
 	"os/exec"
 
 	"github.com/containerd/containerd/api/types/runc/options"
 	containerd "github.com/containerd/containerd/v2/client"
-	tarchive "github.com/containerd/containerd/v2/core/transfer/archive"
-	"github.com/containerd/containerd/v2/core/transfer/image"
 	"github.com/containerd/containerd/v2/pkg/cio"
 	"github.com/containerd/containerd/v2/pkg/namespaces"
 	"github.com/containerd/containerd/v2/pkg/oci"
-	"github.com/containerd/platforms"
 	_ "github.com/moby/buildkit/client/connhelper/dockercontainer"
 	"github.com/moby/buildkit/identity"
 	"github.com/pkg/errors"
 )
-
-type ImageImporter struct {
-	CC        *containerd.Client
-	Namespace string `asm:"namespace"`
-}
-
-func (i *ImageImporter) ImportImage(ctx context.Context, r io.Reader, indexName string) error {
-	ctx = namespaces.WithNamespace(ctx, i.Namespace)
-	var opts []image.StoreOpt
-	opts = append(opts, image.WithNamedPrefix("mn-tmp", true))
-
-	// Only when all-platforms not specified, we will check platform value
-	// Implicitly if the platforms is empty, it means all-platforms
-	platSpec := platforms.DefaultSpec()
-	opts = append(opts, image.WithPlatforms(platSpec))
-
-	opts = append(opts, image.WithUnpack(platSpec, ""))
-
-	is := image.NewStore(indexName, opts...)
-
-	var iopts []tarchive.ImportOpt
-
-	iis := tarchive.NewImageImportStream(r, "", iopts...)
-
-	return i.CC.Transfer(ctx, iis, is)
-}
 
 type ContainerRunner struct {
 	Log         *slog.Logger
 	CC          *containerd.Client
 	Namespace   string `asm:"namespace"`
 	RunscBinary string `asm:"runsc_binary,optional"`
+	Clickhouse  string `asm:"clickhouse_address,optional"`
 }
 
 func (c *ContainerRunner) Populated() error {
 	if c.RunscBinary == "" {
 		c.RunscBinary = "runsc-ignore"
+	}
+
+	if c.Clickhouse == "" {
+		c.Clickhouse = "clickhouse:9000"
 	}
 
 	return nil
@@ -170,7 +145,7 @@ func (c *ContainerRunner) bootInitialTask(ctx context.Context, config *Container
 
 	task, err := container.NewTask(ctx,
 		cio.BinaryIO(exe, map[string]string{
-			"-d": "clickhouse:9000",
+			"-d": c.Clickhouse,
 			"-e": config.Id,
 		}))
 	if err != nil {

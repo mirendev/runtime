@@ -397,12 +397,12 @@ func (c *ContainerMonitor) SetPortStatus(id string, bp observability.BoundPort, 
 			switch curEp.Type {
 			case "http":
 				c.Log.Info("checking http port", "addr", ip, "port", curEp.Port)
-				go c.checkHTTP(context.Background(), ip, 10*time.Second, curEp)
+				go c.checkHTTP(context.Background(), ip, 60*time.Second, curEp)
 				return
 
 			case "", "tcp":
 				c.Log.Info("checking tcp port", "addr", ip, "port", curEp.Port)
-				go c.checkPort(context.Background(), ip, 10*time.Second, curEp)
+				go c.checkPort(context.Background(), ip, 60*time.Second, curEp)
 
 				return
 			case "udp":
@@ -461,7 +461,9 @@ func (c *ContainerMonitor) checkHTTP(ctx context.Context, addr string, dur time.
 
 	for time.Since(start) < dur {
 		resp, err := http.Get(url)
-		if err == nil && resp.StatusCode < 400 {
+		if err != nil {
+			c.Log.Error("error checking http port", "addr", addr, "port", ep.Port, "error", err)
+		} else if resp.StatusCode < 400 {
 			c.Log.Info("http port active", "addr", addr, "port", ep.Port, "status", resp.StatusCode)
 
 			c.mu.Lock()
@@ -469,10 +471,13 @@ func (c *ContainerMonitor) checkHTTP(ctx context.Context, addr string, dur time.
 			ep.Status = observability.PortStatusActive
 			c.mu.Unlock()
 			return nil
+		} else {
+			c.Log.Warn("http port bad status", "addr", addr, "port", ep.Port, "status", resp.StatusCode)
 		}
 
 		time.Sleep(500 * time.Millisecond)
 	}
 
+	c.Log.Warn("giving up on checking port status")
 	return nil
 }

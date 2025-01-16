@@ -2,6 +2,7 @@ package stream
 
 import (
 	"context"
+	"io"
 
 	rpc "miren.dev/runtime/pkg/rpc"
 )
@@ -41,4 +42,49 @@ func ReadStream[T any](fn func(T) error) *rpc.Interface {
 
 func StreamRecv[T any](fn func(T) error) SendStream[T] {
 	return &Receiver[T]{fn: fn}
+}
+
+type rscReader struct {
+	ctx context.Context
+	rsc *RecvStreamClient[[]byte]
+}
+
+func (r *rscReader) Read(p []byte) (n int, err error) {
+	ret, err := r.rsc.Recv(r.ctx, int32(len(p)))
+	if err != nil {
+		return 0, err
+	}
+
+	data := ret.Value()
+
+	return copy(p, data), nil
+}
+
+func ToReader(ctx context.Context, x *RecvStreamClient[[]byte]) io.Reader {
+	return &rscReader{ctx: ctx, rsc: x}
+}
+
+type serveReader struct {
+	r io.Reader
+}
+
+func (s *serveReader) Recv(ctx context.Context, state *RecvStreamRecv[[]byte]) error {
+	args := state.Args()
+
+	buf := make([]byte, args.Count())
+
+	n, err := s.r.Read(buf)
+	if err != nil {
+		return err
+	}
+
+	buf = buf[:n]
+
+	state.Results().SetValue(buf)
+
+	return nil
+}
+
+func ServeReader(ctx context.Context, r io.Reader) RecvStream[[]byte] {
+	return &serveReader{r: r}
 }

@@ -17,7 +17,8 @@ func TestIngressHTTP(t *testing.T) {
 	t.Run("returns 404 when there is no ability to answer the request", func(t *testing.T) {
 		r := require.New(t)
 
-		reg := testutils.Registry(TestInject, discovery.TestInject)
+		reg, cleanup := testutils.Registry(TestInject, discovery.TestInject)
+		defer cleanup()
 
 		var h HTTP
 		err := reg.Populate(&h)
@@ -40,7 +41,8 @@ func TestIngressHTTP(t *testing.T) {
 	t.Run("invokes ServeHTTP on the discovered value", func(t *testing.T) {
 		r := require.New(t)
 
-		reg := testutils.Registry(TestInject, discovery.TestInject)
+		reg, cleanup := testutils.Registry(TestInject, discovery.TestInject)
+		defer cleanup()
 
 		var h HTTP
 		err := reg.Populate(&h)
@@ -70,7 +72,8 @@ func TestIngressHTTP(t *testing.T) {
 	t.Run("can derive the application from the host", func(t *testing.T) {
 		r := require.New(t)
 
-		reg := testutils.Registry(TestInject, discovery.TestInject)
+		reg, cleanup := testutils.Registry(TestInject, discovery.TestInject)
+		defer cleanup()
 
 		var h HTTP
 		err := reg.Populate(&h)
@@ -98,7 +101,8 @@ func TestIngressHTTP(t *testing.T) {
 	t.Run("can deal with lookup being slow", func(t *testing.T) {
 		r := require.New(t)
 
-		reg := testutils.Registry(TestInject, discovery.TestInject)
+		reg, cleanup := testutils.Registry(TestInject, discovery.TestInject)
+		defer cleanup()
 
 		var h HTTP
 		err := reg.Populate(&h)
@@ -130,7 +134,8 @@ func TestIngressHTTP(t *testing.T) {
 	t.Run("returns an error if the lookup times out", func(t *testing.T) {
 		r := require.New(t)
 
-		reg := testutils.Registry(TestInject, discovery.TestInject)
+		reg, cleanup := testutils.Registry(TestInject, discovery.TestInject)
+		defer cleanup()
 
 		var h HTTP
 		err := reg.Populate(&h)
@@ -163,7 +168,8 @@ func TestIngressHTTP(t *testing.T) {
 	t.Run("returns an error if the lookup fails", func(t *testing.T) {
 		r := require.New(t)
 
-		reg := testutils.Registry(TestInject, discovery.TestInject)
+		reg, cleanup := testutils.Registry(TestInject, discovery.TestInject)
+		defer cleanup()
 
 		var h HTTP
 		err := reg.Populate(&h)
@@ -190,7 +196,8 @@ func TestIngressHTTP(t *testing.T) {
 	t.Run("returns an error if the lookup fails in the background", func(t *testing.T) {
 		r := require.New(t)
 
-		reg := testutils.Registry(TestInject, discovery.TestInject)
+		reg, cleanup := testutils.Registry(TestInject, discovery.TestInject)
+		defer cleanup()
 
 		var h HTTP
 		err := reg.Populate(&h)

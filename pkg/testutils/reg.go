@@ -3,6 +3,7 @@ package testutils
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -13,23 +14,60 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	buildkit "github.com/moby/buildkit/client"
 	"miren.dev/runtime/pkg/asm"
+	"miren.dev/runtime/pkg/netdb"
 	"miren.dev/runtime/pkg/slogfmt"
 
 	clickhouse "github.com/ClickHouse/clickhouse-go/v2"
 )
 
-func Registry(extra ...func(*asm.Registry)) *asm.Registry {
+func Registry(extra ...func(*asm.Registry)) (*asm.Registry, func()) {
 	var r asm.Registry
 
+	var usedClient *containerd.Client
+
+	ndb, err := netdb.New(filepath.Join(os.TempDir(), "net.db"))
+	if err != nil {
+		panic(err)
+	}
+
+	iface, err := ndb.ReserveInterface("mt")
+	if err != nil {
+		panic(err)
+	}
+
+	mega, err := ndb.Subnet("10.8.0.0/16")
+	if err != nil {
+		panic(err)
+	}
+
+	subnet, err := mega.ReserveSubnet(24)
+	if err != nil {
+		panic(err)
+	}
+
+	r.Register("subnet", subnet)
+	r.Register("net-iface", iface)
+
 	r.Provide(func() (*containerd.Client, error) {
-		return containerd.New("/run/containerd.sock")
+		cl, err := containerd.New("/run/containerd.sock")
+		if err != nil {
+			return nil, err
+		}
+
+		usedClient = cl
+
+		return cl, nil
 	})
 
 	r.Provide(func() (*buildkit.Client, error) {
 		return buildkit.New(context.TODO(), "")
 	})
 
-	r.Register("namespace", "miren-test")
+	ts := time.Now()
+
+	namespace := fmt.Sprintf("miren-%d", ts.UnixNano())
+
+	r.Register("namespace", namespace)
 	r.Register("org_id", uint64(1))
 
 	log := slog.New(slogfmt.NewTextHandler(os.Stderr, &slog.HandlerOptions{
@@ -99,5 +137,16 @@ func Registry(extra ...func(*asm.Registry)) *asm.Registry {
 		fn(&r)
 	}
 
-	return &r
+	cleanup := func() {
+		if usedClient != nil {
+			NukeNamespace(usedClient, namespace)
+		}
+
+		ndb.ReleaseInterface(iface)
+		mega.ReleaseSubnet(subnet.Prefix())
+
+		ndb.Close()
+	}
+
+	return &r, cleanup
 }

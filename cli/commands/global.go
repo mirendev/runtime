@@ -9,6 +9,7 @@ import (
 	"os/signal"
 
 	"golang.org/x/sys/unix"
+	"miren.dev/runtime/pkg/asm"
 	"miren.dev/runtime/pkg/slogfmt"
 )
 
@@ -18,6 +19,7 @@ type GlobalFlags struct {
 
 type Context struct {
 	context.Context
+	*asm.Registry
 
 	verbose int
 	Log     *slog.Logger
@@ -25,14 +27,20 @@ type Context struct {
 	Stdout io.Writer
 	Stderr io.Writer
 
+	Client *asm.Registry
+	Server *asm.Registry
+
 	cancels []func()
 }
 
-func setup(ctx context.Context, flags *GlobalFlags) *Context {
+func setup(ctx context.Context, flags *GlobalFlags, opts any) *Context {
 	s := &Context{
 		verbose: len(flags.Verbose),
 		Stdout:  os.Stdout,
 		Stderr:  os.Stderr,
+
+		Server: &asm.Registry{},
+		Client: &asm.Registry{},
 	}
 
 	var level slog.Level
@@ -51,15 +59,22 @@ func setup(ctx context.Context, flags *GlobalFlags) *Context {
 	dynLevel := new(slog.LevelVar)
 	dynLevel.Set(level)
 
+	s.Log = slog.New(slogfmt.NewTextHandler(os.Stderr, &slog.HandlerOptions{
+		Level: dynLevel,
+	}))
+
+	s.Server.Log = s.Log
+	s.Client.Log = s.Log
+
+	s.setupServerComponents(ctx, s.Server)
+
+	s.Server.InferFrom(opts)
+
 	sigCh := make(chan os.Signal, 1)
 
 	signal.Notify(sigCh, os.Interrupt, unix.SIGQUIT, unix.SIGTERM,
 		unix.SIGTTIN, unix.SIGTTOU,
 	)
-
-	s.Log = slog.New(slogfmt.NewTextHandler(os.Stderr, &slog.HandlerOptions{
-		Level: dynLevel,
-	}))
 
 	ctx, cancel := context.WithCancel(ctx)
 	s.cancels = append(s.cancels, cancel)

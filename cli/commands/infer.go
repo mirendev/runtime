@@ -97,13 +97,14 @@ func (w *Cmd) Run(args []string) int {
 		return 1
 	}
 
-	ctx := setup(context.Background(), w.global)
+	ctx := setup(context.Background(), w.global, w.opts.Interface())
 	defer ctx.Close()
 
 	rets := w.f.Call([]reflect.Value{reflect.ValueOf(ctx), w.opts.Elem()})
 
 	if err, ok := rets[0].Interface().(error); ok {
 		if err != nil {
+			fmt.Fprintf(os.Stderr, "An error occured:\n%s\n", err)
 			return 1
 		}
 	}
@@ -127,7 +128,7 @@ func RunCommand(f any, args ...string) (*CommandOutput, error) {
 		return &out, err
 	}
 
-	ctx := setup(context.Background(), cmd.global)
+	ctx := setup(context.Background(), cmd.global, cmd.opts.Interface())
 	defer ctx.Close()
 
 	ctx.Stdout = &out.Stdout

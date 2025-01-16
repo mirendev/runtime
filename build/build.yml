@@ -1,0 +1,31 @@
+apiVersion: miren.dev/rpc/v1
+kind: IDL
+
+imports:
+  stream:
+    path: ../pkg/rpc/stream/stream.yml
+    import: miren.dev/runtime/pkg/rpc/stream
+
+interfaces:
+  - name: Stream
+    methods:
+      - name: recv
+        parameters:
+          - name: count
+            type: int32
+        results:
+          - name: data
+            type: bytes
+
+  - name: Builder
+    methods:
+      - name: buildFromTar
+        parameters:
+          - name: application
+            type: string
+          - name: tardata
+            type: stream.RecvStream[[]byte]
+        results:
+          - name: version
+            type: string
+

@@ -17,6 +17,7 @@ import (
 	"miren.dev/runtime/build"
 	"miren.dev/runtime/discovery"
 	"miren.dev/runtime/health"
+	"miren.dev/runtime/image"
 	"miren.dev/runtime/ingress"
 	"miren.dev/runtime/observability"
 	"miren.dev/runtime/pkg/testutils"
@@ -29,7 +30,11 @@ func TestContainer(t *testing.T) {
 
 		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 		defer cancel()
-		reg := testutils.Registry(observability.TestInject, build.TestInject, ingress.TestInject, discovery.TestInject)
+
+		reg, cleanup := testutils.Registry(
+			observability.TestInject, build.TestInject, ingress.TestInject, discovery.TestInject,
+		)
+		defer cleanup()
 
 		var (
 			cc  *containerd.Client
@@ -58,7 +63,7 @@ func TestContainer(t *testing.T) {
 		o, err := bkl.Transform(ctx, datafs)
 		r.NoError(err)
 
-		var ii run.ImageImporter
+		var ii image.ImageImporter
 
 		err = reg.Populate(&ii)
 		r.NoError(err)
@@ -177,7 +182,9 @@ func TestContainer(t *testing.T) {
 
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		reg := testutils.Registry(observability.TestInject, build.TestInject, ingress.TestInject, discovery.TestInject)
+
+		reg, cleanup := testutils.Registry(observability.TestInject, build.TestInject, ingress.TestInject, discovery.TestInject)
+		defer cleanup()
 
 		var (
 			cc  *containerd.Client
@@ -204,7 +211,7 @@ func TestContainer(t *testing.T) {
 		o, err := bkl.Transform(ctx, datafs)
 		r.NoError(err)
 
-		var ii run.ImageImporter
+		var ii image.ImageImporter
 
 		err = reg.Populate(&ii)
 		r.NoError(err)

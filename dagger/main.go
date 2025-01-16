@@ -98,6 +98,13 @@ func (m *Runtime) BuildEnv(dir *dagger.Directory) *dagger.Container {
 		WithExec([]string{"/usr/local/bin/runsc", "install"})
 }
 
+func (m *Runtime) Container(
+	ctx context.Context,
+	dir *dagger.Directory,
+) *dagger.Container {
+	return m.BuildEnv(dir)
+}
+
 func (m *Runtime) Test(
 	ctx context.Context,
 	dir *dagger.Directory,

@@ -13,6 +13,9 @@ interfaces:
       - T
     methods:
       - name: recv
+        parameters:
+          - name: count
+            type: int32
         results:
           - name: value
             type: T

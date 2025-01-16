@@ -16,8 +16,9 @@ type PersistentLogWriter struct {
 	DB *sql.DB `asm:"clickhouse"`
 }
 
-func (l *PersistentLogWriter) WriteEntry(id string, body string) error {
-	_, err := l.DB.Exec("INSERT INTO logs (timestamp, container_id, body) VALUES (NOW(), ?, ?)", id, body)
+func (l *PersistentLogWriter) WriteEntry(etype string, entity string, le LogEntry) error {
+	_, err := l.DB.Exec("INSERT INTO logs (timestamp, entity_type, entity_id, body) VALUES (?, ?, ?, ?)",
+		le.Timestamp, etype, entity, le.Body)
 	return err
 }
 
@@ -26,7 +27,7 @@ type PersistentLogReader struct {
 }
 
 func (l *PersistentLogReader) Read(ctx context.Context, id string) ([]LogEntry, error) {
-	rows, err := l.DB.QueryContext(ctx, "SELECT timestamp, body FROM logs WHERE container_id = ?", id)
+	rows, err := l.DB.QueryContext(ctx, "SELECT timestamp, body FROM logs WHERE entity_id = ?", id)
 	if err != nil {
 		return nil, err
 	}
@@ -54,12 +55,13 @@ func (m *LogsMaintainer) Setup(ctx context.Context) error {
 CREATE TABLE IF NOT EXISTS logs
 (
     timestamp DateTime64(9) CODEC(Delta(8), ZSTD(1)),
-    container_id LowCardinality(String) CODEC(ZSTD(1)),
+		entity_type LowCardinality(String) CODEC(ZSTD(1)),
+    entity_id LowCardinality(String) CODEC(ZSTD(1)),
     body String CODEC(ZSTD(1))
 )
 ENGINE = MergeTree
 PARTITION BY toDate(timestamp)
-ORDER BY (container_id, toUnixTimestamp(timestamp))
+ORDER BY (entity_type, entity_id, toUnixTimestamp(timestamp))
 `)
 
 	return err

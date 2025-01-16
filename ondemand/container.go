@@ -8,7 +8,7 @@ import (
 	"miren.dev/runtime/app"
 	"miren.dev/runtime/discovery"
 	"miren.dev/runtime/health"
-	"miren.dev/runtime/network"
+	"miren.dev/runtime/pkg/netdb"
 	"miren.dev/runtime/run"
 )
 
@@ -17,7 +17,7 @@ type LaunchContainer struct {
 	AppAccess *app.AppAccess
 	CR        *run.ContainerRunner
 	CD        *discovery.Containerd
-	IPPool    *network.IPPool
+	Subnet    *netdb.Subnet
 	Health    *health.ContainerMonitor
 }
 
@@ -59,9 +59,9 @@ func (l *LaunchContainer) launch(
 	mrv *app.AppVersion,
 ) (discovery.Endpoint, error) {
 
-	sa := l.IPPool.Router()
+	sa := l.Subnet.Router()
 
-	ca, err := l.IPPool.Allocate()
+	ca, err := l.Subnet.Reserve()
 	if err != nil {
 		return nil, err
 	}

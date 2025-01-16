@@ -608,6 +608,17 @@ func (g *Generator) writeForField(f *j.File, t *DescType, field *DescField) {
 			return
 		}
 
+		if slices.Contains(t.Generic, field.Type) {
+			f.Func().Params(
+				j.Id("v").Op("*").Add(recv),
+			).Id("Set" + name).Params(
+				j.Id(field.Name).Add(g.properType(field.Type)),
+			).Block(
+				j.Id("v").Dot("data").Dot(name).Op("=").Op("&").Id(field.Name),
+			)
+			return
+		}
+
 		f.Func().Params(
 			j.Id("v").Op("*").Add(recv),
 		).Id("Set" + name).Params(

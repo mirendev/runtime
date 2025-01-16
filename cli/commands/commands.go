@@ -10,5 +10,8 @@ func AllCommands() map[string]cli.CommandFactory {
 		"run": func() (cli.Command, error) {
 			return Infer("run", "Run the application", Run), nil
 		},
+		"server": func() (cli.Command, error) {
+			return Infer("server", "Start the server", Server), nil
+		},
 	}
 }

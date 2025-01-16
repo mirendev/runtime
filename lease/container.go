@@ -16,7 +16,7 @@ import (
 	"miren.dev/runtime/app"
 	"miren.dev/runtime/discovery"
 	"miren.dev/runtime/health"
-	"miren.dev/runtime/network"
+	"miren.dev/runtime/pkg/netdb"
 	"miren.dev/runtime/pkg/set"
 	"miren.dev/runtime/run"
 )
@@ -26,7 +26,7 @@ type LaunchContainer struct {
 	AppAccess *app.AppAccess
 	CR        *run.ContainerRunner
 	CD        *discovery.Containerd
-	IPPool    *network.IPPool
+	Subnet    *netdb.Subnet
 	Health    *health.ContainerMonitor
 	DB        *sql.DB `asm:"clickhouse"`
 
@@ -330,6 +330,7 @@ func (l *LaunchContainer) Lease(ctx context.Context, name string) (*LeasedContai
 
 		select {
 		case <-ctx.Done():
+			app.mu.Lock()
 			return nil, ctx.Err()
 		case win, ok := <-pendingCh:
 			app.mu.Lock()
@@ -479,9 +480,9 @@ func (l *LaunchContainer) launch(
 	mrv *app.AppVersion,
 ) (*runningContainer, error) {
 
-	sa := l.IPPool.Router()
+	sa := l.Subnet.Router()
 
-	ca, err := l.IPPool.Allocate()
+	ca, err := l.Subnet.Reserve()
 	if err != nil {
 		return nil, err
 	}

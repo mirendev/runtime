@@ -74,7 +74,10 @@ func main() {
 
 				fmt.Fprintln(f, "stderr")
 				ent.Line = line
-				err = lw.WriteEntry(cfg.ID, line)
+				err = lw.WriteEntry("container", cfg.ID, observability.LogEntry{
+					Timestamp: time.Now(),
+					Body:      line,
+				})
 				if err != nil {
 					fmt.Fprintf(f, "err: %v\n", err)
 					return
@@ -99,7 +102,10 @@ func main() {
 
 				fmt.Fprintln(f, "stdout")
 				ent.Line = line
-				err = lw.WriteEntry(cfg.ID, line)
+				err = lw.WriteEntry("container", cfg.ID, observability.LogEntry{
+					Timestamp: time.Now(),
+					Body:      line,
+				})
 				if err != nil {
 					fmt.Fprintf(f, "err: %v\n", err)
 					return

@@ -18,6 +18,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"miren.dev/runtime/build"
+	"miren.dev/runtime/image"
 	"miren.dev/runtime/observability"
 	"miren.dev/runtime/pkg/testutils"
 )
@@ -29,7 +30,8 @@ func TestContainerd(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 
-		reg := testutils.Registry(observability.TestInject, build.TestInject)
+		reg, cleanup := testutils.Registry(observability.TestInject, build.TestInject)
+		defer cleanup()
 
 		var (
 			cc  *containerd.Client
@@ -48,7 +50,7 @@ func TestContainerd(t *testing.T) {
 		o, err := bkl.Transform(ctx, datafs)
 		r.NoError(err)
 
-		var ii ImageImporter
+		var ii image.ImageImporter
 
 		err = reg.Populate(&ii)
 		r.NoError(err)
@@ -73,7 +75,9 @@ func TestContainerd(t *testing.T) {
 
 		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 		defer cancel()
-		reg := testutils.Registry(observability.TestInject, build.TestInject)
+
+		reg, cleanup := testutils.Registry(observability.TestInject, build.TestInject)
+		defer cleanup()
 
 		var (
 			cc  *containerd.Client
@@ -109,7 +113,7 @@ func TestContainerd(t *testing.T) {
 		o, err := bkl.Transform(ctx, datafs)
 		r.NoError(err)
 
-		var ii ImageImporter
+		var ii image.ImageImporter
 
 		err = reg.Populate(&ii)
 		r.NoError(err)
@@ -274,7 +278,9 @@ func TestContainerd(t *testing.T) {
 
 		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 		defer cancel()
-		reg := testutils.Registry(observability.TestInject, build.TestInject)
+
+		reg, cleanup := testutils.Registry(observability.TestInject, build.TestInject)
+		defer cleanup()
 
 		var (
 			cc  *containerd.Client
@@ -310,7 +316,7 @@ func TestContainerd(t *testing.T) {
 		o, err := bkl.Transform(ctx, datafs)
 		r.NoError(err)
 
-		var ii ImageImporter
+		var ii image.ImageImporter
 
 		err = reg.Populate(&ii)
 		r.NoError(err)

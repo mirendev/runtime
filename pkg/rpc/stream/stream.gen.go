@@ -148,11 +148,24 @@ func (v SendStreamClient[T]) Send(ctx context.Context, value T) (*SendStreamClie
 	return &SendStreamClientSendResults[T]{client: v.Client, data: ret}, nil
 }
 
-type recvStreamRecvArgsData[T any] struct{}
+type recvStreamRecvArgsData[T any] struct {
+	Count *int32 `cbor:"0,keyasint,omitempty" json:"count,omitempty"`
+}
 
 type RecvStreamRecvArgs[T any] struct {
 	call *rpc.Call
 	data recvStreamRecvArgsData[T]
+}
+
+func (v *RecvStreamRecvArgs[T]) HasCount() bool {
+	return v.data.Count != nil
+}
+
+func (v *RecvStreamRecvArgs[T]) Count() int32 {
+	if v.data.Count == nil {
+		return 0
+	}
+	return *v.data.Count
 }
 
 func (v *RecvStreamRecvArgs[T]) MarshalCBOR() ([]byte, error) {
@@ -180,8 +193,8 @@ type RecvStreamRecvResults[T any] struct {
 	data recvStreamRecvResultsData[T]
 }
 
-func (v *RecvStreamRecvResults[T]) SetValue(value *T) {
-	v.data.Value = value
+func (v *RecvStreamRecvResults[T]) SetValue(value T) {
+	v.data.Value = &value
 }
 
 func (v *RecvStreamRecvResults[T]) MarshalCBOR() ([]byte, error) {
@@ -278,8 +291,9 @@ func (v *RecvStreamClientRecvResults[T]) Value() T {
 	return *v.data.Value
 }
 
-func (v RecvStreamClient[T]) Recv(ctx context.Context) (*RecvStreamClientRecvResults[T], error) {
+func (v RecvStreamClient[T]) Recv(ctx context.Context, count int32) (*RecvStreamClientRecvResults[T], error) {
 	args := RecvStreamRecvArgs[T]{}
+	args.data.Count = &count
 
 	var ret recvStreamRecvResultsData[T]
 

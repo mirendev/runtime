@@ -213,7 +213,7 @@ func enableIPv6(ifName string) error {
 	return nil
 }
 
-func configureIface(ifName string, nc NetworkConfig) error {
+func configureIface(log *slog.Logger, ifName string, nc NetworkConfig) error {
 	link, err := netlink.LinkByName(ifName)
 	if err != nil {
 		return fmt.Errorf("failed to lookup %q: %v", ifName, err)
@@ -229,6 +229,8 @@ func configureIface(ifName string, nc NetworkConfig) error {
 		if err = netlink.AddrAdd(link, addr); err != nil {
 			return fmt.Errorf("failed to add IP addr %v to %q: %v", ac, ifName, err)
 		}
+
+		log.Debug("added address", "address", ac.String(), "interface", ifName)
 	}
 
 	if err := netlink.LinkSetUp(link); err != nil {
@@ -464,7 +466,7 @@ func setupNetwork(
 		_, _ = sysctl.Sysctl(fmt.Sprintf("net/ipv4/conf/%s/arp_notify", "eth0"), "1")
 
 		// Add the IP to the interface
-		if err := configureIface("eth0", nc); err != nil {
+		if err := configureIface(log, "eth0", nc); err != nil {
 			return err
 		}
 		return nil
