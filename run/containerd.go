@@ -156,7 +156,7 @@ func (c *ContainerRunner) bootInitialTask(ctx context.Context, config *Container
 		return err
 	}
 
-	err = setupNetwork(c.Log, task, config)
+	err = network.ConfigureNetNS(c.Log, int(task.Pid()), config.Endpoint)
 	if err != nil {
 		return err
 	}
