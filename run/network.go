@@ -20,6 +20,7 @@ import (
 	"github.com/pkg/errors"
 	"github.com/vishvananda/netlink"
 	"go4.org/netipx"
+	"miren.dev/runtime/network"
 )
 
 func netnsPath(pid int) string {
@@ -157,12 +158,9 @@ type BridgeConfig struct {
 	MTU         int
 	Vlan        int
 	PromiscMode bool
-	MAC         string
-	Id          string
-	IPAM        IPAM
 }
 
-func setupBridge(n *BridgeConfig) (*netlink.Bridge, *current.Interface, error) {
+func setupBridge(n *network.BridgeConfig) (*netlink.Bridge, *current.Interface, error) {
 	vlanFiltering := n.Vlan != 0
 
 	// create bridge if necessary
@@ -213,7 +211,7 @@ func enableIPv6(ifName string) error {
 	return nil
 }
 
-func configureIface(log *slog.Logger, ifName string, nc NetworkConfig) error {
+func configureIface(log *slog.Logger, ifName string, nc *network.EndpointConfig) error {
 	link, err := netlink.LinkByName(ifName)
 	if err != nil {
 		return fmt.Errorf("failed to lookup %q: %v", ifName, err)
@@ -225,7 +223,10 @@ func configureIface(log *slog.Logger, ifName string, nc NetworkConfig) error {
 	}
 
 	for _, ac := range nc.Addresses {
-		addr := &netlink.Addr{IPNet: &ac, Label: ""}
+		addr := &netlink.Addr{
+			IPNet: netipx.PrefixIPNet(ac),
+			Label: "",
+		}
 		if err = netlink.AddrAdd(link, addr); err != nil {
 			return fmt.Errorf("failed to add IP addr %v to %q: %v", ac, ifName, err)
 		}
@@ -239,30 +240,44 @@ func configureIface(log *slog.Logger, ifName string, nc NetworkConfig) error {
 
 	ip.SettleAddresses(ifName, 10)
 
-	for _, gw := range nc.Gateways {
-		routeIsV4 := gw.Addr().Is4()
-		var dst *net.IPNet
-
-		if routeIsV4 {
-			_, dst, _ = net.ParseCIDR("0.0.0.0/0")
-		} else {
-			_, dst, _ = net.ParseCIDR("::/0")
-		}
-
-		net.ParseCIDR("0.0.0.0/0")
-
-		ngw := netipx.PrefixIPNet(gw)
-
+	for _, r := range nc.Routes {
 		route := netlink.Route{
-			Dst:       dst,
+			Dst:       netipx.PrefixIPNet(r.Dest),
 			LinkIndex: link.Attrs().Index,
-			Gw:        ngw.IP,
+			Gw:        r.Via.AsSlice(),
 		}
 
 		if err = netlink.RouteAddEcmp(&route); err != nil {
-			return fmt.Errorf("failed to add route '%v via %v dev %v': %v", dst, gw, ifName, err)
+			return fmt.Errorf("failed to add route '%v via %v dev %v': %v", r.Dest, r.Via, ifName, err)
 		}
 	}
+
+	/*
+		for _, gw := range nc.Gateways {
+			routeIsV4 := gw.Addr().Is4()
+			var dst *net.IPNet
+
+			if routeIsV4 {
+				_, dst, _ = net.ParseCIDR("0.0.0.0/0")
+			} else {
+				_, dst, _ = net.ParseCIDR("::/0")
+			}
+
+			net.ParseCIDR("0.0.0.0/0")
+
+			ngw := netipx.PrefixIPNet(gw)
+
+			route := netlink.Route{
+				Dst:       dst,
+				LinkIndex: link.Attrs().Index,
+				Gw:        ngw.IP,
+			}
+
+			if err = netlink.RouteAddEcmp(&route); err != nil {
+				return fmt.Errorf("failed to add route '%v via %v dev %v': %v", dst, gw, ifName, err)
+			}
+		}
+	*/
 
 	return nil
 }
@@ -356,14 +371,11 @@ func enableForwarding(br netlink.Link) error {
 
 const MetadataIP = "169.254.168.1"
 
-func configureGW(br netlink.Link, nc NetworkConfig) error {
+func configureGW(br netlink.Link, ec *network.EndpointConfig) error {
 	var natIP string
 
-	for _, ac := range nc.Addresses {
-		gwIP := &net.IPNet{
-			IP:   ip.NextIP(ac.IP.Mask(ac.Mask)),
-			Mask: ac.Mask,
-		}
+	for _, ac := range ec.Bridge.Addresses {
+		gwIP := netipx.PrefixIPNet(ac)
 
 		var family int
 
@@ -407,7 +419,7 @@ func configureGW(br netlink.Link, nc NetworkConfig) error {
 
 func formatChain(id string) string {
 	output := sha512.Sum512([]byte(id))
-	return fmt.Sprintf("ISLE-%x", output)[:28]
+	return fmt.Sprintf("MIREN-%x", output)[:28]
 }
 
 type Subnet struct {
@@ -418,7 +430,6 @@ type Subnet struct {
 
 func setupNetwork(
 	log *slog.Logger,
-	subnet *Subnet,
 	task containerd.Task,
 	cont *ContainerConfig,
 ) error {
@@ -433,19 +444,13 @@ func setupNetwork(
 
 	log.Debug("configuring netns", "path", path, "pid", pid)
 
-	bc := &BridgeConfig{
-		Name: subnet.OSName,
-		Id:   subnet.Id,
-		MAC:  idToMac(subnet.Id),
-	}
-
-	br, brInterface, err := setupBridge(bc)
+	br, brInterface, err := setupBridge(cont.Endpoint.Bridge)
 	if err != nil {
 		return err
 	}
 
 	hostInterface, containerInterface, err := setupVeth(
-		netns, br, "eth0", bc.MTU, true, bc.Vlan, bc.MAC,
+		netns, br, "eth0", 0, true, 0, "",
 	)
 	if err != nil {
 		return err
@@ -453,20 +458,42 @@ func setupNetwork(
 
 	log.Info("configured veth", "host-iface", hostInterface.Name, "cont-iface", containerInterface.Name)
 
-	var nc NetworkConfig
-	nc.Gateways = subnet.IP
+	ec := cont.Endpoint
 
-	for _, ip := range cont.IPs {
-		cidr := netipx.PrefixIPNet(ip)
-		nc.Addresses = append(nc.Addresses, *cidr)
-	}
+	/*
+
+		var ec network.EndpointConfig
+		ec.Addresses = cont.IPs
+		ec.Bridge = &network.BridgeConfig{
+			Name:      bc.Name,
+			Addresses: subnet.IP,
+		}
+
+		err = ec.DeriveDefaultGateway()
+		if err != nil {
+			return err
+		}
+
+		spew.Dump(ec, cont.Endpoint)
+
+	*/
+
+	/*
+		var nc NetworkConfig
+		nc.Gateways = subnet.IP
+
+		for _, ip := range cont.IPs {
+			cidr := netipx.PrefixIPNet(ip)
+			nc.Addresses = append(nc.Addresses, *cidr)
+		}
+	*/
 
 	if err := netns.Do(func(_ ns.NetNS) error {
 		_, _ = sysctl.Sysctl(fmt.Sprintf("net/ipv6/conf/%s/accept_dad", "eth0"), "0")
 		_, _ = sysctl.Sysctl(fmt.Sprintf("net/ipv4/conf/%s/arp_notify", "eth0"), "1")
 
 		// Add the IP to the interface
-		if err := configureIface(log, "eth0", nc); err != nil {
+		if err := configureIface(log, "eth0", ec); err != nil {
 			return err
 		}
 		return nil
@@ -493,23 +520,23 @@ func setupNetwork(
 	}
 
 	// Refetch the bridge to get all updated attributes
-	br, err = bridgeByName(bc.Name)
+	br, err = bridgeByName(ec.Bridge.Name)
 	if err != nil {
 		return err
 	}
 
 	hw := br.Attrs().HardwareAddr
 	log.Debug("configuring bridge with gateway addresses", "mac", hw.String())
-	err = configureGW(br, nc)
+	err = configureGW(br, ec)
 	if err != nil {
 		return err
 	}
 
-	chain := formatChain(bc.Id)
-	comment := fmt.Sprintf("id: %q", bc.Id)
+	chain := formatChain(ec.Bridge.Name)
+	comment := fmt.Sprintf("id: %q", ec.Bridge.Name)
 
-	for _, ac := range nc.Addresses {
-		if err = ip.SetupIPMasq(&ac, chain, comment); err != nil {
+	for _, ac := range ec.Addresses {
+		if err = ip.SetupIPMasq(netipx.PrefixIPNet(ac), chain, comment); err != nil {
 			return err
 		}
 	}

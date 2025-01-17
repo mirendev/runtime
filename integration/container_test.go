@@ -19,6 +19,7 @@ import (
 	"miren.dev/runtime/health"
 	"miren.dev/runtime/image"
 	"miren.dev/runtime/ingress"
+	"miren.dev/runtime/network"
 	"miren.dev/runtime/observability"
 	"miren.dev/runtime/pkg/testutils"
 	"miren.dev/runtime/run"
@@ -117,15 +118,21 @@ func TestContainer(t *testing.T) {
 		ca, err := netip.ParsePrefix("172.16.9.2/24")
 		r.NoError(err)
 
-		config := &run.ContainerConfig{
-			App:   "mn-nginx",
-			Image: imgeName,
-			IPs:   []netip.Prefix{ca},
-			Subnet: &run.Subnet{
-				Id:     "sub",
-				IP:     []netip.Prefix{sa},
-				OSName: "mtest",
+		ec := &network.EndpointConfig{
+			Addresses: []netip.Prefix{ca},
+			Bridge: &network.BridgeConfig{
+				Name:      "mtest",
+				Addresses: []netip.Prefix{sa},
 			},
+		}
+
+		err = ec.DeriveDefaultGateway()
+		r.NoError(err)
+
+		config := &run.ContainerConfig{
+			App:      "mn-nginx",
+			Image:    imgeName,
+			Endpoint: ec,
 		}
 
 		id, err := cr.RunContainer(ctx, config)
@@ -238,16 +245,21 @@ func TestContainer(t *testing.T) {
 		ca, err := netip.ParsePrefix("172.16.9.3/24")
 		r.NoError(err)
 
-		config := &run.ContainerConfig{
-			App:   "mn-nginx2",
-			Image: "mn-nginx:latest",
-			IPs:   []netip.Prefix{ca},
-			Subnet: &run.Subnet{
-				Id:     "sub",
-				IP:     []netip.Prefix{sa},
-				OSName: "mtest",
+		ec := &network.EndpointConfig{
+			Addresses: []netip.Prefix{ca},
+			Bridge: &network.BridgeConfig{
+				Name:      "mtest",
+				Addresses: []netip.Prefix{sa},
 			},
+		}
 
+		err = ec.DeriveDefaultGateway()
+		r.NoError(err)
+
+		config := &run.ContainerConfig{
+			App:       "mn-nginx2",
+			Image:     "mn-nginx:latest",
+			Endpoint:  ec,
 			StaticDir: "/public",
 		}
 

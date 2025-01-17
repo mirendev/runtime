@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"fmt"
 	"log/slog"
-	"net/netip"
 	"os"
 	"path/filepath"
 	"sync"
@@ -16,6 +15,7 @@ import (
 	"miren.dev/runtime/app"
 	"miren.dev/runtime/discovery"
 	"miren.dev/runtime/health"
+	"miren.dev/runtime/network"
 	"miren.dev/runtime/pkg/netdb"
 	"miren.dev/runtime/pkg/set"
 	"miren.dev/runtime/run"
@@ -480,22 +480,24 @@ func (l *LaunchContainer) launch(
 	mrv *app.AppVersion,
 ) (*runningContainer, error) {
 
-	sa := l.Subnet.Router()
+	/*
+		sa := l.Subnet.Router()
 
-	ca, err := l.Subnet.Reserve()
+		ca, err := l.Subnet.Reserve()
+		if err != nil {
+			return nil, err
+		}
+	*/
+
+	ec, err := network.AllocateOnBridge("mtest", l.Subnet)
 	if err != nil {
 		return nil, err
 	}
 
 	config := &run.ContainerConfig{
-		App:   ac.Name,
-		Image: mrv.ImageName(),
-		IPs:   []netip.Prefix{ca},
-		Subnet: &run.Subnet{
-			Id:     "sub",
-			IP:     []netip.Prefix{sa},
-			OSName: "mtest",
-		},
+		App:      ac.Name,
+		Image:    mrv.ImageName(),
+		Endpoint: ec,
 	}
 
 	_, err = l.CR.RunContainer(ctx, config)

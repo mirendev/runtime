@@ -4,7 +4,6 @@ import (
 	"context"
 	"io"
 	"net"
-	"net/netip"
 	"os"
 	"time"
 
@@ -13,6 +12,7 @@ import (
 	"github.com/containerd/containerd/v2/pkg/namespaces"
 	buildkit "github.com/moby/buildkit/client"
 	"github.com/opencontainers/runtime-spec/specs-go"
+	"miren.dev/runtime/network"
 	"miren.dev/runtime/pkg/netdb"
 	"miren.dev/runtime/run"
 )
@@ -41,22 +41,15 @@ func (l *LaunchBuildkit) Launch(ctx context.Context) (*RunningBuildkit, error) {
 		}
 	}
 
-	sa := l.Subnet.Router()
-
-	ca, err := l.Subnet.Reserve()
+	ec, err := network.AllocateOnBridge("mtest", l.Subnet)
 	if err != nil {
 		return nil, err
 	}
 
 	id, err := l.CR.RunContainer(ctx, &run.ContainerConfig{
-		App:   "internal",
-		Image: "docker.io/moby/buildkit:latest",
-		IPs:   []netip.Prefix{ca},
-		Subnet: &run.Subnet{
-			Id:     "build",
-			IP:     []netip.Prefix{sa},
-			OSName: "build",
-		},
+		App:      "internal",
+		Image:    "docker.io/moby/buildkit:latest",
+		Endpoint: ec,
 	})
 	if err != nil {
 		return nil, err

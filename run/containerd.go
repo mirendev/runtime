@@ -3,7 +3,6 @@ package run
 import (
 	"context"
 	"log/slog"
-	"net/netip"
 	"os/exec"
 
 	"github.com/containerd/containerd/api/types/runc/options"
@@ -14,6 +13,7 @@ import (
 	_ "github.com/moby/buildkit/client/connhelper/dockercontainer"
 	"github.com/moby/buildkit/identity"
 	"github.com/pkg/errors"
+	"miren.dev/runtime/network"
 )
 
 type ContainerRunner struct {
@@ -37,11 +37,11 @@ func (c *ContainerRunner) Populated() error {
 }
 
 type ContainerConfig struct {
-	Id     string
-	App    string
-	Image  string
-	IPs    []netip.Prefix
-	Subnet *Subnet
+	Id    string
+	App   string
+	Image string
+
+	Endpoint *network.EndpointConfig
 
 	StaticDir string
 
@@ -51,6 +51,10 @@ type ContainerConfig struct {
 func (c *ContainerRunner) RunContainer(ctx context.Context, config *ContainerConfig) (string, error) {
 	if config.Id == "" {
 		config.Id = identity.NewID()
+	}
+
+	if config.Endpoint == nil {
+		return "", errors.New("network endpoint config is required")
 	}
 
 	ctx = namespaces.WithNamespace(ctx, c.Namespace)
@@ -110,8 +114,8 @@ func (c *ContainerRunner) buildSpec(ctx context.Context, config *ContainerConfig
 
 	lbls := map[string]string{
 		"miren.dev/app":           config.App,
-		"miren.dev/http_host":     config.IPs[0].Addr().String() + ":3000",
-		"miren.dev/ip":            config.IPs[0].Addr().String(),
+		"miren.dev/http_host":     config.Endpoint.Addresses[0].Addr().String() + ":3000",
+		"miren.dev/ip":            config.Endpoint.Addresses[0].Addr().String(),
 		"miren.dev/endpoint:http": "port=3000,type=http",
 	}
 
@@ -152,7 +156,7 @@ func (c *ContainerRunner) bootInitialTask(ctx context.Context, config *Container
 		return err
 	}
 
-	err = setupNetwork(c.Log, config.Subnet, task, config)
+	err = setupNetwork(c.Log, task, config)
 	if err != nil {
 		return err
 	}

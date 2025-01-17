@@ -19,6 +19,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"miren.dev/runtime/build"
 	"miren.dev/runtime/image"
+	"miren.dev/runtime/network"
 	"miren.dev/runtime/observability"
 	"miren.dev/runtime/pkg/testutils"
 )
@@ -157,15 +158,21 @@ func TestContainerd(t *testing.T) {
 		ca, err := netip.ParsePrefix("172.16.8.2/24")
 		r.NoError(err)
 
-		config := &ContainerConfig{
-			App:   "mn-nginx",
-			Image: "mn-nginx:latest",
-			IPs:   []netip.Prefix{ca},
-			Subnet: &Subnet{
-				Id:     "sub",
-				IP:     []netip.Prefix{sa},
-				OSName: "mtest",
+		ec := &network.EndpointConfig{
+			Addresses: []netip.Prefix{ca},
+			Bridge: &network.BridgeConfig{
+				Name:      "mtest",
+				Addresses: []netip.Prefix{sa},
 			},
+		}
+
+		err = ec.DeriveDefaultGateway()
+		r.NoError(err)
+
+		config := &ContainerConfig{
+			App:      "mn-nginx",
+			Image:    "mn-nginx:latest",
+			Endpoint: ec,
 		}
 
 		id, err := cr.RunContainer(ctx, config)
@@ -360,15 +367,21 @@ func TestContainerd(t *testing.T) {
 		ca, err := netip.ParsePrefix("172.16.8.2/24")
 		r.NoError(err)
 
-		config := &ContainerConfig{
-			App:   "mn-sort",
-			Image: "mn-sort:latest",
-			IPs:   []netip.Prefix{ca},
-			Subnet: &Subnet{
-				Id:     "sub",
-				IP:     []netip.Prefix{sa},
-				OSName: "mtest",
+		ec := &network.EndpointConfig{
+			Addresses: []netip.Prefix{ca},
+			Bridge: &network.BridgeConfig{
+				Name:      "mtest",
+				Addresses: []netip.Prefix{sa},
 			},
+		}
+
+		err = ec.DeriveDefaultGateway()
+		r.NoError(err)
+
+		config := &ContainerConfig{
+			App:      "mn-sort",
+			Image:    "mn-sort:latest",
+			Endpoint: ec,
 		}
 
 		id, err := cr.RunContainer(ctx, config)
