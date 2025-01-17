@@ -21,6 +21,7 @@ type LaunchBuildkit struct {
 	CR        *run.ContainerRunner
 	Subnet    *netdb.Subnet
 	Namespace string `asm:"namespace"`
+	Bridge    string `asm:"bridge-iface"`
 }
 
 type RunningBuildkit struct {
@@ -41,7 +42,7 @@ func (l *LaunchBuildkit) Launch(ctx context.Context) (*RunningBuildkit, error) {
 		}
 	}
 
-	ec, err := network.AllocateOnBridge("mtest", l.Subnet)
+	ec, err := network.AllocateOnBridge(l.Bridge, l.Subnet)
 	if err != nil {
 		return nil, err
 	}

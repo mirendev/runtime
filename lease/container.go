@@ -30,6 +30,8 @@ type LaunchContainer struct {
 	Health    *health.ContainerMonitor
 	DB        *sql.DB `asm:"clickhouse"`
 
+	Bridge string `asm:"bridge-iface"`
+
 	MaxLeasesPerContainer int           `asm:"max_leases_per_container,optional"`
 	MaxContainersPerApp   int           `asm:"max_containers_per_app,optional"`
 	IdleTimeout           time.Duration `asm:"container_idle_timeout,optional"`
@@ -479,20 +481,12 @@ func (l *LaunchContainer) launch(
 	ac *app.AppConfig,
 	mrv *app.AppVersion,
 ) (*runningContainer, error) {
-
-	/*
-		sa := l.Subnet.Router()
-
-		ca, err := l.Subnet.Reserve()
-		if err != nil {
-			return nil, err
-		}
-	*/
-
-	ec, err := network.AllocateOnBridge("mtest", l.Subnet)
+	ec, err := network.AllocateOnBridge(l.Bridge, l.Subnet)
 	if err != nil {
 		return nil, err
 	}
+
+	l.Log.Debug("allocated network endpoint", "bridge", l.Bridge, "addresses", ec.Addresses)
 
 	config := &run.ContainerConfig{
 		App:      ac.Name,

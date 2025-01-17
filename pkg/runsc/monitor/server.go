@@ -120,8 +120,7 @@ func (s *CommonServer) run() {
 	for {
 		conn, err := s.listener.Accept()
 		if err != nil {
-			// EBADF returns when the socket closes.
-			if !errors.Is(err, unix.EBADF) {
+			if !errors.Is(err, net.ErrClosed) {
 				s.Log.Error("socket.Accept()", "error", err)
 			}
 			return
@@ -232,14 +231,12 @@ func (s *CommonServer) closeClient(client client) {
 
 // Close stops listening and closes all connections.
 func (s *CommonServer) Close() {
-	s.Log.Warn("closing runsc monitor", "token", s.ts.UnixMicro(), "li2", s.listener != nil)
-
 	if s.listener != nil {
 		_ = s.listener.Close()
 	}
 
 	err := os.Remove(s.Endpoint)
-	s.Log.Warn("removed runsc monitor endpoint", "endpoint", s.Endpoint, "error", err)
+	s.Log.Debug("removed runsc monitor endpoint", "endpoint", s.Endpoint, "error", err)
 
 	s.mu.Lock()
 	defer s.mu.Unlock()

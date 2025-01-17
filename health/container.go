@@ -2,6 +2,7 @@ package health
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -462,7 +463,14 @@ func (c *ContainerMonitor) checkHTTP(ctx context.Context, addr string, dur time.
 	for time.Since(start) < dur {
 		resp, err := http.Get(url)
 		if err != nil {
-			c.Log.Error("error checking http port", "addr", addr, "port", ep.Port, "error", err)
+			var netErr *net.OpError
+			if errors.As(err, &netErr) {
+				if !netErr.Temporary() && netErr.Op != "dial" {
+					c.Log.Error("unable to check http port", "addr", addr, "port", ep.Port, "error", err, "op", netErr.Op)
+				}
+			} else {
+				c.Log.Error("error checking http port", "addr", addr, "port", ep.Port, "error", err)
+			}
 		} else if resp.StatusCode < 400 {
 			c.Log.Info("http port active", "addr", addr, "port", ep.Port, "status", resp.StatusCode)
 

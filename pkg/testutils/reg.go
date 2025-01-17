@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"log/slog"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"time"
@@ -13,6 +14,7 @@ import (
 	"github.com/davecgh/go-spew/spew"
 	"github.com/jackc/pgx/v5/pgxpool"
 	buildkit "github.com/moby/buildkit/client"
+	"miren.dev/runtime/network"
 	"miren.dev/runtime/pkg/asm"
 	"miren.dev/runtime/pkg/netdb"
 	"miren.dev/runtime/pkg/slogfmt"
@@ -46,7 +48,17 @@ func Registry(extra ...func(*asm.Registry)) (*asm.Registry, func()) {
 	}
 
 	r.Register("subnet", subnet)
-	r.Register("net-iface", iface)
+
+	r.ProvideName("bridge-iface", func() (string, error) {
+		_, err = network.SetupBridge(&network.BridgeConfig{
+			Name:      iface,
+			Addresses: []netip.Prefix{subnet.Router()},
+		})
+		if err != nil {
+			return "", err
+		}
+		return iface, nil
+	})
 
 	r.Provide(func() (*containerd.Client, error) {
 		cl, err := containerd.New("/run/containerd.sock")

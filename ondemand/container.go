@@ -19,6 +19,7 @@ type LaunchContainer struct {
 	CD        *discovery.Containerd
 	Subnet    *netdb.Subnet
 	Health    *health.ContainerMonitor
+	Bridge    string `asm:"bridge-iface"`
 }
 
 func (l *LaunchContainer) Lookup(ctx context.Context, app string) (discovery.Endpoint, chan discovery.BackgroundLookup, error) {
@@ -58,7 +59,7 @@ func (l *LaunchContainer) launch(
 	ac *app.AppConfig,
 	mrv *app.AppVersion,
 ) (discovery.Endpoint, error) {
-	ec, err := network.AllocateOnBridge("mtest", l.Subnet)
+	ec, err := network.AllocateOnBridge(l.Bridge, l.Subnet)
 	if err != nil {
 		return nil, err
 	}

@@ -243,33 +243,6 @@ func ConfigureIface(log *slog.Logger, ifName string, nc *EndpointConfig) error {
 		}
 	}
 
-	/*
-		for _, gw := range nc.Gateways {
-			routeIsV4 := gw.Addr().Is4()
-			var dst *net.IPNet
-
-			if routeIsV4 {
-				_, dst, _ = net.ParseCIDR("0.0.0.0/0")
-			} else {
-				_, dst, _ = net.ParseCIDR("::/0")
-			}
-
-			net.ParseCIDR("0.0.0.0/0")
-
-			ngw := netipx.PrefixIPNet(gw)
-
-			route := netlink.Route{
-				Dst:       dst,
-				LinkIndex: link.Attrs().Index,
-				Gw:        ngw.IP,
-			}
-
-			if err = netlink.RouteAddEcmp(&route); err != nil {
-				return fmt.Errorf("failed to add route '%v via %v dev %v': %v", dst, gw, ifName, err)
-			}
-		}
-	*/
-
 	return nil
 }
 
@@ -360,11 +333,7 @@ func enableForwarding(br netlink.Link) error {
 	return nil
 }
 
-const MetadataIP = "169.254.168.1"
-
 func ConfigureGW(br netlink.Link, ec *EndpointConfig) error {
-	var natIP string
-
 	for _, ac := range ec.Bridge.Addresses {
 		gwIP := netipx.PrefixIPNet(ac)
 
@@ -372,7 +341,6 @@ func ConfigureGW(br netlink.Link, ec *EndpointConfig) error {
 
 		if gwIP.IP.To4() != nil {
 			family = netlink.FAMILY_V4
-			natIP = gwIP.IP.String()
 		} else {
 			family = netlink.FAMILY_V6
 		}
@@ -392,20 +360,7 @@ func ConfigureGW(br netlink.Link, ec *EndpointConfig) error {
 		}
 	}
 
-	ipt, err := iptables.NewWithProtocol(iptables.ProtocolIPv4)
-	if err != nil {
-		return err
-	}
-
-	if natIP == "" {
-		return nil
-	}
-
-	return ipt.AppendUnique(
-		"nat", "PREROUTING",
-		"-d", MetadataIP, "-j", "DNAT",
-		"--to-destination", natIP,
-	)
+	return nil
 }
 
 func formatChain(id string) string {

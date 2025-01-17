@@ -1,6 +1,7 @@
 package network
 
 import (
+	"fmt"
 	"net/netip"
 
 	"miren.dev/runtime/pkg/netdb"
@@ -80,6 +81,10 @@ type BridgeConfig struct {
 }
 
 func AllocateOnBridge(name string, subnet *netdb.Subnet) (*EndpointConfig, error) {
+	if name == "" {
+		return nil, fmt.Errorf("bridge name must be provided")
+	}
+
 	bridge := subnet.Router()
 
 	ep, err := subnet.Reserve()
