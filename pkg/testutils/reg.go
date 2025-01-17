@@ -49,6 +49,8 @@ func Registry(extra ...func(*asm.Registry)) (*asm.Registry, func()) {
 
 	r.Register("subnet", subnet)
 
+	var cancels []func()
+
 	r.ProvideName("bridge-iface", func() (string, error) {
 		_, err = network.SetupBridge(&network.BridgeConfig{
 			Name:      iface,
@@ -57,6 +59,9 @@ func Registry(extra ...func(*asm.Registry)) (*asm.Registry, func()) {
 		if err != nil {
 			return "", err
 		}
+		cancels = append(cancels, func() {
+			network.TeardownBridge(iface)
+		})
 		return iface, nil
 	})
 
@@ -152,6 +157,10 @@ func Registry(extra ...func(*asm.Registry)) (*asm.Registry, func()) {
 	cleanup := func() {
 		if usedClient != nil {
 			NukeNamespace(usedClient, namespace)
+		}
+
+		for _, cancel := range cancels {
+			cancel()
 		}
 
 		ndb.ReleaseInterface(iface)

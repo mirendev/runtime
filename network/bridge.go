@@ -142,15 +142,6 @@ func SetupVeth(netns ns.NetNS, br *netlink.Bridge, ifName string, mtu int, hairp
 	return hostIface, contIface, nil
 }
 
-type NetworkConfig struct {
-	Addresses []net.IPNet
-	Gateways  []netip.Prefix
-}
-
-type IPAM interface {
-	IPForMac(string) ([]NetworkConfig, error)
-}
-
 func SetupBridge(n *BridgeConfig) (*netlink.Bridge, error) {
 	vlanFiltering := n.Vlan != 0
 
@@ -172,6 +163,20 @@ const (
 	// Note: use slash as separator so we can have dots in interface name (VLANs)
 	DisableIPv6SysctlTemplate = "net/ipv6/conf/%s/disable_ipv6"
 )
+
+func TeardownBridge(name string) error {
+	br, err := BridgeByName(name)
+	if err != nil {
+		return fmt.Errorf("failed to lookup bridge %q: %v", name, err)
+	}
+
+	// Delete the bridge
+	if err = netlink.LinkDel(br); err != nil {
+		return fmt.Errorf("failed to delete bridge %q: %v", name, err)
+	}
+
+	return nil
+}
 
 func enableIPv6(ifName string) error {
 	// Enabled IPv6 for loopback "lo" and the interface
