@@ -34,9 +34,9 @@ func TestLaunch(t *testing.T) {
 
 		defer cleanup()
 
-		var lbk *launch.LaunchBuildkit
+		var lbk launch.LaunchBuildkit
 
-		err := reg.Init(&lbk)
+		err := reg.Populate(&lbk)
 		r.NoError(err)
 
 		rbk, err := lbk.Launch(ctx)

@@ -150,7 +150,7 @@ func TestLeaseContainer(t *testing.T) {
 		r.NotNil(lc)
 		r.True(lc.StartedWindow)
 
-		app := lc.App
+		pool := lc.Pool
 
 		ctx = namespaces.WithNamespace(ctx, on.CD.Namespace)
 
@@ -189,8 +189,8 @@ func TestLeaseContainer(t *testing.T) {
 
 			r.NotZero(li.Usage)
 
-			r.False(lc.App.idle.Empty(), "container should be idle")
-			r.True(lc.App.windows.Empty(), "window should be removed")
+			r.False(lc.Pool.idle.Empty(), "container should be idle")
+			r.True(lc.Pool.windows.Empty(), "window should be removed")
 		})
 
 		t.Run("lease operations manage the rif latency", func(t *testing.T) {
@@ -218,7 +218,7 @@ func TestLeaseContainer(t *testing.T) {
 			)
 
 			err := on.DB.QueryRow(
-				"SELECT usage, leases FROM container_usage WHERE app = $1", app.name,
+				"SELECT usage, leases FROM container_usage WHERE app = $1", pool.app.name,
 			).Scan(&usage, &leases)
 
 			r.NoError(err)
@@ -255,7 +255,7 @@ func TestLeaseContainer(t *testing.T) {
 
 			r.Equal(1, cnt)
 
-			r.True(app.idle.Empty(), "container was not destroyed")
+			r.True(pool.idle.Empty(), "container was not destroyed")
 
 			_, err = on.CR.CC.LoadContainer(ctx, lc.Container())
 			r.Error(err)

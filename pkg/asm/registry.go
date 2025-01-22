@@ -316,6 +316,10 @@ fields:
 			continue
 		}
 
+		if !field.IsZero() {
+			continue
+		}
+
 		tag, ok := fieldType.Tag.Lookup("asm")
 		if !ok {
 			// If the field is a struct, we can try to populate it type. We error
@@ -323,7 +327,7 @@ fields:
 			// with a random builder value is nonsense.
 
 			if fieldType.Type.Kind() == reflect.Struct ||
-				fieldType.Type.Kind() == reflect.Ptr && fieldType.Type.Elem().Kind() == reflect.Struct ||
+				(fieldType.Type.Kind() == reflect.Ptr && fieldType.Type.Elem().Kind() == reflect.Struct) ||
 				fieldType.Type.Kind() == reflect.Interface {
 				// ok
 			} else {
@@ -349,19 +353,6 @@ fields:
 
 		component, ok := r.components[tag]
 		if !ok {
-			// If the field is a struct, we can try to populate it type. We error
-			// on all other types because the idea of populating, say, a string
-			// with a random builder value is nonsense.
-
-			if optional || (fieldType.Type.Kind() == reflect.Struct ||
-				fieldType.Type.Kind() == reflect.Ptr && fieldType.Type.Elem().Kind() == reflect.Struct) {
-				// ok
-			} else {
-				return fmt.Errorf("when considering %s/%s.%s, unable to find component of type %s (name %s) available",
-					rv.Type().PkgPath(), rv.Type().Name(), fieldType.Name,
-					field.Type(), tag)
-			}
-
 			ok, err := r.populateByType(field, tag)
 			if err != nil {
 				return err
