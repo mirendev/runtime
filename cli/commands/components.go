@@ -69,6 +69,7 @@ func (c *Context) setupServerComponents(ctx context.Context, reg *asm.Registry) 
 
 	reg.Register("clickhouse-address", "clickhouse:9000")
 	reg.Register("postgres-address", "postgres:5432")
+	reg.Register("clickhouse-debug", false)
 
 	reg.Register("container_idle_timeout", time.Minute)
 
@@ -76,7 +77,9 @@ func (c *Context) setupServerComponents(ctx context.Context, reg *asm.Registry) 
 	reg.Register("lookup_timeout", time.Second*5)
 
 	reg.ProvideName("clickhouse", func(opts struct {
+		Log     *slog.Logger
 		Address string `asm:"clickhouse-address"`
+		Debug   bool   `asm:"clickhouse-debug"`
 	}) *sql.DB {
 		return clickhouse.OpenDB(&clickhouse.Options{
 			Addr: []string{opts.Address},
@@ -89,7 +92,10 @@ func (c *Context) setupServerComponents(ctx context.Context, reg *asm.Registry) 
 			Compression: &clickhouse.Compression{
 				Method: clickhouse.CompressionLZ4,
 			},
-			Debug: true,
+			Debug: opts.Debug,
+			Debugf: func(format string, v ...interface{}) {
+				opts.Log.Debug(fmt.Sprintf(format, v...))
+			},
 		})
 	})
 

@@ -4,10 +4,14 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"net"
 	"os"
+	"path/filepath"
 	"reflect"
+	"strings"
 
 	"github.com/jessevdk/go-flags"
+	toml "github.com/pelletier/go-toml/v2"
 )
 
 type Cmd struct {
@@ -73,6 +77,101 @@ func Infer(name, syn string, f interface{}) *Cmd {
 	}
 }
 
+func (w *Cmd) ReadConfig(path string) error {
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+
+	defer f.Close()
+
+	vals := make(map[string]any)
+
+	dec := toml.NewDecoder(f)
+	err = dec.Decode(&vals)
+	if err != nil {
+		return err
+	}
+
+	err = w.consumeValues(w.opts.Elem(), vals)
+	if err != nil {
+		return err
+	}
+
+	err = w.consumeValues(reflect.ValueOf(w.global).Elem(), vals)
+	if err != nil {
+		return err
+	}
+
+	return err
+}
+
+func (w *Cmd) consumeValues(rv reflect.Value, vals map[string]any) error {
+	for i := 0; i < rv.NumField(); i++ {
+		field := rv.Field(i)
+
+		ft := rv.Type().Field(i)
+		name := ft.Tag.Get("long")
+
+		if val, ok := vals[name]; ok {
+			vv := reflect.ValueOf(val)
+			if vv.Kind() == field.Kind() {
+				field.Set(vv.Convert(ft.Type))
+			}
+		}
+	}
+
+	return nil
+}
+
+func (w *Cmd) show(rv reflect.Value) {
+	vals := make(map[string]any)
+
+	for i := 0; i < rv.NumField(); i++ {
+		field := rv.Field(i)
+		name := rv.Type().Field(i).Tag.Get("long")
+		if name == "" {
+			name = rv.Type().Field(i).Tag.Get("short")
+		}
+		vals[name] = field.Interface()
+	}
+
+	data, err := toml.Marshal(vals)
+	if err != nil {
+		fmt.Println(err)
+	} else {
+		fmt.Print(string(data))
+	}
+}
+
+func (w *Cmd) clean(rv reflect.Value) error {
+	for i := 0; i < rv.NumField(); i++ {
+		field := rv.Field(i)
+		typ := rv.Type().Field(i).Tag.Get("type")
+		if typ == "" {
+			continue
+		}
+
+		name := rv.Type().Field(i).Tag.Get("long")
+		if name == "" {
+			name = rv.Type().Field(i).Tag.Get("short")
+		}
+
+		switch typ {
+		case "path":
+			field.SetString(ExpandPath(field.String()))
+		case "address":
+			val := field.String()
+			_, _, err := net.SplitHostPort(val)
+			if err != nil {
+				return fmt.Errorf("error validating %s as address: %s", name, err)
+			}
+		}
+	}
+
+	return nil
+}
+
 func (w *Cmd) Help() string {
 	var buf bytes.Buffer
 	w.parser.WriteHelp(&buf)
@@ -83,7 +182,29 @@ func (w *Cmd) Synopsis() string {
 	return w.syn
 }
 
+func (w *Cmd) loadConfig(args []string) error {
+	for i, arg := range args {
+		switch {
+		case arg == "--config":
+			if i+1 < len(args) {
+				return w.ReadConfig(args[i+1])
+			} else {
+				return fmt.Errorf("missing argument for --config")
+			}
+		case strings.HasPrefix(arg, "--config="):
+			return w.ReadConfig(arg[9:])
+		}
+	}
+
+	return nil
+}
+
 func (w *Cmd) Run(args []string) int {
+	if err := w.loadConfig(args); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+
 	_, err := w.parser.ParseArgs(args)
 	if err != nil {
 		flagsErr, ok := err.(*flags.Error)
@@ -95,6 +216,24 @@ func (w *Cmd) Run(args []string) int {
 		}
 
 		return 1
+	}
+
+	err = w.clean(reflect.ValueOf(w.global).Elem())
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+
+	err = w.clean(w.opts.Elem())
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+
+	if os.Getenv("DEBUG_CONFIG") != "" {
+		fmt.Println("# Configuration")
+		w.show(reflect.ValueOf(w.global).Elem())
+		w.show(w.opts.Elem())
 	}
 
 	ctx := setup(context.Background(), w.global, w.opts.Interface())
@@ -143,4 +282,22 @@ func RunCommand(f any, args ...string) (*CommandOutput, error) {
 	}
 
 	return &out, nil
+}
+
+func ExpandPath(path string) string {
+	if path == "" {
+		return ""
+	}
+
+	if strings.HasPrefix(path, "~/") {
+		return os.ExpandEnv("$HOME" + path[1:])
+	}
+
+	dir, err := filepath.Abs(path)
+	if err != nil {
+		// only happens if getwd fails, which means everything is broken.
+		panic(err)
+	}
+
+	return dir
 }
