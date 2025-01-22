@@ -26,7 +26,6 @@ import (
 	"net"
 	"os"
 	"sync"
-	"time"
 
 	"golang.org/x/sys/unix"
 	"google.golang.org/protobuf/proto"
@@ -81,8 +80,6 @@ type CommonServer struct {
 	mu   sync.Mutex
 	cond *sync.Cond
 
-	ts time.Time
-
 	// +checklocks:cond.L
 	clients []client
 }
@@ -98,10 +95,6 @@ func (s *CommonServer) Init(log *slog.Logger, path string, handler ClientHandler
 
 // Start creates the socket file and listens for new connections.
 func (s *CommonServer) Start() error {
-	if s.Endpoint == "/run/runsc-mon.sock" {
-		panic("gtfo")
-	}
-
 	li, err := net.Listen("unixpacket", s.Endpoint)
 	if err != nil {
 		return err
@@ -109,9 +102,7 @@ func (s *CommonServer) Start() error {
 
 	s.listener = li
 
-	s.ts = time.Now()
-
-	s.Log.Warn("starting runsc monitor", "token", s.ts.UnixMicro(), "endpoint", s.Endpoint)
+	s.Log.Debug("starting runsc monitor", "endpoint", s.Endpoint)
 	go s.run()
 	return nil
 }
@@ -236,6 +227,10 @@ func (s *CommonServer) Close() {
 	}
 
 	err := os.Remove(s.Endpoint)
+	if err != nil && os.IsNotExist(err) {
+		err = nil
+	}
+
 	s.Log.Debug("removed runsc monitor endpoint", "endpoint", s.Endpoint, "error", err)
 
 	s.mu.Lock()

@@ -22,6 +22,9 @@ func (v *SendStreamSendArgs[T]) HasValue() bool {
 }
 
 func (v *SendStreamSendArgs[T]) Value() T {
+	if v.data.Value == nil {
+		return rpc.Zero[T]()
+	}
 	return *v.data.Value
 }
 
@@ -41,11 +44,17 @@ func (v *SendStreamSendArgs[T]) UnmarshalJSON(data []byte) error {
 	return json.Unmarshal(data, &v.data)
 }
 
-type sendStreamSendResultsData[T any] struct{}
+type sendStreamSendResultsData[T any] struct {
+	Count *int32 `cbor:"0,keyasint,omitempty" json:"count,omitempty"`
+}
 
 type SendStreamSendResults[T any] struct {
 	call *rpc.Call
 	data sendStreamSendResultsData[T]
+}
+
+func (v *SendStreamSendResults[T]) SetCount(count int32) {
+	v.data.Count = &count
 }
 
 func (v *SendStreamSendResults[T]) MarshalCBOR() ([]byte, error) {
@@ -132,6 +141,17 @@ func (c SendStreamClient[T]) Export() SendStream[T] {
 type SendStreamClientSendResults[T any] struct {
 	client *rpc.Client
 	data   sendStreamSendResultsData[T]
+}
+
+func (v *SendStreamClientSendResults[T]) HasCount() bool {
+	return v.data.Count != nil
+}
+
+func (v *SendStreamClientSendResults[T]) Count() int32 {
+	if v.data.Count == nil {
+		return 0
+	}
+	return *v.data.Count
 }
 
 func (v SendStreamClient[T]) Send(ctx context.Context, value T) (*SendStreamClientSendResults[T], error) {
@@ -288,6 +308,9 @@ func (v *RecvStreamClientRecvResults[T]) HasValue() bool {
 }
 
 func (v *RecvStreamClientRecvResults[T]) Value() T {
+	if v.data.Value == nil {
+		return rpc.Zero[T]()
+	}
 	return *v.data.Value
 }
 

@@ -10,16 +10,17 @@ import (
 
 	"golang.org/x/sys/unix"
 	"miren.dev/runtime/pkg/asm"
+	"miren.dev/runtime/pkg/rpc"
 	"miren.dev/runtime/pkg/slogfmt"
 )
 
 type GlobalFlags struct {
-	Verbose []bool `short:"v" long:"verbose" description:"Enable verbose output"`
+	Verbose       []bool `short:"v" long:"verbose" description:"Enable verbose output"`
+	ServerAddress string `short:"a" long:"server-address" description:"Server address to connect to" default:"127.0.0.1:8443" asm:"server-addr"`
 }
 
 type Context struct {
 	context.Context
-	*asm.Registry
 
 	verbose int
 	Log     *slog.Logger
@@ -31,6 +32,12 @@ type Context struct {
 	Server *asm.Registry
 
 	cancels []func()
+
+	Config struct {
+		ServerAddress string `asm:"server-addr"`
+	}
+
+	exitCode int
 }
 
 func setup(ctx context.Context, flags *GlobalFlags, opts any) *Context {
@@ -69,6 +76,9 @@ func setup(ctx context.Context, flags *GlobalFlags, opts any) *Context {
 	s.setupServerComponents(ctx, s.Server)
 
 	s.Server.InferFrom(opts)
+	s.Client.InferFrom(flags)
+
+	s.Client.Populate(&s.Config)
 
 	sigCh := make(chan os.Signal, 1)
 
@@ -151,6 +161,24 @@ func (c *Context) Close() error {
 	return nil
 }
 
+func (c *Context) SetExitCode(code int) {
+	c.exitCode = code
+}
+
 func (c *Context) Printf(format string, args ...interface{}) {
 	fmt.Fprintf(c.Stdout, format, args...)
+}
+
+func (c *Context) RPCClient(name string) (*rpc.Client, error) {
+	cs, err := rpc.NewState(c, rpc.WithSkipVerify, rpc.WithLogger(c.Log))
+	if err != nil {
+		return nil, err
+	}
+
+	client, err := cs.Connect(c.Config.ServerAddress, name)
+	if err != nil {
+		return nil, err
+	}
+
+	return client, nil
 }

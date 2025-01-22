@@ -31,6 +31,9 @@ func NukeNamespace(cl *containerd.Client, ns string) {
 	for i := 0; i < 10; i++ {
 		err = cl.NamespaceService().Delete(context.TODO(), ns)
 		if err != nil {
+			if strings.Contains(err.Error(), "not found") {
+				break
+			}
 			fmt.Printf("error clearing namespace: %s\n", err)
 		} else {
 			break

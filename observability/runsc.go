@@ -154,7 +154,8 @@ func (c *clientHandler) Message(raw []byte, hdr monitor.Header, payload []byte) 
 			ip = &addr
 		}
 
-		if ip != nil {
+		// For some reason, we see 0 ports sometimes?
+		if ip != nil && ip.Port() != 0 {
 			bp := BoundPort{
 				Addr: ip.Address(),
 				Port: ip.Port(),

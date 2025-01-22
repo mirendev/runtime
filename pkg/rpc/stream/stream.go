@@ -2,6 +2,7 @@ package stream
 
 import (
 	"context"
+	"errors"
 	"io"
 
 	rpc "miren.dev/runtime/pkg/rpc"
@@ -57,6 +58,10 @@ func (r *rscReader) Read(p []byte) (n int, err error) {
 
 	data := ret.Value()
 
+	if len(data) == 0 {
+		return 0, io.EOF
+	}
+
 	return copy(p, data), nil
 }
 
@@ -75,6 +80,10 @@ func (s *serveReader) Recv(ctx context.Context, state *RecvStreamRecv[[]byte]) e
 
 	n, err := s.r.Read(buf)
 	if err != nil {
+		if errors.Is(err, io.EOF) {
+			state.Results().SetValue(nil)
+			return nil
+		}
 		return err
 	}
 
@@ -87,4 +96,65 @@ func (s *serveReader) Recv(ctx context.Context, state *RecvStreamRecv[[]byte]) e
 
 func ServeReader(ctx context.Context, r io.Reader) RecvStream[[]byte] {
 	return &serveReader{r: r}
+}
+
+type serveWriter struct {
+	w io.Writer
+}
+
+func (s *serveWriter) Send(ctx context.Context, state *SendStreamSend[[]byte]) error {
+	args := state.Args()
+
+	n, err := s.w.Write(args.Value())
+	if err != nil {
+		return err
+	}
+
+	state.Results().SetCount(int32(n))
+
+	return nil
+}
+
+func ServeWriter(ctx context.Context, w io.Writer) SendStream[[]byte] {
+	return &serveWriter{w: w}
+}
+
+type wscWriter struct {
+	ctx context.Context
+	wsc *SendStreamClient[[]byte]
+}
+
+func (w *wscWriter) Write(p []byte) (n int, err error) {
+	result, err := w.wsc.Send(w.ctx, p)
+	if err != nil {
+		return 0, err
+	}
+
+	return int(result.Count()), nil
+}
+
+func ToWriter(ctx context.Context, x *SendStreamClient[[]byte]) io.Writer {
+	return &wscWriter{ctx: ctx, wsc: x}
+}
+
+type chanReader[T any] struct {
+	ch <-chan T
+}
+
+func (c *chanReader[T]) Recv(ctx context.Context, state *RecvStreamRecv[T]) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case v, ok := <-c.ch:
+		if !ok {
+			return io.EOF
+		}
+
+		state.Results().SetValue(v)
+		return nil
+	}
+}
+
+func ChanReader[T any](ch <-chan T) RecvStream[T] {
+	return &chanReader[T]{ch: ch}
 }

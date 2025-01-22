@@ -69,25 +69,30 @@ func (r *Registry) buildByType(field reflect.Value, tag string) (reflect.Value, 
 		// that creates an empty struct BUT ONLY if the struct comes from
 		// within the runtime package. This prevents us from making random
 		// structs in other packages that hold a lot of private state.
-		ft := field.Type()
+		/*
+			ft := field.Type()
 
-		if ft.Kind() == reflect.Pointer && ft.Elem().Kind() == reflect.Struct &&
-			isExported(ft.Elem().Name()) &&
-			strings.HasPrefix(ft.Elem().PkgPath(), "miren.dev/runtime") {
-			if r.Log != nil {
-				r.Log.Debug("implicit builder for pointer to struct", "type", ft)
-			}
-			ret := reflect.New(ft.Elem())
-			err := r.Populate(ret.Interface())
-			if err != nil {
+			if ft.Kind() == reflect.Pointer && ft.Elem().Kind() == reflect.Struct &&
+				isExported(ft.Elem().Name()) &&
+				strings.HasPrefix(ft.Elem().PkgPath(), "miren.dev/runtime") &&
+
+				// Everything in pkg/ is standalone and shouldn't be auto-created.
+				!strings.HasPrefix(ft.Elem().PkgPath(), "miren.dev/runtime/pkg") {
 				if r.Log != nil {
-					r.Log.Error("error populating implicit builder", "type", ft, "error", err)
+					r.Log.Debug("implicit builder for pointer to struct", "type", ft)
 				}
-				return reflect.Value{}, err
-			}
+				ret := reflect.New(ft.Elem())
+				err := r.Populate(ret.Interface())
+				if err != nil {
+					if r.Log != nil {
+						r.Log.Error("error populating implicit builder", "type", ft, "error", err)
+					}
+					return reflect.Value{}, err
+				}
 
-			return ret, nil
-		}
+				return ret, nil
+			}
+		*/
 
 		if tag == "" {
 			return reflect.Value{}, errNoBuilder
@@ -313,6 +318,20 @@ fields:
 
 		tag, ok := fieldType.Tag.Lookup("asm")
 		if !ok {
+			// If the field is a struct, we can try to populate it type. We error
+			// on all other types because the idea of populating, say, a string
+			// with a random builder value is nonsense.
+
+			if fieldType.Type.Kind() == reflect.Struct ||
+				fieldType.Type.Kind() == reflect.Ptr && fieldType.Type.Elem().Kind() == reflect.Struct ||
+				fieldType.Type.Kind() == reflect.Interface {
+				// ok
+			} else {
+				return fmt.Errorf("when considering %s/%s.%s, unable to handle unnamed non-(struct || interface) value (type: %s)",
+					rv.Type().PkgPath(), rv.Type().Name(), fieldType.Name,
+					field.Type())
+			}
+
 			ok, err := r.populateByType(field, "")
 			if err != nil {
 				return err
@@ -330,6 +349,19 @@ fields:
 
 		component, ok := r.components[tag]
 		if !ok {
+			// If the field is a struct, we can try to populate it type. We error
+			// on all other types because the idea of populating, say, a string
+			// with a random builder value is nonsense.
+
+			if optional || (fieldType.Type.Kind() == reflect.Struct ||
+				fieldType.Type.Kind() == reflect.Ptr && fieldType.Type.Elem().Kind() == reflect.Struct) {
+				// ok
+			} else {
+				return fmt.Errorf("when considering %s/%s.%s, unable to find component of type %s (name %s) available",
+					rv.Type().PkgPath(), rv.Type().Name(), fieldType.Name,
+					field.Type(), tag)
+			}
+
 			ok, err := r.populateByType(field, tag)
 			if err != nil {
 				return err

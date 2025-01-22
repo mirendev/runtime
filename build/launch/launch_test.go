@@ -1,4 +1,4 @@
-package launch
+package launch_test
 
 import (
 	"context"
@@ -7,6 +7,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"miren.dev/runtime/build"
+	"miren.dev/runtime/build/launch"
 	"miren.dev/runtime/discovery"
 	"miren.dev/runtime/ingress"
 	"miren.dev/runtime/network"
@@ -33,7 +34,7 @@ func TestLaunch(t *testing.T) {
 
 		defer cleanup()
 
-		var lbk *LaunchBuildkit
+		var lbk *launch.LaunchBuildkit
 
 		err := reg.Init(&lbk)
 		r.NoError(err)

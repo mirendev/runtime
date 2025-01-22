@@ -2,5 +2,14 @@
   "name": "runtime",
   "engineVersion": "v0.14.0",
   "sdk": "go",
-  "source": "dagger"
+  "source": "dagger",
+  "views": [
+    {
+      "name": "default",
+      "patterns": [
+        "**",
+        "!tmp/"
+      ]
+    }
+  ]
 }

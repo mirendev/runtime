@@ -16,7 +16,6 @@ import (
 	"miren.dev/runtime/discovery"
 	"miren.dev/runtime/health"
 	"miren.dev/runtime/image"
-	"miren.dev/runtime/ingress"
 	"miren.dev/runtime/network"
 	"miren.dev/runtime/observability"
 	"miren.dev/runtime/pkg/testutils"
@@ -33,7 +32,6 @@ func TestLeaseContainer(t *testing.T) {
 		reg, cleanup := testutils.Registry(
 			observability.TestInject,
 			build.TestInject,
-			ingress.TestInject,
 			discovery.TestInject,
 			run.TestInject,
 			network.TestInject,
@@ -273,7 +271,6 @@ func TestLeaseContainer(t *testing.T) {
 		reg, cleanup := testutils.Registry(
 			observability.TestInject,
 			build.TestInject,
-			ingress.TestInject,
 			discovery.TestInject,
 			run.TestInject,
 			network.TestInject,
@@ -427,7 +424,6 @@ func TestLeaseContainer(t *testing.T) {
 		reg, cleanup := testutils.Registry(
 			observability.TestInject,
 			build.TestInject,
-			ingress.TestInject,
 			discovery.TestInject,
 			run.TestInject,
 			network.TestInject,

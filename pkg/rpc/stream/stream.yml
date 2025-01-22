@@ -7,6 +7,9 @@ interfaces:
         parameters:
           - name: value
             type: T
+        results:
+          - name: count
+            type: int32
 
   - name: RecvStream
     generic:

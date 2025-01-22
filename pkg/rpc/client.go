@@ -131,10 +131,13 @@ func (c *Client) sendIdentity(ctx context.Context) error {
 func (c *Client) resolveCapability(name string) error {
 	c.log.Info("rpc.resolve", "name", name)
 	url := "https://" + c.remote + "/_rpc/lookup/" + name
+	c.log.Info("rpc.resolve", "url", url)
 	req, err := http.NewRequest(http.MethodPost, url, nil)
 	if err != nil {
-		return err
+		return fmt.Errorf("error creating new http request: %w", err)
 	}
+
+	c.log.Debug("rpc.resolve", "url", url)
 
 	req.Header.Set("rpc-public-key", base58.Encode(c.pubkey))
 	req.Header.Set("rpc-contact-addr", c.remote)
@@ -154,7 +157,7 @@ func (c *Client) resolveCapability(name string) error {
 
 	err = cbor.NewDecoder(resp.Body).Decode(&lr)
 	if err != nil {
-		return err
+		return fmt.Errorf("unable to decode response body: %w", err)
 	}
 
 	if lr.Error != "" {
@@ -328,7 +331,7 @@ func (c *Client) prepareRequest(ctx context.Context, req *http.Request) error {
 }
 
 func (c *Client) Call(ctx context.Context, method string, args, result any) error {
-	c.log.InfoContext(ctx, "rpc.call", "method", method, "oid", string(c.oid))
+	//c.log.InfoContext(ctx, "rpc.call", "method", method, "oid", string(c.oid))
 
 	ctx, span := Tracer().Start(ctx, "rpc.call."+method)
 	defer span.End()

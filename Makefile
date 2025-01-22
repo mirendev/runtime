@@ -19,3 +19,8 @@ bin/miren:
 	@bash ./hack/build.sh
 
 .PHONY: bin/miren
+
+bin/miren-debug:
+	go build -gcflags="all=-N -l" -o bin/miren-debug ./cmd/miren
+
+.PHONY: bin/miren-debug

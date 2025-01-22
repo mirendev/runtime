@@ -487,6 +487,8 @@ func (g *Generator) readForField(f *j.File, t *DescType, field *DescField) {
 			f.Func().Params(
 				j.Id("v").Op("*").Add(recv),
 			).Id(name).Params().Id(field.Type).Block(
+				j.If(j.Id("v").Dot("data").Dot(name).Op("==").Nil()).Block(
+					j.Return(j.Qual("miren.dev/runtime/pkg/rpc", "Zero").Index(j.Id(field.Type)).Call())),
 				j.Return(j.Op("*").Id("v").Dot("data").Dot(name)),
 			)
 

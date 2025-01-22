@@ -109,7 +109,7 @@ func (w *Cmd) Run(args []string) int {
 		}
 	}
 
-	return 0
+	return ctx.exitCode
 }
 
 type CommandOutput struct {

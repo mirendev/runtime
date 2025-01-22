@@ -34,9 +34,9 @@ type RunningBuildkit struct {
 func (l *LaunchBuildkit) Launch(ctx context.Context) (*RunningBuildkit, error) {
 	ctx = namespaces.WithNamespace(ctx, l.Namespace)
 
-	img, err := l.CR.CC.GetImage(ctx, "docker.io/moby/buildkit:latest")
+	img, err := l.CR.CC.GetImage(ctx, "ghcr.io/mirendev/buildkit:latest")
 	if img == nil || err != nil {
-		_, err := l.CR.CC.Pull(ctx, "docker.io/moby/buildkit:latest", client.WithPullUnpack)
+		_, err := l.CR.CC.Pull(ctx, "ghcr.io/mirendev/buildkit:latest", client.WithPullUnpack)
 		if err != nil {
 			return nil, err
 		}
@@ -48,9 +48,10 @@ func (l *LaunchBuildkit) Launch(ctx context.Context) (*RunningBuildkit, error) {
 	}
 
 	id, err := l.CR.RunContainer(ctx, &run.ContainerConfig{
-		App:      "internal",
-		Image:    "docker.io/moby/buildkit:latest",
-		Endpoint: ec,
+		App:        "internal",
+		Image:      "ghcr.io/mirendev/buildkit:latest",
+		Endpoint:   ec,
+		Privileged: true,
 	})
 	if err != nil {
 		return nil, err

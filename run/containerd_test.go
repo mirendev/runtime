@@ -1,4 +1,4 @@
-package run
+package run_test
 
 import (
 	"context"
@@ -22,6 +22,7 @@ import (
 	"miren.dev/runtime/network"
 	"miren.dev/runtime/observability"
 	"miren.dev/runtime/pkg/testutils"
+	"miren.dev/runtime/run"
 )
 
 func TestContainerd(t *testing.T) {
@@ -128,7 +129,7 @@ func TestContainerd(t *testing.T) {
 		r.NoError(err)
 
 		var (
-			cr  ContainerRunner
+			cr  run.ContainerRunner
 			mon observability.RunSCMonitor
 		)
 
@@ -169,7 +170,7 @@ func TestContainerd(t *testing.T) {
 		err = ec.DeriveDefaultGateway()
 		r.NoError(err)
 
-		config := &ContainerConfig{
+		config := &run.ContainerConfig{
 			App:      "mn-nginx",
 			Image:    "mn-nginx:latest",
 			Endpoint: ec,
@@ -337,7 +338,7 @@ func TestContainerd(t *testing.T) {
 		r.NoError(err)
 
 		var (
-			cr  ContainerRunner
+			cr  run.ContainerRunner
 			mon observability.RunSCMonitor
 		)
 
@@ -378,7 +379,7 @@ func TestContainerd(t *testing.T) {
 		err = ec.DeriveDefaultGateway()
 		r.NoError(err)
 
-		config := &ContainerConfig{
+		config := &run.ContainerConfig{
 			App:      "mn-sort",
 			Image:    "mn-sort:latest",
 			Endpoint: ec,

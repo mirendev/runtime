@@ -3,21 +3,29 @@ package build
 import (
 	"context"
 	"crypto/rand"
+	"fmt"
+	"log/slog"
+	"os"
 
+	"github.com/davecgh/go-spew/spew"
 	"github.com/mr-tron/base58"
 	"miren.dev/runtime/app"
+	"miren.dev/runtime/build/launch"
 	"miren.dev/runtime/image"
+	"miren.dev/runtime/observability"
 	"miren.dev/runtime/pkg/rpc/stream"
 )
 
 //go:generate go run ../pkg/rpc/cmd/rpcgen -pkg build -input build.yml -output rpc.gen.go
 
 type RPCBuilder struct {
-	BuildKit *Buildkit
-	TempDir  string `name:"tempdir"`
+	Log     *slog.Logger
+	LBK     *launch.LaunchBuildkit
+	TempDir string `asm:"tempdir"`
 
 	AppAccess      *app.AppAccess
 	ImportImporter *image.ImageImporter
+	LogWriter      observability.LogWriter
 }
 
 func (b *RPCBuilder) nextVersion(ctx context.Context, name string) (string, error) {
@@ -51,14 +59,47 @@ func (b *RPCBuilder) BuildFromTar(ctx context.Context, state *BuilderBuildFromTa
 	name := args.Application()
 	td := args.Tardata()
 
-	r := stream.ToReader(ctx, td)
-
-	tr, err := TarFS(r, b.TempDir)
+	path, err := os.MkdirTemp(b.TempDir, "buildkit-")
 	if err != nil {
 		return err
 	}
 
-	o, err := b.BuildKit.Transform(ctx, tr)
+	b.Log.Debug("receiving tar data", "app", name, "tempdir", path)
+
+	r := stream.ToReader(ctx, td)
+
+	tr, err := TarFS(r, path)
+	if err != nil {
+		return fmt.Errorf("error untaring data: %w", err)
+	}
+
+	b.Log.Debug("launching buildkitd")
+	rbk, err := b.LBK.Launch(ctx)
+	if err != nil {
+		return err
+	}
+
+	defer rbk.Close(context.Background())
+
+	bkc, err := rbk.Client(ctx)
+	if err != nil {
+		return err
+	}
+
+	defer bkc.Close()
+
+	ci, err := bkc.Info(ctx)
+	if err != nil {
+		b.Log.Error("error getting buildkid info", "error", err)
+	} else {
+		spew.Dump(ci.BuildkitVersion)
+	}
+
+	bk := &Buildkit{
+		Client:    bkc,
+		Log:       b.Log,
+		LogWriter: b.LogWriter,
+	}
 	if err != nil {
 		return err
 	}
@@ -68,7 +109,14 @@ func (b *RPCBuilder) BuildFromTar(ctx context.Context, state *BuilderBuildFromTa
 		return err
 	}
 
-	err = b.ImportImporter.ImportImage(ctx, o, mrv)
+	o, err := bk.Transform(ctx, tr)
+	if err != nil {
+		return err
+	}
+
+	b.Log.Debug("importing tar into image", "app", name, "version", mrv)
+
+	err = b.ImportImporter.ImportImage(ctx, o, name+":"+mrv)
 	if err != nil {
 		return err
 	}
