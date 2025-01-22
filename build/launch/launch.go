@@ -1,6 +1,7 @@
 package launch
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"net"
@@ -11,6 +12,7 @@ import (
 	"github.com/containerd/containerd/v2/pkg/cio"
 	"github.com/containerd/containerd/v2/pkg/namespaces"
 	buildkit "github.com/moby/buildkit/client"
+	"github.com/moby/buildkit/identity"
 	"github.com/opencontainers/runtime-spec/specs-go"
 	"miren.dev/runtime/network"
 	"miren.dev/runtime/pkg/netdb"
@@ -112,12 +114,67 @@ func (p *pipeNetConn) SetWriteDeadline(t time.Time) error {
 	return nil
 }
 
+func (l *RunningBuildkit) checkReady(ctx context.Context, cont client.Container) error {
+	task, err := cont.Task(ctx, nil)
+	if err != nil {
+		return err
+	}
+
+	var out bytes.Buffer
+
+	proc, err := task.Exec(ctx,
+		identity.NewID(),
+		&specs.Process{
+			Args: []string{"buildctl", "debug", "info"},
+			Env:  []string{"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"},
+			Cwd:  "/",
+		},
+		cio.NewCreator(cio.WithStreams(nil, &out, &out)),
+	)
+
+	err = proc.Start(ctx)
+	if err != nil {
+		return err
+	}
+
+	es, err := proc.Wait(ctx)
+	if err != nil {
+		return err
+	}
+
+	select {
+	case <-ctx.Done():
+		proc.Kill(context.Background(), 9)
+		return ctx.Err()
+	case status := <-es:
+		proc.IO().Wait()
+
+		err = status.Error()
+		if err != nil {
+			return nil
+		}
+	}
+
+	return nil
+}
+
 func (l *RunningBuildkit) Client(ctx context.Context) (*buildkit.Client, error) {
 	ctx = namespaces.WithNamespace(ctx, l.Namespace)
 
 	cont, err := l.CR.CC.LoadContainer(ctx, l.id)
 	if err != nil {
 		return nil, err
+	}
+
+	for {
+		err := l.checkReady(ctx, cont)
+		if err == nil {
+			break
+		}
+
+		l.CR.Log.Debug("waiting for buildkit to be ready", "error", err)
+
+		time.Sleep(100 * time.Millisecond)
 	}
 
 	or, ow, err := os.Pipe()
