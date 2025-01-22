@@ -3,7 +3,9 @@ package testutils
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"log/slog"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"time"
@@ -12,24 +14,77 @@ import (
 	"github.com/davecgh/go-spew/spew"
 	"github.com/jackc/pgx/v5/pgxpool"
 	buildkit "github.com/moby/buildkit/client"
+	"miren.dev/runtime/network"
 	"miren.dev/runtime/pkg/asm"
+	"miren.dev/runtime/pkg/netdb"
 	"miren.dev/runtime/pkg/slogfmt"
 
 	clickhouse "github.com/ClickHouse/clickhouse-go/v2"
 )
 
-func Registry(extra ...func(*asm.Registry)) *asm.Registry {
+func Registry(extra ...func(*asm.Registry)) (*asm.Registry, func()) {
 	var r asm.Registry
 
+	var usedClient *containerd.Client
+
+	ndb, err := netdb.New(filepath.Join(os.TempDir(), "net.db"))
+	if err != nil {
+		panic(err)
+	}
+
+	iface, err := ndb.ReserveInterface("mt")
+	if err != nil {
+		panic(err)
+	}
+
+	mega, err := ndb.Subnet("10.8.0.0/16")
+	if err != nil {
+		panic(err)
+	}
+
+	subnet, err := mega.ReserveSubnet(24)
+	if err != nil {
+		panic(err)
+	}
+
+	r.Register("subnet", subnet)
+
+	var cancels []func()
+
+	r.ProvideName("bridge-iface", func() (string, error) {
+		_, err = network.SetupBridge(&network.BridgeConfig{
+			Name:      iface,
+			Addresses: []netip.Prefix{subnet.Router()},
+		})
+		if err != nil {
+			return "", err
+		}
+		cancels = append(cancels, func() {
+			network.TeardownBridge(iface)
+		})
+		return iface, nil
+	})
+
 	r.Provide(func() (*containerd.Client, error) {
-		return containerd.New("/run/containerd.sock")
+		cl, err := containerd.New("/run/containerd.sock")
+		if err != nil {
+			return nil, err
+		}
+
+		usedClient = cl
+
+		return cl, nil
 	})
 
 	r.Provide(func() (*buildkit.Client, error) {
 		return buildkit.New(context.TODO(), "")
 	})
 
-	r.Register("namespace", "miren-test")
+	ts := time.Now()
+
+	namespace := fmt.Sprintf("miren-%d", ts.UnixNano())
+
+	r.Register("namespace", namespace)
 	r.Register("org_id", uint64(1))
 
 	log := slog.New(slogfmt.NewTextHandler(os.Stderr, &slog.HandlerOptions{
@@ -99,5 +154,20 @@ func Registry(extra ...func(*asm.Registry)) *asm.Registry {
 		fn(&r)
 	}
 
-	return &r
+	cleanup := func() {
+		if usedClient != nil {
+			NukeNamespace(usedClient, namespace)
+		}
+
+		for _, cancel := range cancels {
+			cancel()
+		}
+
+		ndb.ReleaseInterface(iface)
+		mega.ReleaseSubnet(subnet.Prefix())
+
+		ndb.Close()
+	}
+
+	return &r, cleanup
 }

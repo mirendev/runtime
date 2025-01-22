@@ -5,18 +5,20 @@ import (
 	"database/sql"
 	"fmt"
 	"log/slog"
-	"net/netip"
 	"os"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/containerd/containerd/v2/client"
+	"github.com/containerd/containerd/v2/pkg/namespaces"
 	"github.com/moby/buildkit/identity"
 	"miren.dev/runtime/app"
 	"miren.dev/runtime/discovery"
 	"miren.dev/runtime/health"
 	"miren.dev/runtime/network"
+	"miren.dev/runtime/pkg/netdb"
 	"miren.dev/runtime/pkg/set"
 	"miren.dev/runtime/run"
 )
@@ -25,10 +27,15 @@ type LaunchContainer struct {
 	Log       *slog.Logger
 	AppAccess *app.AppAccess
 	CR        *run.ContainerRunner
+	CC        *client.Client
 	CD        *discovery.Containerd
-	IPPool    *network.IPPool
+	Subnet    *netdb.Subnet
 	Health    *health.ContainerMonitor
 	DB        *sql.DB `asm:"clickhouse"`
+
+	Namespace string `asm:"namespace"`
+
+	Bridge string `asm:"bridge-iface"`
 
 	MaxLeasesPerContainer int           `asm:"max_leases_per_container,optional"`
 	MaxContainersPerApp   int           `asm:"max_containers_per_app,optional"`
@@ -87,6 +94,12 @@ type pendingContainer struct {
 }
 
 type application struct {
+	name  string
+	pools map[string]*pool
+}
+
+type pool struct {
+	app  *application
 	name string
 
 	mu   sync.Mutex
@@ -101,21 +114,16 @@ type application struct {
 
 func (l *LaunchContainer) newApplication(name string) *application {
 	app := &application{
-		name:               name,
-		maxLeasesPerWindow: l.MaxLeasesPerContainer,
-		windows:            set.New[*UsageWindow](),
-		idle:               set.New[*runningContainer](),
-		pending:            set.New[*pendingContainer](),
+		name:  name,
+		pools: make(map[string]*pool),
 	}
 
-	app.cond = sync.NewCond(&app.mu)
-
-	l.Log.Info("tracking application", "app", name, "max-leases", app.maxLeasesPerWindow, "up", l.MaxLeasesPerContainer)
+	l.Log.Info("tracking application", "app", name, "max-leases", l.MaxLeasesPerContainer)
 
 	return app
 }
 
-func (a *application) availableWindow() *UsageWindow {
+func (a *pool) availableWindow() *UsageWindow {
 	if a.windows.Empty() {
 		return nil
 	}
@@ -132,7 +140,7 @@ func (a *application) availableWindow() *UsageWindow {
 	return nil
 }
 
-func (a *application) availableIdleContainer() *runningContainer {
+func (a *pool) availableIdleContainer() *runningContainer {
 	if a.idle.Empty() {
 		return nil
 	}
@@ -163,6 +171,34 @@ func (l *LaunchContainer) lookupApp(app string) *application {
 	}
 
 	return a
+}
+
+func (l *LaunchContainer) lookupPool(app, name string) *pool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	a, ok := l.applications[app]
+	if !ok {
+		a = l.newApplication(app)
+		l.applications[app] = a
+	}
+
+	p, ok := a.pools[name]
+	if !ok {
+		p = &pool{
+			app:                a,
+			name:               name,
+			maxLeasesPerWindow: l.MaxLeasesPerContainer,
+			windows:            set.New[*UsageWindow](),
+			idle:               set.New[*runningContainer](),
+			pending:            set.New[*pendingContainer](),
+		}
+
+		p.cond = sync.NewCond(&p.mu)
+		a.pools[name] = p
+	}
+
+	return p
 }
 
 type runningContainer struct {
@@ -224,7 +260,8 @@ type UsageWindow struct {
 }
 
 type LeasedContainer struct {
-	App       *application
+	lc        *LaunchContainer
+	Pool      *pool
 	StartTime time.Time
 
 	Start  uint64
@@ -237,17 +274,46 @@ func (l *LeasedContainer) Container() string {
 	return l.Window.container.id
 }
 
-func (l *LaunchContainer) Lease(ctx context.Context, name string) (*LeasedContainer, error) {
-	app := l.lookupApp(name)
+func (l *LeasedContainer) Obj(ctx context.Context) (client.Container, error) {
+	return l.lc.CC.LoadContainer(ctx, l.Container())
+}
+
+type leaseOptions struct {
+	dontWaitNetwork bool
+	poolName        string
+}
+
+func DontWaitNetwork() LeaseOption {
+	return func(lc *leaseOptions) {
+		lc.dontWaitNetwork = true
+	}
+}
+
+func Pool(name string) LeaseOption {
+	return func(lc *leaseOptions) {
+		lc.poolName = name
+	}
+}
+
+type LeaseOption func(*leaseOptions)
+
+func (l *LaunchContainer) Lease(ctx context.Context, name string, opts ...LeaseOption) (*LeasedContainer, error) {
+	var lo leaseOptions
+
+	for _, opt := range opts {
+		opt(&lo)
+	}
+
+	pool := l.lookupPool(name, lo.poolName)
 
 	var (
 		err error
 	)
 
-	app.mu.Lock()
-	defer app.mu.Unlock()
+	pool.mu.Lock()
+	defer pool.mu.Unlock()
 
-	win := app.availableWindow()
+	win := pool.availableWindow()
 	if win != nil {
 		start, err := win.container.cpuUsage()
 		if err != nil {
@@ -257,7 +323,8 @@ func (l *LaunchContainer) Lease(ctx context.Context, name string) (*LeasedContai
 		l.Log.Info("adding lease to existing window", "window", win.Id)
 
 		lc := &LeasedContainer{
-			App:       app,
+			lc:        l,
+			Pool:      pool,
 			StartTime: time.Now(),
 			Window:    win,
 			Start:     start,
@@ -273,19 +340,19 @@ func (l *LaunchContainer) Lease(ctx context.Context, name string) (*LeasedContai
 
 	// No windows, but we might still have a container kicking around
 	// we can reuse.
-	rc := app.availableIdleContainer()
+	rc := pool.availableIdleContainer()
 	if rc != nil {
 		start, err := rc.cpuUsage()
 		if err != nil {
 			return nil, err
 		}
 
-		app.idle.Remove(rc)
+		pool.idle.Remove(rc)
 
-		l.Log.Debug("beginning new usage window", "app", app.name, "start", start)
+		l.Log.Debug("beginning new usage window", "app", pool.app.name, "start", start)
 
 		win = &UsageWindow{
-			App:         app.name,
+			App:         pool.app.name,
 			Id:          identity.NewID(),
 			Start:       start,
 			Leases:      set.New[*LeasedContainer](),
@@ -295,7 +362,8 @@ func (l *LaunchContainer) Lease(ctx context.Context, name string) (*LeasedContai
 		}
 
 		lc := &LeasedContainer{
-			App:           app,
+			lc:            l,
+			Pool:          pool,
 			StartTime:     time.Now(),
 			Window:        win,
 			Start:         start,
@@ -314,8 +382,8 @@ func (l *LaunchContainer) Lease(ctx context.Context, name string) (*LeasedContai
 
 	var pendingCh chan *UsageWindow
 
-	if !app.pending.Empty() {
-		for pc := range app.pending {
+	if !pool.pending.Empty() {
+		for pc := range pool.pending {
 			if pc.waiters.Len() < l.MaxLeasesPerContainer {
 				// So that the sender doesn't block.
 				pendingCh = make(chan *UsageWindow, 1)
@@ -326,20 +394,22 @@ func (l *LaunchContainer) Lease(ctx context.Context, name string) (*LeasedContai
 	}
 
 	if pendingCh != nil {
-		app.mu.Unlock()
+		pool.mu.Unlock()
 
 		select {
 		case <-ctx.Done():
+			pool.mu.Lock()
 			return nil, ctx.Err()
 		case win, ok := <-pendingCh:
-			app.mu.Lock()
+			pool.mu.Lock()
 
 			if !ok {
 				return nil, fmt.Errorf("pending container failed")
 			}
 
 			lc := &LeasedContainer{
-				App:       app,
+				lc:        l,
+				Pool:      pool,
 				StartTime: time.Now(),
 				Window:    win,
 				Start:     win.Start,
@@ -354,7 +424,7 @@ func (l *LaunchContainer) Lease(ctx context.Context, name string) (*LeasedContai
 
 	// ok, we need to launch a container.
 
-	ac, err := l.AppAccess.LoadApp(ctx, app.name)
+	ac, err := l.AppAccess.LoadApp(ctx, pool.app.name)
 	if err != nil {
 		return nil, err
 	}
@@ -368,15 +438,15 @@ func (l *LaunchContainer) Lease(ctx context.Context, name string) (*LeasedContai
 		waiters: set.New[chan *UsageWindow](),
 	}
 
-	app.pending.Add(pc)
-	defer app.pending.Remove(pc)
+	pool.pending.Add(pc)
+	defer pool.pending.Remove(pc)
 
 	winId := identity.NewID()
-	l.Log.Info("launching container", "app", ac.Name, "version", mrv.Version, "window", winId)
+	l.Log.Info("launching container", "app", ac.Name, "pool", lo.poolName, "version", mrv.Version, "window", winId)
 
-	app.mu.Unlock()
-	rc, err = l.launch(ctx, ac, mrv)
-	app.mu.Lock()
+	pool.mu.Unlock()
+	rc, err = l.launch(ctx, ac, mrv, &lo)
+	pool.mu.Lock()
 
 	if err != nil {
 		for ch := range pc.waiters {
@@ -390,7 +460,7 @@ func (l *LaunchContainer) Lease(ctx context.Context, name string) (*LeasedContai
 	}
 
 	win = &UsageWindow{
-		App:         app.name,
+		App:         pool.app.name,
 		Id:          winId,
 		Start:       0,
 		Leases:      set.New[*LeasedContainer](),
@@ -399,10 +469,11 @@ func (l *LaunchContainer) Lease(ctx context.Context, name string) (*LeasedContai
 		container: rc,
 	}
 
-	app.windows.Add(win)
+	pool.windows.Add(win)
 
 	lc := &LeasedContainer{
-		App:           app,
+		lc:            l,
+		Pool:          pool,
 		StartTime:     time.Now(),
 		Window:        win,
 		Start:         win.Start,
@@ -429,8 +500,8 @@ type LeaseInfo struct {
 }
 
 func (l *LaunchContainer) ReleaseLease(ctx context.Context, lc *LeasedContainer) (*LeaseInfo, error) {
-	lc.App.mu.Lock()
-	defer lc.App.mu.Unlock()
+	lc.Pool.mu.Lock()
+	defer lc.Pool.mu.Unlock()
 
 	lc.Window.Leases.Remove(lc)
 
@@ -445,8 +516,8 @@ func (l *LaunchContainer) ReleaseLease(ctx context.Context, lc *LeasedContainer)
 
 	if lc.Window.Leases.Empty() {
 		err = l.closeWindow(ctx, lc.Window, ts)
-		lc.App.idle.Add(lc.Window.container)
-		lc.App.windows.Remove(lc.Window)
+		lc.Pool.idle.Add(lc.Window.container)
+		lc.Pool.windows.Remove(lc.Window)
 		l.Log.Info("usage window closed", "window", lc.Window.Id, "app", lc.Window.App)
 	}
 
@@ -477,24 +548,19 @@ func (l *LaunchContainer) launch(
 	ctx context.Context,
 	ac *app.AppConfig,
 	mrv *app.AppVersion,
+	lo *leaseOptions,
 ) (*runningContainer, error) {
-
-	sa := l.IPPool.Router()
-
-	ca, err := l.IPPool.Allocate()
+	ec, err := network.AllocateOnBridge(l.Bridge, l.Subnet)
 	if err != nil {
 		return nil, err
 	}
 
+	l.Log.Debug("allocated network endpoint", "bridge", l.Bridge, "addresses", ec.Addresses)
+
 	config := &run.ContainerConfig{
-		App:   ac.Name,
-		Image: mrv.ImageName(),
-		IPs:   []netip.Prefix{ca},
-		Subnet: &run.Subnet{
-			Id:     "sub",
-			IP:     []netip.Prefix{sa},
-			OSName: "mtest",
-		},
+		App:      ac.Name,
+		Image:    mrv.ImageName(),
+		Endpoint: ec,
 	}
 
 	_, err = l.CR.RunContainer(ctx, config)
@@ -502,9 +568,17 @@ func (l *LaunchContainer) launch(
 		return nil, err
 	}
 
-	err = l.Health.WaitForReady(ctx, config.Id)
-	if err != nil {
-		return nil, err
+	if lo.dontWaitNetwork {
+		l.Log.Info("not waiting for network", "container", config.Id)
+		err = l.Health.WaitReady(ctx, config.Id)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		err = l.Health.WaitForReady(ctx, config.Id)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	rc := &runningContainer{
@@ -522,13 +596,131 @@ func (l *LaunchContainer) ShutdownIdle(ctx context.Context) (int, error) {
 	var cnt int
 
 	for _, app := range l.applications {
-		app.mu.Lock()
+		for _, pool := range app.pools {
+			pool.mu.Lock()
 
-		var toDelete []*runningContainer
+			var toDelete []*runningContainer
 
-		for rc := range app.idle {
-			if time.Since(rc.idleSince) >= l.IdleTimeout {
-				l.Log.Info("shutting down idle container", "container", rc.id)
+			for rc := range pool.idle {
+				idle := time.Since(rc.idleSince)
+				if idle >= l.IdleTimeout {
+					l.Log.Info("shutting down idle container", "container", rc.id)
+
+					err := l.CR.StopContainer(ctx, rc.id)
+					if err != nil {
+						l.Log.Error("failed to stop container", "container", rc.id, "error", err)
+					} else {
+						toDelete = append(toDelete, rc)
+					}
+				} else {
+					l.Log.Debug("skipping idle container, not yet reached idle max", "container", rc.id, "left", l.IdleTimeout-idle)
+				}
+			}
+
+			cnt += len(toDelete)
+
+			for _, rc := range toDelete {
+				pool.idle.Remove(rc)
+			}
+
+			pool.mu.Unlock()
+		}
+	}
+
+	return cnt, nil
+}
+
+// RecoverContainers scans containerd for running containers and adds them to the idle pool
+func (l *LaunchContainer) RecoverContainers(ctx context.Context) error {
+	l.Log.Info("recovering containers", "namespace", l.Namespace)
+
+	ctx = namespaces.WithNamespace(ctx, l.Namespace)
+
+	containers, err := l.CC.Containers(ctx)
+	if err != nil {
+		return fmt.Errorf("listing containers: %w", err)
+	}
+
+	for _, container := range containers {
+		labels, err := container.Labels(ctx)
+		if err != nil {
+			l.Log.Warn("failed to get labels for container", "container", container.ID(), "error", err)
+			continue
+		}
+
+		appName := labels["miren.dev/app"]
+		if appName == "" {
+			l.Log.Warn("container missing app label", "container", container.ID())
+			continue
+		}
+
+		poolName := labels["miren.dev/pool"]
+		if appName == "" {
+			l.Log.Warn("container missing app label", "container", container.ID())
+			continue
+		}
+
+		spec, err := container.Spec(ctx)
+		if err != nil {
+			l.Log.Warn("failed to get container spec", "container", container.ID(), "error", err)
+			continue
+		}
+
+		// Check if container is actually running
+		task, err := container.Task(ctx, nil)
+		if err != nil {
+			l.Log.Debug("container has no task", "container", container.ID())
+			continue
+		}
+
+		status, err := task.Status(ctx)
+		if err != nil {
+			l.Log.Warn("failed to get task status", "container", container.ID(), "error", err)
+			continue
+		}
+
+		if status.Status != client.Running {
+			l.Log.Debug("container not running", "container", container.ID(), "status", status.Status)
+			continue
+		}
+
+		pool := l.lookupPool(appName, poolName)
+
+		rc := &runningContainer{
+			id:          container.ID(),
+			cpuStatPath: filepath.Join("/sys/fs/cgroup", spec.Linux.CgroupsPath, "cpu.stat"),
+			idleSince:   time.Now(), // We assume recovered containers are idle
+			windows:     set.New[*UsageWindow](),
+		}
+
+		pool.mu.Lock()
+		pool.idle.Add(rc)
+		l.Log.Info("recovered container", "container", container.ID(), "app", appName)
+		pool.mu.Unlock()
+	}
+
+	return nil
+}
+
+func (l *LaunchContainer) Shutdown(ctx context.Context) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	// TODO: we're only shutting down idle containers. Add logic to pick
+	// up non-idle containers from containerd on start.
+
+	var cnt int
+
+	for _, app := range l.applications {
+		for _, pool := range app.pools {
+			pool.mu.Lock()
+
+			var toDelete []*runningContainer
+
+			for rc := range pool.idle {
+				idle := time.Since(rc.idleSince)
+
+				l.Log.Info("shutting down idle container", "container", rc.id, "idle", idle)
 
 				err := l.CR.StopContainer(ctx, rc.id)
 				if err != nil {
@@ -537,15 +729,15 @@ func (l *LaunchContainer) ShutdownIdle(ctx context.Context) (int, error) {
 					toDelete = append(toDelete, rc)
 				}
 			}
+
+			cnt += len(toDelete)
+
+			for _, rc := range toDelete {
+				pool.idle.Remove(rc)
+			}
+
+			pool.mu.Unlock()
 		}
-
-		cnt += len(toDelete)
-
-		for _, rc := range toDelete {
-			app.idle.Remove(rc)
-		}
-
-		app.mu.Unlock()
 	}
 
 	return cnt, nil

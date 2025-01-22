@@ -1,0 +1,10 @@
+interfaces:
+  - name: Crud
+    methods:
+      - name: new
+        parameters:
+          - name: name
+            type: string
+        results:
+          - name: id
+            type: string

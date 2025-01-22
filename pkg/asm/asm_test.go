@@ -138,6 +138,29 @@ func TestASM(t *testing.T) {
 	})
 
 	t.Run("named providers can be used without a name", func(t *testing.T) {
+
+		type bar struct {
+			Name string
+		}
+
+		type thing struct {
+			Name *bar
+		}
+
+		r := require.New(t)
+
+		var reg Registry
+		reg.ProvideName("better", func() *bar { return &bar{Name: "miren"} })
+
+		var x thing
+
+		err := reg.Populate(&x)
+		r.NoError(err)
+
+		r.Equal(x.Name.Name, "miren")
+	})
+
+	t.Run("can't use a non-struct type as a named providers without a name", func(t *testing.T) {
 		type thing struct {
 			Name string
 		}
@@ -150,9 +173,7 @@ func TestASM(t *testing.T) {
 		var x thing
 
 		err := reg.Populate(&x)
-		r.NoError(err)
-
-		r.Equal(x.Name, "miren")
+		r.Error(err)
 	})
 
 	t.Run("returns the same value when using a provider", func(t *testing.T) {

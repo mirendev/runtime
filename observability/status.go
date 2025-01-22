@@ -36,6 +36,11 @@ type StatusMonitor struct {
 	entities map[string]*EntityStatus
 }
 
+func (s *StatusMonitor) Populated() error {
+	s.entities = make(map[string]*EntityStatus)
+	return nil
+}
+
 func (s *StatusMonitor) SetPortStatus(entity string, port BoundPort, status PortStatus) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

@@ -49,6 +49,7 @@ type State struct {
 	tlsCfg *tls.Config
 
 	server *Server
+	hs     *http3.Server
 	li     *quic.EarlyListener
 	cert   tls.Certificate
 
@@ -232,12 +233,23 @@ func (s *State) startListener(ctx context.Context, so *stateOptions) error {
 		Logger:    s.log,
 	}
 
+	s.hs = serv
+
 	go func() {
 		<-ctx.Done()
 		serv.Shutdown(context.Background())
 	}()
 
 	go serv.ServeListener(s.li)
+
+	return nil
+}
+
+func (s *State) Close() error {
+	s.li.Close()
+	if s.hs != nil {
+		s.hs.Close()
+	}
 
 	return nil
 }
@@ -250,13 +262,13 @@ func (s *State) Connect(remote string, name string) (*Client, error) {
 
 	err := c.resolveCapability(name)
 	if err != nil {
-		c.log.Error("rpc.connect", "error", err)
+		c.log.Error("error resolving capability", "error", err)
 		return nil, err
 	}
 
 	err = c.sendIdentity(c.top)
 	if err != nil {
-		c.log.Error("rpc.connect", "error", err)
+		c.log.Error("error sending identity", "error", err)
 		return nil, err
 	}
 

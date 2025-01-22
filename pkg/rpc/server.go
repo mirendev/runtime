@@ -390,13 +390,14 @@ func (s *Server) lookup(w http.ResponseWriter, r *http.Request) {
 
 	//s.state.log.Info("Lookup", "name", name)
 
+	// TODO: add condition codes to the error response rather than just a string
 	iface, ok := s.persistent[name]
 	if !ok {
-		json.NewEncoder(w).Encode(lookupResponse{Error: "unknown object: " + name})
+		cbor.NewEncoder(w).Encode(lookupResponse{Error: "unknown object: " + name})
 	} else {
 		data, err := base58.Decode(pk)
 		if err != nil {
-			json.NewEncoder(w).Encode(lookupResponse{Error: "invalid public key"})
+			cbor.NewEncoder(w).Encode(lookupResponse{Error: "invalid public key"})
 			return
 		}
 
@@ -575,6 +576,7 @@ func (s *Server) handleCalls(w http.ResponseWriter, r *http.Request) {
 
 		err := mm.Handler(ctx, call)
 		if err != nil {
+			s.state.log.Error("rpc call errored", "method", mm.InterfaceName+"."+mm.Name, "error", err)
 			w.Header().Add("rpc-status", "error")
 			w.Header().Add("rpc-error", err.Error())
 			s.handleError(w, r, err)

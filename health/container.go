@@ -2,6 +2,7 @@ package health
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -149,6 +150,8 @@ func (c *ContainerMonitor) Populated() error {
 }
 
 func (c *ContainerMonitor) refreshStatus(ctx context.Context) {
+	c.Log.Debug("refreshing container status")
+
 	ctx = namespaces.WithNamespace(ctx, c.Namespace)
 
 	containers, err := c.CC.Containers(ctx)
@@ -184,6 +187,8 @@ func (c *ContainerMonitor) refreshStatus(ctx context.Context) {
 				Labels:    lbls,
 				Endpoints: setupEndpoints(lbls),
 			}
+
+			c.Log.Debug("container status created", "id", cont.ID(), "running", status.Status == containerd.Running)
 		}
 
 		c.mu.Unlock()
@@ -225,8 +230,6 @@ func (c *ContainerMonitor) processEvent(ctx context.Context, ev *events.Envelope
 		return
 	}
 
-	//c.Log.Info("containerd event", "type", fmt.Sprintf("%T", v), "event", v)
-
 	switch e := v.(type) {
 	case *aevents.ContainerCreate:
 		c.Log.Info("container created", "id", e.ID)
@@ -244,6 +247,7 @@ func (c *ContainerMonitor) processEvent(ctx context.Context, ev *events.Envelope
 		defer c.mu.Unlock()
 
 		if status, ok := c.status[e.ContainerID]; ok {
+			c.Log.Info("task not running", "id", e.ContainerID)
 			status.Running = false
 		}
 
@@ -253,6 +257,7 @@ func (c *ContainerMonitor) processEvent(ctx context.Context, ev *events.Envelope
 		defer c.mu.Unlock()
 
 		if status, ok := c.status[e.ContainerID]; ok {
+			c.Log.Info("task started", "id", e.ContainerID)
 			status.Running = true
 		}
 
@@ -397,12 +402,12 @@ func (c *ContainerMonitor) SetPortStatus(id string, bp observability.BoundPort, 
 			switch curEp.Type {
 			case "http":
 				c.Log.Info("checking http port", "addr", ip, "port", curEp.Port)
-				go c.checkHTTP(context.Background(), ip, 10*time.Second, curEp)
+				go c.checkHTTP(context.Background(), ip, 60*time.Second, curEp)
 				return
 
 			case "", "tcp":
 				c.Log.Info("checking tcp port", "addr", ip, "port", curEp.Port)
-				go c.checkPort(context.Background(), ip, 10*time.Second, curEp)
+				go c.checkPort(context.Background(), ip, 60*time.Second, curEp)
 
 				return
 			case "udp":
@@ -461,18 +466,30 @@ func (c *ContainerMonitor) checkHTTP(ctx context.Context, addr string, dur time.
 
 	for time.Since(start) < dur {
 		resp, err := http.Get(url)
-		if err == nil && resp.StatusCode < 400 {
-			c.Log.Info("http port active", "addr", addr, "port", ep.Port, "status", resp.StatusCode)
-
+		if err != nil {
+			var netErr *net.OpError
+			if errors.As(err, &netErr) {
+				if !netErr.Temporary() && netErr.Op != "dial" {
+					c.Log.Error("unable to check http port", "addr", addr, "port", ep.Port, "error", err, "op", netErr.Op)
+				}
+			} else {
+				c.Log.Error("error checking http port", "addr", addr, "port", ep.Port, "error", err)
+			}
+		} else if resp.StatusCode < 400 {
 			c.mu.Lock()
 			c.cond.Broadcast()
 			ep.Status = observability.PortStatusActive
 			c.mu.Unlock()
+
+			c.Log.Info("http port active", "addr", addr, "port", ep.Port, "status", resp.StatusCode)
 			return nil
+		} else {
+			c.Log.Warn("http port bad status", "addr", addr, "port", ep.Port, "status", resp.StatusCode)
 		}
 
 		time.Sleep(500 * time.Millisecond)
 	}
 
+	c.Log.Warn("giving up on checking port status")
 	return nil
 }

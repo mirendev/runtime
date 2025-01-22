@@ -7,12 +7,18 @@ interfaces:
         parameters:
           - name: value
             type: T
+        results:
+          - name: count
+            type: int32
 
   - name: RecvStream
     generic:
       - T
     methods:
       - name: recv
+        parameters:
+          - name: count
+            type: int32
         results:
           - name: value
             type: T

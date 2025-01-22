@@ -15,7 +15,8 @@ func TestRunSCMonitor(t *testing.T) {
 	t.Run("generates a pod init config", func(t *testing.T) {
 		r := require.New(t)
 
-		reg := testutils.Registry()
+		reg, cleanup := testutils.Registry()
+		defer cleanup()
 
 		reg.Register("status-monitor", &StatusMonitor{})
 

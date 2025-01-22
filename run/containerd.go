@@ -2,55 +2,27 @@ package run
 
 import (
 	"context"
-	"io"
 	"log/slog"
-	"net/netip"
 	"os/exec"
 
 	"github.com/containerd/containerd/api/types/runc/options"
 	containerd "github.com/containerd/containerd/v2/client"
-	tarchive "github.com/containerd/containerd/v2/core/transfer/archive"
-	"github.com/containerd/containerd/v2/core/transfer/image"
 	"github.com/containerd/containerd/v2/pkg/cio"
 	"github.com/containerd/containerd/v2/pkg/namespaces"
 	"github.com/containerd/containerd/v2/pkg/oci"
-	"github.com/containerd/platforms"
 	_ "github.com/moby/buildkit/client/connhelper/dockercontainer"
 	"github.com/moby/buildkit/identity"
+	"github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/pkg/errors"
+	"miren.dev/runtime/network"
 )
-
-type ImageImporter struct {
-	CC        *containerd.Client
-	Namespace string `asm:"namespace"`
-}
-
-func (i *ImageImporter) ImportImage(ctx context.Context, r io.Reader, indexName string) error {
-	ctx = namespaces.WithNamespace(ctx, i.Namespace)
-	var opts []image.StoreOpt
-	opts = append(opts, image.WithNamedPrefix("mn-tmp", true))
-
-	// Only when all-platforms not specified, we will check platform value
-	// Implicitly if the platforms is empty, it means all-platforms
-	platSpec := platforms.DefaultSpec()
-	opts = append(opts, image.WithPlatforms(platSpec))
-
-	opts = append(opts, image.WithUnpack(platSpec, ""))
-
-	is := image.NewStore(indexName, opts...)
-
-	var iopts []tarchive.ImportOpt
-
-	iis := tarchive.NewImageImportStream(r, "", iopts...)
-
-	return i.CC.Transfer(ctx, iis, is)
-}
 
 type ContainerRunner struct {
 	Log         *slog.Logger
 	CC          *containerd.Client
 	Namespace   string `asm:"namespace"`
 	RunscBinary string `asm:"runsc_binary,optional"`
+	Clickhouse  string `asm:"clickhouse_address,optional"`
 }
 
 func (c *ContainerRunner) Populated() error {
@@ -58,15 +30,23 @@ func (c *ContainerRunner) Populated() error {
 		c.RunscBinary = "runsc-ignore"
 	}
 
+	if c.Clickhouse == "" {
+		c.Clickhouse = "clickhouse:9000"
+	}
+
 	return nil
 }
 
 type ContainerConfig struct {
-	Id     string
-	App    string
-	Image  string
-	IPs    []netip.Prefix
-	Subnet *Subnet
+	Id    string
+	App   string
+	Image string
+
+	Labels map[string]string
+
+	Privileged bool
+
+	Endpoint *network.EndpointConfig
 
 	StaticDir string
 
@@ -76,6 +56,10 @@ type ContainerConfig struct {
 func (c *ContainerRunner) RunContainer(ctx context.Context, config *ContainerConfig) (string, error) {
 	if config.Id == "" {
 		config.Id = identity.NewID()
+	}
+
+	if config.Endpoint == nil {
+		return "", errors.New("network endpoint config is required")
 	}
 
 	ctx = namespaces.WithNamespace(ctx, c.Namespace)
@@ -135,22 +119,55 @@ func (c *ContainerRunner) buildSpec(ctx context.Context, config *ContainerConfig
 
 	lbls := map[string]string{
 		"miren.dev/app":           config.App,
-		"miren.dev/http_host":     config.IPs[0].Addr().String() + ":3000",
-		"miren.dev/ip":            config.IPs[0].Addr().String(),
+		"miren.dev/http_host":     config.Endpoint.Addresses[0].Addr().String() + ":3000",
+		"miren.dev/ip":            config.Endpoint.Addresses[0].Addr().String(),
 		"miren.dev/endpoint:http": "port=3000,type=http",
+	}
+
+	for k, v := range config.Labels {
+		lbls[k] = v
 	}
 
 	if config.StaticDir != "" {
 		lbls["miren.dev/static_dir"] = config.StaticDir
 	}
 
+	mounts := []specs.Mount{
+		{
+			Destination: "/sys",
+			Type:        "sysfs",
+			Source:      "sysfs",
+			Options:     []string{"nosuid", "noexec", "nodev", "rw"},
+		},
+		{
+			Destination: "/sys/fs/cgroup",
+			Type:        "cgroup",
+			Source:      "cgroup",
+			Options:     []string{"nosuid", "noexec", "nodev", "rw"},
+		},
+	}
+
+	specOpts := []oci.SpecOpts{
+		oci.WithImageConfig(img),
+		oci.WithDefaultUnixDevices,
+		oci.WithEnv([]string{"PORT=3000"}),
+		oci.WithHostResolvconf,
+		oci.WithoutMounts("/sys"),
+		oci.WithMounts(mounts),
+	}
+
+	if config.Privileged {
+		specOpts = append(specOpts,
+			oci.WithPrivileged,
+			oci.WithAllDevicesAllowed,
+			oci.WithWriteableCgroupfs,
+			oci.WithAddedCapabilities([]string{"CAP_SYS_ADMIN"}),
+		)
+	}
+
 	opts = append(opts,
 		containerd.WithNewSnapshot(config.Id, img),
-		containerd.WithNewSpec(
-			oci.WithImageConfig(img),
-			oci.WithEnv([]string{"PORT=3000"}),
-			//oci.WithMounts(mounts),
-		),
+		containerd.WithNewSpec(specOpts...),
 		containerd.WithRuntime("io.containerd.runc.v2", &options.Options{
 			BinaryName: c.RunscBinary,
 		}),
@@ -158,6 +175,50 @@ func (c *ContainerRunner) buildSpec(ctx context.Context, config *ContainerConfig
 	)
 
 	return opts, nil
+}
+
+var perms = []string{
+	"CAP_CHOWN",
+	"CAP_DAC_OVERRIDE",
+	"CAP_DAC_READ_SEARCH",
+	"CAP_FOWNER",
+	"CAP_FSETID",
+	"CAP_KILL",
+	"CAP_SETGID",
+	"CAP_SETUID",
+	"CAP_SETPCAP",
+	"CAP_LINUX_IMMUTABLE",
+	"CAP_NET_BIND_SERVICE",
+	"CAP_NET_BROADCAST",
+	"CAP_NET_ADMIN",
+	"CAP_NET_RAW",
+	"CAP_IPC_LOCK",
+	"CAP_IPC_OWNER",
+	"CAP_SYS_MODULE",
+	"CAP_SYS_RAWIO",
+	"CAP_SYS_CHROOT",
+	"CAP_SYS_PTRACE",
+	"CAP_SYS_PACCT",
+	"CAP_SYS_ADMIN",
+	"CAP_SYS_BOOT",
+	"CAP_SYS_NICE",
+	"CAP_SYS_RESOURCE",
+	"CAP_SYS_TIME",
+	"CAP_SYS_TTY_CONFIG",
+	"CAP_MKNOD",
+	"CAP_LEASE",
+	"CAP_AUDIT_WRITE",
+	"CAP_AUDIT_CONTROL",
+	"CAP_SETFCAP",
+	"CAP_MAC_OVERRIDE",
+	"CAP_MAC_ADMIN",
+	"CAP_SYSLOG",
+	"CAP_WAKE_ALARM",
+	"CAP_BLOCK_SUSPEND",
+	"CAP_AUDIT_READ",
+	"CAP_PERFMON",
+	"CAP_BPF",
+	"CAP_CHECKPOINT_RESTORE",
 }
 
 func (c *ContainerRunner) bootInitialTask(ctx context.Context, config *ContainerConfig, container containerd.Container) error {
@@ -170,14 +231,14 @@ func (c *ContainerRunner) bootInitialTask(ctx context.Context, config *Container
 
 	task, err := container.NewTask(ctx,
 		cio.BinaryIO(exe, map[string]string{
-			"-d": "clickhouse:9000",
+			"-d": c.Clickhouse,
 			"-e": config.Id,
 		}))
 	if err != nil {
 		return err
 	}
 
-	err = setupNetwork(c.Log, config.Subnet, task, config)
+	err = network.ConfigureNetNS(c.Log, int(task.Pid()), config.Endpoint)
 	if err != nil {
 		return err
 	}

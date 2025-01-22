@@ -13,7 +13,8 @@ func TestAppAccess(t *testing.T) {
 	t.Run("manipulates app configs", func(t *testing.T) {
 		r := require.New(t)
 
-		reg := testutils.Registry()
+		reg, cleanup := testutils.Registry()
+		defer cleanup()
 
 		var aa AppAccess
 
@@ -50,7 +51,8 @@ func TestAppAccess(t *testing.T) {
 	t.Run("manipulatse app versions", func(t *testing.T) {
 		r := require.New(t)
 
-		reg := testutils.Registry()
+		reg, cleanup := testutils.Registry()
+		defer cleanup()
 
 		var aa AppAccess
 

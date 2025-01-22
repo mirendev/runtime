@@ -10,7 +10,6 @@ import (
 
 	_ "github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/ringbuf"
-	"github.com/davecgh/go-spew/spew"
 	gprofile "github.com/google/pprof/profile"
 	"miren.dev/runtime/pkg/perf"
 )
@@ -91,10 +90,7 @@ func (p *Profiler) Start(ctx context.Context) error {
 
 	var events []*perf.Event
 
-	spew.Dump(cpus)
-
 	for _, cpu := range cpus {
-		fmt.Printf("cpu: %d\n", cpu)
 		ev, err := perf.Open(p.attr, p.pid, int(cpu), nil)
 		if err != nil {
 			for _, ev := range events {
@@ -107,7 +103,6 @@ func (p *Profiler) Start(ctx context.Context) error {
 		events = append(events, ev)
 	}
 
-	fmt.Printf("setting bpf\n")
 	for _, ev := range events {
 		err := ev.SetBPF(uint32(objs.Profile.FD()))
 		if err != nil {
@@ -118,8 +113,6 @@ func (p *Profiler) Start(ctx context.Context) error {
 			return err
 		}
 	}
-
-	fmt.Println(objs.Events.Type())
 
 	r, err := ringbuf.NewReader(objs.Events)
 	if err != nil {
@@ -145,8 +138,6 @@ func (p *Profiler) readEvents(ctx context.Context, r *ringbuf.Reader) {
 			fmt.Printf("error reading: %v\n", err)
 			return
 		}
-
-		fmt.Println("rec")
 
 		stk := Stack{data: rec.RawSample}
 

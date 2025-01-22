@@ -7,7 +7,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/davecgh/go-spew/spew"
 	"miren.dev/runtime/discovery"
 )
 
@@ -27,7 +26,6 @@ func (h *HTTP) Populated() error {
 }
 
 func (h *HTTP) DeriveApp(req *http.Request) (string, bool) {
-	spew.Dump(req.Host, h.checkDomain)
 	if strings.HasSuffix(req.Host, h.checkDomain) {
 		return strings.TrimSuffix(req.Host, h.checkDomain), true
 	}

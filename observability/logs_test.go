@@ -18,7 +18,8 @@ func TestLogs(t *testing.T) {
 
 		r := require.New(t)
 
-		reg := testutils.Registry(TestInject)
+		reg, cleanup := testutils.Registry(TestInject)
+		defer cleanup()
 
 		var (
 			lm LogsMaintainer
@@ -40,7 +41,10 @@ func TestLogs(t *testing.T) {
 
 		id := identity.NewID()
 
-		err = pw.WriteEntry(id, "this is a log line")
+		err = pw.WriteEntry("container", id, LogEntry{
+			Timestamp: time.Now(),
+			Body:      "this is a log line",
+		})
 		r.NoError(err)
 
 		entries, err := pr.Read(ctx, id)
@@ -57,7 +61,7 @@ func TestLogs(t *testing.T) {
 
 		var count int
 
-		err = db.QueryRow("SELECT count() FROM logs WHERE container_id = ?", id).Scan(&count)
+		err = db.QueryRow("SELECT count() FROM logs WHERE entity_id = ?", id).Scan(&count)
 		r.NoError(err)
 
 		r.Equal(1, count)

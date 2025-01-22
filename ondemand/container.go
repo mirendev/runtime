@@ -3,12 +3,12 @@ package ondemand
 import (
 	"context"
 	"log/slog"
-	"net/netip"
 
 	"miren.dev/runtime/app"
 	"miren.dev/runtime/discovery"
 	"miren.dev/runtime/health"
 	"miren.dev/runtime/network"
+	"miren.dev/runtime/pkg/netdb"
 	"miren.dev/runtime/run"
 )
 
@@ -17,8 +17,9 @@ type LaunchContainer struct {
 	AppAccess *app.AppAccess
 	CR        *run.ContainerRunner
 	CD        *discovery.Containerd
-	IPPool    *network.IPPool
+	Subnet    *netdb.Subnet
 	Health    *health.ContainerMonitor
+	Bridge    string `asm:"bridge-iface"`
 }
 
 func (l *LaunchContainer) Lookup(ctx context.Context, app string) (discovery.Endpoint, chan discovery.BackgroundLookup, error) {
@@ -58,23 +59,15 @@ func (l *LaunchContainer) launch(
 	ac *app.AppConfig,
 	mrv *app.AppVersion,
 ) (discovery.Endpoint, error) {
-
-	sa := l.IPPool.Router()
-
-	ca, err := l.IPPool.Allocate()
+	ec, err := network.AllocateOnBridge(l.Bridge, l.Subnet)
 	if err != nil {
 		return nil, err
 	}
 
 	config := &run.ContainerConfig{
-		App:   ac.Name,
-		Image: mrv.ImageName(),
-		IPs:   []netip.Prefix{ca},
-		Subnet: &run.Subnet{
-			Id:     "sub",
-			IP:     []netip.Prefix{sa},
-			OSName: "mtest",
-		},
+		App:      ac.Name,
+		Image:    mrv.ImageName(),
+		Endpoint: ec,
 	}
 
 	_, err = l.CR.RunContainer(ctx, config)

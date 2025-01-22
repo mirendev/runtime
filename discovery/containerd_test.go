@@ -15,7 +15,8 @@ func TestContainerd(t *testing.T) {
 	t.Run("can lookup an endpoint from containerd", func(t *testing.T) {
 		r := require.New(t)
 
-		reg := testutils.Registry(TestInject)
+		reg, cleanup := testutils.Registry(TestInject)
+		defer cleanup()
 
 		var cl Containerd
 

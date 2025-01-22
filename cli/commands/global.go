@@ -9,11 +9,15 @@ import (
 	"os/signal"
 
 	"golang.org/x/sys/unix"
+	"miren.dev/runtime/pkg/asm"
+	"miren.dev/runtime/pkg/rpc"
 	"miren.dev/runtime/pkg/slogfmt"
 )
 
 type GlobalFlags struct {
-	Verbose []bool `short:"v" long:"verbose" description:"Enable verbose output"`
+	Verbose       []bool `short:"v" long:"verbose" description:"Enable verbose output"`
+	ServerAddress string `short:"a" long:"server-address" description:"Server address to connect to" default:"127.0.0.1:8443" asm:"server-addr"`
+	Config        string `long:"config" description:"Path to configuration file"`
 }
 
 type Context struct {
@@ -25,14 +29,26 @@ type Context struct {
 	Stdout io.Writer
 	Stderr io.Writer
 
+	Client *asm.Registry
+	Server *asm.Registry
+
 	cancels []func()
+
+	Config struct {
+		ServerAddress string `asm:"server-addr"`
+	}
+
+	exitCode int
 }
 
-func setup(ctx context.Context, flags *GlobalFlags) *Context {
+func setup(ctx context.Context, flags *GlobalFlags, opts any) *Context {
 	s := &Context{
 		verbose: len(flags.Verbose),
 		Stdout:  os.Stdout,
 		Stderr:  os.Stderr,
+
+		Server: &asm.Registry{},
+		Client: &asm.Registry{},
 	}
 
 	var level slog.Level
@@ -51,15 +67,25 @@ func setup(ctx context.Context, flags *GlobalFlags) *Context {
 	dynLevel := new(slog.LevelVar)
 	dynLevel.Set(level)
 
+	s.Log = slog.New(slogfmt.NewTextHandler(os.Stderr, &slog.HandlerOptions{
+		Level: dynLevel,
+	}))
+
+	s.Server.Log = s.Log
+	s.Client.Log = s.Log
+
+	s.setupServerComponents(ctx, s.Server)
+
+	s.Server.InferFrom(opts)
+	s.Client.InferFrom(flags)
+
+	s.Client.Populate(&s.Config)
+
 	sigCh := make(chan os.Signal, 1)
 
 	signal.Notify(sigCh, os.Interrupt, unix.SIGQUIT, unix.SIGTERM,
 		unix.SIGTTIN, unix.SIGTTOU,
 	)
-
-	s.Log = slog.New(slogfmt.NewTextHandler(os.Stderr, &slog.HandlerOptions{
-		Level: dynLevel,
-	}))
 
 	ctx, cancel := context.WithCancel(ctx)
 	s.cancels = append(s.cancels, cancel)
@@ -136,6 +162,24 @@ func (c *Context) Close() error {
 	return nil
 }
 
+func (c *Context) SetExitCode(code int) {
+	c.exitCode = code
+}
+
 func (c *Context) Printf(format string, args ...interface{}) {
 	fmt.Fprintf(c.Stdout, format, args...)
+}
+
+func (c *Context) RPCClient(name string) (*rpc.Client, error) {
+	cs, err := rpc.NewState(c, rpc.WithSkipVerify, rpc.WithLogger(c.Log))
+	if err != nil {
+		return nil, err
+	}
+
+	client, err := cs.Connect(c.Config.ServerAddress, name)
+	if err != nil {
+		return nil, err
+	}
+
+	return client, nil
 }

@@ -1,4 +1,4 @@
-package run
+package network
 
 import (
 	"crypto/sha256"
@@ -11,7 +11,6 @@ import (
 	"syscall"
 	"time"
 
-	containerd "github.com/containerd/containerd/v2/client"
 	current "github.com/containernetworking/cni/pkg/types/100"
 	"github.com/containernetworking/plugins/pkg/ip"
 	"github.com/containernetworking/plugins/pkg/ns"
@@ -26,7 +25,7 @@ func netnsPath(pid int) string {
 	return fmt.Sprintf("/proc/%d/ns/net", pid)
 }
 
-func bridgeByName(name string) (*netlink.Bridge, error) {
+func BridgeByName(name string) (*netlink.Bridge, error) {
 	l, err := netlink.LinkByName(name)
 	if err != nil {
 		return nil, fmt.Errorf("could not lookup %q: %v", name, err)
@@ -81,7 +80,7 @@ func ensureBridge(brName string, mtu int, promiscMode, vlanFiltering bool) (*net
 
 	// Re-fetch link to read all attributes and if it already existed,
 	// ensure it's really a bridge with similar configuration
-	br, err = bridgeByName(brName)
+	br, err = BridgeByName(brName)
 	if err != nil {
 		return nil, err
 	}
@@ -96,7 +95,7 @@ func ensureBridge(brName string, mtu int, promiscMode, vlanFiltering bool) (*net
 	return br, nil
 }
 
-func setupVeth(netns ns.NetNS, br *netlink.Bridge, ifName string, mtu int, hairpinMode bool, vlanID int, mac string) (*current.Interface, *current.Interface, error) {
+func SetupVeth(netns ns.NetNS, br *netlink.Bridge, ifName string, mtu int, hairpinMode bool, vlanID int, mac string) (*current.Interface, *current.Interface, error) {
 	contIface := &current.Interface{}
 	hostIface := &current.Interface{}
 
@@ -143,49 +142,41 @@ func setupVeth(netns ns.NetNS, br *netlink.Bridge, ifName string, mtu int, hairp
 	return hostIface, contIface, nil
 }
 
-type NetworkConfig struct {
-	Addresses []net.IPNet
-	Gateways  []netip.Prefix
-}
-
-type IPAM interface {
-	IPForMac(string) ([]NetworkConfig, error)
-}
-
-type BridgeConfig struct {
-	Name        string
-	MTU         int
-	Vlan        int
-	PromiscMode bool
-	MAC         string
-	Id          string
-	IPAM        IPAM
-}
-
-func setupBridge(n *BridgeConfig) (*netlink.Bridge, *current.Interface, error) {
+func SetupBridge(n *BridgeConfig) (*netlink.Bridge, error) {
 	vlanFiltering := n.Vlan != 0
 
 	// create bridge if necessary
 	br, err := ensureBridge(n.Name, n.MTU, n.PromiscMode, vlanFiltering)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to create bridge %q: %w", n.Name, err)
+		return nil, fmt.Errorf("failed to create bridge %q: %w", n.Name, err)
 	}
 
 	err = enableForwarding(br)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to enable forwarding on bridge %q: %w", n.Name, err)
+		return nil, fmt.Errorf("failed to enable forwarding on bridge %q: %w", n.Name, err)
 	}
 
-	return br, &current.Interface{
-		Name: "miren-" + br.Attrs().Name,
-		Mac:  br.Attrs().HardwareAddr.String(),
-	}, nil
+	return br, nil
 }
 
 const (
 	// Note: use slash as separator so we can have dots in interface name (VLANs)
 	DisableIPv6SysctlTemplate = "net/ipv6/conf/%s/disable_ipv6"
 )
+
+func TeardownBridge(name string) error {
+	br, err := BridgeByName(name)
+	if err != nil {
+		return fmt.Errorf("failed to lookup bridge %q: %v", name, err)
+	}
+
+	// Delete the bridge
+	if err = netlink.LinkDel(br); err != nil {
+		return fmt.Errorf("failed to delete bridge %q: %v", name, err)
+	}
+
+	return nil
+}
 
 func enableIPv6(ifName string) error {
 	// Enabled IPv6 for loopback "lo" and the interface
@@ -213,7 +204,10 @@ func enableIPv6(ifName string) error {
 	return nil
 }
 
-func configureIface(ifName string, nc NetworkConfig) error {
+func ConfigureIface(log *slog.Logger, ifName string, nc *EndpointConfig) error {
+	_, _ = sysctl.Sysctl(fmt.Sprintf("net/ipv6/conf/%s/accept_dad", ifName), "0")
+	_, _ = sysctl.Sysctl(fmt.Sprintf("net/ipv4/conf/%s/arp_notify", ifName), "1")
+
 	link, err := netlink.LinkByName(ifName)
 	if err != nil {
 		return fmt.Errorf("failed to lookup %q: %v", ifName, err)
@@ -225,10 +219,15 @@ func configureIface(ifName string, nc NetworkConfig) error {
 	}
 
 	for _, ac := range nc.Addresses {
-		addr := &netlink.Addr{IPNet: &ac, Label: ""}
+		addr := &netlink.Addr{
+			IPNet: netipx.PrefixIPNet(ac),
+			Label: "",
+		}
 		if err = netlink.AddrAdd(link, addr); err != nil {
 			return fmt.Errorf("failed to add IP addr %v to %q: %v", ac, ifName, err)
 		}
+
+		log.Debug("added address", "address", ac.String(), "interface", ifName)
 	}
 
 	if err := netlink.LinkSetUp(link); err != nil {
@@ -237,28 +236,15 @@ func configureIface(ifName string, nc NetworkConfig) error {
 
 	ip.SettleAddresses(ifName, 10)
 
-	for _, gw := range nc.Gateways {
-		routeIsV4 := gw.Addr().Is4()
-		var dst *net.IPNet
-
-		if routeIsV4 {
-			_, dst, _ = net.ParseCIDR("0.0.0.0/0")
-		} else {
-			_, dst, _ = net.ParseCIDR("::/0")
-		}
-
-		net.ParseCIDR("0.0.0.0/0")
-
-		ngw := netipx.PrefixIPNet(gw)
-
+	for _, r := range nc.Routes {
 		route := netlink.Route{
-			Dst:       dst,
+			Dst:       netipx.PrefixIPNet(r.Dest),
 			LinkIndex: link.Attrs().Index,
-			Gw:        ngw.IP,
+			Gw:        r.Via.AsSlice(),
 		}
 
 		if err = netlink.RouteAddEcmp(&route); err != nil {
-			return fmt.Errorf("failed to add route '%v via %v dev %v': %v", dst, gw, ifName, err)
+			return fmt.Errorf("failed to add route '%v via %v dev %v': %v", r.Dest, r.Via, ifName, err)
 		}
 	}
 
@@ -352,22 +338,14 @@ func enableForwarding(br netlink.Link) error {
 	return nil
 }
 
-const MetadataIP = "169.254.168.1"
-
-func configureGW(br netlink.Link, nc NetworkConfig) error {
-	var natIP string
-
-	for _, ac := range nc.Addresses {
-		gwIP := &net.IPNet{
-			IP:   ip.NextIP(ac.IP.Mask(ac.Mask)),
-			Mask: ac.Mask,
-		}
+func ConfigureGW(br netlink.Link, ec *EndpointConfig) error {
+	for _, ac := range ec.Bridge.Addresses {
+		gwIP := netipx.PrefixIPNet(ac)
 
 		var family int
 
 		if gwIP.IP.To4() != nil {
 			family = netlink.FAMILY_V4
-			natIP = gwIP.IP.String()
 		} else {
 			family = netlink.FAMILY_V6
 		}
@@ -387,25 +365,12 @@ func configureGW(br netlink.Link, nc NetworkConfig) error {
 		}
 	}
 
-	ipt, err := iptables.NewWithProtocol(iptables.ProtocolIPv4)
-	if err != nil {
-		return err
-	}
-
-	if natIP == "" {
-		return nil
-	}
-
-	return ipt.AppendUnique(
-		"nat", "PREROUTING",
-		"-d", MetadataIP, "-j", "DNAT",
-		"--to-destination", natIP,
-	)
+	return nil
 }
 
 func formatChain(id string) string {
 	output := sha512.Sum512([]byte(id))
-	return fmt.Sprintf("ISLE-%x", output)[:28]
+	return fmt.Sprintf("MIREN-%x", output)[:28]
 }
 
 type Subnet struct {
@@ -414,73 +379,22 @@ type Subnet struct {
 	OSName string
 }
 
-func setupNetwork(
-	log *slog.Logger,
-	subnet *Subnet,
-	task containerd.Task,
-	cont *ContainerConfig,
-) error {
-	pid := task.Pid()
+func CalculateGateway(pr netip.Prefix) netip.Prefix {
+	start := pr.Masked()
+	return netip.PrefixFrom(start.Addr().Next(), start.Bits())
+}
 
-	path := netnsPath(int(pid))
+var retries = []int{0, 50, 500, 1000, 1000}
 
-	netns, err := ns.GetNS(path)
-	if err != nil {
-		return err
-	}
-
-	log.Debug("configuring netns", "path", path, "pid", pid)
-
-	bc := &BridgeConfig{
-		Name: subnet.OSName,
-		Id:   subnet.Id,
-		MAC:  idToMac(subnet.Id),
-	}
-
-	br, brInterface, err := setupBridge(bc)
-	if err != nil {
-		return err
-	}
-
-	hostInterface, containerInterface, err := setupVeth(
-		netns, br, "eth0", bc.MTU, true, bc.Vlan, bc.MAC,
-	)
-	if err != nil {
-		return err
-	}
-
-	log.Info("configured veth", "host-iface", hostInterface.Name, "cont-iface", containerInterface.Name)
-
-	var nc NetworkConfig
-	nc.Gateways = subnet.IP
-
-	for _, ip := range cont.IPs {
-		cidr := netipx.PrefixIPNet(ip)
-		nc.Addresses = append(nc.Addresses, *cidr)
-	}
-
-	if err := netns.Do(func(_ ns.NetNS) error {
-		_, _ = sysctl.Sysctl(fmt.Sprintf("net/ipv6/conf/%s/accept_dad", "eth0"), "0")
-		_, _ = sysctl.Sysctl(fmt.Sprintf("net/ipv4/conf/%s/arp_notify", "eth0"), "1")
-
-		// Add the IP to the interface
-		if err := configureIface("eth0", nc); err != nil {
-			return err
-		}
-		return nil
-	}); err != nil {
-		return err
-	}
-
-	// check bridge port state
-	retries := []int{0, 50, 500, 1000, 1000}
+func CheckBridgeStatus(name string) error {
 	for idx, sleep := range retries {
 		time.Sleep(time.Duration(sleep) * time.Millisecond)
 
-		hostVeth, err := netlink.LinkByName(hostInterface.Name)
+		hostVeth, err := netlink.LinkByName(name)
 		if err != nil {
 			return err
 		}
+
 		if hostVeth.Attrs().OperState == netlink.OperUp {
 			break
 		}
@@ -490,40 +404,18 @@ func setupNetwork(
 		}
 	}
 
-	// Refetch the bridge to get all updated attributes
-	br, err = bridgeByName(bc.Name)
-	if err != nil {
-		return err
-	}
+	return nil
+}
 
-	hw := br.Attrs().HardwareAddr
-	log.Debug("configuring bridge with gateway addresses", "mac", hw.String())
-	err = configureGW(br, nc)
-	if err != nil {
-		return err
-	}
+func MasqueradeEndpoint(ec *EndpointConfig) error {
+	chain := formatChain(ec.Bridge.Name)
+	comment := fmt.Sprintf("id: %q", ec.Bridge.Name)
 
-	chain := formatChain(bc.Id)
-	comment := fmt.Sprintf("id: %q", bc.Id)
-
-	for _, ac := range nc.Addresses {
-		if err = ip.SetupIPMasq(&ac, chain, comment); err != nil {
+	for _, ac := range ec.Addresses {
+		if err := ip.SetupIPMasq(netipx.PrefixIPNet(ac), chain, comment); err != nil {
 			return err
 		}
 	}
 
-	// Refetch the bridge since its MAC address may change when the first
-	// veth is added or after its IP address is set
-	br, err = bridgeByName(br.Name)
-	if err != nil {
-		return err
-	}
-	brInterface.Mac = br.Attrs().HardwareAddr.String()
-
 	return nil
-}
-
-func CalculateGateway(pr netip.Prefix) netip.Prefix {
-	start := pr.Masked()
-	return netip.PrefixFrom(start.Addr().Next(), start.Bits())
 }

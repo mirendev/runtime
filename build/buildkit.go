@@ -24,13 +24,6 @@ type Buildkit struct {
 	LogWriter observability.LogWriter
 }
 
-func NewBuildkit(ctx context.Context, cl *client.Client, tempdir string) (*Buildkit, error) {
-	bk := &Buildkit{
-		Client: cl,
-	}
-	return bk, nil
-}
-
 type tarOutput struct {
 	rc    io.ReadCloser
 	mu    sync.Mutex
@@ -60,6 +53,16 @@ func (t *tarOutput) Close() error {
 	return pe
 }
 
+type ociWriter struct {
+	log *slog.Logger
+	io.WriteCloser
+}
+
+func (o *ociWriter) Close() error {
+	o.log.Info("closing oci writer")
+	return o.WriteCloser.Close()
+}
+
 func (b *Buildkit) Transform(ctx context.Context, dfs fsutil.FS) (io.ReadCloser, error) {
 	mounts := map[string]fsutil.FS{
 		"dockerfile": dfs,
@@ -74,7 +77,8 @@ func (b *Buildkit) Transform(ctx context.Context, dfs fsutil.FS) (io.ReadCloser,
 	output := client.ExportEntry{
 		Type: "oci",
 		Output: func(attrs map[string]string) (io.WriteCloser, error) {
-			return w, nil
+			b.Log.Debug("returning oci output value")
+			return &ociWriter{b.Log, w}, nil
 		},
 	}
 
@@ -106,6 +110,8 @@ func (b *Buildkit) Transform(ctx context.Context, dfs fsutil.FS) (io.ReadCloser,
 
 	//mw := progresswriter.NewMultiWriter(pw)
 
+	b.Log.Info("building from fs walker", "ref", ref)
+
 	var to tarOutput
 	to.rc = r
 
@@ -122,7 +128,12 @@ func (b *Buildkit) Transform(ctx context.Context, dfs fsutil.FS) (io.ReadCloser,
 				select {
 				case <-ctx.Done():
 					return
-				case ss := <-ssProgress:
+				case ss, ok := <-ssProgress:
+					if !ok {
+						b.Log.Info("status channel closed", "ref", ref)
+						return
+					}
+
 					if data, err := json.Marshal(ss); err != nil {
 						err := b.LogWriter.WriteEntry("build", ref, observability.LogEntry{
 							Timestamp: time.Now(),
@@ -137,18 +148,23 @@ func (b *Buildkit) Transform(ctx context.Context, dfs fsutil.FS) (io.ReadCloser,
 		}()
 
 		_, err = b.Client.Build(ctx, solveOpt, "miren", func(ctx context.Context, c gateway.Client) (*gateway.Result, error) {
+			b.Log.Info("solving", "ref", ref)
 			res, err := c.Solve(ctx, sreq)
 			if err != nil {
+				b.Log.Error("failed to solve", "err", err)
 				return nil, err
 			}
 
+			b.Log.Info("solved", "ref", ref)
+
 			return res, nil
-		}, ssProgress)
+		}, nil)
 
 		to.mu.Lock()
 		to.bgErr = err
 		to.mu.Unlock()
 	}()
 
+	b.Log.Debug("returning tar output", "ref", ref)
 	return &to, nil
 }

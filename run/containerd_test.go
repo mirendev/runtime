@@ -1,4 +1,4 @@
-package run
+package run_test
 
 import (
 	"context"
@@ -18,8 +18,11 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"miren.dev/runtime/build"
+	"miren.dev/runtime/image"
+	"miren.dev/runtime/network"
 	"miren.dev/runtime/observability"
 	"miren.dev/runtime/pkg/testutils"
+	"miren.dev/runtime/run"
 )
 
 func TestContainerd(t *testing.T) {
@@ -29,7 +32,8 @@ func TestContainerd(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 
-		reg := testutils.Registry(observability.TestInject, build.TestInject)
+		reg, cleanup := testutils.Registry(observability.TestInject, build.TestInject)
+		defer cleanup()
 
 		var (
 			cc  *containerd.Client
@@ -48,7 +52,7 @@ func TestContainerd(t *testing.T) {
 		o, err := bkl.Transform(ctx, datafs)
 		r.NoError(err)
 
-		var ii ImageImporter
+		var ii image.ImageImporter
 
 		err = reg.Populate(&ii)
 		r.NoError(err)
@@ -73,7 +77,9 @@ func TestContainerd(t *testing.T) {
 
 		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 		defer cancel()
-		reg := testutils.Registry(observability.TestInject, build.TestInject)
+
+		reg, cleanup := testutils.Registry(observability.TestInject, build.TestInject)
+		defer cleanup()
 
 		var (
 			cc  *containerd.Client
@@ -109,7 +115,7 @@ func TestContainerd(t *testing.T) {
 		o, err := bkl.Transform(ctx, datafs)
 		r.NoError(err)
 
-		var ii ImageImporter
+		var ii image.ImageImporter
 
 		err = reg.Populate(&ii)
 		r.NoError(err)
@@ -123,7 +129,7 @@ func TestContainerd(t *testing.T) {
 		r.NoError(err)
 
 		var (
-			cr  ContainerRunner
+			cr  run.ContainerRunner
 			mon observability.RunSCMonitor
 		)
 
@@ -153,15 +159,21 @@ func TestContainerd(t *testing.T) {
 		ca, err := netip.ParsePrefix("172.16.8.2/24")
 		r.NoError(err)
 
-		config := &ContainerConfig{
-			App:   "mn-nginx",
-			Image: "mn-nginx:latest",
-			IPs:   []netip.Prefix{ca},
-			Subnet: &Subnet{
-				Id:     "sub",
-				IP:     []netip.Prefix{sa},
-				OSName: "mtest",
+		ec := &network.EndpointConfig{
+			Addresses: []netip.Prefix{ca},
+			Bridge: &network.BridgeConfig{
+				Name:      "mtest",
+				Addresses: []netip.Prefix{sa},
 			},
+		}
+
+		err = ec.DeriveDefaultGateway()
+		r.NoError(err)
+
+		config := &run.ContainerConfig{
+			App:      "mn-nginx",
+			Image:    "mn-nginx:latest",
+			Endpoint: ec,
 		}
 
 		id, err := cr.RunContainer(ctx, config)
@@ -274,7 +286,9 @@ func TestContainerd(t *testing.T) {
 
 		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 		defer cancel()
-		reg := testutils.Registry(observability.TestInject, build.TestInject)
+
+		reg, cleanup := testutils.Registry(observability.TestInject, build.TestInject)
+		defer cleanup()
 
 		var (
 			cc  *containerd.Client
@@ -310,7 +324,7 @@ func TestContainerd(t *testing.T) {
 		o, err := bkl.Transform(ctx, datafs)
 		r.NoError(err)
 
-		var ii ImageImporter
+		var ii image.ImageImporter
 
 		err = reg.Populate(&ii)
 		r.NoError(err)
@@ -324,7 +338,7 @@ func TestContainerd(t *testing.T) {
 		r.NoError(err)
 
 		var (
-			cr  ContainerRunner
+			cr  run.ContainerRunner
 			mon observability.RunSCMonitor
 		)
 
@@ -354,15 +368,21 @@ func TestContainerd(t *testing.T) {
 		ca, err := netip.ParsePrefix("172.16.8.2/24")
 		r.NoError(err)
 
-		config := &ContainerConfig{
-			App:   "mn-sort",
-			Image: "mn-sort:latest",
-			IPs:   []netip.Prefix{ca},
-			Subnet: &Subnet{
-				Id:     "sub",
-				IP:     []netip.Prefix{sa},
-				OSName: "mtest",
+		ec := &network.EndpointConfig{
+			Addresses: []netip.Prefix{ca},
+			Bridge: &network.BridgeConfig{
+				Name:      "mtest",
+				Addresses: []netip.Prefix{sa},
 			},
+		}
+
+		err = ec.DeriveDefaultGateway()
+		r.NoError(err)
+
+		config := &run.ContainerConfig{
+			App:      "mn-sort",
+			Image:    "mn-sort:latest",
+			Endpoint: ec,
 		}
 
 		id, err := cr.RunContainer(ctx, config)

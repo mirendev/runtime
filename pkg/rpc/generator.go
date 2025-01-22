@@ -487,6 +487,8 @@ func (g *Generator) readForField(f *j.File, t *DescType, field *DescField) {
 			f.Func().Params(
 				j.Id("v").Op("*").Add(recv),
 			).Id(name).Params().Id(field.Type).Block(
+				j.If(j.Id("v").Dot("data").Dot(name).Op("==").Nil()).Block(
+					j.Return(j.Qual("miren.dev/runtime/pkg/rpc", "Zero").Index(j.Id(field.Type)).Call())),
 				j.Return(j.Op("*").Id("v").Dot("data").Dot(name)),
 			)
 
@@ -605,6 +607,17 @@ func (g *Generator) writeForField(f *j.File, t *DescType, field *DescField) {
 
 			f.Line()
 
+			return
+		}
+
+		if slices.Contains(t.Generic, field.Type) {
+			f.Func().Params(
+				j.Id("v").Op("*").Add(recv),
+			).Id("Set" + name).Params(
+				j.Id(field.Name).Add(g.properType(field.Type)),
+			).Block(
+				j.Id("v").Dot("data").Dot(name).Op("=").Op("&").Id(field.Name),
+			)
 			return
 		}
 

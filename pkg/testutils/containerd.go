@@ -15,6 +15,34 @@ import (
 	"github.com/vishvananda/netlink"
 )
 
+func NukeNamespace(cl *containerd.Client, ns string) {
+	err := ClearContainers(cl, ns)
+	if err != nil {
+		fmt.Printf("error clearing containers: %s\n", err)
+	}
+
+	err = ClearImages(cl, ns)
+	if err != nil {
+		fmt.Printf("error clearing images: %s\n", err)
+	}
+
+	// There is a delay as things are cleaned up async that
+	// we can't see easily, so we just retry it if there is a failure.
+	for i := 0; i < 10; i++ {
+		err = cl.NamespaceService().Delete(context.TODO(), ns)
+		if err != nil {
+			if strings.Contains(err.Error(), "not found") {
+				break
+			}
+			fmt.Printf("error clearing namespace: %s\n", err)
+		} else {
+			break
+		}
+
+		time.Sleep(time.Second)
+	}
+}
+
 func ClearContainers(cl *containerd.Client, ns string) error {
 	defer NukeBridges()
 
@@ -31,6 +59,20 @@ func ClearContainers(cl *containerd.Client, ns string) error {
 		}
 
 		container.Delete(ctx, containerd.WithSnapshotCleanup)
+	}
+
+	return nil
+}
+
+func ClearImages(cl *containerd.Client, ns string) error {
+	ctx := namespaces.WithNamespace(context.Background(), ns)
+	images, err := cl.ListImages(ctx)
+	if err != nil {
+		return err
+	}
+
+	for _, img := range images {
+		cl.ImageService().Delete(ctx, img.Name())
 	}
 
 	return nil
