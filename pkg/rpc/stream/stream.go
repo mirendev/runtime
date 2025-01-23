@@ -158,3 +158,15 @@ func (c *chanReader[T]) Recv(ctx context.Context, state *RecvStreamRecv[T]) erro
 func ChanReader[T any](ch <-chan T) RecvStream[T] {
 	return &chanReader[T]{ch: ch}
 }
+
+type callbackSender[T any] struct {
+	fn func(T) error
+}
+
+func (c *callbackSender[T]) Send(ctx context.Context, state *SendStreamSend[T]) error {
+	return c.fn(state.Args().Value())
+}
+
+func Callback[T any](f func(T) error) SendStream[T] {
+	return &callbackSender[T]{fn: f}
+}

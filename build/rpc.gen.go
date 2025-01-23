@@ -10,6 +10,97 @@ import (
 	"miren.dev/runtime/pkg/rpc/stream"
 )
 
+type StatusUpdate interface {
+	Which() string
+	Message() string
+	SetMessage(string)
+	Buildkit() []byte
+	SetBuildkit([]byte)
+}
+
+type statusUpdate struct {
+	U_Message  *string `cbor:"1,keyasint,omitempty" json:"message,omitempty"`
+	U_Buildkit *[]byte `cbor:"2,keyasint,omitempty" json:"buildkit,omitempty"`
+}
+
+func (v *statusUpdate) Which() string {
+	if v.U_Message != nil {
+		return "message"
+	}
+	if v.U_Buildkit != nil {
+		return "buildkit"
+	}
+	return ""
+}
+
+func (v *statusUpdate) Message() string {
+	if v.U_Message == nil {
+		return ""
+	}
+	return *v.U_Message
+}
+
+func (v *statusUpdate) SetMessage(val string) {
+	v.U_Buildkit = nil
+	v.U_Message = &val
+}
+
+func (v *statusUpdate) Buildkit() []byte {
+	if v.U_Buildkit == nil {
+		return nil
+	}
+	return *v.U_Buildkit
+}
+
+func (v *statusUpdate) SetBuildkit(val []byte) {
+	v.U_Message = nil
+	v.U_Buildkit = &val
+}
+
+type statusData struct {
+	Kind *string `cbor:"0,keyasint,omitempty" json:"kind,omitempty"`
+	statusUpdate
+}
+
+type Status struct {
+	data statusData
+}
+
+func (v *Status) HasKind() bool {
+	return v.data.Kind != nil
+}
+
+func (v *Status) Kind() string {
+	if v.data.Kind == nil {
+		return ""
+	}
+	return *v.data.Kind
+}
+
+func (v *Status) SetKind(kind string) {
+	v.data.Kind = &kind
+}
+
+func (v *Status) Update() StatusUpdate {
+	return &v.data.statusUpdate
+}
+
+func (v *Status) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *Status) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *Status) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *Status) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
 type streamRecvArgsData struct {
 	Count *int32 `cbor:"0,keyasint,omitempty" json:"count,omitempty"`
 }
@@ -174,6 +265,7 @@ func (v StreamClient) Recv(ctx context.Context, count int32) (*StreamClientRecvR
 type builderBuildFromTarArgsData struct {
 	Application *string         `cbor:"0,keyasint,omitempty" json:"application,omitempty"`
 	Tardata     *rpc.Capability `cbor:"1,keyasint,omitempty" json:"tardata,omitempty"`
+	Status      *rpc.Capability `cbor:"2,keyasint,omitempty" json:"status,omitempty"`
 }
 
 type BuilderBuildFromTarArgs struct {
@@ -201,6 +293,17 @@ func (v *BuilderBuildFromTarArgs) Tardata() *stream.RecvStreamClient[[]byte] {
 		return nil
 	}
 	return &stream.RecvStreamClient[[]byte]{Client: v.call.NewClient(v.data.Tardata)}
+}
+
+func (v *BuilderBuildFromTarArgs) HasStatus() bool {
+	return v.data.Status != nil
+}
+
+func (v *BuilderBuildFromTarArgs) Status() *stream.SendStreamClient[*Status] {
+	if v.data.Status == nil {
+		return nil
+	}
+	return &stream.SendStreamClient[*Status]{Client: v.call.NewClient(v.data.Status)}
 }
 
 func (v *BuilderBuildFromTarArgs) MarshalCBOR() ([]byte, error) {
@@ -329,10 +432,11 @@ func (v *BuilderClientBuildFromTarResults) Version() string {
 	return *v.data.Version
 }
 
-func (v BuilderClient) BuildFromTar(ctx context.Context, application string, tardata stream.RecvStream[[]byte]) (*BuilderClientBuildFromTarResults, error) {
+func (v BuilderClient) BuildFromTar(ctx context.Context, application string, tardata stream.RecvStream[[]byte], status stream.SendStream[*Status]) (*BuilderClientBuildFromTarResults, error) {
 	args := BuilderBuildFromTarArgs{}
 	args.data.Application = &application
 	args.data.Tardata = v.Client.NewCapability(stream.AdaptRecvStream[[]byte](tardata), tardata)
+	args.data.Status = v.Client.NewCapability(stream.AdaptSendStream[*Status](status), status)
 
 	var ret builderBuildFromTarResultsData
 

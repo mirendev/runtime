@@ -3,6 +3,7 @@ package launch
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"net"
 	"os"
@@ -170,6 +171,8 @@ func (l *RunningBuildkit) Client(ctx context.Context) (*buildkit.Client, error) 
 		err := l.checkReady(ctx, cont)
 		if err == nil {
 			break
+		} else if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return nil, err
 		}
 
 		l.CR.Log.Debug("waiting for buildkit to be ready", "error", err)
