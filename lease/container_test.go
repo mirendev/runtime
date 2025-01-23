@@ -87,7 +87,7 @@ func TestLeaseContainer(t *testing.T) {
 		datafs, err := build.TarFS(dfr, t.TempDir())
 		r.NoError(err)
 
-		o, err := bkl.Transform(ctx, datafs)
+		o, _, err := bkl.Transform(ctx, datafs)
 		r.NoError(err)
 
 		var aa app.AppAccess
@@ -326,7 +326,7 @@ func TestLeaseContainer(t *testing.T) {
 		datafs, err := build.TarFS(dfr, t.TempDir())
 		r.NoError(err)
 
-		o, err := bkl.Transform(ctx, datafs)
+		o, _, err := bkl.Transform(ctx, datafs)
 		r.NoError(err)
 
 		var aa app.AppAccess
@@ -479,7 +479,7 @@ func TestLeaseContainer(t *testing.T) {
 		datafs, err := build.TarFS(dfr, t.TempDir())
 		r.NoError(err)
 
-		o, err := bkl.Transform(ctx, datafs)
+		o, _, err := bkl.Transform(ctx, datafs)
 		r.NoError(err)
 
 		var aa app.AppAccess
