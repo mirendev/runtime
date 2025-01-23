@@ -8,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/davecgh/go-spew/spew"
 	"github.com/moby/buildkit/client"
 	"github.com/mr-tron/base58"
 	"miren.dev/runtime/app"
@@ -114,7 +113,7 @@ func (b *RPCBuilder) BuildFromTar(ctx context.Context, state *BuilderBuildFromTa
 	if err != nil {
 		b.Log.Error("error getting buildkid info", "error", err)
 	} else {
-		spew.Dump(ci.BuildkitVersion)
+		b.Log.Debug("buildkitd info", "version", ci.BuildkitVersion.Version, "rev", ci.BuildkitVersion.Revision)
 	}
 
 	bk := &Buildkit{
