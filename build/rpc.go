@@ -8,6 +8,7 @@ import (
 	"os"
 
 	"github.com/davecgh/go-spew/spew"
+	"github.com/moby/buildkit/client"
 	"github.com/mr-tron/base58"
 	"miren.dev/runtime/app"
 	"miren.dev/runtime/build/launch"
@@ -64,6 +65,15 @@ func (b *RPCBuilder) BuildFromTar(ctx context.Context, state *BuilderBuildFromTa
 		return err
 	}
 
+	status := args.Status()
+
+	so := new(Status)
+
+	if status != nil {
+		so.Update().SetMessage("Reading application data")
+		status.Send(ctx, so)
+	}
+
 	b.Log.Debug("receiving tar data", "app", name, "tempdir", path)
 
 	r := stream.ToReader(ctx, td)
@@ -71,6 +81,11 @@ func (b *RPCBuilder) BuildFromTar(ctx context.Context, state *BuilderBuildFromTa
 	tr, err := TarFS(r, path)
 	if err != nil {
 		return fmt.Errorf("error untaring data: %w", err)
+	}
+
+	if status != nil {
+		so.Update().SetMessage("Launching builder")
+		status.Send(ctx, so)
 	}
 
 	b.Log.Debug("launching buildkitd")
@@ -109,7 +124,36 @@ func (b *RPCBuilder) BuildFromTar(ctx context.Context, state *BuilderBuildFromTa
 		return err
 	}
 
-	o, err := bk.Transform(ctx, tr)
+	var tos []TransformOptions
+
+	if status != nil {
+		tos = append(tos, WithPhaseUpdates(func(phase string) {
+			switch phase {
+			case "export":
+				so.Update().SetMessage("Registering image")
+				status.Send(ctx, so)
+			case "solved":
+				so.Update().SetMessage("Building image")
+				status.Send(ctx, so)
+			}
+		}))
+
+		tos = append(tos, WithStatusUpdates(func(ss *client.SolveStatus, sj []byte) {
+			so := new(Status)
+			so.Update().SetBuildkit(sj)
+			_, err := status.Send(ctx, so)
+			if err != nil {
+				b.Log.Warn("error sending status update", "error", err)
+			}
+		}))
+	}
+
+	if status != nil {
+		so.Update().SetMessage("Calculating build")
+		status.Send(ctx, so)
+	}
+
+	o, err := bk.Transform(ctx, tr, tos...)
 	if err != nil {
 		return err
 	}

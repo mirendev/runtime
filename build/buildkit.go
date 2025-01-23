@@ -7,7 +7,6 @@ import (
 	"log/slog"
 	"os"
 	"sync"
-	"time"
 
 	"github.com/moby/buildkit/client"
 	gateway "github.com/moby/buildkit/frontend/gateway/client"
@@ -63,7 +62,32 @@ func (o *ociWriter) Close() error {
 	return o.WriteCloser.Close()
 }
 
-func (b *Buildkit) Transform(ctx context.Context, dfs fsutil.FS) (io.ReadCloser, error) {
+type transformOpt struct {
+	statusUpdates func(ss *client.SolveStatus, sj []byte)
+	phaseUpdates  func(phase string)
+}
+
+type TransformOptions func(*transformOpt)
+
+func WithStatusUpdates(fn func(ss *client.SolveStatus, sj []byte)) TransformOptions {
+	return func(o *transformOpt) {
+		o.statusUpdates = fn
+	}
+}
+
+func WithPhaseUpdates(fn func(phase string)) TransformOptions {
+	return func(o *transformOpt) {
+		o.phaseUpdates = fn
+	}
+}
+
+func (b *Buildkit) Transform(ctx context.Context, dfs fsutil.FS, tos ...TransformOptions) (io.ReadCloser, error) {
+	var opts transformOpt
+
+	for _, o := range tos {
+		o(&opts)
+	}
+
 	mounts := map[string]fsutil.FS{
 		"dockerfile": dfs,
 		"context":    dfs,
@@ -77,6 +101,10 @@ func (b *Buildkit) Transform(ctx context.Context, dfs fsutil.FS) (io.ReadCloser,
 	output := client.ExportEntry{
 		Type: "oci",
 		Output: func(attrs map[string]string) (io.WriteCloser, error) {
+			if opts.phaseUpdates != nil {
+				opts.phaseUpdates("export")
+			}
+
 			b.Log.Debug("returning oci output value")
 			return &ociWriter{b.Log, w}, nil
 		},
@@ -110,6 +138,8 @@ func (b *Buildkit) Transform(ctx context.Context, dfs fsutil.FS) (io.ReadCloser,
 
 	//mw := progresswriter.NewMultiWriter(pw)
 
+	//mw.Status()
+
 	b.Log.Info("building from fs walker", "ref", ref)
 
 	var to tarOutput
@@ -133,14 +163,19 @@ func (b *Buildkit) Transform(ctx context.Context, dfs fsutil.FS) (io.ReadCloser,
 						b.Log.Info("status channel closed", "ref", ref)
 						return
 					}
+					if data, err := json.Marshal(ss); err == nil {
+						/*
+							err := b.LogWriter.WriteEntry("build", ref, observability.LogEntry{
+								Timestamp: time.Now(),
+								Body:      string(data),
+							})
+							if err != nil {
+								b.Log.Error("failed to write log entry", "err", err)
+							}
+						*/
 
-					if data, err := json.Marshal(ss); err != nil {
-						err := b.LogWriter.WriteEntry("build", ref, observability.LogEntry{
-							Timestamp: time.Now(),
-							Body:      string(data),
-						})
-						if err != nil {
-							b.Log.Error("failed to write log entry", "err", err)
+						if opts.statusUpdates != nil {
+							opts.statusUpdates(ss, data)
 						}
 					}
 				}
@@ -148,6 +183,10 @@ func (b *Buildkit) Transform(ctx context.Context, dfs fsutil.FS) (io.ReadCloser,
 		}()
 
 		_, err = b.Client.Build(ctx, solveOpt, "miren", func(ctx context.Context, c gateway.Client) (*gateway.Result, error) {
+			if opts.phaseUpdates != nil {
+				opts.phaseUpdates("solving")
+			}
+
 			b.Log.Info("solving", "ref", ref)
 			res, err := c.Solve(ctx, sreq)
 			if err != nil {
@@ -155,10 +194,14 @@ func (b *Buildkit) Transform(ctx context.Context, dfs fsutil.FS) (io.ReadCloser,
 				return nil, err
 			}
 
+			if opts.phaseUpdates != nil {
+				opts.phaseUpdates("solved")
+			}
+
 			b.Log.Info("solved", "ref", ref)
 
 			return res, nil
-		}, nil)
+		}, ssProgress)
 
 		to.mu.Lock()
 		to.bgErr = err

@@ -6,6 +6,22 @@ imports:
     path: ../pkg/rpc/stream/stream.yml
     import: miren.dev/runtime/pkg/rpc/stream
 
+types:
+  - type: Status
+    fields:
+      - name: kind
+        type: string
+        index: 0
+      - name: update
+        type: union
+        union:
+          - name: message
+            type: string
+            index: 1
+          - name: buildkit
+            type: bytes
+            index: 2
+
 interfaces:
   - name: Stream
     methods:
@@ -25,6 +41,8 @@ interfaces:
             type: string
           - name: tardata
             type: stream.RecvStream[[]byte]
+          - name: status
+            type: stream.SendStream[*Status]
         results:
           - name: version
             type: string
