@@ -15,6 +15,7 @@ import (
 	"github.com/moby/buildkit/util/progress/progresswriter"
 
 	"miren.dev/runtime/build"
+	"miren.dev/runtime/pkg/colortheory"
 	"miren.dev/runtime/pkg/rpc/stream"
 )
 
@@ -165,6 +166,7 @@ type pushInfo struct {
 
 	transfers chan transferUpdate
 	prog      progress.Model
+	parts     int
 
 	fetch string
 }
@@ -182,15 +184,23 @@ var Meter = spinner.Spinner{
 	FPS: time.Second / 7, //nolint:gomnd
 }
 
+var (
+	mirenBlue = "#3E53FB"
+	lightBlue = colortheory.ChangeLightness(mirenBlue, -10)
+)
+
 func initialModel(update chan string, transfers chan transferUpdate) *pushInfo {
 	s := spinner.New()
 	s.Spinner = Meter
 	s.Style = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{
 		Light: "#3E53FB",
-		Dark:  "206",
+		Dark:  lightBlue,
 	})
 
-	p := progress.New(progress.WithWidth(20), progress.WithDefaultGradient())
+	p := progress.New(progress.WithWidth(20), progress.WithGradient(
+		colortheory.ChangeLightness("#3E53FB", -10),
+		colortheory.ChangeLightness("#3E53FB", 20),
+	))
 
 	return &pushInfo{
 		spinner:   s,
@@ -239,6 +249,8 @@ func (m *pushInfo) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			current += t.current
 		}
 
+		m.parts = len(msg.transfers)
+
 		cmd := m.prog.SetPercent(float64(current) / float64(total))
 		return m,
 			tea.Batch(cmd,
@@ -267,5 +279,7 @@ func (m *pushInfo) View() string {
 		return m.err.Error()
 	}
 
-	return fmt.Sprintf("%s %s...\n    %s %s\n", m.spinner.View(), m.message, m.fetch, m.prog.View())
+	fetch := lipgloss.NewStyle().Faint(true).Render(fmt.Sprintf("Fetching %d data:", m.parts))
+
+	return fmt.Sprintf("%s %s...\n    %s %s\n", m.spinner.View(), m.message, fetch, m.prog.View())
 }
