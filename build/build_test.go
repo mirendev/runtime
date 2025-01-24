@@ -42,7 +42,7 @@ func TestBuildKitLocal(t *testing.T) {
 		datafs, err := TarFS(dfr, t.TempDir())
 		r.NoError(err)
 
-		o, err := bkl.Transform(ctx, datafs)
+		o, _, err := bkl.Transform(ctx, datafs)
 		r.NoError(err)
 
 		files, err := TarToMap(o)
@@ -116,7 +116,7 @@ func TestBuildKitLocal(t *testing.T) {
 		datafs, err := fsutil.NewFS("testdata/df-large")
 		r.NoError(err)
 
-		o, err := bkl.Transform(ctx, datafs)
+		o, _, err := bkl.Transform(ctx, datafs)
 		r.NoError(err)
 
 		tr := tar.NewReader(o)

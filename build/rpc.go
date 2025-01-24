@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
 
-	"github.com/davecgh/go-spew/spew"
 	"github.com/moby/buildkit/client"
 	"github.com/mr-tron/base58"
 	"miren.dev/runtime/app"
@@ -65,6 +65,8 @@ func (b *RPCBuilder) BuildFromTar(ctx context.Context, state *BuilderBuildFromTa
 		return err
 	}
 
+	defer os.RemoveAll(path)
+
 	status := args.Status()
 
 	so := new(Status)
@@ -89,6 +91,10 @@ func (b *RPCBuilder) BuildFromTar(ctx context.Context, state *BuilderBuildFromTa
 	}
 
 	b.Log.Debug("launching buildkitd")
+
+	cacheDir := filepath.Join(b.TempDir, "buildkit-cache")
+	os.MkdirAll(cacheDir, 0755)
+
 	rbk, err := b.LBK.Launch(ctx)
 	if err != nil {
 		return err
@@ -107,7 +113,7 @@ func (b *RPCBuilder) BuildFromTar(ctx context.Context, state *BuilderBuildFromTa
 	if err != nil {
 		b.Log.Error("error getting buildkid info", "error", err)
 	} else {
-		spew.Dump(ci.BuildkitVersion)
+		b.Log.Debug("buildkitd info", "version", ci.BuildkitVersion.Version, "rev", ci.BuildkitVersion.Revision)
 	}
 
 	bk := &Buildkit{
@@ -125,6 +131,8 @@ func (b *RPCBuilder) BuildFromTar(ctx context.Context, state *BuilderBuildFromTa
 	}
 
 	var tos []TransformOptions
+
+	tos = append(tos, WithCacheDir(cacheDir))
 
 	if status != nil {
 		tos = append(tos, WithPhaseUpdates(func(phase string) {
@@ -153,7 +161,7 @@ func (b *RPCBuilder) BuildFromTar(ctx context.Context, state *BuilderBuildFromTa
 		status.Send(ctx, so)
 	}
 
-	o, err := bk.Transform(ctx, tr, tos...)
+	o, done, err := bk.Transform(ctx, tr, tos...)
 	if err != nil {
 		return err
 	}
@@ -163,6 +171,13 @@ func (b *RPCBuilder) BuildFromTar(ctx context.Context, state *BuilderBuildFromTa
 	err = b.ImportImporter.ImportImage(ctx, o, name+":"+mrv)
 	if err != nil {
 		return err
+	}
+
+	select {
+	case <-done:
+	// ok
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 
 	state.Results().SetVersion(mrv)

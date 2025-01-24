@@ -9,6 +9,7 @@ import (
 	"sync"
 
 	"github.com/moby/buildkit/client"
+	"github.com/moby/buildkit/frontend"
 	gateway "github.com/moby/buildkit/frontend/gateway/client"
 	"github.com/moby/buildkit/identity"
 	"miren.dev/runtime/observability"
@@ -65,6 +66,7 @@ func (o *ociWriter) Close() error {
 type transformOpt struct {
 	statusUpdates func(ss *client.SolveStatus, sj []byte)
 	phaseUpdates  func(phase string)
+	cacheDir      string
 }
 
 type TransformOptions func(*transformOpt)
@@ -81,7 +83,13 @@ func WithPhaseUpdates(fn func(phase string)) TransformOptions {
 	}
 }
 
-func (b *Buildkit) Transform(ctx context.Context, dfs fsutil.FS, tos ...TransformOptions) (io.ReadCloser, error) {
+func WithCacheDir(dir string) TransformOptions {
+	return func(o *transformOpt) {
+		o.cacheDir = dir
+	}
+}
+
+func (b *Buildkit) Transform(ctx context.Context, dfs fsutil.FS, tos ...TransformOptions) (io.ReadCloser, chan struct{}, error) {
 	var opts transformOpt
 
 	for _, o := range tos {
@@ -95,7 +103,7 @@ func (b *Buildkit) Transform(ctx context.Context, dfs fsutil.FS, tos ...Transfor
 
 	r, w, err := os.Pipe()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	output := client.ExportEntry{
@@ -113,10 +121,11 @@ func (b *Buildkit) Transform(ctx context.Context, dfs fsutil.FS, tos ...Transfor
 	ref := identity.NewID()
 
 	solveOpt := client.SolveOpt{
-		Exports:     []client.ExportEntry{output},
-		LocalMounts: mounts,
-		Frontend:    "dockerfile.v0",
-		Ref:         ref,
+		Exports:       []client.ExportEntry{output},
+		LocalMounts:   mounts,
+		Frontend:      "dockerfile.v0",
+		FrontendAttrs: map[string]string{},
+		Ref:           ref,
 		/*
 			TODO(emp): add this when we're ready to support verifying and/or displaying sbom
 					FrontendAttrs: map[string]string{
@@ -125,9 +134,36 @@ func (b *Buildkit) Transform(ctx context.Context, dfs fsutil.FS, tos ...Transfor
 		*/
 	}
 
+	if opts.cacheDir != "" {
+		solveOpt.CacheImports = []client.CacheOptionsEntry{
+			{
+				Type: "local",
+				Attrs: map[string]string{
+					"src": opts.cacheDir,
+				},
+			},
+		}
+		solveOpt.CacheExports = []client.CacheOptionsEntry{
+			{
+				Type: "local",
+				Attrs: map[string]string{
+					"dest": opts.cacheDir,
+				},
+			},
+		}
+	}
+
 	sreq := gateway.SolveRequest{
 		Frontend:    solveOpt.Frontend,
 		FrontendOpt: solveOpt.FrontendAttrs,
+	}
+
+	sreq.CacheImports = make([]frontend.CacheOptionsEntry, len(solveOpt.CacheImports))
+	for i, e := range solveOpt.CacheImports {
+		sreq.CacheImports[i] = frontend.CacheOptionsEntry{
+			Type:  e.Type,
+			Attrs: e.Attrs,
+		}
 	}
 
 	// not using shared context to not disrupt display but let is finish reporting errors
@@ -145,7 +181,10 @@ func (b *Buildkit) Transform(ctx context.Context, dfs fsutil.FS, tos ...Transfor
 	var to tarOutput
 	to.rc = r
 
+	done := make(chan struct{})
+
 	go func() {
+		defer close(done)
 		defer w.Close()
 
 		ctx, cancel := context.WithCancel(ctx)
@@ -209,5 +248,5 @@ func (b *Buildkit) Transform(ctx context.Context, dfs fsutil.FS, tos ...Transfor
 	}()
 
 	b.Log.Debug("returning tar output", "ref", ref)
-	return &to, nil
+	return &to, done, nil
 }

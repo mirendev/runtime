@@ -34,7 +34,24 @@ type RunningBuildkit struct {
 	id   string
 }
 
-func (l *LaunchBuildkit) Launch(ctx context.Context) (*RunningBuildkit, error) {
+type launchOptions struct {
+	cacheDir string
+}
+
+type LaunchOption func(*launchOptions)
+
+func WithCacheDir(dir string) LaunchOption {
+	return func(o *launchOptions) {
+		o.cacheDir = dir
+	}
+}
+
+func (l *LaunchBuildkit) Launch(ctx context.Context, lo ...LaunchOption) (*RunningBuildkit, error) {
+	var opts launchOptions
+	for _, o := range lo {
+		o(&opts)
+	}
+
 	ctx = namespaces.WithNamespace(ctx, l.Namespace)
 
 	img, err := l.CR.CC.GetImage(ctx, "ghcr.io/mirendev/buildkit:latest")
