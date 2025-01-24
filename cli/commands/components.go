@@ -55,8 +55,11 @@ func (c *Context) setupServerComponents(ctx context.Context, reg *asm.Registry) 
 
 	reg.Register("runsc_binary", "runsc")
 
+	reg.Register("server-id", "miren-server")
+
 	reg.ProvideName("subnet", func(opts struct {
 		TempDir string `asm:"tempdir"`
+		Id      string `asm:"server-id"`
 	}) (*netdb.Subnet, error) {
 		ndb, err := netdb.New(filepath.Join(opts.TempDir, "net.db"))
 		if err != nil {
@@ -68,7 +71,7 @@ func (c *Context) setupServerComponents(ctx context.Context, reg *asm.Registry) 
 			return nil, err
 		}
 
-		return mega.ReserveSubnet(24)
+		return mega.ReserveSubnet(24, opts.Id)
 	})
 
 	reg.Register("clickhouse-address", "clickhouse:9000")

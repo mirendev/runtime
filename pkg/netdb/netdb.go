@@ -39,7 +39,9 @@ func New(path string) (*NetDB, error) {
 		CREATE TABLE IF NOT EXISTS subnets (
 			cidr TEXT PRIMARY KEY,
 			parent TEXT,
-			reserved INTEGER DEFAULT 1
+			identifier TEXT,
+			reserved INTEGER DEFAULT 1,
+			UNIQUE(parent, identifier)
 		);
 		CREATE TABLE IF NOT EXISTS interfaces (
 			name TEXT PRIMARY KEY,
@@ -80,7 +82,7 @@ func (s *Subnet) Prefix() netip.Prefix {
 	return s.net
 }
 
-func (s *Subnet) ReserveSubnet(bits int) (*Subnet, error) {
+func (s *Subnet) ReserveSubnet(bits int, identifier string) (*Subnet, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -98,6 +100,31 @@ func (s *Subnet) ReserveSubnet(bits int) (*Subnet, error) {
 	}
 	defer tx.Rollback()
 
+	// Check if we already have a reservation for this identifier
+	var existingCIDR string
+	err = tx.QueryRow("SELECT cidr FROM subnets WHERE parent = ? AND identifier = ?",
+		s.net.String(), identifier).Scan(&existingCIDR)
+	if err == nil {
+		// Found existing reservation
+		prefix, err := netip.ParsePrefix(existingCIDR)
+		if err != nil {
+			return nil, fmt.Errorf("invalid stored cidr: %w", err)
+		}
+
+		err = tx.Commit()
+		if err != nil {
+			return nil, err
+		}
+
+		return &Subnet{
+			db:  s.db,
+			net: prefix,
+		}, nil
+	} else if err != sql.ErrNoRows {
+		return nil, err
+	}
+
+	// No existing reservation found, proceed with allocation
 	for {
 		if !s.net.Contains(prefix.Addr()) {
 			return nil, net.InvalidAddrError("no available subnets in parent subnet")
@@ -148,8 +175,8 @@ func (s *Subnet) ReserveSubnet(bits int) (*Subnet, error) {
 		}
 
 		// Try to insert the subnet reservation
-		_, err = tx.Exec("INSERT INTO subnets (cidr, parent, reserved) VALUES (?, ?, 1) ON CONFLICT(cidr) DO NOTHING",
-			prefix.String(), s.net.String())
+		_, err = tx.Exec("INSERT INTO subnets (cidr, parent, identifier, reserved) VALUES (?, ?, ?, 1) ON CONFLICT(cidr) DO NOTHING",
+			prefix.String(), s.net.String(), identifier)
 		if err != nil {
 			return nil, err
 		}
