@@ -16,6 +16,7 @@ import (
 	buildkit "github.com/moby/buildkit/client"
 	"miren.dev/runtime/network"
 	"miren.dev/runtime/pkg/asm"
+	"miren.dev/runtime/pkg/idgen"
 	"miren.dev/runtime/pkg/netdb"
 	"miren.dev/runtime/pkg/slogfmt"
 
@@ -42,7 +43,7 @@ func Registry(extra ...func(*asm.Registry)) (*asm.Registry, func()) {
 		panic(err)
 	}
 
-	subnet, err := mega.ReserveSubnet(24)
+	subnet, err := mega.ReserveSubnet(24, idgen.Gen("test"))
 	if err != nil {
 		panic(err)
 	}

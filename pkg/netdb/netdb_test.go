@@ -45,12 +45,12 @@ func TestNetDB(t *testing.T) {
 		subnet, err := n.Subnet("172.16.0.0/16")
 		r.NoError(err)
 
-		sub, err := subnet.ReserveSubnet(24)
+		sub, err := subnet.ReserveSubnet(24, "a")
 		r.NoError(err)
 
 		r.Equal("172.16.0.0/24", sub.Prefix().String())
 
-		sub2, err := subnet.ReserveSubnet(24)
+		sub2, err := subnet.ReserveSubnet(24, "b")
 		r.NoError(err)
 
 		r.Equal("172.16.1.0/24", sub2.Prefix().String())
