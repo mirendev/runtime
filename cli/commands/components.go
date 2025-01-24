@@ -30,8 +30,13 @@ import (
 )
 
 func (c *Context) setupServerComponents(ctx context.Context, reg *asm.Registry) {
-	reg.Provide(func() (*containerd.Client, error) {
-		return containerd.New("/run/containerd/containerd.sock")
+	reg.Register("namespace", "miren-test")
+
+	reg.Provide(func(opts struct {
+		Namespace string `asm:"namespace"`
+	}) (*containerd.Client, error) {
+		return containerd.New("/run/containerd/containerd.sock",
+			containerd.WithDefaultNamespace(opts.Namespace))
 	})
 
 	reg.Provide(func(opts struct {
@@ -40,7 +45,6 @@ func (c *Context) setupServerComponents(ctx context.Context, reg *asm.Registry) 
 		return buildkit.New(ctx, "")
 	})
 
-	reg.Register("namespace", "miren-test")
 	reg.Register("org_id", uint64(1))
 
 	reg.Register("log", c.Log)
@@ -75,6 +79,8 @@ func (c *Context) setupServerComponents(ctx context.Context, reg *asm.Registry) 
 
 	reg.Register("http_domain", "local.miren.run")
 	reg.Register("lookup_timeout", time.Second*5)
+
+	reg.Register("rollback_window", 2)
 
 	reg.ProvideName("clickhouse", func(opts struct {
 		Log     *slog.Logger
@@ -185,6 +191,10 @@ func (c *Context) setupServerComponents(ctx context.Context, reg *asm.Registry) 
 
 	reg.Provide(func() *lease.LaunchContainer {
 		return &lease.LaunchContainer{}
+	})
+
+	reg.Provide(func() *image.ImagePruner {
+		return &image.ImagePruner{}
 	})
 
 	reg.Provide(func() *discovery.Containerd {

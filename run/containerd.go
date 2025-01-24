@@ -11,10 +11,10 @@ import (
 	"github.com/containerd/containerd/v2/pkg/namespaces"
 	"github.com/containerd/containerd/v2/pkg/oci"
 	_ "github.com/moby/buildkit/client/connhelper/dockercontainer"
-	"github.com/moby/buildkit/identity"
 	"github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/pkg/errors"
 	"miren.dev/runtime/network"
+	"miren.dev/runtime/pkg/idgen"
 )
 
 type ContainerRunner struct {
@@ -38,9 +38,10 @@ func (c *ContainerRunner) Populated() error {
 }
 
 type ContainerConfig struct {
-	Id    string
-	App   string
-	Image string
+	Id      string
+	App     string
+	Image   string
+	Version string
 
 	Labels map[string]string
 
@@ -55,7 +56,7 @@ type ContainerConfig struct {
 
 func (c *ContainerRunner) RunContainer(ctx context.Context, config *ContainerConfig) (string, error) {
 	if config.Id == "" {
-		config.Id = identity.NewID()
+		config.Id = idgen.Gen("c")
 	}
 
 	if config.Endpoint == nil {
@@ -119,6 +120,7 @@ func (c *ContainerRunner) buildSpec(ctx context.Context, config *ContainerConfig
 
 	lbls := map[string]string{
 		"miren.dev/app":           config.App,
+		"miren.dev/version":       config.Version,
 		"miren.dev/http_host":     config.Endpoint.Addresses[0].Addr().String() + ":3000",
 		"miren.dev/ip":            config.Endpoint.Addresses[0].Addr().String(),
 		"miren.dev/endpoint:http": "port=3000,type=http",

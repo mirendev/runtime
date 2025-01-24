@@ -185,6 +185,16 @@ func (a *AppAccess) CreateVersion(ctx context.Context, av *AppVersion) error {
 	return err
 }
 
+func (a *AppAccess) DeleteVersion(ctx context.Context, av *AppVersion) error {
+	err := a.inTx(ctx, func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctx,
+			"DELETE FROM application_versions WHERE id = $1", av.Id,
+		)
+		return err
+	})
+	return err
+}
+
 func (a *AppAccess) LoadVersion(ctx context.Context, ac *AppConfig, version string) (*AppVersion, error) {
 	var appVersion AppVersion
 
@@ -217,4 +227,36 @@ func (a *AppAccess) MostRecentVersion(ctx context.Context, ac *AppConfig) (*AppV
 	appVersion.App = ac
 
 	return &appVersion, nil
+}
+
+func (a *AppAccess) ListVersions(ctx context.Context, ac *AppConfig) ([]*AppVersion, error) {
+	var ret []*AppVersion
+
+	err := a.inTx(ctx, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx,
+			"SELECT id, application_id, version, created_at, updated_at, static_dir FROM application_versions WHERE application_id = $1 ORDER BY created_at DESC", ac.Id,
+		)
+		if err != nil {
+			return err
+		}
+
+		for rows.Next() {
+			var appVersion AppVersion
+			err = rows.Scan(&appVersion.Id, &appVersion.AppId, &appVersion.Version, &appVersion.CreatedAt, &appVersion.UpdatedAt, &appVersion.StaticDir)
+			if err != nil {
+				return err
+			}
+
+			appVersion.App = ac
+			ret = append(ret, &appVersion)
+		}
+
+		return nil
+	})
+
+	if err != nil {
+		return nil, err
+	}
+
+	return ret, nil
 }

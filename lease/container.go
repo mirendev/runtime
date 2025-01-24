@@ -13,11 +13,11 @@ import (
 
 	"github.com/containerd/containerd/v2/client"
 	"github.com/containerd/containerd/v2/pkg/namespaces"
-	"github.com/moby/buildkit/identity"
 	"miren.dev/runtime/app"
 	"miren.dev/runtime/discovery"
 	"miren.dev/runtime/health"
 	"miren.dev/runtime/network"
+	"miren.dev/runtime/pkg/idgen"
 	"miren.dev/runtime/pkg/netdb"
 	"miren.dev/runtime/pkg/set"
 	"miren.dev/runtime/run"
@@ -207,6 +207,8 @@ type runningContainer struct {
 
 	idleSince time.Time
 
+	image string
+
 	windows set.Set[*UsageWindow]
 
 	buf [128]byte
@@ -255,6 +257,8 @@ type UsageWindow struct {
 
 	Leases      set.Set[*LeasedContainer]
 	TotalLeases uint32
+
+	Version *app.AppVersion
 
 	container *runningContainer
 }
@@ -353,7 +357,7 @@ func (l *LaunchContainer) Lease(ctx context.Context, name string, opts ...LeaseO
 
 		win = &UsageWindow{
 			App:         pool.app.name,
-			Id:          identity.NewID(),
+			Id:          idgen.Gen("w"),
 			Start:       start,
 			Leases:      set.New[*LeasedContainer](),
 			TotalLeases: 1,
@@ -441,7 +445,7 @@ func (l *LaunchContainer) Lease(ctx context.Context, name string, opts ...LeaseO
 	pool.pending.Add(pc)
 	defer pool.pending.Remove(pc)
 
-	winId := identity.NewID()
+	winId := idgen.Gen("w")
 	l.Log.Info("launching container", "app", ac.Name, "pool", lo.poolName, "version", mrv.Version, "window", winId)
 
 	pool.mu.Unlock()
@@ -465,6 +469,7 @@ func (l *LaunchContainer) Lease(ctx context.Context, name string, opts ...LeaseO
 		Start:       0,
 		Leases:      set.New[*LeasedContainer](),
 		TotalLeases: 1,
+		Version:     mrv,
 
 		container: rc,
 	}
@@ -583,6 +588,7 @@ func (l *LaunchContainer) launch(
 
 	rc := &runningContainer{
 		id:          config.Id,
+		image:       config.Image,
 		cpuStatPath: filepath.Join("/sys/fs/cgroup", config.CGroupPath, "cpu.stat"),
 	}
 
@@ -686,8 +692,15 @@ func (l *LaunchContainer) RecoverContainers(ctx context.Context) error {
 
 		pool := l.lookupPool(appName, poolName)
 
+		img, err := container.Image(ctx)
+		if err != nil {
+			l.Log.Warn("failed to get container image", "container", container.ID(), "error", err)
+			continue
+		}
+
 		rc := &runningContainer{
 			id:          container.ID(),
+			image:       img.Name(),
 			cpuStatPath: filepath.Join("/sys/fs/cgroup", spec.Linux.CgroupsPath, "cpu.stat"),
 			idleSince:   time.Now(), // We assume recovered containers are idle
 			windows:     set.New[*UsageWindow](),
@@ -741,4 +754,37 @@ func (l *LaunchContainer) Shutdown(ctx context.Context) (int, error) {
 	}
 
 	return cnt, nil
+}
+
+func (l *LaunchContainer) ImageInUse(ctx context.Context, image string) (bool, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	for _, app := range l.applications {
+		for _, pool := range app.pools {
+			pool.mu.Lock()
+
+			for rc := range pool.windows {
+				if rc.container.image == image {
+					l.Log.Debug("image in use in pool window", "app", app.name, "pool", pool.name, "image", image)
+					pool.mu.Unlock()
+					return true, nil
+				}
+			}
+
+			for rc := range pool.idle {
+				if rc.image == image {
+					pool.mu.Unlock()
+					l.Log.Debug("image in use in idle pool", "app", app.name, "pool", pool.name, "image", image)
+					return true, nil
+				}
+			}
+
+			pool.mu.Unlock()
+		}
+	}
+
+	l.Log.Debug("image not in use", "image", image)
+
+	return false, nil
 }
