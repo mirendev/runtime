@@ -2,18 +2,17 @@ package build
 
 import (
 	"context"
-	"crypto/rand"
 	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
 
 	"github.com/moby/buildkit/client"
-	"github.com/mr-tron/base58"
 	"miren.dev/runtime/app"
 	"miren.dev/runtime/build/launch"
 	"miren.dev/runtime/image"
 	"miren.dev/runtime/observability"
+	"miren.dev/runtime/pkg/idgen"
 	"miren.dev/runtime/pkg/rpc/stream"
 )
 
@@ -26,6 +25,7 @@ type RPCBuilder struct {
 
 	AppAccess      *app.AppAccess
 	ImportImporter *image.ImageImporter
+	ImagePruner    *image.ImagePruner
 	LogWriter      observability.LogWriter
 }
 
@@ -35,13 +35,7 @@ func (b *RPCBuilder) nextVersion(ctx context.Context, name string) (string, erro
 		return "", err
 	}
 
-	data := make([]byte, 16)
-	_, err = rand.Read(data)
-	if err != nil {
-		return "", err
-	}
-
-	ver := name + "-" + base58.Encode(data)
+	ver := name + "-" + idgen.Gen("v")
 
 	err = b.AppAccess.CreateVersion(ctx, &app.AppVersion{
 		AppId:   ac.Id,
@@ -179,6 +173,13 @@ func (b *RPCBuilder) BuildFromTar(ctx context.Context, state *BuilderBuildFromTa
 	case <-ctx.Done():
 		return ctx.Err()
 	}
+
+	go func() {
+		err := b.ImagePruner.PruneApp(context.Background(), name)
+		if err != nil {
+			b.Log.Error("error pruning app images", "app", name, "error", err)
+		}
+	}()
 
 	state.Results().SetVersion(mrv)
 

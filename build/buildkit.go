@@ -11,8 +11,8 @@ import (
 	"github.com/moby/buildkit/client"
 	"github.com/moby/buildkit/frontend"
 	gateway "github.com/moby/buildkit/frontend/gateway/client"
-	"github.com/moby/buildkit/identity"
 	"miren.dev/runtime/observability"
+	"miren.dev/runtime/pkg/idgen"
 
 	"github.com/tonistiigi/fsutil"
 )
@@ -118,7 +118,7 @@ func (b *Buildkit) Transform(ctx context.Context, dfs fsutil.FS, tos ...Transfor
 		},
 	}
 
-	ref := identity.NewID()
+	ref := idgen.Gen("r")
 
 	solveOpt := client.SolveOpt{
 		Exports:       []client.ExportEntry{output},

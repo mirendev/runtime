@@ -6,10 +6,10 @@ import (
 
 	"github.com/containerd/containerd/v2/pkg/cio"
 	"github.com/containerd/containerd/v2/pkg/namespaces"
-	"github.com/moby/buildkit/identity"
 	"github.com/opencontainers/runtime-spec/specs-go"
 	"golang.org/x/sys/unix"
 	"miren.dev/runtime/lease"
+	"miren.dev/runtime/pkg/idgen"
 	"miren.dev/runtime/pkg/rpc/stream"
 )
 
@@ -68,7 +68,7 @@ func (r *RPCShell) Open(ctx context.Context, state *ShellAccessOpen) error {
 
 	cstreams := cio.NewCreator(copts...)
 
-	proc, err := task.Exec(ctx, "shell-access-"+identity.NewID(), spec, cstreams)
+	proc, err := task.Exec(ctx, idgen.Gen("e"), spec, cstreams)
 	if err != nil {
 		return err
 	}

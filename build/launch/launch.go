@@ -13,9 +13,9 @@ import (
 	"github.com/containerd/containerd/v2/pkg/cio"
 	"github.com/containerd/containerd/v2/pkg/namespaces"
 	buildkit "github.com/moby/buildkit/client"
-	"github.com/moby/buildkit/identity"
 	"github.com/opencontainers/runtime-spec/specs-go"
 	"miren.dev/runtime/network"
+	"miren.dev/runtime/pkg/idgen"
 	"miren.dev/runtime/pkg/netdb"
 	"miren.dev/runtime/run"
 )
@@ -141,7 +141,7 @@ func (l *RunningBuildkit) checkReady(ctx context.Context, cont client.Container)
 	var out bytes.Buffer
 
 	proc, err := task.Exec(ctx,
-		identity.NewID(),
+		idgen.Gen("t"),
 		&specs.Process{
 			Args: []string{"buildctl", "debug", "info"},
 			Env:  []string{"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"},

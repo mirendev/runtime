@@ -281,5 +281,5 @@ func (m *pushInfo) View() string {
 
 	fetch := lipgloss.NewStyle().Faint(true).Render(fmt.Sprintf("Fetching %d data:", m.parts))
 
-	return fmt.Sprintf("%s %s...\n    %s %s\n", m.spinner.View(), m.message, fetch, m.prog.View())
+	return fmt.Sprintf("  %s %s...\n      %s %s\n", m.spinner.View(), m.message, fetch, m.prog.View())
 }
