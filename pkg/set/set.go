@@ -1,5 +1,7 @@
 package set
 
+import "iter"
+
 type Set[K comparable] map[K]struct{}
 
 func New[K comparable]() Set[K] {
@@ -25,4 +27,15 @@ func (s Set[K]) Len() int {
 
 func (s Set[K]) Empty() bool {
 	return s.Len() == 0
+}
+
+// Each returns an iterator over the set's elements
+func (s Set[K]) Each() iter.Seq[K] {
+	return func(yield func(K) bool) {
+		for k := range s {
+			if !yield(k) {
+				return
+			}
+		}
+	}
 }
