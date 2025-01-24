@@ -12,6 +12,7 @@ import (
 	"miren.dev/runtime/pkg/asm"
 	"miren.dev/runtime/pkg/rpc"
 	"miren.dev/runtime/pkg/slogfmt"
+	"miren.dev/runtime/pkg/slogrus"
 )
 
 type GlobalFlags struct {
@@ -70,6 +71,9 @@ func setup(ctx context.Context, flags *GlobalFlags, opts any) *Context {
 	s.Log = slog.New(slogfmt.NewTextHandler(os.Stderr, &slog.HandlerOptions{
 		Level: dynLevel,
 	}))
+
+	ctx = slogrus.WithLogger(ctx, s.Log)
+	slogrus.OverrideGlobal(s.Log)
 
 	s.Server.Log = s.Log
 	s.Client.Log = s.Log
