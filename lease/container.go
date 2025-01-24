@@ -132,6 +132,10 @@ func (a *pool) availableWindow() *UsageWindow {
 	// order of the for here. Not the greatest way to load balance, but it's better
 	// than nothing.
 	for w := range a.windows {
+		if w.retire {
+			continue
+		}
+
 		if w.Leases.Len() < a.maxLeasesPerWindow {
 			return w
 		}
@@ -261,6 +265,11 @@ type UsageWindow struct {
 	Version *app.AppVersion
 
 	container *runningContainer
+
+	// Inidcates tha that the window is for a container version that has
+	// been cleared. When this window closes, we won't return the container
+	// to the idle pool.
+	retire bool
 }
 
 type LeasedContainer struct {
@@ -521,8 +530,22 @@ func (l *LaunchContainer) ReleaseLease(ctx context.Context, lc *LeasedContainer)
 
 	if lc.Window.Leases.Empty() {
 		err = l.closeWindow(ctx, lc.Window, ts)
-		lc.Pool.idle.Add(lc.Window.container)
+		if err != nil {
+			return nil, err
+		}
+
 		lc.Pool.windows.Remove(lc.Window)
+
+		if lc.Window.retire {
+			err := l.CR.StopContainer(ctx, lc.Window.container.id)
+			if err != nil {
+				l.Log.Error("failed to stop container", "container", lc.Window.container.id, "error", err)
+			}
+
+		} else {
+			lc.Pool.idle.Add(lc.Window.container)
+		}
+
 		l.Log.Info("usage window closed", "window", lc.Window.Id, "app", lc.Window.App)
 	}
 
@@ -541,7 +564,7 @@ func (l *LaunchContainer) closeWindow(ctx context.Context, w *UsageWindow, ts ui
 
 	usage := ts - w.Start
 
-	_, err := l.DB.Exec(
+	_, err := l.DB.ExecContext(ctx,
 		"INSERT INTO container_usage (app, usage, leases) VALUES (?, ?, ?)",
 		w.App, usage, w.TotalLeases,
 	)
@@ -787,4 +810,60 @@ func (l *LaunchContainer) ImageInUse(ctx context.Context, image string) (bool, e
 	l.Log.Debug("image not in use", "image", image)
 
 	return false, nil
+}
+
+func (l *LaunchContainer) ClearVersion(ctx context.Context, mrv *app.AppVersion) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	imageName := mrv.ImageName()
+	l.Log.Info("clearing containers for version", "image", imageName)
+
+	app, ok := l.applications[mrv.App.Name]
+	if !ok {
+		return nil
+	}
+
+	for _, pool := range app.pools {
+		pool.mu.Lock()
+
+		var toDelete []*runningContainer
+
+		// Check idle containers
+		for rc := range pool.idle.Each() {
+			if rc.image == imageName {
+				l.Log.Info("stopping idle container with version",
+					"container", rc.id,
+					"app", app.name,
+					"pool", pool.name,
+					"image", imageName)
+
+				err := l.CR.StopContainer(ctx, rc.id)
+				if err != nil {
+					l.Log.Error("failed to stop container",
+						"container", rc.id,
+						"error", err)
+					pool.mu.Unlock()
+					return fmt.Errorf("stopping container %s: %w", rc.id, err)
+				}
+
+				toDelete = append(toDelete, rc)
+			}
+		}
+
+		// Remove the containers from the idle set
+		for _, rc := range toDelete {
+			pool.idle.Remove(rc)
+		}
+
+		for w := range pool.windows.Each() {
+			if w.container.image == imageName {
+				w.retire = true
+			}
+		}
+
+		pool.mu.Unlock()
+	}
+
+	return nil
 }
