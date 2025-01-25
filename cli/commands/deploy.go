@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -19,62 +20,68 @@ import (
 	"miren.dev/runtime/pkg/rpc/stream"
 )
 
-func Run(ctx *Context, opts struct {
+func Deploy(ctx *Context, opts struct {
 	App     string `short:"a" long:"app" description:"Application to run"`
 	Dir     string `short:"d" long:"dir" description:"Directory to run from"`
 	Explain bool   `short:"x" long:"explain" description:"Explain the build process"`
 }) error {
-	c := &cliRun{}
-
-	id, err := c.buildCode(ctx, opts.App, opts.Dir, opts.Explain)
+	cl, err := ctx.RPCClient("build")
 	if err != nil {
 		return err
 	}
 
-	ctx.Printf("\nUpdated version %s deployed. All traffic moved to new version.\n", id)
-
-	return nil
-}
-
-type cliRun struct{}
-
-type transfer struct {
-	total, current int64
-}
-
-type transferUpdate struct {
-	transfers map[string]transfer
-}
-
-func (c *cliRun) buildCode(ctx *Context, name, dir string, explain bool) (string, error) {
-	cl, err := ctx.RPCClient("build")
-	if err != nil {
-		return "", err
-	}
-
 	bc := build.BuilderClient{Client: cl}
+
+	name := opts.App
+	dir := opts.Dir
 
 	ctx.Log.Info("building code", "name", name, "dir", dir)
 
 	r, err := build.MakeTar(dir)
 	if err != nil {
-		return "", err
+		return err
 	}
 
 	var (
-		pw progresswriter.Writer
-		//spin     *mspinner.Spinner
-		updateCh   = make(chan string, 1)
-		transferCh = make(chan transferUpdate, 1)
+		cb stream.SendStream[*build.Status]
 	)
 
-	if explain {
-		pw, err = progresswriter.NewPrinter(ctx, os.Stderr, "auto")
+	if opts.Explain {
+		pw, err := progresswriter.NewPrinter(ctx, os.Stderr, "auto")
 		if err != nil {
-			return "", err
+			return err
 		}
+
+		cb = stream.Callback(func(su *build.Status) error {
+			update := su.Update()
+
+			switch update.Which() {
+			case "buildkit":
+				sj := update.Buildkit()
+
+				var status client.SolveStatus
+				if err := json.Unmarshal(sj, &status); err != nil {
+					return err
+				}
+
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				case pw.Status() <- &status:
+					// ok
+				}
+			}
+
+			return nil
+		})
 	} else {
-		var wg sync.WaitGroup
+		var (
+			updateCh   = make(chan string, 1)
+			transferCh = make(chan transferUpdate, 1)
+			transfers  = map[string]transfer{}
+			wg         sync.WaitGroup
+		)
+
 		defer wg.Wait()
 
 		p := tea.NewProgram(initialModel(updateCh, transferCh))
@@ -85,23 +92,19 @@ func (c *cliRun) buildCode(ctx *Context, name, dir string, explain bool) (string
 		}()
 
 		defer p.Quit()
-	}
 
-	transfers := map[string]transfer{}
+		cb = stream.Callback(func(su *build.Status) error {
+			update := su.Update()
 
-	cb := stream.Callback(func(su *build.Status) error {
-		update := su.Update()
+			switch update.Which() {
+			case "buildkit":
+				sj := update.Buildkit()
 
-		switch update.Which() {
-		case "buildkit":
-			sj := update.Buildkit()
+				var status client.SolveStatus
+				if err := json.Unmarshal(sj, &status); err != nil {
+					return err
+				}
 
-			var status client.SolveStatus
-			if err := json.Unmarshal(sj, &status); err != nil {
-				return err
-			}
-
-			if !explain {
 				var updated bool
 				for _, st := range status.Statuses {
 					if st.Total != 0 {
@@ -120,100 +123,108 @@ func (c *cliRun) buildCode(ctx *Context, name, dir string, explain bool) (string
 				}
 
 				return nil
+			case "message":
+				msg := update.Message()
+				go func() {
+					updateCh <- msg
+				}()
 			}
 
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			case pw.Status() <- &status:
-				// ok
-			}
-		case "message":
-			if explain {
-				return nil
-			}
-
-			msg := update.Message()
-			go func() {
-				updateCh <- msg
-			}()
-		}
-
-		return nil
-	})
+			return nil
+		})
+	}
 
 	results, err := bc.BuildFromTar(ctx, name, stream.ServeReader(ctx, r), cb)
 	if err != nil {
-		return "", err
+		return err
 	}
 
-	return results.Version(), nil
+	ctx.Printf("\nUpdated version %s deployed. All traffic moved to new version.\n", results.Version())
+
+	return nil
 }
 
-type pushInfo struct {
-	spinner  spinner.Model
-	quitting bool
-	err      error
+type transfer struct {
+	total, current int64
+}
 
-	message    string
-	update     chan string
-	lastUpdate time.Time
+type transferUpdate struct {
+	transfers map[string]transfer
+}
 
-	sub      string
-	subStyle lipgloss.Style
+type deployInfo struct {
+	spinner spinner.Model
 
-	width int
+	message string
+	update  chan string
 
 	transfers chan transferUpdate
 	prog      progress.Model
 	parts     int
-
-	fetch string
-}
-
-var Meter = spinner.Spinner{
-	Frames: []string{
-		"▱▱▱",
-		"▰▱▱",
-		"▰▰▱",
-		"▰▰▰",
-		"▱▰▰",
-		"▱▱▰",
-		"▱▱▱",
-	},
-	FPS: time.Second / 7, //nolint:gomnd
 }
 
 var (
 	mirenBlue = "#3E53FB"
 	lightBlue = colortheory.ChangeLightness(mirenBlue, -10)
-)
+	square    = "▰"
 
-func initialModel(update chan string, transfers chan transferUpdate) *pushInfo {
-	s := spinner.New()
-	s.Spinner = Meter
-	s.Style = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{
+	spinBlankStyle = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{
+		Light: "#111111",
+		Dark:  colortheory.ChangeLightness(mirenBlue, 25),
+	})
+
+	spinStyle = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{
 		Light: "#3E53FB",
 		Dark:  lightBlue,
 	})
+)
+
+func line(str string) string {
+	var sb strings.Builder
+
+	for _, b := range str {
+		if b == ' ' {
+			sb.WriteString(spinBlankStyle.Render(square))
+		} else {
+			sb.WriteString(spinStyle.Render(square))
+		}
+	}
+
+	return sb.String()
+}
+
+var Meter = spinner.Spinner{
+	Frames: []string{
+		line("   "),
+		line("▰  "),
+		line("▰▰ "),
+		line("▰▰▰"),
+		line(" ▰▰"),
+		line("  ▰"),
+	},
+	FPS: time.Second / 7, //nolint:gomnd
+}
+
+func initialModel(update chan string, transfers chan transferUpdate) *deployInfo {
+	s := spinner.New()
+	s.Spinner = Meter
+	s.Style = lipgloss.NewStyle()
 
 	p := progress.New(progress.WithWidth(20), progress.WithGradient(
 		colortheory.ChangeLightness("#3E53FB", -10),
 		colortheory.ChangeLightness("#3E53FB", 20),
 	))
 
-	return &pushInfo{
+	return &deployInfo{
 		spinner:   s,
 		message:   "Starting build",
-		sub:       "doing things",
 		update:    update,
 		transfers: transfers,
 		prog:      p,
-		fetch:     lipgloss.NewStyle().Faint(true).Render("Fetching data:"),
 	}
 }
 
-func (m *pushInfo) Init() tea.Cmd {
+func (m *deployInfo) Init() tea.Cmd {
 	return tea.Batch(
 		m.spinner.Tick,
 		func() tea.Msg {
@@ -232,11 +243,8 @@ type updateMsg struct {
 
 type tickMsg struct{}
 
-func (m *pushInfo) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m *deployInfo) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
-	case error:
-		m.err = msg
-		return m, nil
 	case updateMsg:
 		m.message = msg.msg
 		return m, func() tea.Msg {
@@ -262,9 +270,6 @@ func (m *pushInfo) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		p, cmd := m.prog.Update(msg)
 		m.prog = p.(progress.Model)
 		return m, cmd
-	case tea.WindowSizeMsg:
-		m.width = msg.Width
-		return m, nil
 	case spinner.TickMsg:
 		var cmd tea.Cmd
 		m.spinner, cmd = m.spinner.Update(msg)
@@ -274,12 +279,10 @@ func (m *pushInfo) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 }
 
-func (m *pushInfo) View() string {
-	if m.err != nil {
-		return m.err.Error()
-	}
+var deployPrefixStyle = lipgloss.NewStyle().Faint(true)
 
-	fetch := lipgloss.NewStyle().Faint(true).Render(fmt.Sprintf("Fetching %d data:", m.parts))
+func (m *deployInfo) View() string {
+	fetch := deployPrefixStyle.Render(fmt.Sprintf("Fetching %d items:", m.parts))
 
 	return fmt.Sprintf("  %s %s...\n      %s %s\n", m.spinner.View(), m.message, fetch, m.prog.View())
 }

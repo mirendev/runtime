@@ -7,8 +7,9 @@ func AllCommands() map[string]cli.CommandFactory {
 		"version": func() (cli.Command, error) {
 			return Infer("version", "Print the version", Version), nil
 		},
-		"run": func() (cli.Command, error) {
-			return Infer("run", "Run the application", Run), nil
+
+		"deploy": func() (cli.Command, error) {
+			return Infer("Deploy", "Deploy an application", Deploy), nil
 		},
 		"server": func() (cli.Command, error) {
 			return Infer("server", "Start the server", Server), nil
