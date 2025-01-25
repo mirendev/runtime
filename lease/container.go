@@ -16,8 +16,7 @@ import (
 	"miren.dev/runtime/app"
 	"miren.dev/runtime/discovery"
 	"miren.dev/runtime/health"
-	"miren.dev/runtime/network"
-	"miren.dev/runtime/pkg/idgen"
+	"miren.dev/runtime/pkg/multierror"
 	"miren.dev/runtime/pkg/netdb"
 	"miren.dev/runtime/pkg/set"
 	"miren.dev/runtime/run"
@@ -91,6 +90,12 @@ func (l *LaunchContainer) LatencyEstimate() (int32, float64) {
 
 type pendingContainer struct {
 	waiters set.Set[chan *UsageWindow]
+}
+
+func (p *pendingContainer) Close() {
+	for ch := range p.waiters {
+		close(ch)
+	}
 }
 
 type application struct {
@@ -319,194 +324,47 @@ func (l *LaunchContainer) Lease(ctx context.Context, name string, opts ...LeaseO
 
 	pool := l.lookupPool(name, lo.poolName)
 
-	var (
-		err error
-	)
+	operation := leaseOperation{
+		LaunchContainer: l,
+		name:            name,
+		opts:            lo,
+		pool:            pool,
+	}
 
-	pool.mu.Lock()
-	defer pool.mu.Unlock()
-
-	win := pool.availableWindow()
-	if win != nil {
-		start, err := win.container.cpuUsage()
+	for {
+		lc, err := operation.tryAvailableWindow()
 		if err != nil {
 			return nil, err
 		}
 
-		l.Log.Info("adding lease to existing window", "window", win.Id)
-
-		lc := &LeasedContainer{
-			lc:        l,
-			Pool:      pool,
-			StartTime: time.Now(),
-			Window:    win,
-			Start:     start,
-		}
-
-		win.TotalLeases++
-		win.Leases.Add(lc)
-
-		l.rif.Add(1)
-
-		return lc, nil
-	}
-
-	// No windows, but we might still have a container kicking around
-	// we can reuse.
-	rc := pool.availableIdleContainer()
-	if rc != nil {
-		start, err := rc.cpuUsage()
-		if err != nil {
-			return nil, err
-		}
-
-		pool.idle.Remove(rc)
-
-		l.Log.Debug("beginning new usage window", "app", pool.app.name, "start", start)
-
-		win = &UsageWindow{
-			App:         pool.app.name,
-			Id:          idgen.Gen("w"),
-			Start:       start,
-			Leases:      set.New[*LeasedContainer](),
-			TotalLeases: 1,
-
-			container: rc,
-		}
-
-		lc := &LeasedContainer{
-			lc:            l,
-			Pool:          pool,
-			StartTime:     time.Now(),
-			Window:        win,
-			Start:         start,
-			StartedWindow: true,
-		}
-
-		win.Leases.Add(lc)
-
-		l.rif.Add(1)
-
-		return lc, nil
-	}
-
-	// If there are any pending containers, find one with room and attach ourselves
-	// to it.
-
-	var pendingCh chan *UsageWindow
-
-	if !pool.pending.Empty() {
-		for pc := range pool.pending {
-			if pc.waiters.Len() < l.MaxLeasesPerContainer {
-				// So that the sender doesn't block.
-				pendingCh = make(chan *UsageWindow, 1)
-				pc.waiters.Add(pendingCh)
-				break
-			}
-		}
-	}
-
-	if pendingCh != nil {
-		pool.mu.Unlock()
-
-		select {
-		case <-ctx.Done():
-			pool.mu.Lock()
-			return nil, ctx.Err()
-		case win, ok := <-pendingCh:
-			pool.mu.Lock()
-
-			if !ok {
-				return nil, fmt.Errorf("pending container failed")
-			}
-
-			lc := &LeasedContainer{
-				lc:        l,
-				Pool:      pool,
-				StartTime: time.Now(),
-				Window:    win,
-				Start:     win.Start,
-			}
-
-			win.Leases.Add(lc)
-			l.rif.Add(1)
-
+		if lc != nil {
 			return lc, nil
 		}
-	}
 
-	// ok, we need to launch a container.
-
-	ac, err := l.AppAccess.LoadApp(ctx, pool.app.name)
-	if err != nil {
-		return nil, err
-	}
-
-	mrv, err := l.AppAccess.MostRecentVersion(ctx, ac)
-	if err != nil {
-		return nil, err
-	}
-
-	pc := &pendingContainer{
-		waiters: set.New[chan *UsageWindow](),
-	}
-
-	pool.pending.Add(pc)
-	defer pool.pending.Remove(pc)
-
-	winId := idgen.Gen("w")
-	l.Log.Info("launching container", "app", ac.Name, "pool", lo.poolName, "version", mrv.Version, "window", winId)
-
-	pool.mu.Unlock()
-	rc, err = l.launch(ctx, ac, mrv, &lo)
-	pool.mu.Lock()
-
-	if err != nil {
-		for ch := range pc.waiters {
-			close(ch)
+		lc, err = operation.tryAvailableIdleContainer()
+		if err != nil {
+			return nil, err
 		}
 
-		l.Log.Error("failed to launch container", "app", ac.Name, "version", mrv.Version, "error", err)
-		return nil, err
-	} else {
-		l.Log.Info("launched container", "app", ac.Name, "version", mrv.Version, "window", winId)
-	}
-
-	win = &UsageWindow{
-		App:         pool.app.name,
-		Id:          winId,
-		Start:       0,
-		Leases:      set.New[*LeasedContainer](),
-		TotalLeases: 1,
-		Version:     mrv,
-
-		container: rc,
-	}
-
-	pool.windows.Add(win)
-
-	lc := &LeasedContainer{
-		lc:            l,
-		Pool:          pool,
-		StartTime:     time.Now(),
-		Window:        win,
-		Start:         win.Start,
-		StartedWindow: true,
-	}
-
-	win.Leases.Add(lc)
-	l.rif.Add(1)
-
-	for ch := range pc.waiters {
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		case ch <- win:
-			// ok
+		if lc != nil {
+			return lc, nil
 		}
-	}
 
-	return lc, nil
+		lc, retry, err := operation.tryPendingContainer(ctx)
+		if err != nil {
+			return nil, err
+		}
+
+		if lc != nil {
+			return lc, nil
+		}
+
+		if retry {
+			continue
+		}
+
+		return operation.launchContainer(ctx)
+	}
 }
 
 type LeaseInfo struct {
@@ -570,52 +428,6 @@ func (l *LaunchContainer) closeWindow(ctx context.Context, w *UsageWindow, ts ui
 	)
 
 	return err
-}
-
-func (l *LaunchContainer) launch(
-	ctx context.Context,
-	ac *app.AppConfig,
-	mrv *app.AppVersion,
-	lo *leaseOptions,
-) (*runningContainer, error) {
-	ec, err := network.AllocateOnBridge(l.Bridge, l.Subnet)
-	if err != nil {
-		return nil, err
-	}
-
-	l.Log.Debug("allocated network endpoint", "bridge", l.Bridge, "addresses", ec.Addresses)
-
-	config := &run.ContainerConfig{
-		App:      ac.Name,
-		Image:    mrv.ImageName(),
-		Endpoint: ec,
-	}
-
-	_, err = l.CR.RunContainer(ctx, config)
-	if err != nil {
-		return nil, err
-	}
-
-	if lo.dontWaitNetwork {
-		l.Log.Info("not waiting for network", "container", config.Id)
-		err = l.Health.WaitReady(ctx, config.Id)
-		if err != nil {
-			return nil, err
-		}
-	} else {
-		err = l.Health.WaitForReady(ctx, config.Id)
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	rc := &runningContainer{
-		id:          config.Id,
-		image:       config.Image,
-		cpuStatPath: filepath.Join("/sys/fs/cgroup", config.CGroupPath, "cpu.stat"),
-	}
-
-	return rc, nil
 }
 
 func (l *LaunchContainer) ShutdownIdle(ctx context.Context) (int, error) {
