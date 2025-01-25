@@ -482,6 +482,8 @@ func (l *LaunchContainer) RecoverContainers(ctx context.Context) error {
 		return fmt.Errorf("listing containers: %w", err)
 	}
 
+	toSave := set.New[string]()
+
 	for _, container := range containers {
 		labels, err := container.Labels(ctx)
 		if err != nil {
@@ -525,6 +527,23 @@ func (l *LaunchContainer) RecoverContainers(ctx context.Context) error {
 			continue
 		}
 
+		aa, err := l.AppAccess.LoadApp(ctx, appName)
+		if err != nil {
+			l.Log.Warn("failed to load app", "app", appName, "error", err)
+			continue
+		}
+
+		mrv, err := l.AppAccess.MostRecentVersion(ctx, aa)
+		if err != nil {
+			l.Log.Warn("failed to get most recent version", "app", appName, "error", err)
+			continue
+		}
+
+		if mrv.Version != labels["miren.dev/version"] {
+			l.Log.Warn("container version mismatch", "container", container.ID(), "expected", mrv.Version, "actual", labels["miren.dev/version"])
+			continue
+		}
+
 		pool := l.lookupPool(appName, poolName)
 
 		img, err := container.Image(ctx)
@@ -545,6 +564,18 @@ func (l *LaunchContainer) RecoverContainers(ctx context.Context) error {
 		pool.idle.Add(rc)
 		l.Log.Info("recovered container", "container", container.ID(), "app", appName)
 		pool.mu.Unlock()
+
+		toSave.Add(container.ID())
+	}
+
+	for _, container := range containers {
+		if !toSave.Contains(container.ID()) {
+			l.Log.Info("stopping unrecovered container", "container", container.ID())
+			err := l.CR.NukeContainer(ctx, container.ID())
+			if err != nil {
+				l.Log.Error("failed to stop container", "container", container.ID(), "error", err)
+			}
+		}
 	}
 
 	return nil
