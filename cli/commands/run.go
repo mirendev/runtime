@@ -26,12 +26,12 @@ func Run(ctx *Context, opts struct {
 }) error {
 	c := &cliRun{}
 
-	_, err := c.buildCode(ctx, opts.App, opts.Dir, opts.Explain)
+	id, err := c.buildCode(ctx, opts.App, opts.Dir, opts.Explain)
 	if err != nil {
 		return err
 	}
 
-	ctx.Printf("\nUpdated version deployed!\n")
+	ctx.Printf("\nUpdated version %s deployed. All traffic moved to new version.\n", id)
 
 	return nil
 }

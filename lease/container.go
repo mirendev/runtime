@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"iter"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -99,8 +100,23 @@ func (p *pendingContainer) Close() {
 }
 
 type application struct {
-	name  string
+	name string
+
+	mu    sync.Mutex
 	pools map[string]*pool
+}
+
+func (a *application) Pools() iter.Seq[*pool] {
+	return func(yield func(*pool) bool) {
+		a.mu.Lock()
+		defer a.mu.Unlock()
+
+		for _, p := range a.pools {
+			if !yield(p) {
+				return
+			}
+		}
+	}
 }
 
 type pool struct {
@@ -192,6 +208,9 @@ func (l *LaunchContainer) lookupPool(app, name string) *pool {
 		l.applications[app] = a
 	}
 
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
 	p, ok := a.pools[name]
 	if !ok {
 		p = &pool{
@@ -205,6 +224,7 @@ func (l *LaunchContainer) lookupPool(app, name string) *pool {
 
 		p.cond = sync.NewCond(&p.mu)
 		a.pools[name] = p
+		l.Log.Info("tracking new pool", "app", app, "pool", name)
 	}
 
 	return p
@@ -399,8 +419,8 @@ func (l *LaunchContainer) ReleaseLease(ctx context.Context, lc *LeasedContainer)
 			if err != nil {
 				l.Log.Error("failed to stop container", "container", lc.Window.container.id, "error", err)
 			}
-
 		} else {
+			l.Log.Info("returning container to idle pool", "container", lc.Window.container.id)
 			lc.Pool.idle.Add(lc.Window.container)
 		}
 
@@ -622,31 +642,39 @@ func (l *LaunchContainer) Shutdown(ctx context.Context) (int, error) {
 	return cnt, nil
 }
 
+func (l *LaunchContainer) imageInUseInPool(p *pool, image string) (bool, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	for rc := range p.idle {
+		if rc.image == image {
+			return true, nil
+		}
+	}
+
+	for w := range p.windows {
+		if w.container.image == image {
+			return true, nil
+		}
+	}
+
+	return false, nil
+}
+
 func (l *LaunchContainer) ImageInUse(ctx context.Context, image string) (bool, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
 	for _, app := range l.applications {
-		for _, pool := range app.pools {
-			pool.mu.Lock()
-
-			for rc := range pool.windows {
-				if rc.container.image == image {
-					l.Log.Debug("image in use in pool window", "app", app.name, "pool", pool.name, "image", image)
-					pool.mu.Unlock()
-					return true, nil
-				}
+		for pool := range app.Pools() {
+			ok, err := l.imageInUseInPool(pool, image)
+			if err != nil {
+				return true, err
 			}
 
-			for rc := range pool.idle {
-				if rc.image == image {
-					pool.mu.Unlock()
-					l.Log.Debug("image in use in idle pool", "app", app.name, "pool", pool.name, "image", image)
-					return true, nil
-				}
+			if ok {
+				return true, nil
 			}
-
-			pool.mu.Unlock()
 		}
 	}
 
@@ -655,58 +683,85 @@ func (l *LaunchContainer) ImageInUse(ctx context.Context, image string) (bool, e
 	return false, nil
 }
 
-func (l *LaunchContainer) ClearVersion(ctx context.Context, mrv *app.AppVersion) error {
-	l.mu.Lock()
-	defer l.mu.Unlock()
+func (l *LaunchContainer) clearOldInPool(ctx context.Context, pool *pool, imageName string) error {
+	pool.mu.Lock()
+	defer pool.mu.Unlock()
 
-	imageName := mrv.ImageName()
-	l.Log.Info("clearing containers for version", "image", imageName)
+	var toDelete []*runningContainer
 
-	app, ok := l.applications[mrv.App.Name]
-	if !ok {
-		return nil
+	l.Log.Info("clearing old versions in pool",
+		"app", pool.app.name,
+		"pool", pool.name,
+		"new-image", imageName,
+		"windows", len(pool.windows),
+		"idle-containers", len(pool.idle),
+	)
+
+	for rc := range pool.idle.Each() {
+		if rc.image != imageName {
+			l.Log.Info("stopping idle container with version",
+				"container", rc.id,
+				"app", pool.app.name,
+				"pool", pool.name,
+				"image", imageName)
+
+			err := l.CR.StopContainer(ctx, rc.id)
+			if err != nil {
+				l.Log.Error("failed to stop container",
+					"container", rc.id,
+					"error", err)
+				return fmt.Errorf("stopping container %s: %w", rc.id, err)
+			}
+
+			toDelete = append(toDelete, rc)
+		}
 	}
 
-	for _, pool := range app.pools {
-		pool.mu.Lock()
+	for _, rc := range toDelete {
+		pool.idle.Remove(rc)
+	}
 
-		var toDelete []*runningContainer
-
-		// Check idle containers
-		for rc := range pool.idle.Each() {
-			if rc.image == imageName {
-				l.Log.Info("stopping idle container with version",
-					"container", rc.id,
-					"app", app.name,
-					"pool", pool.name,
-					"image", imageName)
-
-				err := l.CR.StopContainer(ctx, rc.id)
-				if err != nil {
-					l.Log.Error("failed to stop container",
-						"container", rc.id,
-						"error", err)
-					pool.mu.Unlock()
-					return fmt.Errorf("stopping container %s: %w", rc.id, err)
-				}
-
-				toDelete = append(toDelete, rc)
-			}
+	for w := range pool.windows.Each() {
+		if w.container.image != imageName {
+			l.Log.Info("retiring window with version",
+				"window", w.Id, "app", pool.app.name, "pool", pool.name, "image", imageName,
+			)
+			w.retire = true
 		}
-
-		// Remove the containers from the idle set
-		for _, rc := range toDelete {
-			pool.idle.Remove(rc)
-		}
-
-		for w := range pool.windows.Each() {
-			if w.container.image == imageName {
-				w.retire = true
-			}
-		}
-
-		pool.mu.Unlock()
 	}
 
 	return nil
+}
+
+func (l *LaunchContainer) findApp(name string) (*application, bool) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	app, ok := l.applications[name]
+	return app, ok
+}
+
+func (l *LaunchContainer) ClearOldVersions(ctx context.Context, cur *app.AppVersion) error {
+	imageName := cur.ImageName()
+	l.Log.Info("clearing use of older versions",
+		"app", cur.App.Name,
+		"current", cur.Version, "image", imageName)
+
+	app, ok := l.findApp(cur.App.Name)
+	if !ok {
+		l.Log.Debug("app not found", "app", cur.App.Name)
+		return nil
+	}
+
+	var rerr error
+
+	for pool := range app.Pools() {
+		err := l.clearOldInPool(ctx, pool, imageName)
+		if err != nil {
+			l.Log.Error("failed to clear old versions in pool", "app", app.name, "pool", pool.name, "error", err)
+			rerr = multierror.Append(rerr, err)
+		}
+	}
+
+	return rerr
 }

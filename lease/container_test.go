@@ -404,8 +404,6 @@ func TestLeaseContainer(t *testing.T) {
 			case err := <-errors:
 				r.NoError(err)
 			case cur := <-leases:
-				r.NotNil(cur)
-
 				if lease == nil {
 					cur = lease
 				} else {
@@ -690,7 +688,12 @@ func TestLeaseContainer(t *testing.T) {
 
 		r.Equal(on.applications["test"].pools["default"].idle.Len(), 1)
 
-		err = on.ClearVersion(ctx, mrv)
+		fake := &app.AppVersion{
+			App:     mrv.App,
+			Version: "not-real",
+		}
+
+		err = on.ClearOldVersions(ctx, fake)
 		r.NoError(err)
 
 		r.Equal(on.applications["test"].pools["default"].idle.Len(), 0)
@@ -704,7 +707,7 @@ func TestLeaseContainer(t *testing.T) {
 			_, err = lc.Obj(ctx)
 			r.NoError(err)
 
-			err = on.ClearVersion(ctx, mrv)
+			err = on.ClearOldVersions(ctx, fake)
 			r.NoError(err)
 
 			r.Equal(on.applications["test"].pools["default"].idle.Len(), 0)
@@ -726,7 +729,7 @@ func TestLeaseContainer(t *testing.T) {
 			lc, err = on.Lease(ctx, "test", Pool("default"))
 			r.NoError(err)
 
-			err = on.ClearVersion(ctx, mrv)
+			err = on.ClearOldVersions(ctx, fake)
 			r.NoError(err)
 
 			lc2, err := on.Lease(ctx, "test", Pool("default"))

@@ -1,6 +1,8 @@
 package cli
 
 import (
+	"context"
+	"errors"
 	"fmt"
 
 	"github.com/mitchellh/cli"
@@ -15,8 +17,10 @@ func Run(args []string) int {
 
 	exitStatus, err := c.Run()
 	if err != nil {
-		fmt.Printf("ERROR: %s\n", err)
-		return 1
+		if !errors.Is(err, context.Canceled) {
+			fmt.Printf("ERROR: %s\n", err)
+			return 1
+		}
 	}
 
 	return exitStatus

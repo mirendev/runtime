@@ -67,6 +67,7 @@ type transformOpt struct {
 	statusUpdates func(ss *client.SolveStatus, sj []byte)
 	phaseUpdates  func(phase string)
 	cacheDir      string
+	frontendAttrs map[string]string
 }
 
 type TransformOptions func(*transformOpt)
@@ -89,8 +90,28 @@ func WithCacheDir(dir string) TransformOptions {
 	}
 }
 
+func WithBuildArg(key, val string) TransformOptions {
+	return func(o *transformOpt) {
+		o.frontendAttrs["build-arg:"+key] = val
+	}
+}
+
+func WithBuildArgs(args map[string]string) TransformOptions {
+	return func(o *transformOpt) {
+		for k, v := range args {
+			o.frontendAttrs["build-arg:"+k] = v
+		}
+	}
+}
+
 func (b *Buildkit) Transform(ctx context.Context, dfs fsutil.FS, tos ...TransformOptions) (io.ReadCloser, chan struct{}, error) {
 	var opts transformOpt
+
+	opts.frontendAttrs = map[string]string{
+		//"attest:sbom":       "mode:max",
+		//"attest:provenance": "mode:max",
+		"build-arg:BUILDKIT_INLINE_CACHE": "1",
+	}
 
 	for _, o := range tos {
 		o(&opts)
@@ -124,14 +145,8 @@ func (b *Buildkit) Transform(ctx context.Context, dfs fsutil.FS, tos ...Transfor
 		Exports:       []client.ExportEntry{output},
 		LocalMounts:   mounts,
 		Frontend:      "dockerfile.v0",
-		FrontendAttrs: map[string]string{},
+		FrontendAttrs: opts.frontendAttrs,
 		Ref:           ref,
-		/*
-			TODO(emp): add this when we're ready to support verifying and/or displaying sbom
-					FrontendAttrs: map[string]string{
-						"attest:sbom": "",
-					},
-		*/
 	}
 
 	if opts.cacheDir != "" {

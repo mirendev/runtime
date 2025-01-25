@@ -44,6 +44,7 @@ type ContainerConfig struct {
 	Version string
 
 	Labels map[string]string
+	Env    map[string]string
 
 	Privileged bool
 
@@ -149,10 +150,18 @@ func (c *ContainerRunner) buildSpec(ctx context.Context, config *ContainerConfig
 		},
 	}
 
+	var envs []string
+
+	for k, v := range config.Env {
+		envs = append(envs, k+"="+v)
+	}
+
+	envs = append(envs, "PORT=3000")
+
 	specOpts := []oci.SpecOpts{
 		oci.WithImageConfig(img),
 		oci.WithDefaultUnixDevices,
-		oci.WithEnv([]string{"PORT=3000"}),
+		oci.WithEnv(envs),
 		oci.WithHostResolvconf,
 		oci.WithoutMounts("/sys"),
 		oci.WithMounts(mounts),
@@ -266,6 +275,32 @@ func (c *ContainerRunner) StopContainer(ctx context.Context, id string) error {
 		if err != nil {
 			return err
 		}
+	}
+
+	err = container.Delete(ctx, containerd.WithSnapshotCleanup)
+	if err != nil {
+		return err
+	}
+
+	c.Log.Info("container stopped", "id", id)
+
+	return nil
+}
+
+// NukeContainer stops and deletes a container.
+// It doesn't return an error if the container is missing, as that is the desired state.
+func (c *ContainerRunner) NukeContainer(ctx context.Context, id string) error {
+	ctx = namespaces.WithNamespace(ctx, c.Namespace)
+
+	container, err := c.CC.LoadContainer(ctx, id)
+	if err != nil {
+		return nil
+	}
+
+	task, err := container.Task(ctx, nil)
+	if err == nil {
+		task.Delete(ctx, containerd.WithProcessKill)
+		task.Delete(ctx)
 	}
 
 	err = container.Delete(ctx, containerd.WithSnapshotCleanup)

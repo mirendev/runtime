@@ -25,6 +25,8 @@ type LeaseHTTP struct {
 	checkDomain string
 
 	LookupTimeout time.Duration `asm:"lookup_timeout"`
+
+	Top context.Context `asm:"top_context"`
 }
 
 func (h *LeaseHTTP) Populated() error {
@@ -59,7 +61,17 @@ func (h *LeaseHTTP) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	defer h.Lease.ReleaseLease(req.Context(), lc)
+	defer func() {
+		// We *must* use the top context because the http server will cancel the request
+		// context IF AND WHEN the client cancels the request (which, again, super common).
+		// So we use the top context so that regardless of what happens, we release the lease.
+		li, err := h.Lease.ReleaseLease(h.Top, lc)
+		if err != nil {
+			h.Log.Error("error releasing lease from http request", "error", err, "app", app)
+		} else {
+			h.Log.Debug("lease released", "app", app, "usage", li.Usage)
+		}
+	}()
 
 	cont, err := lc.Obj(ctx)
 	if err != nil {
