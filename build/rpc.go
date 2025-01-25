@@ -18,34 +18,42 @@ import (
 
 //go:generate go run ../pkg/rpc/cmd/rpcgen -pkg build -input build.yml -output rpc.gen.go
 
+type ClearVersioner interface {
+	ClearOldVersions(ctx context.Context, current *app.AppVersion) error
+}
+
 type RPCBuilder struct {
 	Log     *slog.Logger
 	LBK     *launch.LaunchBuildkit
 	TempDir string `asm:"tempdir"`
 
+	CV             ClearVersioner
 	AppAccess      *app.AppAccess
 	ImportImporter *image.ImageImporter
 	ImagePruner    *image.ImagePruner
 	LogWriter      observability.LogWriter
 }
 
-func (b *RPCBuilder) nextVersion(ctx context.Context, name string) (string, error) {
+func (b *RPCBuilder) nextVersion(ctx context.Context, name string) (*app.AppVersion, error) {
 	ac, err := b.AppAccess.LoadApp(ctx, name)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 
 	ver := name + "-" + idgen.Gen("v")
 
-	err = b.AppAccess.CreateVersion(ctx, &app.AppVersion{
+	av := &app.AppVersion{
+		App:     ac,
 		AppId:   ac.Id,
 		Version: ver,
-	})
-	if err != nil {
-		return "", err
 	}
 
-	return ver, nil
+	err = b.AppAccess.CreateVersion(ctx, av)
+	if err != nil {
+		return nil, err
+	}
+
+	return av, nil
 }
 
 func (b *RPCBuilder) BuildFromTar(ctx context.Context, state *BuilderBuildFromTar) error {
@@ -126,7 +134,10 @@ func (b *RPCBuilder) BuildFromTar(ctx context.Context, state *BuilderBuildFromTa
 
 	var tos []TransformOptions
 
-	tos = append(tos, WithCacheDir(cacheDir))
+	tos = append(tos,
+		WithCacheDir(cacheDir),
+		WithBuildArg("MIREN_VERSION", mrv.Version),
+	)
 
 	if status != nil {
 		tos = append(tos, WithPhaseUpdates(func(phase string) {
@@ -160,9 +171,9 @@ func (b *RPCBuilder) BuildFromTar(ctx context.Context, state *BuilderBuildFromTa
 		return err
 	}
 
-	b.Log.Debug("importing tar into image", "app", name, "version", mrv)
+	b.Log.Debug("importing tar into image", "app", name, "image", mrv.ImageName())
 
-	err = b.ImportImporter.ImportImage(ctx, o, name+":"+mrv)
+	err = b.ImportImporter.ImportImage(ctx, o, mrv.ImageName())
 	if err != nil {
 		return err
 	}
@@ -174,14 +185,18 @@ func (b *RPCBuilder) BuildFromTar(ctx context.Context, state *BuilderBuildFromTa
 		return ctx.Err()
 	}
 
-	go func() {
-		err := b.ImagePruner.PruneApp(context.Background(), name)
-		if err != nil {
-			b.Log.Error("error pruning app images", "app", name, "error", err)
-		}
-	}()
+	b.Log.Info("clearing old version", "app", name, "new-ver", mrv.Version)
+	err = b.CV.ClearOldVersions(ctx, mrv)
+	if err != nil {
+		return err
+	}
 
-	state.Results().SetVersion(mrv)
+	err = b.ImagePruner.PruneApp(context.Background(), name)
+	if err != nil {
+		b.Log.Error("error pruning app images", "app", name, "error", err)
+	}
+
+	state.Results().SetVersion(mrv.Version)
 
 	return nil
 }

@@ -103,5 +103,5 @@ func (s *Server) Run(ctx context.Context) error {
 
 	<-ctx.Done()
 
-	return ctx.Err()
+	return nil
 }

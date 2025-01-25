@@ -31,6 +31,7 @@ import (
 
 func (c *Context) setupServerComponents(ctx context.Context, reg *asm.Registry) {
 	reg.Register("namespace", "miren-test")
+	reg.Register("top_context", ctx)
 
 	reg.Provide(func(opts struct {
 		Namespace string `asm:"namespace"`
