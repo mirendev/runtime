@@ -308,6 +308,10 @@ func (l *leaseOperation) launch(
 		},
 	}
 
+	for k, v := range l.mrv.Configuration.EnvVars {
+		config.Env[k] = v
+	}
+
 	_, err = l.CR.RunContainer(ctx, config)
 	if err != nil {
 		return nil, err

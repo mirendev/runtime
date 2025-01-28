@@ -30,6 +30,7 @@ CREATE TABLE application_versions (
     updated_at TIMESTAMP DEFAULT NOW(),
     application_id BIGINT NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
     xid TEXT NOT NULL,
+    image_id TEXT NOT NULL,
     version TEXT NOT NULL,
     static_dir TEXT,
     configuration JSONB,

@@ -40,12 +40,23 @@ func (b *RPCBuilder) nextVersion(ctx context.Context, name string) (*app.AppVers
 		return nil, err
 	}
 
+	cur, err := b.AppAccess.MostRecentVersion(ctx, ac)
+	if err != nil {
+		return nil, err
+	}
+
 	ver := name + "-" + idgen.Gen("v")
 
 	av := &app.AppVersion{
 		App:     ac,
 		AppId:   ac.Id,
 		Version: ver,
+		ImageId: ver,
+
+		// We always port the current configuration forward. This means that
+		// the application itself has no configuration, instead we've got a per
+		// version configuration that can mutate each time.
+		Configuration: cur.Configuration,
 	}
 
 	err = b.AppAccess.CreateVersion(ctx, av)
