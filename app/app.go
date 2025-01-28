@@ -8,6 +8,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/pkg/errors"
+	"miren.dev/runtime/pkg/idgen"
 )
 
 type AppAccess struct {
@@ -24,6 +25,7 @@ func (a *AppAccess) UseTx(tx pgx.Tx) {
 
 type AppConfig struct {
 	Id        uint64
+	Xid       string
 	CreatedAt time.Time
 	UpdatedAt time.Time
 
@@ -55,14 +57,34 @@ func (a *AppAccess) LoadApp(ctx context.Context, name string) (*AppConfig, error
 
 	err := a.inTx(ctx, func(tx pgx.Tx) error {
 		return tx.QueryRow(ctx,
-			`SELECT id, name, created_at, updated_at 
+			`SELECT id, xid, name, created_at, updated_at 
        FROM applications 
        WHERE organization_id = $1
 			   AND name = $2`, a.OrgId, name,
-		).Scan(&app.Id, &app.Name, &app.CreatedAt, &app.UpdatedAt)
+		).Scan(&app.Id, &app.Xid, &app.Name, &app.CreatedAt, &app.UpdatedAt)
 	})
 	if err != nil {
 		return nil, errors.Wrapf(err, "failed to load app %s", name)
+	}
+
+	app.OrgId = a.OrgId
+
+	return &app, nil
+}
+
+func (a *AppAccess) LoadAppByXid(ctx context.Context, xid string) (*AppConfig, error) {
+	var app AppConfig
+
+	err := a.inTx(ctx, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx,
+			`SELECT id, xid, name, created_at, updated_at 
+       FROM applications 
+       WHERE organization_id = $1
+			   AND xid = $2`, a.OrgId, xid,
+		).Scan(&app.Id, &app.Xid, &app.Name, &app.CreatedAt, &app.UpdatedAt)
+	})
+	if err != nil {
+		return nil, errors.Wrapf(err, "failed to load app by xid: %s", xid)
 	}
 
 	app.OrgId = a.OrgId
@@ -81,10 +103,12 @@ func (a *AppAccess) CreateApp(ctx context.Context, app *AppConfig) error {
 		app.UpdatedAt = now
 	}
 
+	xid := idgen.Gen(app.Name + "-")
+
 	err := a.inTx(ctx, func(tx pgx.Tx) error {
 		_, err := tx.Exec(ctx,
-			"INSERT INTO applications (name, created_at, updated_at, organization_id) VALUES ($1, $2, $3, $4)",
-			app.Name, app.CreatedAt, app.UpdatedAt, a.OrgId,
+			"INSERT INTO applications (name, xid, created_at, updated_at, organization_id) VALUES ($1, $2, $3, $4, $5)",
+			app.Name, xid, app.CreatedAt, app.UpdatedAt, a.OrgId,
 		)
 		return err
 	})
@@ -118,7 +142,7 @@ func (a *AppAccess) ListApps(ctx context.Context) ([]*AppConfig, error) {
 
 	err := a.inTx(ctx, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx,
-			`SELECT id, name, created_at, updated_at 
+			`SELECT id, name, xid, created_at, updated_at 
        FROM applications
 			 WHERE organization_id = $1`,
 			a.OrgId,
@@ -129,7 +153,7 @@ func (a *AppAccess) ListApps(ctx context.Context) ([]*AppConfig, error) {
 
 		for rows.Next() {
 			var app AppConfig
-			err = rows.Scan(&app.Id, &app.Name, &app.CreatedAt, &app.UpdatedAt)
+			err = rows.Scan(&app.Id, &app.Name, &app.Xid, &app.CreatedAt, &app.UpdatedAt)
 			if err != nil {
 				return err
 			}
@@ -147,14 +171,21 @@ func (a *AppAccess) ListApps(ctx context.Context) ([]*AppConfig, error) {
 	return apps, nil
 }
 
+type AppConfiguration struct {
+	StaticDir string `json:"static_dir"`
+}
+
 type AppVersion struct {
 	Id        uint64
+	Xid       string
 	AppId     uint64
 	Version   string
 	CreatedAt time.Time
 	UpdatedAt time.Time
 
 	StaticDir sql.NullString
+
+	Configuration AppConfiguration
 
 	App *AppConfig
 }
@@ -174,10 +205,16 @@ func (a *AppAccess) CreateVersion(ctx context.Context, av *AppVersion) error {
 		av.UpdatedAt = now
 	}
 
+	xid := idgen.Gen("v")
+
 	err := a.inTx(ctx, func(tx pgx.Tx) error {
 		_, err := tx.Exec(ctx,
-			"INSERT INTO application_versions (application_id, version, created_at, updated_at, static_dir) VALUES ($1, $2, $3, $4, $5)",
-			av.AppId, av.Version, av.CreatedAt, av.UpdatedAt, av.StaticDir,
+			`INSERT INTO application_versions (
+				application_id, version, xid, created_at, updated_at, static_dir,
+				configuration
+			) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+			av.AppId, av.Version, xid, av.CreatedAt, av.UpdatedAt, av.StaticDir,
+			av.Configuration,
 		)
 		return err
 	})
@@ -200,8 +237,18 @@ func (a *AppAccess) LoadVersion(ctx context.Context, ac *AppConfig, version stri
 
 	err := a.inTx(ctx, func(tx pgx.Tx) error {
 		return tx.QueryRow(ctx,
-			"SELECT id, application_id, version, created_at, updated_at, static_dir FROM application_versions WHERE application_id = $1 AND version = $2", ac.Id, version,
-		).Scan(&appVersion.Id, &appVersion.AppId, &appVersion.Version, &appVersion.CreatedAt, &appVersion.UpdatedAt, &appVersion.StaticDir)
+			`SELECT 
+			    id, xid, application_id, version, created_at, updated_at, static_dir,
+			    configuration
+			  FROM application_versions 
+			  WHERE application_id = $1 
+			    AND version = $2`, ac.Id, version,
+		).Scan(
+			&appVersion.Id, &appVersion.Xid,
+			&appVersion.AppId, &appVersion.Version,
+			&appVersion.CreatedAt, &appVersion.UpdatedAt, &appVersion.StaticDir,
+			&appVersion.Configuration,
+		)
 	})
 	if err != nil {
 		return nil, err
@@ -217,8 +264,18 @@ func (a *AppAccess) MostRecentVersion(ctx context.Context, ac *AppConfig) (*AppV
 
 	err := a.inTx(ctx, func(tx pgx.Tx) error {
 		return tx.QueryRow(ctx,
-			"SELECT id, application_id, version, created_at, updated_at, static_dir FROM application_versions WHERE application_id = $1 ORDER BY created_at DESC LIMIT 1", ac.Id,
-		).Scan(&appVersion.Id, &appVersion.AppId, &appVersion.Version, &appVersion.CreatedAt, &appVersion.UpdatedAt, &appVersion.StaticDir)
+			`SELECT 
+			   id, xid, application_id, version, created_at, updated_at, static_dir,
+				 configuration
+			FROM application_versions 
+			WHERE application_id = $1 
+			ORDER BY created_at DESC LIMIT 1`, ac.Id,
+		).Scan(
+			&appVersion.Id, &appVersion.Xid,
+			&appVersion.AppId, &appVersion.Version,
+			&appVersion.CreatedAt, &appVersion.UpdatedAt, &appVersion.StaticDir,
+			&appVersion.Configuration,
+		)
 	})
 	if err != nil {
 		return nil, err
@@ -234,7 +291,12 @@ func (a *AppAccess) ListVersions(ctx context.Context, ac *AppConfig) ([]*AppVers
 
 	err := a.inTx(ctx, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx,
-			"SELECT id, application_id, version, created_at, updated_at, static_dir FROM application_versions WHERE application_id = $1 ORDER BY created_at DESC", ac.Id,
+			`SELECT 
+			   id, xid, application_id, version, created_at, updated_at, static_dir,
+				 configuration
+			FROM application_versions
+			WHERE application_id = $1
+			ORDER BY created_at DESC`, ac.Id,
 		)
 		if err != nil {
 			return err
@@ -242,7 +304,12 @@ func (a *AppAccess) ListVersions(ctx context.Context, ac *AppConfig) ([]*AppVers
 
 		for rows.Next() {
 			var appVersion AppVersion
-			err = rows.Scan(&appVersion.Id, &appVersion.AppId, &appVersion.Version, &appVersion.CreatedAt, &appVersion.UpdatedAt, &appVersion.StaticDir)
+			err = rows.Scan(
+				&appVersion.Id, &appVersion.Xid,
+				&appVersion.AppId, &appVersion.Version,
+				&appVersion.CreatedAt, &appVersion.UpdatedAt, &appVersion.StaticDir,
+				&appVersion.Configuration,
+			)
 			if err != nil {
 				return err
 			}

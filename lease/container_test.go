@@ -144,7 +144,7 @@ func TestLeaseContainer(t *testing.T) {
 
 		r.NoError(testutils.ClearContainers(cc, on.CD.Namespace))
 
-		lc, err := on.Lease(ctx, "test")
+		lc, err := on.Lease(ctx, ac.Xid)
 		r.NoError(err)
 
 		r.NotNil(lc)
@@ -165,7 +165,7 @@ func TestLeaseContainer(t *testing.T) {
 			// Sleep a little so that the container racks up some cpu time
 			time.Sleep(500 * time.Millisecond)
 
-			lc2, err := on.Lease(ctx, "test")
+			lc2, err := on.Lease(ctx, ac.Xid)
 			r.NoError(err)
 
 			r.False(lc2.StartedWindow)
@@ -209,28 +209,10 @@ func TestLeaseContainer(t *testing.T) {
 			r.Greater(val1, val2)
 		})
 
-		t.Run("closed windows emit reconds to clickhouse", func(t *testing.T) {
-			r := require.New(t)
-
-			var (
-				usage  uint64
-				leases uint32
-			)
-
-			err := on.DB.QueryRow(
-				"SELECT usage, leases FROM container_usage WHERE app = $1", pool.app.name,
-			).Scan(&usage, &leases)
-
-			r.NoError(err)
-
-			r.NotZero(usage)
-			r.Equal(uint32(2), leases)
-		})
-
 		t.Run("reports the current rif and latency", func(t *testing.T) {
 			r := require.New(t)
 
-			lc3, err := on.Lease(ctx, "test")
+			lc3, err := on.Lease(ctx, ac.Xid)
 			r.NoError(err)
 
 			rif, latency := on.LatencyEstimate()
@@ -388,7 +370,7 @@ func TestLeaseContainer(t *testing.T) {
 
 		for i := 0; i < 5; i++ {
 			go func() {
-				lc, err := on.Lease(ctx, "test")
+				lc, err := on.Lease(ctx, ac.Xid)
 				if err != nil {
 					errors <- err
 				} else {
@@ -539,7 +521,7 @@ func TestLeaseContainer(t *testing.T) {
 
 		on.Log.Debug("starting leases")
 		for i := 0; i < 5; i++ {
-			lc, err := on.Lease(ctx, "test")
+			lc, err := on.Lease(ctx, ac.Xid)
 			r.NoError(err)
 
 			leases = append(leases, lc)
@@ -675,18 +657,18 @@ func TestLeaseContainer(t *testing.T) {
 
 		r.NoError(testutils.ClearContainers(cc, on.CD.Namespace))
 
-		lc, err := on.Lease(ctx, "test", Pool("default"))
+		lc, err := on.Lease(ctx, ac.Xid, Pool("default"))
 		r.NoError(err)
 
 		r.NotNil(lc)
 
-		r.Equal(on.applications["test"].pools["default"].idle.Len(), 0)
+		r.Equal(on.applications[ac.Xid].pools["default"].idle.Len(), 0)
 
 		// Put the lease away, setting the container up in the idle pool.
 		_, err = on.ReleaseLease(ctx, lc)
 		r.NoError(err)
 
-		r.Equal(on.applications["test"].pools["default"].idle.Len(), 1)
+		r.Equal(on.applications[ac.Xid].pools["default"].idle.Len(), 1)
 
 		fake := &app.AppVersion{
 			App:     mrv.App,
@@ -696,10 +678,10 @@ func TestLeaseContainer(t *testing.T) {
 		err = on.ClearOldVersions(ctx, fake)
 		r.NoError(err)
 
-		r.Equal(on.applications["test"].pools["default"].idle.Len(), 0)
+		r.Equal(on.applications[ac.Xid].pools["default"].idle.Len(), 0)
 
 		t.Run("releasing a lease for a cleaned version does not return to idle", func(t *testing.T) {
-			lc, err = on.Lease(ctx, "test", Pool("default"))
+			lc, err = on.Lease(ctx, ac.Xid, Pool("default"))
 			r.NoError(err)
 
 			ctx := namespaces.WithNamespace(ctx, on.CD.Namespace)
@@ -710,7 +692,7 @@ func TestLeaseContainer(t *testing.T) {
 			err = on.ClearOldVersions(ctx, fake)
 			r.NoError(err)
 
-			r.Equal(on.applications["test"].pools["default"].idle.Len(), 0)
+			r.Equal(on.applications[ac.Xid].pools["default"].idle.Len(), 0)
 
 			_, err = lc.Obj(ctx)
 			r.NoError(err)
@@ -718,21 +700,21 @@ func TestLeaseContainer(t *testing.T) {
 			_, err = on.ReleaseLease(ctx, lc)
 			r.NoError(err)
 
-			r.Equal(on.applications["test"].pools["default"].windows.Len(), 0)
-			r.Equal(on.applications["test"].pools["default"].idle.Len(), 0)
+			r.Equal(on.applications[ac.Xid].pools["default"].windows.Len(), 0)
+			r.Equal(on.applications[ac.Xid].pools["default"].idle.Len(), 0)
 
 			_, err = lc.Obj(ctx)
 			r.Error(err)
 		})
 
 		t.Run("new leases don't consider retired windows", func(t *testing.T) {
-			lc, err = on.Lease(ctx, "test", Pool("default"))
+			lc, err = on.Lease(ctx, ac.Xid, Pool("default"))
 			r.NoError(err)
 
 			err = on.ClearOldVersions(ctx, fake)
 			r.NoError(err)
 
-			lc2, err := on.Lease(ctx, "test", Pool("default"))
+			lc2, err := on.Lease(ctx, ac.Xid, Pool("default"))
 			r.NoError(err)
 
 			r.NotSame(lc.Window, lc2.Window)

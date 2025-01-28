@@ -10,7 +10,7 @@ func TestRun(t *testing.T) {
 	t.Run("Run the application", func(t *testing.T) {
 		r := require.New(t)
 
-		out, err := RunCommand(Run, "-h")
+		out, err := RunCommand(Deploy, "-h")
 		r.Error(err)
 
 		r.Contains(out.Stderr.String(), "Command Options")

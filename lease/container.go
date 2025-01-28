@@ -17,9 +17,11 @@ import (
 	"miren.dev/runtime/app"
 	"miren.dev/runtime/discovery"
 	"miren.dev/runtime/health"
+	"miren.dev/runtime/metrics"
 	"miren.dev/runtime/pkg/multierror"
 	"miren.dev/runtime/pkg/netdb"
 	"miren.dev/runtime/pkg/set"
+	"miren.dev/runtime/pkg/units"
 	"miren.dev/runtime/run"
 )
 
@@ -32,6 +34,9 @@ type LaunchContainer struct {
 	Subnet    *netdb.Subnet
 	Health    *health.ContainerMonitor
 	DB        *sql.DB `asm:"clickhouse"`
+
+	ConStats *ContainerStatsTracker
+	CPUUsage *metrics.CPUUsage
 
 	Namespace string `asm:"namespace"`
 
@@ -69,19 +74,7 @@ func (l *LaunchContainer) Populated() error {
 		l.IdleTimeout = 1 * time.Hour
 	}
 
-	_, err := l.DB.Exec(
-		`
-CREATE TABLE IF NOT EXISTS container_usage (
-    timestamp DateTime64(9) CODEC(Delta(8), ZSTD(1)),
-    app LowCardinality(String) CODEC(ZSTD(1)),
-		usage UInt64,
-		leases UInt32,
-) 
-		ENGINE = MergeTree
-		ORDER BY (app, toUnixTimestamp(timestamp))
-`)
-
-	return err
+	return nil
 }
 
 func (l *LaunchContainer) LatencyEstimate() (int32, float64) {
@@ -142,6 +135,64 @@ func (l *LaunchContainer) newApplication(name string) *application {
 	l.Log.Info("tracking application", "app", name, "max-leases", l.MaxLeasesPerContainer)
 
 	return app
+}
+
+type PoolInfo struct {
+	Name      string
+	Windows   []WindowInfo
+	Idle      int
+	IdleUsage units.Microseconds
+}
+
+type WindowInfo struct {
+	Version string
+	Leases  int
+	Usage   units.Microseconds
+}
+
+type AppInfo struct {
+	Name  string
+	Pools []PoolInfo
+}
+
+func (l *LaunchContainer) AppInfo(name string) (*AppInfo, error) {
+	app, ok := l.findApp(name)
+	if !ok {
+		return nil, nil
+	}
+
+	var ai AppInfo
+	ai.Name = name
+
+	for pool := range app.Pools() {
+		pool.mu.Lock()
+
+		pi := PoolInfo{
+			Name: pool.name,
+			Idle: pool.idle.Len(),
+		}
+
+		for rc := range pool.idle {
+			pi.IdleUsage += rc.usage
+		}
+
+		for w := range pool.windows {
+			pi.IdleUsage += w.container.usage
+
+			usage, _ := w.container.cpuUsage()
+			pi.Windows = append(pi.Windows, WindowInfo{
+				Version: w.Version,
+				Leases:  w.Leases.Len(),
+				Usage:   usage - w.Start,
+			})
+		}
+
+		ai.Pools = append(ai.Pools, pi)
+
+		pool.mu.Unlock()
+	}
+
+	return &ai, nil
 }
 
 func (a *pool) availableWindow() *UsageWindow {
@@ -234,9 +285,15 @@ type runningContainer struct {
 	id          string
 	cpuStatPath string
 
+	memCurPath string
+
 	idleSince time.Time
 
-	image string
+	usage units.Microseconds
+
+	app     string
+	image   string
+	version string
 
 	windows set.Set[*UsageWindow]
 
@@ -254,7 +311,7 @@ func parseInt(b []byte) (uint64, error) {
 	return n, nil
 }
 
-func (r *runningContainer) cpuUsage() (uint64, error) {
+func (r *runningContainer) cpuUsage() (units.Microseconds, error) {
 	f, err := os.Open(r.cpuStatPath)
 	if err != nil {
 		return 0, err
@@ -271,7 +328,12 @@ func (r *runningContainer) cpuUsage() (uint64, error) {
 
 	data = data[11:n]
 
-	return parseInt(data)
+	u, err := parseInt(data)
+	if err != nil {
+		return 0, err
+	}
+
+	return units.Microseconds(u), nil
 
 	//i := bytes.IndexByte(data, '\n')
 
@@ -282,12 +344,13 @@ type UsageWindow struct {
 	App string
 	Id  string
 
-	Start, End uint64
+	WallStart, WallEnd time.Time
+	Start, End         units.Microseconds
 
 	Leases      set.Set[*LeasedContainer]
 	TotalLeases uint32
 
-	Version *app.AppVersion
+	Version string
 
 	container *runningContainer
 
@@ -302,7 +365,7 @@ type LeasedContainer struct {
 	Pool      *pool
 	StartTime time.Time
 
-	Start  uint64
+	Start  units.Microseconds
 	Window *UsageWindow
 
 	StartedWindow bool
@@ -388,10 +451,12 @@ func (l *LaunchContainer) Lease(ctx context.Context, name string, opts ...LeaseO
 }
 
 type LeaseInfo struct {
-	Usage uint64
+	Usage units.Microseconds
 }
 
 func (l *LaunchContainer) ReleaseLease(ctx context.Context, lc *LeasedContainer) (*LeaseInfo, error) {
+	done := time.Now()
+
 	lc.Pool.mu.Lock()
 	defer lc.Pool.mu.Unlock()
 
@@ -407,7 +472,7 @@ func (l *LaunchContainer) ReleaseLease(ctx context.Context, lc *LeasedContainer)
 	}
 
 	if lc.Window.Leases.Empty() {
-		err = l.closeWindow(ctx, lc.Window, ts)
+		err = l.closeWindow(ctx, lc.Window, ts, done)
 		if err != nil {
 			return nil, err
 		}
@@ -434,20 +499,22 @@ func (l *LaunchContainer) ReleaseLease(ctx context.Context, lc *LeasedContainer)
 	return i, nil
 }
 
-func (l *LaunchContainer) closeWindow(ctx context.Context, w *UsageWindow, ts uint64) error {
+func (l *LaunchContainer) closeWindow(ctx context.Context, w *UsageWindow, ts units.Microseconds, wallEnd time.Time) error {
 	l.Log.Info("closing window", "window", w.Id, "app", w.App)
 
 	w.End = ts
+	w.WallEnd = wallEnd
 	w.container.idleSince = time.Now()
 
-	usage := ts - w.Start
+	return l.ConStats.retireContainer(ctx, w.container)
 
-	_, err := l.DB.ExecContext(ctx,
-		"INSERT INTO container_usage (app, usage, leases) VALUES (?, ?, ?)",
-		w.App, usage, w.TotalLeases,
-	)
+	/*
+		usage := ts - w.Start
 
-	return err
+		w.container.usage += usage
+
+		return l.CPUUsage.RecordUsage(ctx, w.App, w.WallStart, w.WallEnd, usage)
+	*/
 }
 
 func (l *LaunchContainer) ShutdownIdle(ctx context.Context) (int, error) {
@@ -559,8 +626,10 @@ func (l *LaunchContainer) RecoverContainers(ctx context.Context) error {
 			continue
 		}
 
-		if mrv.Version != labels["miren.dev/version"] {
-			l.Log.Warn("container version mismatch", "container", container.ID(), "expected", mrv.Version, "actual", labels["miren.dev/version"])
+		version := labels["miren.dev/version"]
+
+		if mrv.Version != version {
+			l.Log.Warn("container version mismatch", "container", container.ID(), "expected", mrv.Version, "actual", version)
 			continue
 		}
 
@@ -574,8 +643,11 @@ func (l *LaunchContainer) RecoverContainers(ctx context.Context) error {
 
 		rc := &runningContainer{
 			id:          container.ID(),
+			app:         aa.Xid,
 			image:       img.Name(),
+			version:     version,
 			cpuStatPath: filepath.Join("/sys/fs/cgroup", spec.Linux.CgroupsPath, "cpu.stat"),
+			memCurPath:  filepath.Join("/sys/fs/cgroup", spec.Linux.CgroupsPath, "memory.current"),
 			idleSince:   time.Now(), // We assume recovered containers are idle
 			windows:     set.New[*UsageWindow](),
 		}
@@ -747,7 +819,7 @@ func (l *LaunchContainer) ClearOldVersions(ctx context.Context, cur *app.AppVers
 		"app", cur.App.Name,
 		"current", cur.Version, "image", imageName)
 
-	app, ok := l.findApp(cur.App.Name)
+	app, ok := l.findApp(cur.App.Xid)
 	if !ok {
 		l.Log.Debug("app not found", "app", cur.App.Name)
 		return nil

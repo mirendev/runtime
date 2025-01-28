@@ -1,0 +1,309 @@
+package commands
+
+import (
+	"context"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/NimbleMarkets/ntcharts/linechart/timeserieslinechart"
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+
+	"miren.dev/runtime/pkg/units"
+	"miren.dev/runtime/server"
+)
+
+func MinuteLabeler(i int, v float64) string {
+	t := time.Unix(int64(v), 0).Local()
+	return t.Format("15:04")
+}
+
+func App(ctx *Context, opts struct {
+	App   string `short:"a" long:"app" description:"Application get info about"`
+	Watch bool   `short:"w" long:"watch" description:"Watch the app stats"`
+	Graph bool   `short:"g" long:"graph" description:"Graph the app stats"`
+}) error {
+	cl, err := ctx.RPCClient("app-info")
+	if err != nil {
+		return err
+	}
+
+	ac := server.AppInfoClient{Client: cl}
+
+	res, err := ac.AppInfo(ctx, opts.App)
+	if err != nil {
+		return err
+	}
+
+	status := res.Status()
+
+	//spew.Dump(status)
+	//windows := status.Pools()
+
+	p := tea.NewProgram(Model{
+		cl:    &server.AppInfoClient{Client: cl},
+		app:   opts.App,
+		watch: opts.Watch,
+		cpu: timeserieslinechart.New(60, 12,
+			timeserieslinechart.WithXLabelFormatter(MinuteLabeler),
+			timeserieslinechart.WithYLabelFormatter(func(i int, v float64) string {
+				return fmt.Sprintf("%.3f", v/1000)
+			}),
+		),
+		mem: timeserieslinechart.New(60, 12,
+			timeserieslinechart.WithXLabelFormatter(MinuteLabeler),
+		),
+
+		status: status,
+		graph:  opts.Graph,
+	})
+
+	_, err = p.Run()
+	return err
+}
+
+const (
+	columnKeyName    = "name"
+	columnKeyVersion = "version"
+	columnKeyLeases  = "leases"
+	columnKeyIdle    = "idle"
+	columnKeyUsage   = "usage"
+
+	colorNormal   = "#fa0"
+	colorFire     = "#f64"
+	colorElectric = "#ff0"
+	colorWater    = "#44f"
+	colorPlant    = "#8b8"
+)
+
+var (
+	styleSubtle = lipgloss.NewStyle().Foreground(lipgloss.Color("#888"))
+
+	styleBase = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#a7a")).
+			BorderForeground(lipgloss.Color("#a38")).
+			Align(lipgloss.Right)
+)
+
+type Model struct {
+	cl     *server.AppInfoClient
+	app    string
+	status *server.ApplicationStatus
+	watch  bool
+
+	cpu timeserieslinechart.Model
+	mem timeserieslinechart.Model
+	max float64
+
+	width        int
+	stack, graph bool
+
+	quitting bool
+}
+
+var randomFloat64 float64
+
+var defaultStyle = lipgloss.NewStyle().
+	BorderStyle(lipgloss.RoundedBorder()).
+	BorderForeground(lipgloss.Color(lightBlue)).
+	PaddingLeft(1).PaddingRight(1)
+
+var titleStyle = lipgloss.NewStyle().
+	Foreground(lipgloss.Color("3")) // yellow
+
+var blockStyle = lipgloss.NewStyle().
+	Foreground(lipgloss.Color("63")) // purple
+
+var blockStyle2 = lipgloss.NewStyle().
+	Foreground(lipgloss.Color("9")). // red
+	Background(lipgloss.Color("2"))  // green
+
+var blockStyle3 = lipgloss.NewStyle().
+	Foreground(lipgloss.Color("6")). // cyan
+	Background(lipgloss.Color("3"))  // yellow
+
+var blockStyle4 = lipgloss.NewStyle().
+	Foreground(lipgloss.Color("3")) // yellow
+
+func (m Model) Init() tea.Cmd {
+	return nil
+}
+
+func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		switch msg.String() {
+		case "q", "ctrl+c":
+			m.quitting = true
+		}
+	case tea.WindowSizeMsg:
+		m.width = msg.Width
+
+		if msg.Width < 50 {
+			m.stack = true
+
+			m.cpu.Resize(msg.Width, 12)
+			m.mem.Resize(msg.Width, 12)
+		} else {
+			m.stack = false
+
+			width := (msg.Width - 8) / 2
+
+			m.cpu.Resize(width, 12)
+			m.mem.Resize(width, 12)
+		}
+	}
+
+	res, err := m.cl.AppInfo(context.TODO(), m.app)
+	if err != nil {
+		return m, tea.Quit
+	}
+
+	m.cpu.Clear()
+	m.mem.Clear()
+
+	status := res.Status()
+	m.status = status
+
+	format := "2006-01-02 15:04:05.999999999 -0700 MST"
+
+	for _, s := range status.CpuOverHour() {
+		t, err := time.Parse(format, s.Start())
+		if err == nil {
+			m.cpu.Push(timeserieslinechart.TimePoint{
+				Time:  t,
+				Value: s.Cores() * 1000,
+			})
+		}
+	}
+
+	for _, s := range status.MemoryOverHour() {
+		t, err := time.Parse(format, s.Timestamp())
+		if err == nil {
+			by := units.Bytes(s.Bytes())
+
+			m.mem.Push(timeserieslinechart.TimePoint{
+				Time:  t,
+				Value: float64(by.MegaBytes()),
+			})
+		}
+	}
+
+	m.cpu.Draw()
+	m.mem.Draw()
+
+	if !m.watch || m.quitting {
+		return m, tea.Quit
+	}
+
+	return m, tea.Tick(10*time.Second, func(t time.Time) tea.Msg {
+		return TickMsg{Time: t}
+	})
+}
+
+type TickMsg struct {
+	Time time.Time
+}
+
+const (
+	format = "2006-01-02 15:04:05.999999999 -0700 MST"
+	Stamp  = "Jan _2 03:04:05PM"
+)
+
+var (
+	bold  = lipgloss.NewStyle().Bold(true)
+	faint = lipgloss.NewStyle().Faint(true)
+)
+
+func (m Model) View() string {
+	t, err := time.Parse(format, m.status.LastDeploy())
+	if err == nil {
+		t = t.Local()
+	}
+
+	hdr := fmt.Sprintf("       name: %s\nlast update: %s %s\n",
+		bold.Render(m.status.Name()),
+		bold.Render(t.Format(Stamp)),
+
+		faint.Render(
+			fmt.Sprintf("(%s ago, %s)",
+				time.Since(t).Round(time.Second),
+				m.status.ActiveVersion(),
+			)),
+	)
+
+	for _, ps := range m.status.Pools() {
+		hdr += fmt.Sprintf("       pool: %s instances=%d idle=%d\n", bold.Render(ps.Name()), len(ps.Windows()), ps.Idle())
+	}
+
+	var (
+		body   string
+		footer string
+	)
+
+	if !m.graph {
+		cpuSamples := m.status.CpuOverHour()[len(m.status.CpuOverHour())-5:]
+
+		var lines []string
+
+		of := time.Kitchen
+		for _, s := range cpuSamples {
+			t, err := time.Parse(format, s.Start())
+			t = t.Local()
+			if err != nil {
+				lines = append(lines, fmt.Sprintf("%s: %.3f", s.Start(), s.Cores()))
+			} else {
+				lines = append(lines, fmt.Sprintf("%s: %.3f", t.Format(of), s.Cores()))
+			}
+		}
+
+		memSamples := m.status.MemoryOverHour()[len(m.status.MemoryOverHour())-5:]
+
+		var memlines []string
+
+		for _, s := range memSamples {
+			t, err := time.Parse(format, s.Timestamp())
+
+			b := units.Bytes(s.Bytes())
+
+			if err != nil {
+				memlines = append(memlines, fmt.Sprintf("%s: %s", s.Timestamp(), b.Short()))
+			} else {
+				t = t.Local()
+				memlines = append(memlines, fmt.Sprintf("%s: %s", t.Format(of), b.Short()))
+			}
+		}
+
+		body = lipgloss.JoinHorizontal(lipgloss.Top,
+			defaultStyle.Render(titleStyle.Render("CPU (cores)")+"\n"+strings.Join(lines, "\n")),
+			defaultStyle.Render(titleStyle.Render("Memory (MB)")+"\n"+strings.Join(memlines, "\n")),
+		)
+	} else if m.stack {
+		body = lipgloss.JoinVertical(lipgloss.Top,
+			defaultStyle.Render(titleStyle.Render("   CPU (cores)")+"\n"+m.cpu.View()),
+			defaultStyle.Render(titleStyle.Render("   Memory (MB)")+"\n"+m.mem.View()),
+		)
+		footer =
+			lipgloss.NewStyle().Width(m.width).Align(lipgloss.Right).Render(
+				fmt.Sprintf("Updated: %s", time.Now().Format(Stamp)),
+			)
+
+	} else {
+		body = lipgloss.JoinHorizontal(lipgloss.Top,
+			defaultStyle.Render(titleStyle.Render("   CPU (cores)")+"\n"+m.cpu.View()),
+			defaultStyle.Render(titleStyle.Render("   Memory (MB)")+"\n"+m.mem.View()),
+		)
+		footer =
+			lipgloss.NewStyle().Width(m.width - 3).Align(lipgloss.Right).Faint(true).Render(
+				fmt.Sprintf("Updated: %s", time.Now().Format(Stamp)),
+			)
+	}
+
+	frame := lipgloss.JoinVertical(lipgloss.Top, hdr, body, footer)
+	if m.quitting {
+		frame += "\n"
+	}
+
+	return frame
+}

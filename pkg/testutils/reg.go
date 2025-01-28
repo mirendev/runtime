@@ -16,6 +16,7 @@ import (
 	buildkit "github.com/moby/buildkit/client"
 	"miren.dev/runtime/network"
 	"miren.dev/runtime/pkg/asm"
+	"miren.dev/runtime/pkg/asm/autoreg"
 	"miren.dev/runtime/pkg/idgen"
 	"miren.dev/runtime/pkg/netdb"
 	"miren.dev/runtime/pkg/slogfmt"
@@ -150,6 +151,10 @@ func Registry(extra ...func(*asm.Registry)) (*asm.Registry, func()) {
 
 		return pool, nil
 	})
+
+	for _, f := range autoreg.All() {
+		r.Provide(f.Interface())
+	}
 
 	for _, fn := range extra {
 		fn(&r)

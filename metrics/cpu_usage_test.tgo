@@ -1,0 +1,117 @@
+package metrics
+
+import (
+	"context"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/require"
+	"miren.dev/runtime/app"
+	"miren.dev/runtime/pkg/testutils"
+	"miren.dev/runtime/pkg/units"
+)
+
+func TestCPUUsage(t *testing.T) {
+	t.Run("can get cpu usage", func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+
+		r := require.New(t)
+
+		reg, cleanup := testutils.Registry(app.TestInject)
+		defer cleanup()
+
+		var au CPUUsage
+		err := reg.Populate(&au)
+		r.NoError(err)
+
+		err = au.Setup()
+		r.NoError(err)
+
+		t.Run("over a minute, max", func(t *testing.T) {
+			r := require.New(t)
+
+			_, err = au.DB.ExecContext(ctx, "TRUNCATE TABLE cpu_usage")
+			r.NoError(err)
+
+			ts := time.Now()
+			end := ts.Add(time.Minute)
+			err = au.RecordUsage(ctx, "app1", ts, end, units.Microseconds(time.Minute.Microseconds()))
+			r.NoError(err)
+
+			var tsout time.Time
+			err = au.DB.QueryRow("SELECT timestamp FROM cpu_usage").Scan(&tsout)
+			r.NoError(err)
+
+			r.Equal(ts.UnixMicro(), tsout.UnixMicro())
+
+			cores, err := au.CurrentCPUUsage("app1")
+			r.NoError(err)
+
+			r.InDelta(1, cores, 0.1)
+
+		})
+
+		t.Run("over a minute, half", func(t *testing.T) {
+			r := require.New(t)
+			_, err = au.DB.ExecContext(ctx, "TRUNCATE TABLE cpu_usage")
+			r.NoError(err)
+
+			ts := time.Now()
+			end := ts.Add(time.Minute)
+			err = au.RecordUsage(ctx, "app1", ts, end, units.Microseconds(time.Minute.Microseconds()/2))
+			r.NoError(err)
+
+			cores, err := au.CurrentCPUUsage("app1")
+			r.NoError(err)
+
+			r.InDelta(0.5, cores, 0.01)
+		})
+
+		t.Run("over a minute, tenth in multile windows", func(t *testing.T) {
+			r := require.New(t)
+			_, err = au.DB.ExecContext(ctx, "TRUNCATE TABLE cpu_usage")
+			r.NoError(err)
+
+			ts := time.Now()
+			end := ts.Add(time.Minute)
+			err = au.RecordUsage(ctx, "app1", ts, end, units.Microseconds(time.Minute.Microseconds()/20))
+			r.NoError(err)
+
+			cores, err := au.CurrentCPUUsage("app1")
+			r.NoError(err)
+
+			r.InDelta(0.05, cores, 0.01)
+			err = au.RecordUsage(ctx, "app1", ts, end, units.Microseconds(time.Minute.Microseconds()/20))
+			r.NoError(err)
+
+			cores, err = au.CurrentCPUUsage("app1")
+			r.NoError(err)
+
+			r.InDelta(0.1, cores, 0.01)
+		})
+
+		t.Run("over a hour in multile windows", func(t *testing.T) {
+			r := require.New(t)
+			_, err = au.DB.ExecContext(ctx, "TRUNCATE TABLE cpu_usage")
+			r.NoError(err)
+
+			ts := time.Now()
+
+			for i := 0; i < 60; i++ {
+				ws := ts.Add(time.Minute * time.Duration(i))
+
+				dur := 30 * time.Second
+				end := ws.Add(dur)
+
+				err = au.RecordUsage(ctx, "app1", ts, end, units.Microseconds(dur.Microseconds()))
+				r.NoError(err)
+			}
+
+			cores, err := au.CPUUsageOver("app1", "1 HOUR")
+			r.NoError(err)
+
+			r.InDelta(0.5, cores, 0.01)
+		})
+	})
+}

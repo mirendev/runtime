@@ -17,6 +17,8 @@ import (
 	"miren.dev/runtime/shell"
 )
 
+//go:generate go run ../pkg/rpc/cmd/rpcgen -pkg server -input rpc.yml -output rpc.gen.go
+
 type Server struct {
 	Log  *slog.Logger
 	Port int `asm:"server_port"`
@@ -24,6 +26,7 @@ type Server struct {
 	Build   *build.RPCBuilder
 	Shell   *shell.RPCShell
 	AppCrud *app.RPCCrud
+	AppInfo *RPCAppInfo
 
 	Lease *lease.LaunchContainer
 
@@ -32,6 +35,8 @@ type Server struct {
 	Ingress *ingress.LeaseHTTP
 
 	RunSCMon *observability.RunSCMonitor
+
+	ConStatTracker *lease.ContainerStatsTracker
 }
 
 func (s *Server) periodicIdleShutdown(ctx context.Context) {
@@ -87,6 +92,8 @@ func (s *Server) Run(ctx context.Context) error {
 	go s.Health.MonitorEvents(ctx)
 	go s.periodicIdleShutdown(ctx)
 
+	go s.ConStatTracker.Monitor(ctx)
+
 	s.Lease.RecoverContainers(ctx)
 
 	serv := ss.Server()
@@ -95,6 +102,7 @@ func (s *Server) Run(ctx context.Context) error {
 
 	serv.ExposeValue("build", build.AdaptBuilder(s.Build))
 	serv.ExposeValue("app", app.AdaptCrud(s.AppCrud))
+	serv.ExposeValue("app-info", AdaptAppInfo(s.AppInfo))
 	serv.ExposeValue("shell", shell.AdaptShellAccess(s.Shell))
 
 	go http.ListenAndServe(":8080", s.Ingress)

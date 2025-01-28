@@ -77,8 +77,10 @@ func (l *leaseOperation) tryAvailableIdleContainer() (*LeasedContainer, error) {
 			App:         l.pool.app.name,
 			Id:          idgen.Gen("w"),
 			Start:       start,
+			WallStart:   time.Now(),
 			Leases:      set.New[*LeasedContainer](),
 			TotalLeases: 1,
+			Version:     rc.version,
 
 			container: rc,
 		}
@@ -182,7 +184,7 @@ func (l *leaseOperation) setupLaunch(ctx context.Context) error {
 
 	pool := l.pool
 
-	ac, err := l.AppAccess.LoadApp(ctx, pool.app.name)
+	ac, err := l.AppAccess.LoadAppByXid(ctx, pool.app.name)
 	if err != nil {
 		return err
 	}
@@ -243,9 +245,10 @@ func (l *leaseOperation) launchContainer(ctx context.Context) (*LeasedContainer,
 		App:         l.pool.app.name,
 		Id:          winId,
 		Start:       0,
+		WallStart:   time.Now(),
 		Leases:      set.New[*LeasedContainer](),
 		TotalLeases: 1,
-		Version:     l.mrv,
+		Version:     l.mrv.Version,
 
 		container: rc,
 	}
@@ -326,7 +329,17 @@ func (l *leaseOperation) launch(
 	rc := &runningContainer{
 		id:          config.Id,
 		image:       config.Image,
+		app:         l.ac.Xid,
+		version:     l.mrv.Version,
 		cpuStatPath: filepath.Join("/sys/fs/cgroup", config.CGroupPath, "cpu.stat"),
+		memCurPath:  filepath.Join("/sys/fs/cgroup", config.CGroupPath, "memory.current"),
+	}
+
+	err = l.ConStats.activateContainer(rc)
+	if err != nil {
+		l.Log.Error("failed to activate container", "container", rc.id, "error", err)
+		l.CR.StopContainer(ctx, rc.id)
+		return nil, err
 	}
 
 	return rc, nil
