@@ -10,6 +10,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"miren.dev/runtime/pkg/rpc/standard"
 	"miren.dev/runtime/pkg/units"
 	"miren.dev/runtime/server"
 )
@@ -166,28 +167,22 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	status := res.Status()
 	m.status = status
 
-	format := "2006-01-02 15:04:05.999999999 -0700 MST"
-
 	for _, s := range status.CpuOverHour() {
-		t, err := time.Parse(format, s.Start())
-		if err == nil {
-			m.cpu.Push(timeserieslinechart.TimePoint{
-				Time:  t,
-				Value: s.Cores() * 1000,
-			})
-		}
+		t := standard.FromTimestamp(s.Start())
+		m.cpu.Push(timeserieslinechart.TimePoint{
+			Time:  t,
+			Value: s.Cores() * 1000,
+		})
 	}
 
 	for _, s := range status.MemoryOverHour() {
-		t, err := time.Parse(format, s.Timestamp())
-		if err == nil {
-			by := units.Bytes(s.Bytes())
+		t := standard.FromTimestamp(s.Timestamp())
+		by := units.Bytes(s.Bytes())
 
-			m.mem.Push(timeserieslinechart.TimePoint{
-				Time:  t,
-				Value: float64(by.MegaBytes()),
-			})
-		}
+		m.mem.Push(timeserieslinechart.TimePoint{
+			Time:  t,
+			Value: float64(by.MegaBytes()),
+		})
 	}
 
 	m.cpu.Draw()
@@ -217,10 +212,7 @@ var (
 )
 
 func (m Model) View() string {
-	t, err := time.Parse(format, m.status.LastDeploy())
-	if err == nil {
-		t = t.Local()
-	}
+	t := standard.FromTimestamp(m.status.LastDeploy())
 
 	hdr := fmt.Sprintf("       name: %s\nlast update: %s %s\n",
 		bold.Render(m.status.Name()),
@@ -249,13 +241,8 @@ func (m Model) View() string {
 
 		of := time.Kitchen
 		for _, s := range cpuSamples {
-			t, err := time.Parse(format, s.Start())
-			t = t.Local()
-			if err != nil {
-				lines = append(lines, fmt.Sprintf("%s: %.3f", s.Start(), s.Cores()))
-			} else {
-				lines = append(lines, fmt.Sprintf("%s: %.3f", t.Format(of), s.Cores()))
-			}
+			t := standard.FromTimestamp(s.Start())
+			lines = append(lines, fmt.Sprintf("%s: %.3f", t.Format(of), s.Cores()))
 		}
 
 		memSamples := m.status.MemoryOverHour()[len(m.status.MemoryOverHour())-5:]
@@ -263,16 +250,11 @@ func (m Model) View() string {
 		var memlines []string
 
 		for _, s := range memSamples {
-			t, err := time.Parse(format, s.Timestamp())
+			t := standard.FromTimestamp(s.Timestamp())
 
 			b := units.Bytes(s.Bytes())
 
-			if err != nil {
-				memlines = append(memlines, fmt.Sprintf("%s: %s", s.Timestamp(), b.Short()))
-			} else {
-				t = t.Local()
-				memlines = append(memlines, fmt.Sprintf("%s: %s", t.Format(of), b.Short()))
-			}
+			memlines = append(memlines, fmt.Sprintf("%s: %s", t.Format(of), b.Short()))
 		}
 
 		body = lipgloss.JoinHorizontal(lipgloss.Top,
