@@ -7,11 +7,12 @@ import (
 
 	"github.com/fxamacker/cbor/v2"
 	rpc "miren.dev/runtime/pkg/rpc"
+	"miren.dev/runtime/pkg/rpc/standard"
 )
 
 type cpuUsageData struct {
-	Start *string  `cbor:"0,keyasint,omitempty" json:"start,omitempty"`
-	Cores *float64 `cbor:"1,keyasint,omitempty" json:"cores,omitempty"`
+	Start *standard.Timestamp `cbor:"0,keyasint,omitempty" json:"start,omitempty"`
+	Cores *float64            `cbor:"1,keyasint,omitempty" json:"cores,omitempty"`
 }
 
 type CpuUsage struct {
@@ -22,15 +23,12 @@ func (v *CpuUsage) HasStart() bool {
 	return v.data.Start != nil
 }
 
-func (v *CpuUsage) Start() string {
-	if v.data.Start == nil {
-		return ""
-	}
-	return *v.data.Start
+func (v *CpuUsage) Start() *standard.Timestamp {
+	return v.data.Start
 }
 
-func (v *CpuUsage) SetStart(start string) {
-	v.data.Start = &start
+func (v *CpuUsage) SetStart(start *standard.Timestamp) {
+	v.data.Start = start
 }
 
 func (v *CpuUsage) HasCores() bool {
@@ -65,8 +63,8 @@ func (v *CpuUsage) UnmarshalJSON(data []byte) error {
 }
 
 type memoryUsageData struct {
-	Timestamp *string `cbor:"0,keyasint,omitempty" json:"timestamp,omitempty"`
-	Bytes     *int64  `cbor:"1,keyasint,omitempty" json:"bytes,omitempty"`
+	Timestamp *standard.Timestamp `cbor:"0,keyasint,omitempty" json:"timestamp,omitempty"`
+	Bytes     *int64              `cbor:"1,keyasint,omitempty" json:"bytes,omitempty"`
 }
 
 type MemoryUsage struct {
@@ -77,15 +75,12 @@ func (v *MemoryUsage) HasTimestamp() bool {
 	return v.data.Timestamp != nil
 }
 
-func (v *MemoryUsage) Timestamp() string {
-	if v.data.Timestamp == nil {
-		return ""
-	}
-	return *v.data.Timestamp
+func (v *MemoryUsage) Timestamp() *standard.Timestamp {
+	return v.data.Timestamp
 }
 
-func (v *MemoryUsage) SetTimestamp(timestamp string) {
-	v.data.Timestamp = &timestamp
+func (v *MemoryUsage) SetTimestamp(timestamp *standard.Timestamp) {
+	v.data.Timestamp = timestamp
 }
 
 func (v *MemoryUsage) HasBytes() bool {
@@ -279,15 +274,15 @@ func (v *WindowStatus) UnmarshalJSON(data []byte) error {
 }
 
 type applicationStatusData struct {
-	Name           *string         `cbor:"0,keyasint,omitempty" json:"name,omitempty"`
-	Pools          *[]*PoolStatus  `cbor:"1,keyasint,omitempty" json:"pools,omitempty"`
-	LastMinCPU     *float64        `cbor:"2,keyasint,omitempty" json:"lastMinCPU,omitempty"`
-	LastHourCPU    *float64        `cbor:"3,keyasint,omitempty" json:"lastHourCPU,omitempty"`
-	LastDayCPU     *float64        `cbor:"4,keyasint,omitempty" json:"lastDayCPU,omitempty"`
-	CpuOverHour    *[]*CpuUsage    `cbor:"5,keyasint,omitempty" json:"cpuOverHour,omitempty"`
-	MemoryOverHour *[]*MemoryUsage `cbor:"6,keyasint,omitempty" json:"memoryOverHour,omitempty"`
-	ActiveVersion  *string         `cbor:"7,keyasint,omitempty" json:"activeVersion,omitempty"`
-	LastDeploy     *string         `cbor:"8,keyasint,omitempty" json:"lastDeploy,omitempty"`
+	Name           *string             `cbor:"0,keyasint,omitempty" json:"name,omitempty"`
+	Pools          *[]*PoolStatus      `cbor:"1,keyasint,omitempty" json:"pools,omitempty"`
+	LastMinCPU     *float64            `cbor:"2,keyasint,omitempty" json:"lastMinCPU,omitempty"`
+	LastHourCPU    *float64            `cbor:"3,keyasint,omitempty" json:"lastHourCPU,omitempty"`
+	LastDayCPU     *float64            `cbor:"4,keyasint,omitempty" json:"lastDayCPU,omitempty"`
+	CpuOverHour    *[]*CpuUsage        `cbor:"5,keyasint,omitempty" json:"cpuOverHour,omitempty"`
+	MemoryOverHour *[]*MemoryUsage     `cbor:"6,keyasint,omitempty" json:"memoryOverHour,omitempty"`
+	ActiveVersion  *string             `cbor:"7,keyasint,omitempty" json:"activeVersion,omitempty"`
+	LastDeploy     *standard.Timestamp `cbor:"8,keyasint,omitempty" json:"lastDeploy,omitempty"`
 }
 
 type ApplicationStatus struct {
@@ -421,15 +416,12 @@ func (v *ApplicationStatus) HasLastDeploy() bool {
 	return v.data.LastDeploy != nil
 }
 
-func (v *ApplicationStatus) LastDeploy() string {
-	if v.data.LastDeploy == nil {
-		return ""
-	}
-	return *v.data.LastDeploy
+func (v *ApplicationStatus) LastDeploy() *standard.Timestamp {
+	return v.data.LastDeploy
 }
 
-func (v *ApplicationStatus) SetLastDeploy(lastDeploy string) {
-	v.data.LastDeploy = &lastDeploy
+func (v *ApplicationStatus) SetLastDeploy(lastDeploy *standard.Timestamp) {
+	v.data.LastDeploy = lastDeploy
 }
 
 func (v *ApplicationStatus) MarshalCBOR() ([]byte, error) {

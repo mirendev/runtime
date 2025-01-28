@@ -368,7 +368,7 @@ func (g *Generator) readForField(f *j.File, t *DescType, field *DescField) {
 		)
 
 		f.Line()
-	case "int32", "int64", "float32", "float64":
+	case "uint32", "int32", "uint64", "int64", "float32", "float64":
 		f.Func().Params(
 			j.Id("v").Op("*").Add(recv),
 		).Id("Has" + name).Params().Bool().Block(
@@ -550,7 +550,7 @@ func (g *Generator) writeForField(f *j.File, t *DescType, field *DescField) {
 			j.Id("v").Dot("data").Dot(name).Op("=").Op("&").Id(field.Name),
 		)
 
-	case "int32", "int64", "float32", "float64":
+	case "uint32", "int32", "uint64", "int64", "float32", "float64":
 		f.Func().Params(
 			j.Id("v").Op("*").Add(recv),
 		).Id("Set" + name).Params(
@@ -636,7 +636,7 @@ func (g *Generator) writeForField(f *j.File, t *DescType, field *DescField) {
 // Helper to generate the correct type for a union field
 func (g *Generator) typeForUnion(u UnionField) j.Code {
 	switch u.Type {
-	case "bool", "int32", "int64", "float32", "float64", "string":
+	case "bool", "uint32", "int32", "uint64", "int64", "float32", "float64", "string":
 		return j.Id(u.Type)
 	case "bytes":
 		return j.Index().Byte()
@@ -739,7 +739,7 @@ func (g *Generator) zeroValue(field UnionField) j.Code {
 	switch field.Type {
 	case "bool":
 		return j.Lit(false)
-	case "int32", "int64":
+	case "uint32", "int32", "uint64", "int64":
 		return j.Lit(0)
 	case "string":
 		return j.Lit("")
@@ -843,7 +843,7 @@ func (g *Generator) generateStruct(f *j.File) error {
 					)
 				}
 
-			case "int32", "int64", "float32", "float64":
+			case "uint32", "int32", "uint64", "int64", "float32", "float64":
 				if t.Readable() {
 					f.Func().Params(
 						j.Id("v").Op("*").Add(recv),
@@ -1465,7 +1465,9 @@ func (t *DescType) Writeable() bool {
 var dataFields = map[string]int{
 	"bool":    1,
 	"int32":   4,
+	"uint32":  4,
 	"int64":   8,
+	"uint64":  8,
 	"float32": 4,
 	"float64": 8,
 }
@@ -1494,9 +1496,9 @@ func (t *DescType) CalculateOffsets(usertypes map[string]*DescType) {
 		switch field.Type {
 		case "bool":
 			dataOffset += 1
-		case "int32":
+		case "uint32", "int32":
 			dataOffset += 4
-		case "int64":
+		case "uint64", "int64":
 			dataOffset += 8
 		case "float32":
 			dataOffset += 4

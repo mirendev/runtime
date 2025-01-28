@@ -5,20 +5,24 @@ imports:
   stream:
     path: ../pkg/rpc/stream/stream.yml
     import: miren.dev/runtime/pkg/rpc/stream
+  standard:
+    path: ../pkg/rpc/standard/standard.yml
+    import: miren.dev/runtime/pkg/rpc/standard
 
 types:
   - type: CpuUsage
     fields:
       - name: start
-        type: string
+        type: standard.Timestamp
         index: 0
       - name: cores
         type: float64
         index: 1
+
   - type: MemoryUsage
     fields:
       - name: timestamp
-        type: string
+        type: standard.Timestamp
         index: 0
       - name: bytes
         type: int64
@@ -82,7 +86,7 @@ types:
         type: string
         index: 7
       - name: lastDeploy
-        type: string
+        type: standard.Timestamp
         index: 8
 
 interfaces:

@@ -1,0 +1,15 @@
+types:
+  - type: Timestamp
+    fields:
+      - name: seconds
+        type: int64
+        index: 0
+      - name: nanoseconds
+        type: int32
+        index: 1
+
+  - type: Duration
+    fields:
+      - name: nanoseconds
+        type: uint64
+        index: 0

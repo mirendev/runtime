@@ -7,6 +7,7 @@ import (
 	"miren.dev/runtime/app"
 	"miren.dev/runtime/lease"
 	"miren.dev/runtime/metrics"
+	"miren.dev/runtime/pkg/rpc/standard"
 )
 
 type RPCAppInfo struct {
@@ -37,7 +38,7 @@ func (a *RPCAppInfo) AppInfo(ctx context.Context, state *AppInfoAppInfo) error {
 	ver, err := a.App.MostRecentVersion(ctx, ac)
 	if err == nil {
 		rai.SetActiveVersion(ver.Version)
-		rai.SetLastDeploy(ver.CreatedAt.String())
+		rai.SetLastDeploy(standard.ToTimestamp(ver.CreatedAt))
 	}
 
 	/*
@@ -74,7 +75,7 @@ func (a *RPCAppInfo) AppInfo(ctx context.Context, state *AppInfoAppInfo) error {
 	for _, uat := range uats {
 		var rcpu CpuUsage
 
-		rcpu.SetStart(uat.Timestamp.String())
+		rcpu.SetStart(standard.ToTimestamp(uat.Timestamp))
 		rcpu.SetCores(uat.Cores)
 
 		usages = append(usages, &rcpu)
@@ -92,7 +93,7 @@ func (a *RPCAppInfo) AppInfo(ctx context.Context, state *AppInfoAppInfo) error {
 	for _, mu := range memusages {
 		var rmu MemoryUsage
 
-		rmu.SetTimestamp(mu.Timestamp.String())
+		rmu.SetTimestamp(standard.ToTimestamp(mu.Timestamp))
 		rmu.SetBytes(mu.Memory.Int64())
 
 		musages = append(musages, &rmu)
