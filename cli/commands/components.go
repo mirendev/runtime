@@ -22,7 +22,6 @@ import (
 	"miren.dev/runtime/image"
 	"miren.dev/runtime/ingress"
 	"miren.dev/runtime/lease"
-	"miren.dev/runtime/metrics"
 	"miren.dev/runtime/observability"
 	"miren.dev/runtime/pkg/asm"
 	"miren.dev/runtime/pkg/asm/autoreg"
@@ -222,10 +221,6 @@ func (c *Context) setupServerComponents(ctx context.Context, reg *asm.Registry) 
 
 	reg.Provide(func() *server.RPCAppInfo {
 		return &server.RPCAppInfo{}
-	})
-
-	reg.Provide(func() *metrics.CPUUsage {
-		return &metrics.CPUUsage{}
 	})
 
 	for _, f := range autoreg.All() {
