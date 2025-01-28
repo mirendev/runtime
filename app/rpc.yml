@@ -1,3 +1,13 @@
+types:
+  - type: NamedValue
+    fields:
+      - name: key
+        type: string
+        index: 0
+      - name: value
+        type: string
+        index: 1
+
 interfaces:
   - name: Crud
     methods:
@@ -7,4 +17,14 @@ interfaces:
             type: string
         results:
           - name: id
+            type: string
+      - name: addEnv
+        parameters:
+          - name: app
+            type: string
+          - name: envvars
+            type: list
+            element: NamedValue
+        results:
+          - name: versionId
             type: string

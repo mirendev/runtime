@@ -755,7 +755,7 @@ func (l *LaunchContainer) ImageInUse(ctx context.Context, image string) (bool, e
 	return false, nil
 }
 
-func (l *LaunchContainer) clearOldInPool(ctx context.Context, pool *pool, imageName string) error {
+func (l *LaunchContainer) clearOldInPool(ctx context.Context, pool *pool, version string) error {
 	pool.mu.Lock()
 	defer pool.mu.Unlock()
 
@@ -764,18 +764,18 @@ func (l *LaunchContainer) clearOldInPool(ctx context.Context, pool *pool, imageN
 	l.Log.Info("clearing old versions in pool",
 		"app", pool.app.name,
 		"pool", pool.name,
-		"new-image", imageName,
+		"new-version", version,
 		"windows", len(pool.windows),
 		"idle-containers", len(pool.idle),
 	)
 
 	for rc := range pool.idle.Each() {
-		if rc.image != imageName {
+		if rc.version != version {
 			l.Log.Info("stopping idle container with version",
 				"container", rc.id,
 				"app", pool.app.name,
 				"pool", pool.name,
-				"image", imageName)
+				"cur-version", rc.version)
 
 			err := l.CR.StopContainer(ctx, rc.id)
 			if err != nil {
@@ -794,9 +794,9 @@ func (l *LaunchContainer) clearOldInPool(ctx context.Context, pool *pool, imageN
 	}
 
 	for w := range pool.windows.Each() {
-		if w.container.image != imageName {
+		if w.container.version != version {
 			l.Log.Info("retiring window with version",
-				"window", w.Id, "app", pool.app.name, "pool", pool.name, "image", imageName,
+				"window", w.Id, "app", pool.app.name, "pool", pool.name, "cur-version", w.container.version,
 			)
 			w.retire = true
 		}
@@ -814,21 +814,20 @@ func (l *LaunchContainer) findApp(name string) (*application, bool) {
 }
 
 func (l *LaunchContainer) ClearOldVersions(ctx context.Context, cur *app.AppVersion) error {
-	imageName := cur.ImageName()
 	l.Log.Info("clearing use of older versions",
 		"app", cur.App.Name,
-		"current", cur.Version, "image", imageName)
+		"current", cur.Version)
 
 	app, ok := l.findApp(cur.App.Xid)
 	if !ok {
-		l.Log.Debug("app not found", "app", cur.App.Name)
+		l.Log.Debug("app is completetly idle", "app", cur.App.Name, "xid", cur.App.Xid)
 		return nil
 	}
 
 	var rerr error
 
 	for pool := range app.Pools() {
-		err := l.clearOldInPool(ctx, pool, imageName)
+		err := l.clearOldInPool(ctx, pool, cur.Version)
 		if err != nil {
 			l.Log.Error("failed to clear old versions in pool", "app", app.name, "pool", pool.name, "error", err)
 			rerr = multierror.Append(rerr, err)

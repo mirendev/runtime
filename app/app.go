@@ -172,14 +172,17 @@ func (a *AppAccess) ListApps(ctx context.Context) ([]*AppConfig, error) {
 }
 
 type AppConfiguration struct {
-	StaticDir string `json:"static_dir"`
+	StaticDir string            `json:"static_dir"`
+	EnvVars   map[string]string `json:"env_vars"`
 }
 
 type AppVersion struct {
-	Id        uint64
-	Xid       string
-	AppId     uint64
-	Version   string
+	Id      uint64
+	Xid     string
+	AppId   uint64
+	Version string
+	ImageId string
+
 	CreatedAt time.Time
 	UpdatedAt time.Time
 
@@ -191,18 +194,21 @@ type AppVersion struct {
 }
 
 func (av *AppVersion) ImageName() string {
-	return av.App.Name + ":" + av.Version
+	return av.App.Name + ":" + av.ImageId
 }
 
 func (a *AppAccess) CreateVersion(ctx context.Context, av *AppVersion) error {
 	now := time.Now()
 
-	if av.CreatedAt.IsZero() {
-		av.CreatedAt = now
+	av.CreatedAt = now
+	av.UpdatedAt = now
+
+	if av.Version == "" {
+		av.Version = av.App.Name + "-" + idgen.Gen("v")
 	}
 
-	if av.UpdatedAt.IsZero() {
-		av.UpdatedAt = now
+	if av.ImageId == "" {
+		av.ImageId = av.Version
 	}
 
 	xid := idgen.Gen("v")
@@ -211,10 +217,10 @@ func (a *AppAccess) CreateVersion(ctx context.Context, av *AppVersion) error {
 		_, err := tx.Exec(ctx,
 			`INSERT INTO application_versions (
 				application_id, version, xid, created_at, updated_at, static_dir,
-				configuration
-			) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+				configuration, image_id
+			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
 			av.AppId, av.Version, xid, av.CreatedAt, av.UpdatedAt, av.StaticDir,
-			av.Configuration,
+			av.Configuration, av.ImageId,
 		)
 		return err
 	})
@@ -239,7 +245,7 @@ func (a *AppAccess) LoadVersion(ctx context.Context, ac *AppConfig, version stri
 		return tx.QueryRow(ctx,
 			`SELECT 
 			    id, xid, application_id, version, created_at, updated_at, static_dir,
-			    configuration
+			    configuration, image_id
 			  FROM application_versions 
 			  WHERE application_id = $1 
 			    AND version = $2`, ac.Id, version,
@@ -247,7 +253,7 @@ func (a *AppAccess) LoadVersion(ctx context.Context, ac *AppConfig, version stri
 			&appVersion.Id, &appVersion.Xid,
 			&appVersion.AppId, &appVersion.Version,
 			&appVersion.CreatedAt, &appVersion.UpdatedAt, &appVersion.StaticDir,
-			&appVersion.Configuration,
+			&appVersion.Configuration, &appVersion.ImageId,
 		)
 	})
 	if err != nil {
@@ -266,7 +272,7 @@ func (a *AppAccess) MostRecentVersion(ctx context.Context, ac *AppConfig) (*AppV
 		return tx.QueryRow(ctx,
 			`SELECT 
 			   id, xid, application_id, version, created_at, updated_at, static_dir,
-				 configuration
+				 configuration, image_id
 			FROM application_versions 
 			WHERE application_id = $1 
 			ORDER BY created_at DESC LIMIT 1`, ac.Id,
@@ -274,7 +280,7 @@ func (a *AppAccess) MostRecentVersion(ctx context.Context, ac *AppConfig) (*AppV
 			&appVersion.Id, &appVersion.Xid,
 			&appVersion.AppId, &appVersion.Version,
 			&appVersion.CreatedAt, &appVersion.UpdatedAt, &appVersion.StaticDir,
-			&appVersion.Configuration,
+			&appVersion.Configuration, &appVersion.ImageId,
 		)
 	})
 	if err != nil {
@@ -293,7 +299,7 @@ func (a *AppAccess) ListVersions(ctx context.Context, ac *AppConfig) ([]*AppVers
 		rows, err := tx.Query(ctx,
 			`SELECT 
 			   id, xid, application_id, version, created_at, updated_at, static_dir,
-				 configuration
+				 configuration, image_id
 			FROM application_versions
 			WHERE application_id = $1
 			ORDER BY created_at DESC`, ac.Id,
@@ -308,7 +314,7 @@ func (a *AppAccess) ListVersions(ctx context.Context, ac *AppConfig) ([]*AppVers
 				&appVersion.Id, &appVersion.Xid,
 				&appVersion.AppId, &appVersion.Version,
 				&appVersion.CreatedAt, &appVersion.UpdatedAt, &appVersion.StaticDir,
-				&appVersion.Configuration,
+				&appVersion.Configuration, &appVersion.ImageId,
 			)
 			if err != nil {
 				return err

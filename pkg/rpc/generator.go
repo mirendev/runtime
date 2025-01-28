@@ -10,7 +10,7 @@ import (
 	"strings"
 
 	j "github.com/dave/jennifer/jen"
-	"github.com/davecgh/go-spew/spew"
+	"github.com/pkg/errors"
 	"golang.org/x/tools/imports"
 	"gopkg.in/yaml.v3"
 )
@@ -253,6 +253,18 @@ func (g *Generator) generateServerStructs(f *j.File, t *DescInterface) error {
 						"cbor": fmt.Sprintf("%d,keyasint,omitempty", idx),
 						"json": p.Name + ",omitempty",
 					})
+				} else if p.Type == "list" {
+					if g.ti(p.Element).isMessage {
+						gr.Id(capitalize(p.Name)).Op("*").Index().Op("*").Id(p.Element).Tag(map[string]string{
+							"cbor": fmt.Sprintf("%d,keyasint,omitempty", idx),
+							"json": p.Name + ",omitempty",
+						})
+					} else {
+						gr.Id(capitalize(p.Name)).Op("*").Index().Add(g.properType(p.Element)).Tag(map[string]string{
+							"cbor": fmt.Sprintf("%d,keyasint,omitempty", idx),
+							"json": p.Name + ",omitempty",
+						})
+					}
 				} else {
 					gr.Id(capitalize(p.Name)).Op("*").Add(g.properType(p.Type)).Tag(map[string]string{
 						"cbor": fmt.Sprintf("%d,keyasint,omitempty", idx),
@@ -276,9 +288,10 @@ func (g *Generator) generateServerStructs(f *j.File, t *DescInterface) error {
 			g.readForField(f,
 				&DescType{Type: tn + "Args", Generic: t.Generic},
 				&DescField{
-					Name:  p.Name,
-					Type:  p.Type,
-					Index: idx,
+					Name:    p.Name,
+					Type:    p.Type,
+					Element: p.Element,
+					Index:   idx,
 				},
 			)
 		}
@@ -300,6 +313,11 @@ func (g *Generator) generateServerStructs(f *j.File, t *DescInterface) error {
 					})
 				} else if p.Type == "bytes" {
 					gr.Id(capitalize(p.Name)).Op("*").Index().Byte().Tag(map[string]string{
+						"cbor": fmt.Sprintf("%d,keyasint,omitempty", idx),
+						"json": p.Name + ",omitempty",
+					})
+				} else if p.Type == "list" {
+					gr.Id(capitalize(p.Name)).Op("*").Index().Id(p.Element).Tag(map[string]string{
 						"cbor": fmt.Sprintf("%d,keyasint,omitempty", idx),
 						"json": p.Name + ",omitempty",
 					})
@@ -435,14 +453,25 @@ func (g *Generator) readForField(f *j.File, t *DescType, field *DescField) {
 
 		f.Line()
 
-		f.Func().Params(
-			j.Id("v").Op("*").Add(recv),
-		).Id(name).Params().Index().Id(field.Element).Block(
-			j.If(j.Id("v").Dot("data").Dot(name).Op("==").Nil()).Block(
-				j.Return(j.Nil()),
-			),
-			j.Return(j.Op("*").Id("v").Dot("data").Dot(name)),
-		)
+		if g.ti(field.Element).isMessage {
+			f.Func().Params(
+				j.Id("v").Op("*").Add(recv),
+			).Id(name).Params().Index().Op("*").Id(field.Element).Block(
+				j.If(j.Id("v").Dot("data").Dot(name).Op("==").Nil()).Block(
+					j.Return(j.Nil()),
+				),
+				j.Return(j.Op("*").Id("v").Dot("data").Dot(name)),
+			)
+		} else {
+			f.Func().Params(
+				j.Id("v").Op("*").Add(recv),
+			).Id(name).Params().Index().Id(field.Element).Block(
+				j.If(j.Id("v").Dot("data").Dot(name).Op("==").Nil()).Block(
+					j.Return(j.Nil()),
+				),
+				j.Return(j.Op("*").Id("v").Dot("data").Dot(name)),
+			)
+		}
 
 		f.Line()
 	default:
@@ -1170,6 +1199,12 @@ func (g *Generator) generateClient(f *j.File, i *DescInterface) error {
 					gr.Id(private(p.Name)).Op("*").Add(g.properType(p.Type))
 				} else if p.Type == "bytes" {
 					gr.Id(private(p.Name)).Index().Byte()
+				} else if p.Type == "list" {
+					if g.ti(p.Element).isMessage {
+						gr.Id(private(p.Name)).Index().Op("*").Add(g.properType(p.Element))
+					} else {
+						gr.Id(private(p.Name)).Index().Id(p.Element)
+					}
 				} else {
 					gr.Id(private(p.Name)).Add(g.properType(p.Type))
 				}
@@ -1190,6 +1225,9 @@ func (g *Generator) generateClient(f *j.File, i *DescInterface) error {
 					})
 				} else if g.ti(p.Type).isMessage {
 					gr.Id("args").Dot("data").Dot(capitalize(p.Name)).Op("=").Id(private(p.Name))
+				} else if p.Type == "list" {
+					gr.Id("x").Op(":=").Qual("slices", "Clone").Call(j.Id(private(p.Name)))
+					gr.Id("args").Dot("data").Dot(capitalize(p.Name)).Op("=").Op("&").Id("x")
 				} else {
 					gr.Id("args").Dot("data").Dot(capitalize(p.Name)).Op("=").Op("&").Id(private(p.Name))
 				}
@@ -1383,13 +1421,40 @@ func (g *Generator) Generate(name string) (string, error) {
 
 	err = f.Render(&buf)
 	if err != nil {
-		return "", err
+		str := err.Error()
+		lines := strings.Split(str, "\n")
+
+		hdr := lines[0]
+
+		var sb strings.Builder
+
+		sb.WriteString(hdr)
+		sb.WriteString("\n")
+
+		for i, line := range lines[1:] {
+			fmt.Fprintf(&sb, "%d: %s\n", i+1, line)
+		}
+
+		return "", errors.New(sb.String())
 	}
 
 	code, err := imports.Process("out.go", buf.Bytes(), &imports.Options{})
 	if err != nil {
-		spew.Dump(buf.String())
-		return "", err
+		str := err.Error()
+		lines := strings.Split(str, "\n")
+
+		hdr := lines[0]
+
+		var sb strings.Builder
+
+		sb.WriteString(hdr)
+		sb.WriteString("\n")
+
+		for i, line := range lines[1:] {
+			fmt.Fprintf(&sb, "%d: %s\n", i+1, line)
+		}
+
+		return "", errors.New(sb.String())
 	}
 
 	return string(code), nil
@@ -1575,6 +1640,7 @@ type DescMethods struct {
 }
 
 type DescParamater struct {
-	Name string `yaml:"name"`
-	Type string `yaml:"type"`
+	Name    string `yaml:"name"`
+	Type    string `yaml:"type"`
+	Element string `yaml:"element,omitempty"`
 }
