@@ -17,8 +17,10 @@ CREATE TABLE applications (
     updated_at TIMESTAMP DEFAULT NOW(),
     organization_id BIGINT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
 
+    xid TEXT NOT NULL,
     name TEXT NOT NULL,
 
+    UNIQUE(xid),
     UNIQUE(organization_id, name)
 );
 
@@ -27,9 +29,12 @@ CREATE TABLE application_versions (
     created_at TIMESTAMP DEFAULT NOW(),
     updated_at TIMESTAMP DEFAULT NOW(),
     application_id BIGINT NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
+    xid TEXT NOT NULL,
     version TEXT NOT NULL,
     static_dir TEXT,
+    configuration JSONB,
 
+    UNIQUE(xid),
     UNIQUE(application_id, version)
 );
 

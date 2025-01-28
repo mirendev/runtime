@@ -10,6 +10,7 @@ import (
 
 	containerd "github.com/containerd/containerd/v2/client"
 	"github.com/containerd/containerd/v2/pkg/namespaces"
+	"miren.dev/runtime/app"
 	"miren.dev/runtime/discovery"
 	"miren.dev/runtime/lease"
 )
@@ -17,6 +18,8 @@ import (
 type LeaseHTTP struct {
 	Log   *slog.Logger
 	Lease *lease.LaunchContainer
+
+	App *app.AppAccess
 
 	CC        *containerd.Client
 	Namespace string `asm:"namespace"`
@@ -49,12 +52,19 @@ func (h *LeaseHTTP) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
+	ac, err := h.App.LoadApp(req.Context(), app)
+	if err != nil {
+		h.Log.Error("error looking up application", "error", err, "app", app)
+		http.Error(w, fmt.Sprintf("application not found: %s", app), http.StatusNotFound)
+		return
+	}
+
 	ctx, cancel := context.WithTimeout(req.Context(), h.LookupTimeout)
 	defer cancel()
 
 	ctx = namespaces.WithNamespace(ctx, h.Namespace)
 
-	lc, err := h.Lease.Lease(ctx, app, lease.Pool("http"))
+	lc, err := h.Lease.Lease(ctx, ac.Xid, lease.Pool("http"))
 	if err != nil {
 		h.Log.Error("error looking up endpoint for application", "error", err, "app", app)
 		w.WriteHeader(http.StatusInternalServerError)

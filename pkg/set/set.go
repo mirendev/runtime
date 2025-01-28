@@ -29,6 +29,14 @@ func (s Set[K]) Empty() bool {
 	return s.Len() == 0
 }
 
+func (s Set[K]) Values() []K {
+	vals := make([]K, 0, len(s))
+	for k := range s {
+		vals = append(vals, k)
+	}
+	return vals
+}
+
 // Each returns an iterator over the set's elements
 func (s Set[K]) Each() iter.Seq[K] {
 	return func(yield func(K) bool) {
