@@ -48,7 +48,6 @@ func (c *ContainerStatsTracker) Monitor(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-timer.C:
-			c.Log.Debug("reading active containers stats")
 			err := c.readActiveContainers(ctx)
 			if err != nil {
 				c.Log.Error("failed to read active containers", "err", err)
