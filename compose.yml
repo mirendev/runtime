@@ -1,0 +1,15 @@
+services:
+  clickhouse:
+    image: clickhouse/clickhouse-server:latest
+    ports:
+      - 9000:9000
+
+  postgres:
+    image: postgres:17
+    environment:
+      - POSTGRES_DB=miren_dev
+      - POSTGRES_PASSWORD=miren
+      - POSTGRES_USER=miren
+    ports:
+      - 5432:5432
+
