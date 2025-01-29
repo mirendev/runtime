@@ -2,11 +2,13 @@ package build
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/moby/buildkit/client"
 	"miren.dev/runtime/app"
 	"miren.dev/runtime/build/launch"
@@ -37,7 +39,25 @@ type RPCBuilder struct {
 func (b *RPCBuilder) nextVersion(ctx context.Context, name string) (*app.AppVersion, error) {
 	ac, err := b.AppAccess.LoadApp(ctx, name)
 	if err != nil {
-		return nil, err
+		if !errors.Is(err, pgx.ErrNoRows) {
+			return nil, err
+		}
+
+		ac = &app.AppConfig{
+			Name: name,
+		}
+
+		err = b.AppAccess.CreateApp(ctx, ac)
+		if err != nil {
+			return nil, err
+		}
+
+		b.Log.Info("created new app while deploying", "app", name)
+
+		ac, err = b.AppAccess.LoadApp(ctx, name)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	cur, err := b.AppAccess.MostRecentVersion(ctx, ac)
