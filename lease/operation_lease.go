@@ -82,6 +82,8 @@ func (l *leaseOperation) tryAvailableIdleContainer() (*LeasedContainer, error) {
 			TotalLeases: 1,
 			Version:     rc.version,
 
+			maxLeasesPerWindow: rc.maxConcurrency,
+
 			container: rc,
 		}
 
@@ -250,8 +252,16 @@ func (l *leaseOperation) launchContainer(ctx context.Context) (*LeasedContainer,
 		TotalLeases: 1,
 		Version:     l.mrv.Version,
 
+		maxLeasesPerWindow: l.MaxLeasesPerContainer,
+
 		container: rc,
 	}
+
+	if l.mrv.Configuration.HasConcurrency() {
+		win.maxLeasesPerWindow = int(l.mrv.Configuration.Concurrency())
+	}
+
+	rc.maxConcurrency = win.maxLeasesPerWindow
 
 	l.pool.windows.Add(win)
 
@@ -308,8 +318,8 @@ func (l *leaseOperation) launch(
 		},
 	}
 
-	for k, v := range l.mrv.Configuration.EnvVars {
-		config.Env[k] = v
+	for _, nv := range l.mrv.Configuration.EnvVars() {
+		config.Env[nv.Key()] = nv.Value()
 	}
 
 	_, err = l.CR.RunContainer(ctx, config)

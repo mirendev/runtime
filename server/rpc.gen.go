@@ -118,7 +118,7 @@ type poolStatusData struct {
 	Name      *string          `cbor:"0,keyasint,omitempty" json:"name,omitempty"`
 	Windows   *[]*WindowStatus `cbor:"1,keyasint,omitempty" json:"windows,omitempty"`
 	Idle      *int32           `cbor:"2,keyasint,omitempty" json:"idle,omitempty"`
-	IdleUsage *int64           `cbor:"3,keyasint,omitempty" json:"idleUsage,omitempty"`
+	IdleUsage *int64           `cbor:"3,keyasint,omitempty" json:"idle_usage,omitempty"`
 }
 
 type PoolStatus struct {
@@ -276,13 +276,13 @@ func (v *WindowStatus) UnmarshalJSON(data []byte) error {
 type applicationStatusData struct {
 	Name           *string             `cbor:"0,keyasint,omitempty" json:"name,omitempty"`
 	Pools          *[]*PoolStatus      `cbor:"1,keyasint,omitempty" json:"pools,omitempty"`
-	LastMinCPU     *float64            `cbor:"2,keyasint,omitempty" json:"lastMinCPU,omitempty"`
-	LastHourCPU    *float64            `cbor:"3,keyasint,omitempty" json:"lastHourCPU,omitempty"`
-	LastDayCPU     *float64            `cbor:"4,keyasint,omitempty" json:"lastDayCPU,omitempty"`
-	CpuOverHour    *[]*CpuUsage        `cbor:"5,keyasint,omitempty" json:"cpuOverHour,omitempty"`
-	MemoryOverHour *[]*MemoryUsage     `cbor:"6,keyasint,omitempty" json:"memoryOverHour,omitempty"`
-	ActiveVersion  *string             `cbor:"7,keyasint,omitempty" json:"activeVersion,omitempty"`
-	LastDeploy     *standard.Timestamp `cbor:"8,keyasint,omitempty" json:"lastDeploy,omitempty"`
+	LastMinCPU     *float64            `cbor:"2,keyasint,omitempty" json:"last_min_c_p_u,omitempty"`
+	LastHourCPU    *float64            `cbor:"3,keyasint,omitempty" json:"last_hour_c_p_u,omitempty"`
+	LastDayCPU     *float64            `cbor:"4,keyasint,omitempty" json:"last_day_c_p_u,omitempty"`
+	CpuOverHour    *[]*CpuUsage        `cbor:"5,keyasint,omitempty" json:"cpu_over_hour,omitempty"`
+	MemoryOverHour *[]*MemoryUsage     `cbor:"6,keyasint,omitempty" json:"memory_over_hour,omitempty"`
+	ActiveVersion  *string             `cbor:"7,keyasint,omitempty" json:"active_version,omitempty"`
+	LastDeploy     *standard.Timestamp `cbor:"8,keyasint,omitempty" json:"last_deploy,omitempty"`
 }
 
 type ApplicationStatus struct {

@@ -141,6 +141,53 @@ func capitalize(s string) string {
 	return strings.ToTitle(s[:1]) + s[1:]
 }
 
+func toSnake(s string) string {
+	var b bytes.Buffer
+
+	for i, c := range s {
+		if c >= 'A' && c <= 'Z' {
+			if i > 0 {
+				b.WriteByte('_')
+			}
+			b.WriteRune(c + 32)
+		} else {
+			b.WriteByte(byte(c))
+		}
+	}
+
+	return b.String()
+}
+
+func toCamal(s string) string {
+	var b bytes.Buffer
+
+	upper := true
+
+	for _, c := range s {
+		if c == '_' {
+			upper = true
+			continue
+		}
+
+		if upper {
+			if c >= 'a' && c <= 'z' {
+				b.WriteRune(c - 32)
+			} else {
+				b.WriteRune(c)
+			}
+			upper = false
+		} else {
+			b.WriteRune(c)
+		}
+	}
+
+	return b.String()
+}
+
+func toFunc(s string) string {
+	return capitalize(toCamal(s))
+}
+
 func private(s string) string {
 	return strings.ToLower(s[:1]) + s[1:]
 }
@@ -244,23 +291,23 @@ func (g *Generator) generateServerStructs(f *j.File, t *DescInterface) error {
 		f.Type().Add(decl).StructFunc(func(gr *j.Group) {
 			for idx, p := range m.Parameters {
 				if g.ti(p.Type).isInterface {
-					gr.Id(capitalize(p.Name)).Op("*").Qual("miren.dev/runtime/pkg/rpc", "Capability").Tag(map[string]string{
+					gr.Id(toCamal(p.Name)).Op("*").Qual("miren.dev/runtime/pkg/rpc", "Capability").Tag(map[string]string{
 						"cbor": fmt.Sprintf("%d,keyasint,omitempty", idx),
 						"json": p.Name + ",omitempty",
 					})
 				} else if p.Type == "bytes" {
-					gr.Id(capitalize(p.Name)).Op("*").Index().Byte().Tag(map[string]string{
+					gr.Id(toCamal(p.Name)).Op("*").Index().Byte().Tag(map[string]string{
 						"cbor": fmt.Sprintf("%d,keyasint,omitempty", idx),
 						"json": p.Name + ",omitempty",
 					})
 				} else if p.Type == "list" {
 					if g.ti(p.Element).isMessage {
-						gr.Id(capitalize(p.Name)).Op("*").Index().Op("*").Id(p.Element).Tag(map[string]string{
+						gr.Id(toCamal(p.Name)).Op("*").Index().Op("*").Id(p.Element).Tag(map[string]string{
 							"cbor": fmt.Sprintf("%d,keyasint,omitempty", idx),
 							"json": p.Name + ",omitempty",
 						})
 					} else {
-						gr.Id(capitalize(p.Name)).Op("*").Index().Add(g.properType(p.Element)).Tag(map[string]string{
+						gr.Id(toCamal(p.Name)).Op("*").Index().Add(g.properType(p.Element)).Tag(map[string]string{
 							"cbor": fmt.Sprintf("%d,keyasint,omitempty", idx),
 							"json": p.Name + ",omitempty",
 						})
@@ -361,7 +408,8 @@ func (g *Generator) generateServerStructs(f *j.File, t *DescInterface) error {
 }
 
 func (g *Generator) readForField(f *j.File, t *DescType, field *DescField) {
-	name := capitalize(field.Name)
+	name := toCamal(field.Name)
+	fname := toCamal(name)
 	expName := capitalize(t.Type)
 
 	_, recv := t.addGeneric(expName)
@@ -370,7 +418,7 @@ func (g *Generator) readForField(f *j.File, t *DescType, field *DescField) {
 	case "bool":
 		f.Func().Params(
 			j.Id("v").Op("*").Add(recv),
-		).Id("Has" + name).Params().Bool().Block(
+		).Id("Has" + fname).Params().Bool().Block(
 			j.Return(j.Id("v").Dot("data").Dot(name).Op("!=").Nil()),
 		)
 
@@ -378,7 +426,7 @@ func (g *Generator) readForField(f *j.File, t *DescType, field *DescField) {
 
 		f.Func().Params(
 			j.Id("v").Op("*").Add(recv),
-		).Id(name).Params().Bool().Block(
+		).Id(fname).Params().Bool().Block(
 			j.If(j.Id("v").Dot("data").Dot(name).Op("==").Nil()).Block(
 				j.Return(j.Lit(false)),
 			),
@@ -389,7 +437,7 @@ func (g *Generator) readForField(f *j.File, t *DescType, field *DescField) {
 	case "uint32", "int32", "uint64", "int64", "float32", "float64":
 		f.Func().Params(
 			j.Id("v").Op("*").Add(recv),
-		).Id("Has" + name).Params().Bool().Block(
+		).Id("Has" + fname).Params().Bool().Block(
 			j.Return(j.Id("v").Dot("data").Dot(name).Op("!=").Nil()),
 		)
 
@@ -397,7 +445,7 @@ func (g *Generator) readForField(f *j.File, t *DescType, field *DescField) {
 
 		f.Func().Params(
 			j.Id("v").Op("*").Add(recv),
-		).Id(name).Params().Id(field.Type).Block(
+		).Id(fname).Params().Id(field.Type).Block(
 			j.If(j.Id("v").Dot("data").Dot(name).Op("==").Nil()).Block(
 				j.Return(j.Lit(0)),
 			),
@@ -409,7 +457,7 @@ func (g *Generator) readForField(f *j.File, t *DescType, field *DescField) {
 	case "bytes":
 		f.Func().Params(
 			j.Id("v").Op("*").Add(recv),
-		).Id("Has" + name).Params().Bool().Block(
+		).Id("Has" + fname).Params().Bool().Block(
 			j.Return(j.Id("v").Dot("data").Dot(name).Op("!=").Nil()),
 		)
 
@@ -417,7 +465,7 @@ func (g *Generator) readForField(f *j.File, t *DescType, field *DescField) {
 
 		f.Func().Params(
 			j.Id("v").Op("*").Add(recv),
-		).Id(name).Params().Index().Byte().Block(
+		).Id(fname).Params().Index().Byte().Block(
 			j.If(j.Id("v").Dot("data").Dot(name).Op("==").Nil()).Block(
 				j.Return(j.Nil()),
 			),
@@ -428,7 +476,7 @@ func (g *Generator) readForField(f *j.File, t *DescType, field *DescField) {
 	case "string":
 		f.Func().Params(
 			j.Id("v").Op("*").Add(recv),
-		).Id("Has" + name).Params().Bool().Block(
+		).Id("Has" + fname).Params().Bool().Block(
 			j.Return(j.Id("v").Dot("data").Dot(name).Op("!=").Nil()),
 		)
 
@@ -436,7 +484,7 @@ func (g *Generator) readForField(f *j.File, t *DescType, field *DescField) {
 
 		f.Func().Params(
 			j.Id("v").Op("*").Add(recv),
-		).Id(name).Params().String().Block(
+		).Id(fname).Params().String().Block(
 			j.If(j.Id("v").Dot("data").Dot(name).Op("==").Nil()).Block(
 				j.Return(j.Lit("")),
 			),
@@ -447,7 +495,7 @@ func (g *Generator) readForField(f *j.File, t *DescType, field *DescField) {
 	case "list":
 		f.Func().Params(
 			j.Id("v").Op("*").Add(recv),
-		).Id("Has" + name).Params().Bool().Block(
+		).Id("Has" + fname).Params().Bool().Block(
 			j.Return(j.Id("v").Dot("data").Dot(name).Op("!=").Nil()),
 		)
 
@@ -456,7 +504,7 @@ func (g *Generator) readForField(f *j.File, t *DescType, field *DescField) {
 		if g.ti(field.Element).isMessage {
 			f.Func().Params(
 				j.Id("v").Op("*").Add(recv),
-			).Id(name).Params().Index().Op("*").Id(field.Element).Block(
+			).Id(fname).Params().Index().Op("*").Id(field.Element).Block(
 				j.If(j.Id("v").Dot("data").Dot(name).Op("==").Nil()).Block(
 					j.Return(j.Nil()),
 				),
@@ -465,7 +513,7 @@ func (g *Generator) readForField(f *j.File, t *DescType, field *DescField) {
 		} else {
 			f.Func().Params(
 				j.Id("v").Op("*").Add(recv),
-			).Id(name).Params().Index().Id(field.Element).Block(
+			).Id(fname).Params().Index().Id(field.Element).Block(
 				j.If(j.Id("v").Dot("data").Dot(name).Op("==").Nil()).Block(
 					j.Return(j.Nil()),
 				),
@@ -478,7 +526,7 @@ func (g *Generator) readForField(f *j.File, t *DescType, field *DescField) {
 		if g.ti(field.Type).isInterface {
 			f.Func().Params(
 				j.Id("v").Op("*").Add(recv),
-			).Id("Has" + name).Params().Bool().Block(
+			).Id("Has" + fname).Params().Bool().Block(
 				j.Return(j.Id("v").Dot("data").Dot(name).Op("!=").Nil()),
 			)
 
@@ -486,7 +534,7 @@ func (g *Generator) readForField(f *j.File, t *DescType, field *DescField) {
 
 			f.Func().Params(
 				j.Id("v").Op("*").Add(recv),
-			).Id(name).Params().Op("*").Id(g.deriveType(field.Type, "Client")).Block(
+			).Id(fname).Params().Op("*").Id(g.deriveType(field.Type, "Client")).Block(
 				j.If(j.Id("v").Dot("data").Dot(name).Op("==").Nil()).Block(
 					j.Return(j.Nil()),
 				),
@@ -507,7 +555,7 @@ func (g *Generator) readForField(f *j.File, t *DescType, field *DescField) {
 		if slices.Contains(t.Generic, field.Type) {
 			f.Func().Params(
 				j.Id("v").Op("*").Add(recv),
-			).Id("Has" + name).Params().Bool().Block(
+			).Id("Has" + fname).Params().Bool().Block(
 				j.Return(j.Id("v").Dot("data").Dot(name).Op("!=").Nil()),
 			)
 
@@ -515,7 +563,7 @@ func (g *Generator) readForField(f *j.File, t *DescType, field *DescField) {
 
 			f.Func().Params(
 				j.Id("v").Op("*").Add(recv),
-			).Id(name).Params().Id(field.Type).Block(
+			).Id(fname).Params().Id(field.Type).Block(
 				j.If(j.Id("v").Dot("data").Dot(name).Op("==").Nil()).Block(
 					j.Return(j.Qual("miren.dev/runtime/pkg/rpc", "Zero").Index(j.Id(field.Type)).Call())),
 				j.Return(j.Op("*").Id("v").Dot("data").Dot(name)),
@@ -528,7 +576,7 @@ func (g *Generator) readForField(f *j.File, t *DescType, field *DescField) {
 		if g.ti(field.Type).isMessage {
 			f.Func().Params(
 				j.Id("v").Op("*").Add(recv),
-			).Id("Has" + name).Params().Bool().Block(
+			).Id("Has" + fname).Params().Bool().Block(
 				j.Return(j.Id("v").Dot("data").Dot(name).Op("!=").Nil()),
 			)
 
@@ -536,14 +584,14 @@ func (g *Generator) readForField(f *j.File, t *DescType, field *DescField) {
 
 			f.Func().Params(
 				j.Id("v").Op("*").Add(recv),
-			).Id(name).Params().Op("*").Add(g.properType(field.Type)).Block(
+			).Id(fname).Params().Op("*").Add(g.properType(field.Type)).Block(
 				j.Return(j.Id("v").Dot("data").Dot(name)),
 			)
 
 		} else {
 			f.Func().Params(
 				j.Id("v").Op("*").Add(recv),
-			).Id("Has" + name).Params().Bool().Block(
+			).Id("Has" + fname).Params().Bool().Block(
 				j.Return(j.Id("v").Dot("data").Dot(name).Op("!=").Nil()),
 			)
 
@@ -551,7 +599,7 @@ func (g *Generator) readForField(f *j.File, t *DescType, field *DescField) {
 
 			f.Func().Params(
 				j.Id("v").Op("*").Add(recv),
-			).Id(name).Params().Add(g.properType(field.Type)).Block(
+			).Id(fname).Params().Add(g.properType(field.Type)).Block(
 				j.Return(j.Op("*").Id("v").Dot("data").Dot(name)),
 			)
 		}
@@ -564,7 +612,9 @@ func (g *Generator) readForField(f *j.File, t *DescType, field *DescField) {
 }
 
 func (g *Generator) writeForField(f *j.File, t *DescType, field *DescField) {
-	name := capitalize(field.Name)
+	name := toCamal(field.Name)
+	pname := private(field.Name)
+	fname := toCamal(name)
 	expName := capitalize(t.Type)
 
 	_, recv := t.addGeneric(expName)
@@ -573,47 +623,47 @@ func (g *Generator) writeForField(f *j.File, t *DescType, field *DescField) {
 	case "bool":
 		f.Func().Params(
 			j.Id("v").Op("*").Add(recv),
-		).Id("Set" + name).Params(
-			j.Id(field.Name).Bool(),
+		).Id("Set" + fname).Params(
+			j.Id(pname).Bool(),
 		).Block(
-			j.Id("v").Dot("data").Dot(name).Op("=").Op("&").Id(field.Name),
+			j.Id("v").Dot("data").Dot(name).Op("=").Op("&").Id(pname),
 		)
 
 	case "uint32", "int32", "uint64", "int64", "float32", "float64":
 		f.Func().Params(
 			j.Id("v").Op("*").Add(recv),
-		).Id("Set" + name).Params(
-			j.Id(field.Name).Id(field.Type),
+		).Id("Set" + fname).Params(
+			j.Id(pname).Id(field.Type),
 		).Block(
-			j.Id("v").Dot("data").Dot(name).Op("=").Op("&").Id(field.Name),
+			j.Id("v").Dot("data").Dot(name).Op("=").Op("&").Id(pname),
 		)
 
 	case "bytes":
 		f.Func().Params(
 			j.Id("v").Op("*").Add(recv),
-		).Id("Set"+name).Params(
-			j.Id(field.Name).Index().Byte(),
+		).Id("Set"+fname).Params(
+			j.Id(pname).Index().Byte(),
 		).Block(
-			j.Id("x").Op(":=").Id("slices").Dot("Clone").Call(j.Id(field.Name)),
+			j.Id("x").Op(":=").Id("slices").Dot("Clone").Call(j.Id(pname)),
 			j.Id("v").Dot("data").Dot(name).Op("=").Op("&").Id("x"),
 		)
 
 	case "string":
 		f.Func().Params(
 			j.Id("v").Op("*").Add(recv),
-		).Id("Set" + name).Params(
-			j.Id(field.Name).String(),
+		).Id("Set" + fname).Params(
+			j.Id(pname).String(),
 		).Block(
-			j.Id("v").Dot("data").Dot(name).Op("=").Op("&").Id(field.Name),
+			j.Id("v").Dot("data").Dot(name).Op("=").Op("&").Id(pname),
 		)
 
 	case "list":
 		f.Func().Params(
 			j.Id("v").Op("*").Add(recv),
-		).Id("Set"+name).Params(
-			j.Id(field.Name).Index().Id(field.Element),
+		).Id("Set"+fname).Params(
+			j.Id(pname).Index().Id(field.Element),
 		).Block(
-			j.Id("x").Op(":=").Id("slices").Dot("Clone").Call(j.Id(field.Name)),
+			j.Id("x").Op(":=").Id("slices").Dot("Clone").Call(j.Id(pname)),
 			j.Id("v").Dot("data").Dot(name).Op("=").Op("&").Id("x"),
 		)
 
@@ -621,15 +671,15 @@ func (g *Generator) writeForField(f *j.File, t *DescType, field *DescField) {
 		if g.ti(field.Type).isInterface {
 			f.Func().Params(
 				j.Id("v").Op("*").Add(recv),
-			).Id("Set" + name).Params(
-				j.Id(field.Name).Id(field.Type),
+			).Id("Set" + fname).Params(
+				j.Id(pname).Id(field.Type),
 			).Block(
 				j.Id("v").Dot("data").Dot(name).Op("=").Id("v").Dot("call").Dot("NewCapability").CallFunc(func(gr *j.Group) {
 					if g.isImported(field.Type) {
 						iname, tname := g.splitType(field.Type)
-						gr.Qual(g.Imports[iname].Import, "Adapt"+tname).Call(j.Id(field.Name))
+						gr.Qual(g.Imports[iname].Import, "Adapt"+tname).Call(j.Id(pname))
 					} else {
-						gr.Id("Adapt" + field.Type).Call(j.Id(field.Name))
+						gr.Id("Adapt" + field.Type).Call(j.Id(pname))
 					}
 				}),
 			)
@@ -642,20 +692,20 @@ func (g *Generator) writeForField(f *j.File, t *DescType, field *DescField) {
 		if slices.Contains(t.Generic, field.Type) {
 			f.Func().Params(
 				j.Id("v").Op("*").Add(recv),
-			).Id("Set" + name).Params(
-				j.Id(field.Name).Add(g.properType(field.Type)),
+			).Id("Set" + fname).Params(
+				j.Id(pname).Add(g.properType(field.Type)),
 			).Block(
-				j.Id("v").Dot("data").Dot(name).Op("=").Op("&").Id(field.Name),
+				j.Id("v").Dot("data").Dot(name).Op("=").Op("&").Id(pname),
 			)
 			return
 		}
 
 		f.Func().Params(
 			j.Id("v").Op("*").Add(recv),
-		).Id("Set" + name).Params(
-			j.Id(field.Name).Op("*").Add(g.properType(field.Type)),
+		).Id("Set" + fname).Params(
+			j.Id(pname).Op("*").Add(g.properType(field.Type)),
 		).Block(
-			j.Id("v").Dot("data").Dot(name).Op("=").Id(field.Name),
+			j.Id("v").Dot("data").Dot(name).Op("=").Id(pname),
 		)
 	}
 
@@ -684,7 +734,7 @@ func (g *Generator) generateUnionInterface(f *j.File, typ, name string, fields [
 	f.Type().Id(interfaceName).InterfaceFunc(func(gr *j.Group) {
 		gr.Id("Which").Params().String()
 		for _, field := range fields {
-			fieldName := capitalize(field.Name)
+			fieldName := toCamal(field.Name)
 			gr.Id(fieldName).Params().Add(g.typeForUnion(field))
 			gr.Id("Set" + fieldName).Params(g.typeForUnion(field))
 		}
@@ -699,9 +749,9 @@ func (g *Generator) generateUnionStruct(f *j.File, typ, name string, fields []Un
 	f.Type().Id(structName).StructFunc(func(gr *j.Group) {
 		for _, field := range fields {
 			fieldType := g.typeForUnion(field)
-			gr.Id("U_" + capitalize(field.Name)).Op("*").Add(fieldType).Tag(map[string]string{
+			gr.Id("U_" + toCamal(field.Name)).Op("*").Add(fieldType).Tag(map[string]string{
 				"cbor": fmt.Sprintf("%d,keyasint,omitempty", field.Index),
-				"json": field.Name + ",omitempty",
+				"json": toSnake(field.Name) + ",omitempty",
 			})
 		}
 	})
@@ -712,7 +762,7 @@ func (g *Generator) generateUnionStruct(f *j.File, typ, name string, fields []Un
 		j.Id("v").Op("*").Id(structName),
 	).Id("Which").Params().String().BlockFunc(func(g *j.Group) {
 		for _, field := range fields {
-			g.If(j.Id("v").Dot("U_" + capitalize(field.Name)).Op("!=").Nil()).Block(
+			g.If(j.Id("v").Dot("U_" + toCamal(field.Name)).Op("!=").Nil()).Block(
 				j.Return(j.Lit(field.Name)),
 			)
 		}
@@ -722,7 +772,7 @@ func (g *Generator) generateUnionStruct(f *j.File, typ, name string, fields []Un
 
 	// Generate getters and setters
 	for _, field := range fields {
-		fieldName := capitalize(field.Name)
+		fieldName := toCamal(field.Name)
 		methodName := fieldName
 
 		fieldName = "U_" + fieldName
@@ -747,7 +797,7 @@ func (g *Generator) generateUnionStruct(f *j.File, typ, name string, fields []Un
 			// Clear all other fields
 			for _, other := range fields {
 				if other.Name != field.Name {
-					g.Id("v").Dot("U_" + capitalize(other.Name)).Op("=").Nil()
+					g.Id("v").Dot("U_" + toCamal(other.Name)).Op("=").Nil()
 				}
 			}
 
@@ -800,13 +850,20 @@ func (g *Generator) generateStruct(f *j.File) error {
 		f.Type().Add(dataType).StructFunc(func(gr *j.Group) {
 			for _, field := range t.Fields {
 				if field.Type == "list" {
-					gr.Id(capitalize(field.Name)).Op("*").Index().Id(field.Element).Tag(map[string]string{
-						"cbor": fmt.Sprintf("%d,keyasint,omitempty", field.Index),
-						"json": field.Name + ",omitempty",
-					})
+					if g.ti(field.Element).isMessage {
+						gr.Id(toCamal(field.Name)).Op("*").Index().Op("*").Id(field.Element).Tag(map[string]string{
+							"cbor": fmt.Sprintf("%d,keyasint,omitempty", field.Index),
+							"json": toSnake(field.Name) + ",omitempty",
+						})
+					} else {
+						gr.Id(toCamal(field.Name)).Op("*").Index().Id(field.Element).Tag(map[string]string{
+							"cbor": fmt.Sprintf("%d,keyasint,omitempty", field.Index),
+							"json": toSnake(field.Name) + ",omitempty",
+						})
+					}
 
 				} else if field.Type == "union" {
-					gr.Id(private(t.Type) + capitalize(field.Name))
+					gr.Id(private(t.Type) + toCamal(field.Name))
 				} else {
 					typ := j.Op("*").Add(g.properType(field.Type))
 
@@ -814,9 +871,9 @@ func (g *Generator) generateStruct(f *j.File) error {
 						typ = j.Op("*").Qual(rpc, "Capability")
 					}
 
-					gr.Id(capitalize(field.Name)).Add(typ).Tag(map[string]string{
+					gr.Id(toCamal(field.Name)).Add(typ).Tag(map[string]string{
 						"cbor": fmt.Sprintf("%d,keyasint,omitempty", field.Index),
-						"json": field.Name + ",omitempty",
+						"json": toSnake(field.Name) + ",omitempty",
 					})
 				}
 			}
@@ -837,14 +894,16 @@ func (g *Generator) generateStruct(f *j.File) error {
 		f.Line()
 
 		for _, field := range t.Fields {
-			name := capitalize(field.Name)
+			name := toCamal(field.Name)
+			pname := private(field.Name)
+			fname := toCamal(name)
 
 			switch field.Type {
 			case "bool":
 				if t.Readable() {
 					f.Func().Params(
 						j.Id("v").Op("*").Add(recv),
-					).Id("Has" + name).Params().Bool().Block(
+					).Id("Has" + fname).Params().Bool().Block(
 						j.Return(j.Id("v").Dot("data").Dot(name).Op("!=").Nil()),
 					)
 
@@ -852,7 +911,7 @@ func (g *Generator) generateStruct(f *j.File) error {
 
 					f.Func().Params(
 						j.Id("v").Op("*").Add(recv),
-					).Id(name).Params().Bool().Block(
+					).Id(fname).Params().Bool().Block(
 						j.If(j.Id("v").Dot("data").Dot(name).Op("==").Nil()).Block(
 							j.Return(j.Lit(false)),
 						),
@@ -865,10 +924,10 @@ func (g *Generator) generateStruct(f *j.File) error {
 				if t.Writeable() {
 					f.Func().Params(
 						j.Id("v").Op("*").Add(recv),
-					).Id("Set" + name).Params(
-						j.Id(field.Name).Bool(),
+					).Id("Set" + fname).Params(
+						j.Id(pname).Bool(),
 					).Block(
-						j.Id("v").Dot("data").Dot(name).Op("=").Op("&").Id(field.Name),
+						j.Id("v").Dot("data").Dot(name).Op("=").Op("&").Id(pname),
 					)
 				}
 
@@ -876,7 +935,7 @@ func (g *Generator) generateStruct(f *j.File) error {
 				if t.Readable() {
 					f.Func().Params(
 						j.Id("v").Op("*").Add(recv),
-					).Id("Has" + name).Params().Bool().Block(
+					).Id("Has" + fname).Params().Bool().Block(
 						j.Return(j.Id("v").Dot("data").Dot(name).Op("!=").Nil()),
 					)
 
@@ -884,7 +943,7 @@ func (g *Generator) generateStruct(f *j.File) error {
 
 					f.Func().Params(
 						j.Id("v").Op("*").Add(recv),
-					).Id(name).Params().Add(g.properType(field.Type)).Block(
+					).Id(fname).Params().Add(g.properType(field.Type)).Block(
 						j.If(j.Id("v").Dot("data").Dot(name).Op("==").Nil()).Block(
 							j.Return(j.Lit(0)),
 						),
@@ -897,10 +956,10 @@ func (g *Generator) generateStruct(f *j.File) error {
 				if t.Writeable() {
 					f.Func().Params(
 						j.Id("v").Op("*").Add(recv),
-					).Id("Set" + name).Params(
-						j.Id(field.Name).Add(g.properType(field.Type)),
+					).Id("Set" + fname).Params(
+						j.Id(pname).Add(g.properType(field.Type)),
 					).Block(
-						j.Id("v").Dot("data").Dot(name).Op("=").Op("&").Id(field.Name),
+						j.Id("v").Dot("data").Dot(name).Op("=").Op("&").Id(pname),
 					)
 				}
 
@@ -908,7 +967,7 @@ func (g *Generator) generateStruct(f *j.File) error {
 				if t.Readable() {
 					f.Func().Params(
 						j.Id("v").Op("*").Add(recv),
-					).Id("Has" + name).Params().Bool().Block(
+					).Id("Has" + fname).Params().Bool().Block(
 						j.Return(j.Id("v").Dot("data").Dot(name).Op("!=").Nil()),
 					)
 
@@ -916,7 +975,7 @@ func (g *Generator) generateStruct(f *j.File) error {
 
 					f.Func().Params(
 						j.Id("v").Op("*").Add(recv),
-					).Id(name).Params().String().Block(
+					).Id(fname).Params().String().Block(
 						j.If(j.Id("v").Dot("data").Dot(name).Op("==").Nil()).Block(
 							j.Return(j.Nil()),
 						),
@@ -929,10 +988,10 @@ func (g *Generator) generateStruct(f *j.File) error {
 				if t.Writeable() {
 					f.Func().Params(
 						j.Id("v").Op("*").Add(recv),
-					).Id("Set"+name).Params(
-						j.Id(field.Name).String(),
+					).Id("Set"+fname).Params(
+						j.Id(pname).String(),
 					).Block(
-						j.Id("x").Op(":=").Id("slices").Dot("Clone").Call(j.Id(field.Name)),
+						j.Id("x").Op(":=").Id("slices").Dot("Clone").Call(j.Id(pname)),
 						j.Id("v").Dot("data").Dot(name).Op("=").Op("&").Id("x"),
 					)
 				}
@@ -940,7 +999,7 @@ func (g *Generator) generateStruct(f *j.File) error {
 				if t.Readable() {
 					f.Func().Params(
 						j.Id("v").Op("*").Add(recv),
-					).Id("Has" + name).Params().Bool().Block(
+					).Id("Has" + fname).Params().Bool().Block(
 						j.Return(j.Id("v").Dot("data").Dot(name).Op("!=").Nil()),
 					)
 
@@ -948,7 +1007,7 @@ func (g *Generator) generateStruct(f *j.File) error {
 
 					f.Func().Params(
 						j.Id("v").Op("*").Add(recv),
-					).Id(name).Params().String().Block(
+					).Id(fname).Params().String().Block(
 						j.If(j.Id("v").Dot("data").Dot(name).Op("==").Nil()).Block(
 							j.Return(j.Lit("")),
 						),
@@ -961,10 +1020,10 @@ func (g *Generator) generateStruct(f *j.File) error {
 				if t.Writeable() {
 					f.Func().Params(
 						j.Id("v").Op("*").Add(recv),
-					).Id("Set" + name).Params(
-						j.Id(field.Name).String(),
+					).Id("Set" + fname).Params(
+						j.Id(pname).String(),
 					).Block(
-						j.Id("v").Dot("data").Dot(name).Op("=").Op("&").Id(field.Name),
+						j.Id("v").Dot("data").Dot(name).Op("=").Op("&").Id(pname),
 					)
 				}
 
@@ -972,39 +1031,61 @@ func (g *Generator) generateStruct(f *j.File) error {
 				if t.Readable() {
 					f.Func().Params(
 						j.Id("v").Op("*").Add(recv),
-					).Id("Has" + name).Params().Bool().Block(
+					).Id("Has" + fname).Params().Bool().Block(
 						j.Return(j.Id("v").Dot("data").Dot(name).Op("!=").Nil()),
 					)
 
 					f.Line()
 
-					f.Func().Params(
-						j.Id("v").Op("*").Add(recv),
-					).Id(name).Params().Index().Id(field.Element).Block(
-						j.If(j.Id("v").Dot("data").Dot(name).Op("==").Nil()).Block(
-							j.Return(j.Nil()),
-						),
-						j.Return(j.Op("*").Id("v").Dot("data").Dot(name)),
-					)
+					if g.ti(field.Element).isMessage {
+						f.Func().Params(
+							j.Id("v").Op("*").Add(recv),
+						).Id(fname).Params().Index().Op("*").Id(field.Element).Block(
+							j.If(j.Id("v").Dot("data").Dot(name).Op("==").Nil()).Block(
+								j.Return(j.Nil()),
+							),
+							j.Return(j.Op("*").Id("v").Dot("data").Dot(name)),
+						)
+					} else {
+						f.Func().Params(
+							j.Id("v").Op("*").Add(recv),
+						).Id(fname).Params().Index().Id(field.Element).Block(
+							j.If(j.Id("v").Dot("data").Dot(name).Op("==").Nil()).Block(
+								j.Return(j.Nil()),
+							),
+							j.Return(j.Op("*").Id("v").Dot("data").Dot(name)),
+						)
+					}
 
 					f.Line()
 				}
 
 				if t.Writeable() {
-					f.Func().Params(
-						j.Id("v").Op("*").Add(recv),
-					).Id("Set"+name).Params(
-						j.Id(field.Name).Index().Id(field.Element),
-					).Block(
-						j.Id("x").Op(":=").Id("slices").Dot("Clone").Call(j.Id(field.Name)),
-						j.Id("v").Dot("data").Dot(name).Op("=").Op("&").Id("x"),
-					)
+					if g.ti(field.Element).isMessage {
+						f.Func().Params(
+							j.Id("v").Op("*").Add(recv),
+						).Id("Set"+fname).Params(
+							j.Id(pname).Index().Op("*").Id(field.Element),
+						).Block(
+							j.Id("x").Op(":=").Id("slices").Dot("Clone").Call(j.Id(pname)),
+							j.Id("v").Dot("data").Dot(name).Op("=").Op("&").Id("x"),
+						)
+					} else {
+						f.Func().Params(
+							j.Id("v").Op("*").Add(recv),
+						).Id("Set"+fname).Params(
+							j.Id(pname).Index().Id(field.Element),
+						).Block(
+							j.Id("x").Op(":=").Id("slices").Dot("Clone").Call(j.Id(pname)),
+							j.Id("v").Dot("data").Dot(name).Op("=").Op("&").Id("x"),
+						)
+					}
 				}
 			case "union":
 				f.Func().Params(
 					j.Id("v").Op("*").Add(recv),
-				).Id(name).Params().Id(capitalize(t.Type) + capitalize(field.Name)).Block(
-					j.Return(j.Op("&").Id("v").Dot("data").Dot(private(t.Type) + capitalize(field.Name))),
+				).Id(fname).Params().Id(capitalize(t.Type) + capitalize(name)).Block(
+					j.Return(j.Op("&").Id("v").Dot("data").Dot(private(t.Type) + capitalize(name))),
 				)
 
 				f.Line()
@@ -1014,7 +1095,7 @@ func (g *Generator) generateStruct(f *j.File) error {
 					if t.Readable() {
 						f.Func().Params(
 							j.Id("v").Op("*").Add(recv),
-						).Id("Has" + name).Params().Bool().Block(
+						).Id("Has" + fname).Params().Bool().Block(
 							j.Return(j.Id("v").Dot("data").Dot(name).Op("!=").Lit("")),
 						)
 
@@ -1022,7 +1103,7 @@ func (g *Generator) generateStruct(f *j.File) error {
 
 						f.Func().Params(
 							j.Id("v").Op("*").Add(recv),
-						).Id(name).Params().Add(g.properType(field.Type)).Block(
+						).Id(fname).Params().Add(g.properType(field.Type)).Block(
 							j.If(j.Id("v").Dot("data").Dot(name).Op("==").Nil()).Block(
 								j.Return(j.Nil()),
 							),
@@ -1036,15 +1117,15 @@ func (g *Generator) generateStruct(f *j.File) error {
 					if t.Writeable() {
 						f.Func().Params(
 							j.Id("v").Op("*").Add(recv),
-						).Id("Set" + name).Params(
-							j.Id(field.Name).Add(g.properType(field.Type)),
+						).Id("Set" + fname).Params(
+							j.Id(pname).Add(g.properType(field.Type)),
 						).Block(
 							j.Id("v").Dot("data").Dot(name).Op("=").Id("v").Dot("call").Dot("NewCapability").CallFunc(func(gr *j.Group) {
 								if g.isImported(field.Type) {
 									iname, tname := g.splitType(field.Type)
-									gr.Qual(g.Imports[iname].Import, "Adapt"+tname).Call(j.Id(field.Name))
+									gr.Qual(g.Imports[iname].Import, "Adapt"+tname).Call(j.Id(pname))
 								} else {
-									j.Id("Adapt" + field.Type).Call(j.Id(field.Name))
+									j.Id("Adapt" + field.Type).Call(j.Id(pname))
 								}
 							}),
 						)
@@ -1058,7 +1139,7 @@ func (g *Generator) generateStruct(f *j.File) error {
 				if t.Readable() {
 					f.Func().Params(
 						j.Id("v").Op("*").Add(recv),
-					).Id("Has" + name).Params().Bool().Block(
+					).Id("Has" + fname).Params().Bool().Block(
 						j.Return(j.Id("v").Dot("data").Dot(name).Op("!=").Nil()),
 					)
 
@@ -1066,7 +1147,7 @@ func (g *Generator) generateStruct(f *j.File) error {
 
 					f.Func().Params(
 						j.Id("v").Op("*").Add(recv),
-					).Id(name).Params().Op("*").Add(g.properType(field.Type)).Block(
+					).Id(fname).Params().Op("*").Add(g.properType(field.Type)).Block(
 						j.Return(j.Id("v").Dot("data").Dot(name)),
 					)
 
@@ -1076,10 +1157,10 @@ func (g *Generator) generateStruct(f *j.File) error {
 				if t.Writeable() {
 					f.Func().Params(
 						j.Id("v").Op("*").Add(recv),
-					).Id("Set" + name).Params(
-						j.Id(field.Name).Op("*").Add(g.properType(field.Type)),
+					).Id("Set" + fname).Params(
+						j.Id(pname).Op("*").Add(g.properType(field.Type)),
 					).Block(
-						j.Id("v").Dot("data").Dot(name).Op("=").Id(field.Name),
+						j.Id("v").Dot("data").Dot(name).Op("=").Id(pname),
 					)
 				}
 			}
@@ -1214,7 +1295,7 @@ func (g *Generator) generateClient(f *j.File, i *DescInterface) error {
 
 			for _, p := range m.Parameters {
 				if g.ti(p.Type).isInterface {
-					gr.Id("args").Dot("data").Dot(capitalize(p.Name)).Op("=").Id("v").Dot("Client").Dot("NewCapability").CallFunc(func(gr *j.Group) {
+					gr.Id("args").Dot("data").Dot(toCamal(p.Name)).Op("=").Id("v").Dot("Client").Dot("NewCapability").CallFunc(func(gr *j.Group) {
 						if g.isImported(p.Type) {
 							iname, tname := g.splitType(p.Type)
 							gr.Qual(g.Imports[iname].Import, "Adapt"+tname).Call(j.Id(p.Name))
@@ -1224,12 +1305,12 @@ func (g *Generator) generateClient(f *j.File, i *DescInterface) error {
 						gr.Id(private(p.Name))
 					})
 				} else if g.ti(p.Type).isMessage {
-					gr.Id("args").Dot("data").Dot(capitalize(p.Name)).Op("=").Id(private(p.Name))
+					gr.Id("args").Dot("data").Dot(toCamal(p.Name)).Op("=").Id(private(p.Name))
 				} else if p.Type == "list" {
 					gr.Id("x").Op(":=").Qual("slices", "Clone").Call(j.Id(private(p.Name)))
-					gr.Id("args").Dot("data").Dot(capitalize(p.Name)).Op("=").Op("&").Id("x")
+					gr.Id("args").Dot("data").Dot(toCamal(p.Name)).Op("=").Op("&").Id("x")
 				} else {
-					gr.Id("args").Dot("data").Dot(capitalize(p.Name)).Op("=").Op("&").Id(private(p.Name))
+					gr.Id("args").Dot("data").Dot(toCamal(p.Name)).Op("=").Op("&").Id(private(p.Name))
 				}
 			}
 

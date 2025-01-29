@@ -44,7 +44,7 @@ func (r *RPCCrud) New(ctx context.Context, state *CrudNew) error {
 	return nil
 }
 
-func (r *RPCCrud) AddEnv(ctx context.Context, state *CrudAddEnv) error {
+func (r *RPCCrud) SetConfiguration(ctx context.Context, state *CrudSetConfiguration) error {
 	name := state.Args().App()
 	ac, err := r.Access.LoadApp(ctx, name)
 	if err != nil {
@@ -57,16 +57,17 @@ func (r *RPCCrud) AddEnv(ctx context.Context, state *CrudAddEnv) error {
 		return err
 	}
 
-	if ver.Configuration.EnvVars == nil {
-		ver.Configuration.EnvVars = make(map[string]string)
+	cfg := state.Args().Configuration()
+
+	if cfg.HasEnvVars() {
+		for _, nv := range cfg.EnvVars() {
+			if strings.HasPrefix(nv.Key(), "MIREN_") {
+				return fmt.Errorf("cannot set MIREN_ environment variables")
+			}
+		}
 	}
 
-	for _, nv := range state.Args().Envvars() {
-		if strings.HasPrefix(nv.Key(), "MIREN_") {
-			return fmt.Errorf("cannot set MIREN_ environment variables")
-		}
-		ver.Configuration.EnvVars[nv.Key()] = nv.Value()
-	}
+	ver.Configuration = *cfg
 
 	ver.Version = "" // Let create version assign one
 
@@ -85,6 +86,23 @@ func (r *RPCCrud) AddEnv(ctx context.Context, state *CrudAddEnv) error {
 	}
 
 	state.Results().SetVersionId(ver.Version)
+
+	return nil
+}
+
+func (r *RPCCrud) GetConfiguration(ctx context.Context, state *CrudGetConfiguration) error {
+	name := state.Args().App()
+	ac, err := r.Access.LoadApp(ctx, name)
+	if err != nil {
+		return err
+	}
+
+	ver, err := r.Access.MostRecentVersion(ctx, ac)
+	if err != nil {
+		return err
+	}
+
+	state.Results().SetConfiguration(&ver.Configuration)
 
 	return nil
 }

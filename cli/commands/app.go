@@ -3,6 +3,7 @@ package commands
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -10,6 +11,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"miren.dev/runtime/app"
 	"miren.dev/runtime/pkg/rpc/standard"
 	"miren.dev/runtime/pkg/units"
 	"miren.dev/runtime/server"
@@ -25,6 +27,19 @@ func App(ctx *Context, opts struct {
 	Watch bool   `short:"w" long:"watch" description:"Watch the app stats"`
 	Graph bool   `short:"g" long:"graph" description:"Graph the app stats"`
 }) error {
+	crudcl, err := ctx.RPCClient("app")
+	if err != nil {
+		return err
+	}
+
+	crud := app.CrudClient{Client: crudcl}
+
+	cfgres, err := crud.GetConfiguration(ctx, opts.App)
+	if err != nil {
+		ctx.Printf("unknown application: %s\n", opts.App)
+		return nil
+	}
+
 	cl, err := ctx.RPCClient("app-info")
 	if err != nil {
 		return err
@@ -43,6 +58,7 @@ func App(ctx *Context, opts struct {
 	//windows := status.Pools()
 
 	p := tea.NewProgram(Model{
+		cfg:   cfgres.Configuration(),
 		cl:    &server.AppInfoClient{Client: cl},
 		app:   opts.App,
 		watch: opts.Watch,
@@ -88,6 +104,7 @@ var (
 )
 
 type Model struct {
+	cfg    *app.Configuration
 	cl     *server.AppInfoClient
 	app    string
 	status *server.ApplicationStatus
@@ -214,7 +231,19 @@ var (
 func (m Model) View() string {
 	t := standard.FromTimestamp(m.status.LastDeploy())
 
-	hdr := fmt.Sprintf("       name: %s\nlast update: %s %s\n",
+	envvars := []string{}
+
+	for _, v := range m.cfg.EnvVars() {
+		if v.Sensitive() {
+			envvars = append(envvars, fmt.Sprintf("%s=****", v.Key()))
+		} else {
+			envvars = append(envvars, fmt.Sprintf("%s=%s", v.Key(), v.Value()))
+		}
+	}
+
+	sort.Strings(envvars)
+
+	hdr := fmt.Sprintf("       name: %s\nlast update: %s %s\nconcurrency: %s\n   env vars: %s\n",
 		bold.Render(m.status.Name()),
 		bold.Render(t.Format(Stamp)),
 
@@ -223,6 +252,8 @@ func (m Model) View() string {
 				time.Since(t).Round(time.Second),
 				m.status.ActiveVersion(),
 			)),
+		bold.Render(fmt.Sprintf("%d", m.cfg.Concurrency())),
+		bold.Render(strings.Join(envvars, ", ")),
 	)
 
 	for _, ps := range m.status.Pools() {

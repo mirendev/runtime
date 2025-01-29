@@ -9,9 +9,66 @@ import (
 	rpc "miren.dev/runtime/pkg/rpc"
 )
 
+type configurationData struct {
+	EnvVars     *[]*NamedValue `cbor:"0,keyasint,omitempty" json:"env_vars,omitempty"`
+	Concurrency *int32         `cbor:"1,keyasint,omitempty" json:"concurrency,omitempty"`
+}
+
+type Configuration struct {
+	data configurationData
+}
+
+func (v *Configuration) HasEnvVars() bool {
+	return v.data.EnvVars != nil
+}
+
+func (v *Configuration) EnvVars() []*NamedValue {
+	if v.data.EnvVars == nil {
+		return nil
+	}
+	return *v.data.EnvVars
+}
+
+func (v *Configuration) SetEnvVars(env_vars []*NamedValue) {
+	x := slices.Clone(env_vars)
+	v.data.EnvVars = &x
+}
+
+func (v *Configuration) HasConcurrency() bool {
+	return v.data.Concurrency != nil
+}
+
+func (v *Configuration) Concurrency() int32 {
+	if v.data.Concurrency == nil {
+		return 0
+	}
+	return *v.data.Concurrency
+}
+
+func (v *Configuration) SetConcurrency(concurrency int32) {
+	v.data.Concurrency = &concurrency
+}
+
+func (v *Configuration) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *Configuration) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *Configuration) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *Configuration) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
 type namedValueData struct {
-	Key   *string `cbor:"0,keyasint,omitempty" json:"key,omitempty"`
-	Value *string `cbor:"1,keyasint,omitempty" json:"value,omitempty"`
+	Key       *string `cbor:"0,keyasint,omitempty" json:"key,omitempty"`
+	Value     *string `cbor:"1,keyasint,omitempty" json:"value,omitempty"`
+	Sensitive *bool   `cbor:"2,keyasint,omitempty" json:"sensitive,omitempty"`
 }
 
 type NamedValue struct {
@@ -46,6 +103,21 @@ func (v *NamedValue) Value() string {
 
 func (v *NamedValue) SetValue(value string) {
 	v.data.Value = &value
+}
+
+func (v *NamedValue) HasSensitive() bool {
+	return v.data.Sensitive != nil
+}
+
+func (v *NamedValue) Sensitive() bool {
+	if v.data.Sensitive == nil {
+		return false
+	}
+	return *v.data.Sensitive
+}
+
+func (v *NamedValue) SetSensitive(sensitive bool) {
+	v.data.Sensitive = &sensitive
 }
 
 func (v *NamedValue) MarshalCBOR() ([]byte, error) {
@@ -129,80 +201,147 @@ func (v *CrudNewResults) UnmarshalJSON(data []byte) error {
 	return json.Unmarshal(data, &v.data)
 }
 
-type crudAddEnvArgsData struct {
-	App     *string        `cbor:"0,keyasint,omitempty" json:"app,omitempty"`
-	Envvars *[]*NamedValue `cbor:"1,keyasint,omitempty" json:"envvars,omitempty"`
+type crudSetConfigurationArgsData struct {
+	App           *string        `cbor:"0,keyasint,omitempty" json:"app,omitempty"`
+	Configuration *Configuration `cbor:"1,keyasint,omitempty" json:"configuration,omitempty"`
 }
 
-type CrudAddEnvArgs struct {
+type CrudSetConfigurationArgs struct {
 	call *rpc.Call
-	data crudAddEnvArgsData
+	data crudSetConfigurationArgsData
 }
 
-func (v *CrudAddEnvArgs) HasApp() bool {
+func (v *CrudSetConfigurationArgs) HasApp() bool {
 	return v.data.App != nil
 }
 
-func (v *CrudAddEnvArgs) App() string {
+func (v *CrudSetConfigurationArgs) App() string {
 	if v.data.App == nil {
 		return ""
 	}
 	return *v.data.App
 }
 
-func (v *CrudAddEnvArgs) HasEnvvars() bool {
-	return v.data.Envvars != nil
+func (v *CrudSetConfigurationArgs) HasConfiguration() bool {
+	return v.data.Configuration != nil
 }
 
-func (v *CrudAddEnvArgs) Envvars() []*NamedValue {
-	if v.data.Envvars == nil {
-		return nil
-	}
-	return *v.data.Envvars
+func (v *CrudSetConfigurationArgs) Configuration() *Configuration {
+	return v.data.Configuration
 }
 
-func (v *CrudAddEnvArgs) MarshalCBOR() ([]byte, error) {
+func (v *CrudSetConfigurationArgs) MarshalCBOR() ([]byte, error) {
 	return cbor.Marshal(v.data)
 }
 
-func (v *CrudAddEnvArgs) UnmarshalCBOR(data []byte) error {
+func (v *CrudSetConfigurationArgs) UnmarshalCBOR(data []byte) error {
 	return cbor.Unmarshal(data, &v.data)
 }
 
-func (v *CrudAddEnvArgs) MarshalJSON() ([]byte, error) {
+func (v *CrudSetConfigurationArgs) MarshalJSON() ([]byte, error) {
 	return json.Marshal(v.data)
 }
 
-func (v *CrudAddEnvArgs) UnmarshalJSON(data []byte) error {
+func (v *CrudSetConfigurationArgs) UnmarshalJSON(data []byte) error {
 	return json.Unmarshal(data, &v.data)
 }
 
-type crudAddEnvResultsData struct {
+type crudSetConfigurationResultsData struct {
 	VersionId *string `cbor:"0,keyasint,omitempty" json:"versionId,omitempty"`
 }
 
-type CrudAddEnvResults struct {
+type CrudSetConfigurationResults struct {
 	call *rpc.Call
-	data crudAddEnvResultsData
+	data crudSetConfigurationResultsData
 }
 
-func (v *CrudAddEnvResults) SetVersionId(versionId string) {
+func (v *CrudSetConfigurationResults) SetVersionId(versionId string) {
 	v.data.VersionId = &versionId
 }
 
-func (v *CrudAddEnvResults) MarshalCBOR() ([]byte, error) {
+func (v *CrudSetConfigurationResults) MarshalCBOR() ([]byte, error) {
 	return cbor.Marshal(v.data)
 }
 
-func (v *CrudAddEnvResults) UnmarshalCBOR(data []byte) error {
+func (v *CrudSetConfigurationResults) UnmarshalCBOR(data []byte) error {
 	return cbor.Unmarshal(data, &v.data)
 }
 
-func (v *CrudAddEnvResults) MarshalJSON() ([]byte, error) {
+func (v *CrudSetConfigurationResults) MarshalJSON() ([]byte, error) {
 	return json.Marshal(v.data)
 }
 
-func (v *CrudAddEnvResults) UnmarshalJSON(data []byte) error {
+func (v *CrudSetConfigurationResults) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type crudGetConfigurationArgsData struct {
+	App *string `cbor:"0,keyasint,omitempty" json:"app,omitempty"`
+}
+
+type CrudGetConfigurationArgs struct {
+	call *rpc.Call
+	data crudGetConfigurationArgsData
+}
+
+func (v *CrudGetConfigurationArgs) HasApp() bool {
+	return v.data.App != nil
+}
+
+func (v *CrudGetConfigurationArgs) App() string {
+	if v.data.App == nil {
+		return ""
+	}
+	return *v.data.App
+}
+
+func (v *CrudGetConfigurationArgs) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *CrudGetConfigurationArgs) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *CrudGetConfigurationArgs) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *CrudGetConfigurationArgs) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type crudGetConfigurationResultsData struct {
+	Configuration *Configuration `cbor:"0,keyasint,omitempty" json:"configuration,omitempty"`
+	VersionId     *string        `cbor:"1,keyasint,omitempty" json:"versionId,omitempty"`
+}
+
+type CrudGetConfigurationResults struct {
+	call *rpc.Call
+	data crudGetConfigurationResultsData
+}
+
+func (v *CrudGetConfigurationResults) SetConfiguration(configuration *Configuration) {
+	v.data.Configuration = configuration
+}
+
+func (v *CrudGetConfigurationResults) SetVersionId(versionId string) {
+	v.data.VersionId = &versionId
+}
+
+func (v *CrudGetConfigurationResults) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *CrudGetConfigurationResults) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *CrudGetConfigurationResults) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *CrudGetConfigurationResults) UnmarshalJSON(data []byte) error {
 	return json.Unmarshal(data, &v.data)
 }
 
@@ -232,13 +371,13 @@ func (t *CrudNew) Results() *CrudNewResults {
 	return results
 }
 
-type CrudAddEnv struct {
+type CrudSetConfiguration struct {
 	*rpc.Call
-	args    CrudAddEnvArgs
-	results CrudAddEnvResults
+	args    CrudSetConfigurationArgs
+	results CrudSetConfigurationResults
 }
 
-func (t *CrudAddEnv) Args() *CrudAddEnvArgs {
+func (t *CrudSetConfiguration) Args() *CrudSetConfigurationArgs {
 	args := &t.args
 	if args.call != nil {
 		return args
@@ -248,7 +387,33 @@ func (t *CrudAddEnv) Args() *CrudAddEnvArgs {
 	return args
 }
 
-func (t *CrudAddEnv) Results() *CrudAddEnvResults {
+func (t *CrudSetConfiguration) Results() *CrudSetConfigurationResults {
+	results := &t.results
+	if results.call != nil {
+		return results
+	}
+	results.call = t.Call
+	t.Call.Results(results)
+	return results
+}
+
+type CrudGetConfiguration struct {
+	*rpc.Call
+	args    CrudGetConfigurationArgs
+	results CrudGetConfigurationResults
+}
+
+func (t *CrudGetConfiguration) Args() *CrudGetConfigurationArgs {
+	args := &t.args
+	if args.call != nil {
+		return args
+	}
+	args.call = t.Call
+	t.Call.Args(args)
+	return args
+}
+
+func (t *CrudGetConfiguration) Results() *CrudGetConfigurationResults {
 	results := &t.results
 	if results.call != nil {
 		return results
@@ -260,7 +425,8 @@ func (t *CrudAddEnv) Results() *CrudAddEnvResults {
 
 type Crud interface {
 	New(ctx context.Context, state *CrudNew) error
-	AddEnv(ctx context.Context, state *CrudAddEnv) error
+	SetConfiguration(ctx context.Context, state *CrudSetConfiguration) error
+	GetConfiguration(ctx context.Context, state *CrudGetConfiguration) error
 }
 
 type reexportCrud struct {
@@ -271,7 +437,11 @@ func (_ reexportCrud) New(ctx context.Context, state *CrudNew) error {
 	panic("not implemented")
 }
 
-func (_ reexportCrud) AddEnv(ctx context.Context, state *CrudAddEnv) error {
+func (_ reexportCrud) SetConfiguration(ctx context.Context, state *CrudSetConfiguration) error {
+	panic("not implemented")
+}
+
+func (_ reexportCrud) GetConfiguration(ctx context.Context, state *CrudGetConfiguration) error {
 	panic("not implemented")
 }
 
@@ -290,11 +460,19 @@ func AdaptCrud(t Crud) *rpc.Interface {
 			},
 		},
 		{
-			Name:          "addEnv",
+			Name:          "setConfiguration",
 			InterfaceName: "Crud",
 			Index:         0,
 			Handler: func(ctx context.Context, call *rpc.Call) error {
-				return t.AddEnv(ctx, &CrudAddEnv{Call: call})
+				return t.SetConfiguration(ctx, &CrudSetConfiguration{Call: call})
+			},
+		},
+		{
+			Name:          "getConfiguration",
+			InterfaceName: "Crud",
+			Index:         0,
+			Handler: func(ctx context.Context, call *rpc.Call) error {
+				return t.GetConfiguration(ctx, &CrudGetConfiguration{Call: call})
 			},
 		},
 	}
@@ -340,34 +518,71 @@ func (v CrudClient) New(ctx context.Context, name string) (*CrudClientNewResults
 	return &CrudClientNewResults{client: v.Client, data: ret}, nil
 }
 
-type CrudClientAddEnvResults struct {
+type CrudClientSetConfigurationResults struct {
 	client *rpc.Client
-	data   crudAddEnvResultsData
+	data   crudSetConfigurationResultsData
 }
 
-func (v *CrudClientAddEnvResults) HasVersionId() bool {
+func (v *CrudClientSetConfigurationResults) HasVersionId() bool {
 	return v.data.VersionId != nil
 }
 
-func (v *CrudClientAddEnvResults) VersionId() string {
+func (v *CrudClientSetConfigurationResults) VersionId() string {
 	if v.data.VersionId == nil {
 		return ""
 	}
 	return *v.data.VersionId
 }
 
-func (v CrudClient) AddEnv(ctx context.Context, app string, envvars []*NamedValue) (*CrudClientAddEnvResults, error) {
-	args := CrudAddEnvArgs{}
+func (v CrudClient) SetConfiguration(ctx context.Context, app string, configuration *Configuration) (*CrudClientSetConfigurationResults, error) {
+	args := CrudSetConfigurationArgs{}
 	args.data.App = &app
-	x := slices.Clone(envvars)
-	args.data.Envvars = &x
+	args.data.Configuration = configuration
 
-	var ret crudAddEnvResultsData
+	var ret crudSetConfigurationResultsData
 
-	err := v.Client.Call(ctx, "addEnv", &args, &ret)
+	err := v.Client.Call(ctx, "setConfiguration", &args, &ret)
 	if err != nil {
 		return nil, err
 	}
 
-	return &CrudClientAddEnvResults{client: v.Client, data: ret}, nil
+	return &CrudClientSetConfigurationResults{client: v.Client, data: ret}, nil
+}
+
+type CrudClientGetConfigurationResults struct {
+	client *rpc.Client
+	data   crudGetConfigurationResultsData
+}
+
+func (v *CrudClientGetConfigurationResults) HasConfiguration() bool {
+	return v.data.Configuration != nil
+}
+
+func (v *CrudClientGetConfigurationResults) Configuration() *Configuration {
+	return v.data.Configuration
+}
+
+func (v *CrudClientGetConfigurationResults) HasVersionId() bool {
+	return v.data.VersionId != nil
+}
+
+func (v *CrudClientGetConfigurationResults) VersionId() string {
+	if v.data.VersionId == nil {
+		return ""
+	}
+	return *v.data.VersionId
+}
+
+func (v CrudClient) GetConfiguration(ctx context.Context, app string) (*CrudClientGetConfigurationResults, error) {
+	args := CrudGetConfigurationArgs{}
+	args.data.App = &app
+
+	var ret crudGetConfigurationResultsData
+
+	err := v.Client.Call(ctx, "getConfiguration", &args, &ret)
+	if err != nil {
+		return nil, err
+	}
+
+	return &CrudClientGetConfigurationResults{client: v.Client, data: ret}, nil
 }

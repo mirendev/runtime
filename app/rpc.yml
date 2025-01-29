@@ -1,4 +1,14 @@
 types:
+  - type: Configuration
+    fields:
+      - name: env_vars
+        type: list
+        element: NamedValue
+        index: 0
+      - name: concurrency
+        type: int32
+        index: 1
+
   - type: NamedValue
     fields:
       - name: key
@@ -7,6 +17,9 @@ types:
       - name: value
         type: string
         index: 1
+      - name: sensitive
+        type: bool
+        index: 2
 
 interfaces:
   - name: Crud
@@ -18,13 +31,21 @@ interfaces:
         results:
           - name: id
             type: string
-      - name: addEnv
+      - name: setConfiguration
         parameters:
           - name: app
             type: string
-          - name: envvars
-            type: list
-            element: NamedValue
+          - name: configuration
+            type: Configuration
         results:
+          - name: versionId
+            type: string
+      - name: getConfiguration
+        parameters:
+          - name: app
+            type: string
+        results:
+          - name: configuration
+            type: Configuration
           - name: versionId
             type: string

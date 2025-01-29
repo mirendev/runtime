@@ -119,8 +119,6 @@ type pool struct {
 	mu   sync.Mutex
 	cond *sync.Cond
 
-	maxLeasesPerWindow int
-
 	windows set.Set[*UsageWindow]
 	idle    set.Set[*runningContainer]
 	pending set.Set[*pendingContainer]
@@ -208,7 +206,7 @@ func (a *pool) availableWindow() *UsageWindow {
 			continue
 		}
 
-		if w.Leases.Len() < a.maxLeasesPerWindow {
+		if w.Leases.Len() < w.maxLeasesPerWindow {
 			return w
 		}
 	}
@@ -265,12 +263,11 @@ func (l *LaunchContainer) lookupPool(app, name string) *pool {
 	p, ok := a.pools[name]
 	if !ok {
 		p = &pool{
-			app:                a,
-			name:               name,
-			maxLeasesPerWindow: l.MaxLeasesPerContainer,
-			windows:            set.New[*UsageWindow](),
-			idle:               set.New[*runningContainer](),
-			pending:            set.New[*pendingContainer](),
+			app:     a,
+			name:    name,
+			windows: set.New[*UsageWindow](),
+			idle:    set.New[*runningContainer](),
+			pending: set.New[*pendingContainer](),
 		}
 
 		p.cond = sync.NewCond(&p.mu)
@@ -294,6 +291,8 @@ type runningContainer struct {
 	app     string
 	image   string
 	version string
+
+	maxConcurrency int
 
 	windows set.Set[*UsageWindow]
 
@@ -353,6 +352,10 @@ type UsageWindow struct {
 	Version string
 
 	container *runningContainer
+
+	// Indicates how many leases we can have in this window.
+	// Effectively, how much concurrency a single container can have
+	maxLeasesPerWindow int
 
 	// Inidcates tha that the window is for a container version that has
 	// been cleared. When this window closes, we won't return the container

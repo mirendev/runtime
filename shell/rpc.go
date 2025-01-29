@@ -119,7 +119,7 @@ func (r *RPCShell) spec(opts *ShellOptions) *specs.Process {
 
 	proc.Args = args
 
-	winsize := opts.Win_size()
+	winsize := opts.WinSize()
 	if winsize != nil {
 		proc.Terminal = true
 		proc.ConsoleSize = &specs.Box{
