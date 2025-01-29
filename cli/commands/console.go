@@ -55,7 +55,7 @@ func Console(ctx *Context, opts struct {
 			ws := new(shell.WindowSize)
 			ws.SetHeight(int32(csz.Height))
 			ws.SetWidth(int32(csz.Width))
-			opt.SetWin_size(ws)
+			opt.SetWinSize(ws)
 		}
 
 		defer con.Reset()

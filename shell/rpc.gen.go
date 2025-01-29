@@ -68,7 +68,7 @@ func (v *WindowSize) UnmarshalJSON(data []byte) error {
 type shellOptionsData struct {
 	Terminal *bool       `cbor:"0,keyasint,omitempty" json:"terminal,omitempty"`
 	Command  *[]string   `cbor:"1,keyasint,omitempty" json:"command,omitempty"`
-	Win_size *WindowSize `cbor:"2,keyasint,omitempty" json:"win_size,omitempty"`
+	WinSize  *WindowSize `cbor:"2,keyasint,omitempty" json:"win_size,omitempty"`
 	Env      *[]string   `cbor:"3,keyasint,omitempty" json:"env,omitempty"`
 	Pool     *string     `cbor:"4,keyasint,omitempty" json:"pool,omitempty"`
 }
@@ -108,16 +108,16 @@ func (v *ShellOptions) SetCommand(command []string) {
 	v.data.Command = &x
 }
 
-func (v *ShellOptions) HasWin_size() bool {
-	return v.data.Win_size != nil
+func (v *ShellOptions) HasWinSize() bool {
+	return v.data.WinSize != nil
 }
 
-func (v *ShellOptions) Win_size() *WindowSize {
-	return v.data.Win_size
+func (v *ShellOptions) WinSize() *WindowSize {
+	return v.data.WinSize
 }
 
-func (v *ShellOptions) SetWin_size(win_size *WindowSize) {
-	v.data.Win_size = win_size
+func (v *ShellOptions) SetWinSize(win_size *WindowSize) {
+	v.data.WinSize = win_size
 }
 
 func (v *ShellOptions) HasEnv() bool {
@@ -168,11 +168,11 @@ func (v *ShellOptions) UnmarshalJSON(data []byte) error {
 }
 
 type shellAccessOpenArgsData struct {
-	Application    *string         `cbor:"0,keyasint,omitempty" json:"application,omitempty"`
-	Options        *ShellOptions   `cbor:"1,keyasint,omitempty" json:"options,omitempty"`
-	Input          *rpc.Capability `cbor:"2,keyasint,omitempty" json:"input,omitempty"`
-	Output         *rpc.Capability `cbor:"3,keyasint,omitempty" json:"output,omitempty"`
-	Window_updates *rpc.Capability `cbor:"4,keyasint,omitempty" json:"window_updates,omitempty"`
+	Application   *string         `cbor:"0,keyasint,omitempty" json:"application,omitempty"`
+	Options       *ShellOptions   `cbor:"1,keyasint,omitempty" json:"options,omitempty"`
+	Input         *rpc.Capability `cbor:"2,keyasint,omitempty" json:"input,omitempty"`
+	Output        *rpc.Capability `cbor:"3,keyasint,omitempty" json:"output,omitempty"`
+	WindowUpdates *rpc.Capability `cbor:"4,keyasint,omitempty" json:"window_updates,omitempty"`
 }
 
 type ShellAccessOpenArgs struct {
@@ -221,15 +221,15 @@ func (v *ShellAccessOpenArgs) Output() *stream.SendStreamClient[[]byte] {
 	return &stream.SendStreamClient[[]byte]{Client: v.call.NewClient(v.data.Output)}
 }
 
-func (v *ShellAccessOpenArgs) HasWindow_updates() bool {
-	return v.data.Window_updates != nil
+func (v *ShellAccessOpenArgs) HasWindowUpdates() bool {
+	return v.data.WindowUpdates != nil
 }
 
-func (v *ShellAccessOpenArgs) Window_updates() *stream.RecvStreamClient[*WindowSize] {
-	if v.data.Window_updates == nil {
+func (v *ShellAccessOpenArgs) WindowUpdates() *stream.RecvStreamClient[*WindowSize] {
+	if v.data.WindowUpdates == nil {
 		return nil
 	}
-	return &stream.RecvStreamClient[*WindowSize]{Client: v.call.NewClient(v.data.Window_updates)}
+	return &stream.RecvStreamClient[*WindowSize]{Client: v.call.NewClient(v.data.WindowUpdates)}
 }
 
 func (v *ShellAccessOpenArgs) MarshalCBOR() ([]byte, error) {
@@ -364,7 +364,7 @@ func (v ShellAccessClient) Open(ctx context.Context, application string, options
 	args.data.Options = options
 	args.data.Input = v.Client.NewCapability(stream.AdaptRecvStream[[]byte](input), input)
 	args.data.Output = v.Client.NewCapability(stream.AdaptSendStream[[]byte](output), output)
-	args.data.Window_updates = v.Client.NewCapability(stream.AdaptRecvStream[*WindowSize](window_updates), window_updates)
+	args.data.WindowUpdates = v.Client.NewCapability(stream.AdaptRecvStream[*WindowSize](window_updates), window_updates)
 
 	var ret shellAccessOpenResultsData
 

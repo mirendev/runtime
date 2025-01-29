@@ -171,11 +171,6 @@ func (a *AppAccess) ListApps(ctx context.Context) ([]*AppConfig, error) {
 	return apps, nil
 }
 
-type AppConfiguration struct {
-	StaticDir string            `json:"static_dir"`
-	EnvVars   map[string]string `json:"env_vars"`
-}
-
 type AppVersion struct {
 	Id      uint64
 	Xid     string
@@ -188,7 +183,7 @@ type AppVersion struct {
 
 	StaticDir sql.NullString
 
-	Configuration AppConfiguration
+	Configuration Configuration
 
 	App *AppConfig
 }
