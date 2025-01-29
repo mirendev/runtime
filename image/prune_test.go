@@ -7,7 +7,6 @@ import (
 
 	"github.com/containerd/containerd/v2/pkg/namespaces"
 	"github.com/jackc/pgx/v5"
-	"github.com/moby/buildkit/identity"
 	"github.com/stretchr/testify/require"
 	"miren.dev/runtime/app"
 	"miren.dev/runtime/pkg/testutils"
@@ -65,28 +64,24 @@ func TestPrune(t *testing.T) {
 		ao, err := aa.LoadApp(ctx, "test")
 		r.NoError(err)
 
-		v1 := identity.NewID()
-
 		v1ver := &app.AppVersion{
-			App:     ao,
-			AppId:   ao.Id,
-			Version: v1,
+			App:   ao,
+			AppId: ao.Id,
 		}
 
 		err = aa.CreateVersion(ctx, v1ver)
 		r.NoError(err)
+
+		v1 := v1ver.Version
 
 		vers, err := ip.VersionsToPrune(ctx, ao)
 		r.NoError(err)
 
 		r.Len(vers, 0)
 
-		v2 := identity.NewID()
-
 		v2ver := &app.AppVersion{
-			App:     ao,
-			AppId:   ao.Id,
-			Version: v2,
+			App:   ao,
+			AppId: ao.Id,
 		}
 
 		err = aa.CreateVersion(ctx, v2ver)
@@ -166,8 +161,8 @@ func TestPrune(t *testing.T) {
 		r.NoError(err)
 
 		err = aa.CreateVersion(ctx, &app.AppVersion{
-			AppId:   ao.Id,
-			Version: identity.NewID(),
+			App:   ao,
+			AppId: ao.Id,
 		})
 		r.NoError(err)
 
@@ -176,12 +171,9 @@ func TestPrune(t *testing.T) {
 
 		r.Len(vers, 0)
 
-		v2 := identity.NewID()
-
 		v2ver := &app.AppVersion{
-			App:     ao,
-			AppId:   ao.Id,
-			Version: v2,
+			App:   ao,
+			AppId: ao.Id,
 		}
 
 		err = aa.CreateVersion(ctx, v2ver)
@@ -192,11 +184,9 @@ func TestPrune(t *testing.T) {
 
 		r.Len(vers, 0)
 
-		v3 := identity.NewID()
-
 		err = aa.CreateVersion(ctx, &app.AppVersion{
-			AppId:   ao.Id,
-			Version: v3,
+			App:   ao,
+			AppId: ao.Id,
 		})
 		r.NoError(err)
 
@@ -205,11 +195,9 @@ func TestPrune(t *testing.T) {
 
 		r.Len(vers, 0)
 
-		v4 := identity.NewID()
-
 		err = aa.CreateVersion(ctx, &app.AppVersion{
-			AppId:   ao.Id,
-			Version: v4,
+			App:   ao,
+			AppId: ao.Id,
 		})
 		r.NoError(err)
 

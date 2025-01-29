@@ -67,7 +67,7 @@ func (r *RPCCrud) SetConfiguration(ctx context.Context, state *CrudSetConfigurat
 		}
 	}
 
-	ver.Configuration = *cfg
+	ver.Configuration = cfg
 
 	ver.Version = "" // Let create version assign one
 
@@ -99,10 +99,11 @@ func (r *RPCCrud) GetConfiguration(ctx context.Context, state *CrudGetConfigurat
 
 	ver, err := r.Access.MostRecentVersion(ctx, ac)
 	if err != nil {
-		return err
+		state.Results().SetConfiguration(&Configuration{})
+		return nil
 	}
 
-	state.Results().SetConfiguration(&ver.Configuration)
+	state.Results().SetConfiguration(ver.Configuration)
 
 	return nil
 }

@@ -60,9 +60,18 @@ func (b *RPCBuilder) nextVersion(ctx context.Context, name string) (*app.AppVers
 		}
 	}
 
+	var currentCfg *app.Configuration
+
 	cur, err := b.AppAccess.MostRecentVersion(ctx, ac)
 	if err != nil {
-		return nil, err
+		if !errors.Is(err, pgx.ErrNoRows) {
+			return nil, err
+		}
+
+		cfg := app.DefaultConfiguration
+		currentCfg = &cfg
+	} else {
+		currentCfg = cur.Configuration
 	}
 
 	ver := name + "-" + idgen.Gen("v")
@@ -76,7 +85,7 @@ func (b *RPCBuilder) nextVersion(ctx context.Context, name string) (*app.AppVers
 		// We always port the current configuration forward. This means that
 		// the application itself has no configuration, instead we've got a per
 		// version configuration that can mutate each time.
-		Configuration: cur.Configuration,
+		Configuration: currentCfg,
 	}
 
 	err = b.AppAccess.CreateVersion(ctx, av)

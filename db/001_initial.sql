@@ -2,8 +2,8 @@
 
 CREATE TABLE IF NOT EXISTS organizations (
     id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-    created_at TIMESTAMP DEFAULT NOW(),
-    updated_at TIMESTAMP DEFAULT NOW(),
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     name TEXT NOT NULL,
     external_id TEXT NOT NULL,
 
@@ -13,8 +13,8 @@ CREATE TABLE IF NOT EXISTS organizations (
 
 CREATE TABLE applications (
     id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-    created_at TIMESTAMP DEFAULT NOW(),
-    updated_at TIMESTAMP DEFAULT NOW(),
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     organization_id BIGINT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
 
     xid TEXT NOT NULL,
@@ -26,8 +26,8 @@ CREATE TABLE applications (
 
 CREATE TABLE application_versions (
     id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-    created_at TIMESTAMP DEFAULT NOW(),
-    updated_at TIMESTAMP DEFAULT NOW(),
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     application_id BIGINT NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
     xid TEXT NOT NULL,
     image_id TEXT NOT NULL,

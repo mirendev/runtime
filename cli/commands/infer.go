@@ -199,6 +199,10 @@ func (w *Cmd) loadConfig(args []string) error {
 	return nil
 }
 
+type OptsValidate interface {
+	Validate(glbl *GlobalFlags) error
+}
+
 func (w *Cmd) Run(args []string) int {
 	if err := w.loadConfig(args); err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -228,6 +232,14 @@ func (w *Cmd) Run(args []string) int {
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
+	}
+
+	if ov, ok := w.opts.Interface().(OptsValidate); ok {
+		err = ov.Validate(w.global)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
 	}
 
 	if os.Getenv("DEBUG_CONFIG") != "" {

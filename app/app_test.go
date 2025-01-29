@@ -76,20 +76,22 @@ func TestAppAccess(t *testing.T) {
 		app, err := aa.LoadApp(ctx, "test")
 		r.NoError(err)
 
-		err = aa.CreateVersion(ctx, &AppVersion{
-			AppId:   app.Id,
-			Version: "1.0.0",
-		})
+		iver := &AppVersion{
+			App:   app,
+			AppId: app.Id,
+		}
+
+		err = aa.CreateVersion(ctx, iver)
 		r.NoError(err)
 
-		ver, err := aa.LoadVersion(ctx, app, "1.0.0")
+		ver, err := aa.LoadVersion(ctx, app, iver.Version)
 		r.NoError(err)
 
-		r.Equal("1.0.0", ver.Version)
+		r.Equal(iver.Version, ver.Version)
 
 		mrv, err := aa.MostRecentVersion(ctx, app)
 		r.NoError(err)
 
-		r.Equal("1.0.0", mrv.Version)
+		r.Equal(iver.Version, mrv.Version)
 	})
 }

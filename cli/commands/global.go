@@ -17,7 +17,7 @@ import (
 
 type GlobalFlags struct {
 	Verbose       []bool `short:"v" long:"verbose" description:"Enable verbose output"`
-	ServerAddress string `short:"a" long:"server-address" description:"Server address to connect to" default:"127.0.0.1:8443" asm:"server-addr"`
+	ServerAddress string `long:"server-address" description:"Server address to connect to" default:"127.0.0.1:8443" asm:"server-addr"`
 	Config        string `long:"config" description:"Path to configuration file"`
 }
 

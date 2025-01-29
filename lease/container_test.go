@@ -111,8 +111,8 @@ func TestLeaseContainer(t *testing.T) {
 		r.NoError(err)
 
 		err = aa.CreateVersion(ctx, &app.AppVersion{
-			AppId:   ac.Id,
-			Version: "aabbcc",
+			App:   ac,
+			AppId: ac.Id,
 		})
 		r.NoError(err)
 
@@ -332,8 +332,8 @@ func TestLeaseContainer(t *testing.T) {
 		r.NoError(err)
 
 		err = aa.CreateVersion(ctx, &app.AppVersion{
-			AppId:   ac.Id,
-			Version: "aabbcc",
+			App:   ac,
+			AppId: ac.Id,
 		})
 		r.NoError(err)
 
@@ -483,8 +483,8 @@ func TestLeaseContainer(t *testing.T) {
 		r.NoError(err)
 
 		err = aa.CreateVersion(ctx, &app.AppVersion{
-			AppId:   ac.Id,
-			Version: "aabbcc",
+			App:   ac,
+			AppId: ac.Id,
 		})
 		r.NoError(err)
 
@@ -510,7 +510,11 @@ func TestLeaseContainer(t *testing.T) {
 		err = reg.Populate(&on)
 		r.NoError(err)
 
-		on.MaxLeasesPerContainer = 2
+		mrv.Configuration.SetConcurrency(2)
+
+		err = aa.CreateVersion(ctx, mrv)
+		r.NoError(err)
+
 		on.CR.RunscBinary = runscBin
 
 		defer testutils.ClearContainers(cc, on.CD.Namespace)
@@ -532,8 +536,8 @@ func TestLeaseContainer(t *testing.T) {
 		r.Same(leases[0].Window, leases[1].Window)
 		r.Same(leases[2].Window, leases[3].Window)
 
-		r.NotSame(leases[0].Window, leases[2].Window)
-		r.NotSame(leases[2].Window, leases[4].Window)
+		r.NotEqual(leases[0].Window.Id, leases[2].Window.Id)
+		r.NotEqual(leases[2].Window.Id, leases[4].Window.Id)
 	})
 
 	t.Run("cleans up for old releases", func(t *testing.T) {
@@ -624,8 +628,8 @@ func TestLeaseContainer(t *testing.T) {
 		r.NoError(err)
 
 		err = aa.CreateVersion(ctx, &app.AppVersion{
-			AppId:   ac.Id,
-			Version: "aabbcc",
+			App:   ac,
+			AppId: ac.Id,
 		})
 		r.NoError(err)
 

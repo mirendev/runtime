@@ -15,5 +15,9 @@ func ToTimestamp(t time.Time) *Timestamp {
 }
 
 func FromTimestamp(ts *Timestamp) time.Time {
+	if ts == nil {
+		return time.Time{}
+	}
+
 	return time.Unix(ts.Seconds(), int64(ts.Nanoseconds()))
 }
