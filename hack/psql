@@ -1,0 +1,3 @@
+#!/bin/sh
+
+exec psql postgres://miren:miren@localhost:5432/miren_dev

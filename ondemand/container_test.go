@@ -113,8 +113,8 @@ func TestOndemand(t *testing.T) {
 		r.NoError(err)
 
 		err = aa.CreateVersion(ctx, &app.AppVersion{
-			AppId:   ac.Id,
-			Version: "aabbcc",
+			App:   ac,
+			AppId: ac.Id,
 		})
 		r.NoError(err)
 

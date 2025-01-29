@@ -9,7 +9,7 @@ import (
 )
 
 func Set(ctx *Context, opts struct {
-	App         string   `short:"a" long:"app" description:"Application to set"`
+	AppCentric
 	Env         []string `short:"e" long:"env" description:"Set environment variables"`
 	Sensitive   []string `short:"s" long:"sensitive" description:"Set sensitive environment variables"`
 	Delete      []string `short:"d" long:"delete" description:"Delete environment variables"`

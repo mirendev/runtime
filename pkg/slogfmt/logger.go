@@ -44,12 +44,16 @@ var (
 		slog.LevelWarn:  color.New(color.FgHiYellow),
 		slog.LevelError: color.New(color.FgHiRed),
 	}
+
+	moduleColor = color.New(color.Faint)
 )
 
 // TextHandler is a [Handler] that writes Records to an [io.Writer] as a
 // sequence of key=value pairs separated by spaces and followed by a newline.
 type TextHandler struct {
 	*commonHandler
+
+	module string
 }
 
 // NewTextHandler creates a [TextHandler] that writes to w,
@@ -60,11 +64,12 @@ func NewTextHandler(w io.Writer, opts *slog.HandlerOptions) *TextHandler {
 		opts = &slog.HandlerOptions{}
 	}
 	return &TextHandler{
-		&commonHandler{
+		commonHandler: &commonHandler{
 			w:    w,
 			opts: *opts,
 			mu:   &sync.Mutex{},
 		},
+		module: "",
 	}
 }
 
@@ -74,14 +79,33 @@ func (h *TextHandler) Enabled(_ context.Context, level slog.Level) bool {
 	return h.enabled(level)
 }
 
+const ModuleKey = "module"
+
 // WithAttrs returns a new [TextHandler] whose attributes consists
 // of h's attributes followed by attrs.
 func (h *TextHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
-	return &TextHandler{commonHandler: h.withAttrs(attrs)}
+	var (
+		goodAttrs []slog.Attr
+		module    = h.module
+	)
+
+	for _, a := range attrs {
+		if a.Key == ModuleKey && a.Value.Kind() == slog.KindString {
+			if module == "" {
+				module = a.Value.String()
+			} else {
+				module += "." + a.Value.String()
+			}
+		} else {
+			goodAttrs = append(goodAttrs, a)
+		}
+	}
+
+	return &TextHandler{commonHandler: h.withAttrs(goodAttrs), module: module}
 }
 
 func (h *TextHandler) WithGroup(name string) slog.Handler {
-	return &TextHandler{commonHandler: h.withGroup(name)}
+	return &TextHandler{commonHandler: h.withGroup(name), module: h.module}
 }
 
 // Handle formats its argument [Record] as a single line of space-separated
@@ -121,7 +145,7 @@ func (h *TextHandler) WithGroup(name string) slog.Handler {
 // Each call to Handle results in a single serialized call to
 // io.Writer.Write.
 func (h *TextHandler) Handle(_ context.Context, r slog.Record) error {
-	return h.handle(r)
+	return h.handle(r, h.module)
 }
 
 type commonHandler struct {
@@ -214,7 +238,7 @@ func recordSource(r slog.Record) *slog.Source {
 
 // handle is the internal implementation of Handler.Handle
 // used by TextHandler and JSONHandler.
-func (h *commonHandler) handle(r slog.Record) error {
+func (h *commonHandler) handle(r slog.Record, module string) error {
 	state := h.newHandleState(NewBuffer(), true, "")
 	defer state.free()
 	// Built-in attributes. They are not in a group.
@@ -260,6 +284,11 @@ func (h *commonHandler) handle(r slog.Record) error {
 	// source
 	if h.opts.AddSource {
 		state.appendAttr(slog.Any(slog.SourceKey, recordSource(r)))
+	}
+
+	if module != "" {
+		state.appendRawString(moduleColor.Sprint(module))
+		state.appendRawString(" ")
 	}
 
 	key = slog.MessageKey

@@ -230,7 +230,7 @@ func (s *State) startListener(ctx context.Context, so *stateOptions) error {
 	serv := &http3.Server{
 		Handler:   s.server,
 		TLSConfig: s.tlsCfg,
-		Logger:    s.log,
+		Logger:    s.log.With("module", "http3"),
 	}
 
 	s.hs = serv

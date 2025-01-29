@@ -183,7 +183,7 @@ type AppVersion struct {
 
 	StaticDir sql.NullString
 
-	Configuration Configuration
+	Configuration *Configuration
 
 	App *AppConfig
 }
@@ -197,13 +197,15 @@ func (a *AppAccess) CreateVersion(ctx context.Context, av *AppVersion) error {
 
 	av.CreatedAt = now
 	av.UpdatedAt = now
-
-	if av.Version == "" {
-		av.Version = av.App.Name + "-" + idgen.Gen("v")
-	}
+	av.Version = av.App.Name + "-" + idgen.Gen("v")
 
 	if av.ImageId == "" {
 		av.ImageId = av.Version
+	}
+
+	if av.Configuration == nil {
+		cfg := DefaultConfiguration
+		av.Configuration = &cfg
 	}
 
 	xid := idgen.Gen("v")

@@ -25,7 +25,7 @@ func currentConsole() console.Console {
 }
 
 func Console(ctx *Context, opts struct {
-	App  string   `short:"a" long:"app" description:"Application to run"`
+	AppCentric
 	Pool string   `long:"pool" default:"shell" description:"Pool to use"`
 	Args []string `positional-args:"yes"`
 }) error {

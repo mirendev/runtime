@@ -17,15 +17,38 @@ import (
 	"miren.dev/runtime/server"
 )
 
+type AppCentric struct {
+	App string `short:"a" long:"app" env:"MIREN_APP" description:"Application get info about"`
+
+	config *AppConfig
+}
+
+func (a *AppCentric) Validate(glbl *GlobalFlags) error {
+	ac, err := LoadAppConfig()
+	if err == nil {
+		a.config = ac
+	}
+
+	if a.App == "" {
+		if a.config != nil && a.config.Name != "" {
+			a.App = a.config.Name
+		} else {
+			return fmt.Errorf("app is required")
+		}
+	}
+
+	return nil
+}
+
 func MinuteLabeler(i int, v float64) string {
 	t := time.Unix(int64(v), 0).Local()
 	return t.Format("15:04")
 }
 
 func App(ctx *Context, opts struct {
-	App   string `short:"a" long:"app" description:"Application get info about"`
-	Watch bool   `short:"w" long:"watch" description:"Watch the app stats"`
-	Graph bool   `short:"g" long:"graph" description:"Graph the app stats"`
+	AppCentric
+	Watch bool `short:"w" long:"watch" description:"Watch the app stats"`
+	Graph bool `short:"g" long:"graph" description:"Graph the app stats"`
 }) error {
 	crudcl, err := ctx.RPCClient("app")
 	if err != nil {
@@ -229,7 +252,22 @@ var (
 )
 
 func (m Model) View() string {
+	var (
+		lastUpdate string
+		laExtra    string
+	)
+
 	t := standard.FromTimestamp(m.status.LastDeploy())
+	if t.IsZero() {
+		lastUpdate = "never"
+	} else {
+		lastUpdate = t.Format(format)
+		laExtra = faint.Render(
+			fmt.Sprintf("(%s ago, %s)",
+				time.Since(t).Round(time.Second),
+				m.status.ActiveVersion(),
+			))
+	}
 
 	envvars := []string{}
 
@@ -245,13 +283,8 @@ func (m Model) View() string {
 
 	hdr := fmt.Sprintf("       name: %s\nlast update: %s %s\nconcurrency: %s\n   env vars: %s\n",
 		bold.Render(m.status.Name()),
-		bold.Render(t.Format(Stamp)),
-
-		faint.Render(
-			fmt.Sprintf("(%s ago, %s)",
-				time.Since(t).Round(time.Second),
-				m.status.ActiveVersion(),
-			)),
+		bold.Render(lastUpdate),
+		laExtra,
 		bold.Render(fmt.Sprintf("%d", m.cfg.Concurrency())),
 		bold.Render(strings.Join(envvars, ", ")),
 	)
