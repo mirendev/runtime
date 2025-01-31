@@ -22,7 +22,7 @@ import (
 
 func Deploy(ctx *Context, opts struct {
 	App     string `short:"a" long:"app" description:"Application to run"`
-	Dir     string `short:"d" long:"dir" description:"Directory to run from"`
+	Dir     string `short:"d" long:"dir" description:"Directory to run from" default:"."`
 	Explain bool   `short:"x" long:"explain" description:"Explain the build process"`
 }) error {
 	cl, err := ctx.RPCClient("build")
@@ -43,7 +43,8 @@ func Deploy(ctx *Context, opts struct {
 	}
 
 	var (
-		cb stream.SendStream[*build.Status]
+		cb      stream.SendStream[*build.Status]
+		results *build.BuilderClientBuildFromTarResults
 	)
 
 	if opts.Explain {
@@ -74,6 +75,18 @@ func Deploy(ctx *Context, opts struct {
 
 			return nil
 		})
+
+		results, err = bc.BuildFromTar(ctx, name, stream.ServeReader(ctx, r), cb)
+		if err != nil {
+			return err
+		}
+
+		close(pw.Status())
+		<-pw.Done()
+
+		if pw.Err() != nil {
+			return pw.Err()
+		}
 	} else {
 		var (
 			updateCh   = make(chan string, 1)
@@ -132,11 +145,12 @@ func Deploy(ctx *Context, opts struct {
 
 			return nil
 		})
-	}
 
-	results, err := bc.BuildFromTar(ctx, name, stream.ServeReader(ctx, r), cb)
-	if err != nil {
-		return err
+		results, err = bc.BuildFromTar(ctx, name, stream.ServeReader(ctx, r), cb)
+		if err != nil {
+			return err
+		}
+
 	}
 
 	ctx.Printf("\nUpdated version %s deployed. All traffic moved to new version.\n", results.Version())
