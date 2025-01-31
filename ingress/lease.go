@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -46,17 +47,30 @@ func (h *LeaseHTTP) DeriveApp(req *http.Request) (string, bool) {
 }
 
 func (h *LeaseHTTP) ServeHTTP(w http.ResponseWriter, req *http.Request) {
-	app, ok := h.DeriveApp(req)
-	if !ok {
-		w.WriteHeader(http.StatusNotFound)
-		return
+	onlyHost, _, err := net.SplitHostPort(req.Host)
+	if err != nil {
+		onlyHost = req.Host
 	}
 
-	ac, err := h.App.LoadApp(req.Context(), app)
+	ac, err := h.App.LoadApplicationForHost(req.Context(), onlyHost)
 	if err != nil {
-		h.Log.Error("error looking up application", "error", err, "app", app)
-		http.Error(w, fmt.Sprintf("application not found: %s", app), http.StatusNotFound)
-		return
+		h.Log.Error("error looking up application by host", "error", err, "host", req.Host)
+	}
+
+	if ac == nil {
+		h.Log.Debug("no application found by host route", "host", req.Host)
+		app, ok := h.DeriveApp(req)
+		if !ok {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+
+		ac, err = h.App.LoadApp(req.Context(), app)
+		if err != nil {
+			h.Log.Error("error looking up application", "error", err, "app", app)
+			http.Error(w, fmt.Sprintf("application not found: %s", app), http.StatusNotFound)
+			return
+		}
 	}
 
 	ctx, cancel := context.WithTimeout(req.Context(), h.LookupTimeout)
@@ -66,8 +80,8 @@ func (h *LeaseHTTP) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 
 	lc, err := h.Lease.Lease(ctx, ac.Xid, lease.Pool("http"))
 	if err != nil {
-		h.Log.Error("error looking up endpoint for application", "error", err, "app", app)
-		w.WriteHeader(http.StatusInternalServerError)
+		h.Log.Error("error looking up endpoint for application", "error", err, "app", ac.Name)
+		http.Error(w, fmt.Sprintf("error accessing application: %s", ac.Name), http.StatusInternalServerError)
 		return
 	}
 
@@ -77,22 +91,22 @@ func (h *LeaseHTTP) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		// So we use the top context so that regardless of what happens, we release the lease.
 		li, err := h.Lease.ReleaseLease(h.Top, lc)
 		if err != nil {
-			h.Log.Error("error releasing lease from http request", "error", err, "app", app)
+			h.Log.Error("error releasing lease from http request", "error", err, "app", ac.Name)
 		} else {
-			h.Log.Debug("lease released", "app", app, "usage", li.Usage)
+			h.Log.Debug("lease released", "app", ac.Name, "usage", li.Usage)
 		}
 	}()
 
 	cont, err := lc.Obj(ctx)
 	if err != nil {
-		h.Log.Error("error looking up endpoint for application", "error", err, "app", app)
+		h.Log.Error("error looking up endpoint for application", "error", err, "app", ac.Name)
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
 
 	endpoint, err := h.extractEndpoint(ctx, cont)
 	if err != nil {
-		h.Log.Error("error looking up endpoint for application", "error", err, "app", app)
+		h.Log.Error("error looking up endpoint for application", "error", err, "app", ac.Name)
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
