@@ -32,12 +32,24 @@ type tarOutput struct {
 
 func (t *tarOutput) Read(p []byte) (int, error) {
 	t.mu.Lock()
+
+	if t.bgErr != nil {
+		t.mu.Unlock()
+		return 0, t.bgErr
+	}
+
+	t.mu.Unlock()
+
+	n, err := t.rc.Read(p)
+
+	t.mu.Lock()
 	defer t.mu.Unlock()
 
 	if t.bgErr != nil {
-		return 0, t.bgErr
+		return n, t.bgErr
 	}
-	return t.rc.Read(p)
+
+	return n, err
 }
 
 func (t *tarOutput) Close() error {
@@ -258,10 +270,157 @@ func (b *Buildkit) Transform(ctx context.Context, dfs fsutil.FS, tos ...Transfor
 		}, ssProgress)
 
 		to.mu.Lock()
+		if err != nil {
+			w.Close()
+			r.Close()
+		}
 		to.bgErr = err
 		to.mu.Unlock()
 	}()
 
 	b.Log.Debug("returning tar output", "ref", ref)
 	return &to, done, nil
+}
+
+func (b *Buildkit) BuildImage(ctx context.Context, dfs fsutil.FS, getTar func() (io.WriteCloser, error), tos ...TransformOptions) error {
+	var opts transformOpt
+
+	opts.frontendAttrs = map[string]string{
+		//"attest:sbom":       "mode:max",
+		//"attest:provenance": "mode:max",
+		"build-arg:BUILDKIT_INLINE_CACHE": "1",
+	}
+
+	for _, o := range tos {
+		o(&opts)
+	}
+
+	mounts := map[string]fsutil.FS{
+		"dockerfile": dfs,
+		"context":    dfs,
+	}
+
+	output := client.ExportEntry{
+		Type: "oci",
+		Output: func(attrs map[string]string) (io.WriteCloser, error) {
+			if opts.phaseUpdates != nil {
+				opts.phaseUpdates("export")
+			}
+
+			b.Log.Debug("returning oci output value")
+			return getTar()
+		},
+	}
+
+	ref := idgen.Gen("r")
+
+	solveOpt := client.SolveOpt{
+		Exports:       []client.ExportEntry{output},
+		LocalMounts:   mounts,
+		Frontend:      "dockerfile.v0",
+		FrontendAttrs: opts.frontendAttrs,
+		Ref:           ref,
+	}
+
+	if opts.cacheDir != "" {
+		solveOpt.CacheImports = []client.CacheOptionsEntry{
+			{
+				Type: "local",
+				Attrs: map[string]string{
+					"src": opts.cacheDir,
+				},
+			},
+		}
+		solveOpt.CacheExports = []client.CacheOptionsEntry{
+			{
+				Type: "local",
+				Attrs: map[string]string{
+					"dest": opts.cacheDir,
+				},
+			},
+		}
+	}
+
+	sreq := gateway.SolveRequest{
+		Frontend:    solveOpt.Frontend,
+		FrontendOpt: solveOpt.FrontendAttrs,
+	}
+
+	sreq.CacheImports = make([]frontend.CacheOptionsEntry, len(solveOpt.CacheImports))
+	for i, e := range solveOpt.CacheImports {
+		sreq.CacheImports[i] = frontend.CacheOptionsEntry{
+			Type:  e.Type,
+			Attrs: e.Attrs,
+		}
+	}
+
+	// not using shared context to not disrupt display but let is finish reporting errors
+	//pw, err := progresswriter.NewPrinter(ctx, os.Stderr, "rawjson")
+	//if err != nil {
+	//return nil, err
+	//}
+
+	//mw := progresswriter.NewMultiWriter(pw)
+
+	//mw.Status()
+
+	b.Log.Info("building from fs walker", "ref", ref)
+
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	ssProgress := make(chan *client.SolveStatus, 1)
+
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case ss, ok := <-ssProgress:
+				if !ok {
+					b.Log.Info("status channel closed", "ref", ref)
+					return
+				}
+				if data, err := json.Marshal(ss); err == nil {
+					/*
+						err := b.LogWriter.WriteEntry("build", ref, observability.LogEntry{
+							Timestamp: time.Now(),
+							Body:      string(data),
+						})
+						if err != nil {
+							b.Log.Error("failed to write log entry", "err", err)
+						}
+					*/
+
+					if opts.statusUpdates != nil {
+						opts.statusUpdates(ss, data)
+					}
+				}
+			}
+		}
+	}()
+
+	_, err := b.Client.Build(ctx, solveOpt, "miren", func(ctx context.Context, c gateway.Client) (*gateway.Result, error) {
+		if opts.phaseUpdates != nil {
+			opts.phaseUpdates("solving")
+		}
+
+		b.Log.Info("solving", "ref", ref)
+		res, err := c.Solve(ctx, sreq)
+		if err != nil {
+			b.Log.Error("failed to solve", "err", err)
+			return nil, err
+		}
+
+		if opts.phaseUpdates != nil {
+			opts.phaseUpdates("solved")
+		}
+
+		b.Log.Info("solved", "ref", ref)
+
+		return res, nil
+	}, ssProgress)
+
+	return err
+
 }

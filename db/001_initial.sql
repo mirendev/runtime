@@ -53,6 +53,7 @@ INSERT INTO organizations (name, external_id) VALUES ('local', 'local');
 
 ---- create above / drop below ----
 
+DROP TABLE http_routes;
 DROP TABLE application_versions;
 DROP TABLE applications;
 DROP TABLE organizations;

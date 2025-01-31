@@ -130,6 +130,8 @@ func TarFS(r io.Reader, dir string) (fsutil.FS, error) {
 			if _, err := io.Copy(f, tr); err != nil {
 				return nil, err
 			}
+
+			f.Chmod(os.FileMode(th.FileInfo().Mode()) & os.ModePerm)
 		}
 	}
 
