@@ -38,6 +38,8 @@ func main() {
 
 	fmt.Fprintf(f, "%q %q\n", *fDB, *fEnt)
 
+	entity := *fEnt
+
 	var lw observability.PersistentLogWriter
 	lw.DB = clickhouse.OpenDB(&clickhouse.Options{
 		Addr: []string{*fDB},
@@ -61,25 +63,31 @@ func main() {
 			defer wg.Done()
 
 			br := bufio.NewReader(cfg.Stderr)
-			var ent LogEntry
 
 			for {
 				line, err := br.ReadString('\n')
 				if err != nil {
-					fmt.Fprintf(f, "err: %v\n", err)
 					return
 				}
 
 				line = strings.TrimRight(line, "\t\n\r")
 
-				fmt.Fprintln(f, "stderr")
-				ent.Line = line
-				err = lw.WriteEntry("container", cfg.ID, observability.LogEntry{
+				stream := observability.Stderr
+
+				if strings.HasPrefix(line, "!USER ") {
+					line = strings.TrimPrefix(line, "!USER ")
+					stream = observability.UserOOB
+				} else if strings.HasPrefix(line, "!ERROR ") {
+					line = strings.TrimPrefix(line, "!ERROR ")
+					stream = observability.Error
+				}
+
+				err = lw.WriteEntry(entity, observability.LogEntry{
 					Timestamp: time.Now(),
+					Stream:    stream,
 					Body:      line,
 				})
 				if err != nil {
-					fmt.Fprintf(f, "err: %v\n", err)
 					return
 				}
 			}
@@ -90,24 +98,30 @@ func main() {
 
 			br := bufio.NewReader(cfg.Stdout)
 
-			var ent LogEntry
 			for {
 				line, err := br.ReadString('\n')
 				if err != nil {
-					fmt.Fprintf(f, "err: %v\n", err)
 					return
 				}
 
 				line = strings.TrimRight(line, "\t\n\r")
 
-				fmt.Fprintln(f, "stdout")
-				ent.Line = line
-				err = lw.WriteEntry("container", cfg.ID, observability.LogEntry{
+				stream := observability.Stdout
+
+				if strings.HasPrefix(line, "!USER ") {
+					line = strings.TrimPrefix(line, "!USER ")
+					stream = observability.UserOOB
+				} else if strings.HasPrefix(line, "!ERROR ") {
+					line = strings.TrimPrefix(line, "!ERROR ")
+					stream = observability.Error
+				}
+
+				err = lw.WriteEntry(entity, observability.LogEntry{
 					Timestamp: time.Now(),
+					Stream:    stream,
 					Body:      line,
 				})
 				if err != nil {
-					fmt.Fprintf(f, "err: %v\n", err)
 					return
 				}
 			}

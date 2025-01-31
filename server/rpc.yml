@@ -89,6 +89,18 @@ types:
         type: standard.Timestamp
         index: 8
 
+  - type: LogEntry
+    fields:
+      - name: timestamp
+        type: standard.Timestamp
+        index: 0
+      - name: line
+        type: string
+        index: 1
+      - name: stream
+        type: string
+        index: 2
+
 interfaces:
   - name: AppInfo
     methods:
@@ -99,4 +111,19 @@ interfaces:
         results:
           - name: status
             type: ApplicationStatus
+
+  - name: Logs
+    methods:
+      - name: appLogs
+        parameters:
+          - name: application
+            type: string
+          - name: from
+            type: standard.Timestamp
+          - name: follow
+            type: bool
+        results:
+          - name: logs
+            type: list
+            element: LogEntry
 

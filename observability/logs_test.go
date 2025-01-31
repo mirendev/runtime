@@ -41,8 +41,9 @@ func TestLogs(t *testing.T) {
 
 		id := identity.NewID()
 
-		err = pw.WriteEntry("container", id, LogEntry{
+		err = pw.WriteEntry(id, LogEntry{
 			Timestamp: time.Now(),
+			Stream:    Stdout,
 			Body:      "this is a log line",
 		})
 		r.NoError(err)
@@ -61,7 +62,7 @@ func TestLogs(t *testing.T) {
 
 		var count int
 
-		err = db.QueryRow("SELECT count() FROM logs WHERE entity_id = ?", id).Scan(&count)
+		err = db.QueryRow("SELECT count() FROM logs WHERE entity = ?", id).Scan(&count)
 		r.NoError(err)
 
 		r.Equal(1, count)
