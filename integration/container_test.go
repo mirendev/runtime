@@ -145,7 +145,7 @@ func TestContainer(t *testing.T) {
 		cs, err := ch.Status(ctx, id)
 		r.NoError(err)
 
-		r.True(cs.Running)
+		r.True(cs.Status == containerd.Running)
 
 		ep, ok := cs.Endpoints["http"]
 		r.True(ok)
