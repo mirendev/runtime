@@ -26,7 +26,9 @@ type Server struct {
 	Build   *build.RPCBuilder
 	Shell   *shell.RPCShell
 	AppCrud *app.RPCCrud
+
 	AppInfo *RPCAppInfo
+	LogsRPC *RPCLogs
 
 	Lease *lease.LaunchContainer
 
@@ -37,6 +39,8 @@ type Server struct {
 	RunSCMon *observability.RunSCMonitor
 
 	ConStatTracker *lease.ContainerStatsTracker
+
+	Logs *observability.LogsMaintainer
 }
 
 func (s *Server) periodicIdleShutdown(ctx context.Context) {
@@ -79,6 +83,8 @@ func (s *Server) Run(ctx context.Context) error {
 
 	defer ss.Close()
 
+	s.Logs.Setup(ctx)
+
 	s.Log.Info("starting runsc monitoring")
 
 	err = s.RunSCMon.WritePodInit("/run/runsc-init.json")
@@ -103,6 +109,7 @@ func (s *Server) Run(ctx context.Context) error {
 	serv.ExposeValue("build", build.AdaptBuilder(s.Build))
 	serv.ExposeValue("app", app.AdaptCrud(s.AppCrud))
 	serv.ExposeValue("app-info", AdaptAppInfo(s.AppInfo))
+	serv.ExposeValue("logs", AdaptLogs(s.LogsRPC))
 	serv.ExposeValue("shell", shell.AdaptShellAccess(s.Shell))
 
 	go http.ListenAndServe(":8080", s.Ingress)

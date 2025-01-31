@@ -316,6 +316,7 @@ func (l *leaseOperation) launch(
 			"miren.dev/pool":    l.pool.name,
 			"miren.dev/version": l.mrv.Version,
 		},
+		LogEntity: l.ac.Xid,
 	}
 
 	for _, nv := range l.mrv.Configuration.EnvVars() {

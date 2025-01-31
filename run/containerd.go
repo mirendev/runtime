@@ -22,7 +22,7 @@ type ContainerRunner struct {
 	CC          *containerd.Client
 	Namespace   string `asm:"namespace"`
 	RunscBinary string `asm:"runsc_binary,optional"`
-	Clickhouse  string `asm:"clickhouse_address,optional"`
+	Clickhouse  string `asm:"clickhouse-address,optional"`
 }
 
 func (c *ContainerRunner) Populated() error {
@@ -38,10 +38,11 @@ func (c *ContainerRunner) Populated() error {
 }
 
 type ContainerConfig struct {
-	Id      string
-	App     string
-	Image   string
-	Version string
+	Id        string
+	App       string
+	Image     string
+	Version   string
+	LogEntity string
 
 	Labels map[string]string
 	Env    map[string]string
@@ -240,10 +241,15 @@ func (c *ContainerRunner) bootInitialTask(ctx context.Context, config *Container
 		return err
 	}
 
+	id := config.LogEntity
+	if id == "" {
+		id = config.Id
+	}
+
 	task, err := container.NewTask(ctx,
 		cio.BinaryIO(exe, map[string]string{
 			"-d": c.Clickhouse,
-			"-e": config.Id,
+			"-e": id,
 		}))
 	if err != nil {
 		return err

@@ -27,6 +27,10 @@ func AllCommands() map[string]cli.CommandFactory {
 			return Infer("set", "Set environment variables for an application", Set), nil
 		},
 
+		"logs": func() (cli.Command, error) {
+			return Infer("logs", "Get logs for an application", Logs), nil
+		},
+
 		"app new": func() (cli.Command, error) {
 			return Infer("app new", "Create a new application", AppNew), nil
 		},

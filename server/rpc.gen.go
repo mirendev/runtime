@@ -440,6 +440,74 @@ func (v *ApplicationStatus) UnmarshalJSON(data []byte) error {
 	return json.Unmarshal(data, &v.data)
 }
 
+type logEntryData struct {
+	Timestamp *standard.Timestamp `cbor:"0,keyasint,omitempty" json:"timestamp,omitempty"`
+	Line      *string             `cbor:"1,keyasint,omitempty" json:"line,omitempty"`
+	Stream    *string             `cbor:"2,keyasint,omitempty" json:"stream,omitempty"`
+}
+
+type LogEntry struct {
+	data logEntryData
+}
+
+func (v *LogEntry) HasTimestamp() bool {
+	return v.data.Timestamp != nil
+}
+
+func (v *LogEntry) Timestamp() *standard.Timestamp {
+	return v.data.Timestamp
+}
+
+func (v *LogEntry) SetTimestamp(timestamp *standard.Timestamp) {
+	v.data.Timestamp = timestamp
+}
+
+func (v *LogEntry) HasLine() bool {
+	return v.data.Line != nil
+}
+
+func (v *LogEntry) Line() string {
+	if v.data.Line == nil {
+		return ""
+	}
+	return *v.data.Line
+}
+
+func (v *LogEntry) SetLine(line string) {
+	v.data.Line = &line
+}
+
+func (v *LogEntry) HasStream() bool {
+	return v.data.Stream != nil
+}
+
+func (v *LogEntry) Stream() string {
+	if v.data.Stream == nil {
+		return ""
+	}
+	return *v.data.Stream
+}
+
+func (v *LogEntry) SetStream(stream string) {
+	v.data.Stream = &stream
+}
+
+func (v *LogEntry) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *LogEntry) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *LogEntry) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *LogEntry) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
 type appInfoAppInfoArgsData struct {
 	Application *string `cbor:"0,keyasint,omitempty" json:"application,omitempty"`
 }
@@ -595,4 +663,188 @@ func (v AppInfoClient) AppInfo(ctx context.Context, application string) (*AppInf
 	}
 
 	return &AppInfoClientAppInfoResults{client: v.Client, data: ret}, nil
+}
+
+type logsAppLogsArgsData struct {
+	Application *string             `cbor:"0,keyasint,omitempty" json:"application,omitempty"`
+	From        *standard.Timestamp `cbor:"1,keyasint,omitempty" json:"from,omitempty"`
+	Follow      *bool               `cbor:"2,keyasint,omitempty" json:"follow,omitempty"`
+}
+
+type LogsAppLogsArgs struct {
+	call *rpc.Call
+	data logsAppLogsArgsData
+}
+
+func (v *LogsAppLogsArgs) HasApplication() bool {
+	return v.data.Application != nil
+}
+
+func (v *LogsAppLogsArgs) Application() string {
+	if v.data.Application == nil {
+		return ""
+	}
+	return *v.data.Application
+}
+
+func (v *LogsAppLogsArgs) HasFrom() bool {
+	return v.data.From != nil
+}
+
+func (v *LogsAppLogsArgs) From() *standard.Timestamp {
+	return v.data.From
+}
+
+func (v *LogsAppLogsArgs) HasFollow() bool {
+	return v.data.Follow != nil
+}
+
+func (v *LogsAppLogsArgs) Follow() bool {
+	if v.data.Follow == nil {
+		return false
+	}
+	return *v.data.Follow
+}
+
+func (v *LogsAppLogsArgs) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *LogsAppLogsArgs) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *LogsAppLogsArgs) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *LogsAppLogsArgs) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type logsAppLogsResultsData struct {
+	Logs *[]*LogEntry `cbor:"0,keyasint,omitempty" json:"logs,omitempty"`
+}
+
+type LogsAppLogsResults struct {
+	call *rpc.Call
+	data logsAppLogsResultsData
+}
+
+func (v *LogsAppLogsResults) SetLogs(logs []*LogEntry) {
+	x := slices.Clone(logs)
+	v.data.Logs = &x
+}
+
+func (v *LogsAppLogsResults) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *LogsAppLogsResults) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *LogsAppLogsResults) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *LogsAppLogsResults) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type LogsAppLogs struct {
+	*rpc.Call
+	args    LogsAppLogsArgs
+	results LogsAppLogsResults
+}
+
+func (t *LogsAppLogs) Args() *LogsAppLogsArgs {
+	args := &t.args
+	if args.call != nil {
+		return args
+	}
+	args.call = t.Call
+	t.Call.Args(args)
+	return args
+}
+
+func (t *LogsAppLogs) Results() *LogsAppLogsResults {
+	results := &t.results
+	if results.call != nil {
+		return results
+	}
+	results.call = t.Call
+	t.Call.Results(results)
+	return results
+}
+
+type Logs interface {
+	AppLogs(ctx context.Context, state *LogsAppLogs) error
+}
+
+type reexportLogs struct {
+	client *rpc.Client
+}
+
+func (_ reexportLogs) AppLogs(ctx context.Context, state *LogsAppLogs) error {
+	panic("not implemented")
+}
+
+func (t reexportLogs) CapabilityClient() *rpc.Client {
+	return t.client
+}
+
+func AdaptLogs(t Logs) *rpc.Interface {
+	methods := []rpc.Method{
+		{
+			Name:          "appLogs",
+			InterfaceName: "Logs",
+			Index:         0,
+			Handler: func(ctx context.Context, call *rpc.Call) error {
+				return t.AppLogs(ctx, &LogsAppLogs{Call: call})
+			},
+		},
+	}
+
+	return rpc.NewInterface(methods, t)
+}
+
+type LogsClient struct {
+	*rpc.Client
+}
+
+func (c LogsClient) Export() Logs {
+	return reexportLogs{client: c.Client}
+}
+
+type LogsClientAppLogsResults struct {
+	client *rpc.Client
+	data   logsAppLogsResultsData
+}
+
+func (v *LogsClientAppLogsResults) HasLogs() bool {
+	return v.data.Logs != nil
+}
+
+func (v *LogsClientAppLogsResults) Logs() []*LogEntry {
+	if v.data.Logs == nil {
+		return nil
+	}
+	return *v.data.Logs
+}
+
+func (v LogsClient) AppLogs(ctx context.Context, application string, from *standard.Timestamp, follow bool) (*LogsClientAppLogsResults, error) {
+	args := LogsAppLogsArgs{}
+	args.data.Application = &application
+	args.data.From = from
+	args.data.Follow = &follow
+
+	var ret logsAppLogsResultsData
+
+	err := v.Client.Call(ctx, "appLogs", &args, &ret)
+	if err != nil {
+		return nil, err
+	}
+
+	return &LogsClientAppLogsResults{client: v.Client, data: ret}, nil
 }
