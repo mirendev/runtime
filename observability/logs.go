@@ -165,10 +165,21 @@ func (l *LogReader) Read(ctx context.Context, id string, opts ...LogReaderOption
 		var e LogEntry
 		err := rows.Scan(&e.Timestamp, &e.Stream, &e.Body)
 		if err != nil {
+			rows.Close()
 			return nil, err
 		}
 		entries = append(entries, e)
 	}
+
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return entries, nil
 
 	return entries, nil
 }
