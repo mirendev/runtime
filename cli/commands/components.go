@@ -84,7 +84,7 @@ func (c *Context) setupServerComponents(ctx context.Context, reg *asm.Registry) 
 	reg.Register("container_idle_timeout", time.Minute)
 
 	reg.Register("http_domain", "local.miren.run")
-	reg.Register("lookup_timeout", time.Second*5)
+	reg.Register("lookup_timeout", 5*time.Minute)
 
 	reg.Register("rollback_window", 2)
 
