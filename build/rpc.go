@@ -236,7 +236,7 @@ func (b *RPCBuilder) BuildFromTar(ctx context.Context, state *BuilderBuildFromTa
 	wg.Wait()
 
 	if importError != nil {
-		b.Log.Debug("error importing image", "app", name, "image", mrv.ImageName(), "error", err)
+		b.Log.Debug("error importing image", "app", name, "image", mrv.ImageName(), "error", importError)
 	}
 
 	b.Log.Info("clearing old version", "app", name, "new-ver", mrv.Version)
