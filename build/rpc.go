@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sync"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/moby/buildkit/client"
@@ -206,23 +208,35 @@ func (b *RPCBuilder) BuildFromTar(ctx context.Context, state *BuilderBuildFromTa
 		status.Send(ctx, so)
 	}
 
-	o, done, err := bk.Transform(ctx, tr, tos...)
+	var importError error
+
+	var wg sync.WaitGroup
+
+	err = bk.BuildImage(ctx, tr, func() (io.WriteCloser, error) {
+		r, w, err := os.Pipe()
+		if err != nil {
+			return nil, err
+		}
+
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			b.Log.Debug("importing tar into image", "app", name, "image", mrv.ImageName())
+			importError = b.ImportImporter.ImportImage(ctx, r, mrv.ImageName())
+			b.Log.Debug("finished importing image", "app", name, "image", mrv.ImageName(), "error", importError)
+		}()
+
+		return w, nil
+	}, tos...)
+
 	if err != nil {
 		return err
 	}
 
-	b.Log.Debug("importing tar into image", "app", name, "image", mrv.ImageName())
+	wg.Wait()
 
-	err = b.ImportImporter.ImportImage(ctx, o, mrv.ImageName())
-	if err != nil {
-		return err
-	}
-
-	select {
-	case <-done:
-	// ok
-	case <-ctx.Done():
-		return ctx.Err()
+	if importError != nil {
+		b.Log.Debug("error importing image", "app", name, "image", mrv.ImageName(), "error", err)
 	}
 
 	b.Log.Info("clearing old version", "app", name, "new-ver", mrv.Version)

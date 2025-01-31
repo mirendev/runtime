@@ -70,6 +70,7 @@ func (l *LaunchBuildkit) Launch(ctx context.Context, lo ...LaunchOption) (*Runni
 	id, err := l.CR.RunContainer(ctx, &run.ContainerConfig{
 		App:        "internal",
 		Image:      "ghcr.io/mirendev/buildkit:latest",
+		LogEntity:  "buildkit",
 		Endpoint:   ec,
 		Privileged: true,
 	})
