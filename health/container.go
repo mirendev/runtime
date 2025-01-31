@@ -40,8 +40,8 @@ func (ep *Endpoint) Ready() bool {
 }
 
 type ContainerStatus struct {
-	Running bool
-	Labels  map[string]string
+	Status containerd.ProcessStatus
+	Labels map[string]string
 
 	Endpoints map[string]*Endpoint
 }
@@ -174,7 +174,7 @@ func (c *ContainerMonitor) refreshStatus(ctx context.Context) {
 		c.mu.Lock()
 
 		if cs, ok := c.status[cont.ID()]; ok {
-			cs.Running = status.Status == containerd.Running
+			cs.Status = status.Status
 		} else {
 			// Labels aren't dynamic, so we'll just fetch them once
 			lbls, err := cont.Labels(ctx)
@@ -183,7 +183,7 @@ func (c *ContainerMonitor) refreshStatus(ctx context.Context) {
 			}
 
 			c.status[cont.ID()] = &ContainerStatus{
-				Running:   status.Status == containerd.Running,
+				Status:    status.Status,
 				Labels:    lbls,
 				Endpoints: setupEndpoints(lbls),
 			}
@@ -247,8 +247,9 @@ func (c *ContainerMonitor) processEvent(ctx context.Context, ev *events.Envelope
 		defer c.mu.Unlock()
 
 		if status, ok := c.status[e.ContainerID]; ok {
-			c.Log.Info("task not running", "id", e.ContainerID)
-			status.Running = false
+			c.Log.Info("task has exitted", "id", e.ContainerID,
+				"status", e.ExitStatus, "exited-at", e.ExitedAt.AsTime())
+			status.Status = containerd.Stopped
 		}
 
 		c.cond.Broadcast()
@@ -258,7 +259,7 @@ func (c *ContainerMonitor) processEvent(ctx context.Context, ev *events.Envelope
 
 		if status, ok := c.status[e.ContainerID]; ok {
 			c.Log.Info("task started", "id", e.ContainerID)
-			status.Running = true
+			status.Status = containerd.Running
 		}
 
 		c.cond.Broadcast()
@@ -272,8 +273,15 @@ func (c *ContainerMonitor) WaitReady(ctx context.Context, id string) error {
 	for {
 		status, ok := c.status[id]
 
-		if ok && status.Running {
-			return nil
+		if ok {
+			switch status.Status {
+			case containerd.Running:
+				return nil
+
+			case containerd.Stopped, containerd.Paused:
+				c.Log.Warn("container has stopped while waiting to start", "status", status.Status)
+				return fmt.Errorf("waiting for container to run, but container has stopped (%s)", status.Status)
+			}
 		}
 
 		c.cond.Wait()
@@ -303,17 +311,24 @@ func (c *ContainerMonitor) WaitForReady(ctx context.Context, id string) error {
 	for err == nil {
 		status, ok := c.status[id]
 
-		if ok && status.Running {
-			var stillWaiting bool
+		if ok {
 
-			for _, ep := range status.Endpoints {
-				if !ep.Ready() {
-					stillWaiting = true
+			switch status.Status {
+			case containerd.Running:
+				var stillWaiting bool
+
+				for _, ep := range status.Endpoints {
+					if !ep.Ready() {
+						stillWaiting = true
+					}
 				}
-			}
 
-			if !stillWaiting {
-				return nil
+				if !stillWaiting {
+					return nil
+				}
+			case containerd.Stopped, containerd.Paused:
+				c.Log.Warn("container has stopped while waiting to start", "status", status.Status)
+				return fmt.Errorf("waiting for container to run, but container has stopped (%s)", status.Status)
 			}
 		}
 
@@ -344,11 +359,17 @@ func (c *ContainerMonitor) WaitForPortActive(ctx context.Context, id string, por
 	for err == nil {
 		status, ok := c.status[id]
 
-		if ok && status.Running {
-			for _, ep := range status.Endpoints {
-				if ep.Port == port && ep.Ready() {
-					return nil
+		if ok {
+			switch status.Status {
+			case containerd.Running:
+				for _, ep := range status.Endpoints {
+					if ep.Port == port && ep.Ready() {
+						return nil
+					}
 				}
+			case containerd.Stopped, containerd.Paused:
+				c.Log.Warn("container has stopped while waiting to start", "status", status.Status)
+				return fmt.Errorf("waiting for container to run, but container has stopped (%s)", status.Status)
 			}
 		}
 
