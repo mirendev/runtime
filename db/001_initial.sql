@@ -39,6 +39,16 @@ CREATE TABLE application_versions (
     UNIQUE(application_id, version)
 );
 
+CREATE TABLE http_routes (
+    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    application_id BIGINT NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
+    host TEXT NOT NULL,
+
+    UNIQUE(host)
+);
+
 INSERT INTO organizations (name, external_id) VALUES ('local', 'local');
 
 ---- create above / drop below ----

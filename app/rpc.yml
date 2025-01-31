@@ -49,3 +49,9 @@ interfaces:
             type: Configuration
           - name: versionId
             type: string
+      - name: setHost
+        parameters:
+          - name: app
+            type: string
+          - name: host
+            type: string

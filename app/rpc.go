@@ -107,3 +107,13 @@ func (r *RPCCrud) GetConfiguration(ctx context.Context, state *CrudGetConfigurat
 
 	return nil
 }
+
+func (r *RPCCrud) SetHost(ctx context.Context, state *CrudSetHost) error {
+	name := state.Args().App()
+	ac, err := r.Access.LoadApp(ctx, name)
+	if err != nil {
+		return err
+	}
+
+	return r.Access.SetApplicationHost(ctx, ac, state.Args().Host())
+}

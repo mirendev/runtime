@@ -364,10 +364,17 @@ func (g *Generator) generateServerStructs(f *j.File, t *DescInterface) error {
 						"json": p.Name + ",omitempty",
 					})
 				} else if p.Type == "list" {
-					gr.Id(capitalize(p.Name)).Op("*").Index().Id(p.Element).Tag(map[string]string{
-						"cbor": fmt.Sprintf("%d,keyasint,omitempty", idx),
-						"json": p.Name + ",omitempty",
-					})
+					if g.ti(p.Element).isMessage {
+						gr.Id(capitalize(p.Name)).Op("*").Index().Op("*").Id(p.Element).Tag(map[string]string{
+							"cbor": fmt.Sprintf("%d,keyasint,omitempty", idx),
+							"json": p.Name + ",omitempty",
+						})
+					} else {
+						gr.Id(capitalize(p.Name)).Op("*").Index().Id(p.Element).Tag(map[string]string{
+							"cbor": fmt.Sprintf("%d,keyasint,omitempty", idx),
+							"json": p.Name + ",omitempty",
+						})
+					}
 				} else {
 					gr.Id(capitalize(p.Name)).Op("*").Add(g.properType(p.Type)).Tag(map[string]string{
 						"cbor": fmt.Sprintf("%d,keyasint,omitempty", idx),
@@ -390,9 +397,10 @@ func (g *Generator) generateServerStructs(f *j.File, t *DescInterface) error {
 			g.writeForField(f,
 				&DescType{Type: tn + "Results", Generic: t.Generic},
 				&DescField{
-					Name:  p.Name,
-					Type:  p.Type,
-					Index: idx,
+					Name:    p.Name,
+					Type:    p.Type,
+					Element: p.Element,
+					Index:   idx,
 				},
 			)
 		}
@@ -658,14 +666,25 @@ func (g *Generator) writeForField(f *j.File, t *DescType, field *DescField) {
 		)
 
 	case "list":
-		f.Func().Params(
-			j.Id("v").Op("*").Add(recv),
-		).Id("Set"+fname).Params(
-			j.Id(pname).Index().Id(field.Element),
-		).Block(
-			j.Id("x").Op(":=").Id("slices").Dot("Clone").Call(j.Id(pname)),
-			j.Id("v").Dot("data").Dot(name).Op("=").Op("&").Id("x"),
-		)
+		if g.ti(field.Element).isMessage {
+			f.Func().Params(
+				j.Id("v").Op("*").Add(recv),
+			).Id("Set"+fname).Params(
+				j.Id(pname).Index().Op("*").Id(field.Element),
+			).Block(
+				j.Id("x").Op(":=").Id("slices").Dot("Clone").Call(j.Id(pname)),
+				j.Id("v").Dot("data").Dot(name).Op("=").Op("&").Id("x"),
+			)
+		} else {
+			f.Func().Params(
+				j.Id("v").Op("*").Add(recv),
+			).Id("Set"+fname).Params(
+				j.Id(pname).Index().Id(field.Element),
+			).Block(
+				j.Id("x").Op(":=").Id("slices").Dot("Clone").Call(j.Id(pname)),
+				j.Id("v").Dot("data").Dot(name).Op("=").Op("&").Id("x"),
+			)
+		}
 
 	default:
 		if g.ti(field.Type).isInterface {
@@ -1262,9 +1281,10 @@ func (g *Generator) generateClient(f *j.File, i *DescInterface) error {
 				g.readForField(f,
 					&DescType{Type: tn + "Results", Generic: i.Generic},
 					&DescField{
-						Name:  p.Name,
-						Type:  p.Type,
-						Index: 0,
+						Name:    p.Name,
+						Type:    p.Type,
+						Element: p.Element,
+						Index:   0,
 					})
 			}
 			f.Line()

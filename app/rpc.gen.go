@@ -345,6 +345,77 @@ func (v *CrudGetConfigurationResults) UnmarshalJSON(data []byte) error {
 	return json.Unmarshal(data, &v.data)
 }
 
+type crudSetHostArgsData struct {
+	App  *string `cbor:"0,keyasint,omitempty" json:"app,omitempty"`
+	Host *string `cbor:"1,keyasint,omitempty" json:"host,omitempty"`
+}
+
+type CrudSetHostArgs struct {
+	call *rpc.Call
+	data crudSetHostArgsData
+}
+
+func (v *CrudSetHostArgs) HasApp() bool {
+	return v.data.App != nil
+}
+
+func (v *CrudSetHostArgs) App() string {
+	if v.data.App == nil {
+		return ""
+	}
+	return *v.data.App
+}
+
+func (v *CrudSetHostArgs) HasHost() bool {
+	return v.data.Host != nil
+}
+
+func (v *CrudSetHostArgs) Host() string {
+	if v.data.Host == nil {
+		return ""
+	}
+	return *v.data.Host
+}
+
+func (v *CrudSetHostArgs) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *CrudSetHostArgs) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *CrudSetHostArgs) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *CrudSetHostArgs) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type crudSetHostResultsData struct{}
+
+type CrudSetHostResults struct {
+	call *rpc.Call
+	data crudSetHostResultsData
+}
+
+func (v *CrudSetHostResults) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *CrudSetHostResults) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *CrudSetHostResults) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *CrudSetHostResults) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
 type CrudNew struct {
 	*rpc.Call
 	args    CrudNewArgs
@@ -423,10 +494,37 @@ func (t *CrudGetConfiguration) Results() *CrudGetConfigurationResults {
 	return results
 }
 
+type CrudSetHost struct {
+	*rpc.Call
+	args    CrudSetHostArgs
+	results CrudSetHostResults
+}
+
+func (t *CrudSetHost) Args() *CrudSetHostArgs {
+	args := &t.args
+	if args.call != nil {
+		return args
+	}
+	args.call = t.Call
+	t.Call.Args(args)
+	return args
+}
+
+func (t *CrudSetHost) Results() *CrudSetHostResults {
+	results := &t.results
+	if results.call != nil {
+		return results
+	}
+	results.call = t.Call
+	t.Call.Results(results)
+	return results
+}
+
 type Crud interface {
 	New(ctx context.Context, state *CrudNew) error
 	SetConfiguration(ctx context.Context, state *CrudSetConfiguration) error
 	GetConfiguration(ctx context.Context, state *CrudGetConfiguration) error
+	SetHost(ctx context.Context, state *CrudSetHost) error
 }
 
 type reexportCrud struct {
@@ -442,6 +540,10 @@ func (_ reexportCrud) SetConfiguration(ctx context.Context, state *CrudSetConfig
 }
 
 func (_ reexportCrud) GetConfiguration(ctx context.Context, state *CrudGetConfiguration) error {
+	panic("not implemented")
+}
+
+func (_ reexportCrud) SetHost(ctx context.Context, state *CrudSetHost) error {
 	panic("not implemented")
 }
 
@@ -473,6 +575,14 @@ func AdaptCrud(t Crud) *rpc.Interface {
 			Index:         0,
 			Handler: func(ctx context.Context, call *rpc.Call) error {
 				return t.GetConfiguration(ctx, &CrudGetConfiguration{Call: call})
+			},
+		},
+		{
+			Name:          "setHost",
+			InterfaceName: "Crud",
+			Index:         0,
+			Handler: func(ctx context.Context, call *rpc.Call) error {
+				return t.SetHost(ctx, &CrudSetHost{Call: call})
 			},
 		},
 	}
@@ -585,4 +695,24 @@ func (v CrudClient) GetConfiguration(ctx context.Context, app string) (*CrudClie
 	}
 
 	return &CrudClientGetConfigurationResults{client: v.Client, data: ret}, nil
+}
+
+type CrudClientSetHostResults struct {
+	client *rpc.Client
+	data   crudSetHostResultsData
+}
+
+func (v CrudClient) SetHost(ctx context.Context, app string, host string) (*CrudClientSetHostResults, error) {
+	args := CrudSetHostArgs{}
+	args.data.App = &app
+	args.data.Host = &host
+
+	var ret crudSetHostResultsData
+
+	err := v.Client.Call(ctx, "setHost", &args, &ret)
+	if err != nil {
+		return nil, err
+	}
+
+	return &CrudClientSetHostResults{client: v.Client, data: ret}, nil
 }
