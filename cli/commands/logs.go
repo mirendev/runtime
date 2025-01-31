@@ -9,6 +9,8 @@ import (
 
 func Logs(ctx *Context, opts struct {
 	AppCentric
+
+	Last *time.Duration `short:"l" long:"last" description:"Show logs from the last duration"`
 }) error {
 	cl, err := ctx.RPCClient("logs")
 	if err != nil {
@@ -24,10 +26,15 @@ func Logs(ctx *Context, opts struct {
 		"user-oob": "U",
 	}
 
-	start := time.Now()
-	start = time.Date(start.Year(), start.Month(), start.Day(), 0, 0, 0, 0, start.Location())
+	var ts *standard.Timestamp
 
-	ts := standard.ToTimestamp(start)
+	if opts.Last != nil {
+		ts = standard.ToTimestamp(time.Now().Add(-*opts.Last))
+	} else {
+		start := time.Now()
+		start = time.Date(start.Year(), start.Month(), start.Day(), 0, 0, 0, 0, start.Location())
+		ts = standard.ToTimestamp(start)
+	}
 
 	for {
 		res, err := ac.AppLogs(ctx, opts.App, ts, false)
