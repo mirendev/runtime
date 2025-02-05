@@ -5,13 +5,18 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/tls"
+	"fmt"
 	"log/slog"
 	"net"
 	"os"
+	"os/exec"
+	"strings"
 	"time"
 
+	"github.com/davecgh/go-spew/spew"
 	"github.com/quic-go/quic-go"
 	"github.com/quic-go/quic-go/http3"
+	"miren.dev/runtime/pkg/packet"
 	"miren.dev/runtime/pkg/slogfmt"
 )
 
@@ -38,25 +43,36 @@ func init() {
 	}
 
 	DefaultTransport.QUICConfig = &DefaultQUICConfig
-
 }
 
-type State struct {
-	top       context.Context
-	log       *slog.Logger
-	transport *quic.Transport
+type StateCommon struct {
+	top context.Context
+	log *slog.Logger
 
-	tlsCfg *tls.Config
+	opts *stateOptions
 
-	server *Server
-	hs     *http3.Server
-	li     *quic.EarlyListener
-	cert   tls.Certificate
+	serverTlsCfg *tls.Config
+	clientTlsCfg *tls.Config
+	cert         tls.Certificate
 
 	privkey ed25519.PrivateKey
 	pubkey  ed25519.PublicKey
 
 	qc quic.Config
+}
+
+type State struct {
+	*StateCommon
+
+	transport      *quic.Transport
+	localTransport *quic.Transport
+	localRemote    net.Addr
+
+	server *Server
+	hs     *http3.Server
+	li     *quic.EarlyListener
+
+	localMP *packet.PacketConnMultiplex
 }
 
 func (s *State) ListenAddr() string {
@@ -78,6 +94,9 @@ type stateOptions struct {
 
 	level slog.Level
 	log   *slog.Logger
+
+	serverLocalAddr string
+	clientLocalAddr string
 }
 
 type StateOption func(*stateOptions)
@@ -108,6 +127,18 @@ func WithLogger(log *slog.Logger) StateOption {
 func WithLogLevel(level slog.Level) StateOption {
 	return func(o *stateOptions) {
 		o.level = level
+	}
+}
+
+func WithLocalServer(addr string) StateOption {
+	return func(o *stateOptions) {
+		o.serverLocalAddr = addr
+	}
+}
+
+func WithLocalConnect(addr string) StateOption {
+	return func(o *stateOptions) {
+		o.clientLocalAddr = addr
 	}
 }
 
@@ -153,13 +184,16 @@ func NewState(ctx context.Context, opts ...StateOption) (*State, error) {
 	}
 
 	s := &State{
-		top:       ctx,
-		log:       so.log,
-		transport: &quic.Transport{Conn: udpConn},
-		tlsCfg:    tlsCfg,
+		StateCommon: &StateCommon{
+			top:          ctx,
+			log:          so.log,
+			clientTlsCfg: tlsCfg,
+			privkey:      priv,
+			pubkey:       pub,
+		},
+
 		server:    newServer(),
-		privkey:   priv,
-		pubkey:    pub,
+		transport: &quic.Transport{Conn: udpConn},
 	}
 
 	qc := quic.Config{
@@ -177,6 +211,18 @@ func NewState(ctx context.Context, opts ...StateOption) (*State, error) {
 		return nil, err
 	}
 
+	err = s.setupLocal(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	if so.serverLocalAddr != "" {
+		err := s.startLocalListener(ctx, so.serverLocalAddr)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	return s, nil
 }
 
@@ -184,7 +230,7 @@ func (s *State) Server() *Server {
 	return s.server
 }
 
-func (s *State) setupServer(so *stateOptions) error {
+func (s *State) setupServerTls(so *stateOptions) error {
 	var (
 		cert tls.Certificate
 		err  error
@@ -210,7 +256,18 @@ func (s *State) setupServer(so *stateOptions) error {
 		NextProtos:   []string{http3.NextProtoH3},
 	}
 
-	ec, err := s.transport.ListenEarly(tlsCfg, &s.qc)
+	s.serverTlsCfg = tlsCfg
+
+	return nil
+}
+
+func (s *State) setupServer(so *stateOptions) error {
+	err := s.setupServerTls(so)
+	if err != nil {
+		return err
+	}
+
+	ec, err := s.transport.ListenEarly(s.serverTlsCfg, &s.qc)
 	if err != nil {
 		return err
 	}
@@ -229,7 +286,7 @@ func (s *State) startListener(ctx context.Context, so *stateOptions) error {
 
 	serv := &http3.Server{
 		Handler:   s.server,
-		TLSConfig: s.tlsCfg,
+		TLSConfig: s.clientTlsCfg,
 		Logger:    s.log.With("module", "http3"),
 	}
 
@@ -255,31 +312,67 @@ func (s *State) Close() error {
 }
 
 func (s *State) Connect(remote string, name string) (*Client, error) {
-	c := &Client{
-		State:  s,
-		remote: remote,
+	var (
+		client *Client
+		err    error
+	)
+	if strings.HasPrefix(remote, "unix:") {
+		client, err = s.connectLocal(strings.TrimPrefix(remote, "unix:"))
+		if err != nil {
+			return nil, err
+		}
+	} else if remote == "dial-stdio" {
+		shstr := os.Getenv("MIREN_DIAL_PROGRAM")
+		if shstr == "" {
+			return nil, fmt.Errorf("MIREN_DIAL_PROGRAM not set")
+		}
+
+		s.log.Debug("dialing stdio", "command", shstr)
+
+		cmd := exec.Command("sh", "-c", shstr)
+		cmd.Env = os.Environ()
+
+		client, err = s.connectProcess(cmd)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		client = &Client{
+			State:     s,
+			transport: s.transport,
+			remote:    remote,
+		}
 	}
 
-	err := c.resolveCapability(name)
+	err = client.resolveCapability(name)
 	if err != nil {
-		c.log.Error("error resolving capability", "error", err)
+		spew.Config.DisableMethods = true
+		spew.Dump(err)
+		s.log.Error("error resolving capability", "error", err)
 		return nil, err
 	}
 
-	err = c.sendIdentity(c.top)
+	err = client.sendIdentity(s.top)
 	if err != nil {
-		c.log.Error("error sending identity", "error", err)
+		s.log.Error("error sending identity", "error", err)
 		return nil, err
 	}
 
-	return c, nil
+	return client, nil
 }
 
 func (s *State) NewClient(capa *Capability) *Client {
+	transport := s.transport
+
+	if strings.HasPrefix(capa.Address, "unix:") {
+		transport = s.localTransport
+	}
+
 	return &Client{
-		State:  s,
-		capa:   capa,
-		oid:    capa.OID,
-		remote: capa.Address,
+		State:     s,
+		transport: transport,
+		capa:      capa,
+		oid:       capa.OID,
+		remote:    capa.Address,
 	}
 }

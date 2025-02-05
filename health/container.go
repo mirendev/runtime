@@ -150,8 +150,6 @@ func (c *ContainerMonitor) Populated() error {
 }
 
 func (c *ContainerMonitor) refreshStatus(ctx context.Context) {
-	c.Log.Debug("refreshing container status")
-
 	ctx = namespaces.WithNamespace(ctx, c.Namespace)
 
 	containers, err := c.CC.Containers(ctx)

@@ -11,6 +11,7 @@ func Server(ctx *Context, opts struct {
 	TempDir           string `long:"temp-dir" description:"Directory to store temporary files" asm:"tempdir" type:"path"`
 	RunscBinary       string `long:"runsc-binary" description:"Path to the runsc binary" asm:"runsc_binary" type:"path"`
 	Id                string `long:"id" description:"Unique identifier for the server" asm:"server-id"`
+	Local             string `long:"local" description:"Run the server locally" asm:"local-path"`
 }) error {
 	var server server.Server
 

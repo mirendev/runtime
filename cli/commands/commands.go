@@ -38,6 +38,10 @@ func AllCommands() map[string]cli.CommandFactory {
 			return Infer("app new", "Create a new application", AppNew), nil
 		},
 
+		"internal dial-stdio": func() (cli.Command, error) {
+			return Infer("internal dial-stdio", "Dial a stdio connection", DialStdio), nil
+		},
+
 		"debug ctr nuke": func() (cli.Command, error) {
 			return Infer("debug ctr nuke", "Nuke a containerd namespace", CtrNuke), nil
 		},

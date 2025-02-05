@@ -37,7 +37,7 @@ func init() {
 type Server struct {
 	state *State
 
-	mu       sync.Mutex
+	mu       *sync.Mutex
 	objects  map[OID]*heldCapability
 	registry map[string]OID
 
@@ -75,6 +75,7 @@ func (h *heldCapability) Close() error {
 
 func newServer() *Server {
 	s := &Server{
+		mu:             new(sync.Mutex),
 		objects:        make(map[OID]*heldCapability),
 		registry:       make(map[string]OID),
 		persistent:     make(map[string]*Interface),
@@ -84,6 +85,13 @@ func newServer() *Server {
 	s.setupMux()
 
 	return s
+}
+
+func (s *Server) Clone(state *State) *Server {
+	ns := *s
+	ns.state = state
+
+	return &ns
 }
 
 type Method struct {
@@ -130,9 +138,10 @@ func (s *Server) NewClient(capa *Capability) *Client {
 	// different than the address that this server sees, likely due to NAT.
 
 	return &Client{
-		State:  s.state,
-		oid:    capa.OID,
-		remote: capa.Address,
+		State:     s.state,
+		transport: s.state.transport,
+		oid:       capa.OID,
+		remote:    capa.Address,
 	}
 }
 

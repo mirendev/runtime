@@ -23,6 +23,8 @@ type Server struct {
 	Log  *slog.Logger
 	Port int `asm:"server_port"`
 
+	LocalPath string `asm:"local-path,optional"`
+
 	Build   *build.RPCBuilder
 	Shell   *shell.RPCShell
 	AppCrud *app.RPCCrud
@@ -73,10 +75,17 @@ func (s *Server) Shutdown() {
 func (s *Server) Run(ctx context.Context) error {
 	defer s.Shutdown()
 
-	ss, err := rpc.NewState(ctx, rpc.WithSkipVerify,
+	opts := []rpc.StateOption{
+		rpc.WithSkipVerify,
 		rpc.WithBindAddr(fmt.Sprintf("127.0.0.1:%d", s.Port)),
 		rpc.WithLogger(s.Log),
-	)
+	}
+
+	if s.LocalPath != "" {
+		opts = append(opts, rpc.WithLocalServer(s.LocalPath))
+	}
+
+	ss, err := rpc.NewState(ctx, opts...)
 	if err != nil {
 		return err
 	}
