@@ -16,6 +16,7 @@ import (
 	"github.com/fxamacker/cbor/v2"
 	"github.com/mr-tron/base58"
 	"github.com/pkg/errors"
+	"github.com/quic-go/quic-go"
 	"github.com/quic-go/quic-go/http3"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/propagation"
@@ -24,9 +25,11 @@ import (
 type Client struct {
 	*State
 
-	capa   *Capability
-	remote string
-	oid    OID
+	transport  *quic.Transport
+	capa       *Capability
+	remote     string
+	remoteAddr net.Addr
+	oid        OID
 
 	// This is the remote address that the server
 	// observes this client as coming from. We use this address
@@ -279,12 +282,18 @@ func (c *Client) conn(ctx context.Context) (*http3.ClientConn, error) {
 		return c.cachedConn.hc, nil
 	}
 
-	udpAddr, err := net.ResolveUDPAddr("udp", c.remote)
-	if err != nil {
-		return nil, err
+	addr := c.remoteAddr
+
+	if addr == nil {
+		udpAddr, err := net.ResolveUDPAddr("udp", c.remote)
+		if err != nil {
+			return nil, err
+		}
+
+		addr = udpAddr
 	}
 
-	ec, err := c.transport.DialEarly(context.Background(), udpAddr, c.tlsCfg, &DefaultQUICConfig)
+	ec, err := c.transport.DialEarly(ctx, addr, c.clientTlsCfg, &DefaultQUICConfig)
 	if err != nil {
 		return nil, err
 	}

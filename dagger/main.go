@@ -49,6 +49,8 @@ func init() {
 func (m *Runtime) WithServices(dir *dagger.Directory) *dagger.Container {
 	ch := dag.Container().
 		From("clickhouse/clickhouse-server:latest").
+		WithEnvVariable("CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT", "1").
+		WithEnvVariable("CLICKHOUSE_PASSWORD", "default").
 		WithExposedPort(9000).
 		AsService()
 

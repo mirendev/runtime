@@ -95,19 +95,24 @@ func Registry(extra ...func(*asm.Registry)) (*asm.Registry, func()) {
 
 	r.Register("log", log)
 
-	r.ProvideName("clickhouse", func() *sql.DB {
+	r.ProvideName("clickhouse", func(opts struct {
+		Log *slog.Logger
+	}) *sql.DB {
 		return clickhouse.OpenDB(&clickhouse.Options{
 			Addr: []string{"clickhouse:9000"},
 			Auth: clickhouse.Auth{
 				Database: "default",
 				Username: "default",
-				Password: "",
+				Password: "default",
 			},
 			DialTimeout: time.Second * 30,
 			Compression: &clickhouse.Compression{
 				Method: clickhouse.CompressionLZ4,
 			},
 			Debug: true,
+			Debugf: func(format string, v ...interface{}) {
+				opts.Log.Debug(fmt.Sprintf(format, v...))
+			},
 		})
 	})
 
