@@ -45,5 +45,9 @@ func AllCommands() map[string]cli.CommandFactory {
 		"debug ctr nuke": func() (cli.Command, error) {
 			return Infer("debug ctr nuke", "Nuke a containerd namespace", CtrNuke), nil
 		},
+
+		"debug colors": func() (cli.Command, error) {
+			return Infer("debug colors", "Print some colors", Colors), nil
+		},
 	}
 }

@@ -13,10 +13,13 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/moby/buildkit/client"
+
 	"github.com/moby/buildkit/util/progress/progresswriter"
 
 	"miren.dev/runtime/build"
+	"miren.dev/runtime/pkg/color"
 	"miren.dev/runtime/pkg/colortheory"
+	"miren.dev/runtime/pkg/progress/progressui"
 	"miren.dev/runtime/pkg/rpc/stream"
 )
 
@@ -135,6 +138,8 @@ func Deploy(ctx *Context, opts struct {
 					}
 				}
 
+				p.Send(&status)
+
 				return nil
 			case "message":
 				msg := update.Message()
@@ -153,9 +158,20 @@ func Deploy(ctx *Context, opts struct {
 
 	}
 
-	ctx.Printf("\nUpdated version %s deployed. All traffic moved to new version.\n", results.Version())
+	ctx.Printf("\n\nUpdated version %s deployed. All traffic moved to new version.\n", results.Version())
 
 	return nil
+}
+
+var liveFaint lipgloss.Style
+
+func init() {
+	lf := color.LiveFaint()
+	if lf == "" {
+		liveFaint = lipgloss.NewStyle().Faint(true)
+	} else {
+		liveFaint = lipgloss.NewStyle().Foreground(lipgloss.Color(lf))
+	}
 }
 
 type transfer struct {
@@ -167,6 +183,7 @@ type transferUpdate struct {
 }
 
 type deployInfo struct {
+	cancel  func()
 	spinner spinner.Model
 
 	message string
@@ -175,6 +192,9 @@ type deployInfo struct {
 	transfers chan transferUpdate
 	prog      progress.Model
 	parts     int
+
+	showProgress bool
+	bp           tea.Model
 }
 
 var (
@@ -235,11 +255,13 @@ func initialModel(update chan string, transfers chan transferUpdate) *deployInfo
 		update:    update,
 		transfers: transfers,
 		prog:      p,
+		bp:        progressui.TeaModel(),
 	}
 }
 
 func (m *deployInfo) Init() tea.Cmd {
 	return tea.Batch(
+		m.bp.Init(),
 		m.spinner.Tick,
 		func() tea.Msg {
 			return updateMsg{msg: <-m.update}
@@ -258,12 +280,23 @@ type updateMsg struct {
 type tickMsg struct{}
 
 func (m *deployInfo) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	var (
+		cmd  tea.Cmd
+		cmds []tea.Cmd
+	)
+
+	m.bp, cmd = m.bp.Update(msg)
+	if cmd != nil {
+		cmds = append(cmds, cmd)
+	}
+
 	switch msg := msg.(type) {
 	case updateMsg:
 		m.message = msg.msg
-		return m, func() tea.Msg {
+
+		cmds = append(cmds, func() tea.Msg {
 			return updateMsg{msg: <-m.update}
-		}
+		})
 	case transferUpdate:
 		var total, current int64
 		for _, t := range msg.transfers {
@@ -274,23 +307,34 @@ func (m *deployInfo) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.parts = len(msg.transfers)
 
 		cmd := m.prog.SetPercent(float64(current) / float64(total))
-		return m,
-			tea.Batch(cmd,
-				func() tea.Msg {
-					return <-m.transfers
-				},
-			)
+		cmds = append(cmds,
+			cmd,
+			func() tea.Msg {
+				return <-m.transfers
+			})
 	case progress.FrameMsg:
 		p, cmd := m.prog.Update(msg)
 		m.prog = p.(progress.Model)
-		return m, cmd
+
+		if cmd != nil {
+			cmds = append(cmds, cmd)
+		}
 	case spinner.TickMsg:
 		var cmd tea.Cmd
 		m.spinner, cmd = m.spinner.Update(msg)
-		return m, cmd
-	default:
-		return m, nil
+		if cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+	case tea.KeyMsg:
+		switch msg.Type {
+		case tea.KeyEsc:
+			m.showProgress = false
+		case tea.KeyEnter:
+			m.showProgress = !m.showProgress
+		}
 	}
+
+	return m, tea.Batch(cmds...)
 }
 
 var deployPrefixStyle = lipgloss.NewStyle().Faint(true)
@@ -298,5 +342,18 @@ var deployPrefixStyle = lipgloss.NewStyle().Faint(true)
 func (m *deployInfo) View() string {
 	fetch := deployPrefixStyle.Render(fmt.Sprintf("Fetching %d items:", m.parts))
 
-	return fmt.Sprintf("  %s %s...\n      %s %s\n", m.spinner.View(), m.message, fetch, m.prog.View())
+	str := fmt.Sprintf("  %s %s...\n      %s %s", m.spinner.View(), m.message, fetch, m.prog.View())
+
+	if !m.showProgress {
+		return lipgloss.JoinVertical(lipgloss.Top,
+			str,
+			liveFaint.Render("      [enter: explain]"),
+		)
+	}
+
+	return lipgloss.JoinVertical(lipgloss.Top,
+		str,
+		m.bp.View(),
+		liveFaint.Render("      [enter: hide explain]"),
+	)
 }
