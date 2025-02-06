@@ -384,6 +384,9 @@ func (c *Client) Call(ctx context.Context, method string, args, result any) erro
 	}
 
 	err = rs.Close()
+	if err != nil {
+		return err
+	}
 
 	num1xx := 0               // number of informational 1xx headers received
 	const max1xxResponses = 5 // arbitrary bound on number of informational responses
