@@ -5,7 +5,6 @@ import (
 	"os"
 	"strings"
 
-	"github.com/davecgh/go-spew/spew"
 	"github.com/lucasb-eyer/go-colorful"
 	"github.com/muesli/termenv"
 	"golang.org/x/sys/unix"
@@ -22,8 +21,6 @@ func Background() string {
 	if err != nil {
 		return ""
 	}
-
-	spew.Dump(bgc)
 
 	rgb := termenv.ConvertToRGB(bgc)
 
@@ -148,6 +145,16 @@ func xTermColor(s string) (termenv.RGBColor, error) {
 	s = strings.TrimPrefix(s, prefix)
 
 	h := strings.Split(s, "/")
+	if len(h) != 3 {
+		return termenv.RGBColor(""), termenv.ErrInvalidColor
+	}
+
+	for _, part := range h {
+		if len(part) < 2 {
+			return termenv.RGBColor(""), termenv.ErrInvalidColor
+		}
+	}
+
 	hex := fmt.Sprintf("#%s%s%s", h[0][:2], h[1][:2], h[2][:2])
 	return termenv.RGBColor(hex), nil
 }
@@ -160,7 +167,7 @@ func readNextByte(o *termenv.Output) (byte, error) {
 	}
 
 	if n == 0 {
-		panic("read returned no data")
+		return 0, fmt.Errorf("read returned no data")
 	}
 
 	return b[0], nil
