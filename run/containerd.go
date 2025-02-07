@@ -2,8 +2,11 @@ package run
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
+	"os"
 	"os/exec"
+	"path/filepath"
 
 	"github.com/containerd/containerd/api/types/runc/options"
 	containerd "github.com/containerd/containerd/v2/client"
@@ -23,6 +26,10 @@ type ContainerRunner struct {
 	Namespace   string `asm:"namespace"`
 	RunscBinary string `asm:"runsc_binary,optional"`
 	Clickhouse  string `asm:"clickhouse-address,optional"`
+
+	NetServ *network.ServiceManager
+
+	Tempdir string `asm:"tempdir"`
 }
 
 func (c *ContainerRunner) Populated() error {
@@ -103,6 +110,21 @@ func (c *ContainerRunner) RunContainer(ctx context.Context, config *ContainerCon
 	return config.Id, nil
 }
 
+func (c *ContainerRunner) writeResolve(path string, cfg *ContainerConfig) error {
+	f, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+
+	defer f.Close()
+
+	for _, addr := range cfg.Endpoint.Bridge.Addresses {
+		fmt.Fprintf(f, "nameserver %s\n", addr.Addr().String())
+	}
+
+	return nil
+}
+
 func (c *ContainerRunner) buildSpec(ctx context.Context, config *ContainerConfig) ([]containerd.NewContainerOpts, error) {
 	img, err := c.CC.GetImage(ctx, config.Image)
 	if err != nil {
@@ -136,6 +158,15 @@ func (c *ContainerRunner) buildSpec(ctx context.Context, config *ContainerConfig
 		lbls["miren.dev/static_dir"] = config.StaticDir
 	}
 
+	tmpDir := filepath.Join(c.Tempdir, "containerd", config.Id)
+	os.MkdirAll(tmpDir, 0755)
+
+	resolvePath := filepath.Join(tmpDir, "resolv.conf")
+	err = c.writeResolve(resolvePath, config)
+	if err != nil {
+		return nil, err
+	}
+
 	mounts := []specs.Mount{
 		{
 			Destination: "/sys",
@@ -148,6 +179,12 @@ func (c *ContainerRunner) buildSpec(ctx context.Context, config *ContainerConfig
 			Type:        "cgroup",
 			Source:      "cgroup",
 			Options:     []string{"nosuid", "noexec", "nodev", "rw"},
+		},
+		{
+			Destination: "/etc/resolv.conf",
+			Type:        "bind",
+			Source:      resolvePath,
+			Options:     []string{"rw"},
 		},
 	}
 
@@ -260,6 +297,11 @@ func (c *ContainerRunner) bootInitialTask(ctx context.Context, config *Container
 		return err
 	}
 
+	err = c.NetServ.SetupDNS(config.Endpoint.Bridge)
+	if err != nil {
+		return err
+	}
+
 	return task.Start(ctx)
 }
 
@@ -287,6 +329,11 @@ func (c *ContainerRunner) StopContainer(ctx context.Context, id string) error {
 	if err != nil {
 		return err
 	}
+
+	// Ignore errors, as the directory might not exist if the container was
+	// cleared up elsewhere.
+	tmpDir := filepath.Join(c.Tempdir, "containerd", id)
+	_ = os.RemoveAll(tmpDir)
 
 	c.Log.Info("container stopped", "id", id)
 
