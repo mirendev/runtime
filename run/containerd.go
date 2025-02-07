@@ -111,14 +111,20 @@ func (c *ContainerRunner) RunContainer(ctx context.Context, config *ContainerCon
 }
 
 func (c *ContainerRunner) writeResolve(path string, cfg *ContainerConfig) error {
-	f, err := os.Create(path)
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644)
 	if err != nil {
 		return err
 	}
-
 	defer f.Close()
 
+	if len(cfg.Endpoint.Bridge.Addresses) == 0 {
+		return fmt.Errorf("no nameservers available in bridge config")
+	}
+
 	for _, addr := range cfg.Endpoint.Bridge.Addresses {
+		if !addr.Addr().IsValid() {
+			return fmt.Errorf("invalid nameserver address: %v", addr)
+		}
 		fmt.Fprintf(f, "nameserver %s\n", addr.Addr().String())
 	}
 
