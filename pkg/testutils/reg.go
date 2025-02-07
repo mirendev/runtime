@@ -49,6 +49,7 @@ func Registry(extra ...func(*asm.Registry)) (*asm.Registry, func()) {
 		panic(err)
 	}
 
+	r.Register("tempdir", os.TempDir())
 	r.Register("subnet", subnet)
 
 	var cancels []func()
