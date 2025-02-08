@@ -38,4 +38,6 @@ COPY --from=builder /app/db /db
 
 RUN chmod +x /entrypoint.sh
 
+VOLUME /var/lib/miren
+
 ENTRYPOINT ["/entrypoint.sh"]

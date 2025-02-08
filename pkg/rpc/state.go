@@ -5,15 +5,16 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/tls"
+	"crypto/x509"
 	"fmt"
 	"log/slog"
 	"net"
 	"os"
 	"os/exec"
+	"slices"
 	"strings"
 	"time"
 
-	"github.com/davecgh/go-spew/spew"
 	"github.com/quic-go/quic-go"
 	"github.com/quic-go/quic-go/http3"
 	"miren.dev/runtime/pkg/packet"
@@ -88,9 +89,15 @@ type stateOptions struct {
 	certPath string
 	keyPath  string
 
+	certData []byte
+	keyData  []byte
+
 	bindAddr string
 
 	skipVerify bool
+	caCert     []byte
+
+	requireClientCerts bool
 
 	level slog.Level
 	log   *slog.Logger
@@ -105,6 +112,13 @@ func WithCert(certPath, keyPath string) StateOption {
 	return func(o *stateOptions) {
 		o.certPath = certPath
 		o.keyPath = keyPath
+	}
+}
+
+func WithCertPEMs(certData, keyData []byte) StateOption {
+	return func(o *stateOptions) {
+		o.certData = slices.Clone(certData)
+		o.keyData = slices.Clone(keyData)
 	}
 }
 
@@ -142,6 +156,19 @@ func WithLocalConnect(addr string) StateOption {
 	}
 }
 
+func WithCertificateVerification(caCert []byte) StateOption {
+	return func(o *stateOptions) {
+		if caCert != nil {
+			o.skipVerify = false
+			o.caCert = caCert
+		}
+	}
+}
+
+func WithRequireClientCerts(o *stateOptions) {
+	o.requireClientCerts = true
+}
+
 func NewState(ctx context.Context, opts ...StateOption) (*State, error) {
 	var so stateOptions
 
@@ -166,6 +193,38 @@ func NewState(ctx context.Context, opts ...StateOption) (*State, error) {
 	tlsCfg := &tls.Config{
 		InsecureSkipVerify: so.skipVerify,
 		NextProtos:         []string{http3.NextProtoH3},
+		VerifyConnection: func(cs tls.ConnectionState) error {
+			so.log.Debug("connected to unverified peer", "name", cs.ServerName)
+			return nil
+		},
+	}
+
+	if so.caCert != nil {
+		so.log.Info("adding CA cert to client TLS config")
+		tlsCfg.RootCAs = x509.NewCertPool()
+		tlsCfg.RootCAs.AppendCertsFromPEM(so.caCert)
+		tlsCfg.VerifyConnection = func(cs tls.ConnectionState) error {
+			so.log.Debug("connected to verified peer", "name", cs.ServerName)
+			return nil
+		}
+	}
+
+	var cert tls.Certificate
+
+	if so.certData != nil && so.keyData != nil {
+		cert, err = tls.X509KeyPair(so.certData, so.keyData)
+		if err != nil {
+			return nil, err
+		}
+
+		tlsCfg.Certificates = []tls.Certificate{cert}
+	} else if so.certPath != "" && so.keyPath != "" {
+		cert, err = tls.LoadX509KeyPair(so.certPath, so.keyPath)
+		if err != nil {
+			return nil, err
+		}
+
+		tlsCfg.Certificates = []tls.Certificate{cert}
 	}
 
 	pub, priv, err := ed25519.GenerateKey(rand.Reader)
@@ -236,7 +295,12 @@ func (s *State) setupServerTls(so *stateOptions) error {
 		err  error
 	)
 
-	if so.certPath != "" && so.keyPath != "" {
+	if so.certData != nil && so.keyData != nil {
+		cert, err = tls.X509KeyPair(so.certData, so.keyData)
+		if err != nil {
+			return err
+		}
+	} else if so.certPath != "" && so.keyPath != "" {
 		cert, err = tls.LoadX509KeyPair(so.certPath, so.keyPath)
 		if err != nil {
 			return err
@@ -254,6 +318,25 @@ func (s *State) setupServerTls(so *stateOptions) error {
 	tlsCfg := &tls.Config{
 		Certificates: []tls.Certificate{cert},
 		NextProtos:   []string{http3.NextProtoH3},
+	}
+
+	if so.caCert != nil {
+		tlsCfg.ClientCAs = x509.NewCertPool()
+		tlsCfg.ClientCAs.AppendCertsFromPEM(so.caCert)
+		if so.requireClientCerts {
+			tlsCfg.ClientAuth = tls.RequireAndVerifyClientCert
+		} else {
+			tlsCfg.ClientAuth = tls.RequestClientCert
+		}
+		tlsCfg.VerifyConnection = func(cs tls.ConnectionState) error {
+			if len(cs.PeerCertificates) == 0 {
+				s.log.Warn("client connection has no certificates")
+			} else {
+				cert := cs.PeerCertificates[0]
+				s.log.Info("verified client connection", "subject", cert.Subject)
+			}
+			return nil
+		}
 	}
 
 	s.serverTlsCfg = tlsCfg
@@ -278,6 +361,21 @@ func (s *State) setupServer(so *stateOptions) error {
 	return nil
 }
 
+type connectionKey struct{}
+
+type CurrentConnectionInfo struct {
+	PeerSubject string
+}
+
+func ConnectionInfo(ctx context.Context) *CurrentConnectionInfo {
+	v := ctx.Value(connectionKey{})
+	if v == nil {
+		return nil
+	}
+
+	return v.(*CurrentConnectionInfo)
+}
+
 func (s *State) startListener(ctx context.Context, so *stateOptions) error {
 	err := s.setupServer(so)
 	if err != nil {
@@ -285,9 +383,8 @@ func (s *State) startListener(ctx context.Context, so *stateOptions) error {
 	}
 
 	serv := &http3.Server{
-		Handler:   s.server,
-		TLSConfig: s.clientTlsCfg,
-		Logger:    s.log.With("module", "http3"),
+		Handler: s.server,
+		Logger:  s.log.With("module", "http3"),
 	}
 
 	s.hs = serv
@@ -346,8 +443,6 @@ func (s *State) Connect(remote string, name string) (*Client, error) {
 
 	err = client.resolveCapability(name)
 	if err != nil {
-		spew.Config.DisableMethods = true
-		spew.Dump(err)
 		s.log.Error("error resolving capability", "error", err)
 		return nil, err
 	}

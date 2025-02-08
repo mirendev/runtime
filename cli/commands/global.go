@@ -9,6 +9,7 @@ import (
 	"os/signal"
 
 	"golang.org/x/sys/unix"
+	"miren.dev/runtime/clientconfig"
 	"miren.dev/runtime/pkg/asm"
 	"miren.dev/runtime/pkg/rpc"
 	"miren.dev/runtime/pkg/slogfmt"
@@ -18,7 +19,8 @@ import (
 type GlobalFlags struct {
 	Verbose       []bool `short:"v" long:"verbose" description:"Enable verbose output"`
 	ServerAddress string `long:"server-address" description:"Server address to connect to" default:"127.0.0.1:8443" asm:"server-addr"`
-	Config        string `long:"config" description:"Path to configuration file"`
+	// We actually process this manually, but we include it here so that it validates.
+	Options string `long:"options" description:"Path to file containing options"`
 }
 
 type Context struct {
@@ -34,6 +36,9 @@ type Context struct {
 	Server *asm.Registry
 
 	cancels []func()
+
+	ClientConfig  *clientconfig.Config
+	ClusterConfig *clientconfig.ClusterConfig
 
 	Config struct {
 		ServerAddress string `asm:"server-addr"`
@@ -84,6 +89,28 @@ func setup(ctx context.Context, flags *GlobalFlags, opts any) *Context {
 	s.Client.InferFrom(flags)
 
 	s.Client.Populate(&s.Config)
+
+	if lc, ok := opts.(interface {
+		LoadConfig() (*clientconfig.Config, error)
+	}); ok {
+		cfg, err := lc.LoadConfig()
+		if err == nil {
+			s.ClientConfig = cfg
+		} else {
+			s.Log.Warn("Failed to load client config", "error", err)
+		}
+	}
+
+	if lc, ok := opts.(interface {
+		LoadCluster() (*clientconfig.ClusterConfig, error)
+	}); ok {
+		cfg, err := lc.LoadCluster()
+		if err == nil {
+			s.ClusterConfig = cfg
+		} else {
+			s.Log.Warn("Failed to load cluster config", "error", err)
+		}
+	}
 
 	sigCh := make(chan os.Signal, 1)
 
@@ -175,7 +202,20 @@ func (c *Context) Printf(format string, args ...interface{}) {
 }
 
 func (c *Context) RPCClient(name string) (*rpc.Client, error) {
-	cs, err := rpc.NewState(c, rpc.WithSkipVerify, rpc.WithLogger(c.Log))
+	var opts []rpc.StateOption
+
+	opts = append(opts, rpc.WithLogger(c.Log))
+
+	if c.ClusterConfig != nil {
+		opts = append(opts,
+			rpc.WithCertPEMs([]byte(c.ClusterConfig.ClientCert), []byte(c.ClusterConfig.ClientKey)),
+			rpc.WithCertificateVerification([]byte(c.ClusterConfig.CACert)),
+		)
+	} else {
+		opts = append(opts, rpc.WithSkipVerify)
+	}
+
+	cs, err := rpc.NewState(c, opts...)
 	if err != nil {
 		return nil, err
 	}

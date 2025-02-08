@@ -17,7 +17,9 @@ var bufPool = sync.Pool{
 }
 
 func NewBuffer() *Buffer {
-	return bufPool.Get().(*Buffer)
+	buf := bufPool.Get().(*Buffer)
+	buf.Reset()
+	return buf
 }
 
 func (b *Buffer) Free() {
@@ -46,6 +48,14 @@ func (b *Buffer) WriteString(s string) (int, error) {
 func (b *Buffer) WriteByte(c byte) error {
 	*b = append(*b, c)
 	return nil
+}
+
+func (b *Buffer) WriteNewLine() {
+	if len(*b) > 0 && (*b)[0] == '\n' {
+		return
+	}
+
+	*b = append(*b, '\n')
 }
 
 func (b *Buffer) WriteRune(r rune) error {

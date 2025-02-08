@@ -303,7 +303,7 @@ func (h *commonHandler) handle(r slog.Record, module string) error {
 	}
 	state.groups = stateGroups // Restore groups passed to ReplaceAttrs.
 	state.appendNonBuiltIns(r)
-	state.buf.WriteByte('\n')
+	state.buf.WriteNewLine()
 
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -612,6 +612,7 @@ func (s *handleState) appendString(str string) {
 	if strings.Contains(str, "\n") {
 		s.appendRawString("\n")
 		writeIndent(s, str, "  │ ")
+		return
 	}
 
 	if needsQuoting(str) {
@@ -665,7 +666,7 @@ func appendValue(v slog.Value, dst []byte) []byte {
 
 func writeIndent(w *handleState, str string, indent string) {
 	for {
-		nl := strings.IndexByte(str, "\n"[0])
+		nl := strings.IndexByte(str, '\n')
 		if nl == -1 {
 			if str != "" {
 				w.appendRawString(indent)

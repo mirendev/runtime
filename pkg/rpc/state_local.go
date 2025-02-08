@@ -3,6 +3,7 @@ package rpc
 import (
 	"bufio"
 	"context"
+	"crypto/tls"
 	"net"
 	"os"
 	"os/exec"
@@ -124,7 +125,15 @@ func (s *State) startLocalListener(ctx context.Context, addr string) error {
 		}
 	}()
 
-	ec, err := s.localTransport.ListenEarly(s.serverTlsCfg, &s.qc)
+	// We build our own TLSConfig because for the unix listener,
+	// we don't check client certs because it's assumed that unix
+	// local access is governing access.
+
+	tlsCfg := s.serverTlsCfg.Clone()
+	tlsCfg.ClientCAs = nil
+	tlsCfg.ClientAuth = tls.NoClientCert
+
+	ec, err := s.localTransport.ListenEarly(tlsCfg, &s.qc)
 	if err != nil {
 		return err
 	}

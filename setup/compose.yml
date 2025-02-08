@@ -9,6 +9,7 @@ services:
     privileged: true
     volumes:
       - containerd:/var/lib/containerd
+      - miren:/var/lib/miren
     depends_on:
       clickhouse:
         condition: service_healthy
@@ -50,4 +51,5 @@ volumes:
     # ok
   containerd:
     # ok
-
+  miren:
+    # ok

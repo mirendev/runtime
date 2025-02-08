@@ -38,6 +38,14 @@ func AllCommands() map[string]cli.CommandFactory {
 			return Infer("app new", "Create a new application", AppNew), nil
 		},
 
+		"config info": func() (cli.Command, error) {
+			return Infer("config info", "Get information about the configuration", ConfigInfo), nil
+		},
+
+		"user whoami": func() (cli.Command, error) {
+			return Infer("user whoami", "Get information about the current user", WhoAmI), nil
+		},
+
 		"internal dial-stdio": func() (cli.Command, error) {
 			return Infer("internal dial-stdio", "Dial a stdio connection", DialStdio), nil
 		},

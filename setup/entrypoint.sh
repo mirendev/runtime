@@ -15,6 +15,26 @@ mount -t debugfs nodev /sys/kernel/debug
 mount -t tracefs nodev /sys/kernel/debug/tracing
 mount -t tracefs nodev /sys/kernel/tracing
 
-mkdir -p /data /run
+mkdir -p /data /run /etc/miren
 
-exec miren server -v -v --run-containerd
+echo "run-containerd = true" > /etc/miren/server.conf
+echo "data-path = \"/var/lib/miren\"" >> /etc/miren/server.conf
+
+if test -n "$SERVER_ID"; then
+  echo "id = \"$SERVER_ID\"" >> /etc/miren/server.conf
+fi
+
+if test -n "$INSECURE_ACCESS"; then
+  echo "WARNING: INSECURE_ACCESS is set, allowing unauthenticated access to the server"
+  echo "require-client-certs = false" >> /etc/miren/server.conf
+else
+  echo "require-client-certs = true" >> /etc/miren/server.conf
+fi
+
+if test -n "$DISABLE_LOCAL"; then
+  echo "WARNING: DISABLE_LOCAL is set, disabling local access to the server"
+else
+  echo "local = \"/run/miren/miren.sock\"" >> /etc/miren/server.conf
+fi
+
+exec miren server -v -v --options /etc/miren/server.conf
