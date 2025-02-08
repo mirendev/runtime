@@ -23,6 +23,8 @@ type Server struct {
 	Log  *slog.Logger
 	Port int `asm:"server_port"`
 
+	DataPath string `asm:"data-path"`
+
 	LocalPath string `asm:"local-path,optional"`
 
 	Build   *build.RPCBuilder
@@ -124,6 +126,11 @@ func (s *Server) Run(ctx context.Context) error {
 	go http.ListenAndServe(":8080", s.Ingress)
 
 	s.Log.Info("server started", "rpc-port", s.Port, "http-port", ":8080")
+
+	err = s.ServeTLS()
+	if err != nil {
+		return err
+	}
 
 	<-ctx.Done()
 
