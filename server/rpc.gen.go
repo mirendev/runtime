@@ -508,6 +508,188 @@ func (v *LogEntry) UnmarshalJSON(data []byte) error {
 	return json.Unmarshal(data, &v.data)
 }
 
+type userInfoData struct {
+	Subject *string `cbor:"0,keyasint,omitempty" json:"subject,omitempty"`
+}
+
+type UserInfo struct {
+	data userInfoData
+}
+
+func (v *UserInfo) HasSubject() bool {
+	return v.data.Subject != nil
+}
+
+func (v *UserInfo) Subject() string {
+	if v.data.Subject == nil {
+		return ""
+	}
+	return *v.data.Subject
+}
+
+func (v *UserInfo) SetSubject(subject string) {
+	v.data.Subject = &subject
+}
+
+func (v *UserInfo) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *UserInfo) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *UserInfo) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *UserInfo) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type userQueryWhoAmIArgsData struct{}
+
+type UserQueryWhoAmIArgs struct {
+	call *rpc.Call
+	data userQueryWhoAmIArgsData
+}
+
+func (v *UserQueryWhoAmIArgs) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *UserQueryWhoAmIArgs) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *UserQueryWhoAmIArgs) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *UserQueryWhoAmIArgs) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type userQueryWhoAmIResultsData struct {
+	Info *UserInfo `cbor:"0,keyasint,omitempty" json:"info,omitempty"`
+}
+
+type UserQueryWhoAmIResults struct {
+	call *rpc.Call
+	data userQueryWhoAmIResultsData
+}
+
+func (v *UserQueryWhoAmIResults) SetInfo(info *UserInfo) {
+	v.data.Info = info
+}
+
+func (v *UserQueryWhoAmIResults) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *UserQueryWhoAmIResults) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *UserQueryWhoAmIResults) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *UserQueryWhoAmIResults) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type UserQueryWhoAmI struct {
+	*rpc.Call
+	args    UserQueryWhoAmIArgs
+	results UserQueryWhoAmIResults
+}
+
+func (t *UserQueryWhoAmI) Args() *UserQueryWhoAmIArgs {
+	args := &t.args
+	if args.call != nil {
+		return args
+	}
+	args.call = t.Call
+	t.Call.Args(args)
+	return args
+}
+
+func (t *UserQueryWhoAmI) Results() *UserQueryWhoAmIResults {
+	results := &t.results
+	if results.call != nil {
+		return results
+	}
+	results.call = t.Call
+	t.Call.Results(results)
+	return results
+}
+
+type UserQuery interface {
+	WhoAmI(ctx context.Context, state *UserQueryWhoAmI) error
+}
+
+type reexportUserQuery struct {
+	client *rpc.Client
+}
+
+func (_ reexportUserQuery) WhoAmI(ctx context.Context, state *UserQueryWhoAmI) error {
+	panic("not implemented")
+}
+
+func (t reexportUserQuery) CapabilityClient() *rpc.Client {
+	return t.client
+}
+
+func AdaptUserQuery(t UserQuery) *rpc.Interface {
+	methods := []rpc.Method{
+		{
+			Name:          "whoAmI",
+			InterfaceName: "UserQuery",
+			Index:         0,
+			Handler: func(ctx context.Context, call *rpc.Call) error {
+				return t.WhoAmI(ctx, &UserQueryWhoAmI{Call: call})
+			},
+		},
+	}
+
+	return rpc.NewInterface(methods, t)
+}
+
+type UserQueryClient struct {
+	*rpc.Client
+}
+
+func (c UserQueryClient) Export() UserQuery {
+	return reexportUserQuery{client: c.Client}
+}
+
+type UserQueryClientWhoAmIResults struct {
+	client *rpc.Client
+	data   userQueryWhoAmIResultsData
+}
+
+func (v *UserQueryClientWhoAmIResults) HasInfo() bool {
+	return v.data.Info != nil
+}
+
+func (v *UserQueryClientWhoAmIResults) Info() *UserInfo {
+	return v.data.Info
+}
+
+func (v UserQueryClient) WhoAmI(ctx context.Context) (*UserQueryClientWhoAmIResults, error) {
+	args := UserQueryWhoAmIArgs{}
+
+	var ret userQueryWhoAmIResultsData
+
+	err := v.Client.Call(ctx, "whoAmI", &args, &ret)
+	if err != nil {
+		return nil, err
+	}
+
+	return &UserQueryClientWhoAmIResults{client: v.Client, data: ret}, nil
+}
+
 type appInfoAppInfoArgsData struct {
 	Application *string `cbor:"0,keyasint,omitempty" json:"application,omitempty"`
 }

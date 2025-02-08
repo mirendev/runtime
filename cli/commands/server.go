@@ -3,6 +3,7 @@ package commands
 import (
 	"os"
 	"os/exec"
+	"path/filepath"
 	"time"
 
 	containerd "github.com/containerd/containerd/v2/client"
@@ -10,15 +11,16 @@ import (
 )
 
 func Server(ctx *Context, opts struct {
-	Port              int    `short:"p" long:"port" description:"Port to listen on" default:"8443" asm:"server_port"`
-	PostgresAddress   string `long:"pg-addr" asm:"postgres-address" type:"address"`
-	ClickhouseAddress string `long:"clickhouse-addr" asm:"clickhouse-address" type:"address"`
-	TempDir           string `long:"temp-dir" description:"Directory to store temporary files" asm:"tempdir" type:"path"`
-	DataPath          string `long:"data-path" description:"Path to store data" asm:"data-path" type:"path"`
-	RunscBinary       string `long:"runsc-binary" description:"Path to the runsc binary" asm:"runsc_binary" type:"path"`
-	Id                string `long:"id" description:"Unique identifier for the server" asm:"server-id"`
-	Local             string `long:"local" description:"Run the server locally" asm:"local-path"`
-	RunContainerd     bool   `long:"run-containerd" description:"Run containerd in the background"`
+	Port               int    `short:"p" long:"port" description:"Port to listen on" default:"8443" asm:"server_port"`
+	PostgresAddress    string `long:"pg-addr" asm:"postgres-address" type:"address"`
+	ClickhouseAddress  string `long:"clickhouse-addr" asm:"clickhouse-address" type:"address"`
+	TempDir            string `long:"temp-dir" description:"Directory to store temporary files" asm:"tempdir" type:"path"`
+	DataPath           string `long:"data-path" description:"Path to store data" asm:"data-path" type:"path"`
+	RunscBinary        string `long:"runsc-binary" description:"Path to the runsc binary" asm:"runsc_binary" type:"path"`
+	Id                 string `long:"id" description:"Unique identifier for the server" asm:"server-id"`
+	Local              string `long:"local" description:"Run the server locally" asm:"local-path"`
+	RunContainerd      bool   `long:"run-containerd" description:"Run containerd in the background"`
+	RequireClientCerts bool   `long:"require-client-certs" description:"Require client certificates for all connections" asm:"require-client-certs"`
 }) error {
 	if opts.RunContainerd {
 		ctx.Log.Info("starting containerd")
@@ -63,6 +65,34 @@ func Server(ctx *Context, opts struct {
 	err := ctx.Server.Populate(&server)
 	if err != nil {
 		return err
+	}
+
+	err = server.Setup(ctx)
+	if err != nil {
+		return err
+	}
+
+	if opts.Local != "" {
+		dir := filepath.Dir(opts.Local)
+
+		err := os.MkdirAll(dir, 0755)
+		if err != nil {
+			return err
+		}
+
+		path := filepath.Join(dir, "clientconfig.yaml")
+
+		ctx.Log.Info("writing config file for local server", "path", path)
+
+		cfg, err := server.LocalConfig()
+		if err != nil {
+			return err
+		}
+
+		err = cfg.SaveTo(path)
+		if err != nil {
+			return err
+		}
 	}
 
 	err = server.Run(ctx.Context)

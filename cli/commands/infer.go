@@ -77,7 +77,7 @@ func Infer(name, syn string, f interface{}) *Cmd {
 	}
 }
 
-func (w *Cmd) ReadConfig(path string) error {
+func (w *Cmd) ReadOptions(path string) error {
 	f, err := os.Open(path)
 	if err != nil {
 		return err
@@ -162,6 +162,9 @@ func (w *Cmd) clean(rv reflect.Value) error {
 			field.SetString(ExpandPath(field.String()))
 		case "address":
 			val := field.String()
+			if val == "" {
+				continue
+			}
 			_, _, err := net.SplitHostPort(val)
 			if err != nil {
 				return fmt.Errorf("error validating %s as address: %s", name, err)
@@ -182,17 +185,17 @@ func (w *Cmd) Synopsis() string {
 	return w.syn
 }
 
-func (w *Cmd) loadConfig(args []string) error {
+func (w *Cmd) loadOptions(args []string) error {
 	for i, arg := range args {
 		switch {
-		case arg == "--config":
+		case arg == "--options":
 			if i+1 < len(args) {
-				return w.ReadConfig(args[i+1])
+				return w.ReadOptions(args[i+1])
 			} else {
-				return fmt.Errorf("missing argument for --config")
+				return fmt.Errorf("missing argument for --options")
 			}
-		case strings.HasPrefix(arg, "--config="):
-			return w.ReadConfig(arg[9:])
+		case strings.HasPrefix(arg, "--options="):
+			return w.ReadOptions(arg[10:])
 		}
 	}
 
@@ -204,7 +207,7 @@ type OptsValidate interface {
 }
 
 func (w *Cmd) Run(args []string) int {
-	if err := w.loadConfig(args); err != nil {
+	if err := w.loadOptions(args); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}

@@ -516,7 +516,7 @@ func (s *Server) authRequest(r *http.Request, oid OID) (ed25519.PublicKey, bool)
 
 	if len(capa.pub) != ed25519.PublicKeySize {
 		s.state.log.Info("Invalid public key size", "size", len(capa.pub))
-		panic("bad key!!!")
+		return nil, false
 	}
 
 	if !ed25519.Verify(capa.pub, buf.Bytes(), bsign) {
@@ -583,6 +583,12 @@ func (s *Server) handleCalls(w http.ResponseWriter, r *http.Request) {
 
 		span.SetAttributes(attribute.String("oid", string(oid)))
 
+		if len(r.TLS.PeerCertificates) > 0 {
+			ctx = context.WithValue(ctx, connectionKey{}, &CurrentConnectionInfo{
+				PeerSubject: r.TLS.PeerCertificates[0].Subject.String(),
+			})
+		}
+
 		err := mm.Handler(ctx, call)
 		if err != nil {
 			s.state.log.Error("rpc call errored", "method", mm.InterfaceName+"."+mm.Name, "error", err)
@@ -601,6 +607,6 @@ func (s *Server) handleCalls(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (s *Server) handleError(w http.ResponseWriter, r *http.Request, err error) {
+func (s *Server) handleError(w http.ResponseWriter, _ *http.Request, err error) {
 	http.Error(w, err.Error(), http.StatusInternalServerError)
 }

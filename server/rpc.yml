@@ -101,7 +101,20 @@ types:
         type: string
         index: 2
 
+  - type: UserInfo
+    fields:
+      - name: subject
+        type: string
+        
+
 interfaces:
+  - name: UserQuery
+    methods:
+      - name: whoAmI
+        results:
+          - name: info
+            type: UserInfo
+
   - name: AppInfo
     methods:
       - name: appInfo
