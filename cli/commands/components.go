@@ -60,6 +60,8 @@ func (c *Context) setupServerComponents(ctx context.Context, reg *asm.Registry) 
 
 	reg.Register("server-id", "miren-server")
 
+	reg.Register("data-path", "/var/lib/miren")
+
 	reg.ProvideName("subnet", func(opts struct {
 		TempDir string `asm:"tempdir"`
 		Id      string `asm:"server-id"`
@@ -98,7 +100,7 @@ func (c *Context) setupServerComponents(ctx context.Context, reg *asm.Registry) 
 			Auth: clickhouse.Auth{
 				Database: "default",
 				Username: "default",
-				Password: "",
+				Password: "default",
 			},
 			DialTimeout: time.Second * 30,
 			Compression: &clickhouse.Compression{
@@ -129,13 +131,15 @@ func (c *Context) setupServerComponents(ctx context.Context, reg *asm.Registry) 
 			dir = filepath.Dir(dir)
 		}
 	}
+	reg.Register("postgres-db", "miren_prod")
 
 	reg.ProvideName("postgres", func(opts struct {
 		Log     *slog.Logger
 		Address string `asm:"postgres-address"`
+		DB      string `asm:"postgres-db"`
 	}) (*pgxpool.Pool, error) {
 		pool, err := pgxpool.New(ctx,
-			fmt.Sprintf("postgres://miren:miren@%s/miren_dev", opts.Address),
+			fmt.Sprintf("postgres://miren:miren@%s/%s", opts.Address, opts.DB),
 		)
 		if err != nil {
 			return nil, err

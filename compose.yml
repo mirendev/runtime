@@ -1,13 +1,16 @@
 services:
   clickhouse:
     image: clickhouse/clickhouse-server:latest
+    environment:
+      - CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT=1
+      - CLICKHOUSE_PASSWORD=default
     ports:
       - 9000:9000
 
   postgres:
     image: postgres:17
     environment:
-      - POSTGRES_DB=miren_dev
+      - POSTGRES_DB=miren_prod
       - POSTGRES_PASSWORD=miren
       - POSTGRES_USER=miren
     ports:
