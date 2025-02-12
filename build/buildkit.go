@@ -9,10 +9,13 @@ import (
 	"sync"
 
 	"github.com/moby/buildkit/client"
+	"github.com/moby/buildkit/client/llb"
 	"github.com/moby/buildkit/frontend"
 	gateway "github.com/moby/buildkit/frontend/gateway/client"
+	"miren.dev/runtime/appconfig"
 	"miren.dev/runtime/observability"
 	"miren.dev/runtime/pkg/idgen"
+	"miren.dev/runtime/pkg/stackbuild"
 
 	"github.com/tonistiigi/fsutil"
 )
@@ -283,7 +286,42 @@ func (b *Buildkit) Transform(ctx context.Context, dfs fsutil.FS, tos ...Transfor
 	return &to, done, nil
 }
 
-func (b *Buildkit) BuildImage(ctx context.Context, dfs fsutil.FS, getTar func() (io.WriteCloser, error), tos ...TransformOptions) error {
+type BuildStack struct {
+	Stack   string
+	CodeDir string
+	Input   string
+
+	Version     string
+	OnBuild     []string
+	AlpineImage string
+}
+
+type ImageConfig struct {
+	Services map[string]string
+}
+
+func (b *Buildkit) loadAppConfig(dfs fsutil.FS) (*appconfig.AppConfig, error) {
+	dr, err := dfs.Open("app.json")
+	if err != nil {
+		return nil, nil
+	}
+
+	defer dr.Close()
+
+	data, err := io.ReadAll(dr)
+	if err != nil {
+		return nil, err
+	}
+
+	ac, err := appconfig.Parse(data)
+	if err != nil {
+		return nil, err
+	}
+
+	return ac, nil
+}
+
+func (b *Buildkit) BuildImage(ctx context.Context, dfs fsutil.FS, bs BuildStack, getTar func() (io.WriteCloser, error), tos ...TransformOptions) error {
 	var opts transformOpt
 
 	opts.frontendAttrs = map[string]string{
@@ -297,12 +335,58 @@ func (b *Buildkit) BuildImage(ctx context.Context, dfs fsutil.FS, getTar func() 
 	}
 
 	mounts := map[string]fsutil.FS{
-		"dockerfile": dfs,
-		"context":    dfs,
+		"context": dfs,
+	}
+
+	ref := idgen.Gen("r")
+
+	solveOpt := client.SolveOpt{
+		LocalMounts: mounts,
+		Ref:         ref,
+	}
+
+	var def *llb.Definition
+
+	exportAttr := map[string]string{}
+
+	if bs.Stack == "dockerfile" {
+		mounts["dockerfile"] = dfs
+		solveOpt.Frontend = "dockerfile.v0"
+		solveOpt.FrontendAttrs = opts.frontendAttrs
+		solveOpt.FrontendAttrs["filename"] = bs.Input
+	} else {
+		stack, err := stackbuild.DetectStack(bs.CodeDir)
+		if err != nil {
+			return err
+		}
+
+		state, err := stack.GenerateLLB(bs.CodeDir, stackbuild.BuildOptions{
+			OnBuild:     bs.OnBuild,
+			Version:     bs.Version,
+			AlpineImage: bs.AlpineImage,
+		})
+		if err != nil {
+			return err
+		}
+
+		def, err = state.Marshal(ctx)
+		if err != nil {
+			return err
+		}
+
+		data, err := json.Marshal(stack.Image())
+		if err != nil {
+			return err
+		}
+
+		exportAttr["containerimage.config"] = string(data)
+
+		b.Log.Info("using stack", "stack", stack.Name())
 	}
 
 	output := client.ExportEntry{
-		Type: "oci",
+		Type:  "oci",
+		Attrs: exportAttr,
 		Output: func(attrs map[string]string) (io.WriteCloser, error) {
 			if opts.phaseUpdates != nil {
 				opts.phaseUpdates("export")
@@ -313,15 +397,7 @@ func (b *Buildkit) BuildImage(ctx context.Context, dfs fsutil.FS, getTar func() 
 		},
 	}
 
-	ref := idgen.Gen("r")
-
-	solveOpt := client.SolveOpt{
-		Exports:       []client.ExportEntry{output},
-		LocalMounts:   mounts,
-		Frontend:      "dockerfile.v0",
-		FrontendAttrs: opts.frontendAttrs,
-		Ref:           ref,
-	}
+	solveOpt.Exports = []client.ExportEntry{output}
 
 	if opts.cacheDir != "" {
 		solveOpt.CacheImports = []client.CacheOptionsEntry{
@@ -401,6 +477,17 @@ func (b *Buildkit) BuildImage(ctx context.Context, dfs fsutil.FS, getTar func() 
 		}
 	}()
 
+	if def != nil {
+		if opts.phaseUpdates != nil {
+			opts.phaseUpdates("solving")
+		}
+		_, err := b.Client.Solve(ctx, def, solveOpt, ssProgress)
+		if opts.phaseUpdates != nil {
+			opts.phaseUpdates("solved")
+		}
+		return err
+	}
+
 	_, err := b.Client.Build(ctx, solveOpt, "runtime", func(ctx context.Context, c gateway.Client) (*gateway.Result, error) {
 		if opts.phaseUpdates != nil {
 			opts.phaseUpdates("solving")
@@ -423,5 +510,4 @@ func (b *Buildkit) BuildImage(ctx context.Context, dfs fsutil.FS, getTar func() 
 	}, ssProgress)
 
 	return err
-
 }

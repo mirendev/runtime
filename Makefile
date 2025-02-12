@@ -23,6 +23,8 @@ bin/runtime:
 release:
 	@bash ./hack/build-release.sh
 
+.PHONY: release
+
 bin/runtime-debug:
 	go build -gcflags="all=-N -l" -o bin/runtime-debug ./cmd/runtime
 

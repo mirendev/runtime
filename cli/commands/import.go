@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"miren.dev/runtime/app"
+	"miren.dev/runtime/appconfig"
 )
 
 func Import(ctx *Context, opts struct {
@@ -80,7 +81,7 @@ func Import(ctx *Context, opts struct {
 
 	ctx.Begin("Importing %s", dir)
 
-	ac, err := LoadAppConfigUnder(dir)
+	ac, err := appconfig.LoadAppConfigUnder(dir)
 	if err != nil {
 		return err
 	}

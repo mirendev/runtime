@@ -10,6 +10,13 @@ types:
         type: int32
         index: 1
 
+  - type: ServiceCommand
+    fields:
+      - name: service
+        type: string
+      - name: command
+        type: string
+
   - type: Configuration
     fields:
       - name: env_vars
@@ -22,6 +29,9 @@ types:
       - name: auto_concurrency
         type: AutoConcurrency
         index: 2
+      - name: commands
+        type: list
+        element: ServiceCommand
 
   - type: NamedValue
     fields:
