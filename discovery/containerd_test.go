@@ -28,8 +28,8 @@ func TestContainerd(t *testing.T) {
 		id := identity.NewID()
 
 		cont, err := cl.Client.NewContainer(ctx, id, containerd.WithAdditionalContainerLabels(map[string]string{
-			"miren.dev/app":       id,
-			"miren.dev/http_host": "127.0.0.1:8888",
+			"runtime.computer/app":       id,
+			"runtime.computer/http_host": "127.0.0.1:8888",
 		}))
 		r.NoError(err)
 

@@ -10,10 +10,10 @@ import (
 
 const (
 	// DefaultConfigPath is the default path for the config file in user's home directory
-	DefaultConfigPath = ".config/miren/clientconfig.yaml"
+	DefaultConfigPath = ".config/runtime/clientconfig.yaml"
 
 	// EnvConfigPath is the environment variable name for custom config path
-	EnvConfigPath = "MIREN_CONFIG"
+	EnvConfigPath = "RUNTIME_CONFIG"
 )
 
 // ClusterConfig holds the configuration for a single cluster

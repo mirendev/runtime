@@ -67,21 +67,22 @@ func TestNetDB(t *testing.T) {
 		n, err := New(filepath.Join(t.TempDir(), "net.db"))
 		r.NoError(err)
 
-		iface, err := n.ReserveInterface("miren")
+		iface, err := n.ReserveInterface("rt")
 		r.NoError(err)
 
-		r.Equal("miren1", iface)
+		r.Equal("rt1", iface)
 
-		iface2, err := n.ReserveInterface("miren")
+		iface2, err := n.ReserveInterface("rt")
 		r.NoError(err)
 
-		r.Equal("miren2", iface2)
+		r.Equal("rt2", iface2)
 
-		err = n.ReleaseInterface("miren1")
-
-		iface3, err := n.ReserveInterface("miren")
+		err = n.ReleaseInterface("rt1")
 		r.NoError(err)
 
-		r.Equal("miren1", iface3)
+		iface3, err := n.ReserveInterface("rt")
+		r.NoError(err)
+
+		r.Equal("rt1", iface3)
 	})
 }

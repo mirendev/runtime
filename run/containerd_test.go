@@ -189,8 +189,8 @@ func TestContainerd(t *testing.T) {
 		lbls, err := c.Labels(ctx)
 		r.NoError(err)
 
-		r.Equal("mn-nginx", lbls["miren.dev/app"])
-		r.Equal(ca.Addr().String()+":3000", lbls["miren.dev/http_host"])
+		r.Equal("mn-nginx", lbls["runtime.computer/app"])
+		r.Equal(ca.Addr().String()+":3000", lbls["runtime.computer/http_host"])
 
 		task, err := c.Task(ctx, nil)
 		r.NoError(err)

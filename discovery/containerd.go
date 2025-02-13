@@ -38,9 +38,9 @@ func (c *Containerd) lookupBG(ctx context.Context, app string, ch chan Backgroun
 }
 
 const (
-	appLabel       = "miren.dev/app"
-	httpHostLabel  = "miren.dev/http_host"
-	staticDirLabel = "miren.dev/static_dir"
+	appLabel       = "runtime.computer/app"
+	httpHostLabel  = "runtime.computer/http_host"
+	staticDirLabel = "runtime.computer/static_dir"
 )
 
 func (c *Containerd) FindInContainerd(ctx context.Context, app string) (Endpoint, error) {

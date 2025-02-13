@@ -149,11 +149,11 @@ func (c *ContainerRunner) buildSpec(ctx context.Context, config *ContainerConfig
 	)
 
 	lbls := map[string]string{
-		"miren.dev/app":           config.App,
-		"miren.dev/version":       config.Version,
-		"miren.dev/http_host":     config.Endpoint.Addresses[0].Addr().String() + ":3000",
-		"miren.dev/ip":            config.Endpoint.Addresses[0].Addr().String(),
-		"miren.dev/endpoint:http": "port=3000,type=http",
+		"runtime.computer/app":           config.App,
+		"runtime.computer/version":       config.Version,
+		"runtime.computer/http_host":     config.Endpoint.Addresses[0].Addr().String() + ":3000",
+		"runtime.computer/ip":            config.Endpoint.Addresses[0].Addr().String(),
+		"runtime.computer/endpoint:http": "port=3000,type=http",
 	}
 
 	for k, v := range config.Labels {
@@ -161,7 +161,7 @@ func (c *ContainerRunner) buildSpec(ctx context.Context, config *ContainerConfig
 	}
 
 	if config.StaticDir != "" {
-		lbls["miren.dev/static_dir"] = config.StaticDir
+		lbls["runtime.computer/static_dir"] = config.StaticDir
 	}
 
 	tmpDir := filepath.Join(c.Tempdir, "containerd", config.Id)

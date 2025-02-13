@@ -56,7 +56,7 @@ func TestIngressHTTP(t *testing.T) {
 		req, err := http.NewRequest("GET", "/", strings.NewReader(""))
 		r.NoError(err)
 
-		req.Host = "test.miren.test"
+		req.Host = "test.runtime.test"
 
 		var rw httptest.ResponseRecorder
 
@@ -90,7 +90,7 @@ func TestIngressHTTP(t *testing.T) {
 		_, ok = h.DeriveApp(req)
 		r.False(ok)
 
-		req.Host = "test.miren.test"
+		req.Host = "test.runtime.test"
 
 		app, ok := h.DeriveApp(req)
 		r.True(ok)
@@ -118,7 +118,7 @@ func TestIngressHTTP(t *testing.T) {
 		req, err := http.NewRequest("GET", "/", strings.NewReader(""))
 		r.NoError(err)
 
-		req.Host = "test.miren.test"
+		req.Host = "test.runtime.test"
 
 		var rw httptest.ResponseRecorder
 
@@ -152,7 +152,7 @@ func TestIngressHTTP(t *testing.T) {
 		req, err := http.NewRequest("GET", "/", strings.NewReader(""))
 		r.NoError(err)
 
-		req.Host = "test.miren.test"
+		req.Host = "test.runtime.test"
 
 		var rw httptest.ResponseRecorder
 
@@ -180,7 +180,7 @@ func TestIngressHTTP(t *testing.T) {
 		req, err := http.NewRequest("GET", "/", strings.NewReader(""))
 		r.NoError(err)
 
-		req.Host = "test.miren.test"
+		req.Host = "test.runtime.test"
 
 		var rw httptest.ResponseRecorder
 
@@ -208,7 +208,7 @@ func TestIngressHTTP(t *testing.T) {
 		req, err := http.NewRequest("GET", "/", strings.NewReader(""))
 		r.NoError(err)
 
-		req.Host = "test.miren.test"
+		req.Host = "test.runtime.test"
 
 		var rw httptest.ResponseRecorder
 

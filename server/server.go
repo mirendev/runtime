@@ -114,7 +114,7 @@ func (s *Server) LoadCA(ctx context.Context) error {
 		s.Log.Info("generating new CA", "path", cert)
 
 		ca, err := caauth.New(caauth.Options{
-			CommonName:   "miren-server",
+			CommonName:   "runtime-server",
 			Organization: "miren",
 			ValidFor:     10 * year,
 		})
@@ -168,7 +168,7 @@ func (s *Server) LoadAPICert(ctx context.Context) error {
 	s.Log.Info("generating new API cert", "path", cert)
 
 	cc, err := s.authority.IssueCertificate(caauth.Options{
-		CommonName:   "miren-api",
+		CommonName:   "runtime-api",
 		Organization: "miren",
 		ValidFor:     1 * year,
 		IPs: []net.IP{
@@ -226,7 +226,7 @@ func (s *Server) Setup(ctx context.Context) error {
 
 func (s *Server) LocalConfig() (*clientconfig.Config, error) {
 	cc, err := s.authority.IssueCertificate(caauth.Options{
-		CommonName:   "miren-user",
+		CommonName:   "runtime-user",
 		Organization: "miren",
 		ValidFor:     1 * year,
 	})

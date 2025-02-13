@@ -20,7 +20,7 @@ import (
 type AppCentric struct {
 	ConfigCentric
 
-	App string `short:"a" long:"app" env:"MIREN_APP" description:"Application get info about"`
+	App string `short:"a" long:"app" env:"RUNTIME_APP" description:"Application get info about"`
 
 	config *AppConfig
 }
