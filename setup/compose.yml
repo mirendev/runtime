@@ -7,6 +7,8 @@ services:
       - 80:80
       - 8443:8443/udp
     privileged: true
+    labels:
+      computer.runtime.cluster: "local"
     volumes:
       - containerd:/var/lib/containerd
       - runtime:/var/lib/runtime

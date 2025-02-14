@@ -1,3 +1,8 @@
+imports:
+  standard:
+    path: ../pkg/rpc/standard/standard.yml
+    import: miren.dev/runtime/pkg/rpc/standard
+
 types:
   - type: Configuration
     fields:
@@ -20,6 +25,22 @@ types:
       - name: sensitive
         type: bool
         index: 2
+
+  - type: VersionInfo
+    fields:
+      - name: version
+        type: string
+      - name: created_at
+        type: standard.Timestamp
+
+  - type: AppInfo
+    fields:
+      - name: name
+        type: string
+      - name: created_at
+        type: standard.Timestamp
+      - name: current_version
+        type: VersionInfo
 
 interfaces:
   - name: Crud
@@ -55,3 +76,8 @@ interfaces:
             type: string
           - name: host
             type: string
+      - name: list
+        results:
+          - name: apps
+            type: list
+            element: AppInfo

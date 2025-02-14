@@ -16,5 +16,10 @@ func SetHost(ctx *Context, opts struct {
 	ac := app.CrudClient{Client: cl}
 
 	_, err = ac.SetHost(ctx, opts.App, opts.Host)
-	return err
+	if err != nil {
+		return err
+	}
+
+	ctx.Printf("Host set to %s\n", opts.Host)
+	return nil
 }

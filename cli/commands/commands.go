@@ -8,6 +8,10 @@ func AllCommands() map[string]cli.CommandFactory {
 			return Infer("version", "Print the version", Version), nil
 		},
 
+		"setup": func() (cli.Command, error) {
+			return Infer("setup", "Setup the runtime access", Setup), nil
+		},
+
 		"deploy": func() (cli.Command, error) {
 			return Infer("Deploy", "Deploy an application", Deploy), nil
 		},
@@ -21,6 +25,10 @@ func AllCommands() map[string]cli.CommandFactory {
 
 		"app": func() (cli.Command, error) {
 			return Infer("app", "Get information about an application", App), nil
+		},
+
+		"apps": func() (cli.Command, error) {
+			return Infer("apps", "List all applications", Apps), nil
 		},
 
 		"set": func() (cli.Command, error) {

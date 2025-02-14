@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+
+	"miren.dev/runtime/pkg/rpc/standard"
 )
 
 //go:generate go run ../pkg/rpc/cmd/rpcgen -pkg app -input rpc.yml -output rpc.gen.go
@@ -40,6 +42,36 @@ func (r *RPCCrud) New(ctx context.Context, state *CrudNew) error {
 
 	// TODO this is a bad id.
 	state.Results().SetId(name)
+
+	return nil
+}
+
+func (r *RPCCrud) List(ctx context.Context, state *CrudList) error {
+	apps, err := r.Access.ListApps(ctx)
+	if err != nil {
+		return err
+	}
+
+	var ai []*AppInfo
+
+	for _, ac := range apps {
+		var a AppInfo
+
+		a.SetName(ac.Name)
+		a.SetCreatedAt(standard.ToTimestamp(ac.CreatedAt))
+
+		mrv, err := r.Access.MostRecentVersion(ctx, ac)
+		if err == nil {
+			var vi VersionInfo
+			vi.SetVersion(mrv.Version)
+			vi.SetCreatedAt(standard.ToTimestamp(mrv.CreatedAt))
+			a.SetCurrentVersion(&vi)
+		}
+
+		ai = append(ai, &a)
+	}
+
+	state.Results().SetApps(ai)
 
 	return nil
 }

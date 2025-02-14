@@ -100,6 +100,20 @@ func LoadConfigFrom(configPath string) (*Config, error) {
 	return &config, nil
 }
 
+// LoadConfig loads the configuration from disk
+func DecodeConfig(data []byte) (*Config, error) {
+	var config Config
+	if err := yaml.Unmarshal(data, &config); err != nil {
+		return nil, fmt.Errorf("failed to parse config file: %w", err)
+	}
+
+	if err := config.Validate(); err != nil {
+		return nil, fmt.Errorf("invalid configuration: %w", err)
+	}
+
+	return &config, nil
+}
+
 // SaveConfig saves the configuration to disk
 func SaveConfig(config *Config) error {
 	configPath, err := getConfigPath()
@@ -126,11 +140,25 @@ func (c *Config) SaveTo(path string) error {
 		return fmt.Errorf("failed to marshal config: %w", err)
 	}
 
-	if err := os.WriteFile(path, data, 0666); err != nil {
+	if err := os.WriteFile(path, data, 0600); err != nil {
 		return fmt.Errorf("failed to write config file: %w", err)
 	}
 
 	return nil
+}
+
+func (c *Config) SaveToHome() error {
+	configPath, err := getConfigPath()
+	if err != nil {
+		return fmt.Errorf("failed to determine config path: %w", err)
+	}
+
+	dir := filepath.Dir(configPath)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return err
+	}
+
+	return c.SaveTo(configPath)
 }
 
 // GetCluster returns the configuration for a specific cluster
