@@ -581,13 +581,13 @@ func (l *LaunchContainer) RecoverContainers(ctx context.Context) error {
 			continue
 		}
 
-		appName := labels["miren.dev/app"]
+		appName := labels["runtime.computer/app"]
 		if appName == "" {
 			l.Log.Warn("container missing app label", "container", container.ID())
 			continue
 		}
 
-		poolName := labels["miren.dev/pool"]
+		poolName := labels["runtime.computer/pool"]
 		if appName == "" {
 			l.Log.Warn("container missing app label", "container", container.ID())
 			continue
@@ -629,7 +629,7 @@ func (l *LaunchContainer) RecoverContainers(ctx context.Context) error {
 			continue
 		}
 
-		version := labels["miren.dev/version"]
+		version := labels["runtime.computer/version"]
 
 		if mrv.Version != version {
 			l.Log.Warn("container version mismatch", "container", container.ID(), "expected", mrv.Version, "actual", version)

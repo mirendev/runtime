@@ -10,9 +10,9 @@ services:
   postgres:
     image: postgres:17
     environment:
-      - POSTGRES_DB=miren_prod
-      - POSTGRES_PASSWORD=miren
-      - POSTGRES_USER=miren
+      - POSTGRES_DB=runtime_prod
+      - POSTGRES_PASSWORD=runtime
+      - POSTGRES_USER=runtime
     ports:
       - 5432:5432
 

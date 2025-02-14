@@ -248,7 +248,7 @@ func (b *Buildkit) Transform(ctx context.Context, dfs fsutil.FS, tos ...Transfor
 			}
 		}()
 
-		_, err = b.Client.Build(ctx, solveOpt, "miren", func(ctx context.Context, c gateway.Client) (*gateway.Result, error) {
+		_, err = b.Client.Build(ctx, solveOpt, "runtime", func(ctx context.Context, c gateway.Client) (*gateway.Result, error) {
 			if opts.phaseUpdates != nil {
 				opts.phaseUpdates("solving")
 			}
@@ -400,7 +400,7 @@ func (b *Buildkit) BuildImage(ctx context.Context, dfs fsutil.FS, getTar func() 
 		}
 	}()
 
-	_, err := b.Client.Build(ctx, solveOpt, "miren", func(ctx context.Context, c gateway.Client) (*gateway.Result, error) {
+	_, err := b.Client.Build(ctx, solveOpt, "runtime", func(ctx context.Context, c gateway.Client) (*gateway.Result, error) {
 		if opts.phaseUpdates != nil {
 			opts.phaseUpdates("solving")
 		}

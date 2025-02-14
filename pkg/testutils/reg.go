@@ -85,7 +85,7 @@ func Registry(extra ...func(*asm.Registry)) (*asm.Registry, func()) {
 
 	ts := time.Now()
 
-	namespace := fmt.Sprintf("miren-%d", ts.UnixNano())
+	namespace := fmt.Sprintf("runtime-%d", ts.UnixNano())
 
 	r.Register("namespace", namespace)
 	r.Register("org_id", uint64(1))
@@ -139,7 +139,7 @@ func Registry(extra ...func(*asm.Registry)) (*asm.Registry, func()) {
 	r.ProvideName("postgres", func() (*pgxpool.Pool, error) {
 		ctx := context.Background()
 
-		pool, err := pgxpool.New(ctx, "postgres://postgres@postgres:5432/miren_test")
+		pool, err := pgxpool.New(ctx, "postgres://postgres@postgres:5432/runtime_test")
 		if err != nil {
 			return nil, err
 		}

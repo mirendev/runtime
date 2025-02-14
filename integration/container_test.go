@@ -45,8 +45,6 @@ func TestContainer(t *testing.T) {
 		err := reg.Init(&cc, &bkl)
 		r.NoError(err)
 
-		//go testutils.MonitorContainers(ctx, cc, "miren-test")
-
 		var lm observability.LogsMaintainer
 
 		err = reg.Populate(&lm)
@@ -175,7 +173,7 @@ func TestContainer(t *testing.T) {
 		req, err := http.NewRequest("GET", "/", strings.NewReader(""))
 		r.NoError(err)
 
-		req.Host = "mn-nginx.miren.test"
+		req.Host = "mn-nginx.runtime.test"
 
 		rw := httptest.NewRecorder()
 
@@ -292,7 +290,7 @@ func TestContainer(t *testing.T) {
 		req, err := http.NewRequest("GET", "/foo.html", strings.NewReader(""))
 		r.NoError(err)
 
-		req.Host = "mn-nginx2.miren.test"
+		req.Host = "mn-nginx2.runtime.test"
 
 		rw := httptest.NewRecorder()
 

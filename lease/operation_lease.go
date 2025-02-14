@@ -313,8 +313,8 @@ func (l *leaseOperation) launch(
 			"MIREN_VERSION": l.mrv.Version,
 		},
 		Labels: map[string]string{
-			"miren.dev/pool":    l.pool.name,
-			"miren.dev/version": l.mrv.Version,
+			"runtime.computer/pool":    l.pool.name,
+			"runtime.computer/version": l.mrv.Version,
 		},
 		LogEntity: l.ac.Xid,
 	}

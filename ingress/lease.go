@@ -115,9 +115,9 @@ func (h *LeaseHTTP) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 }
 
 const (
-	appLabel       = "miren.dev/app"
-	httpHostLabel  = "miren.dev/http_host"
-	staticDirLabel = "miren.dev/static_dir"
+	appLabel       = "runtime.computer/app"
+	httpHostLabel  = "runtime.computer/http_host"
+	staticDirLabel = "runtime.computer/static_dir"
 )
 
 func (h *LeaseHTTP) extractEndpoint(ctx context.Context, container containerd.Container) (discovery.Endpoint, error) {

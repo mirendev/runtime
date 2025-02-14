@@ -11,7 +11,7 @@ import (
 )
 
 func Run(args []string) int {
-	c := cli.NewCLI("miren", version.Version)
+	c := cli.NewCLI("runtime", version.Version)
 	c.Commands = commands.AllCommands()
 	c.Args = args[1:]
 

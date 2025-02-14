@@ -1,4 +1,4 @@
-name: miren
+name: runtime
 services:
   runtime:
     image: mirendev/runtime:latest
@@ -9,7 +9,7 @@ services:
     privileged: true
     volumes:
       - containerd:/var/lib/containerd
-      - miren:/var/lib/miren
+      - runtime:/var/lib/runtime
     depends_on:
       clickhouse:
         condition: service_healthy
@@ -33,13 +33,13 @@ services:
   postgres:
     image: postgres:17
     environment:
-      - POSTGRES_DB=miren_prod
-      - POSTGRES_PASSWORD=miren
-      - POSTGRES_USER=miren
+      - POSTGRES_DB=runtime_prod
+      - POSTGRES_PASSWORD=runtime
+      - POSTGRES_USER=runtime
     volumes:
       - postgres:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "PGPASSWORD=miren pg_isready -U miren -d miren_prod"]
+      test: ["CMD-SHELL", "PGPASSWORD=runtime pg_isready -U runtime -d runtime_prod"]
       interval: 1s
       timeout: 5s
       retries: 5
@@ -51,5 +51,5 @@ volumes:
     # ok
   containerd:
     # ok
-  miren:
+  runtime:
     # ok

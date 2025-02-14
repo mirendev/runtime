@@ -11,7 +11,7 @@ type AppConfig struct {
 	Name string `toml:"name"`
 }
 
-const AppConfigPath = ".miren/app.toml"
+const AppConfigPath = ".runtime/app.toml"
 
 func LoadAppConfig() (*AppConfig, error) {
 	dir, err := os.Getwd()

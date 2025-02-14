@@ -17,27 +17,29 @@ RUN go mod download
 
 COPY . .
 
-RUN CGO_ENABLED=1 go build -o /go/bin/miren ./cmd/miren
-RUN go build -o /go/bin/containerd-log-ingress ./run/containerd-log-ingress
+RUN --mount=type=cache,target=/root/.cache/go-build CGO_ENABLED=1 go build -o /go/bin/runtime ./cmd/runtime
+RUN --mount=type=cache,target=/root.cache/go-build go build -o /go/bin/containerd-log-ingress ./run/containerd-log-ingress
 
 FROM alpine:latest AS base
 
-RUN apk add --no-cache containerd nerdctl iptables
+RUN apk add --no-cache containerd nerdctl iptables curl
 
 COPY --chmod=0755 --from=binaries /data/runsc /usr/local/bin/runsc
 COPY --chmod=0755 --from=binaries /data/containerd-shim-runsc-v1 /usr/local/bin/containerd-shim-runsc-v1
 
 FROM base AS app
 
-COPY --from=builder /go/bin/miren /bin/miren
+COPY --from=builder /go/bin/runtime /bin/runtime
 COPY --from=builder /go/bin/containerd-log-ingress /bin/containerd-log-ingress
 
 COPY --from=builder /app/setup/entrypoint.sh /entrypoint.sh
 
 COPY --from=builder /app/db /db
 
+COPY --from=builder --chmod=0755 /app/setup/runsc-runtime /bin/runsc-runtime
+
 RUN chmod +x /entrypoint.sh
 
-VOLUME /var/lib/miren
+VOLUME /var/lib/runtime
 
 ENTRYPOINT ["/entrypoint.sh"]

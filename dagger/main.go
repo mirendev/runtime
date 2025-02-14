@@ -56,7 +56,7 @@ func (m *Runtime) WithServices(dir *dagger.Directory) *dagger.Container {
 
 	pg := dag.Container().
 		From("postgres:17").
-		WithEnvVariable("POSTGRES_DB", "miren_test").
+		WithEnvVariable("POSTGRES_DB", "runtime_test").
 		WithEnvVariable("POSTGRES_USER", "postgres").
 		WithEnvVariable("POSTGRES_HOST_AUTH_METHOD", "trust").
 		WithExposedPort(5432).

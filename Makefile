@@ -13,14 +13,14 @@ image:
 	rm tmp/latest.tar
 
 clean:
-	rm bin/miren
+	rm bin/runtime
 
-bin/miren:
+bin/runtime:
 	@bash ./hack/build.sh
 
-.PHONY: bin/miren
+.PHONY: bin/runtime
 
-bin/miren-debug:
-	go build -gcflags="all=-N -l" -o bin/miren-debug ./cmd/miren
+bin/runtime-debug:
+	go build -gcflags="all=-N -l" -o bin/runtime-debug ./cmd/runtime
 
-.PHONY: bin/miren-debug
+.PHONY: bin/runtime-debug

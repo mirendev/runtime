@@ -32,7 +32,7 @@ import (
 )
 
 func (c *Context) setupServerComponents(ctx context.Context, reg *asm.Registry) {
-	reg.Register("namespace", "miren-test")
+	reg.Register("namespace", "runtime")
 	reg.Register("top_context", ctx)
 
 	reg.Provide(func(opts struct {
@@ -52,15 +52,15 @@ func (c *Context) setupServerComponents(ctx context.Context, reg *asm.Registry) 
 
 	reg.Register("log", c.Log)
 
-	reg.Register("bridge-iface", "miren0")
+	reg.Register("bridge-iface", "rt0")
 
 	reg.Register("tempdir", os.TempDir())
 
 	reg.Register("runsc_binary", "runsc")
 
-	reg.Register("server-id", "miren-server")
+	reg.Register("server-id", "runtime-server")
 
-	reg.Register("data-path", "/var/lib/miren")
+	reg.Register("data-path", "/var/lib/runtime")
 
 	reg.ProvideName("subnet", func(opts struct {
 		TempDir string `asm:"tempdir"`
@@ -131,7 +131,7 @@ func (c *Context) setupServerComponents(ctx context.Context, reg *asm.Registry) 
 			dir = filepath.Dir(dir)
 		}
 	}
-	reg.Register("postgres-db", "miren_prod")
+	reg.Register("postgres-db", "runtime_prod")
 
 	reg.ProvideName("postgres", func(opts struct {
 		Log     *slog.Logger
@@ -139,7 +139,7 @@ func (c *Context) setupServerComponents(ctx context.Context, reg *asm.Registry) 
 		DB      string `asm:"postgres-db"`
 	}) (*pgxpool.Pool, error) {
 		pool, err := pgxpool.New(ctx,
-			fmt.Sprintf("postgres://miren:miren@%s/%s", opts.Address, opts.DB),
+			fmt.Sprintf("postgres://runtime:runtime@%s/%s", opts.Address, opts.DB),
 		)
 		if err != nil {
 			return nil, err

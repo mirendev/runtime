@@ -178,7 +178,7 @@ func (b *RPCBuilder) BuildFromTar(ctx context.Context, state *BuilderBuildFromTa
 
 	tos = append(tos,
 		WithCacheDir(cacheDir),
-		WithBuildArg("MIREN_VERSION", mrv.Version),
+		WithBuildArg("RUNTIME_VERSION", mrv.Version),
 	)
 
 	if status != nil {
