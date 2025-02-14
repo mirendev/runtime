@@ -8,6 +8,7 @@ import (
 	"github.com/containerd/containerd/v2/pkg/namespaces"
 	"github.com/opencontainers/runtime-spec/specs-go"
 	"golang.org/x/sys/unix"
+	"miren.dev/runtime/app"
 	"miren.dev/runtime/lease"
 	"miren.dev/runtime/pkg/idgen"
 	"miren.dev/runtime/pkg/rpc/stream"
@@ -18,6 +19,7 @@ import (
 type RPCShell struct {
 	Log       *slog.Logger
 	Lease     *lease.LaunchContainer
+	Apps      *app.AppAccess
 	Namespace string `asm:"namespace"`
 }
 
@@ -36,7 +38,12 @@ func (r *RPCShell) Open(ctx context.Context, state *ShellAccessOpen) error {
 		pool = "shell"
 	}
 
-	lc, err := r.Lease.Lease(ctx, name, lease.DontWaitNetwork(), lease.Pool(pool))
+	ac, err := r.Apps.LoadApp(ctx, name)
+	if err != nil {
+		return err
+	}
+
+	lc, err := r.Lease.Lease(ctx, ac.Xid, lease.DontWaitNetwork(), lease.Pool(pool))
 	if err != nil {
 		return err
 	}
