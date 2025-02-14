@@ -1,6 +1,7 @@
 package rpc
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
@@ -437,6 +438,7 @@ func (s *State) Connect(remote string, name string) (*Client, error) {
 		client = &Client{
 			State:     s,
 			transport: s.transport,
+			tlsCfg:    s.clientTlsCfg,
 			remote:    remote,
 		}
 	}
@@ -457,6 +459,12 @@ func (s *State) Connect(remote string, name string) (*Client, error) {
 }
 
 func (s *State) NewClient(capa *Capability) *Client {
+	// see if we have the issuer of this capa in our knownAddresses table,
+	// and if so, we use that as it's remote address rather than the one
+	// in the capability.
+	// We do this because the address that client has for itself can be
+	// different than the address that this server sees, likely due to NAT.
+
 	transport := s.transport
 
 	if strings.HasPrefix(capa.Address, "unix:") {
@@ -466,6 +474,37 @@ func (s *State) NewClient(capa *Capability) *Client {
 	return &Client{
 		State:     s,
 		transport: transport,
+		tlsCfg:    s.clientTlsCfg.Clone(),
+		capa:      capa,
+		oid:       capa.OID,
+		remote:    capa.Address,
+	}
+}
+
+func (s *State) newClientFrom(capa *Capability, peer *x509.Certificate) *Client {
+	transport := s.transport
+
+	if strings.HasPrefix(capa.Address, "unix:") {
+		transport = s.localTransport
+	}
+
+	cfg := s.clientTlsCfg.Clone()
+	cfg.InsecureSkipVerify = true
+
+	if peer != nil {
+		cfg.VerifyPeerCertificate = func(rawCerts [][]byte, verifiedChains [][]*x509.Certificate) error {
+			if bytes.Equal(peer.Raw, rawCerts[0]) {
+				return nil
+			}
+
+			return fmt.Errorf("certificate mismatch")
+		}
+	}
+
+	return &Client{
+		State:     s,
+		transport: transport,
+		tlsCfg:    cfg,
 		capa:      capa,
 		oid:       capa.OID,
 		remote:    capa.Address,
