@@ -12,6 +12,7 @@ import (
 
 func Server(ctx *Context, opts struct {
 	Port               int    `short:"p" long:"port" description:"Port to listen on" default:"8443" asm:"server_port"`
+	HTTPAddress        string `long:"http-addr" description:"Address to listen on for HTTP" default:":80" asm:"http-address"`
 	PostgresAddress    string `long:"pg-addr" asm:"postgres-address" type:"address"`
 	ClickhouseAddress  string `long:"clickhouse-addr" asm:"clickhouse-address" type:"address"`
 	TempDir            string `long:"temp-dir" description:"Directory to store temporary files" asm:"tempdir" type:"path"`
@@ -45,15 +46,11 @@ func Server(ctx *Context, opts struct {
 		for {
 			cl, err := containerd.New("/run/containerd/containerd.sock")
 			if err == nil {
-				cl.Close()
-
-				break
-			}
-
-			_, err = cl.Server(ctx)
-			if err == nil {
-				cl.Close()
-				break
+				_, err = cl.Server(ctx)
+				if err == nil {
+					cl.Close()
+					break
+				}
 			}
 
 			time.Sleep(100 * time.Millisecond)

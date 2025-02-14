@@ -28,12 +28,14 @@ type Server struct {
 	Log  *slog.Logger
 	Port int `asm:"server_port"`
 
+	HTTPAddress string `asm:"http-address"`
+
 	DataPath string `asm:"data-path"`
 	TempDir  string `asm:"tempdir"`
 
 	LocalPath string `asm:"local-path,optional"`
 
-	RequireClientCerts bool `asm:"require-client-certs"`
+	RequireClientCerts bool `asm:"require-client-certs,optional"`
 
 	Build   *build.RPCBuilder
 	Shell   *shell.RPCShell
@@ -293,9 +295,9 @@ func (s *Server) Run(ctx context.Context) error {
 	serv.ExposeValue("shell", shell.AdaptShellAccess(s.Shell))
 	serv.ExposeValue("user", AdaptUserQuery(s))
 
-	go http.ListenAndServe(":8080", s.Ingress)
+	go http.ListenAndServe(s.HTTPAddress, s.Ingress)
 
-	s.Log.Info("server started", "rpc-port", s.Port, "http-port", ":8080")
+	s.Log.Info("server started", "rpc-port", s.Port, "http-port", s.HTTPAddress, "https-port", ":443")
 
 	err = s.ServeTLS()
 	if err != nil {
