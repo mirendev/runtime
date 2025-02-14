@@ -130,21 +130,6 @@ func (s *Server) ExposeValue(name string, iface *Interface) {
 	s.persistent[name] = iface
 }
 
-func (s *Server) NewClient(capa *Capability) *Client {
-	// see if we have the issuer of this capa in our knownAddresses table,
-	// and if so, we use that as it's remote address rather than the one
-	// in the capability.
-	// We do this because the address that client has for itself can be
-	// different than the address that this server sees, likely due to NAT.
-
-	return &Client{
-		State:     s.state,
-		transport: s.state.transport,
-		oid:       capa.OID,
-		remote:    capa.Address,
-	}
-}
-
 const BootstrapOID = "!bootstrap"
 
 func (s *Server) assignCapability(i *Interface, pub ed25519.PublicKey, contactAddr string) *Capability {
@@ -583,7 +568,8 @@ func (s *Server) handleCalls(w http.ResponseWriter, r *http.Request) {
 
 		span.SetAttributes(attribute.String("oid", string(oid)))
 
-		if len(r.TLS.PeerCertificates) > 0 {
+		if r.TLS != nil && len(r.TLS.PeerCertificates) > 0 {
+			call.peer = r.TLS.PeerCertificates[0]
 			ctx = context.WithValue(ctx, connectionKey{}, &CurrentConnectionInfo{
 				PeerSubject: r.TLS.PeerCertificates[0].Subject.String(),
 			})

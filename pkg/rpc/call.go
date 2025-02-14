@@ -2,6 +2,7 @@ package rpc
 
 import (
 	"crypto/ed25519"
+	"crypto/x509"
 	"net/http"
 
 	"github.com/fxamacker/cbor/v2"
@@ -16,6 +17,8 @@ type Call struct {
 	method string
 
 	caller ed25519.PublicKey
+
+	peer *x509.Certificate
 
 	results any
 }
@@ -37,5 +40,5 @@ func (c *Call) NewCapability(i *Interface) *Capability {
 }
 
 func (c *Call) NewClient(capa *Capability) *Client {
-	return c.s.NewClient(capa)
+	return c.s.state.newClientFrom(capa, c.peer)
 }

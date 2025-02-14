@@ -238,6 +238,7 @@ func TestRPC(t *testing.T) {
 		ac := &example.AdjustTempClient{Client: c2}
 
 		_, err = ac.Adjust(context.Background(), res2.Setter().Export())
+		r.NoError(err)
 
 		r.Equal(float32(72), em.temp)
 	})

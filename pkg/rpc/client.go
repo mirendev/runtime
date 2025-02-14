@@ -6,6 +6,7 @@ import (
 	"crypto"
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -30,6 +31,8 @@ type Client struct {
 	remote     string
 	remoteAddr net.Addr
 	oid        OID
+
+	tlsCfg *tls.Config
 
 	// This is the remote address that the server
 	// observes this client as coming from. We use this address
@@ -293,7 +296,7 @@ func (c *Client) conn(ctx context.Context) (*http3.ClientConn, error) {
 		addr = udpAddr
 	}
 
-	ec, err := c.transport.DialEarly(ctx, addr, c.clientTlsCfg, &DefaultQUICConfig)
+	ec, err := c.transport.DialEarly(ctx, addr, c.tlsCfg, &DefaultQUICConfig)
 	if err != nil {
 		return nil, err
 	}
