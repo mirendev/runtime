@@ -332,11 +332,15 @@ func (l *leaseOperation) launch(
 		l.Log.Info("not waiting for network", "container", config.Id)
 		err = l.Health.WaitReady(ctx, config.Id)
 		if err != nil {
+			l.Log.Error("error waiting for container", "container", config.Id, "error", err)
+			l.CR.StopContainer(ctx, config.Id)
 			return nil, err
 		}
 	} else {
 		err = l.Health.WaitForReady(ctx, config.Id)
 		if err != nil {
+			l.Log.Error("error waiting for container readiness", "container", config.Id, "error", err)
+			l.CR.StopContainer(ctx, config.Id)
 			return nil, err
 		}
 	}
