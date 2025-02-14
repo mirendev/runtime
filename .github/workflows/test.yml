@@ -29,4 +29,4 @@ jobs:
         go-version: '1.23'
 
     - name: Build
-      run: make bin/miren
+      run: make bin/runtime
