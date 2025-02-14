@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"time"
 
@@ -56,7 +57,11 @@ func (c *Context) setupServerComponents(ctx context.Context, reg *asm.Registry) 
 
 	reg.Register("tempdir", os.TempDir())
 
-	reg.Register("runsc_binary", "runsc")
+	if path, err := exec.LookPath("runsc-runtime"); err == nil && path != "" {
+		reg.Register("runsc_binary", path)
+	} else {
+		reg.Register("runsc_binary", "runsc")
+	}
 
 	reg.Register("server-id", "runtime-server")
 
