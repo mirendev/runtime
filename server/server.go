@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"miren.dev/runtime/api"
 	"miren.dev/runtime/app"
 	"miren.dev/runtime/build"
 	"miren.dev/runtime/clientconfig"
@@ -290,10 +291,10 @@ func (s *Server) Run(ctx context.Context) error {
 
 	serv.ExposeValue("build", build.AdaptBuilder(s.Build))
 	serv.ExposeValue("app", app.AdaptCrud(s.AppCrud))
-	serv.ExposeValue("app-info", AdaptAppInfo(s.AppInfo))
-	serv.ExposeValue("logs", AdaptLogs(s.LogsRPC))
+	serv.ExposeValue("app-info", api.AdaptAppInfo(s.AppInfo))
+	serv.ExposeValue("logs", api.AdaptLogs(s.LogsRPC))
 	serv.ExposeValue("shell", shell.AdaptShellAccess(s.Shell))
-	serv.ExposeValue("user", AdaptUserQuery(s))
+	serv.ExposeValue("user", api.AdaptUserQuery(s))
 
 	go http.ListenAndServe(s.HTTPAddress, s.Ingress)
 

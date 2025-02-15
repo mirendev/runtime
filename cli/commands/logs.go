@@ -3,8 +3,8 @@ package commands
 import (
 	"time"
 
+	"miren.dev/runtime/api"
 	"miren.dev/runtime/pkg/rpc/standard"
-	"miren.dev/runtime/server"
 )
 
 func Logs(ctx *Context, opts struct {
@@ -17,7 +17,7 @@ func Logs(ctx *Context, opts struct {
 		return err
 	}
 
-	ac := server.LogsClient{Client: cl}
+	ac := api.LogsClient{Client: cl}
 
 	typ := map[string]string{
 		"stdout":   "S",

@@ -14,7 +14,7 @@ import (
 	"miren.dev/runtime/pkg/perf"
 )
 
-//go:generate go run github.com/cilium/ebpf/cmd/bpf2go -type stack_key -type arguments perf ebpf/perf_event.c -- -I ebpf/include
+//go:generate go run github.com/cilium/ebpf/cmd/bpf2go -type stack_key -type arguments perf ebpf/perf_event.c -- -I ../../../ebpf/include
 
 const samplesPerSecond = 20
 

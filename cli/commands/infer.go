@@ -207,41 +207,50 @@ type OptsValidate interface {
 }
 
 func (w *Cmd) Run(args []string) int {
-	if err := w.loadOptions(args); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		return 1
-	}
-
-	_, err := w.parser.ParseArgs(args)
+	err := w.Invoke(args...)
 	if err != nil {
+		if err, ok := err.(ErrExitCode); ok {
+			return int(err)
+		}
+
 		flagsErr, ok := err.(*flags.Error)
 
 		if ok && flagsErr.Type == flags.ErrHelp {
 			fmt.Fprintln(os.Stdout, err)
 		} else {
-			fmt.Fprintln(os.Stderr, err)
+			fmt.Fprintf(os.Stderr, "An error occured:\n%s\n", err)
 		}
 
 		return 1
 	}
 
+	return 0
+}
+
+func (w *Cmd) Invoke(args ...string) error {
+	if err := w.loadOptions(args); err != nil {
+		return err
+	}
+
+	_, err := w.parser.ParseArgs(args)
+	if err != nil {
+		return err
+	}
+
 	err = w.clean(reflect.ValueOf(w.global).Elem())
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		return 1
+		return err
 	}
 
 	err = w.clean(w.opts.Elem())
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		return 1
+		return err
 	}
 
 	if ov, ok := w.opts.Interface().(OptsValidate); ok {
 		err = ov.Validate(w.global)
 		if err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			return 1
+			return err
 		}
 	}
 
@@ -258,12 +267,21 @@ func (w *Cmd) Run(args []string) int {
 
 	if err, ok := rets[0].Interface().(error); ok {
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "An error occured:\n%s\n", err)
-			return 1
+			return err
 		}
 	}
 
-	return ctx.exitCode
+	if ctx.exitCode != 0 {
+		return ErrExitCode(ctx.exitCode)
+	}
+
+	return nil
+}
+
+type ErrExitCode int
+
+func (e ErrExitCode) Error() string {
+	return fmt.Sprintf("exit code %d", e)
 }
 
 type CommandOutput struct {

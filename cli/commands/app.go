@@ -2,6 +2,7 @@ package commands
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -11,10 +12,10 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"miren.dev/runtime/api"
 	"miren.dev/runtime/app"
 	"miren.dev/runtime/pkg/rpc/standard"
 	"miren.dev/runtime/pkg/units"
-	"miren.dev/runtime/server"
 )
 
 type AppCentric struct {
@@ -51,6 +52,8 @@ func App(ctx *Context, opts struct {
 	AppCentric
 	Watch bool `short:"w" long:"watch" description:"Watch the app stats"`
 	Graph bool `short:"g" long:"graph" description:"Graph the app stats"`
+
+	ConfigOnly bool `long:"config-only" description:"Only show the configuration"`
 }) error {
 	crudcl, err := ctx.RPCClient("app")
 	if err != nil {
@@ -65,12 +68,22 @@ func App(ctx *Context, opts struct {
 		return nil
 	}
 
+	if opts.ConfigOnly {
+		data, err := json.MarshalIndent(cfgres.Configuration(), "", "  ")
+		if err != nil {
+			return err
+		}
+
+		ctx.Printf("%s\n", data)
+		return nil
+	}
+
 	cl, err := ctx.RPCClient("app-info")
 	if err != nil {
 		return err
 	}
 
-	ac := server.AppInfoClient{Client: cl}
+	ac := api.AppInfoClient{Client: cl}
 
 	res, err := ac.AppInfo(ctx, opts.App)
 	if err != nil {
@@ -84,7 +97,7 @@ func App(ctx *Context, opts struct {
 
 	p := tea.NewProgram(Model{
 		cfg:   cfgres.Configuration(),
-		cl:    &server.AppInfoClient{Client: cl},
+		cl:    &api.AppInfoClient{Client: cl},
 		app:   opts.App,
 		watch: opts.Watch,
 		cpu: timeserieslinechart.New(60, 12,
@@ -130,9 +143,9 @@ var (
 
 type Model struct {
 	cfg    *app.Configuration
-	cl     *server.AppInfoClient
+	cl     *api.AppInfoClient
 	app    string
-	status *server.ApplicationStatus
+	status *api.ApplicationStatus
 	watch  bool
 
 	cpu timeserieslinechart.Model
@@ -283,11 +296,28 @@ func (m Model) View() string {
 
 	sort.Strings(envvars)
 
+	var concurrency string
+
+	if m.cfg.HasAutoConcurrency() {
+		if m.cfg.AutoConcurrency().HasFactor() {
+			concurrency = fmt.Sprintf("auto (factor of %d)",
+				m.cfg.AutoConcurrency().Factor(),
+			)
+		} else {
+			concurrency = "auto"
+		}
+	} else if m.cfg.HasConcurrency() {
+		concurrency = fmt.Sprintf("%d", m.cfg.Concurrency())
+	} else {
+		// Really shouldn't happen
+		concurrency = "unknown"
+	}
+
 	hdr := fmt.Sprintf("       name: %s\nlast update: %s %s\nconcurrency: %s\n   env vars: %s\n",
 		bold.Render(m.status.Name()),
 		bold.Render(lastUpdate),
 		laExtra,
-		bold.Render(fmt.Sprintf("%d", m.cfg.Concurrency())),
+		bold.Render(concurrency),
 		bold.Render(strings.Join(envvars, ", ")),
 	)
 

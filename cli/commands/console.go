@@ -26,13 +26,15 @@ func currentConsole() console.Console {
 
 func Console(ctx *Context, opts struct {
 	AppCentric
-	Pool string   `long:"pool" default:"shell" description:"Pool to use"`
-	Args []string `positional-args:"yes"`
+	Pool string `long:"pool" default:"shell" description:"Pool to use"`
+	Rest struct {
+		Args []string
+	} `positional-args:"yes"`
 }) error {
 	opt := new(shell.ShellOptions)
 
-	if len(opts.Args) > 0 {
-		opt.SetCommand(opts.Args)
+	if len(opts.Rest.Args) > 0 {
+		opt.SetCommand(opts.Rest.Args)
 	}
 
 	if opts.Pool != "" {

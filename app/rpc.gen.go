@@ -10,9 +10,49 @@ import (
 	"miren.dev/runtime/pkg/rpc/standard"
 )
 
+type autoConcurrencyData struct {
+	Factor *int32 `cbor:"1,keyasint,omitempty" json:"factor,omitempty"`
+}
+
+type AutoConcurrency struct {
+	data autoConcurrencyData
+}
+
+func (v *AutoConcurrency) HasFactor() bool {
+	return v.data.Factor != nil
+}
+
+func (v *AutoConcurrency) Factor() int32 {
+	if v.data.Factor == nil {
+		return 0
+	}
+	return *v.data.Factor
+}
+
+func (v *AutoConcurrency) SetFactor(factor int32) {
+	v.data.Factor = &factor
+}
+
+func (v *AutoConcurrency) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *AutoConcurrency) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *AutoConcurrency) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *AutoConcurrency) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
 type configurationData struct {
-	EnvVars     *[]*NamedValue `cbor:"0,keyasint,omitempty" json:"env_vars,omitempty"`
-	Concurrency *int32         `cbor:"1,keyasint,omitempty" json:"concurrency,omitempty"`
+	EnvVars         *[]*NamedValue   `cbor:"0,keyasint,omitempty" json:"env_vars,omitempty"`
+	Concurrency     *int32           `cbor:"1,keyasint,omitempty" json:"concurrency,omitempty"`
+	AutoConcurrency *AutoConcurrency `cbor:"2,keyasint,omitempty" json:"auto_concurrency,omitempty"`
 }
 
 type Configuration struct {
@@ -48,6 +88,18 @@ func (v *Configuration) Concurrency() int32 {
 
 func (v *Configuration) SetConcurrency(concurrency int32) {
 	v.data.Concurrency = &concurrency
+}
+
+func (v *Configuration) HasAutoConcurrency() bool {
+	return v.data.AutoConcurrency != nil
+}
+
+func (v *Configuration) AutoConcurrency() *AutoConcurrency {
+	return v.data.AutoConcurrency
+}
+
+func (v *Configuration) SetAutoConcurrency(auto_concurrency *AutoConcurrency) {
+	v.data.AutoConcurrency = auto_concurrency
 }
 
 func (v *Configuration) MarshalCBOR() ([]byte, error) {
@@ -587,6 +639,65 @@ func (v *CrudListResults) UnmarshalJSON(data []byte) error {
 	return json.Unmarshal(data, &v.data)
 }
 
+type crudDestroyArgsData struct {
+	Name *string `cbor:"0,keyasint,omitempty" json:"name,omitempty"`
+}
+
+type CrudDestroyArgs struct {
+	call *rpc.Call
+	data crudDestroyArgsData
+}
+
+func (v *CrudDestroyArgs) HasName() bool {
+	return v.data.Name != nil
+}
+
+func (v *CrudDestroyArgs) Name() string {
+	if v.data.Name == nil {
+		return ""
+	}
+	return *v.data.Name
+}
+
+func (v *CrudDestroyArgs) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *CrudDestroyArgs) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *CrudDestroyArgs) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *CrudDestroyArgs) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type crudDestroyResultsData struct{}
+
+type CrudDestroyResults struct {
+	call *rpc.Call
+	data crudDestroyResultsData
+}
+
+func (v *CrudDestroyResults) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *CrudDestroyResults) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *CrudDestroyResults) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *CrudDestroyResults) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
 type CrudNew struct {
 	*rpc.Call
 	args    CrudNewArgs
@@ -717,12 +828,39 @@ func (t *CrudList) Results() *CrudListResults {
 	return results
 }
 
+type CrudDestroy struct {
+	*rpc.Call
+	args    CrudDestroyArgs
+	results CrudDestroyResults
+}
+
+func (t *CrudDestroy) Args() *CrudDestroyArgs {
+	args := &t.args
+	if args.call != nil {
+		return args
+	}
+	args.call = t.Call
+	t.Call.Args(args)
+	return args
+}
+
+func (t *CrudDestroy) Results() *CrudDestroyResults {
+	results := &t.results
+	if results.call != nil {
+		return results
+	}
+	results.call = t.Call
+	t.Call.Results(results)
+	return results
+}
+
 type Crud interface {
 	New(ctx context.Context, state *CrudNew) error
 	SetConfiguration(ctx context.Context, state *CrudSetConfiguration) error
 	GetConfiguration(ctx context.Context, state *CrudGetConfiguration) error
 	SetHost(ctx context.Context, state *CrudSetHost) error
 	List(ctx context.Context, state *CrudList) error
+	Destroy(ctx context.Context, state *CrudDestroy) error
 }
 
 type reexportCrud struct {
@@ -746,6 +884,10 @@ func (_ reexportCrud) SetHost(ctx context.Context, state *CrudSetHost) error {
 }
 
 func (_ reexportCrud) List(ctx context.Context, state *CrudList) error {
+	panic("not implemented")
+}
+
+func (_ reexportCrud) Destroy(ctx context.Context, state *CrudDestroy) error {
 	panic("not implemented")
 }
 
@@ -793,6 +935,14 @@ func AdaptCrud(t Crud) *rpc.Interface {
 			Index:         0,
 			Handler: func(ctx context.Context, call *rpc.Call) error {
 				return t.List(ctx, &CrudList{Call: call})
+			},
+		},
+		{
+			Name:          "destroy",
+			InterfaceName: "Crud",
+			Index:         0,
+			Handler: func(ctx context.Context, call *rpc.Call) error {
+				return t.Destroy(ctx, &CrudDestroy{Call: call})
 			},
 		},
 	}
@@ -954,4 +1104,23 @@ func (v CrudClient) List(ctx context.Context) (*CrudClientListResults, error) {
 	}
 
 	return &CrudClientListResults{client: v.Client, data: ret}, nil
+}
+
+type CrudClientDestroyResults struct {
+	client *rpc.Client
+	data   crudDestroyResultsData
+}
+
+func (v CrudClient) Destroy(ctx context.Context, name string) (*CrudClientDestroyResults, error) {
+	args := CrudDestroyArgs{}
+	args.data.Name = &name
+
+	var ret crudDestroyResultsData
+
+	err := v.Client.Call(ctx, "destroy", &args, &ret)
+	if err != nil {
+		return nil, err
+	}
+
+	return &CrudClientDestroyResults{client: v.Client, data: ret}, nil
 }

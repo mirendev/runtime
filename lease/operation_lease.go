@@ -2,6 +2,7 @@ package lease
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"time"
 
@@ -198,6 +199,10 @@ func (l *leaseOperation) setupLaunch(ctx context.Context) error {
 		return err
 	}
 
+	if mrv.ImageId == "" {
+		return fmt.Errorf("version has no image, and is undeployable")
+	}
+
 	l.mrv = mrv
 
 	pc := &pendingContainer{
@@ -257,7 +262,13 @@ func (l *leaseOperation) launchContainer(ctx context.Context) (*LeasedContainer,
 		container: rc,
 	}
 
-	if l.mrv.Configuration.HasConcurrency() {
+	if l.mrv.Configuration.HasAutoConcurrency() {
+		win.maxLeasesPerWindow = l.AutoConcurrencyInitial
+
+		if l.mrv.Configuration.AutoConcurrency().HasFactor() {
+			win.maxLeasesPerWindow *= int(l.mrv.Configuration.AutoConcurrency().Factor())
+		}
+	} else if l.mrv.Configuration.HasConcurrency() {
 		win.maxLeasesPerWindow = int(l.mrv.Configuration.Concurrency())
 	}
 

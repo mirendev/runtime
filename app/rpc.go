@@ -46,6 +46,30 @@ func (r *RPCCrud) New(ctx context.Context, state *CrudNew) error {
 	return nil
 }
 
+func (r *RPCCrud) Destroy(ctx context.Context, state *CrudDestroy) error {
+	name := state.Args().Name()
+	ac, err := r.Access.LoadApp(ctx, name)
+	if err != nil {
+		// No app, no problem.
+		return nil
+	}
+
+	ver := &AppVersion{
+		App:   ac,
+		AppId: ac.Id,
+
+		// This is a special version that will be used to clear all versions
+		Version: "final-for-destroy",
+	}
+
+	err = r.CV.ClearOldVersions(ctx, ver)
+	if err != nil {
+		return err
+	}
+
+	return r.Access.DeleteApp(ctx, ac.Id)
+}
+
 func (r *RPCCrud) List(ctx context.Context, state *CrudList) error {
 	apps, err := r.Access.ListApps(ctx)
 	if err != nil {
@@ -85,8 +109,12 @@ func (r *RPCCrud) SetConfiguration(ctx context.Context, state *CrudSetConfigurat
 
 	ver, err := r.Access.MostRecentVersion(ctx, ac)
 	if err != nil {
-		// Error out so that we don't create a version that has no image
-		return err
+		// This will create a version without an image id, so it won't be
+		// deployable.
+		ver = &AppVersion{
+			App:   ac,
+			AppId: ac.Id,
+		}
 	}
 
 	cfg := state.Args().Configuration()

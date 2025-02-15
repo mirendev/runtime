@@ -4,6 +4,12 @@ imports:
     import: miren.dev/runtime/pkg/rpc/standard
 
 types:
+  - type: AutoConcurrency
+    fields:
+      - name: factor
+        type: int32
+        index: 1
+
   - type: Configuration
     fields:
       - name: env_vars
@@ -13,6 +19,9 @@ types:
       - name: concurrency
         type: int32
         index: 1
+      - name: auto_concurrency
+        type: AutoConcurrency
+        index: 2
 
   - type: NamedValue
     fields:
@@ -81,3 +90,7 @@ interfaces:
           - name: apps
             type: list
             element: AppInfo
+      - name: destroy
+        parameters:
+          - name: name
+            type: string

@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/netip"
 	"strings"
 	"time"
 
@@ -38,12 +39,22 @@ func (h *LeaseHTTP) Populated() error {
 	return nil
 }
 
-func (h *LeaseHTTP) DeriveApp(req *http.Request) (string, bool) {
-	if strings.HasSuffix(req.Host, h.checkDomain) {
-		return strings.TrimSuffix(req.Host, h.checkDomain), true
+func (h *LeaseHTTP) DeriveApp(host string) (string, bool) {
+	if host == "" {
+		return "", false
 	}
 
-	return "", false
+	_, err := netip.ParseAddr(host)
+	if err != nil {
+		return "", false
+	}
+
+	if app, _, ok := strings.Cut(host, "."); ok {
+		return app, true
+	}
+
+	// Ok, it's JUST a name, so let's try it.
+	return host, true
 }
 
 func (h *LeaseHTTP) ServeHTTP(w http.ResponseWriter, req *http.Request) {
@@ -59,7 +70,7 @@ func (h *LeaseHTTP) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 
 	if ac == nil {
 		h.Log.Debug("no application found by host route", "host", req.Host)
-		app, ok := h.DeriveApp(req)
+		app, ok := h.DeriveApp(onlyHost)
 		if !ok {
 			w.WriteHeader(http.StatusNotFound)
 			return

@@ -13,6 +13,7 @@ import (
 func Run(args []string) int {
 	c := cli.NewCLI("runtime", version.Version)
 	c.Commands = commands.AllCommands()
+	c.HiddenCommands = commands.HiddenCommands()
 	c.Args = args[1:]
 
 	exitStatus, err := c.Run()

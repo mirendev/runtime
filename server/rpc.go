@@ -3,13 +3,14 @@ package server
 import (
 	"context"
 
+	"miren.dev/runtime/api"
 	"miren.dev/runtime/pkg/rpc"
 )
 
-var _ UserQuery = &Server{}
+var _ api.UserQuery = &Server{}
 
-func (s *Server) WhoAmI(ctx context.Context, req *UserQueryWhoAmI) error {
-	var ui UserInfo
+func (s *Server) WhoAmI(ctx context.Context, req *api.UserQueryWhoAmI) error {
+	var ui api.UserInfo
 
 	ci := rpc.ConnectionInfo(ctx)
 	if ci != nil {
