@@ -231,8 +231,9 @@ func (b *Buildkit) Transform(ctx context.Context, dfs fsutil.FS, tos ...Transfor
 					}
 					if data, err := json.Marshal(ss); err == nil {
 						/*
-							err := b.LogWriter.WriteEntry("build", ref, observability.LogEntry{
+							err := b.LogWriter.WriteEntry("build", observability.LogEntry{
 								Timestamp: time.Now(),
+								Stream:    observability.Stdout,
 								Body:      string(data),
 							})
 							if err != nil {

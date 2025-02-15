@@ -1,26 +1,57 @@
 #!/bin/bash
 
-current_branch=$(git rev-parse --abbrev-ref HEAD)
+if test -z "$VERSION"; then
 
-# If it's a release branch, extract the version, otherwise use branch name
-if [[ $current_branch =~ ^release/(.*) ]]; then
-  version="${BASH_REMATCH[1]}"
+  current_branch=$(git rev-parse --abbrev-ref HEAD)
+
+  # If it's a release branch, extract the version, otherwise use branch name
+  if [[ $current_branch =~ ^release/(.*) ]]; then
+    version="${BASH_REMATCH[1]}"
+  else
+    version="$current_branch:$(git rev-parse --short HEAD)"
+  fi
 else
-  version="$current_branch:$(git rev-parse --short HEAD)"
+  version="$VERSION"
 fi
 
 echo "Building version $version"
 
-mkdir -p tmp/release
+dir="tmp/release/$version"
 
-echo "Darwin / arm64"
-GOOS=darwin GOARCH=arm64 go build -ldflags "-X miren.dev/runtime/version.Version=$version" -o tmp/release/runtime-darwin-arm64 ./cmd/runtime
+mkdir -p $dir
 
-echo "Darwin / amd64"
-GOOS=darwin GOARCH=amd64 go build -ldflags "-X miren.dev/runtime/version.Version=$version" -o tmp/release/runtime-darwin-amd64 ./cmd/runtime
+if ! test -f $dir/runtime-darwin-arm64.zip; then
+  echo "Darwin / arm64"
+  GOOS=darwin GOARCH=arm64 go build -ldflags "-X miren.dev/runtime/version.Version=$version" -o $dir/runtime ./cmd/runtime
 
-echo "Linux / arm64"
-GOOS=linux GOARCH=arm64 go build -ldflags "-X miren.dev/runtime/version.Version=$version" -o tmp/release/runtime-linux-arm64 ./cmd/runtime
+  zip -j $dir/runtime-darwin-arm64.zip $dir/runtime
 
-echo "Linux / amd64"
-GOOS=linux GOARCH=amd64 go build -ldflags "-X miren.dev/runtime/version.Version=$version" -o tmp/release/runtime-linux-amd64 ./cmd/runtime
+  rm $dir/runtime
+fi
+
+if ! test -f $dir/runtime-darwin-amd64.zip; then
+  echo "Darwin / amd64"
+  GOOS=darwin GOARCH=amd64 go build -ldflags "-X miren.dev/runtime/version.Version=$version" -o $dir/runtime ./cmd/runtime
+
+  zip -j $dir/runtime-darwin-amd64.zip $dir/runtime
+
+  rm $dir/runtime
+fi
+
+if ! test -f $dir/runtime-linux-arm64.zip; then
+  echo "Linux / arm64"
+  GOOS=linux GOARCH=arm64 go build -ldflags "-X miren.dev/runtime/version.Version=$version" -o $dir/runtime ./cmd/runtime
+
+  zip -j $dir/runtime-linux-arm64.zip $dir/runtime
+
+  rm $dir/runtime
+fi
+
+if ! test -f $dir/runtime-linux-amd64.zip; then
+  echo "Linux / amd64"
+  GOOS=linux GOARCH=amd64 go build -ldflags "-X miren.dev/runtime/version.Version=$version" -o $dir/runtime ./cmd/runtime
+
+  zip -j $dir/runtime-linux-amd64.zip $dir/runtime
+
+  rm $dir/runtime
+fi
