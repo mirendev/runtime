@@ -22,21 +22,26 @@ require (
 	github.com/coreos/go-iptables v0.7.0
 	github.com/dave/jennifer v1.7.1
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc
+	github.com/docker/docker v27.3.1+incompatible
 	github.com/elastic/go-perf v0.0.0-20241029065020-30bec95324b8
 	github.com/fxamacker/cbor/v2 v2.7.0
 	github.com/google/pprof v0.0.0-20241203143554-1e3fdc7de467
-	github.com/hashicorp/yamux v0.1.2
 	github.com/ironpark/skiplist v0.0.0-20230103051251-d63941a7d606
 	github.com/jackc/pgx/v5 v5.7.1
 	github.com/jackc/tern/v2 v2.2.3
 	github.com/jessevdk/go-flags v1.6.1
+	github.com/lucasb-eyer/go-colorful v1.2.0
 	github.com/mattn/go-colorable v0.1.13
 	github.com/mattn/go-isatty v0.0.20
 	github.com/mattn/go-sqlite3 v1.14.24
+	github.com/miekg/dns v1.1.63
 	github.com/mitchellh/cli v1.1.5
 	github.com/mitchellh/go-testing-interface v1.14.1
 	github.com/moby/buildkit v0.17.1
+	github.com/morikuni/aec v1.0.0
 	github.com/mr-tron/base58 v1.2.0
+	github.com/muesli/termenv v0.15.2
+	github.com/opencontainers/go-digest v1.0.0
 	github.com/opencontainers/runtime-spec v1.2.0
 	github.com/pelletier/go-toml/v2 v2.2.3
 	github.com/pkg/errors v0.9.1
@@ -45,6 +50,9 @@ require (
 	github.com/spf13/pflag v1.0.5
 	github.com/stretchr/testify v1.10.0
 	github.com/tonistiigi/fsutil v0.0.0-20241028165955-397af5306b5c
+	github.com/tonistiigi/go-csvvalue v0.0.0-20240710180619-ddb21b71c0b4
+	github.com/tonistiigi/units v0.0.0-20180711220420-6950e57a87ea
+	github.com/tonistiigi/vt100 v0.0.0-20240514184818-90bafcd6abab
 	github.com/vishvananda/netlink v1.3.0
 	go.opentelemetry.io/otel v1.33.0
 	go.opentelemetry.io/otel/exporters/stdout/stdoutlog v0.9.0
@@ -56,9 +64,11 @@ require (
 	go.opentelemetry.io/otel/sdk/metric v1.33.0
 	go.opentelemetry.io/otel/trace v1.33.0
 	go4.org/netipx v0.0.0-20231129151722-fdeea329fbba
+	golang.org/x/crypto v0.32.0
 	golang.org/x/net v0.32.0
 	golang.org/x/sync v0.10.0
 	golang.org/x/sys v0.29.0
+	golang.org/x/time v0.6.0
 	golang.org/x/tools v0.28.0
 	google.golang.org/protobuf v1.35.2
 	gopkg.in/yaml.v3 v3.0.1
@@ -91,7 +101,8 @@ require (
 	github.com/containerd/ttrpc v1.2.6 // indirect
 	github.com/distribution/reference v0.6.0 // indirect
 	github.com/docker/cli v27.3.1+incompatible // indirect
-	github.com/docker/docker v27.3.1+incompatible // indirect
+	github.com/docker/go-connections v0.5.0 // indirect
+	github.com/docker/go-units v0.5.0 // indirect
 	github.com/erikgeiser/coninput v0.0.0-20211004153227-1c3628e74d0f // indirect
 	github.com/fatih/color v1.18.0 // indirect
 	github.com/felixge/httpsnoop v1.0.4 // indirect
@@ -118,10 +129,8 @@ require (
 	github.com/jackc/puddle/v2 v2.2.2 // indirect
 	github.com/klauspost/compress v1.17.11 // indirect
 	github.com/lrstanley/bubblezone v0.0.0-20240914071701-b48c55a5e78e // indirect
-	github.com/lucasb-eyer/go-colorful v1.2.0 // indirect
 	github.com/mattn/go-localereader v0.0.1 // indirect
 	github.com/mattn/go-runewidth v0.0.16 // indirect
-	github.com/miekg/dns v1.1.63 // indirect
 	github.com/mitchellh/copystructure v1.2.0 // indirect
 	github.com/mitchellh/reflectwalk v1.0.2 // indirect
 	github.com/moby/docker-image-spec v1.3.1 // indirect
@@ -132,12 +141,9 @@ require (
 	github.com/moby/sys/signal v0.7.1 // indirect
 	github.com/moby/sys/user v0.3.0 // indirect
 	github.com/moby/sys/userns v0.1.0 // indirect
-	github.com/morikuni/aec v1.0.0 // indirect
 	github.com/muesli/ansi v0.0.0-20230316100256-276c6243b2f6 // indirect
 	github.com/muesli/cancelreader v0.2.2 // indirect
-	github.com/muesli/termenv v0.15.2 // indirect
 	github.com/onsi/ginkgo/v2 v2.19.0 // indirect
-	github.com/opencontainers/go-digest v1.0.0 // indirect
 	github.com/opencontainers/image-spec v1.1.0 // indirect
 	github.com/opencontainers/runtime-tools v0.9.1-0.20221107090550-2e043c6bd626 // indirect
 	github.com/opencontainers/selinux v1.11.1 // indirect
@@ -155,9 +161,6 @@ require (
 	github.com/shopspring/decimal v1.4.0 // indirect
 	github.com/spf13/cast v1.7.0 // indirect
 	github.com/syndtr/gocapability v0.0.0-20200815063812-42c35b437635 // indirect
-	github.com/tonistiigi/go-csvvalue v0.0.0-20240710180619-ddb21b71c0b4 // indirect
-	github.com/tonistiigi/units v0.0.0-20180711220420-6950e57a87ea // indirect
-	github.com/tonistiigi/vt100 v0.0.0-20240514184818-90bafcd6abab // indirect
 	github.com/vbatts/tar-split v0.11.5 // indirect
 	github.com/vishvananda/netns v0.0.4 // indirect
 	github.com/x448/float16 v0.8.4 // indirect
@@ -170,11 +173,9 @@ require (
 	go.opentelemetry.io/otel/metric v1.33.0 // indirect
 	go.opentelemetry.io/proto/otlp v1.3.1 // indirect
 	go.uber.org/mock v0.5.0 // indirect
-	golang.org/x/crypto v0.32.0 // indirect
 	golang.org/x/exp v0.0.0-20240909161429-701f63a606c0 // indirect
 	golang.org/x/mod v0.22.0 // indirect
 	golang.org/x/text v0.21.0 // indirect
-	golang.org/x/time v0.6.0 // indirect
 	google.golang.org/genproto v0.0.0-20240123012728-ef4313101c80 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20241007155032-5fefd90f89a9 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20241021214115-324edc3d5d38 // indirect

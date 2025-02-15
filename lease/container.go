@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -46,6 +47,8 @@ type LaunchContainer struct {
 	MaxContainersPerApp   int           `asm:"max_containers_per_app,optional"`
 	IdleTimeout           time.Duration `asm:"container_idle_timeout,optional"`
 
+	AutoConcurrencyInitial int `asm:"auto_concurrency_initial,optional"`
+
 	mu sync.Mutex
 
 	applications map[string]*application
@@ -72,6 +75,18 @@ func (l *LaunchContainer) Populated() error {
 
 	if l.IdleTimeout == 0 {
 		l.IdleTimeout = 1 * time.Hour
+	}
+
+	if l.AutoConcurrencyInitial == 0 {
+		// We always reserve a core for the runtime itself.
+		availableCores := runtime.NumCPU()
+		if availableCores > 1 {
+			availableCores--
+		}
+
+		l.AutoConcurrencyInitial = availableCores
+
+		l.Log.Info("setting auto concurrency initial", "value", l.AutoConcurrencyInitial)
 	}
 
 	return nil

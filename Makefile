@@ -20,6 +20,9 @@ bin/runtime:
 
 .PHONY: bin/runtime
 
+release:
+	@bash ./hack/build-release.sh
+
 bin/runtime-debug:
 	go build -gcflags="all=-N -l" -o bin/runtime-debug ./cmd/runtime
 

@@ -14,6 +14,7 @@ import (
 	"miren.dev/runtime/pkg/rpc"
 	"miren.dev/runtime/pkg/slogfmt"
 	"miren.dev/runtime/pkg/slogrus"
+	"miren.dev/runtime/pkg/ui"
 )
 
 type GlobalFlags struct {
@@ -199,6 +200,18 @@ func (c *Context) SetExitCode(code int) {
 
 func (c *Context) Printf(format string, args ...interface{}) {
 	fmt.Fprintf(c.Stdout, format, args...)
+}
+
+func (c *Context) Completed(format string, args ...interface{}) {
+	fmt.Fprintf(c.Stdout, ui.Checkmark+" "+format+"\n", args...)
+}
+
+func (c *Context) Info(format string, args ...interface{}) {
+	fmt.Fprintf(c.Stdout, "  "+format+"\n", args...)
+}
+
+func (c *Context) Begin(format string, args ...interface{}) {
+	fmt.Fprintf(c.Stderr, ui.Play+" "+format+"\n", args...)
 }
 
 func (c *Context) RPCClient(name string) (*rpc.Client, error) {

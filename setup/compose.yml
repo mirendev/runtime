@@ -7,9 +7,12 @@ services:
       - 80:80
       - 8443:8443/udp
     privileged: true
+    labels:
+      computer.runtime.cluster: "local"
     volumes:
       - containerd:/var/lib/containerd
       - runtime:/var/lib/runtime
+    restart: always
     depends_on:
       clickhouse:
         condition: service_healthy
@@ -23,6 +26,7 @@ services:
       - CLICKHOUSE_PASSWORD=default
     volumes:
       - clickhouse:/var/lib/clickhouse
+    restart: always
     healthcheck:
       # Can just use 'db' as the host since we're inside the container network
       test: ["CMD", "clickhouse-client", "--host", "clickhouse", "--query", "SELECT 1"]
@@ -38,6 +42,7 @@ services:
       - POSTGRES_USER=runtime
     volumes:
       - postgres:/var/lib/postgresql/data
+    restart: always
     healthcheck:
       test: ["CMD-SHELL", "PGPASSWORD=runtime pg_isready -U runtime -d runtime_prod"]
       interval: 1s

@@ -1,4 +1,15 @@
+imports:
+  standard:
+    path: ../pkg/rpc/standard/standard.yml
+    import: miren.dev/runtime/pkg/rpc/standard
+
 types:
+  - type: AutoConcurrency
+    fields:
+      - name: factor
+        type: int32
+        index: 1
+
   - type: Configuration
     fields:
       - name: env_vars
@@ -8,6 +19,9 @@ types:
       - name: concurrency
         type: int32
         index: 1
+      - name: auto_concurrency
+        type: AutoConcurrency
+        index: 2
 
   - type: NamedValue
     fields:
@@ -20,6 +34,22 @@ types:
       - name: sensitive
         type: bool
         index: 2
+
+  - type: VersionInfo
+    fields:
+      - name: version
+        type: string
+      - name: created_at
+        type: standard.Timestamp
+
+  - type: AppInfo
+    fields:
+      - name: name
+        type: string
+      - name: created_at
+        type: standard.Timestamp
+      - name: current_version
+        type: VersionInfo
 
 interfaces:
   - name: Crud
@@ -54,4 +84,13 @@ interfaces:
           - name: app
             type: string
           - name: host
+            type: string
+      - name: list
+        results:
+          - name: apps
+            type: list
+            element: AppInfo
+      - name: destroy
+        parameters:
+          - name: name
             type: string

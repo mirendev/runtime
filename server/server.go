@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"miren.dev/runtime/api"
 	"miren.dev/runtime/app"
 	"miren.dev/runtime/build"
 	"miren.dev/runtime/clientconfig"
@@ -28,12 +29,14 @@ type Server struct {
 	Log  *slog.Logger
 	Port int `asm:"server_port"`
 
+	HTTPAddress string `asm:"http-address"`
+
 	DataPath string `asm:"data-path"`
 	TempDir  string `asm:"tempdir"`
 
 	LocalPath string `asm:"local-path,optional"`
 
-	RequireClientCerts bool `asm:"require-client-certs"`
+	RequireClientCerts bool `asm:"require-client-certs,optional"`
 
 	Build   *build.RPCBuilder
 	Shell   *shell.RPCShell
@@ -288,14 +291,14 @@ func (s *Server) Run(ctx context.Context) error {
 
 	serv.ExposeValue("build", build.AdaptBuilder(s.Build))
 	serv.ExposeValue("app", app.AdaptCrud(s.AppCrud))
-	serv.ExposeValue("app-info", AdaptAppInfo(s.AppInfo))
-	serv.ExposeValue("logs", AdaptLogs(s.LogsRPC))
+	serv.ExposeValue("app-info", api.AdaptAppInfo(s.AppInfo))
+	serv.ExposeValue("logs", api.AdaptLogs(s.LogsRPC))
 	serv.ExposeValue("shell", shell.AdaptShellAccess(s.Shell))
-	serv.ExposeValue("user", AdaptUserQuery(s))
+	serv.ExposeValue("user", api.AdaptUserQuery(s))
 
-	go http.ListenAndServe(":8080", s.Ingress)
+	go http.ListenAndServe(s.HTTPAddress, s.Ingress)
 
-	s.Log.Info("server started", "rpc-port", s.Port, "http-port", ":8080")
+	s.Log.Info("server started", "rpc-port", s.Port, "http-port", s.HTTPAddress, "https-port", ":443")
 
 	err = s.ServeTLS()
 	if err != nil {

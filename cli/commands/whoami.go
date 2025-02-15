@@ -1,8 +1,6 @@
 package commands
 
-import (
-	"miren.dev/runtime/server"
-)
+import "miren.dev/runtime/api"
 
 func WhoAmI(ctx *Context, opts struct {
 	ConfigCentric
@@ -12,7 +10,7 @@ func WhoAmI(ctx *Context, opts struct {
 		return err
 	}
 
-	uq := &server.UserQueryClient{Client: cl}
+	uq := &api.UserQueryClient{Client: cl}
 
 	results, err := uq.WhoAmI(ctx)
 	if err != nil {

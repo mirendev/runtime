@@ -2,6 +2,7 @@ package lease
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"time"
 
@@ -198,6 +199,10 @@ func (l *leaseOperation) setupLaunch(ctx context.Context) error {
 		return err
 	}
 
+	if mrv.ImageId == "" {
+		return fmt.Errorf("version has no image, and is undeployable")
+	}
+
 	l.mrv = mrv
 
 	pc := &pendingContainer{
@@ -257,7 +262,13 @@ func (l *leaseOperation) launchContainer(ctx context.Context) (*LeasedContainer,
 		container: rc,
 	}
 
-	if l.mrv.Configuration.HasConcurrency() {
+	if l.mrv.Configuration.HasAutoConcurrency() {
+		win.maxLeasesPerWindow = l.AutoConcurrencyInitial
+
+		if l.mrv.Configuration.AutoConcurrency().HasFactor() {
+			win.maxLeasesPerWindow *= int(l.mrv.Configuration.AutoConcurrency().Factor())
+		}
+	} else if l.mrv.Configuration.HasConcurrency() {
 		win.maxLeasesPerWindow = int(l.mrv.Configuration.Concurrency())
 	}
 
@@ -332,11 +343,15 @@ func (l *leaseOperation) launch(
 		l.Log.Info("not waiting for network", "container", config.Id)
 		err = l.Health.WaitReady(ctx, config.Id)
 		if err != nil {
+			l.Log.Error("error waiting for container", "container", config.Id, "error", err)
+			l.CR.StopContainer(ctx, config.Id)
 			return nil, err
 		}
 	} else {
 		err = l.Health.WaitForReady(ctx, config.Id)
 		if err != nil {
+			l.Log.Error("error waiting for container readiness", "container", config.Id, "error", err)
+			l.CR.StopContainer(ctx, config.Id)
 			return nil, err
 		}
 	}

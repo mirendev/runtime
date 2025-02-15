@@ -1,18 +1,25 @@
 package commands
 
-import "github.com/mitchellh/cli"
+import (
+	"github.com/mitchellh/cli"
+)
 
 func AllCommands() map[string]cli.CommandFactory {
-	return map[string]cli.CommandFactory{
+	base := map[string]cli.CommandFactory{
 		"version": func() (cli.Command, error) {
 			return Infer("version", "Print the version", Version), nil
 		},
 
+		"setup": func() (cli.Command, error) {
+			return Infer("setup", "Setup the runtime access", Setup), nil
+		},
+
+		"import": func() (cli.Command, error) {
+			return Infer("import", "Import an image", Import), nil
+		},
+
 		"deploy": func() (cli.Command, error) {
 			return Infer("Deploy", "Deploy an application", Deploy), nil
-		},
-		"server": func() (cli.Command, error) {
-			return Infer("server", "Start the server", Server), nil
 		},
 
 		"console": func() (cli.Command, error) {
@@ -23,9 +30,14 @@ func AllCommands() map[string]cli.CommandFactory {
 			return Infer("app", "Get information about an application", App), nil
 		},
 
+		"apps": func() (cli.Command, error) {
+			return Infer("apps", "List all applications", Apps), nil
+		},
+
 		"set": func() (cli.Command, error) {
 			return Infer("set", "Set environment variables for an application", Set), nil
 		},
+
 		"set host": func() (cli.Command, error) {
 			return Infer("set host", "Set the hostname of an application", SetHost), nil
 		},
@@ -38,8 +50,20 @@ func AllCommands() map[string]cli.CommandFactory {
 			return Infer("app new", "Create a new application", AppNew), nil
 		},
 
+		"app destroy": func() (cli.Command, error) {
+			return Infer("app destroy", "Create a new application", AppDestroy), nil
+		},
+
+		"config": func() (cli.Command, error) {
+			return Section("config", "Commands related to client configuration"), nil
+		},
+
 		"config info": func() (cli.Command, error) {
-			return Infer("config info", "Get information about the configuration", ConfigInfo), nil
+			return Infer("config info", "Get information about the client configuration", ConfigInfo), nil
+		},
+
+		"user": func() (cli.Command, error) {
+			return Section("user", "Commands related to cluster users"), nil
 		},
 
 		"user whoami": func() (cli.Command, error) {
@@ -57,5 +81,16 @@ func AllCommands() map[string]cli.CommandFactory {
 		"debug colors": func() (cli.Command, error) {
 			return Infer("debug colors", "Print some colors", Colors), nil
 		},
+	}
+
+	addCommands(base)
+
+	return base
+}
+
+func HiddenCommands() []string {
+	return []string{
+		"internal",
+		"debug",
 	}
 }

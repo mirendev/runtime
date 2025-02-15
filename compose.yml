@@ -1,3 +1,4 @@
+name: rundev
 services:
   clickhouse:
     image: clickhouse/clickhouse-server:latest

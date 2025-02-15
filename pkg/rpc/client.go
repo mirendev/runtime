@@ -352,12 +352,12 @@ func (c *Client) Call(ctx context.Context, method string, args, result any) erro
 
 	hc, err := c.conn(ctx)
 	if err != nil {
-		return err
+		return fmt.Errorf("error connecting to remote: %w", err)
 	}
 
 	rs, err := hc.OpenRequestStream(ctx)
 	if err != nil {
-		return err
+		return fmt.Errorf("error opening request stream: %w", err)
 	}
 
 	data, err := cbor.Marshal(args)

@@ -64,11 +64,6 @@ func isForeground(fd int) bool {
 	return pgrp == unix.Getpgrp()
 }
 
-const (
-	tcgetattr = unix.TCGETS
-	tcsetattr = unix.TCSETS
-)
-
 func termStatusReport(o *termenv.Output, sequence int) (string, error) {
 	tty := o.TTY()
 	if tty == nil {

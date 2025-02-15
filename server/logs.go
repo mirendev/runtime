@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 
+	"miren.dev/runtime/api"
 	"miren.dev/runtime/app"
 	"miren.dev/runtime/observability"
 	"miren.dev/runtime/pkg/asm/autoreg"
@@ -17,9 +18,9 @@ type RPCLogs struct {
 	LogReader *observability.LogReader
 }
 
-var _ Logs = &RPCLogs{}
+var _ api.Logs = &RPCLogs{}
 
-func (s *RPCLogs) AppLogs(ctx context.Context, req *LogsAppLogs) error {
+func (s *RPCLogs) AppLogs(ctx context.Context, req *api.LogsAppLogs) error {
 	args := req.Args()
 
 	ac, err := s.App.LoadApp(ctx, args.Application())
@@ -41,10 +42,10 @@ func (s *RPCLogs) AppLogs(ctx context.Context, req *LogsAppLogs) error {
 		return err
 	}
 
-	var ret []*LogEntry
+	var ret []*api.LogEntry
 
 	for _, entry := range entries {
-		var le LogEntry
+		var le api.LogEntry
 
 		le.SetTimestamp(standard.ToTimestamp(entry.Timestamp))
 		le.SetLine(entry.Body)

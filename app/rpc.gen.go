@@ -7,11 +7,52 @@ import (
 
 	"github.com/fxamacker/cbor/v2"
 	rpc "miren.dev/runtime/pkg/rpc"
+	"miren.dev/runtime/pkg/rpc/standard"
 )
 
+type autoConcurrencyData struct {
+	Factor *int32 `cbor:"1,keyasint,omitempty" json:"factor,omitempty"`
+}
+
+type AutoConcurrency struct {
+	data autoConcurrencyData
+}
+
+func (v *AutoConcurrency) HasFactor() bool {
+	return v.data.Factor != nil
+}
+
+func (v *AutoConcurrency) Factor() int32 {
+	if v.data.Factor == nil {
+		return 0
+	}
+	return *v.data.Factor
+}
+
+func (v *AutoConcurrency) SetFactor(factor int32) {
+	v.data.Factor = &factor
+}
+
+func (v *AutoConcurrency) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *AutoConcurrency) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *AutoConcurrency) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *AutoConcurrency) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
 type configurationData struct {
-	EnvVars     *[]*NamedValue `cbor:"0,keyasint,omitempty" json:"env_vars,omitempty"`
-	Concurrency *int32         `cbor:"1,keyasint,omitempty" json:"concurrency,omitempty"`
+	EnvVars         *[]*NamedValue   `cbor:"0,keyasint,omitempty" json:"env_vars,omitempty"`
+	Concurrency     *int32           `cbor:"1,keyasint,omitempty" json:"concurrency,omitempty"`
+	AutoConcurrency *AutoConcurrency `cbor:"2,keyasint,omitempty" json:"auto_concurrency,omitempty"`
 }
 
 type Configuration struct {
@@ -47,6 +88,18 @@ func (v *Configuration) Concurrency() int32 {
 
 func (v *Configuration) SetConcurrency(concurrency int32) {
 	v.data.Concurrency = &concurrency
+}
+
+func (v *Configuration) HasAutoConcurrency() bool {
+	return v.data.AutoConcurrency != nil
+}
+
+func (v *Configuration) AutoConcurrency() *AutoConcurrency {
+	return v.data.AutoConcurrency
+}
+
+func (v *Configuration) SetAutoConcurrency(auto_concurrency *AutoConcurrency) {
+	v.data.AutoConcurrency = auto_concurrency
 }
 
 func (v *Configuration) MarshalCBOR() ([]byte, error) {
@@ -133,6 +186,123 @@ func (v *NamedValue) MarshalJSON() ([]byte, error) {
 }
 
 func (v *NamedValue) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type versionInfoData struct {
+	Version   *string             `cbor:"0,keyasint,omitempty" json:"version,omitempty"`
+	CreatedAt *standard.Timestamp `cbor:"0,keyasint,omitempty" json:"created_at,omitempty"`
+}
+
+type VersionInfo struct {
+	data versionInfoData
+}
+
+func (v *VersionInfo) HasVersion() bool {
+	return v.data.Version != nil
+}
+
+func (v *VersionInfo) Version() string {
+	if v.data.Version == nil {
+		return ""
+	}
+	return *v.data.Version
+}
+
+func (v *VersionInfo) SetVersion(version string) {
+	v.data.Version = &version
+}
+
+func (v *VersionInfo) HasCreatedAt() bool {
+	return v.data.CreatedAt != nil
+}
+
+func (v *VersionInfo) CreatedAt() *standard.Timestamp {
+	return v.data.CreatedAt
+}
+
+func (v *VersionInfo) SetCreatedAt(created_at *standard.Timestamp) {
+	v.data.CreatedAt = created_at
+}
+
+func (v *VersionInfo) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *VersionInfo) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *VersionInfo) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *VersionInfo) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type appInfoData struct {
+	Name           *string             `cbor:"0,keyasint,omitempty" json:"name,omitempty"`
+	CreatedAt      *standard.Timestamp `cbor:"0,keyasint,omitempty" json:"created_at,omitempty"`
+	CurrentVersion *VersionInfo        `cbor:"0,keyasint,omitempty" json:"current_version,omitempty"`
+}
+
+type AppInfo struct {
+	data appInfoData
+}
+
+func (v *AppInfo) HasName() bool {
+	return v.data.Name != nil
+}
+
+func (v *AppInfo) Name() string {
+	if v.data.Name == nil {
+		return ""
+	}
+	return *v.data.Name
+}
+
+func (v *AppInfo) SetName(name string) {
+	v.data.Name = &name
+}
+
+func (v *AppInfo) HasCreatedAt() bool {
+	return v.data.CreatedAt != nil
+}
+
+func (v *AppInfo) CreatedAt() *standard.Timestamp {
+	return v.data.CreatedAt
+}
+
+func (v *AppInfo) SetCreatedAt(created_at *standard.Timestamp) {
+	v.data.CreatedAt = created_at
+}
+
+func (v *AppInfo) HasCurrentVersion() bool {
+	return v.data.CurrentVersion != nil
+}
+
+func (v *AppInfo) CurrentVersion() *VersionInfo {
+	return v.data.CurrentVersion
+}
+
+func (v *AppInfo) SetCurrentVersion(current_version *VersionInfo) {
+	v.data.CurrentVersion = current_version
+}
+
+func (v *AppInfo) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *AppInfo) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *AppInfo) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *AppInfo) UnmarshalJSON(data []byte) error {
 	return json.Unmarshal(data, &v.data)
 }
 
@@ -416,6 +586,118 @@ func (v *CrudSetHostResults) UnmarshalJSON(data []byte) error {
 	return json.Unmarshal(data, &v.data)
 }
 
+type crudListArgsData struct{}
+
+type CrudListArgs struct {
+	call *rpc.Call
+	data crudListArgsData
+}
+
+func (v *CrudListArgs) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *CrudListArgs) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *CrudListArgs) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *CrudListArgs) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type crudListResultsData struct {
+	Apps *[]*AppInfo `cbor:"0,keyasint,omitempty" json:"apps,omitempty"`
+}
+
+type CrudListResults struct {
+	call *rpc.Call
+	data crudListResultsData
+}
+
+func (v *CrudListResults) SetApps(apps []*AppInfo) {
+	x := slices.Clone(apps)
+	v.data.Apps = &x
+}
+
+func (v *CrudListResults) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *CrudListResults) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *CrudListResults) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *CrudListResults) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type crudDestroyArgsData struct {
+	Name *string `cbor:"0,keyasint,omitempty" json:"name,omitempty"`
+}
+
+type CrudDestroyArgs struct {
+	call *rpc.Call
+	data crudDestroyArgsData
+}
+
+func (v *CrudDestroyArgs) HasName() bool {
+	return v.data.Name != nil
+}
+
+func (v *CrudDestroyArgs) Name() string {
+	if v.data.Name == nil {
+		return ""
+	}
+	return *v.data.Name
+}
+
+func (v *CrudDestroyArgs) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *CrudDestroyArgs) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *CrudDestroyArgs) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *CrudDestroyArgs) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type crudDestroyResultsData struct{}
+
+type CrudDestroyResults struct {
+	call *rpc.Call
+	data crudDestroyResultsData
+}
+
+func (v *CrudDestroyResults) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *CrudDestroyResults) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *CrudDestroyResults) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *CrudDestroyResults) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
 type CrudNew struct {
 	*rpc.Call
 	args    CrudNewArgs
@@ -520,11 +802,65 @@ func (t *CrudSetHost) Results() *CrudSetHostResults {
 	return results
 }
 
+type CrudList struct {
+	*rpc.Call
+	args    CrudListArgs
+	results CrudListResults
+}
+
+func (t *CrudList) Args() *CrudListArgs {
+	args := &t.args
+	if args.call != nil {
+		return args
+	}
+	args.call = t.Call
+	t.Call.Args(args)
+	return args
+}
+
+func (t *CrudList) Results() *CrudListResults {
+	results := &t.results
+	if results.call != nil {
+		return results
+	}
+	results.call = t.Call
+	t.Call.Results(results)
+	return results
+}
+
+type CrudDestroy struct {
+	*rpc.Call
+	args    CrudDestroyArgs
+	results CrudDestroyResults
+}
+
+func (t *CrudDestroy) Args() *CrudDestroyArgs {
+	args := &t.args
+	if args.call != nil {
+		return args
+	}
+	args.call = t.Call
+	t.Call.Args(args)
+	return args
+}
+
+func (t *CrudDestroy) Results() *CrudDestroyResults {
+	results := &t.results
+	if results.call != nil {
+		return results
+	}
+	results.call = t.Call
+	t.Call.Results(results)
+	return results
+}
+
 type Crud interface {
 	New(ctx context.Context, state *CrudNew) error
 	SetConfiguration(ctx context.Context, state *CrudSetConfiguration) error
 	GetConfiguration(ctx context.Context, state *CrudGetConfiguration) error
 	SetHost(ctx context.Context, state *CrudSetHost) error
+	List(ctx context.Context, state *CrudList) error
+	Destroy(ctx context.Context, state *CrudDestroy) error
 }
 
 type reexportCrud struct {
@@ -544,6 +880,14 @@ func (_ reexportCrud) GetConfiguration(ctx context.Context, state *CrudGetConfig
 }
 
 func (_ reexportCrud) SetHost(ctx context.Context, state *CrudSetHost) error {
+	panic("not implemented")
+}
+
+func (_ reexportCrud) List(ctx context.Context, state *CrudList) error {
+	panic("not implemented")
+}
+
+func (_ reexportCrud) Destroy(ctx context.Context, state *CrudDestroy) error {
 	panic("not implemented")
 }
 
@@ -583,6 +927,22 @@ func AdaptCrud(t Crud) *rpc.Interface {
 			Index:         0,
 			Handler: func(ctx context.Context, call *rpc.Call) error {
 				return t.SetHost(ctx, &CrudSetHost{Call: call})
+			},
+		},
+		{
+			Name:          "list",
+			InterfaceName: "Crud",
+			Index:         0,
+			Handler: func(ctx context.Context, call *rpc.Call) error {
+				return t.List(ctx, &CrudList{Call: call})
+			},
+		},
+		{
+			Name:          "destroy",
+			InterfaceName: "Crud",
+			Index:         0,
+			Handler: func(ctx context.Context, call *rpc.Call) error {
+				return t.Destroy(ctx, &CrudDestroy{Call: call})
 			},
 		},
 	}
@@ -715,4 +1075,52 @@ func (v CrudClient) SetHost(ctx context.Context, app string, host string) (*Crud
 	}
 
 	return &CrudClientSetHostResults{client: v.Client, data: ret}, nil
+}
+
+type CrudClientListResults struct {
+	client *rpc.Client
+	data   crudListResultsData
+}
+
+func (v *CrudClientListResults) HasApps() bool {
+	return v.data.Apps != nil
+}
+
+func (v *CrudClientListResults) Apps() []*AppInfo {
+	if v.data.Apps == nil {
+		return nil
+	}
+	return *v.data.Apps
+}
+
+func (v CrudClient) List(ctx context.Context) (*CrudClientListResults, error) {
+	args := CrudListArgs{}
+
+	var ret crudListResultsData
+
+	err := v.Client.Call(ctx, "list", &args, &ret)
+	if err != nil {
+		return nil, err
+	}
+
+	return &CrudClientListResults{client: v.Client, data: ret}, nil
+}
+
+type CrudClientDestroyResults struct {
+	client *rpc.Client
+	data   crudDestroyResultsData
+}
+
+func (v CrudClient) Destroy(ctx context.Context, name string) (*CrudClientDestroyResults, error) {
+	args := CrudDestroyArgs{}
+	args.data.Name = &name
+
+	var ret crudDestroyResultsData
+
+	err := v.Client.Call(ctx, "destroy", &args, &ret)
+	if err != nil {
+		return nil, err
+	}
+
+	return &CrudClientDestroyResults{client: v.Client, data: ret}, nil
 }

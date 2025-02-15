@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"miren.dev/runtime/api"
 	"miren.dev/runtime/app"
 	"miren.dev/runtime/lease"
 	"miren.dev/runtime/metrics"
@@ -17,9 +18,9 @@ type RPCAppInfo struct {
 	Mem   *metrics.MemoryUsage
 }
 
-var _ AppInfo = &RPCAppInfo{}
+var _ api.AppInfo = &RPCAppInfo{}
 
-func (a *RPCAppInfo) AppInfo(ctx context.Context, state *AppInfoAppInfo) error {
+func (a *RPCAppInfo) AppInfo(ctx context.Context, state *api.AppInfoAppInfo) error {
 	args := state.Args()
 
 	ac, err := a.App.LoadApp(ctx, args.Application())
@@ -32,7 +33,7 @@ func (a *RPCAppInfo) AppInfo(ctx context.Context, state *AppInfoAppInfo) error {
 		return err
 	}
 
-	var rai ApplicationStatus
+	var rai api.ApplicationStatus
 	rai.SetName(ac.Name)
 
 	ver, err := a.App.MostRecentVersion(ctx, ac)
@@ -70,10 +71,10 @@ func (a *RPCAppInfo) AppInfo(ctx context.Context, state *AppInfoAppInfo) error {
 		return err
 	}
 
-	var usages []*CpuUsage
+	var usages []*api.CpuUsage
 
 	for _, uat := range uats {
-		var rcpu CpuUsage
+		var rcpu api.CpuUsage
 
 		rcpu.SetStart(standard.ToTimestamp(uat.Timestamp))
 		rcpu.SetCores(uat.Cores)
@@ -88,10 +89,10 @@ func (a *RPCAppInfo) AppInfo(ctx context.Context, state *AppInfoAppInfo) error {
 
 	rai.SetCpuOverHour(usages)
 
-	var musages []*MemoryUsage
+	var musages []*api.MemoryUsage
 
 	for _, mu := range memusages {
-		var rmu MemoryUsage
+		var rmu api.MemoryUsage
 
 		rmu.SetTimestamp(standard.ToTimestamp(mu.Timestamp))
 		rmu.SetBytes(mu.Memory.Int64())
@@ -106,19 +107,19 @@ func (a *RPCAppInfo) AppInfo(ctx context.Context, state *AppInfoAppInfo) error {
 		return nil
 	}
 
-	var pools []*PoolStatus
+	var pools []*api.PoolStatus
 
 	for _, p := range ai.Pools {
-		var rp PoolStatus
+		var rp api.PoolStatus
 
 		rp.SetName(p.Name)
 		rp.SetIdle(int32(p.Idle))
 		rp.SetIdleUsage(int64(p.IdleUsage))
 
-		var windows []*WindowStatus
+		var windows []*api.WindowStatus
 
 		for _, w := range p.Windows {
-			var rw WindowStatus
+			var rw api.WindowStatus
 
 			rw.SetVersion(w.Version)
 			rw.SetLeases(int32(w.Leases))
