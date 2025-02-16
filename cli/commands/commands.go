@@ -74,6 +74,10 @@ func AllCommands() map[string]cli.CommandFactory {
 			return Infer("internal dial-stdio", "Dial a stdio connection", DialStdio), nil
 		},
 
+		"test load": func() (cli.Command, error) {
+			return Infer("test load", "Loadtest a URL", TestLoad), nil
+		},
+
 		"debug ctr nuke": func() (cli.Command, error) {
 			return Infer("debug ctr nuke", "Nuke a containerd namespace", CtrNuke), nil
 		},
