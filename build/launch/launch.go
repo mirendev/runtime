@@ -150,6 +150,9 @@ func (l *RunningBuildkit) checkReady(ctx context.Context, cont client.Container)
 		},
 		cio.NewCreator(cio.WithStreams(nil, &out, &out)),
 	)
+	if err != nil {
+		return err
+	}
 
 	err = proc.Start(ctx)
 	if err != nil {
@@ -222,6 +225,9 @@ func (l *RunningBuildkit) Client(ctx context.Context) (*buildkit.Client, error) 
 		},
 		cio.NewCreator(cio.WithStreams(ir, ow, os.Stderr)),
 	)
+	if err != nil {
+		return nil, err
+	}
 
 	err = proc.Start(ctx)
 	if err != nil {
