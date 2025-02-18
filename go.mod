@@ -1,6 +1,6 @@
 module miren.dev/runtime
 
-go 1.23.3
+go 1.24
 
 require (
 	github.com/ClickHouse/clickhouse-go/v2 v2.30.0

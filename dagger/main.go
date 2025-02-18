@@ -69,10 +69,10 @@ func (m *Runtime) WithServices(dir *dagger.Directory) *dagger.Container {
 
 func (m *Runtime) BuildEnv(dir *dagger.Directory) *dagger.Container {
 	return dag.Container().
-		From("golang:1.23").
-		WithMountedCache("/go/pkg/mod", dag.CacheVolume("go-mod-123")).
+		From("golang:1.24").
+		WithMountedCache("/go/pkg/mod", dag.CacheVolume("go-mod-124")).
 		WithEnvVariable("GOMODCACHE", "/go/pkg/mod").
-		WithMountedCache("/go/build-cache", dag.CacheVolume("go-build-123")).
+		WithMountedCache("/go/build-cache", dag.CacheVolume("go-build-124")).
 		WithEnvVariable("GOCACHE", "/go/build-cache").
 		WithExec([]string{"apt-get", "update"}).
 		WithExec([]string{"apt-get", "install", "-y", "iptables", "bash"}).
