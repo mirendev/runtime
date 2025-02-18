@@ -12,11 +12,14 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/moby/buildkit/client"
+	"github.com/tonistiigi/fsutil"
 	"miren.dev/runtime/app"
+	"miren.dev/runtime/appconfig"
 	"miren.dev/runtime/build/launch"
 	"miren.dev/runtime/image"
 	"miren.dev/runtime/observability"
 	"miren.dev/runtime/pkg/idgen"
+	"miren.dev/runtime/pkg/procfile"
 	"miren.dev/runtime/pkg/rpc/stream"
 )
 
@@ -90,12 +93,47 @@ func (b *RPCBuilder) nextVersion(ctx context.Context, name string) (*app.AppVers
 		Configuration: currentCfg,
 	}
 
-	err = b.AppAccess.CreateVersion(ctx, av)
+	return av, nil
+}
+
+func (b *RPCBuilder) readProcFile(dfs fsutil.FS) (map[string]string, error) {
+	r, err := dfs.Open("Procfile")
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	defer r.Close()
+
+	data, err := io.ReadAll(r)
 	if err != nil {
 		return nil, err
 	}
 
-	return av, nil
+	return procfile.Parser(data)
+}
+
+func (b *RPCBuilder) loadAppConfig(dfs fsutil.FS) (*appconfig.AppConfig, error) {
+	dr, err := dfs.Open(".runtime/app.toml")
+	if err != nil {
+		return nil, nil
+	}
+
+	defer dr.Close()
+
+	data, err := io.ReadAll(dr)
+	if err != nil {
+		return nil, err
+	}
+
+	ac, err := appconfig.Parse(data)
+	if err != nil {
+		return nil, err
+	}
+
+	return ac, nil
 }
 
 func (b *RPCBuilder) BuildFromTar(ctx context.Context, state *BuilderBuildFromTar) error {
@@ -132,6 +170,38 @@ func (b *RPCBuilder) BuildFromTar(ctx context.Context, state *BuilderBuildFromTa
 	if status != nil {
 		so.Update().SetMessage("Launching builder")
 		status.Send(ctx, so)
+	}
+
+	ac, err := b.loadAppConfig(tr)
+	if err != nil {
+		b.Log.Warn("error loading app config, ignoring", "error", err)
+	}
+
+	var buildStack BuildStack
+	buildStack.CodeDir = path
+
+	if ac != nil && ac.Build != nil {
+		buildStack.OnBuild = ac.Build.OnBuild
+		buildStack.Version = ac.Build.Version
+		buildStack.AlpineImage = ac.Build.AlpineImage
+
+		if ac.Build.Dockerfile != "" {
+			buildStack.Stack = "dockerfile"
+			buildStack.Input = ac.Build.Dockerfile
+
+			b.Log.Info("using dockerfile from app config", "dockerfile", ac.Build.Dockerfile)
+		}
+	}
+
+	if buildStack.Stack == "" {
+		dr, err := tr.Open("Dockefile.runtime")
+		if err == nil {
+			buildStack.Stack = "dockerfile"
+			buildStack.Input = "Dockerfile.runtime"
+			dr.Close()
+		} else {
+			buildStack.Stack = "auto"
+		}
 	}
 
 	b.Log.Debug("launching buildkitd")
@@ -212,7 +282,7 @@ func (b *RPCBuilder) BuildFromTar(ctx context.Context, state *BuilderBuildFromTa
 
 	var wg sync.WaitGroup
 
-	err = bk.BuildImage(ctx, tr, func() (io.WriteCloser, error) {
+	err = bk.BuildImage(ctx, tr, buildStack, func() (io.WriteCloser, error) {
 		r, w, err := os.Pipe()
 		if err != nil {
 			return nil, err
@@ -237,6 +307,44 @@ func (b *RPCBuilder) BuildFromTar(ctx context.Context, state *BuilderBuildFromTa
 
 	if importError != nil {
 		b.Log.Debug("error importing image", "app", name, "image", mrv.ImageName(), "error", importError)
+	}
+
+	var serviceCmds []*app.ServiceCommand
+
+	srvMap := map[string]string{}
+
+	if ac != nil {
+		for k, v := range ac.Services {
+			srvMap[k] = v
+		}
+	}
+
+	services, err := b.readProcFile(tr)
+	if err != nil {
+		return fmt.Errorf("error reading procfile: %w", err)
+	}
+
+	// Prioritize the app config over the Procfile
+	for k, v := range services {
+		if _, ok := srvMap[k]; !ok {
+			srvMap[k] = v
+		}
+	}
+
+	for k, v := range srvMap {
+		var sc app.ServiceCommand
+		sc.SetService(k)
+		sc.SetCommand(v)
+
+		serviceCmds = append(serviceCmds, &sc)
+	}
+
+	mrv.Configuration.SetCommands(serviceCmds)
+
+	// Only after we've imported the image do we want to create the new version record.
+	err = b.AppAccess.CreateVersion(ctx, mrv)
+	if err != nil {
+		return err
 	}
 
 	b.Log.Info("clearing old version", "app", name, "new-ver", mrv.Version)

@@ -14,6 +14,7 @@ import (
 
 	"miren.dev/runtime/api"
 	"miren.dev/runtime/app"
+	"miren.dev/runtime/appconfig"
 	"miren.dev/runtime/pkg/rpc/standard"
 	"miren.dev/runtime/pkg/units"
 )
@@ -23,11 +24,11 @@ type AppCentric struct {
 
 	App string `short:"a" long:"app" env:"RUNTIME_APP" description:"Application get info about"`
 
-	config *AppConfig
+	config *appconfig.AppConfig
 }
 
 func (a *AppCentric) Validate(glbl *GlobalFlags) error {
-	ac, err := LoadAppConfig()
+	ac, err := appconfig.LoadAppConfig()
 	if err == nil {
 		a.config = ac
 	}

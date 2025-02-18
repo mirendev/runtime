@@ -49,10 +49,66 @@ func (v *AutoConcurrency) UnmarshalJSON(data []byte) error {
 	return json.Unmarshal(data, &v.data)
 }
 
+type serviceCommandData struct {
+	Service *string `cbor:"0,keyasint,omitempty" json:"service,omitempty"`
+	Command *string `cbor:"0,keyasint,omitempty" json:"command,omitempty"`
+}
+
+type ServiceCommand struct {
+	data serviceCommandData
+}
+
+func (v *ServiceCommand) HasService() bool {
+	return v.data.Service != nil
+}
+
+func (v *ServiceCommand) Service() string {
+	if v.data.Service == nil {
+		return ""
+	}
+	return *v.data.Service
+}
+
+func (v *ServiceCommand) SetService(service string) {
+	v.data.Service = &service
+}
+
+func (v *ServiceCommand) HasCommand() bool {
+	return v.data.Command != nil
+}
+
+func (v *ServiceCommand) Command() string {
+	if v.data.Command == nil {
+		return ""
+	}
+	return *v.data.Command
+}
+
+func (v *ServiceCommand) SetCommand(command string) {
+	v.data.Command = &command
+}
+
+func (v *ServiceCommand) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *ServiceCommand) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *ServiceCommand) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *ServiceCommand) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
 type configurationData struct {
-	EnvVars         *[]*NamedValue   `cbor:"0,keyasint,omitempty" json:"env_vars,omitempty"`
-	Concurrency     *int32           `cbor:"1,keyasint,omitempty" json:"concurrency,omitempty"`
-	AutoConcurrency *AutoConcurrency `cbor:"2,keyasint,omitempty" json:"auto_concurrency,omitempty"`
+	EnvVars         *[]*NamedValue     `cbor:"0,keyasint,omitempty" json:"env_vars,omitempty"`
+	Commands        *[]*ServiceCommand `cbor:"0,keyasint,omitempty" json:"commands,omitempty"`
+	Concurrency     *int32             `cbor:"1,keyasint,omitempty" json:"concurrency,omitempty"`
+	AutoConcurrency *AutoConcurrency   `cbor:"2,keyasint,omitempty" json:"auto_concurrency,omitempty"`
 }
 
 type Configuration struct {
@@ -73,6 +129,22 @@ func (v *Configuration) EnvVars() []*NamedValue {
 func (v *Configuration) SetEnvVars(env_vars []*NamedValue) {
 	x := slices.Clone(env_vars)
 	v.data.EnvVars = &x
+}
+
+func (v *Configuration) HasCommands() bool {
+	return v.data.Commands != nil
+}
+
+func (v *Configuration) Commands() []*ServiceCommand {
+	if v.data.Commands == nil {
+		return nil
+	}
+	return *v.data.Commands
+}
+
+func (v *Configuration) SetCommands(commands []*ServiceCommand) {
+	x := slices.Clone(commands)
+	v.data.Commands = &x
 }
 
 func (v *Configuration) HasConcurrency() bool {
