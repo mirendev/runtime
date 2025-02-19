@@ -353,6 +353,10 @@ func (s *RubyStack) GenerateLLB(dir string, opts BuildOptions) (*llb.State, erro
 	return &base, nil
 }
 
+func (s *RubyStack) Entrypoint() string {
+	return "bundle exec"
+}
+
 // PythonStack implements Stack for Python
 type PythonStack struct {
 	MetaStack
