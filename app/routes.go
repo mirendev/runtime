@@ -7,30 +7,32 @@ import (
 	"github.com/pkg/errors"
 )
 
-func (a *AppAccess) LoadApplicationForHost(ctx context.Context, host string) (*AppConfig, error) {
-	var app AppConfig
+func (a *AppAccess) LoadApplicationForHost(ctx context.Context, host string) (*AppConfig, string, error) {
+	var (
+		app AppConfig
+	)
 
 	err := a.DB.QueryRow(ctx,
-		`SELECT app.id, app.xid, app.name, app.created_at, app.updated_at 
+		`SELECT app.id, app.xid, app.name, app.created_at, app.updated_at, r.host
 		   FROM http_routes r, applications app
 		  WHERE (host = $1 OR host = '*')
 		    AND r.application_id = app.id
 		  ORDER BY CASE WHEN host = $1 THEN 0 ELSE 1 END
 		  LIMIT 1`, host).Scan(
-		&app.Id, &app.Xid, &app.Name, &app.CreatedAt, &app.UpdatedAt,
+		&app.Id, &app.Xid, &app.Name, &app.CreatedAt, &app.UpdatedAt, &host,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, nil
+			return nil, "", nil
 		}
-		return nil, err
+		return nil, "", err
 	}
 
-	return &app, nil
+	return &app, host, nil
 }
 
 func (a *AppAccess) SetApplicationHost(ctx context.Context, ac *AppConfig, host string) error {
-	cur, err := a.LoadApplicationForHost(ctx, host)
+	cur, _, err := a.LoadApplicationForHost(ctx, host)
 	if err != nil {
 		return err
 	}

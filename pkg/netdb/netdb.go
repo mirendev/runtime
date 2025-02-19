@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/netip"
 	"sync"
+	"time"
 
 	_ "github.com/mattn/go-sqlite3"
 	"go4.org/netipx"
@@ -15,16 +16,24 @@ type NetDB struct {
 	db   *sql.DB
 	path string
 	mu   sync.Mutex
+
+	cooldownDur time.Duration
 }
 
 type Subnet struct {
-	db  *sql.DB
-	net netip.Prefix
-	mu  sync.Mutex
+	netdb *NetDB
+	db    *sql.DB
+	net   netip.Prefix
+	mu    sync.Mutex
 }
 
 func New(path string) (*NetDB, error) {
 	db, err := sql.Open("sqlite3", path)
+	if err != nil {
+		return nil, err
+	}
+
+	_, err = db.Exec("PRAGMA journal_mode=WAL;")
 	if err != nil {
 		return nil, err
 	}
@@ -34,7 +43,8 @@ func New(path string) (*NetDB, error) {
 		CREATE TABLE IF NOT EXISTS ips (
 			ip TEXT PRIMARY KEY,
 			subnet TEXT,
-			reserved INTEGER DEFAULT 1
+			reserved INTEGER DEFAULT 1,
+			released_at INTEGER DEFAULT NULL
 		);
 		CREATE TABLE IF NOT EXISTS subnets (
 			cidr TEXT PRIMARY KEY,
@@ -52,9 +62,12 @@ func New(path string) (*NetDB, error) {
 		return nil, err
 	}
 
+	db.Exec("ALTER TABLE ips ADD COLUMN released_at INTEGER DEFAULT NULL;")
+
 	return &NetDB{
-		db:   db,
-		path: path,
+		db:          db,
+		path:        path,
+		cooldownDur: 30 * time.Minute,
 	}, nil
 }
 
@@ -69,8 +82,9 @@ func (n *NetDB) Subnet(cidr string) (*Subnet, error) {
 	}
 
 	return &Subnet{
-		db:  n.db,
-		net: prefix,
+		netdb: n,
+		db:    n.db,
+		net:   prefix,
 	}, nil
 }
 
@@ -117,8 +131,9 @@ func (s *Subnet) ReserveSubnet(bits int, identifier string) (*Subnet, error) {
 		}
 
 		return &Subnet{
-			db:  s.db,
-			net: prefix,
+			netdb: s.netdb,
+			db:    s.db,
+			net:   prefix,
 		}, nil
 	} else if err != sql.ErrNoRows {
 		return nil, err
@@ -195,8 +210,9 @@ func (s *Subnet) ReserveSubnet(bits int, identifier string) (*Subnet, error) {
 			}
 
 			return &Subnet{
-				db:  s.db,
-				net: prefix,
+				netdb: s.netdb,
+				db:    s.db,
+				net:   prefix,
 			}, nil
 		}
 
@@ -225,53 +241,99 @@ func (s *Subnet) Reserve() (netip.Prefix, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// Start from .2 (assuming .1 is gateway)
-	ip := s.net.Addr().Next().Next()
-
 	tx, err := s.db.Begin()
 	if err != nil {
 		return netip.Prefix{}, err
 	}
 	defer tx.Rollback()
 
-	for {
-		if !s.net.Contains(ip) {
-			return netip.Prefix{}, net.InvalidAddrError("no available IPs in subnet")
-		}
+	lastIP := netipx.PrefixLastIP(s.net)
 
-		// Try to insert with a unique constraint - if it fails, the IP was taken
-		_, err = tx.Exec("INSERT INTO ips (ip, subnet, reserved) VALUES (?, ?, 1) ON CONFLICT(ip) DO NOTHING",
-			ip.String(), s.net.String())
-		if err != nil {
-			return netip.Prefix{}, err
-		}
+	ts := time.Now()
 
-		// Check if we actually inserted (got the reservation)
-		var count int
-		err = tx.QueryRow("SELECT changes()").Scan(&count)
-		if err != nil {
-			return netip.Prefix{}, err
-		}
+	for _, dur := range []time.Duration{s.netdb.cooldownDur, 0} {
+		// Start from .2 (assuming .1 is gateway)
+		ip := s.net.Addr().Next().Next()
 
-		if count > 0 {
-			// We got the reservation
-			err = tx.Commit()
+		for s.net.Contains(ip) && ip.Less(lastIP) {
+			// Check if the IP is available and not recently released
+			var releasedAt int64
+			err = tx.QueryRow(`
+				SELECT released_at FROM ips 
+				WHERE ip = ? 
+				AND released_at IS NOT NULL 
+			`, ip.String()).Scan(&releasedAt)
+			if err == nil {
+				check := ts.Add(-dur).Unix()
+
+				if releasedAt <= check {
+					_, err := tx.Exec(`
+						UPDATE ips
+						SET reserved = 1, released_at = NULL
+						WHERE ip = ?`, ip.String())
+					if err != nil {
+						return netip.Prefix{}, err
+					}
+
+					// We got the reservation
+					err = tx.Commit()
+					if err != nil {
+						return netip.Prefix{}, err
+					}
+
+					return netip.PrefixFrom(ip, s.net.Bits()), nil
+				}
+				ip = ip.Next()
+				continue
+			}
+
+			// Try to insert with a unique constraint - if it fails, the IP was taken
+			_, err = tx.Exec(`
+			INSERT INTO ips (ip, subnet, reserved, released_at) 
+			VALUES (?, ?, 1, NULL) 
+			ON CONFLICT(ip) DO NOTHING`,
+				ip.String(), s.net.String())
 			if err != nil {
 				return netip.Prefix{}, err
 			}
 
-			return netip.PrefixFrom(ip, s.net.Bits()), nil
-		}
+			// Check if we actually inserted (got the reservation)
+			var count int
+			err = tx.QueryRow("SELECT changes()").Scan(&count)
+			if err != nil {
+				return netip.Prefix{}, err
+			}
 
-		ip = ip.Next()
+			if count > 0 {
+				// We got the reservation
+				err = tx.Commit()
+				if err != nil {
+					return netip.Prefix{}, err
+				}
+
+				return netip.PrefixFrom(ip, s.net.Bits()), nil
+			}
+
+			ip = ip.Next()
+		}
 	}
+
+	return netip.Prefix{}, net.InvalidAddrError("no available IPs in subnet")
 }
 
 func (s *Subnet) Release(prefix netip.Prefix) error {
+	return s.ReleaseAddr(prefix.Addr())
+}
+
+func (s *Subnet) ReleaseAddr(addr netip.Addr) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	_, err := s.db.Exec("DELETE FROM ips WHERE ip = ?", prefix.Addr().String())
+	_, err := s.db.Exec(`
+		UPDATE ips 
+		SET reserved = 0, released_at = ? 
+		WHERE ip = ?`,
+		time.Now().Unix(), addr.String())
 	return err
 }
 
