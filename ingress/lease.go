@@ -63,12 +63,12 @@ func (h *LeaseHTTP) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		onlyHost = req.Host
 	}
 
-	ac, err := h.App.LoadApplicationForHost(req.Context(), onlyHost)
+	ac, dbHost, err := h.App.LoadApplicationForHost(req.Context(), onlyHost)
 	if err != nil {
 		h.Log.Error("error looking up application by host", "error", err, "host", req.Host)
 	}
 
-	if ac == nil {
+	if ac == nil || dbHost == "*" {
 		h.Log.Debug("no application found by host route", "host", req.Host)
 		app, ok := h.DeriveApp(onlyHost)
 		if !ok {
@@ -77,11 +77,14 @@ func (h *LeaseHTTP) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 			return
 		}
 
-		ac, err = h.App.LoadApp(req.Context(), app)
-		if err != nil {
+		sac, err := h.App.LoadApp(req.Context(), app)
+		if err != nil && ac == nil {
 			h.Log.Error("error looking up application", "error", err, "app", app)
 			http.Error(w, fmt.Sprintf("application not found: %s", app), http.StatusNotFound)
 			return
+		}
+		if sac != nil {
+			ac = sac
 		}
 	}
 
