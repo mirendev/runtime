@@ -433,7 +433,7 @@ func (s *PythonStack) GenerateLLB(dir string, opts BuildOptions) (*llb.State, er
 
 		// Install pipenv and dependencies with cache
 		state = pipState.Dir("/app").Run(
-			llb.Shlex("pip install pipenv && pipenv install --system"),
+			llb.Shlex("sh -c 'pip install pipenv && pipenv install --deploy'"),
 			llb.AddMount("/root/.cache/pip", pipCache, llb.AsPersistentCacheDir("pip", llb.CacheMountShared)),
 		).Root()
 	} else if s.hasFile("pyproject.toml") {
@@ -462,6 +462,10 @@ func (s *PythonStack) GenerateLLB(dir string, opts BuildOptions) (*llb.State, er
 func (s *PythonStack) Entrypoint() string {
 	if s.hasFile("pyproject.toml") {
 		return "poetry run"
+	}
+
+	if s.hasFile("Pipfile") {
+		return "pipenv run"
 	}
 
 	return ""
@@ -501,7 +505,7 @@ func (s *NodeStack) GenerateLLB(dir string, opts BuildOptions) (*llb.State, erro
 	pkgFiles := []string{"package.json", "package-lock.json", "yarn.lock"}
 	depState := base.File(llb.Copy(localCtx, "/", "/app", &llb.CopyInfo{
 		IncludePatterns: pkgFiles,
-	}))
+	}), llb.WithCustomName("copy package files"))
 
 	// Use yarn if yarn.lock exists, otherwise npm
 	var state llb.State
