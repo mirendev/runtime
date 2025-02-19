@@ -188,6 +188,22 @@ type AppVersion struct {
 	App *AppConfig
 }
 
+func (av *Configuration) CommandFor(serv string) string {
+	var cmd string
+	for _, s := range av.Commands() {
+		if s.Service() == serv {
+			cmd = s.Command()
+			break
+		}
+	}
+
+	if av.HasEntrypoint() {
+		cmd = av.Entrypoint() + " " + cmd
+	}
+
+	return cmd
+}
+
 func (av *AppVersion) ImageName() string {
 	return av.App.Name + ":" + av.ImageId
 }

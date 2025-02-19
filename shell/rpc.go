@@ -3,6 +3,7 @@ package shell
 import (
 	"context"
 	"log/slog"
+	"strings"
 
 	"github.com/containerd/containerd/v2/pkg/cio"
 	"github.com/containerd/containerd/v2/pkg/namespaces"
@@ -43,7 +44,7 @@ func (r *RPCShell) Open(ctx context.Context, state *ShellAccessOpen) error {
 		return err
 	}
 
-	lc, err := r.Lease.Lease(ctx, ac.Xid, lease.DontWaitNetwork(), lease.Pool(pool))
+	lc, err := r.Lease.Lease(ctx, ac.Xid, lease.DontWaitNetwork(), lease.Pool(pool), lease.Command("sleep 48h"))
 	if err != nil {
 		return err
 	}
@@ -65,7 +66,7 @@ func (r *RPCShell) Open(ctx context.Context, state *ShellAccessOpen) error {
 
 	copts := []cio.Opt{cio.WithStreams(input, output, output)}
 
-	spec := r.spec(opts)
+	spec := r.spec(opts, lc)
 	if spec.Terminal {
 		r.Log.Debug("terminal shell")
 		copts = append(copts, cio.WithTerminal)
@@ -111,17 +112,32 @@ func (r *RPCShell) Open(ctx context.Context, state *ShellAccessOpen) error {
 	return nil
 }
 
-func (r *RPCShell) spec(opts *ShellOptions) *specs.Process {
+func (r *RPCShell) spec(opts *ShellOptions, lc *lease.LeasedContainer) *specs.Process {
 	proc := &specs.Process{
 		Env: append([]string{
 			"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
 		}, opts.Env()...),
-		Cwd: "/",
+		Cwd: "/app",
 	}
 
+	ep := lc.Configuration.Entrypoint()
+
 	args := opts.Command()
+
 	if len(args) == 0 {
 		args = []string{"/bin/sh"}
+		if con := lc.Configuration.CommandFor("console"); con != "" {
+			if ep != "" {
+				args = []string{"/bin/sh", "-c", "exec " + ep + " " + con}
+			} else {
+				args = []string{"/bin/sh", "-c", "exec " + con}
+			}
+		}
+
+	} else {
+		if ep != "" {
+			args = []string{"/bin/sh", "-c", "exec " + ep + " " + strings.Join(args, " ")}
+		}
 	}
 
 	proc.Args = args

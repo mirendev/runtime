@@ -51,7 +51,7 @@ func (v *AutoConcurrency) UnmarshalJSON(data []byte) error {
 
 type serviceCommandData struct {
 	Service *string `cbor:"0,keyasint,omitempty" json:"service,omitempty"`
-	Command *string `cbor:"0,keyasint,omitempty" json:"command,omitempty"`
+	Command *string `cbor:"1,keyasint,omitempty" json:"command,omitempty"`
 }
 
 type ServiceCommand struct {
@@ -106,9 +106,10 @@ func (v *ServiceCommand) UnmarshalJSON(data []byte) error {
 
 type configurationData struct {
 	EnvVars         *[]*NamedValue     `cbor:"0,keyasint,omitempty" json:"env_vars,omitempty"`
-	Commands        *[]*ServiceCommand `cbor:"0,keyasint,omitempty" json:"commands,omitempty"`
 	Concurrency     *int32             `cbor:"1,keyasint,omitempty" json:"concurrency,omitempty"`
 	AutoConcurrency *AutoConcurrency   `cbor:"2,keyasint,omitempty" json:"auto_concurrency,omitempty"`
+	Commands        *[]*ServiceCommand `cbor:"3,keyasint,omitempty" json:"commands,omitempty"`
+	Entrypoint      *string            `cbor:"4,keyasint,omitempty" json:"entrypoint,omitempty"`
 }
 
 type Configuration struct {
@@ -129,22 +130,6 @@ func (v *Configuration) EnvVars() []*NamedValue {
 func (v *Configuration) SetEnvVars(env_vars []*NamedValue) {
 	x := slices.Clone(env_vars)
 	v.data.EnvVars = &x
-}
-
-func (v *Configuration) HasCommands() bool {
-	return v.data.Commands != nil
-}
-
-func (v *Configuration) Commands() []*ServiceCommand {
-	if v.data.Commands == nil {
-		return nil
-	}
-	return *v.data.Commands
-}
-
-func (v *Configuration) SetCommands(commands []*ServiceCommand) {
-	x := slices.Clone(commands)
-	v.data.Commands = &x
 }
 
 func (v *Configuration) HasConcurrency() bool {
@@ -172,6 +157,37 @@ func (v *Configuration) AutoConcurrency() *AutoConcurrency {
 
 func (v *Configuration) SetAutoConcurrency(auto_concurrency *AutoConcurrency) {
 	v.data.AutoConcurrency = auto_concurrency
+}
+
+func (v *Configuration) HasCommands() bool {
+	return v.data.Commands != nil
+}
+
+func (v *Configuration) Commands() []*ServiceCommand {
+	if v.data.Commands == nil {
+		return nil
+	}
+	return *v.data.Commands
+}
+
+func (v *Configuration) SetCommands(commands []*ServiceCommand) {
+	x := slices.Clone(commands)
+	v.data.Commands = &x
+}
+
+func (v *Configuration) HasEntrypoint() bool {
+	return v.data.Entrypoint != nil
+}
+
+func (v *Configuration) Entrypoint() string {
+	if v.data.Entrypoint == nil {
+		return ""
+	}
+	return *v.data.Entrypoint
+}
+
+func (v *Configuration) SetEntrypoint(entrypoint string) {
+	v.data.Entrypoint = &entrypoint
 }
 
 func (v *Configuration) MarshalCBOR() ([]byte, error) {
@@ -263,7 +279,7 @@ func (v *NamedValue) UnmarshalJSON(data []byte) error {
 
 type versionInfoData struct {
 	Version   *string             `cbor:"0,keyasint,omitempty" json:"version,omitempty"`
-	CreatedAt *standard.Timestamp `cbor:"0,keyasint,omitempty" json:"created_at,omitempty"`
+	CreatedAt *standard.Timestamp `cbor:"1,keyasint,omitempty" json:"created_at,omitempty"`
 }
 
 type VersionInfo struct {
@@ -315,8 +331,8 @@ func (v *VersionInfo) UnmarshalJSON(data []byte) error {
 
 type appInfoData struct {
 	Name           *string             `cbor:"0,keyasint,omitempty" json:"name,omitempty"`
-	CreatedAt      *standard.Timestamp `cbor:"0,keyasint,omitempty" json:"created_at,omitempty"`
-	CurrentVersion *VersionInfo        `cbor:"0,keyasint,omitempty" json:"current_version,omitempty"`
+	CreatedAt      *standard.Timestamp `cbor:"1,keyasint,omitempty" json:"created_at,omitempty"`
+	CurrentVersion *VersionInfo        `cbor:"2,keyasint,omitempty" json:"current_version,omitempty"`
 }
 
 type AppInfo struct {

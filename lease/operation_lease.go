@@ -39,11 +39,12 @@ func (l *leaseOperation) tryAvailableWindow() (*LeasedContainer, error) {
 		l.Log.Info("adding lease to existing window", "window", win.Id)
 
 		lc := &LeasedContainer{
-			lc:        l.LaunchContainer,
-			Pool:      l.pool,
-			StartTime: time.Now(),
-			Window:    win,
-			Start:     start,
+			lc:            l.LaunchContainer,
+			Pool:          l.pool,
+			StartTime:     time.Now(),
+			Window:        win,
+			Start:         start,
+			Configuration: win.container.configuration,
 		}
 
 		win.TotalLeases++
@@ -97,6 +98,7 @@ func (l *leaseOperation) tryAvailableIdleContainer() (*LeasedContainer, error) {
 			Window:        win,
 			Start:         start,
 			StartedWindow: true,
+			Configuration: rc.configuration,
 		}
 
 		win.Leases.Add(lc)
@@ -165,11 +167,12 @@ func (l *leaseOperation) tryPendingContainer(ctx context.Context) (*LeasedContai
 		defer l.pool.mu.Unlock()
 
 		lc := &LeasedContainer{
-			lc:        l.LaunchContainer,
-			Pool:      l.pool,
-			StartTime: time.Now(),
-			Window:    win,
-			Start:     win.Start,
+			lc:            l.LaunchContainer,
+			Pool:          l.pool,
+			StartTime:     time.Now(),
+			Window:        win,
+			Start:         win.Start,
+			Configuration: win.container.configuration,
 		}
 
 		win.Leases.Add(lc)
@@ -283,6 +286,7 @@ func (l *leaseOperation) launchContainer(ctx context.Context) (*LeasedContainer,
 		Window:        win,
 		Start:         win.Start,
 		StartedWindow: true,
+		Configuration: l.mrv.Configuration,
 	}
 
 	win.Leases.Add(lc)
@@ -328,6 +332,16 @@ func (l *leaseOperation) launch(
 			"runtime.computer/version": l.mrv.Version,
 		},
 		LogEntity: l.ac.Xid,
+	}
+
+	if l.opts.command != "" {
+		config.Command = l.opts.command
+		if l.mrv.Configuration.HasEntrypoint() {
+			config.Command = l.mrv.Configuration.Entrypoint() + " " + config.Command
+		}
+	} else if l.opts.serviceName != "" {
+		config.Service = l.opts.serviceName
+		config.Command = l.mrv.Configuration.CommandFor(l.opts.serviceName)
 	}
 
 	for _, nv := range l.mrv.Configuration.EnvVars() {
