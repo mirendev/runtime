@@ -119,7 +119,10 @@ func (s *MetaStack) readFile(path string) ([]byte, error) {
 
 func (s *MetaStack) applyOnBuild(cur llb.State, opts BuildOptions) llb.State {
 	for _, sh := range opts.OnBuild {
-		cur = cur.Dir("/app").Run(llb.Shlex(sh)).Root()
+		cur = cur.Dir("/app").Run(
+			llb.Args([]string{"/bin/sh", "-c", sh}),
+			llb.WithCustomName("[phase] Application onbuild: "+sh),
+		).Root()
 	}
 
 	return cur
@@ -163,6 +166,7 @@ func (h *highlevelBuilder) aptInstall(cur llb.State, pkgs ...string) llb.State {
 		llb.Shlexf("sh -c 'apt-get update && apt-get install -y %s'", strings.Join(pkgs, " ")),
 		h.CacheMount("/var/lib/apt/lists"),
 		h.CacheMount("/var/cache/apt/archives"),
+		llb.WithCustomName("[phase] Installing OS packages"),
 	).State
 }
 
@@ -170,6 +174,7 @@ func (h *highlevelBuilder) apkAdd(cur llb.State, pkgs ...string) llb.State {
 	return cur.Run(
 		llb.Shlexf("apk add --no-cache %s", strings.Join(pkgs, " ")),
 		h.CacheMount("/var/cache/apk"),
+		llb.WithCustomName("[phase] Installing OS packages"),
 	).State
 }
 
@@ -191,6 +196,7 @@ func (h *highlevelBuilder) bundleInstall(cur, mnt llb.State) llb.State {
 	return cur.Dir("/app").Run(
 		llb.Shlex("bundle install"),
 		llb.AddEnv("BUNDLE_SILENCE_ROOT_WARNING", "true"),
+		llb.WithCustomName("[phase] Installing Ruby Gem dependencies"),
 		//h.Access(mnt, "Gemfile", "/app/Gemfile"),
 		//h.Access(mnt, "Gemfile.lock", "/app/Gemfile.lock"),
 		//llb.AddMount("/app/Gemfile", mnt, llb.SourcePath("/app/Gemfile"), llb.Readonly),
@@ -201,6 +207,7 @@ func (h *highlevelBuilder) bundleInstall(cur, mnt llb.State) llb.State {
 func (h *highlevelBuilder) bootsnap(cur llb.State, args ...string) llb.State {
 	return cur.Dir("/app").Run(
 		llb.Shlexf("bundle exec bootsnap precompile %s", strings.Join(args, " ")),
+		llb.WithCustomName("[phase] Precompiling Bootsnap cache"),
 	).State
 }
 
@@ -214,7 +221,9 @@ func (h *highlevelBuilder) copyApp(cur, mnt llb.State) llb.State {
 			AllowWildcard:       true,
 			AllowEmptyWildcard:  true,
 			CreatedTime:         &origin,
-		}))
+		}),
+		llb.WithCustomName("[phase] Copying application code"),
+	)
 }
 
 func (h *highlevelBuilder) withConfig(state llb.State, img ocispecs.Image) (llb.State, error) {
@@ -304,6 +313,7 @@ func (s *RubyStack) GenerateLLB(dir string, opts BuildOptions) (*llb.State, erro
 		base = base.Dir("/app").Run(
 			llb.Shlex(`sh -c 'bundle exec rake -T | grep -q "rake assets:precompile" && bundle exec rake assets:precompile || echo "no assets:precompile"'`),
 			llb.AddEnv("SECRET_KEY_BASE_DUMMY", "1"),
+			llb.WithCustomName("[phase] Precompiling assets"),
 		).State
 	}
 
@@ -390,6 +400,7 @@ func (s *PythonStack) GenerateLLB(dir string, opts BuildOptions) (*llb.State, er
 		state = pipState.Dir("/app").Run(
 			llb.Shlex("pip install -r requirements.txt"),
 			llb.AddMount("/root/.cache/pip", pipCache, llb.AsPersistentCacheDir("pip", llb.CacheMountShared)),
+			llb.WithCustomName("[phase] Installing Python dependencies with pip"),
 		).Root()
 	} else if s.hasFile("Pipfile") {
 		// Copy only Pipfile and Pipfile.lock first
@@ -401,6 +412,7 @@ func (s *PythonStack) GenerateLLB(dir string, opts BuildOptions) (*llb.State, er
 		state = pipState.Dir("/app").Run(
 			llb.Shlex("sh -c 'pip install pipenv && pipenv install --deploy'"),
 			llb.AddMount("/root/.cache/pip", pipCache, llb.AsPersistentCacheDir("pip", llb.CacheMountShared)),
+			llb.WithCustomName("[phase] Installing Python dependencies with pipenv"),
 		).Root()
 	} else if s.hasFile("pyproject.toml") {
 		// Copy only pyproject.toml and poetry.lock first
@@ -412,6 +424,7 @@ func (s *PythonStack) GenerateLLB(dir string, opts BuildOptions) (*llb.State, er
 		state = poetryState.Dir("/app").Run(
 			llb.Shlex("sh -c 'pip install poetry && poetry install --no-root'"),
 			llb.AddMount("/root/.cache/pip", pipCache, llb.AsPersistentCacheDir("pip", llb.CacheMountShared)),
+			llb.WithCustomName("[phase] Installing Python dependencies with poetry"),
 		).Root()
 	}
 
@@ -483,6 +496,7 @@ func (s *NodeStack) GenerateLLB(dir string, opts BuildOptions) (*llb.State, erro
 		state = depState.Dir("/app").Run(
 			llb.Shlex("yarn install"),
 			llb.AddMount("/usr/local/share/.cache/yarn", yarnCache, llb.AsPersistentCacheDir("yarn", llb.CacheMountShared)),
+			llb.WithCustomName("[phase] Installing Node.js dependencies with yarn"),
 		).Root()
 	} else {
 		// Create cache mounts
@@ -493,6 +507,7 @@ func (s *NodeStack) GenerateLLB(dir string, opts BuildOptions) (*llb.State, erro
 		state = depState.Dir("/app").Run(
 			llb.Shlex("npm install"),
 			llb.AddMount("/root/.npm", npmCache, llb.AsPersistentCacheDir("npm", llb.CacheMountShared)),
+			llb.WithCustomName("[phase] Installing Node.js dependencies with npm"),
 		).Root()
 	}
 
@@ -546,6 +561,7 @@ func (s *BunStack) GenerateLLB(dir string, opts BuildOptions) (*llb.State, error
 	state := depState.Dir("/app").Run(
 		llb.Shlex("bun install"),
 		llb.AddMount("/root/.bun", bunCache, llb.AsPersistentCacheDir("bun", llb.CacheMountShared)),
+		llb.WithCustomName("[phase] Installing Bun dependencies"),
 	).Root()
 
 	h := &highlevelBuilder{opts}
@@ -611,6 +627,7 @@ func (s *GoStack) GenerateLLB(dir string, opts BuildOptions) (*llb.State, error)
 		// This basically is just a scratch mount until we add the ability to
 		// properly export and import the cache dirs.
 		h.CacheMount("/root/.cache/go-build"),
+		llb.WithCustomName("[phase] Building Go application"),
 	).Root()
 
 	if opts.AlpineImage == "" {

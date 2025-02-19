@@ -5,7 +5,7 @@ FROM alpine:latest AS binaries
 ADD https://storage.googleapis.com/gvisor/releases/release/latest/aarch64/runsc /data/
 ADD https://storage.googleapis.com/gvisor/releases/release/latest/aarch64/containerd-shim-runsc-v1 /data/
 
-FROM golang:1.23-alpine AS builder
+FROM golang:1.24-alpine AS builder
 
 RUN apk add --no-cache clang
 
