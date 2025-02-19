@@ -3,6 +3,7 @@ package rpc
 import (
 	"crypto/ed25519"
 	"crypto/x509"
+	"fmt"
 	"net/http"
 
 	"github.com/fxamacker/cbor/v2"
@@ -21,6 +22,10 @@ type Call struct {
 	peer *x509.Certificate
 
 	results any
+}
+
+func (c *Call) String() string {
+	return fmt.Sprintf("<Call %s %s>", c.oid, c.method)
 }
 
 func (c *Call) Args(v any) {

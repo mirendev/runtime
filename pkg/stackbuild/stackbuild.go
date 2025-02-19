@@ -42,6 +42,8 @@ type Stack interface {
 	GenerateLLB(dir string, opts BuildOptions) (*llb.State, error)
 
 	Image() ocispecs.Image
+
+	Entrypoint() string
 }
 
 // DetectStack identifies the programming stack in the given directory
@@ -68,6 +70,10 @@ func DetectStack(dir string) (Stack, error) {
 type MetaStack struct {
 	dir    string
 	result ocispecs.Image
+}
+
+func (s *MetaStack) Entrypoint() string {
+	return ""
 }
 
 func (s *MetaStack) setupResult() {
@@ -412,7 +418,7 @@ func (s *PythonStack) GenerateLLB(dir string, opts BuildOptions) (*llb.State, er
 		// Copy only requirements.txt first
 		pipState := state.File(llb.Copy(localCtx, "/", "/app", &llb.CopyInfo{
 			IncludePatterns: []string{"requirements.txt"},
-		}))
+		}), llb.WithCustomName("copy requirements.txt"))
 
 		// Install dependencies with cache
 		state = pipState.Dir("/app").Run(
@@ -423,29 +429,23 @@ func (s *PythonStack) GenerateLLB(dir string, opts BuildOptions) (*llb.State, er
 		// Copy only Pipfile and Pipfile.lock first
 		pipState := state.File(llb.Copy(localCtx, "/", "/app", &llb.CopyInfo{
 			IncludePatterns: []string{"Pipfile", "Pipfile.lock"},
-		}))
+		}), llb.WithCustomName("copy Pipfile"))
 
 		// Install pipenv and dependencies with cache
 		state = pipState.Dir("/app").Run(
-			llb.Shlex("pip install pipenv && pipenv install --system"),
+			llb.Shlex("sh -c 'pip install pipenv && pipenv install --deploy'"),
 			llb.AddMount("/root/.cache/pip", pipCache, llb.AsPersistentCacheDir("pip", llb.CacheMountShared)),
 		).Root()
 	} else if s.hasFile("pyproject.toml") {
 		// Copy only pyproject.toml and poetry.lock first
 		poetryState := state.File(llb.Copy(localCtx, "/", "/app", &llb.CopyInfo{
 			IncludePatterns: []string{"pyproject.toml", "poetry.lock", "README.md"},
-		}))
-
-		// Poetry cache mount
-		poetryCache := llb.Scratch().File(
-			llb.Mkdir("/poetry", 0755, llb.WithParents(true)),
-		)
+		}), llb.WithCustomName("copy pyproject.toml"))
 
 		// Install poetry and dependencies with cache
 		state = poetryState.Dir("/app").Run(
 			llb.Shlex("sh -c 'pip install poetry && poetry install --no-root'"),
 			llb.AddMount("/root/.cache/pip", pipCache, llb.AsPersistentCacheDir("pip", llb.CacheMountShared)),
-			llb.AddMount("/root/.cache/pypoetry", poetryCache, llb.AsPersistentCacheDir("poetry", llb.CacheMountShared)),
 		).Root()
 	}
 
@@ -459,6 +459,18 @@ func (s *PythonStack) GenerateLLB(dir string, opts BuildOptions) (*llb.State, er
 	return &state, nil
 }
 
+func (s *PythonStack) Entrypoint() string {
+	if s.hasFile("pyproject.toml") {
+		return "poetry run"
+	}
+
+	if s.hasFile("Pipfile") {
+		return "pipenv run"
+	}
+
+	return ""
+}
+
 // NodeStack implements Stack for Node.js
 type NodeStack struct {
 	MetaStack
@@ -469,7 +481,7 @@ func (s *NodeStack) Name() string {
 }
 
 func (s *NodeStack) Detect() bool {
-	return s.hasFile("package.json") && !s.hasFile("bun.lockb")
+	return s.hasFile("package.json") && !s.hasFile("bun.lock")
 }
 
 func (s *NodeStack) GenerateLLB(dir string, opts BuildOptions) (*llb.State, error) {
@@ -493,7 +505,7 @@ func (s *NodeStack) GenerateLLB(dir string, opts BuildOptions) (*llb.State, erro
 	pkgFiles := []string{"package.json", "package-lock.json", "yarn.lock"}
 	depState := base.File(llb.Copy(localCtx, "/", "/app", &llb.CopyInfo{
 		IncludePatterns: pkgFiles,
-	}))
+	}), llb.WithCustomName("copy package files"))
 
 	// Use yarn if yarn.lock exists, otherwise npm
 	var state llb.State
@@ -535,7 +547,7 @@ func (s *BunStack) Name() string {
 }
 
 func (s *BunStack) Detect() bool {
-	return s.hasFile("package.json") && s.hasFile("bun.lockb")
+	return s.hasFile("package.json") && s.hasFile("bun.lock")
 }
 
 func (s *BunStack) GenerateLLB(dir string, opts BuildOptions) (*llb.State, error) {
@@ -554,7 +566,7 @@ func (s *BunStack) GenerateLLB(dir string, opts BuildOptions) (*llb.State, error
 	base := llb.Image(fmt.Sprintf("oven/bun:%s", version))
 
 	// Copy package files first for better caching
-	pkgFiles := []string{"package.json", "bun.lockb"}
+	pkgFiles := []string{"package.json", "bun.lock"}
 	depState := base.File(llb.Copy(localCtx, "/", "/app", &llb.CopyInfo{
 		IncludePatterns: pkgFiles,
 	}))

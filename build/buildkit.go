@@ -321,7 +321,17 @@ func (b *Buildkit) loadAppConfig(dfs fsutil.FS) (*appconfig.AppConfig, error) {
 	return ac, nil
 }
 
-func (b *Buildkit) BuildImage(ctx context.Context, dfs fsutil.FS, bs BuildStack, getTar func() (io.WriteCloser, error), tos ...TransformOptions) error {
+type BuildResult struct {
+	Entrypoint string
+}
+
+func (b *Buildkit) BuildImage(
+	ctx context.Context,
+	dfs fsutil.FS,
+	bs BuildStack,
+	getTar func() (io.WriteCloser, error),
+	tos ...TransformOptions,
+) (*BuildResult, error) {
 	var opts transformOpt
 
 	opts.frontendAttrs = map[string]string{
@@ -349,6 +359,8 @@ func (b *Buildkit) BuildImage(ctx context.Context, dfs fsutil.FS, bs BuildStack,
 
 	exportAttr := map[string]string{}
 
+	var res BuildResult
+
 	if bs.Stack == "dockerfile" {
 		mounts["dockerfile"] = dfs
 		solveOpt.Frontend = "dockerfile.v0"
@@ -357,7 +369,7 @@ func (b *Buildkit) BuildImage(ctx context.Context, dfs fsutil.FS, bs BuildStack,
 	} else {
 		stack, err := stackbuild.DetectStack(bs.CodeDir)
 		if err != nil {
-			return err
+			return nil, err
 		}
 
 		state, err := stack.GenerateLLB(bs.CodeDir, stackbuild.BuildOptions{
@@ -366,17 +378,19 @@ func (b *Buildkit) BuildImage(ctx context.Context, dfs fsutil.FS, bs BuildStack,
 			AlpineImage: bs.AlpineImage,
 		})
 		if err != nil {
-			return err
+			return nil, err
 		}
+
+		res.Entrypoint = stack.Entrypoint()
 
 		def, err = state.Marshal(ctx)
 		if err != nil {
-			return err
+			return nil, err
 		}
 
 		data, err := json.Marshal(stack.Image())
 		if err != nil {
-			return err
+			return nil, err
 		}
 
 		exportAttr["containerimage.config"] = string(data)
@@ -485,7 +499,7 @@ func (b *Buildkit) BuildImage(ctx context.Context, dfs fsutil.FS, bs BuildStack,
 		if opts.phaseUpdates != nil {
 			opts.phaseUpdates("solved")
 		}
-		return err
+		return &res, err
 	}
 
 	_, err := b.Client.Build(ctx, solveOpt, "runtime", func(ctx context.Context, c gateway.Client) (*gateway.Result, error) {
@@ -509,5 +523,5 @@ func (b *Buildkit) BuildImage(ctx context.Context, dfs fsutil.FS, bs BuildStack,
 		return res, nil
 	}, ssProgress)
 
-	return err
+	return &res, err
 }

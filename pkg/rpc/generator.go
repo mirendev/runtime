@@ -1502,6 +1502,13 @@ func (g *Generator) generateInterfaces(f *j.File) error {
 }
 
 func (g *Generator) Generate(name string) (string, error) {
+	for _, t := range g.Types {
+		err := t.Validate()
+		if err != nil {
+			return "", err
+		}
+	}
+
 	f := j.NewFile(name)
 
 	for name, imp := range g.Imports {
@@ -1618,6 +1625,28 @@ type DescType struct {
 	pointers int
 
 	userType *DescType
+}
+
+func (t *DescType) Validate() error {
+	seen := map[int]struct{}{}
+
+	for _, field := range t.Fields {
+		if field.Type == "union" {
+			for _, u := range field.Union {
+				if _, ok := seen[u.Index]; ok {
+					return fmt.Errorf("duplicate field index %d in union in type %s", u.Index, t.Type)
+				}
+				seen[u.Index] = struct{}{}
+			}
+		} else {
+			if _, ok := seen[field.Index]; ok {
+				return fmt.Errorf("duplicate field index %d in type %s", field.Index, t.Type)
+			}
+			seen[field.Index] = struct{}{}
+		}
+	}
+
+	return nil
 }
 
 func (t *DescType) Readable() bool {

@@ -23,7 +23,7 @@ func Apps(ctx *Context, opts struct {
 	}
 
 	for _, a := range apps.Apps() {
-		ctx.Printf("%s", a.Name())
+		ctx.Info("%s", a.Name())
 	}
 
 	return nil

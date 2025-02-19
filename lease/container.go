@@ -309,6 +309,8 @@ type runningContainer struct {
 
 	maxConcurrency int
 
+	configuration *app.Configuration
+
 	windows set.Set[*UsageWindow]
 
 	buf [128]byte
@@ -387,6 +389,8 @@ type LeasedContainer struct {
 	Window *UsageWindow
 
 	StartedWindow bool
+
+	Configuration *app.Configuration
 }
 
 func (l *LeasedContainer) Container() string {
@@ -400,6 +404,8 @@ func (l *LeasedContainer) Obj(ctx context.Context) (client.Container, error) {
 type leaseOptions struct {
 	dontWaitNetwork bool
 	poolName        string
+	serviceName     string
+	command         string
 }
 
 func DontWaitNetwork() LeaseOption {
@@ -411,6 +417,18 @@ func DontWaitNetwork() LeaseOption {
 func Pool(name string) LeaseOption {
 	return func(lc *leaseOptions) {
 		lc.poolName = name
+	}
+}
+
+func Service(name string) LeaseOption {
+	return func(lc *leaseOptions) {
+		lc.serviceName = name
+	}
+}
+
+func Command(name string) LeaseOption {
+	return func(lc *leaseOptions) {
+		lc.command = name
 	}
 }
 

@@ -61,6 +61,9 @@ type ContainerConfig struct {
 	StaticDir string
 
 	CGroupPath string
+
+	Service string
+	Command string
 }
 
 func (c *ContainerRunner) RunContainer(ctx context.Context, config *ContainerConfig) (string, error) {
@@ -209,6 +212,13 @@ func (c *ContainerRunner) buildSpec(ctx context.Context, config *ContainerConfig
 		oci.WithHostResolvconf,
 		oci.WithoutMounts("/sys"),
 		oci.WithMounts(mounts),
+		oci.WithProcessCwd("/app"),
+	}
+
+	if config.Command != "" {
+		c.Log.Debug("overriding command", "command", config.Command)
+		specOpts = append(specOpts,
+			oci.WithProcessArgs("/bin/sh", "-c", "exec "+config.Command))
 	}
 
 	if config.Privileged {

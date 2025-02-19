@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"os"
 	"path/filepath"
 	"sync"
@@ -282,7 +283,7 @@ func (b *RPCBuilder) BuildFromTar(ctx context.Context, state *BuilderBuildFromTa
 
 	var wg sync.WaitGroup
 
-	err = bk.BuildImage(ctx, tr, buildStack, func() (io.WriteCloser, error) {
+	res, err := bk.BuildImage(ctx, tr, buildStack, func() (io.WriteCloser, error) {
 		r, w, err := os.Pipe()
 		if err != nil {
 			return nil, err
@@ -309,6 +310,10 @@ func (b *RPCBuilder) BuildFromTar(ctx context.Context, state *BuilderBuildFromTa
 		b.Log.Debug("error importing image", "app", name, "image", mrv.ImageName(), "error", importError)
 	}
 
+	if res.Entrypoint != "" {
+		mrv.Configuration.SetEntrypoint(res.Entrypoint)
+	}
+
 	var serviceCmds []*app.ServiceCommand
 
 	srvMap := map[string]string{}
@@ -322,6 +327,10 @@ func (b *RPCBuilder) BuildFromTar(ctx context.Context, state *BuilderBuildFromTa
 	services, err := b.readProcFile(tr)
 	if err != nil {
 		return fmt.Errorf("error reading procfile: %w", err)
+	} else if services == nil {
+		b.Log.Debug("no procfile found, using app config")
+	} else {
+		b.Log.Debug("using procfile", "services", maps.Keys(services))
 	}
 
 	// Prioritize the app config over the Procfile

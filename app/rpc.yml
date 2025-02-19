@@ -14,8 +14,10 @@ types:
     fields:
       - name: service
         type: string
+        index: 0
       - name: command
         type: string
+        index: 1
 
   - type: Configuration
     fields:
@@ -32,6 +34,11 @@ types:
       - name: commands
         type: list
         element: ServiceCommand
+        index: 3
+      - name: entrypoint
+        type: string
+        index: 4
+        doc: "Prefixed to all commands run in the container"
 
   - type: NamedValue
     fields:
@@ -49,17 +56,22 @@ types:
     fields:
       - name: version
         type: string
+        index: 0
       - name: created_at
         type: standard.Timestamp
+        index: 1
 
   - type: AppInfo
     fields:
       - name: name
         type: string
+        index: 0
       - name: created_at
         type: standard.Timestamp
+        index: 1
       - name: current_version
         type: VersionInfo
+        index: 2
 
 interfaces:
   - name: Crud

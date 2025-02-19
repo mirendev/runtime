@@ -45,7 +45,7 @@ func (h *LeaseHTTP) DeriveApp(host string) (string, bool) {
 	}
 
 	_, err := netip.ParseAddr(host)
-	if err != nil {
+	if err == nil {
 		return "", false
 	}
 
@@ -72,6 +72,7 @@ func (h *LeaseHTTP) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		h.Log.Debug("no application found by host route", "host", req.Host)
 		app, ok := h.DeriveApp(onlyHost)
 		if !ok {
+			h.Log.Debug("unable to derive app from host", "host", onlyHost)
 			w.WriteHeader(http.StatusNotFound)
 			return
 		}
@@ -84,12 +85,14 @@ func (h *LeaseHTTP) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		}
 	}
 
+	h.Log.Debug("application found", "app", ac.Name)
+
 	ctx, cancel := context.WithTimeout(req.Context(), h.LookupTimeout)
 	defer cancel()
 
 	ctx = namespaces.WithNamespace(ctx, h.Namespace)
 
-	lc, err := h.Lease.Lease(ctx, ac.Xid, lease.Pool("http"))
+	lc, err := h.Lease.Lease(ctx, ac.Xid, lease.Pool("http"), lease.Service("web"))
 	if err != nil {
 		h.Log.Error("error looking up endpoint for application", "error", err, "app", ac.Name)
 		http.Error(w, fmt.Sprintf("error accessing application: %s", ac.Name), http.StatusInternalServerError)
