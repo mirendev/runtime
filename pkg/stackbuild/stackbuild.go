@@ -300,40 +300,6 @@ func (s *RubyStack) GenerateLLB(dir string, opts BuildOptions) (*llb.State, erro
 		base = h.bootsnap(base, "app/", "lib/")
 	}
 
-	/*
-			// Install system dependencies
-			deps := base.Run(
-				llb.Shlex("sh -c 'apt-get update && apt-get install -y build-essential libpq-dev nodejs libyaml-dev'"),
-				llb.AddMount("/var/lib/apt/lists", llb.Scratch(), llb.AsPersistentCacheDir("apt", llb.CacheMountShared)),
-				llb.AddMount("/var/cache/apt/archives", llb.Scratch(), llb.AsPersistentCacheDir("apt-archives", llb.CacheMountShared)),
-			)
-
-			gemInstall := deps.Dir("/app").Run(
-				llb.Shlex("sh -c 'bundle install && bundle exec bootsnap precompile --gemfile'"),
-				llb.AddEnv("BUNDLE_PATH", "/usr/local/bundle"),
-				llb.AddEnv("BUNDLE_DEPLOYMENT", "1"),
-				llb.AddEnv("BUNDLE_WITHOUT", "development"),
-				llb.AddMount("/app/Gemfile", localCtx, llb.SourcePath("/app/Gemfile"), llb.Readonly),
-				llb.AddMount("/app/Gemfile.lock", localCtx, llb.SourcePath("/app/Gemfile.lock"), llb.Readonly),
-			)
-
-			origin := time.Date(2021, time.January, 1, 0, 0, 0, 0, time.UTC)
-
-			// Copy the rest of the application code
-			appState := gemInstall.File(
-				llb.Copy(llb.Local("context"), "*", "/app/", &llb.CopyInfo{
-					CopyDirContentsOnly: true,
-					AllowWildcard:       true,
-					CreatedTime:         &origin,
-				}))
-
-		prep := base.Dir("/app").Run(
-			llb.Shlex("bundle exec bootsnap precompile app/ lib/"),
-			llb.AddEnv("BUNDLE_PATH", "/usr/local/bundle"),
-			llb.AddEnv("BUNDLE_WITHOUT", "development"),
-		)
-	*/
-
 	if s.hasFile("Rakefile") {
 		base = base.Dir("/app").Run(
 			llb.Shlex(`sh -c 'bundle exec rake -T | grep -q "rake assets:precompile" && bundle exec rake assets:precompile || echo "no assets:precompile"'`),
