@@ -258,8 +258,14 @@ func (b *RPCBuilder) BuildFromTar(ctx context.Context, state *BuilderBuildFromTa
 			case "export":
 				so.Update().SetMessage("Registering image")
 				status.Send(ctx, so)
+			case "solving":
+				so.Update().SetMessage("Calculating build")
+				status.Send(ctx, so)
 			case "solved":
 				so.Update().SetMessage("Building image")
+				status.Send(ctx, so)
+			default:
+				so.Update().SetMessage(phase)
 				status.Send(ctx, so)
 			}
 		}))

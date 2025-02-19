@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"strings"
 	"sync"
 
 	"github.com/moby/buildkit/client"
@@ -482,6 +483,20 @@ func (b *Buildkit) BuildImage(
 							b.Log.Error("failed to write log entry", "err", err)
 						}
 					*/
+
+					if opts.phaseUpdates != nil {
+						for _, s := range ss.Vertexes {
+							if s.Started == nil || s.Completed != nil {
+								continue
+							}
+
+							if strings.HasPrefix(s.Name, "[phase] ") {
+								phase := strings.TrimPrefix(s.Name, "[phase] ")
+								b.Log.Debug("phase update", "phase", phase)
+								opts.phaseUpdates(phase)
+							}
+						}
+					}
 
 					if opts.statusUpdates != nil {
 						opts.statusUpdates(ss, data)
