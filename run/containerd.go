@@ -4,9 +4,11 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net/netip"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 
 	"github.com/containerd/containerd/api/types/runc/options"
 	containerd "github.com/containerd/containerd/v2/client"
@@ -18,6 +20,7 @@ import (
 	"github.com/pkg/errors"
 	"miren.dev/runtime/network"
 	"miren.dev/runtime/pkg/idgen"
+	"miren.dev/runtime/pkg/netdb"
 )
 
 type ContainerRunner struct {
@@ -28,6 +31,7 @@ type ContainerRunner struct {
 	Clickhouse  string `asm:"clickhouse-address,optional"`
 
 	NetServ *network.ServiceManager
+	Subnet  *netdb.Subnet
 
 	Tempdir string `asm:"tempdir"`
 }
@@ -329,6 +333,11 @@ func (c *ContainerRunner) StopContainer(ctx context.Context, id string) error {
 		return err
 	}
 
+	labels, err := container.Labels(ctx)
+	if err != nil {
+		return err
+	}
+
 	task, err := container.Task(ctx, nil)
 	if err != nil {
 		return err
@@ -344,6 +353,22 @@ func (c *ContainerRunner) StopContainer(ctx context.Context, id string) error {
 	err = container.Delete(ctx, containerd.WithSnapshotCleanup)
 	if err != nil {
 		return err
+	}
+
+	for l, v := range labels {
+		if strings.HasPrefix(l, "runtime.computer/ip") {
+			addr, err := netip.ParseAddr(v)
+			if err == nil {
+				err = c.Subnet.ReleaseAddr(addr)
+				if err != nil {
+					c.Log.Error("failed to release IP", "addr", addr, "err", err)
+				}
+			} else {
+				c.Log.Error("failed to parse IP", "addr", v, "err", err)
+			}
+
+			c.Log.Debug("released IP", "addr", addr)
+		}
 	}
 
 	// Ignore errors, as the directory might not exist if the container was
