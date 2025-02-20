@@ -197,6 +197,10 @@ func (av *Configuration) CommandFor(serv string) string {
 		}
 	}
 
+	if cmd == "" {
+		return ""
+	}
+
 	if av.HasEntrypoint() {
 		cmd = av.Entrypoint() + " " + cmd
 	}

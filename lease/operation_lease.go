@@ -373,6 +373,7 @@ func (l *leaseOperation) launch(
 	rc := &runningContainer{
 		id:          config.Id,
 		image:       config.Image,
+		spec:        config.Spec,
 		app:         l.ac.Xid,
 		version:     l.mrv.Version,
 		cpuStatPath: filepath.Join("/sys/fs/cgroup", config.CGroupPath, "cpu.stat"),

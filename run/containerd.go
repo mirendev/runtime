@@ -68,6 +68,8 @@ type ContainerConfig struct {
 
 	Service string
 	Command string
+
+	Spec *oci.Spec
 }
 
 func (c *ContainerRunner) RunContainer(ctx context.Context, config *ContainerConfig) (string, error) {
@@ -95,6 +97,8 @@ func (c *ContainerRunner) RunContainer(ctx context.Context, config *ContainerCon
 	if err != nil {
 		return "", errors.Wrapf(err, "failed to get container spec %s", config.Id)
 	}
+
+	config.Spec = spec
 
 	config.CGroupPath = spec.Linux.CgroupsPath
 

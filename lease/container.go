@@ -15,6 +15,7 @@ import (
 
 	"github.com/containerd/containerd/v2/client"
 	"github.com/containerd/containerd/v2/pkg/namespaces"
+	"github.com/containerd/containerd/v2/pkg/oci"
 	"miren.dev/runtime/app"
 	"miren.dev/runtime/discovery"
 	"miren.dev/runtime/health"
@@ -313,6 +314,8 @@ type runningContainer struct {
 
 	windows set.Set[*UsageWindow]
 
+	spec *oci.Spec
+
 	buf [128]byte
 }
 
@@ -399,6 +402,10 @@ func (l *LeasedContainer) Container() string {
 
 func (l *LeasedContainer) Obj(ctx context.Context) (client.Container, error) {
 	return l.lc.CC.LoadContainer(ctx, l.Container())
+}
+
+func (l *LeasedContainer) Spec() *oci.Spec {
+	return l.Window.container.spec
 }
 
 type leaseOptions struct {
@@ -679,6 +686,7 @@ func (l *LaunchContainer) RecoverContainers(ctx context.Context) error {
 
 		rc := &runningContainer{
 			id:          container.ID(),
+			spec:        spec,
 			app:         aa.Xid,
 			image:       img.Name(),
 			version:     version,
