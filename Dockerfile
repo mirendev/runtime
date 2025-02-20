@@ -1,9 +1,6 @@
 # syntax=docker/dockerfile:1
 
-FROM alpine:latest AS binaries
-
-ADD https://storage.googleapis.com/gvisor/releases/release/latest/aarch64/runsc /data/
-ADD https://storage.googleapis.com/gvisor/releases/release/latest/aarch64/containerd-shim-runsc-v1 /data/
+FROM ghcr.io/mirendev/runsc:latest AS binaries
 
 FROM golang:1.24-alpine AS builder
 
@@ -24,8 +21,8 @@ FROM alpine:latest AS base
 
 RUN apk add --no-cache containerd nerdctl iptables curl
 
-COPY --chmod=0755 --from=binaries /data/runsc /usr/local/bin/runsc
-COPY --chmod=0755 --from=binaries /data/containerd-shim-runsc-v1 /usr/local/bin/containerd-shim-runsc-v1
+COPY --chmod=0755 --from=binaries /runsc /usr/local/bin/runsc
+COPY --chmod=0755 --from=binaries /containerd-shim-runsc-v1 /usr/local/bin/containerd-shim-runsc-v1
 
 FROM base AS app
 
