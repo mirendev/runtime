@@ -26,8 +26,9 @@ import (
 func Deploy(ctx *Context, opts struct {
 	AppCentric
 
-	Dir     string `short:"d" long:"dir" description:"Directory to run from" default:"."`
-	Explain bool   `short:"x" long:"explain" description:"Explain the build process"`
+	Dir           string `short:"d" long:"dir" description:"Directory to run from" default:"."`
+	Explain       bool   `short:"x" long:"explain" description:"Explain the build process"`
+	ExplainFormat string `long:"explain-format" description:"Explain format" choice:"auto" choice:"plain" choice:"tty" choice:"rawjson" default:"auto"`
 }) error {
 	cl, err := ctx.RPCClient("build")
 	if err != nil {
@@ -52,7 +53,7 @@ func Deploy(ctx *Context, opts struct {
 	)
 
 	if opts.Explain {
-		pw, err := progresswriter.NewPrinter(ctx, os.Stderr, "auto")
+		pw, err := progresswriter.NewPrinter(ctx, os.Stderr, opts.ExplainFormat)
 		if err != nil {
 			return err
 		}

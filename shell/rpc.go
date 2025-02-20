@@ -113,11 +113,12 @@ func (r *RPCShell) Open(ctx context.Context, state *ShellAccessOpen) error {
 }
 
 func (r *RPCShell) spec(opts *ShellOptions, lc *lease.LeasedContainer) *specs.Process {
+	spec := lc.Spec()
+
 	proc := &specs.Process{
-		Env: append([]string{
-			"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
-		}, opts.Env()...),
-		Cwd: "/app",
+		Cwd:  "/app",
+		Env:  spec.Process.Env,
+		User: spec.Process.User,
 	}
 
 	ep := lc.Configuration.Entrypoint()
@@ -125,19 +126,16 @@ func (r *RPCShell) spec(opts *ShellOptions, lc *lease.LeasedContainer) *specs.Pr
 	args := opts.Command()
 
 	if len(args) == 0 {
-		args = []string{"/bin/sh"}
 		if con := lc.Configuration.CommandFor("console"); con != "" {
-			if ep != "" {
-				args = []string{"/bin/sh", "-c", "exec " + ep + " " + con}
-			} else {
-				args = []string{"/bin/sh", "-c", "exec " + con}
-			}
+			// CommandFor already prepends the entrypoint
+			args = []string{"/bin/sh", "-c", "exec " + con}
+		} else if ep != "" {
+			args = []string{"/bin/sh", "-c", "exec " + ep + " /bin/sh"}
+		} else {
+			args = []string{"/bin/sh"}
 		}
-
-	} else {
-		if ep != "" {
-			args = []string{"/bin/sh", "-c", "exec " + ep + " " + strings.Join(args, " ")}
-		}
+	} else if ep != "" {
+		args = []string{"/bin/sh", "-c", "exec " + ep + " " + strings.Join(args, " ")}
 	}
 
 	proc.Args = args

@@ -226,6 +226,27 @@ func (h *highlevelBuilder) copyApp(cur, mnt llb.State) llb.State {
 	)
 }
 
+func (m *MetaStack) addAppUser(cur llb.State) llb.State {
+	m.result.Config.User = "2010"
+
+	bb := llb.Image("busybox:1.37-musl")
+
+	return cur.Run(
+		llb.Args([]string{"/bin/sh", "-c",
+			"/bin/busybox addgroup -g 2011 app && /bin/busybox adduser -u 2010 -G app -D app",
+		}),
+		llb.WithCustomName("[phase] Adding app user"),
+		llb.AddMount("/bin/busybox", bb, llb.SourcePath("/bin/busybox"), llb.Readonly),
+	).State
+}
+
+func (m *MetaStack) chownApp(cur llb.State) llb.State {
+	return cur.Run(
+		llb.Shlex("chown -R app:app /app"),
+		llb.WithCustomName("[phase] Chowning application code"),
+	).Root()
+}
+
 func (h *highlevelBuilder) withConfig(state llb.State, img ocispecs.Image) (llb.State, error) {
 	configbytes, err := json.Marshal(img)
 	if err != nil {
@@ -291,6 +312,8 @@ func (s *RubyStack) GenerateLLB(dir string, opts BuildOptions) (*llb.State, erro
 	}
 	base := llb.Image(fmt.Sprintf("ruby:%s-slim", version), llb.WithMetaResolver(mr))
 
+	base = s.addAppUser(base)
+
 	h := &highlevelBuilder{opts}
 
 	// My kingdom for a pipe operator.
@@ -318,6 +341,8 @@ func (s *RubyStack) GenerateLLB(dir string, opts BuildOptions) (*llb.State, erro
 	}
 
 	base = s.applyOnBuild(base, opts)
+
+	base = s.chownApp(base)
 
 	var ep string
 
@@ -383,11 +408,14 @@ func (s *PythonStack) GenerateLLB(dir string, opts BuildOptions) (*llb.State, er
 	if opts.Version != "" {
 		version = opts.Version
 	}
+
 	base := llb.Image(fmt.Sprintf("python:%s-slim", version))
+
+	base = s.addAppUser(base)
 
 	// Create pip cache mount
 	pipCache := llb.Scratch().File(
-		llb.Mkdir("/pip-cache", 0755, llb.WithParents(true)),
+		llb.Mkdir("/pip-cache", 0777, llb.WithParents(true)),
 	)
 
 	var state llb.State
@@ -412,10 +440,17 @@ func (s *PythonStack) GenerateLLB(dir string, opts BuildOptions) (*llb.State, er
 			IncludePatterns: []string{"Pipfile", "Pipfile.lock"},
 		}), llb.WithCustomName("copy Pipfile"))
 
-		// Install pipenv and dependencies with cache
 		state = pipState.Dir("/app").Run(
-			llb.Shlex("sh -c 'pip install pipenv && pipenv install --deploy'"),
+			llb.Shlex("pip install pipenv"),
 			llb.AddMount("/root/.cache/pip", pipCache, llb.AsPersistentCacheDir("pip", llb.CacheMountShared)),
+			llb.WithCustomName("[phase] Installing Python pipenv"),
+		).Root()
+
+		// Install pipenv and dependencies with cache
+		state = state.Dir("/app").Run(
+			llb.Shlex("pipenv install --deploy"),
+			llb.AddMount("/home/app/.cache/pip", pipCache, llb.AsPersistentCacheDir("pip", llb.CacheMountShared)),
+			llb.User("app"),
 			llb.WithCustomName("[phase] Installing Python dependencies with pipenv"),
 		).Root()
 	} else if s.hasFile("pyproject.toml") {
@@ -424,10 +459,19 @@ func (s *PythonStack) GenerateLLB(dir string, opts BuildOptions) (*llb.State, er
 			IncludePatterns: []string{"pyproject.toml", "poetry.lock", "README.md"},
 		}), llb.WithCustomName("copy pyproject.toml"))
 
-		// Install poetry and dependencies with cache
-		state = poetryState.Dir("/app").Run(
-			llb.Shlex("sh -c 'pip install poetry && poetry install --no-root'"),
+		state = poetryState.Run(
+			llb.Shlex("pip install poetry"),
 			llb.AddMount("/root/.cache/pip", pipCache, llb.AsPersistentCacheDir("pip", llb.CacheMountShared)),
+			llb.WithCustomName("[phase] Installing Python poetry"),
+		).Root()
+
+		state = state.File(llb.Mkdir("/home/app/.cache", 0777, llb.WithParents(true)))
+
+		// Install poetry and dependencies with cache
+		state = state.Dir("/app").Run(
+			llb.Shlex("poetry install --no-root"),
+			llb.AddMount("/home/app/.cache/pip", pipCache, llb.AsPersistentCacheDir("pip", llb.CacheMountShared)),
+			llb.User("app"),
 			llb.WithCustomName("[phase] Installing Python dependencies with poetry"),
 		).Root()
 	}
@@ -438,6 +482,8 @@ func (s *PythonStack) GenerateLLB(dir string, opts BuildOptions) (*llb.State, er
 	state = h.copyApp(state, localCtx)
 
 	state = s.applyOnBuild(state, opts)
+
+	state = s.chownApp(state)
 
 	return &state, nil
 }
@@ -482,6 +528,8 @@ func (s *NodeStack) GenerateLLB(dir string, opts BuildOptions) (*llb.State, erro
 	}
 	base := llb.Image(fmt.Sprintf("node:%s-slim", version))
 
+	base = s.addAppUser(base)
+
 	h := &highlevelBuilder{opts}
 
 	// Copy package files first for better caching
@@ -519,6 +567,8 @@ func (s *NodeStack) GenerateLLB(dir string, opts BuildOptions) (*llb.State, erro
 
 	state = s.applyOnBuild(state, opts)
 
+	state = s.chownApp(state)
+
 	return &state, nil
 }
 
@@ -550,6 +600,8 @@ func (s *BunStack) GenerateLLB(dir string, opts BuildOptions) (*llb.State, error
 	}
 	base := llb.Image(fmt.Sprintf("oven/bun:%s", version))
 
+	base = s.addAppUser(base)
+
 	// Copy package files first for better caching
 	pkgFiles := []string{"package.json", "bun.lock"}
 	depState := base.File(llb.Copy(localCtx, "/", "/app", &llb.CopyInfo{
@@ -574,6 +626,8 @@ func (s *BunStack) GenerateLLB(dir string, opts BuildOptions) (*llb.State, error
 	state = h.copyApp(state, localCtx)
 
 	state = s.applyOnBuild(state, opts)
+
+	state = s.chownApp(state)
 
 	return &state, nil
 }
@@ -638,10 +692,9 @@ func (s *GoStack) GenerateLLB(dir string, opts BuildOptions) (*llb.State, error)
 		opts.AlpineImage = AlpineDefault
 	}
 
-	clean := llb.Image(opts.AlpineImage, llb.WithMetaResolver(mr))
-	c1 := clean.File(llb.Copy(state, "/bin/app", "/bin/app"))
+	state = s.addAppUser(state)
+	state = s.applyOnBuild(state, opts)
+	state = s.chownApp(state)
 
-	c1 = s.applyOnBuild(c1, opts)
-
-	return &c1, nil
+	return &state, nil
 }
