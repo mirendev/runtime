@@ -1,0 +1,85 @@
+#!/sbin/openrc-run
+
+# read kernel options
+init_KOPT() {
+	eval "set -- $(cat /proc/cmdline 2>/dev/null)"
+	for opt; do
+		case "$opt" in
+			swap=*)
+				eval "KOPT_${opt%%=*}='${opt#*=}'" ;;
+			data=*)
+				eval "KOPT_${opt%%=*}='${opt#*=}'" ;;
+			vol_*=*)
+				eval "KOPT_${opt%%=*}='${opt#*=}'" ;;
+			share_*=*)
+				eval "KOPT_${opt%%=*}='${opt#*=}'" ;;
+		esac
+	done
+}
+
+format_mount() {
+	mkdir -p "$2"
+
+	fsck -y "$1" || true
+
+	if ! mount "$1" "$2"; then
+		mkfs.ext4 "$1"
+
+		if ! mount "$1" "$2"; then
+			echo "UNABLE TO FORMAT $1"
+		else
+			echo "Formatted $2"
+		fi
+	else
+		echo "Mounted $2"
+	fi
+}
+
+start() {
+	init_KOPT
+	local rc=0
+	ebegin "Starting ${RC_SVCNAME}"
+	if [ -n "$KOPT_data" ]; then
+		format_mount $KOPT_data /data
+
+		if ! [ -e /data/var/lib ]; then
+			mkdir -p /data/var/lib
+			cp -a /var/lib/* /data/var/lib/
+		fi
+
+		rm -rf /var/lib
+		ln -sf /data/var/lib /var/lib
+
+		echo "Activating swap file on /data"
+		# We do this everytime in case the user changes
+		# the amount of swap. By doing a fallocate then
+		# truncate, we're sure that the file is always the exact
+		# requested size.
+		fallocate -l "${KOPT_swap:-2G}" /data/swap
+		truncate -s "${KOPT_swap:-2G}" /data/swap
+		mkswap /data/swap
+		swapon /data/swap
+	fi
+
+	for i in ${!KOPT_vol_*}; do
+		name=${i#"KOPT_vol_"}
+		dev="${!i}"
+
+		mkdir -p "/vol/$name"
+		format_mount "$dev" "/vol/$name"
+		chmod a+rwx "/vol/$name"
+		echo "Mounted /vol/$name"
+	done
+
+	for i in ${!KOPT_share_*}; do
+		name=${i#"KOPT_share_"}
+		tag="${!i}"
+
+		mkdir -p "/share/$name"
+		mount -t virtiofs $opts "$tag" "/share/$name"
+		echo "Mounted /share/$name"
+	done
+	
+	eend $rc
+}
+

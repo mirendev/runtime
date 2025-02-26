@@ -1,0 +1,10 @@
+af_packet
+ipv6
+bridge
+br_netfilter
+iptable_nat
+ip6table_nat
+openvswitch
+vport_geneve
+vport_vxlan
+vport_gre

@@ -1,0 +1,18 @@
+#!/sbin/openrc-run
+supervisor=supervise-daemon
+
+name="Isle Guest Management"
+description="Connects to host"
+
+command="/usr/sbin/isle-guest"
+command_args="${ISLE_OPTS}"
+SVC_LOGFILE="${SVC_LOGFILE:-/var/log/${RC_SVCNAME}.log}"
+SVC_ERRFILE="${SVC_ERRFILE:-${SVC_LOGFILE}}"
+SVC_OUTFILE="${SVC_OUTFILE:-${SVC_LOGFILE}}"
+supervise_daemon_args="--stderr \"${SVC_ERRFILE}\" --stdout \"${SVC_OUTFILE}\""
+
+retry="${ISLE_RETRY:-TERM/60/KILL/10}"
+
+depend() {
+	need networking cgroups containerd
+}
