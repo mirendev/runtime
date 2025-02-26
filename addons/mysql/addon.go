@@ -168,11 +168,6 @@ func (a *Addon) HealthCheck(ctx context.Context, cfg *addons.InstanceConfig) (ad
 	if err != nil {
 		return "", err
 	}
-
-	conn, err := mysql.NewConnector(mcfg)
-	if err != nil {
-		return "", err
-	}
 	c, err := conn.Connect(ctx)
 	if err != nil {
 		return "", err
