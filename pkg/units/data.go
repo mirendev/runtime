@@ -172,7 +172,12 @@ var sizeSuffix = map[string]int{
 }
 
 func ParseData(str string) (Data, error) {
-	var size int64
+	str = strings.TrimSpace(str)
+	
+	// Handle numeric-only input
+	if val, err := strconv.ParseInt(str, 10, 64); err == nil {
+		return Bytes(val), nil
+	}
 
 	for suf, factor := range sizeSuffix {
 		if strings.HasSuffix(str, suf) {
@@ -181,9 +186,9 @@ func ParseData(str string) (Data, error) {
 				return nil, errors.Wrapf(err, "parsing size")
 			}
 
-			size = base * int64(factor)
+			return Bytes(base * int64(factor)), nil
 		}
 	}
 
-	return Bytes(size), nil
+	return nil, errors.New("unable to parse data size: unknown format")
 }

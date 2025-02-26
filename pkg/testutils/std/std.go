@@ -86,9 +86,9 @@ func Setup(t *testing.T) *Std {
 
 	var cr *run.ContainerRunner
 	err = reg.Init(&cr)
-
+	r.NoError(err)
+	
 	cr.RunscBinary = runscBin
-
 	reg.Register("containerd", cc)
 	reg.Register("container-runner", cr)
 	reg.Register("runsc-monitor", &mon)

@@ -36,9 +36,11 @@ func (h *HTTPPortChecker) CheckPort(ctx context.Context, log *slog.Logger, addr 
 			log.Error("error checking http port", "addr", addr, "port", port, "error", err)
 		}
 	} else if resp.StatusCode < 400 {
+		defer resp.Body.Close()
 		log.Info("http port active", "addr", addr, "port", port, "status", resp.StatusCode)
 		return true, nil
 	} else {
+		defer resp.Body.Close()
 		log.Warn("http port bad status", "addr", addr, "port", port, "status", resp.StatusCode)
 	}
 
