@@ -203,10 +203,6 @@ func (c *Context) setupServerComponents(ctx context.Context, reg *asm.Registry) 
 		return &app.RPCCrud{}
 	})
 
-	reg.Provide(func() *image.ImageImporter {
-		return &image.ImageImporter{}
-	})
-
 	reg.Provide(func() *shell.RPCShell {
 		return &shell.RPCShell{}
 	})

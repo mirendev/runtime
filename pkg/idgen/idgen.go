@@ -70,3 +70,7 @@ func Gen(prefix string) string {
 
 	return prefix + base58.Encode(uuid[:])
 }
+
+func GenNS(ns string) string {
+	return Gen(ns + "-")
+}

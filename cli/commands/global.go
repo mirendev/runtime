@@ -7,7 +7,10 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"reflect"
+	"strings"
 
+	"github.com/charmbracelet/lipgloss"
 	"golang.org/x/sys/unix"
 	"miren.dev/runtime/clientconfig"
 	"miren.dev/runtime/pkg/asm"
@@ -212,6 +215,144 @@ func (c *Context) Info(format string, args ...interface{}) {
 
 func (c *Context) Begin(format string, args ...interface{}) {
 	fmt.Fprintf(c.Stderr, ui.Play+" "+format+"\n", args...)
+}
+
+// DisplayTableTemplate renders a table using a template string to infer headers and data
+// Template format: "HEADER1:field1,HEADER2:method2,HEADER3:field3"
+func (c *Context) DisplayTableTemplate(template string, items []any) {
+	// Parse template
+	columns := strings.Split(template, ",")
+	headers := make([]string, len(columns))
+	accessors := make([]string, len(columns))
+
+	for i, col := range columns {
+		parts := strings.Split(col, ":")
+		if len(parts) != 2 {
+			c.Log.Error("invalid template column format", "column", col)
+			return
+		}
+		headers[i] = parts[0]
+		accessors[i] = parts[1]
+	}
+
+	// Generate rows
+	rows := make([][]string, len(items))
+	for i, item := range items {
+		row := make([]string, len(columns))
+		val := reflect.ValueOf(item)
+
+		for j, accessor := range accessors {
+			// Try field first
+			field := reflect.Indirect(val).FieldByName(accessor)
+			if field.IsValid() {
+				// Check if the field is nil
+				if field.Kind() == reflect.Ptr && field.IsNil() {
+					row[j] = "<nil>"
+					continue
+				}
+				row[j] = fmt.Sprint(field.Interface())
+				continue
+			}
+
+			// Try method if field not found
+			method := val.MethodByName(accessor)
+			if method.IsValid() {
+				result := method.Call(nil)
+				if len(result) > 0 {
+					// Check if the result is nil
+					if result[0].Kind() == reflect.Ptr && result[0].IsNil() {
+						row[j] = "<nil>"
+						continue
+					}
+					row[j] = fmt.Sprint(result[0].Interface())
+				}
+				continue
+			}
+
+			// Neither found
+			c.Log.Error("field or method not found", "accessor", accessor, "value", val.Type())
+			row[j] = "<error>"
+		}
+		rows[i] = row
+	}
+
+	c.DisplayTable(headers, rows)
+}
+
+// DisplayTable renders a formatted table with headers and rows
+func (c *Context) DisplayTable(headers []string, rows [][]string) {
+  // Validate row lengths
+  for i, row := range rows {
+    if len(row) != len(headers) {
+      c.Log.Error("row has incorrect number of columns",
+        "row", i,
+        "expected", len(headers),
+        "actual", len(row))
+      // Pad or truncate the row to match header length
+      if len(row) < len(headers) {
+        newRow := make([]string, len(headers))
+        copy(newRow, row)
+        rows[i] = newRow
+      } else {
+        rows[i] = row[:len(headers)]
+      }
+    }
+  }
+
+	// Define styles
+	headerStyle := lipgloss.NewStyle().
+		Bold(true).
+		Foreground(lipgloss.Color("12")). // Blue
+		PaddingRight(2)
+
+	cellStyle := lipgloss.NewStyle().
+		PaddingRight(2)
+
+	// Calculate column widths
+	colWidths := make([]int, len(headers))
+
+	// Check header lengths
+	for i, h := range headers {
+		colWidths[i] = len(h)
+	}
+
+	// Check data lengths
+	for _, row := range rows {
+		for i, cell := range row {
+			if len(cell) > colWidths[i] {
+				colWidths[i] = len(cell)
+			}
+		}
+	}
+
+	// Render headers
+	headerRow := ""
+	for i, header := range headers {
+		headerRow += headerStyle.
+			Width(colWidths[i] + 2).
+			Render(header)
+	}
+	fmt.Fprintln(c.Stdout, headerRow)
+
+	// Render separator
+	sep := ""
+	for _, width := range colWidths {
+		sep += strings.Repeat("─", width+2)
+	}
+	fmt.Fprintln(c.Stdout, lipgloss.NewStyle().
+		Foreground(lipgloss.Color("8")). // Gray
+		Render(sep))
+
+	// Render data rows
+	for _, row := range rows {
+		renderedRow := ""
+		for i, cell := range row {
+			renderedRow += cellStyle.
+				Width(colWidths[i] + 2).
+				Render(cell)
+		}
+		fmt.Fprintln(c.Stdout, renderedRow)
+	}
 }
 
 func (c *Context) RPCClient(name string) (*rpc.Client, error) {

@@ -100,6 +100,55 @@ func (r *RPCCrud) List(ctx context.Context, state *CrudList) error {
 	return nil
 }
 
+func (c *Configuration) HasEnvVar(key string) bool {
+	for _, nv := range c.EnvVars() {
+		if nv.Key() == key {
+			return true
+		}
+	}
+
+	return false
+}
+
+func (c *Configuration) AddEnvVar(key, value string) {
+	vars := c.EnvVars()
+
+	var nv NamedValue
+	nv.SetKey(key)
+	nv.SetValue(value)
+
+	vars = append(vars, &nv)
+
+	c.SetEnvVars(vars)
+}
+
+func (c *Configuration) AddSensitiveEnvVar(key, value string) {
+	vars := c.EnvVars()
+
+	var nv NamedValue
+	nv.SetKey(key)
+	nv.SetValue(value)
+	nv.SetSensitive(true)
+
+	vars = append(vars, &nv)
+
+	c.SetEnvVars(vars)
+}
+
+func (c *Configuration) RemoveEnvVar(key string) {
+	var vars []*NamedValue
+
+	for _, nv := range c.EnvVars() {
+		if nv.Key() == key {
+			continue
+		}
+
+		vars = append(vars, nv)
+	}
+
+	c.SetEnvVars(vars)
+}
+
 func (r *RPCCrud) SetConfiguration(ctx context.Context, state *CrudSetConfiguration) error {
 	name := state.Args().App()
 	ac, err := r.Access.LoadApp(ctx, name)

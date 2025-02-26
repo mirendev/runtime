@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"miren.dev/runtime/addons"
 	"miren.dev/runtime/api"
 	"miren.dev/runtime/app"
 	"miren.dev/runtime/build"
@@ -18,15 +19,19 @@ import (
 	"miren.dev/runtime/ingress"
 	"miren.dev/runtime/lease"
 	"miren.dev/runtime/observability"
+	"miren.dev/runtime/pkg/asm"
 	"miren.dev/runtime/pkg/caauth"
 	"miren.dev/runtime/pkg/rpc"
+	"miren.dev/runtime/run"
 	"miren.dev/runtime/shell"
 )
 
 //go:generate go run ../pkg/rpc/cmd/rpcgen -pkg server -input rpc.yml -output rpc.gen.go
 
 type Server struct {
-	Log  *slog.Logger
+	Log *slog.Logger
+	Reg *asm.Registry
+
 	Port int `asm:"server_port"`
 
 	HTTPAddress string `asm:"http-address"`
@@ -44,6 +49,10 @@ type Server struct {
 
 	AppInfo *RPCAppInfo
 	LogsRPC *RPCLogs
+	Disks   *RPCDisks
+	Addons  *RPCAddons
+
+	AddonReg *addons.Registry
 
 	Lease *lease.LaunchContainer
 
@@ -56,6 +65,8 @@ type Server struct {
 	ConStatTracker *lease.ContainerStatsTracker
 
 	Logs *observability.LogsMaintainer
+
+	CR *run.ContainerRunner
 
 	authority *caauth.Authority
 
@@ -204,7 +215,7 @@ func (s *Server) LoadAPICert(ctx context.Context) error {
 }
 
 func (s *Server) Setup(ctx context.Context) error {
-	err := os.MkdirAll(s.TempDir, 0700)
+	err := os.MkdirAll(s.DataPath, 0700)
 	if err != nil {
 		return err
 	}
@@ -285,7 +296,19 @@ func (s *Server) Run(ctx context.Context) error {
 
 	s.Lease.RecoverContainers(ctx)
 
+	err = s.CR.RestoreContainers(ctx)
+	if err != nil {
+		return err
+	}
+
+	go s.CR.ReconcileLoop(ctx)
+
 	serv := ss.Server()
+
+	err = s.SetupBuiltinAddons()
+	if err != nil {
+		return err
+	}
 
 	s.Log.Info("exposing build service")
 
@@ -295,6 +318,8 @@ func (s *Server) Run(ctx context.Context) error {
 	serv.ExposeValue("logs", api.AdaptLogs(s.LogsRPC))
 	serv.ExposeValue("shell", shell.AdaptShellAccess(s.Shell))
 	serv.ExposeValue("user", api.AdaptUserQuery(s))
+	serv.ExposeValue("disks", api.AdaptDisks(s.Disks))
+	serv.ExposeValue("addons", api.AdaptAddons(s.Addons))
 
 	go http.ListenAndServe(s.HTTPAddress, s.Ingress)
 

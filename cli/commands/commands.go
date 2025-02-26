@@ -54,6 +54,18 @@ func AllCommands() map[string]cli.CommandFactory {
 			return Infer("app destroy", "Create a new application", AppDestroy), nil
 		},
 
+		"app addon add": func() (cli.Command, error) {
+			return Infer("app addon add", "Add an addon to an application", AppAddonsAdd), nil
+		},
+
+		"app addon destroy": func() (cli.Command, error) {
+			return Infer("app addon destroy", "Destroy an addon", AppAddonsDestroy), nil
+		},
+
+		"app addons": func() (cli.Command, error) {
+			return Infer("app addon list", "List addons for an application", AppAddonsList), nil
+		},
+
 		"config": func() (cli.Command, error) {
 			return Section("config", "Commands related to client configuration"), nil
 		},
@@ -68,6 +80,14 @@ func AllCommands() map[string]cli.CommandFactory {
 
 		"user whoami": func() (cli.Command, error) {
 			return Infer("user whoami", "Get information about the current user", WhoAmI), nil
+		},
+
+		"disk create": func() (cli.Command, error) {
+			return Infer("disk create", "Create a new disk", DiskCreate), nil
+		},
+
+		"disk run": func() (cli.Command, error) {
+			return Infer("disk run", "Run a disk", DiskRun), nil
 		},
 
 		"internal dial-stdio": func() (cli.Command, error) {

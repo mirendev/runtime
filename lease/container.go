@@ -624,6 +624,7 @@ func (l *LaunchContainer) RecoverContainers(ctx context.Context) error {
 		appName := labels["runtime.computer/app"]
 		if appName == "" {
 			l.Log.Warn("container missing app label", "container", container.ID())
+			toSave.Add(container.ID())
 			continue
 		}
 
@@ -685,15 +686,16 @@ func (l *LaunchContainer) RecoverContainers(ctx context.Context) error {
 		}
 
 		rc := &runningContainer{
-			id:          container.ID(),
-			spec:        spec,
-			app:         aa.Xid,
-			image:       img.Name(),
-			version:     version,
-			cpuStatPath: filepath.Join("/sys/fs/cgroup", spec.Linux.CgroupsPath, "cpu.stat"),
-			memCurPath:  filepath.Join("/sys/fs/cgroup", spec.Linux.CgroupsPath, "memory.current"),
-			idleSince:   time.Now(), // We assume recovered containers are idle
-			windows:     set.New[*UsageWindow](),
+			id:            container.ID(),
+			spec:          spec,
+			app:           aa.Xid,
+			image:         img.Name(),
+			version:       version,
+			cpuStatPath:   filepath.Join("/sys/fs/cgroup", spec.Linux.CgroupsPath, "cpu.stat"),
+			memCurPath:    filepath.Join("/sys/fs/cgroup", spec.Linux.CgroupsPath, "memory.current"),
+			idleSince:     time.Now(), // We assume recovered containers are idle
+			windows:       set.New[*UsageWindow](),
+			configuration: mrv.Configuration,
 		}
 
 		pool.mu.Lock()

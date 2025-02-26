@@ -176,6 +176,8 @@ func TestContainerd(t *testing.T) {
 			Endpoint: ec,
 		}
 
+		config.DefaultHTTPApp()
+
 		id, err := cr.RunContainer(ctx, config)
 		r.NoError(err)
 

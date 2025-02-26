@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/netip"
 
+	"github.com/vishvananda/netlink"
 	"miren.dev/runtime/pkg/netdb"
 )
 
@@ -83,6 +84,11 @@ type BridgeConfig struct {
 func AllocateOnBridge(name string, subnet *netdb.Subnet) (*EndpointConfig, error) {
 	if name == "" {
 		return nil, fmt.Errorf("bridge name must be provided")
+	}
+
+	_, err := netlink.LinkByName(name)
+	if err != nil {
+		return nil, fmt.Errorf("failed to find bridge %s: %w", name, err)
 	}
 
 	bridge := subnet.Router()

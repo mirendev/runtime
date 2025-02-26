@@ -33,7 +33,10 @@ type ContainerRunner struct {
 	NetServ *network.ServiceManager
 	Subnet  *netdb.Subnet
 
-	Tempdir string `asm:"tempdir"`
+	DataPath string `asm:"data-path"`
+	Tempdir  string `asm:"tempdir"`
+
+	store *containerStore
 }
 
 func (c *ContainerRunner) Populated() error {
@@ -45,7 +48,53 @@ func (c *ContainerRunner) Populated() error {
 		c.Clickhouse = "clickhouse:9000"
 	}
 
+	store, err := newContainerStore(filepath.Join(c.DataPath, "containers.db"))
+	if err != nil {
+		return fmt.Errorf("create container store: %w", err)
+	}
+	c.store = store
+
 	return nil
+}
+
+// RestoreContainers restarts any containers that should be running
+func (c *ContainerRunner) RestoreContainers(ctx context.Context) error {
+	configs, err := c.store.List()
+	if err != nil {
+		return fmt.Errorf("list containers: %w", err)
+	}
+
+	for _, cfg := range configs {
+		c.Log.Info("checking container", "id", cfg.Id)
+
+		// Check if container exists and is running
+		container, err := c.CC.LoadContainer(ctx, cfg.Id)
+		if err == nil {
+			task, err := container.Task(ctx, nil)
+			if err == nil {
+				status, err := task.Status(ctx)
+				if err == nil && status.Status == containerd.Running {
+					c.Log.Info("container already running", "id", cfg.Id)
+					continue
+				}
+			}
+
+			// Container exists but task is not running properly
+			_ = c.NukeContainer(ctx, cfg.Id)
+		}
+
+		if _, err := c.RunContainer(ctx, cfg); err != nil {
+			c.Log.Error("failed to restore container", "id", cfg.Id, "error", err)
+		}
+	}
+
+	return nil
+}
+
+type PortConfig struct {
+	Port int
+	Name string
+	Type string
 }
 
 type ContainerConfig struct {
@@ -70,6 +119,18 @@ type ContainerConfig struct {
 	Command string
 
 	Spec *oci.Spec
+
+	Ports []PortConfig
+
+	AlwaysRun bool
+}
+
+func (c *ContainerConfig) DefaultHTTPApp() {
+	c.Ports = append(c.Ports, PortConfig{
+		Port: 3000,
+		Name: "http",
+		Type: "http",
+	})
 }
 
 func (c *ContainerRunner) RunContainer(ctx context.Context, config *ContainerConfig) (string, error) {
@@ -118,6 +179,10 @@ func (c *ContainerRunner) RunContainer(ctx context.Context, config *ContainerCon
 
 	c.Log.Info("container started", "id", config.Id, "namespace", c.Namespace)
 
+	if err := c.store.Save(config); err != nil {
+		c.Log.Error("failed to persist container config", "id", config.Id, "error", err)
+	}
+
 	return config.Id, nil
 }
 
@@ -160,11 +225,17 @@ func (c *ContainerRunner) buildSpec(ctx context.Context, config *ContainerConfig
 	)
 
 	lbls := map[string]string{
-		"runtime.computer/app":           config.App,
-		"runtime.computer/version":       config.Version,
-		"runtime.computer/http_host":     config.Endpoint.Addresses[0].Addr().String() + ":3000",
-		"runtime.computer/ip":            config.Endpoint.Addresses[0].Addr().String(),
-		"runtime.computer/endpoint:http": "port=3000,type=http",
+		"runtime.computer/app":     config.App,
+		"runtime.computer/version": config.Version,
+		"runtime.computer/ip":      config.Endpoint.Addresses[0].Addr().String(),
+	}
+
+	for _, p := range config.Ports {
+		lbls[fmt.Sprintf("runtime.computer/endpoint:%s", p.Name)] = fmt.Sprintf("port=%d,type=%s", p.Port, p.Type)
+
+		if p.Type == "http" {
+			lbls["runtime.computer/http_host"] = fmt.Sprintf("%s:%d", config.Endpoint.Addresses[0].Addr().String(), p.Port)
+		}
 	}
 
 	for k, v := range config.Labels {
@@ -329,6 +400,20 @@ func (c *ContainerRunner) bootInitialTask(ctx context.Context, config *Container
 	return task.Start(ctx)
 }
 
+func (c *ContainerRunner) RestartContainer(ctx context.Context, cfg *ContainerConfig) error {
+	ctx = namespaces.WithNamespace(ctx, c.Namespace)
+
+	id := cfg.Id
+
+	err := c.NukeContainer(ctx, id)
+	if err != nil {
+		c.Log.Debug("failed to nuke container before restart", "id", id, "error", err)
+	}
+
+	_, err = c.RunContainer(ctx, cfg)
+	return err
+}
+
 func (c *ContainerRunner) StopContainer(ctx context.Context, id string) error {
 	ctx = namespaces.WithNamespace(ctx, c.Namespace)
 
@@ -381,6 +466,10 @@ func (c *ContainerRunner) StopContainer(ctx context.Context, id string) error {
 	_ = os.RemoveAll(tmpDir)
 
 	c.Log.Info("container stopped", "id", id)
+
+	if err := c.store.Delete(id); err != nil {
+		c.Log.Error("failed to remove container from store", "id", id, "error", err)
+	}
 
 	return nil
 }

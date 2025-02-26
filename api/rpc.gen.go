@@ -283,6 +283,7 @@ type applicationStatusData struct {
 	MemoryOverHour *[]*MemoryUsage     `cbor:"6,keyasint,omitempty" json:"memory_over_hour,omitempty"`
 	ActiveVersion  *string             `cbor:"7,keyasint,omitempty" json:"active_version,omitempty"`
 	LastDeploy     *standard.Timestamp `cbor:"8,keyasint,omitempty" json:"last_deploy,omitempty"`
+	Addons         *[]*AddonInstance   `cbor:"9,keyasint,omitempty" json:"addons,omitempty"`
 }
 
 type ApplicationStatus struct {
@@ -424,6 +425,22 @@ func (v *ApplicationStatus) SetLastDeploy(lastDeploy *standard.Timestamp) {
 	v.data.LastDeploy = lastDeploy
 }
 
+func (v *ApplicationStatus) HasAddons() bool {
+	return v.data.Addons != nil
+}
+
+func (v *ApplicationStatus) Addons() []*AddonInstance {
+	if v.data.Addons == nil {
+		return nil
+	}
+	return *v.data.Addons
+}
+
+func (v *ApplicationStatus) SetAddons(addons []*AddonInstance) {
+	x := slices.Clone(addons)
+	v.data.Addons = &x
+}
+
 func (v *ApplicationStatus) MarshalCBOR() ([]byte, error) {
 	return cbor.Marshal(v.data)
 }
@@ -544,6 +561,164 @@ func (v *UserInfo) MarshalJSON() ([]byte, error) {
 }
 
 func (v *UserInfo) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type diskConfigData struct {
+	Id       *string `cbor:"0,keyasint,omitempty" json:"id,omitempty"`
+	Name     *string `cbor:"1,keyasint,omitempty" json:"name,omitempty"`
+	Capacity *int64  `cbor:"2,keyasint,omitempty" json:"capacity,omitempty"`
+}
+
+type DiskConfig struct {
+	data diskConfigData
+}
+
+func (v *DiskConfig) HasId() bool {
+	return v.data.Id != nil
+}
+
+func (v *DiskConfig) Id() string {
+	if v.data.Id == nil {
+		return ""
+	}
+	return *v.data.Id
+}
+
+func (v *DiskConfig) SetId(id string) {
+	v.data.Id = &id
+}
+
+func (v *DiskConfig) HasName() bool {
+	return v.data.Name != nil
+}
+
+func (v *DiskConfig) Name() string {
+	if v.data.Name == nil {
+		return ""
+	}
+	return *v.data.Name
+}
+
+func (v *DiskConfig) SetName(name string) {
+	v.data.Name = &name
+}
+
+func (v *DiskConfig) HasCapacity() bool {
+	return v.data.Capacity != nil
+}
+
+func (v *DiskConfig) Capacity() int64 {
+	if v.data.Capacity == nil {
+		return 0
+	}
+	return *v.data.Capacity
+}
+
+func (v *DiskConfig) SetCapacity(capacity int64) {
+	v.data.Capacity = &capacity
+}
+
+func (v *DiskConfig) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *DiskConfig) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *DiskConfig) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *DiskConfig) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type addonInstanceData struct {
+	Id    *string `cbor:"0,keyasint,omitempty" json:"id,omitempty"`
+	Name  *string `cbor:"1,keyasint,omitempty" json:"name,omitempty"`
+	Addon *string `cbor:"2,keyasint,omitempty" json:"addon,omitempty"`
+	Plan  *string `cbor:"3,keyasint,omitempty" json:"plan,omitempty"`
+}
+
+type AddonInstance struct {
+	data addonInstanceData
+}
+
+func (v *AddonInstance) HasId() bool {
+	return v.data.Id != nil
+}
+
+func (v *AddonInstance) Id() string {
+	if v.data.Id == nil {
+		return ""
+	}
+	return *v.data.Id
+}
+
+func (v *AddonInstance) SetId(id string) {
+	v.data.Id = &id
+}
+
+func (v *AddonInstance) HasName() bool {
+	return v.data.Name != nil
+}
+
+func (v *AddonInstance) Name() string {
+	if v.data.Name == nil {
+		return ""
+	}
+	return *v.data.Name
+}
+
+func (v *AddonInstance) SetName(name string) {
+	v.data.Name = &name
+}
+
+func (v *AddonInstance) HasAddon() bool {
+	return v.data.Addon != nil
+}
+
+func (v *AddonInstance) Addon() string {
+	if v.data.Addon == nil {
+		return ""
+	}
+	return *v.data.Addon
+}
+
+func (v *AddonInstance) SetAddon(addon string) {
+	v.data.Addon = &addon
+}
+
+func (v *AddonInstance) HasPlan() bool {
+	return v.data.Plan != nil
+}
+
+func (v *AddonInstance) Plan() string {
+	if v.data.Plan == nil {
+		return ""
+	}
+	return *v.data.Plan
+}
+
+func (v *AddonInstance) SetPlan(plan string) {
+	v.data.Plan = &plan
+}
+
+func (v *AddonInstance) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *AddonInstance) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *AddonInstance) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *AddonInstance) UnmarshalJSON(data []byte) error {
 	return json.Unmarshal(data, &v.data)
 }
 
@@ -1029,4 +1204,1141 @@ func (v LogsClient) AppLogs(ctx context.Context, application string, from *stand
 	}
 
 	return &LogsClientAppLogsResults{client: v.Client, data: ret}, nil
+}
+
+type disksNewArgsData struct {
+	Name     *string `cbor:"0,keyasint,omitempty" json:"name,omitempty"`
+	Capacity *int64  `cbor:"1,keyasint,omitempty" json:"capacity,omitempty"`
+}
+
+type DisksNewArgs struct {
+	call *rpc.Call
+	data disksNewArgsData
+}
+
+func (v *DisksNewArgs) HasName() bool {
+	return v.data.Name != nil
+}
+
+func (v *DisksNewArgs) Name() string {
+	if v.data.Name == nil {
+		return ""
+	}
+	return *v.data.Name
+}
+
+func (v *DisksNewArgs) HasCapacity() bool {
+	return v.data.Capacity != nil
+}
+
+func (v *DisksNewArgs) Capacity() int64 {
+	if v.data.Capacity == nil {
+		return 0
+	}
+	return *v.data.Capacity
+}
+
+func (v *DisksNewArgs) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *DisksNewArgs) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *DisksNewArgs) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *DisksNewArgs) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type disksNewResultsData struct {
+	Id *string `cbor:"0,keyasint,omitempty" json:"id,omitempty"`
+}
+
+type DisksNewResults struct {
+	call *rpc.Call
+	data disksNewResultsData
+}
+
+func (v *DisksNewResults) SetId(id string) {
+	v.data.Id = &id
+}
+
+func (v *DisksNewResults) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *DisksNewResults) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *DisksNewResults) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *DisksNewResults) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type disksGetByIdArgsData struct {
+	Id *string `cbor:"0,keyasint,omitempty" json:"id,omitempty"`
+}
+
+type DisksGetByIdArgs struct {
+	call *rpc.Call
+	data disksGetByIdArgsData
+}
+
+func (v *DisksGetByIdArgs) HasId() bool {
+	return v.data.Id != nil
+}
+
+func (v *DisksGetByIdArgs) Id() string {
+	if v.data.Id == nil {
+		return ""
+	}
+	return *v.data.Id
+}
+
+func (v *DisksGetByIdArgs) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *DisksGetByIdArgs) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *DisksGetByIdArgs) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *DisksGetByIdArgs) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type disksGetByIdResultsData struct {
+	Config *DiskConfig `cbor:"0,keyasint,omitempty" json:"config,omitempty"`
+}
+
+type DisksGetByIdResults struct {
+	call *rpc.Call
+	data disksGetByIdResultsData
+}
+
+func (v *DisksGetByIdResults) SetConfig(config *DiskConfig) {
+	v.data.Config = config
+}
+
+func (v *DisksGetByIdResults) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *DisksGetByIdResults) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *DisksGetByIdResults) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *DisksGetByIdResults) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type disksGetByNameArgsData struct {
+	Name *string `cbor:"0,keyasint,omitempty" json:"name,omitempty"`
+}
+
+type DisksGetByNameArgs struct {
+	call *rpc.Call
+	data disksGetByNameArgsData
+}
+
+func (v *DisksGetByNameArgs) HasName() bool {
+	return v.data.Name != nil
+}
+
+func (v *DisksGetByNameArgs) Name() string {
+	if v.data.Name == nil {
+		return ""
+	}
+	return *v.data.Name
+}
+
+func (v *DisksGetByNameArgs) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *DisksGetByNameArgs) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *DisksGetByNameArgs) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *DisksGetByNameArgs) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type disksGetByNameResultsData struct {
+	Config *DiskConfig `cbor:"0,keyasint,omitempty" json:"config,omitempty"`
+}
+
+type DisksGetByNameResults struct {
+	call *rpc.Call
+	data disksGetByNameResultsData
+}
+
+func (v *DisksGetByNameResults) SetConfig(config *DiskConfig) {
+	v.data.Config = config
+}
+
+func (v *DisksGetByNameResults) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *DisksGetByNameResults) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *DisksGetByNameResults) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *DisksGetByNameResults) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type disksListArgsData struct{}
+
+type DisksListArgs struct {
+	call *rpc.Call
+	data disksListArgsData
+}
+
+func (v *DisksListArgs) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *DisksListArgs) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *DisksListArgs) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *DisksListArgs) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type disksListResultsData struct {
+	Disks *[]*DiskConfig `cbor:"0,keyasint,omitempty" json:"disks,omitempty"`
+}
+
+type DisksListResults struct {
+	call *rpc.Call
+	data disksListResultsData
+}
+
+func (v *DisksListResults) SetDisks(disks []*DiskConfig) {
+	x := slices.Clone(disks)
+	v.data.Disks = &x
+}
+
+func (v *DisksListResults) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *DisksListResults) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *DisksListResults) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *DisksListResults) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type disksDeleteArgsData struct {
+	Id *string `cbor:"0,keyasint,omitempty" json:"id,omitempty"`
+}
+
+type DisksDeleteArgs struct {
+	call *rpc.Call
+	data disksDeleteArgsData
+}
+
+func (v *DisksDeleteArgs) HasId() bool {
+	return v.data.Id != nil
+}
+
+func (v *DisksDeleteArgs) Id() string {
+	if v.data.Id == nil {
+		return ""
+	}
+	return *v.data.Id
+}
+
+func (v *DisksDeleteArgs) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *DisksDeleteArgs) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *DisksDeleteArgs) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *DisksDeleteArgs) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type disksDeleteResultsData struct{}
+
+type DisksDeleteResults struct {
+	call *rpc.Call
+	data disksDeleteResultsData
+}
+
+func (v *DisksDeleteResults) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *DisksDeleteResults) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *DisksDeleteResults) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *DisksDeleteResults) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type DisksNew struct {
+	*rpc.Call
+	args    DisksNewArgs
+	results DisksNewResults
+}
+
+func (t *DisksNew) Args() *DisksNewArgs {
+	args := &t.args
+	if args.call != nil {
+		return args
+	}
+	args.call = t.Call
+	t.Call.Args(args)
+	return args
+}
+
+func (t *DisksNew) Results() *DisksNewResults {
+	results := &t.results
+	if results.call != nil {
+		return results
+	}
+	results.call = t.Call
+	t.Call.Results(results)
+	return results
+}
+
+type DisksGetById struct {
+	*rpc.Call
+	args    DisksGetByIdArgs
+	results DisksGetByIdResults
+}
+
+func (t *DisksGetById) Args() *DisksGetByIdArgs {
+	args := &t.args
+	if args.call != nil {
+		return args
+	}
+	args.call = t.Call
+	t.Call.Args(args)
+	return args
+}
+
+func (t *DisksGetById) Results() *DisksGetByIdResults {
+	results := &t.results
+	if results.call != nil {
+		return results
+	}
+	results.call = t.Call
+	t.Call.Results(results)
+	return results
+}
+
+type DisksGetByName struct {
+	*rpc.Call
+	args    DisksGetByNameArgs
+	results DisksGetByNameResults
+}
+
+func (t *DisksGetByName) Args() *DisksGetByNameArgs {
+	args := &t.args
+	if args.call != nil {
+		return args
+	}
+	args.call = t.Call
+	t.Call.Args(args)
+	return args
+}
+
+func (t *DisksGetByName) Results() *DisksGetByNameResults {
+	results := &t.results
+	if results.call != nil {
+		return results
+	}
+	results.call = t.Call
+	t.Call.Results(results)
+	return results
+}
+
+type DisksList struct {
+	*rpc.Call
+	args    DisksListArgs
+	results DisksListResults
+}
+
+func (t *DisksList) Args() *DisksListArgs {
+	args := &t.args
+	if args.call != nil {
+		return args
+	}
+	args.call = t.Call
+	t.Call.Args(args)
+	return args
+}
+
+func (t *DisksList) Results() *DisksListResults {
+	results := &t.results
+	if results.call != nil {
+		return results
+	}
+	results.call = t.Call
+	t.Call.Results(results)
+	return results
+}
+
+type DisksDelete struct {
+	*rpc.Call
+	args    DisksDeleteArgs
+	results DisksDeleteResults
+}
+
+func (t *DisksDelete) Args() *DisksDeleteArgs {
+	args := &t.args
+	if args.call != nil {
+		return args
+	}
+	args.call = t.Call
+	t.Call.Args(args)
+	return args
+}
+
+func (t *DisksDelete) Results() *DisksDeleteResults {
+	results := &t.results
+	if results.call != nil {
+		return results
+	}
+	results.call = t.Call
+	t.Call.Results(results)
+	return results
+}
+
+type Disks interface {
+	New(ctx context.Context, state *DisksNew) error
+	GetById(ctx context.Context, state *DisksGetById) error
+	GetByName(ctx context.Context, state *DisksGetByName) error
+	List(ctx context.Context, state *DisksList) error
+	Delete(ctx context.Context, state *DisksDelete) error
+}
+
+type reexportDisks struct {
+	client *rpc.Client
+}
+
+func (_ reexportDisks) New(ctx context.Context, state *DisksNew) error {
+	panic("not implemented")
+}
+
+func (_ reexportDisks) GetById(ctx context.Context, state *DisksGetById) error {
+	panic("not implemented")
+}
+
+func (_ reexportDisks) GetByName(ctx context.Context, state *DisksGetByName) error {
+	panic("not implemented")
+}
+
+func (_ reexportDisks) List(ctx context.Context, state *DisksList) error {
+	panic("not implemented")
+}
+
+func (_ reexportDisks) Delete(ctx context.Context, state *DisksDelete) error {
+	panic("not implemented")
+}
+
+func (t reexportDisks) CapabilityClient() *rpc.Client {
+	return t.client
+}
+
+func AdaptDisks(t Disks) *rpc.Interface {
+	methods := []rpc.Method{
+		{
+			Name:          "new",
+			InterfaceName: "Disks",
+			Index:         0,
+			Handler: func(ctx context.Context, call *rpc.Call) error {
+				return t.New(ctx, &DisksNew{Call: call})
+			},
+		},
+		{
+			Name:          "getById",
+			InterfaceName: "Disks",
+			Index:         0,
+			Handler: func(ctx context.Context, call *rpc.Call) error {
+				return t.GetById(ctx, &DisksGetById{Call: call})
+			},
+		},
+		{
+			Name:          "getByName",
+			InterfaceName: "Disks",
+			Index:         0,
+			Handler: func(ctx context.Context, call *rpc.Call) error {
+				return t.GetByName(ctx, &DisksGetByName{Call: call})
+			},
+		},
+		{
+			Name:          "list",
+			InterfaceName: "Disks",
+			Index:         0,
+			Handler: func(ctx context.Context, call *rpc.Call) error {
+				return t.List(ctx, &DisksList{Call: call})
+			},
+		},
+		{
+			Name:          "delete",
+			InterfaceName: "Disks",
+			Index:         0,
+			Handler: func(ctx context.Context, call *rpc.Call) error {
+				return t.Delete(ctx, &DisksDelete{Call: call})
+			},
+		},
+	}
+
+	return rpc.NewInterface(methods, t)
+}
+
+type DisksClient struct {
+	*rpc.Client
+}
+
+func (c DisksClient) Export() Disks {
+	return reexportDisks{client: c.Client}
+}
+
+type DisksClientNewResults struct {
+	client *rpc.Client
+	data   disksNewResultsData
+}
+
+func (v *DisksClientNewResults) HasId() bool {
+	return v.data.Id != nil
+}
+
+func (v *DisksClientNewResults) Id() string {
+	if v.data.Id == nil {
+		return ""
+	}
+	return *v.data.Id
+}
+
+func (v DisksClient) New(ctx context.Context, name string, capacity int64) (*DisksClientNewResults, error) {
+	args := DisksNewArgs{}
+	args.data.Name = &name
+	args.data.Capacity = &capacity
+
+	var ret disksNewResultsData
+
+	err := v.Client.Call(ctx, "new", &args, &ret)
+	if err != nil {
+		return nil, err
+	}
+
+	return &DisksClientNewResults{client: v.Client, data: ret}, nil
+}
+
+type DisksClientGetByIdResults struct {
+	client *rpc.Client
+	data   disksGetByIdResultsData
+}
+
+func (v *DisksClientGetByIdResults) HasConfig() bool {
+	return v.data.Config != nil
+}
+
+func (v *DisksClientGetByIdResults) Config() *DiskConfig {
+	return v.data.Config
+}
+
+func (v DisksClient) GetById(ctx context.Context, id string) (*DisksClientGetByIdResults, error) {
+	args := DisksGetByIdArgs{}
+	args.data.Id = &id
+
+	var ret disksGetByIdResultsData
+
+	err := v.Client.Call(ctx, "getById", &args, &ret)
+	if err != nil {
+		return nil, err
+	}
+
+	return &DisksClientGetByIdResults{client: v.Client, data: ret}, nil
+}
+
+type DisksClientGetByNameResults struct {
+	client *rpc.Client
+	data   disksGetByNameResultsData
+}
+
+func (v *DisksClientGetByNameResults) HasConfig() bool {
+	return v.data.Config != nil
+}
+
+func (v *DisksClientGetByNameResults) Config() *DiskConfig {
+	return v.data.Config
+}
+
+func (v DisksClient) GetByName(ctx context.Context, name string) (*DisksClientGetByNameResults, error) {
+	args := DisksGetByNameArgs{}
+	args.data.Name = &name
+
+	var ret disksGetByNameResultsData
+
+	err := v.Client.Call(ctx, "getByName", &args, &ret)
+	if err != nil {
+		return nil, err
+	}
+
+	return &DisksClientGetByNameResults{client: v.Client, data: ret}, nil
+}
+
+type DisksClientListResults struct {
+	client *rpc.Client
+	data   disksListResultsData
+}
+
+func (v *DisksClientListResults) HasDisks() bool {
+	return v.data.Disks != nil
+}
+
+func (v *DisksClientListResults) Disks() []*DiskConfig {
+	if v.data.Disks == nil {
+		return nil
+	}
+	return *v.data.Disks
+}
+
+func (v DisksClient) List(ctx context.Context) (*DisksClientListResults, error) {
+	args := DisksListArgs{}
+
+	var ret disksListResultsData
+
+	err := v.Client.Call(ctx, "list", &args, &ret)
+	if err != nil {
+		return nil, err
+	}
+
+	return &DisksClientListResults{client: v.Client, data: ret}, nil
+}
+
+type DisksClientDeleteResults struct {
+	client *rpc.Client
+	data   disksDeleteResultsData
+}
+
+func (v DisksClient) Delete(ctx context.Context, id string) (*DisksClientDeleteResults, error) {
+	args := DisksDeleteArgs{}
+	args.data.Id = &id
+
+	var ret disksDeleteResultsData
+
+	err := v.Client.Call(ctx, "delete", &args, &ret)
+	if err != nil {
+		return nil, err
+	}
+
+	return &DisksClientDeleteResults{client: v.Client, data: ret}, nil
+}
+
+type addonsCreateInstanceArgsData struct {
+	Name  *string `cbor:"0,keyasint,omitempty" json:"name,omitempty"`
+	Addon *string `cbor:"1,keyasint,omitempty" json:"addon,omitempty"`
+	Plan  *string `cbor:"2,keyasint,omitempty" json:"plan,omitempty"`
+	App   *string `cbor:"3,keyasint,omitempty" json:"app,omitempty"`
+}
+
+type AddonsCreateInstanceArgs struct {
+	call *rpc.Call
+	data addonsCreateInstanceArgsData
+}
+
+func (v *AddonsCreateInstanceArgs) HasName() bool {
+	return v.data.Name != nil
+}
+
+func (v *AddonsCreateInstanceArgs) Name() string {
+	if v.data.Name == nil {
+		return ""
+	}
+	return *v.data.Name
+}
+
+func (v *AddonsCreateInstanceArgs) HasAddon() bool {
+	return v.data.Addon != nil
+}
+
+func (v *AddonsCreateInstanceArgs) Addon() string {
+	if v.data.Addon == nil {
+		return ""
+	}
+	return *v.data.Addon
+}
+
+func (v *AddonsCreateInstanceArgs) HasPlan() bool {
+	return v.data.Plan != nil
+}
+
+func (v *AddonsCreateInstanceArgs) Plan() string {
+	if v.data.Plan == nil {
+		return ""
+	}
+	return *v.data.Plan
+}
+
+func (v *AddonsCreateInstanceArgs) HasApp() bool {
+	return v.data.App != nil
+}
+
+func (v *AddonsCreateInstanceArgs) App() string {
+	if v.data.App == nil {
+		return ""
+	}
+	return *v.data.App
+}
+
+func (v *AddonsCreateInstanceArgs) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *AddonsCreateInstanceArgs) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *AddonsCreateInstanceArgs) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *AddonsCreateInstanceArgs) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type addonsCreateInstanceResultsData struct {
+	Id *string `cbor:"0,keyasint,omitempty" json:"id,omitempty"`
+}
+
+type AddonsCreateInstanceResults struct {
+	call *rpc.Call
+	data addonsCreateInstanceResultsData
+}
+
+func (v *AddonsCreateInstanceResults) SetId(id string) {
+	v.data.Id = &id
+}
+
+func (v *AddonsCreateInstanceResults) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *AddonsCreateInstanceResults) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *AddonsCreateInstanceResults) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *AddonsCreateInstanceResults) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type addonsListInstancesArgsData struct {
+	App *string `cbor:"0,keyasint,omitempty" json:"app,omitempty"`
+}
+
+type AddonsListInstancesArgs struct {
+	call *rpc.Call
+	data addonsListInstancesArgsData
+}
+
+func (v *AddonsListInstancesArgs) HasApp() bool {
+	return v.data.App != nil
+}
+
+func (v *AddonsListInstancesArgs) App() string {
+	if v.data.App == nil {
+		return ""
+	}
+	return *v.data.App
+}
+
+func (v *AddonsListInstancesArgs) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *AddonsListInstancesArgs) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *AddonsListInstancesArgs) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *AddonsListInstancesArgs) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type addonsListInstancesResultsData struct {
+	Addons *[]*AddonInstance `cbor:"0,keyasint,omitempty" json:"addons,omitempty"`
+}
+
+type AddonsListInstancesResults struct {
+	call *rpc.Call
+	data addonsListInstancesResultsData
+}
+
+func (v *AddonsListInstancesResults) SetAddons(addons []*AddonInstance) {
+	x := slices.Clone(addons)
+	v.data.Addons = &x
+}
+
+func (v *AddonsListInstancesResults) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *AddonsListInstancesResults) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *AddonsListInstancesResults) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *AddonsListInstancesResults) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type addonsDeleteInstanceArgsData struct {
+	App  *string `cbor:"0,keyasint,omitempty" json:"app,omitempty"`
+	Name *string `cbor:"1,keyasint,omitempty" json:"name,omitempty"`
+}
+
+type AddonsDeleteInstanceArgs struct {
+	call *rpc.Call
+	data addonsDeleteInstanceArgsData
+}
+
+func (v *AddonsDeleteInstanceArgs) HasApp() bool {
+	return v.data.App != nil
+}
+
+func (v *AddonsDeleteInstanceArgs) App() string {
+	if v.data.App == nil {
+		return ""
+	}
+	return *v.data.App
+}
+
+func (v *AddonsDeleteInstanceArgs) HasName() bool {
+	return v.data.Name != nil
+}
+
+func (v *AddonsDeleteInstanceArgs) Name() string {
+	if v.data.Name == nil {
+		return ""
+	}
+	return *v.data.Name
+}
+
+func (v *AddonsDeleteInstanceArgs) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *AddonsDeleteInstanceArgs) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *AddonsDeleteInstanceArgs) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *AddonsDeleteInstanceArgs) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type addonsDeleteInstanceResultsData struct{}
+
+type AddonsDeleteInstanceResults struct {
+	call *rpc.Call
+	data addonsDeleteInstanceResultsData
+}
+
+func (v *AddonsDeleteInstanceResults) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *AddonsDeleteInstanceResults) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *AddonsDeleteInstanceResults) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *AddonsDeleteInstanceResults) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type AddonsCreateInstance struct {
+	*rpc.Call
+	args    AddonsCreateInstanceArgs
+	results AddonsCreateInstanceResults
+}
+
+func (t *AddonsCreateInstance) Args() *AddonsCreateInstanceArgs {
+	args := &t.args
+	if args.call != nil {
+		return args
+	}
+	args.call = t.Call
+	t.Call.Args(args)
+	return args
+}
+
+func (t *AddonsCreateInstance) Results() *AddonsCreateInstanceResults {
+	results := &t.results
+	if results.call != nil {
+		return results
+	}
+	results.call = t.Call
+	t.Call.Results(results)
+	return results
+}
+
+type AddonsListInstances struct {
+	*rpc.Call
+	args    AddonsListInstancesArgs
+	results AddonsListInstancesResults
+}
+
+func (t *AddonsListInstances) Args() *AddonsListInstancesArgs {
+	args := &t.args
+	if args.call != nil {
+		return args
+	}
+	args.call = t.Call
+	t.Call.Args(args)
+	return args
+}
+
+func (t *AddonsListInstances) Results() *AddonsListInstancesResults {
+	results := &t.results
+	if results.call != nil {
+		return results
+	}
+	results.call = t.Call
+	t.Call.Results(results)
+	return results
+}
+
+type AddonsDeleteInstance struct {
+	*rpc.Call
+	args    AddonsDeleteInstanceArgs
+	results AddonsDeleteInstanceResults
+}
+
+func (t *AddonsDeleteInstance) Args() *AddonsDeleteInstanceArgs {
+	args := &t.args
+	if args.call != nil {
+		return args
+	}
+	args.call = t.Call
+	t.Call.Args(args)
+	return args
+}
+
+func (t *AddonsDeleteInstance) Results() *AddonsDeleteInstanceResults {
+	results := &t.results
+	if results.call != nil {
+		return results
+	}
+	results.call = t.Call
+	t.Call.Results(results)
+	return results
+}
+
+type Addons interface {
+	CreateInstance(ctx context.Context, state *AddonsCreateInstance) error
+	ListInstances(ctx context.Context, state *AddonsListInstances) error
+	DeleteInstance(ctx context.Context, state *AddonsDeleteInstance) error
+}
+
+type reexportAddons struct {
+	client *rpc.Client
+}
+
+func (_ reexportAddons) CreateInstance(ctx context.Context, state *AddonsCreateInstance) error {
+	panic("not implemented")
+}
+
+func (_ reexportAddons) ListInstances(ctx context.Context, state *AddonsListInstances) error {
+	panic("not implemented")
+}
+
+func (_ reexportAddons) DeleteInstance(ctx context.Context, state *AddonsDeleteInstance) error {
+	panic("not implemented")
+}
+
+func (t reexportAddons) CapabilityClient() *rpc.Client {
+	return t.client
+}
+
+func AdaptAddons(t Addons) *rpc.Interface {
+	methods := []rpc.Method{
+		{
+			Name:          "createInstance",
+			InterfaceName: "Addons",
+			Index:         0,
+			Handler: func(ctx context.Context, call *rpc.Call) error {
+				return t.CreateInstance(ctx, &AddonsCreateInstance{Call: call})
+			},
+		},
+		{
+			Name:          "listInstances",
+			InterfaceName: "Addons",
+			Index:         0,
+			Handler: func(ctx context.Context, call *rpc.Call) error {
+				return t.ListInstances(ctx, &AddonsListInstances{Call: call})
+			},
+		},
+		{
+			Name:          "deleteInstance",
+			InterfaceName: "Addons",
+			Index:         0,
+			Handler: func(ctx context.Context, call *rpc.Call) error {
+				return t.DeleteInstance(ctx, &AddonsDeleteInstance{Call: call})
+			},
+		},
+	}
+
+	return rpc.NewInterface(methods, t)
+}
+
+type AddonsClient struct {
+	*rpc.Client
+}
+
+func (c AddonsClient) Export() Addons {
+	return reexportAddons{client: c.Client}
+}
+
+type AddonsClientCreateInstanceResults struct {
+	client *rpc.Client
+	data   addonsCreateInstanceResultsData
+}
+
+func (v *AddonsClientCreateInstanceResults) HasId() bool {
+	return v.data.Id != nil
+}
+
+func (v *AddonsClientCreateInstanceResults) Id() string {
+	if v.data.Id == nil {
+		return ""
+	}
+	return *v.data.Id
+}
+
+func (v AddonsClient) CreateInstance(ctx context.Context, name string, addon string, plan string, app string) (*AddonsClientCreateInstanceResults, error) {
+	args := AddonsCreateInstanceArgs{}
+	args.data.Name = &name
+	args.data.Addon = &addon
+	args.data.Plan = &plan
+	args.data.App = &app
+
+	var ret addonsCreateInstanceResultsData
+
+	err := v.Client.Call(ctx, "createInstance", &args, &ret)
+	if err != nil {
+		return nil, err
+	}
+
+	return &AddonsClientCreateInstanceResults{client: v.Client, data: ret}, nil
+}
+
+type AddonsClientListInstancesResults struct {
+	client *rpc.Client
+	data   addonsListInstancesResultsData
+}
+
+func (v *AddonsClientListInstancesResults) HasAddons() bool {
+	return v.data.Addons != nil
+}
+
+func (v *AddonsClientListInstancesResults) Addons() []*AddonInstance {
+	if v.data.Addons == nil {
+		return nil
+	}
+	return *v.data.Addons
+}
+
+func (v AddonsClient) ListInstances(ctx context.Context, app string) (*AddonsClientListInstancesResults, error) {
+	args := AddonsListInstancesArgs{}
+	args.data.App = &app
+
+	var ret addonsListInstancesResultsData
+
+	err := v.Client.Call(ctx, "listInstances", &args, &ret)
+	if err != nil {
+		return nil, err
+	}
+
+	return &AddonsClientListInstancesResults{client: v.Client, data: ret}, nil
+}
+
+type AddonsClientDeleteInstanceResults struct {
+	client *rpc.Client
+	data   addonsDeleteInstanceResultsData
+}
+
+func (v AddonsClient) DeleteInstance(ctx context.Context, app string, name string) (*AddonsClientDeleteInstanceResults, error) {
+	args := AddonsDeleteInstanceArgs{}
+	args.data.App = &app
+	args.data.Name = &name
+
+	var ret addonsDeleteInstanceResultsData
+
+	err := v.Client.Call(ctx, "deleteInstance", &args, &ret)
+	if err != nil {
+		return nil, err
+	}
+
+	return &AddonsClientDeleteInstanceResults{client: v.Client, data: ret}, nil
 }

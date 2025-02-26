@@ -70,6 +70,8 @@ func (l *LaunchContainer) launch(
 		Endpoint: ec,
 	}
 
+	config.DefaultHTTPApp()
+
 	_, err = l.CR.RunContainer(ctx, config)
 	if err != nil {
 		return nil, err

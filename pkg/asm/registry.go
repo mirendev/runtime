@@ -158,8 +158,16 @@ func isAssignableTo(a, b reflect.Type) bool {
 	return b.AssignableTo(a)
 }
 
+var regType = reflect.TypeFor[*Registry]()
+
 func (r *Registry) populateByType(field reflect.Value, tag string) (bool, error) {
 	if tag == "" {
+
+		if field.Type() == regType {
+			field.Set(reflect.ValueOf(r))
+			return true, nil
+		}
+
 		for _, v := range r.components {
 			cv := reflect.ValueOf(v)
 
