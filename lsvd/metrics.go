@@ -28,7 +28,7 @@ var (
 
 	blocksWriteLatency = promauto.NewHistogram(prometheus.HistogramOpts{
 		Name:    "lsvd_blocks_write_time",
-		Help:    "The total number of blocks read",
+		Help:    "The latency of block writes",
 		Buckets: prometheus.DefBuckets,
 	})
 
@@ -54,7 +54,7 @@ var (
 
 	segmentTime = promauto.NewHistogram(prometheus.HistogramOpts{
 		Name:    "lsvd_segments_upload_time",
-		Help:    "The total number of segments bytes written",
+		Help:    "The time taken to upload segments",
 		Buckets: prometheus.DefBuckets,
 	})
 

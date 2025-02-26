@@ -451,13 +451,18 @@ func HandleTransport(log *slog.Logger, conn net.Conn, backend Backend, options *
 			if sc != nil {
 				backend.ReadIntoConn(b[:length], int64(offset), sc)
 			} else {
-				n, err := backend.ReadAt(b[:length], int64(offset))
-				if err != nil {
-					return err
-				}
+				for left := length; left > 0; {
+					n, err := backend.ReadAt(b[:left], int64(offset))
+					if err != nil {
+						return err
+					}
 
-				if _, err := conn.Write(b[:n]); err != nil {
-					return err
+					if _, err := conn.Write(b[:n]); err != nil {
+						return err
+					}
+
+					b = b[n:]
+					left -= uint32(n)
 				}
 			}
 		case TRANSMISSION_TYPE_REQUEST_WRITE:

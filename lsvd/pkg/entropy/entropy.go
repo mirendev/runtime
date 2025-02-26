@@ -33,6 +33,10 @@ func (s *shannon) Write(data []byte) (int, error) {
 }
 
 func (s *shannon) Value() float64 {
+	if s.total == 0 {
+		return 0
+	}
+
 	var entropy float64
 	for _, count := range s.frequencies {
 		if count > 0 {

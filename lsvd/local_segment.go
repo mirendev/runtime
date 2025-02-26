@@ -155,7 +155,10 @@ func (l *LocalFileAccess) AppendToSegments(ctx context.Context, vol string, seg 
 	defer bw.Flush()
 
 	for _, seg := range segments {
-		bw.Write(seg[:])
+		_, err = bw.Write(seg[:])
+		if err != nil {
+			return err
+		}
 	}
 
 	return nil

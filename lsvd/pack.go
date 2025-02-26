@@ -3,6 +3,8 @@ package lsvd
 import (
 	"context"
 	"path/filepath"
+
+	"miren.dev/runtime/pkg/multierror"
 )
 
 type Packer struct {
@@ -142,14 +144,21 @@ func (p *Packer) removeOldSegments(ctx context.Context) error {
 		return err
 	}
 
+	var rerr error
+
 	for _, seg := range segments {
 		p.d.log.Debug("removing dead segment", "id", seg)
 		err := p.d.removeSegmentIfPossible(ctx, seg)
 		if err != nil {
-			return err
+			rerr = multierror.Append(rerr, err)
+			continue
 		}
 
 		p.d.s.SetDeleted(seg, p.d.log)
+	}
+
+	if rerr != nil {
+		return rerr
 	}
 
 	p.d.log.Debug("removed dead segments", "count", len(segments))

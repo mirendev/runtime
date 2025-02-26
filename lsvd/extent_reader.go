@@ -236,6 +236,7 @@ func (d *ExtentReader) fetchExtentUncached(
 
 		rangeData = uncomp
 		compressionOverhead.Add(time.Since(startDecomp).Seconds())
+	default:
 		return RangeData{}, nil, fmt.Errorf("unknown flags value: %d", pe.Flags())
 	}
 
