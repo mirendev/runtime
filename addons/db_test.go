@@ -57,7 +57,6 @@ func TestDB(t *testing.T) {
 
 		// Create test instance
 		instance := &Instance{
-			Name:        "test-addon",
 			Xid:         "ext-123",
 			ContainerId: "container-123",
 			DiskIds:     diskIds,
@@ -73,11 +72,9 @@ func TestDB(t *testing.T) {
 		retrieved, err := db.GetInstance(instance.Id)
 		r.NoError(err)
 
-		r.Equal(instance.Name, retrieved.Name)
 		r.Equal(instance.Xid, retrieved.Xid)
 		r.Equal(instance.ContainerId, retrieved.ContainerId)
 		r.Equal(instance.DiskIds, retrieved.DiskIds)
-		r.Equal(instance.AppId, retrieved.AppId)
 		r.Equal(instance.CreatedAt, retrieved.CreatedAt)
 		r.Equal(instance.UpdatedAt, retrieved.UpdatedAt)
 
@@ -137,7 +134,6 @@ func TestDB(t *testing.T) {
 
 		// Create instance without disks or app
 		instance := &Instance{
-			Name:        "test-addon",
 			Xid:         "ext-123",
 			ContainerId: "container-123",
 		}
@@ -150,6 +146,5 @@ func TestDB(t *testing.T) {
 		r.NoError(err)
 
 		r.Empty(retrieved.DiskIds, "should have no disk IDs")
-		r.Zero(retrieved.AppId, "should have no app ID")
 	})
 }
