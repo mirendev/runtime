@@ -133,6 +133,8 @@ func TestContainer(t *testing.T) {
 			Endpoint: ec,
 		}
 
+		config.DefaultHTTPApp()
+
 		id, err := cr.RunContainer(ctx, config)
 		r.NoError(err)
 
@@ -260,6 +262,8 @@ func TestContainer(t *testing.T) {
 			Endpoint:  ec,
 			StaticDir: "/public",
 		}
+
+		config.DefaultHTTPApp()
 
 		id, err := cr.RunContainer(ctx, config)
 		r.NoError(err)

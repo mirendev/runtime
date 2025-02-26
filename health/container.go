@@ -18,6 +18,7 @@ import (
 	"github.com/containerd/containerd/v2/core/events"
 	"github.com/containerd/containerd/v2/pkg/namespaces"
 	"github.com/containerd/typeurl/v2"
+	"miren.dev/runtime/health/portreg"
 	"miren.dev/runtime/observability"
 )
 
@@ -418,20 +419,13 @@ func (c *ContainerMonitor) SetPortStatus(id string, bp observability.BoundPort, 
 		ip := cs.Labels[ipLabel]
 
 		if status == observability.PortStatusBound && ip != "" {
-			switch curEp.Type {
-			case "http":
-				c.Log.Info("checking http port", "addr", ip, "port", curEp.Port)
-				go c.checkHTTP(context.Background(), ip, 60*time.Second, curEp)
-				return
 
-			case "", "tcp":
-				c.Log.Info("checking tcp port", "addr", ip, "port", curEp.Port)
-				go c.checkPort(context.Background(), ip, 60*time.Second, curEp)
+			pc := portreg.Get(curEp.Type)
 
+			if pc != nil {
+				go c.checkPort2(context.Background(), ip, 60*time.Second, curEp, pc)
 				return
-			case "udp":
-				// nothing needed
-			default:
+			} else {
 				c.Log.Warn("unknown port type", "type", curEp.Type)
 			}
 		}
@@ -441,6 +435,39 @@ func (c *ContainerMonitor) SetPortStatus(id string, bp observability.BoundPort, 
 	} else {
 		c.Log.Warn("container not found", "id", id)
 	}
+}
+
+func (c *ContainerMonitor) checkPort2(ctx context.Context, addr string, dur time.Duration, ep *Endpoint, pc portreg.PortChecker) error {
+	start := time.Now()
+
+	defer c.Log.Info("port check done", "addr", addr, "port", ep.Port)
+
+	ticker := time.NewTicker(500 * time.Millisecond)
+	defer ticker.Stop()
+
+	for time.Since(start) < dur {
+		c.Log.Info("checking port", "addr", addr, "port", ep.Port)
+		ok, err := pc.CheckPort(ctx, c.Log, addr, ep.Port)
+		if err != nil {
+			c.Log.Error("error checking port", "addr", addr, "port", ep.Port, "error", err)
+			// We don't give up here, because, well, we don't have another option.
+		} else if ok {
+			c.mu.Lock()
+			c.cond.Broadcast()
+			ep.Status = observability.PortStatusActive
+			c.mu.Unlock()
+			return nil
+		}
+
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+			//ok
+		}
+	}
+
+	return nil
 }
 
 func (c *ContainerMonitor) checkPort(ctx context.Context, addr string, dur time.Duration, ep *Endpoint) error {

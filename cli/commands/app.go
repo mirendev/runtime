@@ -314,12 +314,19 @@ func (m Model) View() string {
 		concurrency = "unknown"
 	}
 
-	hdr := fmt.Sprintf("       name: %s\nlast update: %s %s\nconcurrency: %s\n   env vars: %s\n",
+	var addons []string
+
+	for _, a := range m.status.Addons() {
+		addons = append(addons, a.Name())
+	}
+
+	hdr := fmt.Sprintf("       name: %s\nlast update: %s %s\nconcurrency: %s\n   env vars: %s\n    addons: %s\n",
 		bold.Render(m.status.Name()),
 		bold.Render(lastUpdate),
 		laExtra,
 		bold.Render(concurrency),
 		bold.Render(strings.Join(envvars, ", ")),
+		bold.Render(strings.Join(addons, ", ")),
 	)
 
 	for _, ps := range m.status.Pools() {

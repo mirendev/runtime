@@ -284,6 +284,7 @@ func (h *commonHandler) handle(r slog.Record, module string) error {
 	// source
 	if h.opts.AddSource {
 		state.appendAttr(slog.Any(slog.SourceKey, recordSource(r)))
+		state.appendRawString(" ")
 	}
 
 	if module != "" {

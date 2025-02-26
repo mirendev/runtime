@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"miren.dev/runtime/addons"
 	"miren.dev/runtime/api"
 	"miren.dev/runtime/app"
 	"miren.dev/runtime/lease"
@@ -13,6 +14,7 @@ import (
 
 type RPCAppInfo struct {
 	App   *app.AppAccess
+	DB    *addons.DB
 	Lease *lease.LaunchContainer
 	CPU   *metrics.CPUUsage
 	Mem   *metrics.MemoryUsage
@@ -134,6 +136,25 @@ func (a *RPCAppInfo) AppInfo(ctx context.Context, state *api.AppInfoAppInfo) err
 	}
 
 	rai.SetPools(pools)
+
+	// Get instances from DB
+	instances, err := a.DB.ListInstancesForApp(ac.Id)
+	if err != nil {
+		return err
+	}
+
+	// Convert to API format
+	addons := make([]*api.AddonInstance, len(instances))
+	for i, instance := range instances {
+		apiInstance := &api.AddonInstance{}
+		apiInstance.SetId(instance.Xid)
+		apiInstance.SetName(instance.Apps[0].Name)
+		apiInstance.SetAddon(instance.Addon)
+		apiInstance.SetPlan(instance.Plan)
+		addons[i] = apiInstance
+	}
+
+	rai.SetAddons(addons)
 
 	state.Results().SetStatus(&rai)
 

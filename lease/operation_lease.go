@@ -334,6 +334,8 @@ func (l *leaseOperation) launch(
 		LogEntity: l.ac.Xid,
 	}
 
+	config.DefaultHTTPApp()
+
 	if l.opts.command != "" {
 		config.Command = l.opts.command
 		if l.mrv.Configuration.HasEntrypoint() {
@@ -371,13 +373,14 @@ func (l *leaseOperation) launch(
 	}
 
 	rc := &runningContainer{
-		id:          config.Id,
-		image:       config.Image,
-		spec:        config.Spec,
-		app:         l.ac.Xid,
-		version:     l.mrv.Version,
-		cpuStatPath: filepath.Join("/sys/fs/cgroup", config.CGroupPath, "cpu.stat"),
-		memCurPath:  filepath.Join("/sys/fs/cgroup", config.CGroupPath, "memory.current"),
+		id:            config.Id,
+		image:         config.Image,
+		spec:          config.Spec,
+		app:           l.ac.Xid,
+		version:       l.mrv.Version,
+		cpuStatPath:   filepath.Join("/sys/fs/cgroup", config.CGroupPath, "cpu.stat"),
+		memCurPath:    filepath.Join("/sys/fs/cgroup", config.CGroupPath, "memory.current"),
+		configuration: l.mrv.Configuration,
 	}
 
 	err = l.ConStats.activateContainer(rc)

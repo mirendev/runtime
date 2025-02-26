@@ -33,4 +33,9 @@ cd /src
 # Because all the tests use the same containerd, buildkit, and cgroups, we need to
 # make sure that they don't interfere with each other. For now, we do that by passing
 # -p 1, but in the future we should run each test in a separate namespace.
-gotestsum --format testname -- -p 1 "$@"
+
+if test -n "$VERBOSE"; then
+  go test -p 1 -v "$@"
+else
+  gotestsum --format testname -- -p 1 "$@"
+fi

@@ -317,7 +317,7 @@ func (s *RubyStack) GenerateLLB(dir string, opts BuildOptions) (*llb.State, erro
 	h := &highlevelBuilder{opts}
 
 	// My kingdom for a pipe operator.
-	base = h.aptInstall(base, "build-essential", "libpq-dev", "nodejs", "libyaml-dev")
+	base = h.aptInstall(base, "build-essential", "libpq-dev", "nodejs", "libyaml-dev", "postgresql-client")
 
 	base = base.
 		AddEnv("SECRET_KEY_BASE_DUMMY", "1").

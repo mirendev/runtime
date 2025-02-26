@@ -88,6 +88,10 @@ types:
       - name: lastDeploy
         type: standard.Timestamp
         index: 8
+      - name: addons
+        type: list
+        element: AddonInstance
+        index: 9
 
   - type: LogEntry
     fields:
@@ -105,7 +109,33 @@ types:
     fields:
       - name: subject
         type: string
-        
+
+  - type: DiskConfig
+    fields:
+      - name: id
+        type: string
+        index: 0
+      - name: name
+        type: string
+        index: 1
+      - name: capacity
+        type: int64
+        index: 2
+
+  - type: AddonInstance
+    fields:
+      - name: id
+        type: string
+        index: 0
+      - name: name
+        type: string
+        index: 1
+      - name: addon
+        type: string
+        index: 2
+      - name: plan
+        type: string
+        index: 3
 
 interfaces:
   - name: UserQuery
@@ -140,3 +170,69 @@ interfaces:
             type: list
             element: LogEntry
 
+  - name: Disks
+    methods:
+      - name: new
+        parameters:
+          - name: name
+            type: string
+          - name: capacity
+            type: int64
+        results:
+          - name: id
+            type: string
+      - name: getById
+        parameters:
+          - name: id
+            type: string
+        results:
+          - name: config
+            type: DiskConfig
+      - name: getByName
+        parameters:
+          - name: name
+            type: string
+        results:
+          - name: config
+            type: DiskConfig
+      - name: list
+        results:
+          - name: disks
+            type: list
+            element: DiskConfig
+      - name: delete
+        parameters:
+          - name: id
+            type: string
+
+  - name: Addons
+    methods:
+      - name: createInstance
+        parameters:
+          - name: name
+            type: string
+          - name: addon
+            type: string
+          - name: plan
+            type: string
+          - name: app
+            type: string
+        results:
+          - name: id
+            type: string
+
+      - name: listInstances
+        parameters:
+          - name: app
+            type: string
+        results:
+          - name: addons
+            type: list
+            element: AddonInstance
+
+      - name: deleteInstance
+        parameters:
+          - name: app
+            type: string
+          - name: name
+            type: string

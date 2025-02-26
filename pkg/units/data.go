@@ -1,6 +1,12 @@
 package units
 
-import "fmt"
+import (
+	"fmt"
+	"strconv"
+	"strings"
+
+	"github.com/pkg/errors"
+)
 
 type (
 	Bytes     int64
@@ -122,4 +128,62 @@ func (m MegaBytes) Int64() int64 {
 
 func (g GigaBytes) Int64() int64 {
 	return int64(g)
+}
+
+const (
+	kilo = 1000
+	mega = kilo * 1000
+	giga = mega * 1000
+	tera = giga * 1000
+	peta = tera * 1000
+)
+
+var sizeSuffix = map[string]int{
+	"k":  kilo,
+	"kb": kilo,
+	"kB": kilo,
+	"K":  kilo,
+	"Kb": kilo,
+	"KB": kilo,
+	"m":  mega,
+	"mb": mega,
+	"mB": mega,
+	"M":  mega,
+	"Mb": mega,
+	"MB": mega,
+	"g":  giga,
+	"gb": giga,
+	"gB": giga,
+	"G":  giga,
+	"Gb": giga,
+	"GB": giga,
+	"t":  tera,
+	"tb": tera,
+	"tB": tera,
+	"T":  tera,
+	"Tb": tera,
+	"TB": tera,
+	"p":  peta,
+	"pb": peta,
+	"pB": peta,
+	"P":  peta,
+	"Pb": peta,
+	"PB": peta,
+}
+
+func ParseData(str string) (Data, error) {
+	var size int64
+
+	for suf, factor := range sizeSuffix {
+		if strings.HasSuffix(str, suf) {
+			base, err := strconv.ParseInt(str[:len(str)-len(suf)], 10, 64)
+			if err != nil {
+				return nil, errors.Wrapf(err, "parsing size")
+			}
+
+			size = base * int64(factor)
+		}
+	}
+
+	return Bytes(size), nil
 }

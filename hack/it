@@ -1,4 +1,3 @@
 #!/bin/bash
 
-
 dagger call -q test --dir=. --tests="$@"
