@@ -56,7 +56,7 @@ func (m *Manager) CreateDisk(ctx context.Context, params CreateDiskParams) (stri
 
 	_, err := sa.GetVolumeInfo(ctx, params.Name)
 	if err == nil {
-		return "", errors.Wrap(err, "disk already exists")
+		return "", errors.New("disk already exists")
 	}
 
 	err = sa.InitVolume(ctx, &lsvd.VolumeInfo{

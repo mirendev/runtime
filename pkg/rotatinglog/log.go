@@ -75,12 +75,15 @@ func (r *rotatingLogger) rotate() error {
 		}
 
 		// Rename existing log files
-		os.Rename(oldPath, newPath)
+		if err := os.Rename(oldPath, newPath); err != nil {
+			return err
+		}
 	}
 
 	// Rename current log file
-	os.Rename(r.path, fmt.Sprintf("%s.1", r.path))
-
+	if err := os.Rename(r.path, fmt.Sprintf("%s.1", r.path)); err != nil {
+		return err
+	}
 	// Create new log file
 	file, err := os.OpenFile(r.path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 	if err != nil {
