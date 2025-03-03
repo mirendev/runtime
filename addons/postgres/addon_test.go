@@ -19,6 +19,7 @@ func TestPostgresAddon(t *testing.T) {
 		defer s.Cleanup()
 
 		var addon Addon
+		addon.localDisk = true
 		err := s.Populate(&addon)
 		r.NoError(err)
 

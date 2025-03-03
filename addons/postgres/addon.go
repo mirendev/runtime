@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
@@ -28,6 +30,10 @@ type Addon struct {
 	Images *image.ImageImporter
 
 	Disks *disk.Manager
+
+	Tempdir string `asm:"tempdir"`
+
+	localDisk bool
 }
 
 var _ addons.Addon = &Addon{}
@@ -63,14 +69,27 @@ func (a *Addon) Provision(ctx context.Context, name string, plan addons.Plan) (*
 	id := addons.InstanceId(idgen.GenNS("postgres"))
 
 	a.Log.Info("provisioning postgres disk", "id", id)
-	// Provision a disk!
-	path, err := a.Disks.CreateDisk(ctx, disk.CreateDiskParams{
-		Name:     string(id),
-		Capacity: units.GigaBytes(100),
-	})
 
-	if err != nil {
-		return nil, errors.Wrap(err, "error creating disk")
+	var path string
+
+	if a.localDisk {
+		path = filepath.Join(a.Tempdir, string(id))
+		err := os.MkdirAll(path, 0755)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		// Provision a disk!
+		dpath, err := a.Disks.CreateDisk(ctx, disk.CreateDiskParams{
+			Name:     string(id),
+			Capacity: units.GigaBytes(100),
+		})
+
+		if err != nil {
+			return nil, errors.Wrap(err, "error creating disk")
+		}
+
+		path = dpath
 	}
 
 	img, err := a.Images.PullImage(ctx, "docker.io/library/postgres:17")
