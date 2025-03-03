@@ -242,17 +242,5 @@ func (l *RunningBuildkit) Client(ctx context.Context) (*buildkit.Client, error) 
 }
 
 func (l *RunningBuildkit) Close(ctx context.Context) error {
-	ctx = namespaces.WithNamespace(ctx, l.Namespace)
-
-	cont, err := l.CR.CC.LoadContainer(ctx, l.id)
-	if err != nil {
-		return err
-	}
-
-	task, _ := cont.Task(ctx, nil)
-	if task != nil {
-		task.Delete(ctx, client.WithProcessKill)
-	}
-
-	return cont.Delete(ctx, client.WithSnapshotCleanup)
+	return l.CR.StopContainer(ctx, l.id)
 }

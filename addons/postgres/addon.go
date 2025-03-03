@@ -7,12 +7,15 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/pkg/errors"
 	"miren.dev/runtime/addons"
+	"miren.dev/runtime/disk"
 	"miren.dev/runtime/health"
 	"miren.dev/runtime/image"
 	"miren.dev/runtime/network"
 	"miren.dev/runtime/pkg/idgen"
 	"miren.dev/runtime/pkg/netdb"
+	"miren.dev/runtime/pkg/units"
 	"miren.dev/runtime/run"
 )
 
@@ -23,6 +26,8 @@ type Addon struct {
 	Bridge string `asm:"bridge-iface"`
 	Health *health.ContainerMonitor
 	Images *image.ImageImporter
+
+	Disks *disk.Manager
 }
 
 var _ addons.Addon = &Addon{}
@@ -55,14 +60,25 @@ type instanceConfig struct {
 }
 
 func (a *Addon) Provision(ctx context.Context, name string, plan addons.Plan) (*addons.InstanceConfig, error) {
+	id := addons.InstanceId(idgen.GenNS("postgres"))
+
+	a.Log.Info("provisioning postgres disk", "id", id)
+	// Provision a disk!
+	path, err := a.Disks.CreateDisk(ctx, disk.CreateDiskParams{
+		Name:     string(id),
+		Capacity: units.GigaBytes(100),
+	})
+
+	if err != nil {
+		return nil, errors.Wrap(err, "error creating disk")
+	}
+
 	img, err := a.Images.PullImage(ctx, "docker.io/library/postgres:17")
 	if err != nil {
 		return nil, err
 	}
 
 	a.Log.Debug("pulled image", "image", img.Name())
-
-	id := addons.InstanceId(idgen.GenNS("postgres"))
 
 	pass := idgen.Gen("p")
 
@@ -79,12 +95,19 @@ func (a *Addon) Provision(ctx context.Context, name string, plan addons.Plan) (*
 			"POSTGRES_USER":     name,
 			"POSTGRES_PASSWORD": pass,
 			"POSTGRES_DB":       name,
+			"PGDATA":            "/var/lib/postgresql/data/pgdata",
 		},
 		Ports: []run.PortConfig{
 			{
 				Port: 5432,
 				Name: "postgres",
 				Type: "postgres",
+			},
+		},
+		Mounts: []run.MountConfig{
+			{
+				Source: path,
+				Target: "/var/lib/postgresql/data",
 			},
 		},
 		AlwaysRun: true,

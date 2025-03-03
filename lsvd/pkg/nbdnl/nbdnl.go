@@ -206,7 +206,7 @@ func Connect(idx uint32, socks []*os.File, size uint64, cf ClientFlags, sf Serve
 	}
 	msgs, err := conn.c.Execute(msg, conn.family, netlink.Request)
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("sending connect command: %w", err)
 	}
 	for _, m := range msgs {
 		d, err := netlink.NewAttributeDecoder(m.Data)

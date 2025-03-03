@@ -90,6 +90,14 @@ func AllCommands() map[string]cli.CommandFactory {
 			return Infer("disk run", "Run a disk", DiskRun), nil
 		},
 
+		"disk provision": func() (cli.Command, error) {
+			return Infer("disk provision", "Provision a disk", DiskProvision), nil
+		},
+
+		"internal disk cleanup": func() (cli.Command, error) {
+			return Infer("internal disk cleanup", "Cleanup disk data", DiskCleanup), nil
+		},
+
 		"internal dial-stdio": func() (cli.Command, error) {
 			return Infer("internal dial-stdio", "Dial a stdio connection", DialStdio), nil
 		},
