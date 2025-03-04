@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -14,11 +15,13 @@ import (
 	"github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/containerd/containerd/runtime/v2/logging"
 	"miren.dev/runtime/observability"
+	"miren.dev/runtime/pkg/rotatinglog"
 )
 
 var (
 	fDB  = flag.String("d", "", "db")
 	fEnt = flag.String("e", "", "ent")
+	fDir = flag.String("l", "", "log")
 )
 
 type LogEntry struct {
@@ -26,25 +29,19 @@ type LogEntry struct {
 }
 
 func main() {
-	var f io.Writer
-
-	if os.Getenv("LOG_INGRESS_DEBUG") != "" {
-		lf, err := os.OpenFile("/tmp/log-debug", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
-		if err != nil {
-			panic(err)
-		}
-
-		defer lf.Close()
-		f = lf
-	} else {
-		f = io.Discard
-	}
-
-	fmt.Fprintf(f, "starting: %+v %#v\n", os.Args, os.Environ())
+	var lf io.Writer = io.Discard
 
 	flag.Parse()
 
-	fmt.Fprintf(f, "%q %q\n", *fDB, *fEnt)
+	if *fDir != "" {
+		rl, err := rotatinglog.Open(filepath.Join(*fDir, "log"), 10, 10)
+		if err == nil {
+			defer rl.Close()
+			lf = rl
+
+			fmt.Fprintf(lf, "%s: restart %+v\n", time.Now().Format(time.RFC3339), os.Args)
+		}
+	}
 
 	entity := *fEnt
 
@@ -60,10 +57,7 @@ func main() {
 		Compression: &clickhouse.Compression{
 			Method: clickhouse.CompressionLZ4,
 		},
-		Debug: true,
-		Debugf: func(format string, v ...interface{}) {
-			fmt.Fprintf(f, format, v...)
-		},
+		Debug: false,
 	})
 
 	logging.Run(func(ctx context.Context, cfg *logging.Config, ready func() error) error {
@@ -81,9 +75,9 @@ func main() {
 					return
 				}
 
-				line = strings.TrimRight(line, "\t\n\r")
+				ts := time.Now()
 
-				fmt.Fprintf(f, "stderr: %q\n", line)
+				line = strings.TrimRight(line, "\t\n\r")
 
 				stream := observability.Stderr
 
@@ -95,14 +89,15 @@ func main() {
 					stream = observability.Error
 				}
 
+				fmt.Fprintf(lf, "%s: [%s] %s\n", ts.Format(time.RFC3339), stream, line)
+
 				err = lw.WriteEntry(entity, observability.LogEntry{
-					Timestamp: time.Now(),
+					Timestamp: ts,
 					Stream:    stream,
 					Body:      line,
 				})
 				if err != nil {
-					fmt.Fprintf(f, "error: %v\n", err)
-					return
+					fmt.Fprintf(lf, "%s: error: %v\n", ts.Format(time.RFC3339), err)
 				}
 			}
 		}()
@@ -118,9 +113,10 @@ func main() {
 					return
 				}
 
+				ts := time.Now()
+
 				line = strings.TrimRight(line, "\t\n\r")
 
-				fmt.Fprintf(f, "stdout: %q\n", line)
 				stream := observability.Stdout
 
 				if strings.HasPrefix(line, "!USER ") {
@@ -131,14 +127,15 @@ func main() {
 					stream = observability.Error
 				}
 
+				fmt.Fprintf(lf, "%s: [%s] %s\n", ts.Format(time.RFC3339), stream, line)
+
 				err = lw.WriteEntry(entity, observability.LogEntry{
-					Timestamp: time.Now(),
+					Timestamp: ts,
 					Stream:    stream,
 					Body:      line,
 				})
 				if err != nil {
-					fmt.Fprintf(f, "error: %v\n", err)
-					return
+					fmt.Fprintf(lf, "%s error: %v\n", ts.Format(time.RFC3339), err)
 				}
 			}
 		}()
@@ -148,7 +145,6 @@ func main() {
 			return err
 		}
 
-		fmt.Fprintln(f, "waiting")
 		wg.Wait()
 
 		return nil

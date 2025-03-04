@@ -97,6 +97,11 @@ type PortConfig struct {
 	Type string
 }
 
+type MountConfig struct {
+	Source string
+	Target string
+}
+
 type ContainerConfig struct {
 	Id        string
 	App       string
@@ -120,7 +125,8 @@ type ContainerConfig struct {
 
 	Spec *oci.Spec
 
-	Ports []PortConfig
+	Ports  []PortConfig
+	Mounts []MountConfig
 
 	AlwaysRun bool
 }
@@ -274,6 +280,15 @@ func (c *ContainerRunner) buildSpec(ctx context.Context, config *ContainerConfig
 			Source:      resolvePath,
 			Options:     []string{"rw"},
 		},
+	}
+
+	for _, m := range config.Mounts {
+		mounts = append(mounts, specs.Mount{
+			Destination: m.Target,
+			Type:        "bind",
+			Source:      m.Source,
+			Options:     []string{"rbind", "rw"},
+		})
 	}
 
 	var envs []string

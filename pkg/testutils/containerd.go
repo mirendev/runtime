@@ -13,6 +13,7 @@ import (
 	"github.com/containerd/typeurl/v2"
 	"github.com/davecgh/go-spew/spew"
 	"github.com/vishvananda/netlink"
+	"golang.org/x/sys/unix"
 )
 
 func NukeNamespace(cl *containerd.Client, ns string) {
@@ -55,9 +56,24 @@ func ClearContainers(cl *containerd.Client, ns string) error {
 	for _, container := range containers {
 		task, _ := container.Task(ctx, nil)
 		if task != nil {
+			task.Kill(ctx, unix.SIGTERM)
+		}
+	}
+
+	time.Sleep(time.Second)
+
+	for _, container := range containers {
+		task, _ := container.Task(ctx, nil)
+		if task != nil {
+			task.Kill(ctx, unix.SIGTERM)
+			time.Sleep(100 * time.Millisecond)
 			task.Delete(ctx, containerd.WithProcessKill)
 		}
+	}
 
+	time.Sleep(time.Second)
+
+	for _, container := range containers {
 		container.Delete(ctx, containerd.WithSnapshotCleanup)
 	}
 

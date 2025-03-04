@@ -178,6 +178,22 @@ func timeAvgValue(c prometheus.Histogram) time.Duration {
 	return time.Duration(m.Histogram.GetSampleSum()*float64(time.Second)) / time.Duration(samples)
 }
 
+type MetricSnapshot struct {
+	BlocksWritten   int64
+	BlocksRead      int64
+	IOPS            int64
+	SegmentsWritten int64
+}
+
+func GetMetrics() MetricSnapshot {
+	return MetricSnapshot{
+		BlocksWritten:   counterValue(blocksWritten),
+		BlocksRead:      counterValue(blocksRead),
+		IOPS:            counterValue(iops),
+		SegmentsWritten: counterValue(segmentsWritten),
+	}
+}
+
 func LogMetrics(log *slog.Logger) {
 	log.Info("disk stats",
 		"written-bytes", counterValue(writtenBytes),

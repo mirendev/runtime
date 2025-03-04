@@ -55,9 +55,13 @@ func (r *Runner) fsPath() string {
 	return filepath.Join(r.dir, "fs")
 }
 
+func (r *Runner) idxPath() string {
+	return filepath.Join(r.dir, "idx")
+}
+
 const UmountSignalTimeout = 5 * time.Minute
 
-func (r *Runner) Run(ctx context.Context, name string) error {
+func (r *Runner) Run(ctx context.Context, name, fsPath, bindAddr string) error {
 	vol, err := r.sa.GetVolumeInfo(ctx, name)
 	if err != nil {
 		return fmt.Errorf("unable to locate volume: %s", err)
@@ -88,6 +92,8 @@ func (r *Runner) Run(ctx context.Context, name string) error {
 	if err != nil {
 		return errors.Wrapf(err, "setting up loopback")
 	}
+
+	os.WriteFile(r.idxPath(), []byte(strconv.Itoa(int(idx))), 0644)
 
 	devPath := r.devPath()
 
@@ -123,8 +129,6 @@ func (r *Runner) Run(ctx context.Context, name string) error {
 		}
 	}()
 
-	fsPath := r.fsPath()
-
 	err = os.MkdirAll(fsPath, 0755)
 	if err != nil {
 		return errors.Wrapf(err, "creating fs path")
@@ -153,7 +157,11 @@ func (r *Runner) Run(ctx context.Context, name string) error {
 		cmd.Stderr = os.Stderr
 		err := cmd.Run()
 		if err != nil {
-			return errors.Wrapf(err, "fscking")
+			if ee, ok := err.(*exec.ExitError); ok {
+				if ee.ProcessState.ExitCode() > 2 {
+					return errors.Wrapf(err, "fscking")
+				}
+			}
 		}
 
 		normSize := vol.Size - (vol.Size % 4096)
@@ -187,6 +195,8 @@ func (r *Runner) Run(ctx context.Context, name string) error {
 	if err != nil {
 		log.Info("error mounting", "error", err)
 	}
+
+	go r.Serve(ctx, cancel, log, bindAddr)
 
 	<-ctx.Done()
 
