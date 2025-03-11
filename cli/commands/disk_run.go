@@ -2,13 +2,17 @@ package commands
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"syscall"
 
+	"miren.dev/runtime/dataset"
 	"miren.dev/runtime/disk"
 	"miren.dev/runtime/lsvd"
+	"miren.dev/runtime/pkg/rpc"
 )
 
 func DiskRun(ctx *Context, opts struct {
@@ -17,6 +21,8 @@ func DiskRun(ctx *Context, opts struct {
 	Mount   string `long:"mount" description:"Directory to mount the disk"`
 	Name    string `short:"n" long:"name" description:"Name of the disk"`
 	Bind    string `long:"bind" description:"Address to bind the disk server to" default:"0.0.0.0:8501"`
+
+	DataSetURI string `long:"dataset" description:"Dataset URI"`
 
 	Background bool `long:"background" description:"Run in background"`
 }) error {
@@ -83,7 +89,35 @@ func DiskRun(ctx *Context, opts struct {
 		return nil
 	}
 
-	sa := &lsvd.LocalFileAccess{Dir: opts.DataDir, Log: ctx.Log}
+	var sa lsvd.SegmentAccess
+
+	if opts.DataSetURI == "" {
+		ctx.Log.Info("Using local filesystem to store data")
+		sa = &lsvd.LocalFileAccess{Dir: opts.DataDir, Log: ctx.Log}
+	} else {
+		ctx.Log.Info("binding to", "addr", "0.0.0.0:0")
+		cs, err := rpc.NewState(ctx, rpc.WithSkipVerify, rpc.WithBindAddr("0.0.0.0:0"))
+		if err != nil {
+			return err
+		}
+
+		u, err := url.Parse(opts.DataSetURI)
+		if err != nil {
+			return err
+		}
+
+		client, err := cs.Connect(u.Host, strings.TrimPrefix(u.Path, "/"))
+		if err != nil {
+			return err
+		}
+
+		dc := &dataset.DataSetsClient{Client: client}
+		sa = dataset.NewSegmentAccess(ctx.Log, dc, []string{"application/database"},
+			dataset.WithHost(fmt.Sprintf("%s://%s", u.Scheme, u.Host)),
+		)
+
+		ctx.Log.Info("Using dataset to store data", "uri", opts.DataSetURI)
+	}
 
 	vi, err := sa.GetVolumeInfo(ctx, opts.Name)
 	if err != nil {

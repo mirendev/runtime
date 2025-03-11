@@ -848,11 +848,341 @@ func (g *Generator) zeroValue(field UnionField) j.Code {
 	}
 }
 
+func (g *Generator) generateCompactStruct(f *j.File, t *DescType) error {
+	rpc := "miren.dev/runtime/pkg/rpc"
+
+	// Generate union interfaces and structs first
+	for _, field := range t.Fields {
+		if field.Type == "union" {
+			g.generateUnionInterface(f, t.Type, field.Name, field.Union)
+			g.generateUnionStruct(f, t.Type, field.Name, field.Union)
+		}
+	}
+
+	expName := capitalize(t.Type)
+
+	// Generate data struct with optional type parameter
+	dataType, dataRecv := t.addGeneric(private(t.Type) + "Data")
+
+	f.Type().Add(dataType).StructFunc(func(gr *j.Group) {
+		gr.Id("_").Struct().Tag(map[string]string{
+			"cbor": ",toarray",
+		})
+
+		for _, field := range t.Fields {
+			if field.Type == "list" {
+				if g.ti(field.Element).isMessage {
+					gr.Id(toCamal(field.Name)).Index().Id(field.Element).Tag(map[string]string{
+						"cbor": fmt.Sprintf("%d,keyasint,omitempty", field.Index),
+						"json": toSnake(field.Name) + ",omitempty",
+					})
+				} else {
+					gr.Id(toCamal(field.Name)).Index().Id(field.Element).Tag(map[string]string{
+						"cbor": fmt.Sprintf("%d,keyasint,omitempty", field.Index),
+						"json": toSnake(field.Name) + ",omitempty",
+					})
+				}
+
+			} else if field.Type == "union" {
+				gr.Id(private(t.Type) + toCamal(field.Name))
+			} else {
+				typ := g.properType(field.Type)
+
+				if field.isInterface {
+					typ = j.Op("*").Qual(rpc, "Capability")
+				}
+
+				gr.Id(toCamal(field.Name)).Add(typ).Tag(map[string]string{
+					"cbor": fmt.Sprintf("%d,keyasint,omitempty", field.Index),
+					"json": toSnake(field.Name) + ",omitempty",
+				})
+			}
+		}
+	})
+
+	f.Line()
+
+	structType, recv := t.addGeneric(expName)
+
+	f.Type().Add(structType).StructFunc(func(g *j.Group) {
+		if t.includeCall {
+			g.Id("call").Op("*").Qual(rpc, "Call")
+		}
+
+		g.Id("data").Add(dataRecv)
+	})
+
+	f.Line()
+
+	for _, field := range t.Fields {
+		name := toCamal(field.Name)
+		pname := private(field.Name)
+		fname := toCamal(name)
+
+		switch field.Type {
+		case "bool":
+			if t.Readable() {
+				f.Func().Params(
+					j.Id("v").Op("*").Add(recv),
+				).Id("Has" + fname).Params().Bool().Block(
+					j.Return(j.True()),
+				)
+
+				f.Line()
+
+				f.Func().Params(
+					j.Id("v").Op("*").Add(recv),
+				).Id(fname).Params().Bool().Block(
+					j.Return(j.Id("v").Dot("data").Dot(name)),
+				)
+
+				f.Line()
+			}
+
+			if t.Writeable() {
+				f.Func().Params(
+					j.Id("v").Op("*").Add(recv),
+				).Id("Set" + fname).Params(
+					j.Id(pname).Bool(),
+				).Block(
+					j.Id("v").Dot("data").Dot(name).Op("=").Id(pname),
+				)
+			}
+
+		case "uint32", "int32", "uint64", "int64", "float32", "float64":
+			if t.Readable() {
+				f.Func().Params(
+					j.Id("v").Op("*").Add(recv),
+				).Id("Has" + fname).Params().Bool().Block(
+					j.Return(j.True()),
+				)
+
+				f.Line()
+
+				f.Func().Params(
+					j.Id("v").Op("*").Add(recv),
+				).Id(fname).Params().Add(g.properType(field.Type)).Block(
+					j.Return(j.Id("v").Dot("data").Dot(name)),
+				)
+
+				f.Line()
+			}
+
+			if t.Writeable() {
+				f.Func().Params(
+					j.Id("v").Op("*").Add(recv),
+				).Id("Set" + fname).Params(
+					j.Id(pname).Add(g.properType(field.Type)),
+				).Block(
+					j.Id("v").Dot("data").Dot(name).Op("=").Id(pname),
+				)
+			}
+
+		case "bytes":
+			if t.Readable() {
+				f.Func().Params(
+					j.Id("v").Op("*").Add(recv),
+				).Id("Has" + fname).Params().Bool().Block(
+					j.Return(j.True()),
+				)
+
+				f.Line()
+
+				f.Func().Params(
+					j.Id("v").Op("*").Add(recv),
+				).Id(fname).Params().String().Block(
+					j.Return(j.Id("v").Dot("data").Dot(name)),
+				)
+
+				f.Line()
+			}
+
+			if t.Writeable() {
+				f.Func().Params(
+					j.Id("v").Op("*").Add(recv),
+				).Id("Set"+fname).Params(
+					j.Id(pname).String(),
+				).Block(
+					j.Id("x").Op(":=").Id("slices").Dot("Clone").Call(j.Id(pname)),
+					j.Id("v").Dot("data").Dot(name).Op("=").Id("x"),
+				)
+			}
+		case "string":
+			if t.Readable() {
+				f.Func().Params(
+					j.Id("v").Op("*").Add(recv),
+				).Id("Has" + fname).Params().Bool().Block(
+					j.Return(j.True()),
+				)
+
+				f.Line()
+
+				f.Func().Params(
+					j.Id("v").Op("*").Add(recv),
+				).Id(fname).Params().String().Block(
+					j.Return(j.Id("v").Dot("data").Dot(name)),
+				)
+
+				f.Line()
+			}
+
+			if t.Writeable() {
+				f.Func().Params(
+					j.Id("v").Op("*").Add(recv),
+				).Id("Set" + fname).Params(
+					j.Id(pname).String(),
+				).Block(
+					j.Id("v").Dot("data").Dot(name).Op("=").Id(pname),
+				)
+			}
+
+		case "list":
+			if t.Readable() {
+				f.Func().Params(
+					j.Id("v").Op("*").Add(recv),
+				).Id("Has" + fname).Params().Bool().Block(
+					j.Return(j.True()),
+				)
+
+				f.Line()
+
+				if g.ti(field.Element).isMessage {
+					f.Func().Params(
+						j.Id("v").Op("*").Add(recv),
+					).Id(fname).Params().Index().Id(field.Element).Block(
+						j.Return(j.Id("v").Dot("data").Dot(name)),
+					)
+				} else {
+					f.Func().Params(
+						j.Id("v").Op("*").Add(recv),
+					).Id(fname).Params().Index().Id(field.Element).Block(
+						j.Return(j.Id("v").Dot("data").Dot(name)),
+					)
+				}
+
+				f.Line()
+			}
+
+			if t.Writeable() {
+				if g.ti(field.Element).isMessage {
+					f.Func().Params(
+						j.Id("v").Op("*").Add(recv),
+					).Id("Set"+fname).Params(
+						j.Id(pname).Index().Id(field.Element),
+					).Block(
+						j.Id("x").Op(":=").Id("slices").Dot("Clone").Call(j.Id(pname)),
+						j.Id("v").Dot("data").Dot(name).Op("=").Id("x"),
+					)
+				} else {
+					f.Func().Params(
+						j.Id("v").Op("*").Add(recv),
+					).Id("Set"+fname).Params(
+						j.Id(pname).Index().Id(field.Element),
+					).Block(
+						j.Id("x").Op(":=").Id("slices").Dot("Clone").Call(j.Id(pname)),
+						j.Id("v").Dot("data").Dot(name).Op("=").Id("x"),
+					)
+				}
+			}
+		case "union":
+			f.Func().Params(
+				j.Id("v").Op("*").Add(recv),
+			).Id(fname).Params().Id(capitalize(t.Type) + capitalize(name)).Block(
+				j.Return(j.Op("&").Id("v").Dot("data").Dot(private(t.Type) + capitalize(name))),
+			)
+
+			f.Line()
+
+		default:
+			if g.ti(field.Type).isInterface {
+				if t.Readable() {
+					f.Func().Params(
+						j.Id("v").Op("*").Add(recv),
+					).Id("Has" + fname).Params().Bool().Block(
+						j.Return(j.True()),
+					)
+
+					f.Line()
+
+					f.Func().Params(
+						j.Id("v").Op("*").Add(recv),
+					).Id(fname).Params().Add(g.properType(field.Type)).Block(
+						j.Return(j.Id("v").Dot("data").Dot(name)),
+					)
+
+					f.Line()
+				}
+
+				if t.Writeable() {
+					f.Func().Params(
+						j.Id("v").Op("*").Add(recv),
+					).Id("Set" + fname).Params(
+						j.Id(pname).Add(g.properType(field.Type)),
+					).Block(
+						j.Id("v").Dot("data").Dot(name).Op("=").Id("v").Dot("call").Dot("NewCapability").CallFunc(func(gr *j.Group) {
+							if g.isImported(field.Type) {
+								iname, tname := g.splitType(field.Type)
+								gr.Qual(g.Imports[iname].Import, "Adapt"+tname).Call(j.Id(pname))
+							} else {
+								j.Id("Adapt" + field.Type).Call(j.Id(pname))
+							}
+						}),
+					)
+				}
+
+				f.Line()
+
+				continue
+			}
+
+			if t.Readable() {
+				f.Func().Params(
+					j.Id("v").Op("*").Add(recv),
+				).Id("Has" + fname).Params().Bool().Block(
+					j.Return(j.Id("v").Dot("data").Dot(name).Op("!=").Nil()),
+				)
+
+				f.Line()
+
+				f.Func().Params(
+					j.Id("v").Op("*").Add(recv),
+				).Id(fname).Params().Op("*").Add(g.properType(field.Type)).Block(
+					j.Return(j.Id("v").Dot("data").Dot(name)),
+				)
+
+				f.Line()
+			}
+
+			if t.Writeable() {
+				f.Func().Params(
+					j.Id("v").Op("*").Add(recv),
+				).Id("Set" + fname).Params(
+					j.Id(pname).Op("*").Add(g.properType(field.Type)),
+				).Block(
+					j.Id("v").Dot("data").Dot(name).Op("=").Id(pname),
+				)
+			}
+		}
+
+		f.Line()
+	}
+
+	g.generateMarshalers(f, recv.GoString())
+	return nil
+}
+
 func (g *Generator) generateStruct(f *j.File) error {
 	f.ImportName("github.com/fxamacker/cbor/v2", "cbor")
 	rpc := "miren.dev/runtime/pkg/rpc"
 
 	for _, t := range g.Types {
+		if t.Compact {
+			err := g.generateCompactStruct(f, t)
+			if err != nil {
+				return err
+			}
+			continue
+		}
 		// Generate union interfaces and structs first
 		for _, field := range t.Fields {
 			if field.Type == "union" {
@@ -867,6 +1197,12 @@ func (g *Generator) generateStruct(f *j.File) error {
 		dataType, dataRecv := t.addGeneric(private(t.Type) + "Data")
 
 		f.Type().Add(dataType).StructFunc(func(gr *j.Group) {
+			if t.Compact {
+				gr.Id("_").Struct().Tag(map[string]string{
+					"cbor": ",toarray",
+				})
+			}
+
 			for _, field := range t.Fields {
 				if field.Type == "list" {
 					if g.ti(field.Element).isMessage {
@@ -1270,8 +1606,8 @@ func (g *Generator) generateClient(f *j.File, i *DescInterface) error {
 			if g.ti(p.Type).isInterface {
 				f.Func().Params(
 					j.Id("v").Op("*").Add(i.typeName(tn + "Results")),
-				).Id(name).Params().Id(g.deriveType(p.Type, "Client")).Block(
-					j.Return(j.Id(g.deriveType(p.Type, "Client")).Values(
+				).Id(name).Params().Op("*").Id(g.deriveType(p.Type, "Client")).Block(
+					j.Return(j.Op("&").Id(g.deriveType(p.Type, "Client")).Values(
 						j.Line().Id("Client").Op(":").Id("v").Dot("client").Dot("NewClient").Call(j.Id("v").Dot("data").Dot(name)),
 						j.Line(),
 					),
@@ -1614,6 +1950,7 @@ const (
 type DescType struct {
 	Type        string       `yaml:"type"`
 	Fields      []*DescField `yaml:"fields"`
+	Compact     bool         `yaml:"compact,omitempty"`
 	Generic     []string     `yaml:"generic,omitempty"`
 	Constraints []string     `yaml:"constraints,omitempty"`
 

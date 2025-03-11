@@ -500,9 +500,9 @@ type SegmentStats struct {
 }
 
 func (o *SegmentCreator) Flush(ctx context.Context,
-	sa SegmentAccess, seg SegmentId,
+	vol Volume, seg SegmentId,
 ) ([]ExtentLocation, *SegmentStats, error) {
-	locs, stats, err := o.builder.Flush(ctx, o.log, sa, seg, o.volName)
+	locs, stats, err := o.builder.Flush(ctx, o.log, vol, seg, o.volName)
 	if err != nil {
 		return locs, stats, err
 	}
@@ -635,7 +635,7 @@ func (o *SegmentBuilder) WriteExtent(log *slog.Logger, ext RangeDataView) ([]byt
 }
 
 func (o *SegmentBuilder) Flush(ctx context.Context, log *slog.Logger,
-	sa SegmentAccess, seg SegmentId, volName string,
+	vol Volume, seg SegmentId, volName string,
 ) ([]ExtentLocation, *SegmentStats, error) {
 	start := time.Now()
 	defer func() {
@@ -728,15 +728,38 @@ func (o *SegmentBuilder) Flush(ctx context.Context, log *slog.Logger,
 
 	f.Seek(0, io.SeekStart)
 
-	err = sa.UploadSegment(ctx, seg, f)
+	var diskExtents []ExternalExtentHeader
+
+	for _, blk := range o.extents {
+		var de ExternalExtentHeader
+		de.SetLba(uint64(blk.LBA))
+		de.SetBlocks(blk.Blocks)
+		de.SetOffset(blk.Offset + dataBegin)
+		de.SetSize(blk.Size)
+		de.SetRawSize(blk.RawSize)
+
+		diskExtents = append(diskExtents, de)
+	}
+
+	layout := &SegmentLayout{}
+	layout.SetExtents(diskExtents)
+
+	err = vol.NewSegment(ctx, seg, layout, f)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	err = sa.AppendToSegments(ctx, volName, seg)
-	if err != nil {
-		return nil, nil, err
-	}
+	/*
+		err = sa.UploadSegment(ctx, seg, f)
+		if err != nil {
+			return nil, nil, err
+		}
+
+		err = sa.AppendToSegments(ctx, volName, seg)
+		if err != nil {
+			return nil, nil, err
+		}
+	*/
 
 	log.Info("segment persistent to storage", "segment", seg, "volume", volName,
 		"blocks", stats.Blocks,

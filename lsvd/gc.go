@@ -1,7 +1,6 @@
 package lsvd
 
 import (
-	"bufio"
 	"context"
 	"fmt"
 	"log/slog"
@@ -39,19 +38,19 @@ type CopyIterator struct {
 	seg SegmentId
 	d   *Disk
 	or  SegmentReader
-	br  *bufio.Reader
+	//br  *bufio.Reader
 
 	err error
 
-	hdr SegmentHeader
+	//hdr SegmentHeader
 
-	left uint32
+	//left uint32
 
 	expectedBlocks uint64
 	originalTotal  uint64
-	totalBlocks    uint64
-	copiedExtents  int
-	copiedBlocks   uint64
+	//totalBlocks    uint64
+	copiedExtents int
+	copiedBlocks  uint64
 
 	newSegment SegmentId
 	builder    *SegmentBuilder
@@ -200,7 +199,7 @@ func (c *CopyIterator) updateDisk(ctx context.Context) error {
 	)
 
 	for {
-		_, stats, err = c.builder.Flush(ctx, c.d.log, c.d.sa, c.newSegment, c.d.volName)
+		_, stats, err = c.builder.Flush(ctx, c.d.log, c.d.volume, c.newSegment, c.d.volName)
 		if err != nil {
 			c.d.log.Error("error flushing data to segment, retrying", "error", err)
 			time.Sleep(5 * time.Second)
@@ -267,7 +266,7 @@ func (c *CopyIterator) Close(ctx context.Context) error {
 		"blocks", c.copiedBlocks,
 		"expected-blocks", c.expectedBlocks,
 		"original-blocks", c.originalTotal,
-		"percent", float64(c.copiedBlocks)/float64(c.hdr.ExtentCount),
+		//"percent", float64(c.copiedBlocks)/float64(c.hdr.ExtentCount),
 	)
 
 	c.builder.Close(c.d.log)
@@ -308,23 +307,25 @@ func (ci *CopyIterator) Reset(ctx context.Context, seg SegmentId) error {
 		}
 	}
 
-	f, err := ci.d.sa.OpenSegment(ctx, seg)
+	f, err := ci.d.volume.OpenSegment(ctx, seg)
 	if err != nil {
 		return errors.Wrapf(err, "opening segment %s", seg)
 	}
 
-	br := bufio.NewReader(ToReader(f))
+	/*
+		br := bufio.NewReader(ToReader(f))
 
-	err = ci.hdr.Read(br)
-	if err != nil {
-		return err
-	}
+		err = ci.hdr.Read(br)
+		if err != nil {
+			return err
+		}
+	*/
 
 	ci.or = f
-	ci.br = br
+	//ci.br = br
 
-	ci.totalBlocks += uint64(ci.hdr.ExtentCount)
-	ci.left += ci.hdr.ExtentCount
+	//ci.totalBlocks += uint64(ci.hdr.ExtentCount)
+	//ci.left += ci.hdr.ExtentCount
 
 	return nil
 }
@@ -352,7 +353,12 @@ func (d *Disk) removeSegmentIfPossible(ctx context.Context, seg SegmentId) error
 	}
 
 	for _, vol := range volumes {
-		segments, err := d.sa.ListSegments(ctx, vol)
+		vo, err := d.sa.OpenVolume(ctx, vol)
+		if err != nil {
+			return err
+		}
+
+		segments, err := vo.ListSegments(ctx)
 		if err != nil {
 			return err
 		}

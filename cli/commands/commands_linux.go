@@ -75,12 +75,12 @@ func (c *Context) setupServerComponents(ctx context.Context, reg *asm.Registry) 
 	reg.Register("data-path", "/var/lib/runtime")
 
 	reg.ProvideName("subnet", func(opts struct {
-		TempDir string `asm:"tempdir"`
-		Id      string `asm:"server-id"`
+		Dir string `asm:"data-path"`
+		Id  string `asm:"server-id"`
 	}) (*netdb.Subnet, error) {
-		ndb, err := netdb.New(filepath.Join(opts.TempDir, "net.db"))
+		ndb, err := netdb.New(filepath.Join(opts.Dir, "net.db"))
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("failed to open netdb: %w", err)
 		}
 
 		mega, err := ndb.Subnet("10.8.0.0/16")

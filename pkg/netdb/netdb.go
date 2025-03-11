@@ -30,7 +30,7 @@ type Subnet struct {
 func New(path string) (*NetDB, error) {
 	db, err := sql.Open("sqlite3", path)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to open netdb database: %w", err)
 	}
 
 	_, err = db.Exec("PRAGMA journal_mode=WAL;")

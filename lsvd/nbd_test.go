@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"io"
 	"log/slog"
+	"math"
 	"os"
 	"testing"
 
@@ -129,5 +130,29 @@ func TestNBD(t *testing.T) {
 		r.NoError(err)
 
 		r.Equal(Extent{0, 2}, b.pendingTrim)
+	})
+
+	t.Run("properly handles back to back large trims", func(t *testing.T) {
+		r := require.New(t)
+
+		dir, err := os.MkdirTemp("", "lsvd")
+		r.NoError(err)
+		defer os.RemoveAll(dir)
+
+		d, err := NewDisk(ctx, log, dir)
+		r.NoError(err)
+
+		b := NBDWrapper(ctx, log, d)
+
+		err = b.Trim(0, (math.MaxUint16-5)*BlockSize)
+		r.NoError(err)
+
+		err = b.Trim((math.MaxUint16-5)*BlockSize, 100*BlockSize)
+		r.NoError(err)
+
+		r.Less(b.pendingTrim.Blocks, uint32(math.MaxUint16))
+
+		err = b.flushPendingWrite()
+		r.NoError(err)
 	})
 }

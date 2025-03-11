@@ -217,7 +217,7 @@ func (c *Controller) closeSegment(ctx *Context, ev Event) error {
 	// forever.
 	start := time.Now()
 	for {
-		entries, stats, err = oc.Flush(ctx, d.sa, segId)
+		entries, stats, err = oc.Flush(ctx, d.volume, segId)
 		if err != nil {
 			c.log.Error("error flushing data to segment, retrying", "error", err)
 			time.Sleep(5 * time.Second)

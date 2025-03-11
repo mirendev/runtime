@@ -15,6 +15,7 @@ import (
 	"miren.dev/runtime/app"
 	"miren.dev/runtime/build"
 	"miren.dev/runtime/clientconfig"
+	"miren.dev/runtime/dataset"
 	"miren.dev/runtime/health"
 	"miren.dev/runtime/ingress"
 	"miren.dev/runtime/lease"
@@ -67,6 +68,8 @@ type Server struct {
 	Logs *observability.LogsMaintainer
 
 	CR *run.ContainerRunner
+
+	DataSets *dataset.Manager
 
 	authority *caauth.Authority
 
@@ -320,6 +323,7 @@ func (s *Server) Run(ctx context.Context) error {
 	serv.ExposeValue("user", api.AdaptUserQuery(s))
 	serv.ExposeValue("disks", api.AdaptDisks(s.Disks))
 	serv.ExposeValue("addons", api.AdaptAddons(s.Addons))
+	serv.ExposeValue("dataset", dataset.AdaptDataSets(s.DataSets))
 
 	go http.ListenAndServe(s.HTTPAddress, s.Ingress)
 

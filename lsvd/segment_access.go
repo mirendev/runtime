@@ -11,6 +11,8 @@ import (
 type SegmentReader interface {
 	io.ReaderAt
 	io.Closer
+
+	Layout(ctx context.Context) (*SegmentLayout, error)
 }
 
 type VolumeInfo struct {
@@ -20,21 +22,20 @@ type VolumeInfo struct {
 	UUID   string      `json:"uuid"`
 }
 
+type Volume interface {
+	Info(ctx context.Context) (*VolumeInfo, error)
+	ListSegments(ctx context.Context) ([]SegmentId, error)
+	OpenSegment(ctx context.Context, seg SegmentId) (SegmentReader, error)
+	NewSegment(ctx context.Context, seg SegmentId, layout *SegmentLayout, data *os.File) error
+	RemoveSegment(ctx context.Context, seg SegmentId) error
+}
+
 type SegmentAccess interface {
 	InitContainer(ctx context.Context) error
 	InitVolume(ctx context.Context, vol *VolumeInfo) error
 	ListVolumes(ctx context.Context) ([]string, error)
-	GetVolumeInfo(ctx context.Context, vol string) (*VolumeInfo, error)
-
-	ListSegments(ctx context.Context, vol string) ([]SegmentId, error)
-	OpenSegment(ctx context.Context, seg SegmentId) (SegmentReader, error)
-	WriteSegment(ctx context.Context, seg SegmentId) (io.WriteCloser, error)
-	UploadSegment(ctx context.Context, seg SegmentId, f *os.File) error
-
 	RemoveSegment(ctx context.Context, seg SegmentId) error
-	RemoveSegmentFromVolume(ctx context.Context, vol string, seg SegmentId) error
-	WriteMetadata(ctx context.Context, vol, name string) (io.WriteCloser, error)
-	ReadMetadata(ctx context.Context, vol, name string) (io.ReadCloser, error)
 
-	AppendToSegments(ctx context.Context, volume string, seg SegmentId) error
+	OpenVolume(ctx context.Context, vol string) (Volume, error)
+	GetVolumeInfo(ctx context.Context, vol string) (*VolumeInfo, error)
 }

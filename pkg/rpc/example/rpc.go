@@ -421,8 +421,8 @@ type MeterClientGetSetterResults struct {
 	data   meterGetSetterResultsData
 }
 
-func (v *MeterClientGetSetterResults) Setter() SetTempClient {
-	return SetTempClient{
+func (v *MeterClientGetSetterResults) Setter() *SetTempClient {
+	return &SetTempClient{
 		Client: v.client.NewClient(v.data.Setter),
 	}
 }
@@ -1041,6 +1041,9 @@ func (v *SetTempGSetTempArgs[T]) HasTemp() bool {
 }
 
 func (v *SetTempGSetTempArgs[T]) Temp() T {
+	if v.data.Temp == nil {
+		return rpc.Zero[T]()
+	}
 	return *v.data.Temp
 }
 

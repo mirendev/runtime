@@ -4,6 +4,7 @@
 package commands
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -64,12 +65,12 @@ func Server(ctx *Context, opts struct {
 
 	err := ctx.Server.Populate(&server)
 	if err != nil {
-		return err
+		return fmt.Errorf("populating server: %w", err)
 	}
 
 	err = server.Setup(ctx)
 	if err != nil {
-		return err
+		return fmt.Errorf("setting up server: %w", err)
 	}
 
 	if opts.Local != "" {

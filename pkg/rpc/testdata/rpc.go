@@ -315,8 +315,8 @@ func (v *TownClientGetHeroResults) Hero() *Hero {
 	return v.data.Hero
 }
 
-func (v *TownClientGetHeroResults) Empower() EmpowerClient {
-	return EmpowerClient{
+func (v *TownClientGetHeroResults) Empower() *EmpowerClient {
+	return &EmpowerClient{
 		Client: v.client.NewClient(v.data.Empower),
 	}
 }

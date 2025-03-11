@@ -21,3 +21,17 @@ func FromTimestamp(ts *Timestamp) time.Time {
 
 	return time.Unix(ts.Seconds(), int64(ts.Nanoseconds()))
 }
+
+func ToDuration(d time.Duration) *Duration {
+	var dur Duration
+	dur.SetNanoseconds(uint64(d.Nanoseconds()))
+	return &dur
+}
+
+func FromDuration(dur *Duration) time.Duration {
+	if dur == nil {
+		return 0
+	}
+
+	return time.Duration(dur.Nanoseconds()) * time.Nanosecond
+}

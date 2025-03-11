@@ -112,7 +112,8 @@ type ContainerConfig struct {
 	Labels map[string]string
 	Env    map[string]string
 
-	Privileged bool
+	Privileged      bool
+	SuperPrivileged bool
 
 	Endpoint *network.EndpointConfig
 
@@ -278,7 +279,7 @@ func (c *ContainerRunner) buildSpec(ctx context.Context, config *ContainerConfig
 			Destination: "/etc/resolv.conf",
 			Type:        "bind",
 			Source:      resolvePath,
-			Options:     []string{"rw"},
+			Options:     []string{"rbind", "rw"},
 		},
 	}
 
@@ -332,6 +333,18 @@ func (c *ContainerRunner) buildSpec(ctx context.Context, config *ContainerConfig
 		}),
 		containerd.WithAdditionalContainerLabels(lbls),
 	)
+
+	if config.SuperPrivileged {
+		opts = append(opts,
+			containerd.WithRuntime("io.containerd.runc.v2", nil),
+		)
+	} else {
+		opts = append(opts,
+			containerd.WithRuntime("io.containerd.runc.v2", &options.Options{
+				BinaryName: c.RunscBinary,
+			}),
+		)
+	}
 
 	return opts, nil
 }

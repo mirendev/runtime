@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/davecgh/go-spew/spew"
 	_ "github.com/mattn/go-sqlite3"
 )
 
@@ -25,8 +24,6 @@ func newContainerStore(path string) (*containerStore, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open database: %w", err)
 	}
-
-	spew.Dump(path)
 
 	_, err = db.Exec(`
 		CREATE TABLE IF NOT EXISTS containers (

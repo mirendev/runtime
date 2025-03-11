@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 
+	"github.com/containerd/containerd/namespaces"
 	containerd "github.com/containerd/containerd/v2/client"
 	"github.com/containerd/containerd/v2/core/containers"
 	"github.com/containerd/containerd/v2/pkg/cio"
@@ -32,6 +33,7 @@ type Provisioner struct {
 	Namespace  string `asm:"namespace"`
 	Bridge     string `asm:"bridge-iface"`
 	Subnet     *netdb.Subnet
+	Port       int `asm:"server_port"`
 }
 
 var _ = autoreg.Register[Provisioner]()
@@ -44,6 +46,7 @@ type ProvisionConfig struct {
 }
 
 func (p *Provisioner) Provision(ctx context.Context, pc ProvisionConfig) error {
+	ctx = namespaces.WithNamespace(ctx, p.Namespace)
 	ref := "docker.io/library/ubuntu:latest"
 	img, err := p.CC.GetImage(ctx, ref)
 	if err != nil {
@@ -98,13 +101,13 @@ func (p *Provisioner) Provision(ctx context.Context, pc ProvisionConfig) error {
 				Source:      "cgroup",
 				Options:     []string{"nosuid", "noexec", "nodev", "rw"},
 			},
-				{
-					Destination: "/etc/resolv.conf",
-					Type:        "bind",
-					Source:      resolvePath,
-					Options:     []string{"rw"},
-				},
 		*/
+		{
+			Destination: "/etc/resolv.conf",
+			Type:        "bind",
+			Source:      resolvePath,
+			Options:     []string{"rbind", "rw"},
+		},
 		{
 			Destination: "/bin/runtime",
 			Type:        "bind",
@@ -127,16 +130,26 @@ func (p *Provisioner) Provision(ctx context.Context, pc ProvisionConfig) error {
 
 	_ = mounts
 
+	dsAddr := fmt.Sprintf("https://%s:%d/dataset", p.Subnet.Router().Addr(), p.Port)
+
+	p.Log.Info("using dataset uri", "uri", dsAddr)
+
 	specOpts := []oci.SpecOpts{
 		oci.WithDefaultSpec(),
 		oci.WithImageConfig(img),
 		oci.WithDefaultUnixDevices,
+		oci.WithHostHostsFile,
 		//oci.WithEnv(envs),
-		oci.WithHostResolvconf,
+		//oci.WithHostResolvconf,
 		//oci.WithoutMounts("/sys"),
 		oci.WithMounts(mounts),
 		//oci.WithProcessCwd("/app"),
-		oci.WithProcessArgs("/bin/runtime", "disk", "run", "-v", "--data", "/data", "-d", "/access", "--mount", "/access/fs", "-n", pc.Name),
+		oci.WithProcessArgs("/bin/runtime", "disk", "run", "-v",
+			"--data", "/data",
+			"-d", "/access",
+			"--mount", "/access/fs",
+			"--dataset", dsAddr,
+			"-n", pc.Name),
 		oci.WithPrivileged,
 		oci.WithAllDevicesAllowed,
 

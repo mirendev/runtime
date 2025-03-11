@@ -245,6 +245,11 @@ func (n *nbdWrapper) queueTrim(ext Extent) bool {
 	}
 
 	if n.pendingTrim.Last()+1 == ext.LBA {
+		// Be sure we don't accidentally create a trim that's too large!
+		if n.pendingTrim.Blocks+ext.Blocks >= MaxBlocks {
+			return false
+		}
+
 		n.pendingTrim.Blocks += ext.Blocks
 		return true
 	}

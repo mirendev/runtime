@@ -81,6 +81,9 @@ func (s *serveReader) Recv(ctx context.Context, state *RecvStreamRecv[[]byte]) e
 	n, err := s.r.Read(buf)
 	if err != nil {
 		if errors.Is(err, io.EOF) {
+			if c, ok := s.r.(io.Closer); ok {
+				c.Close()
+			}
 			state.Results().SetValue(nil)
 			return nil
 		}

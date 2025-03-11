@@ -16,9 +16,10 @@ type ExtentReader struct {
 	openSegments *lru.Cache[SegmentId, SegmentReader]
 	sa           SegmentAccess
 	rangeCache   *RangeCache
+	vol          Volume
 }
 
-func NewExtentReader(log *slog.Logger, path string, sa SegmentAccess) (*ExtentReader, error) {
+func NewExtentReader(log *slog.Logger, path string, vol Volume) (*ExtentReader, error) {
 	openSegments, err := lru.NewWithEvict[SegmentId, SegmentReader](
 		256, func(key SegmentId, value SegmentReader) {
 			openSegments.Dec()
@@ -31,7 +32,7 @@ func NewExtentReader(log *slog.Logger, path string, sa SegmentAccess) (*ExtentRe
 	er := &ExtentReader{
 		log:          log,
 		openSegments: openSegments,
-		sa:           sa,
+		vol:          vol,
 	}
 
 	rc, err := NewRangeCache(RangeCacheOptions{
@@ -59,7 +60,7 @@ func (d *ExtentReader) Close() error {
 func (d *ExtentReader) fetchData(ctx context.Context, seg SegmentId, data []byte, off int64) error {
 	ci, ok := d.openSegments.Get(seg)
 	if !ok {
-		lf, err := d.sa.OpenSegment(ctx, seg)
+		lf, err := d.vol.OpenSegment(ctx, seg)
 		if err != nil {
 			return err
 		}

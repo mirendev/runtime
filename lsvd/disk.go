@@ -28,6 +28,7 @@ type Disk struct {
 	path   string
 
 	size     int64
+	volume   Volume
 	volName  string
 	readOnly bool
 	useZstd  bool
@@ -109,14 +110,26 @@ func NewDisk(ctx context.Context, log *slog.Logger, path string, options ...Opti
 
 	log.Info("attaching to volume", "name", o.volName, "size", sz)
 
-	er, err := NewExtentReader(log, filepath.Join(path, "readcache"), o.sa)
+	volume, err := o.sa.OpenVolume(ctx, o.volName)
 	if err != nil {
 		return nil, err
 	}
+
+	er, err := NewExtentReader(log, filepath.Join(path, "readcache"), volume)
+	if err != nil {
+		return nil, err
+	}
+
+	vo, err := o.sa.OpenVolume(ctx, o.volName)
+	if err != nil {
+		return nil, err
+	}
+
 	d := &Disk{
 		log:            log,
 		path:           path,
 		size:           sz,
+		volume:         vo,
 		lba2pba:        NewExtentMap(),
 		sa:             o.sa,
 		volName:        o.volName,

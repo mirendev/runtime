@@ -1459,10 +1459,41 @@ func TestLSVD(t *testing.T) {
 
 }
 
+type slowVolume struct {
+	Volume
+	sl *slowLocal
+}
+
+var _ Volume = &slowVolume{}
+
+func (s *slowVolume) NewSegment(ctx context.Context, seg SegmentId, layout *SegmentLayout, f *os.File) error {
+	s.sl.waiting.Store(true)
+
+	if s.sl.wait != nil {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-s.sl.wait:
+			// ok
+		}
+	}
+
+	return s.Volume.NewSegment(ctx, seg, layout, f)
+}
+
 type slowLocal struct {
 	LocalFileAccess
 	waiting atomic.Bool
 	wait    chan struct{}
+}
+
+func (s *slowLocal) OpenVolume(ctx context.Context, name string) (Volume, error) {
+	vol, err := s.LocalFileAccess.OpenVolume(ctx, name)
+	if err != nil {
+		return nil, err
+	}
+
+	return &slowVolume{Volume: vol, sl: s}, nil
 }
 
 func (s *slowLocal) WriteSegment(ctx context.Context, seg SegmentId) (io.WriteCloser, error) {
@@ -1493,6 +1524,21 @@ func (s *slowLocal) UploadSegment(ctx context.Context, seg SegmentId, f *os.File
 	}
 
 	return s.LocalFileAccess.UploadSegment(ctx, seg, f)
+}
+
+func (s *slowLocal) AppendSegment(ctx context.Context, vol string, seg SegmentId, f *os.File) error {
+	s.waiting.Store(true)
+
+	if s.wait != nil {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-s.wait:
+			// ok
+		}
+	}
+
+	return s.LocalFileAccess.AppendSegment(ctx, vol, seg, f)
 }
 
 func emptyBytesI(b []byte) bool {
