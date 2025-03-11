@@ -52,6 +52,7 @@ func Registry(extra ...func(*asm.Registry)) (*asm.Registry, func()) {
 	r.Register("data-path", os.TempDir())
 	r.Register("tempdir", os.TempDir())
 	r.Register("subnet", subnet)
+	r.Register("server_port", 10000)
 
 	var cancels []func()
 
