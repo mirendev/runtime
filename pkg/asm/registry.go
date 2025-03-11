@@ -112,7 +112,7 @@ func (r *Registry) buildByType(field reflect.Value, tag string) (reflect.Value, 
 			arg := reflect.New(argType)
 			err := r.Populate(arg.Interface())
 			if err != nil {
-				return reflect.Value{}, err
+				return reflect.Value{}, fmt.Errorf("error populating argument %T: %w", arg.Interface(), err)
 			}
 
 			args = append(args, arg.Elem())
@@ -124,7 +124,8 @@ func (r *Registry) buildByType(field reflect.Value, tag string) (reflect.Value, 
 	result := builder.Call(args)
 	if len(result) == 2 {
 		if !result[1].IsNil() {
-			return reflect.Value{}, result[1].Interface().(error)
+			return reflect.Value{},
+				fmt.Errorf("error building %s via %s: %w", field.Type(), builder.String(), result[1].Interface().(error))
 		}
 	}
 
@@ -135,7 +136,7 @@ func (r *Registry) buildByType(field reflect.Value, tag string) (reflect.Value, 
 	if canPopulate(ret) {
 		err := r.Populate(ret.Interface())
 		if err != nil {
-			return reflect.Value{}, err
+			return reflect.Value{}, fmt.Errorf("error populating built value %T: %w", ret.Interface(), err)
 		}
 	}
 
@@ -201,7 +202,10 @@ type HasPopulated interface {
 
 func (r *Registry) RunHooks(s any) error {
 	if pop, ok := s.(HasPopulated); ok {
-		return pop.Populated()
+		err := pop.Populated()
+		if err != nil {
+			return fmt.Errorf("error running populated hook for %T: %w", s, err)
+		}
 	}
 
 	return nil
