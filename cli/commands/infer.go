@@ -159,7 +159,15 @@ func (w *Cmd) clean(rv reflect.Value) error {
 
 		switch typ {
 		case "path":
-			field.SetString(ExpandPath(field.String()))
+			path := ExpandPath(field.String())
+			if _, err := os.Stat(path); err != nil {
+				err = os.MkdirAll(path, 0700)
+				if err != nil {
+					return fmt.Errorf("error validating %s as path: %w", name, err)
+				}
+			}
+
+			field.SetString(path)
 		case "address":
 			val := field.String()
 			if val == "" {
@@ -229,7 +237,7 @@ func (w *Cmd) Run(args []string) int {
 
 func (w *Cmd) Invoke(args ...string) error {
 	if err := w.loadOptions(args); err != nil {
-		return err
+		return fmt.Errorf("error loading options: %w", err)
 	}
 
 	_, err := w.parser.ParseArgs(args)
@@ -239,18 +247,18 @@ func (w *Cmd) Invoke(args ...string) error {
 
 	err = w.clean(reflect.ValueOf(w.global).Elem())
 	if err != nil {
-		return err
+		return fmt.Errorf("error cleaning global options: %w", err)
 	}
 
 	err = w.clean(w.opts.Elem())
 	if err != nil {
-		return err
+		return fmt.Errorf("error cleaning command options: %w", err)
 	}
 
 	if ov, ok := w.opts.Interface().(OptsValidate); ok {
 		err = ov.Validate(w.global)
 		if err != nil {
-			return err
+			return fmt.Errorf("error validating options: %w", err)
 		}
 	}
 
