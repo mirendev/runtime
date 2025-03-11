@@ -94,6 +94,10 @@ func AllCommands() map[string]cli.CommandFactory {
 			return Infer("disk provision", "Provision a disk", DiskProvision), nil
 		},
 
+		"dataset serve": func() (cli.Command, error) {
+			return Infer("dataset serve", "Serve a dataset", DataSetServe), nil
+		},
+
 		"internal disk cleanup": func() (cli.Command, error) {
 			return Infer("internal disk cleanup", "Cleanup disk data", DiskCleanup), nil
 		},

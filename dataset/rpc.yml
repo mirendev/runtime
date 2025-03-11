@@ -1,0 +1,167 @@
+apiVersion: miren.dev/rpc/v1
+kind: IDL
+
+imports:
+  standard:
+    path: ../pkg/rpc/standard/standard.yml
+    import: miren.dev/runtime/pkg/rpc/standard
+  stream:
+    path: ../pkg/rpc/stream/stream.yml
+    import: miren.dev/runtime/pkg/rpc/stream
+
+types:
+  - type: DataSetInfo
+    fields:
+      - name: id
+        type: string
+        index: 0
+      - name: name
+        type: string
+        index: 1
+      - name: size
+        type: int64
+        index: 2
+      - name: formats
+        type: list
+        element: string
+        index: 3
+
+  - type: SegmentLayout
+    compact: true
+    fields:
+      - name: extents
+        type: list
+        element: Extent
+
+  - type: Extent
+    compact: true
+    fields:
+      - name: lba
+        type: uint64
+        index: 0
+      - name: blocks
+        type: uint32
+        index: 1
+      - name: size
+        type: uint32
+        index: 2
+      - name: offset
+        type: uint32
+        index: 3
+      - name: raw_size
+        type: uint32
+        index: 4
+
+  - type: DataPathAccess
+    fields:
+      - name: url
+        type: string
+        index: 0
+      - name: ttl
+        type: standard.Duration
+        index: 1
+
+interfaces:
+  - name: SegmentReader
+    methods:
+      - name: readAt
+        parameters:
+          - name: offset
+            type: int64
+          - name: size
+            type: int64
+        results:
+          - name: data
+            type: bytes
+      - name: close
+      - name: layout
+        results:
+          - name: layout
+            type: SegmentLayout
+      - name: dataPath
+        results:
+          - name: dataPath
+            type: DataPathAccess
+
+  - name: SegmentWriter
+    methods:
+      - name: writeAt
+        parameters:
+          - name: offset
+            type: int64
+          - name: data
+            type: bytes
+        results:
+          - name: count
+            type: int64
+      - name: close
+
+  - name: DataSet
+    methods:
+      - name: getInfo
+        results:
+          - name: info
+            type: DataSetInfo
+
+      - name: listSegments
+        results:
+          - name: segments
+            type: list
+            element: string
+
+      - name: readSegment
+        parameters:
+          - name: id
+            type: string
+        results:
+          - name: reader
+            type: SegmentReader
+
+      - name: newSegment
+        parameters:
+          - name: id
+            type: string
+          - name: layout
+            type: SegmentLayout
+        results:
+          - name: writer
+            type: SegmentWriter
+        
+      - name: readBytes
+        parameters:
+          - name: offset
+            type: int64
+          - name: count
+            type: int64
+        results:
+          - name: data
+            type: bytes
+
+  - name: DataSets
+    methods:
+      - name: list
+        results:
+          - name: datasets
+            type: list
+            element: DataSetInfo
+
+      - name: create
+        parameters:
+          - name: info
+            type: DataSetInfo
+        results:
+          - name: dataset
+            type: DataSet
+
+      - name: get
+        parameters:
+          - name: id
+            type: string
+        results:
+          - name: dataset
+            type: DataSet
+
+      - name: delete
+        parameters:
+          - name: id
+            type: string
