@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/davecgh/go-spew/spew"
 	"github.com/pkg/errors"
 	"golang.org/x/sys/unix"
 	"miren.dev/runtime/lsvd"
@@ -140,7 +141,9 @@ func (r *Runner) Run(ctx context.Context, name, fsPath, bindAddr string) error {
 	if err != nil {
 		log.Info("error reading superblock, formatting drive", "error", err)
 
-		out, err := exec.Command("mkfs.ext4", devPath).CombinedOutput()
+		out, err := exec.Command("mkfs.ext4",
+			"-b", "4096", "-m", "0",
+			devPath).CombinedOutput()
 		if err != nil {
 			return errors.Wrapf(err, "formatting ext4")
 		}
@@ -193,7 +196,8 @@ func (r *Runner) Run(ctx context.Context, name, fsPath, bindAddr string) error {
 
 	err = unix.Mount(devPath, fsPath, "ext4", 0, "")
 	if err != nil {
-		log.Info("error mounting", "error", err)
+		spew.Dump(err)
+		log.Info("error mounting", "error", err, "dev", devPath, "fs", fsPath)
 	}
 
 	go r.Serve(ctx, cancel, log, bindAddr)

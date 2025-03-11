@@ -7,11 +7,10 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/pkg/errors"
-	"miren.dev/runtime/lsvd"
+	"miren.dev/runtime/dataset"
 	"miren.dev/runtime/pkg/asm/autoreg"
 	"miren.dev/runtime/pkg/idgen"
 	"miren.dev/runtime/pkg/units"
@@ -24,6 +23,7 @@ type Manager struct {
 	OrgId       uint64 `asm:"org_id"`
 	Provisioner *Provisioner
 	DataPath    string `asm:"data-path"`
+	DataSets    *dataset.Manager
 
 	dataRoot   string
 	accessRoot string
@@ -52,18 +52,12 @@ type CreateDiskParams struct {
 }
 
 func (m *Manager) CreateDisk(ctx context.Context, params CreateDiskParams) (string, error) {
-	sa := &lsvd.LocalFileAccess{Dir: m.dataRoot, Log: m.Log}
+	var info dataset.DataSetInfo
 
-	_, err := sa.GetVolumeInfo(ctx, params.Name)
-	if err == nil {
-		return "", errors.New("disk already exists")
-	}
+	info.SetName(params.Name)
+	info.SetSize(params.Capacity.Bytes().Int64())
 
-	err = sa.InitVolume(ctx, &lsvd.VolumeInfo{
-		Name: params.Name,
-		Size: params.Capacity.Bytes(),
-		UUID: uuid.NewString(),
-	})
+	_, err := m.DataSets.CreateDataSet(ctx, &info)
 	if err != nil {
 		return "", err
 	}
