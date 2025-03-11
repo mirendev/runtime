@@ -11,12 +11,14 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/fxamacker/cbor/v2"
 	"github.com/oklog/ulid/v2"
 	"github.com/pkg/errors"
 )
 
 type LocalFile struct {
 	f   *os.File
+	dir string
 	log *slog.Logger
 }
 
@@ -32,6 +34,29 @@ func (l *LocalFile) ReadAt(b []byte, off int64) (int, error) {
 	return n, err
 }
 
+func (l *LocalFile) Close() error {
+	return l.f.Close()
+}
+
+func (l *LocalFile) Layout(_ context.Context) (*SegmentLayout, error) {
+	f, err := os.Open(l.f.Name() + ".layout.cbor")
+	if err != nil {
+		return nil, err
+	}
+
+	defer f.Close()
+
+	var layout SegmentLayout
+
+	err = cbor.NewDecoder(f).Decode(&layout)
+
+	if err != nil {
+		return nil, err
+	}
+
+	return &layout, nil
+}
+
 func OpenLocalFile(path string, log *slog.Logger) (*LocalFile, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -41,8 +66,153 @@ func OpenLocalFile(path string, log *slog.Logger) (*LocalFile, error) {
 	return &LocalFile{f: f, log: log}, nil
 }
 
-func (l *LocalFile) Close() error {
-	return l.f.Close()
+type LocalVolume struct {
+	Log  *slog.Logger
+	Dir  string
+	Name string
+}
+
+var _ Volume = (*LocalVolume)(nil)
+
+func (l *LocalVolume) Info(_ context.Context) (*VolumeInfo, error) {
+	f, err := os.Open(filepath.Join(l.Dir, "volumes", l.Name, "info.json"))
+	if err != nil {
+		return nil, err
+	}
+
+	defer f.Close()
+
+	var vi VolumeInfo
+	err = json.NewDecoder(f).Decode(&vi)
+	if err != nil {
+		return nil, err
+	}
+
+	return &vi, nil
+}
+
+func (l *LocalVolume) ListSegments(_ context.Context) ([]SegmentId, error) {
+	f, err := os.Open(filepath.Join(l.Dir, "volumes", l.Name, "segments"))
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+	}
+
+	return ReadSegmentList(f)
+}
+
+func (l *LocalVolume) OpenSegment(_ context.Context, seg SegmentId) (SegmentReader, error) {
+	return OpenLocalFile(
+		filepath.Join(l.Dir, "segments", "segment."+ulid.ULID(seg).String()), l.Log)
+}
+
+func (l *LocalVolume) NewSegment(ctx context.Context, seg SegmentId, layout *SegmentLayout, data *os.File) error {
+	err := l.AppendSegment(ctx, seg, data)
+	if err != nil {
+		return err
+	}
+
+	path := filepath.Join(l.Dir, "segments", "segment."+ulid.ULID(seg).String()+".layout.cbor")
+	f, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+
+	defer f.Close()
+
+	err = cbor.NewEncoder(f).Encode(layout)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (l *LocalVolume) AppendSegment(ctx context.Context, seg SegmentId, f *os.File) error {
+	path := filepath.Join(l.Dir, "segments", "segment."+ulid.ULID(seg).String())
+	dest, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+
+	defer dest.Close()
+
+	n, err := io.Copy(dest, f)
+	if err != nil {
+		l.Log.Error("error saving segment", "error", err, "path", path)
+	} else {
+		l.Log.Debug("saved segment", "path", path, "size", n)
+	}
+
+	segments, err := l.ListSegments(ctx)
+	if err != nil {
+		return err
+	}
+
+	path = filepath.Join(l.Dir, "volumes", l.Name, "segments")
+
+	segments = append(segments, seg)
+
+	f, err = os.Create(path)
+	if err != nil {
+		return err
+	}
+
+	defer f.Close()
+
+	bw := bufio.NewWriter(f)
+
+	defer bw.Flush()
+
+	for _, seg := range segments {
+		_, err = bw.Write(seg[:])
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (l *LocalVolume) RemoveSegment(_ context.Context, seg SegmentId) error {
+	var buf bytes.Buffer
+
+	segmentsPath := filepath.Join(l.Dir, "volumes", l.Name, "segments")
+	f, err := os.OpenFile(segmentsPath, os.O_RDONLY, 0644)
+	if err != nil {
+		return err
+	}
+
+	defer f.Close()
+
+	var cur SegmentId
+
+	for {
+		_, err = f.Read(cur[:])
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				break
+			}
+
+			return err
+		}
+
+		if seg != cur {
+			buf.Write(cur[:])
+		}
+	}
+
+	f.Close()
+
+	f, err = os.Create(segmentsPath)
+	if err != nil {
+		return err
+	}
+
+	io.Copy(f, &buf)
+
+	return nil
 }
 
 type LocalFileAccess struct {
@@ -52,12 +222,20 @@ type LocalFileAccess struct {
 
 var _ SegmentAccess = (*LocalFileAccess)(nil)
 
-func (l *LocalFileAccess) OpenSegment(ctx context.Context, seg SegmentId) (SegmentReader, error) {
+func (l *LocalFileAccess) OpenVolume(ctx context.Context, vol string) (Volume, error) {
+	return &LocalVolume{
+		Log:  l.Log,
+		Dir:  l.Dir,
+		Name: vol,
+	}, nil
+}
+
+func (l *LocalFileAccess) OpenSegment(ctx context.Context, _ string, seg SegmentId) (SegmentReader, error) {
 	return OpenLocalFile(
 		filepath.Join(l.Dir, "segments", "segment."+ulid.ULID(seg).String()), l.Log)
 }
 
-func ReadSegments(f io.Reader) ([]SegmentId, error) {
+func ReadSegmentList(f io.Reader) ([]SegmentId, error) {
 	var out []SegmentId
 
 	br := bufio.NewReader(f)
@@ -91,7 +269,7 @@ func (l *LocalFileAccess) ListSegments(ctx context.Context, vol string) ([]Segme
 
 	defer f.Close()
 
-	return ReadSegments(f)
+	return ReadSegmentList(f)
 }
 
 func (l *LocalFileAccess) WriteMetadata(ctx context.Context, vol, name string) (io.WriteCloser, error) {
@@ -112,6 +290,15 @@ func (l *LocalFileAccess) RemoveSegment(ctx context.Context, seg SegmentId) erro
 func (l *LocalFileAccess) WriteSegment(ctx context.Context, seg SegmentId) (io.WriteCloser, error) {
 	path := filepath.Join(l.Dir, "segments", "segment."+ulid.ULID(seg).String())
 	return os.Create(path)
+}
+
+func (l *LocalFileAccess) AppendSegment(ctx context.Context, vol string, seg SegmentId, f *os.File) error {
+	err := l.UploadSegment(ctx, seg, f)
+	if err != nil {
+		return err
+	}
+
+	return l.AppendToSegments(ctx, vol, seg)
 }
 
 func (l *LocalFileAccess) UploadSegment(ctx context.Context, seg SegmentId, f *os.File) error {

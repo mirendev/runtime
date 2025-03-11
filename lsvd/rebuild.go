@@ -26,7 +26,7 @@ func (d *Disk) rebuildFromSegments(ctx context.Context) error {
 		ld.lba2pba.Populate(d.log, d.lba2pba, uint16(idx))
 	}
 
-	entries, err := d.sa.ListSegments(ctx, d.volName)
+	entries, err := d.volume.ListSegments(ctx)
 	if err != nil {
 		return err
 	}
@@ -44,49 +44,77 @@ func (d *Disk) rebuildFromSegments(ctx context.Context) error {
 func (d *Disk) rebuildFromSegment(ctx context.Context, seg SegmentId) error {
 	d.log.Info("rebuilding mappings from segment", "id", seg)
 
-	f, err := d.sa.OpenSegment(ctx, seg)
+	f, err := d.volume.OpenSegment(ctx, seg)
 	if err != nil {
 		return err
 	}
 
 	defer f.Close()
 
-	br := bufio.NewReader(ToReader(f))
-
-	var hdr SegmentHeader
-
-	err = hdr.Read(br)
+	layout, err := f.Layout(ctx)
 	if err != nil {
 		return err
 	}
 
-	d.log.Debug("extent header info", "count", hdr.ExtentCount, "data-begin", hdr.DataOffset)
-
 	stats := &SegmentStats{}
 
-	d.s.Create(seg, stats)
+	if layout != nil {
+		d.log.Debug("loading extents from segment layout", "extents", len(layout.Extents()))
 
-	for i := uint32(0); i < hdr.ExtentCount; i++ {
-		var eh ExtentHeader
+		for _, ext := range layout.Extents() {
+			stats.Blocks += uint64(ext.Blocks())
 
-		_, err := eh.Read(br)
+			var eh ExtentHeader
+			eh.LBA = LBA(ext.Lba())
+			eh.Blocks = uint32(ext.Blocks())
+			eh.Offset = ext.Offset()
+			eh.Size = ext.Size()
+			eh.RawSize = ext.RawSize()
+
+			affected, err := d.lba2pba.Update(d.log, ExtentLocation{
+				ExtentHeader: eh,
+				Segment:      seg,
+			}, nil)
+			if err != nil {
+				return err
+			}
+
+			d.s.UpdateUsage(d.log, seg, affected)
+		}
+	} else {
+		br := bufio.NewReader(ToReader(f))
+
+		var hdr SegmentHeader
+
+		err = hdr.Read(br)
 		if err != nil {
 			return err
 		}
 
-		stats.Blocks += uint64(eh.Blocks)
+		d.log.Debug("extent header info", "count", hdr.ExtentCount, "data-begin", hdr.DataOffset)
 
-		eh.Offset += hdr.DataOffset
+		for i := uint32(0); i < hdr.ExtentCount; i++ {
+			var eh ExtentHeader
 
-		affected, err := d.lba2pba.Update(d.log, ExtentLocation{
-			ExtentHeader: eh,
-			Segment:      seg,
-		}, nil)
-		if err != nil {
-			return err
+			_, err := eh.Read(br)
+			if err != nil {
+				return err
+			}
+
+			stats.Blocks += uint64(eh.Blocks)
+
+			eh.Offset += hdr.DataOffset
+
+			affected, err := d.lba2pba.Update(d.log, ExtentLocation{
+				ExtentHeader: eh,
+				Segment:      seg,
+			}, nil)
+			if err != nil {
+				return err
+			}
+
+			d.s.UpdateUsage(d.log, seg, affected)
 		}
-
-		d.s.UpdateUsage(d.log, seg, affected)
 	}
 
 	// Now reset the stats for our seg to the correct ones.
@@ -167,7 +195,7 @@ func (d *Disk) saveLBAMap(ctx context.Context) error {
 }
 
 func (d *Disk) segmentsHash(ctx context.Context) (string, error) {
-	segments, err := d.sa.ListSegments(ctx, d.volName)
+	segments, err := d.volume.ListSegments(ctx)
 	if err != nil {
 		return "", err
 	}

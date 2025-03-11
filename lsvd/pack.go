@@ -96,7 +96,7 @@ func (p *Packer) flushSegment(ctx context.Context, sb *SegmentBuilder) error {
 
 	d.log.Debug("creating packed segment", "id", sid)
 
-	locs, stats, err := sb.Flush(ctx, d.log, d.sa, sid, d.volName)
+	locs, stats, err := sb.Flush(ctx, d.log, d.volume, sid, d.volName)
 	if err != nil {
 		return err
 	}

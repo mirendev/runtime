@@ -104,7 +104,7 @@ func (d *Disk) cleanupDeletedSegments(ctx context.Context) error {
 
 	for _, i := range d.s.FindDeleted() {
 		d.log.Info("removing segment from volume", "volume", d.volName, "segment", i)
-		err := d.sa.RemoveSegmentFromVolume(ctx, d.volName, i)
+		err := d.volume.RemoveSegment(ctx, i)
 		if err != nil {
 			return err
 		}

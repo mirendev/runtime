@@ -70,6 +70,11 @@ func (c compactPE) LiveLast() LBA {
 }
 
 func (c *compactPE) SetLive(ext Extent) {
+	if ext.LBA < c.PhysLBA() {
+		panic(fmt.Sprintf("invalid live range: %d < %d (%d vs %d blocks)",
+			ext.LBA, c.PhysLBA(), ext.Blocks, c.PhysBlocks()))
+	}
+
 	ld := ext.LBA - c.PhysLBA()
 	if ld > math.MaxUint16 {
 		panic(fmt.Sprintf("compact PE failure, live diff too large: %d - %d = %d", ext.LBA, c.PhysLBA(), ld))

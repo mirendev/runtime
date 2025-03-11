@@ -406,7 +406,7 @@ func TestGC(t *testing.T) {
 		err = d.CloseSegment(ctx)
 		r.NoError(err)
 
-		segments, err := d.sa.ListSegments(ctx, d.volName)
+		segments, err := d.volume.ListSegments(ctx)
 		r.NoError(err)
 		r.Len(segments, 2)
 
@@ -431,7 +431,7 @@ func TestGC(t *testing.T) {
 		t.Logf("post gc density: %f", d2)
 		r.Greater(d2, density)
 
-		segments, err = d.sa.ListSegments(ctx, d.volName)
+		segments, err = d.volume.ListSegments(ctx)
 		r.NoError(err)
 		r.Len(segments, 1)
 	})
@@ -468,7 +468,7 @@ func TestGC(t *testing.T) {
 		err = d.CloseSegment(ctx)
 		r.NoError(err)
 
-		segments, err := d.sa.ListSegments(ctx, d.volName)
+		segments, err := d.volume.ListSegments(ctx)
 		r.NoError(err)
 
 		r.Len(segments, 2)
@@ -484,7 +484,7 @@ func TestGC(t *testing.T) {
 
 		d.Close(ctx)
 
-		newSegments, err := d.sa.ListSegments(ctx, d.volName)
+		newSegments, err := d.volume.ListSegments(ctx)
 		r.NoError(err)
 
 		r.Len(newSegments, 1)

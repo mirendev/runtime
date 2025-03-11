@@ -84,7 +84,49 @@ func (s *S3ObjectReader) ReadAt(dest []byte, off int64) (int, error) {
 	return n, err
 }
 
-func (s *S3Access) OpenSegment(ctx context.Context, seg SegmentId) (SegmentReader, error) {
+func (s *S3ObjectReader) Layout(ctx context.Context) (*SegmentLayout, error) {
+	return nil, nil
+}
+
+type S3Volume struct {
+	sa  *S3Access
+	vol string
+}
+
+var _ Volume = (*S3Volume)(nil)
+
+func (s *S3Access) OpenVolume(ctx context.Context, name string) (Volume, error) {
+	return &S3Volume{
+		sa:  s,
+		vol: name,
+	}, nil
+}
+
+func (s *S3Volume) Info(ctx context.Context) (*VolumeInfo, error) {
+	return s.sa.GetVolumeInfo(ctx, s.vol)
+}
+
+func (s *S3Volume) ListSegments(ctx context.Context) ([]SegmentId, error) {
+	return s.sa.ListSegments(ctx, s.vol)
+}
+
+func (s *S3Volume) OpenSegment(ctx context.Context, seg SegmentId) (SegmentReader, error) {
+	return s.sa.OpenSegment(ctx, s.vol, seg)
+}
+
+func (s *S3Volume) AppendSegment(ctx context.Context, seg SegmentId, f *os.File) error {
+	return s.sa.AppendSegment(ctx, s.vol, seg, f)
+}
+
+func (s *S3Volume) NewSegment(ctx context.Context, seg SegmentId, layout *SegmentLayout, data *os.File) error {
+	return s.sa.AppendSegment(ctx, s.vol, seg, data)
+}
+
+func (s *S3Volume) RemoveSegment(ctx context.Context, seg SegmentId) error {
+	return s.sa.RemoveSegmentFromVolume(ctx, s.vol, seg)
+}
+
+func (s *S3Access) OpenSegment(ctx context.Context, _ string, seg SegmentId) (SegmentReader, error) {
 	key := "segments/segment." + ulid.ULID(seg).String()
 
 	// Validate the segment exists.
@@ -121,7 +163,7 @@ func (s *S3Access) ListSegments(ctx context.Context, vol string) ([]SegmentId, e
 
 	defer out.Body.Close()
 
-	return ReadSegments(out.Body)
+	return ReadSegmentList(out.Body)
 }
 
 type mdWriter struct {
@@ -306,6 +348,15 @@ func (s *S3Access) AppendToSegments(ctx context.Context, vol string, seg Segment
 		Body:   bytes.NewReader(buf.Bytes()),
 	})
 	return err
+}
+
+func (s *S3Access) AppendSegment(ctx context.Context, vol string, seg SegmentId, f *os.File) error {
+	err := s.UploadSegment(ctx, seg, f)
+	if err != nil {
+		return err
+	}
+
+	return s.AppendToSegments(ctx, vol, seg)
 }
 
 func (s *S3Access) InitContainer(ctx context.Context) error {

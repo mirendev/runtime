@@ -1,0 +1,37 @@
+apiVersion: miren.dev/rpc/v1
+kind: IDL
+
+imports:
+  standard:
+    path: ../pkg/rpc/standard/standard.yml
+    import: miren.dev/runtime/pkg/rpc/standard
+  stream:
+    path: ../pkg/rpc/stream/stream.yml
+    import: miren.dev/runtime/pkg/rpc/stream
+
+types:
+  - type: SegmentLayout
+    compact: true
+    fields:
+      - name: extents
+        type: list
+        element: ExternalExtentHeader
+
+  - type: ExternalExtentHeader
+    compact: true
+    fields:
+      - name: lba
+        type: uint64
+        index: 0
+      - name: blocks
+        type: uint32
+        index: 1
+      - name: size
+        type: uint32
+        index: 2
+      - name: offset
+        type: uint32
+        index: 3
+      - name: raw_size
+        type: uint32
+        index: 4

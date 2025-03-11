@@ -302,7 +302,12 @@ func (c *CLI) volumeInspect(ctx context.Context, opts struct {
 		fmt.Printf("  parent: %s\n", info.Parent)
 	}
 
-	entries, err := sa.ListSegments(ctx, opts.Name)
+	vol, err := sa.OpenVolume(ctx, opts.Name)
+	if err != nil {
+		return err
+	}
+
+	entries, err := vol.ListSegments(ctx)
 	if err != nil {
 		return err
 	}
@@ -356,7 +361,12 @@ func (c *CLI) volumePack(ctx context.Context, opts struct {
 
 	log.Info("Packing volume complete", "new-size", info.Size)
 
-	entries, err := sa.ListSegments(ctx, opts.Name)
+	vol, err := sa.OpenVolume(ctx, opts.Name)
+	if err != nil {
+		return err
+	}
+
+	entries, err := vol.ListSegments(ctx)
 	if err != nil {
 		return err
 	}
