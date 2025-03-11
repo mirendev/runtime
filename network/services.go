@@ -44,6 +44,8 @@ func (sm *ServiceManager) SetupDNS(bc *BridgeConfig) error {
 		return nil // DNS already configured
 	}
 
+	sm.Log.Info("Starting DNS services for bridge", "bridge", bridgeName)
+
 	bs := &BridgeServices{
 		ips: slices.Clone(bc.Addresses),
 	}
@@ -57,6 +59,8 @@ func (sm *ServiceManager) SetupDNS(bc *BridgeConfig) error {
 		if err != nil {
 			return fmt.Errorf("creating DNS server for bridge %s: %w", bridgeName, err)
 		}
+
+		sm.Log.Info("Binding DNS server", "bridge", bridgeName, "addr", addr.String())
 
 		go func() {
 			if err := server.ListenAndServe(); err != nil {
