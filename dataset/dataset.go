@@ -195,8 +195,8 @@ func (m *Manager) List(ctx context.Context, state *DataSetsList) error {
 // GetVolume
 
 func (m *Manager) getDS(id string) (*dsAccess, error) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
+	m.mu.Lock()
+	defer m.mu.Unlock()
 
 	ds, ok := m.datasets[id]
 	if !ok {
