@@ -2,6 +2,7 @@ package rpc_test
 
 import (
 	"context"
+	"log/slog"
 	"testing"
 	"time"
 
@@ -33,6 +34,15 @@ func (m *exampleMeter) GetSetter(ctx context.Context, call *example.MeterGetSett
 	res := call.Results()
 	res.SetSetter(m)
 	return nil
+}
+
+func (m *exampleMeter) ReconstructFromState(is *rpc.InterfaceState) (*rpc.Interface, error) {
+	switch is.Interface {
+	case "SetTemp":
+		return example.AdaptSetTemp(m), nil
+	default:
+		return nil, nil
+	}
 }
 
 func (m *exampleMeter) SetTemp(ctx context.Context, call *example.SetTempSetTemp) error {
@@ -119,7 +129,7 @@ func TestRPC(t *testing.T) {
 
 		s := example.AdaptMeter(&exampleMeter{temp: 42})
 
-		ss, err := rpc.NewState(ctx, rpc.WithSkipVerify)
+		ss, err := rpc.NewState(ctx, rpc.WithSkipVerify, rpc.WithLogLevel(slog.LevelDebug))
 		r.NoError(err)
 
 		serv := ss.Server()
@@ -279,6 +289,60 @@ func TestRPC(t *testing.T) {
 		time.Sleep(time.Second)
 
 		r.Equal([]float32{42, 100}, vals)
+	})
+
+	t.Run("can reresolve a capability", func(t *testing.T) {
+		r := require.New(t)
+
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		em := &exampleMeter{temp: 42}
+
+		s := example.AdaptMeter(em)
+
+		ss, err := rpc.NewState(ctx, rpc.WithSkipVerify,
+			rpc.WithBindAddr("localhost:12321"),
+			rpc.WithLogLevel(slog.LevelDebug))
+		r.NoError(err)
+
+		serv := ss.Server()
+
+		serv.ExposeValue("meter", s)
+
+		cs, err := rpc.NewState(ctx, rpc.WithSkipVerify)
+		r.NoError(err)
+
+		c, err := cs.Connect(ss.ListenAddr(), "meter")
+		r.NoError(err)
+
+		mc := &example.MeterClient{Client: c}
+
+		_, err = mc.ReadTemperature(context.Background(), "test")
+		r.NoError(err)
+
+		res2, err := mc.GetSetter(context.Background(), "test")
+		r.NoError(err)
+
+		ss.Close()
+
+		ss, err = rpc.NewState(ctx, rpc.WithSkipVerify,
+			rpc.WithBindAddr("localhost:12321"),
+			rpc.WithLogLevel(slog.LevelDebug))
+		r.NoError(err)
+
+		serv = ss.Server()
+
+		serv.ExposeValue("meter", s)
+
+		res, err := mc.ReadTemperature(context.Background(), "test")
+		r.Equal("test", res.Reading().Meter())
+		r.Equal(float32(42), res.Reading().Temperature())
+
+		res3, err := res2.Setter().SetTemp(ctx, 100)
+		r.NoError(err)
+
+		r.Equal(int32(100), res3.Temp())
 	})
 }
 

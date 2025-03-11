@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"reflect"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -34,6 +35,10 @@ func init() {
 	os.Setenv("QUIC_GO_DISABLE_RECEIVE_BUFFER_WARNING", "true")
 }
 
+type HasReconstructFromState interface {
+	ReconstructFromState(is *InterfaceState) (*Interface, error)
+}
+
 type Server struct {
 	state *State
 
@@ -45,6 +50,8 @@ type Server struct {
 
 	knownAddresses map[string]string
 
+	resolvers map[string]HasReconstructFromState
+
 	mux *http.ServeMux
 }
 
@@ -55,6 +62,8 @@ type heldInterface struct {
 
 type heldCapability struct {
 	*heldInterface
+
+	category string
 
 	lastContact time.Time
 
@@ -80,6 +89,7 @@ func newServer() *Server {
 		registry:       make(map[string]OID),
 		persistent:     make(map[string]*Interface),
 		knownAddresses: make(map[string]string),
+		resolvers:      make(map[string]HasReconstructFromState),
 	}
 
 	s.setupMux()
@@ -101,9 +111,24 @@ type Method struct {
 	Handler       func(ctx context.Context, call *Call) error
 }
 
+type HasRestoreState interface {
+	RestoreState(iface any) (any, error)
+}
+
 type Interface struct {
+	name    string
 	methods map[string]Method
 	closer  io.Closer
+
+	forbidRestore bool
+	restoreState  HasRestoreState
+	constructor   HasReconstructFromState
+}
+
+func typeNameHash(obj any) string {
+	t := reflect.TypeOf(obj)
+	name := t.PkgPath() + "." + t.Name()
+	return base58.Encode([]byte(name))
 }
 
 func NewInterface(methods []Method, obj any) *Interface {
@@ -113,11 +138,24 @@ func NewInterface(methods []Method, obj any) *Interface {
 	}
 
 	i := &Interface{
+		name:    methods[0].InterfaceName,
 		methods: m,
 	}
 
 	if c, ok := obj.(io.Closer); ok {
 		i.closer = c
+	}
+
+	if r, ok := obj.(HasRestoreState); ok {
+		i.restoreState = r
+	}
+
+	if c, ok := obj.(HasReconstructFromState); ok {
+		i.constructor = c
+	}
+
+	if _, ok := obj.(ForbidRestore); ok {
+		i.forbidRestore = true
 	}
 
 	return i
@@ -128,11 +166,15 @@ func (s *Server) ExposeValue(name string, iface *Interface) {
 	defer s.mu.Unlock()
 
 	s.persistent[name] = iface
+
+	if iface.constructor != nil {
+		s.resolvers[name] = iface.constructor
+	}
 }
 
 const BootstrapOID = "!bootstrap"
 
-func (s *Server) assignCapability(i *Interface, pub ed25519.PublicKey, contactAddr string) *Capability {
+func (s *Server) assignCapability(i *Interface, pub ed25519.PublicKey, contactAddr string, category string) *Capability {
 	if len(pub) != ed25519.PublicKeySize {
 		panic("bad key!!!")
 	}
@@ -146,10 +188,6 @@ func (s *Server) assignCapability(i *Interface, pub ed25519.PublicKey, contactAd
 
 	oid := OID(base58.Encode(buf))
 
-	if contactAddr == "" {
-		contactAddr = s.state.transport.Conn.LocalAddr().String()
-	}
-
 	capa := &Capability{
 		OID:     oid,
 		User:    pub,
@@ -161,8 +199,24 @@ func (s *Server) assignCapability(i *Interface, pub ed25519.PublicKey, contactAd
 		heldInterface: &heldInterface{
 			Interface: i,
 		},
+		category:    category,
 		lastContact: time.Now(),
 		pub:         pub,
+	}
+
+	if i.restoreState != nil {
+		if rs, err := i.restoreState.RestoreState(i); err == nil {
+			capa.RestoreState = &InterfaceState{
+				Category:  category,
+				Interface: i.name,
+				Data:      rs,
+			}
+		}
+	} else if !i.forbidRestore {
+		capa.RestoreState = &InterfaceState{
+			Category:  category,
+			Interface: i.name,
+		}
 	}
 
 	hc.refs.Add(1)
@@ -211,6 +265,7 @@ func (s *Server) setupMux() {
 
 	mux.HandleFunc("POST /_rpc/call/{oid}/{method}", s.handleCalls)
 	mux.HandleFunc("POST /_rpc/lookup/{name}", s.lookup)
+	mux.HandleFunc("POST /_rpc/reresolve", s.reresolve)
 	mux.HandleFunc("POST /_rpc/reexport/{oid}", s.reexport)
 	mux.HandleFunc("POST /_rpc/ref/{oid}", s.refCapa)
 	mux.HandleFunc("POST /_rpc/deref/{oid}", s.derefCapa)
@@ -303,9 +358,8 @@ func (s *Server) clientIdentify(w http.ResponseWriter, r *http.Request) {
 func (s *Server) reexport(w http.ResponseWriter, r *http.Request) {
 	oid := OID(r.PathValue("oid"))
 
-	_, ok := s.authRequest(r, oid)
+	_, ok := s.authRequest(r, w, oid)
 	if !ok {
-		w.WriteHeader(http.StatusForbidden)
 		return
 	}
 
@@ -395,10 +449,98 @@ func (s *Server) lookup(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		capa := s.assignCapability(iface, ed25519.PublicKey(data), ca)
+		capa := s.assignCapability(iface, ed25519.PublicKey(data), ca, name)
+		capa.RestoreState = &InterfaceState{
+			Category:  "!persistent",
+			Interface: name,
+		}
 
 		cbor.NewEncoder(w).Encode(lookupResponse{Capability: capa})
 	}
+}
+
+func (s *Server) reresolve(w http.ResponseWriter, r *http.Request) {
+	var rs InterfaceState
+
+	err := cbor.NewDecoder(r.Body).Decode(&rs)
+	if err != nil {
+		http.Error(w, "failed to read body", http.StatusBadRequest)
+		return
+	}
+
+	pk := r.Header.Get("rpc-public-key")
+	if pk == "" {
+		http.Error(w, "public key not provided", http.StatusForbidden)
+		return
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	var (
+		iface    *Interface
+		category string
+	)
+
+	if rs.Category == "!persistent" {
+		name := rs.Interface
+
+		category = name
+
+		var ok bool
+		// TODO: add condition codes to the error response rather than just a string
+		iface, ok = s.persistent[name]
+		if !ok {
+			cbor.NewEncoder(w).Encode(lookupResponse{Error: "unknown object: " + name})
+			return
+		}
+	} else if res, ok := s.resolvers[rs.Category]; ok {
+		s.state.log.Info("attempting to resolve data",
+			"category", rs.Category,
+			"interface", rs.Interface,
+			"resolvers", len(s.resolvers),
+		)
+		iface, err = res.ReconstructFromState(&rs)
+		if err != nil {
+			cbor.NewEncoder(w).Encode(lookupResponse{Error: "failed to resolve: " + err.Error()})
+			return
+		}
+
+		if iface == nil {
+			cbor.NewEncoder(w).Encode(lookupResponse{Error: fmt.Sprintf("unable to restore capability")})
+			return
+		}
+	}
+
+	w.WriteHeader(http.StatusOK)
+
+	w.Header().Set("Content-Type", "application/cbor")
+
+	// having the client provide the contact address allows the server
+	// to provide capabilities for OTHER servers rather than just itself.
+	// in this way, the client doesn't have to assume that just because it
+	// looked up the capability here, the functionality is also here.
+	//
+	// NOTE: We don't actually support that atm, but this provides future
+	// abilities.
+	ca := r.Header.Get("rpc-contact-addr")
+	if ca != "" {
+		ca = s.state.transport.Conn.LocalAddr().String()
+	}
+
+	//s.state.log.Info("Lookup", "name", name)
+
+	// TODO: add condition codes to the error response rather than just a string
+	pkdata, err := base58.Decode(pk)
+	if err != nil {
+		cbor.NewEncoder(w).Encode(lookupResponse{Error: "invalid public key"})
+		return
+	}
+
+	capa := s.assignCapability(iface, ed25519.PublicKey(pkdata), ca, category)
+	capa.RestoreState = &rs
+
+	cbor.NewEncoder(w).Encode(lookupResponse{Capability: capa})
 }
 
 type refResponse struct {
@@ -409,9 +551,8 @@ type refResponse struct {
 func (s *Server) refCapa(w http.ResponseWriter, r *http.Request) {
 	oid := OID(r.PathValue("oid"))
 
-	_, ok := s.authRequest(r, oid)
+	_, ok := s.authRequest(r, w, oid)
 	if !ok {
-		w.WriteHeader(http.StatusForbidden)
 		return
 	}
 
@@ -431,9 +572,8 @@ func (s *Server) refCapa(w http.ResponseWriter, r *http.Request) {
 func (s *Server) derefCapa(w http.ResponseWriter, r *http.Request) {
 	oid := OID(r.PathValue("oid"))
 
-	_, ok := s.authRequest(r, oid)
+	_, ok := s.authRequest(r, w, oid)
 	if !ok {
-		w.WriteHeader(http.StatusForbidden)
 		return
 	}
 
@@ -460,23 +600,32 @@ func (s *Server) derefCapa(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (s *Server) authRequest(r *http.Request, oid OID) (ed25519.PublicKey, bool) {
+func (s *Server) authRequest(r *http.Request, w http.ResponseWriter, oid OID) (ed25519.PublicKey, bool) {
 	ts := r.Header.Get("rpc-timestamp")
+
+	if ts == "" {
+		s.state.log.Info("No timestamp provided for authentication")
+		http.Error(w, "no timestamp provided", http.StatusForbidden)
+		return nil, false
+	}
 
 	t, err := time.Parse(time.RFC3339Nano, ts)
 	if err != nil {
 		s.state.log.Info("Failed to parse timestamp", "error", err)
+		http.Error(w, "failed to parse timestamp", http.StatusForbidden)
 		return nil, false
 	}
 
 	if time.Since(t) > 10*time.Minute {
 		s.state.log.Info("Timestamp too old", "timestamp", t)
+		http.Error(w, "timestamp too old", http.StatusForbidden)
 		return nil, false
 	}
 
 	sign := r.Header.Get("rpc-signature")
 	if sign == "" {
 		s.state.log.Info("No signature provided")
+		http.Error(w, "no signature provided", http.StatusForbidden)
 		return nil, false
 	}
 
@@ -485,7 +634,10 @@ func (s *Server) authRequest(r *http.Request, oid OID) (ed25519.PublicKey, bool)
 	s.mu.Unlock()
 
 	if !ok {
-		s.state.log.Info("Found capability", "oid", oid)
+		s.state.log.Info("no capability found", "oid", oid)
+		w.Header().Add("rpc-status", "unknown-capability")
+		w.Header().Add("rpc-error", "unknown capability: "+string(oid))
+		http.Error(w, "unknown capability", http.StatusNotFound)
 		return nil, false
 	}
 
@@ -496,16 +648,19 @@ func (s *Server) authRequest(r *http.Request, oid OID) (ed25519.PublicKey, bool)
 	bsign, err := base58.Decode(sign)
 	if err != nil {
 		s.state.log.Info("Failed to decode signature", "error", err)
+		http.Error(w, "failed to decode signature", http.StatusForbidden)
 		return nil, false
 	}
 
 	if len(capa.pub) != ed25519.PublicKeySize {
 		s.state.log.Info("Invalid public key size", "size", len(capa.pub))
+		http.Error(w, "invalid public key size", http.StatusForbidden)
 		return nil, false
 	}
 
 	if !ed25519.Verify(capa.pub, buf.Bytes(), bsign) {
 		s.state.log.Info("Failed to verify signature")
+		http.Error(w, "failed to verify signature", http.StatusForbidden)
 		return nil, false
 	}
 
@@ -515,25 +670,18 @@ func (s *Server) authRequest(r *http.Request, oid OID) (ed25519.PublicKey, bool)
 func (s *Server) handleCalls(w http.ResponseWriter, r *http.Request) {
 	oid := OID(r.PathValue("oid"))
 
-	user, ok := s.authRequest(r, oid)
+	s.state.log.Info("server: rpc call", "oid", oid)
+
+	w.Header().Set("Trailer", "rpc-status, rpc-error")
+
+	user, ok := s.authRequest(r, w, oid)
 	if !ok {
-		w.WriteHeader(http.StatusForbidden)
 		return
 	}
 
 	method := r.PathValue("method")
 
-	w.Header().Set("Trailer", "rpc-status, rpc-error")
-
 	ctx := r.Context()
-
-	call := &Call{
-		s:      s,
-		r:      r,
-		oid:    oid,
-		method: method,
-		caller: user,
-	}
 
 	defer r.Body.Close()
 
@@ -568,6 +716,15 @@ func (s *Server) handleCalls(w http.ResponseWriter, r *http.Request) {
 
 		span.SetAttributes(attribute.String("oid", string(oid)))
 
+		call := &Call{
+			s:        s,
+			r:        r,
+			oid:      oid,
+			method:   method,
+			caller:   user,
+			category: iface.category,
+		}
+
 		if r.TLS != nil && len(r.TLS.PeerCertificates) > 0 {
 			call.peer = r.TLS.PeerCertificates[0]
 			ctx = context.WithValue(ctx, connectionKey{}, &CurrentConnectionInfo{
@@ -588,7 +745,7 @@ func (s *Server) handleCalls(w http.ResponseWriter, r *http.Request) {
 		w.Header().Add("rpc-status", "ok")
 	} else {
 		w.WriteHeader(http.StatusNotFound)
-		w.Header().Add("rpc-status", "unknown")
+		w.Header().Add("rpc-status", "unknown-capability")
 		w.Header().Add("rpc-error", "unknown object: "+string(oid))
 	}
 }

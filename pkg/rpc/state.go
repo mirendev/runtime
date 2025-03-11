@@ -42,6 +42,7 @@ func init() {
 		MaxIncomingUniStreams: 1000,
 		Allow0RTT:             true,
 		KeepAlivePeriod:       10 * time.Second,
+		MaxIdleTimeout:        30 * time.Second,
 	}
 
 	DefaultTransport.QUICConfig = &DefaultQUICConfig
@@ -406,7 +407,7 @@ func (s *State) Close() error {
 		s.hs.Close()
 	}
 
-	return nil
+	return s.transport.Conn.Close()
 }
 
 func (s *State) Connect(remote string, name string) (*Client, error) {
@@ -441,6 +442,8 @@ func (s *State) Connect(remote string, name string) (*Client, error) {
 			tlsCfg:    s.clientTlsCfg,
 			remote:    remote,
 		}
+
+		client.setupTransport()
 	}
 
 	err = client.resolveCapability(name)
@@ -458,27 +461,36 @@ func (s *State) Connect(remote string, name string) (*Client, error) {
 	return client, nil
 }
 
-func (s *State) NewClient(capa *Capability) *Client {
+func (c *Client) newClientUnder(capa *Capability) *Client {
 	// see if we have the issuer of this capa in our knownAddresses table,
 	// and if so, we use that as it's remote address rather than the one
 	// in the capability.
 	// We do this because the address that client has for itself can be
 	// different than the address that this server sees, likely due to NAT.
 
-	transport := s.transport
+	addr := capa.Address
+	transport := c.State.transport
 
-	if strings.HasPrefix(capa.Address, "unix:") {
-		transport = s.localTransport
+	if strings.HasPrefix(addr, "unix:") {
+		transport = c.State.localTransport
 	}
 
-	return &Client{
-		State:     s,
+	if addr == "" {
+		addr = c.remote
+	}
+
+	newClient := &Client{
+		State:     c.State,
 		transport: transport,
-		tlsCfg:    s.clientTlsCfg.Clone(),
+		tlsCfg:    c.State.clientTlsCfg.Clone(),
 		capa:      capa,
 		oid:       capa.OID,
-		remote:    capa.Address,
+		remote:    addr,
 	}
+
+	newClient.setupTransport()
+
+	return newClient
 }
 
 func (s *State) newClientFrom(capa *Capability, peer *x509.Certificate) *Client {
@@ -501,7 +513,7 @@ func (s *State) newClientFrom(capa *Capability, peer *x509.Certificate) *Client 
 		}
 	}
 
-	return &Client{
+	c := &Client{
 		State:     s,
 		transport: transport,
 		tlsCfg:    cfg,
@@ -509,4 +521,8 @@ func (s *State) newClientFrom(capa *Capability, peer *x509.Certificate) *Client 
 		oid:       capa.OID,
 		remote:    capa.Address,
 	}
+
+	c.setupTransport()
+
+	return c
 }
