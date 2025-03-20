@@ -85,6 +85,7 @@ func (c *SandboxController) setupRunscConfig() error {
 }
 
 func SetupRunsc(dir string) (string, string) {
+
 	path := filepath.Join(dir, "runsc-entry")
 	pic := filepath.Join(dir, "pod-init-config.json")
 

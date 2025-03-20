@@ -1,0 +1,92 @@
+domain: dev.miren.sandbox
+version: v1alpha
+attrs:
+  label:
+    type: string
+    doc: Label for the container
+    many: true
+
+  network:
+    type: component
+    doc: Network accessability for the container
+    many: true
+    attrs:
+      address:
+        doc: A network address to reach the container at
+        type: string
+      subnet:
+        doc: The subnet that the address is associated with
+        type: string
+
+  route:
+    type: component
+    doc: A network route the container uses
+    many: true
+    attrs:
+      destination:
+        doc: The network destination
+        type: string
+      gateway:
+        doc: The next hop for the destination
+        type: string
+
+  container:
+    type: component
+    doc: A container running in the sandbox
+    many: true
+    required: true
+    attrs:
+      image:
+        type: string
+        doc: Container image
+        required: true
+      name:
+        type: string
+        doc: Container name
+      privileged:
+        type: bool
+        doc: Whether or not the container runs in privileged mode
+      command:
+        type: string
+        doc: Command to run in the container
+      env:
+        type: string
+        doc: Environment variable for the container
+        many: true
+      port:
+        type: component
+        doc: A network port the container declares
+        many: true
+        attrs:
+          port:
+            type: int
+            doc: Port number
+            required: true
+          name:
+            type: string
+            doc: Name of the port for reference
+            required: true
+          protocol:
+            type: enum
+            doc: Port protocol
+            choices: [tcp, udp]
+          type:
+            type: string
+            doc: The highlevel type of the port
+            example: http
+            
+      mount:
+        type: component
+        doc: A mounted directory
+        many: true
+        attrs:
+          source:
+            type: string
+            doc: Mount source path
+          destination:
+            type: string
+            doc: Mount destination path
+
+      oom_score:
+        type: int
+        doc: How to adjust the OOM score for this container
