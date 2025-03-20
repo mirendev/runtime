@@ -4,6 +4,7 @@ go 1.24
 
 require (
 	github.com/ClickHouse/clickhouse-go/v2 v2.30.0
+	github.com/Microsoft/hcsshim v0.12.9
 	github.com/NimbleMarkets/ntcharts v0.3.1
 	github.com/aws/aws-sdk-go-v2 v1.30.3
 	github.com/aws/aws-sdk-go-v2/config v1.27.27
@@ -38,6 +39,7 @@ require (
 	github.com/fxamacker/cbor/v2 v2.7.0
 	github.com/go-ozzo/ozzo-validation/v4 v4.3.0
 	github.com/go-sql-driver/mysql v1.9.0
+	github.com/google/cel-go v0.24.1
 	github.com/google/pprof v0.0.0-20241203143554-1e3fdc7de467
 	github.com/google/shlex v0.0.0-20191202100458-e7afc7fbc510
 	github.com/google/uuid v1.6.0
@@ -87,6 +89,7 @@ require (
 	github.com/tonistiigi/vt100 v0.0.0-20240514184818-90bafcd6abab
 	github.com/vishvananda/netlink v1.3.1-0.20240922070040-084abd93d350
 	go.etcd.io/bbolt v1.3.11
+	go.etcd.io/etcd/client/v3 v3.5.19
 	go.opentelemetry.io/otel v1.33.0
 	go.opentelemetry.io/otel/exporters/stdout/stdoutlog v0.9.0
 	go.opentelemetry.io/otel/exporters/stdout/stdoutmetric v1.33.0
@@ -103,11 +106,13 @@ require (
 	golang.org/x/sync v0.12.0
 	golang.org/x/sys v0.31.0
 	golang.org/x/term v0.30.0
-	golang.org/x/time v0.6.0
+	golang.org/x/time v0.7.0
 	golang.org/x/tools v0.28.0
+	google.golang.org/genproto/googleapis/api v0.0.0-20241007155032-5fefd90f89a9
 	google.golang.org/grpc v1.68.1
 	google.golang.org/protobuf v1.35.2
 	gopkg.in/yaml.v3 v3.0.1
+	tags.cncf.io/container-device-interface/specs-go v0.8.0
 )
 
 require (
@@ -121,7 +126,6 @@ require (
 	github.com/Masterminds/semver/v3 v3.3.0 // indirect
 	github.com/Masterminds/sprig/v3 v3.3.0 // indirect
 	github.com/Microsoft/go-winio v0.6.2 // indirect
-	github.com/Microsoft/hcsshim v0.12.9 // indirect
 	github.com/agext/levenshtein v1.2.3 // indirect
 	github.com/andybalholm/brotli v1.1.1 // indirect
 	github.com/antlr4-go/antlr/v4 v4.13.0 // indirect
@@ -176,7 +180,6 @@ require (
 	github.com/gogo/protobuf v1.3.2 // indirect
 	github.com/golang/groupcache v0.0.0-20210331224755-41bb18bfe9da // indirect
 	github.com/golang/protobuf v1.5.4 // indirect
-	github.com/google/cel-go v0.24.1 // indirect
 	github.com/google/go-cmp v0.6.0 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.22.0 // indirect
 	github.com/hashicorp/errwrap v1.1.0 // indirect
@@ -203,6 +206,7 @@ require (
 	github.com/moby/sys/mountinfo v0.7.2 // indirect
 	github.com/moby/sys/sequential v0.6.0 // indirect
 	github.com/moby/sys/signal v0.7.1 // indirect
+	github.com/moby/sys/symlink v0.3.0 // indirect
 	github.com/moby/sys/user v0.3.0 // indirect
 	github.com/moby/sys/userns v0.1.0 // indirect
 	github.com/muesli/ansi v0.0.0-20230316100256-276c6243b2f6 // indirect
@@ -236,7 +240,6 @@ require (
 	github.com/zclconf/go-cty v1.13.0 // indirect
 	go.etcd.io/etcd/api/v3 v3.5.19 // indirect
 	go.etcd.io/etcd/client/pkg/v3 v3.5.19 // indirect
-	go.etcd.io/etcd/client/v3 v3.5.19 // indirect
 	go.opencensus.io v0.24.0 // indirect
 	go.opentelemetry.io/auto/sdk v1.1.0 // indirect
 	go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc v0.56.0 // indirect
@@ -250,10 +253,9 @@ require (
 	go.uber.org/zap v1.27.0 // indirect
 	golang.org/x/mod v0.22.0 // indirect
 	golang.org/x/text v0.23.0 // indirect
-	google.golang.org/genproto/googleapis/api v0.0.0-20241007155032-5fefd90f89a9 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20241021214115-324edc3d5d38 // indirect
 	gotest.tools/v3 v3.5.1 // indirect
+	gvisor.dev/gvisor v0.0.0-20250317184159-a24f13b091dc // indirect
 	sigs.k8s.io/yaml v1.4.0 // indirect
 	tags.cncf.io/container-device-interface v0.8.0 // indirect
-	tags.cncf.io/container-device-interface/specs-go v0.8.0 // indirect
 )

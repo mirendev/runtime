@@ -7,6 +7,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"miren.dev/runtime/pkg/entity/types"
 )
 
 func setupTestStore(t *testing.T) (*FileStore, func()) {
@@ -35,8 +36,8 @@ func TestCreateEntity(t *testing.T) {
 			name:       "valid entity",
 			entityType: "test",
 			attrs: []Attr{
-				{ID: EntityIdent, Value: "test/person"},
-				{ID: EntityDoc, Value: "A test person"},
+				Any(Ident, KeywordValue("test/person")),
+				String(Doc, "A test person"),
 			},
 			wantErr: false,
 		},
@@ -44,7 +45,7 @@ func TestCreateEntity(t *testing.T) {
 			name:       "invalid attribute type",
 			entityType: "test",
 			attrs: []Attr{
-				{ID: EntityIdent, Value: 123}, // Should be string
+				Int(Ident, 123), // Should be string
 			},
 			wantErr: true,
 		},
@@ -52,7 +53,7 @@ func TestCreateEntity(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			entity, err := store.CreateEntity(tt.attrs)
+			entity, err := store.CreateEntity(t.Context(), tt.attrs)
 			if tt.wantErr {
 				assert.Error(t, err)
 				return
@@ -74,20 +75,20 @@ func TestGetEntity(t *testing.T) {
 
 	// Create a test entity
 	attrs := []Attr{
-		{ID: EntityIdent, Value: "test/person"},
-		{ID: EntityDoc, Value: "A test person"},
+		Any(Ident, "test/person"),
+		Any(Doc, "A test person"),
 	}
-	created, err := store.CreateEntity(attrs)
+	created, err := store.CreateEntity(t.Context(), attrs)
 	require.NoError(t, err)
 
 	// Test getting the entity
-	entity, err := store.GetEntity(EntityId(created.ID))
+	entity, err := store.GetEntity(t.Context(), Id(created.ID))
 	require.NoError(t, err, "missing %s, %s", created.ID, err)
 	assert.Equal(t, created.ID, entity.ID)
 	assert.Equal(t, created.Attrs, entity.Attrs)
 
 	// Test getting non-existent entity
-	_, err = store.GetEntity("nonexistent")
+	_, err = store.GetEntity(t.Context(), "nonexistent")
 	assert.ErrorIs(t, err, ErrEntityNotFound)
 }
 
@@ -97,18 +98,18 @@ func TestUpdateEntity(t *testing.T) {
 
 	// Create initial entity
 	initial := []Attr{
-		{ID: EntityIdent, Value: "test/person"},
-		{ID: EntityDoc, Value: "A test person"},
+		Any(Ident, "test/person"),
+		Any(Doc, "A test person"),
 	}
-	entity, err := store.CreateEntity(initial)
+	entity, err := store.CreateEntity(t.Context(), initial)
 	require.NoError(t, err)
 
 	// Update the entity
 	updates := []Attr{
-		{ID: EntityDoc, Value: "Updated description"},
+		Any(Doc, "Updated description"),
 	}
 	time.Sleep(10 * time.Millisecond)
-	updated, err := store.UpdateEntity(EntityId(entity.ID), updates)
+	updated, err := store.UpdateEntity(t.Context(), Id(entity.ID), updates)
 	require.NoError(t, err)
 
 	assert.Equal(t, entity.ID, updated.ID)
@@ -116,7 +117,7 @@ func TestUpdateEntity(t *testing.T) {
 	assert.Greater(t, updated.UpdatedAt, entity.UpdatedAt)
 
 	// Verify the update
-	retrieved, err := store.GetEntity(EntityId(entity.ID))
+	retrieved, err := store.GetEntity(t.Context(), Id(entity.ID))
 	require.NoError(t, err)
 	assert.Equal(t, updated.Attrs, retrieved.Attrs)
 }
@@ -127,22 +128,22 @@ func TestDeleteEntity(t *testing.T) {
 
 	// Create a test entity
 	attrs := []Attr{
-		{ID: EntityIdent, Value: "test/person"},
-		{ID: EntityDoc, Value: "A test person"},
+		Any(Ident, "test/person"),
+		Any(Doc, "A test person"),
 	}
-	entity, err := store.CreateEntity(attrs)
+	entity, err := store.CreateEntity(t.Context(), attrs)
 	require.NoError(t, err)
 
 	// Delete the entity
-	err = store.DeleteEntity(EntityId(entity.ID))
+	err = store.DeleteEntity(t.Context(), Id(entity.ID))
 	require.NoError(t, err)
 
 	// Verify the entity is deleted
-	_, err = store.GetEntity(EntityId(entity.ID))
+	_, err = store.GetEntity(t.Context(), Id(entity.ID))
 	assert.ErrorIs(t, err, ErrEntityNotFound)
 
 	// Try to delete non-existent entity
-	err = store.DeleteEntity("nonexistent")
+	err = store.DeleteEntity(t.Context(), "nonexistent")
 	assert.ErrorIs(t, err, ErrEntityNotFound)
 }
 
@@ -150,41 +151,37 @@ func TestEntityAttributes(t *testing.T) {
 	entity := &Entity{
 		ID: "test",
 		Attrs: []Attr{
-			{ID: EntityIdent, Value: "test/person"},
-			{ID: EntityDoc, Value: "A test person"},
+			Any(Ident, KeywordValue("test/person")),
+			Any(Doc, "A test person"),
 		},
 	}
 
 	// Test Get
-	attr, ok := entity.Get(EntityIdent)
+	attr, ok := entity.Get(Ident)
 	require.True(t, ok)
-	assert.Equal(t, "test/person", attr.Value)
+	assert.Equal(t, types.Keyword("test/person"), attr.Value.Any())
 
 	// Test Get non-existent
 	_, ok = entity.Get("nonexistent")
 	assert.False(t, ok)
+}
 
-	// Test Set (update existing)
-	entity.Set(EntityIdent, "updated/person")
-	attr, ok = entity.Get(EntityIdent)
+func TestEntityComponentAttributes(t *testing.T) {
+	component := &EntityComponent{
+		Attrs: []Attr{
+			Any(Doc, "A test component"),
+			Any(Type, "test/type"),
+		},
+	}
+
+	// Test Get
+	attr, ok := component.Get(Doc)
 	require.True(t, ok)
-	assert.Equal(t, "updated/person", attr.Value)
+	assert.Equal(t, "A test component", attr.Value.Any())
 
-	// Test Set (add new)
-	entity.Set("new/attr", "new value")
-	attr, ok = entity.Get("new/attr")
-	require.True(t, ok)
-	assert.Equal(t, "new value", attr.Value)
-
-	// Test Remove
-	err := entity.Remove(EntityIdent)
-	require.NoError(t, err)
-	_, ok = entity.Get(EntityIdent)
-	require.False(t, ok)
-
-	// Test Remove non-existent
-	err = entity.Remove("nonexistent")
-	assert.ErrorIs(t, err, ErrAttributeNotFound)
+	// Test Get non-existent
+	_, ok = component.Get("nonexistent")
+	assert.False(t, ok)
 }
 
 func TestAttrsHelper(t *testing.T) {
@@ -197,12 +194,12 @@ func TestAttrsHelper(t *testing.T) {
 		{
 			name: "valid pairs",
 			input: []any{
-				EntityId("test/attr1"), "value1",
-				EntityId("test/attr2"), 123,
+				Id("test/attr1"), "value1",
+				Id("test/attr2"), 123,
 			},
 			want: []Attr{
-				{ID: EntityId("test/attr1"), Value: "value1"},
-				{ID: EntityId("test/attr2"), Value: 123},
+				Any(Id("test/attr1"), "value1"),
+				Any(Id("test/attr2"), 123),
 			},
 		},
 		{
@@ -237,20 +234,93 @@ func TestAttrsHelper(t *testing.T) {
 func TestIndices(t *testing.T) {
 	// Create a test entity
 	attrs := []Attr{
-		{ID: EntityIdent, Value: "test/person"},
-		{ID: EntityDoc, Value: "A test person"},
-		{ID: EntityKind, Value: "person"},
+		Any(Ident, "test/person"),
+		Any(Doc, "A test person"),
+		Keyword(EntityKind, "person"),
 	}
 
 	store, cleanup := setupTestStore(t)
 	defer cleanup()
 
 	// Create a test entity
-	entity, err := store.CreateEntity(attrs)
+	entity, err := store.CreateEntity(t.Context(), attrs)
 	require.NoError(t, err)
 
-	ids, err := store.ListIndex(EntityKind, "person")
+	ids, err := store.ListIndex(t.Context(), Keyword(EntityKind, "person"))
 	require.NoError(t, err)
 
-	assert.Contains(t, ids, EntityId(entity.ID))
+	assert.Contains(t, ids, Id(entity.ID))
+}
+
+func TestValidKeyword(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		bad   bool
+	}{
+		{
+			name:  "bare",
+			input: "test",
+		},
+		{
+			name:  "namespaced",
+			input: "test/foo",
+		},
+		{
+			name:  "deep namespaced",
+			input: "bar/test/foo",
+		},
+		{
+			name:  "snaked",
+			input: "bar_bar",
+		},
+		{
+			name:  "kabob",
+			input: "bar-bar",
+		},
+		{
+			name:  "dots",
+			input: "bar.bar",
+		},
+		{
+			name:  "colon",
+			input: "bar:bar",
+		},
+		{
+			name:  "numbers",
+			input: "test/bar18",
+		},
+		{
+			name:  "bad char",
+			input: "test*",
+			bad:   true,
+		},
+		{
+			name:  "separator at end",
+			input: "test/",
+			bad:   true,
+		},
+		{
+			name:  "number at start",
+			input: "18test",
+			bad:   true,
+		},
+		{
+			name:  "has spaces",
+			input: "foo bar",
+			bad:   true,
+		},
+		{
+			name:  "has special",
+			input: "foo\r\b",
+			bad:   true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ok := ValidKeyword(tt.input)
+			require.Equal(t, !tt.bad, ok)
+		})
+	}
 }

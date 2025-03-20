@@ -113,3 +113,36 @@ func AllocateOnBridge(name string, subnet *netdb.Subnet) (*EndpointConfig, error
 
 	return ec, nil
 }
+
+func SetupOnBridge(name string, subnet *netdb.Subnet, prefix []netip.Prefix) (*EndpointConfig, error) {
+	if name == "" {
+		return nil, fmt.Errorf("bridge name must be provided")
+	}
+
+	_, err := netlink.LinkByName(name)
+	if err != nil {
+		return nil, fmt.Errorf("failed to find bridge %s: %w", name, err)
+	}
+
+	bridge := subnet.Router()
+
+	ep, err := subnet.Reserve()
+	if err != nil {
+		return nil, err
+	}
+
+	ec := &EndpointConfig{
+		Addresses: []netip.Prefix{ep},
+		Bridge: &BridgeConfig{
+			Name:      name,
+			Addresses: []netip.Prefix{bridge},
+		},
+	}
+
+	err = ec.DeriveDefaultGateway()
+	if err != nil {
+		return nil, err
+	}
+
+	return ec, nil
+}

@@ -18,6 +18,27 @@ export OTEL_SDK_DISABLED=true
 # Compile in the background while containerd starts
 go build -o /bin/containerd-log-ingress ./run/containerd-log-ingress &
 
+cat <<EOF > /etc/containerd/config.toml
+version = 2
+[plugins."io.containerd.runtime.v1.linux"]
+  shim_debug = true
+[plugins."io.containerd.grpc.v1.cri".containerd.runtimes.runc]
+  runtime_type = "io.containerd.runc.v2"
+[plugins."io.containerd.grpc.v1.cri".containerd.runtimes.runsc]
+  runtime_type = "io.containerd.runsc.v1"
+[plugins."io.containerd.grpc.v1.cri".containerd.runtimes.miren]
+  runtime_type = "io.containerd.runsc.v1"
+EOF
+
+cat <<EOF > /etc/containerd/runsc.toml
+log_path = "/var/log/runsc/%ID%/shim.log"
+log_level = "debug"
+binary_name = "/src/hack/runsc-ignore"
+[runsc_config]
+  debug = "true"
+  debug-log = "/var/log/runsc/%ID%/gvisor.%COMMAND%.log"
+EOF
+
 containerd --root /data --state /data/state --address /run/containerd.sock -l trace > /dev/null 2>&1 &
 buildkitd --root /data/buildkit > /dev/null 2>&1 &
 

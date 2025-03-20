@@ -1,18 +1,19 @@
 package entity
 
 import (
+	"context"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 	"reflect"
 	"slices"
-	"sync"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
+	"github.com/davecgh/go-spew/spew"
 	"github.com/fxamacker/cbor/v2"
 	"github.com/google/uuid"
-	"github.com/mr-tron/base58"
+	"miren.dev/runtime/pkg/entity/types"
 )
 
 // Common errors
@@ -34,32 +35,16 @@ const (
 
 // AttributeSchema defines the schema for an attribute
 type AttributeSchema struct {
-	ID          EntityId `json:"id" cbor:"id"`
-	Name        string   `json:"name" cbor:"name"`
-	Description string   `json:"description" cbor:"description"`
-	Type        EntityId
-	ElemType    EntityId
-	Required    bool `json:"required" cbor:"required"`
-	Unique      uniq
-	EnumValues  []any `json:"enum_values" cbor:"enum_values"`
-	AllowMany   bool
-	Index       bool
-
+	ID         Id
+	Doc        string
+	Type       Id
+	ElemType   Id
+	Unique     uniq
+	EnumValues []Value
+	AllowMany  bool
+	Index      bool
 	Predicate  []*Entity
 	CheckProgs []string
-	// Additional validation rules could be added here
-}
-
-// Attribute represents a key-value pair with a link to its schema
-type Attribute struct {
-	SchemaID string `json:"schema_id" cbor:"schema_id"`
-	Value    any    `json:"value" cbor:"value"`
-}
-
-type Attr struct {
-	ID    EntityId `json:"id" cbor:"id"`
-	Value any      `json:"v" cbor:"v"`
-	Type  string   `json:"t" cbor:"t"`
 }
 
 // Entity represents an entity with a set of attributes
@@ -72,7 +57,24 @@ type Entity struct {
 	Attrs []Attr `json:"attrs" cbor:"attrs"`
 }
 
-func (e *Entity) Get(name EntityId) (Attr, bool) {
+type AttrGetter interface {
+	Get(name Id) (Attr, bool)
+	GetAll(name Id) []Attr
+}
+
+func MustGet(e AttrGetter, name Id) Attr {
+	attr, ok := e.Get(name)
+	if !ok {
+		panic(fmt.Sprintf("attribute %q not found", name))
+	}
+	return attr
+}
+
+func (e *Entity) Get(name Id) (Attr, bool) {
+	if name == DBId {
+		return Attr{ID: DBId, Value: AnyValue(e.ID)}, true
+	}
+
 	for _, attr := range e.Attrs {
 		if attr.ID == name {
 			return attr, true
@@ -82,245 +84,125 @@ func (e *Entity) Get(name EntityId) (Attr, bool) {
 	return Attr{}, false
 }
 
+func (e *Entity) GetAll(name Id) []Attr {
+	var attrs []Attr
+
+	if name == DBId {
+		return []Attr{{ID: DBId, Value: AnyValue(e.ID)}}
+	}
+
+	for _, attr := range e.Attrs {
+		if attr.ID == name {
+			attrs = append(attrs, attr)
+		}
+	}
+
+	return attrs
+}
+
+type EntityComponent struct {
+	Attrs []Attr `json:"attrs" cbor:"attrs"`
+}
+
+func (e *EntityComponent) Get(name Id) (Attr, bool) {
+	for _, attr := range e.Attrs {
+		if attr.ID == name {
+			return attr, true
+		}
+	}
+
+	return Attr{}, false
+}
+
+func (e *EntityComponent) GetAll(name Id) []Attr {
+	var attrs []Attr
+	for _, attr := range e.Attrs {
+		if attr.ID == name {
+			attrs = append(attrs, attr)
+		}
+	}
+
+	return attrs
+}
+
 type EntityStore interface {
-	GetEntity(id EntityId) (*Entity, error)
-	GetAttributeSchema(name EntityId) (*AttributeSchema, error)
-	CreateEntity(attributes []Attr) (*Entity, error)
-	UpdateEntity(id EntityId, attributes []Attr) (*Entity, error)
-	DeleteEntity(id EntityId) error
-	ListIndex(id EntityId, val any) ([]EntityId, error)
-	ListCollection(collection string) ([]EntityId, error)
-}
-
-// FileStore provides CRUD operations for entities
-type FileStore struct {
-	basePath    string
-	schemaCache map[EntityId]*AttributeSchema
-	mu          sync.RWMutex
-
-	validator *Validator
-}
-
-// NewFileStore creates a new entity store with the given base path
-func NewFileStore(basePath string) (*FileStore, error) {
-	// Ensure the base directory exists
-	if err := os.MkdirAll(basePath, 0755); err != nil {
-		return nil, fmt.Errorf("failed to create store directory: %w", err)
-	}
-
-	// Create directories for entities and schemas
-	if err := os.MkdirAll(filepath.Join(basePath, "entities"), 0755); err != nil {
-		return nil, fmt.Errorf("failed to create entities directory: %w", err)
-	}
-
-	if err := os.MkdirAll(filepath.Join(basePath, "collections"), 0755); err != nil {
-		return nil, fmt.Errorf("failed to create schemas directory: %w", err)
-	}
-
-	store := &FileStore{
-		basePath:    basePath,
-		schemaCache: make(map[EntityId]*AttributeSchema),
-	}
-
-	store.validator = NewValidator(store)
-
-	err := InitSystemEntities(store.saveEntity)
-	if err != nil {
-		return nil, err
-	}
-
-	return store, nil
-}
-
-// CreateEntity creates a new entity with the given type and attributes
-func (s *FileStore) CreateEntity(attributes []Attr) (*Entity, error) {
-	// Validate attributes against schemas
-	err := s.validator.ValidateAttributes(attributes)
-	if err != nil {
-		return nil, err
-	}
-
-	entity := &Entity{
-		Attrs:     attributes,
-		Revision:  1,
-		CreatedAt: now(),
-		UpdatedAt: now(),
-	}
-
-	if err := s.saveEntity(entity); err != nil {
-		return nil, err
-	}
-
-	for _, attr := range entity.Attrs {
-		schema, err := s.GetAttributeSchema(attr.ID)
-		if err != nil {
-			return nil, err
-		}
-
-		if schema.Index {
-			err := s.addToCollection(entity, fmt.Sprintf("%s:%v", attr.ID, attr.Value))
-			if err != nil {
-				return nil, err
-			}
-		}
-	}
-
-	return entity, nil
-}
-
-// GetEntity retrieves an entity by ID
-func (s *FileStore) GetEntity(id EntityId) (*Entity, error) {
-	key := base58.Encode([]byte(id))
-	path := filepath.Join(s.basePath, "entities", key+".cbor")
-
-	data, err := os.ReadFile(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, fmt.Errorf("looking for %s: %w", id, ErrEntityNotFound)
-		}
-		return nil, fmt.Errorf("failed to read entity file: %w", err)
-	}
-
-	var entity Entity
-	if err := cbor.Unmarshal(data, &entity); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal entity: %w", err)
-	}
-
-	err = entity.postUnmarshal()
-	if err != nil {
-		return nil, err
-	}
-
-	return &entity, nil
+	GetEntity(ctx context.Context, id Id) (*Entity, error)
+	GetAttributeSchema(ctx context.Context, name Id) (*AttributeSchema, error)
+	CreateEntity(ctx context.Context, attributes []Attr) (*Entity, error)
+	UpdateEntity(ctx context.Context, id Id, attributes []Attr) (*Entity, error)
+	DeleteEntity(ctx context.Context, id Id) error
+	ListIndex(ctx context.Context, attr Attr) ([]Id, error)
+	ListCollection(ctx context.Context, collection string) ([]Id, error)
 }
 
 func (e *Entity) postUnmarshal() error {
-	for i, attr := range e.Attrs {
-		if attr.Type == string(EntityTypeRef) {
-			if id, ok := attr.Value.(string); ok {
-				e.Attrs[i].Value = EntityId(id)
-			}
-		}
-	}
-
 	return nil
 }
 
-// UpdateEntity updates an existing entity
-func (s *FileStore) UpdateEntity(id EntityId, attributes []Attr) (*Entity, error) {
-	entity, err := s.GetEntity(id)
-	if err != nil {
-		return nil, err
-	}
-
-	// Validate attributes against schemas
-	err = s.validator.ValidateAttributes(attributes)
-	if err != nil {
-		return nil, err
-	}
-
-	entity.Attrs = append(entity.Attrs, attributes...)
-
-	// TODO: Revalidate attributes tooking for duplicates
-
-	entity.Revision++
-	entity.UpdatedAt = now()
-
-	if err := s.saveEntity(entity); err != nil {
-		return nil, err
-	}
-
-	return entity, nil
-}
-
-// DeleteEntity deletes an entity by ID
-func (s *FileStore) DeleteEntity(id EntityId) error {
-	key := base58.Encode([]byte(id))
-	path := filepath.Join(s.basePath, "entities", key+".cbor")
-
-	if err := os.Remove(path); err != nil {
-		if os.IsNotExist(err) {
-			return ErrEntityNotFound
-		}
-		return fmt.Errorf("failed to delete entity file: %w", err)
-	}
-
-	return nil
-}
-
-func convertEntityToSchema(s EntityStore, entity *Entity) (*AttributeSchema, error) {
+func convertEntityToSchema(ctx context.Context, s EntityStore, entity *Entity) (*AttributeSchema, error) {
 	var schema AttributeSchema
 
 	for _, attr := range entity.Attrs {
 		switch attr.ID {
-		case EntityIdent:
-			switch id := attr.Value.(type) {
-			case EntityId:
-				schema.ID = id
-			case KW:
-				schema.ID = EntityId(id)
-			case string:
-				schema.ID = EntityId(id)
+		case Ident:
+			switch id := attr.Value.Any().(type) {
+			case types.Keyword:
+				schema.ID = Id(id)
 			default:
-				return nil, fmt.Errorf("invalid entity ident (expected EntityId): %v (%T)", attr.Value, attr.Value)
+				return nil, fmt.Errorf("invalid entity ident (expected EntityId): %v (%T)", id, attr.Value)
 			}
-		case EntityDoc:
-			if doc, ok := attr.Value.(string); ok {
-				schema.Description = doc
+		case Doc:
+			if doc, ok := attr.Value.Any().(string); ok {
+				schema.Doc = doc
 			} else {
 				return nil, fmt.Errorf("invalid entity doc: %v", attr.Value)
 			}
-		case EntityType:
-			if typ, ok := attr.Value.(EntityId); ok {
+		case Type:
+			if typ, ok := attr.Value.Any().(Id); ok {
 				schema.Type = typ
 			} else {
 				return nil, fmt.Errorf("invalid entity type: %v", attr.Value)
 			}
-		case EntityEnumValues:
-			rv := reflect.ValueOf(attr.Value)
-			if rv.Kind() != reflect.Slice {
-				return nil, fmt.Errorf("enum values must be a slice")
+		case EnumValues:
+			if val, ok := attr.Value.Any().([]Value); ok {
+				schema.EnumValues = val
+			} else {
+				return nil, fmt.Errorf("enum values must be a slice, was %T", attr.Value.Any())
 			}
-
-			values := make([]any, rv.Len())
-			for i := range rv.Len() {
-				values[i] = rv.Index(i).Interface()
-			}
-
-			schema.EnumValues = values
 		case EntityElemType:
-			if elemType, ok := attr.Value.(EntityId); ok {
+			if elemType, ok := attr.Value.Any().(Id); ok {
 				schema.ElemType = elemType
 			} else {
 				return nil, fmt.Errorf("invalid element type: %v", attr.Value)
 			}
-		case EntityCard:
-			switch attr.Value {
-			case EntityCardOne:
+		case Cardinality:
+			switch attr.Value.Any() {
+			case CardinalityOne:
 				//ok
-			case EntityCardMany:
+			case CardinalityMany:
 				schema.AllowMany = true
 			default:
 				return nil, fmt.Errorf("invalid cardinality: %v", attr.Value)
 			}
-		case EntityUniq:
-			switch attr.Value {
-			case EntityUniqueId:
+		case Uniq:
+			switch attr.Value.Any() {
+			case UniqueId:
 				schema.Unique = uniqId
-			case EntityUniqueValue:
+			case UniqueValue:
 				schema.Unique = uniqVal
 			default:
 				return nil, fmt.Errorf("invalid uniqueness: %v", attr.Value)
 			}
-		case EntityIndex:
-			if val, ok := attr.Value.(bool); ok {
+		case Index:
+			if val, ok := attr.Value.Any().(bool); ok {
 				schema.Index = val
 			} else {
-				return nil, fmt.Errorf("invalid index: %v", attr.Value)
+				spew.Dump(attr)
+				return nil, fmt.Errorf("invalid index: %v", attr.Value.Any())
 			}
-		case EntityAttrPred:
-			if pred, ok := attr.Value.(EntityId); ok {
-				e, err := s.GetEntity(pred)
+		case AttrPred:
+			if pred, ok := attr.Value.Any().(Id); ok {
+				e, err := s.GetEntity(ctx, pred)
 				if err != nil {
 					return nil, fmt.Errorf("invalid predicate: %w", err)
 				}
@@ -328,8 +210,8 @@ func convertEntityToSchema(s EntityStore, entity *Entity) (*AttributeSchema, err
 				schema.Predicate = append(schema.Predicate, e)
 
 				for _, predAttr := range e.Attrs {
-					if predAttr.ID == EntityProgPred {
-						schema.CheckProgs = append(schema.CheckProgs, predAttr.Value.(string))
+					if predAttr.ID == Program {
+						schema.CheckProgs = append(schema.CheckProgs, predAttr.Value.Any().(string))
 					}
 				}
 
@@ -339,57 +221,21 @@ func convertEntityToSchema(s EntityStore, entity *Entity) (*AttributeSchema, err
 		}
 	}
 
-	if schema.ElemType != "" {
-		switch schema.ElemType {
-		case EntityTypeRef:
-			for i, v := range schema.EnumValues {
-				schema.EnumValues[i] = EntityId(v.(string))
-			}
-		}
-	}
-
 	return &schema, nil
-}
-
-// GetAttributeSchema retrieves an attribute schema by ID
-func (s *FileStore) GetAttributeSchema(id EntityId) (*AttributeSchema, error) {
-	// Check the cache first
-	s.mu.RLock()
-	schema, ok := s.schemaCache[id]
-	s.mu.RUnlock()
-
-	if ok {
-		return schema, nil
-	}
-
-	entity, err := s.GetEntity(id)
-	if err != nil {
-		return nil, err
-	}
-
-	schema, err = convertEntityToSchema(s, entity)
-	if err != nil {
-		return nil, err
-	}
-
-	// Update the cache
-	s.mu.Lock()
-	s.schemaCache[schema.ID] = schema
-	s.mu.Unlock()
-
-	return schema, nil
 }
 
 func (e *Entity) Fixup() error {
 	if e.ID == "" {
-		if ident, ok := e.Get(EntityIdent); ok {
-			switch id := ident.Value.(type) {
-			case EntityId:
+		if ident, ok := e.Get(Ident); ok {
+			switch id := ident.Value.Any().(type) {
+			case Id:
 				e.ID = string(id)
 			case string:
 				e.ID = id
-			case KW:
+			case types.Keyword:
 				e.ID = string(id)
+			default:
+				panic(fmt.Sprintf("invalid entity ident (expected EntityId): %v (%T)", ident.Value.Any(), ident.Value))
 			}
 		}
 	}
@@ -398,88 +244,41 @@ func (e *Entity) Fixup() error {
 		e.ID = uuid.New().String()
 	}
 
-	for i, attr := range e.Attrs {
-		if attr.Type == "" {
-			switch attr.Value.(type) {
-			case EntityId:
-				e.Attrs[i].Type = string(EntityTypeRef)
-			}
-		}
-	}
-
 	return nil
 }
 
-// saveEntity saves an entity to disk
-func (s *FileStore) saveEntity(entity *Entity) error {
-	entity.Fixup()
+var (
+	encoder cbor.EncMode
+	decoder cbor.DecMode
+	tags    = cbor.NewTagSet()
+)
 
-	data, err := cbor.Marshal(entity)
+func init() {
+	tags.Add(cbor.TagOptions{
+		EncTag: cbor.EncTagRequired,
+		DecTag: cbor.DecTagOptional,
+	}, reflect.TypeOf(Id("")), 50)
+
+	tags.Add(cbor.TagOptions{
+		EncTag: cbor.EncTagRequired,
+		DecTag: cbor.DecTagOptional,
+	}, reflect.TypeOf(types.Keyword("")), 51)
+
+	var err error
+	encoder, err = cbor.EncOptions{
+		Sort:          cbor.SortBytewiseLexical,
+		ShortestFloat: cbor.ShortestFloat16,
+		Time:          cbor.TimeRFC3339Nano,
+		TagsMd:        cbor.TagsAllowed,
+	}.EncModeWithSharedTags(tags)
 	if err != nil {
-		return fmt.Errorf("failed to marshal entity: %w", err)
+		panic(err)
 	}
 
-	key := base58.Encode([]byte(entity.ID))
-
-	path := filepath.Join(s.basePath, "entities", key+".cbor")
-
-	if err := os.WriteFile(path, data, 0644); err != nil {
-		return fmt.Errorf("failed to write entity file: %w", err)
-	}
-
-	return nil
-}
-
-func (s *FileStore) addToCollection(entity *Entity, collection string) error {
-	key := base58.Encode([]byte(entity.ID))
-	colKey := base58.Encode([]byte(collection))
-
-	path := filepath.Join(s.basePath, "collections", colKey, key)
-
-	os.MkdirAll(filepath.Dir(path), 0755)
-
-	if err := os.WriteFile(path, []byte(entity.ID), 0644); err != nil {
-		return fmt.Errorf("failed to write collection file: %w", err)
-	}
-
-	return nil
-}
-
-func (s *FileStore) ListIndex(id EntityId, val any) ([]EntityId, error) {
-	schema, err := s.GetAttributeSchema(id)
+	decoder, err = cbor.DecOptions{}.DecModeWithSharedTags(tags)
 	if err != nil {
-		return nil, err
+		panic(err)
 	}
-
-	if !schema.Index {
-		return nil, fmt.Errorf("attribute %s is not indexed", id)
-	}
-
-	return s.ListCollection(fmt.Sprintf("%s:%v", id, val))
-}
-
-func (s *FileStore) ListCollection(collection string) ([]EntityId, error) {
-	colKey := base58.Encode([]byte(collection))
-
-	path := filepath.Join(s.basePath, "collections", colKey)
-
-	entries, err := os.ReadDir(path)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read collection directory: %w", err)
-	}
-
-	var ids []EntityId
-
-	for _, entry := range entries {
-		data, err := os.ReadFile(filepath.Join(path, entry.Name()))
-		if err != nil {
-			return nil, fmt.Errorf("failed to read collection file: %w", err)
-		}
-
-		ids = append(ids, EntityId(data))
-	}
-
-	return ids, nil
 }
 
 // Helper function to get current time
@@ -488,256 +287,72 @@ func now() int64 {
 }
 
 type (
-	EntityId string
-	KW       string
+	Id = types.Id
 )
 
-const (
-	EntityIdent      EntityId = "db/ident"
-	EntityDoc        EntityId = "db/doc"
-	EntityUniq       EntityId = "db/uniq"
-	EntityCard       EntityId = "db/cardinality"
-	EntityType       EntityId = "db/type"
-	EntityEnumValues EntityId = "db/enumValues"
-	EntityElemType   EntityId = "db/elementType"
+var keySpecial = []rune{'_', '-', '/', '.', ':'}
 
-	EntityUniqueId    EntityId = "db/unique.identity"
-	EntityUniqueValue EntityId = "db/unique.value"
+func ValidKeyword(str string) bool {
+	r, sz := utf8.DecodeRuneInString(str)
+	if !unicode.IsLetter(r) {
+		return false
+	}
 
-	EntityCardOne  EntityId = "db/cardinality.one"
-	EntityCardMany EntityId = "db/cardinality.many"
+	str = str[sz:]
 
-	EntityTypeAny   EntityId = "db/type.any"
-	EntityTypeRef   EntityId = "db/type.ref"
-	EntityTypeStr   EntityId = "db/type.str"
-	EntityTypeKW    EntityId = "db/type.keyword"
-	EntityTypeInt   EntityId = "db/type.int"
-	EntityTypeFloat EntityId = "db/type.float"
-	EntityTypeBool  EntityId = "db/type.bool"
-	EntityTypeTime  EntityId = "db/type.time"
-	EntityTypeEnum  EntityId = "db/type.enum"
-	EntityTypeArray EntityId = "db/type.array"
+	var special bool
 
-	EntityIndex EntityId = "db/index"
+	for len(str) > 0 {
+		r, sz = utf8.DecodeRuneInString(str)
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			special = false
+			str = str[sz:]
+			continue
+		}
 
-	EntityAttrPred EntityId = "db/attr.pred"
-	EntityProgPred EntityId = "db/program"
+		if slices.Contains(keySpecial, r) {
+			special = true
+			str = str[sz:]
+			continue
+		}
 
-	EntityKind EntityId = "entity/kind"
+		return false
+	}
 
-	EntityNetIP   EntityId = "db/pred.ip"
-	EntityNetCIDR EntityId = "db/pred.cidr"
-)
+	if special {
+		return false
+	}
+
+	return true
+}
+
+func MustKeyword(str string) types.Keyword {
+	if !ValidKeyword(str) {
+		panic(fmt.Sprintf("invalid keyword: %q", str))
+	}
+
+	return types.Keyword(str)
+}
 
 func Attrs(vals ...any) []Attr {
-	if len(vals)%2 != 0 {
-		panic("odd number of arguments")
-	}
-
 	var attrs []Attr
 
-	for i := 0; i < len(vals); i += 2 {
-		id, ok := vals[i].(EntityId)
-		if !ok {
-			panic(fmt.Sprintf("expected EntityId key, got %T", vals[i]))
+	i := 0
+	for i < len(vals) {
+		switch v := vals[i].(type) {
+		case Attr:
+			attrs = append(attrs, v)
+			i++
+		case Id:
+			attrs = append(attrs, Attr{
+				ID:    v,
+				Value: AnyValue(vals[i+1]),
+			})
+			i += 2
+		default:
+			panic(fmt.Sprintf("expected Id key, got %T", v))
 		}
 
-		attrs = append(attrs, Attr{
-			ID:    id,
-			Value: vals[i+1],
-		})
 	}
 	return attrs
-}
-
-func InitSystemEntities(save func(*Entity) error) error {
-	ident := &Entity{
-		Attrs: Attrs(
-			EntityIdent, KW(EntityIdent),
-			EntityDoc, "Entity identifier",
-			EntityUniq, EntityUniqueId,
-			EntityCard, EntityCardOne,
-			EntityType, EntityTypeKW,
-		),
-	}
-
-	doc := &Entity{
-		Attrs: Attrs(
-			EntityIdent, KW(EntityDoc),
-			EntityDoc, "Entity documentation",
-			EntityCard, EntityCardOne,
-			EntityType, EntityTypeStr,
-		),
-	}
-
-	uniq := &Entity{
-		Attrs: Attrs(
-			EntityIdent, KW(EntityUniq),
-			EntityDoc, "Unique attribute value",
-			EntityCard, EntityCardOne,
-			EntityType, EntityTypeRef,
-		),
-	}
-
-	card := &Entity{
-		Attrs: Attrs(
-			EntityIdent, KW(EntityCard),
-			EntityDoc, "Cardinality of an attribute",
-			EntityCard, EntityCardOne,
-			EntityType, EntityTypeEnum,
-			EntityElemType, EntityTypeRef,
-			EntityEnumValues, []EntityId{EntityCardOne, EntityCardMany},
-		),
-	}
-
-	types := []EntityId{
-		EntityTypeAny, EntityTypeRef, EntityTypeStr, EntityTypeKW,
-		EntityTypeInt, EntityTypeFloat, EntityTypeBool, EntityTypeTime,
-		EntityTypeEnum, EntityTypeArray,
-	}
-
-	typ := &Entity{
-		Attrs: Attrs(
-			EntityIdent, KW(EntityType),
-			EntityDoc, "Type of an attribute",
-			EntityCard, EntityCardOne,
-			EntityType, EntityTypeRef,
-		),
-	}
-
-	enumValues := &Entity{
-		Attrs: Attrs(
-			EntityIdent, KW(EntityEnumValues),
-			EntityDoc, "Enum values",
-			EntityCard, EntityCardMany,
-			EntityType, EntityTypeArray,
-			EntityElemType, EntityTypeAny,
-		),
-	}
-
-	enumType := &Entity{
-		Attrs: Attrs(
-			EntityIdent, KW(EntityElemType),
-			EntityDoc, "Enum type",
-			EntityCard, EntityCardOne,
-			EntityType, EntityTypeEnum,
-			EntityElemType, EntityTypeRef,
-			EntityEnumValues, types,
-		),
-	}
-
-	index := &Entity{
-		Attrs: Attrs(
-			EntityIdent, KW(EntityIndex),
-			EntityDoc, "Index",
-			EntityCard, EntityCardOne,
-			EntityType, EntityTypeBool,
-		),
-	}
-
-	entityKind := &Entity{
-		Attrs: Attrs(
-			EntityIdent, KW(EntityKind),
-			EntityDoc, "Entity kind",
-			EntityCard, EntityCardOne,
-			EntityType, EntityTypeKW,
-			EntityIndex, true,
-		),
-	}
-
-	id := func(id EntityId, doc string) *Entity {
-		return &Entity{
-			Attrs: Attrs(
-				EntityIdent, KW(id),
-				EntityDoc, doc,
-			),
-		}
-	}
-
-	uniqueIdentity := id(EntityUniqueId, "Unique identity")
-	uniqueValue := id(EntityUniqueValue, "Unique value")
-	cardOne := id(EntityCardOne, "Cardinality one")
-	cardMany := id(EntityCardMany, "Cardinality many")
-
-	typeAny := id(EntityTypeAny, "Any type")
-	typeRef := id(EntityTypeRef, "Reference type")
-	typeStr := id(EntityTypeStr, "String type")
-	typeKW := id(EntityTypeKW, "Keyword type")
-	typeInt := id(EntityTypeInt, "Integer type")
-	typeFloat := id(EntityTypeFloat, "Float type")
-	typeBool := id(EntityTypeBool, "Boolean type")
-	typeTime := id(EntityTypeTime, "Time type")
-	typeEnum := id(EntityTypeEnum, "Enum type")
-	typeArray := id(EntityTypeArray, "Array type")
-
-	attrPred := &Entity{
-		Attrs: Attrs(
-			EntityIdent, KW(EntityAttrPred),
-			EntityDoc, "Attribute predicate",
-			EntityCard, EntityCardMany,
-			EntityType, EntityTypeRef,
-		),
-	}
-
-	predIP := &Entity{
-		Attrs: Attrs(
-			EntityIdent, KW(EntityNetIP),
-			EntityDoc, "A program that checks if a value is an IP address",
-			EntityProgPred, "isIP(value)",
-		),
-	}
-
-	predCidr := &Entity{
-		Attrs: Attrs(
-			EntityIdent, KW(EntityNetCIDR),
-			EntityDoc, "A program that checks if a value is an IP CIDR address",
-			EntityProgPred, "isCIDR(value)",
-		),
-	}
-
-	entities := []*Entity{
-		ident, doc, uniq, card, typ, enumValues, enumType,
-		uniqueIdentity, uniqueValue, cardOne, cardMany,
-		typeAny, typeRef, typeStr, typeKW, typeInt, typeFloat, typeBool, typeTime, typeEnum,
-		typeArray, index,
-		attrPred, predIP, predCidr,
-		entityKind,
-	}
-
-	for _, entity := range entities {
-		if err := save(entity); err != nil {
-			if !errors.Is(err, ErrEntityAlreadyExists) {
-				return err
-			}
-		}
-	}
-
-	return nil
-}
-
-// SetAttributeValue sets an attribute value
-func (e *Entity) Set(name EntityId, value any) {
-	for i, attr := range e.Attrs {
-		if attr.ID == name {
-			e.Attrs[i].Value = value
-			return
-		}
-	}
-
-	e.Attrs = append(e.Attrs, Attr{ID: name, Value: value})
-}
-
-// RemoveAttribute removes an attribute
-func (e *Entity) Remove(name EntityId) error {
-	idx := slices.IndexFunc(e.Attrs, func(a Attr) bool {
-		return a.ID == name
-	})
-
-	if idx == -1 {
-		return ErrAttributeNotFound
-	}
-
-	e.Attrs = slices.Delete(e.Attrs, idx, idx+1)
-
-	return nil
 }

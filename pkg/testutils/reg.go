@@ -98,6 +98,8 @@ func Registry(extra ...func(*asm.Registry)) (*asm.Registry, func()) {
 
 	r.Register("log", log)
 
+	r.Register("clickhouse-address", "clickhouse:9000")
+
 	r.ProvideName("clickhouse", func(opts struct {
 		Log *slog.Logger
 	}) *sql.DB {

@@ -17,3 +17,12 @@ services:
     ports:
       - 5432:5432
 
+  etcd:
+    image: bitnami/etcd:3.5.19
+    environment:
+      - ALLOW_NONE_AUTHENTICATION=yes
+      - ETCD_ADVERTISE_CLIENT_URLS=http://etcd:2379
+    ports:
+      - 2379:2379
+      - 2380:2380
+

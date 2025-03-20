@@ -5,9 +5,55 @@ package network
 
 import (
 	"log/slog"
+	"net"
+	"net/netip"
 
 	"github.com/containernetworking/plugins/pkg/ns"
+	"go4.org/netipx"
 )
+
+func CGroupAddress(log *slog.Logger, pid int) ([]netip.Prefix, error) {
+	path := netnsPath(int(pid))
+
+	netns, err := ns.GetNS(path)
+	if err != nil {
+		return nil, err
+	}
+
+	var ret []netip.Prefix
+
+	err = netns.Do(func(_ ns.NetNS) error {
+		iface, err := net.InterfaceByName("eth0")
+		if err != nil {
+			return err
+		}
+
+		addrs, err := iface.Addrs()
+		if err != nil {
+			return err
+		}
+
+		for _, addr := range addrs {
+			ipNet, ok := addr.(*net.IPNet)
+			if !ok {
+				continue
+			}
+
+			if pr, ok := netipx.FromStdIPNet(ipNet); ok {
+				ret = append(ret, pr)
+			} else {
+				log.Warn("failed to convert IPNet to netip.Prefix", "addr", addr)
+			}
+		}
+		return nil
+	})
+
+	if err != nil {
+		return nil, err
+	}
+
+	return ret, nil
+}
 
 func ConfigureNetNS(log *slog.Logger, pid int, ec *EndpointConfig) error {
 	path := netnsPath(int(pid))
@@ -38,6 +84,7 @@ func ConfigureNetNS(log *slog.Logger, pid int, ec *EndpointConfig) error {
 		if err := ConfigureIface(log, "eth0", ec); err != nil {
 			return err
 		}
+
 		return nil
 	}); err != nil {
 		return err

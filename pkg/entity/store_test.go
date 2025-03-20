@@ -32,14 +32,14 @@ func setupTestEtcd(t *testing.T) *clientv3.Client {
 
 func TestEtcdStore_CreateEntity(t *testing.T) {
 	client := setupTestEtcd(t)
-	store, err := NewEtcdStore(client, "/test-entities")
+	store, err := NewEtcdStore(t.Context(), client, "/test-entities")
 	require.NoError(t, err)
 
-	e, err := store.CreateEntity(Attrs(
-		EntityIdent, "test/addresses",
-		EntityDoc, "A list of addresses",
-		EntityCard, EntityCardMany,
-		EntityType, EntityTypeStr,
+	e, err := store.CreateEntity(t.Context(), Attrs(
+		Ident, "test/addresses",
+		Doc, "A list of addresses",
+		Cardinality, CardinalityMany,
+		Type, TypeStr,
 	))
 	require.NoError(t, err)
 
@@ -56,8 +56,8 @@ func TestEtcdStore_CreateEntity(t *testing.T) {
 			name:       "valid entity",
 			entityType: "test",
 			attrs: []Attr{
-				{ID: EntityIdent, Value: "test1"},
-				{ID: EntityDoc, Value: "test document"},
+				Any(Ident, KeywordValue("test1")),
+				Any(Doc, "test document"),
 			},
 			wantErr: false,
 		},
@@ -65,8 +65,8 @@ func TestEtcdStore_CreateEntity(t *testing.T) {
 			name:       "duplicate entity",
 			entityType: "test",
 			attrs: []Attr{
-				{ID: EntityIdent, Value: "test1"},
-				{ID: EntityDoc, Value: "duplicate"},
+				Any(Ident, KeywordValue("test1")),
+				Any(Doc, "duplicate"),
 			},
 			wantErr: true,
 		},
@@ -74,7 +74,7 @@ func TestEtcdStore_CreateEntity(t *testing.T) {
 			name:       "invalid attribute",
 			entityType: "test",
 			attrs: []Attr{
-				{ID: EntityIdent, Value: 123}, // Wrong type for ident
+				Any(Ident, 123), // Wrong type for ident
 			},
 			wantErr: true,
 			errMsg:  "invalid attribute",
@@ -83,9 +83,9 @@ func TestEtcdStore_CreateEntity(t *testing.T) {
 			name:       "duplicate cardinality.one attribute",
 			entityType: "test",
 			attrs: []Attr{
-				{ID: EntityIdent, Value: "test4"},
-				{ID: EntityDoc, Value: "first doc"},
-				{ID: EntityDoc, Value: "second doc"}, // EntityDoc is cardinality.one
+				Any(Ident, KeywordValue("test4")),
+				Any(Doc, "first doc"),
+				Any(Doc, "second doc"), // EntityDoc is cardinality.one
 			},
 			wantErr: true,
 			errMsg:  "cardinality violation",
@@ -94,9 +94,9 @@ func TestEtcdStore_CreateEntity(t *testing.T) {
 			name:       "valid cardinality.many attribute",
 			entityType: "test",
 			attrs: []Attr{
-				{ID: EntityIdent, Value: "test5"},
-				{ID: EntityId("test/addresses"), Value: "val1"},
-				{ID: EntityId("test/addresses"), Value: "val2"},
+				Any(Ident, KeywordValue("test5")),
+				Any(Id("test/addresses"), "val1"),
+				Any(Id("test/addresses"), "val2"),
 			},
 			wantErr: false,
 		},
@@ -104,7 +104,7 @@ func TestEtcdStore_CreateEntity(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			entity, err := store.CreateEntity(tt.attrs)
+			entity, err := store.CreateEntity(t.Context(), tt.attrs)
 			if tt.wantErr {
 				assert.Error(t, err)
 				return
@@ -120,17 +120,17 @@ func TestEtcdStore_CreateEntity(t *testing.T) {
 	}
 }
 
-func TestEtcdStore_CustomType(t *testing.T) {
+func TestEtcdStore_AttrPred(t *testing.T) {
 	client := setupTestEtcd(t)
-	store, err := NewEtcdStore(client, "/test-entities")
+	store, err := NewEtcdStore(t.Context(), client, "/test-entities")
 	require.NoError(t, err)
 
-	e, err := store.CreateEntity(Attrs(
-		EntityIdent, "test/address",
-		EntityDoc, "An address",
-		EntityCard, EntityCardMany,
-		EntityType, EntityTypeStr,
-		EntityAttrPred, EntityId("db/pred.ip"),
+	e, err := store.CreateEntity(t.Context(), Attrs(
+		Ident, "test/address",
+		Doc, "An address",
+		Cardinality, CardinalityMany,
+		Type, TypeStr,
+		AttrPred, Id("db/pred.ip"),
 	))
 	require.NoError(t, err)
 
@@ -147,7 +147,7 @@ func TestEtcdStore_CustomType(t *testing.T) {
 			name:       "valid entity",
 			entityType: "test",
 			attrs: []Attr{
-				{ID: EntityId("test/address"), Value: "10.0.1.1"},
+				Any(Id("test/address"), "10.0.1.1"),
 			},
 			wantErr: false,
 		},
@@ -155,7 +155,7 @@ func TestEtcdStore_CustomType(t *testing.T) {
 			name:       "invalid attribute",
 			entityType: "test",
 			attrs: []Attr{
-				{ID: EntityId("test/address"), Value: "hello"},
+				Any(Id("test/address"), "hello"),
 			},
 			wantErr: true,
 			errMsg:  "invalid attribute",
@@ -164,7 +164,7 @@ func TestEtcdStore_CustomType(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			entity, err := store.CreateEntity(tt.attrs)
+			entity, err := store.CreateEntity(t.Context(), tt.attrs)
 			if tt.wantErr {
 				assert.Error(t, err)
 				return
@@ -182,25 +182,25 @@ func TestEtcdStore_CustomType(t *testing.T) {
 
 func TestEtcdStore_GetEntity(t *testing.T) {
 	client := setupTestEtcd(t)
-	store, err := NewEtcdStore(client, "/test-entities")
+	store, err := NewEtcdStore(t.Context(), client, "/test-entities")
 	require.NoError(t, err)
 
 	// Create a test entity
-	created, err := store.CreateEntity([]Attr{
-		{ID: EntityIdent, Value: "test1"},
-		{ID: EntityDoc, Value: "test document"},
+	created, err := store.CreateEntity(t.Context(), []Attr{
+		Any(Ident, "test1"),
+		Any(Doc, "test document"),
 	})
 	require.NoError(t, err)
 
 	tests := []struct {
 		name    string
-		id      EntityId
+		id      Id
 		want    *Entity
 		wantErr bool
 	}{
 		{
 			name:    "existing entity",
-			id:      EntityId(created.ID),
+			id:      Id(created.ID),
 			want:    created,
 			wantErr: false,
 		},
@@ -214,7 +214,7 @@ func TestEtcdStore_GetEntity(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := store.GetEntity(tt.id)
+			got, err := store.GetEntity(t.Context(), tt.id)
 			if tt.wantErr {
 				assert.Error(t, err)
 				return
@@ -229,37 +229,37 @@ func TestEtcdStore_GetEntity(t *testing.T) {
 
 func TestEtcdStore_UpdateEntity(t *testing.T) {
 	client := setupTestEtcd(t)
-	store, err := NewEtcdStore(client, "/test-entities")
+	store, err := NewEtcdStore(t.Context(), client, "/test-entities")
 	require.NoError(t, err)
 
 	// Create a test entity
-	entity, err := store.CreateEntity([]Attr{
-		{ID: EntityIdent, Value: "test1"},
-		{ID: EntityDoc, Value: "original doc"},
+	entity, err := store.CreateEntity(t.Context(), []Attr{
+		Any(Ident, "test1"),
+		Any(Doc, "original doc"),
 	})
 	require.NoError(t, err)
 
 	tests := []struct {
 		name      string
-		id        EntityId
+		id        Id
 		attrs     []Attr
 		wantAttrs int
 		wantErr   bool
 	}{
 		{
 			name: "valid update",
-			id:   EntityId(entity.ID),
+			id:   Id(entity.ID),
 			attrs: []Attr{
-				{ID: EntityDoc, Value: "updated doc"},
+				Any(Doc, "updated doc"),
 			},
 			wantAttrs: 3, // Original 2 + 1 new
 			wantErr:   false,
 		},
 		{
 			name: "invalid attribute",
-			id:   EntityId(entity.ID),
+			id:   Id(entity.ID),
 			attrs: []Attr{
-				{ID: EntityIdent, Value: 123}, // Wrong type
+				Any(Ident, 123), // Wrong type
 			},
 			wantErr: true,
 		},
@@ -267,7 +267,7 @@ func TestEtcdStore_UpdateEntity(t *testing.T) {
 			name: "non-existent entity",
 			id:   "nonexistent",
 			attrs: []Attr{
-				{ID: EntityDoc, Value: "won't work"},
+				Any(Doc, "won't work"),
 			},
 			wantErr: true,
 		},
@@ -277,7 +277,7 @@ func TestEtcdStore_UpdateEntity(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			updated, err := store.UpdateEntity(tt.id, tt.attrs)
+			updated, err := store.UpdateEntity(t.Context(), tt.id, tt.attrs)
 			if tt.wantErr {
 				assert.Error(t, err)
 				return
@@ -293,24 +293,24 @@ func TestEtcdStore_UpdateEntity(t *testing.T) {
 
 func TestEtcdStore_DeleteEntity(t *testing.T) {
 	client := setupTestEtcd(t)
-	store, err := NewEtcdStore(client, "/test-entities")
+	store, err := NewEtcdStore(t.Context(), client, "/test-entities")
 	require.NoError(t, err)
 
 	// Create a test entity
-	entity, err := store.CreateEntity([]Attr{
-		{ID: EntityIdent, Value: "test1"},
-		{ID: EntityDoc, Value: "test document"},
+	entity, err := store.CreateEntity(t.Context(), []Attr{
+		Any(Ident, "test1"),
+		Any(Doc, "test document"),
 	})
 	require.NoError(t, err)
 
 	tests := []struct {
 		name    string
-		id      EntityId
+		id      Id
 		wantErr bool
 	}{
 		{
 			name:    "existing entity",
-			id:      EntityId(entity.ID),
+			id:      Id(entity.ID),
 			wantErr: false,
 		},
 		{
@@ -322,7 +322,7 @@ func TestEtcdStore_DeleteEntity(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := store.DeleteEntity(tt.id)
+			err := store.DeleteEntity(t.Context(), tt.id)
 			if tt.wantErr {
 				assert.Error(t, err)
 				return
@@ -331,7 +331,7 @@ func TestEtcdStore_DeleteEntity(t *testing.T) {
 			require.NoError(t, err)
 
 			// Verify entity is gone
-			_, err = store.GetEntity(tt.id)
+			_, err = store.GetEntity(t.Context(), tt.id)
 			assert.Error(t, err)
 		})
 	}
@@ -339,47 +339,47 @@ func TestEtcdStore_DeleteEntity(t *testing.T) {
 
 func TestEtcdStore_ListIndex(t *testing.T) {
 	client := setupTestEtcd(t)
-	store, err := NewEtcdStore(client, "/test-entities")
+	store, err := NewEtcdStore(t.Context(), client, "/test-entities")
 	require.NoError(t, err)
 
 	// Create test entities with indexed attributes
-	_, err = store.CreateEntity([]Attr{
-		{ID: EntityIdent, Value: "test1"},
-		{ID: EntityKind, Value: "user"},
+	_, err = store.CreateEntity(t.Context(), []Attr{
+		Any(Ident, KeywordValue("test1")),
+		Keyword(EntityKind, "user"),
 	})
 	require.NoError(t, err)
 
-	_, err = store.CreateEntity([]Attr{
-		{ID: EntityIdent, Value: "test2"},
-		{ID: EntityKind, Value: "user"},
+	_, err = store.CreateEntity(t.Context(), []Attr{
+		Any(Ident, KeywordValue("test2")),
+		Keyword(EntityKind, "user"),
 	})
 	require.NoError(t, err)
 
 	tests := []struct {
 		name      string
-		attrID    EntityId
-		value     any
+		attrID    Id
+		value     Value
 		wantCount int
 		wantErr   bool
 	}{
 		{
 			name:      "valid index",
 			attrID:    EntityKind,
-			value:     "user",
+			value:     KeywordValue("user"),
 			wantCount: 2,
 			wantErr:   false,
 		},
 		{
 			name:      "non-existent value",
 			attrID:    EntityKind,
-			value:     "admin",
+			value:     KeywordValue("admin"),
 			wantCount: 0,
 			wantErr:   false,
 		},
 		{
 			name:      "non-indexed attribute",
-			attrID:    EntityDoc,
-			value:     "test",
+			attrID:    Doc,
+			value:     StringValue("test"),
 			wantCount: 0,
 			wantErr:   true,
 		},
@@ -387,7 +387,7 @@ func TestEtcdStore_ListIndex(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			entities, err := store.ListIndex(tt.attrID, tt.value)
+			entities, err := store.ListIndex(t.Context(), Attr{ID: tt.attrID, Value: tt.value})
 			if tt.wantErr {
 				assert.Error(t, err)
 				return

@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"time"
+
+	"miren.dev/runtime/pkg/asm/autoreg"
 )
 
 type ResourcesMonitor struct {
@@ -33,6 +35,8 @@ ORDER BY (container_id, toUnixTimestamp(timestamp))
 
 	return err
 }
+
+var _ = autoreg.Register[ResourcesMonitor]()
 
 func CGroupPathForPid(pid uint32) (string, error) {
 	// read cgroup

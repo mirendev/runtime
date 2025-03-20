@@ -1,16 +1,19 @@
 package entity
 
 import (
+	"context"
 	"fmt"
+	"maps"
 	"slices"
 	"time"
 
-	"github.com/davecgh/go-spew/spew"
 	"github.com/google/cel-go/cel"
 	"github.com/google/cel-go/common/types"
 	"github.com/google/cel-go/ext"
 	"golang.org/x/crypto/blake2b"
 	"miren.dev/runtime/pkg/cel/library"
+	etypes "miren.dev/runtime/pkg/entity/types"
+	"miren.dev/runtime/pkg/mapx"
 )
 
 // Validator provides methods to validate attribute values against their schemas
@@ -19,7 +22,8 @@ type Validator struct {
 
 	env *cel.Env
 
-	cacheProgs map[[32]byte]cel.Program
+	cacheProgs  map[[32]byte]cel.Program
+	ensureCache map[Id]map[Id]struct{}
 }
 
 // NewValidator creates a new attribute validator
@@ -44,37 +48,122 @@ func NewValidator(store EntityStore) *Validator {
 	}
 
 	return &Validator{
-		store:      store,
-		env:        env,
-		cacheProgs: make(map[[32]byte]cel.Program),
+		store:       store,
+		env:         env,
+		cacheProgs:  make(map[[32]byte]cel.Program),
+		ensureCache: make(map[Id]map[Id]struct{}),
+	}
+}
+
+func asEntityId(val any) (Id, error) {
+	switch v := val.(type) {
+	case Id:
+		return v, nil
+	case string:
+		return Id(v), nil
+	case etypes.Keyword:
+		return Id(v), nil
+	default:
+		return "", fmt.Errorf("value not convertable to an entity ID")
 	}
 }
 
 // ValidateEntity validates all attributes in an entity against their schemas
-func (v *Validator) ValidateEntity(entity *Entity) error {
+func (v *Validator) ValidateEntity(ctx context.Context, entity *Entity) error {
+	require := map[Id]struct{}{}
+
+	var valid []Attr
+
 	for _, attr := range entity.Attrs {
-		if err := v.ValidateAttribute(attr); err != nil {
-			return err
+		if attr.ID == Ensure {
+			ensure, ok := attr.Value.Any().(Id)
+			if !ok {
+				return fmt.Errorf("attribute %s must be a ref", Ensure)
+			}
+
+			if m, ok := v.ensureCache[ensure]; ok {
+				require = maps.Clone(m)
+			} else {
+				ee, err := v.store.GetEntity(ctx, ensure)
+				if err != nil {
+					return fmt.Errorf("attribute %s must be a valid entity ref", Ensure)
+				}
+
+				for _, elem := range ee.Attrs {
+					if elem.ID == EntityAttrs {
+						attrs, ok := elem.Value.Any().([]any)
+						if !ok {
+							return fmt.Errorf("attribute %s must be an array of strings", EntityAttrs)
+						}
+
+						for _, elem := range attrs {
+							id, err := asEntityId(elem)
+							if err != nil {
+								return fmt.Errorf("attribute %s must be an array of EntityId, was %T: %w", EntityAttrs, elem, err)
+							}
+
+							require[id] = struct{}{}
+						}
+					}
+				}
+
+				v.ensureCache[ensure] = maps.Clone(require)
+			}
+		} else {
+			valid = append(valid, attr)
 		}
 	}
+
+	count := make(map[Id]int)
+	for i, attr := range valid {
+		count[attr.ID]++
+		delete(require, attr.ID)
+		if err := v.ValidateAttribute(ctx, &attr); err != nil {
+			return err
+		}
+
+		valid[i] = attr
+	}
+
+	if len(require) > 0 {
+		return fmt.Errorf("missing required attributes: %v", mapx.Keys(require))
+	}
+
+	// Now do a card check
+
+	for _, attr := range valid {
+		schema, err := v.store.GetAttributeSchema(ctx, attr.ID)
+		if err != nil {
+			return fmt.Errorf("schema not found for attribute %s: %w", attr.ID, err)
+		}
+
+		if !schema.AllowMany && count[attr.ID] > 1 {
+			return fmt.Errorf("attribute %s has multiple values, only one supported", attr.ID)
+		}
+	}
+
+	entity.Attrs = valid
+
 	return nil
 }
 
-func (v *Validator) ValidateAttributes(attrs []Attr) error {
+func (v *Validator) ValidateAttributes(ctx context.Context, attrs []Attr) error {
 	// Check them one-off...
 
-	count := make(map[EntityId]int)
-	for _, attr := range attrs {
+	count := make(map[Id]int)
+	for i, attr := range attrs {
 		count[attr.ID]++
-		if err := v.ValidateAttribute(attr); err != nil {
+		if err := v.ValidateAttribute(ctx, &attr); err != nil {
 			return err
 		}
+
+		attrs[i] = attr
 	}
 
 	// Now do a card check
 
 	for _, attr := range attrs {
-		schema, err := v.store.GetAttributeSchema(attr.ID)
+		schema, err := v.store.GetAttributeSchema(ctx, attr.ID)
 		if err != nil {
 			return fmt.Errorf("schema not found for attribute %s: %w", attr.ID, err)
 		}
@@ -88,53 +177,67 @@ func (v *Validator) ValidateAttributes(attrs []Attr) error {
 }
 
 // ValidateAttribute validates a single attribute against its schema
-func (v *Validator) ValidateAttribute(attr Attr) error {
+func (v *Validator) ValidateAttribute(ctx context.Context, attr *Attr) error {
 	name := attr.ID
 
-	schema, err := v.store.GetAttributeSchema(name)
+	schema, err := v.store.GetAttributeSchema(ctx, name)
 	if err != nil {
 		return fmt.Errorf("schema not found for attribute %s: %w", name, err)
 	}
 
 	// Validate value based on type
 	switch schema.Type {
-	case EntityTypeAny:
+	case TypeAny:
 		// ok
-	case EntityTypeKW, EntityTypeStr:
-		if _, ok := attr.Value.(string); !ok {
-			return fmt.Errorf("attribute %s must be a string (is %T)", name, attr.Value)
+	case TypeKeyword:
+		switch v := attr.Value.Any().(type) {
+		case etypes.Keyword:
+			// Valid
+		case string:
+			if !ValidKeyword(v) {
+				return fmt.Errorf("attribute %s must be a valid keyword", name)
+			}
+
+			attr.Value = KeywordValue(etypes.Keyword(v))
+
+		default:
+			return fmt.Errorf("attribute %s must be a keyword or string, got %T", name, v)
 		}
-	case EntityTypeInt:
+	case TypeStr:
+		if _, ok := attr.Value.Any().(string); !ok {
+			return fmt.Errorf("attribute %s must be a string (is %T)", name, attr.Value.Any())
+		}
+	case TypeInt:
 		// Go's CBOR libraries may unmarshal integers as different types
-		switch v := attr.Value.(type) {
+		switch v := attr.Value.Any().(type) {
 		case int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64:
 			// Valid
 		default:
 			return fmt.Errorf("attribute %s must be an integer, got %T", name, v)
 		}
-	case EntityTypeFloat:
-		switch v := attr.Value.(type) {
+	case TypeFloat:
+		switch v := attr.Value.Any().(type) {
 		case float32, float64:
 			// Valid
 		default:
 			return fmt.Errorf("attribute %s must be a float, got %T", name, v)
 		}
-	case EntityTypeBool:
-		if _, ok := attr.Value.(bool); !ok {
+	case TypeBool:
+		if _, ok := attr.Value.Any().(bool); !ok {
 			return fmt.Errorf("attribute %s must be a boolean", name)
 		}
-	case EntityTypeRef:
-		str, ok := attr.Value.(EntityId)
+	case TypeRef:
+		str, ok := attr.Value.Any().(Id)
 		if !ok {
 			return fmt.Errorf("attribute %s must be a string representing an entity ID", name)
 		}
 		// Check if the referenced entity exists
-		if _, err := v.store.GetEntity(str); err != nil {
+		if _, err := v.store.GetEntity(ctx, str); err != nil {
 			return fmt.Errorf("attribute %s references a non-existent entity: %w", name, err)
 		}
-	case EntityTypeTime:
+	case TypeTime:
 		// Timestamps can be stored as various integer types representing milliseconds since epoch
-		switch v := attr.Value.(type) {
+		switch v := attr.Value.Any().(type) {
 		case int64:
 			// Valid
 		case string:
@@ -148,25 +251,47 @@ func (v *Validator) ValidateAttribute(attr Attr) error {
 		default:
 			return fmt.Errorf("attribute %s must be a timestamp (int64 or RFC3339 string), got %T", name, v)
 		}
-	case EntityTypeEnum:
-		idx := slices.Index(schema.EnumValues, attr.Value)
+	case TypeEnum:
+		idx := slices.IndexFunc(schema.EnumValues, func(e Value) bool {
+			return e.Equal(attr.Value)
+		})
 		if idx == -1 {
 			return fmt.Errorf("attribute %s must be one of %v (was %v)", name, schema.EnumValues, attr.Value)
 		}
-	case EntityTypeArray:
-		tuple, ok := attr.Value.([]any)
+	case TypeArray:
+		tuple, ok := attr.Value.Any().([]any)
 		if !ok {
 			return fmt.Errorf("attribute %s must be an array", name)
 		}
 
 		for i, elem := range tuple {
-			if err := v.validateToType(elem, schema.ElemType); err != nil {
+			if err := v.validateToType(ctx, elem, schema.ElemType); err != nil {
 				return fmt.Errorf("attribute %s[%d]: %w", name, i, err)
 			}
 		}
-	default:
-		// Custom type!
+	case TypeDuration:
+		if attr.Value.Kind() != KindDuration {
+			return fmt.Errorf("attribute %s must be a duration", name)
+		}
 
+	case TypeComponent:
+		if attr.Value.Kind() != KindComponent {
+			return fmt.Errorf("attribute %s must be a component (was %s, %T)", name, attr.Value.Kind(), attr.Value.Any())
+		}
+
+		comp := attr.Value.Component()
+		err := v.ValidateAttributes(ctx, comp.Attrs)
+		if err != nil {
+			return fmt.Errorf("attribute %s must be a valid component: %w", name, err)
+		}
+
+		// Components are not allowed to use Ident, so let's be sure they don't.
+		_, ok := comp.Get(Ident)
+		if ok {
+			return fmt.Errorf("attribute %s (a component) must not have an Ident attribute", name)
+		}
+
+	default:
 		return fmt.Errorf("unknown attribute type %s for attribute %s", schema.Type, name)
 	}
 
@@ -196,13 +321,11 @@ func (v *Validator) ValidateAttribute(attr Attr) error {
 		out, _, err := run.Eval(map[string]any{
 			"entity": attr.ID,
 			"attr":   attr.ID,
-			"value":  attr.Value,
+			"value":  attr.Value.Any(),
 		})
 		if err != nil {
 			return fmt.Errorf("failed to run check program for attribute %s: %w", name, err)
 		}
-
-		spew.Dump(out)
 
 		if out != types.True {
 			return fmt.Errorf("check failed for attribute %s: %v", name, out)
@@ -213,14 +336,14 @@ func (v *Validator) ValidateAttribute(attr Attr) error {
 }
 
 // ValidateAttribute validates a single attribute against its schema
-func (v *Validator) validateToType(val any, typ EntityId) error {
+func (v *Validator) validateToType(ctx context.Context, val any, typ Id) error {
 	// Validate value based on type
 	switch typ {
-	case EntityTypeKW, EntityTypeStr:
+	case TypeKeyword, TypeStr:
 		if _, ok := val.(string); !ok {
 			return fmt.Errorf("value must be a string")
 		}
-	case EntityTypeInt:
+	case TypeInt:
 		// Go's CBOR libraries may unmarshal integers as different types
 		switch v := val.(type) {
 		case int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64:
@@ -228,27 +351,27 @@ func (v *Validator) validateToType(val any, typ EntityId) error {
 		default:
 			return fmt.Errorf("value must be an integer, got %T", v)
 		}
-	case EntityTypeFloat:
+	case TypeFloat:
 		switch v := val.(type) {
 		case float32, float64:
 			// Valid
 		default:
 			return fmt.Errorf("value must be a float, got %T", v)
 		}
-	case EntityTypeBool:
+	case TypeBool:
 		if _, ok := val.(bool); !ok {
 			return fmt.Errorf("value must be a boolean")
 		}
-	case EntityTypeRef:
-		str, ok := val.(EntityId)
+	case TypeRef:
+		str, ok := val.(Id)
 		if !ok {
 			return fmt.Errorf("value must be a string representing an entity ID")
 		}
 		// Check if the referenced entity exists
-		if _, err := v.store.GetEntity(str); err != nil {
+		if _, err := v.store.GetEntity(ctx, str); err != nil {
 			return fmt.Errorf("value references a non-existent entity: %w", err)
 		}
-	case EntityTypeTime:
+	case TypeTime:
 		// Timestamps can be stored as various integer types representing milliseconds since epoch
 		switch v := val.(type) {
 		case int64:

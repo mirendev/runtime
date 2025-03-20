@@ -13,7 +13,7 @@ import (
 type Runtime struct{}
 
 var (
-	arm_containerd = "https://github.com/containerd/containerd/releases/download/v2.0.0/containerd-2.0.0-linux-arm64.tar.gz"
+	arm_containerd = "https://github.com/containerd/containerd/releases/download/v2.0.4/containerd-2.0.4-linux-arm64.tar.gz"
 	arm_buildkit   = "https://github.com/moby/buildkit/releases/download/v0.17.1/buildkit-v0.17.1.linux-arm64.tar.gz"
 	arm_runc       = "https://github.com/opencontainers/runc/releases/download/v1.2.2/runc.arm64"
 	arm_runsc      = "https://storage.googleapis.com/gvisor/releases/release/latest/aarch64/runsc"
@@ -21,7 +21,7 @@ var (
 )
 
 var (
-	amd_containerd = "https://github.com/containerd/containerd/releases/download/v2.0.0/containerd-2.0.0-linux-amd64.tar.gz"
+	amd_containerd = "https://github.com/containerd/containerd/releases/download/v2.0.4/containerd-2.0.4-linux-amd64.tar.gz"
 	amd_buildkit   = "https://github.com/moby/buildkit/releases/download/v0.17.1/buildkit-v0.17.1.linux-amd64.tar.gz"
 	amd_runc       = "https://github.com/opencontainers/runc/releases/download/v1.2.2/runc.amd64"
 	amd_runsc      = "https://storage.googleapis.com/gvisor/releases/release/latest/x86_64/runsc"
@@ -62,9 +62,32 @@ func (m *Runtime) WithServices(dir *dagger.Directory) *dagger.Container {
 		WithExposedPort(5432).
 		AsService()
 
+	etcd := dag.Container().
+		From("bitnami/etcd:3.5.19").
+		WithEnvVariable("ALLOW_NONE_AUTHENTICATION", "yes").
+		WithEnvVariable("ETCD_ADVERTISE_CLIENT_URLS", "http://etcd:2379").
+		WithExposedPort(2379).
+		//WithExposedPort(2380).
+		AsService()
+
 	return m.BuildEnv(dir).
 		WithServiceBinding("clickhouse", ch).
-		WithServiceBinding("postgres", pg)
+		WithServiceBinding("postgres", pg).
+		WithServiceBinding("etcd", etcd)
+}
+
+func (m *Runtime) Etcd() *dagger.Container {
+	etcd := dag.Container().
+		From("bitnami/etcd:3.5.19").
+		WithEnvVariable("ALLOW_NONE_AUTHENTICATION", "yes").
+		WithEnvVariable("ETCD_ADVERTISE_CLIENT_URLS", "http://etcd:2379").
+		WithExposedPort(2379).
+		//WithExposedPort(2380).
+		AsService()
+
+	return dag.Container().
+		WithServiceBinding("etcd", etcd).
+		Terminal()
 }
 
 func (m *Runtime) BuildEnv(dir *dagger.Directory) *dagger.Container {
@@ -76,7 +99,6 @@ func (m *Runtime) BuildEnv(dir *dagger.Directory) *dagger.Container {
 		WithEnvVariable("GOCACHE", "/go/build-cache").
 		WithExec([]string{"apt-get", "update"}).
 		WithExec([]string{"apt-get", "install", "-y", "iptables", "bash"}).
-		WithExec([]string{"go", "install", "gotest.tools/gotestsum@latest"}).
 		WithFile("/upstream/containerd.tar.gz", dag.HTTP(containerd)).
 		WithFile("/upstream/buildkit.tar.gz", dag.HTTP(buildkit)).
 		WithFile("/upstream/runc", dag.HTTP(runc), dagger.ContainerWithFileOpts{
@@ -116,10 +138,13 @@ func (m *Runtime) Test(
 	tests string,
 	// +optional
 	count int,
+	// +optional
+	verbose bool,
 ) (string, error) {
 	w := m.WithServices(dir).
 		WithDirectory("/src", dir).
 		WithWorkdir("/src").
+		WithExec([]string{"go", "install", "./pkg/gotestsum"}).
 		WithMountedCache("/data", dag.CacheVolume("containerd"))
 
 	if tests == "" {
@@ -140,6 +165,10 @@ func (m *Runtime) Test(
 		if count > 0 {
 			//args = append(args, "--")
 			args = append(args, "-count", strconv.Itoa(count))
+		}
+
+		if verbose {
+			w = w.WithEnvVariable("VERBOSE", "1")
 		}
 
 		w = w.WithExec(args, dagger.ContainerWithExecOpts{
