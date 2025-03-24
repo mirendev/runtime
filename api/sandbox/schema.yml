@@ -1,5 +1,7 @@
 domain: dev.miren.sandbox
 version: v1alpha
+kinds:
+  - sandbox
 attrs:
   label:
     type: string
@@ -49,6 +51,9 @@ attrs:
       command:
         type: string
         doc: Command to run in the container
+      directory:
+        type: string
+        doc: Directory to start in
       env:
         type: string
         doc: Environment variable for the container

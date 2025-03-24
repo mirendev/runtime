@@ -21,6 +21,7 @@ type Generator struct {
 	Interfaces []*DescInterface
 
 	importedGenerators map[string]*Generator
+	importedPackages   map[string][]string
 
 	typeInfo map[string]typeInfo
 }
@@ -29,12 +30,14 @@ func NewGenerator() (*Generator, error) {
 	return &Generator{
 		typeInfo:           make(map[string]typeInfo),
 		importedGenerators: make(map[string]*Generator),
+		importedPackages:   make(map[string][]string),
 	}, nil
 }
 
 type Import struct {
-	Path   string `yaml:"path"`
-	Import string `yaml:"import"`
+	Path   string   `yaml:"path"`
+	Import string   `yaml:"import"`
+	Types  []string `yaml:"types"`
 }
 
 func (g *Generator) Read(path string) error {
@@ -76,19 +79,23 @@ func (g *Generator) Read(path string) error {
 
 func (g *Generator) processImports(src string) error {
 	for name, path := range g.Imports {
-		relPath := filepath.Join(src, "..", path.Path)
+		if path.Path == "" {
+			g.importedPackages[name] = path.Types
+		} else {
+			relPath := filepath.Join(src, "..", path.Path)
 
-		sg, err := NewGenerator()
-		if err != nil {
-			return err
+			sg, err := NewGenerator()
+			if err != nil {
+				return err
+			}
+
+			err = sg.Read(relPath)
+			if err != nil {
+				return err
+			}
+
+			g.importedGenerators[name] = sg
 		}
-
-		err = sg.Read(relPath)
-		if err != nil {
-			return err
-		}
-
-		g.importedGenerators[name] = sg
 	}
 
 	return nil
@@ -104,6 +111,15 @@ func (g *Generator) ti(name string) typeInfo {
 	if dot != -1 {
 		imp, ok := g.importedGenerators[name[:dot]]
 		if !ok {
+			x, ok := g.importedPackages[name[:dot]]
+			if ok {
+				for _, t := range x {
+					if t == name[dot+1:] {
+						return typeInfo{}
+					}
+				}
+			}
+
 			panic("missing import for " + name[:dot])
 		}
 
@@ -138,7 +154,7 @@ func (g *Generator) isImported(name string) bool {
 }
 
 func capitalize(s string) string {
-	return strings.ToTitle(s[:1]) + s[1:]
+	return toCamal(s)
 }
 
 func toSnake(s string) string {
@@ -1815,7 +1831,7 @@ func (g *Generator) generateInterfaces(f *j.File) error {
 						).Error().Block(
 							j.Return(j.Id("t").Dot(methodName).Call(
 								j.Id("ctx"),
-								j.Op("&").Add(i.typeName(expName+capitalize(m.Name))).Values(j.Id("Call").Op(":").Id("call")),
+								j.Op("&").Add(i.typeName(expName+toCamal(m.Name))).Values(j.Id("Call").Op(":").Id("call")),
 							)))
 						g.Line()
 					})

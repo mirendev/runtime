@@ -49,10 +49,10 @@ type AttributeSchema struct {
 
 // Entity represents an entity with a set of attributes
 type Entity struct {
-	ID        string `json:"id" cbor:"id"`
-	Revision  int    `json:"revision,omitempty" cbor:"revision,omitempty"`
-	CreatedAt int64  `json:"created_at" cbor:"created_at"`
-	UpdatedAt int64  `json:"updated_at" cbor:"updated_at"`
+	ID        types.Id `json:"id" cbor:"id"`
+	Revision  int64    `json:"revision,omitempty" cbor:"revision,omitempty"`
+	CreatedAt int64    `json:"created_at" cbor:"created_at"`
+	UpdatedAt int64    `json:"updated_at" cbor:"updated_at"`
 
 	Attrs []Attr `json:"attrs" cbor:"attrs"`
 }
@@ -60,7 +60,11 @@ type Entity struct {
 type AttrGetter interface {
 	Get(name Id) (Attr, bool)
 	GetAll(name Id) []Attr
+
+	AllAttrs() []Attr
 }
+
+var _ AttrGetter = (*Entity)(nil)
 
 func MustGet(e AttrGetter, name Id) Attr {
 	attr, ok := e.Get(name)
@@ -100,9 +104,15 @@ func (e *Entity) GetAll(name Id) []Attr {
 	return attrs
 }
 
+func (e *Entity) AllAttrs() []Attr {
+	return e.Attrs
+}
+
 type EntityComponent struct {
 	Attrs []Attr `json:"attrs" cbor:"attrs"`
 }
+
+var _ AttrGetter = (*EntityComponent)(nil)
 
 func (e *EntityComponent) Get(name Id) (Attr, bool) {
 	for _, attr := range e.Attrs {
@@ -123,6 +133,10 @@ func (e *EntityComponent) GetAll(name Id) []Attr {
 	}
 
 	return attrs
+}
+
+func (e *EntityComponent) AllAttrs() []Attr {
+	return e.Attrs
 }
 
 type EntityStore interface {
@@ -229,11 +243,11 @@ func (e *Entity) Fixup() error {
 		if ident, ok := e.Get(Ident); ok {
 			switch id := ident.Value.Any().(type) {
 			case Id:
-				e.ID = string(id)
-			case string:
 				e.ID = id
+			case string:
+				e.ID = Id(id)
 			case types.Keyword:
-				e.ID = string(id)
+				e.ID = Id(id)
 			default:
 				panic(fmt.Sprintf("invalid entity ident (expected EntityId): %v (%T)", ident.Value.Any(), ident.Value))
 			}
@@ -241,7 +255,7 @@ func (e *Entity) Fixup() error {
 	}
 
 	if e.ID == "" {
-		e.ID = uuid.New().String()
+		e.ID = Id(uuid.New().String())
 	}
 
 	return nil
@@ -252,6 +266,14 @@ var (
 	decoder cbor.DecMode
 	tags    = cbor.NewTagSet()
 )
+
+func Encode(v any) ([]byte, error) {
+	return encoder.Marshal(v)
+}
+
+func Decode(data []byte, v any) error {
+	return decoder.Unmarshal(data, v)
+}
 
 func init() {
 	tags.Add(cbor.TagOptions{

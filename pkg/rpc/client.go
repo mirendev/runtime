@@ -86,6 +86,8 @@ func (c *Client) NewCapability(i *Interface, lower any) *Capability {
 		}
 
 		return capa
+	} else if c.localClient != nil {
+		return c.localClient.NewCapability(i)
 	} else {
 		return c.State.server.assignCapability(i, c.capa.Issuer, c.serverObservedAddress, "")
 	}

@@ -43,7 +43,7 @@ func TestEtcdStore_CreateEntity(t *testing.T) {
 	))
 	require.NoError(t, err)
 
-	require.Equal(t, "test/addresses", e.ID)
+	require.Equal(t, Id("test/addresses"), e.ID)
 
 	tests := []struct {
 		name       string

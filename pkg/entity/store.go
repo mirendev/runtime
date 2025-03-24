@@ -22,10 +22,14 @@ type EtcdStore struct {
 }
 
 type Store interface {
+	GetEntity(ctx context.Context, id Id) (*Entity, error)
 	CreateEntity(ctx context.Context, attributes []Attr) (*Entity, error)
-	UpdateEntity(ctx context.Context, id Id, attributes []Attr) (*Entity, error)
 	DeleteEntity(ctx context.Context, id Id) error
+	WatchIndex(ctx context.Context, attr Attr) (clientv3.WatchChan, error)
+	ListIndex(ctx context.Context, attr Attr) ([]Id, error)
 }
+
+var ErrNotFound = errors.New("entity not found")
 
 var _ Store = (*EtcdStore)(nil)
 
@@ -72,6 +76,8 @@ func (s *EtcdStore) CreateEntity(ctx context.Context, attributes []Attr) (*Entit
 		return nil, err
 	}
 
+	var collections []Attr
+
 	for _, attr := range entity.Attrs {
 		schema, err := s.GetAttributeSchema(ctx, attr.ID)
 		if err != nil {
@@ -79,10 +85,7 @@ func (s *EtcdStore) CreateEntity(ctx context.Context, attributes []Attr) (*Entit
 		}
 
 		if schema.Index {
-			err := s.addToCollection(entity, attr.CAS())
-			if err != nil {
-				return nil, err
-			}
+			collections = append(collections, attr)
 		}
 	}
 
@@ -91,7 +94,7 @@ func (s *EtcdStore) CreateEntity(ctx context.Context, attributes []Attr) (*Entit
 		return nil, fmt.Errorf("failed to marshal entity: %w", err)
 	}
 
-	key := s.buildKey(entity.ID)
+	key := s.buildKey(entity.ID.String())
 
 	// Use Txn to check that the key doesn't exist yet
 	txnResp, err := s.client.Txn(ctx).
@@ -107,7 +110,16 @@ func (s *EtcdStore) CreateEntity(ctx context.Context, attributes []Attr) (*Entit
 		return nil, fmt.Errorf("creating %s: %w", entity.ID, ErrEntityAlreadyExists)
 	}
 
-	entity.Revision = int(txnResp.Header.Revision)
+	entity.Revision = txnResp.Header.Revision
+
+	// Gotta be sure we add to collections AFTER creating the entity so that
+	// fast readers don't see the entity before it's fully created
+	for _, attr := range collections {
+		err := s.addToCollection(entity, attr.CAS())
+		if err != nil {
+			return nil, err
+		}
+	}
 
 	return entity, nil
 }
@@ -120,7 +132,7 @@ func (s *EtcdStore) saveEntity(ctx context.Context, entity *Entity) error {
 		return fmt.Errorf("failed to marshal entity: %w", err)
 	}
 
-	key := s.buildKey(entity.ID)
+	key := s.buildKey(entity.ID.String())
 
 	// Use Txn to check that the key doesn't exist yet
 	txnResp, err := s.client.Txn(ctx).
@@ -141,7 +153,7 @@ func (s *EtcdStore) saveEntity(ctx context.Context, entity *Entity) error {
 
 // GetEntity implements Store interface
 func (s *EtcdStore) GetEntity(ctx context.Context, id Id) (*Entity, error) {
-	key := s.buildKey(string(id))
+	key := s.buildKey(id.String())
 
 	resp, err := s.client.Get(ctx, key)
 	if err != nil {
@@ -154,8 +166,8 @@ func (s *EtcdStore) GetEntity(ctx context.Context, id Id) (*Entity, error) {
 
 	var entity Entity
 
-	entity.ID = string(id)
-	entity.Revision = int(resp.Kvs[0].Version)
+	entity.ID = id
+	entity.Revision = resp.Kvs[0].ModRevision
 
 	err = decoder.Unmarshal(resp.Kvs[0].Value, &entity)
 	if err != nil {
@@ -192,7 +204,7 @@ func (s *EtcdStore) UpdateEntity(ctx context.Context, id Id, attributes []Attr) 
 		return nil, fmt.Errorf("failed to serialize entity: %w", err)
 	}
 
-	key := s.buildKey(entity.ID)
+	key := s.buildKey(entity.ID.String())
 
 	// Use Txn to check that the key exists before updating
 	txnResp, err := s.client.Txn(ctx).
@@ -208,14 +220,33 @@ func (s *EtcdStore) UpdateEntity(ctx context.Context, id Id, attributes []Attr) 
 		return nil, errors.New("entity does not exist")
 	}
 
-	entity.Revision = int(txnResp.Header.Revision)
+	entity.Revision = txnResp.Header.Revision
 
 	return entity, nil
 }
 
 // DeleteEntity implements Store interface
 func (s *EtcdStore) DeleteEntity(ctx context.Context, id Id) error {
-	key := s.buildKey(string(id))
+	entity, err := s.GetEntity(ctx, id)
+	if err != nil {
+		return nil
+	}
+
+	for _, attr := range entity.Attrs {
+		schema, err := s.GetAttributeSchema(ctx, attr.ID)
+		if err != nil {
+			return err
+		}
+
+		if schema.Index {
+			err := s.deleteFromCollection(entity, attr.CAS())
+			if err != nil {
+				return fmt.Errorf("failed to delete entity from collection: %w", err)
+			}
+		}
+	}
+
+	key := s.buildKey(id.String())
 
 	// Use Txn to check that the key exists before deleting
 	txnResp, err := s.client.Txn(ctx).
@@ -269,17 +300,49 @@ func (s *EtcdStore) addToCollection(entity *Entity, collection string) error {
 	ctx := context.Background()
 	key = s.buildKey(fmt.Sprintf("collections/%s/%s", colKey, key))
 
-	txnResp, err := s.client.Txn(ctx).
-		If(clientv3.Compare(clientv3.CreateRevision(key), "=", 0)).
-		Then(clientv3.OpPut(key, entity.ID)).
-		Commit()
-	if err != nil {
-		return err
-	}
+	/*
+		txnResp, err := s.client.Txn(ctx).
+			If(clientv3.Compare(clientv3.CreateRevision(key), "=", 0)).
+			Then(clientv3.OpPut(key, entity.ID.String())).
+			Commit()
+		if err != nil {
+			return err
+		}
 
-	if !txnResp.Succeeded {
-		return fmt.Errorf("entity already exists: %s", key)
-	}
+		if !txnResp.Succeeded {
+			return fmt.Errorf("entity already exists: %s", key)
+		}
+	*/
+
+	_, err := s.client.Put(ctx, key, entity.ID.String())
+	return err
+
+	return nil
+}
+
+func (s *EtcdStore) deleteFromCollection(entity *Entity, collection string) error {
+	key := base58.Encode([]byte(entity.ID))
+	colKey := tr.Replace(collection)
+
+	ctx := context.Background()
+	key = s.buildKey(fmt.Sprintf("collections/%s/%s", colKey, key))
+
+	/*
+		txnResp, err := s.client.Txn(ctx).
+			If(clientv3.Compare(clientv3.CreateRevision(key), "=", 0)).
+			Then(clientv3.OpPut(key, entity.ID.String())).
+			Commit()
+		if err != nil {
+			return err
+		}
+
+		if !txnResp.Succeeded {
+			return fmt.Errorf("entity already exists: %s", key)
+		}
+	*/
+
+	_, err := s.client.Delete(ctx, key)
+	return err
 
 	return nil
 }
@@ -325,7 +388,7 @@ func (s *EtcdStore) WatchIndex(ctx context.Context, attr Attr) (clientv3.WatchCh
 		return nil, err
 	}
 
-	return s.client.Watch(ctx, prefix, clientv3.WithPrefix()), nil
+	return s.client.Watch(ctx, prefix, clientv3.WithPrefix(), clientv3.WithPrevKV()), nil
 }
 
 var tr = strings.NewReplacer("/", "_", ":", "_")

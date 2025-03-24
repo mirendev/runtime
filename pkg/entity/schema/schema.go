@@ -1,6 +1,7 @@
 package schema
 
 import (
+	"context"
 	"sync"
 
 	"miren.dev/runtime/pkg/entity"
@@ -56,6 +57,39 @@ func Register(domain string, version string, fn func(schema *SchemaBuilder)) {
 	defaultRegistry.schemas[domain] = schema
 }
 
+func (b *SchemaBuilder) Apply(ctx context.Context, store entity.Store) error {
+	for _, eid := range b.singletons {
+		_, err := store.CreateEntity(ctx, entity.Attrs(
+			entity.Ident, types.Keyword(eid),
+		))
+		if err != nil {
+			return err
+		}
+	}
+
+	for _, e := range b.attrs {
+		_, err := store.CreateEntity(ctx, e.Attrs)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func Apply(ctx context.Context, store entity.Store) error {
+	//defaultRegistry.mu.Lock()
+	//defer defaultRegistry.mu.Unlock()
+
+	for _, schema := range defaultRegistry.schemas {
+		if err := schema.Apply(ctx, store); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
 func (b *SchemaBuilder) Id(name string) entity.Id {
 	eid := entity.Id(b.domain + "/" + name)
 	if _, exists := b.attrs[eid]; !exists {
@@ -69,6 +103,7 @@ type attrBuilder struct {
 	card     entity.Id
 	doc      string
 	required bool
+	indexed  bool
 
 	choises []entity.Id
 
@@ -89,6 +124,10 @@ func Doc(doc string) AttrOption {
 
 func Required(b *attrBuilder) {
 	b.required = true
+}
+
+func Indexed(b *attrBuilder) {
+	b.indexed = true
 }
 
 func Choices(choices ...entity.Id) AttrOption {
@@ -117,20 +156,30 @@ func (s *SchemaBuilder) Attr(name string, typ entity.Id, opts ...AttrOption) ent
 		opt(&ab)
 	}
 
-	s.attrs[eid] = &entity.Entity{
+	ent := &entity.Entity{
 		Attrs: entity.Attrs(
-			entity.Ident, types.Keyword(name),
-			entity.Doc, "Attribute "+name,
+			entity.Ident, types.Keyword(eid),
+			entity.Doc, ab.doc,
 			entity.Type, typ,
 			entity.Cardinality, ab.card,
 		),
 	}
+
+	if ab.indexed {
+		ent.Attrs = append(ent.Attrs, entity.Attr{ID: entity.Index, Value: entity.BoolValue(true)})
+	}
+
+	s.attrs[eid] = ent
 
 	return eid
 }
 
 func (s *SchemaBuilder) String(name string, opts ...AttrOption) entity.Id {
 	return s.Attr(name, entity.TypeStr, opts...)
+}
+
+func (s *SchemaBuilder) Keyword(name string, opts ...AttrOption) entity.Id {
+	return s.Attr(name, entity.TypeKeyword, opts...)
 }
 
 func (s *SchemaBuilder) Bool(name string, opts ...AttrOption) entity.Id {

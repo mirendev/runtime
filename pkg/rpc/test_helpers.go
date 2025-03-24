@@ -26,6 +26,15 @@ func (l *localCall) NewCapability(i *Interface) *Capability {
 	}
 }
 
+func (l *localClient) NewCapability(i *Interface) *Capability {
+	oid := OID(idgen.Gen("lcap"))
+	l.caps[oid] = i
+
+	return &Capability{
+		OID: oid,
+	}
+}
+
 func (l *localCall) NewClient(capa *Capability) *Client {
 	return &Client{
 		oid: capa.OID,

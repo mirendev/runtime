@@ -8,8 +8,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
+	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/containerd/containerd/namespaces"
 	containerd "github.com/containerd/containerd/v2/client"
@@ -17,13 +20,20 @@ import (
 	"github.com/containerd/containerd/v2/pkg/oci"
 	"github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/pkg/errors"
+	"golang.org/x/sys/unix"
 	"gvisor.dev/gvisor/pkg/shim/v1/runtimeoptions"
 	"miren.dev/runtime/network"
 	"miren.dev/runtime/observability"
+	"miren.dev/runtime/pkg/containerdx"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/netdb"
 
 	"miren.dev/runtime/api/sandbox/v1alpha"
+)
+
+const (
+	// defaultSandboxOOMAdj is default omm adj for sandbox container. (kubernetes#47938).
+	defaultSandboxOOMAdj = -998
 )
 
 const sandboxImage = "registry.k8s.io/pause:3.8"
@@ -85,7 +95,6 @@ func (c *SandboxController) setupRunscConfig() error {
 }
 
 func SetupRunsc(dir string) (string, string) {
-
 	path := filepath.Join(dir, "runsc-entry")
 	pic := filepath.Join(dir, "pod-init-config.json")
 
@@ -176,8 +185,224 @@ func (c *SandboxController) Close() error {
 	return nil
 }
 
-func (c *SandboxController) Create(ctx context.Context, co *v1alpha.Sandbox) error {
-	c.Log.Debug("creating container", "id", co.ID)
+const (
+	sandboxVersionLabel = "runtime.computer/sandbox-version"
+	sandboxEntityLabel  = "runtime.computer/entity-id"
+)
+
+const (
+	notFound = iota
+	same
+	differentVersion
+)
+
+// canUpdateInPlace checks if the sandbox can be updated in place without destroying it.
+func (c *SandboxController) canUpdateInPlace(ctx context.Context, sb *v1alpha.Sandbox, meta *entity.Meta) (bool, *v1alpha.Sandbox, error) {
+	// We support the ability to update a subnet of elements of the sandbox while running.
+	// For everything else, we destroy it and rebuild it fully with Create.
+
+	oldMeta, err := c.readEntity(ctx, sb.ID)
+	if err != nil {
+		c.Log.Error("failed to read existing entity, trying with new definition", "id", sb.ID, "err", err)
+		oldMeta = meta
+	}
+
+	var oldSb v1alpha.Sandbox
+	oldSb.Decode(oldMeta)
+
+	// TODO: handle adding a new container without destroying the sandbox first.
+	if len(sb.Container) != len(oldSb.Container) {
+		return false, nil, nil
+	}
+
+	for i, container := range sb.Container {
+		if container.Name != oldSb.Container[i].Name {
+			return false, nil, nil
+		}
+
+		if container.Image != oldSb.Container[i].Image {
+			return false, nil, nil
+		}
+
+		if container.Command != oldSb.Container[i].Command {
+			return false, nil, nil
+		}
+
+		if !slices.Equal(container.Env, oldSb.Container[i].Env) {
+			return false, nil, nil
+		}
+
+		if !slices.Equal(container.Mount, oldSb.Container[i].Mount) {
+			return false, nil, nil
+		}
+
+		if !slices.Equal(container.Port, oldSb.Container[i].Port) {
+			return false, nil, nil
+		}
+
+		if container.Privileged != oldSb.Container[i].Privileged {
+			return false, nil, nil
+		}
+
+		if container.OomScore != oldSb.Container[i].OomScore {
+			return false, nil, nil
+		}
+	}
+
+	return true, &oldSb, nil
+}
+
+func (c *SandboxController) containerId(id entity.Id) string {
+	cid := id.String()
+	cid = strings.TrimPrefix(cid, "sandbox/")
+	return "sandbox." + cid
+}
+
+func (c *SandboxController) checkSandbox(ctx context.Context, co *v1alpha.Sandbox, meta *entity.Meta) (int, error) {
+	c.Log.Debug("checking for existing sandbox", "id", co.ID)
+
+	ctx = namespaces.WithNamespace(ctx, c.Namespace)
+
+	cont, err := c.CC.LoadContainer(ctx, c.containerId(co.ID))
+	if err != nil {
+		return notFound, nil
+	}
+
+	labels, err := cont.Labels(ctx)
+	if err != nil {
+		return notFound, err
+	}
+
+	if _, ok := labels[sandboxVersionLabel]; !ok {
+		c.Log.Debug("sandbox version label not found, assuming new sandbox")
+		return differentVersion, nil
+	}
+
+	if labels[sandboxVersionLabel] != fmt.Sprint(meta.Revision) {
+		c.Log.Debug("sandbox version mismatch", "expected", meta.Revision, "found", labels[sandboxVersionLabel])
+		return differentVersion, nil
+	}
+
+	return same, nil
+}
+
+func (c *SandboxController) saveEntity(ctx context.Context, sb *v1alpha.Sandbox, meta *entity.Meta) error {
+	path := c.sandboxPath(sb, "entity.cbor")
+
+	f, err := os.Create(path)
+	if err != nil {
+		return fmt.Errorf("failed to create entity file: %w", err)
+	}
+
+	defer f.Close()
+
+	data, err := entity.Encode(meta)
+	if err != nil {
+		return fmt.Errorf("failed to encode entity: %w", err)
+	}
+
+	_, err = f.Write(data)
+	if err != nil {
+		return fmt.Errorf("failed to write entity file: %w", err)
+	}
+
+	return nil
+}
+
+func (c *SandboxController) readEntity(ctx context.Context, id entity.Id) (*entity.Meta, error) {
+	path := filepath.Join(c.Tempdir, "containerd", id.PathSafe(), "entity.cbor")
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, fmt.Errorf("entity file not found: %w", err)
+		}
+
+		return nil, fmt.Errorf("failed to open entity file: %w", err)
+	}
+
+	var meta entity.Meta
+
+	err = entity.Decode(data, &meta)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decode entity file: %w", err)
+	}
+
+	return &meta, nil
+}
+
+func (c *SandboxController) updateSandbox(ctx context.Context, sb *v1alpha.Sandbox, meta *entity.Meta) error {
+	// We support the ability to update a subnet of elements of the sandbox while running.
+	// For everything else, we destroy it and rebuild it fully with Create.
+
+	canUpdate, oldSb, err := c.canUpdateInPlace(ctx, sb, meta)
+	if err != nil {
+		c.Log.Error("failed to check if sandbox can be updated in place", "err", err)
+	} else if canUpdate {
+
+		cont, err := c.CC.LoadContainer(ctx, c.containerId(sb.ID))
+		if err != nil {
+			return fmt.Errorf("failed to load existing sandbox: %w", err)
+		}
+
+		if !slices.Equal(oldSb.Label, sb.Label) {
+			labels, err := cont.Labels(ctx)
+			if err != nil {
+				return fmt.Errorf("failed to get container labels: %w", err)
+			}
+
+			for _, lbl := range oldSb.Label {
+				k, _, ok := strings.Cut(lbl, "=")
+				if ok {
+					delete(labels, strings.TrimSpace(k))
+				}
+			}
+
+			for _, lbl := range sb.Label {
+				k, v, ok := strings.Cut(lbl, "=")
+				if ok {
+					labels[strings.TrimSpace(k)] = strings.TrimSpace(v)
+				}
+			}
+
+			_, err = cont.SetLabels(ctx, labels)
+			if err != nil {
+				return err
+			}
+		}
+
+		return c.saveEntity(ctx, sb, meta)
+	}
+
+	c.Log.Debug("destroying existing sandbox to recreate it")
+
+	err = c.Delete(ctx, meta.ID)
+	if err != nil {
+		return fmt.Errorf("failed to delete existing sandbox: %w", err)
+	}
+
+	return c.createSandbox(ctx, sb, meta)
+}
+
+func (c *SandboxController) Create(ctx context.Context, co *v1alpha.Sandbox, meta *entity.Meta) error {
+	searchRes, err := c.checkSandbox(ctx, co, meta)
+	if err != nil {
+		c.Log.Error("error checking sandbox, proceeding with create", "err", err)
+	} else {
+		switch searchRes {
+		case same:
+			c.Log.Debug("sandbox already exists, skipping create")
+			return nil
+		case differentVersion:
+			return c.updateSandbox(ctx, co, meta)
+		}
+	}
+
+	return c.createSandbox(ctx, co, meta)
+}
+
+func (c *SandboxController) createSandbox(ctx context.Context, co *v1alpha.Sandbox, meta *entity.Meta) error {
+	c.Log.Debug("creating sandbox", "id", co.ID)
 
 	ctx = namespaces.WithNamespace(ctx, c.Namespace)
 
@@ -186,12 +411,14 @@ func (c *SandboxController) Create(ctx context.Context, co *v1alpha.Sandbox) err
 		return fmt.Errorf("failed to allocate network: %w", err)
 	}
 
-	opts, err := c.buildSpec(ctx, co, ep)
+	opts, err := c.buildSpec(ctx, co, ep, meta)
 	if err != nil {
 		return fmt.Errorf("failed to build container spec: %w", err)
 	}
 
-	container, err := c.CC.NewContainer(ctx, co.ID, opts...)
+	cid := c.containerId(co.ID)
+
+	container, err := c.CC.NewContainer(ctx, cid, opts...)
 	if err != nil {
 		return errors.Wrapf(err, "failed to create container %s", co.ID)
 	}
@@ -223,7 +450,7 @@ func (c *SandboxController) Create(ctx context.Context, co *v1alpha.Sandbox) err
 
 		go func() {
 			defer c.exitMonitor()
-			err := c.ResourcesMonitor.Monitor(c.topCtx, co.ID, cgroupPath)
+			err := c.ResourcesMonitor.Monitor(c.topCtx, cid, cgroupPath)
 			if err != nil {
 				c.Log.Error("failed to monitor container resources", "id", co.ID, "err", err)
 			}
@@ -237,65 +464,7 @@ func (c *SandboxController) Create(ctx context.Context, co *v1alpha.Sandbox) err
 		return err
 	}
 
-	return nil
-}
-
-func (c *SandboxController) Delete(ctx context.Context, entity *entity.Entity) error {
-	id := entity.ID
-
-	ctx = namespaces.WithNamespace(ctx, c.Namespace)
-
-	container, err := c.CC.LoadContainer(ctx, id)
-	if err != nil {
-		return err
-	}
-
-	labels, err := container.Labels(ctx)
-	if err != nil {
-		return err
-	}
-
-	task, err := container.Task(ctx, nil)
-	if err != nil {
-		return err
-	}
-
-	if task != nil {
-		_, err = task.Delete(ctx, containerd.WithProcessKill)
-		if err != nil {
-			return err
-		}
-	}
-
-	err = container.Delete(ctx, containerd.WithSnapshotCleanup)
-	if err != nil {
-		return err
-	}
-
-	for l, v := range labels {
-		if strings.HasPrefix(l, "runtime.computer/ip") {
-			addr, err := netip.ParseAddr(v)
-			if err == nil {
-				err = c.Subnet.ReleaseAddr(addr)
-				if err != nil {
-					c.Log.Error("failed to release IP", "addr", addr, "err", err)
-				}
-			} else {
-				c.Log.Error("failed to parse IP", "addr", v, "err", err)
-			}
-
-			c.Log.Debug("released IP", "addr", addr)
-		}
-	}
-
-	// Ignore errors, as the directory might not exist if the container was
-	// cleared up elsewhere.
-	tmpDir := filepath.Join(c.Tempdir, "containerd", id)
-	_ = os.RemoveAll(tmpDir)
-
-	c.Log.Info("container stopped", "id", id)
-
-	return nil
+	return c.saveEntity(ctx, co, meta)
 }
 
 func (c *SandboxController) allocateNetwork(
@@ -353,6 +522,7 @@ func (c *SandboxController) buildSpec(
 	ctx context.Context,
 	co *v1alpha.Sandbox,
 	ep *network.EndpointConfig,
+	meta *entity.Meta,
 ) (
 	[]containerd.NewContainerOpts,
 	error,
@@ -391,13 +561,14 @@ func (c *SandboxController) buildSpec(
 		}
 	}
 
+	lbls[sandboxVersionLabel] = strconv.FormatInt(meta.Revision, 10)
+	lbls[sandboxEntityLabel] = co.ID.String()
+
 	//if config.StaticDir != "" {
 	//lbls["runtime.computer/static_dir"] = config.StaticDir
 	//}
 
-	id := co.ID
-
-	tmpDir := filepath.Join(c.Tempdir, "containerd", id)
+	tmpDir := filepath.Join(c.Tempdir, "containerd", co.ID.PathSafe())
 	os.MkdirAll(tmpDir, 0755)
 
 	resolvePath := c.sandboxPath(co, "resolv.conf")
@@ -436,7 +607,10 @@ func (c *SandboxController) buildSpec(
 		oci.WithAnnotations(map[string]string{
 			"io.kubernetes.cri.container-type": "sandbox",
 		}),
+		containerdx.WithOOMScoreAdj(defaultSandboxOOMAdj, false),
 	}
+
+	id := co.ID.String()
 
 	opts = append(opts,
 		containerd.WithNewSnapshot(id, img),
@@ -519,7 +693,7 @@ func (c *SandboxController) bootContainers(
 			return fmt.Errorf("failed to build container spec: %w", err)
 		}
 
-		id := fmt.Sprintf("%s-%s", sb.ID, container.Name)
+		id := fmt.Sprintf("%s-%s", c.containerId(sb.ID), container.Name)
 		container, err := c.CC.NewContainer(ctx, id, opts...)
 		if err != nil {
 			return errors.Wrapf(err, "failed to create container %s", sb.ID)
@@ -542,7 +716,7 @@ func (c *SandboxController) bootContainers(
 }
 
 func (c *SandboxController) sandboxPath(sb *v1alpha.Sandbox, sub string) string {
-	return filepath.Join(c.Tempdir, "containerd", sb.ID, sub)
+	return filepath.Join(c.Tempdir, "containerd", sb.ID.PathSafe(), sub)
 }
 
 func (c *SandboxController) buildSubContainerSpec(
@@ -581,8 +755,6 @@ func (c *SandboxController) buildSubContainerSpec(
 		opts []containerd.NewContainerOpts
 	)
 
-	lbls := map[string]string{}
-
 	id := fmt.Sprintf("%s-%s", sb.ID, co.Name)
 
 	resolvePath := c.sandboxPath(sb, "resolv.conf")
@@ -608,12 +780,17 @@ func (c *SandboxController) buildSubContainerSpec(
 		},
 	}
 
+	dir := co.Directory
+	if dir == "" {
+		dir = "/"
+	}
+
 	specOpts := []oci.SpecOpts{
 		oci.WithImageConfig(img),
 		oci.WithDefaultUnixDevices,
 		oci.WithoutMounts("/sys"),
 		oci.WithMounts(mounts),
-		oci.WithProcessCwd("/"),
+		oci.WithProcessCwd(dir),
 		oci.WithLinuxNamespace(specs.LinuxNamespace{
 			Type: specs.NetworkNamespace,
 			Path: fmt.Sprintf("/proc/%d/ns/net", sbPid),
@@ -628,8 +805,21 @@ func (c *SandboxController) buildSubContainerSpec(
 		}),
 		oci.WithAnnotations(map[string]string{
 			"io.kubernetes.cri.container-type": "container",
-			"io.kubernetes.cri.sandbox-id":     sb.ID,
+			"io.kubernetes.cri.sandbox-id":     sb.ID.String(),
 		}),
+	}
+
+	if co.OomScore != 0 {
+		specOpts = append(specOpts, containerdx.WithOOMScoreAdj(int(co.OomScore), false))
+	}
+
+	if co.Privileged {
+		specOpts = append(specOpts,
+			oci.WithPrivileged,
+			oci.WithAllDevicesAllowed,
+			oci.WithWriteableCgroupfs,
+			oci.WithAddedCapabilities([]string{"CAP_SYS_ADMIN"}),
+		)
 	}
 
 	opts = append(opts,
@@ -639,8 +829,176 @@ func (c *SandboxController) buildSubContainerSpec(
 			TypeUrl:    "io.containerd.runsc.v1.options",
 			ConfigPath: c.runscConfigPath,
 		}),
-		containerd.WithAdditionalContainerLabels(lbls),
 	)
 
 	return opts, nil
+}
+
+func (c *SandboxController) destroySubContainers(ctx context.Context, sb *v1alpha.Sandbox) error {
+	// First, signal all the subcontainers with SIGTERM
+	esCh := make(chan containerd.ExitStatus, len(sb.Container))
+
+	var waiting int
+
+	for _, container := range sb.Container {
+		id := fmt.Sprintf("%s-%s", c.containerId(sb.ID), container.Name)
+
+		c.Log.Debug("sending SIGTERM to subcontainer", "id", id)
+
+		ctx = namespaces.WithNamespace(ctx, c.Namespace)
+
+		cont, err := c.CC.LoadContainer(ctx, id)
+		if err != nil {
+			c.Log.Error("failed to load container", "id", id, "err", err)
+			continue
+		}
+
+		task, err := cont.Task(ctx, nil)
+		if err != nil {
+			c.Log.Error("failed to load task", "id", id, "err", err)
+		} else {
+			ch, err := task.Wait(ctx)
+			if err != nil {
+				c.Log.Error("failed to get wait chan for task", "id", id, "err", err)
+			} else {
+				err = task.Kill(ctx, unix.SIGTERM)
+				if err != nil {
+					c.Log.Warn("failed to kill task", "id", id, "err", err)
+				} else {
+					waiting++
+
+					go func() {
+						select {
+						case es := <-ch:
+							esCh <- es
+						case <-ctx.Done():
+							esCh <- containerd.ExitStatus{}
+						}
+					}()
+				}
+			}
+		}
+	}
+
+	ticker := time.NewTimer(5 * time.Second)
+	defer ticker.Stop()
+
+loop:
+	for waiting > 0 {
+		select {
+		case <-ticker.C:
+			c.Log.Debug("gave up waiting for containers to exit")
+			break loop
+		case <-ctx.Done():
+			c.Log.Debug("context cancelled, giving up waiting for containers to exit")
+			break loop
+		case es := <-esCh:
+			waiting--
+			c.Log.Info("container exited", "exit_code", es.ExitCode())
+		}
+	}
+
+	c.Log.Info("deleting subcontainers", "id", sb.ID, "containers", len(sb.Container))
+
+	// Now, we can delete the subcontainers.
+	for _, container := range sb.Container {
+		id := fmt.Sprintf("%s-%s", c.containerId(sb.ID), container.Name)
+
+		c.Log.Debug("destroying subcontainer", "id", id)
+
+		ctx = namespaces.WithNamespace(ctx, c.Namespace)
+
+		cont, err := c.CC.LoadContainer(ctx, id)
+		if err != nil {
+			c.Log.Error("failed to load container", "id", id, "err", err)
+			continue
+		}
+
+		task, err := cont.Task(ctx, nil)
+		if err != nil {
+			c.Log.Error("failed to load task", "id", id, "err", err)
+		} else {
+			_, err = task.Delete(ctx, containerd.WithProcessKill)
+			if err != nil {
+				c.Log.Error("failed to delete task", "id", id, "err", err)
+			}
+		}
+
+		err = cont.Delete(ctx, containerd.WithSnapshotCleanup)
+		if err != nil {
+			c.Log.Error("failed to delete container", "id", id, "err", err)
+		}
+	}
+
+	return nil
+}
+
+func (c *SandboxController) Delete(ctx context.Context, id entity.Id) error {
+	ctx = namespaces.WithNamespace(ctx, c.Namespace)
+
+	oldMeta, err := c.readEntity(ctx, id)
+	if err != nil {
+		c.Log.Error("failed to read existing entity", "id", id, "err", err)
+		return fmt.Errorf("failed to read existing entity: %w", err)
+	}
+
+	var oldSb v1alpha.Sandbox
+	oldSb.Decode(oldMeta)
+
+	err = c.destroySubContainers(ctx, &oldSb)
+	if err != nil {
+		return fmt.Errorf("failed to destroy subcontainers: %w", err)
+	}
+
+	container, err := c.CC.LoadContainer(ctx, c.containerId(id))
+	if err != nil {
+		return err
+	}
+
+	labels, err := container.Labels(ctx)
+	if err != nil {
+		return err
+	}
+
+	task, err := container.Task(ctx, nil)
+	if err != nil {
+		return err
+	}
+
+	if task != nil {
+		_, err = task.Delete(ctx, containerd.WithProcessKill)
+		if err != nil {
+			return err
+		}
+	}
+
+	err = container.Delete(ctx, containerd.WithSnapshotCleanup)
+	if err != nil {
+		return err
+	}
+
+	for l, v := range labels {
+		if strings.HasPrefix(l, "runtime.computer/ip") {
+			addr, err := netip.ParseAddr(v)
+			if err == nil {
+				err = c.Subnet.ReleaseAddr(addr)
+				if err != nil {
+					c.Log.Error("failed to release IP", "addr", addr, "err", err)
+				}
+			} else {
+				c.Log.Error("failed to parse IP", "addr", v, "err", err)
+			}
+
+			c.Log.Debug("released IP", "addr", addr)
+		}
+	}
+
+	// Ignore errors, as the directory might not exist if the container was
+	// cleared up elsewhere.
+	tmpDir := filepath.Join(c.Tempdir, "containerd", id.PathSafe())
+	_ = os.RemoveAll(tmpDir)
+
+	c.Log.Info("container stopped", "id", id)
+
+	return nil
 }

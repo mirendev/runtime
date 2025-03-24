@@ -1,6 +1,7 @@
 package entity
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -207,7 +208,7 @@ func (v *Value) setFromTuple(x valueDecodeTuple, decoder unmarshaler) error {
 			return fmt.Errorf("bad component: %w", err)
 		}
 
-		v.any = comp
+		v.any = &comp
 	default:
 		err := decoder.Unmarshal(x.Value, &v.any)
 		if err != nil {
@@ -261,6 +262,10 @@ func Any(id Id, v any) Attr {
 
 func Ref(id Id, v Id) Attr {
 	return Attr{id, RefValue(v)}
+}
+
+func Pair(id Id, x, y Value) Attr {
+	return Attr{id, Value{any: []Value{x, y}}}
 }
 
 type Keywordable interface {
@@ -722,7 +727,16 @@ func (v Value) append(dst []byte) []byte {
 		return append(dst, v.duration().String()...)
 	case KindTime:
 		return append(dst, v.time().String()...)
-	case KindAny, KindId, KindKeyword, KindComponent, KindArray:
+	case KindArray:
+		values := v.Array()
+		for i, v := range values {
+			dst = v.append(dst)
+			if i < len(values)-1 {
+				dst = append(dst, []byte(", ")...)
+			}
+		}
+		return dst
+	case KindAny, KindId, KindKeyword, KindComponent:
 		return fmt.Append(dst, v.any)
 	default:
 		panic(fmt.Sprintf("bad kind: %s", v.Kind()))
@@ -732,5 +746,36 @@ func (v Value) append(dst []byte) []byte {
 // append appends a text representation of v to dst.
 // v is formatted as with fmt.Sprint.
 func (v Value) sum(w io.Writer) {
-	w.Write(v.append(nil))
+	switch v.Kind() {
+	case KindString:
+		w.Write([]byte(v.str()))
+	case KindInt64, KindUint64, KindFloat64, KindDuration:
+		var b [8]byte
+		binary.BigEndian.PutUint64(b[:], v.num)
+		w.Write(b[:])
+	case KindBool:
+		if v.bool() {
+			w.Write([]byte{1})
+		} else {
+			w.Write([]byte{0})
+		}
+	case KindTime:
+		var b [8]byte
+		binary.BigEndian.PutUint64(b[:], uint64(v.time().UnixNano()))
+		w.Write(b[:])
+	case KindId, KindKeyword, KindAny:
+		w.Write([]byte(fmt.Sprint(v.any)))
+	case KindComponent:
+		for _, a := range v.Component().Attrs {
+			a.Sum(w)
+			w.Write([]byte{';'})
+		}
+	case KindArray:
+		for _, v := range v.Array() {
+			v.sum(w)
+			w.Write([]byte{','})
+		}
+	default:
+		w.Write(v.append(nil))
+	}
 }

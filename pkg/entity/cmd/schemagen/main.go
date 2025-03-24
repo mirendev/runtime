@@ -8,8 +8,6 @@ import (
 	"strings"
 
 	j "github.com/dave/jennifer/jen"
-	"golang.org/x/text/cases"
-	"golang.org/x/text/language"
 	"golang.org/x/tools/imports"
 	"gopkg.in/yaml.v3"
 	"miren.dev/runtime/pkg/mapx"
@@ -22,8 +20,9 @@ var (
 )
 
 const (
-	top = "miren.dev/runtime/pkg/entity"
-	sch = "miren.dev/runtime/pkg/entity/schema"
+	top  = "miren.dev/runtime/pkg/entity"
+	topt = "miren.dev/runtime/pkg/entity/types"
+	sch  = "miren.dev/runtime/pkg/entity/schema"
 )
 
 func main() {
@@ -46,18 +45,28 @@ func main() {
 		panic(err)
 	}
 
+	jf := j.NewFile(*fPkg)
+
+	for _, kind := range sf.Kinds {
+		jf.Var().DefsFunc(func(b *j.Group) {
+			b.Id("Kind"+toCamal(kind)).Op("=").Qual(top, "MustKeyword").Call(j.Lit(sf.Domain + "/" + kind))
+		})
+	}
+
 	var g gen
 	g.name = sf.Domain
 	g.prefix = sf.Domain
 	g.sf = &sf
-	g.f = j.NewFile(*fPkg)
+	g.f = jf
 
-	g.fields = append(g.fields, j.Id("ID").String().Tag(map[string]string{
-		"json": "id",
-	}))
+	g.fields = append(g.fields,
+		j.Id("ID").Qual(top, "Id").Tag(map[string]string{
+			"json": "id",
+		}),
+	)
 
 	g.decoders = append(g.decoders,
-		j.Id("o").Dot("ID").Op("=").Qual(top, "MustGet").Call(j.Id("e"), j.Qual(top, "DBId")).Dot("Value").Dot("String").Call())
+		j.Id("o").Dot("ID").Op("=").Qual(top, "MustGet").Call(j.Id("e"), j.Qual(top, "DBId")).Dot("Value").Dot("Id").Call())
 
 	for name, attr := range mapx.StableOrder(sf.Attrs) {
 		g.attr(name, attr)
@@ -130,6 +139,7 @@ func main() {
 type schemaFile struct {
 	Domain  string                `yaml:"domain"`
 	Version string                `yaml:"version"`
+	Kinds   []string              `yaml:"kinds"`
 	Attrs   map[string]schemaAttr `yaml:"attrs"`
 }
 
@@ -139,8 +149,35 @@ type schemaAttr struct {
 	Many     bool     `yaml:"many,omitempty"`     // for repeated attributes
 	Required bool     `yaml:"required,omitempty"` // for required attributes
 	Choices  []string `yaml:"choices,omitempty"`  // for enum attributes
+	Indexed  bool     `yaml:"indexed,omitempty"`  // for indexed attributes
 
 	Attrs map[string]schemaAttr `yaml:"attrs,omitempty"` // for nested attributes
+}
+
+func toCamal(s string) string {
+	var b bytes.Buffer
+
+	upper := true
+
+	for _, c := range s {
+		if c == '_' {
+			upper = true
+			continue
+		}
+
+		if upper {
+			if c >= 'a' && c <= 'z' {
+				b.WriteRune(c - 32)
+			} else {
+				b.WriteRune(c)
+			}
+			upper = false
+		} else {
+			b.WriteRune(c)
+		}
+	}
+
+	return b.String()
 }
 
 type gen struct {
@@ -174,10 +211,8 @@ func (g *gen) NSd(name string) j.Code {
 	return j.Id(g.local + name)
 }
 
-var caser = cases.Title(language.English)
-
 func (g *gen) attr(name string, attr schemaAttr) {
-	fname := caser.String(name)
+	fname := toCamal(name)
 
 	g.idents = append(g.idents, j.Id(g.local+fname+"Id").Op("=").Qual(top, "Id").Call(j.Lit(g.prefix+"/"+name)))
 
@@ -244,6 +279,10 @@ func (g *gen) attr(name string, attr schemaAttr) {
 			call = append(call, j.Qual(sch, "Required"))
 		}
 
+		if attr.Indexed {
+			call = append(call, j.Qual(sch, "Indexed"))
+		}
+
 		if len(attr.Choices) > 0 {
 
 			var args []j.Code
@@ -271,6 +310,17 @@ func (g *gen) attr(name string, attr schemaAttr) {
 		simpleDecoder("KindString", "String")
 		simpleEncoder("String")
 		simpleDecl("String")
+	case "keyword":
+		if attr.Many {
+			g.fields = append(g.fields, j.Id(fname).Index().Qual(topt, "Keyword").Tag(tag))
+
+		} else {
+			g.fields = append(g.fields, j.Id(fname).Qual(topt, "Keyword").Tag(tag))
+		}
+
+		simpleDecoder("KindKeyword", "Keyword")
+		simpleEncoder("Keyword")
+		simpleDecl("Keyword")
 	case "int":
 		g.fields = append(g.fields, j.Id(fname).Int64().Tag(tag))
 		simpleDecoder("KindInt64", "Int64")
@@ -287,27 +337,27 @@ func (g *gen) attr(name string, attr schemaAttr) {
 		g.fields = append(g.fields, j.Id(fname).Add(g.NSd(fname)).Tag(tag))
 
 		for _, v := range attr.Choices {
-			g.idents = append(g.idents, j.Add(g.Ident(fname+caser.String(v))).Op("=").Qual(top, "Id").
+			g.idents = append(g.idents, j.Add(g.Ident(fname+toCamal(v))).Op("=").Qual(top, "Id").
 				Call(j.Lit(g.prefix+"/"+name+"."+v)))
 		}
 
 		g.decodeouter = append(g.decodeouter, j.Const().DefsFunc(func(b *j.Group) {
 			for _, v := range attr.Choices {
-				b.Add(j.Id(strings.ToUpper(v)).Add(g.NSd(fname)).Op("=").Add(j.Lit(name + "." + v))) // g.Ident(fname + caser.String(v))))
+				b.Add(j.Id(strings.ToUpper(v)).Add(g.NSd(fname)).Op("=").Add(j.Lit(name + "." + v)))
 			}
 		}))
 
 		g.decodeouter = append(g.decodeouter, j.Var().Id(name+"FromId").Op("=").Map(j.Qual(top, "Id")).Add(g.NSd(fname)).
 			ValuesFunc(func(b *j.Group) {
 				for _, v := range attr.Choices {
-					b.Add(g.Ident(fname + caser.String(v))).Op(":").Id(strings.ToUpper(v))
+					b.Add(g.Ident(fname + toCamal(v))).Op(":").Id(strings.ToUpper(v))
 				}
 			}))
 
 		g.decodeouter = append(g.decodeouter, j.Var().Id(name+"ToId").Op("=").Map(g.NSd(fname)).Qual(top, "Id").
 			ValuesFunc(func(b *j.Group) {
 				for _, v := range attr.Choices {
-					b.Add(j.Id(strings.ToUpper(v)).Op(":").Add(g.Ident(fname + caser.String(v))))
+					b.Add(j.Id(strings.ToUpper(v)).Op(":").Add(g.Ident(fname + toCamal(v))))
 				}
 			}))
 
@@ -347,11 +397,15 @@ func (g *gen) attr(name string, attr schemaAttr) {
 			call = append(call, j.Qual(sch, "Required"))
 		}
 
+		if attr.Indexed {
+			call = append(call, j.Qual(sch, "Indexed"))
+		}
+
 		var args []j.Code
 
 		for _, v := range attr.Choices {
 			g.decl = append(g.decl, j.Id("sb").Dot("Singleton").Call(j.Lit(name+"."+v)))
-			args = append(args, g.Ident(fname+caser.String(v)))
+			args = append(args, g.Ident(fname+toCamal(v)))
 		}
 
 		call = append(call, j.Qual(sch, "Choices").Call(args...))
@@ -394,7 +448,7 @@ func (g *gen) attr(name string, attr schemaAttr) {
 
 		} else {
 			d := j.If(
-				j.List(j.Id("a"), j.Id("ok")).Op("=").Id("e").Dot("Get").Call(g.Ident(fname)),
+				j.List(j.Id("a"), j.Id("ok")).Op(":=").Id("e").Dot("Get").Call(g.Ident(fname)),
 				j.Id("ok").Op("&&").Id("a").Dot("Value").Dot("Kind").Call().Op("==").Qual(top, "KindComponent"),
 			).Block(
 				j.Id("o").Dot(fname).Dot("Decode").Call(j.Id("a").Dot("Value").Dot("Component").Call()),
@@ -430,7 +484,7 @@ func (g *gen) generate() {
 		name = name[idx+1:]
 	}
 
-	structName := caser.String(name)
+	structName := toCamal(name)
 	g.structName = structName
 
 	f := g.f

@@ -5,6 +5,10 @@ import (
 	schema "miren.dev/runtime/pkg/entity/schema"
 )
 
+var (
+	KindSandbox = entity.MustKeyword("dev.miren.sandbox/sandbox")
+)
+
 const (
 	ContainerId = entity.Id("dev.miren.sandbox/container")
 	LabelId     = entity.Id("dev.miren.sandbox/label")
@@ -13,7 +17,7 @@ const (
 )
 
 type Sandbox struct {
-	ID        string      `json:"id"`
+	ID        entity.Id   `json:"id"`
 	Container []Container `json:"container"`
 	Label     []string    `json:"label,omitempty"`
 	Network   []Network   `json:"network,omitempty"`
@@ -21,7 +25,7 @@ type Sandbox struct {
 }
 
 func (o *Sandbox) Decode(e entity.AttrGetter) {
-	o.ID = entity.MustGet(e, entity.DBId).Value.String()
+	o.ID = entity.MustGet(e, entity.DBId).Value.Id()
 	for _, a := range e.GetAll(ContainerId) {
 		if a.Value.Kind() == entity.KindComponent {
 			var v Container
@@ -78,22 +82,24 @@ func (o *Sandbox) InitSchema(sb *schema.SchemaBuilder) {
 
 const (
 	ContainerCommandId    = entity.Id("dev.miren.sandbox.container/command")
+	ContainerDirectoryId  = entity.Id("dev.miren.sandbox.container/directory")
 	ContainerEnvId        = entity.Id("dev.miren.sandbox.container/env")
 	ContainerImageId      = entity.Id("dev.miren.sandbox.container/image")
 	ContainerMountId      = entity.Id("dev.miren.sandbox.container/mount")
 	ContainerNameId       = entity.Id("dev.miren.sandbox.container/name")
-	ContainerOom_scoreId  = entity.Id("dev.miren.sandbox.container/oom_score")
+	ContainerOomScoreId   = entity.Id("dev.miren.sandbox.container/oom_score")
 	ContainerPortId       = entity.Id("dev.miren.sandbox.container/port")
 	ContainerPrivilegedId = entity.Id("dev.miren.sandbox.container/privileged")
 )
 
 type Container struct {
 	Command    string   `json:"command,omitempty"`
+	Directory  string   `json:"directory,omitempty"`
 	Env        []string `json:"env,omitempty"`
 	Image      string   `json:"image"`
 	Mount      []Mount  `json:"mount,omitempty"`
 	Name       string   `json:"name,omitempty"`
-	Oom_score  int64    `json:"oom_score,omitempty"`
+	OomScore   int64    `json:"oom_score,omitempty"`
 	Port       []Port   `json:"port,omitempty"`
 	Privileged bool     `json:"privileged,omitempty"`
 }
@@ -101,6 +107,9 @@ type Container struct {
 func (o *Container) Decode(e entity.AttrGetter) {
 	if a, ok := e.Get(ContainerCommandId); ok && a.Value.Kind() == entity.KindString {
 		o.Command = a.Value.String()
+	}
+	if a, ok := e.Get(ContainerDirectoryId); ok && a.Value.Kind() == entity.KindString {
+		o.Directory = a.Value.String()
 	}
 	for _, a := range e.GetAll(ContainerEnvId) {
 		if a.Value.Kind() == entity.KindString {
@@ -120,8 +129,8 @@ func (o *Container) Decode(e entity.AttrGetter) {
 	if a, ok := e.Get(ContainerNameId); ok && a.Value.Kind() == entity.KindString {
 		o.Name = a.Value.String()
 	}
-	if a, ok := e.Get(ContainerOom_scoreId); ok && a.Value.Kind() == entity.KindInt64 {
-		o.Oom_score = a.Value.Int64()
+	if a, ok := e.Get(ContainerOomScoreId); ok && a.Value.Kind() == entity.KindInt64 {
+		o.OomScore = a.Value.Int64()
 	}
 	for _, a := range e.GetAll(ContainerPortId) {
 		if a.Value.Kind() == entity.KindComponent {
@@ -137,6 +146,7 @@ func (o *Container) Decode(e entity.AttrGetter) {
 
 func (o *Container) Encode() (attrs []entity.Attr) {
 	attrs = append(attrs, entity.String(ContainerCommandId, o.Command))
+	attrs = append(attrs, entity.String(ContainerDirectoryId, o.Directory))
 	for _, v := range o.Env {
 		attrs = append(attrs, entity.String(ContainerEnvId, v))
 	}
@@ -145,7 +155,7 @@ func (o *Container) Encode() (attrs []entity.Attr) {
 		attrs = append(attrs, entity.Component(ContainerMountId, v.Encode()))
 	}
 	attrs = append(attrs, entity.String(ContainerNameId, o.Name))
-	attrs = append(attrs, entity.Int64(ContainerOom_scoreId, o.Oom_score))
+	attrs = append(attrs, entity.Int64(ContainerOomScoreId, o.OomScore))
 	for _, v := range o.Port {
 		attrs = append(attrs, entity.Component(ContainerPortId, v.Encode()))
 	}
@@ -155,6 +165,7 @@ func (o *Container) Encode() (attrs []entity.Attr) {
 
 func (o *Container) InitSchema(sb *schema.SchemaBuilder) {
 	sb.String("command", schema.Doc("Command to run in the container"))
+	sb.String("directory", schema.Doc("Directory to start in"))
 	sb.String("env", schema.Doc("Environment variable for the container"), schema.Many)
 	sb.String("image", schema.Doc("Container image"), schema.Required)
 	sb.Component("mount", schema.Doc("A mounted directory"), schema.Many)

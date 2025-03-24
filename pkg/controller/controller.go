@@ -2,13 +2,17 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
 	"time"
 
 	clientv3 "go.etcd.io/etcd/client/v3"
+	"miren.dev/runtime/api/entityserver/v1alpha"
 	"miren.dev/runtime/pkg/entity"
+	"miren.dev/runtime/pkg/idgen"
+	"miren.dev/runtime/pkg/rpc/stream"
 )
 
 // EventType represents the type of event that occurred on an entity
@@ -24,12 +28,29 @@ const (
 type Event struct {
 	Type EventType
 	Id   entity.Id
+
+	Entity *entity.Entity // The entity that was changed
+
+	Rev, PrevRev int64 // Revision and previous revision for the entity
 }
 
 // Controller processes entities of a specific kind
 type Controller interface {
 	Start(ctx context.Context) error
 	Stop()
+}
+
+type workerIdKey struct{}
+
+func withWorkerId(ctx context.Context, id string) context.Context {
+	return context.WithValue(ctx, workerIdKey{}, id)
+}
+
+func WorkerId(ctx context.Context) string {
+	if id, ok := ctx.Value(workerIdKey{}).(string); ok {
+		return id
+	}
+	return "unknown"
 }
 
 // HandlerFunc is a function that processes an entity
@@ -39,28 +60,29 @@ type HandlerFunc func(ctx context.Context, event Event) error
 type ReconcileController struct {
 	Log *slog.Logger
 
+	cancel func()
+
+	esc          *v1alpha.EntityAccessClient
 	name         string
 	index        entity.Attr
-	store        *entity.EtcdStore
 	handler      HandlerFunc
 	resyncPeriod time.Duration
 	workers      int
 	workQueue    chan Event
-	stopCh       chan struct{}
 	wg           sync.WaitGroup
 }
 
 // NewReconcileController creates a new controller
-func NewReconcileController(name string, index entity.Attr, store *entity.EtcdStore, handler HandlerFunc, resyncPeriod time.Duration, workers int) *ReconcileController {
+func NewReconcileController(name string, log *slog.Logger, index entity.Attr, esc *v1alpha.EntityAccessClient, handler HandlerFunc, resyncPeriod time.Duration, workers int) *ReconcileController {
 	return &ReconcileController{
+		Log:          log,
 		name:         name,
 		index:        index,
-		store:        store,
+		esc:          esc,
 		handler:      handler,
 		resyncPeriod: resyncPeriod,
 		workers:      workers,
 		workQueue:    make(chan Event, 1000),
-		stopCh:       make(chan struct{}),
 	}
 }
 
@@ -80,28 +102,25 @@ func convertEvent(event *clientv3.Event) (Event, error) {
 
 	id := entity.Id(event.Kv.Value)
 
-	if eventType == EventDeleted {
-		return Event{
-			Type: eventType,
-			Id:   id,
-		}, nil
-	}
-
-	return Event{
+	ev := Event{
 		Type: eventType,
 		Id:   id,
-	}, nil
+		Rev:  event.Kv.ModRevision,
+	}
+
+	if event.PrevKv != nil {
+		ev.PrevRev = event.PrevKv.ModRevision
+	}
+
+	return ev, nil
 }
 
 // Start starts the controller
-func (c *ReconcileController) Start(ctx context.Context) error {
-	c.Log.Info("Starting controller", "name", c.name, "id", c.index.ID, "value", c.index.Value)
+func (c *ReconcileController) Start(top context.Context) error {
+	ctx, cancel := context.WithCancel(top)
+	c.cancel = cancel
 
-	// Start watching for events
-	eventChan, err := c.store.WatchIndex(ctx, c.index)
-	if err != nil {
-		return fmt.Errorf("failed to watch for events: %w", err)
-	}
+	c.Log.Info("Starting controller", "name", c.name, "id", c.index.ID, "value", c.index.Value)
 
 	// Start workers
 	for i := 0; i < c.workers; i++ {
@@ -111,7 +130,52 @@ func (c *ReconcileController) Start(ctx context.Context) error {
 
 	// Start event processor
 	c.wg.Add(1)
-	go c.processEvents(ctx, eventChan)
+	go func() {
+		defer c.wg.Done()
+		c.Log.Info("Starting index watch")
+		defer c.Log.Info("Index watch stopped")
+
+		c.esc.WatchIndex(ctx, c.index, stream.Callback(func(op *v1alpha.EntityOp) error {
+			var eventType EventType
+
+			switch op.Operation() {
+			case 1:
+				eventType = EventAdded
+			case 2:
+				eventType = EventUpdated
+			case 3:
+				eventType = EventDeleted
+			default:
+				return nil
+			}
+
+			ev := Event{
+				Type:    eventType,
+				Id:      entity.Id(op.EntityId()),
+				PrevRev: op.Previous(),
+			}
+
+			if op.HasEntity() {
+				aen := op.Entity()
+
+				ev.Entity = &entity.Entity{
+					ID:        entity.Id(aen.Id()),
+					CreatedAt: aen.CreatedAt(),
+					UpdatedAt: aen.UpdatedAt(),
+					Attrs:     aen.Attrs(),
+				}
+			}
+
+			select {
+			case <-ctx.Done():
+				return nil
+			case c.workQueue <- ev:
+				//ok
+			}
+
+			return nil
+		}))
+	}()
 
 	// Start periodic resync
 	if c.resyncPeriod > 0 {
@@ -125,55 +189,34 @@ func (c *ReconcileController) Start(ctx context.Context) error {
 // Stop stops the controller
 func (c *ReconcileController) Stop() {
 	c.Log.Info("Stopping controller", "name", c.name)
-	close(c.stopCh)
+	if c.cancel != nil {
+		c.cancel()
+	}
 	c.wg.Wait()
 	close(c.workQueue)
 }
 
-// processEvents processes events from the watch channel
-func (c *ReconcileController) processEvents(ctx context.Context, eventChan clientv3.WatchChan) {
-	defer c.wg.Done()
-
-	for {
-		select {
-		case <-c.stopCh:
-			return
-		case resp, ok := <-eventChan:
-			if !ok {
-				return
-			}
-
-			for _, xevent := range resp.Events {
-				event, err := convertEvent(xevent)
-				if err != nil {
-					c.Log.Error("error converting etcd event", "error", err)
-					continue
-				}
-
-				// Queue the event
-				select {
-				case c.workQueue <- event:
-					// Event added to queue
-				case <-c.stopCh:
-					return
-				}
-			}
-		}
-	}
-}
-
 // runWorker processes items from the work queue
 func (c *ReconcileController) runWorker(ctx context.Context) {
+	id := idgen.Gen("worker")
+
+	c.Log.Info("Starting worker", "id", id)
+	defer c.Log.Info("Stopping worker", "id", id)
+
 	defer c.wg.Done()
+
+	ctx = withWorkerId(ctx, id)
 
 	for {
 		select {
-		case <-c.stopCh:
+		case <-ctx.Done():
 			return
 		case event, ok := <-c.workQueue:
 			if !ok {
 				return
 			}
+
+			c.Log.Info("Processing event", "entity", event.Id, "worker", WorkerId(ctx))
 
 			// Process the event
 			if err := c.processItem(ctx, event); err != nil {
@@ -196,6 +239,9 @@ func (c *ReconcileController) processItem(ctx context.Context, event Event) erro
 
 // periodicResync periodically resyncs all entities
 func (c *ReconcileController) periodicResync(ctx context.Context) {
+	c.Log.Info("Starting resync")
+	defer c.Log.Info("Stopping resync")
+
 	defer c.wg.Done()
 
 	ticker := time.NewTicker(c.resyncPeriod)
@@ -203,23 +249,41 @@ func (c *ReconcileController) periodicResync(ctx context.Context) {
 
 	for {
 		// List all entities and queue them for processing
-		entities, err := c.store.ListIndex(ctx, c.index)
+		resp, err := c.esc.List(ctx, c.index)
 		if err != nil {
+			if errors.Is(err, context.Canceled) {
+				return
+			}
+
 			c.Log.Error("error listing entities for resync", "error", err)
 			continue
 		}
 
-		for _, entity := range entities {
+		entities := resp.Values()
+
+		for _, aen := range entities {
+			en := &entity.Entity{
+				ID:        entity.Id(aen.Id()),
+				CreatedAt: aen.CreatedAt(),
+				UpdatedAt: aen.UpdatedAt(),
+				Attrs:     aen.Attrs(),
+			}
+
+			ev := Event{
+				Type:   EventUpdated,
+				Entity: en,
+			}
+
 			select {
-			case c.workQueue <- Event{Type: EventUpdated, Id: entity}:
-				// Event added to queue
-			case <-c.stopCh:
+			case <-ctx.Done():
 				return
+			case c.workQueue <- ev:
+				// Event added to queue
 			}
 		}
 
 		select {
-		case <-c.stopCh:
+		case <-ctx.Done():
 			return
 		case <-ticker.C:
 			break
@@ -234,8 +298,8 @@ type ControllerEntity interface {
 
 type GenericController[P ControllerEntity] interface {
 	Init(context.Context) error
-	Create(ctx context.Context, obj P) error
-	Delete(ctx context.Context, e *entity.Entity) error
+	Create(ctx context.Context, obj P, meta *entity.Meta) error
+	Delete(ctx context.Context, e entity.Id) error
 }
 
 func AdaptController[
@@ -245,38 +309,32 @@ func AdaptController[
 		ControllerEntity
 	},
 	C GenericController[P],
-](cont C, eg entity.EntityGetter) HandlerFunc {
+](cont C) HandlerFunc {
 	return func(ctx context.Context, event Event) error {
 		switch event.Type {
 		case EventAdded, EventUpdated:
-			entity, err := eg.GetEntity(ctx, event.Id)
-			if err != nil {
-				return fmt.Errorf("failed to get entity: %w", err)
-			}
+			e := event.Entity
 
-			if entity == nil {
+			if e == nil {
 				return fmt.Errorf("entity not found: %s", event.Id)
 			}
 
 			// Decode the entity into the controller entity type
 			var obj P = new(T)
-			obj.Decode(entity)
+			obj.Decode(e)
 
-			if err := cont.Create(ctx, obj); err != nil {
+			meta := &entity.Meta{
+				Entity:   e,
+				Revision: e.Revision,
+				Previous: event.PrevRev,
+			}
+
+			if err := cont.Create(ctx, obj, meta); err != nil {
 				return fmt.Errorf("failed to create entity: %w", err)
 			}
 
 		case EventDeleted:
-			entity, err := eg.GetEntity(ctx, event.Id)
-			if err != nil {
-				return fmt.Errorf("failed to get entity: %w", err)
-			}
-
-			if entity == nil {
-				return fmt.Errorf("entity not found: %s", event.Id)
-			}
-
-			if err := cont.Delete(ctx, entity); err != nil {
+			if err := cont.Delete(ctx, event.Id); err != nil {
 				return fmt.Errorf("failed to create entity: %w", err)
 			}
 		}

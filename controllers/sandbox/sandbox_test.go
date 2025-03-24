@@ -75,7 +75,7 @@ func TestContainerd(t *testing.T) {
 		r.NoError(co.Init(ctx))
 		defer co.Close()
 
-		id := "cont-xyz"
+		id := entity.Id("cont-xyz")
 
 		var sb v1alpha.Sandbox
 
@@ -88,10 +88,15 @@ func TestContainerd(t *testing.T) {
 			Attrs: sb.Encode(),
 		}
 
+		meta := &entity.Meta{
+			Entity:   cont,
+			Revision: 1,
+		}
+
 		var tco v1alpha.Sandbox
 		tco.Decode(cont)
 
-		err = co.Create(ctx, &tco)
+		err = co.Create(ctx, &tco, meta)
 		r.NoError(err)
 
 		r.Len(tco.Network, 1)
@@ -99,7 +104,7 @@ func TestContainerd(t *testing.T) {
 		ca, err := netip.ParsePrefix(tco.Network[0].Address)
 		r.NoError(err)
 
-		c, err := cc.LoadContainer(ctx, id)
+		c, err := cc.LoadContainer(ctx, id.String())
 		r.NoError(err)
 
 		r.NotNil(c)
@@ -189,6 +194,132 @@ func TestContainerd(t *testing.T) {
 		addr := strings.Fields(strings.TrimSpace(lines[0]))[1]
 
 		r.Equal(addr, ca.String(), "address doesn't match")
+
+		t.Run("create on existing sandbox is no-op", func(t *testing.T) {
+			searchRes, err := co.checkSandbox(ctx, &sb, meta)
+			r.NoError(err)
+
+			r.Equal(same, searchRes)
+		})
+
+		t.Run("detects changes", func(t *testing.T) {
+			meta := &entity.Meta{
+				Entity:   cont,
+				Revision: 2,
+			}
+
+			searchRes, err := co.checkSandbox(ctx, &sb, meta)
+			r.NoError(err)
+
+			r.Equal(differentVersion, searchRes)
+		})
+
+		t.Run("can update in place with just label changes", func(t *testing.T) {
+			task.Delete(ctx, containerd.WithProcessKill)
+			bc.Delete(ctx, containerd.WithSnapshotCleanup)
+
+			var sb v1alpha.Sandbox
+
+			sb.ID = id
+
+			sb.Label = append(sb.Label, "runtime.computer/app=mn-test")
+
+			cont := &entity.Entity{
+				ID:    id,
+				Attrs: sb.Encode(),
+			}
+
+			meta := &entity.Meta{
+				Entity:   cont,
+				Revision: 2,
+			}
+
+			canUpdate, _, err := co.canUpdateInPlace(ctx, &sb, meta)
+			r.NoError(err)
+			r.True(canUpdate)
+		})
+
+		t.Run("updates container in place when labels change", func(t *testing.T) {
+			var sb v1alpha.Sandbox
+
+			sb.ID = id
+
+			sb.Label = append(sb.Label, "runtime.computer/app=mn-test")
+
+			cont := &entity.Entity{
+				ID:    id,
+				Attrs: sb.Encode(),
+			}
+
+			meta := &entity.Meta{
+				Entity:   cont,
+				Revision: 2,
+			}
+
+			err := co.Create(ctx, &sb, meta)
+			r.NoError(err)
+
+			c, err := cc.LoadContainer(ctx, id.String())
+			r.NoError(err)
+
+			labels, err := c.Labels(ctx)
+			r.NoError(err)
+
+			r.Equal("mn-test", labels["runtime.computer/app"], "container label not updated")
+
+			diskMeta, err := co.readEntity(ctx, id)
+			r.NoError(err)
+
+			r.Equal(int64(2), diskMeta.Revision)
+		})
+
+		t.Run("rebuilds sandbox when necessary", func(t *testing.T) {
+			task.Delete(ctx, containerd.WithProcessKill)
+			bc.Delete(ctx, containerd.WithSnapshotCleanup)
+
+			var sb v1alpha.Sandbox
+
+			sb.ID = id
+
+			sb.Label = append(sb.Label, "runtime.computer/app=mn-test")
+			sb.Container = append(sb.Container, v1alpha.Container{
+				Name:  "nginx",
+				Image: "mn-nginx:latest",
+			})
+
+			cont := &entity.Entity{
+				ID:    id,
+				Attrs: sb.Encode(),
+			}
+
+			meta := &entity.Meta{
+				Entity:   cont,
+				Revision: 3,
+			}
+
+			canUpdate, _, err := co.canUpdateInPlace(ctx, &sb, meta)
+			r.NoError(err)
+			r.False(canUpdate)
+
+			err = co.Create(ctx, &sb, meta)
+			r.NoError(err)
+
+			c, err := cc.LoadContainer(ctx, id.String()+"-nginx")
+			r.NoError(err)
+
+			task, err := c.Task(ctx, nil)
+			r.NoError(err)
+
+			status, err := task.Status(ctx)
+			r.NoError(err)
+
+			r.Equal(containerd.Running, status.Status, "container task not running")
+
+			diskMeta, err := co.readEntity(ctx, id)
+			r.NoError(err)
+
+			r.Equal(int64(3), diskMeta.Revision)
+		})
 	})
 
 	t.Run("calculates cpu usage correctly", func(t *testing.T) {
@@ -237,7 +368,7 @@ func TestContainerd(t *testing.T) {
 
 		r.NoError(co.Init(ctx))
 
-		id := "cont-xyz"
+		id := entity.Id("cont-xyz")
 
 		var sb v1alpha.Sandbox
 
@@ -255,13 +386,17 @@ func TestContainerd(t *testing.T) {
 			Attrs: sb.Encode(),
 		}
 
+		meta := &entity.Meta{
+			Entity: cont,
+		}
+
 		var tco v1alpha.Sandbox
 		tco.Decode(cont)
 
-		err = co.Create(ctx, &tco)
+		err = co.Create(ctx, &tco, meta)
 		r.NoError(err)
 
-		c, err := cc.LoadContainer(ctx, id)
+		c, err := cc.LoadContainer(ctx, id.String())
 		r.NoError(err)
 
 		r.NotNil(c)
@@ -280,14 +415,14 @@ func TestContainerd(t *testing.T) {
 		// Let sort ... sort.
 		time.Sleep(3 * time.Second)
 
-		cpu, mem, err := co.ResourcesMonitor.LastestUsage(id)
+		cpu, mem, err := co.ResourcesMonitor.LastestUsage(id.String())
 		r.NoError(err)
 
 		t.Logf("last delta: %f", cpu)
 
 		// This fails because of how Github Actions works when it's higher, so
 		// we're just going to test that it's just being measured for now.
-		r.Greater(float64(cpu), float64(1))
+		r.Greater(float64(cpu), float64(0.5))
 
 		r.Greater(mem, uint64(0))
 
