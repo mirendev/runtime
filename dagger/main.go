@@ -98,7 +98,7 @@ func (m *Runtime) BuildEnv(dir *dagger.Directory) *dagger.Container {
 		WithMountedCache("/go/build-cache", dag.CacheVolume("go-build-124")).
 		WithEnvVariable("GOCACHE", "/go/build-cache").
 		WithExec([]string{"apt-get", "update"}).
-		WithExec([]string{"apt-get", "install", "-y", "iptables", "bash"}).
+		WithExec([]string{"apt-get", "install", "-y", "iptables", "bash", "iproute2", "inetutils-ping"}).
 		WithFile("/upstream/containerd.tar.gz", dag.HTTP(containerd)).
 		WithFile("/upstream/buildkit.tar.gz", dag.HTTP(buildkit)).
 		WithFile("/upstream/runc", dag.HTTP(runc), dagger.ContainerWithFileOpts{

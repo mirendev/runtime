@@ -10,18 +10,22 @@ var (
 )
 
 const (
-	ContainerId = entity.Id("dev.miren.sandbox/container")
-	LabelId     = entity.Id("dev.miren.sandbox/label")
-	NetworkId   = entity.Id("dev.miren.sandbox/network")
-	RouteId     = entity.Id("dev.miren.sandbox/route")
+	ContainerId   = entity.Id("dev.miren.sandbox/container")
+	HostNetworkId = entity.Id("dev.miren.sandbox/hostNetwork")
+	LabelsId      = entity.Id("dev.miren.sandbox/labels")
+	NetworkId     = entity.Id("dev.miren.sandbox/network")
+	PortId        = entity.Id("dev.miren.sandbox/port")
+	RouteId       = entity.Id("dev.miren.sandbox/route")
 )
 
 type Sandbox struct {
-	ID        entity.Id   `json:"id"`
-	Container []Container `json:"container"`
-	Label     []string    `json:"label,omitempty"`
-	Network   []Network   `json:"network,omitempty"`
-	Route     []Route     `json:"route,omitempty"`
+	ID          entity.Id   `json:"id"`
+	Container   []Container `json:"container"`
+	HostNetwork bool        `json:"hostNetwork,omitempty"`
+	Labels      []string    `json:"labels,omitempty"`
+	Network     []Network   `json:"network,omitempty"`
+	Port        []Port      `json:"port,omitempty"`
+	Route       []Route     `json:"route,omitempty"`
 }
 
 func (o *Sandbox) Decode(e entity.AttrGetter) {
@@ -33,9 +37,12 @@ func (o *Sandbox) Decode(e entity.AttrGetter) {
 			o.Container = append(o.Container, v)
 		}
 	}
-	for _, a := range e.GetAll(LabelId) {
+	if a, ok := e.Get(HostNetworkId); ok && a.Value.Kind() == entity.KindBool {
+		o.HostNetwork = a.Value.Bool()
+	}
+	for _, a := range e.GetAll(LabelsId) {
 		if a.Value.Kind() == entity.KindString {
-			o.Label = append(o.Label, a.Value.String())
+			o.Labels = append(o.Labels, a.Value.String())
 		}
 	}
 	for _, a := range e.GetAll(NetworkId) {
@@ -43,6 +50,13 @@ func (o *Sandbox) Decode(e entity.AttrGetter) {
 			var v Network
 			v.Decode(a.Value.Component())
 			o.Network = append(o.Network, v)
+		}
+	}
+	for _, a := range e.GetAll(PortId) {
+		if a.Value.Kind() == entity.KindComponent {
+			var v Port
+			v.Decode(a.Value.Component())
+			o.Port = append(o.Port, v)
 		}
 	}
 	for _, a := range e.GetAll(RouteId) {
@@ -58,11 +72,15 @@ func (o *Sandbox) Encode() (attrs []entity.Attr) {
 	for _, v := range o.Container {
 		attrs = append(attrs, entity.Component(ContainerId, v.Encode()))
 	}
-	for _, v := range o.Label {
-		attrs = append(attrs, entity.String(LabelId, v))
+	attrs = append(attrs, entity.Bool(HostNetworkId, o.HostNetwork))
+	for _, v := range o.Labels {
+		attrs = append(attrs, entity.String(LabelsId, v))
 	}
 	for _, v := range o.Network {
 		attrs = append(attrs, entity.Component(NetworkId, v.Encode()))
+	}
+	for _, v := range o.Port {
+		attrs = append(attrs, entity.Component(PortId, v.Encode()))
 	}
 	for _, v := range o.Route {
 		attrs = append(attrs, entity.Component(RouteId, v.Encode()))
@@ -73,9 +91,12 @@ func (o *Sandbox) Encode() (attrs []entity.Attr) {
 func (o *Sandbox) InitSchema(sb *schema.SchemaBuilder) {
 	sb.Component("container", schema.Doc("A container running in the sandbox"), schema.Many, schema.Required)
 	(&Container{}).InitSchema(sb.Builder("container"))
-	sb.String("label", schema.Doc("Label for the container"), schema.Many)
+	sb.Bool("hostNetwork", schema.Doc("Indicates if the container should use the networking of\nnode that it is running on directly\n"))
+	sb.String("labels", schema.Doc("Label for the sandbox"), schema.Many)
 	sb.Component("network", schema.Doc("Network accessability for the container"), schema.Many)
 	(&Network{}).InitSchema(sb.Builder("network"))
+	sb.Component("port", schema.Doc("A network port the container declares"), schema.Many)
+	(&Port{}).InitSchema(sb.Builder("port"))
 	sb.Component("route", schema.Doc("A network route the container uses"), schema.Many)
 	(&Route{}).InitSchema(sb.Builder("route"))
 }
@@ -88,7 +109,6 @@ const (
 	ContainerMountId      = entity.Id("dev.miren.sandbox.container/mount")
 	ContainerNameId       = entity.Id("dev.miren.sandbox.container/name")
 	ContainerOomScoreId   = entity.Id("dev.miren.sandbox.container/oom_score")
-	ContainerPortId       = entity.Id("dev.miren.sandbox.container/port")
 	ContainerPrivilegedId = entity.Id("dev.miren.sandbox.container/privileged")
 )
 
@@ -100,7 +120,6 @@ type Container struct {
 	Mount      []Mount  `json:"mount,omitempty"`
 	Name       string   `json:"name,omitempty"`
 	OomScore   int64    `json:"oom_score,omitempty"`
-	Port       []Port   `json:"port,omitempty"`
 	Privileged bool     `json:"privileged,omitempty"`
 }
 
@@ -132,13 +151,6 @@ func (o *Container) Decode(e entity.AttrGetter) {
 	if a, ok := e.Get(ContainerOomScoreId); ok && a.Value.Kind() == entity.KindInt64 {
 		o.OomScore = a.Value.Int64()
 	}
-	for _, a := range e.GetAll(ContainerPortId) {
-		if a.Value.Kind() == entity.KindComponent {
-			var v Port
-			v.Decode(a.Value.Component())
-			o.Port = append(o.Port, v)
-		}
-	}
 	if a, ok := e.Get(ContainerPrivilegedId); ok && a.Value.Kind() == entity.KindBool {
 		o.Privileged = a.Value.Bool()
 	}
@@ -156,9 +168,6 @@ func (o *Container) Encode() (attrs []entity.Attr) {
 	}
 	attrs = append(attrs, entity.String(ContainerNameId, o.Name))
 	attrs = append(attrs, entity.Int64(ContainerOomScoreId, o.OomScore))
-	for _, v := range o.Port {
-		attrs = append(attrs, entity.Component(ContainerPortId, v.Encode()))
-	}
 	attrs = append(attrs, entity.Bool(ContainerPrivilegedId, o.Privileged))
 	return
 }
@@ -172,8 +181,6 @@ func (o *Container) InitSchema(sb *schema.SchemaBuilder) {
 	(&Mount{}).InitSchema(sb.Builder("mount"))
 	sb.String("name", schema.Doc("Container name"))
 	sb.Int64("oom_score", schema.Doc("How to adjust the OOM score for this container"))
-	sb.Component("port", schema.Doc("A network port the container declares"), schema.Many)
-	(&Port{}).InitSchema(sb.Builder("port"))
 	sb.Bool("privileged", schema.Doc("Whether or not the container runs in privileged mode"))
 }
 
@@ -208,63 +215,6 @@ func (o *Mount) InitSchema(sb *schema.SchemaBuilder) {
 }
 
 const (
-	PortNameId        = entity.Id("dev.miren.sandbox.container.port/name")
-	PortPortId        = entity.Id("dev.miren.sandbox.container.port/port")
-	PortProtocolId    = entity.Id("dev.miren.sandbox.container.port/protocol")
-	PortProtocolTcpId = entity.Id("dev.miren.sandbox.container.port/protocol.tcp")
-	PortProtocolUdpId = entity.Id("dev.miren.sandbox.container.port/protocol.udp")
-	PortTypeId        = entity.Id("dev.miren.sandbox.container.port/type")
-)
-
-type Port struct {
-	Name     string       `json:"name"`
-	Port     int64        `json:"port"`
-	Protocol PortProtocol `json:"protocol,omitempty"`
-	Type     string       `json:"type,omitempty"`
-}
-
-type PortProtocol string
-
-const (
-	TCP PortProtocol = "protocol.tcp"
-	UDP PortProtocol = "protocol.udp"
-)
-
-var protocolFromId = map[entity.Id]PortProtocol{PortProtocolTcpId: TCP, PortProtocolUdpId: UDP}
-var protocolToId = map[PortProtocol]entity.Id{TCP: PortProtocolTcpId, UDP: PortProtocolUdpId}
-
-func (o *Port) Decode(e entity.AttrGetter) {
-	if a, ok := e.Get(PortNameId); ok && a.Value.Kind() == entity.KindString {
-		o.Name = a.Value.String()
-	}
-	if a, ok := e.Get(PortPortId); ok && a.Value.Kind() == entity.KindInt64 {
-		o.Port = a.Value.Int64()
-	}
-	if a, ok := e.Get(PortProtocolId); ok && a.Value.Kind() == entity.KindId {
-		o.Protocol = protocolFromId[a.Value.Id()]
-	}
-	if a, ok := e.Get(PortTypeId); ok && a.Value.Kind() == entity.KindString {
-		o.Type = a.Value.String()
-	}
-}
-
-func (o *Port) Encode() (attrs []entity.Attr) {
-	attrs = append(attrs, entity.String(PortNameId, o.Name))
-	attrs = append(attrs, entity.Int64(PortPortId, o.Port))
-	attrs = append(attrs, entity.String(PortTypeId, o.Type))
-	return
-}
-
-func (o *Port) InitSchema(sb *schema.SchemaBuilder) {
-	sb.String("name", schema.Doc("Name of the port for reference"), schema.Required)
-	sb.Int64("port", schema.Doc("Port number"), schema.Required)
-	sb.Singleton("protocol.tcp")
-	sb.Singleton("protocol.udp")
-	sb.Ref("protocol", schema.Doc("Port protocol"), schema.Choices(PortProtocolTcpId, PortProtocolUdpId))
-	sb.String("type", schema.Doc("The highlevel type of the port"))
-}
-
-const (
 	NetworkAddressId = entity.Id("dev.miren.sandbox.network/address")
 	NetworkSubnetId  = entity.Id("dev.miren.sandbox.network/subnet")
 )
@@ -292,6 +242,70 @@ func (o *Network) Encode() (attrs []entity.Attr) {
 func (o *Network) InitSchema(sb *schema.SchemaBuilder) {
 	sb.String("address", schema.Doc("A network address to reach the container at"))
 	sb.String("subnet", schema.Doc("The subnet that the address is associated with"))
+}
+
+const (
+	PortNameId        = entity.Id("dev.miren.sandbox.port/name")
+	PortNodePortId    = entity.Id("dev.miren.sandbox.port/node_port")
+	PortPortId        = entity.Id("dev.miren.sandbox.port/port")
+	PortProtocolId    = entity.Id("dev.miren.sandbox.port/protocol")
+	PortProtocolTcpId = entity.Id("dev.miren.sandbox.port/protocol.tcp")
+	PortProtocolUdpId = entity.Id("dev.miren.sandbox.port/protocol.udp")
+	PortTypeId        = entity.Id("dev.miren.sandbox.port/type")
+)
+
+type Port struct {
+	Name     string       `json:"name"`
+	NodePort int64        `json:"node_port,omitempty"`
+	Port     int64        `json:"port"`
+	Protocol PortProtocol `json:"protocol,omitempty"`
+	Type     string       `json:"type,omitempty"`
+}
+
+type PortProtocol string
+
+const (
+	TCP PortProtocol = "protocol.tcp"
+	UDP PortProtocol = "protocol.udp"
+)
+
+var protocolFromId = map[entity.Id]PortProtocol{PortProtocolTcpId: TCP, PortProtocolUdpId: UDP}
+var protocolToId = map[PortProtocol]entity.Id{TCP: PortProtocolTcpId, UDP: PortProtocolUdpId}
+
+func (o *Port) Decode(e entity.AttrGetter) {
+	if a, ok := e.Get(PortNameId); ok && a.Value.Kind() == entity.KindString {
+		o.Name = a.Value.String()
+	}
+	if a, ok := e.Get(PortNodePortId); ok && a.Value.Kind() == entity.KindInt64 {
+		o.NodePort = a.Value.Int64()
+	}
+	if a, ok := e.Get(PortPortId); ok && a.Value.Kind() == entity.KindInt64 {
+		o.Port = a.Value.Int64()
+	}
+	if a, ok := e.Get(PortProtocolId); ok && a.Value.Kind() == entity.KindId {
+		o.Protocol = protocolFromId[a.Value.Id()]
+	}
+	if a, ok := e.Get(PortTypeId); ok && a.Value.Kind() == entity.KindString {
+		o.Type = a.Value.String()
+	}
+}
+
+func (o *Port) Encode() (attrs []entity.Attr) {
+	attrs = append(attrs, entity.String(PortNameId, o.Name))
+	attrs = append(attrs, entity.Int64(PortNodePortId, o.NodePort))
+	attrs = append(attrs, entity.Int64(PortPortId, o.Port))
+	attrs = append(attrs, entity.String(PortTypeId, o.Type))
+	return
+}
+
+func (o *Port) InitSchema(sb *schema.SchemaBuilder) {
+	sb.String("name", schema.Doc("Name of the port for reference"), schema.Required)
+	sb.Int64("node_port", schema.Doc("The port number that should be forwarded from the node to the container"))
+	sb.Int64("port", schema.Doc("Port number"), schema.Required)
+	sb.Singleton("protocol.tcp")
+	sb.Singleton("protocol.udp")
+	sb.Ref("protocol", schema.Doc("Port protocol"), schema.Choices(PortProtocolTcpId, PortProtocolUdpId))
+	sb.String("type", schema.Doc("The highlevel type of the port"))
 }
 
 const (

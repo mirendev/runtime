@@ -4,9 +4,12 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net/http"
 	"net/netip"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -81,7 +84,7 @@ func TestContainerd(t *testing.T) {
 
 		sb.ID = id
 
-		sb.Label = append(sb.Label, "runtime.computer/app=mn-nginx")
+		sb.Labels = append(sb.Labels, "runtime.computer/app=mn-nginx")
 
 		cont := &entity.Entity{
 			ID:    id,
@@ -104,7 +107,7 @@ func TestContainerd(t *testing.T) {
 		ca, err := netip.ParsePrefix(tco.Network[0].Address)
 		r.NoError(err)
 
-		c, err := cc.LoadContainer(ctx, id.String())
+		c, err := cc.LoadContainer(ctx, co.containerId(id))
 		r.NoError(err)
 
 		r.NotNil(c)
@@ -165,7 +168,7 @@ func TestContainerd(t *testing.T) {
 		ioc = cio.NewCreator(cio.WithStreams(os.Stdin, pw, os.Stderr))
 
 		proc, err := task.Exec(ctx, "test", &specs.Process{
-			Args: []string{"/bin/sh", "-c", "ip addr | grep 'inet '"},
+			Args: []string{"/bin/sh", "-c", "ip addr show dev eth0 | grep 'inet '"},
 			Env:  []string{"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"},
 			Cwd:  "/",
 		}, ioc)
@@ -191,6 +194,8 @@ func TestContainerd(t *testing.T) {
 		lines := strings.Split(strings.TrimSpace(string(data)), "\n")
 		r.Len(lines, 1)
 
+		sort.Strings(lines)
+
 		addr := strings.Fields(strings.TrimSpace(lines[0]))[1]
 
 		r.Equal(addr, ca.String(), "address doesn't match")
@@ -203,6 +208,7 @@ func TestContainerd(t *testing.T) {
 		})
 
 		t.Run("detects changes", func(t *testing.T) {
+			r := require.New(t)
 			meta := &entity.Meta{
 				Entity:   cont,
 				Revision: 2,
@@ -215,6 +221,8 @@ func TestContainerd(t *testing.T) {
 		})
 
 		t.Run("can update in place with just label changes", func(t *testing.T) {
+			r := require.New(t)
+
 			task.Delete(ctx, containerd.WithProcessKill)
 			bc.Delete(ctx, containerd.WithSnapshotCleanup)
 
@@ -222,7 +230,7 @@ func TestContainerd(t *testing.T) {
 
 			sb.ID = id
 
-			sb.Label = append(sb.Label, "runtime.computer/app=mn-test")
+			sb.Labels = append(sb.Labels, "runtime.computer/app=mn-test")
 
 			cont := &entity.Entity{
 				ID:    id,
@@ -240,11 +248,13 @@ func TestContainerd(t *testing.T) {
 		})
 
 		t.Run("updates container in place when labels change", func(t *testing.T) {
+			r := require.New(t)
+
 			var sb v1alpha.Sandbox
 
 			sb.ID = id
 
-			sb.Label = append(sb.Label, "runtime.computer/app=mn-test")
+			sb.Labels = append(sb.Labels, "runtime.computer/app=mn-test")
 
 			cont := &entity.Entity{
 				ID:    id,
@@ -259,7 +269,7 @@ func TestContainerd(t *testing.T) {
 			err := co.Create(ctx, &sb, meta)
 			r.NoError(err)
 
-			c, err := cc.LoadContainer(ctx, id.String())
+			c, err := cc.LoadContainer(ctx, co.containerId(id))
 			r.NoError(err)
 
 			labels, err := c.Labels(ctx)
@@ -274,6 +284,8 @@ func TestContainerd(t *testing.T) {
 		})
 
 		t.Run("rebuilds sandbox when necessary", func(t *testing.T) {
+			r := require.New(t)
+
 			task.Delete(ctx, containerd.WithProcessKill)
 			bc.Delete(ctx, containerd.WithSnapshotCleanup)
 
@@ -281,7 +293,7 @@ func TestContainerd(t *testing.T) {
 
 			sb.ID = id
 
-			sb.Label = append(sb.Label, "runtime.computer/app=mn-test")
+			sb.Labels = append(sb.Labels, "runtime.computer/app=mn-test")
 			sb.Container = append(sb.Container, v1alpha.Container{
 				Name:  "nginx",
 				Image: "mn-nginx:latest",
@@ -304,7 +316,7 @@ func TestContainerd(t *testing.T) {
 			err = co.Create(ctx, &sb, meta)
 			r.NoError(err)
 
-			c, err := cc.LoadContainer(ctx, id.String()+"-nginx")
+			c, err := cc.LoadContainer(ctx, co.containerId(id)+"-nginx")
 			r.NoError(err)
 
 			task, err := c.Task(ctx, nil)
@@ -367,6 +379,7 @@ func TestContainerd(t *testing.T) {
 		r.NoError(err)
 
 		r.NoError(co.Init(ctx))
+		defer co.Close()
 
 		id := entity.Id("cont-xyz")
 
@@ -374,7 +387,7 @@ func TestContainerd(t *testing.T) {
 
 		sb.ID = id
 
-		sb.Label = append(sb.Label, "runtime.computer/app=mn-nginx")
+		sb.Labels = append(sb.Labels, "runtime.computer/app=mn-nginx")
 
 		sb.Container = append(sb.Container, v1alpha.Container{
 			Name:  "sort",
@@ -396,7 +409,7 @@ func TestContainerd(t *testing.T) {
 		err = co.Create(ctx, &tco, meta)
 		r.NoError(err)
 
-		c, err := cc.LoadContainer(ctx, id.String())
+		c, err := cc.LoadContainer(ctx, co.containerId(id))
 		r.NoError(err)
 
 		r.NotNil(c)
@@ -415,7 +428,7 @@ func TestContainerd(t *testing.T) {
 		// Let sort ... sort.
 		time.Sleep(3 * time.Second)
 
-		cpu, mem, err := co.ResourcesMonitor.LastestUsage(id.String())
+		cpu, mem, err := co.ResourcesMonitor.LastestUsage(co.containerId(id))
 		r.NoError(err)
 
 		t.Logf("last delta: %f", cpu)
@@ -426,5 +439,127 @@ func TestContainerd(t *testing.T) {
 
 		r.Greater(mem, uint64(0))
 
+	})
+
+	t.Run("configures networking", func(t *testing.T) {
+		r := require.New(t)
+
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cancel()
+
+		reg, cleanup := testutils.Registry(observability.TestInject, build.TestInject)
+		// defer cleanup()
+
+		_ = cleanup
+
+		var (
+			cc  *containerd.Client
+			bkl *build.Buildkit
+		)
+
+		err := reg.Init(&cc, &bkl)
+		r.NoError(err)
+
+		dfr, err := build.MakeTar("testdata/nginx")
+		r.NoError(err)
+
+		datafs, err := build.TarFS(dfr, t.TempDir())
+		r.NoError(err)
+
+		o, _, err := bkl.Transform(ctx, datafs)
+		r.NoError(err)
+
+		var ii image.ImageImporter
+
+		err = reg.Populate(&ii)
+		r.NoError(err)
+
+		err = ii.ImportImage(ctx, o, "mn-nginx:latest")
+		r.NoError(err)
+
+		ctx = namespaces.WithNamespace(ctx, ii.Namespace)
+
+		_, err = cc.GetImage(ctx, "mn-nginx:latest")
+		r.NoError(err)
+
+		var co SandboxController
+
+		err = reg.Populate(&co)
+		r.NoError(err)
+
+		r.NoError(co.Init(ctx))
+		defer co.Close()
+
+		id := entity.Id("cont-xyz")
+
+		var sb v1alpha.Sandbox
+
+		sb.ID = id
+
+		sb.Labels = append(sb.Labels, "runtime.computer/app=mn-nginx")
+
+		sb.Container = append(sb.Container, v1alpha.Container{
+			Name:  "nginx",
+			Image: "mn-nginx:latest",
+		})
+		sb.Port = append(sb.Port, v1alpha.Port{
+			Name:     "http",
+			NodePort: 31001,
+			Port:     80,
+			Protocol: v1alpha.TCP,
+			Type:     "http",
+		})
+
+		cont := &entity.Entity{
+			ID:    id,
+			Attrs: sb.Encode(),
+		}
+
+		meta := &entity.Meta{
+			Entity:   cont,
+			Revision: 1,
+		}
+
+		var tco v1alpha.Sandbox
+		tco.Decode(cont)
+
+		err = co.Create(ctx, &tco, meta)
+		r.NoError(err)
+
+		r.Len(tco.Network, 1)
+
+		ca, err := netip.ParsePrefix(tco.Network[0].Address)
+		r.NoError(err)
+
+		c, err := cc.LoadContainer(ctx, co.containerId(id))
+		r.NoError(err)
+
+		r.NotNil(c)
+
+		//defer testutils.ClearContainer(ctx, c)
+
+		lbls, err := c.Labels(ctx)
+		r.NoError(err)
+
+		out, _ := exec.Command("iptables", "-t", "nat", "-L", "-nv").CombinedOutput()
+		fmt.Println(string(out))
+
+		r.Equal("mn-nginx", lbls["runtime.computer/app"])
+
+		time.Sleep(5 * time.Second)
+
+		hc := http.Client{
+			Timeout: 1 * time.Second,
+		}
+
+		resp, err := hc.Get(fmt.Sprintf("http://%s:80", ca.Addr().String()))
+		r.NoError(err)
+
+		resp, err = hc.Get("http://127.0.0.1:31001")
+		r.NoError(err)
+
+		defer resp.Body.Close()
+
+		r.Equal(http.StatusOK, resp.StatusCode)
 	})
 }

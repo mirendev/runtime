@@ -19,6 +19,7 @@ import (
 	"github.com/containerd/containerd/v2/pkg/cio"
 	"github.com/containerd/containerd/v2/pkg/oci"
 	"github.com/opencontainers/runtime-spec/specs-go"
+	"github.com/pelletier/go-toml/v2"
 	"github.com/pkg/errors"
 	"golang.org/x/sys/unix"
 	"gvisor.dev/gvisor/pkg/shim/v1/runtimeoptions"
@@ -92,6 +93,34 @@ func (c *SandboxController) setupRunscConfig() error {
 	c.runscConfigPath = path
 
 	return nil
+}
+
+func (c *SandboxController) setupNewRunscConfig(path string, opts map[string]string) error {
+	if c.RunscBinary == "" {
+		c.RunscBinary = "runsc"
+	}
+
+	exe, err := exec.LookPath(c.RunscBinary)
+	if err != nil {
+		return fmt.Errorf("failed to find runsc binary: %w", err)
+	}
+
+	f, err := os.Create(path)
+	if err != nil {
+		return fmt.Errorf("failed to create runsc config: %w", err)
+	}
+
+	defer f.Close()
+
+	top := map[string]any{
+		"binary_name": exe,
+	}
+
+	if len(opts) > 0 {
+		top["runsc_config"] = opts
+	}
+
+	return toml.NewEncoder(f).Encode(top)
 }
 
 func SetupRunsc(dir string) (string, string) {
@@ -236,10 +265,6 @@ func (c *SandboxController) canUpdateInPlace(ctx context.Context, sb *v1alpha.Sa
 			return false, nil, nil
 		}
 
-		if !slices.Equal(container.Port, oldSb.Container[i].Port) {
-			return false, nil, nil
-		}
-
 		if container.Privileged != oldSb.Container[i].Privileged {
 			return false, nil, nil
 		}
@@ -247,6 +272,10 @@ func (c *SandboxController) canUpdateInPlace(ctx context.Context, sb *v1alpha.Sa
 		if container.OomScore != oldSb.Container[i].OomScore {
 			return false, nil, nil
 		}
+	}
+
+	if !slices.Equal(sb.Port, oldSb.Port) {
+		return false, nil, nil
 	}
 
 	return true, &oldSb, nil
@@ -345,20 +374,20 @@ func (c *SandboxController) updateSandbox(ctx context.Context, sb *v1alpha.Sandb
 			return fmt.Errorf("failed to load existing sandbox: %w", err)
 		}
 
-		if !slices.Equal(oldSb.Label, sb.Label) {
+		if !slices.Equal(oldSb.Labels, sb.Labels) {
 			labels, err := cont.Labels(ctx)
 			if err != nil {
 				return fmt.Errorf("failed to get container labels: %w", err)
 			}
 
-			for _, lbl := range oldSb.Label {
+			for _, lbl := range oldSb.Labels {
 				k, _, ok := strings.Cut(lbl, "=")
 				if ok {
 					delete(labels, strings.TrimSpace(k))
 				}
 			}
 
-			for _, lbl := range sb.Label {
+			for _, lbl := range sb.Labels {
 				k, v, ok := strings.Cut(lbl, "=")
 				if ok {
 					labels[strings.TrimSpace(k)] = strings.TrimSpace(v)
@@ -555,7 +584,7 @@ func (c *SandboxController) buildSpec(
 
 	lbls := map[string]string{}
 
-	for _, lbl := range co.Label {
+	for _, lbl := range co.Labels {
 		if key, val, ok := strings.Cut(lbl, "="); ok {
 			lbls[strings.TrimSpace(key)] = strings.TrimSpace(val)
 		}
@@ -610,6 +639,20 @@ func (c *SandboxController) buildSpec(
 		containerdx.WithOOMScoreAdj(defaultSandboxOOMAdj, false),
 	}
 
+	cfg := map[string]string{}
+
+	if co.HostNetwork {
+		cfg["network"] = "host"
+		specOpts = append(specOpts, oci.WithHostNamespace(specs.NetworkNamespace))
+	}
+
+	cfgPath := c.sandboxPath(co, "runsc.toml")
+
+	err = c.setupNewRunscConfig(cfgPath, cfg)
+	if err != nil {
+		return nil, err
+	}
+
 	id := co.ID.String()
 
 	opts = append(opts,
@@ -617,7 +660,7 @@ func (c *SandboxController) buildSpec(
 		containerd.WithNewSpec(specOpts...),
 		containerd.WithRuntime("io.containerd.runsc.v1", &runtimeoptions.Options{
 			TypeUrl:    "io.containerd.runsc.v1.options",
-			ConfigPath: c.runscConfigPath,
+			ConfigPath: cfgPath,
 		}),
 		containerd.WithAdditionalContainerLabels(lbls),
 	)
@@ -669,6 +712,11 @@ func (c *SandboxController) bootInitialTask(
 		return nil, err
 	}
 
+	err = c.configureFirewall(co, ep)
+	if err != nil {
+		return nil, err
+	}
+
 	err = task.Start(ctx)
 	if err != nil {
 		return nil, err
@@ -683,7 +731,7 @@ func (c *SandboxController) bootContainers(
 	ep *network.EndpointConfig,
 	sbPid int,
 ) error {
-	c.Log.Info("booting containers")
+	c.Log.Info("booting containers", "count", len(sb.Container))
 
 	ctx = namespaces.WithNamespace(ctx, c.Namespace)
 
@@ -694,12 +742,15 @@ func (c *SandboxController) bootContainers(
 		}
 
 		id := fmt.Sprintf("%s-%s", c.containerId(sb.ID), container.Name)
+
+		c.Log.Info("creating container", "id", id)
+
 		container, err := c.CC.NewContainer(ctx, id, opts...)
 		if err != nil {
 			return errors.Wrapf(err, "failed to create container %s", sb.ID)
 		}
 
-		task, err := container.NewTask(ctx, cio.NullIO)
+		task, err := container.NewTask(ctx, cio.NewCreator(cio.WithStdio))
 		if err != nil {
 			return err
 		}
@@ -729,15 +780,15 @@ func (c *SandboxController) buildSubContainerSpec(
 	[]containerd.NewContainerOpts,
 	error,
 ) {
-	img, err := c.CC.GetImage(ctx, sandboxImage)
+	img, err := c.CC.GetImage(ctx, co.Image)
 	if err != nil {
 		// If the image is not found, we can try to pull it.
-		_, err = c.CC.Pull(ctx, sandboxImage, containerd.WithPullUnpack)
+		_, err = c.CC.Pull(ctx, co.Image, containerd.WithPullUnpack)
 		if err != nil {
 			return nil, fmt.Errorf("failed to pull image %s: %w", sandboxImage, err)
 		}
 
-		img, err = c.CC.GetImage(ctx, sandboxImage)
+		img, err = c.CC.GetImage(ctx, co.Image)
 		if err != nil {
 			// If we still can't get the image, return the error.
 			return nil, fmt.Errorf("failed to get image %s: %w", sandboxImage, err)
@@ -805,7 +856,7 @@ func (c *SandboxController) buildSubContainerSpec(
 		}),
 		oci.WithAnnotations(map[string]string{
 			"io.kubernetes.cri.container-type": "container",
-			"io.kubernetes.cri.sandbox-id":     sb.ID.String(),
+			"io.kubernetes.cri.sandbox-id":     c.containerId(sb.ID),
 		}),
 	}
 
