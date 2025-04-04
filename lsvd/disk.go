@@ -255,12 +255,16 @@ func (d *Disk) resolveSegmentAccess(ext Extent) ([]PartialExtent, error) {
 	return d.lba2pba.Resolve(d.log, ext, nil)
 }
 
+func (d *Disk) trace(ctx context.Context, msg string, args ...any) {
+	d.log.Log(ctx, LevelTrace, msg, args...)
+}
+
 func (d *Disk) ReadExtent(ctx *Context, rng Extent) (RangeData, error) {
 	data := NewRangeData(ctx, rng)
 
 	cp, err := d.ReadExtentInto(ctx, data)
 	if cp.fd != nil {
-		d.log.Debug("read extent from cache", "extent", rng, "fd", cp.fd)
+		d.trace(ctx, "read extent from cache", "extent", rng, "fd", cp.fd)
 		err = FillFromeCache(data.WriteData(), []CachePosition{cp})
 		if err != nil {
 			return RangeData{}, err
@@ -291,9 +295,7 @@ func (d *Disk) ReadExtentInto(ctx *Context, data RangeData) (CachePosition, erro
 
 	log := d.log
 
-	if log.Enabled(ctx, slog.LevelDebug) {
-		log.Debug("attempting to fill request from write cache", "extent", rng)
-	}
+	d.trace(ctx, "attempting to fill request from write cache", "extent", rng)
 
 	remaining, err := d.fillFromWriteCache(ctx, log, data)
 	if err != nil {
@@ -302,7 +304,7 @@ func (d *Disk) ReadExtentInto(ctx *Context, data RangeData) (CachePosition, erro
 
 	// Completely filled range from the write cache
 	if len(remaining) == 0 {
-		d.log.Debug("extent filled entirely from write cache")
+		d.trace(ctx, "extent filled entirely from write cache")
 		return CachePosition{}, nil
 	}
 
@@ -328,7 +330,7 @@ func (d *Disk) ReadExtentInto(ctx *Context, data RangeData) (CachePosition, erro
 		}
 
 		if len(pes) == 0 {
-			log.Debug("no partial extents found")
+			d.trace(ctx, "no partial extents found")
 			if v, ok := data.SubRange(h); ok {
 				clear(v.WriteData())
 			}
@@ -382,11 +384,11 @@ func (d *Disk) ReadExtentInto(ctx *Context, data RangeData) (CachePosition, erro
 		}
 	}
 
-	if log.Enabled(ctx, slog.LevelDebug) {
-		log.Debug("pes needed", "total", len(reqs))
+	if log.Enabled(ctx, LevelTrace) {
+		d.trace(ctx, "pes needed", "total", len(reqs))
 
 		for _, o := range reqs {
-			log.Debug("partial-extent needed",
+			d.trace(ctx, "partial-extent needed",
 				"segment", o.pe.Segment, "offset", o.pe.Offset, "size", o.pe.Size,
 				"usable", o.pe.Live, "full", o.pe.Extent,
 				"disk-id", o.pe.Disk,
@@ -487,7 +489,7 @@ func (d *Disk) fillingFromPrevWriteCache(ctx *Context, log *slog.Logger, data Ra
 		}
 	}
 
-	log.Debug("write cache didn't find", "input", holes, "holes", remaining)
+	d.trace(ctx, "write cache didn't find", "input", holes, "holes", remaining)
 
 	return remaining, nil
 }
@@ -550,7 +552,7 @@ func (d *Disk) readOneExtent(
 		return CachePosition{}, fmt.Errorf("error clamping range")
 	}
 
-	d.log.Debug("preparing to copy data from segment", "request", x, "clamped", overlap)
+	d.trace(ctx, "preparing to copy data from segment", "request", x, "clamped", overlap)
 
 	// Compute our source range and destination range against overlap
 
@@ -571,7 +573,7 @@ func (d *Disk) readOneExtent(
 	}
 
 	if d.log.Enabled(ctx, slog.LevelDebug) {
-		d.log.Debug("copying segment data",
+		d.trace(ctx, "copying segment data",
 			"src", src.Extent,
 			"dest", dest.Extent,
 			"sub-source", subSrc.Extent, "sub-dest", subDest.Extent,
@@ -614,7 +616,7 @@ func (d *Disk) readPartialExtent(
 		}
 
 		if isDebug {
-			d.log.Debug("preparing to copy data from segment", "request", x, "clamped", overlap)
+			d.trace(ctx, "preparing to copy data from segment", "request", x, "clamped", overlap)
 		}
 
 		// Compute our source range and destination range against overlap
@@ -636,7 +638,7 @@ func (d *Disk) readPartialExtent(
 		}
 
 		if isDebug {
-			d.log.Debug("copying segment data",
+			d.trace(ctx, "copying segment data",
 				"src", src.Extent,
 				"dest", dest.Extent,
 				"sub-source", subSrc.Extent, "sub-dest", subDest.Extent,
@@ -684,7 +686,7 @@ func (d *Disk) checkFlush(ctx context.Context) error {
 		if mode.Debug() {
 			select {
 			case <-ch:
-				d.log.Debug("segment has been flushed")
+				d.trace(ctx, "segment has been flushed")
 			case <-ctx.Done():
 			}
 		}

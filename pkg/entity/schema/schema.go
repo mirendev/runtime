@@ -174,6 +174,10 @@ func (s *SchemaBuilder) Attr(name string, typ entity.Id, opts ...AttrOption) ent
 	return eid
 }
 
+func (s *SchemaBuilder) Label(name string, opts ...AttrOption) entity.Id {
+	return s.Attr(name, entity.TypeLabel, opts...)
+}
+
 func (s *SchemaBuilder) String(name string, opts ...AttrOption) entity.Id {
 	return s.Attr(name, entity.TypeStr, opts...)
 }

@@ -331,6 +331,22 @@ func (g *gen) attr(name string, attr schemaAttr) {
 		simpleDecoder("KindBool", "Bool")
 		simpleEncoder("Bool")
 		simpleDecl("Bool")
+	case "label":
+		if attr.Many {
+			g.fields = append(g.fields, j.Id(fname).Qual(topt, "Labels").Tag(tag))
+			g.encoders = append(g.encoders,
+				j.For(j.List(j.Op("_"), j.Id("v")).Op(":=").Range().Id("o").Dot(fname)).Block(
+					j.Id("attrs").Op("=").Append(j.Id("attrs"), j.Qual(top, "Label").Call(g.Ident(fname), j.Id("v").Dot("Key"), j.Id("v").Dot("Value"))),
+				),
+			)
+		} else {
+			g.fields = append(g.fields, j.Id(fname).Qual(topt, "Label").Tag(tag))
+			g.encoders = append(g.encoders,
+				j.Id("attrs").Op("=").Append(j.Id("attrs"), j.Qual(top, "Label").Call(g.Ident(fname), j.Id("v").Dot("Key"), j.Id("v").Dot("Value"))),
+			)
+		}
+		simpleDecoder("KindLabel", "Label")
+		simpleDecl("Label")
 	case "enum":
 		g.decodeouter = append(g.decodeouter, j.Type().Add(g.NSd(fname)).String())
 

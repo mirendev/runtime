@@ -284,6 +284,10 @@ func Component(id Id, attrs []Attr) Attr {
 	return Attr{id, ComponentValue(&EntityComponent{attrs})}
 }
 
+func Label(id Id, key, val string) Attr {
+	return Attr{id, LabelValue(key, val)}
+}
+
 type (
 	stringptr *byte // used in Value.any when the Value is a string
 )
@@ -304,6 +308,7 @@ const (
 	KindKeyword
 	KindArray
 	KindComponent
+	KindLabel
 )
 
 var kindStrings = []string{
@@ -319,6 +324,7 @@ var kindStrings = []string{
 	"Keyword",
 	"Array",
 	"Component",
+	"Label",
 }
 
 func (k Kind) String() string {
@@ -351,6 +357,8 @@ func (v Value) Kind() Kind {
 		return KindArray
 	case *EntityComponent:
 		return KindComponent
+	case types.Label:
+		return KindLabel
 	default:
 		return KindAny
 	}
@@ -439,6 +447,15 @@ func ComponentValue(v *EntityComponent) Value {
 	return Value{any: v}
 }
 
+func LabelValue(key, val string) Value {
+	return Value{
+		any: types.Label{
+			Key:   key,
+			Value: val,
+		},
+	}
+}
+
 // AnyValue returns a [Value] for the supplied value.
 //
 // If the supplied value is of type Value, it is returned
@@ -496,7 +513,7 @@ func AnyValue(v any) Value {
 		return Value{any: kind(v)}
 	case Value:
 		return v
-	case []Value:
+	case []Value, types.Label:
 		return Value{any: v}
 	case *EntityComponent:
 		return ComponentValue(v)
@@ -548,6 +565,8 @@ func (v Value) Any() any {
 	case KindArray:
 		return v.any
 	case KindComponent:
+		return v.any
+	case KindLabel:
 		return v.any
 	default:
 		panic(fmt.Sprintf("bad kind: %s", v.Kind()))
@@ -682,6 +701,14 @@ func (v Value) Component() *EntityComponent {
 	}
 
 	panic(fmt.Sprintf("Value kind is %s, not %s", v.Kind(), KindComponent))
+}
+
+func (v Value) Label() types.Label {
+	if v, ok := v.any.(types.Label); ok {
+		return v
+	}
+
+	panic(fmt.Sprintf("Value kind is %s, not %s", v.Kind(), KindLabel))
 }
 
 //////////////// Other

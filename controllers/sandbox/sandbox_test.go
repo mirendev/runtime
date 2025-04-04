@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"net/netip"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -27,10 +26,18 @@ import (
 	"miren.dev/runtime/image"
 	"miren.dev/runtime/observability"
 	"miren.dev/runtime/pkg/entity"
+	"miren.dev/runtime/pkg/entity/types"
+	"miren.dev/runtime/pkg/idgen"
+	"miren.dev/runtime/pkg/mountinfo"
 	"miren.dev/runtime/pkg/testutils"
 )
 
-func TestContainerd(t *testing.T) {
+func TestSandbox(t *testing.T) {
+
+	sbName := func() string {
+		return idgen.GenNS("sb")
+	}
+
 	t.Run("can run a container", func(t *testing.T) {
 		r := require.New(t)
 
@@ -78,7 +85,7 @@ func TestContainerd(t *testing.T) {
 		r.NoError(co.Init(ctx))
 		defer co.Close()
 
-		id := entity.Id("cont-xyz")
+		id := entity.Id(sbName())
 
 		var sb v1alpha.Sandbox
 
@@ -381,7 +388,7 @@ func TestContainerd(t *testing.T) {
 		r.NoError(co.Init(ctx))
 		defer co.Close()
 
-		id := entity.Id("cont-xyz")
+		id := entity.Id(sbName())
 
 		var sb v1alpha.Sandbox
 
@@ -448,9 +455,7 @@ func TestContainerd(t *testing.T) {
 		defer cancel()
 
 		reg, cleanup := testutils.Registry(observability.TestInject, build.TestInject)
-		// defer cleanup()
-
-		_ = cleanup
+		defer cleanup()
 
 		var (
 			cc  *containerd.Client
@@ -490,7 +495,7 @@ func TestContainerd(t *testing.T) {
 		r.NoError(co.Init(ctx))
 		defer co.Close()
 
-		id := entity.Id("cont-xyz")
+		id := entity.Id(sbName())
 
 		var sb v1alpha.Sandbox
 
@@ -536,13 +541,10 @@ func TestContainerd(t *testing.T) {
 
 		r.NotNil(c)
 
-		//defer testutils.ClearContainer(ctx, c)
+		defer testutils.ClearContainer(ctx, c)
 
 		lbls, err := c.Labels(ctx)
 		r.NoError(err)
-
-		out, _ := exec.Command("iptables", "-t", "nat", "-L", "-nv").CombinedOutput()
-		fmt.Println(string(out))
 
 		r.Equal("mn-nginx", lbls["runtime.computer/app"])
 
@@ -555,10 +557,409 @@ func TestContainerd(t *testing.T) {
 		resp, err := hc.Get(fmt.Sprintf("http://%s:80", ca.Addr().String()))
 		r.NoError(err)
 
+		defer resp.Body.Close()
+
 		resp, err = hc.Get("http://127.0.0.1:31001")
 		r.NoError(err)
 
 		defer resp.Body.Close()
+
+		r.Equal(http.StatusOK, resp.StatusCode)
+	})
+
+	t.Run("sets up host paths as volumes", func(t *testing.T) {
+		r := require.New(t)
+
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cancel()
+
+		reg, cleanup := testutils.Registry(observability.TestInject, build.TestInject)
+		defer cleanup()
+
+		var (
+			cc  *containerd.Client
+			bkl *build.Buildkit
+		)
+
+		err := reg.Init(&cc, &bkl)
+		r.NoError(err)
+
+		dfr, err := build.MakeTar("testdata/nginx")
+		r.NoError(err)
+
+		datafs, err := build.TarFS(dfr, t.TempDir())
+		r.NoError(err)
+
+		o, _, err := bkl.Transform(ctx, datafs)
+		r.NoError(err)
+
+		var ii image.ImageImporter
+
+		err = reg.Populate(&ii)
+		r.NoError(err)
+
+		err = ii.ImportImage(ctx, o, "mn-nginx:latest")
+		r.NoError(err)
+
+		ctx = namespaces.WithNamespace(ctx, ii.Namespace)
+
+		_, err = cc.GetImage(ctx, "mn-nginx:latest")
+		r.NoError(err)
+
+		var co SandboxController
+
+		err = reg.Populate(&co)
+		r.NoError(err)
+
+		r.NoError(co.Init(ctx))
+		defer co.Close()
+
+		id := entity.Id(sbName())
+
+		var sb v1alpha.Sandbox
+
+		sb.ID = id
+
+		sb.Labels = append(sb.Labels, "runtime.computer/app=mn-nginx")
+
+		spath, err := filepath.Abs("testdata/static-site")
+		r.NoError(err)
+
+		sb.Volume = append(sb.Volume, v1alpha.Volume{
+			Name:     "static-site",
+			Provider: "host",
+			Labels:   types.LabelSet("path", spath),
+		})
+
+		sb.Container = append(sb.Container, v1alpha.Container{
+			Name:  "nginx",
+			Image: "mn-nginx:latest",
+			Mount: []v1alpha.Mount{
+				{
+					Destination: "/usr/share/nginx/html",
+					Source:      "static-site",
+				},
+			},
+		})
+
+		sb.Port = append(sb.Port, v1alpha.Port{
+			Name:     "http",
+			Port:     80,
+			Protocol: v1alpha.TCP,
+			Type:     "http",
+		})
+
+		cont := &entity.Entity{
+			ID:    id,
+			Attrs: sb.Encode(),
+		}
+
+		meta := &entity.Meta{
+			Entity:   cont,
+			Revision: 1,
+		}
+
+		var tco v1alpha.Sandbox
+		tco.Decode(cont)
+
+		err = co.Create(ctx, &tco, meta)
+		r.NoError(err)
+
+		r.Len(tco.Network, 1)
+
+		ca, err := netip.ParsePrefix(tco.Network[0].Address)
+		r.NoError(err)
+
+		c, err := cc.LoadContainer(ctx, co.containerId(id))
+		r.NoError(err)
+
+		r.NotNil(c)
+
+		defer testutils.ClearContainer(ctx, c)
+
+		time.Sleep(5 * time.Second)
+
+		hc := http.Client{
+			Timeout: 1 * time.Second,
+		}
+
+		resp, err := hc.Get(fmt.Sprintf("http://%s:80", ca.Addr().String()))
+		r.NoError(err)
+
+		defer resp.Body.Close()
+
+		data, err := io.ReadAll(resp.Body)
+		r.NoError(err)
+
+		r.Contains(string(data), "this is from testdata/static-site")
+
+		r.Equal(http.StatusOK, resp.StatusCode)
+	})
+
+	t.Run("sets up named host volumes", func(t *testing.T) {
+		r := require.New(t)
+
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cancel()
+
+		reg, cleanup := testutils.Registry(observability.TestInject, build.TestInject)
+		defer cleanup()
+
+		var (
+			cc  *containerd.Client
+			bkl *build.Buildkit
+		)
+
+		err := reg.Init(&cc, &bkl)
+		r.NoError(err)
+
+		dfr, err := build.MakeTar("testdata/nginx")
+		r.NoError(err)
+
+		datafs, err := build.TarFS(dfr, t.TempDir())
+		r.NoError(err)
+
+		o, _, err := bkl.Transform(ctx, datafs)
+		r.NoError(err)
+
+		var ii image.ImageImporter
+
+		err = reg.Populate(&ii)
+		r.NoError(err)
+
+		err = ii.ImportImage(ctx, o, "mn-nginx:latest")
+		r.NoError(err)
+
+		ctx = namespaces.WithNamespace(ctx, ii.Namespace)
+
+		_, err = cc.GetImage(ctx, "mn-nginx:latest")
+		r.NoError(err)
+
+		var co SandboxController
+
+		err = reg.Populate(&co)
+		r.NoError(err)
+
+		r.NoError(co.Init(ctx))
+		defer co.Close()
+
+		id := entity.Id(sbName())
+
+		var sb v1alpha.Sandbox
+
+		sb.ID = id
+
+		sb.Labels = append(sb.Labels, "runtime.computer/app=mn-nginx")
+
+		sb.Volume = append(sb.Volume, v1alpha.Volume{
+			Name:     "static-site",
+			Provider: "host",
+			Labels:   types.LabelSet("name", "site-data"),
+		})
+
+		sb.Container = append(sb.Container, v1alpha.Container{
+			Name:  "nginx",
+			Image: "mn-nginx:latest",
+			Mount: []v1alpha.Mount{
+				{
+					Destination: "/usr/share/nginx/html",
+					Source:      "static-site",
+				},
+			},
+		})
+
+		sb.Port = append(sb.Port, v1alpha.Port{
+			Name:     "http",
+			Port:     80,
+			Protocol: v1alpha.TCP,
+			Type:     "http",
+		})
+
+		cont := &entity.Entity{
+			ID:    id,
+			Attrs: sb.Encode(),
+		}
+
+		meta := &entity.Meta{
+			Entity:   cont,
+			Revision: 1,
+		}
+
+		var tco v1alpha.Sandbox
+		tco.Decode(cont)
+
+		err = co.Create(ctx, &tco, meta)
+		r.NoError(err)
+
+		r.Len(tco.Network, 1)
+
+		ca, err := netip.ParsePrefix(tco.Network[0].Address)
+		r.NoError(err)
+
+		c, err := cc.LoadContainer(ctx, co.containerId(id))
+		r.NoError(err)
+
+		r.NotNil(c)
+
+		defer testutils.ClearContainer(ctx, c)
+
+		time.Sleep(5 * time.Second)
+
+		rawPath := filepath.Join(co.DataPath, "host-volumes", "site-data", "index.html")
+
+		err = os.WriteFile(rawPath, []byte("this is from testdata/static-site"), 0644)
+		r.NoError(err)
+
+		hc := http.Client{
+			Timeout: 1 * time.Second,
+		}
+
+		resp, err := hc.Get(fmt.Sprintf("http://%s:80", ca.Addr().String()))
+		r.NoError(err)
+
+		defer resp.Body.Close()
+
+		data, err := io.ReadAll(resp.Body)
+		r.NoError(err)
+
+		r.Contains(string(data), "this is from testdata/static-site")
+
+		r.Equal(http.StatusOK, resp.StatusCode)
+	})
+
+	t.Run("sets up miren volumes", func(t *testing.T) {
+		r := require.New(t)
+
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cancel()
+
+		reg, cleanup := testutils.Registry(observability.TestInject, build.TestInject)
+		defer cleanup()
+
+		var (
+			cc  *containerd.Client
+			bkl *build.Buildkit
+		)
+
+		err := reg.Init(&cc, &bkl)
+		r.NoError(err)
+
+		dfr, err := build.MakeTar("testdata/nginx")
+		r.NoError(err)
+
+		datafs, err := build.TarFS(dfr, t.TempDir())
+		r.NoError(err)
+
+		o, _, err := bkl.Transform(ctx, datafs)
+		r.NoError(err)
+
+		var ii image.ImageImporter
+
+		err = reg.Populate(&ii)
+		r.NoError(err)
+
+		err = ii.ImportImage(ctx, o, "mn-nginx:latest")
+		r.NoError(err)
+
+		ctx = namespaces.WithNamespace(ctx, ii.Namespace)
+
+		_, err = cc.GetImage(ctx, "mn-nginx:latest")
+		r.NoError(err)
+
+		var co SandboxController
+
+		err = reg.Populate(&co)
+		r.NoError(err)
+
+		r.NoError(co.Init(ctx))
+		defer co.Close()
+
+		id := entity.Id("sb-xyz")
+
+		var sb v1alpha.Sandbox
+
+		sb.ID = id
+
+		sb.Labels = append(sb.Labels, "runtime.computer/app=mn-nginx")
+
+		sb.Volume = append(sb.Volume, v1alpha.Volume{
+			Name:     "static-site",
+			Provider: "miren",
+			Labels:   types.LabelSet("name", "testing", "size", "50MB"),
+		})
+
+		sb.Container = append(sb.Container, v1alpha.Container{
+			Name:  "nginx",
+			Image: "mn-nginx:latest",
+			Mount: []v1alpha.Mount{
+				{
+					Destination: "/usr/share/nginx/html",
+					Source:      "static-site",
+				},
+			},
+		})
+
+		sb.Port = append(sb.Port, v1alpha.Port{
+			Name:     "http",
+			Port:     80,
+			Protocol: v1alpha.TCP,
+			Type:     "http",
+		})
+
+		cont := &entity.Entity{
+			ID:    id,
+			Attrs: sb.Encode(),
+		}
+
+		meta := &entity.Meta{
+			Entity:   cont,
+			Revision: 1,
+		}
+
+		var tco v1alpha.Sandbox
+		tco.Decode(cont)
+
+		err = co.Create(ctx, &tco, meta)
+		r.NoError(err)
+
+		r.Len(tco.Network, 1)
+
+		ca, err := netip.ParsePrefix(tco.Network[0].Address)
+		r.NoError(err)
+
+		c, err := cc.LoadContainer(ctx, co.containerId(id))
+		r.NoError(err)
+
+		r.NotNil(c)
+
+		defer testutils.ClearContainer(ctx, c)
+
+		time.Sleep(5 * time.Second)
+
+		rawPath := co.sandboxPath(&sb, "volumes", "static-site", "index.html")
+
+		mp, err := mountinfo.MountPoint(rawPath)
+		r.NoError(err)
+		r.NotNil(mp)
+
+		r.Equal(filepath.Dir(rawPath), mp.Mountpoint)
+
+		err = os.WriteFile(rawPath, []byte("this is from testdata/static-site"), 0644)
+		r.NoError(err)
+
+		hc := http.Client{
+			Timeout: 1 * time.Second,
+		}
+
+		resp, err := hc.Get(fmt.Sprintf("http://%s:80", ca.Addr().String()))
+		r.NoError(err)
+
+		defer resp.Body.Close()
+
+		data, err := io.ReadAll(resp.Body)
+		r.NoError(err)
+
+		r.Contains(string(data), "this is from testdata/static-site")
 
 		r.Equal(http.StatusOK, resp.StatusCode)
 	})

@@ -60,7 +60,7 @@ func NBDWrapper(ctx context.Context, log *slog.Logger, d *Disk) *nbdWrapper {
 
 func logBlocks(log *slog.Logger, msg string, idx LBA, data []byte) {
 	for len(data) > 0 {
-		log.Debug(msg, "block", idx, "sum", blkSum(data))
+		trace(log, msg, "block", idx, "sum", blkSum(data))
 		data = data[BlockSize:]
 		idx++
 	}
@@ -74,7 +74,7 @@ func (n *nbdWrapper) ReadAt(b []byte, off int64) (int, error) {
 
 	ext := Extent{LBA: blk, Blocks: blocks}
 
-	n.log.Debug("nbd read-at",
+	trace(n.log, "nbd read-at",
 		"size", len(b), "offset", off,
 		"extent", ext,
 	)
@@ -114,10 +114,10 @@ func (n *nbdWrapper) ReadIntoConn(b []byte, off int64, output *os.File) (bool, e
 
 	ext := Extent{LBA: blk, Blocks: blocks}
 
-	var isDebug = n.log.Enabled(n.ctx, logger.Debug)
+	var isDebug = n.log.Enabled(n.ctx, LevelTrace)
 
 	if isDebug {
-		n.log.Debug("nbd read-at",
+		trace(n.log, "nbd read-at",
 			"size", len(b), "offset", off,
 			"extent", ext,
 		)
@@ -179,7 +179,7 @@ func (n *nbdWrapper) ReadIntoConn(b []byte, off int64, output *os.File) (bool, e
 		}
 
 		if isDebug {
-			n.log.Debug("sendfile complete", "request", cps.size, "written", written, "left", left)
+			trace(n.log, "sendfile complete", "request", cps.size, "written", written, "left", left)
 		}
 		left -= written
 		off += int64(written)
@@ -258,7 +258,7 @@ func (n *nbdWrapper) queueTrim(ext Extent) bool {
 }
 
 func (n *nbdWrapper) WriteAt(b []byte, off int64) (int, error) {
-	n.log.Debug("nbd write-at", "size", len(b), "offset", off)
+	trace(n.log, "nbd write-at", "size", len(b), "offset", off)
 
 	defer n.buf.Reset()
 	defer n.ctx.Reset()
@@ -302,7 +302,7 @@ func (n *nbdWrapper) ZeroAt(off, size int64) error {
 
 	numBlocks := uint32(size / BlockSize)
 
-	n.log.LogAttrs(n.ctx, logger.Debug,
+	n.log.LogAttrs(n.ctx, LevelTrace,
 		"nbd zero-at",
 		slog.Int64("size", size),
 		slog.Int64("offset", off),
@@ -316,7 +316,7 @@ func (n *nbdWrapper) ZeroAt(off, size int64) error {
 	// 2^16, so we'll break this up.
 
 	if numBlocks > MaxBlocks {
-		n.log.Debug("detected very large trim request, breaking up into smaller extents")
+		trace(n.log, "detected very large trim request, breaking up into smaller extents")
 
 		err := n.flushPendingWrite()
 		if err != nil {
@@ -397,7 +397,7 @@ func (n *nbdWrapper) Size() (int64, error) {
 func (n *nbdWrapper) Sync() error {
 	defer n.buf.Reset()
 
-	n.log.Debug("nbd sync")
+	trace(n.log, "nbd sync")
 
 	err := n.flushPendingWrite()
 	if err != nil {

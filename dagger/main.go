@@ -67,13 +67,21 @@ func (m *Runtime) WithServices(dir *dagger.Directory) *dagger.Container {
 		WithEnvVariable("ALLOW_NONE_AUTHENTICATION", "yes").
 		WithEnvVariable("ETCD_ADVERTISE_CLIENT_URLS", "http://etcd:2379").
 		WithExposedPort(2379).
-		//WithExposedPort(2380).
+		AsService()
+
+	minio := dag.Container().
+		From("quay.io/minio/minio:latest").
+		WithEnvVariable("MINIO_ROOT_USER", "admin").
+		WithEnvVariable("MINIO_ROOT_PASSWORD", "password").
+		WithExposedPort(9000).
+		WithExec([]string{"minio", "server", "/data"}).
 		AsService()
 
 	return m.BuildEnv(dir).
 		WithServiceBinding("clickhouse", ch).
 		WithServiceBinding("postgres", pg).
-		WithServiceBinding("etcd", etcd)
+		WithServiceBinding("etcd", etcd).
+		WithServiceBinding("minio", minio)
 }
 
 func (m *Runtime) Etcd() *dagger.Container {
@@ -98,6 +106,7 @@ func (m *Runtime) BuildEnv(dir *dagger.Directory) *dagger.Container {
 		WithMountedCache("/go/build-cache", dag.CacheVolume("go-build-124")).
 		WithEnvVariable("GOCACHE", "/go/build-cache").
 		WithExec([]string{"apt-get", "update"}).
+		WithExec([]string{"go", "install", "gotest.tools/gotestsum@latest"}).
 		WithExec([]string{"apt-get", "install", "-y", "iptables", "bash", "iproute2", "inetutils-ping"}).
 		WithFile("/upstream/containerd.tar.gz", dag.HTTP(containerd)).
 		WithFile("/upstream/buildkit.tar.gz", dag.HTTP(buildkit)).
@@ -140,11 +149,13 @@ func (m *Runtime) Test(
 	count int,
 	// +optional
 	verbose bool,
+	// +optional
+	run string,
 ) (string, error) {
 	w := m.WithServices(dir).
 		WithDirectory("/src", dir).
 		WithWorkdir("/src").
-		WithExec([]string{"go", "install", "./pkg/gotestsum"}).
+		WithEnvVariable("S3_URL", "http://minio:9000").
 		WithMountedCache("/data", dag.CacheVolume("containerd"))
 
 	if tests == "" {
@@ -154,6 +165,7 @@ func (m *Runtime) Test(
 	if shell {
 		w = w.Terminal(dagger.ContainerTerminalOpts{
 			InsecureRootCapabilities: true,
+			Cmd:                      []string{"/bin/bash"},
 		})
 	} else {
 		args := []string{"sh", "/src/hack/test.sh"}
@@ -165,6 +177,10 @@ func (m *Runtime) Test(
 		if count > 0 {
 			//args = append(args, "--")
 			args = append(args, "-count", strconv.Itoa(count))
+		}
+
+		if run != "" {
+			args = append(args, "-run", run)
 		}
 
 		if verbose {

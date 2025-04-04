@@ -63,6 +63,22 @@ attrs:
         type: int
         doc: The port number that should be forwarded from the node to the container
 
+  volume:
+    type: component
+    doc: A volume that is available for binding into containers
+    many: true
+    attrs:
+      name:
+        type: string
+        doc: The name of the volume
+      provider:
+        type: string
+        doc: What provider should provide the volume
+      labels:
+        type: label
+        doc: Labels that identify the volume to the provider
+        many: true
+
   container:
     type: component
     doc: A container running in the sandbox

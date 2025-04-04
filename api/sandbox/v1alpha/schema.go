@@ -3,6 +3,7 @@ package v1alpha
 import (
 	entity "miren.dev/runtime/pkg/entity"
 	schema "miren.dev/runtime/pkg/entity/schema"
+	types "miren.dev/runtime/pkg/entity/types"
 )
 
 var (
@@ -16,6 +17,7 @@ const (
 	NetworkId     = entity.Id("dev.miren.sandbox/network")
 	PortId        = entity.Id("dev.miren.sandbox/port")
 	RouteId       = entity.Id("dev.miren.sandbox/route")
+	VolumeId      = entity.Id("dev.miren.sandbox/volume")
 )
 
 type Sandbox struct {
@@ -26,6 +28,7 @@ type Sandbox struct {
 	Network     []Network   `json:"network,omitempty"`
 	Port        []Port      `json:"port,omitempty"`
 	Route       []Route     `json:"route,omitempty"`
+	Volume      []Volume    `json:"volume,omitempty"`
 }
 
 func (o *Sandbox) Decode(e entity.AttrGetter) {
@@ -66,6 +69,13 @@ func (o *Sandbox) Decode(e entity.AttrGetter) {
 			o.Route = append(o.Route, v)
 		}
 	}
+	for _, a := range e.GetAll(VolumeId) {
+		if a.Value.Kind() == entity.KindComponent {
+			var v Volume
+			v.Decode(a.Value.Component())
+			o.Volume = append(o.Volume, v)
+		}
+	}
 }
 
 func (o *Sandbox) Encode() (attrs []entity.Attr) {
@@ -85,6 +95,9 @@ func (o *Sandbox) Encode() (attrs []entity.Attr) {
 	for _, v := range o.Route {
 		attrs = append(attrs, entity.Component(RouteId, v.Encode()))
 	}
+	for _, v := range o.Volume {
+		attrs = append(attrs, entity.Component(VolumeId, v.Encode()))
+	}
 	return
 }
 
@@ -99,6 +112,8 @@ func (o *Sandbox) InitSchema(sb *schema.SchemaBuilder) {
 	(&Port{}).InitSchema(sb.Builder("port"))
 	sb.Component("route", schema.Doc("A network route the container uses"), schema.Many)
 	(&Route{}).InitSchema(sb.Builder("route"))
+	sb.Component("volume", schema.Doc("A volume that is available for binding into containers"), schema.Many)
+	(&Volume{}).InitSchema(sb.Builder("volume"))
 }
 
 const (
@@ -336,6 +351,47 @@ func (o *Route) Encode() (attrs []entity.Attr) {
 func (o *Route) InitSchema(sb *schema.SchemaBuilder) {
 	sb.String("destination", schema.Doc("The network destination"))
 	sb.String("gateway", schema.Doc("The next hop for the destination"))
+}
+
+const (
+	VolumeLabelsId   = entity.Id("dev.miren.sandbox.volume/labels")
+	VolumeNameId     = entity.Id("dev.miren.sandbox.volume/name")
+	VolumeProviderId = entity.Id("dev.miren.sandbox.volume/provider")
+)
+
+type Volume struct {
+	Labels   types.Labels `json:"labels,omitempty"`
+	Name     string       `json:"name,omitempty"`
+	Provider string       `json:"provider,omitempty"`
+}
+
+func (o *Volume) Decode(e entity.AttrGetter) {
+	for _, a := range e.GetAll(VolumeLabelsId) {
+		if a.Value.Kind() == entity.KindLabel {
+			o.Labels = append(o.Labels, a.Value.Label())
+		}
+	}
+	if a, ok := e.Get(VolumeNameId); ok && a.Value.Kind() == entity.KindString {
+		o.Name = a.Value.String()
+	}
+	if a, ok := e.Get(VolumeProviderId); ok && a.Value.Kind() == entity.KindString {
+		o.Provider = a.Value.String()
+	}
+}
+
+func (o *Volume) Encode() (attrs []entity.Attr) {
+	for _, v := range o.Labels {
+		attrs = append(attrs, entity.Label(VolumeLabelsId, v.Key, v.Value))
+	}
+	attrs = append(attrs, entity.String(VolumeNameId, o.Name))
+	attrs = append(attrs, entity.String(VolumeProviderId, o.Provider))
+	return
+}
+
+func (o *Volume) InitSchema(sb *schema.SchemaBuilder) {
+	sb.Label("labels", schema.Doc("Labels that identify the volume to the provider"), schema.Many)
+	sb.String("name", schema.Doc("The name of the volume"))
+	sb.String("provider", schema.Doc("What provider should provide the volume"))
 }
 
 func init() {

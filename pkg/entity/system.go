@@ -34,6 +34,7 @@ const (
 	TypeArray     Id = "db/type.array"
 	TypeDuration  Id = "db/type.duration"
 	TypeComponent Id = "db/type.component"
+	TypeLabel     Id = "db/type.label"
 
 	Index Id = "db/index"
 
@@ -94,7 +95,7 @@ func InitSystemEntities(save func(*Entity) error) error {
 	xtypes := ArrayValue(
 		TypeAny, TypeRef, TypeStr, TypeKeyword,
 		TypeInt, TypeFloat, TypeBool, TypeTime,
-		TypeEnum, TypeArray,
+		TypeEnum, TypeArray, TypeLabel,
 	)
 
 	typ := &Entity{
@@ -172,6 +173,7 @@ func InitSystemEntities(save func(*Entity) error) error {
 	typeArray := id(TypeArray, "Array type")
 	typeDuration := id(TypeDuration, "Duration type")
 	typeComponent := id(TypeComponent, "Component type")
+	typeLabel := id(TypeLabel, "Label type")
 
 	attrPred := &Entity{
 		Attrs: Attrs(
@@ -231,7 +233,7 @@ func InitSystemEntities(save func(*Entity) error) error {
 		ident, doc, uniq, card, typ, enumValues, enumType,
 		uniqueIdentity, uniqueValue, cardOne, cardMany,
 		typeAny, typeRef, typeStr, typeKW, typeInt, typeFloat, typeBool, typeTime, typeEnum,
-		typeArray, typeDuration, typeComponent, index,
+		typeArray, typeDuration, typeComponent, typeLabel, index,
 		attrPred, predIP, predCidr, entityAttrs, entityPreds, entityEnsure,
 		entityKind,
 	}

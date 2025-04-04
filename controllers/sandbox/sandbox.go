@@ -67,6 +67,8 @@ type SandboxController struct {
 	cond     *sync.Cond
 
 	runscConfigPath string
+
+	running sync.WaitGroup
 }
 
 func (c *SandboxController) setupRunscConfig() error {
@@ -210,6 +212,8 @@ func (c *SandboxController) Close() error {
 	if err != nil {
 		c.Log.Error("failed to close runsc monitor", "err", err)
 	}
+
+	c.running.Wait()
 
 	return nil
 }
@@ -443,6 +447,11 @@ func (c *SandboxController) createSandbox(ctx context.Context, co *v1alpha.Sandb
 	opts, err := c.buildSpec(ctx, co, ep, meta)
 	if err != nil {
 		return fmt.Errorf("failed to build container spec: %w", err)
+	}
+
+	err = c.configureVolumes(ctx, co)
+	if err != nil {
+		return fmt.Errorf("failed to configure volumes: %w", err)
 	}
 
 	cid := c.containerId(co.ID)
@@ -766,8 +775,13 @@ func (c *SandboxController) bootContainers(
 	return nil
 }
 
-func (c *SandboxController) sandboxPath(sb *v1alpha.Sandbox, sub string) string {
-	return filepath.Join(c.Tempdir, "containerd", sb.ID.PathSafe(), sub)
+func (c *SandboxController) sandboxPath(sb *v1alpha.Sandbox, sub ...string) string {
+	parts := append(
+		[]string{c.Tempdir, "containerd", sb.ID.PathSafe()},
+		sub...,
+	)
+
+	return filepath.Join(parts...)
 }
 
 func (c *SandboxController) buildSubContainerSpec(
@@ -829,6 +843,34 @@ func (c *SandboxController) buildSubContainerSpec(
 			Source:      resolvePath,
 			Options:     []string{"rbind", "rw"},
 		},
+	}
+
+	for _, m := range co.Mount {
+		rawPath := c.sandboxPath(sb, "volumes", m.Source)
+		st, err := os.Lstat(rawPath)
+		if err != nil {
+			return nil, fmt.Errorf("volume %s does not exist", rawPath)
+		}
+
+		for st.Mode().Type() == os.ModeSymlink {
+			tgt, err := os.Readlink(rawPath)
+			if err != nil {
+				return nil, fmt.Errorf("failed to read symlink %s: %w", rawPath, err)
+			}
+
+			rawPath = tgt
+			st, err = os.Stat(rawPath)
+			if err != nil {
+				return nil, fmt.Errorf("volume %s does not exist", rawPath)
+			}
+		}
+
+		mounts = append(mounts, specs.Mount{
+			Destination: m.Destination,
+			Type:        "bind",
+			Source:      rawPath,
+			Options:     []string{"rbind", "rw"},
+		})
 	}
 
 	dir := co.Directory
