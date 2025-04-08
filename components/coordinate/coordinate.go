@@ -30,11 +30,12 @@ type Coordinator struct {
 	CoordinatorConfig
 
 	Log *slog.Logger
+
+	state *rpc.State
 }
 
 func (c *Coordinator) Start(ctx context.Context) error {
 	c.Log.Info("starting coordinator", "address", c.Address, "etcd_endpoints", c.EtcdEndpoints, "prefix", c.Prefix)
-	defer c.Log.Info("coordinator stopped")
 
 	rs, err := rpc.NewState(ctx, rpc.WithSkipVerify, rpc.WithBindAddr(c.Address))
 	if err != nil {
@@ -53,7 +54,7 @@ func (c *Coordinator) Start(ctx context.Context) error {
 		return err
 	}
 
-	etcdStore, err := entity.NewEtcdStore(ctx, client, c.Prefix)
+	etcdStore, err := entity.NewEtcdStore(ctx, c.Log, client, c.Prefix)
 	if err != nil {
 		c.Log.Error("failed to create etcd store", "error", err)
 		return err
@@ -70,6 +71,8 @@ func (c *Coordinator) Start(ctx context.Context) error {
 	ess.Store = etcdStore
 
 	server.ExposeValue("entities", esv1.AdaptEntityAccess(&ess))
+
+	c.state = rs
 
 	c.Log.Info("started RPC server")
 	return nil

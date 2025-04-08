@@ -116,7 +116,7 @@ func TestContainerd(t *testing.T) {
 		container.Label = append(container.Label, "runtime.computer/app=mn-nginx")
 
 		cont := &entity.Entity{
-			ID:    id,
+			ID:    entity.Id(id),
 			Attrs: container.Encode(),
 		}
 

@@ -1,12 +1,16 @@
 package entityserver
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
 	"fmt"
 	"log/slog"
 
 	"github.com/davecgh/go-spew/spew"
+	"github.com/fxamacker/cbor/v2"
 	clientv3 "go.etcd.io/etcd/client/v3"
+	"gopkg.in/yaml.v3"
 	"miren.dev/runtime/api/entityserver/v1alpha"
 	"miren.dev/runtime/pkg/entity"
 )
@@ -49,22 +53,36 @@ func (e *EntityServer) Put(ctx context.Context, req *v1alpha.EntityAccessPut) er
 		return fmt.Errorf("missing required field: entity")
 	}
 
-	rpctypes := args.Entity()
+	rpcE := args.Entity()
 
-	attrs := rpctypes.Attrs()
+	attrs := rpcE.Attrs()
 	if len(attrs) == 0 {
 		return fmt.Errorf("missing required field: attrs")
 	}
 
-	// TODO: handle created_at and updated_at fileds
-	re, err := e.Store.CreateEntity(ctx, attrs)
-	if err != nil {
-		return fmt.Errorf("failed to create entity: %w", err)
+	results := req.Results()
+
+	if rpcE.HasId() {
+		// TODO: handle updated_at
+		re, err := e.Store.UpdateEntity(ctx, entity.Id(rpcE.Id()), attrs)
+		if err != nil {
+			return fmt.Errorf("failed to create entity: %w", err)
+		}
+
+		e.Log.Debug("updated entity", "id", re.ID)
+		results.SetRevision(re.Revision)
+		results.SetId(re.ID.String())
+	} else {
+		// TODO: handle created_at and updated_at fileds
+		re, err := e.Store.CreateEntity(ctx, attrs)
+		if err != nil {
+			return fmt.Errorf("failed to create entity: %w", err)
+		}
+
+		e.Log.Debug("created entity", "id", re.ID)
+		results.SetRevision(re.Revision)
+		results.SetId(re.ID.String())
 	}
-
-	e.Log.Debug("created entity", "id", re.ID)
-
-	req.Results().SetRevision(re.Revision)
 
 	return nil
 }
@@ -138,7 +156,6 @@ func (e *EntityServer) WatchIndex(ctx context.Context, req *v1alpha.EntityAccess
 					op.SetEntityId(string(event.Kv.Value))
 					en, err := e.Store.GetEntity(ctx, entity.Id(event.Kv.Value))
 					if err != nil {
-						spew.Dump(event)
 						e.Log.Error("failed to get entity for event", "error", err, "id", event.Kv.Value)
 						continue
 					}
@@ -201,6 +218,134 @@ func (e *EntityServer) List(ctx context.Context, req *v1alpha.EntityAccessList) 
 	}
 
 	req.Results().SetValues(ret)
+
+	return nil
+}
+
+func (e *EntityServer) Parse(ctx context.Context, req *v1alpha.EntityAccessParse) error {
+	args := req.Args()
+
+	data := args.Data()
+
+	var x any
+
+	err := yaml.NewDecoder(bytes.NewReader(data)).Decode(&x)
+	if err != nil {
+		return err
+	}
+
+	m, ok := x.(map[string]any)
+	if !ok {
+		return fmt.Errorf("invalid entity format")
+	}
+
+	kind, ok := m["kind"].(string)
+	if !ok {
+		return fmt.Errorf("missing kind")
+	}
+
+	version, ok := m["version"].(string)
+	if !ok {
+		return fmt.Errorf("missing version")
+	}
+
+	schema, err := e.Store.GetEntity(ctx, entity.Id("schema."+kind+"/"+version))
+	if err != nil {
+		return fmt.Errorf("failed to get schema: %w", err)
+	}
+
+	esch, ok := schema.Get(entity.Schema)
+	if !ok {
+		return fmt.Errorf("missing schema")
+	}
+
+	var es entity.EncodedSchema
+	gr, err := gzip.NewReader(bytes.NewReader(esch.Value.Bytes()))
+	if err != nil {
+		return fmt.Errorf("failed to create gzip reader: %w", err)
+	}
+
+	defer gr.Close()
+
+	err = cbor.NewDecoder(gr).Decode(&es)
+	if err != nil {
+		return fmt.Errorf("failed to decode schema: %w", err)
+	}
+
+	attrs, err := entity.NaturalDecode(x, &es)
+	if err != nil {
+		return fmt.Errorf("failed to decode entity: %w", err)
+	}
+
+	var rpcEntity v1alpha.Entity
+	rpcEntity.SetAttrs(attrs)
+
+	req.Results().SetEntity(&rpcEntity)
+	return nil
+}
+
+func (e *EntityServer) Format(ctx context.Context, req *v1alpha.EntityAccessFormat) error {
+	args := req.Args()
+
+	ent := args.Entity().Entity()
+
+	sid, ok := ent.Get(entity.EntitySchema)
+	if !ok {
+		req.Results().SetData([]byte(spew.Sdump(ent)))
+		return nil
+	}
+
+	schema, err := e.Store.GetEntity(ctx, sid.Value.Id())
+	if err != nil {
+		return fmt.Errorf("failed to get schema: %w", err)
+	}
+
+	esch, ok := schema.Get(entity.Schema)
+	if !ok {
+		return fmt.Errorf("missing schema")
+	}
+
+	var es entity.EncodedSchema
+	gr, err := gzip.NewReader(bytes.NewReader(esch.Value.Bytes()))
+	if err != nil {
+		return fmt.Errorf("failed to create gzip reader: %w", err)
+	}
+
+	defer gr.Close()
+
+	err = cbor.NewDecoder(gr).Decode(&es)
+	if err != nil {
+		return fmt.Errorf("failed to decode schema: %w", err)
+	}
+
+	m, err := entity.NaturalEncode(ent, &es)
+	if err != nil {
+		return fmt.Errorf("failed to encode entity: %w", err)
+	}
+
+	var n yaml.Node
+	err = n.Encode(map[string]any{
+		"attrs": ent.Attrs,
+	})
+
+	var n2 yaml.Node
+	err = n2.Encode(map[string]any{
+		fmt.Sprintf("%s/%s", es.Name, es.Version): m,
+	})
+
+	n2.Content = append(n2.Content, n.Content...)
+
+	var buf bytes.Buffer
+
+	enc := yaml.NewEncoder(&buf)
+	enc.SetIndent(2)
+
+	err = enc.Encode(&n2)
+	if err != nil {
+		return fmt.Errorf("failed to encode entity: %w", err)
+	}
+
+	req.Results().SetData(buf.Bytes())
 
 	return nil
 }

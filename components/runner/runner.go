@@ -7,6 +7,7 @@ import (
 
 	containerd "github.com/containerd/containerd/v2/client"
 	es "miren.dev/runtime/api/entityserver/v1alpha"
+	ns "miren.dev/runtime/api/node/v1alpha"
 	sb "miren.dev/runtime/api/sandbox/v1alpha"
 	sc "miren.dev/runtime/api/schedule/v1alpha"
 	"miren.dev/runtime/controllers/sandbox"
@@ -67,7 +68,6 @@ func (r *Runner) ContainerdContainerForSandbox(ctx context.Context, id entity.Id
 
 func (r *Runner) Start(ctx context.Context) error {
 	r.Log.Info("Starting runner", "id", r.Id)
-	defer r.Log.Info("Runner stopped", "id", r.Id)
 
 	rs, err := rpc.NewState(ctx, rpc.WithSkipVerify)
 	if err != nil {
@@ -86,7 +86,41 @@ func (r *Runner) Start(ctx context.Context) error {
 		return err
 	}
 
-	return cm.Start(ctx)
+	err = r.setupEntity(&eas)
+	if err != nil {
+		return err
+	}
+
+	err = cm.Start(ctx)
+	if err != nil {
+		return err
+	}
+
+	r.Log.Info("Runner running", "id", r.Id)
+
+	return nil
+}
+
+func (r *Runner) setupEntity(eas *es.EntityAccessClient) error {
+	if r.Id == "" {
+		return nil
+	}
+
+	var ent es.Entity
+
+	ent.SetAttrs(entity.Attrs(
+		entity.Ident, r.Id,
+		entity.EntityKind, ns.KindNode,
+		entity.EntitySchema, ns.Schema,
+		ns.StatusId, ns.StatusReadyId,
+	))
+
+	_, err := eas.Put(context.Background(), &ent)
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func (r *Runner) SetupControllers(

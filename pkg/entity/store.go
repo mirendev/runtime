@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"sync"
 
@@ -13,6 +14,7 @@ import (
 
 // EtcdStore implements Store using etcd
 type EtcdStore struct {
+	log       *slog.Logger
 	client    *clientv3.Client
 	validator *Validator
 	prefix    string
@@ -24,6 +26,7 @@ type EtcdStore struct {
 type Store interface {
 	GetEntity(ctx context.Context, id Id) (*Entity, error)
 	CreateEntity(ctx context.Context, attributes []Attr) (*Entity, error)
+	UpdateEntity(ctx context.Context, id Id, attributes []Attr) (*Entity, error)
 	DeleteEntity(ctx context.Context, id Id) error
 	WatchIndex(ctx context.Context, attr Attr) (clientv3.WatchChan, error)
 	ListIndex(ctx context.Context, attr Attr) ([]Id, error)
@@ -34,8 +37,9 @@ var ErrNotFound = errors.New("entity not found")
 var _ Store = (*EtcdStore)(nil)
 
 // NewEtcdStore creates a new etcd-backed entity store
-func NewEtcdStore(ctx context.Context, client *clientv3.Client, prefix string) (*EtcdStore, error) {
+func NewEtcdStore(ctx context.Context, log *slog.Logger, client *clientv3.Client, prefix string) (*EtcdStore, error) {
 	store := &EtcdStore{
+		log:         log,
 		client:      client,
 		prefix:      prefix,
 		schemaCache: make(map[Id]*AttributeSchema),
@@ -186,18 +190,33 @@ func (s *EtcdStore) UpdateEntity(ctx context.Context, id Id, attributes []Attr) 
 		return nil, err
 	}
 
+	var collections []Attr
+
 	// Validate attributes
-	for i, attr := range attributes {
+	for _, attr := range attributes {
 		if err := s.validator.ValidateAttribute(ctx, &attr); err != nil {
 			return nil, fmt.Errorf("invalid attribute %s: %w", attr.ID, err)
 		}
-		attributes[i] = attr
+
+		schema, err := s.GetAttributeSchema(ctx, attr.ID)
+		if err != nil {
+			return nil, err
+		}
+
+		if schema.Index {
+			collections = append(collections, attr)
+		}
 	}
 
-	entity.Attrs = append(entity.Attrs, attributes...)
-	entity.UpdatedAt = now()
+	err = entity.Update(attributes)
+	if err != nil {
+		return nil, fmt.Errorf("failed to update entity: %w", err)
+	}
 
-	entity.Fixup()
+	err = s.validator.ValidateAttributes(ctx, entity.Attrs)
+	if err != nil {
+		return nil, err
+	}
 
 	data, err := encoder.Marshal(entity)
 	if err != nil {
@@ -221,6 +240,15 @@ func (s *EtcdStore) UpdateEntity(ctx context.Context, id Id, attributes []Attr) 
 	}
 
 	entity.Revision = txnResp.Header.Revision
+
+	// Gotta be sure we add to collections AFTER creating the entity so that
+	// fast readers don't see the entity before it's fully created
+	for _, attr := range collections {
+		err := s.addToCollection(entity, attr.CAS())
+		if err != nil {
+			return nil, err
+		}
+	}
 
 	return entity, nil
 }
@@ -316,8 +344,6 @@ func (s *EtcdStore) addToCollection(entity *Entity, collection string) error {
 
 	_, err := s.client.Put(ctx, key, entity.ID.String())
 	return err
-
-	return nil
 }
 
 func (s *EtcdStore) deleteFromCollection(entity *Entity, collection string) error {
@@ -343,8 +369,6 @@ func (s *EtcdStore) deleteFromCollection(entity *Entity, collection string) erro
 
 	_, err := s.client.Delete(ctx, key)
 	return err
-
-	return nil
 }
 
 func (s *EtcdStore) ListIndex(ctx context.Context, attr Attr) ([]Id, error) {

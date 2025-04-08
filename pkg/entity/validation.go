@@ -207,6 +207,15 @@ func (v *Validator) ValidateAttribute(ctx context.Context, attr *Attr) error {
 		if _, ok := attr.Value.Any().(string); !ok {
 			return fmt.Errorf("attribute %s must be a string (is %T)", name, attr.Value.Any())
 		}
+	case TypeBytes:
+		if _, ok := attr.Value.Any().([]byte); !ok {
+			return fmt.Errorf("attribute %s must be a byte array (is %T)", name, attr.Value.Any())
+		}
+
+	case TypeLabel:
+		if _, ok := attr.Value.Any().(etypes.Label); !ok {
+			return fmt.Errorf("attribute %s must be a label (is %T)", name, attr.Value.Any())
+		}
 	case TypeInt:
 		// Go's CBOR libraries may unmarshal integers as different types
 		switch v := attr.Value.Any().(type) {

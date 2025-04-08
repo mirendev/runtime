@@ -459,7 +459,8 @@ func (v *EntityAccessPutArgs) UnmarshalJSON(data []byte) error {
 }
 
 type entityAccessPutResultsData struct {
-	Revision *int64 `cbor:"0,keyasint,omitempty" json:"revision,omitempty"`
+	Revision *int64  `cbor:"0,keyasint,omitempty" json:"revision,omitempty"`
+	Id       *string `cbor:"1,keyasint,omitempty" json:"id,omitempty"`
 }
 
 type EntityAccessPutResults struct {
@@ -469,6 +470,10 @@ type EntityAccessPutResults struct {
 
 func (v *EntityAccessPutResults) SetRevision(revision int64) {
 	v.data.Revision = &revision
+}
+
+func (v *EntityAccessPutResults) SetId(id string) {
+	v.data.Id = &id
 }
 
 func (v *EntityAccessPutResults) MarshalCBOR() ([]byte, error) {
@@ -683,6 +688,134 @@ func (v *EntityAccessListResults) UnmarshalJSON(data []byte) error {
 	return json.Unmarshal(data, &v.data)
 }
 
+type entityAccessParseArgsData struct {
+	Data *[]byte `cbor:"0,keyasint,omitempty" json:"data,omitempty"`
+}
+
+type EntityAccessParseArgs struct {
+	call *rpc.Call
+	data entityAccessParseArgsData
+}
+
+func (v *EntityAccessParseArgs) HasData() bool {
+	return v.data.Data != nil
+}
+
+func (v *EntityAccessParseArgs) Data() []byte {
+	if v.data.Data == nil {
+		return nil
+	}
+	return *v.data.Data
+}
+
+func (v *EntityAccessParseArgs) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *EntityAccessParseArgs) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *EntityAccessParseArgs) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *EntityAccessParseArgs) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type entityAccessParseResultsData struct {
+	Entity *Entity `cbor:"0,keyasint,omitempty" json:"entity,omitempty"`
+}
+
+type EntityAccessParseResults struct {
+	call *rpc.Call
+	data entityAccessParseResultsData
+}
+
+func (v *EntityAccessParseResults) SetEntity(entity *Entity) {
+	v.data.Entity = entity
+}
+
+func (v *EntityAccessParseResults) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *EntityAccessParseResults) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *EntityAccessParseResults) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *EntityAccessParseResults) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type entityAccessFormatArgsData struct {
+	Entity *Entity `cbor:"0,keyasint,omitempty" json:"entity,omitempty"`
+}
+
+type EntityAccessFormatArgs struct {
+	call *rpc.Call
+	data entityAccessFormatArgsData
+}
+
+func (v *EntityAccessFormatArgs) HasEntity() bool {
+	return v.data.Entity != nil
+}
+
+func (v *EntityAccessFormatArgs) Entity() *Entity {
+	return v.data.Entity
+}
+
+func (v *EntityAccessFormatArgs) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *EntityAccessFormatArgs) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *EntityAccessFormatArgs) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *EntityAccessFormatArgs) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type entityAccessFormatResultsData struct {
+	Data *[]byte `cbor:"0,keyasint,omitempty" json:"data,omitempty"`
+}
+
+type EntityAccessFormatResults struct {
+	call *rpc.Call
+	data entityAccessFormatResultsData
+}
+
+func (v *EntityAccessFormatResults) SetData(data []byte) {
+	x := slices.Clone(data)
+	v.data.Data = &x
+}
+
+func (v *EntityAccessFormatResults) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *EntityAccessFormatResults) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *EntityAccessFormatResults) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *EntityAccessFormatResults) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
 type EntityAccessGet struct {
 	*rpc.Call
 	args    EntityAccessGetArgs
@@ -813,12 +946,66 @@ func (t *EntityAccessList) Results() *EntityAccessListResults {
 	return results
 }
 
+type EntityAccessParse struct {
+	*rpc.Call
+	args    EntityAccessParseArgs
+	results EntityAccessParseResults
+}
+
+func (t *EntityAccessParse) Args() *EntityAccessParseArgs {
+	args := &t.args
+	if args.call != nil {
+		return args
+	}
+	args.call = t.Call
+	t.Call.Args(args)
+	return args
+}
+
+func (t *EntityAccessParse) Results() *EntityAccessParseResults {
+	results := &t.results
+	if results.call != nil {
+		return results
+	}
+	results.call = t.Call
+	t.Call.Results(results)
+	return results
+}
+
+type EntityAccessFormat struct {
+	*rpc.Call
+	args    EntityAccessFormatArgs
+	results EntityAccessFormatResults
+}
+
+func (t *EntityAccessFormat) Args() *EntityAccessFormatArgs {
+	args := &t.args
+	if args.call != nil {
+		return args
+	}
+	args.call = t.Call
+	t.Call.Args(args)
+	return args
+}
+
+func (t *EntityAccessFormat) Results() *EntityAccessFormatResults {
+	results := &t.results
+	if results.call != nil {
+		return results
+	}
+	results.call = t.Call
+	t.Call.Results(results)
+	return results
+}
+
 type EntityAccess interface {
 	Get(ctx context.Context, state *EntityAccessGet) error
 	Put(ctx context.Context, state *EntityAccessPut) error
 	Delete(ctx context.Context, state *EntityAccessDelete) error
 	WatchIndex(ctx context.Context, state *EntityAccessWatchIndex) error
 	List(ctx context.Context, state *EntityAccessList) error
+	Parse(ctx context.Context, state *EntityAccessParse) error
+	Format(ctx context.Context, state *EntityAccessFormat) error
 }
 
 type reexportEntityAccess struct {
@@ -842,6 +1029,14 @@ func (_ reexportEntityAccess) WatchIndex(ctx context.Context, state *EntityAcces
 }
 
 func (_ reexportEntityAccess) List(ctx context.Context, state *EntityAccessList) error {
+	panic("not implemented")
+}
+
+func (_ reexportEntityAccess) Parse(ctx context.Context, state *EntityAccessParse) error {
+	panic("not implemented")
+}
+
+func (_ reexportEntityAccess) Format(ctx context.Context, state *EntityAccessFormat) error {
 	panic("not implemented")
 }
 
@@ -889,6 +1084,22 @@ func AdaptEntityAccess(t EntityAccess) *rpc.Interface {
 			Index:         0,
 			Handler: func(ctx context.Context, call *rpc.Call) error {
 				return t.List(ctx, &EntityAccessList{Call: call})
+			},
+		},
+		{
+			Name:          "parse",
+			InterfaceName: "EntityAccess",
+			Index:         0,
+			Handler: func(ctx context.Context, call *rpc.Call) error {
+				return t.Parse(ctx, &EntityAccessParse{Call: call})
+			},
+		},
+		{
+			Name:          "format",
+			InterfaceName: "EntityAccess",
+			Index:         0,
+			Handler: func(ctx context.Context, call *rpc.Call) error {
+				return t.Format(ctx, &EntityAccessFormat{Call: call})
 			},
 		},
 	}
@@ -945,6 +1156,17 @@ func (v *EntityAccessClientPutResults) Revision() int64 {
 		return 0
 	}
 	return *v.data.Revision
+}
+
+func (v *EntityAccessClientPutResults) HasId() bool {
+	return v.data.Id != nil
+}
+
+func (v *EntityAccessClientPutResults) Id() string {
+	if v.data.Id == nil {
+		return ""
+	}
+	return *v.data.Id
 }
 
 func (v EntityAccessClient) Put(ctx context.Context, entity *Entity) (*EntityAccessClientPutResults, error) {
@@ -1039,4 +1261,61 @@ func (v EntityAccessClient) List(ctx context.Context, index entity.Attr) (*Entit
 	}
 
 	return &EntityAccessClientListResults{client: v.Client, data: ret}, nil
+}
+
+type EntityAccessClientParseResults struct {
+	client *rpc.Client
+	data   entityAccessParseResultsData
+}
+
+func (v *EntityAccessClientParseResults) HasEntity() bool {
+	return v.data.Entity != nil
+}
+
+func (v *EntityAccessClientParseResults) Entity() *Entity {
+	return v.data.Entity
+}
+
+func (v EntityAccessClient) Parse(ctx context.Context, data []byte) (*EntityAccessClientParseResults, error) {
+	args := EntityAccessParseArgs{}
+	args.data.Data = &data
+
+	var ret entityAccessParseResultsData
+
+	err := v.Client.Call(ctx, "parse", &args, &ret)
+	if err != nil {
+		return nil, err
+	}
+
+	return &EntityAccessClientParseResults{client: v.Client, data: ret}, nil
+}
+
+type EntityAccessClientFormatResults struct {
+	client *rpc.Client
+	data   entityAccessFormatResultsData
+}
+
+func (v *EntityAccessClientFormatResults) HasData() bool {
+	return v.data.Data != nil
+}
+
+func (v *EntityAccessClientFormatResults) Data() []byte {
+	if v.data.Data == nil {
+		return nil
+	}
+	return *v.data.Data
+}
+
+func (v EntityAccessClient) Format(ctx context.Context, entity *Entity) (*EntityAccessClientFormatResults, error) {
+	args := EntityAccessFormatArgs{}
+	args.data.Entity = entity
+
+	var ret entityAccessFormatResultsData
+
+	err := v.Client.Call(ctx, "format", &args, &ret)
+	if err != nil {
+		return nil, err
+	}
+
+	return &EntityAccessClientFormatResults{client: v.Client, data: ret}, nil
 }

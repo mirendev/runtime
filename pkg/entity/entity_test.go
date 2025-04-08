@@ -324,3 +324,37 @@ func TestValidKeyword(t *testing.T) {
 		})
 	}
 }
+
+func TestRemove(t *testing.T) {
+	// Create a test entity
+	attrs := []Attr{
+		Any(Ident, "test/person"),
+		Any(Doc, "A test person"),
+	}
+
+	ent := &Entity{Attrs: attrs}
+
+	ent.Remove(Doc)
+
+	r := require.New(t)
+
+	r.Len(ent.Attrs, 1)
+}
+
+func TestEntity(t *testing.T) {
+	t.Run("dedups attributes", func(t *testing.T) {
+		r := require.New(t)
+
+		attrs := []Attr{
+			Any(Ident, "test/person"),
+			Any(Doc, "A test person"),
+			Any(Doc, "A test person"),
+		}
+
+		ent := &Entity{Attrs: attrs}
+
+		ent.Fixup()
+
+		r.Len(ent.Attrs, 2)
+	})
+}

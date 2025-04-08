@@ -271,6 +271,7 @@ func (c *ReconcileController) periodicResync(ctx context.Context) {
 
 			ev := Event{
 				Type:   EventUpdated,
+				Id:     entity.Id(aen.Id()),
 				Entity: en,
 			}
 

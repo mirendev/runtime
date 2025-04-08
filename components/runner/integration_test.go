@@ -11,9 +11,10 @@ import (
 	"github.com/containerd/containerd/v2/pkg/namespaces"
 	"github.com/stretchr/testify/require"
 	"miren.dev/runtime/api/entityserver/v1alpha"
+	ns "miren.dev/runtime/api/node/v1alpha"
 	sb "miren.dev/runtime/api/sandbox/v1alpha"
-	sch "miren.dev/runtime/api/schedule/v1alpha"
 	"miren.dev/runtime/components/coordinate"
+	"miren.dev/runtime/components/scheduler"
 	"miren.dev/runtime/observability"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/rpc"
@@ -41,7 +42,7 @@ func TestRunnerCoordinatorIntegration(t *testing.T) {
 
 	// Setup runner config
 	runnerCfg := RunnerConfig{
-		Id:            "test-runner",
+		Id:            "node/test-runner",
 		ServerAddress: coordCfg.Address,
 		Workers:       2,
 	}
@@ -77,15 +78,41 @@ func TestRunnerCoordinatorIntegration(t *testing.T) {
 
 	eac := v1alpha.EntityAccessClient{Client: client}
 
+	// Check the node entity for the runner
+	nodeId := runnerCfg.Id
+
+	res, err := eac.Get(ctx, nodeId)
+	r.NoError(err)
+
+	r.True(res.HasEntity())
+
+	node := &entity.Entity{
+		Attrs: res.Entity().Attrs(),
+	}
+
+	status, ok := node.Get(ns.StatusId)
+	r.True(ok)
+
+	r.Equal(ns.StatusReadyId, status.Value.Id())
+
+	tmpSch, err := scheduler.NewScheduler(ctx, log, &eac)
+	r.NoError(err)
+
+	schNode, err := tmpSch.FindNodeById(entity.Id(nodeId))
+	r.NoError(err)
+
+	r.NotNil(schNode)
+
+	go tmpSch.Watch(ctx, &eac)
+
 	id := fmt.Sprintf("sandbox/test-%d", time.Now().Unix())
 
 	// Test creating a sandbox entity
 	sandbox := &v1alpha.Entity{}
-	sandbox.SetId(id)
-	sandbox.SetAttrs([]entity.Attr{
+	sandbox.SetAttrs(entity.Attrs(
+		entity.EntityKind, sb.KindSandbox,
 		entity.Keyword(entity.Ident, id),
-		sch.Index(sb.KindSandbox, runnerCfg.Id),
-	})
+	))
 
 	_, err = eac.Put(ctx, sandbox)
 	r.NoError(err)

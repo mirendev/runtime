@@ -2,6 +2,7 @@ package entity
 
 import (
 	"context"
+	"log/slog"
 	"testing"
 	"time"
 
@@ -32,7 +33,7 @@ func setupTestEtcd(t *testing.T) *clientv3.Client {
 
 func TestEtcdStore_CreateEntity(t *testing.T) {
 	client := setupTestEtcd(t)
-	store, err := NewEtcdStore(t.Context(), client, "/test-entities")
+	store, err := NewEtcdStore(t.Context(), slog.Default(), client, "/test-entities")
 	require.NoError(t, err)
 
 	e, err := store.CreateEntity(t.Context(), Attrs(
@@ -122,7 +123,7 @@ func TestEtcdStore_CreateEntity(t *testing.T) {
 
 func TestEtcdStore_AttrPred(t *testing.T) {
 	client := setupTestEtcd(t)
-	store, err := NewEtcdStore(t.Context(), client, "/test-entities")
+	store, err := NewEtcdStore(t.Context(), slog.Default(), client, "/test-entities")
 	require.NoError(t, err)
 
 	e, err := store.CreateEntity(t.Context(), Attrs(
@@ -182,7 +183,7 @@ func TestEtcdStore_AttrPred(t *testing.T) {
 
 func TestEtcdStore_GetEntity(t *testing.T) {
 	client := setupTestEtcd(t)
-	store, err := NewEtcdStore(t.Context(), client, "/test-entities")
+	store, err := NewEtcdStore(t.Context(), slog.Default(), client, "/test-entities")
 	require.NoError(t, err)
 
 	// Create a test entity
@@ -229,7 +230,7 @@ func TestEtcdStore_GetEntity(t *testing.T) {
 
 func TestEtcdStore_UpdateEntity(t *testing.T) {
 	client := setupTestEtcd(t)
-	store, err := NewEtcdStore(t.Context(), client, "/test-entities")
+	store, err := NewEtcdStore(t.Context(), slog.Default(), client, "/test-entities")
 	require.NoError(t, err)
 
 	// Create a test entity
@@ -293,7 +294,7 @@ func TestEtcdStore_UpdateEntity(t *testing.T) {
 
 func TestEtcdStore_DeleteEntity(t *testing.T) {
 	client := setupTestEtcd(t)
-	store, err := NewEtcdStore(t.Context(), client, "/test-entities")
+	store, err := NewEtcdStore(t.Context(), slog.Default(), client, "/test-entities")
 	require.NoError(t, err)
 
 	// Create a test entity
@@ -339,7 +340,7 @@ func TestEtcdStore_DeleteEntity(t *testing.T) {
 
 func TestEtcdStore_ListIndex(t *testing.T) {
 	client := setupTestEtcd(t)
-	store, err := NewEtcdStore(t.Context(), client, "/test-entities")
+	store, err := NewEtcdStore(t.Context(), slog.Default(), client, "/test-entities")
 	require.NoError(t, err)
 
 	// Create test entities with indexed attributes

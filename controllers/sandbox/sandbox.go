@@ -182,6 +182,14 @@ func (c *SandboxController) Init(ctx context.Context) error {
 
 	c.cond = sync.NewCond(&c.mu)
 
+	_, err = network.SetupBridge(&network.BridgeConfig{
+		Name:      c.Bridge,
+		Addresses: []netip.Prefix{c.Subnet.Router()},
+	})
+	if err != nil {
+		return err
+	}
+
 	return nil
 }
 
@@ -463,6 +471,8 @@ func (c *SandboxController) createSandbox(ctx context.Context, co *v1alpha.Sandb
 
 	defer func() {
 		if err != nil {
+			c.Log.Error("failed to create sandbox, cleaning up", "id", co.ID, "err", err)
+
 			task, _ := container.Task(ctx, nil)
 			if task != nil {
 				task.Delete(ctx, containerd.WithProcessKill)
@@ -476,6 +486,11 @@ func (c *SandboxController) createSandbox(ctx context.Context, co *v1alpha.Sandb
 	}()
 
 	task, err := c.bootInitialTask(ctx, co, ep, container)
+	if err != nil {
+		return err
+	}
+
+	err = c.bootContainers(ctx, co, ep, int(task.Pid()))
 	if err != nil {
 		return err
 	}
@@ -496,11 +511,6 @@ func (c *SandboxController) createSandbox(ctx context.Context, co *v1alpha.Sandb
 	}
 
 	c.Log.Info("sanbox started", "id", co.ID, "namespace", c.Namespace)
-
-	err = c.bootContainers(ctx, co, ep, int(task.Pid()))
-	if err != nil {
-		return err
-	}
 
 	return c.saveEntity(ctx, co, meta)
 }
@@ -799,13 +809,13 @@ func (c *SandboxController) buildSubContainerSpec(
 		// If the image is not found, we can try to pull it.
 		_, err = c.CC.Pull(ctx, co.Image, containerd.WithPullUnpack)
 		if err != nil {
-			return nil, fmt.Errorf("failed to pull image %s: %w", sandboxImage, err)
+			return nil, fmt.Errorf("failed to pull image %s: %w", co.Image, err)
 		}
 
 		img, err = c.CC.GetImage(ctx, co.Image)
 		if err != nil {
 			// If we still can't get the image, return the error.
-			return nil, fmt.Errorf("failed to get image %s: %w", sandboxImage, err)
+			return nil, fmt.Errorf("failed to get image %s: %w", co.Image, err)
 		}
 	}
 

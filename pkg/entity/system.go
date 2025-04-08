@@ -35,6 +35,7 @@ const (
 	TypeDuration  Id = "db/type.duration"
 	TypeComponent Id = "db/type.component"
 	TypeLabel     Id = "db/type.label"
+	TypeBytes     Id = "db/type.bytes"
 
 	Index Id = "db/index"
 
@@ -46,10 +47,13 @@ const (
 	AttrPred Id = "db/attr.pred"
 	Program  Id = "db/program"
 
-	EntityKind Id = "entity/kind"
+	EntityKind   Id = "entity/kind"
+	EntitySchema Id = "entity/schema"
 
 	PredIP   Id = "db/pred.ip"
 	PredCIDR Id = "db/pred.cidr"
+
+	Schema Id = "db/schema"
 )
 
 func InitSystemEntities(save func(*Entity) error) error {
@@ -95,7 +99,7 @@ func InitSystemEntities(save func(*Entity) error) error {
 	xtypes := ArrayValue(
 		TypeAny, TypeRef, TypeStr, TypeKeyword,
 		TypeInt, TypeFloat, TypeBool, TypeTime,
-		TypeEnum, TypeArray, TypeLabel,
+		TypeEnum, TypeArray, TypeLabel, TypeBytes,
 	)
 
 	typ := &Entity{
@@ -174,6 +178,7 @@ func InitSystemEntities(save func(*Entity) error) error {
 	typeDuration := id(TypeDuration, "Duration type")
 	typeComponent := id(TypeComponent, "Component type")
 	typeLabel := id(TypeLabel, "Label type")
+	typeBytes := id(TypeBytes, "Bytes type")
 
 	attrPred := &Entity{
 		Attrs: Attrs(
@@ -229,13 +234,31 @@ func InitSystemEntities(save func(*Entity) error) error {
 		),
 	}
 
+	entitySchema := &Entity{
+		Attrs: Attrs(
+			Ident, types.Keyword(Schema),
+			Doc, "An encoded Schema",
+			Cardinality, CardinalityOne,
+			Type, TypeBytes,
+		),
+	}
+
+	entityESchema := &Entity{
+		Attrs: Attrs(
+			Ident, types.Keyword(EntitySchema),
+			Doc, "A reference to the schema used by the entity",
+			Cardinality, CardinalityOne,
+			Type, TypeRef,
+		),
+	}
+
 	entities := []*Entity{
 		ident, doc, uniq, card, typ, enumValues, enumType,
 		uniqueIdentity, uniqueValue, cardOne, cardMany,
 		typeAny, typeRef, typeStr, typeKW, typeInt, typeFloat, typeBool, typeTime, typeEnum,
-		typeArray, typeDuration, typeComponent, typeLabel, index,
+		typeArray, typeDuration, typeComponent, typeLabel, typeBytes, index,
 		attrPred, predIP, predCidr, entityAttrs, entityPreds, entityEnsure,
-		entityKind,
+		entityKind, entitySchema, entityESchema,
 	}
 
 	for _, entity := range entities {

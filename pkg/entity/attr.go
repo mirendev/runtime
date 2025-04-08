@@ -1,11 +1,14 @@
 package entity
 
 import (
+	"bytes"
+	"cmp"
 	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
 	"math"
+	"slices"
 	"strconv"
 	"time"
 	"unsafe"
@@ -36,6 +39,23 @@ func (a Attr) CAS() string {
 	h, _ := blake2b.New256(nil)
 	a.Sum(h)
 	return base58.Encode(h.Sum(nil))
+}
+
+func (a Attr) Equal(b Attr) bool {
+	if a.ID != b.ID {
+		return false
+	}
+
+	return a.Value.Equal(b.Value)
+}
+
+func SortedAttrs(attrs []Attr) []Attr {
+	slices.SortFunc(attrs, func(a, b Attr) int {
+		return a.Compare(b)
+	})
+	return slices.CompactFunc(attrs, func(a, b Attr) bool {
+		return a.Equal(b)
+	})
 }
 
 type Value struct {
@@ -256,6 +276,10 @@ func Time(id Id, v time.Time) Attr {
 	return Attr{id, TimeValue(v)}
 }
 
+func Duration(id Id, v time.Duration) Attr {
+	return Attr{id, DurationValue(v)}
+}
+
 func Any(id Id, v any) Attr {
 	return Attr{id, AnyValue(v)}
 }
@@ -288,6 +312,10 @@ func Label(id Id, key, val string) Attr {
 	return Attr{id, LabelValue(key, val)}
 }
 
+func Bytes(id Id, b []byte) Attr {
+	return Attr{id, BytesValue(b)}
+}
+
 type (
 	stringptr *byte // used in Value.any when the Value is a string
 )
@@ -309,6 +337,7 @@ const (
 	KindArray
 	KindComponent
 	KindLabel
+	KindBytes
 )
 
 var kindStrings = []string{
@@ -325,6 +354,7 @@ var kindStrings = []string{
 	"Array",
 	"Component",
 	"Label",
+	"Bytes",
 }
 
 func (k Kind) String() string {
@@ -359,6 +389,8 @@ func (v Value) Kind() Kind {
 		return KindComponent
 	case types.Label:
 		return KindLabel
+	case []byte:
+		return KindBytes
 	default:
 		return KindAny
 	}
@@ -428,6 +460,11 @@ func TimeValue(v time.Time) Value {
 	return Value{any: timeTime(v.Round(0))}
 }
 
+// DurationValue returns a [Value] for a [time.Duration].
+func DurationValue(v time.Duration) Value {
+	return Value{num: uint64(v), any: KindDuration}
+}
+
 func RefValue(v Id) Value {
 	return Value{any: v}
 }
@@ -453,6 +490,12 @@ func LabelValue(key, val string) Value {
 			Key:   key,
 			Value: val,
 		},
+	}
+}
+
+func BytesValue(b []byte) Value {
+	return Value{
+		any: slices.Clone(b),
 	}
 }
 
@@ -513,7 +556,7 @@ func AnyValue(v any) Value {
 		return Value{any: kind(v)}
 	case Value:
 		return v
-	case []Value, types.Label:
+	case []Value, types.Label, []byte:
 		return Value{any: v}
 	case *EntityComponent:
 		return ComponentValue(v)
@@ -567,6 +610,8 @@ func (v Value) Any() any {
 	case KindComponent:
 		return v.any
 	case KindLabel:
+		return v.any
+	case KindBytes:
 		return v.any
 	default:
 		panic(fmt.Sprintf("bad kind: %s", v.Kind()))
@@ -711,29 +756,106 @@ func (v Value) Label() types.Label {
 	panic(fmt.Sprintf("Value kind is %s, not %s", v.Kind(), KindLabel))
 }
 
+func (v Value) Bytes() []byte {
+	if v, ok := v.any.([]byte); ok {
+		return v
+	}
+
+	panic(fmt.Sprintf("Value kind is %s, not %s", v.Kind(), KindBytes))
+}
+
 //////////////// Other
 
 // Equal reports whether v and w represent the same Go value.
 func (v Value) Equal(w Value) bool {
+	return v.Compare(w) == 0
+}
+
+func (a Attr) Compare(b Attr) int {
+	if a.ID != b.ID {
+		return cmp.Compare(a.ID, b.ID)
+	}
+
+	return a.Value.Compare(b.Value)
+}
+
+// Equal reports whether v and w represent the same Go value.
+func (v Value) Compare(w Value) int {
 	k1 := v.Kind()
 	k2 := w.Kind()
 	if k1 != k2 {
-		return false
+		if k1 < k2 {
+			return -1
+		}
+
+		return 1
 	}
 	switch k1 {
 	case KindInt64, KindUint64, KindBool, KindDuration:
-		return v.num == w.num
+		return cmp.Compare(v.num, w.num)
 	case KindString:
-		return v.str() == w.str()
+		return cmp.Compare(v.str(), w.str())
 	case KindFloat64:
-		return v.float() == w.float()
+		return cmp.Compare(v.float(), w.float())
 	case KindTime:
-		return v.time().Equal(w.time())
-	case KindId, KindKeyword, KindAny, KindComponent, KindArray:
-		return v.any == w.any
+		return v.time().Compare(w.time())
+	case KindBytes:
+		return bytes.Compare(v.Bytes(), w.Bytes())
+	case KindId:
+		return cmp.Compare(v.Id(), w.Id())
+	case KindKeyword:
+		return cmp.Compare(v.Keyword(), w.Keyword())
+	case KindComponent:
+		return v.Component().Compare(w.Component())
+	case KindArray:
+		if len(v.Array()) != len(w.Array()) {
+			return cmp.Compare(len(v.Array()), len(w.Array()))
+		}
+		if len(v.Array()) == 0 {
+			return 0
+		}
+
+		for i := 0; i < len(v.Array()); i++ {
+			if cmp := v.Array()[i].Compare(w.Array()[i]); cmp != 0 {
+				return cmp
+			}
+		}
+
+		return 0
+	case KindLabel:
+		if v.Label().Key != w.Label().Key {
+			return cmp.Compare(v.Label().Key, w.Label().Key)
+		}
+
+		return cmp.Compare(v.Label().Value, w.Label().Value)
+
+	case KindAny:
+		if v.any == w.any {
+			return 0
+		}
+
+		return -1
 	default:
 		panic(fmt.Sprintf("bad kind: %s", k1))
 	}
+}
+
+func (e *EntityComponent) Compare(other *EntityComponent) int {
+	if len(e.Attrs) != len(other.Attrs) {
+		return cmp.Compare(len(e.Attrs), len(other.Attrs))
+	}
+
+	for i := 0; i < len(e.Attrs); i++ {
+		if cmp := e.Attrs[i].Compare(other.Attrs[i]); cmp != 0 {
+			return cmp
+		}
+	}
+
+	return 0
+}
+
+func (e *EntityComponent) Equal(other *EntityComponent) bool {
+	return e.Compare(other) == 0
 }
 
 // append appends a text representation of v to dst.
@@ -765,6 +887,15 @@ func (v Value) append(dst []byte) []byte {
 		return dst
 	case KindAny, KindId, KindKeyword, KindComponent:
 		return fmt.Append(dst, v.any)
+	case KindLabel:
+		label := v.Label()
+		dst = append(dst, label.Key...)
+		dst = append(dst, '=')
+		dst = append(dst, label.Value...)
+		return dst
+	case KindBytes:
+		dst = append(dst, base58.Encode(v.Bytes())...)
+		return dst
 	default:
 		panic(fmt.Sprintf("bad kind: %s", v.Kind()))
 	}

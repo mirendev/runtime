@@ -45,6 +45,17 @@ func (m *MockStore) CreateEntity(ctx context.Context, attrs []Attr) (*Entity, er
 	return e, nil
 }
 
+func (m *MockStore) UpdateEntity(ctx context.Context, id Id, attrs []Attr) (*Entity, error) {
+	e, ok := m.Entities[id]
+	if !ok {
+		return nil, ErrNotFound
+	}
+
+	e.Update(attrs)
+
+	return e, nil
+}
+
 func (m *MockStore) DeleteEntity(ctx context.Context, id Id) error {
 	delete(m.Entities, id)
 	return nil

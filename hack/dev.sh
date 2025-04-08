@@ -41,7 +41,6 @@ EOF
 
 mkdir -p /run/containerd
 containerd --root /data --state /data/state --address /run/containerd/containerd.sock -l trace > /dev/null 2>&1 &
-buildkitd --root /data/buildkit > /dev/null 2>&1 &
 
 mount -t debugfs nodev /sys/kernel/debug
 mount -t tracefs nodev /sys/kernel/debug/tracing
@@ -52,12 +51,16 @@ sleep 1
 
 cd /src
 
-# Because all the tests use the same containerd, buildkit, and cgroups, we need to
-# make sure that they don't interfere with each other. For now, we do that by passing
-# -p 1, but in the future we should run each test in a separate namespace.
+make bin/runtime
 
-if test -n "$VERBOSE"; then
-  go test -p 1 -v "$@"
-else
-  gotestsum --format testname -- -p 1 "$@"
-fi
+ln -s `pwd`/bin/runtime /bin/r
+
+echo "Cleaning runtime namespace to begin..."
+r debug ctr nuke -n runtime
+
+./bin/runtime dev -vv &
+
+export HISTFILE=/data/.bash_history
+export HISTIGNORE=exit
+
+bash

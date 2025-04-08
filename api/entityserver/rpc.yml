@@ -73,6 +73,8 @@ interfaces:
         results:
           - name: revision
             type: int64
+          - name: id
+            type: string
 
       - name: delete
         parameters:
@@ -97,3 +99,19 @@ interfaces:
           - name: values
             type: list
             element: Entity
+
+      - name: parse
+        parameters:
+          - name: data
+            type: bytes
+        results:
+          - name: entity
+            type: Entity
+
+      - name: format
+        parameters:
+          - name: entity
+            type: Entity
+        results:
+          - name: data
+            type: bytes

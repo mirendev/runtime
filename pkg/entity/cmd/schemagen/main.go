@@ -2,14 +2,17 @@ package main
 
 import (
 	"bytes"
+	"compress/gzip"
 	"flag"
 	"fmt"
 	"os"
 	"strings"
 
 	j "github.com/dave/jennifer/jen"
+	"github.com/fxamacker/cbor/v2"
 	"golang.org/x/tools/imports"
 	"gopkg.in/yaml.v3"
+	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/mapx"
 )
 
@@ -47,17 +50,15 @@ func main() {
 
 	jf := j.NewFile(*fPkg)
 
-	for _, kind := range sf.Kinds {
-		jf.Var().DefsFunc(func(b *j.Group) {
-			b.Id("Kind"+toCamal(kind)).Op("=").Qual(top, "MustKeyword").Call(j.Lit(sf.Domain + "/" + kind))
-		})
-	}
-
 	var g gen
 	g.name = sf.Domain
 	g.prefix = sf.Domain
 	g.sf = &sf
 	g.f = jf
+	g.ec = &entity.EncodedSchema{
+		Name:    sf.Domain,
+		Version: sf.Version,
+	}
 
 	g.fields = append(g.fields,
 		j.Id("ID").Qual(top, "Id").Tag(map[string]string{
@@ -76,12 +77,38 @@ func main() {
 
 	g.f.Line()
 
+	g.ec.Kinds = sf.Kinds
+
+	jf.Var().DefsFunc(func(b *j.Group) {
+		for _, kind := range sf.Kinds {
+			b.Id("Kind"+toCamal(kind)).Op("=").Qual(top, "MustKeyword").Call(j.Lit(sf.Domain + "/kind." + kind))
+		}
+
+		b.Id("Schema").Op("=").Qual(top, "Id").Call(j.Lit("schema." + sf.Domain + "/" + sf.Version))
+	})
+
 	g.f.Func().Id("init").Params().BlockFunc(func(b *j.Group) {
 		b.Add(j.Qual(sch, "Register").Call(
 			j.Lit(sf.Domain),
 			j.Lit(sf.Version),
 			j.Parens(j.Op("&").Id(g.structName).Values()).Dot("InitSchema"),
 		))
+
+		data, err := cbor.Marshal(g.ec)
+		if err != nil {
+			panic(err)
+		}
+
+		var buf bytes.Buffer
+		zw := gzip.NewWriter(&buf)
+		zw.Write(data)
+		zw.Flush()
+
+		b.Qual(sch, "RegisterEncodedSchema").Call(
+			j.Lit(sf.Domain),
+			j.Lit(sf.Version),
+			j.Index().Byte().Call(j.Lit(buf.String())),
+		)
 	})
 
 	var buf bytes.Buffer
@@ -184,6 +211,8 @@ type gen struct {
 	name   string
 	prefix string
 	local  string
+
+	ec *entity.EncodedSchema
 
 	structName string
 	sf         *schemaFile
@@ -298,6 +327,15 @@ func (g *gen) attr(name string, attr schemaAttr) {
 			j.Id("sb").Dot(method).Call(call...))
 	}
 
+	simpleField := func(typ string) {
+		g.ec.Fields = append(g.ec.Fields, &entity.SchemaField{
+			Name: name,
+			Type: typ,
+			Id:   entity.Id(g.prefix + "/" + name),
+			Many: attr.Many,
+		})
+	}
+
 	switch attr.Type {
 	case "string":
 		if attr.Many {
@@ -310,6 +348,7 @@ func (g *gen) attr(name string, attr schemaAttr) {
 		simpleDecoder("KindString", "String")
 		simpleEncoder("String")
 		simpleDecl("String")
+		simpleField("string")
 	case "keyword":
 		if attr.Many {
 			g.fields = append(g.fields, j.Id(fname).Index().Qual(topt, "Keyword").Tag(tag))
@@ -321,16 +360,19 @@ func (g *gen) attr(name string, attr schemaAttr) {
 		simpleDecoder("KindKeyword", "Keyword")
 		simpleEncoder("Keyword")
 		simpleDecl("Keyword")
+		simpleField("keyword")
 	case "int":
 		g.fields = append(g.fields, j.Id(fname).Int64().Tag(tag))
 		simpleDecoder("KindInt64", "Int64")
 		simpleEncoder("Int64")
 		simpleDecl("Int64")
+		simpleField("int")
 	case "bool":
 		g.fields = append(g.fields, j.Id(fname).Bool().Tag(tag))
 		simpleDecoder("KindBool", "Bool")
 		simpleEncoder("Bool")
 		simpleDecl("Bool")
+		simpleField("bool")
 	case "label":
 		if attr.Many {
 			g.fields = append(g.fields, j.Id(fname).Qual(topt, "Labels").Tag(tag))
@@ -347,6 +389,8 @@ func (g *gen) attr(name string, attr schemaAttr) {
 		}
 		simpleDecoder("KindLabel", "Label")
 		simpleDecl("Label")
+		simpleField("label")
+
 	case "enum":
 		g.decodeouter = append(g.decodeouter, j.Type().Add(g.NSd(fname)).String())
 
@@ -429,6 +473,19 @@ func (g *gen) attr(name string, attr schemaAttr) {
 		g.decl = append(g.decl,
 			j.Id("sb").Dot("Ref").Call(call...))
 
+		fc := map[string]entity.Id{}
+
+		for _, v := range attr.Choices {
+			fc[v] = entity.Id(g.prefix + "/" + name + "." + v)
+		}
+
+		g.ec.Fields = append(g.ec.Fields, &entity.SchemaField{
+			Name:       name,
+			Type:       "enum",
+			Id:         entity.Id(g.prefix + "/" + name),
+			Many:       attr.Many,
+			EnumValues: fc,
+		})
 	case "component":
 		if attr.Many {
 			g.fields = append(g.fields, j.Id(fname).Index().Id(fname).Tag(tag))
@@ -442,6 +499,10 @@ func (g *gen) attr(name string, attr schemaAttr) {
 		sg.f = g.f
 		sg.local = fname
 		sg.prefix = g.prefix + "." + name
+		sg.ec = &entity.EncodedSchema{
+			Name:    g.prefix + "." + name,
+			Version: g.sf.Version,
+		}
 
 		for k, v := range mapx.StableOrder(attr.Attrs) {
 			sg.attr(k, v)
@@ -489,6 +550,14 @@ func (g *gen) attr(name string, attr schemaAttr) {
 
 		g.decl = append(g.decl,
 			j.Parens(j.Op("&").Id(fname).Values()).Dot("InitSchema").Call(j.Id("sb").Dot("Builder").Call(j.Lit(name))))
+
+		g.ec.Fields = append(g.ec.Fields, &entity.SchemaField{
+			Name:      name,
+			Type:      "component",
+			Id:        entity.Id(g.prefix + "/" + name),
+			Many:      attr.Many,
+			Component: sg.ec,
+		})
 	}
 }
 
@@ -499,6 +568,9 @@ func (g *gen) generate() {
 	if idx != -1 {
 		name = name[idx+1:]
 	}
+
+	g.ec.PrimaryKind = strings.ToLower(name)
+	g.sf.Kinds = append(g.sf.Kinds, strings.ToLower(name))
 
 	structName := toCamal(name)
 	g.structName = structName

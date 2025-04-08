@@ -10,7 +10,6 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/davecgh/go-spew/spew"
 	"github.com/fxamacker/cbor/v2"
 	"github.com/google/uuid"
 	"miren.dev/runtime/pkg/entity/types"
@@ -106,6 +105,18 @@ func (e *Entity) GetAll(name Id) []Attr {
 
 func (e *Entity) AllAttrs() []Attr {
 	return e.Attrs
+}
+
+func (e *Entity) Remove(id Id) {
+	e.Attrs = slices.DeleteFunc(e.Attrs, func(attr Attr) bool {
+		return attr.ID == id
+	})
+}
+
+func (e *Entity) Update(attrs []Attr) error {
+	e.UpdatedAt = now()
+	e.Attrs = append(e.Attrs, attrs...)
+	return e.Fixup()
 }
 
 type EntityComponent struct {
@@ -211,7 +222,6 @@ func convertEntityToSchema(ctx context.Context, s EntityStore, entity *Entity) (
 			if val, ok := attr.Value.Any().(bool); ok {
 				schema.Index = val
 			} else {
-				spew.Dump(attr)
 				return nil, fmt.Errorf("invalid index: %v", attr.Value.Any())
 			}
 		case AttrPred:
@@ -249,7 +259,7 @@ func (e *Entity) Fixup() error {
 			case types.Keyword:
 				e.ID = Id(id)
 			default:
-				panic(fmt.Sprintf("invalid entity ident (expected EntityId): %v (%T)", ident.Value.Any(), ident.Value))
+				return fmt.Errorf("invalid entity ident (expected EntityId): %v (%T)", ident.Value.Any(), ident.Value)
 			}
 		}
 	}
@@ -257,6 +267,8 @@ func (e *Entity) Fixup() error {
 	if e.ID == "" {
 		e.ID = Id(uuid.New().String())
 	}
+
+	e.Attrs = SortedAttrs(e.Attrs)
 
 	return nil
 }
@@ -376,5 +388,5 @@ func Attrs(vals ...any) []Attr {
 		}
 
 	}
-	return attrs
+	return SortedAttrs(attrs)
 }

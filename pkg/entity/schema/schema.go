@@ -2,6 +2,7 @@ package schema
 
 import (
 	"context"
+	"errors"
 	"sync"
 
 	"miren.dev/runtime/pkg/entity"
@@ -62,14 +63,14 @@ func (b *SchemaBuilder) Apply(ctx context.Context, store entity.Store) error {
 		_, err := store.CreateEntity(ctx, entity.Attrs(
 			entity.Ident, types.Keyword(eid),
 		))
-		if err != nil {
+		if err != nil && !errors.Is(err, entity.ErrEntityAlreadyExists) {
 			return err
 		}
 	}
 
 	for _, e := range b.attrs {
 		_, err := store.CreateEntity(ctx, e.Attrs)
-		if err != nil {
+		if err != nil && !errors.Is(err, entity.ErrEntityAlreadyExists) {
 			return err
 		}
 	}
@@ -84,6 +85,20 @@ func Apply(ctx context.Context, store entity.Store) error {
 	for _, schema := range defaultRegistry.schemas {
 		if err := schema.Apply(ctx, store); err != nil {
 			return err
+		}
+	}
+
+	for domain, vers := range encodedRegistry {
+		for ver, schema := range vers {
+			kw := entity.Id("schema." + domain + "/" + ver)
+
+			_, err := store.CreateEntity(ctx, entity.Attrs(
+				entity.Ident, types.Keyword(kw),
+				entity.Schema, entity.BytesValue(schema.encoded),
+			))
+			if err != nil && !errors.Is(err, entity.ErrEntityAlreadyExists) {
+				return err
+			}
 		}
 	}
 

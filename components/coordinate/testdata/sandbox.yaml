@@ -1,0 +1,15 @@
+kind: dev.miren.sandbox
+version: v1alpha
+
+labels:
+  - app=nginx
+
+port:
+  - port: 80
+    name: http
+    type: http
+
+container:
+  - image: docker.io/library/nginx:latest
+    name: nginx
+    

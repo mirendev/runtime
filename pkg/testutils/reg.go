@@ -71,7 +71,7 @@ func Registry(extra ...func(*asm.Registry)) (*asm.Registry, func()) {
 	})
 
 	r.Provide(func() (*containerd.Client, error) {
-		cl, err := containerd.New("/run/containerd.sock")
+		cl, err := containerd.New("/run/containerd/containerd.sock")
 		if err != nil {
 			return nil, err
 		}

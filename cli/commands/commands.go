@@ -98,6 +98,26 @@ func AllCommands() map[string]cli.CommandFactory {
 			return Infer("dataset serve", "Serve a dataset", DataSetServe), nil
 		},
 
+		"runner run": func() (cli.Command, error) {
+			return Infer("runner run", "Run a runner", RunnerRun), nil
+		},
+
+		"coordinator run": func() (cli.Command, error) {
+			return Infer("coordinator run", "Run a coordinator", CoordinatorRun), nil
+		},
+
+		"dev": func() (cli.Command, error) {
+			return Infer("dev", "Run the dev server", Dev), nil
+		},
+
+		"entity get": func() (cli.Command, error) {
+			return Infer("entity get", "Get an entity", EntityGet), nil
+		},
+
+		"entity put": func() (cli.Command, error) {
+			return Infer("entity put", "Put an entity", EntityPut), nil
+		},
+
 		"internal disk cleanup": func() (cli.Command, error) {
 			return Infer("internal disk cleanup", "Cleanup disk data", DiskCleanup), nil
 		},

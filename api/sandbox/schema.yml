@@ -1,7 +1,5 @@
 domain: dev.miren.sandbox
 version: v1alpha
-kinds:
-  - sandbox
 attrs:
   labels:
     type: string

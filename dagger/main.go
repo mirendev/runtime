@@ -70,7 +70,7 @@ func (m *Runtime) WithServices(dir *dagger.Directory) *dagger.Container {
 		AsService()
 
 	minio := dag.Container().
-		From("quay.io/minio/minio:latest").
+		From("quay.io/minio/minio:RELEASE.2025-04-03T14-56-28Z").
 		WithEnvVariable("MINIO_ROOT_USER", "admin").
 		WithEnvVariable("MINIO_ROOT_PASSWORD", "password").
 		WithExposedPort(9000).
@@ -191,6 +191,34 @@ func (m *Runtime) Test(
 			InsecureRootCapabilities: true,
 		})
 	}
+
+	return w.Stdout(ctx)
+}
+
+func (m *Runtime) Dev(
+	ctx context.Context,
+	dir *dagger.Directory,
+	// +optional
+	shell bool,
+	// +optional
+	tests string,
+	// +optional
+	count int,
+	// +optional
+	verbose bool,
+	// +optional
+	run string,
+) (string, error) {
+	w := m.WithServices(dir).
+		WithDirectory("/src", dir).
+		WithWorkdir("/src").
+		WithEnvVariable("S3_URL", "http://minio:9000").
+		WithMountedCache("/data", dag.CacheVolume("containerd"))
+
+	w = w.Terminal(dagger.ContainerTerminalOpts{
+		InsecureRootCapabilities: true,
+		Cmd:                      []string{"/bin/bash", "/src/hack/dev.sh"},
+	})
 
 	return w.Stdout(ctx)
 }

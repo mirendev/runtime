@@ -78,6 +78,7 @@ func (c *Context) setupServerComponents(ctx context.Context, reg *asm.Registry) 
 		Dir string `asm:"data-path"`
 		Id  string `asm:"server-id"`
 	}) (*netdb.Subnet, error) {
+		os.MkdirAll(opts.Dir, 0755)
 		ndb, err := netdb.New(filepath.Join(opts.Dir, "net.db"))
 		if err != nil {
 			return nil, fmt.Errorf("failed to open netdb: %w", err)
@@ -225,10 +226,6 @@ func (c *Context) setupServerComponents(ctx context.Context, reg *asm.Registry) 
 
 	reg.Provide(func() *ingress.LeaseHTTP {
 		return &ingress.LeaseHTTP{}
-	})
-
-	reg.Provide(func() *observability.RunSCMonitor {
-		return &observability.RunSCMonitor{}
 	})
 
 	reg.Provide(func() *server.RPCAppInfo {

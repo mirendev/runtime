@@ -4,7 +4,6 @@ go 1.24
 
 require (
 	github.com/ClickHouse/clickhouse-go/v2 v2.30.0
-	github.com/Microsoft/hcsshim v0.12.9
 	github.com/NimbleMarkets/ntcharts v0.3.1
 	github.com/aws/aws-sdk-go-v2 v1.30.3
 	github.com/aws/aws-sdk-go-v2/config v1.27.27
@@ -12,7 +11,6 @@ require (
 	github.com/aws/aws-sdk-go-v2/feature/s3/manager v1.17.8
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.58.2
 	github.com/aws/smithy-go v1.20.3
-	github.com/bitfield/gotestdox v0.2.2
 	github.com/charmbracelet/bubbles v0.20.0
 	github.com/charmbracelet/bubbletea v1.2.4
 	github.com/charmbracelet/lipgloss v1.0.0
@@ -30,18 +28,16 @@ require (
 	github.com/coreos/go-iptables v0.7.0
 	github.com/dave/jennifer v1.7.1
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc
-	github.com/dnephin/pflag v1.0.7
 	github.com/docker/cli v27.5.0+incompatible
 	github.com/docker/docker v27.5.1+incompatible
 	github.com/elastic/go-perf v0.0.0-20241029065020-30bec95324b8
 	github.com/fatih/color v1.18.0
-	github.com/fsnotify/fsnotify v1.7.0
 	github.com/fxamacker/cbor/v2 v2.7.0
 	github.com/go-ozzo/ozzo-validation/v4 v4.3.0
 	github.com/go-sql-driver/mysql v1.9.0
 	github.com/google/cel-go v0.24.1
+	github.com/google/gofuzz v1.2.0
 	github.com/google/pprof v0.0.0-20241203143554-1e3fdc7de467
-	github.com/google/shlex v0.0.0-20191202100458-e7afc7fbc510
 	github.com/google/uuid v1.6.0
 	github.com/hashicorp/go-hclog v1.6.3
 	github.com/hashicorp/golang-lru/v2 v2.0.7
@@ -53,6 +49,7 @@ require (
 	github.com/kdomanski/iso9660 v0.4.0
 	github.com/lab47/cleo v0.0.0-20231211212820-67d5758db9ae
 	github.com/lab47/lsvd v0.0.0-20240924031640-ac13c6bb62f0
+	github.com/lab47/lz4decode v0.0.0-20240106213008-0c6757ab03cd
 	github.com/lab47/mode v0.0.0-20231220013342-9703805c0e9c
 	github.com/lima-vm/go-qcow2reader v0.1.1
 	github.com/lucasb-eyer/go-colorful v1.2.0
@@ -66,6 +63,7 @@ require (
 	github.com/mitchellh/go-testing-interface v1.14.1
 	github.com/mitchellh/mapstructure v1.5.0
 	github.com/moby/buildkit v0.19.0
+	github.com/moby/sys/mountinfo v0.7.2
 	github.com/morikuni/aec v1.0.0
 	github.com/mr-tron/base58 v1.2.0
 	github.com/muesli/termenv v0.15.2
@@ -80,6 +78,7 @@ require (
 	github.com/prometheus/client_golang v1.20.5
 	github.com/prometheus/client_model v0.6.1
 	github.com/quic-go/quic-go v0.49.0
+	github.com/redis/go-redis/v9 v9.7.1
 	github.com/sirupsen/logrus v1.9.3
 	github.com/spf13/pflag v1.0.5
 	github.com/stretchr/testify v1.10.0
@@ -89,6 +88,7 @@ require (
 	github.com/tonistiigi/vt100 v0.0.0-20240514184818-90bafcd6abab
 	github.com/vishvananda/netlink v1.3.1-0.20240922070040-084abd93d350
 	go.etcd.io/bbolt v1.3.11
+	go.etcd.io/etcd/api/v3 v3.5.19
 	go.etcd.io/etcd/client/v3 v3.5.19
 	go.opentelemetry.io/otel v1.33.0
 	go.opentelemetry.io/otel/exporters/stdout/stdoutlog v0.9.0
@@ -112,7 +112,7 @@ require (
 	google.golang.org/grpc v1.68.1
 	google.golang.org/protobuf v1.35.2
 	gopkg.in/yaml.v3 v3.0.1
-	tags.cncf.io/container-device-interface/specs-go v0.8.0
+	gvisor.dev/gvisor v0.0.0-20250317184159-a24f13b091dc
 )
 
 require (
@@ -126,6 +126,7 @@ require (
 	github.com/Masterminds/semver/v3 v3.3.0 // indirect
 	github.com/Masterminds/sprig/v3 v3.3.0 // indirect
 	github.com/Microsoft/go-winio v0.6.2 // indirect
+	github.com/Microsoft/hcsshim v0.12.9 // indirect
 	github.com/agext/levenshtein v1.2.3 // indirect
 	github.com/andybalholm/brotli v1.1.1 // indirect
 	github.com/antlr4-go/antlr/v4 v4.13.0 // indirect
@@ -171,6 +172,7 @@ require (
 	github.com/docker/go-units v0.5.0 // indirect
 	github.com/erikgeiser/coninput v0.0.0-20211004153227-1c3628e74d0f // indirect
 	github.com/felixge/httpsnoop v1.0.4 // indirect
+	github.com/fsnotify/fsnotify v1.7.0 // indirect
 	github.com/go-faster/city v1.0.1 // indirect
 	github.com/go-faster/errors v0.7.1 // indirect
 	github.com/go-logr/logr v1.4.2 // indirect
@@ -181,6 +183,7 @@ require (
 	github.com/golang/groupcache v0.0.0-20210331224755-41bb18bfe9da // indirect
 	github.com/golang/protobuf v1.5.4 // indirect
 	github.com/google/go-cmp v0.6.0 // indirect
+	github.com/google/shlex v0.0.0-20191202100458-e7afc7fbc510 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.22.0 // indirect
 	github.com/hashicorp/errwrap v1.1.0 // indirect
 	github.com/hashicorp/go-cleanhttp v0.5.2 // indirect
@@ -192,7 +195,6 @@ require (
 	github.com/jackc/puddle/v2 v2.2.2 // indirect
 	github.com/josharian/native v1.1.0 // indirect
 	github.com/klauspost/compress v1.17.11 // indirect
-	github.com/lab47/lz4decode v0.0.0-20240106213008-0c6757ab03cd // indirect
 	github.com/lrstanley/bubblezone v0.0.0-20240914071701-b48c55a5e78e // indirect
 	github.com/mattn/go-localereader v0.0.1 // indirect
 	github.com/mattn/go-runewidth v0.0.16 // indirect
@@ -203,10 +205,8 @@ require (
 	github.com/moby/docker-image-spec v1.3.1 // indirect
 	github.com/moby/locker v1.0.1 // indirect
 	github.com/moby/patternmatcher v0.6.0 // indirect
-	github.com/moby/sys/mountinfo v0.7.2 // indirect
 	github.com/moby/sys/sequential v0.6.0 // indirect
 	github.com/moby/sys/signal v0.7.1 // indirect
-	github.com/moby/sys/symlink v0.3.0 // indirect
 	github.com/moby/sys/user v0.3.0 // indirect
 	github.com/moby/sys/userns v0.1.0 // indirect
 	github.com/muesli/ansi v0.0.0-20230316100256-276c6243b2f6 // indirect
@@ -224,7 +224,6 @@ require (
 	github.com/prometheus/common v0.55.0 // indirect
 	github.com/prometheus/procfs v0.15.1 // indirect
 	github.com/quic-go/qpack v0.5.1 // indirect
-	github.com/redis/go-redis/v9 v9.7.1 // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect
 	github.com/safchain/ethtool v0.4.0 // indirect
 	github.com/secure-systems-lab/go-securesystemslib v0.4.0 // indirect
@@ -238,7 +237,6 @@ require (
 	github.com/vishvananda/netns v0.0.4 // indirect
 	github.com/x448/float16 v0.8.4 // indirect
 	github.com/zclconf/go-cty v1.13.0 // indirect
-	go.etcd.io/etcd/api/v3 v3.5.19 // indirect
 	go.etcd.io/etcd/client/pkg/v3 v3.5.19 // indirect
 	go.opencensus.io v0.24.0 // indirect
 	go.opentelemetry.io/auto/sdk v1.1.0 // indirect
@@ -255,7 +253,7 @@ require (
 	golang.org/x/text v0.23.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20241021214115-324edc3d5d38 // indirect
 	gotest.tools/v3 v3.5.1 // indirect
-	gvisor.dev/gvisor v0.0.0-20250317184159-a24f13b091dc // indirect
 	sigs.k8s.io/yaml v1.4.0 // indirect
 	tags.cncf.io/container-device-interface v0.8.0 // indirect
+	tags.cncf.io/container-device-interface/specs-go v0.8.0 // indirect
 )
