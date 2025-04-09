@@ -22,6 +22,13 @@ type SchemaField struct {
 	Component  *EncodedSchema `json:"component,omitempty" cbor:"component,omitempty"`
 }
 
+type EncodedDomain struct {
+	Name       string                    `json:"name" cbor:"name"`
+	Version    string                    `json:"version" cbor:"version"`
+	Kinds      map[string]*EncodedSchema `json:"kinds" cbor:"kinds"`
+	ShortKinds map[string]string         `json:"short_kinds" cbor:"short_kinds"`
+}
+
 type EncodedSchema struct {
 	Name    string         `json:"name" cbor:"name"`
 	Version string         `json:"version" cbor:"version"`

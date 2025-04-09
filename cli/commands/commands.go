@@ -118,6 +118,10 @@ func AllCommands() map[string]cli.CommandFactory {
 			return Infer("entity put", "Put an entity", EntityPut), nil
 		},
 
+		"entity list": func() (cli.Command, error) {
+			return Infer("entity list", "List entities", EntityList), nil
+		},
+
 		"internal disk cleanup": func() (cli.Command, error) {
 			return Infer("internal disk cleanup", "Cleanup disk data", DiskCleanup), nil
 		},

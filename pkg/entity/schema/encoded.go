@@ -9,7 +9,7 @@ import (
 )
 
 type ecRegEntry struct {
-	schema  *entity.EncodedSchema
+	schema  *entity.EncodedDomain
 	encoded []byte
 }
 
@@ -25,7 +25,7 @@ func RegisterEncodedSchema(domain, version string, data []byte) {
 		panic(err)
 	}
 
-	var schema entity.EncodedSchema
+	var schema entity.EncodedDomain
 
 	err = cbor.NewDecoder(gr).Decode(&schema)
 	if err != nil {

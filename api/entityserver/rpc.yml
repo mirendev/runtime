@@ -100,6 +100,24 @@ interfaces:
             type: list
             element: Entity
 
+      - name: makeAttr
+        parameters:
+          - name: id
+            type: string
+          - name: value
+            type: string
+        results:
+          - name: attr
+            type: entity.Attr
+
+      - name: lookupMajorKind
+        parameters:
+          - name: kind
+            type: string
+        results:
+          - name: attr
+            type: entity.Attr
+
       - name: parse
         parameters:
           - name: data

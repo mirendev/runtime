@@ -25,6 +25,7 @@ type EtcdStore struct {
 
 type Store interface {
 	GetEntity(ctx context.Context, id Id) (*Entity, error)
+	GetAttributeSchema(ctx context.Context, name Id) (*AttributeSchema, error)
 	CreateEntity(ctx context.Context, attributes []Attr) (*Entity, error)
 	UpdateEntity(ctx context.Context, id Id, attributes []Attr) (*Entity, error)
 	DeleteEntity(ctx context.Context, id Id) error

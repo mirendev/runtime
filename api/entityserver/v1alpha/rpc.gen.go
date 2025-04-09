@@ -688,6 +688,148 @@ func (v *EntityAccessListResults) UnmarshalJSON(data []byte) error {
 	return json.Unmarshal(data, &v.data)
 }
 
+type entityAccessMakeAttrArgsData struct {
+	Id    *string `cbor:"0,keyasint,omitempty" json:"id,omitempty"`
+	Value *string `cbor:"1,keyasint,omitempty" json:"value,omitempty"`
+}
+
+type EntityAccessMakeAttrArgs struct {
+	call *rpc.Call
+	data entityAccessMakeAttrArgsData
+}
+
+func (v *EntityAccessMakeAttrArgs) HasId() bool {
+	return v.data.Id != nil
+}
+
+func (v *EntityAccessMakeAttrArgs) Id() string {
+	if v.data.Id == nil {
+		return ""
+	}
+	return *v.data.Id
+}
+
+func (v *EntityAccessMakeAttrArgs) HasValue() bool {
+	return v.data.Value != nil
+}
+
+func (v *EntityAccessMakeAttrArgs) Value() string {
+	if v.data.Value == nil {
+		return ""
+	}
+	return *v.data.Value
+}
+
+func (v *EntityAccessMakeAttrArgs) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *EntityAccessMakeAttrArgs) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *EntityAccessMakeAttrArgs) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *EntityAccessMakeAttrArgs) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type entityAccessMakeAttrResultsData struct {
+	Attr *entity.Attr `cbor:"0,keyasint,omitempty" json:"attr,omitempty"`
+}
+
+type EntityAccessMakeAttrResults struct {
+	call *rpc.Call
+	data entityAccessMakeAttrResultsData
+}
+
+func (v *EntityAccessMakeAttrResults) SetAttr(attr *entity.Attr) {
+	v.data.Attr = attr
+}
+
+func (v *EntityAccessMakeAttrResults) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *EntityAccessMakeAttrResults) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *EntityAccessMakeAttrResults) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *EntityAccessMakeAttrResults) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type entityAccessLookupMajorKindArgsData struct {
+	Kind *string `cbor:"0,keyasint,omitempty" json:"kind,omitempty"`
+}
+
+type EntityAccessLookupMajorKindArgs struct {
+	call *rpc.Call
+	data entityAccessLookupMajorKindArgsData
+}
+
+func (v *EntityAccessLookupMajorKindArgs) HasKind() bool {
+	return v.data.Kind != nil
+}
+
+func (v *EntityAccessLookupMajorKindArgs) Kind() string {
+	if v.data.Kind == nil {
+		return ""
+	}
+	return *v.data.Kind
+}
+
+func (v *EntityAccessLookupMajorKindArgs) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *EntityAccessLookupMajorKindArgs) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *EntityAccessLookupMajorKindArgs) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *EntityAccessLookupMajorKindArgs) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type entityAccessLookupMajorKindResultsData struct {
+	Attr *entity.Attr `cbor:"0,keyasint,omitempty" json:"attr,omitempty"`
+}
+
+type EntityAccessLookupMajorKindResults struct {
+	call *rpc.Call
+	data entityAccessLookupMajorKindResultsData
+}
+
+func (v *EntityAccessLookupMajorKindResults) SetAttr(attr *entity.Attr) {
+	v.data.Attr = attr
+}
+
+func (v *EntityAccessLookupMajorKindResults) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *EntityAccessLookupMajorKindResults) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *EntityAccessLookupMajorKindResults) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *EntityAccessLookupMajorKindResults) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
 type entityAccessParseArgsData struct {
 	Data *[]byte `cbor:"0,keyasint,omitempty" json:"data,omitempty"`
 }
@@ -946,6 +1088,58 @@ func (t *EntityAccessList) Results() *EntityAccessListResults {
 	return results
 }
 
+type EntityAccessMakeAttr struct {
+	*rpc.Call
+	args    EntityAccessMakeAttrArgs
+	results EntityAccessMakeAttrResults
+}
+
+func (t *EntityAccessMakeAttr) Args() *EntityAccessMakeAttrArgs {
+	args := &t.args
+	if args.call != nil {
+		return args
+	}
+	args.call = t.Call
+	t.Call.Args(args)
+	return args
+}
+
+func (t *EntityAccessMakeAttr) Results() *EntityAccessMakeAttrResults {
+	results := &t.results
+	if results.call != nil {
+		return results
+	}
+	results.call = t.Call
+	t.Call.Results(results)
+	return results
+}
+
+type EntityAccessLookupMajorKind struct {
+	*rpc.Call
+	args    EntityAccessLookupMajorKindArgs
+	results EntityAccessLookupMajorKindResults
+}
+
+func (t *EntityAccessLookupMajorKind) Args() *EntityAccessLookupMajorKindArgs {
+	args := &t.args
+	if args.call != nil {
+		return args
+	}
+	args.call = t.Call
+	t.Call.Args(args)
+	return args
+}
+
+func (t *EntityAccessLookupMajorKind) Results() *EntityAccessLookupMajorKindResults {
+	results := &t.results
+	if results.call != nil {
+		return results
+	}
+	results.call = t.Call
+	t.Call.Results(results)
+	return results
+}
+
 type EntityAccessParse struct {
 	*rpc.Call
 	args    EntityAccessParseArgs
@@ -1004,6 +1198,8 @@ type EntityAccess interface {
 	Delete(ctx context.Context, state *EntityAccessDelete) error
 	WatchIndex(ctx context.Context, state *EntityAccessWatchIndex) error
 	List(ctx context.Context, state *EntityAccessList) error
+	MakeAttr(ctx context.Context, state *EntityAccessMakeAttr) error
+	LookupMajorKind(ctx context.Context, state *EntityAccessLookupMajorKind) error
 	Parse(ctx context.Context, state *EntityAccessParse) error
 	Format(ctx context.Context, state *EntityAccessFormat) error
 }
@@ -1029,6 +1225,14 @@ func (_ reexportEntityAccess) WatchIndex(ctx context.Context, state *EntityAcces
 }
 
 func (_ reexportEntityAccess) List(ctx context.Context, state *EntityAccessList) error {
+	panic("not implemented")
+}
+
+func (_ reexportEntityAccess) MakeAttr(ctx context.Context, state *EntityAccessMakeAttr) error {
+	panic("not implemented")
+}
+
+func (_ reexportEntityAccess) LookupMajorKind(ctx context.Context, state *EntityAccessLookupMajorKind) error {
 	panic("not implemented")
 }
 
@@ -1084,6 +1288,22 @@ func AdaptEntityAccess(t EntityAccess) *rpc.Interface {
 			Index:         0,
 			Handler: func(ctx context.Context, call *rpc.Call) error {
 				return t.List(ctx, &EntityAccessList{Call: call})
+			},
+		},
+		{
+			Name:          "makeAttr",
+			InterfaceName: "EntityAccess",
+			Index:         0,
+			Handler: func(ctx context.Context, call *rpc.Call) error {
+				return t.MakeAttr(ctx, &EntityAccessMakeAttr{Call: call})
+			},
+		},
+		{
+			Name:          "lookupMajorKind",
+			InterfaceName: "EntityAccess",
+			Index:         0,
+			Handler: func(ctx context.Context, call *rpc.Call) error {
+				return t.LookupMajorKind(ctx, &EntityAccessLookupMajorKind{Call: call})
 			},
 		},
 		{
@@ -1261,6 +1481,61 @@ func (v EntityAccessClient) List(ctx context.Context, index entity.Attr) (*Entit
 	}
 
 	return &EntityAccessClientListResults{client: v.Client, data: ret}, nil
+}
+
+type EntityAccessClientMakeAttrResults struct {
+	client *rpc.Client
+	data   entityAccessMakeAttrResultsData
+}
+
+func (v *EntityAccessClientMakeAttrResults) HasAttr() bool {
+	return v.data.Attr != nil
+}
+
+func (v *EntityAccessClientMakeAttrResults) Attr() entity.Attr {
+	return *v.data.Attr
+}
+
+func (v EntityAccessClient) MakeAttr(ctx context.Context, id string, value string) (*EntityAccessClientMakeAttrResults, error) {
+	args := EntityAccessMakeAttrArgs{}
+	args.data.Id = &id
+	args.data.Value = &value
+
+	var ret entityAccessMakeAttrResultsData
+
+	err := v.Client.Call(ctx, "makeAttr", &args, &ret)
+	if err != nil {
+		return nil, err
+	}
+
+	return &EntityAccessClientMakeAttrResults{client: v.Client, data: ret}, nil
+}
+
+type EntityAccessClientLookupMajorKindResults struct {
+	client *rpc.Client
+	data   entityAccessLookupMajorKindResultsData
+}
+
+func (v *EntityAccessClientLookupMajorKindResults) HasAttr() bool {
+	return v.data.Attr != nil
+}
+
+func (v *EntityAccessClientLookupMajorKindResults) Attr() entity.Attr {
+	return *v.data.Attr
+}
+
+func (v EntityAccessClient) LookupMajorKind(ctx context.Context, kind string) (*EntityAccessClientLookupMajorKindResults, error) {
+	args := EntityAccessLookupMajorKindArgs{}
+	args.data.Kind = &kind
+
+	var ret entityAccessLookupMajorKindResultsData
+
+	err := v.Client.Call(ctx, "lookupMajorKind", &args, &ret)
+	if err != nil {
+		return nil, err
+	}
+
+	return &EntityAccessClientLookupMajorKindResults{client: v.Client, data: ret}, nil
 }
 
 type EntityAccessClientParseResults struct {

@@ -1,4 +1,4 @@
-kind: dev.miren.sandbox
+kind: dev.miren.compute/sandbox
 version: v1alpha
 
 labels:

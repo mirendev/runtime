@@ -374,6 +374,9 @@ func Attrs(vals ...any) []Attr {
 	i := 0
 	for i < len(vals) {
 		switch v := vals[i].(type) {
+		case func() []Attr:
+			attrs = append(attrs, v()...)
+			i++
 		case Attr:
 			attrs = append(attrs, v)
 			i++

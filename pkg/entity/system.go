@@ -50,6 +50,8 @@ const (
 	EntityKind   Id = "entity/kind"
 	EntitySchema Id = "entity/schema"
 
+	EntityMajorKind Id = "entity/kind.major"
+
 	PredIP   Id = "db/pred.ip"
 	PredCIDR Id = "db/pred.cidr"
 
@@ -144,6 +146,16 @@ func InitSystemEntities(save func(*Entity) error) error {
 	entityKind := &Entity{
 		Attrs: Attrs(
 			Ident, types.Keyword(EntityKind),
+			Doc, "Entity kind",
+			Cardinality, CardinalityMany,
+			Type, TypeKeyword,
+			Index, true,
+		),
+	}
+
+	entityMajorKind := &Entity{
+		Attrs: Attrs(
+			Ident, types.Keyword(EntityMajorKind),
 			Doc, "Entity kind",
 			Cardinality, CardinalityOne,
 			Type, TypeKeyword,
@@ -247,7 +259,7 @@ func InitSystemEntities(save func(*Entity) error) error {
 		Attrs: Attrs(
 			Ident, types.Keyword(EntitySchema),
 			Doc, "A reference to the schema used by the entity",
-			Cardinality, CardinalityOne,
+			Cardinality, CardinalityMany,
 			Type, TypeRef,
 		),
 	}
@@ -258,7 +270,7 @@ func InitSystemEntities(save func(*Entity) error) error {
 		typeAny, typeRef, typeStr, typeKW, typeInt, typeFloat, typeBool, typeTime, typeEnum,
 		typeArray, typeDuration, typeComponent, typeLabel, typeBytes, index,
 		attrPred, predIP, predCidr, entityAttrs, entityPreds, entityEnsure,
-		entityKind, entitySchema, entityESchema,
+		entityKind, entitySchema, entityESchema, entityMajorKind,
 	}
 
 	for _, entity := range entities {

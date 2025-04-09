@@ -5,8 +5,6 @@ import (
 	"time"
 
 	"miren.dev/runtime/api/entityserver/v1alpha"
-	sb "miren.dev/runtime/api/sandbox/v1alpha"
-	sch "miren.dev/runtime/api/schedule/v1alpha"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/rpc"
 )
@@ -34,7 +32,6 @@ func SandboxCreate(ctx *Context, opts struct {
 	sandbox.SetId(id)
 	sandbox.SetAttrs([]entity.Attr{
 		entity.Keyword(entity.Ident, id),
-		sch.Index(sb.KindSandbox, "xx"),
 	})
 
 	_, err = eac.Put(ctx, sandbox)

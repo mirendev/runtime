@@ -157,8 +157,8 @@ func AdditionalAttrs(attrs ...entity.Attr) AttrOption {
 	}
 }
 
-func (s *SchemaBuilder) Attr(name string, typ entity.Id, opts ...AttrOption) entity.Id {
-	eid := entity.Id(s.domain + "/" + name)
+func (s *SchemaBuilder) Attr(name, id string, typ entity.Id, opts ...AttrOption) entity.Id {
+	eid := entity.Id(id)
 
 	if _, exists := s.attrs[eid]; exists {
 		panic("Attribute already exists: " + string(eid))
@@ -189,52 +189,52 @@ func (s *SchemaBuilder) Attr(name string, typ entity.Id, opts ...AttrOption) ent
 	return eid
 }
 
-func (s *SchemaBuilder) Label(name string, opts ...AttrOption) entity.Id {
-	return s.Attr(name, entity.TypeLabel, opts...)
+func (s *SchemaBuilder) Label(name, id string, opts ...AttrOption) entity.Id {
+	return s.Attr(name, id, entity.TypeLabel, opts...)
 }
 
-func (s *SchemaBuilder) String(name string, opts ...AttrOption) entity.Id {
-	return s.Attr(name, entity.TypeStr, opts...)
+func (s *SchemaBuilder) String(name, id string, opts ...AttrOption) entity.Id {
+	return s.Attr(name, id, entity.TypeStr, opts...)
 }
 
-func (s *SchemaBuilder) Keyword(name string, opts ...AttrOption) entity.Id {
-	return s.Attr(name, entity.TypeKeyword, opts...)
+func (s *SchemaBuilder) Keyword(name, id string, opts ...AttrOption) entity.Id {
+	return s.Attr(name, id, entity.TypeKeyword, opts...)
 }
 
-func (s *SchemaBuilder) Bool(name string, opts ...AttrOption) entity.Id {
-	return s.Attr(name, entity.TypeBool, opts...)
+func (s *SchemaBuilder) Bool(name, id string, opts ...AttrOption) entity.Id {
+	return s.Attr(name, id, entity.TypeBool, opts...)
 }
 
-func (s *SchemaBuilder) Int64(name string, opts ...AttrOption) entity.Id {
-	return s.Attr(name, entity.TypeInt, opts...)
+func (s *SchemaBuilder) Int64(name, id string, opts ...AttrOption) entity.Id {
+	return s.Attr(name, id, entity.TypeInt, opts...)
 }
 
-func (s *SchemaBuilder) Float(name string, opts ...AttrOption) entity.Id {
-	return s.Attr(name, entity.TypeFloat, opts...)
+func (s *SchemaBuilder) Float(name, id string, opts ...AttrOption) entity.Id {
+	return s.Attr(name, id, entity.TypeFloat, opts...)
 }
 
-func (s *SchemaBuilder) Time(name string, opts ...AttrOption) entity.Id {
-	return s.Attr(name, entity.TypeTime, opts...)
+func (s *SchemaBuilder) Time(name, id string, opts ...AttrOption) entity.Id {
+	return s.Attr(name, id, entity.TypeTime, opts...)
 }
 
-func (s *SchemaBuilder) Enum(name string, values any, opts ...AttrOption) entity.Id {
+func (s *SchemaBuilder) Enum(name, id string, values any, opts ...AttrOption) entity.Id {
 	opts = append(opts, AdditionalAttrs(
 		entity.Attr{ID: entity.EnumValues, Value: entity.ArrayValue(values)},
 	))
 
-	return s.Attr(name, entity.TypeEnum, opts...)
+	return s.Attr(name, id, entity.TypeEnum, opts...)
 }
 
-func (s *SchemaBuilder) Component(name string, opts ...AttrOption) entity.Id {
-	return s.Attr(name, entity.TypeComponent, opts...)
+func (s *SchemaBuilder) Component(name, id string, opts ...AttrOption) entity.Id {
+	return s.Attr(name, id, entity.TypeComponent, opts...)
 }
 
-func (s *SchemaBuilder) Ref(name string, opts ...AttrOption) entity.Id {
-	return s.Attr(name, entity.TypeRef, opts...)
+func (s *SchemaBuilder) Ref(name, id string, opts ...AttrOption) entity.Id {
+	return s.Attr(name, id, entity.TypeRef, opts...)
 }
 
-func (s *SchemaBuilder) Singleton(name string, opts ...AttrOption) entity.Id {
-	eid := entity.Id(s.domain + "/" + name)
+func (s *SchemaBuilder) Singleton(id string, opts ...AttrOption) entity.Id {
+	eid := entity.Id(id)
 	s.singletons = append(s.singletons, eid)
 	return eid
 }

@@ -48,53 +48,89 @@ func main() {
 		panic(err)
 	}
 
+	var ed entity.EncodedDomain
+	ed.Name = sf.Domain
+	ed.Version = sf.Version
+	ed.Kinds = make(map[string]*entity.EncodedSchema)
+
 	jf := j.NewFile(*fPkg)
 
-	var g gen
-	g.name = sf.Domain
-	g.prefix = sf.Domain
-	g.sf = &sf
-	g.f = jf
-	g.ec = &entity.EncodedSchema{
-		Name:    sf.Domain,
-		Version: sf.Version,
-	}
-
-	g.fields = append(g.fields,
-		j.Id("ID").Qual(top, "Id").Tag(map[string]string{
-			"json": "id",
-		}),
+	var (
+		kinds   []string
+		structs []string
 	)
 
-	g.decoders = append(g.decoders,
-		j.Id("o").Dot("ID").Op("=").Qual(top, "MustGet").Call(j.Id("e"), j.Qual(top, "DBId")).Dot("Value").Dot("Id").Call())
+	usedAttrs := map[string]struct{}{}
 
-	for name, attr := range mapx.StableOrder(sf.Attrs) {
-		g.attr(name, attr)
+	for kind, attrs := range mapx.StableOrder(sf.Kinds) {
+		kinds = append(kinds, kind)
+
+		var g gen
+		g.usedAttrs = usedAttrs
+		g.kind = kind
+		g.name = kind // sf.Domain
+		g.prefix = sf.Domain + "." + kind
+		g.local = toCamal(kind)
+		g.sf = &sf
+		g.f = jf
+		g.ec = &entity.EncodedSchema{
+			Name:    sf.Domain,
+			Version: sf.Version,
+		}
+
+		ed.Kinds[kind] = g.ec
+
+		g.fields = append(g.fields,
+			j.Id("ID").Qual(top, "Id").Tag(map[string]string{
+				"json": "id",
+			}),
+		)
+
+		g.decoders = append(g.decoders,
+			j.Id("o").Dot("ID").Op("=").Qual(top, "MustGet").Call(j.Id("e"), j.Qual(top, "DBId")).Dot("Value").Dot("Id").Call())
+
+		for name, attr := range mapx.StableOrder(attrs) {
+			if attr.Attr == "" {
+				attr.Attr = kind + "." + name
+			}
+
+			if _, ok := usedAttrs[attr.Attr]; ok {
+				panic(fmt.Sprintf("Duplicate attribute name: %s", attr.Attr))
+			}
+
+			g.usedAttrs[attr.Attr] = struct{}{}
+
+			g.attr(name, attr)
+		}
+
+		g.generate()
+
+		structs = append(structs, g.structName)
+
+		g.f.Line()
 	}
 
-	g.generate()
-
-	g.f.Line()
-
-	g.ec.Kinds = sf.Kinds
-
 	jf.Var().DefsFunc(func(b *j.Group) {
-		for _, kind := range sf.Kinds {
+		for _, kind := range kinds {
 			b.Id("Kind"+toCamal(kind)).Op("=").Qual(top, "MustKeyword").Call(j.Lit(sf.Domain + "/kind." + kind))
 		}
 
 		b.Id("Schema").Op("=").Qual(top, "Id").Call(j.Lit("schema." + sf.Domain + "/" + sf.Version))
 	})
 
-	g.f.Func().Id("init").Params().BlockFunc(func(b *j.Group) {
+	jf.Func().Id("init").Params().BlockFunc(func(b *j.Group) {
 		b.Add(j.Qual(sch, "Register").Call(
 			j.Lit(sf.Domain),
 			j.Lit(sf.Version),
-			j.Parens(j.Op("&").Id(g.structName).Values()).Dot("InitSchema"),
+			j.Func().Params(j.Id("sb").Op("*").Qual(sch, "SchemaBuilder")).
+				BlockFunc(func(b *j.Group) {
+					for _, sn := range structs {
+						b.Parens(j.Op("&").Id(sn).Values()).Dot("InitSchema").Call(j.Id("sb"))
+					}
+				}),
 		))
 
-		data, err := cbor.Marshal(g.ec)
+		data, err := cbor.Marshal(ed)
 		if err != nil {
 			panic(err)
 		}
@@ -113,7 +149,7 @@ func main() {
 
 	var buf bytes.Buffer
 
-	err = g.f.Render(&buf)
+	err = jf.Render(&buf)
 	if err != nil {
 		str := err.Error()
 		lines := strings.Split(str, "\n")
@@ -164,21 +200,25 @@ func main() {
 }
 
 type schemaFile struct {
-	Domain  string                `yaml:"domain"`
-	Version string                `yaml:"version"`
-	Kinds   []string              `yaml:"kinds"`
-	Attrs   map[string]schemaAttr `yaml:"attrs"`
+	Domain  string                 `yaml:"domain"`
+	Version string                 `yaml:"version"`
+	Major   string                 `yaml:"kind-major"`
+	Kinds   map[string]schemaAttrs `yaml:"kinds"`
+	//Attrs   map[string]schemaAttr `yaml:"attrs"`
 }
+
+type schemaAttrs map[string]*schemaAttr
 
 type schemaAttr struct {
 	Type     string   `yaml:"type"`
 	Doc      string   `yaml:"doc"`
+	Attr     string   `yaml:"attr,omitempty"`     // for attribute name
 	Many     bool     `yaml:"many,omitempty"`     // for repeated attributes
 	Required bool     `yaml:"required,omitempty"` // for required attributes
 	Choices  []string `yaml:"choices,omitempty"`  // for enum attributes
 	Indexed  bool     `yaml:"indexed,omitempty"`  // for indexed attributes
 
-	Attrs map[string]schemaAttr `yaml:"attrs,omitempty"` // for nested attributes
+	Attrs map[string]*schemaAttr `yaml:"attrs,omitempty"` // for nested attributes
 }
 
 func toCamal(s string) string {
@@ -208,9 +248,12 @@ func toCamal(s string) string {
 }
 
 type gen struct {
+	kind   string
 	name   string
 	prefix string
 	local  string
+
+	usedAttrs map[string]struct{}
 
 	ec *entity.EncodedSchema
 
@@ -240,10 +283,12 @@ func (g *gen) NSd(name string) j.Code {
 	return j.Id(g.local + name)
 }
 
-func (g *gen) attr(name string, attr schemaAttr) {
+func (g *gen) attr(name string, attr *schemaAttr) {
 	fname := toCamal(name)
 
-	g.idents = append(g.idents, j.Id(g.local+fname+"Id").Op("=").Qual(top, "Id").Call(j.Lit(g.prefix+"/"+name)))
+	eid := g.sf.Domain + "/" + attr.Attr
+
+	g.idents = append(g.idents, j.Id(g.local+fname+"Id").Op("=").Qual(top, "Id").Call(j.Lit(eid)))
 
 	tn := name
 	if !attr.Required {
@@ -254,6 +299,7 @@ func (g *gen) attr(name string, attr schemaAttr) {
 
 	tag := map[string]string{
 		"json": tn,
+		"cbor": tn,
 	}
 
 	simpleDecoder := func(kind, method string) {
@@ -294,7 +340,7 @@ func (g *gen) attr(name string, attr schemaAttr) {
 
 	simpleDecl := func(method string) {
 		var call []j.Code
-		call = append(call, j.Lit(name))
+		call = append(call, j.Lit(name), j.Lit(eid))
 
 		if attr.Doc != "" {
 			call = append(call, j.Qual(sch, "Doc").Call(j.Lit(attr.Doc)))
@@ -313,7 +359,6 @@ func (g *gen) attr(name string, attr schemaAttr) {
 		}
 
 		if len(attr.Choices) > 0 {
-
 			var args []j.Code
 
 			for _, v := range attr.Choices {
@@ -331,7 +376,7 @@ func (g *gen) attr(name string, attr schemaAttr) {
 		g.ec.Fields = append(g.ec.Fields, &entity.SchemaField{
 			Name: name,
 			Type: typ,
-			Id:   entity.Id(g.prefix + "/" + name),
+			Id:   entity.Id(eid),
 			Many: attr.Many,
 		})
 	}
@@ -367,6 +412,12 @@ func (g *gen) attr(name string, attr schemaAttr) {
 		simpleEncoder("Int64")
 		simpleDecl("Int64")
 		simpleField("int")
+	case "ref":
+		g.fields = append(g.fields, j.Id(fname).Qual(top, "Id").Tag(tag))
+		simpleDecoder("KindId", "Id")
+		simpleEncoder("Ref")
+		simpleDecl("Ref")
+		simpleField("Id")
 	case "bool":
 		g.fields = append(g.fields, j.Id(fname).Bool().Tag(tag))
 		simpleDecoder("KindBool", "Bool")
@@ -397,8 +448,16 @@ func (g *gen) attr(name string, attr schemaAttr) {
 		g.fields = append(g.fields, j.Id(fname).Add(g.NSd(fname)).Tag(tag))
 
 		for _, v := range attr.Choices {
+			id := name + "." + v
+
+			if _, ok := g.usedAttrs[id]; ok {
+				panic(fmt.Sprintf("Duplicate attribute name: %s", id))
+			}
+
+			g.usedAttrs[id] = struct{}{}
+
 			g.idents = append(g.idents, j.Add(g.Ident(fname+toCamal(v))).Op("=").Qual(top, "Id").
-				Call(j.Lit(g.prefix+"/"+name+"."+v)))
+				Call(j.Lit(g.sf.Domain+"/"+id)))
 		}
 
 		g.decodeouter = append(g.decodeouter, j.Const().DefsFunc(func(b *j.Group) {
@@ -442,8 +501,15 @@ func (g *gen) attr(name string, attr schemaAttr) {
 		)
 		g.decoders = append(g.decoders, d)
 
+		enc := j.If(
+			j.List(j.Id("a"), j.Id("ok")).Op(":=").Id(name+"ToId").Index(j.Id("o").Dot(fname)), j.Id("ok"),
+		).Block(
+			j.Id("attrs").Op("=").Append(j.Id("attrs"), j.Qual(top, "Ref").Call(g.Ident(fname), j.Id("a"))),
+		)
+		g.encoders = append(g.encoders, enc)
+
 		var call []j.Code
-		call = append(call, j.Lit(name))
+		call = append(call, j.Lit(name), j.Lit(eid))
 
 		if attr.Doc != "" {
 			call = append(call, j.Qual(sch, "Doc").Call(j.Lit(attr.Doc)))
@@ -464,7 +530,7 @@ func (g *gen) attr(name string, attr schemaAttr) {
 		var args []j.Code
 
 		for _, v := range attr.Choices {
-			g.decl = append(g.decl, j.Id("sb").Dot("Singleton").Call(j.Lit(name+"."+v)))
+			g.decl = append(g.decl, j.Id("sb").Dot("Singleton").Call(j.Lit(g.sf.Domain+"/"+name+"."+v)))
 			args = append(args, g.Ident(fname+toCamal(v)))
 		}
 
@@ -482,7 +548,7 @@ func (g *gen) attr(name string, attr schemaAttr) {
 		g.ec.Fields = append(g.ec.Fields, &entity.SchemaField{
 			Name:       name,
 			Type:       "enum",
-			Id:         entity.Id(g.prefix + "/" + name),
+			Id:         entity.Id(eid),
 			Many:       attr.Many,
 			EnumValues: fc,
 		})
@@ -494,6 +560,7 @@ func (g *gen) attr(name string, attr schemaAttr) {
 		}
 
 		var sg gen
+		sg.usedAttrs = g.usedAttrs
 		sg.name = fname
 		sg.sf = g.sf
 		sg.f = g.f
@@ -505,6 +572,16 @@ func (g *gen) attr(name string, attr schemaAttr) {
 		}
 
 		for k, v := range mapx.StableOrder(attr.Attrs) {
+			if v.Attr == "" {
+				v.Attr = name + "." + k
+			}
+
+			if _, ok := g.usedAttrs[v.Attr]; ok {
+				panic(fmt.Sprintf("Duplicate attribute name: %s", attr.Attr))
+			}
+
+			g.usedAttrs[v.Attr] = struct{}{}
+
 			sg.attr(k, v)
 		}
 
@@ -554,7 +631,7 @@ func (g *gen) attr(name string, attr schemaAttr) {
 		g.ec.Fields = append(g.ec.Fields, &entity.SchemaField{
 			Name:      name,
 			Type:      "component",
-			Id:        entity.Id(g.prefix + "/" + name),
+			Id:        entity.Id(eid),
 			Many:      attr.Many,
 			Component: sg.ec,
 		})
@@ -570,7 +647,7 @@ func (g *gen) generate() {
 	}
 
 	g.ec.PrimaryKind = strings.ToLower(name)
-	g.sf.Kinds = append(g.sf.Kinds, strings.ToLower(name))
+	//g.sf.Kinds = append(g.sf.Kinds, strings.ToLower(name))
 
 	structName := toCamal(name)
 	g.structName = structName
@@ -609,6 +686,17 @@ func (g *gen) generate() {
 		BlockFunc(func(b *j.Group) {
 			for _, d := range g.encoders {
 				b.Add(d)
+			}
+			if g.kind != "" {
+				b.Id("attrs").Op("=").Append(
+					j.Id("attrs"),
+					j.Qual(top, "Keyword").Call(j.Qual(top, "EntityKind"), j.Id("Kind"+toCamal(g.kind))),
+				)
+				b.Id("attrs").Op("=").Append(
+					j.Id("attrs"),
+					j.Qual(top, "Ref").Call(j.Qual(top, "EntitySchema"), j.Id("Schema")),
+				)
+
 			}
 			b.Return()
 		})

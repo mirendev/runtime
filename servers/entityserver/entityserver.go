@@ -4,8 +4,13 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"encoding/base64"
 	"fmt"
 	"log/slog"
+	"slices"
+	"strconv"
+	"strings"
+	"time"
 
 	"github.com/davecgh/go-spew/spew"
 	"github.com/fxamacker/cbor/v2"
@@ -13,6 +18,7 @@ import (
 	"gopkg.in/yaml.v3"
 	"miren.dev/runtime/api/entityserver/v1alpha"
 	"miren.dev/runtime/pkg/entity"
+	etypes "miren.dev/runtime/pkg/entity/types"
 )
 
 type EntityServer struct {
@@ -222,6 +228,136 @@ func (e *EntityServer) List(ctx context.Context, req *v1alpha.EntityAccessList) 
 	return nil
 }
 
+func (e *EntityServer) MakeAttr(ctx context.Context, req *v1alpha.EntityAccessMakeAttr) error {
+	args := req.Args()
+
+	if !args.HasId() {
+		return fmt.Errorf("missing required field: name")
+	}
+
+	if !args.HasValue() {
+		return fmt.Errorf("missing required field: value")
+	}
+
+	id := entity.Id(args.Id())
+
+	schema, err := e.Store.GetAttributeSchema(ctx, id)
+	if err != nil {
+		return fmt.Errorf("failed to get schema: %w", err)
+	}
+
+	var value entity.Value
+
+	switch schema.Type {
+	case entity.TypeStr:
+		value = entity.StringValue(args.Value())
+
+	case entity.TypeInt:
+		i, err := strconv.ParseInt(args.Value(), 10, 64)
+		if err != nil {
+			return fmt.Errorf("invalid integer value: %w", err)
+		}
+
+		value = entity.IntValue(int(i))
+
+	case entity.TypeFloat:
+		f, err := strconv.ParseFloat(args.Value(), 64)
+		if err != nil {
+			return fmt.Errorf("invalid float value: %w", err)
+		}
+		value = entity.Float64Value(f)
+
+	case entity.TypeBool:
+		b, err := strconv.ParseBool(args.Value())
+		if err != nil {
+			return fmt.Errorf("invalid boolean value: %w", err)
+		}
+		value = entity.BoolValue(b)
+
+	case entity.TypeRef:
+		value = entity.RefValue(entity.Id(args.Value()))
+
+	case entity.TypeTime:
+		// Try RFC3339 first
+		t, err := time.Parse(time.RFC3339, args.Value())
+		if err != nil {
+			// Try RFC3339Nano
+			t, err = time.Parse(time.RFC3339Nano, args.Value())
+			if err != nil {
+				return fmt.Errorf("invalid time value, must be RFC3339 or RFC3339Nano format: %w", err)
+			}
+		}
+		value = entity.TimeValue(t)
+
+	case entity.TypeDuration:
+		d, err := time.ParseDuration(args.Value())
+		if err != nil {
+			return fmt.Errorf("invalid duration value: %w", err)
+		}
+		value = entity.DurationValue(d)
+
+	case entity.TypeKeyword:
+		if !entity.ValidKeyword(args.Value()) {
+			return fmt.Errorf("invalid keyword value: %s", args.Value())
+		}
+		value = entity.KeywordValue(etypes.Keyword(args.Value()))
+
+	case entity.TypeBytes:
+		b, err := base64.StdEncoding.DecodeString(args.Value())
+		if err != nil {
+			return fmt.Errorf("invalid base64 encoded bytes: %w", err)
+		}
+		value = entity.BytesValue(b)
+
+	case entity.TypeLabel:
+		parts := strings.SplitN(args.Value(), "=", 2)
+		if len(parts) == 1 {
+			value = entity.LabelValue(parts[0], "")
+		} else {
+			value = entity.LabelValue(parts[0], parts[1])
+		}
+
+	case entity.TypeEnum:
+		value = entity.RefValue(id)
+
+		// Look up the enum value in the schema
+		if !slices.ContainsFunc(schema.EnumValues, func(v entity.Value) bool {
+			return v.Equal(value)
+		}) {
+			return fmt.Errorf("invalid enum value: %s", args.Value())
+		}
+
+	default:
+		return fmt.Errorf("unsupported attribute type: %s", schema.Type)
+	}
+
+	req.Results().SetAttr(&entity.Attr{ID: id, Value: value})
+
+	return nil
+}
+
+func (e *EntityServer) LookupMajorKind(ctx context.Context, req *v1alpha.EntityAccessLookupMajorKind) error {
+	args := req.Args()
+
+	if !args.HasKind() {
+		return fmt.Errorf("missing required field: kind")
+	}
+
+	schema, err := e.Store.GetEntity(ctx, entity.Id("schema."+args.Kind()))
+	if err != nil {
+		return fmt.Errorf("failed to get schema: %w", err)
+	}
+
+	var rpcEntity v1alpha.Entity
+	rpcEntity.SetId(schema.ID.String())
+	rpcEntity.SetCreatedAt(schema.CreatedAt)
+	rpcEntity.SetUpdatedAt(schema.UpdatedAt)
+	rpcEntity.SetRevision(schema.Revision)
+	rpcEntity.SetAttrs(schema.Attrs)
+
+	return nil
+}
+
 func (e *EntityServer) Parse(ctx context.Context, req *v1alpha.EntityAccessParse) error {
 	args := req.Args()
 
@@ -249,7 +385,12 @@ func (e *EntityServer) Parse(ctx context.Context, req *v1alpha.EntityAccessParse
 		return fmt.Errorf("missing version")
 	}
 
-	schema, err := e.Store.GetEntity(ctx, entity.Id("schema."+kind+"/"+version))
+	domain, kind, ok := strings.Cut(kind, "/")
+	if !ok {
+		return fmt.Errorf("invalid kind format")
+	}
+
+	schema, err := e.Store.GetEntity(ctx, entity.Id("schema."+domain+"/"+version))
 	if err != nil {
 		return fmt.Errorf("failed to get schema: %w", err)
 	}
@@ -259,7 +400,7 @@ func (e *EntityServer) Parse(ctx context.Context, req *v1alpha.EntityAccessParse
 		return fmt.Errorf("missing schema")
 	}
 
-	var es entity.EncodedSchema
+	var ed entity.EncodedDomain
 	gr, err := gzip.NewReader(bytes.NewReader(esch.Value.Bytes()))
 	if err != nil {
 		return fmt.Errorf("failed to create gzip reader: %w", err)
@@ -267,12 +408,17 @@ func (e *EntityServer) Parse(ctx context.Context, req *v1alpha.EntityAccessParse
 
 	defer gr.Close()
 
-	err = cbor.NewDecoder(gr).Decode(&es)
+	err = cbor.NewDecoder(gr).Decode(&ed)
 	if err != nil {
 		return fmt.Errorf("failed to decode schema: %w", err)
 	}
 
-	attrs, err := entity.NaturalDecode(x, &es)
+	es := ed.Kinds[kind]
+	if es == nil {
+		return fmt.Errorf("unknown kind: %s", kind)
+	}
+
+	attrs, err := entity.NaturalDecode(x, es)
 	if err != nil {
 		return fmt.Errorf("failed to decode entity: %w", err)
 	}

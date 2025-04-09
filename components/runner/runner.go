@@ -7,13 +7,12 @@ import (
 
 	containerd "github.com/containerd/containerd/v2/client"
 	es "miren.dev/runtime/api/entityserver/v1alpha"
-	ns "miren.dev/runtime/api/node/v1alpha"
 	sb "miren.dev/runtime/api/sandbox/v1alpha"
-	sc "miren.dev/runtime/api/schedule/v1alpha"
 	"miren.dev/runtime/controllers/sandbox"
 	"miren.dev/runtime/pkg/asm"
 	"miren.dev/runtime/pkg/controller"
 	"miren.dev/runtime/pkg/entity"
+	"miren.dev/runtime/pkg/entity/types"
 	"miren.dev/runtime/pkg/rpc"
 )
 
@@ -106,16 +105,18 @@ func (r *Runner) setupEntity(eas *es.EntityAccessClient) error {
 		return nil
 	}
 
-	var ent es.Entity
+	node := sb.Node{
+		Status:      sb.READY,
+		Constraints: types.LabelSet("compute", "generic"),
+	}
 
-	ent.SetAttrs(entity.Attrs(
+	var aent es.Entity
+	aent.SetAttrs(entity.Attrs(
+		node.Encode,
 		entity.Ident, r.Id,
-		entity.EntityKind, ns.KindNode,
-		entity.EntitySchema, ns.Schema,
-		ns.StatusId, ns.StatusReadyId,
 	))
 
-	_, err := eas.Put(context.Background(), &ent)
+	_, err := eas.Put(context.Background(), &aent)
 	if err != nil {
 		return err
 	}
@@ -159,7 +160,7 @@ func (r *Runner) SetupControllers(
 		controller.NewReconcileController(
 			"sandbox",
 			log,
-			sc.Index(sb.KindSandbox, r.Id),
+			sb.Index(sb.KindSandbox, entity.Id(r.Id)),
 			eas,
 			controller.AdaptController(&sbc),
 			time.Minute,

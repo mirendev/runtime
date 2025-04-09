@@ -229,6 +229,13 @@ func (v *Value) setFromTuple(x valueDecodeTuple, decoder unmarshaler) error {
 		}
 
 		v.any = &comp
+	case KindLabel:
+		var label types.Label
+		if err := decoder.Unmarshal(x.Value, &label); err != nil {
+			return fmt.Errorf("bad label: %w", err)
+		}
+
+		v.any = label
 	default:
 		err := decoder.Unmarshal(x.Value, &v.any)
 		if err != nil {
