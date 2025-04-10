@@ -21,7 +21,7 @@ import (
 
 	"github.com/opencontainers/runtime-spec/specs-go"
 
-	"miren.dev/runtime/api/sandbox/v1alpha"
+	compute "miren.dev/runtime/api/compute/v1alpha"
 	"miren.dev/runtime/build"
 	"miren.dev/runtime/image"
 	"miren.dev/runtime/observability"
@@ -87,7 +87,7 @@ func TestSandbox(t *testing.T) {
 
 		id := entity.Id(sbName())
 
-		var sb v1alpha.Sandbox
+		var sb compute.Sandbox
 
 		sb.ID = id
 
@@ -103,7 +103,7 @@ func TestSandbox(t *testing.T) {
 			Revision: 1,
 		}
 
-		var tco v1alpha.Sandbox
+		var tco compute.Sandbox
 		tco.Decode(cont)
 
 		err = co.Create(ctx, &tco, meta)
@@ -233,7 +233,7 @@ func TestSandbox(t *testing.T) {
 			task.Delete(ctx, containerd.WithProcessKill)
 			bc.Delete(ctx, containerd.WithSnapshotCleanup)
 
-			var sb v1alpha.Sandbox
+			var sb compute.Sandbox
 
 			sb.ID = id
 
@@ -257,7 +257,7 @@ func TestSandbox(t *testing.T) {
 		t.Run("updates container in place when labels change", func(t *testing.T) {
 			r := require.New(t)
 
-			var sb v1alpha.Sandbox
+			var sb compute.Sandbox
 
 			sb.ID = id
 
@@ -296,12 +296,12 @@ func TestSandbox(t *testing.T) {
 			task.Delete(ctx, containerd.WithProcessKill)
 			bc.Delete(ctx, containerd.WithSnapshotCleanup)
 
-			var sb v1alpha.Sandbox
+			var sb compute.Sandbox
 
 			sb.ID = id
 
 			sb.Labels = append(sb.Labels, "runtime.computer/app=mn-test")
-			sb.Container = append(sb.Container, v1alpha.Container{
+			sb.Container = append(sb.Container, compute.Container{
 				Name:  "nginx",
 				Image: "mn-nginx:latest",
 			})
@@ -390,13 +390,13 @@ func TestSandbox(t *testing.T) {
 
 		id := entity.Id(sbName())
 
-		var sb v1alpha.Sandbox
+		var sb compute.Sandbox
 
 		sb.ID = id
 
 		sb.Labels = append(sb.Labels, "runtime.computer/app=mn-nginx")
 
-		sb.Container = append(sb.Container, v1alpha.Container{
+		sb.Container = append(sb.Container, compute.Container{
 			Name:  "sort",
 			Image: "mn-sort:latest",
 		})
@@ -410,7 +410,7 @@ func TestSandbox(t *testing.T) {
 			Entity: cont,
 		}
 
-		var tco v1alpha.Sandbox
+		var tco compute.Sandbox
 		tco.Decode(cont)
 
 		err = co.Create(ctx, &tco, meta)
@@ -497,21 +497,21 @@ func TestSandbox(t *testing.T) {
 
 		id := entity.Id(sbName())
 
-		var sb v1alpha.Sandbox
+		var sb compute.Sandbox
 
 		sb.ID = id
 
 		sb.Labels = append(sb.Labels, "runtime.computer/app=mn-nginx")
 
-		sb.Container = append(sb.Container, v1alpha.Container{
+		sb.Container = append(sb.Container, compute.Container{
 			Name:  "nginx",
 			Image: "mn-nginx:latest",
 		})
-		sb.Port = append(sb.Port, v1alpha.Port{
+		sb.Port = append(sb.Port, compute.Port{
 			Name:     "http",
 			NodePort: 31001,
 			Port:     80,
-			Protocol: v1alpha.TCP,
+			Protocol: compute.TCP,
 			Type:     "http",
 		})
 
@@ -525,7 +525,7 @@ func TestSandbox(t *testing.T) {
 			Revision: 1,
 		}
 
-		var tco v1alpha.Sandbox
+		var tco compute.Sandbox
 		tco.Decode(cont)
 
 		err = co.Create(ctx, &tco, meta)
@@ -616,7 +616,7 @@ func TestSandbox(t *testing.T) {
 
 		id := entity.Id(sbName())
 
-		var sb v1alpha.Sandbox
+		var sb compute.Sandbox
 
 		sb.ID = id
 
@@ -625,16 +625,16 @@ func TestSandbox(t *testing.T) {
 		spath, err := filepath.Abs("testdata/static-site")
 		r.NoError(err)
 
-		sb.Volume = append(sb.Volume, v1alpha.Volume{
+		sb.Volume = append(sb.Volume, compute.Volume{
 			Name:     "static-site",
 			Provider: "host",
 			Labels:   types.LabelSet("path", spath),
 		})
 
-		sb.Container = append(sb.Container, v1alpha.Container{
+		sb.Container = append(sb.Container, compute.Container{
 			Name:  "nginx",
 			Image: "mn-nginx:latest",
-			Mount: []v1alpha.Mount{
+			Mount: []compute.Mount{
 				{
 					Destination: "/usr/share/nginx/html",
 					Source:      "static-site",
@@ -642,10 +642,10 @@ func TestSandbox(t *testing.T) {
 			},
 		})
 
-		sb.Port = append(sb.Port, v1alpha.Port{
+		sb.Port = append(sb.Port, compute.Port{
 			Name:     "http",
 			Port:     80,
-			Protocol: v1alpha.TCP,
+			Protocol: compute.TCP,
 			Type:     "http",
 		})
 
@@ -659,7 +659,7 @@ func TestSandbox(t *testing.T) {
 			Revision: 1,
 		}
 
-		var tco v1alpha.Sandbox
+		var tco compute.Sandbox
 		tco.Decode(cont)
 
 		err = co.Create(ctx, &tco, meta)
@@ -745,22 +745,22 @@ func TestSandbox(t *testing.T) {
 
 		id := entity.Id(sbName())
 
-		var sb v1alpha.Sandbox
+		var sb compute.Sandbox
 
 		sb.ID = id
 
 		sb.Labels = append(sb.Labels, "runtime.computer/app=mn-nginx")
 
-		sb.Volume = append(sb.Volume, v1alpha.Volume{
+		sb.Volume = append(sb.Volume, compute.Volume{
 			Name:     "static-site",
 			Provider: "host",
 			Labels:   types.LabelSet("name", "site-data"),
 		})
 
-		sb.Container = append(sb.Container, v1alpha.Container{
+		sb.Container = append(sb.Container, compute.Container{
 			Name:  "nginx",
 			Image: "mn-nginx:latest",
-			Mount: []v1alpha.Mount{
+			Mount: []compute.Mount{
 				{
 					Destination: "/usr/share/nginx/html",
 					Source:      "static-site",
@@ -768,10 +768,10 @@ func TestSandbox(t *testing.T) {
 			},
 		})
 
-		sb.Port = append(sb.Port, v1alpha.Port{
+		sb.Port = append(sb.Port, compute.Port{
 			Name:     "http",
 			Port:     80,
-			Protocol: v1alpha.TCP,
+			Protocol: compute.TCP,
 			Type:     "http",
 		})
 
@@ -785,7 +785,7 @@ func TestSandbox(t *testing.T) {
 			Revision: 1,
 		}
 
-		var tco v1alpha.Sandbox
+		var tco compute.Sandbox
 		tco.Decode(cont)
 
 		err = co.Create(ctx, &tco, meta)
@@ -876,22 +876,22 @@ func TestSandbox(t *testing.T) {
 
 		id := entity.Id("sb-xyz")
 
-		var sb v1alpha.Sandbox
+		var sb compute.Sandbox
 
 		sb.ID = id
 
 		sb.Labels = append(sb.Labels, "runtime.computer/app=mn-nginx")
 
-		sb.Volume = append(sb.Volume, v1alpha.Volume{
+		sb.Volume = append(sb.Volume, compute.Volume{
 			Name:     "static-site",
 			Provider: "miren",
 			Labels:   types.LabelSet("name", "testing", "size", "50MB"),
 		})
 
-		sb.Container = append(sb.Container, v1alpha.Container{
+		sb.Container = append(sb.Container, compute.Container{
 			Name:  "nginx",
 			Image: "mn-nginx:latest",
-			Mount: []v1alpha.Mount{
+			Mount: []compute.Mount{
 				{
 					Destination: "/usr/share/nginx/html",
 					Source:      "static-site",
@@ -899,10 +899,10 @@ func TestSandbox(t *testing.T) {
 			},
 		})
 
-		sb.Port = append(sb.Port, v1alpha.Port{
+		sb.Port = append(sb.Port, compute.Port{
 			Name:     "http",
 			Port:     80,
-			Protocol: v1alpha.TCP,
+			Protocol: compute.TCP,
 			Type:     "http",
 		})
 
@@ -916,7 +916,7 @@ func TestSandbox(t *testing.T) {
 			Revision: 1,
 		}
 
-		var tco v1alpha.Sandbox
+		var tco compute.Sandbox
 		tco.Decode(cont)
 
 		err = co.Create(ctx, &tco, meta)

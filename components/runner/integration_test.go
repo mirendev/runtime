@@ -10,9 +10,8 @@ import (
 	containerd "github.com/containerd/containerd/v2/client"
 	"github.com/containerd/containerd/v2/pkg/namespaces"
 	"github.com/stretchr/testify/require"
+	compute "miren.dev/runtime/api/compute/v1alpha"
 	"miren.dev/runtime/api/entityserver/v1alpha"
-	ns "miren.dev/runtime/api/node/v1alpha"
-	sb "miren.dev/runtime/api/sandbox/v1alpha"
 	"miren.dev/runtime/components/coordinate"
 	"miren.dev/runtime/components/scheduler"
 	"miren.dev/runtime/observability"
@@ -90,10 +89,10 @@ func TestRunnerCoordinatorIntegration(t *testing.T) {
 		Attrs: res.Entity().Attrs(),
 	}
 
-	status, ok := node.Get(ns.StatusId)
+	status, ok := node.Get(compute.NodeStatusId)
 	r.True(ok)
 
-	r.Equal(ns.StatusReadyId, status.Value.Id())
+	r.Equal(compute.NodeStatusReadyId, status.Value.Id())
 
 	tmpSch, err := scheduler.NewScheduler(ctx, log, &eac)
 	r.NoError(err)
@@ -110,7 +109,7 @@ func TestRunnerCoordinatorIntegration(t *testing.T) {
 	// Test creating a sandbox entity
 	sandbox := &v1alpha.Entity{}
 	sandbox.SetAttrs(entity.Attrs(
-		entity.EntityKind, sb.KindSandbox,
+		entity.EntityKind, compute.KindSandbox,
 		entity.Keyword(entity.Ident, id),
 	))
 

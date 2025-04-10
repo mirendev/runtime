@@ -16,7 +16,7 @@ import (
 	"miren.dev/runtime/pkg/rpc"
 	"miren.dev/runtime/pkg/testutils"
 
-	sb "miren.dev/runtime/api/sandbox/v1alpha" // Import sandbox API for testing
+	compute "miren.dev/runtime/api/compute/v1alpha"
 )
 
 func TestCoordinatorParse(t *testing.T) {
@@ -76,8 +76,8 @@ func TestCoordinatorParse(t *testing.T) {
 	r.Equal(attrs[0].ID, entity.Id("dev.miren.sandbox/container"))
 	r.Equal(attrs[0].Value.Component(), &entity.EntityComponent{
 		Attrs: entity.Attrs(
-			sb.ContainerImageId, "nginx:latest",
-			sb.ContainerNameId, "nginx",
+			compute.ContainerImageId, "nginx:latest",
+			compute.ContainerNameId, "nginx",
 		),
 	})
 
@@ -87,9 +87,9 @@ func TestCoordinatorParse(t *testing.T) {
 	r.Equal(attrs[2].ID, entity.Id("dev.miren.sandbox/port"))
 	r.Equal(attrs[2].Value.Component(), &entity.EntityComponent{
 		Attrs: entity.Attrs(
-			sb.PortNameId, "http",
-			sb.PortPortId, 80,
-			sb.PortTypeId, "http",
+			compute.PortNameId, "http",
+			compute.PortPortId, 80,
+			compute.PortTypeId, "http",
 		),
 	})
 }

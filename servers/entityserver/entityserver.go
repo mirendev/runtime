@@ -336,26 +336,64 @@ func (e *EntityServer) MakeAttr(ctx context.Context, req *v1alpha.EntityAccessMa
 	return nil
 }
 
-func (e *EntityServer) LookupMajorKind(ctx context.Context, req *v1alpha.EntityAccessLookupMajorKind) error {
+func (e *EntityServer) LookupKind(ctx context.Context, req *v1alpha.EntityAccessLookupKind) error {
 	args := req.Args()
 
 	if !args.HasKind() {
 		return fmt.Errorf("missing required field: kind")
 	}
 
-	schema, err := e.Store.GetEntity(ctx, entity.Id("schema."+args.Kind()))
+	ids, err := e.Store.ListIndex(ctx, entity.Keyword(entity.SchemaKind, args.Kind()))
+	if err != nil {
+		return fmt.Errorf("failed to lookup kind '%s': %w", args.Kind(), err)
+	}
+
+	switch {
+	case len(ids) == 0:
+		return fmt.Errorf("kind '%s' not found", args.Kind())
+	case len(ids) > 1:
+		return fmt.Errorf("kind '%s' is ambiguous, %d schemas found", args.Kind(), len(ids))
+	}
+
+	schema, err := e.Store.GetEntity(ctx, ids[0])
 	if err != nil {
 		return fmt.Errorf("failed to get schema: %w", err)
 	}
 
-	var rpcEntity v1alpha.Entity
-	rpcEntity.SetId(schema.ID.String())
-	rpcEntity.SetCreatedAt(schema.CreatedAt)
-	rpcEntity.SetUpdatedAt(schema.UpdatedAt)
-	rpcEntity.SetRevision(schema.Revision)
-	rpcEntity.SetAttrs(schema.Attrs)
+	sa, ok := schema.Get(entity.Schema)
+	if !ok {
+		return fmt.Errorf("corrupt missing schema")
+	}
 
-	return nil
+	var es entity.EncodedDomain
+
+	gr, err := gzip.NewReader(bytes.NewReader(sa.Value.Bytes()))
+	if err != nil {
+		return fmt.Errorf("failed to create gzip reader: %w", err)
+	}
+
+	defer gr.Close()
+
+	err = cbor.NewDecoder(gr).Decode(&es)
+	if err != nil {
+		return fmt.Errorf("failed to decode schema: %w", err)
+	}
+
+	if _, ok := es.Kinds[args.Kind()]; ok {
+		attr := entity.Keyword(entity.EntityKind, args.Kind())
+		req.Results().SetAttr(&attr)
+		return nil
+	}
+
+	spew.Dump(es.ShortKinds)
+
+	if kind, ok := es.ShortKinds[args.Kind()]; ok {
+		attr := entity.Keyword(entity.EntityKind, kind)
+		req.Results().SetAttr(&attr)
+		return nil
+	}
+
+	return fmt.Errorf("kind '%s' not found", args.Kind())
 }
 
 func (e *EntityServer) Parse(ctx context.Context, req *v1alpha.EntityAccessParse) error {
@@ -451,7 +489,7 @@ func (e *EntityServer) Format(ctx context.Context, req *v1alpha.EntityAccessForm
 		return fmt.Errorf("missing schema")
 	}
 
-	var es entity.EncodedSchema
+	var ed entity.EncodedDomain
 	gr, err := gzip.NewReader(bytes.NewReader(esch.Value.Bytes()))
 	if err != nil {
 		return fmt.Errorf("failed to create gzip reader: %w", err)
@@ -459,14 +497,23 @@ func (e *EntityServer) Format(ctx context.Context, req *v1alpha.EntityAccessForm
 
 	defer gr.Close()
 
-	err = cbor.NewDecoder(gr).Decode(&es)
+	err = cbor.NewDecoder(gr).Decode(&ed)
 	if err != nil {
 		return fmt.Errorf("failed to decode schema: %w", err)
 	}
 
-	m, err := entity.NaturalEncode(ent, &es)
-	if err != nil {
-		return fmt.Errorf("failed to encode entity: %w", err)
+	var results []any
+
+	for _, kind := range ent.GetAll(entity.EntityKind) {
+		es, ok := ed.Kinds[string(kind.Value.Keyword())]
+		if !ok {
+			continue
+		}
+		m, err := entity.NaturalEncode(ent, es)
+		if err != nil {
+			return fmt.Errorf("failed to encode entity: %w", err)
+		}
+		results = append(results, m)
 	}
 
 	var n yaml.Node
@@ -476,7 +523,7 @@ func (e *EntityServer) Format(ctx context.Context, req *v1alpha.EntityAccessForm
 
 	var n2 yaml.Node
 	err = n2.Encode(map[string]any{
-		fmt.Sprintf("%s/%s", es.Name, es.Version): m,
+		"kinds": results,
 	})
 
 	n2.Content = append(n2.Content, n.Content...)

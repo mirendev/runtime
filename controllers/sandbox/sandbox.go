@@ -29,7 +29,7 @@ import (
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/netdb"
 
-	"miren.dev/runtime/api/sandbox/v1alpha"
+	compute "miren.dev/runtime/api/compute/v1alpha"
 )
 
 const (
@@ -238,7 +238,7 @@ const (
 )
 
 // canUpdateInPlace checks if the sandbox can be updated in place without destroying it.
-func (c *SandboxController) canUpdateInPlace(ctx context.Context, sb *v1alpha.Sandbox, meta *entity.Meta) (bool, *v1alpha.Sandbox, error) {
+func (c *SandboxController) canUpdateInPlace(ctx context.Context, sb *compute.Sandbox, meta *entity.Meta) (bool, *compute.Sandbox, error) {
 	// We support the ability to update a subnet of elements of the sandbox while running.
 	// For everything else, we destroy it and rebuild it fully with Create.
 
@@ -248,7 +248,7 @@ func (c *SandboxController) canUpdateInPlace(ctx context.Context, sb *v1alpha.Sa
 		oldMeta = meta
 	}
 
-	var oldSb v1alpha.Sandbox
+	var oldSb compute.Sandbox
 	oldSb.Decode(oldMeta)
 
 	// TODO: handle adding a new container without destroying the sandbox first.
@@ -299,7 +299,7 @@ func (c *SandboxController) containerId(id entity.Id) string {
 	return "sandbox." + cid
 }
 
-func (c *SandboxController) checkSandbox(ctx context.Context, co *v1alpha.Sandbox, meta *entity.Meta) (int, error) {
+func (c *SandboxController) checkSandbox(ctx context.Context, co *compute.Sandbox, meta *entity.Meta) (int, error) {
 	c.Log.Debug("checking for existing sandbox", "id", co.ID)
 
 	ctx = namespaces.WithNamespace(ctx, c.Namespace)
@@ -327,7 +327,7 @@ func (c *SandboxController) checkSandbox(ctx context.Context, co *v1alpha.Sandbo
 	return same, nil
 }
 
-func (c *SandboxController) saveEntity(ctx context.Context, sb *v1alpha.Sandbox, meta *entity.Meta) error {
+func (c *SandboxController) saveEntity(ctx context.Context, sb *compute.Sandbox, meta *entity.Meta) error {
 	path := c.sandboxPath(sb, "entity.cbor")
 
 	f, err := os.Create(path)
@@ -372,7 +372,7 @@ func (c *SandboxController) readEntity(ctx context.Context, id entity.Id) (*enti
 	return &meta, nil
 }
 
-func (c *SandboxController) updateSandbox(ctx context.Context, sb *v1alpha.Sandbox, meta *entity.Meta) error {
+func (c *SandboxController) updateSandbox(ctx context.Context, sb *compute.Sandbox, meta *entity.Meta) error {
 	// We support the ability to update a subnet of elements of the sandbox while running.
 	// For everything else, we destroy it and rebuild it fully with Create.
 
@@ -425,7 +425,7 @@ func (c *SandboxController) updateSandbox(ctx context.Context, sb *v1alpha.Sandb
 	return c.createSandbox(ctx, sb, meta)
 }
 
-func (c *SandboxController) Create(ctx context.Context, co *v1alpha.Sandbox, meta *entity.Meta) error {
+func (c *SandboxController) Create(ctx context.Context, co *compute.Sandbox, meta *entity.Meta) error {
 	searchRes, err := c.checkSandbox(ctx, co, meta)
 	if err != nil {
 		c.Log.Error("error checking sandbox, proceeding with create", "err", err)
@@ -442,7 +442,7 @@ func (c *SandboxController) Create(ctx context.Context, co *v1alpha.Sandbox, met
 	return c.createSandbox(ctx, co, meta)
 }
 
-func (c *SandboxController) createSandbox(ctx context.Context, co *v1alpha.Sandbox, meta *entity.Meta) error {
+func (c *SandboxController) createSandbox(ctx context.Context, co *compute.Sandbox, meta *entity.Meta) error {
 	c.Log.Debug("creating sandbox", "id", co.ID)
 
 	ctx = namespaces.WithNamespace(ctx, c.Namespace)
@@ -517,7 +517,7 @@ func (c *SandboxController) createSandbox(ctx context.Context, co *v1alpha.Sandb
 
 func (c *SandboxController) allocateNetwork(
 	ctx context.Context,
-	co *v1alpha.Sandbox,
+	co *compute.Sandbox,
 ) (*network.EndpointConfig, error) {
 	if c.Bridge == "" {
 		return nil, fmt.Errorf("bridge name not configured")
@@ -555,7 +555,7 @@ func (c *SandboxController) allocateNetwork(
 			return nil, err
 		}
 
-		co.Network = append(co.Network, v1alpha.Network{
+		co.Network = append(co.Network, compute.Network{
 			Address: ep.Addresses[0].String(),
 			Subnet:  c.Bridge,
 		})
@@ -568,7 +568,7 @@ func (c *SandboxController) allocateNetwork(
 
 func (c *SandboxController) buildSpec(
 	ctx context.Context,
-	co *v1alpha.Sandbox,
+	co *compute.Sandbox,
 	ep *network.EndpointConfig,
 	meta *entity.Meta,
 ) (
@@ -710,7 +710,7 @@ func (c *SandboxController) writeResolve(path string, ep *network.EndpointConfig
 
 func (c *SandboxController) bootInitialTask(
 	ctx context.Context,
-	co *v1alpha.Sandbox,
+	co *compute.Sandbox,
 	ep *network.EndpointConfig,
 	container containerd.Container,
 ) (containerd.Task, error) {
@@ -746,7 +746,7 @@ func (c *SandboxController) bootInitialTask(
 
 func (c *SandboxController) bootContainers(
 	ctx context.Context,
-	sb *v1alpha.Sandbox,
+	sb *compute.Sandbox,
 	ep *network.EndpointConfig,
 	sbPid int,
 ) error {
@@ -785,7 +785,7 @@ func (c *SandboxController) bootContainers(
 	return nil
 }
 
-func (c *SandboxController) sandboxPath(sb *v1alpha.Sandbox, sub ...string) string {
+func (c *SandboxController) sandboxPath(sb *compute.Sandbox, sub ...string) string {
 	parts := append(
 		[]string{c.Tempdir, "containerd", sb.ID.PathSafe()},
 		sub...,
@@ -796,8 +796,8 @@ func (c *SandboxController) sandboxPath(sb *v1alpha.Sandbox, sub ...string) stri
 
 func (c *SandboxController) buildSubContainerSpec(
 	ctx context.Context,
-	sb *v1alpha.Sandbox,
-	co *v1alpha.Container,
+	sb *compute.Sandbox,
+	co *compute.Container,
 	ep *network.EndpointConfig,
 	sbPid int,
 ) (
@@ -937,7 +937,7 @@ func (c *SandboxController) buildSubContainerSpec(
 	return opts, nil
 }
 
-func (c *SandboxController) destroySubContainers(ctx context.Context, sb *v1alpha.Sandbox) error {
+func (c *SandboxController) destroySubContainers(ctx context.Context, sb *compute.Sandbox) error {
 	// First, signal all the subcontainers with SIGTERM
 	esCh := make(chan containerd.ExitStatus, len(sb.Container))
 
@@ -1045,7 +1045,7 @@ func (c *SandboxController) Delete(ctx context.Context, id entity.Id) error {
 		return fmt.Errorf("failed to read existing entity: %w", err)
 	}
 
-	var oldSb v1alpha.Sandbox
+	var oldSb compute.Sandbox
 	oldSb.Decode(oldMeta)
 
 	err = c.destroySubContainers(ctx, &oldSb)

@@ -110,7 +110,7 @@ interfaces:
           - name: attr
             type: entity.Attr
 
-      - name: lookupMajorKind
+      - name: lookupKind
         parameters:
           - name: kind
             type: string

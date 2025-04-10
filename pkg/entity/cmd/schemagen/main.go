@@ -52,6 +52,7 @@ func main() {
 	ed.Name = sf.Domain
 	ed.Version = sf.Version
 	ed.Kinds = make(map[string]*entity.EncodedSchema)
+	ed.ShortKinds = make(map[string]string)
 
 	jf := j.NewFile(*fPkg)
 
@@ -74,11 +75,14 @@ func main() {
 		g.sf = &sf
 		g.f = jf
 		g.ec = &entity.EncodedSchema{
-			Name:    sf.Domain,
+			Name:    sf.Domain + "/" + kind,
 			Version: sf.Version,
 		}
 
-		ed.Kinds[kind] = g.ec
+		longKind := sf.Domain + "/kind." + kind
+
+		ed.Kinds[longKind] = g.ec
+		ed.ShortKinds[kind] = longKind
 
 		g.fields = append(g.fields,
 			j.Id("ID").Qual(top, "Id").Tag(map[string]string{
@@ -447,6 +451,8 @@ func (g *gen) attr(name string, attr *schemaAttr) {
 
 		g.fields = append(g.fields, j.Id(fname).Add(g.NSd(fname)).Tag(tag))
 
+		fc := map[string]entity.Id{}
+
 		for _, v := range attr.Choices {
 			id := name + "." + v
 
@@ -458,6 +464,8 @@ func (g *gen) attr(name string, attr *schemaAttr) {
 
 			g.idents = append(g.idents, j.Add(g.Ident(fname+toCamal(v))).Op("=").Qual(top, "Id").
 				Call(j.Lit(g.sf.Domain+"/"+id)))
+
+			fc[v] = entity.Id(g.sf.Domain + "/" + id)
 		}
 
 		g.decodeouter = append(g.decodeouter, j.Const().DefsFunc(func(b *j.Group) {
@@ -538,12 +546,6 @@ func (g *gen) attr(name string, attr *schemaAttr) {
 
 		g.decl = append(g.decl,
 			j.Id("sb").Dot("Ref").Call(call...))
-
-		fc := map[string]entity.Id{}
-
-		for _, v := range attr.Choices {
-			fc[v] = entity.Id(g.prefix + "/" + name + "." + v)
-		}
 
 		g.ec.Fields = append(g.ec.Fields, &entity.SchemaField{
 			Name:       name,

@@ -1,4 +1,4 @@
-package v1alpha
+package compute_v1alpha
 
 import (
 	entity "miren.dev/runtime/pkg/entity"

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"miren.dev/runtime/pkg/mapx"
 	"miren.dev/runtime/pkg/multierror"
 )
 
@@ -158,6 +159,8 @@ func naturalDecode(data any, es *EncodedSchema, top bool) ([]Attr, error) {
 
 func NaturalEncode(e *Entity, es *EncodedSchema) (map[string]any, error) {
 	result := make(map[string]any)
+	result["kind"] = es.Name
+	result["version"] = es.Version
 
 	// Group attributes by field ID
 	attrsByField := make(map[Id][]Attr)
@@ -214,7 +217,7 @@ func encodeNaturalValue(f *SchemaField, val Value) (any, error) {
 				return name, nil
 			}
 		}
-		return nil, fmt.Errorf("enum value not found for id %s", id)
+		return nil, fmt.Errorf("enum value not found for id %s (possible: %s)", id, mapx.Values(f.EnumValues))
 	case "label":
 		lbl := val.Label()
 		return fmt.Sprintf("%s=%s", lbl.Key, lbl.Value), nil

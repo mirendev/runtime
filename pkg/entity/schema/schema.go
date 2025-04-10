@@ -92,10 +92,19 @@ func Apply(ctx context.Context, store entity.Store) error {
 		for ver, schema := range vers {
 			kw := entity.Id("schema." + domain + "/" + ver)
 
-			_, err := store.CreateEntity(ctx, entity.Attrs(
+			attrs := entity.Attrs(
 				entity.Ident, types.Keyword(kw),
 				entity.Schema, entity.BytesValue(schema.encoded),
-			))
+			)
+
+			for k, v := range schema.schema.ShortKinds {
+				attrs = append(attrs, entity.Attrs(
+					entity.SchemaKind, k,
+					entity.SchemaKind, v,
+				)...)
+			}
+
+			_, err := store.CreateEntity(ctx, attrs)
 			if err != nil && !errors.Is(err, entity.ErrEntityAlreadyExists) {
 				return err
 			}

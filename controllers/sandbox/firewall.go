@@ -7,11 +7,11 @@ import (
 
 	"github.com/containernetworking/plugins/pkg/utils/sysctl"
 	"github.com/davecgh/go-spew/spew"
-	"miren.dev/runtime/api/sandbox/v1alpha"
+	compute "miren.dev/runtime/api/compute/v1alpha"
 	"miren.dev/runtime/network"
 )
 
-func (c *SandboxController) configureFirewall(sb *v1alpha.Sandbox, ep *network.EndpointConfig) error {
+func (c *SandboxController) configureFirewall(sb *compute.Sandbox, ep *network.EndpointConfig) error {
 	c.Log.Info("configuring firewall", "sandbox", sb.ID.String(), "ports", len(sb.Port))
 
 	for _, p := range sb.Port {
@@ -23,7 +23,7 @@ func (c *SandboxController) configureFirewall(sb *v1alpha.Sandbox, ep *network.E
 	return nil
 }
 
-func (c *SandboxController) configurePort(p v1alpha.Port, ep *network.EndpointConfig) error {
+func (c *SandboxController) configurePort(p compute.Port, ep *network.EndpointConfig) error {
 	// Configure the firewall to forward traffic on node port to port
 
 	if p.NodePort != 0 {

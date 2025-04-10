@@ -10,13 +10,13 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/config"
 
-	"miren.dev/runtime/api/sandbox/v1alpha"
+	compute "miren.dev/runtime/api/compute/v1alpha"
 	"miren.dev/runtime/disk"
 	"miren.dev/runtime/lsvd"
 	"miren.dev/runtime/pkg/units"
 )
 
-func (c *SandboxController) configureVolumes(ctx context.Context, sb *v1alpha.Sandbox) error {
+func (c *SandboxController) configureVolumes(ctx context.Context, sb *compute.Sandbox) error {
 	for _, volume := range sb.Volume {
 		switch volume.Provider {
 		case "miren":
@@ -35,7 +35,7 @@ func (c *SandboxController) configureVolumes(ctx context.Context, sb *v1alpha.Sa
 	return nil
 }
 
-func (c *SandboxController) configureHostVolume(sb *v1alpha.Sandbox, volume v1alpha.Volume) error {
+func (c *SandboxController) configureHostVolume(sb *compute.Sandbox, volume compute.Volume) error {
 	rawPath := c.sandboxPath(sb, "volumes", volume.Name)
 	err := os.MkdirAll(filepath.Dir(rawPath), 0755)
 	if err != nil {
@@ -70,7 +70,7 @@ func (c *SandboxController) configureHostVolume(sb *v1alpha.Sandbox, volume v1al
 	return os.Symlink(path, rawPath)
 }
 
-func (c *SandboxController) configureMirenVolume(ctx context.Context, sb *v1alpha.Sandbox, volume v1alpha.Volume) error {
+func (c *SandboxController) configureMirenVolume(ctx context.Context, sb *compute.Sandbox, volume compute.Volume) error {
 	name, ok := volume.Labels.Get("name")
 	if !ok {
 		return fmt.Errorf("missing name label for miren volume")

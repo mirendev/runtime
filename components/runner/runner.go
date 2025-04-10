@@ -6,8 +6,8 @@ import (
 	"time"
 
 	containerd "github.com/containerd/containerd/v2/client"
+	compute "miren.dev/runtime/api/compute/v1alpha"
 	es "miren.dev/runtime/api/entityserver/v1alpha"
-	sb "miren.dev/runtime/api/sandbox/v1alpha"
 	"miren.dev/runtime/controllers/sandbox"
 	"miren.dev/runtime/pkg/asm"
 	"miren.dev/runtime/pkg/controller"
@@ -105,8 +105,8 @@ func (r *Runner) setupEntity(eas *es.EntityAccessClient) error {
 		return nil
 	}
 
-	node := sb.Node{
-		Status:      sb.READY,
+	node := compute.Node{
+		Status:      compute.READY,
 		Constraints: types.LabelSet("compute", "generic"),
 	}
 
@@ -160,7 +160,7 @@ func (r *Runner) SetupControllers(
 		controller.NewReconcileController(
 			"sandbox",
 			log,
-			sb.Index(sb.KindSandbox, entity.Id(r.Id)),
+			compute.Index(compute.KindSandbox, entity.Id(r.Id)),
 			eas,
 			controller.AdaptController(&sbc),
 			time.Minute,
