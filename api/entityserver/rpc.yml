@@ -45,6 +45,16 @@ types:
         type: string
         index: 3
 
+  - type: ParsedFile
+    fields:
+      - name: format
+        type: string
+        index: 0
+      - name: entities
+        type: list
+        element: Entity
+        index: 1
+
 interfaces:
   - name: Stream
     methods:
@@ -91,6 +101,13 @@ interfaces:
           - name: values
             type: stream.SendStream[*EntityOp]
 
+      - name: watch_entity
+        parameters:
+          - name: id
+            type: string
+          - name: updates
+            type: stream.SendStream[*EntityOp]
+
       - name: list
         parameters:
           - name: index
@@ -123,8 +140,8 @@ interfaces:
           - name: data
             type: bytes
         results:
-          - name: entity
-            type: Entity
+          - name: file
+            type: ParsedFile
 
       - name: format
         parameters:

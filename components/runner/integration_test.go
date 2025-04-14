@@ -10,7 +10,7 @@ import (
 	containerd "github.com/containerd/containerd/v2/client"
 	"github.com/containerd/containerd/v2/pkg/namespaces"
 	"github.com/stretchr/testify/require"
-	compute "miren.dev/runtime/api/compute/v1alpha"
+	compute "miren.dev/runtime/api/compute/compute_v1alpha"
 	"miren.dev/runtime/api/entityserver/v1alpha"
 	"miren.dev/runtime/components/coordinate"
 	"miren.dev/runtime/components/scheduler"

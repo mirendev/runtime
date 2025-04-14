@@ -29,7 +29,7 @@ import (
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/netdb"
 
-	compute "miren.dev/runtime/api/compute/v1alpha"
+	compute "miren.dev/runtime/api/compute/compute_v1alpha"
 )
 
 const (
@@ -38,6 +38,10 @@ const (
 )
 
 const sandboxImage = "registry.k8s.io/pause:3.8"
+
+type containerPorts struct {
+	Ports []observability.BoundPort
+}
 
 type SandboxController struct {
 	Log *slog.Logger
@@ -57,7 +61,8 @@ type SandboxController struct {
 	LogsMaintainer   *observability.LogsMaintainer
 	ResourcesMonitor *observability.ResourcesMonitor
 
-	RunscMon *observability.RunSCMonitor
+	RunscMon  *observability.RunSCMonitor
+	StatusMon *observability.StatusMonitor
 
 	topCtx context.Context
 	cancel func()
@@ -69,6 +74,10 @@ type SandboxController struct {
 	runscConfigPath string
 
 	running sync.WaitGroup
+
+	portMu   sync.Mutex
+	portCond *sync.Cond
+	portMap  map[string]*containerPorts
 }
 
 func (c *SandboxController) setupRunscConfig() error {
@@ -147,9 +156,59 @@ func SetupRunsc(dir string) (string, string) {
 	return path, pic
 }
 
+func (c *SandboxController) SetPortStatus(id string, port observability.BoundPort, status observability.PortStatus) {
+	c.portMu.Lock()
+	defer c.portMu.Unlock()
+
+	ports, ok := c.portMap[id]
+	if !ok {
+		ports = &containerPorts{}
+		c.portMap[id] = ports
+	}
+
+	c.Log.Debug("setting port status", "id", id, "port", port, "status", status)
+
+	switch status {
+	case observability.PortStatusBound:
+		ports.Ports = append(ports.Ports, port)
+	case observability.PortStatusUnbound:
+		slices.DeleteFunc(ports.Ports, func(p observability.BoundPort) bool {
+			return p == port
+		})
+	}
+
+	c.portCond.Broadcast()
+}
+
+func (c *SandboxController) waitForPort(id string, port int) {
+	c.portMu.Lock()
+	defer c.portMu.Unlock()
+
+	for {
+		ports, ok := c.portMap[id]
+		if !ok {
+			ports = &containerPorts{}
+			c.portMap[id] = ports
+		}
+
+		for _, p := range ports.Ports {
+			if p.Port == port {
+				return
+			}
+		}
+
+		c.portCond.Wait()
+	}
+}
+
 func (c *SandboxController) Init(ctx context.Context) error {
+	c.portCond = sync.NewCond(&c.portMu)
+	c.portMap = make(map[string]*containerPorts)
+
 	runscBin, podInit := SetupRunsc(c.Tempdir)
 	c.RunscBinary = runscBin
+
+	c.RunscMon.Ports = c
 
 	c.RunscMon.SetEndpoint(filepath.Join(c.Tempdir, "runsc-mon.sock"))
 
@@ -284,10 +343,9 @@ func (c *SandboxController) canUpdateInPlace(ctx context.Context, sb *compute.Sa
 		if container.OomScore != oldSb.Container[i].OomScore {
 			return false, nil, nil
 		}
-	}
-
-	if !slices.Equal(sb.Port, oldSb.Port) {
-		return false, nil, nil
+		if !slices.Equal(container.Port, oldSb.Container[i].Port) {
+			return false, nil, nil
+		}
 	}
 
 	return true, &oldSb, nil
@@ -490,7 +548,7 @@ func (c *SandboxController) createSandbox(ctx context.Context, co *compute.Sandb
 		return err
 	}
 
-	err = c.bootContainers(ctx, co, ep, int(task.Pid()))
+	waitPorts, err := c.bootContainers(ctx, co, ep, int(task.Pid()))
 	if err != nil {
 		return err
 	}
@@ -511,6 +569,21 @@ func (c *SandboxController) createSandbox(ctx context.Context, co *compute.Sandb
 	}
 
 	c.Log.Info("sanbox started", "id", co.ID, "namespace", c.Namespace)
+
+	for _, wp := range waitPorts {
+		c.Log.Info("waiting for ports to be bound", "id", cid, "port", wp.port)
+		c.waitForPort(wp.id, wp.port)
+	}
+
+	co.Status = compute.RUNNING
+
+	co.Network = append(co.Network, compute.Network{
+		Address: ep.Addresses[0].Addr().String(),
+		Subnet:  c.Bridge,
+	})
+
+	// The contrtoller will detect the updates and sync them back
+	meta.Entity.Update(co.Encode())
 
 	return c.saveEntity(ctx, co, meta)
 }
@@ -744,45 +817,59 @@ func (c *SandboxController) bootInitialTask(
 	return task, nil
 }
 
+type waitPort struct {
+	id   string
+	port int
+}
+
 func (c *SandboxController) bootContainers(
 	ctx context.Context,
 	sb *compute.Sandbox,
 	ep *network.EndpointConfig,
 	sbPid int,
-) error {
+) ([]waitPort, error) {
 	c.Log.Info("booting containers", "count", len(sb.Container))
 
 	ctx = namespaces.WithNamespace(ctx, c.Namespace)
 
+	var ret []waitPort
+
 	for _, container := range sb.Container {
 		opts, err := c.buildSubContainerSpec(ctx, sb, &container, ep, sbPid)
 		if err != nil {
-			return fmt.Errorf("failed to build container spec: %w", err)
+			return nil, fmt.Errorf("failed to build container spec: %w", err)
 		}
 
 		id := fmt.Sprintf("%s-%s", c.containerId(sb.ID), container.Name)
+
+		for _, port := range container.Port {
+			ret = append(ret, waitPort{
+				id:   id,
+				port: int(port.Port),
+			})
+		}
 
 		c.Log.Info("creating container", "id", id)
 
 		container, err := c.CC.NewContainer(ctx, id, opts...)
 		if err != nil {
-			return errors.Wrapf(err, "failed to create container %s", sb.ID)
+			return nil, errors.Wrapf(err, "failed to create container %s", sb.ID)
 		}
 
 		task, err := container.NewTask(ctx, cio.NewCreator(cio.WithStdio))
 		if err != nil {
-			return err
+			return nil, err
 		}
 
 		err = task.Start(ctx)
 		if err != nil {
-			return err
+			return nil, err
 		}
 
 		c.Log.Info("container started", "id", container.ID())
 	}
 
-	return nil
+	return ret, nil
 }
 
 func (c *SandboxController) sandboxPath(sb *compute.Sandbox, sub ...string) string {

@@ -7,6 +7,11 @@ kinds:
       doc: Label for the sandbox
       many: true
 
+    status:
+      type: enum
+      doc: The status of the pod
+      choices: [pending, not_ready, running]
+
     hostNetwork:
       type: bool
       doc: |
@@ -36,31 +41,6 @@ kinds:
         gateway:
           doc: The next hop for the destination
           type: string
-
-    port:
-      type: component
-      doc: A network port the container declares
-      many: true
-      attrs:
-        port:
-          type: int
-          doc: Port number
-          required: true
-        name:
-          type: string
-          doc: Name of the port for reference
-          required: true
-        protocol:
-          type: enum
-          doc: Port protocol
-          choices: [tcp, udp]
-        type:
-          type: string
-          doc: The highlevel type of the port
-          example: http
-        node_port:
-          type: int
-          doc: The port number that should be forwarded from the node to the container
 
     volume:
       type: component
@@ -104,6 +84,32 @@ kinds:
           type: string
           doc: Environment variable for the container
           many: true
+
+        port:
+          type: component
+          doc: A network port the container declares
+          many: true
+          attrs:
+            port:
+              type: int
+              doc: Port number
+              required: true
+            name:
+              type: string
+              doc: Name of the port for reference
+              required: true
+            protocol:
+              type: enum
+              doc: Port protocol
+              choices: [tcp, udp]
+            type:
+              type: string
+              doc: The highlevel type of the port
+              example: http
+            node_port:
+              type: int
+              doc: The port number that should be forwarded from the node to the container
+
         mount:
           type: component
           doc: A mounted directory
@@ -141,5 +147,19 @@ kinds:
           type: ref
           doc: The node id the entity is scheduled for
         kind:
-          type: keyword
+          type: ref
           doc: The type of entity this is
+
+  lease:
+    project:
+      type: ref
+      doc: Which project currently holds the lease
+      indexed: true
+    sandbox:
+      type: ref
+      doc: The sandbox that is leased
+      indexed: true
+    last_heartbeat:
+      type: time
+      doc: The last time the lease was updated
+

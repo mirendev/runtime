@@ -10,7 +10,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/config"
 
-	compute "miren.dev/runtime/api/compute/v1alpha"
+	compute "miren.dev/runtime/api/compute/compute_v1alpha"
 	"miren.dev/runtime/disk"
 	"miren.dev/runtime/lsvd"
 	"miren.dev/runtime/pkg/units"

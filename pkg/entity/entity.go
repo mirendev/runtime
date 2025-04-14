@@ -11,7 +11,6 @@ import (
 	"unicode/utf8"
 
 	"github.com/fxamacker/cbor/v2"
-	"github.com/google/uuid"
 	"miren.dev/runtime/pkg/entity/types"
 )
 
@@ -262,10 +261,6 @@ func (e *Entity) Fixup() error {
 				return fmt.Errorf("invalid entity ident (expected EntityId): %v (%T)", ident.Value.Any(), ident.Value)
 			}
 		}
-	}
-
-	if e.ID == "" {
-		e.ID = Id(uuid.New().String())
 	}
 
 	e.Attrs = SortedAttrs(e.Attrs)

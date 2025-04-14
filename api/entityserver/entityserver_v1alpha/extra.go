@@ -1,4 +1,4 @@
-package v1alpha
+package entityserver_v1alpha
 
 import (
 	"miren.dev/runtime/pkg/entity"

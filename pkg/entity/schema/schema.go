@@ -90,10 +90,10 @@ func Apply(ctx context.Context, store entity.Store) error {
 
 	for domain, vers := range encodedRegistry {
 		for ver, schema := range vers {
-			kw := entity.Id("schema." + domain + "/" + ver)
+			schemaId := entity.Id(domain + "/schema." + ver)
 
 			attrs := entity.Attrs(
-				entity.Ident, types.Keyword(kw),
+				entity.Ident, types.Keyword(schemaId),
 				entity.Schema, entity.BytesValue(schema.encoded),
 			)
 
@@ -108,6 +108,17 @@ func Apply(ctx context.Context, store entity.Store) error {
 			if err != nil && !errors.Is(err, entity.ErrEntityAlreadyExists) {
 				return err
 			}
+
+			for kw := range schema.schema.Kinds {
+				_, err := store.CreateEntity(ctx, entity.Attrs(
+					entity.Ident, types.Keyword(kw),
+					entity.EntitySchema, schemaId,
+				))
+				if err != nil && !errors.Is(err, entity.ErrEntityAlreadyExists) {
+					return err
+				}
+			}
+
 		}
 	}
 
@@ -212,6 +223,10 @@ func (s *SchemaBuilder) Keyword(name, id string, opts ...AttrOption) entity.Id {
 
 func (s *SchemaBuilder) Bool(name, id string, opts ...AttrOption) entity.Id {
 	return s.Attr(name, id, entity.TypeBool, opts...)
+}
+
+func (s *SchemaBuilder) Bytes(name, id string, opts ...AttrOption) entity.Id {
+	return s.Attr(name, id, entity.TypeBytes, opts...)
 }
 
 func (s *SchemaBuilder) Int64(name, id string, opts ...AttrOption) entity.Id {

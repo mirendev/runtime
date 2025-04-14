@@ -148,7 +148,7 @@ func InitSystemEntities(save func(*Entity) error) error {
 			Ident, types.Keyword(EntityKind),
 			Doc, "Entity kind",
 			Cardinality, CardinalityMany,
-			Type, TypeKeyword,
+			Type, TypeRef,
 			Index, true,
 		),
 	}
@@ -259,7 +259,7 @@ func InitSystemEntities(save func(*Entity) error) error {
 		Attrs: Attrs(
 			Ident, types.Keyword(EntitySchema),
 			Doc, "A reference to the schema used by the entity",
-			Cardinality, CardinalityMany,
+			Cardinality, CardinalityOne,
 			Type, TypeRef,
 		),
 	}

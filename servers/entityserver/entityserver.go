@@ -5,6 +5,7 @@ import (
 	"compress/gzip"
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"log/slog"
 	"slices"
@@ -12,23 +13,42 @@ import (
 	"strings"
 	"time"
 
-	"github.com/davecgh/go-spew/spew"
 	"github.com/fxamacker/cbor/v2"
 	clientv3 "go.etcd.io/etcd/client/v3"
-	"gopkg.in/yaml.v3"
-	"miren.dev/runtime/api/entityserver/v1alpha"
+	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/pkg/entity"
 	etypes "miren.dev/runtime/pkg/entity/types"
+	"miren.dev/runtime/pkg/model"
 )
 
 type EntityServer struct {
 	Log   *slog.Logger
 	Store entity.Store
+
+	tf *model.TextFormatter
 }
 
-var _ v1alpha.EntityAccess = (*EntityServer)(nil)
+func NewEntityServer(log *slog.Logger, store entity.Store) (*EntityServer, error) {
+	sc, err := entity.NewSchemaCache(store)
+	if err != nil {
+		return nil, err
+	}
 
-func (e *EntityServer) Get(ctx context.Context, req *v1alpha.EntityAccessGet) error {
+	tf, err := model.NewTextFormatter(sc)
+	if err != nil {
+		return nil, err
+	}
+
+	return &EntityServer{
+		Log:   log,
+		Store: store,
+		tf:    tf,
+	}, nil
+}
+
+var _ entityserver_v1alpha.EntityAccess = (*EntityServer)(nil)
+
+func (e *EntityServer) Get(ctx context.Context, req *entityserver_v1alpha.EntityAccessGet) error {
 	args := req.Args()
 
 	if !args.HasId() {
@@ -40,7 +60,7 @@ func (e *EntityServer) Get(ctx context.Context, req *v1alpha.EntityAccessGet) er
 		return fmt.Errorf("failed to get entity: %w", err)
 	}
 
-	var rpcEntity v1alpha.Entity
+	var rpcEntity entityserver_v1alpha.Entity
 	rpcEntity.SetId(entity.ID.String())
 	rpcEntity.SetCreatedAt(entity.CreatedAt)
 	rpcEntity.SetUpdatedAt(entity.UpdatedAt)
@@ -52,7 +72,93 @@ func (e *EntityServer) Get(ctx context.Context, req *v1alpha.EntityAccessGet) er
 	return nil
 }
 
-func (e *EntityServer) Put(ctx context.Context, req *v1alpha.EntityAccessPut) error {
+func (e *EntityServer) WatchEntity(ctx context.Context, req *entityserver_v1alpha.EntityAccessWatchEntity) error {
+	args := req.Args()
+
+	if !args.HasId() {
+		return fmt.Errorf("missing required field: id")
+	}
+
+	send := args.Updates()
+
+	ch, err := e.Store.WatchEntity(ctx, entity.Id(args.Id()))
+	if err != nil {
+		return fmt.Errorf("failed to watch index: %w", err)
+	}
+
+	// Send the current value of the entity so that there is no race condition
+	en, err := e.Store.GetEntity(ctx, entity.Id(args.Id()))
+	if err == nil {
+		var rpcEntity entityserver_v1alpha.Entity
+		rpcEntity.SetId(en.ID.String())
+		rpcEntity.SetCreatedAt(en.CreatedAt)
+		rpcEntity.SetUpdatedAt(en.UpdatedAt)
+		rpcEntity.SetRevision(en.Revision)
+		rpcEntity.SetAttrs(en.Attrs)
+
+		var op entityserver_v1alpha.EntityOp
+		op.SetOperation(1)
+		op.SetEntity(&rpcEntity)
+
+		_, err = send.Send(ctx, &op)
+		if err != nil {
+			e.Log.Error("failed to send event", "error", err)
+			return nil
+		}
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case event, ok := <-ch:
+			if !ok {
+				return nil
+			}
+
+			var (
+				eventType int
+				read      bool
+			)
+
+			switch event.Type {
+			case entity.EntityOpCreate:
+				eventType = 1
+				read = true
+			case entity.EntityOpUpdate, entity.EntityOpStated:
+				eventType = 2
+				read = true
+			case entity.EntityOpDelete:
+				eventType = 3
+			default:
+				continue
+			}
+
+			var op entityserver_v1alpha.EntityOp
+			op.SetOperation(int64(eventType))
+
+			if read {
+				en = event.Entity
+				var rpcEntity entityserver_v1alpha.Entity
+				rpcEntity.SetId(en.ID.String())
+				rpcEntity.SetCreatedAt(en.CreatedAt)
+				rpcEntity.SetUpdatedAt(en.UpdatedAt)
+				rpcEntity.SetRevision(en.Revision)
+				rpcEntity.SetAttrs(en.Attrs)
+
+				op.SetEntity(&rpcEntity)
+			}
+
+			_, err = send.Send(ctx, &op)
+			if err != nil {
+				e.Log.Error("failed to send event", "error", err)
+				return nil
+			}
+		}
+	}
+}
+
+func (e *EntityServer) Put(ctx context.Context, req *entityserver_v1alpha.EntityAccessPut) error {
 	args := req.Args()
 
 	if !args.HasEntity() {
@@ -72,28 +178,32 @@ func (e *EntityServer) Put(ctx context.Context, req *v1alpha.EntityAccessPut) er
 		// TODO: handle updated_at
 		re, err := e.Store.UpdateEntity(ctx, entity.Id(rpcE.Id()), attrs)
 		if err != nil {
-			return fmt.Errorf("failed to create entity: %w", err)
+			if !errors.Is(err, entity.ErrNotFound) {
+				return fmt.Errorf("failed to create entity: %w", err)
+			}
+		} else {
+			e.Log.Debug("updated entity", "id", re.ID)
+			results.SetRevision(re.Revision)
+			results.SetId(re.ID.String())
+			return nil
 		}
 
-		e.Log.Debug("updated entity", "id", re.ID)
-		results.SetRevision(re.Revision)
-		results.SetId(re.ID.String())
-	} else {
-		// TODO: handle created_at and updated_at fileds
-		re, err := e.Store.CreateEntity(ctx, attrs)
-		if err != nil {
-			return fmt.Errorf("failed to create entity: %w", err)
-		}
-
-		e.Log.Debug("created entity", "id", re.ID)
-		results.SetRevision(re.Revision)
-		results.SetId(re.ID.String())
 	}
+
+	// TODO: handle created_at and updated_at fileds
+	re, err := e.Store.CreateEntity(ctx, attrs)
+	if err != nil {
+		return fmt.Errorf("failed to create entity: %w", err)
+	}
+
+	e.Log.Debug("created entity", "id", re.ID)
+	results.SetRevision(re.Revision)
+	results.SetId(re.ID.String())
 
 	return nil
 }
 
-func (e *EntityServer) Delete(ctx context.Context, req *v1alpha.EntityAccessDelete) error {
+func (e *EntityServer) Delete(ctx context.Context, req *entityserver_v1alpha.EntityAccessDelete) error {
 	args := req.Args()
 
 	if !args.HasId() {
@@ -109,7 +219,7 @@ func (e *EntityServer) Delete(ctx context.Context, req *v1alpha.EntityAccessDele
 	return e.Store.DeleteEntity(ctx, entity.Id(args.Id()))
 }
 
-func (e *EntityServer) WatchIndex(ctx context.Context, req *v1alpha.EntityAccessWatchIndex) error {
+func (e *EntityServer) WatchIndex(ctx context.Context, req *entityserver_v1alpha.EntityAccessWatchIndex) error {
 	args := req.Args()
 
 	if !args.HasIndex() {
@@ -155,7 +265,7 @@ func (e *EntityServer) WatchIndex(ctx context.Context, req *v1alpha.EntityAccess
 					continue
 				}
 
-				var op v1alpha.EntityOp
+				var op entityserver_v1alpha.EntityOp
 				op.SetOperation(int64(eventType))
 
 				if read {
@@ -170,7 +280,7 @@ func (e *EntityServer) WatchIndex(ctx context.Context, req *v1alpha.EntityAccess
 						op.SetPrevious(event.PrevKv.ModRevision)
 					}
 
-					var rpcEntity v1alpha.Entity
+					var rpcEntity entityserver_v1alpha.Entity
 					rpcEntity.SetId(en.ID.String())
 					rpcEntity.SetCreatedAt(en.CreatedAt)
 					rpcEntity.SetUpdatedAt(en.UpdatedAt)
@@ -186,13 +296,14 @@ func (e *EntityServer) WatchIndex(ctx context.Context, req *v1alpha.EntityAccess
 				_, err = send.Send(ctx, &op)
 				if err != nil {
 					e.Log.Error("failed to send event", "error", err)
+					return nil
 				}
 			}
 		}
 	}
 }
 
-func (e *EntityServer) List(ctx context.Context, req *v1alpha.EntityAccessList) error {
+func (e *EntityServer) List(ctx context.Context, req *entityserver_v1alpha.EntityAccessList) error {
 	args := req.Args()
 
 	if !args.HasIndex() {
@@ -204,7 +315,7 @@ func (e *EntityServer) List(ctx context.Context, req *v1alpha.EntityAccessList) 
 		return fmt.Errorf("failed to list entities: %w", err)
 	}
 
-	var ret []*v1alpha.Entity
+	var ret []*entityserver_v1alpha.Entity
 
 	for _, id := range ids {
 
@@ -213,7 +324,7 @@ func (e *EntityServer) List(ctx context.Context, req *v1alpha.EntityAccessList) 
 			return fmt.Errorf("failed to get entity: %w", err)
 		}
 
-		var rpcEntity v1alpha.Entity
+		var rpcEntity entityserver_v1alpha.Entity
 		rpcEntity.SetId(entity.ID.String())
 		rpcEntity.SetCreatedAt(entity.CreatedAt)
 		rpcEntity.SetUpdatedAt(entity.UpdatedAt)
@@ -228,7 +339,7 @@ func (e *EntityServer) List(ctx context.Context, req *v1alpha.EntityAccessList) 
 	return nil
 }
 
-func (e *EntityServer) MakeAttr(ctx context.Context, req *v1alpha.EntityAccessMakeAttr) error {
+func (e *EntityServer) MakeAttr(ctx context.Context, req *entityserver_v1alpha.EntityAccessMakeAttr) error {
 	args := req.Args()
 
 	if !args.HasId() {
@@ -336,7 +447,7 @@ func (e *EntityServer) MakeAttr(ctx context.Context, req *v1alpha.EntityAccessMa
 	return nil
 }
 
-func (e *EntityServer) LookupKind(ctx context.Context, req *v1alpha.EntityAccessLookupKind) error {
+func (e *EntityServer) LookupKind(ctx context.Context, req *entityserver_v1alpha.EntityAccessLookupKind) error {
 	args := req.Args()
 
 	if !args.HasKind() {
@@ -380,15 +491,13 @@ func (e *EntityServer) LookupKind(ctx context.Context, req *v1alpha.EntityAccess
 	}
 
 	if _, ok := es.Kinds[args.Kind()]; ok {
-		attr := entity.Keyword(entity.EntityKind, args.Kind())
+		attr := entity.Ref(entity.EntityKind, entity.Id(args.Kind()))
 		req.Results().SetAttr(&attr)
 		return nil
 	}
 
-	spew.Dump(es.ShortKinds)
-
 	if kind, ok := es.ShortKinds[args.Kind()]; ok {
-		attr := entity.Keyword(entity.EntityKind, kind)
+		attr := entity.Ref(entity.EntityKind, entity.Id(kind))
 		req.Results().SetAttr(&attr)
 		return nil
 	}
@@ -396,149 +505,45 @@ func (e *EntityServer) LookupKind(ctx context.Context, req *v1alpha.EntityAccess
 	return fmt.Errorf("kind '%s' not found", args.Kind())
 }
 
-func (e *EntityServer) Parse(ctx context.Context, req *v1alpha.EntityAccessParse) error {
+func (e *EntityServer) Parse(ctx context.Context, req *entityserver_v1alpha.EntityAccessParse) error {
 	args := req.Args()
 
 	data := args.Data()
 
-	var x any
-
-	err := yaml.NewDecoder(bytes.NewReader(data)).Decode(&x)
+	pf, err := e.tf.Parse(ctx, data)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to parse entity: %w", err)
 	}
 
-	m, ok := x.(map[string]any)
-	if !ok {
-		return fmt.Errorf("invalid entity format")
+	var ents []*entityserver_v1alpha.Entity
+	for _, ent := range pf.Entities {
+		var rpcEntity entityserver_v1alpha.Entity
+		rpcEntity.SetAttrs(ent.Attrs)
+		if ent.ID != "" {
+			rpcEntity.SetId(ent.ID.String())
+		}
+
+		ents = append(ents, &rpcEntity)
 	}
 
-	kind, ok := m["kind"].(string)
-	if !ok {
-		return fmt.Errorf("missing kind")
-	}
+	var rpcPF entityserver_v1alpha.ParsedFile
+	rpcPF.SetEntities(ents)
+	rpcPF.SetFormat(pf.Format)
 
-	version, ok := m["version"].(string)
-	if !ok {
-		return fmt.Errorf("missing version")
-	}
-
-	domain, kind, ok := strings.Cut(kind, "/")
-	if !ok {
-		return fmt.Errorf("invalid kind format")
-	}
-
-	schema, err := e.Store.GetEntity(ctx, entity.Id("schema."+domain+"/"+version))
-	if err != nil {
-		return fmt.Errorf("failed to get schema: %w", err)
-	}
-
-	esch, ok := schema.Get(entity.Schema)
-	if !ok {
-		return fmt.Errorf("missing schema")
-	}
-
-	var ed entity.EncodedDomain
-	gr, err := gzip.NewReader(bytes.NewReader(esch.Value.Bytes()))
-	if err != nil {
-		return fmt.Errorf("failed to create gzip reader: %w", err)
-	}
-
-	defer gr.Close()
-
-	err = cbor.NewDecoder(gr).Decode(&ed)
-	if err != nil {
-		return fmt.Errorf("failed to decode schema: %w", err)
-	}
-
-	es := ed.Kinds[kind]
-	if es == nil {
-		return fmt.Errorf("unknown kind: %s", kind)
-	}
-
-	attrs, err := entity.NaturalDecode(x, es)
-	if err != nil {
-		return fmt.Errorf("failed to decode entity: %w", err)
-	}
-
-	var rpcEntity v1alpha.Entity
-	rpcEntity.SetAttrs(attrs)
-
-	req.Results().SetEntity(&rpcEntity)
+	req.Results().SetFile(&rpcPF)
 	return nil
 }
 
-func (e *EntityServer) Format(ctx context.Context, req *v1alpha.EntityAccessFormat) error {
+func (e *EntityServer) Format(ctx context.Context, req *entityserver_v1alpha.EntityAccessFormat) error {
 	args := req.Args()
 
 	ent := args.Entity().Entity()
 
-	sid, ok := ent.Get(entity.EntitySchema)
-	if !ok {
-		req.Results().SetData([]byte(spew.Sdump(ent)))
-		return nil
-	}
-
-	schema, err := e.Store.GetEntity(ctx, sid.Value.Id())
+	data, err := e.tf.Format(ctx, ent)
 	if err != nil {
-		return fmt.Errorf("failed to get schema: %w", err)
+		return fmt.Errorf("failed to format entity: %w", err)
 	}
 
-	esch, ok := schema.Get(entity.Schema)
-	if !ok {
-		return fmt.Errorf("missing schema")
-	}
-
-	var ed entity.EncodedDomain
-	gr, err := gzip.NewReader(bytes.NewReader(esch.Value.Bytes()))
-	if err != nil {
-		return fmt.Errorf("failed to create gzip reader: %w", err)
-	}
-
-	defer gr.Close()
-
-	err = cbor.NewDecoder(gr).Decode(&ed)
-	if err != nil {
-		return fmt.Errorf("failed to decode schema: %w", err)
-	}
-
-	var results []any
-
-	for _, kind := range ent.GetAll(entity.EntityKind) {
-		es, ok := ed.Kinds[string(kind.Value.Keyword())]
-		if !ok {
-			continue
-		}
-		m, err := entity.NaturalEncode(ent, es)
-		if err != nil {
-			return fmt.Errorf("failed to encode entity: %w", err)
-		}
-		results = append(results, m)
-	}
-
-	var n yaml.Node
-	err = n.Encode(map[string]any{
-		"attrs": ent.Attrs,
-	})
-
-	var n2 yaml.Node
-	err = n2.Encode(map[string]any{
-		"kinds": results,
-	})
-
-	n2.Content = append(n2.Content, n.Content...)
-
-	var buf bytes.Buffer
-
-	enc := yaml.NewEncoder(&buf)
-	enc.SetIndent(2)
-
-	err = enc.Encode(&n2)
-	if err != nil {
-		return fmt.Errorf("failed to encode entity: %w", err)
-	}
-
-	req.Results().SetData(buf.Bytes())
-
+	req.Results().SetData([]byte(data))
 	return nil
 }

@@ -1,0 +1,6 @@
+kind: dev.miren.core/app
+version: v1alpha
+metadata:
+  name: nginx
+spec:
+  project: project/default

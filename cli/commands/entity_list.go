@@ -4,7 +4,7 @@ import (
 	"os"
 
 	"github.com/davecgh/go-spew/spew"
-	"miren.dev/runtime/api/entityserver/v1alpha"
+	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/rpc"
 )
@@ -28,7 +28,7 @@ func EntityList(ctx *Context, opts struct {
 		return err
 	}
 
-	eac := &v1alpha.EntityAccessClient{Client: client}
+	eac := &entityserver_v1alpha.EntityAccessClient{Client: client}
 
 	var index entity.Attr
 

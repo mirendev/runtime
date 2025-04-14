@@ -1,0 +1,38 @@
+domain: dev.miren.core
+version: v1alpha
+kinds:
+  metadata:
+    name:
+      type: string
+      doc: The name of the entity
+    project:
+      type: ref
+      doc: A reference to the project the entity belongs to
+    labels:
+      type: label
+      doc: Identifying labels for the entity
+      many: true
+
+  project:
+    owner:
+      type: string
+      doc: The email address of the project owner
+
+  app:
+    project:
+      type: ref
+      doc: The project that the app belongs to
+    active_version:
+      type: ref
+      doc: The version of the project that should be used
+
+  app_version:
+    app:
+      type: ref
+      doc: The application the version is for
+    image_url:
+      type: string
+      doc: The OCI url for the versions code
+    configuration:
+      type: bytes
+      doc: The configuration of the application at this version

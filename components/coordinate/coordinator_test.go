@@ -16,7 +16,7 @@ import (
 	"miren.dev/runtime/pkg/rpc"
 	"miren.dev/runtime/pkg/testutils"
 
-	compute "miren.dev/runtime/api/compute/v1alpha"
+	compute "miren.dev/runtime/api/compute/compute_v1alpha"
 )
 
 func TestCoordinatorParse(t *testing.T) {

@@ -65,9 +65,9 @@ type Value struct {
 }
 
 type valueEncodeTuple struct {
-	_     struct{} `cbor:",toarray"`
-	Kind  Kind     `cbor:"0" json:"k"`
-	Value any      `cbor:"1" json:"v"`
+	_     struct{}  `cbor:",toarray"`
+	Kind  ValueKind `cbor:"0" json:"k"`
+	Value any       `cbor:"1" json:"v"`
 }
 
 func (v *Value) MarshalCBOR() ([]byte, error) {
@@ -116,7 +116,7 @@ func (m *superRawMessage) UnmarshalJSON(data []byte) error {
 
 type valueDecodeTuple struct {
 	_     struct{}        `cbor:",toarray"`
-	Kind  Kind            `cbor:"0" json:"k"`
+	Kind  ValueKind       `cbor:"0" json:"k"`
 	Value superRawMessage `cbor:"1" json:"v"`
 }
 
@@ -327,11 +327,11 @@ type (
 	stringptr *byte // used in Value.any when the Value is a string
 )
 
-// Kind is the kind of a [Value].
-type Kind int
+// ValueKind is the kind of a [Value].
+type ValueKind int
 
 const (
-	KindAny Kind = iota
+	KindAny ValueKind = iota
 	KindBool
 	KindDuration
 	KindFloat64
@@ -364,21 +364,45 @@ var kindStrings = []string{
 	"Bytes",
 }
 
-func (k Kind) String() string {
+func (k ValueKind) String() string {
 	if k >= 0 && int(k) < len(kindStrings) {
 		return kindStrings[k]
 	}
 	return "<unknown slog.Kind>"
 }
 
+var shortKindStrings = []string{
+	"an",
+	"bo",
+	"du",
+	"fl",
+	"in",
+	"st",
+	"tm",
+	"ui",
+	"id",
+	"kw",
+	"ar",
+	"cp",
+	"lb",
+	"by",
+}
+
+func (k ValueKind) ShortString() string {
+	if k >= 0 && int(k) < len(shortKindStrings) {
+		return shortKindStrings[k]
+	}
+	return "<unknown slog.Kind>"
+}
+
 // Unexported version of Kind, just so we can store Kinds in Values.
 // (No user-provided value has this type.)
-type kind Kind
+type kind ValueKind
 
 // Kind returns v's Kind.
-func (v Value) Kind() Kind {
+func (v Value) Kind() ValueKind {
 	switch x := v.any.(type) {
-	case Kind:
+	case ValueKind:
 		return x
 	case stringptr:
 		return KindString
@@ -559,7 +583,7 @@ func AnyValue(v any) Value {
 		return RefValue(v)
 	case types.Keyword:
 		return KeywordValue(v)
-	case Kind:
+	case ValueKind:
 		return Value{any: kind(v)}
 	case Value:
 		return v
@@ -591,7 +615,7 @@ func (v Value) Any() any {
 	switch v.Kind() {
 	case KindAny:
 		if k, ok := v.any.(kind); ok {
-			return Kind(k)
+			return ValueKind(k)
 		}
 		return v.any
 	case KindInt64:
@@ -632,8 +656,15 @@ func (v Value) String() string {
 	if sp, ok := v.any.(stringptr); ok {
 		return unsafe.String(sp, v.num)
 	}
-	var buf []byte
-	return string(v.append(buf))
+
+	switch v.Kind() {
+	case KindInt64, KindUint64, KindFloat64, KindBool, KindString:
+		var buf []byte
+		return string(v.append(buf))
+	default:
+		var buf []byte
+		return v.Kind().ShortString() + ": " + string(v.append(buf))
+	}
 }
 
 func (v Value) str() string {

@@ -10,6 +10,7 @@ import (
 
 	"github.com/mr-tron/base58"
 	clientv3 "go.etcd.io/etcd/client/v3"
+	"miren.dev/runtime/pkg/idgen"
 )
 
 // EtcdStore implements Store using etcd
@@ -25,6 +26,7 @@ type EtcdStore struct {
 
 type Store interface {
 	GetEntity(ctx context.Context, id Id) (*Entity, error)
+	WatchEntity(ctx context.Context, id Id) (chan EntityOp, error)
 	GetAttributeSchema(ctx context.Context, name Id) (*AttributeSchema, error)
 	CreateEntity(ctx context.Context, attributes []Attr) (*Entity, error)
 	UpdateEntity(ctx context.Context, id Id, attributes []Attr) (*Entity, error)
@@ -92,6 +94,11 @@ func (s *EtcdStore) CreateEntity(ctx context.Context, attributes []Attr) (*Entit
 		if schema.Index {
 			collections = append(collections, attr)
 		}
+	}
+
+	// A default ID
+	if entity.ID == "" {
+		entity.ID = Id(idgen.GenNS("e"))
 	}
 
 	data, err := encoder.Marshal(entity)
@@ -166,22 +173,103 @@ func (s *EtcdStore) GetEntity(ctx context.Context, id Id) (*Entity, error) {
 	}
 
 	if len(resp.Kvs) == 0 {
-		return nil, errors.New("entity not found")
+		return nil, ErrNotFound
 	}
 
 	var entity Entity
-
-	entity.ID = id
-	entity.Revision = resp.Kvs[0].ModRevision
 
 	err = decoder.Unmarshal(resp.Kvs[0].Value, &entity)
 	if err != nil {
 		return nil, fmt.Errorf("failed to deserialize entity: %w", err)
 	}
 
+	entity.Revision = resp.Kvs[0].ModRevision
+
 	entity.postUnmarshal()
 
 	return &entity, nil
+}
+
+type EntityOpType int
+
+const (
+	EntityOpCreate EntityOpType = iota
+	EntityOpUpdate
+	EntityOpDelete
+	EntityOpStated
+)
+
+type EntityOp struct {
+	Type EntityOpType
+	*Entity
+}
+
+func (s *EtcdStore) WatchEntity(ctx context.Context, id Id) (chan EntityOp, error) {
+	key := s.buildKey(id.String())
+	wc := s.client.Watch(ctx, key)
+
+	och := make(chan EntityOp)
+
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case watchevent, ok := <-wc:
+				if !ok {
+					return
+				}
+				for _, event := range watchevent.Events {
+					var (
+						eventType EntityOpType
+						read      bool
+					)
+
+					switch {
+					case event.IsCreate():
+						eventType = EntityOpCreate
+						read = true
+					case event.IsModify():
+						eventType = EntityOpUpdate
+						read = true
+					case event.Type == clientv3.EventTypeDelete:
+						eventType = EntityOpDelete
+					default:
+						read = true
+						eventType = EntityOpStated
+					}
+
+					op := EntityOp{
+						Type: eventType,
+					}
+
+					if read {
+						var entity Entity
+
+						err := decoder.Unmarshal(event.Kv.Value, &entity)
+						if err != nil {
+							s.log.Error("failed to get entity for event", "error", err, "id", event.Kv.Value)
+							continue
+						}
+
+						entity.Revision = event.Kv.ModRevision
+
+						entity.postUnmarshal()
+						op.Entity = &entity
+					}
+
+					select {
+					case <-ctx.Done():
+						return
+					case och <- op:
+						// ok
+					}
+				}
+			}
+		}
+	}()
+
+	return och, nil
 }
 
 // UpdateEntity implements Store interface

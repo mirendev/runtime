@@ -3,7 +3,7 @@ package commands
 import (
 	"os"
 
-	"miren.dev/runtime/api/entityserver/v1alpha"
+	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/pkg/rpc"
 )
 
@@ -24,7 +24,7 @@ func EntityGet(ctx *Context, opts struct {
 		return err
 	}
 
-	eac := &v1alpha.EntityAccessClient{Client: client}
+	eac := &entityserver_v1alpha.EntityAccessClient{Client: client}
 
 	res, err := eac.Get(ctx, opts.Id)
 	if err != nil {

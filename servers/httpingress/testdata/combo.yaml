@@ -1,0 +1,37 @@
+kind: dev.miren.core/project
+version: v1alpha
+metadata:
+  name: default
+spec:
+  owner: mbot@miren.dev
+---
+kind: dev.miren.core/app
+version: v1alpha
+metadata:
+  name: nginx
+spec:
+  project: project/default
+---
+kind: dev.miren.core/app_version
+version: v1alpha
+metadata:
+  name: abcdef
+spec:
+  app: app/nginx
+  image_url: docker.io/library/nginx:latest
+---
+kind: dev.miren.ingress/http_route
+version: v1alpha
+metadata:
+  name: localhost
+spec:
+  host: localhost
+  app: app/nginx
+---
+kind: dev.miren.core/app
+version: v1alpha
+metadata:
+  name: nginx
+spec:
+  project: project/default
+  active_version: app_version/abcdef

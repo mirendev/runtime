@@ -7,16 +7,18 @@ import (
 
 	"github.com/containernetworking/plugins/pkg/utils/sysctl"
 	"github.com/davecgh/go-spew/spew"
-	compute "miren.dev/runtime/api/compute/v1alpha"
+	compute "miren.dev/runtime/api/compute/compute_v1alpha"
 	"miren.dev/runtime/network"
 )
 
 func (c *SandboxController) configureFirewall(sb *compute.Sandbox, ep *network.EndpointConfig) error {
-	c.Log.Info("configuring firewall", "sandbox", sb.ID.String(), "ports", len(sb.Port))
+	for _, co := range sb.Container {
+		c.Log.Info("configuring firewall", "sandbox", sb.ID.String(), "ports", len(co.Port))
 
-	for _, p := range sb.Port {
-		if err := c.configurePort(p, ep); err != nil {
-			return err
+		for _, p := range co.Port {
+			if err := c.configurePort(p, ep); err != nil {
+				return err
+			}
 		}
 	}
 

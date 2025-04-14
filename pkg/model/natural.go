@@ -1,4 +1,4 @@
-package entity
+package model
 
 import (
 	"encoding/base64"
@@ -7,56 +7,32 @@ import (
 	"strings"
 	"time"
 
+	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/mapx"
 	"miren.dev/runtime/pkg/multierror"
 )
 
-type SchemaField struct {
-	Name string `json:"name" cbor:"name"`
-	Type string `json:"type" cbor:"type"`
-
-	Id Id `json:"id" cbor:"id"`
-
-	Many bool `json:"many,omitempty" cbor:"many,omitempty"`
-
-	EnumValues map[string]Id  `json:"enum_values,omitempty" cbor:"enum_values,omitempty"`
-	Component  *EncodedSchema `json:"component,omitempty" cbor:"component,omitempty"`
+type SchemaValue struct {
+	Id       string         `json:"id,omitempty" yaml:"id,omitempty" cbor:"id,omitempty"`
+	Kind     string         `json:"kind" yaml:"kind" cbor:"kind"`
+	Version  string         `json:"version" yaml:"version" cbor:"version"`
+	Metadata map[string]any `json:"metadata,omitempty" yaml:"metadata,omitempty" cbor:"metadata,omitempty"`
+	Spec     map[string]any `json:"spec" yaml:"spec" cbor:"spec"`
 }
 
-type EncodedDomain struct {
-	Name       string                    `json:"name" cbor:"name"`
-	Version    string                    `json:"version" cbor:"version"`
-	Kinds      map[string]*EncodedSchema `json:"kinds" cbor:"kinds"`
-	ShortKinds map[string]string         `json:"short_kinds" cbor:"short_kinds"`
-}
-
-type EncodedSchema struct {
-	Domain  string         `json:"domain" cbor:"domain"`
-	Name    string         `json:"name" cbor:"name"`
-	Version string         `json:"version" cbor:"version"`
-	Kinds   []string       `json:"kinds" cbor:"kinds"`
-	Fields  []*SchemaField `json:"fields" cbor:"fields"`
-
-	PrimaryKind string `json:"primary_kind" cbor:"primary_kind"`
-}
-
-func (es *EncodedSchema) GetField(name string) *SchemaField {
-	for _, field := range es.Fields {
-		if field.Name == name {
-			return field
-		}
+func NaturalDecode(data any, es *entity.EncodedSchema) (*entity.Entity, error) {
+	attrs, err := naturalDecode(data, es, true)
+	if err != nil {
+		return nil, err
 	}
-	return nil
+
+	return &entity.Entity{Attrs: attrs}, nil
 }
 
-func NaturalDecode(data any, es *EncodedSchema) ([]Attr, error) {
-	return naturalDecode(data, es, true)
-}
-
-func naturalDecode(data any, es *EncodedSchema, top bool) ([]Attr, error) {
+func naturalDecode(data any, es *entity.EncodedSchema, top bool) ([]entity.Attr, error) {
 	var (
 		excludedFields []string
-		attrs          []Attr
+		attrs          []entity.Attr
 		err            error
 	)
 
@@ -150,20 +126,14 @@ func naturalDecode(data any, es *EncodedSchema, top bool) ([]Attr, error) {
 	if top && es.PrimaryKind != "" {
 		// Add the primary kind as a label
 		attrs = append(attrs,
-			Ref(EntityKind, Id(es.Domain+"/kind."+es.PrimaryKind)),
+			entity.Ref(entity.EntityKind, entity.Id(es.Domain+"/kind."+es.PrimaryKind)),
 		)
 	}
 
-	return SortedAttrs(attrs), err
+	return entity.SortedAttrs(attrs), err
 }
 
-type SchemaValue struct {
-	Kind    string         `json:"kind" yaml:"kind" cbor:"kind"`
-	Version string         `json:"version" yaml:"version" cbor:"version"`
-	Spec    map[string]any `json:"spec" yaml:"spec" cbor:"spec"`
-}
-
-func NaturalEncode(e *Entity, es *EncodedSchema) (*SchemaValue, error) {
+func NaturalEncode(e *entity.Entity, es *entity.EncodedSchema) (*SchemaValue, error) {
 	m, err := naturalEncodeMap(e, es)
 	if err != nil {
 		return nil, err
@@ -178,11 +148,11 @@ func NaturalEncode(e *Entity, es *EncodedSchema) (*SchemaValue, error) {
 	return sv, nil
 }
 
-func naturalEncodeMap(e *Entity, es *EncodedSchema) (map[string]any, error) {
+func naturalEncodeMap(e *entity.Entity, es *entity.EncodedSchema) (map[string]any, error) {
 	m := make(map[string]any)
 
 	// Group attributes by field ID
-	attrsByField := make(map[Id][]Attr)
+	attrsByField := make(map[entity.Id][]entity.Attr)
 	for _, attr := range e.Attrs {
 		attrsByField[attr.ID] = append(attrsByField[attr.ID], attr)
 	}
@@ -218,7 +188,7 @@ func naturalEncodeMap(e *Entity, es *EncodedSchema) (map[string]any, error) {
 	return m, nil
 }
 
-func encodeNaturalValue(f *SchemaField, val Value) (any, error) {
+func encodeNaturalValue(f *entity.SchemaField, val entity.Value) (any, error) {
 	switch f.Type {
 	case "string":
 		return val.String(), nil
@@ -257,15 +227,15 @@ func encodeNaturalValue(f *SchemaField, val Value) (any, error) {
 		if comp == nil {
 			return nil, nil
 		}
-		return naturalEncodeMap(&Entity{Attrs: comp.Attrs}, f.Component)
+		return naturalEncodeMap(&entity.Entity{Attrs: comp.Attrs}, f.Component)
 	default:
 		return nil, fmt.Errorf("unsupported type: %s", f.Type)
 	}
 }
 
-func decodeNaturalValue(f *SchemaField, v any) ([]Attr, error) {
+func decodeNaturalValue(f *entity.SchemaField, v any) ([]entity.Attr, error) {
 	var (
-		attrs []Attr
+		attrs []entity.Attr
 		err   error
 	)
 
@@ -275,7 +245,7 @@ func decodeNaturalValue(f *SchemaField, v any) ([]Attr, error) {
 		if !ok {
 			err = multierror.Append(err, fmt.Errorf("failed to decode field %s: expected string, got %T", f.Name, v))
 		} else {
-			attrs = append(attrs, String(f.Id, str))
+			attrs = append(attrs, entity.String(f.Id, str))
 		}
 	case "int":
 		rv := reflect.ValueOf(v)
@@ -283,21 +253,21 @@ func decodeNaturalValue(f *SchemaField, v any) ([]Attr, error) {
 			err = multierror.Append(err, fmt.Errorf("failed to decode field %s: expected int, got %T", f.Name, v))
 
 		} else {
-			attrs = append(attrs, Int(f.Id, int(rv.Int())))
+			attrs = append(attrs, entity.Int(f.Id, int(rv.Int())))
 		}
 	case "bool":
 		b, ok := v.(bool)
 		if !ok {
 			err = multierror.Append(err, fmt.Errorf("failed to decode field %s: expected bool, got %T", f.Name, v))
 		} else {
-			attrs = append(attrs, Bool(f.Id, b))
+			attrs = append(attrs, entity.Bool(f.Id, b))
 		}
 	case "float":
 		d, ok := v.(float64)
 		if !ok {
 			err = multierror.Append(err, fmt.Errorf("failed to decode field %s: expected float64, got %T", f.Name, v))
 		} else {
-			attrs = append(attrs, Float64(f.Id, d))
+			attrs = append(attrs, entity.Float64(f.Id, d))
 		}
 	case "enum":
 		enum, ok := v.(string)
@@ -309,20 +279,20 @@ func decodeNaturalValue(f *SchemaField, v any) ([]Attr, error) {
 				err = multierror.Append(err, fmt.Errorf("enum %s not found in schema", enum))
 			}
 
-			attrs = append(attrs, Ref(f.Id, id))
+			attrs = append(attrs, entity.Ref(f.Id, id))
 		}
 	case "label":
 		switch label := v.(type) {
 		case string:
 			k, v, ok := strings.Cut(label, "=")
 			if ok {
-				attrs = append(attrs, Label(f.Id, k, v))
+				attrs = append(attrs, entity.Label(f.Id, k, v))
 			} else {
 				err = multierror.Append(err, fmt.Errorf("invalid label used: %s ", label))
 			}
 		case map[string]any:
 			for k, v := range label {
-				attrs = append(attrs, Label(f.Id, k, fmt.Sprint(v)))
+				attrs = append(attrs, entity.Label(f.Id, k, fmt.Sprint(v)))
 			}
 		default:
 			err = multierror.Append(err, fmt.Errorf("failed to decode field %s: expected string, got %T", f.Name, v))
@@ -336,7 +306,7 @@ func decodeNaturalValue(f *SchemaField, v any) ([]Attr, error) {
 			if err != nil {
 				err = multierror.Append(err, fmt.Errorf("failed to decode field %s: %w", f.Name, err))
 			}
-			attrs = append(attrs, Bytes(f.Id, data))
+			attrs = append(attrs, entity.Bytes(f.Id, data))
 		}
 	case "time":
 		t, ok := v.(string)
@@ -348,7 +318,7 @@ func decodeNaturalValue(f *SchemaField, v any) ([]Attr, error) {
 				err = multierror.Append(err, fmt.Errorf("failed to decode field %s: %w", f.Name, err))
 			}
 
-			attrs = append(attrs, Time(f.Id, tm))
+			attrs = append(attrs, entity.Time(f.Id, tm))
 		}
 	case "duration":
 		d, ok := v.(string)
@@ -359,7 +329,7 @@ func decodeNaturalValue(f *SchemaField, v any) ([]Attr, error) {
 			if err != nil {
 				err = multierror.Append(err, fmt.Errorf("failed to decode field %s: %w", f.Name, err))
 			} else {
-				attrs = append(attrs, Duration(f.Id, dur))
+				attrs = append(attrs, entity.Duration(f.Id, dur))
 			}
 		}
 	// TODO: list
@@ -368,21 +338,21 @@ func decodeNaturalValue(f *SchemaField, v any) ([]Attr, error) {
 		if !ok {
 			err = multierror.Append(err, fmt.Errorf("failed to decode field %s: expected string, got %T", f.Name, v))
 		} else {
-			attrs = append(attrs, Ref(f.Id, Id(id)))
+			attrs = append(attrs, entity.Ref(f.Id, entity.Id(id)))
 		}
 	case "keyword":
 		kw, ok := v.(string)
 		if !ok {
 			err = multierror.Append(err, fmt.Errorf("failed to decode field %s: expected string, got %T", f.Name, v))
 		} else {
-			if !ValidKeyword(kw) {
+			if !entity.ValidKeyword(kw) {
 				err = multierror.Append(err, fmt.Errorf("failed to decode field %s: %w", f.Name, err))
 			} else {
-				attrs = append(attrs, Keyword(f.Id, kw))
+				attrs = append(attrs, entity.Keyword(f.Id, kw))
 			}
 		}
 	case "any":
-		attrs = append(attrs, Any(f.Id, v))
+		attrs = append(attrs, entity.Any(f.Id, v))
 	case "component":
 		m, ok := v.(map[string]any)
 		if !ok {
@@ -392,7 +362,7 @@ func decodeNaturalValue(f *SchemaField, v any) ([]Attr, error) {
 			if err != nil {
 				err = multierror.Append(err, fmt.Errorf("failed to decode component %s: %w", f.Name, err))
 			} else {
-				attrs = append(attrs, Component(f.Id, sub))
+				attrs = append(attrs, entity.Component(f.Id, sub))
 			}
 		}
 	}

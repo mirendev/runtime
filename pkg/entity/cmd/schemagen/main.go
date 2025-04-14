@@ -75,6 +75,7 @@ func main() {
 		g.sf = &sf
 		g.f = jf
 		g.ec = &entity.EncodedSchema{
+			Domain:  sf.Domain,
 			Name:    sf.Domain + "/" + kind,
 			Version: sf.Version,
 		}
@@ -116,10 +117,10 @@ func main() {
 
 	jf.Var().DefsFunc(func(b *j.Group) {
 		for _, kind := range kinds {
-			b.Id("Kind"+toCamal(kind)).Op("=").Qual(top, "MustKeyword").Call(j.Lit(sf.Domain + "/kind." + kind))
+			b.Id("Kind"+toCamal(kind)).Op("=").Qual(top, "Id").Call(j.Lit(sf.Domain + "/kind." + kind))
 		}
 
-		b.Id("Schema").Op("=").Qual(top, "Id").Call(j.Lit("schema." + sf.Domain + "/" + sf.Version))
+		b.Id("Schema").Op("=").Qual(top, "Id").Call(j.Lit(sf.Domain + "/schema." + sf.Version))
 	})
 
 	jf.Func().Id("init").Params().BlockFunc(func(b *j.Group) {
@@ -337,7 +338,9 @@ func (g *gen) attr(name string, attr *schemaAttr) {
 			)
 		} else {
 			g.encoders = append(g.encoders,
-				j.Id("attrs").Op("=").Append(j.Id("attrs"), j.Qual(top, method).Call(g.Ident(fname), j.Id("o").Dot(fname))),
+				j.If(j.Op("!").Qual(top, "Empty").Call(j.Id("o").Dot(fname))).Block(
+					j.Id("attrs").Op("=").Append(j.Id("attrs"), j.Qual(top, method).Call(g.Ident(fname), j.Id("o").Dot(fname))),
+				),
 			)
 		}
 	}
@@ -416,18 +419,43 @@ func (g *gen) attr(name string, attr *schemaAttr) {
 		simpleEncoder("Int64")
 		simpleDecl("Int64")
 		simpleField("int")
+	case "time":
+		g.fields = append(g.fields, j.Id(fname).Qual("time", "Time").Tag(tag))
+		simpleDecoder("KindTime", "Time")
+		simpleEncoder("Time")
+		simpleDecl("Time")
+		simpleField("time")
 	case "ref":
 		g.fields = append(g.fields, j.Id(fname).Qual(top, "Id").Tag(tag))
 		simpleDecoder("KindId", "Id")
 		simpleEncoder("Ref")
 		simpleDecl("Ref")
-		simpleField("Id")
+		simpleField("id")
 	case "bool":
 		g.fields = append(g.fields, j.Id(fname).Bool().Tag(tag))
 		simpleDecoder("KindBool", "Bool")
 		simpleEncoder("Bool")
 		simpleDecl("Bool")
 		simpleField("bool")
+	case "bytes":
+		g.fields = append(g.fields, j.Id(fname).Index().Byte().Tag(tag))
+		simpleDecoder("KindBytes", "Bytes")
+		simpleDecl("Bytes")
+		simpleField("bytes")
+		if attr.Many {
+			g.encoders = append(g.encoders,
+				j.For(j.List(j.Op("_"), j.Id("v")).Op(":=").Range().Id("o").Dot(fname)).Block(
+					j.Id("attrs").Op("=").Append(j.Id("attrs"), j.Qual(top, "Bytes").Call(g.Ident(fname), j.Id("v"))),
+				),
+			)
+		} else {
+			g.encoders = append(g.encoders,
+				j.If(j.Id("len").Call(j.Id("o").Dot(fname)).Op("==").Lit(0)).Block(
+					j.Id("attrs").Op("=").Append(j.Id("attrs"), j.Qual(top, "Bytes").Call(g.Ident(fname), j.Id("o").Dot(fname))),
+				),
+			)
+		}
+
 	case "label":
 		if attr.Many {
 			g.fields = append(g.fields, j.Id(fname).Qual(topt, "Labels").Tag(tag))
@@ -439,7 +467,8 @@ func (g *gen) attr(name string, attr *schemaAttr) {
 		} else {
 			g.fields = append(g.fields, j.Id(fname).Qual(topt, "Label").Tag(tag))
 			g.encoders = append(g.encoders,
-				j.Id("attrs").Op("=").Append(j.Id("attrs"), j.Qual(top, "Label").Call(g.Ident(fname), j.Id("v").Dot("Key"), j.Id("v").Dot("Value"))),
+				j.If(j.Op("!").Qual(top, "Empty").Call(j.Id("o").Dot(fname))).Block(
+					j.Id("attrs").Op("=").Append(j.Id("attrs"), j.Qual(top, "Label").Call(g.Ident(fname), j.Id("v").Dot("Key"), j.Id("v").Dot("Value")))),
 			)
 		}
 		simpleDecoder("KindLabel", "Label")
@@ -474,43 +503,30 @@ func (g *gen) attr(name string, attr *schemaAttr) {
 			}
 		}))
 
-		g.decodeouter = append(g.decodeouter, j.Var().Id(name+"FromId").Op("=").Map(j.Qual(top, "Id")).Add(g.NSd(fname)).
+		g.decodeouter = append(g.decodeouter, j.Var().Id(g.name+name+"FromId").Op("=").Map(j.Qual(top, "Id")).Add(g.NSd(fname)).
 			ValuesFunc(func(b *j.Group) {
 				for _, v := range attr.Choices {
 					b.Add(g.Ident(fname + toCamal(v))).Op(":").Id(strings.ToUpper(v))
 				}
 			}))
 
-		g.decodeouter = append(g.decodeouter, j.Var().Id(name+"ToId").Op("=").Map(g.NSd(fname)).Qual(top, "Id").
+		g.decodeouter = append(g.decodeouter, j.Var().Id(g.name+name+"ToId").Op("=").Map(g.NSd(fname)).Qual(top, "Id").
 			ValuesFunc(func(b *j.Group) {
 				for _, v := range attr.Choices {
 					b.Add(j.Id(strings.ToUpper(v)).Op(":").Add(g.Ident(fname + toCamal(v))))
 				}
 			}))
 
-		/*
-			if attr.Many {
-				d :=
-					j.For(j.List(j.Op("_"), j.Id("a")).Op(":=").Range().Id("e").Dot("GetAll").Call(g.Ident(fname))).Block(
-						j.If(
-							j.Id("a").Dot("Value").Dot("Kind").Call().Op("==").Qual(top, kind),
-						).Block(
-							j.Id("o").Dot(fname).Op("=").Append(j.Id("o").Dot(fname), j.Id("a").Dot("Value").Dot(method).Call()),
-						),
-					)
-				g.decoders = append(g.decoders, d)
-		*/
-
 		d := j.If(
 			j.List(j.Id("a"), j.Id("ok")).Op(":=").Id("e").Dot("Get").Call(g.Ident(fname)),
 			j.Id("ok").Op("&&").Id("a").Dot("Value").Dot("Kind").Call().Op("==").Qual(top, "KindId"),
 		).Block(
-			j.Id("o").Dot(fname).Op("=").Id(name + "FromId").Index(j.Id("a").Dot("Value").Dot("Id").Call()),
+			j.Id("o").Dot(fname).Op("=").Id(g.name + name + "FromId").Index(j.Id("a").Dot("Value").Dot("Id").Call()),
 		)
 		g.decoders = append(g.decoders, d)
 
 		enc := j.If(
-			j.List(j.Id("a"), j.Id("ok")).Op(":=").Id(name+"ToId").Index(j.Id("o").Dot(fname)), j.Id("ok"),
+			j.List(j.Id("a"), j.Id("ok")).Op(":=").Id(g.name+name+"ToId").Index(j.Id("o").Dot(fname)), j.Id("ok"),
 		).Block(
 			j.Id("attrs").Op("=").Append(j.Id("attrs"), j.Qual(top, "Ref").Call(g.Ident(fname), j.Id("a"))),
 		)
@@ -569,6 +585,7 @@ func (g *gen) attr(name string, attr *schemaAttr) {
 		sg.local = fname
 		sg.prefix = g.prefix + "." + name
 		sg.ec = &entity.EncodedSchema{
+			Domain:  g.sf.Domain,
 			Name:    g.prefix + "." + name,
 			Version: g.sf.Version,
 		}
@@ -621,8 +638,9 @@ func (g *gen) attr(name string, attr *schemaAttr) {
 			)
 		} else {
 			g.encoders = append(g.encoders,
-				j.Id("attrs").Op("=").Append(j.Id("attrs"), j.Qual(top, "Component").
-					Call(g.Ident(fname), j.Id("o").Dot(fname).Dot("Encode").Call())),
+				j.If(j.Op("!").Qual(top, "Empty").Call(j.Id("o").Dot(fname))).Block(
+					j.Id("attrs").Op("=").Append(j.Id("attrs"), j.Qual(top, "Component").
+						Call(g.Ident(fname), j.Id("o").Dot(fname).Dot("Encode").Call()))),
 			)
 		}
 		simpleDecl("Component")
@@ -637,6 +655,8 @@ func (g *gen) attr(name string, attr *schemaAttr) {
 			Many:      attr.Many,
 			Component: sg.ec,
 		})
+	default:
+		panic(fmt.Sprintf("Unknown attribute type: %s", attr.Type))
 	}
 }
 
@@ -682,6 +702,17 @@ func (g *gen) generate() {
 
 	f.Line()
 
+	if g.kind != "" {
+		f.Func().
+			Params(j.Id("o").Op("*").Id(structName)).Id("Is").
+			Params(j.Id("e").Qual(top, "AttrGetter")).Bool().
+			BlockFunc(func(b *j.Group) {
+				b.Return(j.Qual(top, "Is").Call(j.Id("e"), j.Id("Kind"+toCamal(g.kind))))
+			})
+
+		f.Line()
+	}
+
 	f.Func().
 		Params(j.Id("o").Op("*").Id(structName)).Id("Encode").
 		Params().Params(j.Id("attrs").Index().Qual(top, "Attr")).
@@ -692,13 +723,8 @@ func (g *gen) generate() {
 			if g.kind != "" {
 				b.Id("attrs").Op("=").Append(
 					j.Id("attrs"),
-					j.Qual(top, "Keyword").Call(j.Qual(top, "EntityKind"), j.Id("Kind"+toCamal(g.kind))),
+					j.Qual(top, "Ref").Call(j.Qual(top, "EntityKind"), j.Id("Kind"+toCamal(g.kind))),
 				)
-				b.Id("attrs").Op("=").Append(
-					j.Id("attrs"),
-					j.Qual(top, "Ref").Call(j.Qual(top, "EntitySchema"), j.Id("Schema")),
-				)
-
 			}
 			b.Return()
 		})

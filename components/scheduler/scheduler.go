@@ -6,27 +6,27 @@ import (
 	"sync"
 
 	"github.com/davecgh/go-spew/spew"
-	compute "miren.dev/runtime/api/compute/v1alpha"
-	eas "miren.dev/runtime/api/entityserver/v1alpha"
+	"miren.dev/runtime/api/compute/compute_v1alpha"
+	eas "miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/pkg/cond"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/rpc/stream"
 )
 
 type sandbox struct {
-	compute.Sandbox
+	compute_v1alpha.Sandbox
 	*entity.Entity
 }
 
 type Scheduler struct {
 	log   *slog.Logger
-	nodes map[entity.Id]*compute.Node
+	nodes map[entity.Id]*compute_v1alpha.Node
 
 	assigning sync.Mutex
 }
 
 func (s *Scheduler) gatherSandboxes(ctx context.Context, eac *eas.EntityAccessClient) ([]*sandbox, error) {
-	results, err := eac.List(ctx, entity.Keyword(entity.EntityKind, compute.KindSandbox))
+	results, err := eac.List(ctx, entity.Ref(entity.EntityKind, compute_v1alpha.KindSandbox))
 	if err != nil {
 		return nil, err
 	}
@@ -46,18 +46,18 @@ func (s *Scheduler) gatherSandboxes(ctx context.Context, eac *eas.EntityAccessCl
 	return ret, nil
 }
 
-func (s *Scheduler) gatherNodes(ctx context.Context, eac *eas.EntityAccessClient) ([]*compute.Node, error) {
-	results, err := eac.List(ctx, entity.Keyword(entity.EntityKind, compute.KindNode))
+func (s *Scheduler) gatherNodes(ctx context.Context, eac *eas.EntityAccessClient) ([]*compute_v1alpha.Node, error) {
+	results, err := eac.List(ctx, entity.Ref(entity.EntityKind, compute_v1alpha.KindNode))
 	if err != nil {
 		return nil, err
 	}
 
 	entities := results.Values()
 
-	var ret []*compute.Node
+	var ret []*compute_v1alpha.Node
 
 	for _, ent := range entities {
-		var node compute.Node
+		var node compute_v1alpha.Node
 
 		node.Decode(ent.Entity())
 		ret = append(ret, &node)
@@ -71,7 +71,7 @@ func (s *Scheduler) gatherNodes(ctx context.Context, eac *eas.EntityAccessClient
 func NewScheduler(ctx context.Context, log *slog.Logger, eac *eas.EntityAccessClient) (*Scheduler, error) {
 	s := &Scheduler{
 		log:   log,
-		nodes: make(map[entity.Id]*compute.Node),
+		nodes: make(map[entity.Id]*compute_v1alpha.Node),
 	}
 
 	nodes, err := s.gatherNodes(ctx, eac)
@@ -86,7 +86,7 @@ func NewScheduler(ctx context.Context, log *slog.Logger, eac *eas.EntityAccessCl
 	return s, nil
 }
 
-func (s *Scheduler) FindNodeById(id entity.Id) (*compute.Node, error) {
+func (s *Scheduler) FindNodeById(id entity.Id) (*compute_v1alpha.Node, error) {
 	node, ok := s.nodes[id]
 	if !ok {
 		return nil, cond.NotFound(id)
@@ -96,7 +96,7 @@ func (s *Scheduler) FindNodeById(id entity.Id) (*compute.Node, error) {
 }
 
 func (s *Scheduler) Watch(ctx context.Context, eac *eas.EntityAccessClient) error {
-	index := entity.Keyword(entity.EntityKind, compute.KindSandbox)
+	index := entity.Ref(entity.EntityKind, compute_v1alpha.KindSandbox)
 
 	_, err := eac.WatchIndex(ctx, index, stream.Callback(func(op *eas.EntityOp) error {
 
@@ -129,7 +129,7 @@ func (s *Scheduler) AssignSandboxes(ctx context.Context, eac *eas.EntityAccessCl
 	}
 
 	// Find first available node
-	var firstNode *compute.Node
+	var firstNode *compute_v1alpha.Node
 	for _, node := range s.nodes {
 		firstNode = node
 		break
@@ -158,7 +158,7 @@ func (s *Scheduler) assignSandbox(ctx context.Context, ent *entity.Entity, eac *
 	sandbox.Decode(sandbox.Entity)
 
 	// Skip if already scheduled
-	if _, ok := sandbox.Get(compute.ScheduleKeyId); ok {
+	if _, ok := sandbox.Get(compute_v1alpha.ScheduleKeyId); ok {
 		return nil
 	}
 
@@ -167,7 +167,7 @@ func (s *Scheduler) assignSandbox(ctx context.Context, ent *entity.Entity, eac *
 
 	// TODO here is where a real scheduling algorithm will go.
 	// Find first available node
-	var firstNode *compute.Node
+	var firstNode *compute_v1alpha.Node
 	for _, node := range s.nodes {
 		firstNode = node
 		break
@@ -181,9 +181,9 @@ func (s *Scheduler) assignSandbox(ctx context.Context, ent *entity.Entity, eac *
 	s.log.Error("sandbox attrs")
 	spew.Dump(sandbox.Entity.Attrs)
 
-	se := compute.Schedule{
-		Key: compute.Key{
-			Kind: compute.KindSandbox,
+	se := compute_v1alpha.Schedule{
+		Key: compute_v1alpha.Key{
+			Kind: compute_v1alpha.KindSandbox,
 			Node: firstNode.ID,
 		},
 	}

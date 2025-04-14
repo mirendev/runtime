@@ -1,0 +1,11 @@
+domain: dev.miren.ingress
+version: v1alpha
+kinds:
+  http_route:
+    host:
+      type: string
+      doc: The hostname to match on for the application
+      indexed: true
+    app:
+      type: ref
+      doc: The application to route to

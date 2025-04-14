@@ -6,7 +6,7 @@ import (
 	"time"
 
 	clientv3 "go.etcd.io/etcd/client/v3"
-	esv1 "miren.dev/runtime/api/entityserver/v1alpha"
+	esv1 "miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/schema"
 	"miren.dev/runtime/pkg/rpc"
@@ -66,11 +66,13 @@ func (c *Coordinator) Start(ctx context.Context) error {
 		return err
 	}
 
-	var ess entityserver.EntityServer
-	ess.Log = c.Log
-	ess.Store = etcdStore
+	ess, err := entityserver.NewEntityServer(c.Log, etcdStore)
+	if err != nil {
+		c.Log.Error("failed to create entity server", "error", err)
+		return err
+	}
 
-	server.ExposeValue("entities", esv1.AdaptEntityAccess(&ess))
+	server.ExposeValue("entities", esv1.AdaptEntityAccess(ess))
 
 	c.state = rs
 

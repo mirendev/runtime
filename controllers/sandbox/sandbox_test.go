@@ -21,7 +21,7 @@ import (
 
 	"github.com/opencontainers/runtime-spec/specs-go"
 
-	compute "miren.dev/runtime/api/compute/v1alpha"
+	compute "miren.dev/runtime/api/compute/compute_v1alpha"
 	"miren.dev/runtime/build"
 	"miren.dev/runtime/image"
 	"miren.dev/runtime/observability"

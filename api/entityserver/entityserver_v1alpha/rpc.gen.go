@@ -1,4 +1,4 @@
-package v1alpha
+package entityserver_v1alpha
 
 import (
 	"context"
@@ -196,6 +196,62 @@ func (v *EntityOp) MarshalJSON() ([]byte, error) {
 }
 
 func (v *EntityOp) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type parsedFileData struct {
+	Format   *string    `cbor:"0,keyasint,omitempty" json:"format,omitempty"`
+	Entities *[]*Entity `cbor:"1,keyasint,omitempty" json:"entities,omitempty"`
+}
+
+type ParsedFile struct {
+	data parsedFileData
+}
+
+func (v *ParsedFile) HasFormat() bool {
+	return v.data.Format != nil
+}
+
+func (v *ParsedFile) Format() string {
+	if v.data.Format == nil {
+		return ""
+	}
+	return *v.data.Format
+}
+
+func (v *ParsedFile) SetFormat(format string) {
+	v.data.Format = &format
+}
+
+func (v *ParsedFile) HasEntities() bool {
+	return v.data.Entities != nil
+}
+
+func (v *ParsedFile) Entities() []*Entity {
+	if v.data.Entities == nil {
+		return nil
+	}
+	return *v.data.Entities
+}
+
+func (v *ParsedFile) SetEntities(entities []*Entity) {
+	x := slices.Clone(entities)
+	v.data.Entities = &x
+}
+
+func (v *ParsedFile) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *ParsedFile) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *ParsedFile) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *ParsedFile) UnmarshalJSON(data []byte) error {
 	return json.Unmarshal(data, &v.data)
 }
 
@@ -625,6 +681,77 @@ func (v *EntityAccessWatchIndexResults) UnmarshalJSON(data []byte) error {
 	return json.Unmarshal(data, &v.data)
 }
 
+type entityAccessWatchEntityArgsData struct {
+	Id      *string         `cbor:"0,keyasint,omitempty" json:"id,omitempty"`
+	Updates *rpc.Capability `cbor:"1,keyasint,omitempty" json:"updates,omitempty"`
+}
+
+type EntityAccessWatchEntityArgs struct {
+	call *rpc.Call
+	data entityAccessWatchEntityArgsData
+}
+
+func (v *EntityAccessWatchEntityArgs) HasId() bool {
+	return v.data.Id != nil
+}
+
+func (v *EntityAccessWatchEntityArgs) Id() string {
+	if v.data.Id == nil {
+		return ""
+	}
+	return *v.data.Id
+}
+
+func (v *EntityAccessWatchEntityArgs) HasUpdates() bool {
+	return v.data.Updates != nil
+}
+
+func (v *EntityAccessWatchEntityArgs) Updates() *stream.SendStreamClient[*EntityOp] {
+	if v.data.Updates == nil {
+		return nil
+	}
+	return &stream.SendStreamClient[*EntityOp]{Client: v.call.NewClient(v.data.Updates)}
+}
+
+func (v *EntityAccessWatchEntityArgs) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *EntityAccessWatchEntityArgs) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *EntityAccessWatchEntityArgs) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *EntityAccessWatchEntityArgs) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type entityAccessWatchEntityResultsData struct{}
+
+type EntityAccessWatchEntityResults struct {
+	call *rpc.Call
+	data entityAccessWatchEntityResultsData
+}
+
+func (v *EntityAccessWatchEntityResults) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *EntityAccessWatchEntityResults) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *EntityAccessWatchEntityResults) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *EntityAccessWatchEntityResults) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
 type entityAccessListArgsData struct {
 	Index *entity.Attr `cbor:"0,keyasint,omitempty" json:"index,omitempty"`
 }
@@ -867,7 +994,7 @@ func (v *EntityAccessParseArgs) UnmarshalJSON(data []byte) error {
 }
 
 type entityAccessParseResultsData struct {
-	Entity *Entity `cbor:"0,keyasint,omitempty" json:"entity,omitempty"`
+	File *ParsedFile `cbor:"0,keyasint,omitempty" json:"file,omitempty"`
 }
 
 type EntityAccessParseResults struct {
@@ -875,8 +1002,8 @@ type EntityAccessParseResults struct {
 	data entityAccessParseResultsData
 }
 
-func (v *EntityAccessParseResults) SetEntity(entity *Entity) {
-	v.data.Entity = entity
+func (v *EntityAccessParseResults) SetFile(file *ParsedFile) {
+	v.data.File = file
 }
 
 func (v *EntityAccessParseResults) MarshalCBOR() ([]byte, error) {
@@ -1062,6 +1189,32 @@ func (t *EntityAccessWatchIndex) Results() *EntityAccessWatchIndexResults {
 	return results
 }
 
+type EntityAccessWatchEntity struct {
+	*rpc.Call
+	args    EntityAccessWatchEntityArgs
+	results EntityAccessWatchEntityResults
+}
+
+func (t *EntityAccessWatchEntity) Args() *EntityAccessWatchEntityArgs {
+	args := &t.args
+	if args.call != nil {
+		return args
+	}
+	args.call = t.Call
+	t.Call.Args(args)
+	return args
+}
+
+func (t *EntityAccessWatchEntity) Results() *EntityAccessWatchEntityResults {
+	results := &t.results
+	if results.call != nil {
+		return results
+	}
+	results.call = t.Call
+	t.Call.Results(results)
+	return results
+}
+
 type EntityAccessList struct {
 	*rpc.Call
 	args    EntityAccessListArgs
@@ -1197,6 +1350,7 @@ type EntityAccess interface {
 	Put(ctx context.Context, state *EntityAccessPut) error
 	Delete(ctx context.Context, state *EntityAccessDelete) error
 	WatchIndex(ctx context.Context, state *EntityAccessWatchIndex) error
+	WatchEntity(ctx context.Context, state *EntityAccessWatchEntity) error
 	List(ctx context.Context, state *EntityAccessList) error
 	MakeAttr(ctx context.Context, state *EntityAccessMakeAttr) error
 	LookupKind(ctx context.Context, state *EntityAccessLookupKind) error
@@ -1221,6 +1375,10 @@ func (_ reexportEntityAccess) Delete(ctx context.Context, state *EntityAccessDel
 }
 
 func (_ reexportEntityAccess) WatchIndex(ctx context.Context, state *EntityAccessWatchIndex) error {
+	panic("not implemented")
+}
+
+func (_ reexportEntityAccess) WatchEntity(ctx context.Context, state *EntityAccessWatchEntity) error {
 	panic("not implemented")
 }
 
@@ -1280,6 +1438,14 @@ func AdaptEntityAccess(t EntityAccess) *rpc.Interface {
 			Index:         0,
 			Handler: func(ctx context.Context, call *rpc.Call) error {
 				return t.WatchIndex(ctx, &EntityAccessWatchIndex{Call: call})
+			},
+		},
+		{
+			Name:          "watch_entity",
+			InterfaceName: "EntityAccess",
+			Index:         0,
+			Handler: func(ctx context.Context, call *rpc.Call) error {
+				return t.WatchEntity(ctx, &EntityAccessWatchEntity{Call: call})
 			},
 		},
 		{
@@ -1453,6 +1619,26 @@ func (v EntityAccessClient) WatchIndex(ctx context.Context, index entity.Attr, v
 	return &EntityAccessClientWatchIndexResults{client: v.Client, data: ret}, nil
 }
 
+type EntityAccessClientWatchEntityResults struct {
+	client *rpc.Client
+	data   entityAccessWatchEntityResultsData
+}
+
+func (v EntityAccessClient) WatchEntity(ctx context.Context, id string, updates stream.SendStream[*EntityOp]) (*EntityAccessClientWatchEntityResults, error) {
+	args := EntityAccessWatchEntityArgs{}
+	args.data.Id = &id
+	args.data.Updates = v.Client.NewCapability(stream.AdaptSendStream[*EntityOp](updates), updates)
+
+	var ret entityAccessWatchEntityResultsData
+
+	err := v.Client.Call(ctx, "watch_entity", &args, &ret)
+	if err != nil {
+		return nil, err
+	}
+
+	return &EntityAccessClientWatchEntityResults{client: v.Client, data: ret}, nil
+}
+
 type EntityAccessClientListResults struct {
 	client *rpc.Client
 	data   entityAccessListResultsData
@@ -1543,12 +1729,12 @@ type EntityAccessClientParseResults struct {
 	data   entityAccessParseResultsData
 }
 
-func (v *EntityAccessClientParseResults) HasEntity() bool {
-	return v.data.Entity != nil
+func (v *EntityAccessClientParseResults) HasFile() bool {
+	return v.data.File != nil
 }
 
-func (v *EntityAccessClientParseResults) Entity() *Entity {
-	return v.data.Entity
+func (v *EntityAccessClientParseResults) File() *ParsedFile {
+	return v.data.File
 }
 
 func (v EntityAccessClient) Parse(ctx context.Context, data []byte) (*EntityAccessClientParseResults, error) {

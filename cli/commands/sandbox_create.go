@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"time"
 
-	"miren.dev/runtime/api/entityserver/v1alpha"
+	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/rpc"
 )
@@ -23,12 +23,12 @@ func SandboxCreate(ctx *Context, opts struct {
 		return fmt.Errorf("failed to connect to RPC server: %w", err)
 	}
 
-	eac := v1alpha.EntityAccessClient{Client: client}
+	eac := entityserver_v1alpha.EntityAccessClient{Client: client}
 
 	id := fmt.Sprintf("sandbox/test-%d", time.Now().Unix())
 
 	// Test creating a sandbox entity
-	sandbox := &v1alpha.Entity{}
+	sandbox := &entityserver_v1alpha.Entity{}
 	sandbox.SetId(id)
 	sandbox.SetAttrs([]entity.Attr{
 		entity.Keyword(entity.Ident, id),

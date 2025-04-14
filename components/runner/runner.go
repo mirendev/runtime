@@ -6,8 +6,9 @@ import (
 	"time"
 
 	containerd "github.com/containerd/containerd/v2/client"
-	compute "miren.dev/runtime/api/compute/v1alpha"
-	es "miren.dev/runtime/api/entityserver/v1alpha"
+	"miren.dev/runtime/api/compute/compute_v1alpha"
+	"miren.dev/runtime/api/core/core_v1alpha"
+	es "miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/controllers/sandbox"
 	"miren.dev/runtime/pkg/asm"
 	"miren.dev/runtime/pkg/controller"
@@ -105,15 +106,21 @@ func (r *Runner) setupEntity(eas *es.EntityAccessClient) error {
 		return nil
 	}
 
-	node := compute.Node{
-		Status:      compute.READY,
+	node := compute_v1alpha.Node{
+		Status:      compute_v1alpha.READY,
 		Constraints: types.LabelSet("compute", "generic"),
+	}
+
+	md := core_v1alpha.Metadata{
+		Name:   r.Id,
+		Labels: types.LabelSet("type", "dev"),
 	}
 
 	var aent es.Entity
 	aent.SetAttrs(entity.Attrs(
+		md.Encode,
 		node.Encode,
-		entity.Ident, r.Id,
+		entity.Ident, "node/"+r.Id,
 	))
 
 	_, err := eas.Put(context.Background(), &aent)
@@ -160,7 +167,7 @@ func (r *Runner) SetupControllers(
 		controller.NewReconcileController(
 			"sandbox",
 			log,
-			compute.Index(compute.KindSandbox, entity.Id(r.Id)),
+			compute_v1alpha.Index(compute_v1alpha.KindSandbox, entity.Id("node/"+r.Id)),
 			eas,
 			controller.AdaptController(&sbc),
 			time.Minute,

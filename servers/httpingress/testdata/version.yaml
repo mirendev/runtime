@@ -1,0 +1,7 @@
+kind: dev.miren.core/app_version
+version: v1alpha
+metadata:
+  name: abcdef
+spec:
+  app: app/nginx
+  image_url: docker.io/library/nginx:latest

@@ -1853,7 +1853,7 @@ func (g *Generator) generateInterfaces(f *j.File) error {
 	return nil
 }
 
-func (g *Generator) Generate(name string) (string, error) {
+func (g *Generator) Generate(pkgName string) (string, error) {
 	for _, t := range g.Types {
 		err := t.Validate()
 		if err != nil {
@@ -1861,7 +1861,8 @@ func (g *Generator) Generate(name string) (string, error) {
 		}
 	}
 
-	f := j.NewFile(name)
+	fmt.Println(pkgName)
+	f := j.NewFile(pkgName)
 
 	for name, imp := range g.Imports {
 		f.ImportName(imp.Import, name)

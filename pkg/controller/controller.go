@@ -8,8 +8,7 @@ import (
 	"sync"
 	"time"
 
-	clientv3 "go.etcd.io/etcd/client/v3"
-	"miren.dev/runtime/api/entityserver/v1alpha"
+	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/idgen"
 	"miren.dev/runtime/pkg/rpc/stream"
@@ -54,7 +53,7 @@ func WorkerId(ctx context.Context) string {
 }
 
 // HandlerFunc is a function that processes an entity
-type HandlerFunc func(ctx context.Context, event Event) error
+type HandlerFunc func(ctx context.Context, event Event) ([]entity.Attr, error)
 
 // ReconcileController implements the Controller interface
 type ReconcileController struct {
@@ -62,7 +61,7 @@ type ReconcileController struct {
 
 	cancel func()
 
-	esc          *v1alpha.EntityAccessClient
+	esc          *entityserver_v1alpha.EntityAccessClient
 	name         string
 	index        entity.Attr
 	handler      HandlerFunc
@@ -73,7 +72,7 @@ type ReconcileController struct {
 }
 
 // NewReconcileController creates a new controller
-func NewReconcileController(name string, log *slog.Logger, index entity.Attr, esc *v1alpha.EntityAccessClient, handler HandlerFunc, resyncPeriod time.Duration, workers int) *ReconcileController {
+func NewReconcileController(name string, log *slog.Logger, index entity.Attr, esc *entityserver_v1alpha.EntityAccessClient, handler HandlerFunc, resyncPeriod time.Duration, workers int) *ReconcileController {
 	return &ReconcileController{
 		Log:          log,
 		name:         name,
@@ -84,35 +83,6 @@ func NewReconcileController(name string, log *slog.Logger, index entity.Attr, es
 		workers:      workers,
 		workQueue:    make(chan Event, 1000),
 	}
-}
-
-func convertEvent(event *clientv3.Event) (Event, error) {
-	var eventType EventType
-
-	switch {
-	case event.IsCreate():
-		eventType = EventAdded
-	case event.IsModify():
-		eventType = EventUpdated
-	case event.Type == clientv3.EventTypeDelete:
-		eventType = EventDeleted
-	default:
-		return Event{}, nil
-	}
-
-	id := entity.Id(event.Kv.Value)
-
-	ev := Event{
-		Type: eventType,
-		Id:   id,
-		Rev:  event.Kv.ModRevision,
-	}
-
-	if event.PrevKv != nil {
-		ev.PrevRev = event.PrevKv.ModRevision
-	}
-
-	return ev, nil
 }
 
 // Start starts the controller
@@ -135,7 +105,7 @@ func (c *ReconcileController) Start(top context.Context) error {
 		c.Log.Info("Starting index watch")
 		defer c.Log.Info("Index watch stopped")
 
-		c.esc.WatchIndex(ctx, c.index, stream.Callback(func(op *v1alpha.EntityOp) error {
+		c.esc.WatchIndex(ctx, c.index, stream.Callback(func(op *entityserver_v1alpha.EntityOp) error {
 			var eventType EventType
 
 			switch op.Operation() {
@@ -219,21 +189,42 @@ func (c *ReconcileController) runWorker(ctx context.Context) {
 			c.Log.Info("Processing event", "entity", event.Id, "worker", WorkerId(ctx))
 
 			// Process the event
-			if err := c.processItem(ctx, event); err != nil {
+			updates, err := c.processItem(ctx, event)
+			if err != nil {
 				c.Log.Error("error processing item", "event", event, "error", err)
+				continue
+			}
+
+			if len(updates) > 0 {
+				if event.Id == "" {
+					c.Log.Error("entity id is empty update there are updates", "event", event)
+				} else {
+					c.Log.Info("updating entity with updates produced by controller", "event", event, "updates", len(updates))
+
+					var rpcE entityserver_v1alpha.Entity
+					rpcE.SetId(string(event.Id))
+					rpcE.SetAttrs(updates)
+
+					_, err := c.esc.Put(ctx, &rpcE)
+					if err != nil {
+						c.Log.Error("error updating entity", "entity", event.Id, "error", err)
+					} else {
+						c.Log.Info("updated entity", "entity", event.Id)
+					}
+				}
 			}
 		}
 	}
 }
 
 // processItem processes a single item from the work queue
-func (c *ReconcileController) processItem(ctx context.Context, event Event) error {
+func (c *ReconcileController) processItem(ctx context.Context, event Event) ([]entity.Attr, error) {
 	// Handle different event types
 	switch event.Type {
 	case EventAdded, EventUpdated, EventDeleted:
 		return c.handler(ctx, event)
 	default:
-		return fmt.Errorf("unknown event type: %s", event.Type)
+		return nil, fmt.Errorf("unknown event type: %s", event.Type)
 	}
 }
 
@@ -311,18 +302,20 @@ func AdaptController[
 	},
 	C GenericController[P],
 ](cont C) HandlerFunc {
-	return func(ctx context.Context, event Event) error {
+	return func(ctx context.Context, event Event) ([]entity.Attr, error) {
 		switch event.Type {
 		case EventAdded, EventUpdated:
 			e := event.Entity
 
 			if e == nil {
-				return fmt.Errorf("entity not found: %s", event.Id)
+				return nil, fmt.Errorf("entity not found: %s", event.Id)
 			}
 
 			// Decode the entity into the controller entity type
 			var obj P = new(T)
 			obj.Decode(e)
+
+			orig := e.Clone()
 
 			meta := &entity.Meta{
 				Entity:   e,
@@ -331,16 +324,18 @@ func AdaptController[
 			}
 
 			if err := cont.Create(ctx, obj, meta); err != nil {
-				return fmt.Errorf("failed to create entity: %w", err)
+				return nil, fmt.Errorf("failed to create entity: %w", err)
 			}
+
+			return entity.Diff(meta.Entity, orig), nil
 
 		case EventDeleted:
 			if err := cont.Delete(ctx, event.Id); err != nil {
-				return fmt.Errorf("failed to create entity: %w", err)
+				return nil, fmt.Errorf("failed to create entity: %w", err)
 			}
 		}
 
-		return nil
+		return nil, nil
 	}
 }
 
