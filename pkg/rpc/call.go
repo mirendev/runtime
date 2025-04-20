@@ -53,6 +53,8 @@ func (c *Call) NewCapability(i *Interface) *Capability {
 		return c.local.NewCapability(i)
 	}
 
+	c.s.mu.Lock()
+	defer c.s.mu.Unlock()
 	return c.s.assignCapability(i, c.caller, "", c.category)
 }
 

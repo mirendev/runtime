@@ -1,0 +1,60 @@
+domain: dev.miren.network
+version: v1alpha
+kinds:
+  service:
+    match:
+      type: label
+      doc: A label to match against a sandbox
+      many: true
+
+    ip:
+      type: string
+      doc: The IP allocated to the service
+      many: true
+
+    port:
+      type: component
+      doc: A network port the service exposes
+      many: true
+      attrs:
+        port:
+          type: int
+          doc: Port number to listen on
+          required: true
+        target_port:
+          type: int
+          doc: Port number to target on the pod side
+        name:
+          type: string
+          doc: Name of the port for reference
+          required: true
+        protocol:
+          type: enum
+          doc: Port protocol
+          choices: [tcp, udp]
+        type:
+          type: string
+          doc: The highlevel type of the port
+          example: http
+        node_port:
+          type: int
+          doc: The port number that should be forwarded from the node to the container
+
+  endpoints:
+    service:
+      type: ref
+      doc: The service that uses these endpoints
+      indexed: true
+
+    endpoint:
+      type: component
+      doc: The endpoint configuration, per endpoint
+      many: true
+      attrs:
+        ip:
+          type: string
+          doc: The IP of the endpoint
+        port:
+          type: int
+          doc: The port number
+

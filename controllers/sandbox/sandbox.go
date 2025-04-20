@@ -18,6 +18,7 @@ import (
 	containerd "github.com/containerd/containerd/v2/client"
 	"github.com/containerd/containerd/v2/pkg/cio"
 	"github.com/containerd/containerd/v2/pkg/oci"
+	"github.com/davecgh/go-spew/spew"
 	"github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/pelletier/go-toml/v2"
 	"github.com/pkg/errors"
@@ -30,6 +31,9 @@ import (
 	"miren.dev/runtime/pkg/netdb"
 
 	compute "miren.dev/runtime/api/compute/compute_v1alpha"
+	"miren.dev/runtime/api/core/core_v1alpha"
+	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
+	"miren.dev/runtime/api/network/network_v1alpha"
 )
 
 const (
@@ -46,6 +50,8 @@ type containerPorts struct {
 type SandboxController struct {
 	Log *slog.Logger
 	CC  *containerd.Client
+
+	EAC *entityserver_v1alpha.EntityAccessClient
 
 	Namespace   string `asm:"namespace"`
 	RunscBinary string `asm:"runsc_binary,optional"`
@@ -577,15 +583,92 @@ func (c *SandboxController) createSandbox(ctx context.Context, co *compute.Sandb
 
 	co.Status = compute.RUNNING
 
-	co.Network = append(co.Network, compute.Network{
-		Address: ep.Addresses[0].Addr().String(),
-		Subnet:  c.Bridge,
-	})
-
 	// The contrtoller will detect the updates and sync them back
 	meta.Entity.Update(co.Encode())
 
+	err = c.updateServices(ctx, co, meta, ep)
+	if err != nil {
+		return fmt.Errorf("failed to update services: %w", err)
+	}
+
 	return c.saveEntity(ctx, co, meta)
+}
+
+func (c *SandboxController) updateServices(
+	ctx context.Context,
+	co *compute.Sandbox,
+	meta *entity.Meta,
+	ep *network.EndpointConfig,
+) error {
+	sresp, err := c.EAC.List(ctx, entity.Ref(entity.EntityKind, network_v1alpha.KindService))
+	if err != nil {
+		return err
+	}
+
+	md := core_v1alpha.MD(meta.Entity)
+
+	c.Log.Debug("updating services", "id", co.ID, "labels", md.Labels, "services", len(sresp.Values()))
+
+	for _, ent := range sresp.Values() {
+		var srv network_v1alpha.Service
+		srv.Decode(ent.Entity())
+
+		if !srv.Match.Equal(md.Labels) {
+			c.Log.Debug("skipping service, labels do not match", "service", srv.ID, "labels", srv.Match, "entity", md.Labels)
+			spew.Dump(srv.Match, md.Labels)
+			continue
+		}
+
+		err = c.addEndpoint(ctx, co, ep, &srv)
+		if err != nil {
+			return fmt.Errorf("failed to add endpoint: %w", err)
+		}
+	}
+
+	return nil
+}
+
+func (c *SandboxController) addEndpoint(
+	ctx context.Context,
+	sb *compute.Sandbox,
+	ep *network.EndpointConfig,
+	srv *network_v1alpha.Service,
+) error {
+	for _, co := range sb.Container {
+		for _, p := range co.Port {
+			var add bool
+			for _, sp := range srv.Port {
+				if (sp.TargetPort != 0 && p.Port == sp.TargetPort) || p.Port == sp.Port {
+					add = true
+					break
+				}
+			}
+
+			if !add {
+				continue
+			}
+
+			var eps network_v1alpha.Endpoints
+
+			eps.Service = srv.ID
+			eps.Endpoint = append(eps.Endpoint, network_v1alpha.Endpoint{
+				Ip:   ep.Addresses[0].Addr().String(),
+				Port: p.Port,
+			})
+
+			var rpcE entityserver_v1alpha.Entity
+			rpcE.SetAttrs(eps.Encode())
+
+			pr, err := c.EAC.Put(ctx, &rpcE)
+			if err != nil {
+				return fmt.Errorf("failed to update service: %w", err)
+			}
+
+			c.Log.Debug("updated service", "id", pr.Id(), "service", eps.Service)
+		}
+	}
+
+	return nil
 }
 
 func (c *SandboxController) allocateNetwork(
@@ -629,7 +712,7 @@ func (c *SandboxController) allocateNetwork(
 		}
 
 		co.Network = append(co.Network, compute.Network{
-			Address: ep.Addresses[0].String(),
+			Address: ep.Addresses[0].Addr().String(),
 			Subnet:  c.Bridge,
 		})
 	}

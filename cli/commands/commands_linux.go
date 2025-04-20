@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"log/slog"
+	"net/netip"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -74,9 +75,12 @@ func (c *Context) setupServerComponents(ctx context.Context, reg *asm.Registry) 
 
 	reg.Register("data-path", "/var/lib/runtime")
 
+	reg.Register("ip4-routable", netip.MustParsePrefix("10.8.0.0/16"))
+
 	reg.ProvideName("subnet", func(opts struct {
-		Dir string `asm:"data-path"`
-		Id  string `asm:"server-id"`
+		Dir    string       `asm:"data-path"`
+		Id     string       `asm:"server-id"`
+		Prefix netip.Prefix `asm:"ip4-routable"`
 	}) (*netdb.Subnet, error) {
 		os.MkdirAll(opts.Dir, 0755)
 		ndb, err := netdb.New(filepath.Join(opts.Dir, "net.db"))
@@ -84,13 +88,15 @@ func (c *Context) setupServerComponents(ctx context.Context, reg *asm.Registry) 
 			return nil, fmt.Errorf("failed to open netdb: %w", err)
 		}
 
-		mega, err := ndb.Subnet("10.8.0.0/16")
+		mega, err := ndb.Subnet(opts.Prefix.String())
 		if err != nil {
 			return nil, err
 		}
 
 		return mega.ReserveSubnet(24, opts.Id)
 	})
+
+	reg.Register("service-subnet", netip.MustParsePrefix("10.10.0.0/16"))
 
 	reg.Register("clickhouse-address", "clickhouse:9000")
 	reg.Register("postgres-address", "postgres:5432")

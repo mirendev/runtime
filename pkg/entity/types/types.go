@@ -1,6 +1,9 @@
 package types
 
-import "strings"
+import (
+	"slices"
+	"strings"
+)
 
 type (
 	Id      string
@@ -32,6 +35,20 @@ func (l Labels) Get(key string) (string, bool) {
 	}
 
 	return "", false
+}
+
+func (l Labels) Equal(o Labels) bool {
+	if len(l) != len(o) {
+		return false
+	}
+
+	for _, a := range l {
+		if !slices.Contains(o, a) {
+			return false
+		}
+	}
+
+	return true
 }
 
 func LabelSet(vals ...string) Labels {

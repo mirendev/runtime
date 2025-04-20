@@ -5,11 +5,13 @@ package commands
 
 import (
 	"net/http"
+	"net/netip"
 	"time"
 
 	"golang.org/x/sync/errgroup"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/components/coordinate"
+	"miren.dev/runtime/components/ipalloc"
 	"miren.dev/runtime/components/runner"
 	"miren.dev/runtime/components/scheduler"
 	"miren.dev/runtime/pkg/rpc"
@@ -37,6 +39,13 @@ func Dev(ctx *Context, opts struct {
 	}
 
 	time.Sleep(time.Second)
+
+	subnets := []netip.Prefix{
+		netip.MustParsePrefix("10.10.0.0/16"),
+		netip.MustParsePrefix("fd47:cafe:d00d::/64"),
+	}
+
+	ctx.Server.Register("service-prefixes", subnets)
 
 	r := runner.NewRunner(ctx.Log, ctx.Server, runner.RunnerConfig{
 		Id:            opts.RunnerId,
@@ -72,6 +81,11 @@ func Dev(ctx *Context, opts struct {
 
 	eg.Go(func() error {
 		return sch.Watch(sub, eac)
+	})
+
+	ipa := ipalloc.NewAllocator(ctx.Log, subnets)
+	eg.Go(func() error {
+		return ipa.Watch(sub, eac)
 	})
 
 	hs := httpingress.NewServer(ctx.Log, eac)

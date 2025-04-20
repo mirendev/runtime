@@ -15,6 +15,7 @@ import (
 	"miren.dev/runtime/api/ingress/ingress_v1alpha"
 	"miren.dev/runtime/discovery"
 	"miren.dev/runtime/pkg/entity"
+	"miren.dev/runtime/pkg/entity/types"
 	"miren.dev/runtime/pkg/rpc/stream"
 )
 
@@ -128,7 +129,8 @@ func (h *Server) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	var rpcE entityserver_v1alpha.Entity
 	rpcE.SetAttrs(entity.Attrs(
 		(&core_v1alpha.Metadata{
-			Name: ver,
+			Name:   ver,
+			Labels: types.LabelSet("app", appMD.Name),
 		}).Encode,
 		sb.Encode,
 	))

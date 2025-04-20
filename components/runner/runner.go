@@ -9,7 +9,9 @@ import (
 	"miren.dev/runtime/api/compute/compute_v1alpha"
 	"miren.dev/runtime/api/core/core_v1alpha"
 	es "miren.dev/runtime/api/entityserver/entityserver_v1alpha"
+	"miren.dev/runtime/api/network/network_v1alpha"
 	"miren.dev/runtime/controllers/sandbox"
+	"miren.dev/runtime/controllers/service"
 	"miren.dev/runtime/pkg/asm"
 	"miren.dev/runtime/pkg/controller"
 	"miren.dev/runtime/pkg/entity"
@@ -140,8 +142,15 @@ func (r *Runner) SetupControllers(
 ) {
 	cm := controller.NewControllerManager()
 
+	r.reg.Register("entity-client", eas)
+
 	var sbc sandbox.SandboxController
 	if err := r.reg.Populate(&sbc); err != nil {
+		return nil, err
+	}
+
+	var serviceController service.ServiceController
+	if err := r.reg.Populate(&serviceController); err != nil {
 		return nil, err
 	}
 
@@ -151,6 +160,11 @@ func (r *Runner) SetupControllers(
 	}
 
 	err := sbc.Init(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	err = serviceController.Init(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -171,6 +185,30 @@ func (r *Runner) SetupControllers(
 			eas,
 			controller.AdaptController(&sbc),
 			time.Minute,
+			workers,
+		),
+	)
+
+	cm.AddController(
+		controller.NewReconcileController(
+			"service",
+			log,
+			entity.Ref(entity.EntityKind, network_v1alpha.KindService),
+			eas,
+			controller.AdaptController(&serviceController),
+			time.Minute,
+			workers,
+		),
+	)
+
+	cm.AddController(
+		controller.NewReconcileController(
+			"endpoints",
+			log,
+			entity.Ref(entity.EntityKind, network_v1alpha.KindEndpoints),
+			eas,
+			serviceController.UpdateEndpoints,
+			0,
 			workers,
 		),
 	)

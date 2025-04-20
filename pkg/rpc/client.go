@@ -89,6 +89,8 @@ func (c *Client) NewCapability(i *Interface, lower any) *Capability {
 	} else if c.localClient != nil {
 		return c.localClient.NewCapability(i)
 	} else {
+		c.State.server.mu.Lock()
+		defer c.State.server.mu.Unlock()
 		return c.State.server.assignCapability(i, c.capa.Issuer, c.serverObservedAddress, "")
 	}
 }

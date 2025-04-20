@@ -255,6 +255,9 @@ func (s *Server) reexportCapability(target OID, cur *heldCapability, pub ed25519
 
 	hc.refs.Add(1)
 
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	s.objects[oid] = hc
 
 	return capa
@@ -685,7 +688,11 @@ func (s *Server) handleCalls(w http.ResponseWriter, r *http.Request) {
 
 	defer r.Body.Close()
 
-	if iface, ok := s.objects[oid]; ok {
+	s.mu.Lock()
+	iface, ok := s.objects[oid]
+	s.mu.Unlock()
+
+	if ok {
 		iface.touch()
 
 		mm := iface.methods[method]
