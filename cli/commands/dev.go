@@ -4,16 +4,22 @@
 package commands
 
 import (
+	"fmt"
 	"net/http"
 	"net/netip"
+	"os"
+	"path/filepath"
 	"time"
 
+	"github.com/davecgh/go-spew/spew"
 	"golang.org/x/sync/errgroup"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/components/coordinate"
 	"miren.dev/runtime/components/ipalloc"
 	"miren.dev/runtime/components/runner"
 	"miren.dev/runtime/components/scheduler"
+	"miren.dev/runtime/pkg/grunge"
+	"miren.dev/runtime/pkg/netdb"
 	"miren.dev/runtime/pkg/rpc"
 	"miren.dev/runtime/servers/httpingress"
 )
@@ -45,7 +51,66 @@ func Dev(ctx *Context, opts struct {
 		netip.MustParsePrefix("fd47:cafe:d00d::/64"),
 	}
 
+	reg := ctx.Server
+
 	ctx.Server.Register("service-prefixes", subnets)
+
+	gn, err := grunge.NewNetwork(ctx.Log, grunge.NetworkOptions{
+		EtcdEndpoints: opts.EtcdEndpoints,
+		EtcdPrefix:    opts.EtcdPrefix + "/sub/flannel",
+	})
+	if err != nil {
+		ctx.Log.Error("failed to create grunge network", "error", err)
+		return err
+	}
+
+	err = gn.SetupConfig(ctx,
+		netip.MustParsePrefix("10.8.0.0/16"),
+		netip.MustParsePrefix("fd47:ace::/64"),
+	)
+	if err != nil {
+		ctx.Log.Error("failed to setup grunge network", "error", err)
+		return err
+	}
+
+	err = gn.Start(sub)
+	if err != nil {
+		ctx.Log.Error("failed to start grunge network", "error", err)
+		return err
+	}
+
+	lease := gn.Lease()
+
+	ctx.Log.Info("leased IP prefixes", "ipv4", lease.IPv4().String(), "ipv6", lease.IPv6().String())
+
+	leases, err := gn.AllLeases(ctx)
+	if err != nil {
+		ctx.Log.Error("failed to get all leases", "error", err)
+		return err
+	}
+
+	ctx.Log.Info("cluster leases", "leasees", spew.Sdump(leases))
+
+	reg.Register("ip4-routable", lease.IPv4())
+
+	reg.ProvideName("subnet", func(opts struct {
+		Dir    string       `asm:"data-path"`
+		Id     string       `asm:"server-id"`
+		Prefix netip.Prefix `asm:"ip4-routable"`
+	}) (*netdb.Subnet, error) {
+		os.MkdirAll(opts.Dir, 0755)
+		ndb, err := netdb.New(filepath.Join(opts.Dir, "net.db"))
+		if err != nil {
+			return nil, fmt.Errorf("failed to open netdb: %w", err)
+		}
+
+		sub, err := ndb.Subnet(opts.Prefix.String())
+		if err != nil {
+			return nil, err
+		}
+
+		return sub, nil
+	})
 
 	r := runner.NewRunner(ctx.Log, ctx.Server, runner.RunnerConfig{
 		Id:            opts.RunnerId,
