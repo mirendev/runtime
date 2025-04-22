@@ -6,6 +6,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -294,18 +295,18 @@ func (s *Server) checkIdentity(r *http.Request) (string, bool) {
 
 	t, err := time.Parse(time.RFC3339Nano, ts)
 	if err != nil {
-		s.state.log.Info("Failed to parse timestamp", "error", err)
+		s.state.log.Warn("Failed to parse timestamp", "error", err)
 		return "", false
 	}
 
 	if time.Since(t) > 10*time.Minute {
-		s.state.log.Info("Timestamp too old", "timestamp", t)
+		s.state.log.Warn("Timestamp too old", "timestamp", t)
 		return "", false
 	}
 
 	sign := r.Header.Get("rpc-signature")
 	if sign == "" {
-		s.state.log.Info("No signature provided")
+		s.state.log.Warn("No signature provided")
 		return "", false
 	}
 
@@ -315,7 +316,7 @@ func (s *Server) checkIdentity(r *http.Request) (string, bool) {
 
 	bsign, err := base58.Decode(sign)
 	if err != nil {
-		s.state.log.Info("Failed to decode signature", "error", err)
+		s.state.log.Warn("Failed to decode signature", "error", err)
 		return "", false
 	}
 
@@ -329,12 +330,12 @@ func (s *Server) checkIdentity(r *http.Request) (string, bool) {
 	pub := ed25519.PublicKey(key)
 
 	if len(pub) != ed25519.PublicKeySize {
-		s.state.log.Info("Invalid public key size", "size", len(pub))
+		s.state.log.Warn("Invalid public key size", "size", len(pub))
 		return "", false
 	}
 
 	if !ed25519.Verify(pub, buf.Bytes(), bsign) {
-		s.state.log.Info("Failed to verify signature")
+		s.state.log.Warn("Failed to verify signature")
 		return "", false
 	}
 
@@ -498,11 +499,6 @@ func (s *Server) reresolve(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	} else if res, ok := s.resolvers[rs.Category]; ok {
-		s.state.log.Info("attempting to resolve data",
-			"category", rs.Category,
-			"interface", rs.Interface,
-			"resolvers", len(s.resolvers),
-		)
 		iface, err = res.ReconstructFromState(&rs)
 		if err != nil {
 			cbor.NewEncoder(w).Encode(lookupResponse{Error: "failed to resolve: " + err.Error()})
@@ -530,8 +526,6 @@ func (s *Server) reresolve(w http.ResponseWriter, r *http.Request) {
 	if ca != "" {
 		ca = s.state.transport.Conn.LocalAddr().String()
 	}
-
-	//s.state.log.Info("Lookup", "name", name)
 
 	// TODO: add condition codes to the error response rather than just a string
 	pkdata, err := base58.Decode(pk)
@@ -607,27 +601,27 @@ func (s *Server) authRequest(r *http.Request, w http.ResponseWriter, oid OID) (e
 	ts := r.Header.Get("rpc-timestamp")
 
 	if ts == "" {
-		s.state.log.Info("No timestamp provided for authentication")
+		s.state.log.Warn("No timestamp provided for authentication")
 		http.Error(w, "no timestamp provided", http.StatusForbidden)
 		return nil, false
 	}
 
 	t, err := time.Parse(time.RFC3339Nano, ts)
 	if err != nil {
-		s.state.log.Info("Failed to parse timestamp", "error", err)
+		s.state.log.Warn("Failed to parse timestamp", "error", err)
 		http.Error(w, "failed to parse timestamp", http.StatusForbidden)
 		return nil, false
 	}
 
 	if time.Since(t) > 10*time.Minute {
-		s.state.log.Info("Timestamp too old", "timestamp", t)
+		s.state.log.Warn("Timestamp too old", "timestamp", t)
 		http.Error(w, "timestamp too old", http.StatusForbidden)
 		return nil, false
 	}
 
 	sign := r.Header.Get("rpc-signature")
 	if sign == "" {
-		s.state.log.Info("No signature provided")
+		s.state.log.Warn("No signature provided")
 		http.Error(w, "no signature provided", http.StatusForbidden)
 		return nil, false
 	}
@@ -637,7 +631,6 @@ func (s *Server) authRequest(r *http.Request, w http.ResponseWriter, oid OID) (e
 	s.mu.Unlock()
 
 	if !ok {
-		s.state.log.Info("no capability found", "oid", oid)
 		w.Header().Add("rpc-status", "unknown-capability")
 		w.Header().Add("rpc-error", "unknown capability: "+string(oid))
 		http.Error(w, "unknown capability", http.StatusNotFound)
@@ -650,19 +643,19 @@ func (s *Server) authRequest(r *http.Request, w http.ResponseWriter, oid OID) (e
 
 	bsign, err := base58.Decode(sign)
 	if err != nil {
-		s.state.log.Info("Failed to decode signature", "error", err)
+		s.state.log.Warn("Failed to decode signature", "error", err)
 		http.Error(w, "failed to decode signature", http.StatusForbidden)
 		return nil, false
 	}
 
 	if len(capa.pub) != ed25519.PublicKeySize {
-		s.state.log.Info("Invalid public key size", "size", len(capa.pub))
+		s.state.log.Warn("Invalid public key size", "size", len(capa.pub))
 		http.Error(w, "invalid public key size", http.StatusForbidden)
 		return nil, false
 	}
 
 	if !ed25519.Verify(capa.pub, buf.Bytes(), bsign) {
-		s.state.log.Info("Failed to verify signature")
+		s.state.log.Warn("Failed to verify signature")
 		http.Error(w, "failed to verify signature", http.StatusForbidden)
 		return nil, false
 	}
@@ -673,7 +666,7 @@ func (s *Server) authRequest(r *http.Request, w http.ResponseWriter, oid OID) (e
 func (s *Server) handleCalls(w http.ResponseWriter, r *http.Request) {
 	oid := OID(r.PathValue("oid"))
 
-	s.state.log.Info("server: rpc call", "oid", oid)
+	//s.state.log.Info("server: rpc call", "oid", oid)
 
 	w.Header().Set("Trailer", "rpc-status, rpc-error")
 
@@ -741,7 +734,9 @@ func (s *Server) handleCalls(w http.ResponseWriter, r *http.Request) {
 
 		err := mm.Handler(ctx, call)
 		if err != nil {
-			s.state.log.Error("rpc call errored", "method", mm.InterfaceName+"."+mm.Name, "error", err)
+			if !errors.Is(err, context.Canceled) {
+				s.state.log.Error("rpc call errored", "method", mm.InterfaceName+"."+mm.Name, "error", err)
+			}
 			w.Header().Add("rpc-status", "error")
 			w.Header().Add("rpc-error", err.Error())
 			s.handleError(w, r, err)

@@ -18,6 +18,10 @@ kinds:
         Indicates if the container should use the networking of
         node that it is running on directly
 
+    version:
+      type: ref
+      doc: A reference to the application version entity for the sandbox
+
     network:
       type: component
       doc: Network accessability for the container

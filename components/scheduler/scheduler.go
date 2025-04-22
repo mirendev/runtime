@@ -5,7 +5,6 @@ import (
 	"log/slog"
 	"sync"
 
-	"github.com/davecgh/go-spew/spew"
 	"miren.dev/runtime/api/compute/compute_v1alpha"
 	eas "miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/pkg/cond"
@@ -178,9 +177,6 @@ func (s *Scheduler) assignSandbox(ctx context.Context, ent *entity.Entity, eac *
 		return nil
 	}
 
-	s.log.Error("sandbox attrs")
-	spew.Dump(sandbox.Entity.Attrs)
-
 	se := compute_v1alpha.Schedule{
 		Key: compute_v1alpha.Key{
 			Kind: compute_v1alpha.KindSandbox,
@@ -197,9 +193,6 @@ func (s *Scheduler) assignSandbox(ctx context.Context, ent *entity.Entity, eac *
 	// Create scheduler index attribute
 	//schedIndex := sch.Index(sb.KindSandbox, string(firstNode.ID))
 	//sandbox.Entity.Attrs = append(sandbox.Entity.Attrs, schedIndex)
-
-	s.log.Error("post sandbox attrs")
-	spew.Dump(sandbox.Attrs)
 
 	var rpcE eas.Entity
 	rpcE.SetId(string(sandbox.Entity.ID))

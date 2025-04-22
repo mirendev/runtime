@@ -110,6 +110,8 @@ func (h *Server) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	ver := core_v1alpha.MD(vr.Entity().Entity()).Name
 
 	var sb compute_v1alpha.Sandbox
+	sb.Version = app.ActiveVersion
+
 	sb.Container = append(sb.Container, compute_v1alpha.Container{
 		Name:  "app",
 		Image: av.ImageUrl,

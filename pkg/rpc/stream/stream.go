@@ -162,6 +162,19 @@ func ChanReader[T any](ch <-chan T) RecvStream[T] {
 	return &chanReader[T]{ch: ch}
 }
 
+func ChanWriter[T any](ctx context.Context, rs *RecvStreamClient[T], ch chan<- T) {
+	go func() {
+		for {
+			ret, err := rs.Recv(ctx, 1)
+			if err != nil {
+				return
+			}
+
+			ch <- ret.Value()
+		}
+	}()
+}
+
 type callbackSender[T any] struct {
 	fn func(T) error
 }

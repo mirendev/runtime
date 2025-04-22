@@ -292,9 +292,10 @@ func (c *SandboxController) Close() error {
 }
 
 const (
-	sandboxVersionLabel = "runtime.computer/sandbox-version"
-	sandboxEntityLabel  = "runtime.computer/entity-id"
-	sandboxKindLabel    = "runtime.computer/container-kind"
+	sandboxVersionLabel   = "runtime.computer/sandbox-version"
+	sandboxEntityLabel    = "runtime.computer/entity-id"
+	sandboxVerEntityLabel = "runtime.computer/version-entity"
+	sandboxKindLabel      = "runtime.computer/container-kind"
 )
 
 const (
@@ -725,7 +726,7 @@ func (c *SandboxController) allocateNetwork(
 
 func (c *SandboxController) buildSpec(
 	ctx context.Context,
-	co *compute.Sandbox,
+	sb *compute.Sandbox,
 	ep *network.EndpointConfig,
 	meta *entity.Meta,
 ) (
@@ -760,24 +761,28 @@ func (c *SandboxController) buildSpec(
 
 	lbls := map[string]string{}
 
-	for _, lbl := range co.Labels {
+	for _, lbl := range sb.Labels {
 		if key, val, ok := strings.Cut(lbl, "="); ok {
 			lbls[strings.TrimSpace(key)] = strings.TrimSpace(val)
 		}
 	}
 
 	lbls[sandboxVersionLabel] = strconv.FormatInt(meta.Revision, 10)
-	lbls[sandboxEntityLabel] = co.ID.String()
+	lbls[sandboxEntityLabel] = sb.ID.String()
 	lbls[sandboxKindLabel] = "sandbox"
+
+	if sb.Version != "" {
+		lbls[sandboxVerEntityLabel] = sb.Version.String()
+	}
 
 	//if config.StaticDir != "" {
 	//lbls["runtime.computer/static_dir"] = config.StaticDir
 	//}
 
-	tmpDir := filepath.Join(c.Tempdir, "containerd", co.ID.PathSafe())
+	tmpDir := filepath.Join(c.Tempdir, "containerd", sb.ID.PathSafe())
 	os.MkdirAll(tmpDir, 0755)
 
-	resolvePath := c.sandboxPath(co, "resolv.conf")
+	resolvePath := c.sandboxPath(sb, "resolv.conf")
 	err = c.writeResolve(resolvePath, ep)
 	if err != nil {
 		return nil, err
@@ -818,19 +823,19 @@ func (c *SandboxController) buildSpec(
 
 	cfg := map[string]string{}
 
-	if co.HostNetwork {
+	if sb.HostNetwork {
 		cfg["network"] = "host"
 		specOpts = append(specOpts, oci.WithHostNamespace(specs.NetworkNamespace))
 	}
 
-	cfgPath := c.sandboxPath(co, "runsc.toml")
+	cfgPath := c.sandboxPath(sb, "runsc.toml")
 
 	err = c.setupNewRunscConfig(cfgPath, cfg)
 	if err != nil {
 		return nil, err
 	}
 
-	id := co.ID.String()
+	id := sb.ID.String()
 
 	opts = append(opts,
 		containerd.WithNewSnapshot(id, img),
@@ -1099,6 +1104,10 @@ func (c *SandboxController) buildSubContainerSpec(
 
 	lbls := map[string]string{}
 	lbls[sandboxEntityLabel] = sb.ID.String()
+
+	if sb.Version != "" {
+		lbls[sandboxVerEntityLabel] = sb.Version.String()
+	}
 
 	opts = append(opts,
 		containerd.WithNewSnapshot(id, img),
