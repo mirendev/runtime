@@ -1,0 +1,24 @@
+apiVersion: miren.dev/rpc/v1
+kind: IDL
+
+imports:
+  stream:
+    path: ../../pkg/rpc/stream/stream.yml
+    import: miren.dev/runtime/pkg/rpc/stream
+
+interfaces:
+  - name: SandboxExec
+    methods:
+      - name: exec
+        parameters:
+          - name: id
+            type: string
+          - name: command
+            type: string
+          - name: input
+            type: stream.RecvStream[[]byte]
+          - name: output
+            type: stream.SendStream[[]byte]
+        results:
+          - name: code
+            type: int32

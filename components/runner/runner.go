@@ -9,6 +9,7 @@ import (
 	"miren.dev/runtime/api/compute/compute_v1alpha"
 	"miren.dev/runtime/api/core/core_v1alpha"
 	es "miren.dev/runtime/api/entityserver/entityserver_v1alpha"
+	"miren.dev/runtime/api/exec/exec_v1alpha"
 	"miren.dev/runtime/api/network/network_v1alpha"
 	"miren.dev/runtime/controllers/sandbox"
 	"miren.dev/runtime/controllers/service"
@@ -17,11 +18,13 @@ import (
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/types"
 	"miren.dev/runtime/pkg/rpc"
+	"miren.dev/runtime/servers/exec"
 )
 
 type RunnerConfig struct {
 	Id            string `json:"id" cbor:"id" yaml:"id"`
 	ServerAddress string `json:"server_address" cbor:"server_address" yaml:"server_address"`
+	ListenAddress string `json:"listen_address" cbor:"listen_address" yaml:"listen_address"`
 	Workers       int    `json:"workers" cbor:"workers" yaml:"workers"`
 }
 
@@ -71,7 +74,7 @@ func (r *Runner) ContainerdContainerForSandbox(ctx context.Context, id entity.Id
 func (r *Runner) Start(ctx context.Context) error {
 	r.Log.Info("Starting runner", "id", r.Id)
 
-	rs, err := rpc.NewState(ctx, rpc.WithSkipVerify)
+	rs, err := rpc.NewState(ctx, rpc.WithSkipVerify, rpc.WithBindAddr(r.ListenAddress))
 	if err != nil {
 		return err
 	}
@@ -81,17 +84,29 @@ func (r *Runner) Start(ctx context.Context) error {
 		return err
 	}
 
-	eas := es.EntityAccessClient{Client: client}
+	eas := &es.EntityAccessClient{Client: client}
 
-	cm, err := r.SetupControllers(ctx, &eas)
+	r.reg.Register("entity-client", eas)
+
+	cm, err := r.SetupControllers(ctx, eas)
 	if err != nil {
 		return err
 	}
 
-	err = r.setupEntity(&eas)
+	err = r.setupEntity(eas)
 	if err != nil {
 		return err
 	}
+
+	var es exec.Server
+
+	if err := r.reg.Populate(&es); err != nil {
+		return err
+	}
+
+	rs.Server().ExposeValue("dev.miren.runtime/exec", exec_v1alpha.AdaptSandboxExec(&es))
+
+	r.Log.Info("Registered exec server")
 
 	err = cm.Start(ctx)
 	if err != nil {
@@ -111,6 +126,7 @@ func (r *Runner) setupEntity(eas *es.EntityAccessClient) error {
 	node := compute_v1alpha.Node{
 		Status:      compute_v1alpha.READY,
 		Constraints: types.LabelSet("compute", "generic"),
+		ApiAddress:  r.ListenAddress,
 	}
 
 	md := core_v1alpha.Metadata{

@@ -148,6 +148,12 @@ func (f *TextFormatter) Format(ctx context.Context, ent *entity.Entity) (string,
 		}
 	}
 
+	if len(results) == 0 {
+		return "", fmt.Errorf("no entity found")
+	}
+
+	results[0].Id = ent.ID.String()
+
 	if metadata != nil && len(results) > 0 {
 		results[0].Metadata = metadata
 	}

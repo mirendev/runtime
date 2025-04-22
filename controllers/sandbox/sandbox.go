@@ -294,6 +294,7 @@ func (c *SandboxController) Close() error {
 const (
 	sandboxVersionLabel = "runtime.computer/sandbox-version"
 	sandboxEntityLabel  = "runtime.computer/entity-id"
+	sandboxKindLabel    = "runtime.computer/container-kind"
 )
 
 const (
@@ -767,6 +768,7 @@ func (c *SandboxController) buildSpec(
 
 	lbls[sandboxVersionLabel] = strconv.FormatInt(meta.Revision, 10)
 	lbls[sandboxEntityLabel] = co.ID.String()
+	lbls[sandboxKindLabel] = "sandbox"
 
 	//if config.StaticDir != "" {
 	//lbls["runtime.computer/static_dir"] = config.StaticDir
@@ -1095,6 +1097,9 @@ func (c *SandboxController) buildSubContainerSpec(
 		)
 	}
 
+	lbls := map[string]string{}
+	lbls[sandboxEntityLabel] = sb.ID.String()
+
 	opts = append(opts,
 		containerd.WithNewSnapshot(id, img),
 		containerd.WithNewSpec(specOpts...),
@@ -1102,6 +1107,7 @@ func (c *SandboxController) buildSubContainerSpec(
 			TypeUrl:    "io.containerd.runsc.v1.options",
 			ConfigPath: c.runscConfigPath,
 		}),
+		containerd.WithAdditionalContainerLabels(lbls),
 	)
 
 	return opts, nil

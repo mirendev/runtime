@@ -12,8 +12,10 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"time"
 
+	"github.com/davecgh/go-spew/spew"
 	"github.com/fxamacker/cbor/v2"
 	"github.com/mr-tron/base58"
 	"github.com/pkg/errors"
@@ -161,7 +163,7 @@ func (c *Client) sendIdentity(ctx context.Context) error {
 }
 
 func (c *Client) resolveCapability(name string) error {
-	url := "https://" + c.remote + "/_rpc/lookup/" + name
+	url := "https://" + c.remote + "/_rpc/lookup/" + url.PathEscape(name)
 	c.State.log.Debug("rpc.resolve", "name", name, "url", url)
 	req, err := http.NewRequest(http.MethodPost, url, nil)
 	if err != nil {
@@ -179,6 +181,9 @@ func (c *Client) resolveCapability(name string) error {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
+		data, _ := io.ReadAll(resp.Body)
+		spew.Dump(string(data))
+
 		return errors.Errorf("unexpected status code: %d", resp.StatusCode)
 	}
 

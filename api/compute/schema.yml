@@ -137,6 +137,10 @@ kinds:
       doc: The status of the node
       choices: [unknown, ready, disabled, unhealthy]
 
+    api_address:
+      type: string
+      doc: The address to connect the node at
+
   schedule:
     key:
       type: component

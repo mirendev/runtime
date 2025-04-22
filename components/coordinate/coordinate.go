@@ -6,11 +6,14 @@ import (
 	"time"
 
 	clientv3 "go.etcd.io/etcd/client/v3"
+	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	esv1 "miren.dev/runtime/api/entityserver/entityserver_v1alpha"
+	"miren.dev/runtime/api/exec/exec_v1alpha"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/schema"
 	"miren.dev/runtime/pkg/rpc"
 	"miren.dev/runtime/servers/entityserver"
+	execproxy "miren.dev/runtime/servers/exec_proxy"
 )
 
 type CoordinatorConfig struct {
@@ -74,8 +77,24 @@ func (c *Coordinator) Start(ctx context.Context) error {
 
 	server.ExposeValue("entities", esv1.AdaptEntityAccess(ess))
 
+	loopback, err := rs.Connect(c.Address, "entities")
+	if err != nil {
+		c.Log.Error("failed to connect to RPC server", "error", err)
+		return err
+	}
+
+	eac := &entityserver_v1alpha.EntityAccessClient{Client: loopback}
+
+	eps := execproxy.NewServer(c.Log, eac, rs)
+
+	server.ExposeValue("dev.miren.runtime/exec", exec_v1alpha.AdaptSandboxExec(eps))
+
 	c.state = rs
 
 	c.Log.Info("started RPC server")
 	return nil
+}
+
+func (c *Coordinator) Server() *rpc.Server {
+	return c.state.Server()
 }

@@ -26,6 +26,7 @@ import (
 
 func Dev(ctx *Context, opts struct {
 	Address       string   `short:"a" long:"address" description:"Address to listen on" default:"localhost:8443"`
+	RunnerAddress string   `long:"runner-address" description:"Address to listen on" default:"localhost:8444"`
 	EtcdEndpoints []string `short:"e" long:"etcd" description:"Etcd endpoints" default:"http://etcd:2379"`
 	EtcdPrefix    string   `short:"p" long:"etcd-prefix" description:"Etcd prefix" default:"/miren"`
 	RunnerId      string   `short:"r" long:"runner-id" description:"Runner ID" default:"dev"`
@@ -112,9 +113,29 @@ func Dev(ctx *Context, opts struct {
 		return sub, nil
 	})
 
+	// Setup the core services on the coordinator address for dev
+
+	/*
+		{
+			serv := co.Server()
+
+			var builder build.RPCBuilder
+
+			err = ctx.Server.Populate(&builder)
+			if err != nil {
+				return fmt.Errorf("populating build: %w", err)
+			}
+
+			serv.ExposeValue("dev.miren.runtime/build", build.AdaptBuilder(&builder))
+		}
+	*/
+
+	// Run the runner!
+
 	r := runner.NewRunner(ctx.Log, ctx.Server, runner.RunnerConfig{
 		Id:            opts.RunnerId,
 		ServerAddress: opts.Address,
+		ListenAddress: opts.RunnerAddress,
 		Workers:       runner.DefaulWorkers,
 	})
 
