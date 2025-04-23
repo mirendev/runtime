@@ -809,6 +809,9 @@ func (s *Server) startCallStream(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
 	err = mm.Handler(ctx, call)
 	if err != nil {
 		if !errors.Is(err, context.Canceled) {

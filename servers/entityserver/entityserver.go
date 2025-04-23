@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"slices"
 	"strconv"
@@ -102,7 +103,9 @@ func (e *EntityServer) WatchEntity(ctx context.Context, req *entityserver_v1alph
 
 		_, err = send.Send(ctx, &op)
 		if err != nil {
-			e.Log.Error("failed to send event", "error", err)
+			if !errors.Is(err, context.Canceled) && !errors.Is(err, io.EOF) {
+				e.Log.Error("failed to send event", "error", err)
+			}
 			return nil
 		}
 	}
@@ -151,7 +154,9 @@ func (e *EntityServer) WatchEntity(ctx context.Context, req *entityserver_v1alph
 
 			_, err = send.Send(ctx, &op)
 			if err != nil {
-				e.Log.Error("failed to send event", "error", err)
+				if !errors.Is(err, context.Canceled) && !errors.Is(err, io.EOF) {
+					e.Log.Error("failed to send event", "error", err)
+				}
 				return nil
 			}
 		}
@@ -295,7 +300,9 @@ func (e *EntityServer) WatchIndex(ctx context.Context, req *entityserver_v1alpha
 
 				_, err = send.Send(ctx, &op)
 				if err != nil {
-					e.Log.Error("failed to send event", "error", err)
+					if !errors.Is(err, context.Canceled) && !errors.Is(err, io.EOF) {
+						e.Log.Error("failed to send event", "error", err)
+					}
 					return nil
 				}
 			}

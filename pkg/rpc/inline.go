@@ -3,7 +3,9 @@ package rpc
 import (
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
+	"time"
 
 	"github.com/fxamacker/cbor/v2"
 	"miren.dev/runtime/pkg/webtransport"
@@ -37,15 +39,43 @@ func (c *inlineClient) Call(ctx context.Context, method string, args any, ret an
 	dec := cbor.NewDecoder(str)
 
 	var rr refResponse
-	dec.Decode(&rr)
+
+	for {
+		ts := time.Now().Add(1 * time.Second)
+		str.SetReadDeadline(ts)
+
+		err = dec.Decode(&rr)
+		if err == nil {
+			break
+		}
+
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+
+		if to, ok := err.(interface {
+			Timeout() bool
+		}); ok && to.Timeout() {
+			continue
+		}
+
+		return err
+	}
 
 	switch rr.Status {
 	case "error":
+		if rr.Error == "EOF" {
+			return io.EOF
+		}
 		return fmt.Errorf("call error: %s", rr.Error)
 	case "ok":
 		return dec.Decode(ret)
 	default:
-		return fmt.Errorf("unknown response status: %s", rr.Status)
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+
+		return fmt.Errorf("unknown response status to %s/%s: %s: %w", c.oid, method, rr.Status, err)
 	}
 }
 

@@ -105,6 +105,9 @@ func (s *Server) Exec(ctx context.Context, req *exec_v1alpha.SandboxExecExec) er
 		return err
 	}
 
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
 	input := stream.ToReader(ctx, args.Input())
 	output := stream.ToWriter(ctx, args.Output())
 

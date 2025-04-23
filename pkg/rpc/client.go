@@ -629,9 +629,11 @@ func (c *Client) handleCallStream(
 									Error:  "unknown method",
 								})
 							} else {
+								ctx, cancel := context.WithCancel(ctx)
 								err := c.callInline(ctx, mm, rs.OID, rs.Method, iface.Interface, enc, dec)
+								cancel()
 								if err != nil {
-									if !errors.Is(err, context.Canceled) {
+									if !errors.Is(err, context.Canceled) && !errors.Is(err, io.EOF) {
 										c.State.log.Error("rpc.callstream: error calling inline", "error", err)
 									}
 									return
