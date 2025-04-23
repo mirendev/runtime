@@ -65,7 +65,11 @@ func (r *rscReader) Read(p []byte) (n int, err error) {
 	return copy(p, data), nil
 }
 
-func ToReader(ctx context.Context, x *RecvStreamClient[[]byte]) io.Reader {
+func (r *rscReader) Close() error {
+	return r.rsc.Close()
+}
+
+func ToReader(ctx context.Context, x *RecvStreamClient[[]byte]) io.ReadCloser {
 	return &rscReader{ctx: ctx, rsc: x}
 }
 
@@ -136,7 +140,11 @@ func (w *wscWriter) Write(p []byte) (n int, err error) {
 	return int(result.Count()), nil
 }
 
-func ToWriter(ctx context.Context, x *SendStreamClient[[]byte]) io.Writer {
+func (w *wscWriter) Close() error {
+	return w.wsc.Close()
+}
+
+func ToWriter(ctx context.Context, x *SendStreamClient[[]byte]) io.WriteCloser {
 	return &wscWriter{ctx: ctx, wsc: x}
 }
 
@@ -164,6 +172,8 @@ func ChanReader[T any](ch <-chan T) RecvStream[T] {
 
 func ChanWriter[T any](ctx context.Context, rs *RecvStreamClient[T], ch chan<- T) {
 	go func() {
+		defer rs.Close()
+
 		for {
 			ret, err := rs.Recv(ctx, 1)
 			if err != nil {

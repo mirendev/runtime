@@ -107,6 +107,9 @@ func (s *Server) Exec(ctx context.Context, req *exec_v1alpha.SandboxExecExec) er
 	r := stream.ToReader(ctx, args.Input())
 	w := stream.ToWriter(ctx, args.Output())
 
+	defer r.Close()
+	defer w.Close()
+
 	ch := make(chan *exec_v1alpha.WindowSize, 1)
 
 	ws := stream.ChanReader(ch)

@@ -108,6 +108,9 @@ func (s *Server) Exec(ctx context.Context, req *exec_v1alpha.SandboxExecExec) er
 	input := stream.ToReader(ctx, args.Input())
 	output := stream.ToWriter(ctx, args.Output())
 
+	defer input.Close()
+	defer output.Close()
+
 	if args.HasWindowUpdates() {
 		ch := make(chan *exec_v1alpha.WindowSize)
 		stream.ChanWriter(ctx, args.WindowUpdates(), ch)
@@ -168,8 +171,6 @@ func (s *Server) Exec(ctx context.Context, req *exec_v1alpha.SandboxExecExec) er
 
 	select {
 	case <-ctx.Done():
-		args.Input().Close()
-		args.Output().Close()
 		req.Results().SetCode(int32(130))
 		proc.Kill(context.Background(), 9)
 		return ctx.Err()
