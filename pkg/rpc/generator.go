@@ -1665,16 +1665,30 @@ func (g *Generator) generateClient(f *j.File, i *DescInterface) error {
 		}).Params(j.Op("*").Add(i.typeName(tn+"Results")), j.Error()).BlockFunc(func(gr *j.Group) {
 			gr.Id("args").Op(":= ").Add(i.typeName(capitalize(i.Name) + capitalize(m.Name) + "Args")).Values()
 
+			hasCaps := false
 			for _, p := range m.Parameters {
 				if g.ti(p.Type).isInterface {
-					gr.Id("args").Dot("data").Dot(toCamal(p.Name)).Op("=").Id("v").Dot("Client").Dot("NewCapability").CallFunc(func(gr *j.Group) {
-						if g.isImported(p.Type) {
-							iname, tname := g.splitType(p.Type)
-							gr.Qual(g.Imports[iname].Import, "Adapt"+tname).Call(j.Id(p.Name))
-						} else {
-							gr.Id("Adapt" + capitalize(p.Type)).Call(j.Id(private(p.Name)))
-						}
-						gr.Id(private(p.Name))
+					gr.Id("caps").Op(":=").Map(j.Qual(rpc, "OID")).Op("*").Qual(rpc, "InlineCapability").Values()
+					hasCaps = true
+					break
+				}
+			}
+
+			for _, p := range m.Parameters {
+				if g.ti(p.Type).isInterface {
+					gr.BlockFunc(func(gr *j.Group) {
+						gr.List(j.Id("ic"), j.Id("oid"), j.Id("c")).Op(":=").Id("v").Dot("Client").Dot("NewInlineCapability").
+							CallFunc(func(gr *j.Group) {
+								if g.isImported(p.Type) {
+									iname, tname := g.splitType(p.Type)
+									gr.Qual(g.Imports[iname].Import, "Adapt"+tname).Call(j.Id(p.Name))
+								} else {
+									gr.Id("Adapt" + capitalize(p.Type)).Call(j.Id(private(p.Name)))
+								}
+								gr.Id(private(p.Name))
+							})
+						gr.Id("args").Dot("data").Dot(toCamal(p.Name)).Op("=").Id("c")
+						gr.Id("caps").Index(j.Id("oid")).Op("=").Id("ic")
 					})
 				} else if g.ti(p.Type).isMessage {
 					gr.Id("args").Dot("data").Dot(toCamal(p.Name)).Op("=").Id(private(p.Name))
@@ -1692,12 +1706,23 @@ func (g *Generator) generateClient(f *j.File, i *DescInterface) error {
 
 			gr.Line()
 
-			gr.Id("err").Op(":=").Id("v").Dot("Client").Dot("Call").Call(
-				j.Id("ctx"),
-				j.Lit(m.Name),
-				j.Op("&").Id("args"),
-				j.Op("&").Id("ret"),
-			)
+			if hasCaps {
+				gr.Id("err").Op(":=").Id("v").Dot("Client").Dot("CallWithCaps").Call(
+					j.Id("ctx"),
+					j.Lit(m.Name),
+					j.Op("&").Id("args"),
+					j.Op("&").Id("ret"),
+					j.Id("caps"),
+				)
+
+			} else {
+				gr.Id("err").Op(":=").Id("v").Dot("Client").Dot("Call").Call(
+					j.Id("ctx"),
+					j.Lit(m.Name),
+					j.Op("&").Id("args"),
+					j.Op("&").Id("ret"),
+				)
+			}
 			gr.If(j.Id("err").Op("!=").Nil()).Block(
 				j.Return(j.Nil(), j.Id("err")),
 			)

@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"slices"
@@ -20,6 +21,7 @@ import (
 	"github.com/quic-go/quic-go/http3"
 	"miren.dev/runtime/pkg/packet"
 	"miren.dev/runtime/pkg/slogfmt"
+	"miren.dev/runtime/pkg/webtransport"
 )
 
 var (
@@ -73,6 +75,7 @@ type State struct {
 
 	server *Server
 	hs     *http3.Server
+	ws     *webtransport.Server
 	li     *quic.EarlyListener
 
 	localMP *packet.PacketConnMultiplex
@@ -384,19 +387,30 @@ func (s *State) startListener(ctx context.Context, so *stateOptions) error {
 		return err
 	}
 
-	serv := &http3.Server{
-		Handler: s.server,
-		Logger:  s.log.With("module", "http3"),
+	s.ws = &webtransport.Server{
+		H3: http3.Server{
+			Handler: s.server,
+			Logger:  s.log.With("module", "http3"),
+		},
+		CheckOrigin: func(r *http.Request) bool {
+			return true
+		},
 	}
 
-	s.hs = serv
+	s.hs = &s.ws.H3
+	s.server.ws = s.ws
 
 	go func() {
 		<-ctx.Done()
-		serv.Shutdown(context.Background())
+		s.hs.Shutdown(context.Background())
 	}()
 
-	go serv.ServeListener(s.li)
+	err = s.ws.Init()
+	if err != nil {
+		return err
+	}
+
+	go s.hs.ServeListener(s.li)
 
 	return nil
 }

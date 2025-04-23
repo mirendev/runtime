@@ -12,6 +12,8 @@ import (
 	"miren.dev/runtime/pkg/rpc/stream"
 )
 
+//go:generate go run ./cmd/rpcgen -input example/rpc.yml -output example/rpc.go -pkg example
+
 type exampleMeter struct {
 	temp float32
 }
@@ -199,6 +201,7 @@ func TestRPC(t *testing.T) {
 		r.Equal("test", up.reading.Meter())
 		r.Equal(float32(42), up.reading.Temperature())
 
+		time.Sleep(100 * time.Millisecond) // wait for goroutine running close
 		r.True(up.closed)
 	})
 

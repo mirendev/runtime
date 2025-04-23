@@ -7,13 +7,13 @@ import (
 	"net/http"
 
 	"github.com/fxamacker/cbor/v2"
+	"miren.dev/runtime/pkg/webtransport"
 )
-
-//go:generate go run ./cmd/rpcgen -pkg=format -input=format/rpc.yml -output=format/rpc.gen.go -pkg=format
 
 type Call struct {
 	s        *Server
 	r        *http.Request
+	dec      *cbor.Decoder
 	oid      OID
 	method   string
 	category string
@@ -24,8 +24,13 @@ type Call struct {
 
 	results any
 
+	inline bool
+
 	argData []byte
 	local   *localCall
+
+	ctrl      *controlStream
+	wsSession *webtransport.Session
 }
 
 func (c *Call) String() string {
@@ -35,6 +40,8 @@ func (c *Call) String() string {
 func (c *Call) Args(v any) {
 	if c.argData != nil {
 		cbor.Unmarshal(c.argData, v)
+	} else if c.dec != nil {
+		c.dec.Decode(v)
 	} else {
 		cbor.NewDecoder(c.r.Body).Decode(v)
 	}
@@ -53,9 +60,7 @@ func (c *Call) NewCapability(i *Interface) *Capability {
 		return c.local.NewCapability(i)
 	}
 
-	c.s.mu.Lock()
-	defer c.s.mu.Unlock()
-	return c.s.assignCapability(i, c.caller, "", c.category)
+	return c.s.assignCapability(i, c.caller, "", c.category, true)
 }
 
 func (c *Call) NewClient(capa *Capability) *Client {
@@ -63,5 +68,15 @@ func (c *Call) NewClient(capa *Capability) *Client {
 		return c.local.NewClient(capa)
 	}
 
-	return c.s.state.newClientFrom(capa, c.peer)
+	client := c.s.state.newClientFrom(capa, c.peer)
+	if capa.Inline {
+		client.inlineClient = &inlineClient{
+			log:     c.s.state.log,
+			oid:     capa.OID,
+			ctrl:    c.ctrl,
+			session: c.wsSession,
+		}
+	}
+
+	return client
 }

@@ -384,17 +384,30 @@ func (v *SandboxExecClientExecResults) Code() int32 {
 
 func (v SandboxExecClient) Exec(ctx context.Context, category string, value string, command string, options *ShellOptions, input stream.RecvStream[[]byte], output stream.SendStream[[]byte], window_updates stream.RecvStream[*WindowSize]) (*SandboxExecClientExecResults, error) {
 	args := SandboxExecExecArgs{}
+	caps := map[rpc.OID]*rpc.InlineCapability{}
 	args.data.Category = &category
 	args.data.Value = &value
 	args.data.Command = &command
 	args.data.Options = options
-	args.data.Input = v.Client.NewCapability(stream.AdaptRecvStream[[]byte](input), input)
-	args.data.Output = v.Client.NewCapability(stream.AdaptSendStream[[]byte](output), output)
-	args.data.WindowUpdates = v.Client.NewCapability(stream.AdaptRecvStream[*WindowSize](window_updates), window_updates)
+	{
+		ic, oid, c := v.Client.NewInlineCapability(stream.AdaptRecvStream[[]byte](input), input)
+		args.data.Input = c
+		caps[oid] = ic
+	}
+	{
+		ic, oid, c := v.Client.NewInlineCapability(stream.AdaptSendStream[[]byte](output), output)
+		args.data.Output = c
+		caps[oid] = ic
+	}
+	{
+		ic, oid, c := v.Client.NewInlineCapability(stream.AdaptRecvStream[*WindowSize](window_updates), window_updates)
+		args.data.WindowUpdates = c
+		caps[oid] = ic
+	}
 
 	var ret sandboxExecExecResultsData
 
-	err := v.Client.Call(ctx, "exec", &args, &ret)
+	err := v.Client.CallWithCaps(ctx, "exec", &args, &ret, caps)
 	if err != nil {
 		return nil, err
 	}

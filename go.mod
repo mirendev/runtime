@@ -242,6 +242,7 @@ require (
 	github.com/prometheus/common v0.55.0 // indirect
 	github.com/prometheus/procfs v0.15.1 // indirect
 	github.com/quic-go/qpack v0.5.1 // indirect
+	github.com/quic-go/webtransport-go v0.8.0 // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect
 	github.com/safchain/ethtool v0.5.9 // indirect
 	github.com/secure-systems-lab/go-securesystemslib v0.4.0 // indirect

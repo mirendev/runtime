@@ -872,11 +872,16 @@ type MeterUpdatesClientRegisterUpdatesResults struct {
 
 func (v MeterUpdatesClient) RegisterUpdates(ctx context.Context, recv UpdateReceiver) (*MeterUpdatesClientRegisterUpdatesResults, error) {
 	args := MeterUpdatesRegisterUpdatesArgs{}
-	args.data.Recv = v.Client.NewCapability(AdaptUpdateReceiver(recv), recv)
+	caps := map[rpc.OID]*rpc.InlineCapability{}
+	{
+		ic, oid, c := v.Client.NewInlineCapability(AdaptUpdateReceiver(recv), recv)
+		args.data.Recv = c
+		caps[oid] = ic
+	}
 
 	var ret meterUpdatesRegisterUpdatesResultsData
 
-	err := v.Client.Call(ctx, "registerUpdates", &args, &ret)
+	err := v.Client.CallWithCaps(ctx, "registerUpdates", &args, &ret, caps)
 	if err != nil {
 		return nil, err
 	}
@@ -1015,11 +1020,16 @@ type AdjustTempClientAdjustResults struct {
 
 func (v AdjustTempClient) Adjust(ctx context.Context, setter SetTemp) (*AdjustTempClientAdjustResults, error) {
 	args := AdjustTempAdjustArgs{}
-	args.data.Setter = v.Client.NewCapability(AdaptSetTemp(setter), setter)
+	caps := map[rpc.OID]*rpc.InlineCapability{}
+	{
+		ic, oid, c := v.Client.NewInlineCapability(AdaptSetTemp(setter), setter)
+		args.data.Setter = c
+		caps[oid] = ic
+	}
 
 	var ret adjustTempAdjustResultsData
 
-	err := v.Client.Call(ctx, "adjust", &args, &ret)
+	err := v.Client.CallWithCaps(ctx, "adjust", &args, &ret, caps)
 	if err != nil {
 		return nil, err
 	}
@@ -1301,11 +1311,16 @@ type EmitTempsClientEmitResults struct {
 
 func (v EmitTempsClient) Emit(ctx context.Context, emitter stream.SendStream[float32]) (*EmitTempsClientEmitResults, error) {
 	args := EmitTempsEmitArgs{}
-	args.data.Emitter = v.Client.NewCapability(stream.AdaptSendStream[float32](emitter), emitter)
+	caps := map[rpc.OID]*rpc.InlineCapability{}
+	{
+		ic, oid, c := v.Client.NewInlineCapability(stream.AdaptSendStream[float32](emitter), emitter)
+		args.data.Emitter = c
+		caps[oid] = ic
+	}
 
 	var ret emitTempsEmitResultsData
 
-	err := v.Client.Call(ctx, "emit", &args, &ret)
+	err := v.Client.CallWithCaps(ctx, "emit", &args, &ret, caps)
 	if err != nil {
 		return nil, err
 	}

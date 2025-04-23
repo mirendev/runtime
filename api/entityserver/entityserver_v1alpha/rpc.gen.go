@@ -1606,12 +1606,17 @@ type EntityAccessClientWatchIndexResults struct {
 
 func (v EntityAccessClient) WatchIndex(ctx context.Context, index entity.Attr, values stream.SendStream[*EntityOp]) (*EntityAccessClientWatchIndexResults, error) {
 	args := EntityAccessWatchIndexArgs{}
+	caps := map[rpc.OID]*rpc.InlineCapability{}
 	args.data.Index = &index
-	args.data.Values = v.Client.NewCapability(stream.AdaptSendStream[*EntityOp](values), values)
+	{
+		ic, oid, c := v.Client.NewInlineCapability(stream.AdaptSendStream[*EntityOp](values), values)
+		args.data.Values = c
+		caps[oid] = ic
+	}
 
 	var ret entityAccessWatchIndexResultsData
 
-	err := v.Client.Call(ctx, "watch_index", &args, &ret)
+	err := v.Client.CallWithCaps(ctx, "watch_index", &args, &ret, caps)
 	if err != nil {
 		return nil, err
 	}
@@ -1626,12 +1631,17 @@ type EntityAccessClientWatchEntityResults struct {
 
 func (v EntityAccessClient) WatchEntity(ctx context.Context, id string, updates stream.SendStream[*EntityOp]) (*EntityAccessClientWatchEntityResults, error) {
 	args := EntityAccessWatchEntityArgs{}
+	caps := map[rpc.OID]*rpc.InlineCapability{}
 	args.data.Id = &id
-	args.data.Updates = v.Client.NewCapability(stream.AdaptSendStream[*EntityOp](updates), updates)
+	{
+		ic, oid, c := v.Client.NewInlineCapability(stream.AdaptSendStream[*EntityOp](updates), updates)
+		args.data.Updates = c
+		caps[oid] = ic
+	}
 
 	var ret entityAccessWatchEntityResultsData
 
-	err := v.Client.Call(ctx, "watch_entity", &args, &ret)
+	err := v.Client.CallWithCaps(ctx, "watch_entity", &args, &ret, caps)
 	if err != nil {
 		return nil, err
 	}

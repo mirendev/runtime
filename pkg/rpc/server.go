@@ -20,6 +20,7 @@ import (
 	"github.com/mr-tron/base58"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/propagation"
+	"miren.dev/runtime/pkg/webtransport"
 )
 
 func init() {
@@ -54,6 +55,7 @@ type Server struct {
 	resolvers map[string]HasReconstructFromState
 
 	mux *http.ServeMux
+	ws  *webtransport.Server
 }
 
 type heldInterface struct {
@@ -175,7 +177,7 @@ func (s *Server) ExposeValue(name string, iface *Interface) {
 
 const BootstrapOID = "!bootstrap"
 
-func (s *Server) assignCapability(i *Interface, pub ed25519.PublicKey, contactAddr string, category string) *Capability {
+func (s *Server) assignCapability(i *Interface, pub ed25519.PublicKey, contactAddr string, category string, inline bool) *Capability {
 	if len(pub) != ed25519.PublicKeySize {
 		panic("bad key!!!")
 	}
@@ -194,6 +196,11 @@ func (s *Server) assignCapability(i *Interface, pub ed25519.PublicKey, contactAd
 		User:    pub,
 		Issuer:  s.state.pubkey,
 		Address: contactAddr,
+		Inline:  inline,
+	}
+
+	if inline {
+		capa.Address = ""
 	}
 
 	hc := &heldCapability{
@@ -219,6 +226,9 @@ func (s *Server) assignCapability(i *Interface, pub ed25519.PublicKey, contactAd
 			Interface: i.name,
 		}
 	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
 	hc.refs.Add(1)
 
@@ -268,6 +278,7 @@ func (s *Server) setupMux() {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("POST /_rpc/call/{oid}/{method}", s.handleCalls)
+	mux.HandleFunc("CONNECT /_rpc/callstream/{oid}/{method}", s.startCallStream)
 	mux.HandleFunc("POST /_rpc/lookup/{name}", s.lookup)
 	mux.HandleFunc("POST /_rpc/reresolve", s.reresolve)
 	mux.HandleFunc("POST /_rpc/reexport/{oid}", s.reexport)
@@ -388,9 +399,10 @@ func (s *Server) reexport(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	hc, ok := s.objects[oid]
+	s.mu.Unlock()
 
-	if hc, ok := s.objects[oid]; ok {
+	if ok {
 		data, err := base58.Decode(pk)
 		if err != nil {
 			json.NewEncoder(w).Encode(lookupResponse{Error: "invalid public key"})
@@ -421,9 +433,6 @@ func (s *Server) lookup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	w.WriteHeader(http.StatusOK)
 
 	w.Header().Set("Content-Type", "application/cbor")
@@ -443,7 +452,10 @@ func (s *Server) lookup(w http.ResponseWriter, r *http.Request) {
 	//s.state.log.Info("Lookup", "name", name)
 
 	// TODO: add condition codes to the error response rather than just a string
+	s.mu.Lock()
 	iface, ok := s.persistent[name]
+	s.mu.Unlock()
+
 	if !ok {
 		cbor.NewEncoder(w).Encode(lookupResponse{Error: "unknown object: " + name})
 	} else {
@@ -453,7 +465,7 @@ func (s *Server) lookup(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		capa := s.assignCapability(iface, ed25519.PublicKey(data), ca, name)
+		capa := s.assignCapability(iface, ed25519.PublicKey(data), ca, name, false)
 		capa.RestoreState = &InterfaceState{
 			Category:  "!persistent",
 			Interface: name,
@@ -478,9 +490,6 @@ func (s *Server) reresolve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	var (
 		iface    *Interface
 		category string
@@ -493,21 +502,30 @@ func (s *Server) reresolve(w http.ResponseWriter, r *http.Request) {
 
 		var ok bool
 		// TODO: add condition codes to the error response rather than just a string
+		s.mu.Lock()
 		iface, ok = s.persistent[name]
+		s.mu.Unlock()
+
 		if !ok {
 			cbor.NewEncoder(w).Encode(lookupResponse{Error: "unknown object: " + name})
 			return
 		}
-	} else if res, ok := s.resolvers[rs.Category]; ok {
-		iface, err = res.ReconstructFromState(&rs)
-		if err != nil {
-			cbor.NewEncoder(w).Encode(lookupResponse{Error: "failed to resolve: " + err.Error()})
-			return
-		}
+	} else {
+		s.mu.Lock()
+		res, ok := s.resolvers[rs.Category]
+		s.mu.Unlock()
 
-		if iface == nil {
-			cbor.NewEncoder(w).Encode(lookupResponse{Error: fmt.Sprintf("unable to restore capability")})
-			return
+		if ok {
+			iface, err = res.ReconstructFromState(&rs)
+			if err != nil {
+				cbor.NewEncoder(w).Encode(lookupResponse{Error: "failed to resolve: " + err.Error()})
+				return
+			}
+
+			if iface == nil {
+				cbor.NewEncoder(w).Encode(lookupResponse{Error: fmt.Sprintf("unable to restore capability")})
+				return
+			}
 		}
 	}
 
@@ -534,15 +552,15 @@ func (s *Server) reresolve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	capa := s.assignCapability(iface, ed25519.PublicKey(pkdata), ca, category)
+	capa := s.assignCapability(iface, ed25519.PublicKey(pkdata), ca, category, false)
 	capa.RestoreState = &rs
 
 	cbor.NewEncoder(w).Encode(lookupResponse{Capability: capa})
 }
 
 type refResponse struct {
-	Status string `json:"status,omitempty"`
-	Error  string `json:"error,omitempty"`
+	Status string `json:"status,omitempty" cbor:"status,omitempty"`
+	Error  string `json:"error,omitempty" cbor:"error,omitempty"`
 }
 
 func (s *Server) refCapa(w http.ResponseWriter, r *http.Request) {
@@ -576,25 +594,30 @@ func (s *Server) derefCapa(w http.ResponseWriter, r *http.Request) {
 
 	w.WriteHeader(http.StatusOK)
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if hc, ok := s.objects[oid]; ok {
+	if s.Deref(oid) {
 		var rep refResponse
-
-		if hc.refs.Add(-1) == 0 {
-			delete(s.objects, oid)
-			go hc.Close()
-
-			rep.Status = "removed"
-		} else {
-			rep.Status = "ok"
-		}
-
+		rep.Status = "ok"
 		json.NewEncoder(w).Encode(rep)
 	} else {
 		json.NewEncoder(w).Encode(refResponse{Error: "unknown capability: " + string(oid)})
 	}
+}
+
+func (s *Server) Deref(oid OID) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if hc, ok := s.objects[oid]; ok {
+		if hc.refs.Add(-1) == 0 {
+			delete(s.objects, oid)
+			go hc.Close()
+
+		}
+
+		return true
+	}
+
+	return false
 }
 
 func (s *Server) authRequest(r *http.Request, w http.ResponseWriter, oid OID) (ed25519.PublicKey, bool) {
@@ -663,10 +686,147 @@ func (s *Server) authRequest(r *http.Request, w http.ResponseWriter, oid OID) (e
 	return capa.pub, true
 }
 
-func (s *Server) handleCalls(w http.ResponseWriter, r *http.Request) {
+type streamRequest struct {
+	Kind   string `json:"kind" cbor:"kind"`
+	OID    OID    `json:"oid" cbor:"oid"`
+	Method string `json:"method" cbor:"method"`
+	Status string `json:"status" cbor:"status"`
+}
+
+type controlStream struct {
+	mu  sync.Mutex
+	dec *cbor.Decoder
+	enc *cbor.Encoder
+}
+
+func (cs *controlStream) NoReply(rs streamRequest, arg any) error {
+	cs.mu.Lock()
+	defer cs.mu.Unlock()
+
+	err := cs.enc.Encode(rs)
+	if err != nil {
+		return err
+	}
+
+	if arg != nil {
+		return cs.enc.Encode(arg)
+	}
+
+	return nil
+}
+
+func (s *Server) startCallStream(w http.ResponseWriter, r *http.Request) {
 	oid := OID(r.PathValue("oid"))
 
-	//s.state.log.Info("server: rpc call", "oid", oid)
+	method := r.PathValue("method")
+
+	w.Header().Set("Trailer", "rpc-status, rpc-error")
+
+	user, ok := s.authRequest(r, w, oid)
+	if !ok {
+		return
+	}
+
+	ctx := r.Context()
+
+	s.mu.Lock()
+	iface, ok := s.objects[oid]
+	s.mu.Unlock()
+	if !ok {
+		w.WriteHeader(http.StatusNotFound)
+		w.Header().Add("rpc-status", "unknown-capability")
+		w.Header().Add("rpc-error", "unknown object: "+string(oid))
+		return
+	}
+
+	iface.touch()
+
+	mm := iface.methods[method]
+	if mm.Handler == nil {
+		w.WriteHeader(http.StatusNotFound)
+		w.Header().Add("rpc-status", "unknown")
+		w.Header().Add("rpc-error", "unknown method: "+method)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+
+	defer func() {
+		if r := recover(); r != nil {
+			w.Header().Add("rpc-status", "panic")
+			w.Header().Add("rpc-error", fmt.Sprint(r))
+			panic(r)
+		}
+	}()
+
+	ctx = Propagator().Extract(ctx, propagation.HeaderCarrier(r.Header))
+
+	tracer := Tracer()
+
+	ctx, span := tracer.Start(ctx, "rpc.handle."+mm.InterfaceName+"."+mm.Name)
+
+	defer span.End()
+
+	span.SetAttributes(attribute.String("oid", string(oid)))
+
+	sess, err := s.ws.Upgrade(w, r)
+	if err != nil {
+		s.state.log.Error("failed to upgrade connection", "error", err)
+		http.Error(w, "failed to upgrade connection", http.StatusInternalServerError)
+		return
+	}
+
+	ctrlstream, err := sess.AcceptStream(ctx)
+	if err != nil {
+		s.state.log.Error("failed to accept arg stream", "error", err)
+		return
+	}
+
+	var cs controlStream
+	cs.dec = cbor.NewDecoder(ctrlstream)
+	cs.enc = cbor.NewEncoder(ctrlstream)
+
+	defer ctrlstream.Close()
+
+	call := &Call{
+		s:        s,
+		r:        r,
+		oid:      oid,
+		method:   method,
+		caller:   user,
+		category: iface.category,
+
+		dec: cs.dec,
+
+		wsSession: sess,
+		ctrl:      &cs,
+	}
+
+	if r.TLS != nil && len(r.TLS.PeerCertificates) > 0 {
+		call.peer = r.TLS.PeerCertificates[0]
+		ctx = context.WithValue(ctx, connectionKey{}, &CurrentConnectionInfo{
+			PeerSubject: r.TLS.PeerCertificates[0].Subject.String(),
+		})
+	}
+
+	err = mm.Handler(ctx, call)
+	if err != nil {
+		if !errors.Is(err, context.Canceled) {
+			s.state.log.Error("rpc call errored", "method", mm.InterfaceName+"."+mm.Name, "error", err)
+		}
+		w.Header().Add("rpc-status", "error")
+		w.Header().Add("rpc-error", err.Error())
+		s.handleError(w, r, err)
+		return
+	}
+
+	cs.NoReply(streamRequest{
+		Kind: "result",
+	}, call.results)
+}
+
+func (s *Server) handleCalls(w http.ResponseWriter, r *http.Request) {
+	oid := OID(r.PathValue("oid"))
 
 	w.Header().Set("Trailer", "rpc-status, rpc-error")
 
