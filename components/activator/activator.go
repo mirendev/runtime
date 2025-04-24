@@ -21,6 +21,8 @@ import (
 type Lease struct {
 	ver     *core_v1alpha.AppVersion
 	sandbox *compute_v1alpha.Sandbox
+	ent     *entity.Entity
+	pool    string
 
 	Size int
 	URL  string
@@ -34,14 +36,23 @@ func (l *Lease) Sandbox() *compute_v1alpha.Sandbox {
 	return l.sandbox
 }
 
+func (l *Lease) SandboxEntity() *entity.Entity {
+	return l.ent
+}
+
+func (l *Lease) Pool() string {
+	return l.pool
+}
+
 type AppActivator interface {
-	AcquireLease(ctx context.Context, ver *core_v1alpha.AppVersion) (*Lease, error)
+	AcquireLease(ctx context.Context, ver *core_v1alpha.AppVersion, pool string) (*Lease, error)
 	ReleaseLease(ctx context.Context, lease *Lease) error
 	RenewLease(ctx context.Context, lease *Lease) (*Lease, error)
 }
 
 type sandbox struct {
 	sandbox     *compute_v1alpha.Sandbox
+	ent         *entity.Entity
 	lastRenewal time.Time
 	url         string
 	maxSlots    int
@@ -55,9 +66,13 @@ type verSandboxes struct {
 	leaseSlots int
 }
 
+type verKey struct {
+	ver, pool string
+}
+
 type localActivator struct {
 	mu       sync.Mutex
-	versions map[string]*verSandboxes
+	versions map[verKey]*verSandboxes
 
 	log *slog.Logger
 	eac *entityserver_v1alpha.EntityAccessClient
@@ -69,7 +84,7 @@ func NewLocalActivator(ctx context.Context, log *slog.Logger, eac *entityserver_
 	la := &localActivator{
 		log:      log,
 		eac:      eac,
-		versions: make(map[string]*verSandboxes),
+		versions: make(map[verKey]*verSandboxes),
 	}
 
 	go la.InBackground(ctx)
@@ -77,14 +92,15 @@ func NewLocalActivator(ctx context.Context, log *slog.Logger, eac *entityserver_
 	return la
 }
 
-func (a *localActivator) AcquireLease(ctx context.Context, ver *core_v1alpha.AppVersion) (*Lease, error) {
+func (a *localActivator) AcquireLease(ctx context.Context, ver *core_v1alpha.AppVersion, pool string) (*Lease, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	vs, ok := a.versions[ver.ID.String()]
+	key := verKey{ver.ID.String(), pool}
+	vs, ok := a.versions[key]
 
 	if !ok {
-		a.log.Info("creating new sandbox for app", "app", ver.App, "version", ver.Version)
-		return a.activateApp(ctx, ver)
+		a.log.Info("creating new sandbox for app", "app", ver.App, "version", ver.Version, "pool", pool, "key", key)
+		return a.activateApp(ctx, ver, pool)
 	}
 
 	if len(vs.sandboxes) == 0 {
@@ -104,6 +120,7 @@ func (a *localActivator) AcquireLease(ctx context.Context, ver *core_v1alpha.App
 				return &Lease{
 					ver:     ver,
 					sandbox: s.sandbox,
+					ent:     s.ent,
 					Size:    vs.leaseSlots,
 					URL:     s.url,
 				}, nil
@@ -116,10 +133,10 @@ func (a *localActivator) AcquireLease(ctx context.Context, ver *core_v1alpha.App
 		a.log.Info("no space in existing sandboxes, creating new sandbox for app", "app", ver.App, "version", ver.Version)
 	}
 
-	return a.activateApp(ctx, ver)
+	return a.activateApp(ctx, ver, pool)
 }
 
-func (a *localActivator) activateApp(ctx context.Context, ver *core_v1alpha.AppVersion) (*Lease, error) {
+func (a *localActivator) activateApp(ctx context.Context, ver *core_v1alpha.AppVersion, pool string) (*Lease, error) {
 	gr, err := a.eac.Get(ctx, ver.App.String())
 	if err != nil {
 		return nil, err
@@ -169,7 +186,10 @@ func (a *localActivator) activateApp(ctx context.Context, ver *core_v1alpha.AppV
 
 	a.log.Debug("created sandbox", "app", ver.App, "sandbox", pr.Id())
 
-	var runningSB compute_v1alpha.Sandbox
+	var (
+		runningSB compute_v1alpha.Sandbox
+		sbEnt     *entity.Entity
+	)
 
 	a.log.Debug("watching sandbox", "app", ver.App, "sandbox", pr.Id())
 
@@ -182,6 +202,7 @@ func (a *localActivator) activateApp(ctx context.Context, ver *core_v1alpha.AppV
 
 			if sb.Status == compute_v1alpha.RUNNING {
 				runningSB = sb
+				sbEnt = en
 				// TODO figure out a better way to signal that we're done with the watch.
 				return io.EOF
 			}
@@ -210,6 +231,7 @@ func (a *localActivator) activateApp(ctx context.Context, ver *core_v1alpha.AppV
 
 	lsb := &sandbox{
 		sandbox:     &runningSB,
+		ent:         sbEnt,
 		lastRenewal: time.Now(),
 		url:         addr,
 		maxSlots:    int(ver.Concurrency),
@@ -219,18 +241,21 @@ func (a *localActivator) activateApp(ctx context.Context, ver *core_v1alpha.AppV
 	lease := &Lease{
 		ver:     ver,
 		sandbox: lsb.sandbox,
+		ent:     lsb.ent,
 		Size:    leaseSlots,
 		URL:     lsb.url,
 	}
 
-	vs, ok := a.versions[ver.ID.String()]
+	key := verKey{ver.ID.String(), pool}
+
+	vs, ok := a.versions[key]
 	if !ok {
 		vs = &verSandboxes{
 			ver:        ver,
 			sandboxes:  []*sandbox{},
 			leaseSlots: leaseSlots,
 		}
-		a.versions[ver.ID.String()] = vs
+		a.versions[key] = vs
 	}
 
 	vs.sandboxes = append(vs.sandboxes, lsb)
@@ -242,7 +267,7 @@ func (a *localActivator) ReleaseLease(ctx context.Context, lease *Lease) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
-	vs, ok := a.versions[lease.ver.ID.String()]
+	vs, ok := a.versions[verKey{lease.ver.ID.String(), lease.pool}]
 	if !ok {
 		return nil
 	}
@@ -261,7 +286,7 @@ func (a *localActivator) RenewLease(ctx context.Context, lease *Lease) (*Lease, 
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
-	vs, ok := a.versions[lease.ver.ID.String()]
+	vs, ok := a.versions[verKey{lease.ver.ID.String(), lease.pool}]
 	if !ok {
 		return nil, fmt.Errorf("lease not found")
 	}

@@ -9,6 +9,7 @@ import (
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	esv1 "miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/api/exec/exec_v1alpha"
+	"miren.dev/runtime/components/activator"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/schema"
 	"miren.dev/runtime/pkg/rpc"
@@ -35,6 +36,12 @@ type Coordinator struct {
 	Log *slog.Logger
 
 	state *rpc.State
+
+	aa activator.AppActivator
+}
+
+func (c *Coordinator) Activator() activator.AppActivator {
+	return c.aa
 }
 
 func (c *Coordinator) Start(ctx context.Context) error {
@@ -85,7 +92,10 @@ func (c *Coordinator) Start(ctx context.Context) error {
 
 	eac := &entityserver_v1alpha.EntityAccessClient{Client: loopback}
 
-	eps := execproxy.NewServer(c.Log, eac, rs)
+	aa := activator.NewLocalActivator(ctx, c.Log, eac)
+	c.aa = aa
+
+	eps := execproxy.NewServer(c.Log, eac, rs, aa)
 
 	server.ExposeValue("dev.miren.runtime/exec", exec_v1alpha.AdaptSandboxExec(eps))
 

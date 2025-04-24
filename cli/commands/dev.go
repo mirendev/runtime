@@ -132,22 +132,10 @@ func Dev(ctx *Context, opts struct {
 
 	// Run the runner!
 
-	r := runner.NewRunner(ctx.Log, ctx.Server, runner.RunnerConfig{
-		Id:            opts.RunnerId,
-		ServerAddress: opts.Address,
-		ListenAddress: opts.RunnerAddress,
-		Workers:       runner.DefaulWorkers,
-	})
-
 	// Create RPC client to interact with coordinator
 	rs, err := rpc.NewState(ctx, rpc.WithSkipVerify)
 	if err != nil {
 		ctx.Log.Error("failed to create RPC client", "error", err)
-		return err
-	}
-
-	err = r.Start(sub)
-	if err != nil {
 		return err
 	}
 
@@ -159,6 +147,29 @@ func Dev(ctx *Context, opts struct {
 
 	eac := &entityserver_v1alpha.EntityAccessClient{Client: client}
 
+	ipa := ipalloc.NewAllocator(ctx.Log, subnets)
+	eg.Go(func() error {
+		return ipa.Watch(sub, eac)
+	})
+
+	aa := co.Activator()
+
+	hs := httpingress.NewServer(ctx, ctx.Log, eac, aa)
+
+	reg.Register("app-activator", aa)
+
+	r := runner.NewRunner(ctx.Log, ctx.Server, runner.RunnerConfig{
+		Id:            opts.RunnerId,
+		ServerAddress: opts.Address,
+		ListenAddress: opts.RunnerAddress,
+		Workers:       runner.DefaulWorkers,
+	})
+
+	err = r.Start(sub)
+	if err != nil {
+		return err
+	}
+
 	sch, err := scheduler.NewScheduler(sub, ctx.Log, eac)
 	if err != nil {
 		ctx.Log.Error("failed to create scheduler", "error", err)
@@ -168,13 +179,6 @@ func Dev(ctx *Context, opts struct {
 	eg.Go(func() error {
 		return sch.Watch(sub, eac)
 	})
-
-	ipa := ipalloc.NewAllocator(ctx.Log, subnets)
-	eg.Go(func() error {
-		return ipa.Watch(sub, eac)
-	})
-
-	hs := httpingress.NewServer(ctx, ctx.Log, eac)
 
 	go func() {
 		err := http.ListenAndServe(":8989", hs)

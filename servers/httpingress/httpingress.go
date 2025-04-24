@@ -34,9 +34,12 @@ type appUsage struct {
 	leases []*lease
 }
 
-func NewServer(ctx context.Context, log *slog.Logger, eac *entityserver_v1alpha.EntityAccessClient) *Server {
-	aa := activator.NewLocalActivator(ctx, log, eac)
-
+func NewServer(
+	ctx context.Context,
+	log *slog.Logger,
+	eac *entityserver_v1alpha.EntityAccessClient,
+	aa activator.AppActivator,
+) *Server {
 	serv := &Server{
 		Log:  log,
 		eac:  eac,
@@ -239,7 +242,7 @@ func (h *Server) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	var av core_v1alpha.AppVersion
 	av.Decode(vr.Entity().Entity())
 
-	actLease, err := h.aa.AcquireLease(ctx, &av)
+	actLease, err := h.aa.AcquireLease(ctx, &av, "http")
 	if err != nil {
 		h.Log.Error("error acquiring lease", "error", err, "app", hr.App)
 		http.Error(w, fmt.Sprintf("error acquiring lease: %s", hr.App), http.StatusInternalServerError)

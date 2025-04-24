@@ -9,26 +9,30 @@ import (
 	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/api/exec/exec_v1alpha"
+	"miren.dev/runtime/components/activator"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/rpc"
 	"miren.dev/runtime/pkg/rpc/stream"
 )
 
 type Server struct {
-	Log *slog.Logger
-	EAC *entityserver_v1alpha.EntityAccessClient
-	rs  *rpc.State
+	Log    *slog.Logger
+	EAC    *entityserver_v1alpha.EntityAccessClient
+	rs     *rpc.State
+	AppAct activator.AppActivator
 }
 
 func NewServer(
 	log *slog.Logger,
 	eac *entityserver_v1alpha.EntityAccessClient,
 	rs *rpc.State,
+	appAct activator.AppActivator,
 ) *Server {
 	return &Server{
-		Log: log,
-		EAC: eac,
-		rs:  rs,
+		Log:    log,
+		EAC:    eac,
+		rs:     rs,
+		AppAct: appAct,
 	}
 }
 
@@ -55,23 +59,35 @@ func (s *Server) Exec(ctx context.Context, req *exec_v1alpha.SandboxExecExec) er
 	case "app":
 		name := args.Value()
 
-		ents, err := s.EAC.List(ctx, entity.Ref(entity.EntityKind, compute_v1alpha.KindSandbox))
+		ent, err := s.EAC.Get(ctx, "app/"+name)
 		if err != nil {
-			return fmt.Errorf("failed to list sandboxes: %w", err)
+			return fmt.Errorf("failed to get entity %s: %w", name, err)
 		}
 
-		for _, ent := range ents.Values() {
-			md := core_v1alpha.MD(ent.Entity())
+		var appEnt core_v1alpha.App
+		appEnt.Decode(ent.Entity().Entity())
 
-			if val, ok := md.Labels.Get("app"); ok && val == "nginx" {
-				id = ent.Id()
-				found = ent.Entity()
-				break
-			}
+		if appEnt.ActiveVersion == "" {
+			return fmt.Errorf("app %s has no active version", name)
 		}
-		if id == "" {
-			return fmt.Errorf("no sandbox found with app label %s", name)
+
+		verEnt, err := s.EAC.Get(ctx, appEnt.ActiveVersion.String())
+		if err != nil {
+			return fmt.Errorf("failed to get app version %s: %w", appEnt.ActiveVersion, err)
 		}
+
+		var appVer core_v1alpha.AppVersion
+		appVer.Decode(verEnt.Entity().Entity())
+
+		lease, err := s.AppAct.AcquireLease(ctx, &appVer, "exec")
+		if err != nil {
+			return fmt.Errorf("failed to acquire lease for app %s: %w", name, err)
+		}
+
+		defer s.AppAct.ReleaseLease(ctx, lease)
+
+		found = lease.SandboxEntity()
+		id = found.ID.String()
 	}
 
 	if found == nil {
