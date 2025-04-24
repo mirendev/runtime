@@ -9,7 +9,6 @@ import (
 	"github.com/containerd/console"
 	"golang.org/x/sys/unix"
 	"miren.dev/runtime/api/exec/exec_v1alpha"
-	"miren.dev/runtime/pkg/rpc"
 	"miren.dev/runtime/pkg/rpc/stream"
 )
 
@@ -21,17 +20,12 @@ func SandboxExec(ctx *Context, opts struct {
 		Args []string
 	} `positional-args:"yes"`
 }) error {
-	rs, err := rpc.NewState(ctx, rpc.WithSkipVerify, rpc.WithLogger(ctx.Log))
+	cl, err := ctx.RPCClient("dev.miren.runtime/exec")
 	if err != nil {
 		return err
 	}
 
-	client, err := rs.Connect(opts.Server, "dev.miren.runtime/exec")
-	if err != nil {
-		return err
-	}
-
-	sec := &exec_v1alpha.SandboxExecClient{Client: client}
+	sec := &exec_v1alpha.SandboxExecClient{Client: cl}
 
 	winCh := make(chan os.Signal, 1)
 	winUpdates := make(chan *exec_v1alpha.WindowSize, 1)
