@@ -10,7 +10,7 @@ kinds:
     status:
       type: enum
       doc: The status of the pod
-      choices: [pending, not_ready, running]
+      choices: [pending, not_ready, running, stopped, dead]
 
     hostNetwork:
       type: bool

@@ -174,7 +174,7 @@ func Dev(ctx *Context, opts struct {
 		return ipa.Watch(sub, eac)
 	})
 
-	hs := httpingress.NewServer(ctx.Log, eac)
+	hs := httpingress.NewServer(ctx, ctx.Log, eac)
 
 	go func() {
 		err := http.ListenAndServe(":8989", hs)

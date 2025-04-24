@@ -30,9 +30,15 @@ kinds:
     app:
       type: ref
       doc: The application the version is for
+    version:
+      type: string
+      doc: The version of this app
     image_url:
       type: string
       doc: The OCI url for the versions code
+    concurrency:
+      type: int
+      doc: How concurrent requests this app can handle
     configuration:
       type: bytes
       doc: The configuration of the application at this version

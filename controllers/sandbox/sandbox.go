@@ -492,20 +492,31 @@ func (c *SandboxController) updateSandbox(ctx context.Context, sb *compute.Sandb
 }
 
 func (c *SandboxController) Create(ctx context.Context, co *compute.Sandbox, meta *entity.Meta) error {
-	searchRes, err := c.checkSandbox(ctx, co, meta)
-	if err != nil {
-		c.Log.Error("error checking sandbox, proceeding with create", "err", err)
-	} else {
-		switch searchRes {
-		case same:
-			c.Log.Debug("sandbox already exists, skipping create")
-			return nil
-		case differentVersion:
-			return c.updateSandbox(ctx, co, meta)
+	switch co.Status {
+	case compute.DEAD:
+		return nil
+	case compute.STOPPED:
+		c.Log.Debug("sandbox is stopped, verifying it is no longer running")
+		return c.stopSandbox(ctx, co)
+	case "", compute.PENDING, compute.RUNNING:
+		searchRes, err := c.checkSandbox(ctx, co, meta)
+		if err != nil {
+			c.Log.Error("error checking sandbox, proceeding with create", "err", err)
+		} else {
+			switch searchRes {
+			case same:
+				c.Log.Debug("sandbox already exists, skipping create")
+				return nil
+			case differentVersion:
+				return c.updateSandbox(ctx, co, meta)
+			}
 		}
-	}
 
-	return c.createSandbox(ctx, co, meta)
+		return c.createSandbox(ctx, co, meta)
+	default:
+		c.Log.Warn("ignoring sandbox status", "status", co.Status)
+		return nil
+	}
 }
 
 func (c *SandboxController) createSandbox(ctx context.Context, co *compute.Sandbox, meta *entity.Meta) error {
@@ -1233,12 +1244,18 @@ func (c *SandboxController) Delete(ctx context.Context, id entity.Id) error {
 	var oldSb compute.Sandbox
 	oldSb.Decode(oldMeta)
 
-	err = c.destroySubContainers(ctx, &oldSb)
+	return c.stopSandbox(ctx, &oldSb)
+}
+
+func (c *SandboxController) stopSandbox(ctx context.Context, sb *compute.Sandbox) error {
+	ctx = namespaces.WithNamespace(ctx, c.Namespace)
+
+	err := c.destroySubContainers(ctx, sb)
 	if err != nil {
 		return fmt.Errorf("failed to destroy subcontainers: %w", err)
 	}
 
-	container, err := c.CC.LoadContainer(ctx, c.containerId(id))
+	container, err := c.CC.LoadContainer(ctx, c.containerId(sb.ID))
 	if err != nil {
 		return err
 	}
@@ -1283,10 +1300,27 @@ func (c *SandboxController) Delete(ctx context.Context, id entity.Id) error {
 
 	// Ignore errors, as the directory might not exist if the container was
 	// cleared up elsewhere.
-	tmpDir := filepath.Join(c.Tempdir, "containerd", id.PathSafe())
+	tmpDir := filepath.Join(c.Tempdir, "containerd", sb.ID.PathSafe())
 	_ = os.RemoveAll(tmpDir)
 
-	c.Log.Info("container stopped", "id", id)
+	c.Log.Info("container stopped", "id", sb.ID)
+
+	var rpcE entityserver_v1alpha.Entity
+
+	rpcE.SetId(sb.ID.String())
+
+	rpcE.SetAttrs(entity.Attrs(
+		(&compute.Sandbox{
+			Status: compute.DEAD,
+		}).Encode,
+	))
+
+	_, err = c.EAC.Put(context.Background(), &rpcE)
+	if err != nil {
+		c.Log.Error("failed to retire sandbox", "error", err)
+	}
+
+	c.Log.Info("sandbox retired", "id", sb.ID, "status", compute.DEAD)
 
 	return nil
 }

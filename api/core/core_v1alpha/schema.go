@@ -49,15 +49,19 @@ func (o *App) InitSchema(sb *schema.SchemaBuilder) {
 
 const (
 	AppVersionAppId           = entity.Id("dev.miren.core/app_version.app")
+	AppVersionConcurrencyId   = entity.Id("dev.miren.core/app_version.concurrency")
 	AppVersionConfigurationId = entity.Id("dev.miren.core/app_version.configuration")
 	AppVersionImageUrlId      = entity.Id("dev.miren.core/app_version.image_url")
+	AppVersionVersionId       = entity.Id("dev.miren.core/app_version.version")
 )
 
 type AppVersion struct {
 	ID            entity.Id `json:"id"`
 	App           entity.Id `cbor:"app,omitempty" json:"app,omitempty"`
+	Concurrency   int64     `cbor:"concurrency,omitempty" json:"concurrency,omitempty"`
 	Configuration []byte    `cbor:"configuration,omitempty" json:"configuration,omitempty"`
 	ImageUrl      string    `cbor:"image_url,omitempty" json:"image_url,omitempty"`
+	Version       string    `cbor:"version,omitempty" json:"version,omitempty"`
 }
 
 func (o *AppVersion) Decode(e entity.AttrGetter) {
@@ -65,11 +69,17 @@ func (o *AppVersion) Decode(e entity.AttrGetter) {
 	if a, ok := e.Get(AppVersionAppId); ok && a.Value.Kind() == entity.KindId {
 		o.App = a.Value.Id()
 	}
+	if a, ok := e.Get(AppVersionConcurrencyId); ok && a.Value.Kind() == entity.KindInt64 {
+		o.Concurrency = a.Value.Int64()
+	}
 	if a, ok := e.Get(AppVersionConfigurationId); ok && a.Value.Kind() == entity.KindBytes {
 		o.Configuration = a.Value.Bytes()
 	}
 	if a, ok := e.Get(AppVersionImageUrlId); ok && a.Value.Kind() == entity.KindString {
 		o.ImageUrl = a.Value.String()
+	}
+	if a, ok := e.Get(AppVersionVersionId); ok && a.Value.Kind() == entity.KindString {
+		o.Version = a.Value.String()
 	}
 }
 
@@ -81,11 +91,17 @@ func (o *AppVersion) Encode() (attrs []entity.Attr) {
 	if !entity.Empty(o.App) {
 		attrs = append(attrs, entity.Ref(AppVersionAppId, o.App))
 	}
+	if !entity.Empty(o.Concurrency) {
+		attrs = append(attrs, entity.Int64(AppVersionConcurrencyId, o.Concurrency))
+	}
 	if len(o.Configuration) == 0 {
 		attrs = append(attrs, entity.Bytes(AppVersionConfigurationId, o.Configuration))
 	}
 	if !entity.Empty(o.ImageUrl) {
 		attrs = append(attrs, entity.String(AppVersionImageUrlId, o.ImageUrl))
+	}
+	if !entity.Empty(o.Version) {
+		attrs = append(attrs, entity.String(AppVersionVersionId, o.Version))
 	}
 	attrs = append(attrs, entity.Ref(entity.EntityKind, KindAppVersion))
 	return
@@ -93,8 +109,10 @@ func (o *AppVersion) Encode() (attrs []entity.Attr) {
 
 func (o *AppVersion) InitSchema(sb *schema.SchemaBuilder) {
 	sb.Ref("app", "dev.miren.core/app_version.app", schema.Doc("The application the version is for"))
+	sb.Int64("concurrency", "dev.miren.core/app_version.concurrency", schema.Doc("How concurrent requests this app can handle"))
 	sb.Bytes("configuration", "dev.miren.core/app_version.configuration", schema.Doc("The configuration of the application at this version"))
 	sb.String("image_url", "dev.miren.core/app_version.image_url", schema.Doc("The OCI url for the versions code"))
+	sb.String("version", "dev.miren.core/app_version.version", schema.Doc("The version of this app"))
 }
 
 const (
@@ -196,5 +214,5 @@ func init() {
 		(&Metadata{}).InitSchema(sb)
 		(&Project{}).InitSchema(sb)
 	})
-	schema.RegisterEncodedSchema("dev.miren.core", "v1alpha", []byte("\x1f\x8b\b\x00\x00\x00\x00\x00\x00\xff\x84\x94\xcfN\xb40\x14\xc5\xdf\xe3\xfb\x8c\xc6ą+\x8cOD.\xf4\xc2\\\x87\xfeI\xdba`\xa9>\x8a\x13\xdfPצ\x94\xe2PK\xd9L&p\xcf鹿\x1cza\x028\n\x86}\xc1I\xa3(j\xa9\xb1\xedQ\x1b\x92\xa2ퟡS\a\xc0#\tf.\xe7\xf5ԓ{Z\x80R\x9f\r\x93\x1cHD.\x93\xb3\x8e4\xa0T\xda\xfd\xbbi\b;f\xde>|\"\xa8-\xf5Xγ̎\n+b\x15\xb1\xe1\xfe\xafe\xb1\x9e\xf6\x16\xad\xd2\xf2\x05k{\xad\xfd\x97\xd0\xcec\x9d\xd2\xc4A\x8f\xa5\x8bS\x83R\xc3\xddƾ\xe1\x98\xdcީ\x93\xcae\xf1\x1c\x80w\x9f\xde%\xb8N~\xbb\xed\xe72y\x11\xaf\xa5h\xa8=i\xb0\x01\x1aV\xa3E\xe3\x1c\x1e3\x0e+\x9d\xf7\"\xe2\xd0by\xd2\xdd\xe4\xd3\x18\xabI\xb4\xce\xe8!c\xb4\x88V8\x8fW#\xc3M\n+G\v\f,\xe4\x98\xc6\xfd\v\x9a\x1d\x9e\xbe\xe2M\a\x15v\xc63\x99\xfe\xa7\xa8\x06\xcbb\x9e\xe6 \xc6/\xcf\xc3\xffD(\xe2]\x16\xbd\x1bޮaܬE\x96\xea\xe2!\xbc\x1d\xfe\xa7\xc8͒\x1c\xb8>\xd2͒<\xb7W\x1f\x1f\xe5Y\xa0\xde\xdb{v,\xa6\xe1U\xfa\xb0\xfe\xd1\x1c\xa4\xb6\xa5\xbfI\\\xb9\xb7n\x93UW\xf6>\xc1_6\xd9V\x85\x10Y\x82?\x00\x00\x00\xff\xff"))
+	schema.RegisterEncodedSchema("dev.miren.core", "v1alpha", []byte("\x1f\x8b\b\x00\x00\x00\x00\x00\x00\xff\x84\x94\xddn\xa30\x10\x85\xdfcw\xb5\xab\xad\xaa\xaaWT}\"4\xd8\x03q\xc1?\x1a\x1c\x02\x97m\xd5'i\xd47l\xaf+cC\x80\x1a\xe7&\x89\u009c\x8f3g<>s\x05\x12\x15\xc7.\x93\x82PeL\x13V\x1dR+\xb4\xaa\xbaGh\xcc\x01\xb0\x16\x8a\xb7\xe7Ӻ\xea\xc1\xfd\x9b\x811\x1f%\xd7\x12\x84\xdaPF2m4`L\x9c\xfeU\x96\x02\x1b\u07be\xbc{G\xc0\xac\xe80\x0f\xb5\xdc\x0e\x06\v\xc1\v\xc1\xfb\xff?\x91ٺ\xda#*C\xfa\t\x99]j\x7fE\xb4\xa1\xac1$$А;;\f\x8c\xe9\xff\xed\xf4;\xbd&\xd5w\xecM\xf9\xdcx*\x807\xef\xde9X:\xff\xbb\xcfs\x9e\xbc\xa8fZ\xb1#\x11*6\x8cb&\x94u껄z\xa1\xf1\x14ɴ*Eu$\xb0S\xf4X\f\x16[G\xbaO\x93.:\xcf\x12BB\x85\xf9\x91\x9a\x91S\xb6\x96\x84\xaa\x1c\xe86\x01\x9aEa\x92\xcbS\xb0@\xdc$\x10\xe1{5\xd5zQ\xd0\xff\x89MW\xa2\x05\x0e\x16R\xa3ݮ\xc1\xa4I\x8f\xf5\xd5oZ\xd9@\x81M\xebC\x1d\x7fǆ;!\xb3P-A\r\x9f>\v\xff\xb1\tb\xdbˬw\xc5\xfb۰=\xe0\xb3,\xb6\x12\x87\xe9i\xff;\x96\\\x90\xa4\x82\xeb6\xba I\xe7\xf6\xec\xed\xa3>)\xa4k}\ab6\x16\xaf\xdcO\xed\xd7\xedA\x93\xcd\xfd\x85\xe6vl\xefR[\x9d\x95k7\xc1%\x9b䩚L$\x13\xfc\x06\x00\x00\xff\xff"))
 }

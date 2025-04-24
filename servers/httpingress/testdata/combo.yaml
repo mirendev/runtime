@@ -18,7 +18,9 @@ metadata:
   name: abcdef
 spec:
   app: app/nginx
+  version: abcdef
   image_url: docker.io/library/nginx:latest
+  concurrency: 10
 ---
 kind: dev.miren.ingress/http_route
 version: v1alpha

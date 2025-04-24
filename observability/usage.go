@@ -71,6 +71,10 @@ func (m *ResourcesMonitor) Monitor(ctx context.Context, id, cgroupPath string) e
 			// read cgroup stats
 			cur, err := m.readCgroupStats(cgroupPath, buf)
 			if err != nil {
+				if errors.Is(err, os.ErrNotExist) {
+					m.Log.Debug("cgroup path does not exist, ending monitor", "path", cgroupPath)
+					return nil
+				}
 				m.Log.Error("failed to read cgroup stats", "err", err)
 				continue
 			}

@@ -295,6 +295,12 @@ func (s *EtcdStore) UpdateEntity(ctx context.Context, id Id, attributes []Attr) 
 		if schema.Index {
 			collections = append(collections, attr)
 		}
+
+		if !schema.AllowMany {
+			if _, ok := entity.Get(attr.ID); ok {
+				entity.Remove(attr.ID)
+			}
+		}
 	}
 
 	err = entity.Update(attributes)
