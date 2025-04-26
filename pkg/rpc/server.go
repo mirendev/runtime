@@ -6,7 +6,6 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -20,6 +19,7 @@ import (
 	"github.com/mr-tron/base58"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/propagation"
+	"miren.dev/runtime/pkg/cond"
 	"miren.dev/runtime/pkg/webtransport"
 )
 
@@ -559,8 +559,10 @@ func (s *Server) reresolve(w http.ResponseWriter, r *http.Request) {
 }
 
 type refResponse struct {
-	Status string `json:"status,omitempty" cbor:"status,omitempty"`
-	Error  string `json:"error,omitempty" cbor:"error,omitempty"`
+	Status   string `json:"status,omitempty" cbor:"status,omitempty"`
+	Error    string `json:"error,omitempty" cbor:"error,omitempty"`
+	Category string `json:"category,omitempty" cbor:"category,omitempty"`
+	Code     string `json:"code,omitempty" cbor:"code,omitempty"`
 }
 
 func (s *Server) refCapa(w http.ResponseWriter, r *http.Request) {
@@ -691,6 +693,10 @@ type streamRequest struct {
 	OID    OID    `json:"oid" cbor:"oid"`
 	Method string `json:"method" cbor:"method"`
 	Status string `json:"status" cbor:"status"`
+
+	Category string `json:"category" cbor:"category"`
+	Code     string `json:"code" cbor:"code"`
+	Error    string `json:"error" cbor:"error"`
 }
 
 type controlStream struct {
@@ -720,7 +726,7 @@ func (s *Server) startCallStream(w http.ResponseWriter, r *http.Request) {
 
 	method := r.PathValue("method")
 
-	w.Header().Set("Trailer", "rpc-status, rpc-error")
+	w.Header().Set("Trailer", "rpc-status, rpc-error, rpc-error-category, rpc-error-code")
 
 	user, ok := s.authRequest(r, w, oid)
 	if !ok {
@@ -750,14 +756,6 @@ func (s *Server) startCallStream(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(http.StatusOK)
-
-	defer func() {
-		if r := recover(); r != nil {
-			w.Header().Add("rpc-status", "panic")
-			w.Header().Add("rpc-error", fmt.Sprint(r))
-			panic(r)
-		}
-	}()
 
 	ctx = Propagator().Extract(ctx, propagation.HeaderCarrier(r.Header))
 
@@ -812,20 +810,43 @@ func (s *Server) startCallStream(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	err = mm.Handler(ctx, call)
-	if err != nil {
-		if !errors.Is(err, context.Canceled) {
-			s.state.log.Error("rpc call errored", "method", mm.InterfaceName+"."+mm.Name, "error", err)
+	defer func() {
+		if r := recover(); r != nil {
+			var sr streamRequest
+			sr.Kind = "panic"
+			sr.Error = fmt.Sprint(r)
+			cs.NoReply(sr, nil)
+			panic(r)
 		}
-		w.Header().Add("rpc-status", "error")
-		w.Header().Add("rpc-error", err.Error())
-		s.handleError(w, r, err)
-		return
-	}
+	}()
 
-	cs.NoReply(streamRequest{
-		Kind: "result",
-	}, call.results)
+	err = cond.Wrap(mm.Handler(ctx, call))
+
+	if err != nil {
+		var sr streamRequest
+		sr.Kind = "error"
+		w.Header().Add("rpc-status", "error")
+
+		if emsg, ok := err.(ErrorMessage); ok {
+			sr.Error = emsg.ErrorMessage()
+		} else {
+			sr.Error = err.Error()
+		}
+
+		if ecat, ok := err.(ErrorCategory); ok {
+			sr.Category = ecat.ErrorCategory()
+		}
+
+		if ecode, ok := err.(ErrorCode); ok {
+			sr.Code = ecode.ErrorCode()
+		}
+
+		cs.NoReply(sr, nil)
+	} else {
+		cs.NoReply(streamRequest{
+			Kind: "result",
+		}, call.results)
+	}
 }
 
 func (s *Server) handleCalls(w http.ResponseWriter, r *http.Request) {
@@ -897,11 +918,22 @@ func (s *Server) handleCalls(w http.ResponseWriter, r *http.Request) {
 
 		err := mm.Handler(ctx, call)
 		if err != nil {
-			if !errors.Is(err, context.Canceled) {
-				s.state.log.Error("rpc call errored", "method", mm.InterfaceName+"."+mm.Name, "error", err)
-			}
 			w.Header().Add("rpc-status", "error")
-			w.Header().Add("rpc-error", err.Error())
+
+			if emsg, ok := err.(ErrorMessage); ok {
+				w.Header().Add("rpc-error", emsg.ErrorMessage())
+			} else {
+				w.Header().Add("rpc-error", err.Error())
+			}
+
+			if ecat, ok := err.(ErrorCategory); ok {
+				w.Header().Add("rpc-error-category", ecat.ErrorCategory())
+			}
+
+			if ecode, ok := err.(ErrorCode); ok {
+				w.Header().Add("rpc-error-code", ecode.ErrorCode())
+			}
+
 			s.handleError(w, r, err)
 			return
 		}

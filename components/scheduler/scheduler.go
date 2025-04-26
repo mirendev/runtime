@@ -88,7 +88,7 @@ func NewScheduler(ctx context.Context, log *slog.Logger, eac *eas.EntityAccessCl
 func (s *Scheduler) FindNodeById(id entity.Id) (*compute_v1alpha.Node, error) {
 	node, ok := s.nodes[id]
 	if !ok {
-		return nil, cond.NotFound(id)
+		return nil, cond.NotFound("node", id)
 	}
 
 	return node, nil
@@ -135,7 +135,7 @@ func (s *Scheduler) AssignSandboxes(ctx context.Context, eac *eas.EntityAccessCl
 	}
 
 	if firstNode == nil {
-		return cond.NotFound("no nodes available for scheduling")
+		return cond.Error("no nodes available for scheduling")
 	}
 
 	s.log.Debug("considering sandboxes for assignment", "count", len(sandboxes))

@@ -7,7 +7,6 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"slices"
 	"strconv"
@@ -17,6 +16,7 @@ import (
 	"github.com/fxamacker/cbor/v2"
 	clientv3 "go.etcd.io/etcd/client/v3"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
+	"miren.dev/runtime/pkg/cond"
 	"miren.dev/runtime/pkg/entity"
 	etypes "miren.dev/runtime/pkg/entity/types"
 	"miren.dev/runtime/pkg/model"
@@ -53,12 +53,12 @@ func (e *EntityServer) Get(ctx context.Context, req *entityserver_v1alpha.Entity
 	args := req.Args()
 
 	if !args.HasId() {
-		return fmt.Errorf("missing required field: id")
+		return cond.ValidationFailure("missing-field", "id")
 	}
 
 	entity, err := e.Store.GetEntity(ctx, entity.Id(args.Id()))
 	if err != nil {
-		return fmt.Errorf("failed to get entity: %w", err)
+		return cond.NotFound("entity", args.Id())
 	}
 
 	var rpcEntity entityserver_v1alpha.Entity
@@ -77,7 +77,7 @@ func (e *EntityServer) WatchEntity(ctx context.Context, req *entityserver_v1alph
 	args := req.Args()
 
 	if !args.HasId() {
-		return fmt.Errorf("missing required field: id")
+		return cond.ValidationFailure("missing-field", "id")
 	}
 
 	send := args.Updates()
@@ -103,7 +103,7 @@ func (e *EntityServer) WatchEntity(ctx context.Context, req *entityserver_v1alph
 
 		_, err = send.Send(ctx, &op)
 		if err != nil {
-			if !errors.Is(err, context.Canceled) && !errors.Is(err, io.EOF) {
+			if !errors.Is(err, context.Canceled) && !errors.Is(err, cond.ErrClosed{}) {
 				e.Log.Error("failed to send event", "error", err)
 			}
 			return nil
@@ -154,7 +154,7 @@ func (e *EntityServer) WatchEntity(ctx context.Context, req *entityserver_v1alph
 
 			_, err = send.Send(ctx, &op)
 			if err != nil {
-				if !errors.Is(err, context.Canceled) && !errors.Is(err, io.EOF) {
+				if !errors.Is(err, context.Canceled) && !errors.Is(err, cond.ErrClosed{}) {
 					e.Log.Error("failed to send event", "error", err)
 				}
 				return nil
@@ -300,7 +300,7 @@ func (e *EntityServer) WatchIndex(ctx context.Context, req *entityserver_v1alpha
 
 				_, err = send.Send(ctx, &op)
 				if err != nil {
-					if !errors.Is(err, context.Canceled) && !errors.Is(err, io.EOF) {
+					if !errors.Is(err, context.Canceled) && !errors.Is(err, cond.ErrClosed{}) {
 						e.Log.Error("failed to send event", "error", err)
 					}
 					return nil

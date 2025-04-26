@@ -23,6 +23,7 @@ import (
 	"github.com/quic-go/quic-go/http3"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/propagation"
+	"miren.dev/runtime/pkg/cond"
 	"miren.dev/runtime/pkg/webtransport"
 )
 
@@ -496,19 +497,21 @@ request:
 				// We have a resolution, let's try to resolve it and update our capability.
 				rerr := c.reresolveCapability(c.capa.RestoreState)
 				if rerr != nil {
-					return fmt.Errorf("unknown capability, failed to reresolve: %w", rerr)
+					return cond.NotFound("capability", c.capa.OID)
 				}
 
 				continue request
 			}
 
-			return errors.New("unknown capability")
+			return cond.NotFound("capability", c.capa.OID)
 		case "error":
+			code := hr.Trailer.Get("rpc-error-code")
+			category := hr.Trailer.Get("rpc-error-category")
 			errs := hr.Trailer.Get("rpc-error")
-			return fmt.Errorf("remote error: %s", errs)
+			return cond.RemoteError(category, code, errs)
 		case "panic":
 			errs := hr.Trailer.Get("rpc-error")
-			return fmt.Errorf("remote panic: %s", errs)
+			return cond.RemoteError("panic", "panic", errs)
 		}
 
 		return err
@@ -582,131 +585,131 @@ func (c *Client) handleCallStream(
 	args, result any,
 	caps map[OID]*InlineCapability,
 ) (bool, error) {
-	var (
-		status string
-		err    error
-	)
+	if hr.StatusCode != http.StatusOK {
+		status := hr.Trailer.Get("rpc-status")
 
-	if hr.StatusCode == http.StatusOK {
-		ctx, cancel := context.WithCancel(ctx)
-		defer cancel()
+		err := cond.Errorf("unexpected status code: %d", hr.StatusCode)
 
-		go func() {
-			for {
-				str, err := sess.AcceptStream(ctx)
-				if err != nil {
-					break
-				}
-
-				go func() {
-					defer str.Close()
-
-					var rs streamRequest
-
-					dec := cbor.NewDecoder(str)
-
-					err = dec.Decode(&rs)
-					if err != nil {
-						c.State.log.Error("rpc.callstream call: error decoding stream request", "error", err)
-						return
-					}
-
-					enc := cbor.NewEncoder(str)
-
-					switch rs.Kind {
-					case "call":
-						iface, ok := caps[rs.OID]
-						if !ok {
-							enc.Encode(refResponse{
-								Status: "error",
-								Error:  "unknown capability",
-							})
-						} else {
-							mm := iface.methods[rs.Method]
-							if mm.Handler == nil {
-								enc.Encode(refResponse{
-									Status: "error",
-									Error:  "unknown method",
-								})
-							} else {
-								ctx, cancel := context.WithCancel(ctx)
-								err := c.callInline(ctx, mm, rs.OID, rs.Method, iface.Interface, enc, dec)
-								cancel()
-								if err != nil {
-									if !errors.Is(err, context.Canceled) && !errors.Is(err, io.EOF) {
-										c.State.log.Error("rpc.callstream: error calling inline", "error", err)
-									}
-									return
-								}
-							}
-						}
-					default:
-						c.State.log.Error("rpc.callstream: unknown call stream request", "kind", rs.Kind)
-					}
-				}()
-			}
-		}()
-
-		// Open the control stream
-		ctrl, err := sess.OpenStreamSync(ctx)
-		if err != nil {
-			c.State.log.Error("rpc.callstream ctrl: error opening control stream", "error", err)
+		switch status {
+		case "ok", "":
+			// The remote side thought everything was fine, so use our ability to parse
+			// the response as the error.
 			return false, err
-		}
-
-		enc := cbor.NewEncoder(ctrl)
-		enc.Encode(args)
-
-		dec := cbor.NewDecoder(ctrl)
-
-		for {
-			var rs streamRequest
-
-			err = dec.Decode(&rs)
-			if err != nil {
-				if errors.Is(err, io.EOF) {
-					break
+		case "unknown-capability":
+			if c.capa.RestoreState != nil {
+				// We have a resolution, let's try to resolve it and update our capability.
+				rerr := c.reresolveCapability(c.capa.RestoreState)
+				if rerr != nil {
+					err = cond.NotFound("capability", c.capa.OID)
 				}
-				return false, err
 			}
 
-			switch rs.Kind {
-			case "result":
-				status = rs.Status
-				err = dec.Decode(result)
-			case "deref":
-				c.State.server.Deref(rs.OID)
-			default:
-				c.State.log.Error("rpc.callstream: unknown control stream request", "kind", rs.Kind)
-			}
+			err = cond.NotFound("capability", c.capa.OID)
+		case "error":
+			errs := hr.Trailer.Get("rpc-error")
+			err = cond.RemoteError("generic", "unknown", errs)
+		case "panic":
+			errs := hr.Trailer.Get("rpc-error")
+			err = cond.Panic(errs)
 		}
-	} else {
-		err = fmt.Errorf("unexpected status code: %d", hr.StatusCode)
+
+		return false, err
 	}
 
-	switch status {
-	case "ok", "":
-		// The remote side thought everything was fine, so use our ability to parse
-		// the response as the error.
-		return false, err
-	case "unknown-capability":
-		if c.capa.RestoreState != nil {
-			// We have a resolution, let's try to resolve it and update our capability.
-			rerr := c.reresolveCapability(c.capa.RestoreState)
-			if rerr != nil {
-				return false, fmt.Errorf("unknown capability, failed to reresolve: %w", rerr)
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	go func() {
+		for {
+			str, err := sess.AcceptStream(ctx)
+			if err != nil {
+				break
 			}
 
-			return true, nil
+			go func() {
+				defer str.Close()
+
+				var rs streamRequest
+
+				dec := cbor.NewDecoder(str)
+
+				err = dec.Decode(&rs)
+				if err != nil {
+					c.State.log.Error("rpc.callstream call: error decoding stream request", "error", err)
+					return
+				}
+
+				enc := cbor.NewEncoder(str)
+
+				switch rs.Kind {
+				case "call":
+					iface, ok := caps[rs.OID]
+					if !ok {
+						enc.Encode(refResponse{
+							Status: "error",
+							Error:  "unknown capability",
+						})
+					} else {
+						mm := iface.methods[rs.Method]
+						if mm.Handler == nil {
+							enc.Encode(refResponse{
+								Status: "error",
+								Error:  "unknown method",
+							})
+						} else {
+							ctx, cancel := context.WithCancel(ctx)
+							err := c.callInline(ctx, mm, rs.OID, rs.Method, iface.Interface, enc, dec)
+							cancel()
+							if err != nil {
+								if !errors.Is(err, context.Canceled) && !errors.Is(err, cond.ErrClosed{}) {
+									c.State.log.Error("rpc.callstream: error calling inline", "error", err)
+								}
+								return
+							}
+						}
+					}
+				default:
+					c.State.log.Error("rpc.callstream: unknown call stream request", "kind", rs.Kind)
+				}
+			}()
+		}
+	}()
+
+	// Open the control stream
+	ctrl, err := sess.OpenStreamSync(ctx)
+	if err != nil {
+		c.State.log.Error("rpc.callstream ctrl: error opening control stream", "error", err)
+		return false, err
+	}
+
+	enc := cbor.NewEncoder(ctrl)
+	enc.Encode(args)
+
+	dec := cbor.NewDecoder(ctrl)
+
+	for {
+		var rs streamRequest
+
+		err = dec.Decode(&rs)
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			break
 		}
 
-		return false, errors.New("unknown capability")
-	case "error":
-		errs := hr.Trailer.Get("rpc-error")
-		return false, fmt.Errorf("remote error: %s", errs)
-	case "panic":
-		errs := hr.Trailer.Get("rpc-error")
-		return false, fmt.Errorf("remote panic: %s", errs)
+		switch rs.Kind {
+		case "result":
+			err = dec.Decode(result)
+			break
+		case "deref":
+			c.State.server.Deref(rs.OID)
+		case "error":
+			err = cond.RemoteError(rs.Category, rs.Code, rs.Error)
+			break
+		default:
+			c.State.log.Error("rpc.callstream: unknown control stream request", "kind", rs.Kind)
+		}
 	}
 
 	return false, err
@@ -729,11 +732,29 @@ func (c *Client) callInline(
 		inline: true,
 	}
 
-	err := mm.Handler(ctx, call)
+	err := cond.Wrap(mm.Handler(ctx, call))
 	if err != nil {
+		var msg, category, code string
+
+		if emsg, ok := err.(ErrorMessage); ok {
+			msg = emsg.ErrorMessage()
+		} else {
+			msg = err.Error()
+		}
+
+		if ecat, ok := err.(ErrorCategory); ok {
+			category = ecat.ErrorCategory()
+		}
+
+		if ecode, ok := err.(ErrorCode); ok {
+			code = ecode.ErrorCode()
+		}
+
 		enc.Encode(refResponse{
-			Status: "error",
-			Error:  err.Error(),
+			Status:   "error",
+			Error:    msg,
+			Category: category,
+			Code:     code,
 		})
 		return err
 	}

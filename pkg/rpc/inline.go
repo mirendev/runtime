@@ -3,11 +3,11 @@ package rpc
 import (
 	"context"
 	"fmt"
-	"io"
 	"log/slog"
 	"time"
 
 	"github.com/fxamacker/cbor/v2"
+	"miren.dev/runtime/pkg/cond"
 	"miren.dev/runtime/pkg/webtransport"
 )
 
@@ -64,10 +64,7 @@ func (c *inlineClient) Call(ctx context.Context, method string, args any, ret an
 
 	switch rr.Status {
 	case "error":
-		if rr.Error == "EOF" {
-			return io.EOF
-		}
-		return fmt.Errorf("call error: %s", rr.Error)
+		return cond.RemoteError(rr.Category, rr.Code, rr.Error)
 	case "ok":
 		return dec.Decode(ret)
 	default:

@@ -737,6 +737,34 @@ func (g *gen) generate() {
 			})
 
 		f.Line()
+
+		f.Func().
+			Params(j.Id("o").Op("*").Id(structName)).Id("ShortKind").
+			Params().String().
+			BlockFunc(func(b *j.Group) {
+				b.Return(j.Lit(g.kind))
+			})
+
+		f.Line()
+
+		f.Func().
+			Params(j.Id("o").Op("*").Id(structName)).Id("Kind").
+			Params().Qual(top, "Id").
+			BlockFunc(func(b *j.Group) {
+				b.Return(j.Id("Kind" + toCamal(g.kind)))
+			})
+
+		f.Line()
+
+		f.Func().
+			Params(j.Id("o").Op("*").Id(structName)).Id("EntityId").
+			Params().Params(j.Qual(top, "Id")).
+			BlockFunc(func(b *j.Group) {
+				b.Return(j.Id("o").Dot("ID"))
+			})
+
+		f.Line()
+
 	}
 
 	f.Func().

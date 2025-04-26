@@ -31,6 +31,18 @@ func (o *App) Is(e entity.AttrGetter) bool {
 	return entity.Is(e, KindApp)
 }
 
+func (o *App) ShortKind() string {
+	return "app"
+}
+
+func (o *App) Kind() entity.Id {
+	return KindApp
+}
+
+func (o *App) EntityId() entity.Id {
+	return o.ID
+}
+
 func (o *App) Encode() (attrs []entity.Attr) {
 	if !entity.Empty(o.ActiveVersion) {
 		attrs = append(attrs, entity.Ref(AppActiveVersionId, o.ActiveVersion))
@@ -90,6 +102,18 @@ func (o *AppVersion) Decode(e entity.AttrGetter) {
 
 func (o *AppVersion) Is(e entity.AttrGetter) bool {
 	return entity.Is(e, KindAppVersion)
+}
+
+func (o *AppVersion) ShortKind() string {
+	return "app_version"
+}
+
+func (o *AppVersion) Kind() entity.Id {
+	return KindAppVersion
+}
+
+func (o *AppVersion) EntityId() entity.Id {
+	return o.ID
 }
 
 func (o *AppVersion) Encode() (attrs []entity.Attr) {
@@ -400,6 +424,18 @@ func (o *Metadata) Is(e entity.AttrGetter) bool {
 	return entity.Is(e, KindMetadata)
 }
 
+func (o *Metadata) ShortKind() string {
+	return "metadata"
+}
+
+func (o *Metadata) Kind() entity.Id {
+	return KindMetadata
+}
+
+func (o *Metadata) EntityId() entity.Id {
+	return o.ID
+}
+
 func (o *Metadata) Encode() (attrs []entity.Attr) {
 	for _, v := range o.Labels {
 		attrs = append(attrs, entity.Label(MetadataLabelsId, v.Key, v.Value))
@@ -451,6 +487,18 @@ func (o *Project) Decode(e entity.AttrGetter) {
 
 func (o *Project) Is(e entity.AttrGetter) bool {
 	return entity.Is(e, KindProject)
+}
+
+func (o *Project) ShortKind() string {
+	return "project"
+}
+
+func (o *Project) Kind() entity.Id {
+	return KindProject
+}
+
+func (o *Project) EntityId() entity.Id {
+	return o.ID
 }
 
 func (o *Project) Encode() (attrs []entity.Attr) {

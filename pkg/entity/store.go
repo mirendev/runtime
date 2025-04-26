@@ -10,6 +10,7 @@ import (
 
 	"github.com/mr-tron/base58"
 	clientv3 "go.etcd.io/etcd/client/v3"
+	"miren.dev/runtime/pkg/cond"
 	"miren.dev/runtime/pkg/idgen"
 )
 
@@ -169,18 +170,18 @@ func (s *EtcdStore) GetEntity(ctx context.Context, id Id) (*Entity, error) {
 
 	resp, err := s.client.Get(ctx, key)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get entity from etcd: %w", err)
+		return nil, cond.NotFound("entity", id)
 	}
 
 	if len(resp.Kvs) == 0 {
-		return nil, ErrNotFound
+		return nil, cond.NotFound("entity", id)
 	}
 
 	var entity Entity
 
 	err = decoder.Unmarshal(resp.Kvs[0].Value, &entity)
 	if err != nil {
-		return nil, fmt.Errorf("failed to deserialize entity: %w", err)
+		return nil, cond.Errorf("failed to deserialize entity: %w", err)
 	}
 
 	entity.Revision = resp.Kvs[0].ModRevision

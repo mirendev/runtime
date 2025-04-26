@@ -38,6 +38,14 @@ func (o *Lease) Is(e entity.AttrGetter) bool {
 	return entity.Is(e, KindLease)
 }
 
+func (o *Lease) ShortKind() string {
+	return "lease"
+}
+
+func (o *Lease) Kind() entity.Id {
+	return KindLease
+}
+
 func (o *Lease) Encode() (attrs []entity.Attr) {
 	if !entity.Empty(o.LastHeartbeat) {
 		attrs = append(attrs, entity.Time(LeaseLastHeartbeatId, o.LastHeartbeat))
@@ -50,6 +58,19 @@ func (o *Lease) Encode() (attrs []entity.Attr) {
 	}
 	attrs = append(attrs, entity.Ref(entity.EntityKind, KindLease))
 	return
+}
+
+func (o *Lease) Empty() bool {
+	if !entity.Empty(o.LastHeartbeat) {
+		return false
+	}
+	if !entity.Empty(o.Project) {
+		return false
+	}
+	if !entity.Empty(o.Sandbox) {
+		return false
+	}
+	return true
 }
 
 func (o *Lease) InitSchema(sb *schema.SchemaBuilder) {
@@ -106,6 +127,14 @@ func (o *Node) Is(e entity.AttrGetter) bool {
 	return entity.Is(e, KindNode)
 }
 
+func (o *Node) ShortKind() string {
+	return "node"
+}
+
+func (o *Node) Kind() entity.Id {
+	return KindNode
+}
+
 func (o *Node) Encode() (attrs []entity.Attr) {
 	if !entity.Empty(o.ApiAddress) {
 		attrs = append(attrs, entity.String(NodeApiAddressId, o.ApiAddress))
@@ -118,6 +147,19 @@ func (o *Node) Encode() (attrs []entity.Attr) {
 	}
 	attrs = append(attrs, entity.Ref(entity.EntityKind, KindNode))
 	return
+}
+
+func (o *Node) Empty() bool {
+	if !entity.Empty(o.ApiAddress) {
+		return false
+	}
+	if len(o.Constraints) != 0 {
+		return false
+	}
+	if o.Status == "" {
+		return false
+	}
+	return true
 }
 
 func (o *Node) InitSchema(sb *schema.SchemaBuilder) {
@@ -230,6 +272,14 @@ func (o *Sandbox) Is(e entity.AttrGetter) bool {
 	return entity.Is(e, KindSandbox)
 }
 
+func (o *Sandbox) ShortKind() string {
+	return "sandbox"
+}
+
+func (o *Sandbox) Kind() entity.Id {
+	return KindSandbox
+}
+
 func (o *Sandbox) Encode() (attrs []entity.Attr) {
 	for _, v := range o.Container {
 		attrs = append(attrs, entity.Component(SandboxContainerId, v.Encode()))
@@ -260,6 +310,37 @@ func (o *Sandbox) Encode() (attrs []entity.Attr) {
 	}
 	attrs = append(attrs, entity.Ref(entity.EntityKind, KindSandbox))
 	return
+}
+
+func (o *Sandbox) Empty() bool {
+	if len(o.Container) != 0 {
+		return false
+	}
+	if !entity.Empty(o.HostNetwork) {
+		return false
+	}
+	if len(o.Labels) != 0 {
+		return false
+	}
+	if len(o.Network) != 0 {
+		return false
+	}
+	if len(o.Route) != 0 {
+		return false
+	}
+	if len(o.StaticHost) != 0 {
+		return false
+	}
+	if o.Status == "" {
+		return false
+	}
+	if !entity.Empty(o.Version) {
+		return false
+	}
+	if len(o.Volume) != 0 {
+		return false
+	}
+	return true
 }
 
 func (o *Sandbox) InitSchema(sb *schema.SchemaBuilder) {
@@ -391,6 +472,40 @@ func (o *Container) Encode() (attrs []entity.Attr) {
 	return
 }
 
+func (o *Container) Empty() bool {
+	if !entity.Empty(o.Command) {
+		return false
+	}
+	if len(o.ConfigFile) != 0 {
+		return false
+	}
+	if !entity.Empty(o.Directory) {
+		return false
+	}
+	if len(o.Env) != 0 {
+		return false
+	}
+	if !entity.Empty(o.Image) {
+		return false
+	}
+	if len(o.Mount) != 0 {
+		return false
+	}
+	if !entity.Empty(o.Name) {
+		return false
+	}
+	if !entity.Empty(o.OomScore) {
+		return false
+	}
+	if len(o.Port) != 0 {
+		return false
+	}
+	if !entity.Empty(o.Privileged) {
+		return false
+	}
+	return true
+}
+
 func (o *Container) InitSchema(sb *schema.SchemaBuilder) {
 	sb.String("command", "dev.miren.compute/container.command", schema.Doc("Command to run in the container"))
 	sb.Component("config_file", "dev.miren.compute/container.config_file", schema.Doc("A file to write into the container before starting"), schema.Many)
@@ -444,6 +559,19 @@ func (o *ConfigFile) Encode() (attrs []entity.Attr) {
 	return
 }
 
+func (o *ConfigFile) Empty() bool {
+	if !entity.Empty(o.Data) {
+		return false
+	}
+	if !entity.Empty(o.Mode) {
+		return false
+	}
+	if !entity.Empty(o.Path) {
+		return false
+	}
+	return true
+}
+
 func (o *ConfigFile) InitSchema(sb *schema.SchemaBuilder) {
 	sb.String("data", "dev.miren.compute/config_file.data", schema.Doc("The configuration data"))
 	sb.String("mode", "dev.miren.compute/config_file.mode", schema.Doc("The file mode to set the configuration to"))
@@ -477,6 +605,16 @@ func (o *Mount) Encode() (attrs []entity.Attr) {
 		attrs = append(attrs, entity.String(MountSourceId, o.Source))
 	}
 	return
+}
+
+func (o *Mount) Empty() bool {
+	if !entity.Empty(o.Destination) {
+		return false
+	}
+	if !entity.Empty(o.Source) {
+		return false
+	}
+	return true
 }
 
 func (o *Mount) InitSchema(sb *schema.SchemaBuilder) {
@@ -549,6 +687,25 @@ func (o *Port) Encode() (attrs []entity.Attr) {
 	return
 }
 
+func (o *Port) Empty() bool {
+	if !entity.Empty(o.Name) {
+		return false
+	}
+	if !entity.Empty(o.NodePort) {
+		return false
+	}
+	if !entity.Empty(o.Port) {
+		return false
+	}
+	if o.Protocol == "" {
+		return false
+	}
+	if !entity.Empty(o.Type) {
+		return false
+	}
+	return true
+}
+
 func (o *Port) InitSchema(sb *schema.SchemaBuilder) {
 	sb.String("name", "dev.miren.compute/port.name", schema.Doc("Name of the port for reference"), schema.Required)
 	sb.Int64("node_port", "dev.miren.compute/port.node_port", schema.Doc("The port number that should be forwarded from the node to the container"))
@@ -588,6 +745,16 @@ func (o *Network) Encode() (attrs []entity.Attr) {
 	return
 }
 
+func (o *Network) Empty() bool {
+	if !entity.Empty(o.Address) {
+		return false
+	}
+	if !entity.Empty(o.Subnet) {
+		return false
+	}
+	return true
+}
+
 func (o *Network) InitSchema(sb *schema.SchemaBuilder) {
 	sb.String("address", "dev.miren.compute/network.address", schema.Doc("A network address to reach the container at"))
 	sb.String("subnet", "dev.miren.compute/network.subnet", schema.Doc("The subnet that the address is associated with"))
@@ -622,6 +789,16 @@ func (o *Route) Encode() (attrs []entity.Attr) {
 	return
 }
 
+func (o *Route) Empty() bool {
+	if !entity.Empty(o.Destination) {
+		return false
+	}
+	if !entity.Empty(o.Gateway) {
+		return false
+	}
+	return true
+}
+
 func (o *Route) InitSchema(sb *schema.SchemaBuilder) {
 	sb.String("destination", "dev.miren.compute/route.destination", schema.Doc("The network destination"))
 	sb.String("gateway", "dev.miren.compute/route.gateway", schema.Doc("The next hop for the destination"))
@@ -654,6 +831,16 @@ func (o *StaticHost) Encode() (attrs []entity.Attr) {
 		attrs = append(attrs, entity.String(StaticHostIpId, o.Ip))
 	}
 	return
+}
+
+func (o *StaticHost) Empty() bool {
+	if !entity.Empty(o.Host) {
+		return false
+	}
+	if !entity.Empty(o.Ip) {
+		return false
+	}
+	return true
 }
 
 func (o *StaticHost) InitSchema(sb *schema.SchemaBuilder) {
@@ -700,6 +887,19 @@ func (o *Volume) Encode() (attrs []entity.Attr) {
 	return
 }
 
+func (o *Volume) Empty() bool {
+	if len(o.Labels) != 0 {
+		return false
+	}
+	if !entity.Empty(o.Name) {
+		return false
+	}
+	if !entity.Empty(o.Provider) {
+		return false
+	}
+	return true
+}
+
 func (o *Volume) InitSchema(sb *schema.SchemaBuilder) {
 	sb.Label("labels", "dev.miren.compute/volume.labels", schema.Doc("Labels that identify the volume to the provider"), schema.Many)
 	sb.String("name", "dev.miren.compute/volume.name", schema.Doc("The name of the volume"))
@@ -726,12 +926,27 @@ func (o *Schedule) Is(e entity.AttrGetter) bool {
 	return entity.Is(e, KindSchedule)
 }
 
+func (o *Schedule) ShortKind() string {
+	return "schedule"
+}
+
+func (o *Schedule) Kind() entity.Id {
+	return KindSchedule
+}
+
 func (o *Schedule) Encode() (attrs []entity.Attr) {
-	if !entity.Empty(o.Key) {
+	if !o.Key.Empty() {
 		attrs = append(attrs, entity.Component(ScheduleKeyId, o.Key.Encode()))
 	}
 	attrs = append(attrs, entity.Ref(entity.EntityKind, KindSchedule))
 	return
+}
+
+func (o *Schedule) Empty() bool {
+	if !o.Key.Empty() {
+		return false
+	}
+	return true
 }
 
 func (o *Schedule) InitSchema(sb *schema.SchemaBuilder) {
@@ -768,6 +983,16 @@ func (o *Key) Encode() (attrs []entity.Attr) {
 	return
 }
 
+func (o *Key) Empty() bool {
+	if !entity.Empty(o.Kind) {
+		return false
+	}
+	if !entity.Empty(o.Node) {
+		return false
+	}
+	return true
+}
+
 func (o *Key) InitSchema(sb *schema.SchemaBuilder) {
 	sb.Ref("kind", "dev.miren.compute/key.kind", schema.Doc("The type of entity this is"))
 	sb.Ref("node", "dev.miren.compute/key.node", schema.Doc("The node id the entity is scheduled for"))
@@ -788,5 +1013,5 @@ func init() {
 		(&Sandbox{}).InitSchema(sb)
 		(&Schedule{}).InitSchema(sb)
 	})
-	schema.RegisterEncodedSchema("dev.miren.compute", "v1alpha", []byte("\x1f\x8b\b\x00\x00\x00\x00\x00\x00\xff\xb4XK\x92\xf3&\x10>Gޯ\xcak\xc3T.\x92+\xa8\xb0hK\x8c$P\x00y\xece\x92\xca\"9Ff&7L\xd6)\xe8\xd6\x03\x83\xb1\xbc\xf87^X\xfd}\x82\xaf\xbfn\x1a\xbd\t\xc5\a\xf8E\xc0\x89\rҀb\xb5\x1e\xc6\xc9As\x02c\xa5V\xcd\xe9'ޏ-\x87N*a\xdfΟ$\x91O\xfe\tSZ\xc0?G\xa1\a.U\xca\x16^rJ\xa1\x1e\x95\x7f\xd3\x7fǣ\x84^\xd8\xdf_\x03\xb6㣬\xb8\x10\x06\xac\x15\xee2\xc2\xd1:#Us\x90\xe2\xfcu\x9e\x97m \xb8ˮ\xd6\xca:årH\x02=?@_\xe2\xd8\"\x06\xae.\xff\"\xd3\xd1:\xee&$\x11\xa0\xa6\xc1s|v\x83\x03c;\x1fV\x9dx?\x81}\x93\x93j\x81\xf7\xae\xbd\xe4ތ\x00\xb6\xc44\x93\xea\x94~Q\xe7/\v\xb1!\x02\fpq9\x7f~3.<o\x85\xb4\xfcЃ8\x7fu3p\x0e\xe9G#\an.\x95ϊ\xf0\xfbɱ\a\vX\xae\xc4A\x9f\xef\xb8\xe0\xfcQ杈,;\xe1\xcf\xf7\x80\x97\xb5V\x8eK\x05&\xa8/=\x87V\xa0\x9cO\xc177\xb9\xd9\n\vy\\q\xf7֛r\xb2\x84\xb3\xbc\xf2\xbf\xd0\xc3M\xad\x87\x81+q\xed\xdf̢\x17bF\x98\xf7\xc5\xc0G\xd9TG\xd9Cf\xf7ߗ\x89V\xe8\x83\n<\xedP`˿\xab\xa2\x85\xe0\x8e\xef(\xe5\r/\xf3\x10B\x0fZ\xc0\x83h\x0f!\xf4\xc8]\xfb \xdaC\xa2bxƧ\xfe!\xb2J!\r\xd4N\x9b\xcb5\xf5\xb7\xa5\xc4,(l-5\xa8\xd35\xfe\x8b\x12\xdeǇ\x84\xe2*@\x0e\xbcI\xa4\xc9\x14\xfa\xca\x10\x10\xe80\x18\xf4\xa4\\\xc6[E\x02\x04=\xe8\xaa\x1f\xf7\xb8*0\x97\xfd\xf4\x1b\x9d\x10\x02\xac\x93\x8a;\xa9Վ\n\v\xc4l\x83y\xa5Ʈ'S'\xf2eZ\x1e\x12`x\xe4\v\x94\x90\x8c\x16~\xae\xc82]|ݰ\a\x90\x9d\xb4\x1e*[k\x83\x04\xb5\xc4D\x14\xbd\xb4@\xde\xc9\xe7\xda\xe4\x92Y\\A\xc0<\x98\xcb\x1f\xf6\xe4\xd2\x13\x97S\xf9GA\xb5\xcc\xe0\xe1\t\xb7\x82\xf9өZ\xb6<\v\x96\xd9,\x02\xe7\xe8\xd7+\xadf\xe0\xad7\xfa\x1f\xac\xd5v4\xda\xe9Z\xf7\xf1 \x90)W\x04R\xf4v\x14\xf8\xbbv\xf5\x98\xf3\xd7\x1c\xcc\\=֓(\xc7Lb|]U\xdb+\x9d\x0f\x8b\xcf\xf7U\x8e\xe7\xd1ȓ\xef\xe5\x80\xe7\x958h\x1d&\xa5\xef\x8a\xdeY@\x11\xefzfS\xad\xb6ں\x9f\xc1\xbdh\xd3\xc5\xec\x19w\xcfF\xda`h\b\v\xd3[2\x0e\xe6\x86$\xa2 @07VH\xa36\xab\xb8\xdb\xf1f\x9e\x19\xf4`\x95\xa4\x8c\xec\x8aqW\xa7kn\xcc\xc1\x99\x05\x13-#\xc4\xdc㦃\x02\xb7C\xb7\x19\x8e\x80(\xa5\xb3ptl\x18\xedw\x99\x8a\x98)\x85y\xcb\byP\u0094\x8fE|\x1f\xe2\xa8\b\xc4\xe9Q\xd14\xdc\xc1\vO\x0e\xfb̖\x91\x81\xe2\xe3\xc3\"<\xa2\xe9Ώ\u07b2\xae\xbc\xd13R\x16Jc\v|PД\x95eXw\xc9*\x96\x85\x97\xa7\xaa\ro(jD\x1f丧\x927X9\xc6\xf3\x18>\xf3\x8f\n\x97\xb4BwH\xefi\xefB\x00\xcf^\xec\xe6[\x12pь\xa0\x84TM\xe1vF\x11RiW\xe1\r\xed\xf6\xado\x89i̤T\x99\x97\"\x1a\xeb\xf48\xc2M\xc1&\xcb(\x82\x9cK\xd9\f\xca\x1c\xa4\xb8\xd3\xed(\x1aMz<\xe9~\x1ar\xa5^P\x960\x0fZ3%d1\xe1\x9d{FzJ\xac\xf7\xfdL\x91\"gtF\x14Ƒ\x8c'\x88`\x1dH\xfcxp\x92\x82n\xaa\xe5NM\xe0\x19\x119\x9b4\x8f\xfb/I\x91\xdb\t\xde\xc6\xeb\x16\xc4\xd4\xdf\xfb(s\xfe8\x936\x82\x96\xf5\xfd\x95\xee+\x1d\\2n\xc8}\x82 Z\xd6\xc1e\xbf\vR\"\xb6%\xdaי\xc2p\xb3q{f\xd3\x1d\\\x98\x0f\x9bs>\xdf/\xcb\b\x1f\x16\xe5\xc5\xcb\x11\xfd\xd1Ϋ=\x7fz#S=p{/M/)6\xc0v]\xb5Uϭ\xabZ\xe0\xc6\x1d\x80;\x9a\x11\xa5\xef\xb9\xd9y.0\xb3\x18D\x9dc4\xfa\x19j\xb7U&c@$\xa0XB\x92_w!)6>)ãζڸ\n?F\xe2_e]\xf1\x93U\xe9\xab\xe5RIw\xbek\xad\x89\xbcWr\xff\x03\x00\x00\xff\xff"))
+	schema.RegisterEncodedSchema("dev.miren.compute", "v1alpha", []byte("\x1f\x8b\b\x00\x00\x00\x00\x00\x00\xff\xb4X˒\xeb&\x10\xfd\x8e\xbc_\x95׆\xa9\xfcH~A\x85E[b$\x01\x01䱗I*\x8b\xe4323\xf9\xc3d\x9d\x02\x1aY\x18\x84\xe5\xc5\xddL\xddk\xfa\x1c\xc3\xe9\xd3\xdd\xe07&\xe8\x04\xbf08\x91\x89k\x10\xa4\x95\x93\x9a-t'ІKѝ~\xa2\xa3\xea)\f\\0\xf3v\xfe<\x8b|r+\xc4P\xc1\x0e\xf2\xfcϑɉr\x91\x13\xfa\xef9\x7f\x94\xc3\x11Y\xfe\xc2\xff\x8eG\x0e#3\x7f\xbe{<o\xa5\xb0\x94\v\xd0\xcc^\x94\xfb襤\x00a\x0f\x9c\x9d\xbf\xd9\xe4&W\xd8D\xc5\xe5\xdf+\xee\xde~sN\x92q\xd6w\xfe\u05ebg\xeaZ9MT0\xbf\uf8f1\x9a\x8bnc\xd3\v1AL8\xfb\xd0Jq\xe4]s\xe4#\x14N\xff}\x9d\xe8\n}P\x81\xa7\x1d\n\xac\xf9\xebj\xfc\x1e\xd4`\x8cZz+\xc5\xd7\xc5\x13D^\xe2 \x88\x9e$\x83\a\xd1\x0e\x82hEm\xff \xdaAF\xa5\xf9D\xf5\xa5q\az\x0e\xabn1\xb0r\xc65\xb4V\xea\xcb-\xf5\xb7\xb5\xc4,\xa8P\x87-\x88\xd3-\xfe\x8b\x1a\xde\xc5\xfb\x84\x86]\x00\x9fh\x97I\xf3U\x8d\xc1#\x82\xc3`\x92\xb3\xb0\x05oU\t\x02\xe8AW\xfd\xb8\xc7U\x9e\xb9\xee\xa7\xdf¹\a\x06\xc6rA-\x97bG\x85yb\xb2\xc2\x04\x96\xa3\x91\xb3n3\xf9\n-/\x10\x84\xf0\xc4\x17AB4\x9a\xffsC\xf6eMJ\a@;I95\xa6\x95:\x10\xb4<$\xa2\xea\xa5\x05\xf2\x8e>\x97\xba\x94\xcc\xea\x0e<\xe6\xc1\\\xfe\xb0'\x97\x8e\xb8\x9e\xca?*\xaa}\x92\xef\xd9\x11\xae\x05\x13\x92A\xb3\x1c9\nV8l\x00\xc6\xe8\xd7\x1b\xad\"p\xeb\x1bݟP\xab\xbd\xd2\xd2\xcaV\x8e\x1e\xc7@\xcc\xd3F\xb9\x06 F\x0f.\xb09\xd1q\x06\xf3wk[U\xf2W\f&\xb6U\xed\xcc\xea13S\xafW\xd5\xf6J\xe7\xc2\x12벫\x1c\xcfJ\xf3\x93\xeb\xe5\x10\xe6\x15;H9:\xb2\xef\xaa\xdeY@\t\xefufc\xad\xf6\xd2؟\xc1\xbeH=\xa4\xec\x05wG#\xad0A\xfd\xe3H\x0f0\x9a\x1d\xe5\x15)\x10\xe0\xcd\x1d*\xa4\x13\xab]\xdc\xedx\x91'\x82\x1e\xac\x92\x9c\x91\xdc0\xee\xeat\x1deL\x83\xc9\x0e^\xd80\xd2\x12D\xc4\x1e7\x1f\x04\xd8\x1d\xbaEx\x00$)\x8d\xc2\xe1\xd8\xd0ҝ2\x17\xb1P\n\xf1\xc8\x01\xf2\xa0\x849\x1fI\xf8>Ĩ\xf0\xc4\xf9\xa8\xe8:j\xe1\x85fþp\xe4\xc0\x80\xf1\xe9\xb0\xf0Kx\xbb3\x96Z\xde6\xce\xe8\x05)+\xa5\xb1\x06>(h\xceJ\n\xac\xbbde\xcb\xc6뷪\x15\xaf/\xea\x80>p\xb5\xa7\x92WX\xae\xd2\xfbXXsK\xd8\x1f\xdc\a\xb3I{s\xa5;\x84\xf0us~\uf315J\xc1\xe6VfC0\x821\xa0\xec\xfc\xd9f\x98[\xee\x14\b\xc6EWa\xc3\b.\xa4m4Pv\xd9\x12p6d\x89\xe9\xf4,D\x9d\x17#й\x98M\xaf́\xb3;\xdd\x0e\xa3\x83I\x8f'9\xceS\xa9\xd4+\xca\"\xe6Ak\xe6\x84$%\xbc\xf3\xceȧ\x04\xf8\x7fo\x14i\xe0LfD\xe5:R\xc84\x12\\/$\xeezp\xe2\f_\xaa\xf5N\x8d\xe0\x88H\x9c\x8d\x9a\xa7\xfd\x17\xa5(\x9d$\xbc\xc6\xdb\x1e\xd8<\xc2=\x95?.\xa4\r\xa1u}\x7f\xc5\xf7\xca\x00\x97\x82\x1b\n\xb7\x95HK\x06\xb8\xecwAND\xd6D\xfb:\x93\xbfܬ\xdc^8\xf4\x00\x17\xe2\xc2b\xce\xe3\xfb\xb2\x8epaI^\x9c\x1c\xc9\a}\xdc\xed\xf9ӍL\x8d@ͽ4\xbd\xe4X\x0f\xdb\xf5\xd4\x16#5\xb6\xe9\x81j{\x00j\xf1\x8e\xc8]\xcf-\xde\xe7<3IA\xd89\x94\x96\xcf\xd0ڵ2\x05\x03\x06\x02\x8cE$\xfau\x17\x12c\xd3I\xe9\x97JwY/\xa2K\xc4\x1d\rO\x85\v\x8ed\xfb$\x1c\xa8\xe2\xcdƽ\xabС\x1d/YAޖ\x9fo\x8cՔ\v{ۏ\xb68\xd6\bߒ*\xa3\xadВ<G>\xd7\u07baY\fB\xbe\x88\xca\xc4\xc0\b\bS\xa8T\xce8Y\xdczϸ\xa1\x87\x11\xcas\x04' \x86\xf0Y\xf4@G\xdb\xd7f\xdb\x12\x93\xbeO\xdcy\x06\xd3Km\x9b\xf0c\xe4\xd2\x06\xef\xfc(y\xad\xc2{\xfd\x12}V-V\xbf\x8f\xaa\x15\xff\a\x00\x00\xff\xff"))
 }

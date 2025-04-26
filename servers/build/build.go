@@ -10,16 +10,16 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/davecgh/go-spew/spew"
 	"github.com/moby/buildkit/client"
 	"github.com/tonistiigi/fsutil"
 	"miren.dev/runtime/api/build/build_v1alpha"
 	"miren.dev/runtime/api/core/core_v1alpha"
+	"miren.dev/runtime/api/entityserver"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/appconfig"
 	"miren.dev/runtime/components/netresolve"
 	"miren.dev/runtime/defaults"
-	"miren.dev/runtime/pkg/entity"
+	"miren.dev/runtime/pkg/cond"
 	"miren.dev/runtime/pkg/idgen"
 	"miren.dev/runtime/pkg/procfile"
 	"miren.dev/runtime/pkg/rpc/stream"
@@ -29,6 +29,7 @@ import (
 type Builder struct {
 	Log      *slog.Logger
 	EAS      *entityserver_v1alpha.EntityAccessClient
+	ec       *entityserver.Client
 	TempDir  string
 	Registry string
 
@@ -41,6 +42,7 @@ func NewBuilder(log *slog.Logger, eas *entityserver_v1alpha.EntityAccessClient, 
 		EAS:      eas,
 		Resolver: res,
 		TempDir:  tmpdir,
+		ec:       entityserver.NewClient(eas),
 	}
 }
 
@@ -51,39 +53,30 @@ func (b *Builder) nextVersion(ctx context.Context, name string) (
 ) {
 	var appRec core_v1alpha.App
 
-	ret, err := b.EAS.Get(ctx, "app/"+name)
+	err := b.ec.Get(ctx, name, &appRec)
 	if err != nil {
-		var rpcE entityserver_v1alpha.Entity
+		if !errors.Is(cond.ErrNotFound{}, err) {
+			return nil, nil, err
+		}
 
 		appRec.Project = "project/default"
 
-		rpcE.SetAttrs(entity.Attrs(
-			(&core_v1alpha.Metadata{
-				Name: name,
-			}).Encode,
-			appRec.Encode,
-			entity.Ident, "app/"+name,
-		))
-
-		pr, err := b.EAS.Put(ctx, &rpcE)
+		id, err := b.ec.Create(ctx, name, &appRec)
 		if err != nil {
 			return nil, nil, err
 		}
-		appRec.ID = entity.Id(pr.Id())
-	} else {
-		appRec.Decode(ret.Entity().Entity())
+		appRec.ID = id
 	}
 
 	var currentCfg core_v1alpha.Config
 
 	if appRec.ActiveVersion != "" {
-		vret, err := b.EAS.Get(ctx, appRec.ActiveVersion.String())
+		var verRec core_v1alpha.AppVersion
+
+		err := b.ec.GetById(ctx, appRec.ActiveVersion, &verRec)
 		if err != nil {
 			return nil, nil, err
 		}
-
-		var verRec core_v1alpha.AppVersion
-		verRec.Decode(vret.Entity().Entity())
 
 		currentCfg = verRec.Config
 	} else {
@@ -330,31 +323,33 @@ func (b *Builder) BuildFromTar(ctx context.Context, state *build_v1alpha.Builder
 
 	mrv.Config.Commands = serviceCmds
 
-	spew.Dump(mrv)
-	spew.Dump(mrv.Encode())
-
-	var rpcE entityserver_v1alpha.Entity
-
-	rpcE.SetAttrs(entity.Attrs(
-		(&core_v1alpha.Metadata{
-			Name: mrv.Version,
-		}).Encode,
-		entity.Ident, "app_verison/"+mrv.Version,
-		mrv.Encode,
-	))
-
-	pr, err := b.EAS.Put(ctx, &rpcE)
+	id, err := b.ec.Create(ctx, mrv.Version, mrv)
 	if err != nil {
-		return err
+		return fmt.Errorf("error creating app version: %w", err)
 	}
 
-	appRec.ActiveVersion = entity.Id(pr.Id())
+	appRec.ActiveVersion = id
 
-	var rpcE2 entityserver_v1alpha.Entity
-	rpcE2.SetId(string(appRec.ID))
-	rpcE2.SetAttrs(appRec.Encode())
+	/*
+		var rpcE entityserver_v1alpha.Entity
 
-	_, err = b.EAS.Put(ctx, &rpcE2)
+		rpcE.SetAttrs(entity.Attrs(
+			(&core_v1alpha.Metadata{
+				Name: mrv.Version,
+			}).Encode,
+			entity.Ident, "app_verison/"+mrv.Version,
+			mrv.Encode,
+		))
+
+		pr, err := b.EAS.Put(ctx, &rpcE)
+		if err != nil {
+			return err
+		}
+
+		appRec.ActiveVersion = entity.Id(pr.Id())
+	*/
+
+	err = b.ec.Update(ctx, appRec)
 	if err != nil {
 		return fmt.Errorf("error updating app entity: %w", err)
 	}
