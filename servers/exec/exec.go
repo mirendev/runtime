@@ -2,7 +2,6 @@ package exec
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -16,7 +15,6 @@ import (
 	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/api/exec/exec_v1alpha"
-	"miren.dev/runtime/app"
 	"miren.dev/runtime/pkg/idgen"
 	"miren.dev/runtime/pkg/rpc/stream"
 )
@@ -191,6 +189,19 @@ func (s *Server) Exec(ctx context.Context, req *exec_v1alpha.SandboxExecExec) er
 	return nil
 }
 
+func (e *Server) command(ver *core_v1alpha.AppVersion, service string) string {
+	for _, cmd := range ver.Config.Commands {
+		if cmd.Service == service && cmd.Command != "" {
+			if ver.Config.Entrypoint != "" {
+				return ver.Config.Entrypoint + " " + cmd.Command
+			}
+			return cmd.Command
+		}
+	}
+
+	return ""
+}
+
 func (e *Server) spec(opts *exec_v1alpha.ShellOptions, spec *oci.Spec, ver *core_v1alpha.AppVersion) (*specs.Process, error) {
 	proc := &specs.Process{
 		Cwd:  spec.Process.Cwd,
@@ -198,21 +209,12 @@ func (e *Server) spec(opts *exec_v1alpha.ShellOptions, spec *oci.Spec, ver *core
 		User: spec.Process.User,
 	}
 
-	var cfg app.Configuration
-
-	if ver != nil && ver.Configuration != nil {
-		err := json.Unmarshal(ver.Configuration, &cfg)
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	ep := cfg.Entrypoint()
+	ep := ver.Config.Entrypoint
 
 	args := opts.Command()
 
 	if len(args) == 0 {
-		if con := cfg.CommandFor("console"); con != "" {
+		if con := e.command(ver, "console"); con != "" {
 			// CommandFor already prepends the entrypoint
 			args = []string{"/bin/sh", "-c", "exec " + con}
 		} else if ep != "" {

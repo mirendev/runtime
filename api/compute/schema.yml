@@ -62,6 +62,18 @@ kinds:
           doc: Labels that identify the volume to the provider
           many: true
 
+    static_host:
+      type: component
+      doc: A name to ip mapping configured staticly for the sandbox
+      many: true
+      attrs:
+        host:
+          type: string
+          doc: The hostname
+        ip:
+          type: string
+          doc: The IP
+
     container:
       type: component
       doc: A container running in the sandbox
@@ -129,6 +141,21 @@ kinds:
         oom_score:
           type: int
           doc: How to adjust the OOM score for this container
+
+        config_file:
+          type: component
+          doc: A file to write into the container before starting
+          many: true
+          attrs:
+            path:
+              type: string
+              doc: The path in the container to write the data
+            data:
+              type: string
+              doc: The configuration data
+            mode:
+              type: string
+              doc: The file mode to set the configuration to
 
   node:
     constraints:

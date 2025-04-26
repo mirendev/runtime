@@ -136,6 +136,7 @@ const (
 	SandboxLabelsId         = entity.Id("dev.miren.compute/sandbox.labels")
 	SandboxNetworkId        = entity.Id("dev.miren.compute/sandbox.network")
 	SandboxRouteId          = entity.Id("dev.miren.compute/sandbox.route")
+	SandboxStaticHostId     = entity.Id("dev.miren.compute/sandbox.static_host")
 	SandboxStatusId         = entity.Id("dev.miren.compute/sandbox.status")
 	SandboxStatusPendingId  = entity.Id("dev.miren.compute/status.pending")
 	SandboxStatusNotReadyId = entity.Id("dev.miren.compute/status.not_ready")
@@ -153,6 +154,7 @@ type Sandbox struct {
 	Labels      []string      `cbor:"labels,omitempty" json:"labels,omitempty"`
 	Network     []Network     `cbor:"network,omitempty" json:"network,omitempty"`
 	Route       []Route       `cbor:"route,omitempty" json:"route,omitempty"`
+	StaticHost  []StaticHost  `cbor:"static_host,omitempty" json:"static_host,omitempty"`
 	Status      SandboxStatus `cbor:"status,omitempty" json:"status,omitempty"`
 	Version     entity.Id     `cbor:"version,omitempty" json:"version,omitempty"`
 	Volume      []Volume      `cbor:"volume,omitempty" json:"volume,omitempty"`
@@ -202,6 +204,13 @@ func (o *Sandbox) Decode(e entity.AttrGetter) {
 			o.Route = append(o.Route, v)
 		}
 	}
+	for _, a := range e.GetAll(SandboxStaticHostId) {
+		if a.Value.Kind() == entity.KindComponent {
+			var v StaticHost
+			v.Decode(a.Value.Component())
+			o.StaticHost = append(o.StaticHost, v)
+		}
+	}
 	if a, ok := e.Get(SandboxStatusId); ok && a.Value.Kind() == entity.KindId {
 		o.Status = sandboxstatusFromId[a.Value.Id()]
 	}
@@ -237,6 +246,9 @@ func (o *Sandbox) Encode() (attrs []entity.Attr) {
 	for _, v := range o.Route {
 		attrs = append(attrs, entity.Component(SandboxRouteId, v.Encode()))
 	}
+	for _, v := range o.StaticHost {
+		attrs = append(attrs, entity.Component(SandboxStaticHostId, v.Encode()))
+	}
 	if a, ok := sandboxstatusToId[o.Status]; ok {
 		attrs = append(attrs, entity.Ref(SandboxStatusId, a))
 	}
@@ -259,6 +271,8 @@ func (o *Sandbox) InitSchema(sb *schema.SchemaBuilder) {
 	(&Network{}).InitSchema(sb.Builder("network"))
 	sb.Component("route", "dev.miren.compute/sandbox.route", schema.Doc("A network route the container uses"), schema.Many)
 	(&Route{}).InitSchema(sb.Builder("route"))
+	sb.Component("static_host", "dev.miren.compute/sandbox.static_host", schema.Doc("A name to ip mapping configured staticly for the sandbox"), schema.Many)
+	(&StaticHost{}).InitSchema(sb.Builder("static_host"))
 	sb.Singleton("dev.miren.compute/status.pending")
 	sb.Singleton("dev.miren.compute/status.not_ready")
 	sb.Singleton("dev.miren.compute/status.running")
@@ -272,6 +286,7 @@ func (o *Sandbox) InitSchema(sb *schema.SchemaBuilder) {
 
 const (
 	ContainerCommandId    = entity.Id("dev.miren.compute/container.command")
+	ContainerConfigFileId = entity.Id("dev.miren.compute/container.config_file")
 	ContainerDirectoryId  = entity.Id("dev.miren.compute/container.directory")
 	ContainerEnvId        = entity.Id("dev.miren.compute/container.env")
 	ContainerImageId      = entity.Id("dev.miren.compute/container.image")
@@ -283,20 +298,28 @@ const (
 )
 
 type Container struct {
-	Command    string   `cbor:"command,omitempty" json:"command,omitempty"`
-	Directory  string   `cbor:"directory,omitempty" json:"directory,omitempty"`
-	Env        []string `cbor:"env,omitempty" json:"env,omitempty"`
-	Image      string   `cbor:"image" json:"image"`
-	Mount      []Mount  `cbor:"mount,omitempty" json:"mount,omitempty"`
-	Name       string   `cbor:"name,omitempty" json:"name,omitempty"`
-	OomScore   int64    `cbor:"oom_score,omitempty" json:"oom_score,omitempty"`
-	Port       []Port   `cbor:"port,omitempty" json:"port,omitempty"`
-	Privileged bool     `cbor:"privileged,omitempty" json:"privileged,omitempty"`
+	Command    string       `cbor:"command,omitempty" json:"command,omitempty"`
+	ConfigFile []ConfigFile `cbor:"config_file,omitempty" json:"config_file,omitempty"`
+	Directory  string       `cbor:"directory,omitempty" json:"directory,omitempty"`
+	Env        []string     `cbor:"env,omitempty" json:"env,omitempty"`
+	Image      string       `cbor:"image" json:"image"`
+	Mount      []Mount      `cbor:"mount,omitempty" json:"mount,omitempty"`
+	Name       string       `cbor:"name,omitempty" json:"name,omitempty"`
+	OomScore   int64        `cbor:"oom_score,omitempty" json:"oom_score,omitempty"`
+	Port       []Port       `cbor:"port,omitempty" json:"port,omitempty"`
+	Privileged bool         `cbor:"privileged,omitempty" json:"privileged,omitempty"`
 }
 
 func (o *Container) Decode(e entity.AttrGetter) {
 	if a, ok := e.Get(ContainerCommandId); ok && a.Value.Kind() == entity.KindString {
 		o.Command = a.Value.String()
+	}
+	for _, a := range e.GetAll(ContainerConfigFileId) {
+		if a.Value.Kind() == entity.KindComponent {
+			var v ConfigFile
+			v.Decode(a.Value.Component())
+			o.ConfigFile = append(o.ConfigFile, v)
+		}
 	}
 	if a, ok := e.Get(ContainerDirectoryId); ok && a.Value.Kind() == entity.KindString {
 		o.Directory = a.Value.String()
@@ -338,6 +361,9 @@ func (o *Container) Encode() (attrs []entity.Attr) {
 	if !entity.Empty(o.Command) {
 		attrs = append(attrs, entity.String(ContainerCommandId, o.Command))
 	}
+	for _, v := range o.ConfigFile {
+		attrs = append(attrs, entity.Component(ContainerConfigFileId, v.Encode()))
+	}
 	if !entity.Empty(o.Directory) {
 		attrs = append(attrs, entity.String(ContainerDirectoryId, o.Directory))
 	}
@@ -367,6 +393,8 @@ func (o *Container) Encode() (attrs []entity.Attr) {
 
 func (o *Container) InitSchema(sb *schema.SchemaBuilder) {
 	sb.String("command", "dev.miren.compute/container.command", schema.Doc("Command to run in the container"))
+	sb.Component("config_file", "dev.miren.compute/container.config_file", schema.Doc("A file to write into the container before starting"), schema.Many)
+	(&ConfigFile{}).InitSchema(sb.Builder("config_file"))
 	sb.String("directory", "dev.miren.compute/container.directory", schema.Doc("Directory to start in"))
 	sb.String("env", "dev.miren.compute/container.env", schema.Doc("Environment variable for the container"), schema.Many)
 	sb.String("image", "dev.miren.compute/container.image", schema.Doc("Container image"), schema.Required)
@@ -377,6 +405,49 @@ func (o *Container) InitSchema(sb *schema.SchemaBuilder) {
 	sb.Component("port", "dev.miren.compute/container.port", schema.Doc("A network port the container declares"), schema.Many)
 	(&Port{}).InitSchema(sb.Builder("port"))
 	sb.Bool("privileged", "dev.miren.compute/container.privileged", schema.Doc("Whether or not the container runs in privileged mode"))
+}
+
+const (
+	ConfigFileDataId = entity.Id("dev.miren.compute/config_file.data")
+	ConfigFileModeId = entity.Id("dev.miren.compute/config_file.mode")
+	ConfigFilePathId = entity.Id("dev.miren.compute/config_file.path")
+)
+
+type ConfigFile struct {
+	Data string `cbor:"data,omitempty" json:"data,omitempty"`
+	Mode string `cbor:"mode,omitempty" json:"mode,omitempty"`
+	Path string `cbor:"path,omitempty" json:"path,omitempty"`
+}
+
+func (o *ConfigFile) Decode(e entity.AttrGetter) {
+	if a, ok := e.Get(ConfigFileDataId); ok && a.Value.Kind() == entity.KindString {
+		o.Data = a.Value.String()
+	}
+	if a, ok := e.Get(ConfigFileModeId); ok && a.Value.Kind() == entity.KindString {
+		o.Mode = a.Value.String()
+	}
+	if a, ok := e.Get(ConfigFilePathId); ok && a.Value.Kind() == entity.KindString {
+		o.Path = a.Value.String()
+	}
+}
+
+func (o *ConfigFile) Encode() (attrs []entity.Attr) {
+	if !entity.Empty(o.Data) {
+		attrs = append(attrs, entity.String(ConfigFileDataId, o.Data))
+	}
+	if !entity.Empty(o.Mode) {
+		attrs = append(attrs, entity.String(ConfigFileModeId, o.Mode))
+	}
+	if !entity.Empty(o.Path) {
+		attrs = append(attrs, entity.String(ConfigFilePathId, o.Path))
+	}
+	return
+}
+
+func (o *ConfigFile) InitSchema(sb *schema.SchemaBuilder) {
+	sb.String("data", "dev.miren.compute/config_file.data", schema.Doc("The configuration data"))
+	sb.String("mode", "dev.miren.compute/config_file.mode", schema.Doc("The file mode to set the configuration to"))
+	sb.String("path", "dev.miren.compute/config_file.path", schema.Doc("The path in the container to write the data"))
 }
 
 const (
@@ -557,6 +628,40 @@ func (o *Route) InitSchema(sb *schema.SchemaBuilder) {
 }
 
 const (
+	StaticHostHostId = entity.Id("dev.miren.compute/static_host.host")
+	StaticHostIpId   = entity.Id("dev.miren.compute/static_host.ip")
+)
+
+type StaticHost struct {
+	Host string `cbor:"host,omitempty" json:"host,omitempty"`
+	Ip   string `cbor:"ip,omitempty" json:"ip,omitempty"`
+}
+
+func (o *StaticHost) Decode(e entity.AttrGetter) {
+	if a, ok := e.Get(StaticHostHostId); ok && a.Value.Kind() == entity.KindString {
+		o.Host = a.Value.String()
+	}
+	if a, ok := e.Get(StaticHostIpId); ok && a.Value.Kind() == entity.KindString {
+		o.Ip = a.Value.String()
+	}
+}
+
+func (o *StaticHost) Encode() (attrs []entity.Attr) {
+	if !entity.Empty(o.Host) {
+		attrs = append(attrs, entity.String(StaticHostHostId, o.Host))
+	}
+	if !entity.Empty(o.Ip) {
+		attrs = append(attrs, entity.String(StaticHostIpId, o.Ip))
+	}
+	return
+}
+
+func (o *StaticHost) InitSchema(sb *schema.SchemaBuilder) {
+	sb.String("host", "dev.miren.compute/static_host.host", schema.Doc("The hostname"))
+	sb.String("ip", "dev.miren.compute/static_host.ip", schema.Doc("The IP"))
+}
+
+const (
 	VolumeLabelsId   = entity.Id("dev.miren.compute/volume.labels")
 	VolumeNameId     = entity.Id("dev.miren.compute/volume.name")
 	VolumeProviderId = entity.Id("dev.miren.compute/volume.provider")
@@ -683,5 +788,5 @@ func init() {
 		(&Sandbox{}).InitSchema(sb)
 		(&Schedule{}).InitSchema(sb)
 	})
-	schema.RegisterEncodedSchema("dev.miren.compute", "v1alpha", []byte("\x1f\x8b\b\x00\x00\x00\x00\x00\x00\xff\xb4XK\xb2\xeb4\x10]\a\xff_A\xc1D\x14\x1ba\v)\xc5\xea\xd8z\xb6%#ɾ\xf6\x10(\xaa`\x1b\xdc\xfb\xd8!\x8c)\xa9ۿHV\x9c\xc1\x9bd\x10\x9fs,u\x1fu\xb7\xfc&\x14o\xe1\x17\x01\x03k\xa5\x01\xc5\n\xddv\xbd\x83r\x00c\xa5V\xe5\xf0\x13o\xba\x8aC-\x95\xb0o\xe3\xa7\x11\xf2G\xff\x845\xc0-\xfcs\x13\xba\xe5R\xc5r\xe1-/17\xd0\xd2\xef\xfa\xefv\x93\xd0\b\xfb\xfbk \xab\x86[w\xa9\x80\x1bw\x05\ue11b:\x10N\xb6p\x95b\xfc\xee@\x99\xedI\xa8TvF\xbf\x83\x02%\xaeRx\x81/\x8e\x04\bKL˕\xb8\xea\xf1\x14\x93\xb0Mgd\xcb\xcdt\xf1\x9b\x82\xf0h\xfc\xe4 \x88J\x8bG1\x1cb\xaag\x9d\na\xcd;y\xe1B\x18\xb06l\xe1f\x9d\x91\xaa\xf4\xdb\xf8:\xad\xcb6\x14\xb4J]he\x9d\xe1R9\x14\x81\x86_\xa1\xc9il\x19-Wӿ\xa8t\xb3\x8e\xbb\x1eE\x04\xa8\xbe\xf5\x1a\x9f\x1dh \xb6\xf6\xb0\xcb\xc0\x9b\x1e\xec[٫Z\xe9\x175~\x19s\x10\xce\b\x01\x06\xb8\x98\xc6\xcf\x0fq\xe1y%\xa4\xe5\xd7\x06\xc4\xf8\xd5!p\x86\xc8^U\xc0\x1bWM\xa9]/o'\xcc\xce\x03\xc2\xef'\xb5\x96`\x01r\xcd\x03\x17\x8c\x1f%^\x8a̼\x13\xfe|\x1f\xf8\xb2\xd0\xcaq\xa9\xc0\x84\xe8K\xaf\xa1\x15(\xe7S\xf0͡6[i!\x8f+\xef\xd1zcM\x16i\xe6W\xfe\x17\x1d\xc1B\xb7-W\xe2\u07bf\x89E/\u008c8\xa8 \x854P8m\xa6{\x8dos\x1a\v\v\xcd[\x80\x1a\xee\xf9\x89R\xb0\xf2=>\x04\rW\x01\xb2\xe5%\xdc+$\x8c\xb7*\x04\x06\xe6\x0fZ\xdd+\x97\xc8]V\x00IOf\xee\x87\x13\x99C\xe5|\xfe~\xa3\x1a$\xc0:\xa9\xb8\x93Z\x9d\xc8a\x10f\x1b\xce+\x95\x0eݛ\"\n_\xe2P\xa1\x00\xc2\xf7\xa58<A9\xfc\xb9\x13KT\x95uÞ@vҺ\xbd\xd8B\x1b\x14($&\"륅\x82\xd9\x14\x9d6\xa9dfW\x108O\xe6\xf2\xfb3\xb9\xf4\xc2\xf9T\xfe\x91\x89Z\xa2\xb5y\xc1m\xc0|\xfd\xbb,[\x9e\x03\x96\xd8,\x12g\xf4\xeb]\xacf\xe2\xd1\x1b\xfd\x0f\x9eժ3\xda\xe9B7\xfbV\x938\xaeH$\xf4\xb6\xd9\xfc]\xb8\xa2K\xf9k\x063WtE/\xf2\x98^t\xafk\xd4Ά\xce\xc3\xf6\x1dd\rǻ\xce\xc8A6P\x02VDqպ9\x98\x886)^H;ݵ+\xd0Y\xad\xb4u?\x83{Ѧޫ'\xdc=\x1biá6\x1f\xe6\x83h\xe0H5m\x92 B07\x9e\x90RmV\xf1\xb0\xe2\xcd:3\xe9\xc9S\x12+\xb2;\xc5S\x95\xae<\x98\xb4\x12\v&YF\x8c\xb9\xc6\xf5W\x05\xeeD\xdcf:\x12v)\x9d\x03Gm\xc3h\xbf\xcb8\x88\x89\xa30o\x19)O\x860\xd6c;\xbd\x0f\xd1*\x82p\xdc*ʒ;x\xe1Q\xb3Ol\x19\x15\b\xbfo\x16\xe1Qfl\u03789\x9e\\ߗ\x1d(!U\x99\x99\\\t!\x95v\x17\x9c^\x8f\xe7\xcc\x05S\x9a^\xa9\xbc.!J\xebt\xd7Az\xe1\x88$\x84\x10\xc0\x93c\xf9<\x11\x03\xa7\xc1jN\xea\xf6v\x949\x9d\x84Fg\xde\x06\xdd\xf4mʚ\x99\xc8\x12\xe7IoƂl/\xf8\xe0.\x15W\xb5\xf5\x06\x940\x15j\xeejZ\xa6}&\xe2L\x02k\x03\xf5\xedl\x90\x82f\xf7|e!\xf2\xccؙ\x9ab\xbe\xaf\x17\x14\x8a\xd4N\xf0~RT \xfa\xe6\xd15u\xfc8\x916\xa2\xe6\xe3\xfb+\xcd\xd75L\t7\xa4\xaep$\xcbj\x98λ \x16b[\xa1S\x05J\x84f\xbcq{b\xd35L\xcc\xc3\xe6\x9ck\x01'\x18\x1e\xb6ˋ\x0f\xc7\xee\x8fj^mm+m\xdc\x05?\xcf\xd0\xf7\x85\xecG\x1a\xbc\x7f\xe6>A,&xpI]\xd6\xf0\xd0-\xff\x03\x00\x00\xff\xff"))
+	schema.RegisterEncodedSchema("dev.miren.compute", "v1alpha", []byte("\x1f\x8b\b\x00\x00\x00\x00\x00\x00\xff\xb4XK\x92\xf3&\x10>Gޯ\xcak\xc3T.\x92+\xa8\xb0hK\x8c$P\x00y\xece\x92\xca\"9Ff&7L\xd6)\xe8\xd6\x03\x83\xb1\xbc\xf87^X\xfd}\x82\xaf\xbfn\x1a\xbd\t\xc5\a\xf8E\xc0\x89\rҀb\xb5\x1e\xc6\xc9As\x02c\xa5V\xcd\xe9'ޏ-\x87N*a\xdfΟ$\x91O\xfe\tSZ\xc0?G\xa1\a.U\xca\x16^rJ\xa1\x1e\x95\x7f\xd3\x7fǣ\x84^\xd8\xdf_\x03\xb6㣬\xb8\x10\x06\xac\x15\xee2\xc2\xd1:#Us\x90\xe2\xfcu\x9e\x97m \xb8ˮ\xd6\xca:årH\x02=?@_\xe2\xd8\"\x06\xae.\xff\"\xd3\xd1:\xee&$\x11\xa0\xa6\xc1s|v\x83\x03c;\x1fV\x9dx?\x81}\x93\x93j\x81\xf7\xae\xbd\xe4ތ\x00\xb6\xc44\x93\xea\x94~Q\xe7/\v\xb1!\x02\fpq9\x7f~3.<o\x85\xb4\xfcЃ8\x7fu3p\x0e\xe9G#\an.\x95ϊ\xf0\xfbɱ\a\vX\xae\xc4A\x9f\xef\xb8\xe0\xfcQ杈,;\xe1\xcf\xf7\x80\x97\xb5V\x8eK\x05&\xa8/=\x87V\xa0\x9cO\xc177\xb9\xd9\n\vy\\q\xf7֛r\xb2\x84\xb3\xbc\xf2\xbf\xd0\xc3M\xad\x87\x81+q\xed\xdf̢\x17bF\x98\xf7\xc5\xc0G\xd9TG\xd9Cf\xf7ߗ\x89V\xe8\x83\n<\xedP`˿\xab\xa2\x85\xe0\x8e\xef(\xe5\r/\xf3\x10B\x0fZ\xc0\x83h\x0f!\xf4\xc8]\xfb \xdaC\xa2bxƧ\xfe!\xb2J!\r\xd4N\x9b\xcb5\xf5\xb7\xa5\xc4,(l-5\xa8\xd35\xfe\x8b\x12\xdeǇ\x84\xe2*@\x0e\xbcI\xa4\xc9\x14\xfa\xca\x10\x10\xe80\x18\xf4\xa4\\\xc6[E\x02\x04=\xe8\xaa\x1f\xf7\xb8*0\x97\xfd\xf4\x1b\x9d\x10\x02\xac\x93\x8a;\xa9Վ\n\v\xc4l\x83y\xa5Ʈ'S'\xf2eZ\x1e\x12`x\xe4\v\x94\x90\x8c\x16~\xae\xc82]|ݰ\a\x90\x9d\xb4\x1e*[k\x83\x04\xb5\xc4D\x14\xbd\xb4@\xde\xc9\xe7\xda\xe4\x92Y\\A\xc0<\x98\xcb\x1f\xf6\xe4\xd2\x13\x97S\xf9GA\xb5\xcc\xe0\xe1\t\xb7\x82\xf9өZ\xb6<\v\x96\xd9,\x02\xe7\xe8\xd7+\xadf\xe0\xad7\xfa\x1f\xac\xd5v4\xda\xe9Z\xf7\xf1 \x90)W\x04R\xf4v\x14\xf8\xbbv\xf5\x98\xf3\xd7\x1c\xcc\\=֓(\xc7Lb|]U\xdb+\x9d\x0f\x8b\xcf\xf7U\x8e\xe7\xd1ȓ\xef\xe5\x80\xe7\x958h\x1d&\xa5\xef\x8a\xdeY@\x11\xefzfS\xad\xb6ں\x9f\xc1\xbdh\xd3\xc5\xec\x19w\xcfF\xda`h\b\v\xd3[2\x0e\xe6\x86$\xa2 @07VH\xa36\xab\xb8\xdb\xf1f\x9e\x19\xf4`\x95\xa4\x8c\xec\x8aqW\xa7kn\xcc\xc1\x99\x05\x13-#\xc4\xdc㦃\x02\xb7C\xb7\x19\x8e\x80(\xa5\xb3ptl\x18\xedw\x99\x8a\x98)\x85y\xcb\byP\u0094\x8fE|\x1f\xe2\xa8\b\xc4\xe9Q\xd14\xdc\xc1\vO\x0e\xfb̖\x91\x81\xe2\xe3\xc3\"<\xa2\xe9Ώ\u07b2\xae\xbc\xd13R\x16Jc\v|PД\x95eXw\xc9*\x96\x85\x97\xa7\xaa\ro(jD\x1f丧\x927X9\xc6\xf3\x18>\xf3\x8f\n\x97\xb4BwH\xefi\xefB\x00\xcf^\xec\xe6[\x12pь\xa0\x84TM\xe1vF\x11RiW\xe1\r\xed\xf6\xado\x89i̤T\x99\x97\"\x1a\xeb\xf48\xc2M\xc1&\xcb(\x82\x9cK\xd9\f\xca\x1c\xa4\xb8\xd3\xed(\x1aMz<\xe9~\x1ar\xa5^P\x960\x0fZ3%d1\xe1\x9d{FzJ\xac\xf7\xfdL\x91\"gtF\x14Ƒ\x8c'\x88`\x1dH\xfcxp\x92\x82n\xaa\xe5NM\xe0\x19\x119\x9b4\x8f\xfb/I\x91\xdb\t\xde\xc6\xeb\x16\xc4\xd4\xdf\xfb(s\xfe8\x936\x82\x96\xf5\xfd\x95\xee+\x1d\\2n\xc8}\x82 Z\xd6\xc1e\xbf\vR\"\xb6%\xdaי\xc2p\xb3q{f\xd3\x1d\\\x98\x0f\x9bs>\xdf/\xcb\b\x1f\x16\xe5\xc5\xcb\x11\xfd\xd1Ϋ=\x7fz#S=p{/M/)6\xc0v]\xb5Uϭ\xabZ\xe0\xc6\x1d\x80;\x9a\x11\xa5\xef\xb9\xd9y.0\xb3\x18D\x9dc4\xfa\x19j\xb7U&c@$\xa0XB\x92_w!)6>)ãζڸ\n?F\xe2_e]\xf1\x93U\xe9\xab\xe5RIw\xbek\xad\x89\xbcWr\xff\x03\x00\x00\xff\xff"))
 }

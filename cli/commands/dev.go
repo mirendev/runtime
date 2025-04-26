@@ -16,6 +16,8 @@ import (
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/components/coordinate"
 	"miren.dev/runtime/components/ipalloc"
+	"miren.dev/runtime/components/netresolve"
+	"miren.dev/runtime/components/ocireg"
 	"miren.dev/runtime/components/runner"
 	"miren.dev/runtime/components/scheduler"
 	"miren.dev/runtime/pkg/grunge"
@@ -33,10 +35,14 @@ func Dev(ctx *Context, opts struct {
 }) error {
 	eg, sub := errgroup.WithContext(ctx)
 
+	res, hm := netresolve.NewLocalResolver()
+
 	co := coordinate.NewCoordinator(ctx.Log, coordinate.CoordinatorConfig{
 		Address:       opts.Address,
 		EtcdEndpoints: opts.EtcdEndpoints,
 		Prefix:        opts.EtcdPrefix,
+		Resolver:      res,
+		TempDir:       os.TempDir(),
 	})
 
 	err := co.Start(sub)
@@ -157,6 +163,7 @@ func Dev(ctx *Context, opts struct {
 	hs := httpingress.NewServer(ctx, ctx.Log, eac, aa)
 
 	reg.Register("app-activator", aa)
+	reg.Register("resolver", res)
 
 	r := runner.NewRunner(ctx.Log, ctx.Server, runner.RunnerConfig{
 		Id:            opts.RunnerId,
@@ -186,6 +193,16 @@ func Dev(ctx *Context, opts struct {
 			ctx.Log.Error("failed to start HTTP server", "error", err)
 		}
 	}()
+
+	regAddr, err := ocireg.SetupReg(ctx, ctx.Log, eac)
+	if err != nil {
+		ctx.Log.Error("failed to setup OCI registry", "error", err)
+		return err
+	}
+
+	ctx.Log.Info("OCI registry URL", "url", regAddr)
+
+	hm.SetHost("cluster.local", regAddr)
 
 	ctx.Log.Info("Starting dev mode", "address", opts.Address, "etcd_endpoints", opts.EtcdEndpoints, "etcd_prefix", opts.EtcdPrefix, "runner_id", opts.RunnerId)
 

@@ -45,7 +45,7 @@ func (l *Lease) Pool() string {
 }
 
 type AppActivator interface {
-	AcquireLease(ctx context.Context, ver *core_v1alpha.AppVersion, pool string) (*Lease, error)
+	AcquireLease(ctx context.Context, ver *core_v1alpha.AppVersion, pool, service string) (*Lease, error)
 	ReleaseLease(ctx context.Context, lease *Lease) error
 	RenewLease(ctx context.Context, lease *Lease) (*Lease, error)
 }
@@ -92,7 +92,7 @@ func NewLocalActivator(ctx context.Context, log *slog.Logger, eac *entityserver_
 	return la
 }
 
-func (a *localActivator) AcquireLease(ctx context.Context, ver *core_v1alpha.AppVersion, pool string) (*Lease, error) {
+func (a *localActivator) AcquireLease(ctx context.Context, ver *core_v1alpha.AppVersion, pool, service string) (*Lease, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	key := verKey{ver.ID.String(), pool}
@@ -100,7 +100,7 @@ func (a *localActivator) AcquireLease(ctx context.Context, ver *core_v1alpha.App
 
 	if !ok {
 		a.log.Info("creating new sandbox for app", "app", ver.App, "version", ver.Version, "pool", pool, "key", key)
-		return a.activateApp(ctx, ver, pool)
+		return a.activateApp(ctx, ver, pool, service)
 	}
 
 	if len(vs.sandboxes) == 0 {
@@ -133,10 +133,10 @@ func (a *localActivator) AcquireLease(ctx context.Context, ver *core_v1alpha.App
 		a.log.Info("no space in existing sandboxes, creating new sandbox for app", "app", ver.App, "version", ver.Version)
 	}
 
-	return a.activateApp(ctx, ver, pool)
+	return a.activateApp(ctx, ver, pool, service)
 }
 
-func (a *localActivator) activateApp(ctx context.Context, ver *core_v1alpha.AppVersion, pool string) (*Lease, error) {
+func (a *localActivator) activateApp(ctx context.Context, ver *core_v1alpha.AppVersion, pool, service string) (*Lease, error) {
 	gr, err := a.eac.Get(ctx, ver.App.String())
 	if err != nil {
 		return nil, err
@@ -151,23 +151,43 @@ func (a *localActivator) activateApp(ctx context.Context, ver *core_v1alpha.AppV
 	var sb compute_v1alpha.Sandbox
 	sb.Version = app.ActiveVersion
 
-	sb.Container = append(sb.Container, compute_v1alpha.Container{
+	appCont := compute_v1alpha.Container{
 		Name:  "app",
 		Image: ver.ImageUrl,
 		Env: []string{
 			"MIREN_APP=" + appMD.Name,
 			"MIREN_VERSION=" + ver.Version,
 		},
+		Directory: "/app",
 		Port: []compute_v1alpha.Port{
 			{
-				Port: 80,
+				Port: 3000,
 				Name: "http",
 				Type: "http",
 			},
 		},
-	})
+	}
+
+	for _, x := range ver.Config.Variable {
+		appCont.Env = append(appCont.Env, x.Key+"="+x.Value)
+	}
+
+	for _, s := range ver.Config.Commands {
+		if s.Service == service && s.Command != "" {
+			if ver.Config.Entrypoint != "" {
+				appCont.Command = ver.Config.Entrypoint + " " + s.Command
+			} else {
+				appCont.Command = s.Command
+			}
+			break
+		}
+	}
+
+	sb.Container = append(sb.Container, appCont)
 
 	name := idgen.GenNS("sb")
+
+	a.log.Debug("creating sandbox", "app", ver.App, "sandbox", name, "command", appCont.Command)
 
 	var rpcE entityserver_v1alpha.Entity
 	rpcE.SetAttrs(entity.Attrs(
@@ -215,14 +235,14 @@ func (a *localActivator) activateApp(ctx context.Context, ver *core_v1alpha.AppV
 		return nil, err
 	}
 
-	addr := "http://" + runningSB.Network[0].Address
+	addr := "http://" + runningSB.Network[0].Address + ":3000"
 
 	var leaseSlots int
 
-	if ver.Concurrency <= 0 {
+	if ver.Config.Concurrency.Fixed <= 0 {
 		leaseSlots = 1
 	} else {
-		leaseSlots = int(float32(ver.Concurrency) * 0.20)
+		leaseSlots = int(float32(ver.Config.Concurrency.Fixed) * 0.20)
 
 		if leaseSlots < 1 {
 			leaseSlots = 1
@@ -234,7 +254,7 @@ func (a *localActivator) activateApp(ctx context.Context, ver *core_v1alpha.AppV
 		ent:         sbEnt,
 		lastRenewal: time.Now(),
 		url:         addr,
-		maxSlots:    int(ver.Concurrency),
+		maxSlots:    int(ver.Config.Concurrency.Fixed),
 		inuseSlots:  leaseSlots,
 	}
 

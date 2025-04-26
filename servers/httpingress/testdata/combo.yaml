@@ -28,7 +28,7 @@ metadata:
   name: localhost
 spec:
   host: localhost
-  app: app/nginx
+  app: app/hw-bun
 ---
 kind: dev.miren.core/app
 version: v1alpha

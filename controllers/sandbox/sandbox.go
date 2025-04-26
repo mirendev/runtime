@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"net/netip"
 	"os"
 	"os/exec"
@@ -16,14 +17,19 @@ import (
 
 	"github.com/containerd/containerd/namespaces"
 	containerd "github.com/containerd/containerd/v2/client"
+	"github.com/containerd/containerd/v2/core/remotes"
+	"github.com/containerd/containerd/v2/core/remotes/docker"
 	"github.com/containerd/containerd/v2/pkg/cio"
 	"github.com/containerd/containerd/v2/pkg/oci"
 	"github.com/davecgh/go-spew/spew"
+	"github.com/mr-tron/base58"
 	"github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/pelletier/go-toml/v2"
 	"github.com/pkg/errors"
+	"golang.org/x/crypto/blake2b"
 	"golang.org/x/sys/unix"
 	"gvisor.dev/gvisor/pkg/shim/v1/runtimeoptions"
+	"miren.dev/runtime/components/netresolve"
 	"miren.dev/runtime/network"
 	"miren.dev/runtime/observability"
 	"miren.dev/runtime/pkg/containerdx"
@@ -69,6 +75,8 @@ type SandboxController struct {
 
 	RunscMon  *observability.RunSCMonitor
 	StatusMon *observability.StatusMonitor
+
+	Resolver netresolve.Resolver
 
 	topCtx context.Context
 	cancel func()
@@ -735,6 +743,65 @@ func (c *SandboxController) allocateNetwork(
 	return ep, nil
 }
 
+func (c *SandboxController) setupHosts(sb *compute.Sandbox, name string) error {
+	var lines []string
+
+	lines = append(lines, "# The following lines are managed by runtime.computer")
+	lines = append(lines, fmt.Sprintf("127.0.0.1\tlocalhost localhost.localdomain %s", name))
+	lines = append(lines, fmt.Sprintf("::1\tlocalhost localhost.localdomain %s", name))
+
+	for _, addr := range sb.StaticHost {
+		lines = append(lines, fmt.Sprintf("%s\t%s", addr.Ip, addr.Host))
+	}
+	lines = append(lines, "")
+
+	path := c.sandboxPath(sb, "hosts")
+
+	return os.WriteFile(path, []byte(strings.Join(lines, "\n")), 0644)
+}
+
+func (c *SandboxController) resolver() remotes.Resolver {
+	headers := make(http.Header)
+	headers.Set("User-Agent", "containerd/2")
+
+	return docker.NewResolver(docker.ResolverOptions{
+		Hosts: func(host string) ([]docker.RegistryHost, error) {
+			switch host {
+			case "cluster.local", "cluster.local:5000":
+				addr, err := c.Resolver.LookupHost("cluster.local")
+				if err != nil {
+					return nil, fmt.Errorf("failed to resolve cluster.local: %w", err)
+				}
+
+				config := docker.RegistryHost{
+					Client:       http.DefaultClient,
+					Host:         addr.String() + ":5000",
+					Scheme:       "http",
+					Path:         "/v2",
+					Capabilities: docker.HostCapabilityPull | docker.HostCapabilityResolve | docker.HostCapabilityPush,
+				}
+
+				return []docker.RegistryHost{config}, nil
+			default:
+				config := docker.RegistryHost{
+					Client: http.DefaultClient,
+					Authorizer: docker.NewDockerAuthorizer(
+						docker.WithAuthHeader(headers)),
+					Host:         host,
+					Scheme:       "https",
+					Path:         "/v2",
+					Capabilities: docker.HostCapabilityPull | docker.HostCapabilityResolve | docker.HostCapabilityPush,
+				}
+
+				if host == "docker.io" {
+					config.Host = "registry-1.docker.io"
+				}
+				return []docker.RegistryHost{config}, nil
+			}
+		},
+	})
+}
+
 func (c *SandboxController) buildSpec(
 	ctx context.Context,
 	sb *compute.Sandbox,
@@ -747,7 +814,7 @@ func (c *SandboxController) buildSpec(
 	img, err := c.CC.GetImage(ctx, sandboxImage)
 	if err != nil {
 		// If the image is not found, we can try to pull it.
-		_, err = c.CC.Pull(ctx, sandboxImage, containerd.WithPullUnpack)
+		_, err = c.CC.Pull(ctx, sandboxImage, containerd.WithPullUnpack, containerd.WithResolver(c.resolver()))
 		if err != nil {
 			return nil, fmt.Errorf("failed to pull image %s: %w", sandboxImage, err)
 		}
@@ -799,6 +866,11 @@ func (c *SandboxController) buildSpec(
 		return nil, err
 	}
 
+	err = c.setupHosts(sb, sb.ID.String())
+	if err != nil {
+		return nil, err
+	}
+
 	mounts := []specs.Mount{
 		{
 			Destination: "/sys",
@@ -816,6 +888,12 @@ func (c *SandboxController) buildSpec(
 			Destination: "/etc/resolv.conf",
 			Type:        "bind",
 			Source:      resolvePath,
+			Options:     []string{"rbind", "rw"},
+		},
+		{
+			Destination: "/etc/hosts",
+			Type:        "bind",
+			Source:      c.sandboxPath(sb, "hosts"),
 			Options:     []string{"rbind", "rw"},
 		},
 	}
@@ -995,7 +1073,7 @@ func (c *SandboxController) buildSubContainerSpec(
 	img, err := c.CC.GetImage(ctx, co.Image)
 	if err != nil {
 		// If the image is not found, we can try to pull it.
-		_, err = c.CC.Pull(ctx, co.Image, containerd.WithPullUnpack)
+		_, err = c.CC.Pull(ctx, co.Image, containerd.WithPullUnpack, containerd.WithResolver(c.resolver()))
 		if err != nil {
 			return nil, fmt.Errorf("failed to pull image %s: %w", co.Image, err)
 		}
@@ -1041,6 +1119,12 @@ func (c *SandboxController) buildSubContainerSpec(
 			Source:      resolvePath,
 			Options:     []string{"rbind", "rw"},
 		},
+		{
+			Destination: "/etc/hosts",
+			Type:        "bind",
+			Source:      c.sandboxPath(sb, "hosts"),
+			Options:     []string{"rbind", "rw"},
+		},
 	}
 
 	for _, m := range co.Mount {
@@ -1065,6 +1149,40 @@ func (c *SandboxController) buildSubContainerSpec(
 
 		mounts = append(mounts, specs.Mount{
 			Destination: m.Destination,
+			Type:        "bind",
+			Source:      rawPath,
+			Options:     []string{"rbind", "rw"},
+		})
+	}
+
+	for _, cf := range co.ConfigFile {
+		h, _ := blake2b.New256(nil)
+		fmt.Fprint(h, cf.Path)
+		fmt.Fprint(h, cf.Data)
+
+		id := base58.Encode(h.Sum(nil))
+
+		rawPath := c.sandboxPath(sb, id)
+
+		var mode os.FileMode = 0644
+
+		if cf.Mode != "" {
+			m, err := strconv.ParseInt(cf.Mode, 8, 32)
+			if err != nil {
+				return nil, fmt.Errorf("failed to parse file mode %s: %w", cf.Mode, err)
+			}
+			mode = os.FileMode(m)
+		}
+
+		err = os.WriteFile(rawPath, []byte(cf.Data), mode)
+		if err != nil {
+			return nil, fmt.Errorf("failed to write config file %s: %w", rawPath, err)
+		}
+
+		c.Log.Debug("created config file", "path", rawPath, "dest", cf.Path, "mode", mode)
+
+		mounts = append(mounts, specs.Mount{
+			Destination: cf.Path,
 			Type:        "bind",
 			Source:      rawPath,
 			Options:     []string{"rbind", "rw"},
@@ -1098,6 +1216,10 @@ func (c *SandboxController) buildSubContainerSpec(
 			"io.kubernetes.cri.container-type": "container",
 			"io.kubernetes.cri.sandbox-id":     c.containerId(sb.ID),
 		}),
+	}
+
+	if co.Command != "" {
+		specOpts = append(specOpts, oci.WithProcessArgs("/bin/sh", "-c", co.Command))
 	}
 
 	if co.OomScore != 0 {

@@ -69,7 +69,7 @@ func (c *Call) NewClient(capa *Capability) *Client {
 	}
 
 	client := c.s.state.newClientFrom(capa, c.peer)
-	if capa.Inline {
+	if capa.Inline && c.wsSession != nil {
 		client.inlineClient = &inlineClient{
 			log:     c.s.state.log,
 			oid:     capa.OID,

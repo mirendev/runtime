@@ -6,21 +6,27 @@ import (
 	"time"
 
 	clientv3 "go.etcd.io/etcd/client/v3"
+	"miren.dev/runtime/api/build/build_v1alpha"
+	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	esv1 "miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/api/exec/exec_v1alpha"
 	"miren.dev/runtime/components/activator"
+	"miren.dev/runtime/components/netresolve"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/schema"
 	"miren.dev/runtime/pkg/rpc"
+	"miren.dev/runtime/servers/build"
 	"miren.dev/runtime/servers/entityserver"
 	execproxy "miren.dev/runtime/servers/exec_proxy"
 )
 
 type CoordinatorConfig struct {
-	Address       string   `json:"address" yaml:"address"`
-	EtcdEndpoints []string `json:"etcd_endpoints" yaml:"etcd_endpoints"`
-	Prefix        string   `json:"prefix" yaml:"prefix"`
+	Address       string              `json:"address" yaml:"address"`
+	EtcdEndpoints []string            `json:"etcd_endpoints" yaml:"etcd_endpoints"`
+	Prefix        string              `json:"prefix" yaml:"prefix"`
+	Resolver      netresolve.Resolver `json:"resolver" yaml:"resolver"`
+	TempDir       string              `json:"temp_dir" yaml:"temp_dir"`
 }
 
 func NewCoordinator(log *slog.Logger, cfg CoordinatorConfig) *Coordinator {
@@ -52,6 +58,7 @@ func (c *Coordinator) Start(ctx context.Context) error {
 		c.Log.Error("failed to create RPC server", "error", err)
 		return err
 	}
+	c.state = rs
 
 	server := rs.Server()
 
@@ -92,14 +99,33 @@ func (c *Coordinator) Start(ctx context.Context) error {
 
 	eac := &entityserver_v1alpha.EntityAccessClient{Client: loopback}
 
+	var (
+		defPro core_v1alpha.Project
+		defNet entityserver_v1alpha.Entity
+	)
+
+	defNet.SetAttrs(entity.Attrs(
+		(&core_v1alpha.Metadata{
+			Name: "default",
+		}).Encode,
+		defPro.Encode,
+		entity.Ident, "project/default",
+	))
+
+	_, err = eac.Put(ctx, &defNet)
+	if err != nil {
+		c.Log.Error("failed to create default project", "error", err)
+		return err
+	}
+
 	aa := activator.NewLocalActivator(ctx, c.Log, eac)
 	c.aa = aa
 
 	eps := execproxy.NewServer(c.Log, eac, rs, aa)
-
 	server.ExposeValue("dev.miren.runtime/exec", exec_v1alpha.AdaptSandboxExec(eps))
 
-	c.state = rs
+	bs := build.NewBuilder(c.Log, eac, c.Resolver, c.TempDir)
+	server.ExposeValue("dev.miren.runtime/build", build_v1alpha.AdaptBuilder(bs))
 
 	c.Log.Info("started RPC server")
 	return nil

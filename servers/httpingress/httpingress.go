@@ -242,7 +242,7 @@ func (h *Server) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	var av core_v1alpha.AppVersion
 	av.Decode(vr.Entity().Entity())
 
-	actLease, err := h.aa.AcquireLease(ctx, &av, "http")
+	actLease, err := h.aa.AcquireLease(ctx, &av, "http", "web")
 	if err != nil {
 		h.Log.Error("error acquiring lease", "error", err, "app", hr.App)
 		http.Error(w, fmt.Sprintf("error acquiring lease: %s", hr.App), http.StatusInternalServerError)

@@ -79,7 +79,7 @@ func (s *Server) Exec(ctx context.Context, req *exec_v1alpha.SandboxExecExec) er
 		var appVer core_v1alpha.AppVersion
 		appVer.Decode(verEnt.Entity().Entity())
 
-		lease, err := s.AppAct.AcquireLease(ctx, &appVer, "exec")
+		lease, err := s.AppAct.AcquireLease(ctx, &appVer, "exec", "exec")
 		if err != nil {
 			return fmt.Errorf("failed to acquire lease for app %s: %w", name, err)
 		}
