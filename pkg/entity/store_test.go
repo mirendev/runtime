@@ -8,6 +8,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.etcd.io/etcd/api/v3/mvccpb"
 	clientv3 "go.etcd.io/etcd/client/v3"
 )
 
@@ -113,12 +114,52 @@ func TestEtcdStore_CreateEntity(t *testing.T) {
 
 			require.NoError(t, err)
 			assert.NotEmpty(t, entity.ID)
-			assert.Equal(t, tt.attrs, entity.Attrs)
-			assert.Greater(t, entity.Revision, 0)
+			assert.Equal(t, SortedAttrs(tt.attrs), entity.Attrs)
+			assert.Greater(t, entity.Revision, int64(0))
 			assert.NotZero(t, entity.CreatedAt)
 			assert.NotZero(t, entity.UpdatedAt)
 		})
 	}
+
+	t.Run("with session attributes", func(t *testing.T) {
+		r := require.New(t)
+
+		_, err := store.CreateEntity(t.Context(), Attrs(
+			Ident, "test/status",
+			Doc, "A Status",
+			Cardinality, CardinalityMany,
+			Type, TypeStr,
+			Session, true,
+		))
+		require.NoError(t, err)
+
+		sid, err := store.CreateSession(t.Context(), 30)
+		r.NoError(err)
+
+		addr := String(Id("test/status"), "foo")
+		//addr.Session = sid
+
+		attrs := []Attr{addr}
+
+		entity, err := store.CreateEntity(t.Context(), attrs, WithSession(sid))
+		require.NoError(t, err)
+
+		e2, err := store.GetEntity(t.Context(), entity.ID)
+		r.NoError(err)
+
+		sa, ok := e2.Get(Id("test/status"))
+		r.True(ok)
+
+		r.Equal(addr, sa)
+
+		r.NoError(store.RevokeSession(t.Context(), sid))
+
+		e3, err := store.GetEntity(t.Context(), entity.ID)
+		r.NoError(err)
+
+		_, ok = e3.Get(Id("test/status"))
+		r.False(ok)
+	})
 }
 
 func TestEtcdStore_AttrPred(t *testing.T) {
@@ -135,7 +176,7 @@ func TestEtcdStore_AttrPred(t *testing.T) {
 	))
 	require.NoError(t, err)
 
-	require.Equal(t, "test/address", e.ID)
+	require.Equal(t, Id("test/address"), e.ID)
 
 	tests := []struct {
 		name       string
@@ -174,7 +215,7 @@ func TestEtcdStore_AttrPred(t *testing.T) {
 			require.NoError(t, err)
 			assert.NotEmpty(t, entity.ID)
 			assert.Equal(t, tt.attrs, entity.Attrs)
-			assert.Greater(t, entity.Revision, 0)
+			assert.Greater(t, entity.Revision, int64(0))
 			assert.NotZero(t, entity.CreatedAt)
 			assert.NotZero(t, entity.UpdatedAt)
 		})
@@ -253,7 +294,7 @@ func TestEtcdStore_UpdateEntity(t *testing.T) {
 			attrs: []Attr{
 				Any(Doc, "updated doc"),
 			},
-			wantAttrs: 3, // Original 2 + 1 new
+			wantAttrs: 2,
 			wantErr:   false,
 		},
 		{
@@ -290,6 +331,96 @@ func TestEtcdStore_UpdateEntity(t *testing.T) {
 			assert.NotEqual(t, updated.CreatedAt, updated.UpdatedAt)
 		})
 	}
+
+	t.Run("with session attributes", func(t *testing.T) {
+		r := require.New(t)
+
+		_, err := store.CreateEntity(t.Context(), Attrs(
+			Ident, "test/kind",
+			Doc, "a kind",
+			Cardinality, CardinalityOne,
+			Type, TypeStr,
+			Index, true,
+		))
+		require.NoError(t, err)
+
+		_, err = store.CreateEntity(t.Context(), Attrs(
+			Ident, "test/status",
+			Doc, "A Status",
+			Cardinality, CardinalityMany,
+			Type, TypeStr,
+			Session, true,
+		))
+		require.NoError(t, err)
+
+		sid, err := store.CreateSession(t.Context(), 30)
+		r.NoError(err)
+
+		entity, err := store.CreateEntity(t.Context(), []Attr{
+			String(Id("test/kind"), "foo"),
+		})
+		require.NoError(t, err)
+
+		addr := String(Id("test/status"), "foo")
+
+		attrs := []Attr{addr}
+
+		_, err = store.UpdateEntity(t.Context(), entity.ID, attrs, WithSession(sid))
+		require.NoError(t, err)
+
+		e2, err := store.GetEntity(t.Context(), entity.ID)
+		r.NoError(err)
+
+		sa, ok := e2.Get(Id("test/status"))
+		r.True(ok)
+
+		r.Equal(addr, sa)
+
+		wc, err := store.WatchIndex(t.Context(), String(Id("test/kind"), "foo"))
+		r.NoError(err)
+
+		r.NoError(store.RevokeSession(t.Context(), sid))
+
+		select {
+		case <-t.Context().Done():
+			r.NoError(t.Context().Err())
+		case x := <-wc:
+			r.Len(x.Events, 1)
+			r.Equal(x.Events[0].Type, mvccpb.DELETE)
+			r.Equal(x.Events[0].PrevKv.Value, []byte(entity.ID))
+		}
+
+		e3, err := store.GetEntity(t.Context(), entity.ID)
+		r.NoError(err)
+
+		_, ok = e3.Get(Id("test/status"))
+		r.False(ok)
+	})
+
+	t.Run("from a fixed revision", func(t *testing.T) {
+		r := require.New(t)
+
+		e, err := store.GetEntity(t.Context(), entity.ID)
+		r.NoError(err)
+
+		_, err = store.UpdateEntity(t.Context(), e.ID, []Attr{
+			Any(Doc, "updated document"),
+		}, WithFromRevision(e.Revision-1))
+		r.Error(err)
+
+		_, err = store.UpdateEntity(t.Context(), e.ID, []Attr{
+			Any(Doc, "updated document from rev"),
+		}, WithFromRevision(e.Revision))
+		r.NoError(err)
+
+		e2, err := store.GetEntity(t.Context(), entity.ID)
+		r.NoError(err)
+
+		a, ok := e2.Get(Doc)
+		r.True(ok)
+
+		r.Equal("updated document from rev", a.Value.String())
+	})
 }
 
 func TestEtcdStore_DeleteEntity(t *testing.T) {
@@ -317,7 +448,7 @@ func TestEtcdStore_DeleteEntity(t *testing.T) {
 		{
 			name:    "non-existent entity",
 			id:      "nonexistent",
-			wantErr: true,
+			wantErr: false,
 		},
 	}
 
@@ -343,16 +474,21 @@ func TestEtcdStore_ListIndex(t *testing.T) {
 	store, err := NewEtcdStore(t.Context(), slog.Default(), client, "/test-entities")
 	require.NoError(t, err)
 
+	k, err := store.CreateEntity(t.Context(), []Attr{
+		Any(Ident, KeywordValue("test/kind")),
+	})
+	require.NoError(t, err)
+
 	// Create test entities with indexed attributes
 	_, err = store.CreateEntity(t.Context(), []Attr{
 		Any(Ident, KeywordValue("test1")),
-		Keyword(EntityKind, "user"),
+		Ref(EntityKind, k.ID),
 	})
 	require.NoError(t, err)
 
 	_, err = store.CreateEntity(t.Context(), []Attr{
 		Any(Ident, KeywordValue("test2")),
-		Keyword(EntityKind, "user"),
+		Ref(EntityKind, k.ID),
 	})
 	require.NoError(t, err)
 
@@ -366,14 +502,14 @@ func TestEtcdStore_ListIndex(t *testing.T) {
 		{
 			name:      "valid index",
 			attrID:    EntityKind,
-			value:     KeywordValue("user"),
+			value:     RefValue(k.ID),
 			wantCount: 2,
 			wantErr:   false,
 		},
 		{
 			name:      "non-existent value",
 			attrID:    EntityKind,
-			value:     KeywordValue("admin"),
+			value:     RefValue("xx"),
 			wantCount: 0,
 			wantErr:   false,
 		},

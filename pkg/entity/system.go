@@ -37,7 +37,10 @@ const (
 	TypeLabel     Id = "db/type.label"
 	TypeBytes     Id = "db/type.bytes"
 
-	Index Id = "db/index"
+	Index   Id = "db/index"
+	Session Id = "db/session"
+
+	AttrSession Id = "db/attr.session"
 
 	EntityAttrs Id = "db/entity.attrs"
 	EntityPreds Id = "db/entity.preds"
@@ -56,6 +59,8 @@ const (
 	PredCIDR Id = "db/pred.cidr"
 
 	Schema Id = "db/schema"
+
+	TTL Id = "db/entity.ttl"
 )
 
 func InitSystemEntities(save func(*Entity) error) error {
@@ -140,6 +145,33 @@ func InitSystemEntities(save func(*Entity) error) error {
 			Doc, "Index",
 			Cardinality, CardinalityOne,
 			Type, TypeBool,
+		),
+	}
+
+	session := &Entity{
+		Attrs: Attrs(
+			Ident, types.Keyword(Session),
+			Doc, "Values of this attribute are stored in a session",
+			Cardinality, CardinalityOne,
+			Type, TypeBool,
+		),
+	}
+
+	attrSession := &Entity{
+		Attrs: Attrs(
+			Ident, types.Keyword(AttrSession),
+			Doc, "The session id in use for this attribute",
+			Cardinality, CardinalityMany,
+			Type, TypeStr,
+		),
+	}
+
+	ttl := &Entity{
+		Attrs: Attrs(
+			Ident, types.Keyword(TTL),
+			Doc, "Time to live for this entity",
+			Cardinality, CardinalityOne,
+			Type, TypeDuration,
 		),
 	}
 
@@ -268,7 +300,8 @@ func InitSystemEntities(save func(*Entity) error) error {
 		ident, doc, uniq, card, typ, enumValues, enumType,
 		uniqueIdentity, uniqueValue, cardOne, cardMany,
 		typeAny, typeRef, typeStr, typeKW, typeInt, typeFloat, typeBool, typeTime, typeEnum,
-		typeArray, typeDuration, typeComponent, typeLabel, typeBytes, index,
+		typeArray, typeDuration, typeComponent, typeLabel, typeBytes, index, session, ttl,
+		attrSession,
 		attrPred, predIP, predCidr, entityAttrs, entityPreds, entityEnsure,
 		entityKind, entitySchema, entityESchema, schemaKind,
 	}

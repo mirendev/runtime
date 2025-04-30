@@ -97,7 +97,7 @@ func Console(ctx *Context, opts struct {
 		return err
 	}
 
-	sec := &exec_v1alpha.SandboxExecClient{Client: cl}
+	sec := exec_v1alpha.NewSandboxExecClient(cl)
 
 	input := stream.ServeReader(ctx, in)
 	output := stream.ServeWriter(ctx, out)

@@ -61,10 +61,10 @@ func TestCreateEntity(t *testing.T) {
 
 			require.NoError(t, err)
 			assert.NotEmpty(t, entity.ID)
-			assert.Equal(t, 1, entity.Revision)
+			assert.Equal(t, int64(1), entity.Revision)
 			assert.NotZero(t, entity.CreatedAt)
 			assert.NotZero(t, entity.UpdatedAt)
-			assert.Equal(t, tt.attrs, entity.Attrs)
+			assert.Equal(t, SortedAttrs(tt.attrs), entity.Attrs)
 		})
 	}
 }
@@ -232,21 +232,28 @@ func TestAttrsHelper(t *testing.T) {
 }
 
 func TestIndices(t *testing.T) {
+
+	store, cleanup := setupTestStore(t)
+	defer cleanup()
+
+	pk, err := store.CreateEntity(t.Context(), Attrs(
+		Any(Ident, "attr/person"),
+		Any(Index, true),
+	))
+	require.NoError(t, err)
+
 	// Create a test entity
 	attrs := []Attr{
 		Any(Ident, "test/person"),
 		Any(Doc, "A test person"),
-		Keyword(EntityKind, "person"),
+		Ref(EntityKind, pk.ID),
 	}
-
-	store, cleanup := setupTestStore(t)
-	defer cleanup()
 
 	// Create a test entity
 	entity, err := store.CreateEntity(t.Context(), attrs)
 	require.NoError(t, err)
 
-	ids, err := store.ListIndex(t.Context(), Keyword(EntityKind, "person"))
+	ids, err := store.ListIndex(t.Context(), Ref(EntityKind, pk.ID))
 	require.NoError(t, err)
 
 	assert.Contains(t, ids, Id(entity.ID))

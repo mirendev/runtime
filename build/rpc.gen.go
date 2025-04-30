@@ -106,7 +106,7 @@ type streamRecvArgsData struct {
 }
 
 type StreamRecvArgs struct {
-	call *rpc.Call
+	call rpc.Call
 	data streamRecvArgsData
 }
 
@@ -142,7 +142,7 @@ type streamRecvResultsData struct {
 }
 
 type StreamRecvResults struct {
-	call *rpc.Call
+	call rpc.Call
 	data streamRecvResultsData
 }
 
@@ -168,7 +168,7 @@ func (v *StreamRecvResults) UnmarshalJSON(data []byte) error {
 }
 
 type StreamRecv struct {
-	*rpc.Call
+	rpc.Call
 	args    StreamRecvArgs
 	results StreamRecvResults
 }
@@ -198,14 +198,14 @@ type Stream interface {
 }
 
 type reexportStream struct {
-	client *rpc.Client
+	client rpc.Client
 }
 
 func (_ reexportStream) Recv(ctx context.Context, state *StreamRecv) error {
 	panic("not implemented")
 }
 
-func (t reexportStream) CapabilityClient() *rpc.Client {
+func (t reexportStream) CapabilityClient() rpc.Client {
 	return t.client
 }
 
@@ -215,7 +215,7 @@ func AdaptStream(t Stream) *rpc.Interface {
 			Name:          "recv",
 			InterfaceName: "Stream",
 			Index:         0,
-			Handler: func(ctx context.Context, call *rpc.Call) error {
+			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.Recv(ctx, &StreamRecv{Call: call})
 			},
 		},
@@ -225,7 +225,11 @@ func AdaptStream(t Stream) *rpc.Interface {
 }
 
 type StreamClient struct {
-	*rpc.Client
+	rpc.Client
+}
+
+func NewStreamClient(client rpc.Client) *StreamClient {
+	return &StreamClient{Client: client}
 }
 
 func (c StreamClient) Export() Stream {
@@ -233,7 +237,7 @@ func (c StreamClient) Export() Stream {
 }
 
 type StreamClientRecvResults struct {
-	client *rpc.Client
+	client rpc.Client
 	data   streamRecvResultsData
 }
 
@@ -269,7 +273,7 @@ type builderBuildFromTarArgsData struct {
 }
 
 type BuilderBuildFromTarArgs struct {
-	call *rpc.Call
+	call rpc.Call
 	data builderBuildFromTarArgsData
 }
 
@@ -327,7 +331,7 @@ type builderBuildFromTarResultsData struct {
 }
 
 type BuilderBuildFromTarResults struct {
-	call *rpc.Call
+	call rpc.Call
 	data builderBuildFromTarResultsData
 }
 
@@ -352,7 +356,7 @@ func (v *BuilderBuildFromTarResults) UnmarshalJSON(data []byte) error {
 }
 
 type BuilderBuildFromTar struct {
-	*rpc.Call
+	rpc.Call
 	args    BuilderBuildFromTarArgs
 	results BuilderBuildFromTarResults
 }
@@ -382,14 +386,14 @@ type Builder interface {
 }
 
 type reexportBuilder struct {
-	client *rpc.Client
+	client rpc.Client
 }
 
 func (_ reexportBuilder) BuildFromTar(ctx context.Context, state *BuilderBuildFromTar) error {
 	panic("not implemented")
 }
 
-func (t reexportBuilder) CapabilityClient() *rpc.Client {
+func (t reexportBuilder) CapabilityClient() rpc.Client {
 	return t.client
 }
 
@@ -399,7 +403,7 @@ func AdaptBuilder(t Builder) *rpc.Interface {
 			Name:          "buildFromTar",
 			InterfaceName: "Builder",
 			Index:         0,
-			Handler: func(ctx context.Context, call *rpc.Call) error {
+			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.BuildFromTar(ctx, &BuilderBuildFromTar{Call: call})
 			},
 		},
@@ -409,7 +413,11 @@ func AdaptBuilder(t Builder) *rpc.Interface {
 }
 
 type BuilderClient struct {
-	*rpc.Client
+	rpc.Client
+}
+
+func NewBuilderClient(client rpc.Client) *BuilderClient {
+	return &BuilderClient{Client: client}
 }
 
 func (c BuilderClient) Export() Builder {
@@ -417,7 +425,7 @@ func (c BuilderClient) Export() Builder {
 }
 
 type BuilderClientBuildFromTarResults struct {
-	client *rpc.Client
+	client rpc.Client
 	data   builderBuildFromTarResultsData
 }
 
@@ -434,13 +442,22 @@ func (v *BuilderClientBuildFromTarResults) Version() string {
 
 func (v BuilderClient) BuildFromTar(ctx context.Context, application string, tardata stream.RecvStream[[]byte], status stream.SendStream[*Status]) (*BuilderClientBuildFromTarResults, error) {
 	args := BuilderBuildFromTarArgs{}
+	caps := map[rpc.OID]*rpc.InlineCapability{}
 	args.data.Application = &application
-	args.data.Tardata = v.Client.NewCapability(stream.AdaptRecvStream[[]byte](tardata), tardata)
-	args.data.Status = v.Client.NewCapability(stream.AdaptSendStream[*Status](status), status)
+	{
+		ic, oid, c := v.Client.NewInlineCapability(stream.AdaptRecvStream[[]byte](tardata), tardata)
+		args.data.Tardata = c
+		caps[oid] = ic
+	}
+	{
+		ic, oid, c := v.Client.NewInlineCapability(stream.AdaptSendStream[*Status](status), status)
+		args.data.Status = c
+		caps[oid] = ic
+	}
 
 	var ret builderBuildFromTarResultsData
 
-	err := v.Client.Call(ctx, "buildFromTar", &args, &ret)
+	err := v.Client.CallWithCaps(ctx, "buildFromTar", &args, &ret, caps)
 	if err != nil {
 		return nil, err
 	}

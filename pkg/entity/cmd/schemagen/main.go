@@ -222,6 +222,8 @@ type schemaAttr struct {
 	Required bool     `yaml:"required,omitempty"` // for required attributes
 	Choices  []string `yaml:"choices,omitempty"`  // for enum attributes
 	Indexed  bool     `yaml:"indexed,omitempty"`  // for indexed attributes
+	Session  bool     `yaml:"session,omitempty"`  // for session attributes
+	BindTo   string   `yaml:"bind_to,omitempty"`  // for binding to other attributes
 
 	Attrs map[string]*schemaAttr `yaml:"attrs,omitempty"` // for nested attributes
 }
@@ -294,7 +296,11 @@ func (g *gen) attr(name string, attr *schemaAttr) {
 
 	eid := g.sf.Domain + "/" + attr.Attr
 
-	g.idents = append(g.idents, j.Id(g.local+fname+"Id").Op("=").Qual(top, "Id").Call(j.Lit(eid)))
+	if attr.BindTo != "" {
+		g.idents = append(g.idents, j.Id(g.local+fname+"Id").Op("=").Qual(top, "Id").Call(j.Lit(attr.BindTo)))
+	} else {
+		g.idents = append(g.idents, j.Id(g.local+fname+"Id").Op("=").Qual(top, "Id").Call(j.Lit(eid)))
+	}
 
 	tn := name
 	if !attr.Required {
@@ -564,6 +570,10 @@ func (g *gen) attr(name string, attr *schemaAttr) {
 
 		if attr.Indexed {
 			call = append(call, j.Qual(sch, "Indexed"))
+		}
+
+		if attr.Session {
+			call = append(call, j.Qual(sch, "Session"))
 		}
 
 		var args []j.Code

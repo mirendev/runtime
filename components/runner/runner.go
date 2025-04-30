@@ -7,7 +7,7 @@ import (
 
 	containerd "github.com/containerd/containerd/v2/client"
 	"miren.dev/runtime/api/compute/compute_v1alpha"
-	"miren.dev/runtime/api/core/core_v1alpha"
+	"miren.dev/runtime/api/entityserver"
 	es "miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/api/exec/exec_v1alpha"
 	"miren.dev/runtime/api/network/network_v1alpha"
@@ -49,6 +49,9 @@ type Runner struct {
 
 	cc *containerd.Client
 
+	ec *entityserver.Client
+	se *entityserver.Session
+
 	namespace string
 }
 
@@ -84,7 +87,9 @@ func (r *Runner) Start(ctx context.Context) error {
 		return err
 	}
 
-	eas := &es.EntityAccessClient{Client: client}
+	eas := es.NewEntityAccessClient(client)
+
+	ec := entityserver.NewClient(r.Log, eas)
 
 	r.reg.Register("entity-client", eas)
 
@@ -93,7 +98,7 @@ func (r *Runner) Start(ctx context.Context) error {
 		return err
 	}
 
-	err = r.setupEntity(eas)
+	err = r.setupEntity(ctx, ec)
 	if err != nil {
 		return err
 	}
@@ -118,10 +123,18 @@ func (r *Runner) Start(ctx context.Context) error {
 	return nil
 }
 
-func (r *Runner) setupEntity(eas *es.EntityAccessClient) error {
+func (r *Runner) setupEntity(ctx context.Context, ec *entityserver.Client) error {
 	if r.Id == "" {
 		return nil
 	}
+
+	sess, ec, err := ec.NewSession(ctx, "runner health")
+	if err != nil {
+		return err
+	}
+
+	r.ec = ec
+	r.se = sess
 
 	node := compute_v1alpha.Node{
 		Status:      compute_v1alpha.READY,
@@ -129,19 +142,7 @@ func (r *Runner) setupEntity(eas *es.EntityAccessClient) error {
 		ApiAddress:  r.ListenAddress,
 	}
 
-	md := core_v1alpha.Metadata{
-		Name:   r.Id,
-		Labels: types.LabelSet("type", "dev"),
-	}
-
-	var aent es.Entity
-	aent.SetAttrs(entity.Attrs(
-		md.Encode,
-		node.Encode,
-		entity.Ident, "node/"+r.Id,
-	))
-
-	_, err := eas.Put(context.Background(), &aent)
+	_, err = ec.Create(ctx, r.Id, &node)
 	if err != nil {
 		return err
 	}

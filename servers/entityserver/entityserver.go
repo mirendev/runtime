@@ -14,8 +14,11 @@ import (
 	"time"
 
 	"github.com/fxamacker/cbor/v2"
+	"github.com/mr-tron/base58"
 	clientv3 "go.etcd.io/etcd/client/v3"
+	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
+	"miren.dev/runtime/api/meta/meta_v1alpha"
 	"miren.dev/runtime/pkg/cond"
 	"miren.dev/runtime/pkg/entity"
 	etypes "miren.dev/runtime/pkg/entity/types"
@@ -179,32 +182,91 @@ func (e *EntityServer) Put(ctx context.Context, req *entityserver_v1alpha.Entity
 
 	results := req.Results()
 
+	var opts []entity.EntityOption
+
 	if rpcE.HasId() {
 		// TODO: handle updated_at
-		re, err := e.Store.UpdateEntity(ctx, entity.Id(rpcE.Id()), attrs)
+
+		// If the entity has a revision, then make sure that we're updating that specific entity.
+		if rev := rpcE.Revision(); rev > 0 {
+			opts = append(opts, entity.WithFromRevision(rev))
+		}
+
+		re, err := e.Store.UpdateEntity(ctx, entity.Id(rpcE.Id()), attrs, opts...)
 		if err != nil {
 			if !errors.Is(err, entity.ErrNotFound) {
 				return fmt.Errorf("failed to create entity: %w", err)
 			}
 		} else {
-			e.Log.Debug("updated entity", "id", re.ID)
 			results.SetRevision(re.Revision)
 			results.SetId(re.ID.String())
-			return nil
+		}
+	} else {
+		// TODO: handle created_at and updated_at fileds
+		re, err := e.Store.CreateEntity(ctx, attrs, opts...)
+		if err != nil {
+			return fmt.Errorf("failed to create entity: %w", err)
 		}
 
+		results.SetRevision(re.Revision)
+		results.SetId(re.ID.String())
+
+	}
+	return nil
+}
+
+func (e *EntityServer) PutSession(ctx context.Context, req *entityserver_v1alpha.EntityAccessPutSession) error {
+	args := req.Args()
+
+	if !args.HasEntity() {
+		return fmt.Errorf("missing required field: entity")
 	}
 
-	// TODO: handle created_at and updated_at fileds
-	re, err := e.Store.CreateEntity(ctx, attrs)
+	rpcE := args.Entity()
+
+	attrs := rpcE.Attrs()
+	if len(attrs) == 0 {
+		return fmt.Errorf("missing required field: attrs")
+	}
+
+	session := args.Session()
+	if session == "" {
+		return cond.ValidationFailure("missing-field", "session")
+	}
+
+	data, err := base58.Decode(session)
 	if err != nil {
-		return fmt.Errorf("failed to create entity: %w", err)
+		return cond.ValidationFailure("invalid-field", "session")
 	}
 
-	e.Log.Debug("created entity", "id", re.ID)
-	results.SetRevision(re.Revision)
-	results.SetId(re.ID.String())
+	results := req.Results()
 
+	var opts []entity.EntityOption
+
+	opts = append(opts, entity.WithSession(data))
+
+	if rpcE.HasId() {
+		// TODO: handle updated_at
+		re, err := e.Store.UpdateEntity(ctx, entity.Id(rpcE.Id()), attrs, opts...)
+		if err != nil {
+			if !errors.Is(err, entity.ErrNotFound) {
+				return fmt.Errorf("failed to create entity: %w", err)
+			}
+		} else {
+			results.SetRevision(re.Revision)
+			results.SetId(re.ID.String())
+		}
+	} else {
+		// TODO: handle created_at and updated_at fileds
+		re, err := e.Store.CreateEntity(ctx, attrs, opts...)
+		if err != nil {
+			return fmt.Errorf("failed to create entity: %w", err)
+		}
+
+		results.SetRevision(re.Revision)
+		results.SetId(re.ID.String())
+
+	}
 	return nil
 }
 
@@ -317,7 +379,26 @@ func (e *EntityServer) List(ctx context.Context, req *entityserver_v1alpha.Entit
 		return fmt.Errorf("missing required field: index")
 	}
 
-	ids, err := e.Store.ListIndex(ctx, args.Index())
+	var (
+		ids []entity.Id
+		err error
+	)
+
+	index := args.Index()
+
+	if index.ID == entity.AttrSession {
+		str := index.Value.String()
+
+		data, err := base58.Decode(str)
+		if err != nil {
+			return fmt.Errorf("invalid session id: %w", err)
+		}
+
+		ids, err = e.Store.ListSessionEntities(ctx, data)
+	} else {
+		ids, err = e.Store.ListIndex(ctx, args.Index())
+	}
+
 	if err != nil {
 		return fmt.Errorf("failed to list entities: %w", err)
 	}
@@ -552,5 +633,99 @@ func (e *EntityServer) Format(ctx context.Context, req *entityserver_v1alpha.Ent
 	}
 
 	req.Results().SetData([]byte(data))
+	return nil
+}
+
+func (e *EntityServer) CreateSession(ctx context.Context, req *entityserver_v1alpha.EntityAccessCreateSession) error {
+	args := req.Args()
+
+	if !args.HasTtl() {
+		return cond.ValidationFailure("missing-field", "ttl")
+	}
+
+	ttl := args.Ttl()
+
+	if ttl == 0 {
+		return cond.ValidationFailure("invalid-field", "id")
+	}
+
+	id, err := e.Store.CreateSession(ctx, ttl)
+	if err != nil {
+		return err
+	}
+
+	nice := base58.Encode(id)
+
+	var sess meta_v1alpha.Session
+	sess.Usage = args.Usage()
+	sess.UniqueId = nice
+
+	_, err = e.Store.CreateEntity(ctx, entity.Attrs(
+		entity.Ident, "session/"+nice,
+		sess.Encode,
+		(&core_v1alpha.Metadata{
+			Name: "session/" + nice,
+		}).Encode,
+	), entity.BondToSession(id))
+	if err != nil {
+		e.Log.Error("failed to create session entity", "error", err)
+	}
+
+	req.Results().SetId(base58.Encode(id))
+
+	return nil
+}
+
+// RevokeLease
+func (e *EntityServer) RevokeSession(ctx context.Context, req *entityserver_v1alpha.EntityAccessRevokeSession) error {
+	args := req.Args()
+
+	if !args.HasId() {
+		return cond.ValidationFailure("missing-field", "id")
+	}
+
+	id := args.Id()
+
+	if id == "" {
+		return cond.ValidationFailure("invalid-field", "id")
+	}
+
+	data, err := base58.Decode(id)
+	if err != nil {
+		return cond.ValidationFailure("invalid-field", "id")
+	}
+
+	err = e.Store.RevokeSession(ctx, data)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// AssertLease keeps the lease alive
+func (e *EntityServer) PingSession(ctx context.Context, req *entityserver_v1alpha.EntityAccessPingSession) error {
+	args := req.Args()
+
+	if !args.HasId() {
+		return cond.ValidationFailure("missing-field", "id")
+	}
+
+	id := args.Id()
+
+	if id == "" {
+		return cond.ValidationFailure("invalid-field", "id")
+	}
+
+	data, err := base58.Decode(id)
+	if err != nil {
+		return cond.ValidationFailure("invalid-field", "id")
+	}
+
+	err = e.Store.PingSession(ctx, data)
+	if err != nil {
+		return err
+	}
+
 	return nil
 }

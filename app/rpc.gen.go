@@ -399,7 +399,7 @@ type crudNewArgsData struct {
 }
 
 type CrudNewArgs struct {
-	call *rpc.Call
+	call rpc.Call
 	data crudNewArgsData
 }
 
@@ -435,7 +435,7 @@ type crudNewResultsData struct {
 }
 
 type CrudNewResults struct {
-	call *rpc.Call
+	call rpc.Call
 	data crudNewResultsData
 }
 
@@ -465,7 +465,7 @@ type crudSetConfigurationArgsData struct {
 }
 
 type CrudSetConfigurationArgs struct {
-	call *rpc.Call
+	call rpc.Call
 	data crudSetConfigurationArgsData
 }
 
@@ -509,7 +509,7 @@ type crudSetConfigurationResultsData struct {
 }
 
 type CrudSetConfigurationResults struct {
-	call *rpc.Call
+	call rpc.Call
 	data crudSetConfigurationResultsData
 }
 
@@ -538,7 +538,7 @@ type crudGetConfigurationArgsData struct {
 }
 
 type CrudGetConfigurationArgs struct {
-	call *rpc.Call
+	call rpc.Call
 	data crudGetConfigurationArgsData
 }
 
@@ -575,7 +575,7 @@ type crudGetConfigurationResultsData struct {
 }
 
 type CrudGetConfigurationResults struct {
-	call *rpc.Call
+	call rpc.Call
 	data crudGetConfigurationResultsData
 }
 
@@ -609,7 +609,7 @@ type crudSetHostArgsData struct {
 }
 
 type CrudSetHostArgs struct {
-	call *rpc.Call
+	call rpc.Call
 	data crudSetHostArgsData
 }
 
@@ -654,7 +654,7 @@ func (v *CrudSetHostArgs) UnmarshalJSON(data []byte) error {
 type crudSetHostResultsData struct{}
 
 type CrudSetHostResults struct {
-	call *rpc.Call
+	call rpc.Call
 	data crudSetHostResultsData
 }
 
@@ -677,7 +677,7 @@ func (v *CrudSetHostResults) UnmarshalJSON(data []byte) error {
 type crudListArgsData struct{}
 
 type CrudListArgs struct {
-	call *rpc.Call
+	call rpc.Call
 	data crudListArgsData
 }
 
@@ -702,7 +702,7 @@ type crudListResultsData struct {
 }
 
 type CrudListResults struct {
-	call *rpc.Call
+	call rpc.Call
 	data crudListResultsData
 }
 
@@ -732,7 +732,7 @@ type crudDestroyArgsData struct {
 }
 
 type CrudDestroyArgs struct {
-	call *rpc.Call
+	call rpc.Call
 	data crudDestroyArgsData
 }
 
@@ -766,7 +766,7 @@ func (v *CrudDestroyArgs) UnmarshalJSON(data []byte) error {
 type crudDestroyResultsData struct{}
 
 type CrudDestroyResults struct {
-	call *rpc.Call
+	call rpc.Call
 	data crudDestroyResultsData
 }
 
@@ -787,7 +787,7 @@ func (v *CrudDestroyResults) UnmarshalJSON(data []byte) error {
 }
 
 type CrudNew struct {
-	*rpc.Call
+	rpc.Call
 	args    CrudNewArgs
 	results CrudNewResults
 }
@@ -813,7 +813,7 @@ func (t *CrudNew) Results() *CrudNewResults {
 }
 
 type CrudSetConfiguration struct {
-	*rpc.Call
+	rpc.Call
 	args    CrudSetConfigurationArgs
 	results CrudSetConfigurationResults
 }
@@ -839,7 +839,7 @@ func (t *CrudSetConfiguration) Results() *CrudSetConfigurationResults {
 }
 
 type CrudGetConfiguration struct {
-	*rpc.Call
+	rpc.Call
 	args    CrudGetConfigurationArgs
 	results CrudGetConfigurationResults
 }
@@ -865,7 +865,7 @@ func (t *CrudGetConfiguration) Results() *CrudGetConfigurationResults {
 }
 
 type CrudSetHost struct {
-	*rpc.Call
+	rpc.Call
 	args    CrudSetHostArgs
 	results CrudSetHostResults
 }
@@ -891,7 +891,7 @@ func (t *CrudSetHost) Results() *CrudSetHostResults {
 }
 
 type CrudList struct {
-	*rpc.Call
+	rpc.Call
 	args    CrudListArgs
 	results CrudListResults
 }
@@ -917,7 +917,7 @@ func (t *CrudList) Results() *CrudListResults {
 }
 
 type CrudDestroy struct {
-	*rpc.Call
+	rpc.Call
 	args    CrudDestroyArgs
 	results CrudDestroyResults
 }
@@ -952,7 +952,7 @@ type Crud interface {
 }
 
 type reexportCrud struct {
-	client *rpc.Client
+	client rpc.Client
 }
 
 func (_ reexportCrud) New(ctx context.Context, state *CrudNew) error {
@@ -979,7 +979,7 @@ func (_ reexportCrud) Destroy(ctx context.Context, state *CrudDestroy) error {
 	panic("not implemented")
 }
 
-func (t reexportCrud) CapabilityClient() *rpc.Client {
+func (t reexportCrud) CapabilityClient() rpc.Client {
 	return t.client
 }
 
@@ -989,7 +989,7 @@ func AdaptCrud(t Crud) *rpc.Interface {
 			Name:          "new",
 			InterfaceName: "Crud",
 			Index:         0,
-			Handler: func(ctx context.Context, call *rpc.Call) error {
+			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.New(ctx, &CrudNew{Call: call})
 			},
 		},
@@ -997,7 +997,7 @@ func AdaptCrud(t Crud) *rpc.Interface {
 			Name:          "setConfiguration",
 			InterfaceName: "Crud",
 			Index:         0,
-			Handler: func(ctx context.Context, call *rpc.Call) error {
+			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.SetConfiguration(ctx, &CrudSetConfiguration{Call: call})
 			},
 		},
@@ -1005,7 +1005,7 @@ func AdaptCrud(t Crud) *rpc.Interface {
 			Name:          "getConfiguration",
 			InterfaceName: "Crud",
 			Index:         0,
-			Handler: func(ctx context.Context, call *rpc.Call) error {
+			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.GetConfiguration(ctx, &CrudGetConfiguration{Call: call})
 			},
 		},
@@ -1013,7 +1013,7 @@ func AdaptCrud(t Crud) *rpc.Interface {
 			Name:          "setHost",
 			InterfaceName: "Crud",
 			Index:         0,
-			Handler: func(ctx context.Context, call *rpc.Call) error {
+			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.SetHost(ctx, &CrudSetHost{Call: call})
 			},
 		},
@@ -1021,7 +1021,7 @@ func AdaptCrud(t Crud) *rpc.Interface {
 			Name:          "list",
 			InterfaceName: "Crud",
 			Index:         0,
-			Handler: func(ctx context.Context, call *rpc.Call) error {
+			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.List(ctx, &CrudList{Call: call})
 			},
 		},
@@ -1029,7 +1029,7 @@ func AdaptCrud(t Crud) *rpc.Interface {
 			Name:          "destroy",
 			InterfaceName: "Crud",
 			Index:         0,
-			Handler: func(ctx context.Context, call *rpc.Call) error {
+			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.Destroy(ctx, &CrudDestroy{Call: call})
 			},
 		},
@@ -1039,7 +1039,11 @@ func AdaptCrud(t Crud) *rpc.Interface {
 }
 
 type CrudClient struct {
-	*rpc.Client
+	rpc.Client
+}
+
+func NewCrudClient(client rpc.Client) *CrudClient {
+	return &CrudClient{Client: client}
 }
 
 func (c CrudClient) Export() Crud {
@@ -1047,7 +1051,7 @@ func (c CrudClient) Export() Crud {
 }
 
 type CrudClientNewResults struct {
-	client *rpc.Client
+	client rpc.Client
 	data   crudNewResultsData
 }
 
@@ -1077,7 +1081,7 @@ func (v CrudClient) New(ctx context.Context, name string) (*CrudClientNewResults
 }
 
 type CrudClientSetConfigurationResults struct {
-	client *rpc.Client
+	client rpc.Client
 	data   crudSetConfigurationResultsData
 }
 
@@ -1108,7 +1112,7 @@ func (v CrudClient) SetConfiguration(ctx context.Context, app string, configurat
 }
 
 type CrudClientGetConfigurationResults struct {
-	client *rpc.Client
+	client rpc.Client
 	data   crudGetConfigurationResultsData
 }
 
@@ -1146,7 +1150,7 @@ func (v CrudClient) GetConfiguration(ctx context.Context, app string) (*CrudClie
 }
 
 type CrudClientSetHostResults struct {
-	client *rpc.Client
+	client rpc.Client
 	data   crudSetHostResultsData
 }
 
@@ -1166,7 +1170,7 @@ func (v CrudClient) SetHost(ctx context.Context, app string, host string) (*Crud
 }
 
 type CrudClientListResults struct {
-	client *rpc.Client
+	client rpc.Client
 	data   crudListResultsData
 }
 
@@ -1195,7 +1199,7 @@ func (v CrudClient) List(ctx context.Context) (*CrudClientListResults, error) {
 }
 
 type CrudClientDestroyResults struct {
-	client *rpc.Client
+	client rpc.Client
 	data   crudDestroyResultsData
 }
 

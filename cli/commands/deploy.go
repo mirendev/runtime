@@ -36,7 +36,7 @@ func Deploy(ctx *Context, opts struct {
 		return err
 	}
 
-	bc := build_v1alpha.BuilderClient{Client: cl}
+	bc := build_v1alpha.NewBuilderClient(cl)
 
 	name := opts.App
 	dir := opts.Dir

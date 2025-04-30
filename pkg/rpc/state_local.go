@@ -23,7 +23,7 @@ func (s *State) setupLocal(ctx context.Context) error {
 	return nil
 }
 
-func (s *State) connectLocal(addr string) (*Client, error) {
+func (s *State) connectLocal(addr string) (*NetworkClient, error) {
 	c, err := net.Dial("unix", addr)
 	if err != nil {
 		return nil, err
@@ -34,7 +34,7 @@ func (s *State) connectLocal(addr string) (*Client, error) {
 		return nil, err
 	}
 
-	return &Client{
+	return &NetworkClient{
 		State:      s,
 		transport:  s.localTransport,
 		remote:     "local",
@@ -42,7 +42,7 @@ func (s *State) connectLocal(addr string) (*Client, error) {
 	}, nil
 }
 
-func (s *State) connectProcess(cmd *exec.Cmd) (*Client, error) {
+func (s *State) connectProcess(cmd *exec.Cmd) (*NetworkClient, error) {
 	se, err := cmd.StderrPipe()
 	if err != nil {
 		return nil, err
@@ -86,7 +86,7 @@ func (s *State) connectProcess(cmd *exec.Cmd) (*Client, error) {
 		}
 	}()
 
-	return &Client{
+	return &NetworkClient{
 		State:      s,
 		transport:  s.localTransport,
 		remote:     "local",

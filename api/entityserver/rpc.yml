@@ -86,6 +86,18 @@ interfaces:
           - name: id
             type: string
 
+      - name: put_session
+        parameters:
+          - name: entity
+            type: Entity
+          - name: session
+            type: string
+        results:
+          - name: revision
+            type: int64
+          - name: id
+            type: string
+
       - name: delete
         parameters:
           - name: id
@@ -150,3 +162,23 @@ interfaces:
         results:
           - name: data
             type: bytes
+
+      - name: create_session
+        parameters:
+          - name: ttl
+            type: int64
+          - name: usage
+            type: string
+        results:
+          - name: id
+            type: string
+
+      - name: revoke_session
+        parameters:
+          - name: id
+            type: string
+
+      - name: ping_session
+        parameters:
+          - name: id
+            type: string

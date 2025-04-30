@@ -30,6 +30,18 @@ func (o *HttpRoute) Is(e entity.AttrGetter) bool {
 	return entity.Is(e, KindHttpRoute)
 }
 
+func (o *HttpRoute) ShortKind() string {
+	return "http_route"
+}
+
+func (o *HttpRoute) Kind() entity.Id {
+	return KindHttpRoute
+}
+
+func (o *HttpRoute) EntityId() entity.Id {
+	return o.ID
+}
+
 func (o *HttpRoute) Encode() (attrs []entity.Attr) {
 	if !entity.Empty(o.App) {
 		attrs = append(attrs, entity.Ref(HttpRouteAppId, o.App))
@@ -39,6 +51,16 @@ func (o *HttpRoute) Encode() (attrs []entity.Attr) {
 	}
 	attrs = append(attrs, entity.Ref(entity.EntityKind, KindHttpRoute))
 	return
+}
+
+func (o *HttpRoute) Empty() bool {
+	if !entity.Empty(o.App) {
+		return false
+	}
+	if !entity.Empty(o.Host) {
+		return false
+	}
+	return true
 }
 
 func (o *HttpRoute) InitSchema(sb *schema.SchemaBuilder) {

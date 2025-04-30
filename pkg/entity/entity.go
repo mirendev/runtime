@@ -41,6 +41,7 @@ type AttributeSchema struct {
 	EnumValues []Value
 	AllowMany  bool
 	Index      bool
+	Session    bool
 	Predicate  []*Entity
 	CheckProgs []string
 }
@@ -152,8 +153,8 @@ func (e *EntityComponent) AllAttrs() []Attr {
 type EntityStore interface {
 	GetEntity(ctx context.Context, id Id) (*Entity, error)
 	GetAttributeSchema(ctx context.Context, name Id) (*AttributeSchema, error)
-	CreateEntity(ctx context.Context, attributes []Attr) (*Entity, error)
-	UpdateEntity(ctx context.Context, id Id, attributes []Attr) (*Entity, error)
+	CreateEntity(ctx context.Context, attributes []Attr, opts ...EntityOption) (*Entity, error)
+	UpdateEntity(ctx context.Context, id Id, attributes []Attr, opts ...EntityOption) (*Entity, error)
 	DeleteEntity(ctx context.Context, id Id) error
 	ListIndex(ctx context.Context, attr Attr) ([]Id, error)
 	ListCollection(ctx context.Context, collection string) ([]Id, error)
@@ -220,6 +221,12 @@ func convertEntityToSchema(ctx context.Context, s EntityStore, entity *Entity) (
 		case Index:
 			if val, ok := attr.Value.Any().(bool); ok {
 				schema.Index = val
+			} else {
+				return nil, fmt.Errorf("invalid index: %v", attr.Value.Any())
+			}
+		case Session:
+			if val, ok := attr.Value.Any().(bool); ok {
+				schema.Session = val
 			} else {
 				return nil, fmt.Errorf("invalid index: %v", attr.Value.Any())
 			}

@@ -260,7 +260,7 @@ type streamRecvArgsData struct {
 }
 
 type StreamRecvArgs struct {
-	call *rpc.Call
+	call rpc.Call
 	data streamRecvArgsData
 }
 
@@ -296,7 +296,7 @@ type streamRecvResultsData struct {
 }
 
 type StreamRecvResults struct {
-	call *rpc.Call
+	call rpc.Call
 	data streamRecvResultsData
 }
 
@@ -322,7 +322,7 @@ func (v *StreamRecvResults) UnmarshalJSON(data []byte) error {
 }
 
 type StreamRecv struct {
-	*rpc.Call
+	rpc.Call
 	args    StreamRecvArgs
 	results StreamRecvResults
 }
@@ -352,14 +352,14 @@ type Stream interface {
 }
 
 type reexportStream struct {
-	client *rpc.Client
+	client rpc.Client
 }
 
 func (_ reexportStream) Recv(ctx context.Context, state *StreamRecv) error {
 	panic("not implemented")
 }
 
-func (t reexportStream) CapabilityClient() *rpc.Client {
+func (t reexportStream) CapabilityClient() rpc.Client {
 	return t.client
 }
 
@@ -369,7 +369,7 @@ func AdaptStream(t Stream) *rpc.Interface {
 			Name:          "recv",
 			InterfaceName: "Stream",
 			Index:         0,
-			Handler: func(ctx context.Context, call *rpc.Call) error {
+			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.Recv(ctx, &StreamRecv{Call: call})
 			},
 		},
@@ -379,7 +379,11 @@ func AdaptStream(t Stream) *rpc.Interface {
 }
 
 type StreamClient struct {
-	*rpc.Client
+	rpc.Client
+}
+
+func NewStreamClient(client rpc.Client) *StreamClient {
+	return &StreamClient{Client: client}
 }
 
 func (c StreamClient) Export() Stream {
@@ -387,7 +391,7 @@ func (c StreamClient) Export() Stream {
 }
 
 type StreamClientRecvResults struct {
-	client *rpc.Client
+	client rpc.Client
 	data   streamRecvResultsData
 }
 
@@ -421,7 +425,7 @@ type entityAccessGetArgsData struct {
 }
 
 type EntityAccessGetArgs struct {
-	call *rpc.Call
+	call rpc.Call
 	data entityAccessGetArgsData
 }
 
@@ -457,7 +461,7 @@ type entityAccessGetResultsData struct {
 }
 
 type EntityAccessGetResults struct {
-	call *rpc.Call
+	call rpc.Call
 	data entityAccessGetResultsData
 }
 
@@ -486,7 +490,7 @@ type entityAccessPutArgsData struct {
 }
 
 type EntityAccessPutArgs struct {
-	call *rpc.Call
+	call rpc.Call
 	data entityAccessPutArgsData
 }
 
@@ -520,7 +524,7 @@ type entityAccessPutResultsData struct {
 }
 
 type EntityAccessPutResults struct {
-	call *rpc.Call
+	call rpc.Call
 	data entityAccessPutResultsData
 }
 
@@ -548,12 +552,91 @@ func (v *EntityAccessPutResults) UnmarshalJSON(data []byte) error {
 	return json.Unmarshal(data, &v.data)
 }
 
+type entityAccessPutSessionArgsData struct {
+	Entity  *Entity `cbor:"0,keyasint,omitempty" json:"entity,omitempty"`
+	Session *string `cbor:"1,keyasint,omitempty" json:"session,omitempty"`
+}
+
+type EntityAccessPutSessionArgs struct {
+	call rpc.Call
+	data entityAccessPutSessionArgsData
+}
+
+func (v *EntityAccessPutSessionArgs) HasEntity() bool {
+	return v.data.Entity != nil
+}
+
+func (v *EntityAccessPutSessionArgs) Entity() *Entity {
+	return v.data.Entity
+}
+
+func (v *EntityAccessPutSessionArgs) HasSession() bool {
+	return v.data.Session != nil
+}
+
+func (v *EntityAccessPutSessionArgs) Session() string {
+	if v.data.Session == nil {
+		return ""
+	}
+	return *v.data.Session
+}
+
+func (v *EntityAccessPutSessionArgs) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *EntityAccessPutSessionArgs) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *EntityAccessPutSessionArgs) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *EntityAccessPutSessionArgs) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type entityAccessPutSessionResultsData struct {
+	Revision *int64  `cbor:"0,keyasint,omitempty" json:"revision,omitempty"`
+	Id       *string `cbor:"1,keyasint,omitempty" json:"id,omitempty"`
+}
+
+type EntityAccessPutSessionResults struct {
+	call rpc.Call
+	data entityAccessPutSessionResultsData
+}
+
+func (v *EntityAccessPutSessionResults) SetRevision(revision int64) {
+	v.data.Revision = &revision
+}
+
+func (v *EntityAccessPutSessionResults) SetId(id string) {
+	v.data.Id = &id
+}
+
+func (v *EntityAccessPutSessionResults) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *EntityAccessPutSessionResults) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *EntityAccessPutSessionResults) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *EntityAccessPutSessionResults) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
 type entityAccessDeleteArgsData struct {
 	Id *string `cbor:"0,keyasint,omitempty" json:"id,omitempty"`
 }
 
 type EntityAccessDeleteArgs struct {
-	call *rpc.Call
+	call rpc.Call
 	data entityAccessDeleteArgsData
 }
 
@@ -589,7 +672,7 @@ type entityAccessDeleteResultsData struct {
 }
 
 type EntityAccessDeleteResults struct {
-	call *rpc.Call
+	call rpc.Call
 	data entityAccessDeleteResultsData
 }
 
@@ -619,7 +702,7 @@ type entityAccessWatchIndexArgsData struct {
 }
 
 type EntityAccessWatchIndexArgs struct {
-	call *rpc.Call
+	call rpc.Call
 	data entityAccessWatchIndexArgsData
 }
 
@@ -661,7 +744,7 @@ func (v *EntityAccessWatchIndexArgs) UnmarshalJSON(data []byte) error {
 type entityAccessWatchIndexResultsData struct{}
 
 type EntityAccessWatchIndexResults struct {
-	call *rpc.Call
+	call rpc.Call
 	data entityAccessWatchIndexResultsData
 }
 
@@ -687,7 +770,7 @@ type entityAccessWatchEntityArgsData struct {
 }
 
 type EntityAccessWatchEntityArgs struct {
-	call *rpc.Call
+	call rpc.Call
 	data entityAccessWatchEntityArgsData
 }
 
@@ -732,7 +815,7 @@ func (v *EntityAccessWatchEntityArgs) UnmarshalJSON(data []byte) error {
 type entityAccessWatchEntityResultsData struct{}
 
 type EntityAccessWatchEntityResults struct {
-	call *rpc.Call
+	call rpc.Call
 	data entityAccessWatchEntityResultsData
 }
 
@@ -757,7 +840,7 @@ type entityAccessListArgsData struct {
 }
 
 type EntityAccessListArgs struct {
-	call *rpc.Call
+	call rpc.Call
 	data entityAccessListArgsData
 }
 
@@ -790,7 +873,7 @@ type entityAccessListResultsData struct {
 }
 
 type EntityAccessListResults struct {
-	call *rpc.Call
+	call rpc.Call
 	data entityAccessListResultsData
 }
 
@@ -821,7 +904,7 @@ type entityAccessMakeAttrArgsData struct {
 }
 
 type EntityAccessMakeAttrArgs struct {
-	call *rpc.Call
+	call rpc.Call
 	data entityAccessMakeAttrArgsData
 }
 
@@ -868,7 +951,7 @@ type entityAccessMakeAttrResultsData struct {
 }
 
 type EntityAccessMakeAttrResults struct {
-	call *rpc.Call
+	call rpc.Call
 	data entityAccessMakeAttrResultsData
 }
 
@@ -897,7 +980,7 @@ type entityAccessLookupKindArgsData struct {
 }
 
 type EntityAccessLookupKindArgs struct {
-	call *rpc.Call
+	call rpc.Call
 	data entityAccessLookupKindArgsData
 }
 
@@ -933,7 +1016,7 @@ type entityAccessLookupKindResultsData struct {
 }
 
 type EntityAccessLookupKindResults struct {
-	call *rpc.Call
+	call rpc.Call
 	data entityAccessLookupKindResultsData
 }
 
@@ -962,7 +1045,7 @@ type entityAccessParseArgsData struct {
 }
 
 type EntityAccessParseArgs struct {
-	call *rpc.Call
+	call rpc.Call
 	data entityAccessParseArgsData
 }
 
@@ -998,7 +1081,7 @@ type entityAccessParseResultsData struct {
 }
 
 type EntityAccessParseResults struct {
-	call *rpc.Call
+	call rpc.Call
 	data entityAccessParseResultsData
 }
 
@@ -1027,7 +1110,7 @@ type entityAccessFormatArgsData struct {
 }
 
 type EntityAccessFormatArgs struct {
-	call *rpc.Call
+	call rpc.Call
 	data entityAccessFormatArgsData
 }
 
@@ -1060,7 +1143,7 @@ type entityAccessFormatResultsData struct {
 }
 
 type EntityAccessFormatResults struct {
-	call *rpc.Call
+	call rpc.Call
 	data entityAccessFormatResultsData
 }
 
@@ -1085,8 +1168,203 @@ func (v *EntityAccessFormatResults) UnmarshalJSON(data []byte) error {
 	return json.Unmarshal(data, &v.data)
 }
 
+type entityAccessCreateSessionArgsData struct {
+	Ttl   *int64  `cbor:"0,keyasint,omitempty" json:"ttl,omitempty"`
+	Usage *string `cbor:"1,keyasint,omitempty" json:"usage,omitempty"`
+}
+
+type EntityAccessCreateSessionArgs struct {
+	call rpc.Call
+	data entityAccessCreateSessionArgsData
+}
+
+func (v *EntityAccessCreateSessionArgs) HasTtl() bool {
+	return v.data.Ttl != nil
+}
+
+func (v *EntityAccessCreateSessionArgs) Ttl() int64 {
+	if v.data.Ttl == nil {
+		return 0
+	}
+	return *v.data.Ttl
+}
+
+func (v *EntityAccessCreateSessionArgs) HasUsage() bool {
+	return v.data.Usage != nil
+}
+
+func (v *EntityAccessCreateSessionArgs) Usage() string {
+	if v.data.Usage == nil {
+		return ""
+	}
+	return *v.data.Usage
+}
+
+func (v *EntityAccessCreateSessionArgs) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *EntityAccessCreateSessionArgs) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *EntityAccessCreateSessionArgs) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *EntityAccessCreateSessionArgs) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type entityAccessCreateSessionResultsData struct {
+	Id *string `cbor:"0,keyasint,omitempty" json:"id,omitempty"`
+}
+
+type EntityAccessCreateSessionResults struct {
+	call rpc.Call
+	data entityAccessCreateSessionResultsData
+}
+
+func (v *EntityAccessCreateSessionResults) SetId(id string) {
+	v.data.Id = &id
+}
+
+func (v *EntityAccessCreateSessionResults) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *EntityAccessCreateSessionResults) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *EntityAccessCreateSessionResults) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *EntityAccessCreateSessionResults) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type entityAccessRevokeSessionArgsData struct {
+	Id *string `cbor:"0,keyasint,omitempty" json:"id,omitempty"`
+}
+
+type EntityAccessRevokeSessionArgs struct {
+	call rpc.Call
+	data entityAccessRevokeSessionArgsData
+}
+
+func (v *EntityAccessRevokeSessionArgs) HasId() bool {
+	return v.data.Id != nil
+}
+
+func (v *EntityAccessRevokeSessionArgs) Id() string {
+	if v.data.Id == nil {
+		return ""
+	}
+	return *v.data.Id
+}
+
+func (v *EntityAccessRevokeSessionArgs) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *EntityAccessRevokeSessionArgs) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *EntityAccessRevokeSessionArgs) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *EntityAccessRevokeSessionArgs) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type entityAccessRevokeSessionResultsData struct{}
+
+type EntityAccessRevokeSessionResults struct {
+	call rpc.Call
+	data entityAccessRevokeSessionResultsData
+}
+
+func (v *EntityAccessRevokeSessionResults) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *EntityAccessRevokeSessionResults) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *EntityAccessRevokeSessionResults) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *EntityAccessRevokeSessionResults) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type entityAccessPingSessionArgsData struct {
+	Id *string `cbor:"0,keyasint,omitempty" json:"id,omitempty"`
+}
+
+type EntityAccessPingSessionArgs struct {
+	call rpc.Call
+	data entityAccessPingSessionArgsData
+}
+
+func (v *EntityAccessPingSessionArgs) HasId() bool {
+	return v.data.Id != nil
+}
+
+func (v *EntityAccessPingSessionArgs) Id() string {
+	if v.data.Id == nil {
+		return ""
+	}
+	return *v.data.Id
+}
+
+func (v *EntityAccessPingSessionArgs) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *EntityAccessPingSessionArgs) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *EntityAccessPingSessionArgs) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *EntityAccessPingSessionArgs) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type entityAccessPingSessionResultsData struct{}
+
+type EntityAccessPingSessionResults struct {
+	call rpc.Call
+	data entityAccessPingSessionResultsData
+}
+
+func (v *EntityAccessPingSessionResults) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *EntityAccessPingSessionResults) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *EntityAccessPingSessionResults) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *EntityAccessPingSessionResults) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
 type EntityAccessGet struct {
-	*rpc.Call
+	rpc.Call
 	args    EntityAccessGetArgs
 	results EntityAccessGetResults
 }
@@ -1112,7 +1390,7 @@ func (t *EntityAccessGet) Results() *EntityAccessGetResults {
 }
 
 type EntityAccessPut struct {
-	*rpc.Call
+	rpc.Call
 	args    EntityAccessPutArgs
 	results EntityAccessPutResults
 }
@@ -1137,8 +1415,34 @@ func (t *EntityAccessPut) Results() *EntityAccessPutResults {
 	return results
 }
 
+type EntityAccessPutSession struct {
+	rpc.Call
+	args    EntityAccessPutSessionArgs
+	results EntityAccessPutSessionResults
+}
+
+func (t *EntityAccessPutSession) Args() *EntityAccessPutSessionArgs {
+	args := &t.args
+	if args.call != nil {
+		return args
+	}
+	args.call = t.Call
+	t.Call.Args(args)
+	return args
+}
+
+func (t *EntityAccessPutSession) Results() *EntityAccessPutSessionResults {
+	results := &t.results
+	if results.call != nil {
+		return results
+	}
+	results.call = t.Call
+	t.Call.Results(results)
+	return results
+}
+
 type EntityAccessDelete struct {
-	*rpc.Call
+	rpc.Call
 	args    EntityAccessDeleteArgs
 	results EntityAccessDeleteResults
 }
@@ -1164,7 +1468,7 @@ func (t *EntityAccessDelete) Results() *EntityAccessDeleteResults {
 }
 
 type EntityAccessWatchIndex struct {
-	*rpc.Call
+	rpc.Call
 	args    EntityAccessWatchIndexArgs
 	results EntityAccessWatchIndexResults
 }
@@ -1190,7 +1494,7 @@ func (t *EntityAccessWatchIndex) Results() *EntityAccessWatchIndexResults {
 }
 
 type EntityAccessWatchEntity struct {
-	*rpc.Call
+	rpc.Call
 	args    EntityAccessWatchEntityArgs
 	results EntityAccessWatchEntityResults
 }
@@ -1216,7 +1520,7 @@ func (t *EntityAccessWatchEntity) Results() *EntityAccessWatchEntityResults {
 }
 
 type EntityAccessList struct {
-	*rpc.Call
+	rpc.Call
 	args    EntityAccessListArgs
 	results EntityAccessListResults
 }
@@ -1242,7 +1546,7 @@ func (t *EntityAccessList) Results() *EntityAccessListResults {
 }
 
 type EntityAccessMakeAttr struct {
-	*rpc.Call
+	rpc.Call
 	args    EntityAccessMakeAttrArgs
 	results EntityAccessMakeAttrResults
 }
@@ -1268,7 +1572,7 @@ func (t *EntityAccessMakeAttr) Results() *EntityAccessMakeAttrResults {
 }
 
 type EntityAccessLookupKind struct {
-	*rpc.Call
+	rpc.Call
 	args    EntityAccessLookupKindArgs
 	results EntityAccessLookupKindResults
 }
@@ -1294,7 +1598,7 @@ func (t *EntityAccessLookupKind) Results() *EntityAccessLookupKindResults {
 }
 
 type EntityAccessParse struct {
-	*rpc.Call
+	rpc.Call
 	args    EntityAccessParseArgs
 	results EntityAccessParseResults
 }
@@ -1320,7 +1624,7 @@ func (t *EntityAccessParse) Results() *EntityAccessParseResults {
 }
 
 type EntityAccessFormat struct {
-	*rpc.Call
+	rpc.Call
 	args    EntityAccessFormatArgs
 	results EntityAccessFormatResults
 }
@@ -1345,9 +1649,88 @@ func (t *EntityAccessFormat) Results() *EntityAccessFormatResults {
 	return results
 }
 
+type EntityAccessCreateSession struct {
+	rpc.Call
+	args    EntityAccessCreateSessionArgs
+	results EntityAccessCreateSessionResults
+}
+
+func (t *EntityAccessCreateSession) Args() *EntityAccessCreateSessionArgs {
+	args := &t.args
+	if args.call != nil {
+		return args
+	}
+	args.call = t.Call
+	t.Call.Args(args)
+	return args
+}
+
+func (t *EntityAccessCreateSession) Results() *EntityAccessCreateSessionResults {
+	results := &t.results
+	if results.call != nil {
+		return results
+	}
+	results.call = t.Call
+	t.Call.Results(results)
+	return results
+}
+
+type EntityAccessRevokeSession struct {
+	rpc.Call
+	args    EntityAccessRevokeSessionArgs
+	results EntityAccessRevokeSessionResults
+}
+
+func (t *EntityAccessRevokeSession) Args() *EntityAccessRevokeSessionArgs {
+	args := &t.args
+	if args.call != nil {
+		return args
+	}
+	args.call = t.Call
+	t.Call.Args(args)
+	return args
+}
+
+func (t *EntityAccessRevokeSession) Results() *EntityAccessRevokeSessionResults {
+	results := &t.results
+	if results.call != nil {
+		return results
+	}
+	results.call = t.Call
+	t.Call.Results(results)
+	return results
+}
+
+type EntityAccessPingSession struct {
+	rpc.Call
+	args    EntityAccessPingSessionArgs
+	results EntityAccessPingSessionResults
+}
+
+func (t *EntityAccessPingSession) Args() *EntityAccessPingSessionArgs {
+	args := &t.args
+	if args.call != nil {
+		return args
+	}
+	args.call = t.Call
+	t.Call.Args(args)
+	return args
+}
+
+func (t *EntityAccessPingSession) Results() *EntityAccessPingSessionResults {
+	results := &t.results
+	if results.call != nil {
+		return results
+	}
+	results.call = t.Call
+	t.Call.Results(results)
+	return results
+}
+
 type EntityAccess interface {
 	Get(ctx context.Context, state *EntityAccessGet) error
 	Put(ctx context.Context, state *EntityAccessPut) error
+	PutSession(ctx context.Context, state *EntityAccessPutSession) error
 	Delete(ctx context.Context, state *EntityAccessDelete) error
 	WatchIndex(ctx context.Context, state *EntityAccessWatchIndex) error
 	WatchEntity(ctx context.Context, state *EntityAccessWatchEntity) error
@@ -1356,10 +1739,13 @@ type EntityAccess interface {
 	LookupKind(ctx context.Context, state *EntityAccessLookupKind) error
 	Parse(ctx context.Context, state *EntityAccessParse) error
 	Format(ctx context.Context, state *EntityAccessFormat) error
+	CreateSession(ctx context.Context, state *EntityAccessCreateSession) error
+	RevokeSession(ctx context.Context, state *EntityAccessRevokeSession) error
+	PingSession(ctx context.Context, state *EntityAccessPingSession) error
 }
 
 type reexportEntityAccess struct {
-	client *rpc.Client
+	client rpc.Client
 }
 
 func (_ reexportEntityAccess) Get(ctx context.Context, state *EntityAccessGet) error {
@@ -1367,6 +1753,10 @@ func (_ reexportEntityAccess) Get(ctx context.Context, state *EntityAccessGet) e
 }
 
 func (_ reexportEntityAccess) Put(ctx context.Context, state *EntityAccessPut) error {
+	panic("not implemented")
+}
+
+func (_ reexportEntityAccess) PutSession(ctx context.Context, state *EntityAccessPutSession) error {
 	panic("not implemented")
 }
 
@@ -1402,7 +1792,19 @@ func (_ reexportEntityAccess) Format(ctx context.Context, state *EntityAccessFor
 	panic("not implemented")
 }
 
-func (t reexportEntityAccess) CapabilityClient() *rpc.Client {
+func (_ reexportEntityAccess) CreateSession(ctx context.Context, state *EntityAccessCreateSession) error {
+	panic("not implemented")
+}
+
+func (_ reexportEntityAccess) RevokeSession(ctx context.Context, state *EntityAccessRevokeSession) error {
+	panic("not implemented")
+}
+
+func (_ reexportEntityAccess) PingSession(ctx context.Context, state *EntityAccessPingSession) error {
+	panic("not implemented")
+}
+
+func (t reexportEntityAccess) CapabilityClient() rpc.Client {
 	return t.client
 }
 
@@ -1412,7 +1814,7 @@ func AdaptEntityAccess(t EntityAccess) *rpc.Interface {
 			Name:          "get",
 			InterfaceName: "EntityAccess",
 			Index:         0,
-			Handler: func(ctx context.Context, call *rpc.Call) error {
+			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.Get(ctx, &EntityAccessGet{Call: call})
 			},
 		},
@@ -1420,15 +1822,23 @@ func AdaptEntityAccess(t EntityAccess) *rpc.Interface {
 			Name:          "put",
 			InterfaceName: "EntityAccess",
 			Index:         0,
-			Handler: func(ctx context.Context, call *rpc.Call) error {
+			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.Put(ctx, &EntityAccessPut{Call: call})
+			},
+		},
+		{
+			Name:          "put_session",
+			InterfaceName: "EntityAccess",
+			Index:         0,
+			Handler: func(ctx context.Context, call rpc.Call) error {
+				return t.PutSession(ctx, &EntityAccessPutSession{Call: call})
 			},
 		},
 		{
 			Name:          "delete",
 			InterfaceName: "EntityAccess",
 			Index:         0,
-			Handler: func(ctx context.Context, call *rpc.Call) error {
+			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.Delete(ctx, &EntityAccessDelete{Call: call})
 			},
 		},
@@ -1436,7 +1846,7 @@ func AdaptEntityAccess(t EntityAccess) *rpc.Interface {
 			Name:          "watch_index",
 			InterfaceName: "EntityAccess",
 			Index:         0,
-			Handler: func(ctx context.Context, call *rpc.Call) error {
+			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.WatchIndex(ctx, &EntityAccessWatchIndex{Call: call})
 			},
 		},
@@ -1444,7 +1854,7 @@ func AdaptEntityAccess(t EntityAccess) *rpc.Interface {
 			Name:          "watch_entity",
 			InterfaceName: "EntityAccess",
 			Index:         0,
-			Handler: func(ctx context.Context, call *rpc.Call) error {
+			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.WatchEntity(ctx, &EntityAccessWatchEntity{Call: call})
 			},
 		},
@@ -1452,7 +1862,7 @@ func AdaptEntityAccess(t EntityAccess) *rpc.Interface {
 			Name:          "list",
 			InterfaceName: "EntityAccess",
 			Index:         0,
-			Handler: func(ctx context.Context, call *rpc.Call) error {
+			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.List(ctx, &EntityAccessList{Call: call})
 			},
 		},
@@ -1460,7 +1870,7 @@ func AdaptEntityAccess(t EntityAccess) *rpc.Interface {
 			Name:          "makeAttr",
 			InterfaceName: "EntityAccess",
 			Index:         0,
-			Handler: func(ctx context.Context, call *rpc.Call) error {
+			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.MakeAttr(ctx, &EntityAccessMakeAttr{Call: call})
 			},
 		},
@@ -1468,7 +1878,7 @@ func AdaptEntityAccess(t EntityAccess) *rpc.Interface {
 			Name:          "lookupKind",
 			InterfaceName: "EntityAccess",
 			Index:         0,
-			Handler: func(ctx context.Context, call *rpc.Call) error {
+			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.LookupKind(ctx, &EntityAccessLookupKind{Call: call})
 			},
 		},
@@ -1476,7 +1886,7 @@ func AdaptEntityAccess(t EntityAccess) *rpc.Interface {
 			Name:          "parse",
 			InterfaceName: "EntityAccess",
 			Index:         0,
-			Handler: func(ctx context.Context, call *rpc.Call) error {
+			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.Parse(ctx, &EntityAccessParse{Call: call})
 			},
 		},
@@ -1484,8 +1894,32 @@ func AdaptEntityAccess(t EntityAccess) *rpc.Interface {
 			Name:          "format",
 			InterfaceName: "EntityAccess",
 			Index:         0,
-			Handler: func(ctx context.Context, call *rpc.Call) error {
+			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.Format(ctx, &EntityAccessFormat{Call: call})
+			},
+		},
+		{
+			Name:          "create_session",
+			InterfaceName: "EntityAccess",
+			Index:         0,
+			Handler: func(ctx context.Context, call rpc.Call) error {
+				return t.CreateSession(ctx, &EntityAccessCreateSession{Call: call})
+			},
+		},
+		{
+			Name:          "revoke_session",
+			InterfaceName: "EntityAccess",
+			Index:         0,
+			Handler: func(ctx context.Context, call rpc.Call) error {
+				return t.RevokeSession(ctx, &EntityAccessRevokeSession{Call: call})
+			},
+		},
+		{
+			Name:          "ping_session",
+			InterfaceName: "EntityAccess",
+			Index:         0,
+			Handler: func(ctx context.Context, call rpc.Call) error {
+				return t.PingSession(ctx, &EntityAccessPingSession{Call: call})
 			},
 		},
 	}
@@ -1494,7 +1928,11 @@ func AdaptEntityAccess(t EntityAccess) *rpc.Interface {
 }
 
 type EntityAccessClient struct {
-	*rpc.Client
+	rpc.Client
+}
+
+func NewEntityAccessClient(client rpc.Client) *EntityAccessClient {
+	return &EntityAccessClient{Client: client}
 }
 
 func (c EntityAccessClient) Export() EntityAccess {
@@ -1502,7 +1940,7 @@ func (c EntityAccessClient) Export() EntityAccess {
 }
 
 type EntityAccessClientGetResults struct {
-	client *rpc.Client
+	client rpc.Client
 	data   entityAccessGetResultsData
 }
 
@@ -1529,7 +1967,7 @@ func (v EntityAccessClient) Get(ctx context.Context, id string) (*EntityAccessCl
 }
 
 type EntityAccessClientPutResults struct {
-	client *rpc.Client
+	client rpc.Client
 	data   entityAccessPutResultsData
 }
 
@@ -1569,8 +2007,50 @@ func (v EntityAccessClient) Put(ctx context.Context, entity *Entity) (*EntityAcc
 	return &EntityAccessClientPutResults{client: v.Client, data: ret}, nil
 }
 
+type EntityAccessClientPutSessionResults struct {
+	client rpc.Client
+	data   entityAccessPutSessionResultsData
+}
+
+func (v *EntityAccessClientPutSessionResults) HasRevision() bool {
+	return v.data.Revision != nil
+}
+
+func (v *EntityAccessClientPutSessionResults) Revision() int64 {
+	if v.data.Revision == nil {
+		return 0
+	}
+	return *v.data.Revision
+}
+
+func (v *EntityAccessClientPutSessionResults) HasId() bool {
+	return v.data.Id != nil
+}
+
+func (v *EntityAccessClientPutSessionResults) Id() string {
+	if v.data.Id == nil {
+		return ""
+	}
+	return *v.data.Id
+}
+
+func (v EntityAccessClient) PutSession(ctx context.Context, entity *Entity, session string) (*EntityAccessClientPutSessionResults, error) {
+	args := EntityAccessPutSessionArgs{}
+	args.data.Entity = entity
+	args.data.Session = &session
+
+	var ret entityAccessPutSessionResultsData
+
+	err := v.Client.Call(ctx, "put_session", &args, &ret)
+	if err != nil {
+		return nil, err
+	}
+
+	return &EntityAccessClientPutSessionResults{client: v.Client, data: ret}, nil
+}
+
 type EntityAccessClientDeleteResults struct {
-	client *rpc.Client
+	client rpc.Client
 	data   entityAccessDeleteResultsData
 }
 
@@ -1600,7 +2080,7 @@ func (v EntityAccessClient) Delete(ctx context.Context, id string) (*EntityAcces
 }
 
 type EntityAccessClientWatchIndexResults struct {
-	client *rpc.Client
+	client rpc.Client
 	data   entityAccessWatchIndexResultsData
 }
 
@@ -1625,7 +2105,7 @@ func (v EntityAccessClient) WatchIndex(ctx context.Context, index entity.Attr, v
 }
 
 type EntityAccessClientWatchEntityResults struct {
-	client *rpc.Client
+	client rpc.Client
 	data   entityAccessWatchEntityResultsData
 }
 
@@ -1650,7 +2130,7 @@ func (v EntityAccessClient) WatchEntity(ctx context.Context, id string, updates 
 }
 
 type EntityAccessClientListResults struct {
-	client *rpc.Client
+	client rpc.Client
 	data   entityAccessListResultsData
 }
 
@@ -1680,7 +2160,7 @@ func (v EntityAccessClient) List(ctx context.Context, index entity.Attr) (*Entit
 }
 
 type EntityAccessClientMakeAttrResults struct {
-	client *rpc.Client
+	client rpc.Client
 	data   entityAccessMakeAttrResultsData
 }
 
@@ -1708,7 +2188,7 @@ func (v EntityAccessClient) MakeAttr(ctx context.Context, id string, value strin
 }
 
 type EntityAccessClientLookupKindResults struct {
-	client *rpc.Client
+	client rpc.Client
 	data   entityAccessLookupKindResultsData
 }
 
@@ -1735,7 +2215,7 @@ func (v EntityAccessClient) LookupKind(ctx context.Context, kind string) (*Entit
 }
 
 type EntityAccessClientParseResults struct {
-	client *rpc.Client
+	client rpc.Client
 	data   entityAccessParseResultsData
 }
 
@@ -1762,7 +2242,7 @@ func (v EntityAccessClient) Parse(ctx context.Context, data []byte) (*EntityAcce
 }
 
 type EntityAccessClientFormatResults struct {
-	client *rpc.Client
+	client rpc.Client
 	data   entityAccessFormatResultsData
 }
 
@@ -1789,4 +2269,73 @@ func (v EntityAccessClient) Format(ctx context.Context, entity *Entity) (*Entity
 	}
 
 	return &EntityAccessClientFormatResults{client: v.Client, data: ret}, nil
+}
+
+type EntityAccessClientCreateSessionResults struct {
+	client rpc.Client
+	data   entityAccessCreateSessionResultsData
+}
+
+func (v *EntityAccessClientCreateSessionResults) HasId() bool {
+	return v.data.Id != nil
+}
+
+func (v *EntityAccessClientCreateSessionResults) Id() string {
+	if v.data.Id == nil {
+		return ""
+	}
+	return *v.data.Id
+}
+
+func (v EntityAccessClient) CreateSession(ctx context.Context, ttl int64, usage string) (*EntityAccessClientCreateSessionResults, error) {
+	args := EntityAccessCreateSessionArgs{}
+	args.data.Ttl = &ttl
+	args.data.Usage = &usage
+
+	var ret entityAccessCreateSessionResultsData
+
+	err := v.Client.Call(ctx, "create_session", &args, &ret)
+	if err != nil {
+		return nil, err
+	}
+
+	return &EntityAccessClientCreateSessionResults{client: v.Client, data: ret}, nil
+}
+
+type EntityAccessClientRevokeSessionResults struct {
+	client rpc.Client
+	data   entityAccessRevokeSessionResultsData
+}
+
+func (v EntityAccessClient) RevokeSession(ctx context.Context, id string) (*EntityAccessClientRevokeSessionResults, error) {
+	args := EntityAccessRevokeSessionArgs{}
+	args.data.Id = &id
+
+	var ret entityAccessRevokeSessionResultsData
+
+	err := v.Client.Call(ctx, "revoke_session", &args, &ret)
+	if err != nil {
+		return nil, err
+	}
+
+	return &EntityAccessClientRevokeSessionResults{client: v.Client, data: ret}, nil
+}
+
+type EntityAccessClientPingSessionResults struct {
+	client rpc.Client
+	data   entityAccessPingSessionResultsData
+}
+
+func (v EntityAccessClient) PingSession(ctx context.Context, id string) (*EntityAccessClientPingSessionResults, error) {
+	args := EntityAccessPingSessionArgs{}
+	args.data.Id = &id
+
+	var ret entityAccessPingSessionResultsData
+
+	err := v.Client.Call(ctx, "ping_session", &args, &ret)
+	if err != nil {
+		return nil, err
+	}
+
+	return &EntityAccessClientPingSessionResults{client: v.Client, data: ret}, nil
 }

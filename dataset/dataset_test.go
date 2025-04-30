@@ -32,7 +32,7 @@ func TestDatasetManager(t *testing.T) {
 
 		// Create dataset
 		mc := &dataset.DataSetsClient{
-			Client: rpc.LocalClient(dataset.AdaptDataSets(manager)),
+			NetworkClient: rpc.LocalClient(dataset.AdaptDataSets(manager)),
 		}
 
 		info := &dataset.DataSetInfo{}
@@ -73,7 +73,7 @@ func TestDatasetManager(t *testing.T) {
 		r.NoError(err)
 
 		mc := &dataset.DataSetsClient{
-			Client: rpc.LocalClient(dataset.AdaptDataSets(manager)),
+			NetworkClient: rpc.LocalClient(dataset.AdaptDataSets(manager)),
 		}
 
 		// Create multiple datasets
@@ -115,7 +115,7 @@ func TestDatasetManager(t *testing.T) {
 		r.NoError(err)
 
 		mc := &dataset.DataSetsClient{
-			Client: rpc.LocalClient(dataset.AdaptDataSets(manager)),
+			NetworkClient: rpc.LocalClient(dataset.AdaptDataSets(manager)),
 		}
 
 		// Create dataset
@@ -151,7 +151,7 @@ func TestDatasetManager(t *testing.T) {
 		r.NoError(err)
 
 		mc := &dataset.DataSetsClient{
-			Client: rpc.LocalClient(dataset.AdaptDataSets(manager)),
+			NetworkClient: rpc.LocalClient(dataset.AdaptDataSets(manager)),
 		}
 
 		// Create dataset

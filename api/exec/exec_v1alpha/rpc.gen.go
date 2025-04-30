@@ -178,7 +178,7 @@ type sandboxExecExecArgsData struct {
 }
 
 type SandboxExecExecArgs struct {
-	call *rpc.Call
+	call rpc.Call
 	data sandboxExecExecArgsData
 }
 
@@ -277,7 +277,7 @@ type sandboxExecExecResultsData struct {
 }
 
 type SandboxExecExecResults struct {
-	call *rpc.Call
+	call rpc.Call
 	data sandboxExecExecResultsData
 }
 
@@ -302,7 +302,7 @@ func (v *SandboxExecExecResults) UnmarshalJSON(data []byte) error {
 }
 
 type SandboxExecExec struct {
-	*rpc.Call
+	rpc.Call
 	args    SandboxExecExecArgs
 	results SandboxExecExecResults
 }
@@ -332,14 +332,14 @@ type SandboxExec interface {
 }
 
 type reexportSandboxExec struct {
-	client *rpc.Client
+	client rpc.Client
 }
 
 func (_ reexportSandboxExec) Exec(ctx context.Context, state *SandboxExecExec) error {
 	panic("not implemented")
 }
 
-func (t reexportSandboxExec) CapabilityClient() *rpc.Client {
+func (t reexportSandboxExec) CapabilityClient() rpc.Client {
 	return t.client
 }
 
@@ -349,7 +349,7 @@ func AdaptSandboxExec(t SandboxExec) *rpc.Interface {
 			Name:          "exec",
 			InterfaceName: "SandboxExec",
 			Index:         0,
-			Handler: func(ctx context.Context, call *rpc.Call) error {
+			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.Exec(ctx, &SandboxExecExec{Call: call})
 			},
 		},
@@ -359,7 +359,11 @@ func AdaptSandboxExec(t SandboxExec) *rpc.Interface {
 }
 
 type SandboxExecClient struct {
-	*rpc.Client
+	rpc.Client
+}
+
+func NewSandboxExecClient(client rpc.Client) *SandboxExecClient {
+	return &SandboxExecClient{Client: client}
 }
 
 func (c SandboxExecClient) Export() SandboxExec {
@@ -367,7 +371,7 @@ func (c SandboxExecClient) Export() SandboxExec {
 }
 
 type SandboxExecClientExecResults struct {
-	client *rpc.Client
+	client rpc.Client
 	data   sandboxExecExecResultsData
 }
 

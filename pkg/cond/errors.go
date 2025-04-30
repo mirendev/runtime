@@ -37,6 +37,70 @@ func NotFound(category string, element any) error {
 	return ErrNotFound{Category: category, Element: fmt.Sprint(element)}
 }
 
+type ErrConflict struct {
+	Category string
+	Element  string
+}
+
+func (e ErrConflict) Error() string {
+	return fmt.Sprintf("conflict in %s: %s", e.Category, e.Element)
+}
+
+func (e ErrConflict) ErrorCategory() string {
+	return e.Category
+}
+
+func (e ErrConflict) ErrorCode() string {
+	return "conflict"
+}
+
+func (e ErrConflict) Is(target error) bool {
+	if target == nil {
+		return false
+	}
+
+	_, ok := target.(ErrConflict)
+	return ok
+}
+
+func Conflict(category string, element any) error {
+	return ErrConflict{Category: category, Element: fmt.Sprint(element)}
+}
+
+type ErrCorruption struct {
+	Category string
+	Message  string
+}
+
+func (e ErrCorruption) Error() string {
+	return fmt.Sprintf("corruption in %s: %s", e.Category, e.Message)
+}
+
+func (e ErrCorruption) ErrorMessage() string {
+	return e.Message
+}
+
+func (e ErrCorruption) ErrorCategory() string {
+	return e.Category
+}
+
+func (e ErrCorruption) ErrorCode() string {
+	return "corruption"
+}
+
+func (e ErrCorruption) Is(target error) bool {
+	if target == nil {
+		return false
+	}
+
+	_, ok := target.(ErrCorruption)
+	return ok
+}
+
+func Corruption(category string, message string, args ...any) error {
+	return ErrCorruption{Category: category, Message: fmt.Sprintf(message, args...)}
+}
+
 type ErrGeneric struct {
 	Message string
 	inner   error
@@ -103,6 +167,10 @@ func RemoteError(category, code, message string) error {
 		return ValidationFailure(category, message)
 	case "not-found":
 		return NotFound(category, message)
+	case "conflict":
+		return Conflict(category, message)
+	case "corruption":
+		return Corruption(category, message)
 	}
 
 	return ErrRemote{

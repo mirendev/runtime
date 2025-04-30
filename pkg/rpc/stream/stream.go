@@ -11,11 +11,11 @@ import (
 //go:generate go run ../cmd/rpcgen/main.go -pkg stream -input stream.yml -output stream.gen.go
 
 type Sender[T any] struct {
-	c   *rpc.Client
+	c   *rpc.NetworkClient
 	ssc SendStreamClient[T]
 }
 
-func ClientSend[T any](c *rpc.Client) (*Sender[T], error) {
+func ClientSend[T any](c *rpc.NetworkClient) (*Sender[T], error) {
 	ssc := SendStreamClient[T]{Client: c}
 	return &Sender[T]{c: c, ssc: ssc}, nil
 }

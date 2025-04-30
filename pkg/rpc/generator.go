@@ -343,7 +343,7 @@ func (g *Generator) generateServerStructs(f *j.File, t *DescInterface) error {
 		decl, name := t.addGeneric(tn + "Args")
 
 		f.Type().Add(decl).StructFunc(func(g *j.Group) {
-			g.Id("call").Id("*").Qual("miren.dev/runtime/pkg/rpc", "Call")
+			g.Id("call").Qual("miren.dev/runtime/pkg/rpc", "Call")
 			g.Id("data").Add(privateArgs)
 		})
 
@@ -405,7 +405,7 @@ func (g *Generator) generateServerStructs(f *j.File, t *DescInterface) error {
 		decl, name = t.addGeneric(tn + "Results")
 
 		f.Type().Add(decl).StructFunc(func(g *j.Group) {
-			g.Id("call").Id("*").Qual("miren.dev/runtime/pkg/rpc", "Call")
+			g.Id("call").Qual("miren.dev/runtime/pkg/rpc", "Call")
 			g.Id("data").Add(privateResults)
 		})
 
@@ -922,7 +922,7 @@ func (g *Generator) generateCompactStruct(f *j.File, t *DescType) error {
 
 	f.Type().Add(structType).StructFunc(func(g *j.Group) {
 		if t.includeCall {
-			g.Id("call").Op("*").Qual(rpc, "Call")
+			g.Id("call").Qual(rpc, "Call")
 		}
 
 		g.Id("data").Add(dataRecv)
@@ -1256,7 +1256,7 @@ func (g *Generator) generateStruct(f *j.File) error {
 
 		f.Type().Add(structType).StructFunc(func(g *j.Group) {
 			if t.includeCall {
-				g.Id("call").Op("*").Qual(rpc, "Call")
+				g.Id("call").Qual(rpc, "Call")
 			}
 
 			g.Id("data").Add(dataRecv)
@@ -1590,8 +1590,32 @@ func (g *Generator) generateClient(f *j.File, i *DescInterface) error {
 	clientType, recv := i.addGeneric(expName)
 
 	f.Type().Add(clientType).Struct(
-		j.Op("*").Qual(rpc, "Client"),
+		j.Qual(rpc, "Client"),
 	)
+
+	f.Line()
+
+	if len(i.Generic) > 0 {
+		f.Func().Id("New" + expName).TypesFunc(func(gr *j.Group) {
+			for _, g := range i.Generic {
+				gr.Id(g).Any()
+			}
+		}).Params(j.Id("client").Qual(rpc, "Client")).Op("*").Add(recv).Block(
+			j.Return(j.Op("&").Id(expName).TypesFunc(func(gr *j.Group) {
+				for _, g := range i.Generic {
+					gr.Id(g)
+				}
+			}).Values(
+				j.Id("Client").Op(":").Id("client"),
+			)),
+		)
+	} else {
+		f.Func().Id("New" + expName).Params(j.Id("client").Qual(rpc, "Client")).Op("*").Add(recv).Block(
+			j.Return(j.Op("&").Id(expName).Values(
+				j.Id("Client").Op(":").Id("client"),
+			)),
+		)
+	}
 
 	f.Line()
 
@@ -1610,7 +1634,7 @@ func (g *Generator) generateClient(f *j.File, i *DescInterface) error {
 		sname, _ := i.addGeneric(tn + "Results")
 
 		f.Type().Add(sname).Struct(
-			j.Id("client").Op("*").Qual(rpc, "Client"),
+			j.Id("client").Qual(rpc, "Client"),
 			j.Id("data").Add(i.typeName(private(i.Name)+capitalize(m.Name)+"ResultsData")),
 		)
 
@@ -1760,7 +1784,7 @@ func (g *Generator) generateInterfaces(f *j.File) error {
 			decl, recv := i.addGeneric(tn)
 
 			f.Type().Add(decl).Struct(
-				j.Op("*").Qual(rpc, "Call"),
+				j.Qual(rpc, "Call"),
 				j.Id("args").Add(i.typeName(tn+"Args")),
 				j.Id("results").Add(i.typeName(tn+"Results")),
 			)
@@ -1814,7 +1838,7 @@ func (g *Generator) generateInterfaces(f *j.File) error {
 		reexportType, recv := i.addGeneric("reexport" + expName)
 
 		f.Type().Add(reexportType).Struct(
-			j.Id("client").Op("*").Qual(rpc, "Client"),
+			j.Id("client").Qual(rpc, "Client"),
 		)
 
 		for _, m := range i.Method {
@@ -1831,7 +1855,7 @@ func (g *Generator) generateInterfaces(f *j.File) error {
 		}
 
 		f.Func().Params(j.Id("t").Add(recv)).Id("CapabilityClient").
-			Params().Params(j.Op("*").Qual(rpc, "Client")).Block(
+			Params().Params(j.Qual(rpc, "Client")).Block(
 			j.Return(j.Id("t").Dot("client")),
 		)
 
@@ -1852,7 +1876,7 @@ func (g *Generator) generateInterfaces(f *j.File) error {
 						g.Line().Id("Index").Op(":").Lit(m.Index)
 						g.Line().Id("Handler").Op(":").Func().Params(
 							j.Id("ctx").Qual("context", "Context"),
-							j.Id("call").Op("*").Qual(rpc, "Call"),
+							j.Id("call").Qual(rpc, "Call"),
 						).Error().Block(
 							j.Return(j.Id("t").Dot(methodName).Call(
 								j.Id("ctx"),

@@ -35,6 +35,18 @@ func (o *Endpoints) Is(e entity.AttrGetter) bool {
 	return entity.Is(e, KindEndpoints)
 }
 
+func (o *Endpoints) ShortKind() string {
+	return "endpoints"
+}
+
+func (o *Endpoints) Kind() entity.Id {
+	return KindEndpoints
+}
+
+func (o *Endpoints) EntityId() entity.Id {
+	return o.ID
+}
+
 func (o *Endpoints) Encode() (attrs []entity.Attr) {
 	for _, v := range o.Endpoint {
 		attrs = append(attrs, entity.Component(EndpointsEndpointId, v.Encode()))
@@ -44,6 +56,16 @@ func (o *Endpoints) Encode() (attrs []entity.Attr) {
 	}
 	attrs = append(attrs, entity.Ref(entity.EntityKind, KindEndpoints))
 	return
+}
+
+func (o *Endpoints) Empty() bool {
+	if len(o.Endpoint) != 0 {
+		return false
+	}
+	if !entity.Empty(o.Service) {
+		return false
+	}
+	return true
 }
 
 func (o *Endpoints) InitSchema(sb *schema.SchemaBuilder) {
@@ -79,6 +101,16 @@ func (o *Endpoint) Encode() (attrs []entity.Attr) {
 		attrs = append(attrs, entity.Int64(EndpointPortId, o.Port))
 	}
 	return
+}
+
+func (o *Endpoint) Empty() bool {
+	if !entity.Empty(o.Ip) {
+		return false
+	}
+	if !entity.Empty(o.Port) {
+		return false
+	}
+	return true
 }
 
 func (o *Endpoint) InitSchema(sb *schema.SchemaBuilder) {
@@ -124,6 +156,18 @@ func (o *Service) Is(e entity.AttrGetter) bool {
 	return entity.Is(e, KindService)
 }
 
+func (o *Service) ShortKind() string {
+	return "service"
+}
+
+func (o *Service) Kind() entity.Id {
+	return KindService
+}
+
+func (o *Service) EntityId() entity.Id {
+	return o.ID
+}
+
 func (o *Service) Encode() (attrs []entity.Attr) {
 	for _, v := range o.Ip {
 		attrs = append(attrs, entity.String(ServiceIpId, v))
@@ -136,6 +180,19 @@ func (o *Service) Encode() (attrs []entity.Attr) {
 	}
 	attrs = append(attrs, entity.Ref(entity.EntityKind, KindService))
 	return
+}
+
+func (o *Service) Empty() bool {
+	if len(o.Ip) != 0 {
+		return false
+	}
+	if len(o.Match) != 0 {
+		return false
+	}
+	if len(o.Port) != 0 {
+		return false
+	}
+	return true
 }
 
 func (o *Service) InitSchema(sb *schema.SchemaBuilder) {
@@ -218,6 +275,28 @@ func (o *Port) Encode() (attrs []entity.Attr) {
 	return
 }
 
+func (o *Port) Empty() bool {
+	if !entity.Empty(o.Name) {
+		return false
+	}
+	if !entity.Empty(o.NodePort) {
+		return false
+	}
+	if !entity.Empty(o.Port) {
+		return false
+	}
+	if o.Protocol == "" {
+		return false
+	}
+	if !entity.Empty(o.TargetPort) {
+		return false
+	}
+	if !entity.Empty(o.Type) {
+		return false
+	}
+	return true
+}
+
 func (o *Port) InitSchema(sb *schema.SchemaBuilder) {
 	sb.String("name", "dev.miren.network/port.name", schema.Doc("Name of the port for reference"), schema.Required)
 	sb.Int64("node_port", "dev.miren.network/port.node_port", schema.Doc("The port number that should be forwarded from the node to the container"))
@@ -240,5 +319,5 @@ func init() {
 		(&Endpoints{}).InitSchema(sb)
 		(&Service{}).InitSchema(sb)
 	})
-	schema.RegisterEncodedSchema("dev.miren.network", "v1alpha", []byte("\x1f\x8b\b\x00\x00\x00\x00\x00\x00\xff\x94\x94K\xb2\x950\x10\x86\xd7a\xf9,u\x1c\xcb\x15Q!\xdd@\x17\xe4a\x12\x903\xd5*\x17r\x1f\xeeP\xc7V\x12\xe0\x9esC\xc0;a\xc2\xff\x7f\xe9\xfcݝ\aP\\\xe27\xc0\x89I\xb2\xa8\x98B\xff]۾\x9d\xd0:Ҫ\x9d\xbe\xf2\xc1t\x1c{R\xe0\xee\xe6\x0f\x99\xf2K\xf8\xc3P\x81Ѥ\xbc\xfb݀\x96\x9cT\x8e\x8c'ͯs\xc0\xe6\xdd?\xf4o\xd3\x10\x0e\xe0~<FB\xb7\xca\xc1_\f\x92\xd0\xd2h\x85\xca\xd7\x04\xf3\xe7\x03\xf8V\"H\xae.\x7f\x9e\x8cg\x15\xe7P\x96COJ\xbf\x8f\xa8\x9aL,\xbaqޒjC\xc5o\xcb\x1532\xc9\x06F\xdbt[A\xe9\x9e\xef\x0f\\A<\x18K\x92\xdbK\x15\xaa\xd8\x02K\xb4֡\x9dH`\x04\xd6\x04\x81\xf7\xe9(\xb7E\x7fä\xed\xf7\xfc\xae0\x11\x8b\xed,\xddW\xb9}q\x1eG\xfa\xf3\xa1\x14\xe9\x9b\"\x91\x91I\xcdO^\x94܋.\xdaq\xe05\x0e\x85hWw\x92G\xc0\xe3\xb3\xc6\u070e\xe1N$+#:^8\x809\x8e]\xe3\x8es\xfa\xb5\xccP\xfc<Kjg\x17\x03\x90\x05m\xb2\x91ҀU6\x7f;\xaf@2\xae\xea\xd2\xe0\x96N\f\x9fԔ\xceX\xed\xb5\xd0C\xf4\x01\xaaQ\x16ڒ\x8c\x8b\xba\x0f\xc2j\xe2È\xeeN\x8c`\xf6\x9a\xb0\x8a\xd9\bFxq\xac\xf1bY\xbf\xdesۢ\xcfS\xf8X\xa8\xe9J\x7f\xff\x94\xfb\xff\x86\x1fd7\xbb\x06\xd9F\xaf+ܻN[_\xa5\xa7\xf9j%O\x1f\xe9\x15p\xb6\xbc\xff\x00\x00\x00\xff\xff"))
+	schema.RegisterEncodedSchema("dev.miren.network", "v1alpha", []byte("\x1f\x8b\b\x00\x00\x00\x00\x00\x00\xff\x94\x94K\xb2\x950\x10\x86\xd7a\xf9,u\x1c\xcb\x15Q!\xdd@\x17\xe4a\x12\x903\xd5*\x17r\x1f\xeeP\xc7V\x12\xe0\x9esC\xc0;a\x00\xff\xff\xa5\xf9\xbb;\x0f\xa0\xb8\xc4o\x80\x13\x93dQ1\x85\xfe\xbb\xb6};\xa1u\xa4U;}\xe5\x83\xe98\xf6\xa4\xc0\xdd\xcd\x1f2\xe5\x97\xf0\x85\xa1\x02\xa3Iy\xf7\xbb\x01-9\xa9\x1c\x19O\x9a_\xe7\x80ͻ\x7f\xe8ߦ!\x1c\xc0\xfdx\x8c\x84n\x95\x83\xbf\x18$\xa1\xa5\xd1\n\x95\xaf\t\xe6\xcf\a\xf0\xadD\x90\\]\xfe<\x19\xcf*Ρ,\x87\x9e\x94~\x1fQ5\x99Xt\xe3\xbc%Ն\x8aߖ+fd\x92\r\x8c\xb6\xe9o\x05\xa5\xff|\x7f\xe0\n\xe2\xc1X\x92\xdc^\xaaP\xc5\x16X\xa2\xb5\x0e\xedD\x02#\xb0&\b\xbcOG\xb9-\xfa\x1b&m\x9f\xe7w\x85\x89Xlg\xe9\xbe\xca\xed\x8b\xf38ҟ\x0f\xa5H\xdf\x14\x89\x8cLj~\xf2\xa2\xe4^tю\x03\xafq(D\xbb\xba\x93<\x02\x1e\x9f5\xe6v\fw\"Y\x19\xd1\xf1\xc2\x01\xccq\xec\x1aw\x9cӯe\x86\xe2\xe3YR;\xbb\x18\x80,h\x93\x8d\x94\x06\xac\xb2\xf9۹\x05\x92qU\x97\x06\xb7tbx\xa4\xa6t\xc6j\xaf\x85\x1e\xa2\x0fP\x8d\xb2Жd\\\xd4}\x10V\x13\x1fFtw\xc2\v\xb3ׄU̼0b\x84c\xcd\b\xcb\xfa\xf5\x9e\xdb\x16}\x9e\xc2\xc7BMW\xfa\xfb\xa7\xdc\xff7\xfc \xbb\xd95\xc86z]\xe1\xdeu\xda\xfa*]\xcd\xeb˳\x85\xbcZ\xdd\xd3\xcb\xfc\x1f\x00\x00\x00\xff\xff"))
 }

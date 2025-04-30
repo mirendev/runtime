@@ -42,7 +42,7 @@ func NewBuilder(log *slog.Logger, eas *entityserver_v1alpha.EntityAccessClient, 
 		EAS:      eas,
 		Resolver: res,
 		TempDir:  tmpdir,
-		ec:       entityserver.NewClient(eas),
+		ec:       entityserver.NewClient(log, eas),
 	}
 }
 

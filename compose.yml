@@ -8,15 +8,6 @@ services:
     ports:
       - 9000:9000
 
-  postgres:
-    image: postgres:17
-    environment:
-      - POSTGRES_DB=runtime_prod
-      - POSTGRES_PASSWORD=runtime
-      - POSTGRES_USER=runtime
-    ports:
-      - 5432:5432
-
   etcd:
     image: bitnami/etcd:3.5.19
     environment:

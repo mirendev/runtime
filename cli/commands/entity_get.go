@@ -24,7 +24,7 @@ func EntityGet(ctx *Context, opts struct {
 		return err
 	}
 
-	eac := &entityserver_v1alpha.EntityAccessClient{Client: client}
+	eac := entityserver_v1alpha.NewEntityAccessClient(client)
 
 	res, err := eac.Get(ctx, opts.Id)
 	if err != nil {

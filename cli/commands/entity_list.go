@@ -3,7 +3,6 @@ package commands
 import (
 	"os"
 
-	"github.com/davecgh/go-spew/spew"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/rpc"
@@ -28,7 +27,7 @@ func EntityList(ctx *Context, opts struct {
 		return err
 	}
 
-	eac := &entityserver_v1alpha.EntityAccessClient{Client: client}
+	eac := entityserver_v1alpha.NewEntityAccessClient(client)
 
 	var index entity.Attr
 
@@ -48,14 +47,15 @@ func EntityList(ctx *Context, opts struct {
 		index = indexres.Attr()
 	}
 
-	spew.Dump(index)
-
 	res, err := eac.List(ctx, index)
 	if err != nil {
 		return err
 	}
 
-	for _, e := range res.Values() {
+	for i, e := range res.Values() {
+		if i > 0 {
+			os.Stdout.Write([]byte("---\n"))
+		}
 		fres, err := eac.Format(ctx, e)
 		if err != nil {
 			return err

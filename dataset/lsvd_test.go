@@ -55,7 +55,7 @@ func TestLSVD(t *testing.T) {
 
 		// Create dataset
 		mc := &dataset.DataSetsClient{
-			Client: rpc.LocalClient(dataset.AdaptDataSets(manager)),
+			NetworkClient: rpc.LocalClient(dataset.AdaptDataSets(manager)),
 		}
 
 		sa := dataset.NewSegmentAccess(log, mc, []string{"application/test"})

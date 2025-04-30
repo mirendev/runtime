@@ -35,7 +35,7 @@ func EntityPut(ctx *Context, opts struct {
 		return err
 	}
 
-	eac := &entityserver_v1alpha.EntityAccessClient{Client: client}
+	eac := entityserver_v1alpha.NewEntityAccessClient(client)
 
 	for _, path := range opts.Path {
 		data, err = os.ReadFile(path)

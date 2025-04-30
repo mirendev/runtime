@@ -176,7 +176,7 @@ type shellAccessOpenArgsData struct {
 }
 
 type ShellAccessOpenArgs struct {
-	call *rpc.Call
+	call rpc.Call
 	data shellAccessOpenArgsData
 }
 
@@ -253,7 +253,7 @@ type shellAccessOpenResultsData struct {
 }
 
 type ShellAccessOpenResults struct {
-	call *rpc.Call
+	call rpc.Call
 	data shellAccessOpenResultsData
 }
 
@@ -278,7 +278,7 @@ func (v *ShellAccessOpenResults) UnmarshalJSON(data []byte) error {
 }
 
 type ShellAccessOpen struct {
-	*rpc.Call
+	rpc.Call
 	args    ShellAccessOpenArgs
 	results ShellAccessOpenResults
 }
@@ -308,14 +308,14 @@ type ShellAccess interface {
 }
 
 type reexportShellAccess struct {
-	client *rpc.Client
+	client rpc.Client
 }
 
 func (_ reexportShellAccess) Open(ctx context.Context, state *ShellAccessOpen) error {
 	panic("not implemented")
 }
 
-func (t reexportShellAccess) CapabilityClient() *rpc.Client {
+func (t reexportShellAccess) CapabilityClient() rpc.Client {
 	return t.client
 }
 
@@ -325,7 +325,7 @@ func AdaptShellAccess(t ShellAccess) *rpc.Interface {
 			Name:          "open",
 			InterfaceName: "ShellAccess",
 			Index:         0,
-			Handler: func(ctx context.Context, call *rpc.Call) error {
+			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.Open(ctx, &ShellAccessOpen{Call: call})
 			},
 		},
@@ -335,7 +335,11 @@ func AdaptShellAccess(t ShellAccess) *rpc.Interface {
 }
 
 type ShellAccessClient struct {
-	*rpc.Client
+	rpc.Client
+}
+
+func NewShellAccessClient(client rpc.Client) *ShellAccessClient {
+	return &ShellAccessClient{Client: client}
 }
 
 func (c ShellAccessClient) Export() ShellAccess {
@@ -343,7 +347,7 @@ func (c ShellAccessClient) Export() ShellAccess {
 }
 
 type ShellAccessClientOpenResults struct {
-	client *rpc.Client
+	client rpc.Client
 	data   shellAccessOpenResultsData
 }
 
@@ -360,15 +364,28 @@ func (v *ShellAccessClientOpenResults) Status() int32 {
 
 func (v ShellAccessClient) Open(ctx context.Context, application string, options *ShellOptions, input stream.RecvStream[[]byte], output stream.SendStream[[]byte], window_updates stream.RecvStream[*WindowSize]) (*ShellAccessClientOpenResults, error) {
 	args := ShellAccessOpenArgs{}
+	caps := map[rpc.OID]*rpc.InlineCapability{}
 	args.data.Application = &application
 	args.data.Options = options
-	args.data.Input = v.Client.NewCapability(stream.AdaptRecvStream[[]byte](input), input)
-	args.data.Output = v.Client.NewCapability(stream.AdaptSendStream[[]byte](output), output)
-	args.data.WindowUpdates = v.Client.NewCapability(stream.AdaptRecvStream[*WindowSize](window_updates), window_updates)
+	{
+		ic, oid, c := v.Client.NewInlineCapability(stream.AdaptRecvStream[[]byte](input), input)
+		args.data.Input = c
+		caps[oid] = ic
+	}
+	{
+		ic, oid, c := v.Client.NewInlineCapability(stream.AdaptSendStream[[]byte](output), output)
+		args.data.Output = c
+		caps[oid] = ic
+	}
+	{
+		ic, oid, c := v.Client.NewInlineCapability(stream.AdaptRecvStream[*WindowSize](window_updates), window_updates)
+		args.data.WindowUpdates = c
+		caps[oid] = ic
+	}
 
 	var ret shellAccessOpenResultsData
 
-	err := v.Client.Call(ctx, "open", &args, &ret)
+	err := v.Client.CallWithCaps(ctx, "open", &args, &ret, caps)
 	if err != nil {
 		return nil, err
 	}

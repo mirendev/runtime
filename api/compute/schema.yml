@@ -167,6 +167,7 @@ kinds:
       type: enum
       doc: The status of the node
       choices: [unknown, ready, disabled, unhealthy]
+      session: true
 
     api_address:
       type: string

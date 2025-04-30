@@ -13,7 +13,7 @@ type sendStreamSendArgsData[T any] struct {
 }
 
 type SendStreamSendArgs[T any] struct {
-	call *rpc.Call
+	call rpc.Call
 	data sendStreamSendArgsData[T]
 }
 
@@ -49,7 +49,7 @@ type sendStreamSendResultsData[T any] struct {
 }
 
 type SendStreamSendResults[T any] struct {
-	call *rpc.Call
+	call rpc.Call
 	data sendStreamSendResultsData[T]
 }
 
@@ -74,7 +74,7 @@ func (v *SendStreamSendResults[T]) UnmarshalJSON(data []byte) error {
 }
 
 type SendStreamSend[T any] struct {
-	*rpc.Call
+	rpc.Call
 	args    SendStreamSendArgs[T]
 	results SendStreamSendResults[T]
 }
@@ -104,14 +104,14 @@ type SendStream[T any] interface {
 }
 
 type reexportSendStream[T any] struct {
-	client *rpc.Client
+	client rpc.Client
 }
 
 func (_ reexportSendStream[T]) Send(ctx context.Context, state *SendStreamSend[T]) error {
 	panic("not implemented")
 }
 
-func (t reexportSendStream[T]) CapabilityClient() *rpc.Client {
+func (t reexportSendStream[T]) CapabilityClient() rpc.Client {
 	return t.client
 }
 
@@ -121,7 +121,7 @@ func AdaptSendStream[T any](t SendStream[T]) *rpc.Interface {
 			Name:          "send",
 			InterfaceName: "SendStream",
 			Index:         0,
-			Handler: func(ctx context.Context, call *rpc.Call) error {
+			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.Send(ctx, &SendStreamSend[T]{Call: call})
 			},
 		},
@@ -131,7 +131,11 @@ func AdaptSendStream[T any](t SendStream[T]) *rpc.Interface {
 }
 
 type SendStreamClient[T any] struct {
-	*rpc.Client
+	rpc.Client
+}
+
+func NewSendStreamClient[T any](client rpc.Client) *SendStreamClient[T] {
+	return &SendStreamClient[T]{Client: client}
 }
 
 func (c SendStreamClient[T]) Export() SendStream[T] {
@@ -139,7 +143,7 @@ func (c SendStreamClient[T]) Export() SendStream[T] {
 }
 
 type SendStreamClientSendResults[T any] struct {
-	client *rpc.Client
+	client rpc.Client
 	data   sendStreamSendResultsData[T]
 }
 
@@ -173,7 +177,7 @@ type recvStreamRecvArgsData[T any] struct {
 }
 
 type RecvStreamRecvArgs[T any] struct {
-	call *rpc.Call
+	call rpc.Call
 	data recvStreamRecvArgsData[T]
 }
 
@@ -209,7 +213,7 @@ type recvStreamRecvResultsData[T any] struct {
 }
 
 type RecvStreamRecvResults[T any] struct {
-	call *rpc.Call
+	call rpc.Call
 	data recvStreamRecvResultsData[T]
 }
 
@@ -234,7 +238,7 @@ func (v *RecvStreamRecvResults[T]) UnmarshalJSON(data []byte) error {
 }
 
 type RecvStreamRecv[T any] struct {
-	*rpc.Call
+	rpc.Call
 	args    RecvStreamRecvArgs[T]
 	results RecvStreamRecvResults[T]
 }
@@ -264,14 +268,14 @@ type RecvStream[T any] interface {
 }
 
 type reexportRecvStream[T any] struct {
-	client *rpc.Client
+	client rpc.Client
 }
 
 func (_ reexportRecvStream[T]) Recv(ctx context.Context, state *RecvStreamRecv[T]) error {
 	panic("not implemented")
 }
 
-func (t reexportRecvStream[T]) CapabilityClient() *rpc.Client {
+func (t reexportRecvStream[T]) CapabilityClient() rpc.Client {
 	return t.client
 }
 
@@ -281,7 +285,7 @@ func AdaptRecvStream[T any](t RecvStream[T]) *rpc.Interface {
 			Name:          "recv",
 			InterfaceName: "RecvStream",
 			Index:         0,
-			Handler: func(ctx context.Context, call *rpc.Call) error {
+			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.Recv(ctx, &RecvStreamRecv[T]{Call: call})
 			},
 		},
@@ -291,7 +295,11 @@ func AdaptRecvStream[T any](t RecvStream[T]) *rpc.Interface {
 }
 
 type RecvStreamClient[T any] struct {
-	*rpc.Client
+	rpc.Client
+}
+
+func NewRecvStreamClient[T any](client rpc.Client) *RecvStreamClient[T] {
+	return &RecvStreamClient[T]{Client: client}
 }
 
 func (c RecvStreamClient[T]) Export() RecvStream[T] {
@@ -299,7 +307,7 @@ func (c RecvStreamClient[T]) Export() RecvStream[T] {
 }
 
 type RecvStreamClientRecvResults[T any] struct {
-	client *rpc.Client
+	client rpc.Client
 	data   recvStreamRecvResultsData[T]
 }
 

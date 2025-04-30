@@ -51,7 +51,7 @@ func NewFileStore(basePath string) (*FileStore, error) {
 }
 
 // CreateEntity creates a new entity with the given type and attributes
-func (s *FileStore) CreateEntity(ctx context.Context, attributes []Attr) (*Entity, error) {
+func (s *FileStore) CreateEntity(ctx context.Context, attributes []Attr, opts ...EntityOption) (*Entity, error) {
 	entity := &Entity{
 		Attrs:     attributes,
 		Revision:  1,
@@ -113,7 +113,7 @@ func (s *FileStore) GetEntity(_ context.Context, id Id) (*Entity, error) {
 }
 
 // UpdateEntity updates an existing entity
-func (s *FileStore) UpdateEntity(ctx context.Context, id Id, attributes []Attr) (*Entity, error) {
+func (s *FileStore) UpdateEntity(ctx context.Context, id Id, attributes []Attr, opts ...EntityOption) (*Entity, error) {
 	entity, err := s.GetEntity(ctx, id)
 	if err != nil {
 		return nil, err
@@ -228,12 +228,11 @@ func (s *FileStore) ListIndex(ctx context.Context, attr Attr) ([]Id, error) {
 		return nil, fmt.Errorf("attribute %s is not indexed", attr.ID)
 	}
 
-	return s.ListCollection(ctx, fmt.Sprintf("%s:%s", attr.ID, attr.Value))
+	return s.ListCollection(ctx, fmt.Sprintf("%s:%v", attr.ID, attr.Value.Any()))
 }
 
 func (s *FileStore) ListCollection(_ context.Context, collection string) ([]Id, error) {
 	colKey := base58.Encode([]byte(collection))
-
 	path := filepath.Join(s.basePath, "collections", colKey)
 
 	entries, err := os.ReadDir(path)

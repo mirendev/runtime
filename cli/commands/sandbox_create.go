@@ -23,7 +23,7 @@ func SandboxCreate(ctx *Context, opts struct {
 		return fmt.Errorf("failed to connect to RPC server: %w", err)
 	}
 
-	eac := entityserver_v1alpha.EntityAccessClient{Client: client}
+	eac := entityserver_v1alpha.NewEntityAccessClient(client)
 
 	id := fmt.Sprintf("sandbox/test-%d", time.Now().Unix())
 

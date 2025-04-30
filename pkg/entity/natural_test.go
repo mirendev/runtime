@@ -110,10 +110,10 @@ func TestNaturalDecode(t *testing.T) {
 		r.Equal(attrs[4].Value.Any(), types.Label{Key: "foo", Value: "test"})
 
 		r.Equal(attrs[5].ID, Id("test/qux"))
-		r.Equal(attrs[5].Value.Any(), 3.14)
+		r.Equal(attrs[5].Value.Any(), 2.71)
 
 		r.Equal(attrs[6].ID, Id("test/qux"))
-		r.Equal(attrs[6].Value.Any(), 2.71)
+		r.Equal(attrs[6].Value.Any(), 3.14)
 
 		r.Equal(attrs[7].ID, Id("test/sub"))
 		r.Equal(attrs[7].Value.Component(), &EntityComponent{
@@ -172,11 +172,11 @@ func TestNaturalDecode(t *testing.T) {
 			r.Equal(attrs[4].ID, Id("test/label"))
 			r.Equal(attrs[4].Value.Any(), types.Label{Key: "foo", Value: "test"})
 
-			r.Equal(attrs[5].ID, Id("test/qux"))
-			r.Equal(attrs[5].Value.Any(), 3.14)
-
 			r.Equal(attrs[6].ID, Id("test/qux"))
-			r.Equal(attrs[6].Value.Any(), 2.71)
+			r.Equal(attrs[6].Value.Any(), 3.14)
+
+			r.Equal(attrs[5].ID, Id("test/qux"))
+			r.Equal(attrs[5].Value.Any(), 2.71)
 
 			r.Equal(attrs[7].ID, Id("test/sub"))
 			r.Equal(attrs[7].Value.Component(), &EntityComponent{

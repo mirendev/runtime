@@ -97,7 +97,7 @@ func (c *Coordinator) Start(ctx context.Context) error {
 		return err
 	}
 
-	eac := &entityserver_v1alpha.EntityAccessClient{Client: loopback}
+	eac := entityserver_v1alpha.NewEntityAccessClient(loopback)
 
 	var (
 		defPro core_v1alpha.Project

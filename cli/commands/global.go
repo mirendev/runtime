@@ -355,7 +355,7 @@ func (c *Context) DisplayTable(headers []string, rows [][]string) {
 	}
 }
 
-func (c *Context) RPCClient(name string) (*rpc.Client, error) {
+func (c *Context) RPCClient(name string) (*rpc.NetworkClient, error) {
 	var opts []rpc.StateOption
 
 	opts = append(opts, rpc.WithLogger(c.Log))

@@ -25,7 +25,7 @@ func SandboxExec(ctx *Context, opts struct {
 		return err
 	}
 
-	sec := &exec_v1alpha.SandboxExecClient{Client: cl}
+	sec := exec_v1alpha.NewSandboxExecClient(cl)
 
 	winCh := make(chan os.Signal, 1)
 	winUpdates := make(chan *exec_v1alpha.WindowSize, 1)

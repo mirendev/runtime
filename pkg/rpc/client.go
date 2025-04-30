@@ -15,7 +15,6 @@ import (
 	"net/url"
 	"time"
 
-	"github.com/davecgh/go-spew/spew"
 	"github.com/fxamacker/cbor/v2"
 	"github.com/mr-tron/base58"
 	"github.com/pkg/errors"
@@ -27,7 +26,15 @@ import (
 	"miren.dev/runtime/pkg/webtransport"
 )
 
-type Client struct {
+type Client interface {
+	CallWithCaps(ctx context.Context, method string, args, result any, caps map[OID]*InlineCapability) error
+	Call(ctx context.Context, method string, args, result any) error
+	NewInlineCapability(i *Interface, lower any) (*InlineCapability, OID, *Capability)
+	NewClient(capa *Capability) Client
+	Close() error
+}
+
+type NetworkClient struct {
 	State *State
 
 	transport  *quic.Transport
@@ -51,7 +58,7 @@ type Client struct {
 	localClient  *localClient
 }
 
-func (c *Client) setupTransport() {
+func (c *NetworkClient) setupTransport() {
 	c.htr.Logger = c.State.log.With("module", "rpc-call")
 	c.htr.TLSClientConfig = c.tlsCfg
 	c.htr.QUICConfig = &DefaultQUICConfig
@@ -69,7 +76,7 @@ func (c *Client) setupTransport() {
 	c.ws.DialAddr = c.htr.Dial
 }
 
-func (c *Client) NewClient(capa *Capability) *Client {
+func (c *NetworkClient) NewClient(capa *Capability) Client {
 	if c.localClient != nil {
 		return c.localClient.NewClient(capa)
 	}
@@ -77,19 +84,24 @@ func (c *Client) NewClient(capa *Capability) *Client {
 	return c.newClientUnder(capa)
 }
 
-func (c *Client) String() string {
+func (c *NetworkClient) String() string {
 	return fmt.Sprintf("Client(remote: %s, oid: %s)", c.remote, c.oid)
 }
 
-func (c *Client) reexportCapability(origin *Client) (*Capability, error) {
+func (c *NetworkClient) reexportCapability(oc Client) (*Capability, error) {
+	origin, ok := oc.(*NetworkClient)
+	if !ok {
+		return nil, errors.New("origin client is not a network client")
+	}
+
 	// We need to re-export the capability held by +cl+ so that it can
 	// be used by the entities that we're calling.
 
 	return origin.requestReexportCapability(c.State.top, origin.capa, c.capa.Issuer)
 }
 
-func (c *Client) NewCapability(i *Interface, lower any) *Capability {
-	if rc, ok := lower.(interface{ CapabilityClient() *Client }); ok {
+func (c *NetworkClient) NewCapability(i *Interface, lower any) *Capability {
+	if rc, ok := lower.(interface{ CapabilityClient() Client }); ok {
 		capa, err := c.reexportCapability(rc.CapabilityClient())
 		if err != nil {
 			panic(err)
@@ -103,7 +115,7 @@ func (c *Client) NewCapability(i *Interface, lower any) *Capability {
 	}
 }
 
-func (c *Client) NewInlineCapability(i *Interface, lower any) (*InlineCapability, OID, *Capability) {
+func (c *NetworkClient) NewInlineCapability(i *Interface, lower any) (*InlineCapability, OID, *Capability) {
 	capa := c.NewCapability(i, lower)
 
 	ic := &InlineCapability{
@@ -114,11 +126,11 @@ func (c *Client) NewInlineCapability(i *Interface, lower any) (*InlineCapability
 	return ic, capa.OID, capa
 }
 
-func (c *Client) roundTrip(r *http.Request) (*http.Response, error) {
+func (c *NetworkClient) roundTrip(r *http.Request) (*http.Response, error) {
 	return c.htr.RoundTrip(r)
 }
 
-func (c *Client) sendIdentity(ctx context.Context) error {
+func (c *NetworkClient) sendIdentity(ctx context.Context) error {
 	url := "https://" + c.remote + "/_rpc/identify"
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, nil)
 	if err != nil {
@@ -179,7 +191,7 @@ func (c *Client) sendIdentity(ctx context.Context) error {
 	return nil
 }
 
-func (c *Client) resolveCapability(name string) error {
+func (c *NetworkClient) resolveCapability(name string) error {
 	url := "https://" + c.remote + "/_rpc/lookup/" + url.PathEscape(name)
 	c.State.log.Debug("rpc.resolve", "name", name, "url", url)
 	req, err := http.NewRequest(http.MethodPost, url, nil)
@@ -198,9 +210,6 @@ func (c *Client) resolveCapability(name string) error {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		data, _ := io.ReadAll(resp.Body)
-		spew.Dump(string(data))
-
 		return errors.Errorf("unexpected status code: %d", resp.StatusCode)
 	}
 
@@ -223,7 +232,7 @@ func (c *Client) resolveCapability(name string) error {
 	return nil
 }
 
-func (c *Client) reresolveCapability(rs *InterfaceState) error {
+func (c *NetworkClient) reresolveCapability(rs *InterfaceState) error {
 	url := "https://" + c.remote + "/_rpc/reresolve"
 	c.State.log.Debug("reresolving capability from state", "url", url)
 
@@ -269,7 +278,7 @@ func (c *Client) reresolveCapability(rs *InterfaceState) error {
 	return nil
 }
 
-func (c *Client) requestReexportCapability(ctx context.Context, capa *Capability, target ed25519.PublicKey) (*Capability, error) {
+func (c *NetworkClient) requestReexportCapability(ctx context.Context, capa *Capability, target ed25519.PublicKey) (*Capability, error) {
 	url := "https://" + c.remote + "/_rpc/reexport/" + string(capa.OID)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, nil)
 	if err != nil {
@@ -309,7 +318,7 @@ func (c *Client) requestReexportCapability(ctx context.Context, capa *Capability
 	return lr.Capability, nil
 }
 
-func (c *Client) refOID(ctx context.Context, oid OID) error {
+func (c *NetworkClient) refOID(ctx context.Context, oid OID) error {
 	url := "https://" + c.remote + "/_rpc/ref/" + string(oid)
 	req, err := http.NewRequest(http.MethodPost, url, nil)
 	if err != nil {
@@ -342,7 +351,7 @@ func (c *Client) refOID(ctx context.Context, oid OID) error {
 	return nil
 }
 
-func (c *Client) derefOID(ctx context.Context, oid OID) error {
+func (c *NetworkClient) derefOID(ctx context.Context, oid OID) error {
 	if c.inlineClient != nil {
 		return c.inlineClient.derefOID(ctx, oid)
 	}
@@ -379,11 +388,11 @@ func (c *Client) derefOID(ctx context.Context, oid OID) error {
 	return nil
 }
 
-func (c *Client) Close() error {
+func (c *NetworkClient) Close() error {
 	return c.derefOID(c.State.top, c.oid)
 }
 
-func (c *Client) prepareRequest(ctx context.Context, req *http.Request) error {
+func (c *NetworkClient) prepareRequest(ctx context.Context, req *http.Request) error {
 	Propagator().Inject(ctx, propagation.HeaderCarrier(req.Header))
 
 	ts := time.Now()
@@ -426,7 +435,7 @@ func resolveUDPAddr(ctx context.Context, network, addr string) (*net.UDPAddr, er
 	return &net.UDPAddr{IP: ip.IP, Port: port, Zone: ip.Zone}, nil
 }
 
-func (c *Client) Call(ctx context.Context, method string, args, result any) error {
+func (c *NetworkClient) Call(ctx context.Context, method string, args, result any) error {
 	if c.localClient != nil {
 		return c.localClient.Call(ctx, method, args, result)
 	}
@@ -523,7 +532,7 @@ type InlineCapability struct {
 	*Interface
 }
 
-func (c *Client) CallWithCaps(ctx context.Context, method string, args, result any, caps map[OID]*InlineCapability) error {
+func (c *NetworkClient) CallWithCaps(ctx context.Context, method string, args, result any, caps map[OID]*InlineCapability) error {
 	if c.localClient != nil {
 		return c.localClient.Call(ctx, method, args, result)
 	}
@@ -558,9 +567,6 @@ request:
 				continue request
 			}
 
-			data, _ := io.ReadAll(hr.Body)
-			spew.Dump(string(data))
-
 			return err
 		}
 
@@ -577,7 +583,7 @@ request:
 	}
 }
 
-func (c *Client) handleCallStream(
+func (c *NetworkClient) handleCallStream(
 	ctx context.Context,
 	hr *http.Response,
 	sess *webtransport.Session,
@@ -693,6 +699,7 @@ func (c *Client) handleCallStream(
 		err = dec.Decode(&rs)
 		if err != nil {
 			if errors.Is(err, io.EOF) {
+				err = nil
 				break
 			}
 			break
@@ -715,7 +722,7 @@ func (c *Client) handleCallStream(
 	return false, err
 }
 
-func (c *Client) callInline(
+func (c *NetworkClient) callInline(
 	ctx context.Context,
 	mm Method,
 	oid OID,
@@ -724,7 +731,7 @@ func (c *Client) callInline(
 	enc *cbor.Encoder,
 	dec *cbor.Decoder,
 ) error {
-	call := &Call{
+	call := &NetworkCall{
 		oid:    oid,
 		method: method,
 		dec:    dec,

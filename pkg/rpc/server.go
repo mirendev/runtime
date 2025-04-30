@@ -111,7 +111,7 @@ type Method struct {
 	Name          string
 	InterfaceName string
 	Index         int
-	Handler       func(ctx context.Context, call *Call) error
+	Handler       func(ctx context.Context, call Call) error
 }
 
 type HasRestoreState interface {
@@ -123,9 +123,22 @@ type Interface struct {
 	methods map[string]Method
 	closer  io.Closer
 
+	value         any
+	aroundContext func(ctx context.Context, call Call) (context.Context, func())
+
+	methodMissing func(ctx context.Context, method string, call Call) error
+
 	forbidRestore bool
 	restoreState  HasRestoreState
 	constructor   HasReconstructFromState
+}
+
+func (i *Interface) Value() any {
+	return i.value
+}
+
+func (i *Interface) SetAroundContext(fn func(ctx context.Context, call Call) (context.Context, func())) {
+	i.aroundContext = fn
 }
 
 func typeNameHash(obj any) string {
@@ -142,6 +155,7 @@ func NewInterface(methods []Method, obj any) *Interface {
 
 	i := &Interface{
 		name:    methods[0].InterfaceName,
+		value:   obj,
 		methods: m,
 	}
 
@@ -722,6 +736,7 @@ func (cs *controlStream) NoReply(rs streamRequest, arg any) error {
 }
 
 func (s *Server) startCallStream(w http.ResponseWriter, r *http.Request) {
+	s.state.log.Warn("starting call stream")
 	oid := OID(r.PathValue("oid"))
 
 	method := r.PathValue("method")
@@ -786,7 +801,7 @@ func (s *Server) startCallStream(w http.ResponseWriter, r *http.Request) {
 
 	defer ctrlstream.Close()
 
-	call := &Call{
+	call := &NetworkCall{
 		s:        s,
 		r:        r,
 		oid:      oid,
@@ -843,9 +858,13 @@ func (s *Server) startCallStream(w http.ResponseWriter, r *http.Request) {
 
 		cs.NoReply(sr, nil)
 	} else {
+		res := call.results
+		if res == nil {
+			res = struct{}{}
+		}
 		cs.NoReply(streamRequest{
 			Kind: "result",
-		}, call.results)
+		}, res)
 	}
 }
 
@@ -900,7 +919,7 @@ func (s *Server) handleCalls(w http.ResponseWriter, r *http.Request) {
 
 		span.SetAttributes(attribute.String("oid", string(oid)))
 
-		call := &Call{
+		call := &NetworkCall{
 			s:        s,
 			r:        r,
 			oid:      oid,
@@ -914,6 +933,12 @@ func (s *Server) handleCalls(w http.ResponseWriter, r *http.Request) {
 			ctx = context.WithValue(ctx, connectionKey{}, &CurrentConnectionInfo{
 				PeerSubject: r.TLS.PeerCertificates[0].Subject.String(),
 			})
+		}
+
+		if iface.aroundContext != nil {
+			var cancel func()
+			ctx, cancel = iface.aroundContext(ctx, call)
+			defer cancel()
 		}
 
 		err := mm.Handler(ctx, call)

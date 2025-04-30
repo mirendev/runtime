@@ -550,7 +550,7 @@ func (v *UserInfo) UnmarshalJSON(data []byte) error {
 type userQueryWhoAmIArgsData struct{}
 
 type UserQueryWhoAmIArgs struct {
-	call *rpc.Call
+	call rpc.Call
 	data userQueryWhoAmIArgsData
 }
 
@@ -575,7 +575,7 @@ type userQueryWhoAmIResultsData struct {
 }
 
 type UserQueryWhoAmIResults struct {
-	call *rpc.Call
+	call rpc.Call
 	data userQueryWhoAmIResultsData
 }
 
@@ -600,7 +600,7 @@ func (v *UserQueryWhoAmIResults) UnmarshalJSON(data []byte) error {
 }
 
 type UserQueryWhoAmI struct {
-	*rpc.Call
+	rpc.Call
 	args    UserQueryWhoAmIArgs
 	results UserQueryWhoAmIResults
 }
@@ -630,14 +630,14 @@ type UserQuery interface {
 }
 
 type reexportUserQuery struct {
-	client *rpc.Client
+	client rpc.Client
 }
 
 func (_ reexportUserQuery) WhoAmI(ctx context.Context, state *UserQueryWhoAmI) error {
 	panic("not implemented")
 }
 
-func (t reexportUserQuery) CapabilityClient() *rpc.Client {
+func (t reexportUserQuery) CapabilityClient() rpc.Client {
 	return t.client
 }
 
@@ -647,7 +647,7 @@ func AdaptUserQuery(t UserQuery) *rpc.Interface {
 			Name:          "whoAmI",
 			InterfaceName: "UserQuery",
 			Index:         0,
-			Handler: func(ctx context.Context, call *rpc.Call) error {
+			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.WhoAmI(ctx, &UserQueryWhoAmI{Call: call})
 			},
 		},
@@ -657,7 +657,11 @@ func AdaptUserQuery(t UserQuery) *rpc.Interface {
 }
 
 type UserQueryClient struct {
-	*rpc.Client
+	rpc.Client
+}
+
+func NewUserQueryClient(client rpc.Client) *UserQueryClient {
+	return &UserQueryClient{Client: client}
 }
 
 func (c UserQueryClient) Export() UserQuery {
@@ -665,7 +669,7 @@ func (c UserQueryClient) Export() UserQuery {
 }
 
 type UserQueryClientWhoAmIResults struct {
-	client *rpc.Client
+	client rpc.Client
 	data   userQueryWhoAmIResultsData
 }
 
@@ -695,7 +699,7 @@ type appInfoAppInfoArgsData struct {
 }
 
 type AppInfoAppInfoArgs struct {
-	call *rpc.Call
+	call rpc.Call
 	data appInfoAppInfoArgsData
 }
 
@@ -731,7 +735,7 @@ type appInfoAppInfoResultsData struct {
 }
 
 type AppInfoAppInfoResults struct {
-	call *rpc.Call
+	call rpc.Call
 	data appInfoAppInfoResultsData
 }
 
@@ -756,7 +760,7 @@ func (v *AppInfoAppInfoResults) UnmarshalJSON(data []byte) error {
 }
 
 type AppInfoAppInfo struct {
-	*rpc.Call
+	rpc.Call
 	args    AppInfoAppInfoArgs
 	results AppInfoAppInfoResults
 }
@@ -786,14 +790,14 @@ type AppInfo interface {
 }
 
 type reexportAppInfo struct {
-	client *rpc.Client
+	client rpc.Client
 }
 
 func (_ reexportAppInfo) AppInfo(ctx context.Context, state *AppInfoAppInfo) error {
 	panic("not implemented")
 }
 
-func (t reexportAppInfo) CapabilityClient() *rpc.Client {
+func (t reexportAppInfo) CapabilityClient() rpc.Client {
 	return t.client
 }
 
@@ -803,7 +807,7 @@ func AdaptAppInfo(t AppInfo) *rpc.Interface {
 			Name:          "appInfo",
 			InterfaceName: "AppInfo",
 			Index:         0,
-			Handler: func(ctx context.Context, call *rpc.Call) error {
+			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.AppInfo(ctx, &AppInfoAppInfo{Call: call})
 			},
 		},
@@ -813,7 +817,11 @@ func AdaptAppInfo(t AppInfo) *rpc.Interface {
 }
 
 type AppInfoClient struct {
-	*rpc.Client
+	rpc.Client
+}
+
+func NewAppInfoClient(client rpc.Client) *AppInfoClient {
+	return &AppInfoClient{Client: client}
 }
 
 func (c AppInfoClient) Export() AppInfo {
@@ -821,7 +829,7 @@ func (c AppInfoClient) Export() AppInfo {
 }
 
 type AppInfoClientAppInfoResults struct {
-	client *rpc.Client
+	client rpc.Client
 	data   appInfoAppInfoResultsData
 }
 
@@ -854,7 +862,7 @@ type logsAppLogsArgsData struct {
 }
 
 type LogsAppLogsArgs struct {
-	call *rpc.Call
+	call rpc.Call
 	data logsAppLogsArgsData
 }
 
@@ -909,7 +917,7 @@ type logsAppLogsResultsData struct {
 }
 
 type LogsAppLogsResults struct {
-	call *rpc.Call
+	call rpc.Call
 	data logsAppLogsResultsData
 }
 
@@ -935,7 +943,7 @@ func (v *LogsAppLogsResults) UnmarshalJSON(data []byte) error {
 }
 
 type LogsAppLogs struct {
-	*rpc.Call
+	rpc.Call
 	args    LogsAppLogsArgs
 	results LogsAppLogsResults
 }
@@ -965,14 +973,14 @@ type Logs interface {
 }
 
 type reexportLogs struct {
-	client *rpc.Client
+	client rpc.Client
 }
 
 func (_ reexportLogs) AppLogs(ctx context.Context, state *LogsAppLogs) error {
 	panic("not implemented")
 }
 
-func (t reexportLogs) CapabilityClient() *rpc.Client {
+func (t reexportLogs) CapabilityClient() rpc.Client {
 	return t.client
 }
 
@@ -982,7 +990,7 @@ func AdaptLogs(t Logs) *rpc.Interface {
 			Name:          "appLogs",
 			InterfaceName: "Logs",
 			Index:         0,
-			Handler: func(ctx context.Context, call *rpc.Call) error {
+			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.AppLogs(ctx, &LogsAppLogs{Call: call})
 			},
 		},
@@ -992,7 +1000,11 @@ func AdaptLogs(t Logs) *rpc.Interface {
 }
 
 type LogsClient struct {
-	*rpc.Client
+	rpc.Client
+}
+
+func NewLogsClient(client rpc.Client) *LogsClient {
+	return &LogsClient{Client: client}
 }
 
 func (c LogsClient) Export() Logs {
@@ -1000,7 +1012,7 @@ func (c LogsClient) Export() Logs {
 }
 
 type LogsClientAppLogsResults struct {
-	client *rpc.Client
+	client rpc.Client
 	data   logsAppLogsResultsData
 }
 

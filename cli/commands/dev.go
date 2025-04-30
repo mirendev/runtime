@@ -151,7 +151,7 @@ func Dev(ctx *Context, opts struct {
 		return err
 	}
 
-	eac := &entityserver_v1alpha.EntityAccessClient{Client: client}
+	eac := entityserver_v1alpha.NewEntityAccessClient(client)
 
 	ipa := ipalloc.NewAllocator(ctx.Log, subnets)
 	eg.Go(func() error {

@@ -32,7 +32,7 @@ func TestReader(t *testing.T) {
 	c, err := cs.Connect(ss.ListenAddr(), "meter")
 	r.NoError(err)
 
-	mc := ReaderClient{Client: c}
+	mc := ReaderClient{NetworkClient: c}
 
 	cr := AsReader(ctx, mc)
 
@@ -71,7 +71,7 @@ func TestWriter(t *testing.T) {
 	c, err := cs.Connect(ss.ListenAddr(), "meter")
 	r.NoError(err)
 
-	mc := WriterClient{Client: c}
+	mc := WriterClient{NetworkClient: c}
 
 	cr := AsWriter(ctx, mc)
 
