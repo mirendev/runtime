@@ -55,7 +55,7 @@ func (b *Builder) nextVersion(ctx context.Context, name string) (
 
 	err := b.ec.Get(ctx, name, &appRec)
 	if err != nil {
-		if !errors.Is(cond.ErrNotFound{}, err) {
+		if !errors.Is(err, cond.ErrNotFound{}) {
 			return nil, nil, err
 		}
 
@@ -226,12 +226,10 @@ func (b *Builder) BuildFromTar(ctx context.Context, state *build_v1alpha.Builder
 		Log:    b.Log,
 		//LogWriter: b.LogWriter,
 	}
-	if err != nil {
-		return err
-	}
 
 	appRec, mrv, err := b.nextVersion(ctx, name)
 	if err != nil {
+		b.Log.Error("error getting next version", "error", err)
 		return err
 	}
 
@@ -279,6 +277,7 @@ func (b *Builder) BuildFromTar(ctx context.Context, state *build_v1alpha.Builder
 
 	res, err := bk.BuildImage(ctx, tr, buildStack, imgName, tos...)
 	if err != nil {
+		b.Log.Error("error building image", "error", err)
 		return err
 	}
 
@@ -323,7 +322,7 @@ func (b *Builder) BuildFromTar(ctx context.Context, state *build_v1alpha.Builder
 
 	mrv.Config.Commands = serviceCmds
 
-	id, err := b.ec.Create(ctx, mrv.Version, mrv)
+	id, err := b.ec.CreateOrUpdate(ctx, mrv.Version, mrv)
 	if err != nil {
 		return fmt.Errorf("error creating app version: %w", err)
 	}

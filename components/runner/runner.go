@@ -91,8 +91,6 @@ func (r *Runner) Start(ctx context.Context) error {
 
 	ec := entityserver.NewClient(r.Log, eas)
 
-	r.reg.Register("entity-client", eas)
-
 	cm, err := r.SetupControllers(ctx, eas)
 	if err != nil {
 		return err

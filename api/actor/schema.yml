@@ -1,18 +1,15 @@
 domain: dev.miren.actor
 version: v1alpha
 kinds:
-  actor_lease:
-    node:
-      type: ref
-      doc: The node that the actor is running on
-    actor:
-      type: ref
-      doc: The actor that this lease is for
-
   actor:
     state:
       type: bytes
       doc: The state of an actor
+
+    node:
+      type: ref
+      doc: The node that is serving the actor
+      session: true
 
   node:
     endpoint:

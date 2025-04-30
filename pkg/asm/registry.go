@@ -31,6 +31,10 @@ func (r *Registry) Register(name string, component interface{}) {
 	if r.components == nil {
 		r.components = make(map[string]interface{})
 	}
+	if _, ok := r.components[name]; ok {
+		panic("component already registered: " + name)
+	}
+
 	r.components[name] = component
 }
 

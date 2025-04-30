@@ -194,24 +194,25 @@ func (e *EntityServer) Put(ctx context.Context, req *entityserver_v1alpha.Entity
 
 		re, err := e.Store.UpdateEntity(ctx, entity.Id(rpcE.Id()), attrs, opts...)
 		if err != nil {
-			if !errors.Is(err, entity.ErrNotFound) {
+			if !errors.Is(err, cond.ErrNotFound{}) {
 				return fmt.Errorf("failed to create entity: %w", err)
 			}
 		} else {
 			results.SetRevision(re.Revision)
 			results.SetId(re.ID.String())
+			return nil
 		}
-	} else {
-		// TODO: handle created_at and updated_at fileds
-		re, err := e.Store.CreateEntity(ctx, attrs, opts...)
-		if err != nil {
-			return fmt.Errorf("failed to create entity: %w", err)
-		}
-
-		results.SetRevision(re.Revision)
-		results.SetId(re.ID.String())
-
 	}
+
+	// TODO: handle created_at and updated_at fileds
+	re, err := e.Store.CreateEntity(ctx, attrs, opts...)
+	if err != nil {
+		return fmt.Errorf("failed to create entity: %w", err)
+	}
+
+	results.SetRevision(re.Revision)
+	results.SetId(re.ID.String())
+
 	return nil
 }
 

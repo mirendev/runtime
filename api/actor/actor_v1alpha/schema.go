@@ -6,16 +6,21 @@ import (
 )
 
 const (
+	ActorNodeId  = entity.Id("dev.miren.actor/actor.node")
 	ActorStateId = entity.Id("dev.miren.actor/actor.state")
 )
 
 type Actor struct {
 	ID    entity.Id `json:"id"`
+	Node  entity.Id `cbor:"node,omitempty" json:"node,omitempty"`
 	State []byte    `cbor:"state,omitempty" json:"state,omitempty"`
 }
 
 func (o *Actor) Decode(e entity.AttrGetter) {
 	o.ID = entity.MustGet(e, entity.DBId).Value.Id()
+	if a, ok := e.Get(ActorNodeId); ok && a.Value.Kind() == entity.KindId {
+		o.Node = a.Value.Id()
+	}
 	if a, ok := e.Get(ActorStateId); ok && a.Value.Kind() == entity.KindBytes {
 		o.State = a.Value.Bytes()
 	}
@@ -38,6 +43,9 @@ func (o *Actor) EntityId() entity.Id {
 }
 
 func (o *Actor) Encode() (attrs []entity.Attr) {
+	if !entity.Empty(o.Node) {
+		attrs = append(attrs, entity.Ref(ActorNodeId, o.Node))
+	}
 	if len(o.State) == 0 {
 		attrs = append(attrs, entity.Bytes(ActorStateId, o.State))
 	}
@@ -46,6 +54,9 @@ func (o *Actor) Encode() (attrs []entity.Attr) {
 }
 
 func (o *Actor) Empty() bool {
+	if !entity.Empty(o.Node) {
+		return false
+	}
 	if len(o.State) == 0 {
 		return false
 	}
@@ -53,70 +64,8 @@ func (o *Actor) Empty() bool {
 }
 
 func (o *Actor) InitSchema(sb *schema.SchemaBuilder) {
+	sb.Ref("node", "dev.miren.actor/actor.node", schema.Doc("The node that is serving the actor"))
 	sb.Bytes("state", "dev.miren.actor/actor.state", schema.Doc("The state of an actor"))
-}
-
-const (
-	ActorLeaseActorId = entity.Id("dev.miren.actor/actor_lease.actor")
-	ActorLeaseNodeId  = entity.Id("dev.miren.actor/actor_lease.node")
-)
-
-type ActorLease struct {
-	ID    entity.Id `json:"id"`
-	Actor entity.Id `cbor:"actor,omitempty" json:"actor,omitempty"`
-	Node  entity.Id `cbor:"node,omitempty" json:"node,omitempty"`
-}
-
-func (o *ActorLease) Decode(e entity.AttrGetter) {
-	o.ID = entity.MustGet(e, entity.DBId).Value.Id()
-	if a, ok := e.Get(ActorLeaseActorId); ok && a.Value.Kind() == entity.KindId {
-		o.Actor = a.Value.Id()
-	}
-	if a, ok := e.Get(ActorLeaseNodeId); ok && a.Value.Kind() == entity.KindId {
-		o.Node = a.Value.Id()
-	}
-}
-
-func (o *ActorLease) Is(e entity.AttrGetter) bool {
-	return entity.Is(e, KindActorLease)
-}
-
-func (o *ActorLease) ShortKind() string {
-	return "actor_lease"
-}
-
-func (o *ActorLease) Kind() entity.Id {
-	return KindActorLease
-}
-
-func (o *ActorLease) EntityId() entity.Id {
-	return o.ID
-}
-
-func (o *ActorLease) Encode() (attrs []entity.Attr) {
-	if !entity.Empty(o.Actor) {
-		attrs = append(attrs, entity.Ref(ActorLeaseActorId, o.Actor))
-	}
-	if !entity.Empty(o.Node) {
-		attrs = append(attrs, entity.Ref(ActorLeaseNodeId, o.Node))
-	}
-	attrs = append(attrs, entity.Ref(entity.EntityKind, KindActorLease))
-	return
-}
-
-func (o *ActorLease) Empty() bool {
-	if !entity.Empty(o.Actor) {
-		return false
-	}
-	if !entity.Empty(o.Node) {
-		return false
-	}
-	return true
-}
-
-func (o *ActorLease) InitSchema(sb *schema.SchemaBuilder) {
-	sb.Ref("actor", "dev.miren.actor/actor_lease.actor", schema.Doc("The actor that this lease is for"))
-	sb.Ref("node", "dev.miren.actor/actor_lease.node", schema.Doc("The node that the actor is running on"))
 }
 
 const (
@@ -173,17 +122,15 @@ func (o *Node) InitSchema(sb *schema.SchemaBuilder) {
 }
 
 var (
-	KindActor      = entity.Id("dev.miren.actor/kind.actor")
-	KindActorLease = entity.Id("dev.miren.actor/kind.actor_lease")
-	KindNode       = entity.Id("dev.miren.actor/kind.node")
-	Schema         = entity.Id("dev.miren.actor/schema.v1alpha")
+	KindActor = entity.Id("dev.miren.actor/kind.actor")
+	KindNode  = entity.Id("dev.miren.actor/kind.node")
+	Schema    = entity.Id("dev.miren.actor/schema.v1alpha")
 )
 
 func init() {
 	schema.Register("dev.miren.actor", "v1alpha", func(sb *schema.SchemaBuilder) {
 		(&Actor{}).InitSchema(sb)
-		(&ActorLease{}).InitSchema(sb)
 		(&Node{}).InitSchema(sb)
 	})
-	schema.RegisterEncodedSchema("dev.miren.actor", "v1alpha", []byte("\x1f\x8b\b\x00\x00\x00\x00\x00\x00\xff\x84\x92aN\x840\x10\x85ϡ\xc6D/P\xe3\x89\xc8\xe0\f0\x81NI;\x12\xf8\xa9WY\xe3\r\xf5\xb7i\xbbٰ\b\xdd\x7f\xa4}\xefu\xbe\xc7|\xa1\x80%\x874\x19˞\xc4\xc0\x9b:\xdfN\xe4\x03;i\xa7W\x18\xc6\x0e\xa8g\xc1p\x9a\xef6\xba\x97xn\xc4!}7\xe8,\xb0l\x93R\xbcnmQ\xb6\xff\xc6o\xd30\r\x18>\xf2`\x1d\t\x8e\x8eEQ\x97\x91\x9a\xa0\x9e\xa5\xad\x19\xe7ǽHsQ[\x90\xe5g\x18=[\xf0K\x15\x931\n\xe6\xfb]\x80\xf4Y$x\xdf\xfa\n5]\x10N\xc9JAA)\xcdO\xf5\xa2\x14\xe2\xf8\x0f\xbby&I\xafƦt1?\x1d\xcf]\r\x04\xa1\xdc\xff\xc1s\xd9Y\x86\xf8<C\xe4\xb0\bQ3F\x82\xe7Bd>\xc9\xce\xd4\xfb\xda\xf8\x0fem\x8c\xe2+\xfe~uۇ\xcey\xad\xf2.\x9e\x8b)\xfcе\xf5v\x81y?\x8e\x17\xfc\x0f\x00\x00\xff\xff"))
+	schema.RegisterEncodedSchema("dev.miren.actor", "v1alpha", []byte("\x1f\x8b\b\x00\x00\x00\x00\x00\x00\xff|\x91QN\xc40\fD\xcf\x01\x88+\x14q\xa2\x95\x8b\xdd\xd6\xdaƩ\x12Sm>\xe1(\x80\xb8!|#;\b\x89l\x95\x9f\xaaJ\xe6\x8d=\x99\x0f\x14\b\x14\x91\xf6!p\"\x19\xe0Ic\x9awJ\x99\xa3\xcc\xfb#\xac\xdb\x02tf\xc1\xfcv\xb9mt\x0fv^\x7f?'\x8c\x01XZ+\xf7\x7fn\xb9Δ\xefibZ1\xbf\xbe;\x8a\xe6\x88Z6\x1a\x19G\xc6\xeb\x1d\xfc;\x98\xac\x12\x94\x15\xb4\"4\x16\xa5l\xd4\xdd1\xe5\xd2uK\x1c \x95\x93\xcd'\xbf\xb8\xdc\x1c&\xb5!ݠ\xdab&\xeb\xe7|\xa9\x15,$\xb8E\x16\xf5ŧ\xac\x89e\xb6\xcd\xef\x8f,\x87?u\x00)_\xff\x12\xf8\x8b\x9d\xf3\x12\x93\x9ejo\xbf\x99:\xed9\xd3\t\xfd\x03\x00\x00\xff\xff"))
 }

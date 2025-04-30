@@ -2,6 +2,7 @@ package entityserver
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -9,8 +10,10 @@ import (
 
 	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
+	"miren.dev/runtime/pkg/cond"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/types"
+	"miren.dev/runtime/pkg/rpc/stream"
 )
 
 type Client struct {
@@ -58,6 +61,65 @@ func (c *Client) GetById(ctx context.Context, id entity.Id, sc SchemaEncoder) er
 	return nil
 }
 
+type ListResults struct {
+	values []*entity.Entity
+	cur    *entity.Entity
+}
+
+func (l *ListResults) Next() bool {
+	if len(l.values) == 0 {
+		return false
+	}
+
+	l.cur = l.values[0]
+	l.values = l.values[1:]
+
+	return true
+}
+
+func (l *ListResults) Read(sc SchemaEncoder) error {
+	if l.cur == nil {
+		return fmt.Errorf("no more values")
+	}
+
+	sc.Decode(l.cur)
+	return nil
+}
+
+func (c *Client) List(ctx context.Context, index entity.Attr) (*ListResults, error) {
+	ret, err := c.eac.List(ctx, index)
+	if err != nil {
+		return nil, err
+	}
+
+	var lr ListResults
+
+	for _, v := range ret.Values() {
+		lr.values = append(lr.values, v.Entity())
+	}
+
+	return &lr, nil
+}
+
+func (c *Client) OneAtIndex(ctx context.Context, index entity.Attr, sc SchemaEncoder) error {
+	ret, err := c.eac.List(ctx, index)
+	if err != nil {
+		return err
+	}
+
+	if len(ret.Values()) == 0 {
+		return cond.NotFound("entity", index)
+	}
+
+	if len(ret.Values()) > 1 {
+		return cond.Conflict("entity", "more than one entity found")
+	}
+
+	sc.Decode(ret.Values()[0].Entity())
+
+	return nil
+}
+
 type createOp struct {
 	labels types.Labels
 }
@@ -86,6 +148,50 @@ func (c *Client) Create(ctx context.Context, name string, sc SchemaEncoder, opts
 		sc.Encode,
 		entity.Ident, sc.ShortKind()+"/"+name,
 	))
+
+	if c.sessionId != "" {
+		pr, err := c.eac.PutSession(ctx, &rpcE, c.sessionId)
+		if err != nil {
+			return "", err
+		}
+
+		return entity.Id(pr.Id()), nil
+	}
+
+	pr, err := c.eac.Put(ctx, &rpcE)
+	if err != nil {
+		return "", err
+	}
+
+	return entity.Id(pr.Id()), nil
+}
+
+func (c *Client) CreateOrUpdate(ctx context.Context, name string, sc SchemaEncoder, opts ...CreateOptions) (entity.Id, error) {
+	var op createOp
+	for _, opt := range opts {
+		opt(&op)
+	}
+
+	var rpcE entityserver_v1alpha.Entity
+
+	gr, err := c.eac.Get(ctx, sc.ShortKind()+"/"+name)
+	if err == nil {
+		rpcE.SetId(gr.Entity().Id())
+		rpcE.SetAttrs(sc.Encode())
+	} else {
+		if !errors.Is(err, cond.ErrNotFound{}) {
+			return "", err
+		}
+		rpcE.SetAttrs(
+			entity.Attrs(
+				(&core_v1alpha.Metadata{
+					Name:   name,
+					Labels: op.labels,
+				}).Encode,
+				sc.Encode,
+				entity.Ident, sc.ShortKind()+"/"+name,
+			))
+	}
 
 	if c.sessionId != "" {
 		pr, err := c.eac.PutSession(ctx, &rpcE, c.sessionId)
@@ -152,6 +258,29 @@ func (c *Client) UpdateAttrs(ctx context.Context, id entity.Id, attrs ...any) er
 	}
 
 	return nil
+}
+
+func (c *Client) WatchEntity(ctx context.Context, id entity.Id) chan *entity.Entity {
+	ch := make(chan *entity.Entity, 1)
+
+	go func() {
+		c.eac.WatchEntity(ctx, id.String(), stream.Callback(func(op *entityserver_v1alpha.EntityOp) error {
+			if op.HasEntity() {
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				case ch <- op.Entity().Entity():
+					// ok
+				}
+			} else {
+				close(ch)
+			}
+
+			return nil
+		}))
+	}()
+
+	return ch
 }
 
 type Session struct {

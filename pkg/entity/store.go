@@ -239,6 +239,7 @@ func (s *EtcdStore) CreateEntity(
 	}
 
 	if !txnResp.Succeeded {
+		s.log.Error("failed to create entity in etcd", "error", err, "id", entity.ID)
 		return nil, cond.Conflict("entity", entity.ID)
 	}
 
@@ -418,6 +419,7 @@ func (s *EtcdStore) UpdateEntity(
 	}
 
 	if o.fromRevision != 0 && entity.Revision != o.fromRevision {
+		s.log.Error("entity revision mismatch", "expected", o.fromRevision, "actual", entity.Revision)
 		return nil, cond.Conflict("entity", entity.ID)
 	}
 
@@ -523,6 +525,7 @@ func (s *EtcdStore) UpdateEntity(
 	}
 
 	if !txnResp.Succeeded {
+		s.log.Error("failed to update entity in etcd", "error", err, "id", entity.ID)
 		return nil, cond.Conflict("entity", entity.ID)
 	}
 

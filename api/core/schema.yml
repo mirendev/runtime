@@ -37,6 +37,15 @@ kinds:
       type: string
       doc: The OCI url for the versions code
 
+    manifest:
+      type: string
+      doc: The OCI image manifest for the version
+
+    manifest_digest:
+      type: string
+      doc: The digest of the manifest
+      indexed: true
+
     config:
       type: component
       doc: The configuration of the version

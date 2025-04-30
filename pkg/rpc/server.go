@@ -15,6 +15,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/davecgh/go-spew/spew"
 	"github.com/fxamacker/cbor/v2"
 	"github.com/mr-tron/base58"
 	"go.opentelemetry.io/otel/attribute"
@@ -840,7 +841,6 @@ func (s *Server) startCallStream(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		var sr streamRequest
 		sr.Kind = "error"
-		w.Header().Add("rpc-status", "error")
 
 		if emsg, ok := err.(ErrorMessage); ok {
 			sr.Error = emsg.ErrorMessage()
@@ -855,6 +855,8 @@ func (s *Server) startCallStream(w http.ResponseWriter, r *http.Request) {
 		if ecode, ok := err.(ErrorCode); ok {
 			sr.Code = ecode.ErrorCode()
 		}
+
+		spew.Dump(sr, err)
 
 		cs.NoReply(sr, nil)
 	} else {
@@ -871,7 +873,7 @@ func (s *Server) startCallStream(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleCalls(w http.ResponseWriter, r *http.Request) {
 	oid := OID(r.PathValue("oid"))
 
-	w.Header().Set("Trailer", "rpc-status, rpc-error")
+	w.Header().Set("Trailer", "rpc-status, rpc-error, rpc-error-category, rpc-error-code")
 
 	user, ok := s.authRequest(r, w, oid)
 	if !ok {

@@ -8,18 +8,22 @@ import (
 	"time"
 
 	"github.com/fxamacker/cbor/v2"
-	clientv3 "go.etcd.io/etcd/client/v3"
 	"miren.dev/runtime/api/actor/actor_v1alpha"
 	"miren.dev/runtime/api/entityserver"
 	"miren.dev/runtime/pkg/cond"
+	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/rpc"
 )
 
 type Registry struct {
 	log *slog.Logger
 	rs  *rpc.State
+	tc  *entityserver.Client
 	ec  *entityserver.Client
-	id  string
+	es  *entityserver.Session
+
+	id       string
+	entityId entity.Id
 
 	mu      sync.Mutex
 	closing bool
@@ -33,7 +37,7 @@ func NewRegistry(log *slog.Logger, rs *rpc.State, id string, ec *entityserver.Cl
 		log:     log,
 		rs:      rs,
 		id:      id,
-		ec:      ec,
+		tc:      ec,
 		running: make(map[string]bool),
 	}
 }
@@ -42,10 +46,23 @@ func (r *Registry) Start(ctx context.Context) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
+	es, ec, err := r.tc.NewSession(ctx, r.id)
+	if err != nil {
+		return err
+	}
+
+	r.es = es
+	r.ec = ec
+
 	var an actor_v1alpha.Node
 	an.Endpoint = append(an.Endpoint, r.rs.ListenAddr())
 
-	_, err := r.ec.Create(ctx, r.id, &an)
+	pr, err := r.ec.Create(ctx, r.id, &an)
+	if err != nil {
+		return err
+	}
+
+	r.entityId = pr
 	return err
 }
 
@@ -125,79 +142,30 @@ func (r *Registry) restoreActorState(ctx context.Context, name string, as ActorS
 	return ctx
 }
 
-func (r *Registry) acquirePath(ctx context.Context, name string, id clientv3.LeaseID) (bool, error) {
-
-	var an actor_v1alpha.Actor
-	err := r.ec.Get(ctx, name, &an)
-	if err != nil {
-		return false, err
-	}
-
-	var al actor_v1alpha.ActorLease
-	err = r.ec.Get(ctx, name+"/lease", &al)
-
-	if err != nil {
-		if !errors.Is(err, cond.ErrNotFound{}) {
-			return false, err
-		}
-	}
-
-	path := "/actor/registry/" + name
-
-	// Attempt to register the actor
-	txn := r.ec.Txn(ctx).If(
-		clientv3.Compare(clientv3.CreateRevision(path), "=", 0),
-	).Then(
-		clientv3.OpPut(path, r.rs.ListenAddr(), clientv3.WithLease(id)),
-	).Else()
-
-	tr, err := txn.Commit()
-	if err != nil {
-		r.log.Error("failed to commit transaction", "name", name, "err", err)
-	}
-
-	if !tr.Succeeded {
-		gr, err := r.ec.KV.Get(ctx, path)
-		if err != nil {
-			r.log.Error("failed to get actor", "name", name, "err", err)
-			return false
-		}
-
-		if len(gr.Kvs) == 0 {
-			r.log.Error("actor not found", "name", name)
-			return false
-		}
-
-		ep := string(gr.Kvs[0].Value)
-		if ep != r.rs.ListenAddr() {
-			r.log.Error("actor already registered", "name", name, "ep", ep)
-		} else {
-			r.log.Info("actor already owned by self", "name", name)
-		}
-		return false
-	} else {
-		r.log.Info("actor registered", "name", name, "ep", r.rs.ListenAddr())
-		return true
-	}
-}
-
 func (r *Registry) Register(ctx context.Context, name string, iface *rpc.Interface) error {
-	lr, err := r.ec.Lease.Grant(ctx, 60)
+	var act actor_v1alpha.Actor
+
+	owned := false
+
+	err := r.ec.Get(ctx, name, &act)
 	if err != nil {
-		r.log.Error("failed to grant lease", "name", name, "err", err)
-		return err
+		if errors.Is(err, cond.ErrNotFound{}) {
+			act.Node = r.entityId
+
+			err = r.ec.Update(ctx, &act)
+			if err == nil {
+				owned = true
+			}
+		}
+	} else if act.Node == r.entityId {
+		owned = true
 	}
 
-	owned := r.acquirePath(ctx, name, lr.ID)
+	ch := r.ec.WatchEntity(ctx, r.entityId)
 
 	go func() {
-		defer r.ec.Lease.Revoke(ctx, lr.ID)
-
 		ctx, cancel := context.WithCancel(ctx)
 		defer cancel()
-
-		path := "/actor/registry/" + name
-		wc := r.ec.Watch(ctx, path)
 
 		owned := owned
 
@@ -208,30 +176,24 @@ func (r *Registry) Register(ctx context.Context, name string, iface *rpc.Interfa
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				_, err := r.ec.Lease.KeepAliveOnce(ctx, lr.ID)
-				if err != nil {
-					r.log.Error("failed to keep lease alive", "name", name, "err", err)
+			// ok
+			case wr, ok := <-ch:
+				if !ok {
+					r.log.Info("actor deleted", "name", name)
 					return
 				}
-			case wr := <-wc:
-				if wr.Canceled {
-					r.log.Error("watch canceled", "name", name, "err", wr.Err())
-					wc = r.ec.Watch(ctx, path)
-				}
 
-				for _, ev := range wr.Events {
-					switch ev.Type {
-					case clientv3.EventTypeDelete:
-						r.log.Info("actor lease deleted", "name", name)
-					case clientv3.EventTypePut:
-						r.log.Info("actor lease updated", "name", name)
-						if ev.Kv == nil {
-							r.log.Error("actor lease updated, but no value", "name", name)
-						}
-						if string(ev.Kv.Value) != r.rs.ListenAddr() {
-							r.log.Error("actor lease updated, but not this node", "name", name, "ep", string(ev.Kv.Value))
-						}
-					}
+				var act actor_v1alpha.Actor
+				act.Decode(wr)
+
+				switch act.Node {
+				case "":
+					r.log.Info("actor not owned by any node", "name", name)
+				case r.entityId:
+					// we still own it!
+					owned = true
+				default:
+					r.log.Info("actor not owned by this node", "name", name, "node", act.Node)
 				}
 
 				r.mu.Lock()
@@ -241,9 +203,15 @@ func (r *Registry) Register(ctx context.Context, name string, iface *rpc.Interfa
 				if closing {
 					return
 				}
+			}
 
-				if !owned {
-					owned = r.acquirePath(ctx, name, lr.ID)
+			if !owned {
+				err = r.ec.UpdateAttrs(ctx, act.ID, entity.Ref(actor_v1alpha.ActorNodeId, r.entityId))
+				if err != nil {
+					r.log.Error("failed to update actor", "name", name, "err", err)
+				} else {
+					owned = true
+					r.log.Info("actor updated to this node", "name", name)
 				}
 			}
 		}
@@ -271,40 +239,30 @@ func (r *Registry) Close(ctx context.Context) error {
 
 	r.closing = true
 
-	for name, ok := range r.running {
-		if ok {
-			r.log.Info("actor still running", "name", name)
-		} else {
-			r.log.Info("actor not running", "name", name)
-		}
-
-		path := "/actor/registry/" + name
-		txn := r.ec.Txn(ctx).If(
-			clientv3.Compare(clientv3.Value(path), "=", r.rs.ListenAddr()),
-		).Then(
-			clientv3.OpDelete(path),
-		)
-
-		txn.Commit()
-	}
+	r.es.Close()
 
 	return nil
 }
 
 func (r *Registry) Client(ctx context.Context, name string) (rpc.Client, error) {
-	path := "/actor/registry/" + name
-	resp, err := r.ec.KV.Get(ctx, path)
-	if err != nil {
-		return nil, err
-	}
+	var act actor_v1alpha.Actor
 
-	if len(resp.Kvs) == 0 {
+	err := r.ec.Get(ctx, name, &act)
+	if err != nil {
 		return nil, cond.NotFound("actor", name)
 	}
 
-	ep := string(resp.Kvs[0].Value)
+	if act.Node == "" {
+		return nil, cond.NotFound("actor", name)
+	}
 
-	c, err := r.rs.Connect(ep, name)
+	var node actor_v1alpha.Node
+	err = r.ec.GetById(ctx, act.Node, &node)
+	if err != nil {
+		return nil, cond.NotFound("node", act.Node)
+	}
+
+	c, err := r.rs.Connect(node.Endpoint[0], name)
 	if err != nil {
 		return nil, err
 	}

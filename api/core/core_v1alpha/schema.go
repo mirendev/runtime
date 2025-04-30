@@ -70,18 +70,22 @@ func (o *App) InitSchema(sb *schema.SchemaBuilder) {
 }
 
 const (
-	AppVersionAppId      = entity.Id("dev.miren.core/app_version.app")
-	AppVersionConfigId   = entity.Id("dev.miren.core/app_version.config")
-	AppVersionImageUrlId = entity.Id("dev.miren.core/app_version.image_url")
-	AppVersionVersionId  = entity.Id("dev.miren.core/app_version.version")
+	AppVersionAppId            = entity.Id("dev.miren.core/app_version.app")
+	AppVersionConfigId         = entity.Id("dev.miren.core/app_version.config")
+	AppVersionImageUrlId       = entity.Id("dev.miren.core/app_version.image_url")
+	AppVersionManifestId       = entity.Id("dev.miren.core/app_version.manifest")
+	AppVersionManifestDigestId = entity.Id("dev.miren.core/app_version.manifest_digest")
+	AppVersionVersionId        = entity.Id("dev.miren.core/app_version.version")
 )
 
 type AppVersion struct {
-	ID       entity.Id `json:"id"`
-	App      entity.Id `cbor:"app,omitempty" json:"app,omitempty"`
-	Config   Config    `cbor:"config,omitempty" json:"config,omitempty"`
-	ImageUrl string    `cbor:"image_url,omitempty" json:"image_url,omitempty"`
-	Version  string    `cbor:"version,omitempty" json:"version,omitempty"`
+	ID             entity.Id `json:"id"`
+	App            entity.Id `cbor:"app,omitempty" json:"app,omitempty"`
+	Config         Config    `cbor:"config,omitempty" json:"config,omitempty"`
+	ImageUrl       string    `cbor:"image_url,omitempty" json:"image_url,omitempty"`
+	Manifest       string    `cbor:"manifest,omitempty" json:"manifest,omitempty"`
+	ManifestDigest string    `cbor:"manifest_digest,omitempty" json:"manifest_digest,omitempty"`
+	Version        string    `cbor:"version,omitempty" json:"version,omitempty"`
 }
 
 func (o *AppVersion) Decode(e entity.AttrGetter) {
@@ -94,6 +98,12 @@ func (o *AppVersion) Decode(e entity.AttrGetter) {
 	}
 	if a, ok := e.Get(AppVersionImageUrlId); ok && a.Value.Kind() == entity.KindString {
 		o.ImageUrl = a.Value.String()
+	}
+	if a, ok := e.Get(AppVersionManifestId); ok && a.Value.Kind() == entity.KindString {
+		o.Manifest = a.Value.String()
+	}
+	if a, ok := e.Get(AppVersionManifestDigestId); ok && a.Value.Kind() == entity.KindString {
+		o.ManifestDigest = a.Value.String()
 	}
 	if a, ok := e.Get(AppVersionVersionId); ok && a.Value.Kind() == entity.KindString {
 		o.Version = a.Value.String()
@@ -126,6 +136,12 @@ func (o *AppVersion) Encode() (attrs []entity.Attr) {
 	if !entity.Empty(o.ImageUrl) {
 		attrs = append(attrs, entity.String(AppVersionImageUrlId, o.ImageUrl))
 	}
+	if !entity.Empty(o.Manifest) {
+		attrs = append(attrs, entity.String(AppVersionManifestId, o.Manifest))
+	}
+	if !entity.Empty(o.ManifestDigest) {
+		attrs = append(attrs, entity.String(AppVersionManifestDigestId, o.ManifestDigest))
+	}
 	if !entity.Empty(o.Version) {
 		attrs = append(attrs, entity.String(AppVersionVersionId, o.Version))
 	}
@@ -143,6 +159,12 @@ func (o *AppVersion) Empty() bool {
 	if !entity.Empty(o.ImageUrl) {
 		return false
 	}
+	if !entity.Empty(o.Manifest) {
+		return false
+	}
+	if !entity.Empty(o.ManifestDigest) {
+		return false
+	}
 	if !entity.Empty(o.Version) {
 		return false
 	}
@@ -154,6 +176,8 @@ func (o *AppVersion) InitSchema(sb *schema.SchemaBuilder) {
 	sb.Component("config", "dev.miren.core/app_version.config", schema.Doc("The configuration of the version"))
 	(&Config{}).InitSchema(sb.Builder("config"))
 	sb.String("image_url", "dev.miren.core/app_version.image_url", schema.Doc("The OCI url for the versions code"))
+	sb.String("manifest", "dev.miren.core/app_version.manifest", schema.Doc("The OCI image manifest for the version"))
+	sb.String("manifest_digest", "dev.miren.core/app_version.manifest_digest", schema.Doc("The digest of the manifest"), schema.Indexed)
 	sb.String("version", "dev.miren.core/app_version.version", schema.Doc("The version of this app"))
 }
 
@@ -535,5 +559,5 @@ func init() {
 		(&Metadata{}).InitSchema(sb)
 		(&Project{}).InitSchema(sb)
 	})
-	schema.RegisterEncodedSchema("dev.miren.core", "v1alpha", []byte("\x1f\x8b\b\x00\x00\x00\x00\x00\x00\xff\xacVK\x92\xdb \x10\xbdG\xfeIe\x95\xaa(\x95\x13\xb90\xb4d\xc6\x12P\bk\xace~'\xc9$7L\xd6)\xa0\xc1\x02!\xacE63.齧\xd7M\x7fxb\x82\f \x18L\xcd\xc05\x88\x86J\r\xdd\x04z\xe4Rt\xd3gҫ\x13\x813\x17l|\xba>Oa\x9f\xec\xe3Fi\xf9\x00\xd4\xfcn\x99\x1c\b\x17\x99\x94\x93\x9f2\x1eRʟ\xf9۶\x1cz6~\xf9\xe9\xb8 \x1f\x05hff\x05\xedh4\x17ݑ\xb3닲b\xe3\xc0\xbd\xd2| z>X\xbd\x0e_=\x96\xbc\x13\xa5j\xbeu\xc6!J\xd5=\x7f\xf5\x9e\x05\xa1\x86Op@\xac3\x7f\xe4\xcc\x1a\x7f\xbb\x96lR\xb4\x97\b\xb6\x97\xdcg\x05.\u0092\x90)Q\xea\xfaz#\xde\xf0\x99Zܥ/\x1db\xe0\xb5\x04|\xf7\ueb43\xa5\xf3W\xdbz֓/\u0096J\xd1\xf2\xce\xf18\x95\x83\x92\x02\x84\xd9HZ\xa4{\xd2\r_\x8d+\x13j\xd6B\xf5\xf0~\xfcr:'*\x87\x81\b6\x16\xbc\xe6\xa1z\xd9&2\x06\"\xe6?;\xed~\xb8k7\xea\xee\xaa\xcb\x0e\xd1y7\xe5\xb5\x12D\x83:\xb2G\xd0\x13\xa7\xb0\x9b\x8d\xf8\xa46c\xea\xfc\x99\x9f\xa9\x14\xf4\xa25\b:\xef8\xf8\x18t$\xed\xcc\xe4\xc7=\x99\x8c\xa2\xbb\x92\xc9\xc8\xc5H\xe7\x99r\xefv\x9d\x88\xa8\xd8X0\x0e\xb4\x96_\x81%\xc47\x15\xa2C')\\\xe6\xccK>\x800zV\x92\v\x93\x1fNA\xda\x06{#`0Jj\x93x\xcaG\x00\x12-\x0e\x9b`\"\x9a\x93c\x0f\xfb\x9b 2\xfes\x13\x04\xdd\xfa\xb9}\xc3\xd9t\x869\xcfR\xbe\u0602`s\x06L1\x1fA\x8c\xdc\xcei\xc7eG)\xfbR\x85Ff\xc4\xe3\xa9O\xa4\xbf\xacZ\xe7\xe5\x16ۡ\xd3\xc6\t\uf4a783\xd1#\x1fH\a\x87\x8b\xee\xf3Ｏ\f\xd0H\xc2._.\xad\x85Ļ\x8a\x04\xfeO\xabt\x01X\xadk\xb7\x8c\x060\x84\x11Cj\xa7\x9fo\xed\xc0\xb9sҸPzr\x84\xde\x0fip\xbfK\xb5\x19$\x1bD\xbb\xdaĮp\x7f\xee\\=\"߂\xb7\x97w>\x1c\"\xad\xb4\xc1O\xe1\xedy<Im\x0e\xfe\xfee\xb7\xea\xd65&I\xf7\xbd\xdd\x1f\xe5\xeb\a\x13¨\xde\xfb\xfe\x01\x00\x00\xff\xff"))
+	schema.RegisterEncodedSchema("dev.miren.core", "v1alpha", []byte("\x1f\x8b\b\x00\x00\x00\x00\x00\x00\xff\xacVے\x9c \x10\xfd\x8f\xdcoO[\x15S\xf9\xa2)\x06Z\xa7w\x14(d\xdc\xf11I%?\x92M\xfe0yN\t\r+\xa8\x8c\x0fyً\x9es<}\xe8\x06\x1e\x85d\x1dH\x01Cա\x01Yqe\xa0\x19\xc0\xf4\xa8d3|f\xad>18\xa3\x14\xfd\xe3C\x8a\xfa4=\xad\x98ֿk\xa1:\x862Sq\xca&\xe30\xad\xd7\xd5\xff\xd65B+\xfa\xaf?\xbd#\xc6-\x0ep \xac\xb0\xa3\x86#\x8a#\x8a\xebۥd\x95\xa2\xbdD\xa3\x8d\xba\an\xe7\xdcg+\\\x82\xb5\xda`\xc7\xccx\x98\xecp\xa6\xf5\xf5\xf5F\xbd\xe13\xa5\xba\u05fet\x88\x85\x97\x02\xf8\xe1\xddO\x0e\xe6\xce_m\xebM\x9e\xfc:\xd6\\\xc9\x1a\x1b\xc7C\xae:\xad$H\xbb\x11Z\xa4{\xd2\x13\xbeXW&T-\x85\xca\xe5}\xff\xe5tN\\u\x1d\x93\xa2_\xf1\x9a\x97\xeae\xab\xc8\xe8\x98\x1c\xff\xec\xb4{w\xd3n\xd4\xdd\u0557\r\xa1\x9d\xed\xba\xb7\x06e3y\xce{%\x88\x06ub\xf7`\x06䰛M\xf8\xa47ct~\xcd\xcf\\I~1\x06$\x1fw,|,:\x92v&\xf9qO\x92QtW\x98\x82]\xacr\x9e9z\xb7\xcb \xa2b5\x81=\x0fj\xbc\x82H\x88o\nD\x87N\"\x9cg\xe6%\xefAZ3j\x85\xd2拳\"=\x15\xfbD\xa0b\xb426\xf1\x94o\x01D\x9cp4\x04\x033Ȏ-\xec\x1f\x82\xc8\xf8\xcfC\x10t\xcb\xeb\xf6\x8d\xf6\xa63\x8cyJ\xcf3\xbfA\xb0:\x03E\x8c=\xc8\x1e\xa7}\xdaq\xc5Q\xa9v\xadC#3\xe2i\xd5\a\xd6^\x16\xa3\xf3r\x8b\xed\xd0\xe9\xe0\x84w\xc9S\xda3\xc9#v\xac\x81\xc3Ŵ\xf9w>\x146\xd0H\xf2\"\xa7\x8eI\xac\xa1_t\xd2\xfb\x82F\xe0x\t\x15\xfe=\blV\x94\xeev(\x11\x95v\x9e\xf9A:\x13zW\x10\xa2\xdf\xe9\xe4\xcc\x00\xd7\x17k\ad\a\x96\tfY\xa9#\xf3\x9bD\xe0\xdc\xe8>:\xe4Zv\x84\xd6\x1f\x1c\xe0\xfe^\x9b\x97 Y\x11\xda\xcd\vM\xaa\xfb\x91\x05\x91\xd7\x12\xf9\x13x\xfbB\x91oX\x91\xb6v\xab8\x85\xb7\x8biq\xc9\x11\xa5\x14ܐ\xf1\x88R\xce\xed\v͏z\x90`n\xd5M\x8a\x95\x03'\xeeC\xf9\xe7\xfe\xa4\x8c=\xf8;axX\xach\xba\xcbl]\x1e\x93\x86\xbau\xe3z\n\xb0\xd8z\xff\x00\x00\x00\xff\xff"))
 }

@@ -13,6 +13,7 @@ import (
 
 	"github.com/davecgh/go-spew/spew"
 	"golang.org/x/sync/errgroup"
+	"miren.dev/runtime/api/entityserver"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/components/coordinate"
 	"miren.dev/runtime/components/ipalloc"
@@ -119,6 +120,12 @@ func Dev(ctx *Context, opts struct {
 		return sub, nil
 	})
 
+	reg.ProvideName("router-address", func(opts struct {
+		Sub *netdb.Subnet `asm:"subnet"`
+	}) (netip.Addr, error) {
+		return opts.Sub.Router().Addr(), nil
+	})
+
 	// Setup the core services on the coordinator address for dev
 
 	/*
@@ -152,6 +159,9 @@ func Dev(ctx *Context, opts struct {
 	}
 
 	eac := entityserver_v1alpha.NewEntityAccessClient(client)
+	ec := entityserver.NewClient(ctx.Log, eac)
+
+	reg.Register("hl-entity-client", ec)
 
 	ipa := ipalloc.NewAllocator(ctx.Log, subnets)
 	eg.Go(func() error {
@@ -194,9 +204,20 @@ func Dev(ctx *Context, opts struct {
 		}
 	}()
 
-	regAddr, err := ocireg.SetupReg(ctx, ctx.Log, eac)
+	var registry ocireg.Registry
+	err = reg.Populate(&registry)
 	if err != nil {
-		ctx.Log.Error("failed to setup OCI registry", "error", err)
+		ctx.Log.Error("failed to populate OCI registry", "error", err)
+		return err
+	}
+
+	registry.Start(ctx, ":5000")
+
+	var regAddr netip.Addr
+
+	err = reg.ResolveNamed(&regAddr, "router-address")
+	if err != nil {
+		ctx.Log.Error("failed to resolve router address", "error", err)
 		return err
 	}
 
