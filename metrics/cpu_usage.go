@@ -6,7 +6,6 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/davecgh/go-spew/spew"
 	"miren.dev/runtime/pkg/asm/autoreg"
 	"miren.dev/runtime/pkg/units"
 )
@@ -44,8 +43,6 @@ CREATE TABLE IF NOT EXISTS cpu_usage (
 }
 
 func (m *CPUUsage) RecordUsage(ctx context.Context, entity string, windowStart, windowEnd time.Time, cpuUsec units.Microseconds, attrs map[string]string) error {
-	spew.Dump(windowStart, windowStart.UnixMicro(), windowEnd, windowEnd.UnixMicro())
-
 	_, err := m.DB.ExecContext(ctx, `
     INSERT INTO cpu_usage 
       (timestamp, window_end, entity, cpu_usec, attributes)

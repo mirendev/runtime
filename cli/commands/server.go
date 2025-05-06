@@ -7,11 +7,9 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"time"
 
 	containerd "github.com/containerd/containerd/v2/client"
-	"miren.dev/runtime/server"
 )
 
 func Server(ctx *Context, opts struct {
@@ -60,42 +58,45 @@ func Server(ctx *Context, opts struct {
 			time.Sleep(100 * time.Millisecond)
 		}
 	}
+	/*
 
-	var server server.Server
+		var server server.Server
 
-	err := ctx.Server.Populate(&server)
-	if err != nil {
-		return fmt.Errorf("populating server: %w", err)
-	}
-
-	err = server.Setup(ctx)
-	if err != nil {
-		return fmt.Errorf("setting up server: %w", err)
-	}
-
-	if opts.Local != "" {
-		dir := filepath.Dir(opts.Local)
-
-		err := os.MkdirAll(dir, 0755)
+		err := ctx.Server.Populate(&server)
 		if err != nil {
-			return err
+			return fmt.Errorf("populating server: %w", err)
 		}
 
-		path := filepath.Join(dir, "clientconfig.yaml")
-
-		ctx.Log.Info("writing config file for local server", "path", path)
-
-		cfg, err := server.LocalConfig()
+		err = server.Setup(ctx)
 		if err != nil {
-			return err
+			return fmt.Errorf("setting up server: %w", err)
 		}
 
-		err = cfg.SaveTo(path)
-		if err != nil {
-			return err
-		}
-	}
+		if opts.Local != "" {
+			dir := filepath.Dir(opts.Local)
 
-	err = server.Run(ctx.Context)
-	return err
+			err := os.MkdirAll(dir, 0755)
+			if err != nil {
+				return err
+			}
+
+			path := filepath.Join(dir, "clientconfig.yaml")
+
+			ctx.Log.Info("writing config file for local server", "path", path)
+
+			cfg, err := server.LocalConfig()
+			if err != nil {
+				return err
+			}
+
+			err = cfg.SaveTo(path)
+			if err != nil {
+				return err
+			}
+		}
+
+		err = server.Run(ctx.Context)
+		return err
+	*/
+	return fmt.Errorf("server not implemented yet")
 }

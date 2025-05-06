@@ -17,20 +17,9 @@ import (
 	containerd "github.com/containerd/containerd/v2/client"
 	"github.com/jackc/pgx/v5/pgxpool"
 	buildkit "github.com/moby/buildkit/client"
-	"miren.dev/runtime/app"
-	"miren.dev/runtime/build"
-	"miren.dev/runtime/build/launch"
-	"miren.dev/runtime/discovery"
-	"miren.dev/runtime/health"
-	"miren.dev/runtime/image"
-	"miren.dev/runtime/ingress"
-	"miren.dev/runtime/lease"
 	"miren.dev/runtime/observability"
 	"miren.dev/runtime/pkg/asm"
 	"miren.dev/runtime/pkg/asm/autoreg"
-	"miren.dev/runtime/run"
-	"miren.dev/runtime/server"
-	"miren.dev/runtime/shell"
 )
 
 func addCommands(cmds map[string]cli.CommandFactory) {
@@ -185,58 +174,6 @@ func (c *Context) setupServerComponents(ctx context.Context, reg *asm.Registry) 
 
 	reg.Provide(func() *observability.StatusMonitor {
 		return &observability.StatusMonitor{}
-	})
-
-	reg.Provide(func() *build.Buildkit {
-		return &build.Buildkit{}
-	})
-
-	reg.Provide(func() *build.RPCBuilder {
-		return &build.RPCBuilder{}
-	})
-
-	reg.Provide(func() *launch.LaunchBuildkit {
-		return &launch.LaunchBuildkit{}
-	})
-
-	reg.Provide(func() *run.ContainerRunner {
-		return &run.ContainerRunner{}
-	})
-
-	reg.Provide(func() *app.AppAccess {
-		return &app.AppAccess{}
-	})
-
-	reg.Provide(func() *app.RPCCrud {
-		return &app.RPCCrud{}
-	})
-
-	reg.Provide(func() *shell.RPCShell {
-		return &shell.RPCShell{}
-	})
-
-	reg.Provide(func() *lease.LaunchContainer {
-		return &lease.LaunchContainer{}
-	})
-
-	reg.Provide(func() *image.ImagePruner {
-		return &image.ImagePruner{}
-	})
-
-	reg.Provide(func() *discovery.Containerd {
-		return &discovery.Containerd{}
-	})
-
-	reg.Provide(func() *health.ContainerMonitor {
-		return &health.ContainerMonitor{}
-	})
-
-	reg.Provide(func() *ingress.LeaseHTTP {
-		return &ingress.LeaseHTTP{}
-	})
-
-	reg.Provide(func() *server.RPCAppInfo {
-		return &server.RPCAppInfo{}
 	})
 
 	for _, f := range autoreg.All() {

@@ -2,7 +2,11 @@ package coordinate
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
+	"net"
+	"os"
+	"path/filepath"
 	"time"
 
 	clientv3 "go.etcd.io/etcd/client/v3"
@@ -13,9 +17,11 @@ import (
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	esv1 "miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/api/exec/exec_v1alpha"
+	"miren.dev/runtime/clientconfig"
 	"miren.dev/runtime/components/activator"
 	"miren.dev/runtime/components/netresolve"
 	"miren.dev/runtime/metrics"
+	"miren.dev/runtime/pkg/caauth"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/schema"
 	"miren.dev/runtime/pkg/rpc"
@@ -31,6 +37,7 @@ type CoordinatorConfig struct {
 	Prefix        string              `json:"prefix" yaml:"prefix"`
 	Resolver      netresolve.Resolver `json:"resolver" yaml:"resolver"`
 	TempDir       string              `json:"temp_dir" yaml:"temp_dir"`
+	DataPath      string              `json:"data_path" yaml:"data_path"`
 
 	Mem *metrics.MemoryUsage
 	Cpu *metrics.CPUUsage
@@ -51,16 +58,166 @@ type Coordinator struct {
 	state *rpc.State
 
 	aa activator.AppActivator
+
+	authority *caauth.Authority
+
+	apiCert []byte
+	apiKey  []byte
 }
 
 func (c *Coordinator) Activator() activator.AppActivator {
 	return c.aa
 }
 
+const (
+	day  = 24 * time.Hour
+	year = 365 * day
+)
+
+func (c *Coordinator) LoadCA(ctx context.Context) error {
+	cert := filepath.Join(c.DataPath, "server", "ca.crt")
+	keyPath := filepath.Join(c.DataPath, "server", "ca.key")
+
+	if data, err := os.ReadFile(cert); err == nil {
+		c.Log.Info("loading existing CA", "path", cert)
+
+		key, err := os.ReadFile(keyPath)
+		if err != nil {
+			return fmt.Errorf("missing key for CA: %w", err)
+		}
+
+		ca, err := caauth.LoadFromPEM(data, key)
+		if err != nil {
+			return fmt.Errorf("failed to load CA: %w", err)
+		}
+
+		c.authority = ca
+	} else {
+		c.Log.Info("generating new CA", "path", cert)
+
+		ca, err := caauth.New(caauth.Options{
+			CommonName:   "runtime-server",
+			Organization: "miren",
+			ValidFor:     10 * year,
+		})
+		if err != nil {
+			return fmt.Errorf("failed to generate CA: %w", err)
+		}
+
+		err = os.MkdirAll(filepath.Dir(cert), 0755)
+		if err != nil {
+			return fmt.Errorf("failed to create CA directory: %w", err)
+		}
+
+		cd, kd, err := ca.ExportPEM()
+		if err != nil {
+			return fmt.Errorf("failed to export CA: %w", err)
+		}
+
+		err = os.WriteFile(cert, cd, 0644)
+		if err != nil {
+			return fmt.Errorf("failed to write CA cert: %w", err)
+		}
+
+		err = os.WriteFile(keyPath, kd, 0600)
+		if err != nil {
+			return fmt.Errorf("failed to write CA key: %w", err)
+		}
+
+		c.authority = ca
+	}
+
+	return nil
+}
+
+func (c *Coordinator) LoadAPICert(ctx context.Context) error {
+	cert := filepath.Join(c.DataPath, "server", "api.crt")
+	keyPath := filepath.Join(c.DataPath, "server", "api.key")
+
+	if data, err := os.ReadFile(cert); err == nil {
+		c.Log.Info("loading existing API cert", "path", cert)
+
+		key, err := os.ReadFile(keyPath)
+		if err != nil {
+			return fmt.Errorf("missing key for API cert: %w", err)
+		}
+
+		c.apiCert = data
+		c.apiKey = key
+		return nil
+	}
+
+	c.Log.Info("generating new API cert", "path", cert)
+
+	cc, err := c.authority.IssueCertificate(caauth.Options{
+		CommonName:   "runtime-api",
+		Organization: "miren",
+		ValidFor:     1 * year,
+		IPs: []net.IP{
+			net.ParseIP("127.0.0.1"),
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("failed to generate API cert: %w", err)
+	}
+
+	err = os.MkdirAll(filepath.Dir(cert), 0755)
+	if err != nil {
+		return fmt.Errorf("failed to create API directory: %w", err)
+	}
+
+	err = os.WriteFile(cert, cc.CertPEM, 0644)
+	if err != nil {
+		return fmt.Errorf("failed to write API cert: %w", err)
+	}
+
+	err = os.WriteFile(keyPath, cc.KeyPEM, 0600)
+	if err != nil {
+		return fmt.Errorf("failed to write API key: %w", err)
+	}
+
+	c.apiCert = cc.CertPEM
+	c.apiKey = cc.KeyPEM
+
+	return nil
+}
+
+func (c *Coordinator) LocalConfig() (*clientconfig.Config, error) {
+	cc, err := c.authority.IssueCertificate(caauth.Options{
+		CommonName:   "runtime-user",
+		Organization: "miren",
+		ValidFor:     1 * year,
+	})
+
+	if err != nil {
+		return nil, err
+	}
+
+	return clientconfig.Local(cc, c.authority.GetCACertificate()), nil
+}
+
 func (c *Coordinator) Start(ctx context.Context) error {
 	c.Log.Info("starting coordinator", "address", c.Address, "etcd_endpoints", c.EtcdEndpoints, "prefix", c.Prefix)
 
-	rs, err := rpc.NewState(ctx, rpc.WithSkipVerify, rpc.WithBindAddr(c.Address))
+	err := c.LoadCA(ctx)
+	if err != nil {
+		c.Log.Error("failed to load CA", "error", err)
+		return err
+	}
+
+	err = c.LoadAPICert(ctx)
+	if err != nil {
+		c.Log.Error("failed to load CA", "error", err)
+		return err
+	}
+
+	rs, err := rpc.NewState(ctx,
+		rpc.WithSkipVerify,
+		//rpc.WithCertPEMs(c.apiCert, c.apiKey),
+		//rpc.WithCertificateVerification(c.authority.GetCACertificate()),
+		rpc.WithBindAddr(c.Address),
+		rpc.WithLogger(c.Log),
+	)
 	if err != nil {
 		c.Log.Error("failed to create RPC server", "error", err)
 		return err

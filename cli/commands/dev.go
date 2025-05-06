@@ -34,6 +34,7 @@ func Dev(ctx *Context, opts struct {
 	EtcdEndpoints []string `short:"e" long:"etcd" description:"Etcd endpoints" default:"http://etcd:2379"`
 	EtcdPrefix    string   `short:"p" long:"etcd-prefix" description:"Etcd prefix" default:"/miren"`
 	RunnerId      string   `short:"r" long:"runner-id" description:"Runner ID" default:"dev"`
+	DataPath      string   `short:"d" long:"data-path" description:"Data path" default:"/var/lib/miren"`
 }) error {
 	eg, sub := errgroup.WithContext(ctx)
 
