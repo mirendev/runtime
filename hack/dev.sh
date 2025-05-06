@@ -28,6 +28,9 @@ version = 2
   runtime_type = "io.containerd.runsc.v1"
 [plugins."io.containerd.grpc.v1.cri".containerd.runtimes.miren]
   runtime_type = "io.containerd.runsc.v1"
+
+[metrics]
+  address = "127.0.0.1:1338"
 EOF
 
 cat <<EOF > /etc/containerd/runsc.toml
@@ -54,6 +57,16 @@ cd /src
 make bin/runtime
 
 ln -s `pwd`/bin/runtime /bin/r
+
+mkdir -p ~/.config/runtime
+
+cat > ~/.config/runtime/clientconfig.yaml <<EOF
+clusters:
+  local:
+    hostname: localhost
+    insecure: true
+active_cluster: local
+EOF
 
 echo "Cleaning runtime namespace to begin..."
 r debug ctr nuke -n runtime

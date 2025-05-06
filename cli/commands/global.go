@@ -361,10 +361,14 @@ func (c *Context) RPCClient(name string) (*rpc.NetworkClient, error) {
 	opts = append(opts, rpc.WithLogger(c.Log))
 
 	if c.ClusterConfig != nil {
-		opts = append(opts,
-			rpc.WithCertPEMs([]byte(c.ClusterConfig.ClientCert), []byte(c.ClusterConfig.ClientKey)),
-			rpc.WithCertificateVerification([]byte(c.ClusterConfig.CACert)),
-		)
+		if c.ClusterConfig.Insecure {
+			opts = append(opts, rpc.WithSkipVerify)
+		} else {
+			opts = append(opts,
+				rpc.WithCertPEMs([]byte(c.ClusterConfig.ClientCert), []byte(c.ClusterConfig.ClientKey)),
+				rpc.WithCertificateVerification([]byte(c.ClusterConfig.CACert)),
+			)
+		}
 	} else {
 		opts = append(opts, rpc.WithSkipVerify)
 	}

@@ -3,6 +3,7 @@ package build
 import (
 	"context"
 	"log/slog"
+	"maps"
 
 	"github.com/containerd/containerd/v2/client"
 	buildkit "github.com/moby/buildkit/client"
@@ -11,6 +12,7 @@ import (
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/pkg/computex"
 	"miren.dev/runtime/pkg/entity"
+	"miren.dev/runtime/pkg/entity/types"
 	"miren.dev/runtime/pkg/idgen"
 )
 
@@ -28,10 +30,24 @@ type RunningBuildkit struct {
 }
 
 type launchOptions struct {
-	cacheDir string
+	logEntity string
+	cacheDir  string
+	attrs     map[string]string
 }
 
 type LaunchOption func(*launchOptions)
+
+func WithLogEntity(logEntity string) LaunchOption {
+	return func(lo *launchOptions) {
+		lo.logEntity = logEntity
+	}
+}
+
+func WithLogAttrs(attrs map[string]string) LaunchOption {
+	return func(lo *launchOptions) {
+		lo.attrs = maps.Clone(attrs)
+	}
+}
 
 func (l *LaunchBuildkit) generateConfig() string {
 	str := `
@@ -85,6 +101,18 @@ func (l *LaunchBuildkit) Launch(ctx context.Context, addr string, lo ...LaunchOp
 	}
 
 	var sb compute_v1alpha.Sandbox
+	sb.LogEntity = "build"
+	if opts.logEntity != "" {
+		sb.LogEntity = opts.logEntity
+	}
+
+	for k, v := range opts.attrs {
+		sb.LogAttribute = append(sb.LogAttribute, types.Label{
+			Key:   k,
+			Value: v,
+		})
+	}
+
 	sb.StaticHost = append(sb.StaticHost, compute_v1alpha.StaticHost{
 		Host: "cluster.local",
 		Ip:   addr,

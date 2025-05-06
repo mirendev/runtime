@@ -19,9 +19,11 @@ const (
 )
 
 type LogEntry struct {
-	Timestamp time.Time
-	Stream    LogStream
-	Body      string
+	Timestamp  time.Time
+	Stream     LogStream
+	TraceID    string
+	Attributes map[string]string
+	Body       string
 }
 
 type PersistentLogWriter struct {
@@ -29,8 +31,8 @@ type PersistentLogWriter struct {
 }
 
 func (l *PersistentLogWriter) WriteEntry(entity string, le LogEntry) error {
-	_, err := l.DB.Exec("INSERT INTO logs (timestamp, entity, stream, body) VALUES (?, ?, ?, ?)",
-		le.Timestamp.UnixMicro(), entity, le.Stream, le.Body)
+	_, err := l.DB.Exec("INSERT INTO logs (timestamp, entity, stream, trace_id, attributes, body) VALUES (?, ?, ?, ?, ?, ?)",
+		le.Timestamp.UnixMicro(), entity, le.Stream, le.TraceID, le.Attributes, le.Body)
 	return err
 }
 
@@ -39,7 +41,7 @@ type PersistentLogReader struct {
 }
 
 func (l *PersistentLogReader) Read(ctx context.Context, id string) ([]LogEntry, error) {
-	rows, err := l.DB.QueryContext(ctx, "SELECT timestamp, body FROM logs WHERE entity = ?", id)
+	rows, err := l.DB.QueryContext(ctx, "SELECT timestamp, body, trace_id, attributes FROM logs WHERE entity = ?", id)
 	if err != nil {
 		return nil, err
 	}
@@ -48,7 +50,7 @@ func (l *PersistentLogReader) Read(ctx context.Context, id string) ([]LogEntry, 
 
 	for rows.Next() {
 		var e LogEntry
-		err := rows.Scan(&e.Timestamp, &e.Body)
+		err := rows.Scan(&e.Timestamp, &e.Body, &e.TraceID, &e.Attributes)
 		if err != nil {
 			return nil, err
 		}
@@ -71,11 +73,19 @@ CREATE TABLE IF NOT EXISTS logs
     timestamp DateTime64(6) CODEC(Delta(8), ZSTD(1)),
     entity LowCardinality(String) CODEC(ZSTD(1)),
 		stream Enum8('stdout' = 1, 'stderr' = 2, 'error' = 3, 'user-oob' = 4) CODEC(ZSTD(1)),
-    body String CODEC(ZSTD(1))
+    trace_id String CODEC(ZSTD(1)),
+		attributes Map(LowCardinality(String), String) CODEC(ZSTD(1)),
+    body String CODEC(ZSTD(1)),
+    INDEX idx_trace_id trace_id TYPE bloom_filter(0.001) GRANULARITY 1,
+    INDEX idx_attr_key mapKeys(attributes) TYPE bloom_filter(0.01) GRANULARITY 1,
+    INDEX idx_attr_value mapValues(attributes) TYPE bloom_filter(0.01) GRANULARITY 1,
+    INDEX idx_body body TYPE tokenbf_v1(32768, 3, 0) GRANULARITY 1
 )
 ENGINE = MergeTree
 PARTITION BY toDate(timestamp)
-ORDER BY (timestamp, entity, stream)
+ORDER BY (entity, toUnixTimestamp(timestamp), trace_id)
+TTL toDateTime(timestamp) + toIntervalDay(30)
+SETTINGS ttl_only_drop_parts = 1
 `)
 
 	return err
@@ -139,7 +149,7 @@ func (l *LogReader) Read(ctx context.Context, id string, opts ...LogReaderOption
 
 	if !o.From.IsZero() {
 		rows, err = l.DB.QueryContext(ctx,
-			`SELECT timestamp, stream, body
+			`SELECT timestamp, stream, body, trace_id, attributes
 			   FROM logs
 			  WHERE entity = ? AND timestamp >= '?'
 			  ORDER BY timestamp ASC
@@ -149,7 +159,7 @@ func (l *LogReader) Read(ctx context.Context, id string, opts ...LogReaderOption
 		}
 	} else {
 		rows, err = l.DB.QueryContext(ctx,
-			`SELECT timestamp, stream, body
+			`SELECT timestamp, stream, body, trace_id, attributes
 			   FROM logs
 			  WHERE entity = ?
 			  ORDER BY timestamp ASC
@@ -163,7 +173,7 @@ func (l *LogReader) Read(ctx context.Context, id string, opts ...LogReaderOption
 
 	for rows.Next() {
 		var e LogEntry
-		err := rows.Scan(&e.Timestamp, &e.Stream, &e.Body)
+		err := rows.Scan(&e.Timestamp, &e.Stream, &e.Body, &e.TraceID, &e.Attributes)
 		if err != nil {
 			rows.Close()
 			return nil, err
@@ -178,8 +188,6 @@ func (l *LogReader) Read(ctx context.Context, id string, opts ...LogReaderOption
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-
-	return entries, nil
 
 	return entries, nil
 }

@@ -2,6 +2,7 @@ package sandbox
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -70,13 +71,14 @@ type SandboxController struct {
 	DataPath string `asm:"data-path"`
 	Tempdir  string `asm:"tempdir"`
 
-	LogsMaintainer   *observability.LogsMaintainer
-	ResourcesMonitor *observability.ResourcesMonitor
+	LogsMaintainer *observability.LogsMaintainer
 
 	RunscMon  *observability.RunSCMonitor
 	StatusMon *observability.StatusMonitor
 
-	Resolver netresolve.Resolver
+	Resolver   netresolve.Resolver
+	Clickhouse *sql.DB `asm:"clickhouse"`
+	Metrics    *Metrics
 
 	topCtx context.Context
 	cancel func()
@@ -246,11 +248,6 @@ func (c *SandboxController) Init(ctx context.Context) error {
 		return err
 	}
 
-	err = c.ResourcesMonitor.Setup(ctx)
-	if err != nil {
-		return err
-	}
-
 	c.topCtx, c.cancel = context.WithCancel(ctx)
 
 	c.cond = sync.NewCond(&c.mu)
@@ -262,6 +259,8 @@ func (c *SandboxController) Init(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+
+	go c.Metrics.Monitor(c.topCtx)
 
 	return nil
 }
@@ -575,24 +574,40 @@ func (c *SandboxController) createSandbox(ctx context.Context, co *compute.Sandb
 		return err
 	}
 
-	waitPorts, err := c.bootContainers(ctx, co, ep, int(task.Pid()))
+	rootSpec, err := container.Spec(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to get container spec: %w", err)
+	}
+
+	cgroups := map[string]string{
+		"": rootSpec.Linux.CgroupsPath,
+	}
+
+	waitPorts, err := c.bootContainers(ctx, co, ep, int(task.Pid()), cgroups)
 	if err != nil {
 		return err
 	}
 
-	cgroupPath, err := observability.CGroupPathForPid(task.Pid())
-	if err != nil {
-		c.Log.Error("failed to get cgroup path", "pid", task.Pid(), "err", err)
-	} else {
-		c.enterMonitor()
+	le := co.LogEntity
+	if le == "" {
+		le = co.ID.String()
+	}
 
-		go func() {
-			defer c.exitMonitor()
-			err := c.ResourcesMonitor.Monitor(c.topCtx, cid, cgroupPath)
-			if err != nil {
-				c.Log.Error("failed to monitor container resources", "id", co.ID, "err", err)
-			}
-		}()
+	attrs := map[string]string{
+		"sandbox": co.ID.String(),
+	}
+
+	if co.Version != "" {
+		attrs["version"] = co.Version.String()
+	}
+
+	for _, lbl := range co.LogAttribute {
+		attrs[lbl.Key] = lbl.Value
+	}
+
+	err = c.Metrics.Add(le, cgroups, attrs)
+	if err != nil {
+		return err
 	}
 
 	c.Log.Info("sanbox started", "id", co.ID, "namespace", c.Namespace)
@@ -960,15 +975,47 @@ func (c *SandboxController) writeResolve(path string, ep *network.EndpointConfig
 	return nil
 }
 
+func (c *SandboxController) logConsumer(sb *compute.Sandbox, container string) *SandboxLogs {
+	le := sb.LogEntity
+	if le == "" {
+		le = sb.ID.String()
+	}
+
+	lw := &observability.PersistentLogWriter{
+		DB: c.Clickhouse,
+	}
+
+	attrs := map[string]string{
+		"sandbox": sb.ID.String(),
+	}
+
+	if container != "" {
+		attrs["container"] = container
+	}
+
+	if sb.Version != "" {
+		attrs["version"] = sb.Version.String()
+	}
+
+	for _, lbl := range sb.LogAttribute {
+		attrs[lbl.Key] = lbl.Value
+	}
+
+	return NewSandboxLogs(c.Log, le, attrs, lw)
+}
+
 func (c *SandboxController) bootInitialTask(
 	ctx context.Context,
-	co *compute.Sandbox,
+	sb *compute.Sandbox,
 	ep *network.EndpointConfig,
 	container containerd.Container,
 ) (containerd.Task, error) {
 	c.Log.Info("booting sandbox task")
 
-	task, err := container.NewTask(ctx, cio.NullIO)
+	sl := c.logConsumer(sb, "")
+
+	task, err := container.NewTask(ctx, cio.NewCreator(
+		cio.WithStreams(nil, sl, sl.Stderr())))
 	if err != nil {
 		return nil, err
 	}
@@ -983,7 +1030,7 @@ func (c *SandboxController) bootInitialTask(
 		return nil, err
 	}
 
-	err = c.configureFirewall(co, ep)
+	err = c.configureFirewall(sb, ep)
 	if err != nil {
 		return nil, err
 	}
@@ -1006,6 +1053,7 @@ func (c *SandboxController) bootContainers(
 	sb *compute.Sandbox,
 	ep *network.EndpointConfig,
 	sbPid int,
+	cgroups map[string]string,
 ) ([]waitPort, error) {
 	c.Log.Info("booting containers", "count", len(sb.Container))
 
@@ -1030,12 +1078,22 @@ func (c *SandboxController) bootContainers(
 
 		c.Log.Info("creating container", "id", id)
 
-		container, err := c.CC.NewContainer(ctx, id, opts...)
+		cc, err := c.CC.NewContainer(ctx, id, opts...)
 		if err != nil {
 			return nil, errors.Wrapf(err, "failed to create container %s", sb.ID)
 		}
 
-		task, err := container.NewTask(ctx, cio.NewCreator(cio.WithStdio))
+		spec, err := cc.Spec(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get container spec: %w", err)
+		}
+
+		cgroups[container.Name] = spec.Linux.CgroupsPath
+
+		sl := c.logConsumer(sb, container.Name)
+
+		task, err := cc.NewTask(ctx, cio.NewCreator(
+			cio.WithStreams(nil, sl, sl.Stderr())))
 		if err != nil {
 			return nil, err
 		}
@@ -1045,7 +1103,7 @@ func (c *SandboxController) bootContainers(
 			return nil, err
 		}
 
-		c.Log.Info("container started", "id", container.ID())
+		c.Log.Info("container started", "id", cc.ID())
 	}
 
 	return ret, nil
@@ -1443,6 +1501,13 @@ func (c *SandboxController) stopSandbox(ctx context.Context, sb *compute.Sandbox
 	}
 
 	c.Log.Info("sandbox retired", "id", sb.ID, "status", compute.DEAD)
+
+	le := sb.LogEntity
+	if le == "" {
+		le = sb.ID.String()
+	}
+
+	c.Metrics.Remove(le)
 
 	return nil
 }

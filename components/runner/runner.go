@@ -10,6 +10,7 @@ import (
 	"miren.dev/runtime/api/entityserver"
 	es "miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/api/exec/exec_v1alpha"
+	"miren.dev/runtime/api/metric/metric_v1alpha"
 	"miren.dev/runtime/api/network/network_v1alpha"
 	"miren.dev/runtime/controllers/sandbox"
 	"miren.dev/runtime/controllers/service"
@@ -91,7 +92,7 @@ func (r *Runner) Start(ctx context.Context) error {
 
 	ec := entityserver.NewClient(r.Log, eas)
 
-	cm, err := r.SetupControllers(ctx, eas)
+	cm, err := r.SetupControllers(ctx, eas, rs.Server())
 	if err != nil {
 		return err
 	}
@@ -151,6 +152,7 @@ func (r *Runner) setupEntity(ctx context.Context, ec *entityserver.Client) error
 func (r *Runner) SetupControllers(
 	ctx context.Context,
 	eas *es.EntityAccessClient,
+	rs *rpc.Server,
 ) (
 	*controller.ControllerManager,
 	error,
@@ -163,6 +165,8 @@ func (r *Runner) SetupControllers(
 	if err := r.reg.Populate(&sbc); err != nil {
 		return nil, err
 	}
+
+	rs.ExposeValue("dev.miren.runtime/sandbox.metrics", metric_v1alpha.AdaptSandboxMetrics(sbc.Metrics))
 
 	var serviceController service.ServiceController
 	if err := r.reg.Populate(&serviceController); err != nil {

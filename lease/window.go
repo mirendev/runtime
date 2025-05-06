@@ -123,7 +123,7 @@ func (c *ContainerStatsTracker) writeContainerStats(ctx context.Context, rc *run
 
 	rc.usage += usage
 
-	err = c.CPUUsage.RecordUsage(ctx, rc.app, start, wallEnd, usage)
+	err = c.CPUUsage.RecordUsage(ctx, rc.app, start, wallEnd, usage, nil)
 	if err != nil {
 		return err
 	}
@@ -135,7 +135,7 @@ func (c *ContainerStatsTracker) writeContainerStats(ctx context.Context, rc *run
 	if err != nil {
 		c.Log.Error("failed to read memory usage", "err", err)
 	} else {
-		err = c.MemUsage.RecordUsage(ctx, rc.app, wallEnd, mem)
+		err = c.MemUsage.RecordUsage(ctx, rc.app, wallEnd, mem, nil)
 		if err != nil {
 			c.Log.Error("failed to record memory usage", "err", err)
 		}

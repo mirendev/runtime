@@ -86,6 +86,25 @@ func (l *ListResults) Read(sc SchemaEncoder) error {
 	return nil
 }
 
+func (l *ListResults) Metadata() *core_v1alpha.Metadata {
+	if l.cur == nil {
+		return nil
+	}
+
+	var md core_v1alpha.Metadata
+	md.Decode(l.cur)
+
+	return &md
+}
+
+func (l *ListResults) Entity() *entity.Entity {
+	if l.cur == nil {
+		return nil
+	}
+
+	return l.cur
+}
+
 func (c *Client) List(ctx context.Context, index entity.Attr) (*ListResults, error) {
 	ret, err := c.eac.List(ctx, index)
 	if err != nil {
@@ -253,6 +272,15 @@ func (c *Client) UpdateAttrs(ctx context.Context, id entity.Id, attrs ...any) er
 	}
 
 	_, err := c.eac.Put(ctx, &rpcE2)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (c *Client) Delete(ctx context.Context, id entity.Id) error {
+	_, err := c.eac.Delete(ctx, id.String())
 	if err != nil {
 		return err
 	}

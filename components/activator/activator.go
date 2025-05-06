@@ -151,6 +151,9 @@ func (a *localActivator) activateApp(ctx context.Context, ver *core_v1alpha.AppV
 	var sb compute_v1alpha.Sandbox
 	sb.Version = app.ActiveVersion
 
+	sb.LogEntity = appMD.Name
+	sb.LogAttribute = types.LabelSet("stage", "app-run", "pool", pool, "service", service)
+
 	appCont := compute_v1alpha.Container{
 		Name:  "app",
 		Image: ver.ImageUrl,

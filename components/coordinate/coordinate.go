@@ -6,16 +6,20 @@ import (
 	"time"
 
 	clientv3 "go.etcd.io/etcd/client/v3"
+	"miren.dev/runtime/api/app/app_v1alpha"
 	"miren.dev/runtime/api/build/build_v1alpha"
 	"miren.dev/runtime/api/core/core_v1alpha"
+	aes "miren.dev/runtime/api/entityserver"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	esv1 "miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/api/exec/exec_v1alpha"
 	"miren.dev/runtime/components/activator"
 	"miren.dev/runtime/components/netresolve"
+	"miren.dev/runtime/metrics"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/schema"
 	"miren.dev/runtime/pkg/rpc"
+	"miren.dev/runtime/servers/app"
 	"miren.dev/runtime/servers/build"
 	"miren.dev/runtime/servers/entityserver"
 	execproxy "miren.dev/runtime/servers/exec_proxy"
@@ -27,6 +31,9 @@ type CoordinatorConfig struct {
 	Prefix        string              `json:"prefix" yaml:"prefix"`
 	Resolver      netresolve.Resolver `json:"resolver" yaml:"resolver"`
 	TempDir       string              `json:"temp_dir" yaml:"temp_dir"`
+
+	Mem *metrics.MemoryUsage
+	Cpu *metrics.CPUUsage
 }
 
 func NewCoordinator(log *slog.Logger, cfg CoordinatorConfig) *Coordinator {
@@ -126,6 +133,12 @@ func (c *Coordinator) Start(ctx context.Context) error {
 
 	bs := build.NewBuilder(c.Log, eac, c.Resolver, c.TempDir)
 	server.ExposeValue("dev.miren.runtime/build", build_v1alpha.AdaptBuilder(bs))
+
+	ec := aes.NewClient(c.Log, eac)
+
+	ai := app.NewAppInfo(c.Log, ec, c.Cpu, c.Mem)
+	server.ExposeValue("dev.miren.runtime/app", app_v1alpha.AdaptCrud(ai))
+	server.ExposeValue("dev.miren.runtime/app-status", app_v1alpha.AdaptAppStatus(ai))
 
 	c.Log.Info("started RPC server")
 	return nil

@@ -200,7 +200,9 @@ func (b *Builder) BuildFromTar(ctx context.Context, state *build_v1alpha.Builder
 		return fmt.Errorf("error resolving cluster.local: %w", err)
 	}
 
-	rbk, err := lbk.Launch(ctx, ip.String())
+	rbk, err := lbk.Launch(ctx, ip.String(), WithLogEntity(name), WithLogAttrs(map[string]string{
+		"version": "build",
+	}))
 	if err != nil {
 		return err
 	}

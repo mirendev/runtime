@@ -21,6 +21,7 @@ import (
 	"miren.dev/runtime/components/ocireg"
 	"miren.dev/runtime/components/runner"
 	"miren.dev/runtime/components/scheduler"
+	"miren.dev/runtime/metrics"
 	"miren.dev/runtime/pkg/grunge"
 	"miren.dev/runtime/pkg/netdb"
 	"miren.dev/runtime/pkg/rpc"
@@ -38,15 +39,34 @@ func Dev(ctx *Context, opts struct {
 
 	res, hm := netresolve.NewLocalResolver()
 
+	var (
+		cpu metrics.CPUUsage
+		mem metrics.MemoryUsage
+	)
+
+	err := ctx.Server.Populate(&mem)
+	if err != nil {
+		ctx.Log.Error("failed to populate memory usage", "error", err)
+		return err
+	}
+
+	err = ctx.Server.Populate(&cpu)
+	if err != nil {
+		ctx.Log.Error("failed to populate CPU usage", "error", err)
+		return err
+	}
+
 	co := coordinate.NewCoordinator(ctx.Log, coordinate.CoordinatorConfig{
 		Address:       opts.Address,
 		EtcdEndpoints: opts.EtcdEndpoints,
 		Prefix:        opts.EtcdPrefix,
 		Resolver:      res,
 		TempDir:       os.TempDir(),
+		Mem:           &mem,
+		Cpu:           &cpu,
 	})
 
-	err := co.Start(sub)
+	err = co.Start(sub)
 	if err != nil {
 		ctx.Log.Error("failed to start coordinator", "error", err)
 		return err
