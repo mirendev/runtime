@@ -98,15 +98,15 @@ func WithPhaseUpdates(fn func(phase string)) TransformOptions {
 	}
 }
 
-func WithBuildArg(key, val string) TransformOptions {
-	return func(o *transformOpt) {
-		o.frontendAttrs["build-arg:"+key] = val
-	}
-}
-
 func WithCacheDir(dir string) TransformOptions {
 	return func(o *transformOpt) {
 		o.cacheDir = dir
+	}
+}
+
+func WithBuildArg(key, val string) TransformOptions {
+	return func(o *transformOpt) {
+		o.frontendAttrs["build-arg:"+key] = val
 	}
 }
 
@@ -142,10 +142,14 @@ func (b *Buildkit) Transform(ctx context.Context, dfs fsutil.FS, tos ...Transfor
 	}
 
 	output := client.ExportEntry{
-		Type: "image",
-		Attrs: map[string]string{
-			"push": "true",
-			"name": "registry.cluster:5000/",
+		Type: "oci",
+		Output: func(attrs map[string]string) (io.WriteCloser, error) {
+			if opts.phaseUpdates != nil {
+				opts.phaseUpdates("export")
+			}
+
+			b.Log.Debug("returning oci output value")
+			return &ociWriter{b.Log, w}, nil
 		},
 	}
 
@@ -313,7 +317,7 @@ func (b *Buildkit) BuildImage(
 	ctx context.Context,
 	dfs fsutil.FS,
 	bs BuildStack,
-	name string,
+	getTar func() (io.WriteCloser, error),
 	tos ...TransformOptions,
 ) (*BuildResult, error) {
 	var opts transformOpt
@@ -341,10 +345,7 @@ func (b *Buildkit) BuildImage(
 
 	var def *llb.Definition
 
-	exportAttr := map[string]string{
-		"push": "true",
-		"name": name,
-	}
+	exportAttr := map[string]string{}
 
 	var res BuildResult
 
@@ -386,8 +387,16 @@ func (b *Buildkit) BuildImage(
 	}
 
 	output := client.ExportEntry{
-		Type:  "image",
+		Type:  "oci",
 		Attrs: exportAttr,
+		Output: func(attrs map[string]string) (io.WriteCloser, error) {
+			if opts.phaseUpdates != nil {
+				opts.phaseUpdates("export")
+			}
+
+			b.Log.Debug("returning oci output value")
+			return getTar()
+		},
 	}
 
 	solveOpt.Exports = []client.ExportEntry{output}

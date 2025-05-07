@@ -201,7 +201,7 @@ func (m *Metrics) writeStatsToClickhouse(ctx context.Context) error {
 
 func (m *Metrics) Monitor(ctx context.Context) {
 	m.Log.Debug("start sandbox resource monitoring")
-	ticker := time.NewTicker(10 * time.Second)
+	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
 
 	for {

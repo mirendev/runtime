@@ -4,7 +4,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/buildkite/shellwords"
+	"miren.dev/runtime/pkg/shellwords"
 )
 
 func TestSplitPosix(t *testing.T) {

@@ -98,7 +98,6 @@ func (s *Scheduler) Watch(ctx context.Context, eac *eas.EntityAccessClient) erro
 	index := entity.Ref(entity.EntityKind, compute_v1alpha.KindSandbox)
 
 	_, err := eac.WatchIndex(ctx, index, stream.Callback(func(op *eas.EntityOp) error {
-
 		if op == nil {
 			return nil
 		}
@@ -117,6 +116,10 @@ func (s *Scheduler) Watch(ctx context.Context, eac *eas.EntityAccessClient) erro
 
 		return nil
 	}))
+
+	if err != nil {
+		s.log.Error("failed to watch sandboxes", "error", err)
+	}
 	return err
 }
 

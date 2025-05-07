@@ -14,7 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.etcd.io/etcd/api/v3/mvccpb"
 	clientv3 "go.etcd.io/etcd/client/v3"
-	"miren.dev/runtime/api/entityserver/v1alpha"
+	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/rpc"
 	"miren.dev/runtime/pkg/slogfmt"
@@ -32,16 +32,16 @@ func TestReconcileController_Lifecycle(t *testing.T) {
 		Store: store,
 	}
 
-	sc := &v1alpha.EntityAccessClient{
-		Client: rpc.LocalClient(v1alpha.AdaptEntityAccess(server)),
+	sc := &entityserver_v1alpha.EntityAccessClient{
+		Client: rpc.LocalClient(entityserver_v1alpha.AdaptEntityAccess(server)),
 	}
 
 	testIndex := entity.Any(entity.Type, "test/type")
 
 	handlerCalls := 0
-	handler := func(ctx context.Context, event Event) error {
+	handler := func(ctx context.Context, event Event) ([]entity.Attr, error) {
 		handlerCalls++
-		return nil
+		return nil, nil
 	}
 
 	controller := NewReconcileController(
@@ -76,16 +76,16 @@ func TestReconcileController_EventProcessing(t *testing.T) {
 		Store: store,
 	}
 
-	sc := &v1alpha.EntityAccessClient{
-		Client: rpc.LocalClient(v1alpha.AdaptEntityAccess(server)),
+	sc := &entityserver_v1alpha.EntityAccessClient{
+		Client: rpc.LocalClient(entityserver_v1alpha.AdaptEntityAccess(server)),
 	}
 
 	testIndex := entity.Any(entity.Type, "test/type")
 
 	eventsChan := make(chan Event, 10)
-	handler := func(ctx context.Context, event Event) error {
+	handler := func(ctx context.Context, event Event) ([]entity.Attr, error) {
 		eventsChan <- event
-		return nil
+		return nil, nil
 	}
 
 	controller := NewReconcileController(
@@ -212,8 +212,8 @@ func TestReconcileController_Resync(t *testing.T) {
 		Store: store,
 	}
 
-	sc := &v1alpha.EntityAccessClient{
-		Client: rpc.LocalClient(v1alpha.AdaptEntityAccess(server)),
+	sc := &entityserver_v1alpha.EntityAccessClient{
+		Client: rpc.LocalClient(entityserver_v1alpha.AdaptEntityAccess(server)),
 	}
 
 	testIndex := entity.Any(entity.Type, "test/type")
@@ -229,12 +229,12 @@ func TestReconcileController_Resync(t *testing.T) {
 
 	resyncCalls := 0
 	eventsChan := make(chan Event, 10)
-	handler := func(ctx context.Context, event Event) error {
+	handler := func(ctx context.Context, event Event) ([]entity.Attr, error) {
 		if event.Type == EventUpdated {
 			resyncCalls++
 		}
 		eventsChan <- event
-		return nil
+		return nil, nil
 	}
 
 	controller := NewReconcileController(
@@ -273,18 +273,18 @@ func TestReconcileController_WorkerCount(t *testing.T) {
 		Store: store,
 	}
 
-	sc := &v1alpha.EntityAccessClient{
-		Client: rpc.LocalClient(v1alpha.AdaptEntityAccess(server)),
+	sc := &entityserver_v1alpha.EntityAccessClient{
+		Client: rpc.LocalClient(entityserver_v1alpha.AdaptEntityAccess(server)),
 	}
 
 	testIndex := entity.Any(entity.Type, "test/type")
 
 	var workerIDs sync.Map
-	handler := func(ctx context.Context, event Event) error {
+	handler := func(ctx context.Context, event Event) ([]entity.Attr, error) {
 		// Store the goroutine ID to track unique workers
 		workerIDs.Store(WorkerId(ctx), true)
 		time.Sleep(100 * time.Millisecond) // Simulate work
-		return nil
+		return nil, nil
 	}
 
 	workerCount := 3

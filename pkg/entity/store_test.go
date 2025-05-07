@@ -14,8 +14,9 @@ import (
 
 func setupTestEtcd(t *testing.T) *clientv3.Client {
 	client, err := clientv3.New(clientv3.Config{
-		Endpoints:   []string{"localhost:2379"},
-		DialTimeout: 2 * time.Second,
+		Endpoints:       []string{"etcd:2379"},
+		DialTimeout:     2 * time.Second,
+		MaxUnaryRetries: 2,
 	})
 	require.NoError(t, err)
 

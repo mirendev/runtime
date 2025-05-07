@@ -68,7 +68,7 @@ type townGetHeroArgsData struct {
 }
 
 type TownGetHeroArgs struct {
-	call *rpc.Call
+	call rpc.Call
 	data townGetHeroArgsData
 }
 
@@ -105,7 +105,7 @@ type townGetHeroResultsData struct {
 }
 
 type TownGetHeroResults struct {
-	call *rpc.Call
+	call rpc.Call
 	data townGetHeroResultsData
 }
 
@@ -138,7 +138,7 @@ type townHireHeroArgsData struct {
 }
 
 type TownHireHeroArgs struct {
-	call *rpc.Call
+	call rpc.Call
 	data townHireHeroArgsData
 }
 
@@ -174,7 +174,7 @@ type townHireHeroResultsData struct {
 }
 
 type TownHireHeroResults struct {
-	call *rpc.Call
+	call rpc.Call
 	data townHireHeroResultsData
 }
 
@@ -199,7 +199,7 @@ func (v *TownHireHeroResults) UnmarshalJSON(data []byte) error {
 }
 
 type TownGetHero struct {
-	*rpc.Call
+	rpc.Call
 	args    TownGetHeroArgs
 	results TownGetHeroResults
 }
@@ -225,7 +225,7 @@ func (t *TownGetHero) Results() *TownGetHeroResults {
 }
 
 type TownHireHero struct {
-	*rpc.Call
+	rpc.Call
 	args    TownHireHeroArgs
 	results TownHireHeroResults
 }
@@ -256,7 +256,7 @@ type Town interface {
 }
 
 type reexportTown struct {
-	client *rpc.Client
+	client rpc.Client
 }
 
 func (_ reexportTown) GetHero(ctx context.Context, state *TownGetHero) error {
@@ -267,7 +267,7 @@ func (_ reexportTown) HireHero(ctx context.Context, state *TownHireHero) error {
 	panic("not implemented")
 }
 
-func (t reexportTown) CapabilityClient() *rpc.Client {
+func (t reexportTown) CapabilityClient() rpc.Client {
 	return t.client
 }
 
@@ -277,7 +277,7 @@ func AdaptTown(t Town) *rpc.Interface {
 			Name:          "getHero",
 			InterfaceName: "Town",
 			Index:         0,
-			Handler: func(ctx context.Context, call *rpc.Call) error {
+			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.GetHero(ctx, &TownGetHero{Call: call})
 			},
 		},
@@ -285,7 +285,7 @@ func AdaptTown(t Town) *rpc.Interface {
 			Name:          "hireHero",
 			InterfaceName: "Town",
 			Index:         1,
-			Handler: func(ctx context.Context, call *rpc.Call) error {
+			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.HireHero(ctx, &TownHireHero{Call: call})
 			},
 		},
@@ -295,7 +295,11 @@ func AdaptTown(t Town) *rpc.Interface {
 }
 
 type TownClient struct {
-	*rpc.Client
+	rpc.Client
+}
+
+func NewTownClient(client rpc.Client) *TownClient {
+	return &TownClient{Client: client}
 }
 
 func (c TownClient) Export() Town {
@@ -303,7 +307,7 @@ func (c TownClient) Export() Town {
 }
 
 type TownClientGetHeroResults struct {
-	client *rpc.Client
+	client rpc.Client
 	data   townGetHeroResultsData
 }
 
@@ -336,7 +340,7 @@ func (v TownClient) GetHero(ctx context.Context, name string) (*TownClientGetHer
 }
 
 type TownClientHireHeroResults struct {
-	client *rpc.Client
+	client rpc.Client
 	data   townHireHeroResultsData
 }
 
@@ -370,7 +374,7 @@ type empowerIncreasePowerArgsData struct {
 }
 
 type EmpowerIncreasePowerArgs struct {
-	call *rpc.Call
+	call rpc.Call
 	data empowerIncreasePowerArgsData
 }
 
@@ -406,7 +410,7 @@ type empowerIncreasePowerResultsData struct {
 }
 
 type EmpowerIncreasePowerResults struct {
-	call *rpc.Call
+	call rpc.Call
 	data empowerIncreasePowerResultsData
 }
 
@@ -431,7 +435,7 @@ func (v *EmpowerIncreasePowerResults) UnmarshalJSON(data []byte) error {
 }
 
 type EmpowerIncreasePower struct {
-	*rpc.Call
+	rpc.Call
 	args    EmpowerIncreasePowerArgs
 	results EmpowerIncreasePowerResults
 }
@@ -461,14 +465,14 @@ type Empower interface {
 }
 
 type reexportEmpower struct {
-	client *rpc.Client
+	client rpc.Client
 }
 
 func (_ reexportEmpower) IncreasePower(ctx context.Context, state *EmpowerIncreasePower) error {
 	panic("not implemented")
 }
 
-func (t reexportEmpower) CapabilityClient() *rpc.Client {
+func (t reexportEmpower) CapabilityClient() rpc.Client {
 	return t.client
 }
 
@@ -478,7 +482,7 @@ func AdaptEmpower(t Empower) *rpc.Interface {
 			Name:          "increasePower",
 			InterfaceName: "Empower",
 			Index:         0,
-			Handler: func(ctx context.Context, call *rpc.Call) error {
+			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.IncreasePower(ctx, &EmpowerIncreasePower{Call: call})
 			},
 		},
@@ -488,7 +492,11 @@ func AdaptEmpower(t Empower) *rpc.Interface {
 }
 
 type EmpowerClient struct {
-	*rpc.Client
+	rpc.Client
+}
+
+func NewEmpowerClient(client rpc.Client) *EmpowerClient {
+	return &EmpowerClient{Client: client}
 }
 
 func (c EmpowerClient) Export() Empower {
@@ -496,7 +504,7 @@ func (c EmpowerClient) Export() Empower {
 }
 
 type EmpowerClientIncreasePowerResults struct {
-	client *rpc.Client
+	client rpc.Client
 	data   empowerIncreasePowerResultsData
 }
 

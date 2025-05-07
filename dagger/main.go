@@ -18,6 +18,7 @@ var (
 	arm_runc       = "https://github.com/opencontainers/runc/releases/download/v1.2.2/runc.arm64"
 	arm_runsc      = "https://storage.googleapis.com/gvisor/releases/release/latest/aarch64/runsc"
 	arm_runscshim  = "https://storage.googleapis.com/gvisor/releases/release/latest/aarch64/containerd-shim-runsc-v1"
+	arm_nerdctl    = "https://github.com/containerd/nerdctl/releases/download/v2.0.5/nerdctl-2.0.5-linux-arm64.tar.gz"
 )
 
 var (
@@ -26,9 +27,10 @@ var (
 	amd_runc       = "https://github.com/opencontainers/runc/releases/download/v1.2.2/runc.amd64"
 	amd_runsc      = "https://storage.googleapis.com/gvisor/releases/release/latest/x86_64/runsc"
 	amd_runscshim  = "https://storage.googleapis.com/gvisor/releases/release/latest/x86_64/containerd-shim-runsc-v1"
+	amd_nerdctl    = "https://github.com/containerd/nerdctl/releases/download/v2.0.5/nerdctl-2.0.5-linux-amd64.tar.gz"
 )
 
-var containerd, buildkit, runc, runsc, runscshim string
+var containerd, buildkit, runc, runsc, runscshim, nerdctl string
 
 func init() {
 	if runtime.GOARCH == "arm64" {
@@ -37,12 +39,14 @@ func init() {
 		runc = arm_runc
 		runsc = arm_runsc
 		runscshim = arm_runscshim
+		nerdctl = arm_nerdctl
 	} else {
 		containerd = amd_containerd
 		buildkit = amd_buildkit
 		runc = amd_runc
 		runsc = amd_runsc
 		runscshim = amd_runscshim
+		nerdctl = amd_nerdctl
 	}
 }
 
@@ -111,6 +115,7 @@ func (m *Runtime) BuildEnv(dir *dagger.Directory) *dagger.Container {
 		WithExec([]string{"apt-get", "install", "-y", "iptables", "bash", "iproute2", "inetutils-ping"}).
 		WithFile("/upstream/containerd.tar.gz", dag.HTTP(containerd)).
 		WithFile("/upstream/buildkit.tar.gz", dag.HTTP(buildkit)).
+		WithFile("/upstream/nerdctl.tar.gz", dag.HTTP(nerdctl)).
 		WithFile("/upstream/runc", dag.HTTP(runc), dagger.ContainerWithFileOpts{
 			Permissions: 0755,
 		}).
@@ -126,6 +131,7 @@ func (m *Runtime) BuildEnv(dir *dagger.Directory) *dagger.Container {
 		WithFile("/etc/containerd/config.toml", dir.File("hack/containerd-config.toml")).
 		WithExec([]string{"tar", "-C", "/usr/local", "-xvf", "/upstream/containerd.tar.gz"}).
 		WithExec([]string{"tar", "-C", "/usr/local", "-xvf", "/upstream/buildkit.tar.gz"}).
+		WithExec([]string{"tar", "-C", "/usr/local/bin", "-xvf", "/upstream/nerdctl.tar.gz"}).
 		WithExec([]string{"mv", "/upstream/runc", "/usr/local/bin/runc"}).
 		WithExec([]string{"mv", "/upstream/runsc", "/usr/local/bin/runsc"}).
 		WithExec([]string{"mv", "/upstream/containerd-shim-runsc-v1", "/usr/local/bin/containerd-shim-runsc-v1"}).
@@ -152,6 +158,8 @@ func (m *Runtime) Test(
 	verbose bool,
 	// +optional
 	run string,
+	// +optional
+	fast bool,
 ) (string, error) {
 	w := m.WithServices(dir).
 		WithDirectory("/src", dir).
@@ -186,6 +194,10 @@ func (m *Runtime) Test(
 
 		if verbose {
 			w = w.WithEnvVariable("VERBOSE", "1")
+		}
+
+		if fast {
+			args = append(args, "-failfast")
 		}
 
 		w = w.WithExec(args, dagger.ContainerWithExecOpts{

@@ -16,7 +16,7 @@ import (
 
 	"golang.org/x/exp/rand"
 
-	"github.com/quic-go/webtransport-go"
+	"miren.dev/runtime/pkg/webtransport"
 
 	"github.com/quic-go/quic-go"
 	"github.com/quic-go/quic-go/http3"

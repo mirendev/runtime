@@ -14,7 +14,7 @@ type readerReadArgsData struct {
 }
 
 type ReaderReadArgs struct {
-	call *rpc.NetworkCall
+	call rpc.Call
 	data readerReadArgsData
 }
 
@@ -50,7 +50,7 @@ type readerReadResultsData struct {
 }
 
 type ReaderReadResults struct {
-	call *rpc.NetworkCall
+	call rpc.Call
 	data readerReadResultsData
 }
 
@@ -76,7 +76,7 @@ func (v *ReaderReadResults) UnmarshalJSON(data []byte) error {
 }
 
 type ReaderRead struct {
-	*rpc.NetworkCall
+	rpc.Call
 	args    ReaderReadArgs
 	results ReaderReadResults
 }
@@ -86,8 +86,8 @@ func (t *ReaderRead) Args() *ReaderReadArgs {
 	if args.call != nil {
 		return args
 	}
-	args.call = t.NetworkCall
-	t.NetworkCall.Args(args)
+	args.call = t.Call
+	t.Call.Args(args)
 	return args
 }
 
@@ -96,8 +96,8 @@ func (t *ReaderRead) Results() *ReaderReadResults {
 	if results.call != nil {
 		return results
 	}
-	results.call = t.NetworkCall
-	t.NetworkCall.Results(results)
+	results.call = t.Call
+	t.Call.Results(results)
 	return results
 }
 
@@ -106,14 +106,14 @@ type Reader interface {
 }
 
 type reexportReader struct {
-	client *rpc.NetworkClient
+	client rpc.Client
 }
 
 func (_ reexportReader) Read(ctx context.Context, state *ReaderRead) error {
 	panic("not implemented")
 }
 
-func (t reexportReader) CapabilityClient() *rpc.NetworkClient {
+func (t reexportReader) CapabilityClient() rpc.Client {
 	return t.client
 }
 
@@ -123,8 +123,8 @@ func AdaptReader(t Reader) *rpc.Interface {
 			Name:          "Read",
 			InterfaceName: "Reader",
 			Index:         0,
-			Handler: func(ctx context.Context, call *rpc.NetworkCall) error {
-				return t.Read(ctx, &ReaderRead{NetworkCall: call})
+			Handler: func(ctx context.Context, call rpc.Call) error {
+				return t.Read(ctx, &ReaderRead{Call: call})
 			},
 		},
 	}
@@ -133,15 +133,19 @@ func AdaptReader(t Reader) *rpc.Interface {
 }
 
 type ReaderClient struct {
-	*rpc.NetworkClient
+	rpc.Client
+}
+
+func NewReaderClient(client rpc.Client) *ReaderClient {
+	return &ReaderClient{Client: client}
 }
 
 func (c ReaderClient) Export() Reader {
-	return reexportReader{client: c.NetworkClient}
+	return reexportReader{client: c.Client}
 }
 
 type ReaderClientReadResults struct {
-	client *rpc.NetworkClient
+	client rpc.Client
 	data   readerReadResultsData
 }
 
@@ -162,12 +166,12 @@ func (v ReaderClient) Read(ctx context.Context, count int32) (*ReaderClientReadR
 
 	var ret readerReadResultsData
 
-	err := v.NetworkClient.Call(ctx, "Read", &args, &ret)
+	err := v.Client.Call(ctx, "Read", &args, &ret)
 	if err != nil {
 		return nil, err
 	}
 
-	return &ReaderClientReadResults{client: v.NetworkClient, data: ret}, nil
+	return &ReaderClientReadResults{client: v.Client, data: ret}, nil
 }
 
 type readerAtReadAtArgsData struct {
@@ -176,7 +180,7 @@ type readerAtReadAtArgsData struct {
 }
 
 type ReaderAtReadAtArgs struct {
-	call *rpc.NetworkCall
+	call rpc.Call
 	data readerAtReadAtArgsData
 }
 
@@ -223,7 +227,7 @@ type readerAtReadAtResultsData struct {
 }
 
 type ReaderAtReadAtResults struct {
-	call *rpc.NetworkCall
+	call rpc.Call
 	data readerAtReadAtResultsData
 }
 
@@ -249,7 +253,7 @@ func (v *ReaderAtReadAtResults) UnmarshalJSON(data []byte) error {
 }
 
 type ReaderAtReadAt struct {
-	*rpc.NetworkCall
+	rpc.Call
 	args    ReaderAtReadAtArgs
 	results ReaderAtReadAtResults
 }
@@ -259,8 +263,8 @@ func (t *ReaderAtReadAt) Args() *ReaderAtReadAtArgs {
 	if args.call != nil {
 		return args
 	}
-	args.call = t.NetworkCall
-	t.NetworkCall.Args(args)
+	args.call = t.Call
+	t.Call.Args(args)
 	return args
 }
 
@@ -269,8 +273,8 @@ func (t *ReaderAtReadAt) Results() *ReaderAtReadAtResults {
 	if results.call != nil {
 		return results
 	}
-	results.call = t.NetworkCall
-	t.NetworkCall.Results(results)
+	results.call = t.Call
+	t.Call.Results(results)
 	return results
 }
 
@@ -279,14 +283,14 @@ type ReaderAt interface {
 }
 
 type reexportReaderAt struct {
-	client *rpc.NetworkClient
+	client rpc.Client
 }
 
 func (_ reexportReaderAt) ReadAt(ctx context.Context, state *ReaderAtReadAt) error {
 	panic("not implemented")
 }
 
-func (t reexportReaderAt) CapabilityClient() *rpc.NetworkClient {
+func (t reexportReaderAt) CapabilityClient() rpc.Client {
 	return t.client
 }
 
@@ -296,8 +300,8 @@ func AdaptReaderAt(t ReaderAt) *rpc.Interface {
 			Name:          "ReadAt",
 			InterfaceName: "ReaderAt",
 			Index:         0,
-			Handler: func(ctx context.Context, call *rpc.NetworkCall) error {
-				return t.ReadAt(ctx, &ReaderAtReadAt{NetworkCall: call})
+			Handler: func(ctx context.Context, call rpc.Call) error {
+				return t.ReadAt(ctx, &ReaderAtReadAt{Call: call})
 			},
 		},
 	}
@@ -306,15 +310,19 @@ func AdaptReaderAt(t ReaderAt) *rpc.Interface {
 }
 
 type ReaderAtClient struct {
-	*rpc.NetworkClient
+	rpc.Client
+}
+
+func NewReaderAtClient(client rpc.Client) *ReaderAtClient {
+	return &ReaderAtClient{Client: client}
 }
 
 func (c ReaderAtClient) Export() ReaderAt {
-	return reexportReaderAt{client: c.NetworkClient}
+	return reexportReaderAt{client: c.Client}
 }
 
 type ReaderAtClientReadAtResults struct {
-	client *rpc.NetworkClient
+	client rpc.Client
 	data   readerAtReadAtResultsData
 }
 
@@ -336,12 +344,12 @@ func (v ReaderAtClient) ReadAt(ctx context.Context, count int32, offset int64) (
 
 	var ret readerAtReadAtResultsData
 
-	err := v.NetworkClient.Call(ctx, "ReadAt", &args, &ret)
+	err := v.Client.Call(ctx, "ReadAt", &args, &ret)
 	if err != nil {
 		return nil, err
 	}
 
-	return &ReaderAtClientReadAtResults{client: v.NetworkClient, data: ret}, nil
+	return &ReaderAtClientReadAtResults{client: v.Client, data: ret}, nil
 }
 
 type writerWriteArgsData struct {
@@ -349,7 +357,7 @@ type writerWriteArgsData struct {
 }
 
 type WriterWriteArgs struct {
-	call *rpc.NetworkCall
+	call rpc.Call
 	data writerWriteArgsData
 }
 
@@ -385,7 +393,7 @@ type writerWriteResultsData struct {
 }
 
 type WriterWriteResults struct {
-	call *rpc.NetworkCall
+	call rpc.Call
 	data writerWriteResultsData
 }
 
@@ -410,7 +418,7 @@ func (v *WriterWriteResults) UnmarshalJSON(data []byte) error {
 }
 
 type WriterWrite struct {
-	*rpc.NetworkCall
+	rpc.Call
 	args    WriterWriteArgs
 	results WriterWriteResults
 }
@@ -420,8 +428,8 @@ func (t *WriterWrite) Args() *WriterWriteArgs {
 	if args.call != nil {
 		return args
 	}
-	args.call = t.NetworkCall
-	t.NetworkCall.Args(args)
+	args.call = t.Call
+	t.Call.Args(args)
 	return args
 }
 
@@ -430,8 +438,8 @@ func (t *WriterWrite) Results() *WriterWriteResults {
 	if results.call != nil {
 		return results
 	}
-	results.call = t.NetworkCall
-	t.NetworkCall.Results(results)
+	results.call = t.Call
+	t.Call.Results(results)
 	return results
 }
 
@@ -440,14 +448,14 @@ type Writer interface {
 }
 
 type reexportWriter struct {
-	client *rpc.NetworkClient
+	client rpc.Client
 }
 
 func (_ reexportWriter) Write(ctx context.Context, state *WriterWrite) error {
 	panic("not implemented")
 }
 
-func (t reexportWriter) CapabilityClient() *rpc.NetworkClient {
+func (t reexportWriter) CapabilityClient() rpc.Client {
 	return t.client
 }
 
@@ -457,8 +465,8 @@ func AdaptWriter(t Writer) *rpc.Interface {
 			Name:          "Write",
 			InterfaceName: "Writer",
 			Index:         0,
-			Handler: func(ctx context.Context, call *rpc.NetworkCall) error {
-				return t.Write(ctx, &WriterWrite{NetworkCall: call})
+			Handler: func(ctx context.Context, call rpc.Call) error {
+				return t.Write(ctx, &WriterWrite{Call: call})
 			},
 		},
 	}
@@ -467,15 +475,19 @@ func AdaptWriter(t Writer) *rpc.Interface {
 }
 
 type WriterClient struct {
-	*rpc.NetworkClient
+	rpc.Client
+}
+
+func NewWriterClient(client rpc.Client) *WriterClient {
+	return &WriterClient{Client: client}
 }
 
 func (c WriterClient) Export() Writer {
-	return reexportWriter{client: c.NetworkClient}
+	return reexportWriter{client: c.Client}
 }
 
 type WriterClientWriteResults struct {
-	client *rpc.NetworkClient
+	client rpc.Client
 	data   writerWriteResultsData
 }
 
@@ -496,10 +508,10 @@ func (v WriterClient) Write(ctx context.Context, data []byte) (*WriterClientWrit
 
 	var ret writerWriteResultsData
 
-	err := v.NetworkClient.Call(ctx, "Write", &args, &ret)
+	err := v.Client.Call(ctx, "Write", &args, &ret)
 	if err != nil {
 		return nil, err
 	}
 
-	return &WriterClientWriteResults{client: v.NetworkClient, data: ret}, nil
+	return &WriterClientWriteResults{client: v.Client, data: ret}, nil
 }

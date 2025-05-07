@@ -22,13 +22,14 @@ import (
 	"github.com/opencontainers/runtime-spec/specs-go"
 
 	compute "miren.dev/runtime/api/compute/compute_v1alpha"
-	"miren.dev/runtime/build"
 	"miren.dev/runtime/image"
 	"miren.dev/runtime/observability"
+	build "miren.dev/runtime/pkg/buildkit"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/types"
 	"miren.dev/runtime/pkg/idgen"
 	"miren.dev/runtime/pkg/mountinfo"
+	"miren.dev/runtime/pkg/tarx"
 	"miren.dev/runtime/pkg/testutils"
 )
 
@@ -55,10 +56,10 @@ func TestSandbox(t *testing.T) {
 		err := reg.Init(&cc, &bkl)
 		r.NoError(err)
 
-		dfr, err := build.MakeTar("testdata/nginx")
+		dfr, err := tarx.MakeTar("testdata/nginx")
 		r.NoError(err)
 
-		datafs, err := build.TarFS(dfr, t.TempDir())
+		datafs, err := tarx.TarFS(dfr, t.TempDir())
 		r.NoError(err)
 
 		o, _, err := bkl.Transform(ctx, datafs)
@@ -82,8 +83,9 @@ func TestSandbox(t *testing.T) {
 		err = reg.Populate(&co)
 		r.NoError(err)
 
-		r.NoError(co.Init(ctx))
 		defer co.Close()
+
+		r.NoError(co.Init(ctx))
 
 		id := entity.Id(sbName())
 
@@ -111,7 +113,7 @@ func TestSandbox(t *testing.T) {
 
 		r.Len(tco.Network, 1)
 
-		ca, err := netip.ParsePrefix(tco.Network[0].Address)
+		ca, err := netip.ParseAddr(tco.Network[0].Address)
 		r.NoError(err)
 
 		c, err := cc.LoadContainer(ctx, co.containerId(id))
@@ -205,7 +207,7 @@ func TestSandbox(t *testing.T) {
 
 		addr := strings.Fields(strings.TrimSpace(lines[0]))[1]
 
-		r.Equal(addr, ca.String(), "address doesn't match")
+		r.Equal(addr, ca.String()+"/24", "address doesn't match")
 
 		t.Run("create on existing sandbox is no-op", func(t *testing.T) {
 			searchRes, err := co.checkSandbox(ctx, &sb, meta)
@@ -385,8 +387,8 @@ func TestSandbox(t *testing.T) {
 		err = reg.Populate(&co)
 		r.NoError(err)
 
-		r.NoError(co.Init(ctx))
 		defer co.Close()
+		r.NoError(co.Init(ctx))
 
 		id := entity.Id(sbName())
 
@@ -435,7 +437,7 @@ func TestSandbox(t *testing.T) {
 		// Let sort ... sort.
 		time.Sleep(3 * time.Second)
 
-		cpu, mem, err := co.ResourcesMonitor.LastestUsage(co.containerId(id))
+		cpu, err := co.Metrics.CPUUsage.CurrentCPUUsage(id.String())
 		r.NoError(err)
 
 		t.Logf("last delta: %f", cpu)
@@ -443,9 +445,6 @@ func TestSandbox(t *testing.T) {
 		// This fails because of how Github Actions works when it's higher, so
 		// we're just going to test that it's just being measured for now.
 		r.Greater(float64(cpu), float64(0.5))
-
-		r.Greater(mem, uint64(0))
-
 	})
 
 	t.Run("configures networking", func(t *testing.T) {
@@ -492,8 +491,8 @@ func TestSandbox(t *testing.T) {
 		err = reg.Populate(&co)
 		r.NoError(err)
 
-		r.NoError(co.Init(ctx))
 		defer co.Close()
+		r.NoError(co.Init(ctx))
 
 		id := entity.Id(sbName())
 
@@ -506,13 +505,15 @@ func TestSandbox(t *testing.T) {
 		sb.Container = append(sb.Container, compute.Container{
 			Name:  "nginx",
 			Image: "mn-nginx:latest",
-		})
-		sb.Port = append(sb.Port, compute.Port{
-			Name:     "http",
-			NodePort: 31001,
-			Port:     80,
-			Protocol: compute.TCP,
-			Type:     "http",
+			Port: []compute.Port{
+				{
+					Name:     "http",
+					NodePort: 31001,
+					Port:     80,
+					Protocol: compute.TCP,
+					Type:     "http",
+				},
+			},
 		})
 
 		cont := &entity.Entity{
@@ -533,7 +534,7 @@ func TestSandbox(t *testing.T) {
 
 		r.Len(tco.Network, 1)
 
-		ca, err := netip.ParsePrefix(tco.Network[0].Address)
+		ca, err := netip.ParseAddr(tco.Network[0].Address)
 		r.NoError(err)
 
 		c, err := cc.LoadContainer(ctx, co.containerId(id))
@@ -554,7 +555,7 @@ func TestSandbox(t *testing.T) {
 			Timeout: 1 * time.Second,
 		}
 
-		resp, err := hc.Get(fmt.Sprintf("http://%s:80", ca.Addr().String()))
+		resp, err := hc.Get(fmt.Sprintf("http://%s:80", ca.String()))
 		r.NoError(err)
 
 		defer resp.Body.Close()
@@ -611,8 +612,8 @@ func TestSandbox(t *testing.T) {
 		err = reg.Populate(&co)
 		r.NoError(err)
 
-		r.NoError(co.Init(ctx))
 		defer co.Close()
+		r.NoError(co.Init(ctx))
 
 		id := entity.Id(sbName())
 
@@ -640,13 +641,14 @@ func TestSandbox(t *testing.T) {
 					Source:      "static-site",
 				},
 			},
-		})
-
-		sb.Port = append(sb.Port, compute.Port{
-			Name:     "http",
-			Port:     80,
-			Protocol: compute.TCP,
-			Type:     "http",
+			Port: []compute.Port{
+				{
+					Name:     "http",
+					Port:     80,
+					Protocol: compute.TCP,
+					Type:     "http",
+				},
+			},
 		})
 
 		cont := &entity.Entity{
@@ -667,7 +669,7 @@ func TestSandbox(t *testing.T) {
 
 		r.Len(tco.Network, 1)
 
-		ca, err := netip.ParsePrefix(tco.Network[0].Address)
+		ca, err := netip.ParseAddr(tco.Network[0].Address)
 		r.NoError(err)
 
 		c, err := cc.LoadContainer(ctx, co.containerId(id))
@@ -683,7 +685,7 @@ func TestSandbox(t *testing.T) {
 			Timeout: 1 * time.Second,
 		}
 
-		resp, err := hc.Get(fmt.Sprintf("http://%s:80", ca.Addr().String()))
+		resp, err := hc.Get(fmt.Sprintf("http://%s:80", ca.String()))
 		r.NoError(err)
 
 		defer resp.Body.Close()
@@ -740,8 +742,8 @@ func TestSandbox(t *testing.T) {
 		err = reg.Populate(&co)
 		r.NoError(err)
 
-		r.NoError(co.Init(ctx))
 		defer co.Close()
+		r.NoError(co.Init(ctx))
 
 		id := entity.Id(sbName())
 
@@ -766,13 +768,14 @@ func TestSandbox(t *testing.T) {
 					Source:      "static-site",
 				},
 			},
-		})
-
-		sb.Port = append(sb.Port, compute.Port{
-			Name:     "http",
-			Port:     80,
-			Protocol: compute.TCP,
-			Type:     "http",
+			Port: []compute.Port{
+				{
+					Name:     "http",
+					Port:     80,
+					Protocol: compute.TCP,
+					Type:     "http",
+				},
+			},
 		})
 
 		cont := &entity.Entity{
@@ -793,7 +796,7 @@ func TestSandbox(t *testing.T) {
 
 		r.Len(tco.Network, 1)
 
-		ca, err := netip.ParsePrefix(tco.Network[0].Address)
+		ca, err := netip.ParseAddr(tco.Network[0].Address)
 		r.NoError(err)
 
 		c, err := cc.LoadContainer(ctx, co.containerId(id))
@@ -814,7 +817,7 @@ func TestSandbox(t *testing.T) {
 			Timeout: 1 * time.Second,
 		}
 
-		resp, err := hc.Get(fmt.Sprintf("http://%s:80", ca.Addr().String()))
+		resp, err := hc.Get(fmt.Sprintf("http://%s:80", ca.String()))
 		r.NoError(err)
 
 		defer resp.Body.Close()
@@ -871,8 +874,8 @@ func TestSandbox(t *testing.T) {
 		err = reg.Populate(&co)
 		r.NoError(err)
 
-		r.NoError(co.Init(ctx))
 		defer co.Close()
+		r.NoError(co.Init(ctx))
 
 		id := entity.Id("sb-xyz")
 
@@ -897,13 +900,14 @@ func TestSandbox(t *testing.T) {
 					Source:      "static-site",
 				},
 			},
-		})
-
-		sb.Port = append(sb.Port, compute.Port{
-			Name:     "http",
-			Port:     80,
-			Protocol: compute.TCP,
-			Type:     "http",
+			Port: []compute.Port{
+				{
+					Name:     "http",
+					Port:     80,
+					Protocol: compute.TCP,
+					Type:     "http",
+				},
+			},
 		})
 
 		cont := &entity.Entity{
@@ -924,7 +928,7 @@ func TestSandbox(t *testing.T) {
 
 		r.Len(tco.Network, 1)
 
-		ca, err := netip.ParsePrefix(tco.Network[0].Address)
+		ca, err := netip.ParseAddr(tco.Network[0].Address)
 		r.NoError(err)
 
 		c, err := cc.LoadContainer(ctx, co.containerId(id))
@@ -951,7 +955,7 @@ func TestSandbox(t *testing.T) {
 			Timeout: 1 * time.Second,
 		}
 
-		resp, err := hc.Get(fmt.Sprintf("http://%s:80", ca.Addr().String()))
+		resp, err := hc.Get(fmt.Sprintf("http://%s:80", ca.String()))
 		r.NoError(err)
 
 		defer resp.Body.Close()

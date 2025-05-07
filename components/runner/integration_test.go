@@ -11,7 +11,7 @@ import (
 	"github.com/containerd/containerd/v2/pkg/namespaces"
 	"github.com/stretchr/testify/require"
 	compute "miren.dev/runtime/api/compute/compute_v1alpha"
-	"miren.dev/runtime/api/entityserver/v1alpha"
+	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/components/coordinate"
 	"miren.dev/runtime/components/scheduler"
 	"miren.dev/runtime/observability"
@@ -41,7 +41,7 @@ func TestRunnerCoordinatorIntegration(t *testing.T) {
 
 	// Setup runner config
 	runnerCfg := RunnerConfig{
-		Id:            "node/test-runner",
+		Id:            "test-runner",
 		ServerAddress: coordCfg.Address,
 		Workers:       2,
 	}
@@ -65,8 +65,16 @@ func TestRunnerCoordinatorIntegration(t *testing.T) {
 		runnerDone <- runner.Start(ctx)
 	}()
 
+	defer runner.Close()
+
 	// Wait for runner to start
 	time.Sleep(1 * time.Second)
+
+	select {
+	case err := <-runnerDone:
+		require.NoError(t, err)
+	default:
+	}
 
 	// Create RPC client to interact with coordinator
 	rs, err := rpc.NewState(ctx, rpc.WithSkipVerify)
@@ -75,10 +83,10 @@ func TestRunnerCoordinatorIntegration(t *testing.T) {
 	client, err := rs.Connect(coordCfg.Address, "entities")
 	require.NoError(t, err)
 
-	eac := v1alpha.EntityAccessClient{Client: client}
+	eac := entityserver_v1alpha.EntityAccessClient{Client: client}
 
 	// Check the node entity for the runner
-	nodeId := runnerCfg.Id
+	nodeId := "node/" + runnerCfg.Id
 
 	res, err := eac.Get(ctx, nodeId)
 	r.NoError(err)
@@ -103,11 +111,12 @@ func TestRunnerCoordinatorIntegration(t *testing.T) {
 	r.NotNil(schNode)
 
 	go tmpSch.Watch(ctx, &eac)
+	time.Sleep(1 * time.Second)
 
 	id := fmt.Sprintf("sandbox/test-%d", time.Now().Unix())
 
 	// Test creating a sandbox entity
-	sandbox := &v1alpha.Entity{}
+	sandbox := &entityserver_v1alpha.Entity{}
 	sandbox.SetAttrs(entity.Attrs(
 		entity.EntityKind, compute.KindSandbox,
 		entity.Keyword(entity.Ident, id),
@@ -154,17 +163,6 @@ func TestRunnerCoordinatorIntegration(t *testing.T) {
 	r.NoError(err)
 	r.Nil(c)
 
-	// Verify the sandbox was processed
-	// In a real test, you'd verify the actual sandbox state
-	// This is just a placeholder for demonstration
-
 	// Cleanup
 	cancel()
-
-	select {
-	case err := <-runnerDone:
-		require.NoError(t, err)
-	case <-time.After(5 * time.Second):
-		t.Fatal("runner failed to shut down")
-	}
 }

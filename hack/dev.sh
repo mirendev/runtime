@@ -42,6 +42,9 @@ EOF
 mkdir -p /run/containerd
 containerd --root /data --state /data/state --address /run/containerd/containerd.sock -l trace > /dev/null 2>&1 &
 
+# Handy to build stuff with.
+buildkitd --root /data/buildkit > /dev/null 2>&1 &
+
 mount -t debugfs nodev /sys/kernel/debug
 mount -t tracefs nodev /sys/kernel/debug/tracing
 mount -t tracefs nodev /sys/kernel/tracing
@@ -72,5 +75,6 @@ r debug ctr nuke -n runtime
 
 export HISTFILE=/data/.bash_history
 export HISTIGNORE=exit
+export CONTAINERD_NAMESPACE=runtime
 
 bash

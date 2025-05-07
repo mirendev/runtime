@@ -15,9 +15,6 @@ mkdir -p /data /run
 
 export OTEL_SDK_DISABLED=true
 
-# Compile in the background while containerd starts
-go build -o /bin/containerd-log-ingress ./run/containerd-log-ingress &
-
 cat <<EOF > /etc/containerd/config.toml
 version = 2
 [plugins."io.containerd.runtime.v1.linux"]

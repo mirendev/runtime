@@ -14,11 +14,16 @@ import (
 	"github.com/davecgh/go-spew/spew"
 	"github.com/jackc/pgx/v5/pgxpool"
 	buildkit "github.com/moby/buildkit/client"
+	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
+	"miren.dev/runtime/components/coordinate"
+	"miren.dev/runtime/components/netresolve"
+	"miren.dev/runtime/metrics"
 	"miren.dev/runtime/network"
 	"miren.dev/runtime/pkg/asm"
 	"miren.dev/runtime/pkg/asm/autoreg"
 	"miren.dev/runtime/pkg/idgen"
 	"miren.dev/runtime/pkg/netdb"
+	"miren.dev/runtime/pkg/rpc"
 	"miren.dev/runtime/pkg/slogfmt"
 
 	clickhouse "github.com/ClickHouse/clickhouse-go/v2"
@@ -48,6 +53,14 @@ func Registry(extra ...func(*asm.Registry)) (*asm.Registry, func()) {
 	if err != nil {
 		panic(err)
 	}
+	r.Register("ip4-routable", subnet.Prefix())
+
+	subnets := []netip.Prefix{
+		netip.MustParsePrefix("10.10.0.0/16"),
+		netip.MustParsePrefix("fd47:cafe:d00d::/64"),
+	}
+
+	r.Register("service-prefixes", subnets)
 
 	r.Register("data-path", os.TempDir())
 	r.Register("tempdir", os.TempDir())
@@ -114,7 +127,7 @@ func Registry(extra ...func(*asm.Registry)) (*asm.Registry, func()) {
 			Compression: &clickhouse.Compression{
 				Method: clickhouse.CompressionLZ4,
 			},
-			Debug: true,
+			Debug: false,
 			Debugf: func(format string, v ...interface{}) {
 				opts.Log.Debug(fmt.Sprintf(format, v...))
 			},
@@ -162,6 +175,65 @@ func Registry(extra ...func(*asm.Registry)) (*asm.Registry, func()) {
 		return pool, nil
 	})
 
+	res, hm := netresolve.NewLocalResolver()
+
+	r.Provide(func() netresolve.Resolver {
+		return res
+	})
+
+	r.Provide(func() netresolve.HostMapper {
+		return hm
+	})
+
+	var prefix string
+
+	r.ProvideName("etcd-prefix", func() string {
+		prefix = "/" + idgen.Gen("p")
+		return prefix
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	r.Provide(func(opts struct {
+		CPU    *metrics.CPUUsage
+		Mem    *metrics.MemoryUsage
+		Log    *slog.Logger
+		Prefix string `asm:"etcd-prefix"`
+	}) (*coordinate.Coordinator, error) {
+		co := coordinate.NewCoordinator(opts.Log, coordinate.CoordinatorConfig{
+			EtcdEndpoints: []string{"etcd:2379"},
+			Prefix:        opts.Prefix,
+			Resolver:      res,
+			TempDir:       os.TempDir(),
+			Mem:           opts.Mem,
+			Cpu:           opts.CPU,
+		})
+
+		err = co.Start(ctx)
+		if err != nil {
+			return nil, err
+		}
+
+		return co, nil
+	})
+
+	r.ProvideName("rpc-state", func() (*rpc.State, error) {
+		return rpc.NewState(ctx, rpc.WithSkipVerify)
+	})
+
+	r.Provide(func(opts struct {
+		State *rpc.State `asm:"rpc-state"`
+		Co    *coordinate.Coordinator
+	}) (*entityserver_v1alpha.EntityAccessClient, error) {
+		client, err := opts.State.Connect(opts.Co.ListenAddress(), "entities")
+		if err != nil {
+			return nil, err
+		}
+
+		eac := entityserver_v1alpha.NewEntityAccessClient(client)
+		return eac, nil
+	})
+
 	for _, f := range autoreg.All() {
 		r.Provide(f.Interface())
 	}
@@ -171,6 +243,8 @@ func Registry(extra ...func(*asm.Registry)) (*asm.Registry, func()) {
 	}
 
 	cleanup := func() {
+		cancel()
+
 		if usedClient != nil {
 			NukeNamespace(usedClient, namespace)
 		}

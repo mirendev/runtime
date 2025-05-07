@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/quic-go/webtransport-go"
+	"miren.dev/runtime/pkg/webtransport"
 
 	"github.com/quic-go/quic-go"
 	"github.com/quic-go/quic-go/http3"

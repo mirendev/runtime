@@ -196,6 +196,10 @@ func (c *Coordinator) LocalConfig() (*clientconfig.Config, error) {
 	return clientconfig.Local(cc, c.authority.GetCACertificate()), nil
 }
 
+func (c *Coordinator) ListenAddress() string {
+	return c.state.ListenAddr()
+}
+
 func (c *Coordinator) Start(ctx context.Context) error {
 	c.Log.Info("starting coordinator", "address", c.Address, "etcd_endpoints", c.EtcdEndpoints, "prefix", c.Prefix)
 
@@ -255,7 +259,7 @@ func (c *Coordinator) Start(ctx context.Context) error {
 
 	server.ExposeValue("entities", esv1.AdaptEntityAccess(ess))
 
-	loopback, err := rs.Connect(c.Address, "entities")
+	loopback, err := rs.Connect(rs.ListenAddr(), "entities")
 	if err != nil {
 		c.Log.Error("failed to connect to RPC server", "error", err)
 		return err

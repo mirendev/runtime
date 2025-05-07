@@ -2,10 +2,12 @@ package runner
 
 import (
 	"context"
+	"io"
 	"log/slog"
 	"time"
 
 	containerd "github.com/containerd/containerd/v2/client"
+	"github.com/davecgh/go-spew/spew"
 	"miren.dev/runtime/api/compute/compute_v1alpha"
 	"miren.dev/runtime/api/entityserver"
 	es "miren.dev/runtime/api/entityserver/entityserver_v1alpha"
@@ -18,6 +20,7 @@ import (
 	"miren.dev/runtime/pkg/controller"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/types"
+	"miren.dev/runtime/pkg/multierror"
 	"miren.dev/runtime/pkg/rpc"
 	"miren.dev/runtime/servers/exec"
 )
@@ -53,7 +56,22 @@ type Runner struct {
 	ec *entityserver.Client
 	se *entityserver.Session
 
+	closers []io.Closer
+
 	namespace string
+}
+
+func (r *Runner) Close() error {
+	var err error
+
+	for _, c := range r.closers {
+		xerr := c.Close()
+		if xerr != nil {
+			err = multierror.Append(err, xerr)
+		}
+	}
+
+	return err
 }
 
 func (r *Runner) ContainerdNamespace() string {
@@ -65,6 +83,8 @@ func (r *Runner) ContainerdContainerForSandbox(ctx context.Context, id entity.Id
 	if err != nil {
 		return nil, err
 	}
+
+	spew.Dump(cl)
 
 	for _, c := range cl {
 		if c.Labels["runtime.computer/entity-id"] == string(id) {
@@ -141,10 +161,12 @@ func (r *Runner) setupEntity(ctx context.Context, ec *entityserver.Client) error
 		ApiAddress:  r.ListenAddress,
 	}
 
-	_, err = ec.Create(ctx, r.Id, &node)
+	res, err := ec.Create(ctx, r.Id, &node)
 	if err != nil {
 		return err
 	}
+
+	r.Log.Info("Registered runner", "id", res)
 
 	return nil
 }
@@ -165,6 +187,8 @@ func (r *Runner) SetupControllers(
 	if err := r.reg.Populate(&sbc); err != nil {
 		return nil, err
 	}
+
+	r.closers = append(r.closers, &sbc)
 
 	rs.ExposeValue("dev.miren.runtime/sandbox.metrics", metric_v1alpha.AdaptSandboxMetrics(sbc.Metrics))
 

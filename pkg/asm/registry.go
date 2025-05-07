@@ -46,8 +46,10 @@ var errNoBuilder = errors.New("no builder for type")
 
 func (r *Registry) buildByType(field reflect.Value, tag string) (reflect.Value, error) {
 	for _, v := range r.built {
-		if isAssignableTo(field.Type(), v.val.Type()) {
-			return v.val, nil
+		if tag == "" || tag == v.name {
+			if isAssignableTo(field.Type(), v.val.Type()) {
+				return v.val, nil
+			}
 		}
 	}
 

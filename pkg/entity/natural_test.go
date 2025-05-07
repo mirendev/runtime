@@ -260,7 +260,7 @@ func TestNaturalDecode(t *testing.T) {
 		})
 
 		r.Equal(attrs[0].ID, Id("test/bar"))
-		r.Equal(attrs[0].Value.Any(), timeNow.Local())
+		r.Equal(attrs[0].Value.Any(), timeNow.UTC())
 
 		r.Equal(attrs[1].ID, Id("test/baz"))
 		r.Equal(attrs[1].Value.Any(), 10*time.Second)

@@ -402,7 +402,9 @@ func TestActor(t *testing.T) {
 		r.NoError(err)
 
 		ec, err := clientv3.New(clientv3.Config{
-			Endpoints: []string{"localhost:2379"},
+			Endpoints:       []string{"etcd:2379"},
+			DialTimeout:     2 * time.Second,
+			MaxUnaryRetries: 2,
 		})
 		r.NoError(err)
 

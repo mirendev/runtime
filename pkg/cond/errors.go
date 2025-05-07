@@ -170,7 +170,7 @@ func RemoteError(category, code, message string) error {
 	case "conflict":
 		return Conflict(category, message)
 	case "corruption":
-		return Corruption(category, message)
+		return ErrCorruption{Category: category, Message: message}
 	}
 
 	return ErrRemote{

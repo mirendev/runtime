@@ -1,18 +1,19 @@
-package coordinate
+package coordinate_test
 
 import (
-	"cmp"
 	"context"
 	"log/slog"
 	"os"
-	"slices"
 	"testing"
 	"time"
 
+	"github.com/davecgh/go-spew/spew"
 	"github.com/stretchr/testify/require"
-	"miren.dev/runtime/api/entityserver/v1alpha"
+	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
+	"miren.dev/runtime/components/coordinate"
 	"miren.dev/runtime/observability"
 	"miren.dev/runtime/pkg/entity"
+	"miren.dev/runtime/pkg/entity/types"
 	"miren.dev/runtime/pkg/rpc"
 	"miren.dev/runtime/pkg/testutils"
 
@@ -32,7 +33,7 @@ func TestCoordinatorParse(t *testing.T) {
 	r.NoError(err)
 
 	// Setup coordinator config
-	coordCfg := CoordinatorConfig{
+	coordCfg := coordinate.CoordinatorConfig{
 		Address:       "localhost:9991",          // Use test port
 		EtcdEndpoints: []string{"etcd:2379"},     // Default etcd port
 		Prefix:        "/test/miren/" + t.Name(), // Unique prefix for this test
@@ -43,7 +44,7 @@ func TestCoordinatorParse(t *testing.T) {
 	defer cancel()
 
 	// Start coordinator in background
-	coord := NewCoordinator(log, coordCfg)
+	coord := coordinate.NewCoordinator(log, coordCfg)
 	err = coord.Start(ctx)
 	r.NoError(err)
 
@@ -57,7 +58,7 @@ func TestCoordinatorParse(t *testing.T) {
 	client, err := rs.Connect(coordCfg.Address, "entities")
 	require.NoError(t, err)
 
-	eac := v1alpha.EntityAccessClient{Client: client}
+	eac := entityserver_v1alpha.EntityAccessClient{Client: client}
 
 	data, err := os.ReadFile("testdata/sandbox.yaml")
 	r.NoError(err)
@@ -65,31 +66,58 @@ func TestCoordinatorParse(t *testing.T) {
 	res, err := eac.Parse(ctx, data)
 	r.NoError(err)
 
-	attrs := res.Entity().Attrs()
+	attrs := res.File().Entities()[0].Attrs()
 
-	slices.SortFunc(attrs, func(a, b entity.Attr) int {
-		return cmp.Compare(a.ID, b.ID)
-	})
+	entity.SortedAttrs(attrs)
 
-	r.Len(attrs, 3)
+	r.Len(attrs, 7)
 
-	r.Equal(attrs[0].ID, entity.Id("dev.miren.sandbox/container"))
-	r.Equal(attrs[0].Value.Component(), &entity.EntityComponent{
+	r.Equal(attrs[0].ID, entity.Id("db/ident"))
+	r.Equal(attrs[0].Value.Keyword(), types.Keyword("sandbox/nginx"))
+
+	r.Equal(attrs[1].ID, entity.Id("dev.miren.compute/sandbox.container"))
+
+	spew.Dump(attrs[1].Value.Component().Attrs)
+	r.Equal(attrs[1].Value.Component(), &entity.EntityComponent{
 		Attrs: entity.Attrs(
-			compute.ContainerImageId, "nginx:latest",
+			compute.ContainerImageId, "docker.io/library/nginx:latest",
 			compute.ContainerNameId, "nginx",
+			compute.ContainerPortId, &entity.EntityComponent{
+				Attrs: entity.Attrs(
+					compute.PortNameId, "http",
+					compute.PortPortId, 80,
+					compute.PortTypeId, "http",
+				),
+			},
 		),
 	})
 
-	r.Equal(attrs[1].ID, entity.Id("dev.miren.sandbox/labels"))
-	r.Equal(attrs[1].Value.String(), "app=nginx")
+	r.Equal(attrs[2].ID, entity.Id("dev.miren.compute/sandbox.labels"))
+	r.Equal(attrs[2].Value.String(), "app=nginx")
 
-	r.Equal(attrs[2].ID, entity.Id("dev.miren.sandbox/port"))
-	r.Equal(attrs[2].Value.Component(), &entity.EntityComponent{
-		Attrs: entity.Attrs(
-			compute.PortNameId, "http",
-			compute.PortPortId, 80,
-			compute.PortTypeId, "http",
-		),
+	r.Equal(attrs[3].ID, entity.Id("dev.miren.core/metadata.labels"))
+	r.Equal(attrs[3].Value.Label(), types.Label{
+		Key:   "app",
+		Value: "nginx",
 	})
+
+	r.Equal(attrs[4].ID, entity.Id("dev.miren.core/metadata.name"))
+	r.Equal(attrs[4].Value.String(), "nginx")
+
+	r.Equal(attrs[5].ID, entity.Id("entity/kind"))
+	r.Equal(attrs[5].Value.Id(), entity.Id("dev.miren.compute/kind.sandbox"))
+
+	r.Equal(attrs[6].ID, entity.Id("entity/kind"))
+	r.Equal(attrs[6].Value.Id(), entity.Id("dev.miren.core/kind.metadata"))
+
+	/*
+		r.Equal(attrs[2].ID, entity.Id("dev.miren.sandbox/port"))
+		r.Equal(attrs[2].Value.Component(), &entity.EntityComponent{
+			Attrs: entity.Attrs(
+				compute.PortNameId, "http",
+				compute.PortPortId, 80,
+				compute.PortTypeId, "http",
+			),
+		})
+	*/
 }

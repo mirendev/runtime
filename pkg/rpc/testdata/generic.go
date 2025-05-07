@@ -65,7 +65,7 @@ type readerReadArgsData[T any] struct {
 }
 
 type ReaderReadArgs[T any] struct {
-	call *rpc.Call
+	call rpc.Call
 	data readerReadArgsData[T]
 }
 
@@ -96,7 +96,7 @@ func (v *ReaderReadArgs[T]) UnmarshalJSON(data []byte) error {
 type readerReadResultsData[T any] struct{}
 
 type ReaderReadResults[T any] struct {
-	call *rpc.Call
+	call rpc.Call
 	data readerReadResultsData[T]
 }
 
@@ -117,7 +117,7 @@ func (v *ReaderReadResults[T]) UnmarshalJSON(data []byte) error {
 }
 
 type ReaderRead[T any] struct {
-	*rpc.Call
+	rpc.Call
 	args    ReaderReadArgs[T]
 	results ReaderReadResults[T]
 }
@@ -147,14 +147,14 @@ type Reader[T any] interface {
 }
 
 type reexportReader[T any] struct {
-	client *rpc.Client
+	client rpc.Client
 }
 
 func (_ reexportReader[T]) Read(ctx context.Context, state *ReaderRead[T]) error {
 	panic("not implemented")
 }
 
-func (t reexportReader[T]) CapabilityClient() *rpc.Client {
+func (t reexportReader[T]) CapabilityClient() rpc.Client {
 	return t.client
 }
 
@@ -164,7 +164,7 @@ func AdaptReader[T any](t Reader[T]) *rpc.Interface {
 			Name:          "read",
 			InterfaceName: "Reader",
 			Index:         0,
-			Handler: func(ctx context.Context, call *rpc.Call) error {
+			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.Read(ctx, &ReaderRead[T]{Call: call})
 			},
 		},
@@ -174,7 +174,11 @@ func AdaptReader[T any](t Reader[T]) *rpc.Interface {
 }
 
 type ReaderClient[T any] struct {
-	*rpc.Client
+	rpc.Client
+}
+
+func NewReaderClient[T any](client rpc.Client) *ReaderClient[T] {
+	return &ReaderClient[T]{Client: client}
 }
 
 func (c ReaderClient[T]) Export() Reader[T] {
@@ -182,7 +186,7 @@ func (c ReaderClient[T]) Export() Reader[T] {
 }
 
 type ReaderClientReadResults[T any] struct {
-	client *rpc.Client
+	client rpc.Client
 	data   readerReadResultsData[T]
 }
 

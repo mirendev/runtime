@@ -13,6 +13,8 @@ type MockStore struct {
 	OnWatchIndex func(ctx context.Context, attr Attr) (clientv3.WatchChan, error)
 }
 
+var _ Store = &MockStore{}
+
 func NewMockStore() *MockStore {
 	return &MockStore{
 		Entities: make(map[Id]*Entity),
@@ -26,7 +28,7 @@ func (m *MockStore) GetEntity(ctx context.Context, id Id) (*Entity, error) {
 	return nil, ErrNotFound
 }
 
-func (m *MockStore) CreateEntity(ctx context.Context, attrs []Attr) (*Entity, error) {
+func (m *MockStore) CreateEntity(ctx context.Context, attrs []Attr, opts ...EntityOption) (*Entity, error) {
 	// Find the ident attribute
 	var ident types.Keyword
 	for _, attr := range attrs {
@@ -45,7 +47,7 @@ func (m *MockStore) CreateEntity(ctx context.Context, attrs []Attr) (*Entity, er
 	return e, nil
 }
 
-func (m *MockStore) UpdateEntity(ctx context.Context, id Id, attrs []Attr) (*Entity, error) {
+func (m *MockStore) UpdateEntity(ctx context.Context, id Id, attrs []Attr, opts ...EntityOption) (*Entity, error) {
 	e, ok := m.Entities[id]
 	if !ok {
 		return nil, ErrNotFound
@@ -100,6 +102,11 @@ func (m *MockStore) WatchIndex(ctx context.Context, attr Attr) (clientv3.WatchCh
 	return ch, nil
 }
 
+// WatchEntity
+func (m *MockStore) WatchEntity(ctx context.Context, id Id) (chan EntityOp, error) {
+	return nil, nil
+}
+
 func (m *MockStore) ListIndex(ctx context.Context, attr Attr) ([]Id, error) {
 	// For simplicity, return all entities as a list
 	var ids []Id
@@ -108,4 +115,38 @@ func (m *MockStore) ListIndex(ctx context.Context, attr Attr) ([]Id, error) {
 	}
 
 	return ids, nil
+}
+
+func (m *MockStore) CreateSession(ctx context.Context, id int64) ([]byte, error) {
+	return []byte("mock-session-id"), nil
+}
+
+// ListSessionEntities
+func (m *MockStore) ListSessionEntities(ctx context.Context, id []byte) ([]Id, error) {
+	return nil, nil
+
+	// For simplicity, return all entities as a list
+	var ids []Id
+	for id := range m.Entities {
+		ids = append(ids, id)
+	}
+
+	return ids, nil
+}
+
+// PingSession
+func (m *MockStore) PingSession(ctx context.Context, id []byte) error {
+	return nil
+}
+
+// RevokeSession
+func (m *MockStore) RevokeSession(ctx context.Context, id []byte) error {
+	return nil
+}
+
+func (m *MockStore) GetAttributeSchema(ctx context.Context, id Id) (*AttributeSchema, error) {
+	// For simplicity, return a mock schema
+	return &AttributeSchema{
+		ID: id,
+	}, nil
 }
