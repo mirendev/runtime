@@ -1,0 +1,22 @@
+domain: dev.miren.meta
+version: v1alpha
+kinds:
+  session:
+    unique_id:
+      type: string
+      doc: The identifier for the session
+    usage:
+      type: string
+      doc: What the session is being used for
+
+  leased:
+    ttl:
+      type: int
+      doc: The time to live left on the value
+      bind_to: db/entity.ttl
+
+    session_id:
+      type: string
+      doc: The unique identifer for the session bound to this entity
+      bind_to: db/attr.session
+

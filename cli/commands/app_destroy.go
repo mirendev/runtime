@@ -11,7 +11,7 @@ func AppDestroy(ctx *Context, opts struct {
 		return err
 	}
 
-	crud := app.CrudClient{Client: crudcl}
+	crud := app.NewCrudClient(crudcl)
 
 	if !opts.Confirm {
 		ctx.Info("Please confirm the destruction of the app with --confirm\n")

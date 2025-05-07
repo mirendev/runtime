@@ -22,6 +22,7 @@ type ClusterConfig struct {
 	CACert     string `yaml:"ca_cert"`     // PEM encoded CA certificate
 	ClientCert string `yaml:"client_cert"` // PEM encoded client certificate
 	ClientKey  string `yaml:"client_key"`  // PEM encoded client key
+	Insecure   bool   `yaml:"insecure"`    // Skip TLS verification
 }
 
 // Config represents the complete client configuration

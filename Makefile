@@ -7,6 +7,9 @@ test-i:
 test-shell:
 	dagger call -q test --dir=. --shell
 
+dev:
+	dagger call -q dev --dir=. --shell
+
 image:
 	dagger call -q container --dir=. export --path=tmp/latest.tar
 	docker import tmp/latest.tar miren:latest

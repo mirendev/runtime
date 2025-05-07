@@ -8,12 +8,12 @@ services:
     ports:
       - 9000:9000
 
-  postgres:
-    image: postgres:17
+  etcd:
+    image: bitnami/etcd:3.5.19
     environment:
-      - POSTGRES_DB=runtime_prod
-      - POSTGRES_PASSWORD=runtime
-      - POSTGRES_USER=runtime
+      - ALLOW_NONE_AUTHENTICATION=yes
+      - ETCD_ADVERTISE_CLIENT_URLS=http://etcd:2379
     ports:
-      - 5432:5432
+      - 2379:2379
+      - 2380:2380
 

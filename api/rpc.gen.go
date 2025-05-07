@@ -725,7 +725,7 @@ func (v *AddonInstance) UnmarshalJSON(data []byte) error {
 type userQueryWhoAmIArgsData struct{}
 
 type UserQueryWhoAmIArgs struct {
-	call *rpc.Call
+	call rpc.Call
 	data userQueryWhoAmIArgsData
 }
 
@@ -750,7 +750,7 @@ type userQueryWhoAmIResultsData struct {
 }
 
 type UserQueryWhoAmIResults struct {
-	call *rpc.Call
+	call rpc.Call
 	data userQueryWhoAmIResultsData
 }
 
@@ -775,7 +775,7 @@ func (v *UserQueryWhoAmIResults) UnmarshalJSON(data []byte) error {
 }
 
 type UserQueryWhoAmI struct {
-	*rpc.Call
+	rpc.Call
 	args    UserQueryWhoAmIArgs
 	results UserQueryWhoAmIResults
 }
@@ -805,14 +805,14 @@ type UserQuery interface {
 }
 
 type reexportUserQuery struct {
-	client *rpc.Client
+	client rpc.Client
 }
 
 func (_ reexportUserQuery) WhoAmI(ctx context.Context, state *UserQueryWhoAmI) error {
 	panic("not implemented")
 }
 
-func (t reexportUserQuery) CapabilityClient() *rpc.Client {
+func (t reexportUserQuery) CapabilityClient() rpc.Client {
 	return t.client
 }
 
@@ -822,7 +822,7 @@ func AdaptUserQuery(t UserQuery) *rpc.Interface {
 			Name:          "whoAmI",
 			InterfaceName: "UserQuery",
 			Index:         0,
-			Handler: func(ctx context.Context, call *rpc.Call) error {
+			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.WhoAmI(ctx, &UserQueryWhoAmI{Call: call})
 			},
 		},
@@ -832,7 +832,11 @@ func AdaptUserQuery(t UserQuery) *rpc.Interface {
 }
 
 type UserQueryClient struct {
-	*rpc.Client
+	rpc.Client
+}
+
+func NewUserQueryClient(client rpc.Client) *UserQueryClient {
+	return &UserQueryClient{Client: client}
 }
 
 func (c UserQueryClient) Export() UserQuery {
@@ -840,7 +844,7 @@ func (c UserQueryClient) Export() UserQuery {
 }
 
 type UserQueryClientWhoAmIResults struct {
-	client *rpc.Client
+	client rpc.Client
 	data   userQueryWhoAmIResultsData
 }
 
@@ -870,7 +874,7 @@ type appInfoAppInfoArgsData struct {
 }
 
 type AppInfoAppInfoArgs struct {
-	call *rpc.Call
+	call rpc.Call
 	data appInfoAppInfoArgsData
 }
 
@@ -906,7 +910,7 @@ type appInfoAppInfoResultsData struct {
 }
 
 type AppInfoAppInfoResults struct {
-	call *rpc.Call
+	call rpc.Call
 	data appInfoAppInfoResultsData
 }
 
@@ -931,7 +935,7 @@ func (v *AppInfoAppInfoResults) UnmarshalJSON(data []byte) error {
 }
 
 type AppInfoAppInfo struct {
-	*rpc.Call
+	rpc.Call
 	args    AppInfoAppInfoArgs
 	results AppInfoAppInfoResults
 }
@@ -961,14 +965,14 @@ type AppInfo interface {
 }
 
 type reexportAppInfo struct {
-	client *rpc.Client
+	client rpc.Client
 }
 
 func (_ reexportAppInfo) AppInfo(ctx context.Context, state *AppInfoAppInfo) error {
 	panic("not implemented")
 }
 
-func (t reexportAppInfo) CapabilityClient() *rpc.Client {
+func (t reexportAppInfo) CapabilityClient() rpc.Client {
 	return t.client
 }
 
@@ -978,7 +982,7 @@ func AdaptAppInfo(t AppInfo) *rpc.Interface {
 			Name:          "appInfo",
 			InterfaceName: "AppInfo",
 			Index:         0,
-			Handler: func(ctx context.Context, call *rpc.Call) error {
+			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.AppInfo(ctx, &AppInfoAppInfo{Call: call})
 			},
 		},
@@ -988,7 +992,11 @@ func AdaptAppInfo(t AppInfo) *rpc.Interface {
 }
 
 type AppInfoClient struct {
-	*rpc.Client
+	rpc.Client
+}
+
+func NewAppInfoClient(client rpc.Client) *AppInfoClient {
+	return &AppInfoClient{Client: client}
 }
 
 func (c AppInfoClient) Export() AppInfo {
@@ -996,7 +1004,7 @@ func (c AppInfoClient) Export() AppInfo {
 }
 
 type AppInfoClientAppInfoResults struct {
-	client *rpc.Client
+	client rpc.Client
 	data   appInfoAppInfoResultsData
 }
 
@@ -1029,7 +1037,7 @@ type logsAppLogsArgsData struct {
 }
 
 type LogsAppLogsArgs struct {
-	call *rpc.Call
+	call rpc.Call
 	data logsAppLogsArgsData
 }
 
@@ -1084,7 +1092,7 @@ type logsAppLogsResultsData struct {
 }
 
 type LogsAppLogsResults struct {
-	call *rpc.Call
+	call rpc.Call
 	data logsAppLogsResultsData
 }
 
@@ -1110,7 +1118,7 @@ func (v *LogsAppLogsResults) UnmarshalJSON(data []byte) error {
 }
 
 type LogsAppLogs struct {
-	*rpc.Call
+	rpc.Call
 	args    LogsAppLogsArgs
 	results LogsAppLogsResults
 }
@@ -1140,14 +1148,14 @@ type Logs interface {
 }
 
 type reexportLogs struct {
-	client *rpc.Client
+	client rpc.Client
 }
 
 func (_ reexportLogs) AppLogs(ctx context.Context, state *LogsAppLogs) error {
 	panic("not implemented")
 }
 
-func (t reexportLogs) CapabilityClient() *rpc.Client {
+func (t reexportLogs) CapabilityClient() rpc.Client {
 	return t.client
 }
 
@@ -1157,7 +1165,7 @@ func AdaptLogs(t Logs) *rpc.Interface {
 			Name:          "appLogs",
 			InterfaceName: "Logs",
 			Index:         0,
-			Handler: func(ctx context.Context, call *rpc.Call) error {
+			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.AppLogs(ctx, &LogsAppLogs{Call: call})
 			},
 		},
@@ -1167,7 +1175,11 @@ func AdaptLogs(t Logs) *rpc.Interface {
 }
 
 type LogsClient struct {
-	*rpc.Client
+	rpc.Client
+}
+
+func NewLogsClient(client rpc.Client) *LogsClient {
+	return &LogsClient{Client: client}
 }
 
 func (c LogsClient) Export() Logs {
@@ -1175,7 +1187,7 @@ func (c LogsClient) Export() Logs {
 }
 
 type LogsClientAppLogsResults struct {
-	client *rpc.Client
+	client rpc.Client
 	data   logsAppLogsResultsData
 }
 
@@ -1212,7 +1224,7 @@ type disksNewArgsData struct {
 }
 
 type DisksNewArgs struct {
-	call *rpc.Call
+	call rpc.Call
 	data disksNewArgsData
 }
 
@@ -1259,7 +1271,7 @@ type disksNewResultsData struct {
 }
 
 type DisksNewResults struct {
-	call *rpc.Call
+	call rpc.Call
 	data disksNewResultsData
 }
 
@@ -1288,7 +1300,7 @@ type disksGetByIdArgsData struct {
 }
 
 type DisksGetByIdArgs struct {
-	call *rpc.Call
+	call rpc.Call
 	data disksGetByIdArgsData
 }
 
@@ -1324,7 +1336,7 @@ type disksGetByIdResultsData struct {
 }
 
 type DisksGetByIdResults struct {
-	call *rpc.Call
+	call rpc.Call
 	data disksGetByIdResultsData
 }
 
@@ -1353,7 +1365,7 @@ type disksGetByNameArgsData struct {
 }
 
 type DisksGetByNameArgs struct {
-	call *rpc.Call
+	call rpc.Call
 	data disksGetByNameArgsData
 }
 
@@ -1389,7 +1401,7 @@ type disksGetByNameResultsData struct {
 }
 
 type DisksGetByNameResults struct {
-	call *rpc.Call
+	call rpc.Call
 	data disksGetByNameResultsData
 }
 
@@ -1416,7 +1428,7 @@ func (v *DisksGetByNameResults) UnmarshalJSON(data []byte) error {
 type disksListArgsData struct{}
 
 type DisksListArgs struct {
-	call *rpc.Call
+	call rpc.Call
 	data disksListArgsData
 }
 
@@ -1441,7 +1453,7 @@ type disksListResultsData struct {
 }
 
 type DisksListResults struct {
-	call *rpc.Call
+	call rpc.Call
 	data disksListResultsData
 }
 
@@ -1471,7 +1483,7 @@ type disksDeleteArgsData struct {
 }
 
 type DisksDeleteArgs struct {
-	call *rpc.Call
+	call rpc.Call
 	data disksDeleteArgsData
 }
 
@@ -1505,7 +1517,7 @@ func (v *DisksDeleteArgs) UnmarshalJSON(data []byte) error {
 type disksDeleteResultsData struct{}
 
 type DisksDeleteResults struct {
-	call *rpc.Call
+	call rpc.Call
 	data disksDeleteResultsData
 }
 
@@ -1526,7 +1538,7 @@ func (v *DisksDeleteResults) UnmarshalJSON(data []byte) error {
 }
 
 type DisksNew struct {
-	*rpc.Call
+	rpc.Call
 	args    DisksNewArgs
 	results DisksNewResults
 }
@@ -1552,7 +1564,7 @@ func (t *DisksNew) Results() *DisksNewResults {
 }
 
 type DisksGetById struct {
-	*rpc.Call
+	rpc.Call
 	args    DisksGetByIdArgs
 	results DisksGetByIdResults
 }
@@ -1578,7 +1590,7 @@ func (t *DisksGetById) Results() *DisksGetByIdResults {
 }
 
 type DisksGetByName struct {
-	*rpc.Call
+	rpc.Call
 	args    DisksGetByNameArgs
 	results DisksGetByNameResults
 }
@@ -1604,7 +1616,7 @@ func (t *DisksGetByName) Results() *DisksGetByNameResults {
 }
 
 type DisksList struct {
-	*rpc.Call
+	rpc.Call
 	args    DisksListArgs
 	results DisksListResults
 }
@@ -1630,7 +1642,7 @@ func (t *DisksList) Results() *DisksListResults {
 }
 
 type DisksDelete struct {
-	*rpc.Call
+	rpc.Call
 	args    DisksDeleteArgs
 	results DisksDeleteResults
 }
@@ -1664,7 +1676,7 @@ type Disks interface {
 }
 
 type reexportDisks struct {
-	client *rpc.Client
+	client rpc.Client
 }
 
 func (_ reexportDisks) New(ctx context.Context, state *DisksNew) error {
@@ -1687,7 +1699,7 @@ func (_ reexportDisks) Delete(ctx context.Context, state *DisksDelete) error {
 	panic("not implemented")
 }
 
-func (t reexportDisks) CapabilityClient() *rpc.Client {
+func (t reexportDisks) CapabilityClient() rpc.Client {
 	return t.client
 }
 
@@ -1697,7 +1709,7 @@ func AdaptDisks(t Disks) *rpc.Interface {
 			Name:          "new",
 			InterfaceName: "Disks",
 			Index:         0,
-			Handler: func(ctx context.Context, call *rpc.Call) error {
+			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.New(ctx, &DisksNew{Call: call})
 			},
 		},
@@ -1705,7 +1717,7 @@ func AdaptDisks(t Disks) *rpc.Interface {
 			Name:          "getById",
 			InterfaceName: "Disks",
 			Index:         0,
-			Handler: func(ctx context.Context, call *rpc.Call) error {
+			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.GetById(ctx, &DisksGetById{Call: call})
 			},
 		},
@@ -1713,7 +1725,7 @@ func AdaptDisks(t Disks) *rpc.Interface {
 			Name:          "getByName",
 			InterfaceName: "Disks",
 			Index:         0,
-			Handler: func(ctx context.Context, call *rpc.Call) error {
+			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.GetByName(ctx, &DisksGetByName{Call: call})
 			},
 		},
@@ -1721,7 +1733,7 @@ func AdaptDisks(t Disks) *rpc.Interface {
 			Name:          "list",
 			InterfaceName: "Disks",
 			Index:         0,
-			Handler: func(ctx context.Context, call *rpc.Call) error {
+			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.List(ctx, &DisksList{Call: call})
 			},
 		},
@@ -1729,7 +1741,7 @@ func AdaptDisks(t Disks) *rpc.Interface {
 			Name:          "delete",
 			InterfaceName: "Disks",
 			Index:         0,
-			Handler: func(ctx context.Context, call *rpc.Call) error {
+			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.Delete(ctx, &DisksDelete{Call: call})
 			},
 		},
@@ -1739,7 +1751,11 @@ func AdaptDisks(t Disks) *rpc.Interface {
 }
 
 type DisksClient struct {
-	*rpc.Client
+	rpc.Client
+}
+
+func NewDisksClient(client rpc.Client) *DisksClient {
+	return &DisksClient{Client: client}
 }
 
 func (c DisksClient) Export() Disks {
@@ -1747,7 +1763,7 @@ func (c DisksClient) Export() Disks {
 }
 
 type DisksClientNewResults struct {
-	client *rpc.Client
+	client rpc.Client
 	data   disksNewResultsData
 }
 
@@ -1778,7 +1794,7 @@ func (v DisksClient) New(ctx context.Context, name string, capacity int64) (*Dis
 }
 
 type DisksClientGetByIdResults struct {
-	client *rpc.Client
+	client rpc.Client
 	data   disksGetByIdResultsData
 }
 
@@ -1805,7 +1821,7 @@ func (v DisksClient) GetById(ctx context.Context, id string) (*DisksClientGetByI
 }
 
 type DisksClientGetByNameResults struct {
-	client *rpc.Client
+	client rpc.Client
 	data   disksGetByNameResultsData
 }
 
@@ -1832,7 +1848,7 @@ func (v DisksClient) GetByName(ctx context.Context, name string) (*DisksClientGe
 }
 
 type DisksClientListResults struct {
-	client *rpc.Client
+	client rpc.Client
 	data   disksListResultsData
 }
 
@@ -1861,7 +1877,7 @@ func (v DisksClient) List(ctx context.Context) (*DisksClientListResults, error) 
 }
 
 type DisksClientDeleteResults struct {
-	client *rpc.Client
+	client rpc.Client
 	data   disksDeleteResultsData
 }
 
@@ -1887,7 +1903,7 @@ type addonsCreateInstanceArgsData struct {
 }
 
 type AddonsCreateInstanceArgs struct {
-	call *rpc.Call
+	call rpc.Call
 	data addonsCreateInstanceArgsData
 }
 
@@ -1956,7 +1972,7 @@ type addonsCreateInstanceResultsData struct {
 }
 
 type AddonsCreateInstanceResults struct {
-	call *rpc.Call
+	call rpc.Call
 	data addonsCreateInstanceResultsData
 }
 
@@ -1985,7 +2001,7 @@ type addonsListInstancesArgsData struct {
 }
 
 type AddonsListInstancesArgs struct {
-	call *rpc.Call
+	call rpc.Call
 	data addonsListInstancesArgsData
 }
 
@@ -2021,7 +2037,7 @@ type addonsListInstancesResultsData struct {
 }
 
 type AddonsListInstancesResults struct {
-	call *rpc.Call
+	call rpc.Call
 	data addonsListInstancesResultsData
 }
 
@@ -2052,7 +2068,7 @@ type addonsDeleteInstanceArgsData struct {
 }
 
 type AddonsDeleteInstanceArgs struct {
-	call *rpc.Call
+	call rpc.Call
 	data addonsDeleteInstanceArgsData
 }
 
@@ -2097,7 +2113,7 @@ func (v *AddonsDeleteInstanceArgs) UnmarshalJSON(data []byte) error {
 type addonsDeleteInstanceResultsData struct{}
 
 type AddonsDeleteInstanceResults struct {
-	call *rpc.Call
+	call rpc.Call
 	data addonsDeleteInstanceResultsData
 }
 
@@ -2118,7 +2134,7 @@ func (v *AddonsDeleteInstanceResults) UnmarshalJSON(data []byte) error {
 }
 
 type AddonsCreateInstance struct {
-	*rpc.Call
+	rpc.Call
 	args    AddonsCreateInstanceArgs
 	results AddonsCreateInstanceResults
 }
@@ -2144,7 +2160,7 @@ func (t *AddonsCreateInstance) Results() *AddonsCreateInstanceResults {
 }
 
 type AddonsListInstances struct {
-	*rpc.Call
+	rpc.Call
 	args    AddonsListInstancesArgs
 	results AddonsListInstancesResults
 }
@@ -2170,7 +2186,7 @@ func (t *AddonsListInstances) Results() *AddonsListInstancesResults {
 }
 
 type AddonsDeleteInstance struct {
-	*rpc.Call
+	rpc.Call
 	args    AddonsDeleteInstanceArgs
 	results AddonsDeleteInstanceResults
 }
@@ -2202,7 +2218,7 @@ type Addons interface {
 }
 
 type reexportAddons struct {
-	client *rpc.Client
+	client rpc.Client
 }
 
 func (_ reexportAddons) CreateInstance(ctx context.Context, state *AddonsCreateInstance) error {
@@ -2217,7 +2233,7 @@ func (_ reexportAddons) DeleteInstance(ctx context.Context, state *AddonsDeleteI
 	panic("not implemented")
 }
 
-func (t reexportAddons) CapabilityClient() *rpc.Client {
+func (t reexportAddons) CapabilityClient() rpc.Client {
 	return t.client
 }
 
@@ -2227,7 +2243,7 @@ func AdaptAddons(t Addons) *rpc.Interface {
 			Name:          "createInstance",
 			InterfaceName: "Addons",
 			Index:         0,
-			Handler: func(ctx context.Context, call *rpc.Call) error {
+			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.CreateInstance(ctx, &AddonsCreateInstance{Call: call})
 			},
 		},
@@ -2235,7 +2251,7 @@ func AdaptAddons(t Addons) *rpc.Interface {
 			Name:          "listInstances",
 			InterfaceName: "Addons",
 			Index:         0,
-			Handler: func(ctx context.Context, call *rpc.Call) error {
+			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.ListInstances(ctx, &AddonsListInstances{Call: call})
 			},
 		},
@@ -2243,7 +2259,7 @@ func AdaptAddons(t Addons) *rpc.Interface {
 			Name:          "deleteInstance",
 			InterfaceName: "Addons",
 			Index:         0,
-			Handler: func(ctx context.Context, call *rpc.Call) error {
+			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.DeleteInstance(ctx, &AddonsDeleteInstance{Call: call})
 			},
 		},
@@ -2253,7 +2269,11 @@ func AdaptAddons(t Addons) *rpc.Interface {
 }
 
 type AddonsClient struct {
-	*rpc.Client
+	rpc.Client
+}
+
+func NewAddonsClient(client rpc.Client) *AddonsClient {
+	return &AddonsClient{Client: client}
 }
 
 func (c AddonsClient) Export() Addons {
@@ -2261,7 +2281,7 @@ func (c AddonsClient) Export() Addons {
 }
 
 type AddonsClientCreateInstanceResults struct {
-	client *rpc.Client
+	client rpc.Client
 	data   addonsCreateInstanceResultsData
 }
 
@@ -2294,7 +2314,7 @@ func (v AddonsClient) CreateInstance(ctx context.Context, name string, addon str
 }
 
 type AddonsClientListInstancesResults struct {
-	client *rpc.Client
+	client rpc.Client
 	data   addonsListInstancesResultsData
 }
 
@@ -2324,7 +2344,7 @@ func (v AddonsClient) ListInstances(ctx context.Context, app string) (*AddonsCli
 }
 
 type AddonsClientDeleteInstanceResults struct {
-	client *rpc.Client
+	client rpc.Client
 	data   addonsDeleteInstanceResultsData
 }
 

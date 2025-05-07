@@ -1,0 +1,6 @@
+kind: dev.miren.core/project
+version: v1alpha
+metadata:
+  name: default
+spec:
+  owner: mbot@miren.dev

@@ -1,0 +1,7 @@
+kind: dev.miren.ingress/http_route
+version: v1alpha
+metadata:
+  name: localhost
+spec:
+  host: localhost
+  app: app/nginx

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"log/slog"
+	"net/netip"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -16,21 +17,9 @@ import (
 	containerd "github.com/containerd/containerd/v2/client"
 	"github.com/jackc/pgx/v5/pgxpool"
 	buildkit "github.com/moby/buildkit/client"
-	"miren.dev/runtime/app"
-	"miren.dev/runtime/build"
-	"miren.dev/runtime/build/launch"
-	"miren.dev/runtime/discovery"
-	"miren.dev/runtime/health"
-	"miren.dev/runtime/image"
-	"miren.dev/runtime/ingress"
-	"miren.dev/runtime/lease"
 	"miren.dev/runtime/observability"
 	"miren.dev/runtime/pkg/asm"
 	"miren.dev/runtime/pkg/asm/autoreg"
-	"miren.dev/runtime/pkg/netdb"
-	"miren.dev/runtime/run"
-	"miren.dev/runtime/server"
-	"miren.dev/runtime/shell"
 )
 
 func addCommands(cmds map[string]cli.CommandFactory) {
@@ -74,22 +63,30 @@ func (c *Context) setupServerComponents(ctx context.Context, reg *asm.Registry) 
 
 	reg.Register("data-path", "/var/lib/runtime")
 
-	reg.ProvideName("subnet", func(opts struct {
-		Dir string `asm:"data-path"`
-		Id  string `asm:"server-id"`
-	}) (*netdb.Subnet, error) {
-		ndb, err := netdb.New(filepath.Join(opts.Dir, "net.db"))
-		if err != nil {
-			return nil, fmt.Errorf("failed to open netdb: %w", err)
-		}
+	/*
+		reg.Register("ip4-routable", netip.MustParsePrefix("10.8.0.0/16"))
 
-		mega, err := ndb.Subnet("10.8.0.0/16")
-		if err != nil {
-			return nil, err
-		}
+		reg.ProvideName("subnet", func(opts struct {
+			Dir    string       `asm:"data-path"`
+			Id     string       `asm:"server-id"`
+			Prefix netip.Prefix `asm:"ip4-routable"`
+		}) (*netdb.Subnet, error) {
+			os.MkdirAll(opts.Dir, 0755)
+			ndb, err := netdb.New(filepath.Join(opts.Dir, "net.db"))
+			if err != nil {
+				return nil, fmt.Errorf("failed to open netdb: %w", err)
+			}
 
-		return mega.ReserveSubnet(24, opts.Id)
-	})
+			mega, err := ndb.Subnet(opts.Prefix.String())
+			if err != nil {
+				return nil, err
+			}
+
+			return mega.ReserveSubnet(24, opts.Id)
+		})
+	*/
+
+	reg.Register("service-subnet", netip.MustParsePrefix("10.10.0.0/16"))
 
 	reg.Register("clickhouse-address", "clickhouse:9000")
 	reg.Register("postgres-address", "postgres:5432")
@@ -177,62 +174,6 @@ func (c *Context) setupServerComponents(ctx context.Context, reg *asm.Registry) 
 
 	reg.Provide(func() *observability.StatusMonitor {
 		return &observability.StatusMonitor{}
-	})
-
-	reg.Provide(func() *build.Buildkit {
-		return &build.Buildkit{}
-	})
-
-	reg.Provide(func() *build.RPCBuilder {
-		return &build.RPCBuilder{}
-	})
-
-	reg.Provide(func() *launch.LaunchBuildkit {
-		return &launch.LaunchBuildkit{}
-	})
-
-	reg.Provide(func() *run.ContainerRunner {
-		return &run.ContainerRunner{}
-	})
-
-	reg.Provide(func() *app.AppAccess {
-		return &app.AppAccess{}
-	})
-
-	reg.Provide(func() *app.RPCCrud {
-		return &app.RPCCrud{}
-	})
-
-	reg.Provide(func() *shell.RPCShell {
-		return &shell.RPCShell{}
-	})
-
-	reg.Provide(func() *lease.LaunchContainer {
-		return &lease.LaunchContainer{}
-	})
-
-	reg.Provide(func() *image.ImagePruner {
-		return &image.ImagePruner{}
-	})
-
-	reg.Provide(func() *discovery.Containerd {
-		return &discovery.Containerd{}
-	})
-
-	reg.Provide(func() *health.ContainerMonitor {
-		return &health.ContainerMonitor{}
-	})
-
-	reg.Provide(func() *ingress.LeaseHTTP {
-		return &ingress.LeaseHTTP{}
-	})
-
-	reg.Provide(func() *observability.RunSCMonitor {
-		return &observability.RunSCMonitor{}
-	})
-
-	reg.Provide(func() *server.RPCAppInfo {
-		return &server.RPCAppInfo{}
 	})
 
 	for _, f := range autoreg.All() {

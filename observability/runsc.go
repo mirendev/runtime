@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 
 	"google.golang.org/protobuf/proto"
+	"miren.dev/runtime/pkg/asm/autoreg"
 	"miren.dev/runtime/pkg/runsc"
 	"miren.dev/runtime/pkg/runsc/monitor"
 
@@ -41,6 +42,8 @@ type RunSCMonitor struct {
 	cs       *monitor.CommonServer
 	messages atomic.Uint64
 }
+
+var _ = autoreg.Register[RunSCMonitor]()
 
 func (r *RunSCMonitor) SetEndpoint(endpoint string) {
 	r.endpoint = endpoint

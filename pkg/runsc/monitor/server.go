@@ -176,6 +176,11 @@ func (s *CommonServer) handleClient(client client) {
 	for {
 		read, err := client.conn.Read(buf)
 		if err != nil {
+			return
+
+			// We don't catch all the errors correctly, so just treat them all like
+			// as though we can't retry the read and the connection is dead.
+
 			if errors.Is(err, io.EOF) || errors.Is(err, unix.EBADF) {
 				// Both errors indicate that the socket has been closed.
 				return

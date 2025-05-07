@@ -29,6 +29,10 @@ CREATE TABLE IF NOT EXISTS memory_usage (
     timestamp DateTime64(3), -- Millisecond precision timestamp
 		entity LowCardinality(String), -- Entity identifier
     memory_usage UInt64,     -- Memory usage in bytes
+
+		attributes Map(LowCardinality(String), String) CODEC(ZSTD(1)),
+    INDEX idx_attr_key mapKeys(attributes) TYPE bloom_filter(0.01) GRANULARITY 1,
+    INDEX idx_attr_value mapValues(attributes) TYPE bloom_filter(0.01) GRANULARITY 1
     
     -- Order by timestamp and container for efficient time-series queries
     -- Partition by day to allow efficient data retention and queries
@@ -64,13 +68,19 @@ GROUP BY
 	return nil
 }
 
-func (m *MemoryUsage) RecordUsage(ctx context.Context, entity string, ts time.Time, memory units.Bytes) error {
+func (m *MemoryUsage) RecordUsage(
+	ctx context.Context,
+	entity string,
+	ts time.Time,
+	memory units.Bytes,
+	attrs map[string]string,
+) error {
 	_, err := m.DB.ExecContext(ctx, `
     INSERT INTO memory_usage 
-      (timestamp, entity, memory_usage)
-    VALUES (toDateTime64('?', 6), ?, ?)
+      (timestamp, entity, memory_usage, attributes)
+    VALUES (toDateTime64('?', 6), ?, ?, ?)
 `,
-		ts.UnixMicro(), entity, memory.Int64())
+		ts.UnixMicro(), entity, memory.Int64(), attrs)
 	return err
 }
 

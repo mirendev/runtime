@@ -11,6 +11,8 @@ type Capability struct {
 	Issuer  []byte `cbor:"3,keyasint" json:"issue"`
 
 	RestoreState *InterfaceState `cbor:"4,keyasint" json:"restore-state"`
+
+	Inline bool `cbor:"5,keyasint" json:"inline"`
 }
 
 type InterfaceState struct {

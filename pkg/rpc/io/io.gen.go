@@ -14,7 +14,7 @@ type readerReadArgsData struct {
 }
 
 type ReaderReadArgs struct {
-	call *rpc.Call
+	call rpc.Call
 	data readerReadArgsData
 }
 
@@ -50,7 +50,7 @@ type readerReadResultsData struct {
 }
 
 type ReaderReadResults struct {
-	call *rpc.Call
+	call rpc.Call
 	data readerReadResultsData
 }
 
@@ -76,7 +76,7 @@ func (v *ReaderReadResults) UnmarshalJSON(data []byte) error {
 }
 
 type ReaderRead struct {
-	*rpc.Call
+	rpc.Call
 	args    ReaderReadArgs
 	results ReaderReadResults
 }
@@ -106,14 +106,14 @@ type Reader interface {
 }
 
 type reexportReader struct {
-	client *rpc.Client
+	client rpc.Client
 }
 
 func (_ reexportReader) Read(ctx context.Context, state *ReaderRead) error {
 	panic("not implemented")
 }
 
-func (t reexportReader) CapabilityClient() *rpc.Client {
+func (t reexportReader) CapabilityClient() rpc.Client {
 	return t.client
 }
 
@@ -123,7 +123,7 @@ func AdaptReader(t Reader) *rpc.Interface {
 			Name:          "Read",
 			InterfaceName: "Reader",
 			Index:         0,
-			Handler: func(ctx context.Context, call *rpc.Call) error {
+			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.Read(ctx, &ReaderRead{Call: call})
 			},
 		},
@@ -133,7 +133,11 @@ func AdaptReader(t Reader) *rpc.Interface {
 }
 
 type ReaderClient struct {
-	*rpc.Client
+	rpc.Client
+}
+
+func NewReaderClient(client rpc.Client) *ReaderClient {
+	return &ReaderClient{Client: client}
 }
 
 func (c ReaderClient) Export() Reader {
@@ -141,7 +145,7 @@ func (c ReaderClient) Export() Reader {
 }
 
 type ReaderClientReadResults struct {
-	client *rpc.Client
+	client rpc.Client
 	data   readerReadResultsData
 }
 
@@ -176,7 +180,7 @@ type readerAtReadAtArgsData struct {
 }
 
 type ReaderAtReadAtArgs struct {
-	call *rpc.Call
+	call rpc.Call
 	data readerAtReadAtArgsData
 }
 
@@ -223,7 +227,7 @@ type readerAtReadAtResultsData struct {
 }
 
 type ReaderAtReadAtResults struct {
-	call *rpc.Call
+	call rpc.Call
 	data readerAtReadAtResultsData
 }
 
@@ -249,7 +253,7 @@ func (v *ReaderAtReadAtResults) UnmarshalJSON(data []byte) error {
 }
 
 type ReaderAtReadAt struct {
-	*rpc.Call
+	rpc.Call
 	args    ReaderAtReadAtArgs
 	results ReaderAtReadAtResults
 }
@@ -279,14 +283,14 @@ type ReaderAt interface {
 }
 
 type reexportReaderAt struct {
-	client *rpc.Client
+	client rpc.Client
 }
 
 func (_ reexportReaderAt) ReadAt(ctx context.Context, state *ReaderAtReadAt) error {
 	panic("not implemented")
 }
 
-func (t reexportReaderAt) CapabilityClient() *rpc.Client {
+func (t reexportReaderAt) CapabilityClient() rpc.Client {
 	return t.client
 }
 
@@ -296,7 +300,7 @@ func AdaptReaderAt(t ReaderAt) *rpc.Interface {
 			Name:          "ReadAt",
 			InterfaceName: "ReaderAt",
 			Index:         0,
-			Handler: func(ctx context.Context, call *rpc.Call) error {
+			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.ReadAt(ctx, &ReaderAtReadAt{Call: call})
 			},
 		},
@@ -306,7 +310,11 @@ func AdaptReaderAt(t ReaderAt) *rpc.Interface {
 }
 
 type ReaderAtClient struct {
-	*rpc.Client
+	rpc.Client
+}
+
+func NewReaderAtClient(client rpc.Client) *ReaderAtClient {
+	return &ReaderAtClient{Client: client}
 }
 
 func (c ReaderAtClient) Export() ReaderAt {
@@ -314,7 +322,7 @@ func (c ReaderAtClient) Export() ReaderAt {
 }
 
 type ReaderAtClientReadAtResults struct {
-	client *rpc.Client
+	client rpc.Client
 	data   readerAtReadAtResultsData
 }
 
@@ -349,7 +357,7 @@ type writerWriteArgsData struct {
 }
 
 type WriterWriteArgs struct {
-	call *rpc.Call
+	call rpc.Call
 	data writerWriteArgsData
 }
 
@@ -385,7 +393,7 @@ type writerWriteResultsData struct {
 }
 
 type WriterWriteResults struct {
-	call *rpc.Call
+	call rpc.Call
 	data writerWriteResultsData
 }
 
@@ -410,7 +418,7 @@ func (v *WriterWriteResults) UnmarshalJSON(data []byte) error {
 }
 
 type WriterWrite struct {
-	*rpc.Call
+	rpc.Call
 	args    WriterWriteArgs
 	results WriterWriteResults
 }
@@ -440,14 +448,14 @@ type Writer interface {
 }
 
 type reexportWriter struct {
-	client *rpc.Client
+	client rpc.Client
 }
 
 func (_ reexportWriter) Write(ctx context.Context, state *WriterWrite) error {
 	panic("not implemented")
 }
 
-func (t reexportWriter) CapabilityClient() *rpc.Client {
+func (t reexportWriter) CapabilityClient() rpc.Client {
 	return t.client
 }
 
@@ -457,7 +465,7 @@ func AdaptWriter(t Writer) *rpc.Interface {
 			Name:          "Write",
 			InterfaceName: "Writer",
 			Index:         0,
-			Handler: func(ctx context.Context, call *rpc.Call) error {
+			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.Write(ctx, &WriterWrite{Call: call})
 			},
 		},
@@ -467,7 +475,11 @@ func AdaptWriter(t Writer) *rpc.Interface {
 }
 
 type WriterClient struct {
-	*rpc.Client
+	rpc.Client
+}
+
+func NewWriterClient(client rpc.Client) *WriterClient {
+	return &WriterClient{Client: client}
 }
 
 func (c WriterClient) Export() Writer {
@@ -475,7 +487,7 @@ func (c WriterClient) Export() Writer {
 }
 
 type WriterClientWriteResults struct {
-	client *rpc.Client
+	client rpc.Client
 	data   writerWriteResultsData
 }
 

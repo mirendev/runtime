@@ -1,0 +1,3 @@
+#!/bin/bash
+
+exec runsc --debug-log=/tmp/runsc/ --debug --strace "$@"

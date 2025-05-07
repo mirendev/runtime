@@ -291,7 +291,7 @@ func (o *SegmentBuilder) readLog(f *os.File, log *slog.Logger) error {
 			return err
 		}
 
-		log.Debug("read extent header", "extent", eh.Extent, "flags", eh.Flags(), "raw-size", eh.RawSize)
+		trace(log, "read extent header", "extent", eh.Extent, "flags", eh.Flags(), "raw-size", eh.RawSize)
 
 		o.totalBlocks += int(eh.Blocks)
 
@@ -418,9 +418,9 @@ func (o *SegmentCreator) FillExtent(ctx *Context, data RangeDataView) ([]Extent,
 				return nil, fmt.Errorf("reading from write log returned wrong number of bytes 2 (%d, %d)", n, len(srcData))
 			}
 
-			o.log.Debug("compressed range", "offset", srcRng.Offset)
+			trace(o.log, "compressed range", "offset", srcRng.Offset)
 
-			o.log.Debug("original size of compressed extent", "len", srcRng.RawSize, "comp-size", srcRng.Size)
+			trace(o.log, "original size of compressed extent", "len", srcRng.RawSize, "comp-size", srcRng.Size)
 
 			uncompData := ctx.Allocate(int(srcRng.RawSize))
 
@@ -453,11 +453,11 @@ func (o *SegmentCreator) FillExtent(ctx *Context, data RangeDataView) ([]Extent,
 			return nil, fmt.Errorf("error calculating src subrange")
 		}
 
-		o.log.Debug("mapping src range", "rng", subSrc.Extent)
+		trace(o.log, "mapping src range", "rng", subSrc.Extent)
 
 		n := subDest.Copy(subSrc)
 
-		o.log.Debug("copied range", "bytes", n, "blocks", n/BlockSize)
+		trace(o.log, "copied range", "bytes", n, "blocks", n/BlockSize)
 	}
 
 	e := time.Since(startFill)
@@ -620,8 +620,8 @@ func (o *SegmentBuilder) WriteExtent(log *slog.Logger, ext RangeDataView) ([]byt
 
 	o.offset += uint64(n)
 
-	if log.Enabled(context.TODO(), slog.LevelDebug) {
-		log.Debug("wrote range",
+	if log.Enabled(context.TODO(), LevelTrace) {
+		trace(log, "wrote range",
 			"offset", eh.Offset,
 			"size", eh.Size,
 			"raw-size", eh.RawSize,
@@ -659,8 +659,8 @@ func (o *SegmentBuilder) Flush(ctx context.Context, log *slog.Logger,
 
 	dataBegin := uint32(o.header.Len() + 8)
 
-	if log.Enabled(context.TODO(), slog.LevelDebug) {
-		log.Debug("segment constructed",
+	if log.Enabled(context.TODO(), LevelTrace) {
+		trace(log, "segment constructed",
 			"header-size", o.header.Len(),
 			"body-size", o.offset,
 			"blocks", len(o.extents),

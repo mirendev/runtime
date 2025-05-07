@@ -3,17 +3,27 @@ package rpc_test
 import (
 	"context"
 	"log/slog"
+	"os"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
+	clientv3 "go.etcd.io/etcd/client/v3"
 	"miren.dev/runtime/pkg/rpc"
+	"miren.dev/runtime/pkg/rpc/etcdreg"
 	"miren.dev/runtime/pkg/rpc/example"
 	"miren.dev/runtime/pkg/rpc/stream"
+	"miren.dev/runtime/pkg/slogfmt"
 )
+
+//go:generate go run ./cmd/rpcgen -input example/rpc.yml -output example/rpc.go -pkg example
 
 type exampleMeter struct {
 	temp float32
+}
+
+func (m *exampleMeter) ActorState() any {
+	return &m.temp
 }
 
 func (m *exampleMeter) ReadTemperature(ctx context.Context, call *example.MeterReadTemperature) error {
@@ -199,6 +209,7 @@ func TestRPC(t *testing.T) {
 		r.Equal("test", up.reading.Meter())
 		r.Equal(float32(42), up.reading.Temperature())
 
+		time.Sleep(100 * time.Millisecond) // wait for goroutine running close
 		r.True(up.closed)
 	})
 
@@ -344,6 +355,94 @@ func TestRPC(t *testing.T) {
 
 		r.Equal(int32(100), res3.Temp())
 	})
+}
+
+func TestActor(t *testing.T) {
+	t.Run("serves an interface locally", func(t *testing.T) {
+		r := require.New(t)
+
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		s := example.AdaptMeter(&exampleMeter{temp: 42})
+
+		ar := rpc.NewLocalActorRegistry()
+		err := ar.Register(ctx, "meter", s)
+		r.NoError(err)
+
+		c, err := ar.Client(ctx, "meter")
+		r.NoError(err)
+
+		mc := example.NewMeterClient(c)
+
+		res, err := mc.ReadTemperature(context.Background(), "test")
+		r.NoError(err)
+
+		r.Equal("test", res.Reading().Meter())
+		r.Equal(float32(42), res.Reading().Temperature())
+
+		res2, err := mc.GetSetter(context.Background(), "test")
+		r.NoError(err)
+
+		res3, err := res2.Setter().SetTemp(ctx, 100)
+		r.NoError(err)
+
+		r.Equal(int32(100), res3.Temp())
+	})
+
+	t.Run("serves an interface remotely", func(t *testing.T) {
+		r := require.New(t)
+
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		s := example.AdaptMeter(&exampleMeter{temp: 42})
+
+		ss, err := rpc.NewState(ctx, rpc.WithSkipVerify, rpc.WithLogLevel(slog.LevelDebug))
+		r.NoError(err)
+
+		ec, err := clientv3.New(clientv3.Config{
+			Endpoints:       []string{"etcd:2379"},
+			DialTimeout:     2 * time.Second,
+			MaxUnaryRetries: 2,
+		})
+		r.NoError(err)
+
+		log := slog.New(slogfmt.NewTextHandler(os.Stdout, &slog.HandlerOptions{
+			Level: slog.LevelDebug,
+		}))
+
+		reg := etcdreg.NewActorRegistry(log, ss, ec)
+		defer reg.Close(ctx)
+
+		err = reg.Register(ctx, "meter", s)
+
+		cs, err := rpc.NewState(ctx, rpc.WithSkipVerify)
+		r.NoError(err)
+
+		reg2 := etcdreg.NewActorRegistry(log, cs, ec)
+		defer reg2.Close(ctx)
+
+		c, err := reg2.Client(ctx, "meter")
+		r.NoError(err)
+
+		mc := &example.MeterClient{Client: c}
+
+		res, err := mc.ReadTemperature(context.Background(), "test")
+		r.NoError(err)
+
+		r.Equal("test", res.Reading().Meter())
+		r.Equal(float32(42), res.Reading().Temperature())
+
+		res2, err := mc.GetSetter(context.Background(), "test")
+		r.NoError(err)
+
+		res3, err := res2.Setter().SetTemp(ctx, 100)
+		r.NoError(err)
+
+		r.Equal(int32(100), res3.Temp())
+	})
+
 }
 
 func BenchmarkRPC(b *testing.B) {

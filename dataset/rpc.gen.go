@@ -283,7 +283,7 @@ type segmentReaderReadAtArgsData struct {
 }
 
 type SegmentReaderReadAtArgs struct {
-	call *rpc.Call
+	call rpc.Call
 	data segmentReaderReadAtArgsData
 }
 
@@ -330,7 +330,7 @@ type segmentReaderReadAtResultsData struct {
 }
 
 type SegmentReaderReadAtResults struct {
-	call *rpc.Call
+	call rpc.Call
 	data segmentReaderReadAtResultsData
 }
 
@@ -358,7 +358,7 @@ func (v *SegmentReaderReadAtResults) UnmarshalJSON(data []byte) error {
 type segmentReaderCloseArgsData struct{}
 
 type SegmentReaderCloseArgs struct {
-	call *rpc.Call
+	call rpc.Call
 	data segmentReaderCloseArgsData
 }
 
@@ -381,7 +381,7 @@ func (v *SegmentReaderCloseArgs) UnmarshalJSON(data []byte) error {
 type segmentReaderCloseResultsData struct{}
 
 type SegmentReaderCloseResults struct {
-	call *rpc.Call
+	call rpc.Call
 	data segmentReaderCloseResultsData
 }
 
@@ -404,7 +404,7 @@ func (v *SegmentReaderCloseResults) UnmarshalJSON(data []byte) error {
 type segmentReaderLayoutArgsData struct{}
 
 type SegmentReaderLayoutArgs struct {
-	call *rpc.Call
+	call rpc.Call
 	data segmentReaderLayoutArgsData
 }
 
@@ -429,7 +429,7 @@ type segmentReaderLayoutResultsData struct {
 }
 
 type SegmentReaderLayoutResults struct {
-	call *rpc.Call
+	call rpc.Call
 	data segmentReaderLayoutResultsData
 }
 
@@ -456,7 +456,7 @@ func (v *SegmentReaderLayoutResults) UnmarshalJSON(data []byte) error {
 type segmentReaderDataPathArgsData struct{}
 
 type SegmentReaderDataPathArgs struct {
-	call *rpc.Call
+	call rpc.Call
 	data segmentReaderDataPathArgsData
 }
 
@@ -481,7 +481,7 @@ type segmentReaderDataPathResultsData struct {
 }
 
 type SegmentReaderDataPathResults struct {
-	call *rpc.Call
+	call rpc.Call
 	data segmentReaderDataPathResultsData
 }
 
@@ -506,7 +506,7 @@ func (v *SegmentReaderDataPathResults) UnmarshalJSON(data []byte) error {
 }
 
 type SegmentReaderReadAt struct {
-	*rpc.Call
+	rpc.Call
 	args    SegmentReaderReadAtArgs
 	results SegmentReaderReadAtResults
 }
@@ -532,7 +532,7 @@ func (t *SegmentReaderReadAt) Results() *SegmentReaderReadAtResults {
 }
 
 type SegmentReaderClose struct {
-	*rpc.Call
+	rpc.Call
 	args    SegmentReaderCloseArgs
 	results SegmentReaderCloseResults
 }
@@ -558,7 +558,7 @@ func (t *SegmentReaderClose) Results() *SegmentReaderCloseResults {
 }
 
 type SegmentReaderLayout struct {
-	*rpc.Call
+	rpc.Call
 	args    SegmentReaderLayoutArgs
 	results SegmentReaderLayoutResults
 }
@@ -584,7 +584,7 @@ func (t *SegmentReaderLayout) Results() *SegmentReaderLayoutResults {
 }
 
 type SegmentReaderDataPath struct {
-	*rpc.Call
+	rpc.Call
 	args    SegmentReaderDataPathArgs
 	results SegmentReaderDataPathResults
 }
@@ -617,7 +617,7 @@ type SegmentReader interface {
 }
 
 type reexportSegmentReader struct {
-	client *rpc.Client
+	client rpc.Client
 }
 
 func (_ reexportSegmentReader) ReadAt(ctx context.Context, state *SegmentReaderReadAt) error {
@@ -636,7 +636,7 @@ func (_ reexportSegmentReader) DataPath(ctx context.Context, state *SegmentReade
 	panic("not implemented")
 }
 
-func (t reexportSegmentReader) CapabilityClient() *rpc.Client {
+func (t reexportSegmentReader) CapabilityClient() rpc.Client {
 	return t.client
 }
 
@@ -646,7 +646,7 @@ func AdaptSegmentReader(t SegmentReader) *rpc.Interface {
 			Name:          "readAt",
 			InterfaceName: "SegmentReader",
 			Index:         0,
-			Handler: func(ctx context.Context, call *rpc.Call) error {
+			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.ReadAt(ctx, &SegmentReaderReadAt{Call: call})
 			},
 		},
@@ -654,7 +654,7 @@ func AdaptSegmentReader(t SegmentReader) *rpc.Interface {
 			Name:          "close",
 			InterfaceName: "SegmentReader",
 			Index:         0,
-			Handler: func(ctx context.Context, call *rpc.Call) error {
+			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.Close(ctx, &SegmentReaderClose{Call: call})
 			},
 		},
@@ -662,7 +662,7 @@ func AdaptSegmentReader(t SegmentReader) *rpc.Interface {
 			Name:          "layout",
 			InterfaceName: "SegmentReader",
 			Index:         0,
-			Handler: func(ctx context.Context, call *rpc.Call) error {
+			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.Layout(ctx, &SegmentReaderLayout{Call: call})
 			},
 		},
@@ -670,7 +670,7 @@ func AdaptSegmentReader(t SegmentReader) *rpc.Interface {
 			Name:          "dataPath",
 			InterfaceName: "SegmentReader",
 			Index:         0,
-			Handler: func(ctx context.Context, call *rpc.Call) error {
+			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.DataPath(ctx, &SegmentReaderDataPath{Call: call})
 			},
 		},
@@ -680,7 +680,11 @@ func AdaptSegmentReader(t SegmentReader) *rpc.Interface {
 }
 
 type SegmentReaderClient struct {
-	*rpc.Client
+	rpc.Client
+}
+
+func NewSegmentReaderClient(client rpc.Client) *SegmentReaderClient {
+	return &SegmentReaderClient{Client: client}
 }
 
 func (c SegmentReaderClient) Export() SegmentReader {
@@ -688,7 +692,7 @@ func (c SegmentReaderClient) Export() SegmentReader {
 }
 
 type SegmentReaderClientReadAtResults struct {
-	client *rpc.Client
+	client rpc.Client
 	data   segmentReaderReadAtResultsData
 }
 
@@ -719,7 +723,7 @@ func (v SegmentReaderClient) ReadAt(ctx context.Context, offset int64, size int6
 }
 
 type SegmentReaderClientCloseResults struct {
-	client *rpc.Client
+	client rpc.Client
 	data   segmentReaderCloseResultsData
 }
 
@@ -737,7 +741,7 @@ func (v SegmentReaderClient) Close(ctx context.Context) (*SegmentReaderClientClo
 }
 
 type SegmentReaderClientLayoutResults struct {
-	client *rpc.Client
+	client rpc.Client
 	data   segmentReaderLayoutResultsData
 }
 
@@ -763,7 +767,7 @@ func (v SegmentReaderClient) Layout(ctx context.Context) (*SegmentReaderClientLa
 }
 
 type SegmentReaderClientDataPathResults struct {
-	client *rpc.Client
+	client rpc.Client
 	data   segmentReaderDataPathResultsData
 }
 
@@ -794,7 +798,7 @@ type segmentWriterWriteAtArgsData struct {
 }
 
 type SegmentWriterWriteAtArgs struct {
-	call *rpc.Call
+	call rpc.Call
 	data segmentWriterWriteAtArgsData
 }
 
@@ -841,7 +845,7 @@ type segmentWriterWriteAtResultsData struct {
 }
 
 type SegmentWriterWriteAtResults struct {
-	call *rpc.Call
+	call rpc.Call
 	data segmentWriterWriteAtResultsData
 }
 
@@ -868,7 +872,7 @@ func (v *SegmentWriterWriteAtResults) UnmarshalJSON(data []byte) error {
 type segmentWriterCloseArgsData struct{}
 
 type SegmentWriterCloseArgs struct {
-	call *rpc.Call
+	call rpc.Call
 	data segmentWriterCloseArgsData
 }
 
@@ -891,7 +895,7 @@ func (v *SegmentWriterCloseArgs) UnmarshalJSON(data []byte) error {
 type segmentWriterCloseResultsData struct{}
 
 type SegmentWriterCloseResults struct {
-	call *rpc.Call
+	call rpc.Call
 	data segmentWriterCloseResultsData
 }
 
@@ -912,7 +916,7 @@ func (v *SegmentWriterCloseResults) UnmarshalJSON(data []byte) error {
 }
 
 type SegmentWriterWriteAt struct {
-	*rpc.Call
+	rpc.Call
 	args    SegmentWriterWriteAtArgs
 	results SegmentWriterWriteAtResults
 }
@@ -938,7 +942,7 @@ func (t *SegmentWriterWriteAt) Results() *SegmentWriterWriteAtResults {
 }
 
 type SegmentWriterClose struct {
-	*rpc.Call
+	rpc.Call
 	args    SegmentWriterCloseArgs
 	results SegmentWriterCloseResults
 }
@@ -969,7 +973,7 @@ type SegmentWriter interface {
 }
 
 type reexportSegmentWriter struct {
-	client *rpc.Client
+	client rpc.Client
 }
 
 func (_ reexportSegmentWriter) WriteAt(ctx context.Context, state *SegmentWriterWriteAt) error {
@@ -980,7 +984,7 @@ func (_ reexportSegmentWriter) Close(ctx context.Context, state *SegmentWriterCl
 	panic("not implemented")
 }
 
-func (t reexportSegmentWriter) CapabilityClient() *rpc.Client {
+func (t reexportSegmentWriter) CapabilityClient() rpc.Client {
 	return t.client
 }
 
@@ -990,7 +994,7 @@ func AdaptSegmentWriter(t SegmentWriter) *rpc.Interface {
 			Name:          "writeAt",
 			InterfaceName: "SegmentWriter",
 			Index:         0,
-			Handler: func(ctx context.Context, call *rpc.Call) error {
+			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.WriteAt(ctx, &SegmentWriterWriteAt{Call: call})
 			},
 		},
@@ -998,7 +1002,7 @@ func AdaptSegmentWriter(t SegmentWriter) *rpc.Interface {
 			Name:          "close",
 			InterfaceName: "SegmentWriter",
 			Index:         0,
-			Handler: func(ctx context.Context, call *rpc.Call) error {
+			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.Close(ctx, &SegmentWriterClose{Call: call})
 			},
 		},
@@ -1008,7 +1012,11 @@ func AdaptSegmentWriter(t SegmentWriter) *rpc.Interface {
 }
 
 type SegmentWriterClient struct {
-	*rpc.Client
+	rpc.Client
+}
+
+func NewSegmentWriterClient(client rpc.Client) *SegmentWriterClient {
+	return &SegmentWriterClient{Client: client}
 }
 
 func (c SegmentWriterClient) Export() SegmentWriter {
@@ -1016,7 +1024,7 @@ func (c SegmentWriterClient) Export() SegmentWriter {
 }
 
 type SegmentWriterClientWriteAtResults struct {
-	client *rpc.Client
+	client rpc.Client
 	data   segmentWriterWriteAtResultsData
 }
 
@@ -1047,7 +1055,7 @@ func (v SegmentWriterClient) WriteAt(ctx context.Context, offset int64, data []b
 }
 
 type SegmentWriterClientCloseResults struct {
-	client *rpc.Client
+	client rpc.Client
 	data   segmentWriterCloseResultsData
 }
 
@@ -1067,7 +1075,7 @@ func (v SegmentWriterClient) Close(ctx context.Context) (*SegmentWriterClientClo
 type dataSetGetInfoArgsData struct{}
 
 type DataSetGetInfoArgs struct {
-	call *rpc.Call
+	call rpc.Call
 	data dataSetGetInfoArgsData
 }
 
@@ -1092,7 +1100,7 @@ type dataSetGetInfoResultsData struct {
 }
 
 type DataSetGetInfoResults struct {
-	call *rpc.Call
+	call rpc.Call
 	data dataSetGetInfoResultsData
 }
 
@@ -1119,7 +1127,7 @@ func (v *DataSetGetInfoResults) UnmarshalJSON(data []byte) error {
 type dataSetListSegmentsArgsData struct{}
 
 type DataSetListSegmentsArgs struct {
-	call *rpc.Call
+	call rpc.Call
 	data dataSetListSegmentsArgsData
 }
 
@@ -1144,7 +1152,7 @@ type dataSetListSegmentsResultsData struct {
 }
 
 type DataSetListSegmentsResults struct {
-	call *rpc.Call
+	call rpc.Call
 	data dataSetListSegmentsResultsData
 }
 
@@ -1174,7 +1182,7 @@ type dataSetReadSegmentArgsData struct {
 }
 
 type DataSetReadSegmentArgs struct {
-	call *rpc.Call
+	call rpc.Call
 	data dataSetReadSegmentArgsData
 }
 
@@ -1210,7 +1218,7 @@ type dataSetReadSegmentResultsData struct {
 }
 
 type DataSetReadSegmentResults struct {
-	call *rpc.Call
+	call rpc.Call
 	data dataSetReadSegmentResultsData
 }
 
@@ -1240,7 +1248,7 @@ type dataSetNewSegmentArgsData struct {
 }
 
 type DataSetNewSegmentArgs struct {
-	call *rpc.Call
+	call rpc.Call
 	data dataSetNewSegmentArgsData
 }
 
@@ -1284,7 +1292,7 @@ type dataSetNewSegmentResultsData struct {
 }
 
 type DataSetNewSegmentResults struct {
-	call *rpc.Call
+	call rpc.Call
 	data dataSetNewSegmentResultsData
 }
 
@@ -1314,7 +1322,7 @@ type dataSetReadBytesArgsData struct {
 }
 
 type DataSetReadBytesArgs struct {
-	call *rpc.Call
+	call rpc.Call
 	data dataSetReadBytesArgsData
 }
 
@@ -1361,7 +1369,7 @@ type dataSetReadBytesResultsData struct {
 }
 
 type DataSetReadBytesResults struct {
-	call *rpc.Call
+	call rpc.Call
 	data dataSetReadBytesResultsData
 }
 
@@ -1387,7 +1395,7 @@ func (v *DataSetReadBytesResults) UnmarshalJSON(data []byte) error {
 }
 
 type DataSetGetInfo struct {
-	*rpc.Call
+	rpc.Call
 	args    DataSetGetInfoArgs
 	results DataSetGetInfoResults
 }
@@ -1413,7 +1421,7 @@ func (t *DataSetGetInfo) Results() *DataSetGetInfoResults {
 }
 
 type DataSetListSegments struct {
-	*rpc.Call
+	rpc.Call
 	args    DataSetListSegmentsArgs
 	results DataSetListSegmentsResults
 }
@@ -1439,7 +1447,7 @@ func (t *DataSetListSegments) Results() *DataSetListSegmentsResults {
 }
 
 type DataSetReadSegment struct {
-	*rpc.Call
+	rpc.Call
 	args    DataSetReadSegmentArgs
 	results DataSetReadSegmentResults
 }
@@ -1465,7 +1473,7 @@ func (t *DataSetReadSegment) Results() *DataSetReadSegmentResults {
 }
 
 type DataSetNewSegment struct {
-	*rpc.Call
+	rpc.Call
 	args    DataSetNewSegmentArgs
 	results DataSetNewSegmentResults
 }
@@ -1491,7 +1499,7 @@ func (t *DataSetNewSegment) Results() *DataSetNewSegmentResults {
 }
 
 type DataSetReadBytes struct {
-	*rpc.Call
+	rpc.Call
 	args    DataSetReadBytesArgs
 	results DataSetReadBytesResults
 }
@@ -1525,7 +1533,7 @@ type DataSet interface {
 }
 
 type reexportDataSet struct {
-	client *rpc.Client
+	client rpc.Client
 }
 
 func (_ reexportDataSet) GetInfo(ctx context.Context, state *DataSetGetInfo) error {
@@ -1548,7 +1556,7 @@ func (_ reexportDataSet) ReadBytes(ctx context.Context, state *DataSetReadBytes)
 	panic("not implemented")
 }
 
-func (t reexportDataSet) CapabilityClient() *rpc.Client {
+func (t reexportDataSet) CapabilityClient() rpc.Client {
 	return t.client
 }
 
@@ -1558,7 +1566,7 @@ func AdaptDataSet(t DataSet) *rpc.Interface {
 			Name:          "getInfo",
 			InterfaceName: "DataSet",
 			Index:         0,
-			Handler: func(ctx context.Context, call *rpc.Call) error {
+			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.GetInfo(ctx, &DataSetGetInfo{Call: call})
 			},
 		},
@@ -1566,7 +1574,7 @@ func AdaptDataSet(t DataSet) *rpc.Interface {
 			Name:          "listSegments",
 			InterfaceName: "DataSet",
 			Index:         0,
-			Handler: func(ctx context.Context, call *rpc.Call) error {
+			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.ListSegments(ctx, &DataSetListSegments{Call: call})
 			},
 		},
@@ -1574,7 +1582,7 @@ func AdaptDataSet(t DataSet) *rpc.Interface {
 			Name:          "readSegment",
 			InterfaceName: "DataSet",
 			Index:         0,
-			Handler: func(ctx context.Context, call *rpc.Call) error {
+			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.ReadSegment(ctx, &DataSetReadSegment{Call: call})
 			},
 		},
@@ -1582,7 +1590,7 @@ func AdaptDataSet(t DataSet) *rpc.Interface {
 			Name:          "newSegment",
 			InterfaceName: "DataSet",
 			Index:         0,
-			Handler: func(ctx context.Context, call *rpc.Call) error {
+			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.NewSegment(ctx, &DataSetNewSegment{Call: call})
 			},
 		},
@@ -1590,7 +1598,7 @@ func AdaptDataSet(t DataSet) *rpc.Interface {
 			Name:          "readBytes",
 			InterfaceName: "DataSet",
 			Index:         0,
-			Handler: func(ctx context.Context, call *rpc.Call) error {
+			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.ReadBytes(ctx, &DataSetReadBytes{Call: call})
 			},
 		},
@@ -1600,7 +1608,11 @@ func AdaptDataSet(t DataSet) *rpc.Interface {
 }
 
 type DataSetClient struct {
-	*rpc.Client
+	rpc.Client
+}
+
+func NewDataSetClient(client rpc.Client) *DataSetClient {
+	return &DataSetClient{Client: client}
 }
 
 func (c DataSetClient) Export() DataSet {
@@ -1608,7 +1620,7 @@ func (c DataSetClient) Export() DataSet {
 }
 
 type DataSetClientGetInfoResults struct {
-	client *rpc.Client
+	client rpc.Client
 	data   dataSetGetInfoResultsData
 }
 
@@ -1634,7 +1646,7 @@ func (v DataSetClient) GetInfo(ctx context.Context) (*DataSetClientGetInfoResult
 }
 
 type DataSetClientListSegmentsResults struct {
-	client *rpc.Client
+	client rpc.Client
 	data   dataSetListSegmentsResultsData
 }
 
@@ -1663,7 +1675,7 @@ func (v DataSetClient) ListSegments(ctx context.Context) (*DataSetClientListSegm
 }
 
 type DataSetClientReadSegmentResults struct {
-	client *rpc.Client
+	client rpc.Client
 	data   dataSetReadSegmentResultsData
 }
 
@@ -1688,7 +1700,7 @@ func (v DataSetClient) ReadSegment(ctx context.Context, id string) (*DataSetClie
 }
 
 type DataSetClientNewSegmentResults struct {
-	client *rpc.Client
+	client rpc.Client
 	data   dataSetNewSegmentResultsData
 }
 
@@ -1714,7 +1726,7 @@ func (v DataSetClient) NewSegment(ctx context.Context, id string, layout *Segmen
 }
 
 type DataSetClientReadBytesResults struct {
-	client *rpc.Client
+	client rpc.Client
 	data   dataSetReadBytesResultsData
 }
 
@@ -1747,7 +1759,7 @@ func (v DataSetClient) ReadBytes(ctx context.Context, offset int64, count int64)
 type dataSetsListArgsData struct{}
 
 type DataSetsListArgs struct {
-	call *rpc.Call
+	call rpc.Call
 	data dataSetsListArgsData
 }
 
@@ -1772,7 +1784,7 @@ type dataSetsListResultsData struct {
 }
 
 type DataSetsListResults struct {
-	call *rpc.Call
+	call rpc.Call
 	data dataSetsListResultsData
 }
 
@@ -1802,7 +1814,7 @@ type dataSetsCreateArgsData struct {
 }
 
 type DataSetsCreateArgs struct {
-	call *rpc.Call
+	call rpc.Call
 	data dataSetsCreateArgsData
 }
 
@@ -1835,7 +1847,7 @@ type dataSetsCreateResultsData struct {
 }
 
 type DataSetsCreateResults struct {
-	call *rpc.Call
+	call rpc.Call
 	data dataSetsCreateResultsData
 }
 
@@ -1864,7 +1876,7 @@ type dataSetsGetArgsData struct {
 }
 
 type DataSetsGetArgs struct {
-	call *rpc.Call
+	call rpc.Call
 	data dataSetsGetArgsData
 }
 
@@ -1900,7 +1912,7 @@ type dataSetsGetResultsData struct {
 }
 
 type DataSetsGetResults struct {
-	call *rpc.Call
+	call rpc.Call
 	data dataSetsGetResultsData
 }
 
@@ -1929,7 +1941,7 @@ type dataSetsDeleteArgsData struct {
 }
 
 type DataSetsDeleteArgs struct {
-	call *rpc.Call
+	call rpc.Call
 	data dataSetsDeleteArgsData
 }
 
@@ -1963,7 +1975,7 @@ func (v *DataSetsDeleteArgs) UnmarshalJSON(data []byte) error {
 type dataSetsDeleteResultsData struct{}
 
 type DataSetsDeleteResults struct {
-	call *rpc.Call
+	call rpc.Call
 	data dataSetsDeleteResultsData
 }
 
@@ -1984,7 +1996,7 @@ func (v *DataSetsDeleteResults) UnmarshalJSON(data []byte) error {
 }
 
 type DataSetsList struct {
-	*rpc.Call
+	rpc.Call
 	args    DataSetsListArgs
 	results DataSetsListResults
 }
@@ -2010,7 +2022,7 @@ func (t *DataSetsList) Results() *DataSetsListResults {
 }
 
 type DataSetsCreate struct {
-	*rpc.Call
+	rpc.Call
 	args    DataSetsCreateArgs
 	results DataSetsCreateResults
 }
@@ -2036,7 +2048,7 @@ func (t *DataSetsCreate) Results() *DataSetsCreateResults {
 }
 
 type DataSetsGet struct {
-	*rpc.Call
+	rpc.Call
 	args    DataSetsGetArgs
 	results DataSetsGetResults
 }
@@ -2062,7 +2074,7 @@ func (t *DataSetsGet) Results() *DataSetsGetResults {
 }
 
 type DataSetsDelete struct {
-	*rpc.Call
+	rpc.Call
 	args    DataSetsDeleteArgs
 	results DataSetsDeleteResults
 }
@@ -2095,7 +2107,7 @@ type DataSets interface {
 }
 
 type reexportDataSets struct {
-	client *rpc.Client
+	client rpc.Client
 }
 
 func (_ reexportDataSets) List(ctx context.Context, state *DataSetsList) error {
@@ -2114,7 +2126,7 @@ func (_ reexportDataSets) Delete(ctx context.Context, state *DataSetsDelete) err
 	panic("not implemented")
 }
 
-func (t reexportDataSets) CapabilityClient() *rpc.Client {
+func (t reexportDataSets) CapabilityClient() rpc.Client {
 	return t.client
 }
 
@@ -2124,7 +2136,7 @@ func AdaptDataSets(t DataSets) *rpc.Interface {
 			Name:          "list",
 			InterfaceName: "DataSets",
 			Index:         0,
-			Handler: func(ctx context.Context, call *rpc.Call) error {
+			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.List(ctx, &DataSetsList{Call: call})
 			},
 		},
@@ -2132,7 +2144,7 @@ func AdaptDataSets(t DataSets) *rpc.Interface {
 			Name:          "create",
 			InterfaceName: "DataSets",
 			Index:         0,
-			Handler: func(ctx context.Context, call *rpc.Call) error {
+			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.Create(ctx, &DataSetsCreate{Call: call})
 			},
 		},
@@ -2140,7 +2152,7 @@ func AdaptDataSets(t DataSets) *rpc.Interface {
 			Name:          "get",
 			InterfaceName: "DataSets",
 			Index:         0,
-			Handler: func(ctx context.Context, call *rpc.Call) error {
+			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.Get(ctx, &DataSetsGet{Call: call})
 			},
 		},
@@ -2148,7 +2160,7 @@ func AdaptDataSets(t DataSets) *rpc.Interface {
 			Name:          "delete",
 			InterfaceName: "DataSets",
 			Index:         0,
-			Handler: func(ctx context.Context, call *rpc.Call) error {
+			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.Delete(ctx, &DataSetsDelete{Call: call})
 			},
 		},
@@ -2158,7 +2170,11 @@ func AdaptDataSets(t DataSets) *rpc.Interface {
 }
 
 type DataSetsClient struct {
-	*rpc.Client
+	rpc.Client
+}
+
+func NewDataSetsClient(client rpc.Client) *DataSetsClient {
+	return &DataSetsClient{Client: client}
 }
 
 func (c DataSetsClient) Export() DataSets {
@@ -2166,7 +2182,7 @@ func (c DataSetsClient) Export() DataSets {
 }
 
 type DataSetsClientListResults struct {
-	client *rpc.Client
+	client rpc.Client
 	data   dataSetsListResultsData
 }
 
@@ -2195,7 +2211,7 @@ func (v DataSetsClient) List(ctx context.Context) (*DataSetsClientListResults, e
 }
 
 type DataSetsClientCreateResults struct {
-	client *rpc.Client
+	client rpc.Client
 	data   dataSetsCreateResultsData
 }
 
@@ -2220,7 +2236,7 @@ func (v DataSetsClient) Create(ctx context.Context, info *DataSetInfo) (*DataSet
 }
 
 type DataSetsClientGetResults struct {
-	client *rpc.Client
+	client rpc.Client
 	data   dataSetsGetResultsData
 }
 
@@ -2245,7 +2261,7 @@ func (v DataSetsClient) Get(ctx context.Context, id string) (*DataSetsClientGetR
 }
 
 type DataSetsClientDeleteResults struct {
-	client *rpc.Client
+	client rpc.Client
 	data   dataSetsDeleteResultsData
 }
 

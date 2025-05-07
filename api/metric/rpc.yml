@@ -1,0 +1,56 @@
+apiVersion: miren.dev/rpc/v1
+kind: IDL
+
+imports:
+  standard:
+    path: ../../pkg/rpc/standard/standard.yml
+    import: miren.dev/runtime/pkg/rpc/standard
+
+types:
+  - type: MetricSnapshot
+    fields:
+      - name: measured_at
+        type: standard.Timestamp
+        index: 0
+      - name: total_cpu_time
+        type: int64
+        index: 1
+      - name: kernel_cpu_time
+        type: int64
+        index: 2
+      - name: memory_usage
+        type: int64
+        index: 3
+      - name: memory_peak
+        type: int64
+        index: 4
+      - name: swap_usage
+        type: int64
+        index: 5
+      - name: swap_peak
+        type: int64
+        index: 6
+
+  - type: ContainerSnapshot
+    fields:
+      - name: name
+        type: string
+        index: 0
+      - name: metrics
+        type: MetricSnapshot
+        index: 1
+
+interfaces:
+  - name: SandboxMetrics
+    methods:
+      - name: snapshot
+        http: GET /snapshot/{sandbox}
+        parameters:
+          - name: sandbox
+            type: string
+        results:
+          - name: metrics
+            type: MetricSnapshot
+          - name: containers
+            type: list
+            element: ContainerSnapshot

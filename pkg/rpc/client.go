@@ -12,6 +12,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"time"
 
 	"github.com/fxamacker/cbor/v2"
@@ -21,13 +22,24 @@ import (
 	"github.com/quic-go/quic-go/http3"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/propagation"
+	"miren.dev/runtime/pkg/cond"
+	"miren.dev/runtime/pkg/webtransport"
 )
 
-type Client struct {
+type Client interface {
+	CallWithCaps(ctx context.Context, method string, args, result any, caps map[OID]*InlineCapability) error
+	Call(ctx context.Context, method string, args, result any) error
+	NewInlineCapability(i *Interface, lower any) (*InlineCapability, OID, *Capability)
+	NewClient(capa *Capability) Client
+	Close() error
+}
+
+type NetworkClient struct {
 	State *State
 
 	transport  *quic.Transport
 	htr        http3.Transport
+	ws         webtransport.Dialer
 	capa       *Capability
 	remote     string
 	remoteAddr net.Addr
@@ -42,10 +54,11 @@ type Client struct {
 
 	//cachedConn *cachedConn
 
-	localClient *localClient
+	inlineClient *inlineClient
+	localClient  *localClient
 }
 
-func (c *Client) setupTransport() {
+func (c *NetworkClient) setupTransport() {
 	c.htr.Logger = c.State.log.With("module", "rpc-call")
 	c.htr.TLSClientConfig = c.tlsCfg
 	c.htr.QUICConfig = &DefaultQUICConfig
@@ -57,9 +70,13 @@ func (c *Client) setupTransport() {
 
 		return c.transport.DialEarly(ctx, uaddr, tlsCfg, cfg)
 	}
+
+	c.ws.TLSClientConfig = c.tlsCfg
+	c.ws.QUICConfig = &DefaultQUICConfig
+	c.ws.DialAddr = c.htr.Dial
 }
 
-func (c *Client) NewClient(capa *Capability) *Client {
+func (c *NetworkClient) NewClient(capa *Capability) Client {
 	if c.localClient != nil {
 		return c.localClient.NewClient(capa)
 	}
@@ -67,35 +84,53 @@ func (c *Client) NewClient(capa *Capability) *Client {
 	return c.newClientUnder(capa)
 }
 
-func (c *Client) String() string {
+func (c *NetworkClient) String() string {
 	return fmt.Sprintf("Client(remote: %s, oid: %s)", c.remote, c.oid)
 }
 
-func (c *Client) reexportCapability(origin *Client) (*Capability, error) {
+func (c *NetworkClient) reexportCapability(oc Client) (*Capability, error) {
+	origin, ok := oc.(*NetworkClient)
+	if !ok {
+		return nil, errors.New("origin client is not a network client")
+	}
+
 	// We need to re-export the capability held by +cl+ so that it can
 	// be used by the entities that we're calling.
 
 	return origin.requestReexportCapability(c.State.top, origin.capa, c.capa.Issuer)
 }
 
-func (c *Client) NewCapability(i *Interface, lower any) *Capability {
-	if rc, ok := lower.(interface{ CapabilityClient() *Client }); ok {
+func (c *NetworkClient) NewCapability(i *Interface, lower any) *Capability {
+	if rc, ok := lower.(interface{ CapabilityClient() Client }); ok {
 		capa, err := c.reexportCapability(rc.CapabilityClient())
 		if err != nil {
 			panic(err)
 		}
 
 		return capa
+	} else if c.localClient != nil {
+		return c.localClient.NewCapability(i)
 	} else {
-		return c.State.server.assignCapability(i, c.capa.Issuer, c.serverObservedAddress, "")
+		return c.State.server.assignCapability(i, c.capa.Issuer, c.serverObservedAddress, "", true)
 	}
 }
 
-func (c *Client) roundTrip(r *http.Request) (*http.Response, error) {
+func (c *NetworkClient) NewInlineCapability(i *Interface, lower any) (*InlineCapability, OID, *Capability) {
+	capa := c.NewCapability(i, lower)
+
+	ic := &InlineCapability{
+		Capability: capa,
+		Interface:  i,
+	}
+
+	return ic, capa.OID, capa
+}
+
+func (c *NetworkClient) roundTrip(r *http.Request) (*http.Response, error) {
 	return c.htr.RoundTrip(r)
 }
 
-func (c *Client) sendIdentity(ctx context.Context) error {
+func (c *NetworkClient) sendIdentity(ctx context.Context) error {
 	url := "https://" + c.remote + "/_rpc/identify"
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, nil)
 	if err != nil {
@@ -156,8 +191,8 @@ func (c *Client) sendIdentity(ctx context.Context) error {
 	return nil
 }
 
-func (c *Client) resolveCapability(name string) error {
-	url := "https://" + c.remote + "/_rpc/lookup/" + name
+func (c *NetworkClient) resolveCapability(name string) error {
+	url := "https://" + c.remote + "/_rpc/lookup/" + url.PathEscape(name)
 	c.State.log.Debug("rpc.resolve", "name", name, "url", url)
 	req, err := http.NewRequest(http.MethodPost, url, nil)
 	if err != nil {
@@ -197,7 +232,7 @@ func (c *Client) resolveCapability(name string) error {
 	return nil
 }
 
-func (c *Client) reresolveCapability(rs *InterfaceState) error {
+func (c *NetworkClient) reresolveCapability(rs *InterfaceState) error {
 	url := "https://" + c.remote + "/_rpc/reresolve"
 	c.State.log.Debug("reresolving capability from state", "url", url)
 
@@ -243,7 +278,7 @@ func (c *Client) reresolveCapability(rs *InterfaceState) error {
 	return nil
 }
 
-func (c *Client) requestReexportCapability(ctx context.Context, capa *Capability, target ed25519.PublicKey) (*Capability, error) {
+func (c *NetworkClient) requestReexportCapability(ctx context.Context, capa *Capability, target ed25519.PublicKey) (*Capability, error) {
 	url := "https://" + c.remote + "/_rpc/reexport/" + string(capa.OID)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, nil)
 	if err != nil {
@@ -283,7 +318,7 @@ func (c *Client) requestReexportCapability(ctx context.Context, capa *Capability
 	return lr.Capability, nil
 }
 
-func (c *Client) refOID(ctx context.Context, oid OID) error {
+func (c *NetworkClient) refOID(ctx context.Context, oid OID) error {
 	url := "https://" + c.remote + "/_rpc/ref/" + string(oid)
 	req, err := http.NewRequest(http.MethodPost, url, nil)
 	if err != nil {
@@ -316,7 +351,11 @@ func (c *Client) refOID(ctx context.Context, oid OID) error {
 	return nil
 }
 
-func (c *Client) derefOID(ctx context.Context, oid OID) error {
+func (c *NetworkClient) derefOID(ctx context.Context, oid OID) error {
+	if c.inlineClient != nil {
+		return c.inlineClient.derefOID(ctx, oid)
+	}
+
 	url := "https://" + c.remote + "/_rpc/deref/" + string(oid)
 	req, err := http.NewRequest(http.MethodPost, url, nil)
 	if err != nil {
@@ -349,11 +388,11 @@ func (c *Client) derefOID(ctx context.Context, oid OID) error {
 	return nil
 }
 
-func (c *Client) Close() error {
+func (c *NetworkClient) Close() error {
 	return c.derefOID(c.State.top, c.oid)
 }
 
-func (c *Client) prepareRequest(ctx context.Context, req *http.Request) error {
+func (c *NetworkClient) prepareRequest(ctx context.Context, req *http.Request) error {
 	Propagator().Inject(ctx, propagation.HeaderCarrier(req.Header))
 
 	ts := time.Now()
@@ -364,7 +403,7 @@ func (c *Client) prepareRequest(ctx context.Context, req *http.Request) error {
 
 	var buf bytes.Buffer
 
-	fmt.Fprintf(&buf, "POST %s %s", req.URL.Path, tss)
+	fmt.Fprintf(&buf, "%s %s %s", req.Method, req.URL.Path, tss)
 
 	sign, err := c.State.privkey.Sign(rand.Reader, buf.Bytes(), crypto.Hash(0))
 	if err != nil {
@@ -396,9 +435,13 @@ func resolveUDPAddr(ctx context.Context, network, addr string) (*net.UDPAddr, er
 	return &net.UDPAddr{IP: ip.IP, Port: port, Zone: ip.Zone}, nil
 }
 
-func (c *Client) Call(ctx context.Context, method string, args, result any) error {
+func (c *NetworkClient) Call(ctx context.Context, method string, args, result any) error {
 	if c.localClient != nil {
 		return c.localClient.Call(ctx, method, args, result)
+	}
+
+	if c.inlineClient != nil && c.capa.Inline {
+		return c.inlineClient.Call(ctx, method, args, result)
 	}
 
 	ctx, span := Tracer().Start(ctx, "rpc.call."+method)
@@ -463,21 +506,269 @@ request:
 				// We have a resolution, let's try to resolve it and update our capability.
 				rerr := c.reresolveCapability(c.capa.RestoreState)
 				if rerr != nil {
-					return fmt.Errorf("unknown capability, failed to reresolve: %w", rerr)
+					return cond.NotFound("capability", c.capa.OID)
 				}
 
 				continue request
 			}
 
-			return errors.New("unknown capability")
+			return cond.NotFound("capability", c.capa.OID)
 		case "error":
+			code := hr.Trailer.Get("rpc-error-code")
+			category := hr.Trailer.Get("rpc-error-category")
 			errs := hr.Trailer.Get("rpc-error")
-			return fmt.Errorf("remote error: %s", errs)
+			return cond.RemoteError(category, code, errs)
 		case "panic":
 			errs := hr.Trailer.Get("rpc-error")
-			return fmt.Errorf("remote panic: %s", errs)
+			return cond.RemoteError("panic", "panic", errs)
 		}
 
 		return err
 	}
+}
+
+type InlineCapability struct {
+	*Capability
+	*Interface
+}
+
+func (c *NetworkClient) CallWithCaps(ctx context.Context, method string, args, result any, caps map[OID]*InlineCapability) error {
+	if c.localClient != nil {
+		return c.localClient.Call(ctx, method, args, result)
+	}
+
+	ctx, span := Tracer().Start(ctx, "rpc.call."+method)
+	defer span.End()
+
+	data, err := cbor.Marshal(args)
+	if err != nil {
+		return err
+	}
+
+request:
+	for {
+		span.SetAttributes(attribute.String("oid", string(c.oid)))
+
+		url := "https://" + c.remote + "/_rpc/callstream/" + string(c.oid) + "/" + method
+		req, err := http.NewRequestWithContext(ctx, http.MethodConnect, url, bytes.NewReader(data))
+		if err != nil {
+			return err
+		}
+
+		err = c.prepareRequest(ctx, req)
+		if err != nil {
+			return err
+		}
+
+		hr, sess, err := c.ws.Dial(ctx, url, req.Header)
+		if err != nil {
+			if _, ok := err.(*quic.ApplicationError); ok {
+				c.State.log.Info("rpc.call retrying", "oid", string(c.oid), "error", err)
+				continue request
+			}
+
+			return err
+		}
+
+		retry, err := c.handleCallStream(ctx, hr, sess, method, args, result, caps)
+		if err != nil {
+			return err
+		}
+
+		if retry {
+			continue request
+		}
+
+		return nil
+	}
+}
+
+func (c *NetworkClient) handleCallStream(
+	ctx context.Context,
+	hr *http.Response,
+	sess *webtransport.Session,
+	method string,
+	args, result any,
+	caps map[OID]*InlineCapability,
+) (bool, error) {
+	if hr.StatusCode != http.StatusOK {
+		status := hr.Trailer.Get("rpc-status")
+
+		err := cond.Errorf("unexpected status code: %d", hr.StatusCode)
+
+		switch status {
+		case "ok", "":
+			// The remote side thought everything was fine, so use our ability to parse
+			// the response as the error.
+			return false, err
+		case "unknown-capability":
+			if c.capa.RestoreState != nil {
+				// We have a resolution, let's try to resolve it and update our capability.
+				rerr := c.reresolveCapability(c.capa.RestoreState)
+				if rerr != nil {
+					err = cond.NotFound("capability", c.capa.OID)
+				}
+			}
+
+			err = cond.NotFound("capability", c.capa.OID)
+		case "error":
+			errs := hr.Trailer.Get("rpc-error")
+			err = cond.RemoteError("generic", "unknown", errs)
+		case "panic":
+			errs := hr.Trailer.Get("rpc-error")
+			err = cond.Panic(errs)
+		}
+
+		return false, err
+	}
+
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	go func() {
+		for {
+			str, err := sess.AcceptStream(ctx)
+			if err != nil {
+				break
+			}
+
+			go func() {
+				defer str.Close()
+
+				var rs streamRequest
+
+				dec := cbor.NewDecoder(str)
+
+				err = dec.Decode(&rs)
+				if err != nil {
+					c.State.log.Error("rpc.callstream call: error decoding stream request", "error", err)
+					return
+				}
+
+				enc := cbor.NewEncoder(str)
+
+				switch rs.Kind {
+				case "call":
+					iface, ok := caps[rs.OID]
+					if !ok {
+						enc.Encode(refResponse{
+							Status: "error",
+							Error:  "unknown capability",
+						})
+					} else {
+						mm := iface.methods[rs.Method]
+						if mm.Handler == nil {
+							enc.Encode(refResponse{
+								Status: "error",
+								Error:  "unknown method",
+							})
+						} else {
+							ctx, cancel := context.WithCancel(ctx)
+							err := c.callInline(ctx, mm, rs.OID, rs.Method, iface.Interface, enc, dec)
+							cancel()
+							if err != nil {
+								if !errors.Is(err, context.Canceled) && !errors.Is(err, cond.ErrClosed{}) {
+									c.State.log.Error("rpc.callstream: error calling inline", "error", err)
+								}
+								return
+							}
+						}
+					}
+				default:
+					c.State.log.Error("rpc.callstream: unknown call stream request", "kind", rs.Kind)
+				}
+			}()
+		}
+	}()
+
+	// Open the control stream
+	ctrl, err := sess.OpenStreamSync(ctx)
+	if err != nil {
+		c.State.log.Error("rpc.callstream ctrl: error opening control stream", "error", err)
+		return false, err
+	}
+
+	enc := cbor.NewEncoder(ctrl)
+	enc.Encode(args)
+
+	dec := cbor.NewDecoder(ctrl)
+
+	for {
+		var rs streamRequest
+
+		err = dec.Decode(&rs)
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				err = nil
+				break
+			}
+			break
+		}
+
+		switch rs.Kind {
+		case "result":
+			err = dec.Decode(result)
+			break
+		case "deref":
+			c.State.server.Deref(rs.OID)
+		case "error":
+			err = cond.RemoteError(rs.Category, rs.Code, rs.Error)
+			break
+		default:
+			c.State.log.Error("rpc.callstream: unknown control stream request", "kind", rs.Kind)
+		}
+	}
+
+	return false, err
+}
+
+func (c *NetworkClient) callInline(
+	ctx context.Context,
+	mm Method,
+	oid OID,
+	method string,
+	iface *Interface,
+	enc *cbor.Encoder,
+	dec *cbor.Decoder,
+) error {
+	call := &NetworkCall{
+		oid:    oid,
+		method: method,
+		dec:    dec,
+		caller: c.capa.User,
+		inline: true,
+	}
+
+	err := cond.Wrap(mm.Handler(ctx, call))
+	if err != nil {
+		var msg, category, code string
+
+		if emsg, ok := err.(ErrorMessage); ok {
+			msg = emsg.ErrorMessage()
+		} else {
+			msg = err.Error()
+		}
+
+		if ecat, ok := err.(ErrorCategory); ok {
+			category = ecat.ErrorCategory()
+		}
+
+		if ecode, ok := err.(ErrorCode); ok {
+			code = ecode.ErrorCode()
+		}
+
+		enc.Encode(refResponse{
+			Status:   "error",
+			Error:    msg,
+			Category: category,
+			Code:     code,
+		})
+		return err
+	}
+
+	enc.Encode(refResponse{
+		Status: "ok",
+	})
+
+	return enc.Encode(call.results)
 }

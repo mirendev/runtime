@@ -281,23 +281,23 @@ func (c *Context) DisplayTableTemplate(template string, items []any) {
 
 // DisplayTable renders a formatted table with headers and rows
 func (c *Context) DisplayTable(headers []string, rows [][]string) {
-  // Validate row lengths
-  for i, row := range rows {
-    if len(row) != len(headers) {
-      c.Log.Error("row has incorrect number of columns",
-        "row", i,
-        "expected", len(headers),
-        "actual", len(row))
-      // Pad or truncate the row to match header length
-      if len(row) < len(headers) {
-        newRow := make([]string, len(headers))
-        copy(newRow, row)
-        rows[i] = newRow
-      } else {
-        rows[i] = row[:len(headers)]
-      }
-    }
-  }
+	// Validate row lengths
+	for i, row := range rows {
+		if len(row) != len(headers) {
+			c.Log.Error("row has incorrect number of columns",
+				"row", i,
+				"expected", len(headers),
+				"actual", len(row))
+			// Pad or truncate the row to match header length
+			if len(row) < len(headers) {
+				newRow := make([]string, len(headers))
+				copy(newRow, row)
+				rows[i] = newRow
+			} else {
+				rows[i] = row[:len(headers)]
+			}
+		}
+	}
 
 	// Define styles
 	headerStyle := lipgloss.NewStyle().
@@ -355,16 +355,20 @@ func (c *Context) DisplayTable(headers []string, rows [][]string) {
 	}
 }
 
-func (c *Context) RPCClient(name string) (*rpc.Client, error) {
+func (c *Context) RPCClient(name string) (*rpc.NetworkClient, error) {
 	var opts []rpc.StateOption
 
 	opts = append(opts, rpc.WithLogger(c.Log))
 
 	if c.ClusterConfig != nil {
-		opts = append(opts,
-			rpc.WithCertPEMs([]byte(c.ClusterConfig.ClientCert), []byte(c.ClusterConfig.ClientKey)),
-			rpc.WithCertificateVerification([]byte(c.ClusterConfig.CACert)),
-		)
+		if c.ClusterConfig.Insecure {
+			opts = append(opts, rpc.WithSkipVerify)
+		} else {
+			opts = append(opts,
+				rpc.WithCertPEMs([]byte(c.ClusterConfig.ClientCert), []byte(c.ClusterConfig.ClientKey)),
+				rpc.WithCertificateVerification([]byte(c.ClusterConfig.CACert)),
+			)
+		}
 	} else {
 		opts = append(opts, rpc.WithSkipVerify)
 	}

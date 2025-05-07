@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"slices"
@@ -20,6 +21,7 @@ import (
 	"github.com/quic-go/quic-go/http3"
 	"miren.dev/runtime/pkg/packet"
 	"miren.dev/runtime/pkg/slogfmt"
+	"miren.dev/runtime/pkg/webtransport"
 )
 
 var (
@@ -73,6 +75,7 @@ type State struct {
 
 	server *Server
 	hs     *http3.Server
+	ws     *webtransport.Server
 	li     *quic.EarlyListener
 
 	localMP *packet.PacketConnMultiplex
@@ -384,19 +387,30 @@ func (s *State) startListener(ctx context.Context, so *stateOptions) error {
 		return err
 	}
 
-	serv := &http3.Server{
-		Handler: s.server,
-		Logger:  s.log.With("module", "http3"),
+	s.ws = &webtransport.Server{
+		H3: http3.Server{
+			Handler: s.server,
+			Logger:  s.log.With("module", "http3"),
+		},
+		CheckOrigin: func(r *http.Request) bool {
+			return true
+		},
 	}
 
-	s.hs = serv
+	s.hs = &s.ws.H3
+	s.server.ws = s.ws
 
 	go func() {
 		<-ctx.Done()
-		serv.Shutdown(context.Background())
+		s.hs.Shutdown(context.Background())
 	}()
 
-	go serv.ServeListener(s.li)
+	err = s.ws.Init()
+	if err != nil {
+		return err
+	}
+
+	go s.hs.ServeListener(s.li)
 
 	return nil
 }
@@ -410,9 +424,9 @@ func (s *State) Close() error {
 	return s.transport.Conn.Close()
 }
 
-func (s *State) Connect(remote string, name string) (*Client, error) {
+func (s *State) Connect(remote string, name string) (*NetworkClient, error) {
 	var (
-		client *Client
+		client *NetworkClient
 		err    error
 	)
 	if strings.HasPrefix(remote, "unix:") {
@@ -436,7 +450,7 @@ func (s *State) Connect(remote string, name string) (*Client, error) {
 			return nil, err
 		}
 	} else {
-		client = &Client{
+		client = &NetworkClient{
 			State:     s,
 			transport: s.transport,
 			tlsCfg:    s.clientTlsCfg,
@@ -461,7 +475,7 @@ func (s *State) Connect(remote string, name string) (*Client, error) {
 	return client, nil
 }
 
-func (c *Client) newClientUnder(capa *Capability) *Client {
+func (c *NetworkClient) newClientUnder(capa *Capability) *NetworkClient {
 	// see if we have the issuer of this capa in our knownAddresses table,
 	// and if so, we use that as it's remote address rather than the one
 	// in the capability.
@@ -479,7 +493,7 @@ func (c *Client) newClientUnder(capa *Capability) *Client {
 		addr = c.remote
 	}
 
-	newClient := &Client{
+	newClient := &NetworkClient{
 		State:     c.State,
 		transport: transport,
 		tlsCfg:    c.State.clientTlsCfg.Clone(),
@@ -493,7 +507,7 @@ func (c *Client) newClientUnder(capa *Capability) *Client {
 	return newClient
 }
 
-func (s *State) newClientFrom(capa *Capability, peer *x509.Certificate) *Client {
+func (s *State) newClientFrom(capa *Capability, peer *x509.Certificate) *NetworkClient {
 	transport := s.transport
 
 	if strings.HasPrefix(capa.Address, "unix:") {
@@ -513,7 +527,7 @@ func (s *State) newClientFrom(capa *Capability, peer *x509.Certificate) *Client 
 		}
 	}
 
-	c := &Client{
+	c := &NetworkClient{
 		State:     s,
 		transport: transport,
 		tlsCfg:    cfg,

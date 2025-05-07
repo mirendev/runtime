@@ -1,0 +1,95 @@
+domain: dev.miren.core
+version: v1alpha
+kinds:
+  metadata:
+    name:
+      type: string
+      doc: The name of the entity
+    project:
+      type: ref
+      doc: A reference to the project the entity belongs to
+    labels:
+      type: label
+      doc: Identifying labels for the entity
+      many: true
+
+  project:
+    owner:
+      type: string
+      doc: The email address of the project owner
+
+  app:
+    project:
+      type: ref
+      doc: The project that the app belongs to
+    active_version:
+      type: ref
+      doc: The version of the project that should be used
+
+  app_version:
+    app:
+      type: ref
+      doc: The application the version is for
+    version:
+      type: string
+      doc: The version of this app
+    image_url:
+      type: string
+      doc: The OCI url for the versions code
+
+    manifest:
+      type: string
+      doc: The OCI image manifest for the version
+
+    manifest_digest:
+      type: string
+      doc: The digest of the manifest
+      indexed: true
+
+    config:
+      type: component
+      doc: The configuration of the version
+      attrs:
+        port:
+          type: int
+          doc: The TCP port to access, default to 3000
+        concurrency:
+          type: component
+          doc: How to control the concurrency for the application
+          attrs:
+            fixed:
+              type: int
+              doc: How concurrent requests this app can handle
+            auto:
+              type: int
+              doc: How to scale the application based on the node
+        entrypoint:
+          type: string
+          doc: The container entrypoint command
+        commands:
+          type: component
+          doc: The command to run for a specific service type
+          many: true
+          attrs:
+            service:
+              type: string
+              doc: The service name
+            command:
+              type: string
+              doc: The command to run for the service
+        variable:
+          type: component
+          doc: A variable to be exposed to the app
+          many: true
+          attrs:
+            key:
+              type: string
+              doc: The name of the variable
+            value:
+              type: string
+              doc: The value of the value
+            sensitive:
+              type: bool
+              doc: Whether or not the value is sensitive
+
+

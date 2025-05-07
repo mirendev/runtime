@@ -21,6 +21,7 @@ type Generator struct {
 	Interfaces []*DescInterface
 
 	importedGenerators map[string]*Generator
+	importedPackages   map[string][]string
 
 	typeInfo map[string]typeInfo
 }
@@ -29,12 +30,14 @@ func NewGenerator() (*Generator, error) {
 	return &Generator{
 		typeInfo:           make(map[string]typeInfo),
 		importedGenerators: make(map[string]*Generator),
+		importedPackages:   make(map[string][]string),
 	}, nil
 }
 
 type Import struct {
-	Path   string `yaml:"path"`
-	Import string `yaml:"import"`
+	Path   string   `yaml:"path"`
+	Import string   `yaml:"import"`
+	Types  []string `yaml:"types"`
 }
 
 func (g *Generator) Read(path string) error {
@@ -76,19 +79,23 @@ func (g *Generator) Read(path string) error {
 
 func (g *Generator) processImports(src string) error {
 	for name, path := range g.Imports {
-		relPath := filepath.Join(src, "..", path.Path)
+		if path.Path == "" {
+			g.importedPackages[name] = path.Types
+		} else {
+			relPath := filepath.Join(src, "..", path.Path)
 
-		sg, err := NewGenerator()
-		if err != nil {
-			return err
+			sg, err := NewGenerator()
+			if err != nil {
+				return err
+			}
+
+			err = sg.Read(relPath)
+			if err != nil {
+				return err
+			}
+
+			g.importedGenerators[name] = sg
 		}
-
-		err = sg.Read(relPath)
-		if err != nil {
-			return err
-		}
-
-		g.importedGenerators[name] = sg
 	}
 
 	return nil
@@ -104,6 +111,15 @@ func (g *Generator) ti(name string) typeInfo {
 	if dot != -1 {
 		imp, ok := g.importedGenerators[name[:dot]]
 		if !ok {
+			x, ok := g.importedPackages[name[:dot]]
+			if ok {
+				for _, t := range x {
+					if t == name[dot+1:] {
+						return typeInfo{}
+					}
+				}
+			}
+
 			panic("missing import for " + name[:dot])
 		}
 
@@ -138,7 +154,7 @@ func (g *Generator) isImported(name string) bool {
 }
 
 func capitalize(s string) string {
-	return strings.ToTitle(s[:1]) + s[1:]
+	return toCamal(s)
 }
 
 func toSnake(s string) string {
@@ -327,7 +343,7 @@ func (g *Generator) generateServerStructs(f *j.File, t *DescInterface) error {
 		decl, name := t.addGeneric(tn + "Args")
 
 		f.Type().Add(decl).StructFunc(func(g *j.Group) {
-			g.Id("call").Id("*").Qual("miren.dev/runtime/pkg/rpc", "Call")
+			g.Id("call").Qual("miren.dev/runtime/pkg/rpc", "Call")
 			g.Id("data").Add(privateArgs)
 		})
 
@@ -389,7 +405,7 @@ func (g *Generator) generateServerStructs(f *j.File, t *DescInterface) error {
 		decl, name = t.addGeneric(tn + "Results")
 
 		f.Type().Add(decl).StructFunc(func(g *j.Group) {
-			g.Id("call").Id("*").Qual("miren.dev/runtime/pkg/rpc", "Call")
+			g.Id("call").Qual("miren.dev/runtime/pkg/rpc", "Call")
 			g.Id("data").Add(privateResults)
 		})
 
@@ -906,7 +922,7 @@ func (g *Generator) generateCompactStruct(f *j.File, t *DescType) error {
 
 	f.Type().Add(structType).StructFunc(func(g *j.Group) {
 		if t.includeCall {
-			g.Id("call").Op("*").Qual(rpc, "Call")
+			g.Id("call").Qual(rpc, "Call")
 		}
 
 		g.Id("data").Add(dataRecv)
@@ -1240,7 +1256,7 @@ func (g *Generator) generateStruct(f *j.File) error {
 
 		f.Type().Add(structType).StructFunc(func(g *j.Group) {
 			if t.includeCall {
-				g.Id("call").Op("*").Qual(rpc, "Call")
+				g.Id("call").Qual(rpc, "Call")
 			}
 
 			g.Id("data").Add(dataRecv)
@@ -1574,8 +1590,32 @@ func (g *Generator) generateClient(f *j.File, i *DescInterface) error {
 	clientType, recv := i.addGeneric(expName)
 
 	f.Type().Add(clientType).Struct(
-		j.Op("*").Qual(rpc, "Client"),
+		j.Qual(rpc, "Client"),
 	)
+
+	f.Line()
+
+	if len(i.Generic) > 0 {
+		f.Func().Id("New" + expName).TypesFunc(func(gr *j.Group) {
+			for _, g := range i.Generic {
+				gr.Id(g).Any()
+			}
+		}).Params(j.Id("client").Qual(rpc, "Client")).Op("*").Add(recv).Block(
+			j.Return(j.Op("&").Id(expName).TypesFunc(func(gr *j.Group) {
+				for _, g := range i.Generic {
+					gr.Id(g)
+				}
+			}).Values(
+				j.Id("Client").Op(":").Id("client"),
+			)),
+		)
+	} else {
+		f.Func().Id("New" + expName).Params(j.Id("client").Qual(rpc, "Client")).Op("*").Add(recv).Block(
+			j.Return(j.Op("&").Id(expName).Values(
+				j.Id("Client").Op(":").Id("client"),
+			)),
+		)
+	}
 
 	f.Line()
 
@@ -1594,7 +1634,7 @@ func (g *Generator) generateClient(f *j.File, i *DescInterface) error {
 		sname, _ := i.addGeneric(tn + "Results")
 
 		f.Type().Add(sname).Struct(
-			j.Id("client").Op("*").Qual(rpc, "Client"),
+			j.Id("client").Qual(rpc, "Client"),
 			j.Id("data").Add(i.typeName(private(i.Name)+capitalize(m.Name)+"ResultsData")),
 		)
 
@@ -1649,16 +1689,30 @@ func (g *Generator) generateClient(f *j.File, i *DescInterface) error {
 		}).Params(j.Op("*").Add(i.typeName(tn+"Results")), j.Error()).BlockFunc(func(gr *j.Group) {
 			gr.Id("args").Op(":= ").Add(i.typeName(capitalize(i.Name) + capitalize(m.Name) + "Args")).Values()
 
+			hasCaps := false
 			for _, p := range m.Parameters {
 				if g.ti(p.Type).isInterface {
-					gr.Id("args").Dot("data").Dot(toCamal(p.Name)).Op("=").Id("v").Dot("Client").Dot("NewCapability").CallFunc(func(gr *j.Group) {
-						if g.isImported(p.Type) {
-							iname, tname := g.splitType(p.Type)
-							gr.Qual(g.Imports[iname].Import, "Adapt"+tname).Call(j.Id(p.Name))
-						} else {
-							gr.Id("Adapt" + capitalize(p.Type)).Call(j.Id(private(p.Name)))
-						}
-						gr.Id(private(p.Name))
+					gr.Id("caps").Op(":=").Map(j.Qual(rpc, "OID")).Op("*").Qual(rpc, "InlineCapability").Values()
+					hasCaps = true
+					break
+				}
+			}
+
+			for _, p := range m.Parameters {
+				if g.ti(p.Type).isInterface {
+					gr.BlockFunc(func(gr *j.Group) {
+						gr.List(j.Id("ic"), j.Id("oid"), j.Id("c")).Op(":=").Id("v").Dot("Client").Dot("NewInlineCapability").
+							CallFunc(func(gr *j.Group) {
+								if g.isImported(p.Type) {
+									iname, tname := g.splitType(p.Type)
+									gr.Qual(g.Imports[iname].Import, "Adapt"+tname).Call(j.Id(p.Name))
+								} else {
+									gr.Id("Adapt" + capitalize(p.Type)).Call(j.Id(private(p.Name)))
+								}
+								gr.Id(private(p.Name))
+							})
+						gr.Id("args").Dot("data").Dot(toCamal(p.Name)).Op("=").Id("c")
+						gr.Id("caps").Index(j.Id("oid")).Op("=").Id("ic")
 					})
 				} else if g.ti(p.Type).isMessage {
 					gr.Id("args").Dot("data").Dot(toCamal(p.Name)).Op("=").Id(private(p.Name))
@@ -1676,12 +1730,23 @@ func (g *Generator) generateClient(f *j.File, i *DescInterface) error {
 
 			gr.Line()
 
-			gr.Id("err").Op(":=").Id("v").Dot("Client").Dot("Call").Call(
-				j.Id("ctx"),
-				j.Lit(m.Name),
-				j.Op("&").Id("args"),
-				j.Op("&").Id("ret"),
-			)
+			if hasCaps {
+				gr.Id("err").Op(":=").Id("v").Dot("Client").Dot("CallWithCaps").Call(
+					j.Id("ctx"),
+					j.Lit(m.Name),
+					j.Op("&").Id("args"),
+					j.Op("&").Id("ret"),
+					j.Id("caps"),
+				)
+
+			} else {
+				gr.Id("err").Op(":=").Id("v").Dot("Client").Dot("Call").Call(
+					j.Id("ctx"),
+					j.Lit(m.Name),
+					j.Op("&").Id("args"),
+					j.Op("&").Id("ret"),
+				)
+			}
 			gr.If(j.Id("err").Op("!=").Nil()).Block(
 				j.Return(j.Nil(), j.Id("err")),
 			)
@@ -1719,7 +1784,7 @@ func (g *Generator) generateInterfaces(f *j.File) error {
 			decl, recv := i.addGeneric(tn)
 
 			f.Type().Add(decl).Struct(
-				j.Op("*").Qual(rpc, "Call"),
+				j.Qual(rpc, "Call"),
 				j.Id("args").Add(i.typeName(tn+"Args")),
 				j.Id("results").Add(i.typeName(tn+"Results")),
 			)
@@ -1773,7 +1838,7 @@ func (g *Generator) generateInterfaces(f *j.File) error {
 		reexportType, recv := i.addGeneric("reexport" + expName)
 
 		f.Type().Add(reexportType).Struct(
-			j.Id("client").Op("*").Qual(rpc, "Client"),
+			j.Id("client").Qual(rpc, "Client"),
 		)
 
 		for _, m := range i.Method {
@@ -1790,7 +1855,7 @@ func (g *Generator) generateInterfaces(f *j.File) error {
 		}
 
 		f.Func().Params(j.Id("t").Add(recv)).Id("CapabilityClient").
-			Params().Params(j.Op("*").Qual(rpc, "Client")).Block(
+			Params().Params(j.Qual(rpc, "Client")).Block(
 			j.Return(j.Id("t").Dot("client")),
 		)
 
@@ -1811,11 +1876,11 @@ func (g *Generator) generateInterfaces(f *j.File) error {
 						g.Line().Id("Index").Op(":").Lit(m.Index)
 						g.Line().Id("Handler").Op(":").Func().Params(
 							j.Id("ctx").Qual("context", "Context"),
-							j.Id("call").Op("*").Qual(rpc, "Call"),
+							j.Id("call").Qual(rpc, "Call"),
 						).Error().Block(
 							j.Return(j.Id("t").Dot(methodName).Call(
 								j.Id("ctx"),
-								j.Op("&").Add(i.typeName(expName+capitalize(m.Name))).Values(j.Id("Call").Op(":").Id("call")),
+								j.Op("&").Add(i.typeName(expName+toCamal(m.Name))).Values(j.Id("Call").Op(":").Id("call")),
 							)))
 						g.Line()
 					})
@@ -1837,7 +1902,7 @@ func (g *Generator) generateInterfaces(f *j.File) error {
 	return nil
 }
 
-func (g *Generator) Generate(name string) (string, error) {
+func (g *Generator) Generate(pkgName string) (string, error) {
 	for _, t := range g.Types {
 		err := t.Validate()
 		if err != nil {
@@ -1845,7 +1910,8 @@ func (g *Generator) Generate(name string) (string, error) {
 		}
 	}
 
-	f := j.NewFile(name)
+	fmt.Println(pkgName)
+	f := j.NewFile(pkgName)
 
 	for name, imp := range g.Imports {
 		f.ImportName(imp.Import, name)

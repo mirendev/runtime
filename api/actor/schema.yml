@@ -1,0 +1,18 @@
+domain: dev.miren.actor
+version: v1alpha
+kinds:
+  actor:
+    state:
+      type: bytes
+      doc: The state of an actor
+
+    node:
+      type: ref
+      doc: The node that is serving the actor
+      session: true
+
+  node:
+    endpoint:
+      type: string
+      doc: The address to dial for the node
+      many: true

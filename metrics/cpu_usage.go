@@ -30,21 +30,25 @@ CREATE TABLE IF NOT EXISTS cpu_usage (
     window_end DateTime64(6) CODEC(Delta(8), ZSTD(1)),
     entity LowCardinality(String) CODEC(ZSTD(1)),
 		cpu_usec UInt64,
+		attributes Map(LowCardinality(String), String) CODEC(ZSTD(1)),
+    INDEX idx_attr_key mapKeys(attributes) TYPE bloom_filter(0.01) GRANULARITY 1,
+    INDEX idx_attr_value mapValues(attributes) TYPE bloom_filter(0.01) GRANULARITY 1
 ) 
 		ENGINE = MergeTree
 		ORDER BY (entity, toUnixTimestamp(timestamp))
-		TTL toDateTime(timestamp) + INTERVAL 30 DAY;
+		TTL toDateTime(timestamp) + INTERVAL 30 DAY
+		SETTINGS ttl_only_drop_parts = 1;
 `)
 	return err
 }
 
-func (m *CPUUsage) RecordUsage(ctx context.Context, entity string, windowStart, windowEnd time.Time, cpuUsec units.Microseconds) error {
+func (m *CPUUsage) RecordUsage(ctx context.Context, entity string, windowStart, windowEnd time.Time, cpuUsec units.Microseconds, attrs map[string]string) error {
 	_, err := m.DB.ExecContext(ctx, `
     INSERT INTO cpu_usage 
-      (timestamp, window_end, entity, cpu_usec)
-    VALUES (toDateTime64('?', 6), toDateTime64('?', 6), ?, ?)
+      (timestamp, window_end, entity, cpu_usec, attributes)
+    VALUES (toDateTime64('?', 6), toDateTime64('?', 6), ?, ?, ?)
 `,
-		windowStart.UnixMicro(), windowEnd.UnixMicro(), entity, cpuUsec)
+		windowStart.UnixMicro(), windowEnd.UnixMicro(), entity, cpuUsec, attrs)
 	return err
 }
 

@@ -1,0 +1,344 @@
+imports:
+  standard:
+    path: ../../pkg/rpc/standard/standard.yml
+    import: miren.dev/runtime/pkg/rpc/standard
+
+types:
+  - type: AutoConcurrency
+    fields:
+      - name: factor
+        type: int32
+        index: 1
+
+  - type: ServiceCommand
+    fields:
+      - name: service
+        type: string
+        index: 0
+      - name: command
+        type: string
+        index: 1
+
+  - type: Configuration
+    fields:
+      - name: env_vars
+        type: list
+        element: NamedValue
+        index: 0
+      - name: concurrency
+        type: int32
+        index: 1
+      - name: auto_concurrency
+        type: AutoConcurrency
+        index: 2
+      - name: commands
+        type: list
+        element: ServiceCommand
+        index: 3
+      - name: entrypoint
+        type: string
+        index: 4
+        doc: "Prefixed to all commands run in the container"
+
+  - type: NamedValue
+    fields:
+      - name: key
+        type: string
+        index: 0
+      - name: value
+        type: string
+        index: 1
+      - name: sensitive
+        type: bool
+        index: 2
+
+  - type: VersionInfo
+    fields:
+      - name: version
+        type: string
+        index: 0
+      - name: created_at
+        type: standard.Timestamp
+        index: 1
+
+  - type: AppInfo
+    fields:
+      - name: name
+        type: string
+        index: 0
+      - name: created_at
+        type: standard.Timestamp
+        index: 1
+      - name: current_version
+        type: VersionInfo
+        index: 2
+
+  - type: CpuUsage
+    fields:
+      - name: start
+        type: standard.Timestamp
+        index: 0
+      - name: cores
+        type: float64
+        index: 1
+
+  - type: MemoryUsage
+    fields:
+      - name: timestamp
+        type: standard.Timestamp
+        index: 0
+      - name: bytes
+        type: int64
+        index: 1
+
+  - type: PoolStatus
+    fields:
+      - name: name
+        type: string
+        index: 0
+      - name: windows
+        type: list
+        element: "*WindowStatus"
+        index: 1
+      - name: idle
+        type: int32
+        index: 2
+      - name: idleUsage
+        type: int64
+        index: 3
+
+  - type: WindowStatus
+    fields:
+      - name: version
+        type: string
+        index: 0
+      - name: leases
+        type: int32
+        index: 1
+      - name: usage
+        type: int64
+        index: 2
+
+  - type: ApplicationStatus
+    fields:
+      - name: name
+        type: string
+        index: 0
+      - name: pools
+        type: list
+        element: "*PoolStatus"
+        index: 1
+      - name: lastMinCPU
+        type: float64
+        index: 2
+      - name: lastHourCPU
+        type: float64
+        index: 3
+      - name: lastDayCPU
+        type: float64
+        index: 4
+      - name: cpuOverHour
+        type: list
+        element: '*CpuUsage'
+        index: 5
+      - name: memoryOverHour
+        type: list
+        element: '*MemoryUsage'
+        index: 6
+      - name: activeVersion
+        type: string
+        index: 7
+      - name: lastDeploy
+        type: standard.Timestamp
+        index: 8
+      - name: addons
+        type: list
+        element: AddonInstance
+        index: 9
+
+  - type: LogEntry
+    fields:
+      - name: timestamp
+        type: standard.Timestamp
+        index: 0
+      - name: line
+        type: string
+        index: 1
+      - name: stream
+        type: string
+        index: 2
+
+  - type: UserInfo
+    fields:
+      - name: subject
+        type: string
+
+  - type: DiskConfig
+    fields:
+      - name: id
+        type: string
+        index: 0
+      - name: name
+        type: string
+        index: 1
+      - name: capacity
+        type: int64
+        index: 2
+
+  - type: AddonInstance
+    fields:
+      - name: id
+        type: string
+        index: 0
+      - name: name
+        type: string
+        index: 1
+      - name: addon
+        type: string
+        index: 2
+      - name: plan
+        type: string
+        index: 3
+
+interfaces:
+  - name: Crud
+    methods:
+      - name: new
+        parameters:
+          - name: name
+            type: string
+        results:
+          - name: id
+            type: string
+      - name: setConfiguration
+        parameters:
+          - name: app
+            type: string
+          - name: configuration
+            type: Configuration
+        results:
+          - name: versionId
+            type: string
+      - name: getConfiguration
+        parameters:
+          - name: app
+            type: string
+        results:
+          - name: configuration
+            type: Configuration
+          - name: versionId
+            type: string
+      - name: setHost
+        parameters:
+          - name: app
+            type: string
+          - name: host
+            type: string
+      - name: list
+        results:
+          - name: apps
+            type: list
+            element: AppInfo
+      - name: destroy
+        parameters:
+          - name: name
+            type: string
+
+  - name: UserQuery
+    methods:
+      - name: whoAmI
+        results:
+          - name: info
+            type: UserInfo
+
+  - name: AppStatus
+    methods:
+      - name: appInfo
+        parameters:
+          - name: application
+            type: string
+        results:
+          - name: status
+            type: ApplicationStatus
+
+  - name: Logs
+    methods:
+      - name: appLogs
+        parameters:
+          - name: application
+            type: string
+          - name: from
+            type: standard.Timestamp
+          - name: follow
+            type: bool
+        results:
+          - name: logs
+            type: list
+            element: LogEntry
+
+  - name: Disks
+    methods:
+      - name: new
+        parameters:
+          - name: name
+            type: string
+          - name: capacity
+            type: int64
+        results:
+          - name: id
+            type: string
+      - name: getById
+        parameters:
+          - name: id
+            type: string
+        results:
+          - name: config
+            type: DiskConfig
+      - name: getByName
+        parameters:
+          - name: name
+            type: string
+        results:
+          - name: config
+            type: DiskConfig
+      - name: list
+        results:
+          - name: disks
+            type: list
+            element: DiskConfig
+      - name: delete
+        parameters:
+          - name: id
+            type: string
+
+  - name: Addons
+    methods:
+      - name: createInstance
+        parameters:
+          - name: name
+            type: string
+          - name: addon
+            type: string
+          - name: plan
+            type: string
+          - name: app
+            type: string
+        results:
+          - name: id
+            type: string
+
+      - name: listInstances
+        parameters:
+          - name: app
+            type: string
+        results:
+          - name: addons
+            type: list
+            element: AddonInstance
+
+      - name: deleteInstance
+        parameters:
+          - name: app
+            type: string
+          - name: name
+            type: string

@@ -33,7 +33,7 @@ func (e *extentValidator) populate(log *slog.Logger, ctx *Context, d *Disk, oc *
 		}
 
 		e.sums[ent.Extent] = sum
-		d.log.Debug("sum of extent", "extent", ent.Extent, "sum", sum)
+		d.trace(ctx, "sum of extent", "extent", ent.Extent, "sum", sum)
 
 		ranges, err := d.lba2pba.Resolve(log, ent.Extent, nil)
 		if err != nil {

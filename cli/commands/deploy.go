@@ -16,11 +16,12 @@ import (
 
 	"github.com/moby/buildkit/util/progress/progresswriter"
 
-	"miren.dev/runtime/build"
+	"miren.dev/runtime/api/build/build_v1alpha"
 	"miren.dev/runtime/pkg/color"
 	"miren.dev/runtime/pkg/colortheory"
 	"miren.dev/runtime/pkg/progress/progressui"
 	"miren.dev/runtime/pkg/rpc/stream"
+	"miren.dev/runtime/pkg/tarx"
 )
 
 func Deploy(ctx *Context, opts struct {
@@ -30,26 +31,26 @@ func Deploy(ctx *Context, opts struct {
 	Explain       bool   `short:"x" long:"explain" description:"Explain the build process"`
 	ExplainFormat string `long:"explain-format" description:"Explain format" choice:"auto" choice:"plain" choice:"tty" choice:"rawjson" default:"auto"`
 }) error {
-	cl, err := ctx.RPCClient("build")
+	cl, err := ctx.RPCClient("dev.miren.runtime/build")
 	if err != nil {
 		return err
 	}
 
-	bc := build.BuilderClient{Client: cl}
+	bc := build_v1alpha.NewBuilderClient(cl)
 
 	name := opts.App
 	dir := opts.Dir
 
 	ctx.Log.Info("building code", "name", name, "dir", dir)
 
-	r, err := build.MakeTar(dir)
+	r, err := tarx.MakeTar(dir)
 	if err != nil {
 		return err
 	}
 
 	var (
-		cb      stream.SendStream[*build.Status]
-		results *build.BuilderClientBuildFromTarResults
+		cb      stream.SendStream[*build_v1alpha.Status]
+		results *build_v1alpha.BuilderClientBuildFromTarResults
 	)
 
 	if opts.Explain {
@@ -58,7 +59,7 @@ func Deploy(ctx *Context, opts struct {
 			return err
 		}
 
-		cb = stream.Callback(func(su *build.Status) error {
+		cb = stream.Callback(func(su *build_v1alpha.Status) error {
 			update := su.Update()
 
 			switch update.Which() {
@@ -111,7 +112,7 @@ func Deploy(ctx *Context, opts struct {
 
 		defer p.Quit()
 
-		cb = stream.Callback(func(su *build.Status) error {
+		cb = stream.Callback(func(su *build_v1alpha.Status) error {
 			update := su.Update()
 
 			switch update.Which() {

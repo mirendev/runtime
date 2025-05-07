@@ -12,8 +12,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"miren.dev/runtime/api"
-	"miren.dev/runtime/app"
+	"miren.dev/runtime/api/app/app_v1alpha"
 	"miren.dev/runtime/appconfig"
 	"miren.dev/runtime/pkg/rpc/standard"
 	"miren.dev/runtime/pkg/units"
@@ -56,12 +55,12 @@ func App(ctx *Context, opts struct {
 
 	ConfigOnly bool `long:"config-only" description:"Only show the configuration"`
 }) error {
-	crudcl, err := ctx.RPCClient("app")
+	crudcl, err := ctx.RPCClient("dev.miren.runtime/app")
 	if err != nil {
 		return err
 	}
 
-	crud := app.CrudClient{Client: crudcl}
+	crud := app_v1alpha.NewCrudClient(crudcl)
 
 	cfgres, err := crud.GetConfiguration(ctx, opts.App)
 	if err != nil {
@@ -79,12 +78,12 @@ func App(ctx *Context, opts struct {
 		return nil
 	}
 
-	cl, err := ctx.RPCClient("app-info")
+	cl, err := ctx.RPCClient("dev.miren.runtime/app-status")
 	if err != nil {
 		return err
 	}
 
-	ac := api.AppInfoClient{Client: cl}
+	ac := app_v1alpha.NewAppStatusClient(cl)
 
 	res, err := ac.AppInfo(ctx, opts.App)
 	if err != nil {
@@ -98,7 +97,7 @@ func App(ctx *Context, opts struct {
 
 	p := tea.NewProgram(Model{
 		cfg:   cfgres.Configuration(),
-		cl:    &api.AppInfoClient{Client: cl},
+		cl:    ac,
 		app:   opts.App,
 		watch: opts.Watch,
 		cpu: timeserieslinechart.New(60, 12,
@@ -143,10 +142,10 @@ var (
 )
 
 type Model struct {
-	cfg    *app.Configuration
-	cl     *api.AppInfoClient
+	cfg    *app_v1alpha.Configuration
+	cl     *app_v1alpha.AppStatusClient
 	app    string
-	status *api.ApplicationStatus
+	status *app_v1alpha.ApplicationStatus
 	watch  bool
 
 	cpu timeserieslinechart.Model

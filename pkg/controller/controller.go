@@ -1,0 +1,375 @@
+package controller
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log/slog"
+	"sync"
+	"time"
+
+	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
+	"miren.dev/runtime/pkg/entity"
+	"miren.dev/runtime/pkg/idgen"
+	"miren.dev/runtime/pkg/rpc/stream"
+)
+
+// EventType represents the type of event that occurred on an entity
+type EventType string
+
+const (
+	EventAdded   EventType = "ADDED"
+	EventUpdated EventType = "UPDATED"
+	EventDeleted EventType = "DELETED"
+)
+
+// Event represents a change to an entity
+type Event struct {
+	Type EventType
+	Id   entity.Id
+
+	Entity *entity.Entity // The entity that was changed
+
+	Rev, PrevRev int64 // Revision and previous revision for the entity
+}
+
+// Controller processes entities of a specific kind
+type Controller interface {
+	Start(ctx context.Context) error
+	Stop()
+}
+
+type workerIdKey struct{}
+
+func withWorkerId(ctx context.Context, id string) context.Context {
+	return context.WithValue(ctx, workerIdKey{}, id)
+}
+
+func WorkerId(ctx context.Context) string {
+	if id, ok := ctx.Value(workerIdKey{}).(string); ok {
+		return id
+	}
+	return "unknown"
+}
+
+// HandlerFunc is a function that processes an entity
+type HandlerFunc func(ctx context.Context, event Event) ([]entity.Attr, error)
+
+// ReconcileController implements the Controller interface
+type ReconcileController struct {
+	Log *slog.Logger
+
+	cancel func()
+
+	esc          *entityserver_v1alpha.EntityAccessClient
+	name         string
+	index        entity.Attr
+	handler      HandlerFunc
+	resyncPeriod time.Duration
+	workers      int
+	workQueue    chan Event
+	wg           sync.WaitGroup
+}
+
+// NewReconcileController creates a new controller
+func NewReconcileController(name string, log *slog.Logger, index entity.Attr, esc *entityserver_v1alpha.EntityAccessClient, handler HandlerFunc, resyncPeriod time.Duration, workers int) *ReconcileController {
+	return &ReconcileController{
+		Log:          log,
+		name:         name,
+		index:        index,
+		esc:          esc,
+		handler:      handler,
+		resyncPeriod: resyncPeriod,
+		workers:      workers,
+		workQueue:    make(chan Event, 1000),
+	}
+}
+
+// Start starts the controller
+func (c *ReconcileController) Start(top context.Context) error {
+	ctx, cancel := context.WithCancel(top)
+	c.cancel = cancel
+
+	c.Log.Info("Starting controller", "name", c.name, "id", c.index.ID, "value", c.index.Value)
+
+	// Start workers
+	for i := 0; i < c.workers; i++ {
+		c.wg.Add(1)
+		go c.runWorker(ctx)
+	}
+
+	// Start event processor
+	c.wg.Add(1)
+	go func() {
+		defer c.wg.Done()
+		c.Log.Info("Starting index watch")
+		defer c.Log.Info("Index watch stopped")
+
+		c.esc.WatchIndex(ctx, c.index, stream.Callback(func(op *entityserver_v1alpha.EntityOp) error {
+			var eventType EventType
+
+			switch op.Operation() {
+			case 1:
+				eventType = EventAdded
+			case 2:
+				eventType = EventUpdated
+			case 3:
+				eventType = EventDeleted
+			default:
+				return nil
+			}
+
+			ev := Event{
+				Type:    eventType,
+				Id:      entity.Id(op.EntityId()),
+				PrevRev: op.Previous(),
+			}
+
+			if op.HasEntity() {
+				aen := op.Entity()
+
+				ev.Entity = &entity.Entity{
+					ID:        entity.Id(aen.Id()),
+					CreatedAt: aen.CreatedAt(),
+					UpdatedAt: aen.UpdatedAt(),
+					Attrs:     aen.Attrs(),
+				}
+			}
+
+			select {
+			case <-ctx.Done():
+				return nil
+			case c.workQueue <- ev:
+				//ok
+			}
+
+			return nil
+		}))
+	}()
+
+	// Start periodic resync
+	if c.resyncPeriod > 0 {
+		c.wg.Add(1)
+		go c.periodicResync(ctx)
+	}
+
+	return nil
+}
+
+// Stop stops the controller
+func (c *ReconcileController) Stop() {
+	c.Log.Info("Stopping controller", "name", c.name)
+	if c.cancel != nil {
+		c.cancel()
+	}
+	c.wg.Wait()
+	close(c.workQueue)
+}
+
+// runWorker processes items from the work queue
+func (c *ReconcileController) runWorker(ctx context.Context) {
+	id := idgen.Gen("worker")
+
+	c.Log.Info("Starting worker", "id", id)
+	defer c.Log.Info("Stopping worker", "id", id)
+
+	defer c.wg.Done()
+
+	ctx = withWorkerId(ctx, id)
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case event, ok := <-c.workQueue:
+			if !ok {
+				return
+			}
+
+			c.Log.Info("Processing event", "entity", event.Id, "worker", WorkerId(ctx))
+
+			// Process the event
+			updates, err := c.processItem(ctx, event)
+			if err != nil {
+				c.Log.Error("error processing item", "event", event, "error", err)
+				continue
+			}
+
+			if len(updates) > 0 {
+				if event.Id == "" {
+					c.Log.Error("entity id is empty update there are updates", "event", event)
+				} else {
+					c.Log.Info("updating entity with updates produced by controller", "event", event, "updates", len(updates))
+
+					var rpcE entityserver_v1alpha.Entity
+					rpcE.SetId(string(event.Id))
+					rpcE.SetAttrs(updates)
+
+					_, err := c.esc.Put(ctx, &rpcE)
+					if err != nil {
+						c.Log.Error("error updating entity", "entity", event.Id, "error", err)
+					} else {
+						c.Log.Info("updated entity", "entity", event.Id)
+					}
+				}
+			}
+		}
+	}
+}
+
+// processItem processes a single item from the work queue
+func (c *ReconcileController) processItem(ctx context.Context, event Event) ([]entity.Attr, error) {
+	// Handle different event types
+	switch event.Type {
+	case EventAdded, EventUpdated, EventDeleted:
+		return c.handler(ctx, event)
+	default:
+		return nil, fmt.Errorf("unknown event type: %s", event.Type)
+	}
+}
+
+// periodicResync periodically resyncs all entities
+func (c *ReconcileController) periodicResync(ctx context.Context) {
+	c.Log.Info("Starting resync")
+	defer c.Log.Info("Stopping resync")
+
+	defer c.wg.Done()
+
+	ticker := time.NewTicker(c.resyncPeriod)
+	defer ticker.Stop()
+
+	for {
+		// List all entities and queue them for processing
+		resp, err := c.esc.List(ctx, c.index)
+		if err != nil {
+			if errors.Is(err, context.Canceled) {
+				return
+			}
+
+			c.Log.Error("error listing entities for resync", "error", err)
+			continue
+		}
+
+		entities := resp.Values()
+
+		for _, aen := range entities {
+			en := &entity.Entity{
+				ID:        entity.Id(aen.Id()),
+				CreatedAt: aen.CreatedAt(),
+				UpdatedAt: aen.UpdatedAt(),
+				Attrs:     aen.Attrs(),
+			}
+
+			ev := Event{
+				Type:   EventUpdated,
+				Id:     entity.Id(aen.Id()),
+				Entity: en,
+			}
+
+			select {
+			case <-ctx.Done():
+				return
+			case c.workQueue <- ev:
+				// Event added to queue
+			}
+		}
+
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			break
+		}
+	}
+}
+
+type ControllerEntity interface {
+	Decode(getter entity.AttrGetter)
+	Encode() []entity.Attr
+}
+
+type GenericController[P ControllerEntity] interface {
+	Init(context.Context) error
+	Create(ctx context.Context, obj P, meta *entity.Meta) error
+	Delete(ctx context.Context, e entity.Id) error
+}
+
+func AdaptController[
+	T any,
+	P interface {
+		*T
+		ControllerEntity
+	},
+	C GenericController[P],
+](cont C) HandlerFunc {
+	return func(ctx context.Context, event Event) ([]entity.Attr, error) {
+		switch event.Type {
+		case EventAdded, EventUpdated:
+			e := event.Entity
+
+			if e == nil {
+				return nil, fmt.Errorf("entity not found: %s", event.Id)
+			}
+
+			// Decode the entity into the controller entity type
+			var obj P = new(T)
+			obj.Decode(e)
+
+			orig := e.Clone()
+
+			meta := &entity.Meta{
+				Entity:   e,
+				Revision: e.Revision,
+				Previous: event.PrevRev,
+			}
+
+			if err := cont.Create(ctx, obj, meta); err != nil {
+				return nil, fmt.Errorf("failed to create entity: %w", err)
+			}
+
+			return entity.Diff(meta.Entity, orig), nil
+
+		case EventDeleted:
+			if err := cont.Delete(ctx, event.Id); err != nil {
+				return nil, fmt.Errorf("failed to create entity: %w", err)
+			}
+		}
+
+		return nil, nil
+	}
+}
+
+// ControllerManager manages multiple controllers
+type ControllerManager struct {
+	controllers []Controller
+}
+
+// NewControllerManager creates a new controller manager
+func NewControllerManager() *ControllerManager {
+	return &ControllerManager{
+		controllers: make([]Controller, 0),
+	}
+}
+
+// AddController adds a controller to the manager
+func (m *ControllerManager) AddController(controller Controller) {
+	m.controllers = append(m.controllers, controller)
+}
+
+// Start starts all controllers
+func (m *ControllerManager) Start(ctx context.Context) error {
+	for _, controller := range m.controllers {
+		if err := controller.Start(ctx); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// Stop stops all controllers
+func (m *ControllerManager) Stop() {
+	for _, controller := range m.controllers {
+		controller.Stop()
+	}
+}

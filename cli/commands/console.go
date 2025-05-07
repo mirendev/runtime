@@ -4,11 +4,12 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"strings"
 
 	"github.com/containerd/console"
 	"golang.org/x/sys/unix"
+	"miren.dev/runtime/api/exec/exec_v1alpha"
 	"miren.dev/runtime/pkg/rpc/stream"
-	"miren.dev/runtime/shell"
 )
 
 func currentConsole() console.Console {
@@ -31,7 +32,7 @@ func Console(ctx *Context, opts struct {
 		Args []string
 	} `positional-args:"yes"`
 }) error {
-	opt := new(shell.ShellOptions)
+	opt := new(exec_v1alpha.ShellOptions)
 
 	if len(opts.Rest.Args) > 0 {
 		opt.SetCommand(opts.Rest.Args)
@@ -42,7 +43,7 @@ func Console(ctx *Context, opts struct {
 	}
 
 	winCh := make(chan os.Signal, 1)
-	winUpdates := make(chan *shell.WindowSize, 1)
+	winUpdates := make(chan *exec_v1alpha.WindowSize, 1)
 
 	var (
 		in  io.Reader
@@ -54,7 +55,7 @@ func Console(ctx *Context, opts struct {
 		out = con
 
 		if csz, err := con.Size(); err == nil {
-			ws := new(shell.WindowSize)
+			ws := new(exec_v1alpha.WindowSize)
 			ws.SetHeight(int32(csz.Height))
 			ws.SetWidth(int32(csz.Width))
 			opt.SetWinSize(ws)
@@ -78,7 +79,7 @@ func Console(ctx *Context, opts struct {
 						continue
 					}
 
-					ws := new(shell.WindowSize)
+					ws := new(exec_v1alpha.WindowSize)
 					ws.SetHeight(int32(csz.Height))
 					ws.SetWidth(int32(csz.Width))
 
@@ -91,24 +92,31 @@ func Console(ctx *Context, opts struct {
 		out = os.Stdout
 	}
 
-	cl, err := ctx.RPCClient("shell")
+	cl, err := ctx.RPCClient("dev.miren.runtime/exec")
 	if err != nil {
 		return err
 	}
 
-	sc := shell.ShellAccessClient{Client: cl}
+	sec := exec_v1alpha.NewSandboxExecClient(cl)
 
 	input := stream.ServeReader(ctx, in)
 	output := stream.ServeWriter(ctx, out)
 
 	winUS := stream.ChanReader(winUpdates)
 
-	results, err := sc.Open(ctx, opts.App, opt, input, output, winUS)
+	results, err := sec.Exec(
+		ctx,
+		"app", opts.App,
+		strings.Join(opts.Rest.Args, " "),
+		opt,
+		input, output,
+		winUS,
+	)
 	if err != nil {
 		return err
 	}
 
-	status := results.Status()
+	status := results.Code()
 	ctx.SetExitCode(int(status))
 
 	return nil

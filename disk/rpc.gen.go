@@ -100,7 +100,7 @@ type diskManagementUnmountArgsData struct {
 }
 
 type DiskManagementUnmountArgs struct {
-	call *rpc.Call
+	call rpc.Call
 	data diskManagementUnmountArgsData
 }
 
@@ -134,7 +134,7 @@ func (v *DiskManagementUnmountArgs) UnmarshalJSON(data []byte) error {
 type diskManagementUnmountResultsData struct{}
 
 type DiskManagementUnmountResults struct {
-	call *rpc.Call
+	call rpc.Call
 	data diskManagementUnmountResultsData
 }
 
@@ -159,7 +159,7 @@ type diskManagementStatusArgsData struct {
 }
 
 type DiskManagementStatusArgs struct {
-	call *rpc.Call
+	call rpc.Call
 	data diskManagementStatusArgsData
 }
 
@@ -195,7 +195,7 @@ type diskManagementStatusResultsData struct {
 }
 
 type DiskManagementStatusResults struct {
-	call *rpc.Call
+	call rpc.Call
 	data diskManagementStatusResultsData
 }
 
@@ -220,7 +220,7 @@ func (v *DiskManagementStatusResults) UnmarshalJSON(data []byte) error {
 }
 
 type DiskManagementUnmount struct {
-	*rpc.Call
+	rpc.Call
 	args    DiskManagementUnmountArgs
 	results DiskManagementUnmountResults
 }
@@ -246,7 +246,7 @@ func (t *DiskManagementUnmount) Results() *DiskManagementUnmountResults {
 }
 
 type DiskManagementStatus struct {
-	*rpc.Call
+	rpc.Call
 	args    DiskManagementStatusArgs
 	results DiskManagementStatusResults
 }
@@ -277,7 +277,7 @@ type DiskManagement interface {
 }
 
 type reexportDiskManagement struct {
-	client *rpc.Client
+	client rpc.Client
 }
 
 func (_ reexportDiskManagement) Unmount(ctx context.Context, state *DiskManagementUnmount) error {
@@ -288,7 +288,7 @@ func (_ reexportDiskManagement) Status(ctx context.Context, state *DiskManagemen
 	panic("not implemented")
 }
 
-func (t reexportDiskManagement) CapabilityClient() *rpc.Client {
+func (t reexportDiskManagement) CapabilityClient() rpc.Client {
 	return t.client
 }
 
@@ -298,7 +298,7 @@ func AdaptDiskManagement(t DiskManagement) *rpc.Interface {
 			Name:          "unmount",
 			InterfaceName: "DiskManagement",
 			Index:         0,
-			Handler: func(ctx context.Context, call *rpc.Call) error {
+			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.Unmount(ctx, &DiskManagementUnmount{Call: call})
 			},
 		},
@@ -306,7 +306,7 @@ func AdaptDiskManagement(t DiskManagement) *rpc.Interface {
 			Name:          "status",
 			InterfaceName: "DiskManagement",
 			Index:         0,
-			Handler: func(ctx context.Context, call *rpc.Call) error {
+			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.Status(ctx, &DiskManagementStatus{Call: call})
 			},
 		},
@@ -316,7 +316,11 @@ func AdaptDiskManagement(t DiskManagement) *rpc.Interface {
 }
 
 type DiskManagementClient struct {
-	*rpc.Client
+	rpc.Client
+}
+
+func NewDiskManagementClient(client rpc.Client) *DiskManagementClient {
+	return &DiskManagementClient{Client: client}
 }
 
 func (c DiskManagementClient) Export() DiskManagement {
@@ -324,7 +328,7 @@ func (c DiskManagementClient) Export() DiskManagement {
 }
 
 type DiskManagementClientUnmountResults struct {
-	client *rpc.Client
+	client rpc.Client
 	data   diskManagementUnmountResultsData
 }
 
@@ -343,7 +347,7 @@ func (v DiskManagementClient) Unmount(ctx context.Context, id string) (*DiskMana
 }
 
 type DiskManagementClientStatusResults struct {
-	client *rpc.Client
+	client rpc.Client
 	data   diskManagementStatusResultsData
 }
 

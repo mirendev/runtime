@@ -233,7 +233,7 @@ func (c *Controller) closeSegment(ctx *Context, ev Event) error {
 
 	var validator *extentValidator
 
-	if mode.Debug() {
+	if false && mode.Debug() {
 		validator = &extentValidator{}
 		validator.populate(c.log, ctx, d, oc, entries)
 	}

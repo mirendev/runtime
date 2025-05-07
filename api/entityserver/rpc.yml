@@ -1,0 +1,184 @@
+apiVersion: miren.dev/rpc/v1
+kind: IDL
+
+imports:
+  stream:
+    path: ../../pkg/rpc/stream/stream.yml
+    import: miren.dev/runtime/pkg/rpc/stream
+  entity:
+    import: miren.dev/runtime/pkg/entity
+    types:
+      - Attr
+
+types:
+  - type: Entity
+    fields:
+      - name: id
+        type: string
+        index: 0
+      - name: revision
+        type: int64
+        index: 1
+      - name: created_at
+        type: int64
+        index: 2
+      - name: updated_at
+        type: int64
+        index: 3
+      - name: attrs
+        type: list
+        element: entity.Attr
+        index: 4
+
+  - type: EntityOp
+    fields:
+      - name: entity
+        type: Entity
+        index: 0
+      - name: previous
+        type: int64
+        index: 1
+      - name: operation
+        type: int64
+        index: 2
+      - name: entity_id
+        type: string
+        index: 3
+
+  - type: ParsedFile
+    fields:
+      - name: format
+        type: string
+        index: 0
+      - name: entities
+        type: list
+        element: Entity
+        index: 1
+
+interfaces:
+  - name: Stream
+    methods:
+      - name: recv
+        parameters:
+          - name: count
+            type: int32
+        results:
+          - name: data
+            type: bytes
+
+  - name: EntityAccess
+    methods:
+      - name: get
+        parameters:
+          - name: id
+            type: string
+        results:
+          - name: entity
+            type: Entity
+
+      - name: put
+        parameters:
+          - name: entity
+            type: Entity
+        results:
+          - name: revision
+            type: int64
+          - name: id
+            type: string
+
+      - name: put_session
+        parameters:
+          - name: entity
+            type: Entity
+          - name: session
+            type: string
+        results:
+          - name: revision
+            type: int64
+          - name: id
+            type: string
+
+      - name: delete
+        parameters:
+          - name: id
+            type: string
+        results:
+          - name: revision
+            type: int64
+
+      - name: watch_index
+        parameters:
+          - name: index
+            type: entity.Attr
+          - name: values
+            type: stream.SendStream[*EntityOp]
+
+      - name: watch_entity
+        parameters:
+          - name: id
+            type: string
+          - name: updates
+            type: stream.SendStream[*EntityOp]
+
+      - name: list
+        parameters:
+          - name: index
+            type: entity.Attr
+        results:
+          - name: values
+            type: list
+            element: Entity
+
+      - name: makeAttr
+        parameters:
+          - name: id
+            type: string
+          - name: value
+            type: string
+        results:
+          - name: attr
+            type: entity.Attr
+
+      - name: lookupKind
+        parameters:
+          - name: kind
+            type: string
+        results:
+          - name: attr
+            type: entity.Attr
+
+      - name: parse
+        parameters:
+          - name: data
+            type: bytes
+        results:
+          - name: file
+            type: ParsedFile
+
+      - name: format
+        parameters:
+          - name: entity
+            type: Entity
+        results:
+          - name: data
+            type: bytes
+
+      - name: create_session
+        parameters:
+          - name: ttl
+            type: int64
+          - name: usage
+            type: string
+        results:
+          - name: id
+            type: string
+
+      - name: revoke_session
+        parameters:
+          - name: id
+            type: string
+
+      - name: ping_session
+        parameters:
+          - name: id
+            type: string

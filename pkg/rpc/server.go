@@ -15,10 +15,13 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/davecgh/go-spew/spew"
 	"github.com/fxamacker/cbor/v2"
 	"github.com/mr-tron/base58"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/propagation"
+	"miren.dev/runtime/pkg/cond"
+	"miren.dev/runtime/pkg/webtransport"
 )
 
 func init() {
@@ -53,6 +56,7 @@ type Server struct {
 	resolvers map[string]HasReconstructFromState
 
 	mux *http.ServeMux
+	ws  *webtransport.Server
 }
 
 type heldInterface struct {
@@ -108,7 +112,7 @@ type Method struct {
 	Name          string
 	InterfaceName string
 	Index         int
-	Handler       func(ctx context.Context, call *Call) error
+	Handler       func(ctx context.Context, call Call) error
 }
 
 type HasRestoreState interface {
@@ -120,9 +124,22 @@ type Interface struct {
 	methods map[string]Method
 	closer  io.Closer
 
+	value         any
+	aroundContext func(ctx context.Context, call Call) (context.Context, func())
+
+	methodMissing func(ctx context.Context, method string, call Call) error
+
 	forbidRestore bool
 	restoreState  HasRestoreState
 	constructor   HasReconstructFromState
+}
+
+func (i *Interface) Value() any {
+	return i.value
+}
+
+func (i *Interface) SetAroundContext(fn func(ctx context.Context, call Call) (context.Context, func())) {
+	i.aroundContext = fn
 }
 
 func typeNameHash(obj any) string {
@@ -139,6 +156,7 @@ func NewInterface(methods []Method, obj any) *Interface {
 
 	i := &Interface{
 		name:    methods[0].InterfaceName,
+		value:   obj,
 		methods: m,
 	}
 
@@ -174,7 +192,7 @@ func (s *Server) ExposeValue(name string, iface *Interface) {
 
 const BootstrapOID = "!bootstrap"
 
-func (s *Server) assignCapability(i *Interface, pub ed25519.PublicKey, contactAddr string, category string) *Capability {
+func (s *Server) assignCapability(i *Interface, pub ed25519.PublicKey, contactAddr string, category string, inline bool) *Capability {
 	if len(pub) != ed25519.PublicKeySize {
 		panic("bad key!!!")
 	}
@@ -193,6 +211,11 @@ func (s *Server) assignCapability(i *Interface, pub ed25519.PublicKey, contactAd
 		User:    pub,
 		Issuer:  s.state.pubkey,
 		Address: contactAddr,
+		Inline:  inline,
+	}
+
+	if inline {
+		capa.Address = ""
 	}
 
 	hc := &heldCapability{
@@ -218,6 +241,9 @@ func (s *Server) assignCapability(i *Interface, pub ed25519.PublicKey, contactAd
 			Interface: i.name,
 		}
 	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
 	hc.refs.Add(1)
 
@@ -255,6 +281,9 @@ func (s *Server) reexportCapability(target OID, cur *heldCapability, pub ed25519
 
 	hc.refs.Add(1)
 
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	s.objects[oid] = hc
 
 	return capa
@@ -264,6 +293,7 @@ func (s *Server) setupMux() {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("POST /_rpc/call/{oid}/{method}", s.handleCalls)
+	mux.HandleFunc("CONNECT /_rpc/callstream/{oid}/{method}", s.startCallStream)
 	mux.HandleFunc("POST /_rpc/lookup/{name}", s.lookup)
 	mux.HandleFunc("POST /_rpc/reresolve", s.reresolve)
 	mux.HandleFunc("POST /_rpc/reexport/{oid}", s.reexport)
@@ -291,18 +321,18 @@ func (s *Server) checkIdentity(r *http.Request) (string, bool) {
 
 	t, err := time.Parse(time.RFC3339Nano, ts)
 	if err != nil {
-		s.state.log.Info("Failed to parse timestamp", "error", err)
+		s.state.log.Warn("Failed to parse timestamp", "error", err)
 		return "", false
 	}
 
 	if time.Since(t) > 10*time.Minute {
-		s.state.log.Info("Timestamp too old", "timestamp", t)
+		s.state.log.Warn("Timestamp too old", "timestamp", t)
 		return "", false
 	}
 
 	sign := r.Header.Get("rpc-signature")
 	if sign == "" {
-		s.state.log.Info("No signature provided")
+		s.state.log.Warn("No signature provided")
 		return "", false
 	}
 
@@ -312,7 +342,7 @@ func (s *Server) checkIdentity(r *http.Request) (string, bool) {
 
 	bsign, err := base58.Decode(sign)
 	if err != nil {
-		s.state.log.Info("Failed to decode signature", "error", err)
+		s.state.log.Warn("Failed to decode signature", "error", err)
 		return "", false
 	}
 
@@ -326,12 +356,12 @@ func (s *Server) checkIdentity(r *http.Request) (string, bool) {
 	pub := ed25519.PublicKey(key)
 
 	if len(pub) != ed25519.PublicKeySize {
-		s.state.log.Info("Invalid public key size", "size", len(pub))
+		s.state.log.Warn("Invalid public key size", "size", len(pub))
 		return "", false
 	}
 
 	if !ed25519.Verify(pub, buf.Bytes(), bsign) {
-		s.state.log.Info("Failed to verify signature")
+		s.state.log.Warn("Failed to verify signature")
 		return "", false
 	}
 
@@ -384,9 +414,10 @@ func (s *Server) reexport(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	hc, ok := s.objects[oid]
+	s.mu.Unlock()
 
-	if hc, ok := s.objects[oid]; ok {
+	if ok {
 		data, err := base58.Decode(pk)
 		if err != nil {
 			json.NewEncoder(w).Encode(lookupResponse{Error: "invalid public key"})
@@ -417,9 +448,6 @@ func (s *Server) lookup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	w.WriteHeader(http.StatusOK)
 
 	w.Header().Set("Content-Type", "application/cbor")
@@ -439,7 +467,10 @@ func (s *Server) lookup(w http.ResponseWriter, r *http.Request) {
 	//s.state.log.Info("Lookup", "name", name)
 
 	// TODO: add condition codes to the error response rather than just a string
+	s.mu.Lock()
 	iface, ok := s.persistent[name]
+	s.mu.Unlock()
+
 	if !ok {
 		cbor.NewEncoder(w).Encode(lookupResponse{Error: "unknown object: " + name})
 	} else {
@@ -449,7 +480,7 @@ func (s *Server) lookup(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		capa := s.assignCapability(iface, ed25519.PublicKey(data), ca, name)
+		capa := s.assignCapability(iface, ed25519.PublicKey(data), ca, name, false)
 		capa.RestoreState = &InterfaceState{
 			Category:  "!persistent",
 			Interface: name,
@@ -474,9 +505,6 @@ func (s *Server) reresolve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	var (
 		iface    *Interface
 		category string
@@ -489,26 +517,30 @@ func (s *Server) reresolve(w http.ResponseWriter, r *http.Request) {
 
 		var ok bool
 		// TODO: add condition codes to the error response rather than just a string
+		s.mu.Lock()
 		iface, ok = s.persistent[name]
+		s.mu.Unlock()
+
 		if !ok {
 			cbor.NewEncoder(w).Encode(lookupResponse{Error: "unknown object: " + name})
 			return
 		}
-	} else if res, ok := s.resolvers[rs.Category]; ok {
-		s.state.log.Info("attempting to resolve data",
-			"category", rs.Category,
-			"interface", rs.Interface,
-			"resolvers", len(s.resolvers),
-		)
-		iface, err = res.ReconstructFromState(&rs)
-		if err != nil {
-			cbor.NewEncoder(w).Encode(lookupResponse{Error: "failed to resolve: " + err.Error()})
-			return
-		}
+	} else {
+		s.mu.Lock()
+		res, ok := s.resolvers[rs.Category]
+		s.mu.Unlock()
 
-		if iface == nil {
-			cbor.NewEncoder(w).Encode(lookupResponse{Error: fmt.Sprintf("unable to restore capability")})
-			return
+		if ok {
+			iface, err = res.ReconstructFromState(&rs)
+			if err != nil {
+				cbor.NewEncoder(w).Encode(lookupResponse{Error: "failed to resolve: " + err.Error()})
+				return
+			}
+
+			if iface == nil {
+				cbor.NewEncoder(w).Encode(lookupResponse{Error: fmt.Sprintf("unable to restore capability")})
+				return
+			}
 		}
 	}
 
@@ -528,8 +560,6 @@ func (s *Server) reresolve(w http.ResponseWriter, r *http.Request) {
 		ca = s.state.transport.Conn.LocalAddr().String()
 	}
 
-	//s.state.log.Info("Lookup", "name", name)
-
 	// TODO: add condition codes to the error response rather than just a string
 	pkdata, err := base58.Decode(pk)
 	if err != nil {
@@ -537,15 +567,17 @@ func (s *Server) reresolve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	capa := s.assignCapability(iface, ed25519.PublicKey(pkdata), ca, category)
+	capa := s.assignCapability(iface, ed25519.PublicKey(pkdata), ca, category, false)
 	capa.RestoreState = &rs
 
 	cbor.NewEncoder(w).Encode(lookupResponse{Capability: capa})
 }
 
 type refResponse struct {
-	Status string `json:"status,omitempty"`
-	Error  string `json:"error,omitempty"`
+	Status   string `json:"status,omitempty" cbor:"status,omitempty"`
+	Error    string `json:"error,omitempty" cbor:"error,omitempty"`
+	Category string `json:"category,omitempty" cbor:"category,omitempty"`
+	Code     string `json:"code,omitempty" cbor:"code,omitempty"`
 }
 
 func (s *Server) refCapa(w http.ResponseWriter, r *http.Request) {
@@ -579,52 +611,57 @@ func (s *Server) derefCapa(w http.ResponseWriter, r *http.Request) {
 
 	w.WriteHeader(http.StatusOK)
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if hc, ok := s.objects[oid]; ok {
+	if s.Deref(oid) {
 		var rep refResponse
-
-		if hc.refs.Add(-1) == 0 {
-			delete(s.objects, oid)
-			go hc.Close()
-
-			rep.Status = "removed"
-		} else {
-			rep.Status = "ok"
-		}
-
+		rep.Status = "ok"
 		json.NewEncoder(w).Encode(rep)
 	} else {
 		json.NewEncoder(w).Encode(refResponse{Error: "unknown capability: " + string(oid)})
 	}
 }
 
+func (s *Server) Deref(oid OID) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if hc, ok := s.objects[oid]; ok {
+		if hc.refs.Add(-1) == 0 {
+			delete(s.objects, oid)
+			go hc.Close()
+
+		}
+
+		return true
+	}
+
+	return false
+}
+
 func (s *Server) authRequest(r *http.Request, w http.ResponseWriter, oid OID) (ed25519.PublicKey, bool) {
 	ts := r.Header.Get("rpc-timestamp")
 
 	if ts == "" {
-		s.state.log.Info("No timestamp provided for authentication")
+		s.state.log.Warn("No timestamp provided for authentication")
 		http.Error(w, "no timestamp provided", http.StatusForbidden)
 		return nil, false
 	}
 
 	t, err := time.Parse(time.RFC3339Nano, ts)
 	if err != nil {
-		s.state.log.Info("Failed to parse timestamp", "error", err)
+		s.state.log.Warn("Failed to parse timestamp", "error", err)
 		http.Error(w, "failed to parse timestamp", http.StatusForbidden)
 		return nil, false
 	}
 
 	if time.Since(t) > 10*time.Minute {
-		s.state.log.Info("Timestamp too old", "timestamp", t)
+		s.state.log.Warn("Timestamp too old", "timestamp", t)
 		http.Error(w, "timestamp too old", http.StatusForbidden)
 		return nil, false
 	}
 
 	sign := r.Header.Get("rpc-signature")
 	if sign == "" {
-		s.state.log.Info("No signature provided")
+		s.state.log.Warn("No signature provided")
 		http.Error(w, "no signature provided", http.StatusForbidden)
 		return nil, false
 	}
@@ -634,7 +671,6 @@ func (s *Server) authRequest(r *http.Request, w http.ResponseWriter, oid OID) (e
 	s.mu.Unlock()
 
 	if !ok {
-		s.state.log.Info("no capability found", "oid", oid)
 		w.Header().Add("rpc-status", "unknown-capability")
 		w.Header().Add("rpc-error", "unknown capability: "+string(oid))
 		http.Error(w, "unknown capability", http.StatusNotFound)
@@ -647,19 +683,19 @@ func (s *Server) authRequest(r *http.Request, w http.ResponseWriter, oid OID) (e
 
 	bsign, err := base58.Decode(sign)
 	if err != nil {
-		s.state.log.Info("Failed to decode signature", "error", err)
+		s.state.log.Warn("Failed to decode signature", "error", err)
 		http.Error(w, "failed to decode signature", http.StatusForbidden)
 		return nil, false
 	}
 
 	if len(capa.pub) != ed25519.PublicKeySize {
-		s.state.log.Info("Invalid public key size", "size", len(capa.pub))
+		s.state.log.Warn("Invalid public key size", "size", len(capa.pub))
 		http.Error(w, "invalid public key size", http.StatusForbidden)
 		return nil, false
 	}
 
 	if !ed25519.Verify(capa.pub, buf.Bytes(), bsign) {
-		s.state.log.Info("Failed to verify signature")
+		s.state.log.Warn("Failed to verify signature")
 		http.Error(w, "failed to verify signature", http.StatusForbidden)
 		return nil, false
 	}
@@ -667,12 +703,177 @@ func (s *Server) authRequest(r *http.Request, w http.ResponseWriter, oid OID) (e
 	return capa.pub, true
 }
 
+type streamRequest struct {
+	Kind   string `json:"kind" cbor:"kind"`
+	OID    OID    `json:"oid" cbor:"oid"`
+	Method string `json:"method" cbor:"method"`
+	Status string `json:"status" cbor:"status"`
+
+	Category string `json:"category" cbor:"category"`
+	Code     string `json:"code" cbor:"code"`
+	Error    string `json:"error" cbor:"error"`
+}
+
+type controlStream struct {
+	mu  sync.Mutex
+	dec *cbor.Decoder
+	enc *cbor.Encoder
+}
+
+func (cs *controlStream) NoReply(rs streamRequest, arg any) error {
+	cs.mu.Lock()
+	defer cs.mu.Unlock()
+
+	err := cs.enc.Encode(rs)
+	if err != nil {
+		return err
+	}
+
+	if arg != nil {
+		return cs.enc.Encode(arg)
+	}
+
+	return nil
+}
+
+func (s *Server) startCallStream(w http.ResponseWriter, r *http.Request) {
+	s.state.log.Warn("starting call stream")
+	oid := OID(r.PathValue("oid"))
+
+	method := r.PathValue("method")
+
+	w.Header().Set("Trailer", "rpc-status, rpc-error, rpc-error-category, rpc-error-code")
+
+	user, ok := s.authRequest(r, w, oid)
+	if !ok {
+		return
+	}
+
+	ctx := r.Context()
+
+	s.mu.Lock()
+	iface, ok := s.objects[oid]
+	s.mu.Unlock()
+	if !ok {
+		w.WriteHeader(http.StatusNotFound)
+		w.Header().Add("rpc-status", "unknown-capability")
+		w.Header().Add("rpc-error", "unknown object: "+string(oid))
+		return
+	}
+
+	iface.touch()
+
+	mm := iface.methods[method]
+	if mm.Handler == nil {
+		w.WriteHeader(http.StatusNotFound)
+		w.Header().Add("rpc-status", "unknown")
+		w.Header().Add("rpc-error", "unknown method: "+method)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+
+	ctx = Propagator().Extract(ctx, propagation.HeaderCarrier(r.Header))
+
+	tracer := Tracer()
+
+	ctx, span := tracer.Start(ctx, "rpc.handle."+mm.InterfaceName+"."+mm.Name)
+
+	defer span.End()
+
+	span.SetAttributes(attribute.String("oid", string(oid)))
+
+	sess, err := s.ws.Upgrade(w, r)
+	if err != nil {
+		s.state.log.Error("failed to upgrade connection", "error", err)
+		http.Error(w, "failed to upgrade connection", http.StatusInternalServerError)
+		return
+	}
+
+	ctrlstream, err := sess.AcceptStream(ctx)
+	if err != nil {
+		s.state.log.Error("failed to accept arg stream", "error", err)
+		return
+	}
+
+	var cs controlStream
+	cs.dec = cbor.NewDecoder(ctrlstream)
+	cs.enc = cbor.NewEncoder(ctrlstream)
+
+	defer ctrlstream.Close()
+
+	call := &NetworkCall{
+		s:        s,
+		r:        r,
+		oid:      oid,
+		method:   method,
+		caller:   user,
+		category: iface.category,
+
+		dec: cs.dec,
+
+		wsSession: sess,
+		ctrl:      &cs,
+	}
+
+	if r.TLS != nil && len(r.TLS.PeerCertificates) > 0 {
+		call.peer = r.TLS.PeerCertificates[0]
+		ctx = context.WithValue(ctx, connectionKey{}, &CurrentConnectionInfo{
+			PeerSubject: r.TLS.PeerCertificates[0].Subject.String(),
+		})
+	}
+
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	defer func() {
+		if r := recover(); r != nil {
+			var sr streamRequest
+			sr.Kind = "panic"
+			sr.Error = fmt.Sprint(r)
+			cs.NoReply(sr, nil)
+			panic(r)
+		}
+	}()
+
+	err = cond.Wrap(mm.Handler(ctx, call))
+
+	if err != nil {
+		var sr streamRequest
+		sr.Kind = "error"
+
+		if emsg, ok := err.(ErrorMessage); ok {
+			sr.Error = emsg.ErrorMessage()
+		} else {
+			sr.Error = err.Error()
+		}
+
+		if ecat, ok := err.(ErrorCategory); ok {
+			sr.Category = ecat.ErrorCategory()
+		}
+
+		if ecode, ok := err.(ErrorCode); ok {
+			sr.Code = ecode.ErrorCode()
+		}
+
+		spew.Dump(sr, err)
+
+		cs.NoReply(sr, nil)
+	} else {
+		res := call.results
+		if res == nil {
+			res = struct{}{}
+		}
+		cs.NoReply(streamRequest{
+			Kind: "result",
+		}, res)
+	}
+}
+
 func (s *Server) handleCalls(w http.ResponseWriter, r *http.Request) {
 	oid := OID(r.PathValue("oid"))
 
-	s.state.log.Info("server: rpc call", "oid", oid)
-
-	w.Header().Set("Trailer", "rpc-status, rpc-error")
+	w.Header().Set("Trailer", "rpc-status, rpc-error, rpc-error-category, rpc-error-code")
 
 	user, ok := s.authRequest(r, w, oid)
 	if !ok {
@@ -685,7 +886,11 @@ func (s *Server) handleCalls(w http.ResponseWriter, r *http.Request) {
 
 	defer r.Body.Close()
 
-	if iface, ok := s.objects[oid]; ok {
+	s.mu.Lock()
+	iface, ok := s.objects[oid]
+	s.mu.Unlock()
+
+	if ok {
 		iface.touch()
 
 		mm := iface.methods[method]
@@ -716,7 +921,7 @@ func (s *Server) handleCalls(w http.ResponseWriter, r *http.Request) {
 
 		span.SetAttributes(attribute.String("oid", string(oid)))
 
-		call := &Call{
+		call := &NetworkCall{
 			s:        s,
 			r:        r,
 			oid:      oid,
@@ -732,11 +937,30 @@ func (s *Server) handleCalls(w http.ResponseWriter, r *http.Request) {
 			})
 		}
 
+		if iface.aroundContext != nil {
+			var cancel func()
+			ctx, cancel = iface.aroundContext(ctx, call)
+			defer cancel()
+		}
+
 		err := mm.Handler(ctx, call)
 		if err != nil {
-			s.state.log.Error("rpc call errored", "method", mm.InterfaceName+"."+mm.Name, "error", err)
 			w.Header().Add("rpc-status", "error")
-			w.Header().Add("rpc-error", err.Error())
+
+			if emsg, ok := err.(ErrorMessage); ok {
+				w.Header().Add("rpc-error", emsg.ErrorMessage())
+			} else {
+				w.Header().Add("rpc-error", err.Error())
+			}
+
+			if ecat, ok := err.(ErrorCategory); ok {
+				w.Header().Add("rpc-error-category", ecat.ErrorCategory())
+			}
+
+			if ecode, ok := err.(ErrorCode); ok {
+				w.Header().Add("rpc-error-code", ecode.ErrorCode())
+			}
+
 			s.handleError(w, r, err)
 			return
 		}

@@ -11,11 +11,11 @@ import (
 //go:generate go run ../cmd/rpcgen/main.go -pkg stream -input stream.yml -output stream.gen.go
 
 type Sender[T any] struct {
-	c   *rpc.Client
+	c   *rpc.NetworkClient
 	ssc SendStreamClient[T]
 }
 
-func ClientSend[T any](c *rpc.Client) (*Sender[T], error) {
+func ClientSend[T any](c *rpc.NetworkClient) (*Sender[T], error) {
 	ssc := SendStreamClient[T]{Client: c}
 	return &Sender[T]{c: c, ssc: ssc}, nil
 }
@@ -65,7 +65,11 @@ func (r *rscReader) Read(p []byte) (n int, err error) {
 	return copy(p, data), nil
 }
 
-func ToReader(ctx context.Context, x *RecvStreamClient[[]byte]) io.Reader {
+func (r *rscReader) Close() error {
+	return r.rsc.Close()
+}
+
+func ToReader(ctx context.Context, x *RecvStreamClient[[]byte]) io.ReadCloser {
 	return &rscReader{ctx: ctx, rsc: x}
 }
 
@@ -136,7 +140,11 @@ func (w *wscWriter) Write(p []byte) (n int, err error) {
 	return int(result.Count()), nil
 }
 
-func ToWriter(ctx context.Context, x *SendStreamClient[[]byte]) io.Writer {
+func (w *wscWriter) Close() error {
+	return w.wsc.Close()
+}
+
+func ToWriter(ctx context.Context, x *SendStreamClient[[]byte]) io.WriteCloser {
 	return &wscWriter{ctx: ctx, wsc: x}
 }
 
@@ -160,6 +168,21 @@ func (c *chanReader[T]) Recv(ctx context.Context, state *RecvStreamRecv[T]) erro
 
 func ChanReader[T any](ch <-chan T) RecvStream[T] {
 	return &chanReader[T]{ch: ch}
+}
+
+func ChanWriter[T any](ctx context.Context, rs *RecvStreamClient[T], ch chan<- T) {
+	go func() {
+		defer rs.Close()
+
+		for {
+			ret, err := rs.Recv(ctx, 1)
+			if err != nil {
+				return
+			}
+
+			ch <- ret.Value()
+		}
+	}()
 }
 
 type callbackSender[T any] struct {

@@ -25,6 +25,12 @@ func AllCommands() map[string]cli.CommandFactory {
 		"console": func() (cli.Command, error) {
 			return Infer("console", "Start a console", Console), nil
 		},
+		"sandbox exec": func() (cli.Command, error) {
+			return Infer("sandbox exec", "Execute a command in a sandbox", SandboxExec), nil
+		},
+		"sandbox metrics": func() (cli.Command, error) {
+			return Infer("sandbox metrics", "Get metrics from a sandbox", SandboxMetrics), nil
+		},
 
 		"app": func() (cli.Command, error) {
 			return Infer("app", "Get information about an application", App), nil
@@ -96,6 +102,30 @@ func AllCommands() map[string]cli.CommandFactory {
 
 		"dataset serve": func() (cli.Command, error) {
 			return Infer("dataset serve", "Serve a dataset", DataSetServe), nil
+		},
+
+		"runner run": func() (cli.Command, error) {
+			return Infer("runner run", "Run a runner", RunnerRun), nil
+		},
+
+		"coordinator run": func() (cli.Command, error) {
+			return Infer("coordinator run", "Run a coordinator", CoordinatorRun), nil
+		},
+
+		"dev": func() (cli.Command, error) {
+			return Infer("dev", "Run the dev server", Dev), nil
+		},
+
+		"entity get": func() (cli.Command, error) {
+			return Infer("entity get", "Get an entity", EntityGet), nil
+		},
+
+		"entity put": func() (cli.Command, error) {
+			return Infer("entity put", "Put an entity", EntityPut), nil
+		},
+
+		"entity list": func() (cli.Command, error) {
+			return Infer("entity list", "List entities", EntityList), nil
 		},
 
 		"internal disk cleanup": func() (cli.Command, error) {

@@ -26,8 +26,17 @@ func (l *localCall) NewCapability(i *Interface) *Capability {
 	}
 }
 
-func (l *localCall) NewClient(capa *Capability) *Client {
-	return &Client{
+func (l *localClient) NewCapability(i *Interface) *Capability {
+	oid := OID(idgen.Gen("lcap"))
+	l.caps[oid] = i
+
+	return &Capability{
+		OID: oid,
+	}
+}
+
+func (l *localCall) NewClient(capa *Capability) *NetworkClient {
+	return &NetworkClient{
 		oid: capa.OID,
 
 		localClient: &localClient{
@@ -37,8 +46,8 @@ func (l *localCall) NewClient(capa *Capability) *Client {
 	}
 }
 
-func (l *localClient) NewClient(capa *Capability) *Client {
-	return &Client{
+func (l *localClient) NewClient(capa *Capability) *NetworkClient {
+	return &NetworkClient{
 		oid: capa.OID,
 
 		localClient: &localClient{
@@ -64,7 +73,7 @@ func (l *localClient) Call(ctx context.Context, name string, arg, ret any) error
 		return err
 	}
 
-	call := &Call{
+	call := &NetworkCall{
 		argData: data,
 		local: &localCall{
 			localEnv: l.localEnv,
@@ -84,8 +93,8 @@ func (l *localClient) Call(ctx context.Context, name string, arg, ret any) error
 	return cbor.Unmarshal(rdata, ret)
 }
 
-func LocalClient(iface *Interface) *Client {
-	return &Client{
+func LocalClient(iface *Interface) *NetworkClient {
+	return &NetworkClient{
 		localClient: &localClient{
 			localEnv: &localEnv{
 				caps: make(map[OID]*Interface),
@@ -95,7 +104,7 @@ func LocalClient(iface *Interface) *Client {
 	}
 }
 
-func Local(args ...any) *Call {
+func Local(args ...any) *NetworkCall {
 	md := map[string]any{}
 
 	for i := 0; i < len(args); i += 2 {
@@ -107,7 +116,7 @@ func Local(args ...any) *Call {
 		panic(err)
 	}
 
-	return &Call{
+	return &NetworkCall{
 		argData: data,
 		local: &localCall{
 			localEnv: &localEnv{
