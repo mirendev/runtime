@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/mr-tron/base58"
+	"go.etcd.io/etcd/api/v3/mvccpb"
 	clientv3 "go.etcd.io/etcd/client/v3"
 	"miren.dev/runtime/pkg/cond"
 	"miren.dev/runtime/pkg/idgen"
@@ -661,6 +662,25 @@ func (s *EtcdStore) deleteFromCollection(entity *Entity, collection string) erro
 }
 
 func (s *EtcdStore) ListIndex(ctx context.Context, attr Attr) ([]Id, error) {
+	if attr.ID == DBId {
+		if attr.Value.Kind() != KindId {
+			return nil, cond.ValidationFailure("attribute", "invalid value type for ID")
+		}
+
+		id := attr.Value.Id()
+
+		gr, err := s.client.KV.Get(ctx, s.buildKey(id), clientv3.WithCountOnly())
+		if err != nil {
+			return nil, err
+		}
+
+		if gr.Count == 0 {
+			return nil, nil
+		}
+
+		return []Id{attr.Value.Id()}, nil
+	}
+
 	schema, err := s.GetAttributeSchema(ctx, attr.ID)
 	if err != nil {
 		return nil, err
@@ -687,6 +707,48 @@ func (s *EtcdStore) IndexPrefix(ctx context.Context, attr Attr) (string, error) 
 }
 
 func (s *EtcdStore) WatchIndex(ctx context.Context, attr Attr) (clientv3.WatchChan, error) {
+	if attr.ID == DBId {
+		if attr.Value.Kind() != KindId {
+			return nil, cond.ValidationFailure("attribute", "invalid value type for ID")
+		}
+
+		id := attr.Value.Id()
+		key := s.buildKey(id)
+		wc := s.client.Watch(ctx, key)
+
+		ret := make(chan clientv3.WatchResponse, 1)
+
+		go func() {
+			defer close(ret)
+
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case wr, ok := <-wc:
+					if !ok {
+						return
+					}
+
+					ret <- clientv3.WatchResponse{
+						Header: wr.Header,
+						Events: []*clientv3.Event{
+							{
+								Type: clientv3.EventTypePut,
+								Kv: &mvccpb.KeyValue{
+									Key:   []byte(key),
+									Value: []byte(id),
+								},
+							},
+						},
+					}
+				}
+			}
+		}()
+
+		return ret, nil
+	}
+
 	schema, err := s.GetAttributeSchema(ctx, attr.ID)
 	if err != nil {
 		return nil, err
