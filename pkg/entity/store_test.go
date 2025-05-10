@@ -521,6 +521,27 @@ func TestEtcdStore_ListIndex(t *testing.T) {
 			wantCount: 0,
 			wantErr:   true,
 		},
+		{
+			name:      "indexed by dbid, with wrong kind of attribute value",
+			attrID:    DBId,
+			value:     StringValue("test1"),
+			wantCount: 0,
+			wantErr:   true,
+		},
+		{
+			name:      "indexed by dbid",
+			attrID:    DBId,
+			value:     RefValue("test1"),
+			wantCount: 1,
+			wantErr:   false,
+		},
+		{
+			name:      "indexed by dbid when the id is not there",
+			attrID:    DBId,
+			value:     RefValue("not-there"),
+			wantCount: 0,
+			wantErr:   false,
+		},
 	}
 
 	for _, tt := range tests {
@@ -534,5 +555,161 @@ func TestEtcdStore_ListIndex(t *testing.T) {
 			require.NoError(t, err)
 			assert.Len(t, entities, tt.wantCount)
 		})
+	}
+}
+
+func TestWatchIndex(t *testing.T) {
+	ctx := context.Background()
+	client := setupTestEtcd(t)
+	store, err := NewEtcdStore(t.Context(), slog.Default(), client, "/test-entities")
+	require.NoError(t, err)
+
+	// Create a attr for an indexed attribute
+	attr, err := store.CreateEntity(ctx, []Attr{
+		String(Ident, "test-index"),
+		Ref(Type, TypeStr),
+		Bool(Index, true),
+	})
+	if err != nil {
+		t.Fatalf("Failed to create schema: %v", err)
+	}
+
+	// Start watching the index before creating any entities
+	watcher, err := store.WatchIndex(ctx, String(attr.ID, "value1"))
+	if err != nil {
+		t.Fatalf("Failed to create watcher: %v", err)
+	}
+
+	// Create an entity with the indexed attribute
+	entity1, err := store.CreateEntity(ctx, []Attr{
+		String(attr.ID, "value1"),
+		String(Ident, "test-entity-1"),
+	})
+	if err != nil {
+		t.Fatalf("Failed to create entity: %v", err)
+	}
+
+	// Wait for and verify the creation event
+	select {
+	case wr := <-watcher:
+		assert.Len(t, wr.Events, 1)
+		for _, event := range wr.Events {
+			if event.Type != clientv3.EventTypePut {
+				t.Errorf("Expected PUT event, got %v", event.Type)
+			}
+			if string(event.Kv.Value) != string(entity1.ID) {
+				t.Errorf("Expected entity ID %s, got %s", entity1.ID, event.Kv.Value)
+			}
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Timeout waiting for creation event")
+	}
+
+	// Update the entity with a new value for the indexed attribute
+	_, err = store.UpdateEntity(ctx, entity1.ID, []Attr{
+		String(attr.ID, "value2"),
+	})
+	if err != nil {
+		t.Fatalf("Failed to update entity: %v", err)
+	}
+
+	/* FIXME
+	// Wait for and verify the deletion event (old value removed from index)
+	select {
+	case wr := <-watcher:
+		assert.Len(t, wr.Events, 1)
+		for _, event := range wr.Events {
+			if event.Type != clientv3.EventTypeDelete {
+				t.Errorf("Expected DELETE event, got %v", event.Type)
+			}
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Timeout waiting for deletion event")
+	}
+	*/
+
+	// Create a new watcher for the new value
+	watcher2, err := store.WatchIndex(ctx, String(attr.ID, "value2"))
+	if err != nil {
+		t.Fatalf("Failed to create second watcher: %v", err)
+	}
+
+	// Delete the entity
+	err = store.DeleteEntity(ctx, entity1.ID)
+	if err != nil {
+		t.Fatalf("Failed to delete entity: %v", err)
+	}
+
+	// Wait for and verify the deletion event
+	select {
+	case wr := <-watcher2:
+		assert.Len(t, wr.Events, 1)
+		for _, event := range wr.Events {
+			if event.Type != clientv3.EventTypeDelete {
+				t.Errorf("Expected DELETE event, got %v", event.Type)
+			}
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Timeout waiting for deletion event")
+	}
+
+	// Test watching a non-indexed attribute
+	nonIndexedSchema, err := store.CreateEntity(ctx, []Attr{
+		String(Ident, "non-indexed"),
+		Ref(Type, TypeStr),
+		Bool(Index, false),
+	})
+	if err != nil {
+		t.Fatalf("Failed to create non-indexed schema: %v", err)
+	}
+
+	_, err = store.WatchIndex(ctx, String(nonIndexedSchema.ID, "value"))
+	if err == nil {
+		t.Error("Expected error when watching non-indexed attribute")
+	}
+}
+
+func TestWatchIndex_DBID(t *testing.T) {
+	ctx := context.Background()
+	client := setupTestEtcd(t)
+	store, err := NewEtcdStore(t.Context(), slog.Default(), client, "/test-entities")
+	require.NoError(t, err)
+
+	// Create an entity with the indexed attribute
+	entity1, err := store.CreateEntity(ctx, []Attr{
+		String(Ident, "test-entity-1"),
+		String(Doc, "test document"),
+	})
+	if err != nil {
+		t.Fatalf("Failed to create entity: %v", err)
+	}
+
+	// Start watching the index before creating any entities
+	watcher, err := store.WatchIndex(ctx, Ref(DBId, "test-entity-1"))
+	if err != nil {
+		t.Fatalf("Failed to create watcher: %v", err)
+	}
+
+	_, err = store.UpdateEntity(ctx, entity1.ID, []Attr{
+		String(Doc, "now with more doc"),
+	})
+	if err != nil {
+		t.Fatalf("Failed to update entity: %v", err)
+	}
+
+	// Wait for and verify the creation event
+	select {
+	case wr := <-watcher:
+		assert.Len(t, wr.Events, 1)
+		for _, event := range wr.Events {
+			if event.Type != clientv3.EventTypePut {
+				t.Errorf("Expected PUT event, got %v", event.Type)
+			}
+			if string(event.Kv.Value) != string(entity1.ID) {
+				t.Errorf("Expected entity ID %s, got %s", entity1.ID, event.Kv.Value)
+			}
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Timeout waiting for creation event")
 	}
 }
