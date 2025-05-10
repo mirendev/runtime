@@ -719,6 +719,8 @@ func (s *EtcdStore) WatchIndex(ctx context.Context, attr Attr) (clientv3.WatchCh
 		ret := make(chan clientv3.WatchResponse, 1)
 
 		go func() {
+			defer close(ret)
+
 			for {
 				select {
 				case <-ctx.Done():
