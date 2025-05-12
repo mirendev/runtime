@@ -119,18 +119,21 @@ func (f *TextFormatter) decode(ctx context.Context, sc *SchemaValue) (*entity.En
 	return ent, nil
 }
 
+// Format produces a textual representation of an entity by YAML encoding its attributes.
 func (f *TextFormatter) Format(ctx context.Context, ent *entity.Entity) (string, error) {
 	var (
 		results  []*SchemaValue
 		metadata map[string]any
 	)
 
+	// If an entity has any kinds, we can do special output formatting
 	for _, kindid := range ent.GetAll(entity.EntityKind) {
 		es, err := f.sc.GetKindSchema(ctx, kindid.Value.Id())
 		if err != nil {
 			return "", fmt.Errorf("failed to get kind schema: %w", err)
 		}
 
+		// Metadata has a special place
 		if kindid.Value.Id() == core_v1alpha.KindMetadata {
 			md, err := naturalEncodeMap(ent, es)
 			if err != nil {
@@ -139,6 +142,7 @@ func (f *TextFormatter) Format(ctx context.Context, ent *entity.Entity) (string,
 
 			metadata = md
 		} else {
+			// Everything else gets decoded based on its schema
 			m, err := NaturalEncode(ent, es)
 			if err != nil {
 				return "", fmt.Errorf("failed to encode entity: %w", err)
@@ -148,16 +152,15 @@ func (f *TextFormatter) Format(ctx context.Context, ent *entity.Entity) (string,
 		}
 	}
 
-	if len(results) == 0 {
-		return "", fmt.Errorf("no entity found")
+	if len(results) > 0 {
+		results[0].Id = ent.ID.String()
+
+		if metadata != nil {
+			results[0].Metadata = metadata
+		}
 	}
 
-	results[0].Id = ent.ID.String()
-
-	if metadata != nil && len(results) > 0 {
-		results[0].Metadata = metadata
-	}
-
+	// All the entity's raw attributes are going into the YAML output
 	var n yaml.Node
 	err := n.Encode(map[string]any{
 		"attrs": ent.Attrs,
@@ -166,6 +169,7 @@ func (f *TextFormatter) Format(ctx context.Context, ent *entity.Entity) (string,
 		return "", fmt.Errorf("failed to encode entity: %w", err)
 	}
 
+	// If there's any data we could encode using schemas, we'll prepend that
 	switch len(results) {
 	case 0:
 		// ok
