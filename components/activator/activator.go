@@ -154,6 +154,12 @@ func (a *localActivator) activateApp(ctx context.Context, ver *core_v1alpha.AppV
 	sb.LogEntity = appMD.Name
 	sb.LogAttribute = types.LabelSet("stage", "app-run", "pool", pool, "service", service)
 
+	// Determine port from config or default to 3000
+	port := int64(3000)
+	if ver.Config.Port > 0 {
+		port = ver.Config.Port
+	}
+
 	appCont := compute_v1alpha.Container{
 		Name:  "app",
 		Image: ver.ImageUrl,
@@ -164,7 +170,7 @@ func (a *localActivator) activateApp(ctx context.Context, ver *core_v1alpha.AppV
 		Directory: "/app",
 		Port: []compute_v1alpha.Port{
 			{
-				Port: 3000,
+				Port: port,
 				Name: "http",
 				Type: "http",
 			},
@@ -238,7 +244,7 @@ func (a *localActivator) activateApp(ctx context.Context, ver *core_v1alpha.AppV
 		return nil, err
 	}
 
-	addr := "http://" + runningSB.Network[0].Address + ":3000"
+	addr := fmt.Sprintf("http://%s:%d", runningSB.Network[0].Address, port)
 
 	var leaseSlots int
 
