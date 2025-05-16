@@ -78,6 +78,11 @@ export CONTAINERD_NAMESPACE=runtime
 # Make a tmux session for us to run multiple shells in
 tmux new-session -d -s dev
 
+# Set the prefix to one that is unlikely to overlap: ctrl-s
+tmux unbind-key C-b
+tmux set-option -g prefix C-s
+tmux bind-key C-s send-prefix
+
 # Start with two panes with the server running on top and a shell running on the bottom
 tmux split-window -v
 tmux send-keys -t dev:0.0 "./bin/runtime dev -vv" Enter
