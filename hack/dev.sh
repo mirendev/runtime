@@ -71,10 +71,15 @@ EOF
 echo "Cleaning runtime namespace to begin..."
 r debug ctr nuke -n runtime
 
-./bin/runtime dev -vv >>/var/log/runtime.log 2>&1 &
-
 export HISTFILE=/data/.bash_history
 export HISTIGNORE=exit
 export CONTAINERD_NAMESPACE=runtime
 
-bash
+# Make a tmux session for us to run multiple shells in
+tmux new-session -d -s dev
+
+# Start with two panes with the server running on top and a shell running on the bottom
+tmux split-window -v
+tmux send-keys -t dev:0.0 "./bin/runtime dev -vv" Enter
+tmux select-pane -t dev:0.1
+tmux attach-session -t dev
