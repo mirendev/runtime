@@ -160,8 +160,9 @@ func (m *Runtime) Test(
 	tests string,
 	// +optional
 	count int,
+	// NOTE: This flag cannot be called "verbose" - see https://github.com/dagger/dagger/issues/10428
 	// +optional
-	verbose bool,
+	verboose bool,
 	// +optional
 	run string,
 	// +optional
@@ -198,7 +199,7 @@ func (m *Runtime) Test(
 			args = append(args, "-run", run)
 		}
 
-		if verbose {
+		if verboose {
 			w = w.WithEnvVariable("VERBOSE", "1")
 		}
 

@@ -11,6 +11,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"miren.dev/runtime/cli"
+	"miren.dev/runtime/pkg/testutils"
 )
 
 func TestCustomPortEndToEnd(t *testing.T) {
@@ -21,10 +22,10 @@ func TestCustomPortEndToEnd(t *testing.T) {
 	defer cancel()
 	t.Log("starting test")
 
-	exitCode := make(chan int, 1)
+	serverErr := make(chan error, 1)
 	go func() {
 		t.Log("starting dev")
-		exitCode <- cli.Run([]string{"runtime", "dev"})
+		serverErr <- testutils.TestServer(t)
 	}()
 
 	// Give the dev server time to spin up
@@ -33,18 +34,20 @@ func TestCustomPortEndToEnd(t *testing.T) {
 	// Write a combo.yaml
 	filePath := writeTempContents(t, "combo.yaml", comboYaml)
 
+	t.Log("putting entities")
 	// Spin up combo
 	putCode := cli.Run([]string{"runtime", "entity", "put", "-p", filePath})
 	r.Equal(0, putCode)
 
 	select {
-	case code := <-exitCode:
-		t.Logf("got code: %d", code)
+	case err := <-serverErr:
+		t.Logf("test server got err: %s", err)
 	case <-ctx.Done():
 		t.Logf("got done")
 	}
 
 	// Ensure we can route to nginx container
+	t.Log("running HTTP GET")
 	resp, err := http.Get("http://localhost:8989")
 	r.NoError(err)
 	defer resp.Body.Close()
