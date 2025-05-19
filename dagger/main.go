@@ -218,16 +218,6 @@ func (m *Runtime) Test(
 func (m *Runtime) Dev(
 	ctx context.Context,
 	dir *dagger.Directory,
-	// +optional
-	shell bool,
-	// +optional
-	tests string,
-	// +optional
-	count int,
-	// +optional
-	verbose bool,
-	// +optional
-	run string,
 ) (string, error) {
 	w := m.WithServices(dir).
 		WithDirectory("/src", dir).
