@@ -1,8 +1,10 @@
 package testutils
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/netip"
 	"os"
@@ -30,6 +32,8 @@ import (
 // TestServer spins up an equivalent of the dev server for testing purposes.
 func TestServer(t *testing.T) error {
 	ctx := t.Context()
+	// Create a cancellable context
+	ctx, ctxCancel := context.WithCancel(ctx)
 	eg, sub := errgroup.WithContext(ctx)
 	reg, cleanup := Registry(observability.TestInject)
 	t.Cleanup(cleanup)
@@ -41,9 +45,7 @@ func TestServer(t *testing.T) error {
 	optsEtcdPrefix := "/miren"
 	optsRunnerId := "dev"
 
-	log := slog.New(slogfmt.NewTextHandler(os.Stderr, &slog.HandlerOptions{
-		Level: slog.LevelDebug,
-	}))
+	log := slog.New(slogfmt.NewTestHandler(t, &slog.HandlerOptions{Level: slog.LevelDebug}))
 
 	res, hm := netresolve.NewLocalResolver()
 
@@ -55,12 +57,14 @@ func TestServer(t *testing.T) error {
 	err := reg.Populate(&mem)
 	if err != nil {
 		log.Error("failed to populate memory usage", "error", err)
+		ctxCancel()
 		return err
 	}
 
 	err = reg.Populate(&cpu)
 	if err != nil {
 		log.Error("failed to populate CPU usage", "error", err)
+		ctxCancel()
 		return err
 	}
 
@@ -78,6 +82,7 @@ func TestServer(t *testing.T) error {
 	err = co.Start(sub)
 	if err != nil {
 		log.Error("failed to start coordinator", "error", err)
+		ctxCancel()
 		return err
 	}
 
@@ -131,12 +136,14 @@ func TestServer(t *testing.T) error {
 	rs, err := rpc.NewState(ctx, rpc.WithSkipVerify)
 	if err != nil {
 		log.Error("failed to create RPC client", "error", err)
+		ctxCancel()
 		return err
 	}
 
 	client, err := rs.Connect(optsAddress, "entities")
 	if err != nil {
 		log.Error("failed to connect to RPC server", "error", err)
+		ctxCancel()
 		return err
 	}
 
@@ -150,7 +157,8 @@ func TestServer(t *testing.T) error {
 
 	ipa := ipalloc.NewAllocator(log, subnets)
 	eg.Go(func() error {
-		return ipa.Watch(sub, eac)
+		defer t.Log("ipa escaped")
+		return ipa.Watch(ctx, eac)
 	})
 
 	aa := co.Activator()
@@ -164,45 +172,94 @@ func TestServer(t *testing.T) error {
 		Id:            optsRunnerId,
 		ServerAddress: optsAddress,
 		ListenAddress: optsRunnerAddress,
-		Workers:       runner.DefaulWorkers,
+		Workers:       1,
 	})
 
 	err = r.Start(sub)
 	if err != nil {
+		ctxCancel()
 		return err
 	}
 
 	sch, err := scheduler.NewScheduler(sub, log, eac)
 	if err != nil {
 		log.Error("failed to create scheduler", "error", err)
+		ctxCancel()
 		return err
 	}
 
 	eg.Go(func() error {
-		return sch.Watch(sub, eac)
+		defer t.Log("ipa escaped")
+		return sch.Watch(ctx, eac)
 	})
 
+	httpServer := &http.Server{
+		Addr:    ":8989",
+		Handler: hs,
+	}
+
 	go func() {
-		err := http.ListenAndServe(":8989", hs)
-		if err != nil {
+		err := httpServer.ListenAndServe()
+		if err == http.ErrServerClosed {
+			log.Info("ingress server closed")
+		}
+		if err != nil && err != http.ErrServerClosed {
 			log.Error("failed to start HTTP server", "error", err)
 		}
 	}()
 
-	var registry ocireg.Registry
-	err = reg.Populate(&registry)
+	// Register cleanup function to shutdown the HTTP server
+	t.Cleanup(func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := httpServer.Shutdown(shutdownCtx); err != nil {
+			log.Error("failed to shutdown HTTP server", "error", err)
+		}
+		log.Info("HTTP server shutdown complete")
+	})
+
+	var ociRegistry ocireg.Registry
+	err = reg.Populate(&ociRegistry)
 	if err != nil {
 		log.Error("failed to populate OCI registry", "error", err)
+		ctxCancel()
 		return err
 	}
 
-	registry.Start(ctx, ":5000")
+	// Start the OCI Registry with a proper server
+	ociServer := &http.Server{
+		Addr: ":5000",
+		BaseContext: func(net.Listener) context.Context {
+			return ctx
+		},
+	}
+
+	go func() {
+		err := ociRegistry.Start(ctx, ":5000")
+		if err == http.ErrServerClosed {
+			log.Info("OCI registry closed")
+		}
+		if err != nil && err != http.ErrServerClosed {
+			log.Error("failed to start OCI registry", "error", err)
+		}
+	}()
+
+	// Register cleanup for OCI registry server
+	t.Cleanup(func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := ociServer.Shutdown(shutdownCtx); err != nil {
+			log.Error("failed to shutdown OCI registry server", "error", err)
+		}
+		log.Info("OCI registry server shutdown complete")
+	})
 
 	var regAddr netip.Addr
 
 	err = reg.ResolveNamed(&regAddr, "router-address")
 	if err != nil {
 		log.Error("failed to resolve router address", "error", err)
+		ctxCancel()
 		return err
 	}
 
@@ -210,7 +267,33 @@ func TestServer(t *testing.T) error {
 
 	hm.SetHost("cluster.local", regAddr)
 
-	log.Info("Starting dev mode", "address", optsAddress, "etcd_endpoints", optsEtcdEndpoints, "etcd_prefix", optsEtcdPrefix, "runner_id", optsRunnerId)
+	log.Info("Starting test mode", "address", optsAddress, "etcd_endpoints", optsEtcdEndpoints, "etcd_prefix", optsEtcdPrefix, "runner_id", optsRunnerId)
 
-	return eg.Wait()
+	// Register cleanup for running components
+	t.Cleanup(func() {
+		// The runner will be stopped by the context cancellation
+		log.Info("Runner will be stopped via context cancellation")
+
+		// TODO: Close any RPC connections, currently hangs
+		// if client != nil {
+		// 	log.Info("Closing RPC client connections")
+		// 	client.Close()
+		// }
+
+		// Cancel context to signal all components to stop
+		log.Info("Canceling context to stop all components")
+		ctxCancel()
+
+		// TODO: Graceful shutdown
+		// log.Info("Waiting for errgroup to complete")
+		// Wait for errgroup to finish
+		// if err := eg.Wait(); err != nil {
+		// 	log.Error("error waiting for components to stop", "error", err)
+		// }
+
+		log.Info("Test server shutdown complete")
+	})
+
+	// Let the server run until the test ends
+	return nil
 }
