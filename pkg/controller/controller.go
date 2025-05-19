@@ -171,7 +171,6 @@ func (c *ReconcileController) runWorker(ctx context.Context) {
 	id := idgen.Gen("worker")
 
 	c.Log.Info("Starting worker", "id", id)
-	defer c.Log.Info("Stopping worker", "id", id)
 
 	defer c.wg.Done()
 
@@ -180,9 +179,11 @@ func (c *ReconcileController) runWorker(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
+			c.Log.Info("Stopping worker", "id", id)
 			return
 		case event, ok := <-c.workQueue:
 			if !ok {
+				c.Log.Info("Stopping worker", "id", id)
 				return
 			}
 
