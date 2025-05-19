@@ -1,4 +1,4 @@
-package testutils
+package testserver
 
 import (
 	"context"
@@ -26,6 +26,7 @@ import (
 	"miren.dev/runtime/pkg/netdb"
 	"miren.dev/runtime/pkg/rpc"
 	"miren.dev/runtime/pkg/slogfmt"
+	"miren.dev/runtime/pkg/testutils"
 	"miren.dev/runtime/servers/httpingress"
 )
 
@@ -35,7 +36,7 @@ func TestServer(t *testing.T) error {
 	// Create a cancellable context
 	ctx, ctxCancel := context.WithCancel(ctx)
 	eg, sub := errgroup.WithContext(ctx)
-	reg, cleanup := Registry(observability.TestInject)
+	reg, cleanup := testutils.Registry(observability.TestInject)
 	t.Cleanup(cleanup)
 
 	// Mirroring defaults from cli/commands/dev.go

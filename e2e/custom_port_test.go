@@ -11,7 +11,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"miren.dev/runtime/cli"
-	"miren.dev/runtime/pkg/testutils"
+	"miren.dev/runtime/pkg/testserver"
 )
 
 func TestCustomPortEndToEnd(t *testing.T) {
@@ -25,7 +25,7 @@ func TestCustomPortEndToEnd(t *testing.T) {
 	serverErr := make(chan error, 1)
 	go func() {
 		t.Log("starting dev")
-		serverErr <- testutils.TestServer(t)
+		serverErr <- testserver.TestServer(t)
 	}()
 
 	// Give the dev server time to spin up
