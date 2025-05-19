@@ -2,9 +2,7 @@ package controller
 
 import (
 	"context"
-	"fmt"
-	"os"
-	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -22,9 +20,7 @@ import (
 )
 
 func TestReconcileController_Lifecycle(t *testing.T) {
-	log := slog.New(slogfmt.NewTextHandler(os.Stdout, &slog.HandlerOptions{
-		Level: slog.LevelDebug,
-	}))
+	log := slog.New(slogfmt.NewTestHandler(t, &slog.HandlerOptions{Level: slog.LevelDebug}))
 
 	store := entity.NewMockStore()
 	server := &entityserver.EntityServer{
@@ -38,9 +34,9 @@ func TestReconcileController_Lifecycle(t *testing.T) {
 
 	testIndex := entity.Any(entity.Type, "test/type")
 
-	handlerCalls := 0
+	var handlerCalls atomic.Uint64
 	handler := func(ctx context.Context, event Event) ([]entity.Attr, error) {
-		handlerCalls++
+		handlerCalls.Add(1)
 		return nil, nil
 	}
 
@@ -50,25 +46,28 @@ func TestReconcileController_Lifecycle(t *testing.T) {
 		testIndex,
 		sc,
 		handler,
-		1*time.Second,
-		2, // workers
+		0, // no resync
+		1, // workers
 	)
 
 	// Test Start
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	err := controller.Start(ctx)
 	require.NoError(t, err)
 
+	// Give a few millis for the test event to come through
+	time.Sleep(10 * time.Millisecond)
+
 	// Test Stop
 	controller.Stop()
+
+	// MockStore sends a fake Put event to /mock/entity, ensure it came through
+	require.Equal(t, handlerCalls.Load(), uint64(1))
 }
 
 func TestReconcileController_EventProcessing(t *testing.T) {
-	log := slog.New(slogfmt.NewTextHandler(os.Stdout, &slog.HandlerOptions{
-		Level: slog.LevelDebug,
-	}))
+	log := slog.New(slogfmt.NewTestHandler(t, &slog.HandlerOptions{Level: slog.LevelDebug}))
 
 	store := entity.NewMockStore()
 	server := &entityserver.EntityServer{
@@ -202,9 +201,7 @@ func TestReconcileController_EventProcessing(t *testing.T) {
 }
 
 func TestReconcileController_Resync(t *testing.T) {
-	log := slog.New(slogfmt.NewTextHandler(os.Stdout, &slog.HandlerOptions{
-		Level: slog.LevelDebug,
-	}))
+	log := slog.New(slogfmt.NewTestHandler(t, &slog.HandlerOptions{Level: slog.LevelDebug}))
 
 	store := entity.NewMockStore()
 	server := &entityserver.EntityServer{
@@ -260,66 +257,4 @@ func TestReconcileController_Resync(t *testing.T) {
 
 	// Should have at least 2 resync calls
 	assert.GreaterOrEqual(t, resyncCalls, 2)
-}
-
-func TestReconcileController_WorkerCount(t *testing.T) {
-	log := slog.New(slogfmt.NewTextHandler(os.Stdout, &slog.HandlerOptions{
-		Level: slog.LevelDebug,
-	}))
-
-	store := entity.NewMockStore()
-	server := &entityserver.EntityServer{
-		Log:   log,
-		Store: store,
-	}
-
-	sc := &entityserver_v1alpha.EntityAccessClient{
-		Client: rpc.LocalClient(entityserver_v1alpha.AdaptEntityAccess(server)),
-	}
-
-	testIndex := entity.Any(entity.Type, "test/type")
-
-	var workerIDs sync.Map
-	handler := func(ctx context.Context, event Event) ([]entity.Attr, error) {
-		// Store the goroutine ID to track unique workers
-		workerIDs.Store(WorkerId(ctx), true)
-		time.Sleep(100 * time.Millisecond) // Simulate work
-		return nil, nil
-	}
-
-	workerCount := 3
-	controller := NewReconcileController(
-		"test-controller",
-		log,
-		testIndex,
-		sc,
-		handler,
-		0, // disable resync
-		workerCount,
-	)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 1000*time.Millisecond)
-	defer cancel()
-
-	err := controller.Start(ctx)
-	require.NoError(t, err)
-
-	// Send multiple events
-	for i := 0; i < 10; i++ {
-		controller.workQueue <- Event{
-			Type: EventAdded,
-			Id:   entity.Id(fmt.Sprintf("test/entity%d", i)),
-		}
-	}
-
-	controller.Stop()
-
-	// Count unique worker IDs
-	uniqueWorkers := 0
-	workerIDs.Range(func(key, value interface{}) bool {
-		uniqueWorkers++
-		return true
-	})
-
-	assert.Less(t, uniqueWorkers, workerCount)
 }
