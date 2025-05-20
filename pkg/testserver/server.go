@@ -43,7 +43,8 @@ func TestServer(t *testing.T) error {
 	optsAddress := "localhost:8443"
 	optsRunnerAddress := "localhost:8444"
 	optsEtcdEndpoints := []string{"http://etcd:2379"}
-	optsEtcdPrefix := "/miren"
+	var optsEtcdPrefix string
+	reg.ResolveNamed(&optsEtcdPrefix, "etcd-prefix")
 	optsRunnerId := "dev"
 
 	log := slog.New(slogfmt.NewTestHandler(t, &slog.HandlerOptions{Level: slog.LevelDebug}))
@@ -158,7 +159,7 @@ func TestServer(t *testing.T) error {
 
 	ipa := ipalloc.NewAllocator(log, subnets)
 	eg.Go(func() error {
-		defer t.Log("ipa escaped")
+		defer t.Log("ipallocator watch complete")
 		return ipa.Watch(ctx, eac)
 	})
 
@@ -190,7 +191,7 @@ func TestServer(t *testing.T) error {
 	}
 
 	eg.Go(func() error {
-		defer t.Log("ipa escaped")
+		defer t.Log("scheduled watch complete")
 		return sch.Watch(ctx, eac)
 	})
 
@@ -214,9 +215,9 @@ func TestServer(t *testing.T) error {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		if err := httpServer.Shutdown(shutdownCtx); err != nil {
-			log.Error("failed to shutdown HTTP server", "error", err)
+			log.Error("failed to shutdown HTTP ingress server", "error", err)
 		}
-		log.Info("HTTP server shutdown complete")
+		log.Info("HTTP ingress server shutdown complete")
 	})
 
 	var ociRegistry ocireg.Registry
@@ -268,31 +269,25 @@ func TestServer(t *testing.T) error {
 
 	hm.SetHost("cluster.local", regAddr)
 
-	log.Info("Starting test mode", "address", optsAddress, "etcd_endpoints", optsEtcdEndpoints, "etcd_prefix", optsEtcdPrefix, "runner_id", optsRunnerId)
+	log.Info("Starting test server", "address", optsAddress, "etcd_endpoints", optsEtcdEndpoints, "etcd_prefix", optsEtcdPrefix, "runner_id", optsRunnerId)
 
 	// Register cleanup for running components
 	t.Cleanup(func() {
-		// The runner will be stopped by the context cancellation
-		log.Info("Runner will be stopped via context cancellation")
-
 		// TODO: Close any RPC connections, currently hangs
 		// if client != nil {
 		// 	log.Info("Closing RPC client connections")
 		// 	client.Close()
 		// }
 
-		// Cancel context to signal all components to stop
 		log.Info("Canceling context to stop all components")
 		ctxCancel()
 
-		// TODO: Graceful shutdown
+		// TODO: Untangle graceful shutdown, currently hangs
 		// log.Info("Waiting for errgroup to complete")
 		// Wait for errgroup to finish
 		// if err := eg.Wait(); err != nil {
 		// 	log.Error("error waiting for components to stop", "error", err)
 		// }
-
-		log.Info("Test server shutdown complete")
 	})
 
 	// Let the server run until the test ends

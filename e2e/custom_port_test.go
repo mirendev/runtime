@@ -1,7 +1,6 @@
 package e2e
 
 import (
-	"context"
 	"io"
 	"net/http"
 	"os"
@@ -17,16 +16,10 @@ import (
 func TestCustomPortEndToEnd(t *testing.T) {
 	r := require.New(t)
 
-	// Start dev server
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
+	// Start a test server that we expect to be shut down properly by t.Cleanup functions at the end of the test
 	t.Log("starting test")
-
-	serverErr := make(chan error, 1)
-	go func() {
-		t.Log("starting dev")
-		serverErr <- testserver.TestServer(t)
-	}()
+	err := testserver.TestServer(t)
+	r.NoError(err)
 
 	// Give the dev server time to spin up
 	time.Sleep(5 * time.Second)
@@ -38,13 +31,6 @@ func TestCustomPortEndToEnd(t *testing.T) {
 	// Spin up combo
 	putCode := cli.Run([]string{"runtime", "entity", "put", "-p", filePath})
 	r.Equal(0, putCode)
-
-	select {
-	case err := <-serverErr:
-		t.Logf("test server got err: %s", err)
-	case <-ctx.Done():
-		t.Logf("got done")
-	}
 
 	// Ensure we can route to nginx container
 	t.Log("running HTTP GET")
