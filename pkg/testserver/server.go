@@ -200,16 +200,6 @@ func TestServer(t *testing.T) error {
 		Handler: hs,
 	}
 
-	go func() {
-		err := httpServer.ListenAndServe()
-		if err == http.ErrServerClosed {
-			log.Info("ingress server closed")
-		}
-		if err != nil && err != http.ErrServerClosed {
-			log.Error("failed to start HTTP server", "error", err)
-		}
-	}()
-
 	// Register cleanup function to shutdown the HTTP server
 	t.Cleanup(func() {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -218,6 +208,21 @@ func TestServer(t *testing.T) error {
 			log.Error("failed to shutdown HTTP ingress server", "error", err)
 		}
 		log.Info("HTTP ingress server shutdown complete")
+	})
+
+	// Use errgroup to capture and propagate HTTP server errors
+	eg.Go(func() error {
+		log.Info("Starting HTTP ingress server", "addr", httpServer.Addr)
+		err := httpServer.ListenAndServe()
+		if err == http.ErrServerClosed {
+			log.Info("ingress server closed")
+			return nil
+		}
+		if err != nil {
+			log.Error("failed to start HTTP server", "error", err)
+			return err
+		}
+		return nil
 	})
 
 	var ociRegistry ocireg.Registry
@@ -236,16 +241,6 @@ func TestServer(t *testing.T) error {
 		},
 	}
 
-	go func() {
-		err := ociRegistry.Start(ctx, ":5000")
-		if err == http.ErrServerClosed {
-			log.Info("OCI registry closed")
-		}
-		if err != nil && err != http.ErrServerClosed {
-			log.Error("failed to start OCI registry", "error", err)
-		}
-	}()
-
 	// Register cleanup for OCI registry server
 	t.Cleanup(func() {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -254,6 +249,21 @@ func TestServer(t *testing.T) error {
 			log.Error("failed to shutdown OCI registry server", "error", err)
 		}
 		log.Info("OCI registry server shutdown complete")
+	})
+
+	// Use errgroup to capture and propagate OCI registry server errors
+	eg.Go(func() error {
+		log.Info("Starting OCI registry server", "addr", ociServer.Addr)
+		err := ociRegistry.Start(ctx, ":5000")
+		if err == http.ErrServerClosed {
+			log.Info("OCI registry closed")
+			return nil
+		}
+		if err != nil {
+			log.Error("failed to start OCI registry", "error", err)
+			return err
+		}
+		return nil
 	})
 
 	var regAddr netip.Addr
@@ -282,14 +292,24 @@ func TestServer(t *testing.T) error {
 		log.Info("Canceling context to stop all components")
 		ctxCancel()
 
-		// TODO: Untangle graceful shutdown, currently hangs
-		// log.Info("Waiting for errgroup to complete")
-		// Wait for errgroup to finish
-		// if err := eg.Wait(); err != nil {
-		// 	log.Error("error waiting for components to stop", "error", err)
-		// }
+		// Log if errgroup has any errors when cleaned up
+		if err := eg.Wait(); err != nil {
+			log.Error("error waiting for components to stop", "error", err)
+		}
 	})
 
-	// Let the server run until the test ends
+	// Wait in a separate goroutine for any errors from the errgroup
+	eg.Go(func() error {
+		// This goroutine will exit when the first error occurs in any of the
+		// other goroutines in the group, or when the context is canceled
+		<-sub.Done()
+		if err := sub.Err(); err != nil && err != context.Canceled {
+			log.Error("component error detected", "error", err)
+			return err
+		}
+		return nil
+	})
+
+	// Let the server run until the test ends or until an error occurs
 	return nil
 }
