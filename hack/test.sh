@@ -5,7 +5,7 @@ set -e
 
 mkdir /sys/fs/cgroup/inner
 
-for pid in "$(cat /sys/fs/cgroup/cgroup.procs)"; do
+cat /sys/fs/cgroup/cgroup.procs | while read -r pid; do
   echo "$pid" >/sys/fs/cgroup/inner/cgroup.procs 2>/dev/null || true
 done
 
