@@ -24,3 +24,69 @@ jobs:
         name: runtime-linux-${{ matrix.arch }}
         path: release-linux-${{ matrix.arch }}.tar.gz
         retention-days: 7
+
+  release:
+    needs: package
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      
+      - name: Check if tip release exists
+        id: check_release
+        run: |
+          RELEASE_ID=$(gh api repos/${{ github.repository }}/releases/tags/tip -q .id || echo "")
+          echo "RELEASE_ID=$RELEASE_ID" >> $GITHUB_ENV
+          if [ -n "$RELEASE_ID" ]; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Delete existing tip release if it exists
+        if: steps.check_release.outputs.exists == 'true'
+        run: gh api -X DELETE repos/${{ github.repository }}/releases/${{ env.RELEASE_ID }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Create new tip release
+        id: create_release
+        run: |
+          RELEASE_ID=$(gh api \
+            --method POST \
+            -H "Accept: application/vnd.github+json" \
+            repos/${{ github.repository }}/releases \
+            -f tag_name='tip' \
+            -f name='Tip Build' \
+            -f body='Latest build from main branch' \
+            -f prerelease=true \
+            -q .id)
+          echo "RELEASE_ID=$RELEASE_ID" >> $GITHUB_ENV
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Upload AMD64 build to release
+        run: |
+          gh api \
+            --method POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Content-Type: application/octet-stream" \
+            "repos/${{ github.repository }}/releases/${{ env.RELEASE_ID }}/assets?name=runtime-linux-amd64.tar.gz" \
+            --input artifacts/runtime-linux-amd64/release-linux-amd64.tar.gz
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Upload ARM64 build to release
+        run: |
+          gh api \
+            --method POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Content-Type: application/octet-stream" \
+            "repos/${{ github.repository }}/releases/${{ env.RELEASE_ID }}/assets?name=runtime-linux-arm64.tar.gz" \
+            --input artifacts/runtime-linux-arm64/release-linux-arm64.tar.gz
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
