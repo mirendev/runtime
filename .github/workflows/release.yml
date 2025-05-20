@@ -19,7 +19,7 @@ jobs:
         args: package --dir=. export --path=release-linux-${{ matrix.arch }}.tar.gz
         cloud-token: ${{ secrets.DAGGER_CLOUD_TOKEN }}
     - name: Upload build artifact
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: runtime-linux-${{ matrix.arch }}
         path: release-linux-${{ matrix.arch }}.tar.gz
