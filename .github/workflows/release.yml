@@ -4,6 +4,10 @@ on:
   push:
     branches: [ "main", "evan/mir-146" ]
 
+# Set permissions for the entire workflow
+permissions:
+  contents: write    # Required for creating releases and uploading assets
+
 jobs:
   package:
     runs-on: ubuntu-latest
