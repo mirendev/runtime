@@ -15,6 +15,11 @@ image:
 	docker import tmp/latest.tar miren:latest
 	rm tmp/latest.tar
 
+release-data:
+	dagger call package --dir=. export --path=release.tar.gz
+
+.PHONY: release-data
+
 clean:
 	rm bin/runtime
 

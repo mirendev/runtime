@@ -1,0 +1,26 @@
+name: Dagger
+
+on:
+  push:
+    branches: [ "main" ]
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        arch: [amd64, arm64]
+    steps:
+    - uses: actions/checkout@v4
+    - name: Build and package for ${{ matrix.arch }}
+      uses: dagger/dagger-for-github@v7
+      with:
+        verb: call
+        args: package --dir=. export --path=release-linux-${{ matrix.arch }}.tar.gz
+        cloud-token: ${{ secrets.DAGGER_CLOUD_TOKEN }}
+    - name: Upload build artifact
+      uses: actions/upload-artifact@v3
+      with:
+        name: runtime-linux-${{ matrix.arch }}
+        path: release-linux-${{ matrix.arch }}.tar.gz
+        retention-days: 7
