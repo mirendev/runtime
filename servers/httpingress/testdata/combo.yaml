@@ -21,6 +21,8 @@ spec:
   version: abcdef
   image_url: docker.io/library/nginx:latest
   concurrency: 10
+  config:
+    port: 80
 ---
 kind: dev.miren.ingress/http_route
 version: v1alpha
@@ -28,7 +30,7 @@ metadata:
   name: localhost
 spec:
   host: localhost
-  app: app/hw-bun
+  app: app/nginx
 ---
 kind: dev.miren.core/app
 version: v1alpha

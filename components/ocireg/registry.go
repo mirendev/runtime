@@ -28,6 +28,8 @@ type Registry struct {
 	RootDir string `asm:"data-path"`
 	Log     *slog.Logger
 	EC      *entityserver.Client
+
+	server *http.Server
 }
 
 func (r *Registry) Populated() error {
@@ -66,15 +68,22 @@ func (r *Registry) Start(ctx context.Context, addr string) error {
 
 	r.Log.Info("Starting OCI Registry", "addr", addr, "path", path)
 
-	server := &http.Server{
+	r.server = &http.Server{
 		Addr:    addr,
 		Handler: mux,
 		BaseContext: func(net.Listener) context.Context {
 			return ctx
 		},
 	}
-	go server.ListenAndServe()
+	go r.server.ListenAndServe()
 	return nil
+}
+
+func (r *Registry) Shutdown(ctx context.Context) error {
+	if r.server == nil {
+		return fmt.Errorf("shutdown called but server is not running")
+	}
+	return r.server.Shutdown(ctx)
 }
 
 type RegistryHandler struct {

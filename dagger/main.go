@@ -160,8 +160,9 @@ func (m *Runtime) Test(
 	tests string,
 	// +optional
 	count int,
+	// NOTE: This flag cannot be called "verbose" - see https://github.com/dagger/dagger/issues/10428
 	// +optional
-	verbose bool,
+	verboose bool,
 	// +optional
 	run string,
 	// +optional
@@ -178,9 +179,10 @@ func (m *Runtime) Test(
 	}
 
 	if shell {
+		w = w.WithEnvVariable("USESHELL", "1")
 		w = w.Terminal(dagger.ContainerTerminalOpts{
 			InsecureRootCapabilities: true,
-			Cmd:                      []string{"/bin/bash"},
+			Cmd:                      []string{"/bin/bash", "/src/hack/test.sh"},
 		})
 	} else {
 		args := []string{"sh", "/src/hack/test.sh"}
@@ -198,7 +200,7 @@ func (m *Runtime) Test(
 			args = append(args, "-run", run)
 		}
 
-		if verbose {
+		if verboose {
 			w = w.WithEnvVariable("VERBOSE", "1")
 		}
 
@@ -217,16 +219,6 @@ func (m *Runtime) Test(
 func (m *Runtime) Dev(
 	ctx context.Context,
 	dir *dagger.Directory,
-	// +optional
-	shell bool,
-	// +optional
-	tests string,
-	// +optional
-	count int,
-	// +optional
-	verbose bool,
-	// +optional
-	run string,
 ) (string, error) {
 	w := m.WithServices(dir).
 		WithDirectory("/src", dir).
