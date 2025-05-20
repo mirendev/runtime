@@ -242,7 +242,8 @@ func (s *ServiceController) initNFT(table string, nc *nftCommands) error {
 	maps := set.New[string]()
 
 	if slices.Contains(tables, table) {
-		cmd := exec.Command("nft", "-j", "list", "table", table)
+		// TODO: assuming inet family here; read from `list tables` output instead?
+		cmd := exec.Command("nft", "-j", "list", "table", "inet", table)
 
 		out, err := cmd.Output()
 		if err != nil {
