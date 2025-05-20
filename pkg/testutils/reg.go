@@ -34,7 +34,12 @@ func Registry(extra ...func(*asm.Registry)) (*asm.Registry, func()) {
 
 	var usedClient *containerd.Client
 
-	ndb, err := netdb.New(filepath.Join(os.TempDir(), "net.db"))
+	tempDir, err := os.MkdirTemp("", "runtime-reg")
+	if err != nil {
+		panic(err)
+	}
+
+	ndb, err := netdb.New(filepath.Join(tempDir, "net.db"))
 	if err != nil {
 		panic(err)
 	}
@@ -62,8 +67,8 @@ func Registry(extra ...func(*asm.Registry)) (*asm.Registry, func()) {
 
 	r.Register("service-prefixes", subnets)
 
-	r.Register("data-path", os.TempDir())
-	r.Register("tempdir", os.TempDir())
+	r.Register("data-path", tempDir)
+	r.Register("tempdir", tempDir)
 	r.Register("subnet", subnet)
 	r.Register("server_port", 10000)
 
@@ -204,7 +209,7 @@ func Registry(extra ...func(*asm.Registry)) (*asm.Registry, func()) {
 			EtcdEndpoints: []string{"etcd:2379"},
 			Prefix:        opts.Prefix,
 			Resolver:      res,
-			TempDir:       os.TempDir(),
+			TempDir:       tempDir,
 			Mem:           opts.Mem,
 			Cpu:           opts.CPU,
 		})
@@ -257,6 +262,8 @@ func Registry(extra ...func(*asm.Registry)) (*asm.Registry, func()) {
 		mega.ReleaseSubnet(subnet.Prefix())
 
 		ndb.Close()
+
+		os.RemoveAll(tempDir)
 	}
 
 	return &r, cleanup
