@@ -34,62 +34,42 @@ jobs:
         with:
           path: artifacts
       
-      - name: Get or create tip release
-        id: get_or_create_release
+      - name: Check if tip release exists
+        id: check_release
         run: |
-          # Try to get existing release ID
-          RELEASE_ID=$(gh api repos/${{ github.repository }}/releases/tags/tip -q .id 2>/dev/null || echo "")
-          
-          # If no release exists, create one
-          if [ -z "$RELEASE_ID" ]; then
-            echo "Creating new tip release..."
-            RELEASE_ID=$(gh api \
-              --method POST \
-              -H "Accept: application/vnd.github+json" \
-              repos/${{ github.repository }}/releases \
-              -f tag_name='tip' \
-              -f name='Tip Build' \
-              -f body='Latest build from main branch' \
-              -f prerelease=true \
-              -q .id)
+          if gh release view tip &>/dev/null; then
+            echo "exists=true" >> $GITHUB_OUTPUT
           else
-            echo "Using existing tip release with ID: $RELEASE_ID"
+            echo "exists=false" >> $GITHUB_OUTPUT
           fi
-          
-          echo "RELEASE_ID=$RELEASE_ID" >> $GITHUB_ENV
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Create tip release if it doesn't exist
+        if: steps.check_release.outputs.exists == 'false'
+        run: |
+          gh release create tip \
+            --title "Tip Build" \
+            --notes "Latest build from main branch" \
+            --prerelease
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Delete existing assets if they exist
+        run: |
+          # Delete existing assets if they exist (ignoring errors if they don't)
+          gh release delete-asset tip runtime-linux-amd64.tar.gz --yes 2>/dev/null || true
+          gh release delete-asset tip runtime-linux-arm64.tar.gz --yes 2>/dev/null || true
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       
       - name: Upload release assets
         run: |
-          function upload_asset() {
-            local arch=$1
-            local asset_name="runtime-linux-$arch.tar.gz"
-            local artifact_path="artifacts/runtime-linux-$arch/release-linux-$arch.tar.gz"
-            
-            echo "Processing $asset_name..."
-            
-            # Check if asset already exists
-            ASSET_ID=$(gh api repos/${{ github.repository }}/releases/${{ env.RELEASE_ID }}/assets -q '.[] | select(.name=="'$asset_name'") | .id' 2>/dev/null || echo "")
-            
-            # If asset exists, delete it first
-            if [ -n "$ASSET_ID" ]; then
-              echo "Deleting existing asset $asset_name with ID: $ASSET_ID"
-              gh api -X DELETE repos/${{ github.repository }}/releases/assets/$ASSET_ID
-            fi
-            
-            # Upload the new asset
-            echo "Uploading $asset_name..."
-            gh api \
-              --method POST \
-              -H "Accept: application/vnd.github+json" \
-              -H "Content-Type: application/octet-stream" \
-              "repos/${{ github.repository }}/releases/${{ env.RELEASE_ID }}/assets?name=$asset_name" \
-              --input "$artifact_path"
-          }
+          # Rename the artifacts to the expected names
+          cp artifacts/runtime-linux-amd64/release-linux-amd64.tar.gz runtime-linux-amd64.tar.gz
+          cp artifacts/runtime-linux-arm64/release-linux-arm64.tar.gz runtime-linux-arm64.tar.gz
           
-          # Upload both assets
-          upload_asset "amd64"
-          upload_asset "arm64"
+          # Upload both assets to the release
+          gh release upload tip runtime-linux-amd64.tar.gz runtime-linux-arm64.tar.gz --clobber
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
