@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"net"
 	"net/http"
 	"net/netip"
 	"os"
@@ -233,37 +232,22 @@ func TestServer(t *testing.T) error {
 		return err
 	}
 
-	// Start the OCI Registry with a proper server
-	ociServer := &http.Server{
-		Addr: ":5000",
-		BaseContext: func(net.Listener) context.Context {
-			return ctx
-		},
+	// Start the OCI Registry
+	err = ociRegistry.Start(ctx, ":5000")
+	if err != nil {
+		log.Error("failed to start OCI registry", "error", err)
+		ctxCancel()
+		return err
 	}
 
 	// Register cleanup for OCI registry server
 	t.Cleanup(func() {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		if err := ociServer.Shutdown(shutdownCtx); err != nil {
+		if err := ociRegistry.Shutdown(shutdownCtx); err != nil {
 			log.Error("failed to shutdown OCI registry server", "error", err)
 		}
 		log.Info("OCI registry server shutdown complete")
-	})
-
-	// Use errgroup to capture and propagate OCI registry server errors
-	eg.Go(func() error {
-		log.Info("Starting OCI registry server", "addr", ociServer.Addr)
-		err := ociRegistry.Start(ctx, ":5000")
-		if err == http.ErrServerClosed {
-			log.Info("OCI registry closed")
-			return nil
-		}
-		if err != nil {
-			log.Error("failed to start OCI registry", "error", err)
-			return err
-		}
-		return nil
 	})
 
 	var regAddr netip.Addr
