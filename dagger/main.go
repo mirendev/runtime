@@ -179,9 +179,10 @@ func (m *Runtime) Test(
 	}
 
 	if shell {
+		w = w.WithEnvVariable("USESHELL", "1")
 		w = w.Terminal(dagger.ContainerTerminalOpts{
 			InsecureRootCapabilities: true,
-			Cmd:                      []string{"/bin/bash"},
+			Cmd:                      []string{"/bin/bash", "/src/hack/test.sh"},
 		})
 	} else {
 		args := []string{"sh", "/src/hack/test.sh"}
