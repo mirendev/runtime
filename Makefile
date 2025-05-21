@@ -8,7 +8,7 @@ test-shell:
 	dagger call -q test --dir=. --shell
 
 dev:
-	dagger call -q dev --dir=. --shell
+	dagger call -q dev --dir=.
 
 image:
 	dagger call -q container --dir=. export --path=tmp/latest.tar
