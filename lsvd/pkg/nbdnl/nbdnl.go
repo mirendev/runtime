@@ -25,7 +25,7 @@
 //
 // This package provides the low-level netlink protocol, which in particular
 // requires connections to be in the transmission phase (i.e. having done the
-// NBD handshake phase or knowning the necessary information by other means).
+// NBD handshake phase or knowing the necessary information by other means).
 // Most users will probably want to use the nbd package, which is more
 // convenientand also implements handshaking.
 package nbdnl
@@ -81,7 +81,7 @@ var conn struct {
 	family uint16
 }
 
-// dial initalizes conn, if needed.
+// dial initializes conn, if needed.
 func dial() error {
 	conn.mu.Lock()
 	defer conn.mu.Unlock()

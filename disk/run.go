@@ -192,7 +192,7 @@ func (r *Runner) Start(ctx context.Context, name, fsPath, bindAddr string) error
 
 	log.Info("ext4 filesystem ready", "size", fsSize, "mount-point", fsPath)
 
-	err = unix.Mount(devPath, fsPath, "ext4", 0, "")
+	err = mountDisk(devPath, fsPath)
 	if err != nil {
 		spew.Dump(err)
 		log.Info("error mounting", "error", err, "dev", devPath, "fs", fsPath)
@@ -409,7 +409,7 @@ func (r *Runner) Run(ctx context.Context, name, fsPath, bindAddr string) error {
 
 	log.Info("ext4 filesystem ready", "size", fsSize)
 
-	err = unix.Mount(devPath, fsPath, "ext4", 0, "")
+	err = mountDisk(devPath, fsPath)
 	if err != nil {
 		spew.Dump(err)
 		log.Info("error mounting", "error", err, "dev", devPath, "fs", fsPath)
