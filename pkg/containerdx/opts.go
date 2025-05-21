@@ -9,14 +9,12 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 
 	"github.com/containerd/containerd/v2/core/containers"
 	"github.com/containerd/containerd/v2/core/mount"
 	"github.com/containerd/containerd/v2/pkg/oci"
 	runtimespec "github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/pkg/errors"
-	"golang.org/x/sys/unix"
 )
 
 // WithAdditionalGIDs adds any additional groups listed for a particular user in the
@@ -463,18 +461,6 @@ func cgroupv2HasHugetlb() (bool, error) {
 		_cgroupv2HasHugetlb = strings.Contains(string(controllers), "hugetlb")
 	})
 	return _cgroupv2HasHugetlb, _cgroupv2HasHugetlbErr
-}
-
-// IsCgroup2UnifiedMode returns whether we are running in cgroup v2 unified mode.
-func IsCgroup2UnifiedMode() bool {
-	isUnifiedOnce.Do(func() {
-		var st syscall.Statfs_t
-		if err := syscall.Statfs("/sys/fs/cgroup", &st); err != nil {
-			panic("cannot statfs cgroup root")
-		}
-		isUnified = st.Type == unix.CGROUP2_SUPER_MAGIC
-	})
-	return isUnified
 }
 
 // WithOOMScoreAdj sets the oom score
