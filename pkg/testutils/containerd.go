@@ -29,19 +29,20 @@ func NukeNamespace(cl *containerd.Client, ns string) {
 
 	// There is a delay as things are cleaned up async that
 	// we can't see easily, so we just retry it if there is a failure.
-	for i := 0; i < 10; i++ {
+	for i := 0; i < 20; i++ {
 		err = cl.NamespaceService().Delete(context.TODO(), ns)
 		if err != nil {
 			if strings.Contains(err.Error(), "not found") {
-				break
+				return
 			}
-			fmt.Printf("error clearing namespace: %s\n", err)
 		} else {
 			break
 		}
 
-		time.Sleep(time.Second)
+		time.Sleep(time.Second / 2)
 	}
+
+	fmt.Println("Timed out waiting for namespace to be deleted")
 }
 
 func ClearContainers(cl *containerd.Client, ns string) error {

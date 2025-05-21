@@ -14,6 +14,7 @@ import (
 	"miren.dev/runtime/api/exec/exec_v1alpha"
 	"miren.dev/runtime/api/metric/metric_v1alpha"
 	"miren.dev/runtime/api/network/network_v1alpha"
+	"miren.dev/runtime/clientconfig"
 	"miren.dev/runtime/controllers/sandbox"
 	"miren.dev/runtime/controllers/service"
 	"miren.dev/runtime/pkg/asm"
@@ -30,6 +31,8 @@ type RunnerConfig struct {
 	ServerAddress string `json:"server_address" cbor:"server_address" yaml:"server_address"`
 	ListenAddress string `json:"listen_address" cbor:"listen_address" yaml:"listen_address"`
 	Workers       int    `json:"workers" cbor:"workers" yaml:"workers"`
+
+	Config *clientconfig.Config `json:"config" cbor:"config" yaml:"config"`
 }
 
 const (
@@ -98,7 +101,7 @@ func (r *Runner) ContainerdContainerForSandbox(ctx context.Context, id entity.Id
 func (r *Runner) Start(ctx context.Context) error {
 	r.Log.Info("Starting runner", "id", r.Id)
 
-	rs, err := rpc.NewState(ctx, rpc.WithSkipVerify, rpc.WithBindAddr(r.ListenAddress))
+	rs, err := r.Config.State(ctx, rpc.WithLogger(r.Log), rpc.WithBindAddr(r.ListenAddress))
 	if err != nil {
 		return err
 	}

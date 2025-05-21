@@ -114,27 +114,16 @@ func TestServer(t *testing.T) error {
 		return opts.Sub.Router().Addr(), nil
 	})
 
-	// Setup the core services on the coordinator address for dev
-
-	/*
-		{
-			serv := co.Server()
-
-			var builder build.RPCBuilder
-
-			err = reg.Populate(&builder)
-			if err != nil {
-				return fmt.Errorf("populating build: %w", err)
-			}
-
-			serv.ExposeValue("dev.miren.runtime/build", build.AdaptBuilder(&builder))
-		}
-	*/
-
 	// Run the runner!
 
 	// Create RPC client to interact with coordinator
-	rs, err := rpc.NewState(ctx, rpc.WithSkipVerify)
+	scfg, err := co.ServiceConfig()
+	if err != nil {
+		return err
+	}
+
+	// Create RPC client to interact with coordinator
+	rs, err := scfg.State(ctx, rpc.WithLogger(log))
 	if err != nil {
 		log.Error("failed to create RPC client", "error", err)
 		ctxCancel()
@@ -169,11 +158,17 @@ func TestServer(t *testing.T) error {
 	reg.Register("app-activator", aa)
 	reg.Register("resolver", res)
 
+	rcfg, err := co.NamedConfig("runner")
+	if err != nil {
+		return err
+	}
+
 	r := runner.NewRunner(log, reg, runner.RunnerConfig{
 		Id:            optsRunnerId,
 		ServerAddress: optsAddress,
 		ListenAddress: optsRunnerAddress,
 		Workers:       1,
+		Config:        rcfg,
 	})
 
 	err = r.Start(sub)

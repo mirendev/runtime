@@ -5,6 +5,7 @@ package commands
 
 import (
 	"fmt"
+	"net"
 	"net/http"
 	"net/netip"
 	"os"
@@ -29,12 +30,14 @@ import (
 )
 
 func Dev(ctx *Context, opts struct {
-	Address       string   `short:"a" long:"address" description:"Address to listen on" default:"localhost:8443"`
-	RunnerAddress string   `long:"runner-address" description:"Address to listen on" default:"localhost:8444"`
-	EtcdEndpoints []string `short:"e" long:"etcd" description:"Etcd endpoints" default:"http://etcd:2379"`
-	EtcdPrefix    string   `short:"p" long:"etcd-prefix" description:"Etcd prefix" default:"/miren"`
-	RunnerId      string   `short:"r" long:"runner-id" description:"Runner ID" default:"dev"`
-	DataPath      string   `short:"d" long:"data-path" description:"Data path" default:"/var/lib/miren"`
+	Address         string   `short:"a" long:"address" description:"Address to listen on" default:"localhost:8443"`
+	RunnerAddress   string   `long:"runner-address" description:"Address to listen on" default:"localhost:8444"`
+	EtcdEndpoints   []string `short:"e" long:"etcd" description:"Etcd endpoints" default:"http://etcd:2379"`
+	EtcdPrefix      string   `short:"p" long:"etcd-prefix" description:"Etcd prefix" default:"/miren"`
+	RunnerId        string   `short:"r" long:"runner-id" description:"Runner ID" default:"dev"`
+	DataPath        string   `short:"d" long:"data-path" description:"Data path" default:"/var/lib/miren"`
+	AdditionalNames []string `long:"dns-names" description:"Additional DNS names assigned to the server cert"`
+	AdditionalIPs   []string `long:"ips" description:"Additional IPs assigned to the server cert"`
 }) error {
 	eg, sub := errgroup.WithContext(ctx)
 
@@ -57,14 +60,27 @@ func Dev(ctx *Context, opts struct {
 		return err
 	}
 
+	var additionalIps []net.IP
+	for _, ip := range opts.AdditionalIPs {
+		addr := net.ParseIP(ip)
+		if addr == nil {
+			ctx.Log.Error("failed to parse additional IP", "ip", ip)
+			return err
+		}
+		additionalIps = append(additionalIps, addr)
+	}
+
 	co := coordinate.NewCoordinator(ctx.Log, coordinate.CoordinatorConfig{
-		Address:       opts.Address,
-		EtcdEndpoints: opts.EtcdEndpoints,
-		Prefix:        opts.EtcdPrefix,
-		Resolver:      res,
-		TempDir:       os.TempDir(),
-		Mem:           &mem,
-		Cpu:           &cpu,
+		Address:         opts.Address,
+		EtcdEndpoints:   opts.EtcdEndpoints,
+		Prefix:          opts.EtcdPrefix,
+		DataPath:        opts.DataPath,
+		AdditionalNames: opts.AdditionalNames,
+		AdditionalIPs:   additionalIps,
+		Resolver:        res,
+		TempDir:         os.TempDir(),
+		Mem:             &mem,
+		Cpu:             &cpu,
 	})
 
 	err = co.Start(sub)
@@ -147,27 +163,16 @@ func Dev(ctx *Context, opts struct {
 		return opts.Sub.Router().Addr(), nil
 	})
 
-	// Setup the core services on the coordinator address for dev
-
-	/*
-		{
-			serv := co.Server()
-
-			var builder build.RPCBuilder
-
-			err = ctx.Server.Populate(&builder)
-			if err != nil {
-				return fmt.Errorf("populating build: %w", err)
-			}
-
-			serv.ExposeValue("dev.miren.runtime/build", build.AdaptBuilder(&builder))
-		}
-	*/
-
 	// Run the runner!
 
+	scfg, err := co.ServiceConfig()
+	if err != nil {
+		ctx.Log.Error("failed to get service config", "error", err)
+		return err
+	}
+
 	// Create RPC client to interact with coordinator
-	rs, err := rpc.NewState(ctx, rpc.WithSkipVerify)
+	rs, err := scfg.State(ctx, rpc.WithLogger(ctx.Log))
 	if err != nil {
 		ctx.Log.Error("failed to create RPC client", "error", err)
 		return err
@@ -196,11 +201,17 @@ func Dev(ctx *Context, opts struct {
 	reg.Register("app-activator", aa)
 	reg.Register("resolver", res)
 
+	rcfg, err := co.NamedConfig("runner")
+	if err != nil {
+		return err
+	}
+
 	r := runner.NewRunner(ctx.Log, ctx.Server, runner.RunnerConfig{
 		Id:            opts.RunnerId,
 		ServerAddress: opts.Address,
 		ListenAddress: opts.RunnerAddress,
 		Workers:       runner.DefaulWorkers,
+		Config:        rcfg,
 	})
 
 	err = r.Start(sub)

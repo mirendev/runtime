@@ -7,6 +7,9 @@ test-i:
 test-shell:
 	dagger call -q test --dir=. --shell
 
+dev-tmux:
+	dagger call -q dev --dir=. --tmux
+
 dev:
 	dagger call -q dev --dir=.
 

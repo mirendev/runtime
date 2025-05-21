@@ -76,6 +76,21 @@ func New(opts Options) (*Authority, error) {
 	}, nil
 }
 
+func LoadCertificate(certPEM []byte) (*x509.Certificate, error) {
+	// Decode certificate
+	block, _ := pem.Decode(certPEM)
+	if block == nil || block.Type != "CERTIFICATE" {
+		return nil, fmt.Errorf("failed to decode PEM certificate")
+	}
+
+	cert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		return nil, fmt.Errorf("parsing certificate: %w", err)
+	}
+
+	return cert, nil
+}
+
 // LoadFromPEM loads an existing CA from PEM-encoded certificate and key
 func LoadFromPEM(certPEM, keyPEM []byte) (*Authority, error) {
 	// Decode certificate

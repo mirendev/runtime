@@ -16,7 +16,6 @@ import (
 	"miren.dev/runtime/components/scheduler"
 	"miren.dev/runtime/observability"
 	"miren.dev/runtime/pkg/entity"
-	"miren.dev/runtime/pkg/rpc"
 	"miren.dev/runtime/pkg/testutils"
 )
 
@@ -58,6 +57,11 @@ func TestRunnerCoordinatorIntegration(t *testing.T) {
 	// Wait for coordinator to start
 	time.Sleep(1 * time.Second)
 
+	rcfg, err := coord.ServiceConfig()
+	r.NoError(err)
+
+	runnerCfg.Config = rcfg
+
 	// Create and start runner
 	runner := NewRunner(log, reg, runnerCfg)
 	runnerDone := make(chan error, 1)
@@ -76,8 +80,11 @@ func TestRunnerCoordinatorIntegration(t *testing.T) {
 	default:
 	}
 
+	cfg, err := coord.LocalConfig()
+	r.NoError(err)
+
 	// Create RPC client to interact with coordinator
-	rs, err := rpc.NewState(ctx, rpc.WithSkipVerify)
+	rs, err := cfg.State(ctx)
 	require.NoError(t, err)
 
 	client, err := rs.Connect(coordCfg.Address, "entities")

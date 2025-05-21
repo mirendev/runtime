@@ -7,8 +7,10 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"slices"
 	"time"
 
+	"github.com/davecgh/go-spew/spew"
 	clientv3 "go.etcd.io/etcd/client/v3"
 	"miren.dev/runtime/api/app/app_v1alpha"
 	"miren.dev/runtime/api/build/build_v1alpha"
@@ -32,12 +34,14 @@ import (
 )
 
 type CoordinatorConfig struct {
-	Address       string              `json:"address" yaml:"address"`
-	EtcdEndpoints []string            `json:"etcd_endpoints" yaml:"etcd_endpoints"`
-	Prefix        string              `json:"prefix" yaml:"prefix"`
-	Resolver      netresolve.Resolver `json:"resolver" yaml:"resolver"`
-	TempDir       string              `json:"temp_dir" yaml:"temp_dir"`
-	DataPath      string              `json:"data_path" yaml:"data_path"`
+	Address         string              `json:"address" yaml:"address"`
+	EtcdEndpoints   []string            `json:"etcd_endpoints" yaml:"etcd_endpoints"`
+	Prefix          string              `json:"prefix" yaml:"prefix"`
+	Resolver        netresolve.Resolver `json:"resolver" yaml:"resolver"`
+	TempDir         string              `json:"temp_dir" yaml:"temp_dir"`
+	DataPath        string              `json:"data_path" yaml:"data_path"`
+	AdditionalNames []string            `json:"additional_names" yaml:"additional_names"`
+	AdditionalIPs   []net.IP            `json:"additional_ips" yaml:"additional_ips"`
 
 	Mem *metrics.MemoryUsage
 	Cpu *metrics.CPUUsage
@@ -131,6 +135,19 @@ func (c *Coordinator) LoadCA(ctx context.Context) error {
 }
 
 func (c *Coordinator) LoadAPICert(ctx context.Context) error {
+	names := []string{
+		"localhost",
+	}
+
+	names = append(names, c.AdditionalNames...)
+
+	ips := []net.IP{
+		net.ParseIP("127.0.0.1"),
+		net.ParseIP("::1"),
+	}
+
+	ips = append(ips, c.AdditionalIPs...)
+
 	cert := filepath.Join(c.DataPath, "server", "api.crt")
 	keyPath := filepath.Join(c.DataPath, "server", "api.key")
 
@@ -142,10 +159,35 @@ func (c *Coordinator) LoadAPICert(ctx context.Context) error {
 			return fmt.Errorf("missing key for API cert: %w", err)
 		}
 
-		c.apiCert = data
-		c.apiKey = key
-		return nil
+		x509Cert, err := caauth.LoadCertificate(data)
+		if err == nil {
+			horizon := time.Now().Add(-48 * time.Hour)
+			if x509Cert.NotAfter.Before(horizon) {
+				c.Log.Info("API cert is expired", "cert", x509Cert.NotAfter, "horizon", horizon)
+				goto regen
+			}
+
+			if !slices.Equal(x509Cert.DNSNames, names) {
+				spew.Dump(x509Cert.DNSNames, names)
+				c.Log.Info("API cert does not match expected names", "cert", x509Cert.DNSNames, "expected", names)
+				goto regen
+			}
+
+			if !slices.EqualFunc(x509Cert.IPAddresses, ips, func(a, b net.IP) bool {
+				return a.Equal(b)
+			}) {
+				spew.Dump(x509Cert.IPAddresses, ips)
+				c.Log.Info("API cert does not match expected IPs", "cert", x509Cert.IPAddresses, "expected", ips)
+				goto regen
+			}
+
+			c.apiCert = data
+			c.apiKey = key
+			return nil
+		}
 	}
+
+regen:
 
 	c.Log.Info("generating new API cert", "path", cert)
 
@@ -153,9 +195,8 @@ func (c *Coordinator) LoadAPICert(ctx context.Context) error {
 		CommonName:   "runtime-api",
 		Organization: "miren",
 		ValidFor:     1 * year,
-		IPs: []net.IP{
-			net.ParseIP("127.0.0.1"),
-		},
+		IPs:          ips,
+		DNSNames:     names,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to generate API cert: %w", err)
@@ -183,8 +224,16 @@ func (c *Coordinator) LoadAPICert(ctx context.Context) error {
 }
 
 func (c *Coordinator) LocalConfig() (*clientconfig.Config, error) {
+	return c.NamedConfig("runtime-user")
+}
+
+func (c *Coordinator) ServiceConfig() (*clientconfig.Config, error) {
+	return c.NamedConfig("runtime-services")
+}
+
+func (c *Coordinator) NamedConfig(name string) (*clientconfig.Config, error) {
 	cc, err := c.authority.IssueCertificate(caauth.Options{
-		CommonName:   "runtime-user",
+		CommonName:   name,
 		Organization: "miren",
 		ValidFor:     1 * year,
 	})
@@ -217,8 +266,8 @@ func (c *Coordinator) Start(ctx context.Context) error {
 
 	rs, err := rpc.NewState(ctx,
 		rpc.WithSkipVerify,
-		//rpc.WithCertPEMs(c.apiCert, c.apiKey),
-		//rpc.WithCertificateVerification(c.authority.GetCACertificate()),
+		rpc.WithCertPEMs(c.apiCert, c.apiKey),
+		rpc.WithCertificateVerification(c.authority.GetCACertificate()),
 		rpc.WithBindAddr(c.Address),
 		rpc.WithLogger(c.Log),
 	)

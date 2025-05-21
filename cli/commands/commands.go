@@ -136,6 +136,10 @@ func AllCommands() map[string]cli.CommandFactory {
 			return Infer("dev", "Run the dev server", Dev), nil
 		},
 
+		"auth generate": func() (cli.Command, error) {
+			return Infer("auth generate", "Generate authentication config file", AuthGenerate), nil
+		},
+
 		"entity get": func() (cli.Command, error) {
 			return Infer("entity get", "Get an entity", EntityGet), nil
 		},
