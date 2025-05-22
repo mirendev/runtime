@@ -60,13 +60,7 @@ ln -s "$PWD"/bin/runtime /bin/r
 
 mkdir -p ~/.config/runtime
 
-cat >~/.config/runtime/clientconfig.yaml <<EOF
-clusters:
-  local:
-    hostname: localhost
-    insecure: true
-active_cluster: local
-EOF
+r auth generate -c ~/.config/runtime/clientconfig.yaml
 
 echo "Cleaning runtime namespace to begin..."
 r debug ctr nuke -n runtime
@@ -75,16 +69,25 @@ export HISTFILE=/data/.bash_history
 export HISTIGNORE=exit
 export CONTAINERD_NAMESPACE=runtime
 
-# Make a tmux session for us to run multiple shells in
-tmux new-session -d -s dev
+if [[ -n "$USE_TMUX" ]]; then
+  # Make a tmux session for us to run multiple shells in
+  tmux new-session -d -s dev
 
-# Set the prefix to one that is unlikely to overlap: ctrl-s
-tmux unbind-key C-b
-tmux set-option -g prefix C-s
-tmux bind-key C-s send-prefix
+  # Set the prefix to one that is unlikely to overlap: ctrl-s
+  tmux unbind-key C-b
+  tmux set-option -g prefix C-s
+  tmux bind-key C-s send-prefix
 
-# Start with two panes with the server running on top and a shell running on the bottom
-tmux split-window -v
-tmux send-keys -t dev:0.0 "./bin/runtime dev -vv" Enter
-tmux select-pane -t dev:0.1
-tmux attach-session -t dev
+  # Start with two panes with the server running on top and a shell running on the bottom
+  tmux split-window -v
+  tmux send-keys -t dev:0.0 "./bin/runtime dev -vv" Enter
+  tmux select-pane -t dev:0.1
+  tmux attach-session -t dev
+else
+  # Start the server in the background
+  ./bin/runtime dev -vv > /tmp/server.log 2>&1 &
+  echo "Server started, logs are in /tmp/server.log"
+
+  # Start a shell
+  bash
+fi

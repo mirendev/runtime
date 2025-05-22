@@ -2,11 +2,13 @@ package coordinate
 
 import (
 	"context"
+	"crypto/x509"
 	"fmt"
 	"log/slog"
 	"net"
 	"os"
 	"path/filepath"
+	"slices"
 	"time"
 
 	clientv3 "go.etcd.io/etcd/client/v3"
@@ -32,12 +34,14 @@ import (
 )
 
 type CoordinatorConfig struct {
-	Address       string              `json:"address" yaml:"address"`
-	EtcdEndpoints []string            `json:"etcd_endpoints" yaml:"etcd_endpoints"`
-	Prefix        string              `json:"prefix" yaml:"prefix"`
-	Resolver      netresolve.Resolver `json:"resolver" yaml:"resolver"`
-	TempDir       string              `json:"temp_dir" yaml:"temp_dir"`
-	DataPath      string              `json:"data_path" yaml:"data_path"`
+	Address         string              `json:"address" yaml:"address"`
+	EtcdEndpoints   []string            `json:"etcd_endpoints" yaml:"etcd_endpoints"`
+	Prefix          string              `json:"prefix" yaml:"prefix"`
+	Resolver        netresolve.Resolver `json:"resolver" yaml:"resolver"`
+	TempDir         string              `json:"temp_dir" yaml:"temp_dir"`
+	DataPath        string              `json:"data_path" yaml:"data_path"`
+	AdditionalNames []string            `json:"additional_names" yaml:"additional_names"`
+	AdditionalIPs   []net.IP            `json:"additional_ips" yaml:"additional_ips"`
 
 	Mem *metrics.MemoryUsage
 	Cpu *metrics.CPUUsage
@@ -73,6 +77,25 @@ const (
 	day  = 24 * time.Hour
 	year = 365 * day
 )
+
+func validateAPICertificate(cert *x509.Certificate, expectedNames []string, expectedIPs []net.IP) error {
+	horizon := time.Now().Add(48 * time.Hour)
+	if cert.NotAfter.Before(horizon) {
+		return fmt.Errorf("certificate expired on %v (horizon: %v)", cert.NotAfter, horizon)
+	}
+
+	if !slices.Equal(cert.DNSNames, expectedNames) {
+		return fmt.Errorf("certificate DNS names %v do not match expected %v", cert.DNSNames, expectedNames)
+	}
+
+	if !slices.EqualFunc(cert.IPAddresses, expectedIPs, func(a, b net.IP) bool {
+		return a.Equal(b)
+	}) {
+		return fmt.Errorf("certificate IP addresses %v do not match expected %v", cert.IPAddresses, expectedIPs)
+	}
+
+	return nil
+}
 
 func (c *Coordinator) LoadCA(ctx context.Context) error {
 	cert := filepath.Join(c.DataPath, "server", "ca.crt")
@@ -131,6 +154,19 @@ func (c *Coordinator) LoadCA(ctx context.Context) error {
 }
 
 func (c *Coordinator) LoadAPICert(ctx context.Context) error {
+	names := []string{
+		"localhost",
+	}
+
+	names = append(names, c.AdditionalNames...)
+
+	ips := []net.IP{
+		net.ParseIP("127.0.0.1"),
+		net.ParseIP("::1"),
+	}
+
+	ips = append(ips, c.AdditionalIPs...)
+
 	cert := filepath.Join(c.DataPath, "server", "api.crt")
 	keyPath := filepath.Join(c.DataPath, "server", "api.key")
 
@@ -142,10 +178,20 @@ func (c *Coordinator) LoadAPICert(ctx context.Context) error {
 			return fmt.Errorf("missing key for API cert: %w", err)
 		}
 
-		c.apiCert = data
-		c.apiKey = key
-		return nil
+		x509Cert, err := caauth.LoadCertificate(data)
+		if err == nil {
+			if err := validateAPICertificate(x509Cert, names, ips); err != nil {
+				c.Log.Info("API cert validation failed", "error", err)
+				goto regen
+			}
+
+			c.apiCert = data
+			c.apiKey = key
+			return nil
+		}
 	}
+
+regen:
 
 	c.Log.Info("generating new API cert", "path", cert)
 
@@ -153,9 +199,8 @@ func (c *Coordinator) LoadAPICert(ctx context.Context) error {
 		CommonName:   "runtime-api",
 		Organization: "miren",
 		ValidFor:     1 * year,
-		IPs: []net.IP{
-			net.ParseIP("127.0.0.1"),
-		},
+		IPs:          ips,
+		DNSNames:     names,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to generate API cert: %w", err)
@@ -183,8 +228,16 @@ func (c *Coordinator) LoadAPICert(ctx context.Context) error {
 }
 
 func (c *Coordinator) LocalConfig() (*clientconfig.Config, error) {
+	return c.NamedConfig("runtime-user")
+}
+
+func (c *Coordinator) ServiceConfig() (*clientconfig.Config, error) {
+	return c.NamedConfig("runtime-services")
+}
+
+func (c *Coordinator) NamedConfig(name string) (*clientconfig.Config, error) {
 	cc, err := c.authority.IssueCertificate(caauth.Options{
-		CommonName:   "runtime-user",
+		CommonName:   name,
 		Organization: "miren",
 		ValidFor:     1 * year,
 	})
@@ -216,9 +269,8 @@ func (c *Coordinator) Start(ctx context.Context) error {
 	}
 
 	rs, err := rpc.NewState(ctx,
-		rpc.WithSkipVerify,
-		//rpc.WithCertPEMs(c.apiCert, c.apiKey),
-		//rpc.WithCertificateVerification(c.authority.GetCACertificate()),
+		rpc.WithCertPEMs(c.apiCert, c.apiKey),
+		rpc.WithCertificateVerification(c.authority.GetCACertificate()),
 		rpc.WithBindAddr(c.Address),
 		rpc.WithLogger(c.Log),
 	)

@@ -185,6 +185,10 @@ func NewState(ctx context.Context, opts ...StateOption) (*State, error) {
 		so.bindAddr = "localhost:0"
 	}
 
+	if so.log == nil {
+		so.log = slog.Default()
+	}
+
 	up, err := net.ResolveUDPAddr("udp", so.bindAddr)
 	if err != nil {
 		return nil, err

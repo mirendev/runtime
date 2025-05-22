@@ -219,12 +219,18 @@ func (m *Runtime) Test(
 func (m *Runtime) Dev(
 	ctx context.Context,
 	dir *dagger.Directory,
+	// +optional
+	tmux bool,
 ) (string, error) {
 	w := m.WithServices(dir).
 		WithDirectory("/src", dir).
 		WithWorkdir("/src").
 		WithEnvVariable("S3_URL", "http://minio:9000").
 		WithMountedCache("/data", dag.CacheVolume("containerd"))
+
+	if tmux {
+		w = w.WithEnvVariable("USE_TMUX", "1")
+	}
 
 	w = w.Terminal(dagger.ContainerTerminalOpts{
 		InsecureRootCapabilities: true,
