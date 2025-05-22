@@ -156,19 +156,16 @@ func (e *EtcdComponent) Stop(ctx context.Context) error {
 	ctx = namespaces.WithNamespace(ctx, e.Namespace)
 
 	if e.container != nil {
-		// Stop and delete the task
+		// Stop and delete the task with timeout and graceful escalation
 		task, err := e.container.Task(ctx, nil)
 		if err == nil {
-			task.Kill(ctx, unix.SIGTERM)
-			task.Wait(ctx)
-			task.Delete(ctx)
+			e.stopTask(ctx, task)
+		} else {
+			e.Log.Warn("failed to get etcd task for shutdown", "error", err)
 		}
 
-		// Delete the container
-		err = e.container.Delete(ctx, containerd.WithSnapshotCleanup)
-		if err != nil {
-			e.Log.Error("failed to delete etcd container", "error", err)
-		}
+		// Delete the container with retry logic
+		e.deleteContainerWithRetry(ctx)
 
 		e.container = nil
 	}
@@ -177,6 +174,80 @@ func (e *EtcdComponent) Stop(ctx context.Context) error {
 	e.Log.Info("etcd server stopped")
 
 	return nil
+}
+
+func (e *EtcdComponent) stopTask(ctx context.Context, task containerd.Task) {
+	// Create a timeout context for graceful shutdown
+	shutdownCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	// First attempt: graceful shutdown with SIGTERM
+	if err := task.Kill(shutdownCtx, unix.SIGTERM); err != nil {
+		e.Log.Error("failed to send SIGTERM to etcd task", "error", err)
+		return
+	}
+
+	// Wait for graceful exit with timeout
+	waitCh := make(chan error, 1)
+	go func() {
+		_, waitErr := task.Wait(shutdownCtx)
+		waitCh <- waitErr
+	}()
+
+	select {
+	case waitErr := <-waitCh:
+		if waitErr != nil {
+			e.Log.Warn("etcd task wait returned error", "error", waitErr)
+		} else {
+			e.Log.Info("etcd task exited gracefully")
+		}
+	case <-shutdownCtx.Done():
+		// Timeout reached, escalate to SIGKILL
+		e.Log.Warn("etcd task did not exit gracefully, sending SIGKILL")
+		killCtx, killCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer killCancel()
+		
+		if err := task.Kill(killCtx, unix.SIGKILL); err != nil {
+			e.Log.Error("failed to send SIGKILL to etcd task", "error", err)
+		} else {
+			// Wait for forced exit
+			if _, waitErr := task.Wait(killCtx); waitErr != nil {
+				e.Log.Error("etcd task wait after SIGKILL failed", "error", waitErr)
+			}
+		}
+	}
+
+	// Delete the task
+	deleteCtx, deleteCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer deleteCancel()
+	
+	if _, err := task.Delete(deleteCtx); err != nil {
+		e.Log.Error("failed to delete etcd task", "error", err)
+	}
+}
+
+func (e *EtcdComponent) deleteContainerWithRetry(ctx context.Context) {
+	const maxRetries = 3
+	const retryDelay = 2 * time.Second
+
+	for attempt := 1; attempt <= maxRetries; attempt++ {
+		deleteCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		err := e.container.Delete(deleteCtx, containerd.WithSnapshotCleanup)
+		cancel()
+
+		if err == nil {
+			e.Log.Info("etcd container deleted successfully")
+			return
+		}
+
+		e.Log.Error("failed to delete etcd container", "error", err, "attempt", attempt, "max_retries", maxRetries)
+		
+		if attempt < maxRetries {
+			time.Sleep(retryDelay)
+		}
+	}
+
+	e.Log.Error("failed to delete etcd container after all retries, potential snapshot leak")
 }
 
 func (e *EtcdComponent) ClientEndpoint() string {
