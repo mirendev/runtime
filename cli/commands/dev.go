@@ -15,6 +15,7 @@ import (
 	"golang.org/x/sync/errgroup"
 	"miren.dev/runtime/api/entityserver"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
+	"miren.dev/runtime/components/autotls"
 	"miren.dev/runtime/components/coordinate"
 	"miren.dev/runtime/components/ipalloc"
 	"miren.dev/runtime/components/netresolve"
@@ -35,6 +36,7 @@ func Dev(ctx *Context, opts struct {
 	EtcdPrefix    string   `short:"p" long:"etcd-prefix" description:"Etcd prefix" default:"/miren"`
 	RunnerId      string   `short:"r" long:"runner-id" description:"Runner ID" default:"dev"`
 	DataPath      string   `short:"d" long:"data-path" description:"Data path" default:"/var/lib/miren"`
+	StandardTLS   bool     `long:"serve-tls" description:"Expose the http ingress on standard TLS ports"`
 }) error {
 	eg, sub := errgroup.WithContext(ctx)
 
@@ -224,6 +226,10 @@ func Dev(ctx *Context, opts struct {
 			ctx.Log.Error("failed to start HTTP server", "error", err)
 		}
 	}()
+
+	if opts.StandardTLS {
+		autotls.ServeTLS(sub, ctx.Log, opts.DataPath, hs)
+	}
 
 	var registry ocireg.Registry
 	err = reg.Populate(&registry)
