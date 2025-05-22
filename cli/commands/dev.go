@@ -12,12 +12,14 @@ import (
 	"path/filepath"
 	"time"
 
+	containerd "github.com/containerd/containerd/v2/client"
 	"github.com/davecgh/go-spew/spew"
 	"golang.org/x/sync/errgroup"
 	"miren.dev/runtime/api/entityserver"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/components/autotls"
 	"miren.dev/runtime/components/coordinate"
+	"miren.dev/runtime/components/etcd"
 	"miren.dev/runtime/components/ipalloc"
 	"miren.dev/runtime/components/netresolve"
 	"miren.dev/runtime/components/ocireg"
@@ -39,7 +41,10 @@ func Dev(ctx *Context, opts struct {
 	DataPath        string   `short:"d" long:"data-path" description:"Data path" default:"/var/lib/miren"`
 	AdditionalNames []string `long:"dns-names" description:"Additional DNS names assigned to the server cert"`
 	AdditionalIPs   []string `long:"ips" description:"Additional IPs assigned to the server cert"`
-  StandardTLS     bool     `long:"serve-tls" description:"Expose the http ingress on standard TLS ports"`
+	StandardTLS     bool     `long:"serve-tls" description:"Expose the http ingress on standard TLS ports"`
+	StartEtcd       bool     `long:"start-etcd" description:"Start embedded etcd server"`
+	EtcdClientPort  int      `long:"etcd-client-port" description:"Etcd client port" default:"12379"`
+	EtcdPeerPort    int      `long:"etcd-peer-port" description:"Etcd peer port" default:"12380"`
 }) error {
 	eg, sub := errgroup.WithContext(ctx)
 
@@ -70,6 +75,45 @@ func Dev(ctx *Context, opts struct {
 			return fmt.Errorf("failed to parse additional IP %s", ip)
 		}
 		additionalIps = append(additionalIps, addr)
+	}
+
+	// Start embedded etcd server if requested
+	if opts.StartEtcd {
+		ctx.Log.Info("starting embedded etcd server", "client-port", opts.EtcdClientPort, "peer-port", opts.EtcdPeerPort)
+
+		// Get containerd client from registry
+		var cc *containerd.Client
+		err := ctx.Server.Resolve(&cc)
+		if err != nil {
+			ctx.Log.Error("failed to get containerd client for etcd", "error", err)
+			return err
+		}
+
+		// TODO figure out why I can't use ResolveNamed to pull out the namespace from ctx.Server
+		etcdComponent := etcd.NewEtcdComponent(ctx.Log, cc, "runtime", opts.DataPath)
+
+		etcdConfig := etcd.EtcdConfig{
+			Name:         "dev-etcd",
+			ClientPort:   opts.EtcdClientPort,
+			PeerPort:     opts.EtcdPeerPort,
+			InitialToken: "dev-cluster",
+			ClusterState: "new",
+		}
+
+		err = etcdComponent.Start(sub, etcdConfig)
+		if err != nil {
+			ctx.Log.Error("failed to start etcd component", "error", err)
+			return err
+		}
+
+		// Update etcd endpoints to use local etcd
+		opts.EtcdEndpoints = []string{etcdComponent.ClientEndpoint()}
+		ctx.Log.Info("using embedded etcd", "endpoint", etcdComponent.ClientEndpoint())
+
+		// Ensure cleanup on exit
+		defer func() {
+			etcdComponent.Stop(ctx.Context)
+		}()
 	}
 
 	co := coordinate.NewCoordinator(ctx.Log, coordinate.CoordinatorConfig{
@@ -220,6 +264,8 @@ func Dev(ctx *Context, opts struct {
 	if err != nil {
 		return err
 	}
+
+	defer r.Close()
 
 	sch, err := scheduler.NewScheduler(sub, ctx.Log, eac)
 	if err != nil {
