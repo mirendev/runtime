@@ -244,7 +244,7 @@ func (s *EtcdStore) CreateEntity(
 	if !txnResp.Succeeded {
 
 		if len(txnResp.Responses) == 1 {
-			// If the curent value of the entity has the same atttributes as
+			// If the current value of the entity has the same attributes as
 			// we were going to store, then we're all done!
 			rng := txnResp.Responses[0].GetResponseRange()
 
