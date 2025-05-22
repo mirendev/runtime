@@ -79,7 +79,10 @@ func (e *EtcdComponent) Start(ctx context.Context, config EtcdConfig) error {
 	}
 
 	dataPath := filepath.Join(e.DataPath, "etcd")
-	os.MkdirAll(dataPath, 0755)
+	err = os.MkdirAll(dataPath, 0755)
+	if err != nil {
+		return fmt.Errorf("failed to create data directory: %w", err)
+	}
 
 	// Check if container already exists
 	existingContainer, err := e.CC.LoadContainer(ctx, etcdContainerName)
@@ -206,7 +209,7 @@ func (e *EtcdComponent) stopTask(ctx context.Context, task containerd.Task) {
 		e.Log.Warn("etcd task did not exit gracefully, sending SIGKILL")
 		killCtx, killCancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer killCancel()
-		
+
 		if err := task.Kill(killCtx, unix.SIGKILL); err != nil {
 			e.Log.Error("failed to send SIGKILL to etcd task", "error", err)
 		} else {
@@ -220,7 +223,7 @@ func (e *EtcdComponent) stopTask(ctx context.Context, task containerd.Task) {
 	// Delete the task
 	deleteCtx, deleteCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer deleteCancel()
-	
+
 	if _, err := task.Delete(deleteCtx); err != nil {
 		e.Log.Error("failed to delete etcd task", "error", err)
 	}
@@ -241,7 +244,7 @@ func (e *EtcdComponent) deleteContainerWithRetry(ctx context.Context) {
 		}
 
 		e.Log.Error("failed to delete etcd container", "error", err, "attempt", attempt, "max_retries", maxRetries)
-		
+
 		if attempt < maxRetries {
 			time.Sleep(retryDelay)
 		}
