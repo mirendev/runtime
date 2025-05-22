@@ -228,7 +228,7 @@ func Dev(ctx *Context, opts struct {
 	}()
 
 	if opts.StandardTLS {
-		autotls.ServeTLS(ctx.Log, opts.DataPath, hs)
+		autotls.ServeTLS(sub, ctx.Log, opts.DataPath, hs)
 	}
 
 	var registry ocireg.Registry
