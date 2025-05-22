@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -233,6 +234,7 @@ func (s *EtcdStore) CreateEntity(
 	txnResp, err := s.client.Txn(ctx).
 		If(clientv3.Compare(clientv3.CreateRevision(key), "=", 0)).
 		Then(txopt...).
+		Else(clientv3.OpGet(key)).
 		Commit()
 
 	if err != nil {
@@ -240,6 +242,24 @@ func (s *EtcdStore) CreateEntity(
 	}
 
 	if !txnResp.Succeeded {
+
+		if len(txnResp.Responses) == 1 {
+			// If the curent value of the entity has the same atttributes as
+			// we were going to store, then we're all done!
+			rng := txnResp.Responses[0].GetResponseRange()
+
+			var curr Entity
+
+			if decoder.Unmarshal(rng.Kvs[0].Value, &curr) == nil {
+				if slices.EqualFunc(curr.Attrs, entity.Attrs, func(a, b Attr) bool {
+					return a.Equal(b)
+				}) {
+					entity.Revision = rng.Header.Revision
+					return entity, nil
+				}
+			}
+		}
+
 		s.log.Error("failed to create entity in etcd", "error", err, "id", entity.ID)
 		return nil, cond.Conflict("entity", entity.ID)
 	}
