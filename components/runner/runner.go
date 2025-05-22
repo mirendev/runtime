@@ -101,7 +101,16 @@ func (r *Runner) ContainerdContainerForSandbox(ctx context.Context, id entity.Id
 func (r *Runner) Start(ctx context.Context) error {
 	r.Log.Info("Starting runner", "id", r.Id)
 
-	rs, err := r.Config.State(ctx, rpc.WithLogger(r.Log), rpc.WithBindAddr(r.ListenAddress))
+	var (
+		rs  *rpc.State
+		err error
+	)
+
+	if r.Config == nil {
+		rs, err = rpc.NewState(ctx, rpc.WithLogger(r.Log), rpc.WithBindAddr(r.ListenAddress), rpc.WithSkipVerify)
+	} else {
+		rs, err = r.Config.State(ctx, rpc.WithLogger(r.Log), rpc.WithBindAddr(r.ListenAddress))
+	}
 	if err != nil {
 		return err
 	}

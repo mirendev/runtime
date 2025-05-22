@@ -65,7 +65,7 @@ func Dev(ctx *Context, opts struct {
 		addr := net.ParseIP(ip)
 		if addr == nil {
 			ctx.Log.Error("failed to parse additional IP", "ip", ip)
-			return err
+			return fmt.Errorf("failed to parse additional IP %s", ip)
 		}
 		additionalIps = append(additionalIps, addr)
 	}

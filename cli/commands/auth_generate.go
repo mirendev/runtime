@@ -1,6 +1,8 @@
 package commands
 
-import "miren.dev/runtime/components/coordinate"
+import (
+	"miren.dev/runtime/components/coordinate"
+)
 
 func AuthGenerate(ctx *Context, opts struct {
 	DataPath   string `short:"d" long:"data-path" description:"Data path" default:"/var/lib/miren"`

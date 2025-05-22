@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"math/big"
 	"net"
+	"regexp"
 	"time"
 )
 
@@ -153,8 +154,52 @@ type ClientCertificate struct {
 	KeyPEM  []byte
 }
 
+var (
+	dnsName    = regexp.MustCompile(`^([a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?$`)
+	simpleName = regexp.MustCompile(`^[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?$`)
+)
+
+// ValidateCommonName validates that the provided name is a valid DNS-1123 name
+// or a valid domain name suitable for use as a certificate CommonName.
+func ValidateCommonName(name string) error {
+	// For domain names like "test.example.com", we allow dots
+	if dnsName.MatchString(name) {
+		return nil // Valid domain name
+	}
+
+	// For simple names, RFC 1123 compliant hostname pattern
+	// - Must start with a letter or number
+	// - Can contain letters, numbers, and hyphens
+	// - Cannot end with a hyphen
+	// - Max length is 63 characters
+	if !simpleName.MatchString(name) {
+		return fmt.Errorf("invalid name format: %q does not conform to DNS-1123 naming conventions", name)
+	}
+
+	// List of reserved names that should not be used as certificate names
+	reservedNames := map[string]bool{
+		"admin":       true,
+		"root":        true,
+		"system":      true,
+		"kubernetes":  true,
+		"kube-system": true,
+		"runtime":     true,
+	}
+
+	if reservedNames[name] {
+		return fmt.Errorf("name %q is reserved and cannot be used", name)
+	}
+
+	return nil
+}
+
 // IssueCertificate creates a new certificate signed by the CA
 func (ca *Authority) IssueCertificate(opts Options) (*ClientCertificate, error) {
+	// Validate the common name before proceeding
+	if err := ValidateCommonName(opts.CommonName); err != nil {
+		return nil, err
+	}
+
 	pub, priv, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		return nil, fmt.Errorf("generating key pair: %w", err)

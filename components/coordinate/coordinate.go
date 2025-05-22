@@ -265,7 +265,6 @@ func (c *Coordinator) Start(ctx context.Context) error {
 	}
 
 	rs, err := rpc.NewState(ctx,
-		rpc.WithSkipVerify,
 		rpc.WithCertPEMs(c.apiCert, c.apiKey),
 		rpc.WithCertificateVerification(c.authority.GetCACertificate()),
 		rpc.WithBindAddr(c.Address),
