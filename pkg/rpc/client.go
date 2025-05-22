@@ -693,6 +693,16 @@ func (c *NetworkClient) handleCallStream(
 
 	dec := cbor.NewDecoder(ctrl)
 
+	const cancelCode = webtransport.StreamErrorCode(quic.FlowControlError)
+
+	// If the context is canceled, then we bail ASAP on trying to complete the RPC.
+	// Because we have a local ctx with a local cancel also, when this method turns, this
+	// goroutine will automatically get cleaned up.
+	go func() {
+		<-ctx.Done()
+		ctrl.CancelRead(cancelCode)
+	}()
+
 	for {
 		var rs streamRequest
 
@@ -700,8 +710,10 @@ func (c *NetworkClient) handleCallStream(
 		if err != nil {
 			if errors.Is(err, io.EOF) {
 				err = nil
-				break
+			} else if se, ok := err.(*webtransport.StreamError); ok && se.ErrorCode == cancelCode {
+				err = cond.Closed("rpc call terminated before getting response")
 			}
+
 			break
 		}
 

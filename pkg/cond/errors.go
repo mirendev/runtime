@@ -231,6 +231,10 @@ func (e ErrClosed) Is(target error) bool {
 	return false
 }
 
+func Closed(message string) error {
+	return ErrClosed{Message: message}
+}
+
 func Wrap(err error) error {
 	if err == nil {
 		return nil
