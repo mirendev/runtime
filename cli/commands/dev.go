@@ -104,7 +104,7 @@ func Dev(ctx *Context, opts struct {
 		return err
 	}
 
-	err = gn.Start(sub)
+	err = gn.Start(sub, eg)
 	if err != nil {
 		ctx.Log.Error("failed to start grunge network", "error", err)
 		return err

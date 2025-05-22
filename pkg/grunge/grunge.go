@@ -22,6 +22,7 @@ import (
 	"go.etcd.io/etcd/api/v3/v3rpc/rpctypes"
 	clientv3 "go.etcd.io/etcd/client/v3"
 	"go4.org/netipx"
+	"golang.org/x/sync/errgroup"
 
 	_ "github.com/flannel-io/flannel/pkg/backend/alloc"
 	_ "github.com/flannel-io/flannel/pkg/backend/extension"
@@ -196,7 +197,7 @@ func (n *Network) AllLeases(ctx context.Context) ([]lease.Lease, error) {
 	return leases, nil
 }
 
-func (n *Network) Start(ctx context.Context) error {
+func (n *Network) Start(ctx context.Context, eg *errgroup.Group) error {
 	cfg := &fetcd.EtcdConfig{
 		Endpoints: n.EtcdEndpoints,
 		Prefix:    n.EtcdPrefix,
@@ -264,7 +265,7 @@ func (n *Network) Start(ctx context.Context) error {
 
 	n.lease = bn.Lease()
 
-	go func() {
+	eg.Go(func() error {
 		defer cancel()
 		// Start "Running" the backend network. This will block until the context is done so run in another goroutine.
 		n.log.Info("Running backend.")
@@ -283,11 +284,11 @@ func (n *Network) Start(ctx context.Context) error {
 			}
 		}
 
-		n.log.Info("Waiting for all goroutines to exit")
 		// Block waiting for all the goroutines to finish.
 		wg.Wait()
-		n.log.Info("Exiting cleanly...")
-	}()
+
+		return err
+	})
 
 	return nil
 }
