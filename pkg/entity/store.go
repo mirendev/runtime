@@ -242,7 +242,6 @@ func (s *EtcdStore) CreateEntity(
 	}
 
 	if !txnResp.Succeeded {
-
 		if len(txnResp.Responses) == 1 {
 			// If the current value of the entity has the same attributes as
 			// we were going to store, then we're all done!
