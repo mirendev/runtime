@@ -2,6 +2,7 @@ package coordinate
 
 import (
 	"context"
+	"crypto/x509"
 	"fmt"
 	"log/slog"
 	"net"
@@ -10,7 +11,6 @@ import (
 	"slices"
 	"time"
 
-	"github.com/davecgh/go-spew/spew"
 	clientv3 "go.etcd.io/etcd/client/v3"
 	"miren.dev/runtime/api/app/app_v1alpha"
 	"miren.dev/runtime/api/build/build_v1alpha"
@@ -77,6 +77,25 @@ const (
 	day  = 24 * time.Hour
 	year = 365 * day
 )
+
+func validateAPICertificate(cert *x509.Certificate, expectedNames []string, expectedIPs []net.IP) error {
+	horizon := time.Now().Add(48 * time.Hour)
+	if cert.NotAfter.Before(horizon) {
+		return fmt.Errorf("certificate expired on %v (horizon: %v)", cert.NotAfter, horizon)
+	}
+
+	if !slices.Equal(cert.DNSNames, expectedNames) {
+		return fmt.Errorf("certificate DNS names %v do not match expected %v", cert.DNSNames, expectedNames)
+	}
+
+	if !slices.EqualFunc(cert.IPAddresses, expectedIPs, func(a, b net.IP) bool {
+		return a.Equal(b)
+	}) {
+		return fmt.Errorf("certificate IP addresses %v do not match expected %v", cert.IPAddresses, expectedIPs)
+	}
+
+	return nil
+}
 
 func (c *Coordinator) LoadCA(ctx context.Context) error {
 	cert := filepath.Join(c.DataPath, "server", "ca.crt")
@@ -161,23 +180,8 @@ func (c *Coordinator) LoadAPICert(ctx context.Context) error {
 
 		x509Cert, err := caauth.LoadCertificate(data)
 		if err == nil {
-			horizon := time.Now().Add(-48 * time.Hour)
-			if x509Cert.NotAfter.Before(horizon) {
-				c.Log.Info("API cert is expired", "cert", x509Cert.NotAfter, "horizon", horizon)
-				goto regen
-			}
-
-			if !slices.Equal(x509Cert.DNSNames, names) {
-				spew.Dump(x509Cert.DNSNames, names)
-				c.Log.Info("API cert does not match expected names", "cert", x509Cert.DNSNames, "expected", names)
-				goto regen
-			}
-
-			if !slices.EqualFunc(x509Cert.IPAddresses, ips, func(a, b net.IP) bool {
-				return a.Equal(b)
-			}) {
-				spew.Dump(x509Cert.IPAddresses, ips)
-				c.Log.Info("API cert does not match expected IPs", "cert", x509Cert.IPAddresses, "expected", ips)
+			if err := validateAPICertificate(x509Cert, names, ips); err != nil {
+				c.Log.Info("API cert validation failed", "error", err)
 				goto regen
 			}
 

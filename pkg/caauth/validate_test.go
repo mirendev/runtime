@@ -50,6 +50,11 @@ func TestValidateCommonName(t *testing.T) {
 			shouldError: false,
 		},
 		{
+			name:        "valid name with uppercase",
+			commonName:  "MyService",
+			shouldError: false,
+		},
+		{
 			name:        "invalid name starting with hyphen",
 			commonName:  "-myservice",
 			shouldError: true,
@@ -72,11 +77,6 @@ func TestValidateCommonName(t *testing.T) {
 			commonName:  "my service",
 			shouldError: true,
 			errorMsg:    "invalid name format",
-		},
-		{
-			name:        "invalid name with uppercase",
-			commonName:  "MyService",
-			shouldError: false, // Uppercase is allowed in DNS-1123
 		},
 		{
 			name:        "invalid empty name",
@@ -124,8 +124,8 @@ func TestValidateCommonName(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := ValidateCommonName(tt.commonName)
-			
+			err := validateCommonName(tt.commonName)
+
 			if tt.shouldError {
 				assert.Error(t, err)
 				if tt.errorMsg != "" {
@@ -152,12 +152,12 @@ func TestIssueCertificateValidatesCommonName(t *testing.T) {
 
 	// Test with invalid common names
 	invalidNames := []string{
-		"",                // Empty name
-		"-invalid",        // Starts with hyphen
-		"invalid-",        // Ends with hyphen
-		"inv@lid",         // Contains special character
-		"admin",           // Reserved name
-		"my name",         // Contains space
+		"",         // Empty name
+		"-invalid", // Starts with hyphen
+		"invalid-", // Ends with hyphen
+		"inv@lid",  // Contains special character
+		"admin",    // Reserved name
+		"my name",  // Contains space
 	}
 
 	for _, name := range invalidNames {
@@ -189,3 +189,4 @@ func TestIssueCertificateValidatesCommonName(t *testing.T) {
 		assert.NoError(t, err, "IssueCertificate should accept valid common name: %s", name)
 	}
 }
+

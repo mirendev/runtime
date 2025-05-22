@@ -159,9 +159,9 @@ var (
 	simpleName = regexp.MustCompile(`^[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?$`)
 )
 
-// ValidateCommonName validates that the provided name is a valid DNS-1123 name
+// validateCommonName validates that the provided name is a valid DNS-1123 name
 // or a valid domain name suitable for use as a certificate CommonName.
-func ValidateCommonName(name string) error {
+func validateCommonName(name string) error {
 	// For domain names like "test.example.com", we allow dots
 	if dnsName.MatchString(name) {
 		return nil // Valid domain name
@@ -196,7 +196,7 @@ func ValidateCommonName(name string) error {
 // IssueCertificate creates a new certificate signed by the CA
 func (ca *Authority) IssueCertificate(opts Options) (*ClientCertificate, error) {
 	// Validate the common name before proceeding
-	if err := ValidateCommonName(opts.CommonName); err != nil {
+	if err := validateCommonName(opts.CommonName); err != nil {
 		return nil, err
 	}
 
