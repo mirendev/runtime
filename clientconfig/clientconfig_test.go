@@ -36,7 +36,7 @@ func TestConfigLoadSave(t *testing.T) {
 	}
 
 	// Save configuration
-	err = SaveConfig(originalConfig)
+	err = originalConfig.Save()
 	r.NoError(err)
 
 	// Load configuration

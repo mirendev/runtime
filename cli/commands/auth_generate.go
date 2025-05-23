@@ -2,6 +2,7 @@ package commands
 
 import (
 	"net"
+	"strings"
 
 	"miren.dev/runtime/clientconfig"
 	"miren.dev/runtime/components/coordinate"
@@ -33,12 +34,17 @@ func AuthGenerate(ctx *Context, opts struct {
 		return err
 	}
 
+	tgt := opts.Target
+	if !strings.Contains(tgt, ":") {
+		tgt = net.JoinHostPort(tgt, "8443")
+	}
+
 	lcfg := &clientconfig.Config{
 		ActiveCluster: opts.ClusterName,
 
 		Clusters: map[string]*clientconfig.ClusterConfig{
 			opts.ClusterName: {
-				Hostname:   net.JoinHostPort(opts.Target, "8443"),
+				Hostname:   tgt,
 				CACert:     string(cc.CACert),
 				ClientCert: string(cc.CertPEM),
 				ClientKey:  string(cc.KeyPEM),

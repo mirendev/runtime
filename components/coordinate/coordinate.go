@@ -250,6 +250,10 @@ func (c *Coordinator) NamedConfig(name string) (*clientconfig.Config, error) {
 }
 
 func (c *Coordinator) IssueCertificate(name string) (*caauth.ClientCertificate, error) {
+	if c.authority == nil {
+		return nil, fmt.Errorf("CA authority not initialized")
+	}
+
 	return c.authority.IssueCertificate(caauth.Options{
 		CommonName:   name,
 		Organization: "miren",

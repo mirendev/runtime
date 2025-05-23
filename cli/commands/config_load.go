@@ -8,7 +8,7 @@ import (
 
 func ConfigLoad(ctx *Context, opts struct {
 	Config    string `long:"config" description:"Path to the config file to update"`
-	Input     string `short:"i" long:"input" description:"Path to the input config file to add"`
+	Input     string `short:"i" long:"input" description:"Path to the input config file to add" required:"true"`
 	Force     bool   `short:"f" long:"force" description:"Force the update"`
 	SetActive bool   `short:"a" long:"set-active" description:"Set the active cluster"`
 }) error {
