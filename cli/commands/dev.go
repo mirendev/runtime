@@ -27,6 +27,7 @@ import (
 	"miren.dev/runtime/components/runner"
 	"miren.dev/runtime/components/scheduler"
 	"miren.dev/runtime/metrics"
+	"miren.dev/runtime/observability"
 	"miren.dev/runtime/pkg/grunge"
 	"miren.dev/runtime/pkg/netdb"
 	"miren.dev/runtime/pkg/rpc"
@@ -52,8 +53,9 @@ func Dev(ctx *Context, opts struct {
 	res, hm := netresolve.NewLocalResolver()
 
 	var (
-		cpu metrics.CPUUsage
-		mem metrics.MemoryUsage
+		cpu  metrics.CPUUsage
+		mem  metrics.MemoryUsage
+		logs observability.LogReader
 	)
 
 	err := ctx.Server.Populate(&mem)
@@ -65,6 +67,12 @@ func Dev(ctx *Context, opts struct {
 	err = ctx.Server.Populate(&cpu)
 	if err != nil {
 		ctx.Log.Error("failed to populate CPU usage", "error", err)
+		return err
+	}
+
+	err = ctx.Server.Populate(&logs)
+	if err != nil {
+		ctx.Log.Error("failed to populate log reader", "error", err)
 		return err
 	}
 
@@ -126,6 +134,7 @@ func Dev(ctx *Context, opts struct {
 		TempDir:         os.TempDir(),
 		Mem:             &mem,
 		Cpu:             &cpu,
+		Logs:            &logs,
 	})
 
 	err = co.Start(sub)

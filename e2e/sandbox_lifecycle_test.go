@@ -11,9 +11,10 @@ import (
 	"github.com/stretchr/testify/require"
 	"miren.dev/runtime/cli"
 	"miren.dev/runtime/pkg/testserver"
+	"miren.dev/runtime/pkg/testutils"
 )
 
-func TestCustomPortEndToEnd(t *testing.T) {
+func TestSandboxLifecycleEndToEnd(t *testing.T) {
 	r := require.New(t)
 
 	// Start a test server that we expect to be shut down properly by t.Cleanup functions at the end of the test
@@ -43,6 +44,15 @@ func TestCustomPortEndToEnd(t *testing.T) {
 
 	r.Equal(200, resp.StatusCode)
 	r.Contains(string(body), "Welcome to nginx!")
+
+	// Fetch logs from app
+	var logsCode int
+	output, err := testutils.CaptureStdout(func() {
+		logsCode = cli.Run([]string{"runtime", "logs", "-a", "nginx"})
+	})
+	r.NoError(err)
+	r.Equal(0, logsCode)
+	r.Contains(output, `"GET / HTTP/1.1"`)
 }
 
 func writeTempContents(t *testing.T, filename, contents string) string {

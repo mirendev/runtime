@@ -1,4 +1,4 @@
-package observability
+package observability_test
 
 import (
 	"encoding/json"
@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	"miren.dev/runtime/observability"
 	"miren.dev/runtime/pkg/runsc"
 	"miren.dev/runtime/pkg/testutils"
 )
@@ -18,9 +19,9 @@ func TestRunSCMonitor(t *testing.T) {
 		reg, cleanup := testutils.Registry()
 		defer cleanup()
 
-		reg.Register("status-monitor", &StatusMonitor{})
+		reg.Register("status-monitor", &observability.StatusMonitor{})
 
-		var m RunSCMonitor
+		var m observability.RunSCMonitor
 
 		err := reg.Populate(&m)
 		r.NoError(err)

@@ -23,6 +23,7 @@ import (
 	"miren.dev/runtime/components/activator"
 	"miren.dev/runtime/components/netresolve"
 	"miren.dev/runtime/metrics"
+	"miren.dev/runtime/observability"
 	"miren.dev/runtime/pkg/caauth"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/schema"
@@ -31,6 +32,7 @@ import (
 	"miren.dev/runtime/servers/build"
 	"miren.dev/runtime/servers/entityserver"
 	execproxy "miren.dev/runtime/servers/exec_proxy"
+	"miren.dev/runtime/servers/logs"
 )
 
 type CoordinatorConfig struct {
@@ -43,8 +45,9 @@ type CoordinatorConfig struct {
 	AdditionalNames []string            `json:"additional_names" yaml:"additional_names"`
 	AdditionalIPs   []net.IP            `json:"additional_ips" yaml:"additional_ips"`
 
-	Mem *metrics.MemoryUsage
-	Cpu *metrics.CPUUsage
+	Mem  *metrics.MemoryUsage
+	Cpu  *metrics.CPUUsage
+	Logs *observability.LogReader
 }
 
 func NewCoordinator(log *slog.Logger, cfg CoordinatorConfig) *Coordinator {
@@ -352,6 +355,9 @@ func (c *Coordinator) Start(ctx context.Context) error {
 	ai := app.NewAppInfo(c.Log, ec, c.Cpu, c.Mem)
 	server.ExposeValue("dev.miren.runtime/app", app_v1alpha.AdaptCrud(ai))
 	server.ExposeValue("dev.miren.runtime/app-status", app_v1alpha.AdaptAppStatus(ai))
+
+	ls := logs.NewServer(c.Log, ec, c.Logs)
+	server.ExposeValue("dev.miren.runtime/logs", app_v1alpha.AdaptLogs(ls))
 
 	c.Log.Info("started RPC server")
 	return nil

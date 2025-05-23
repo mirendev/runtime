@@ -1,4 +1,4 @@
-package observability
+package observability_test
 
 import (
 	"context"
@@ -8,6 +8,7 @@ import (
 
 	"github.com/moby/buildkit/identity"
 	"github.com/stretchr/testify/require"
+	"miren.dev/runtime/observability"
 	"miren.dev/runtime/pkg/testutils"
 )
 
@@ -18,13 +19,13 @@ func TestLogs(t *testing.T) {
 
 		r := require.New(t)
 
-		reg, cleanup := testutils.Registry(TestInject)
+		reg, cleanup := testutils.Registry(observability.TestInject)
 		defer cleanup()
 
 		var (
-			lm LogsMaintainer
-			pw PersistentLogWriter
-			pr PersistentLogReader
+			lm observability.LogsMaintainer
+			pw observability.PersistentLogWriter
+			pr observability.PersistentLogReader
 		)
 
 		err := reg.Populate(&lm)
@@ -41,9 +42,9 @@ func TestLogs(t *testing.T) {
 
 		id := identity.NewID()
 
-		err = pw.WriteEntry(id, LogEntry{
+		err = pw.WriteEntry(id, observability.LogEntry{
 			Timestamp: time.Now(),
-			Stream:    Stdout,
+			Stream:    observability.Stdout,
 			Body:      "this is a log line",
 		})
 		r.NoError(err)

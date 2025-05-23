@@ -12,7 +12,7 @@ func Logs(ctx *Context, opts struct {
 
 	Last *time.Duration `short:"l" long:"last" description:"Show logs from the last duration"`
 }) error {
-	cl, err := ctx.RPCClient("logs")
+	cl, err := ctx.RPCClient("dev.miren.runtime/logs")
 	if err != nil {
 		return err
 	}

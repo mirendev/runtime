@@ -51,8 +51,9 @@ func TestServer(t *testing.T) error {
 	res, hm := netresolve.NewLocalResolver()
 
 	var (
-		cpu metrics.CPUUsage
-		mem metrics.MemoryUsage
+		cpu  metrics.CPUUsage
+		mem  metrics.MemoryUsage
+		logs observability.LogReader
 	)
 
 	err := reg.Populate(&mem)
@@ -69,6 +70,13 @@ func TestServer(t *testing.T) error {
 		return err
 	}
 
+	err = reg.Populate(&logs)
+	if err != nil {
+		log.Error("failed to populate log reader", "error", err)
+		ctxCancel()
+		return err
+	}
+
 	co := coordinate.NewCoordinator(log, coordinate.CoordinatorConfig{
 		Address:       optsAddress,
 		EtcdEndpoints: optsEtcdEndpoints,
@@ -77,6 +85,7 @@ func TestServer(t *testing.T) error {
 		TempDir:       os.TempDir(),
 		Mem:           &mem,
 		Cpu:           &cpu,
+		Logs:          &logs,
 	})
 
 	t.Log("Starting coordinator")
@@ -119,6 +128,7 @@ func TestServer(t *testing.T) error {
 	// Create RPC client to interact with coordinator
 	scfg, err := co.ServiceConfig()
 	if err != nil {
+		ctxCancel()
 		return err
 	}
 
@@ -160,6 +170,7 @@ func TestServer(t *testing.T) error {
 
 	rcfg, err := co.NamedConfig("runner")
 	if err != nil {
+		ctxCancel()
 		return err
 	}
 
