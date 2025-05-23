@@ -151,7 +151,7 @@ func (a *localActivator) activateApp(ctx context.Context, ver *core_v1alpha.AppV
 	var sb compute_v1alpha.Sandbox
 	sb.Version = app.ActiveVersion
 
-	sb.LogEntity = appMD.Name
+	sb.LogEntity = app.EntityId().String()
 	sb.LogAttribute = types.LabelSet("stage", "app-run", "pool", pool, "service", service)
 
 	// Determine port from config or default to 3000
