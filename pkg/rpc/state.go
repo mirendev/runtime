@@ -87,6 +87,15 @@ func (s *State) ListenAddr() string {
 	return s.transport.Conn.LocalAddr().String()
 }
 
+func (s *State) LoopbackAddr() string {
+	addr := s.transport.Conn.LocalAddr().String()
+	if _, port, err := net.SplitHostPort(addr); err == nil {
+		return "127.0.0.1:" + port
+	}
+
+	return addr
+}
+
 type cachedConn struct {
 	ec quic.EarlyConnection
 	hc *http3.ClientConn

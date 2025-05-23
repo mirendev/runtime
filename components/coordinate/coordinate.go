@@ -323,7 +323,7 @@ func (c *Coordinator) Start(ctx context.Context) error {
 
 	server.ExposeValue("entities", esv1.AdaptEntityAccess(ess))
 
-	loopback, err := rs.Connect(rs.ListenAddr(), "entities")
+	loopback, err := rs.Connect(rs.LoopbackAddr(), "entities")
 	if err != nil {
 		c.Log.Error("failed to connect to RPC server", "error", err)
 		return err

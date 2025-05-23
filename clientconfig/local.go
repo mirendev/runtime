@@ -23,13 +23,22 @@ func Local(cc *caauth.ClientCertificate) *Config {
 }
 
 func (c *Config) RPCOptions() []rpc.StateOption {
+	if c.ActiveCluster == "" {
+		return nil
+	}
+
+	active, exists := c.Clusters[c.ActiveCluster]
+	if !exists {
+		return nil
+	}
+
 	return []rpc.StateOption{
 		rpc.WithCertPEMs(
-			[]byte(c.Clusters[c.ActiveCluster].ClientCert),
-			[]byte(c.Clusters[c.ActiveCluster].ClientKey),
+			[]byte(active.ClientCert),
+			[]byte(active.ClientKey),
 		),
-		rpc.WithCertificateVerification([]byte(c.Clusters[c.ActiveCluster].CACert)),
-		rpc.WithEndpoint(c.Clusters[c.ActiveCluster].Hostname),
+		rpc.WithCertificateVerification([]byte(active.CACert)),
+		rpc.WithEndpoint(active.Hostname),
 		rpc.WithBindAddr("[::]:0"),
 	}
 }
