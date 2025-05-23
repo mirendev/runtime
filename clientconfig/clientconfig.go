@@ -2,6 +2,7 @@ package clientconfig
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 
@@ -19,16 +20,25 @@ const (
 // ClusterConfig holds the configuration for a single cluster
 type ClusterConfig struct {
 	Hostname   string `yaml:"hostname"`
-	CACert     string `yaml:"ca_cert"`     // PEM encoded CA certificate
-	ClientCert string `yaml:"client_cert"` // PEM encoded client certificate
-	ClientKey  string `yaml:"client_key"`  // PEM encoded client key
-	Insecure   bool   `yaml:"insecure"`    // Skip TLS verification
+	CACert     string `yaml:"ca_cert"`            // PEM encoded CA certificate
+	ClientCert string `yaml:"client_cert"`        // PEM encoded client certificate
+	ClientKey  string `yaml:"client_key"`         // PEM encoded client key
+	Insecure   bool   `yaml:"insecure,omitempty"` // Skip TLS verification
 }
 
 // Config represents the complete client configuration
 type Config struct {
 	ActiveCluster string                    `yaml:"active_cluster"`
 	Clusters      map[string]*ClusterConfig `yaml:"clusters"`
+
+	// The path to the config file that was loaded, if any.
+	sourcePath string
+}
+
+func NewConfig() *Config {
+	return &Config{
+		Clusters: make(map[string]*ClusterConfig),
+	}
 }
 
 // Validate checks if the configuration is valid
@@ -67,10 +77,12 @@ func LoadConfig() (*Config, error) {
 
 	data, err := os.ReadFile(configPath)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read config file: %w", err)
+		return nil, ErrNoConfig
 	}
 
 	var config Config
+	config.sourcePath = configPath
+
 	if err := yaml.Unmarshal(data, &config); err != nil {
 		return nil, fmt.Errorf("failed to parse config file: %w", err)
 	}
@@ -82,11 +94,22 @@ func LoadConfig() (*Config, error) {
 	return &config, nil
 }
 
+var ErrNoConfig = fmt.Errorf("no config file found")
+
 // LoadConfig loads the configuration from disk
 func LoadConfigFrom(configPath string) (*Config, error) {
+	if configPath == "-" {
+		data, err := io.ReadAll(os.Stdin)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read config from stdin: %w", err)
+		}
+
+		return DecodeConfig(data)
+	}
+
 	data, err := os.ReadFile(configPath)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read config file: %w", err)
+		return nil, ErrNoConfig
 	}
 
 	var config Config
@@ -116,10 +139,15 @@ func DecodeConfig(data []byte) (*Config, error) {
 }
 
 // SaveConfig saves the configuration to disk
-func SaveConfig(config *Config) error {
-	configPath, err := getConfigPath()
-	if err != nil {
-		return fmt.Errorf("failed to determine config path: %w", err)
+func (c *Config) Save() error {
+	configPath := c.sourcePath
+
+	var err error
+	if configPath == "" {
+		configPath, err = getConfigPath()
+		if err != nil {
+			return fmt.Errorf("failed to determine config path: %w", err)
+		}
 	}
 
 	// Ensure directory exists
@@ -128,7 +156,7 @@ func SaveConfig(config *Config) error {
 		return fmt.Errorf("failed to create config directory: %w", err)
 	}
 
-	return config.SaveTo(configPath)
+	return c.SaveTo(configPath)
 }
 
 func (c *Config) SaveTo(path string) error {
@@ -139,6 +167,11 @@ func (c *Config) SaveTo(path string) error {
 	data, err := yaml.Marshal(c)
 	if err != nil {
 		return fmt.Errorf("failed to marshal config: %w", err)
+	}
+
+	if path == "-" {
+		os.Stdout.Write(data)
+		return nil
 	}
 
 	if err := os.WriteFile(path, data, 0600); err != nil {
@@ -160,6 +193,31 @@ func (c *Config) SaveToHome() error {
 	}
 
 	return c.SaveTo(configPath)
+}
+
+// Merge merges another Config with the current one
+// If updateActiveCluster is true, the ActiveCluster from the other config will override the current one
+// Cluster configurations from the other config will be merged into the current config's clusters
+func (c *Config) Merge(other *Config, updateActiveCluster, force bool) error {
+	if c.Clusters == nil {
+		c.Clusters = make(map[string]*ClusterConfig)
+	}
+
+	// Merge clusters from other config
+	for name, cluster := range other.Clusters {
+		if _, exists := c.Clusters[name]; exists && !force {
+			return fmt.Errorf("cluster %q already exists in current config, use force to overwrite", name)
+		}
+
+		c.Clusters[name] = cluster
+	}
+
+	// Update active cluster if requested and other config has one
+	if c.ActiveCluster == "" || (updateActiveCluster && other.ActiveCluster != "") {
+		c.ActiveCluster = other.ActiveCluster
+	}
+
+	return nil
 }
 
 // GetCluster returns the configuration for a specific cluster

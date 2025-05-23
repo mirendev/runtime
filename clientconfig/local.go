@@ -7,14 +7,14 @@ import (
 	"miren.dev/runtime/pkg/rpc"
 )
 
-func Local(cc *caauth.ClientCertificate, cert []byte) *Config {
+func Local(cc *caauth.ClientCertificate) *Config {
 	return &Config{
 		ActiveCluster: "local",
 
 		Clusters: map[string]*ClusterConfig{
 			"local": {
 				Hostname:   "127.0.0.1:8443",
-				CACert:     string(cert),
+				CACert:     string(cc.CACert),
 				ClientCert: string(cc.CertPEM),
 				ClientKey:  string(cc.KeyPEM),
 			},

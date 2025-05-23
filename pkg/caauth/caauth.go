@@ -152,6 +152,7 @@ func (ca *Authority) ExportPEM() (certPEM, keyPEM []byte, err error) {
 type ClientCertificate struct {
 	CertPEM []byte
 	KeyPEM  []byte
+	CACert  []byte
 }
 
 var (
@@ -251,6 +252,7 @@ func (ca *Authority) IssueCertificate(opts Options) (*ClientCertificate, error) 
 	return &ClientCertificate{
 		CertPEM: certPEM,
 		KeyPEM:  keyPEM,
+		CACert:  ca.GetCACertificate(),
 	}, nil
 }
 

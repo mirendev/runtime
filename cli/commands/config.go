@@ -50,7 +50,7 @@ func (c *ConfigCentric) SaveConfig() error {
 		return nil
 	}
 
-	return clientconfig.SaveConfig(c.cfg)
+	return c.cfg.Save()
 }
 
 func (c *ConfigCentric) LoadCluster() (*clientconfig.ClusterConfig, error) {

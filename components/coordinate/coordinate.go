@@ -246,7 +246,15 @@ func (c *Coordinator) NamedConfig(name string) (*clientconfig.Config, error) {
 		return nil, err
 	}
 
-	return clientconfig.Local(cc, c.authority.GetCACertificate()), nil
+	return clientconfig.Local(cc), nil
+}
+
+func (c *Coordinator) IssueCertificate(name string) (*caauth.ClientCertificate, error) {
+	return c.authority.IssueCertificate(caauth.Options{
+		CommonName:   name,
+		Organization: "miren",
+		ValidFor:     1 * year,
+	})
 }
 
 func (c *Coordinator) ListenAddress() string {
