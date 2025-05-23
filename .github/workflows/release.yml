@@ -1,0 +1,80 @@
+name: Dagger
+
+on:
+  push:
+    branches: [ "main", "evan/mir-146" ]
+
+# Set permissions for the entire workflow
+permissions:
+  contents: write    # Required for creating releases and uploading assets
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        arch: [amd64, arm64]
+    steps:
+    - uses: actions/checkout@v4
+    - name: Build and package for ${{ matrix.arch }}
+      uses: dagger/dagger-for-github@v7
+      with:
+        verb: call
+        args: package --dir=. export --path=release-linux-${{ matrix.arch }}.tar.gz
+        cloud-token: ${{ secrets.DAGGER_CLOUD_TOKEN }}
+    - name: Upload build artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: runtime-linux-${{ matrix.arch }}
+        path: release-linux-${{ matrix.arch }}.tar.gz
+        retention-days: 7
+
+  release:
+    needs: package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      
+      - name: Check if tip release exists
+        id: check_release
+        run: |
+          if gh release view tip &>/dev/null; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Create tip release if it doesn't exist
+        if: steps.check_release.outputs.exists == 'false'
+        run: |
+          gh release create tip \
+            --title "Tip Build" \
+            --notes "Latest build from main branch" \
+            --prerelease
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Delete existing assets if they exist
+        run: |
+          # Delete existing assets if they exist (ignoring errors if they don't)
+          gh release delete-asset tip runtime-linux-amd64.tar.gz --yes 2>/dev/null || true
+          gh release delete-asset tip runtime-linux-arm64.tar.gz --yes 2>/dev/null || true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Upload release assets
+        run: |
+          # Rename the artifacts to the expected names
+          cp artifacts/runtime-linux-amd64/release-linux-amd64.tar.gz runtime-linux-amd64.tar.gz
+          cp artifacts/runtime-linux-arm64/release-linux-arm64.tar.gz runtime-linux-arm64.tar.gz
+          
+          # Upload both assets to the release
+          gh release upload tip runtime-linux-amd64.tar.gz runtime-linux-arm64.tar.gz --clobber
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

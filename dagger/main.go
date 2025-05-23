@@ -144,6 +144,28 @@ func (m *Runtime) BuildEnv(dir *dagger.Directory) *dagger.Container {
 		WithExec([]string{"/usr/local/bin/runsc", "install"})
 }
 
+func (m *Runtime) Package(
+	ctx context.Context,
+	dir *dagger.Directory,
+) *dagger.File {
+	c := m.BuildEnv(dir).
+		WithDirectory("/src", dir).
+		WithExec([]string{"/bin/sh", "-c", `
+		set -e
+		cd /src
+		make bin/runtime
+		mkdir -p /tmp/package
+		cp bin/runtime /tmp/package
+		cp /usr/local/bin/runc /tmp/package
+		cp /usr/local/bin/runsc /tmp/package
+		cp /usr/local/bin/containerd-shim-runsc-v1 /tmp/package
+		cp /usr/local/bin/containerd /tmp/package
+		cp /usr/local/bin/nerdctl /tmp/package
+		tar -C /tmp/package -czf /tmp/package.tar.gz .
+`})
+	return c.File("/tmp/package.tar.gz")
+}
+
 func (m *Runtime) Container(
 	ctx context.Context,
 	dir *dagger.Directory,
