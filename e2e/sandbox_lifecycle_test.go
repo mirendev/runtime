@@ -51,8 +51,6 @@ func TestSandboxLifecycleEndToEnd(t *testing.T) {
 		logsCode = cli.Run([]string{"runtime", "logs", "-a", "nginx"})
 	})
 	r.NoError(err)
-	// TODO: remove this print once things are working properly
-	t.Logf("OUTPUT %s", output)
 	r.Equal(0, logsCode)
 	r.Contains(output, `"GET / HTTP/1.1"`)
 }
