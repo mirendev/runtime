@@ -2,18 +2,29 @@ package clientconfig
 
 import (
 	"context"
+	"net"
 
 	"miren.dev/runtime/pkg/caauth"
 	"miren.dev/runtime/pkg/rpc"
 )
 
-func Local(cc *caauth.ClientCertificate) *Config {
+func Local(cc *caauth.ClientCertificate, listenAddr string) *Config {
+	addr := listenAddr
+	if addr == "" {
+		addr = "localhost:8443"
+	} else {
+		_, port, err := net.SplitHostPort(addr)
+		if err == nil {
+			addr = net.JoinHostPort("127.0.0.1", port)
+		}
+	}
+
 	return &Config{
 		ActiveCluster: "local",
 
 		Clusters: map[string]*ClusterConfig{
 			"local": {
-				Hostname:   "127.0.0.1:8443",
+				Hostname:   addr,
 				CACert:     string(cc.CACert),
 				ClientCert: string(cc.CertPEM),
 				ClientKey:  string(cc.KeyPEM),

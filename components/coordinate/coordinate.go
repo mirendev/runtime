@@ -246,7 +246,7 @@ func (c *Coordinator) NamedConfig(name string) (*clientconfig.Config, error) {
 		return nil, err
 	}
 
-	return clientconfig.Local(cc), nil
+	return clientconfig.Local(cc, c.Address), nil
 }
 
 func (c *Coordinator) IssueCertificate(name string) (*caauth.ClientCertificate, error) {
