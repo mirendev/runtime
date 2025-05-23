@@ -11,7 +11,7 @@ import (
 func AuthGenerate(ctx *Context, opts struct {
 	DataPath    string `short:"d" long:"data-path" description:"Data path" default:"/var/lib/miren"`
 	ConfigPath  string `short:"c" long:"config-path" description:"Path to the config file, - for stdout" default:"clientconfig.yaml"`
-	Name        string `short:"n" long:"name" description:"Name of the client certificate" require:"true"`
+  Name        string `short:"n" long:"name" description:"Name of the client certificate" default:"runtime-user"`
 	Target      string `short:"t" long:"target" description:"Hostname to embed in the config" default:"localhost"`
 	ClusterName string `short:"C" long:"cluster-name" description:"Name of the cluster" default:"local"`
 }) error {
