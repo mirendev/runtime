@@ -73,6 +73,7 @@ func TestServer(t *testing.T) error {
 	err = reg.Populate(&logs)
 	if err != nil {
 		log.Error("failed to populate log reader", "error", err)
+		ctxCancel()
 		return err
 	}
 
@@ -127,6 +128,7 @@ func TestServer(t *testing.T) error {
 	// Create RPC client to interact with coordinator
 	scfg, err := co.ServiceConfig()
 	if err != nil {
+		ctxCancel()
 		return err
 	}
 
@@ -168,6 +170,7 @@ func TestServer(t *testing.T) error {
 
 	rcfg, err := co.NamedConfig("runner")
 	if err != nil {
+		ctxCancel()
 		return err
 	}
 
