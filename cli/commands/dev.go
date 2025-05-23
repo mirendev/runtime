@@ -4,6 +4,7 @@
 package commands
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"net/http"
@@ -111,9 +112,7 @@ func Dev(ctx *Context, opts struct {
 		ctx.Log.Info("using embedded etcd", "endpoint", etcdComponent.ClientEndpoint())
 
 		// Ensure cleanup on exit
-		defer func() {
-			etcdComponent.Stop(ctx.Context)
-		}()
+		defer etcdComponent.Stop(context.Background())
 	}
 
 	co := coordinate.NewCoordinator(ctx.Log, coordinate.CoordinatorConfig{

@@ -191,31 +191,25 @@ func (e *EtcdComponent) stopTask(ctx context.Context, task containerd.Task) {
 	}
 
 	// Wait for graceful exit with timeout
-	waitCh := make(chan error, 1)
-	go func() {
-		_, waitErr := task.Wait(shutdownCtx)
-		waitCh <- waitErr
-	}()
+	status, err := task.Wait(shutdownCtx)
+	if err == nil {
+		select {
+		case es := <-status:
+			e.Log.Info("etcd task exited", "code", es.ExitCode())
 
-	select {
-	case waitErr := <-waitCh:
-		if waitErr != nil {
-			e.Log.Warn("etcd task wait returned error", "error", waitErr)
-		} else {
-			e.Log.Info("etcd task exited gracefully")
-		}
-	case <-shutdownCtx.Done():
-		// Timeout reached, escalate to SIGKILL
-		e.Log.Warn("etcd task did not exit gracefully, sending SIGKILL")
-		killCtx, killCancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer killCancel()
+		case <-shutdownCtx.Done():
+			// Timeout reached, escalate to SIGKILL
+			e.Log.Warn("etcd task did not exit gracefully, sending SIGKILL")
+			killCtx, killCancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer killCancel()
 
-		if err := task.Kill(killCtx, unix.SIGKILL); err != nil {
-			e.Log.Error("failed to send SIGKILL to etcd task", "error", err)
-		} else {
-			// Wait for forced exit
-			if _, waitErr := task.Wait(killCtx); waitErr != nil {
-				e.Log.Error("etcd task wait after SIGKILL failed", "error", waitErr)
+			if err := task.Kill(killCtx, unix.SIGKILL); err != nil {
+				e.Log.Error("failed to send SIGKILL to etcd task", "error", err)
+			} else {
+				// Wait for forced exit
+				if _, waitErr := task.Wait(killCtx); waitErr != nil {
+					e.Log.Error("etcd task wait after SIGKILL failed", "error", waitErr)
+				}
 			}
 		}
 	}
