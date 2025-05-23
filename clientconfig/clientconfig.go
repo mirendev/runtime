@@ -207,7 +207,7 @@ func (c *Config) Merge(other *Config, updateActiveCluster, force bool) error {
 	// Merge clusters from other config
 	for name, cluster := range other.Clusters {
 		if _, exists := c.Clusters[name]; exists && !force {
-			return fmt.Errorf("cluster %q already exists in current config, use force to overwrite", name)
+			return fmt.Errorf("cluster %q already exists in current config, use --force to overwrite", name)
 		}
 
 		c.Clusters[name] = cluster
