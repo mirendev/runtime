@@ -42,10 +42,9 @@ func AllCommands() map[string]cli.CommandFactory {
 			return Infer("app", "Get information about an application", App), nil
 		},
 
-		// TODO: Errors with "unknown object: app"
-		// "apps": func() (cli.Command, error) {
-		// 	return Infer("apps", "List all applications", Apps), nil
-		// },
+		"apps": func() (cli.Command, error) {
+			return Infer("apps", "List all applications", Apps), nil
+		},
 
 		// TODO: Errors with "unknown object: app"
 		// "set": func() (cli.Command, error) {

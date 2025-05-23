@@ -1,16 +1,16 @@
 package commands
 
-import "miren.dev/runtime/app"
+import "miren.dev/runtime/api/app/app_v1alpha"
 
 func Apps(ctx *Context, opts struct {
 	ConfigCentric
 }) error {
-	crudcl, err := ctx.RPCClient("app")
+	crudcl, err := ctx.RPCClient("dev.miren.runtime/app")
 	if err != nil {
 		return err
 	}
 
-	crud := app.CrudClient{Client: crudcl}
+	crud := app_v1alpha.NewCrudClient(crudcl)
 
 	apps, err := crud.List(ctx)
 	if err != nil {
