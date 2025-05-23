@@ -232,7 +232,7 @@ func Dev(ctx *Context, opts struct {
 		return err
 	}
 
-	client, err := rs.Connect(opts.Address, "entities")
+	client, err := rs.Client("entities")
 	if err != nil {
 		ctx.Log.Error("failed to connect to RPC server", "error", err)
 		return err
@@ -262,7 +262,6 @@ func Dev(ctx *Context, opts struct {
 
 	r := runner.NewRunner(ctx.Log, ctx.Server, runner.RunnerConfig{
 		Id:            opts.RunnerId,
-		ServerAddress: opts.Address,
 		ListenAddress: opts.RunnerAddress,
 		Workers:       runner.DefaulWorkers,
 		Config:        rcfg,

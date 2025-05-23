@@ -2,19 +2,30 @@ package clientconfig
 
 import (
 	"context"
+	"net"
 
 	"miren.dev/runtime/pkg/caauth"
 	"miren.dev/runtime/pkg/rpc"
 )
 
-func Local(cc *caauth.ClientCertificate, cert []byte) *Config {
+func Local(cc *caauth.ClientCertificate, listenAddr string) *Config {
+	addr := listenAddr
+	if addr == "" {
+		addr = "localhost:8443"
+	} else {
+		_, port, err := net.SplitHostPort(addr)
+		if err == nil {
+			addr = net.JoinHostPort("127.0.0.1", port)
+		}
+	}
+
 	return &Config{
 		ActiveCluster: "local",
 
 		Clusters: map[string]*ClusterConfig{
 			"local": {
-				Hostname:   "127.0.0.1:8443",
-				CACert:     string(cert),
+				Hostname:   addr,
+				CACert:     string(cc.CACert),
 				ClientCert: string(cc.CertPEM),
 				ClientKey:  string(cc.KeyPEM),
 			},
@@ -23,12 +34,23 @@ func Local(cc *caauth.ClientCertificate, cert []byte) *Config {
 }
 
 func (c *Config) RPCOptions() []rpc.StateOption {
+	if c.ActiveCluster == "" {
+		return nil
+	}
+
+	active, exists := c.Clusters[c.ActiveCluster]
+	if !exists {
+		return nil
+	}
+
 	return []rpc.StateOption{
 		rpc.WithCertPEMs(
-			[]byte(c.Clusters[c.ActiveCluster].ClientCert),
-			[]byte(c.Clusters[c.ActiveCluster].ClientKey),
+			[]byte(active.ClientCert),
+			[]byte(active.ClientKey),
 		),
-		rpc.WithCertificateVerification([]byte(c.Clusters[c.ActiveCluster].CACert)),
+		rpc.WithCertificateVerification([]byte(active.CACert)),
+		rpc.WithEndpoint(active.Hostname),
+		rpc.WithBindAddr("[::]:0"),
 	}
 }
 

@@ -40,9 +40,8 @@ func TestRunnerCoordinatorIntegration(t *testing.T) {
 
 	// Setup runner config
 	runnerCfg := RunnerConfig{
-		Id:            "test-runner",
-		ServerAddress: coordCfg.Address,
-		Workers:       2,
+		Id:      "test-runner",
+		Workers: 2,
 	}
 
 	// Create contexts

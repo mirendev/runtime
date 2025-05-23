@@ -102,22 +102,31 @@ func (r *Runner) Start(ctx context.Context) error {
 	r.Log.Info("Starting runner", "id", r.Id)
 
 	var (
-		rs  *rpc.State
-		err error
+		rs     *rpc.State
+		err    error
+		client *rpc.NetworkClient
 	)
 
 	if r.Config == nil {
 		rs, err = rpc.NewState(ctx, rpc.WithLogger(r.Log), rpc.WithBindAddr(r.ListenAddress), rpc.WithSkipVerify)
+		if err != nil {
+			return err
+		}
+
+		client, err = rs.Connect(r.ServerAddress, "entities")
+		if err != nil {
+			return err
+		}
 	} else {
 		rs, err = r.Config.State(ctx, rpc.WithLogger(r.Log), rpc.WithBindAddr(r.ListenAddress))
-	}
-	if err != nil {
-		return err
-	}
+		if err != nil {
+			return err
+		}
 
-	client, err := rs.Connect(r.ServerAddress, "entities")
-	if err != nil {
-		return err
+		client, err = rs.Client("entities")
+		if err != nil {
+			return err
+		}
 	}
 
 	eas := es.NewEntityAccessClient(client)

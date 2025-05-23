@@ -73,6 +73,8 @@ type State struct {
 	localTransport *quic.Transport
 	localRemote    net.Addr
 
+	defaultEndpoint string
+
 	server *Server
 	hs     *http3.Server
 	ws     *webtransport.Server
@@ -83,6 +85,15 @@ type State struct {
 
 func (s *State) ListenAddr() string {
 	return s.transport.Conn.LocalAddr().String()
+}
+
+func (s *State) LoopbackAddr() string {
+	addr := s.transport.Conn.LocalAddr().String()
+	if _, port, err := net.SplitHostPort(addr); err == nil {
+		return "127.0.0.1:" + port
+	}
+
+	return addr
 }
 
 type cachedConn struct {
@@ -98,6 +109,8 @@ type stateOptions struct {
 	keyData  []byte
 
 	bindAddr string
+
+	endpoint string
 
 	skipVerify bool
 	caCert     []byte
@@ -172,6 +185,12 @@ func WithCertificateVerification(caCert []byte) StateOption {
 
 func WithRequireClientCerts(o *stateOptions) {
 	o.requireClientCerts = true
+}
+
+func WithEndpoint(endpoint string) StateOption {
+	return func(o *stateOptions) {
+		o.endpoint = endpoint
+	}
 }
 
 func NewState(ctx context.Context, opts ...StateOption) (*State, error) {
@@ -260,8 +279,9 @@ func NewState(ctx context.Context, opts ...StateOption) (*State, error) {
 			pubkey:       pub,
 		},
 
-		server:    newServer(),
-		transport: &quic.Transport{Conn: udpConn},
+		defaultEndpoint: so.endpoint,
+		server:          newServer(),
+		transport:       &quic.Transport{Conn: udpConn},
 	}
 
 	qc := quic.Config{
@@ -426,6 +446,14 @@ func (s *State) Close() error {
 	}
 
 	return s.transport.Conn.Close()
+}
+
+func (s *State) Client(name string) (*NetworkClient, error) {
+	if s.defaultEndpoint == "" {
+		return nil, fmt.Errorf("no remote address specified")
+	}
+
+	return s.Connect(s.defaultEndpoint, name)
 }
 
 func (s *State) Connect(remote string, name string) (*NetworkClient, error) {

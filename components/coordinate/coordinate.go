@@ -249,7 +249,19 @@ func (c *Coordinator) NamedConfig(name string) (*clientconfig.Config, error) {
 		return nil, err
 	}
 
-	return clientconfig.Local(cc, c.authority.GetCACertificate()), nil
+	return clientconfig.Local(cc, c.Address), nil
+}
+
+func (c *Coordinator) IssueCertificate(name string) (*caauth.ClientCertificate, error) {
+	if c.authority == nil {
+		return nil, fmt.Errorf("CA authority not initialized")
+	}
+
+	return c.authority.IssueCertificate(caauth.Options{
+		CommonName:   name,
+		Organization: "miren",
+		ValidFor:     1 * year,
+	})
 }
 
 func (c *Coordinator) ListenAddress() string {
@@ -314,7 +326,7 @@ func (c *Coordinator) Start(ctx context.Context) error {
 
 	server.ExposeValue("entities", esv1.AdaptEntityAccess(ess))
 
-	loopback, err := rs.Connect(rs.ListenAddr(), "entities")
+	loopback, err := rs.Connect(rs.LoopbackAddr(), "entities")
 	if err != nil {
 		c.Log.Error("failed to connect to RPC server", "error", err)
 		return err
