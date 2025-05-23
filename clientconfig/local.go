@@ -29,6 +29,8 @@ func (c *Config) RPCOptions() []rpc.StateOption {
 			[]byte(c.Clusters[c.ActiveCluster].ClientKey),
 		),
 		rpc.WithCertificateVerification([]byte(c.Clusters[c.ActiveCluster].CACert)),
+		rpc.WithEndpoint(c.Clusters[c.ActiveCluster].Hostname),
+		rpc.WithBindAddr("[::]:0"),
 	}
 }
 
