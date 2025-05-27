@@ -737,7 +737,6 @@ func (cs *controlStream) NoReply(rs streamRequest, arg any) error {
 }
 
 func (s *Server) startCallStream(w http.ResponseWriter, r *http.Request) {
-	s.state.log.Warn("starting call stream")
 	oid := OID(r.PathValue("oid"))
 
 	method := r.PathValue("method")
