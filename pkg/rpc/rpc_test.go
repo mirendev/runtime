@@ -217,10 +217,11 @@ func TestRPC(t *testing.T) {
 		r.Equal("test", up.reading.Meter())
 		r.Equal(float32(42), up.reading.Temperature())
 
+		time.Sleep(100 * time.Millisecond) // wait for goroutine running close
+
 		up.mu.Lock()
 		defer up.mu.Unlock()
 
-		time.Sleep(100 * time.Millisecond) // wait for goroutine running close
 		r.True(up.closed)
 	})
 
