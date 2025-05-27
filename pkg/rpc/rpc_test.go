@@ -3,6 +3,7 @@ package rpc_test
 import (
 	"context"
 	"log/slog"
+	"net"
 	"os"
 	"sync"
 	"testing"
@@ -394,6 +395,11 @@ func noTestActor(t *testing.T) {
 	t.Run("serves an interface remotely", func(t *testing.T) {
 		r := require.New(t)
 		ctx := t.Context()
+
+		_, err := net.LookupHost("etcd")
+		if err != nil {
+			t.Skip("etcd not available")
+		}
 
 		s := example.AdaptMeter(&exampleMeter{temp: 42})
 
