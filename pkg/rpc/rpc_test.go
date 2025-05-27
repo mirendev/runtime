@@ -340,6 +340,11 @@ func TestRPC(t *testing.T) {
 
 		ss.Close()
 
+		// Give server a chance to shutdown
+		//
+		// TODO: Refactor to use synctest instead? See MIR-175.
+		time.Sleep(100 * time.Millisecond)
+
 		ss, err = rpc.NewState(ctx, rpc.WithSkipVerify,
 			rpc.WithBindAddr("localhost:12321"),
 			rpc.WithLogLevel(slog.LevelDebug))
