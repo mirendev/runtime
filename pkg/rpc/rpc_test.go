@@ -3,6 +3,7 @@ package rpc_test
 import (
 	"context"
 	"log/slog"
+	"net"
 	"os"
 	"sync"
 	"testing"
@@ -141,9 +142,7 @@ func (m *exampleEmit) Emit(ctx context.Context, call *example.EmitTempsEmit) err
 func TestRPC(t *testing.T) {
 	t.Run("serves an interface over rpc", func(t *testing.T) {
 		r := require.New(t)
-
-		ctx, cancel := context.WithCancel(context.Background())
-		defer cancel()
+		ctx := t.Context()
 
 		s := example.AdaptMeter(&exampleMeter{temp: 42})
 
@@ -179,9 +178,7 @@ func TestRPC(t *testing.T) {
 
 	t.Run("handles passing a local object to a remote object", func(t *testing.T) {
 		r := require.New(t)
-
-		ctx, cancel := context.WithCancel(context.Background())
-		defer cancel()
+		ctx := t.Context()
 
 		/*
 			shutdown, err := rpc.SetupOTelSDK(ctx)
@@ -227,9 +224,7 @@ func TestRPC(t *testing.T) {
 
 	t.Run("a capability can be passed to a 3rd party", func(t *testing.T) {
 		r := require.New(t)
-
-		ctx, cancel := context.WithCancel(context.Background())
-		defer cancel()
+		ctx := t.Context()
 
 		var em exampleMeter
 		em.temp = 42
@@ -278,9 +273,7 @@ func TestRPC(t *testing.T) {
 
 	t.Run("can deal with a stream", func(t *testing.T) {
 		r := require.New(t)
-
-		ctx, cancel := context.WithCancel(context.Background())
-		defer cancel()
+		ctx := t.Context()
 
 		s := example.AdaptEmitTemps(&exampleEmit{})
 
@@ -316,9 +309,7 @@ func TestRPC(t *testing.T) {
 
 	t.Run("can reresolve a capability", func(t *testing.T) {
 		r := require.New(t)
-
-		ctx, cancel := context.WithCancel(context.Background())
-		defer cancel()
+		ctx := t.Context()
 
 		em := &exampleMeter{temp: 42}
 
@@ -349,6 +340,11 @@ func TestRPC(t *testing.T) {
 
 		ss.Close()
 
+		// Give server a chance to shutdown
+		//
+		// TODO: Refactor to use synctest instead? See MIR-175.
+		time.Sleep(100 * time.Millisecond)
+
 		ss, err = rpc.NewState(ctx, rpc.WithSkipVerify,
 			rpc.WithBindAddr("localhost:12321"),
 			rpc.WithLogLevel(slog.LevelDebug))
@@ -359,6 +355,7 @@ func TestRPC(t *testing.T) {
 		serv.ExposeValue("meter", s)
 
 		res, err := mc.ReadTemperature(context.Background(), "test")
+		r.NoError(err)
 		r.Equal("test", res.Reading().Meter())
 		r.Equal(float32(42), res.Reading().Temperature())
 
@@ -372,9 +369,7 @@ func TestRPC(t *testing.T) {
 func noTestActor(t *testing.T) {
 	t.Run("serves an interface locally", func(t *testing.T) {
 		r := require.New(t)
-
-		ctx, cancel := context.WithCancel(context.Background())
-		defer cancel()
+		ctx := t.Context()
 
 		s := example.AdaptMeter(&exampleMeter{temp: 42})
 
@@ -404,9 +399,12 @@ func noTestActor(t *testing.T) {
 
 	t.Run("serves an interface remotely", func(t *testing.T) {
 		r := require.New(t)
+		ctx := t.Context()
 
-		ctx, cancel := context.WithCancel(context.Background())
-		defer cancel()
+		_, err := net.LookupHost("etcd")
+		if err != nil {
+			t.Skip("etcd not available")
+		}
 
 		s := example.AdaptMeter(&exampleMeter{temp: 42})
 
@@ -459,9 +457,7 @@ func noTestActor(t *testing.T) {
 
 func BenchmarkRPC(b *testing.B) {
 	r := require.New(b)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := b.Context()
 
 	s := example.AdaptMeter(&exampleMeter{temp: 42})
 
