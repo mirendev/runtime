@@ -349,6 +349,7 @@ func TestRPC(t *testing.T) {
 		serv.ExposeValue("meter", s)
 
 		res, err := mc.ReadTemperature(context.Background(), "test")
+		r.NoError(err)
 		r.Equal("test", res.Reading().Meter())
 		r.Equal(float32(42), res.Reading().Temperature())
 
