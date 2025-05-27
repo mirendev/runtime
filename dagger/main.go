@@ -77,6 +77,7 @@ func (m *Runtime) WithServices(dir *dagger.Directory) *dagger.Container {
 		From("quay.io/minio/minio:RELEASE.2025-04-03T14-56-28Z").
 		WithEnvVariable("MINIO_ROOT_USER", "admin").
 		WithEnvVariable("MINIO_ROOT_PASSWORD", "password").
+		WithEnvVariable("MINIO_UPDATE", "off").
 		WithExposedPort(9000).
 		WithExec([]string{"minio", "server", "/data"}).
 		AsService()
