@@ -1,3 +1,8 @@
+# Silence Dagger message about using its cloud
+export DAGGER_NO_NAG=1
+# Disable telemetry in Dagger and anything else that honors DNT
+export DO_NOT_TRACK=1
+
 test:
 	dagger call -q test --dir=.
 
