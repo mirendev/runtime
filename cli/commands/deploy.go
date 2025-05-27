@@ -27,7 +27,6 @@ import (
 func Deploy(ctx *Context, opts struct {
 	AppCentric
 
-	Dir           string `short:"d" long:"dir" description:"Directory to run from" default:"."`
 	Explain       bool   `short:"x" long:"explain" description:"Explain the build process"`
 	ExplainFormat string `long:"explain-format" description:"Explain format" choice:"auto" choice:"plain" choice:"tty" choice:"rawjson" default:"auto"`
 }) error {
