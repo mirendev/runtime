@@ -82,7 +82,7 @@ var _ AppActivator = (*localActivator)(nil)
 
 func NewLocalActivator(ctx context.Context, log *slog.Logger, eac *entityserver_v1alpha.EntityAccessClient) AppActivator {
 	la := &localActivator{
-		log:      log,
+		log:      log.With("module", "activator"),
 		eac:      eac,
 		versions: make(map[verKey]*verSandboxes),
 	}

@@ -42,7 +42,7 @@ const (
 func NewRunner(log *slog.Logger, reg *asm.Registry, cfg RunnerConfig) *Runner {
 	return &Runner{
 		RunnerConfig: cfg,
-		Log:          log,
+		Log:          log.With("module", "runner"),
 		reg:          reg,
 	}
 }
