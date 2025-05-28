@@ -121,6 +121,7 @@ func (m *Runtime) BuildEnv(dir *dagger.Directory) *dagger.Container {
 			"iproute2",
 			"iptables",
 			"tmux",
+			"vim",
 		}).
 		WithFile("/upstream/containerd.tar.gz", dag.HTTP(containerd)).
 		WithFile("/upstream/buildkit.tar.gz", dag.HTTP(buildkit)).
@@ -179,18 +180,18 @@ func (m *Runtime) Container(
 func (m *Runtime) Test(
 	ctx context.Context,
 	dir *dagger.Directory,
-	// +optional
+// +optional
 	shell bool,
-	// +optional
+// +optional
 	tests string,
-	// +optional
+// +optional
 	count int,
-	// NOTE: This flag cannot be called "verbose" - see https://github.com/dagger/dagger/issues/10428
-	// +optional
+// NOTE: This flag cannot be called "verbose" - see https://github.com/dagger/dagger/issues/10428
+// +optional
 	verboose bool,
-	// +optional
+// +optional
 	run string,
-	// +optional
+// +optional
 	fast bool,
 	// +optional
 	tags string,
@@ -250,7 +251,7 @@ func (m *Runtime) Test(
 func (m *Runtime) Dev(
 	ctx context.Context,
 	dir *dagger.Directory,
-	// +optional
+// +optional
 	tmux bool,
 ) (string, error) {
 	w := m.WithServices(dir).
