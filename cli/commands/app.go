@@ -22,12 +22,21 @@ type AppCentric struct {
 	ConfigCentric
 
 	App string `short:"a" long:"app" env:"RUNTIME_APP" description:"Application get info about"`
+	Dir string `short:"d" long:"dir" description:"Directory to run from" default:"."`
 
 	config *appconfig.AppConfig
 }
 
 func (a *AppCentric) Validate(glbl *GlobalFlags) error {
-	ac, err := appconfig.LoadAppConfig()
+	var ac *appconfig.AppConfig
+	var err error
+
+	if a.Dir != "." {
+		ac, err = appconfig.LoadAppConfigUnder(a.Dir)
+	} else {
+		ac, err = appconfig.LoadAppConfig()
+	}
+
 	if err == nil {
 		a.config = ac
 	}
