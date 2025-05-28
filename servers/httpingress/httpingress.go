@@ -41,7 +41,7 @@ func NewServer(
 	aa activator.AppActivator,
 ) *Server {
 	serv := &Server{
-		Log:  log,
+		Log:  log.With("module", "httpingress"),
 		eac:  eac,
 		aa:   aa,
 		apps: make(map[string]*appUsage),

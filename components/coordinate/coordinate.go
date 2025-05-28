@@ -53,7 +53,7 @@ type CoordinatorConfig struct {
 func NewCoordinator(log *slog.Logger, cfg CoordinatorConfig) *Coordinator {
 	return &Coordinator{
 		CoordinatorConfig: cfg,
-		Log:               log,
+		Log:               log.With("module", "coordinator"),
 	}
 }
 

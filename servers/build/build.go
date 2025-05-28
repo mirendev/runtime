@@ -38,7 +38,7 @@ type Builder struct {
 
 func NewBuilder(log *slog.Logger, eas *entityserver_v1alpha.EntityAccessClient, res netresolve.Resolver, tmpdir string) *Builder {
 	return &Builder{
-		Log:      log,
+		Log:      log.With("module", "builder"),
 		EAS:      eas,
 		Resolver: res,
 		TempDir:  tmpdir,
@@ -191,7 +191,7 @@ func (b *Builder) BuildFromTar(ctx context.Context, state *build_v1alpha.Builder
 	os.MkdirAll(cacheDir, 0755)
 
 	lbk := &LaunchBuildkit{
-		log: b.Log,
+		log: b.Log.With("module", "launchbuildkit"),
 		eac: b.EAS,
 	}
 
