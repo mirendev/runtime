@@ -38,6 +38,14 @@ func (r *Registry) Register(name string, component interface{}) {
 	r.components[name] = component
 }
 
+func (r *Registry) Override(name string, component interface{}) {
+	if r.components == nil {
+		r.components = make(map[string]interface{})
+	}
+
+	r.components[name] = component
+}
+
 func canPopulate(rv reflect.Value) bool {
 	return reflect.Indirect(rv).Kind() == reflect.Struct
 }

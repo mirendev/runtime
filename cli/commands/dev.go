@@ -19,6 +19,7 @@ import (
 	"miren.dev/runtime/api/entityserver"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/components/autotls"
+	"miren.dev/runtime/components/clickhouse"
 	"miren.dev/runtime/components/coordinate"
 	"miren.dev/runtime/components/etcd"
 	"miren.dev/runtime/components/ipalloc"
@@ -35,56 +36,24 @@ import (
 )
 
 func Dev(ctx *Context, opts struct {
-	Address         string   `short:"a" long:"address" description:"Address to listen on" default:"localhost:8443"`
-	RunnerAddress   string   `long:"runner-address" description:"Address to listen on" default:"localhost:8444"`
-	EtcdEndpoints   []string `short:"e" long:"etcd" description:"Etcd endpoints" default:"http://etcd:2379"`
-	EtcdPrefix      string   `short:"p" long:"etcd-prefix" description:"Etcd prefix" default:"/miren"`
-	RunnerId        string   `short:"r" long:"runner-id" description:"Runner ID" default:"dev"`
-	DataPath        string   `short:"d" long:"data-path" description:"Data path" default:"/var/lib/miren"`
-	AdditionalNames []string `long:"dns-names" description:"Additional DNS names assigned to the server cert"`
-	AdditionalIPs   []string `long:"ips" description:"Additional IPs assigned to the server cert"`
-	StandardTLS     bool     `long:"serve-tls" description:"Expose the http ingress on standard TLS ports"`
-	StartEtcd       bool     `long:"start-etcd" description:"Start embedded etcd server"`
-	EtcdClientPort  int      `long:"etcd-client-port" description:"Etcd client port" default:"12379"`
-	EtcdPeerPort    int      `long:"etcd-peer-port" description:"Etcd peer port" default:"12380"`
+	Address                   string   `short:"a" long:"address" description:"Address to listen on" default:"localhost:8443"`
+	RunnerAddress             string   `long:"runner-address" description:"Address to listen on" default:"localhost:8444"`
+	EtcdEndpoints             []string `short:"e" long:"etcd" description:"Etcd endpoints" default:"http://etcd:2379"`
+	EtcdPrefix                string   `short:"p" long:"etcd-prefix" description:"Etcd prefix" default:"/miren"`
+	RunnerId                  string   `short:"r" long:"runner-id" description:"Runner ID" default:"dev"`
+	DataPath                  string   `short:"d" long:"data-path" description:"Data path" default:"/var/lib/miren"`
+	AdditionalNames           []string `long:"dns-names" description:"Additional DNS names assigned to the server cert"`
+	AdditionalIPs             []string `long:"ips" description:"Additional IPs assigned to the server cert"`
+	StandardTLS               bool     `long:"serve-tls" description:"Expose the http ingress on standard TLS ports"`
+	StartEtcd                 bool     `long:"start-etcd" description:"Start embedded etcd server"`
+	EtcdClientPort            int      `long:"etcd-client-port" description:"Etcd client port" default:"12379"`
+	EtcdPeerPort              int      `long:"etcd-peer-port" description:"Etcd peer port" default:"12380"`
+	StartClickHouse           bool     `long:"start-clickhouse" description:"Start embedded ClickHouse server"`
+	ClickHouseHTTPPort        int      `long:"clickhouse-http-port" description:"ClickHouse HTTP port" default:"8223"`
+	ClickHouseNativePort      int      `long:"clickhouse-native-port" description:"ClickHouse native port" default:"9009"`
+	ClickHouseInterServerPort int      `long:"clickhouse-interserver-port" description:"ClickHouse inter-server port" default:"9010"`
 }) error {
 	eg, sub := errgroup.WithContext(ctx)
-
-	res, hm := netresolve.NewLocalResolver()
-
-	var (
-		cpu  metrics.CPUUsage
-		mem  metrics.MemoryUsage
-		logs observability.LogReader
-	)
-
-	err := ctx.Server.Populate(&mem)
-	if err != nil {
-		ctx.Log.Error("failed to populate memory usage", "error", err)
-		return err
-	}
-
-	err = ctx.Server.Populate(&cpu)
-	if err != nil {
-		ctx.Log.Error("failed to populate CPU usage", "error", err)
-		return err
-	}
-
-	err = ctx.Server.Populate(&logs)
-	if err != nil {
-		ctx.Log.Error("failed to populate log reader", "error", err)
-		return err
-	}
-
-	var additionalIps []net.IP
-	for _, ip := range opts.AdditionalIPs {
-		addr := net.ParseIP(ip)
-		if addr == nil {
-			ctx.Log.Error("failed to parse additional IP", "ip", ip)
-			return fmt.Errorf("failed to parse additional IP %s", ip)
-		}
-		additionalIps = append(additionalIps, addr)
-	}
 
 	// Start embedded etcd server if requested
 	if opts.StartEtcd {
@@ -121,6 +90,84 @@ func Dev(ctx *Context, opts struct {
 
 		// Ensure cleanup on exit
 		defer etcdComponent.Stop(context.Background())
+	}
+
+	// Start embedded ClickHouse server if requested
+	if opts.StartClickHouse {
+		ctx.Log.Info("starting embedded clickhouse server",
+			"http-port", opts.ClickHouseHTTPPort,
+			"native-port", opts.ClickHouseNativePort,
+			"interserver-port", opts.ClickHouseInterServerPort)
+
+		// Get containerd client from registry
+		var cc *containerd.Client
+		err := ctx.Server.Resolve(&cc)
+		if err != nil {
+			ctx.Log.Error("failed to get containerd client for clickhouse", "error", err)
+			return err
+		}
+
+		clickhouseComponent := clickhouse.NewClickHouseComponent(ctx.Log, cc, "runtime", opts.DataPath)
+
+		clickhouseConfig := clickhouse.ClickHouseConfig{
+			HTTPPort:        opts.ClickHouseHTTPPort,
+			NativePort:      opts.ClickHouseNativePort,
+			InterServerPort: opts.ClickHouseInterServerPort,
+			User:            "default",
+			Password:        "default",
+		}
+
+		err = clickhouseComponent.Start(sub, clickhouseConfig)
+		if err != nil {
+			ctx.Log.Error("failed to start clickhouse component", "error", err)
+			return err
+		}
+
+		ctx.Log.Info("embedded clickhouse started",
+			"http-endpoint", clickhouseComponent.HTTPEndpoint(),
+			"native-endpoint", clickhouseComponent.NativeEndpoint())
+
+		// Register ClickHouse component in the registry for other components to use
+		ctx.Server.Override("clickhouse-address", clickhouseComponent.NativeEndpoint())
+
+		// Ensure cleanup on exit
+		defer clickhouseComponent.Stop(context.Background())
+	}
+
+	res, hm := netresolve.NewLocalResolver()
+
+	var (
+		cpu  metrics.CPUUsage
+		mem  metrics.MemoryUsage
+		logs observability.LogReader
+	)
+
+	err := ctx.Server.Populate(&mem)
+	if err != nil {
+		ctx.Log.Error("failed to populate memory usage", "error", err)
+		return err
+	}
+
+	err = ctx.Server.Populate(&cpu)
+	if err != nil {
+		ctx.Log.Error("failed to populate CPU usage", "error", err)
+		return err
+	}
+
+	err = ctx.Server.Populate(&logs)
+	if err != nil {
+		ctx.Log.Error("failed to populate log reader", "error", err)
+		return err
+	}
+
+	var additionalIps []net.IP
+	for _, ip := range opts.AdditionalIPs {
+		addr := net.ParseIP(ip)
+		if addr == nil {
+			ctx.Log.Error("failed to parse additional IP", "ip", ip)
+			return fmt.Errorf("failed to parse additional IP %s", ip)
+		}
+		additionalIps = append(additionalIps, addr)
 	}
 
 	co := coordinate.NewCoordinator(ctx.Log, coordinate.CoordinatorConfig{
