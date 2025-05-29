@@ -116,11 +116,11 @@ func (c *ClickHouseComponent) Start(ctx context.Context, config ClickHouseConfig
 	}
 
 	if err := os.Chown(logPath, 101, 101); err != nil {
-		return fmt.Errorf("failed to set ownership for data directory: %w", err)
+		return fmt.Errorf("failed to set ownership for log directory: %w", err)
 	}
 
 	if err := os.Chmod(logPath, 0755); err != nil {
-		return fmt.Errorf("failed to set permissions for data directory: %w", err)
+		return fmt.Errorf("failed to set permissions for log directory: %w", err)
 	}
 
 	err = os.MkdirAll(configPath, 0755)
