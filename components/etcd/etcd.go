@@ -22,9 +22,10 @@ import (
 )
 
 const (
-	etcdImage         = "gcr.io/etcd-development/etcd:v3.5.15"
+	etcdImage         = "docker.io/bitnami/etcd:3.5.19"
+	etcdBinLocation   = "/opt/bitnami/etcd/bin/etcd"
 	etcdContainerName = "runtime-etcd"
-	etcdDataDir       = "/etcd-data"
+	etcdDataDir       = "/bitnami/etcd/data"
 	defaultEtcdPort   = 12379 // Non-default port to avoid conflicts
 	defaultPeerPort   = 12380 // Non-default port to avoid conflicts
 )
@@ -335,9 +336,10 @@ func (e *EtcdComponent) createContainer(ctx context.Context, image containerd.Im
 	// Create container spec with etcd configuration using host networking
 	opts := []oci.SpecOpts{
 		oci.WithImageConfig(image),
+		oci.WithUser("root"),
 		oci.WithHostNamespace(specs.NetworkNamespace), // Use host network namespace
 		oci.WithProcessArgs(
-			"/usr/local/bin/etcd",
+			etcdBinLocation,
 			"--name", config.Name,
 			"--data-dir", config.DataDir,
 			"--listen-client-urls", fmt.Sprintf("http://0.0.0.0:%d", config.ClientPort),
