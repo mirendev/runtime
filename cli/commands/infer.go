@@ -226,7 +226,7 @@ func (w *Cmd) Run(args []string) int {
 		if ok && flagsErr.Type == flags.ErrHelp {
 			fmt.Fprintln(os.Stdout, err)
 		} else {
-			fmt.Fprintf(os.Stderr, "An error occured:\n%s\n", err)
+			fmt.Fprintf(os.Stderr, "An error occurred:\n%s\n", err)
 		}
 
 		return 1
