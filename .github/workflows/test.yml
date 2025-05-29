@@ -8,26 +8,18 @@ on:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: depot-ubuntu-latest,dagger=0.18.9
     steps:
     - uses: actions/checkout@v4
     - name: Test
-      uses: dagger/dagger-for-github@v7
-      with:
-        verb: call
-        args: test --dir=.
-        cloud-token: ${{ secrets.DAGGER_CLOUD_TOKEN }}
+      run: dagger call test --dir=.
 
   test-e2e:
-    runs-on: ubuntu-latest
+    runs-on: depot-ubuntu-latest,dagger=0.18.9
     steps:
     - uses: actions/checkout@v4
     - name: Test
-      uses: dagger/dagger-for-github@v7
-      with:
-        verb: call
-        args: test --dir=. --tests="./e2e" --tags="e2e"
-        cloud-token: ${{ secrets.DAGGER_CLOUD_TOKEN }}
+      run: dagger call test --dir=. --tests="./e2e" --tags="e2e"
 
   build:
     runs-on: ubuntu-latest
