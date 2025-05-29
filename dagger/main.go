@@ -80,8 +80,9 @@ func (m *Runtime) WithServices(dir *dagger.Directory) *dagger.Container {
 		WithEnvVariable("MINIO_ROOT_PASSWORD", "password").
 		WithEnvVariable("MINIO_UPDATE", "off").
 		WithExposedPort(9000).
-		WithExec([]string{"minio", "server", "/data"}).
-		AsService()
+		AsService(dagger.ContainerAsServiceOpts{
+			Args: []string{"minio", "server", "/data"},
+		})
 
 	return m.BuildEnv(dir).
 		WithServiceBinding("clickhouse", ch).
