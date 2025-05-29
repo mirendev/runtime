@@ -5,6 +5,7 @@ package main
 import (
 	"context"
 	"dagger/runtime/internal/dagger"
+	"fmt"
 	"runtime"
 	"strconv"
 	"strings"
@@ -79,8 +80,9 @@ func (m *Runtime) WithServices(dir *dagger.Directory) *dagger.Container {
 		WithEnvVariable("MINIO_ROOT_PASSWORD", "password").
 		WithEnvVariable("MINIO_UPDATE", "off").
 		WithExposedPort(9000).
-		WithExec([]string{"minio", "server", "/data"}).
-		AsService()
+		AsService(dagger.ContainerAsServiceOpts{
+			Args: []string{"minio", "server", "/data"},
+		})
 
 	return m.BuildEnv(dir).
 		WithServiceBinding("clickhouse", ch).
@@ -190,6 +192,8 @@ func (m *Runtime) Test(
 	run string,
 	// +optional
 	fast bool,
+	// +optional
+	tags string,
 ) (string, error) {
 	w := m.WithServices(dir).
 		WithDirectory("/src", dir).
@@ -229,6 +233,10 @@ func (m *Runtime) Test(
 
 		if fast {
 			args = append(args, "-failfast")
+		}
+
+		if tags != "" {
+			args = append(args, fmt.Sprintf("--tags=%s", tags))
 		}
 
 		w = w.WithExec(args, dagger.ContainerWithExecOpts{

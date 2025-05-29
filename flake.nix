@@ -24,6 +24,9 @@
             pkgs.go_1_24
             dagger.packages.${system}.dagger
           ];
+
+          # Allow gopls to work in e2e tests
+          GOFLAGS = "-tags=e2e";
         };
       }
     );
