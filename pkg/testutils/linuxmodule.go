@@ -11,5 +11,12 @@ func IsModuleLoaded(moduleName string) bool {
 	if err != nil {
 		return false
 	}
-	return strings.Contains(string(content), moduleName)
+	lines := strings.SplitSeq(string(content), "\n")
+	for line := range lines {
+		fields := strings.Fields(line)
+		if len(fields) > 0 && fields[0] == moduleName {
+			return true
+		}
+	}
+	return false
 }
