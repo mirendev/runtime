@@ -134,13 +134,6 @@ func (c *ClickHouseComponent) Start(ctx context.Context, config ClickHouseConfig
 		return fmt.Errorf("failed to generate config files: %w", err)
 	}
 
-	// Check if container already exists
-	existingContainer, err := c.CC.LoadContainer(ctx, clickhouseContainerName)
-	if err == nil {
-		c.Log.Info("found existing clickhouse container, restarting it", "container_id", existingContainer.ID())
-		return c.restartExistingContainer(ctx, existingContainer, config)
-	}
-
 	// Set defaults
 	if config.HTTPPort == 0 {
 		config.HTTPPort = defaultHTTPPort
@@ -169,6 +162,13 @@ func (c *ClickHouseComponent) Start(ctx context.Context, config ClickHouseConfig
 	c.httpPort = config.HTTPPort
 	c.nativePort = config.NativePort
 	c.interSvrPort = config.InterServerPort
+
+	// Check if container already exists
+	existingContainer, err := c.CC.LoadContainer(ctx, clickhouseContainerName)
+	if err == nil {
+		c.Log.Info("found existing clickhouse container, restarting it", "container_id", existingContainer.ID())
+		return c.restartExistingContainer(ctx, existingContainer, config)
+	}
 
 	c.Log.Info("starting clickhouse with host networking",
 		"http_port", config.HTTPPort,
