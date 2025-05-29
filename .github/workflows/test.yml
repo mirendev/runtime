@@ -18,6 +18,17 @@ jobs:
         args: test --dir=.
         cloud-token: ${{ secrets.DAGGER_CLOUD_TOKEN }}
 
+  test-e2e:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Test
+      uses: dagger/dagger-for-github@v7
+      with:
+        verb: call
+        args: test --dir=. --tests="./e2e" --tags="e2e"
+        cloud-token: ${{ secrets.DAGGER_CLOUD_TOKEN }}
+
   build:
     runs-on: ubuntu-latest
     steps:

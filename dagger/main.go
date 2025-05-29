@@ -5,6 +5,7 @@ package main
 import (
 	"context"
 	"dagger/runtime/internal/dagger"
+	"fmt"
 	"runtime"
 	"strconv"
 	"strings"
@@ -190,6 +191,8 @@ func (m *Runtime) Test(
 	run string,
 	// +optional
 	fast bool,
+	// +optional
+	tags string,
 ) (string, error) {
 	w := m.WithServices(dir).
 		WithDirectory("/src", dir).
@@ -229,6 +232,10 @@ func (m *Runtime) Test(
 
 		if fast {
 			args = append(args, "-failfast")
+		}
+
+		if tags != "" {
+			args = append(args, fmt.Sprintf("--tags=%s", tags))
 		}
 
 		w = w.WithExec(args, dagger.ContainerWithExecOpts{
