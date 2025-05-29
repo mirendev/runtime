@@ -16,7 +16,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sys/unix"
-	"miren.dev/runtime/components/clickhouse"
+	mc "miren.dev/runtime/components/clickhouse"
 )
 
 const testNamespace = "runtime-clickhouse-test"
@@ -42,17 +42,20 @@ func TestClickHouseComponentIntegration(t *testing.T) {
 	}))
 
 	// Create ClickHouse component
-	component := clickhouse.NewClickHouseComponent(log, cc, testNamespace, tmpDir)
+	component := mc.NewClickHouseComponent(log, cc, testNamespace, tmpDir)
 
 	// Use test-specific ports to avoid conflicts
 	httpPort := 28123
 	nativePort := 29000
 	interServerPort := 29009
 
-	config := clickhouse.ClickHouseConfig{
+	config := mc.ClickHouseConfig{
 		HTTPPort:        httpPort,
 		NativePort:      nativePort,
 		InterServerPort: interServerPort,
+		Database:        "default",
+		User:            "default",
+		Password:        "default",
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
@@ -93,7 +96,7 @@ func TestClickHouseComponentIntegration(t *testing.T) {
 	assert.NotEmpty(t, nativeEndpoint, "native endpoint should not be empty")
 	assert.NotEmpty(t, interServerEndpoint, "inter-server endpoint should not be empty")
 
-	expectedHTTPEndpoint := fmt.Sprintf("http://localhost:%d", httpPort)
+	expectedHTTPEndpoint := fmt.Sprintf("localhost:%d", httpPort)
 	expectedNativeEndpoint := fmt.Sprintf("localhost:%d", nativePort)
 	expectedInterServerEndpoint := fmt.Sprintf("localhost:%d", interServerPort)
 
@@ -120,6 +123,11 @@ func TestClickHouseComponentIntegration(t *testing.T) {
 	t.Log("Testing ClickHouse functionality...")
 	conn, err := clickhouse.Open(&clickhouse.Options{
 		Addr: []string{nativeEndpoint},
+		Auth: clickhouse.Auth{
+			Database: "default",
+			Username: "default",
+			Password: "default",
+		},
 		Settings: clickhouse.Settings{
 			"max_execution_time": 60,
 		},
@@ -132,6 +140,11 @@ func TestClickHouseComponentIntegration(t *testing.T) {
 		time.Sleep(30 * time.Second)
 		conn, err = clickhouse.Open(&clickhouse.Options{
 			Addr: []string{nativeEndpoint},
+			Auth: clickhouse.Auth{
+				Database: "default",
+				Username: "default",
+				Password: "default",
+			},
 			Settings: clickhouse.Settings{
 				"max_execution_time": 60,
 			},
@@ -247,6 +260,11 @@ func TestClickHouseComponentIntegration(t *testing.T) {
 		Settings: clickhouse.Settings{
 			"max_execution_time": 60,
 		},
+		Auth: clickhouse.Auth{
+			Database: "default",
+			Username: "default",
+			Password: "default",
+		},
 		DialTimeout: 30 * time.Second,
 	})
 	require.NoError(t, err, "failed to create ClickHouse connection after restart")
@@ -290,3 +308,4 @@ func cleanupContainer(t *testing.T, cc *containerd.Client, namespace string) {
 		}
 	}
 }
+
