@@ -12,7 +12,7 @@ jobs:
     steps:
     - uses: actions/checkout@v4
     - name: Enable netlink
-      run: modprobe nbd
+      run: sudo modprobe nbd
     - name: Test
       run: dagger --progress=plain call test --dir=.
 
@@ -21,7 +21,7 @@ jobs:
     steps:
     - uses: actions/checkout@v4
     - name: Enable netlink
-      run: modprobe nbd
+      run: sudo modprobe nbd
     - name: Test
       run: dagger --progress=plain call test --dir=. --tests="./e2e" --tags="e2e"
 
