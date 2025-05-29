@@ -18,7 +18,7 @@ func TestLogWriter(t *testing.T) {
 		Level: slog.LevelDebug,
 	}))
 
-	writer := newLogWriter(logger, slog.LevelInfo, "stdout", "test-component", LoggerOpts{})
+	writer := newLogWriter(logger, slog.LevelInfo, LoggerOpts{})
 
 	// Write a simple message
 	message := "This is a test message"
@@ -29,8 +29,6 @@ func TestLogWriter(t *testing.T) {
 	// Check the logged output
 	logOutput := buf.String()
 	assert.Contains(t, logOutput, message)
-	assert.Contains(t, logOutput, "test-component")
-	assert.Contains(t, logOutput, "stdout")
 }
 
 func TestLogWriterMultipleLines(t *testing.T) {
@@ -39,18 +37,18 @@ func TestLogWriterMultipleLines(t *testing.T) {
 		Level: slog.LevelDebug,
 	}))
 
-	writer := newLogWriter(logger, slog.LevelInfo, "stdout", "multiline-test", LoggerOpts{})
+	writer := newLogWriter(logger.With("module", "multiline-test"), slog.LevelInfo, LoggerOpts{})
 
 	// Write multiple lines in one call
 	lines := []string{"Line 1", "Line 2", "Line 3"}
 	message := strings.Join(lines, "\n") + "\n"
-	
+
 	n, err := writer.Write([]byte(message))
 	require.NoError(t, err)
 	assert.Equal(t, len(message), n)
 
 	logOutput := buf.String()
-	
+
 	// Each line should appear in the log
 	for _, line := range lines {
 		assert.Contains(t, logOutput, line)
@@ -66,7 +64,7 @@ func TestLogWriterPartialWrites(t *testing.T) {
 		Level: slog.LevelDebug,
 	}))
 
-	writer := newLogWriter(logger, slog.LevelInfo, "stdout", "partial-test", LoggerOpts{})
+	writer := newLogWriter(logger, slog.LevelInfo, LoggerOpts{})
 
 	// Write partial line first
 	n1, err := writer.Write([]byte("Partial "))
@@ -85,7 +83,6 @@ func TestLogWriterPartialWrites(t *testing.T) {
 	// Now should have the complete message logged
 	logOutput := buf.String()
 	assert.Contains(t, logOutput, "Partial line complete")
-	assert.Contains(t, logOutput, "partial-test")
 }
 
 func TestLogWriterEmptyLines(t *testing.T) {
@@ -94,7 +91,7 @@ func TestLogWriterEmptyLines(t *testing.T) {
 		Level: slog.LevelDebug,
 	}))
 
-	writer := newLogWriter(logger, slog.LevelInfo, "stdout", "empty-test", LoggerOpts{})
+	writer := newLogWriter(logger, slog.LevelInfo, LoggerOpts{})
 
 	// Write some empty lines mixed with content
 	message := "\nactual content\n\n"
@@ -102,10 +99,10 @@ func TestLogWriterEmptyLines(t *testing.T) {
 	require.NoError(t, err)
 
 	logOutput := buf.String()
-	
+
 	// Should contain the actual content
 	assert.Contains(t, logOutput, "actual content")
-	
+
 	// Count log entries - should only have one for the non-empty line
 	logLines := strings.Split(strings.TrimSpace(logOutput), "\n")
 	contentLines := 0
@@ -123,7 +120,7 @@ func TestLogWriterFlush(t *testing.T) {
 		Level: slog.LevelDebug,
 	}))
 
-	writer := newLogWriter(logger, slog.LevelInfo, "stdout", "flush-test", LoggerOpts{})
+	writer := newLogWriter(logger, slog.LevelInfo, LoggerOpts{})
 
 	// Write partial line without newline
 	_, err := writer.Write([]byte("incomplete line"))
@@ -138,7 +135,6 @@ func TestLogWriterFlush(t *testing.T) {
 	// Now should have the incomplete line logged
 	logOutput := buf.String()
 	assert.Contains(t, logOutput, "incomplete line")
-	assert.Contains(t, logOutput, "flush-test")
 }
 
 func TestLogWriterConcurrentWrites(t *testing.T) {
@@ -147,11 +143,11 @@ func TestLogWriterConcurrentWrites(t *testing.T) {
 		Level: slog.LevelDebug,
 	}))
 
-	writer := newLogWriter(logger, slog.LevelInfo, "stdout", "concurrent-test", LoggerOpts{})
+	writer := newLogWriter(logger, slog.LevelInfo, LoggerOpts{})
 
 	// Write multiple lines concurrently
 	done := make(chan bool, 10)
-	
+
 	for i := 0; i < 10; i++ {
 		go func(id int) {
 			defer func() { done <- true }()
@@ -169,7 +165,7 @@ func TestLogWriterConcurrentWrites(t *testing.T) {
 	}
 
 	logOutput := buf.String()
-	
+
 	// Should contain messages from all goroutines
 	for i := 0; i < 10; i++ {
 		expected := fmt.Sprintf("concurrent message %d", i)
@@ -203,13 +199,13 @@ func TestLogWriterWithIgnorePattern(t *testing.T) {
 	opts := LoggerOpts{
 		IgnorePattern: regexp.MustCompile(`^\d{4}\.\d{2}\.\d{2} \d{2}:\d{2}:\d{2}\.\d+`),
 	}
-	writer := newLogWriter(logger, slog.LevelInfo, "stdout", "clickhouse-test", opts)
+	writer := newLogWriter(logger, slog.LevelInfo, opts)
 
 	// Write lines with and without timestamps
 	lines := []string{
-		"2025.05.29 22:30:27.021829 This should be ignored",
+		"2025.05.29 22:30:27.021829 This header should be ignored",
 		"This should be logged",
-		"2025.05.29 22:30:28.123456 This should also be ignored",
+		"2025.05.29 22:30:28.123456 This header should also be ignored",
 		"Another line to log",
 	}
 
@@ -219,14 +215,16 @@ func TestLogWriterWithIgnorePattern(t *testing.T) {
 	}
 
 	logOutput := buf.String()
-	
+
 	// Should contain non-timestamp lines
 	assert.Contains(t, logOutput, "This should be logged")
 	assert.Contains(t, logOutput, "Another line to log")
-	
-	// Should NOT contain timestamp lines
-	assert.NotContains(t, logOutput, "This should be ignored")
-	assert.NotContains(t, logOutput, "This should also be ignored")
+	assert.Contains(t, logOutput, "This header should be ignored")
+	assert.Contains(t, logOutput, "This header should also be ignored")
+
+	// Should NOT contain timestamp bits
+	assert.NotContains(t, logOutput, "2025.05.29 22:30:27.021829")
+	assert.NotContains(t, logOutput, "2025.05.29 22:30:28.123456")
 }
 
 func TestLogWriterWithJSONParsing(t *testing.T) {
@@ -236,7 +234,7 @@ func TestLogWriterWithJSONParsing(t *testing.T) {
 	}))
 
 	opts := LoggerOpts{ParseJSON: true}
-	writer := newLogWriter(logger, slog.LevelInfo, "stdout", "etcd-test", opts)
+	writer := newLogWriter(logger, slog.LevelInfo, opts)
 
 	// Write JSON log line similar to etcd output
 	jsonLine := `{"level":"info","ts":"2025-05-29T22:30:27.123Z","msg":"starting etcd server","version":"3.5.15","cluster-id":"abc123"}`
@@ -244,19 +242,16 @@ func TestLogWriterWithJSONParsing(t *testing.T) {
 	require.NoError(t, err)
 
 	logOutput := buf.String()
-	
+
 	// Should contain the message
 	assert.Contains(t, logOutput, "starting etcd server")
-	
-	// Should contain component info
-	assert.Contains(t, logOutput, "etcd-test")
-	
+
 	// Should contain extracted fields but not 'ts' or 'level'
 	assert.Contains(t, logOutput, "version")
 	assert.Contains(t, logOutput, "3.5.15")
 	assert.Contains(t, logOutput, "cluster-id")
 	assert.Contains(t, logOutput, "abc123")
-	
+
 	// Should NOT contain the timestamp field
 	assert.NotContains(t, logOutput, "2025-05-29T22:30:27.123Z")
 }
@@ -268,7 +263,7 @@ func TestLogWriterJSONWithDifferentLevels(t *testing.T) {
 	}))
 
 	opts := LoggerOpts{ParseJSON: true}
-	writer := newLogWriter(logger, slog.LevelInfo, "stdout", "level-test", opts)
+	writer := newLogWriter(logger, slog.LevelInfo, opts)
 
 	// Test different log levels
 	testCases := []struct {
@@ -289,7 +284,7 @@ func TestLogWriterJSONWithDifferentLevels(t *testing.T) {
 	}
 
 	logOutput := buf.String()
-	
+
 	// Check that all messages appear
 	for _, tc := range testCases {
 		assert.Contains(t, logOutput, tc.message)
@@ -308,7 +303,7 @@ func TestWithLoggerOptions(t *testing.T) {
 	}))
 
 	// Test WithLogger with options
-	creator := WithLogger(logger, "options-test", 
+	creator := WithLogger(logger, "options-test",
 		WithIgnorePattern(`^\d{4}-\d{2}-\d{2}`),
 		WithJSONParsing())
 	require.NotNil(t, creator)
@@ -316,11 +311,12 @@ func TestWithLoggerOptions(t *testing.T) {
 	// Test convenience functions work
 	ignoreOpt := WithIgnorePattern("test.*pattern")
 	jsonOpt := WithJSONParsing()
-	
+
 	opts := LoggerOpts{}
 	ignoreOpt(&opts)
 	jsonOpt(&opts)
-	
+
 	assert.NotNil(t, opts.IgnorePattern)
 	assert.True(t, opts.ParseJSON)
 }
+
