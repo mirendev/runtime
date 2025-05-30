@@ -45,7 +45,32 @@ mount -t tracefs nodev /sys/kernel/debug/tracing
 mount -t tracefs nodev /sys/kernel/tracing
 
 # Wait for containerd and buildkitd to start
-sleep 10
+echo "Waiting for containerd..."
+timeout=30
+count=0
+while ! ctr --address /run/containerd/containerd.sock version >/dev/null 2>&1; do
+  sleep 1
+  count=$((count + 1))
+  if [ "$count" -ge "$timeout" ]; then
+    echo "Timeout waiting for containerd"
+    exit 1
+  fi
+done
+echo "containerd is ready"
+
+# Wait for buildkitd with timeout
+echo "Waiting for buildkitd..."
+timeout=30
+count=0
+while ! buildctl debug info >/dev/null 2>&1; do
+  sleep 1
+  count=$((count + 1))
+  if [ "$count" -ge "$timeout" ]; then
+    echo "Timeout waiting for buildkitd"
+    exit 1
+  fi
+done
+echo "buildkitd is ready"
 
 cd /src
 
