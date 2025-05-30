@@ -1,7 +1,9 @@
 package commands
 
 import (
+	"errors"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
+	"miren.dev/runtime/pkg/cond"
 	"miren.dev/runtime/pkg/rpc"
 	"os"
 )
@@ -26,7 +28,13 @@ func EntityDelete(ctx *Context, opts struct {
 
 	res, err := eac.Delete(ctx, opts.Id)
 	if err != nil {
-		ctx.Log.Info("failed to delete entity", "error", err)
+		ctx.Log.Error("failed to delete entity", "error", err)
+		//If entity doesnt exist, consider the delete to be successful.
+		if errors.Is(err, cond.ErrNotFound{}) {
+			ctx.Log.Info("Entity already deleted or does not exist", "id", opts.Id)
+			os.Stdout.WriteString("Entity deleted successfully.\n")
+			return nil
+		}
 		return err
 	}
 	ctx.Log.Info("Entity deleted successfully", "id", opts.Id, "revision", res.HasRevision)
