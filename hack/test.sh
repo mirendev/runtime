@@ -45,7 +45,7 @@ mount -t tracefs nodev /sys/kernel/debug/tracing
 mount -t tracefs nodev /sys/kernel/tracing
 
 # Wait for containerd and buildkitd to start
-sleep 1
+sleep 10
 
 cd /src
 
