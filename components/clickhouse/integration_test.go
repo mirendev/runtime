@@ -295,7 +295,16 @@ func cleanupContainer(t *testing.T, cc *containerd.Client, namespace string) {
 		task, err := container.Task(ctx, nil)
 		if err == nil {
 			task.Kill(ctx, unix.SIGTERM)
-			task.Wait(ctx)
+			es, err := task.Wait(ctx)
+			require.NoError(t, err)
+
+			select {
+			case <-ctx.Done():
+				require.NoError(t, ctx.Err())
+			case <-es:
+				//ok
+			}
+
 			task.Delete(ctx)
 		}
 
