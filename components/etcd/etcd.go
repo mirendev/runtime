@@ -14,11 +14,11 @@ import (
 	"time"
 
 	containerd "github.com/containerd/containerd/v2/client"
-	"github.com/containerd/containerd/v2/pkg/cio"
 	"github.com/containerd/containerd/v2/pkg/namespaces"
 	"github.com/containerd/containerd/v2/pkg/oci"
 	"github.com/opencontainers/runtime-spec/specs-go"
 	"golang.org/x/sys/unix"
+	"miren.dev/runtime/pkg/slogout"
 )
 
 const (
@@ -125,8 +125,8 @@ func (e *EtcdComponent) Start(ctx context.Context, config EtcdConfig) error {
 
 	e.container = container
 
-	// Start container
-	task, err := container.NewTask(ctx, cio.NewCreator(cio.WithStdio))
+	// Start container with structured logging for JSON output
+	task, err := container.NewTask(ctx, slogout.WithLogger(e.Log, "etcd", slogout.WithJSONParsing()))
 	if err != nil {
 		container.Delete(ctx, containerd.WithSnapshotCleanup)
 		return fmt.Errorf("failed to create etcd task: %w", err)
@@ -307,9 +307,9 @@ func (e *EtcdComponent) restartExistingContainer(ctx context.Context, container 
 		task.Delete(ctx)
 	}
 
-	// Create and start new task
+	// Create and start new task with structured logging for JSON output
 	e.Log.Info("creating new task for existing container")
-	task, err = container.NewTask(ctx, cio.NewCreator(cio.WithStdio))
+	task, err = container.NewTask(ctx, slogout.WithLogger(e.Log, "etcd", slogout.WithJSONParsing()))
 	if err != nil {
 		return fmt.Errorf("failed to create new task for existing container: %w", err)
 	}
@@ -336,6 +336,8 @@ func (e *EtcdComponent) createContainer(ctx context.Context, image containerd.Im
 	opts := []oci.SpecOpts{
 		oci.WithImageConfig(image),
 		oci.WithHostNamespace(specs.NetworkNamespace), // Use host network namespace
+		oci.WithHostHostsFile,
+		oci.WithHostResolvconf,
 		oci.WithProcessArgs(
 			"/usr/local/bin/etcd",
 			"--name", config.Name,
