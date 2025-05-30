@@ -38,6 +38,10 @@ EOF
 
 mkdir -p /run/containerd
 containerd --root /data --state /data/state --address /run/containerd/containerd.sock -l trace >/dev/null 2>&1 &
+
+# Since our buildkit dir is cached across runs, there might be a stale lockfile
+# sitting around that should be safe to kill
+rm -f /data/buildkit/buildkit.lock
 buildkitd --root /data/buildkit 2>&1 &
 
 mount -t debugfs nodev /sys/kernel/debug
