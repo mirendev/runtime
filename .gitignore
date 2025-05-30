@@ -4,3 +4,4 @@ tmp/
 bin/
 .aider*
 .idea/
+.claude
