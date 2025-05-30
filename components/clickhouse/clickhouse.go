@@ -17,6 +17,7 @@ import (
 
 	"github.com/ClickHouse/clickhouse-go/v2"
 	containerd "github.com/containerd/containerd/v2/client"
+	"github.com/containerd/containerd/v2/core/containers"
 	"github.com/containerd/containerd/v2/pkg/namespaces"
 	"github.com/containerd/containerd/v2/pkg/oci"
 	"github.com/opencontainers/runtime-spec/specs-go"
@@ -455,6 +456,16 @@ func (c *ClickHouseComponent) createContainer(ctx context.Context, image contain
 		oci.WithUIDGID(101, 101),
 		oci.WithHostHostsFile,
 		oci.WithHostResolvconf,
+
+		func(ctx context.Context, c1 oci.Client, c2 *containers.Container, s *oci.Spec) error {
+			s.Process.Rlimits = append(s.Process.Rlimits, specs.POSIXRlimit{
+				Type: "RLIMIT_NOFILE",
+				Hard: 1048576, // 1M file descriptors
+				Soft: 1048576,
+			})
+
+			return nil
+		},
 
 		oci.WithMounts([]specs.Mount{
 			{
