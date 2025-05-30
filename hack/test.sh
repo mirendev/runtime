@@ -38,7 +38,7 @@ EOF
 
 mkdir -p /run/containerd
 containerd --root /data --state /data/state --address /run/containerd/containerd.sock -l trace >/dev/null 2>&1 &
-buildkitd --root /data/buildkit >/dev/null 2>&1 &
+buildkitd --root /data/buildkit 2>&1 &
 
 mount -t debugfs nodev /sys/kernel/debug
 mount -t tracefs nodev /sys/kernel/debug/tracing
