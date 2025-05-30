@@ -41,7 +41,7 @@ containerd --root /data --state /data/state --address /run/containerd/containerd
 
 # Since our buildkit dir is cached across runs, there might be a stale lockfile
 # sitting around that should be safe to kill
-rm -f /data/buildkit/buildkit.lock
+rm -f /data/buildkit/buildkitd.lock
 buildkitd --root /data/buildkit 2>&1 &
 
 mount -t debugfs nodev /sys/kernel/debug
