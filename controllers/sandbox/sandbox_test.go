@@ -831,6 +831,10 @@ func TestSandbox(t *testing.T) {
 	})
 
 	t.Run("sets up miren volumes", func(t *testing.T) {
+		if !testutils.IsModuleLoaded("nbd") {
+			t.Skip("miren volumes require nbd kernel module and it doesn't look loaded")
+		}
+
 		r := require.New(t)
 
 		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
