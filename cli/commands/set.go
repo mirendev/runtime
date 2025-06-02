@@ -2,25 +2,26 @@ package commands
 
 import (
 	"fmt"
+	"os"
 	"slices"
 	"strings"
 
-	"miren.dev/runtime/app"
+	"miren.dev/runtime/api/app/app_v1alpha"
 )
 
 func Set(ctx *Context, opts struct {
 	AppCentric
 	Env         []string `short:"e" long:"env" description:"Set environment variables"`
 	Sensitive   []string `short:"s" long:"sensitive" description:"Set sensitive environment variables"`
-	Delete      []string `short:"d" long:"delete" description:"Delete environment variables"`
+	Delete      []string `short:"D" long:"delete" description:"Delete environment variables"`
 	Concurrency *int     `short:"c" long:"concurrency" description:"Set maximum concurrency of application instances"`
 }) error {
-	cl, err := ctx.RPCClient("app")
+	cl, err := ctx.RPCClient("dev.miren.runtime/app")
 	if err != nil {
 		return err
 	}
 
-	ac := app.CrudClient{Client: cl}
+	ac := app_v1alpha.NewCrudClient(cl)
 
 	res, err := ac.GetConfiguration(ctx, opts.App)
 	if err != nil {
@@ -31,7 +32,7 @@ func Set(ctx *Context, opts struct {
 
 	var changes bool
 
-	var envvars []*app.NamedValue
+	var envvars []*app_v1alpha.NamedValue
 
 	if cfg.HasEnvVars() {
 		envvars = cfg.EnvVars()
@@ -44,7 +45,7 @@ func Set(ctx *Context, opts struct {
 				return fmt.Errorf("invalid env var: %s", v)
 			}
 
-			idx := slices.IndexFunc(envvars, func(nv *app.NamedValue) bool {
+			idx := slices.IndexFunc(envvars, func(nv *app_v1alpha.NamedValue) bool {
 				return nv.Key() == parts[0]
 			})
 
@@ -52,7 +53,7 @@ func Set(ctx *Context, opts struct {
 				changes = true
 				ctx.Printf("adding %s...\n", parts[0])
 
-				var nv app.NamedValue
+				var nv app_v1alpha.NamedValue
 
 				nv.SetKey(parts[0])
 				nv.SetValue(parts[1])
@@ -73,31 +74,58 @@ func Set(ctx *Context, opts struct {
 				return fmt.Errorf("invalid env var: %s", v)
 			}
 
-			idx := slices.IndexFunc(envvars, func(nv *app.NamedValue) bool {
+			value := parts[1]
+
+			wasFile := false
+
+			if strings.HasPrefix(value, "@") {
+				if _, err := os.Stat(value[1:]); err == nil {
+					data, err := os.ReadFile(value[1:])
+					if err != nil {
+						return fmt.Errorf("failed to read sensitive env var from file %s: %w", parts[1][1:], err)
+					}
+
+					wasFile = true
+					value = string(data)
+				} else {
+					ctx.Log.Warn("sensitive env var starts with @ but file does not exist", "file", value[1:])
+				}
+			}
+
+			idx := slices.IndexFunc(envvars, func(nv *app_v1alpha.NamedValue) bool {
 				return nv.Key() == parts[0] && nv.Sensitive()
 			})
 
 			if idx == -1 {
 				changes = true
-				ctx.Printf("adding %s...\n", parts[0])
 
-				var nv app.NamedValue
+				if wasFile {
+					ctx.Printf("adding %s from file %s...\n", parts[0], parts[1][1:])
+				} else {
+					ctx.Printf("adding %s...\n", parts[0])
+				}
+
+				var nv app_v1alpha.NamedValue
 
 				nv.SetKey(parts[0])
-				nv.SetValue(parts[1])
+				nv.SetValue(value)
 				nv.SetSensitive(true)
 
 				envvars = append(envvars, &nv)
 			} else if envvars[idx].Value() != parts[1] {
 				changes = true
-				ctx.Printf("updating %s...\n", parts[0])
-				envvars[idx].SetValue(parts[1])
+				if wasFile {
+					ctx.Printf("updating %s from file %s...\n", parts[0], parts[1][1:])
+				} else {
+					ctx.Printf("updating %s...\n", parts[0])
+				}
+				envvars[idx].SetValue(value)
 			}
 		}
 	}
 
 	for _, v := range opts.Delete {
-		envvars = slices.DeleteFunc(envvars, func(nv *app.NamedValue) bool {
+		envvars = slices.DeleteFunc(envvars, func(nv *app_v1alpha.NamedValue) bool {
 			if nv.Key() == v {
 				changes = true
 				ctx.Printf("deleting %s...\n", v)

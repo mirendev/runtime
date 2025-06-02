@@ -360,20 +360,20 @@ func (c *Context) RPCClient(name string) (*rpc.NetworkClient, error) {
 
 	opts = append(opts, rpc.WithLogger(c.Log))
 
-	if c.ClusterConfig != nil {
-		if c.ClusterConfig.Insecure {
-			opts = append(opts, rpc.WithSkipVerify)
-		} else {
-			opts = append(opts,
-				rpc.WithCertPEMs([]byte(c.ClusterConfig.ClientCert), []byte(c.ClusterConfig.ClientKey)),
-				rpc.WithCertificateVerification([]byte(c.ClusterConfig.CACert)),
-			)
+	var (
+		cs  *rpc.State
+		err error
+	)
+
+	if c.ClientConfig != nil {
+		cs, err = c.ClientConfig.State(c, rpc.WithLogger(c.Log))
+		if err == nil {
+			return cs.Client(name)
 		}
-	} else {
-		opts = append(opts, rpc.WithSkipVerify)
+		c.Log.Warn("Client config could not provide RPC state", "error", err)
 	}
 
-	cs, err := rpc.NewState(c, opts...)
+	cs, err = rpc.NewState(c, rpc.WithLogger(c.Log), rpc.WithSkipVerify)
 	if err != nil {
 		return nil, err
 	}

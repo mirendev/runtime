@@ -16,23 +16,52 @@ func EntityPut(ctx *Context, opts struct {
 	Id      string   `short:"i" long:"id" description:"ID of the entity"`
 	DryRun  bool     `short:"d" long:"dry-run" description:"Dry run, do not actually put the entity"`
 	Update  bool     `short:"u" long:"update" description:"Update the entity if it exists"`
+
+	ConfigCentric
 }) error {
 	var (
 		data []byte
 		err  error
 	)
 
-	// Create RPC client to interact with coordinator
-	rs, err := rpc.NewState(ctx, rpc.WithSkipVerify)
-	if err != nil {
-		ctx.Log.Error("failed to create RPC client", "error", err)
-		return err
-	}
+	var (
+		rs     *rpc.State
+		client *rpc.NetworkClient
+	)
 
-	client, err := rs.Connect(opts.Address, "entities")
+	cc, err := opts.LoadConfig()
 	if err != nil {
-		ctx.Log.Error("failed to connect to RPC server", "error", err)
-		return err
+		addr := opts.Address
+		if addr == "" {
+			addr = "localhost:8443"
+		}
+
+		rs, err = rpc.NewState(ctx, rpc.WithSkipVerify)
+		if err != nil {
+			ctx.Log.Error("failed to create RPC client", "error", err)
+			return err
+		}
+
+		// Create RPC client to interact with coordinator
+		client, err = rs.Connect(addr, "entities")
+		if err != nil {
+			ctx.Log.Error("failed to connect to RPC server", "error", err)
+			return err
+		}
+
+	} else {
+		rs, err = cc.State(ctx, rpc.WithLogger(ctx.Log))
+		if err != nil {
+			ctx.Log.Error("failed to create RPC client", "error", err)
+			return err
+		}
+
+		// Create RPC client to interact with coordinator
+		client, err = rs.Client("entities")
+		if err != nil {
+			ctx.Log.Error("failed to connect to RPC server", "error", err)
+			return err
+		}
 	}
 
 	eac := entityserver_v1alpha.NewEntityAccessClient(client)

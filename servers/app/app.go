@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 
 	"miren.dev/runtime/api/app/app_v1alpha"
@@ -174,18 +175,26 @@ func (r *AppInfo) SetConfiguration(ctx context.Context, state *app_v1alpha.CrudS
 	}
 
 	for _, s := range cfg.Commands() {
-		appVer.Config.Commands = append(appVer.Config.Commands, core_v1alpha.Commands{
+		cmd := core_v1alpha.Commands{
 			Service: s.Service(),
 			Command: s.Command(),
-		})
+		}
+
+		if !slices.Contains(appVer.Config.Commands, cmd) {
+			appVer.Config.Commands = append(appVer.Config.Commands, cmd)
+		}
 	}
 
 	for _, ev := range cfg.EnvVars() {
-		appVer.Config.Variable = append(appVer.Config.Variable, core_v1alpha.Variable{
+		nv := core_v1alpha.Variable{
 			Key:       ev.Key(),
 			Value:     ev.Value(),
 			Sensitive: ev.Sensitive(),
-		})
+		}
+
+		if !slices.Contains(appVer.Config.Variable, nv) {
+			appVer.Config.Variable = append(appVer.Config.Variable, nv)
+		}
 	}
 
 	appVer.Config.Entrypoint = cfg.Entrypoint()
@@ -194,7 +203,7 @@ func (r *AppInfo) SetConfiguration(ctx context.Context, state *app_v1alpha.CrudS
 
 	appVer.Version = name + "-" + idgen.Gen("v")
 
-	_, err = r.EC.Create(ctx, appVer.Version, &appVer)
+	avid, err := r.EC.Create(ctx, appVer.Version, &appVer)
 	if err != nil {
 		return err
 	}
@@ -209,6 +218,12 @@ func (r *AppInfo) SetConfiguration(ctx context.Context, state *app_v1alpha.CrudS
 			return err
 		}
 	*/
+
+	appRec.ActiveVersion = avid
+	err = r.EC.Update(ctx, &appRec)
+	if err != nil {
+		return fmt.Errorf("error updating app entity: %w", err)
+	}
 
 	state.Results().SetVersionId(appVer.Version)
 

@@ -46,10 +46,9 @@ func AllCommands() map[string]cli.CommandFactory {
 			return Infer("apps", "List all applications", Apps), nil
 		},
 
-		// TODO: Errors with "unknown object: app"
-		// "set": func() (cli.Command, error) {
-		// 	return Infer("set", "Set environment variables for an application", Set), nil
-		// },
+		"set": func() (cli.Command, error) {
+			return Infer("set", "Set environment variables for an application", Set), nil
+		},
 
 		// TODO: Errors with "unknown object: app"
 		// "set host": func() (cli.Command, error) {
