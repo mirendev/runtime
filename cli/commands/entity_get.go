@@ -10,18 +10,47 @@ import (
 func EntityGet(ctx *Context, opts struct {
 	Id      string `short:"i" long:"id" description:"Entity ID" required:"true"`
 	Address string `short:"a" long:"address" description:"Address to listen on" default:"localhost:8443"`
-}) error {
-	// Create RPC client to interact with coordinator
-	rs, err := rpc.NewState(ctx, rpc.WithSkipVerify)
-	if err != nil {
-		ctx.Log.Error("failed to create RPC client", "error", err)
-		return err
-	}
 
-	client, err := rs.Connect(opts.Address, "entities")
+	ConfigCentric
+}) error {
+	var (
+		rs     *rpc.State
+		client *rpc.NetworkClient
+	)
+
+	cc, err := opts.LoadConfig()
 	if err != nil {
-		ctx.Log.Error("failed to connect to RPC server", "error", err)
-		return err
+		addr := opts.Address
+		if addr == "" {
+			addr = "localhost:8443"
+		}
+
+		rs, err = rpc.NewState(ctx, rpc.WithSkipVerify)
+		if err != nil {
+			ctx.Log.Error("failed to create RPC client", "error", err)
+			return err
+		}
+
+		// Create RPC client to interact with coordinator
+		client, err = rs.Connect(addr, "entities")
+		if err != nil {
+			ctx.Log.Error("failed to connect to RPC server", "error", err)
+			return err
+		}
+
+	} else {
+		rs, err = cc.State(ctx, rpc.WithLogger(ctx.Log))
+		if err != nil {
+			ctx.Log.Error("failed to create RPC client", "error", err)
+			return err
+		}
+
+		// Create RPC client to interact with coordinator
+		client, err = rs.Client("entities")
+		if err != nil {
+			ctx.Log.Error("failed to connect to RPC server", "error", err)
+			return err
+		}
 	}
 
 	eac := entityserver_v1alpha.NewEntityAccessClient(client)
