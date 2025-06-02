@@ -279,17 +279,16 @@ func (g *gen) attr(name string, attr *schemaAttr) {
 				g.encoders = append(g.encoders,
 					j.Id("attrs").Op("=").Append(j.Id("attrs"), j.Qual(top, method).Call(g.Ident(fname), j.Id("o").Dot(fname))),
 				)
-				// For bool, we never consider it empty based on value
-				// (we might want to always include bool fields regardless of their value)
 			} else {
 				g.encoders = append(g.encoders,
 					j.If(j.Op("!").Qual(top, "Empty").Call(j.Id("o").Dot(fname))).Block(
 						j.Id("attrs").Op("=").Append(j.Id("attrs"), j.Qual(top, method).Call(g.Ident(fname), j.Id("o").Dot(fname))),
 					),
 				)
-				g.empties = append(g.empties,
-					j.If(j.Op("!").Qual(top, "Empty").Call(j.Id("o").Dot(fname))).Block(j.Return(j.False())))
 			}
+			// All field types (including bool) should be considered in Empty() check
+			g.empties = append(g.empties,
+				j.If(j.Op("!").Qual(top, "Empty").Call(j.Id("o").Dot(fname))).Block(j.Return(j.False())))
 		}
 	}
 
