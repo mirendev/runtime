@@ -1,3 +1,3 @@
 #!/usr/bin/env bash
 
-dagger call -q test --dir=. --tests="$1" --run="$2"
+dagger call -q test --dir=. --tests="$1" --run="$2" --verboose
