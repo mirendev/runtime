@@ -220,7 +220,10 @@ func (r *AppInfo) SetConfiguration(ctx context.Context, state *app_v1alpha.CrudS
 	*/
 
 	appRec.ActiveVersion = avid
-	r.EC.Update(ctx, &appRec)
+	err = r.EC.Update(ctx, &appRec)
+	if err != nil {
+		return fmt.Errorf("error updating app entity: %w", err)
+	}
 
 	state.Results().SetVersionId(appVer.Version)
 
