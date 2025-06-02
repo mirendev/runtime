@@ -167,6 +167,7 @@ func GenerateSchema(sf *schemaFile, pkg string) (string, error) {
 		zw := gzip.NewWriter(&buf)
 		zw.Write(data)
 		zw.Flush()
+		zw.Close()
 
 		b.Qual(sch, "RegisterEncodedSchema").Call(
 			j.Lit(sf.Domain),
@@ -557,7 +558,7 @@ func (g *gen) attr(name string, attr *schemaAttr) {
 			}
 
 			if _, ok := g.usedAttrs[v.Attr]; ok {
-				panic(fmt.Sprintf("Duplicate attribute name: %s", attr.Attr))
+				panic(fmt.Sprintf("Duplicate attribute name: %s", v.Attr))
 			}
 
 			g.usedAttrs[v.Attr] = struct{}{}
