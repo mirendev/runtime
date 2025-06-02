@@ -78,6 +78,9 @@ if [[ -n "$USE_TMUX" ]]; then
   tmux set-option -g prefix C-s
   tmux bind-key C-s send-prefix
 
+  # Some quality of life settings
+  tmux set-option -g mode-keys vi
+
   # Start with two panes with the server running on top and a shell running on the bottom
   tmux split-window -v
   tmux send-keys -t dev:0.0 "./bin/runtime dev -vv" Enter
