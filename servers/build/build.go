@@ -49,6 +49,7 @@ func NewBuilder(log *slog.Logger, eas *entityserver_v1alpha.EntityAccessClient, 
 func (b *Builder) nextVersion(ctx context.Context, name string) (
 	*core_v1alpha.App,
 	*core_v1alpha.AppVersion,
+	string,
 	error,
 ) {
 	var appRec core_v1alpha.App
@@ -56,14 +57,14 @@ func (b *Builder) nextVersion(ctx context.Context, name string) (
 	err := b.ec.Get(ctx, name, &appRec)
 	if err != nil {
 		if !errors.Is(err, cond.ErrNotFound{}) {
-			return nil, nil, err
+			return nil, nil, "", err
 		}
 
 		appRec.Project = "project/default"
 
 		id, err := b.ec.Create(ctx, name, &appRec)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, "", err
 		}
 		appRec.ID = id
 	}
@@ -75,7 +76,7 @@ func (b *Builder) nextVersion(ctx context.Context, name string) (
 
 		err := b.ec.GetById(ctx, appRec.ActiveVersion, &verRec)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, "", err
 		}
 
 		currentCfg = verRec.Config
@@ -84,16 +85,17 @@ func (b *Builder) nextVersion(ctx context.Context, name string) (
 	}
 
 	ver := name + "-" + idgen.Gen("v")
+	art := name + "-" + idgen.Gen("a")
 
-	b.Log.Info("creating new app version", "app", appRec.ID, "version", ver)
+	b.Log.Info("creating new app version", "app", appRec.ID, "version", ver, "artifact", art)
 
 	var av core_v1alpha.AppVersion
 	av.App = appRec.ID
 	av.Version = ver
-	av.ImageUrl = "cluster.local:5000/" + name + ":" + ver
+	av.ImageUrl = "cluster.local:5000/" + name + ":" + art
 	av.Config = currentCfg
 
-	return &appRec, &av, nil
+	return &appRec, &av, art, nil
 }
 
 func (b *Builder) loadAppConfig(dfs fsutil.FS) (*appconfig.AppConfig, error) {
@@ -229,7 +231,7 @@ func (b *Builder) BuildFromTar(ctx context.Context, state *build_v1alpha.Builder
 		//LogWriter: b.LogWriter,
 	}
 
-	appRec, mrv, err := b.nextVersion(ctx, name)
+	appRec, mrv, artName, err := b.nextVersion(ctx, name)
 	if err != nil {
 		b.Log.Error("error getting next version", "error", err)
 		return err
@@ -283,6 +285,18 @@ func (b *Builder) BuildFromTar(ctx context.Context, state *build_v1alpha.Builder
 		return err
 	}
 
+	var artifact core_v1alpha.Artifact
+
+	err = b.ec.Get(ctx, artName, &artifact)
+	if err != nil {
+		b.Log.Error("error creating artifact entity", "error", err)
+		return fmt.Errorf("error creating artifact entity: %w", err)
+	}
+
+	b.Log.Debug("located stored artifact", "artifact", artifact.ID)
+
+	mrv.Artifact = artifact.ID
+
 	b.Log.Debug("build complete", "image", imgName)
 
 	if res.Entrypoint != "" {
@@ -324,7 +338,7 @@ func (b *Builder) BuildFromTar(ctx context.Context, state *build_v1alpha.Builder
 
 	mrv.Config.Commands = serviceCmds
 
-	id, err := b.ec.CreateOrUpdate(ctx, mrv.Version, mrv)
+	id, err := b.ec.Create(ctx, mrv.Version, mrv)
 	if err != nil {
 		return fmt.Errorf("error creating app version: %w", err)
 	}

@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -18,7 +17,6 @@ import (
 
 	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/api/entityserver"
-	"miren.dev/runtime/pkg/cond"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/idgen"
 )
@@ -179,27 +177,27 @@ func (h *RegistryHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 // getManifest handles GET requests for manifests
 func (h *RegistryHandler) getManifest(w http.ResponseWriter, r *http.Request, name, reference string) {
-	var appVer core_v1alpha.AppVersion
+	var artifact core_v1alpha.Artifact
 
 	if strings.HasPrefix(reference, "sha256:") {
-		err := h.ec.OneAtIndex(r.Context(), entity.String(core_v1alpha.AppVersionManifestDigestId, reference), &appVer)
+		err := h.ec.OneAtIndex(r.Context(), entity.String(core_v1alpha.ArtifactManifestDigestId, reference), &artifact)
 		if err != nil {
-			h.log.Error("Error getting app version by digest", "digest", reference, "error", err)
+			h.log.Error("Error getting artifact by digest", "digest", reference, "error", err)
 			w.WriteHeader(http.StatusNotFound)
 			return
 		}
 
-		h.log.Info("Found app version by digest", "digest", reference, "appVer", appVer.ID)
+		h.log.Info("Found app version by digest", "digest", reference, "appVer", artifact.ID)
 	} else {
-		err := h.ec.Get(r.Context(), reference, &appVer)
+		err := h.ec.Get(r.Context(), reference, &artifact)
 		if err != nil {
-			h.log.Error("Error getting app version", "reference", reference, "error", err)
+			h.log.Error("Error getting artifact", "reference", reference, "error", err)
 			w.WriteHeader(http.StatusNotFound)
 			return
 		}
 	}
 
-	data := []byte(appVer.Manifest)
+	data := []byte(artifact.Manifest)
 
 	/*
 		manifestPath := filepath.Join(h.storageRoot, "manifests", name, reference)
@@ -224,11 +222,11 @@ func (h *RegistryHandler) getManifest(w http.ResponseWriter, r *http.Request, na
 
 // headManifest handles HEAD requests for manifests
 func (h *RegistryHandler) headManifest(w http.ResponseWriter, r *http.Request, name, reference string) {
-	var appVer core_v1alpha.AppVersion
+	var appVer core_v1alpha.Artifact
 
 	err := h.ec.Get(r.Context(), reference, &appVer)
 	if err != nil {
-		h.log.Error("Error getting app version", "reference", reference, "error", err)
+		h.log.Error("Error getting artifact", "reference", reference, "error", err)
 		w.WriteHeader(http.StatusNotFound)
 		return
 	}
@@ -268,34 +266,29 @@ func (h *RegistryHandler) putManifest(w http.ResponseWriter, r *http.Request, na
 
 	// Set the digest header
 
-	var appVer core_v1alpha.AppVersion
+	var (
+		app      core_v1alpha.App
+		artifact core_v1alpha.Artifact
+	)
 
-	err = h.ec.Get(r.Context(), reference, &appVer)
+	artifact.Manifest = string(manifestData)
+	artifact.ManifestDigest = digest
+
+	err = h.ec.Get(r.Context(), name, &app)
 	if err != nil {
-		if errors.Is(err, cond.ErrNotFound{}) {
-			appVer.Manifest = string(manifestData)
-			appVer.ManifestDigest = digest
-			_, err = h.ec.Create(r.Context(), reference, &appVer)
-			if err != nil {
-				h.log.Error("Error creating app version", "name", name, "error", err)
-				w.WriteHeader(http.StatusInternalServerError)
-				return
-			}
-		} else {
-			h.log.Error("Error getting app version", "name", name, "error", err)
-			w.WriteHeader(http.StatusNotFound)
-			return
-		}
+		h.log.Error("Error getting app during artifact creation, will create orphan artifact", "name", name, "error", err)
 	} else {
-		appVer.Manifest = string(manifestData)
-		appVer.ManifestDigest = digest
-		err = h.ec.Update(r.Context(), &appVer)
-		if err != nil {
-			h.log.Error("Error updating app version", "name", name, "error", err)
-			w.WriteHeader(http.StatusInternalServerError)
-			return
-		}
+		artifact.App = app.ID
 	}
+
+	artId, err := h.ec.Create(r.Context(), reference, &artifact)
+	if err != nil {
+		h.log.Error("Error creating app version", "name", name, "error", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	h.log.Info("Created new artifact", "name", name, "reference", reference, "id", artId)
 
 	/*
 		// Create the directory structure if it doesn't exist

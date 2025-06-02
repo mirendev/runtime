@@ -71,6 +71,7 @@ func (o *App) InitSchema(sb *schema.SchemaBuilder) {
 
 const (
 	AppVersionAppId            = entity.Id("dev.miren.core/app_version.app")
+	AppVersionArtifactId       = entity.Id("dev.miren.core/app_version.artifact")
 	AppVersionConfigId         = entity.Id("dev.miren.core/app_version.config")
 	AppVersionImageUrlId       = entity.Id("dev.miren.core/app_version.image_url")
 	AppVersionManifestId       = entity.Id("dev.miren.core/app_version.manifest")
@@ -81,6 +82,7 @@ const (
 type AppVersion struct {
 	ID             entity.Id `json:"id"`
 	App            entity.Id `cbor:"app,omitempty" json:"app,omitempty"`
+	Artifact       entity.Id `cbor:"artifact,omitempty" json:"artifact,omitempty"`
 	Config         Config    `cbor:"config,omitempty" json:"config,omitempty"`
 	ImageUrl       string    `cbor:"image_url,omitempty" json:"image_url,omitempty"`
 	Manifest       string    `cbor:"manifest,omitempty" json:"manifest,omitempty"`
@@ -92,6 +94,9 @@ func (o *AppVersion) Decode(e entity.AttrGetter) {
 	o.ID = entity.MustGet(e, entity.DBId).Value.Id()
 	if a, ok := e.Get(AppVersionAppId); ok && a.Value.Kind() == entity.KindId {
 		o.App = a.Value.Id()
+	}
+	if a, ok := e.Get(AppVersionArtifactId); ok && a.Value.Kind() == entity.KindId {
+		o.Artifact = a.Value.Id()
 	}
 	if a, ok := e.Get(AppVersionConfigId); ok && a.Value.Kind() == entity.KindComponent {
 		o.Config.Decode(a.Value.Component())
@@ -130,6 +135,9 @@ func (o *AppVersion) Encode() (attrs []entity.Attr) {
 	if !entity.Empty(o.App) {
 		attrs = append(attrs, entity.Ref(AppVersionAppId, o.App))
 	}
+	if !entity.Empty(o.Artifact) {
+		attrs = append(attrs, entity.Ref(AppVersionArtifactId, o.Artifact))
+	}
 	if !o.Config.Empty() {
 		attrs = append(attrs, entity.Component(AppVersionConfigId, o.Config.Encode()))
 	}
@@ -153,6 +161,9 @@ func (o *AppVersion) Empty() bool {
 	if !entity.Empty(o.App) {
 		return false
 	}
+	if !entity.Empty(o.Artifact) {
+		return false
+	}
 	if !o.Config.Empty() {
 		return false
 	}
@@ -173,6 +184,7 @@ func (o *AppVersion) Empty() bool {
 
 func (o *AppVersion) InitSchema(sb *schema.SchemaBuilder) {
 	sb.Ref("app", "dev.miren.core/app_version.app", schema.Doc("The application the version is for"))
+	sb.Ref("artifact", "dev.miren.core/app_version.artifact", schema.Doc("The artifact to deploy for the version"))
 	sb.Component("config", "dev.miren.core/app_version.config", schema.Doc("The configuration of the version"))
 	(&Config{}).InitSchema(sb.Builder("config"))
 	sb.String("image_url", "dev.miren.core/app_version.image_url", schema.Doc("The OCI url for the versions code"))
@@ -399,6 +411,9 @@ func (o *Variable) Empty() bool {
 	if !entity.Empty(o.Key) {
 		return false
 	}
+	if !entity.Empty(o.Sensitive) {
+		return false
+	}
 	if !entity.Empty(o.Value) {
 		return false
 	}
@@ -409,6 +424,81 @@ func (o *Variable) InitSchema(sb *schema.SchemaBuilder) {
 	sb.String("key", "dev.miren.core/variable.key", schema.Doc("The name of the variable"))
 	sb.Bool("sensitive", "dev.miren.core/variable.sensitive", schema.Doc("Whether or not the value is sensitive"))
 	sb.String("value", "dev.miren.core/variable.value", schema.Doc("The value of the value"))
+}
+
+const (
+	ArtifactAppId            = entity.Id("dev.miren.core/artifact.app")
+	ArtifactManifestId       = entity.Id("dev.miren.core/artifact.manifest")
+	ArtifactManifestDigestId = entity.Id("dev.miren.core/artifact.manifest_digest")
+)
+
+type Artifact struct {
+	ID             entity.Id `json:"id"`
+	App            entity.Id `cbor:"app,omitempty" json:"app,omitempty"`
+	Manifest       string    `cbor:"manifest,omitempty" json:"manifest,omitempty"`
+	ManifestDigest string    `cbor:"manifest_digest,omitempty" json:"manifest_digest,omitempty"`
+}
+
+func (o *Artifact) Decode(e entity.AttrGetter) {
+	o.ID = entity.MustGet(e, entity.DBId).Value.Id()
+	if a, ok := e.Get(ArtifactAppId); ok && a.Value.Kind() == entity.KindId {
+		o.App = a.Value.Id()
+	}
+	if a, ok := e.Get(ArtifactManifestId); ok && a.Value.Kind() == entity.KindString {
+		o.Manifest = a.Value.String()
+	}
+	if a, ok := e.Get(ArtifactManifestDigestId); ok && a.Value.Kind() == entity.KindString {
+		o.ManifestDigest = a.Value.String()
+	}
+}
+
+func (o *Artifact) Is(e entity.AttrGetter) bool {
+	return entity.Is(e, KindArtifact)
+}
+
+func (o *Artifact) ShortKind() string {
+	return "artifact"
+}
+
+func (o *Artifact) Kind() entity.Id {
+	return KindArtifact
+}
+
+func (o *Artifact) EntityId() entity.Id {
+	return o.ID
+}
+
+func (o *Artifact) Encode() (attrs []entity.Attr) {
+	if !entity.Empty(o.App) {
+		attrs = append(attrs, entity.Ref(ArtifactAppId, o.App))
+	}
+	if !entity.Empty(o.Manifest) {
+		attrs = append(attrs, entity.String(ArtifactManifestId, o.Manifest))
+	}
+	if !entity.Empty(o.ManifestDigest) {
+		attrs = append(attrs, entity.String(ArtifactManifestDigestId, o.ManifestDigest))
+	}
+	attrs = append(attrs, entity.Ref(entity.EntityKind, KindArtifact))
+	return
+}
+
+func (o *Artifact) Empty() bool {
+	if !entity.Empty(o.App) {
+		return false
+	}
+	if !entity.Empty(o.Manifest) {
+		return false
+	}
+	if !entity.Empty(o.ManifestDigest) {
+		return false
+	}
+	return true
+}
+
+func (o *Artifact) InitSchema(sb *schema.SchemaBuilder) {
+	sb.Ref("app", "dev.miren.core/artifact.app", schema.Doc("The application the artifact is for"))
+	sb.String("manifest", "dev.miren.core/artifact.manifest", schema.Doc("The OCI image manifest for the version"))
+	sb.String("manifest_digest", "dev.miren.core/artifact.manifest_digest", schema.Doc("The digest of the manifest"), schema.Indexed)
 }
 
 const (
@@ -542,6 +632,7 @@ func (o *Project) InitSchema(sb *schema.SchemaBuilder) {
 var (
 	KindApp        = entity.Id("dev.miren.core/kind.app")
 	KindAppVersion = entity.Id("dev.miren.core/kind.app_version")
+	KindArtifact   = entity.Id("dev.miren.core/kind.artifact")
 	KindMetadata   = entity.Id("dev.miren.core/kind.metadata")
 	KindProject    = entity.Id("dev.miren.core/kind.project")
 	Schema         = entity.Id("dev.miren.core/schema.v1alpha")
@@ -551,8 +642,9 @@ func init() {
 	schema.Register("dev.miren.core", "v1alpha", func(sb *schema.SchemaBuilder) {
 		(&App{}).InitSchema(sb)
 		(&AppVersion{}).InitSchema(sb)
+		(&Artifact{}).InitSchema(sb)
 		(&Metadata{}).InitSchema(sb)
 		(&Project{}).InitSchema(sb)
 	})
-	schema.RegisterEncodedSchema("dev.miren.core", "v1alpha", []byte("\x1f\x8b\b\x00\x00\x00\x00\x00\x00\xff\xacV˒\xdb \x10\xfc\x8f\xbc_\xa7\xad\x8aR\xf9\"\x17\x86\x91<k\t(\x84\xb5\xd61I%?\x92M\xfe09\xa7\x04\x03+\x90\x84u\xc8e\x1fvw\xd3\xd3\xcc\x00\x8fB\xb2\x0e\xa4\x80\xa1\xeaЀ\xac\xb82\xd0\f`zT\xb2\x19>\xb3V\x9f\x18\x9cQ\x8a\xfe\xf1!E}\x9a>\xad\x98ֿk\xa1:\x862Sq\xca&\xe30\xad\xd7\xd5\xff\xd65B+\xfa\xaf?\xbd#\xc6-\x0ep \xac\xb0\xa3\x86#\x8a#\x8a\xebۥd\x95\xa2\xbdD\xa3\x8d\xba\an\xe7\xdcg+\\\x82\xb5\xda`\xc7\xccx\x98\xecp\xa6\xf5\xf5\xf5F\xbda\x99R\xddk+\x1db\xe1\xa5\x00~x\xf7\x93\x83\xb9\xf3W\xdbz\x93'\xbf\x8f5W\xb2\xc6\xc6\xf1\x90\xabN+\t\xd2n\x84\x16\xe9\x9e\xf4\x84/֕\tUK\xa1ry\xdf\x7f9\x9d\x13W]Ǥ\xe8W\xbc\xe6\xa5z\xd9*2:&\xc7?;\xed\xdeݴ\x1buw\xf5eChg\xbb\xee\xadA\xd9L\x9e\xf3^\t\xa2A\x9d\xd8=\x98\x019\xecf\x13>\xe9\xcd\x18\x9d\xdf\xf33W\x92_\x8c\x01\xc9\xc7\x1d\x1b\x1f\x8b\x8e\xa4\x9dI~ܓd\x14\xdd\x15\xa6`\x17\xab\x9cg\x8e\xde\xed2\x88\xa8XM`σ\x1a\xaf \x12\xe2\x9b\x02ѡ\x93\b\xe7\x99y\xc9{\x90\u058cZ\xa1\xb4\xf9\xe6\xacHO\xc5>\x11\xa8\x18\xad\x8cM<\xe5G\x00\x11'\x1c\r\xc1\xc0\f\xb2c\v\xfb\x87 2\xfe\xf3\x10\x04\xdd\xf2\xbe}\xa3\xb3\xe9\fc\x9e\xd2\xf3\xcco\x10\xac\xce@\x11c\x0f\xb2\xc7\xe9\x9cv\\qT\xaa]\xeb\xd0Ȍx\xda\xf5\x81\xb5\x97\xc5\xe8\xbc\xdcb;t:8\xe1\xbb\xe4S:3\xc9#v\xac\x81\xc3Ŵ\xf9:\x1f\n\ah$y\x91S\xc7$\xd6\xd0/:\xe9}A#p\xbc\x84\n\xff\x1e\x046+Jw;\x94\x88J'\xcf\xfc\"\x9d\t\xbd+\b\xd1\xeftrf\x80답\v\xb2\x03\xcb\x04\xb3\xacԑ\xf9K\"pnt\x1f]r-;B\xeb/\x0ep\x7f\xaf\xcdK\x90\xac\b\xed\xe6\x85&\xd5\xfdȂ\xc8k\x89\xfc\t\xbc\xfd\xa0\xc8\x0f\xacH[{U\x9c·\x8biq\xc9\x11\xa5\x14ܐ\xf1\x88R\xce\xed\v͏z\x90`n\xd5M\x8a\x95\x03'\xeeC\xf9\xe7\xfe\xa4\x8c=\xf87a\xd2\x0f\xb7\x1eLO\xf5\x17;',TLiz\x1fm=H\xff\x01\x00\x00\xff\xff"))
+	schema.RegisterEncodedSchema("dev.miren.core", "v1alpha", []byte("\x1f\x8b\b\x00\x00\x00\x00\x00\x00\xff\xacV[\x8e\xdc \x10\xbcG\xde/)\xd2Jq\x94\x13\x8d\x18h{ر\x01a\xc6;\xfeL\xa2(\aI67L\xbe#C\xc3\x1a\x8c\xb1Wڟ}\xd8U\xe5\xa2h\x9a\xfe\xcd\x04\xe9@0\x18\xaa\x8ek\x10\x15\x95\x1a\x9a\x01tϥh\x86/\xa4U'\x02g.X\x7f\x7f}\x1e\xc3>O\x8f+\xa5\xe5-P\xf3\xa7f\xb2#\\$RV~HxH\xc9\x7f\xe6_]shY\xff\xf5\x97傼\x13\xa0\x99\x19\x15Խ\xd1\\4Gή/\xf2\x8a\x95\x05\xb7J\xf3\x8e\xe8\xf10\xe95\xf8\xea.\xe7\x9d(U\xf2\xad\x13\x0eQ\xaa\xec\xf9\x9b\xf3,\b5|\x80\x03b\xad\xf9#g\x93\xf1\xb7K\xc9*F;\to{\xce}\x96\xe1\",Z2%J]_\xaf\xac\xd7\x7f\xa6\xb4\xeeܗ\x0ea\xe1\xa5\x00~:\xf7\x93\x83\xb9\xf3W\xebz\x93'G:\x11mxM\xe25\xbf/1\x11\xefj\xb8\xa6RԼ\xb1dNe\xa7\xa4\x00aV2\x0f\x1a\x8e\xf4\x80/ƒ\bUK\xa1r:?\xee\xddB\xa9\xec:\"X\x9f\xf1\x9a&\xe5d\xab\xc0\xe8\x88\x18\xff\xee\xb4{\xb3i7\xe8\xee*\xeb\x06\xd1\xe9aLK͋zud\xf7\xa0\aNa7\x1b\xf1Qi\x87\xe8ܞ\x9f\xa9\x14\xf4\xa25\b:\xee\xd8\xf8\xb0\xe8@ڙ\xe4\xa7=I\x06\xd1]a2r1\xd2z\xa6ܹ]\x06\x11\x14\xab\t\x8c\xfd\xb0\xe6W`\x11\xf1M\x81h\xd1Q\x84\xf3̜\xe4-\b\xa3G%\xb90\xe9\xe6d\xa4\xa7\xc5>\x10p1Jj\x13yJ;\b\x12'\x1c\x1e\x82\x81hN\x8e-\xec?\x04\x81\xf1ć\xc0\xeb\x96\xf7\xed;\xb6\xb63\x8ciJ\xe9\xbd\xe8\x05\xab3`ļ\a\xd1\xf3\xa9\xcd[.;J\xd9\xe6*40\x03\x1ew} \xedeqt^\xae\xb1-:>8\xfe]\xf4\x14{&z\xe4\x1di\xe0p\xd1m\xfa\x9d\x0f\x85\x06\x1aH\xd8\xc4;\"x\r\xfd\xa2\x92J\x8d\xdcs\x9c\x84\xf4\xff\x1e\x18o2J7;\x94\x90\x8a\x9dg~\x0fτ\xde\x15\x84\xf0w|rf\x80\xc5\x04\xe2\xeeW\xbc\x91J\x15\x99\x0e\"\x9e\xb3\xaf\xfa\x92\x8b5\xad</6\xbbU\xd76$=ځ\xfa\xb8\xdd\xf8\xb8%\x83\xbc\xb8\x1a=*\x1fc\a\x860b\xc8cb\xf4\x9c\x8d\x18qVh\xc9\x11Zw\xff\x82\xfd;\xd7v\xbcd\x85h\xdbv\xb0\xe1\xd9\x1f\x1bCi\xe0O\xe0\xf5\xb1.\xed\xfb\x81\x96\x9b\xedN\xfe\xed\xb9?Im\x0en2\x0fO\xcby\xfa\xaf\x17\a\xf9\xa9\xc4ֆ\xe5\xe8\x04lM\x98\x1b\x9b\xec\xdf\xfe\a\x00\x00\xff\xff\x01\x00\x00\xff\xff\x11<\x88\b\x82\f\x00\x00"))
 }
