@@ -279,7 +279,7 @@ func (b *Builder) BuildFromTar(ctx context.Context, state *build_v1alpha.Builder
 
 	imgName := mrv.ImageUrl
 
-	res, err := bk.BuildImage(ctx, tr, buildStack, imgName, tos...)
+	res, err := bk.BuildImage(ctx, tr, buildStack, name, imgName, tos...)
 	if err != nil {
 		b.Log.Error("error building image", "error", err)
 		return err

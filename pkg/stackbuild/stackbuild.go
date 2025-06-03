@@ -20,6 +20,9 @@ import (
 type BuildOptions struct {
 	Log *slog.Logger
 
+	// Name is the name of the application being built
+	Name string
+
 	// Version specifies the language/runtime version to use
 	// If empty, defaults to latest stable version
 	Version string
@@ -111,6 +114,11 @@ func (s *MetaStack) SetCmd(cmd []string) {
 func (s *MetaStack) hasFile(path string) bool {
 	st, err := os.Stat(filepath.Join(s.dir, path))
 	return err == nil && st.Mode().IsRegular()
+}
+
+func (s *MetaStack) hasDir(path string) bool {
+	st, err := os.Stat(filepath.Join(s.dir, path))
+	return err == nil && st.Mode().IsDir()
 }
 
 func (s *MetaStack) readFile(path string) ([]byte, error) {
@@ -650,6 +658,29 @@ const (
 	AlpineDefault = "alpine:3.21"
 )
 
+func (s *GoStack) commandDir(opts BuildOptions) string {
+	if !s.hasDir("cmd") {
+		return ""
+	}
+
+	entries, err := os.ReadDir(filepath.Join(s.dir, "cmd"))
+	if err != nil {
+		return ""
+	}
+
+	if len(entries) == 1 {
+		return filepath.Join("cmd", entries[0].Name())
+	}
+
+	for _, entry := range entries {
+		if entry.IsDir() && entry.Name() == opts.Name {
+			return filepath.Join("cmd", entry.Name())
+		}
+	}
+
+	return ""
+}
+
 func (s *GoStack) GenerateLLB(dir string, opts BuildOptions) (*llb.State, error) {
 	// Set up local context with the directory
 	localCtx := llb.Local("context",
@@ -678,9 +709,11 @@ func (s *GoStack) GenerateLLB(dir string, opts BuildOptions) (*llb.State, error)
 	// Copy the rest of the application code
 	appState := h.copyApp(state, localCtx)
 
+	buildDir := s.commandDir(opts)
+
 	// Build with cache
 	state = appState.Dir("/app").Run(
-		llb.Shlex("sh -c 'go mod download -json && go build -o /bin/app'"),
+		llb.Shlex(fmt.Sprintf("sh -c 'go mod download -json && go build -o /bin/app ./%s'", buildDir)),
 
 		// This basically is just a scratch mount until we add the ability to
 		// properly export and import the cache dirs.
