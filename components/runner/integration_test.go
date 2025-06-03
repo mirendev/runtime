@@ -163,7 +163,7 @@ func TestRunnerCoordinatorIntegration(t *testing.T) {
 
 	// Wait a bit for processing
 
-	time.Sleep(2 * time.Second)
+	time.Sleep(5 * time.Second)
 
 	c, err = runner.ContainerdContainerForSandbox(ctx, entity.Id(id))
 	r.NoError(err)
