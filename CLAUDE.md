@@ -86,3 +86,9 @@ The system uses Dagger for containerized development with all dependencies (cont
 - Entity schemas → Go structs: `entity/cmd/schemagen`
 - RPC interfaces → implementations: `pkg/rpc/cmd/rpcgen`
 - Generated files have `.gen.go` suffix
+
+### Code Style & Formatting
+
+- **ALWAYS run `go fmt` on changed files before committing**
+- To format all modified Go files: `git diff --name-status HEAD^ HEAD | grep '^M.*\.go$' | cut -f2 | while read f; do go fmt "$f"; done`
+- The codebase follows standard Go formatting conventions
