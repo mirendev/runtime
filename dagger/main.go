@@ -121,6 +121,7 @@ func (m *Runtime) BuildEnv(dir *dagger.Directory) *dagger.Container {
 			"iproute2",
 			"iptables",
 			"tmux",
+			"vim",
 		}).
 		WithFile("/upstream/containerd.tar.gz", dag.HTTP(containerd)).
 		WithFile("/upstream/buildkit.tar.gz", dag.HTTP(buildkit)).
