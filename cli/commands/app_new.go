@@ -3,7 +3,7 @@ package commands
 import (
 	"fmt"
 
-	"miren.dev/runtime/app"
+	"miren.dev/runtime/api/app/app_v1alpha"
 )
 
 func AppNew(ctx *Context, opts struct {
@@ -18,7 +18,7 @@ func AppNew(ctx *Context, opts struct {
 		return err
 	}
 
-	ac := app.CrudClient{Client: cl}
+	ac := app_v1alpha.CrudClient{Client: cl}
 
 	results, err := ac.New(ctx, opts.Name)
 	if err != nil {

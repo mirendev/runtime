@@ -11,8 +11,6 @@ import (
 	"time"
 
 	containerd "github.com/containerd/containerd/v2/client"
-	"github.com/davecgh/go-spew/spew"
-	"github.com/jackc/pgx/v5/pgxpool"
 	buildkit "github.com/moby/buildkit/client"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/components/coordinate"
@@ -137,47 +135,6 @@ func Registry(extra ...func(*asm.Registry)) (*asm.Registry, func()) {
 				opts.Log.Debug(fmt.Sprintf(format, v...))
 			},
 		})
-	})
-
-	findMigrations := func() (string, error) {
-		dir, err := os.Getwd()
-		if err != nil {
-			return "", err
-		}
-
-		for {
-			if _, err := os.Stat(dir + "/db"); err == nil {
-				return dir + "/db", nil
-			}
-
-			if dir == "/" {
-				return "", os.ErrNotExist
-			}
-
-			dir = filepath.Dir(dir)
-		}
-	}
-
-	r.ProvideName("postgres", func() (*pgxpool.Pool, error) {
-		ctx := context.Background()
-
-		pool, err := pgxpool.New(ctx, "postgres://postgres@postgres:5432/runtime_test")
-		if err != nil {
-			return nil, err
-		}
-
-		dir, err := findMigrations()
-		if err != nil {
-			return nil, err
-		}
-
-		err = RunMigartions(ctx, dir, pool)
-		if err != nil {
-			spew.Dump(dir, err)
-			return nil, err
-		}
-
-		return pool, nil
 	})
 
 	res, hm := netresolve.NewLocalResolver()

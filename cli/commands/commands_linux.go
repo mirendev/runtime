@@ -8,14 +8,12 @@ import (
 	"net/netip"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"time"
 
 	"github.com/mitchellh/cli"
 
 	"github.com/ClickHouse/clickhouse-go/v2"
 	containerd "github.com/containerd/containerd/v2/client"
-	"github.com/jackc/pgx/v5/pgxpool"
 	buildkit "github.com/moby/buildkit/client"
 	"miren.dev/runtime/observability"
 	"miren.dev/runtime/pkg/asm"
@@ -89,7 +87,6 @@ func (c *Context) setupServerComponents(ctx context.Context, reg *asm.Registry) 
 	reg.Register("service-subnet", netip.MustParsePrefix("10.10.0.0/16"))
 
 	reg.Register("clickhouse-address", "clickhouse:9000")
-	reg.Register("postgres-address", "postgres:5432")
 	reg.Register("clickhouse-debug", false)
 
 	reg.Register("container_idle_timeout", time.Minute)
@@ -122,52 +119,6 @@ func (c *Context) setupServerComponents(ctx context.Context, reg *asm.Registry) 
 		})
 	})
 
-	findMigrations := func() (string, error) {
-		dir, err := os.Getwd()
-		if err != nil {
-			return "", err
-		}
-
-		for {
-			if _, err := os.Stat(dir + "/db"); err == nil {
-				return dir + "/db", nil
-			}
-
-			if dir == "/" {
-				return "", os.ErrNotExist
-			}
-
-			dir = filepath.Dir(dir)
-		}
-	}
-	reg.Register("postgres-db", "runtime_prod")
-
-	reg.ProvideName("postgres", func(opts struct {
-		Log     *slog.Logger
-		Address string `asm:"postgres-address"`
-		DB      string `asm:"postgres-db"`
-	}) (*pgxpool.Pool, error) {
-		pool, err := pgxpool.New(ctx,
-			fmt.Sprintf("postgres://runtime:runtime@%s/%s", opts.Address, opts.DB),
-		)
-		if err != nil {
-			return nil, err
-		}
-
-		dir, err := findMigrations()
-		if err != nil {
-			return nil, err
-		}
-
-		err = runMigrations(ctx, dir, pool)
-		if err != nil {
-			return nil, err
-		}
-
-		opts.Log.Debug("connected to postgres", "addr", opts.Address)
-
-		return pool, nil
-	})
 	reg.Provide(func() observability.LogWriter {
 		return &observability.PersistentLogWriter{}
 	})

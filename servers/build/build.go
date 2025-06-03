@@ -371,20 +371,6 @@ func (b *Builder) BuildFromTar(ctx context.Context, state *build_v1alpha.Builder
 
 	b.Log.Info("app version updated", "app", name, "version", mrv.Version)
 
-	/*
-
-		b.Log.Info("clearing old version", "app", name, "new-ver", mrv.Version)
-		err = b.CV.ClearOldVersions(ctx, mrv)
-		if err != nil {
-			return err
-		}
-
-		err = b.ImagePruner.PruneApp(context.Background(), name)
-		if err != nil {
-			b.Log.Error("error pruning app images", "app", name, "error", err)
-		}
-	*/
-
 	state.Results().SetVersion(mrv.Version)
 
 	return nil

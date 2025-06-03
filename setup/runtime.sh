@@ -45,8 +45,6 @@ services:
     depends_on:
       clickhouse:
         condition: service_healthy
-      postgres:
-        condition: service_healthy
 
   clickhouse:
     image: clickhouse/clickhouse-server:latest
@@ -63,25 +61,8 @@ services:
       timeout: 5s
       retries: 5
 
-  postgres:
-    image: postgres:17
-    environment:
-      - POSTGRES_DB=runtime_prod
-      - POSTGRES_PASSWORD=runtime
-      - POSTGRES_USER=runtime
-    volumes:
-      - postgres:/var/lib/postgresql/data
-    restart: always
-    healthcheck:
-      test: ["CMD-SHELL", "PGPASSWORD=runtime pg_isready -U runtime -d runtime_prod"]
-      interval: 1s
-      timeout: 5s
-      retries: 5
-
 volumes:
   clickhouse:
-    # ok
-  postgres:
     # ok
   containerd:
     # ok

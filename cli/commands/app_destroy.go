@@ -1,6 +1,6 @@
 package commands
 
-import "miren.dev/runtime/app"
+import "miren.dev/runtime/api/app/app_v1alpha"
 
 func AppDestroy(ctx *Context, opts struct {
 	AppCentric
@@ -11,7 +11,7 @@ func AppDestroy(ctx *Context, opts struct {
 		return err
 	}
 
-	crud := app.NewCrudClient(crudcl)
+	crud := app_v1alpha.NewCrudClient(crudcl)
 
 	if !opts.Confirm {
 		ctx.Info("Please confirm the destruction of the app with --confirm\n")
