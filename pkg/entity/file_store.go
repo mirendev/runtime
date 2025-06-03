@@ -112,6 +112,43 @@ func (s *FileStore) GetEntity(_ context.Context, id Id) (*Entity, error) {
 	return &entity, nil
 }
 
+// GetEntities retrieves multiple entities by their IDs
+func (s *FileStore) GetEntities(_ context.Context, ids []Id) ([]*Entity, error) {
+	entities := make([]*Entity, 0, len(ids))
+	for _, id := range ids {
+		key := base58.Encode([]byte(id))
+		path := filepath.Join(s.basePath, "entities", key+".cbor")
+
+		data, err := os.ReadFile(path)
+		if err != nil {
+			if os.IsNotExist(err) {
+				// Add nil to maintain order
+				entities = append(entities, nil)
+				continue
+			}
+			// For other errors, still add nil but log the error
+			entities = append(entities, nil)
+			continue
+		}
+
+		var entity Entity
+		if err := decoder.Unmarshal(data, &entity); err != nil {
+			entities = append(entities, nil)
+			continue
+		}
+
+		err = entity.postUnmarshal()
+		if err != nil {
+			entities = append(entities, nil)
+			continue
+		}
+
+		entities = append(entities, &entity)
+	}
+
+	return entities, nil
+}
+
 // UpdateEntity updates an existing entity
 func (s *FileStore) UpdateEntity(ctx context.Context, id Id, attributes []Attr, opts ...EntityOption) (*Entity, error) {
 	entity, err := s.GetEntity(ctx, id)

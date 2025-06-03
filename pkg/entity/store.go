@@ -31,6 +31,7 @@ type EtcdStore struct {
 
 type Store interface {
 	GetEntity(ctx context.Context, id Id) (*Entity, error)
+	GetEntities(ctx context.Context, ids []Id) ([]*Entity, error)
 	WatchEntity(ctx context.Context, id Id) (chan EntityOp, error)
 	GetAttributeSchema(ctx context.Context, name Id) (*AttributeSchema, error)
 	CreateEntity(ctx context.Context, attributes []Attr, opts ...EntityOption) (*Entity, error)
@@ -333,6 +334,92 @@ func (s *EtcdStore) GetEntity(ctx context.Context, id Id) (*Entity, error) {
 	entity.postUnmarshal()
 
 	return &entity, nil
+}
+
+func (s *EtcdStore) GetEntities(ctx context.Context, ids []Id) ([]*Entity, error) {
+	if len(ids) == 0 {
+		return []*Entity{}, nil
+	}
+
+	// Build all the ops for the transaction
+	var ops []clientv3.Op
+	for _, id := range ids {
+		key := s.buildKey(id)
+		ops = append(ops, clientv3.OpGet(key))
+		ops = append(ops, clientv3.OpGet(key+"/session/", clientv3.WithPrefix()))
+	}
+
+	// Execute transaction
+	tr, err := s.client.Txn(ctx).Then(ops...).Commit()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get entities from etcd: %w", err)
+	}
+
+	if !tr.Succeeded {
+		return nil, fmt.Errorf("transaction failed")
+	}
+
+	// Process results
+	entities := make([]*Entity, 0, len(ids))
+	for i := 0; i < len(ids); i++ {
+		// Each entity has 2 responses: primary and session
+		primaryIdx := i * 2
+		sessionIdx := i*2 + 1
+
+		if primaryIdx >= len(tr.Responses) || sessionIdx >= len(tr.Responses) {
+			continue
+		}
+
+		primaryResp := tr.Responses[primaryIdx].GetResponseRange()
+		if len(primaryResp.Kvs) == 0 {
+			// Entity not found, add nil to maintain order
+			entities = append(entities, nil)
+			s.log.Warn("failed to get primary entity from etcd", "id", ids[i])
+			continue
+		}
+
+		var entity Entity
+		err = decoder.Unmarshal(primaryResp.Kvs[0].Value, &entity)
+		if err != nil {
+			entities = append(entities, nil)
+			continue
+		}
+
+		// Handle TTL if present
+		if primaryResp.Kvs[0].Lease != 0 {
+			ttlr, err := s.client.Lease.TimeToLive(ctx, clientv3.LeaseID(primaryResp.Kvs[0].Lease))
+			if err == nil {
+				entity.Attrs = append(entity.Attrs, Duration(TTL, time.Duration(ttlr.TTL)*time.Second))
+			}
+		}
+
+		entity.Revision = primaryResp.Kvs[0].ModRevision
+
+		// Process session attributes
+		sessionResp := tr.Responses[sessionIdx].GetResponseRange()
+		for _, kv := range sessionResp.Kvs {
+			var attrs []Attr
+			err = decoder.Unmarshal(kv.Value, &attrs)
+			if err != nil {
+				continue
+			}
+
+			sid := string(kv.Key)
+			//if there is a '/' at the end of the key, everything that follows is a session id.
+			idx := strings.LastIndexByte(sid, '/')
+			if idx != -1 {
+				sid = sid[idx+1:]
+				attrs = append(attrs, String(AttrSession, sid))
+			}
+
+			entity.Attrs = append(entity.Attrs, attrs...)
+		}
+
+		entity.postUnmarshal()
+		entities = append(entities, &entity)
+	}
+
+	return entities, nil
 }
 
 type EntityOpType int

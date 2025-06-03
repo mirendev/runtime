@@ -3,6 +3,7 @@ package entityserver
 import (
 	"context"
 	"log/slog"
+	"slices"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -215,4 +216,155 @@ func TestEntityServer_WatchIndex(t *testing.T) {
 	}))
 	require.NoError(t, err)
 
+}
+
+func TestEntityServer_List(t *testing.T) {
+	store := entity.NewMockStore()
+	server := &EntityServer{
+		Log:   slog.Default(),
+		Store: store,
+	}
+
+	sc := v1alpha.EntityAccessClient{
+		Client: rpc.LocalClient(v1alpha.AdaptEntityAccess(server)),
+	}
+
+	ctx := context.TODO()
+
+	// Create test entities
+	entities := []struct {
+		ident string
+		attrs []entity.Attr
+	}{
+		{
+			ident: "test/entity1",
+			attrs: []entity.Attr{
+				{ID: entity.Ident, Value: entity.KeywordValue("test/entity1")},
+				{ID: entity.Doc, Value: entity.StringValue("Test entity 1")},
+				{ID: entity.EntityKind, Value: entity.KeywordValue("test")},
+			},
+		},
+		{
+			ident: "test/entity2",
+			attrs: []entity.Attr{
+				{ID: entity.Ident, Value: entity.KeywordValue("test/entity2")},
+				{ID: entity.Doc, Value: entity.StringValue("Test entity 2")},
+				{ID: entity.EntityKind, Value: entity.KeywordValue("test")},
+			},
+		},
+		{
+			ident: "other/entity1",
+			attrs: []entity.Attr{
+				{ID: entity.Ident, Value: entity.KeywordValue("other/entity1")},
+				{ID: entity.Doc, Value: entity.StringValue("Other entity 1")},
+				{ID: entity.EntityKind, Value: entity.KeywordValue("other")},
+			},
+		},
+	}
+
+	for _, e := range entities {
+		_, err := store.CreateEntity(ctx, e.attrs)
+		require.NoError(t, err)
+	}
+
+	tests := []struct {
+		name      string
+		index     entity.Attr
+		wantCount int
+		wantIDs   []string
+		wantErr   bool
+	}{
+		{
+			name:      "list by kind - test",
+			index:     entity.Keyword(entity.EntityKind, "test"),
+			wantCount: 2,
+			wantIDs:   []string{"test/entity1", "test/entity2"},
+			wantErr:   false,
+		},
+		{
+			name:      "list by kind - other",
+			index:     entity.Keyword(entity.EntityKind, "other"),
+			wantCount: 1,
+			wantIDs:   []string{"other/entity1"},
+			wantErr:   false,
+		},
+		{
+			name:      "list by non-existent index",
+			index:     entity.Keyword(entity.EntityKind, "nonexistent"),
+			wantCount: 0,
+			wantIDs:   []string{},
+			wantErr:   false,
+		},
+		{
+			name:      "list by specific ident",
+			index:     entity.Keyword(entity.Ident, "test/entity1"),
+			wantCount: 1,
+			wantIDs:   []string{"test/entity1"},
+			wantErr:   false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resp, err := sc.List(ctx, tt.index)
+			if tt.wantErr {
+				require.Error(t, err)
+				return
+			}
+
+			require.NoError(t, err)
+			results := resp.Values()
+			assert.Equal(t, tt.wantCount, len(results))
+
+			// Collect IDs from results
+			gotIDs := make([]string, 0)
+			for _, result := range results {
+				gotIDs = append(gotIDs, result.Id())
+			}
+
+			// Sort for consistent comparison
+			slices.Sort(gotIDs)
+			slices.Sort(tt.wantIDs)
+			
+			assert.Equal(t, tt.wantIDs, gotIDs)
+
+			// Verify each entity has the expected attributes
+			for _, result := range results {
+				assert.NotEmpty(t, result.Attrs())
+				assert.Greater(t, result.Revision(), int64(0))
+			}
+		})
+	}
+}
+
+func TestEntityServer_List_WithMissingEntity(t *testing.T) {
+	store := entity.NewMockStore()
+	server := &EntityServer{
+		Log:   slog.Default(),
+		Store: store,
+	}
+
+	sc := v1alpha.EntityAccessClient{
+		Client: rpc.LocalClient(v1alpha.AdaptEntityAccess(server)),
+	}
+
+	ctx := context.TODO()
+
+	// Create an entity
+	_, err := store.CreateEntity(ctx, []entity.Attr{
+		{ID: entity.Ident, Value: entity.KeywordValue("test/entity1")},
+		{ID: entity.EntityKind, Value: entity.KeywordValue("test")},
+	})
+	require.NoError(t, err)
+
+	// Override GetEntities to return a nil entry to simulate missing entity
+	store.GetEntitiesFunc = func(ctx context.Context, ids []entity.Id) ([]*entity.Entity, error) {
+		// Return array with nil entry
+		return []*entity.Entity{nil}, nil
+	}
+
+	// List should fail when GetEntities returns nil entry
+	_, err = sc.List(ctx, entity.Keyword(entity.EntityKind, "test"))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "entity not found")
 }
