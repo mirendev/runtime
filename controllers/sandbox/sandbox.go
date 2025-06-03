@@ -226,7 +226,14 @@ func (c *SandboxController) Init(ctx context.Context) error {
 
 	c.RunscMon.Ports = c
 
-	c.RunscMon.SetEndpoint(filepath.Join(c.Tempdir, "runsc-mon.sock"))
+	monPath := filepath.Join(c.Tempdir, "runsc-mon.sock")
+
+	if _, err := os.Stat(monPath); err == nil {
+		c.Log.Warn("runsc monitor socket already exists, removing it", "path", monPath)
+		os.Remove(monPath)
+	}
+
+	c.RunscMon.SetEndpoint(monPath)
 
 	err := c.RunscMon.WritePodInit(podInit)
 	if err != nil {
