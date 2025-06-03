@@ -42,7 +42,7 @@ type Device interface {
 	io.ReaderAt
 	io.WriterAt
 	// Sync should block until all previous writes where written to persistent
-	// storage and return any errors that occured.
+	// storage and return any errors that occurred.
 	Sync() error
 }
 
