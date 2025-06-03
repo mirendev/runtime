@@ -371,7 +371,6 @@ func (b *Builder) BuildFromTar(ctx context.Context, state *build_v1alpha.Builder
 
 	b.Log.Info("app version updated", "app", name, "version", mrv.Version)
 
-
 	state.Results().SetVersion(mrv.Version)
 
 	return nil
