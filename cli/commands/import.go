@@ -12,7 +12,7 @@ import (
 	"strconv"
 	"strings"
 
-	"miren.dev/runtime/app"
+	"miren.dev/runtime/api/app/app_v1alpha"
 	"miren.dev/runtime/appconfig"
 )
 
@@ -97,9 +97,9 @@ func Import(ctx *Context, opts struct {
 		return err
 	}
 
-	aclient := app.CrudClient{Client: cl}
+	aclient := app_v1alpha.CrudClient{Client: cl}
 
-	var envvars []*app.NamedValue
+	var envvars []*app_v1alpha.NamedValue
 
 	ctx.Begin("Configuring environment variables")
 
@@ -118,12 +118,12 @@ func Import(ctx *Context, opts struct {
 			return fmt.Errorf("invalid env var: %s", v)
 		}
 
-		idx := slices.IndexFunc(envvars, func(nv *app.NamedValue) bool {
+		idx := slices.IndexFunc(envvars, func(nv *app_v1alpha.NamedValue) bool {
 			return nv.Key() == parts[0]
 		})
 
 		if idx == -1 {
-			var nv app.NamedValue
+			var nv app_v1alpha.NamedValue
 
 			nv.SetKey(parts[0])
 			nv.SetValue(parts[1])
@@ -143,7 +143,7 @@ func Import(ctx *Context, opts struct {
 
 		ctx.Info("Setting %s...", env.Name)
 
-		var nv app.NamedValue
+		var nv app_v1alpha.NamedValue
 		nv.SetKey(env.Name)
 
 		switch env.Generator {
@@ -165,18 +165,18 @@ func Import(ctx *Context, opts struct {
 		envvars = append(envvars, &nv)
 	}
 
-	var newCfg app.Configuration
+	var newCfg app_v1alpha.Configuration
 	newCfg.SetEnvVars(envvars)
 
 	var wc, threads int
 
-	var autoCon *app.AutoConcurrency
+	var autoCon *app_v1alpha.AutoConcurrency
 
 	for _, env := range envvars {
 		switch env.Key() {
 		case "WEB_CONCURRENCY":
 			if env.Value() == "auto" {
-				autoCon = &app.AutoConcurrency{}
+				autoCon = &app_v1alpha.AutoConcurrency{}
 				continue
 			}
 			v, err := strconv.Atoi(env.Value())

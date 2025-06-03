@@ -36,14 +36,14 @@ This is the **Miren Runtime** - a container orchestration system built on contai
 ### Core Components
 
 **Entity System** (`pkg/entity/`, `api/entityserver/`):
-- Central entity store using PostgreSQL backend
+- Central entity store using etcd backend
 - Entity types defined in `api/*/schema.yml` files and generated Go structs
 - Supports entity watching, indexing, and relationship management
 - Controllers reconcile desired vs actual state
 
-**Application Management** (`app/`, `servers/app/`):
+**Application Management** (`servers/app/`):
 - Apps have versions with configurations (env vars, commands, concurrency)
-- Database stores app metadata, filesystem stores runtime configs
+- Entity store manages app metadata, filesystem stores runtime configs
 - Default app controller handles app lifecycle
 
 **Sandbox Management** (`controllers/sandbox/`):
@@ -72,7 +72,7 @@ This is the **Miren Runtime** - a container orchestration system built on contai
 
 ### Development Environment Setup
 
-The system uses Dagger for containerized development with all dependencies (containerd, buildkit, gvisor, PostgreSQL, etcd, ClickHouse, MinIO) provided as services. The development container includes proper cgroup setup for gvisor compatibility.
+The system uses Dagger for containerized development with all dependencies (containerd, buildkit, gvisor, etcd, ClickHouse, MinIO) provided as services. The development container includes proper cgroup setup for gvisor compatibility.
 
 ### Testing Notes
 

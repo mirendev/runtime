@@ -1,3 +1,0 @@
-#!/bin/sh
-
-exec psql postgres://runtime:runtime@localhost:5432/runtime_prod

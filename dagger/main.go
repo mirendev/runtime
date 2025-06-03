@@ -59,14 +59,6 @@ func (m *Runtime) WithServices(dir *dagger.Directory) *dagger.Container {
 		WithExposedPort(9000).
 		AsService()
 
-	pg := dag.Container().
-		From("postgres:17").
-		WithEnvVariable("POSTGRES_DB", "runtime_test").
-		WithEnvVariable("POSTGRES_USER", "postgres").
-		WithEnvVariable("POSTGRES_HOST_AUTH_METHOD", "trust").
-		WithExposedPort(5432).
-		AsService()
-
 	etcd := dag.Container().
 		From("bitnami/etcd:3.5.19").
 		WithEnvVariable("ALLOW_NONE_AUTHENTICATION", "yes").
@@ -86,7 +78,6 @@ func (m *Runtime) WithServices(dir *dagger.Directory) *dagger.Container {
 
 	return m.BuildEnv(dir).
 		WithServiceBinding("clickhouse", ch).
-		WithServiceBinding("postgres", pg).
 		WithServiceBinding("etcd", etcd).
 		WithServiceBinding("minio", minio)
 }
