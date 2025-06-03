@@ -26,6 +26,20 @@ kinds:
       type: ref
       doc: The version of the project that should be used
 
+  artifact:
+    app:
+      type: ref
+      doc: The application the artifact is for
+
+    manifest:
+      type: string
+      doc: The OCI image manifest for the version
+
+    manifest_digest:
+      type: string
+      doc: The digest of the manifest
+      indexed: true
+
   app_version:
     app:
       type: ref
@@ -33,9 +47,14 @@ kinds:
     version:
       type: string
       doc: The version of this app
+
     image_url:
       type: string
       doc: The OCI url for the versions code
+
+    artifact:
+      type: ref
+      doc: The artifact to deploy for the version
 
     manifest:
       type: string
