@@ -249,6 +249,12 @@ func (h *Server) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
+	if actLease == nil {
+		h.Log.Debug("no lease available for app", "app", hr.App)
+		http.Error(w, fmt.Sprintf("no lease available for app: %s", hr.App), http.StatusServiceUnavailable)
+		return
+	}
+
 	localLease := h.retainLease(ctx, hr.App.String(), actLease)
 
 	defer h.releaseLease(ctx, localLease)
