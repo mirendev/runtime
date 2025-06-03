@@ -1281,6 +1281,7 @@ func (c *SandboxController) buildSubContainerSpec(
 			"io.kubernetes.cri.container-type": "container",
 			"io.kubernetes.cri.sandbox-id":     c.containerId(sb.ID),
 		}),
+		oci.WithEnv(co.Env),
 	}
 
 	if co.Command != "" {
