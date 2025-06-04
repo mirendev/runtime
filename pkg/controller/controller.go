@@ -74,7 +74,7 @@ type ReconcileController struct {
 // NewReconcileController creates a new controller
 func NewReconcileController(name string, log *slog.Logger, index entity.Attr, esc *entityserver_v1alpha.EntityAccessClient, handler HandlerFunc, resyncPeriod time.Duration, workers int) *ReconcileController {
 	return &ReconcileController{
-		Log:          log,
+		Log:          log.With("module", fmt.Sprintf("reconcile.%s", name)),
 		name:         name,
 		index:        index,
 		esc:          esc,
