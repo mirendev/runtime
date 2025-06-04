@@ -154,7 +154,12 @@ waitForCreate:
 			c, err = runner.ContainerdContainerForSandbox(ctx, entity.Id(id))
 			r.NoError(err)
 			if c != nil {
-				break waitForCreate
+				if t, _ := c.Task(ctx, nil); t != nil {
+					// We're looking for an actual running process before we continue
+					if pids, _ := t.Pids(ctx); len(pids) > 0 {
+						break waitForCreate
+					}
+				}
 			}
 		}
 	}
@@ -166,6 +171,7 @@ waitForCreate:
 
 	r.Equal(id, lbl["runtime.computer/entity-id"])
 
+	// Extra cleanup attempt in case the test fails
 	defer testutils.ClearContainer(ctx, c)
 
 	r.NotNil(c)
@@ -178,7 +184,7 @@ waitForCreate:
 	// Wait for container to be cleaned up with timeout
 	var cleanedUp bool
 	timeout = time.After(10 * time.Second)
-	ticker = time.NewTicker(100 * time.Millisecond)
+	ticker = time.NewTicker(500 * time.Millisecond)
 	defer ticker.Stop()
 
 	for {
