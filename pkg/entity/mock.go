@@ -9,8 +9,9 @@ import (
 )
 
 type MockStore struct {
-	Entities     map[Id]*Entity
-	OnWatchIndex func(ctx context.Context, attr Attr) (clientv3.WatchChan, error)
+	Entities        map[Id]*Entity
+	OnWatchIndex    func(ctx context.Context, attr Attr) (clientv3.WatchChan, error)
+	GetEntitiesFunc func(ctx context.Context, ids []Id) ([]*Entity, error)
 }
 
 var _ Store = &MockStore{}
@@ -26,6 +27,22 @@ func (m *MockStore) GetEntity(ctx context.Context, id Id) (*Entity, error) {
 		return e, nil
 	}
 	return nil, ErrNotFound
+}
+
+func (m *MockStore) GetEntities(ctx context.Context, ids []Id) ([]*Entity, error) {
+	if m.GetEntitiesFunc != nil {
+		return m.GetEntitiesFunc(ctx, ids)
+	}
+	
+	entities := make([]*Entity, 0, len(ids))
+	for _, id := range ids {
+		if e, ok := m.Entities[id]; ok {
+			entities = append(entities, e)
+		} else {
+			entities = append(entities, nil)
+		}
+	}
+	return entities, nil
 }
 
 func (m *MockStore) CreateEntity(ctx context.Context, attrs []Attr, opts ...EntityOption) (*Entity, error) {
@@ -108,10 +125,15 @@ func (m *MockStore) WatchEntity(ctx context.Context, id Id) (chan EntityOp, erro
 }
 
 func (m *MockStore) ListIndex(ctx context.Context, attr Attr) ([]Id, error) {
-	// For simplicity, return all entities as a list
+	// Filter entities by the given attribute
 	var ids []Id
-	for id := range m.Entities {
-		ids = append(ids, id)
+	for id, entity := range m.Entities {
+		for _, a := range entity.Attrs {
+			if a.ID == attr.ID && a.Value.Equal(attr.Value) {
+				ids = append(ids, id)
+				break
+			}
+		}
 	}
 
 	return ids, nil

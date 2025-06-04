@@ -404,13 +404,16 @@ func (e *EntityServer) List(ctx context.Context, req *entityserver_v1alpha.Entit
 		return fmt.Errorf("failed to list entities: %w", err)
 	}
 
+	// Use batch retrieval for better performance
+	entities, err := e.Store.GetEntities(ctx, ids)
+	if err != nil {
+		return fmt.Errorf("failed to get entities: %w", err)
+	}
+
 	var ret []*entityserver_v1alpha.Entity
-
-	for _, id := range ids {
-
-		entity, err := e.Store.GetEntity(ctx, entity.Id(id))
-		if err != nil {
-			return fmt.Errorf("failed to get entity: %w", err)
+	for i, entity := range entities {
+		if entity == nil {
+			return fmt.Errorf("entity not found: %s", ids[i])
 		}
 
 		var rpcEntity entityserver_v1alpha.Entity

@@ -2,6 +2,7 @@ package entity
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"testing"
 	"time"
@@ -712,4 +713,288 @@ func TestWatchIndex_DBID(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("Timeout waiting for creation event")
 	}
+}
+
+func TestEtcdStore_GetEntities(t *testing.T) {
+	client := setupTestEtcd(t)
+	store, err := NewEtcdStore(t.Context(), slog.Default(), client, "/test-entities")
+	require.NoError(t, err)
+
+	// Create multiple test entities
+	entity1, err := store.CreateEntity(t.Context(), []Attr{
+		Any(Ident, "test-entity-1"),
+		Any(Doc, "first test document"),
+	})
+	require.NoError(t, err)
+
+	entity2, err := store.CreateEntity(t.Context(), []Attr{
+		Any(Ident, "test-entity-2"),
+		Any(Doc, "second test document"),
+	})
+	require.NoError(t, err)
+
+	entity3, err := store.CreateEntity(t.Context(), []Attr{
+		Any(Ident, "test-entity-3"),
+		Any(Doc, "third test document"),
+	})
+	require.NoError(t, err)
+
+	tests := []struct {
+		name       string
+		ids        []Id
+		wantCount  int
+		wantNils   int
+		checkOrder bool
+		wantErr    bool
+	}{
+		{
+			name:      "empty ID list",
+			ids:       []Id{},
+			wantCount: 0,
+			wantNils:  0,
+			wantErr:   false,
+		},
+		{
+			name:       "single existing entity",
+			ids:        []Id{entity1.ID},
+			wantCount:  1,
+			wantNils:   0,
+			checkOrder: true,
+			wantErr:    false,
+		},
+		{
+			name:       "multiple existing entities",
+			ids:        []Id{entity1.ID, entity2.ID, entity3.ID},
+			wantCount:  3,
+			wantNils:   0,
+			checkOrder: true,
+			wantErr:    false,
+		},
+		{
+			name:       "multiple existing entities in different order",
+			ids:        []Id{entity3.ID, entity1.ID, entity2.ID},
+			wantCount:  3,
+			wantNils:   0,
+			checkOrder: true,
+			wantErr:    false,
+		},
+		{
+			name:      "non-existent entities",
+			ids:       []Id{"non-existent-1", "non-existent-2"},
+			wantCount: 2,
+			wantNils:  2,
+			wantErr:   false,
+		},
+		{
+			name:       "mixed existing and non-existing entities",
+			ids:        []Id{entity1.ID, "non-existent", entity2.ID, "another-non-existent"},
+			wantCount:  4,
+			wantNils:   2,
+			checkOrder: true,
+			wantErr:    false,
+		},
+		{
+			name:       "duplicate IDs",
+			ids:        []Id{entity1.ID, entity1.ID, entity2.ID},
+			wantCount:  3,
+			wantNils:   0,
+			checkOrder: true,
+			wantErr:    false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := store.GetEntities(t.Context(), tt.ids)
+			if tt.wantErr {
+				assert.Error(t, err)
+				return
+			}
+
+			require.NoError(t, err)
+			assert.Len(t, got, tt.wantCount)
+
+			// Count nils
+			nilCount := 0
+			for _, e := range got {
+				if e == nil {
+					nilCount++
+				}
+			}
+			assert.Equal(t, tt.wantNils, nilCount)
+
+			// Check order preservation
+			if tt.checkOrder {
+				for i, id := range tt.ids {
+					if got[i] != nil {
+						assert.Equal(t, id, got[i].ID, "Entity at index %d should have ID %s", i, id)
+					}
+				}
+			}
+
+			// Verify entity contents for non-nil results
+			for i, entity := range got {
+				if entity != nil {
+					// Verify it has expected attributes
+					assert.NotEmpty(t, entity.Attrs)
+					assert.Greater(t, entity.Revision, int64(0))
+					assert.NotZero(t, entity.CreatedAt)
+					assert.NotZero(t, entity.UpdatedAt)
+					
+					// Check that the ID matches what we requested
+					assert.Equal(t, tt.ids[i], entity.ID)
+				}
+			}
+		})
+	}
+
+	t.Run("with session attributes", func(t *testing.T) {
+		r := require.New(t)
+
+		// Create a schema for session attribute
+		_, err := store.CreateEntity(t.Context(), Attrs(
+			Ident, "test/session-status",
+			Doc, "A session status",
+			Cardinality, CardinalityMany,
+			Type, TypeStr,
+			Session, true,
+		))
+		r.NoError(err)
+
+		// Create session
+		sid, err := store.CreateSession(t.Context(), 30)
+		r.NoError(err)
+
+		// Create entities with session attributes
+		entity4, err := store.CreateEntity(t.Context(), []Attr{
+			Any(Ident, "test-entity-4"),
+		}, WithSession(sid))
+		r.NoError(err)
+
+		// Add session attribute
+		_, err = store.UpdateEntity(t.Context(), entity4.ID, []Attr{
+			String(Id("test/session-status"), "active"),
+		}, WithSession(sid))
+		r.NoError(err)
+
+		entity5, err := store.CreateEntity(t.Context(), []Attr{
+			Any(Ident, "test-entity-5"),
+			String(Id("test/session-status"), "pending"),
+		}, WithSession(sid))
+		r.NoError(err)
+
+		// Get entities with session attributes
+		entities, err := store.GetEntities(t.Context(), []Id{entity4.ID, entity5.ID})
+		r.NoError(err)
+		r.Len(entities, 2)
+
+		// Verify session attributes are included
+		for i, e := range entities {
+			r.NotNil(e)
+			status, ok := e.Get(Id("test/session-status"))
+			r.True(ok, "Entity %d should have session status", i)
+			r.NotEmpty(status.Value.String())
+			
+			// Check for session ID attribute
+			sessionAttr, ok := e.Get(AttrSession)
+			r.True(ok, "Entity %d should have session attribute", i)
+			r.NotEmpty(sessionAttr.Value.String())
+		}
+
+		// Revoke session and verify session attributes are gone
+		r.NoError(store.RevokeSession(t.Context(), sid))
+
+		// Get entities again
+		entities, err = store.GetEntities(t.Context(), []Id{entity4.ID, entity5.ID})
+		r.NoError(err)
+		r.Len(entities, 2)
+
+		// Verify session attributes are removed
+		for i, e := range entities {
+			r.NotNil(e)
+			_, ok := e.Get(Id("test/session-status"))
+			r.False(ok, "Entity %d should not have session status after revoke", i)
+		}
+	})
+
+	t.Run("with TTL/lease", func(t *testing.T) {
+		r := require.New(t)
+
+		// Create session with TTL
+		sid, err := store.CreateSession(t.Context(), 30)
+		r.NoError(err)
+
+		// Create entities bound to session (will have TTL)
+		entity6, err := store.CreateEntity(t.Context(), []Attr{
+			Any(Ident, "test-entity-6"),
+		}, BondToSession(sid))
+		r.NoError(err)
+
+		entity7, err := store.CreateEntity(t.Context(), []Attr{
+			Any(Ident, "test-entity-7"),
+		}, BondToSession(sid))
+		r.NoError(err)
+
+		// Get entities and verify TTL attribute is added
+		entities, err := store.GetEntities(t.Context(), []Id{entity6.ID, entity7.ID})
+		r.NoError(err)
+		r.Len(entities, 2)
+
+		for i, e := range entities {
+			r.NotNil(e)
+			ttlAttr, ok := e.Get(TTL)
+			r.True(ok, "Entity %d should have TTL attribute", i)
+			
+			// TTL should be a duration
+			ttlDuration := ttlAttr.Value.Duration()
+			r.Greater(ttlDuration, time.Duration(0))
+			r.LessOrEqual(ttlDuration, 30*time.Second)
+		}
+
+		// Clean up
+		r.NoError(store.RevokeSession(t.Context(), sid))
+	})
+
+	t.Run("large batch", func(t *testing.T) {
+		r := require.New(t)
+
+		// Create a larger batch of entities
+		var ids []Id
+		numEntities := 50
+		for i := 0; i < numEntities; i++ {
+			entity, err := store.CreateEntity(t.Context(), []Attr{
+				Any(Ident, fmt.Sprintf("batch-entity-%d", i)),
+				Any(Doc, fmt.Sprintf("Batch document %d", i)),
+			})
+			r.NoError(err)
+			ids = append(ids, entity.ID)
+		}
+
+		// Add some non-existent IDs
+		ids = append(ids, "non-existent-batch-1", "non-existent-batch-2")
+
+		// Get all entities
+		entities, err := store.GetEntities(t.Context(), ids)
+		r.NoError(err)
+		r.Len(entities, numEntities+2)
+
+		// Verify we got the right number of valid entities
+		validCount := 0
+		for _, e := range entities {
+			if e != nil {
+				validCount++
+			}
+		}
+		r.Equal(numEntities, validCount)
+
+		// Verify order is preserved
+		for i := 0; i < numEntities; i++ {
+			r.NotNil(entities[i])
+			r.Equal(ids[i], entities[i].ID)
+		}
+
+		// Last two should be nil
+		r.Nil(entities[numEntities])
+		r.Nil(entities[numEntities+1])
+	})
 }
