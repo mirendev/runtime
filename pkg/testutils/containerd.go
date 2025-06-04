@@ -36,7 +36,7 @@ func NukeNamespace(cl *containerd.Client, ns string) {
 				return
 			}
 		} else {
-			break
+			return
 		}
 
 		time.Sleep(time.Second / 2)

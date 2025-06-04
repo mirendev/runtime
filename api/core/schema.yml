@@ -22,6 +22,7 @@ kinds:
     project:
       type: ref
       doc: The project that the app belongs to
+
     active_version:
       type: ref
       doc: The version of the project that should be used

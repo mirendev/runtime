@@ -313,7 +313,7 @@ func (b *Buildkit) BuildImage(
 	ctx context.Context,
 	dfs fsutil.FS,
 	bs BuildStack,
-	name string,
+	app, imageURL string,
 	tos ...TransformOptions,
 ) (*BuildResult, error) {
 	var opts transformOpt
@@ -343,7 +343,7 @@ func (b *Buildkit) BuildImage(
 
 	exportAttr := map[string]string{
 		"push": "true",
-		"name": name,
+		"name": imageURL,
 	}
 
 	var res BuildResult
@@ -360,6 +360,7 @@ func (b *Buildkit) BuildImage(
 		}
 
 		state, err := stack.GenerateLLB(bs.CodeDir, stackbuild.BuildOptions{
+			Name:        app,
 			OnBuild:     bs.OnBuild,
 			Version:     bs.Version,
 			AlpineImage: bs.AlpineImage,

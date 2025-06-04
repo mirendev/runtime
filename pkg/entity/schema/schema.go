@@ -104,7 +104,7 @@ func Apply(ctx context.Context, store entity.Store) error {
 				)...)
 			}
 
-			_, err := store.CreateEntity(ctx, attrs)
+			_, err := store.CreateEntity(ctx, attrs, entity.WithOverwrite)
 			if err != nil && !errors.Is(err, entity.ErrEntityAlreadyExists) {
 				return err
 			}
@@ -113,7 +113,7 @@ func Apply(ctx context.Context, store entity.Store) error {
 				_, err := store.CreateEntity(ctx, entity.Attrs(
 					entity.Ident, types.Keyword(kw),
 					entity.EntitySchema, schemaId,
-				))
+				), entity.WithOverwrite)
 				if err != nil && !errors.Is(err, entity.ErrEntityAlreadyExists) {
 					return err
 				}

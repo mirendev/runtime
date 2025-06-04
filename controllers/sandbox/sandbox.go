@@ -96,6 +96,11 @@ type SandboxController struct {
 	portMap  map[string]*containerPorts
 }
 
+func (c *SandboxController) Populated() error {
+	c.Log = c.Log.With("module", "sandbox")
+	return nil
+}
+
 func (c *SandboxController) setupRunscConfig() error {
 	if c.RunscBinary == "" {
 		c.RunscBinary = "runsc"
@@ -506,6 +511,7 @@ func (c *SandboxController) updateSandbox(ctx context.Context, sb *compute.Sandb
 }
 
 func (c *SandboxController) Create(ctx context.Context, co *compute.Sandbox, meta *entity.Meta) error {
+	c.Log.Info("considering sandbox", "id", co.ID, "status", co.Status)
 	switch co.Status {
 	case compute.DEAD:
 		return nil
@@ -1281,6 +1287,7 @@ func (c *SandboxController) buildSubContainerSpec(
 			"io.kubernetes.cri.container-type": "container",
 			"io.kubernetes.cri.sandbox-id":     c.containerId(sb.ID),
 		}),
+		oci.WithEnv(co.Env),
 	}
 
 	if co.Command != "" {
@@ -1335,7 +1342,6 @@ func (c *SandboxController) destroySubContainers(ctx context.Context, sb *comput
 
 		cont, err := c.CC.LoadContainer(ctx, id)
 		if err != nil {
-			c.Log.Error("failed to load container", "id", id, "err", err)
 			continue
 		}
 
@@ -1396,7 +1402,6 @@ loop:
 
 		cont, err := c.CC.LoadContainer(ctx, id)
 		if err != nil {
-			c.Log.Error("failed to load container", "id", id, "err", err)
 			continue
 		}
 
@@ -1443,54 +1448,52 @@ func (c *SandboxController) stopSandbox(ctx context.Context, sb *compute.Sandbox
 	}
 
 	container, err := c.CC.LoadContainer(ctx, c.containerId(sb.ID))
-	if err != nil {
-		return err
-	}
-
-	labels, err := container.Labels(ctx)
-	if err != nil {
-		return err
-	}
-
-	task, err := container.Task(ctx, nil)
-	if err != nil {
-		return err
-	}
-
-	if task != nil {
-		_, err = task.Delete(ctx, containerd.WithProcessKill)
+	if err == nil {
+		labels, err := container.Labels(ctx)
 		if err != nil {
 			return err
 		}
-	}
 
-	err = container.Delete(ctx, containerd.WithSnapshotCleanup)
-	if err != nil {
-		return err
-	}
-
-	for l, v := range labels {
-		if strings.HasPrefix(l, "runtime.computer/ip") {
-			addr, err := netip.ParseAddr(v)
-			if err == nil {
-				err = c.Subnet.ReleaseAddr(addr)
-				if err != nil {
-					c.Log.Error("failed to release IP", "addr", addr, "err", err)
-				}
-			} else {
-				c.Log.Error("failed to parse IP", "addr", v, "err", err)
-			}
-
-			c.Log.Debug("released IP", "addr", addr)
+		task, err := container.Task(ctx, nil)
+		if err != nil {
+			return err
 		}
+
+		if task != nil {
+			_, err = task.Delete(ctx, containerd.WithProcessKill)
+			if err != nil {
+				return err
+			}
+		}
+
+		err = container.Delete(ctx, containerd.WithSnapshotCleanup)
+		if err != nil {
+			return err
+		}
+
+		for l, v := range labels {
+			if strings.HasPrefix(l, "runtime.computer/ip") {
+				addr, err := netip.ParseAddr(v)
+				if err == nil {
+					err = c.Subnet.ReleaseAddr(addr)
+					if err != nil {
+						c.Log.Error("failed to release IP", "addr", addr, "err", err)
+					}
+				} else {
+					c.Log.Error("failed to parse IP", "addr", v, "err", err)
+				}
+
+				c.Log.Debug("released IP", "addr", addr)
+			}
+		}
+
+		// Ignore errors, as the directory might not exist if the container was
+		// cleared up elsewhere.
+		tmpDir := filepath.Join(c.Tempdir, "containerd", sb.ID.PathSafe())
+		_ = os.RemoveAll(tmpDir)
+
+		c.Log.Info("container stopped", "id", sb.ID)
 	}
-
-	// Ignore errors, as the directory might not exist if the container was
-	// cleared up elsewhere.
-	tmpDir := filepath.Join(c.Tempdir, "containerd", sb.ID.PathSafe())
-	_ = os.RemoveAll(tmpDir)
-
-	c.Log.Info("container stopped", "id", sb.ID)
 
 	var rpcE entityserver_v1alpha.Entity
 

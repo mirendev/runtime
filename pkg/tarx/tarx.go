@@ -6,7 +6,9 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 
+	"github.com/shibumi/go-pathspec"
 	"github.com/tonistiigi/fsutil"
 )
 
@@ -19,6 +21,21 @@ func MakeTar(dir string) (io.Reader, error) {
 	gzw := gzip.NewWriter(w)
 	tw := tar.NewWriter(gzw)
 
+	// Load .gitignore patterns
+	var gitignorePatterns []string
+	gitignorePath := filepath.Join(dir, ".gitignore")
+	if data, err := os.ReadFile(gitignorePath); err == nil {
+		lines := strings.Split(string(data), "\n")
+		for _, line := range lines {
+			line = strings.TrimSpace(line)
+			if line != "" && !strings.HasPrefix(line, "#") {
+				gitignorePatterns = append(gitignorePatterns, line)
+			}
+		}
+	}
+
+	gitignorePatterns = append(gitignorePatterns, ".git") // Always ignore .git directory
+
 	go func() {
 		defer w.Close()
 		defer tw.Close()
@@ -30,16 +47,39 @@ func MakeTar(dir string) (io.Reader, error) {
 				return err
 			}
 
-			hdr, err := tar.FileInfoHeader(info, "")
-			if err != nil {
-				return err
-			}
-
 			if dir == path {
 				return nil
 			}
 
 			rp, _ := filepath.Rel(dir, path)
+
+			// Skip .gitignore file itself
+			if rp == ".gitignore" {
+				return nil
+			}
+
+			// Check if file should be ignored by .gitignore
+			if len(gitignorePatterns) > 0 {
+				// Try both with and without trailing slash for directories
+				paths := []string{rp}
+				if info.IsDir() {
+					paths = append(paths, rp+"/")
+				}
+
+				for _, checkPath := range paths {
+					if ignore, err := pathspec.GitIgnore(gitignorePatterns, checkPath); err == nil && ignore {
+						if info.IsDir() {
+							return filepath.SkipDir
+						}
+						return nil
+					}
+				}
+			}
+
+			hdr, err := tar.FileInfoHeader(info, "")
+			if err != nil {
+				return err
+			}
 
 			hdr.Name = rp
 

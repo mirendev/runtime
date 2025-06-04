@@ -30,6 +30,7 @@ kinds:
     version:
       type: ref
       doc: A reference to the application version entity for the sandbox
+      indexed: true
 
     network:
       type: component

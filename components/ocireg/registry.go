@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"log/slog"
 	"net"
 	"net/http"
@@ -101,8 +100,6 @@ func NewRegistryHandler(storageRoot string, log *slog.Logger, ec *entityserver.C
 
 // ServeHTTP implements the http.Handler interface
 func (h *RegistryHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	log.Printf("%s %s", r.Method, r.URL.Path)
-
 	// Strip the leading /v2/ from the path
 	path := strings.TrimPrefix(r.URL.Path, "/v2/")
 
@@ -256,7 +253,7 @@ func (h *RegistryHandler) putManifest(w http.ResponseWriter, r *http.Request, na
 	// Read the manifest data
 	manifestData, err := io.ReadAll(r.Body)
 	if err != nil {
-		log.Printf("Error reading manifest data: %v", err)
+		h.log.Error("Error reading manifest data", "error", err)
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
@@ -321,7 +318,7 @@ func (h *RegistryHandler) getBlob(w http.ResponseWriter, r *http.Request, name, 
 
 	data, err := os.ReadFile(blobPath)
 	if err != nil {
-		log.Printf("Error reading blob %s: %v", blobPath, err)
+		h.log.Error("Error reading blob", "blobPath", blobPath, "error", err)
 		w.WriteHeader(http.StatusNotFound)
 		return
 	}
@@ -339,7 +336,7 @@ func (h *RegistryHandler) headBlob(w http.ResponseWriter, r *http.Request, name,
 
 	fileInfo, err := os.Stat(blobPath)
 	if err != nil {
-		log.Printf("Error stating blob %s: %v", blobPath, err)
+		h.log.Error("Error stating blob", "blobPath", blobPath, "error", err)
 		w.WriteHeader(http.StatusNotFound)
 		return
 	}
@@ -359,7 +356,7 @@ func (h *RegistryHandler) initBlobUpload(w http.ResponseWriter, r *http.Request,
 	uploadDir := filepath.Join(h.storageRoot, "uploads")
 	err := os.MkdirAll(uploadDir, 0755)
 	if err != nil {
-		log.Printf("Error creating upload directory %s: %v", uploadDir, err)
+		h.log.Error("Error creating upload directory", "uploadDir", uploadDir, "error", err)
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
@@ -368,7 +365,7 @@ func (h *RegistryHandler) initBlobUpload(w http.ResponseWriter, r *http.Request,
 	uploadPath := filepath.Join(uploadDir, uploadID)
 	err = os.WriteFile(uploadPath, []byte{}, 0644)
 	if err != nil {
-		log.Printf("Error creating upload file %s: %v", uploadPath, err)
+		h.log.Error("Error creating upload file", "uploadPath", uploadPath, "error", err)
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
@@ -387,7 +384,7 @@ func (h *RegistryHandler) chunkBlobUpload(w http.ResponseWriter, r *http.Request
 	// Check if the upload exists
 	_, err := os.Stat(uploadPath)
 	if err != nil {
-		log.Printf("Upload %s not found: %v", uploadPath, err)
+		h.log.Error("Error stating upload file", "uploadPath", uploadPath, "error", err)
 		w.WriteHeader(http.StatusNotFound)
 		return
 	}
@@ -395,7 +392,7 @@ func (h *RegistryHandler) chunkBlobUpload(w http.ResponseWriter, r *http.Request
 	// Open the file in append mode
 	file, err := os.OpenFile(uploadPath, os.O_APPEND|os.O_WRONLY, 0644)
 	if err != nil {
-		log.Printf("Error opening upload file %s: %v", uploadPath, err)
+		h.log.Error("Error opening upload file", "uploadPath", uploadPath, "error", err)
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
@@ -404,7 +401,7 @@ func (h *RegistryHandler) chunkBlobUpload(w http.ResponseWriter, r *http.Request
 	// Get current file size
 	fileInfo, err := file.Stat()
 	if err != nil {
-		log.Printf("Error stating upload file %s: %v", uploadPath, err)
+		h.log.Error("Error stating upload file", "uploadPath", uploadPath, "error", err)
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
@@ -413,7 +410,7 @@ func (h *RegistryHandler) chunkBlobUpload(w http.ResponseWriter, r *http.Request
 	// Copy request body to the file
 	n, err := io.Copy(file, r.Body)
 	if err != nil {
-		log.Printf("Error copying data to upload file %s: %v", uploadPath, err)
+		h.log.Error("Error copying data to upload file", "uploadPath", uploadPath, "error", err)
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
@@ -432,7 +429,7 @@ func (h *RegistryHandler) completeBlobUpload(w http.ResponseWriter, r *http.Requ
 	// Check if the upload exists
 	_, err := os.Stat(uploadPath)
 	if err != nil {
-		log.Printf("Upload %s not found: %v", uploadPath, err)
+		h.log.Error("Error stating upload file", "uploadPath", uploadPath, "error", err)
 		w.WriteHeader(http.StatusNotFound)
 		return
 	}
@@ -440,7 +437,7 @@ func (h *RegistryHandler) completeBlobUpload(w http.ResponseWriter, r *http.Requ
 	// Get the digest from the query parameters
 	digest := r.URL.Query().Get("digest")
 	if digest == "" {
-		log.Printf("Missing digest parameter")
+		h.log.Error("Missing digest parameter", "uploadPath", uploadPath)
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
@@ -449,7 +446,7 @@ func (h *RegistryHandler) completeBlobUpload(w http.ResponseWriter, r *http.Requ
 	blobsDir := filepath.Join(h.storageRoot, "blobs")
 	err = os.MkdirAll(blobsDir, 0755)
 	if err != nil {
-		log.Printf("Error creating blobs directory %s: %v", blobsDir, err)
+		h.log.Error("Error creating blobs directory", "blobsDir", blobsDir, "error", err)
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
@@ -458,7 +455,7 @@ func (h *RegistryHandler) completeBlobUpload(w http.ResponseWriter, r *http.Requ
 	if r.ContentLength > 0 {
 		file, err := os.OpenFile(uploadPath, os.O_APPEND|os.O_WRONLY, 0644)
 		if err != nil {
-			log.Printf("Error opening upload file %s: %v", uploadPath, err)
+			h.log.Error("Error opening upload file", "uploadPath", uploadPath, "error", err)
 			w.WriteHeader(http.StatusInternalServerError)
 			return
 		}
@@ -466,7 +463,7 @@ func (h *RegistryHandler) completeBlobUpload(w http.ResponseWriter, r *http.Requ
 		_, err = io.Copy(file, r.Body)
 		if err != nil {
 			file.Close()
-			log.Printf("Error copying data to upload file %s: %v", uploadPath, err)
+			h.log.Error("Error copying data to upload file", "uploadPath", uploadPath, "error", err)
 			w.WriteHeader(http.StatusInternalServerError)
 			return
 		}
@@ -477,7 +474,7 @@ func (h *RegistryHandler) completeBlobUpload(w http.ResponseWriter, r *http.Requ
 	finalPath := filepath.Join(blobsDir, digest)
 	err = os.Rename(uploadPath, finalPath)
 	if err != nil {
-		log.Printf("Error moving upload %s to %s: %v", uploadPath, finalPath, err)
+		h.log.Error("Error moving upload file", "uploadPath", uploadPath, "finalPath", finalPath, "error", err)
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}

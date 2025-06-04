@@ -58,6 +58,25 @@ type NetworkClient struct {
 	localClient  *localClient
 }
 
+func setTLSConfigServerName(tlsConf *tls.Config, addr net.Addr, host string) {
+	// If no ServerName is set, infer the ServerName from the host we're connecting to.
+	if tlsConf.ServerName != "" {
+		return
+	}
+	if host == "" {
+		if udpAddr, ok := addr.(*net.UDPAddr); ok {
+			tlsConf.ServerName = udpAddr.IP.String()
+			return
+		}
+	}
+	h, _, err := net.SplitHostPort(host)
+	if err != nil { // This happens if the host doesn't contain a port number.
+		tlsConf.ServerName = host
+		return
+	}
+	tlsConf.ServerName = h
+}
+
 func (c *NetworkClient) setupTransport() {
 	c.htr.Logger = c.State.log.With("module", "rpc-call")
 	c.htr.TLSClientConfig = c.tlsCfg
@@ -67,6 +86,8 @@ func (c *NetworkClient) setupTransport() {
 		if err != nil {
 			return nil, err
 		}
+
+		setTLSConfigServerName(tlsCfg, uaddr, addr)
 
 		return c.transport.DialEarly(ctx, uaddr, tlsCfg, cfg)
 	}
@@ -474,7 +495,7 @@ request:
 				continue request
 			}
 
-			return err
+			return fmt.Errorf("error performing http request to %s: %w", url, err)
 		}
 
 		defer hr.Body.Close()
@@ -567,7 +588,7 @@ request:
 				continue request
 			}
 
-			return err
+			return fmt.Errorf("error performing http request to %s: %w", url, err)
 		}
 
 		retry, err := c.handleCallStream(ctx, hr, sess, method, args, result, caps)
