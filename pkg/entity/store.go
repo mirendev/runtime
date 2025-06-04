@@ -108,6 +108,7 @@ type entityOpts struct {
 	bind         bool
 	session      []byte
 	fromRevision int64
+	overwrite    bool
 }
 
 type EntityOption func(*entityOpts)
@@ -129,6 +130,10 @@ func WithFromRevision(revision int64) EntityOption {
 	return func(opts *entityOpts) {
 		opts.fromRevision = revision
 	}
+}
+
+func WithOverwrite(opts *entityOpts) {
+	opts.overwrite = true
 }
 
 // CreateEntity implements Store interface
@@ -231,9 +236,15 @@ func (s *EtcdStore) CreateEntity(
 
 	txopt = append(txopt, coltxopt...)
 
+	var ifCmp []clientv3.Cmp
+
+	if !o.overwrite {
+		ifCmp = append(ifCmp, clientv3.Compare(clientv3.CreateRevision(key), "=", 0))
+	}
+
 	// Use Txn to check that the key doesn't exist yet
 	txnResp, err := s.client.Txn(ctx).
-		If(clientv3.Compare(clientv3.CreateRevision(key), "=", 0)).
+		If(ifCmp...).
 		Then(txopt...).
 		Else(clientv3.OpGet(key)).
 		Commit()
