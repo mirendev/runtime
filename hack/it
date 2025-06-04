@@ -1,3 +1,6 @@
 #!/usr/bin/env bash
 
+export DAGGER_NO_NAG=1
+export DO_NOT_TRACK=1
+
 dagger call test --dir=. --tests="$@" --fast --verboose
