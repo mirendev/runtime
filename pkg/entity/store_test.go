@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mr-tron/base58"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.etcd.io/etcd/api/v3/mvccpb"
@@ -383,15 +384,24 @@ func TestEtcdStore_UpdateEntity(t *testing.T) {
 
 		r.NoError(store.RevokeSession(t.Context(), sid))
 
+		ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+		defer cancel()
+
 		select {
+		case <-ctx.Done():
+			t.Error("timed out waiting for session revoke")
 		case <-t.Context().Done():
 			r.NoError(t.Context().Err())
 		case x := <-wc:
+			// The session revoke should send an event to the index watcher
 			r.Len(x.Events, 1)
 			r.Equal(x.Events[0].Type, mvccpb.DELETE)
 			r.Equal(x.Events[0].PrevKv.Value, []byte(entity.ID))
+			// This delete should be for the session-based index, not the main entity one
+			r.Contains(string(x.Events[0].PrevKv.Key), base58.Encode(sid))
 		}
 
+		// Entity should still exist, but no longer have the test/status
 		e3, err := store.GetEntity(t.Context(), entity.ID)
 		r.NoError(err)
 
@@ -713,6 +723,86 @@ func TestWatchIndex_DBID(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("Timeout waiting for creation event")
 	}
+}
+
+func TestEtcdStore_UpdateIndexedAttribute_Bug(t *testing.T) {
+	client := setupTestEtcd(t)
+	store, err := NewEtcdStore(t.Context(), slog.Default(), client, "/test-entities")
+	require.NoError(t, err)
+
+	// Create an index attribute that won't change
+	kindAttr, err := store.CreateEntity(t.Context(), Attrs(
+		Ident, "test/kind",
+		Doc, "a kind",
+		Cardinality, CardinalityOne,
+		Type, TypeStr,
+		Index, true,
+	))
+	require.NoError(t, err)
+
+	// Create an indexed attribute schema that we'll change below (similar to our default app boolean)
+	indexedAttr, err := store.CreateEntity(t.Context(), []Attr{
+		String(Ident, "test/default"),
+		Ref(Type, TypeBool),
+		Bool(Index, true),
+		Ref(Cardinality, CardinalityOne),
+	})
+	require.NoError(t, err)
+
+	// Create first entity with default=true
+	entity1, err := store.CreateEntity(t.Context(), []Attr{
+		String(Ident, "app1"),
+		String(kindAttr.ID, "test/app"),
+		Bool(indexedAttr.ID, true),
+	})
+	require.NoError(t, err)
+
+	// Create second entity with default=false
+	entity2, err := store.CreateEntity(t.Context(), []Attr{
+		String(Ident, "app2"),
+		String(kindAttr.ID, "test/app"),
+		Bool(indexedAttr.ID, false),
+	})
+	require.NoError(t, err)
+
+	// Verify initial state: only entity1 should be found when searching for default=true
+	entitiesWithTrue, err := store.ListIndex(t.Context(), Bool(indexedAttr.ID, true))
+	require.NoError(t, err)
+	assert.Len(t, entitiesWithTrue, 1)
+	assert.Equal(t, entity1.ID, entitiesWithTrue[0])
+
+	// Verify only entity2 is found when searching for default=false
+	entitiesWithFalse, err := store.ListIndex(t.Context(), Bool(indexedAttr.ID, false))
+	require.NoError(t, err)
+	assert.Len(t, entitiesWithFalse, 1)
+	assert.Equal(t, entity2.ID, entitiesWithFalse[0])
+
+	// Now update: set entity2 to default=true
+	_, err = store.UpdateEntity(t.Context(), entity2.ID, []Attr{
+		Bool(indexedAttr.ID, true),
+	})
+	require.NoError(t, err)
+
+	// Verify after update: both entities should be found with default=true
+	entitiesWithTrueAfter, err := store.ListIndex(t.Context(), Bool(indexedAttr.ID, true))
+	require.NoError(t, err)
+	assert.Len(t, entitiesWithTrueAfter, 2)
+
+	// Sort for consistent comparison
+	foundIDs := []string{string(entitiesWithTrueAfter[0]), string(entitiesWithTrueAfter[1])}
+	if foundIDs[0] > foundIDs[1] {
+		foundIDs[0], foundIDs[1] = foundIDs[1], foundIDs[0]
+	}
+	expectedIDs := []string{string(entity1.ID), string(entity2.ID)}
+	if expectedIDs[0] > expectedIDs[1] {
+		expectedIDs[0], expectedIDs[1] = expectedIDs[1], expectedIDs[0]
+	}
+	assert.Equal(t, expectedIDs, foundIDs)
+
+	// Verify none have default=false
+	entitiesWithFalseAfter, err := store.ListIndex(t.Context(), Bool(indexedAttr.ID, false))
+	require.NoError(t, err)
+	assert.Len(t, entitiesWithFalseAfter, 0)
 }
 
 func TestEtcdStore_GetEntities(t *testing.T) {
