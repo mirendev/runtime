@@ -258,3 +258,121 @@ func TestReconcileController_Resync(t *testing.T) {
 	// Should have at least 2 resync calls
 	assert.GreaterOrEqual(t, resyncCalls, 2)
 }
+
+// Test entity for AdaptController tests
+type TestEntity struct {
+	ID   string
+	Name string
+}
+
+var NameAttr = entity.Id("name")
+
+func (e *TestEntity) Decode(getter entity.AttrGetter) {
+	e.ID = entity.MustGet(getter, entity.Ident).Value.String()
+	if attr, ok := getter.Get(NameAttr); ok {
+		e.Name = attr.Value.String()
+	}
+}
+
+func (e *TestEntity) Encode() []entity.Attr {
+	return entity.Attrs(
+		entity.Ident, e.ID,
+		NameAttr, e.Name,
+	)
+}
+
+// Controller that only implements GenericController (no Update method)
+type BasicController struct {
+	CreateCalls []string
+	DeleteCalls []string
+}
+
+func (c *BasicController) Init(ctx context.Context) error { return nil }
+
+func (c *BasicController) Create(ctx context.Context, obj *TestEntity, meta *entity.Meta) error {
+	c.CreateCalls = append(c.CreateCalls, obj.ID)
+	return nil
+}
+
+func (c *BasicController) Delete(ctx context.Context, id entity.Id) error {
+	c.DeleteCalls = append(c.DeleteCalls, string(id))
+	return nil
+}
+
+// Controller that implements both GenericController and UpdatingController
+type UpdatingControllerImpl struct {
+	*BasicController
+	UpdateCalls []string
+}
+
+func (c *UpdatingControllerImpl) Update(ctx context.Context, obj *TestEntity, meta *entity.Meta) error {
+	c.UpdateCalls = append(c.UpdateCalls, obj.ID)
+	return nil
+}
+
+func TestAdaptController_WithoutUpdateMethod(t *testing.T) {
+	basicController := &BasicController{}
+	handler := AdaptController[TestEntity](basicController)
+
+	// Test EventAdded - should call Create
+	entity1 := &entity.Entity{
+		ID: "test1",
+		Attrs: entity.Attrs(
+			entity.Ident, "test1",
+			NameAttr, "Test Entity 1",
+		),
+	}
+
+	event := Event{
+		Type:   EventAdded,
+		Id:     "test1",
+		Entity: entity1,
+	}
+
+	_, err := handler(context.Background(), event)
+	require.NoError(t, err)
+
+	// Test EventUpdated - should call Create (fallback)
+	event.Type = EventUpdated
+	_, err = handler(context.Background(), event)
+	require.NoError(t, err)
+
+	// Verify calls
+	assert.Equal(t, []string{"test1", "test1"}, basicController.CreateCalls)
+	assert.Empty(t, basicController.DeleteCalls)
+}
+
+func TestAdaptController_WithUpdateMethod(t *testing.T) {
+	updatingController := &UpdatingControllerImpl{
+		BasicController: &BasicController{},
+	}
+	handler := AdaptController[TestEntity](updatingController)
+
+	// Test EventAdded - should call Create
+	entity1 := &entity.Entity{
+		ID: "test1",
+		Attrs: entity.Attrs(
+			entity.Ident, "test1",
+			NameAttr, "Test Entity 1",
+		),
+	}
+
+	event := Event{
+		Type:   EventAdded,
+		Id:     "test1",
+		Entity: entity1,
+	}
+
+	_, err := handler(context.Background(), event)
+	require.NoError(t, err)
+
+	// Test EventUpdated - should call Update
+	event.Type = EventUpdated
+	_, err = handler(context.Background(), event)
+	require.NoError(t, err)
+
+	// Verify calls
+	assert.Equal(t, []string{"test1"}, updatingController.BasicController.CreateCalls)
+	assert.Equal(t, []string{"test1"}, updatingController.UpdateCalls)
+	assert.Empty(t, updatingController.BasicController.DeleteCalls)
+}
