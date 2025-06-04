@@ -530,6 +530,18 @@ func (s *EtcdStore) UpdateEntity(
 		return nil, cond.Conflict("entity", entity.ID)
 	}
 
+	// Keep track of original indexed attributes for removal
+	originalIndexedAttrs := make(map[Id][]Attr)
+	for _, attr := range entity.Attrs {
+		schema, err := s.GetAttributeSchema(ctx, attr.ID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get attribute schema: %w", err)
+		}
+		if schema.Index {
+			originalIndexedAttrs[attr.ID] = append(originalIndexedAttrs[attr.ID], attr)
+		}
+	}
+
 	// Validate attributes
 	for _, attr := range attributes {
 		schema, err := s.GetAttributeSchema(ctx, attr.ID)
@@ -568,6 +580,8 @@ func (s *EtcdStore) UpdateEntity(
 
 	var coltxopt []clientv3.Op
 
+	// Build map of new indexed attributes
+	newIndexedAttrs := make(map[Id][]Attr)
 	for _, attr := range entity.Attrs {
 		schema, err := s.GetAttributeSchema(ctx, attr.ID)
 		if err != nil {
@@ -575,16 +589,38 @@ func (s *EtcdStore) UpdateEntity(
 		}
 
 		if schema.Index {
-			coltxopt = append(coltxopt, s.addToCollectionOp(entity, attr.CAS()))
-			if sessPart != "" {
-				coltxopt = append(coltxopt, s.addToCollectionSessionOp(entity, attr.CAS(), sessPart, sid))
-			}
+			newIndexedAttrs[attr.ID] = append(newIndexedAttrs[attr.ID], attr)
 		}
 
 		if schema.Session {
 			session = append(session, attr)
 		} else {
 			primary = append(primary, attr)
+		}
+	}
+
+	// Compare old and new indexed attributes and only update collections when values change
+	for attrID, oldAttrs := range originalIndexedAttrs {
+		newAttrs := newIndexedAttrs[attrID]
+
+		// Remove old attributes that are no longer present or have changed values
+		for _, oldAttr := range oldAttrs {
+			found := slices.ContainsFunc(newAttrs, oldAttr.Equal)
+			if !found {
+				coltxopt = append(coltxopt, s.deleteFromCollectionOp(entity, oldAttr.CAS()))
+			}
+		}
+	}
+
+	// All new indexed attributes should update their respective indexes so any watchers will get notified
+	for _, newAttrs := range newIndexedAttrs {
+		for _, newAttr := range newAttrs {
+			coltxopt = append(coltxopt, s.addToCollectionOp(entity, newAttr.CAS()))
+			// And if this is a session-bound update, add a subordinate index entry
+			// so that watchers will be updated when the lease expires
+			if sessPart != "" {
+				coltxopt = append(coltxopt, s.addToCollectionSessionOp(entity, newAttr.CAS(), sessPart, sid))
+			}
 		}
 	}
 
@@ -658,6 +694,7 @@ func (s *EtcdStore) DeleteEntity(ctx context.Context, id Id) error {
 		}
 
 		if schema.Index {
+			// TODO: Batch this as an op into the below txn
 			err := s.deleteFromCollection(entity, attr.CAS())
 			if err != nil {
 				return fmt.Errorf("failed to delete entity from collection: %w", err)
@@ -740,9 +777,7 @@ func (s *EtcdStore) addToCollectionSessionOp(entity *Entity, collection, suffix 
 	key := base58.Encode([]byte(entity.ID))
 	colKey := tr.Replace(collection)
 
-	key = fmt.Sprintf("%s/collections/%s/%s", s.prefix, colKey, key)
-
-	key = fmt.Sprintf("%s/%s", key, suffix)
+	key = fmt.Sprintf("%s/collections/%s/%s/%s", s.prefix, colKey, key, suffix)
 
 	return clientv3.OpPut(key, entity.ID.String(), clientv3.WithLease(clientv3.LeaseID(sid)))
 }
@@ -754,6 +789,15 @@ func (s *EtcdStore) addToCollectionOp(entity *Entity, collection string) clientv
 	key = fmt.Sprintf("%s/collections/%s/%s", s.prefix, colKey, key)
 
 	return clientv3.OpPut(key, entity.ID.String())
+}
+
+func (s *EtcdStore) deleteFromCollectionOp(entity *Entity, collection string) clientv3.Op {
+	key := base58.Encode([]byte(entity.ID))
+	colKey := tr.Replace(collection)
+
+	key = fmt.Sprintf("%s/collections/%s/%s", s.prefix, colKey, key)
+
+	return clientv3.OpDelete(key)
 }
 
 func (s *EtcdStore) deleteFromCollection(entity *Entity, collection string) error {
