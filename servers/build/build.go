@@ -13,6 +13,7 @@ import (
 	"github.com/moby/buildkit/client"
 	"github.com/tonistiigi/fsutil"
 	"miren.dev/runtime/api/build/build_v1alpha"
+	compute "miren.dev/runtime/api/compute/compute_v1alpha"
 	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/api/entityserver"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
@@ -20,6 +21,7 @@ import (
 	"miren.dev/runtime/components/netresolve"
 	"miren.dev/runtime/defaults"
 	"miren.dev/runtime/pkg/cond"
+	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/idgen"
 	"miren.dev/runtime/pkg/procfile"
 	"miren.dev/runtime/pkg/rpc/stream"
@@ -343,26 +345,10 @@ func (b *Builder) BuildFromTar(ctx context.Context, state *build_v1alpha.Builder
 		return fmt.Errorf("error creating app version: %w", err)
 	}
 
+	// Remember the old version before updating
+	oldVersion := appRec.ActiveVersion
+
 	appRec.ActiveVersion = id
-
-	/*
-		var rpcE entityserver_v1alpha.Entity
-
-		rpcE.SetAttrs(entity.Attrs(
-			(&core_v1alpha.Metadata{
-				Name: mrv.Version,
-			}).Encode,
-			entity.Ident, "app_verison/"+mrv.Version,
-			mrv.Encode,
-		))
-
-		pr, err := b.EAS.Put(ctx, &rpcE)
-		if err != nil {
-			return err
-		}
-
-		appRec.ActiveVersion = entity.Id(pr.Id())
-	*/
 
 	err = b.ec.Update(ctx, appRec)
 	if err != nil {
@@ -370,6 +356,41 @@ func (b *Builder) BuildFromTar(ctx context.Context, state *build_v1alpha.Builder
 	}
 
 	b.Log.Info("app version updated", "app", name, "version", mrv.Version)
+
+	// Stop sandboxes running the old version
+	if oldVersion != "" {
+		b.Log.Info("stopping sandboxes with old version", "oldVersion", oldVersion)
+
+		// Query for sandboxes with the old version
+		sandboxes, err := b.ec.List(ctx, entity.Ref(compute.SandboxVersionId, oldVersion))
+		if err != nil {
+			b.Log.Error("error listing sandboxes with old version", "error", err)
+			// Don't fail the build if we can't stop old sandboxes
+		} else {
+			for sandboxes.Next() {
+				var sb compute.Sandbox
+				err := sandboxes.Read(&sb)
+				if err != nil {
+					b.Log.Error("error reading sandbox", "error", err)
+					continue
+				}
+
+				// Only stop running sandboxes
+				if sb.Status == compute.RUNNING || sb.Status == compute.PENDING {
+					b.Log.Info("marking sandbox for stop", "sandbox", sb.ID, "status", sb.Status)
+
+					// Update sandbox status to STOPPED
+					err = b.ec.UpdateAttrs(ctx, sb.ID,
+						entity.Ref(compute.SandboxStatusId, compute.SandboxStatusStoppedId))
+					if err != nil {
+						b.Log.Error("error updating sandbox status", "sandbox", sb.ID, "error", err)
+					}
+
+					b.Log.Info("sandbox marked for stop", "sandbox", sb.ID)
+				}
+			}
+		}
+	}
 
 	state.Results().SetVersion(mrv.Version)
 
