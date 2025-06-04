@@ -9,12 +9,14 @@ import (
 	containerd "github.com/containerd/containerd/v2/client"
 	"github.com/davecgh/go-spew/spew"
 	"miren.dev/runtime/api/compute/compute_v1alpha"
+	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/api/entityserver"
 	es "miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/api/exec/exec_v1alpha"
 	"miren.dev/runtime/api/metric/metric_v1alpha"
 	"miren.dev/runtime/api/network/network_v1alpha"
 	"miren.dev/runtime/clientconfig"
+	"miren.dev/runtime/controllers/app"
 	"miren.dev/runtime/controllers/sandbox"
 	"miren.dev/runtime/controllers/service"
 	"miren.dev/runtime/pkg/asm"
@@ -223,12 +225,19 @@ func (r *Runner) SetupControllers(
 		return nil, err
 	}
 
+	defaultAppController := app.NewDefaultAppController(log, eas)
+
 	err := sbc.Init(ctx)
 	if err != nil {
 		return nil, err
 	}
 
 	err = serviceController.Init(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	err = defaultAppController.Init(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -274,6 +283,18 @@ func (r *Runner) SetupControllers(
 			serviceController.UpdateEndpoints,
 			0,
 			workers,
+		),
+	)
+
+	cm.AddController(
+		controller.NewReconcileController(
+			"default-app",
+			log,
+			entity.Ref(entity.EntityKind, core_v1alpha.KindApp),
+			eas,
+			controller.AdaptController(defaultAppController),
+			0, // No periodic resync needed
+			1, // Single worker is sufficient for this controller
 		),
 	)
 

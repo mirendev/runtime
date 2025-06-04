@@ -49,6 +49,17 @@ func AllCommands() map[string]cli.CommandFactory {
 		"set": func() (cli.Command, error) {
 			return Infer("set", "Set environment variables for an application", Set), nil
 		},
+		"app default set": func() (cli.Command, error) {
+			return Infer("app default set", "Set an app as the default", AppDefaultSet), nil
+		},
+
+		"app default unset": func() (cli.Command, error) {
+			return Infer("app default unset", "Remove default flag from all apps", AppDefaultUnset), nil
+		},
+
+		"app default show": func() (cli.Command, error) {
+			return Infer("app default show", "Show which app is currently default", AppDefaultShow), nil
+		},
 
 		// TODO: Errors with "unknown object: app"
 		// "set host": func() (cli.Command, error) {
