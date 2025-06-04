@@ -131,9 +131,6 @@ func TestRunnerCoordinatorIntegration(t *testing.T) {
 	_, err = eac.Put(ctx, sandbox)
 	r.NoError(err)
 
-	// Wait a bit for processing
-	time.Sleep(2 * time.Second)
-
 	var (
 		cc *containerd.Client
 	)
@@ -142,8 +139,25 @@ func TestRunnerCoordinatorIntegration(t *testing.T) {
 
 	ctx = namespaces.WithNamespace(ctx, runner.ContainerdNamespace())
 
-	c, err := runner.ContainerdContainerForSandbox(ctx, entity.Id(id))
-	r.NoError(err)
+	// Wait for container to be created with timeout
+	var c containerd.Container
+	timeout := time.After(10 * time.Second)
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+
+waitForCreate:
+	for {
+		select {
+		case <-timeout:
+			r.Fail("Timeout waiting for container creation")
+		case <-ticker.C:
+			c, err = runner.ContainerdContainerForSandbox(ctx, entity.Id(id))
+			r.NoError(err)
+			if c != nil {
+				break waitForCreate
+			}
+		}
+	}
 
 	r.NotNil(c)
 
@@ -161,13 +175,28 @@ func TestRunnerCoordinatorIntegration(t *testing.T) {
 	_, err = eac.Delete(ctx, id)
 	r.NoError(err)
 
-	// Wait a bit for processing
+	// Wait for container to be cleaned up with timeout
+	var cleanedUp bool
+	timeout = time.After(10 * time.Second)
+	ticker = time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
 
-	time.Sleep(2 * time.Second)
+	for {
+		select {
+		case <-timeout:
+			r.Fail("Timeout waiting for container cleanup")
+		case <-ticker.C:
+			c, err = runner.ContainerdContainerForSandbox(ctx, entity.Id(id))
+			r.NoError(err)
+			if c == nil {
+				cleanedUp = true
+				goto done
+			}
+		}
+	}
+done:
 
-	c, err = runner.ContainerdContainerForSandbox(ctx, entity.Id(id))
-	r.NoError(err)
-	r.Nil(c)
+	r.True(cleanedUp, "Container should be cleaned up after entity deletion")
 
 	// Cleanup
 	cancel()
