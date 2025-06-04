@@ -191,32 +191,62 @@ func (h *Server) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 
 	vals := resp.Values()
 
+	var targetAppId entity.Id
+	var routeType string
+
 	if len(vals) == 0 {
-		h.Log.Debug("no http route found", "host", onlyHost)
-		http.Error(w, fmt.Sprintf("no http route found: %s", onlyHost), http.StatusNotFound)
-		return
+		h.Log.Debug("no http route found, checking for default app", "host", onlyHost)
+
+		// Try to find a default app to route to
+		defaultResp, err := h.eac.List(ctx, entity.Bool(core_v1alpha.AppDefaultId, true))
+		if err != nil {
+			h.Log.Error("error looking up default app", "error", err)
+			http.Error(w, fmt.Sprintf("no http route found: %s", onlyHost), http.StatusNotFound)
+			return
+		}
+
+		defaultVals := defaultResp.Values()
+		if len(defaultVals) == 0 {
+			h.Log.Debug("no default app found", "host", onlyHost)
+			http.Error(w, fmt.Sprintf("no http route found: %s", onlyHost), http.StatusNotFound)
+			return
+		}
+
+		// Use the first default app found
+		var defaultApp core_v1alpha.App
+		defaultApp.Decode(defaultVals[0].Entity())
+
+		targetAppId = defaultApp.ID
+		routeType = "default"
+	} else {
+		// Use the http route
+		var hr ingress_v1alpha.HttpRoute
+		hr.Decode(vals[0].Entity())
+
+		targetAppId = hr.App
+		routeType = "route"
 	}
 
-	var hr ingress_v1alpha.HttpRoute
-	hr.Decode(vals[0].Entity())
+	h.Log.Info("routing request", "host", onlyHost, "app", targetAppId, "type", routeType)
 
-	curLease, err := h.useLease(ctx, hr.App.String())
+	// Common lease handling logic
+	curLease, err := h.useLease(ctx, targetAppId.String())
 	if err != nil {
-		h.Log.Error("error taking lease", "error", err, "app", hr.App)
-		http.Error(w, fmt.Sprintf("error taking lease: %s", hr.App), http.StatusInternalServerError)
+		h.Log.Error("error taking lease", "error", err, "app", targetAppId)
+		http.Error(w, fmt.Sprintf("error taking lease: %s", targetAppId), http.StatusInternalServerError)
 		return
 	}
 
 	if curLease != nil {
-		h.Log.Info("using existing lease", "app", hr.App, "url", curLease.Lease.URL)
+		h.Log.Info("using existing lease", "app", targetAppId, "url", curLease.Lease.URL)
 		h.forwardToLease(ctx, w, req, curLease)
 		return
 	}
 
-	gr, err := h.eac.Get(ctx, hr.App.String())
+	gr, err := h.eac.Get(ctx, targetAppId.String())
 	if err != nil {
-		h.Log.Error("error looking up application", "error", err, "app", hr.App)
-		http.Error(w, fmt.Sprintf("error looking up application: %s", hr.App), http.StatusInternalServerError)
+		h.Log.Error("error looking up application", "error", err, "app", targetAppId)
+		http.Error(w, fmt.Sprintf("error looking up application: %s", targetAppId), http.StatusInternalServerError)
 		return
 	}
 
@@ -227,8 +257,8 @@ func (h *Server) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	appMD.Decode(gr.Entity().Entity())
 
 	if app.ActiveVersion == "" {
-		h.Log.Debug("no active version for app", "app", hr.App)
-		http.Error(w, fmt.Sprintf("no active version for app: %s", hr.App), http.StatusNotFound)
+		h.Log.Debug("no active version for app", "app", targetAppId)
+		http.Error(w, fmt.Sprintf("no active version for app: %s", targetAppId), http.StatusNotFound)
 		return
 	}
 
@@ -244,18 +274,18 @@ func (h *Server) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 
 	actLease, err := h.aa.AcquireLease(ctx, &av, "http", "web")
 	if err != nil {
-		h.Log.Error("error acquiring lease", "error", err, "app", hr.App)
-		http.Error(w, fmt.Sprintf("error acquiring lease: %s", hr.App), http.StatusInternalServerError)
+		h.Log.Error("error acquiring lease", "error", err, "app", targetAppId)
+		http.Error(w, fmt.Sprintf("error acquiring lease: %s", targetAppId), http.StatusInternalServerError)
 		return
 	}
 
 	if actLease == nil {
-		h.Log.Debug("no lease available for app", "app", hr.App)
-		http.Error(w, fmt.Sprintf("no lease available for app: %s", hr.App), http.StatusServiceUnavailable)
+		h.Log.Debug("no lease available for app", "app", targetAppId)
+		http.Error(w, fmt.Sprintf("no lease available for app: %s", targetAppId), http.StatusServiceUnavailable)
 		return
 	}
 
-	localLease := h.retainLease(ctx, hr.App.String(), actLease)
+	localLease := h.retainLease(ctx, targetAppId.String(), actLease)
 
 	defer h.releaseLease(ctx, localLease)
 

@@ -295,6 +295,12 @@ type GenericController[P ControllerEntity] interface {
 	Delete(ctx context.Context, e entity.Id) error
 }
 
+// UpdatingController is an optional interface that controllers can implement
+// to handle updates differently from creates
+type UpdatingController[P ControllerEntity] interface {
+	Update(ctx context.Context, obj P, meta *entity.Meta) error
+}
+
 func AdaptController[
 	T any,
 	P interface {
@@ -324,8 +330,20 @@ func AdaptController[
 				Previous: event.PrevRev,
 			}
 
-			if err := cont.Create(ctx, obj, meta); err != nil {
-				return nil, fmt.Errorf("failed to create entity: %w", err)
+			var err error
+			if event.Type == EventUpdated {
+				// Check if the controller implements UpdatingController
+				if updater, ok := any(cont).(UpdatingController[P]); ok {
+					err = updater.Update(ctx, obj, meta)
+				} else {
+					err = cont.Create(ctx, obj, meta)
+				}
+			} else {
+				err = cont.Create(ctx, obj, meta)
+			}
+
+			if err != nil {
+				return nil, fmt.Errorf("failed to process entity: %w", err)
 			}
 
 			return entity.Diff(meta.Entity, orig), nil
