@@ -50,14 +50,33 @@ jobs:
         run: |
           set -e
 
+          # Generate SHA256 checksums
+          echo "release-linux-amd64.tar.gz SHA256"
+          sha256sum artifacts/runtime-linux-amd64/release-linux-amd64.tar.gz | cut -d' ' -f1 | tee release-linux-amd64.tar.gz.sha256
+
+          echo "release-linux-arm64.tar.gz SHA256"
+          sha256sum artifacts/runtime-linux-arm64/release-linux-arm64.tar.gz | cut -d' ' -f1 | tee release-linux-arm64.tar.gz.sha256
+
           # Upload amd64 artifact
           curl -X PUT \
             -H "Authorization: Bearer ${{ steps.get-oidc-token.outputs.token }}" \
             -F "file=@artifacts/runtime-linux-amd64/release-linux-amd64.tar.gz" \
-            https://api.miren.cloud/assets/release/main/release-linux-amd64.tar.gz
+            https://api.miren.cloud/assets/release/runtime/main/release-linux-amd64.tar.gz
+
+          # Upload amd64 SHA256
+          curl -X PUT \
+            -H "Authorization: Bearer ${{ steps.get-oidc-token.outputs.token }}" \
+            -F "file=@release-linux-amd64.tar.gz.sha256" \
+            https://api.miren.cloud/assets/release/runtime/main/release-linux-amd64.tar.gz.sha256
 
           # Upload arm64 artifact
           curl -X PUT \
             -H "Authorization: Bearer ${{ steps.get-oidc-token.outputs.token }}" \
             -F "file=@artifacts/runtime-linux-arm64/release-linux-arm64.tar.gz" \
-            https://api.miren.cloud/assets/release/main/release-linux-arm64.tar.gz
+            https://api.miren.cloud/assets/release/runtime/main/release-linux-arm64.tar.gz
+
+          # Upload arm64 SHA256
+          curl -X PUT \
+            -H "Authorization: Bearer ${{ steps.get-oidc-token.outputs.token }}" \
+            -F "file=@release-linux-arm64.tar.gz.sha256" \
+            https://api.miren.cloud/assets/release/runtime/main/release-linux-arm64.tar.gz.sha256
