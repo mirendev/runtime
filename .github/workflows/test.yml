@@ -30,6 +30,18 @@ jobs:
         fi
         echo "All Go files are properly formatted."
 
+    - name: Check go.mod tidiness
+      run: |
+        # Run go mod tidy and check if there are any changes
+        go mod tidy -diff
+        if [ $? -ne 0 ]; then
+          echo ""
+          echo "Error: go.mod or go.sum is not tidy."
+          echo "Please run 'go mod tidy' to fix module dependencies."
+          exit 1
+        fi
+        echo "go.mod and go.sum are tidy."
+
   test:
     needs: lint
     runs-on: depot-ubuntu-latest,dagger=0.18.9
