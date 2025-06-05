@@ -48,16 +48,16 @@ jobs:
 
       - name: Upload to Miren API
         run: |
+          set -e
+
           # Upload amd64 artifact
-          curl -X POST \
+          curl -X PUT \
             -H "Authorization: Bearer ${{ steps.get-oidc-token.outputs.token }}" \
-            -H "Content-Type: application/octet-stream" \
             -F "file=@artifacts/runtime-linux-amd64/release-linux-amd64.tar.gz" \
             https://api.miren.cloud/assets/release/main/release-linux-amd64.tar.gz
 
           # Upload arm64 artifact
-          curl -X POST \
+          curl -X PUT \
             -H "Authorization: Bearer ${{ steps.get-oidc-token.outputs.token }}" \
-            -H "Content-Type: application/octet-stream" \
             -F "file=@artifacts/runtime-linux-arm64/release-linux-arm64.tar.gz" \
             https://api.miren.cloud/assets/release/main/release-linux-arm64.tar.gz
