@@ -2,11 +2,12 @@ name: Dagger
 
 on:
   push:
-    branches: [ "main", "evan/mir-146" ]
+    branches: [ "main", "evan/mir-204" ]
 
 # Set permissions for the entire workflow
 permissions:
   contents: write    # Required for creating releases and uploading assets
+  id-token: write   # Required for OIDC token
 
 jobs:
   package:
@@ -25,52 +26,38 @@ jobs:
         path: release-linux-${{ matrix.arch }}.tar.gz
         retention-days: 7
 
-  release:
+  upload-to-miren:
     needs: package
     runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
     steps:
-      - uses: actions/checkout@v4
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
           path: artifacts
 
-      - name: Check if tip release exists
-        id: check_release
-        run: |
-          if gh release view tip &>/dev/null; then
-            echo "exists=true" >> $GITHUB_OUTPUT
-          else
-            echo "exists=false" >> $GITHUB_OUTPUT
-          fi
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Get OIDC token
+        uses: actions/github-script@v7
+        id: get-oidc-token
+        with:
+          script: |
+            const token = await core.getIDToken()
+            core.setOutput('token', token)
 
-      - name: Create tip release if it doesn't exist
-        if: steps.check_release.outputs.exists == 'false'
+      - name: Upload to Miren API
         run: |
-          gh release create tip \
-            --title "Tip Build" \
-            --notes "Latest build from main branch" \
-            --prerelease
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Upload amd64 artifact
+          curl -X POST \
+            -H "Authorization: Bearer ${{ steps.get-oidc-token.outputs.token }}" \
+            -H "Content-Type: application/octet-stream" \
+            -F "file=@artifacts/runtime-linux-amd64/release-linux-amd64.tar.gz" \
+            https://api.miren.cloud/assets/release/main/release-linux-amd64.tar.gz
 
-      - name: Delete existing assets if they exist
-        run: |
-          # Delete existing assets if they exist (ignoring errors if they don't)
-          gh release delete-asset tip runtime-linux-amd64.tar.gz --yes 2>/dev/null || true
-          gh release delete-asset tip runtime-linux-arm64.tar.gz --yes 2>/dev/null || true
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Upload release assets
-        run: |
-          # Rename the artifacts to the expected names
-          cp artifacts/runtime-linux-amd64/release-linux-amd64.tar.gz runtime-linux-amd64.tar.gz
-          cp artifacts/runtime-linux-arm64/release-linux-arm64.tar.gz runtime-linux-arm64.tar.gz
-
-          # Upload both assets to the release
-          gh release upload tip runtime-linux-amd64.tar.gz runtime-linux-arm64.tar.gz --clobber
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Upload arm64 artifact
+          curl -X POST \
+            -H "Authorization: Bearer ${{ steps.get-oidc-token.outputs.token }}" \
+            -H "Content-Type: application/octet-stream" \
+            -F "file=@artifacts/runtime-linux-arm64/release-linux-arm64.tar.gz" \
+            https://api.miren.cloud/assets/release/main/release-linux-arm64.tar.gz
