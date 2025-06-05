@@ -511,7 +511,7 @@ func (c *SandboxController) updateSandbox(ctx context.Context, sb *compute.Sandb
 }
 
 func (c *SandboxController) Create(ctx context.Context, co *compute.Sandbox, meta *entity.Meta) error {
-	c.Log.Info("considering sandbox", "id", co.ID, "status", co.Status)
+	c.Log.Info("considering sandbox create or update", "id", co.ID, "status", co.Status)
 	switch co.Status {
 	case compute.DEAD:
 		return nil
@@ -623,7 +623,7 @@ func (c *SandboxController) createSandbox(ctx context.Context, co *compute.Sandb
 		return err
 	}
 
-	c.Log.Info("sanbox started", "id", co.ID, "namespace", c.Namespace)
+	c.Log.Info("sandbox started", "id", co.ID, "namespace", c.Namespace)
 
 	for _, wp := range waitPorts {
 		c.Log.Info("waiting for ports to be bound", "id", cid, "port", wp.port)
@@ -632,7 +632,7 @@ func (c *SandboxController) createSandbox(ctx context.Context, co *compute.Sandb
 
 	co.Status = compute.RUNNING
 
-	// The contrtoller will detect the updates and sync them back
+	// The controller will detect the updates and sync them back
 	meta.Entity.Update(co.Encode())
 
 	err = c.updateServices(ctx, co, meta, ep)
@@ -1427,8 +1427,25 @@ loop:
 func (c *SandboxController) Delete(ctx context.Context, id entity.Id) error {
 	ctx = namespaces.WithNamespace(ctx, c.Namespace)
 
+	// Container exists, we need to read the entity data to properly delete it
 	oldMeta, err := c.readEntity(ctx, id)
 	if err != nil {
+		// If entity file is missing but container exists, try to reconstruct minimal sandbox info
+		if strings.Contains(err.Error(), "entity file not found") {
+			// Check if the container exists
+			_, err := c.CC.LoadContainer(ctx, c.containerId(id))
+			if err != nil {
+				// Container doesn't exist, consider it already deleted
+				c.Log.Info("Delete called but container not found, already deleted", "id", id, "error", err)
+				return nil
+			}
+			c.Log.Warn("entity file missing but container exists, attempting cleanup", "id", id)
+			// Create a minimal sandbox just with the ID to attempt cleanup
+			sb := &compute.Sandbox{
+				ID: id,
+			}
+			return c.stopSandbox(ctx, sb)
+		}
 		c.Log.Error("failed to read existing entity", "id", id, "err", err)
 		return fmt.Errorf("failed to read existing entity: %w", err)
 	}

@@ -7,7 +7,6 @@ import (
 	"time"
 
 	containerd "github.com/containerd/containerd/v2/client"
-	"github.com/davecgh/go-spew/spew"
 	"miren.dev/runtime/api/compute/compute_v1alpha"
 	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/api/entityserver"
@@ -88,8 +87,6 @@ func (r *Runner) ContainerdContainerForSandbox(ctx context.Context, id entity.Id
 	if err != nil {
 		return nil, err
 	}
-
-	spew.Dump(cl)
 
 	for _, c := range cl {
 		if c.Labels["runtime.computer/entity-id"] == string(id) {
@@ -210,6 +207,7 @@ func (r *Runner) SetupControllers(
 	if err := r.reg.Populate(&sbc); err != nil {
 		return nil, err
 	}
+	sbc.Log = sbc.Log.With("module", "sandbox", "runner_id", r.Id)
 
 	r.closers = append(r.closers, &sbc)
 
