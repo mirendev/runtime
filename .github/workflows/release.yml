@@ -2,11 +2,7 @@ name: Dagger
 
 on:
   push:
-    branches: [ "main", "evan/mir-146" ]
-
-# Set permissions for the entire workflow
-permissions:
-  contents: write    # Required for creating releases and uploading assets
+    branches: [ "main", "evan/mir-204" ]
 
 jobs:
   package:
@@ -14,63 +10,120 @@ jobs:
     strategy:
       matrix:
         arch: [amd64, arm64]
+    permissions:
+      contents: write
     steps:
     - uses: actions/checkout@v4
     - name: Build and package for ${{ matrix.arch }}
-      run: dagger call package --dir=. export --path=release-linux-${{ matrix.arch }}.tar.gz
+      run: dagger call package --dir=. export --path=release-base-linux-${{ matrix.arch }}.tar.gz
     - name: Upload build artifact
       uses: actions/upload-artifact@v4
       with:
-        name: runtime-linux-${{ matrix.arch }}
-        path: release-linux-${{ matrix.arch }}.tar.gz
+        name: runtime-base-linux-${{ matrix.arch }}
+        path: release-base-linux-${{ matrix.arch }}.tar.gz
         retention-days: 7
 
-  release:
-    needs: package
-    runs-on: ubuntu-latest
+  build-binaries:
+    strategy:
+      matrix:
+        include:
+          - os: linux
+            arch: amd64
+            runner: depot-ubuntu-latest,dagger=0.18.9
+          - os: linux
+            arch: arm64
+            runner: depot-ubuntu-latest,dagger=0.18.9
+          - os: darwin
+            arch: amd64
+            runner: macos-latest
+          - os: darwin
+            arch: arm64
+            runner: macos-latest
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      id-token: write
+      attestations: write
+      contents: read
     steps:
-      - uses: actions/checkout@v4
+    - uses: actions/checkout@v4
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version-file: 'go.mod'
+    - name: Build binary for ${{ matrix.os }}-${{ matrix.arch }}
+      run: |
+        GOOS=${{ matrix.os }} GOARCH=${{ matrix.arch }} make bin/runtime
+        # Create a zip file with the binary
+        zip runtime-${{ matrix.os }}-${{ matrix.arch }}.zip bin/runtime
+    - name: Upload build artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: runtime-${{ matrix.os }}-${{ matrix.arch }}
+        path: runtime-${{ matrix.os }}-${{ matrix.arch }}.zip
+        retention-days: 7
+
+  upload-to-miren:
+    needs: [package, build-binaries]
+    runs-on: depot-ubuntu-latest,dagger=0.18.9
+    concurrency:
+      group: upload-to-miren-${{ github.ref_name }}
+      cancel-in-progress: false
+    permissions:
+      id-token: write
+      contents: read
+    steps:
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
           path: artifacts
 
-      - name: Check if tip release exists
-        id: check_release
-        run: |
-          if gh release view tip &>/dev/null; then
-            echo "exists=true" >> $GITHUB_OUTPUT
-          else
-            echo "exists=false" >> $GITHUB_OUTPUT
-          fi
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Get OIDC token
+        uses: actions/github-script@v7
+        id: get-oidc-token
+        with:
+          script: |
+            const token = await core.getIDToken()
+            core.setOutput('token', token)
 
-      - name: Create tip release if it doesn't exist
-        if: steps.check_release.outputs.exists == 'false'
+      - name: Upload to Miren API
         run: |
-          gh release create tip \
-            --title "Tip Build" \
-            --notes "Latest build from main branch" \
-            --prerelease
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          set -e
 
-      - name: Delete existing assets if they exist
-        run: |
-          # Delete existing assets if they exist (ignoring errors if they don't)
-          gh release delete-asset tip runtime-linux-amd64.tar.gz --yes 2>/dev/null || true
-          gh release delete-asset tip runtime-linux-arm64.tar.gz --yes 2>/dev/null || true
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          for arch in amd64 arm64; do
+            # Generate SHA256 checksums
+            echo "release-base-linux-${arch}.tar.gz SHA256"
+            sha256sum "artifacts/runtime-base-linux-${arch}/release-base-linux-${arch}.tar.gz" | cut -d' ' -f1 | tee "release-base-linux-${arch}.tar.gz.sha256"
 
-      - name: Upload release assets
-        run: |
-          # Rename the artifacts to the expected names
-          cp artifacts/runtime-linux-amd64/release-linux-amd64.tar.gz runtime-linux-amd64.tar.gz
-          cp artifacts/runtime-linux-arm64/release-linux-arm64.tar.gz runtime-linux-arm64.tar.gz
+            # Upload artifact
+            curl --fail-with-body --retry 3 -X PUT \
+              -H "Authorization: Bearer ${{ steps.get-oidc-token.outputs.token }}" \
+              -F "file=@artifacts/runtime-base-linux-${arch}/release-base-linux-${arch}.tar.gz" \
+              https://api.miren.cloud/assets/release/runtime/${{ github.ref_name }}/runtime-base-linux-${arch}.tar.gz
 
-          # Upload both assets to the release
-          gh release upload tip runtime-linux-amd64.tar.gz runtime-linux-arm64.tar.gz --clobber
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+            # Upload sha256
+            curl --fail-with-body --retry 3 -X PUT \
+              -H "Authorization: Bearer ${{ steps.get-oidc-token.outputs.token }}" \
+              -F "file=@release-base-linux-${arch}.tar.gz.sha256" \
+              https://api.miren.cloud/assets/release/runtime/${{ github.ref_name }}/runtime-base-linux-${arch}.tar.gz.sha256
+          done
+
+          # Upload binary artifacts
+          for os in linux darwin; do
+            for arch in amd64 arm64; do
+              # Generate SHA256 checksum for binary
+              echo "runtime-${os}-${arch}.zip SHA256"
+              sha256sum "artifacts/runtime-${os}-${arch}/runtime-${os}-${arch}.zip" | cut -d' ' -f1 | tee "runtime-${os}-${arch}.zip.sha256"
+
+              # Upload binary zip
+              curl --fail-with-body --retry 3 -X PUT \
+                -H "Authorization: Bearer ${{ steps.get-oidc-token.outputs.token }}" \
+                -F "file=@artifacts/runtime-${os}-${arch}/runtime-${os}-${arch}.zip" \
+                https://api.miren.cloud/assets/release/runtime/${{ github.ref_name }}/runtime-${os}-${arch}.zip
+
+              # Upload binary sha256
+              curl --fail-with-body --retry 3 -X PUT \
+                -H "Authorization: Bearer ${{ steps.get-oidc-token.outputs.token }}" \
+                -F "file=@runtime-${os}-${arch}.zip.sha256" \
+                https://api.miren.cloud/assets/release/runtime/${{ github.ref_name }}/runtime-${os}-${arch}.zip.sha256
+            done
+          done
