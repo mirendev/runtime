@@ -81,12 +81,15 @@ cd /src
 if test "$USESHELL" != ""; then
   export HISTFILE=/data/.bash_history
   export HISTIGNORE=exit
+  echo "Starting shell"
   bash
 # Because all the tests use the same containerd, buildkit, and cgroups, we need to
 # make sure that they don't interfere with each other. For now, we do that by passing
 # -p 1, but in the future we should run each test in a separate namespace.
 elif test "$VERBOSE" != ""; then
+  echo "Running tests in verbose mode"
   go test -p 1 -v "$@"
 else
+  echo "Running tests in normal mode"
   gotestsum --format testname -- -p 1 "$@"
 fi
