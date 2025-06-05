@@ -262,3 +262,20 @@ func (m *Runtime) Dev(
 
 	return w.Stdout(ctx)
 }
+
+// Debug returns a container with just the services (etcd, minio, clickhouse) for local debugging
+func (m *Runtime) Debug(
+	ctx context.Context,
+	dir *dagger.Directory,
+) (string, error) {
+	// Simple container with just the services - no containerd, buildkit, or runtime setup
+	w := m.WithServices(dir).
+		WithDirectory("/src", dir).
+		WithWorkdir("/src")
+
+	w = w.Terminal(dagger.ContainerTerminalOpts{
+		Cmd: []string{"/bin/bash", "/src/hack/debug-services.sh"},
+	})
+
+	return w.Stdout(ctx)
+}

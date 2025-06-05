@@ -21,6 +21,11 @@ dev-tmux:
 dev:
 	dagger call -q dev --dir=.
 
+debug-services:
+	dagger call -q debug --dir=.
+
+.PHONY: debug-services
+
 image:
 	dagger call -q container --dir=. export --path=tmp/latest.tar
 	docker import tmp/latest.tar miren:latest
