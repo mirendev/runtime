@@ -173,7 +173,7 @@ var sizeSuffix = map[string]int{
 
 func ParseData(str string) (Data, error) {
 	str = strings.TrimSpace(str)
-	
+
 	// Handle numeric-only input
 	if val, err := strconv.ParseInt(str, 10, 64); err == nil {
 		return Bytes(val), nil

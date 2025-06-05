@@ -317,4 +317,3 @@ func cleanupContainer(t *testing.T, cc *containerd.Client, namespace string) {
 		}
 	}
 }
-

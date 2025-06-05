@@ -7,7 +7,43 @@ on:
     branches: [ "main" ]
 
 jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version-file: 'go.mod'
+
+    - name: Check Go formatting
+      run: |
+        # Run go fmt and capture any files that need formatting
+        unformatted=$(go fmt ./...)
+        if [ -n "$unformatted" ]; then
+          echo "Error: The following files need to be formatted with 'go fmt':"
+          echo "$unformatted"
+          echo ""
+          echo "Please run 'go fmt ./...' to fix formatting issues."
+          exit 1
+        fi
+        echo "All Go files are properly formatted."
+
+    - name: Check go.mod tidiness
+      run: |
+        # Run go mod tidy and check if there are any changes
+        go mod tidy -diff
+        if [ $? -ne 0 ]; then
+          echo ""
+          echo "Error: go.mod or go.sum is not tidy."
+          echo "Please run 'go mod tidy' to fix module dependencies."
+          exit 1
+        fi
+        echo "go.mod and go.sum are tidy."
+
   test:
+    needs: lint
     runs-on: depot-ubuntu-latest,dagger=0.18.9
     steps:
     - uses: actions/checkout@v4
@@ -15,6 +51,7 @@ jobs:
       run: dagger --progress=plain call test --dir=.
 
   test-e2e:
+    needs: lint
     runs-on: depot-ubuntu-latest,dagger=0.18.9
     steps:
     - uses: actions/checkout@v4
@@ -22,6 +59,7 @@ jobs:
       run: dagger --progress=plain call test --dir=. --tests="./e2e" --tags="e2e"
 
   build:
+    needs: lint
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4

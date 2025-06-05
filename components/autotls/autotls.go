@@ -37,7 +37,7 @@ func ServeTLS(ctx context.Context, log *slog.Logger, dataPath string, h http.Han
 		log.Info("shutting down TLS server")
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		
+
 		if err := server.Shutdown(shutdownCtx); err != nil {
 			log.Error("TLS server shutdown error", "error", err)
 		}

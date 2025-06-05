@@ -41,14 +41,14 @@ func TestMakeTar(t *testing.T) {
 		{
 			name: "gitignore with patterns",
 			files: map[string]string{
-				"file1.txt":       "content1",
-				"file2.log":       "log content",
-				"debug.log":       "debug content",
-				"dir/app.log":     "app log",
-				"dir/file3.go":    "package main",
-				"build/output.o":  "binary",
-				"build/main.exe":  "executable",
-				"temp/cache.tmp":  "temp file",
+				"file1.txt":      "content1",
+				"file2.log":      "log content",
+				"debug.log":      "debug content",
+				"dir/app.log":    "app log",
+				"dir/file3.go":   "package main",
+				"build/output.o": "binary",
+				"build/main.exe": "executable",
+				"temp/cache.tmp": "temp file",
 			},
 			gitignore: "*.log\nbuild\ntemp\n",
 			expected:  []string{"file1.txt", "dir", "dir/file3.go"},
@@ -67,11 +67,11 @@ func TestMakeTar(t *testing.T) {
 		{
 			name: "gitignore directory exclusion",
 			files: map[string]string{
-				"file1.txt":           "content1",
-				"node_modules/lib.js": "library",
+				"file1.txt":                 "content1",
+				"node_modules/lib.js":       "library",
 				"node_modules/package.json": "package",
-				"src/main.go":         "package main",
-				"src/util.go":         "package main",
+				"src/main.go":               "package main",
+				"src/util.go":               "package main",
 			},
 			gitignore: "node_modules\n",
 			expected:  []string{"file1.txt", "src", "src/main.go", "src/util.go"},
@@ -79,12 +79,12 @@ func TestMakeTar(t *testing.T) {
 		{
 			name: "gitignore glob patterns",
 			files: map[string]string{
-				"file1.txt":      "content1",
-				"test.tmp":       "temp",
-				"cache.tmp":      "cache",
-				"important.bak":  "backup",
-				"dir/file.tmp":   "temp in dir",
-				"dir/keep.txt":   "keep this",
+				"file1.txt":     "content1",
+				"test.tmp":      "temp",
+				"cache.tmp":     "cache",
+				"important.bak": "backup",
+				"dir/file.tmp":  "temp in dir",
+				"dir/keep.txt":  "keep this",
 			},
 			gitignore: "*.tmp\n*.bak\n",
 			expected:  []string{"file1.txt", "dir", "dir/keep.txt"},
@@ -234,12 +234,12 @@ func TestMakeTarGitignoreNegation(t *testing.T) {
 
 	// Create test files
 	files := map[string]string{
-		"file1.log":       "log1",
-		"file2.log":       "log2",
-		"important.log":   "important log",
-		"dir/debug.log":   "debug",
-		"dir/error.log":   "error",
-		"regular.txt":     "text",
+		"file1.log":     "log1",
+		"file2.log":     "log2",
+		"important.log": "important log",
+		"dir/debug.log": "debug",
+		"dir/error.log": "error",
+		"regular.txt":   "text",
 	}
 
 	for filename, content := range files {

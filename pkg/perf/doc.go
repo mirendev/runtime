@@ -5,7 +5,7 @@
 /*
 Package perf provides access to the Linux perf API.
 
-Counting events
+# Counting events
 
 A Group represents a set of perf events measured together.
 
@@ -30,7 +30,7 @@ Attr configures an individual event.
 	// ...
 	c, err := faults.Measure(func() { ... })
 
-Sampling events
+# Sampling events
 
 Overflow records are available once the MapRing method on Event is called:
 
