@@ -62,14 +62,14 @@ func (b *SchemaBuilder) Apply(ctx context.Context, store entity.Store) error {
 	for _, eid := range b.singletons {
 		_, err := store.CreateEntity(ctx, entity.Attrs(
 			entity.Ident, types.Keyword(eid),
-		))
+		), entity.WithOverwrite)
 		if err != nil && !errors.Is(err, entity.ErrEntityAlreadyExists) {
 			return err
 		}
 	}
 
 	for _, e := range b.attrs {
-		_, err := store.CreateEntity(ctx, e.Attrs)
+		_, err := store.CreateEntity(ctx, e.Attrs, entity.WithOverwrite)
 		if err != nil && !errors.Is(err, entity.ErrEntityAlreadyExists) {
 			return err
 		}
