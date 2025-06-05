@@ -31,6 +31,7 @@ jobs:
         echo "All Go files are properly formatted."
 
   test:
+    needs: lint
     runs-on: depot-ubuntu-latest,dagger=0.18.9
     steps:
     - uses: actions/checkout@v4
@@ -38,6 +39,7 @@ jobs:
       run: dagger --progress=plain call test --dir=.
 
   test-e2e:
+    needs: lint
     runs-on: depot-ubuntu-latest,dagger=0.18.9
     steps:
     - uses: actions/checkout@v4
@@ -45,6 +47,7 @@ jobs:
       run: dagger --progress=plain call test --dir=. --tests="./e2e" --tags="e2e"
 
   build:
+    needs: lint
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
