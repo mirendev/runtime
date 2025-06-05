@@ -40,10 +40,10 @@ binary_name = "/src/hack/runsc-ignore"
 EOF
 
 mkdir -p /run/containerd
-containerd --root /data --state /data/state --address /run/containerd/containerd.sock -l trace >/dev/null 2>&1 &
+containerd --root /data --state /data/state --address /run/containerd/containerd.sock -l trace >/tmp/containerd.log 2>&1 &
 
 # Handy to build stuff with.
-buildkitd --root /data/buildkit >/dev/null 2>&1 &
+buildkitd --root /data/buildkit >/tmp/buildkit.log 2>&1 &
 
 mount -t debugfs nodev /sys/kernel/debug
 mount -t tracefs nodev /sys/kernel/debug/tracing
@@ -88,7 +88,7 @@ if [[ -n "$USE_TMUX" ]]; then
   tmux attach-session -t dev
 else
   # Start the server in the background
-  ./bin/runtime dev -vv > /tmp/server.log 2>&1 &
+  ./bin/runtime dev -vv >/tmp/server.log 2>&1 &
   echo "Server started, logs are in /tmp/server.log"
 
   # Start a shell
