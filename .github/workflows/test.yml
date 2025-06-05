@@ -7,6 +7,29 @@ on:
     branches: [ "main" ]
 
 jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version-file: 'go.mod'
+
+    - name: Check Go formatting
+      run: |
+        # Run go fmt and capture any files that need formatting
+        unformatted=$(go fmt ./...)
+        if [ -n "$unformatted" ]; then
+          echo "Error: The following files need to be formatted with 'go fmt':"
+          echo "$unformatted"
+          echo ""
+          echo "Please run 'go fmt ./...' to fix formatting issues."
+          exit 1
+        fi
+        echo "All Go files are properly formatted."
+
   test:
     runs-on: depot-ubuntu-latest,dagger=0.18.9
     steps:
