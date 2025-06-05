@@ -49,10 +49,9 @@ func TestSandboxLifecycleEndToEnd(t *testing.T) {
 
 	// Fetch logs from app
 	var logsCode int
-	logsOut, err := testutils.CaptureStdout(func() {
+	logsOut := testutils.CaptureStdout(t, false, func() {
 		logsCode = cli.Run([]string{"runtime", "logs", "-a", "nginx"})
 	})
-	r.NoError(err)
 	r.Equal(0, logsCode)
 	r.Contains(logsOut, `"GET / HTTP/1.1"`)
 
@@ -61,10 +60,9 @@ func TestSandboxLifecycleEndToEnd(t *testing.T) {
 
 	t.Logf("deploying bun from %s", bunDir)
 	var deployCode int
-	deployOut, err := testutils.CaptureStdout(func() {
+	deployOut := testutils.CaptureStdout(t, true, func() {
 		deployCode = cli.Run([]string{"runtime", "deploy", "-d", bunDir, "--explain", "--explain-format", "plain"})
 	})
-	r.NoError(err)
 	r.Equal(0, deployCode)
 	r.Contains(deployOut, "All traffic moved to new version.")
 
