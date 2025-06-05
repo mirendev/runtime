@@ -28,7 +28,10 @@ jobs:
 
   upload-to-miren:
     needs: package
-    runs-on: ubuntu-latest
+    runs-on: depot-ubuntu-latest,dagger=0.18.9
+    concurrency:
+      group: upload-to-miren-${{ github.ref_name }}
+      cancel-in-progress: false
     permissions:
       id-token: write
       contents: read
