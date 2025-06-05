@@ -35,8 +35,8 @@ func TestSandboxLifecycleEndToEnd(t *testing.T) {
 	putCode := cli.Run([]string{"runtime", "entity", "put", "-p", filePath})
 	r.Equal(0, putCode)
 
-	// Ensure we can route to nginx container
-	t.Log("running HTTP GET")
+	// Ensure we can route to nginx container, via the default route
+	t.Log("running HTTP GET for nginx")
 	resp, err := http.Get("http://localhost:8989")
 	r.NoError(err)
 	defer resp.Body.Close()
@@ -49,12 +49,45 @@ func TestSandboxLifecycleEndToEnd(t *testing.T) {
 
 	// Fetch logs from app
 	var logsCode int
-	output, err := testutils.CaptureStdout(func() {
+	logsOut, err := testutils.CaptureStdout(func() {
 		logsCode = cli.Run([]string{"runtime", "logs", "-a", "nginx"})
 	})
 	r.NoError(err)
 	r.Equal(0, logsCode)
-	r.Contains(output, `"GET / HTTP/1.1"`)
+	r.Contains(logsOut, `"GET / HTTP/1.1"`)
+
+	// Deploy a second app by building it
+	bunDir := testutils.GetTestFilePath("..", "testdata", "bun")
+
+	t.Logf("deploying bun from %s", bunDir)
+	var deployCode int
+	deployOut, err := testutils.CaptureStdout(func() {
+		deployCode = cli.Run([]string{"runtime", "deploy", "-d", bunDir, "--explain", "--explain-format", "plain"})
+	})
+	r.NoError(err)
+	r.Equal(0, deployCode)
+	r.Contains(deployOut, "All traffic moved to new version.")
+
+	// Set its hostname
+	setHostCode := cli.Run([]string{"runtime", "set", "host", "-a", "hw-bun", "--host", "bunbunbun"})
+	r.Equal(0, setHostCode)
+
+	t.Log("running HTTP GET for bun")
+	client := &http.Client{}
+	req, err := http.NewRequest("GET", "http://localhost:8989", nil)
+	r.NoError(err)
+
+	req.Host = "bunbunbun" // This sets the Host header
+
+	resp, err = client.Do(req)
+	r.NoError(err)
+	defer resp.Body.Close()
+
+	body, err = io.ReadAll(resp.Body)
+	r.NoError(err)
+
+	r.Equal(200, resp.StatusCode)
+	r.Contains(string(body), "Welcome to Bun!")
 }
 
 func writeTempContents(t *testing.T, filename, contents string) string {
@@ -94,14 +127,6 @@ spec:
   concurrency: 10
   config:
     port: 80
----
-kind: dev.miren.ingress/http_route
-version: v1alpha
-metadata:
-  name: localhost
-spec:
-  host: localhost
-  app: app/nginx
 ---
 kind: dev.miren.core/app
 version: v1alpha
