@@ -56,7 +56,7 @@ jobs:
     steps:
     - uses: actions/checkout@v4
     - name: Test
-      run: dagger --progress=plain call test --dir=. --tests="./e2e" --tags="e2e"
+      run: dagger --progress=plain call test --dir=. --tests="./e2e" --tags="e2e" --verboose
 
   build:
     needs: lint
