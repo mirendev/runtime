@@ -930,7 +930,7 @@ func TestEtcdStore_GetEntities(t *testing.T) {
 					assert.Greater(t, entity.Revision, int64(0))
 					assert.NotZero(t, entity.CreatedAt)
 					assert.NotZero(t, entity.UpdatedAt)
-					
+
 					// Check that the ID matches what we requested
 					assert.Equal(t, tt.ids[i], entity.ID)
 				}
@@ -984,7 +984,7 @@ func TestEtcdStore_GetEntities(t *testing.T) {
 			status, ok := e.Get(Id("test/session-status"))
 			r.True(ok, "Entity %d should have session status", i)
 			r.NotEmpty(status.Value.String())
-			
+
 			// Check for session ID attribute
 			sessionAttr, ok := e.Get(AttrSession)
 			r.True(ok, "Entity %d should have session attribute", i)
@@ -1034,7 +1034,7 @@ func TestEtcdStore_GetEntities(t *testing.T) {
 			r.NotNil(e)
 			ttlAttr, ok := e.Get(TTL)
 			r.True(ok, "Entity %d should have TTL attribute", i)
-			
+
 			// TTL should be a duration
 			ttlDuration := ttlAttr.Value.Duration()
 			r.Greater(ttlDuration, time.Duration(0))

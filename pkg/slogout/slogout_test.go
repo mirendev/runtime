@@ -319,4 +319,3 @@ func TestWithLoggerOptions(t *testing.T) {
 	assert.NotNil(t, opts.IgnorePattern)
 	assert.True(t, opts.ParseJSON)
 }
-

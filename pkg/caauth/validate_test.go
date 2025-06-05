@@ -189,4 +189,3 @@ func TestIssueCertificateValidatesCommonName(t *testing.T) {
 		assert.NoError(t, err, "IssueCertificate should accept valid common name: %s", name)
 	}
 }
-

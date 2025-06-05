@@ -325,7 +325,7 @@ func TestEntityServer_List(t *testing.T) {
 			// Sort for consistent comparison
 			slices.Sort(gotIDs)
 			slices.Sort(tt.wantIDs)
-			
+
 			assert.Equal(t, tt.wantIDs, gotIDs)
 
 			// Verify each entity has the expected attributes

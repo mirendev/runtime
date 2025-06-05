@@ -33,7 +33,7 @@ func (m *MockStore) GetEntities(ctx context.Context, ids []Id) ([]*Entity, error
 	if m.GetEntitiesFunc != nil {
 		return m.GetEntitiesFunc(ctx, ids)
 	}
-	
+
 	entities := make([]*Entity, 0, len(ids))
 	for _, id := range ids {
 		if e, ok := m.Entities[id]; ok {

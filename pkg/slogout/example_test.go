@@ -19,7 +19,7 @@ func ExampleWithLogger() {
 	etcdCreator := slogout.WithLogger(logger, "etcd", slogout.WithJSONParsing())
 
 	// Create a CIO creator for ClickHouse (which has timestamp prefixes to ignore)
-	clickhouseCreator := slogout.WithLogger(logger, "clickhouse", 
+	clickhouseCreator := slogout.WithLogger(logger, "clickhouse",
 		slogout.WithIgnorePattern(`^\d{4}\.\d{2}\.\d{2} \d{2}:\d{2}:\d{2}\.\d+`))
 
 	// These creators can now be used with containerd containers:
@@ -28,6 +28,6 @@ func ExampleWithLogger() {
 	// Instead of:
 	// task, err := container.NewTask(ctx, cio.NewCreator(cio.WithStdio))
 
-	_ = etcdCreator      // Use the creator with containerd
+	_ = etcdCreator       // Use the creator with containerd
 	_ = clickhouseCreator // Use the creator with containerd
 }
