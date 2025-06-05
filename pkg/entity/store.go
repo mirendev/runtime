@@ -236,15 +236,9 @@ func (s *EtcdStore) CreateEntity(
 
 	txopt = append(txopt, coltxopt...)
 
-	var ifCmp []clientv3.Cmp
-
-	if !o.overwrite {
-		ifCmp = append(ifCmp, clientv3.Compare(clientv3.CreateRevision(key), "=", 0))
-	}
-
 	// Use Txn to check that the key doesn't exist yet
 	txnResp, err := s.client.Txn(ctx).
-		If(ifCmp...).
+		If(clientv3.Compare(clientv3.CreateRevision(key), "=", 0)).
 		Then(txopt...).
 		Else(clientv3.OpGet(key)).
 		Commit()
@@ -268,6 +262,19 @@ func (s *EtcdStore) CreateEntity(
 					entity.Revision = rng.Header.Revision
 					return entity, nil
 				}
+			}
+
+			if o.overwrite {
+				txnResp, err = s.client.Txn(ctx).
+					Then(txopt...).
+					Else(clientv3.OpGet(key)).
+					Commit()
+				if err != nil {
+					return nil, fmt.Errorf("failed to create entity in etcd (on overwrite): %w", err)
+				}
+
+				entity.Revision = txnResp.Header.Revision
+				return entity, nil
 			}
 		}
 
