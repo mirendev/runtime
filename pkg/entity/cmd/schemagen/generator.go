@@ -421,7 +421,7 @@ func (g *gen) attr(name string, attr *schemaAttr) {
 			g.fields = append(g.fields, j.Id(fname).Qual(topt, "Label").Tag(tag))
 			g.encoders = append(g.encoders,
 				j.If(j.Op("!").Qual(top, "Empty").Call(j.Id("o").Dot(fname))).Block(
-					j.Id("attrs").Op("=").Append(j.Id("attrs"), j.Qual(top, "Label").Call(g.Ident(fname), j.Id("v").Dot("Key"), j.Id("v").Dot("Value")))),
+					j.Id("attrs").Op("=").Append(j.Id("attrs"), j.Qual(top, "Label").Call(g.Ident(fname), j.Id("o").Dot(fname).Dot("Key"), j.Id("o").Dot(fname).Dot("Value")))),
 			)
 			g.empties = append(g.empties,
 				j.If(j.Op("!").Qual(top, "Empty").Call(j.Id("o").Dot(fname))).Block(j.Return(j.False())))
