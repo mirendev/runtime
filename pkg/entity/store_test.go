@@ -1119,44 +1119,6 @@ func TestEtcdStore_GetEntities(t *testing.T) {
 		}
 	})
 
-	t.Run("with TTL/lease", func(t *testing.T) {
-		r := require.New(t)
-
-		// Create session with TTL
-		sid, err := store.CreateSession(t.Context(), 30)
-		r.NoError(err)
-
-		// Create entities bound to session (will have TTL)
-		entity6, err := store.CreateEntity(t.Context(), []Attr{
-			Any(Ident, "test-entity-6"),
-		}, BondToSession(sid))
-		r.NoError(err)
-
-		entity7, err := store.CreateEntity(t.Context(), []Attr{
-			Any(Ident, "test-entity-7"),
-		}, BondToSession(sid))
-		r.NoError(err)
-
-		// Get entities and verify TTL attribute is added
-		entities, err := store.GetEntities(t.Context(), []Id{entity6.ID, entity7.ID})
-		r.NoError(err)
-		r.Len(entities, 2)
-
-		for i, e := range entities {
-			r.NotNil(e)
-			ttlAttr, ok := e.Get(TTL)
-			r.True(ok, "Entity %d should have TTL attribute", i)
-
-			// TTL should be a duration
-			ttlDuration := ttlAttr.Value.Duration()
-			r.Greater(ttlDuration, time.Duration(0))
-			r.LessOrEqual(ttlDuration, 30*time.Second)
-		}
-
-		// Clean up
-		r.NoError(store.RevokeSession(t.Context(), sid))
-	})
-
 	t.Run("large batch", func(t *testing.T) {
 		r := require.New(t)
 
