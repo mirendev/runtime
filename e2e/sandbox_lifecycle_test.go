@@ -61,7 +61,7 @@ func TestSandboxLifecycleEndToEnd(t *testing.T) {
 	t.Logf("deploying bun from %s", bunDir)
 	var deployCode int
 	deployOut := testutils.CaptureStdout(t, true, func() {
-		deployCode = cli.Run([]string{"runtime", "deploy", "-d", bunDir, "--explain", "--explain-format", "plain"})
+		deployCode = cli.Run([]string{"runtime", "deploy", "-d", bunDir, "--explain", "--explain-format", "rawjson"})
 	})
 	r.Equal(0, deployCode)
 	r.Contains(deployOut, "All traffic moved to new version.")
@@ -133,17 +133,4 @@ metadata:
 spec:
   project: project/default
   active_version: app_version/abcdef
----
-kind: dev.miren.network/service
-version: v1alpha
-metadata:
-  name: nginx
-spec:
-  match:
-    - app=nginx
-  port:
-    - port: 80
-      target_port: 80
-      name: http
-      node_port: 8080
 `

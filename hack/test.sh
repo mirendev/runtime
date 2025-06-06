@@ -17,6 +17,11 @@ export OTEL_SDK_DISABLED=true
 
 cat <<EOF >/etc/containerd/config.toml
 version = 2
+
+root = "/data"
+state = "/data/state"
+address = "/run/containerd/containerd.sock"
+
 [plugins."io.containerd.runtime.v1.linux"]
   shim_debug = true
 [plugins."io.containerd.grpc.v1.cri".containerd.runtimes.runc]
@@ -25,6 +30,7 @@ version = 2
   runtime_type = "io.containerd.runsc.v1"
 [plugins."io.containerd.grpc.v1.cri".containerd.runtimes.miren]
   runtime_type = "io.containerd.runsc.v1"
+
 EOF
 
 cat <<EOF >/etc/containerd/runsc.toml
@@ -37,12 +43,22 @@ binary_name = "/src/hack/runsc-ignore"
 EOF
 
 mkdir -p /run/containerd
-containerd --root /data --state /data/state --address /run/containerd/containerd.sock -l trace >/dev/null 2>&1 &
+containerd &
+
+mkdir -p /etc/buildkit
+cat <<EOF >/etc/buildkit/buildkitd.toml
+root = "/data/buildkit"
+debug = false
+
+[log]
+  format = "text"
+EOF
 
 # Since our buildkit dir is cached across runs, there might be a stale lockfile
 # sitting around that should be safe to kill
 rm -f /data/buildkit/buildkitd.lock
-buildkitd --root /data/buildkit 2>&1 &
+
+buildkitd &
 
 mount -t debugfs nodev /sys/kernel/debug
 mount -t tracefs nodev /sys/kernel/debug/tracing
@@ -52,7 +68,7 @@ mount -t tracefs nodev /sys/kernel/tracing
 echo "Waiting for containerd..."
 timeout=30
 count=0
-while ! ctr --address /run/containerd/containerd.sock version >/dev/null 2>&1; do
+while ! ctr version >/dev/null 2>&1; do
   sleep 1
   count=$((count + 1))
   if [ "$count" -ge "$timeout" ]; then
