@@ -344,3 +344,68 @@ func TestEnumFieldEmptiness(t *testing.T) {
 		t.Error("Empty() method should return false when enum fields have values")
 	}
 }
+
+func TestSingleLabelFieldEncoding(t *testing.T) {
+	// Test that single-value label fields generate correct encoding code
+	// This test exposes the bug where v.Key and v.Value are referenced
+	// but v is not defined in the single-value context
+	sf := &schemaFile{
+		Domain:  "test",
+		Version: "v1",
+		Kinds: map[string]schemaAttrs{
+			"resource": {
+				"tag": &schemaAttr{
+					Type: "label",
+					Doc:  "Resource tag",
+				},
+			},
+		},
+	}
+
+	// Generate the schema code
+	code, err := GenerateSchema(sf, "test")
+	if err != nil {
+		t.Fatalf("Failed to generate schema: %v", err)
+	}
+
+	// Check that the struct has a single Label field (not Labels)
+	if !strings.Contains(code, "Tag types.Label") {
+		t.Error("Expected Tag field with types.Label type")
+		t.Logf("Generated code:\n%s", code)
+	}
+
+	// Find the Encode() method
+	encodeMethodPattern := "func (o *Resource) Encode() (attrs []entity.Attr) {"
+	encodeMethodStart := strings.Index(code, encodeMethodPattern)
+	if encodeMethodStart == -1 {
+		t.Error("Could not find Encode() method in generated code")
+		return
+	}
+
+	// Find the end of the Encode() method
+	encodeMethodEnd := strings.Index(code[encodeMethodStart:], "\n}")
+	if encodeMethodEnd == -1 {
+		t.Error("Could not find end of Encode() method")
+		return
+	}
+
+	encodeMethod := code[encodeMethodStart : encodeMethodStart+encodeMethodEnd+2]
+
+	// The encoder should reference o.Tag.Key and o.Tag.Value directly
+	// NOT v.Key and v.Value (which would cause a compilation error)
+	if strings.Contains(encodeMethod, "v.Key") || strings.Contains(encodeMethod, "v.Value") {
+		t.Error("Single-value label encoder should not reference v.Key or v.Value")
+		t.Logf("Encode() method:\n%s", encodeMethod)
+	}
+
+	// Should contain the correct references
+	if !strings.Contains(encodeMethod, "o.Tag.Key") || !strings.Contains(encodeMethod, "o.Tag.Value") {
+		t.Error("Single-value label encoder should reference o.Tag.Key and o.Tag.Value")
+		t.Logf("Encode() method:\n%s", encodeMethod)
+	}
+
+	// Verify the label encoding call structure
+	if !strings.Contains(encodeMethod, "entity.Label(ResourceTagId, o.Tag.Key, o.Tag.Value)") {
+		t.Error("Expected correct Label encoding call with o.Tag.Key and o.Tag.Value")
+	}
+}
