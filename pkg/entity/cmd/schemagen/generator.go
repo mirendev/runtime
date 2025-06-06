@@ -399,12 +399,12 @@ func (g *gen) attr(name string, attr *schemaAttr) {
 				j.If(j.Len(j.Id("o").Dot(fname)).Op("!=").Lit(0)).Block(j.Return(j.False())))
 		} else {
 			g.encoders = append(g.encoders,
-				j.If(j.Id("len").Call(j.Id("o").Dot(fname)).Op("==").Lit(0)).Block(
+				j.If(j.Len(j.Id("o").Dot(fname)).Op(">").Lit(0)).Block(
 					j.Id("attrs").Op("=").Append(j.Id("attrs"), j.Qual(top, "Bytes").Call(g.Ident(fname), j.Id("o").Dot(fname))),
 				),
 			)
 			g.empties = append(g.empties,
-				j.If(j.Id("len").Call(j.Id("o").Dot(fname)).Op("==").Lit(0)).Block(j.Return(j.False())))
+				j.If(j.Len(j.Id("o").Dot(fname)).Op(">").Lit(0)).Block(j.Return(j.False())))
 		}
 
 	case "label":
