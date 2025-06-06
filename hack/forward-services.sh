@@ -1,6 +1,33 @@
 #!/bin/bash
 # Forward services from debug container to host for local debugging
 
+# Check for required dependencies
+check_dependency() {
+    if ! command -v "$1" &> /dev/null; then
+        echo "✗ Error: $1 is not installed"
+        echo "  $2"
+        return 1
+    fi
+}
+
+# Check all required tools
+MISSING_DEPS=0
+check_dependency "docker" "Please install Docker: https://docs.docker.com/get-docker/" || MISSING_DEPS=1
+check_dependency "socat" "Please install socat: apt install socat (Ubuntu/Debian) or brew install socat (macOS)" || MISSING_DEPS=1
+check_dependency "pkill" "Please install procps package for pkill support" || MISSING_DEPS=1
+check_dependency "make" "Please install make: apt install make (Ubuntu/Debian) or install Xcode Command Line Tools (macOS)" || MISSING_DEPS=1
+
+if [ $MISSING_DEPS -eq 1 ]; then
+    echo ""
+    echo "Please install missing dependencies and try again."
+    # Handle both sourced and executed modes
+    if [[ "${BASH_SOURCE[0]}" != "${0}" ]]; then
+        return 1  # Return from sourced script
+    else
+        exit 1    # Exit from executed script
+    fi
+fi
+
 # Try to get IPs automatically from the container
 if [ -z "$MINIO_IP" ] || [ -z "$ETCD_IP" ] || [ -z "$CLICKHOUSE_IP" ]; then
     echo "Getting service IPs from container..."
