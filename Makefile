@@ -13,7 +13,7 @@ test-shell:
 	dagger call -q test --dir=. --shell
 
 test-e2e:
-	dagger call -q test --dir=. --tests="./e2e" --tags=e2e
+	dagger call -q test --dir=. --tests="./e2e" --tags=e2e --verboose
 
 dev-tmux:
 	dagger call -q dev --dir=. --tmux
