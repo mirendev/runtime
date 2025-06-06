@@ -2,14 +2,18 @@ name: Dagger
 
 on:
   push:
-    branches: [ "main", "evan/mir-204" ]
+    branches: [ "main", "evan/mir-210" ]
 
 jobs:
   package:
-    runs-on: depot-ubuntu-latest,dagger=0.18.9
     strategy:
       matrix:
-        arch: [amd64, arm64]
+        include:
+          - arch: amd64
+            runner: depot-ubuntu-latest,dagger=0.18.9
+          - arch: arm64
+            runner: depot-ubuntu-latest-arm,dagger=0.18.9
+    runs-on: ${{ matrix.runner }}
     permissions:
       contents: write
     steps:
@@ -32,7 +36,7 @@ jobs:
             runner: depot-ubuntu-latest,dagger=0.18.9
           - os: linux
             arch: arm64
-            runner: depot-ubuntu-latest,dagger=0.18.9
+            runner: depot-ubuntu-latest-arm,dagger=0.18.9
           - os: darwin
             arch: amd64
             runner: macos-latest

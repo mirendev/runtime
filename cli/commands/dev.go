@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"net/netip"
 	"os"
+	"os/exec"
+	"os/user"
 	"path/filepath"
 	"time"
 
@@ -20,6 +22,7 @@ import (
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/components/autotls"
 	"miren.dev/runtime/components/clickhouse"
+	containerdcomp "miren.dev/runtime/components/containerd"
 	"miren.dev/runtime/components/coordinate"
 	"miren.dev/runtime/components/etcd"
 	"miren.dev/runtime/components/ipalloc"
@@ -36,12 +39,14 @@ import (
 )
 
 func Dev(ctx *Context, opts struct {
+	Mode                      string   `short:"m" long:"mode" description:"Development mode (standalone, distributed)" default:"standalone"`
 	Address                   string   `short:"a" long:"address" description:"Address to listen on" default:"localhost:8443"`
 	RunnerAddress             string   `long:"runner-address" description:"Address to listen on" default:"localhost:8444"`
 	EtcdEndpoints             []string `short:"e" long:"etcd" description:"Etcd endpoints" default:"http://etcd:2379"`
 	EtcdPrefix                string   `short:"p" long:"etcd-prefix" description:"Etcd prefix" default:"/miren"`
 	RunnerId                  string   `short:"r" long:"runner-id" description:"Runner ID" default:"dev"`
 	DataPath                  string   `short:"d" long:"data-path" description:"Data path" default:"/var/lib/miren"`
+	ReleasePath               string   `long:"release-path" description:"Path to release directory containing binaries"`
 	AdditionalNames           []string `long:"dns-names" description:"Additional DNS names assigned to the server cert"`
 	AdditionalIPs             []string `long:"ips" description:"Additional IPs assigned to the server cert"`
 	StandardTLS               bool     `long:"serve-tls" description:"Expose the http ingress on standard TLS ports"`
@@ -52,8 +57,156 @@ func Dev(ctx *Context, opts struct {
 	ClickHouseHTTPPort        int      `long:"clickhouse-http-port" description:"ClickHouse HTTP port" default:"8223"`
 	ClickHouseNativePort      int      `long:"clickhouse-native-port" description:"ClickHouse native port" default:"9009"`
 	ClickHouseInterServerPort int      `long:"clickhouse-interserver-port" description:"ClickHouse inter-server port" default:"9010"`
+	StartContainerd           bool     `long:"start-containerd" description:"Start embedded containerd daemon"`
+	ContainerdBinary          string   `long:"containerd-binary" description:"Path to containerd binary" default:"containerd"`
+	ContainerdSocketPath      string   `long:"containerd-socket" description:"Path to containerd socket"`
 }) error {
 	eg, sub := errgroup.WithContext(ctx)
+
+	// Handle mode configuration
+	switch opts.Mode {
+	case "standalone":
+		// In standalone mode, automatically start all components
+		ctx.Log.Info("running in standalone mode - starting all components")
+		opts.StartContainerd = true
+		opts.StartEtcd = true
+		opts.StartClickHouse = true
+
+		// Determine release path
+		if opts.ReleasePath == "" {
+			// Check for user's home directory first, respecting SUDO_USER
+			var homeDir string
+			if sudoUser := os.Getenv("SUDO_USER"); sudoUser != "" {
+				// Running under sudo, get the original user's home
+				u, err := user.Lookup(sudoUser)
+				if err == nil {
+					homeDir = u.HomeDir
+				} else {
+					// Fallback to HOME env var
+					homeDir = os.Getenv("HOME")
+				}
+			} else {
+				// Not running under sudo, use current user's home
+				homeDir = os.Getenv("HOME")
+				if homeDir == "" {
+					if u, err := user.Current(); err == nil {
+						homeDir = u.HomeDir
+					}
+				}
+			}
+
+			// Try ~/.miren/release
+			userReleasePath := filepath.Join(homeDir, ".miren", "release")
+			if _, err := os.Stat(userReleasePath); err == nil {
+				opts.ReleasePath = userReleasePath
+				ctx.Log.Info("using user release path", "path", opts.ReleasePath)
+			} else {
+				// Try /var/lib/miren/release
+				systemReleasePath := "/var/lib/miren/release"
+				if _, err := os.Stat(systemReleasePath); err == nil {
+					opts.ReleasePath = systemReleasePath
+					ctx.Log.Info("using system release path", "path", opts.ReleasePath)
+				} else {
+					return fmt.Errorf("no release directory found (tried %s and %s)", userReleasePath, systemReleasePath)
+				}
+			}
+		} else {
+			path, err := filepath.Abs(opts.ReleasePath)
+			if err != nil {
+				return fmt.Errorf("failed to resolve absolute release path: %w", err)
+			}
+
+			opts.ReleasePath = path
+
+			// Verify the provided release path exists
+			if _, err := os.Stat(opts.ReleasePath); err != nil {
+				return fmt.Errorf("release path does not exist: %s", opts.ReleasePath)
+			}
+		}
+	case "distributed":
+		// In distributed mode, use the flags as provided
+		ctx.Log.Info("running in distributed mode")
+	default:
+		return fmt.Errorf("unknown mode: %s (valid modes: standalone, distributed)", opts.Mode)
+	}
+
+	// Determine containerd socket path
+	containerdSocketPath := opts.ContainerdSocketPath
+	if containerdSocketPath == "" {
+		containerdSocketPath = filepath.Join(opts.DataPath, "containerd", "containerd.sock")
+	}
+
+	// Start embedded containerd if requested
+	if opts.StartContainerd {
+		ctx.Log.Info("starting embedded containerd", "binary", opts.ContainerdBinary)
+
+		var (
+			containerdPath string
+			binDir         string
+			err            error
+		)
+
+		if opts.ReleasePath == "" {
+			containerdPath, err = exec.LookPath(containerdPath)
+			if err != nil {
+				ctx.Log.Error("containerd binary not found in PATH", "binary", opts.ContainerdBinary, "error", err)
+				return fmt.Errorf("containerd binary not found: %s", opts.ContainerdBinary)
+			}
+		} else {
+			// Get directory containing binaries from release path
+			binDir = filepath.Join(opts.ReleasePath, "bin")
+
+			// Use containerd from release path
+			containerdPath = filepath.Join(binDir, "containerd")
+		}
+
+		// Verify the binary exists
+		if _, err := os.Stat(containerdPath); err != nil {
+			ctx.Log.Error("containerd binary not found", "path", containerdPath, "error", err)
+			return fmt.Errorf("containerd binary not found at %s: %w", containerdPath, err)
+		}
+
+		containerdComponent := containerdcomp.NewContainerdComponent(ctx.Log, opts.DataPath)
+
+		containerdConfig := &containerdcomp.Config{
+			BinaryPath: containerdPath,
+			BaseDir:    filepath.Join(opts.DataPath, "containerd"),
+			BinDir:     binDir,
+			SocketPath: containerdSocketPath,
+		}
+
+		err = containerdComponent.Start(sub, containerdConfig)
+		if err != nil {
+			ctx.Log.Error("failed to start containerd component", "error", err)
+			return err
+		}
+
+		ctx.Log.Info("embedded containerd started", "socket", containerdComponent.SocketPath())
+
+		// Ensure cleanup on exit
+		defer containerdComponent.Stop(context.Background())
+
+		// Override the containerd client provider to use our socket
+		ctx.Server.Provide(func(opts struct {
+			Namespace string `asm:"namespace"`
+		}) (*containerd.Client, error) {
+			return containerd.New(containerdComponent.SocketPath(),
+				containerd.WithDefaultNamespace(opts.Namespace))
+		})
+	} else {
+		// Use existing containerd with provided or default socket path
+		defaultSocket := "/run/containerd/containerd.sock"
+		if containerdSocketPath != "" {
+			defaultSocket = containerdSocketPath
+		}
+
+		ctx.Server.Provide(func(opts struct {
+			Namespace string `asm:"namespace"`
+		}) (*containerd.Client, error) {
+			return containerd.New(defaultSocket,
+				containerd.WithDefaultNamespace(opts.Namespace))
+		})
+	}
 
 	// Start embedded etcd server if requested
 	if opts.StartEtcd {
