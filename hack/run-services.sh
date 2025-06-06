@@ -1,7 +1,7 @@
 #!/bin/bash
-# Script for debug services container
+# Script for services container
 
-echo "=== Debug Services Container ==="
+echo "=== Services Container ==="
 echo ""
 echo "Services available:"
 echo "  - etcd:       etcd:2379"

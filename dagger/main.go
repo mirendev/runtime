@@ -274,7 +274,7 @@ func (m *Runtime) Debug(
 		WithWorkdir("/src")
 
 	w = w.Terminal(dagger.ContainerTerminalOpts{
-		Cmd: []string{"/bin/bash", "/src/hack/debug-services.sh"},
+		Cmd: []string{"/bin/bash", "/src/hack/run-services.sh"},
 	})
 
 	return w.Stdout(ctx)

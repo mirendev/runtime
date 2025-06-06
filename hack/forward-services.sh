@@ -6,7 +6,7 @@ if [ -z "$MINIO_IP" ] || [ -z "$ETCD_IP" ] || [ -z "$CLICKHOUSE_IP" ]; then
     echo "Getting service IPs from container..."
     
     # Find the container PID running bash
-    CONTAINER_PID=$(docker exec dagger-engine-v0.18.9 ps aux | grep -E "bash.*(debug-services|dev.sh)" | grep -v grep | awk '{print $1}' | head -1)
+    CONTAINER_PID=$(docker exec dagger-engine-v0.18.9 ps aux | grep -E "bash.*(run-services|dev.sh)" | grep -v grep | awk '{print $1}' | head -1)
     
     if [ -n "$CONTAINER_PID" ]; then
         # Get the IPs using nsenter
@@ -69,9 +69,49 @@ echo "✓ ClickHouse HTTP forwarded: localhost:8123 → $CLICKHOUSE_IP:8123"
 echo ""
 echo "All services forwarded!"
 echo ""
-echo "For local debugging, use these environment variables:"
-echo "  export S3_URL=http://localhost:9001"
-echo "  export ETCD_ENDPOINTS=localhost:2379"
-echo "  export CLICKHOUSE_URL=http://localhost:8123"
+
+# Check if script is being sourced
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    # Script is being run directly
+    echo "Environment variables to export:"
+    echo "  export S3_URL=http://localhost:9001"
+    echo "  export ETCD_ENDPOINTS=localhost:2379"  
+    echo "  export CLICKHOUSE_URL=http://localhost:8123"
+    echo ""
+    echo "To automatically export these variables, run:"
+    echo "  source ./hack/forward-services.sh"
+else
+    # Script is being sourced
+    export S3_URL=http://localhost:9001
+    export ETCD_ENDPOINTS=localhost:2379
+    export CLICKHOUSE_URL=http://localhost:8123
+    
+    echo "✓ Environment variables exported:"
+    echo "  S3_URL=$S3_URL"
+    echo "  ETCD_ENDPOINTS=$ETCD_ENDPOINTS"
+    echo "  CLICKHOUSE_URL=$CLICKHOUSE_URL"
+    
+    # Build runtime if needed and create 'r' alias
+    SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+    PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+    RUNTIME_BIN="$PROJECT_DIR/bin/runtime"
+    
+    if [[ ! -f "$RUNTIME_BIN" ]]; then
+        echo "Building runtime binary..."
+        (cd "$PROJECT_DIR" && make bin/runtime)
+    fi
+    
+    if [[ -f "$RUNTIME_BIN" ]]; then
+        alias r="$RUNTIME_BIN"
+        echo "✓ Created alias 'r' for runtime command"
+    else
+        echo "✗ Failed to build runtime binary"
+    fi
+fi
+
 echo ""
-echo "And run with: ./bin/runtime dev -vv --etcd=localhost:2379 --clickhouse-addr=localhost:9000"
+if [[ "${BASH_SOURCE[0]}" != "${0}" ]] && [[ -f "$RUNTIME_BIN" ]]; then
+    echo "You can now run: r dev -vv --etcd=localhost:2379 --clickhouse-addr=localhost:9000"
+else
+    echo "You can now run: ./bin/runtime dev -vv --etcd=localhost:2379 --clickhouse-addr=localhost:9000"
+fi

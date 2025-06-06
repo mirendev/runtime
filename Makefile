@@ -21,10 +21,10 @@ dev-tmux:
 dev:
 	dagger call -q dev --dir=.
 
-debug-services:
+services:
 	dagger call debug --dir=.
 
-.PHONY: debug-services
+.PHONY: services
 
 image:
 	dagger call -q container --dir=. export --path=tmp/latest.tar
