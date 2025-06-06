@@ -67,7 +67,8 @@ func TestSandboxLifecycleEndToEnd(t *testing.T) {
 	r.Contains(deployOut, "All traffic moved to new version.")
 
 	// Set its hostname
-	setHostCode := cli.Run([]string{"runtime", "set", "host", "-a", "hw-bun", "--host", "bunbunbun"})
+	routePath := writeTempContents(t, "combo.yaml", routeYaml)
+	setHostCode := cli.Run([]string{"runtime", "entity", "put", "-p", routePath})
 	r.Equal(0, setHostCode)
 
 	t.Log("running HTTP GET for bun")
@@ -133,4 +134,13 @@ metadata:
 spec:
   project: project/default
   active_version: app_version/abcdef
+`
+
+var routeYaml = `kind: dev.miren.ingress/http_route
+version: v1alpha
+metadata:
+  name: bunbunbun
+spec:
+  host: bunbunbun
+  app: app/hw-bun
 `
