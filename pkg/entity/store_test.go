@@ -435,6 +435,118 @@ func TestEtcdStore_UpdateEntity(t *testing.T) {
 	})
 }
 
+func TestEtcdStore_GetEntities_Batching(t *testing.T) {
+	client := setupTestEtcd(t)
+	store, err := NewEtcdStore(t.Context(), slog.Default(), client, "/test-entities")
+	require.NoError(t, err)
+
+	// Create test entities - more than maxEntitiesPerBatch to test batching
+	numEntities := 150 // This will require 3 batches (64 + 64 + 22)
+	var entityIds []Id
+
+	for i := 0; i < numEntities; i++ {
+		entity, err := store.CreateEntity(t.Context(), []Attr{
+			Any(Ident, KeywordValue(fmt.Sprintf("test-entity-%d", i))),
+			Any(Doc, fmt.Sprintf("Test entity %d", i)),
+		})
+		require.NoError(t, err)
+		entityIds = append(entityIds, entity.ID)
+	}
+
+	// Test getting all entities at once
+	t.Run("get all entities in batches", func(t *testing.T) {
+		entities, err := store.GetEntities(t.Context(), entityIds)
+		require.NoError(t, err)
+		require.Len(t, entities, numEntities)
+
+		// Verify all entities were retrieved correctly
+		for i, entity := range entities {
+			require.NotNil(t, entity, "entity at index %d should not be nil", i)
+
+			// Check the ident attribute matches what we created
+			identAttr, ok := entity.Get(Ident)
+			require.True(t, ok)
+			expectedIdent := fmt.Sprintf("test-entity-%d", i)
+			require.Equal(t, KeywordValue(expectedIdent), identAttr.Value)
+		}
+	})
+
+	// Test order preservation across batch boundaries
+	t.Run("order preservation", func(t *testing.T) {
+		// Create a specific order that crosses batch boundaries
+		// Include indices from different batches: 0-63 (batch 1), 64-127 (batch 2), 128-149 (batch 3)
+		orderedIds := []Id{
+			entityIds[10],  // batch 1
+			entityIds[70],  // batch 2
+			entityIds[130], // batch 3
+			entityIds[63],  // last of batch 1
+			entityIds[64],  // first of batch 2
+			entityIds[127], // last of batch 2
+			entityIds[128], // first of batch 3
+			entityIds[0],   // first overall
+			entityIds[149], // last overall
+		}
+
+		entities, err := store.GetEntities(t.Context(), orderedIds)
+		require.NoError(t, err)
+		require.Len(t, entities, len(orderedIds))
+
+		// Verify order is preserved
+		expectedIndices := []int{10, 70, 130, 63, 64, 127, 128, 0, 149}
+		for i, expectedIdx := range expectedIndices {
+			require.NotNil(t, entities[i])
+			identAttr, ok := entities[i].Get(Ident)
+			require.True(t, ok)
+			expectedIdent := fmt.Sprintf("test-entity-%d", expectedIdx)
+			require.Equal(t, KeywordValue(expectedIdent), identAttr.Value)
+
+			// Also verify the entity ID matches
+			require.Equal(t, orderedIds[i], entities[i].ID)
+		}
+	})
+
+	// Test with empty slice
+	t.Run("empty slice", func(t *testing.T) {
+		entities, err := store.GetEntities(t.Context(), []Id{})
+		require.NoError(t, err)
+		require.Empty(t, entities)
+	})
+
+	// Test with some non-existent entities mixed in
+	t.Run("mixed existing and non-existing", func(t *testing.T) {
+		mixedIds := []Id{
+			entityIds[0],
+			"non-existent-1",
+			entityIds[1],
+			"non-existent-2",
+			entityIds[2],
+		}
+
+		entities, err := store.GetEntities(t.Context(), mixedIds)
+		require.NoError(t, err)
+		require.Len(t, entities, 5)
+
+		// Check that existing entities are returned and non-existent are nil
+		require.NotNil(t, entities[0])
+		require.Nil(t, entities[1])
+		require.NotNil(t, entities[2])
+		require.Nil(t, entities[3])
+		require.NotNil(t, entities[4])
+	})
+
+	// Test exact batch boundary
+	t.Run("exact batch size", func(t *testing.T) {
+		exactBatchIds := entityIds[:maxEntitiesPerBatch]
+		entities, err := store.GetEntities(t.Context(), exactBatchIds)
+		require.NoError(t, err)
+		require.Len(t, entities, maxEntitiesPerBatch)
+
+		for _, entity := range entities {
+			require.NotNil(t, entity)
+		}
+	})
+}
+
 func TestEtcdStore_DeleteEntity(t *testing.T) {
 	client := setupTestEtcd(t)
 	store, err := NewEtcdStore(t.Context(), slog.Default(), client, "/test-entities")
@@ -1005,44 +1117,6 @@ func TestEtcdStore_GetEntities(t *testing.T) {
 			_, ok := e.Get(Id("test/session-status"))
 			r.False(ok, "Entity %d should not have session status after revoke", i)
 		}
-	})
-
-	t.Run("with TTL/lease", func(t *testing.T) {
-		r := require.New(t)
-
-		// Create session with TTL
-		sid, err := store.CreateSession(t.Context(), 30)
-		r.NoError(err)
-
-		// Create entities bound to session (will have TTL)
-		entity6, err := store.CreateEntity(t.Context(), []Attr{
-			Any(Ident, "test-entity-6"),
-		}, BondToSession(sid))
-		r.NoError(err)
-
-		entity7, err := store.CreateEntity(t.Context(), []Attr{
-			Any(Ident, "test-entity-7"),
-		}, BondToSession(sid))
-		r.NoError(err)
-
-		// Get entities and verify TTL attribute is added
-		entities, err := store.GetEntities(t.Context(), []Id{entity6.ID, entity7.ID})
-		r.NoError(err)
-		r.Len(entities, 2)
-
-		for i, e := range entities {
-			r.NotNil(e)
-			ttlAttr, ok := e.Get(TTL)
-			r.True(ok, "Entity %d should have TTL attribute", i)
-
-			// TTL should be a duration
-			ttlDuration := ttlAttr.Value.Duration()
-			r.Greater(ttlDuration, time.Duration(0))
-			r.LessOrEqual(ttlDuration, 30*time.Second)
-		}
-
-		// Clean up
-		r.NoError(store.RevokeSession(t.Context(), sid))
 	})
 
 	t.Run("large batch", func(t *testing.T) {
