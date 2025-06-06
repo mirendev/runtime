@@ -48,3 +48,8 @@ bin/runtime-debug:
 	go build -gcflags="all=-N -l" -o bin/runtime-debug ./cmd/runtime
 
 .PHONY: bin/runtime-debug
+
+lint-changed:
+	@bash ./hack/lint-changed.sh
+
+.PHONY: lint-changed
