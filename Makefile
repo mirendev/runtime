@@ -22,7 +22,7 @@ dev:
 	dagger call -q dev --dir=.
 
 debug-services:
-	dagger call -q debug --dir=.
+	dagger call debug --dir=.
 
 .PHONY: debug-services
 
