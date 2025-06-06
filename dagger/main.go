@@ -99,15 +99,11 @@ func (m *Runtime) Etcd() *dagger.Container {
 func (m *Runtime) BuildEnv(dir *dagger.Directory) *dagger.Container {
 	return dag.Container().
 		From("golang:1.24").
-		WithMountedCache("/go/pkg/mod", dag.CacheVolume("go-mod-124")).
-		WithEnvVariable("GOMODCACHE", "/go/pkg/mod").
-		WithMountedCache("/go/build-cache", dag.CacheVolume("go-build-124")).
-		WithEnvVariable("GOCACHE", "/go/build-cache").
 		WithExec([]string{"apt-get", "update"}).
-		WithExec([]string{"go", "install", "gotest.tools/gotestsum@latest"}).
-		WithExec([]string{"sh", "-c", "cd /usr/bin && curl https://clickhouse.com/ | sh"}, dagger.ContainerWithExecOpts{}).
 		WithExec([]string{"apt-get", "install", "-y",
 			"bash",
+			"clickhouse-client",
+			"gotestsum",
 			"inetutils-ping",
 			"iproute2",
 			"iptables",
@@ -136,7 +132,11 @@ func (m *Runtime) BuildEnv(dir *dagger.Directory) *dagger.Container {
 		WithExec([]string{"mv", "/upstream/runc", "/usr/local/bin/runc"}).
 		WithExec([]string{"mv", "/upstream/runsc", "/usr/local/bin/runsc"}).
 		WithExec([]string{"mv", "/upstream/containerd-shim-runsc-v1", "/usr/local/bin/containerd-shim-runsc-v1"}).
-		WithExec([]string{"/usr/local/bin/runsc", "install"})
+		WithExec([]string{"/usr/local/bin/runsc", "install"}).
+		WithMountedCache("/go/pkg/mod", dag.CacheVolume("go-mod-124")).
+		WithEnvVariable("GOMODCACHE", "/go/pkg/mod").
+		WithMountedCache("/go/build-cache", dag.CacheVolume("go-build-124")).
+		WithEnvVariable("GOCACHE", "/go/build-cache")
 }
 
 func (m *Runtime) Package(
