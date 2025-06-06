@@ -487,7 +487,7 @@ func (g *gen) attr(name string, attr *schemaAttr) {
 		)
 		g.encoders = append(g.encoders, enc)
 		g.empties = append(g.empties,
-			j.If(j.Id("o").Dot(fname).Op("==").Lit("")).Block(j.Return(j.False())))
+			j.If(j.Id("o").Dot(fname).Op("!=").Lit("")).Block(j.Return(j.False())))
 
 		var call []j.Code
 		call = append(call, j.Lit(name), j.Lit(eid))

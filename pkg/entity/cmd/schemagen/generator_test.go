@@ -269,3 +269,78 @@ func TestEntityEmptyConsidersAllFields(t *testing.T) {
 		t.Logf("Empty() method:\n%s", emptyMethod)
 	}
 }
+
+func TestEnumFieldEmptiness(t *testing.T) {
+	// Test that enum fields correctly implement the Empty() check
+	// The fix ensures that when an enum has a value (non-empty string),
+	// the Empty() method returns false (meaning the entity is not empty)
+	sf := &schemaFile{
+		Domain:  "test",
+		Version: "v1",
+		Kinds: map[string]schemaAttrs{
+			"deployment": {
+				"status": &schemaAttr{
+					Type:    "enum",
+					Choices: []string{"pending", "running", "completed", "failed"},
+					Doc:     "Deployment status",
+				},
+			},
+		},
+	}
+
+	// Generate the schema code
+	code, err := GenerateSchema(sf, "test")
+	if err != nil {
+		t.Fatalf("Failed to generate schema: %v", err)
+	}
+
+	// Check that enum type is created
+	if !strings.Contains(code, "type DeploymentStatus string") {
+		t.Error("Expected DeploymentStatus enum type to be generated")
+	}
+
+	// Check that enum constants are created
+	expectedConstants := []string{
+		"DeploymentStatusPending",
+		"DeploymentStatusRunning",
+		"DeploymentStatusCompleted",
+		"DeploymentStatusFailed",
+	}
+
+	for _, constant := range expectedConstants {
+		if !strings.Contains(code, constant) {
+			t.Errorf("Expected enum constant %s to be generated", constant)
+		}
+	}
+
+	// Find the Empty() method to verify the fix
+	emptyMethodPattern := "func (o *Deployment) Empty() bool {"
+	emptyMethodStart := strings.Index(code, emptyMethodPattern)
+	if emptyMethodStart == -1 {
+		t.Error("Could not find Empty() method in generated code")
+		return
+	}
+
+	// Find the closing brace of the Empty() method
+	emptyMethodEnd := strings.Index(code[emptyMethodStart:], "\n}")
+	if emptyMethodEnd == -1 {
+		t.Error("Could not find end of Empty() method")
+		return
+	}
+
+	emptyMethod := code[emptyMethodStart : emptyMethodStart+emptyMethodEnd+2]
+
+	// The fix ensures that when an enum field has a value (!= ""),
+	// the Empty() method returns false (entity is not empty)
+	// Look for the corrected check: if o.Status != "" { return false }
+	if !strings.Contains(emptyMethod, `if o.Status != ""`) {
+		t.Error("Empty() method should check if enum Status is not empty string")
+		t.Logf("Empty() method:\n%s", emptyMethod)
+	}
+
+	// Verify the structure of the emptiness check
+	// It should return false when enum has a value (meaning entity is not empty)
+	if !strings.Contains(emptyMethod, `return false`) {
+		t.Error("Empty() method should return false when enum fields have values")
+	}
+}
