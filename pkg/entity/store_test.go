@@ -443,8 +443,7 @@ func TestEtcdStore_GetEntities_Batching(t *testing.T) {
 	// Create test entities - more than maxEntitiesPerBatch to test batching
 	numEntities := 150 // This will require 3 batches (64 + 64 + 22)
 	var entityIds []Id
-	var createdEntities []*Entity
-	
+
 	for i := 0; i < numEntities; i++ {
 		entity, err := store.CreateEntity(t.Context(), []Attr{
 			Any(Ident, KeywordValue(fmt.Sprintf("test-entity-%d", i))),
@@ -452,7 +451,6 @@ func TestEtcdStore_GetEntities_Batching(t *testing.T) {
 		})
 		require.NoError(t, err)
 		entityIds = append(entityIds, entity.ID)
-		createdEntities = append(createdEntities, entity)
 	}
 
 	// Test getting all entities at once
@@ -464,7 +462,7 @@ func TestEtcdStore_GetEntities_Batching(t *testing.T) {
 		// Verify all entities were retrieved correctly
 		for i, entity := range entities {
 			require.NotNil(t, entity, "entity at index %d should not be nil", i)
-			
+
 			// Check the ident attribute matches what we created
 			identAttr, ok := entity.Get(Ident)
 			require.True(t, ok)
@@ -478,21 +476,21 @@ func TestEtcdStore_GetEntities_Batching(t *testing.T) {
 		// Create a specific order that crosses batch boundaries
 		// Include indices from different batches: 0-63 (batch 1), 64-127 (batch 2), 128-149 (batch 3)
 		orderedIds := []Id{
-			entityIds[10],   // batch 1
-			entityIds[70],   // batch 2
-			entityIds[130],  // batch 3
-			entityIds[63],   // last of batch 1
-			entityIds[64],   // first of batch 2
-			entityIds[127],  // last of batch 2
-			entityIds[128],  // first of batch 3
-			entityIds[0],    // first overall
-			entityIds[149],  // last overall
+			entityIds[10],  // batch 1
+			entityIds[70],  // batch 2
+			entityIds[130], // batch 3
+			entityIds[63],  // last of batch 1
+			entityIds[64],  // first of batch 2
+			entityIds[127], // last of batch 2
+			entityIds[128], // first of batch 3
+			entityIds[0],   // first overall
+			entityIds[149], // last overall
 		}
-		
+
 		entities, err := store.GetEntities(t.Context(), orderedIds)
 		require.NoError(t, err)
 		require.Len(t, entities, len(orderedIds))
-		
+
 		// Verify order is preserved
 		expectedIndices := []int{10, 70, 130, 63, 64, 127, 128, 0, 149}
 		for i, expectedIdx := range expectedIndices {
@@ -501,7 +499,7 @@ func TestEtcdStore_GetEntities_Batching(t *testing.T) {
 			require.True(t, ok)
 			expectedIdent := fmt.Sprintf("test-entity-%d", expectedIdx)
 			require.Equal(t, KeywordValue(expectedIdent), identAttr.Value)
-			
+
 			// Also verify the entity ID matches
 			require.Equal(t, orderedIds[i], entities[i].ID)
 		}
@@ -523,11 +521,11 @@ func TestEtcdStore_GetEntities_Batching(t *testing.T) {
 			"non-existent-2",
 			entityIds[2],
 		}
-		
+
 		entities, err := store.GetEntities(t.Context(), mixedIds)
 		require.NoError(t, err)
 		require.Len(t, entities, 5)
-		
+
 		// Check that existing entities are returned and non-existent are nil
 		require.NotNil(t, entities[0])
 		require.Nil(t, entities[1])
@@ -542,7 +540,7 @@ func TestEtcdStore_GetEntities_Batching(t *testing.T) {
 		entities, err := store.GetEntities(t.Context(), exactBatchIds)
 		require.NoError(t, err)
 		require.Len(t, entities, maxEntitiesPerBatch)
-		
+
 		for _, entity := range entities {
 			require.NotNil(t, entity)
 		}

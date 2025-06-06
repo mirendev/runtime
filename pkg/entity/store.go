@@ -416,14 +416,6 @@ func (s *EtcdStore) GetEntities(ctx context.Context, ids []Id) ([]*Entity, error
 				continue
 			}
 
-			// Handle TTL if present
-			if primaryResp.Kvs[0].Lease != 0 {
-				ttlr, err := s.client.Lease.TimeToLive(ctx, clientv3.LeaseID(primaryResp.Kvs[0].Lease))
-				if err == nil {
-					entity.Attrs = append(entity.Attrs, Duration(TTL, time.Duration(ttlr.TTL)*time.Second))
-				}
-			}
-
 			entity.Revision = primaryResp.Kvs[0].ModRevision
 
 			// Process session attributes
