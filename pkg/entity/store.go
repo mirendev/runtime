@@ -50,6 +50,11 @@ var ErrNotFound = errors.New("entity not found")
 
 var _ Store = (*EtcdStore)(nil)
 
+// etcdMaxTxnOps is the maximum number of operations allowed in a single etcd transaction.
+// Each entity requires 2 operations (primary + session), so we divide by 2 for max entities per batch.
+const etcdMaxTxnOps = 128
+const maxEntitiesPerBatch = etcdMaxTxnOps / 2
+
 // NewEtcdStore creates a new etcd-backed entity store
 func NewEtcdStore(ctx context.Context, log *slog.Logger, client *clientv3.Client, prefix string) (*EtcdStore, error) {
 	store := &EtcdStore{
@@ -359,82 +364,91 @@ func (s *EtcdStore) GetEntities(ctx context.Context, ids []Id) ([]*Entity, error
 		return []*Entity{}, nil
 	}
 
-	// Build all the ops for the transaction
-	var ops []clientv3.Op
-	for _, id := range ids {
-		key := s.buildKey(id)
-		ops = append(ops, clientv3.OpGet(key))
-		ops = append(ops, clientv3.OpGet(key+"/session/", clientv3.WithPrefix()))
-	}
+	// Process entities in batches to avoid exceeding etcd transaction limits
+	entities := make([]*Entity, len(ids))
 
-	// Execute transaction
-	tr, err := s.client.Txn(ctx).Then(ops...).Commit()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get entities from etcd: %w", err)
-	}
-
-	if !tr.Succeeded {
-		return nil, fmt.Errorf("transaction failed")
-	}
-
-	// Process results
-	entities := make([]*Entity, 0, len(ids))
-	for i := 0; i < len(ids); i++ {
-		// Each entity has 2 responses: primary and session
-		primaryIdx := i * 2
-		sessionIdx := i*2 + 1
-
-		if primaryIdx >= len(tr.Responses) || sessionIdx >= len(tr.Responses) {
-			continue
+	for start := 0; start < len(ids); start += maxEntitiesPerBatch {
+		end := start + maxEntitiesPerBatch
+		if end > len(ids) {
+			end = len(ids)
 		}
 
-		primaryResp := tr.Responses[primaryIdx].GetResponseRange()
-		if len(primaryResp.Kvs) == 0 {
-			// Entity not found, add nil to maintain order
-			entities = append(entities, nil)
-			s.log.Warn("failed to get primary entity from etcd", "id", ids[i])
-			continue
+		batchIds := ids[start:end]
+
+		// Build all the ops for this batch
+		var ops []clientv3.Op
+		for _, id := range batchIds {
+			key := s.buildKey(id)
+			ops = append(ops, clientv3.OpGet(key))
+			ops = append(ops, clientv3.OpGet(key+"/session/", clientv3.WithPrefix()))
 		}
 
-		var entity Entity
-		err = decoder.Unmarshal(primaryResp.Kvs[0].Value, &entity)
+		// Execute transaction for this batch
+		tr, err := s.client.Txn(ctx).Then(ops...).Commit()
 		if err != nil {
-			entities = append(entities, nil)
-			continue
+			return nil, fmt.Errorf("failed to get entities from etcd: %w", err)
 		}
 
-		// Handle TTL if present
-		if primaryResp.Kvs[0].Lease != 0 {
-			ttlr, err := s.client.Lease.TimeToLive(ctx, clientv3.LeaseID(primaryResp.Kvs[0].Lease))
-			if err == nil {
-				entity.Attrs = append(entity.Attrs, Duration(TTL, time.Duration(ttlr.TTL)*time.Second))
+		if !tr.Succeeded {
+			return nil, fmt.Errorf("transaction failed")
+		}
+
+		// Process results for this batch
+		for i := 0; i < len(batchIds); i++ {
+			// Each entity has 2 responses: primary and session
+			primaryIdx := i * 2
+			sessionIdx := i*2 + 1
+
+			if primaryIdx >= len(tr.Responses) || sessionIdx >= len(tr.Responses) {
+				continue
 			}
-		}
 
-		entity.Revision = primaryResp.Kvs[0].ModRevision
+			primaryResp := tr.Responses[primaryIdx].GetResponseRange()
+			if len(primaryResp.Kvs) == 0 {
+				// Entity not found, leave nil in the result array
+				s.log.Warn("failed to get primary entity from etcd", "id", batchIds[i])
+				continue
+			}
 
-		// Process session attributes
-		sessionResp := tr.Responses[sessionIdx].GetResponseRange()
-		for _, kv := range sessionResp.Kvs {
-			var attrs []Attr
-			err = decoder.Unmarshal(kv.Value, &attrs)
+			var entity Entity
+			err = decoder.Unmarshal(primaryResp.Kvs[0].Value, &entity)
 			if err != nil {
 				continue
 			}
 
-			sid := string(kv.Key)
-			//if there is a '/' at the end of the key, everything that follows is a session id.
-			idx := strings.LastIndexByte(sid, '/')
-			if idx != -1 {
-				sid = sid[idx+1:]
-				attrs = append(attrs, String(AttrSession, sid))
+			// Handle TTL if present
+			if primaryResp.Kvs[0].Lease != 0 {
+				ttlr, err := s.client.Lease.TimeToLive(ctx, clientv3.LeaseID(primaryResp.Kvs[0].Lease))
+				if err == nil {
+					entity.Attrs = append(entity.Attrs, Duration(TTL, time.Duration(ttlr.TTL)*time.Second))
+				}
 			}
 
-			entity.Attrs = append(entity.Attrs, attrs...)
-		}
+			entity.Revision = primaryResp.Kvs[0].ModRevision
 
-		entity.postUnmarshal()
-		entities = append(entities, &entity)
+			// Process session attributes
+			sessionResp := tr.Responses[sessionIdx].GetResponseRange()
+			for _, kv := range sessionResp.Kvs {
+				var attrs []Attr
+				err = decoder.Unmarshal(kv.Value, &attrs)
+				if err != nil {
+					continue
+				}
+
+				sid := string(kv.Key)
+				//if there is a '/' at the end of the key, everything that follows is a session id.
+				idx := strings.LastIndexByte(sid, '/')
+				if idx != -1 {
+					sid = sid[idx+1:]
+					attrs = append(attrs, String(AttrSession, sid))
+				}
+
+				entity.Attrs = append(entity.Attrs, attrs...)
+			}
+
+			entity.postUnmarshal()
+			entities[start+i] = &entity
+		}
 	}
 
 	return entities, nil
