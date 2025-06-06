@@ -1,10 +1,7 @@
 package commands
 
 import (
-	"fmt"
-
-	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
-	"miren.dev/runtime/pkg/entity"
+	"miren.dev/runtime/api/app"
 	"miren.dev/runtime/pkg/rpc"
 )
 
@@ -43,31 +40,14 @@ func SetHost(ctx *Context, opts struct {
 		}
 	}
 
-	ea := entityserver_v1alpha.NewEntityAccessClient(client)
-
-	// Construct the app ID from the name
-	appId := fmt.Sprintf("dev.miren.app/v1alpha/app/%s", opts.App)
-
-	// Verify the app exists
-	_, err = ea.Get(ctx, appId)
+	// Create app client
+	appClient, err := app.NewClient(ctx, ctx.Log, client)
 	if err != nil {
 		return err
 	}
 
-	// Construct the route ID from the host
-	routeId := fmt.Sprintf("dev.miren.ingress/v1alpha/http_route/%s", opts.Host)
-
-	// Create the entity
-	var e entityserver_v1alpha.Entity
-	e.SetId(routeId)
-	e.SetAttrs(entity.Attrs(
-		entity.Ident, routeId,
-		"app", appId,
-		"host", opts.Host,
-	))
-
-	// Put the entity
-	_, err = ea.Put(ctx, &e)
+	// Set the host for the app
+	err = appClient.SetHost(ctx, opts.App, opts.Host)
 	if err != nil {
 		return err
 	}
