@@ -163,16 +163,15 @@ func GenerateSchema(sf *schemaFile, pkg string) (string, error) {
 			panic(fmt.Errorf("failed to marshal encoded domain: %w", err))
 		}
 
-		var buf bytes.Buffer
-		zw := gzip.NewWriter(&buf)
-		zw.Write(data)
-		zw.Flush()
-		zw.Close()
+		compressed, err := compressData(data)
+		if err != nil {
+			panic(fmt.Errorf("failed to compress encoded domain: %w", err))
+		}
 
 		b.Qual(sch, "RegisterEncodedSchema").Call(
 			j.Lit(sf.Domain),
 			j.Lit(sf.Version),
-			j.Index().Byte().Call(j.Lit(buf.String())),
+			j.Index().Byte().Call(j.Lit(string(compressed))),
 		)
 	})
 
@@ -183,6 +182,29 @@ func GenerateSchema(sf *schemaFile, pkg string) (string, error) {
 	}
 
 	return buf.String(), nil
+}
+
+// compressData compresses the input data using gzip and returns the compressed byte slice.
+// Returns an error if any of the gzip operations fail.
+func compressData(data []byte) ([]byte, error) {
+	var buf bytes.Buffer
+	zw := gzip.NewWriter(&buf)
+
+	if _, err := zw.Write(data); err != nil {
+		zw.Close() // Attempt to close even on error
+		return nil, fmt.Errorf("failed to write data to gzip writer: %w", err)
+	}
+
+	if err := zw.Flush(); err != nil {
+		zw.Close() // Attempt to close even on error
+		return nil, fmt.Errorf("failed to flush gzip writer: %w", err)
+	}
+
+	if err := zw.Close(); err != nil {
+		return nil, fmt.Errorf("failed to close gzip writer: %w", err)
+	}
+
+	return buf.Bytes(), nil
 }
 
 func toCamal(s string) string {
