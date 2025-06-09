@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"os/user"
 	"path/filepath"
 	"runtime"
@@ -116,6 +117,14 @@ func DownloadRelease(ctx *Context, opts struct {
 	if err := extractTarGz(tarPath, releaseDir); err != nil {
 		return fmt.Errorf("failed to extract release: %w", err)
 	}
+
+	cmd := exec.Command(filepath.Join(releaseDir, "runtime"), "version")
+	out, err := cmd.Output()
+	if err != nil {
+		return fmt.Errorf("failed to run release binary: %w", err)
+	}
+
+	ctx.Log.Info("release binary version", "version", strings.TrimSpace(string(out)))
 
 	ctx.Log.Info("release downloaded successfully", "path", releaseDir)
 	return nil
