@@ -6,6 +6,7 @@ package slogout
 
 import (
 	"encoding/json"
+	"io"
 	"log/slog"
 	"regexp"
 	"strings"
@@ -20,6 +21,8 @@ type LoggerOpts struct {
 	IgnorePattern *regexp.Regexp
 	// ParseJSON indicates whether to parse each line as JSON and extract key/value pairs
 	ParseJSON bool
+	// ParseKeyValue indicates whether to parse each line as key=value pairs
+	ParseKeyValue bool
 }
 
 // LoggerOption is a function that configures LoggerOpts
@@ -38,6 +41,13 @@ func WithIgnorePattern(pattern string) LoggerOption {
 func WithJSONParsing() LoggerOption {
 	return func(opts *LoggerOpts) {
 		opts.ParseJSON = true
+	}
+}
+
+// WithKeyValueParsing enables key=value parsing of log lines
+func WithKeyValueParsing() LoggerOption {
+	return func(opts *LoggerOpts) {
+		opts.ParseKeyValue = true
 	}
 }
 
@@ -122,10 +132,13 @@ func (w *logWriter) processLine(line string) {
 		}
 	}
 
-	// Parse as JSON if requested
-	if w.opts.ParseJSON {
+	// Parse based on configuration
+	switch {
+	case w.opts.ParseJSON:
 		w.processJSONLine(line)
-	} else {
+	case w.opts.ParseKeyValue:
+		w.processKeyValueLine(line)
+	default:
 		// Log as plain text
 		w.logger.Log(nil, w.level, line)
 	}
@@ -133,6 +146,7 @@ func (w *logWriter) processLine(line string) {
 
 var jsonIgnoreKeys = map[string]struct{}{
 	"ts":      {},
+	"time":    {},
 	"level":   {},
 	"msg":     {},
 	"message": {},
@@ -157,14 +171,14 @@ func (w *logWriter) processJSONLine(line string) {
 	}
 
 	// Build attributes from JSON data, excluding 'ts' and 'level'
-	var attrs []any
+	var attrs []slog.Attr
 
 	for key, value := range jsonData {
 		if _, ignore := jsonIgnoreKeys[key]; ignore {
 			continue // Skip ignored keys
 		}
 
-		attrs = append(attrs, key, value)
+		attrs = append(attrs, slog.Any(key, value))
 	}
 
 	// Get the message - try 'msg' first, then 'message', then use full JSON
@@ -185,7 +199,63 @@ func (w *logWriter) processJSONLine(line string) {
 		message = line // Use full JSON line as message
 	}
 
-	w.logger.Log(nil, level, message, attrs...)
+	w.logger.LogAttrs(nil, level, message, attrs...)
+}
+
+// keyValuePattern matches key=value pairs, handling quoted values
+var keyValuePattern = regexp.MustCompile(`(\w+)=("(?:[^"\\]|\\.)*"|[^\s]+)`)
+
+var kvIgnoreKeys = map[string]struct{}{
+	"time":  {},
+	"level": {},
+	"msg":   {},
+}
+
+// processKeyValueLine parses a line containing key=value pairs
+func (w *logWriter) processKeyValueLine(line string) {
+	matches := keyValuePattern.FindAllStringSubmatch(line, -1)
+	if len(matches) == 0 {
+		// No key=value pairs found, log as plain text
+		w.logger.Log(nil, w.level, line)
+		return
+	}
+
+	level := w.level
+	message := ""
+
+	var attrs []slog.Attr
+
+	for _, match := range matches {
+		if len(match) >= 3 {
+			key := match[1]
+			value := match[2]
+			// Remove quotes if present
+			if len(value) >= 2 && value[0] == '"' && value[len(value)-1] == '"' {
+				// Unescape the quoted string
+				value = value[1 : len(value)-1]
+				value = strings.ReplaceAll(value, `\"`, `"`)
+				value = strings.ReplaceAll(value, `\\`, `\`)
+			}
+
+			switch key {
+			case "ts", "time":
+				// Ignore timestamp keys
+				continue
+			case "level":
+				level = parseLogLevel(value)
+			case "msg", "message":
+				message = value
+			default:
+				attrs = append(attrs, slog.String(key, value))
+			}
+		}
+	}
+
+	if message == "" {
+		message = line // Use the full line as message if no msg key found
+	}
+
+	w.logger.LogAttrs(nil, level, message, attrs...)
 }
 
 // parseLogLevel converts a string level to slog.Level
@@ -218,4 +288,22 @@ func WithLogger(logger *slog.Logger, module string, options ...LoggerOption) cio
 		newLogWriter(logger.With("module", module), slog.LevelInfo, opts),
 		newLogWriter(logger.With("module", module), slog.LevelInfo, opts),
 	))
+}
+
+// NewWriter creates an io.WriteCloser that can be used as cmd.Stdout/cmd.Stderr
+// to parse and route output through slog.Logger. The returned writer should be
+// closed when done to flush any remaining buffered data.
+func NewWriter(logger *slog.Logger, level slog.Level, options ...LoggerOption) io.WriteCloser {
+	opts := LoggerOpts{}
+	for _, option := range options {
+		option(&opts)
+	}
+
+	return newLogWriter(logger, level, opts)
+}
+
+// Close implements io.Closer to flush remaining data
+func (w *logWriter) Close() error {
+	w.flush()
+	return nil
 }
