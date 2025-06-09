@@ -9,7 +9,7 @@ import (
 
 type ConfigCentric struct {
 	Config  string `long:"config" description:"Path to the config file"`
-	Cluster string `long:"cluster" description:"Cluster name"`
+	Cluster string `short:"C" long:"cluster" description:"Cluster name"`
 
 	cfg *clientconfig.Config
 }
@@ -75,11 +75,15 @@ func ConfigInfo(ctx *Context, opts struct {
 	}
 
 	for name, ccfg := range mapx.StableOrder(cfg.Clusters) {
-		if name == cfg.ActiveCluster {
-			ctx.Printf("* %s at %s\n", name, ccfg.Hostname)
-		} else {
-			ctx.Printf("  %s as %s\n", name, ccfg.Hostname)
+		prefix := " "
+		if opts.Cluster != "" {
+			if name == opts.Cluster {
+				prefix = "*"
+			}
+		} else if name == cfg.ActiveCluster {
+			prefix = "*"
 		}
+		ctx.Printf("%s %s at %s\n", prefix, name, ccfg.Hostname)
 	}
 
 	return nil
