@@ -43,18 +43,35 @@ func (c *Config) RPCOptions() []rpc.StateOption {
 		return nil
 	}
 
+	return active.RPCOptions()
+}
+
+func (c *Config) State(ctx context.Context, opts ...rpc.StateOption) (*rpc.State, error) {
+	opts = append(opts, c.RPCOptions()...)
+	return rpc.NewState(ctx, opts...)
+}
+
+func (c *ClusterConfig) RPCOptions() []rpc.StateOption {
+	if c.Insecure {
+		return []rpc.StateOption{
+			rpc.WithEndpoint(c.Hostname),
+			rpc.WithBindAddr("[::]:0"),
+			rpc.WithSkipVerify,
+		}
+	}
+
 	return []rpc.StateOption{
 		rpc.WithCertPEMs(
-			[]byte(active.ClientCert),
-			[]byte(active.ClientKey),
+			[]byte(c.ClientCert),
+			[]byte(c.ClientKey),
 		),
-		rpc.WithCertificateVerification([]byte(active.CACert)),
-		rpc.WithEndpoint(active.Hostname),
+		rpc.WithCertificateVerification([]byte(c.CACert)),
+		rpc.WithEndpoint(c.Hostname),
 		rpc.WithBindAddr("[::]:0"),
 	}
 }
 
-func (c *Config) State(ctx context.Context, opts ...rpc.StateOption) (*rpc.State, error) {
+func (c *ClusterConfig) State(ctx context.Context, opts ...rpc.StateOption) (*rpc.State, error) {
 	opts = append(opts, c.RPCOptions()...)
 	return rpc.NewState(ctx, opts...)
 }
