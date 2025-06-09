@@ -7,7 +7,6 @@ import (
 	"github.com/davecgh/go-spew/spew"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/pkg/entity"
-	"miren.dev/runtime/pkg/rpc"
 )
 
 func EntityPut(ctx *Context, opts struct {
@@ -24,44 +23,9 @@ func EntityPut(ctx *Context, opts struct {
 		err  error
 	)
 
-	var (
-		rs     *rpc.State
-		client *rpc.NetworkClient
-	)
-
-	cc, err := opts.LoadConfig()
+	client, err := ctx.RPCClient("entities")
 	if err != nil {
-		addr := opts.Address
-		if addr == "" {
-			addr = "localhost:8443"
-		}
-
-		rs, err = rpc.NewState(ctx, rpc.WithSkipVerify)
-		if err != nil {
-			ctx.Log.Error("failed to create RPC client", "error", err)
-			return err
-		}
-
-		// Create RPC client to interact with coordinator
-		client, err = rs.Connect(addr, "entities")
-		if err != nil {
-			ctx.Log.Error("failed to connect to RPC server", "error", err)
-			return err
-		}
-
-	} else {
-		rs, err = cc.State(ctx, rpc.WithLogger(ctx.Log))
-		if err != nil {
-			ctx.Log.Error("failed to create RPC client", "error", err)
-			return err
-		}
-
-		// Create RPC client to interact with coordinator
-		client, err = rs.Client("entities")
-		if err != nil {
-			ctx.Log.Error("failed to connect to RPC server", "error", err)
-			return err
-		}
+		return err
 	}
 
 	eac := entityserver_v1alpha.NewEntityAccessClient(client)
