@@ -12,6 +12,7 @@ import (
 	"time"
 
 	containerd "github.com/containerd/containerd/v2/client"
+	"miren.dev/runtime/pkg/slogout"
 )
 
 // Config defines the configuration for running containerd
@@ -50,7 +51,7 @@ type ContainerdComponent struct {
 // NewContainerdComponent creates a new containerd component
 func NewContainerdComponent(log *slog.Logger, dataPath string) *ContainerdComponent {
 	return &ContainerdComponent{
-		log:      log.With("component", "containerd"),
+		log:      log.With("module", "containerd"),
 		dataPath: dataPath,
 	}
 }
@@ -127,9 +128,13 @@ func (c *ContainerdComponent) Start(ctx context.Context, config *Config) error {
 	// Set environment
 	cmd.Env = append(os.Environ(), config.Env...)
 
-	// Setup logging
-	cmd.Stdout = &logWriter{log: c.log, level: slog.LevelInfo}
-	cmd.Stderr = &logWriter{log: c.log, level: slog.LevelError}
+	// Setup logging for containerd output
+	// Use WithJSONParsing() when containerd is configured with format="json"
+	// Use WithKeyValueParsing() when containerd uses default logrus format (key=value pairs)
+	stdout := slogout.NewWriter(c.log, slog.LevelInfo, slogout.WithKeyValueParsing())
+	stderr := slogout.NewWriter(c.log, slog.LevelError, slogout.WithKeyValueParsing())
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
 
 	// Start containerd
 	if err := cmd.Start(); err != nil {
@@ -151,6 +156,11 @@ func (c *ContainerdComponent) Start(ctx context.Context, config *Config) error {
 		} else {
 			c.log.Info("containerd exited")
 		}
+
+		// Close the log writers to flush any remaining data
+		stdout.Close()
+		stderr.Close()
+
 		c.mu.Lock()
 		c.running = false
 		c.cmd = nil
@@ -162,6 +172,10 @@ func (c *ContainerdComponent) Start(ctx context.Context, config *Config) error {
 		// Clean up on failure
 		cmd.Process.Kill()
 		cmd.Wait()
+
+		// Close the log writers
+		stdout.Close()
+		stderr.Close()
 
 		c.mu.Lock()
 		c.running = false
@@ -339,19 +353,4 @@ root = %q
 `, stateDir, rootDir, runscShimPath)
 
 	return os.WriteFile(configPath, []byte(config), 0644)
-}
-
-// logWriter implements io.Writer to log output
-type logWriter struct {
-	log   *slog.Logger
-	level slog.Level
-}
-
-func (w *logWriter) Write(p []byte) (n int, err error) {
-	msg := string(p)
-	if len(msg) > 0 && msg[len(msg)-1] == '\n' {
-		msg = msg[:len(msg)-1]
-	}
-	w.log.Log(context.Background(), w.level, msg)
-	return len(p), nil
 }
