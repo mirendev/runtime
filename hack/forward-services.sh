@@ -77,25 +77,69 @@ sleep 1
 # Start forwarding
 echo "Starting port forwarding..."
 
-# MinIO on 9001 (to avoid conflict with ClickHouse native)
-socat TCP-LISTEN:9001,reuseaddr,fork EXEC:"docker exec -i dagger-engine-v0.18.9 nc $MINIO_IP 9000" &
-echo "✓ MinIO forwarded: localhost:9001 → $MINIO_IP:9000"
+# Track PIDs for cleanup
+SOCAT_PIDS=()
+
+# MinIO on 9001 (to avoid conflict with ClickHouse native protocol on 9000)
+# ClickHouse uses 9000 for its native binary protocol, so we forward MinIO to 9001
+if socat TCP-LISTEN:9001,reuseaddr,fork EXEC:"docker exec -i dagger-engine-v0.18.9 nc $MINIO_IP 9000" & then
+    SOCAT_PIDS+=($!)
+    echo "✓ MinIO forwarded: localhost:9001 → $MINIO_IP:9000"
+else
+    echo "✗ Failed to forward MinIO port"
+    exit 1
+fi
 
 # etcd
-socat TCP-LISTEN:2379,reuseaddr,fork EXEC:"docker exec -i dagger-engine-v0.18.9 nc $ETCD_IP 2379" &
-echo "✓ etcd forwarded: localhost:2379 → $ETCD_IP:2379"
+if socat TCP-LISTEN:2379,reuseaddr,fork EXEC:"docker exec -i dagger-engine-v0.18.9 nc $ETCD_IP 2379" & then
+    SOCAT_PIDS+=($!)
+    echo "✓ etcd forwarded: localhost:2379 → $ETCD_IP:2379"
+else
+    echo "✗ Failed to forward etcd port"
+    # Kill already started processes
+    for pid in ${SOCAT_PIDS[@]}; do kill $pid 2>/dev/null; done
+    exit 1
+fi
 
 # ClickHouse native protocol
-socat TCP-LISTEN:9000,reuseaddr,fork EXEC:"docker exec -i dagger-engine-v0.18.9 nc $CLICKHOUSE_IP 9000" &
-echo "✓ ClickHouse native forwarded: localhost:9000 → $CLICKHOUSE_IP:9000"
+if socat TCP-LISTEN:9000,reuseaddr,fork EXEC:"docker exec -i dagger-engine-v0.18.9 nc $CLICKHOUSE_IP 9000" & then
+    SOCAT_PIDS+=($!)
+    echo "✓ ClickHouse native forwarded: localhost:9000 → $CLICKHOUSE_IP:9000"
+else
+    echo "✗ Failed to forward ClickHouse native port"
+    # Kill already started processes
+    for pid in ${SOCAT_PIDS[@]}; do kill $pid 2>/dev/null; done
+    exit 1
+fi
 
 # ClickHouse HTTP
-socat TCP-LISTEN:8123,reuseaddr,fork EXEC:"docker exec -i dagger-engine-v0.18.9 nc $CLICKHOUSE_IP 8123" &
-echo "✓ ClickHouse HTTP forwarded: localhost:8123 → $CLICKHOUSE_IP:8123"
+if socat TCP-LISTEN:8123,reuseaddr,fork EXEC:"docker exec -i dagger-engine-v0.18.9 nc $CLICKHOUSE_IP 8123" & then
+    SOCAT_PIDS+=($!)
+    echo "✓ ClickHouse HTTP forwarded: localhost:8123 → $CLICKHOUSE_IP:8123"
+else
+    echo "✗ Failed to forward ClickHouse HTTP port"
+    # Kill already started processes
+    for pid in ${SOCAT_PIDS[@]}; do kill $pid 2>/dev/null; done
+    exit 1
+fi
 
 echo ""
 echo "All services forwarded!"
 echo ""
+
+# Cleanup function for when script is sourced
+cleanup_forwarding() {
+    echo "Stopping port forwarding..."
+    for pid in ${SOCAT_PIDS[@]}; do
+        kill $pid 2>/dev/null && echo "  Stopped process $pid"
+    done
+    echo "Port forwarding stopped"
+}
+
+# Set trap for cleanup on exit (only when not sourced)
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    trap cleanup_forwarding EXIT
+fi
 
 # Check if script is being sourced
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
