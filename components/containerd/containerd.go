@@ -119,6 +119,11 @@ func (c *ContainerdComponent) Start(ctx context.Context, config *Config) error {
 		"--config", config.ConfigPath,
 	)
 
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		Setpgid: true,
+		Pgid:    0,
+	}
+
 	c.log.Info("starting containerd",
 		"binary", config.BinaryPath,
 		"socket", config.SocketPath,
