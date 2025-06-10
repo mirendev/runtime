@@ -73,8 +73,6 @@ func Dev(ctx *Context, opts struct {
 	// Handle mode configuration
 	switch opts.Mode {
 	case "standalone":
-		// In standalone mode, automatically start all components
-		ctx.Log.Info("running in standalone mode - starting all components", "release-path", opts.ReleasePath)
 		opts.StartContainerd = true
 		opts.StartEtcd = true
 		opts.StartClickHouse = true
@@ -118,6 +116,9 @@ func Dev(ctx *Context, opts struct {
 					return fmt.Errorf("no release directory found (tried %s and %s)", userReleasePath, systemReleasePath)
 				}
 			}
+
+			// In standalone mode, automatically start all components
+			ctx.UILog.Info("running in standalone mode - starting all components", "release-path", opts.ReleasePath)
 		} else {
 			path, err := filepath.Abs(opts.ReleasePath)
 			if err != nil {
@@ -133,7 +134,7 @@ func Dev(ctx *Context, opts struct {
 		}
 	case "distributed":
 		// In distributed mode, use the flags as provided
-		ctx.Log.Info("running in distributed mode")
+		ctx.UILog.Info("running in distributed mode")
 	default:
 		return fmt.Errorf("unknown mode: %s (valid modes: standalone, distributed)", opts.Mode)
 	}
@@ -536,6 +537,11 @@ func Dev(ctx *Context, opts struct {
 			// Don't fail the whole command if we can't write the config
 		}
 	}
+
+	ctx.UILog.Info("Started in dev mode", "address", opts.Address, "etcd_endpoints", opts.EtcdEndpoints, "etcd_prefix", opts.EtcdPrefix, "runner_id", opts.RunnerId)
+
+	ctx.Info("Dev mode started successfully! You can now connect to the cluster using `-C %s`\n", opts.ConfigClusterName)
+	ctx.Info("For example `cd my-app; runtime deploy -C dev`")
 
 	return eg.Wait()
 }

@@ -33,6 +33,9 @@ type Context struct {
 	verbose int
 	Log     *slog.Logger
 
+	// A separate logger for UI output, which is always at least debug level
+	UILog *slog.Logger
+
 	Stdout io.Writer
 	Stderr io.Writer
 
@@ -48,7 +51,12 @@ type Context struct {
 		ServerAddress string `asm:"server-addr"`
 	}
 
+	levelVar slog.LevelVar
 	exitCode int
+}
+
+func (c *Context) Level() slog.Level {
+	return c.levelVar.Level()
 }
 
 func setup(ctx context.Context, flags *GlobalFlags, opts any) *Context {
@@ -74,12 +82,16 @@ func setup(ctx context.Context, flags *GlobalFlags, opts any) *Context {
 		level = slog.LevelDebug
 	}
 
-	dynLevel := new(slog.LevelVar)
-	dynLevel.Set(level)
+	s.levelVar.Set(level)
 
 	s.Log = slog.New(slogfmt.NewTextHandler(os.Stderr, &slog.HandlerOptions{
-		Level: dynLevel,
+		Level: &s.levelVar,
 	}))
+
+	// A separate logger for UI output, which is always at least debug level
+	s.UILog = slog.New(slogfmt.NewTextHandler(os.Stdout, &slog.HandlerOptions{
+		Level: slog.LevelDebug,
+	})).With("module", "user")
 
 	ctx = slogrus.WithLogger(ctx, s.Log)
 	slogrus.OverrideGlobal(s.Log)
@@ -146,9 +158,9 @@ func setup(ctx context.Context, flags *GlobalFlags, opts any) *Context {
 
 				switch sig {
 				case unix.SIGTTIN:
-					target = dynLevel.Level() - 4
+					target = s.levelVar.Level() - 4
 				case unix.SIGTTOU:
-					target = dynLevel.Level() + 4
+					target = s.levelVar.Level() + 4
 				case os.Interrupt, unix.SIGQUIT, unix.SIGTERM:
 					shutdownRequests++
 					switch shutdownRequests {
@@ -171,11 +183,11 @@ func setup(ctx context.Context, flags *GlobalFlags, opts any) *Context {
 					continue
 				}
 
-				if dynLevel.Level() == target {
+				if s.levelVar.Level() == target {
 					continue
 				}
 
-				dynLevel.Set(target)
+				s.levelVar.Set(target)
 
 				s.Log.ErrorContext(sigCtx, "Log leveling changed", "level", target)
 			}
