@@ -126,7 +126,8 @@ func (e *EtcdComponent) Start(ctx context.Context, config EtcdConfig) error {
 	e.container = container
 
 	// Start container with structured logging for JSON output
-	task, err := container.NewTask(ctx, slogout.WithLogger(e.Log, "etcd", slogout.WithJSONParsing()))
+	task, err := container.NewTask(ctx, slogout.WithLogger(e.Log, "etcd",
+		slogout.WithJSONParsing(), slogout.WithMaxLevel(slog.LevelInfo)))
 	if err != nil {
 		container.Delete(ctx, containerd.WithSnapshotCleanup)
 		return fmt.Errorf("failed to create etcd task: %w", err)
@@ -309,7 +310,8 @@ func (e *EtcdComponent) restartExistingContainer(ctx context.Context, container 
 
 	// Create and start new task with structured logging for JSON output
 	e.Log.Info("creating new task for existing container")
-	task, err = container.NewTask(ctx, slogout.WithLogger(e.Log, "etcd", slogout.WithJSONParsing()))
+	task, err = container.NewTask(ctx, slogout.WithLogger(e.Log, "etcd",
+		slogout.WithJSONParsing(), slogout.WithMaxLevel(slog.LevelInfo)))
 	if err != nil {
 		return fmt.Errorf("failed to create new task for existing container: %w", err)
 	}

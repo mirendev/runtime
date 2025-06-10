@@ -23,6 +23,9 @@ type LoggerOpts struct {
 	ParseJSON bool
 	// ParseKeyValue indicates whether to parse each line as key=value pairs
 	ParseKeyValue bool
+
+	ClampLevel bool       // If true, will clamp log levels to MaxLevel
+	MaxLevel   slog.Level // Maximum log level to process (default: Info)
 }
 
 // LoggerOption is a function that configures LoggerOpts
@@ -48,6 +51,14 @@ func WithJSONParsing() LoggerOption {
 func WithKeyValueParsing() LoggerOption {
 	return func(opts *LoggerOpts) {
 		opts.ParseKeyValue = true
+	}
+}
+
+// WithMaxLevel sets the maximum log level to process
+func WithMaxLevel(level slog.Level) LoggerOption {
+	return func(opts *LoggerOpts) {
+		opts.ClampLevel = true
+		opts.MaxLevel = level
 	}
 }
 
@@ -173,6 +184,11 @@ func (w *logWriter) processJSONLine(line string) {
 	// Build attributes from JSON data, excluding 'ts' and 'level'
 	var attrs []slog.Attr
 
+	if w.opts.ClampLevel && level > w.opts.MaxLevel {
+		level = w.opts.MaxLevel // Respect maximum log level
+		attrs = append(attrs, slog.String("orig-level", level.String()))
+	}
+
 	for key, value := range jsonData {
 		if _, ignore := jsonIgnoreKeys[key]; ignore {
 			continue // Skip ignored keys
@@ -253,6 +269,11 @@ func (w *logWriter) processKeyValueLine(line string) {
 
 	if message == "" {
 		message = line // Use the full line as message if no msg key found
+	}
+
+	if level > w.opts.MaxLevel && w.opts.ClampLevel {
+		level = w.opts.MaxLevel // Respect maximum log level
+		attrs = append(attrs, slog.String("orig-level", level.String()))
 	}
 
 	w.logger.LogAttrs(nil, level, message, attrs...)
