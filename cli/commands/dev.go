@@ -387,14 +387,6 @@ func Dev(ctx *Context, opts struct {
 
 	ctx.Log.Info("leased IP prefixes", "ipv4", lease.IPv4().String(), "ipv6", lease.IPv6().String())
 
-	leases, err := gn.AllLeases(ctx)
-	if err != nil {
-		ctx.Log.Error("failed to get all leases", "error", err)
-		return err
-	}
-
-	ctx.Log.Info("cluster leases", "leasees", spew.Sdump(leases))
-
 	reg.Register("ip4-routable", lease.IPv4())
 
 	reg.ProvideName("subnet", func(opts struct {
