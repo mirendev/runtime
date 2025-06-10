@@ -57,6 +57,7 @@ func Dev(ctx *Context, opts struct {
 	ClickHouseHTTPPort        int      `long:"clickhouse-http-port" description:"ClickHouse HTTP port" default:"8223"`
 	ClickHouseNativePort      int      `long:"clickhouse-native-port" description:"ClickHouse native port" default:"9009"`
 	ClickHouseInterServerPort int      `long:"clickhouse-interserver-port" description:"ClickHouse inter-server port" default:"9010"`
+	ClickHouseAddress         string   `long:"clickhouse-addr" description:"ClickHouse address (when not using embedded)"`
 	StartContainerd           bool     `long:"start-containerd" description:"Start embedded containerd daemon"`
 	ContainerdBinary          string   `long:"containerd-binary" description:"Path to containerd binary" default:"containerd"`
 	ContainerdSocketPath      string   `long:"containerd-socket" description:"Path to containerd socket"`
@@ -276,6 +277,10 @@ func Dev(ctx *Context, opts struct {
 
 		// Ensure cleanup on exit
 		defer clickhouseComponent.Stop(context.Background())
+	} else if opts.ClickHouseAddress != "" {
+		// Override ClickHouse address if provided (for external ClickHouse)
+		ctx.Log.Info("using external clickhouse", "address", opts.ClickHouseAddress)
+		ctx.Server.Override("clickhouse-address", opts.ClickHouseAddress)
 	}
 
 	res, hm := netresolve.NewLocalResolver()

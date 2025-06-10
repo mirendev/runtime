@@ -1,0 +1,73 @@
+package app
+
+import (
+	"context"
+	"fmt"
+	"log/slog"
+
+	"miren.dev/runtime/api/core/core_v1alpha"
+	"miren.dev/runtime/api/entityserver"
+	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
+	"miren.dev/runtime/api/ingress/ingress_v1alpha"
+	"miren.dev/runtime/pkg/rpc"
+)
+
+// Client provides a domain-specific client for App entities
+type Client struct {
+	log          *slog.Logger
+	entityClient *entityserver.Client
+}
+
+// NewClient creates a new App client from an RPC client
+func NewClient(ctx context.Context, log *slog.Logger, client rpc.Client) (*Client, error) {
+	// Get the entity access client
+	eac := entityserver_v1alpha.NewEntityAccessClient(client)
+
+	// Create entity client wrapper
+	entityClient := entityserver.NewClient(log, eac)
+
+	return &Client{
+		log:          log,
+		entityClient: entityClient,
+	}, nil
+}
+
+// GetByName retrieves an app by its name
+func (c *Client) GetByName(ctx context.Context, name string) (*core_v1alpha.App, error) {
+	var app core_v1alpha.App
+	err := c.entityClient.Get(ctx, name, &app)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get app %s: %w", name, err)
+	}
+	return &app, nil
+}
+
+// SetHost sets the host for an app by creating/updating an http_route entity
+func (c *Client) SetHost(ctx context.Context, appName, host string) error {
+	// First verify the app exists
+	app, err := c.GetByName(ctx, appName)
+	if err != nil {
+		return err
+	}
+
+	// Create the http_route entity
+	route := &ingress_v1alpha.HttpRoute{
+		Host: host,
+		App:  app.ID,
+	}
+
+	// Use the host as the route name
+	_, err = c.entityClient.CreateOrUpdate(ctx, host, route)
+	if err != nil {
+		return fmt.Errorf("failed to create/update route: %w", err)
+	}
+
+	return nil
+}
+
+// List returns all apps
+func (c *Client) List(ctx context.Context) ([]*core_v1alpha.App, error) {
+	// List would need to be implemented using the List method on entityClient
+	// For now, return an error indicating it's not implemented
+	return nil, fmt.Errorf("list not implemented")
+}

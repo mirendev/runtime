@@ -269,3 +269,143 @@ func TestEntityEmptyConsidersAllFields(t *testing.T) {
 		t.Logf("Empty() method:\n%s", emptyMethod)
 	}
 }
+
+func TestEnumFieldEmptiness(t *testing.T) {
+	// Test that enum fields correctly implement the Empty() check
+	// The fix ensures that when an enum has a value (non-empty string),
+	// the Empty() method returns false (meaning the entity is not empty)
+	sf := &schemaFile{
+		Domain:  "test",
+		Version: "v1",
+		Kinds: map[string]schemaAttrs{
+			"deployment": {
+				"status": &schemaAttr{
+					Type:    "enum",
+					Choices: []string{"pending", "running", "completed", "failed"},
+					Doc:     "Deployment status",
+				},
+			},
+		},
+	}
+
+	// Generate the schema code
+	code, err := GenerateSchema(sf, "test")
+	if err != nil {
+		t.Fatalf("Failed to generate schema: %v", err)
+	}
+
+	// Check that enum type is created
+	if !strings.Contains(code, "type DeploymentStatus string") {
+		t.Error("Expected DeploymentStatus enum type to be generated")
+	}
+
+	// Check that enum constants are created
+	expectedConstants := []string{
+		"DeploymentStatusPending",
+		"DeploymentStatusRunning",
+		"DeploymentStatusCompleted",
+		"DeploymentStatusFailed",
+	}
+
+	for _, constant := range expectedConstants {
+		if !strings.Contains(code, constant) {
+			t.Errorf("Expected enum constant %s to be generated", constant)
+		}
+	}
+
+	// Find the Empty() method to verify the fix
+	emptyMethodPattern := "func (o *Deployment) Empty() bool {"
+	emptyMethodStart := strings.Index(code, emptyMethodPattern)
+	if emptyMethodStart == -1 {
+		t.Error("Could not find Empty() method in generated code")
+		return
+	}
+
+	// Find the closing brace of the Empty() method
+	emptyMethodEnd := strings.Index(code[emptyMethodStart:], "\n}")
+	if emptyMethodEnd == -1 {
+		t.Error("Could not find end of Empty() method")
+		return
+	}
+
+	emptyMethod := code[emptyMethodStart : emptyMethodStart+emptyMethodEnd+2]
+
+	// The fix ensures that when an enum field has a value (!= ""),
+	// the Empty() method returns false (entity is not empty)
+	// Look for the corrected check: if o.Status != "" { return false }
+	if !strings.Contains(emptyMethod, `if o.Status != ""`) {
+		t.Error("Empty() method should check if enum Status is not empty string")
+		t.Logf("Empty() method:\n%s", emptyMethod)
+	}
+
+	// Verify the structure of the emptiness check
+	// It should return false when enum has a value (meaning entity is not empty)
+	if !strings.Contains(emptyMethod, `return false`) {
+		t.Error("Empty() method should return false when enum fields have values")
+	}
+}
+
+func TestSingleLabelFieldEncoding(t *testing.T) {
+	// Test that single-value label fields generate correct encoding code
+	// This test exposes the bug where v.Key and v.Value are referenced
+	// but v is not defined in the single-value context
+	sf := &schemaFile{
+		Domain:  "test",
+		Version: "v1",
+		Kinds: map[string]schemaAttrs{
+			"resource": {
+				"tag": &schemaAttr{
+					Type: "label",
+					Doc:  "Resource tag",
+				},
+			},
+		},
+	}
+
+	// Generate the schema code
+	code, err := GenerateSchema(sf, "test")
+	if err != nil {
+		t.Fatalf("Failed to generate schema: %v", err)
+	}
+
+	// Check that the struct has a single Label field (not Labels)
+	if !strings.Contains(code, "Tag types.Label") {
+		t.Error("Expected Tag field with types.Label type")
+		t.Logf("Generated code:\n%s", code)
+	}
+
+	// Find the Encode() method
+	encodeMethodPattern := "func (o *Resource) Encode() (attrs []entity.Attr) {"
+	encodeMethodStart := strings.Index(code, encodeMethodPattern)
+	if encodeMethodStart == -1 {
+		t.Error("Could not find Encode() method in generated code")
+		return
+	}
+
+	// Find the end of the Encode() method
+	encodeMethodEnd := strings.Index(code[encodeMethodStart:], "\n}")
+	if encodeMethodEnd == -1 {
+		t.Error("Could not find end of Encode() method")
+		return
+	}
+
+	encodeMethod := code[encodeMethodStart : encodeMethodStart+encodeMethodEnd+2]
+
+	// The encoder should reference o.Tag.Key and o.Tag.Value directly
+	// NOT v.Key and v.Value (which would cause a compilation error)
+	if strings.Contains(encodeMethod, "v.Key") || strings.Contains(encodeMethod, "v.Value") {
+		t.Error("Single-value label encoder should not reference v.Key or v.Value")
+		t.Logf("Encode() method:\n%s", encodeMethod)
+	}
+
+	// Should contain the correct references
+	if !strings.Contains(encodeMethod, "o.Tag.Key") || !strings.Contains(encodeMethod, "o.Tag.Value") {
+		t.Error("Single-value label encoder should reference o.Tag.Key and o.Tag.Value")
+		t.Logf("Encode() method:\n%s", encodeMethod)
+	}
+
+	// Verify the label encoding call structure
+	if !strings.Contains(encodeMethod, "entity.Label(ResourceTagId, o.Tag.Key, o.Tag.Value)") {
+		t.Error("Expected correct Label encoding call with o.Tag.Key and o.Tag.Value")
+	}
+}

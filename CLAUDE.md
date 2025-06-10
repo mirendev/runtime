@@ -89,6 +89,5 @@ The system uses Dagger for containerized development with all dependencies (cont
 
 ### Code Style & Formatting
 
-- **ALWAYS run `go fmt` on changed files before committing**
-- To format all modified Go files: `git diff --name-status HEAD^ HEAD | grep '^M.*\.go$' | cut -f2 | while read f; do go fmt "$f"; done`
+- **ALWAYS run `make lint-changed` before committing** - This runs go fmt, go vet on changed files and go mod tidy
 - The codebase follows standard Go formatting conventions

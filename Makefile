@@ -21,6 +21,11 @@ dev-tmux:
 dev:
 	dagger call -q dev --dir=.
 
+services:
+	dagger call debug --dir=.
+
+.PHONY: services
+
 image:
 	dagger call -q container --dir=. export --path=tmp/latest.tar
 	docker import tmp/latest.tar miren:latest
@@ -48,3 +53,8 @@ bin/runtime-debug:
 	go build -gcflags="all=-N -l" -o bin/runtime-debug ./cmd/runtime
 
 .PHONY: bin/runtime-debug
+
+lint-changed:
+	@bash ./hack/lint-changed.sh
+
+.PHONY: lint-changed

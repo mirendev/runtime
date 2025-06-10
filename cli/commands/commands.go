@@ -61,10 +61,9 @@ func AllCommands() map[string]cli.CommandFactory {
 			return Infer("app default show", "Show which app is currently default", AppDefaultShow), nil
 		},
 
-		// TODO: Errors with "unknown object: app"
-		// "set host": func() (cli.Command, error) {
-		// 	return Infer("set host", "Set the hostname of an application", SetHost), nil
-		// },
+		"set host": func() (cli.Command, error) {
+			return Infer("set host", "Set the hostname of an application", SetHost), nil
+		},
 
 		"logs": func() (cli.Command, error) {
 			return Infer("logs", "Get logs for an application", Logs), nil

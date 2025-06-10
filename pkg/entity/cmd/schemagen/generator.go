@@ -163,16 +163,15 @@ func GenerateSchema(sf *schemaFile, pkg string) (string, error) {
 			panic(fmt.Errorf("failed to marshal encoded domain: %w", err))
 		}
 
-		var buf bytes.Buffer
-		zw := gzip.NewWriter(&buf)
-		zw.Write(data)
-		zw.Flush()
-		zw.Close()
+		compressed, err := compressData(data)
+		if err != nil {
+			panic(fmt.Errorf("failed to compress encoded domain: %w", err))
+		}
 
 		b.Qual(sch, "RegisterEncodedSchema").Call(
 			j.Lit(sf.Domain),
 			j.Lit(sf.Version),
-			j.Index().Byte().Call(j.Lit(buf.String())),
+			j.Index().Byte().Call(j.Lit(string(compressed))),
 		)
 	})
 
@@ -183,6 +182,29 @@ func GenerateSchema(sf *schemaFile, pkg string) (string, error) {
 	}
 
 	return buf.String(), nil
+}
+
+// compressData compresses the input data using gzip and returns the compressed byte slice.
+// Returns an error if any of the gzip operations fail.
+func compressData(data []byte) ([]byte, error) {
+	var buf bytes.Buffer
+	zw := gzip.NewWriter(&buf)
+
+	if _, err := zw.Write(data); err != nil {
+		zw.Close() // Attempt to close even on error
+		return nil, fmt.Errorf("failed to write data to gzip writer: %w", err)
+	}
+
+	if err := zw.Flush(); err != nil {
+		zw.Close() // Attempt to close even on error
+		return nil, fmt.Errorf("failed to flush gzip writer: %w", err)
+	}
+
+	if err := zw.Close(); err != nil {
+		return nil, fmt.Errorf("failed to close gzip writer: %w", err)
+	}
+
+	return buf.Bytes(), nil
 }
 
 func toCamal(s string) string {
@@ -399,12 +421,12 @@ func (g *gen) attr(name string, attr *schemaAttr) {
 				j.If(j.Len(j.Id("o").Dot(fname)).Op("!=").Lit(0)).Block(j.Return(j.False())))
 		} else {
 			g.encoders = append(g.encoders,
-				j.If(j.Id("len").Call(j.Id("o").Dot(fname)).Op("==").Lit(0)).Block(
+				j.If(j.Len(j.Id("o").Dot(fname)).Op(">").Lit(0)).Block(
 					j.Id("attrs").Op("=").Append(j.Id("attrs"), j.Qual(top, "Bytes").Call(g.Ident(fname), j.Id("o").Dot(fname))),
 				),
 			)
 			g.empties = append(g.empties,
-				j.If(j.Id("len").Call(j.Id("o").Dot(fname)).Op("==").Lit(0)).Block(j.Return(j.False())))
+				j.If(j.Len(j.Id("o").Dot(fname)).Op(">").Lit(0)).Block(j.Return(j.False())))
 		}
 
 	case "label":
@@ -421,7 +443,7 @@ func (g *gen) attr(name string, attr *schemaAttr) {
 			g.fields = append(g.fields, j.Id(fname).Qual(topt, "Label").Tag(tag))
 			g.encoders = append(g.encoders,
 				j.If(j.Op("!").Qual(top, "Empty").Call(j.Id("o").Dot(fname))).Block(
-					j.Id("attrs").Op("=").Append(j.Id("attrs"), j.Qual(top, "Label").Call(g.Ident(fname), j.Id("v").Dot("Key"), j.Id("v").Dot("Value")))),
+					j.Id("attrs").Op("=").Append(j.Id("attrs"), j.Qual(top, "Label").Call(g.Ident(fname), j.Id("o").Dot(fname).Dot("Key"), j.Id("o").Dot(fname).Dot("Value")))),
 			)
 			g.empties = append(g.empties,
 				j.If(j.Op("!").Qual(top, "Empty").Call(j.Id("o").Dot(fname))).Block(j.Return(j.False())))
@@ -487,7 +509,7 @@ func (g *gen) attr(name string, attr *schemaAttr) {
 		)
 		g.encoders = append(g.encoders, enc)
 		g.empties = append(g.empties,
-			j.If(j.Id("o").Dot(fname).Op("==").Lit("")).Block(j.Return(j.False())))
+			j.If(j.Id("o").Dot(fname).Op("!=").Lit("")).Block(j.Return(j.False())))
 
 		var call []j.Code
 		call = append(call, j.Lit(name), j.Lit(eid))
