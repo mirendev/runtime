@@ -16,8 +16,9 @@ import (
 	"time"
 
 	containerd "github.com/containerd/containerd/v2/client"
-	"github.com/davecgh/go-spew/spew"
+	"github.com/go-logr/logr"
 	"golang.org/x/sync/errgroup"
+	"k8s.io/klog/v2"
 	"miren.dev/runtime/api/entityserver"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/components/autotls"
@@ -282,6 +283,8 @@ func Dev(ctx *Context, opts struct {
 		ctx.Log.Info("using external clickhouse", "address", opts.ClickHouseAddress)
 		ctx.Server.Override("clickhouse-address", opts.ClickHouseAddress)
 	}
+
+	klog.SetLogger(logr.FromSlogHandler(ctx.Log.With("module", "global").Handler()))
 
 	res, hm := netresolve.NewLocalResolver()
 
