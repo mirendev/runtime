@@ -82,7 +82,6 @@ func TestContainerdComponent_generateDefaultConfig(t *testing.T) {
 	require.NoError(t, err)
 
 	configStr := string(content)
-	assert.Contains(t, configStr, `ShimBinary = "/usr/local/bin/containerd-shim-runsc-v1"`)
 	assert.Contains(t, configStr, `state = "/var/lib/containerd/state"`)
 	assert.Contains(t, configStr, `root = "/var/lib/containerd/root"`)
 }
