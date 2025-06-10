@@ -22,16 +22,16 @@ const (
 // ClusterConfig holds the configuration for a single cluster
 type ClusterConfig struct {
 	Hostname   string `yaml:"hostname"`
-	CACert     string `yaml:"ca_cert"`            // PEM encoded CA certificate
-	ClientCert string `yaml:"client_cert"`        // PEM encoded client certificate
-	ClientKey  string `yaml:"client_key"`         // PEM encoded client key
-	Insecure   bool   `yaml:"insecure,omitempty"` // Skip TLS verification
+	CACert     string `yaml:"ca_cert,omitempty"`     // PEM encoded CA certificate
+	ClientCert string `yaml:"client_cert,omitempty"` // PEM encoded client certificate
+	ClientKey  string `yaml:"client_key,omitempty"`  // PEM encoded client key
+	Insecure   bool   `yaml:"insecure,omitempty"`    // Skip TLS verification
 }
 
 // Config represents the complete client configuration
 type Config struct {
-	ActiveCluster string                    `yaml:"active_cluster"`
-	Clusters      map[string]*ClusterConfig `yaml:"clusters"`
+	ActiveCluster string                    `yaml:"active_cluster,omitempty"`
+	Clusters      map[string]*ClusterConfig `yaml:"clusters,omitempty"`
 
 	// The path to the config file that was loaded, if any.
 	sourcePath string
