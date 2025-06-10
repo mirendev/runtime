@@ -182,6 +182,7 @@ func Dev(ctx *Context, opts struct {
 			BaseDir:    filepath.Join(opts.DataPath, "containerd"),
 			BinDir:     binDir,
 			SocketPath: containerdSocketPath,
+			Env:        []string{"PATH=" + binDir + ":" + os.Getenv("PATH")},
 		}
 
 		err = containerdComponent.Start(sub, containerdConfig)
