@@ -56,6 +56,7 @@ func Dev(ctx *Context, opts struct {
 	StartEtcd                 bool     `long:"start-etcd" description:"Start embedded etcd server"`
 	EtcdClientPort            int      `long:"etcd-client-port" description:"Etcd client port" default:"12379"`
 	EtcdPeerPort              int      `long:"etcd-peer-port" description:"Etcd peer port" default:"12380"`
+	EtcdHTTPClientPort        int      `long:"etcd-http-client-port" description:"Etcd client port" default:"12381"`
 	StartClickHouse           bool     `long:"start-clickhouse" description:"Start embedded ClickHouse server"`
 	ClickHouseHTTPPort        int      `long:"clickhouse-http-port" description:"ClickHouse HTTP port" default:"8223"`
 	ClickHouseNativePort      int      `long:"clickhouse-native-port" description:"ClickHouse native port" default:"9009"`
@@ -220,11 +221,11 @@ func Dev(ctx *Context, opts struct {
 		etcdComponent := etcd.NewEtcdComponent(ctx.Log, cc, "runtime", opts.DataPath)
 
 		etcdConfig := etcd.EtcdConfig{
-			Name:         "dev-etcd",
-			ClientPort:   opts.EtcdClientPort,
-			PeerPort:     opts.EtcdPeerPort,
-			InitialToken: "dev-cluster",
-			ClusterState: "new",
+			Name:           "dev-etcd",
+			ClientPort:     opts.EtcdClientPort,
+			HTTPClientPort: opts.EtcdHTTPClientPort,
+			PeerPort:       opts.EtcdPeerPort,
+			ClusterState:   "new",
 		}
 
 		err = etcdComponent.Start(sub, etcdConfig)
