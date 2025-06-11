@@ -36,6 +36,7 @@ import (
 	"miren.dev/runtime/observability"
 	"miren.dev/runtime/pkg/caauth"
 	"miren.dev/runtime/pkg/grunge"
+	"miren.dev/runtime/pkg/ipdiscovery"
 	"miren.dev/runtime/pkg/netdb"
 	"miren.dev/runtime/pkg/rpc"
 	"miren.dev/runtime/servers/httpingress"
@@ -316,6 +317,29 @@ func Dev(ctx *Context, opts struct {
 	if err != nil {
 		ctx.Log.Error("failed to populate log reader", "error", err)
 		return err
+	}
+
+	// Discover local IPs using ipdiscovery
+	discovery, err := ipdiscovery.DiscoverWithTimeout(5 * time.Second)
+	if err != nil {
+		ctx.Log.Warn("failed to discover local IPs", "error", err)
+		// Don't fail if IP discovery fails, just log it
+	} else {
+		// Add discovered IPs to the additional IPs list
+		for _, addr := range discovery.Addresses {
+			// Skip IPv6 link-local addresses
+			ip := net.ParseIP(addr.IP)
+			if ip != nil && !ip.IsLinkLocalUnicast() {
+				opts.AdditionalIPs = append(opts.AdditionalIPs, addr.IP)
+			}
+		}
+
+		// Add public IP if available
+		if discovery.PublicIP != "" {
+			opts.AdditionalIPs = append(opts.AdditionalIPs, discovery.PublicIP)
+		}
+
+		ctx.Log.Info("discovered IPs", "local-addresses", len(discovery.Addresses), "public", discovery.PublicIP)
 	}
 
 	var additionalIps []net.IP
