@@ -5,3 +5,4 @@ bin/
 .aider*
 .idea/
 .claude
+.run/
