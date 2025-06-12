@@ -2,6 +2,7 @@ package commands
 
 import (
 	"fmt"
+	"github.com/charmbracelet/huh"
 	"miren.dev/runtime/api/app"
 	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
@@ -20,9 +21,23 @@ func SetHost(ctx *Context, opts struct {
 		client *rpc.NetworkClient
 	)
 	_, err := net.LookupIP(opts.Host)
+
+	var confirm = true
 	if err != nil {
-		ctx.Printf("Warning: DNS lookup failed for host %q: %v\n", opts.Host, err)
-		return err
+		err = huh.NewConfirm().
+			Title(fmt.Sprintf("Warning: DNS lookup failed for host %q \n"+
+				"Are you sure you want to continue?", opts.Host)).
+			Affirmative("Yes!").
+			Negative("No.").
+			Value(&confirm).
+			WithTheme(huh.ThemeBase()).
+			Run()
+		if err != nil {
+			return err
+		}
+		if !confirm {
+			return nil
+		}
 	}
 
 	cc, err := opts.LoadConfig()
@@ -63,7 +78,6 @@ func SetHost(ctx *Context, opts struct {
 
 		if len(resp.Values()) == 0 {
 			return fmt.Errorf("No default app is currently set. Use app default set <app>.")
-			return nil
 		}
 
 		for _, ent := range resp.Values() {
