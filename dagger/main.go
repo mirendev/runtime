@@ -156,6 +156,7 @@ func (m *Runtime) Package(
 		cp /usr/local/bin/runc /tmp/package
 		cp /usr/local/bin/runsc /tmp/package
 		cp /usr/local/bin/containerd-shim-runsc-v1 /tmp/package
+		cp /usr/local/bin/containerd-shim-runc-v2 /tmp/package
 		cp /usr/local/bin/containerd /tmp/package
 		cp /usr/local/bin/nerdctl /tmp/package
 		tar -C /tmp/package -czf /tmp/package.tar.gz .
