@@ -51,7 +51,7 @@ func AuthGenerate(ctx *Context, opts struct {
 		}
 		tgt = discovery.PublicIP + ":8443"
 	} else {
-		tgt := opts.Target
+		tgt = opts.Target
 		if !strings.Contains(tgt, ":") {
 			tgt = net.JoinHostPort(tgt, "8443")
 		}

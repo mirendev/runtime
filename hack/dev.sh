@@ -39,8 +39,8 @@ binary_name = "/src/hack/runsc-ignore"
   debug-log = "/var/log/runsc/%ID%/gvisor.%COMMAND%.log"
 EOF
 
-mkdir -p /run/containerd
-containerd --root /data --state /data/state --address /run/containerd/containerd.sock -l trace >/tmp/containerd.log 2>&1 &
+mkdir -p /var/lib/miren/containerd
+containerd --root /data --state /data/state --address /var/lib/miren/containerd/containerd.sock -l trace >/tmp/containerd.log 2>&1 &
 
 # Handy to build stuff with.
 buildkitd --root /data/buildkit >/tmp/buildkit.log 2>&1 &
@@ -83,12 +83,12 @@ if [[ -n "$USE_TMUX" ]]; then
 
   # Start with two panes with the server running on top and a shell running on the bottom
   tmux split-window -v
-  tmux send-keys -t dev:0.0 "./bin/runtime dev -vv" Enter
+  tmux send-keys -t dev:0.0 "./bin/runtime dev -vv --mode=distributed" Enter
   tmux select-pane -t dev:0.1
   tmux attach-session -t dev
 else
   # Start the server in the background
-  ./bin/runtime dev -vv >/tmp/server.log 2>&1 &
+  ./bin/runtime dev -vv --mode=distributed >/tmp/server.log 2>&1 &
   echo "Server started, logs are in /tmp/server.log"
 
   # Start a shell
