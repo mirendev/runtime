@@ -58,7 +58,9 @@ func AppDefaultSet(ctx *Context, opts struct {
 }
 
 // AppDefaultUnset removes the default flag from all apps
-func AppDefaultUnset(ctx *Context, opts struct{}) error {
+func AppDefaultUnset(ctx *Context, _opts struct {
+	ConfigCentric
+}) error {
 	cl, err := ctx.RPCClient("entities")
 	if err != nil {
 		return err
@@ -102,7 +104,9 @@ func AppDefaultUnset(ctx *Context, opts struct{}) error {
 }
 
 // AppDefaultShow shows which app is currently the default
-func AppDefaultShow(ctx *Context, opts struct{}) error {
+func AppDefaultShow(ctx *Context, _opts struct {
+	ConfigCentric
+}) error {
 	cl, err := ctx.RPCClient("entities")
 	if err != nil {
 		return err
