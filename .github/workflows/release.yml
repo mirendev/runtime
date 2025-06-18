@@ -2,7 +2,7 @@ name: Dagger
 
 on:
   push:
-    branches: [ "main", "evan/mir-210" ]
+    branches: [ "main" ]
 
 jobs:
   package:
