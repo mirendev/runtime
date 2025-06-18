@@ -81,24 +81,10 @@ func Dev(ctx *Context, opts struct {
 		// Determine release path
 		if opts.ReleasePath == "" {
 			// Check for user's home directory first, respecting SUDO_USER
-			var homeDir string
-			if sudoUser := os.Getenv("SUDO_USER"); sudoUser != "" {
-				// Running under sudo, get the original user's home
-				u, err := user.Lookup(sudoUser)
-				if err == nil {
-					homeDir = u.HomeDir
-				} else {
-					// Fallback to HOME env var
-					homeDir = os.Getenv("HOME")
-				}
-			} else {
-				// Not running under sudo, use current user's home
-				homeDir = os.Getenv("HOME")
-				if homeDir == "" {
-					if u, err := user.Current(); err == nil {
-						homeDir = u.HomeDir
-					}
-				}
+			homeDir, err := getUserHomeDir()
+			if err != nil {
+				ctx.Log.Warn("failed to determine home directory", "error", err)
+				homeDir = ""
 			}
 
 			// Try ~/.miren/release
@@ -563,29 +549,38 @@ func Dev(ctx *Context, opts struct {
 	return eg.Wait()
 }
 
-// writeDevClusterConfig writes a client config file for the dev cluster
-func writeDevClusterConfig(ctx *Context, cc *caauth.ClientCertificate, address, clusterName string) error {
-	// Determine the config.d directory path, respecting SUDO_USER
-	var homeDir string
+// getUserHomeDir returns the user's home directory, respecting SUDO_USER if running under sudo
+func getUserHomeDir() (string, error) {
 	if sudoUser := os.Getenv("SUDO_USER"); sudoUser != "" {
 		// Running under sudo, get the original user's home
 		u, err := user.Lookup(sudoUser)
 		if err == nil {
-			homeDir = u.HomeDir
-		} else {
-			// Fallback to HOME env var
-			homeDir = os.Getenv("HOME")
+			return u.HomeDir, nil
+		}
+		// Fallback to HOME env var
+		if homeDir := os.Getenv("HOME"); homeDir != "" {
+			return homeDir, nil
 		}
 	} else {
 		// Not running under sudo
-		homeDir = os.Getenv("HOME")
-		if homeDir == "" {
-			u, err := user.Current()
-			if err != nil {
-				return fmt.Errorf("failed to get user home directory: %w", err)
-			}
-			homeDir = u.HomeDir
+		if homeDir := os.Getenv("HOME"); homeDir != "" {
+			return homeDir, nil
 		}
+		u, err := user.Current()
+		if err != nil {
+			return "", fmt.Errorf("failed to get user home directory: %w", err)
+		}
+		return u.HomeDir, nil
+	}
+	return "", fmt.Errorf("could not determine home directory")
+}
+
+// writeDevClusterConfig writes a client config file for the dev cluster
+func writeDevClusterConfig(ctx *Context, cc *caauth.ClientCertificate, address, clusterName string) error {
+	// Determine the config.d directory path, respecting SUDO_USER
+	homeDir, err := getUserHomeDir()
+	if err != nil {
+		return fmt.Errorf("failed to get user home directory: %w", err)
 	}
 
 	configDirPath := filepath.Join(homeDir, ".config/runtime/clientconfig.d")
@@ -609,8 +604,7 @@ func writeDevClusterConfig(ctx *Context, cc *caauth.ClientCertificate, address, 
 		},
 	}
 
-	err := lcfg.SaveTo(devConfigPath)
-	if err != nil {
+	if err := lcfg.SaveTo(devConfigPath); err != nil {
 		return fmt.Errorf("failed to save dev cluster config: %w", err)
 	}
 
