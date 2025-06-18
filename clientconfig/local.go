@@ -47,7 +47,7 @@ func (c *Config) RPCOptions() []rpc.StateOption {
 }
 
 func (c *Config) State(ctx context.Context, opts ...rpc.StateOption) (*rpc.State, error) {
-	opts = append(opts, c.RPCOptions()...)
+	opts = append(c.RPCOptions(), opts...)
 	return rpc.NewState(ctx, opts...)
 }
 
