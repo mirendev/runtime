@@ -9,6 +9,7 @@ import (
 	"miren.dev/runtime/api/entityserver"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/api/ingress/ingress_v1alpha"
+	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/rpc"
 )
 
@@ -60,6 +61,23 @@ func (c *Client) SetHost(ctx context.Context, appName, host string) error {
 	_, err = c.entityClient.CreateOrUpdate(ctx, host, route)
 	if err != nil {
 		return fmt.Errorf("failed to create/update route: %w", err)
+	}
+
+	return nil
+}
+
+// SetActiveVersion updates the active version of an app
+func (c *Client) SetActiveVersion(ctx context.Context, appName, versionID string) error {
+	app, err := c.GetByName(ctx, appName)
+	if err != nil {
+		return fmt.Errorf("failed to get app %s: %w", appName, err)
+	}
+
+	app.ActiveVersion = entity.Id(versionID)
+
+	err = c.entityClient.Update(ctx, app)
+	if err != nil {
+		return fmt.Errorf("failed to update app %s: %w", appName, err)
 	}
 
 	return nil

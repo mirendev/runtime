@@ -12,6 +12,7 @@ import (
 
 	"github.com/moby/buildkit/client"
 	"github.com/tonistiigi/fsutil"
+	"miren.dev/runtime/api/app"
 	"miren.dev/runtime/api/build/build_v1alpha"
 	compute "miren.dev/runtime/api/compute/compute_v1alpha"
 	"miren.dev/runtime/api/core/core_v1alpha"
@@ -29,22 +30,24 @@ import (
 )
 
 type Builder struct {
-	Log      *slog.Logger
-	EAS      *entityserver_v1alpha.EntityAccessClient
-	ec       *entityserver.Client
-	TempDir  string
-	Registry string
+	Log       *slog.Logger
+	EAS       *entityserver_v1alpha.EntityAccessClient
+	ec        *entityserver.Client
+	appClient *app.Client
+	TempDir   string
+	Registry  string
 
 	Resolver netresolve.Resolver
 }
 
-func NewBuilder(log *slog.Logger, eas *entityserver_v1alpha.EntityAccessClient, res netresolve.Resolver, tmpdir string) *Builder {
+func NewBuilder(log *slog.Logger, eas *entityserver_v1alpha.EntityAccessClient, appClient *app.Client, res netresolve.Resolver, tmpdir string) *Builder {
 	return &Builder{
-		Log:      log.With("module", "builder"),
-		EAS:      eas,
-		Resolver: res,
-		TempDir:  tmpdir,
-		ec:       entityserver.NewClient(log, eas),
+		Log:       log.With("module", "builder"),
+		EAS:       eas,
+		appClient: appClient,
+		Resolver:  res,
+		TempDir:   tmpdir,
+		ec:        entityserver.NewClient(log, eas),
 	}
 }
 
@@ -179,7 +182,7 @@ func (b *Builder) BuildFromTar(ctx context.Context, state *build_v1alpha.Builder
 	}
 
 	if buildStack.Stack == "" {
-		dr, err := tr.Open("Dockefile.runtime")
+		dr, err := tr.Open("Dockerfile.runtime")
 		if err == nil {
 			buildStack.Stack = "dockerfile"
 			buildStack.Input = "Dockerfile.runtime"
@@ -348,9 +351,8 @@ func (b *Builder) BuildFromTar(ctx context.Context, state *build_v1alpha.Builder
 	// Remember the old version before updating
 	oldVersion := appRec.ActiveVersion
 
-	appRec.ActiveVersion = id
-
-	err = b.ec.Update(ctx, appRec)
+	b.Log.Info("updating app entity with new version", "app", name, "version", mrv.Version)
+	err = b.appClient.SetActiveVersion(ctx, name, string(id))
 	if err != nil {
 		return fmt.Errorf("error updating app entity: %w", err)
 	}
