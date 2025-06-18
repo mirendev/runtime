@@ -157,7 +157,7 @@ func Dev(ctx *Context, opts struct {
 		)
 
 		if opts.ReleasePath == "" {
-			containerdPath, err = exec.LookPath(containerdPath)
+			containerdPath, err = exec.LookPath(opts.ContainerdBinary)
 			if err != nil {
 				ctx.Log.Error("containerd binary not found in PATH", "binary", opts.ContainerdBinary, "error", err)
 				return fmt.Errorf("containerd binary not found: %s", opts.ContainerdBinary)
