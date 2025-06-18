@@ -43,6 +43,11 @@ func NewConfig() *Config {
 	}
 }
 
+// IsEmpty checks if the configuration has no clusters defined
+func (c *Config) IsEmpty() bool {
+	return len(c.Clusters) == 0
+}
+
 // Validate checks if the configuration is valid
 func (c *Config) Validate() error {
 	if c.ActiveCluster != "" {
@@ -85,6 +90,11 @@ func LoadConfig() (*Config, error) {
 		config.sourcePath = configPath
 
 		if err := loadConfigDir(config); err != nil {
+			return nil, ErrNoConfig
+		}
+
+		// Check if config is still empty after loading config.d
+		if config.IsEmpty() {
 			return nil, ErrNoConfig
 		}
 
