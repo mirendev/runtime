@@ -41,7 +41,7 @@ func AuthGenerate(ctx *Context, opts struct {
 	var tgt string
 
 	if opts.PublicIP {
-		discovery, err := ipdiscovery.DiscoverWithTimeout(5 * time.Second)
+		discovery, err := ipdiscovery.DiscoverWithTimeout(5*time.Second, ctx.Log)
 		if err != nil {
 			return err
 		}

@@ -306,7 +306,7 @@ func Dev(ctx *Context, opts struct {
 	}
 
 	// Discover local IPs using ipdiscovery
-	discovery, err := ipdiscovery.DiscoverWithTimeout(5 * time.Second)
+	discovery, err := ipdiscovery.DiscoverWithTimeout(5*time.Second, ctx.Log)
 	if err != nil {
 		ctx.Log.Warn("failed to discover local IPs", "error", err)
 		// Don't fail if IP discovery fails, just log it

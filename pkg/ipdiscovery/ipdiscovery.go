@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/http"
 	"time"
@@ -31,7 +32,7 @@ type PublicIPResponse struct {
 }
 
 // Discover gathers all local interface addresses and the public IP
-func Discover(ctx context.Context) (*Discovery, error) {
+func Discover(ctx context.Context, log *slog.Logger) (*Discovery, error) {
 	discovery := &Discovery{
 		Addresses: []Address{},
 	}
@@ -83,7 +84,7 @@ func Discover(ctx context.Context) (*Discovery, error) {
 	publicIP, err := getPublicIP(ctx)
 	if err != nil {
 		// Don't fail the entire discovery if we can't get public IP
-		// Just log or handle the error appropriately
+		log.Warn("Failed to get public IP", "error", err)
 		discovery.PublicIP = ""
 	} else {
 		discovery.PublicIP = publicIP
@@ -125,8 +126,8 @@ func getPublicIP(ctx context.Context) (string, error) {
 }
 
 // DiscoverWithTimeout is a convenience function that adds a timeout to Discover
-func DiscoverWithTimeout(timeout time.Duration) (*Discovery, error) {
+func DiscoverWithTimeout(timeout time.Duration, log *slog.Logger) (*Discovery, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	return Discover(ctx)
+	return Discover(ctx, log)
 }

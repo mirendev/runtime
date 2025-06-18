@@ -3,6 +3,7 @@ package ipdiscovery
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -11,11 +12,18 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"miren.dev/runtime/pkg/slogfmt"
 )
+
+// testLogger returns a logger suitable for tests
+func testLogger(t *testing.T) *slog.Logger {
+	return slog.New(slogfmt.NewTestHandler(t, &slog.HandlerOptions{Level: slog.LevelDebug}))
+}
 
 func TestDiscover(t *testing.T) {
 	ctx := context.Background()
-	discovery, err := Discover(ctx)
+	log := testLogger(t)
+	discovery, err := Discover(ctx, log)
 	require.NoError(t, err)
 	require.NotNil(t, discovery)
 
@@ -64,7 +72,8 @@ func TestGetPublicIP(t *testing.T) {
 }
 
 func TestDiscoverWithTimeout(t *testing.T) {
-	discovery, err := DiscoverWithTimeout(5 * time.Second)
+	log := testLogger(t)
+	discovery, err := DiscoverWithTimeout(5*time.Second, log)
 	require.NoError(t, err)
 	require.NotNil(t, discovery)
 
@@ -74,7 +83,8 @@ func TestDiscoverWithTimeout(t *testing.T) {
 
 func TestAddressTypes(t *testing.T) {
 	ctx := context.Background()
-	discovery, err := Discover(ctx)
+	log := testLogger(t)
+	discovery, err := Discover(ctx, log)
 	require.NoError(t, err)
 
 	var hasIPv4 bool
