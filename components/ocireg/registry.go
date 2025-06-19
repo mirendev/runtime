@@ -223,7 +223,6 @@ func (h *RegistryHandler) headManifest(w http.ResponseWriter, r *http.Request, n
 
 	err := h.ec.Get(r.Context(), reference, &appVer)
 	if err != nil {
-		h.log.Error("Error getting artifact", "reference", reference, "error", err)
 		w.WriteHeader(http.StatusNotFound)
 		return
 	}
@@ -336,7 +335,6 @@ func (h *RegistryHandler) headBlob(w http.ResponseWriter, r *http.Request, name,
 
 	fileInfo, err := os.Stat(blobPath)
 	if err != nil {
-		h.log.Error("Error stating blob", "blobPath", blobPath, "error", err)
 		w.WriteHeader(http.StatusNotFound)
 		return
 	}

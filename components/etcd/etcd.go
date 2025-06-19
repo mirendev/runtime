@@ -22,20 +22,22 @@ import (
 )
 
 const (
-	etcdImage         = "gcr.io/etcd-development/etcd:v3.5.15"
-	etcdContainerName = "runtime-etcd"
-	etcdDataDir       = "/etcd-data"
-	defaultEtcdPort   = 12379 // Non-default port to avoid conflicts
-	defaultPeerPort   = 12380 // Non-default port to avoid conflicts
+	etcdImage           = "gcr.io/etcd-development/etcd:v3.5.15"
+	etcdContainerName   = "runtime-etcd"
+	etcdDataDir         = "/etcd-data"
+	defaultEtcdPort     = 12379 // Non-default port to avoid conflicts
+	defaultEtcdHTTPPort = 12381 // Non-default port to avoid conflicts
+	defaultPeerPort     = 12380 // Non-default port to avoid conflicts
 )
 
 type EtcdConfig struct {
-	Name         string
-	DataDir      string
-	ClientPort   int
-	PeerPort     int
-	InitialToken string
-	ClusterState string
+	Name           string
+	DataDir        string
+	ClientPort     int
+	HTTPClientPort int
+	PeerPort       int
+	InitialToken   string
+	ClusterState   string
 }
 
 type EtcdComponent struct {
@@ -79,7 +81,7 @@ func (e *EtcdComponent) Start(ctx context.Context, config EtcdConfig) error {
 	}
 
 	dataPath := filepath.Join(e.DataPath, "etcd")
-	err = os.MkdirAll(dataPath, 0755)
+	err = os.MkdirAll(dataPath, 0700)
 	if err != nil {
 		return fmt.Errorf("failed to create data directory: %w", err)
 	}
@@ -101,11 +103,11 @@ func (e *EtcdComponent) Start(ctx context.Context, config EtcdConfig) error {
 	if config.ClientPort == 0 {
 		config.ClientPort = defaultEtcdPort
 	}
+	if config.HTTPClientPort == 0 {
+		config.HTTPClientPort = defaultEtcdHTTPPort
+	}
 	if config.PeerPort == 0 {
 		config.PeerPort = defaultPeerPort
-	}
-	if config.InitialToken == "" {
-		config.InitialToken = "etcd-cluster-1"
 	}
 	if config.ClusterState == "" {
 		config.ClusterState = "new"
@@ -126,7 +128,8 @@ func (e *EtcdComponent) Start(ctx context.Context, config EtcdConfig) error {
 	e.container = container
 
 	// Start container with structured logging for JSON output
-	task, err := container.NewTask(ctx, slogout.WithLogger(e.Log, "etcd", slogout.WithJSONParsing()))
+	task, err := container.NewTask(ctx, slogout.WithLogger(e.Log, "etcd",
+		slogout.WithJSONParsing(), slogout.WithMaxLevel(slog.LevelInfo)))
 	if err != nil {
 		container.Delete(ctx, containerd.WithSnapshotCleanup)
 		return fmt.Errorf("failed to create etcd task: %w", err)
@@ -309,7 +312,8 @@ func (e *EtcdComponent) restartExistingContainer(ctx context.Context, container 
 
 	// Create and start new task with structured logging for JSON output
 	e.Log.Info("creating new task for existing container")
-	task, err = container.NewTask(ctx, slogout.WithLogger(e.Log, "etcd", slogout.WithJSONParsing()))
+	task, err = container.NewTask(ctx, slogout.WithLogger(e.Log, "etcd",
+		slogout.WithJSONParsing(), slogout.WithMaxLevel(slog.LevelInfo)))
 	if err != nil {
 		return fmt.Errorf("failed to create new task for existing container: %w", err)
 	}
@@ -331,6 +335,22 @@ func (e *EtcdComponent) restartExistingContainer(ctx context.Context, container 
 
 func (e *EtcdComponent) createContainer(ctx context.Context, image containerd.Image, config EtcdConfig) (containerd.Container, error) {
 	dataPath := filepath.Join(e.DataPath, "etcd")
+	args := []string{
+		"/usr/local/bin/etcd",
+		"--name", config.Name,
+		"--data-dir", config.DataDir,
+		"--listen-client-urls", fmt.Sprintf("http://0.0.0.0:%d", config.ClientPort),
+		"--listen-client-http-urls", fmt.Sprintf("http://0.0.0.0:%d", config.HTTPClientPort),
+		"--advertise-client-urls", fmt.Sprintf("http://localhost:%d", config.ClientPort),
+		"--listen-peer-urls", fmt.Sprintf("http://0.0.0.0:%d", config.PeerPort),
+		"--initial-advertise-peer-urls", fmt.Sprintf("http://localhost:%d", config.PeerPort),
+		"--initial-cluster", fmt.Sprintf("%s=http://localhost:%d", config.Name, config.PeerPort),
+		"--initial-cluster-state", config.ClusterState,
+	}
+
+	if config.InitialToken != "" {
+		args = append(args, "--initial-cluster-token", config.InitialToken)
+	}
 
 	// Create container spec with etcd configuration using host networking
 	opts := []oci.SpecOpts{
@@ -338,18 +358,7 @@ func (e *EtcdComponent) createContainer(ctx context.Context, image containerd.Im
 		oci.WithHostNamespace(specs.NetworkNamespace), // Use host network namespace
 		oci.WithHostHostsFile,
 		oci.WithHostResolvconf,
-		oci.WithProcessArgs(
-			"/usr/local/bin/etcd",
-			"--name", config.Name,
-			"--data-dir", config.DataDir,
-			"--listen-client-urls", fmt.Sprintf("http://0.0.0.0:%d", config.ClientPort),
-			"--advertise-client-urls", fmt.Sprintf("http://localhost:%d", config.ClientPort),
-			"--listen-peer-urls", fmt.Sprintf("http://0.0.0.0:%d", config.PeerPort),
-			"--initial-advertise-peer-urls", fmt.Sprintf("http://localhost:%d", config.PeerPort),
-			"--initial-cluster", fmt.Sprintf("%s=http://localhost:%d", config.Name, config.PeerPort),
-			"--initial-cluster-token", config.InitialToken,
-			"--initial-cluster-state", config.ClusterState,
-		),
+		oci.WithProcessArgs(args...),
 		oci.WithEnv([]string{
 			"ETCD_AUTO_COMPACTION_MODE=periodic",
 			"ETCD_AUTO_COMPACTION_RETENTION=1h",

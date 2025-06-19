@@ -319,3 +319,418 @@ func TestWithLoggerOptions(t *testing.T) {
 	assert.NotNil(t, opts.IgnorePattern)
 	assert.True(t, opts.ParseJSON)
 }
+
+func TestNewWriter(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{
+		Level: slog.LevelDebug,
+	}))
+
+	// Test basic NewWriter functionality
+	writer := NewWriter(logger, slog.LevelInfo)
+	require.NotNil(t, writer)
+
+	// Write a line
+	message := "Test message via NewWriter"
+	n, err := writer.Write([]byte(message + "\n"))
+	require.NoError(t, err)
+	assert.Equal(t, len(message)+1, n)
+
+	// Close to flush
+	err = writer.Close()
+	require.NoError(t, err)
+
+	logOutput := buf.String()
+	assert.Contains(t, logOutput, message)
+}
+
+func TestNewWriterWithJSONParsing(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{
+		Level: slog.LevelDebug,
+	}))
+
+	// Create writer with JSON parsing enabled
+	writer := NewWriter(logger, slog.LevelInfo, WithJSONParsing())
+	require.NotNil(t, writer)
+
+	// Write JSON formatted log line (like containerd outputs)
+	jsonLine := `{"level":"info","ts":"2025-05-29T22:30:27.123Z","logger":"containerd","caller":"containerd/server.go:99","msg":"containerd server started","runtime":"io.containerd.runsc.v1","version":"1.7.18"}`
+	_, err := writer.Write([]byte(jsonLine + "\n"))
+	require.NoError(t, err)
+
+	logOutput := buf.String()
+
+	// Should contain the message
+	assert.Contains(t, logOutput, "containerd server started")
+
+	// Should contain extracted fields
+	assert.Contains(t, logOutput, "logger=containerd")
+	assert.Contains(t, logOutput, "caller=containerd/server.go:99")
+	assert.Contains(t, logOutput, "runtime=io.containerd.runsc.v1")
+	assert.Contains(t, logOutput, "version=1.7.18")
+}
+
+func TestNewWriterPartialWrites(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{
+		Level: slog.LevelDebug,
+	}))
+
+	writer := NewWriter(logger, slog.LevelWarn)
+	require.NotNil(t, writer)
+
+	// Write partial JSON line
+	_, err := writer.Write([]byte(`{"level":"warn","msg":"partial `))
+	require.NoError(t, err)
+
+	// No output yet
+	assert.Empty(t, buf.String())
+
+	// Complete the line
+	_, err = writer.Write([]byte(`message","extra":"data"}` + "\n"))
+	require.NoError(t, err)
+
+	// Now should have output
+	logOutput := buf.String()
+	assert.Contains(t, logOutput, "WARN")
+
+	// Close writer
+	err = writer.Close()
+	require.NoError(t, err)
+}
+
+func TestJSONParsingEdgeCases(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{
+		Level: slog.LevelDebug,
+	}))
+
+	writer := NewWriter(logger, slog.LevelInfo, WithJSONParsing())
+
+	testCases := []struct {
+		name     string
+		input    string
+		expected []string
+	}{
+		{
+			name:     "invalid JSON",
+			input:    "not json at all",
+			expected: []string{"not json at all", "json_parse_error"},
+		},
+		{
+			name:     "JSON without msg",
+			input:    `{"level":"info","ts":"2025-05-29T22:30:27.123Z"}`,
+			expected: []string{`msg="{\"level\":\"info\",\"ts\":\"2025-05-29T22:30:27.123Z\"}"`}, // Uses full line as message
+		},
+		{
+			name:     "JSON with message field instead of msg",
+			input:    `{"level":"info","message":"alternative message field"}`,
+			expected: []string{"alternative message field"},
+		},
+		{
+			name:     "empty JSON object",
+			input:    `{}`,
+			expected: []string{`{}`},
+		},
+		{
+			name:     "JSON with nested objects",
+			input:    `{"level":"info","msg":"nested test","data":{"foo":"bar","baz":123}}`,
+			expected: []string{"nested test", "data="},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			buf.Reset()
+			_, err := writer.Write([]byte(tc.input + "\n"))
+			require.NoError(t, err)
+
+			logOutput := buf.String()
+			for _, expected := range tc.expected {
+				assert.Contains(t, logOutput, expected, "Test case: %s", tc.name)
+			}
+		})
+	}
+
+	err := writer.Close()
+	require.NoError(t, err)
+}
+
+func TestJSONLevelParsing(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{
+		Level: slog.LevelDebug,
+	}))
+
+	writer := NewWriter(logger, slog.LevelInfo, WithJSONParsing())
+
+	// Test various level formats
+	levels := []struct {
+		input    string
+		contains string
+	}{
+		{`{"level":"error","msg":"error test"}`, "ERROR"},
+		{`{"level":"ERROR","msg":"uppercase error"}`, "ERROR"},
+		{`{"level":"warn","msg":"warn test"}`, "WARN"},
+		{`{"level":"warning","msg":"warning test"}`, "WARN"},
+		{`{"level":"info","msg":"info test"}`, "INFO"},
+		{`{"level":"information","msg":"information test"}`, "INFO"},
+		{`{"level":"debug","msg":"debug test"}`, "DEBUG"},
+		{`{"level":"unknown","msg":"unknown level"}`, "INFO"}, // Falls back to default
+	}
+
+	for _, tc := range levels {
+		buf.Reset()
+		_, err := writer.Write([]byte(tc.input + "\n"))
+		require.NoError(t, err)
+
+		logOutput := buf.String()
+		assert.Contains(t, logOutput, tc.contains)
+	}
+
+	err := writer.Close()
+	require.NoError(t, err)
+}
+
+func TestContainerdStyleJSONLogs(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{
+		Level: slog.LevelDebug,
+	}))
+
+	writer := NewWriter(logger.With("component", "containerd"), slog.LevelInfo, WithJSONParsing())
+
+	// Simulate actual containerd JSON log output
+	containerdLogs := []string{
+		`{"level":"info","ts":"2025-05-29T22:30:27.021829Z","logger":"containerd","caller":"server/server.go:99","msg":"containerd successfully booted in 0.123456s"}`,
+		`{"level":"warn","ts":"2025-05-29T22:30:28.123456Z","logger":"containerd.grpc","caller":"grpc/server.go:55","msg":"grpc: Server.Serve failed to complete security handshake","error":"tls: first record does not look like a TLS handshake"}`,
+		`{"level":"error","ts":"2025-05-29T22:30:29.234567Z","logger":"containerd.runtime.v2.shim","caller":"shim/shim.go:123","msg":"failed to start shim","id":"test-container","error":"exit status 1"}`,
+	}
+
+	for _, log := range containerdLogs {
+		_, err := writer.Write([]byte(log + "\n"))
+		require.NoError(t, err)
+	}
+
+	logOutput := buf.String()
+
+	// Should contain messages
+	assert.Contains(t, logOutput, "containerd successfully booted")
+	assert.Contains(t, logOutput, "failed to complete security handshake")
+	assert.Contains(t, logOutput, "failed to start shim")
+
+	// Should contain extracted fields
+	assert.Contains(t, logOutput, "component=containerd")
+	assert.Contains(t, logOutput, "logger=containerd.grpc")
+	assert.Contains(t, logOutput, "id=test-container")
+
+	// Should have appropriate log levels
+	assert.Contains(t, logOutput, "INFO")
+	assert.Contains(t, logOutput, "WARN")
+	assert.Contains(t, logOutput, "ERROR")
+
+	err := writer.Close()
+	require.NoError(t, err)
+}
+
+func TestCloseFlushesBuffer(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{
+		Level: slog.LevelDebug,
+	}))
+
+	writer := NewWriter(logger, slog.LevelInfo)
+
+	// Write without newline
+	message := "message without newline"
+	_, err := writer.Write([]byte(message))
+	require.NoError(t, err)
+
+	// Should have no output yet
+	assert.Empty(t, buf.String())
+
+	// Close should flush the buffer
+	err = writer.Close()
+	require.NoError(t, err)
+
+	// Now should have the message
+	logOutput := buf.String()
+	assert.Contains(t, logOutput, message)
+}
+
+func TestLogWriterWithKeyValueParsing(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{
+		Level: slog.LevelDebug,
+	}))
+
+	writer := NewWriter(logger, slog.LevelInfo, WithKeyValueParsing())
+
+	// Test containerd-style key=value log line
+	kvLine := `time="2025-06-06T17:16:10.202323607-07:00" level=info msg="loading plugin \"io.containerd.event.v1.publisher\"..." runtime=io.containerd.runc.v2 type=io.containerd.event.v1`
+	_, err := writer.Write([]byte(kvLine + "\n"))
+	require.NoError(t, err)
+
+	logOutput := buf.String()
+
+	// Should contain the message (with escaped quotes in the output)
+	assert.Contains(t, logOutput, `loading plugin \"io.containerd.event.v1.publisher\"...`)
+
+	// Should contain extracted fields
+	assert.Contains(t, logOutput, "runtime=io.containerd.runc.v2")
+	assert.Contains(t, logOutput, "type=io.containerd.event.v1")
+
+	// Should use correct log level
+	assert.Contains(t, logOutput, "INFO")
+
+	err = writer.Close()
+	require.NoError(t, err)
+}
+
+func TestKeyValueParsingEdgeCases(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{
+		Level: slog.LevelDebug,
+	}))
+
+	writer := NewWriter(logger, slog.LevelInfo, WithKeyValueParsing())
+
+	testCases := []struct {
+		name     string
+		input    string
+		expected []string
+	}{
+		{
+			name:     "simple key=value pairs",
+			input:    `level=info msg="test message" component=test`,
+			expected: []string{"test message", "component=test"},
+		},
+		{
+			name:     "quoted values with spaces",
+			input:    `level=warn msg="this has spaces" path="/path/with spaces/file.txt"`,
+			expected: []string{"this has spaces", `path="/path/with spaces/file.txt"`},
+		},
+		{
+			name:     "escaped quotes in values",
+			input:    `level=error msg="error: \"failed to connect\"" host="test.example.com"`,
+			expected: []string{`error: \"failed to connect\"`, "host=test.example.com"},
+		},
+		{
+			name:     "no key=value pairs",
+			input:    `this is just plain text without any pairs`,
+			expected: []string{"this is just plain text without any pairs"},
+		},
+		{
+			name:     "mixed content",
+			input:    `Starting server on port 8080 status=ok`,
+			expected: []string{"Starting server on port 8080", "status=ok"},
+		},
+		{
+			name:     "empty quoted value",
+			input:    `level=debug msg="" field=""`,
+			expected: []string{"field="},
+		},
+		{
+			name:     "containerd shim log",
+			input:    `time="2025-06-06T17:16:10-07:00" level=error msg="failed to start shim" id=test-container error="exit status 1"`,
+			expected: []string{"failed to start shim", "id=test-container", `error="exit status 1"`},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			buf.Reset()
+			_, err := writer.Write([]byte(tc.input + "\n"))
+			require.NoError(t, err)
+
+			logOutput := buf.String()
+			for _, expected := range tc.expected {
+				assert.Contains(t, logOutput, expected, "Test case: %s", tc.name)
+			}
+		})
+	}
+
+	err := writer.Close()
+	require.NoError(t, err)
+}
+
+func TestKeyValueLevelParsing(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{
+		Level: slog.LevelDebug,
+	}))
+
+	writer := NewWriter(logger, slog.LevelInfo, WithKeyValueParsing())
+
+	// Test various level formats
+	levels := []struct {
+		input    string
+		contains string
+	}{
+		{`level=error msg="error test"`, "ERROR"},
+		{`level=ERROR msg="uppercase error"`, "ERROR"},
+		{`level=warn msg="warn test"`, "WARN"},
+		{`level=warning msg="warning test"`, "WARN"},
+		{`level=info msg="info test"`, "INFO"},
+		{`level=debug msg="debug test"`, "DEBUG"},
+		{`msg="no level specified"`, "INFO"}, // Falls back to writer's default
+	}
+
+	for _, tc := range levels {
+		buf.Reset()
+		_, err := writer.Write([]byte(tc.input + "\n"))
+		require.NoError(t, err)
+
+		logOutput := buf.String()
+		assert.Contains(t, logOutput, tc.contains)
+	}
+
+	err := writer.Close()
+	require.NoError(t, err)
+}
+
+func TestContainerdNonJSONLogs(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{
+		Level: slog.LevelDebug,
+	}))
+
+	writer := NewWriter(logger.With("component", "containerd"), slog.LevelInfo, WithKeyValueParsing())
+
+	// Simulate actual containerd non-JSON log output
+	containerdLogs := []string{
+		`time="2025-06-06T17:16:10.202323607-07:00" level=info msg="loading plugin \"io.containerd.event.v1.publisher\"..." runtime=io.containerd.runc.v2 type=io.containerd.event.v1`,
+		`time="2025-06-06T17:16:10.202456789-07:00" level=info msg="loading plugin \"io.containerd.grpc.v1.cri\"..." type=io.containerd.grpc.v1`,
+		`time="2025-06-06T17:16:10.202567890-07:00" level=warn msg="failed to load plugin" error="plugin init failed" plugin=io.containerd.grpc.v1.cri`,
+		`time="2025-06-06T17:16:10.202678901-07:00" level=error msg="containerd: shim error" id=test-container namespace=default error="OCI runtime create failed"`,
+	}
+
+	for _, log := range containerdLogs {
+		_, err := writer.Write([]byte(log + "\n"))
+		require.NoError(t, err)
+	}
+
+	logOutput := buf.String()
+
+	// Should contain messages (with escaped quotes in the output)
+	assert.Contains(t, logOutput, `loading plugin \"io.containerd.event.v1.publisher\"...`)
+	assert.Contains(t, logOutput, `loading plugin \"io.containerd.grpc.v1.cri\"...`)
+	assert.Contains(t, logOutput, "failed to load plugin")
+	assert.Contains(t, logOutput, "containerd: shim error")
+
+	// Should contain extracted fields
+	assert.Contains(t, logOutput, "component=containerd")
+	assert.Contains(t, logOutput, "runtime=io.containerd.runc.v2")
+	assert.Contains(t, logOutput, "type=io.containerd.event.v1")
+	assert.Contains(t, logOutput, "plugin=io.containerd.grpc.v1.cri")
+	assert.Contains(t, logOutput, "namespace=default")
+
+	// Should have appropriate log levels
+	assert.Contains(t, logOutput, "INFO")
+	assert.Contains(t, logOutput, "WARN")
+	assert.Contains(t, logOutput, "ERROR")
+
+	err := writer.Close()
+	require.NoError(t, err)
+}

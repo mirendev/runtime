@@ -29,6 +29,24 @@ import (
 	"miren.dev/runtime/servers/httpingress"
 )
 
+func TestServerConfig(t *testing.T) (string, error) {
+	t.Helper()
+
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	err := os.WriteFile(path, []byte(`
+active_cluster: local
+clusters:
+	local:
+		hostname: localhost:8443
+		insecure: true
+`), 0644)
+	if err != nil {
+		return "", err
+	}
+
+	return path, nil
+}
+
 // TestServer spins up an equivalent of the dev server for testing purposes.
 func TestServer(t *testing.T) error {
 	ctx := t.Context()

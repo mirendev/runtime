@@ -1,11 +1,14 @@
 package commands
 
 import (
+	"fmt"
 	"net"
 	"strings"
+	"time"
 
 	"miren.dev/runtime/clientconfig"
 	"miren.dev/runtime/components/coordinate"
+	"miren.dev/runtime/pkg/ipdiscovery"
 )
 
 func AuthGenerate(ctx *Context, opts struct {
@@ -14,6 +17,7 @@ func AuthGenerate(ctx *Context, opts struct {
 	Name        string `short:"n" long:"name" description:"Name of the client certificate" default:"runtime-user"`
 	Target      string `short:"t" long:"target" description:"Hostname to embed in the config" default:"localhost"`
 	ClusterName string `short:"C" long:"cluster-name" description:"Name of the cluster" default:"local"`
+	PublicIP    bool   `short:"p" long:"public-ip" description:"Use public IP for the target, if available"`
 }) error {
 	co := coordinate.NewCoordinator(ctx.Log, coordinate.CoordinatorConfig{
 		DataPath: opts.DataPath,
@@ -34,9 +38,27 @@ func AuthGenerate(ctx *Context, opts struct {
 		return err
 	}
 
-	tgt := opts.Target
-	if !strings.Contains(tgt, ":") {
-		tgt = net.JoinHostPort(tgt, "8443")
+	var tgt string
+
+	if opts.PublicIP {
+		discovery, err := ipdiscovery.DiscoverWithTimeout(5*time.Second, ctx.Log)
+		if err != nil {
+			return err
+		}
+
+		if discovery.PublicIP == "" {
+			return fmt.Errorf("no public IP found, use --target to specify a hostname")
+		}
+		tgt = discovery.PublicIP + ":8443"
+	} else {
+		tgt = opts.Target
+		if !strings.Contains(tgt, ":") {
+			tgt = net.JoinHostPort(tgt, "8443")
+		}
+	}
+
+	if tgt == "" {
+		return fmt.Errorf("target hostname is empty, use --target to specify a hostname")
 	}
 
 	lcfg := &clientconfig.Config{

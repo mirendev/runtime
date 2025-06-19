@@ -30,9 +30,12 @@ func TestSandboxLifecycleEndToEnd(t *testing.T) {
 	// Write a combo.yaml
 	filePath := writeTempContents(t, "combo.yaml", comboYaml)
 
+	cfgPath, err := testserver.TestServerConfig(t)
+	r.NoError(err)
+
 	t.Log("putting entities")
 	// Spin up combo
-	putCode := cli.Run([]string{"runtime", "entity", "put", "-p", filePath})
+	putCode := cli.Run([]string{"runtime", "entity", "put", "--config", cfgPath, "-p", filePath})
 	r.Equal(0, putCode)
 
 	// Ensure we can route to nginx container
@@ -50,7 +53,7 @@ func TestSandboxLifecycleEndToEnd(t *testing.T) {
 	// Fetch logs from app
 	var logsCode int
 	output, err := testutils.CaptureStdout(func() {
-		logsCode = cli.Run([]string{"runtime", "logs", "-a", "nginx"})
+		logsCode = cli.Run([]string{"runtime", "logs", "--config", cfgPath, "-a", "nginx"})
 	})
 	r.NoError(err)
 	r.Equal(0, logsCode)

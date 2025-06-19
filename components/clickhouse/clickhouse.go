@@ -515,8 +515,6 @@ func (c *ClickHouseComponent) waitForReady(ctx context.Context, host string, por
 			return
 		}
 
-		c.Log.Error("clickhouse server not ready yet", "endpoint", endpoint, "error", err)
-
 		select {
 		case <-ctx.Done():
 			return

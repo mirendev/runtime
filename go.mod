@@ -34,6 +34,7 @@ require (
 	github.com/fatih/color v1.18.0
 	github.com/flannel-io/flannel v0.26.7
 	github.com/fxamacker/cbor/v2 v2.7.0
+	github.com/go-logr/logr v1.4.2
 	github.com/go-ozzo/ozzo-validation/v4 v4.3.0
 	github.com/google/cel-go v0.24.1
 	github.com/google/gofuzz v1.2.0
@@ -112,6 +113,7 @@ require (
 	google.golang.org/protobuf v1.35.2
 	gopkg.in/yaml.v3 v3.0.1
 	gvisor.dev/gvisor v0.0.0-20250317184159-a24f13b091dc
+	k8s.io/klog/v2 v2.130.1
 )
 
 require (
@@ -174,7 +176,6 @@ require (
 	github.com/fsnotify/fsnotify v1.7.0 // indirect
 	github.com/go-faster/city v1.0.1 // indirect
 	github.com/go-faster/errors v0.7.1 // indirect
-	github.com/go-logr/logr v1.4.2 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/go-task/slim-sprig/v3 v3.0.0 // indirect
 	github.com/godbus/dbus/v5 v5.1.0 // indirect
@@ -251,7 +252,6 @@ require (
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20241021214115-324edc3d5d38 // indirect
 	gotest.tools/v3 v3.5.1 // indirect
 	k8s.io/apimachinery v0.31.2 // indirect
-	k8s.io/klog/v2 v2.130.1 // indirect
 	k8s.io/utils v0.0.0-20240902221715-702e33fdd3c3 // indirect
 	sigs.k8s.io/json v0.0.0-20221116044647-bc3834ca7abd // indirect
 	sigs.k8s.io/knftables v0.0.18 // indirect

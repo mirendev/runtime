@@ -5,6 +5,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -20,16 +22,16 @@ const (
 // ClusterConfig holds the configuration for a single cluster
 type ClusterConfig struct {
 	Hostname   string `yaml:"hostname"`
-	CACert     string `yaml:"ca_cert"`            // PEM encoded CA certificate
-	ClientCert string `yaml:"client_cert"`        // PEM encoded client certificate
-	ClientKey  string `yaml:"client_key"`         // PEM encoded client key
-	Insecure   bool   `yaml:"insecure,omitempty"` // Skip TLS verification
+	CACert     string `yaml:"ca_cert,omitempty"`     // PEM encoded CA certificate
+	ClientCert string `yaml:"client_cert,omitempty"` // PEM encoded client certificate
+	ClientKey  string `yaml:"client_key,omitempty"`  // PEM encoded client key
+	Insecure   bool   `yaml:"insecure,omitempty"`    // Skip TLS verification
 }
 
 // Config represents the complete client configuration
 type Config struct {
-	ActiveCluster string                    `yaml:"active_cluster"`
-	Clusters      map[string]*ClusterConfig `yaml:"clusters"`
+	ActiveCluster string                    `yaml:"active_cluster,omitempty"`
+	Clusters      map[string]*ClusterConfig `yaml:"clusters,omitempty"`
 
 	// The path to the config file that was loaded, if any.
 	sourcePath string
@@ -39,6 +41,11 @@ func NewConfig() *Config {
 	return &Config{
 		Clusters: make(map[string]*ClusterConfig),
 	}
+}
+
+// IsEmpty checks if the configuration has no clusters defined
+func (c *Config) IsEmpty() bool {
+	return len(c.Clusters) == 0
 }
 
 // Validate checks if the configuration is valid
@@ -75,9 +82,27 @@ func LoadConfig() (*Config, error) {
 		return nil, fmt.Errorf("failed to determine config path: %w", err)
 	}
 
+	// Load main config file
 	data, err := os.ReadFile(configPath)
 	if err != nil {
-		return nil, ErrNoConfig
+		// If main config doesn't exist, try loading from config.d directory
+		config := NewConfig()
+		config.sourcePath = configPath
+
+		if err := loadConfigDir(config); err != nil {
+			return nil, ErrNoConfig
+		}
+
+		// Check if config is still empty after loading config.d
+		if config.IsEmpty() {
+			return nil, ErrNoConfig
+		}
+
+		if err := config.Validate(); err != nil {
+			return nil, fmt.Errorf("invalid configuration: %w", err)
+		}
+
+		return config, nil
 	}
 
 	var config Config
@@ -85,6 +110,11 @@ func LoadConfig() (*Config, error) {
 
 	if err := yaml.Unmarshal(data, &config); err != nil {
 		return nil, fmt.Errorf("failed to parse config file: %w", err)
+	}
+
+	// Load additional configs from config.d directory
+	if err := loadConfigDir(&config); err != nil {
+		return nil, fmt.Errorf("failed to load config.d: %w", err)
 	}
 
 	if err := config.Validate(); err != nil {
@@ -228,6 +258,78 @@ func (c *Config) GetCluster(name string) (*ClusterConfig, error) {
 		return nil, fmt.Errorf("cluster %q not found in configuration", name)
 	}
 	return cluster, nil
+}
+
+// loadConfigDir loads additional config files from the config.d directory
+func loadConfigDir(config *Config) error {
+	// Determine the config.d directory path
+	configDirPath, err := getConfigDirPath()
+	if err != nil {
+		return fmt.Errorf("failed to determine config.d path: %w", err)
+	}
+
+	// Check if the directory exists
+	if _, err := os.Stat(configDirPath); os.IsNotExist(err) {
+		// Directory doesn't exist, which is fine
+		return nil
+	}
+
+	// Read all files in the directory
+	entries, err := os.ReadDir(configDirPath)
+	if err != nil {
+		return fmt.Errorf("failed to read config.d directory: %w", err)
+	}
+
+	// Filter and sort YAML files
+	var yamlFiles []string
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		if strings.HasSuffix(name, ".yaml") || strings.HasSuffix(name, ".yml") {
+			yamlFiles = append(yamlFiles, filepath.Join(configDirPath, name))
+		}
+	}
+	sort.Strings(yamlFiles)
+
+	// Load and merge each config file
+	for _, file := range yamlFiles {
+		data, err := os.ReadFile(file)
+		if err != nil {
+			return fmt.Errorf("failed to read config file %s: %w", file, err)
+		}
+
+		var additionalConfig Config
+		if err := yaml.Unmarshal(data, &additionalConfig); err != nil {
+			return fmt.Errorf("failed to parse config file %s: %w", file, err)
+		}
+
+		// Merge the additional config into the main config
+		// Don't update active cluster from additional configs by default
+		if err := config.Merge(&additionalConfig, false, true); err != nil {
+			return fmt.Errorf("failed to merge config from %s: %w", file, err)
+		}
+	}
+
+	return nil
+}
+
+// getConfigDirPath determines the configuration directory path
+func getConfigDirPath() (string, error) {
+	// Check environment variable first
+	if envPath := os.Getenv(EnvConfigPath); envPath != "" {
+		// If a custom config path is specified, use its directory
+		return filepath.Join(filepath.Dir(envPath), "clientconfig.d"), nil
+	}
+
+	// Fall back to default path in user's home directory
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("failed to get user home directory: %w", err)
+	}
+
+	return filepath.Join(homeDir, ".config/runtime/clientconfig.d"), nil
 }
 
 // getConfigPath determines the configuration file path

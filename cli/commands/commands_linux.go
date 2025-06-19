@@ -29,11 +29,13 @@ func addCommands(cmds map[string]cli.CommandFactory) {
 func (c *Context) setupServerComponents(ctx context.Context, reg *asm.Registry) {
 	reg.Register("namespace", "runtime")
 	reg.Register("top_context", ctx)
+	reg.Register("containerd-socket", "/run/containerd/containerd.sock")
 
 	reg.Provide(func(opts struct {
 		Namespace string `asm:"namespace"`
+		Socket    string `asm:"containerd-socket"`
 	}) (*containerd.Client, error) {
-		return containerd.New("/run/containerd/containerd.sock",
+		return containerd.New(opts.Socket,
 			containerd.WithDefaultNamespace(opts.Namespace))
 	})
 
