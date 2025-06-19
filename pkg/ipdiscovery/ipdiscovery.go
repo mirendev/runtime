@@ -10,6 +10,8 @@ import (
 	"time"
 )
 
+const defaultPublicIPURL = "https://ifconfig.co/json"
+
 // Discovery holds information about discovered IP addresses
 type Discovery struct {
 	PublicIP  string    `json:"public_ip"`
@@ -81,7 +83,7 @@ func Discover(ctx context.Context, log *slog.Logger) (*Discovery, error) {
 	}
 
 	// Get public IP
-	publicIP, err := getPublicIP(ctx)
+	publicIP, err := getPublicIP(ctx, "")
 	if err != nil {
 		// Don't fail the entire discovery if we can't get public IP
 		log.Warn("Failed to get public IP", "error", err)
@@ -94,12 +96,16 @@ func Discover(ctx context.Context, log *slog.Logger) (*Discovery, error) {
 }
 
 // getPublicIP fetches the public IP address from ifconfig.co
-func getPublicIP(ctx context.Context) (string, error) {
+func getPublicIP(ctx context.Context, url string) (string, error) {
+	if url == "" {
+		url = defaultPublicIPURL
+	}
+
 	client := &http.Client{
 		Timeout: 10 * time.Second,
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "GET", "https://ifconfig.co/json", nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
 		return "", fmt.Errorf("failed to create request: %w", err)
 	}

@@ -54,21 +54,13 @@ func TestGetPublicIP(t *testing.T) {
 	}))
 	defer server.Close()
 
-	// Override the URL for testing
-	// Since getPublicIP is not exported and uses a hardcoded URL,
-	// we'll test through the Discover function with a real server
+	// Now we can test with the stub server
 	ctx := context.Background()
 
-	// For unit testing, we can't easily override the URL,
-	// so we'll just test that the function doesn't panic
-	ip, err := getPublicIP(ctx)
-	// The actual call might fail due to network conditions,
-	// but it shouldn't panic
-	if err == nil {
-		assert.NotEmpty(t, ip)
-		// Validate it's a valid IP
-		assert.NotNil(t, net.ParseIP(ip))
-	}
+	// Call getPublicIP with the test server URL
+	ip, err := getPublicIP(ctx, server.URL+"/json")
+	require.NoError(t, err)
+	assert.Equal(t, "203.0.113.1", ip)
 }
 
 func TestDiscoverWithTimeout(t *testing.T) {
