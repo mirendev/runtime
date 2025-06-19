@@ -195,24 +195,24 @@ func (h *Server) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	var routeType string
 
 	if len(vals) == 0 {
-		h.Log.Debug("no http route found, checking for default app", "host", onlyHost)
+		h.Log.Debug("no http route found, checking for default route", "host", onlyHost)
 
-		// Try to find a default app to route to
+		// Try to find a default route to route to
 		defaultResp, err := h.eac.List(ctx, entity.Bool(core_v1alpha.AppDefaultId, true))
 		if err != nil {
-			h.Log.Error("error looking up default app", "error", err)
+			h.Log.Error("error looking up default route", "error", err)
 			http.Error(w, fmt.Sprintf("no http route found: %s", onlyHost), http.StatusNotFound)
 			return
 		}
 
 		defaultVals := defaultResp.Values()
 		if len(defaultVals) == 0 {
-			h.Log.Debug("no default app found", "host", onlyHost)
+			h.Log.Debug("no default route found", "host", onlyHost)
 			http.Error(w, fmt.Sprintf("no http route found: %s", onlyHost), http.StatusNotFound)
 			return
 		}
 
-		// Use the first default app found
+		// Use the first default route found
 		var defaultApp core_v1alpha.App
 		defaultApp.Decode(defaultVals[0].Entity())
 

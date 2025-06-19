@@ -27,7 +27,7 @@ func Import(ctx *Context, opts struct {
 
 	NoDeploy bool `long:"no-deploy" description:"Do not deploy the app, configure only"`
 
-	NoDefault bool `long:"no-default" description:"Don't automatically set the app as the default app if possible"`
+	NoDefault bool `long:"no-default" description:"Don't automatically set the app as the default route if possible"`
 
 	Args struct {
 		Source string `positional-arg-name:"source" required:"true"`
@@ -261,9 +261,9 @@ func Import(ctx *Context, opts struct {
 		if err != nil {
 			return err
 		}
-		ctx.Completed("Setup app as default app")
+		ctx.Completed("Setup app as default route")
 	} else {
-		ctx.Info("Other apps exist, not setting up as default")
+		ctx.Info("Other apps exist, not setting up as default route")
 	}
 
 	return nil

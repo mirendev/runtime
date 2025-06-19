@@ -29,7 +29,7 @@ kinds:
     default:
       type: bool
       indexed: true
-      doc: Whether this is the default application for routing
+      doc: Whether this is the default route for routing
 
   artifact:
     app:

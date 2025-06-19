@@ -8,8 +8,8 @@ import (
 	"miren.dev/runtime/pkg/entity"
 )
 
-// AppDefaultSet sets an app as the default app
-func AppDefaultSet(ctx *Context, opts struct {
+// DefaultRouteSet sets an app as the default route
+func DefaultRouteSet(ctx *Context, opts struct {
 	AppCentric
 }) error {
 	cl, err := ctx.RPCClient("entities")
@@ -24,7 +24,7 @@ func AppDefaultSet(ctx *Context, opts struct {
 		return fmt.Errorf("app name is required")
 	}
 
-	ctx.Log.Info("setting default app", "app", appName)
+	ctx.Log.Info("setting default route", "app", appName)
 
 	// Get the app
 	resp, err := eac.Get(ctx, appName)
@@ -37,11 +37,11 @@ func AppDefaultSet(ctx *Context, opts struct {
 
 	// Check if already default
 	if app.Default {
-		ctx.Printf("App %s is already the default app\n", appName)
+		ctx.Printf("App %s is already the default route\n", appName)
 		return nil
 	}
 
-	// Set the app as default - DefaultAppController will handle reconciliation
+	// Set the app as default - DefaultRouteController will handle reconciliation
 	app.Default = true
 
 	var rpcE entityserver_v1alpha.Entity
@@ -50,15 +50,15 @@ func AppDefaultSet(ctx *Context, opts struct {
 
 	_, err = eac.Put(ctx, &rpcE)
 	if err != nil {
-		return fmt.Errorf("failed to set app %s as default: %w", appName, err)
+		return fmt.Errorf("failed to set app %s as default route: %w", appName, err)
 	}
 
-	ctx.Completed("Set %s as the default app", appName)
+	ctx.Completed("Set %s as the default route", appName)
 	return nil
 }
 
-// AppDefaultUnset removes the default flag from all apps
-func AppDefaultUnset(ctx *Context, opts struct{}) error {
+// DefaultRouteUnset removes the default flag from all apps
+func DefaultRouteUnset(ctx *Context, opts struct{}) error {
 	cl, err := ctx.RPCClient("entities")
 	if err != nil {
 		return err
@@ -66,7 +66,7 @@ func AppDefaultUnset(ctx *Context, opts struct{}) error {
 
 	eac := entityserver_v1alpha.NewEntityAccessClient(cl)
 
-	ctx.Log.Info("unsetting default app")
+	ctx.Log.Info("unsetting default route")
 
 	// Find all apps that are currently marked as default
 	resp, err := eac.List(ctx, entity.Bool(core_v1alpha.AppDefaultId, true))
@@ -75,7 +75,7 @@ func AppDefaultUnset(ctx *Context, opts struct{}) error {
 	}
 
 	if len(resp.Values()) == 0 {
-		ctx.Printf("No default app is currently set\n")
+		ctx.Printf("No default route is currently set\n")
 		return nil
 	}
 
@@ -92,17 +92,17 @@ func AppDefaultUnset(ctx *Context, opts struct{}) error {
 
 		_, err := eac.Put(ctx, &rpcE)
 		if err != nil {
-			return fmt.Errorf("failed to unset default flag from app %s: %w", app.ID, err)
+			return fmt.Errorf("failed to unset default route flag from app %s: %w", app.ID, err)
 		}
 
-		ctx.Completed("Removed default flag from %s", app.ID)
+		ctx.Completed("Removed default route flag from %s", app.ID)
 	}
 
 	return nil
 }
 
-// AppDefaultShow shows which app is currently the default
-func AppDefaultShow(ctx *Context, opts struct{}) error {
+// DefaultRouteShow shows which app is currently the default route
+func DefaultRouteShow(ctx *Context, opts struct{}) error {
 	cl, err := ctx.RPCClient("entities")
 	if err != nil {
 		return err
@@ -117,7 +117,7 @@ func AppDefaultShow(ctx *Context, opts struct{}) error {
 	}
 
 	if len(resp.Values()) == 0 {
-		ctx.Printf("No default app is currently set\n")
+		ctx.Printf("No default route is currently set\n")
 		return nil
 	}
 
@@ -128,7 +128,7 @@ func AppDefaultShow(ctx *Context, opts struct{}) error {
 		var metadata core_v1alpha.Metadata
 		metadata.Decode(ent.Entity())
 
-		ctx.Printf("Default app: %s\n", metadata.Name)
+		ctx.Printf("Default route: %s\n", metadata.Name)
 	}
 
 	return nil

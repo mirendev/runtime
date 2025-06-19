@@ -223,7 +223,7 @@ func (r *Runner) SetupControllers(
 		return nil, err
 	}
 
-	defaultAppController := app.NewDefaultAppController(log, eas)
+	defaultRouteController := app.NewDefaultRouteController(log, eas)
 
 	err := sbc.Init(ctx)
 	if err != nil {
@@ -235,7 +235,7 @@ func (r *Runner) SetupControllers(
 		return nil, err
 	}
 
-	err = defaultAppController.Init(ctx)
+	err = defaultRouteController.Init(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -286,11 +286,11 @@ func (r *Runner) SetupControllers(
 
 	cm.AddController(
 		controller.NewReconcileController(
-			"default-app",
+			"default-route",
 			log,
 			entity.Ref(entity.EntityKind, core_v1alpha.KindApp),
 			eas,
-			controller.AdaptController(defaultAppController),
+			controller.AdaptController(defaultRouteController),
 			0, // No periodic resync needed
 			1, // Single worker is sufficient for this controller
 		),

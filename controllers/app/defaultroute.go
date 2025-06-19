@@ -10,30 +10,30 @@ import (
 	"miren.dev/runtime/pkg/entity"
 )
 
-// DefaultAppController manages the default app designation.
+// DefaultRouteController manages the default route designation.
 // It ensures only one app can be marked as default at a time,
 // and automatically marks the first app as default if none exists.
-type DefaultAppController struct {
+type DefaultRouteController struct {
 	Log *slog.Logger
 	EAC *entityserver_v1alpha.EntityAccessClient
 }
 
-// NewDefaultAppController creates a new DefaultAppController
-func NewDefaultAppController(log *slog.Logger, eac *entityserver_v1alpha.EntityAccessClient) *DefaultAppController {
-	return &DefaultAppController{
-		Log: log.With("module", "default-app-controller"),
+// NewDefaultRouteController creates a new DefaultRouteController
+func NewDefaultRouteController(log *slog.Logger, eac *entityserver_v1alpha.EntityAccessClient) *DefaultRouteController {
+	return &DefaultRouteController{
+		Log: log.With("module", "default-route-controller"),
 		EAC: eac,
 	}
 }
 
 // Init initializes the controller
-func (c *DefaultAppController) Init(ctx context.Context) error {
-	c.Log.Info("Initializing DefaultAppController")
+func (c *DefaultRouteController) Init(ctx context.Context) error {
+	c.Log.Info("Initializing DefaultRouteController")
 	return nil
 }
 
 // Create handles app creation/update events
-func (c *DefaultAppController) Create(ctx context.Context, app *core_v1alpha.App, meta *entity.Meta) error {
+func (c *DefaultRouteController) Create(ctx context.Context, app *core_v1alpha.App, meta *entity.Meta) error {
 	c.Log.Info("App created", "app", app.ID)
 
 	// If this app is already marked as default, ensure no other apps are default
@@ -43,14 +43,14 @@ func (c *DefaultAppController) Create(ctx context.Context, app *core_v1alpha.App
 
 	// If this app is not marked as default, check if we need to make it default
 	// (i.e., if no other app is currently default)
-	hasDefault, err := c.hasDefaultApp(ctx)
+	hasDefault, err := c.hasDefaultRoute(ctx)
 	if err != nil {
-		return fmt.Errorf("failed to check for existing default app: %w", err)
+		return fmt.Errorf("failed to check for existing default route: %w", err)
 	}
 
 	// If no app is currently default, make this one default
 	if !hasDefault {
-		c.Log.Info("No default app found, marking as default", "app", app.ID)
+		c.Log.Info("No default route found, marking as default", "app", app.ID)
 		app.Default = true
 
 		// Update the entity in meta so the change gets persisted
@@ -62,7 +62,7 @@ func (c *DefaultAppController) Create(ctx context.Context, app *core_v1alpha.App
 }
 
 // Update handles app update events
-func (c *DefaultAppController) Update(ctx context.Context, app *core_v1alpha.App, meta *entity.Meta) error {
+func (c *DefaultRouteController) Update(ctx context.Context, app *core_v1alpha.App, meta *entity.Meta) error {
 	c.Log.Info("App updated", "app", app.ID, "default", app.Default)
 
 	// If this app is being updated with default=true, ensure no other apps are default
@@ -81,7 +81,7 @@ func (c *DefaultAppController) Update(ctx context.Context, app *core_v1alpha.App
 }
 
 // Delete handles app deletion events
-func (c *DefaultAppController) Delete(ctx context.Context, id entity.Id) error {
+func (c *DefaultRouteController) Delete(ctx context.Context, id entity.Id) error {
 	c.Log.Info("App deleted; doing nothing", "app", id)
 	// Note: We don't automatically promote another app to default when
 	// the default app is deleted, as per the requirements
@@ -89,11 +89,11 @@ func (c *DefaultAppController) Delete(ctx context.Context, id entity.Id) error {
 }
 
 // ensureSingleDefault ensures that only the specified app is marked as default
-func (c *DefaultAppController) ensureSingleDefault(ctx context.Context, keepDefaultId entity.Id) error {
+func (c *DefaultRouteController) ensureSingleDefault(ctx context.Context, keepDefaultId entity.Id) error {
 	// Find all apps that are currently marked as default
 	resp, err := c.EAC.List(ctx, entity.Bool(core_v1alpha.AppDefaultId, true))
 	if err != nil {
-		return fmt.Errorf("failed to list default apps: %w", err)
+		return fmt.Errorf("failed to list default routes: %w", err)
 	}
 
 	for _, ent := range resp.Values() {
@@ -125,10 +125,10 @@ func (c *DefaultAppController) ensureSingleDefault(ctx context.Context, keepDefa
 }
 
 // hasDefaultApp checks if any app is currently marked as default
-func (c *DefaultAppController) hasDefaultApp(ctx context.Context) (bool, error) {
+func (c *DefaultRouteController) hasDefaultRoute(ctx context.Context) (bool, error) {
 	resp, err := c.EAC.List(ctx, entity.Bool(core_v1alpha.AppDefaultId, true))
 	if err != nil {
-		return false, fmt.Errorf("failed to list default apps: %w", err)
+		return false, fmt.Errorf("failed to list default routes: %w", err)
 	}
 
 	return len(resp.Values()) > 0, nil
