@@ -6,7 +6,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -210,17 +209,7 @@ func TestContainerdComponent_Integration(t *testing.T) {
 
 	// Start containerd
 	err = c.Start(ctx, config)
-	if err != nil {
-		// Check for common permission errors
-		errStr := err.Error()
-		if strings.Contains(errStr, "operation not permitted") ||
-			strings.Contains(errStr, "permission denied") ||
-			os.IsPermission(err) {
-			t.Logf("Skipping integration test - insufficient permissions: %v", err)
-			//t.Skipf("Skipping integration test - insufficient permissions: %v", err)
-		}
-		require.NoError(t, err)
-	}
+	require.NoError(t, err)
 	assert.True(t, c.IsRunning())
 
 	// Get PID through API
