@@ -1,0 +1,49 @@
+name: Deploy to miren-dev-server
+
+on:
+  push:
+    branches: [ main ]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Authenticate to Google Cloud
+      uses: google-github-actions/auth@v2
+      with:
+        credentials_json: ${{ secrets.GCP_SA_KEY }}
+    
+    - name: Set up Google Cloud SDK
+      uses: google-github-actions/setup-gcloud@v2
+    
+    - name: Deploy to miren-dev-server
+      run: |
+        echo "🚀 Starting deployment to miren-dev-server"
+        
+        # Reset the VM to trigger startup script and rebuild
+        echo "Resetting VM to trigger fresh build..."
+        gcloud compute instances reset miren-dev-server --zone=us-central1-a
+        
+        # Wait for VM to start booting
+        echo "Waiting for VM to restart..."
+        sleep 30
+        
+        # Wait for startup script to complete (with timeout)
+        echo "Waiting for startup script to complete..."
+        for i in {1..20}; do
+          if gcloud compute ssh miren-dev-server --zone=us-central1-a --command="sudo systemctl is-active miren-runtime" 2>/dev/null; then
+            echo "✅ Runtime service is active!"
+            break
+          fi
+          echo "Still waiting... ($i/20)"
+          sleep 30
+        done
+        
+        # Get final status
+        echo "Deployment status:"
+        gcloud compute ssh miren-dev-server --zone=us-central1-a --command="sudo systemctl status miren-runtime --no-pager" || true
+        
+        # Show the binary version
+        echo "Runtime version:"
+        gcloud compute ssh miren-dev-server --zone=us-central1-a --command="/usr/local/bin/runtime version" || true
