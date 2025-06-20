@@ -3,12 +3,11 @@ package commands
 import (
 	"fmt"
 
-	"miren.dev/runtime/api/core/core_v1alpha"
-	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
-	"miren.dev/runtime/pkg/entity"
+	apppkg "miren.dev/runtime/api/app"
+	"miren.dev/runtime/api/ingress"
 )
 
-// DefaultRouteSet sets an app as the default route
+// DefaultRouteSet creates or updates an http_route to be the default route for an app
 func DefaultRouteSet(ctx *Context, opts struct {
 	AppCentric
 }) error {
@@ -16,120 +15,74 @@ func DefaultRouteSet(ctx *Context, opts struct {
 	if err != nil {
 		return err
 	}
-
-	eac := entityserver_v1alpha.NewEntityAccessClient(cl)
+	appClient := apppkg.NewClient(ctx.Log, cl)
+	ingressClient := ingress.NewClient(ctx.Log, cl)
 
 	appName := opts.App
-	if appName == "" {
-		return fmt.Errorf("app name is required")
-	}
 
-	ctx.Log.Info("setting default route", "app", appName)
-
-	// Get the app
-	resp, err := eac.Get(ctx, appName)
+	// Get the app to ensure it exists
+	app, err := appClient.GetByName(ctx, appName)
 	if err != nil {
 		return fmt.Errorf("failed to get app %s: %w", appName, err)
 	}
 
-	var app core_v1alpha.App
-	app.Decode(resp.Entity().Entity())
+	ctx.Log.Info("setting default route", "app", app.ID)
 
-	// Check if already default
-	if app.Default {
-		ctx.Printf("App %s is already the default route\n", appName)
-		return nil
-	}
-
-	// Set the app as default - DefaultRouteController will handle reconciliation
-	app.Default = true
-
-	var rpcE entityserver_v1alpha.Entity
-	rpcE.SetId(string(app.ID))
-	rpcE.SetAttrs(app.Encode())
-
-	_, err = eac.Put(ctx, &rpcE)
+	_, err = ingressClient.SetDefault(ctx, app.ID)
 	if err != nil {
-		return fmt.Errorf("failed to set app %s as default route: %w", appName, err)
+		return fmt.Errorf("failed to set default route: %w", err)
 	}
 
-	ctx.Completed("Set %s as the default route", appName)
+	// DefaultRouteController will handle ensuring single default
+	ctx.Completed("Set the default route to: %s", app.ID)
 	return nil
 }
 
-// DefaultRouteUnset removes the default flag from all apps
-func DefaultRouteUnset(ctx *Context, opts struct{}) error {
+// DefaultRouteUnset removes the default flag from all http_routes
+func DefaultRouteUnset(ctx *Context, opts struct {
+	ConfigCentric
+}) error {
 	cl, err := ctx.RPCClient("entities")
 	if err != nil {
 		return err
 	}
+	ingressClient := ingress.NewClient(ctx.Log, cl)
 
-	eac := entityserver_v1alpha.NewEntityAccessClient(cl)
-
-	ctx.Log.Info("unsetting default route")
-
-	// Find all apps that are currently marked as default
-	resp, err := eac.List(ctx, entity.Bool(core_v1alpha.AppDefaultId, true))
+	oldDefault, err := ingressClient.UnsetDefault(ctx)
 	if err != nil {
-		return fmt.Errorf("failed to list default apps: %w", err)
+		return fmt.Errorf("failed to lookup default route: %w", err)
 	}
 
-	if len(resp.Values()) == 0 {
-		ctx.Printf("No default route is currently set\n")
-		return nil
-	}
-
-	for _, ent := range resp.Values() {
-		var app core_v1alpha.App
-		app.Decode(ent.Entity())
-
-		ctx.Log.Info("removing default flag from app", "app", app.ID)
-		app.Default = false
-
-		var rpcE entityserver_v1alpha.Entity
-		rpcE.SetId(string(app.ID))
-		rpcE.SetAttrs(app.Encode())
-
-		_, err := eac.Put(ctx, &rpcE)
-		if err != nil {
-			return fmt.Errorf("failed to unset default route flag from app %s: %w", app.ID, err)
-		}
-
-		ctx.Completed("Removed default route flag from %s", app.ID)
+	if oldDefault != nil {
+		ctx.Completed("Removed default route from app: %s", oldDefault.App)
+	} else {
+		ctx.Completed("No default route is currently set")
 	}
 
 	return nil
 }
 
-// DefaultRouteShow shows which app is currently the default route
-func DefaultRouteShow(ctx *Context, opts struct{}) error {
+// DefaultRouteShow shows which route is currently the default
+func DefaultRouteShow(ctx *Context, opts struct {
+	ConfigCentric
+}) error {
 	cl, err := ctx.RPCClient("entities")
 	if err != nil {
 		return err
 	}
+	ingressClient := ingress.NewClient(ctx.Log, cl)
 
-	eac := entityserver_v1alpha.NewEntityAccessClient(cl)
-
-	// Find apps that are currently marked as default
-	resp, err := eac.List(ctx, entity.Bool(core_v1alpha.AppDefaultId, true))
+	defaultRoute, err := ingressClient.LookupDefault(ctx)
 	if err != nil {
-		return fmt.Errorf("failed to list default apps: %w", err)
+		return fmt.Errorf("failed to lookup default route: %w", err)
 	}
 
-	if len(resp.Values()) == 0 {
+	if defaultRoute == nil {
 		ctx.Printf("No default route is currently set\n")
 		return nil
 	}
 
-	for _, ent := range resp.Values() {
-		var app core_v1alpha.App
-		app.Decode(ent.Entity())
-
-		var metadata core_v1alpha.Metadata
-		metadata.Decode(ent.Entity())
-
-		ctx.Printf("Default route: %s\n", metadata.Name)
-	}
+	ctx.Printf("Default route goes to app: %s\n", defaultRoute.App)
 
 	return nil
 }

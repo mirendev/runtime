@@ -16,10 +16,7 @@ func SetHost(ctx *Context, opts struct {
 	}
 
 	// Create app client
-	appClient, err := app.NewClient(ctx, ctx.Log, client)
-	if err != nil {
-		return err
-	}
+	appClient := app.NewClient(ctx.Log, client)
 
 	// Set the host for the app
 	err = appClient.SetHost(ctx, opts.App, opts.Host)

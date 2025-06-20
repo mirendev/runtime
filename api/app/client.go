@@ -20,7 +20,7 @@ type Client struct {
 }
 
 // NewClient creates a new App client from an RPC client
-func NewClient(ctx context.Context, log *slog.Logger, client rpc.Client) (*Client, error) {
+func NewClient(log *slog.Logger, client rpc.Client) *Client {
 	// Get the entity access client
 	eac := entityserver_v1alpha.NewEntityAccessClient(client)
 
@@ -30,7 +30,7 @@ func NewClient(ctx context.Context, log *slog.Logger, client rpc.Client) (*Clien
 	return &Client{
 		log:          log,
 		entityClient: entityClient,
-	}, nil
+	}
 }
 
 // Create creates a new app entity
@@ -75,6 +75,16 @@ func (c *Client) Destroy(ctx context.Context, name string) error {
 	}
 
 	return nil
+}
+
+// GetById retrieves an app by its ID
+func (c *Client) GetById(ctx context.Context, id entity.Id) (*core_v1alpha.App, error) {
+	var app core_v1alpha.App
+	err := c.entityClient.GetById(ctx, id, &app)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get app %s: %w", id, err)
+	}
+	return &app, nil
 }
 
 // SetHost sets the host for an app by creating/updating an http_route entity

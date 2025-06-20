@@ -457,7 +457,7 @@ func Dev(ctx *Context, opts struct {
 
 	aa := co.Activator()
 
-	hs := httpingress.NewServer(ctx, ctx.Log, eac, aa)
+	hs := httpingress.NewServer(ctx, ctx.Log, client, aa)
 
 	reg.Register("app-activator", aa)
 	reg.Register("resolver", res)
