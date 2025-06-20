@@ -39,6 +39,10 @@ jobs:
           echo "Still waiting... ($i/20)"
           sleep 30
         done
+        if [[ $i -eq 20 ]]; then
+          echo "❌ Service did not start in time"
+          exit 1
+        fi
         
         # Get final status
         echo "Deployment status:"
