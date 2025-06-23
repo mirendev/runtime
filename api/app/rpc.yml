@@ -234,6 +234,13 @@ interfaces:
             type: string
           - name: host
             type: string
+      - name: getApp
+        parameters:
+          - name: name
+            type: string
+        results:
+          - name: app
+            type: AppInfo
       - name: list
         results:
           - name: apps

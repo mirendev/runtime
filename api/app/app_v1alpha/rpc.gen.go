@@ -1386,6 +1386,71 @@ func (v *CrudSetHostResults) UnmarshalJSON(data []byte) error {
 	return json.Unmarshal(data, &v.data)
 }
 
+type crudGetAppArgsData struct {
+	Name *string `cbor:"0,keyasint,omitempty" json:"name,omitempty"`
+}
+
+type CrudGetAppArgs struct {
+	call rpc.Call
+	data crudGetAppArgsData
+}
+
+func (v *CrudGetAppArgs) HasName() bool {
+	return v.data.Name != nil
+}
+
+func (v *CrudGetAppArgs) Name() string {
+	if v.data.Name == nil {
+		return ""
+	}
+	return *v.data.Name
+}
+
+func (v *CrudGetAppArgs) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *CrudGetAppArgs) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *CrudGetAppArgs) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *CrudGetAppArgs) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type crudGetAppResultsData struct {
+	App *AppInfo `cbor:"0,keyasint,omitempty" json:"app,omitempty"`
+}
+
+type CrudGetAppResults struct {
+	call rpc.Call
+	data crudGetAppResultsData
+}
+
+func (v *CrudGetAppResults) SetApp(app *AppInfo) {
+	v.data.App = app
+}
+
+func (v *CrudGetAppResults) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *CrudGetAppResults) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *CrudGetAppResults) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *CrudGetAppResults) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
 type crudListArgsData struct{}
 
 type CrudListArgs struct {
@@ -1602,6 +1667,32 @@ func (t *CrudSetHost) Results() *CrudSetHostResults {
 	return results
 }
 
+type CrudGetApp struct {
+	rpc.Call
+	args    CrudGetAppArgs
+	results CrudGetAppResults
+}
+
+func (t *CrudGetApp) Args() *CrudGetAppArgs {
+	args := &t.args
+	if args.call != nil {
+		return args
+	}
+	args.call = t.Call
+	t.Call.Args(args)
+	return args
+}
+
+func (t *CrudGetApp) Results() *CrudGetAppResults {
+	results := &t.results
+	if results.call != nil {
+		return results
+	}
+	results.call = t.Call
+	t.Call.Results(results)
+	return results
+}
+
 type CrudList struct {
 	rpc.Call
 	args    CrudListArgs
@@ -1659,6 +1750,7 @@ type Crud interface {
 	SetConfiguration(ctx context.Context, state *CrudSetConfiguration) error
 	GetConfiguration(ctx context.Context, state *CrudGetConfiguration) error
 	SetHost(ctx context.Context, state *CrudSetHost) error
+	GetApp(ctx context.Context, state *CrudGetApp) error
 	List(ctx context.Context, state *CrudList) error
 	Destroy(ctx context.Context, state *CrudDestroy) error
 }
@@ -1680,6 +1772,10 @@ func (_ reexportCrud) GetConfiguration(ctx context.Context, state *CrudGetConfig
 }
 
 func (_ reexportCrud) SetHost(ctx context.Context, state *CrudSetHost) error {
+	panic("not implemented")
+}
+
+func (_ reexportCrud) GetApp(ctx context.Context, state *CrudGetApp) error {
 	panic("not implemented")
 }
 
@@ -1727,6 +1823,14 @@ func AdaptCrud(t Crud) *rpc.Interface {
 			Index:         0,
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.SetHost(ctx, &CrudSetHost{Call: call})
+			},
+		},
+		{
+			Name:          "getApp",
+			InterfaceName: "Crud",
+			Index:         0,
+			Handler: func(ctx context.Context, call rpc.Call) error {
+				return t.GetApp(ctx, &CrudGetApp{Call: call})
 			},
 		},
 		{
@@ -1879,6 +1983,33 @@ func (v CrudClient) SetHost(ctx context.Context, app string, host string) (*Crud
 	}
 
 	return &CrudClientSetHostResults{client: v.Client, data: ret}, nil
+}
+
+type CrudClientGetAppResults struct {
+	client rpc.Client
+	data   crudGetAppResultsData
+}
+
+func (v *CrudClientGetAppResults) HasApp() bool {
+	return v.data.App != nil
+}
+
+func (v *CrudClientGetAppResults) App() *AppInfo {
+	return v.data.App
+}
+
+func (v CrudClient) GetApp(ctx context.Context, name string) (*CrudClientGetAppResults, error) {
+	args := CrudGetAppArgs{}
+	args.data.Name = &name
+
+	var ret crudGetAppResultsData
+
+	err := v.Client.Call(ctx, "getApp", &args, &ret)
+	if err != nil {
+		return nil, err
+	}
+
+	return &CrudClientGetAppResults{client: v.Client, data: ret}, nil
 }
 
 type CrudClientListResults struct {

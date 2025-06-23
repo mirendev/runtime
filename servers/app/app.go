@@ -288,6 +288,34 @@ func (r *AppInfo) GetConfiguration(ctx context.Context, state *app_v1alpha.CrudG
 	return nil
 }
 
+func (r *AppInfo) GetApp(ctx context.Context, state *app_v1alpha.CrudGetApp) error {
+	name := state.Args().Name()
+
+	var appRec core_v1alpha.App
+
+	err := r.EC.Get(ctx, name, &appRec)
+	if err != nil {
+		return err
+	}
+
+	var appInfo app_v1alpha.AppInfo
+	appInfo.SetName(name)
+
+	// Get version info if there's an active version
+	if appRec.ActiveVersion != "" {
+		var appVer core_v1alpha.AppVersion
+		err = r.EC.GetById(ctx, appRec.ActiveVersion, &appVer)
+		if err == nil {
+			var versionInfo app_v1alpha.VersionInfo
+			versionInfo.SetVersion(appVer.Version)
+			appInfo.SetCurrentVersion(&versionInfo)
+		}
+	}
+
+	state.Results().SetApp(&appInfo)
+	return nil
+}
+
 func (r *AppInfo) SetHost(ctx context.Context, state *app_v1alpha.CrudSetHost) error {
 	name := state.Args().App()
 
