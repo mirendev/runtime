@@ -12,6 +12,7 @@ import (
 	"time"
 
 	clientv3 "go.etcd.io/etcd/client/v3"
+	appclient "miren.dev/runtime/api/app"
 	"miren.dev/runtime/api/app/app_v1alpha"
 	"miren.dev/runtime/api/build/build_v1alpha"
 	"miren.dev/runtime/api/core/core_v1alpha"
@@ -359,7 +360,14 @@ func (c *Coordinator) Start(ctx context.Context) error {
 	eps := execproxy.NewServer(c.Log, eac, rs, aa)
 	server.ExposeValue("dev.miren.runtime/exec", exec_v1alpha.AdaptSandboxExec(eps))
 
-	bs := build.NewBuilder(c.Log, eac, c.Resolver, c.TempDir)
+	// Create app client for the builder
+	appClient, err := appclient.NewClient(ctx, c.Log, loopback)
+	if err != nil {
+		c.Log.Error("failed to create app client", "error", err)
+		return err
+	}
+
+	bs := build.NewBuilder(c.Log, eac, appClient, c.Resolver, c.TempDir)
 	server.ExposeValue("dev.miren.runtime/build", build_v1alpha.AdaptBuilder(bs))
 
 	ec := aes.NewClient(c.Log, eac)
