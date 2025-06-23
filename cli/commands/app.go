@@ -295,11 +295,13 @@ func (m Model) View() string {
 
 	envvars := []string{}
 
-	for _, v := range m.cfg.EnvVars() {
-		if v.Sensitive() {
-			envvars = append(envvars, fmt.Sprintf("%s=****", v.Key()))
-		} else {
-			envvars = append(envvars, fmt.Sprintf("%s=%s", v.Key(), v.Value()))
+	if m.cfg != nil {
+		for _, v := range m.cfg.EnvVars() {
+			if v.Sensitive() {
+				envvars = append(envvars, fmt.Sprintf("%s=****", v.Key()))
+			} else {
+				envvars = append(envvars, fmt.Sprintf("%s=%s", v.Key(), v.Value()))
+			}
 		}
 	}
 
@@ -307,18 +309,22 @@ func (m Model) View() string {
 
 	var concurrency string
 
-	if m.cfg.HasAutoConcurrency() {
-		if m.cfg.AutoConcurrency().HasFactor() {
-			concurrency = fmt.Sprintf("auto (factor of %d)",
-				m.cfg.AutoConcurrency().Factor(),
-			)
+	if m.cfg != nil {
+		if m.cfg.HasAutoConcurrency() {
+			if m.cfg.AutoConcurrency().HasFactor() {
+				concurrency = fmt.Sprintf("auto (factor of %d)",
+					m.cfg.AutoConcurrency().Factor(),
+				)
+			} else {
+				concurrency = "auto"
+			}
+		} else if m.cfg.HasConcurrency() {
+			concurrency = fmt.Sprintf("%d", m.cfg.Concurrency())
 		} else {
-			concurrency = "auto"
+			// Really shouldn't happen
+			concurrency = "unknown"
 		}
-	} else if m.cfg.HasConcurrency() {
-		concurrency = fmt.Sprintf("%d", m.cfg.Concurrency())
 	} else {
-		// Really shouldn't happen
 		concurrency = "unknown"
 	}
 
