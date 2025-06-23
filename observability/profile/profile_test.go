@@ -2,13 +2,13 @@ package profile
 
 import (
 	"context"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"testing"
 	"time"
 
-	"github.com/davecgh/go-spew/spew"
 	"github.com/stretchr/testify/require"
 )
 
@@ -39,8 +39,8 @@ func TestProfile(t *testing.T) {
 		r.NoError(err)
 
 		cmd := exec.Command(path)
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
+		cmd.Stdout = io.Discard
+		cmd.Stderr = io.Discard
 
 		err = cmd.Start()
 		r.NoError(err)
@@ -55,22 +55,22 @@ func TestProfile(t *testing.T) {
 
 		defer profiler.Stop()
 
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 
 		err = profiler.Start(ctx)
 		r.NoError(err)
 
-		time.Sleep(30 * time.Second)
+		time.Sleep(5 * time.Second)
 
 		stacks, err := profiler.Stacks()
 		r.NoError(err)
 
 		r.Greater(len(stacks), 1)
 
-		spew.Dump(stacks[0].User())
+		r.NotEmpty(stacks[0].User())
 
-		spew.Dump(profiler.CallTree())
+		r.NotNil(profiler.CallTree())
 
 		err = profiler.Stop()
 		r.NoError(err)
