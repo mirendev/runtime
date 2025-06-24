@@ -6,21 +6,37 @@ import (
 	"path/filepath"
 	"strings"
 
-	"miren.dev/runtime/api/app/app_v1alpha"
+	toml "github.com/pelletier/go-toml/v2"
+	"miren.dev/runtime/api/app"
+	"miren.dev/runtime/appconfig"
 )
 
 func Init(ctx *Context, opts struct {
-	Name string `short:"n" long:"name" description:"Application name (defaults to current directory name)"`
+	Name string `short:"n" long:"name" description:"Application name (defaults to directory name)"`
+	Dir  string `short:"d" long:"dir" description:"Application directory (defaults to current directory)"`
 }) error {
-	// Determine app name
-	appName := opts.Name
-	if appName == "" {
-		// Use current directory name as default
+	// Determine working directory
+	workDir := opts.Dir
+	if workDir == "" {
 		wd, err := os.Getwd()
 		if err != nil {
 			return fmt.Errorf("failed to get current directory: %w", err)
 		}
-		appName = filepath.Base(wd)
+		workDir = wd
+	} else {
+		// Convert to absolute path
+		absDir, err := filepath.Abs(workDir)
+		if err != nil {
+			return fmt.Errorf("failed to resolve directory path: %w", err)
+		}
+		workDir = absDir
+	}
+
+	// Determine app name
+	appName := opts.Name
+	if appName == "" {
+		// Use directory name as default
+		appName = filepath.Base(workDir)
 
 		// Sanitize the app name - replace spaces and special chars with hyphens
 		appName = strings.ToLower(appName)
@@ -29,29 +45,32 @@ func Init(ctx *Context, opts struct {
 	}
 
 	// Check if already initialized BEFORE creating the app
-	runtimeDir := ".runtime"
+	runtimeDir := filepath.Join(workDir, ".runtime")
 	appTomlPath := filepath.Join(runtimeDir, "app.toml")
 	if _, err := os.Stat(appTomlPath); err == nil {
-		return fmt.Errorf("app.toml already exists in .runtime directory - app already initialized")
+		return fmt.Errorf("app.toml already exists in %s - app already initialized", runtimeDir)
 	}
 
-	// Create the app entity in the runtime
-	crudcl, err := ctx.RPCClient("dev.miren.runtime/app")
+	// Create app client
+	rpcClient, err := ctx.RPCClient("entities")
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to connect to entity server: %w", err)
 	}
 
-	crudClient := app_v1alpha.NewCrudClient(crudcl)
+	appClient, err := app.NewClient(ctx, ctx.Log, rpcClient)
+	if err != nil {
+		return fmt.Errorf("failed to create app client: %w", err)
+	}
 
 	// Check if app already exists
-	_, err = crudClient.GetApp(ctx, appName)
+	_, err = appClient.GetByName(ctx, appName)
 	if err == nil {
-		// App exists if GetApp succeeds
+		// App exists if GetByName succeeds
 		return fmt.Errorf("app '%s' already exists", appName)
 	}
 
 	// Create the app
-	results, err := crudClient.New(ctx, appName)
+	appEntity, err := appClient.Create(ctx, appName)
 	if err != nil {
 		return fmt.Errorf("could not create app '%s': %w", appName, err)
 	}
@@ -60,7 +79,7 @@ func Init(ctx *Context, opts struct {
 	var initErr error
 	defer func() {
 		if initErr != nil {
-			if rollbackErr := rollbackInit(ctx, appName); rollbackErr != nil {
+			if rollbackErr := rollbackInit(ctx, appName, workDir); rollbackErr != nil {
 				ctx.Printf("Warning: Could not rollback init: %v\n", rollbackErr)
 			}
 		}
@@ -72,33 +91,51 @@ func Init(ctx *Context, opts struct {
 		return initErr
 	}
 
-	// Write app.toml with just the name
-	content := fmt.Sprintf("name = \"%s\"\n", appName)
-	if err := os.WriteFile(appTomlPath, []byte(content), 0644); err != nil {
+	// Create app config with just the name
+	appConfig := &appconfig.AppConfig{
+		Name: appName,
+	}
+
+	// Marshal to TOML
+	content, err := toml.Marshal(appConfig)
+	if err != nil {
+		initErr = fmt.Errorf("failed to marshal app config: %w", err)
+		return initErr
+	}
+
+	// Write app.toml
+	if err := os.WriteFile(appTomlPath, content, 0644); err != nil {
 		initErr = fmt.Errorf("failed to write app.toml: %w", err)
 		return initErr
 	}
 
 	// Success - no rollback needed
 
-	ctx.Printf("Initialized runtime app '%s' in .runtime/app.toml\n", appName)
-	ctx.Printf("Created app '%s' with id: %s\n", appName, results.Id())
+	ctx.Printf("Initialized runtime app '%s' in %s\n", appName, appTomlPath)
+	ctx.Printf("Created app '%s' with id: %s\n", appName, appEntity.ID)
 	return nil
 }
 
 // if the app creation fails at any point, we want to cleanup.
-func rollbackInit(ctx *Context, appName string) error {
-	crudcl, err := ctx.RPCClient("dev.miren.runtime/app")
+func rollbackInit(ctx *Context, appName string, workDir string) error {
+	// Create app client
+	rpcClient, err := ctx.RPCClient("entities")
 	if err != nil {
 		return err
 	}
-	crudClient := app_v1alpha.NewCrudClient(crudcl)
-	_, err = crudClient.Destroy(ctx, appName)
+
+	appClient, err := app.NewClient(ctx, ctx.Log, rpcClient)
+	if err != nil {
+		return err
+	}
+
+	// Try to destroy the app
+	err = appClient.Destroy(ctx, appName)
 	if err != nil {
 		ctx.Printf("Could not delete app on rollback: %v\n", err)
 	}
 
-	runtimeDir := ".runtime"
+	runtimeDir := filepath.Join(workDir, ".runtime")
 	if _, err := os.Stat(runtimeDir); err == nil {
 		err := os.RemoveAll(runtimeDir)
 		if err != nil {
