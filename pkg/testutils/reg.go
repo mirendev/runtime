@@ -7,12 +7,14 @@ import (
 	"log/slog"
 	"net/netip"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"time"
 
 	containerd "github.com/containerd/containerd/v2/client"
 	buildkit "github.com/moby/buildkit/client"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
+	cdcomp "miren.dev/runtime/components/containerd"
 	"miren.dev/runtime/components/coordinate"
 	"miren.dev/runtime/components/netresolve"
 	"miren.dev/runtime/metrics"
@@ -31,6 +33,7 @@ func Registry(extra ...func(*asm.Registry)) (*asm.Registry, func()) {
 	var r asm.Registry
 
 	var usedClient *containerd.Client
+	var usedComponent *cdcomp.ContainerdComponent
 
 	tempDir, err := os.MkdirTemp("", "runtime-reg")
 	if err != nil {
@@ -86,12 +89,32 @@ func Registry(extra ...func(*asm.Registry)) (*asm.Registry, func()) {
 		return iface, nil
 	})
 
-	r.Provide(func() (*containerd.Client, error) {
-		cl, err := containerd.New("/run/containerd/containerd.sock")
+	r.Provide(func(opts struct {
+		Log *slog.Logger
+	}) (*containerd.Client, error) {
+		comp := cdcomp.NewContainerdComponent(opts.Log, tempDir)
+
+		containerdPath, err := exec.LookPath("containerd")
 		if err != nil {
 			return nil, err
 		}
 
+		config := &cdcomp.Config{
+			BinaryPath: containerdPath,
+			BaseDir:    filepath.Join(tempDir, "containerd"),
+			BinDir:     filepath.Dir(containerdPath),
+		}
+
+		if err := comp.Start(context.Background(), config); err != nil {
+			return nil, err
+		}
+
+		cl, err := containerd.New(config.SocketPath)
+		if err != nil {
+			return nil, err
+		}
+
+		usedComponent = comp
 		usedClient = cl
 
 		return cl, nil
@@ -209,6 +232,13 @@ func Registry(extra ...func(*asm.Registry)) (*asm.Registry, func()) {
 
 		if usedClient != nil {
 			NukeNamespace(usedClient, namespace)
+		}
+
+		if usedComponent != nil {
+			// Use a fresh context for cleanup
+			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+			usedComponent.Stop(cleanupCtx)
+			cleanupCancel()
 		}
 
 		for _, cancel := range cancels {

@@ -17,6 +17,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sys/unix"
 	mc "miren.dev/runtime/components/clickhouse"
+	"miren.dev/runtime/pkg/containerdx"
 )
 
 const testNamespace = "runtime-clickhouse-test"
@@ -25,7 +26,7 @@ func TestClickHouseComponentIntegration(t *testing.T) {
 	ctx := context.Background()
 
 	// Skip if containerd is not available
-	cc, err := containerd.New("/run/containerd/containerd.sock")
+	cc, err := containerd.New(containerdx.DefaultSocketPath)
 	if err != nil {
 		t.Skipf("containerd not available: %v", err)
 	}

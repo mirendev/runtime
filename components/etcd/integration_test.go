@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"os"
 	"strings"
 	"testing"
 	"time"
@@ -16,32 +15,31 @@ import (
 	clientv3 "go.etcd.io/etcd/client/v3"
 	"golang.org/x/sys/unix"
 	"miren.dev/runtime/components/etcd"
+	"miren.dev/runtime/pkg/testutils"
 )
-
-const testNamespace = "runtime-etcd-test"
 
 func TestEtcdComponentIntegration(t *testing.T) {
 	ctx := t.Context()
 
-	// Skip if containerd is not available
-	cc, err := containerd.New("/run/containerd/containerd.sock")
-	if err != nil {
-		t.Skipf("containerd not available: %v", err)
+	// Create registry and get containerd client
+	reg, cleanup := testutils.Registry()
+	defer cleanup()
+
+	var cc *containerd.Client
+	err := reg.Resolve(&cc)
+	require.NoError(t, err, "failed to get containerd client from registry")
+
+	// Get dependencies from registry using struct population
+	var deps struct {
+		Namespace string       `asm:"namespace"`
+		TempDir   string       `asm:"tempdir"`
+		Log       *slog.Logger `asm:"log"`
 	}
-	defer cc.Close()
-
-	// Create temporary directory for test data
-	tmpDir, err := os.MkdirTemp("", "etcd-test")
-	require.NoError(t, err, "failed to create temp dir")
-	defer os.RemoveAll(tmpDir)
-
-	// Create logger
-	log := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
-		Level: slog.LevelDebug,
-	}))
+	err = reg.Populate(&deps)
+	require.NoError(t, err, "failed to populate dependencies from registry")
 
 	// Create etcd component
-	component := etcd.NewEtcdComponent(log, cc, testNamespace, tmpDir)
+	component := etcd.NewEtcdComponent(deps.Log, cc, deps.Namespace, deps.TempDir)
 
 	// Use test-specific ports to avoid conflicts
 	clientPort := 23790
@@ -68,7 +66,7 @@ func TestEtcdComponentIntegration(t *testing.T) {
 		}
 
 		// Clean up any remaining containers
-		cleanupContainer(t, cc, testNamespace)
+		cleanupContainer(t, cc, deps.Namespace)
 	}()
 
 	// Start the etcd component

@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	containerd "github.com/containerd/containerd/v2/client"
+	"miren.dev/runtime/pkg/containerdx"
 	"miren.dev/runtime/pkg/testutils"
 )
 
@@ -16,7 +17,7 @@ func CtrNuke(c *Context, opts struct {
 		return errors.New("namespace is required")
 	}
 
-	cl, err := containerd.New("/run/containerd/containerd.sock")
+	cl, err := containerd.New(containerdx.DefaultSocketPath)
 	if err != nil {
 		return err
 	}
