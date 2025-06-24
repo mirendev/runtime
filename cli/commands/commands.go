@@ -21,6 +21,10 @@ func AllCommands() map[string]cli.CommandFactory {
 		// 	return Infer("import", "Import an image", Import), nil
 		// },
 
+		"init": func() (cli.Command, error) {
+			return Infer("init", "Initialize a new runtime application", Init), nil
+		},
+
 		"deploy": func() (cli.Command, error) {
 			return Infer("Deploy", "Deploy an application", Deploy), nil
 		},

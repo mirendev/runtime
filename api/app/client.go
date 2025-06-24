@@ -33,6 +33,22 @@ func NewClient(ctx context.Context, log *slog.Logger, client rpc.Client) (*Clien
 	}, nil
 }
 
+// Create creates a new app entity
+func (c *Client) Create(ctx context.Context, name string) (*core_v1alpha.App, error) {
+	app := &core_v1alpha.App{}
+
+	// Create the app entity
+	id, err := c.entityClient.Create(ctx, name, app)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create app %s: %w", name, err)
+	}
+
+	// Set the ID on the app
+	app.ID = id
+
+	return app, nil
+}
+
 // GetByName retrieves an app by its name
 func (c *Client) GetByName(ctx context.Context, name string) (*core_v1alpha.App, error) {
 	var app core_v1alpha.App
@@ -41,6 +57,24 @@ func (c *Client) GetByName(ctx context.Context, name string) (*core_v1alpha.App,
 		return nil, fmt.Errorf("failed to get app %s: %w", name, err)
 	}
 	return &app, nil
+}
+
+// Destroy deletes an app by its name
+func (c *Client) Destroy(ctx context.Context, name string) error {
+	// First get the app to ensure it exists and get its ID
+	app, err := c.GetByName(ctx, name)
+	if err != nil {
+		// If app doesn't exist, that's fine
+		return nil
+	}
+
+	// Delete the app entity
+	err = c.entityClient.Delete(ctx, app.ID)
+	if err != nil {
+		return fmt.Errorf("failed to delete app %s: %w", name, err)
+	}
+
+	return nil
 }
 
 // SetHost sets the host for an app by creating/updating an http_route entity
