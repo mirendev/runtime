@@ -5,45 +5,40 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"os"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2"
 	containerd "github.com/containerd/containerd/v2/client"
-	"github.com/containerd/containerd/v2/pkg/namespaces"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"golang.org/x/sys/unix"
 	mc "miren.dev/runtime/components/clickhouse"
-	"miren.dev/runtime/pkg/containerdx"
+	"miren.dev/runtime/pkg/testutils"
 )
-
-const testNamespace = "runtime-clickhouse-test"
 
 func TestClickHouseComponentIntegration(t *testing.T) {
 	ctx := context.Background()
 
-	// Skip if containerd is not available
-	cc, err := containerd.New(containerdx.DefaultSocketPath)
-	if err != nil {
-		t.Skipf("containerd not available: %v", err)
+	// Create registry and get containerd client
+	reg, cleanup := testutils.Registry()
+	defer cleanup()
+
+	var cc *containerd.Client
+	err := reg.Resolve(&cc)
+	require.NoError(t, err, "failed to get containerd client from registry")
+
+	// Get dependencies from registry using struct population
+	var deps struct {
+		Namespace string       `asm:"namespace"`
+		TempDir   string       `asm:"tempdir"`
+		Log       *slog.Logger `asm:"log"`
 	}
-	defer cc.Close()
-
-	// Create temporary directory for test data
-	tmpDir, err := os.MkdirTemp("", "clickhouse-test")
-	require.NoError(t, err, "failed to create temp dir")
-	defer os.RemoveAll(tmpDir)
-
-	// Create logger
-	log := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
-		Level: slog.LevelDebug,
-	}))
+	err = reg.Populate(&deps)
+	require.NoError(t, err, "failed to populate dependencies from registry")
 
 	// Create ClickHouse component
-	component := mc.NewClickHouseComponent(log, cc, testNamespace, tmpDir)
+	component := mc.NewClickHouseComponent(deps.Log, cc, deps.Namespace, deps.TempDir)
 
 	// Use test-specific ports to avoid conflicts
 	httpPort := 28123
@@ -70,9 +65,6 @@ func TestClickHouseComponentIntegration(t *testing.T) {
 				t.Logf("failed to stop component: %v", err)
 			}
 		}
-
-		// Clean up any remaining containers
-		cleanupContainer(t, cc, testNamespace)
 	}()
 
 	// Start the ClickHouse component
@@ -112,7 +104,7 @@ func TestClickHouseComponentIntegration(t *testing.T) {
 	// Test HTTP endpoint availability
 	t.Log("Testing HTTP endpoint...")
 	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Get(httpEndpoint + "/ping")
+	resp, err := client.Get("http://" + httpEndpoint + "/ping")
 	if err == nil {
 		resp.Body.Close()
 		t.Log("HTTP endpoint is responding")
@@ -278,43 +270,4 @@ func TestClickHouseComponentIntegration(t *testing.T) {
 	require.NoError(t, err, "failed to ping ClickHouse after restart")
 
 	t.Log("Restart test completed successfully!")
-}
-
-func cleanupContainer(t *testing.T, cc *containerd.Client, namespace string) {
-	ctx := context.Background()
-	ctx = namespaces.WithNamespace(ctx, namespace)
-
-	// Try to find and delete any test containers
-	containers, err := cc.Containers(ctx)
-	if err != nil {
-		t.Logf("failed to list containers for cleanup: %v", err)
-		return
-	}
-
-	for _, container := range containers {
-		// Stop and delete task if it exists
-		task, err := container.Task(ctx, nil)
-		if err == nil {
-			task.Kill(ctx, unix.SIGTERM)
-			es, err := task.Wait(ctx)
-			require.NoError(t, err)
-
-			select {
-			case <-ctx.Done():
-				require.NoError(t, ctx.Err())
-			case <-es:
-				//ok
-			}
-
-			task.Delete(ctx)
-		}
-
-		// Delete container
-		err = container.Delete(ctx, containerd.WithSnapshotCleanup)
-		if err != nil {
-			t.Logf("failed to delete container %s: %v", container.ID(), err)
-		} else {
-			t.Logf("cleaned up container %s", container.ID())
-		}
-	}
 }
