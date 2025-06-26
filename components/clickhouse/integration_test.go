@@ -17,19 +17,19 @@ import (
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sys/unix"
 	mc "miren.dev/runtime/components/clickhouse"
+	"miren.dev/runtime/pkg/testutils"
 )
 
 const testNamespace = "runtime-clickhouse-test"
 
 func TestClickHouseComponentIntegration(t *testing.T) {
 	ctx := context.Background()
+	reg, cleanup := testutils.Registry()
+	defer cleanup()
 
-	// Skip if containerd is not available
-	cc, err := containerd.New("/run/containerd/containerd.sock")
-	if err != nil {
-		t.Skipf("containerd not available: %v", err)
-	}
-	defer cc.Close()
+	var cc *containerd.Client
+	err := reg.Resolve(&cc)
+	require.NoError(t, err, "failed to resolve containerd client")
 
 	// Create temporary directory for test data
 	tmpDir, err := os.MkdirTemp("", "clickhouse-test")

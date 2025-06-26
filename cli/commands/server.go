@@ -10,6 +10,7 @@ import (
 	"time"
 
 	containerd "github.com/containerd/containerd/v2/client"
+	"miren.dev/runtime/pkg/containerdx"
 )
 
 func Server(ctx *Context, opts struct {
@@ -45,7 +46,7 @@ func Server(ctx *Context, opts struct {
 		// Wait for containerd to start
 
 		for {
-			cl, err := containerd.New("/run/containerd/containerd.sock")
+			cl, err := containerd.New(containerdx.DefaultSocket)
 			if err == nil {
 				_, err = cl.Server(ctx)
 				if err == nil {

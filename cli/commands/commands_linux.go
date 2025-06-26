@@ -18,6 +18,7 @@ import (
 	"miren.dev/runtime/observability"
 	"miren.dev/runtime/pkg/asm"
 	"miren.dev/runtime/pkg/asm/autoreg"
+	"miren.dev/runtime/pkg/containerdx"
 )
 
 func addCommands(cmds map[string]cli.CommandFactory) {
@@ -29,7 +30,7 @@ func addCommands(cmds map[string]cli.CommandFactory) {
 func (c *Context) setupServerComponents(ctx context.Context, reg *asm.Registry) {
 	reg.Register("namespace", "runtime")
 	reg.Register("top_context", ctx)
-	reg.Register("containerd-socket", "/run/containerd/containerd.sock")
+	reg.Register("containerd-socket", containerdx.DefaultSocket)
 
 	reg.Provide(func(opts struct {
 		Namespace string `asm:"namespace"`

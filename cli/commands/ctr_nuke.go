@@ -5,18 +5,25 @@ import (
 	"fmt"
 
 	containerd "github.com/containerd/containerd/v2/client"
+	"miren.dev/runtime/pkg/containerdx"
 	"miren.dev/runtime/pkg/testutils"
 )
 
 func CtrNuke(c *Context, opts struct {
-	Namespace  string `short:"n" long:"namespace" description:"namespace to nuke"`
-	Containers bool   `short:"c" long:"containers" description:"nuke containers only"`
+	Namespace        string `short:"n" long:"namespace" description:"namespace to nuke"`
+	Containers       bool   `short:"c" long:"containers" description:"nuke containers only"`
+	ContainerdSocket string `long:"containerd-socket" description:"path to containerd socket"`
 }) error {
 	if opts.Namespace == "" {
 		return errors.New("namespace is required")
 	}
 
-	cl, err := containerd.New("/run/containerd/containerd.sock")
+	socket := opts.ContainerdSocket
+	if socket == "" {
+		socket = containerdx.DefaultSocket
+	}
+
+	cl, err := containerd.New(socket)
 	if err != nil {
 		return err
 	}

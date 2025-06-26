@@ -35,6 +35,7 @@ import (
 	"miren.dev/runtime/metrics"
 	"miren.dev/runtime/observability"
 	"miren.dev/runtime/pkg/caauth"
+	"miren.dev/runtime/pkg/containerdx"
 	"miren.dev/runtime/pkg/grunge"
 	"miren.dev/runtime/pkg/ipdiscovery"
 	"miren.dev/runtime/pkg/netdb"
@@ -186,7 +187,7 @@ func Dev(ctx *Context, opts struct {
 		ctx.Server.Override("containerd-socket", containerdComponent.SocketPath())
 	} else {
 		// Use existing containerd with provided or default socket path
-		defaultSocket := "/run/containerd/containerd.sock"
+		defaultSocket := containerdx.DefaultSocket
 		if containerdSocketPath != "" {
 			defaultSocket = containerdSocketPath
 		}

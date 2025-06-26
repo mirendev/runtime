@@ -15,6 +15,8 @@ mkdir -p /data /run
 
 export OTEL_SDK_DISABLED=true
 
+CONTAINERD_SOCKET="/var/lib/miren/containerd/containerd.sock"
+
 cat <<EOF >/etc/containerd/config.toml
 version = 2
 [plugins."io.containerd.runtime.v1.linux"]
@@ -40,7 +42,7 @@ binary_name = "/src/hack/runsc-ignore"
 EOF
 
 mkdir -p /var/lib/miren/containerd
-containerd --root /data --state /data/state --address /var/lib/miren/containerd/containerd.sock -l trace >/tmp/containerd.log 2>&1 &
+containerd --root /data --state /data/state --address "$CONTAINERD_SOCKET" -l trace >/tmp/containerd.log 2>&1 &
 
 # Handy to build stuff with.
 buildkitd --root /data/buildkit >/tmp/buildkit.log 2>&1 &
@@ -63,7 +65,7 @@ mkdir -p ~/.config/runtime
 r auth generate -c ~/.config/runtime/clientconfig.yaml
 
 echo "Cleaning runtime namespace to begin..."
-r debug ctr nuke -n runtime
+r debug ctr nuke -n runtime --containerd-socket "$CONTAINERD_SOCKET"
 
 export HISTFILE=/data/.bash_history
 export HISTIGNORE=exit

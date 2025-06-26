@@ -15,6 +15,9 @@ mkdir -p /data /run
 
 export OTEL_SDK_DISABLED=true
 
+# Containerd socket location
+CONTAINERD_SOCKET="/run/containerd/containerd.sock"
+
 cat <<EOF >/etc/containerd/config.toml
 version = 2
 [plugins."io.containerd.runtime.v1.linux"]
@@ -37,7 +40,7 @@ binary_name = "/src/hack/runsc-ignore"
 EOF
 
 mkdir -p /run/containerd
-containerd --root /data --state /data/state --address /run/containerd/containerd.sock -l trace >/dev/null 2>&1 &
+containerd --root /data --state /data/state --address "$CONTAINERD_SOCKET" -l trace >/dev/null 2>&1 &
 
 # Since our buildkit dir is cached across runs, there might be a stale lockfile
 # sitting around that should be safe to kill
@@ -52,7 +55,7 @@ mount -t tracefs nodev /sys/kernel/tracing
 echo "Waiting for containerd..."
 timeout=30
 count=0
-while ! ctr --address /run/containerd/containerd.sock version >/dev/null 2>&1; do
+while ! ctr --address "$CONTAINERD_SOCKET" version >/dev/null 2>&1; do
   sleep 1
   count=$((count + 1))
   if [ "$count" -ge "$timeout" ]; then
