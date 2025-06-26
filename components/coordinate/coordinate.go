@@ -48,6 +48,7 @@ type CoordinatorConfig struct {
 
 	Mem  *metrics.MemoryUsage
 	Cpu  *metrics.CPUUsage
+	HTTP *metrics.HTTPMetrics
 	Logs *observability.LogReader
 }
 
@@ -368,7 +369,7 @@ func (c *Coordinator) Start(ctx context.Context) error {
 
 	ec := aes.NewClient(c.Log, eac)
 
-	ai := app.NewAppInfo(c.Log, ec, c.Cpu, c.Mem)
+	ai := app.NewAppInfo(c.Log, ec, c.Cpu, c.Mem, c.HTTP)
 	server.ExposeValue("dev.miren.runtime/app", app_v1alpha.AdaptCrud(ai))
 	server.ExposeValue("dev.miren.runtime/app-status", app_v1alpha.AdaptAppStatus(ai))
 

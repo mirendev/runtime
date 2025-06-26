@@ -111,6 +111,51 @@ func (a *AppInfo) AppInfo(ctx context.Context, state *app_v1alpha.AppStatusAppIn
 
 	rai.SetMemoryOverHour(musages)
 
+	// Add HTTP request metrics
+	if a.HTTP != nil {
+		// Get current RPS
+		rps, err := a.HTTP.RPSLastMinute(name)
+		if err != nil {
+			a.Log.Warn("failed to get RPS", "error", err)
+			rps = 0
+		}
+		rai.SetRequestsPerSecond(rps)
+
+		// Get request stats for the last hour
+		stats, err := a.HTTP.StatsLastHour(name)
+		if err != nil {
+			a.Log.Warn("failed to get request stats", "error", err)
+		} else {
+			var requestStats []*app_v1alpha.RequestStat
+			for _, s := range stats {
+				var rs app_v1alpha.RequestStat
+				rs.SetTimestamp(standard.ToTimestamp(s.Time))
+				rs.SetCount(s.Count)
+				rs.SetAvgDurationMs(s.AvgDurationMs)
+				rs.SetErrorRate(s.ErrorRate)
+				requestStats = append(requestStats, &rs)
+			}
+			rai.SetRequestStats(requestStats)
+		}
+
+		// Get top paths
+		topPaths, err := a.HTTP.TopPaths(name, 5)
+		if err != nil {
+			a.Log.Warn("failed to get top paths", "error", err)
+		} else {
+			var pathStats []*app_v1alpha.PathStat
+			for _, p := range topPaths {
+				var ps app_v1alpha.PathStat
+				ps.SetPath(p.Path)
+				ps.SetCount(p.Count)
+				ps.SetAvgDurationMs(p.AvgDurationMs)
+				ps.SetErrorRate(p.ErrorRate)
+				pathStats = append(pathStats, &ps)
+			}
+			rai.SetTopPaths(pathStats)
+		}
+	}
+
 	/*
 		if ai == nil {
 			state.Results().SetStatus(&rai)

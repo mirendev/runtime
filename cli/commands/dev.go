@@ -338,6 +338,14 @@ func Dev(ctx *Context, opts struct {
 		additionalIps = append(additionalIps, addr)
 	}
 
+	// Create HTTP metrics
+	var httpMetrics metrics.HTTPMetrics
+	err = ctx.Server.Populate(&httpMetrics)
+	if err != nil {
+		ctx.Log.Error("failed to populate HTTP metrics", "error", err)
+		return err
+	}
+
 	co := coordinate.NewCoordinator(ctx.Log, coordinate.CoordinatorConfig{
 		Address:         opts.Address,
 		EtcdEndpoints:   opts.EtcdEndpoints,
@@ -349,6 +357,7 @@ func Dev(ctx *Context, opts struct {
 		TempDir:         os.TempDir(),
 		Mem:             &mem,
 		Cpu:             &cpu,
+		HTTP:            &httpMetrics,
 		Logs:            &logs,
 	})
 
@@ -457,7 +466,7 @@ func Dev(ctx *Context, opts struct {
 
 	aa := co.Activator()
 
-	hs := httpingress.NewServer(ctx, ctx.Log, client, aa)
+	hs := httpingress.NewServer(ctx, ctx.Log, client, aa, &httpMetrics)
 
 	reg.Register("app-activator", aa)
 	reg.Register("resolver", res)

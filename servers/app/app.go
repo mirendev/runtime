@@ -25,20 +25,22 @@ type ClearVersioner interface {
 }
 
 type AppInfo struct {
-	Log *slog.Logger
-	CV  ClearVersioner
-	EC  *entityserver.Client
-	CPU *metrics.CPUUsage
-	Mem *metrics.MemoryUsage
+	Log  *slog.Logger
+	CV   ClearVersioner
+	EC   *entityserver.Client
+	CPU  *metrics.CPUUsage
+	Mem  *metrics.MemoryUsage
+	HTTP *metrics.HTTPMetrics
 }
 
-func NewAppInfo(log *slog.Logger, ec *entityserver.Client, cpu *metrics.CPUUsage, mem *metrics.MemoryUsage) *AppInfo {
+func NewAppInfo(log *slog.Logger, ec *entityserver.Client, cpu *metrics.CPUUsage, mem *metrics.MemoryUsage, http *metrics.HTTPMetrics) *AppInfo {
 	return &AppInfo{
-		Log: log,
-		CV:  nil,
-		EC:  ec,
-		CPU: cpu,
-		Mem: mem,
+		Log:  log,
+		CV:   nil,
+		EC:   ec,
+		CPU:  cpu,
+		Mem:  mem,
+		HTTP: http,
 	}
 }
 
