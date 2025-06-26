@@ -64,6 +64,7 @@ func (c *Client) GetById(ctx context.Context, id entity.Id, sc SchemaEncoder) er
 type ListResults struct {
 	values []*entity.Entity
 	cur    *entity.Entity
+	len    int
 }
 
 func (l *ListResults) Next() bool {
@@ -105,6 +106,10 @@ func (l *ListResults) Entity() *entity.Entity {
 	return l.cur
 }
 
+func (l *ListResults) Length() int {
+	return l.len
+}
+
 func (c *Client) List(ctx context.Context, index entity.Attr) (*ListResults, error) {
 	ret, err := c.eac.List(ctx, index)
 	if err != nil {
@@ -115,6 +120,7 @@ func (c *Client) List(ctx context.Context, index entity.Attr) (*ListResults, err
 
 	for _, v := range ret.Values() {
 		lr.values = append(lr.values, v.Entity())
+		lr.len++
 	}
 
 	return &lr, nil

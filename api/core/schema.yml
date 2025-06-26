@@ -26,10 +26,6 @@ kinds:
     active_version:
       type: ref
       doc: The version of the project that should be used
-    default:
-      type: bool
-      indexed: true
-      doc: Whether this is the default application for routing
 
   artifact:
     app:

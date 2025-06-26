@@ -361,11 +361,7 @@ func (c *Coordinator) Start(ctx context.Context) error {
 	server.ExposeValue("dev.miren.runtime/exec", exec_v1alpha.AdaptSandboxExec(eps))
 
 	// Create app client for the builder
-	appClient, err := appclient.NewClient(ctx, c.Log, loopback)
-	if err != nil {
-		c.Log.Error("failed to create app client", "error", err)
-		return err
-	}
+	appClient := appclient.NewClient(c.Log, loopback)
 
 	bs := build.NewBuilder(c.Log, eac, appClient, c.Resolver, c.TempDir)
 	server.ExposeValue("dev.miren.runtime/build", build_v1alpha.AdaptBuilder(bs))

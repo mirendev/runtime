@@ -11,18 +11,23 @@ import (
 	"sync"
 	"time"
 
+	"miren.dev/runtime/api/app"
 	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
-	"miren.dev/runtime/api/ingress/ingress_v1alpha"
+	"miren.dev/runtime/api/ingress"
 	"miren.dev/runtime/components/activator"
 	"miren.dev/runtime/discovery"
 	"miren.dev/runtime/pkg/entity"
+	"miren.dev/runtime/pkg/rpc"
 )
 
 type Server struct {
 	Log *slog.Logger
 
-	eac *entityserver_v1alpha.EntityAccessClient
+	rpcClient     rpc.Client
+	eac           *entityserver_v1alpha.EntityAccessClient
+	ingressClient *ingress.Client
+	appClient     *app.Client
 
 	aa activator.AppActivator
 
@@ -37,14 +42,19 @@ type appUsage struct {
 func NewServer(
 	ctx context.Context,
 	log *slog.Logger,
-	eac *entityserver_v1alpha.EntityAccessClient,
+	rpcClient rpc.Client,
 	aa activator.AppActivator,
 ) *Server {
+	eac := entityserver_v1alpha.NewEntityAccessClient(rpcClient)
+
 	serv := &Server{
-		Log:  log.With("module", "httpingress"),
-		eac:  eac,
-		aa:   aa,
-		apps: make(map[string]*appUsage),
+		Log:           log.With("module", "httpingress"),
+		rpcClient:     rpcClient,
+		eac:           eac,
+		ingressClient: ingress.NewClient(log, rpcClient),
+		appClient:     app.NewClient(log, rpcClient),
+		aa:            aa,
+		apps:          make(map[string]*appUsage),
 	}
 
 	go serv.checkLeases(ctx)
@@ -180,50 +190,40 @@ func (h *Server) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 
 	ctx := req.Context()
 
-	ia := entity.String(ingress_v1alpha.HttpRouteHostId, onlyHost)
-
-	resp, err := h.eac.List(ctx, ia)
+	// Use ingress client to lookup route
+	route, err := h.ingressClient.Lookup(ctx, onlyHost)
 	if err != nil {
 		h.Log.Error("error looking up http route", "error", err, "host", onlyHost)
 		http.Error(w, fmt.Sprintf("error looking up http route: %s", onlyHost), http.StatusInternalServerError)
 		return
 	}
 
-	vals := resp.Values()
-
 	var targetAppId entity.Id
 	var routeType string
 
-	if len(vals) == 0 {
-		h.Log.Debug("no http route found, checking for default app", "host", onlyHost)
+	if route == nil {
+		h.Log.Debug("no http route found, checking for default route", "host", onlyHost)
 
-		// Try to find a default app to route to
-		defaultResp, err := h.eac.List(ctx, entity.Bool(core_v1alpha.AppDefaultId, true))
+		// Try to find a default route to route to
+		defaultRoute, err := h.ingressClient.LookupDefault(ctx)
 		if err != nil {
-			h.Log.Error("error looking up default app", "error", err)
+			h.Log.Error("error looking up default route", "error", err)
 			http.Error(w, fmt.Sprintf("no http route found: %s", onlyHost), http.StatusNotFound)
 			return
 		}
 
-		defaultVals := defaultResp.Values()
-		if len(defaultVals) == 0 {
-			h.Log.Debug("no default app found", "host", onlyHost)
+		if defaultRoute == nil {
+			h.Log.Debug("no default route found", "host", onlyHost)
 			http.Error(w, fmt.Sprintf("no http route found: %s", onlyHost), http.StatusNotFound)
 			return
 		}
 
-		// Use the first default app found
-		var defaultApp core_v1alpha.App
-		defaultApp.Decode(defaultVals[0].Entity())
-
-		targetAppId = defaultApp.ID
+		// Use the default route
+		targetAppId = defaultRoute.App
 		routeType = "default"
 	} else {
-		// Use the http route
-		var hr ingress_v1alpha.HttpRoute
-		hr.Decode(vals[0].Entity())
-
-		targetAppId = hr.App
+		// Use the http route found
+		targetAppId = route.App
 		routeType = "route"
 	}
 

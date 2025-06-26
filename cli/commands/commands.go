@@ -53,16 +53,16 @@ func AllCommands() map[string]cli.CommandFactory {
 		"set": func() (cli.Command, error) {
 			return Infer("set", "Set environment variables for an application", Set), nil
 		},
-		"app default set": func() (cli.Command, error) {
-			return Infer("app default set", "Set an app as the default", AppDefaultSet), nil
+		"default-route set": func() (cli.Command, error) {
+			return Infer("default-route set", "Set an app as the default route", DefaultRouteSet), nil
 		},
 
-		"app default unset": func() (cli.Command, error) {
-			return Infer("app default unset", "Remove default flag from all apps", AppDefaultUnset), nil
+		"default-route unset": func() (cli.Command, error) {
+			return Infer("default-route unset", "Remove default route flag from all apps", DefaultRouteUnset), nil
 		},
 
-		"app default show": func() (cli.Command, error) {
-			return Infer("app default show", "Show which app is currently default", AppDefaultShow), nil
+		"default-route show": func() (cli.Command, error) {
+			return Infer("default-route show", "Show which app is currently the default route", DefaultRouteShow), nil
 		},
 
 		"set host": func() (cli.Command, error) {

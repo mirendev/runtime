@@ -12,10 +12,11 @@ import (
 	"miren.dev/runtime/api/entityserver"
 	es "miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/api/exec/exec_v1alpha"
+	"miren.dev/runtime/api/ingress/ingress_v1alpha"
 	"miren.dev/runtime/api/metric/metric_v1alpha"
 	"miren.dev/runtime/api/network/network_v1alpha"
 	"miren.dev/runtime/clientconfig"
-	"miren.dev/runtime/controllers/app"
+	"miren.dev/runtime/controllers/ingress"
 	"miren.dev/runtime/controllers/sandbox"
 	"miren.dev/runtime/controllers/service"
 	"miren.dev/runtime/pkg/asm"
@@ -223,7 +224,8 @@ func (r *Runner) SetupControllers(
 		return nil, err
 	}
 
-	defaultAppController := app.NewDefaultAppController(log, eas)
+	defaultRouteAppController := ingress.NewDefaultRouteAppController(log, eas)
+	defaultRouteController := ingress.NewDefaultRouteController(log, eas)
 
 	err := sbc.Init(ctx)
 	if err != nil {
@@ -231,11 +233,6 @@ func (r *Runner) SetupControllers(
 	}
 
 	err = serviceController.Init(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	err = defaultAppController.Init(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -286,11 +283,23 @@ func (r *Runner) SetupControllers(
 
 	cm.AddController(
 		controller.NewReconcileController(
-			"default-app",
+			"default-route-app",
 			log,
 			entity.Ref(entity.EntityKind, core_v1alpha.KindApp),
 			eas,
-			controller.AdaptController(defaultAppController),
+			controller.AdaptController(defaultRouteAppController),
+			0, // No periodic resync needed
+			1, // Single worker is sufficient for this controller
+		),
+	)
+
+	cm.AddController(
+		controller.NewReconcileController(
+			"default-route",
+			log,
+			entity.Ref(entity.EntityKind, ingress_v1alpha.KindHttpRoute),
+			eas,
+			controller.AdaptController(defaultRouteController),
 			0, // No periodic resync needed
 			1, // Single worker is sufficient for this controller
 		),

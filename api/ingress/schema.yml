@@ -9,3 +9,7 @@ kinds:
     app:
       type: ref
       doc: The application to route to
+    default:
+      type: bool
+      indexed: true
+      doc: Whether this is the default route for routing

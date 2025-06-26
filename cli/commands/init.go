@@ -57,10 +57,7 @@ func Init(ctx *Context, opts struct {
 		return fmt.Errorf("failed to connect to entity server: %w", err)
 	}
 
-	appClient, err := app.NewClient(ctx, ctx.Log, rpcClient)
-	if err != nil {
-		return fmt.Errorf("failed to create app client: %w", err)
-	}
+	appClient := app.NewClient(ctx.Log, rpcClient)
 
 	// Check if app already exists
 	_, err = appClient.GetByName(ctx, appName)
@@ -124,10 +121,7 @@ func rollbackInit(ctx *Context, appName string, workDir string) error {
 		return err
 	}
 
-	appClient, err := app.NewClient(ctx, ctx.Log, rpcClient)
-	if err != nil {
-		return err
-	}
+	appClient := app.NewClient(ctx.Log, rpcClient)
 
 	// Try to destroy the app
 	err = appClient.Destroy(ctx, appName)

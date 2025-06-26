@@ -852,7 +852,7 @@ func TestEtcdStore_UpdateIndexedAttribute_Bug(t *testing.T) {
 	))
 	require.NoError(t, err)
 
-	// Create an indexed attribute schema that we'll change below (similar to our default app boolean)
+	// Create an indexed attribute schema that we'll change below (similar to our default route boolean)
 	indexedAttr, err := store.CreateEntity(t.Context(), []Attr{
 		String(Ident, "test/default"),
 		Ref(Type, TypeBool),
