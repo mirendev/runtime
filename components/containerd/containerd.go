@@ -41,11 +41,12 @@ type ContainerdComponent struct {
 	log      *slog.Logger
 	dataPath string
 
-	mu      sync.Mutex
-	config  *Config
-	cmd     *exec.Cmd
-	client  *containerd.Client
-	running bool
+	mu       sync.Mutex
+	config   *Config
+	cmd      *exec.Cmd
+	client   *containerd.Client
+	running  bool
+	waitDone chan struct{}
 }
 
 // NewContainerdComponent creates a new containerd component
@@ -152,12 +153,15 @@ func (c *ContainerdComponent) Start(ctx context.Context, config *Config) error {
 	c.mu.Lock()
 	c.cmd = cmd
 	c.running = true
+	c.waitDone = make(chan struct{})
 	c.mu.Unlock()
 
 	c.log.Info("containerd started", "pid", cmd.Process.Pid)
 
 	// Monitor the process in background
 	go func() {
+		defer close(c.waitDone)
+
 		if err := cmd.Wait(); err != nil {
 			c.log.Error("containerd exited with error", "error", err)
 		} else {
@@ -236,31 +240,30 @@ func (c *ContainerdComponent) Stop(ctx context.Context) error {
 	}
 	c.mu.Unlock()
 
+	// Get waitDone channel before sending signal
+	c.mu.Lock()
+	waitDone := c.waitDone
+	c.mu.Unlock()
+
 	// Send SIGTERM for graceful shutdown
 	if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
 		c.log.Warn("failed to send SIGTERM", "error", err)
 	}
 
 	// Wait for process to exit with timeout
-	done := make(chan error, 1)
-	go func() {
-		done <- cmd.Wait()
-	}()
-
 	select {
 	case <-ctx.Done():
 		// Context cancelled, force kill
 		c.log.Warn("context cancelled, force killing containerd")
 		cmd.Process.Kill()
-	case err := <-done:
-		if err != nil && err.Error() != "signal: terminated" {
-			c.log.Warn("containerd exited with error", "error", err)
-		}
+		<-waitDone // Wait for process to actually exit
+	case <-waitDone:
+		// Process exited normally
 	case <-time.After(30 * time.Second):
 		// Timeout, force kill
 		c.log.Warn("shutdown timeout, force killing containerd")
 		cmd.Process.Kill()
-		<-done // Wait for process to actually exit
+		<-waitDone // Wait for process to actually exit
 	}
 
 	c.mu.Lock()
