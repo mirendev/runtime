@@ -19,6 +19,7 @@ import (
 	"miren.dev/runtime/network"
 	"miren.dev/runtime/pkg/asm"
 	"miren.dev/runtime/pkg/asm/autoreg"
+	"miren.dev/runtime/pkg/containerdx"
 	"miren.dev/runtime/pkg/idgen"
 	"miren.dev/runtime/pkg/netdb"
 	"miren.dev/runtime/pkg/rpc"
@@ -87,7 +88,7 @@ func Registry(extra ...func(*asm.Registry)) (*asm.Registry, func()) {
 	})
 
 	r.Provide(func() (*containerd.Client, error) {
-		cl, err := containerd.New("/run/containerd/containerd.sock")
+		cl, err := containerd.New(containerdx.DefaultSocket)
 		if err != nil {
 			return nil, err
 		}

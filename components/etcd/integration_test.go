@@ -16,19 +16,19 @@ import (
 	clientv3 "go.etcd.io/etcd/client/v3"
 	"golang.org/x/sys/unix"
 	"miren.dev/runtime/components/etcd"
+	"miren.dev/runtime/pkg/testutils"
 )
 
 const testNamespace = "runtime-etcd-test"
 
 func TestEtcdComponentIntegration(t *testing.T) {
 	ctx := t.Context()
+	reg, cleanup := testutils.Registry()
+	defer cleanup()
 
-	// Skip if containerd is not available
-	cc, err := containerd.New("/run/containerd/containerd.sock")
-	if err != nil {
-		t.Skipf("containerd not available: %v", err)
-	}
-	defer cc.Close()
+	var cc *containerd.Client
+	err := reg.Resolve(&cc)
+	require.NoError(t, err, "failed to resolve containerd client")
 
 	// Create temporary directory for test data
 	tmpDir, err := os.MkdirTemp("", "etcd-test")
