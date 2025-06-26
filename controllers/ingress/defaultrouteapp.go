@@ -72,15 +72,29 @@ func (c *DefaultRouteAppController) Update(ctx context.Context, app *core_v1alph
 func (c *DefaultRouteAppController) Delete(ctx context.Context, id entity.Id) error {
 	c.Log.Info("App deleted", "app", id)
 
+	// Check if this app had a default route
+	defaultRoute, err := c.ic.LookupDefault(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to lookup default route: %w", err)
+	}
+
+	// If this app had the default route, delete it
+	if defaultRoute != nil && defaultRoute.App == id {
+		c.Log.Info("Deleted app had default route, removing it", "app", id, "route", defaultRoute.ID)
+		if _, err := c.ic.UnsetDefault(ctx); err != nil {
+			return fmt.Errorf("failed to unset default route: %w", err)
+		}
+	}
+
 	// Check if there are any remaining apps
 	appList, err := c.EAC.List(ctx, entity.Ref(entity.EntityKind, core_v1alpha.KindApp))
 	if err != nil {
 		return fmt.Errorf("failed to list apps: %w", err)
 	}
 
-	// If no apps remain, delete all default routes
+	// If no apps remain, delete all default routes (safety check in case of inconsistency)
 	if len(appList.Values()) == 0 {
-		c.Log.Info("Last app deleted, removing default route")
+		c.Log.Info("Last app deleted, removing any remaining default routes")
 
 		_, err := c.ic.UnsetDefault(ctx)
 
