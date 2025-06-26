@@ -41,11 +41,12 @@ type ContainerdComponent struct {
 	log      *slog.Logger
 	dataPath string
 
-	mu      sync.Mutex
-	config  *Config
-	cmd     *exec.Cmd
-	client  *containerd.Client
-	running bool
+	mu       sync.Mutex
+	config   *Config
+	cmd      *exec.Cmd
+	client   *containerd.Client
+	running  bool
+	waitDone chan struct{}
 }
 
 // NewContainerdComponent creates a new containerd component
@@ -152,12 +153,15 @@ func (c *ContainerdComponent) Start(ctx context.Context, config *Config) error {
 	c.mu.Lock()
 	c.cmd = cmd
 	c.running = true
+	c.waitDone = make(chan struct{})
 	c.mu.Unlock()
 
 	c.log.Info("containerd started", "pid", cmd.Process.Pid)
 
 	// Monitor the process in background
 	go func() {
+		defer close(c.waitDone)
+
 		if err := cmd.Wait(); err != nil {
 			c.log.Error("containerd exited with error", "error", err)
 		} else {
@@ -178,16 +182,9 @@ func (c *ContainerdComponent) Start(ctx context.Context, config *Config) error {
 	if err := c.waitForSocket(ctx, config.SocketPath); err != nil {
 		// Clean up on failure
 		cmd.Process.Kill()
-		cmd.Wait()
 
-		// Close the log writers
-		stdout.Close()
-		stderr.Close()
-
-		c.mu.Lock()
-		c.running = false
-		c.cmd = nil
-		c.mu.Unlock()
+		// Wait for the monitoring goroutine to finish
+		<-c.waitDone
 
 		return fmt.Errorf("containerd failed to start: %w", err)
 	}
@@ -216,49 +213,57 @@ func (c *ContainerdComponent) Start(ctx context.Context, config *Config) error {
 // Stop stops the containerd daemon
 func (c *ContainerdComponent) Stop(ctx context.Context) error {
 	c.mu.Lock()
-	defer c.mu.Unlock()
 
 	if !c.running || c.cmd == nil {
+		c.mu.Unlock()
 		return nil
 	}
+
+	// Capture cmd reference before any modifications
+	cmd := c.cmd
+	c.mu.Unlock()
 
 	c.log.Info("stopping containerd")
 
 	// Close client first
+	c.mu.Lock()
 	if c.client != nil {
 		c.client.Close()
 		c.client = nil
 	}
+	c.mu.Unlock()
+
+	// Get waitDone channel before sending signal
+	c.mu.Lock()
+	waitDone := c.waitDone
+	c.mu.Unlock()
 
 	// Send SIGTERM for graceful shutdown
-	if err := c.cmd.Process.Signal(syscall.SIGTERM); err != nil {
+	if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
 		c.log.Warn("failed to send SIGTERM", "error", err)
 	}
 
 	// Wait for process to exit with timeout
-	done := make(chan error, 1)
-	go func() {
-		done <- c.cmd.Wait()
-	}()
-
 	select {
 	case <-ctx.Done():
 		// Context cancelled, force kill
 		c.log.Warn("context cancelled, force killing containerd")
-		c.cmd.Process.Kill()
-	case err := <-done:
-		if err != nil && err.Error() != "signal: terminated" {
-			c.log.Warn("containerd exited with error", "error", err)
-		}
+		cmd.Process.Kill()
+		<-waitDone // Wait for process to actually exit
+	case <-waitDone:
+		// Process exited normally
 	case <-time.After(30 * time.Second):
 		// Timeout, force kill
 		c.log.Warn("shutdown timeout, force killing containerd")
-		c.cmd.Process.Kill()
-		<-done // Wait for process to actually exit
+		cmd.Process.Kill()
+		<-waitDone // Wait for process to actually exit
 	}
 
+	c.mu.Lock()
 	c.running = false
 	c.cmd = nil
+	c.mu.Unlock()
+
 	c.log.Info("containerd stopped")
 
 	return nil
