@@ -486,6 +486,14 @@ func (c *ClickHouseComponent) createContainer(ctx context.Context, image contain
 				Source:      configPath,
 				Options:     []string{"rbind", "ro"},
 			},
+
+			// Binding cgroup filesystem so clickhouse can monitor resource limits
+			{
+				Destination: "/sys/fs/cgroup",
+				Type:        "bind",
+				Source:      "/sys/fs/cgroup",
+				Options:     []string{"rbind", "ro"},
+			},
 		}),
 	}
 
