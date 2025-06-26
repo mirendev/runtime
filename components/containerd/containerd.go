@@ -182,16 +182,9 @@ func (c *ContainerdComponent) Start(ctx context.Context, config *Config) error {
 	if err := c.waitForSocket(ctx, config.SocketPath); err != nil {
 		// Clean up on failure
 		cmd.Process.Kill()
-		cmd.Wait()
 
-		// Close the log writers
-		stdout.Close()
-		stderr.Close()
-
-		c.mu.Lock()
-		c.running = false
-		c.cmd = nil
-		c.mu.Unlock()
+		// Wait for the monitoring goroutine to finish
+		<-c.waitDone
 
 		return fmt.Errorf("containerd failed to start: %w", err)
 	}
