@@ -291,7 +291,7 @@ func (c *ClickHouseComponent) stopTask(ctx context.Context, task containerd.Task
 	}
 
 	// Delete the task
-	deleteCtx, deleteCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	deleteCtx, deleteCancel := context.WithTimeout(ctx, 10*time.Second)
 	defer deleteCancel()
 
 	if _, err := task.Delete(deleteCtx); err != nil {
