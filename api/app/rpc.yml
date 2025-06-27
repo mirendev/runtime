@@ -91,6 +91,43 @@ types:
         type: int64
         index: 1
 
+  - type: RequestStat
+    fields:
+      - name: timestamp
+        type: standard.Timestamp
+        index: 0
+      - name: count
+        type: int64
+        index: 1
+        doc: "Number of requests in this time window"
+      - name: avgDurationMs
+        type: float64
+        index: 2
+        doc: "Average request duration in milliseconds"
+      - name: errorRate
+        type: float64
+        index: 3
+        doc: "Percentage of requests that resulted in errors (4xx/5xx)"
+
+  - type: PathStat
+    fields:
+      - name: path
+        type: string
+        index: 0
+        doc: "The request path"
+      - name: count
+        type: int64
+        index: 1
+        doc: "Number of requests to this path"
+      - name: avgDurationMs
+        type: float64
+        index: 2
+        doc: "Average response time for this path"
+      - name: errorRate
+        type: float64
+        index: 3
+        doc: "Error rate for this path"
+
   - type: PoolStatus
     fields:
       - name: name
@@ -155,6 +192,20 @@ types:
         type: list
         element: AddonInstance
         index: 9
+      - name: requestsPerSecond
+        type: float64
+        index: 10
+        doc: "Current requests per second (last minute average)"
+      - name: requestStats
+        type: list
+        element: '*RequestStat'
+        index: 11
+        doc: "Request statistics over the last hour"
+      - name: topPaths
+        type: list
+        element: '*PathStat'
+        index: 12
+        doc: "Most frequently accessed paths"
 
   - type: LogEntry
     fields:

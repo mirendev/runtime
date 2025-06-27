@@ -17,6 +17,7 @@ import (
 	"miren.dev/runtime/api/ingress"
 	"miren.dev/runtime/components/activator"
 	"miren.dev/runtime/discovery"
+	"miren.dev/runtime/metrics"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/rpc"
 )
@@ -31,6 +32,8 @@ type Server struct {
 
 	aa activator.AppActivator
 
+	httpMetrics *metrics.HTTPMetrics
+
 	mu   sync.Mutex
 	apps map[string]*appUsage
 }
@@ -44,6 +47,7 @@ func NewServer(
 	log *slog.Logger,
 	rpcClient rpc.Client,
 	aa activator.AppActivator,
+	httpMetrics *metrics.HTTPMetrics,
 ) *Server {
 	eac := entityserver_v1alpha.NewEntityAccessClient(rpcClient)
 
@@ -54,7 +58,14 @@ func NewServer(
 		ingressClient: ingress.NewClient(log, rpcClient),
 		appClient:     app.NewClient(log, rpcClient),
 		aa:            aa,
+		httpMetrics:   httpMetrics,
 		apps:          make(map[string]*appUsage),
+	}
+
+	if httpMetrics == nil {
+		serv.Log.Warn("HTTPMetrics is nil in httpingress")
+	} else {
+		serv.Log.Info("HTTPMetrics initialized in httpingress")
 	}
 
 	go serv.checkLeases(ctx)
@@ -183,6 +194,45 @@ func (h *Server) releaseLease(ctx context.Context, lease *lease) {
 }
 
 func (h *Server) ServeHTTP(w http.ResponseWriter, req *http.Request) {
+	// Start tracking request time
+	start := time.Now()
+
+	// Wrap response writer to capture status and size
+	rw := &responseWriter{
+		ResponseWriter: w,
+		statusCode:     http.StatusOK, // default if not explicitly set
+	}
+
+	// Variable to capture app name from serveHTTPWithMetrics
+	var appName string
+
+	// Ensure we record metrics at the end
+	defer func() {
+		if h.httpMetrics != nil && appName != "" {
+			h.recordHTTPMetrics(appName, req, rw, start)
+		}
+	}()
+
+	h.serveHTTPWithMetrics(rw, req, &appName)
+}
+
+func (h *Server) recordHTTPMetrics(appName string, req *http.Request, rw *responseWriter, start time.Time) {
+	duration := time.Since(start)
+	err := h.httpMetrics.RecordRequest(req.Context(), metrics.HTTPRequest{
+		Timestamp:    start,
+		App:          appName,
+		Method:       req.Method,
+		Path:         req.URL.Path,
+		StatusCode:   rw.statusCode,
+		DurationMs:   duration.Milliseconds(),
+		ResponseSize: int64(rw.bytesWritten),
+	})
+	if err != nil {
+		h.Log.Error("Failed to record HTTP request", "error", err, "app", appName)
+	}
+}
+
+func (h *Server) serveHTTPWithMetrics(w http.ResponseWriter, req *http.Request, appName *string) {
 	onlyHost, _, err := net.SplitHostPort(req.Host)
 	if err != nil {
 		onlyHost = req.Host
@@ -201,10 +251,15 @@ func (h *Server) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	var targetAppId entity.Id
 	var routeType string
 
-	if route == nil {
+	if route != nil {
+		// Use the http route if found
+		targetAppId = route.App
+		routeType = "route"
+		h.Log.Debug("using http route", "host", onlyHost, "app", targetAppId)
+	} else {
+		// No route found, try to find a default route
 		h.Log.Debug("no http route found, checking for default route", "host", onlyHost)
 
-		// Try to find a default route to route to
 		defaultRoute, err := h.ingressClient.LookupDefault(ctx)
 		if err != nil {
 			h.Log.Error("error looking up default route", "error", err)
@@ -221,13 +276,27 @@ func (h *Server) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		// Use the default route
 		targetAppId = defaultRoute.App
 		routeType = "default"
-	} else {
-		// Use the http route found
-		targetAppId = route.App
-		routeType = "route"
+		h.Log.Debug("using default route", "host", onlyHost, "app", targetAppId)
 	}
 
-	h.Log.Info("routing request", "host", onlyHost, "app", targetAppId, "type", routeType)
+	// Get app details first to have the name for metrics
+	gr, err := h.eac.Get(ctx, targetAppId.String())
+	if err != nil {
+		h.Log.Error("error looking up application", "error", err, "app", targetAppId)
+		http.Error(w, fmt.Sprintf("error looking up application: %s", targetAppId), http.StatusInternalServerError)
+		return
+	}
+
+	var app core_v1alpha.App
+	app.Decode(gr.Entity().Entity())
+
+	var appMD core_v1alpha.Metadata
+	appMD.Decode(gr.Entity().Entity())
+
+	// Store app name for metrics
+	*appName = appMD.Name
+
+	h.Log.Info("routing request", "host", onlyHost, "app", targetAppId, "name", *appName, "type", routeType)
 
 	// Common lease handling logic
 	curLease, err := h.useLease(ctx, targetAppId.String())
@@ -242,19 +311,6 @@ func (h *Server) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		h.forwardToLease(ctx, w, req, curLease)
 		return
 	}
-
-	gr, err := h.eac.Get(ctx, targetAppId.String())
-	if err != nil {
-		h.Log.Error("error looking up application", "error", err, "app", targetAppId)
-		http.Error(w, fmt.Sprintf("error looking up application: %s", targetAppId), http.StatusInternalServerError)
-		return
-	}
-
-	var app core_v1alpha.App
-	app.Decode(gr.Entity().Entity())
-
-	var appMD core_v1alpha.Metadata
-	appMD.Decode(gr.Entity().Entity())
 
 	if app.ActiveVersion == "" {
 		h.Log.Debug("no active version for app", "app", targetAppId)
@@ -345,3 +401,26 @@ func (h *LeaseHTTP) extractEndpoint(ctx context.Context, container containerd.Co
 	return nil, fmt.Errorf("unable to derive endpoint")
 }
 */
+
+// responseWriter wraps http.ResponseWriter to capture status code and response size
+type responseWriter struct {
+	http.ResponseWriter
+	statusCode   int
+	bytesWritten int
+}
+
+func (rw *responseWriter) WriteHeader(code int) {
+	rw.statusCode = code
+	rw.ResponseWriter.WriteHeader(code)
+}
+
+func (rw *responseWriter) Write(b []byte) (int, error) {
+	n, err := rw.ResponseWriter.Write(b)
+	rw.bytesWritten += n
+	return n, err
+}
+
+// Unwrap returns the underlying ResponseWriter for middleware compatibility
+func (rw *responseWriter) Unwrap() http.ResponseWriter {
+	return rw.ResponseWriter
+}

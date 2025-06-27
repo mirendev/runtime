@@ -375,10 +375,81 @@ func (m Model) View() string {
 			memlines = append(memlines, fmt.Sprintf("%s: %s", t.Format(of), b.Short()))
 		}
 
-		body = lipgloss.JoinHorizontal(lipgloss.Top,
-			defaultStyle.Render(titleStyle.Render("CPU (cores)")+"\n"+strings.Join(lines, "\n")),
-			defaultStyle.Render(titleStyle.Render("Memory (MB)")+"\n"+strings.Join(memlines, "\n")),
-		)
+		// Add HTTP stats if available
+		var httpStatsSection string
+		if m.status.HasRequestsPerSecond() || (m.status.HasRequestStats() && len(m.status.RequestStats()) > 0) {
+			var httpLines []string
+			httpLines = append(httpLines, titleStyle.Render("HTTP Stats"))
+
+			// Add current RPS
+			if m.status.HasRequestsPerSecond() {
+				rpsStr := fmt.Sprintf("%.2f", m.status.RequestsPerSecond())
+				httpLines = append(httpLines, fmt.Sprintf("Current: %s RPS (last minute)", bold.Render(rpsStr)))
+				httpLines = append(httpLines, "") // blank line
+			}
+
+			// Add hourly stats
+			if m.status.HasRequestStats() && len(m.status.RequestStats()) > 0 {
+				httpLines = append(httpLines, "Last hour:")
+
+				// Get last 5 entries
+				stats := m.status.RequestStats()
+				startIdx := 0
+				if len(stats) > 5 {
+					startIdx = len(stats) - 5
+				}
+
+				for _, s := range stats[startIdx:] {
+					t := standard.FromTimestamp(s.Timestamp())
+					errorRateStr := fmt.Sprintf("%.1f%%", s.ErrorRate()*100)
+					if s.ErrorRate() == 0 {
+						errorRateStr = "0%"
+					}
+					line := fmt.Sprintf("%s: %d reqs, %dms avg, %s errors",
+						t.Format(of),
+						s.Count(),
+						int(s.AvgDurationMs()),
+						errorRateStr)
+					httpLines = append(httpLines, line)
+				}
+			}
+
+			// Add top paths if available
+			if m.status.HasTopPaths() && len(m.status.TopPaths()) > 0 {
+				httpLines = append(httpLines, "") // blank line
+				httpLines = append(httpLines, "Top paths:")
+
+				for _, p := range m.status.TopPaths() {
+					errorStr := ""
+					if p.ErrorRate() > 0 {
+						errorStr = fmt.Sprintf(", %.1f%% errors", p.ErrorRate()*100)
+					}
+					line := fmt.Sprintf("  %-20s (%d reqs, %dms avg%s)",
+						p.Path(),
+						p.Count(),
+						int(p.AvgDurationMs()),
+						errorStr)
+					httpLines = append(httpLines, line)
+				}
+			}
+
+			httpStatsSection = defaultStyle.Render(strings.Join(httpLines, "\n"))
+		}
+
+		// Join all sections
+		sections := []string{
+			defaultStyle.Render(titleStyle.Render("CPU (cores)") + "\n" + strings.Join(lines, "\n")),
+			defaultStyle.Render(titleStyle.Render("Memory (MB)") + "\n" + strings.Join(memlines, "\n")),
+		}
+
+		if httpStatsSection != "" {
+			body = lipgloss.JoinVertical(lipgloss.Top,
+				lipgloss.JoinHorizontal(lipgloss.Top, sections[0], sections[1]),
+				httpStatsSection,
+			)
+		} else {
+			body = lipgloss.JoinHorizontal(lipgloss.Top, sections...)
+		}
 	} else if m.stack {
 		body = lipgloss.JoinVertical(lipgloss.Top,
 			defaultStyle.Render(titleStyle.Render("   CPU (cores)")+"\n"+m.cpu.View()),

@@ -498,6 +498,177 @@ func (v *MemoryUsage) UnmarshalJSON(data []byte) error {
 	return json.Unmarshal(data, &v.data)
 }
 
+type requestStatData struct {
+	Timestamp     *standard.Timestamp `cbor:"0,keyasint,omitempty" json:"timestamp,omitempty"`
+	Count         *int64              `cbor:"1,keyasint,omitempty" json:"count,omitempty"`
+	AvgDurationMs *float64            `cbor:"2,keyasint,omitempty" json:"avg_duration_ms,omitempty"`
+	ErrorRate     *float64            `cbor:"3,keyasint,omitempty" json:"error_rate,omitempty"`
+}
+
+type RequestStat struct {
+	data requestStatData
+}
+
+func (v *RequestStat) HasTimestamp() bool {
+	return v.data.Timestamp != nil
+}
+
+func (v *RequestStat) Timestamp() *standard.Timestamp {
+	return v.data.Timestamp
+}
+
+func (v *RequestStat) SetTimestamp(timestamp *standard.Timestamp) {
+	v.data.Timestamp = timestamp
+}
+
+func (v *RequestStat) HasCount() bool {
+	return v.data.Count != nil
+}
+
+func (v *RequestStat) Count() int64 {
+	if v.data.Count == nil {
+		return 0
+	}
+	return *v.data.Count
+}
+
+func (v *RequestStat) SetCount(count int64) {
+	v.data.Count = &count
+}
+
+func (v *RequestStat) HasAvgDurationMs() bool {
+	return v.data.AvgDurationMs != nil
+}
+
+func (v *RequestStat) AvgDurationMs() float64 {
+	if v.data.AvgDurationMs == nil {
+		return 0
+	}
+	return *v.data.AvgDurationMs
+}
+
+func (v *RequestStat) SetAvgDurationMs(avgDurationMs float64) {
+	v.data.AvgDurationMs = &avgDurationMs
+}
+
+func (v *RequestStat) HasErrorRate() bool {
+	return v.data.ErrorRate != nil
+}
+
+func (v *RequestStat) ErrorRate() float64 {
+	if v.data.ErrorRate == nil {
+		return 0
+	}
+	return *v.data.ErrorRate
+}
+
+func (v *RequestStat) SetErrorRate(errorRate float64) {
+	v.data.ErrorRate = &errorRate
+}
+
+func (v *RequestStat) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *RequestStat) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *RequestStat) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *RequestStat) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type pathStatData struct {
+	Path          *string  `cbor:"0,keyasint,omitempty" json:"path,omitempty"`
+	Count         *int64   `cbor:"1,keyasint,omitempty" json:"count,omitempty"`
+	AvgDurationMs *float64 `cbor:"2,keyasint,omitempty" json:"avg_duration_ms,omitempty"`
+	ErrorRate     *float64 `cbor:"3,keyasint,omitempty" json:"error_rate,omitempty"`
+}
+
+type PathStat struct {
+	data pathStatData
+}
+
+func (v *PathStat) HasPath() bool {
+	return v.data.Path != nil
+}
+
+func (v *PathStat) Path() string {
+	if v.data.Path == nil {
+		return ""
+	}
+	return *v.data.Path
+}
+
+func (v *PathStat) SetPath(path string) {
+	v.data.Path = &path
+}
+
+func (v *PathStat) HasCount() bool {
+	return v.data.Count != nil
+}
+
+func (v *PathStat) Count() int64 {
+	if v.data.Count == nil {
+		return 0
+	}
+	return *v.data.Count
+}
+
+func (v *PathStat) SetCount(count int64) {
+	v.data.Count = &count
+}
+
+func (v *PathStat) HasAvgDurationMs() bool {
+	return v.data.AvgDurationMs != nil
+}
+
+func (v *PathStat) AvgDurationMs() float64 {
+	if v.data.AvgDurationMs == nil {
+		return 0
+	}
+	return *v.data.AvgDurationMs
+}
+
+func (v *PathStat) SetAvgDurationMs(avgDurationMs float64) {
+	v.data.AvgDurationMs = &avgDurationMs
+}
+
+func (v *PathStat) HasErrorRate() bool {
+	return v.data.ErrorRate != nil
+}
+
+func (v *PathStat) ErrorRate() float64 {
+	if v.data.ErrorRate == nil {
+		return 0
+	}
+	return *v.data.ErrorRate
+}
+
+func (v *PathStat) SetErrorRate(errorRate float64) {
+	v.data.ErrorRate = &errorRate
+}
+
+func (v *PathStat) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *PathStat) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *PathStat) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *PathStat) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
 type poolStatusData struct {
 	Name      *string          `cbor:"0,keyasint,omitempty" json:"name,omitempty"`
 	Windows   *[]*WindowStatus `cbor:"1,keyasint,omitempty" json:"windows,omitempty"`
@@ -658,16 +829,19 @@ func (v *WindowStatus) UnmarshalJSON(data []byte) error {
 }
 
 type applicationStatusData struct {
-	Name           *string             `cbor:"0,keyasint,omitempty" json:"name,omitempty"`
-	Pools          *[]*PoolStatus      `cbor:"1,keyasint,omitempty" json:"pools,omitempty"`
-	LastMinCPU     *float64            `cbor:"2,keyasint,omitempty" json:"last_min_c_p_u,omitempty"`
-	LastHourCPU    *float64            `cbor:"3,keyasint,omitempty" json:"last_hour_c_p_u,omitempty"`
-	LastDayCPU     *float64            `cbor:"4,keyasint,omitempty" json:"last_day_c_p_u,omitempty"`
-	CpuOverHour    *[]*CpuUsage        `cbor:"5,keyasint,omitempty" json:"cpu_over_hour,omitempty"`
-	MemoryOverHour *[]*MemoryUsage     `cbor:"6,keyasint,omitempty" json:"memory_over_hour,omitempty"`
-	ActiveVersion  *string             `cbor:"7,keyasint,omitempty" json:"active_version,omitempty"`
-	LastDeploy     *standard.Timestamp `cbor:"8,keyasint,omitempty" json:"last_deploy,omitempty"`
-	Addons         *[]*AddonInstance   `cbor:"9,keyasint,omitempty" json:"addons,omitempty"`
+	Name              *string             `cbor:"0,keyasint,omitempty" json:"name,omitempty"`
+	Pools             *[]*PoolStatus      `cbor:"1,keyasint,omitempty" json:"pools,omitempty"`
+	LastMinCPU        *float64            `cbor:"2,keyasint,omitempty" json:"last_min_c_p_u,omitempty"`
+	LastHourCPU       *float64            `cbor:"3,keyasint,omitempty" json:"last_hour_c_p_u,omitempty"`
+	LastDayCPU        *float64            `cbor:"4,keyasint,omitempty" json:"last_day_c_p_u,omitempty"`
+	CpuOverHour       *[]*CpuUsage        `cbor:"5,keyasint,omitempty" json:"cpu_over_hour,omitempty"`
+	MemoryOverHour    *[]*MemoryUsage     `cbor:"6,keyasint,omitempty" json:"memory_over_hour,omitempty"`
+	ActiveVersion     *string             `cbor:"7,keyasint,omitempty" json:"active_version,omitempty"`
+	LastDeploy        *standard.Timestamp `cbor:"8,keyasint,omitempty" json:"last_deploy,omitempty"`
+	Addons            *[]*AddonInstance   `cbor:"9,keyasint,omitempty" json:"addons,omitempty"`
+	RequestsPerSecond *float64            `cbor:"10,keyasint,omitempty" json:"requests_per_second,omitempty"`
+	RequestStats      *[]*RequestStat     `cbor:"11,keyasint,omitempty" json:"request_stats,omitempty"`
+	TopPaths          *[]*PathStat        `cbor:"12,keyasint,omitempty" json:"top_paths,omitempty"`
 }
 
 type ApplicationStatus struct {
@@ -823,6 +997,53 @@ func (v *ApplicationStatus) Addons() []*AddonInstance {
 func (v *ApplicationStatus) SetAddons(addons []*AddonInstance) {
 	x := slices.Clone(addons)
 	v.data.Addons = &x
+}
+
+func (v *ApplicationStatus) HasRequestsPerSecond() bool {
+	return v.data.RequestsPerSecond != nil
+}
+
+func (v *ApplicationStatus) RequestsPerSecond() float64 {
+	if v.data.RequestsPerSecond == nil {
+		return 0
+	}
+	return *v.data.RequestsPerSecond
+}
+
+func (v *ApplicationStatus) SetRequestsPerSecond(requestsPerSecond float64) {
+	v.data.RequestsPerSecond = &requestsPerSecond
+}
+
+func (v *ApplicationStatus) HasRequestStats() bool {
+	return v.data.RequestStats != nil
+}
+
+func (v *ApplicationStatus) RequestStats() []*RequestStat {
+	if v.data.RequestStats == nil {
+		return nil
+	}
+	return *v.data.RequestStats
+}
+
+func (v *ApplicationStatus) SetRequestStats(requestStats []*RequestStat) {
+	x := slices.Clone(requestStats)
+	v.data.RequestStats = &x
+}
+
+func (v *ApplicationStatus) HasTopPaths() bool {
+	return v.data.TopPaths != nil
+}
+
+func (v *ApplicationStatus) TopPaths() []*PathStat {
+	if v.data.TopPaths == nil {
+		return nil
+	}
+	return *v.data.TopPaths
+}
+
+func (v *ApplicationStatus) SetTopPaths(topPaths []*PathStat) {
+	x := slices.Clone(topPaths)
+	v.data.TopPaths = &x
 }
 
 func (v *ApplicationStatus) MarshalCBOR() ([]byte, error) {

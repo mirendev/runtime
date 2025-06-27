@@ -181,7 +181,7 @@ func TestServer(t *testing.T) error {
 
 	aa := co.Activator()
 
-	hs := httpingress.NewServer(ctx, log, client, aa)
+	hs := httpingress.NewServer(ctx, log, client, aa, nil)
 
 	reg.Register("app-activator", aa)
 	reg.Register("resolver", res)
