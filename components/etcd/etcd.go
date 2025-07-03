@@ -18,16 +18,20 @@ import (
 	"github.com/containerd/containerd/v2/pkg/oci"
 	"github.com/opencontainers/runtime-spec/specs-go"
 	"golang.org/x/sys/unix"
+	"miren.dev/runtime/pkg/imagerefs"
 	"miren.dev/runtime/pkg/slogout"
 )
 
 const (
-	etcdImage           = "gcr.io/etcd-development/etcd:v3.5.15"
 	etcdContainerName   = "runtime-etcd"
 	etcdDataDir         = "/etcd-data"
 	defaultEtcdPort     = 12379 // Non-default port to avoid conflicts
 	defaultEtcdHTTPPort = 12381 // Non-default port to avoid conflicts
 	defaultPeerPort     = 12380 // Non-default port to avoid conflicts
+)
+
+var (
+	etcdImage = imagerefs.Etcd
 )
 
 type EtcdConfig struct {

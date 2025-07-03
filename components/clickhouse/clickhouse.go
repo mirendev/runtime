@@ -22,6 +22,7 @@ import (
 	"github.com/containerd/containerd/v2/pkg/oci"
 	"github.com/opencontainers/runtime-spec/specs-go"
 	"golang.org/x/sys/unix"
+	"miren.dev/runtime/pkg/imagerefs"
 	"miren.dev/runtime/pkg/slogout"
 )
 
@@ -32,7 +33,6 @@ var configTemplate string
 var usersTemplate string
 
 const (
-	clickhouseImage         = "docker.io/clickhouse/clickhouse-server:25.3"
 	clickhouseContainerName = "runtime-clickhouse"
 	clickhouseDataDir       = "/var/lib/clickhouse"
 	clickhouseLogDir        = "/var/log/clickhouse-server"
@@ -40,6 +40,10 @@ const (
 	defaultHTTPPort         = 8223 // Non-default port to avoid conflicts
 	defaultNativePort       = 9009 // Non-default port to avoid conflicts
 	defaultInterServerPort  = 9010 // Non-default port to avoid conflicts
+)
+
+var (
+	clickhouseImage = imagerefs.ClickHouse
 )
 
 type ClickHouseConfig struct {

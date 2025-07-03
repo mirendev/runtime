@@ -53,21 +53,25 @@ func init() {
 
 func (m *Runtime) WithServices(dir *dagger.Directory) *dagger.Container {
 	ch := dag.Container().
-		From("clickhouse/clickhouse-server:25.3").
+		From("oci.miren.cloud/clickhouse:v1").
 		WithEnvVariable("CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT", "1").
 		WithEnvVariable("CLICKHOUSE_PASSWORD", "default").
 		WithExposedPort(9000).
 		AsService()
 
 	etcd := dag.Container().
-		From("bitnami/etcd:3.5.19").
-		WithEnvVariable("ALLOW_NONE_AUTHENTICATION", "yes").
-		WithEnvVariable("ETCD_ADVERTISE_CLIENT_URLS", "http://etcd:2379").
+		From("oci.miren.cloud/etcd:v1").
 		WithExposedPort(2379).
-		AsService()
+		AsService(dagger.ContainerAsServiceOpts{
+			Args: []string{"etcd",
+				"--listen-client-urls", "http://0.0.0.0:2379",
+				"--advertise-client-urls", "http://etcd:2379",
+				"--initial-advertise-peer-urls", "http://localhost:2380",
+			},
+		})
 
 	minio := dag.Container().
-		From("quay.io/minio/minio:RELEASE.2025-04-03T14-56-28Z").
+		From("oci.miren.cloud/minio:v1").
 		WithEnvVariable("MINIO_ROOT_USER", "admin").
 		WithEnvVariable("MINIO_ROOT_PASSWORD", "password").
 		WithEnvVariable("MINIO_UPDATE", "off").
@@ -80,20 +84,6 @@ func (m *Runtime) WithServices(dir *dagger.Directory) *dagger.Container {
 		WithServiceBinding("clickhouse", ch).
 		WithServiceBinding("etcd", etcd).
 		WithServiceBinding("minio", minio)
-}
-
-func (m *Runtime) Etcd() *dagger.Container {
-	etcd := dag.Container().
-		From("bitnami/etcd:3.5.19").
-		WithEnvVariable("ALLOW_NONE_AUTHENTICATION", "yes").
-		WithEnvVariable("ETCD_ADVERTISE_CLIENT_URLS", "http://etcd:2379").
-		WithExposedPort(2379).
-		//WithExposedPort(2380).
-		AsService()
-
-	return dag.Container().
-		WithServiceBinding("etcd", etcd).
-		Terminal()
 }
 
 func (m *Runtime) BuildEnv(dir *dagger.Directory) *dagger.Container {
