@@ -158,7 +158,12 @@ func GenerateSchema(sf *schemaFile, pkg string) (string, error) {
 				}),
 		))
 
-		data, err := cbor.Marshal(ed)
+		// Using Core Deterministic Encoding options for CBOR makes sure this field doesn't generate unruly diffs
+		em, err := cbor.CoreDetEncOptions().EncMode()
+		if err != nil {
+			panic(fmt.Errorf("failed to make cbor encmode: %w", err))
+		}
+		data, err := em.Marshal(ed)
 		if err != nil {
 			panic(fmt.Errorf("failed to marshal encoded domain: %w", err))
 		}
