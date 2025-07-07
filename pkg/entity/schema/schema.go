@@ -250,6 +250,10 @@ func (s *SchemaBuilder) Time(name, id string, opts ...AttrOption) entity.Id {
 	return s.Attr(name, id, entity.TypeTime, opts...)
 }
 
+func (s *SchemaBuilder) Duration(name, id string, opts ...AttrOption) entity.Id {
+	return s.Attr(name, id, entity.TypeDuration, opts...)
+}
+
 func (s *SchemaBuilder) Enum(name, id string, values any, opts ...AttrOption) entity.Id {
 	opts = append(opts, AdditionalAttrs(
 		entity.Attr{ID: entity.EnumValues, Value: entity.ArrayValue(values)},
