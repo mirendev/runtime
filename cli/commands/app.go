@@ -118,6 +118,12 @@ func App(ctx *Context, opts struct {
 		mem: timeserieslinechart.New(60, 12,
 			timeserieslinechart.WithXLabelFormatter(MinuteLabeler),
 		),
+		rps: timeserieslinechart.New(60, 12,
+			timeserieslinechart.WithXLabelFormatter(MinuteLabeler),
+			timeserieslinechart.WithYLabelFormatter(func(i int, v float64) string {
+				return fmt.Sprintf("%.1f", v)
+			}),
+		),
 
 		status: status,
 		graph:  opts.Graph,
@@ -159,6 +165,7 @@ type Model struct {
 
 	cpu timeserieslinechart.Model
 	mem timeserieslinechart.Model
+	rps timeserieslinechart.Model
 	max float64
 
 	width        int
@@ -210,6 +217,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 			m.cpu.Resize(msg.Width, 12)
 			m.mem.Resize(msg.Width, 12)
+			m.rps.Resize(msg.Width, 12)
 		} else {
 			m.stack = false
 
@@ -217,6 +225,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 			m.cpu.Resize(width, 12)
 			m.mem.Resize(width, 12)
+			m.rps.Resize(msg.Width-4, 12) // Account for borders and padding
 		}
 	}
 
@@ -227,6 +236,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	m.cpu.Clear()
 	m.mem.Clear()
+	m.rps.Clear()
 
 	status := res.Status()
 	m.status = status
@@ -249,8 +259,22 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		})
 	}
 
+	// Add RPS data from request stats
+	if status.HasRequestStats() {
+		for _, s := range status.RequestStats() {
+			t := standard.FromTimestamp(s.Timestamp())
+			// Convert count per minute to requests per second
+			rps := float64(s.Count()) / 60.0
+			m.rps.Push(timeserieslinechart.TimePoint{
+				Time:  t,
+				Value: rps,
+			})
+		}
+	}
+
 	m.cpu.Draw()
 	m.mem.Draw()
+	m.rps.Draw()
 
 	if !m.watch || m.quitting {
 		return m, tea.Quit
@@ -454,6 +478,7 @@ func (m Model) View() string {
 		body = lipgloss.JoinVertical(lipgloss.Top,
 			defaultStyle.Render(titleStyle.Render("   CPU (cores)")+"\n"+m.cpu.View()),
 			defaultStyle.Render(titleStyle.Render("   Memory (MB)")+"\n"+m.mem.View()),
+			defaultStyle.Render(titleStyle.Render("   Requests/sec")+"\n"+m.rps.View()),
 		)
 		footer =
 			lipgloss.NewStyle().Width(m.width).Align(lipgloss.Right).Render(
@@ -461,9 +486,14 @@ func (m Model) View() string {
 			)
 
 	} else {
-		body = lipgloss.JoinHorizontal(lipgloss.Top,
+		// In horizontal mode, show CPU and Memory side by side, RPS below
+		topRow := lipgloss.JoinHorizontal(lipgloss.Top,
 			defaultStyle.Render(titleStyle.Render("   CPU (cores)")+"\n"+m.cpu.View()),
 			defaultStyle.Render(titleStyle.Render("   Memory (MB)")+"\n"+m.mem.View()),
+		)
+		body = lipgloss.JoinVertical(lipgloss.Top,
+			topRow,
+			defaultStyle.Render(titleStyle.Render("   Requests/sec")+"\n"+m.rps.View()),
 		)
 		footer =
 			lipgloss.NewStyle().Width(m.width - 3).Align(lipgloss.Right).Faint(true).Render(
