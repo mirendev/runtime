@@ -1,6 +1,8 @@
 package core_v1alpha
 
 import (
+	"time"
+
 	entity "miren.dev/runtime/pkg/entity"
 	schema "miren.dev/runtime/pkg/entity/schema"
 	types "miren.dev/runtime/pkg/entity/types"
@@ -329,35 +331,71 @@ func (o *Commands) InitSchema(sb *schema.SchemaBuilder) {
 }
 
 const (
+	ConcurrencyMaxInstancesId        = entity.Id("dev.miren.core/concurrency.max_instances")
+	ConcurrencyMinInstancesId        = entity.Id("dev.miren.core/concurrency.min_instances")
 	ConcurrencyRequestsPerInstanceId = entity.Id("dev.miren.core/concurrency.requests_per_instance")
+	ConcurrencyScaleDownDelayId      = entity.Id("dev.miren.core/concurrency.scale_down_delay")
 )
 
 type Concurrency struct {
-	RequestsPerInstance int64 `cbor:"requests_per_instance,omitempty" json:"requests_per_instance,omitempty"`
+	MaxInstances        int64         `cbor:"max_instances,omitempty" json:"max_instances,omitempty"`
+	MinInstances        int64         `cbor:"min_instances,omitempty" json:"min_instances,omitempty"`
+	RequestsPerInstance int64         `cbor:"requests_per_instance,omitempty" json:"requests_per_instance,omitempty"`
+	ScaleDownDelay      time.Duration `cbor:"scale_down_delay,omitempty" json:"scale_down_delay,omitempty"`
 }
 
 func (o *Concurrency) Decode(e entity.AttrGetter) {
+	if a, ok := e.Get(ConcurrencyMaxInstancesId); ok && a.Value.Kind() == entity.KindInt64 {
+		o.MaxInstances = a.Value.Int64()
+	}
+	if a, ok := e.Get(ConcurrencyMinInstancesId); ok && a.Value.Kind() == entity.KindInt64 {
+		o.MinInstances = a.Value.Int64()
+	}
 	if a, ok := e.Get(ConcurrencyRequestsPerInstanceId); ok && a.Value.Kind() == entity.KindInt64 {
 		o.RequestsPerInstance = a.Value.Int64()
+	}
+	if a, ok := e.Get(ConcurrencyScaleDownDelayId); ok && a.Value.Kind() == entity.KindDuration {
+		o.ScaleDownDelay = a.Value.Duration()
 	}
 }
 
 func (o *Concurrency) Encode() (attrs []entity.Attr) {
+	if !entity.Empty(o.MaxInstances) {
+		attrs = append(attrs, entity.Int64(ConcurrencyMaxInstancesId, o.MaxInstances))
+	}
+	if !entity.Empty(o.MinInstances) {
+		attrs = append(attrs, entity.Int64(ConcurrencyMinInstancesId, o.MinInstances))
+	}
 	if !entity.Empty(o.RequestsPerInstance) {
 		attrs = append(attrs, entity.Int64(ConcurrencyRequestsPerInstanceId, o.RequestsPerInstance))
+	}
+	if !entity.Empty(o.ScaleDownDelay) {
+		attrs = append(attrs, entity.Duration(ConcurrencyScaleDownDelayId, o.ScaleDownDelay))
 	}
 	return
 }
 
 func (o *Concurrency) Empty() bool {
+	if !entity.Empty(o.MaxInstances) {
+		return false
+	}
+	if !entity.Empty(o.MinInstances) {
+		return false
+	}
 	if !entity.Empty(o.RequestsPerInstance) {
+		return false
+	}
+	if !entity.Empty(o.ScaleDownDelay) {
 		return false
 	}
 	return true
 }
 
 func (o *Concurrency) InitSchema(sb *schema.SchemaBuilder) {
-	sb.Int64("requests_per_instance", "dev.miren.core/concurrency.requests_per_instance", schema.Doc("How many simultaneous requests this app can handle. An additional copy will be launched when more than this number of requests comes in concurrently. Defaults to 80."))
+	sb.Int64("max_instances", "dev.miren.core/concurrency.max_instances", schema.Doc("The maximum number of copies to launch. Defaults to 0, which means no limit."))
+	sb.Int64("min_instances", "dev.miren.core/concurrency.min_instances", schema.Doc("The minimum number of warm copies of the app to keep running. Defaults to 0."))
+	sb.Int64("requests_per_instance", "dev.miren.core/concurrency.requests_per_instance", schema.Doc("How many simultaneous requests this app can handle. An additional copy will be launched when more than this number of requests comes in concurrently. Defaults to 0 (unlimited concurrency, no auto scale up)."))
+	sb.Duration("scale_down_delay", "dev.miren.core/concurrency.scale_down_delay", schema.Doc("How long to wait before shutting down an idle instance. An instance is considered idle when it's not handling any requests. Defaults to 2 minutes."))
 }
 
 const (
@@ -634,5 +672,5 @@ func init() {
 		(&Metadata{}).InitSchema(sb)
 		(&Project{}).InitSchema(sb)
 	})
-	schema.RegisterEncodedSchema("dev.miren.core", "v1alpha", []byte("\x1f\x8b\b\x00\x00\x00\x00\x00\x00\xff\xa4V\xdbn\xd4<\x10~\x8f\xff\xe7\f\x12R%\x02<Q\xe4\xb5'Yw\x13\xdb\xd8\u07b4{\t\b\xf1 myC\xb8F>\x8c7\xf5:\x89Un\"\x1f\xf2}\x9e\xf9f<\x9e{&\xc8\b\x82\xc1Ԍ\\\x83h\xa8\xd4\x00\a.\x98y\xb8y\xbc\xfaѭ6D\xa9_\x1e\xa3\xb3]\xa2T\xc0\xfd\xe9\x98\x1c\t\x17\x19i\xd7q\x18\x98\xf9v\xb7\xe3\xec\xf6\xf5%\xb8!\xd4\xf2\t\xda\t\xb4\xe1R\x04\xbb\xb25{R\xb0\xe3\xccS\xfcW\xa0PZ^\x03\xb5\x1e\xdb\xe3$\x82\xfaH\xd2O\x9fɠ\xf6dP\x9a\x8fD\x9fZg4%J\xdd\xfe_\xf27\xb2\x04\x9f\xa7쏸Y\xe3\xf7Wo\xf4\xb32A#o\x04h\x7f\x04\x84\xa13\xba3Vsѯ\x1a\x8e^^0\x87`i\xcb;\x82\xd6\xe7\xf1\xc4\xdd\x1a\xf3\xbf{\xf3s\x85\x90\xc1e\x85?\xc2\xe9\xf8(J\xaf\x96\x10#\x11\xbc\x03\x13b\xb5O\xb3\x99\xdf\x1e\xff~\v\xdf2\xde#\x8d\xcc\x17kU\xdc#mY\xc6\x11,aĒ\xb2\x8c\xb8[%\xe3\xbds\xea\xc5\x02C3\x90\x1d\f\x86\x8dD\x9c~\xfb\xb3\xba\xb8\xe2\x1c\x01?.\xa6Q\"p\x18v\xfe\xe4j\xbe\\\xc2=\xf9\xe2\xec\x91\xe2\x82\x1b\xab\x05^\xde ^\xe9\xda\xe2\x1f5\x02\xfe\xbc+\t8#YNŷk\xa0\x18\xff\x90\x8di\x16\xe1\xf7\v%+\xc1\xa9\x14\x1d\xefC\xc4\xe2\xd8A9\x95\xa3\x92\x02\x84=\x8f\xa2\f\x19[s\xc9V\xa3Ə\x87\x92\x1a\x01\xdfP9\x8eD\xb0y:\xed\xd3چyW\x9b\xe6%\xfa\xfa\xa2\x9fg\b2 U\xc8>\x9cl\xe5nB\x1b\xd0\x13\xa7!\xe3{\x9cT\xdf|\xa4)\xc68\xb9*\xe8Qk\x10\xf4\xe4O9\xcc\x176\x94\xfcP\xa3db\xab\x7fI>]\x9a\x8a$\x8d\x86/G0ִ\nt˅\xb1DD}\x8e\xe5-\xe7\x03\xe5®J5\xf7\xbaXۣ; \xac>)\xc9E\xb8M׳y\x1eӼ\x18D\x06%u\xc02?B\xeb֒}\"\x9a\x93\xdd\x00\xf3dOk\xff\x9e\xecH\xf5\xf4\xa7\x12\x19\x9a\x03\x84$\xa2n\x90\v\x92'`B\x19\x10\x86\xbb^\xc8c\xf9y\xea\x18\xd8N\xca\xf00<_\xc2Od8\x06,\x84a\xf5\x05A\x8aտb\xd5\xf36\xbc[)\x94|$=\xb4G=\x047\xce\xd3\\\x88\xb5b]\xd9:\\UP\xd4v\x0f\x9e\xf0\xcd\n\xe1\xbck\xed\xe7\xedj\x8dƇ\x19S\xfe\xe3\xc1쥶m\xe8\xc8ݛ\xb6ԕ\xa7Np\xad\x8d\xddhtp\xf7\xfc\xaa\xaf\xf6Cs\xbb7\xdf\xff\xbf\x00\x00\x00\xff\xff\x01\x00\x00\xff\xff\xda\x02\xf6\xe3j\f\x00\x00"))
+	schema.RegisterEncodedSchema("dev.miren.core", "v1alpha", []byte("\x1f\x8b\b\x00\x00\x00\x00\x00\x00\xff\xa4\x97ێ\xdb \x10\x86ߣ\xe7\x93\xd4j\xab\xba\xed\x13Y\x13\x18\xdbll\xa0@\xbc\x9b˞\xd4\a\xd9l߰\xbd\xae\x00C\x1c|Bۛ\b\x06\xff\x9f\x87\x99\x01ON\x94C\x87\x9cb_tL!/\x88P\x88{Ʃ\xbe\xbf\xb9\xb4~\xb4\xd6\x02\xa4\xfc\xed4*Y\x05)\xbd\xeeoEE\a\x8c'Ъb\xd8R\xfd\xedn\xc7\xe8\xed˩\xb8\x00bX\x8fe\x8fJ3\xc1\xbd_\x89\xcd\x1c%\xee\x18u\x88G3\b\xa9\xc45\x12\xe3\xb4u\x98\f\xa2z\x80\xd4\xfdghe\x03\xadT\xac\x03u,\xad\xd3\x04\xa4\xbc}<\xb7߁\xe2\xf7\xdc'O\f\x8b9\xfb\xfe\xea\x9c~2\x0f(\xc4\rG\xe5^\x81~h\x9d\xae\xb4Q\x8c\u05eb\x8e\x87]N\xc8>Yʰ\n\x82\xf7i>\xc3j\x8e\xfbߝ\xfbi\x84\x02\xc1V\x85{\x85\x8d\xe3E\x96^,):\xe0\xacB\xeds\xd5\xc4\xd9h\xdfN\xffvK_RV\a\x8cH\x8d\xb9Ql\x02v>\x8c\x1d\x1a\xa0``>\x8ca5+\x8c'\xbb\xa9g\v\x84\xa2\x85\x1d\xb6\x9av\xc0\x8f\x7fܻ\xaa\xc1b7\x82n<[F\x11`5\xf4\xfc\x93F\xf3\xf9\x92\xee\xc1\a\xa7\t\x88\t;\xdc\x16\xe1\xf0\xfa\xe0\xcd\x1d\xdb\xf0DN\x00\x7f\xdd\xcd\x05p\x04Y.\xc5\xd7k\xa2!\xff\xbe\x1a\xe3l\x90\x9f\x16\xae\xac('\x82W\xac\xf6\x19\x1b\xc6Vʈ\xe8\xa4\xe0\xc8\xcdy4\x84!\xa1\x15SZN4~\xde\xcfE\xc3\xeb\v\"\xba\x0e8\x1d\x97S\x13m\x1b\xee]m\xba\x17\xf1\xf9\x97~Z!\x81\x10P\xbe\xfa\xc2d\xabv\xa3Z\xa3\xea\x19\xf1\x15_\x87I\xf6\xc9\x0f\x98\xd9\x1cǭrrP\n99\xba\xb7\xecǆ\x8dH~ȉd\xa4\xe5\x04\xf3\x87\vǻ\xa9\xab\x01Rtp[2\xae\rp\x82ڹ\xd1]\x9a\xacτq\xb3Mb|B\xba0]\x90>\xad\x90\x14~9\xa06\xba\x94\xa8\xa2\xde\x11\x0f\xf3K\x17\xe4\xf7+dM\xa0Œ\x8a\x1b^Rl\xc1\xa7HN\xac\x96\xd7Ѓ\x02\xe3ja\xa5&\xc6\xe9\x9d\xfd\x88\ryCn\xd4Q\n\xc6\xfd\xb5q=\x9a\xa7ś\xdez\x03A\n\xe5\xb5ԍ\u0096\xd7Nu\x0f\x8a\xc1\xae\xc5\U000693b6\xff?\xd5\x01\xf5\xf0\x9e \x10\x8a=\xfaT\x10;H\x03\x92\x9e\xb4\xa8\xd2\xc85\xb3M\x9fӲ\xf3\xd4\x12\xe8N\b\xff\x05|\xba\xa4\xef\xa1=x-\xfaa\xf6M\x10\x10\xabO\r\u05fb\xf3\xe1\xcd\xca\x17\x81uPcyP\xad\xdf\xc6y\x9a\x06b\xed\xab\x94\xd9#]e r\xdb$\a|\xb5\x02\x1c\xb7\xe7\xf5\xb8/ω\xf1~DJ\x1f\xdc\xebF(S\xfa\xbf\x1e\xf6\xe3\xbd\xf4\xf7#\xb6\xbck\xfd\xfaFG\x17V\xcf\xed\xcbj\xe37\xf6{\xb3\xd1\xf9\a\x00\x00\xff\xff\x01\x00\x00\xff\xffJA\x060S\r\x00\x00"))
 }

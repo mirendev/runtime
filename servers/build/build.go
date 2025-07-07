@@ -20,7 +20,6 @@ import (
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/appconfig"
 	"miren.dev/runtime/components/netresolve"
-	"miren.dev/runtime/defaults"
 	"miren.dev/runtime/pkg/cond"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/idgen"
@@ -85,8 +84,6 @@ func (b *Builder) nextVersion(ctx context.Context, name string) (
 		}
 
 		currentCfg = verRec.Config
-	} else {
-		currentCfg.Concurrency.RequestsPerInstance = defaults.Concurrency
 	}
 
 	ver := name + "-" + idgen.Gen("v")

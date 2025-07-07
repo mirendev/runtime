@@ -100,6 +100,11 @@ func (a *localActivator) AcquireLease(ctx context.Context, ver *core_v1alpha.App
 
 	if !ok {
 		a.log.Info("creating new sandbox for app", "app", ver.App, "version", ver.Version, "pool", pool, "key", key)
+		// Check max_instances before creating first sandbox
+		maxInstances := int(ver.Config.Concurrency.MaxInstances)
+		if maxInstances > 0 && 1 > maxInstances {
+			return nil, fmt.Errorf("cannot create sandbox: would exceed max_instances limit of %d", maxInstances)
+		}
 		return a.activateApp(ctx, ver, pool, service)
 	}
 
@@ -131,6 +136,12 @@ func (a *localActivator) AcquireLease(ctx context.Context, ver *core_v1alpha.App
 		// of what the sandboxes can fulfill, it's best to just boot a new sandbox anyway.
 
 		a.log.Info("no space in existing sandboxes, creating new sandbox for app", "app", ver.App, "version", ver.Version)
+	}
+
+	// Check max_instances before creating additional sandbox
+	maxInstances := int(ver.Config.Concurrency.MaxInstances)
+	if maxInstances > 0 && len(vs.sandboxes) >= maxInstances {
+		return nil, fmt.Errorf("cannot create sandbox: already at max_instances limit of %d", maxInstances)
 	}
 
 	return a.activateApp(ctx, ver, pool, service)
@@ -338,6 +349,7 @@ func (a *localActivator) InBackground(ctx context.Context) {
 		select {
 		case <-ticker.C:
 			a.retireUnusedSandboxes()
+			a.ensureMinInstances(ctx)
 		case <-ctx.Done():
 			return
 		}
@@ -350,9 +362,21 @@ func (a *localActivator) retireUnusedSandboxes() {
 
 	for _, vs := range a.versions {
 		var newSandboxes []*sandbox
+		minInstances := int(vs.ver.Config.Concurrency.MinInstances)
 
 		for _, sb := range vs.sandboxes {
-			if time.Since(sb.lastRenewal) > 2*time.Minute {
+			scaleDownDelay := vs.ver.Config.Concurrency.ScaleDownDelay
+			if scaleDownDelay == 0 {
+				scaleDownDelay = 2 * time.Minute // default
+			}
+
+			// Don't retire if we're at or below min_instances
+			if len(vs.sandboxes) <= minInstances {
+				newSandboxes = append(newSandboxes, sb)
+				continue
+			}
+
+			if time.Since(sb.lastRenewal) > scaleDownDelay {
 				a.log.Debug("retiring unused sandbox", "app", vs.ver.App, "sandbox", sb.sandbox.ID)
 
 				if sb.sandbox.Status != compute_v1alpha.RUNNING {
@@ -381,5 +405,57 @@ func (a *localActivator) retireUnusedSandboxes() {
 		}
 
 		vs.sandboxes = newSandboxes
+	}
+}
+
+func (a *localActivator) ensureMinInstances(ctx context.Context) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	for key, vs := range a.versions {
+		minInstances := int(vs.ver.Config.Concurrency.MinInstances)
+		if minInstances <= 0 {
+			continue
+		}
+
+		maxInstances := int(vs.ver.Config.Concurrency.MaxInstances)
+
+		// Count running sandboxes
+		runningCount := 0
+		for _, sb := range vs.sandboxes {
+			if sb.sandbox.Status == compute_v1alpha.RUNNING {
+				runningCount++
+			}
+		}
+
+		// Create additional sandboxes if needed
+		for i := runningCount; i < minInstances; i++ {
+			// Don't exceed max_instances if set
+			if maxInstances > 0 && len(vs.sandboxes) >= maxInstances {
+				a.log.Warn("cannot create sandbox for min_instances: would exceed max_instances",
+					"app", vs.ver.App,
+					"min", minInstances,
+					"max", maxInstances,
+					"current", len(vs.sandboxes))
+				break
+			}
+			a.log.Info("creating sandbox to meet min_instances",
+				"app", vs.ver.App,
+				"version", vs.ver.Version,
+				"current", runningCount,
+				"min", minInstances)
+
+			// Unlock during activation to avoid deadlock
+			a.mu.Unlock()
+			_, err := a.activateApp(ctx, vs.ver, key.pool, "")
+			a.mu.Lock()
+
+			if err != nil {
+				a.log.Error("failed to create sandbox for min_instances",
+					"app", vs.ver.App,
+					"error", err)
+				break
+			}
+		}
 	}
 }

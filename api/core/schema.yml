@@ -79,7 +79,16 @@ kinds:
           attrs:
             requests_per_instance:
               type: int
-              doc: How many simultaneous requests this app can handle. An additional copy will be launched when more than this number of requests comes in concurrently. Defaults to 80.
+              doc: How many simultaneous requests this app can handle. An additional copy will be launched when more than this number of requests comes in concurrently. Defaults to 0 (unlimited concurrency, no auto scale up).
+            min_instances:
+              type: int
+              doc: The minimum number of warm copies of the app to keep running. Defaults to 0.
+            max_instances:
+              type: int
+              doc: The maximum number of copies to launch. Defaults to 0, which means no limit.
+            scale_down_delay:
+              type: duration
+              doc: How long to wait before shutting down an idle instance. An instance is considered idle when it's not handling any requests. Defaults to 2 minutes.
         entrypoint:
           type: string
           doc: The container entrypoint command
