@@ -124,6 +124,12 @@ func App(ctx *Context, opts struct {
 				return fmt.Sprintf("%.1f", v)
 			}),
 		),
+		errorRate: timeserieslinechart.New(60, 12,
+			timeserieslinechart.WithXLabelFormatter(MinuteLabeler),
+			timeserieslinechart.WithYLabelFormatter(func(i int, v float64) string {
+				return fmt.Sprintf("%.1f%%", v)
+			}),
+		),
 
 		status: status,
 		graph:  opts.Graph,
@@ -163,10 +169,11 @@ type Model struct {
 	status *app_v1alpha.ApplicationStatus
 	watch  bool
 
-	cpu timeserieslinechart.Model
-	mem timeserieslinechart.Model
-	rps timeserieslinechart.Model
-	max float64
+	cpu       timeserieslinechart.Model
+	mem       timeserieslinechart.Model
+	rps       timeserieslinechart.Model
+	errorRate timeserieslinechart.Model
+	max       float64
 
 	width        int
 	stack, graph bool
@@ -218,6 +225,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.cpu.Resize(msg.Width, 12)
 			m.mem.Resize(msg.Width, 12)
 			m.rps.Resize(msg.Width, 12)
+			m.errorRate.Resize(msg.Width, 12)
 		} else {
 			m.stack = false
 
@@ -225,7 +233,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 			m.cpu.Resize(width, 12)
 			m.mem.Resize(width, 12)
-			m.rps.Resize(msg.Width-4, 12) // Account for borders and padding
+			m.rps.Resize(width, 12)
+			m.errorRate.Resize(width, 12)
 		}
 	}
 
@@ -237,6 +246,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	m.cpu.Clear()
 	m.mem.Clear()
 	m.rps.Clear()
+	m.errorRate.Clear()
 
 	status := res.Status()
 	m.status = status
@@ -259,7 +269,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		})
 	}
 
-	// Add RPS data from request stats
+	// Add RPS and error rate data from request stats
 	if status.HasRequestStats() {
 		for _, s := range status.RequestStats() {
 			t := standard.FromTimestamp(s.Timestamp())
@@ -269,12 +279,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				Time:  t,
 				Value: rps,
 			})
+			// Error rate as percentage
+			m.errorRate.Push(timeserieslinechart.TimePoint{
+				Time:  t,
+				Value: s.ErrorRate() * 100,
+			})
 		}
 	}
 
 	m.cpu.Draw()
 	m.mem.Draw()
 	m.rps.Draw()
+	m.errorRate.Draw()
 
 	if !m.watch || m.quitting {
 		return m, tea.Quit
@@ -405,16 +421,27 @@ func (m Model) View() string {
 			var httpLines []string
 			httpLines = append(httpLines, titleStyle.Render("HTTP Stats"))
 
-			// Add current RPS
+			// Add current RPS and latest percentiles
 			if m.status.HasRequestsPerSecond() {
 				rpsStr := fmt.Sprintf("%.2f", m.status.RequestsPerSecond())
 				httpLines = append(httpLines, fmt.Sprintf("Current: %s RPS (last minute)", bold.Render(rpsStr)))
+
+				// Show latest percentiles if available
+				if m.status.HasRequestStats() && len(m.status.RequestStats()) > 0 {
+					latest := m.status.RequestStats()[len(m.status.RequestStats())-1]
+					if latest.HasP95DurationMs() && latest.HasP99DurationMs() {
+						httpLines = append(httpLines, fmt.Sprintf("Latency: %s avg, %s P95, %s P99",
+							bold.Render(fmt.Sprintf("%dms", int(latest.AvgDurationMs()))),
+							bold.Render(fmt.Sprintf("%dms", int(latest.P95DurationMs()))),
+							bold.Render(fmt.Sprintf("%dms", int(latest.P99DurationMs())))))
+					}
+				}
 				httpLines = append(httpLines, "") // blank line
 			}
 
 			// Add hourly stats
 			if m.status.HasRequestStats() && len(m.status.RequestStats()) > 0 {
-				httpLines = append(httpLines, "Last hour:")
+				httpLines = append(httpLines, "Recent activity:")
 
 				// Get last 5 entries
 				stats := m.status.RequestStats()
@@ -425,15 +452,56 @@ func (m Model) View() string {
 
 				for _, s := range stats[startIdx:] {
 					t := standard.FromTimestamp(s.Timestamp())
-					errorRateStr := fmt.Sprintf("%.1f%%", s.ErrorRate()*100)
-					if s.ErrorRate() == 0 {
-						errorRateStr = "0%"
+
+					// Parenthetical style format
+					errorStr := ""
+					if s.ErrorRate() > 0 {
+						errorStr = fmt.Sprintf(" | %s errors", bold.Render(fmt.Sprintf("%.1f%%", s.ErrorRate()*100)))
 					}
-					line := fmt.Sprintf("%s: %d reqs, %dms avg, %s errors",
+
+					httpLines = append(httpLines, fmt.Sprintf("  %s: %s reqs | %sms avg (P95: %sms, P99: %sms)%s",
 						t.Format(of),
-						s.Count(),
-						int(s.AvgDurationMs()),
-						errorRateStr)
+						bold.Render(fmt.Sprintf("%d", s.Count())),
+						bold.Render(fmt.Sprintf("%d", int(s.AvgDurationMs()))),
+						bold.Render(fmt.Sprintf("%d", int(s.P95DurationMs()))),
+						bold.Render(fmt.Sprintf("%d", int(s.P99DurationMs()))),
+						errorStr))
+				}
+			}
+
+			// Add error breakdown if available
+			if m.status.HasErrorBreakdown() && len(m.status.ErrorBreakdown()) > 0 {
+				httpLines = append(httpLines, "") // blank line
+				httpLines = append(httpLines, "Error breakdown (last hour):")
+
+				for _, e := range m.status.ErrorBreakdown() {
+					statusText := fmt.Sprintf("%d", e.StatusCode())
+					// Add common status code descriptions
+					switch e.StatusCode() {
+					case 400:
+						statusText += " Bad Request"
+					case 401:
+						statusText += " Unauthorized"
+					case 403:
+						statusText += " Forbidden"
+					case 404:
+						statusText += " Not Found"
+					case 429:
+						statusText += " Too Many Requests"
+					case 500:
+						statusText += " Internal Error"
+					case 502:
+						statusText += " Bad Gateway"
+					case 503:
+						statusText += " Service Unavail"
+					case 504:
+						statusText += " Gateway Timeout"
+					}
+
+					line := fmt.Sprintf("  %-20s (%d reqs, %.1f%%)",
+						statusText,
+						e.Count(),
+						e.Percentage())
 					httpLines = append(httpLines, line)
 				}
 			}
@@ -479,6 +547,7 @@ func (m Model) View() string {
 			defaultStyle.Render(titleStyle.Render("   CPU (cores)")+"\n"+m.cpu.View()),
 			defaultStyle.Render(titleStyle.Render("   Memory (MB)")+"\n"+m.mem.View()),
 			defaultStyle.Render(titleStyle.Render("   Requests/sec")+"\n"+m.rps.View()),
+			defaultStyle.Render(titleStyle.Render("   Error Rate %")+"\n"+m.errorRate.View()),
 		)
 		footer =
 			lipgloss.NewStyle().Width(m.width).Align(lipgloss.Right).Render(
@@ -486,14 +555,18 @@ func (m Model) View() string {
 			)
 
 	} else {
-		// In horizontal mode, show CPU and Memory side by side, RPS below
+		// In horizontal mode, show CPU and Memory side by side, RPS and Error Rate side by side
 		topRow := lipgloss.JoinHorizontal(lipgloss.Top,
 			defaultStyle.Render(titleStyle.Render("   CPU (cores)")+"\n"+m.cpu.View()),
 			defaultStyle.Render(titleStyle.Render("   Memory (MB)")+"\n"+m.mem.View()),
 		)
+		bottomRow := lipgloss.JoinHorizontal(lipgloss.Top,
+			defaultStyle.Render(titleStyle.Render("   Requests/sec")+"\n"+m.rps.View()),
+			defaultStyle.Render(titleStyle.Render("   Error Rate %")+"\n"+m.errorRate.View()),
+		)
 		body = lipgloss.JoinVertical(lipgloss.Top,
 			topRow,
-			defaultStyle.Render(titleStyle.Render("   Requests/sec")+"\n"+m.rps.View()),
+			bottomRow,
 		)
 		footer =
 			lipgloss.NewStyle().Width(m.width - 3).Align(lipgloss.Right).Faint(true).Render(

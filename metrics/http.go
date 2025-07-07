@@ -277,6 +277,55 @@ func (h *HTTPMetrics) TopPaths(app string, limit int) ([]PathStats, error) {
 	return paths, nil
 }
 
+// ErrorBreakdown represents error counts by status code
+type ErrorBreakdown struct {
+	StatusCode int
+	Count      int64
+	Percentage float64
+}
+
+// ErrorsLastHour returns breakdown of errors by status code for the last hour
+func (h *HTTPMetrics) ErrorsLastHour(app string) ([]ErrorBreakdown, error) {
+	query := `
+		SELECT
+			status_code,
+			count(*) as count
+		FROM http_requests
+		WHERE app = ? AND timestamp > now() - INTERVAL 1 HOUR AND status_code >= 400
+		GROUP BY status_code
+		ORDER BY count DESC
+	`
+
+	rows, err := h.DB.Query(query, app)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query error breakdown: %w", err)
+	}
+	defer rows.Close()
+
+	var errors []ErrorBreakdown
+	var totalErrors int64
+
+	// First pass to collect data and count total
+	for rows.Next() {
+		var e ErrorBreakdown
+		err := rows.Scan(&e.StatusCode, &e.Count)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan error breakdown: %w", err)
+		}
+		totalErrors += e.Count
+		errors = append(errors, e)
+	}
+
+	// Calculate percentages
+	if totalErrors > 0 {
+		for i := range errors {
+			errors[i].Percentage = float64(errors[i].Count) / float64(totalErrors) * 100
+		}
+	}
+
+	return errors, nil
+}
+
 // Close stops the background flush routine and flushes remaining data
 func (h *HTTPMetrics) Close() error {
 	if h.cancel != nil {
