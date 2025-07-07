@@ -94,7 +94,6 @@ spec:
   app: app/nginx
   version: abcdef
   image_url: docker.io/library/nginx:latest
-  concurrency: 10
   config:
     port: 80
 ---

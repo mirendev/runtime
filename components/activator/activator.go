@@ -248,10 +248,10 @@ func (a *localActivator) activateApp(ctx context.Context, ver *core_v1alpha.AppV
 
 	var leaseSlots int
 
-	if ver.Config.Concurrency.Fixed <= 0 {
+	if ver.Config.Concurrency.RequestsPerInstance <= 0 {
 		leaseSlots = 1
 	} else {
-		leaseSlots = int(float32(ver.Config.Concurrency.Fixed) * 0.20)
+		leaseSlots = int(float32(ver.Config.Concurrency.RequestsPerInstance) * 0.20)
 
 		if leaseSlots < 1 {
 			leaseSlots = 1
@@ -263,7 +263,7 @@ func (a *localActivator) activateApp(ctx context.Context, ver *core_v1alpha.AppV
 		ent:         sbEnt,
 		lastRenewal: time.Now(),
 		url:         addr,
-		maxSlots:    int(ver.Config.Concurrency.Fixed),
+		maxSlots:    int(ver.Config.Concurrency.RequestsPerInstance),
 		inuseSlots:  leaseSlots,
 	}
 

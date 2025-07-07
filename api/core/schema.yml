@@ -77,12 +77,9 @@ kinds:
           type: component
           doc: How to control the concurrency for the application
           attrs:
-            fixed:
+            requests_per_instance:
               type: int
-              doc: How concurrent requests this app can handle
-            auto:
-              type: int
-              doc: How to scale the application based on the node
+              doc: How many simultaneous requests this app can handle. An additional copy will be launched when more than this number of requests comes in concurrently. Defaults to 80.
         entrypoint:
           type: string
           doc: The container entrypoint command

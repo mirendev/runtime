@@ -86,7 +86,7 @@ func (b *Builder) nextVersion(ctx context.Context, name string) (
 
 		currentCfg = verRec.Config
 	} else {
-		currentCfg.Concurrency.Fixed = defaults.Concurrency
+		currentCfg.Concurrency.RequestsPerInstance = defaults.Concurrency
 	}
 
 	ver := name + "-" + idgen.Gen("v")
