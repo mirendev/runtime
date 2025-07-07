@@ -1,0 +1,29 @@
+kind: dev.miren.core/app
+version: v1alpha
+metadata:
+  name: wordle
+spec:
+  project: project/default
+---
+kind: dev.miren.core/app_version
+version: v1alpha
+metadata:
+  name: wordle-v1
+spec:
+  app: app/wordle
+  version: v1
+  image_url: ghcr.io/clupasq/word-mastermind:0.0.1
+  config:
+    port: 80
+    concurrency:
+      # Keeps all games in memory, so requires a single instance
+      min_instances: 1
+      max_instances: 1
+---
+kind: dev.miren.core/app
+version: v1alpha
+metadata:
+  name: wordle
+spec:
+  project: project/default
+  active_version: app_version/wordle-v1
