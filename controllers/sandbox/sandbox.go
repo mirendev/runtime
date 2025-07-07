@@ -35,6 +35,7 @@ import (
 	"miren.dev/runtime/observability"
 	"miren.dev/runtime/pkg/containerdx"
 	"miren.dev/runtime/pkg/entity"
+	"miren.dev/runtime/pkg/imagerefs"
 	"miren.dev/runtime/pkg/netdb"
 
 	compute "miren.dev/runtime/api/compute/compute_v1alpha"
@@ -48,7 +49,7 @@ const (
 	defaultSandboxOOMAdj = -998
 )
 
-const sandboxImage = "registry.k8s.io/pause:3.8"
+var sandboxImage = imagerefs.Pause
 
 type containerPorts struct {
 	Ports []observability.BoundPort

@@ -14,6 +14,7 @@ import (
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/types"
 	"miren.dev/runtime/pkg/idgen"
+	"miren.dev/runtime/pkg/imagerefs"
 )
 
 type LaunchBuildkit struct {
@@ -119,7 +120,7 @@ func (l *LaunchBuildkit) Launch(ctx context.Context, addr string, lo ...LaunchOp
 	})
 	sb.Container = append(sb.Container, compute_v1alpha.Container{
 		Name:       "app",
-		Image:      "ghcr.io/mirendev/buildkit:latest",
+		Image:      imagerefs.BuildKit,
 		Privileged: true,
 		Port: []compute_v1alpha.Port{
 			{

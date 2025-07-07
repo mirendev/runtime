@@ -14,6 +14,7 @@ import (
 	"github.com/moby/buildkit/client/llb/imagemetaresolver"
 	"github.com/moby/buildkit/util/system"
 	ocispecs "github.com/opencontainers/image-spec/specs-go/v1"
+	"miren.dev/runtime/pkg/imagerefs"
 )
 
 // BuildOptions contains configuration for stack builds
@@ -318,7 +319,7 @@ func (s *RubyStack) GenerateLLB(dir string, opts BuildOptions) (*llb.State, erro
 	if opts.Version != "" {
 		version = opts.Version
 	}
-	base := llb.Image(fmt.Sprintf("ruby:%s-slim", version), llb.WithMetaResolver(mr))
+	base := llb.Image(imagerefs.GetRubyImage(version), llb.WithMetaResolver(mr))
 
 	base = s.addAppUser(base)
 
@@ -417,7 +418,7 @@ func (s *PythonStack) GenerateLLB(dir string, opts BuildOptions) (*llb.State, er
 		version = opts.Version
 	}
 
-	base := llb.Image(fmt.Sprintf("python:%s-slim", version))
+	base := llb.Image(imagerefs.GetPythonImage(version))
 
 	base = s.addAppUser(base)
 
@@ -606,7 +607,7 @@ func (s *BunStack) GenerateLLB(dir string, opts BuildOptions) (*llb.State, error
 	if opts.Version != "" {
 		version = opts.Version
 	}
-	base := llb.Image(fmt.Sprintf("oven/bun:%s", version))
+	base := llb.Image(imagerefs.GetBunImage(version))
 
 	base = s.addAppUser(base)
 
@@ -653,11 +654,6 @@ func (s *GoStack) Detect() bool {
 	return s.hasFile("go.mod")
 }
 
-const (
-	GoDefault     = "1.23"
-	AlpineDefault = "alpine:3.21"
-)
-
 func (s *GoStack) commandDir(opts BuildOptions) string {
 	if !s.hasDir("cmd") {
 		return ""
@@ -695,7 +691,7 @@ func (s *GoStack) GenerateLLB(dir string, opts BuildOptions) (*llb.State, error)
 	if opts.Version != "" {
 		version = opts.Version
 	}
-	base := llb.Image(fmt.Sprintf("golang:%s-alpine", version), llb.WithMetaResolver(mr))
+	base := llb.Image(imagerefs.GetGolangImage(version), llb.WithMetaResolver(mr))
 
 	// At some later time, we should convert this to use persistent cache mounts
 	// but ONLY when we can actually make them persistent. For now, cache
@@ -722,7 +718,7 @@ func (s *GoStack) GenerateLLB(dir string, opts BuildOptions) (*llb.State, error)
 	).Root()
 
 	if opts.AlpineImage == "" {
-		opts.AlpineImage = AlpineDefault
+		opts.AlpineImage = imagerefs.AlpineDefault
 	}
 
 	state = s.addAppUser(state)
