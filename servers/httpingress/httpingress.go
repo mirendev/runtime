@@ -76,9 +76,11 @@ func NewServer(
 func (h *Server) checkLeases(ctx context.Context) {
 	ticker := time.NewTicker(30 * time.Second)
 
+	h.Log.Debug("starting check lease routine")
 	for {
 		select {
 		case <-ctx.Done():
+			h.Log.Debug("context done, stopping lease checker")
 			return
 		case <-ticker.C:
 			h.expireLeases(ctx)
@@ -114,6 +116,7 @@ func (h *Server) expireLeases(ctx context.Context) {
 			h.Log.Debug("No application leases left", "app", app)
 			delete(h.apps, app)
 		} else {
+			h.Log.Debug("App still has leases", "app", app, "leaseCount", len(newLeases))
 			ar.leases = newLeases
 		}
 	}
