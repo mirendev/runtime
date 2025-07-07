@@ -503,6 +503,8 @@ type requestStatData struct {
 	Count         *int64              `cbor:"1,keyasint,omitempty" json:"count,omitempty"`
 	AvgDurationMs *float64            `cbor:"2,keyasint,omitempty" json:"avg_duration_ms,omitempty"`
 	ErrorRate     *float64            `cbor:"3,keyasint,omitempty" json:"error_rate,omitempty"`
+	P95DurationMs *float64            `cbor:"4,keyasint,omitempty" json:"p95_duration_ms,omitempty"`
+	P99DurationMs *float64            `cbor:"5,keyasint,omitempty" json:"p99_duration_ms,omitempty"`
 }
 
 type RequestStat struct {
@@ -564,6 +566,36 @@ func (v *RequestStat) ErrorRate() float64 {
 
 func (v *RequestStat) SetErrorRate(errorRate float64) {
 	v.data.ErrorRate = &errorRate
+}
+
+func (v *RequestStat) HasP95DurationMs() bool {
+	return v.data.P95DurationMs != nil
+}
+
+func (v *RequestStat) P95DurationMs() float64 {
+	if v.data.P95DurationMs == nil {
+		return 0
+	}
+	return *v.data.P95DurationMs
+}
+
+func (v *RequestStat) SetP95DurationMs(p95DurationMs float64) {
+	v.data.P95DurationMs = &p95DurationMs
+}
+
+func (v *RequestStat) HasP99DurationMs() bool {
+	return v.data.P99DurationMs != nil
+}
+
+func (v *RequestStat) P99DurationMs() float64 {
+	if v.data.P99DurationMs == nil {
+		return 0
+	}
+	return *v.data.P99DurationMs
+}
+
+func (v *RequestStat) SetP99DurationMs(p99DurationMs float64) {
+	v.data.P99DurationMs = &p99DurationMs
 }
 
 func (v *RequestStat) MarshalCBOR() ([]byte, error) {
@@ -666,6 +698,77 @@ func (v *PathStat) MarshalJSON() ([]byte, error) {
 }
 
 func (v *PathStat) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type errorBreakdownData struct {
+	StatusCode *int32   `cbor:"0,keyasint,omitempty" json:"status_code,omitempty"`
+	Count      *int64   `cbor:"1,keyasint,omitempty" json:"count,omitempty"`
+	Percentage *float64 `cbor:"2,keyasint,omitempty" json:"percentage,omitempty"`
+}
+
+type ErrorBreakdown struct {
+	data errorBreakdownData
+}
+
+func (v *ErrorBreakdown) HasStatusCode() bool {
+	return v.data.StatusCode != nil
+}
+
+func (v *ErrorBreakdown) StatusCode() int32 {
+	if v.data.StatusCode == nil {
+		return 0
+	}
+	return *v.data.StatusCode
+}
+
+func (v *ErrorBreakdown) SetStatusCode(statusCode int32) {
+	v.data.StatusCode = &statusCode
+}
+
+func (v *ErrorBreakdown) HasCount() bool {
+	return v.data.Count != nil
+}
+
+func (v *ErrorBreakdown) Count() int64 {
+	if v.data.Count == nil {
+		return 0
+	}
+	return *v.data.Count
+}
+
+func (v *ErrorBreakdown) SetCount(count int64) {
+	v.data.Count = &count
+}
+
+func (v *ErrorBreakdown) HasPercentage() bool {
+	return v.data.Percentage != nil
+}
+
+func (v *ErrorBreakdown) Percentage() float64 {
+	if v.data.Percentage == nil {
+		return 0
+	}
+	return *v.data.Percentage
+}
+
+func (v *ErrorBreakdown) SetPercentage(percentage float64) {
+	v.data.Percentage = &percentage
+}
+
+func (v *ErrorBreakdown) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *ErrorBreakdown) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *ErrorBreakdown) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *ErrorBreakdown) UnmarshalJSON(data []byte) error {
 	return json.Unmarshal(data, &v.data)
 }
 
@@ -842,6 +945,7 @@ type applicationStatusData struct {
 	RequestsPerSecond *float64            `cbor:"10,keyasint,omitempty" json:"requests_per_second,omitempty"`
 	RequestStats      *[]*RequestStat     `cbor:"11,keyasint,omitempty" json:"request_stats,omitempty"`
 	TopPaths          *[]*PathStat        `cbor:"12,keyasint,omitempty" json:"top_paths,omitempty"`
+	ErrorBreakdown    *[]*ErrorBreakdown  `cbor:"13,keyasint,omitempty" json:"error_breakdown,omitempty"`
 }
 
 type ApplicationStatus struct {
@@ -1044,6 +1148,22 @@ func (v *ApplicationStatus) TopPaths() []*PathStat {
 func (v *ApplicationStatus) SetTopPaths(topPaths []*PathStat) {
 	x := slices.Clone(topPaths)
 	v.data.TopPaths = &x
+}
+
+func (v *ApplicationStatus) HasErrorBreakdown() bool {
+	return v.data.ErrorBreakdown != nil
+}
+
+func (v *ApplicationStatus) ErrorBreakdown() []*ErrorBreakdown {
+	if v.data.ErrorBreakdown == nil {
+		return nil
+	}
+	return *v.data.ErrorBreakdown
+}
+
+func (v *ApplicationStatus) SetErrorBreakdown(errorBreakdown []*ErrorBreakdown) {
+	x := slices.Clone(errorBreakdown)
+	v.data.ErrorBreakdown = &x
 }
 
 func (v *ApplicationStatus) MarshalCBOR() ([]byte, error) {

@@ -133,6 +133,8 @@ func (a *AppInfo) AppInfo(ctx context.Context, state *app_v1alpha.AppStatusAppIn
 				rs.SetCount(s.Count)
 				rs.SetAvgDurationMs(s.AvgDurationMs)
 				rs.SetErrorRate(s.ErrorRate)
+				rs.SetP95DurationMs(s.P95DurationMs)
+				rs.SetP99DurationMs(s.P99DurationMs)
 				requestStats = append(requestStats, &rs)
 			}
 			rai.SetRequestStats(requestStats)
@@ -153,6 +155,22 @@ func (a *AppInfo) AppInfo(ctx context.Context, state *app_v1alpha.AppStatusAppIn
 				pathStats = append(pathStats, &ps)
 			}
 			rai.SetTopPaths(pathStats)
+		}
+
+		// Get error breakdown
+		errorBreakdown, err := a.HTTP.ErrorsLastHour(name)
+		if err != nil {
+			a.Log.Warn("failed to get error breakdown", "error", err)
+		} else {
+			var errorStats []*app_v1alpha.ErrorBreakdown
+			for _, e := range errorBreakdown {
+				var es app_v1alpha.ErrorBreakdown
+				es.SetStatusCode(int32(e.StatusCode))
+				es.SetCount(e.Count)
+				es.SetPercentage(e.Percentage)
+				errorStats = append(errorStats, &es)
+			}
+			rai.SetErrorBreakdown(errorStats)
 		}
 	}
 

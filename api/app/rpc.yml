@@ -108,6 +108,14 @@ types:
         type: float64
         index: 3
         doc: "Percentage of requests that resulted in errors (4xx/5xx)"
+      - name: p95DurationMs
+        type: float64
+        index: 4
+        doc: "95th percentile request duration in milliseconds"
+      - name: p99DurationMs
+        type: float64
+        index: 5
+        doc: "99th percentile request duration in milliseconds"
 
   - type: PathStat
     fields:
@@ -127,6 +135,21 @@ types:
         type: float64
         index: 3
         doc: "Error rate for this path"
+
+  - type: ErrorBreakdown
+    fields:
+      - name: statusCode
+        type: int32
+        index: 0
+        doc: "HTTP status code (4xx or 5xx)"
+      - name: count
+        type: int64
+        index: 1
+        doc: "Number of requests with this status code"
+      - name: percentage
+        type: float64
+        index: 2
+        doc: "Percentage of total errors"
 
   - type: PoolStatus
     fields:
@@ -206,6 +229,11 @@ types:
         element: '*PathStat'
         index: 12
         doc: "Most frequently accessed paths"
+      - name: errorBreakdown
+        type: list
+        element: '*ErrorBreakdown'
+        index: 13
+        doc: "Breakdown of errors by HTTP status code"
 
   - type: LogEntry
     fields:
