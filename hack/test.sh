@@ -1,89 +1,34 @@
+#!/usr/bin/env bash
 set -e
 
-# Solve the issue of runsc not being able to manipulate subtree_control
-# by moving everything here into a new cgroup so the root can be changed.
+# Source common setup functions
+source "$(dirname "$0")/common-setup.sh"
 
-mkdir /sys/fs/cgroup/inner
+# Setup environment
+setup_cgroups
+setup_environment
 
-cat /sys/fs/cgroup/cgroup.procs | while read -r pid; do
-  echo "$pid" >/sys/fs/cgroup/inner/cgroup.procs 2>/dev/null || true
-done
+export CONTAINERD_ADDRESS="/run/containerd/containerd.sock"
 
-sed -e 's/ / +/g' -e 's/^/+/' </sys/fs/cgroup/cgroup.controllers >/sys/fs/cgroup/cgroup.subtree_control
+# Generate configs
+generate_containerd_config
+setup_runsc_config
 
-mkdir -p /data /run
+# Start services
+start_containerd "$CONTAINERD_ADDRESS" "/dev/null"
+start_buildkitd "/dev/stdout"
 
-export OTEL_SDK_DISABLED=true
+# Setup kernel mounts
+setup_kernel_mounts
 
-# Containerd socket location
-CONTAINERD_SOCKET="/run/containerd/containerd.sock"
-
-cat <<EOF >/etc/containerd/config.toml
-version = 2
-[plugins."io.containerd.runtime.v1.linux"]
-  shim_debug = true
-[plugins."io.containerd.grpc.v1.cri".containerd.runtimes.runc]
-  runtime_type = "io.containerd.runc.v2"
-[plugins."io.containerd.grpc.v1.cri".containerd.runtimes.runsc]
-  runtime_type = "io.containerd.runsc.v1"
-[plugins."io.containerd.grpc.v1.cri".containerd.runtimes.miren]
-  runtime_type = "io.containerd.runsc.v1"
-EOF
-
-cat <<EOF >/etc/containerd/runsc.toml
-log_path = "/var/log/runsc/%ID%/shim.log"
-log_level = "debug"
-binary_name = "/src/hack/runsc-ignore"
-[runsc_config]
-  debug = "true"
-  debug-log = "/var/log/runsc/%ID%/gvisor.%COMMAND%.log"
-EOF
-
-mkdir -p /run/containerd
-containerd --root /data --state /data/state --address "$CONTAINERD_SOCKET" -l trace >/dev/null 2>&1 &
-
-# Since our buildkit dir is cached across runs, there might be a stale lockfile
-# sitting around that should be safe to kill
-rm -f /data/buildkit/buildkitd.lock
-buildkitd --root /data/buildkit 2>&1 &
-
-mount -t debugfs nodev /sys/kernel/debug
-mount -t tracefs nodev /sys/kernel/debug/tracing
-mount -t tracefs nodev /sys/kernel/tracing
-
-# Wait for containerd and buildkitd to start
-echo "Waiting for containerd..."
-timeout=30
-count=0
-while ! ctr --address "$CONTAINERD_SOCKET" version >/dev/null 2>&1; do
-  sleep 1
-  count=$((count + 1))
-  if [ "$count" -ge "$timeout" ]; then
-    echo "Timeout waiting for containerd"
-    exit 1
-  fi
-done
-echo "containerd is ready"
-
-# Wait for buildkitd with timeout
-echo "Waiting for buildkitd..."
-timeout=30
-count=0
-while ! buildctl debug info >/dev/null 2>&1; do
-  sleep 1
-  count=$((count + 1))
-  if [ "$count" -ge "$timeout" ]; then
-    echo "Timeout waiting for buildkitd"
-    exit 1
-  fi
-done
-echo "buildkitd is ready"
+# Wait for services
+wait_for_service "containerd" "ctr --address '$CONTAINERD_ADDRESS' version"
+wait_for_service "buildkitd" "buildctl debug info"
 
 cd /src
 
 if test "$USESHELL" != ""; then
-  export HISTFILE=/data/.bash_history
-  export HISTIGNORE=exit
+  setup_bash_environment
   bash
 # Because all the tests use the same containerd, buildkit, and cgroups, we need to
 # make sure that they don't interfere with each other. For now, we do that by passing

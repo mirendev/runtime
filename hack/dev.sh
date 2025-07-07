@@ -1,75 +1,46 @@
+#!/usr/bin/env bash
 set -e
 
-# Solve the issue of runsc not being able to manipulate subtree_control
-# by moving everything here into a new cgroup so the root can be changed.
+# Source common setup functions
+source "$(dirname "$0")/common-setup.sh"
 
-mkdir /sys/fs/cgroup/inner
+# Setup environment
+setup_cgroups
+setup_environment
 
-for pid in "$(cat /sys/fs/cgroup/cgroup.procs)"; do
-  echo "$pid" >/sys/fs/cgroup/inner/cgroup.procs 2>/dev/null || true
-done
+export CONTAINERD_ADDRESS="/var/lib/miren/containerd/containerd.sock"
 
-sed -e 's/ / +/g' -e 's/^/+/' </sys/fs/cgroup/cgroup.controllers >/sys/fs/cgroup/cgroup.subtree_control
+# Generate configs with metrics enabled
+generate_containerd_config "127.0.0.1:1338"
+setup_runsc_config
 
-mkdir -p /data /run
+# Start services with specific log destinations
+start_containerd "$CONTAINERD_ADDRESS" "/tmp/containerd.log"
+start_buildkitd "/tmp/buildkit.log"
 
-export OTEL_SDK_DISABLED=true
+# Setup kernel mounts
+setup_kernel_mounts
 
-CONTAINERD_SOCKET="/var/lib/miren/containerd/containerd.sock"
-
-cat <<EOF >/etc/containerd/config.toml
-version = 2
-[plugins."io.containerd.runtime.v1.linux"]
-  shim_debug = true
-[plugins."io.containerd.grpc.v1.cri".containerd.runtimes.runc]
-  runtime_type = "io.containerd.runc.v2"
-[plugins."io.containerd.grpc.v1.cri".containerd.runtimes.runsc]
-  runtime_type = "io.containerd.runsc.v1"
-[plugins."io.containerd.grpc.v1.cri".containerd.runtimes.miren]
-  runtime_type = "io.containerd.runsc.v1"
-
-[metrics]
-  address = "127.0.0.1:1338"
-EOF
-
-cat <<EOF >/etc/containerd/runsc.toml
-log_path = "/var/log/runsc/%ID%/shim.log"
-log_level = "debug"
-binary_name = "/src/hack/runsc-ignore"
-[runsc_config]
-  debug = "true"
-  debug-log = "/var/log/runsc/%ID%/gvisor.%COMMAND%.log"
-EOF
-
-mkdir -p /var/lib/miren/containerd
-containerd --root /data --state /data/state --address "$CONTAINERD_SOCKET" -l trace >/tmp/containerd.log 2>&1 &
-
-# Handy to build stuff with.
-buildkitd --root /data/buildkit >/tmp/buildkit.log 2>&1 &
-
-mount -t debugfs nodev /sys/kernel/debug
-mount -t tracefs nodev /sys/kernel/debug/tracing
-mount -t tracefs nodev /sys/kernel/tracing
-
-# Wait for containerd and buildkitd to start
+# Wait for containerd to start (simpler wait for dev)
 sleep 1
 
 cd /src
 
+# Build runtime
 make bin/runtime
 
+# Create symlink
 ln -s "$PWD"/bin/runtime /bin/r
 
+# Setup runtime config
 mkdir -p ~/.config/runtime
-
 r auth generate -c ~/.config/runtime/clientconfig.yaml
 
 echo "Cleaning runtime namespace to begin..."
-r debug ctr nuke -n runtime --containerd-socket "$CONTAINERD_SOCKET"
+r debug ctr nuke -n runtime --containerd-socket "$CONTAINERD_ADDRESS"
 
-export HISTFILE=/data/.bash_history
-export HISTIGNORE=exit
-export CONTAINERD_NAMESPACE=runtime
+# Setup environment variables
+setup_bash_environment
 
 if [[ -n "$USE_TMUX" ]]; then
   # Make a tmux session for us to run multiple shells in

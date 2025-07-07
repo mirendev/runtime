@@ -207,7 +207,7 @@ func (m *Runtime) Test(
 			Cmd:                      []string{"/bin/bash", "/src/hack/test.sh"},
 		})
 	} else {
-		args := []string{"sh", "/src/hack/test.sh"}
+		args := []string{"/bin/bash", "/src/hack/test.sh"}
 
 		for _, t := range strings.Split(tests, " ") {
 			args = append(args, t)
