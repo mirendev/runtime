@@ -443,6 +443,10 @@ func (a *localActivator) retireUnusedSandboxes() {
 	}
 }
 
+// ensureMinInstances maintains min_instances for versions the activator knows about.
+// This complements the app controller by handling recovery when sandboxes crash or
+// are terminated. The controller ensures initial creation, while this ensures ongoing
+// availability for active versions.
 func (a *localActivator) ensureMinInstances(ctx context.Context) {
 	a.mu.Lock()
 	defer a.mu.Unlock()

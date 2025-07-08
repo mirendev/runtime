@@ -23,9 +23,11 @@ import (
 	"miren.dev/runtime/clientconfig"
 	"miren.dev/runtime/components/activator"
 	"miren.dev/runtime/components/netresolve"
+	appcontroller "miren.dev/runtime/controllers/app"
 	"miren.dev/runtime/metrics"
 	"miren.dev/runtime/observability"
 	"miren.dev/runtime/pkg/caauth"
+	"miren.dev/runtime/pkg/controller"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/schema"
 	"miren.dev/runtime/pkg/rpc"
@@ -67,6 +69,7 @@ type Coordinator struct {
 	state *rpc.State
 
 	aa activator.AppActivator
+	cm *controller.ControllerManager
 
 	authority *caauth.Authority
 
@@ -357,6 +360,30 @@ func (c *Coordinator) Start(ctx context.Context) error {
 
 	aa := activator.NewLocalActivator(ctx, c.Log, eac)
 	c.aa = aa
+
+	c.cm = controller.NewControllerManager()
+
+	minInstancesController := &appcontroller.MinInstancesController{
+		Log: c.Log,
+		EAC: eac,
+		AA:  aa,
+	}
+
+	c.cm.AddController(
+		controller.NewReconcileController(
+			"app-min-instances",
+			c.Log,
+			entity.Ref(entity.EntityKind, core_v1alpha.KindApp),
+			eac,
+			controller.AdaptController(minInstancesController),
+			30*time.Second, // Resync every 30s to ensure min instances
+			1,              // Single worker is sufficient
+		),
+	)
+
+	if err := c.cm.Start(ctx); err != nil {
+		return fmt.Errorf("failed to start controller manager: %w", err)
+	}
 
 	eps := execproxy.NewServer(c.Log, eac, rs, aa)
 	server.ExposeValue("dev.miren.runtime/exec", exec_v1alpha.AdaptSandboxExec(eps))
