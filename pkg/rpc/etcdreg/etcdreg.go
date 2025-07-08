@@ -51,7 +51,7 @@ func (r *ActorRegistry) setActorState(ctx context.Context, name string, as Actor
 		return
 	}
 
-	_, err = r.ec.KV.Put(ctx, "/actor/state/"+name, string(data))
+	_, err = r.ec.Put(ctx, "/actor/state/"+name, string(data))
 	if err != nil {
 		r.log.Error("failed to put actor state", "name", name, "err", err)
 		return
@@ -59,7 +59,7 @@ func (r *ActorRegistry) setActorState(ctx context.Context, name string, as Actor
 }
 
 func (r *ActorRegistry) getActorState(ctx context.Context, name string) ([]byte, error) {
-	resp, err := r.ec.KV.Get(ctx, "/actor/state/"+name, clientv3.WithLimit(1))
+	resp, err := r.ec.Get(ctx, "/actor/state/"+name, clientv3.WithLimit(1))
 	if err != nil {
 		return nil, err
 	}
@@ -114,7 +114,7 @@ func (r *ActorRegistry) acquirePath(ctx context.Context, name string, id clientv
 	}
 
 	if !tr.Succeeded {
-		gr, err := r.ec.KV.Get(ctx, path)
+		gr, err := r.ec.Get(ctx, path)
 		if err != nil {
 			r.log.Error("failed to get actor", "name", name, "err", err)
 			return false
@@ -139,7 +139,7 @@ func (r *ActorRegistry) acquirePath(ctx context.Context, name string, id clientv
 }
 
 func (r *ActorRegistry) Register(ctx context.Context, name string, iface *rpc.Interface) error {
-	lr, err := r.ec.Lease.Grant(ctx, 60)
+	lr, err := r.ec.Grant(ctx, 60)
 	if err != nil {
 		r.log.Error("failed to grant lease", "name", name, "err", err)
 		return err
@@ -148,7 +148,7 @@ func (r *ActorRegistry) Register(ctx context.Context, name string, iface *rpc.In
 	owned := r.acquirePath(ctx, name, lr.ID)
 
 	go func() {
-		defer r.ec.Lease.Revoke(ctx, lr.ID)
+		defer r.ec.Revoke(ctx, lr.ID)
 
 		ctx, cancel := context.WithCancel(ctx)
 		defer cancel()
@@ -165,7 +165,7 @@ func (r *ActorRegistry) Register(ctx context.Context, name string, iface *rpc.In
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				_, err := r.ec.Lease.KeepAliveOnce(ctx, lr.ID)
+				_, err := r.ec.KeepAliveOnce(ctx, lr.ID)
 				if err != nil {
 					r.log.Error("failed to keep lease alive", "name", name, "err", err)
 					return
@@ -250,7 +250,7 @@ func (r *ActorRegistry) Close(ctx context.Context) error {
 
 func (r *ActorRegistry) Client(ctx context.Context, name string) (rpc.Client, error) {
 	path := "/actor/registry/" + name
-	resp, err := r.ec.KV.Get(ctx, path)
+	resp, err := r.ec.Get(ctx, path)
 	if err != nil {
 		return nil, err
 	}

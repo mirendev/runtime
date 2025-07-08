@@ -412,7 +412,7 @@ func (v StreamClient) Recv(ctx context.Context, count int32) (*StreamClientRecvR
 
 	var ret streamRecvResultsData
 
-	err := v.Client.Call(ctx, "recv", &args, &ret)
+	err := v.Call(ctx, "recv", &args, &ret)
 	if err != nil {
 		return nil, err
 	}
@@ -1958,7 +1958,7 @@ func (v EntityAccessClient) Get(ctx context.Context, id string) (*EntityAccessCl
 
 	var ret entityAccessGetResultsData
 
-	err := v.Client.Call(ctx, "get", &args, &ret)
+	err := v.Call(ctx, "get", &args, &ret)
 	if err != nil {
 		return nil, err
 	}
@@ -1999,7 +1999,7 @@ func (v EntityAccessClient) Put(ctx context.Context, entity *Entity) (*EntityAcc
 
 	var ret entityAccessPutResultsData
 
-	err := v.Client.Call(ctx, "put", &args, &ret)
+	err := v.Call(ctx, "put", &args, &ret)
 	if err != nil {
 		return nil, err
 	}
@@ -2041,7 +2041,7 @@ func (v EntityAccessClient) PutSession(ctx context.Context, entity *Entity, sess
 
 	var ret entityAccessPutSessionResultsData
 
-	err := v.Client.Call(ctx, "put_session", &args, &ret)
+	err := v.Call(ctx, "put_session", &args, &ret)
 	if err != nil {
 		return nil, err
 	}
@@ -2071,7 +2071,7 @@ func (v EntityAccessClient) Delete(ctx context.Context, id string) (*EntityAcces
 
 	var ret entityAccessDeleteResultsData
 
-	err := v.Client.Call(ctx, "delete", &args, &ret)
+	err := v.Call(ctx, "delete", &args, &ret)
 	if err != nil {
 		return nil, err
 	}
@@ -2089,14 +2089,14 @@ func (v EntityAccessClient) WatchIndex(ctx context.Context, index entity.Attr, v
 	caps := map[rpc.OID]*rpc.InlineCapability{}
 	args.data.Index = &index
 	{
-		ic, oid, c := v.Client.NewInlineCapability(stream.AdaptSendStream[*EntityOp](values), values)
+		ic, oid, c := v.NewInlineCapability(stream.AdaptSendStream[*EntityOp](values), values)
 		args.data.Values = c
 		caps[oid] = ic
 	}
 
 	var ret entityAccessWatchIndexResultsData
 
-	err := v.Client.CallWithCaps(ctx, "watch_index", &args, &ret, caps)
+	err := v.CallWithCaps(ctx, "watch_index", &args, &ret, caps)
 	if err != nil {
 		return nil, err
 	}
@@ -2114,14 +2114,14 @@ func (v EntityAccessClient) WatchEntity(ctx context.Context, id string, updates 
 	caps := map[rpc.OID]*rpc.InlineCapability{}
 	args.data.Id = &id
 	{
-		ic, oid, c := v.Client.NewInlineCapability(stream.AdaptSendStream[*EntityOp](updates), updates)
+		ic, oid, c := v.NewInlineCapability(stream.AdaptSendStream[*EntityOp](updates), updates)
 		args.data.Updates = c
 		caps[oid] = ic
 	}
 
 	var ret entityAccessWatchEntityResultsData
 
-	err := v.Client.CallWithCaps(ctx, "watch_entity", &args, &ret, caps)
+	err := v.CallWithCaps(ctx, "watch_entity", &args, &ret, caps)
 	if err != nil {
 		return nil, err
 	}
@@ -2151,7 +2151,7 @@ func (v EntityAccessClient) List(ctx context.Context, index entity.Attr) (*Entit
 
 	var ret entityAccessListResultsData
 
-	err := v.Client.Call(ctx, "list", &args, &ret)
+	err := v.Call(ctx, "list", &args, &ret)
 	if err != nil {
 		return nil, err
 	}
@@ -2179,7 +2179,7 @@ func (v EntityAccessClient) MakeAttr(ctx context.Context, id string, value strin
 
 	var ret entityAccessMakeAttrResultsData
 
-	err := v.Client.Call(ctx, "makeAttr", &args, &ret)
+	err := v.Call(ctx, "makeAttr", &args, &ret)
 	if err != nil {
 		return nil, err
 	}
@@ -2206,7 +2206,7 @@ func (v EntityAccessClient) LookupKind(ctx context.Context, kind string) (*Entit
 
 	var ret entityAccessLookupKindResultsData
 
-	err := v.Client.Call(ctx, "lookupKind", &args, &ret)
+	err := v.Call(ctx, "lookupKind", &args, &ret)
 	if err != nil {
 		return nil, err
 	}
@@ -2233,7 +2233,7 @@ func (v EntityAccessClient) Parse(ctx context.Context, data []byte) (*EntityAcce
 
 	var ret entityAccessParseResultsData
 
-	err := v.Client.Call(ctx, "parse", &args, &ret)
+	err := v.Call(ctx, "parse", &args, &ret)
 	if err != nil {
 		return nil, err
 	}
@@ -2263,7 +2263,7 @@ func (v EntityAccessClient) Format(ctx context.Context, entity *Entity) (*Entity
 
 	var ret entityAccessFormatResultsData
 
-	err := v.Client.Call(ctx, "format", &args, &ret)
+	err := v.Call(ctx, "format", &args, &ret)
 	if err != nil {
 		return nil, err
 	}
@@ -2294,7 +2294,7 @@ func (v EntityAccessClient) CreateSession(ctx context.Context, ttl int64, usage 
 
 	var ret entityAccessCreateSessionResultsData
 
-	err := v.Client.Call(ctx, "create_session", &args, &ret)
+	err := v.Call(ctx, "create_session", &args, &ret)
 	if err != nil {
 		return nil, err
 	}
@@ -2313,7 +2313,7 @@ func (v EntityAccessClient) RevokeSession(ctx context.Context, id string) (*Enti
 
 	var ret entityAccessRevokeSessionResultsData
 
-	err := v.Client.Call(ctx, "revoke_session", &args, &ret)
+	err := v.Call(ctx, "revoke_session", &args, &ret)
 	if err != nil {
 		return nil, err
 	}
@@ -2332,7 +2332,7 @@ func (v EntityAccessClient) PingSession(ctx context.Context, id string) (*Entity
 
 	var ret entityAccessPingSessionResultsData
 
-	err := v.Client.Call(ctx, "ping_session", &args, &ret)
+	err := v.Call(ctx, "ping_session", &args, &ret)
 	if err != nil {
 		return nil, err
 	}

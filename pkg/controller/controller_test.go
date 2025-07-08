@@ -372,7 +372,7 @@ func TestAdaptController_WithUpdateMethod(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify calls
-	assert.Equal(t, []string{"test1"}, updatingController.BasicController.CreateCalls)
+	assert.Equal(t, []string{"test1"}, updatingController.CreateCalls)
 	assert.Equal(t, []string{"test1"}, updatingController.UpdateCalls)
-	assert.Empty(t, updatingController.BasicController.DeleteCalls)
+	assert.Empty(t, updatingController.DeleteCalls)
 }

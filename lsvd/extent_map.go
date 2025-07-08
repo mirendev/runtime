@@ -181,7 +181,7 @@ func (e *Iterator) CompactValue() compactPE {
 }
 
 func (e *Iterator) CompactValuePtr() *compactPE {
-	return e.ForwardIterator.ValuePtr()
+	return e.ValuePtr()
 }
 
 func (e *ExtentMap) Populate(log *slog.Logger, o *ExtentMap, diskId uint16) error {

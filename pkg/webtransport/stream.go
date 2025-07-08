@@ -178,8 +178,8 @@ func (s *stream) closeWithSession() {
 }
 
 func (s *stream) SetDeadline(t time.Time) error {
-	err1 := s.sendStream.SetWriteDeadline(t)
-	err2 := s.receiveStream.SetReadDeadline(t)
+	err1 := s.SetWriteDeadline(t)
+	err2 := s.SetReadDeadline(t)
 	if err1 != nil {
 		return err1
 	}

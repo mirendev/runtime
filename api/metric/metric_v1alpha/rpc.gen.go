@@ -364,7 +364,7 @@ func (v SandboxMetricsClient) Snapshot(ctx context.Context, sandbox string) (*Sa
 
 	var ret sandboxMetricsSnapshotResultsData
 
-	err := v.Client.Call(ctx, "snapshot", &args, &ret)
+	err := v.Call(ctx, "snapshot", &args, &ret)
 	if err != nil {
 		return nil, err
 	}

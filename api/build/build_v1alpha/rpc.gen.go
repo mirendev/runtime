@@ -258,7 +258,7 @@ func (v StreamClient) Recv(ctx context.Context, count int32) (*StreamClientRecvR
 
 	var ret streamRecvResultsData
 
-	err := v.Client.Call(ctx, "recv", &args, &ret)
+	err := v.Call(ctx, "recv", &args, &ret)
 	if err != nil {
 		return nil, err
 	}
@@ -445,19 +445,19 @@ func (v BuilderClient) BuildFromTar(ctx context.Context, application string, tar
 	caps := map[rpc.OID]*rpc.InlineCapability{}
 	args.data.Application = &application
 	{
-		ic, oid, c := v.Client.NewInlineCapability(stream.AdaptRecvStream[[]byte](tardata), tardata)
+		ic, oid, c := v.NewInlineCapability(stream.AdaptRecvStream[[]byte](tardata), tardata)
 		args.data.Tardata = c
 		caps[oid] = ic
 	}
 	{
-		ic, oid, c := v.Client.NewInlineCapability(stream.AdaptSendStream[*Status](status), status)
+		ic, oid, c := v.NewInlineCapability(stream.AdaptSendStream[*Status](status), status)
 		args.data.Status = c
 		caps[oid] = ic
 	}
 
 	var ret builderBuildFromTarResultsData
 
-	err := v.Client.CallWithCaps(ctx, "buildFromTar", &args, &ret, caps)
+	err := v.CallWithCaps(ctx, "buildFromTar", &args, &ret, caps)
 	if err != nil {
 		return nil, err
 	}

@@ -215,7 +215,7 @@ func ipToString(arg ref.Val) ref.Val {
 		return types.MaybeNoSuchOverloadErr(arg)
 	}
 
-	return types.String(ip.Addr.String())
+	return types.String(ip.String())
 }
 
 func family(arg ref.Val) ref.Val {
@@ -225,12 +225,12 @@ func family(arg ref.Val) ref.Val {
 	}
 
 	switch {
-	case ip.Addr.Is4():
+	case ip.Is4():
 		return types.Int(4)
-	case ip.Addr.Is6():
+	case ip.Is6():
 		return types.Int(6)
 	default:
-		return types.NewErr("IP address %q is not an IPv4 or IPv6 address", ip.Addr.String())
+		return types.NewErr("IP address %q is not an IPv4 or IPv6 address", ip.String())
 	}
 }
 
@@ -268,7 +268,7 @@ func isUnspecified(arg ref.Val) ref.Val {
 		return types.MaybeNoSuchOverloadErr(arg)
 	}
 
-	return types.Bool(ip.Addr.IsUnspecified())
+	return types.Bool(ip.IsUnspecified())
 }
 
 func isLoopback(arg ref.Val) ref.Val {
@@ -277,7 +277,7 @@ func isLoopback(arg ref.Val) ref.Val {
 		return types.MaybeNoSuchOverloadErr(arg)
 	}
 
-	return types.Bool(ip.Addr.IsLoopback())
+	return types.Bool(ip.IsLoopback())
 }
 
 func isLinkLocalMulticast(arg ref.Val) ref.Val {
@@ -286,7 +286,7 @@ func isLinkLocalMulticast(arg ref.Val) ref.Val {
 		return types.MaybeNoSuchOverloadErr(arg)
 	}
 
-	return types.Bool(ip.Addr.IsLinkLocalMulticast())
+	return types.Bool(ip.IsLinkLocalMulticast())
 }
 
 func isLinkLocalUnicast(arg ref.Val) ref.Val {
@@ -295,7 +295,7 @@ func isLinkLocalUnicast(arg ref.Val) ref.Val {
 		return types.MaybeNoSuchOverloadErr(arg)
 	}
 
-	return types.Bool(ip.Addr.IsLinkLocalUnicast())
+	return types.Bool(ip.IsLinkLocalUnicast())
 }
 
 func isGlobalUnicast(arg ref.Val) ref.Val {
@@ -304,7 +304,7 @@ func isGlobalUnicast(arg ref.Val) ref.Val {
 		return types.MaybeNoSuchOverloadErr(arg)
 	}
 
-	return types.Bool(ip.Addr.IsGlobalUnicast())
+	return types.Bool(ip.IsGlobalUnicast())
 }
 
 // parseIPAddr parses a string into an IP address.

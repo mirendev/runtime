@@ -166,7 +166,7 @@ func (v ReaderClient) Read(ctx context.Context, count int32) (*ReaderClientReadR
 
 	var ret readerReadResultsData
 
-	err := v.Client.Call(ctx, "Read", &args, &ret)
+	err := v.Call(ctx, "Read", &args, &ret)
 	if err != nil {
 		return nil, err
 	}
@@ -344,7 +344,7 @@ func (v ReaderAtClient) ReadAt(ctx context.Context, count int32, offset int64) (
 
 	var ret readerAtReadAtResultsData
 
-	err := v.Client.Call(ctx, "ReadAt", &args, &ret)
+	err := v.Call(ctx, "ReadAt", &args, &ret)
 	if err != nil {
 		return nil, err
 	}
@@ -508,7 +508,7 @@ func (v WriterClient) Write(ctx context.Context, data []byte) (*WriterClientWrit
 
 	var ret writerWriteResultsData
 
-	err := v.Client.Call(ctx, "Write", &args, &ret)
+	err := v.Call(ctx, "Write", &args, &ret)
 	if err != nil {
 		return nil, err
 	}

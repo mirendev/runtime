@@ -412,7 +412,7 @@ func (v MeterClient) ReadTemperature(ctx context.Context, name string) (*MeterCl
 
 	var ret meterReadTemperatureResultsData
 
-	err := v.Client.Call(ctx, "readTemperature", &args, &ret)
+	err := v.Call(ctx, "readTemperature", &args, &ret)
 	if err != nil {
 		return nil, err
 	}
@@ -437,7 +437,7 @@ func (v MeterClient) GetSetter(ctx context.Context, name string) (*MeterClientGe
 
 	var ret meterGetSetterResultsData
 
-	err := v.Client.Call(ctx, "getSetter", &args, &ret)
+	err := v.Call(ctx, "getSetter", &args, &ret)
 	if err != nil {
 		return nil, err
 	}
@@ -601,7 +601,7 @@ func (v SetTempClient) SetTemp(ctx context.Context, temp int32) (*SetTempClientS
 
 	var ret setTempSetTempResultsData
 
-	err := v.Client.Call(ctx, "setTemp", &args, &ret)
+	err := v.Call(ctx, "setTemp", &args, &ret)
 	if err != nil {
 		return nil, err
 	}
@@ -745,7 +745,7 @@ func (v UpdateReceiverClient) Update(ctx context.Context, reading *Reading) (*Up
 
 	var ret updateReceiverUpdateResultsData
 
-	err := v.Client.Call(ctx, "update", &args, &ret)
+	err := v.Call(ctx, "update", &args, &ret)
 	if err != nil {
 		return nil, err
 	}
@@ -890,14 +890,14 @@ func (v MeterUpdatesClient) RegisterUpdates(ctx context.Context, recv UpdateRece
 	args := MeterUpdatesRegisterUpdatesArgs{}
 	caps := map[rpc.OID]*rpc.InlineCapability{}
 	{
-		ic, oid, c := v.Client.NewInlineCapability(AdaptUpdateReceiver(recv), recv)
+		ic, oid, c := v.NewInlineCapability(AdaptUpdateReceiver(recv), recv)
 		args.data.Recv = c
 		caps[oid] = ic
 	}
 
 	var ret meterUpdatesRegisterUpdatesResultsData
 
-	err := v.Client.CallWithCaps(ctx, "registerUpdates", &args, &ret, caps)
+	err := v.CallWithCaps(ctx, "registerUpdates", &args, &ret, caps)
 	if err != nil {
 		return nil, err
 	}
@@ -1042,14 +1042,14 @@ func (v AdjustTempClient) Adjust(ctx context.Context, setter SetTemp) (*AdjustTe
 	args := AdjustTempAdjustArgs{}
 	caps := map[rpc.OID]*rpc.InlineCapability{}
 	{
-		ic, oid, c := v.Client.NewInlineCapability(AdaptSetTemp(setter), setter)
+		ic, oid, c := v.NewInlineCapability(AdaptSetTemp(setter), setter)
 		args.data.Setter = c
 		caps[oid] = ic
 	}
 
 	var ret adjustTempAdjustResultsData
 
-	err := v.Client.CallWithCaps(ctx, "adjust", &args, &ret, caps)
+	err := v.CallWithCaps(ctx, "adjust", &args, &ret, caps)
 	if err != nil {
 		return nil, err
 	}
@@ -1196,7 +1196,7 @@ func (v SetTempGClient[T]) SetTemp(ctx context.Context, temp T) (*SetTempGClient
 
 	var ret setTempGSetTempResultsData[T]
 
-	err := v.Client.Call(ctx, "setTemp", &args, &ret)
+	err := v.Call(ctx, "setTemp", &args, &ret)
 	if err != nil {
 		return nil, err
 	}
@@ -1341,14 +1341,14 @@ func (v EmitTempsClient) Emit(ctx context.Context, emitter stream.SendStream[flo
 	args := EmitTempsEmitArgs{}
 	caps := map[rpc.OID]*rpc.InlineCapability{}
 	{
-		ic, oid, c := v.Client.NewInlineCapability(stream.AdaptSendStream[float32](emitter), emitter)
+		ic, oid, c := v.NewInlineCapability(stream.AdaptSendStream[float32](emitter), emitter)
 		args.data.Emitter = c
 		caps[oid] = ic
 	}
 
 	var ret emitTempsEmitResultsData
 
-	err := v.Client.CallWithCaps(ctx, "emit", &args, &ret, caps)
+	err := v.CallWithCaps(ctx, "emit", &args, &ret, caps)
 	if err != nil {
 		return nil, err
 	}

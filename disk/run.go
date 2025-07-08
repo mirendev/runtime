@@ -159,7 +159,7 @@ func (r *Runner) Start(ctx context.Context, name, fsPath, bindAddr string) error
 		err := cmd.Run()
 		if err != nil {
 			if ee, ok := err.(*exec.ExitError); ok {
-				if ee.ProcessState.ExitCode() > 2 {
+				if ee.ExitCode() > 2 {
 					return errors.Wrapf(err, "fscking")
 				}
 			}
@@ -376,7 +376,7 @@ func (r *Runner) Run(ctx context.Context, name, fsPath, bindAddr string) error {
 		err := cmd.Run()
 		if err != nil {
 			if ee, ok := err.(*exec.ExitError); ok {
-				if ee.ProcessState.ExitCode() > 2 {
+				if ee.ExitCode() > 2 {
 					return errors.Wrapf(err, "fscking")
 				}
 			}

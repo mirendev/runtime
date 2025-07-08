@@ -119,13 +119,14 @@ func (h *RegistryHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		name := strings.Join(parts[:len(parts)-2], "/")
 		reference := parts[len(parts)-1]
 
-		if r.Method == http.MethodGet {
+		switch r.Method {
+		case http.MethodGet:
 			h.getManifest(w, r, name, reference)
-		} else if r.Method == http.MethodPut {
+		case http.MethodPut:
 			h.putManifest(w, r, name, reference)
-		} else if r.Method == http.MethodHead {
+		case http.MethodHead:
 			h.headManifest(w, r, name, reference)
-		} else {
+		default:
 			w.WriteHeader(http.StatusMethodNotAllowed)
 		}
 
@@ -134,11 +135,12 @@ func (h *RegistryHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		name := strings.Join(parts[:len(parts)-2], "/")
 		digest := parts[len(parts)-1]
 
-		if r.Method == http.MethodGet {
+		switch r.Method {
+		case http.MethodGet:
 			h.getBlob(w, r, name, digest)
-		} else if r.Method == http.MethodHead {
+		case http.MethodHead:
 			h.headBlob(w, r, name, digest)
-		} else {
+		default:
 			w.WriteHeader(http.StatusMethodNotAllowed)
 		}
 

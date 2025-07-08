@@ -87,7 +87,7 @@ func histogram(buckets []Bucket) string {
 		if max > 0 {
 			barLen = (buckets[i].Count*40 + max/2) / max
 		}
-		res.WriteString(fmt.Sprintf("  %4.3f [%v]\t|%v\n", buckets[i].Mark, buckets[i].Count, strings.Repeat(barChar, barLen)))
+		fmt.Fprintf(res, "  %4.3f [%v]\t|%v\n", buckets[i].Mark, buckets[i].Count, strings.Repeat(barChar, barLen))
 	}
 	return res.String()
 }

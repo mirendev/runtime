@@ -42,7 +42,7 @@ func (d IP) ConvertToNative(typeDesc reflect.Type) (any, error) {
 		return d.Addr, nil
 	}
 	if reflect.TypeOf("").AssignableTo(typeDesc) {
-		return d.Addr.String(), nil
+		return d.String(), nil
 	}
 	return nil, fmt.Errorf("type conversion error from 'IP' to '%v'", typeDesc)
 }
@@ -55,7 +55,7 @@ func (d IP) ConvertToType(typeVal ref.Type) ref.Val {
 	case types.TypeType:
 		return IPType
 	case types.StringType:
-		return types.String(d.Addr.String())
+		return types.String(d.String())
 	}
 	return types.NewErr("type conversion error from '%s' to '%s'", IPType, typeVal)
 }
@@ -82,5 +82,5 @@ func (d IP) Value() any {
 // Size returns the size of the IP address in bytes.
 // Used in the size estimation of the runtime cost.
 func (d IP) Size() ref.Val {
-	return types.Int(int(math.Ceil(float64(d.Addr.BitLen()) / 8)))
+	return types.Int(int(math.Ceil(float64(d.BitLen()) / 8)))
 }

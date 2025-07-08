@@ -338,7 +338,7 @@ func (v DiskManagementClient) Unmount(ctx context.Context, id string) (*DiskMana
 
 	var ret diskManagementUnmountResultsData
 
-	err := v.Client.Call(ctx, "unmount", &args, &ret)
+	err := v.Call(ctx, "unmount", &args, &ret)
 	if err != nil {
 		return nil, err
 	}
@@ -365,7 +365,7 @@ func (v DiskManagementClient) Status(ctx context.Context, id string) (*DiskManag
 
 	var ret diskManagementStatusResultsData
 
-	err := v.Client.Call(ctx, "status", &args, &ret)
+	err := v.Call(ctx, "status", &args, &ret)
 	if err != nil {
 		return nil, err
 	}

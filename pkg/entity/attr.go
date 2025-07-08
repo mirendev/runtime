@@ -960,7 +960,7 @@ func (v Value) sum(w io.Writer) {
 		binary.BigEndian.PutUint64(b[:], uint64(v.time().UnixNano()))
 		w.Write(b[:])
 	case KindId, KindKeyword, KindAny:
-		w.Write([]byte(fmt.Sprint(v.any)))
+		fmt.Fprint(w, v.any)
 	case KindComponent:
 		for _, a := range v.Component().Attrs {
 			a.Sum(w)

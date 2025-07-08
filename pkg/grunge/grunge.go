@@ -100,7 +100,7 @@ func (n *Network) SetupConfig(ctx context.Context, v4, v6 netip.Prefix) error {
 
 	n.log.Info("Setting up config", "key", key, "value", string(cfg))
 
-	_, err = n.ec.KV.Put(ctx, key, string(cfg))
+	_, err = n.ec.Put(ctx, key, string(cfg))
 	return err
 }
 
