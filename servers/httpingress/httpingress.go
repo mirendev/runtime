@@ -88,6 +88,9 @@ func (h *Server) checkLeases(ctx context.Context) {
 	}
 }
 
+// expireLeases runs periodically to clean up unused leases.
+// Leases with no active requests are released back to the activator,
+// while leases still in use are renewed to prevent sandbox retirement.
 func (h *Server) expireLeases(ctx context.Context) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -140,11 +143,16 @@ func (h *Server) DeriveApp(host string) (string, bool) {
 	return host, true
 }
 
+// lease wraps an activator.Lease with usage tracking.
+// HTTPIngress tracks how many concurrent requests are using each lease
+// to ensure we don't exceed the reserved capacity.
 type lease struct {
-	Uses  int
-	Lease *activator.Lease
+	Uses  int              // Current number of requests using this lease
+	Lease *activator.Lease // The underlying lease from the activator
 }
 
+// retainLease stores a newly acquired lease and marks it as having one use.
+// Called after successfully acquiring a lease from the activator.
 func (h *Server) retainLease(ctx context.Context, app string, l *activator.Lease) *lease {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -166,6 +174,9 @@ func (h *Server) retainLease(ctx context.Context, app string, l *activator.Lease
 	return ll
 }
 
+// useLease tries to find an existing lease with available capacity.
+// Returns nil if no leases exist or all are at capacity.
+// The caller must acquire a new lease from the activator if this returns nil.
 func (h *Server) useLease(ctx context.Context, app string) (*lease, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -180,7 +191,9 @@ func (h *Server) useLease(ctx context.Context, app string) (*lease, error) {
 	}
 
 	for _, l := range ar.leases {
-		if l.Uses <= l.Lease.Size {
+		// Check if this lease has available capacity (Uses < Size)
+		// Note: Size=0 means unlimited capacity
+		if l.Lease.Size == 0 || l.Uses < l.Lease.Size {
 			l.Uses++
 			return l, nil
 		}
@@ -301,7 +314,10 @@ func (h *Server) serveHTTPWithMetrics(w http.ResponseWriter, req *http.Request, 
 
 	h.Log.Info("routing request", "host", onlyHost, "app", targetAppId, "name", *appName, "type", routeType)
 
-	// Common lease handling logic
+	// Lease acquisition flow:
+	// 1. First try to use an existing lease with available capacity
+	// 2. If none available, acquire a new lease from the activator
+	// 3. The activator will either reuse an existing sandbox or create a new one
 	curLease, err := h.useLease(ctx, targetAppId.String())
 	if err != nil {
 		h.Log.Error("error taking lease", "error", err, "app", targetAppId)

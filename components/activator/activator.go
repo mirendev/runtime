@@ -1,3 +1,17 @@
+// Package activator manages application sandbox lifecycle and capacity.
+//
+// Architecture overview:
+// - HTTPIngress requests leases from the activator to handle incoming requests
+// - The activator maintains a pool of sandboxes for each app version
+// - Leases represent reserved capacity (slots) within a sandbox
+// - Slot-based concurrency control respects requests_per_instance limits
+// - Background tasks handle sandbox retirement and min_instances enforcement
+//
+// Key flows:
+// 1. Request arrives at HTTPIngress → tries existing lease → acquires new lease if needed
+// 2. Activator finds sandbox with capacity → reserves slots → returns lease with direct URL
+// 3. HTTPIngress forwards request to sandbox URL and tracks lease usage
+// 4. Periodic lease renewal prevents sandbox retirement during active use
 package activator
 
 import (
@@ -18,14 +32,16 @@ import (
 	"miren.dev/runtime/pkg/rpc/stream"
 )
 
+// Lease represents a claim on a portion of a sandbox's capacity.
+// HTTPIngress acquires leases from the activator and tracks their usage.
 type Lease struct {
 	ver     *core_v1alpha.AppVersion
 	sandbox *compute_v1alpha.Sandbox
 	ent     *entity.Entity
 	pool    string
 
-	Size int
-	URL  string
+	Size int    // Number of concurrent request slots this lease reserves
+	URL  string // Direct URL to reach the sandbox
 }
 
 func (l *Lease) Version() *core_v1alpha.AppVersion {
@@ -44,26 +60,37 @@ func (l *Lease) Pool() string {
 	return l.pool
 }
 
+// AppActivator manages the lifecycle of application sandboxes and provides leases for accessing them.
+// It handles scaling up/down based on demand and respects concurrency limits.
 type AppActivator interface {
+	// AcquireLease finds or creates a sandbox with available capacity and reserves slots
 	AcquireLease(ctx context.Context, ver *core_v1alpha.AppVersion, pool, service string) (*Lease, error)
+	// ReleaseLease returns reserved slots back to the sandbox's available capacity
 	ReleaseLease(ctx context.Context, lease *Lease) error
+	// RenewLease updates the last renewal time to prevent sandbox retirement
 	RenewLease(ctx context.Context, lease *Lease) (*Lease, error)
 }
 
+// sandbox tracks a running instance and its capacity utilization.
+// The slot system manages concurrent request handling:
+// - maxSlots=0 means unlimited capacity (requests_per_instance not set)
+// - maxSlots>0 enforces a specific concurrency limit
 type sandbox struct {
 	sandbox     *compute_v1alpha.Sandbox
 	ent         *entity.Entity
-	lastRenewal time.Time
+	lastRenewal time.Time // Used to determine when to retire idle sandboxes
 	url         string
-	maxSlots    int
-	inuseSlots  int
+	maxSlots    int // Total concurrent request capacity (0 = unlimited)
+	inuseSlots  int // Currently reserved slots across all leases
 }
 
+// verSandboxes groups all sandboxes for a specific app version.
+// It tracks the standard lease size for consistent slot allocation.
 type verSandboxes struct {
 	ver       *core_v1alpha.AppVersion
 	sandboxes []*sandbox
 
-	leaseSlots int
+	leaseSlots int // Standard slot count per lease (0 when requests_per_instance=0)
 }
 
 type verKey struct {
@@ -92,6 +119,10 @@ func NewLocalActivator(ctx context.Context, log *slog.Logger, eac *entityserver_
 	return la
 }
 
+// AcquireLease implements the core logic for finding available capacity:
+// 1. Try to find an existing sandbox with available slots
+// 2. If none available, create a new sandbox (respecting max_instances)
+// 3. Reserve slots and return a lease
 func (a *localActivator) AcquireLease(ctx context.Context, ver *core_v1alpha.AppVersion, pool, service string) (*Lease, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -118,7 +149,7 @@ func (a *localActivator) AcquireLease(ctx context.Context, ver *core_v1alpha.App
 
 		for i := 0; i < len(vs.sandboxes); i++ {
 			s := vs.sandboxes[(start+i)%len(vs.sandboxes)]
-			if s.inuseSlots+vs.leaseSlots < s.maxSlots {
+			if s.inuseSlots+vs.leaseSlots <= s.maxSlots {
 				s.inuseSlots += vs.leaseSlots
 
 				a.log.Debug("reusing sandbox", "app", ver.App, "version", ver.Version, "sandbox", s.sandbox.ID, "in-use", s.inuseSlots)
@@ -231,7 +262,7 @@ func (a *localActivator) activateApp(ctx context.Context, ver *core_v1alpha.AppV
 		sbEnt     *entity.Entity
 	)
 
-	a.log.Debug("watching sandbox", "app", ver.App, "sandbox", pr.Id())
+	a.log.Debug("watching sandbox until it becomes running", "app", ver.App, "sandbox", pr.Id())
 
 	a.eac.WatchEntity(ctx, pr.Id(), stream.Callback(func(op *entityserver_v1alpha.EntityOp) error {
 		var sb compute_v1alpha.Sandbox
@@ -252,22 +283,26 @@ func (a *localActivator) activateApp(ctx context.Context, ver *core_v1alpha.AppV
 	}))
 
 	if runningSB.Status != compute_v1alpha.RUNNING {
-		return nil, err
+		a.log.Error("sandbox did not become running", "app", ver.App, "sandbox", pr.Id(), "status", runningSB.Status)
+		return nil, fmt.Errorf("sandbox did not become running: %s", runningSB.Status)
 	}
 
 	addr := fmt.Sprintf("http://%s:%d", runningSB.Network[0].Address, port)
 
+	// Calculate lease slot size based on concurrency configuration:
+	// - If requests_per_instance > 0: each lease gets 20% of total capacity (min 1)
+	// - If requests_per_instance = 0: unlimited capacity, so leaseSlots = 0
+	// This ensures slot arithmetic works correctly: 0+0 <= 0 for unlimited apps
 	var leaseSlots int
 
-	if ver.Config.Concurrency.RequestsPerInstance <= 0 {
-		leaseSlots = 1
-	} else {
+	if ver.Config.Concurrency.RequestsPerInstance > 0 {
 		leaseSlots = int(float32(ver.Config.Concurrency.RequestsPerInstance) * 0.20)
 
 		if leaseSlots < 1 {
 			leaseSlots = 1
 		}
 	}
+	// When RequestsPerInstance is 0 (unlimited), leaseSlots remains 0
 
 	lsb := &sandbox{
 		sandbox:     &runningSB,
