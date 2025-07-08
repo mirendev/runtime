@@ -490,6 +490,7 @@ func (s *Server) lookup(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+//nolint:errcheck
 func (s *Server) reresolve(w http.ResponseWriter, r *http.Request) {
 	var rs InterfaceState
 

@@ -148,6 +148,7 @@ func (r *ActorRegistry) Register(ctx context.Context, name string, iface *rpc.In
 	owned := r.acquirePath(ctx, name, lr.ID)
 
 	go func() {
+		//nolint:errcheck
 		defer r.ec.Revoke(ctx, lr.ID)
 
 		ctx, cancel := context.WithCancel(ctx)

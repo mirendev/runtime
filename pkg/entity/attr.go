@@ -941,6 +941,8 @@ func (v Value) append(dst []byte) []byte {
 
 // append appends a text representation of v to dst.
 // v is formatted as with fmt.Sprint.
+//
+//nolint:errcheck
 func (v Value) sum(w io.Writer) {
 	switch v.Kind() {
 	case KindString:
