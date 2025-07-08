@@ -409,3 +409,91 @@ func TestSingleLabelFieldEncoding(t *testing.T) {
 		t.Error("Expected correct Label encoding call with o.Tag.Key and o.Tag.Value")
 	}
 }
+
+func TestRegisterEncodedSchemaStableWithDifferentFieldOrder(t *testing.T) {
+	// Test that RegisterEncodedSchema produces the same output regardless of field and kind order
+	// This is important because Go maps iterate in random order
+	// Running multiple iterations to catch non-deterministic behavior that may only occur occasionally
+
+	// Schema with multiple kinds and fields
+	sf := &schemaFile{
+		Domain:  "test.order",
+		Version: "v1",
+		Kinds: map[string]schemaAttrs{
+			"item": {
+				"alpha": &schemaAttr{
+					Type: "string",
+					Doc:  "Alpha field",
+				},
+				"beta": &schemaAttr{
+					Type: "int",
+					Doc:  "Beta field",
+				},
+				"gamma": &schemaAttr{
+					Type: "bool",
+					Doc:  "Gamma field",
+				},
+			},
+			"user": {
+				"name": &schemaAttr{
+					Type: "string",
+					Doc:  "User name",
+				},
+				"age": &schemaAttr{
+					Type: "int",
+					Doc:  "User age",
+				},
+				"active": &schemaAttr{
+					Type: "bool",
+					Doc:  "Is user active",
+				},
+			},
+			"product": {
+				"title": &schemaAttr{
+					Type: "string",
+					Doc:  "Product title",
+				},
+				"price": &schemaAttr{
+					Type: "int",
+					Doc:  "Product price",
+				},
+			},
+		},
+	}
+
+	// Extract RegisterEncodedSchema line from generated code
+	extractRegisterLine := func(code string) string {
+		pattern := `schema.RegisterEncodedSchema("test.order", "v1", []byte(`
+		start := strings.Index(code, pattern)
+		if start == -1 {
+			t.Fatal("Could not find RegisterEncodedSchema call")
+		}
+		end := strings.Index(code[start:], "))")
+		if end == -1 {
+			t.Fatal("Could not find end of RegisterEncodedSchema call")
+		}
+		return code[start : start+end+2]
+	}
+
+	// Generate the schema multiple times to catch non-deterministic behavior
+	const iterations = 5
+	var outputs []string
+
+	for i := 0; i < iterations; i++ {
+		code, err := GenerateSchema(sf, "test")
+		if err != nil {
+			t.Fatalf("Failed to generate schema on iteration %d: %v", i, err)
+		}
+
+		line := extractRegisterLine(code)
+		outputs = append(outputs, line)
+	}
+
+	// Verify all outputs are identical
+	for i := 1; i < iterations; i++ {
+		if outputs[i] != outputs[0] {
+			t.Fatalf("RegisterEncodedSchema output differs on iteration %d:\nFirst:  %s\nIteration %d: %s",
+				i, outputs[0], i, outputs[i])
+		}
+	}
+}
