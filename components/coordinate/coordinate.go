@@ -363,7 +363,7 @@ func (c *Coordinator) Start(ctx context.Context) error {
 
 	c.cm = controller.NewControllerManager()
 
-	minInstancesController := &appcontroller.MinInstancesController{
+	deploymentController := &appcontroller.DeploymentController{
 		Log: c.Log,
 		EAC: eac,
 		AA:  aa,
@@ -371,12 +371,12 @@ func (c *Coordinator) Start(ctx context.Context) error {
 
 	c.cm.AddController(
 		controller.NewReconcileController(
-			"app-min-instances",
+			"app-deployment",
 			c.Log,
 			entity.Ref(entity.EntityKind, core_v1alpha.KindApp),
 			eac,
-			controller.AdaptController(minInstancesController),
-			30*time.Second, // Resync every 30s to ensure min instances
+			controller.AdaptController(deploymentController),
+			30*time.Second, // Resync periodically to ensure consistency
 			1,              // Single worker is sufficient
 		),
 	)

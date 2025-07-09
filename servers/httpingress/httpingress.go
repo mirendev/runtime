@@ -347,7 +347,7 @@ func (h *Server) serveHTTPWithMetrics(w http.ResponseWriter, req *http.Request, 
 	var av core_v1alpha.AppVersion
 	av.Decode(vr.Entity().Entity())
 
-	actLease, err := h.aa.AcquireLease(ctx, &av, "http", "web")
+	actLease, err := h.aa.AcquireLease(ctx, &av, activator.DefaultPool, activator.DefaultService)
 	if err != nil {
 		h.Log.Error("error acquiring lease", "error", err, "app", targetAppId)
 		http.Error(w, fmt.Sprintf("error acquiring lease: %s", targetAppId), http.StatusInternalServerError)

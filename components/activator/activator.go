@@ -25,12 +25,19 @@ import (
 
 	"miren.dev/runtime/api/compute/compute_v1alpha"
 	"miren.dev/runtime/api/core/core_v1alpha"
+	"miren.dev/runtime/api/entityserver"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/types"
 	"miren.dev/runtime/pkg/idgen"
 	"miren.dev/runtime/pkg/rpc/stream"
 )
+
+// DefaultPool is the default pool name for HTTP services
+const DefaultPool = "http"
+
+// DefaultService is the default service name for HTTP services
+const DefaultService = "web"
 
 // Lease represents a claim on a portion of a sandbox's capacity.
 // HTTPIngress acquires leases from the activator and tracks their usage.
@@ -69,6 +76,8 @@ type AppActivator interface {
 	ReleaseLease(ctx context.Context, lease *Lease) error
 	// RenewLease updates the last renewal time to prevent sandbox retirement
 	RenewLease(ctx context.Context, lease *Lease) (*Lease, error)
+	// Deploy handles deployment of a new app version, ensuring min instances and cleaning up old versions
+	Deploy(ctx context.Context, app *core_v1alpha.App, ver *core_v1alpha.AppVersion, pool string) error
 }
 
 // sandbox tracks a running instance and its capacity utilization.
@@ -103,6 +112,7 @@ type localActivator struct {
 
 	log *slog.Logger
 	eac *entityserver_v1alpha.EntityAccessClient
+	ec  *entityserver.Client
 }
 
 var _ AppActivator = (*localActivator)(nil)
@@ -111,6 +121,7 @@ func NewLocalActivator(ctx context.Context, log *slog.Logger, eac *entityserver_
 	la := &localActivator{
 		log:      log.With("module", "activator"),
 		eac:      eac,
+		ec:       entityserver.NewClient(log, eac),
 		versions: make(map[verKey]*verSandboxes),
 	}
 
@@ -179,6 +190,40 @@ func (a *localActivator) AcquireLease(ctx context.Context, ver *core_v1alpha.App
 }
 
 func (a *localActivator) activateApp(ctx context.Context, ver *core_v1alpha.AppVersion, pool, service string) (*Lease, error) {
+	// Create the sandbox
+	sb, err := a.createSandbox(ctx, ver, pool, service)
+	if err != nil {
+		return nil, err
+	}
+
+	// Get lease size from version tracking
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	key := verKey{ver.ID.String(), pool}
+	vs, ok := a.versions[key]
+	if !ok {
+		return nil, fmt.Errorf("version tracking not found after creating sandbox")
+	}
+
+	// Mark slots as in use for the first lease
+	sb.inuseSlots = vs.leaseSlots
+
+	lease := &Lease{
+		ver:     ver,
+		sandbox: sb.sandbox,
+		ent:     sb.ent,
+		pool:    pool,
+		Size:    vs.leaseSlots,
+		URL:     sb.url,
+	}
+
+	return lease, nil
+}
+
+// createSandbox creates a new sandbox entity, waits for it to become running, and adds it to version tracking
+func (a *localActivator) createSandbox(ctx context.Context, ver *core_v1alpha.AppVersion, pool, service string) (*sandbox, error) {
+	// Get app metadata
 	gr, err := a.eac.Get(ctx, ver.App.String())
 	if err != nil {
 		return nil, err
@@ -190,18 +235,17 @@ func (a *localActivator) activateApp(ctx context.Context, ver *core_v1alpha.AppV
 	var appMD core_v1alpha.Metadata
 	appMD.Decode(gr.Entity().Entity())
 
-	var sb compute_v1alpha.Sandbox
-	sb.Version = app.ActiveVersion
-
-	sb.LogEntity = app.EntityId().String()
-	sb.LogAttribute = types.LabelSet("stage", "app-run", "pool", pool, "service", service)
-
 	// Determine port from config or default to 3000
 	port := int64(3000)
 	if ver.Config.Port > 0 {
 		port = ver.Config.Port
 	}
+	var sb compute_v1alpha.Sandbox
+	sb.Version = app.ActiveVersion
+	sb.LogEntity = app.EntityId().String()
+	sb.LogAttribute = types.LabelSet("stage", "app-run", "pool", pool, "service", service)
 
+	// Build the app container
 	appCont := compute_v1alpha.Container{
 		Name:  "app",
 		Image: ver.ImageUrl,
@@ -219,10 +263,12 @@ func (a *localActivator) activateApp(ctx context.Context, ver *core_v1alpha.AppV
 		},
 	}
 
-	for _, x := range ver.Config.Variable {
-		appCont.Env = append(appCont.Env, x.Key+"="+x.Value)
+	// Add environment variables from config
+	for _, v := range ver.Config.Variable {
+		appCont.Env = append(appCont.Env, v.Key+"="+v.Value)
 	}
 
+	// Set command based on service
 	for _, s := range ver.Config.Commands {
 		if s.Service == service && s.Command != "" {
 			if ver.Config.Entrypoint != "" {
@@ -237,9 +283,9 @@ func (a *localActivator) activateApp(ctx context.Context, ver *core_v1alpha.AppV
 	sb.Container = append(sb.Container, appCont)
 
 	name := idgen.GenNS("sb")
-
 	a.log.Debug("creating sandbox", "app", ver.App, "sandbox", name, "command", appCont.Command)
 
+	// Create the sandbox entity
 	var rpcE entityserver_v1alpha.Entity
 	rpcE.SetAttrs(entity.Attrs(
 		(&core_v1alpha.Metadata{
@@ -252,11 +298,12 @@ func (a *localActivator) activateApp(ctx context.Context, ver *core_v1alpha.AppV
 
 	pr, err := a.eac.Put(ctx, &rpcE)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to create sandbox entity: %w", err)
 	}
 
-	a.log.Debug("created sandbox", "app", ver.App, "sandbox", pr.Id())
+	a.log.Debug("created sandbox entity", "app", ver.App, "sandbox", pr.Id())
 
+	// Wait for sandbox to become running
 	var (
 		runningSB compute_v1alpha.Sandbox
 		sbEnt     *entity.Entity
@@ -264,7 +311,7 @@ func (a *localActivator) activateApp(ctx context.Context, ver *core_v1alpha.AppV
 
 	a.log.Debug("watching sandbox until it becomes running", "app", ver.App, "sandbox", pr.Id())
 
-	a.eac.WatchEntity(ctx, pr.Id(), stream.Callback(func(op *entityserver_v1alpha.EntityOp) error {
+	_, _ = a.eac.WatchEntity(ctx, pr.Id(), stream.Callback(func(op *entityserver_v1alpha.EntityOp) error {
 		var sb compute_v1alpha.Sandbox
 
 		if op.HasEntity() {
@@ -274,8 +321,7 @@ func (a *localActivator) activateApp(ctx context.Context, ver *core_v1alpha.AppV
 			if sb.Status == compute_v1alpha.RUNNING {
 				runningSB = sb
 				sbEnt = en
-				// TODO figure out a better way to signal that we're done with the watch.
-				return io.EOF
+				return io.EOF // Signal completion
 			}
 		}
 
@@ -287,44 +333,41 @@ func (a *localActivator) activateApp(ctx context.Context, ver *core_v1alpha.AppV
 		return nil, fmt.Errorf("sandbox did not become running: %s", runningSB.Status)
 	}
 
-	addr := fmt.Sprintf("http://%s:%d", runningSB.Network[0].Address, port)
+	// Construct the URL
+	url := fmt.Sprintf("http://%s:%d", runningSB.Network[0].Address, port)
 
-	// Calculate lease slot size based on concurrency configuration:
-	// - If requests_per_instance > 0: each lease gets 20% of total capacity (min 1)
-	// - If requests_per_instance = 0: unlimited capacity, so leaseSlots = 0
-	// This ensures slot arithmetic works correctly: 0+0 <= 0 for unlimited apps
-	var leaseSlots int
-
-	if ver.Config.Concurrency.RequestsPerInstance > 0 {
-		leaseSlots = int(float32(ver.Config.Concurrency.RequestsPerInstance) * 0.20)
-
-		if leaseSlots < 1 {
-			leaseSlots = 1
-		}
-	}
-	// When RequestsPerInstance is 0 (unlimited), leaseSlots remains 0
-
+	// Create the sandbox struct
 	lsb := &sandbox{
 		sandbox:     &runningSB,
 		ent:         sbEnt,
 		lastRenewal: time.Now(),
-		url:         addr,
+		url:         url,
 		maxSlots:    int(ver.Config.Concurrency.RequestsPerInstance),
-		inuseSlots:  leaseSlots,
+		inuseSlots:  0, // No slots in use initially
 	}
 
-	lease := &Lease{
-		ver:     ver,
-		sandbox: lsb.sandbox,
-		ent:     lsb.ent,
-		Size:    leaseSlots,
-		URL:     lsb.url,
-	}
+	// Add to version tracking
+	a.mu.Lock()
+	defer a.mu.Unlock()
 
+	vs := a.ensureVersionTracking(ver, pool)
+	vs.sandboxes = append(vs.sandboxes, lsb)
+
+	return lsb, nil
+}
+
+// ensureVersionTracking ensures version tracking exists for the given version and pool.
+// It returns the verSandboxes struct, creating it if necessary.
+// IMPORTANT: Must be called with a.mu held.
+func (a *localActivator) ensureVersionTracking(ver *core_v1alpha.AppVersion, pool string) *verSandboxes {
 	key := verKey{ver.ID.String(), pool}
-
-	vs, ok := a.versions[key]
-	if !ok {
+	vs, exists := a.versions[key]
+	if !exists {
+		// Calculate lease slots (1/5th of requests_per_instance)
+		var leaseSlots int
+		if ver.Config.Concurrency.RequestsPerInstance > 0 {
+			leaseSlots = max(1, int(float32(ver.Config.Concurrency.RequestsPerInstance)*0.2))
+		}
 		vs = &verSandboxes{
 			ver:        ver,
 			sandboxes:  []*sandbox{},
@@ -332,10 +375,7 @@ func (a *localActivator) activateApp(ctx context.Context, ver *core_v1alpha.AppV
 		}
 		a.versions[key] = vs
 	}
-
-	vs.sandboxes = append(vs.sandboxes, lsb)
-
-	return lease, nil
+	return vs
 }
 
 func (a *localActivator) ReleaseLease(ctx context.Context, lease *Lease) error {
@@ -443,58 +483,189 @@ func (a *localActivator) retireUnusedSandboxes() {
 	}
 }
 
+// ensureMinInstancesForVersion ensures min_instances are running for a specific version.
+// IMPORTANT: Must be called with a.mu held.
+func (a *localActivator) ensureMinInstancesForVersion(ctx context.Context, vs *verSandboxes, key verKey) {
+	minInstances := int(vs.ver.Config.Concurrency.MinInstances)
+	if minInstances <= 0 {
+		return
+	}
+
+	maxInstances := int(vs.ver.Config.Concurrency.MaxInstances)
+	currentCount := len(vs.sandboxes)
+
+	// Create additional sandboxes if needed
+	for i := currentCount; i < minInstances; i++ {
+		// Don't exceed max_instances if set
+		if maxInstances > 0 && len(vs.sandboxes) >= maxInstances {
+			a.log.Warn("cannot create sandbox for min_instances: would exceed max_instances",
+				"app", vs.ver.App,
+				"min", minInstances,
+				"max", maxInstances,
+				"current", len(vs.sandboxes))
+			break
+		}
+		a.log.Info("creating sandbox to meet min_instances",
+			"app", vs.ver.App,
+			"version", vs.ver.Version,
+			"current", currentCount,
+			"min", minInstances)
+
+		// Unlock before creating sandbox to avoid deadlock
+		a.mu.Unlock()
+		// TODO: Plumb service through here instead of assuming DefaultService, perhaps service can ride along with verKey?
+		//       Deploy() would need to take it as an argument as well
+		_, err := a.createSandbox(ctx, vs.ver, key.pool, DefaultService)
+		a.mu.Lock()
+
+		if err != nil {
+			a.log.Error("failed to create sandbox for min_instances",
+				"app", vs.ver.App,
+				"error", err)
+			break
+		}
+	}
+}
+
 // ensureMinInstances maintains min_instances for versions the activator knows about.
-// This complements the app controller by handling recovery when sandboxes crash or
-// are terminated. The controller ensures initial creation, while this ensures ongoing
-// availability for active versions.
 func (a *localActivator) ensureMinInstances(ctx context.Context) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
 	for key, vs := range a.versions {
-		minInstances := int(vs.ver.Config.Concurrency.MinInstances)
-		if minInstances <= 0 {
+		a.ensureMinInstancesForVersion(ctx, vs, key)
+	}
+}
+
+// Deploy handles deployment of a new app version.
+// It is idempotent and handles:
+// - Storing the app version in the activator's internal state
+// - Ensuring min_instances are running
+// - Cleaning up sandboxes from old versions
+func (a *localActivator) Deploy(ctx context.Context, app *core_v1alpha.App, ver *core_v1alpha.AppVersion, pool string) error {
+	if app.ActiveVersion != ver.ID {
+		return fmt.Errorf("app active version (%s) does not match deploying version (%s)", app.ActiveVersion, ver.ID)
+	}
+
+	a.log.Info("deploying app version",
+		"app", app.ID,
+		"version", ver.Version,
+		"pool", pool,
+		"min_instances", ver.Config.Concurrency.MinInstances)
+
+	// Ensure the version is in our tracking map and min_instances are running
+	a.mu.Lock()
+	vs := a.ensureVersionTracking(ver, pool)
+	key := verKey{ver.ID.String(), pool}
+	a.ensureMinInstancesForVersion(ctx, vs, key)
+	a.mu.Unlock()
+
+	// Clean up old versions after new version is running
+	if err := a.cleanupOldVersions(ctx, app, ver, pool); err != nil {
+		a.log.Error("failed to cleanup old versions, continuing anyway",
+			"app", app.ID,
+			"error", err)
+	}
+
+	return nil
+}
+
+// cleanupOldVersions stops sandboxes from previous app versions
+func (a *localActivator) cleanupOldVersions(ctx context.Context, app *core_v1alpha.App, currentVer *core_v1alpha.AppVersion, pool string) error {
+	// Query for all app versions of this app
+	versions, err := a.ec.List(ctx, entity.Ref(core_v1alpha.AppVersionAppId, app.ID))
+	if err != nil {
+		return fmt.Errorf("failed to list app versions: %w", err)
+	}
+
+	for versions.Next() {
+		var ver core_v1alpha.AppVersion
+		if err := versions.Read(&ver); err != nil {
+			a.log.Error("failed to read app version", "error", err)
 			continue
 		}
 
-		maxInstances := int(vs.ver.Config.Concurrency.MaxInstances)
-
-		// Count running sandboxes
-		runningCount := 0
-		for _, sb := range vs.sandboxes {
-			if sb.sandbox.Status == compute_v1alpha.RUNNING {
-				runningCount++
-			}
+		// Skip the current version
+		if ver.ID == currentVer.ID {
+			continue
 		}
 
-		// Create additional sandboxes if needed
-		for i := runningCount; i < minInstances; i++ {
-			// Don't exceed max_instances if set
-			if maxInstances > 0 && len(vs.sandboxes) >= maxInstances {
-				a.log.Warn("cannot create sandbox for min_instances: would exceed max_instances",
-					"app", vs.ver.App,
-					"min", minInstances,
-					"max", maxInstances,
-					"current", len(vs.sandboxes))
-				break
+		a.log.Info("cleaning up old app version",
+			"app", app.ID,
+			"oldVersion", ver.Version,
+			"currentVersion", currentVer.Version)
+
+		// Remove from our tracking
+		a.mu.Lock()
+		key := verKey{ver.ID.String(), pool}
+		vs, exists := a.versions[key]
+		if exists {
+			// Mark all sandboxes for stop
+			for _, sb := range vs.sandboxes {
+				if sb.sandbox.Status == compute_v1alpha.RUNNING || sb.sandbox.Status == compute_v1alpha.PENDING {
+					a.log.Info("marking sandbox for stop",
+						"app", app.ID,
+						"version", ver.Version,
+						"sandbox", sb.sandbox.ID)
+
+					// Update sandbox status to STOPPED
+					var rpcE entityserver_v1alpha.Entity
+					rpcE.SetId(sb.sandbox.ID.String())
+					rpcE.SetAttrs(entity.Attrs(
+						(&compute_v1alpha.Sandbox{
+							Status: compute_v1alpha.STOPPED,
+						}).Encode,
+					))
+
+					if _, err := a.eac.Put(ctx, &rpcE); err != nil {
+						a.log.Error("failed to stop sandbox",
+							"sandbox", sb.sandbox.ID,
+							"error", err)
+					}
+				}
 			}
-			a.log.Info("creating sandbox to meet min_instances",
-				"app", vs.ver.App,
-				"version", vs.ver.Version,
-				"current", runningCount,
-				"min", minInstances)
+			// Remove from tracking
+			delete(a.versions, key)
+		}
+		a.mu.Unlock()
 
-			// Unlock during activation to avoid deadlock
-			a.mu.Unlock()
-			_, err := a.activateApp(ctx, vs.ver, key.pool, "")
-			a.mu.Lock()
+		// Also query for any sandboxes we might not be tracking
+		sandboxes, err := a.ec.List(ctx, entity.Ref(compute_v1alpha.SandboxVersionId, ver.ID))
+		if err != nil {
+			a.log.Error("failed to list sandboxes for old version", "error", err)
+			continue
+		}
 
-			if err != nil {
-				a.log.Error("failed to create sandbox for min_instances",
-					"app", vs.ver.App,
-					"error", err)
-				break
+		for sandboxes.Next() {
+			var sb compute_v1alpha.Sandbox
+			if err := sandboxes.Read(&sb); err != nil {
+				a.log.Error("failed to read sandbox", "error", err)
+				continue
+			}
+
+			if sb.Status == compute_v1alpha.RUNNING || sb.Status == compute_v1alpha.PENDING {
+				a.log.Info("marking untracked sandbox for stop",
+					"app", app.ID,
+					"version", ver.Version,
+					"sandbox", sb.ID)
+
+				// Update sandbox status to STOPPED
+				var rpcE entityserver_v1alpha.Entity
+				rpcE.SetId(sb.ID.String())
+				rpcE.SetAttrs(entity.Attrs(
+					(&compute_v1alpha.Sandbox{
+						Status: compute_v1alpha.STOPPED,
+					}).Encode,
+				))
+
+				if _, err := a.eac.Put(ctx, &rpcE); err != nil {
+					a.log.Error("failed to stop untracked sandbox",
+						"sandbox", sb.ID,
+						"error", err)
+				}
 			}
 		}
 	}
+
+	return nil
 }
