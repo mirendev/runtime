@@ -187,7 +187,7 @@ func (s *Scheduler) assignSandbox(ctx context.Context, ent *entity.Entity, eac *
 		},
 	}
 
-	err := sandbox.Entity.Update(se.Encode())
+	err := sandbox.Update(se.Encode())
 	if err != nil {
 		s.log.Error("failed to update sandbox entity", "error", err)
 		return err

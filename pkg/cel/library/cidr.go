@@ -187,7 +187,7 @@ func cidrToString(arg ref.Val) ref.Val {
 		return types.MaybeNoSuchOverloadErr(arg)
 	}
 
-	return types.String(cidr.Prefix.String())
+	return types.String(cidr.String())
 }
 
 func cidrContainsIPString(arg ref.Val, other ref.Val) ref.Val {
@@ -223,8 +223,8 @@ func cidrContainsCIDR(arg ref.Val, other ref.Val) ref.Val {
 		return types.MaybeNoSuchOverloadErr(other)
 	}
 
-	equalMasked := cidr.Prefix.Masked() == netip.PrefixFrom(containsCIDR.Prefix.Addr(), cidr.Prefix.Bits())
-	return types.Bool(equalMasked && cidr.Prefix.Bits() <= containsCIDR.Prefix.Bits())
+	equalMasked := cidr.Masked() == netip.PrefixFrom(containsCIDR.Addr(), cidr.Bits())
+	return types.Bool(equalMasked && cidr.Bits() <= containsCIDR.Bits())
 }
 
 func prefixLength(arg ref.Val) ref.Val {
@@ -233,7 +233,7 @@ func prefixLength(arg ref.Val) ref.Val {
 		return types.MaybeNoSuchOverloadErr(arg)
 	}
 
-	return types.Int(cidr.Prefix.Bits())
+	return types.Int(cidr.Bits())
 }
 
 func isCIDR(arg ref.Val) ref.Val {
@@ -253,7 +253,7 @@ func cidrToIP(arg ref.Val) ref.Val {
 	}
 
 	return mcel.IP{
-		Addr: cidr.Prefix.Addr(),
+		Addr: cidr.Addr(),
 	}
 }
 
@@ -263,7 +263,7 @@ func masked(arg ref.Val) ref.Val {
 		return types.MaybeNoSuchOverloadErr(arg)
 	}
 
-	maskedCIDR := cidr.Prefix.Masked()
+	maskedCIDR := cidr.Masked()
 	return mcel.CIDR{
 		Prefix: maskedCIDR,
 	}

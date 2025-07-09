@@ -714,7 +714,7 @@ func (v SegmentReaderClient) ReadAt(ctx context.Context, offset int64, size int6
 
 	var ret segmentReaderReadAtResultsData
 
-	err := v.Client.Call(ctx, "readAt", &args, &ret)
+	err := v.Call(ctx, "readAt", &args, &ret)
 	if err != nil {
 		return nil, err
 	}
@@ -732,7 +732,7 @@ func (v SegmentReaderClient) Close(ctx context.Context) (*SegmentReaderClientClo
 
 	var ret segmentReaderCloseResultsData
 
-	err := v.Client.Call(ctx, "close", &args, &ret)
+	err := v.Call(ctx, "close", &args, &ret)
 	if err != nil {
 		return nil, err
 	}
@@ -758,7 +758,7 @@ func (v SegmentReaderClient) Layout(ctx context.Context) (*SegmentReaderClientLa
 
 	var ret segmentReaderLayoutResultsData
 
-	err := v.Client.Call(ctx, "layout", &args, &ret)
+	err := v.Call(ctx, "layout", &args, &ret)
 	if err != nil {
 		return nil, err
 	}
@@ -784,7 +784,7 @@ func (v SegmentReaderClient) DataPath(ctx context.Context) (*SegmentReaderClient
 
 	var ret segmentReaderDataPathResultsData
 
-	err := v.Client.Call(ctx, "dataPath", &args, &ret)
+	err := v.Call(ctx, "dataPath", &args, &ret)
 	if err != nil {
 		return nil, err
 	}
@@ -1046,7 +1046,7 @@ func (v SegmentWriterClient) WriteAt(ctx context.Context, offset int64, data []b
 
 	var ret segmentWriterWriteAtResultsData
 
-	err := v.Client.Call(ctx, "writeAt", &args, &ret)
+	err := v.Call(ctx, "writeAt", &args, &ret)
 	if err != nil {
 		return nil, err
 	}
@@ -1064,7 +1064,7 @@ func (v SegmentWriterClient) Close(ctx context.Context) (*SegmentWriterClientClo
 
 	var ret segmentWriterCloseResultsData
 
-	err := v.Client.Call(ctx, "close", &args, &ret)
+	err := v.Call(ctx, "close", &args, &ret)
 	if err != nil {
 		return nil, err
 	}
@@ -1637,7 +1637,7 @@ func (v DataSetClient) GetInfo(ctx context.Context) (*DataSetClientGetInfoResult
 
 	var ret dataSetGetInfoResultsData
 
-	err := v.Client.Call(ctx, "getInfo", &args, &ret)
+	err := v.Call(ctx, "getInfo", &args, &ret)
 	if err != nil {
 		return nil, err
 	}
@@ -1666,7 +1666,7 @@ func (v DataSetClient) ListSegments(ctx context.Context) (*DataSetClientListSegm
 
 	var ret dataSetListSegmentsResultsData
 
-	err := v.Client.Call(ctx, "listSegments", &args, &ret)
+	err := v.Call(ctx, "listSegments", &args, &ret)
 	if err != nil {
 		return nil, err
 	}
@@ -1691,7 +1691,7 @@ func (v DataSetClient) ReadSegment(ctx context.Context, id string) (*DataSetClie
 
 	var ret dataSetReadSegmentResultsData
 
-	err := v.Client.Call(ctx, "readSegment", &args, &ret)
+	err := v.Call(ctx, "readSegment", &args, &ret)
 	if err != nil {
 		return nil, err
 	}
@@ -1717,7 +1717,7 @@ func (v DataSetClient) NewSegment(ctx context.Context, id string, layout *Segmen
 
 	var ret dataSetNewSegmentResultsData
 
-	err := v.Client.Call(ctx, "newSegment", &args, &ret)
+	err := v.Call(ctx, "newSegment", &args, &ret)
 	if err != nil {
 		return nil, err
 	}
@@ -1748,7 +1748,7 @@ func (v DataSetClient) ReadBytes(ctx context.Context, offset int64, count int64)
 
 	var ret dataSetReadBytesResultsData
 
-	err := v.Client.Call(ctx, "readBytes", &args, &ret)
+	err := v.Call(ctx, "readBytes", &args, &ret)
 	if err != nil {
 		return nil, err
 	}
@@ -2202,7 +2202,7 @@ func (v DataSetsClient) List(ctx context.Context) (*DataSetsClientListResults, e
 
 	var ret dataSetsListResultsData
 
-	err := v.Client.Call(ctx, "list", &args, &ret)
+	err := v.Call(ctx, "list", &args, &ret)
 	if err != nil {
 		return nil, err
 	}
@@ -2227,7 +2227,7 @@ func (v DataSetsClient) Create(ctx context.Context, info *DataSetInfo) (*DataSet
 
 	var ret dataSetsCreateResultsData
 
-	err := v.Client.Call(ctx, "create", &args, &ret)
+	err := v.Call(ctx, "create", &args, &ret)
 	if err != nil {
 		return nil, err
 	}
@@ -2252,7 +2252,7 @@ func (v DataSetsClient) Get(ctx context.Context, id string) (*DataSetsClientGetR
 
 	var ret dataSetsGetResultsData
 
-	err := v.Client.Call(ctx, "get", &args, &ret)
+	err := v.Call(ctx, "get", &args, &ret)
 	if err != nil {
 		return nil, err
 	}
@@ -2271,7 +2271,7 @@ func (v DataSetsClient) Delete(ctx context.Context, id string) (*DataSetsClientD
 
 	var ret dataSetsDeleteResultsData
 
-	err := v.Client.Call(ctx, "delete", &args, &ret)
+	err := v.Call(ctx, "delete", &args, &ret)
 	if err != nil {
 		return nil, err
 	}

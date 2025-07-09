@@ -886,7 +886,8 @@ func (g *Generator) generateCompactStruct(f *j.File, t *DescType) error {
 		})
 
 		for _, field := range t.Fields {
-			if field.Type == "list" {
+			switch field.Type {
+			case "list":
 				if g.ti(field.Element).isMessage {
 					gr.Id(toCamal(field.Name)).Index().Id(field.Element).Tag(map[string]string{
 						"cbor": fmt.Sprintf("%d,keyasint,omitempty", field.Index),
@@ -899,9 +900,9 @@ func (g *Generator) generateCompactStruct(f *j.File, t *DescType) error {
 					})
 				}
 
-			} else if field.Type == "union" {
+			case "union":
 				gr.Id(private(t.Type) + toCamal(field.Name))
-			} else {
+			default:
 				typ := g.properType(field.Type)
 
 				if field.isInterface {
@@ -1220,7 +1221,8 @@ func (g *Generator) generateStruct(f *j.File) error {
 			}
 
 			for _, field := range t.Fields {
-				if field.Type == "list" {
+				switch field.Type {
+				case "list":
 					if g.ti(field.Element).isMessage {
 						gr.Id(toCamal(field.Name)).Op("*").Index().Op("*").Id(field.Element).Tag(map[string]string{
 							"cbor": fmt.Sprintf("%d,keyasint,omitempty", field.Index),
@@ -1233,9 +1235,9 @@ func (g *Generator) generateStruct(f *j.File) error {
 						})
 					}
 
-				} else if field.Type == "union" {
+				case "union":
 					gr.Id(private(t.Type) + toCamal(field.Name))
-				} else {
+				default:
 					typ := j.Op("*").Add(g.properType(field.Type))
 
 					if field.isInterface {

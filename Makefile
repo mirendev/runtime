@@ -54,6 +54,16 @@ bin/runtime-debug:
 
 .PHONY: bin/runtime-debug
 
+lint:
+	golangci-lint run ./...
+
+.PHONY: lint
+
+lint-fix:
+	golangci-lint run --fix ./...
+
+.PHONY: lint-fix
+
 lint-changed:
 	@bash ./hack/lint-changed.sh
 

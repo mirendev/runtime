@@ -394,24 +394,24 @@ func (v SandboxExecClient) Exec(ctx context.Context, category string, value stri
 	args.data.Command = &command
 	args.data.Options = options
 	{
-		ic, oid, c := v.Client.NewInlineCapability(stream.AdaptRecvStream[[]byte](input), input)
+		ic, oid, c := v.NewInlineCapability(stream.AdaptRecvStream[[]byte](input), input)
 		args.data.Input = c
 		caps[oid] = ic
 	}
 	{
-		ic, oid, c := v.Client.NewInlineCapability(stream.AdaptSendStream[[]byte](output), output)
+		ic, oid, c := v.NewInlineCapability(stream.AdaptSendStream[[]byte](output), output)
 		args.data.Output = c
 		caps[oid] = ic
 	}
 	{
-		ic, oid, c := v.Client.NewInlineCapability(stream.AdaptRecvStream[*WindowSize](window_updates), window_updates)
+		ic, oid, c := v.NewInlineCapability(stream.AdaptRecvStream[*WindowSize](window_updates), window_updates)
 		args.data.WindowUpdates = c
 		caps[oid] = ic
 	}
 
 	var ret sandboxExecExecResultsData
 
-	err := v.Client.CallWithCaps(ctx, "exec", &args, &ret, caps)
+	err := v.CallWithCaps(ctx, "exec", &args, &ret, caps)
 	if err != nil {
 		return nil, err
 	}

@@ -164,7 +164,7 @@ func (v SendStreamClient[T]) Send(ctx context.Context, value T) (*SendStreamClie
 
 	var ret sendStreamSendResultsData[T]
 
-	err := v.Client.Call(ctx, "send", &args, &ret)
+	err := v.Call(ctx, "send", &args, &ret)
 	if err != nil {
 		return nil, err
 	}
@@ -328,7 +328,7 @@ func (v RecvStreamClient[T]) Recv(ctx context.Context, count int32) (*RecvStream
 
 	var ret recvStreamRecvResultsData[T]
 
-	err := v.Client.Call(ctx, "recv", &args, &ret)
+	err := v.Call(ctx, "recv", &args, &ret)
 	if err != nil {
 		return nil, err
 	}

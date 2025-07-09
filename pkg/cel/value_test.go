@@ -85,7 +85,7 @@ func TestListValueAdd(t *testing.T) {
 	llv.Append(testValue(t, 4, lv))
 	lov := NewListValue()
 	lov.Append(testValue(t, 5, ov))
-	var v traits.Lister = llv.Add(lov).(traits.Lister)
+	var v = llv.Add(lov).(traits.Lister)
 	if v.Size() != types.Int(2) {
 		t.Errorf("got list size %d, wanted 2", v.Size())
 	}

@@ -44,7 +44,7 @@ func (d URL) ConvertToNative(typeDesc reflect.Type) (interface{}, error) {
 		return d.URL, nil
 	}
 	if reflect.TypeOf("").AssignableTo(typeDesc) {
-		return d.URL.String(), nil
+		return d.String(), nil
 	}
 	return nil, fmt.Errorf("type conversion error from 'URL' to '%v'", typeDesc)
 }
@@ -66,7 +66,7 @@ func (d URL) Equal(other ref.Val) ref.Val {
 	if !ok {
 		return types.MaybeNoSuchOverloadErr(other)
 	}
-	return types.Bool(d.URL.String() == otherDur.URL.String())
+	return types.Bool(d.String() == otherDur.String())
 }
 
 // Type implements ref.Val.Type.

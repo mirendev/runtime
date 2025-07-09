@@ -42,7 +42,7 @@ func (d CIDR) ConvertToNative(typeDesc reflect.Type) (any, error) {
 		return d.Prefix, nil
 	}
 	if reflect.TypeOf("").AssignableTo(typeDesc) {
-		return d.Prefix.String(), nil
+		return d.String(), nil
 	}
 	return nil, fmt.Errorf("type conversion error from 'CIDR' to '%v'", typeDesc)
 }
@@ -55,7 +55,7 @@ func (d CIDR) ConvertToType(typeVal ref.Type) ref.Val {
 	case types.TypeType:
 		return CIDRType
 	case types.StringType:
-		return types.String(d.Prefix.String())
+		return types.String(d.String())
 	}
 	return types.NewErr("type conversion error from '%s' to '%s'", CIDRType, typeVal)
 }
@@ -83,5 +83,5 @@ func (d CIDR) Value() any {
 // Size returns the size of the CIDR prefix address in bytes.
 // Used in the size estimation of the runtime cost.
 func (d CIDR) Size() ref.Val {
-	return types.Int(int(math.Ceil(float64(d.Prefix.Bits()) / 8)))
+	return types.Int(int(math.Ceil(float64(d.Bits()) / 8)))
 }

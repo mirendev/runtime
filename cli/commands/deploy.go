@@ -243,7 +243,7 @@ var Meter = spinner.Spinner{
 		line(" ▰▰"),
 		line("  ▰"),
 	},
-	FPS: time.Second / 7, //nolint:gomnd
+	FPS: time.Second / 7, //nolint:mnd
 }
 
 func initialModel(update chan string, transfers chan transferUpdate) *deployInfo {

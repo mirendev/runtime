@@ -326,7 +326,7 @@ func (s *EtcdStore) GetEntity(ctx context.Context, id Id) (*Entity, error) {
 	}
 
 	if resp.Kvs[0].Lease != 0 {
-		ttlr, err := s.client.Lease.TimeToLive(ctx, clientv3.LeaseID(resp.Kvs[0].Lease))
+		ttlr, err := s.client.TimeToLive(ctx, clientv3.LeaseID(resp.Kvs[0].Lease))
 		if err == nil {
 			entity.Attrs = append(entity.Attrs, Duration(TTL, time.Duration(ttlr.TTL)*time.Second))
 		}
@@ -843,7 +843,7 @@ func (s *EtcdStore) ListIndex(ctx context.Context, attr Attr) ([]Id, error) {
 
 		id := attr.Value.Id()
 
-		gr, err := s.client.KV.Get(ctx, s.buildKey(id), clientv3.WithCountOnly())
+		gr, err := s.client.Get(ctx, s.buildKey(id), clientv3.WithCountOnly())
 		if err != nil {
 			return nil, err
 		}

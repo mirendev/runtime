@@ -2125,7 +2125,7 @@ func (v CrudClient) New(ctx context.Context, name string) (*CrudClientNewResults
 
 	var ret crudNewResultsData
 
-	err := v.Client.Call(ctx, "new", &args, &ret)
+	err := v.Call(ctx, "new", &args, &ret)
 	if err != nil {
 		return nil, err
 	}
@@ -2156,7 +2156,7 @@ func (v CrudClient) SetConfiguration(ctx context.Context, app string, configurat
 
 	var ret crudSetConfigurationResultsData
 
-	err := v.Client.Call(ctx, "setConfiguration", &args, &ret)
+	err := v.Call(ctx, "setConfiguration", &args, &ret)
 	if err != nil {
 		return nil, err
 	}
@@ -2194,7 +2194,7 @@ func (v CrudClient) GetConfiguration(ctx context.Context, app string) (*CrudClie
 
 	var ret crudGetConfigurationResultsData
 
-	err := v.Client.Call(ctx, "getConfiguration", &args, &ret)
+	err := v.Call(ctx, "getConfiguration", &args, &ret)
 	if err != nil {
 		return nil, err
 	}
@@ -2214,7 +2214,7 @@ func (v CrudClient) SetHost(ctx context.Context, app string, host string) (*Crud
 
 	var ret crudSetHostResultsData
 
-	err := v.Client.Call(ctx, "setHost", &args, &ret)
+	err := v.Call(ctx, "setHost", &args, &ret)
 	if err != nil {
 		return nil, err
 	}
@@ -2243,7 +2243,7 @@ func (v CrudClient) List(ctx context.Context) (*CrudClientListResults, error) {
 
 	var ret crudListResultsData
 
-	err := v.Client.Call(ctx, "list", &args, &ret)
+	err := v.Call(ctx, "list", &args, &ret)
 	if err != nil {
 		return nil, err
 	}
@@ -2262,7 +2262,7 @@ func (v CrudClient) Destroy(ctx context.Context, name string) (*CrudClientDestro
 
 	var ret crudDestroyResultsData
 
-	err := v.Client.Call(ctx, "destroy", &args, &ret)
+	err := v.Call(ctx, "destroy", &args, &ret)
 	if err != nil {
 		return nil, err
 	}
@@ -2409,7 +2409,7 @@ func (v UserQueryClient) WhoAmI(ctx context.Context) (*UserQueryClientWhoAmIResu
 
 	var ret userQueryWhoAmIResultsData
 
-	err := v.Client.Call(ctx, "whoAmI", &args, &ret)
+	err := v.Call(ctx, "whoAmI", &args, &ret)
 	if err != nil {
 		return nil, err
 	}
@@ -2570,7 +2570,7 @@ func (v AppStatusClient) AppInfo(ctx context.Context, application string) (*AppS
 
 	var ret appStatusAppInfoResultsData
 
-	err := v.Client.Call(ctx, "appInfo", &args, &ret)
+	err := v.Call(ctx, "appInfo", &args, &ret)
 	if err != nil {
 		return nil, err
 	}
@@ -2758,7 +2758,7 @@ func (v LogsClient) AppLogs(ctx context.Context, application string, from *stand
 
 	var ret logsAppLogsResultsData
 
-	err := v.Client.Call(ctx, "appLogs", &args, &ret)
+	err := v.Call(ctx, "appLogs", &args, &ret)
 	if err != nil {
 		return nil, err
 	}
@@ -3333,7 +3333,7 @@ func (v DisksClient) New(ctx context.Context, name string, capacity int64) (*Dis
 
 	var ret disksNewResultsData
 
-	err := v.Client.Call(ctx, "new", &args, &ret)
+	err := v.Call(ctx, "new", &args, &ret)
 	if err != nil {
 		return nil, err
 	}
@@ -3360,7 +3360,7 @@ func (v DisksClient) GetById(ctx context.Context, id string) (*DisksClientGetByI
 
 	var ret disksGetByIdResultsData
 
-	err := v.Client.Call(ctx, "getById", &args, &ret)
+	err := v.Call(ctx, "getById", &args, &ret)
 	if err != nil {
 		return nil, err
 	}
@@ -3387,7 +3387,7 @@ func (v DisksClient) GetByName(ctx context.Context, name string) (*DisksClientGe
 
 	var ret disksGetByNameResultsData
 
-	err := v.Client.Call(ctx, "getByName", &args, &ret)
+	err := v.Call(ctx, "getByName", &args, &ret)
 	if err != nil {
 		return nil, err
 	}
@@ -3416,7 +3416,7 @@ func (v DisksClient) List(ctx context.Context) (*DisksClientListResults, error) 
 
 	var ret disksListResultsData
 
-	err := v.Client.Call(ctx, "list", &args, &ret)
+	err := v.Call(ctx, "list", &args, &ret)
 	if err != nil {
 		return nil, err
 	}
@@ -3435,7 +3435,7 @@ func (v DisksClient) Delete(ctx context.Context, id string) (*DisksClientDeleteR
 
 	var ret disksDeleteResultsData
 
-	err := v.Client.Call(ctx, "delete", &args, &ret)
+	err := v.Call(ctx, "delete", &args, &ret)
 	if err != nil {
 		return nil, err
 	}
@@ -3853,7 +3853,7 @@ func (v AddonsClient) CreateInstance(ctx context.Context, name string, addon str
 
 	var ret addonsCreateInstanceResultsData
 
-	err := v.Client.Call(ctx, "createInstance", &args, &ret)
+	err := v.Call(ctx, "createInstance", &args, &ret)
 	if err != nil {
 		return nil, err
 	}
@@ -3883,7 +3883,7 @@ func (v AddonsClient) ListInstances(ctx context.Context, app string) (*AddonsCli
 
 	var ret addonsListInstancesResultsData
 
-	err := v.Client.Call(ctx, "listInstances", &args, &ret)
+	err := v.Call(ctx, "listInstances", &args, &ret)
 	if err != nil {
 		return nil, err
 	}
@@ -3903,7 +3903,7 @@ func (v AddonsClient) DeleteInstance(ctx context.Context, app string, name strin
 
 	var ret addonsDeleteInstanceResultsData
 
-	err := v.Client.Call(ctx, "deleteInstance", &args, &ret)
+	err := v.Call(ctx, "deleteInstance", &args, &ret)
 	if err != nil {
 		return nil, err
 	}

@@ -22,6 +22,7 @@
         devShells.default = pkgs.mkShell {
           packages = [
             pkgs.go_1_24
+            pkgs.golangci-lint
             dagger.packages.${system}.dagger
           ];
 

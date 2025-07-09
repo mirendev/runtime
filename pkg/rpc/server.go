@@ -490,6 +490,7 @@ func (s *Server) lookup(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+//nolint:errcheck
 func (s *Server) reresolve(w http.ResponseWriter, r *http.Request) {
 	var rs InterfaceState
 
@@ -538,7 +539,7 @@ func (s *Server) reresolve(w http.ResponseWriter, r *http.Request) {
 			}
 
 			if iface == nil {
-				cbor.NewEncoder(w).Encode(lookupResponse{Error: fmt.Sprintf("unable to restore capability")})
+				cbor.NewEncoder(w).Encode(lookupResponse{Error: "unable to restore capability"})
 				return
 			}
 		}

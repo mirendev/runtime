@@ -173,7 +173,7 @@ type perfTestEnv struct {
 }
 
 func (env *perfTestEnv) capSysAdmin() bool {
-	env.cap.Once.Do(env.initCap)
+	env.cap.Do(env.initCap)
 	return env.cap.sysadmin
 }
 
@@ -210,7 +210,7 @@ func (env *perfTestEnv) initCap() {
 }
 
 func (env *perfTestEnv) paranoidLevel() int {
-	env.paranoid.Once.Do(env.initParanoid)
+	env.paranoid.Do(env.initParanoid)
 	return env.paranoid.value
 }
 
@@ -244,12 +244,12 @@ func (env *perfTestEnv) initTracefs() {
 }
 
 func (env *perfTestEnv) tracefsMounted() bool {
-	env.tracefs.Once.Do(env.initTracefs)
+	env.tracefs.Do(env.initTracefs)
 	return env.tracefs.mounted
 }
 
 func (env *perfTestEnv) tracefsReadable() (bool, error) {
-	env.tracefs.Once.Do(env.initTracefs)
+	env.tracefs.Do(env.initTracefs)
 	return env.tracefs.readable, env.tracefs.readErr
 }
 

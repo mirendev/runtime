@@ -634,7 +634,9 @@ func (c *SandboxController) createSandbox(ctx context.Context, co *compute.Sandb
 	co.Status = compute.RUNNING
 
 	// The controller will detect the updates and sync them back
-	meta.Entity.Update(co.Encode())
+	if err := meta.Update(co.Encode()); err != nil {
+		return fmt.Errorf("failed to update entity metadata: %w", err)
+	}
 
 	err = c.updateServices(ctx, co, meta, ep)
 	if err != nil {

@@ -6,6 +6,12 @@ on:
   pull_request:
     branches: [ "main" ]
 
+permissions:
+  # Used by golangci-lint to emit annotations that are picked up by github
+  contents: read
+  # Used by golangci-lint for only-new-issues
+  pull-requests: read
+
 jobs:
   lint:
     runs-on: ubuntu-latest
@@ -17,18 +23,11 @@ jobs:
       with:
         go-version-file: 'go.mod'
 
-    - name: Check Go formatting
-      run: |
-        # Run go fmt and capture any files that need formatting
-        unformatted=$(go fmt ./...)
-        if [ -n "$unformatted" ]; then
-          echo "Error: The following files need to be formatted with 'go fmt':"
-          echo "$unformatted"
-          echo ""
-          echo "Please run 'go fmt ./...' to fix formatting issues."
-          exit 1
-        fi
-        echo "All Go files are properly formatted."
+    - name: golangci-lint
+      uses: golangci/golangci-lint-action@v8
+      with:
+        version: v2.2
+        only-new-issues: true
 
     - name: Check go.mod tidiness
       run: |

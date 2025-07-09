@@ -572,7 +572,7 @@ func (mr *MmapRecord) DecodeFrom(raw *RawRecord, ev *Event) error {
 // Executable returns a boolean indicating whether the mapping is executable.
 func (mr *MmapRecord) Executable() bool {
 	// The data bit is set when the mapping is _not_ executable.
-	return mr.RecordHeader.Misc&mmapDataBit == 0
+	return mr.Misc&mmapDataBit == 0
 }
 
 // LostRecord (PERF_RECORD_LOST) indicates when events are lost.
@@ -618,7 +618,7 @@ const commExecBit = 1 << 13
 // WasExec returns a boolean indicating whether a process name change
 // was caused by an exec(2) system call.
 func (cr *CommRecord) WasExec() bool {
-	return cr.RecordHeader.Misc&(commExecBit) != 0
+	return cr.Misc&(commExecBit) != 0
 }
 
 // ExitRecord (PERF_RECORD_EXIT) indicates a process exit event.
@@ -880,7 +880,7 @@ const exactIPBit = 1 << 14
 // ExactIP indicates that sr.IP points to the actual instruction that
 // triggered the event. See also Options.PreciseIP.
 func (sr *SampleRecord) ExactIP() bool {
-	return sr.RecordHeader.Misc&exactIPBit != 0
+	return sr.Misc&exactIPBit != 0
 }
 
 // SampleGroupRecord indicates a sample from an event group.
@@ -1012,7 +1012,7 @@ func (sr *SampleGroupRecord) DecodeFrom(raw *RawRecord, ev *Event) error {
 // ExactIP indicates that sr.IP points to the actual instruction that
 // triggered the event. See also Options.PreciseIP.
 func (sr *SampleGroupRecord) ExactIP() bool {
-	return sr.RecordHeader.Misc&exactIPBit != 0
+	return sr.Misc&exactIPBit != 0
 }
 
 // BranchEntry is a sampled branch.
@@ -1098,7 +1098,7 @@ func (mr *Mmap2Record) DecodeFrom(raw *RawRecord, ev *Event) error {
 // Executable returns a boolean indicating whether the mapping is executable.
 func (mr *Mmap2Record) Executable() bool {
 	// The data bit is set when the mapping is _not_ executable.
-	return mr.RecordHeader.Misc&mmapDataBit == 0
+	return mr.Misc&mmapDataBit == 0
 }
 
 // AuxRecord (PERF_RECORD_AUX) reports that new data is available in the
@@ -1196,12 +1196,12 @@ const switchOutPreemptBit = 1 << 14
 // Out returns a boolean indicating whether the context switch was
 // out of the current process, or into the current process.
 func (sr *SwitchRecord) Out() bool {
-	return sr.RecordHeader.Misc&switchOutBit != 0
+	return sr.Misc&switchOutBit != 0
 }
 
 // Preempted indicates whether the thread was preempted in TASK_RUNNING state.
 func (sr *SwitchRecord) Preempted() bool {
-	return sr.RecordHeader.Misc&switchOutPreemptBit != 0
+	return sr.Misc&switchOutPreemptBit != 0
 }
 
 // SwitchCPUWideRecord (PERF_RECORD_SWITCH_CPU_WIDE) indicates a context
@@ -1226,12 +1226,12 @@ func (sr *SwitchCPUWideRecord) DecodeFrom(raw *RawRecord, ev *Event) error {
 // Out returns a boolean indicating whether the context switch was
 // out of the current process, or into the current process.
 func (sr *SwitchCPUWideRecord) Out() bool {
-	return sr.RecordHeader.Misc&switchOutBit != 0
+	return sr.Misc&switchOutBit != 0
 }
 
 // Preempted indicates whether the thread was preempted in TASK_RUNNING state.
 func (sr *SwitchCPUWideRecord) Preempted() bool {
-	return sr.RecordHeader.Misc&switchOutPreemptBit != 0
+	return sr.Misc&switchOutPreemptBit != 0
 }
 
 // NamespacesRecord (PERF_RECORD_NAMESPACES) describes the namespaces of a
