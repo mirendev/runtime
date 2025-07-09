@@ -270,6 +270,326 @@ func TestEntityEmptyConsidersAllFields(t *testing.T) {
 	}
 }
 
+func TestDurationFieldEncoding(t *testing.T) {
+	// Test that duration fields are properly encoded and decoded
+	sf := &schemaFile{
+		Domain:  "test",
+		Version: "v1",
+		Kinds: map[string]schemaAttrs{
+			"config": {
+				"timeout": &schemaAttr{
+					Type: "duration",
+					Doc:  "Request timeout duration",
+				},
+				"interval": &schemaAttr{
+					Type:     "duration",
+					Required: true,
+					Doc:      "Polling interval",
+				},
+			},
+		},
+	}
+
+	// Generate the schema code
+	code, err := GenerateSchema(sf, "test")
+	if err != nil {
+		t.Fatalf("Failed to generate schema: %v", err)
+	}
+
+	// Test 1: Check struct generation with duration fields
+	t.Run("StructGeneration", func(t *testing.T) {
+		if !strings.Contains(code, "type Config struct") {
+			t.Error("Expected Config struct to be generated")
+		}
+
+		// Check that duration fields use time.Duration type
+		if !strings.Contains(code, "Timeout  time.Duration") {
+			t.Error("Expected Timeout field with time.Duration type")
+			t.Logf("Generated code:\n%s", code)
+		}
+
+		if !strings.Contains(code, "Interval time.Duration") {
+			t.Error("Expected Interval field with time.Duration type")
+		}
+	})
+
+	// Test 2: Check JSON tags
+	t.Run("JSONTags", func(t *testing.T) {
+		// Optional field should have omitempty
+		if !strings.Contains(code, `json:"timeout,omitempty"`) {
+			t.Error("Optional duration field should have omitempty tag")
+		}
+
+		// Required field should not have omitempty
+		if strings.Contains(code, `json:"interval,omitempty"`) {
+			t.Error("Required duration field should not have omitempty tag")
+		}
+
+		if !strings.Contains(code, `json:"interval"`) {
+			t.Error("Required duration field should have simple JSON tag")
+		}
+	})
+
+	// Test 3: Check decoder implementation
+	t.Run("Decoder", func(t *testing.T) {
+		// Find the Decode method
+		decodeStart := strings.Index(code, "func (o *Config) Decode(e entity.AttrGetter) {")
+		if decodeStart == -1 {
+			t.Fatal("Could not find Decode() method")
+		}
+		decodeEnd := strings.Index(code[decodeStart:], "\n}")
+		if decodeEnd == -1 {
+			t.Fatal("Could not find end of Decode() method")
+		}
+		decodeMethod := code[decodeStart : decodeStart+decodeEnd]
+
+		// Check for duration decoding
+		if !strings.Contains(decodeMethod, "KindDuration") {
+			t.Error("Decoder should check for KindDuration")
+		}
+
+		if !strings.Contains(decodeMethod, ".Duration()") {
+			t.Error("Decoder should call Duration() method to extract value")
+		}
+	})
+
+	// Test 4: Check encoder implementation
+	t.Run("Encoder", func(t *testing.T) {
+		// Find the Encode method
+		encodeStart := strings.Index(code, "func (o *Config) Encode() (attrs []entity.Attr) {")
+		if encodeStart == -1 {
+			t.Fatal("Could not find Encode() method")
+		}
+		encodeEnd := strings.Index(code[encodeStart:], "\n}")
+		if encodeEnd == -1 {
+			t.Fatal("Could not find end of Encode() method")
+		}
+		encodeMethod := code[encodeStart : encodeStart+encodeEnd]
+
+		// Duration fields should use entity.Duration encoder
+		if !strings.Contains(encodeMethod, "entity.Duration(") {
+			t.Error("Encoder should use entity.Duration function")
+			t.Logf("Encode method:\n%s", encodeMethod)
+		}
+
+		// Should check for empty on optional fields
+		if !strings.Contains(encodeMethod, "!entity.Empty(o.Timeout)") {
+			t.Error("Optional duration field should check for emptiness before encoding")
+		}
+	})
+
+	// Test 5: Check Empty() method implementation
+	t.Run("EmptyMethod", func(t *testing.T) {
+		// Find the Empty method
+		emptyStart := strings.Index(code, "func (o *Config) Empty() bool {")
+		if emptyStart == -1 {
+			t.Fatal("Could not find Empty() method")
+		}
+		emptyEnd := strings.Index(code[emptyStart:], "\n}")
+		if emptyEnd == -1 {
+			t.Fatal("Could not find end of Empty() method")
+		}
+		emptyMethod := code[emptyStart : emptyStart+emptyEnd]
+
+		// Duration fields should be checked for emptiness
+		if !strings.Contains(emptyMethod, "!entity.Empty(o.Timeout)") {
+			t.Error("Empty() should check duration fields")
+			t.Logf("Empty method:\n%s", emptyMethod)
+		}
+
+		if !strings.Contains(emptyMethod, "!entity.Empty(o.Interval)") {
+			t.Error("Empty() should check all duration fields")
+		}
+	})
+
+	// Test 6: Check schema declaration
+	t.Run("SchemaDeclaration", func(t *testing.T) {
+		// Should have Duration schema declaration
+		if !strings.Contains(code, "sb.Duration(") {
+			t.Error("Schema should declare duration fields with sb.Duration()")
+		}
+
+		// Check that required field has Required option
+		initSchemaStart := strings.Index(code, "func (o *Config) InitSchema(sb *schema.SchemaBuilder) {")
+		if initSchemaStart == -1 {
+			t.Fatal("Could not find InitSchema() method")
+		}
+		initSchemaEnd := strings.Index(code[initSchemaStart:], "\n}")
+		if initSchemaEnd == -1 {
+			t.Fatal("Could not find end of InitSchema() method")
+		}
+		initSchemaMethod := code[initSchemaStart : initSchemaStart+initSchemaEnd]
+
+		if !strings.Contains(initSchemaMethod, "schema.Required") {
+			t.Error("Required duration field should have schema.Required option")
+			t.Logf("InitSchema method:\n%s", initSchemaMethod)
+		}
+	})
+}
+
+func TestDurationFieldWithManyValues(t *testing.T) {
+	// Test that duration fields with many=true generate []time.Duration arrays
+	sf := &schemaFile{
+		Domain:  "test",
+		Version: "v1",
+		Kinds: map[string]schemaAttrs{
+			"schedule": {
+				"delays": &schemaAttr{
+					Type: "duration",
+					Many: true,
+					Doc:  "Multiple delay durations",
+				},
+			},
+		},
+	}
+
+	// Generate the schema code
+	code, err := GenerateSchema(sf, "test")
+	if err != nil {
+		t.Fatalf("Failed to generate schema: %v", err)
+	}
+
+	// Check that the generated code includes []time.Duration type
+	if !strings.Contains(code, "[]time.Duration") {
+		t.Error("Expected []time.Duration for many duration field")
+		t.Logf("Generated code:\n%s", code)
+	}
+
+	// Check struct field
+	if !strings.Contains(code, "Delays []time.Duration") {
+		t.Error("Expected Delays field with []time.Duration type")
+	}
+
+	// Check JSON tag
+	if !strings.Contains(code, `json:"delays,omitempty"`) {
+		t.Error("Expected proper JSON tag for array field")
+	}
+
+	// Check decoder handles many durations
+	decodeStart := strings.Index(code, "func (o *Schedule) Decode(e entity.AttrGetter) {")
+	if decodeStart == -1 {
+		t.Fatal("Could not find Decode() method")
+	}
+	decodeEnd := strings.Index(code[decodeStart:], "\n}")
+	if decodeEnd == -1 {
+		t.Fatal("Could not find end of Decode() method")
+	}
+	decodeMethod := code[decodeStart : decodeStart+decodeEnd]
+
+	// Should handle GetAll for many values
+	if !strings.Contains(decodeMethod, "GetAll(ScheduleDelaysId)") {
+		t.Error("Decoder should use GetAll for many values")
+		t.Logf("Decode method:\n%s", decodeMethod)
+	}
+
+	// Check encoder handles many durations
+	encodeStart := strings.Index(code, "func (o *Schedule) Encode() (attrs []entity.Attr) {")
+	if encodeStart == -1 {
+		t.Fatal("Could not find Encode() method")
+	}
+	encodeEnd := strings.Index(code[encodeStart:], "\n}")
+	if encodeEnd == -1 {
+		t.Fatal("Could not find end of Encode() method")
+	}
+	encodeMethod := code[encodeStart : encodeStart+encodeEnd]
+
+	// Should loop through values
+	if !strings.Contains(encodeMethod, "for _, v := range o.Delays") {
+		t.Error("Encoder should loop through array values")
+		t.Logf("Encode method:\n%s", encodeMethod)
+	}
+
+	// Should call entity.Duration for each value
+	if !strings.Contains(encodeMethod, "entity.Duration(ScheduleDelaysId, v)") {
+		t.Error("Encoder should call entity.Duration for each value")
+	}
+}
+
+func TestDurationFieldIntegration(t *testing.T) {
+	// Test duration fields alongside other field types
+	sf := &schemaFile{
+		Domain:  "test",
+		Version: "v1",
+		Kinds: map[string]schemaAttrs{
+			"task": {
+				"name": &schemaAttr{
+					Type:     "string",
+					Required: true,
+					Doc:      "Task name",
+				},
+				"timeout": &schemaAttr{
+					Type: "duration",
+					Doc:  "Task timeout",
+				},
+				"retry_delay": &schemaAttr{
+					Type: "duration",
+					Doc:  "Delay between retries",
+				},
+				"enabled": &schemaAttr{
+					Type: "bool",
+					Doc:  "Whether task is enabled",
+				},
+				"priority": &schemaAttr{
+					Type: "int",
+					Doc:  "Task priority",
+				},
+			},
+		},
+	}
+
+	code, err := GenerateSchema(sf, "test")
+	if err != nil {
+		t.Fatalf("Failed to generate schema: %v", err)
+	}
+
+	// Check that all fields are present in the struct
+	if !strings.Contains(code, "type Task struct") {
+		t.Error("Expected Task struct to be generated")
+	}
+
+	// Verify all field types
+	fieldChecks := []struct {
+		field    string
+		typeStr  string
+		required bool
+	}{
+		{"Name", "string", true},
+		{"Timeout", "time.Duration", false},
+		{"RetryDelay", "time.Duration", false},
+		{"Enabled", "bool", false},
+		{"Priority", "int64", false},
+	}
+
+	for _, check := range fieldChecks {
+		// Check for field with flexible spacing (could be one or more spaces/tabs)
+		if !strings.Contains(code, check.field) || !strings.Contains(code, check.typeStr) {
+			t.Errorf("Expected field %s with type %s", check.field, check.typeStr)
+			// Find the struct definition to help debug
+			structStart := strings.Index(code, "type Task struct")
+			if structStart != -1 {
+				structEnd := strings.Index(code[structStart:], "}")
+				if structEnd != -1 {
+					t.Logf("Task struct:\n%s", code[structStart:structStart+structEnd+1])
+				}
+			}
+		}
+	}
+
+	// Check Empty() method handles all fields correctly
+	emptyStart := strings.Index(code, "func (o *Task) Empty() bool {")
+	emptyEnd := strings.Index(code[emptyStart:], "\n}")
+	emptyMethod := code[emptyStart : emptyStart+emptyEnd]
+
+	// All non-bool fields should be checked
+	for _, check := range fieldChecks {
+		if check.field != "Enabled" { // Bool fields are checked differently
+			if !strings.Contains(emptyMethod, "!entity.Empty(o."+check.field+")") {
+				t.Errorf("Empty() should check field %s", check.field)
+			}
+		}
+	}
+}
+
 func TestEnumFieldEmptiness(t *testing.T) {
 	// Test that enum fields correctly implement the Empty() check
 	// The fix ensures that when an enum has a value (non-empty string),

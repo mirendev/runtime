@@ -399,6 +399,16 @@ func (g *gen) attr(name string, attr *schemaAttr) {
 		simpleEncoder("Time")
 		simpleDecl("Time")
 		simpleField("time")
+	case "duration":
+		if attr.Many {
+			g.fields = append(g.fields, j.Id(fname).Index().Qual("time", "Duration").Tag(tag))
+		} else {
+			g.fields = append(g.fields, j.Id(fname).Qual("time", "Duration").Tag(tag))
+		}
+		simpleDecoder("KindDuration", "Duration")
+		simpleEncoder("Duration")
+		simpleDecl("Duration")
+		simpleField("duration")
 	case "ref":
 		g.fields = append(g.fields, j.Id(fname).Qual(top, "Id").Tag(tag))
 		simpleDecoder("KindId", "Id")
