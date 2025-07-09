@@ -114,6 +114,10 @@ func AllCommands() map[string]cli.CommandFactory {
 			return Infer("config set-active", "Set the active cluster", ConfigSetActive), nil
 		},
 
+		"config remove": func() (cli.Command, error) {
+			return Infer("config remove", "Remove a cluster from the configuration", ConfigRemove), nil
+		},
+
 		// TODO: Errors with "unknown object: user"
 		// "user": func() (cli.Command, error) {
 		// 	return Section("user", "Commands related to cluster users"), nil
