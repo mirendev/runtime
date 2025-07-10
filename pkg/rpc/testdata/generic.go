@@ -196,7 +196,7 @@ func (v ReaderClient[T]) Read(ctx context.Context, value *Container[T]) (*Reader
 
 	var ret readerReadResultsData[T]
 
-	err := v.Client.Call(ctx, "read", &args, &ret)
+	err := v.Call(ctx, "read", &args, &ret)
 	if err != nil {
 		return nil, err
 	}

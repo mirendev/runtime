@@ -1703,7 +1703,7 @@ func (g *Generator) generateClient(f *j.File, i *DescInterface) error {
 			for _, p := range m.Parameters {
 				if g.ti(p.Type).isInterface {
 					gr.BlockFunc(func(gr *j.Group) {
-						gr.List(j.Id("ic"), j.Id("oid"), j.Id("c")).Op(":=").Id("v").Dot("Client").Dot("NewInlineCapability").
+						gr.List(j.Id("ic"), j.Id("oid"), j.Id("c")).Op(":=").Id("v").Dot("NewInlineCapability").
 							CallFunc(func(gr *j.Group) {
 								if g.isImported(p.Type) {
 									iname, tname := g.splitType(p.Type)
@@ -1733,7 +1733,7 @@ func (g *Generator) generateClient(f *j.File, i *DescInterface) error {
 			gr.Line()
 
 			if hasCaps {
-				gr.Id("err").Op(":=").Id("v").Dot("Client").Dot("CallWithCaps").Call(
+				gr.Id("err").Op(":=").Id("v").Dot("CallWithCaps").Call(
 					j.Id("ctx"),
 					j.Lit(m.Name),
 					j.Op("&").Id("args"),
@@ -1742,7 +1742,7 @@ func (g *Generator) generateClient(f *j.File, i *DescInterface) error {
 				)
 
 			} else {
-				gr.Id("err").Op(":=").Id("v").Dot("Client").Dot("Call").Call(
+				gr.Id("err").Op(":=").Id("v").Dot("Call").Call(
 					j.Id("ctx"),
 					j.Lit(m.Name),
 					j.Op("&").Id("args"),
