@@ -3,10 +3,6 @@ package commands
 import (
 	"fmt"
 	"sort"
-	"strings"
-
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 )
 
 func ConfigRemove(ctx *Context, opts struct {
@@ -37,15 +33,8 @@ func ConfigRemove(ctx *Context, opts struct {
 		}
 		sort.Strings(clusterNames)
 
-		// Create and run the selection model
-		m := &clusterRemoveModel{
-			clusters: clusterNames,
-			cursor:   0,
-			active:   cfg.ActiveCluster,
-		}
-
-		p := tea.NewProgram(m)
-		result, err := p.Run()
+		// Use the shared cluster selection with dimming for active cluster
+		selected, err := SelectCluster(ctx, "Select a cluster to remove:", clusterNames, cfg.ActiveCluster, true)
 		if err != nil {
 			// If we can't run interactive mode (no TTY), show available clusters
 			ctx.Printf("Cannot run interactive mode. Available clusters:\n")
@@ -60,13 +49,12 @@ func ConfigRemove(ctx *Context, opts struct {
 			return nil
 		}
 
-		// Check if user cancelled
-		model := result.(*clusterRemoveModel)
-		if model.cancelled {
+		if selected == "" {
+			// User cancelled
 			return nil
 		}
 
-		clusterName = model.selected
+		clusterName = selected
 	}
 
 	// Check if the cluster exists
@@ -101,80 +89,4 @@ func ConfigRemove(ctx *Context, opts struct {
 
 	ctx.Printf("Removed cluster: %s\n", clusterName)
 	return nil
-}
-
-// clusterRemoveModel is the model for the cluster removal selection menu
-type clusterRemoveModel struct {
-	clusters  []string
-	cursor    int
-	selected  string
-	cancelled bool
-	active    string
-}
-
-func (m *clusterRemoveModel) Init() tea.Cmd {
-	return nil
-}
-
-func (m *clusterRemoveModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	switch msg := msg.(type) {
-	case tea.KeyMsg:
-		switch msg.String() {
-		case "ctrl+c", "q", "esc":
-			m.cancelled = true
-			return m, tea.Quit
-
-		case "enter", " ":
-			m.selected = m.clusters[m.cursor]
-			return m, tea.Quit
-
-		case "up", "k":
-			if m.cursor > 0 {
-				m.cursor--
-			}
-
-		case "down", "j":
-			if m.cursor < len(m.clusters)-1 {
-				m.cursor++
-			}
-		}
-	}
-
-	return m, nil
-}
-
-func (m *clusterRemoveModel) View() string {
-	var b strings.Builder
-
-	b.WriteString("Select a cluster to remove:\n\n")
-
-	for i, cluster := range m.clusters {
-		cursor := " "
-		if m.cursor == i {
-			cursor = ">"
-		}
-
-		activeMarker := "  "
-		if cluster == m.active {
-			activeMarker = " * (active)"
-		}
-
-		style := lipgloss.NewStyle()
-		if m.cursor == i {
-			style = style.Foreground(lipgloss.Color("170"))
-		}
-
-		// Dim the active cluster to indicate it can't be removed
-		if cluster == m.active {
-			style = style.Foreground(lipgloss.Color("240"))
-		}
-
-		line := fmt.Sprintf("%s %s%s", cursor, cluster, activeMarker)
-		b.WriteString(style.Render(line) + "\n")
-	}
-
-	b.WriteString("\n(Use arrow keys to navigate, enter to select, esc to cancel)\n")
-	b.WriteString("Note: You cannot remove the active cluster\n")
-
-	return b.String()
 }

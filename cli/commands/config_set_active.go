@@ -3,10 +3,6 @@ package commands
 import (
 	"fmt"
 	"sort"
-	"strings"
-
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 )
 
 func ConfigSetActive(ctx *Context, opts struct {
@@ -31,35 +27,28 @@ func ConfigSetActive(ctx *Context, opts struct {
 		}
 		sort.Strings(clusterNames)
 
-		// Find current active cluster index
-		currentIndex := 0
-		for i, name := range clusterNames {
-			if name == cfg.ActiveCluster {
-				currentIndex = i
-				break
-			}
-		}
-
-		// Create and run the selection model
-		m := &clusterSelectModel{
-			clusters: clusterNames,
-			cursor:   currentIndex,
-			active:   cfg.ActiveCluster,
-		}
-
-		p := tea.NewProgram(m)
-		result, err := p.Run()
+		// Use the shared cluster selection
+		selected, err := SelectCluster(ctx, "Select a cluster to set as active:", clusterNames, cfg.ActiveCluster, false)
 		if err != nil {
-			return fmt.Errorf("failed to run selection menu: %w", err)
-		}
-
-		// Check if user cancelled
-		model := result.(*clusterSelectModel)
-		if model.cancelled {
+			// If we can't run interactive mode (no TTY), show available clusters
+			ctx.Printf("Cannot run interactive mode. Available clusters:\n")
+			for _, name := range clusterNames {
+				prefix := "  "
+				if name == cfg.ActiveCluster {
+					prefix = "* "
+				}
+				ctx.Printf("%s%s\n", prefix, name)
+			}
+			ctx.Printf("\nUsage: runtime config set-active <cluster-name>\n")
 			return nil
 		}
 
-		clusterName = model.selected
+		if selected == "" {
+			// User cancelled
+			return nil
+		}
+
+		clusterName = selected
 	}
 
 	// Check if the cluster exists
@@ -85,74 +74,4 @@ func ConfigSetActive(ctx *Context, opts struct {
 
 	ctx.Printf("Active cluster set to: %s\n", clusterName)
 	return nil
-}
-
-// clusterSelectModel is the model for the cluster selection menu
-type clusterSelectModel struct {
-	clusters  []string
-	cursor    int
-	selected  string
-	cancelled bool
-	active    string
-}
-
-func (m *clusterSelectModel) Init() tea.Cmd {
-	return nil
-}
-
-func (m *clusterSelectModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	switch msg := msg.(type) {
-	case tea.KeyMsg:
-		switch msg.String() {
-		case "ctrl+c", "q", "esc":
-			m.cancelled = true
-			return m, tea.Quit
-
-		case "enter", " ":
-			m.selected = m.clusters[m.cursor]
-			return m, tea.Quit
-
-		case "up", "k":
-			if m.cursor > 0 {
-				m.cursor--
-			}
-
-		case "down", "j":
-			if m.cursor < len(m.clusters)-1 {
-				m.cursor++
-			}
-		}
-	}
-
-	return m, nil
-}
-
-func (m *clusterSelectModel) View() string {
-	var b strings.Builder
-
-	b.WriteString("Select a cluster to set as active:\n\n")
-
-	for i, cluster := range m.clusters {
-		cursor := " "
-		if m.cursor == i {
-			cursor = ">"
-		}
-
-		activeMarker := "  "
-		if cluster == m.active {
-			activeMarker = " *"
-		}
-
-		style := lipgloss.NewStyle()
-		if m.cursor == i {
-			style = style.Foreground(lipgloss.Color("170"))
-		}
-
-		line := fmt.Sprintf("%s %s%s", cursor, cluster, activeMarker)
-		b.WriteString(style.Render(line) + "\n")
-	}
-
-	b.WriteString("\n(Use arrow keys to navigate, enter to select, esc to cancel)\n")
-
-	return b.String()
 }
