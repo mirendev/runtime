@@ -136,7 +136,6 @@ func NewLocalActivator(ctx context.Context, log *slog.Logger, eac *entityserver_
 // 3. Reserve slots and return a lease
 func (a *localActivator) AcquireLease(ctx context.Context, ver *core_v1alpha.AppVersion, pool, service string) (*Lease, error) {
 	a.mu.Lock()
-	defer a.mu.Unlock()
 	key := verKey{ver.ID.String(), pool}
 	vs, ok := a.versions[key]
 
@@ -145,8 +144,11 @@ func (a *localActivator) AcquireLease(ctx context.Context, ver *core_v1alpha.App
 		// Check max_instances before creating first sandbox
 		maxInstances := int(ver.Config.Concurrency.MaxInstances)
 		if maxInstances > 0 && 1 > maxInstances {
+			a.mu.Unlock()
 			return nil, fmt.Errorf("cannot create sandbox: would exceed max_instances limit of %d", maxInstances)
 		}
+		// IMPORTANT: Unlock before calling activateApp to avoid deadlock
+		a.mu.Unlock()
 		return a.activateApp(ctx, ver, pool, service)
 	}
 
@@ -164,13 +166,15 @@ func (a *localActivator) AcquireLease(ctx context.Context, ver *core_v1alpha.App
 				s.inuseSlots += vs.leaseSlots
 
 				a.log.Debug("reusing sandbox", "app", ver.App, "version", ver.Version, "sandbox", s.sandbox.ID, "in-use", s.inuseSlots)
-				return &Lease{
+				lease := &Lease{
 					ver:     ver,
 					sandbox: s.sandbox,
 					ent:     s.ent,
 					Size:    vs.leaseSlots,
 					URL:     s.url,
-				}, nil
+				}
+				a.mu.Unlock()
+				return lease, nil
 			}
 		}
 
@@ -183,9 +187,12 @@ func (a *localActivator) AcquireLease(ctx context.Context, ver *core_v1alpha.App
 	// Check max_instances before creating additional sandbox
 	maxInstances := int(ver.Config.Concurrency.MaxInstances)
 	if maxInstances > 0 && len(vs.sandboxes) >= maxInstances {
+		a.mu.Unlock()
 		return nil, fmt.Errorf("cannot create sandbox: already at max_instances limit of %d", maxInstances)
 	}
 
+	// IMPORTANT: Unlock before calling activateApp to avoid deadlock
+	a.mu.Unlock()
 	return a.activateApp(ctx, ver, pool, service)
 }
 
