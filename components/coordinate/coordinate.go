@@ -52,6 +52,8 @@ type CoordinatorConfig struct {
 	Logs *observability.LogReader
 }
 
+const DefaultProjectOwner = "miren.system@miren.dev"
+
 func NewCoordinator(log *slog.Logger, cfg CoordinatorConfig) *Coordinator {
 	return &Coordinator{
 		CoordinatorConfig: cfg,
@@ -335,21 +337,14 @@ func (c *Coordinator) Start(ctx context.Context) error {
 	}
 
 	eac := entityserver_v1alpha.NewEntityAccessClient(loopback)
+	ec := aes.NewClient(c.Log, eac)
 
-	var (
-		defPro core_v1alpha.Project
-		defNet entityserver_v1alpha.Entity
-	)
+	defaultProject := &core_v1alpha.Project{
+		ID:    entity.Id("default"),
+		Owner: DefaultProjectOwner,
+	}
 
-	defNet.SetAttrs(entity.Attrs(
-		(&core_v1alpha.Metadata{
-			Name: "default",
-		}).Encode,
-		defPro.Encode,
-		entity.Ident, "project/default",
-	))
-
-	_, err = eac.Put(ctx, &defNet)
+	_, err = ec.CreateOrUpdate(ctx, defaultProject.ID.String(), defaultProject)
 	if err != nil {
 		c.Log.Error("failed to create default project", "error", err)
 		return err
@@ -366,8 +361,6 @@ func (c *Coordinator) Start(ctx context.Context) error {
 
 	bs := build.NewBuilder(c.Log, eac, appClient, c.Resolver, c.TempDir)
 	server.ExposeValue("dev.miren.runtime/build", build_v1alpha.AdaptBuilder(bs))
-
-	ec := aes.NewClient(c.Log, eac)
 
 	ai := app.NewAppInfo(c.Log, ec, c.Cpu, c.Mem, c.HTTP)
 	server.ExposeValue("dev.miren.runtime/app", app_v1alpha.AdaptCrud(ai))

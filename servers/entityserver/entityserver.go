@@ -44,7 +44,7 @@ func NewEntityServer(log *slog.Logger, store entity.Store) (*EntityServer, error
 	}
 
 	return &EntityServer{
-		Log:   log,
+		Log:   log.With("module", "entityserver"),
 		Store: store,
 		tf:    tf,
 	}, nil
@@ -175,6 +175,8 @@ func (e *EntityServer) Put(ctx context.Context, req *entityserver_v1alpha.Entity
 
 	rpcE := args.Entity()
 
+	e.Log.Debug("starting put for entity", "id", rpcE.Id(), "revision", rpcE.Revision())
+
 	attrs := rpcE.Attrs()
 	if len(attrs) == 0 {
 		return fmt.Errorf("missing required field: attrs")
@@ -186,6 +188,7 @@ func (e *EntityServer) Put(ctx context.Context, req *entityserver_v1alpha.Entity
 
 	if rpcE.HasId() {
 		// TODO: handle updated_at
+		e.Log.Debug("updating entity", "id", rpcE.Id(), "revision", rpcE.Revision())
 
 		// If the entity has a revision, then make sure that we're updating that specific entity.
 		if rev := rpcE.Revision(); rev > 0 {
@@ -195,8 +198,10 @@ func (e *EntityServer) Put(ctx context.Context, req *entityserver_v1alpha.Entity
 		re, err := e.Store.UpdateEntity(ctx, entity.Id(rpcE.Id()), attrs, opts...)
 		if err != nil {
 			if !errors.Is(err, cond.ErrNotFound{}) {
-				return fmt.Errorf("failed to create entity: %w", err)
+				// We got an error that _wasn't_ a not found error, so we should return it
+				return fmt.Errorf("failed to update entity in put: %w", err)
 			}
+			// Otherwise we got a not found error, so we can fall through to create the entity
 		} else {
 			results.SetRevision(re.Revision)
 			results.SetId(re.ID.String())
@@ -204,10 +209,10 @@ func (e *EntityServer) Put(ctx context.Context, req *entityserver_v1alpha.Entity
 		}
 	}
 
-	// TODO: handle created_at and updated_at fileds
+	// TODO: handle created_at and updated_at fields
 	re, err := e.Store.CreateEntity(ctx, attrs, opts...)
 	if err != nil {
-		return fmt.Errorf("failed to create entity: %w", err)
+		return fmt.Errorf("failed to create entity in put: %w", err)
 	}
 
 	results.SetRevision(re.Revision)
@@ -258,7 +263,7 @@ func (e *EntityServer) PutSession(ctx context.Context, req *entityserver_v1alpha
 			results.SetId(re.ID.String())
 		}
 	} else {
-		// TODO: handle created_at and updated_at fileds
+		// TODO: handle created_at and updated_at fields
 		re, err := e.Store.CreateEntity(ctx, attrs, opts...)
 		if err != nil {
 			return fmt.Errorf("failed to create entity: %w", err)

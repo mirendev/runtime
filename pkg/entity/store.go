@@ -58,7 +58,7 @@ const maxEntitiesPerBatch = etcdMaxTxnOps / 2
 // NewEtcdStore creates a new etcd-backed entity store
 func NewEtcdStore(ctx context.Context, log *slog.Logger, client *clientv3.Client, prefix string) (*EtcdStore, error) {
 	store := &EtcdStore{
-		log:         log,
+		log:         log.With("module", "etcdstore"),
 		client:      client,
 		prefix:      prefix,
 		schemaCache: make(map[Id]*AttributeSchema),
@@ -255,15 +255,17 @@ func (s *EtcdStore) CreateEntity(
 	if !txnResp.Succeeded {
 		if len(txnResp.Responses) == 1 {
 			// If the current value of the entity has the same attributes as
-			// we were going to store, then we're all done!
+			// the entity we were trying to store, then we're all done!
 			rng := txnResp.Responses[0].GetResponseRange()
 
 			var curr Entity
 
 			if decoder.Unmarshal(rng.Kvs[0].Value, &curr) == nil {
+				s.log.Debug("entity already exists, checking if attrs match", "id", entity.ID)
 				if slices.EqualFunc(curr.Attrs, entity.Attrs, func(a, b Attr) bool {
 					return a.Equal(b)
 				}) {
+					s.log.Debug("attrs match, so returning success", "id", entity.ID, "revision", rng.Header.Revision)
 					entity.Revision = rng.Header.Revision
 					return entity, nil
 				}
@@ -283,7 +285,7 @@ func (s *EtcdStore) CreateEntity(
 			}
 		}
 
-		s.log.Error("failed to create entity in etcd", "error", err, "id", entity.ID)
+		s.log.Error("failed to create entity in etcd", "id", entity.ID)
 		return nil, cond.Conflict("entity", entity.ID)
 	}
 
