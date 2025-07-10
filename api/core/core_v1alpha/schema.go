@@ -185,7 +185,7 @@ func (o *AppVersion) Empty() bool {
 }
 
 func (o *AppVersion) InitSchema(sb *schema.SchemaBuilder) {
-	sb.Ref("app", "dev.miren.core/app_version.app", schema.Doc("The application the version is for"))
+	sb.Ref("app", "dev.miren.core/app_version.app", schema.Doc("The application the version is for"), schema.Indexed)
 	sb.Ref("artifact", "dev.miren.core/app_version.artifact", schema.Doc("The artifact to deploy for the version"))
 	sb.Component("config", "dev.miren.core/app_version.config", schema.Doc("The configuration of the version"))
 	(&Config{}).InitSchema(sb.Builder("config"))

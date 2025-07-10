@@ -45,6 +45,8 @@ kinds:
     app:
       type: ref
       doc: The application the version is for
+      indexed: true
+
     version:
       type: string
       doc: The version of this app
