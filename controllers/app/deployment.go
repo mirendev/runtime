@@ -59,7 +59,7 @@ func (c *DeploymentController) deployActiveVersion(ctx context.Context, app *cor
 	var appVersion core_v1alpha.AppVersion
 	appVersion.Decode(vr.Entity().Entity())
 
-	c.Log.Info("deploying app version",
+	c.Log.Debug("ensuring app version is deployed",
 		"app", app.ID,
 		"version", appVersion.Version,
 		"min_instances", appVersion.Config.Concurrency.MinInstances)

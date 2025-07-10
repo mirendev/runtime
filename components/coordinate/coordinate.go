@@ -376,8 +376,8 @@ func (c *Coordinator) Start(ctx context.Context) error {
 			entity.Ref(entity.EntityKind, core_v1alpha.KindApp),
 			eac,
 			controller.AdaptController(deploymentController),
-			30*time.Second, // Resync periodically to ensure consistency
-			1,              // Single worker is sufficient
+			5*time.Minute, // Resync periodically to ensure consistency
+			1,             // Single worker is sufficient
 		),
 	)
 

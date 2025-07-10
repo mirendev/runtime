@@ -554,6 +554,16 @@ func (a *localActivator) Deploy(ctx context.Context, app *core_v1alpha.App, ver 
 		return fmt.Errorf("app active version (%s) does not match deploying version (%s)", app.ActiveVersion, ver.ID)
 	}
 
+	// If our version tracking contains this version, we can assume it's been deployed and return early
+	a.mu.Lock()
+	key := verKey{ver.ID.String(), pool}
+	_, exists := a.versions[key]
+	a.mu.Unlock()
+	if exists {
+		a.log.Debug("app version already deployed", "app", app.ID, "version", ver.Version, "pool", pool)
+		return nil
+	}
+
 	a.log.Info("deploying app version",
 		"app", app.ID,
 		"version", ver.Version,
@@ -563,7 +573,6 @@ func (a *localActivator) Deploy(ctx context.Context, app *core_v1alpha.App, ver 
 	// Ensure the version is in our tracking map and min_instances are running
 	a.mu.Lock()
 	vs := a.ensureVersionTracking(ver, pool)
-	key := verKey{ver.ID.String(), pool}
 	a.ensureMinInstancesForVersion(ctx, vs, key)
 	a.mu.Unlock()
 
@@ -597,20 +606,20 @@ func (a *localActivator) cleanupOldVersions(ctx context.Context, app *core_v1alp
 			continue
 		}
 
-		a.log.Info("cleaning up old app version",
-			"app", app.ID,
-			"oldVersion", ver.Version,
-			"currentVersion", currentVer.Version)
-
 		// Remove from our tracking
 		a.mu.Lock()
 		key := verKey{ver.ID.String(), pool}
 		vs, exists := a.versions[key]
 		if exists {
+			a.log.Info("cleaning up old app version",
+				"app", app.ID,
+				"oldVersion", ver.Version,
+				"currentVersion", currentVer.Version)
+
 			// Mark all sandboxes for stop
 			for _, sb := range vs.sandboxes {
 				if sb.sandbox.Status == compute_v1alpha.RUNNING || sb.sandbox.Status == compute_v1alpha.PENDING {
-					a.log.Info("marking sandbox for stop",
+					a.log.Debug("marking sandbox for stop",
 						"app", app.ID,
 						"version", ver.Version,
 						"sandbox", sb.sandbox.ID)
