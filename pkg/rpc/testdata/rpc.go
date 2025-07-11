@@ -331,7 +331,7 @@ func (v TownClient) GetHero(ctx context.Context, name string) (*TownClientGetHer
 
 	var ret townGetHeroResultsData
 
-	err := v.Client.Call(ctx, "getHero", &args, &ret)
+	err := v.Call(ctx, "getHero", &args, &ret)
 	if err != nil {
 		return nil, err
 	}
@@ -361,7 +361,7 @@ func (v TownClient) HireHero(ctx context.Context, name string) (*TownClientHireH
 
 	var ret townHireHeroResultsData
 
-	err := v.Client.Call(ctx, "hireHero", &args, &ret)
+	err := v.Call(ctx, "hireHero", &args, &ret)
 	if err != nil {
 		return nil, err
 	}
@@ -525,7 +525,7 @@ func (v EmpowerClient) IncreasePower(ctx context.Context, power int32) (*Empower
 
 	var ret empowerIncreasePowerResultsData
 
-	err := v.Client.Call(ctx, "increasePower", &args, &ret)
+	err := v.Call(ctx, "increasePower", &args, &ret)
 	if err != nil {
 		return nil, err
 	}
