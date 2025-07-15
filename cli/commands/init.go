@@ -14,6 +14,7 @@ import (
 func Init(ctx *Context, opts struct {
 	Name string `short:"n" long:"name" description:"Application name (defaults to directory name)"`
 	Dir  string `short:"d" long:"dir" description:"Application directory (defaults to current directory)"`
+	ConfigCentric
 }) error {
 	// Determine working directory
 	workDir := opts.Dir
