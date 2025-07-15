@@ -38,6 +38,9 @@ func AllCommands() map[string]cli.CommandFactory {
 		"sandbox exec": func() (cli.Command, error) {
 			return Infer("sandbox exec", "Execute a command in a sandbox", SandboxExec), nil
 		},
+		"sandbox list": func() (cli.Command, error) {
+			return Infer("sandbox list", "List all sandboxes", SandboxList), nil
+		},
 		"sandbox metrics": func() (cli.Command, error) {
 			return Infer("sandbox metrics", "Get metrics from a sandbox", SandboxMetrics), nil
 		},
