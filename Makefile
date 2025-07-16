@@ -68,3 +68,8 @@ lint-changed:
 	@bash ./hack/lint-changed.sh
 
 .PHONY: lint-changed
+
+dist:
+	@bash ./hack/build-dist.sh
+
+.PHONY: dist
