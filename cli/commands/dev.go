@@ -182,7 +182,14 @@ func Dev(ctx *Context, opts struct {
 		ctx.Log.Info("embedded containerd started", "socket", containerdComponent.SocketPath())
 
 		// Ensure cleanup on exit
-		defer containerdComponent.Stop(context.Background())
+		defer func() {
+			ctx.Log.Info("stopping embedded containerd")
+			stopCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			if err := containerdComponent.Stop(stopCtx); err != nil {
+				ctx.Log.Error("failed to stop containerd component", "error", err)
+			}
+		}()
 
 		ctx.Server.Override("containerd-socket", containerdComponent.SocketPath())
 	} else {
@@ -229,7 +236,14 @@ func Dev(ctx *Context, opts struct {
 		ctx.Log.Info("using embedded etcd", "endpoint", etcdComponent.ClientEndpoint())
 
 		// Ensure cleanup on exit
-		defer etcdComponent.Stop(context.Background())
+		defer func() {
+			ctx.Log.Info("stopping embedded etcd")
+			stopCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			if err := etcdComponent.Stop(stopCtx); err != nil {
+				ctx.Log.Error("failed to stop etcd component", "error", err)
+			}
+		}()
 	}
 
 	// Start embedded ClickHouse server if requested
@@ -271,7 +285,14 @@ func Dev(ctx *Context, opts struct {
 		ctx.Server.Override("clickhouse-address", clickhouseComponent.NativeEndpoint())
 
 		// Ensure cleanup on exit
-		defer clickhouseComponent.Stop(context.Background())
+		defer func() {
+			ctx.Log.Info("stopping embedded clickhouse")
+			stopCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			if err := clickhouseComponent.Stop(stopCtx); err != nil {
+				ctx.Log.Error("failed to stop clickhouse component", "error", err)
+			}
+		}()
 	} else if opts.ClickHouseAddress != "" {
 		// Override ClickHouse address if provided (for external ClickHouse)
 		ctx.Log.Info("using external clickhouse", "address", opts.ClickHouseAddress)
@@ -556,7 +577,14 @@ func Dev(ctx *Context, opts struct {
 	ctx.Info("Dev mode started successfully! You can now connect to the cluster using `-C %s`\n", opts.ConfigClusterName)
 	ctx.Info("For example `cd my-app; runtime deploy -C dev`")
 
-	return eg.Wait()
+	// Wait for all goroutines to complete or context to be cancelled
+	err = eg.Wait()
+	if err != nil && err != context.Canceled {
+		ctx.Log.Error("error during execution", "error", err)
+	}
+
+	ctx.Log.Info("dev mode shutting down, cleaning up resources")
+	return err
 }
 
 // getUserHomeDir returns the user's home directory, respecting SUDO_USER if running under sudo
