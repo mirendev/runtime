@@ -40,8 +40,8 @@ func init() {
 
 	DefaultQUICConfig = quic.Config{
 		EnableDatagrams:       true,
-		MaxIncomingStreams:    1000,
-		MaxIncomingUniStreams: 1000,
+		MaxIncomingStreams:    100000, // Increased from 1000 to handle large transfers
+		MaxIncomingUniStreams: 100000, // Increased from 1000 to handle large transfers
 		Allow0RTT:             true,
 		KeepAlivePeriod:       10 * time.Second,
 		MaxIdleTimeout:        30 * time.Second,
@@ -286,8 +286,8 @@ func NewState(ctx context.Context, opts ...StateOption) (*State, error) {
 
 	qc := quic.Config{
 		EnableDatagrams:       true,
-		MaxIncomingStreams:    1000,
-		MaxIncomingUniStreams: 1000,
+		MaxIncomingStreams:    100000, // Increased from 1000 to handle large transfers
+		MaxIncomingUniStreams: 100000, // Increased from 1000 to handle large transfers
 		Allow0RTT:             true,
 		KeepAlivePeriod:       10 * time.Second,
 	}

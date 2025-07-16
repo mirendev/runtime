@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"io"
+	"log/slog"
+	"time"
 
 	rpc "miren.dev/runtime/pkg/rpc"
 )
@@ -46,63 +48,132 @@ func StreamRecv[T any](fn func(T) error) SendStream[T] {
 }
 
 type rscReader struct {
-	ctx context.Context
-	rsc *RecvStreamClient[[]byte]
+	ctx       context.Context
+	rsc       *RecvStreamClient[[]byte]
+	totalRead int64
+	readCount int
+	log       *slog.Logger
 }
 
 func (r *rscReader) Read(p []byte) (n int, err error) {
-	ret, err := r.rsc.Recv(r.ctx, int32(len(p)))
+	r.readCount++
+	readStart := time.Now()
+	requestSize := len(p)
+
+
+	ret, err := r.rsc.Recv(r.ctx, int32(requestSize))
 	if err != nil {
+		if r.log != nil {
+			r.log.Error("rpc stream recv error",
+				"error", err,
+				"readCount", r.readCount,
+				"duration", time.Since(readStart))
+		}
 		return 0, err
 	}
 
 	data := ret.Value()
+	dataLen := len(data)
 
-	if len(data) == 0 {
+	if dataLen == 0 {
+		if r.log != nil {
+			r.log.Info("rpc stream EOF",
+				"totalBytesRead", r.totalRead,
+				"totalReads", r.readCount,
+				"duration", time.Since(readStart))
+		}
 		return 0, io.EOF
 	}
 
-	return copy(p, data), nil
+	n = copy(p, data)
+	r.totalRead += int64(n)
+
+
+	return n, nil
 }
 
 func (r *rscReader) Close() error {
+	if r.log != nil {
+		r.log.Info("closing rpc stream reader",
+			"totalBytesRead", r.totalRead,
+			"totalReads", r.readCount)
+	}
 	return r.rsc.Close()
 }
 
-func ToReader(ctx context.Context, x *RecvStreamClient[[]byte]) io.ReadCloser {
-	return &rscReader{ctx: ctx, rsc: x}
+func ToReader(ctx context.Context, x *RecvStreamClient[[]byte], log *slog.Logger) io.ReadCloser {
+	if log == nil {
+		log = slog.Default()
+	}
+	log = log.With("component", "rpc.stream.reader")
+	return &rscReader{
+		ctx: ctx,
+		rsc: x,
+		log: log,
+	}
 }
 
 type serveReader struct {
-	r io.Reader
+	r   io.Reader
+	log *slog.Logger
 }
 
 func (s *serveReader) Recv(ctx context.Context, state *RecvStreamRecv[[]byte]) error {
+	// This is called when a client wants to read data from the server's reader.
+	// The client specifies how much data it can accept (bufSize), but the server
+	// may return less if that's all that's available or for protocol efficiency.
 	args := state.Args()
+	recvStart := time.Now()
 
-	buf := make([]byte, args.Count())
+	bufSize := args.Count()
+	log := s.log
+
+
+	buf := make([]byte, bufSize)
 
 	n, err := s.r.Read(buf)
 	if err != nil {
 		if errors.Is(err, io.EOF) {
+			log.Info("server stream EOF",
+				"duration", time.Since(recvStart))
 			if c, ok := s.r.(io.Closer); ok {
 				c.Close()
 			}
 			state.Results().SetValue(nil)
 			return nil
 		}
+		log.Error("server read error",
+			"error", err,
+			"duration", time.Since(recvStart))
 		return err
 	}
 
 	buf = buf[:n]
+
+	if n > 1024*1024 {
+		log.Info("server sent large chunk",
+			"size", n,
+			"duration", time.Since(recvStart))
+	} else if n < int(bufSize) && n > 1024 {
+		// Only warn if we're sending actual data (>1KB) but less than requested
+		// Small responses (<1KB) are likely just protocol messages/acknowledgments
+		log.Debug("server sent partial data",
+			"requested", bufSize,
+			"sent", n,
+			"duration", time.Since(recvStart))
+	}
 
 	state.Results().SetValue(buf)
 
 	return nil
 }
 
-func ServeReader(ctx context.Context, r io.Reader) RecvStream[[]byte] {
-	return &serveReader{r: r}
+func ServeReader(ctx context.Context, r io.Reader, log *slog.Logger) RecvStream[[]byte] {
+	if log == nil {
+		log = slog.Default()
+	}
+	log = log.With("component", "rpc.stream.server")
+	return &serveReader{r: r, log: log}
 }
 
 type serveWriter struct {

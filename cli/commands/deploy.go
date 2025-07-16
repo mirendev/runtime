@@ -42,7 +42,7 @@ func Deploy(ctx *Context, opts struct {
 
 	ctx.Log.Info("building code", "name", name, "dir", dir)
 
-	r, err := tarx.MakeTar(dir)
+	r, err := tarx.MakeTar(dir, ctx.Log)
 	if err != nil {
 		return err
 	}
@@ -81,7 +81,7 @@ func Deploy(ctx *Context, opts struct {
 			return nil
 		})
 
-		results, err = bc.BuildFromTar(ctx, name, stream.ServeReader(ctx, r), cb)
+		results, err = bc.BuildFromTar(ctx, name, stream.ServeReader(ctx, r, ctx.Log), cb)
 		if err != nil {
 			return err
 		}
@@ -153,7 +153,7 @@ func Deploy(ctx *Context, opts struct {
 			return nil
 		})
 
-		results, err = bc.BuildFromTar(ctx, name, stream.ServeReader(ctx, r), cb)
+		results, err = bc.BuildFromTar(ctx, name, stream.ServeReader(ctx, r, ctx.Log), cb)
 		if err != nil {
 			return err
 		}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/netip"
 	"os"
@@ -57,10 +58,10 @@ func TestSandbox(t *testing.T) {
 		err := reg.Init(&cc, &bkl)
 		r.NoError(err)
 
-		dfr, err := tarx.MakeTar("testdata/nginx")
+		dfr, err := tarx.MakeTar("testdata/nginx", slog.Default())
 		r.NoError(err)
 
-		datafs, err := tarx.TarFS(dfr, t.TempDir())
+		datafs, err := tarx.TarFS(dfr, t.TempDir(), slog.Default())
 		r.NoError(err)
 
 		o, _, err := bkl.Transform(ctx, datafs)

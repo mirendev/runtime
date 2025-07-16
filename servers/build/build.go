@@ -9,6 +9,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/moby/buildkit/client"
 	"github.com/tonistiigi/fsutil"
@@ -148,12 +149,16 @@ func (b *Builder) BuildFromTar(ctx context.Context, state *build_v1alpha.Builder
 
 	b.Log.Debug("receiving tar data", "app", name, "tempdir", path)
 
-	r := stream.ToReader(ctx, td)
+	startTime := time.Now()
+	r := stream.ToReader(ctx, td, b.Log)
 
-	tr, err := tarx.TarFS(r, path)
+	tr, err := tarx.TarFS(r, path, b.Log)
 	if err != nil {
 		return fmt.Errorf("error untaring data: %w", err)
 	}
+	b.Log.Info("tar extraction complete",
+		"app", name,
+		"elapsed", time.Since(startTime))
 
 	if status != nil {
 		so.Update().SetMessage("Launching builder")

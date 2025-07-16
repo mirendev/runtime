@@ -120,7 +120,7 @@ func (s *Server) Exec(ctx context.Context, req *exec_v1alpha.SandboxExecExec) er
 
 	pargs := req.Args()
 
-	r := stream.ToReader(ctx, args.Input())
+	r := stream.ToReader(ctx, args.Input(), s.Log)
 	w := stream.ToWriter(ctx, args.Output())
 
 	defer r.Close()
@@ -134,7 +134,7 @@ func (s *Server) Exec(ctx context.Context, req *exec_v1alpha.SandboxExecExec) er
 		stream.ChanWriter(ctx, args.WindowUpdates(), ch)
 	}
 
-	eret, err := ecl.Exec(ctx, "id", id, pargs.Command(), pargs.Options(), stream.ServeReader(ctx, r), stream.ServeWriter(ctx, w), ws)
+	eret, err := ecl.Exec(ctx, "id", id, pargs.Command(), pargs.Options(), stream.ServeReader(ctx, r, s.Log), stream.ServeWriter(ctx, w), ws)
 	if err != nil {
 		return fmt.Errorf("failed to exec on node %s: %w", node.ApiAddress, err)
 	}

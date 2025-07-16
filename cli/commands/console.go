@@ -99,7 +99,7 @@ func Console(ctx *Context, opts struct {
 
 	sec := exec_v1alpha.NewSandboxExecClient(cl)
 
-	input := stream.ServeReader(ctx, in)
+	input := stream.ServeReader(ctx, in, ctx.Log)
 	output := stream.ServeWriter(ctx, out)
 
 	winUS := stream.ChanReader(winUpdates)

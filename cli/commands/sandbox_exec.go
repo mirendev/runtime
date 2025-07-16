@@ -81,7 +81,7 @@ func SandboxExec(ctx *Context, opts struct {
 		out = os.Stdout
 	}
 
-	input := stream.ServeReader(ctx, in)
+	input := stream.ServeReader(ctx, in, ctx.Log)
 	output := stream.ServeWriter(ctx, out)
 	winUS := stream.ChanReader(winUpdates)
 

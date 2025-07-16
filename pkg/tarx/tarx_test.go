@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"compress/gzip"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"testing"
@@ -113,7 +114,7 @@ func TestMakeTar(t *testing.T) {
 			}
 
 			// Create tar
-			reader, err := MakeTar(tmpDir)
+			reader, err := MakeTar(tmpDir, slog.Default())
 			require.NoError(t, err)
 
 			// Extract and verify contents
@@ -145,7 +146,7 @@ func TestMakeTarWithoutGitignore(t *testing.T) {
 	}
 
 	// Create tar (no .gitignore file)
-	reader, err := MakeTar(tmpDir)
+	reader, err := MakeTar(tmpDir, slog.Default())
 	require.NoError(t, err)
 
 	// Extract and verify all files are included
@@ -161,7 +162,7 @@ func TestMakeTarEmptyDirectory(t *testing.T) {
 	defer os.RemoveAll(tmpDir)
 
 	// Create tar of empty directory
-	reader, err := MakeTar(tmpDir)
+	reader, err := MakeTar(tmpDir, slog.Default())
 	require.NoError(t, err)
 
 	// Verify no entries
@@ -208,7 +209,7 @@ func TestMakeTarVerifyContent(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "test.txt"), []byte(testContent), 0644))
 
 	// Create tar
-	reader, err := MakeTar(tmpDir)
+	reader, err := MakeTar(tmpDir, slog.Default())
 	require.NoError(t, err)
 
 	// Extract and verify content
@@ -254,11 +255,80 @@ func TestMakeTarGitignoreNegation(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, ".gitignore"), []byte(gitignore), 0644))
 
 	// Create tar
-	reader, err := MakeTar(tmpDir)
+	reader, err := MakeTar(tmpDir, slog.Default())
 	require.NoError(t, err)
 
 	// Extract and verify only important.log and regular.txt are included
 	entries := extractTarEntries(t, reader)
 	expected := []string{"important.log", "regular.txt", "dir"}
 	require.ElementsMatch(t, expected, entries)
+}
+
+func TestMakeTarVendorInclusion(t *testing.T) {
+	// Create temporary directory
+	tmpDir, err := os.MkdirTemp("", "tarx-test-vendor-")
+	require.NoError(t, err)
+	defer func() {
+		_ = os.RemoveAll(tmpDir)
+	}()
+
+	// Create test files including vendor directory
+	files := map[string]string{
+		"main.go":              "package main",
+		"go.mod":               "module example.com/test",
+		"vendor/lib/lib.go":    "package lib",
+		"vendor/lib/README.md": "vendor lib readme",
+		"vendor/modules.txt":   "vendor modules",
+		"build/output":         "binary output",
+		"node_modules/lib.js":  "javascript lib",
+		".git/config":          "git config",
+	}
+
+	for filename, content := range files {
+		fullPath := filepath.Join(tmpDir, filename)
+		dir := filepath.Dir(fullPath)
+		require.NoError(t, os.MkdirAll(dir, 0755))
+		require.NoError(t, os.WriteFile(fullPath, []byte(content), 0644))
+	}
+
+	// Create .gitignore that excludes vendor and build
+	gitignore := "vendor/\nbuild/\nnode_modules/\n"
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, ".gitignore"), []byte(gitignore), 0644))
+
+	// Create tar
+	reader, err := MakeTar(tmpDir, slog.Default())
+	require.NoError(t, err)
+
+	// Extract and verify vendor is included despite gitignore
+	entries := extractTarEntries(t, reader)
+
+	// Should include vendor files but not build or node_modules
+	expectedToInclude := []string{
+		"main.go",
+		"go.mod",
+		"vendor",
+		"vendor/lib",
+		"vendor/lib/lib.go",
+		"vendor/lib/README.md",
+		"vendor/modules.txt",
+	}
+
+	// Should NOT include these
+	unexpectedFiles := []string{
+		"build",
+		"build/output",
+		"node_modules",
+		"node_modules/lib.js",
+		".git",
+		".git/config",
+		".gitignore",
+	}
+
+	for _, expected := range expectedToInclude {
+		require.Contains(t, entries, expected, "Expected to find %s in tar", expected)
+	}
+
+	for _, unexpected := range unexpectedFiles {
+		require.NotContains(t, entries, unexpected, "Did not expect to find %s in tar", unexpected)
+	}
 }

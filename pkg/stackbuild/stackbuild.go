@@ -708,8 +708,10 @@ func (s *GoStack) GenerateLLB(dir string, opts BuildOptions) (*llb.State, error)
 	buildDir := s.commandDir(opts)
 
 	// Build with cache
+	// Check if vendor directory exists and skip go mod download if it does
+	buildCmd := fmt.Sprintf("sh -c 'echo \"Build directory: %s\" && if [ -d vendor ]; then echo \"Using vendored dependencies\" && ls -la vendor | head -20; else echo \"No vendor directory found, downloading dependencies\" && go mod download -json; fi && echo \"Starting go build\" && go build -o /bin/app ./%s'", buildDir, buildDir)
 	state = appState.Dir("/app").Run(
-		llb.Shlex(fmt.Sprintf("sh -c 'go mod download -json && go build -o /bin/app ./%s'", buildDir)),
+		llb.Shlex(buildCmd),
 
 		// This basically is just a scratch mount until we add the ability to
 		// properly export and import the cache dirs.
