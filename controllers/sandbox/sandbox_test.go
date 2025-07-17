@@ -973,6 +973,14 @@ func TestSandbox(t *testing.T) {
 		r.Equal(http.StatusOK, resp.StatusCode)
 	})
 
+	checkClosed := func(t *testing.T, c io.Closer) {
+		t.Helper()
+		err := c.Close()
+		if err != nil {
+			t.Errorf("failed to close: %v", err)
+		}
+	}
+
 	t.Run("cleans up dead sandboxes older than 1 hour", func(t *testing.T) {
 		r := require.New(t)
 
@@ -987,7 +995,7 @@ func TestSandbox(t *testing.T) {
 		err := reg.Populate(&sbc)
 		r.NoError(err)
 
-		defer sbc.Close()
+		defer checkClosed(t, &sbc)
 
 		err = sbc.Init(ctx)
 		r.NoError(err)

@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"io"
 	"net/netip"
 	"testing"
 	"time"
@@ -31,6 +32,14 @@ func TestServiceController(t *testing.T) {
 
 	svcName := func() string {
 		return idgen.GenNS("svc")
+	}
+
+	checkClosed := func(t *testing.T, c io.Closer) {
+		t.Helper()
+		err := c.Close()
+		if err != nil {
+			t.Errorf("failed to close: %v", err)
+		}
 	}
 
 	t.Run("creates service without errors", func(t *testing.T) {
@@ -101,7 +110,7 @@ func TestServiceController(t *testing.T) {
 		err = sc.Init(ctx)
 		r.NoError(err)
 
-		defer sbC.Close()
+		defer checkClosed(t, &sbC)
 
 		err = sbC.Init(ctx)
 		r.NoError(err)
@@ -231,7 +240,7 @@ func TestServiceController(t *testing.T) {
 		err = sc.Init(ctx)
 		r.NoError(err)
 
-		defer sbC.Close()
+		defer checkClosed(t, &sbC)
 
 		err = sbC.Init(ctx)
 		r.NoError(err)
@@ -405,7 +414,7 @@ func TestServiceController(t *testing.T) {
 			Port: 443,
 		})
 
-		meta.Entity.Attrs = svc.Encode()
+		meta.Attrs = svc.Encode()
 		meta.Revision = 2
 
 		// Re-create the service with updated configuration
@@ -439,7 +448,7 @@ func TestServiceController(t *testing.T) {
 		err = sc.Init(ctx)
 		r.NoError(err)
 
-		defer sbC.Close()
+		defer checkClosed(t, &sbC)
 
 		err = sbC.Init(ctx)
 		r.NoError(err)
@@ -749,7 +758,7 @@ func TestServiceController(t *testing.T) {
 
 		// Create and start the IP allocator
 		ipalloc := ipalloc.NewAllocator(sc.Log, servicePrefixes)
-		
+
 		// Start watching for services in background
 		go func() {
 			err := ipalloc.Watch(ctx, eac)
@@ -757,7 +766,7 @@ func TestServiceController(t *testing.T) {
 				r.NoError(err)
 			}
 		}()
-		
+
 		// Give the watcher a moment to start
 		time.Sleep(50 * time.Millisecond)
 
@@ -801,7 +810,7 @@ func TestServiceController(t *testing.T) {
 		// Re-read the service from entity storage to get the allocated IP
 		result, err := eac.Get(ctx, svcID.String())
 		r.NoError(err)
-		
+
 		var updatedSvc network_v1alpha.Service
 		updatedSvc.Decode(result.Entity().Entity())
 

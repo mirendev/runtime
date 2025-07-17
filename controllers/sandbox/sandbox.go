@@ -991,7 +991,10 @@ func (c *SandboxController) buildSpec(
 	// Make sure the parent directory for the cgroup exists so that gvisor doesn't
 	// try to remove it. This works around a bug in gvisor where it will attempt
 	// to remove the any cgroup directory it creates.
-	os.MkdirAll(filepath.Join("/sys/fs/cgroup", filepath.Dir(cgroupPath)), 0755)
+	err = os.MkdirAll(filepath.Join("/sys/fs/cgroup", filepath.Dir(cgroupPath)), 0755)
+	if err != nil {
+		c.Log.Error("failed to create cgroup directory", "path", cgroupPath, "err", err)
+	}
 
 	specOpts := []oci.SpecOpts{
 		oci.WithImageConfig(img),
@@ -1545,11 +1548,13 @@ func (c *SandboxController) stopSandbox(ctx context.Context, sb *compute.Sandbox
 	}
 
 	c.Log.Debug("removing monitoring metrics", "id", sb.ID, "log_entity", le)
-	c.Metrics.Remove(le)
-	time.Sleep(time.Second)
+	err := c.Metrics.Remove(le)
+	if err != nil {
+		c.Log.Error("failed to remove monitoring metrics", "id", sb.ID, "error", err)
+	}
 
 	c.Log.Debug("stopping container", "id", sb.ID)
-	err := c.destroySubContainers(ctx, sb)
+	err = c.destroySubContainers(ctx, sb)
 	if err != nil {
 		return fmt.Errorf("failed to destroy subcontainers: %w", err)
 	}
