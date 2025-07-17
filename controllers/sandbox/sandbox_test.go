@@ -117,7 +117,7 @@ func TestSandbox(t *testing.T) {
 		ca, err := netip.ParseAddr(tco.Network[0].Address)
 		r.NoError(err)
 
-		c, err := cc.LoadContainer(ctx, co.containerId(id))
+		c, err := cc.LoadContainer(ctx, co.pauseContainerId(id))
 		r.NoError(err)
 
 		r.NotNil(c)
@@ -279,7 +279,7 @@ func TestSandbox(t *testing.T) {
 			err := co.Create(ctx, &sb, meta)
 			r.NoError(err)
 
-			c, err := cc.LoadContainer(ctx, co.containerId(id))
+			c, err := cc.LoadContainer(ctx, co.pauseContainerId(id))
 			r.NoError(err)
 
 			labels, err := c.Labels(ctx)
@@ -419,7 +419,7 @@ func TestSandbox(t *testing.T) {
 		err = co.Create(ctx, &tco, meta)
 		r.NoError(err)
 
-		c, err := cc.LoadContainer(ctx, co.containerId(id))
+		c, err := cc.LoadContainer(ctx, co.pauseContainerId(id))
 		r.NoError(err)
 
 		r.NotNil(c)
@@ -538,7 +538,7 @@ func TestSandbox(t *testing.T) {
 		ca, err := netip.ParseAddr(tco.Network[0].Address)
 		r.NoError(err)
 
-		c, err := cc.LoadContainer(ctx, co.containerId(id))
+		c, err := cc.LoadContainer(ctx, co.pauseContainerId(id))
 		r.NoError(err)
 
 		r.NotNil(c)
@@ -673,7 +673,7 @@ func TestSandbox(t *testing.T) {
 		ca, err := netip.ParseAddr(tco.Network[0].Address)
 		r.NoError(err)
 
-		c, err := cc.LoadContainer(ctx, co.containerId(id))
+		c, err := cc.LoadContainer(ctx, co.pauseContainerId(id))
 		r.NoError(err)
 
 		r.NotNil(c)
@@ -800,7 +800,7 @@ func TestSandbox(t *testing.T) {
 		ca, err := netip.ParseAddr(tco.Network[0].Address)
 		r.NoError(err)
 
-		c, err := cc.LoadContainer(ctx, co.containerId(id))
+		c, err := cc.LoadContainer(ctx, co.pauseContainerId(id))
 		r.NoError(err)
 
 		r.NotNil(c)
@@ -936,7 +936,7 @@ func TestSandbox(t *testing.T) {
 		ca, err := netip.ParseAddr(tco.Network[0].Address)
 		r.NoError(err)
 
-		c, err := cc.LoadContainer(ctx, co.containerId(id))
+		c, err := cc.LoadContainer(ctx, co.pauseContainerId(id))
 		r.NoError(err)
 
 		r.NotNil(c)

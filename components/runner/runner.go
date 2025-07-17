@@ -255,7 +255,7 @@ func (r *Runner) SetupControllers(
 		workers,
 	)
 
-	sbController.SetPeriodic(sbc.Periodic)
+	sbController.SetPeriodic(5*time.Minute, sbc.Periodic)
 
 	cm.AddController(sbController)
 

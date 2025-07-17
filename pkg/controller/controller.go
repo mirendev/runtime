@@ -71,7 +71,8 @@ type ReconcileController struct {
 	wg           sync.WaitGroup
 
 	// periodic is an optional periodic callback
-	periodic func(ctx context.Context) error
+	periodic     func(ctx context.Context) error
+	periodicTime time.Duration
 }
 
 // NewReconcileController creates a new controller
@@ -89,8 +90,9 @@ func NewReconcileController(name string, log *slog.Logger, index entity.Attr, es
 }
 
 // SetPeriodic sets the periodic callback function
-func (c *ReconcileController) SetPeriodic(fn func(ctx context.Context) error) {
+func (c *ReconcileController) SetPeriodic(often time.Duration, fn func(ctx context.Context) error) {
 	c.periodic = fn
+	c.periodicTime = often
 }
 
 // Start starts the controller
@@ -305,8 +307,13 @@ func (c *ReconcileController) runPeriodic(ctx context.Context) {
 
 	defer c.wg.Done()
 
+	dur := c.periodicTime
+	if dur == 0 {
+		dur = 10 * time.Minute // Default to 10 minutes if not set
+	}
+
 	// Run every 10 minutes
-	ticker := time.NewTicker(10 * time.Minute)
+	ticker := time.NewTicker(dur)
 	defer ticker.Stop()
 
 	// Run once immediately
@@ -335,12 +342,6 @@ type GenericController[P ControllerEntity] interface {
 	Init(context.Context) error
 	Create(ctx context.Context, obj P, meta *entity.Meta) error
 	Delete(ctx context.Context, e entity.Id) error
-}
-
-// PeriodicController is an optional interface that controllers can implement
-// to handle periodic callbacks
-type PeriodicController interface {
-	Periodic(ctx context.Context) error
 }
 
 // UpdatingController is an optional interface that controllers can implement

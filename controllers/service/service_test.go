@@ -185,8 +185,11 @@ func TestServiceController(t *testing.T) {
 		err = sbC.Create(ctx, sb, sbMeta)
 		r.NoError(err)
 
-		// Give it a moment for endpoints to be created
-		time.Sleep(200 * time.Millisecond)
+		// Poll for endpoints to be created
+		require.Eventually(t, func() bool {
+			endpoints, err := eac.List(ctx, entity.Ref(entity.EntityKind, network_v1alpha.KindEndpoints))
+			return err == nil && len(endpoints.Values()) > 0
+		}, 5*time.Second, 50*time.Millisecond, "Expected endpoints to be created")
 
 		// Check that endpoints were created
 		endpoints, err := eac.List(ctx, entity.Ref(entity.EntityKind, network_v1alpha.KindEndpoints))
@@ -313,8 +316,11 @@ func TestServiceController(t *testing.T) {
 		err = sbC.Create(ctx, sb, sbMeta)
 		r.NoError(err)
 
-		// Give it a moment for endpoints to be created
-		time.Sleep(100 * time.Millisecond)
+		// Poll for endpoints to be created
+		require.Eventually(t, func() bool {
+			endpoints, err := eac.List(ctx, entity.Ref(entity.EntityKind, network_v1alpha.KindEndpoints))
+			return err == nil && len(endpoints.Values()) > 0
+		}, 5*time.Second, 50*time.Millisecond, "Expected endpoints to be created")
 
 		// Verify endpoints exist
 		endpoints, err := eac.List(ctx, entity.Ref(entity.EntityKind, network_v1alpha.KindEndpoints))
@@ -341,8 +347,11 @@ func TestServiceController(t *testing.T) {
 		err = sbC.Delete(ctx, sbID)
 		r.NoError(err)
 
-		// Give it a moment for endpoints to be deleted
-		time.Sleep(100 * time.Millisecond)
+		// Poll for endpoints to be created
+		require.Eventually(t, func() bool {
+			endpoints, err := eac.List(ctx, entity.Ref(entity.EntityKind, network_v1alpha.KindEndpoints))
+			return err == nil && len(endpoints.Values()) != 2
+		}, 5*time.Second, 50*time.Millisecond, "Expected endpoints to be created")
 
 		// Verify endpoints are deleted
 		endpoints, err = eac.List(ctx, entity.Ref(entity.EntityKind, network_v1alpha.KindEndpoints))
@@ -555,8 +564,11 @@ func TestServiceController(t *testing.T) {
 		err = sbC.Create(ctx, sb2, sbMeta2)
 		r.NoError(err)
 
-		// Give it a moment for endpoints to be created
-		time.Sleep(100 * time.Millisecond)
+		// Poll for endpoints to be created
+		require.Eventually(t, func() bool {
+			endpoints, err := eac.List(ctx, entity.Ref(entity.EntityKind, network_v1alpha.KindEndpoints))
+			return err == nil && len(endpoints.Values()) != 0
+		}, 5*time.Second, 50*time.Millisecond, "Expected endpoints to be created")
 
 		// Check that endpoints contain both sandboxes - each sandbox creates its own endpoint entity
 		endpoints, err := eac.List(ctx, entity.Ref(entity.EntityKind, network_v1alpha.KindEndpoints))
@@ -579,8 +591,11 @@ func TestServiceController(t *testing.T) {
 		err = sbC.Delete(ctx, sbID1)
 		r.NoError(err)
 
-		// Give it a moment for endpoints to be updated
-		time.Sleep(100 * time.Millisecond)
+		// Poll for endpoints to be created
+		require.Eventually(t, func() bool {
+			endpoints, err := eac.List(ctx, entity.Ref(entity.EntityKind, network_v1alpha.KindEndpoints))
+			return err == nil && len(endpoints.Values()) != 2
+		}, 5*time.Second, 50*time.Millisecond, "Expected endpoints to be created")
 
 		// Check that only one endpoint entity remains after deleting first sandbox
 		endpoints, err = eac.List(ctx, entity.Ref(entity.EntityKind, network_v1alpha.KindEndpoints))

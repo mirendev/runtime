@@ -187,7 +187,6 @@ func (e *EntityServer) Put(ctx context.Context, req *entityserver_v1alpha.Entity
 	var opts []entity.EntityOption
 
 	if rpcE.HasId() {
-		// TODO: handle updated_at
 		e.Log.Debug("updating entity", "id", rpcE.Id(), "revision", rpcE.Revision())
 
 		// If the entity has a revision, then make sure that we're updating that specific entity.
@@ -209,7 +208,6 @@ func (e *EntityServer) Put(ctx context.Context, req *entityserver_v1alpha.Entity
 		}
 	}
 
-	// TODO: handle created_at and updated_at fields
 	re, err := e.Store.CreateEntity(ctx, attrs, opts...)
 	if err != nil {
 		return fmt.Errorf("failed to create entity in put: %w", err)
@@ -252,7 +250,6 @@ func (e *EntityServer) PutSession(ctx context.Context, req *entityserver_v1alpha
 	opts = append(opts, entity.WithSession(data))
 
 	if rpcE.HasId() {
-		// TODO: handle updated_at
 		re, err := e.Store.UpdateEntity(ctx, entity.Id(rpcE.Id()), attrs, opts...)
 		if err != nil {
 			if !errors.Is(err, entity.ErrNotFound) {
@@ -263,7 +260,6 @@ func (e *EntityServer) PutSession(ctx context.Context, req *entityserver_v1alpha
 			results.SetId(re.ID.String())
 		}
 	} else {
-		// TODO: handle created_at and updated_at fields
 		re, err := e.Store.CreateEntity(ctx, attrs, opts...)
 		if err != nil {
 			return fmt.Errorf("failed to create entity: %w", err)

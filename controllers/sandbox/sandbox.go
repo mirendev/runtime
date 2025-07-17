@@ -385,7 +385,7 @@ func (c *SandboxController) containerPrefix(id entity.Id) string {
 	return "sandbox." + cid
 }
 
-func (c *SandboxController) containerId(id entity.Id) string {
+func (c *SandboxController) pauseContainerId(id entity.Id) string {
 	return c.containerPrefix(id) + "_pause"
 }
 
@@ -394,7 +394,7 @@ func (c *SandboxController) checkSandbox(ctx context.Context, co *compute.Sandbo
 
 	ctx = namespaces.WithNamespace(ctx, c.Namespace)
 
-	cont, err := c.CC.LoadContainer(ctx, c.containerId(co.ID))
+	cont, err := c.CC.LoadContainer(ctx, c.pauseContainerId(co.ID))
 	if err != nil {
 		return notFound, nil
 	}
@@ -471,7 +471,7 @@ func (c *SandboxController) updateSandbox(ctx context.Context, sb *compute.Sandb
 		c.Log.Error("failed to check if sandbox can be updated in place", "err", err)
 	} else if canUpdate {
 
-		cont, err := c.CC.LoadContainer(ctx, c.containerId(sb.ID))
+		cont, err := c.CC.LoadContainer(ctx, c.pauseContainerId(sb.ID))
 		if err != nil {
 			return fmt.Errorf("failed to load existing sandbox: %w", err)
 		}
@@ -564,7 +564,7 @@ func (c *SandboxController) createSandbox(ctx context.Context, co *compute.Sandb
 		return fmt.Errorf("failed to configure volumes: %w", err)
 	}
 
-	cid := c.containerId(co.ID)
+	cid := c.pauseContainerId(co.ID)
 
 	container, err := c.CC.NewContainer(ctx, cid, opts...)
 	if err != nil {
@@ -991,6 +991,7 @@ func (c *SandboxController) buildSpec(
 	// Make sure the parent directory for the cgroup exists so that gvisor doesn't
 	// try to remove it. This works around a bug in gvisor where it will attempt
 	// to remove the any cgroup directory it creates.
+	// PR with gvisor fix: https://github.com/google/gvisor/pull/11933
 	err = os.MkdirAll(filepath.Join("/sys/fs/cgroup", filepath.Dir(cgroupPath)), 0755)
 	if err != nil {
 		c.Log.Error("failed to create cgroup directory", "path", cgroupPath, "err", err)
@@ -1359,7 +1360,7 @@ func (c *SandboxController) buildSubContainerSpec(
 		}),
 		oci.WithAnnotations(map[string]string{
 			"io.kubernetes.cri.container-type": "container",
-			"io.kubernetes.cri.sandbox-id":     c.containerId(sb.ID),
+			"io.kubernetes.cri.sandbox-id":     c.pauseContainerId(sb.ID),
 		}),
 		oci.WithEnv(co.Env),
 	}
@@ -1516,7 +1517,7 @@ func (c *SandboxController) Delete(ctx context.Context, id entity.Id) error {
 		// If entity file is missing but container exists, try to reconstruct minimal sandbox info
 		if strings.Contains(err.Error(), "entity file not found") {
 			// Check if the container exists
-			_, err := c.CC.LoadContainer(ctx, c.containerId(id))
+			_, err := c.CC.LoadContainer(ctx, c.pauseContainerId(id))
 			if err != nil {
 				// Container doesn't exist, consider it already deleted
 				c.Log.Info("Delete called but container not found, already deleted", "id", id, "error", err)
@@ -1563,7 +1564,7 @@ func (c *SandboxController) stopSandbox(ctx context.Context, sb *compute.Sandbox
 
 	// Collect sandbox IPs before deleting container
 	sandboxIPs := make(map[string]bool)
-	container, err := c.CC.LoadContainer(ctx, c.containerId(sb.ID))
+	container, err := c.CC.LoadContainer(ctx, c.pauseContainerId(sb.ID))
 	if err == nil {
 		labels, err := container.Labels(ctx)
 		if err != nil {
