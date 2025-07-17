@@ -69,6 +69,9 @@ type ReconcileController struct {
 	workers      int
 	workQueue    chan Event
 	wg           sync.WaitGroup
+
+	// periodic is an optional periodic callback
+	periodic func(ctx context.Context) error
 }
 
 // NewReconcileController creates a new controller
@@ -83,6 +86,11 @@ func NewReconcileController(name string, log *slog.Logger, index entity.Attr, es
 		workers:      workers,
 		workQueue:    make(chan Event, 1000),
 	}
+}
+
+// SetPeriodic sets the periodic callback function
+func (c *ReconcileController) SetPeriodic(fn func(ctx context.Context) error) {
+	c.periodic = fn
 }
 
 // Start starts the controller
@@ -151,6 +159,12 @@ func (c *ReconcileController) Start(top context.Context) error {
 	if c.resyncPeriod > 0 {
 		c.wg.Add(1)
 		go c.periodicResync(ctx)
+	}
+
+	// Start periodic callback if set
+	if c.periodic != nil {
+		c.wg.Add(1)
+		go c.runPeriodic(ctx)
 	}
 
 	return nil
@@ -284,6 +298,34 @@ func (c *ReconcileController) periodicResync(ctx context.Context) {
 	}
 }
 
+// runPeriodic runs the periodic callback every 10 minutes
+func (c *ReconcileController) runPeriodic(ctx context.Context) {
+	c.Log.Info("Starting periodic callback")
+	defer c.Log.Info("Stopping periodic callback")
+
+	defer c.wg.Done()
+
+	// Run every 10 minutes
+	ticker := time.NewTicker(10 * time.Minute)
+	defer ticker.Stop()
+
+	// Run once immediately
+	if err := c.periodic(ctx); err != nil {
+		c.Log.Error("error running periodic callback", "error", err)
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if err := c.periodic(ctx); err != nil {
+				c.Log.Error("error running periodic callback", "error", err)
+			}
+		}
+	}
+}
+
 type ControllerEntity interface {
 	Decode(getter entity.AttrGetter)
 	Encode() []entity.Attr
@@ -293,6 +335,12 @@ type GenericController[P ControllerEntity] interface {
 	Init(context.Context) error
 	Create(ctx context.Context, obj P, meta *entity.Meta) error
 	Delete(ctx context.Context, e entity.Id) error
+}
+
+// PeriodicController is an optional interface that controllers can implement
+// to handle periodic callbacks
+type PeriodicController interface {
+	Periodic(ctx context.Context) error
 }
 
 // UpdatingController is an optional interface that controllers can implement

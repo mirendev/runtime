@@ -7,7 +7,9 @@ import (
 
 func (e *Entity) Entity() *entity.Entity {
 	return &entity.Entity{
-		ID:    types.Id(e.Id()),
-		Attrs: e.Attrs(),
+		ID:        types.Id(e.Id()),
+		UpdatedAt: e.UpdatedAt(),
+		CreatedAt: e.CreatedAt(),
+		Attrs:     e.Attrs(),
 	}
 }

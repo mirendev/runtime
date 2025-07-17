@@ -61,6 +61,8 @@ const (
 	Schema Id = "db/schema"
 
 	TTL Id = "db/entity.ttl"
+
+	UpdatedAt Id = "db/entity.updated-at"
 )
 
 func InitSystemEntities(save func(*Entity) error) error {
@@ -172,6 +174,15 @@ func InitSystemEntities(save func(*Entity) error) error {
 			Doc, "Time to live for this entity",
 			Cardinality, CardinalityOne,
 			Type, TypeDuration,
+		),
+	}
+
+	updatedAt := &Entity{
+		Attrs: Attrs(
+			Ident, types.Keyword(UpdatedAt),
+			Doc, "Last update timestamp for this entity",
+			Cardinality, CardinalityOne,
+			Type, TypeInt,
 		),
 	}
 
@@ -300,7 +311,7 @@ func InitSystemEntities(save func(*Entity) error) error {
 		ident, doc, uniq, card, typ, enumValues, enumType,
 		uniqueIdentity, uniqueValue, cardOne, cardMany,
 		typeAny, typeRef, typeStr, typeKW, typeInt, typeFloat, typeBool, typeTime, typeEnum,
-		typeArray, typeDuration, typeComponent, typeLabel, typeBytes, index, session, ttl,
+		typeArray, typeDuration, typeComponent, typeLabel, typeBytes, index, session, ttl, updatedAt,
 		attrSession,
 		attrPred, predIP, predCidr, entityAttrs, entityPreds, entityEnsure,
 		entityKind, entitySchema, entityESchema, schemaKind,

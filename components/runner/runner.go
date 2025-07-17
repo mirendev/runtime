@@ -245,17 +245,19 @@ func (r *Runner) SetupControllers(
 		workers = DefaulWorkers
 	}
 
-	cm.AddController(
-		controller.NewReconcileController(
-			"sandbox",
-			log,
-			compute_v1alpha.Index(compute_v1alpha.KindSandbox, entity.Id("node/"+r.Id)),
-			eas,
-			controller.AdaptController(&sbc),
-			time.Minute,
-			workers,
-		),
+	sbController := controller.NewReconcileController(
+		"sandbox",
+		log,
+		compute_v1alpha.Index(compute_v1alpha.KindSandbox, entity.Id("node/"+r.Id)),
+		eas,
+		controller.AdaptController(&sbc),
+		time.Minute,
+		workers,
 	)
+
+	sbController.SetPeriodic(sbc.Periodic)
+
+	cm.AddController(sbController)
 
 	cm.AddController(
 		controller.NewReconcileController(

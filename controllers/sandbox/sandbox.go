@@ -1635,3 +1635,56 @@ func (c *SandboxController) stopSandbox(ctx context.Context, sb *compute.Sandbox
 
 	return nil
 }
+
+// Periodic implements the PeriodicController interface
+// It runs every 10 minutes to clean up dead sandboxes that are older than 1 hour
+func (c *SandboxController) Periodic(ctx context.Context) error {
+	c.Log.Info("running periodic cleanup of dead sandboxes")
+
+	// List all sandboxes
+	resp, err := c.EAC.List(ctx, entity.Ref(entity.EntityKind, compute.KindSandbox))
+	if err != nil {
+		return fmt.Errorf("failed to list sandboxes: %w", err)
+	}
+
+	now := time.Now()
+	oneHourAgo := now.Add(-1 * time.Hour)
+
+	var deleted int
+	for _, e := range resp.Values() {
+		var sb compute.Sandbox
+		sb.Decode(e.Entity())
+
+		// Check if sandbox is DEAD and UpdatedAt is more than 1 hour ago
+		if sb.Status == compute.DEAD {
+			// Convert UpdatedAt from milliseconds to time.Time
+			updatedAt := time.Unix(0, e.Entity().UpdatedAt*int64(time.Millisecond))
+
+			c.Log.Debug("checking sandbox for cleanup",
+				"id", sb.ID,
+				"status", sb.Status,
+				"updated_at", updatedAt.Format(time.RFC3339),
+				"age", now.Sub(updatedAt).String())
+
+			if updatedAt.Before(oneHourAgo) {
+				c.Log.Info("deleting old dead sandbox",
+					"id", sb.ID,
+					"updated_at", updatedAt.Format(time.RFC3339),
+					"age", now.Sub(updatedAt).String())
+
+				_, err := c.EAC.Delete(ctx, sb.ID.String())
+				if err != nil {
+					c.Log.Error("failed to delete dead sandbox", "id", sb.ID, "error", err)
+					continue
+				}
+				deleted++
+			}
+		}
+	}
+
+	if deleted > 0 {
+		c.Log.Info("periodic cleanup completed", "deleted_sandboxes", deleted)
+	}
+
+	return nil
+}
