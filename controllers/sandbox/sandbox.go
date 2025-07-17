@@ -18,11 +18,12 @@ import (
 
 	"github.com/containerd/containerd/namespaces"
 	containerd "github.com/containerd/containerd/v2/client"
+	"github.com/containerd/containerd/v2/core/containers"
 	"github.com/containerd/containerd/v2/core/remotes"
 	"github.com/containerd/containerd/v2/core/remotes/docker"
 	"github.com/containerd/containerd/v2/pkg/cio"
 	"github.com/containerd/containerd/v2/pkg/oci"
-	"github.com/davecgh/go-spew/spew"
+	"github.com/containerd/errdefs"
 	"github.com/mr-tron/base58"
 	"github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/pelletier/go-toml/v2"
@@ -379,10 +380,14 @@ func (c *SandboxController) canUpdateInPlace(ctx context.Context, sb *compute.Sa
 	return true, &oldSb, nil
 }
 
-func (c *SandboxController) containerId(id entity.Id) string {
+func (c *SandboxController) containerPrefix(id entity.Id) string {
 	cid := id.String()
 	cid = strings.TrimPrefix(cid, "sandbox/")
 	return "sandbox." + cid
+}
+
+func (c *SandboxController) pauseContainerId(id entity.Id) string {
+	return c.containerPrefix(id) + "_pause"
 }
 
 func (c *SandboxController) checkSandbox(ctx context.Context, co *compute.Sandbox, meta *entity.Meta) (int, error) {
@@ -390,9 +395,13 @@ func (c *SandboxController) checkSandbox(ctx context.Context, co *compute.Sandbo
 
 	ctx = namespaces.WithNamespace(ctx, c.Namespace)
 
-	cont, err := c.CC.LoadContainer(ctx, c.containerId(co.ID))
+	cont, err := c.CC.LoadContainer(ctx, c.pauseContainerId(co.ID))
 	if err != nil {
-		return notFound, nil
+		if errdefs.IsNotFound(err) {
+			return notFound, nil
+		}
+
+		return 0, err
 	}
 
 	labels, err := cont.Labels(ctx)
@@ -467,7 +476,7 @@ func (c *SandboxController) updateSandbox(ctx context.Context, sb *compute.Sandb
 		c.Log.Error("failed to check if sandbox can be updated in place", "err", err)
 	} else if canUpdate {
 
-		cont, err := c.CC.LoadContainer(ctx, c.containerId(sb.ID))
+		cont, err := c.CC.LoadContainer(ctx, c.pauseContainerId(sb.ID))
 		if err != nil {
 			return fmt.Errorf("failed to load existing sandbox: %w", err)
 		}
@@ -560,7 +569,7 @@ func (c *SandboxController) createSandbox(ctx context.Context, co *compute.Sandb
 		return fmt.Errorf("failed to configure volumes: %w", err)
 	}
 
-	cid := c.containerId(co.ID)
+	cid := c.pauseContainerId(co.ID)
 
 	container, err := c.CC.NewContainer(ctx, cid, opts...)
 	if err != nil {
@@ -667,7 +676,6 @@ func (c *SandboxController) updateServices(
 
 		if !srv.Match.Equal(md.Labels) {
 			c.Log.Debug("skipping service, labels do not match", "service", srv.ID, "labels", srv.Match, "entity", md.Labels)
-			spew.Dump(srv.Match, md.Labels)
 			continue
 		}
 
@@ -686,6 +694,8 @@ func (c *SandboxController) addEndpoint(
 	ep *network.EndpointConfig,
 	srv *network_v1alpha.Service,
 ) error {
+	c.Log.Debug("adding endpoint to service", "service", srv.ID, "sandbox", sb.ID, "containers", len(sb.Container))
+
 	for _, co := range sb.Container {
 		for _, p := range co.Port {
 			var add bool
@@ -697,6 +707,7 @@ func (c *SandboxController) addEndpoint(
 			}
 
 			if !add {
+				c.Log.Debug("skipping port, not in service", "port", p.Port, "service", srv.ID)
 				continue
 			}
 
@@ -717,6 +728,47 @@ func (c *SandboxController) addEndpoint(
 			}
 
 			c.Log.Debug("updated service", "id", pr.Id(), "service", eps.Service)
+		}
+	}
+
+	return nil
+}
+
+func (c *SandboxController) deleteEndpoints(ctx context.Context, sb *compute.Sandbox, sandboxIPs map[string]bool) error {
+	// If no IPs found, nothing to delete
+	if len(sandboxIPs) == 0 {
+		c.Log.Debug("no sandbox IPs found, skipping endpoint deletion", "sandbox_id", sb.ID)
+		return nil
+	}
+
+	// Get all endpoints
+	endpoints, err := c.EAC.List(ctx, entity.Ref(entity.EntityKind, network_v1alpha.KindEndpoints))
+	if err != nil {
+		return fmt.Errorf("failed to list endpoints: %w", err)
+	}
+
+	c.Log.Debug("considering endpoints for deletion", "sandbox_id", sb.ID, "endpoints_count", len(endpoints.Values()), "sandbox_ips", sandboxIPs)
+
+	// Delete any endpoints that contain our sandbox's IPs
+	for _, epEntity := range endpoints.Values() {
+		var ep network_v1alpha.Endpoints
+		ep.Decode(epEntity.Entity())
+
+		// Check if any endpoint IPs match our sandbox IPs
+		shouldDelete := false
+		for _, endpoint := range ep.Endpoint {
+			if sandboxIPs[endpoint.Ip] {
+				shouldDelete = true
+				break
+			}
+		}
+
+		if shouldDelete {
+			c.Log.Info("deleting endpoints for sandbox", "sandbox_id", sb.ID, "endpoint_id", ep.ID)
+			_, err = c.EAC.Delete(ctx, ep.ID.String())
+			if err != nil {
+				c.Log.Error("failed to delete endpoint", "id", ep.ID, "error", err)
+			}
 		}
 	}
 
@@ -884,6 +936,15 @@ func (c *SandboxController) buildSpec(
 		lbls[sandboxVerEntityLabel] = sb.Version.String()
 	}
 
+	// Add IP addresses from endpoint configuration
+	for i, addr := range ep.Addresses {
+		if i == 0 {
+			lbls["runtime.computer/ip"] = addr.Addr().String()
+		} else {
+			lbls[fmt.Sprintf("runtime.computer/ip%d", i)] = addr.Addr().String()
+		}
+	}
+
 	//if config.StaticDir != "" {
 	//lbls["runtime.computer/static_dir"] = config.StaticDir
 	//}
@@ -929,6 +990,18 @@ func (c *SandboxController) buildSpec(
 		},
 	}
 
+	// Create unique cgroup path for this sandbox
+	cgroupPath := fmt.Sprintf("/miren/sandbox-%s", sb.ID.PathSafe())
+
+	// Make sure the parent directory for the cgroup exists so that gvisor doesn't
+	// try to remove it. This works around a bug in gvisor where it will attempt
+	// to remove the any cgroup directory it creates.
+	// PR with gvisor fix: https://github.com/google/gvisor/pull/11933
+	err = os.MkdirAll(filepath.Join("/sys/fs/cgroup", filepath.Dir(cgroupPath)), 0755)
+	if err != nil {
+		c.Log.Error("failed to create cgroup directory", "path", cgroupPath, "err", err)
+	}
+
 	specOpts := []oci.SpecOpts{
 		oci.WithImageConfig(img),
 		oci.WithDefaultUnixDevices,
@@ -938,6 +1011,10 @@ func (c *SandboxController) buildSpec(
 		oci.WithAnnotations(map[string]string{
 			"io.kubernetes.cri.container-type": "sandbox",
 		}),
+		func(ctx context.Context, c1 oci.Client, c2 *containers.Container, s *oci.Spec) error {
+			s.Linux.CgroupsPath = cgroupPath
+			return nil
+		},
 		containerdx.WithOOMScoreAdj(defaultSandboxOOMAdj, false),
 	}
 
@@ -1083,7 +1160,7 @@ func (c *SandboxController) bootContainers(
 			return nil, fmt.Errorf("failed to build container spec: %w", err)
 		}
 
-		id := fmt.Sprintf("%s-%s", c.containerId(sb.ID), container.Name)
+		id := fmt.Sprintf("%s-%s", c.containerPrefix(sb.ID), container.Name)
 
 		for _, port := range container.Port {
 			ret = append(ret, waitPort{
@@ -1288,7 +1365,7 @@ func (c *SandboxController) buildSubContainerSpec(
 		}),
 		oci.WithAnnotations(map[string]string{
 			"io.kubernetes.cri.container-type": "container",
-			"io.kubernetes.cri.sandbox-id":     c.containerId(sb.ID),
+			"io.kubernetes.cri.sandbox-id":     c.pauseContainerId(sb.ID),
 		}),
 		oci.WithEnv(co.Env),
 	}
@@ -1331,100 +1408,114 @@ func (c *SandboxController) buildSubContainerSpec(
 }
 
 func (c *SandboxController) destroySubContainers(ctx context.Context, sb *compute.Sandbox) error {
-	// First, signal all the subcontainers with SIGTERM
-	esCh := make(chan containerd.ExitStatus, len(sb.Container))
+	if len(sb.Container) == 0 {
+		return nil
+	}
 
-	var waiting int
+	ctx = namespaces.WithNamespace(ctx, c.Namespace)
 
+	// Set up timeout for the entire operation (1 minute max)
+	timeout := 60 * time.Second
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	c.Log.Info("starting subcontainer destruction", "id", sb.ID, "containers", len(sb.Container), "timeout", timeout)
+
+	// Track containers that need to be destroyed
+	containerIds := make([]string, 0, len(sb.Container))
 	for _, container := range sb.Container {
-		id := fmt.Sprintf("%s-%s", c.containerId(sb.ID), container.Name)
+		id := fmt.Sprintf("%s-%s", c.containerPrefix(sb.ID), container.Name)
+		containerIds = append(containerIds, id)
+	}
 
-		c.Log.Debug("sending SIGTERM to subcontainer", "id", id)
+	// Retry loop with exponential backoff
+	retryInterval := 100 * time.Millisecond
+	maxRetryInterval := 2 * time.Second
 
-		ctx = namespaces.WithNamespace(ctx, c.Namespace)
-
-		cont, err := c.CC.LoadContainer(ctx, id)
-		if err != nil {
-			continue
+	for {
+		select {
+		case <-ctx.Done():
+			if ctx.Err() == context.DeadlineExceeded {
+				return fmt.Errorf("failed to destroy subcontainers within %v timeout", timeout)
+			}
+			return fmt.Errorf("context cancelled while destroying subcontainers: %w", ctx.Err())
+		default:
 		}
 
-		task, err := cont.Task(ctx, nil)
-		if err != nil {
-			c.Log.Error("failed to load task", "id", id, "err", err)
-		} else {
-			ch, err := task.Wait(ctx)
+		// Check if any containers still exist
+		remainingContainers := make([]string, 0)
+		for _, id := range containerIds {
+			cont, err := c.CC.LoadContainer(ctx, id)
 			if err != nil {
-				c.Log.Error("failed to get wait chan for task", "id", id, "err", err)
-			} else {
+				if errdefs.IsNotFound(err) {
+					// Container doesn't exist, consider it deleted
+					c.Log.Debug("container not found, considering deleted", "id", id)
+				} else {
+					c.Log.Error("failed to load container", "id", id, "err", err)
+				}
+
+				continue
+			}
+			remainingContainers = append(remainingContainers, id)
+
+			// Try to kill and delete the task
+			task, err := cont.Task(ctx, nil)
+			if err == nil {
+				// First try SIGTERM
 				err = task.Kill(ctx, unix.SIGTERM)
 				if err != nil {
-					c.Log.Warn("failed to kill task", "id", id, "err", err)
+					c.Log.Debug("failed to send SIGTERM", "id", id, "err", err)
 				} else {
-					waiting++
-
-					go func() {
-						select {
-						case es := <-ch:
-							esCh <- es
-						case <-ctx.Done():
-							esCh <- containerd.ExitStatus{}
-						}
-					}()
+					c.Log.Debug("sent SIGTERM to task", "id", id)
 				}
+
+				// Wait a bit then try to delete the task
+				time.Sleep(50 * time.Millisecond)
+
+				_, err = task.Delete(ctx, containerd.WithProcessKill)
+				if err != nil {
+					c.Log.Debug("failed to delete task", "id", id, "err", err)
+				} else {
+					c.Log.Debug("deleted task", "id", id)
+				}
+			} else {
+				c.Log.Debug("no task found for container", "id", id)
 			}
-		}
-	}
 
-	ticker := time.NewTimer(5 * time.Second)
-	defer ticker.Stop()
-
-loop:
-	for waiting > 0 {
-		select {
-		case <-ticker.C:
-			c.Log.Debug("gave up waiting for containers to exit")
-			break loop
-		case <-ctx.Done():
-			c.Log.Debug("context cancelled, giving up waiting for containers to exit")
-			break loop
-		case es := <-esCh:
-			waiting--
-			c.Log.Info("container exited", "exit_code", es.ExitCode())
-		}
-	}
-
-	c.Log.Info("deleting subcontainers", "id", sb.ID, "containers", len(sb.Container))
-
-	// Now, we can delete the subcontainers.
-	for _, container := range sb.Container {
-		id := fmt.Sprintf("%s-%s", c.containerId(sb.ID), container.Name)
-
-		c.Log.Debug("destroying subcontainer", "id", id)
-
-		ctx = namespaces.WithNamespace(ctx, c.Namespace)
-
-		cont, err := c.CC.LoadContainer(ctx, id)
-		if err != nil {
-			continue
-		}
-
-		task, err := cont.Task(ctx, nil)
-		if err != nil {
-			c.Log.Error("failed to load task", "id", id, "err", err)
-		} else {
-			_, err = task.Delete(ctx, containerd.WithProcessKill)
+			// Try to delete the container
+			err = cont.Delete(ctx, containerd.WithSnapshotCleanup)
 			if err != nil {
-				c.Log.Error("failed to delete task", "id", id, "err", err)
+				c.Log.Debug("failed to delete container", "id", id, "err", err)
+			} else {
+				c.Log.Debug("deleted container", "id", id)
 			}
 		}
 
-		err = cont.Delete(ctx, containerd.WithSnapshotCleanup)
-		if err != nil {
-			c.Log.Error("failed to delete container", "id", id, "err", err)
+		// If no containers remain, we're done
+		if len(remainingContainers) == 0 {
+			c.Log.Info("all subcontainers destroyed successfully", "id", sb.ID)
+			return nil
+		}
+
+		// Update the list of containers to check in the next iteration
+		containerIds = remainingContainers
+		c.Log.Debug("waiting for containers to be destroyed", "id", sb.ID, "remaining", len(containerIds), "retry_in", retryInterval)
+
+		// Wait before retrying
+		select {
+		case <-ctx.Done():
+			if ctx.Err() == context.DeadlineExceeded {
+				return fmt.Errorf("failed to destroy subcontainers within %v timeout, remaining: %v", timeout, containerIds)
+			}
+			return fmt.Errorf("context cancelled while destroying subcontainers: %w", ctx.Err())
+		case <-time.After(retryInterval):
+			// Exponential backoff with max limit
+			retryInterval = time.Duration(float64(retryInterval) * 1.5)
+			if retryInterval > maxRetryInterval {
+				retryInterval = maxRetryInterval
+			}
 		}
 	}
-
-	return nil
 }
 
 func (c *SandboxController) Delete(ctx context.Context, id entity.Id) error {
@@ -1436,11 +1527,15 @@ func (c *SandboxController) Delete(ctx context.Context, id entity.Id) error {
 		// If entity file is missing but container exists, try to reconstruct minimal sandbox info
 		if strings.Contains(err.Error(), "entity file not found") {
 			// Check if the container exists
-			_, err := c.CC.LoadContainer(ctx, c.containerId(id))
+			_, err := c.CC.LoadContainer(ctx, c.pauseContainerId(id))
 			if err != nil {
-				// Container doesn't exist, consider it already deleted
-				c.Log.Info("Delete called but container not found, already deleted", "id", id, "error", err)
-				return nil
+				if errdefs.IsNotFound(err) {
+					// Container doesn't exist, consider it already deleted
+					c.Log.Info("Delete called but container not found, already deleted", "id", id, "error", err)
+					return nil
+				}
+
+				return err
 			}
 			c.Log.Warn("entity file missing but container exists, attempting cleanup", "id", id)
 			// Create a minimal sandbox just with the ID to attempt cleanup
@@ -1462,12 +1557,28 @@ func (c *SandboxController) Delete(ctx context.Context, id entity.Id) error {
 func (c *SandboxController) stopSandbox(ctx context.Context, sb *compute.Sandbox) error {
 	ctx = namespaces.WithNamespace(ctx, c.Namespace)
 
-	err := c.destroySubContainers(ctx, sb)
+	le := sb.LogEntity
+	if le == "" {
+		le = sb.ID.String()
+	}
+
+	c.Log.Debug("removing monitoring metrics", "id", sb.ID, "log_entity", le)
+	err := c.Metrics.Remove(le)
+	if err != nil {
+		c.Log.Error("failed to remove monitoring metrics", "id", sb.ID, "error", err)
+	}
+
+	c.Log.Debug("stopping container", "id", sb.ID)
+	err = c.destroySubContainers(ctx, sb)
 	if err != nil {
 		return fmt.Errorf("failed to destroy subcontainers: %w", err)
 	}
 
-	container, err := c.CC.LoadContainer(ctx, c.containerId(sb.ID))
+	c.Log.Debug("deleting pause container", "id", sb.ID)
+
+	// Collect sandbox IPs before deleting container
+	sandboxIPs := make(map[string]bool)
+	container, err := c.CC.LoadContainer(ctx, c.pauseContainerId(sb.ID))
 	if err == nil {
 		labels, err := container.Labels(ctx)
 		if err != nil {
@@ -1482,12 +1593,14 @@ func (c *SandboxController) stopSandbox(ctx context.Context, sb *compute.Sandbox
 		if task != nil {
 			_, err = task.Delete(ctx, containerd.WithProcessKill)
 			if err != nil {
+				c.Log.Error("failed to delete pause task", "id", sb.ID, "err", err)
 				return err
 			}
 		}
 
 		err = container.Delete(ctx, containerd.WithSnapshotCleanup)
 		if err != nil {
+			c.Log.Error("failed to delete pause container", "id", sb.ID, "err", err)
 			return err
 		}
 
@@ -1495,6 +1608,7 @@ func (c *SandboxController) stopSandbox(ctx context.Context, sb *compute.Sandbox
 			if strings.HasPrefix(l, "runtime.computer/ip") {
 				addr, err := netip.ParseAddr(v)
 				if err == nil {
+					sandboxIPs[v] = true
 					err = c.Subnet.ReleaseAddr(addr)
 					if err != nil {
 						c.Log.Error("failed to release IP", "addr", addr, "err", err)
@@ -1513,6 +1627,8 @@ func (c *SandboxController) stopSandbox(ctx context.Context, sb *compute.Sandbox
 		_ = os.RemoveAll(tmpDir)
 
 		c.Log.Info("container stopped", "id", sb.ID)
+	} else if !errdefs.IsNotFound(err) {
+		return err
 	}
 
 	var rpcE entityserver_v1alpha.Entity
@@ -1532,12 +1648,65 @@ func (c *SandboxController) stopSandbox(ctx context.Context, sb *compute.Sandbox
 
 	c.Log.Info("sandbox retired", "id", sb.ID, "status", compute.DEAD)
 
-	le := sb.LogEntity
-	if le == "" {
-		le = sb.ID.String()
+	// Clean up endpoints associated with this sandbox
+	err = c.deleteEndpoints(ctx, sb, sandboxIPs)
+	if err != nil {
+		c.Log.Error("failed to delete endpoints for sandbox", "id", sb.ID, "error", err)
+		// Continue with cleanup even if endpoint deletion fails
 	}
 
-	c.Metrics.Remove(le)
+	return nil
+}
+
+// Periodic implements the PeriodicController interface
+// It runs every 10 minutes to clean up dead sandboxes that are older than 1 hour
+func (c *SandboxController) Periodic(ctx context.Context) error {
+	c.Log.Info("running periodic cleanup of dead sandboxes")
+
+	// List all sandboxes
+	resp, err := c.EAC.List(ctx, entity.Ref(entity.EntityKind, compute.KindSandbox))
+	if err != nil {
+		return fmt.Errorf("failed to list sandboxes: %w", err)
+	}
+
+	now := time.Now()
+	oneHourAgo := now.Add(-1 * time.Hour)
+
+	var deleted int
+	for _, e := range resp.Values() {
+		var sb compute.Sandbox
+		sb.Decode(e.Entity())
+
+		// Check if sandbox is DEAD and UpdatedAt is more than 1 hour ago
+		if sb.Status == compute.DEAD {
+			// Convert UpdatedAt from milliseconds to time.Time
+			updatedAt := time.Unix(0, e.Entity().UpdatedAt*int64(time.Millisecond))
+
+			c.Log.Debug("checking sandbox for cleanup",
+				"id", sb.ID,
+				"status", sb.Status,
+				"updated_at", updatedAt.Format(time.RFC3339),
+				"age", now.Sub(updatedAt).String())
+
+			if updatedAt.Before(oneHourAgo) {
+				c.Log.Info("deleting old dead sandbox",
+					"id", sb.ID,
+					"updated_at", updatedAt.Format(time.RFC3339),
+					"age", now.Sub(updatedAt).String())
+
+				_, err := c.EAC.Delete(ctx, sb.ID.String())
+				if err != nil {
+					c.Log.Error("failed to delete dead sandbox", "id", sb.ID, "error", err)
+					continue
+				}
+				deleted++
+			}
+		}
+	}
+
+	if deleted > 0 {
+		c.Log.Info("periodic cleanup completed", "deleted_sandboxes", deleted)
+	}
 
 	return nil
 }

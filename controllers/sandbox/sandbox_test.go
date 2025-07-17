@@ -22,6 +22,7 @@ import (
 	"github.com/opencontainers/runtime-spec/specs-go"
 
 	compute "miren.dev/runtime/api/compute/compute_v1alpha"
+	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/image"
 	"miren.dev/runtime/observability"
 	build "miren.dev/runtime/pkg/buildkit"
@@ -116,7 +117,7 @@ func TestSandbox(t *testing.T) {
 		ca, err := netip.ParseAddr(tco.Network[0].Address)
 		r.NoError(err)
 
-		c, err := cc.LoadContainer(ctx, co.containerId(id))
+		c, err := cc.LoadContainer(ctx, co.pauseContainerId(id))
 		r.NoError(err)
 
 		r.NotNil(c)
@@ -278,7 +279,7 @@ func TestSandbox(t *testing.T) {
 			err := co.Create(ctx, &sb, meta)
 			r.NoError(err)
 
-			c, err := cc.LoadContainer(ctx, co.containerId(id))
+			c, err := cc.LoadContainer(ctx, co.pauseContainerId(id))
 			r.NoError(err)
 
 			labels, err := c.Labels(ctx)
@@ -325,7 +326,7 @@ func TestSandbox(t *testing.T) {
 			err = co.Create(ctx, &sb, meta)
 			r.NoError(err)
 
-			c, err := cc.LoadContainer(ctx, co.containerId(id)+"-nginx")
+			c, err := cc.LoadContainer(ctx, co.containerPrefix(id)+"-nginx")
 			r.NoError(err)
 
 			task, err := c.Task(ctx, nil)
@@ -418,7 +419,7 @@ func TestSandbox(t *testing.T) {
 		err = co.Create(ctx, &tco, meta)
 		r.NoError(err)
 
-		c, err := cc.LoadContainer(ctx, co.containerId(id))
+		c, err := cc.LoadContainer(ctx, co.pauseContainerId(id))
 		r.NoError(err)
 
 		r.NotNil(c)
@@ -537,7 +538,7 @@ func TestSandbox(t *testing.T) {
 		ca, err := netip.ParseAddr(tco.Network[0].Address)
 		r.NoError(err)
 
-		c, err := cc.LoadContainer(ctx, co.containerId(id))
+		c, err := cc.LoadContainer(ctx, co.pauseContainerId(id))
 		r.NoError(err)
 
 		r.NotNil(c)
@@ -672,7 +673,7 @@ func TestSandbox(t *testing.T) {
 		ca, err := netip.ParseAddr(tco.Network[0].Address)
 		r.NoError(err)
 
-		c, err := cc.LoadContainer(ctx, co.containerId(id))
+		c, err := cc.LoadContainer(ctx, co.pauseContainerId(id))
 		r.NoError(err)
 
 		r.NotNil(c)
@@ -799,7 +800,7 @@ func TestSandbox(t *testing.T) {
 		ca, err := netip.ParseAddr(tco.Network[0].Address)
 		r.NoError(err)
 
-		c, err := cc.LoadContainer(ctx, co.containerId(id))
+		c, err := cc.LoadContainer(ctx, co.pauseContainerId(id))
 		r.NoError(err)
 
 		r.NotNil(c)
@@ -935,7 +936,7 @@ func TestSandbox(t *testing.T) {
 		ca, err := netip.ParseAddr(tco.Network[0].Address)
 		r.NoError(err)
 
-		c, err := cc.LoadContainer(ctx, co.containerId(id))
+		c, err := cc.LoadContainer(ctx, co.pauseContainerId(id))
 		r.NoError(err)
 
 		r.NotNil(c)
@@ -970,5 +971,133 @@ func TestSandbox(t *testing.T) {
 		r.Contains(string(data), "this is from testdata/static-site")
 
 		r.Equal(http.StatusOK, resp.StatusCode)
+	})
+
+	checkClosed := func(t *testing.T, c io.Closer) {
+		t.Helper()
+		err := c.Close()
+		if err != nil {
+			t.Errorf("failed to close: %v", err)
+		}
+	}
+
+	t.Run("cleans up dead sandboxes older than 1 hour", func(t *testing.T) {
+		r := require.New(t)
+
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+
+		reg, cleanup := testutils.Registry(observability.TestInject, build.TestInject)
+		defer cleanup()
+
+		var sbc SandboxController
+
+		err := reg.Populate(&sbc)
+		r.NoError(err)
+
+		defer checkClosed(t, &sbc)
+
+		err = sbc.Init(ctx)
+		r.NoError(err)
+
+		// Create a few sandboxes
+		sbID1 := entity.Id(sbName())
+		sb1 := &compute.Sandbox{
+			ID:     sbID1,
+			Status: compute.RUNNING,
+		}
+
+		// Store sandbox in entity store with ident
+		var rpcE1 entityserver_v1alpha.Entity
+		rpcE1.SetId(sbID1.String())
+		rpcE1.SetAttrs(entity.Attrs(
+			entity.Keyword(entity.Ident, sbID1.String()),
+			sb1.Encode))
+		_, err = sbc.EAC.Put(ctx, &rpcE1)
+		r.NoError(err)
+
+		// Now retrieve it to get the entity with proper metadata
+		result1, err := sbc.EAC.Get(ctx, sbID1.String())
+		r.NoError(err)
+
+		meta1 := &entity.Meta{
+			Entity:   result1.Entity().Entity(),
+			Revision: result1.Entity().Revision(),
+		}
+
+		err = sbc.Create(ctx, sb1, meta1)
+		r.NoError(err)
+
+		// Create a second sandbox
+		sbID2 := entity.Id(sbName())
+		sb2 := &compute.Sandbox{
+			ID:     sbID2,
+			Status: compute.RUNNING,
+		}
+
+		// Store sandbox in entity store with ident
+		var rpcE2 entityserver_v1alpha.Entity
+		rpcE2.SetId(sbID2.String())
+		rpcE2.SetAttrs(entity.Attrs(
+			entity.Keyword(entity.Ident, sbID2.String()),
+			sb2.Encode))
+		_, err = sbc.EAC.Put(ctx, &rpcE2)
+		r.NoError(err)
+
+		// Now retrieve it to get the entity with proper metadata
+		result2, err := sbc.EAC.Get(ctx, sbID2.String())
+		r.NoError(err)
+
+		meta2 := &entity.Meta{
+			Entity:   result2.Entity().Entity(),
+			Revision: result2.Entity().Revision(),
+		}
+
+		err = sbc.Create(ctx, sb2, meta2)
+		r.NoError(err)
+
+		// Wait a bit for containers to be created
+		time.Sleep(2 * time.Second)
+
+		// Stop the first sandbox (this should set status to DEAD)
+		err = sbc.Delete(ctx, sbID1)
+		r.NoError(err)
+
+		// Manually update the UpdatedAt timestamp to be more than 1 hour ago
+		// We need to get the entity and update it
+		var rpcE entityserver_v1alpha.Entity
+		rpcE.SetId(sbID1.String())
+
+		// Set UpdatedAt to 2 hours ago by updating the entity
+		twoHoursAgo := time.Now().Add(-2 * time.Hour).UnixMilli()
+		rpcE.SetAttrs(entity.Attrs(
+			entity.Keyword(entity.Ident, sbID1.String()),
+			(&compute.Sandbox{
+				Status: compute.DEAD,
+			}).Encode,
+			entity.Int64(entity.UpdatedAt, twoHoursAgo)))
+
+		_, err = sbc.EAC.Put(ctx, &rpcE)
+		r.NoError(err)
+
+		// Run the periodic cleanup
+		err = sbc.Periodic(ctx)
+		r.NoError(err)
+
+		// Check that the old dead sandbox was deleted
+		resp, err := sbc.EAC.List(ctx, entity.Ref(entity.EntityKind, compute.KindSandbox))
+		r.NoError(err)
+
+		// Should only have one sandbox left (sbID2)
+		r.Equal(1, len(resp.Values()))
+
+		var remainingSb compute.Sandbox
+		remainingSb.Decode(resp.Values()[0].Entity())
+		r.Equal(sbID2, remainingSb.ID)
+		r.Equal(compute.RUNNING, remainingSb.Status)
+
+		// Clean up the remaining sandbox
+		err = sbc.Delete(ctx, sbID2)
+		r.NoError(err)
 	})
 }

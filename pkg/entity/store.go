@@ -652,6 +652,16 @@ func (s *EtcdStore) UpdateEntity(
 
 	entity.Attrs = primary
 
+	// Set UpdatedAt based on whether it was explicitly provided or already exists
+	// Check if UpdatedAt attribute exists in the entity after update
+	if updatedAtAttr, ok := entity.Get(UpdatedAt); ok && updatedAtAttr.Value.Kind() == KindInt64 {
+		entity.UpdatedAt = updatedAtAttr.Value.Int64()
+		// Remove it from attributes since we're promoting it to the field
+		entity.Remove(UpdatedAt)
+	} else {
+		entity.UpdatedAt = now()
+	}
+
 	data, err := encoder.Marshal(entity)
 	if err != nil {
 		return nil, fmt.Errorf("failed to serialize entity: %w", err)
