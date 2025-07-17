@@ -23,6 +23,7 @@ import (
 	"github.com/containerd/containerd/v2/core/remotes/docker"
 	"github.com/containerd/containerd/v2/pkg/cio"
 	"github.com/containerd/containerd/v2/pkg/oci"
+	"github.com/containerd/errdefs"
 	"github.com/mr-tron/base58"
 	"github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/pelletier/go-toml/v2"
@@ -396,7 +397,11 @@ func (c *SandboxController) checkSandbox(ctx context.Context, co *compute.Sandbo
 
 	cont, err := c.CC.LoadContainer(ctx, c.pauseContainerId(co.ID))
 	if err != nil {
-		return notFound, nil
+		if errdefs.IsNotFound(err) {
+			return notFound, nil
+		}
+
+		return 0, err
 	}
 
 	labels, err := cont.Labels(ctx)
@@ -1442,8 +1447,13 @@ func (c *SandboxController) destroySubContainers(ctx context.Context, sb *comput
 		for _, id := range containerIds {
 			cont, err := c.CC.LoadContainer(ctx, id)
 			if err != nil {
-				// Container doesn't exist, consider it deleted
-				c.Log.Debug("container not found, considering deleted", "id", id)
+				if errdefs.IsNotFound(err) {
+					// Container doesn't exist, consider it deleted
+					c.Log.Debug("container not found, considering deleted", "id", id)
+				} else {
+					c.Log.Error("failed to load container", "id", id, "err", err)
+				}
+
 				continue
 			}
 			remainingContainers = append(remainingContainers, id)
@@ -1519,9 +1529,13 @@ func (c *SandboxController) Delete(ctx context.Context, id entity.Id) error {
 			// Check if the container exists
 			_, err := c.CC.LoadContainer(ctx, c.pauseContainerId(id))
 			if err != nil {
-				// Container doesn't exist, consider it already deleted
-				c.Log.Info("Delete called but container not found, already deleted", "id", id, "error", err)
-				return nil
+				if errdefs.IsNotFound(err) {
+					// Container doesn't exist, consider it already deleted
+					c.Log.Info("Delete called but container not found, already deleted", "id", id, "error", err)
+					return nil
+				}
+
+				return err
 			}
 			c.Log.Warn("entity file missing but container exists, attempting cleanup", "id", id)
 			// Create a minimal sandbox just with the ID to attempt cleanup
@@ -1613,6 +1627,8 @@ func (c *SandboxController) stopSandbox(ctx context.Context, sb *compute.Sandbox
 		_ = os.RemoveAll(tmpDir)
 
 		c.Log.Info("container stopped", "id", sb.ID)
+	} else if !errdefs.IsNotFound(err) {
+		return err
 	}
 
 	var rpcE entityserver_v1alpha.Entity
