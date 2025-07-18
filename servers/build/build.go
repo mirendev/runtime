@@ -200,34 +200,49 @@ func (b *Builder) BuildFromTar(ctx context.Context, state *build_v1alpha.Builder
 	b.Log.Debug("launching buildkitd")
 
 	cacheDir := filepath.Join(b.TempDir, "buildkit-cache")
-	os.MkdirAll(cacheDir, 0755)
+	b.Log.Debug("creating buildkit cache directory", "path", cacheDir)
+	if err := os.MkdirAll(cacheDir, 0755); err != nil {
+		b.Log.Error("failed to create buildkit cache directory", "error", err, "path", cacheDir)
+		return fmt.Errorf("failed to create buildkit cache directory: %w", err)
+	}
 
 	lbk := &LaunchBuildkit{
 		log: b.Log.With("module", "launchbuildkit"),
 		eac: b.EAS,
 	}
+	b.Log.Debug("created LaunchBuildkit instance")
 
+	b.Log.Debug("resolving cluster.local for buildkit")
 	ip, err := b.Resolver.LookupHost("cluster.local")
 	if err != nil {
+		b.Log.Error("failed to resolve cluster.local", "error", err)
 		return fmt.Errorf("error resolving cluster.local: %w", err)
 	}
+	b.Log.Debug("resolved cluster.local", "ip", ip.String())
 
+	b.Log.Info("starting buildkit launch", "clusterIP", ip.String(), "logEntity", name)
 	rbk, err := lbk.Launch(ctx, ip.String(), WithLogEntity(name), WithLogAttrs(map[string]string{
 		"version": "build",
 	}))
 	if err != nil {
+		b.Log.Error("failed to launch buildkit", "error", err)
 		return err
 	}
+	b.Log.Info("buildkit launch completed successfully")
 
 	defer rbk.Close(context.Background())
 
+	b.Log.Debug("attempting to get buildkit client")
 	bkc, err := rbk.Client(ctx)
 	if err != nil {
+		b.Log.Error("failed to get buildkit client", "error", err)
 		return err
 	}
+	b.Log.Debug("successfully obtained buildkit client")
 
 	defer bkc.Close()
 
+	b.Log.Debug("getting buildkit daemon info")
 	ci, err := bkc.Info(ctx)
 	if err != nil {
 		b.Log.Error("error getting buildkid info", "error", err)
