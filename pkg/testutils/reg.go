@@ -98,8 +98,17 @@ func Registry(extra ...func(*asm.Registry)) (*asm.Registry, func()) {
 		return cl, nil
 	})
 
-	r.Provide(func() (*buildkit.Client, error) {
-		return buildkit.New(context.TODO(), "")
+	r.Provide(func(opts struct {
+		Log *slog.Logger
+	}) (*buildkit.Client, error) {
+		opts.Log.Debug("creating buildkit client for tests with default address")
+		client, err := buildkit.New(context.TODO(), "")
+		if err != nil {
+			opts.Log.Error("failed to create buildkit client for tests", "error", err)
+		} else {
+			opts.Log.Info("buildkit client created for tests")
+		}
+		return client, err
 	})
 
 	ts := time.Now()
