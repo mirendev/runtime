@@ -67,30 +67,30 @@ FROM scratch
 COPY --from=builder /build/runtime /runtime
 EOF
 
-# Ensure bin directory exists
-mkdir -p ./bin
+# Ensure dist directory exists
+mkdir -p ./dist
 
 # Build using Docker with version passed as build argument and export binary directly
 # Specify platform to ensure consistent builds across different architectures
-docker build --platform=linux/amd64 -f "$DOCKERFILE" --build-arg "VERSION=$version" --output type=local,dest=./bin .
+docker build --platform=linux/amd64 -f "$DOCKERFILE" --build-arg "VERSION=$version" --output type=local,dest=./dist .
 
 # Rename the binary to runtime-dist
-mv ./bin/runtime ./bin/runtime-dist
+mv ./dist/runtime ./dist/runtime-dist
 
 # Make it executable
-chmod +x ./bin/runtime-dist
+chmod +x ./dist/runtime-dist
 
-echo "Portable binary created at ./bin/runtime-dist"
+echo "Portable binary created at ./dist/runtime-dist"
 
 # Verify it's statically linked
 echo ""
 echo "Binary info:"
-file ./bin/runtime-dist
+file ./dist/runtime-dist
 
 # Show ldd info if available (will show "not a dynamic executable" for static binaries)
 if command -v ldd >/dev/null 2>&1; then
     echo ""
     echo "Dynamic dependencies:"
-    ldd ./bin/runtime-dist 2>&1 || echo "No dynamic dependencies (static binary)"
+    ldd ./dist/runtime-dist 2>&1 || echo "No dynamic dependencies (static binary)"
 fi
 
