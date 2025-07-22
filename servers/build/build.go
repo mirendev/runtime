@@ -237,7 +237,11 @@ func (b *Builder) BuildFromTar(ctx context.Context, state *build_v1alpha.Builder
 	}
 	b.Log.Info("buildkit launch completed successfully")
 
-	defer rbk.Close(ctx)
+	defer func() {
+		if err := rbk.Close(ctx); err != nil {
+			b.Log.Error("failed to close buildkit", "error", err)
+		}
+	}()
 
 	b.Log.Debug("attempting to get buildkit client")
 	bkc, err := rbk.Client(ctx)
