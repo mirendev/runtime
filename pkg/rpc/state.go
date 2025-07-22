@@ -19,6 +19,7 @@ import (
 
 	"github.com/quic-go/quic-go"
 	"github.com/quic-go/quic-go/http3"
+	"github.com/quic-go/quic-go/qlog"
 	"miren.dev/runtime/pkg/packet"
 	"miren.dev/runtime/pkg/slogfmt"
 	"miren.dev/runtime/pkg/webtransport"
@@ -45,6 +46,7 @@ func init() {
 		Allow0RTT:             true,
 		KeepAlivePeriod:       10 * time.Second,
 		MaxIdleTimeout:        30 * time.Second,
+		Tracer:                qlog.DefaultConnectionTracer,
 	}
 
 	DefaultTransport.QUICConfig = &DefaultQUICConfig
@@ -290,6 +292,7 @@ func NewState(ctx context.Context, opts ...StateOption) (*State, error) {
 		MaxIncomingUniStreams: 1000,
 		Allow0RTT:             true,
 		KeepAlivePeriod:       10 * time.Second,
+		Tracer:                qlog.DefaultConnectionTracer,
 	}
 
 	s.qc = qc
