@@ -26,6 +26,7 @@ import (
 	"miren.dev/runtime/pkg/idgen"
 	"miren.dev/runtime/pkg/procfile"
 	"miren.dev/runtime/pkg/rpc/stream"
+	"miren.dev/runtime/pkg/stackbuild"
 	"miren.dev/runtime/pkg/tarx"
 )
 
@@ -192,7 +193,18 @@ func (b *Builder) BuildFromTar(ctx context.Context, state *build_v1alpha.Builder
 		}
 	}
 
-	b.Log.Debug("launching buildkitd")
+	// Check if stack is supported before launching buildkit
+	if buildStack.Stack == "auto" {
+		_, err := stackbuild.DetectStack(buildStack.CodeDir)
+		if err != nil {
+			b.Log.Error("stack detection failed", "error", err, "app", name, "codeDir", buildStack.CodeDir)
+			return fmt.Errorf("no supported stack detected for app %s: %w", name, err)
+		}
+		b.Log.Debug("stack detection successful, proceeding with build")
+	}
+
+	// Now we know the stack is valid, proceed with buildkit setup
+	b.Log.Debug("setting up buildkit")
 
 	cacheDir := filepath.Join(b.TempDir, "buildkit-cache")
 	b.Log.Debug("creating buildkit cache directory", "path", cacheDir)
@@ -225,7 +237,11 @@ func (b *Builder) BuildFromTar(ctx context.Context, state *build_v1alpha.Builder
 	}
 	b.Log.Info("buildkit launch completed successfully")
 
-	defer rbk.Close(context.Background())
+	defer func() {
+		if err := rbk.Close(ctx); err != nil {
+			b.Log.Error("failed to close buildkit", "error", err)
+		}
+	}()
 
 	b.Log.Debug("attempting to get buildkit client")
 	bkc, err := rbk.Client(ctx)
