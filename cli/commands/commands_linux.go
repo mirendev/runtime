@@ -41,9 +41,21 @@ func (c *Context) setupServerComponents(ctx context.Context, reg *asm.Registry) 
 	})
 
 	reg.Provide(func(opts struct {
-		CC *containerd.Client
+		CC  *containerd.Client
+		Log *slog.Logger `asm:"log"`
 	}) (*buildkit.Client, error) {
-		return buildkit.New(ctx, "")
+		// When address is empty, buildkit.New will try to detect the daemon using:
+		// 1. $BUILDKIT_HOST environment variable
+		// 2. $DOCKER_HOST environment variable (for Docker Buildx)
+		// 3. Default unix socket locations
+		opts.Log.Debug("creating buildkit client with default (empty) address")
+		client, err := buildkit.New(ctx, "")
+		if err != nil {
+			opts.Log.Error("failed to create buildkit client with default address", "error", err)
+		} else {
+			opts.Log.Info("buildkit client created with default address")
+		}
+		return client, err
 	})
 
 	reg.Register("org_id", uint64(1))

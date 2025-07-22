@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"maps"
+	"time"
 
 	"github.com/containerd/containerd/v2/client"
 	buildkit "github.com/moby/buildkit/client"
@@ -96,16 +97,20 @@ insecure-entitlements = [ "network.host", "security.insecure" ]
 }
 
 func (l *LaunchBuildkit) Launch(ctx context.Context, addr string, lo ...LaunchOption) (*RunningBuildkit, error) {
+	l.log.Info("starting buildkit launch", "clusterAddr", addr)
 	var opts launchOptions
 	for _, o := range lo {
 		o(&opts)
 	}
+	l.log.Debug("launch options processed", "logEntity", opts.logEntity, "attrs", opts.attrs)
 
+	l.log.Debug("creating sandbox configuration")
 	var sb compute_v1alpha.Sandbox
 	sb.LogEntity = "build"
 	if opts.logEntity != "" {
 		sb.LogEntity = opts.logEntity
 	}
+	l.log.Debug("sandbox log entity set", "logEntity", sb.LogEntity)
 
 	for k, v := range opts.attrs {
 		sb.LogAttribute = append(sb.LogAttribute, types.Label{
@@ -118,6 +123,9 @@ func (l *LaunchBuildkit) Launch(ctx context.Context, addr string, lo ...LaunchOp
 		Host: "cluster.local",
 		Ip:   addr,
 	})
+	l.log.Debug("configuring buildkit container", "image", imagerefs.BuildKit)
+	config := l.generateConfig()
+	l.log.Debug("generated buildkit config", "configSize", len(config))
 	sb.Container = append(sb.Container, compute_v1alpha.Container{
 		Name:       "app",
 		Image:      imagerefs.BuildKit,
@@ -133,12 +141,13 @@ func (l *LaunchBuildkit) Launch(ctx context.Context, addr string, lo ...LaunchOp
 			{
 				Path: "/etc/buildkit/buildkitd.toml",
 				Mode: "0644",
-				Data: l.generateConfig(),
+				Data: config,
 			},
 		},
 	})
 
 	ver := idgen.Gen("buildkit")
+	l.log.Info("creating buildkit sandbox entity", "name", ver)
 
 	var rpcE entityserver_v1alpha.Entity
 	rpcE.SetAttrs(entity.Attrs(
@@ -148,30 +157,86 @@ func (l *LaunchBuildkit) Launch(ctx context.Context, addr string, lo ...LaunchOp
 		sb.Encode,
 	))
 
+	l.log.Debug("putting sandbox entity to entity store")
 	pr, err := l.eac.Put(ctx, &rpcE)
 	if err != nil {
 		l.log.Error("error creating sandbox", "error", err)
 		return nil, err
 	}
 
+	l.log.Info("sandbox entity created, waiting for it to be ready", "entityId", pr.Id())
 	ep, _, err := computex.WaitForSandbox(ctx, pr.Id(), l.eac)
 	if err != nil {
-		l.log.Error("error waiting for sandbox", "error", err)
+		l.log.Error("error waiting for sandbox", "error", err, "entityId", pr.Id())
 		return nil, err
 	}
+	l.log.Debug("sandbox ready", "endpoint", ep)
 
-	l.log.Info("buildkit started", "address", addr)
+	l.log.Info("buildkit started", "address", addr, "endpoint", ep+":3000")
 
-	return &RunningBuildkit{
+	// Create the running buildkit instance
+	rb := &RunningBuildkit{
 		LaunchBuildkit: l,
 		id:             pr.Id(),
 		addr:           ep + ":3000",
-	}, nil
+	}
+
+	// Verify connectivity before returning
+	l.log.Debug("verifying buildkit connectivity")
+	testCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	testClient, err := rb.Client(testCtx)
+	if err != nil {
+		l.log.Error("buildkit started but cannot connect", "error", err, "addr", rb.addr)
+		// Don't fail here, just log - the caller can retry
+	} else {
+		l.log.Info("buildkit connectivity verified", "addr", rb.addr)
+		_ = testClient.Close()
+	}
+
+	return rb, nil
 }
 
 func (l *RunningBuildkit) Client(ctx context.Context) (*buildkit.Client, error) {
-	bk, err := buildkit.New(ctx, "tcp://"+l.addr)
-	return bk, err
+	l.log.Info("attempting to create buildkit client", "addr", l.addr)
+
+	// Add retry logic with exponential backoff
+	var bk *buildkit.Client
+	var err error
+	maxRetries := 5
+	retryDelay := time.Second
+
+	for i := 0; i < maxRetries; i++ {
+		if i > 0 {
+			l.log.Debug("retrying buildkit connection", "attempt", i+1, "delay", retryDelay)
+			select {
+			case <-time.After(retryDelay):
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+			retryDelay *= 2 // exponential backoff
+		}
+
+		l.log.Debug("connecting to buildkit", "addr", l.addr, "attempt", i+1)
+		bk, err = buildkit.New(ctx, "tcp://"+l.addr)
+		if err == nil {
+			l.log.Info("buildkit client created successfully", "addr", l.addr, "attempts", i+1)
+			return bk, nil
+		}
+
+		l.log.Warn("failed to create buildkit client",
+			"error", err,
+			"addr", l.addr,
+			"attempt", i+1,
+			"willRetry", i < maxRetries-1)
+	}
+
+	l.log.Error("failed to create buildkit client after all retries",
+		"error", err,
+		"addr", l.addr,
+		"maxRetries", maxRetries)
+	return nil, err
 }
 
 func (l *RunningBuildkit) Close(ctx context.Context) error {
