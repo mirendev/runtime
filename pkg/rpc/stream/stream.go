@@ -45,13 +45,27 @@ func StreamRecv[T any](fn func(T) error) SendStream[T] {
 	return &Receiver[T]{fn: fn}
 }
 
+const streamChunkSize = 1024 * 1024 // 1MB chunks for efficient streaming
+
 type rscReader struct {
-	ctx context.Context
-	rsc *RecvStreamClient[[]byte]
+	ctx    context.Context
+	rsc    *RecvStreamClient[[]byte]
+	buffer []byte
+	offset int
 }
 
 func (r *rscReader) Read(p []byte) (n int, err error) {
-	ret, err := r.rsc.Recv(r.ctx, int32(len(p)))
+	// If we have buffered data, return it first
+	if r.offset < len(r.buffer) {
+		n = copy(p, r.buffer[r.offset:])
+		r.offset += n
+		return n, nil
+	}
+
+	// Request a large chunk to minimize RPC round-trips
+	requestSize := max(len(p), streamChunkSize)
+
+	ret, err := r.rsc.Recv(r.ctx, int32(requestSize))
 	if err != nil {
 		return 0, err
 	}
@@ -62,7 +76,16 @@ func (r *rscReader) Read(p []byte) (n int, err error) {
 		return 0, io.EOF
 	}
 
-	return copy(p, data), nil
+	// If the returned data fits in p, return it directly
+	if len(data) <= len(p) {
+		return copy(p, data), nil
+	}
+
+	// Otherwise, buffer the extra data for next read
+	n = copy(p, data)
+	r.buffer = data
+	r.offset = n
+	return n, nil
 }
 
 func (r *rscReader) Close() error {
@@ -80,7 +103,13 @@ type serveReader struct {
 func (s *serveReader) Recv(ctx context.Context, state *RecvStreamRecv[[]byte]) error {
 	args := state.Args()
 
-	buf := make([]byte, args.Count())
+	// Limit the maximum read size to prevent excessive memory allocation
+	readSize := int(args.Count())
+	if readSize > streamChunkSize*2 {
+		readSize = streamChunkSize * 2
+	}
+
+	buf := make([]byte, readSize)
 
 	n, err := s.r.Read(buf)
 	if err != nil {
@@ -132,12 +161,32 @@ type wscWriter struct {
 }
 
 func (w *wscWriter) Write(p []byte) (n int, err error) {
-	result, err := w.wsc.Send(w.ctx, p)
-	if err != nil {
-		return 0, err
+	// For large writes, send in chunks to avoid overwhelming buffers
+	remaining := p
+	totalWritten := 0
+
+	for len(remaining) > 0 {
+		chunk := remaining
+		if len(chunk) > streamChunkSize {
+			chunk = remaining[:streamChunkSize]
+		}
+
+		result, err := w.wsc.Send(w.ctx, chunk)
+		if err != nil {
+			return totalWritten, err
+		}
+
+		written := int(result.Count())
+		totalWritten += written
+		remaining = remaining[written:]
+
+		// If we didn't write the full chunk, stop here
+		if written < len(chunk) {
+			break
+		}
 	}
 
-	return int(result.Count()), nil
+	return totalWritten, nil
 }
 
 func (w *wscWriter) Close() error {
