@@ -113,7 +113,7 @@ func TestMakeTar(t *testing.T) {
 			}
 
 			// Create tar
-			reader, err := MakeTar(tmpDir)
+			reader, err := MakeTar(tmpDir, nil)
 			require.NoError(t, err)
 
 			// Extract and verify contents
@@ -145,7 +145,7 @@ func TestMakeTarWithoutGitignore(t *testing.T) {
 	}
 
 	// Create tar (no .gitignore file)
-	reader, err := MakeTar(tmpDir)
+	reader, err := MakeTar(tmpDir, nil)
 	require.NoError(t, err)
 
 	// Extract and verify all files are included
@@ -161,7 +161,7 @@ func TestMakeTarEmptyDirectory(t *testing.T) {
 	defer os.RemoveAll(tmpDir)
 
 	// Create tar of empty directory
-	reader, err := MakeTar(tmpDir)
+	reader, err := MakeTar(tmpDir, nil)
 	require.NoError(t, err)
 
 	// Verify no entries
@@ -208,7 +208,7 @@ func TestMakeTarVerifyContent(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "test.txt"), []byte(testContent), 0644))
 
 	// Create tar
-	reader, err := MakeTar(tmpDir)
+	reader, err := MakeTar(tmpDir, nil)
 	require.NoError(t, err)
 
 	// Extract and verify content
@@ -254,11 +254,62 @@ func TestMakeTarGitignoreNegation(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, ".gitignore"), []byte(gitignore), 0644))
 
 	// Create tar
-	reader, err := MakeTar(tmpDir)
+	reader, err := MakeTar(tmpDir, nil)
 	require.NoError(t, err)
 
 	// Extract and verify only important.log and regular.txt are included
 	entries := extractTarEntries(t, reader)
 	expected := []string{"important.log", "regular.txt", "dir"}
 	require.ElementsMatch(t, expected, entries)
+}
+
+func TestMakeTarWithIncludePatterns(t *testing.T) {
+	// Create temporary directory
+	tmpDir, err := os.MkdirTemp("", "tarx-test-include-")
+	require.NoError(t, err)
+	defer func() {
+		_ = os.RemoveAll(tmpDir)
+	}()
+
+	// Create test files
+	files := map[string]string{
+		"file1.txt":           "content1",
+		"file2.log":           "log content",
+		"dist/bundle.js":      "bundled js",
+		"dist/styles.css":     "styles",
+		"node_modules/lib.js": "library",
+		"build/output.o":      "binary",
+		"src/main.go":         "package main",
+	}
+
+	for filename, content := range files {
+		fullPath := filepath.Join(tmpDir, filename)
+		dir := filepath.Dir(fullPath)
+		require.NoError(t, os.MkdirAll(dir, 0755))
+		require.NoError(t, os.WriteFile(fullPath, []byte(content), 0644))
+	}
+
+	// Create .gitignore that would normally exclude dist and node_modules
+	gitignore := "dist\nnode_modules\nbuild\n*.log\n"
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, ".gitignore"), []byte(gitignore), 0644))
+
+	// Test with include patterns that override gitignore
+	includePatterns := []string{"dist/*", "*.log"}
+	reader, err := MakeTar(tmpDir, includePatterns)
+	require.NoError(t, err)
+
+	// Extract and verify dist files and log files are included despite gitignore
+	entries := extractTarEntries(t, reader)
+
+	// These should be included
+	expectedIncluded := []string{"dist", "dist/bundle.js", "dist/styles.css", "file2.log"}
+	for _, expected := range expectedIncluded {
+		require.Contains(t, entries, expected, "file %s should be included", expected)
+	}
+
+	// These should still be excluded
+	notExpected := []string{"node_modules", "node_modules/lib.js", "build", "build/output.o"}
+	for _, notExp := range notExpected {
+		require.NotContains(t, entries, notExp, "file %s should be excluded", notExp)
+	}
 }

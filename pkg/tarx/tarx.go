@@ -12,7 +12,7 @@ import (
 	"github.com/tonistiigi/fsutil"
 )
 
-func MakeTar(dir string) (io.Reader, error) {
+func MakeTar(dir string, includePatterns []string) (io.Reader, error) {
 	r, w, err := os.Pipe()
 	if err != nil {
 		return nil, err
@@ -58,8 +58,37 @@ func MakeTar(dir string) (io.Reader, error) {
 				return nil
 			}
 
-			// Check if file should be ignored by .gitignore
-			if len(gitignorePatterns) > 0 {
+			// Check if file matches include patterns first
+			isIncluded := false
+			if len(includePatterns) > 0 {
+				for _, pattern := range includePatterns {
+					// Check if the path matches the include pattern
+					match, err := filepath.Match(pattern, rp)
+					if err == nil && match {
+						isIncluded = true
+						break
+					}
+					// Also check if pattern matches any parent directory
+					if info.IsDir() {
+						match, err = filepath.Match(pattern, rp+"/")
+						if err == nil && match {
+							isIncluded = true
+							break
+						}
+					}
+					// Check if the pattern is a prefix match (for directory patterns like "dist/*")
+					if strings.HasSuffix(pattern, "/*") {
+						prefix := strings.TrimSuffix(pattern, "/*")
+						if strings.HasPrefix(rp, prefix+"/") || rp == prefix {
+							isIncluded = true
+							break
+						}
+					}
+				}
+			}
+
+			// Skip gitignore check if file is explicitly included
+			if !isIncluded && len(gitignorePatterns) > 0 {
 				// Try both with and without trailing slash for directories
 				paths := []string{rp}
 				if info.IsDir() {

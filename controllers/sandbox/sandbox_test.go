@@ -57,7 +57,7 @@ func TestSandbox(t *testing.T) {
 		err := reg.Init(&cc, &bkl)
 		r.NoError(err)
 
-		dfr, err := tarx.MakeTar("testdata/nginx")
+		dfr, err := tarx.MakeTar("testdata/nginx", nil)
 		r.NoError(err)
 
 		datafs, err := tarx.TarFS(dfr, t.TempDir())
