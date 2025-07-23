@@ -20,6 +20,7 @@ import (
 	"github.com/moby/buildkit/util/progress/progresswriter"
 	"github.com/stretchr/testify/require"
 
+	"miren.dev/runtime/pkg/imagerefs"
 	"miren.dev/runtime/pkg/tarx"
 
 	_ "github.com/moby/buildkit/client/connhelper/dockercontainer"
@@ -34,13 +35,22 @@ func buildLLB(t *testing.T, dir string, state *llb.State, check ...func(f io.Rea
 	require.NoError(t, err)
 
 	// Pull buildkit image
-	_, err = cl.ImagePull(ctx, "moby/buildkit:latest", image.PullOptions{})
+	pullReader, err := cl.ImagePull(ctx, imagerefs.BuildKit, image.PullOptions{})
+	require.NoError(t, err)
+	defer func() {
+		if err := pullReader.Close(); err != nil {
+			t.Logf("failed to close pull reader: %v", err)
+		}
+	}()
+
+	// Read the pull output to ensure the image is fully pulled
+	_, err = io.Copy(io.Discard, pullReader)
 	require.NoError(t, err)
 
 	// Create buildkit container
 	resp, err := cl.ContainerCreate(ctx,
 		&container.Config{
-			Image: "moby/buildkit:latest",
+			Image: imagerefs.BuildKit,
 		},
 		&container.HostConfig{
 			Privileged: true,
@@ -445,6 +455,58 @@ func TestGo(t *testing.T) {
 	for name, content := range files {
 		require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(content), 0644))
 	}
+
+	stack := &GoStack{
+		MetaStack: MetaStack{
+			dir: dir,
+		},
+	}
+	state, err := stack.GenerateLLB(dir, BuildOptions{Version: "1.23"})
+	require.NoError(t, err)
+
+	buildLLB(t, dir, state, func(r io.Reader) {
+		m, err := tarx.TarToMap(r)
+		require.NoError(t, err)
+		data, ok := m["bin/app"]
+		require.True(t, ok)
+		require.NotEmpty(t, data)
+	})
+}
+
+func TestGoWithVendor(t *testing.T) {
+	if !checkDocker() {
+		t.Skip("Docker not available")
+	}
+
+	root := t.TempDir()
+	dir := setupTestDir(root, t)
+
+	// Create a simple Go project without external dependencies for vendor test
+	files := map[string]string{
+		"go.mod": "module test-app\n\ngo 1.23\n",
+		"go.sum": "",
+		"main.go": `package main
+
+import "fmt"
+
+func main() {
+	fmt.Println("Hello, World!")
+}
+`,
+	}
+
+	for name, content := range files {
+		require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(content), 0644))
+	}
+
+	// Create vendor directory with empty modules.txt (simulating vendored stdlib only)
+	vendorDir := filepath.Join(dir, "vendor")
+	require.NoError(t, os.MkdirAll(vendorDir, 0755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(vendorDir, "modules.txt"),
+		[]byte(""),
+		0644,
+	))
 
 	stack := &GoStack{
 		MetaStack: MetaStack{

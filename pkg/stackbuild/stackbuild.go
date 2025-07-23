@@ -677,6 +677,10 @@ func (s *GoStack) commandDir(opts BuildOptions) string {
 	return ""
 }
 
+func (s *GoStack) hasVendor() bool {
+	return s.hasDir("vendor")
+}
+
 func (s *GoStack) GenerateLLB(dir string, opts BuildOptions) (*llb.State, error) {
 	// Set up local context with the directory
 	localCtx := llb.Local("context",
@@ -707,9 +711,17 @@ func (s *GoStack) GenerateLLB(dir string, opts BuildOptions) (*llb.State, error)
 
 	buildDir := s.commandDir(opts)
 
+	// Build command - skip go mod download if vendor directory exists
+	var buildCmd string
+	if s.hasVendor() {
+		buildCmd = fmt.Sprintf("go build -mod=vendor -o /bin/app ./%s", buildDir)
+	} else {
+		buildCmd = fmt.Sprintf("sh -c 'go mod download -json && go build -o /bin/app ./%s'", buildDir)
+	}
+
 	// Build with cache
 	state = appState.Dir("/app").Run(
-		llb.Shlex(fmt.Sprintf("sh -c 'go mod download -json && go build -o /bin/app ./%s'", buildDir)),
+		llb.Shlex(buildCmd),
 
 		// This basically is just a scratch mount until we add the ability to
 		// properly export and import the cache dirs.
