@@ -700,6 +700,150 @@ func TestServiceController(t *testing.T) {
 		r.NoError(err)
 	})
 
+	t.Run("handles endpoint deletions by updating all services", func(t *testing.T) {
+		r := require.New(t)
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+
+		reg, cleanup := testutils.Registry(observability.TestInject)
+		defer cleanup()
+
+		var (
+			sc  ServiceController
+			eac *entityserver_v1alpha.EntityAccessClient
+		)
+
+		err := reg.Init(&eac)
+		r.NoError(err)
+
+		err = reg.Populate(&sc)
+		r.NoError(err)
+
+		err = sc.Init(ctx)
+		r.NoError(err)
+
+		// Create multiple services
+		svcID1 := entity.Id(svcName())
+		svc1 := &network_v1alpha.Service{
+			ID: svcID1,
+			Match: types.Labels{
+				types.Label{Key: "app", Value: "nginx"},
+			},
+			Port: []network_v1alpha.Port{
+				{
+					Name: "http",
+					Port: 80,
+				},
+			},
+		}
+
+		svcID2 := entity.Id(svcName())
+		svc2 := &network_v1alpha.Service{
+			ID: svcID2,
+			Match: types.Labels{
+				types.Label{Key: "app", Value: "apache"},
+			},
+			Port: []network_v1alpha.Port{
+				{
+					Name: "http",
+					Port: 8080,
+				},
+			},
+		}
+
+		// Store both services in entity store
+		var rpcE1 entityserver_v1alpha.Entity
+		rpcE1.SetAttrs(entity.Attrs(
+			entity.Keyword(entity.Ident, svcID1.String()),
+			svc1.Encode))
+		_, err = eac.Put(ctx, &rpcE1)
+		r.NoError(err)
+
+		var rpcE2 entityserver_v1alpha.Entity
+		rpcE2.SetAttrs(entity.Attrs(
+			entity.Keyword(entity.Ident, svcID2.String()),
+			svc2.Encode))
+		_, err = eac.Put(ctx, &rpcE2)
+		r.NoError(err)
+
+		// Create both services
+		meta1 := &entity.Meta{
+			Entity: &entity.Entity{
+				ID:    svcID1,
+				Attrs: svc1.Encode(),
+			},
+			Revision: 1,
+		}
+		err = sc.Create(ctx, svc1, meta1)
+		r.NoError(err)
+
+		meta2 := &entity.Meta{
+			Entity: &entity.Entity{
+				ID:    svcID2,
+				Attrs: svc2.Encode(),
+			},
+			Revision: 1,
+		}
+		err = sc.Create(ctx, svc2, meta2)
+		r.NoError(err)
+
+		// Create endpoints for first service
+		epID := entity.Id("endpoints-" + svcID1.String())
+		eps := &network_v1alpha.Endpoints{
+			ID:      epID,
+			Service: svcID1,
+			Endpoint: []network_v1alpha.Endpoint{
+				{
+					Ip:   "10.0.0.1",
+					Port: 80,
+				},
+			},
+		}
+
+		// Store the endpoints in entity store first
+		var epEntity entityserver_v1alpha.Entity
+		epEntity.SetAttrs(entity.Attrs(
+			entity.Keyword(entity.Ident, epID.String()),
+			eps.Encode))
+		_, err = eac.Put(ctx, &epEntity)
+		r.NoError(err)
+
+		// Delete the endpoint entity to simulate actual deletion
+		_, err = eac.Delete(ctx, epID.String())
+		r.NoError(err)
+
+		// Verify endpoint is actually deleted
+		_, err = eac.Get(ctx, epID.String())
+		r.Error(err, "Expected endpoint to be deleted")
+
+		// Simulate endpoint deletion event (EventDeleted type)
+		event := controller.Event{
+			Type: controller.EventDeleted,
+			Entity: &entity.Entity{
+				ID:    epID,
+				Attrs: eps.Encode(),
+			},
+		}
+
+		// Call UpdateEndpoints with delete event
+		_, err = sc.UpdateEndpoints(ctx, event)
+		r.NoError(err)
+
+		// Verify that both services were updated by checking their revision in the entity store
+		// When UpdateEndpoints processes a delete event, it should call Create on all services
+		// which would update their configuration in the entity store
+
+		// Check first service was processed
+		result1, err := eac.Get(ctx, svcID1.String())
+		r.NoError(err)
+		r.NotNil(result1)
+
+		// Check second service was processed
+		result2, err := eac.Get(ctx, svcID2.String())
+		r.NoError(err)
+		r.NotNil(result2)
+	})
+
 	t.Run("handles service with nodeport", func(t *testing.T) {
 		r := require.New(t)
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)

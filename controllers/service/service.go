@@ -41,24 +41,55 @@ type ServiceController struct {
 }
 
 func (s *ServiceController) UpdateEndpoints(ctx context.Context, event controller.Event) ([]entity.Attr, error) {
-	var eps network_v1alpha.Endpoints
-	eps.Decode(event.Entity)
+	if event.Type != controller.EventDeleted {
+		var eps network_v1alpha.Endpoints
+		eps.Decode(event.Entity)
 
-	gr, err := s.EAC.Get(ctx, eps.Service.String())
+		gr, err := s.EAC.Get(ctx, eps.Service.String())
+		if err != nil {
+			return nil, fmt.Errorf("failed to get service: %w", err)
+		}
+
+		var srv network_v1alpha.Service
+		srv.Decode(gr.Entity().Entity())
+
+		meta := &entity.Meta{
+			Entity: gr.Entity().Entity(),
+		}
+
+		s.Log.Info("Endpoint updated, triggering service update", "service", srv.ID)
+
+		return nil, s.Create(ctx, &srv, meta)
+	}
+
+	// TODO when WatchIndex gives us the entities value pre-delete, we can use the
+	// same above logic. Until then, we just loop over all the services and update
+	// them all.
+
+	// List all services
+	serviceList, err := s.EAC.List(ctx, entity.Ref(entity.EntityKind, network_v1alpha.KindService))
 	if err != nil {
-		return nil, fmt.Errorf("failed to get service: %w", err)
+		return nil, fmt.Errorf("failed to list services: %w", err)
 	}
 
-	var srv network_v1alpha.Service
-	srv.Decode(gr.Entity().Entity())
+	// Loop through all services and trigger an update
+	for _, srvEntity := range serviceList.Values() {
+		var srv network_v1alpha.Service
+		srv.Decode(srvEntity.Entity())
 
-	meta := &entity.Meta{
-		Entity: gr.Entity().Entity(),
+		meta := &entity.Meta{
+			Entity: srvEntity.Entity(),
+		}
+
+		s.Log.Info("Endpoint deleted, triggering service update", "service", srv.ID)
+
+		if err := s.Create(ctx, &srv, meta); err != nil {
+			s.Log.Error("Failed to update service after endpoint deletion", "service", srv.ID, "error", err)
+			// Continue updating other services even if one fails
+		}
 	}
 
-	s.Log.Info("Endpoint updated, triggering service update", "service", srv.ID)
-
-	return nil, s.Create(ctx, &srv, meta)
+	return nil, nil
 }
 
 type nftCommands struct {
