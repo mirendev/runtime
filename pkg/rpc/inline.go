@@ -150,6 +150,10 @@ func (c *inlineClient) Call(ctx context.Context, method string, args any, ret an
 	var rr refResponse
 
 	// Read response without timeout loop - let QUIC handle flow control
+	if err := ctx.Err(); err != nil {
+		shouldReturn = false
+		return err
+	}
 	err = conn.dec.Decode(&rr)
 	if err != nil {
 		shouldReturn = false
