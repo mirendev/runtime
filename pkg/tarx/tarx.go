@@ -145,6 +145,9 @@ func TarToMap(r io.Reader) (map[string][]byte, error) {
 		if err == io.EOF {
 			break
 		}
+		if err != nil {
+			return nil, err
+		}
 
 		if th == nil {
 			break

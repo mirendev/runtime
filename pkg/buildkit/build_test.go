@@ -16,6 +16,7 @@ import (
 	_ "github.com/moby/buildkit/client/connhelper/dockercontainer"
 	"github.com/stretchr/testify/require"
 	"github.com/tonistiigi/fsutil"
+	"miren.dev/runtime/pkg/tarx"
 	"miren.dev/runtime/pkg/testutils"
 )
 
@@ -35,16 +36,16 @@ func TestBuildKitLocal(t *testing.T) {
 		err := reg.Init(&bkl)
 		r.NoError(err)
 
-		dfr, err := MakeTar("testdata/df1")
+		dfr, err := tarx.MakeTar("testdata/df1", nil)
 		r.NoError(err)
 
-		datafs, err := TarFS(dfr, t.TempDir())
+		datafs, err := tarx.TarFS(dfr, t.TempDir())
 		r.NoError(err)
 
 		o, _, err := bkl.Transform(ctx, datafs)
 		r.NoError(err)
 
-		files, err := TarToMap(o)
+		files, err := tarx.TarToMap(o)
 		r.NoError(err)
 
 		var index struct {
