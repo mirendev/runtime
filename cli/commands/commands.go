@@ -10,17 +10,6 @@ func AllCommands() map[string]cli.CommandFactory {
 			return Infer("version", "Print the version", Version), nil
 		},
 
-		// TODO: Rework this command in context of MVP, currently assumes it can derive things from Docker,
-		//       which we no longer use as a container engine.
-		// "setup": func() (cli.Command, error) {
-		// 	return Infer("setup", "Setup the runtime access", Setup), nil
-		// },
-
-		// TODO: Rework for MVP, currently assumes old "app" concept
-		// "import": func() (cli.Command, error) {
-		// 	return Infer("import", "Import an image", Import), nil
-		// },
-
 		"init": func() (cli.Command, error) {
 			return Infer("init", "Initialize a new runtime application", Init), nil
 		},
@@ -76,31 +65,6 @@ func AllCommands() map[string]cli.CommandFactory {
 			return Infer("logs", "Get logs for an application", Logs), nil
 		},
 
-		// TODO: Errors with "unknown object: app"
-		// "app new": func() (cli.Command, error) {
-		// 	return Infer("app new", "Create a new application", AppNew), nil
-		// },
-
-		// TODO: Errors with "unknown object: app"
-		// "app destroy": func() (cli.Command, error) {
-		// 	return Infer("app destroy", "Create a new application", AppDestroy), nil
-		// },
-
-		// TODO: Errors with "unknown object: addons"
-		// "app addon add": func() (cli.Command, error) {
-		// 	return Infer("app addon add", "Add an addon to an application", AppAddonsAdd), nil
-		// },
-
-		// TODO: Errors with "unknown object: addons"
-		// "app addon destroy": func() (cli.Command, error) {
-		// 	return Infer("app addon destroy", "Destroy an addon", AppAddonsDestroy), nil
-		// },
-
-		// TODO: Errors with "unknown object: addons"
-		// "app addons": func() (cli.Command, error) {
-		// 	return Infer("app addon list", "List addons for an application", AppAddonsList), nil
-		// },
-
 		"config": func() (cli.Command, error) {
 			return Section("config", "Commands related to client configuration"), nil
 		},
@@ -121,42 +85,9 @@ func AllCommands() map[string]cli.CommandFactory {
 			return Infer("config remove", "Remove a cluster from the configuration", ConfigRemove), nil
 		},
 
-		// TODO: Errors with "unknown object: user"
-		// "user": func() (cli.Command, error) {
-		// 	return Section("user", "Commands related to cluster users"), nil
-		// },
-		// "user whoami": func() (cli.Command, error) {
-		// 	return Infer("user whoami", "Get information about the current user", WhoAmI), nil
-		// },
-
 		"disk create": func() (cli.Command, error) {
 			return Infer("disk create", "Create a new disk", DiskCreate), nil
 		},
-
-		// TODO: Errors with "mkdir : no such file or directory"
-		// "disk run": func() (cli.Command, error) {
-		// 	return Infer("disk run", "Run a disk", DiskRun), nil
-		// },
-
-		// TODO: Errors with "when considering miren.dev/runtime/disk/Provisioner.Subnet, unable to find component of type *netdb.Subnet available"
-		// "disk provision": func() (cli.Command, error) {
-		// 	return Infer("disk provision", "Provision a disk", DiskProvision), nil
-		// },
-
-		// TODO: Unclear if this works, needs someone to go over it
-		// "dataset serve": func() (cli.Command, error) {
-		// 	return Infer("dataset serve", "Serve a dataset", DataSetServe), nil
-		// },
-
-		// TODO: Errors with "error performing http request: http3: no Host in request URL"
-		// "runner run": func() (cli.Command, error) {
-		// 	return Infer("runner run", "Run a runner", RunnerRun), nil
-		// },
-
-		// TODO: Errors with "conflict in entity"
-		// "coordinator run": func() (cli.Command, error) {
-		// 	return Infer("coordinator run", "Run a coordinator", CoordinatorRun), nil
-		// },
 
 		"dev": func() (cli.Command, error) {
 			return Infer("dev", "Run the dev server", Dev), nil
@@ -183,14 +114,8 @@ func AllCommands() map[string]cli.CommandFactory {
 		},
 
 		"entity list": func() (cli.Command, error) {
-
 			return Infer("entity list", "List entities", EntityList), nil
 		},
-
-		// TODO: Errors with "open idx: no such file or directory"
-		// "internal disk cleanup": func() (cli.Command, error) {
-		// 	return Infer("internal disk cleanup", "Cleanup disk data", DiskCleanup), nil
-		// },
 
 		// TODO: Unclear if this is still useful; leaving it in for now
 		"internal dial-stdio": func() (cli.Command, error) {
