@@ -3,6 +3,7 @@ package tarx
 import (
 	"archive/tar"
 	"compress/gzip"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -11,6 +12,16 @@ import (
 	"github.com/shibumi/go-pathspec"
 	"github.com/tonistiigi/fsutil"
 )
+
+// ValidatePattern checks if a pattern is valid for use with pathspec.GitIgnore
+func ValidatePattern(pattern string) error {
+	// Test the pattern with a dummy path to ensure it's valid
+	_, err := pathspec.GitIgnore([]string{pattern}, "test")
+	if err != nil {
+		return fmt.Errorf("invalid pattern syntax: %w", err)
+	}
+	return nil
+}
 
 func MakeTar(dir string, includePatterns []string) (io.Reader, error) {
 	r, w, err := os.Pipe()
@@ -61,28 +72,21 @@ func MakeTar(dir string, includePatterns []string) (io.Reader, error) {
 			// Check if file matches include patterns first
 			isIncluded := false
 			if len(includePatterns) > 0 {
-				for _, pattern := range includePatterns {
-					// Check if the path matches the include pattern
-					match, err := filepath.Match(pattern, rp)
-					if err == nil && match {
+				// Try both with and without trailing slash for directories
+				paths := []string{rp}
+				if info.IsDir() {
+					paths = append(paths, rp+"/")
+				}
+
+				for _, checkPath := range paths {
+					// Use the same gitignore-style pattern matching as we use for excludes
+					match, err := pathspec.GitIgnore(includePatterns, checkPath)
+					if err != nil {
+						return fmt.Errorf("invalid include pattern: %w", err)
+					}
+					if match {
 						isIncluded = true
 						break
-					}
-					// Also check if pattern matches any parent directory
-					if info.IsDir() {
-						match, err = filepath.Match(pattern, rp+"/")
-						if err == nil && match {
-							isIncluded = true
-							break
-						}
-					}
-					// Check if the pattern is a prefix match (for directory patterns like "dist/*")
-					if strings.HasSuffix(pattern, "/*") {
-						prefix := strings.TrimSuffix(pattern, "/*")
-						if strings.HasPrefix(rp, prefix+"/") || rp == prefix {
-							isIncluded = true
-							break
-						}
 					}
 				}
 			}
@@ -96,7 +100,11 @@ func MakeTar(dir string, includePatterns []string) (io.Reader, error) {
 				}
 
 				for _, checkPath := range paths {
-					if ignore, err := pathspec.GitIgnore(gitignorePatterns, checkPath); err == nil && ignore {
+					ignore, err := pathspec.GitIgnore(gitignorePatterns, checkPath)
+					if err != nil {
+						return fmt.Errorf("invalid gitignore pattern: %w", err)
+					}
+					if ignore {
 						if info.IsDir() {
 							return filepath.SkipDir
 						}

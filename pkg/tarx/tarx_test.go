@@ -273,13 +273,15 @@ func TestMakeTarWithIncludePatterns(t *testing.T) {
 
 	// Create test files
 	files := map[string]string{
-		"file1.txt":           "content1",
-		"file2.log":           "log content",
-		"dist/bundle.js":      "bundled js",
-		"dist/styles.css":     "styles",
-		"node_modules/lib.js": "library",
-		"build/output.o":      "binary",
-		"src/main.go":         "package main",
+		"file1.txt":                       "content1",
+		"file2.log":                       "log content",
+		"dist/bundle.js":                  "bundled js",
+		"dist/styles.css":                 "styles",
+		"node_modules/lib.js":             "library",
+		"build/output.o":                  "binary",
+		"src/main.go":                     "package main",
+		"src/generated/api.generated":     "generated api",
+		"test/nested/deep/file.generated": "deep generated file",
 	}
 
 	for filename, content := range files {
@@ -290,11 +292,12 @@ func TestMakeTarWithIncludePatterns(t *testing.T) {
 	}
 
 	// Create .gitignore that would normally exclude dist and node_modules
-	gitignore := "dist\nnode_modules\nbuild\n*.log\n"
+	gitignore := "dist\nnode_modules\nbuild\n*.log\n*.generated\n"
 	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, ".gitignore"), []byte(gitignore), 0644))
 
 	// Test with include patterns that override gitignore
-	includePatterns := []string{"dist/*", "*.log"}
+	// Using gitignore-style patterns including the ** pattern
+	includePatterns := []string{"dist", "dist/**", "*.log", "**/*.generated"}
 	reader, err := MakeTar(tmpDir, includePatterns)
 	require.NoError(t, err)
 
@@ -302,7 +305,12 @@ func TestMakeTarWithIncludePatterns(t *testing.T) {
 	entries := extractTarEntries(t, reader)
 
 	// These should be included
-	expectedIncluded := []string{"dist", "dist/bundle.js", "dist/styles.css", "file2.log"}
+	expectedIncluded := []string{
+		"dist", "dist/bundle.js", "dist/styles.css",
+		"file2.log",
+		"src", "src/generated", "src/generated/api.generated",
+		"test", "test/nested", "test/nested/deep", "test/nested/deep/file.generated",
+	}
 	for _, expected := range expectedIncluded {
 		require.Contains(t, entries, expected, "file %s should be included", expected)
 	}

@@ -50,6 +50,12 @@ func Deploy(ctx *Context, opts struct {
 		return err
 	}
 	if ac != nil && ac.Include != nil {
+		// Validate patterns before using them
+		for _, pattern := range ac.Include {
+			if err := tarx.ValidatePattern(pattern); err != nil {
+				return fmt.Errorf("invalid include pattern %q: %w", pattern, err)
+			}
+		}
 		includePatterns = ac.Include
 	}
 
