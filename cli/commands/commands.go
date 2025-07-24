@@ -89,8 +89,8 @@ func AllCommands() map[string]cli.CommandFactory {
 			return Infer("disk create", "Create a new disk", DiskCreate), nil
 		},
 
-		"dev": func() (cli.Command, error) {
-			return Infer("dev", "Run the dev server", Dev), nil
+		"server": func() (cli.Command, error) {
+			return Infer("server", "Start the runtime server", Server), nil
 		},
 
 		"download release": func() (cli.Command, error) {

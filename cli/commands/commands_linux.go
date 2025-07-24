@@ -22,9 +22,7 @@ import (
 )
 
 func addCommands(cmds map[string]cli.CommandFactory) {
-	cmds["server"] = func() (cli.Command, error) {
-		return Infer("server", "Start the server", Server), nil
-	}
+	// Server command is now defined in commands.go (renamed from dev)
 }
 
 func (c *Context) setupServerComponents(ctx context.Context, reg *asm.Registry) {
