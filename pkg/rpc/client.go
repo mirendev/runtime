@@ -410,6 +410,11 @@ func (c *NetworkClient) derefOID(ctx context.Context, oid OID) error {
 }
 
 func (c *NetworkClient) Close() error {
+	// Close inline client if present
+	if c.inlineClient != nil {
+		_ = c.inlineClient.Close()
+	}
+
 	return c.derefOID(c.State.top, c.oid)
 }
 
@@ -656,47 +661,53 @@ func (c *NetworkClient) handleCallStream(
 			go func() {
 				defer str.Close()
 
-				var rs streamRequest
-
 				dec := cbor.NewDecoder(str)
-
-				err = dec.Decode(&rs)
-				if err != nil {
-					c.State.log.Error("rpc.callstream call: error decoding stream request", "error", err)
-					return
-				}
-
 				enc := cbor.NewEncoder(str)
 
-				switch rs.Kind {
-				case "call":
-					iface, ok := caps[rs.OID]
-					if !ok {
-						enc.Encode(refResponse{
-							Status: "error",
-							Error:  "unknown capability",
-						})
-					} else {
+				// Loop to handle multiple requests on the same stream
+				for {
+					var rs streamRequest
+
+					err = dec.Decode(&rs)
+					if err != nil {
+						if err != io.EOF {
+							c.State.log.Error("rpc.callstream call: error decoding stream request", "error", err)
+						}
+						return
+					}
+
+					switch rs.Kind {
+					case "call":
+						iface, ok := caps[rs.OID]
+						if !ok {
+							_ = enc.Encode(refResponse{
+								Status: "error",
+								Error:  "unknown capability",
+							})
+							continue
+						}
+
 						mm := iface.methods[rs.Method]
 						if mm.Handler == nil {
 							enc.Encode(refResponse{
 								Status: "error",
 								Error:  "unknown method",
 							})
-						} else {
-							ctx, cancel := context.WithCancel(ctx)
-							err := c.callInline(ctx, mm, rs.OID, rs.Method, iface.Interface, enc, dec)
-							cancel()
-							if err != nil {
-								if !errors.Is(err, context.Canceled) && !errors.Is(err, cond.ErrClosed{}) {
-									c.State.log.Error("rpc.callstream: error calling inline", "error", err)
-								}
-								return
-							}
+							continue
 						}
+
+						ctx, cancel := context.WithCancel(ctx)
+						err := c.callInline(ctx, mm, rs.OID, rs.Method, iface.Interface, enc, dec)
+						cancel()
+						if err != nil {
+							if !errors.Is(err, context.Canceled) && !errors.Is(err, cond.ErrClosed{}) {
+								c.State.log.Error("rpc.callstream: error calling inline", "error", err)
+							}
+							return
+						}
+					default:
+						c.State.log.Error("rpc.callstream: unknown call stream request", "kind", rs.Kind)
 					}
-				default:
-					c.State.log.Error("rpc.callstream: unknown call stream request", "kind", rs.Kind)
 				}
 			}()
 		}
