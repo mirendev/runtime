@@ -208,9 +208,9 @@ func (b *Builder) BuildFromTar(ctx context.Context, state *build_v1alpha.Builder
 
 	cacheDir := filepath.Join(b.TempDir, "buildkit-cache")
 	b.Log.Debug("creating buildkit cache directory", "path", cacheDir)
-	if err := initializeBuildKitCache(cacheDir); err != nil {
-		b.Log.Error("failed to initialize buildkit cache directory", "error", err, "path", cacheDir)
-		return fmt.Errorf("failed to initialize buildkit cache directory: %w", err)
+	if err := os.MkdirAll(cacheDir, 0755); err != nil {
+		b.Log.Error("failed to create buildkit cache directory", "error", err, "path", cacheDir)
+		return fmt.Errorf("failed to create buildkit cache directory: %w", err)
 	}
 
 	lbk := &LaunchBuildkit{
