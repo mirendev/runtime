@@ -3,6 +3,7 @@ package tarx
 import (
 	"archive/tar"
 	"compress/gzip"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -12,7 +13,17 @@ import (
 	"github.com/tonistiigi/fsutil"
 )
 
-func MakeTar(dir string) (io.Reader, error) {
+// ValidatePattern checks if a pattern is valid for use with pathspec.GitIgnore
+func ValidatePattern(pattern string) error {
+	// Test the pattern with a dummy path to ensure it's valid
+	_, err := pathspec.GitIgnore([]string{pattern}, "test")
+	if err != nil {
+		return fmt.Errorf("invalid pattern syntax: %w", err)
+	}
+	return nil
+}
+
+func MakeTar(dir string, includePatterns []string) (io.Reader, error) {
 	r, w, err := os.Pipe()
 	if err != nil {
 		return nil, err
@@ -58,8 +69,9 @@ func MakeTar(dir string) (io.Reader, error) {
 				return nil
 			}
 
-			// Check if file should be ignored by .gitignore
-			if len(gitignorePatterns) > 0 {
+			// Check if file matches include patterns first
+			isIncluded := false
+			if len(includePatterns) > 0 {
 				// Try both with and without trailing slash for directories
 				paths := []string{rp}
 				if info.IsDir() {
@@ -67,7 +79,32 @@ func MakeTar(dir string) (io.Reader, error) {
 				}
 
 				for _, checkPath := range paths {
-					if ignore, err := pathspec.GitIgnore(gitignorePatterns, checkPath); err == nil && ignore {
+					// Use the same gitignore-style pattern matching as we use for excludes
+					match, err := pathspec.GitIgnore(includePatterns, checkPath)
+					if err != nil {
+						return fmt.Errorf("invalid include pattern: %w", err)
+					}
+					if match {
+						isIncluded = true
+						break
+					}
+				}
+			}
+
+			// Skip gitignore check if file is explicitly included
+			if !isIncluded && len(gitignorePatterns) > 0 {
+				// Try both with and without trailing slash for directories
+				paths := []string{rp}
+				if info.IsDir() {
+					paths = append(paths, rp+"/")
+				}
+
+				for _, checkPath := range paths {
+					ignore, err := pathspec.GitIgnore(gitignorePatterns, checkPath)
+					if err != nil {
+						return fmt.Errorf("invalid gitignore pattern: %w", err)
+					}
+					if ignore {
 						if info.IsDir() {
 							return filepath.SkipDir
 						}
@@ -115,6 +152,9 @@ func TarToMap(r io.Reader) (map[string][]byte, error) {
 		th, err := tr.Next()
 		if err == io.EOF {
 			break
+		}
+		if err != nil {
+			return nil, err
 		}
 
 		if th == nil {

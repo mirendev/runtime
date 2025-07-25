@@ -17,6 +17,7 @@ import (
 	"github.com/moby/buildkit/util/progress/progresswriter"
 
 	"miren.dev/runtime/api/build/build_v1alpha"
+	"miren.dev/runtime/appconfig"
 	"miren.dev/runtime/pkg/color"
 	"miren.dev/runtime/pkg/colortheory"
 	"miren.dev/runtime/pkg/progress/progressui"
@@ -42,7 +43,23 @@ func Deploy(ctx *Context, opts struct {
 
 	ctx.Log.Info("building code", "name", name, "dir", dir)
 
-	r, err := tarx.MakeTar(dir)
+	// Load AppConfig to get include patterns
+	var includePatterns []string
+	ac, err := appconfig.LoadAppConfigUnder(dir)
+	if err != nil {
+		return err
+	}
+	if ac != nil && ac.Include != nil {
+		// Validate patterns before using them
+		for _, pattern := range ac.Include {
+			if err := tarx.ValidatePattern(pattern); err != nil {
+				return fmt.Errorf("invalid include pattern %q: %w", pattern, err)
+			}
+		}
+		includePatterns = ac.Include
+	}
+
+	r, err := tarx.MakeTar(dir, includePatterns)
 	if err != nil {
 		return err
 	}

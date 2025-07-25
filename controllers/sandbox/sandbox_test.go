@@ -57,7 +57,7 @@ func TestSandbox(t *testing.T) {
 		err := reg.Init(&cc, &bkl)
 		r.NoError(err)
 
-		dfr, err := tarx.MakeTar("testdata/nginx")
+		dfr, err := tarx.MakeTar("testdata/nginx", nil)
 		r.NoError(err)
 
 		datafs, err := tarx.TarFS(dfr, t.TempDir())
@@ -361,10 +361,10 @@ func TestSandbox(t *testing.T) {
 		err := reg.Init(&cc, &bkl)
 		r.NoError(err)
 
-		dfr, err := build.MakeTar("testdata/sort")
+		dfr, err := tarx.MakeTar("testdata/sort", nil)
 		r.NoError(err)
 
-		datafs, err := build.TarFS(dfr, t.TempDir())
+		datafs, err := tarx.TarFS(dfr, t.TempDir())
 		r.NoError(err)
 
 		o, _, err := bkl.Transform(ctx, datafs)
@@ -465,10 +465,10 @@ func TestSandbox(t *testing.T) {
 		err := reg.Init(&cc, &bkl)
 		r.NoError(err)
 
-		dfr, err := build.MakeTar("testdata/nginx")
+		dfr, err := tarx.MakeTar("testdata/nginx", nil)
 		r.NoError(err)
 
-		datafs, err := build.TarFS(dfr, t.TempDir())
+		datafs, err := tarx.TarFS(dfr, t.TempDir())
 		r.NoError(err)
 
 		o, _, err := bkl.Transform(ctx, datafs)
@@ -586,10 +586,10 @@ func TestSandbox(t *testing.T) {
 		err := reg.Init(&cc, &bkl)
 		r.NoError(err)
 
-		dfr, err := build.MakeTar("testdata/nginx")
+		dfr, err := tarx.MakeTar("testdata/nginx", nil)
 		r.NoError(err)
 
-		datafs, err := build.TarFS(dfr, t.TempDir())
+		datafs, err := tarx.TarFS(dfr, t.TempDir())
 		r.NoError(err)
 
 		o, _, err := bkl.Transform(ctx, datafs)
@@ -716,10 +716,10 @@ func TestSandbox(t *testing.T) {
 		err := reg.Init(&cc, &bkl)
 		r.NoError(err)
 
-		dfr, err := build.MakeTar("testdata/nginx")
+		dfr, err := tarx.MakeTar("testdata/nginx", nil)
 		r.NoError(err)
 
-		datafs, err := build.TarFS(dfr, t.TempDir())
+		datafs, err := tarx.TarFS(dfr, t.TempDir())
 		r.NoError(err)
 
 		o, _, err := bkl.Transform(ctx, datafs)
@@ -852,10 +852,10 @@ func TestSandbox(t *testing.T) {
 		err := reg.Init(&cc, &bkl)
 		r.NoError(err)
 
-		dfr, err := build.MakeTar("testdata/nginx")
+		dfr, err := tarx.MakeTar("testdata/nginx", nil)
 		r.NoError(err)
 
-		datafs, err := build.TarFS(dfr, t.TempDir())
+		datafs, err := tarx.TarFS(dfr, t.TempDir())
 		r.NoError(err)
 
 		o, _, err := bkl.Transform(ctx, datafs)

@@ -28,6 +28,7 @@ type AppConfig struct {
 	Concurrency *int              `toml:"concurrency"`
 	Services    map[string]string `toml:"services"`
 	Build       *BuildConfig      `toml:"build"`
+	Include     []string          `toml:"include"`
 }
 
 const AppConfigPath = ".runtime/app.toml"
