@@ -21,6 +21,9 @@ types:
           - name: buildkit
             type: bytes
             index: 2
+          - name: error
+            type: string
+            index: 3
 
 interfaces:
   - name: Stream
