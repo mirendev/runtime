@@ -566,10 +566,10 @@ func Server(ctx *Context, opts struct {
 		return err
 	}
 
-	cert, err := co.IssueCertificate("runtime")
+	cert, err := co.IssueCertificate("runtime-server")
 	if err != nil {
-		ctx.Log.Error("failed to issue dev certificate", "error", err)
-		return fmt.Errorf("failed to issue dev certificate: %w", err)
+		ctx.Log.Error("failed to issue server certificate", "error", err)
+		return fmt.Errorf("failed to issue server certificate: %w", err)
 	}
 
 	if opts.ConfigClusterName == "" {
