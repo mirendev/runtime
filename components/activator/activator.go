@@ -122,6 +122,7 @@ func (a *localActivator) AcquireLease(ctx context.Context, ver *core_v1alpha.App
 					ver:     ver,
 					sandbox: s.sandbox,
 					ent:     s.ent,
+					pool:    pool,
 					Size:    vs.leaseSlots,
 					URL:     s.url,
 				}, nil
@@ -272,6 +273,7 @@ func (a *localActivator) activateApp(ctx context.Context, ver *core_v1alpha.AppV
 		ver:     ver,
 		sandbox: lsb.sandbox,
 		ent:     lsb.ent,
+		pool:    pool,
 		Size:    leaseSlots,
 		URL:     lsb.url,
 	}
