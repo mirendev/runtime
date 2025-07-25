@@ -125,6 +125,17 @@ func (b *Builder) loadAppConfig(dfs fsutil.FS) (*appconfig.AppConfig, error) {
 	return ac, nil
 }
 
+// sendErrorStatus sends an error status update if status is not nil, logging any send errors
+func (b *Builder) sendErrorStatus(ctx context.Context, status *stream.SendStreamClient[*build_v1alpha.Status], format string, args ...interface{}) {
+	if status != nil {
+		so := new(build_v1alpha.Status)
+		so.Update().SetError(fmt.Sprintf(format, args...))
+		if _, err := status.Send(ctx, so); err != nil {
+			b.Log.Warn("error sending error status", "error", err)
+		}
+	}
+}
+
 func (b *Builder) BuildFromTar(ctx context.Context, state *build_v1alpha.BuilderBuildFromTar) error {
 	args := state.Args()
 
@@ -144,7 +155,7 @@ func (b *Builder) BuildFromTar(ctx context.Context, state *build_v1alpha.Builder
 
 	if status != nil {
 		so.Update().SetMessage("Reading application data")
-		status.Send(ctx, so)
+		_, _ = status.Send(ctx, so)
 	}
 
 	b.Log.Debug("receiving tar data", "app", name, "tempdir", path)
@@ -153,12 +164,13 @@ func (b *Builder) BuildFromTar(ctx context.Context, state *build_v1alpha.Builder
 
 	tr, err := tarx.TarFS(r, path)
 	if err != nil {
+		b.sendErrorStatus(ctx, status, "Error untaring data: %v", err)
 		return fmt.Errorf("error untaring data: %w", err)
 	}
 
 	if status != nil {
 		so.Update().SetMessage("Launching builder")
-		status.Send(ctx, so)
+		_, _ = status.Send(ctx, so)
 	}
 
 	ac, err := b.loadAppConfig(tr)
@@ -198,6 +210,7 @@ func (b *Builder) BuildFromTar(ctx context.Context, state *build_v1alpha.Builder
 		_, err := stackbuild.DetectStack(buildStack.CodeDir)
 		if err != nil {
 			b.Log.Error("stack detection failed", "error", err, "app", name, "codeDir", buildStack.CodeDir)
+			b.sendErrorStatus(ctx, status, "No supported stack detected for app %s: %v", name, err)
 			return fmt.Errorf("no supported stack detected for app %s: %w", name, err)
 		}
 		b.Log.Debug("stack detection successful, proceeding with build")
@@ -210,6 +223,7 @@ func (b *Builder) BuildFromTar(ctx context.Context, state *build_v1alpha.Builder
 	b.Log.Debug("creating buildkit cache directory", "path", cacheDir)
 	if err := os.MkdirAll(cacheDir, 0755); err != nil {
 		b.Log.Error("failed to create buildkit cache directory", "error", err, "path", cacheDir)
+		b.sendErrorStatus(ctx, status, "Failed to create buildkit cache directory: %v", err)
 		return fmt.Errorf("failed to create buildkit cache directory: %w", err)
 	}
 
@@ -223,6 +237,7 @@ func (b *Builder) BuildFromTar(ctx context.Context, state *build_v1alpha.Builder
 	ip, err := b.Resolver.LookupHost("cluster.local")
 	if err != nil {
 		b.Log.Error("failed to resolve cluster.local", "error", err)
+		b.sendErrorStatus(ctx, status, "Error resolving cluster.local: %v", err)
 		return fmt.Errorf("error resolving cluster.local: %w", err)
 	}
 	b.Log.Debug("resolved cluster.local", "ip", ip.String())
@@ -233,6 +248,7 @@ func (b *Builder) BuildFromTar(ctx context.Context, state *build_v1alpha.Builder
 	}))
 	if err != nil {
 		b.Log.Error("failed to launch buildkit", "error", err)
+		b.sendErrorStatus(ctx, status, "Failed to launch buildkit: %v", err)
 		return err
 	}
 	b.Log.Info("buildkit launch completed successfully")
@@ -247,6 +263,7 @@ func (b *Builder) BuildFromTar(ctx context.Context, state *build_v1alpha.Builder
 	bkc, err := rbk.Client(ctx)
 	if err != nil {
 		b.Log.Error("failed to get buildkit client", "error", err)
+		b.sendErrorStatus(ctx, status, "Failed to get buildkit client: %v", err)
 		return err
 	}
 	b.Log.Debug("successfully obtained buildkit client")
@@ -270,6 +287,7 @@ func (b *Builder) BuildFromTar(ctx context.Context, state *build_v1alpha.Builder
 	appRec, mrv, artName, err := b.nextVersion(ctx, name)
 	if err != nil {
 		b.Log.Error("error getting next version", "error", err)
+		b.sendErrorStatus(ctx, status, "Error getting next version: %v", err)
 		return err
 	}
 
@@ -285,16 +303,16 @@ func (b *Builder) BuildFromTar(ctx context.Context, state *build_v1alpha.Builder
 			switch phase {
 			case "export":
 				so.Update().SetMessage("Registering image")
-				status.Send(ctx, so)
+				_, _ = status.Send(ctx, so)
 			case "solving":
 				so.Update().SetMessage("Calculating build")
-				status.Send(ctx, so)
+				_, _ = status.Send(ctx, so)
 			case "solved":
 				so.Update().SetMessage("Building image")
-				status.Send(ctx, so)
+				_, _ = status.Send(ctx, so)
 			default:
 				so.Update().SetMessage(phase)
-				status.Send(ctx, so)
+				_, _ = status.Send(ctx, so)
 			}
 		}))
 
@@ -310,7 +328,7 @@ func (b *Builder) BuildFromTar(ctx context.Context, state *build_v1alpha.Builder
 
 	if status != nil {
 		so.Update().SetMessage("Calculating build")
-		status.Send(ctx, so)
+		_, _ = status.Send(ctx, so)
 	}
 
 	imgName := mrv.ImageUrl
@@ -318,6 +336,7 @@ func (b *Builder) BuildFromTar(ctx context.Context, state *build_v1alpha.Builder
 	res, err := bk.BuildImage(ctx, tr, buildStack, name, imgName, tos...)
 	if err != nil {
 		b.Log.Error("error building image", "error", err)
+		b.sendErrorStatus(ctx, status, "Error building image: %v", err)
 		return err
 	}
 

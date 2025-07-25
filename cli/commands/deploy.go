@@ -69,6 +69,8 @@ func Deploy(ctx *Context, opts struct {
 		results *build_v1alpha.BuilderClientBuildFromTarResults
 	)
 
+	var buildErrors []string
+
 	if opts.Explain {
 		pw, err := progresswriter.NewPrinter(ctx, os.Stderr, opts.ExplainFormat)
 		if err != nil {
@@ -93,6 +95,8 @@ func Deploy(ctx *Context, opts struct {
 				case pw.Status() <- &status:
 					// ok
 				}
+			case "error":
+				buildErrors = append(buildErrors, update.Error())
 			}
 
 			return nil
@@ -100,6 +104,12 @@ func Deploy(ctx *Context, opts struct {
 
 		results, err = bc.BuildFromTar(ctx, name, stream.ServeReader(ctx, r), cb)
 		if err != nil {
+			if len(buildErrors) > 0 {
+				ctx.Printf("\n\nBuild failed with the following errors:\n")
+				for _, errMsg := range buildErrors {
+					ctx.Printf("  - %s\n", errMsg)
+				}
+			}
 			return err
 		}
 
@@ -165,13 +175,26 @@ func Deploy(ctx *Context, opts struct {
 				go func() {
 					updateCh <- msg
 				}()
+			case "error":
+				buildErrors = append(buildErrors, update.Error())
 			}
 
 			return nil
 		})
 
 		results, err = bc.BuildFromTar(ctx, name, stream.ServeReader(ctx, r), cb)
+
+		// Ensure the progress UI is shut down before printing
+		p.Quit()
+		wg.Wait()
+
 		if err != nil {
+			if len(buildErrors) > 0 {
+				ctx.Printf("\n\nBuild failed with the following errors:\n")
+				for _, errMsg := range buildErrors {
+					ctx.Printf("  - %s\n", errMsg)
+				}
+			}
 			return err
 		}
 
@@ -179,6 +202,12 @@ func Deploy(ctx *Context, opts struct {
 
 	if results.Version() == "" {
 		ctx.Printf("\n\nError detected in building %s. No version returned.\n", name)
+		if len(buildErrors) > 0 {
+			ctx.Printf("\nBuild errors:\n")
+			for _, errMsg := range buildErrors {
+				ctx.Printf("  - %s\n", errMsg)
+			}
+		}
 		return nil
 	}
 
