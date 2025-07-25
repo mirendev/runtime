@@ -6,7 +6,6 @@ import (
 	"io"
 	"log/slog"
 	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 
@@ -455,7 +454,7 @@ func (b *Buildkit) BuildImage(
 				}
 				if data, err := json.Marshal(ss); err == nil {
 					if opts.phaseUpdates != nil {
-						for _, s := range ss.Vertexes { // codespell:ignore
+						for _, s := range ss.Vertexes {
 							if s.Started == nil || s.Completed != nil {
 								continue
 							}
@@ -509,23 +508,4 @@ func (b *Buildkit) BuildImage(
 	}, ssProgress)
 
 	return &res, err
-}
-
-func initializeBuildKitCache(cacheDir string) error {
-	if err := os.MkdirAll(cacheDir, 0755); err != nil {
-		return err
-	}
-
-	// Create a minimal index.json, which prevents a warning log on buildkit's first boot
-	indexPath := filepath.Join(cacheDir, "index.json")
-	indexContent := []byte(`{"manifests":[]}`)
-
-	// Only create if it doesn't already exist
-	if _, err := os.Stat(indexPath); os.IsNotExist(err) {
-		if err := os.WriteFile(indexPath, indexContent, 0644); err != nil {
-			return err
-		}
-	}
-
-	return nil
 }
