@@ -36,7 +36,7 @@ The runtime can be debugged locally while connecting to services (etcd, MinIO, C
 
 3. **Run the runtime locally:**
    ```bash
-   r dev -vv --etcd=localhost:2379 --clickhouse-addr=localhost:9000
+   r server -vv --etcd=localhost:2379 --clickhouse-addr=localhost:9000
    ```
    Your local runtime now connects to the containerized services.
 
@@ -93,7 +93,7 @@ Add to `.vscode/launch.json`:
             "mode": "debug",
             "program": "${workspaceFolder}/cmd/runtime",
             "args": [
-                "dev",
+                "server",
                 "-vv",
                 "--data-path=/var/lib/runtime/data",
                 "--etcd=localhost:2379",

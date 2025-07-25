@@ -182,7 +182,7 @@ fi
 
 echo ""
 if [[ "${BASH_SOURCE[0]}" != "${0}" ]] && [[ -f "$RUNTIME_BIN" ]]; then
-    echo "You can now run: r dev -vv --etcd=localhost:2379 --clickhouse-addr=localhost:9000"
+    echo "You can now run: r server -vv --etcd=localhost:2379 --clickhouse-addr=localhost:9000"
 else
-    echo "You can now run: ./bin/runtime dev -vv --etcd=localhost:2379 --clickhouse-addr=localhost:9000"
+    echo "You can now run: ./bin/runtime server -vv --etcd=localhost:2379 --clickhouse-addr=localhost:9000"
 fi
