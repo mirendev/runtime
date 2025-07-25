@@ -115,6 +115,7 @@ func (a *localActivator) AcquireLease(ctx context.Context, ver *core_v1alpha.App
 			s := vs.sandboxes[(start+i)%len(vs.sandboxes)]
 			if s.inuseSlots+vs.leaseSlots < s.maxSlots {
 				s.inuseSlots += vs.leaseSlots
+				s.lastRenewal = time.Now()
 
 				a.log.Debug("reusing sandbox", "app", ver.App, "version", ver.Version, "sandbox", s.sandbox.ID, "in-use", s.inuseSlots)
 				return &Lease{
