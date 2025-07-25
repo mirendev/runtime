@@ -681,6 +681,29 @@ func (s *GoStack) hasVendor() bool {
 	return s.hasDir("vendor")
 }
 
+func (s *GoStack) parseGoModVersion() string {
+	content, err := s.readFile("go.mod")
+	if err != nil {
+		return ""
+	}
+
+	lines := strings.SplitSeq(string(content), "\n")
+	for line := range lines {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "go ") {
+			parts := strings.Fields(line)
+			if len(parts) >= 2 {
+				version := parts[1]
+				versionParts := strings.Split(version, ".")
+				if len(versionParts) >= 2 {
+					return versionParts[0] + "." + versionParts[1]
+				}
+			}
+		}
+	}
+	return ""
+}
+
 func (s *GoStack) GenerateLLB(dir string, opts BuildOptions) (*llb.State, error) {
 	// Set up local context with the directory
 	localCtx := llb.Local("context",
@@ -694,6 +717,8 @@ func (s *GoStack) GenerateLLB(dir string, opts BuildOptions) (*llb.State, error)
 	version := "1.23"
 	if opts.Version != "" {
 		version = opts.Version
+	} else if goModVersion := s.parseGoModVersion(); goModVersion != "" {
+		version = goModVersion
 	}
 	base := llb.Image(imagerefs.GetGolangImage(version), llb.WithMetaResolver(mr))
 
