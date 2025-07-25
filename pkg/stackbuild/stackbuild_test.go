@@ -524,3 +524,49 @@ func main() {
 		require.NotEmpty(t, data)
 	})
 }
+
+func TestGoVersionDetection(t *testing.T) {
+	// Test the parseGoModVersion function
+	testCases := []struct {
+		name            string
+		goModContent    string
+		expectedVersion string
+	}{
+		{
+			name:            "simple version",
+			goModContent:    "module test-app\n\ngo 1.23\n",
+			expectedVersion: "1.23",
+		},
+		{
+			name:            "patch version",
+			goModContent:    "module test-app\n\ngo 1.23.4\n",
+			expectedVersion: "1.23",
+		},
+		{
+			name:            "with dependencies",
+			goModContent:    "module test-app\n\ngo 1.22.1\n\nrequire github.com/gorilla/mux v1.8.1\n",
+			expectedVersion: "1.22",
+		},
+		{
+			name:            "no go directive",
+			goModContent:    "module test-app\n",
+			expectedVersion: "",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			require.NoError(t, os.WriteFile(filepath.Join(dir, "go.mod"), []byte(tc.goModContent), 0644))
+
+			stack := &GoStack{
+				MetaStack: MetaStack{
+					dir: dir,
+				},
+			}
+
+			version := stack.parseGoModVersion()
+			require.Equal(t, tc.expectedVersion, version)
+		})
+	}
+}
