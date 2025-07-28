@@ -8,12 +8,11 @@ import (
 )
 
 func EntityList(ctx *Context, opts struct {
+	ConfigCentric
 	Attribute string `short:"a" long:"attribute" description:"Attribute to filter by"`
 	Value     string `short:"v" long:"value" description:"Value to filter by"`
 	Kind      string `short:"k" long:"kind" description:"Kind of entity to filter by"`
 	Address   string `long:"address" description:"Address to listen on" default:"localhost:8443"`
-
-	ConfigCentric
 }) error {
 	client, err := ctx.RPCClient("entities")
 	if err != nil {

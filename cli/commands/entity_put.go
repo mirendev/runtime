@@ -10,13 +10,12 @@ import (
 )
 
 func EntityPut(ctx *Context, opts struct {
+	ConfigCentric
 	Address string   `short:"a" long:"address" description:"Address to listen on" default:"localhost:8443"`
 	Path    []string `short:"p" long:"path" description:"Path to the entity"`
 	Id      string   `short:"i" long:"id" description:"ID of the entity"`
 	DryRun  bool     `short:"d" long:"dry-run" description:"Dry run, do not actually put the entity"`
 	Update  bool     `short:"u" long:"update" description:"Update the entity if it exists"`
-
-	ConfigCentric
 }) error {
 	var (
 		data []byte
@@ -36,12 +35,12 @@ func EntityPut(ctx *Context, opts struct {
 			return fmt.Errorf("failed to read file %s: %v", opts.Path, err)
 		}
 
-		pres, err := eac.Parse(ctx, data)
+		press, err := eac.Parse(ctx, data)
 		if err != nil {
 			return fmt.Errorf("failed to parse entity: %v", err)
 		}
 
-		pf := pres.File()
+		pf := press.File()
 
 		for _, rpcEnt := range pf.Entities() {
 			ent := rpcEnt.Entity()
