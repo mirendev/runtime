@@ -72,6 +72,7 @@ func Deploy(ctx *Context, opts struct {
 	var buildErrors []string
 
 	if opts.Explain {
+		// In explain mode, write to stderr
 		pw, err := progresswriter.NewPrinter(ctx, os.Stderr, opts.ExplainFormat)
 		if err != nil {
 			return err
@@ -169,6 +170,32 @@ func Deploy(ctx *Context, opts struct {
 
 				p.Send(&status)
 
+				// Extract error messages from status
+				for _, vertex := range status.Vertexes {
+					if vertex.Error != "" {
+						buildErrors = append(buildErrors, vertex.Error)
+					}
+				}
+
+				// Also check logs for compilation errors if we haven't found specific errors yet
+				if len(buildErrors) == 0 || (len(buildErrors) > 0 && strings.Contains(buildErrors[0], "exit code:")) {
+					for _, log := range status.Logs {
+						if log.Data != nil {
+							logStr := string(log.Data)
+							// Look for Go compilation errors
+							if strings.Contains(logStr, ".go:") && strings.Contains(logStr, ":") {
+								lines := strings.Split(logStr, "\n")
+								for _, line := range lines {
+									line = strings.TrimSpace(line)
+									if line != "" && strings.Contains(line, ".go:") {
+										buildErrors = append(buildErrors, line)
+									}
+								}
+							}
+						}
+					}
+				}
+
 				return nil
 			case "message":
 				msg := update.Message()
@@ -189,6 +216,7 @@ func Deploy(ctx *Context, opts struct {
 		wg.Wait()
 
 		if err != nil {
+
 			if len(buildErrors) > 0 {
 				ctx.Printf("\n\nBuild failed with the following errors:\n")
 				for _, errMsg := range buildErrors {
