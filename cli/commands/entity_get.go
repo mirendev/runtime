@@ -7,10 +7,9 @@ import (
 )
 
 func EntityGet(ctx *Context, opts struct {
+	ConfigCentric
 	Id      string `short:"i" long:"id" description:"Entity ID" required:"true"`
 	Address string `short:"a" long:"address" description:"Address to listen on" default:"localhost:8443"`
-
-	ConfigCentric
 }) error {
 	client, err := ctx.RPCClient("entities")
 	if err != nil {
