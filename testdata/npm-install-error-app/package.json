@@ -1,0 +1,15 @@
+{
+  "name": "npm-install-error-test",
+  "version": "1.0.0",
+  "description": "Test app with non-existent npm dependency",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "totally-fake-package-that-does-not-exist": "^1.0.0",
+    "another-nonexistent-module-xyz123": "^2.5.7",
+    "super-fake-dependency-9999": "latest"
+  }
+}
