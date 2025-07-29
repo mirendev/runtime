@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"fmt"
 	"os"
 
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
@@ -46,14 +47,22 @@ func EntityList(ctx *Context, opts struct {
 
 	for i, e := range res.Values() {
 		if i > 0 {
-			os.Stdout.Write([]byte("---\n"))
+			_, _ = os.Stdout.Write([]byte("---\n"))
 		}
 		fres, err := eac.Format(ctx, e)
 		if err != nil {
-			return err
-		}
+			// Print warning but continue with raw attrs
+			fmt.Fprintf(os.Stderr, "Warning: failed to format entity %s: %v\n", e.Entity().ID, err)
 
-		os.Stdout.Write(fres.Data())
+			// Fall back to printing raw attrs
+			fmt.Printf("id: %s\n", e.Entity().ID)
+			fmt.Printf("attrs:\n")
+			for k, v := range e.Entity().Attrs {
+				fmt.Printf("  %d: %v\n", k, v)
+			}
+		} else {
+			_, _ = os.Stdout.Write(fres.Data())
+		}
 	}
 
 	return nil
