@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net/netip"
 
 	"miren.dev/runtime/api/compute/compute_v1alpha"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
@@ -39,5 +40,15 @@ func WaitForSandbox(ctx context.Context, id string, eac *entityserver_v1alpha.En
 		return "", nil, fmt.Errorf("sandbox %s not running: %s", id, runningSB.Status)
 	}
 
-	return runningSB.Network[0].Address, sbEnt, nil
+	// Parse the address to extract just the IP from potential CIDR notation
+	addr := runningSB.Network[0].Address
+	if prefix, err := netip.ParsePrefix(addr); err == nil {
+		// New format: extract IP from CIDR
+		addr = prefix.Addr().String()
+	} else if _, err := netip.ParseAddr(addr); err != nil {
+		// Not a valid IP either, return error
+		return "", nil, fmt.Errorf("invalid address format: %s", addr)
+	}
+	// If it's already a plain IP (old format), use as-is
+	return addr, sbEnt, nil
 }

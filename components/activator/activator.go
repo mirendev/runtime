@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"math/rand/v2"
+	"net/netip"
 	"sync"
 	"time"
 
@@ -246,7 +247,17 @@ func (a *localActivator) activateApp(ctx context.Context, ver *core_v1alpha.AppV
 		return nil, err
 	}
 
-	addr := fmt.Sprintf("http://%s:%d", runningSB.Network[0].Address, port)
+	// Parse the address to extract just the IP from potential CIDR notation
+	ip := runningSB.Network[0].Address
+	if prefix, err := netip.ParsePrefix(ip); err == nil {
+		// New format: extract IP from CIDR
+		ip = prefix.Addr().String()
+	} else if _, err := netip.ParseAddr(ip); err != nil {
+		// Not a valid IP either, return error
+		return nil, fmt.Errorf("invalid address format: %s", ip)
+	}
+	// If it's already a plain IP (old format), use as-is
+	addr := fmt.Sprintf("http://%s:%d", ip, port)
 
 	var leaseSlots int
 
