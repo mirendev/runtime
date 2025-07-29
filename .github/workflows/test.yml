@@ -58,6 +58,7 @@ jobs:
       run: dagger --progress=plain call test --dir=. --tests="./e2e" --tags="e2e"
 
   build-binaries:
+    needs: lint
     strategy:
       matrix:
         include:
