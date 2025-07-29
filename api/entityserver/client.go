@@ -171,7 +171,7 @@ func (c *Client) Create(ctx context.Context, name string, sc SchemaEncoder, opts
 			Labels: op.labels,
 		}).Encode,
 		sc.Encode,
-		entity.Ident, sc.ShortKind()+"/"+name,
+		entity.Ident, types.Keyword(sc.ShortKind()+"/"+name),
 	))
 
 	if c.sessionId != "" {
@@ -214,7 +214,7 @@ func (c *Client) CreateOrUpdate(ctx context.Context, name string, sc SchemaEncod
 					Labels: op.labels,
 				}).Encode,
 				sc.Encode,
-				entity.Ident, sc.ShortKind()+"/"+name,
+				entity.Ident, types.Keyword(sc.ShortKind()+"/"+name),
 			))
 	}
 

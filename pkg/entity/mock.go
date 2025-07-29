@@ -2,6 +2,7 @@ package entity
 
 import (
 	"context"
+	"time"
 
 	"go.etcd.io/etcd/api/v3/mvccpb"
 	clientv3 "go.etcd.io/etcd/client/v3"
@@ -70,9 +71,35 @@ func (m *MockStore) UpdateEntity(ctx context.Context, id Id, attrs []Attr, opts 
 		return nil, ErrNotFound
 	}
 
-	e.Update(attrs)
+	// Create a copy to avoid modifying the original
+	updated := &Entity{
+		ID:        e.ID,
+		CreatedAt: e.CreatedAt,
+		UpdatedAt: e.UpdatedAt,
+		Revision:  e.Revision + 1,
+		Attrs:     make([]Attr, 0, len(e.Attrs)),
+	}
 
-	return e, nil
+	// First, copy over existing attributes that aren't being updated
+	attrMap := make(map[Id]Attr)
+	for _, attr := range attrs {
+		attrMap[attr.ID] = attr
+	}
+
+	for _, existing := range e.Attrs {
+		if _, isUpdated := attrMap[existing.ID]; !isUpdated {
+			updated.Attrs = append(updated.Attrs, existing)
+		}
+	}
+
+	// Then add the new/updated attributes
+	updated.Attrs = append(updated.Attrs, attrs...)
+	updated.UpdatedAt = time.Now().Unix()
+
+	// Update the entity in the store
+	m.Entities[id] = updated
+
+	return updated, nil
 }
 
 func (m *MockStore) DeleteEntity(ctx context.Context, id Id) error {
