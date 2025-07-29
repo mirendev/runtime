@@ -87,6 +87,11 @@ func NewLocalActivator(ctx context.Context, log *slog.Logger, eac *entityserver_
 		versions: make(map[verKey]*verSandboxes),
 	}
 
+	// Recover existing sandboxes on startup
+	if err := la.recoverSandboxes(ctx); err != nil {
+		la.log.Error("failed to recover sandboxes", "error", err)
+	}
+
 	go la.InBackground(ctx)
 
 	return la
@@ -204,7 +209,7 @@ func (a *localActivator) activateApp(ctx context.Context, ver *core_v1alpha.AppV
 	rpcE.SetAttrs(entity.Attrs(
 		(&core_v1alpha.Metadata{
 			Name:   name,
-			Labels: types.LabelSet("app", appMD.Name),
+			Labels: types.LabelSet("app", appMD.Name, "pool", pool),
 		}).Encode,
 		entity.Ident, "sandbox/"+name,
 		sb.Encode,
@@ -345,6 +350,110 @@ func (a *localActivator) InBackground(ctx context.Context) {
 			return
 		}
 	}
+}
+
+// getLabel extracts a label value from metadata, returning defaultValue if not found
+func getLabel(metadata *core_v1alpha.Metadata, key string, defaultValue string) string {
+	for _, label := range metadata.Labels {
+		if label.Key == key {
+			return label.Value
+		}
+	}
+	return defaultValue
+}
+
+func (a *localActivator) recoverSandboxes(ctx context.Context) error {
+	// List all sandboxes
+	resp, err := a.eac.List(ctx, entity.Ref(entity.EntityKind, compute_v1alpha.KindSandbox))
+	if err != nil {
+		return fmt.Errorf("failed to list sandboxes: %w", err)
+	}
+
+	a.log.Info("recovering sandboxes on startup", "count", len(resp.Values()))
+
+	recoveryTime := time.Now()
+
+	for _, ent := range resp.Values() {
+		var sb compute_v1alpha.Sandbox
+		sb.Decode(ent.Entity())
+
+		// Only recover running sandboxes
+		if sb.Status != compute_v1alpha.RUNNING {
+			continue
+		}
+
+		// Skip sandboxes without a version reference
+		if sb.Version.String() == "" {
+			continue
+		}
+
+		// Get the app version details
+		verResp, err := a.eac.Get(ctx, sb.Version.String())
+		if err != nil {
+			a.log.Error("failed to get app version", "version", sb.Version, "error", err)
+			continue
+		}
+
+		var appVer core_v1alpha.AppVersion
+		appVer.Decode(verResp.Entity().Entity())
+
+		// Extract pool from sandbox labels - default to "default" if not found
+		var metadata core_v1alpha.Metadata
+		metadata.Decode(ent.Entity())
+		pool := getLabel(&metadata, "pool", "default")
+
+		// Calculate the URL
+		port := int64(3000)
+		if appVer.Config.Port > 0 {
+			port = appVer.Config.Port
+		}
+
+		// Skip if no network address assigned yet
+		if len(sb.Network) == 0 || sb.Network[0].Address == "" {
+			a.log.Debug("skipping sandbox without network address", "sandbox", sb.ID)
+			continue
+		}
+
+		addr := fmt.Sprintf("http://%s:%d", sb.Network[0].Address, port)
+
+		// Calculate lease slots
+		var leaseSlots int
+		if appVer.Config.Concurrency.Fixed <= 0 {
+			leaseSlots = 1
+		} else {
+			leaseSlots = int(float32(appVer.Config.Concurrency.Fixed) * 0.20)
+			if leaseSlots < 1 {
+				leaseSlots = 1
+			}
+		}
+
+		// Create sandbox tracking entry
+		lsb := &sandbox{
+			sandbox:     &sb,
+			ent:         ent.Entity(),
+			lastRenewal: recoveryTime, // Set to now to give grace period
+			url:         addr,
+			maxSlots:    int(appVer.Config.Concurrency.Fixed),
+			inuseSlots:  0, // Start with no slots in use
+		}
+
+		// Add to versions map
+		key := verKey{appVer.ID.String(), pool}
+		vs, ok := a.versions[key]
+		if !ok {
+			vs = &verSandboxes{
+				ver:        &appVer,
+				sandboxes:  []*sandbox{},
+				leaseSlots: leaseSlots,
+			}
+			a.versions[key] = vs
+		}
+		vs.sandboxes = append(vs.sandboxes, lsb)
+
+		a.log.Info("recovered sandbox", "app", appVer.App, "version", appVer.Version, "sandbox", sb.ID, "pool", pool)
+	}
+
+	return nil
 }
 
 func (a *localActivator) retireUnusedSandboxes() {
