@@ -1587,10 +1587,12 @@ func (c *SandboxController) stopSandbox(ctx context.Context, sb *compute.Sandbox
 
 		task, err := container.Task(ctx, nil)
 		if err != nil {
-			return err
-		}
-
-		if task != nil {
+			if !errdefs.IsNotFound(err) {
+				c.Log.Error("failed to get pause task", "id", sb.ID, "err", err)
+				return err
+			}
+			c.Log.Debug("pause task not found, continuing with container deletion", "id", sb.ID)
+		} else if task != nil {
 			_, err = task.Delete(ctx, containerd.WithProcessKill)
 			if err != nil {
 				c.Log.Error("failed to delete pause task", "id", sb.ID, "err", err)
