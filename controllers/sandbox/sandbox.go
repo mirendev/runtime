@@ -796,9 +796,16 @@ func (c *SandboxController) allocateNetwork(
 		var prefixes []netip.Prefix
 
 		for _, net := range co.Network {
+			// Try to parse as CIDR first (new format)
 			prefix, err := netip.ParsePrefix(net.Address)
 			if err != nil {
-				return nil, fmt.Errorf("invalid address: %s", net.Address)
+				// Fall back to parsing as plain IP (old format) and assume /32
+				addr, err2 := netip.ParseAddr(net.Address)
+				if err2 != nil {
+					return nil, fmt.Errorf("invalid address: %s (not a valid CIDR or IP)", net.Address)
+				}
+				// Convert plain IP to /32 prefix
+				prefix = netip.PrefixFrom(addr, addr.BitLen())
 			}
 
 			prefixes = append(prefixes, prefix)
@@ -816,7 +823,7 @@ func (c *SandboxController) allocateNetwork(
 		}
 
 		co.Network = append(co.Network, compute.Network{
-			Address: ep.Addresses[0].Addr().String(),
+			Address: ep.Addresses[0].String(),
 			Subnet:  c.Bridge,
 		})
 	}

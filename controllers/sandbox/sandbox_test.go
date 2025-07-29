@@ -114,7 +114,7 @@ func TestSandbox(t *testing.T) {
 
 		r.Len(tco.Network, 1)
 
-		ca, err := netip.ParseAddr(tco.Network[0].Address)
+		ca, err := netip.ParsePrefix(tco.Network[0].Address)
 		r.NoError(err)
 
 		c, err := cc.LoadContainer(ctx, co.pauseContainerId(id))
@@ -208,7 +208,7 @@ func TestSandbox(t *testing.T) {
 
 		addr := strings.Fields(strings.TrimSpace(lines[0]))[1]
 
-		r.Equal(addr, ca.String()+"/24", "address doesn't match")
+		r.Equal(addr, ca.Addr().String()+"/24", "address doesn't match")
 
 		t.Run("create on existing sandbox is no-op", func(t *testing.T) {
 			searchRes, err := co.checkSandbox(ctx, &sb, meta)
@@ -535,7 +535,7 @@ func TestSandbox(t *testing.T) {
 
 		r.Len(tco.Network, 1)
 
-		ca, err := netip.ParseAddr(tco.Network[0].Address)
+		ca, err := netip.ParsePrefix(tco.Network[0].Address)
 		r.NoError(err)
 
 		c, err := cc.LoadContainer(ctx, co.pauseContainerId(id))
@@ -556,7 +556,7 @@ func TestSandbox(t *testing.T) {
 			Timeout: 1 * time.Second,
 		}
 
-		resp, err := hc.Get(fmt.Sprintf("http://%s:80", ca.String()))
+		resp, err := hc.Get(fmt.Sprintf("http://%s:80", ca.Addr().String()))
 		r.NoError(err)
 
 		defer resp.Body.Close()
@@ -670,7 +670,7 @@ func TestSandbox(t *testing.T) {
 
 		r.Len(tco.Network, 1)
 
-		ca, err := netip.ParseAddr(tco.Network[0].Address)
+		ca, err := netip.ParsePrefix(tco.Network[0].Address)
 		r.NoError(err)
 
 		c, err := cc.LoadContainer(ctx, co.pauseContainerId(id))
@@ -686,7 +686,7 @@ func TestSandbox(t *testing.T) {
 			Timeout: 1 * time.Second,
 		}
 
-		resp, err := hc.Get(fmt.Sprintf("http://%s:80", ca.String()))
+		resp, err := hc.Get(fmt.Sprintf("http://%s:80", ca.Addr().String()))
 		r.NoError(err)
 
 		defer resp.Body.Close()
@@ -797,7 +797,7 @@ func TestSandbox(t *testing.T) {
 
 		r.Len(tco.Network, 1)
 
-		ca, err := netip.ParseAddr(tco.Network[0].Address)
+		ca, err := netip.ParsePrefix(tco.Network[0].Address)
 		r.NoError(err)
 
 		c, err := cc.LoadContainer(ctx, co.pauseContainerId(id))
@@ -818,7 +818,7 @@ func TestSandbox(t *testing.T) {
 			Timeout: 1 * time.Second,
 		}
 
-		resp, err := hc.Get(fmt.Sprintf("http://%s:80", ca.String()))
+		resp, err := hc.Get(fmt.Sprintf("http://%s:80", ca.Addr().String()))
 		r.NoError(err)
 
 		defer resp.Body.Close()
@@ -933,7 +933,7 @@ func TestSandbox(t *testing.T) {
 
 		r.Len(tco.Network, 1)
 
-		ca, err := netip.ParseAddr(tco.Network[0].Address)
+		ca, err := netip.ParsePrefix(tco.Network[0].Address)
 		r.NoError(err)
 
 		c, err := cc.LoadContainer(ctx, co.pauseContainerId(id))
@@ -960,7 +960,7 @@ func TestSandbox(t *testing.T) {
 			Timeout: 1 * time.Second,
 		}
 
-		resp, err := hc.Get(fmt.Sprintf("http://%s:80", ca.String()))
+		resp, err := hc.Get(fmt.Sprintf("http://%s:80", ca.Addr().String()))
 		r.NoError(err)
 
 		defer resp.Body.Close()
