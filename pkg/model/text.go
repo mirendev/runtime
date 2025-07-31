@@ -137,7 +137,7 @@ func (f *TextFormatter) Format(ctx context.Context, ent *entity.Entity) (string,
 		if kindid.Value.Id() == core_v1alpha.KindMetadata {
 			md, err := naturalEncodeMap(ent, es)
 			if err != nil {
-				return "", fmt.Errorf("failed to encode entity: %w", err)
+				return "", fmt.Errorf("failed to encode metadata for entity %s: %w", ent.ID, err)
 			}
 
 			metadata = md
@@ -145,7 +145,7 @@ func (f *TextFormatter) Format(ctx context.Context, ent *entity.Entity) (string,
 			// Everything else gets decoded based on its schema
 			m, err := NaturalEncode(ent, es)
 			if err != nil {
-				return "", fmt.Errorf("failed to encode entity: %w", err)
+				return "", fmt.Errorf("failed to encode kind %s for entity %s: %w", kindid.Value.Id(), ent.ID, err)
 			}
 
 			results = append(results, m)
@@ -166,7 +166,7 @@ func (f *TextFormatter) Format(ctx context.Context, ent *entity.Entity) (string,
 		"attrs": ent.Attrs,
 	})
 	if err != nil {
-		return "", fmt.Errorf("failed to encode entity: %w", err)
+		return "", fmt.Errorf("failed to encode raw attrs for entity %s: %w", ent.ID, err)
 	}
 
 	// If there's any data we could encode using schemas, we'll prepend that
@@ -177,7 +177,7 @@ func (f *TextFormatter) Format(ctx context.Context, ent *entity.Entity) (string,
 		var n2 yaml.Node
 		err = n2.Encode(results[0])
 		if err != nil {
-			return "", fmt.Errorf("failed to encode entity: %w", err)
+			return "", fmt.Errorf("failed to encode schema results for entity %s: %w", ent.ID, err)
 		}
 
 		n.Content = append(n2.Content, n.Content...)
@@ -186,6 +186,9 @@ func (f *TextFormatter) Format(ctx context.Context, ent *entity.Entity) (string,
 		err = n2.Encode(map[string]any{
 			"kinds": results,
 		})
+		if err != nil {
+			return "", fmt.Errorf("failed to encode multiple kinds for entity %s: %w", ent.ID, err)
+		}
 
 		n.Content = append(n2.Content, n.Content...)
 	}
@@ -197,7 +200,7 @@ func (f *TextFormatter) Format(ctx context.Context, ent *entity.Entity) (string,
 
 	err = enc.Encode(&n)
 	if err != nil {
-		return "", fmt.Errorf("failed to encode entity: %w", err)
+		return "", fmt.Errorf("failed to encode final YAML for entity %s: %w", ent.ID, err)
 	}
 
 	return buf.String(), nil
