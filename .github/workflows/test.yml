@@ -57,6 +57,40 @@ jobs:
     - name: Test
       run: dagger --progress=plain call test --dir=. --tests="./e2e" --tags="e2e"
 
+  build-binaries:
+    needs: lint
+    strategy:
+      matrix:
+        include:
+          - os: linux
+            arch: amd64
+            runner: depot-ubuntu-latest,dagger=0.18.9
+          - os: linux
+            arch: arm64
+            runner: depot-ubuntu-latest-arm,dagger=0.18.9
+          - os: darwin
+            arch: amd64
+            runner: macos-latest
+          - os: darwin
+            arch: arm64
+            runner: macos-latest
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      id-token: write
+      attestations: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version-file: 'go.mod'
+      - name: Build binary for ${{ matrix.os }}-${{ matrix.arch }}
+        run: |
+          GOOS=${{ matrix.os }} GOARCH=${{ matrix.arch }} make bin/runtime
+          # Create a zip file with the binary
+          zip -j runtime-${{ matrix.os }}-${{ matrix.arch }}.zip bin/runtime
+
   build:
     needs: lint
     runs-on: ubuntu-latest
