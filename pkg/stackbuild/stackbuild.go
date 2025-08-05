@@ -149,7 +149,7 @@ func (s *RubyStack) Name() string {
 }
 
 func (s *RubyStack) Detect() bool {
-	return s.hasFile("Gemfile") && s.detectGem("rails")
+	return s.hasFile("Gemfile")
 }
 
 type highlevelBuilder struct {
