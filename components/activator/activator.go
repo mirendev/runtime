@@ -425,7 +425,18 @@ func (a *localActivator) recoverSandboxes(ctx context.Context) error {
 			continue
 		}
 
-		addr := fmt.Sprintf("http://%s:%d", sb.Network[0].Address, port)
+		// Parse the address to extract just the IP from potential CIDR notation
+		ipAddr := sb.Network[0].Address
+		if prefix, err := netip.ParsePrefix(ipAddr); err == nil {
+			// New format: extract IP from CIDR
+			ipAddr = prefix.Addr().String()
+		} else if _, err := netip.ParseAddr(ipAddr); err != nil {
+			// Not a valid IP either, skip this sandbox
+			a.log.Error("invalid address format", "address", ipAddr, "sandbox", sb.ID)
+			continue
+		}
+		// If it's already a plain IP (old format), use as-is
+		addr := fmt.Sprintf("http://%s:%d", ipAddr, port)
 
 		// Calculate lease slots
 		var leaseSlots int
