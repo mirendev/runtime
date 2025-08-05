@@ -26,37 +26,10 @@ sleep 1
 
 cd /src
 
-# Wait for services to be ready (Dagger service bindings)
-echo "Checking service connectivity..."
-for service in etcd clickhouse minio; do
-  echo -n "Waiting for $service..."
-  count=0
-  while ! ping -c 1 -W 1 $service >/dev/null 2>&1; do
-    echo -n "."
-    sleep 1
-    count=$((count + 1))
-    if [ "$count" -ge 30 ]; then
-      echo " FAILED"
-      echo "ERROR: Could not reach $service after 30 seconds"
-      echo "Checking DNS resolution:"
-      getent hosts $service || echo "DNS lookup failed for $service"
-      break
-    fi
-  done
-  if [ "$count" -lt 30 ]; then
-    echo " OK"
-  fi
-done
-
-# Also check if services are actually responding
-echo "\nChecking service endpoints:"
-echo -n "ClickHouse native port: "
-nc -zv clickhouse 9000 2>&1 || echo "not reachable"
-echo -n "Etcd client port: "
-nc -zv etcd 2379 2>&1 || echo "not reachable"
-echo -n "MinIO port: "
-nc -zv minio 9000 2>&1 || echo "not reachable"
-echo ""
+# Wait for services to be ready using the common helper
+wait_for_service "etcd" "nc -z etcd 2379"
+wait_for_service "clickhouse" "nc -z clickhouse 9000"
+wait_for_service "minio" "nc -z minio 9000"
 
 # Build runtime
 make bin/runtime
