@@ -70,6 +70,7 @@ func Deploy(ctx *Context, opts struct {
 	)
 
 	var buildErrors []string
+	var buildLogs []string
 
 	if opts.Explain {
 		// In explain mode, write to stderr
@@ -177,21 +178,12 @@ func Deploy(ctx *Context, opts struct {
 					}
 				}
 
-				// Also check logs for compilation errors if we haven't found specific errors yet
-				if len(buildErrors) == 0 || (len(buildErrors) > 0 && strings.Contains(buildErrors[0], "exit code:")) {
-					for _, log := range status.Logs {
-						if log.Data != nil {
-							logStr := string(log.Data)
-							// Look for Go compilation errors
-							if strings.Contains(logStr, ".go:") && strings.Contains(logStr, ":") {
-								lines := strings.Split(logStr, "\n")
-								for _, line := range lines {
-									line = strings.TrimSpace(line)
-									if line != "" && strings.Contains(line, ".go:") {
-										buildErrors = append(buildErrors, line)
-									}
-								}
-							}
+				// Collect all logs for potential output on failure
+				for _, log := range status.Logs {
+					if log.Data != nil {
+						logStr := strings.TrimSpace(string(log.Data))
+						if logStr != "" {
+							buildLogs = append(buildLogs, logStr)
 						}
 					}
 				}
@@ -216,11 +208,19 @@ func Deploy(ctx *Context, opts struct {
 		wg.Wait()
 
 		if err != nil {
+			ctx.Printf("\n\nBuild failed.\n")
 
 			if len(buildErrors) > 0 {
-				ctx.Printf("\n\nBuild failed with the following errors:\n")
+				ctx.Printf("\nErrors:\n")
 				for _, errMsg := range buildErrors {
 					ctx.Printf("  - %s\n", errMsg)
+				}
+			}
+
+			if len(buildLogs) > 0 {
+				ctx.Printf("\nBuild output:\n")
+				for _, log := range buildLogs {
+					ctx.Printf("%s\n", log)
 				}
 			}
 			return err
@@ -230,10 +230,18 @@ func Deploy(ctx *Context, opts struct {
 
 	if results.Version() == "" {
 		ctx.Printf("\n\nError detected in building %s. No version returned.\n", name)
+
 		if len(buildErrors) > 0 {
-			ctx.Printf("\nBuild errors:\n")
+			ctx.Printf("\nErrors:\n")
 			for _, errMsg := range buildErrors {
 				ctx.Printf("  - %s\n", errMsg)
+			}
+		}
+
+		if len(buildLogs) > 0 {
+			ctx.Printf("\nBuild output:\n")
+			for _, log := range buildLogs {
+				ctx.Printf("%s\n", log)
 			}
 		}
 		return nil
