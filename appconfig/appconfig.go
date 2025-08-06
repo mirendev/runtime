@@ -153,8 +153,8 @@ func (ac *AppConfig) Validate() error {
 
 		// Validate fixed mode settings
 		if concurrency.Mode == "fixed" {
-			if concurrency.NumInstances < 0 {
-				return fmt.Errorf("service %s: num_instances must be non-negative", serviceName)
+			if concurrency.NumInstances <= 0 {
+				return fmt.Errorf("service %s: num_instances must be at least 1 for fixed mode", serviceName)
 			}
 			if concurrency.RequestsPerInstance > 0 {
 				return fmt.Errorf("service %s: requests_per_instance cannot be set in fixed mode", serviceName)

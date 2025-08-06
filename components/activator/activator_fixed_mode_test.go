@@ -129,12 +129,16 @@ func TestActivatorFixedModeRoundRobin(t *testing.T) {
 	// Both sandboxes should have been used
 	assert.Equal(t, 2, len(sandboxURLs), "should use both sandboxes")
 
-	// With only 10 iterations, distribution might not be perfectly even due to randomness
-	// Just verify both were used
+	// Verify distribution
+	// The implementation uses a random starting point for each request,
+	// so the distribution is random rather than strict round-robin
+	totalRequests := 0
 	for url, count := range sandboxURLs {
 		t.Logf("Sandbox %s used %d times", url, count)
 		assert.Greater(t, count, 0, "each sandbox should be used at least once")
+		totalRequests += count
 	}
+	assert.Equal(t, 10, totalRequests, "all requests should be handled")
 
 	// Verify no slots were tracked for fixed mode
 	vs := activator.versions[verKey{appVer.ID.String(), "default", "web"}]

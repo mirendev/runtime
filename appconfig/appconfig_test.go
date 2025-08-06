@@ -86,6 +86,7 @@ name = "test-app"
 
 [services.worker.concurrency]
 mode = "fixed"
+num_instances = 1
 requests_per_instance = 10
 `,
 			wantErr: "service worker: requests_per_instance cannot be set in fixed mode",
@@ -97,6 +98,7 @@ name = "test-app"
 
 [services.worker.concurrency]
 mode = "fixed"
+num_instances = 1
 scale_down_delay = "2m"
 `,
 			wantErr: "service worker: scale_down_delay cannot be set in fixed mode",
@@ -110,7 +112,18 @@ name = "test-app"
 mode = "fixed"
 num_instances = -1
 `,
-			wantErr: "service worker: num_instances must be non-negative",
+			wantErr: "service worker: num_instances must be at least 1 for fixed mode",
+		},
+		{
+			name: "zero num_instances in fixed mode",
+			config: `
+name = "test-app"
+
+[services.worker.concurrency]
+mode = "fixed"
+num_instances = 0
+`,
+			wantErr: "service worker: num_instances must be at least 1 for fixed mode",
 		},
 		{
 			name: "empty mode defaults to auto",
