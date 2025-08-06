@@ -198,6 +198,7 @@ const (
 	ConfigConcurrencyId = entity.Id("dev.miren.core/config.concurrency")
 	ConfigEntrypointId  = entity.Id("dev.miren.core/config.entrypoint")
 	ConfigPortId        = entity.Id("dev.miren.core/config.port")
+	ConfigServicesId    = entity.Id("dev.miren.core/config.services")
 	ConfigVariableId    = entity.Id("dev.miren.core/config.variable")
 )
 
@@ -206,6 +207,7 @@ type Config struct {
 	Concurrency Concurrency `cbor:"concurrency,omitempty" json:"concurrency,omitempty"`
 	Entrypoint  string      `cbor:"entrypoint,omitempty" json:"entrypoint,omitempty"`
 	Port        int64       `cbor:"port,omitempty" json:"port,omitempty"`
+	Services    []Services  `cbor:"services,omitempty" json:"services,omitempty"`
 	Variable    []Variable  `cbor:"variable,omitempty" json:"variable,omitempty"`
 }
 
@@ -225,6 +227,13 @@ func (o *Config) Decode(e entity.AttrGetter) {
 	}
 	if a, ok := e.Get(ConfigPortId); ok && a.Value.Kind() == entity.KindInt64 {
 		o.Port = a.Value.Int64()
+	}
+	for _, a := range e.GetAll(ConfigServicesId) {
+		if a.Value.Kind() == entity.KindComponent {
+			var v Services
+			v.Decode(a.Value.Component())
+			o.Services = append(o.Services, v)
+		}
 	}
 	for _, a := range e.GetAll(ConfigVariableId) {
 		if a.Value.Kind() == entity.KindComponent {
@@ -248,6 +257,9 @@ func (o *Config) Encode() (attrs []entity.Attr) {
 	if !entity.Empty(o.Port) {
 		attrs = append(attrs, entity.Int64(ConfigPortId, o.Port))
 	}
+	for _, v := range o.Services {
+		attrs = append(attrs, entity.Component(ConfigServicesId, v.Encode()))
+	}
 	for _, v := range o.Variable {
 		attrs = append(attrs, entity.Component(ConfigVariableId, v.Encode()))
 	}
@@ -267,6 +279,9 @@ func (o *Config) Empty() bool {
 	if !entity.Empty(o.Port) {
 		return false
 	}
+	if len(o.Services) != 0 {
+		return false
+	}
 	if len(o.Variable) != 0 {
 		return false
 	}
@@ -276,10 +291,12 @@ func (o *Config) Empty() bool {
 func (o *Config) InitSchema(sb *schema.SchemaBuilder) {
 	sb.Component("commands", "dev.miren.core/config.commands", schema.Doc("The command to run for a specific service type"), schema.Many)
 	(&Commands{}).InitSchema(sb.Builder("commands"))
-	sb.Component("concurrency", "dev.miren.core/config.concurrency", schema.Doc("How to control the concurrency for the application"))
+	sb.Component("concurrency", "dev.miren.core/config.concurrency", schema.Doc("How to control the concurrency for the application (deprecated, use services)"))
 	(&Concurrency{}).InitSchema(sb.Builder("concurrency"))
 	sb.String("entrypoint", "dev.miren.core/config.entrypoint", schema.Doc("The container entrypoint command"))
 	sb.Int64("port", "dev.miren.core/config.port", schema.Doc("The TCP port to access, default to 3000"))
+	sb.Component("services", "dev.miren.core/config.services", schema.Doc("Per-service configuration including concurrency controls"), schema.Many)
+	(&Services{}).InitSchema(sb.Builder("services"))
 	sb.Component("variable", "dev.miren.core/config.variable", schema.Doc("A variable to be exposed to the app"), schema.Many)
 	(&Variable{}).InitSchema(sb.Builder("variable"))
 }
@@ -370,6 +387,119 @@ func (o *Concurrency) Empty() bool {
 func (o *Concurrency) InitSchema(sb *schema.SchemaBuilder) {
 	sb.Int64("auto", "dev.miren.core/concurrency.auto", schema.Doc("How to scale the application based on the node"))
 	sb.Int64("fixed", "dev.miren.core/concurrency.fixed", schema.Doc("How concurrent requests this app can handle"))
+}
+
+const (
+	ServicesNameId               = entity.Id("dev.miren.core/services.name")
+	ServicesServiceConcurrencyId = entity.Id("dev.miren.core/services.service_concurrency")
+)
+
+type Services struct {
+	Name               string             `cbor:"name,omitempty" json:"name,omitempty"`
+	ServiceConcurrency ServiceConcurrency `cbor:"service_concurrency,omitempty" json:"service_concurrency,omitempty"`
+}
+
+func (o *Services) Decode(e entity.AttrGetter) {
+	if a, ok := e.Get(ServicesNameId); ok && a.Value.Kind() == entity.KindString {
+		o.Name = a.Value.String()
+	}
+	if a, ok := e.Get(ServicesServiceConcurrencyId); ok && a.Value.Kind() == entity.KindComponent {
+		o.ServiceConcurrency.Decode(a.Value.Component())
+	}
+}
+
+func (o *Services) Encode() (attrs []entity.Attr) {
+	if !entity.Empty(o.Name) {
+		attrs = append(attrs, entity.String(ServicesNameId, o.Name))
+	}
+	if !o.ServiceConcurrency.Empty() {
+		attrs = append(attrs, entity.Component(ServicesServiceConcurrencyId, o.ServiceConcurrency.Encode()))
+	}
+	return
+}
+
+func (o *Services) Empty() bool {
+	if !entity.Empty(o.Name) {
+		return false
+	}
+	if !o.ServiceConcurrency.Empty() {
+		return false
+	}
+	return true
+}
+
+func (o *Services) InitSchema(sb *schema.SchemaBuilder) {
+	sb.String("name", "dev.miren.core/services.name", schema.Doc("The service name (e.g. web, worker)"))
+	sb.Component("service_concurrency", "dev.miren.core/services.service_concurrency", schema.Doc("Concurrency configuration for this service"))
+	(&ServiceConcurrency{}).InitSchema(sb.Builder("service_concurrency"))
+}
+
+const (
+	ServiceConcurrencyModeId                = entity.Id("dev.miren.core/service_concurrency.mode")
+	ServiceConcurrencyNumInstancesId        = entity.Id("dev.miren.core/service_concurrency.num_instances")
+	ServiceConcurrencyRequestsPerInstanceId = entity.Id("dev.miren.core/service_concurrency.requests_per_instance")
+	ServiceConcurrencyScaleDownDelayId      = entity.Id("dev.miren.core/service_concurrency.scale_down_delay")
+)
+
+type ServiceConcurrency struct {
+	Mode                string `cbor:"mode,omitempty" json:"mode,omitempty"`
+	NumInstances        int64  `cbor:"num_instances,omitempty" json:"num_instances,omitempty"`
+	RequestsPerInstance int64  `cbor:"requests_per_instance,omitempty" json:"requests_per_instance,omitempty"`
+	ScaleDownDelay      string `cbor:"scale_down_delay,omitempty" json:"scale_down_delay,omitempty"`
+}
+
+func (o *ServiceConcurrency) Decode(e entity.AttrGetter) {
+	if a, ok := e.Get(ServiceConcurrencyModeId); ok && a.Value.Kind() == entity.KindString {
+		o.Mode = a.Value.String()
+	}
+	if a, ok := e.Get(ServiceConcurrencyNumInstancesId); ok && a.Value.Kind() == entity.KindInt64 {
+		o.NumInstances = a.Value.Int64()
+	}
+	if a, ok := e.Get(ServiceConcurrencyRequestsPerInstanceId); ok && a.Value.Kind() == entity.KindInt64 {
+		o.RequestsPerInstance = a.Value.Int64()
+	}
+	if a, ok := e.Get(ServiceConcurrencyScaleDownDelayId); ok && a.Value.Kind() == entity.KindString {
+		o.ScaleDownDelay = a.Value.String()
+	}
+}
+
+func (o *ServiceConcurrency) Encode() (attrs []entity.Attr) {
+	if !entity.Empty(o.Mode) {
+		attrs = append(attrs, entity.String(ServiceConcurrencyModeId, o.Mode))
+	}
+	if !entity.Empty(o.NumInstances) {
+		attrs = append(attrs, entity.Int64(ServiceConcurrencyNumInstancesId, o.NumInstances))
+	}
+	if !entity.Empty(o.RequestsPerInstance) {
+		attrs = append(attrs, entity.Int64(ServiceConcurrencyRequestsPerInstanceId, o.RequestsPerInstance))
+	}
+	if !entity.Empty(o.ScaleDownDelay) {
+		attrs = append(attrs, entity.String(ServiceConcurrencyScaleDownDelayId, o.ScaleDownDelay))
+	}
+	return
+}
+
+func (o *ServiceConcurrency) Empty() bool {
+	if !entity.Empty(o.Mode) {
+		return false
+	}
+	if !entity.Empty(o.NumInstances) {
+		return false
+	}
+	if !entity.Empty(o.RequestsPerInstance) {
+		return false
+	}
+	if !entity.Empty(o.ScaleDownDelay) {
+		return false
+	}
+	return true
+}
+
+func (o *ServiceConcurrency) InitSchema(sb *schema.SchemaBuilder) {
+	sb.String("mode", "dev.miren.core/service_concurrency.mode", schema.Doc("The concurrency mode (auto or fixed)"))
+	sb.Int64("num_instances", "dev.miren.core/service_concurrency.num_instances", schema.Doc("For fixed mode, number of instances to maintain"))
+	sb.Int64("requests_per_instance", "dev.miren.core/service_concurrency.requests_per_instance", schema.Doc("For auto mode, number of concurrent requests per instance"))
+	sb.String("scale_down_delay", "dev.miren.core/service_concurrency.scale_down_delay", schema.Doc("For auto mode, delay before scaling down idle instances (e.g. 2m, 15m)"))
 }
 
 const (
@@ -646,5 +776,5 @@ func init() {
 		(&Metadata{}).InitSchema(sb)
 		(&Project{}).InitSchema(sb)
 	})
-	schema.RegisterEncodedSchema("dev.miren.core", "v1alpha", []byte("\x1f\x8b\b\x00\x00\x00\x00\x00\x00\xff\xa4VYn\xdb0\x10\xbdG\xf7\r(\x10\xa0*z\"\x83&G\x12c\x89$(Z\x89?ۢ\xe8A\x92\xf4\x86\xedwA\x8e\x86fh-D\xf2cp\xf1{\x9cy\xb3h\xee\x85b=(\x01c\xd5K\v\xaa\xe2\xda\x02\x1c\xa4\x12\xc3\xc3\xcd\xe3ӯ\xfe\xb4b\xc6\xfc\t\x18\x9b\xdd2c\x10\xf7\xaf\x16\xbagRe\xa4u-\xa1\x13Ï\xbb\xbd\x14\xb7\xef/\xc1\x15\xe3N\x8e\xb0\x1b\xc1\x0eR+\xb4+;s'\x03{)\x02ŋ\x19\nc\xf55p\x17\xb0\rm&P3\x914\xe37֙\x96u\xc6ʞ\xd9\xd3\xce\x1b͙1\xb7/\xe7\xfc\x9dX\xd0\xe71\xfb\xc7tY\xe2\xf7\xf7`\xf4\xaby\x82J\xdf(\xb0\xe1\t\xc0\xa57\xba\x1e\x9c\x95\xaaY5\x9c\xbc\xbc`\xc6`Y'kF\xd6\xe7\xf1\xa4\xdb\x12\xf3\x7f\x06\xf3s\x85\x88\xc1gEx\xc2\xeb\xf8(J\xef\x96\x10=S\xb2\x86\x01c\xd5\xc6]\xe2w\xc0\x7f\xde\xc2\xef\x84l\x88F燥*\xb6D;/c\x0f\x8e\t\xe6ؼ\x8ct[$\xe3\xbdw\xea\xcd\x02Cձ=t\x83\xe8\x99:\xfd\ro\xd5Ӊw\x04\xc2z6\x8d\"\x81ǈ\xf3O\xae\xe6\xdb%ܓ\v\xa7%\x8a\vn\xea\x16T\xbc(\xde\\\xd9\xd2?J\x04\xfc}7'`B\xb2\x9c\x8a\x1f\xd7@S\xfc1\x1b\xe3n\x82\xdf/\xb4\xac\b\xe7Zղ\xc1\x88Mk\x0f\x95\\\xf7F+P\uef1ad\xc8تK\xb6\x125~=̩\x81\xf8\x8a\xeb\xbegJ\xa4\xe9\xd4Ƴ\r\xf3\xae6͋\xf4\xe5M?\xcf\x10b *\xcc>\xdal\xe5nD\x0f`G\xc91\xe3\x1b\xda\x14W>\xd1\xcc\xc68\xba\xaa\xf8\xd1ZP\xfc\x14^9\xa4\a\x1bJ~)Q2\xb2=G\xccHR\xb1\xa3\xd3\xd8\x00\xc2\xca[ȥr\xb3\r9\xc5\xd5\xf2\x160\n\x80KB\xaeJ\x98\xaa\xb1\xf4\x84w\x13\x94\xb3'\xa3\xa5\xc2*\xbbN\xf6y\xac\xf3&11\x18m\x11+\u008a\xac[+\x82\x91Y\xc9\xf6\x1d\xa4E\x10Ϟ_\x04D\xf5\xf4O(1T\a\xc0\xe4\xe2~\x91\v\x92'fD\r\xa0\x06\xe9g\xa4\x80\x95\xe7\xadg\x10{\xad\xf1\x83\xf1z\t?\xb2\xee\x88X\xc0eq\xe1\x10\xc5꿦n\x18l\xf8\xb4\xd2@e\xcf\x1a\xd8\x1dm\x87n\x9c\xb7\xb9\x10kM\xbcp\xa4\xb8*\xa0(\x9d*\x02\xe1\x87\x15\xc2t\x9am\xd21\xb6D\xe3C\u0094\xff\xf10\xb4ں\x1dN\xea\xfe[\xb74\xad\xc7\tqm\xbc\xdd\x18\x80\xe8\xf6\xfc\xb5_\x9d\x93R\xbb7\xe7\x82\xff\x00\x00\x00\xff\xff\x01\x00\x00\xff\xff/\xcfo>\x82\f\x00\x00"))
+	schema.RegisterEncodedSchema("dev.miren.core", "v1alpha", []byte("\x1f\x8b\b\x00\x00\x00\x00\x00\x00\xff\xa4Wَ\xd3<\x14~\x8f\xffg\a\ti\x10\x01\xc4\rW\xbcJ\xe4\xc6'\xa9\xa7\xf1\x82\xedf\xa6\x97,\x82\a\x99\x19\xde\x10\xae\x91צ\xae\xe3X37\x95\x97|\x9f\xcf\xf9\xceR\xfb\x163D\x81a\x98\x1aJ$\xb0\xa6\xe3\x12`G\x18VwW\xa7\xab\xef\xccj\x83\x84\xf8m12\xd9EB8\xdc\xdf\x1es\x8a\bKH\xfb\x9e\xc0\x88շ\x9b\r\xc1\xd7\xcf\xcf\xc1\r\xea4\x99\xa0\x9d@*\u0099\xb3+Y\xd3\a\x01\x1b\x82-\xc5\x7f\x19\n!\xf9%t\xdab\x870\xf1\xa0\xc1\x93\f\xd3\a4\x8a-\x1a\x85$\x14\xc9Ck\x8c\xee\x90\x10\xd7\xff\xe7\xfc\xf5,\xce\xe7)\xf9\xc2o\xd6\xf8\xfd\xd5\x1a\xfd(O\xd0\xf0+\x06\xd2\x1e\x01nh\x8c\ue556\x84\rEÃ\x97g\xcc.XR\x93\x1e\x05\xeb\xd3x\x86\xdd\x1a\xf3\xbf[\xf3S\x85\x02\x83\xc9\n{\x84\xd1\xf1$Jϖ\x10\x141҃r\xb1\xda\xc6\xd9\xcco\x8b\x7f\xbd\x86o1\x19\x02\rO\x17kU\xdc\x06ڼ\x8c\x144\xc2H\xa3\xbc\x8ca\xb7J\xc6[\xe3ԓ\x05\x86fD\x1b\x18\x15\xa6\x88\x1d\xfeسz\xbfb\x1c\x01;ΦQ$0\x18|\xfcI\xd5|\xba\x84\xbbw\xe1l\x03\xc5\x19w\xe8\x16\xa1x\x9dx\xb9\xb2\r_\xd4\b\xf8\xeb&'\xe0\x8cd9\x15_\x96@>\xfe.\x1b\xe3\xcc\xc3o\x17ZV\x84w\x9c\xf5dp\x11\xf3c\x03%\x1d\xa7\x823`\xfa8\xf22$l\xcd9[\x8d\x1a?\xefrj8|\xd3qJ\x11\xc3\xf3t\xdaƵ\x15\xf3.V͋\xf4\xf5M?͐\xc0\x10\xa8\\\xf6\x85\xc9Z\xeeF\xb4\x029\x91\xcee\xfc\x10&Օ\x1fh\xb21\x8e\xae\xb2n/%\xb0\xee`O\xd9\xcd\x17V\x94|[\xa3dd{\x88\x98\x91\xa4A{\xcd]\x03\xb0#caG\x98\xce6\xe49\xae'\xd7\xe0\xa2\x00n\x18\x90E\t\xe7j,\x1da\xdc\x04\xa6\xe5Ap\xc2\\\x95]\xce\xe6i\xac\xd3&\xe1\x19\x04\x97\x0e\x8b\xed(XW*\x02\x9f\x0f'E\x10\xd7\x1e^\x04\x81\xaa>ni\xeb\x0e\f\x85\xd6mS\xf3\xcd\x12\xce\x0f\xda4IUnc\xc5\xe3\xcf\xf5\x1e\xe7έQ\xe1G\xf6o=C\xd6P\x8e\xbd\x16v\x94\xe6\xc8\xfb\n\n\xb6\xa7-aJ#f\xc2m\xb8\xe8\xe9\xd2Ii|\xaa`\x94\xf0e\x0fJ\xabV\x80\x8c<\x96y\x9f\xdf:9\xe1c\xc5\t\xaaC#\xb4\x98_\xb1\x16È\\0\xc5\xd9jm\x83\x93\xfe\x8c\xd9\x11\xe5\x86\x18\x02\\\xaa\xaa\tI\x826#̫*\xae=\xbc\xaa\x02\xd5\xfd/\xa6\x81\xa1ف\x13\xb03\x834\x85\xd2v\x1fQ\n\x98\"\xe6\xe5a\xb1\xe485\fxù\xbb\x86=^\xc2Oh\xdc;,\xb8a\xf5\xdfQ\xa0(~\xe5\xef\x18ֆW\x85k\t\xa1h\x80v/G\xe7\xc6q\x9a\nQ\xba\x1aU^\xd4/*(j\xef\xea\x96\xf0E\x81p\xfeF\x1c\xe6\x8f\xc3\x1a\x8dw3\xa6\xf4Ý\xdar\xa9[\xf7\xfe57ȥ7p|w\x95\x1e\x8d+ϊ\xb0{\xbcC\x17_\x1fs\xbbWo\xdb\xff\x00\x00\x00\xff\xff\x01\x00\x00\xff\xff\x99JLg\xd8\x0f\x00\x00"))
 }

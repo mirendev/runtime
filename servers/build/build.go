@@ -344,8 +344,11 @@ func (b *Builder) BuildFromTar(ctx context.Context, state *build_v1alpha.Builder
 	srvMap := map[string]string{}
 
 	if ac != nil {
+		// If the appconfig contains any commands, extract those
 		for k, v := range ac.Services {
-			srvMap[k] = v
+			if v != nil && v.Command != "" {
+				srvMap[k] = v.Command
+			}
 		}
 	}
 
@@ -358,7 +361,7 @@ func (b *Builder) BuildFromTar(ctx context.Context, state *build_v1alpha.Builder
 		b.Log.Debug("using procfile", "services", maps.Keys(services))
 	}
 
-	// Prioritize the app config over the Procfile
+	// Prioritize the app config over the Procfile; if a service is defined in both, use the app config
 	for k, v := range services {
 		if _, ok := srvMap[k]; !ok {
 			srvMap[k] = v
@@ -373,6 +376,46 @@ func (b *Builder) BuildFromTar(ctx context.Context, state *build_v1alpha.Builder
 	}
 
 	mrv.Config.Commands = serviceCmds
+
+	// Apply app-level concurrency from AppConfig if present (backwards compatibility)
+	if ac != nil && ac.Concurrency != nil {
+		mrv.Config.Concurrency.Fixed = int64(*ac.Concurrency)
+	}
+
+	// Apply service-level concurrency from AppConfig if present
+	// We iterate through all services that have commands (from srvMap)
+	// and apply concurrency config if available in app config
+	for serviceName := range srvMap {
+		svc := core_v1alpha.Services{
+			Name: serviceName,
+		}
+
+		// Check if this service has concurrency config in app config
+		if ac != nil && ac.Services != nil {
+			if serviceConfig, ok := ac.Services[serviceName]; ok && serviceConfig != nil && serviceConfig.Concurrency != nil {
+				// Create service concurrency config
+				svcConcurrency := core_v1alpha.ServiceConcurrency{}
+
+				if serviceConfig.Concurrency.Mode != "" {
+					svcConcurrency.Mode = serviceConfig.Concurrency.Mode
+				}
+				if serviceConfig.Concurrency.NumInstances > 0 {
+					svcConcurrency.NumInstances = int64(serviceConfig.Concurrency.NumInstances)
+				}
+				if serviceConfig.Concurrency.RequestsPerInstance > 0 {
+					svcConcurrency.RequestsPerInstance = int64(serviceConfig.Concurrency.RequestsPerInstance)
+				}
+				if serviceConfig.Concurrency.ScaleDownDelay != "" {
+					svcConcurrency.ScaleDownDelay = serviceConfig.Concurrency.ScaleDownDelay
+				}
+
+				svc.ServiceConcurrency = svcConcurrency
+			}
+		}
+
+		// Add to services list
+		mrv.Config.Services = append(mrv.Config.Services, svc)
+	}
 
 	id, err := b.ec.Create(ctx, mrv.Version, mrv)
 	if err != nil {
