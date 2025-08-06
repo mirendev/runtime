@@ -73,8 +73,9 @@ type verKey struct {
 }
 
 type localActivator struct {
-	mu       sync.Mutex
-	versions map[verKey]*verSandboxes
+	mu               sync.Mutex
+	versions         map[verKey]*verSandboxes
+	pendingCreations map[verKey]int // Track pending sandbox creations per service
 
 	log *slog.Logger
 	eac *entityserver_v1alpha.EntityAccessClient
@@ -84,9 +85,10 @@ var _ AppActivator = (*localActivator)(nil)
 
 func NewLocalActivator(ctx context.Context, log *slog.Logger, eac *entityserver_v1alpha.EntityAccessClient) AppActivator {
 	la := &localActivator{
-		log:      log.With("module", "activator"),
-		eac:      eac,
-		versions: make(map[verKey]*verSandboxes),
+		log:              log.With("module", "activator"),
+		eac:              eac,
+		versions:         make(map[verKey]*verSandboxes),
+		pendingCreations: make(map[verKey]int),
 	}
 
 	// Recover existing sandboxes on startup
@@ -129,18 +131,30 @@ func (a *localActivator) ensureFixedInstances(ctx context.Context) {
 			targetInstances = 1
 		}
 
+		// Account for pending creations to avoid over-provisioning
+		pendingCount := a.pendingCreations[key]
+		totalExpected := runningCount + pendingCount
+
 		// Start additional instances if needed
-		for i := runningCount; i < targetInstances; i++ {
-			a.log.Info("starting fixed instance", "app", vs.ver.App, "service", key.service, "current", runningCount, "target", targetInstances)
+		for i := totalExpected; i < targetInstances; i++ {
+			a.log.Info("starting fixed instance", "app", vs.ver.App, "service", key.service, "current", runningCount, "pending", pendingCount, "target", targetInstances)
 
-			// Release the lock temporarily while creating sandbox
-			a.mu.Unlock()
-			_, err := a.activateApp(ctx, vs.ver, key.pool, key.service)
-			a.mu.Lock()
+			// Mark as pending before releasing lock
+			a.pendingCreations[key]++
 
-			if err != nil {
-				a.log.Error("failed to start fixed instance", "app", vs.ver.App, "service", key.service, "error", err)
-			}
+			// Create sandbox in background to avoid holding lock
+			go func() {
+				_, err := a.activateApp(ctx, vs.ver, key.pool, key.service)
+
+				// Update pending count after creation attempt
+				a.mu.Lock()
+				a.pendingCreations[key]--
+				a.mu.Unlock()
+
+				if err != nil {
+					a.log.Error("failed to start fixed instance", "app", vs.ver.App, "service", key.service, "error", err)
+				}
+			}()
 		}
 	}
 }
