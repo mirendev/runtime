@@ -1,8 +1,10 @@
 package appconfig
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	toml "github.com/pelletier/go-toml/v2"
 )
@@ -21,14 +23,28 @@ type BuildConfig struct {
 	AlpineImage string `toml:"alpine_image"`
 }
 
+// ServiceConcurrencyConfig represents per-service concurrency configuration
+type ServiceConcurrencyConfig struct {
+	Mode                string `toml:"mode"` // "auto" or "fixed"
+	RequestsPerInstance int    `toml:"requests_per_instance"`
+	ScaleDownDelay      string `toml:"scale_down_delay"` // e.g. "2m", "15m"
+	NumInstances        int    `toml:"num_instances"`
+}
+
+// ServiceConfig represents configuration for a specific service
+type ServiceConfig struct {
+	Command     string                    `toml:"command"`
+	Concurrency *ServiceConcurrencyConfig `toml:"concurrency"`
+}
+
 type AppConfig struct {
-	Name        string            `toml:"name"`
-	PostImport  string            `toml:"post_import"`
-	EnvVars     []AppEnvVar       `toml:"env"`
-	Concurrency *int              `toml:"concurrency"`
-	Services    map[string]string `toml:"services"`
-	Build       *BuildConfig      `toml:"build"`
-	Include     []string          `toml:"include"`
+	Name        string                    `toml:"name"`
+	PostImport  string                    `toml:"post_import"`
+	EnvVars     []AppEnvVar               `toml:"env"`
+	Concurrency *int                      `toml:"concurrency"`
+	Services    map[string]*ServiceConfig `toml:"services"`
+	Build       *BuildConfig              `toml:"build"`
+	Include     []string                  `toml:"include"`
 }
 
 const AppConfigPath = ".runtime/app.toml"
@@ -49,6 +65,11 @@ func LoadAppConfig() (*AppConfig, error) {
 			dec := toml.NewDecoder(fi)
 			err = dec.Decode(&ac)
 			if err != nil {
+				return nil, err
+			}
+
+			// Validate the configuration
+			if err := ac.Validate(); err != nil {
 				return nil, err
 			}
 
@@ -74,6 +95,11 @@ func LoadAppConfigUnder(dir string) (*AppConfig, error) {
 			return nil, err
 		}
 
+		// Validate the configuration
+		if err := ac.Validate(); err != nil {
+			return nil, err
+		}
+
 		return &ac, nil
 	}
 
@@ -87,5 +113,57 @@ func Parse(data []byte) (*AppConfig, error) {
 		return nil, err
 	}
 
+	// Validate the configuration
+	if err := ac.Validate(); err != nil {
+		return nil, err
+	}
+
 	return &ac, nil
+}
+
+// Validate checks that the AppConfig has valid values
+func (ac *AppConfig) Validate() error {
+	// Validate service configurations
+	for serviceName, svcConfig := range ac.Services {
+		if svcConfig == nil || svcConfig.Concurrency == nil {
+			continue
+		}
+
+		concurrency := svcConfig.Concurrency
+
+		// Validate mode
+		if concurrency.Mode != "" && concurrency.Mode != "auto" && concurrency.Mode != "fixed" {
+			return fmt.Errorf("service %s: invalid concurrency mode %q, must be \"auto\" or \"fixed\"", serviceName, concurrency.Mode)
+		}
+
+		// Validate auto mode settings
+		if concurrency.Mode == "auto" || concurrency.Mode == "" {
+			if concurrency.RequestsPerInstance < 0 {
+				return fmt.Errorf("service %s: requests_per_instance must be non-negative", serviceName)
+			}
+			if concurrency.ScaleDownDelay != "" {
+				if _, err := time.ParseDuration(concurrency.ScaleDownDelay); err != nil {
+					return fmt.Errorf("service %s: invalid scale_down_delay %q: %v", serviceName, concurrency.ScaleDownDelay, err)
+				}
+			}
+			if concurrency.NumInstances > 0 {
+				return fmt.Errorf("service %s: num_instances cannot be set in auto mode", serviceName)
+			}
+		}
+
+		// Validate fixed mode settings
+		if concurrency.Mode == "fixed" {
+			if concurrency.NumInstances < 0 {
+				return fmt.Errorf("service %s: num_instances must be non-negative", serviceName)
+			}
+			if concurrency.RequestsPerInstance > 0 {
+				return fmt.Errorf("service %s: requests_per_instance cannot be set in fixed mode", serviceName)
+			}
+			if concurrency.ScaleDownDelay != "" {
+				return fmt.Errorf("service %s: scale_down_delay cannot be set in fixed mode", serviceName)
+			}
+		}
+	}
+
+	return nil
 }

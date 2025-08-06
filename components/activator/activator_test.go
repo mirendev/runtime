@@ -31,6 +31,18 @@ func TestActivatorRetireUnusedSandboxes(t *testing.T) {
 	ver := &core_v1alpha.AppVersion{
 		ID:  entity.Id("ver-1"),
 		App: entity.Id("app-1"),
+		Config: core_v1alpha.Config{
+			Services: []core_v1alpha.Services{
+				{
+					Name: "web",
+					ServiceConcurrency: core_v1alpha.ServiceConcurrency{
+						Mode:                "auto",
+						RequestsPerInstance: 10,
+						ScaleDownDelay:      "2m", // 2 minute scale down for testing
+					},
+				},
+			},
+		},
 	}
 
 	// Create sandbox entities using the entityserver.Client
@@ -60,7 +72,7 @@ func TestActivatorRetireUnusedSandboxes(t *testing.T) {
 		log: log,
 		eac: server.EAC,
 		versions: map[verKey]*verSandboxes{
-			{"ver-1", "default"}: {
+			{"ver-1", "default", "web"}: {
 				ver: ver,
 				sandboxes: []*sandbox{
 					// Old sandbox - should be retired
@@ -97,14 +109,14 @@ func TestActivatorRetireUnusedSandboxes(t *testing.T) {
 	}
 
 	// Count initial sandboxes
-	initialCount := len(activator.versions[verKey{"ver-1", "default"}].sandboxes)
+	initialCount := len(activator.versions[verKey{"ver-1", "default", "web"}].sandboxes)
 	assert.Equal(t, 3, initialCount)
 
 	// Run retirement
 	activator.retireUnusedSandboxes()
 
 	// Check that non-RUNNING sandbox was removed and old sandbox was marked for retirement
-	vs := activator.versions[verKey{"ver-1", "default"}]
+	vs := activator.versions[verKey{"ver-1", "default", "web"}]
 	assert.Equal(t, 1, len(vs.sandboxes), "should only have recent sandbox left")
 	assert.Equal(t, sb2.ID, vs.sandboxes[0].sandbox.ID, "should be the recent sandbox")
 
@@ -149,7 +161,7 @@ func TestActivatorLeaseOperations(t *testing.T) {
 	activator := &localActivator{
 		log: log,
 		versions: map[verKey]*verSandboxes{
-			{"ver-1", "default"}: {
+			{"ver-1", "default", "web"}: {
 				ver:        testVer,
 				sandboxes:  []*sandbox{testSandbox},
 				leaseSlots: 2,
@@ -162,6 +174,7 @@ func TestActivatorLeaseOperations(t *testing.T) {
 		ver:     testVer,
 		sandbox: testSandbox.sandbox,
 		pool:    "default",
+		service: "web",
 		Size:    2,
 	}
 
@@ -192,7 +205,7 @@ func TestActivatorConcurrentSafety(t *testing.T) {
 	go func() {
 		for range 100 {
 			activator.mu.Lock()
-			activator.versions[verKey{"ver-1", "default"}] = &verSandboxes{
+			activator.versions[verKey{"ver-1", "default", "web"}] = &verSandboxes{
 				sandboxes: []*sandbox{},
 			}
 			activator.mu.Unlock()
@@ -204,7 +217,7 @@ func TestActivatorConcurrentSafety(t *testing.T) {
 	go func() {
 		for range 100 {
 			activator.mu.Lock()
-			_ = activator.versions[verKey{"ver-1", "default"}]
+			_ = activator.versions[verKey{"ver-1", "default", "web"}]
 			activator.mu.Unlock()
 		}
 		done <- true
@@ -214,7 +227,7 @@ func TestActivatorConcurrentSafety(t *testing.T) {
 	go func() {
 		for range 100 {
 			activator.mu.Lock()
-			delete(activator.versions, verKey{"ver-1", "default"})
+			delete(activator.versions, verKey{"ver-1", "default", "web"})
 			activator.mu.Unlock()
 		}
 		done <- true
@@ -298,7 +311,7 @@ func TestActivatorRecoverSandboxesWithEntityServer(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify sandbox was recovered
-	key := verKey{appVer.ID.String(), "production"}
+	key := verKey{appVer.ID.String(), "production", "web"}
 	vs, ok := activator.versions[key]
 	require.True(t, ok, "version should be in map")
 	require.Len(t, vs.sandboxes, 1, "should have recovered 1 running sandbox")
@@ -486,7 +499,7 @@ func TestActivatorRecoverSandboxesWithCIDR(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify sandbox was recovered with correct URL (without CIDR notation)
-	key := verKey{appVer.ID.String(), "default"}
+	key := verKey{appVer.ID.String(), "default", "web"}
 	vs, ok := activator.versions[key]
 	require.True(t, ok, "version should be in map")
 	require.Len(t, vs.sandboxes, 1, "should have recovered 1 running sandbox")

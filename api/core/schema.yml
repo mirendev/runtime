@@ -75,7 +75,7 @@ kinds:
           doc: The TCP port to access, default to 3000
         concurrency:
           type: component
-          doc: How to control the concurrency for the application
+          doc: How to control the concurrency for the application (deprecated, use services)
           attrs:
             fixed:
               type: int
@@ -83,6 +83,30 @@ kinds:
             auto:
               type: int
               doc: How to scale the application based on the node
+        services:
+          type: component
+          doc: Per-service configuration including concurrency controls
+          many: true
+          attrs:
+            name:
+              type: string
+              doc: The service name (e.g. web, worker)
+            service_concurrency:
+              type: component
+              doc: Concurrency configuration for this service
+              attrs:
+                mode:
+                  type: string
+                  doc: The concurrency mode (auto or fixed)
+                requests_per_instance:
+                  type: int
+                  doc: For auto mode, number of concurrent requests per instance
+                scale_down_delay:
+                  type: string
+                  doc: For auto mode, delay before scaling down idle instances (e.g. 2m, 15m)
+                num_instances:
+                  type: int
+                  doc: For fixed mode, number of instances to maintain
         entrypoint:
           type: string
           doc: The container entrypoint command
