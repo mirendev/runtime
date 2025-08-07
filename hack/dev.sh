@@ -26,6 +26,11 @@ sleep 1
 
 cd /src
 
+# Wait for services to be ready using the common helper
+wait_for_service "etcd" "nc -z etcd 2379"
+wait_for_service "clickhouse" "nc -z clickhouse 9000"
+wait_for_service "minio" "nc -z minio 9000"
+
 # Build runtime
 make bin/runtime
 

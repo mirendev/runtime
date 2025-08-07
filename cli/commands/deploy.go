@@ -69,7 +69,11 @@ func Deploy(ctx *Context, opts struct {
 		results *build_v1alpha.BuilderClientBuildFromTarResults
 	)
 
+	var buildErrors []string
+	var buildLogs []string
+
 	if opts.Explain {
+		// In explain mode, write to stderr
 		pw, err := progresswriter.NewPrinter(ctx, os.Stderr, opts.ExplainFormat)
 		if err != nil {
 			return err
@@ -93,6 +97,8 @@ func Deploy(ctx *Context, opts struct {
 				case pw.Status() <- &status:
 					// ok
 				}
+			case "error":
+				buildErrors = append(buildErrors, update.Error())
 			}
 
 			return nil
@@ -100,6 +106,12 @@ func Deploy(ctx *Context, opts struct {
 
 		results, err = bc.BuildFromTar(ctx, name, stream.ServeReader(ctx, r), cb)
 		if err != nil {
+			if len(buildErrors) > 0 {
+				ctx.Printf("\n\nBuild failed with the following errors:\n")
+				for _, errMsg := range buildErrors {
+					ctx.Printf("  - %s\n", errMsg)
+				}
+			}
 			return err
 		}
 
@@ -159,19 +171,58 @@ func Deploy(ctx *Context, opts struct {
 
 				p.Send(&status)
 
+				// Extract error messages from status
+				for _, vertex := range status.Vertexes {
+					if vertex.Error != "" {
+						buildErrors = append(buildErrors, vertex.Error)
+					}
+				}
+
+				// Collect all logs for potential output on failure
+				for _, log := range status.Logs {
+					if log.Data != nil {
+						logStr := strings.TrimSpace(string(log.Data))
+						if logStr != "" {
+							buildLogs = append(buildLogs, logStr)
+						}
+					}
+				}
+
 				return nil
 			case "message":
 				msg := update.Message()
 				go func() {
 					updateCh <- msg
 				}()
+			case "error":
+				buildErrors = append(buildErrors, update.Error())
 			}
 
 			return nil
 		})
 
 		results, err = bc.BuildFromTar(ctx, name, stream.ServeReader(ctx, r), cb)
+
+		// Ensure the progress UI is shut down before printing
+		p.Quit()
+		wg.Wait()
+
 		if err != nil {
+			ctx.Printf("\n\nBuild failed.\n")
+
+			if len(buildErrors) > 0 {
+				ctx.Printf("\nErrors:\n")
+				for _, errMsg := range buildErrors {
+					ctx.Printf("  - %s\n", errMsg)
+				}
+			}
+
+			if len(buildLogs) > 0 {
+				ctx.Printf("\nBuild output:\n")
+				for _, log := range buildLogs {
+					ctx.Printf("%s\n", log)
+				}
+			}
 			return err
 		}
 
@@ -179,6 +230,20 @@ func Deploy(ctx *Context, opts struct {
 
 	if results.Version() == "" {
 		ctx.Printf("\n\nError detected in building %s. No version returned.\n", name)
+
+		if len(buildErrors) > 0 {
+			ctx.Printf("\nErrors:\n")
+			for _, errMsg := range buildErrors {
+				ctx.Printf("  - %s\n", errMsg)
+			}
+		}
+
+		if len(buildLogs) > 0 {
+			ctx.Printf("\nBuild output:\n")
+			for _, log := range buildLogs {
+				ctx.Printf("%s\n", log)
+			}
+		}
 		return nil
 	}
 

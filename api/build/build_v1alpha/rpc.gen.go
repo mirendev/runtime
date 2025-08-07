@@ -16,11 +16,14 @@ type StatusUpdate interface {
 	SetMessage(string)
 	Buildkit() []byte
 	SetBuildkit([]byte)
+	Error() string
+	SetError(string)
 }
 
 type statusUpdate struct {
 	U_Message  *string `cbor:"1,keyasint,omitempty" json:"message,omitempty"`
 	U_Buildkit *[]byte `cbor:"2,keyasint,omitempty" json:"buildkit,omitempty"`
+	U_Error    *string `cbor:"3,keyasint,omitempty" json:"error,omitempty"`
 }
 
 func (v *statusUpdate) Which() string {
@@ -29,6 +32,9 @@ func (v *statusUpdate) Which() string {
 	}
 	if v.U_Buildkit != nil {
 		return "buildkit"
+	}
+	if v.U_Error != nil {
+		return "error"
 	}
 	return ""
 }
@@ -42,6 +48,7 @@ func (v *statusUpdate) Message() string {
 
 func (v *statusUpdate) SetMessage(val string) {
 	v.U_Buildkit = nil
+	v.U_Error = nil
 	v.U_Message = &val
 }
 
@@ -54,7 +61,21 @@ func (v *statusUpdate) Buildkit() []byte {
 
 func (v *statusUpdate) SetBuildkit(val []byte) {
 	v.U_Message = nil
+	v.U_Error = nil
 	v.U_Buildkit = &val
+}
+
+func (v *statusUpdate) Error() string {
+	if v.U_Error == nil {
+		return ""
+	}
+	return *v.U_Error
+}
+
+func (v *statusUpdate) SetError(val string) {
+	v.U_Message = nil
+	v.U_Buildkit = nil
+	v.U_Error = &val
 }
 
 type statusData struct {
