@@ -1,0 +1,71 @@
+version: '3.8'
+
+services:
+  runtime:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.runtime
+      args:
+        TARGETARCH: ${TARGETARCH:-amd64}
+    image: miren/runtime:latest
+    container_name: miren-runtime
+    privileged: true
+    pid: host
+    network_mode: host
+    volumes:
+      - runtime-data:/data
+      - ${HOME}/.config/runtime:/root/.config/runtime
+      - ${PWD}:/workspace
+    working_dir: /workspace
+    environment:
+      - S3_URL=http://localhost:9000
+      - ETCD_ENDPOINTS=http://localhost:2379
+    depends_on:
+      - etcd
+      - clickhouse
+      - minio
+
+  etcd:
+    image: oci.miren.cloud/etcd:v1
+    container_name: miren-etcd
+    ports:
+      - "2379:2379"
+    command:
+      - etcd
+      - --listen-client-urls=http://0.0.0.0:2379
+      - --advertise-client-urls=http://localhost:2379
+      - --initial-advertise-peer-urls=http://localhost:2380
+    volumes:
+      - etcd-data:/etcd-data
+
+  clickhouse:
+    image: oci.miren.cloud/clickhouse:v1
+    container_name: miren-clickhouse
+    ports:
+      - "9000:9000"
+      - "8123:8123"
+    environment:
+      - CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT=1
+      - CLICKHOUSE_PASSWORD=default
+    volumes:
+      - clickhouse-data:/var/lib/clickhouse
+
+  minio:
+    image: oci.miren.cloud/minio:v1
+    container_name: miren-minio
+    ports:
+      - "9001:9000"
+      - "9002:9001"
+    environment:
+      - MINIO_ROOT_USER=admin
+      - MINIO_ROOT_PASSWORD=password
+      - MINIO_UPDATE=off
+    command: minio server /data --console-address ":9001"
+    volumes:
+      - minio-data:/data
+
+volumes:
+  runtime-data:
+  etcd-data:
+  clickhouse-data:
+  minio-data:

@@ -1,0 +1,146 @@
+# Multi-stage Dockerfile for Miren Runtime OCI image
+# This image contains all executables needed to run the runtime server
+
+# Build stage
+FROM golang:1.24 AS builder
+
+WORKDIR /build
+
+# Copy source code
+COPY . .
+
+# Build runtime binary
+RUN make bin/runtime
+
+# Final stage
+FROM ubuntu:22.04
+
+# Install runtime dependencies
+RUN apt-get update && apt-get install -y \
+    ca-certificates \
+    curl \
+    iptables \
+    iproute2 \
+    netcat-openbsd \
+    util-linux \
+    && rm -rf /var/lib/apt/lists/*
+
+# Set architecture-specific variables
+ARG TARGETARCH
+RUN echo "Building for architecture: $TARGETARCH"
+
+# Download and install containerd
+RUN if [ "$TARGETARCH" = "arm64" ]; then \
+        CONTAINERD_URL="https://github.com/containerd/containerd/releases/download/v2.0.4/containerd-2.0.4-linux-arm64.tar.gz"; \
+    else \
+        CONTAINERD_URL="https://github.com/containerd/containerd/releases/download/v2.0.4/containerd-2.0.4-linux-amd64.tar.gz"; \
+    fi && \
+    curl -L "$CONTAINERD_URL" | tar -C /usr/local -xz
+
+# Download and install buildkit
+RUN if [ "$TARGETARCH" = "arm64" ]; then \
+        BUILDKIT_URL="https://github.com/moby/buildkit/releases/download/v0.17.1/buildkit-v0.17.1.linux-arm64.tar.gz"; \
+    else \
+        BUILDKIT_URL="https://github.com/moby/buildkit/releases/download/v0.17.1/buildkit-v0.17.1.linux-amd64.tar.gz"; \
+    fi && \
+    curl -L "$BUILDKIT_URL" | tar -C /usr/local -xz
+
+# Download and install runc
+RUN if [ "$TARGETARCH" = "arm64" ]; then \
+        RUNC_URL="https://github.com/opencontainers/runc/releases/download/v1.2.2/runc.arm64"; \
+    else \
+        RUNC_URL="https://github.com/opencontainers/runc/releases/download/v1.2.2/runc.amd64"; \
+    fi && \
+    curl -L "$RUNC_URL" -o /usr/local/bin/runc && \
+    chmod +x /usr/local/bin/runc
+
+# Download and install gvisor (runsc)
+RUN if [ "$TARGETARCH" = "arm64" ]; then \
+        RUNSC_URL="https://storage.googleapis.com/gvisor/releases/release/latest/aarch64/runsc"; \
+        RUNSC_SHIM_URL="https://storage.googleapis.com/gvisor/releases/release/latest/aarch64/containerd-shim-runsc-v1"; \
+    else \
+        RUNSC_URL="https://storage.googleapis.com/gvisor/releases/release/latest/x86_64/runsc"; \
+        RUNSC_SHIM_URL="https://storage.googleapis.com/gvisor/releases/release/latest/x86_64/containerd-shim-runsc-v1"; \
+    fi && \
+    curl -L "$RUNSC_URL" -o /usr/local/bin/runsc && \
+    curl -L "$RUNSC_SHIM_URL" -o /usr/local/bin/containerd-shim-runsc-v1 && \
+    chmod +x /usr/local/bin/runsc /usr/local/bin/containerd-shim-runsc-v1
+
+# Install runsc
+RUN /usr/local/bin/runsc install
+
+# Download and install nerdctl (for debugging)
+RUN if [ "$TARGETARCH" = "arm64" ]; then \
+        NERDCTL_URL="https://github.com/containerd/nerdctl/releases/download/v2.0.5/nerdctl-2.0.5-linux-arm64.tar.gz"; \
+    else \
+        NERDCTL_URL="https://github.com/containerd/nerdctl/releases/download/v2.0.5/nerdctl-2.0.5-linux-amd64.tar.gz"; \
+    fi && \
+    curl -L "$NERDCTL_URL" | tar -C /usr/local/bin -xz
+
+# Copy configuration files
+COPY hack/containerd-config.toml /etc/containerd/config.toml
+COPY hack/runsc-ignore /usr/local/bin/runsc-ignore
+RUN chmod +x /usr/local/bin/runsc-ignore
+
+# Copy runtime binary from builder
+COPY --from=builder /build/bin/runtime /usr/local/bin/runtime
+
+# Create necessary directories
+RUN mkdir -p /data/containerd /data/buildkit /var/log /root/.config/runtime
+
+# Create entrypoint script
+RUN cat > /entrypoint.sh << 'EOF'
+#!/bin/bash
+set -e
+
+# Start containerd in the background
+echo "Starting containerd..."
+containerd &
+CONTAINERD_PID=$!
+
+# Wait for containerd to be ready
+sleep 2
+
+# Start buildkitd in the background
+echo "Starting buildkitd..."
+buildkitd --root /data/buildkit &
+BUILDKITD_PID=$!
+
+# Wait for buildkitd to be ready
+sleep 2
+
+# Function to cleanup on exit
+cleanup() {
+    echo "Shutting down services..."
+    kill $BUILDKITD_PID 2>/dev/null || true
+    kill $CONTAINERD_PID 2>/dev/null || true
+    wait $BUILDKITD_PID 2>/dev/null || true
+    wait $CONTAINERD_PID 2>/dev/null || true
+}
+
+# Trap exit signals
+trap cleanup EXIT INT TERM
+
+# Execute command or keep running
+if [ $# -eq 0 ]; then
+    echo "Runtime services started. Container will stay running..."
+    # Keep container running
+    tail -f /dev/null
+else
+    # Execute provided command
+    exec "$@"
+fi
+EOF
+
+RUN chmod +x /entrypoint.sh
+
+# Set working directory
+WORKDIR /workspace
+
+# Expose common ports
+# 8080 - Default HTTP ingress
+# 2379 - etcd client port
+# 9000 - MinIO/ClickHouse ports
+EXPOSE 8080 2379 9000
+
+ENTRYPOINT ["/entrypoint.sh"]
