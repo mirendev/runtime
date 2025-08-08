@@ -244,7 +244,7 @@ func Deploy(ctx *Context, opts struct {
 				ctx.Printf("%s\n", log)
 			}
 		}
-		return nil
+		return fmt.Errorf("build failed for %s", name)
 	}
 
 	ctx.Printf("\n\nUpdated version %s deployed. All traffic moved to new version.\n", results.Version())
