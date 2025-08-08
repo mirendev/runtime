@@ -179,7 +179,7 @@ func Deploy(ctx *Context, opts struct {
 
 	if results.Version() == "" {
 		ctx.Printf("\n\nError detected in building %s. No version returned.\n", name)
-		return nil
+		return fmt.Errorf("build failed: no version returned")
 	}
 
 	ctx.Printf("\n\nUpdated version %s deployed. All traffic moved to new version.\n", results.Version())
