@@ -14,8 +14,8 @@ import (
 
 func Set(ctx *Context, opts struct {
 	AppCentric
-	Env         []string `short:"e" long:"env" description:"Set environment variables (use KEY to prompt, KEY=VALUE to set directly)"`
-	Sensitive   []string `short:"s" long:"sensitive" description:"Set sensitive environment variables (use KEY to prompt with masking, KEY=VALUE to set directly)"`
+	Env         []string `short:"e" long:"env" description:"Set environment variables (use KEY to prompt, KEY=VALUE to set directly, KEY=@file to read from file)"`
+	Sensitive   []string `short:"s" long:"sensitive" description:"Set sensitive environment variables (use KEY to prompt with masking, KEY=VALUE to set directly, KEY=@file to read from file)"`
 	Delete      []string `short:"D" long:"delete" description:"Delete environment variables"`
 	Concurrency *int     `short:"c" long:"concurrency" description:"Set maximum concurrency of application instances"`
 }) error {
