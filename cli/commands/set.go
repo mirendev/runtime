@@ -105,55 +105,31 @@ func Set(ctx *Context, opts struct {
 			}
 		}
 
-		// Find existing variable
-		idx := slices.IndexFunc(envvars, func(nv *app_v1alpha.NamedValue) bool {
-			return nv.Key() == key && nv.Sensitive() == ev.sensitive
-		})
+		// Simply append the new variable - server will handle deduplication with last-value-wins
+		changes = true
 
-		if idx == -1 {
-			changes = true
-
-			if wasFile {
-				ctx.Printf("adding %s from file %s...\n", key, parts[1][1:])
-			} else if wasPrompt {
-				if ev.sensitive {
-					ctx.Printf("adding %s (sensitive, from prompt)...\n", key)
-				} else {
-					ctx.Printf("adding %s (from prompt)...\n", key)
-				}
+		if wasFile {
+			ctx.Printf("setting %s from file %s...\n", key, parts[1][1:])
+		} else if wasPrompt {
+			if ev.sensitive {
+				ctx.Printf("setting %s (sensitive, from prompt)...\n", key)
 			} else {
-				if ev.sensitive {
-					ctx.Printf("adding %s (sensitive)...\n", key)
-				} else {
-					ctx.Printf("adding %s...\n", key)
-				}
+				ctx.Printf("setting %s (from prompt)...\n", key)
 			}
-
-			var nv app_v1alpha.NamedValue
-			nv.SetKey(key)
-			nv.SetValue(value)
-			nv.SetSensitive(ev.sensitive)
-
-			envvars = append(envvars, &nv)
-		} else if envvars[idx].Value() != value {
-			changes = true
-			if wasFile {
-				ctx.Printf("updating %s from file %s...\n", key, parts[1][1:])
-			} else if wasPrompt {
-				if ev.sensitive {
-					ctx.Printf("updating %s (sensitive, from prompt)...\n", key)
-				} else {
-					ctx.Printf("updating %s (from prompt)...\n", key)
-				}
+		} else {
+			if ev.sensitive {
+				ctx.Printf("setting %s (sensitive)...\n", key)
 			} else {
-				if ev.sensitive {
-					ctx.Printf("updating %s (sensitive)...\n", key)
-				} else {
-					ctx.Printf("updating %s...\n", key)
-				}
+				ctx.Printf("setting %s...\n", key)
 			}
-			envvars[idx].SetValue(value)
 		}
+
+		var nv app_v1alpha.NamedValue
+		nv.SetKey(key)
+		nv.SetValue(value)
+		nv.SetSensitive(ev.sensitive)
+
+		envvars = append(envvars, &nv)
 	}
 
 	for _, v := range opts.Delete {
