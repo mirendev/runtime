@@ -1,14 +1,14 @@
 package commands
 
 import (
-	"bufio"
 	"fmt"
 	"os"
 	"slices"
 	"strings"
-	"syscall"
 
-	"golang.org/x/term"
+	"github.com/charmbracelet/bubbles/textinput"
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"miren.dev/runtime/api/app/app_v1alpha"
 )
 
@@ -168,31 +168,95 @@ func Set(ctx *Context, opts struct {
 }
 
 func promptForValue(ctx *Context, key string) (string, error) {
-	// Print prompt message
-	fmt.Fprintf(os.Stderr, "Enter value for variable '%s': ", key)
-
-	// Read line from stdin
-	reader := bufio.NewReader(os.Stdin)
-	value, err := reader.ReadString('\n')
-	if err != nil {
-		return "", err
-	}
-
-	return strings.TrimSpace(value), nil
+	return runTextInputPrompt(key, false)
 }
 
 func promptForSensitiveValue(ctx *Context, key string) (string, error) {
-	// Print prompt message
-	fmt.Fprintf(os.Stderr, "Enter value for sensitive variable '%s': ", key)
+	return runTextInputPrompt(key, true)
+}
 
-	// Read password with terminal masking
-	bytePassword, err := term.ReadPassword(int(syscall.Stdin))
+// textInputModel is a simple model for text input prompts
+type textInputModel struct {
+	textInput textinput.Model
+	key       string
+	sensitive bool
+	submitted bool
+	value     string
+	err       error
+}
+
+func (m textInputModel) Init() tea.Cmd {
+	return textinput.Blink
+}
+
+func (m textInputModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	var cmd tea.Cmd
+
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		switch msg.Type {
+		case tea.KeyEnter:
+			m.value = m.textInput.Value()
+			m.submitted = true
+			return m, tea.Quit
+		case tea.KeyCtrlC, tea.KeyEsc:
+			m.err = fmt.Errorf("cancelled")
+			return m, tea.Quit
+		}
+	}
+
+	m.textInput, cmd = m.textInput.Update(msg)
+	return m, cmd
+}
+
+func (m textInputModel) View() string {
+	if m.submitted || m.err != nil {
+		return ""
+	}
+
+	var promptStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
+	var label string
+	if m.sensitive {
+		label = fmt.Sprintf("Enter value for sensitive variable '%s'", m.key)
+	} else {
+		label = fmt.Sprintf("Enter value for variable '%s'", m.key)
+	}
+
+	return fmt.Sprintf(
+		"%s\n\n%s\n\n%s",
+		promptStyle.Render(label),
+		m.textInput.View(),
+		promptStyle.Render("(press enter to submit, esc to cancel)"),
+	)
+}
+
+func runTextInputPrompt(key string, sensitive bool) (string, error) {
+	ti := textinput.New()
+	ti.Focus()
+	ti.CharLimit = 0
+	ti.Width = 60
+
+	if sensitive {
+		ti.EchoMode = textinput.EchoPassword
+		ti.EchoCharacter = '•'
+	}
+
+	model := textInputModel{
+		textInput: ti,
+		key:       key,
+		sensitive: sensitive,
+	}
+
+	p := tea.NewProgram(model)
+	finalModel, err := p.Run()
 	if err != nil {
 		return "", err
 	}
 
-	// Print newline after password input
-	fmt.Fprintln(os.Stderr)
+	m := finalModel.(textInputModel)
+	if m.err != nil {
+		return "", m.err
+	}
 
-	return strings.TrimSpace(string(bytePassword)), nil
+	return strings.TrimSpace(m.value), nil
 }
