@@ -37,22 +37,22 @@ release-data:
 .PHONY: release-data
 
 clean:
-	rm bin/runtime
+	rm bin/miren
 
-bin/runtime:
+bin/miren:
 	@bash ./hack/build.sh
 
-.PHONY: bin/runtime
+.PHONY: bin/miren
 
 release:
 	@bash ./hack/build-release.sh
 
 .PHONY: release
 
-bin/runtime-debug:
-	go build -gcflags="all=-N -l" -o bin/runtime-debug ./cmd/runtime
+bin/miren-debug:
+	go build -gcflags="all=-N -l" -o bin/miren-debug ./cmd/miren
 
-.PHONY: bin/runtime-debug
+.PHONY: bin/miren-debug
 
 lint:
 	golangci-lint run ./...

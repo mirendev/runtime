@@ -59,12 +59,12 @@ RUN if [ ! -d vendor ]; then go mod download; fi
 # Version is safely passed via build arg
 RUN CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build \
     -ldflags "-X miren.dev/runtime/version.Version=\${VERSION} -linkmode external -extldflags '-static'" \
-    -o runtime \
-    ./cmd/runtime
+    -o miren \
+    ./cmd/miren
 
 # Use scratch for minimal final stage with just the binary
 FROM scratch
-COPY --from=builder /build/runtime /runtime
+COPY --from=builder /build/miren /miren
 EOF
 
 # Ensure dist directory exists
@@ -74,23 +74,23 @@ mkdir -p ./dist
 # Specify platform to ensure consistent builds across different architectures
 docker build --platform=linux/amd64 -f "$DOCKERFILE" --build-arg "VERSION=$version" --output type=local,dest=./dist .
 
-# Rename the binary to runtime-dist
-mv ./dist/runtime ./dist/runtime-dist
+# Rename the binary to miren-dist
+mv ./dist/miren ./dist/miren-dist
 
 # Make it executable
-chmod +x ./dist/runtime-dist
+chmod +x ./dist/miren-dist
 
-echo "Portable binary created at ./dist/runtime-dist"
+echo "Portable binary created at ./dist/miren-dist"
 
 # Verify it's statically linked
 echo ""
 echo "Binary info:"
-file ./dist/runtime-dist
+file ./dist/miren-dist
 
 # Show ldd info if available (will show "not a dynamic executable" for static binaries)
 if command -v ldd >/dev/null 2>&1; then
     echo ""
     echo "Dynamic dependencies:"
-    ldd ./dist/runtime-dist 2>&1 || echo "No dynamic dependencies (static binary)"
+    ldd ./dist/miren-dist 2>&1 || echo "No dynamic dependencies (static binary)"
 fi
 

@@ -6,8 +6,8 @@ set -euo pipefail
 ZONE="us-central1-a"
 PROJECT="miren-deployment"
 INSTANCE="runtime-sandbox"
-REMOTE_TEMP_PATH="~/runtime"
-INSTALL_PATH="/usr/local/bin/runtime"
+REMOTE_TEMP_PATH="~/miren"
+INSTALL_PATH="/usr/local/bin/miren"
 SERVICE_NAME="miren-runtime"
 
 # Colors for output
@@ -85,15 +85,15 @@ else
 fi
 
 # Verify the binary exists
-if [ ! -f "dist/runtime-dist" ]; then
-    print_error "Distribution binary not found at dist/runtime-dist"
+if [ ! -f "dist/miren-dist" ]; then
+    print_error "Distribution binary not found at dist/miren-dist"
     print_error "Run 'make dist' to build it"
     exit 1
 fi
 
 # Step 2: Copy binary to sandbox server
 print_step "Copying binary to sandbox server..."
-if ! gcloud compute scp dist/runtime-dist ${INSTANCE}:${REMOTE_TEMP_PATH} \
+if ! gcloud compute scp dist/miren-dist ${INSTANCE}:${REMOTE_TEMP_PATH} \
     --zone="$ZONE" \
     --tunnel-through-iap \
     --project="$PROJECT"; then
