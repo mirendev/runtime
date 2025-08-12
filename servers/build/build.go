@@ -107,7 +107,12 @@ func (b *Builder) nextVersion(ctx context.Context, name string) (
 func (b *Builder) loadAppConfig(dfs fsutil.FS) (*appconfig.AppConfig, error) {
 	dr, err := dfs.Open(appconfig.AppConfigPath)
 	if err != nil {
-		return nil, nil
+		if os.IsNotExist(err) {
+			// File not found is expected for apps without app.toml
+			return nil, nil
+		}
+		// Return other errors (permission denied, IO errors, etc.)
+		return nil, err
 	}
 
 	defer dr.Close()

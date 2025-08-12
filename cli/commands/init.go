@@ -48,7 +48,14 @@ func Init(ctx *Context, opts struct {
 	// Check if already initialized BEFORE creating the app
 	appTomlPath := filepath.Join(workDir, appconfig.AppConfigPath)
 	runtimeDir := filepath.Dir(appTomlPath)
-	if _, err := os.Stat(appTomlPath); err == nil {
+	if _, err := os.Stat(appTomlPath); err != nil {
+		if !os.IsNotExist(err) {
+			// Return unexpected errors (permission denied, IO errors, etc.)
+			return fmt.Errorf("failed to check for existing app.toml: %w", err)
+		}
+		// File doesn't exist, continue with initialization
+	} else {
+		// File exists
 		return fmt.Errorf("app.toml already exists in %s - app already initialized", runtimeDir)
 	}
 
@@ -133,10 +140,28 @@ func rollbackInit(ctx *Context, appName string, workDir string) error {
 	// Derive runtime directory from centralized config path
 	appTomlPath := filepath.Join(workDir, appconfig.AppConfigPath)
 	runtimeDir := filepath.Dir(appTomlPath)
+
+	// First, remove the app.toml file we created
+	if _, err := os.Stat(appTomlPath); err == nil {
+		if err := os.Remove(appTomlPath); err != nil {
+			ctx.Printf("Failed to remove app.toml on rollback: %v\n", err)
+		}
+	}
+
+	// Then, try to remove the .miren directory only if it's empty
 	if _, err := os.Stat(runtimeDir); err == nil {
-		err := os.RemoveAll(runtimeDir)
+		// Check if directory is empty before removing
+		entries, err := os.ReadDir(runtimeDir)
 		if err != nil {
-			ctx.Printf("Failed to remove .miren directory on rollback: %v\n", err)
+			ctx.Printf("Failed to read .miren directory on rollback: %v\n", err)
+		} else if len(entries) == 0 {
+			// Directory is empty, safe to remove
+			if err := os.Remove(runtimeDir); err != nil {
+				ctx.Printf("Failed to remove empty .miren directory on rollback: %v\n", err)
+			}
+		} else {
+			// Directory not empty, don't remove
+			ctx.Printf("Not removing .miren directory as it contains other files\n")
 		}
 	}
 	return nil
