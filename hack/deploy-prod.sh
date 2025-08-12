@@ -4,7 +4,8 @@ set -euo pipefail
 
 # Configuration
 HOST="miren.cloud"
-REMOTE_TEMP_PATH="~/runtime"
+# Use an absolute, unique temp file on the remote host to avoid tilde-expansion and collisions
+REMOTE_TEMP_PATH="/tmp/miren-runtime.$(date +%s).$$"
 INSTALL_PATH="/usr/local/libexec/miren/runtime"
 SERVICE_NAME="miren-runtime"
 
@@ -36,6 +37,12 @@ fi
 # Ensure ssh is available
 if ! command -v ssh >/dev/null 2>&1; then
     print_error "ssh command not found"
+    exit 1
+fi
+
+# Ensure scp is available
+if ! command -v scp >/dev/null 2>&1; then
+    print_error "scp command not found"
     exit 1
 fi
 
@@ -163,7 +170,7 @@ print_step "Deploying on server..."
 # Create deployment script
 DEPLOY_SCRIPT=$(
     cat <<'EOF'
-set -e
+set -euo pipefail
 
 # Stop the service
 echo "Stopping ${SERVICE_NAME} service..."
@@ -187,13 +194,28 @@ sudo systemctl start "${SERVICE_NAME}"
 
 # Check status
 echo "Checking service status..."
-sudo systemctl is-active --quiet "${SERVICE_NAME}"
-if [ $? -eq 0 ]; then
+if sudo systemctl is-active --quiet "${SERVICE_NAME}"; then
     echo "Service started successfully"
     sudo systemctl status "${SERVICE_NAME}" --no-pager
 else
-    echo "Service failed to start"
-    sudo systemctl status "${SERVICE_NAME}" --no-pager
+    echo "Service failed to start; attempting rollback..."
+    sudo systemctl status "${SERVICE_NAME}" --no-pager || true
+    # Find the latest timestamped backup, if any
+    LATEST_BACKUP="$(ls -1t "${INSTALL_PATH}".backup.* 2>/dev/null | head -n1 || true)"
+    if [ -n "${LATEST_BACKUP}" ]; then
+        echo "Restoring backup: ${LATEST_BACKUP}"
+        sudo install -o root -g root -m 0755 "${LATEST_BACKUP}" "${INSTALL_PATH}"
+        echo "Restarting ${SERVICE_NAME} after rollback..."
+        sudo systemctl restart "${SERVICE_NAME}" || true
+        if sudo systemctl is-active --quiet "${SERVICE_NAME}"; then
+            echo "Rollback successful - service is running with previous version"
+            sudo systemctl status "${SERVICE_NAME}" --no-pager
+        else
+            echo "Rollback failed - service still not running"
+        fi
+    else
+        echo "No backup found to rollback to."
+    fi
     exit 1
 fi
 
