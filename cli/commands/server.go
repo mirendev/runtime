@@ -218,7 +218,7 @@ func Server(ctx *Context, opts struct {
 		etcdComponent := etcd.NewEtcdComponent(ctx.Log, cc, "runtime", opts.DataPath)
 
 		etcdConfig := etcd.EtcdConfig{
-			Name:           "runtime-etcd",
+			Name:           "miren-etcd",
 			ClientPort:     opts.EtcdClientPort,
 			HTTPClientPort: opts.EtcdHTTPClientPort,
 			PeerPort:       opts.EtcdPeerPort,
@@ -566,7 +566,7 @@ func Server(ctx *Context, opts struct {
 		return err
 	}
 
-	cert, err := co.IssueCertificate("runtime-server")
+	cert, err := co.IssueCertificate("miren-server")
 	if err != nil {
 		ctx.Log.Error("failed to issue server certificate", "error", err)
 		return fmt.Errorf("failed to issue server certificate: %w", err)
@@ -595,7 +595,7 @@ func Server(ctx *Context, opts struct {
 		ctx.Log.Error("error during execution", "error", err)
 	}
 
-	ctx.Log.Info("runtime server shutting down, cleaning up resources")
+	ctx.Log.Info("miren server shutting down, cleaning up resources")
 	return err
 }
 

@@ -37,7 +37,7 @@ release-data:
 .PHONY: release-data
 
 clean:
-	rm bin/miren
+	rm -f bin/miren bin/miren-debug
 
 bin/miren:
 	@bash ./hack/build.sh

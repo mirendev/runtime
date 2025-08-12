@@ -70,7 +70,7 @@ func (c *Context) setupServerComponents(ctx context.Context, reg *asm.Registry) 
 		reg.Register("runsc_binary", "runsc")
 	}
 
-	reg.Register("server-id", "runtime-server")
+	reg.Register("server-id", "miren-server")
 
 	reg.Register("data-path", "/var/lib/runtime")
 

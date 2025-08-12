@@ -329,7 +329,7 @@ func getConfigDirPath() (string, error) {
 		return "", fmt.Errorf("failed to get user home directory: %w", err)
 	}
 
-	return filepath.Join(homeDir, ".config/runtime/clientconfig.d"), nil
+	return filepath.Join(homeDir, ".config/miren/clientconfig.d"), nil
 }
 
 // getConfigPath determines the configuration file path

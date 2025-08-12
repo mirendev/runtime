@@ -33,7 +33,7 @@ func Registry(extra ...func(*asm.Registry)) (*asm.Registry, func()) {
 
 	var usedClient *containerd.Client
 
-	tempDir, err := os.MkdirTemp("", "runtime-reg")
+	tempDir, err := os.MkdirTemp("", "miren-reg")
 	if err != nil {
 		panic(err)
 	}

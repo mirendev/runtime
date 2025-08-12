@@ -35,7 +35,7 @@ wait_for_service "minio" "nc -z minio 9000"
 make bin/miren
 
 # Create symlink
-ln -s "$PWD"/bin/miren /bin/m
+ln -sf "$PWD"/bin/miren /bin/m
 
 # Setup miren config
 mkdir -p ~/.config/miren
