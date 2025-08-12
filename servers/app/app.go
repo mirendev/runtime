@@ -170,8 +170,8 @@ func (r *AppInfo) SetConfiguration(ctx context.Context, state *app_v1alpha.CrudS
 
 	if cfg.HasEnvVars() {
 		for _, nv := range cfg.EnvVars() {
-			if strings.HasPrefix(nv.Key(), "RUNTIME_") {
-				return fmt.Errorf("cannot set RUNTIME_ environment variables")
+			if strings.HasPrefix(nv.Key(), "MIREN_") {
+				return fmt.Errorf("cannot set MIREN_ environment variables")
 			}
 		}
 	}

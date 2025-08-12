@@ -295,7 +295,7 @@ func (b *Builder) BuildFromTar(ctx context.Context, state *build_v1alpha.Builder
 
 	tos = append(tos,
 		WithCacheDir(cacheDir),
-		WithBuildArg("RUNTIME_VERSION", mrv.Version),
+		WithBuildArg("MIREN_VERSION", mrv.Version),
 	)
 
 	if status != nil {
