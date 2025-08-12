@@ -1,6 +1,6 @@
 <component name="ProjectRunConfigurationManager">
   <configuration default="false" name="Miren Dev Local Debug" type="GoApplicationRunConfiguration" factoryName="Go Application">
-    <module name="runtime" />
+    <module name="miren" />
     <working_directory value="$PROJECT_DIR$" />
     <parameters value="dev -vv --data-path=/var/lib/miren/data --etcd=localhost:2379" />
     <envs>

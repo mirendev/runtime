@@ -33,7 +33,7 @@ COPY --from=builder /app/setup/entrypoint.sh /entrypoint.sh
 
 COPY --from=builder /app/db /db
 
-COPY --from=builder --chmod=0755 /app/setup/runsc-runtime /bin/runsc-runtime
+COPY --from=builder --chmod=0755 /app/setup/runsc-miren /bin/runsc-miren
 
 RUN chmod +x /entrypoint.sh
 

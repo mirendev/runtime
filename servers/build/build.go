@@ -200,10 +200,10 @@ func (b *Builder) BuildFromTar(ctx context.Context, state *build_v1alpha.Builder
 	}
 
 	if buildStack.Stack == "" {
-		dr, err := tr.Open("Dockerfile.runtime")
+		dr, err := tr.Open("Dockerfile.miren")
 		if err == nil {
 			buildStack.Stack = "dockerfile"
-			buildStack.Input = "Dockerfile.runtime"
+			buildStack.Input = "Dockerfile.miren"
 			dr.Close()
 		} else {
 			buildStack.Stack = "auto"

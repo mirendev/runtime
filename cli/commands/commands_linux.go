@@ -64,7 +64,7 @@ func (c *Context) setupServerComponents(ctx context.Context, reg *asm.Registry) 
 
 	reg.Register("tempdir", os.TempDir())
 
-	if path, err := exec.LookPath("runsc-runtime"); err == nil && path != "" {
+	if path, err := exec.LookPath("runsc-miren"); err == nil && path != "" {
 		reg.Register("runsc_binary", path)
 	} else {
 		reg.Register("runsc_binary", "runsc")
@@ -72,8 +72,7 @@ func (c *Context) setupServerComponents(ctx context.Context, reg *asm.Registry) 
 
 	reg.Register("server-id", "miren-server")
 
-	reg.Register("data-path", "/var/lib/runtime")
-
+	reg.Register("data-path", "/var/lib/miren")
 
 	reg.Register("service-subnet", netip.MustParsePrefix("10.10.0.0/16"))
 

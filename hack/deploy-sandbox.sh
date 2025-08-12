@@ -8,7 +8,7 @@ PROJECT="miren-deployment"
 INSTANCE="miren-sandbox"
 REMOTE_TEMP_PATH="~/miren"
 INSTALL_PATH="/usr/local/bin/miren"
-SERVICE_NAME="miren-runtime"
+SERVICE_NAME="miren"
 
 # Colors for output
 RED='\033[0;31m'
