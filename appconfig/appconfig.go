@@ -47,7 +47,7 @@ type AppConfig struct {
 	Include     []string                  `toml:"include"`
 }
 
-const AppConfigPath = ".runtime/app.toml"
+const AppConfigPath = ".miren/app.toml"
 
 func LoadAppConfig() (*AppConfig, error) {
 	dir, err := os.Getwd()

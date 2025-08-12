@@ -41,8 +41,8 @@ ln -s "$PWD"/bin/miren /bin/m
 mkdir -p ~/.config/miren
 m auth generate -c ~/.config/miren/clientconfig.yaml
 
-echo "Cleaning runtime namespace to begin..."
-m debug ctr nuke -n runtime --containerd-socket "$CONTAINERD_ADDRESS"
+echo "Cleaning miren namespace to begin..."
+m debug ctr nuke -n miren --containerd-socket "$CONTAINERD_ADDRESS"
 
 # Setup environment variables
 setup_bash_environment

@@ -113,7 +113,7 @@ func Registry(extra ...func(*asm.Registry)) (*asm.Registry, func()) {
 
 	ts := time.Now()
 
-	namespace := fmt.Sprintf("runtime-%d", ts.UnixNano())
+	namespace := fmt.Sprintf("miren-%d", ts.UnixNano())
 
 	r.Register("namespace", namespace)
 	r.Register("org_id", uint64(1))

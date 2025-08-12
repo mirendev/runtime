@@ -26,7 +26,7 @@ func addCommands(cmds map[string]cli.CommandFactory) {
 }
 
 func (c *Context) setupServerComponents(ctx context.Context, reg *asm.Registry) {
-	reg.Register("namespace", "runtime")
+	reg.Register("namespace", "miren")
 	reg.Register("top_context", ctx)
 	reg.Register("containerd-socket", containerdx.DefaultSocket)
 
