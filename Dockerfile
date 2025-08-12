@@ -14,8 +14,8 @@ RUN go mod download
 
 COPY . .
 
-RUN --mount=type=cache,target=/root/.cache/go-build CGO_ENABLED=1 go build -o /go/bin/miren ./cmd/miren
-RUN --mount=type=cache,target=/root.cache/go-build go build -o /go/bin/containerd-log-ingress ./run/containerd-log-ingress
+RUN --mount=type=cache,target=/root/.cache/go-build CGO_ENABLED=1 go build -trimpath -ldflags="-s -w" -o /go/bin/miren ./cmd/miren
+RUN --mount=type=cache,target=/root/.cache/go-build go build -trimpath -ldflags="-s -w" -o /go/bin/containerd-log-ingress ./run/containerd-log-ingress
 
 FROM alpine:latest AS base
 
