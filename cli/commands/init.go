@@ -46,8 +46,8 @@ func Init(ctx *Context, opts struct {
 	}
 
 	// Check if already initialized BEFORE creating the app
-	runtimeDir := filepath.Join(workDir, ".miren")
-	appTomlPath := filepath.Join(runtimeDir, "app.toml")
+	appTomlPath := filepath.Join(workDir, appconfig.AppConfigPath)
+	runtimeDir := filepath.Dir(appTomlPath)
 	if _, err := os.Stat(appTomlPath); err == nil {
 		return fmt.Errorf("app.toml already exists in %s - app already initialized", runtimeDir)
 	}
@@ -109,7 +109,7 @@ func Init(ctx *Context, opts struct {
 
 	// Success - no rollback needed
 
-	ctx.Printf("Initialized runtime app '%s' in %s\n", appName, appTomlPath)
+	ctx.Printf("Initialized Miren app '%s' in %s\n", appName, appTomlPath)
 	ctx.Printf("Created app '%s' with id: %s\n", appName, appEntity.ID)
 	return nil
 }
@@ -130,7 +130,9 @@ func rollbackInit(ctx *Context, appName string, workDir string) error {
 		ctx.Printf("Could not delete app on rollback: %v\n", err)
 	}
 
-	runtimeDir := filepath.Join(workDir, ".miren")
+	// Derive runtime directory from centralized config path
+	appTomlPath := filepath.Join(workDir, appconfig.AppConfigPath)
+	runtimeDir := filepath.Dir(appTomlPath)
 	if _, err := os.Stat(runtimeDir); err == nil {
 		err := os.RemoveAll(runtimeDir)
 		if err != nil {

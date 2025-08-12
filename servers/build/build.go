@@ -105,7 +105,7 @@ func (b *Builder) nextVersion(ctx context.Context, name string) (
 }
 
 func (b *Builder) loadAppConfig(dfs fsutil.FS) (*appconfig.AppConfig, error) {
-	dr, err := dfs.Open(".miren/app.toml")
+	dr, err := dfs.Open(appconfig.AppConfigPath)
 	if err != nil {
 		return nil, nil
 	}
