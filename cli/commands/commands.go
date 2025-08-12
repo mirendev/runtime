@@ -11,7 +11,7 @@ func AllCommands() map[string]cli.CommandFactory {
 		},
 
 		"init": func() (cli.Command, error) {
-			return Infer("init", "Initialize a new runtime application", Init), nil
+			return Infer("init", "Initialize a new application", Init), nil
 		},
 
 		"deploy": func() (cli.Command, error) {
@@ -96,11 +96,11 @@ func AllCommands() map[string]cli.CommandFactory {
 		},
 
 		"server": func() (cli.Command, error) {
-			return Infer("server", "Start the runtime server", Server), nil
+			return Infer("server", "Start the miren server", Server), nil
 		},
 
 		"download release": func() (cli.Command, error) {
-			return Infer("download release", "Download and extract runtime release", DownloadRelease), nil
+			return Infer("download release", "Download and extract miren release", DownloadRelease), nil
 		},
 
 		"auth generate": func() (cli.Command, error) {
