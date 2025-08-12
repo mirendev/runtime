@@ -20,7 +20,7 @@ import (
 	"miren.dev/runtime/pkg/testutils"
 )
 
-const testNamespace = "runtime-clickhouse-test"
+const testNamespace = "miren-clickhouse-test"
 
 func TestClickHouseComponentIntegration(t *testing.T) {
 	ctx := context.Background()

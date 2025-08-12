@@ -203,7 +203,7 @@ regen:
 	c.Log.Info("generating new API cert", "path", cert)
 
 	cc, err := c.authority.IssueCertificate(caauth.Options{
-		CommonName:   "runtime-api",
+		CommonName:   "miren-api",
 		Organization: "miren",
 		ValidFor:     1 * year,
 		IPs:          ips,
