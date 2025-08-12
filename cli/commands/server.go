@@ -633,7 +633,7 @@ func writeLocalClusterConfig(ctx *Context, cc *caauth.ClientCertificate, address
 		return fmt.Errorf("failed to get user home directory: %w", err)
 	}
 
-	configDirPath := filepath.Join(homeDir, ".config/runtime/clientconfig.d")
+	configDirPath := filepath.Join(homeDir, ".config/miren/clientconfig.d")
 
 	// Create the directory if it doesn't exist
 	if err := os.MkdirAll(configDirPath, 0755); err != nil {

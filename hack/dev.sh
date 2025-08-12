@@ -37,9 +37,9 @@ make bin/miren
 # Create symlink
 ln -s "$PWD"/bin/miren /bin/m
 
-# Setup runtime config
-mkdir -p ~/.config/runtime
-m auth generate -c ~/.config/runtime/clientconfig.yaml
+# Setup miren config
+mkdir -p ~/.config/miren
+m auth generate -c ~/.config/miren/clientconfig.yaml
 
 echo "Cleaning runtime namespace to begin..."
 m debug ctr nuke -n runtime --containerd-socket "$CONTAINERD_ADDRESS"
