@@ -102,13 +102,13 @@ jobs:
             curl --fail-with-body --retry 3 -X PUT \
               -H "Authorization: Bearer ${{ steps.get-oidc-token.outputs.token }}" \
               -F "file=@artifacts/miren-base-linux-${arch}/release-base-linux-${arch}.tar.gz" \
-              https://api.miren.cloud/assets/release/runtime/${{ github.ref_name }}/miren-base-linux-${arch}.tar.gz
+              https://api.miren.cloud/assets/release/miren/${{ github.ref_name }}/miren-base-linux-${arch}.tar.gz
 
             # Upload sha256
             curl --fail-with-body --retry 3 -X PUT \
               -H "Authorization: Bearer ${{ steps.get-oidc-token.outputs.token }}" \
               -F "file=@release-base-linux-${arch}.tar.gz.sha256" \
-              https://api.miren.cloud/assets/release/runtime/${{ github.ref_name }}/miren-base-linux-${arch}.tar.gz.sha256
+              https://api.miren.cloud/assets/release/miren/${{ github.ref_name }}/miren-base-linux-${arch}.tar.gz.sha256
           done
 
           # Upload binary artifacts
@@ -122,12 +122,12 @@ jobs:
               curl --fail-with-body --retry 3 -X PUT \
                 -H "Authorization: Bearer ${{ steps.get-oidc-token.outputs.token }}" \
                 -F "file=@artifacts/miren-${os}-${arch}/miren-${os}-${arch}.zip" \
-                https://api.miren.cloud/assets/release/runtime/${{ github.ref_name }}/miren-${os}-${arch}.zip
+                https://api.miren.cloud/assets/release/miren/${{ github.ref_name }}/miren-${os}-${arch}.zip
 
               # Upload binary sha256
               curl --fail-with-body --retry 3 -X PUT \
                 -H "Authorization: Bearer ${{ steps.get-oidc-token.outputs.token }}" \
                 -F "file=@miren-${os}-${arch}.zip.sha256" \
-                https://api.miren.cloud/assets/release/runtime/${{ github.ref_name }}/miren-${os}-${arch}.zip.sha256
+                https://api.miren.cloud/assets/release/miren/${{ github.ref_name }}/miren-${os}-${arch}.zip.sha256
             done
           done

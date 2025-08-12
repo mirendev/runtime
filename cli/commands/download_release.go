@@ -27,7 +27,7 @@ func DownloadRelease(ctx *Context, opts struct {
 	arch := runtime.GOARCH
 
 	// Construct download URLs
-	baseURL := fmt.Sprintf("https://api.miren.cloud/assets/release/runtime/%s/runtime-base-linux-%s.tar.gz", opts.Branch, arch)
+	baseURL := fmt.Sprintf("https://api.miren.cloud/assets/release/miren/%s/miren-base-linux-%s.tar.gz", opts.Branch, arch)
 	shaURL := baseURL + ".sha256"
 
 	// Determine release directory
@@ -118,7 +118,7 @@ func DownloadRelease(ctx *Context, opts struct {
 		return fmt.Errorf("failed to extract release: %w", err)
 	}
 
-	cmd := exec.Command(filepath.Join(releaseDir, "runtime"), "version")
+	cmd := exec.Command(filepath.Join(releaseDir, "miren"), "version")
 	out, err := cmd.Output()
 	if err != nil {
 		return fmt.Errorf("failed to run release binary: %w", err)
