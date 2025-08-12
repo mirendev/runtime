@@ -1,17 +1,17 @@
 <component name="ProjectRunConfigurationManager">
-  <configuration default="false" name="Runtime Dev Local Debug" type="GoApplicationRunConfiguration" factoryName="Go Application">
+  <configuration default="false" name="Miren Dev Local Debug" type="GoApplicationRunConfiguration" factoryName="Go Application">
     <module name="runtime" />
     <working_directory value="$PROJECT_DIR$" />
-    <parameters value="dev -vv --data-path=/var/lib/runtime/data --etcd=localhost:2379" />
+    <parameters value="dev -vv --data-path=/var/lib/miren/data --etcd=localhost:2379" />
     <envs>
       <env name="S3_URL" value="http://localhost:9001" />
       <env name="ETCD_ENDPOINTS" value="localhost:2379" />
       <env name="CLICKHOUSE_URL" value="http://localhost:8123" />
     </envs>
     <kind value="PACKAGE" />
-    <package value="miren.dev/runtime/cmd/runtime" />
+    <package value="miren.dev/runtime/cmd/miren" />
     <directory value="$PROJECT_DIR$" />
-    <filePath value="$PROJECT_DIR$/cmd/runtime/main.go" />
+    <filePath value="$PROJECT_DIR$/cmd/miren/main.go" />
     <method v="2" />
   </configuration>
 </component>

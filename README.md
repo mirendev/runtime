@@ -4,7 +4,7 @@ A container orchestration system built on containerd and gvisor for running secu
 
 ## Overview
 
-Miren Runtime provides a platform for deploying and managing containerized applications with strong isolation guarantees using gvisor. It features an entity-based architecture with etcd as the distributed state store for managing applications, versions, sandboxes, and infrastructure components.
+The Miren runtime provides a platform for deploying and managing containerized applications with strong isolation guarantees using gvisor. It features an entity-based architecture with etcd as the distributed state store for managing applications, versions, sandboxes, and infrastructure components.
 
 ## Key Features
 

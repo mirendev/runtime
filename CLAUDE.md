@@ -21,8 +21,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
   - Sets up containerd, buildkit, and gvisor (runsc)
   - Builds the miren binary and creates `/bin/m` symlink
   - Generates auth config in `~/.config/miren/clientconfig.yaml`
-  - Cleans the runtime namespace
-  - Starts the runtime server and provides a shell
+  - Cleans the miren namespace
+  - Starts the miren server and provides a shell
 
 ### Other Commands
 - `make image` - Build and import Docker image as `miren:latest`
@@ -43,7 +43,7 @@ This is the **Miren Runtime** - a container orchestration system built on contai
 
 **Application Management** (`servers/app/`):
 - Apps have versions with configurations (env vars, commands, concurrency)
-- Entity store manages app metadata, filesystem stores runtime configs
+- Entity store manages app metadata, filesystem stores Miren configs
 - Default app controller handles app lifecycle
 
 **Sandbox Management** (`controllers/sandbox/`):
