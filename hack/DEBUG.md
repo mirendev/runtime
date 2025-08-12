@@ -71,7 +71,7 @@ The following environment variables are automatically exported when you source t
 
 1. Create a new "Go Application" run configuration
 2. Set the following:
-   - **Package path**: `miren.dev/runtime/cmd/runtime`
+   - **Package path**: `miren.dev/runtime/cmd/miren`
    - **Program arguments**: `dev -vv --data-path=/var/lib/runtime/data --etcd=localhost:2379 --clickhouse-addr=localhost:9000`
    - **Environment variables**:
      - `S3_URL=minio://admin123:admin123@localhost:9001/buckets`
@@ -91,7 +91,7 @@ Add to `.vscode/launch.json`:
             "type": "go",
             "request": "launch",
             "mode": "debug",
-            "program": "${workspaceFolder}/cmd/runtime",
+            "program": "${workspaceFolder}/cmd/miren",
             "args": [
                 "server",
                 "-vv",
