@@ -49,5 +49,5 @@ jobs:
         gcloud compute ssh miren-dev-server --zone=us-central1-a --command="sudo systemctl status miren-runtime --no-pager" || true
         
         # Show the binary version
-        echo "Runtime version:"
-        gcloud compute ssh miren-dev-server --zone=us-central1-a --command="/usr/local/bin/runtime version" || true
+        echo "Miren version:"
+        gcloud compute ssh miren-dev-server --zone=us-central1-a --command="/usr/local/bin/miren version" || true

@@ -13,10 +13,10 @@ import (
 
 const (
 	// DefaultConfigPath is the default path for the config file in user's home directory
-	DefaultConfigPath = ".config/runtime/clientconfig.yaml"
+	DefaultConfigPath = ".config/miren/clientconfig.yaml"
 
 	// EnvConfigPath is the environment variable name for custom config path
-	EnvConfigPath = "RUNTIME_CONFIG"
+	EnvConfigPath = "MIREN_CONFIG"
 )
 
 // ClusterConfig holds the configuration for a single cluster
@@ -329,7 +329,7 @@ func getConfigDirPath() (string, error) {
 		return "", fmt.Errorf("failed to get user home directory: %w", err)
 	}
 
-	return filepath.Join(homeDir, ".config/runtime/clientconfig.d"), nil
+	return filepath.Join(homeDir, ".config/miren/clientconfig.d"), nil
 }
 
 // getConfigPath determines the configuration file path

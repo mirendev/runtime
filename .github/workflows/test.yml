@@ -87,9 +87,9 @@ jobs:
           go-version-file: 'go.mod'
       - name: Build binary for ${{ matrix.os }}-${{ matrix.arch }}
         run: |
-          GOOS=${{ matrix.os }} GOARCH=${{ matrix.arch }} make bin/runtime
+          GOOS=${{ matrix.os }} GOARCH=${{ matrix.arch }} make bin/miren
           # Create a zip file with the binary
-          zip -j runtime-${{ matrix.os }}-${{ matrix.arch }}.zip bin/runtime
+          zip -j miren-${{ matrix.os }}-${{ matrix.arch }}.zip bin/miren
 
   build:
     needs: lint
@@ -103,4 +103,4 @@ jobs:
         go-version-file: 'go.mod'
 
     - name: Build
-      run: make bin/runtime
+      run: make bin/miren

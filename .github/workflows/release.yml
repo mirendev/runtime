@@ -23,7 +23,7 @@ jobs:
     - name: Upload build artifact
       uses: actions/upload-artifact@v4
       with:
-        name: runtime-base-linux-${{ matrix.arch }}
+        name: miren-base-linux-${{ matrix.arch }}
         path: release-base-linux-${{ matrix.arch }}.tar.gz
         retention-days: 1
 
@@ -56,14 +56,14 @@ jobs:
         go-version-file: 'go.mod'
     - name: Build binary for ${{ matrix.os }}-${{ matrix.arch }}
       run: |
-        GOOS=${{ matrix.os }} GOARCH=${{ matrix.arch }} make bin/runtime
+        GOOS=${{ matrix.os }} GOARCH=${{ matrix.arch }} make bin/miren
         # Create a zip file with the binary
-        zip -j runtime-${{ matrix.os }}-${{ matrix.arch }}.zip bin/runtime
+        zip -j miren-${{ matrix.os }}-${{ matrix.arch }}.zip bin/miren
     - name: Upload build artifact
       uses: actions/upload-artifact@v4
       with:
-        name: runtime-${{ matrix.os }}-${{ matrix.arch }}
-        path: runtime-${{ matrix.os }}-${{ matrix.arch }}.zip
+        name: miren-${{ matrix.os }}-${{ matrix.arch }}
+        path: miren-${{ matrix.os }}-${{ matrix.arch }}.zip
         retention-days: 1
 
   upload-to-miren:
@@ -96,38 +96,38 @@ jobs:
           for arch in amd64 arm64; do
             # Generate SHA256 checksums
             echo "release-base-linux-${arch}.tar.gz SHA256"
-            sha256sum "artifacts/runtime-base-linux-${arch}/release-base-linux-${arch}.tar.gz" | cut -d' ' -f1 | tee "release-base-linux-${arch}.tar.gz.sha256"
+            sha256sum "artifacts/miren-base-linux-${arch}/release-base-linux-${arch}.tar.gz" | cut -d' ' -f1 | tee "release-base-linux-${arch}.tar.gz.sha256"
 
             # Upload artifact
             curl --fail-with-body --retry 3 -X PUT \
               -H "Authorization: Bearer ${{ steps.get-oidc-token.outputs.token }}" \
-              -F "file=@artifacts/runtime-base-linux-${arch}/release-base-linux-${arch}.tar.gz" \
-              https://api.miren.cloud/assets/release/runtime/${{ github.ref_name }}/runtime-base-linux-${arch}.tar.gz
+              -F "file=@artifacts/miren-base-linux-${arch}/release-base-linux-${arch}.tar.gz" \
+              https://api.miren.cloud/assets/release/miren/${{ github.ref_name }}/miren-base-linux-${arch}.tar.gz
 
             # Upload sha256
             curl --fail-with-body --retry 3 -X PUT \
               -H "Authorization: Bearer ${{ steps.get-oidc-token.outputs.token }}" \
               -F "file=@release-base-linux-${arch}.tar.gz.sha256" \
-              https://api.miren.cloud/assets/release/runtime/${{ github.ref_name }}/runtime-base-linux-${arch}.tar.gz.sha256
+              https://api.miren.cloud/assets/release/miren/${{ github.ref_name }}/miren-base-linux-${arch}.tar.gz.sha256
           done
 
           # Upload binary artifacts
           for os in linux darwin; do
             for arch in amd64 arm64; do
               # Generate SHA256 checksum for binary
-              echo "runtime-${os}-${arch}.zip SHA256"
-              sha256sum "artifacts/runtime-${os}-${arch}/runtime-${os}-${arch}.zip" | cut -d' ' -f1 | tee "runtime-${os}-${arch}.zip.sha256"
+              echo "miren-${os}-${arch}.zip SHA256"
+              sha256sum "artifacts/miren-${os}-${arch}/miren-${os}-${arch}.zip" | cut -d' ' -f1 | tee "miren-${os}-${arch}.zip.sha256"
 
               # Upload binary zip
               curl --fail-with-body --retry 3 -X PUT \
                 -H "Authorization: Bearer ${{ steps.get-oidc-token.outputs.token }}" \
-                -F "file=@artifacts/runtime-${os}-${arch}/runtime-${os}-${arch}.zip" \
-                https://api.miren.cloud/assets/release/runtime/${{ github.ref_name }}/runtime-${os}-${arch}.zip
+                -F "file=@artifacts/miren-${os}-${arch}/miren-${os}-${arch}.zip" \
+                https://api.miren.cloud/assets/release/miren/${{ github.ref_name }}/miren-${os}-${arch}.zip
 
               # Upload binary sha256
               curl --fail-with-body --retry 3 -X PUT \
                 -H "Authorization: Bearer ${{ steps.get-oidc-token.outputs.token }}" \
-                -F "file=@runtime-${os}-${arch}.zip.sha256" \
-                https://api.miren.cloud/assets/release/runtime/${{ github.ref_name }}/runtime-${os}-${arch}.zip.sha256
+                -F "file=@miren-${os}-${arch}.zip.sha256" \
+                https://api.miren.cloud/assets/release/miren/${{ github.ref_name }}/miren-${os}-${arch}.zip.sha256
             done
           done

@@ -105,9 +105,14 @@ func (b *Builder) nextVersion(ctx context.Context, name string) (
 }
 
 func (b *Builder) loadAppConfig(dfs fsutil.FS) (*appconfig.AppConfig, error) {
-	dr, err := dfs.Open(".runtime/app.toml")
+	dr, err := dfs.Open(appconfig.AppConfigPath)
 	if err != nil {
-		return nil, nil
+		if os.IsNotExist(err) {
+			// File not found is expected for apps without app.toml
+			return nil, nil
+		}
+		// Return other errors (permission denied, IO errors, etc.)
+		return nil, err
 	}
 
 	defer dr.Close()
@@ -195,10 +200,10 @@ func (b *Builder) BuildFromTar(ctx context.Context, state *build_v1alpha.Builder
 	}
 
 	if buildStack.Stack == "" {
-		dr, err := tr.Open("Dockerfile.runtime")
+		dr, err := tr.Open("Dockerfile.miren")
 		if err == nil {
 			buildStack.Stack = "dockerfile"
-			buildStack.Input = "Dockerfile.runtime"
+			buildStack.Input = "Dockerfile.miren"
 			dr.Close()
 		} else {
 			buildStack.Stack = "auto"
@@ -295,7 +300,7 @@ func (b *Builder) BuildFromTar(ctx context.Context, state *build_v1alpha.Builder
 
 	tos = append(tos,
 		WithCacheDir(cacheDir),
-		WithBuildArg("RUNTIME_VERSION", mrv.Version),
+		WithBuildArg("MIREN_VERSION", mrv.Version),
 	)
 
 	if status != nil {

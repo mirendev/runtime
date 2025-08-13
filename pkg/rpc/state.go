@@ -470,9 +470,9 @@ func (s *State) Connect(remote string, name string) (*NetworkClient, error) {
 			return nil, err
 		}
 	} else if remote == "dial-stdio" {
-		shstr := os.Getenv("RUNTIME_DIAL_PROGRAM")
+		shstr := os.Getenv("MIREN_DIAL_PROGRAM")
 		if shstr == "" {
-			return nil, fmt.Errorf("RUNTIME_DIAL_PROGRAM not set")
+			return nil, fmt.Errorf("MIREN_DIAL_PROGRAM not set")
 		}
 
 		s.log.Debug("dialing stdio", "command", shstr)

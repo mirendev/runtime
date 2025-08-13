@@ -11,4 +11,4 @@ fi
 
 echo "Building version $version"
 
-go build -ldflags "-X miren.dev/runtime/version.Version=$version" -o bin/runtime ./cmd/runtime
+go build -ldflags "-X miren.dev/runtime/version.Version=$version" -o bin/miren ./cmd/miren

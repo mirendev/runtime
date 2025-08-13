@@ -5,8 +5,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Development Commands
 
 ### Building
-- `make bin/runtime` - Build the runtime binary using hack/build.sh (includes version info)
-- `make bin/runtime-debug` - Build with debug symbols for debugging
+- `make bin/miren` - Build the miren binary using hack/build.sh (includes version info)
+- `make bin/miren-debug` - Build with debug symbols for debugging
 - `make release` - Build release version using hack/build-release.sh
 
 ### Testing
@@ -19,10 +19,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - `make dev-tmux` - Start development environment with tmux splits
 - The dev environment automatically:
   - Sets up containerd, buildkit, and gvisor (runsc)
-  - Builds the runtime binary and creates `/bin/r` symlink
-  - Generates auth config in `~/.config/runtime/clientconfig.yaml`
-  - Cleans the runtime namespace
-  - Starts the runtime server and provides a shell
+  - Builds the miren binary and creates `/bin/m` symlink
+  - Generates auth config in `~/.config/miren/clientconfig.yaml`
+  - Cleans the miren namespace
+  - Starts the miren server and provides a shell
 
 ### Other Commands
 - `make image` - Build and import Docker image as `miren:latest`
@@ -43,7 +43,7 @@ This is the **Miren Runtime** - a container orchestration system built on contai
 
 **Application Management** (`servers/app/`):
 - Apps have versions with configurations (env vars, commands, concurrency)
-- Entity store manages app metadata, filesystem stores runtime configs
+- Entity store manages app metadata, filesystem stores Miren configs
 - Default app controller handles app lifecycle
 
 **Sandbox Management** (`controllers/sandbox/`):

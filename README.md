@@ -4,7 +4,7 @@ A container orchestration system built on containerd and gvisor for running secu
 
 ## Overview
 
-Miren Runtime provides a platform for deploying and managing containerized applications with strong isolation guarantees using gvisor. It features an entity-based architecture with etcd as the distributed state store for managing applications, versions, sandboxes, and infrastructure components.
+The Miren runtime provides a platform for deploying and managing containerized applications with strong isolation guarantees using gvisor. It features an entity-based architecture with etcd as the distributed state store for managing applications, versions, sandboxes, and infrastructure components.
 
 ## Key Features
 
@@ -64,11 +64,11 @@ The development environment automatically sets up:
 ### Building
 
 ```bash
-# Build the runtime binary
-make bin/runtime
+# Build the miren binary
+make bin/miren
 
 # Build with debug symbols
-make bin/runtime-debug
+make bin/miren-debug
 
 # Build release version
 make release
@@ -93,50 +93,50 @@ hack/run <package> <test-name>
 
 ```bash
 # Initialize a new application
-runtime init
+miren init
 
 # Deploy an application
-runtime deploy
+miren deploy
 
 # List all applications
-runtime apps
+miren apps
 
 # Get application details
-runtime app <app-name>
+miren app <app-name>
 
 # View application logs
-runtime logs <app-name>
+miren logs <app-name>
 ```
 
 ### Sandbox Management
 
 ```bash
 # List all sandboxes
-runtime sandbox list
+miren sandbox list
 
 # Filter sandboxes by status
-runtime sandbox list --status running
+miren sandbox list --status running
 
 # Execute command in sandbox
-runtime sandbox exec <sandbox-id> -- <command>
+miren sandbox exec <sandbox-id> -- <command>
 
 # Get sandbox metrics
-runtime sandbox metrics <sandbox-id>
+miren sandbox metrics <sandbox-id>
 ```
 
 ### Configuration Management
 
-Cluster configurations are stored in `~/.config/runtime/clientconfig.yaml`.
+Cluster configurations are stored in `~/.config/miren/clientconfig.yaml`.
 
 ```bash
 # Show current configuration
-runtime config info
+miren config info
 
 # Switch active cluster
-runtime config set-active <cluster-name>
+miren config set-active <cluster-name>
 
 # Load additional configuration
-runtime config load <config-file>
+miren config load <config-file>
 ```
 
 ## Application Configuration
@@ -165,8 +165,8 @@ route:
 ### Building from Source
 
 ```bash
-# Build the runtime binary
-make bin/runtime
+# Build the miren binary
+make bin/miren
 ```
 
 ### Code Style

@@ -33,7 +33,7 @@ func Registry(extra ...func(*asm.Registry)) (*asm.Registry, func()) {
 
 	var usedClient *containerd.Client
 
-	tempDir, err := os.MkdirTemp("", "runtime-reg")
+	tempDir, err := os.MkdirTemp("", "miren-reg")
 	if err != nil {
 		panic(err)
 	}
@@ -113,7 +113,7 @@ func Registry(extra ...func(*asm.Registry)) (*asm.Registry, func()) {
 
 	ts := time.Now()
 
-	namespace := fmt.Sprintf("runtime-%d", ts.UnixNano())
+	namespace := fmt.Sprintf("miren-%d", ts.UnixNano())
 
 	r.Register("namespace", namespace)
 	r.Register("org_id", uint64(1))

@@ -26,7 +26,7 @@ func addCommands(cmds map[string]cli.CommandFactory) {
 }
 
 func (c *Context) setupServerComponents(ctx context.Context, reg *asm.Registry) {
-	reg.Register("namespace", "runtime")
+	reg.Register("namespace", "miren")
 	reg.Register("top_context", ctx)
 	reg.Register("containerd-socket", containerdx.DefaultSocket)
 
@@ -64,16 +64,15 @@ func (c *Context) setupServerComponents(ctx context.Context, reg *asm.Registry) 
 
 	reg.Register("tempdir", os.TempDir())
 
-	if path, err := exec.LookPath("runsc-runtime"); err == nil && path != "" {
+	if path, err := exec.LookPath("runsc-miren"); err == nil && path != "" {
 		reg.Register("runsc_binary", path)
 	} else {
 		reg.Register("runsc_binary", "runsc")
 	}
 
-	reg.Register("server-id", "runtime-server")
+	reg.Register("server-id", "miren-server")
 
-	reg.Register("data-path", "/var/lib/runtime")
-
+	reg.Register("data-path", "/var/lib/miren")
 
 	reg.Register("service-subnet", netip.MustParsePrefix("10.10.0.0/16"))
 

@@ -49,7 +49,7 @@ func Server(ctx *Context, opts struct {
 	RunnerAddress             string   `long:"runner-address" description:"Address to listen on" default:"localhost:8444"`
 	EtcdEndpoints             []string `short:"e" long:"etcd" description:"Etcd endpoints" default:"http://etcd:2379"`
 	EtcdPrefix                string   `short:"p" long:"etcd-prefix" description:"Etcd prefix" default:"/miren"`
-	RunnerId                  string   `short:"r" long:"runner-id" description:"Runner ID" default:"runtime"`
+	RunnerId                  string   `short:"r" long:"runner-id" description:"Runner ID" default:"miren"`
 	DataPath                  string   `short:"d" long:"data-path" description:"Data path" default:"/var/lib/miren"`
 	ReleasePath               string   `long:"release-path" description:"Path to release directory containing binaries"`
 	AdditionalNames           []string `long:"dns-names" description:"Additional DNS names assigned to the server cert"`
@@ -215,10 +215,10 @@ func Server(ctx *Context, opts struct {
 		}
 
 		// TODO figure out why I can't use ResolveNamed to pull out the namespace from ctx.Server
-		etcdComponent := etcd.NewEtcdComponent(ctx.Log, cc, "runtime", opts.DataPath)
+		etcdComponent := etcd.NewEtcdComponent(ctx.Log, cc, "miren", opts.DataPath)
 
 		etcdConfig := etcd.EtcdConfig{
-			Name:           "runtime-etcd",
+			Name:           "miren-etcd",
 			ClientPort:     opts.EtcdClientPort,
 			HTTPClientPort: opts.EtcdHTTPClientPort,
 			PeerPort:       opts.EtcdPeerPort,
@@ -261,7 +261,7 @@ func Server(ctx *Context, opts struct {
 			return err
 		}
 
-		clickhouseComponent := clickhouse.NewClickHouseComponent(ctx.Log, cc, "runtime", opts.DataPath)
+		clickhouseComponent := clickhouse.NewClickHouseComponent(ctx.Log, cc, "miren", opts.DataPath)
 
 		clickhouseConfig := clickhouse.ClickHouseConfig{
 			HTTPPort:        opts.ClickHouseHTTPPort,
@@ -566,7 +566,7 @@ func Server(ctx *Context, opts struct {
 		return err
 	}
 
-	cert, err := co.IssueCertificate("runtime-server")
+	cert, err := co.IssueCertificate("miren-server")
 	if err != nil {
 		ctx.Log.Error("failed to issue server certificate", "error", err)
 		return fmt.Errorf("failed to issue server certificate: %w", err)
@@ -584,10 +584,10 @@ func Server(ctx *Context, opts struct {
 		}
 	}
 
-	ctx.UILog.Info("Runtime server started", "address", opts.Address, "etcd_endpoints", opts.EtcdEndpoints, "etcd_prefix", opts.EtcdPrefix, "runner_id", opts.RunnerId)
+	ctx.UILog.Info("Miren server started", "address", opts.Address, "etcd_endpoints", opts.EtcdEndpoints, "etcd_prefix", opts.EtcdPrefix, "runner_id", opts.RunnerId)
 
-	ctx.Info("Runtime server started successfully! You can now connect to the cluster using `-C %s`\n", opts.ConfigClusterName)
-	ctx.Info("For example: cd my-app && runtime deploy -C %s", opts.ConfigClusterName)
+	ctx.Info("Miren server started successfully! You can now connect to the cluster using `-C %s`\n", opts.ConfigClusterName)
+	ctx.Info("For example: cd my-app && miren deploy -C %s", opts.ConfigClusterName)
 
 	// Wait for all goroutines to complete or context to be cancelled
 	err = eg.Wait()
@@ -595,7 +595,7 @@ func Server(ctx *Context, opts struct {
 		ctx.Log.Error("error during execution", "error", err)
 	}
 
-	ctx.Log.Info("runtime server shutting down, cleaning up resources")
+	ctx.Log.Info("miren server shutting down, cleaning up resources")
 	return err
 }
 
@@ -633,7 +633,7 @@ func writeLocalClusterConfig(ctx *Context, cc *caauth.ClientCertificate, address
 		return fmt.Errorf("failed to get user home directory: %w", err)
 	}
 
-	configDirPath := filepath.Join(homeDir, ".config/runtime/clientconfig.d")
+	configDirPath := filepath.Join(homeDir, ".config/miren/clientconfig.d")
 
 	// Create the directory if it doesn't exist
 	if err := os.MkdirAll(configDirPath, 0755); err != nil {

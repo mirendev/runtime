@@ -126,7 +126,7 @@ func (c *Coordinator) LoadCA(ctx context.Context) error {
 		c.Log.Info("generating new CA", "path", cert)
 
 		ca, err := caauth.New(caauth.Options{
-			CommonName:   "runtime-server",
+			CommonName:   "miren-server",
 			Organization: "miren",
 			ValidFor:     10 * year,
 		})
@@ -203,7 +203,7 @@ regen:
 	c.Log.Info("generating new API cert", "path", cert)
 
 	cc, err := c.authority.IssueCertificate(caauth.Options{
-		CommonName:   "runtime-api",
+		CommonName:   "miren-api",
 		Organization: "miren",
 		ValidFor:     1 * year,
 		IPs:          ips,
@@ -235,11 +235,11 @@ regen:
 }
 
 func (c *Coordinator) LocalConfig() (*clientconfig.Config, error) {
-	return c.NamedConfig("runtime-user")
+	return c.NamedConfig("miren-user")
 }
 
 func (c *Coordinator) ServiceConfig() (*clientconfig.Config, error) {
-	return c.NamedConfig("runtime-services")
+	return c.NamedConfig("miren-services")
 }
 
 func (c *Coordinator) NamedConfig(name string) (*clientconfig.Config, error) {

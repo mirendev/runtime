@@ -162,27 +162,27 @@ else
     echo "  ETCD_ENDPOINTS=$ETCD_ENDPOINTS"
     echo "  CLICKHOUSE_URL=$CLICKHOUSE_URL"
     
-    # Build runtime if needed and create 'r' alias
+    # Build miren if needed and create 'm' alias
     SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
     PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-    RUNTIME_BIN="$PROJECT_DIR/bin/runtime"
+    MIREN_BIN="$PROJECT_DIR/bin/miren"
     
-    if [[ ! -f "$RUNTIME_BIN" ]]; then
-        echo "Building runtime binary..."
-        (cd "$PROJECT_DIR" && make bin/runtime)
+    if [[ ! -f "$MIREN_BIN" ]]; then
+        echo "Building miren binary..."
+        (cd "$PROJECT_DIR" && make bin/miren)
     fi
     
-    if [[ -f "$RUNTIME_BIN" ]]; then
-        alias r="$RUNTIME_BIN"
-        echo "✓ Created alias 'r' for runtime command"
+    if [[ -f "$MIREN_BIN" ]]; then
+        alias m="$MIREN_BIN"
+        echo "✓ Created alias 'm' for miren command"
     else
-        echo "✗ Failed to build runtime binary"
+        echo "✗ Failed to build miren binary"
     fi
 fi
 
 echo ""
-if [[ "${BASH_SOURCE[0]}" != "${0}" ]] && [[ -f "$RUNTIME_BIN" ]]; then
-    echo "You can now run: r server -vv --etcd=localhost:2379 --clickhouse-addr=localhost:9000"
+if [[ "${BASH_SOURCE[0]}" != "${0}" ]] && [[ -f "$MIREN_BIN" ]]; then
+    echo "You can now run: m server -vv --etcd=localhost:2379 --clickhouse-addr=localhost:9000"
 else
-    echo "You can now run: ./bin/runtime server -vv --etcd=localhost:2379 --clickhouse-addr=localhost:9000"
+    echo "You can now run: ./bin/miren server -vv --etcd=localhost:2379 --clickhouse-addr=localhost:9000"
 fi

@@ -140,9 +140,9 @@ func (m *Runtime) Package(
 		WithExec([]string{"/bin/sh", "-c", `
 		set -e
 		cd /src
-		make bin/runtime
+		make bin/miren
 		mkdir -p /tmp/package
-		cp bin/runtime /tmp/package
+		cp bin/miren /tmp/package
 		cp /usr/local/bin/runc /tmp/package
 		cp /usr/local/bin/runsc /tmp/package
 		cp /usr/local/bin/containerd-shim-runsc-v1 /tmp/package
