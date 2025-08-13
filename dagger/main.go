@@ -92,7 +92,6 @@ func (m *Runtime) BuildEnv(dir *dagger.Directory) *dagger.Container {
 		WithExec([]string{"apt-get", "update"}).
 		WithExec([]string{"apt-get", "install", "-y",
 			"bash",
-			"clickhouse-client",
 			"gotestsum",
 			"inetutils-ping",
 			"iproute2",
