@@ -140,7 +140,7 @@ func TestSandbox(t *testing.T) {
 		bc, err := co.CC.NewContainer(ctx,
 			"busybox",
 			containerd.WithNewSnapshot("busybox-snapshot", img),
-			containerd.WithRuntime("io.containerd.runsc.v1", nil),
+			containerd.WithRuntime("io.containerd.runc.v2", nil),
 			containerd.WithNewSpec(
 				oci.WithDefaultSpec(),
 				oci.WithImageConfig(img),
@@ -1098,6 +1098,235 @@ func TestSandbox(t *testing.T) {
 
 		// Clean up the remaining sandbox
 		err = sbc.Delete(ctx, sbID2)
+		r.NoError(err)
+	})
+
+	t.Run("port detection works correctly", func(t *testing.T) {
+		r := require.New(t)
+
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cancel()
+
+		reg, cleanup := testutils.Registry(observability.TestInject, build.TestInject)
+		defer cleanup()
+
+		var cc *containerd.Client
+		err := reg.Init(&cc)
+		r.NoError(err)
+
+		var co SandboxController
+		err = reg.Populate(&co)
+		r.NoError(err)
+
+		defer co.Close()
+
+		r.NoError(co.Init(ctx))
+
+		ctx = namespaces.WithNamespace(ctx, co.Namespace)
+
+		// Create a sandbox with a container that binds to port 8080
+		id := entity.Id(sbName())
+
+		var sb compute.Sandbox
+		sb.ID = id
+		sb.Labels = append(sb.Labels, "runtime.computer/app=test-port")
+
+		// Add a container that runs a simple HTTP server on port 8080
+		sb.Container = []compute.Container{
+			{
+				Name:  "http-server",
+				Image: "docker.io/library/busybox:latest",
+				// Run a simple HTTP server using nc (netcat) on port 8080
+				Command: "while true; do echo -e 'HTTP/1.1 200 OK\n\nHello' | nc -l -p 8080; done",
+				Port: []compute.Port{
+					{Port: 8080, Protocol: "tcp"},
+				},
+			},
+		}
+
+		cont := &entity.Entity{
+			ID:    id,
+			Attrs: sb.Encode(),
+		}
+
+		meta := &entity.Meta{
+			Entity:   cont,
+			Revision: 1,
+		}
+
+		var tco compute.Sandbox
+		tco.Decode(cont)
+
+		// Create the sandbox
+		err = co.Create(ctx, &tco, meta)
+		r.NoError(err)
+
+		// Verify network was allocated
+		r.Len(tco.Network, 1)
+		ca, err := netip.ParsePrefix(tco.Network[0].Address)
+		r.NoError(err)
+		ipAddr := ca.Addr().String()
+
+		// Get the container ID for port checking
+		containerID := fmt.Sprintf("%s-%s", co.containerPrefix(id), "http-server")
+
+		// Wait for the port to be detected as bound (with timeout)
+		portBound := false
+		deadline := time.Now().Add(30 * time.Second)
+
+		for time.Now().Before(deadline) {
+			co.portMu.Lock()
+			if ports, ok := co.portMap[containerID]; ok {
+				for _, p := range ports.Ports {
+					if p.Port == 8080 {
+						portBound = true
+						co.Log.Info("Port detected as bound", "port", p.Port, "addr", p.Addr)
+						break
+					}
+				}
+			}
+			co.portMu.Unlock()
+
+			if portBound {
+				break
+			}
+
+			time.Sleep(500 * time.Millisecond)
+		}
+
+		r.True(portBound, "Port 8080 should have been detected as bound")
+
+		// Try to connect to the port to verify it's actually listening
+		resp, err := http.Get(fmt.Sprintf("http://%s:8080", ipAddr))
+		if err == nil {
+			defer resp.Body.Close()
+			r.Equal(200, resp.StatusCode, "HTTP server should respond with 200 OK")
+		}
+
+		// Clean up
+		err = co.Delete(ctx, id)
+		r.NoError(err)
+
+		// Verify port is marked as unbound after deletion
+		time.Sleep(1 * time.Second)
+		co.portMu.Lock()
+		ports, ok := co.portMap[containerID]
+		if ok {
+			for _, p := range ports.Ports {
+				r.NotEqual(8080, p.Port, "Port 8080 should not be in bound ports after deletion")
+			}
+		}
+		co.portMu.Unlock()
+	})
+
+	t.Run("multiple ports detection", func(t *testing.T) {
+		r := require.New(t)
+
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cancel()
+
+		reg, cleanup := testutils.Registry(observability.TestInject, build.TestInject)
+		defer cleanup()
+
+		var cc *containerd.Client
+		err := reg.Init(&cc)
+		r.NoError(err)
+
+		var co SandboxController
+		err = reg.Populate(&co)
+		r.NoError(err)
+
+		defer co.Close()
+
+		r.NoError(co.Init(ctx))
+
+		ctx = namespaces.WithNamespace(ctx, co.Namespace)
+
+		// Create a sandbox with a container that binds to multiple ports
+		id := entity.Id(sbName())
+
+		var sb compute.Sandbox
+		sb.ID = id
+
+		// Add a container that listens on multiple ports
+		sb.Container = []compute.Container{
+			{
+				Name:  "multi-port",
+				Image: "docker.io/library/busybox:latest",
+				// Script that listens on multiple ports
+				Command: `sh -c '
+					nc -l -p 8080 &
+					nc -l -p 8081 &
+					nc -l -p 8082 &
+					wait
+				'`,
+				Port: []compute.Port{
+					{Port: 8080, Protocol: "tcp"},
+					{Port: 8081, Protocol: "tcp"},
+					{Port: 8082, Protocol: "tcp"},
+				},
+			},
+		}
+
+		cont := &entity.Entity{
+			ID:    id,
+			Attrs: sb.Encode(),
+		}
+
+		meta := &entity.Meta{
+			Entity:   cont,
+			Revision: 1,
+		}
+
+		var tco compute.Sandbox
+		tco.Decode(cont)
+
+		// Create the sandbox
+		err = co.Create(ctx, &tco, meta)
+		r.NoError(err)
+
+		// Get the container ID
+		containerID := fmt.Sprintf("%s-%s", co.containerPrefix(id), "multi-port")
+
+		// Wait for all ports to be detected as bound
+		expectedPorts := map[int]bool{8080: false, 8081: false, 8082: false}
+		deadline := time.Now().Add(30 * time.Second)
+
+		for time.Now().Before(deadline) {
+			co.portMu.Lock()
+			if ports, ok := co.portMap[containerID]; ok {
+				for _, p := range ports.Ports {
+					if _, expected := expectedPorts[p.Port]; expected {
+						expectedPorts[p.Port] = true
+						co.Log.Info("Port detected as bound", "port", p.Port)
+					}
+				}
+			}
+			co.portMu.Unlock()
+
+			// Check if all ports are detected
+			allDetected := true
+			for _, detected := range expectedPorts {
+				if !detected {
+					allDetected = false
+					break
+				}
+			}
+
+			if allDetected {
+				break
+			}
+
+			time.Sleep(500 * time.Millisecond)
+		}
+
+		// Verify all ports were detected
+		for port, detected := range expectedPorts {
+			r.True(detected, fmt.Sprintf("Port %d should have been detected as bound", port))
+		}
+
+		// Clean up
+		err = co.Delete(ctx, id)
 		r.NoError(err)
 	})
 }

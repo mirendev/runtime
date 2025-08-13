@@ -7,7 +7,6 @@ import (
 	"log/slog"
 	"net/netip"
 	"os"
-	"os/exec"
 	"time"
 
 	"github.com/mitchellh/cli"
@@ -64,11 +63,6 @@ func (c *Context) setupServerComponents(ctx context.Context, reg *asm.Registry) 
 
 	reg.Register("tempdir", os.TempDir())
 
-	if path, err := exec.LookPath("runsc-miren"); err == nil && path != "" {
-		reg.Register("runsc_binary", path)
-	} else {
-		reg.Register("runsc_binary", "runsc")
-	}
 
 	reg.Register("server-id", "miren-server")
 

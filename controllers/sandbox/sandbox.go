@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"net/netip"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -26,11 +25,9 @@ import (
 	"github.com/containerd/errdefs"
 	"github.com/mr-tron/base58"
 	"github.com/opencontainers/runtime-spec/specs-go"
-	"github.com/pelletier/go-toml/v2"
 	"github.com/pkg/errors"
 	"golang.org/x/crypto/blake2b"
 	"golang.org/x/sys/unix"
-	"gvisor.dev/gvisor/pkg/shim/v1/runtimeoptions"
 	"miren.dev/runtime/components/netresolve"
 	"miren.dev/runtime/network"
 	"miren.dev/runtime/observability"
@@ -62,8 +59,7 @@ type SandboxController struct {
 
 	EAC *entityserver_v1alpha.EntityAccessClient
 
-	Namespace   string `asm:"namespace"`
-	RunscBinary string `asm:"runsc_binary,optional"`
+	Namespace string `asm:"namespace"`
 
 	NetServ *network.ServiceManager
 
@@ -75,7 +71,6 @@ type SandboxController struct {
 
 	LogsMaintainer *observability.LogsMaintainer
 
-	RunscMon  *observability.RunSCMonitor
 	StatusMon *observability.StatusMonitor
 
 	Resolver   netresolve.Resolver
@@ -89,94 +84,17 @@ type SandboxController struct {
 	monitors int
 	cond     *sync.Cond
 
-	runscConfigPath string
-
 	running sync.WaitGroup
 
-	portMu   sync.Mutex
-	portCond *sync.Cond
-	portMap  map[string]*containerPorts
+	portMu      sync.Mutex
+	portCond    *sync.Cond
+	portMap     map[string]*containerPorts
+	portMonitor *PortMonitor
 }
 
 func (c *SandboxController) Populated() error {
 	c.Log = c.Log.With("module", "sandbox")
 	return nil
-}
-
-func (c *SandboxController) setupRunscConfig() error {
-	if c.RunscBinary == "" {
-		c.RunscBinary = "runsc"
-	}
-
-	path := filepath.Join(c.Tempdir, "runsc.toml")
-
-	exe, err := exec.LookPath(c.RunscBinary)
-	if err != nil {
-		return fmt.Errorf("failed to find runsc binary: %w", err)
-	}
-
-	f, err := os.Create(path)
-	if err != nil {
-		return fmt.Errorf("failed to create runsc config: %w", err)
-	}
-
-	defer f.Close()
-
-	fmt.Fprintf(f, "binary_name = \"%s\"\n", exe)
-
-	c.runscConfigPath = path
-
-	return nil
-}
-
-func (c *SandboxController) setupNewRunscConfig(path string, opts map[string]string) error {
-	if c.RunscBinary == "" {
-		c.RunscBinary = "runsc"
-	}
-
-	exe, err := exec.LookPath(c.RunscBinary)
-	if err != nil {
-		return fmt.Errorf("failed to find runsc binary: %w", err)
-	}
-
-	f, err := os.Create(path)
-	if err != nil {
-		return fmt.Errorf("failed to create runsc config: %w", err)
-	}
-
-	defer f.Close()
-
-	top := map[string]any{
-		"binary_name": exe,
-	}
-
-	if len(opts) > 0 {
-		top["runsc_config"] = opts
-	}
-
-	return toml.NewEncoder(f).Encode(top)
-}
-
-func SetupRunsc(dir string) (string, string) {
-	path := filepath.Join(dir, "runsc-entry")
-	pic := filepath.Join(dir, "pod-init-config.json")
-
-	f, err := os.Create(path)
-	if err != nil {
-		panic(err)
-	}
-
-	fmt.Fprintf(f,
-		"#!/bin/bash\nexec runsc -pod-init-config \"%s\" \"$@\"\n", pic)
-
-	defer f.Close()
-
-	err = os.Chmod(path, 0755)
-	if err != nil {
-		panic(err)
-	}
-
-	return path, pic
 }
 
 func (c *SandboxController) SetPortStatus(id string, port observability.BoundPort, status observability.PortStatus) {
@@ -228,36 +146,10 @@ func (c *SandboxController) Init(ctx context.Context) error {
 	c.portCond = sync.NewCond(&c.portMu)
 	c.portMap = make(map[string]*containerPorts)
 
-	runscBin, podInit := SetupRunsc(c.Tempdir)
-	c.RunscBinary = runscBin
+	// Initialize port monitor
+	c.portMonitor = NewPortMonitor(c.Log, c)
 
-	c.RunscMon.Ports = c
-
-	monPath := filepath.Join(c.Tempdir, "runsc-mon.sock")
-
-	if _, err := os.Stat(monPath); err == nil {
-		c.Log.Warn("runsc monitor socket already exists, removing it", "path", monPath)
-		os.Remove(monPath)
-	}
-
-	c.RunscMon.SetEndpoint(monPath)
-
-	err := c.RunscMon.WritePodInit(podInit)
-	if err != nil {
-		return fmt.Errorf("failed to write runsc config: %w", err)
-	}
-
-	err = c.RunscMon.Monitor(ctx)
-	if err != nil {
-		return fmt.Errorf("failed to start runsc monitor: %w", err)
-	}
-
-	err = c.setupRunscConfig()
-	if err != nil {
-		return err
-	}
-
-	err = c.LogsMaintainer.Setup(ctx)
+	err := c.LogsMaintainer.Setup(ctx)
 	if err != nil {
 		return err
 	}
@@ -302,9 +194,8 @@ func (c *SandboxController) Close() error {
 	}
 	c.mu.Unlock()
 
-	err := c.RunscMon.Close()
-	if err != nil {
-		c.Log.Error("failed to close runsc monitor", "err", err)
+	if c.portMonitor != nil {
+		c.portMonitor.Close()
 	}
 
 	c.running.Wait()
@@ -1000,15 +891,6 @@ func (c *SandboxController) buildSpec(
 	// Create unique cgroup path for this sandbox
 	cgroupPath := fmt.Sprintf("/miren/sandbox-%s", sb.ID.PathSafe())
 
-	// Make sure the parent directory for the cgroup exists so that gvisor doesn't
-	// try to remove it. This works around a bug in gvisor where it will attempt
-	// to remove the any cgroup directory it creates.
-	// PR with gvisor fix: https://github.com/google/gvisor/pull/11933
-	err = os.MkdirAll(filepath.Join("/sys/fs/cgroup", filepath.Dir(cgroupPath)), 0755)
-	if err != nil {
-		c.Log.Error("failed to create cgroup directory", "path", cgroupPath, "err", err)
-	}
-
 	specOpts := []oci.SpecOpts{
 		oci.WithImageConfig(img),
 		oci.WithDefaultUnixDevices,
@@ -1025,18 +907,8 @@ func (c *SandboxController) buildSpec(
 		containerdx.WithOOMScoreAdj(defaultSandboxOOMAdj, false),
 	}
 
-	cfg := map[string]string{}
-
 	if sb.HostNetwork {
-		cfg["network"] = "host"
 		specOpts = append(specOpts, oci.WithHostNamespace(specs.NetworkNamespace))
-	}
-
-	cfgPath := c.sandboxPath(sb, "runsc.toml")
-
-	err = c.setupNewRunscConfig(cfgPath, cfg)
-	if err != nil {
-		return nil, err
 	}
 
 	id := sb.ID.String()
@@ -1044,10 +916,7 @@ func (c *SandboxController) buildSpec(
 	opts = append(opts,
 		containerd.WithNewSnapshot(id, img),
 		containerd.WithNewSpec(specOpts...),
-		containerd.WithRuntime("io.containerd.runsc.v1", &runtimeoptions.Options{
-			TypeUrl:    "io.containerd.runsc.v1.options",
-			ConfigPath: cfgPath,
-		}),
+		containerd.WithRuntime("io.containerd.runc.v2", nil),
 		containerd.WithAdditionalContainerLabels(lbls),
 	)
 
@@ -1169,7 +1038,9 @@ func (c *SandboxController) bootContainers(
 
 		id := fmt.Sprintf("%s-%s", c.containerPrefix(sb.ID), container.Name)
 
+		var ports []int
 		for _, port := range container.Port {
+			ports = append(ports, int(port.Port))
 			ret = append(ret, waitPort{
 				id:   id,
 				port: int(port.Port),
@@ -1204,6 +1075,12 @@ func (c *SandboxController) bootContainers(
 		}
 
 		c.Log.Info("container started", "id", cc.ID())
+
+		// Start port monitoring for this container if it has ports
+		if len(ports) > 0 && len(ep.Addresses) > 0 {
+			ip := ep.Addresses[0].Addr().String()
+			c.portMonitor.MonitorContainer(id, ip, ports)
+		}
 	}
 
 	return ret, nil
@@ -1370,10 +1247,6 @@ func (c *SandboxController) buildSubContainerSpec(
 			Type: specs.TimeNamespace,
 			Path: fmt.Sprintf("/proc/%d/ns/time", sbPid),
 		}),
-		oci.WithAnnotations(map[string]string{
-			"io.kubernetes.cri.container-type": "container",
-			"io.kubernetes.cri.sandbox-id":     c.pauseContainerId(sb.ID),
-		}),
 		oci.WithEnv(co.Env),
 	}
 
@@ -1404,10 +1277,7 @@ func (c *SandboxController) buildSubContainerSpec(
 	opts = append(opts,
 		containerd.WithNewSnapshot(id, img),
 		containerd.WithNewSpec(specOpts...),
-		containerd.WithRuntime("io.containerd.runsc.v1", &runtimeoptions.Options{
-			TypeUrl:    "io.containerd.runsc.v1.options",
-			ConfigPath: c.runscConfigPath,
-		}),
+		containerd.WithRuntime("io.containerd.runc.v2", nil),
 		containerd.WithAdditionalContainerLabels(lbls),
 	)
 
@@ -1433,6 +1303,10 @@ func (c *SandboxController) destroySubContainers(ctx context.Context, sb *comput
 	for _, container := range sb.Container {
 		id := fmt.Sprintf("%s-%s", c.containerPrefix(sb.ID), container.Name)
 		containerIds = append(containerIds, id)
+		// Stop port monitoring for this container
+		if c.portMonitor != nil {
+			c.portMonitor.StopMonitoring(id)
+		}
 	}
 
 	// Retry loop with exponential backoff
