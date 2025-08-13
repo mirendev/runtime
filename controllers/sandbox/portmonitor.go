@@ -170,6 +170,6 @@ func (pm *PortMonitor) checkPort(ip string, port int) bool {
 	if err != nil {
 		return false
 	}
-	conn.Close()
+	_ = conn.Close()
 	return true
 }

@@ -1118,7 +1118,7 @@ func TestSandbox(t *testing.T) {
 		err = reg.Populate(&co)
 		r.NoError(err)
 
-		defer co.Close()
+		defer checkClosed(t, &co)
 
 		r.NoError(co.Init(ctx))
 
@@ -1199,7 +1199,7 @@ func TestSandbox(t *testing.T) {
 		// Try to connect to the port to verify it's actually listening
 		resp, err := http.Get(fmt.Sprintf("http://%s:8080", ipAddr))
 		if err == nil {
-			defer resp.Body.Close()
+			defer checkClosed(t, resp.Body)
 			r.Equal(200, resp.StatusCode, "HTTP server should respond with 200 OK")
 		}
 
@@ -1236,7 +1236,7 @@ func TestSandbox(t *testing.T) {
 		err = reg.Populate(&co)
 		r.NoError(err)
 
-		defer co.Close()
+		defer checkClosed(t, &co)
 
 		r.NoError(co.Init(ctx))
 

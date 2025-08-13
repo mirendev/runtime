@@ -194,13 +194,15 @@ func (c *SandboxController) Close() error {
 	}
 	c.mu.Unlock()
 
+	var err error
+
 	if c.portMonitor != nil {
-		c.portMonitor.Close()
+		err = c.portMonitor.Close()
 	}
 
 	c.running.Wait()
 
-	return nil
+	return err
 }
 
 const (
