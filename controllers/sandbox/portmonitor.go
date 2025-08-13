@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"net/netip"
 	"sync"
 	"time"
 
@@ -85,6 +86,19 @@ func (pm *PortMonitor) Close() error {
 	return nil
 }
 
+func (pm *PortMonitor) resolveIP(ip string) netip.Addr {
+	if ip == "" {
+		return netip.Addr{}
+	}
+	addr, _ := net.ResolveIPAddr("ip", ip)
+	if addr != nil {
+		if ipAddr, ok := netipx.FromStdIP(addr.IP); ok {
+			return ipAddr
+		}
+	}
+	return netip.Addr{}
+}
+
 func (pm *PortMonitor) monitorPorts(ctx context.Context, task *monitorTask) {
 	defer pm.wg.Done()
 
@@ -109,13 +123,9 @@ func (pm *PortMonitor) monitorPorts(ctx context.Context, task *monitorTask) {
 				bp := observability.BoundPort{
 					Port: port,
 				}
-				if task.ip != "" {
-					addr, _ := net.ResolveIPAddr("ip", task.ip)
-					if addr != nil {
-						if ipAddr, ok := netipx.FromStdIP(addr.IP); ok {
-							bp.Addr = ipAddr
-						}
-					}
+
+				if addr := pm.resolveIP(task.ip); addr.IsValid() {
+					bp.Addr = addr
 				}
 				pm.ports.SetPortStatus(task.containerID, bp, observability.PortStatusUnbound)
 			}
@@ -131,13 +141,8 @@ func (pm *PortMonitor) monitorPorts(ctx context.Context, task *monitorTask) {
 					bp := observability.BoundPort{
 						Port: port,
 					}
-					if task.ip != "" {
-						addr, _ := net.ResolveIPAddr("ip", task.ip)
-						if addr != nil {
-							if ipAddr, ok := netipx.FromStdIP(addr.IP); ok {
-								bp.Addr = ipAddr
-							}
-						}
+					if addr := pm.resolveIP(task.ip); addr.IsValid() {
+						bp.Addr = addr
 					}
 					pm.ports.SetPortStatus(task.containerID, bp, observability.PortStatusBound)
 					boundPorts[port] = true
@@ -147,13 +152,8 @@ func (pm *PortMonitor) monitorPorts(ctx context.Context, task *monitorTask) {
 					bp := observability.BoundPort{
 						Port: port,
 					}
-					if task.ip != "" {
-						addr, _ := net.ResolveIPAddr("ip", task.ip)
-						if addr != nil {
-							if ipAddr, ok := netipx.FromStdIP(addr.IP); ok {
-								bp.Addr = ipAddr
-							}
-						}
+					if addr := pm.resolveIP(task.ip); addr.IsValid() {
+						bp.Addr = addr
 					}
 					pm.ports.SetPortStatus(task.containerID, bp, observability.PortStatusUnbound)
 					delete(boundPorts, port)
