@@ -92,7 +92,6 @@ func (m *Runtime) BuildEnv(dir *dagger.Directory) *dagger.Container {
 		WithExec([]string{"apt-get", "update"}).
 		WithExec([]string{"apt-get", "install", "-y",
 			"bash",
-			"clickhouse-client",
 			"gotestsum",
 			"inetutils-ping",
 			"iproute2",
@@ -144,7 +143,6 @@ func (m *Runtime) Package(
 		mkdir -p /tmp/package
 		cp bin/miren /tmp/package
 		cp /usr/local/bin/runc /tmp/package
-		cp /usr/local/bin/runsc /tmp/package
 		cp /usr/local/bin/containerd-shim-runsc-v1 /tmp/package
 		cp /usr/local/bin/containerd-shim-runc-v2 /tmp/package
 		cp /usr/local/bin/containerd /tmp/package
