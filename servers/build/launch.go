@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"maps"
+	"strings"
 	"time"
 
 	"github.com/containerd/containerd/v2/client"
@@ -141,7 +142,7 @@ func (l *LaunchBuildkit) Launch(ctx context.Context, addr string, lo ...LaunchOp
 			{
 				Path: "/etc/buildkit/buildkitd.toml",
 				Mode: "0644",
-				Data: config,
+				Data: strings.TrimSpace(config),
 			},
 		},
 	})
