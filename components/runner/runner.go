@@ -177,12 +177,18 @@ func (r *Runner) setupEntity(ctx context.Context, ec *entityserver.Client) error
 	r.se = sess
 
 	node := compute_v1alpha.Node{
-		Status:      compute_v1alpha.READY,
 		Constraints: types.LabelSet("compute", "generic"),
 		ApiAddress:  r.ListenAddress,
 	}
 
-	res, err := ec.Create(ctx, r.Id, &node)
+	res, err := ec.CreateOrUpdate(ctx, r.Id, &node)
+	if err != nil {
+		return err
+	}
+
+	err = ec.UpdateAttrs(ctx, res, (&compute_v1alpha.Node{
+		Status: compute_v1alpha.READY,
+	}).Encode)
 	if err != nil {
 		return err
 	}
