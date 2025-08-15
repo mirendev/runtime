@@ -684,6 +684,11 @@ func writeLocalClusterConfig(ctx *Context, cc *caauth.ClientCertificate, address
 
 // fixOwnershipIfSudo fixes file/directory ownership when running under sudo
 func fixOwnershipIfSudo(ctx *Context, path string) error {
+	if os.Geteuid() != 0 {
+		// Not running as root, nothing to do
+		return nil
+	}
+
 	// Check if running under sudo
 	sudoUID := os.Getenv("SUDO_UID")
 	sudoGID := os.Getenv("SUDO_GID")
