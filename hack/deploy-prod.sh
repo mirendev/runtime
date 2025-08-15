@@ -5,9 +5,9 @@ set -euo pipefail
 # Configuration
 HOST="miren.cloud"
 # Use an absolute, unique temp file on the remote host to avoid tilde-expansion and collisions
-REMOTE_TEMP_PATH="/tmp/miren-runtime.$(date +%s).$$"
-INSTALL_PATH="/usr/local/libexec/miren/runtime"
-SERVICE_NAME="miren-runtime"
+REMOTE_TEMP_PATH="/tmp/miren.$(date +%s).$$"
+INSTALL_PATH="/var/lib/miren/release/miren"
+SERVICE_NAME="miren"
 
 # Colors for output
 RED='\033[0;31m'
@@ -151,15 +151,15 @@ else
 fi
 
 # Verify the binary exists
-if [ ! -f "dist/runtime-dist" ]; then
-    print_error "Distribution binary not found at dist/runtime-dist"
+if [ ! -f "dist/miren-dist" ]; then
+    print_error "Distribution binary not found at dist/miren-dist"
     print_error "Run 'make dist' to build it"
     exit 1
 fi
 
 # Step 2: Copy binary to production server
 print_step "Copying binary to production server..."
-if ! scp dist/runtime-dist "$HOST:$REMOTE_TEMP_PATH"; then
+if ! scp dist/miren-dist "$HOST:$REMOTE_TEMP_PATH"; then
     print_error "Failed to copy binary to server"
     exit 1
 fi
@@ -237,4 +237,3 @@ if [ "$FOLLOW_LOGS" = true ]; then
     print_step "Following service logs (Ctrl+C to stop)..."
     ssh "$HOST" "sudo journalctl -u ${SERVICE_NAME} -f"
 fi
-
