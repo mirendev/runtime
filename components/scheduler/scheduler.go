@@ -3,6 +3,7 @@ package scheduler
 import (
 	"context"
 	"log/slog"
+	"math/rand"
 	"sync"
 
 	"miren.dev/runtime/api/compute/compute_v1alpha"
@@ -133,12 +134,14 @@ func (s *Scheduler) AssignSandboxes(ctx context.Context, eac *eas.EntityAccessCl
 	// Find first available node
 	var firstNode *compute_v1alpha.Node
 	for _, node := range s.nodes {
-		firstNode = node
-		break
+		if node.Status == compute_v1alpha.READY {
+			firstNode = node
+			break
+		}
 	}
 
 	if firstNode == nil {
-		return cond.Error("no nodes available for scheduling")
+		return cond.Error("no nodes available for mass scheduling")
 	}
 
 	s.log.Debug("considering sandboxes for assignment", "count", len(sandboxes))
@@ -167,35 +170,36 @@ func (s *Scheduler) assignSandbox(ctx context.Context, ent *entity.Entity, eac *
 	s.assigning.Lock()
 	defer s.assigning.Unlock()
 
-	// TODO here is where a real scheduling algorithm will go.
-	// Find first available node
-	var firstNode *compute_v1alpha.Node
+	var nodes []*compute_v1alpha.Node
 	for _, node := range s.nodes {
-		firstNode = node
-		break
+		if node.Status == compute_v1alpha.READY {
+			nodes = append(nodes, node)
+		}
 	}
 
-	if firstNode == nil {
-		s.log.Error("no nodes available for scheduling")
+	if len(nodes) == 0 {
+		s.log.Error("no nodes available for scheduling", "sandbox", sandbox.Entity.ID)
 		return nil
 	}
+
+	// TODO do more than pick a random ready node
+	assignedNode := nodes[rand.Intn(len(nodes))]
 
 	se := compute_v1alpha.Schedule{
 		Key: compute_v1alpha.Key{
 			Kind: compute_v1alpha.KindSandbox,
-			Node: firstNode.ID,
+			Node: assignedNode.ID,
 		},
 	}
+
+	// Update the sandbox entity with the assigned node attribute
+	// then store the new sandbox entity back into the entity server
 
 	err := sandbox.Update(se.Encode())
 	if err != nil {
 		s.log.Error("failed to update sandbox entity", "error", err)
 		return err
 	}
-
-	// Create scheduler index attribute
-	//schedIndex := sch.Index(sb.KindSandbox, string(firstNode.ID))
-	//sandbox.Entity.Attrs = append(sandbox.Entity.Attrs, schedIndex)
 
 	var rpcE eas.Entity
 	rpcE.SetId(string(sandbox.Entity.ID))
