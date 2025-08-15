@@ -172,6 +172,9 @@ DEPLOY_SCRIPT=$(
     cat <<'EOF'
 set -euo pipefail
 
+# Always clean up the remote temp file on exit (success or failure)
+trap 'rm -f "${REMOTE_TEMP_PATH}"' EXIT
+
 # Stop the service
 echo "Stopping ${SERVICE_NAME} service..."
 sudo systemctl stop "${SERVICE_NAME}" || true
@@ -183,10 +186,10 @@ if [ -f "${INSTALL_PATH}" ]; then
 fi
 
 # Install new binary
+echo "Ensuring install directory exists..."
+sudo install -d -o root -g root -m 0755 "$(dirname "${INSTALL_PATH}")"
 echo "Installing new binary..."
-sudo cp "${REMOTE_TEMP_PATH}" "${INSTALL_PATH}"
-sudo chmod +x "${INSTALL_PATH}"
-sudo chown root:root "${INSTALL_PATH}"
+sudo install -o root -g root -m 0755 "${REMOTE_TEMP_PATH}" "${INSTALL_PATH}"
 
 # Start the service
 echo "Starting ${SERVICE_NAME} service..."
@@ -218,9 +221,6 @@ else
     fi
     exit 1
 fi
-
-# Clean up temporary file
-rm -f "${REMOTE_TEMP_PATH}"
 EOF
 )
 
