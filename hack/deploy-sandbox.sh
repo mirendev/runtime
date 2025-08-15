@@ -4,7 +4,7 @@ set -euo pipefail
 
 # Configuration
 ZONE="us-central1-a"
-PROJECT="miren-deployment"
+PROJECT="miren-development"
 INSTANCE="miren-sandbox"
 REMOTE_TEMP_PATH="~/miren"
 INSTALL_PATH="/usr/local/bin/miren"
