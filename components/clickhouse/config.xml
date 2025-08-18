@@ -3,6 +3,15 @@
   If you have accidentally specified user-level settings here, server won't start.
   You can either move the settings to the right place inside "users.xml" file
    or add <skip_check_for_incorrect_settings>1</skip_check_for_incorrect_settings> here.
+
+  MEMORY TUNING: This configuration has been tuned for low-memory standalone operation
+  to prevent excessive memory usage and OOM issues. Key changes from defaults:
+  - max_server_memory_usage_to_ram_ratio: 0.5 (from 0.9)
+  - mark_cache_size: 1GB (from 5GB)
+  - uncompressed_cache_size: 512MB (from 8GB)
+  - background_pool_size: 4 (from 16)
+  - max_concurrent_queries: 100 (from 1000)
+  See users.xml for per-query memory limits.
 -->
 <clickhouse>
     <logger>
@@ -31,7 +40,7 @@
         <count>10</count>
 
         <console>1</console> <!-- Default behavior is autodetection (log to console if not daemon mode and is tty) -->
-         <console_log_level>notice</console_log_level> 
+         <console_log_level>notice</console_log_level>
 
         <!-- <use_syslog>0</use_syslog> -->
         <!-- <syslog_level>trace</syslog_level> -->
@@ -353,8 +362,8 @@
     <concurrent_threads_soft_limit_num>0</concurrent_threads_soft_limit_num>
     <concurrent_threads_soft_limit_ratio_to_cores>2</concurrent_threads_soft_limit_ratio_to_cores>
 
-    <!-- Maximum number of concurrent queries. -->
-    <max_concurrent_queries>1000</max_concurrent_queries>
+    <!-- Maximum number of concurrent queries. Reduced for low-memory operation -->
+    <max_concurrent_queries>100</max_concurrent_queries>
 
     <!-- Maximum memory usage (resident set size) for server process.
          Zero value or unset means default. Default is "max_server_memory_usage_to_ram_ratio" of available physical RAM.
@@ -378,21 +387,17 @@
 
     <max_thread_pool_size>10000</max_thread_pool_size>
 
-    <!-- Configure other thread pools: -->
-    <!--
-    <background_buffer_flush_schedule_pool_size>16</background_buffer_flush_schedule_pool_size>
-    <background_pool_size>16</background_pool_size>
-    <background_merges_mutations_concurrency_ratio>2</background_merges_mutations_concurrency_ratio>
+    <!-- Configure other thread pools: reduced for low-memory operation -->
+    <background_buffer_flush_schedule_pool_size>4</background_buffer_flush_schedule_pool_size>
+    <background_pool_size>4</background_pool_size>
+    <background_merges_mutations_concurrency_ratio>1</background_merges_mutations_concurrency_ratio>
     <background_merges_mutations_scheduling_policy>round_robin</background_merges_mutations_scheduling_policy>
-    <background_move_pool_size>8</background_move_pool_size>
-    <background_fetches_pool_size>8</background_fetches_pool_size>
-    <background_common_pool_size>8</background_common_pool_size>
-    <background_schedule_pool_size>128</background_schedule_pool_size>
-    <background_message_broker_schedule_pool_size>16</background_message_broker_schedule_pool_size>
-    <background_distributed_schedule_pool_size>16</background_distributed_schedule_pool_size>
-    <tables_loader_foreground_pool_size>0</tables_loader_foreground_pool_size>
-    <tables_loader_background_pool_size>0</tables_loader_background_pool_size>
-    -->
+    <background_move_pool_size>2</background_move_pool_size>
+    <background_fetches_pool_size>2</background_fetches_pool_size>
+    <background_common_pool_size>2</background_common_pool_size>
+    <background_schedule_pool_size>16</background_schedule_pool_size>
+    <background_message_broker_schedule_pool_size>4</background_message_broker_schedule_pool_size>
+    <background_distributed_schedule_pool_size>4</background_distributed_schedule_pool_size>
 
     <!-- Enables asynchronous loading of databases and tables to speedup server startup.
          Queries to not yet loaded entity will be blocked until load is finished.
@@ -400,8 +405,9 @@
     <async_load_databases>true</async_load_databases>
 
     <!-- On memory constrained environments you may have to set this to value larger than 1.
+         Reduced from default 0.9 to 0.5 for low-memory standalone operation to prevent OOM issues
       -->
-    <max_server_memory_usage_to_ram_ratio>0.9</max_server_memory_usage_to_ram_ratio>
+    <max_server_memory_usage_to_ram_ratio>0.5</max_server_memory_usage_to_ram_ratio>
 
     <!-- Simple server-wide memory profiler. Collect a stack trace at every peak allocation step (in bytes).
          Data will be stored in system.trace_log table with query_id = empty string.
@@ -430,12 +436,13 @@
          is slower than multi-core decompression on some server configurations.
          Enabling it can sometimes paradoxically make queries slower.
       -->
-    <uncompressed_cache_size>8589934592</uncompressed_cache_size>
+    <!-- Reduced from 8GB to 512MB for low-memory operation -->
+    <uncompressed_cache_size>536870912</uncompressed_cache_size>
 
     <!-- Approximate size of mark cache, used in tables of MergeTree family.
          In bytes. Cache is single for server. Memory is allocated only on demand.
-         You should not lower this value. -->
-    <!-- <mark_cache_size>5368709120</mark_cache_size> -->
+         Reduced from 5GB default to 1GB for low-memory operation -->
+    <mark_cache_size>1073741824</mark_cache_size>
 
     <!-- For marks of secondary indices. -->
     <!-- <index_mark_cache_size>5368709120</index_mark_cache_size> -->
@@ -1493,11 +1500,13 @@
     -->
 
     <!-- Settings to fine-tune MergeTree tables. See documentation in source code, in MergeTreeSettings.h -->
-    <!--
     <merge_tree>
+        <!-- Reduced to work with lower background_pool_size (4) × background_merges_mutations_concurrency_ratio (1) = 4 -->
+        <number_of_free_entries_in_pool_to_execute_mutation>2</number_of_free_entries_in_pool_to_execute_mutation>
+        <number_of_free_entries_in_pool_to_lower_max_size_of_merge>2</number_of_free_entries_in_pool_to_lower_max_size_of_merge>
+        <number_of_free_entries_in_pool_to_execute_optimize_entire_partition>2</number_of_free_entries_in_pool_to_execute_optimize_entire_partition>
         <max_suspicious_broken_parts>5</max_suspicious_broken_parts>
     </merge_tree>
-    -->
 
     <!-- Settings to fine-tune ReplicatedMergeTree tables. See documentation in source code, in MergeTreeSettings.h -->
     <!--
