@@ -147,6 +147,7 @@ func (m *Runtime) Package(
 		cp /usr/local/bin/containerd-shim-runc-v2 /tmp/package
 		cp /usr/local/bin/containerd /tmp/package
 		cp /usr/local/bin/nerdctl /tmp/package
+		cp /usr/local/bin/ctr /tmp/package
 		tar -C /tmp/package -czf /tmp/package.tar.gz .
 `})
 	return c.File("/tmp/package.tar.gz")
