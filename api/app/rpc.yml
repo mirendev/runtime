@@ -354,6 +354,18 @@ interfaces:
           - name: logs
             type: list
             element: LogEntry
+      - name: sandboxLogs
+        parameters:
+          - name: sandbox
+            type: string
+          - name: from
+            type: standard.Timestamp
+          - name: follow
+            type: bool
+        results:
+          - name: logs
+            type: list
+            element: LogEntry
 
   - name: Disks
     methods:

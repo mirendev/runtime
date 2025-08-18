@@ -1,4 +1,5 @@
 version: "2"
+
 linters:
   default: standard
   exclusions:
@@ -20,6 +21,10 @@ linters:
         linters:
           - govet
         text: unreachable code
+    # Exclude generated files from reporting issues
+    paths:
+      - ".*\\.gen\\.go$"
+
 formatters:
   enable:
     - gofmt
