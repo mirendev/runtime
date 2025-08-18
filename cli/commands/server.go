@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"os/user"
 	"path/filepath"
+	"strconv"
 	"time"
 
 	containerd "github.com/containerd/containerd/v2/client"
@@ -640,6 +641,20 @@ func writeLocalClusterConfig(ctx *Context, cc *caauth.ClientCertificate, address
 		return fmt.Errorf("failed to create config directory: %w", err)
 	}
 
+	// Fix directory ownership if running under sudo
+	// Fix ownership for all parent directories that we may have created
+	dirsToFix := []string{
+		filepath.Join(homeDir, ".config"),
+		filepath.Join(homeDir, ".config/miren"),
+		configDirPath,
+	}
+
+	for _, dir := range dirsToFix {
+		if err := fixOwnershipIfSudo(ctx, dir); err != nil {
+			ctx.Log.Warn("failed to fix directory ownership", "dir", dir, "error", err)
+		}
+	}
+
 	// Create the local cluster config
 	localConfigPath := filepath.Join(configDirPath, "50-local.yaml")
 
@@ -658,6 +673,48 @@ func writeLocalClusterConfig(ctx *Context, cc *caauth.ClientCertificate, address
 		return fmt.Errorf("failed to save local cluster config: %w", err)
 	}
 
+	// Fix file ownership if running under sudo
+	if err := fixOwnershipIfSudo(ctx, localConfigPath); err != nil {
+		ctx.Log.Warn("failed to fix config file ownership", "error", err)
+	}
+
 	ctx.Log.Info("wrote local cluster config", "path", localConfigPath, "name", clusterName, "address", address)
+	return nil
+}
+
+// fixOwnershipIfSudo fixes file/directory ownership when running under sudo
+func fixOwnershipIfSudo(ctx *Context, path string) error {
+	if os.Geteuid() != 0 {
+		// Not running as root, nothing to do
+		return nil
+	}
+
+	// Check if running under sudo
+	sudoUID := os.Getenv("SUDO_UID")
+	sudoGID := os.Getenv("SUDO_GID")
+
+	if sudoUID == "" || sudoGID == "" {
+		// Not running under sudo, nothing to do
+		return nil
+	}
+
+	// Parse UID and GID
+	uid, err := strconv.Atoi(sudoUID)
+	if err != nil {
+		return fmt.Errorf("failed to parse SUDO_UID: %w", err)
+	}
+
+	gid, err := strconv.Atoi(sudoGID)
+	if err != nil {
+		return fmt.Errorf("failed to parse SUDO_GID: %w", err)
+	}
+
+	// Change ownership
+	if err := os.Chown(path, uid, gid); err != nil {
+		return fmt.Errorf("failed to chown %s to %d:%d: %w", path, uid, gid, err)
+	}
+
+	ctx.Log.Debug("fixed ownership for", "path", path, "uid", uid, "gid", gid)
+
 	return nil
 }
