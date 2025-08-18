@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -8,19 +9,13 @@ import (
 	"sync"
 	"time"
 
-	"github.com/charmbracelet/bubbles/progress"
-	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 	"github.com/moby/buildkit/client"
-
 	"github.com/moby/buildkit/util/progress/progresswriter"
 
 	"miren.dev/runtime/api/build/build_v1alpha"
 	"miren.dev/runtime/appconfig"
-	"miren.dev/runtime/pkg/color"
-	"miren.dev/runtime/pkg/colortheory"
-	"miren.dev/runtime/pkg/progress/progressui"
+	"miren.dev/runtime/pkg/progress/upload"
 	"miren.dev/runtime/pkg/rpc/stream"
 	"miren.dev/runtime/pkg/tarx"
 )
@@ -79,39 +74,52 @@ func Deploy(ctx *Context, opts struct {
 			return err
 		}
 
-		cb = stream.Callback(func(su *build_v1alpha.Status) error {
-			update := su.Update()
+		// Add upload progress tracking in explain mode
+		uploadStartTime := time.Now()
+		var uploadBytes int64
+		var lastPrintTime time.Time
 
-			switch update.Which() {
-			case "buildkit":
-				sj := update.Buildkit()
+		progressReader := upload.NewProgressReader(r, func(progress upload.Progress) {
+			uploadBytes = progress.BytesRead
+			// Print progress every 500ms to avoid spamming
+			if time.Since(lastPrintTime) >= 500*time.Millisecond {
+				lastPrintTime = time.Now()
+				fmt.Fprintf(os.Stderr, "\r\033[K") // Clear to end of line
+				fmt.Fprintf(os.Stderr, "Uploading artifacts: %s at %s",
+					upload.FormatBytes(progress.BytesRead),
+					upload.FormatSpeed(progress.BytesPerSecond))
+			}
+		})
+		r = progressReader
 
-				var status client.SolveStatus
-				if err := json.Unmarshal(sj, &status); err != nil {
-					return err
-				}
-
-				select {
-				case <-ctx.Done():
-					return ctx.Err()
-				case pw.Status() <- &status:
-					// ok
-				}
-			case "error":
-				buildErrors = append(buildErrors, update.Error())
+		// Progress handler for explain mode
+		progressHandler := func(status *client.SolveStatus) error {
+			// Clear the upload progress line when buildkit starts
+			if uploadBytes > 0 {
+				uploadDuration := time.Since(uploadStartTime)
+				avgSpeed := float64(uploadBytes) / uploadDuration.Seconds()
+				fmt.Fprintf(os.Stderr, "\rUpload complete: %s in %.1fs at %s\n",
+					upload.FormatBytes(uploadBytes),
+					uploadDuration.Seconds(),
+					upload.FormatSpeed(avgSpeed))
+				uploadBytes = 0 // Only print once
 			}
 
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case pw.Status() <- status:
+				// ok
+			}
 			return nil
-		})
+		}
+
+		cb = createBuildStatusCallback(ctx, nil, nil, nil, &buildErrors, nil, progressHandler)
 
 		results, err = bc.BuildFromTar(ctx, name, stream.ServeReader(ctx, r), cb)
 		if err != nil {
-			if len(buildErrors) > 0 {
-				ctx.Printf("\n\nBuild failed with the following errors:\n")
-				for _, errMsg := range buildErrors {
-					ctx.Printf("  - %s\n", errMsg)
-				}
-			}
+			ctx.Printf("\n\nBuild failed with the following errors:\n")
+			printBuildErrors(ctx, buildErrors, nil)
 			return err
 		}
 
@@ -123,35 +131,145 @@ func Deploy(ctx *Context, opts struct {
 		}
 	} else {
 		var (
-			updateCh   = make(chan string, 1)
-			transferCh = make(chan transferUpdate, 1)
-			transfers  = map[string]transfer{}
-			wg         sync.WaitGroup
+			updateCh         = make(chan string, 1)
+			transferCh       = make(chan transferUpdate, 1)
+			uploadProgressCh = make(chan upload.Progress, 1)
+			transfers        = map[string]transfer{}
+			wg               sync.WaitGroup
 		)
 
 		defer wg.Wait()
 
-		p := tea.NewProgram(initialModel(updateCh, transferCh))
+		progressReader := upload.NewProgressReader(r, func(progress upload.Progress) {
+			select {
+			case uploadProgressCh <- progress:
+			default:
+			}
+		})
+		r = progressReader
+
+		// Create a context that can be cancelled
+		deployCtx, cancelDeploy := context.WithCancel(ctx)
+		defer cancelDeploy()
+
+		model := initialModel(updateCh, transferCh, uploadProgressCh)
+		p := tea.NewProgram(model)
+
+		var finalModel tea.Model
+		var runErr error
+
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			p.Run()
+			finalModel, runErr = p.Run()
+			if runErr == nil {
+				// Check if we exited due to interrupt or timeout
+				if dm, ok := finalModel.(*deployInfo); ok && (dm.interrupted || dm.currentPhase == "timeout") {
+					cancelDeploy() // Cancel the deployment context
+				}
+			} else {
+				// UI died; ensure we don't keep uploading/building
+				cancelDeploy()
+			}
 		}()
 
 		defer p.Quit()
 
-		cb = stream.Callback(func(su *build_v1alpha.Status) error {
-			update := su.Update()
+		// Progress handler for interactive mode
+		progressHandler := func(status *client.SolveStatus) error {
+			p.Send(status)
+			return nil
+		}
 
-			switch update.Which() {
-			case "buildkit":
-				sj := update.Buildkit()
+		cb = createBuildStatusCallback(deployCtx, updateCh, transferCh, transfers, &buildErrors, &buildLogs, progressHandler)
 
-				var status client.SolveStatus
-				if err := json.Unmarshal(sj, &status); err != nil {
-					return err
-				}
+		results, err = bc.BuildFromTar(deployCtx, name, stream.ServeReader(deployCtx, r), cb)
 
+		// Ensure the progress UI is shut down before printing
+		p.Quit()
+		wg.Wait()
+
+		// Get the final model to extract phase summaries
+		if m, ok := finalModel.(*deployInfo); ok && m.currentPhase == "buildkit" && err == nil {
+			// Complete the buildkit phase if it's still running and we succeeded
+			duration := time.Since(m.phaseStart)
+			buildPhase := phaseSummary{
+				name:     "Build & push image",
+				duration: duration,
+				details:  fmt.Sprintf("%d layers processed", m.parts),
+			}
+
+			// Only print the final build phase summary (TEA UI already showed the others)
+			ctx.Printf("%s\n", renderPhaseSummary(buildPhase))
+		}
+
+		if err != nil {
+			// Check if this was a context cancellation (from timeout or interrupt)
+			if deployCtx.Err() != nil {
+				ctx.Printf("\n\n❌ Deploy cancelled.\n")
+				return deployCtx.Err()
+			}
+
+			ctx.Printf("\n\nBuild failed.\n")
+			printBuildErrors(ctx, buildErrors, buildLogs)
+			return err
+		}
+
+	}
+
+	if results.Version() == "" {
+		ctx.Printf("\n\nError detected in building %s. No version returned.\n", name)
+		printBuildErrors(ctx, buildErrors, buildLogs)
+		return fmt.Errorf("build failed: no version returned")
+	}
+
+	ctx.Printf("\n\nUpdated version %s deployed. All traffic moved to new version.\n", results.Version())
+
+	return nil
+}
+
+// Helper function to print build errors and logs
+func printBuildErrors(ctx *Context, buildErrors []string, buildLogs []string) {
+	if len(buildErrors) > 0 {
+		ctx.Printf("\nErrors:\n")
+		for _, errMsg := range buildErrors {
+			ctx.Printf("  - %s\n", errMsg)
+		}
+	}
+
+	if len(buildLogs) > 0 {
+		ctx.Printf("\nBuild output:\n")
+		for _, log := range buildLogs {
+			ctx.Printf("%s\n", log)
+		}
+	}
+}
+
+
+// createBuildStatusCallback creates a callback for handling build status updates
+func createBuildStatusCallback(
+	ctx context.Context,
+	updateCh chan<- string,
+	transferCh chan<- transferUpdate,
+	transfers map[string]transfer,
+	buildErrors *[]string,
+	buildLogs *[]string,
+	progressHandler func(*client.SolveStatus) error,
+) stream.SendStream[*build_v1alpha.Status] {
+	return stream.Callback(func(su *build_v1alpha.Status) error {
+		update := su.Update()
+
+		switch update.Which() {
+		case "buildkit":
+			sj := update.Buildkit()
+
+			var status client.SolveStatus
+			if err := json.Unmarshal(sj, &status); err != nil {
+				return err
+			}
+
+			// Handle transfers if we have a transfer channel
+			if transferCh != nil {
 				var updated bool
 				for _, st := range status.Statuses {
 					if st.Total != 0 {
@@ -163,291 +281,61 @@ func Deploy(ctx *Context, opts struct {
 				if updated {
 					select {
 					case <-ctx.Done():
-						// none
+						// UI/operation cancelled, drop the update
 					case transferCh <- transferUpdate{transfers: transfers}:
 						// ok
+					default:
+						// channel full, drop to avoid blocking
 					}
 				}
+			}
 
-				p.Send(&status)
-
-				// Extract error messages from status
-				for _, vertex := range status.Vertexes {
-					if vertex.Error != "" {
-						buildErrors = append(buildErrors, vertex.Error)
-					}
+			// Call the progress handler if provided
+			if progressHandler != nil {
+				if err := progressHandler(&status); err != nil {
+					return err
 				}
+			}
 
-				// Collect all logs for potential output on failure
+			// Extract error messages from status
+			for _, vertex := range status.Vertexes {
+				if vertex.Error != "" {
+					*buildErrors = append(*buildErrors, vertex.Error)
+				}
+			}
+
+			// Collect all logs for potential output on failure
+			if buildLogs != nil {
 				for _, log := range status.Logs {
 					if log.Data != nil {
 						logStr := strings.TrimSpace(string(log.Data))
 						if logStr != "" {
-							buildLogs = append(buildLogs, logStr)
+							*buildLogs = append(*buildLogs, logStr)
 						}
 					}
 				}
+			}
 
-				// Fail the build if we detected any errors
-				if len(buildErrors) > 0 {
-					return fmt.Errorf("build failed with %d error(s)", len(buildErrors))
-				}
-
-				return nil
-			case "message":
-				msg := update.Message()
-				go func() {
-					updateCh <- msg
-				}()
-			case "error":
-				buildErrors = append(buildErrors, update.Error())
+			// Fail the build if we detected any errors
+			if len(*buildErrors) > 0 {
+				return fmt.Errorf("build failed with %d error(s)", len(*buildErrors))
 			}
 
 			return nil
-		})
-
-		results, err = bc.BuildFromTar(ctx, name, stream.ServeReader(ctx, r), cb)
-
-		// Ensure the progress UI is shut down before printing
-		p.Quit()
-		wg.Wait()
-
-		if err != nil {
-			ctx.Printf("\n\nBuild failed.\n")
-
-			if len(buildErrors) > 0 {
-				ctx.Printf("\nErrors:\n")
-				for _, errMsg := range buildErrors {
-					ctx.Printf("  - %s\n", errMsg)
+		case "message":
+			msg := update.Message()
+			if updateCh != nil {
+				select {
+				case updateCh <- msg:
+					// sent successfully
+				default:
+					// drop if UI isn't consuming
 				}
 			}
-
-			if len(buildLogs) > 0 {
-				ctx.Printf("\nBuild output:\n")
-				for _, log := range buildLogs {
-					ctx.Printf("%s\n", log)
-				}
-			}
-			return err
+		case "error":
+			*buildErrors = append(*buildErrors, update.Error())
 		}
 
-	}
-
-	if results.Version() == "" {
-		ctx.Printf("\n\nError detected in building %s. No version returned.\n", name)
-
-		if len(buildErrors) > 0 {
-			ctx.Printf("\nErrors:\n")
-			for _, errMsg := range buildErrors {
-				ctx.Printf("  - %s\n", errMsg)
-			}
-		}
-
-		if len(buildLogs) > 0 {
-			ctx.Printf("\nBuild output:\n")
-			for _, log := range buildLogs {
-				ctx.Printf("%s\n", log)
-			}
-		}
-		return fmt.Errorf("build failed: no version returned")
-	}
-
-	ctx.Printf("\n\nUpdated version %s deployed. All traffic moved to new version.\n", results.Version())
-
-	return nil
-}
-
-var liveFaint lipgloss.Style
-
-func init() {
-	lf := color.LiveFaint()
-	if lf == "" {
-		liveFaint = lipgloss.NewStyle().Faint(true)
-	} else {
-		liveFaint = lipgloss.NewStyle().Foreground(lipgloss.Color(lf))
-	}
-}
-
-type transfer struct {
-	total, current int64
-}
-
-type transferUpdate struct {
-	transfers map[string]transfer
-}
-
-type deployInfo struct {
-	cancel  func()
-	spinner spinner.Model
-
-	message string
-	update  chan string
-
-	transfers chan transferUpdate
-	prog      progress.Model
-	parts     int
-
-	showProgress bool
-	bp           tea.Model
-}
-
-var (
-	mirenBlue = "#3E53FB"
-	lightBlue = colortheory.ChangeLightness(mirenBlue, -10)
-	square    = "▰"
-
-	spinBlankStyle = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{
-		Light: "#111111",
-		Dark:  colortheory.ChangeLightness(mirenBlue, 25),
+		return nil
 	})
-
-	spinStyle = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{
-		Light: "#3E53FB",
-		Dark:  lightBlue,
-	})
-)
-
-func line(str string) string {
-	var sb strings.Builder
-
-	for _, b := range str {
-		if b == ' ' {
-			sb.WriteString(spinBlankStyle.Render(square))
-		} else {
-			sb.WriteString(spinStyle.Render(square))
-		}
-	}
-
-	return sb.String()
-}
-
-var Meter = spinner.Spinner{
-	Frames: []string{
-		line("   "),
-		line("▰  "),
-		line("▰▰ "),
-		line("▰▰▰"),
-		line(" ▰▰"),
-		line("  ▰"),
-	},
-	FPS: time.Second / 7, //nolint:mnd
-}
-
-func initialModel(update chan string, transfers chan transferUpdate) *deployInfo {
-	s := spinner.New()
-	s.Spinner = Meter
-	s.Style = lipgloss.NewStyle()
-
-	p := progress.New(progress.WithWidth(20), progress.WithGradient(
-		colortheory.ChangeLightness("#3E53FB", -10),
-		colortheory.ChangeLightness("#3E53FB", 20),
-	))
-
-	return &deployInfo{
-		spinner:   s,
-		message:   "Starting build",
-		update:    update,
-		transfers: transfers,
-		prog:      p,
-		bp:        progressui.TeaModel(),
-	}
-}
-
-func (m *deployInfo) Init() tea.Cmd {
-	return tea.Batch(
-		m.bp.Init(),
-		m.spinner.Tick,
-		func() tea.Msg {
-			return updateMsg{msg: <-m.update}
-		},
-		func() tea.Msg {
-			return <-m.transfers
-		},
-	)
-}
-
-type updateMsg struct {
-	msg   string
-	silly bool
-}
-
-type tickMsg struct{}
-
-func (m *deployInfo) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	var (
-		cmd  tea.Cmd
-		cmds []tea.Cmd
-	)
-
-	m.bp, cmd = m.bp.Update(msg)
-	if cmd != nil {
-		cmds = append(cmds, cmd)
-	}
-
-	switch msg := msg.(type) {
-	case updateMsg:
-		m.message = msg.msg
-
-		cmds = append(cmds, func() tea.Msg {
-			return updateMsg{msg: <-m.update}
-		})
-	case transferUpdate:
-		var total, current int64
-		for _, t := range msg.transfers {
-			total += t.total
-			current += t.current
-		}
-
-		m.parts = len(msg.transfers)
-
-		cmd := m.prog.SetPercent(float64(current) / float64(total))
-		cmds = append(cmds,
-			cmd,
-			func() tea.Msg {
-				return <-m.transfers
-			})
-	case progress.FrameMsg:
-		p, cmd := m.prog.Update(msg)
-		m.prog = p.(progress.Model)
-
-		if cmd != nil {
-			cmds = append(cmds, cmd)
-		}
-	case spinner.TickMsg:
-		var cmd tea.Cmd
-		m.spinner, cmd = m.spinner.Update(msg)
-		if cmd != nil {
-			cmds = append(cmds, cmd)
-		}
-	case tea.KeyMsg:
-		switch msg.Type {
-		case tea.KeyEsc:
-			m.showProgress = false
-		case tea.KeyEnter:
-			m.showProgress = !m.showProgress
-		}
-	}
-
-	return m, tea.Batch(cmds...)
-}
-
-var deployPrefixStyle = lipgloss.NewStyle().Faint(true)
-
-func (m *deployInfo) View() string {
-	fetch := deployPrefixStyle.Render(fmt.Sprintf("Fetching %d items:", m.parts))
-
-	str := fmt.Sprintf("  %s %s...\n      %s %s", m.spinner.View(), m.message, fetch, m.prog.View())
-
-	if !m.showProgress {
-		return lipgloss.JoinVertical(lipgloss.Top,
-			str,
-			liveFaint.Render("      [enter: explain]"),
-		)
-	}
-
-	return lipgloss.JoinVertical(lipgloss.Top,
-		str,
-		m.bp.View(),
-		liveFaint.Render("      [enter: hide explain]"),
-	)
 }
