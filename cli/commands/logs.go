@@ -1,23 +1,52 @@
 package commands
 
 import (
+	"fmt"
+	"strings"
 	"time"
 
-	"miren.dev/runtime/api"
+	"miren.dev/runtime/api/app/app_v1alpha"
+	"miren.dev/runtime/appconfig"
 	"miren.dev/runtime/pkg/rpc/standard"
 )
 
 func Logs(ctx *Context, opts struct {
-	AppCentric
+	ConfigCentric
 
-	Last *time.Duration `short:"l" long:"last" description:"Show logs from the last duration"`
+	App     string         `short:"a" long:"app" description:"Application get logs for" env:"MIREN_APP"`
+	Dir     string         `short:"d" long:"dir" description:"Directory to run from" default:"."`
+	Last    *time.Duration `short:"l" long:"last" description:"Show logs from the last duration"`
+	Sandbox string         `short:"s" long:"sandbox" description:"Show logs for a specific sandbox ID"`
 }) error {
+	// Check for conflicting options
+	if opts.App != "" && opts.Sandbox != "" {
+		return fmt.Errorf("cannot specify both --app and --sandbox")
+	}
+
+	// If neither is specified, try to load app from directory context
+	if opts.App == "" && opts.Sandbox == "" {
+		var ac *appconfig.AppConfig
+		var err error
+
+		if opts.Dir != "." {
+			ac, err = appconfig.LoadAppConfigUnder(opts.Dir)
+		} else {
+			ac, err = appconfig.LoadAppConfig()
+		}
+
+		if err == nil && ac != nil && ac.Name != "" {
+			opts.App = ac.Name
+		} else {
+			return fmt.Errorf("must specify either --app or --sandbox, or run from an app directory")
+		}
+	}
+
 	cl, err := ctx.RPCClient("dev.miren.runtime/logs")
 	if err != nil {
 		return err
 	}
 
-	ac := api.LogsClient{Client: cl}
+	ac := app_v1alpha.LogsClient{Client: cl}
 
 	typ := map[string]string{
 		"stdout":   "S",
@@ -37,7 +66,24 @@ func Logs(ctx *Context, opts struct {
 	}
 
 	for {
-		res, err := ac.AppLogs(ctx, opts.App, ts, false)
+		var (
+			res interface {
+				Logs() []*app_v1alpha.LogEntry
+			}
+			err error
+		)
+
+		if opts.Sandbox != "" {
+			// Normalize sandbox ID - ensure it has the "sandbox/" prefix
+			sandboxID := opts.Sandbox
+			if !strings.HasPrefix(sandboxID, "sandbox/") {
+				sandboxID = "sandbox/" + sandboxID
+			}
+			res, err = ac.SandboxLogs(ctx, sandboxID, ts, false)
+		} else {
+			res, err = ac.AppLogs(ctx, opts.App, ts, false)
+		}
+
 		if err != nil {
 			return err
 		}
@@ -55,7 +101,11 @@ func Logs(ctx *Context, opts struct {
 			break
 		}
 
-		ts = logs[len(logs)-1].Timestamp()
+		// For pagination, use the last log's timestamp + 1 microsecond to avoid duplicates
+		lastTime := standard.FromTimestamp(logs[len(logs)-1].Timestamp())
+		// Add 1 microsecond to exclude the last log from the next query
+		nextTime := lastTime.Add(time.Microsecond)
+		ts = standard.ToTimestamp(nextTime)
 	}
 
 	return nil

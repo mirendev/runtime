@@ -148,12 +148,13 @@ func (l *LogReader) Read(ctx context.Context, id string, opts ...LogReaderOption
 	}
 
 	if !o.From.IsZero() {
+		fromMicros := o.From.UnixMicro()
 		rows, err = l.DB.QueryContext(ctx,
 			`SELECT timestamp, stream, body, trace_id, attributes
 			   FROM logs
-			  WHERE entity = ? AND timestamp >= '?'
+			  WHERE entity = ? AND timestamp >= fromUnixTimestamp64Micro(?)
 			  ORDER BY timestamp ASC
-			  LIMIT ?`, id, o.From.UnixMicro(), limit)
+			  LIMIT ?`, id, fromMicros, limit)
 		if err != nil {
 			return nil, err
 		}
@@ -175,7 +176,72 @@ func (l *LogReader) Read(ctx context.Context, id string, opts ...LogReaderOption
 		var e LogEntry
 		err := rows.Scan(&e.Timestamp, &e.Stream, &e.Body, &e.TraceID, &e.Attributes)
 		if err != nil {
-			rows.Close()
+			_ = rows.Close()
+			return nil, err
+		}
+		entries = append(entries, e)
+	}
+
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return entries, nil
+}
+
+// ReadBySandbox reads logs for a specific sandbox ID by filtering on the sandbox attribute
+func (l *LogReader) ReadBySandbox(ctx context.Context, sandboxID string, opts ...LogReaderOption) ([]LogEntry, error) {
+	var o logReadOpts
+
+	for _, opt := range opts {
+		opt(&o)
+	}
+
+	var (
+		rows *sql.Rows
+		err  error
+
+		limit = o.Limit
+	)
+
+	if limit == 0 {
+		limit = 100
+	}
+
+	if !o.From.IsZero() {
+		fromMicros := o.From.UnixMicro()
+		rows, err = l.DB.QueryContext(ctx,
+			`SELECT timestamp, stream, body, trace_id, attributes
+			   FROM logs
+			  WHERE attributes['sandbox'] = ? AND timestamp >= fromUnixTimestamp64Micro(?)
+			  ORDER BY timestamp ASC
+			  LIMIT ?`, sandboxID, fromMicros, limit)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		rows, err = l.DB.QueryContext(ctx,
+			`SELECT timestamp, stream, body, trace_id, attributes
+			   FROM logs
+			  WHERE attributes['sandbox'] = ?
+			  ORDER BY timestamp ASC
+			  LIMIT ?`, sandboxID, limit)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	var entries []LogEntry
+
+	for rows.Next() {
+		var e LogEntry
+		err := rows.Scan(&e.Timestamp, &e.Stream, &e.Body, &e.TraceID, &e.Attributes)
+		if err != nil {
+			_ = rows.Close()
 			return nil, err
 		}
 		entries = append(entries, e)

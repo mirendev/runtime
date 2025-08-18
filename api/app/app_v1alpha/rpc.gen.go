@@ -2665,6 +2665,93 @@ func (v *LogsAppLogsResults) UnmarshalJSON(data []byte) error {
 	return json.Unmarshal(data, &v.data)
 }
 
+type logsSandboxLogsArgsData struct {
+	Sandbox *string             `cbor:"0,keyasint,omitempty" json:"sandbox,omitempty"`
+	From    *standard.Timestamp `cbor:"1,keyasint,omitempty" json:"from,omitempty"`
+	Follow  *bool               `cbor:"2,keyasint,omitempty" json:"follow,omitempty"`
+}
+
+type LogsSandboxLogsArgs struct {
+	call rpc.Call
+	data logsSandboxLogsArgsData
+}
+
+func (v *LogsSandboxLogsArgs) HasSandbox() bool {
+	return v.data.Sandbox != nil
+}
+
+func (v *LogsSandboxLogsArgs) Sandbox() string {
+	if v.data.Sandbox == nil {
+		return ""
+	}
+	return *v.data.Sandbox
+}
+
+func (v *LogsSandboxLogsArgs) HasFrom() bool {
+	return v.data.From != nil
+}
+
+func (v *LogsSandboxLogsArgs) From() *standard.Timestamp {
+	return v.data.From
+}
+
+func (v *LogsSandboxLogsArgs) HasFollow() bool {
+	return v.data.Follow != nil
+}
+
+func (v *LogsSandboxLogsArgs) Follow() bool {
+	if v.data.Follow == nil {
+		return false
+	}
+	return *v.data.Follow
+}
+
+func (v *LogsSandboxLogsArgs) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *LogsSandboxLogsArgs) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *LogsSandboxLogsArgs) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *LogsSandboxLogsArgs) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type logsSandboxLogsResultsData struct {
+	Logs *[]*LogEntry `cbor:"0,keyasint,omitempty" json:"logs,omitempty"`
+}
+
+type LogsSandboxLogsResults struct {
+	call rpc.Call
+	data logsSandboxLogsResultsData
+}
+
+func (v *LogsSandboxLogsResults) SetLogs(logs []*LogEntry) {
+	x := slices.Clone(logs)
+	v.data.Logs = &x
+}
+
+func (v *LogsSandboxLogsResults) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *LogsSandboxLogsResults) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *LogsSandboxLogsResults) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *LogsSandboxLogsResults) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
 type LogsAppLogs struct {
 	rpc.Call
 	args    LogsAppLogsArgs
@@ -2691,8 +2778,35 @@ func (t *LogsAppLogs) Results() *LogsAppLogsResults {
 	return results
 }
 
+type LogsSandboxLogs struct {
+	rpc.Call
+	args    LogsSandboxLogsArgs
+	results LogsSandboxLogsResults
+}
+
+func (t *LogsSandboxLogs) Args() *LogsSandboxLogsArgs {
+	args := &t.args
+	if args.call != nil {
+		return args
+	}
+	args.call = t.Call
+	t.Call.Args(args)
+	return args
+}
+
+func (t *LogsSandboxLogs) Results() *LogsSandboxLogsResults {
+	results := &t.results
+	if results.call != nil {
+		return results
+	}
+	results.call = t.Call
+	t.Call.Results(results)
+	return results
+}
+
 type Logs interface {
 	AppLogs(ctx context.Context, state *LogsAppLogs) error
+	SandboxLogs(ctx context.Context, state *LogsSandboxLogs) error
 }
 
 type reexportLogs struct {
@@ -2700,6 +2814,10 @@ type reexportLogs struct {
 }
 
 func (_ reexportLogs) AppLogs(ctx context.Context, state *LogsAppLogs) error {
+	panic("not implemented")
+}
+
+func (_ reexportLogs) SandboxLogs(ctx context.Context, state *LogsSandboxLogs) error {
 	panic("not implemented")
 }
 
@@ -2715,6 +2833,14 @@ func AdaptLogs(t Logs) *rpc.Interface {
 			Index:         0,
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.AppLogs(ctx, &LogsAppLogs{Call: call})
+			},
+		},
+		{
+			Name:          "sandboxLogs",
+			InterfaceName: "Logs",
+			Index:         0,
+			Handler: func(ctx context.Context, call rpc.Call) error {
+				return t.SandboxLogs(ctx, &LogsSandboxLogs{Call: call})
 			},
 		},
 	}
@@ -2764,6 +2890,38 @@ func (v LogsClient) AppLogs(ctx context.Context, application string, from *stand
 	}
 
 	return &LogsClientAppLogsResults{client: v.Client, data: ret}, nil
+}
+
+type LogsClientSandboxLogsResults struct {
+	client rpc.Client
+	data   logsSandboxLogsResultsData
+}
+
+func (v *LogsClientSandboxLogsResults) HasLogs() bool {
+	return v.data.Logs != nil
+}
+
+func (v *LogsClientSandboxLogsResults) Logs() []*LogEntry {
+	if v.data.Logs == nil {
+		return nil
+	}
+	return *v.data.Logs
+}
+
+func (v LogsClient) SandboxLogs(ctx context.Context, sandbox string, from *standard.Timestamp, follow bool) (*LogsClientSandboxLogsResults, error) {
+	args := LogsSandboxLogsArgs{}
+	args.data.Sandbox = &sandbox
+	args.data.From = from
+	args.data.Follow = &follow
+
+	var ret logsSandboxLogsResultsData
+
+	err := v.Call(ctx, "sandboxLogs", &args, &ret)
+	if err != nil {
+		return nil, err
+	}
+
+	return &LogsClientSandboxLogsResults{client: v.Client, data: ret}, nil
 }
 
 type disksNewArgsData struct {
