@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"fmt"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -561,4 +562,177 @@ func TestReconcileController_WatchReconnect(t *testing.T) {
 
 	// Verify we had exactly 2 connection attempts (initial + 1 reconnect)
 	assert.Equal(t, int32(2), watchCallCount.Load(), "Should have exactly 2 watch connections")
+}
+
+func TestReconcileController_QueueOverflow(t *testing.T) {
+	t.Skip("This test is designed to to check queue overflow handling, but it's got some races. TODO: rewrite with synctest")
+
+	log := slog.New(slogfmt.NewTestHandler(t, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+	store := entity.NewMockStore()
+
+	// Pre-create all test entities before starting controller to avoid concurrent map access
+	// We need more than the queue size (1000) to trigger overflow
+	numEntities := 1100 // Just slightly more than queue size
+	entityIds := make([]entity.Id, 0, numEntities)
+	for i := range numEntities {
+		id := fmt.Sprintf("test/entity%d", i)
+		entityIds = append(entityIds, entity.Id(id))
+		store.Entities[entity.Id(id)] = &entity.Entity{
+			ID: entity.Id(id),
+			Attrs: entity.Attrs(
+				entity.Ident, id,
+				entity.Type, "test/type",
+			),
+		}
+	}
+
+	// Track resync completion attempts
+	var resyncStarted atomic.Int32
+	var resyncCompleted atomic.Int32
+
+	// Custom ListIndex to track when resync starts and completes
+	store.OnListIndex = func(ctx context.Context, attr entity.Attr) ([]entity.Id, error) {
+		if attr.ID == entity.Type && attr.Value.String() == "test/type" {
+			count := resyncStarted.Add(1)
+			t.Logf("Resync #%d started - listing %d entities", count, len(entityIds))
+
+			// Small delay to ensure deterministic behavior
+			select {
+			case <-time.After(1 * time.Millisecond):
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+
+			// Track completion
+			resyncCompleted.Add(1)
+			t.Logf("Resync #%d completed listing", count)
+
+			return entityIds, nil
+		}
+		// For other queries, return empty
+		return []entity.Id{}, nil
+	}
+
+	// Provide a custom WatchIndex to avoid modifying the entities map
+	store.OnWatchIndex = func(ctx context.Context, attr entity.Attr) (clientv3.WatchChan, error) {
+		ch := make(chan clientv3.WatchResponse)
+		// Just keep the channel open until context is done
+		go func() {
+			<-ctx.Done()
+			close(ch)
+		}()
+		return ch, nil
+	}
+
+	server := &entityserver.EntityServer{
+		Log:   log,
+		Store: store,
+	}
+
+	sc := &entityserver_v1alpha.EntityAccessClient{
+		Client: rpc.LocalClient(entityserver_v1alpha.AdaptEntityAccess(server)),
+	}
+
+	testIndex := entity.Any(entity.Type, "test/type")
+
+	// Track how many events were processed
+	var eventsProcessed atomic.Int32
+	processedChan := make(chan struct{}, 1)
+	blockHandler := make(chan struct{})
+
+	// Handler that processes first event then blocks until we signal
+	handler := func(ctx context.Context, event Event) ([]entity.Attr, error) {
+		count := eventsProcessed.Add(1)
+		if count == 1 {
+			// Signal first event was processed
+			select {
+			case processedChan <- struct{}{}:
+			default:
+			}
+		}
+		// Block until test signals us to continue
+		select {
+		case <-blockHandler:
+		case <-ctx.Done():
+		}
+		return nil, nil
+	}
+
+	controller := NewReconcileController(
+		"test-controller",
+		log,
+		testIndex,
+		sc,
+		handler,
+		30*time.Millisecond, // resync period - short enough to trigger multiple times
+		1,                   // single worker
+	)
+
+	// Start controller
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	defer close(blockHandler) // Ensure handler unblocks on cleanup
+
+	err := controller.Start(ctx)
+	require.NoError(t, err)
+
+	// Wait for first event to be processed (proving worker started)
+	select {
+	case <-processedChan:
+		t.Log("First event processed, queue should start filling")
+	case <-time.After(50 * time.Millisecond):
+		t.Fatal("First event was never processed")
+	}
+
+	// Now the worker is blocked and queue has 999 free slots (started with 1000, processed 1)
+	// First resync should happen around 30ms and will try to queue 1100 events
+	// It should queue 999 successfully, then drop the rest with warnings
+
+	// Wait for multiple resync periods
+	time.Sleep(70 * time.Millisecond) // Should be enough for 2+ resync attempts
+
+	// The context will timeout and we'll stop the controller
+	<-ctx.Done()
+	controller.Stop()
+
+	// Check the results
+	started := resyncStarted.Load()
+	completed := resyncCompleted.Load()
+	processed := eventsProcessed.Load()
+
+	t.Logf("Resync attempts started: %d", started)
+	t.Logf("Resync attempts completed: %d", completed)
+	t.Logf("Events processed: %d", processed)
+
+	// With the bug (no default case):
+	// - First resync starts and completes (lists entities)
+	// - periodicResync tries to queue events, gets stuck at event 1000
+	// - Second resync may start but won't complete because periodicResync is stuck
+	//
+	// With the fix (default case):
+	// - Multiple resyncs should complete successfully
+	// - Events get dropped when queue is full but resync continues
+
+	if started < 2 {
+		t.Errorf("Expected at least 2 resync attempts to start, got %d", started)
+	}
+
+	// This is the key test: with the bug, the second resync won't complete
+	// because periodicResync gets stuck trying to queue event 1001
+	if completed < 2 {
+		t.Errorf("Expected at least 2 resync attempts to complete, got %d", completed)
+		t.Log("This indicates the resync got stuck trying to queue events to a full queue")
+		t.Log("The fix (default case) allows resync to drop events and continue")
+	}
+
+	// We expect at least 1 event to be processed (the first one before blocking)
+	// Due to timing, a few more might sneak through before the handler blocks
+	if processed < 1 {
+		t.Errorf("Expected at least 1 event to be processed, got %d", processed)
+	}
+	if processed > 10 {
+		// If too many were processed, the blocking isn't working
+		t.Errorf("Too many events processed (%d), handler should have blocked", processed)
+	}
 }

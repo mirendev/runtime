@@ -175,6 +175,9 @@ func (c *ReconcileController) Start(top context.Context) error {
 					return nil
 				case c.workQueue <- ev:
 					//ok
+				default:
+					// Queue is full, log and continue
+					c.Log.Warn("Work queue full, dropping watch event", "entity", ev.Id, "eventType", ev.Type, "queueSize", len(c.workQueue))
 				}
 
 				return nil
@@ -340,6 +343,9 @@ func (c *ReconcileController) periodicResync(ctx context.Context) {
 				return
 			case c.workQueue <- ev:
 				// Event added to queue
+			default:
+				// Queue is full, log and skip this event
+				c.Log.Warn("Work queue full during resync, dropping event", "entity", ev.Id, "queueSize", len(c.workQueue))
 			}
 		}
 

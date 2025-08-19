@@ -13,6 +13,7 @@ type MockStore struct {
 	Entities        map[Id]*Entity
 	OnWatchIndex    func(ctx context.Context, attr Attr) (clientv3.WatchChan, error)
 	GetEntitiesFunc func(ctx context.Context, ids []Id) ([]*Entity, error)
+	OnListIndex     func(ctx context.Context, attr Attr) ([]Id, error) // Hook to track ListIndex calls
 }
 
 var _ Store = &MockStore{}
@@ -152,7 +153,12 @@ func (m *MockStore) WatchEntity(ctx context.Context, id Id) (chan EntityOp, erro
 }
 
 func (m *MockStore) ListIndex(ctx context.Context, attr Attr) ([]Id, error) {
-	// Filter entities by the given attribute
+	// Call hook if provided
+	if m.OnListIndex != nil {
+		return m.OnListIndex(ctx, attr)
+	}
+
+	// Default implementation: Filter entities by the given attribute
 	var ids []Id
 	for id, entity := range m.Entities {
 		for _, a := range entity.Attrs {
