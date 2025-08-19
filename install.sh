@@ -56,6 +56,58 @@ check_docker() {
     return 0
 }
 
+verify_checksum() {
+    local file_path="$1"
+    local checksum_url="$2"
+    local temp_checksum="/tmp/$(basename "$file_path").sha256"
+    
+    # Try to download the checksum file
+    if curl -fsSL --connect-timeout 5 --retry 2 "$checksum_url" -o "$temp_checksum" 2>/dev/null; then
+        print_info "Verifying checksum..."
+        
+        # Check if sha256sum is available
+        if command -v sha256sum &>/dev/null; then
+            local expected_checksum=$(cat "$temp_checksum" | cut -d' ' -f1)
+            local actual_checksum=$(sha256sum "$file_path" | cut -d' ' -f1)
+            
+            if [ "$expected_checksum" = "$actual_checksum" ]; then
+                print_success "Checksum verification passed"
+                rm -f "$temp_checksum"
+                return 0
+            else
+                print_error "Checksum verification failed!"
+                print_error "Expected: $expected_checksum"
+                print_error "Actual: $actual_checksum"
+                rm -f "$temp_checksum" "$file_path"
+                exit 1
+            fi
+        elif command -v shasum &>/dev/null; then
+            # macOS fallback
+            local expected_checksum=$(cat "$temp_checksum" | cut -d' ' -f1)
+            local actual_checksum=$(shasum -a 256 "$file_path" | cut -d' ' -f1)
+            
+            if [ "$expected_checksum" = "$actual_checksum" ]; then
+                print_success "Checksum verification passed"
+                rm -f "$temp_checksum"
+                return 0
+            else
+                print_error "Checksum verification failed!"
+                print_error "Expected: $expected_checksum"
+                print_error "Actual: $actual_checksum"
+                rm -f "$temp_checksum" "$file_path"
+                exit 1
+            fi
+        else
+            print_info "No checksum utility available, skipping verification"
+            rm -f "$temp_checksum"
+            return 0
+        fi
+    else
+        print_info "Checksum not available, skipping verification"
+        return 0
+    fi
+}
+
 install_linux() {
     print_info "Installing Miren for Linux..."
     
@@ -69,6 +121,10 @@ install_linux() {
         print_error "Failed to download miren package"
         exit 1
     }
+    
+    # Verify checksum if available
+    local checksum_url="https://api.miren.cloud/assets/release/miren/${version}/miren-base-linux-${arch}.tar.gz.sha256"
+    verify_checksum "/tmp/miren.tar.gz" "$checksum_url"
     
     # Create installation directory
     mkdir -p "$INSTALL_DIR/bin"
@@ -112,6 +168,10 @@ install_macos() {
         exit 1
     }
     
+    # Verify checksum if available
+    local binary_checksum_url="https://api.miren.cloud/assets/release/miren/${version}/miren-darwin-${arch}.zip.sha256"
+    verify_checksum "/tmp/miren.zip" "$binary_checksum_url"
+    
     # Extract the binary
     print_info "Extracting miren binary..."
     if ! command -v unzip &>/dev/null; then
@@ -139,6 +199,9 @@ install_macos() {
         print_error "Failed to download docker-compose configuration"
         exit 1
     }
+    
+    # Verify checksum if available
+    verify_checksum "/tmp/docker-compose.yml" "https://api.miren.cloud/assets/docker-compose.yml.sha256"
     
     # Start services in background
     print_info "Starting miren server containers..."
