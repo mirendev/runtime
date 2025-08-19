@@ -7,19 +7,22 @@ services:
       dockerfile: docker/Dockerfile.runtime
       args:
         TARGETARCH: ${TARGETARCH:-amd64}
-    image: miren/runtime:latest
+    image: oci.miren.cloud/runtime:latest
     container_name: miren-runtime
     privileged: true
-    pid: host
-    network_mode: host
+    ports:
+      - "8080:8080"
+      - "8443:8443/udp"
     volumes:
       - runtime-data:/data
       - ${HOME}/.config/runtime:/root/.config/runtime
       - ${PWD}:/workspace
     working_dir: /workspace
     environment:
-      - S3_URL=http://localhost:9000
-      - ETCD_ENDPOINTS=http://localhost:2379
+      - S3_URL=http://minio:9000
+      - ETCD_ENDPOINTS=http://etcd:2379
+      - CLICKHOUSE_HOST=clickhouse
+      - CLICKHOUSE_PORT=9000
     depends_on:
       - etcd
       - clickhouse

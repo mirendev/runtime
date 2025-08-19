@@ -9,7 +9,7 @@ NC='\033[0m' # No Color
 
 # Default values
 INSTALL_DIR="$HOME/.miren/runtime"
-BINARY_NAME="runtime"
+BINARY_NAME="miren"
 OCI_IMAGE="oci.miren.cloud/runtime:latest"
 
 # Functions
@@ -104,17 +104,17 @@ install_macos() {
     # Download macOS client binary from asset service
     local arch=$(detect_arch)
     local version="${MIREN_VERSION:-main}"
-    local binary_url="https://api.miren.cloud/assets/release/runtime/${version}/runtime-darwin-${arch}.zip"
+    local binary_url="https://api.miren.cloud/assets/release/miren/${version}/miren-darwin-${arch}.zip"
     
     print_info "Downloading macOS runtime client..."
-    curl -L "$binary_url" -o /tmp/runtime.zip || {
+    curl -L "$binary_url" -o /tmp/miren.zip || {
         print_error "Failed to download macOS runtime client"
         exit 1
     }
     
     # Extract the binary
     print_info "Extracting runtime binary..."
-    unzip -j /tmp/runtime.zip -d /tmp/ || {
+    unzip -j /tmp/miren.zip -d /tmp/ || {
         print_error "Failed to extract runtime binary"
         exit 1
     }
@@ -123,11 +123,11 @@ install_macos() {
     mkdir -p "$INSTALL_DIR/bin"
     
     # Install the binary
-    mv /tmp/runtime "$INSTALL_DIR/bin/runtime"
-    chmod +x "$INSTALL_DIR/bin/runtime"
+    mv /tmp/miren "$INSTALL_DIR/bin/miren"
+    chmod +x "$INSTALL_DIR/bin/miren"
     
     # Cleanup
-    rm /tmp/runtime.zip
+    rm /tmp/miren.zip
     
     # Download docker-compose configuration from asset service
     print_info "Downloading runtime server configuration..."
@@ -175,25 +175,25 @@ install_macos() {
     
     # Copy client configuration from container accessible location
     print_info "Configuring runtime client..."
-    mkdir -p "$HOME/.config/runtime"
-    docker exec miren-runtime cat /tmp/clientconfig.yaml > "$HOME/.config/runtime/clientconfig.yaml" || {
+    mkdir -p "$HOME/.config/miren"
+    docker exec miren-runtime cat /tmp/clientconfig.yaml > "$HOME/.config/miren/clientconfig.yaml" || {
         print_error "Failed to copy client configuration"
         exit 1
     }
     
     # Verify the copied config file
-    if [ ! -s "$HOME/.config/runtime/clientconfig.yaml" ]; then
+    if [ ! -s "$HOME/.config/miren/clientconfig.yaml" ]; then
         print_error "Copied configuration file is empty"
         exit 1
     fi
     
-    local copied_size=$(wc -c < "$HOME/.config/runtime/clientconfig.yaml" 2>/dev/null || echo "0")
+    local copied_size=$(wc -c < "$HOME/.config/miren/clientconfig.yaml" 2>/dev/null || echo "0")
     print_info "Successfully copied client configuration (${copied_size} bytes)"
     
     # Create symlink or add to PATH
     if [ -w "/usr/local/bin" ]; then
-        ln -sf "$INSTALL_DIR/bin/runtime" "/usr/local/bin/runtime"
-        print_success "Runtime wrapper installed to /usr/local/bin/runtime"
+        ln -sf "$INSTALL_DIR/bin/miren" "/usr/local/bin/miren"
+        print_success "Runtime wrapper installed to /usr/local/bin/miren"
     else
         print_info "Adding $INSTALL_DIR/bin to PATH..."
         
@@ -210,7 +210,7 @@ install_macos() {
     fi
     
     print_success "Runtime installed successfully!"
-    print_info "You can now use 'runtime' command to interact with Miren Runtime."
+    print_info "You can now use 'miren' command to interact with Miren Runtime."
 }
 
 # Main installation flow
@@ -249,9 +249,9 @@ main() {
     print_success "Installation complete!"
     echo
     echo "Next steps:"
-    echo "  1. Run 'runtime init' to initialize a new application"
-    echo "  2. Run 'runtime deploy' to deploy your application"
-    echo "  3. Run 'runtime --help' for more information"
+    echo "  1. Run 'miren init' to initialize a new application"
+    echo "  2. Run 'miren deploy' to deploy your application"
+    echo "  3. Run 'miren --help' for more information"
 }
 
 # Run main function

@@ -9,8 +9,8 @@ WORKDIR /build
 # Copy source code
 COPY . .
 
-# Build runtime binary
-RUN make bin/runtime
+# Build miren binary
+RUN make bin/miren
 
 # Final stage
 FROM ubuntu:22.04
@@ -22,6 +22,7 @@ RUN apt-get update && apt-get install -y \
     iptables \
     iproute2 \
     netcat-openbsd \
+    nftables \
     util-linux \
     && rm -rf /var/lib/apt/lists/*
 
@@ -82,55 +83,94 @@ COPY hack/containerd-config.toml /etc/containerd/config.toml
 COPY hack/runsc-ignore /usr/local/bin/runsc-ignore
 RUN chmod +x /usr/local/bin/runsc-ignore
 
-# Copy runtime binary from builder
-COPY --from=builder /build/bin/runtime /usr/local/bin/runtime
+# Copy miren binary from builder
+COPY --from=builder /build/bin/miren /usr/local/bin/runtime
 
 # Create necessary directories
-RUN mkdir -p /data/containerd /data/buildkit /var/log /root/.config/runtime
+RUN mkdir -p /data/containerd /data/containerd/state /data/buildkit /var/log /root/.config/runtime /var/lib/miren/containerd
 
 # Create entrypoint script
-RUN cat > /entrypoint.sh << 'EOF'
-#!/bin/bash
-set -e
-
-# Start containerd in the background
-echo "Starting containerd..."
-containerd &
-CONTAINERD_PID=$!
-
-# Wait for containerd to be ready
-sleep 2
-
-# Start buildkitd in the background
-echo "Starting buildkitd..."
-buildkitd --root /data/buildkit &
-BUILDKITD_PID=$!
-
-# Wait for buildkitd to be ready
-sleep 2
-
-# Function to cleanup on exit
-cleanup() {
-    echo "Shutting down services..."
-    kill $BUILDKITD_PID 2>/dev/null || true
-    kill $CONTAINERD_PID 2>/dev/null || true
-    wait $BUILDKITD_PID 2>/dev/null || true
-    wait $CONTAINERD_PID 2>/dev/null || true
-}
-
-# Trap exit signals
-trap cleanup EXIT INT TERM
-
-# Execute command or keep running
-if [ $# -eq 0 ]; then
-    echo "Runtime services started. Container will stay running..."
-    # Keep container running
-    tail -f /dev/null
-else
-    # Execute provided command
-    exec "$@"
-fi
-EOF
+RUN echo '#!/bin/bash' > /entrypoint.sh && \
+    echo 'set -e' >> /entrypoint.sh && \
+    echo '' >> /entrypoint.sh && \
+    echo '# Start containerd in the background' >> /entrypoint.sh && \
+    echo 'echo "Starting containerd..."' >> /entrypoint.sh && \
+    echo 'containerd --address /var/lib/miren/containerd/containerd.sock --root /data/containerd --state /data/containerd/state &' >> /entrypoint.sh && \
+    echo 'CONTAINERD_PID=$!' >> /entrypoint.sh && \
+    echo '' >> /entrypoint.sh && \
+    echo '# Wait for containerd to be ready' >> /entrypoint.sh && \
+    echo 'sleep 2' >> /entrypoint.sh && \
+    echo '' >> /entrypoint.sh && \
+    echo '# Start buildkitd in the background' >> /entrypoint.sh && \
+    echo 'echo "Starting buildkitd..."' >> /entrypoint.sh && \
+    echo 'buildkitd --root /data/buildkit &' >> /entrypoint.sh && \
+    echo 'BUILDKITD_PID=$!' >> /entrypoint.sh && \
+    echo '' >> /entrypoint.sh && \
+    echo '# Wait for buildkitd to be ready' >> /entrypoint.sh && \
+    echo 'sleep 2' >> /entrypoint.sh && \
+    echo '' >> /entrypoint.sh && \
+    echo '# Function to cleanup on exit' >> /entrypoint.sh && \
+    echo 'cleanup() {' >> /entrypoint.sh && \
+    echo '    echo "Shutting down services..."' >> /entrypoint.sh && \
+    echo '    kill $BUILDKITD_PID 2>/dev/null || true' >> /entrypoint.sh && \
+    echo '    kill $CONTAINERD_PID 2>/dev/null || true' >> /entrypoint.sh && \
+    echo '    wait $BUILDKITD_PID 2>/dev/null || true' >> /entrypoint.sh && \
+    echo '    wait $CONTAINERD_PID 2>/dev/null || true' >> /entrypoint.sh && \
+    echo '}' >> /entrypoint.sh && \
+    echo '' >> /entrypoint.sh && \
+    echo '# Trap exit signals' >> /entrypoint.sh && \
+    echo 'trap cleanup EXIT INT TERM' >> /entrypoint.sh && \
+    echo '' >> /entrypoint.sh && \
+    echo '# Wait for external services to be ready' >> /entrypoint.sh && \
+    echo 'echo "Waiting for external services..."' >> /entrypoint.sh && \
+    echo 'while ! nc -z etcd 2379; do' >> /entrypoint.sh && \
+    echo '    echo "Waiting for etcd..."' >> /entrypoint.sh && \
+    echo '    sleep 1' >> /entrypoint.sh && \
+    echo 'done' >> /entrypoint.sh && \
+    echo '' >> /entrypoint.sh && \
+    echo 'while ! nc -z minio 9000; do' >> /entrypoint.sh && \
+    echo '    echo "Waiting for MinIO..."' >> /entrypoint.sh && \
+    echo '    sleep 1' >> /entrypoint.sh && \
+    echo 'done' >> /entrypoint.sh && \
+    echo '' >> /entrypoint.sh && \
+    echo 'echo "External services are ready!"' >> /entrypoint.sh && \
+    echo '' >> /entrypoint.sh && \
+    echo '# Execute command or start runtime server' >> /entrypoint.sh && \
+    echo 'if [ $# -eq 0 ]; then' >> /entrypoint.sh && \
+    echo '    echo "Starting runtime server..."' >> /entrypoint.sh && \
+    echo '    runtime server -vv --mode=distributed -a 0.0.0.0:8443 &' >> /entrypoint.sh && \
+    echo '    SERVER_PID=$!' >> /entrypoint.sh && \
+    echo '' >> /entrypoint.sh && \
+    echo '    # Wait for server to be ready' >> /entrypoint.sh && \
+    echo '    echo "Waiting for runtime server to start..."' >> /entrypoint.sh && \
+    echo '    while ! nc -zu localhost 8443; do' >> /entrypoint.sh && \
+    echo '        sleep 1' >> /entrypoint.sh && \
+    echo '    done' >> /entrypoint.sh && \
+    echo '    echo "Runtime server is ready!"' >> /entrypoint.sh && \
+    echo '' >> /entrypoint.sh && \
+    echo '    # Generate auth config' >> /entrypoint.sh && \
+    echo '    echo "Generating runtime client configuration..."' >> /entrypoint.sh && \
+    echo '    mkdir -p /root/.config/runtime' >> /entrypoint.sh && \
+    echo '    echo "DEBUG: About to run auth generation"' >> /entrypoint.sh && \
+    echo '    echo "DEBUG: Config file before: $(ls -la /root/.config/runtime/clientconfig.yaml 2>/dev/null || echo "does not exist")"' >> /entrypoint.sh && \
+    echo '    if ! runtime auth generate -c /root/.config/runtime/clientconfig.yaml -C local -t localhost:8443 -v; then' >> /entrypoint.sh && \
+    echo '        echo "ERROR: Failed to generate client configuration"' >> /entrypoint.sh && \
+    echo '        kill $SERVER_PID 2>/dev/null || true' >> /entrypoint.sh && \
+    echo '        exit 1' >> /entrypoint.sh && \
+    echo '    fi' >> /entrypoint.sh && \
+    echo '    echo "DEBUG: Config file after: $(ls -la /root/.config/runtime/clientconfig.yaml)"' >> /entrypoint.sh && \
+    echo '    echo "DEBUG: Config file content size: $(wc -c < /root/.config/runtime/clientconfig.yaml 2>/dev/null || echo 0)"' >> /entrypoint.sh && \
+    echo '    # Copy config to accessible location for installation script' >> /entrypoint.sh && \
+    echo '    cp /root/.config/runtime/clientconfig.yaml /tmp/clientconfig.yaml 2>/dev/null || echo "Failed to copy config"' >> /entrypoint.sh && \
+    echo '    echo "DEBUG: Copied config to /tmp/clientconfig.yaml ($(wc -c < /tmp/clientconfig.yaml 2>/dev/null || echo 0) bytes)"' >> /entrypoint.sh && \
+    echo '    echo "Client configuration generated successfully"' >> /entrypoint.sh && \
+    echo '' >> /entrypoint.sh && \
+    echo '    # Wait for server to finish' >> /entrypoint.sh && \
+    echo '    wait $SERVER_PID' >> /entrypoint.sh && \
+    echo 'else' >> /entrypoint.sh && \
+    echo '    # Execute provided command' >> /entrypoint.sh && \
+    echo '    exec "$@"' >> /entrypoint.sh && \
+    echo 'fi' >> /entrypoint.sh
 
 RUN chmod +x /entrypoint.sh
 
