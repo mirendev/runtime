@@ -13,6 +13,9 @@ import (
 	"testing"
 	"time"
 
+	"log/slog"
+	"sync"
+
 	containerd "github.com/containerd/containerd/v2/client"
 	"github.com/containerd/containerd/v2/pkg/cio"
 	"github.com/containerd/containerd/v2/pkg/namespaces"
@@ -1328,5 +1331,66 @@ func TestSandbox(t *testing.T) {
 		// Clean up
 		err = co.Delete(ctx, id)
 		r.NoError(err)
+	})
+
+	t.Run("waitForPort respects timeout", func(t *testing.T) {
+		r := require.New(t)
+
+		c := &SandboxController{
+			Log:     slog.Default(),
+			portMap: make(map[string]*containerPorts),
+		}
+		c.portMu = sync.Mutex{}
+		c.portCond = sync.NewCond(&c.portMu)
+
+		ctx := context.Background()
+
+		// Test immediate return when port is already bound
+		c.portMap["test-id"] = &containerPorts{
+			Ports: []observability.BoundPort{{Port: 8080}},
+		}
+
+		err := c.waitForPort(ctx, "test-id", 8080, 5*time.Second)
+		r.NoError(err, "should return immediately when port is already bound")
+
+		// Test timeout when port never binds
+		start := time.Now()
+		err = c.waitForPort(ctx, "test-id", 9999, 100*time.Millisecond)
+		elapsed := time.Since(start)
+
+		r.Error(err, "should timeout when port never binds")
+		r.Contains(err.Error(), "timeout waiting for port 9999")
+		r.True(elapsed >= 100*time.Millisecond && elapsed < 200*time.Millisecond,
+			"should timeout within expected window, got %v", elapsed)
+
+		// Test port binding during wait
+		go func() {
+			time.Sleep(50 * time.Millisecond)
+			c.SetPortStatus("test-id", observability.BoundPort{Port: 7777}, observability.PortStatusBound)
+		}()
+
+		start = time.Now()
+		err = c.waitForPort(ctx, "test-id", 7777, 5*time.Second)
+		elapsed = time.Since(start)
+
+		r.NoError(err, "should return when port is bound during wait")
+		r.True(elapsed >= 50*time.Millisecond && elapsed < 150*time.Millisecond,
+			"should detect port binding quickly, got %v", elapsed)
+
+		// Test context cancellation
+		ctx, cancel := context.WithCancel(context.Background())
+		go func() {
+			time.Sleep(50 * time.Millisecond)
+			cancel()
+		}()
+
+		start = time.Now()
+		err = c.waitForPort(ctx, "test-id", 6666, 5*time.Second)
+		elapsed = time.Since(start)
+
+		r.Error(err, "should error on context cancellation")
+		r.Contains(err.Error(), "context cancelled")
+		r.True(elapsed >= 50*time.Millisecond && elapsed < 150*time.Millisecond,
+			"should detect context cancellation quickly, got %v", elapsed)
 	})
 }
