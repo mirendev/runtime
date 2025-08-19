@@ -1,5 +1,5 @@
 #!/bin/bash
-set -e
+set -euo pipefail
 
 # Colors for output
 RED='\033[0;31m'
@@ -10,7 +10,6 @@ NC='\033[0m' # No Color
 # Default values
 INSTALL_DIR="$HOME/.miren"
 BINARY_NAME="miren"
-OCI_IMAGE="oci.miren.cloud/miren:latest"
 
 # Functions
 print_error() {
@@ -62,10 +61,11 @@ install_linux() {
     
     # Download release package
     local arch=$(detect_arch)
-    local download_url="https://github.com/mirendev/runtime/releases/latest/download/miren-linux-${arch}.tar.gz"
+    local version="${MIREN_VERSION:-main}"
+    local download_url="https://api.miren.cloud/assets/release/miren/${version}/miren-base-linux-${arch}.tar.gz"
     
     print_info "Downloading miren package..."
-    curl -L "$download_url" -o /tmp/miren.tar.gz || {
+    curl -fSL --connect-timeout 10 --retry 3 "$download_url" -o /tmp/miren.tar.gz || {
         print_error "Failed to download miren package"
         exit 1
     }
@@ -107,13 +107,17 @@ install_macos() {
     local binary_url="https://api.miren.cloud/assets/release/miren/${version}/miren-darwin-${arch}.zip"
     
     print_info "Downloading macOS miren client..."
-    curl -L "$binary_url" -o /tmp/miren.zip || {
+    curl -fSL --connect-timeout 10 --retry 3 "$binary_url" -o /tmp/miren.zip || {
         print_error "Failed to download macOS miren client"
         exit 1
     }
     
     # Extract the binary
     print_info "Extracting miren binary..."
+    if ! command -v unzip &>/dev/null; then
+        print_error "Missing 'unzip'. Please install it (e.g., 'brew install unzip') and rerun."
+        exit 1
+    fi
     unzip -j /tmp/miren.zip -d /tmp/ || {
         print_error "Failed to extract miren binary"
         exit 1
@@ -131,14 +135,18 @@ install_macos() {
     
     # Download docker-compose configuration from asset service
     print_info "Downloading miren server configuration..."
-    curl -L "https://api.miren.cloud/assets/docker-compose.yml" -o /tmp/docker-compose.yml || {
+    curl -fSL --connect-timeout 10 --retry 3 "https://api.miren.cloud/assets/docker-compose.yml" -o /tmp/docker-compose.yml || {
         print_error "Failed to download docker-compose configuration"
         exit 1
     }
     
     # Start services in background
     print_info "Starting miren server containers..."
-    docker compose -f /tmp/docker-compose.yml up -d || {
+    if command -v docker &>/dev/null && docker compose version &>/dev/null; then
+        docker compose -f /tmp/docker-compose.yml up -d
+    else
+        docker-compose -f /tmp/docker-compose.yml up -d
+    fi || {
         print_error "Failed to start miren server containers"
         exit 1
     }
@@ -150,7 +158,7 @@ install_macos() {
     sleep 10  # Initial delay to allow container to fully start
     local retries=30
     while [ $retries -gt 0 ]; do
-        # Check if file exists, has content, and contains actual config data (check both locations)
+        # Check if file exists, has content, and contains actual config data
         if docker exec miren test -f /tmp/clientconfig.yaml; then
             local file_size=$(docker exec miren wc -c /tmp/clientconfig.yaml 2>/dev/null | awk '{print $1}' || echo "0")
             local has_config=$(docker exec miren grep -q "active_cluster" /tmp/clientconfig.yaml 2>/dev/null && echo "yes" || echo "no")
