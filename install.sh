@@ -10,7 +10,7 @@ NC='\033[0m' # No Color
 # Default values
 INSTALL_DIR="$HOME/.miren/runtime"
 BINARY_NAME="runtime"
-OCI_IMAGE="miren/runtime:latest"
+OCI_IMAGE="oci.miren.cloud/runtime:latest"
 
 # Functions
 print_error() {
@@ -101,69 +101,94 @@ install_macos() {
     
     print_success "Docker detected and running"
     
-    # Pull the OCI image
-    print_info "Pulling Miren Runtime Docker image..."
-    docker pull "$OCI_IMAGE" || {
-        print_error "Failed to pull Docker image"
+    # Download macOS client binary from asset service
+    local arch=$(detect_arch)
+    local version="${MIREN_VERSION:-main}"
+    local binary_url="https://api.miren.cloud/assets/release/runtime/${version}/runtime-darwin-${arch}.zip"
+    
+    print_info "Downloading macOS runtime client..."
+    curl -L "$binary_url" -o /tmp/runtime.zip || {
+        print_error "Failed to download macOS runtime client"
+        exit 1
+    }
+    
+    # Extract the binary
+    print_info "Extracting runtime binary..."
+    unzip -j /tmp/runtime.zip -d /tmp/ || {
+        print_error "Failed to extract runtime binary"
         exit 1
     }
     
     # Create installation directory
     mkdir -p "$INSTALL_DIR/bin"
     
-    # Create wrapper script
-    print_info "Creating runtime wrapper script..."
-    cat > "$INSTALL_DIR/bin/runtime" << 'EOF'
-#!/bin/bash
-# Miren Runtime wrapper for macOS (Docker-based)
-
-# Runtime configuration
-MIREN_DOCKER_IMAGE="${MIREN_DOCKER_IMAGE:-miren/runtime:latest}"
-MIREN_DATA_DIR="${MIREN_DATA_DIR:-$HOME/.miren/data}"
-MIREN_CONFIG_DIR="${MIREN_CONFIG_DIR:-$HOME/.config/runtime}"
-
-# Ensure directories exist
-mkdir -p "$MIREN_DATA_DIR" "$MIREN_CONFIG_DIR"
-
-# Function to check if runtime container is running
-is_runtime_running() {
-    docker ps --format '{{.Names}}' | grep -q '^miren-runtime$'
-}
-
-# Function to start runtime container
-start_runtime() {
-    if ! is_runtime_running; then
-        echo "Starting Miren Runtime container..."
-        docker run -d \
-            --name miren-runtime \
-            --privileged \
-            --pid host \
-            --network host \
-            -v "$MIREN_DATA_DIR:/data" \
-            -v "$MIREN_CONFIG_DIR:/root/.config/runtime" \
-            -v "$PWD:/workspace" \
-            -w /workspace \
-            "$MIREN_DOCKER_IMAGE" \
-            tail -f /dev/null
-        
-        # Wait for container to be ready
-        sleep 2
-    fi
-}
-
-# Start runtime if needed
-start_runtime
-
-# Execute command in container
-docker exec -it \
-    -e TERM="$TERM" \
-    -e HOME="/root" \
-    -w "$PWD" \
-    miren-runtime \
-    runtime "$@"
-EOF
-    
+    # Install the binary
+    mv /tmp/runtime "$INSTALL_DIR/bin/runtime"
     chmod +x "$INSTALL_DIR/bin/runtime"
+    
+    # Cleanup
+    rm /tmp/runtime.zip
+    
+    # Download docker-compose configuration from asset service
+    print_info "Downloading runtime server configuration..."
+    curl -L "https://api.miren.cloud/assets/docker-compose.yml" -o /tmp/docker-compose.yml || {
+        print_error "Failed to download docker-compose configuration"
+        exit 1
+    }
+    
+    # Start services in background
+    print_info "Starting runtime server containers..."
+    docker compose -f /tmp/docker-compose.yml up -d || {
+        print_error "Failed to start runtime server containers"
+        exit 1
+    }
+    
+    rm /tmp/docker-compose.yml
+    
+    # Wait for runtime server to generate client config
+    print_info "Waiting for runtime server to initialize..."
+    sleep 10  # Initial delay to allow container to fully start
+    local retries=30
+    while [ $retries -gt 0 ]; do
+        # Check if file exists, has content, and contains actual config data (check both locations)
+        if docker exec miren-runtime test -f /tmp/clientconfig.yaml; then
+            local file_size=$(docker exec miren-runtime wc -c /tmp/clientconfig.yaml 2>/dev/null | awk '{print $1}' || echo "0")
+            local has_config=$(docker exec miren-runtime grep -q "active_cluster" /tmp/clientconfig.yaml 2>/dev/null && echo "yes" || echo "no")
+            
+            if [ "$file_size" -gt 100 ] && [ "$has_config" = "yes" ]; then
+                print_info "Client configuration ready (${file_size} bytes)"
+                break
+            else
+                print_info "Waiting for configuration content... (${file_size} bytes, attempts remaining: $retries)"
+            fi
+        else
+            print_info "Waiting for configuration file... (attempts remaining: $retries)"
+        fi
+        sleep 2
+        retries=$((retries - 1))
+    done
+    
+    if [ $retries -eq 0 ]; then
+        print_error "Runtime server failed to generate client configuration"
+        exit 1
+    fi
+    
+    # Copy client configuration from container accessible location
+    print_info "Configuring runtime client..."
+    mkdir -p "$HOME/.config/runtime"
+    docker exec miren-runtime cat /tmp/clientconfig.yaml > "$HOME/.config/runtime/clientconfig.yaml" || {
+        print_error "Failed to copy client configuration"
+        exit 1
+    }
+    
+    # Verify the copied config file
+    if [ ! -s "$HOME/.config/runtime/clientconfig.yaml" ]; then
+        print_error "Copied configuration file is empty"
+        exit 1
+    fi
+    
+    local copied_size=$(wc -c < "$HOME/.config/runtime/clientconfig.yaml" 2>/dev/null || echo "0")
+    print_info "Successfully copied client configuration (${copied_size} bytes)"
     
     # Create symlink or add to PATH
     if [ -w "/usr/local/bin" ]; then

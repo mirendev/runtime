@@ -76,6 +76,9 @@ jobs:
       id-token: write
       contents: read
     steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
@@ -131,3 +134,10 @@ jobs:
                 https://api.miren.cloud/assets/release/runtime/${{ github.ref_name }}/runtime-${os}-${arch}.zip.sha256
             done
           done
+
+          # Upload docker-compose configuration
+          echo "Uploading docker-compose.yml"
+          curl --fail-with-body --retry 3 -X PUT \
+            -H "Authorization: Bearer ${{ steps.get-oidc-token.outputs.token }}" \
+            -F "file=@docker-compose-production.yml" \
+            https://api.miren.cloud/assets/docker-compose.yml
