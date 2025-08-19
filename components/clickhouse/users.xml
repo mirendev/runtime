@@ -3,8 +3,23 @@
 
     <!-- Profiles of settings. -->
     <profiles>
-        <!-- Default settings. -->
+        <!-- Default settings with memory limits for low-memory operation -->
         <default>
+            <!-- Max memory usage for a single query (2GB) -->
+            <max_memory_usage>2147483648</max_memory_usage>
+            <!-- Max memory for GROUP BY before spilling to disk (512MB) -->
+            <max_bytes_before_external_group_by>536870912</max_bytes_before_external_group_by>
+            <!-- Max memory for sorting before spilling to disk (512MB) -->
+            <max_bytes_before_external_sort>536870912</max_bytes_before_external_sort>
+            <!-- Reduce block size for lower memory usage -->
+            <max_block_size>8192</max_block_size>
+            <!-- Reduce threads for lower memory usage -->
+            <max_threads>4</max_threads>
+            <!-- Disable parallel parsing to save memory -->
+            <input_format_parallel_parsing>0</input_format_parallel_parsing>
+            <output_format_parallel_formatting>0</output_format_parallel_formatting>
+            <!-- Limit insert threads -->
+            <max_insert_threads>2</max_insert_threads>
         </default>
 
         <!-- Profile that allows only read queries. -->
@@ -106,11 +121,11 @@
             {{else}}
             <password></password>
             {{end}}
-            
+
             <networks>
                 <ip>::/0</ip>
             </networks>
-            
+
             <profile>default</profile>
             <quota>default</quota>
             <access_management>1</access_management>

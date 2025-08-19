@@ -170,8 +170,8 @@ func (r *AppInfo) SetConfiguration(ctx context.Context, state *app_v1alpha.CrudS
 
 	if cfg.HasEnvVars() {
 		for _, nv := range cfg.EnvVars() {
-			if strings.HasPrefix(nv.Key(), "RUNTIME_") {
-				return fmt.Errorf("cannot set RUNTIME_ environment variables")
+			if strings.HasPrefix(nv.Key(), "MIREN_") {
+				return fmt.Errorf("cannot set MIREN_ environment variables")
 			}
 		}
 	}
@@ -187,16 +187,33 @@ func (r *AppInfo) SetConfiguration(ctx context.Context, state *app_v1alpha.CrudS
 		}
 	}
 
+	// Simply append all new env vars - we'll deduplicate at the end
 	for _, ev := range cfg.EnvVars() {
 		nv := core_v1alpha.Variable{
 			Key:       ev.Key(),
 			Value:     ev.Value(),
 			Sensitive: ev.Sensitive(),
 		}
+		appVer.Config.Variable = append(appVer.Config.Variable, nv)
+	}
 
-		if !slices.Contains(appVer.Config.Variable, nv) {
-			appVer.Config.Variable = append(appVer.Config.Variable, nv)
+	// Deduplicate environment variables - last value wins for each key
+	if len(appVer.Config.Variable) > 0 {
+		seen := make(map[string]int) // maps key to index in deduplicated slice
+		deduplicated := make([]core_v1alpha.Variable, 0, len(appVer.Config.Variable))
+
+		for _, v := range appVer.Config.Variable {
+			if idx, exists := seen[v.Key]; exists {
+				// Replace the existing entry with this one (last value wins)
+				deduplicated[idx] = v
+			} else {
+				// New key, add it
+				seen[v.Key] = len(deduplicated)
+				deduplicated = append(deduplicated, v)
+			}
 		}
+
+		appVer.Config.Variable = deduplicated
 	}
 
 	appVer.Config.Entrypoint = cfg.Entrypoint()

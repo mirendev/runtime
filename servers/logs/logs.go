@@ -41,8 +41,8 @@ func (s *Server) AppLogs(ctx context.Context, state *app_v1alpha.LogsAppLogs) er
 	var opts []observability.LogReaderOption
 
 	if args.HasFrom() {
-		opts = append(opts, observability.WithFromTime(
-			standard.FromTimestamp(args.From())))
+		fromTime := standard.FromTimestamp(args.From())
+		opts = append(opts, observability.WithFromTime(fromTime))
 	}
 
 	s.Log.Debug("reading logs", "app", appRec.EntityId().String(), "from", args.From())
@@ -56,13 +56,48 @@ func (s *Server) AppLogs(ctx context.Context, state *app_v1alpha.LogsAppLogs) er
 	var ret []*app_v1alpha.LogEntry
 
 	for _, entry := range entries {
-		var le app_v1alpha.LogEntry
-
+		le := &app_v1alpha.LogEntry{}
 		le.SetTimestamp(standard.ToTimestamp(entry.Timestamp))
 		le.SetLine(entry.Body)
 		le.SetStream(string(entry.Stream))
 
-		ret = append(ret, &le)
+		ret = append(ret, le)
+	}
+
+	s.Log.Debug("returning logs", "lineCount", len(entries))
+
+	state.Results().SetLogs(ret)
+
+	return nil
+}
+
+func (s *Server) SandboxLogs(ctx context.Context, state *app_v1alpha.LogsSandboxLogs) error {
+	args := state.Args()
+
+	var opts []observability.LogReaderOption
+
+	if args.HasFrom() {
+		fromTime := standard.FromTimestamp(args.From())
+		opts = append(opts, observability.WithFromTime(fromTime))
+	}
+
+	s.Log.Debug("reading logs", "sandbox", args.Sandbox(), "from", args.From())
+
+	entries, err := s.LogReader.ReadBySandbox(ctx, args.Sandbox(), opts...)
+	if err != nil {
+		s.Log.Error("failed to read logs", "sandbox", args.Sandbox(), "err", err)
+		return err
+	}
+
+	var ret []*app_v1alpha.LogEntry
+
+	for _, entry := range entries {
+		le := &app_v1alpha.LogEntry{}
+		le.SetTimestamp(standard.ToTimestamp(entry.Timestamp))
+		le.SetLine(entry.Body)
+		le.SetStream(string(entry.Stream))
+
+		ret = append(ret, le)
 	}
 
 	s.Log.Debug("returning logs", "lineCount", len(entries))

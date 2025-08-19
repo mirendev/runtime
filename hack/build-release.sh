@@ -20,38 +20,38 @@ dir="tmp/release/$version"
 
 mkdir -p $dir
 
-if ! test -f $dir/runtime-darwin-arm64.zip; then
+if ! test -f $dir/miren-darwin-arm64.zip; then
   echo "Darwin / arm64"
-  GOOS=darwin GOARCH=arm64 go build -ldflags "-X miren.dev/runtime/version.Version=$version" -o $dir/runtime ./cmd/runtime
+  GOOS=darwin GOARCH=arm64 go build -ldflags "-X miren.dev/runtime/version.Version=$version" -o $dir/miren ./cmd/miren
 
-  zip -j $dir/runtime-darwin-arm64.zip $dir/runtime
+  zip -j $dir/miren-darwin-arm64.zip $dir/miren
 
-  rm $dir/runtime
+  rm $dir/miren
 fi
 
-if ! test -f $dir/runtime-darwin-amd64.zip; then
+if ! test -f $dir/miren-darwin-amd64.zip; then
   echo "Darwin / amd64"
-  GOOS=darwin GOARCH=amd64 go build -ldflags "-X miren.dev/runtime/version.Version=$version" -o $dir/runtime ./cmd/runtime
+  GOOS=darwin GOARCH=amd64 go build -ldflags "-X miren.dev/runtime/version.Version=$version" -o $dir/miren ./cmd/miren
 
-  zip -j $dir/runtime-darwin-amd64.zip $dir/runtime
+  zip -j $dir/miren-darwin-amd64.zip $dir/miren
 
-  rm $dir/runtime
+  rm $dir/miren
 fi
 
-if ! test -f $dir/runtime-linux-arm64.zip; then
+if ! test -f $dir/miren-linux-arm64.zip; then
   echo "Linux / arm64"
-  GOOS=linux GOARCH=arm64 go build -ldflags "-X miren.dev/runtime/version.Version=$version" -o $dir/runtime ./cmd/runtime
+  GOOS=linux GOARCH=arm64 go build -ldflags "-X miren.dev/runtime/version.Version=$version" -o $dir/miren ./cmd/miren
 
-  zip -j $dir/runtime-linux-arm64.zip $dir/runtime
+  zip -j $dir/miren-linux-arm64.zip $dir/miren
 
-  rm $dir/runtime
+  rm $dir/miren
 fi
 
-if ! test -f $dir/runtime-linux-amd64.zip; then
+if ! test -f $dir/miren-linux-amd64.zip; then
   echo "Linux / amd64"
-  GOOS=linux GOARCH=amd64 go build -ldflags "-X miren.dev/runtime/version.Version=$version" -o $dir/runtime ./cmd/runtime
+  GOOS=linux GOARCH=amd64 go build -ldflags "-X miren.dev/runtime/version.Version=$version" -o $dir/miren ./cmd/miren
 
-  zip -j $dir/runtime-linux-amd64.zip $dir/runtime
+  zip -j $dir/miren-linux-amd64.zip $dir/miren
 
-  rm $dir/runtime
+  rm $dir/miren
 fi

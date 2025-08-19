@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"os/user"
 	"path/filepath"
+	"strconv"
 	"time"
 
 	containerd "github.com/containerd/containerd/v2/client"
@@ -49,7 +50,7 @@ func Server(ctx *Context, opts struct {
 	RunnerAddress             string   `long:"runner-address" description:"Address to listen on" default:"localhost:8444"`
 	EtcdEndpoints             []string `short:"e" long:"etcd" description:"Etcd endpoints" default:"http://etcd:2379"`
 	EtcdPrefix                string   `short:"p" long:"etcd-prefix" description:"Etcd prefix" default:"/miren"`
-	RunnerId                  string   `short:"r" long:"runner-id" description:"Runner ID" default:"runtime"`
+	RunnerId                  string   `short:"r" long:"runner-id" description:"Runner ID" default:"miren"`
 	DataPath                  string   `short:"d" long:"data-path" description:"Data path" default:"/var/lib/miren"`
 	ReleasePath               string   `long:"release-path" description:"Path to release directory containing binaries"`
 	AdditionalNames           []string `long:"dns-names" description:"Additional DNS names assigned to the server cert"`
@@ -215,10 +216,10 @@ func Server(ctx *Context, opts struct {
 		}
 
 		// TODO figure out why I can't use ResolveNamed to pull out the namespace from ctx.Server
-		etcdComponent := etcd.NewEtcdComponent(ctx.Log, cc, "runtime", opts.DataPath)
+		etcdComponent := etcd.NewEtcdComponent(ctx.Log, cc, "miren", opts.DataPath)
 
 		etcdConfig := etcd.EtcdConfig{
-			Name:           "runtime-etcd",
+			Name:           "miren-etcd",
 			ClientPort:     opts.EtcdClientPort,
 			HTTPClientPort: opts.EtcdHTTPClientPort,
 			PeerPort:       opts.EtcdPeerPort,
@@ -261,7 +262,7 @@ func Server(ctx *Context, opts struct {
 			return err
 		}
 
-		clickhouseComponent := clickhouse.NewClickHouseComponent(ctx.Log, cc, "runtime", opts.DataPath)
+		clickhouseComponent := clickhouse.NewClickHouseComponent(ctx.Log, cc, "miren", opts.DataPath)
 
 		clickhouseConfig := clickhouse.ClickHouseConfig{
 			HTTPPort:        opts.ClickHouseHTTPPort,
@@ -566,7 +567,7 @@ func Server(ctx *Context, opts struct {
 		return err
 	}
 
-	cert, err := co.IssueCertificate("runtime-server")
+	cert, err := co.IssueCertificate("miren-server")
 	if err != nil {
 		ctx.Log.Error("failed to issue server certificate", "error", err)
 		return fmt.Errorf("failed to issue server certificate: %w", err)
@@ -584,10 +585,10 @@ func Server(ctx *Context, opts struct {
 		}
 	}
 
-	ctx.UILog.Info("Runtime server started", "address", opts.Address, "etcd_endpoints", opts.EtcdEndpoints, "etcd_prefix", opts.EtcdPrefix, "runner_id", opts.RunnerId)
+	ctx.UILog.Info("Miren server started", "address", opts.Address, "etcd_endpoints", opts.EtcdEndpoints, "etcd_prefix", opts.EtcdPrefix, "runner_id", opts.RunnerId)
 
-	ctx.Info("Runtime server started successfully! You can now connect to the cluster using `-C %s`\n", opts.ConfigClusterName)
-	ctx.Info("For example: cd my-app && runtime deploy -C %s", opts.ConfigClusterName)
+	ctx.Info("Miren server started successfully! You can now connect to the cluster using `-C %s`\n", opts.ConfigClusterName)
+	ctx.Info("For example: cd my-app && miren deploy -C %s", opts.ConfigClusterName)
 
 	// Wait for all goroutines to complete or context to be cancelled
 	err = eg.Wait()
@@ -595,7 +596,7 @@ func Server(ctx *Context, opts struct {
 		ctx.Log.Error("error during execution", "error", err)
 	}
 
-	ctx.Log.Info("runtime server shutting down, cleaning up resources")
+	ctx.Log.Info("miren server shutting down, cleaning up resources")
 	return err
 }
 
@@ -633,11 +634,25 @@ func writeLocalClusterConfig(ctx *Context, cc *caauth.ClientCertificate, address
 		return fmt.Errorf("failed to get user home directory: %w", err)
 	}
 
-	configDirPath := filepath.Join(homeDir, ".config/runtime/clientconfig.d")
+	configDirPath := filepath.Join(homeDir, ".config/miren/clientconfig.d")
 
 	// Create the directory if it doesn't exist
 	if err := os.MkdirAll(configDirPath, 0755); err != nil {
 		return fmt.Errorf("failed to create config directory: %w", err)
+	}
+
+	// Fix directory ownership if running under sudo
+	// Fix ownership for all parent directories that we may have created
+	dirsToFix := []string{
+		filepath.Join(homeDir, ".config"),
+		filepath.Join(homeDir, ".config/miren"),
+		configDirPath,
+	}
+
+	for _, dir := range dirsToFix {
+		if err := fixOwnershipIfSudo(ctx, dir); err != nil {
+			ctx.Log.Warn("failed to fix directory ownership", "dir", dir, "error", err)
+		}
 	}
 
 	// Create the local cluster config
@@ -658,6 +673,48 @@ func writeLocalClusterConfig(ctx *Context, cc *caauth.ClientCertificate, address
 		return fmt.Errorf("failed to save local cluster config: %w", err)
 	}
 
+	// Fix file ownership if running under sudo
+	if err := fixOwnershipIfSudo(ctx, localConfigPath); err != nil {
+		ctx.Log.Warn("failed to fix config file ownership", "error", err)
+	}
+
 	ctx.Log.Info("wrote local cluster config", "path", localConfigPath, "name", clusterName, "address", address)
+	return nil
+}
+
+// fixOwnershipIfSudo fixes file/directory ownership when running under sudo
+func fixOwnershipIfSudo(ctx *Context, path string) error {
+	if os.Geteuid() != 0 {
+		// Not running as root, nothing to do
+		return nil
+	}
+
+	// Check if running under sudo
+	sudoUID := os.Getenv("SUDO_UID")
+	sudoGID := os.Getenv("SUDO_GID")
+
+	if sudoUID == "" || sudoGID == "" {
+		// Not running under sudo, nothing to do
+		return nil
+	}
+
+	// Parse UID and GID
+	uid, err := strconv.Atoi(sudoUID)
+	if err != nil {
+		return fmt.Errorf("failed to parse SUDO_UID: %w", err)
+	}
+
+	gid, err := strconv.Atoi(sudoGID)
+	if err != nil {
+		return fmt.Errorf("failed to parse SUDO_GID: %w", err)
+	}
+
+	// Change ownership
+	if err := os.Chown(path, uid, gid); err != nil {
+		return fmt.Errorf("failed to chown %s to %d:%d: %w", path, uid, gid, err)
+	}
+
+	ctx.Log.Debug("fixed ownership for", "path", path, "uid", uid, "gid", gid)
+
 	return nil
 }

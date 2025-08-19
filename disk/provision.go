@@ -109,7 +109,7 @@ func (p *Provisioner) Provision(ctx context.Context, pc ProvisionConfig) error {
 			Options:     []string{"rbind", "rw"},
 		},
 		{
-			Destination: "/bin/runtime",
+			Destination: "/bin/miren",
 			Type:        "bind",
 			Source:      src,
 			Options:     []string{"rbind", "ro"},
@@ -144,7 +144,7 @@ func (p *Provisioner) Provision(ctx context.Context, pc ProvisionConfig) error {
 		//oci.WithoutMounts("/sys"),
 		oci.WithMounts(mounts),
 		//oci.WithProcessCwd("/app"),
-		oci.WithProcessArgs("/bin/runtime", "disk", "run", "-v",
+		oci.WithProcessArgs("/bin/miren", "disk", "run", "-v",
 			"--data", "/data",
 			"-d", "/access",
 			"--mount", "/access/fs",

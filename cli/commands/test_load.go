@@ -19,7 +19,7 @@ import (
 const (
 	headerRegexp = `^([\w-]+):\s*(.+)`
 	authRegexp   = `^(.+):([^\s].+)`
-	heyUA        = "runtime-hey/0.0.2"
+	heyUA        = "miren-hey/0.0.2"
 )
 
 func parseInputWithRegexp(input, regx string) ([]string, error) {

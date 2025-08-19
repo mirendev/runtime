@@ -188,6 +188,11 @@ func Deploy(ctx *Context, opts struct {
 					}
 				}
 
+				// Fail the build if we detected any errors
+				if len(buildErrors) > 0 {
+					return fmt.Errorf("build failed with %d error(s)", len(buildErrors))
+				}
+
 				return nil
 			case "message":
 				msg := update.Message()
@@ -244,7 +249,7 @@ func Deploy(ctx *Context, opts struct {
 				ctx.Printf("%s\n", log)
 			}
 		}
-		return nil
+		return fmt.Errorf("build failed: no version returned")
 	}
 
 	ctx.Printf("\n\nUpdated version %s deployed. All traffic moved to new version.\n", results.Version())

@@ -31,18 +31,18 @@ wait_for_service "etcd" "nc -z etcd 2379"
 wait_for_service "clickhouse" "nc -z clickhouse 9000"
 wait_for_service "minio" "nc -z minio 9000"
 
-# Build runtime
-make bin/runtime
+# Build miren
+make bin/miren
 
 # Create symlink
-ln -s "$PWD"/bin/runtime /bin/r
+ln -sf "$PWD"/bin/miren /bin/m
 
-# Setup runtime config
-mkdir -p ~/.config/runtime
-r auth generate -c ~/.config/runtime/clientconfig.yaml
+# Setup miren config
+mkdir -p ~/.config/miren
+m auth generate -c ~/.config/miren/clientconfig.yaml
 
-echo "Cleaning runtime namespace to begin..."
-r debug ctr nuke -n runtime --containerd-socket "$CONTAINERD_ADDRESS"
+echo "Cleaning miren namespace to begin..."
+m debug ctr nuke -n miren --containerd-socket "$CONTAINERD_ADDRESS"
 
 # Setup environment variables
 setup_bash_environment
@@ -61,12 +61,12 @@ if [[ -n "$USE_TMUX" ]]; then
 
   # Start with two panes with the server running on top and a shell running on the bottom
   tmux split-window -v
-  tmux send-keys -t dev:0.0 "./bin/runtime server -vv --mode=distributed" Enter
+  tmux send-keys -t dev:0.0 "./bin/miren server -vv --mode=distributed" Enter
   tmux select-pane -t dev:0.1
   tmux attach-session -t dev
 else
   # Start the server in the background
-  ./bin/runtime server -vv --mode=distributed >/tmp/server.log 2>&1 &
+  ./bin/miren server -vv --mode=distributed >/tmp/server.log 2>&1 &
   echo "Server started, logs are in /tmp/server.log"
 
   # Start a shell

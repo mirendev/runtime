@@ -373,7 +373,7 @@ func ConfigureGW(br netlink.Link, ec *EndpointConfig) error {
 
 func formatChain(id string) string {
 	output := sha512.Sum512([]byte(id))
-	return fmt.Sprintf("RUNTIME-%x", output)[:28]
+	return fmt.Sprintf("MIREN-%x", output)[:28]
 }
 
 type Subnet struct {

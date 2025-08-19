@@ -21,7 +21,7 @@ import (
 type AppCentric struct {
 	ConfigCentric
 
-	App string `short:"a" long:"app" env:"RUNTIME_APP" description:"Application get info about"`
+	App string `short:"a" long:"app" env:"MIREN_APP" description:"Application get info about"`
 	Dir string `short:"d" long:"dir" description:"Directory to run from" default:"."`
 
 	config *appconfig.AppConfig

@@ -33,7 +33,7 @@ var configTemplate string
 var usersTemplate string
 
 const (
-	clickhouseContainerName = "runtime-clickhouse"
+	clickhouseContainerName = "miren-clickhouse"
 	clickhouseDataDir       = "/var/lib/clickhouse"
 	clickhouseLogDir        = "/var/log/clickhouse-server"
 	clickhouseConfigDir     = "/etc/clickhouse-server"

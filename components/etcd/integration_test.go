@@ -19,7 +19,7 @@ import (
 	"miren.dev/runtime/pkg/testutils"
 )
 
-const testNamespace = "runtime-etcd-test"
+const testNamespace = "miren-etcd-test"
 
 func TestEtcdComponentIntegration(t *testing.T) {
 	ctx := t.Context()

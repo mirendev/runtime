@@ -23,7 +23,7 @@ import (
 )
 
 const (
-	etcdContainerName   = "runtime-etcd"
+	etcdContainerName   = "miren-etcd"
 	etcdDataDir         = "/etcd-data"
 	defaultEtcdPort     = 12379 // Non-default port to avoid conflicts
 	defaultEtcdHTTPPort = 12381 // Non-default port to avoid conflicts
