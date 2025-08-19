@@ -4,7 +4,7 @@ services:
   miren:
     build:
       context: ..
-      dockerfile: docker/Dockerfile.runtime
+      dockerfile: docker/Dockerfile.miren
       args:
         TARGETARCH: ${TARGETARCH:-amd64}
     image: oci.miren.cloud/runtime:latest
@@ -15,7 +15,7 @@ services:
       - "8443:8443/udp"
     volumes:
       - miren-data:/data
-      - ${HOME}/.config/runtime:/root/.config/runtime
+      - ${HOME}/.config/miren:/root/.config/miren
       - ${PWD}:/workspace
     working_dir: /workspace
     environment:

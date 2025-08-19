@@ -87,7 +87,7 @@ RUN chmod +x /usr/local/bin/runsc-ignore
 COPY --from=builder /build/bin/miren /usr/local/bin/runtime
 
 # Create necessary directories
-RUN mkdir -p /data/containerd /data/containerd/state /data/buildkit /var/log /root/.config/runtime /var/lib/miren/containerd
+RUN mkdir -p /data/containerd /data/containerd/state /data/buildkit /var/log /root/.config/miren /var/lib/miren/containerd
 
 # Create entrypoint script
 RUN echo '#!/bin/bash' > /entrypoint.sh && \
@@ -150,18 +150,18 @@ RUN echo '#!/bin/bash' > /entrypoint.sh && \
     echo '' >> /entrypoint.sh && \
     echo '    # Generate auth config' >> /entrypoint.sh && \
     echo '    echo "Generating runtime client configuration..."' >> /entrypoint.sh && \
-    echo '    mkdir -p /root/.config/runtime' >> /entrypoint.sh && \
+    echo '    mkdir -p /root/.config/miren' >> /entrypoint.sh && \
     echo '    echo "DEBUG: About to run auth generation"' >> /entrypoint.sh && \
-    echo '    echo "DEBUG: Config file before: $(ls -la /root/.config/runtime/clientconfig.yaml 2>/dev/null || echo "does not exist")"' >> /entrypoint.sh && \
-    echo '    if ! runtime auth generate -c /root/.config/runtime/clientconfig.yaml -C local -t localhost:8443 -v; then' >> /entrypoint.sh && \
+    echo '    echo "DEBUG: Config file before: $(ls -la /root/.config/miren/clientconfig.yaml 2>/dev/null || echo "does not exist")"' >> /entrypoint.sh && \
+    echo '    if ! runtime auth generate -c /root/.config/miren/clientconfig.yaml -C local -t localhost:8443 -v; then' >> /entrypoint.sh && \
     echo '        echo "ERROR: Failed to generate client configuration"' >> /entrypoint.sh && \
     echo '        kill $SERVER_PID 2>/dev/null || true' >> /entrypoint.sh && \
     echo '        exit 1' >> /entrypoint.sh && \
     echo '    fi' >> /entrypoint.sh && \
-    echo '    echo "DEBUG: Config file after: $(ls -la /root/.config/runtime/clientconfig.yaml)"' >> /entrypoint.sh && \
-    echo '    echo "DEBUG: Config file content size: $(wc -c < /root/.config/runtime/clientconfig.yaml 2>/dev/null || echo 0)"' >> /entrypoint.sh && \
+    echo '    echo "DEBUG: Config file after: $(ls -la /root/.config/miren/clientconfig.yaml)"' >> /entrypoint.sh && \
+    echo '    echo "DEBUG: Config file content size: $(wc -c < /root/.config/miren/clientconfig.yaml 2>/dev/null || echo 0)"' >> /entrypoint.sh && \
     echo '    # Copy config to accessible location for installation script' >> /entrypoint.sh && \
-    echo '    cp /root/.config/runtime/clientconfig.yaml /tmp/clientconfig.yaml 2>/dev/null || echo "Failed to copy config"' >> /entrypoint.sh && \
+    echo '    cp /root/.config/miren/clientconfig.yaml /tmp/clientconfig.yaml 2>/dev/null || echo "Failed to copy config"' >> /entrypoint.sh && \
     echo '    echo "DEBUG: Copied config to /tmp/clientconfig.yaml ($(wc -c < /tmp/clientconfig.yaml 2>/dev/null || echo 0) bytes)"' >> /entrypoint.sh && \
     echo '    echo "Client configuration generated successfully"' >> /entrypoint.sh && \
     echo '' >> /entrypoint.sh && \

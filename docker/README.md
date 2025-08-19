@@ -35,7 +35,7 @@ If you prefer to install manually:
 
 3. Use the runtime:
    ```bash
-   docker exec -it miren-runtime runtime --help
+   docker exec -it miren runtime --help
    ```
 
 ## Architecture
@@ -53,21 +53,21 @@ The Docker setup includes:
 
 - `MIREN_DOCKER_IMAGE`: Override the Docker image (default: `miren/runtime:latest`)
 - `MIREN_DATA_DIR`: Data directory on host (default: `$HOME/.miren/data`)
-- `MIREN_CONFIG_DIR`: Config directory on host (default: `$HOME/.config/runtime`)
+- `MIREN_CONFIG_DIR`: Config directory on host (default: `$HOME/.config/miren`)
 
 ### Volumes
 
 The following directories are mounted from the host:
 - Current working directory → `/workspace`
 - `~/.miren/data` → `/data`
-- `~/.config/runtime` → `/root/.config/runtime`
+- `~/.config/miren` → `/root/.config/miren`
 
 ## Development
 
 To build a development image:
 
 ```bash
-docker build -f docker/Dockerfile.runtime -t miren/runtime:dev .
+docker build -f docker/Dockerfile.miren -t miren/runtime:dev .
 ```
 
 To run with local changes:
@@ -88,12 +88,12 @@ docker run -it --rm \
 
 Check if the container is already running:
 ```bash
-docker ps -a | grep miren-runtime
+docker ps -a | grep miren
 ```
 
 Remove old container if needed:
 ```bash
-docker rm -f miren-runtime
+docker rm -f miren
 ```
 
 ### Permission issues
