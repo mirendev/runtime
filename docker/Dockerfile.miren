@@ -1,5 +1,5 @@
 # Multi-stage Dockerfile for Miren Runtime OCI image
-# This image contains all executables needed to run the runtime server
+# This image contains all executables needed to run the miren server
 
 # Build stage
 FROM golang:1.24 AS builder
@@ -15,7 +15,7 @@ RUN make bin/miren
 # Final stage
 FROM ubuntu:22.04
 
-# Install runtime dependencies
+# Install miren dependencies
 RUN apt-get update && apt-get install -y \
     ca-certificates \
     curl \
@@ -84,7 +84,7 @@ COPY hack/runsc-ignore /usr/local/bin/runsc-ignore
 RUN chmod +x /usr/local/bin/runsc-ignore
 
 # Copy miren binary from builder
-COPY --from=builder /build/bin/miren /usr/local/bin/runtime
+COPY --from=builder /build/bin/miren /usr/local/bin/miren
 
 # Create necessary directories
 RUN mkdir -p /data/containerd /data/containerd/state /data/buildkit /var/log /root/.config/miren /var/lib/miren/containerd
@@ -135,25 +135,25 @@ RUN echo '#!/bin/bash' > /entrypoint.sh && \
     echo '' >> /entrypoint.sh && \
     echo 'echo "External services are ready!"' >> /entrypoint.sh && \
     echo '' >> /entrypoint.sh && \
-    echo '# Execute command or start runtime server' >> /entrypoint.sh && \
+    echo '# Execute command or start miren server' >> /entrypoint.sh && \
     echo 'if [ $# -eq 0 ]; then' >> /entrypoint.sh && \
-    echo '    echo "Starting runtime server..."' >> /entrypoint.sh && \
-    echo '    runtime server -vv --mode=distributed -a 0.0.0.0:8443 &' >> /entrypoint.sh && \
+    echo '    echo "Starting miren server..."' >> /entrypoint.sh && \
+    echo '    miren server -vv --mode=distributed -a 0.0.0.0:8443 &' >> /entrypoint.sh && \
     echo '    SERVER_PID=$!' >> /entrypoint.sh && \
     echo '' >> /entrypoint.sh && \
     echo '    # Wait for server to be ready' >> /entrypoint.sh && \
-    echo '    echo "Waiting for runtime server to start..."' >> /entrypoint.sh && \
+    echo '    echo "Waiting for miren server to start..."' >> /entrypoint.sh && \
     echo '    while ! nc -zu localhost 8443; do' >> /entrypoint.sh && \
     echo '        sleep 1' >> /entrypoint.sh && \
     echo '    done' >> /entrypoint.sh && \
     echo '    echo "Runtime server is ready!"' >> /entrypoint.sh && \
     echo '' >> /entrypoint.sh && \
     echo '    # Generate auth config' >> /entrypoint.sh && \
-    echo '    echo "Generating runtime client configuration..."' >> /entrypoint.sh && \
+    echo '    echo "Generating miren client configuration..."' >> /entrypoint.sh && \
     echo '    mkdir -p /root/.config/miren' >> /entrypoint.sh && \
     echo '    echo "DEBUG: About to run auth generation"' >> /entrypoint.sh && \
     echo '    echo "DEBUG: Config file before: $(ls -la /root/.config/miren/clientconfig.yaml 2>/dev/null || echo "does not exist")"' >> /entrypoint.sh && \
-    echo '    if ! runtime auth generate -c /root/.config/miren/clientconfig.yaml -C local -t localhost:8443 -v; then' >> /entrypoint.sh && \
+    echo '    if ! miren auth generate -c /root/.config/miren/clientconfig.yaml -C local -t localhost:8443 -v; then' >> /entrypoint.sh && \
     echo '        echo "ERROR: Failed to generate client configuration"' >> /entrypoint.sh && \
     echo '        kill $SERVER_PID 2>/dev/null || true' >> /entrypoint.sh && \
     echo '        exit 1' >> /entrypoint.sh && \
