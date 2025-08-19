@@ -146,7 +146,7 @@ RUN echo '#!/bin/bash' > /entrypoint.sh && \
     echo '    while ! nc -zu localhost 8443; do' >> /entrypoint.sh && \
     echo '        sleep 1' >> /entrypoint.sh && \
     echo '    done' >> /entrypoint.sh && \
-    echo '    echo "Runtime server is ready!"' >> /entrypoint.sh && \
+    echo '    echo "Miren server is ready!"' >> /entrypoint.sh && \
     echo '' >> /entrypoint.sh && \
     echo '    # Generate auth config' >> /entrypoint.sh && \
     echo '    echo "Generating miren client configuration..."' >> /entrypoint.sh && \
@@ -179,8 +179,9 @@ WORKDIR /workspace
 
 # Expose common ports
 # 8080 - Default HTTP ingress
+# 8443 - Miren server (HTTP/3 QUIC)
 # 2379 - etcd client port
 # 9000 - MinIO/ClickHouse ports
-EXPOSE 8080 2379 9000
+EXPOSE 8080 8443 2379 9000
 
 ENTRYPOINT ["/entrypoint.sh"]

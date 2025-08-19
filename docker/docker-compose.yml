@@ -7,7 +7,7 @@ services:
       dockerfile: docker/Dockerfile.miren
       args:
         TARGETARCH: ${TARGETARCH:-amd64}
-    image: oci.miren.cloud/runtime:latest
+    image: oci.miren.cloud/miren:latest
     container_name: miren
     privileged: true
     ports:
