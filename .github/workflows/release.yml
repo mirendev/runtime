@@ -141,3 +141,10 @@ jobs:
             -H "Authorization: Bearer ${{ steps.get-oidc-token.outputs.token }}" \
             -F "file=@docker-compose-production.yml" \
             https://api.miren.cloud/assets/docker-compose.yml
+
+          # Upload install script
+          echo "Uploading install.sh"
+          curl --fail-with-body --retry 3 -X PUT \
+            -H "Authorization: Bearer ${{ steps.get-oidc-token.outputs.token }}" \
+            -F "file=@install.sh" \
+            https://api.miren.cloud/assets/install.sh
