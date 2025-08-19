@@ -315,6 +315,14 @@ func (e *EntityServer) WatchIndex(ctx context.Context, req *entityserver_v1alpha
 				return nil
 			}
 
+			// Check if the watch was canceled or had an error
+			if watchevent.Canceled {
+				if err := watchevent.Err(); err != nil {
+					return fmt.Errorf("watch canceled with error: %w", err)
+				}
+				return fmt.Errorf("watch canceled")
+			}
+
 			for _, event := range watchevent.Events {
 				var (
 					eventType int

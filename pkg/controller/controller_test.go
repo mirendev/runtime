@@ -376,3 +376,189 @@ func TestAdaptController_WithUpdateMethod(t *testing.T) {
 	assert.Equal(t, []string{"test1"}, updatingController.UpdateCalls)
 	assert.Empty(t, updatingController.DeleteCalls)
 }
+
+func TestReconcileController_WatchReconnect(t *testing.T) {
+	log := slog.New(slogfmt.NewTestHandler(t, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+	store := entity.NewMockStore()
+	server := &entityserver.EntityServer{
+		Log:   log,
+		Store: store,
+	}
+
+	sc := &entityserver_v1alpha.EntityAccessClient{
+		Client: rpc.LocalClient(entityserver_v1alpha.AdaptEntityAccess(server)),
+	}
+
+	testIndex := entity.Any(entity.Type, "test/type")
+
+	eventsChan := make(chan Event, 10)
+	handler := func(ctx context.Context, event Event) ([]entity.Attr, error) {
+		eventsChan <- event
+		return nil, nil
+	}
+
+	controller := NewReconcileController(
+		"test-controller",
+		log,
+		testIndex,
+		sc,
+		handler,
+		0, // disable resync
+		1, // single worker
+	)
+
+	// Track number of WatchIndex calls to verify reconnection
+	watchCallCount := atomic.Int32{}
+	connectionAttempts := make(chan int32, 10)
+
+	// Control channel to simulate disconnection
+	simulateDisconnect := make(chan struct{})
+
+	// Setup mock watch handler that simulates disconnection and reconnection
+	store.OnWatchIndex = func(ctx context.Context, attr entity.Attr) (clientv3.WatchChan, error) {
+		attempt := watchCallCount.Add(1)
+		connectionAttempts <- attempt
+
+		// First connection - return error to simulate disconnection
+		switch attempt {
+		case 1:
+			ch := make(chan clientv3.WatchResponse)
+			go func() {
+				// Send initial event
+				select {
+				case ch <- clientv3.WatchResponse{
+					Events: []*clientv3.Event{
+						{
+							Type: clientv3.EventTypePut,
+							Kv: &mvccpb.KeyValue{
+								Key:            []byte("test-key-1"),
+								Value:          []byte("test/entity1"),
+								ModRevision:    1,
+								CreateRevision: 1,
+							},
+						},
+					},
+				}:
+				case <-ctx.Done():
+					return
+				}
+
+				// Wait for signal to disconnect
+				select {
+				case <-simulateDisconnect:
+					// Send canceled response to simulate disconnection
+					ch <- clientv3.WatchResponse{
+						Canceled: true,
+					}
+					close(ch)
+				case <-ctx.Done():
+					close(ch)
+				}
+			}()
+			return ch, nil
+		case 2:
+			// Second connection - successful reconnection
+			ch := make(chan clientv3.WatchResponse)
+			go func() {
+				// Send event after reconnection
+				select {
+				case ch <- clientv3.WatchResponse{
+					Events: []*clientv3.Event{
+						{
+							Type: clientv3.EventTypePut,
+							Kv: &mvccpb.KeyValue{
+								Key:            []byte("test-key-2"),
+								Value:          []byte("test/entity2"),
+								ModRevision:    2,
+								CreateRevision: 2,
+							},
+						},
+					},
+				}:
+				case <-ctx.Done():
+					return
+				}
+
+				// Keep channel open until context is done
+				<-ctx.Done()
+				close(ch)
+			}()
+			return ch, nil
+		default:
+			// Subsequent connections if any
+			ch := make(chan clientv3.WatchResponse)
+			go func() {
+				<-ctx.Done()
+				close(ch)
+			}()
+			return ch, nil
+		}
+	}
+
+	// Add test entity to store
+	store.Entities[entity.Id("test/entity1")] = &entity.Entity{
+		ID: entity.Id("test/entity1"),
+		Attrs: entity.Attrs(
+			entity.Ident, "test/entity1",
+			entity.Type, "test/type",
+		),
+	}
+	store.Entities[entity.Id("test/entity2")] = &entity.Entity{
+		ID: entity.Id("test/entity2"),
+		Attrs: entity.Attrs(
+			entity.Ident, "test/entity2",
+			entity.Type, "test/type",
+		),
+	}
+
+	// Start controller
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	err := controller.Start(ctx)
+	require.NoError(t, err)
+
+	// Wait for first connection
+	select {
+	case attempt := <-connectionAttempts:
+		assert.Equal(t, int32(1), attempt, "First connection attempt")
+	case <-time.After(1 * time.Second):
+		t.Fatal("Timeout waiting for first connection")
+	}
+
+	// Wait for first event
+	select {
+	case event := <-eventsChan:
+		assert.Equal(t, EventAdded, event.Type)
+		assert.Equal(t, entity.Id("test/entity1"), event.Id)
+	case <-time.After(1 * time.Second):
+		t.Fatal("Timeout waiting for first event")
+	}
+
+	// Trigger disconnection
+	close(simulateDisconnect)
+
+	// Wait for reconnection after simulated disconnection
+	select {
+	case attempt := <-connectionAttempts:
+		assert.Equal(t, int32(2), attempt, "Should reconnect after disconnection")
+	case <-time.After(2 * time.Second):
+		t.Fatal("Timeout waiting for reconnection")
+	}
+
+	// Wait for event after reconnection
+	select {
+	case event := <-eventsChan:
+		assert.Equal(t, EventAdded, event.Type)
+		assert.Equal(t, entity.Id("test/entity2"), event.Id)
+	case <-time.After(1 * time.Second):
+		t.Fatal("Timeout waiting for event after reconnection")
+	}
+
+	// Stop controller
+	controller.Stop()
+
+	// Verify we had exactly 2 connection attempts (initial + 1 reconnect)
+	assert.Equal(t, int32(2), watchCallCount.Load(), "Should have exactly 2 watch connections")
+}
