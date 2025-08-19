@@ -1,15 +1,15 @@
 version: '3.8'
 
 services:
-  runtime:
+  miren:
     image: oci.miren.cloud/runtime:latest
-    container_name: miren-runtime
+    container_name: miren
     privileged: true
     ports:
       - "8080:8080"
       - "8443:8443/udp"
     volumes:
-      - runtime-data:/data
+      - miren-data:/data
       - ${PWD}:/workspace
     working_dir: /workspace
     environment:
@@ -62,7 +62,7 @@ services:
       - minio-data:/data
 
 volumes:
-  runtime-data:
+  miren-data:
   etcd-data:
   clickhouse-data:
   minio-data:

@@ -1,20 +1,20 @@
 version: '3.8'
 
 services:
-  runtime:
+  miren:
     build:
       context: ..
       dockerfile: docker/Dockerfile.runtime
       args:
         TARGETARCH: ${TARGETARCH:-amd64}
     image: oci.miren.cloud/runtime:latest
-    container_name: miren-runtime
+    container_name: miren
     privileged: true
     ports:
       - "8080:8080"
       - "8443:8443/udp"
     volumes:
-      - runtime-data:/data
+      - miren-data:/data
       - ${HOME}/.config/runtime:/root/.config/runtime
       - ${PWD}:/workspace
     working_dir: /workspace
@@ -68,7 +68,7 @@ services:
       - minio-data:/data
 
 volumes:
-  runtime-data:
+  miren-data:
   etcd-data:
   clickhouse-data:
   minio-data:

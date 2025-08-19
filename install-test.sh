@@ -101,21 +101,16 @@ install_macos() {
     
     print_success "Docker detected and running"
     
-    # Download macOS client binary from asset service
-    local arch=$(detect_arch)
-    local version="${MIREN_VERSION:-main}"
-    local binary_url="https://api.miren.cloud/assets/release/miren/${version}/miren-darwin-${arch}.zip"
-    
-    print_info "Downloading macOS miren client..."
-    curl -L "$binary_url" -o /tmp/miren.zip || {
-        print_error "Failed to download macOS miren client"
+    # Use local macOS client binary for testing
+    print_info "Using local miren client..."
+    if [ ! -f "$(dirname "$0")/bin/miren" ]; then
+        print_error "Local miren binary not found. Please run 'make bin/miren' first."
         exit 1
-    }
+    fi
     
-    # Extract the binary
-    print_info "Extracting miren binary..."
-    unzip -j /tmp/miren.zip -d /tmp/ || {
-        print_error "Failed to extract miren binary"
+    # Copy the binary to temp location
+    cp "$(dirname "$0")/bin/miren" /tmp/miren || {
+        print_error "Failed to copy miren binary"
         exit 1
     }
     
@@ -126,13 +121,10 @@ install_macos() {
     mv /tmp/miren "$INSTALL_DIR/bin/miren"
     chmod +x "$INSTALL_DIR/bin/miren"
     
-    # Cleanup
-    rm /tmp/miren.zip
-    
-    # Download docker-compose configuration from asset service
-    print_info "Downloading miren server configuration..."
-    curl -L "https://api.miren.cloud/assets/docker-compose.yml" -o /tmp/docker-compose.yml || {
-        print_error "Failed to download docker-compose configuration"
+    # Use local docker-compose configuration for testing
+    print_info "Using local miren server configuration..."
+    cp "$(dirname "$0")/docker-compose-production.yml" /tmp/docker-compose.yml || {
+        print_error "Failed to copy docker-compose configuration"
         exit 1
     }
     
