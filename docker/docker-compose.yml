@@ -2,11 +2,6 @@ version: '3.8'
 
 services:
   miren:
-    build:
-      context: ..
-      dockerfile: docker/Dockerfile.miren
-      args:
-        TARGETARCH: ${TARGETARCH:-amd64}
     image: oci.miren.cloud/miren:latest
     container_name: miren
     privileged: true
@@ -15,7 +10,6 @@ services:
       - "8443:8443/udp"
     volumes:
       - miren-data:/data
-      - ${HOME}/.config/miren:/root/.config/miren
       - ${PWD}:/workspace
     working_dir: /workspace
     environment:

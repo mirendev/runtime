@@ -70,7 +70,16 @@ func (c *Context) setupServerComponents(ctx context.Context, reg *asm.Registry) 
 
 	reg.Register("service-subnet", netip.MustParsePrefix("10.10.0.0/16"))
 
-	reg.Register("clickhouse-address", "clickhouse:9000")
+	// Configure ClickHouse address from environment variables or default
+	clickhouseHost := os.Getenv("CLICKHOUSE_HOST")
+	if clickhouseHost == "" {
+		clickhouseHost = "clickhouse"
+	}
+	clickhousePort := os.Getenv("CLICKHOUSE_PORT")
+	if clickhousePort == "" {
+		clickhousePort = "9000"
+	}
+	reg.Register("clickhouse-address", fmt.Sprintf("%s:%s", clickhouseHost, clickhousePort))
 	reg.Register("clickhouse-debug", false)
 
 	reg.Register("container_idle_timeout", time.Minute)

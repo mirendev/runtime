@@ -173,12 +173,12 @@ jobs:
           # Upload docker-compose configuration
           echo "Uploading docker-compose.yml"
           # Generate SHA256 checksum for docker-compose file
-          sha256sum docker-compose-production.yml | cut -d' ' -f1 | tee docker-compose.yml.sha256
+          sha256sum docker/docker-compose.yml | cut -d' ' -f1 | tee docker-compose.yml.sha256
           
           # Upload docker-compose file
           curl --fail-with-body --retry 3 -X PUT \
             -H "Authorization: Bearer ${{ steps.get-oidc-token.outputs.token }}" \
-            -F "file=@docker-compose-production.yml" \
+            -F "file=@docker/docker-compose.yml" \
             https://api.miren.cloud/assets/docker-compose.yml
           
           # Upload docker-compose sha256
