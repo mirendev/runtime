@@ -18,6 +18,9 @@ const (
 
 	// Minio object storage server
 	Minio = "oci.miren.cloud/minio:v1"
+
+	// Miren runtime server
+	Miren = "oci.miren.cloud/miren:latest"
 )
 
 // Base images for language stacks
