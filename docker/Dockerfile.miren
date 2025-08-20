@@ -38,13 +38,6 @@ RUN if [ "$TARGETARCH" = "arm64" ]; then \
     fi && \
     curl -L "$CONTAINERD_URL" | tar -C /usr/local -xz
 
-# Download and install buildkit
-RUN if [ "$TARGETARCH" = "arm64" ]; then \
-        BUILDKIT_URL="https://github.com/moby/buildkit/releases/download/v0.17.1/buildkit-v0.17.1.linux-arm64.tar.gz"; \
-    else \
-        BUILDKIT_URL="https://github.com/moby/buildkit/releases/download/v0.17.1/buildkit-v0.17.1.linux-amd64.tar.gz"; \
-    fi && \
-    curl -L "$BUILDKIT_URL" | tar -C /usr/local -xz
 
 # Download and install runc
 RUN if [ "$TARGETARCH" = "arm64" ]; then \
@@ -55,20 +48,6 @@ RUN if [ "$TARGETARCH" = "arm64" ]; then \
     curl -L "$RUNC_URL" -o /usr/local/bin/runc && \
     chmod +x /usr/local/bin/runc
 
-# Download and install gvisor (runsc)
-RUN if [ "$TARGETARCH" = "arm64" ]; then \
-        RUNSC_URL="https://storage.googleapis.com/gvisor/releases/release/latest/aarch64/runsc"; \
-        RUNSC_SHIM_URL="https://storage.googleapis.com/gvisor/releases/release/latest/aarch64/containerd-shim-runsc-v1"; \
-    else \
-        RUNSC_URL="https://storage.googleapis.com/gvisor/releases/release/latest/x86_64/runsc"; \
-        RUNSC_SHIM_URL="https://storage.googleapis.com/gvisor/releases/release/latest/x86_64/containerd-shim-runsc-v1"; \
-    fi && \
-    curl -L "$RUNSC_URL" -o /usr/local/bin/runsc && \
-    curl -L "$RUNSC_SHIM_URL" -o /usr/local/bin/containerd-shim-runsc-v1 && \
-    chmod +x /usr/local/bin/runsc /usr/local/bin/containerd-shim-runsc-v1
-
-# Install runsc
-RUN /usr/local/bin/runsc install
 
 # Download and install nerdctl (for debugging)
 RUN if [ "$TARGETARCH" = "arm64" ]; then \
@@ -90,88 +69,8 @@ COPY --from=builder /build/bin/miren /usr/local/bin/miren
 RUN mkdir -p /data/containerd /data/containerd/state /data/buildkit /var/log /root/.config/miren /var/lib/miren/containerd
 
 # Create entrypoint script
-RUN echo '#!/bin/bash' > /entrypoint.sh && \
-    echo 'set -e' >> /entrypoint.sh && \
-    echo '' >> /entrypoint.sh && \
-    echo '# Start containerd in the background' >> /entrypoint.sh && \
-    echo 'echo "Starting containerd..."' >> /entrypoint.sh && \
-    echo 'containerd --address /var/lib/miren/containerd/containerd.sock --root /data/containerd --state /data/containerd/state &' >> /entrypoint.sh && \
-    echo 'CONTAINERD_PID=$!' >> /entrypoint.sh && \
-    echo '' >> /entrypoint.sh && \
-    echo '# Wait for containerd to be ready' >> /entrypoint.sh && \
-    echo 'sleep 2' >> /entrypoint.sh && \
-    echo '' >> /entrypoint.sh && \
-    echo '# Start buildkitd in the background' >> /entrypoint.sh && \
-    echo 'echo "Starting buildkitd..."' >> /entrypoint.sh && \
-    echo 'buildkitd --root /data/buildkit &' >> /entrypoint.sh && \
-    echo 'BUILDKITD_PID=$!' >> /entrypoint.sh && \
-    echo '' >> /entrypoint.sh && \
-    echo '# Wait for buildkitd to be ready' >> /entrypoint.sh && \
-    echo 'sleep 2' >> /entrypoint.sh && \
-    echo '' >> /entrypoint.sh && \
-    echo '# Function to cleanup on exit' >> /entrypoint.sh && \
-    echo 'cleanup() {' >> /entrypoint.sh && \
-    echo '    echo "Shutting down services..."' >> /entrypoint.sh && \
-    echo '    kill $BUILDKITD_PID 2>/dev/null || true' >> /entrypoint.sh && \
-    echo '    kill $CONTAINERD_PID 2>/dev/null || true' >> /entrypoint.sh && \
-    echo '    wait $BUILDKITD_PID 2>/dev/null || true' >> /entrypoint.sh && \
-    echo '    wait $CONTAINERD_PID 2>/dev/null || true' >> /entrypoint.sh && \
-    echo '}' >> /entrypoint.sh && \
-    echo '' >> /entrypoint.sh && \
-    echo '# Trap exit signals' >> /entrypoint.sh && \
-    echo 'trap cleanup EXIT INT TERM' >> /entrypoint.sh && \
-    echo '' >> /entrypoint.sh && \
-    echo '# Wait for external services to be ready' >> /entrypoint.sh && \
-    echo 'echo "Waiting for external services..."' >> /entrypoint.sh && \
-    echo 'while ! nc -z etcd 2379; do' >> /entrypoint.sh && \
-    echo '    echo "Waiting for etcd..."' >> /entrypoint.sh && \
-    echo '    sleep 1' >> /entrypoint.sh && \
-    echo 'done' >> /entrypoint.sh && \
-    echo '' >> /entrypoint.sh && \
-    echo 'while ! nc -z minio 9000; do' >> /entrypoint.sh && \
-    echo '    echo "Waiting for MinIO..."' >> /entrypoint.sh && \
-    echo '    sleep 1' >> /entrypoint.sh && \
-    echo 'done' >> /entrypoint.sh && \
-    echo '' >> /entrypoint.sh && \
-    echo 'echo "External services are ready!"' >> /entrypoint.sh && \
-    echo '' >> /entrypoint.sh && \
-    echo '# Execute command or start miren server' >> /entrypoint.sh && \
-    echo 'if [ $# -eq 0 ]; then' >> /entrypoint.sh && \
-    echo '    echo "Starting miren server..."' >> /entrypoint.sh && \
-    echo '    miren server -vv --mode=distributed -a 0.0.0.0:8443 &' >> /entrypoint.sh && \
-    echo '    SERVER_PID=$!' >> /entrypoint.sh && \
-    echo '' >> /entrypoint.sh && \
-    echo '    # Wait for server to be ready' >> /entrypoint.sh && \
-    echo '    echo "Waiting for miren server to start..."' >> /entrypoint.sh && \
-    echo '    while ! nc -zu localhost 8443; do' >> /entrypoint.sh && \
-    echo '        sleep 1' >> /entrypoint.sh && \
-    echo '    done' >> /entrypoint.sh && \
-    echo '    echo "Miren server is ready!"' >> /entrypoint.sh && \
-    echo '' >> /entrypoint.sh && \
-    echo '    # Generate auth config' >> /entrypoint.sh && \
-    echo '    echo "Generating miren client configuration..."' >> /entrypoint.sh && \
-    echo '    mkdir -p /root/.config/miren' >> /entrypoint.sh && \
-    echo '    echo "DEBUG: About to run auth generation"' >> /entrypoint.sh && \
-    echo '    echo "DEBUG: Config file before: $(ls -la /root/.config/miren/clientconfig.yaml 2>/dev/null || echo "does not exist")"' >> /entrypoint.sh && \
-    echo '    if ! miren auth generate -c /root/.config/miren/clientconfig.yaml -C local -t localhost:8443 -v; then' >> /entrypoint.sh && \
-    echo '        echo "ERROR: Failed to generate client configuration"' >> /entrypoint.sh && \
-    echo '        kill $SERVER_PID 2>/dev/null || true' >> /entrypoint.sh && \
-    echo '        exit 1' >> /entrypoint.sh && \
-    echo '    fi' >> /entrypoint.sh && \
-    echo '    echo "DEBUG: Config file after: $(ls -la /root/.config/miren/clientconfig.yaml)"' >> /entrypoint.sh && \
-    echo '    echo "DEBUG: Config file content size: $(wc -c < /root/.config/miren/clientconfig.yaml 2>/dev/null || echo 0)"' >> /entrypoint.sh && \
-    echo '    # Copy config to accessible location for installation script' >> /entrypoint.sh && \
-    echo '    cp /root/.config/miren/clientconfig.yaml /tmp/clientconfig.yaml 2>/dev/null || echo "Failed to copy config"' >> /entrypoint.sh && \
-    echo '    echo "DEBUG: Copied config to /tmp/clientconfig.yaml ($(wc -c < /tmp/clientconfig.yaml 2>/dev/null || echo 0) bytes)"' >> /entrypoint.sh && \
-    echo '    echo "Client configuration generated successfully"' >> /entrypoint.sh && \
-    echo '' >> /entrypoint.sh && \
-    echo '    # Wait for server to finish' >> /entrypoint.sh && \
-    echo '    wait $SERVER_PID' >> /entrypoint.sh && \
-    echo 'else' >> /entrypoint.sh && \
-    echo '    # Execute provided command' >> /entrypoint.sh && \
-    echo '    exec "$@"' >> /entrypoint.sh && \
-    echo 'fi' >> /entrypoint.sh
-
+# Copy and setup entrypoint script
+COPY docker/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
 # Set working directory
@@ -180,8 +79,7 @@ WORKDIR /workspace
 # Expose common ports
 # 8080 - Default HTTP ingress
 # 8443 - Miren server (HTTP/3 QUIC)
-# 2379 - etcd client port
-# 9000 - MinIO/ClickHouse ports
-EXPOSE 8080 8443 2379 9000
+# 2379 - etcd client port (for debugging)
+EXPOSE 8080 8443
 
 ENTRYPOINT ["/entrypoint.sh"]

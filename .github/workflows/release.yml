@@ -187,9 +187,3 @@ jobs:
             -F "file=@docker-compose.yml.sha256" \
             https://api.miren.cloud/assets/docker-compose.yml.sha256
 
-          # Upload install script
-          echo "Uploading install.sh"
-          curl --fail-with-body --retry 3 -X PUT \
-            -H "Authorization: Bearer ${{ steps.get-oidc-token.outputs.token }}" \
-            -F "file=@install.sh" \
-            https://api.miren.cloud/assets/install.sh
