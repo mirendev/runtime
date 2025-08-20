@@ -1,22 +1,22 @@
-# Miren Runtime Docker Support
+# Miren Docker Support
 
-This directory contains Docker configurations for running Miren Runtime on macOS and other non-Linux platforms.
+This directory contains Docker configurations for running Miren on macOS and other non-Linux platforms.
 
 ## Quick Start
 
 ### Installation
 
-Run the installer script from the repository root:
+Run the installer script:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/mirendev/runtime/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/mirendev/cloud/main/services/installer/install.sh | bash
 ```
 
 The installer will:
 - Detect your operating system
 - Check for Docker (on macOS)
-- Install the appropriate runtime version
-- Set up the runtime wrapper script
+- Install the appropriate miren version
+- Set up Docker services and client configuration
 
 ### Manual Installation
 
@@ -30,22 +30,21 @@ If you prefer to install manually:
 2. Run with docker-compose:
    ```bash
    cd docker
-   docker-compose up -d
+   docker compose up -d
    ```
 
-3. Use the runtime:
+3. Use miren:
    ```bash
-   docker exec -it miren runtime --help
+   docker exec -it miren --help
    ```
 
 ## Architecture
 
 The Docker setup includes:
 
-- **Runtime Container**: Contains all runtime executables (containerd, buildkit, gvisor/runsc)
-- **etcd**: Distributed key-value store for state management
+- **Miren Container**: Contains miren server with containerd and container runtime
+- **etcd**: Distributed key-value store for state management  
 - **ClickHouse**: Analytics database for metrics
-- **MinIO**: S3-compatible object storage
 
 ## Configuration
 
@@ -102,7 +101,8 @@ The runtime container requires privileged mode to run containerd and manage cont
 
 ### Network issues
 
-The runtime uses host networking mode. Ensure no other services are using ports:
+Ensure no other services are using the required ports:
 - 8080 (HTTP ingress)
+- 8443 (Miren server QUIC)
 - 2379 (etcd)
-- 9000-9002 (MinIO/ClickHouse)
+- 9000, 8123 (ClickHouse)
