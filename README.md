@@ -1,14 +1,14 @@
 # Miren Runtime
 
-A container orchestration system built on containerd and gvisor for running secure, isolated applications with etcd-backed state management.
+A container orchestration system built on containerd for running secure, isolated applications with etcd-backed state management.
 
 ## Overview
 
-The Miren runtime provides a platform for deploying and managing containerized applications with strong isolation guarantees using gvisor. It features an entity-based architecture with etcd as the distributed state store for managing applications, versions, sandboxes, and infrastructure components.
+The Miren runtime provides a platform for deploying and managing containerized applications with strong isolation guarantees. It features an entity-based architecture with etcd as the distributed state store for managing applications, versions, sandboxes, and infrastructure components.
 
 ## Key Features
 
-- **Secure Isolation**: Uses gvisor (runsc) for strong container isolation
+- **Secure Isolation**: Strong container isolation using containerd
 - **Distributed State**: etcd backend for reliable, distributed state management
 - **Multi-tenant**: Support for projects and isolated environments
 - **HTTP Ingress**: Built-in routing for HTTP traffic to applications
@@ -55,10 +55,8 @@ make dev-tmux
 ```
 
 The development environment automatically sets up:
-- containerd with gvisor runtime
+- containerd for container runtime
 - etcd for state storage
-- buildkit for container builds
-- MinIO for object storage
 - ClickHouse for metrics
 
 ### Building
