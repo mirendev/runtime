@@ -92,8 +92,11 @@ func NewLocalActivator(ctx context.Context, log *slog.Logger, eac *entityserver_
 	}
 
 	// Recover existing sandboxes on startup
+	la.log.Info("activator starting, attempting to recover existing sandboxes")
 	if err := la.recoverSandboxes(ctx); err != nil {
 		la.log.Error("failed to recover sandboxes", "error", err)
+	} else {
+		la.log.Info("activator recovery complete", "tracked_versions", len(la.versions))
 	}
 
 	go la.InBackground(ctx)
@@ -169,12 +172,26 @@ func (a *localActivator) AcquireLease(ctx context.Context, ver *core_v1alpha.App
 	svcConcurrency := a.getServiceConcurrency(ver, service)
 
 	if !ok {
-		a.log.Info("creating new sandbox for app", "app", ver.App, "version", ver.Version, "pool", pool, "service", service, "key", key)
+		a.log.Info("version key not found in tracked versions",
+			"app", ver.App,
+			"version", ver.Version,
+			"version_id", ver.ID.String(),
+			"pool", pool,
+			"service", service,
+			"key", key,
+			"tracked_keys", len(a.versions))
+		// Log what keys we ARE tracking for debugging
+		for k := range a.versions {
+			a.log.Debug("tracked key", "key", k)
+		}
 		return a.activateApp(ctx, ver, pool, service)
 	}
 
 	if len(vs.sandboxes) == 0 {
-		a.log.Info("no sandboxes available, creating new sandbox for app", "app", ver.App, "version", ver.Version)
+		a.log.Info("no sandboxes available in version slot, creating new sandbox",
+			"app", ver.App,
+			"version", ver.Version,
+			"key", key)
 	} else {
 		a.log.Debug("reusing existing sandboxes", "app", ver.App, "version", ver.Version, "sandboxes", len(vs.sandboxes))
 
@@ -528,9 +545,13 @@ func (a *localActivator) recoverSandboxes(ctx context.Context) error {
 		return fmt.Errorf("failed to list sandboxes: %w", err)
 	}
 
-	a.log.Info("recovering sandboxes on startup", "count", len(resp.Values()))
+	a.log.Info("recovering sandboxes on startup", "total_sandboxes", len(resp.Values()))
 
 	recoveryTime := time.Now()
+	runningCount := 0
+	skippedNoVersion := 0
+	skippedNotRunning := 0
+	recoveredCount := 0
 
 	for _, ent := range resp.Values() {
 		var sb compute_v1alpha.Sandbox
@@ -538,11 +559,16 @@ func (a *localActivator) recoverSandboxes(ctx context.Context) error {
 
 		// Only recover running sandboxes
 		if sb.Status != compute_v1alpha.RUNNING {
+			skippedNotRunning++
+			a.log.Debug("skipping non-running sandbox", "sandbox", sb.ID, "status", sb.Status)
 			continue
 		}
+		runningCount++
 
 		// Skip sandboxes without a version reference
 		if sb.Version.String() == "" {
+			skippedNoVersion++
+			a.log.Debug("skipping sandbox without version", "sandbox", sb.ID)
 			continue
 		}
 
@@ -632,9 +658,18 @@ func (a *localActivator) recoverSandboxes(ctx context.Context) error {
 			a.versions[key] = vs
 		}
 		vs.sandboxes = append(vs.sandboxes, lsb)
+		recoveredCount++
 
-		a.log.Info("recovered sandbox", "app", appVer.App, "version", appVer.Version, "sandbox", sb.ID, "pool", pool, "service", service)
+		a.log.Info("recovered sandbox", "app", appVer.App, "version", appVer.Version, "sandbox", sb.ID, "pool", pool, "service", service, "url", addr)
 	}
+
+	a.log.Info("sandbox recovery summary",
+		"total", len(resp.Values()),
+		"running", runningCount,
+		"recovered", recoveredCount,
+		"skipped_not_running", skippedNotRunning,
+		"skipped_no_version", skippedNoVersion,
+		"tracked_keys", len(a.versions))
 
 	return nil
 }
