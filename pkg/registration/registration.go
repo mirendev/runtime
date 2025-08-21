@@ -135,8 +135,16 @@ func (c *Client) StartRegistration(ctx context.Context) (*Result, error) {
 
 	if resp.StatusCode != http.StatusOK {
 		var errResp map[string]string
-		json.NewDecoder(resp.Body).Decode(&errResp)
-		return nil, fmt.Errorf("registration failed: %s", errResp["error"])
+		if err := json.NewDecoder(resp.Body).Decode(&errResp); err != nil {
+			return nil, fmt.Errorf("failed to decode error response: %w", err)
+		}
+
+		errmsg := errResp["error"]
+		if errmsg == "" {
+			errmsg = "unknown error"
+		}
+
+		return nil, fmt.Errorf("registration failed: %s", errmsg)
 	}
 
 	var result Result
