@@ -14,10 +14,10 @@ import (
 
 // AuthClient handles service account authentication with miren.cloud
 type AuthClient struct {
-	serverURL    string
-	keyPair      *KeyPair
-	httpClient   *http.Client
-	
+	serverURL  string
+	keyPair    *KeyPair
+	httpClient *http.Client
+
 	mu           sync.RWMutex
 	currentToken string
 	tokenExpiry  time.Time

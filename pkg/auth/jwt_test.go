@@ -362,4 +362,3 @@ func TestInvalidTokens(t *testing.T) {
 		}
 	})
 }
-

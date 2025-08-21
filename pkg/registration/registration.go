@@ -270,4 +270,3 @@ func LoadRegistration(dir string) (*StoredRegistration, error) {
 
 	return &reg, nil
 }
-
