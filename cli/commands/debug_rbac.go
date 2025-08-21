@@ -206,7 +206,7 @@ func DebugRBACTest(ctx *Context, opts struct {
 
 	// Create evaluator with a basic logger
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
-	evaluator := rbac.NewEvaluator(fetcher, logger)
+	evaluator := rbac.NewEvaluator(ctx, fetcher, logger)
 
 	// Clean up tags
 	cleanTags := make(map[string]interface{})

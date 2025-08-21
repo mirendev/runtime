@@ -1,6 +1,7 @@
 package rbac
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -64,7 +65,7 @@ type Evaluator struct {
 }
 
 // NewEvaluator creates a new RBAC evaluator with a PolicyProvider
-func NewEvaluator(provider PolicyProvider, logger *slog.Logger) *Evaluator {
+func NewEvaluator(ctx context.Context, provider PolicyProvider, logger *slog.Logger) *Evaluator {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -72,7 +73,7 @@ func NewEvaluator(provider PolicyProvider, logger *slog.Logger) *Evaluator {
 	return &Evaluator{
 		provider: provider,
 		logger:   logger.With("component", "rbac-evaluator"),
-		cache:    newDecisionCache(),
+		cache:    newDecisionCache(ctx),
 	}
 }
 
@@ -181,12 +182,12 @@ type cacheEntry struct {
 	expires  time.Time
 }
 
-func newDecisionCache() *decisionCache {
+func newDecisionCache(ctx context.Context) *decisionCache {
 	dc := &decisionCache{
 		entries: make(map[string]*cacheEntry),
 	}
 	// Start cleanup goroutine
-	go dc.cleanup()
+	go dc.cleanup(ctx)
 	return dc
 }
 
@@ -246,19 +247,24 @@ func (dc *decisionCache) requestKey(req *Request) string {
 	return key
 }
 
-func (dc *decisionCache) cleanup() {
+func (dc *decisionCache) cleanup(ctx context.Context) {
 	ticker := time.NewTicker(1 * time.Minute)
 	defer ticker.Stop()
 
-	for range ticker.C {
-		dc.mu.Lock()
-		now := time.Now()
-		for key, entry := range dc.entries {
-			if now.After(entry.expires) {
-				delete(dc.entries, key)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			dc.mu.Lock()
+			now := time.Now()
+			for key, entry := range dc.entries {
+				if now.After(entry.expires) {
+					delete(dc.entries, key)
+				}
 			}
+			dc.mu.Unlock()
 		}
-		dc.mu.Unlock()
 	}
 }
 

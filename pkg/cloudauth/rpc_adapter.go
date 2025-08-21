@@ -98,7 +98,7 @@ func NewRPCAuthenticator(ctx context.Context, config Config) (*RPCAuthenticator,
 	}
 
 	// Create evaluator with the policy fetcher as provider
-	a.rbacEval = rbac.NewEvaluator(a.policyFetcher, config.Logger)
+	a.rbacEval = rbac.NewEvaluator(ctx, a.policyFetcher, config.Logger)
 
 	return a, nil
 }

@@ -98,7 +98,7 @@ func TestEvaluatorWithTags(t *testing.T) {
 	store.UpdatePolicy(policy)
 
 	// Create evaluator
-	eval := NewEvaluator(store, nil)
+	eval := NewEvaluator(t.Context(), store, nil)
 
 	tests := []struct {
 		name     string
@@ -505,7 +505,7 @@ func TestEvaluatorCache(t *testing.T) {
 
 	store := NewMemoryPolicyStore()
 	store.UpdatePolicy(policy)
-	eval := NewEvaluator(store, nil)
+	eval := NewEvaluator(t.Context(), store, nil)
 
 	req := &Request{
 		Subject:  "test-user",
@@ -539,7 +539,7 @@ func TestEvaluatorWithNoPolicy(t *testing.T) {
 	// Create evaluator with nil policy
 	store := NewMemoryPolicyStore()
 	store.UpdatePolicy(nil)
-	eval := NewEvaluator(store, nil)
+	eval := NewEvaluator(t.Context(), store, nil)
 
 	req := &Request{
 		Subject:  "test-user",
@@ -554,4 +554,3 @@ func TestEvaluatorWithNoPolicy(t *testing.T) {
 		t.Errorf("expected deny with no policy, got %v", decision)
 	}
 }
-
