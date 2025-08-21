@@ -77,20 +77,20 @@ type Status struct {
 
 // StoredRegistration contains the registration data stored on disk
 type StoredRegistration struct {
-	ClusterID        string    `json:"cluster_id"`
-	ClusterName      string    `json:"cluster_name"`
-	OrganizationID   string    `json:"organization_id"`
-	ServiceAccountID string    `json:"service_account_id"`
-	PrivateKey       string    `json:"private_key"` // PEM encoded private key
-	CloudURL         string    `json:"cloud_url"`
-	RegisteredAt     time.Time `json:"registered_at"`
+	ClusterID        string            `json:"cluster_id"`
+	ClusterName      string            `json:"cluster_name"`
+	OrganizationID   string            `json:"organization_id"`
+	ServiceAccountID string            `json:"service_account_id"`
+	PrivateKey       string            `json:"private_key"` // PEM encoded private key
+	CloudURL         string            `json:"cloud_url"`
+	RegisteredAt     time.Time         `json:"registered_at"`
 	Tags             map[string]string `json:"tags,omitempty"`
-	
+
 	// Pending registration fields
-	Status           string    `json:"status,omitempty"` // "pending" or "approved"
-	RegistrationID   string    `json:"registration_id,omitempty"`
-	PollURL          string    `json:"poll_url,omitempty"`
-	ExpiresAt        time.Time `json:"expires_at,omitempty"`
+	Status         string    `json:"status,omitempty"` // "pending" or "approved"
+	RegistrationID string    `json:"registration_id,omitempty"`
+	PollURL        string    `json:"poll_url,omitempty"`
+	ExpiresAt      time.Time `json:"expires_at,omitempty"`
 }
 
 // Client handles the cluster registration flow
@@ -168,15 +168,17 @@ func (c *Client) PollForApprovalWithCallback(ctx context.Context, pollURL string
 				continue
 			}
 
-			if status.Status == "approved" {
+			switch status.Status {
+			case "approved":
 				return status, nil
-			} else if status.Status == "rejected" {
+			case "rejected":
 				return nil, fmt.Errorf("registration was rejected")
-			}
-
-			// Call progress callback if provided
-			if progressCallback != nil && status.Status == "pending" {
-				progressCallback()
+			case "pending":
+				if progressCallback != nil {
+					progressCallback()
+				}
+			default:
+				return nil, fmt.Errorf("unexpected status: %s", status.Status)
 			}
 			// Continue polling for "pending" or other states
 		}
@@ -223,7 +225,6 @@ func (c *Client) checkRegistrationStatus(ctx context.Context, pollURL string) (*
 	return &status, nil
 }
 
-
 // SaveRegistration saves the registration data to the specified directory
 func SaveRegistration(dir string, reg *StoredRegistration) error {
 	// Ensure directory exists
@@ -269,3 +270,4 @@ func LoadRegistration(dir string) (*StoredRegistration, error) {
 
 	return &reg, nil
 }
+

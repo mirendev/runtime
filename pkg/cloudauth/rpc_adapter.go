@@ -37,7 +37,7 @@ type Config struct {
 // Validate validates the configuration
 func (c *Config) Validate() error {
 	if c.Logger == nil {
-		return fmt.Errorf("Logger is required")
+		return fmt.Errorf("logger is required")
 	}
 
 	// Validate tags if provided

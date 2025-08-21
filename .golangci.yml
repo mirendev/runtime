@@ -1,26 +1,28 @@
 version: "2"
+
 linters:
-  default: standard
-  exclusions:
-    warn-unused: true
-    rules:
-      - path: pkg/perf
-        linters:
-          - govet
-        text: unreachable code
-      - path: dataset/
-        linters:
-          - govet
-        text: unreachable code
-      - path: pkg/runsc/monitor
-        linters:
-          - govet
-        text: unreachable code
-      - path: pkg/entity/mock
-        linters:
-          - govet
-        text: unreachable code
-formatters:
-  enable:
-    - gofmt
-    - goimports
+  disable:
+    - errcheck
+
+linters-settings:
+  govet:
+    check-shadowing: true
+
+issues:
+  exclude-rules:
+    - path: pkg/perf
+      linters:
+        - govet
+      text: "unreachable code"
+    - path: dataset/
+      linters:
+        - govet
+      text: "unreachable code"
+    - path: pkg/runsc/monitor
+      linters:
+        - govet
+      text: "unreachable code"
+    - path: pkg/entity/mock
+      linters:
+        - govet
+      text: "unreachable code"

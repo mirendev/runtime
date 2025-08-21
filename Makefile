@@ -69,6 +69,11 @@ lint-changed:
 
 .PHONY: lint-changed
 
+lint-pr:
+	golangci-lint run --new-from-rev main ./...
+
+.PHONY: lint-pr
+
 dist:
 	@bash ./hack/build-dist.sh
 

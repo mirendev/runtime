@@ -263,8 +263,8 @@ func (tc *TokenCache) Set(token string, claims *Claims) {
 
 	// Cache until token expires
 	var expiry time.Time
-	if claims.RegisteredClaims.ExpiresAt != nil {
-		expiry = claims.RegisteredClaims.ExpiresAt.Time
+	if claims.ExpiresAt != nil {
+		expiry = claims.ExpiresAt.Time
 	}
 	if expiry.IsZero() {
 		expiry = time.Now().Add(1 * time.Hour)

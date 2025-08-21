@@ -63,7 +63,7 @@ func TestJWTValidatorWithEdDSA(t *testing.T) {
 	// Create and sign token with Ed25519
 	token := jwt.NewWithClaims(&jwt.SigningMethodEd25519{}, claims)
 	token.Header["kid"] = "test-key-1"
-	
+
 	tokenString, err := token.SignedString(privateKey)
 	if err != nil {
 		t.Fatalf("failed to sign token: %v", err)
@@ -77,8 +77,8 @@ func TestJWTValidatorWithEdDSA(t *testing.T) {
 	}
 
 	// Verify claims
-	if validatedClaims.RegisteredClaims.Subject != "test-service-account" {
-		t.Errorf("expected subject 'test-service-account', got %s", validatedClaims.RegisteredClaims.Subject)
+	if validatedClaims.Subject != "test-service-account" {
+		t.Errorf("expected subject 'test-service-account', got %s", validatedClaims.Subject)
 	}
 	if validatedClaims.OrganizationID != "org-123" {
 		t.Errorf("expected org_id 'org-123', got %s", validatedClaims.OrganizationID)
@@ -138,15 +138,15 @@ func TestJWTValidatorWithMultipleKeys(t *testing.T) {
 		}
 		token := jwt.NewWithClaims(&jwt.SigningMethodEd25519{}, claims)
 		token.Header["kid"] = "key-1"
-		
+
 		tokenString, _ := token.SignedString(privateKey1)
-		
+
 		validatedClaims, err := validator.ValidateToken(ctx, tokenString)
 		if err != nil {
 			t.Fatalf("failed to validate token with key-1: %v", err)
 		}
-		if validatedClaims.RegisteredClaims.Subject != "sa-1" {
-			t.Errorf("expected subject 'sa-1', got %s", validatedClaims.RegisteredClaims.Subject)
+		if validatedClaims.Subject != "sa-1" {
+			t.Errorf("expected subject 'sa-1', got %s", validatedClaims.Subject)
 		}
 	})
 
@@ -160,15 +160,15 @@ func TestJWTValidatorWithMultipleKeys(t *testing.T) {
 		}
 		token := jwt.NewWithClaims(&jwt.SigningMethodEd25519{}, claims)
 		token.Header["kid"] = "key-2"
-		
+
 		tokenString, _ := token.SignedString(privateKey2)
-		
+
 		validatedClaims, err := validator.ValidateToken(ctx, tokenString)
 		if err != nil {
 			t.Fatalf("failed to validate token with key-2: %v", err)
 		}
-		if validatedClaims.RegisteredClaims.Subject != "sa-2" {
-			t.Errorf("expected subject 'sa-2', got %s", validatedClaims.RegisteredClaims.Subject)
+		if validatedClaims.Subject != "sa-2" {
+			t.Errorf("expected subject 'sa-2', got %s", validatedClaims.Subject)
 		}
 	})
 
@@ -182,9 +182,9 @@ func TestJWTValidatorWithMultipleKeys(t *testing.T) {
 		}
 		token := jwt.NewWithClaims(&jwt.SigningMethodEd25519{}, claims)
 		token.Header["kid"] = "non-existent-key"
-		
+
 		tokenString, _ := token.SignedString(privateKey1)
-		
+
 		_, err := validator.ValidateToken(ctx, tokenString)
 		if err == nil {
 			t.Error("expected error for non-existent key ID")
@@ -194,7 +194,7 @@ func TestJWTValidatorWithMultipleKeys(t *testing.T) {
 
 func TestJWKSCaching(t *testing.T) {
 	publicKey, privateKey, _ := ed25519.GenerateKey(rand.Reader)
-	
+
 	requestCount := 0
 	jwks := JWKS{
 		Keys: []JWK{
@@ -264,7 +264,7 @@ func TestJWKSCaching(t *testing.T) {
 
 func TestInvalidTokens(t *testing.T) {
 	publicKey, privateKey, _ := ed25519.GenerateKey(rand.Reader)
-	
+
 	jwks := JWKS{
 		Keys: []JWK{
 			{
@@ -334,7 +334,7 @@ func TestInvalidTokens(t *testing.T) {
 		}
 		token := jwt.NewWithClaims(&jwt.SigningMethodEd25519{}, claims)
 		token.Header["kid"] = "test-key"
-		
+
 		// Sign with a different key
 		_, wrongKey, _ := ed25519.GenerateKey(rand.Reader)
 		tokenString, _ := token.SignedString(wrongKey)
@@ -362,3 +362,4 @@ func TestInvalidTokens(t *testing.T) {
 		}
 	})
 }
+

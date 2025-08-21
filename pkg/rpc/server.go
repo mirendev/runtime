@@ -326,8 +326,6 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.state.log.Debug("request authenticated", "identity", identity, "path", r.URL.Path)
-		// Add identity to request context for downstream use
-		r = r.WithContext(context.WithValue(r.Context(), "identity", identity))
 	} else {
 		// No Authorization header - let authenticator decide if this is allowed
 		allowed, identity, err := s.state.authenticator.NoAuthorization(r.Context(), r)
@@ -347,7 +345,6 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// Request is allowed without auth header (e.g., using client certs)
 		if identity != "" && identity != "anonymous" {
 			s.state.log.Debug("request allowed without auth header", "identity", identity, "path", r.URL.Path)
-			r = r.WithContext(context.WithValue(r.Context(), "identity", identity))
 		}
 	}
 

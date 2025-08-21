@@ -30,13 +30,13 @@ func (d Decision) String() string {
 type Explainer interface {
 	// RuleConsidered is called for each rule that is evaluated
 	RuleConsidered(rule *Rule)
-	
+
 	// RuleSkipped is called when a rule is skipped with the reason
 	RuleSkipped(rule *Rule, reason string)
-	
+
 	// RuleMatched is called when a rule matches and grants permission
 	RuleMatched(rule *Rule, resource string, action string)
-	
+
 	// NoRulesMatched is called when no rules grant the requested permission
 	NoRulesMatched()
 }
@@ -61,7 +61,6 @@ type Evaluator struct {
 	provider PolicyProvider
 	logger   *slog.Logger
 	cache    *decisionCache
-	mu       sync.RWMutex
 }
 
 // NewEvaluator creates a new RBAC evaluator with a PolicyProvider
@@ -84,7 +83,7 @@ func (e *Evaluator) Evaluate(req *Request, opts ...EvaluateOption) Decision {
 	for _, opt := range opts {
 		opt(options)
 	}
-	
+
 	// Check cache first
 	if decision, ok := e.cache.get(req); ok {
 		return decision
@@ -106,7 +105,7 @@ func (e *Evaluator) Evaluate(req *Request, opts ...EvaluateOption) Decision {
 		if options.Explainer != nil {
 			options.Explainer.RuleConsidered(rule)
 		}
-		
+
 		// Check if tags match
 		if !rule.MatchesTags(req.Tags) {
 			if options.Explainer != nil {
@@ -228,22 +227,22 @@ func (dc *decisionCache) clear() {
 func (dc *decisionCache) requestKey(req *Request) string {
 	// Include all relevant fields in cache key
 	key := fmt.Sprintf("%s:%s:%s", req.Subject, req.Resource, req.Action)
-	
+
 	// Add groups to key
 	for _, g := range req.Groups {
 		key += ":" + g
 	}
-	
+
 	// Add tags to key
 	for k, v := range req.Tags {
 		key += fmt.Sprintf(":%s=%v", k, v)
 	}
-	
+
 	// Add context to key
 	for k, v := range req.Context {
 		key += fmt.Sprintf(":%s=%v", k, v)
 	}
-	
+
 	return key
 }
 
@@ -262,3 +261,4 @@ func (dc *decisionCache) cleanup() {
 		dc.mu.Unlock()
 	}
 }
+
