@@ -126,6 +126,7 @@ type deployInfo struct {
 	// Timeout and interrupt handling
 	lastActivity    time.Time
 	buildkitTimeout time.Duration
+	buildkitStarted bool // Track if buildkit has shown any activity
 	interrupted     bool
 
 	showProgress bool
@@ -159,7 +160,8 @@ func initialModel(update chan string, transfers chan transferUpdate, uploadProgr
 		phaseStart:      time.Now(),
 		currentPhase:    "upload",
 		lastActivity:    time.Now(),
-		buildkitTimeout: 30 * time.Second, // 30 second timeout for buildkit to start
+		buildkitTimeout: 60 * time.Second, // 60 second timeout for buildkit to start
+		buildkitStarted: false,
 		bp:              progressui.TeaModel(),
 	}
 }
@@ -229,11 +231,11 @@ func (m *deployInfo) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.showProgress = !m.showProgress
 		}
 	case timeoutCheckMsg:
-		// Check for timeout in buildkit phase
-		if m.currentPhase == "buildkit" && time.Since(m.lastActivity) > m.buildkitTimeout {
+		// Only check for timeout if buildkit hasn't started yet
+		if m.currentPhase == "buildkit" && !m.buildkitStarted && time.Since(m.lastActivity) > m.buildkitTimeout {
 			m.currentPhase = "timeout"
 			return m, tea.Sequence(
-				tea.Println("\n\n❌ Buildkit failed to start after 30 seconds. This may indicate a server issue."),
+				tea.Println("\n\n❌ Buildkit failed to start after 60 seconds. This may indicate a server issue."),
 				tea.Quit,
 			)
 		}
@@ -272,6 +274,7 @@ func (m *deployInfo) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.phaseStart = time.Now()
 				m.currentPhase = "buildkit"
 			}
+
 		}
 
 		cmds = append(cmds, func() tea.Msg {
@@ -294,6 +297,12 @@ func (m *deployInfo) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	case transferUpdate:
 		m.lastActivity = time.Now() // Reset activity timer
+
+		// Mark buildkit as started once we receive transfer updates
+		if m.currentPhase == "buildkit" && !m.buildkitStarted {
+			m.buildkitStarted = true
+		}
+
 		// Buildkit transfers mean upload is complete (fallback if no "Launching builder" message)
 		if m.isUploading {
 			m.isUploading = false

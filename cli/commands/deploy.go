@@ -163,10 +163,11 @@ func Deploy(ctx *Context, opts struct {
 			defer wg.Done()
 			finalModel, runErr = p.Run()
 			if runErr == nil {
-				// Check if we exited due to interrupt or timeout
-				if dm, ok := finalModel.(*deployInfo); ok && (dm.interrupted || dm.currentPhase == "timeout") {
+				// Check if we exited due to interrupt or actual timeout
+				if dm, ok := finalModel.(*deployInfo); ok && dm.interrupted {
 					cancelDeploy() // Cancel the deployment context
 				}
+				// Note: we don't cancel on timeout phase anymore as that's handled by the UI
 			} else {
 				// UI died; ensure we don't keep uploading/building
 				cancelDeploy()
@@ -204,10 +205,16 @@ func Deploy(ctx *Context, opts struct {
 		}
 
 		if err != nil {
-			// Check if this was a context cancellation (from timeout or interrupt)
-			if deployCtx.Err() != nil {
+			// Check if this was a user interruption
+			if dm, ok := finalModel.(*deployInfo); ok && dm.interrupted {
 				ctx.Printf("\n\n❌ Deploy cancelled.\n")
 				return deployCtx.Err()
+			}
+
+			// Check if this was a buildkit startup timeout (handled by UI)
+			if dm, ok := finalModel.(*deployInfo); ok && dm.currentPhase == "timeout" {
+				// The UI already printed the timeout message
+				return fmt.Errorf("buildkit startup timeout")
 			}
 
 			ctx.Printf("\n\nBuild failed.\n")
@@ -244,7 +251,6 @@ func printBuildErrors(ctx *Context, buildErrors []string, buildLogs []string) {
 		}
 	}
 }
-
 
 // createBuildStatusCallback creates a callback for handling build status updates
 func createBuildStatusCallback(
