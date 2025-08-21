@@ -37,6 +37,7 @@ require (
 	github.com/fxamacker/cbor/v2 v2.7.0
 	github.com/go-logr/logr v1.4.2
 	github.com/go-ozzo/ozzo-validation/v4 v4.3.0
+	github.com/golang-jwt/jwt/v5 v5.3.0
 	github.com/google/cel-go v0.24.1
 	github.com/google/gofuzz v1.2.0
 	github.com/google/pprof v0.0.0-20241203143554-1e3fdc7de467

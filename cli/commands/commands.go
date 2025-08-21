@@ -139,6 +139,14 @@ func AllCommands() map[string]cli.CommandFactory {
 		"debug colors": func() (cli.Command, error) {
 			return Infer("debug colors", "Print some colors", Colors), nil
 		},
+
+		"debug rbac": func() (cli.Command, error) {
+			return Infer("debug rbac", "Fetch and display RBAC rules from miren.cloud", DebugRBAC), nil
+		},
+
+		"debug rbac test": func() (cli.Command, error) {
+			return Infer("debug rbac test", "Test RBAC evaluation with fetched rules", DebugRBACTest), nil
+		},
 	}
 
 	addCommands(base)
