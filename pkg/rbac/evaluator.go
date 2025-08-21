@@ -4,8 +4,11 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"sort"
 	"sync"
 	"time"
+
+	"miren.dev/runtime/pkg/mapx"
 )
 
 // Decision represents an authorization decision
@@ -229,18 +232,20 @@ func (dc *decisionCache) requestKey(req *Request) string {
 	// Include all relevant fields in cache key
 	key := fmt.Sprintf("%s:%s:%s", req.Subject, req.Resource, req.Action)
 
+	sort.Strings(req.Groups)
+
 	// Add groups to key
 	for _, g := range req.Groups {
 		key += ":" + g
 	}
 
 	// Add tags to key
-	for k, v := range req.Tags {
+	for k, v := range mapx.StableOrder(req.Tags) {
 		key += fmt.Sprintf(":%s=%v", k, v)
 	}
 
 	// Add context to key
-	for k, v := range req.Context {
+	for k, v := range mapx.StableOrder(req.Context) {
 		key += fmt.Sprintf(":%s=%v", k, v)
 	}
 
