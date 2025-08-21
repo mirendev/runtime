@@ -121,24 +121,52 @@ func (c *SandboxController) SetPortStatus(id string, port observability.BoundPor
 	c.portCond.Broadcast()
 }
 
-func (c *SandboxController) waitForPort(id string, port int) {
-	c.portMu.Lock()
-	defer c.portMu.Unlock()
+func (c *SandboxController) waitForPort(ctx context.Context, id string, port int, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
 
-	for {
-		ports, ok := c.portMap[id]
-		if !ok {
-			ports = &containerPorts{}
-			c.portMap[id] = ports
-		}
+	// Create a channel to signal when port is ready
+	done := make(chan struct{})
+	cancelled := make(chan struct{})
 
-		for _, p := range ports.Ports {
-			if p.Port == port {
+	go func() {
+		c.portMu.Lock()
+		defer c.portMu.Unlock()
+
+		for {
+			select {
+			case <-cancelled:
 				return
+			default:
 			}
-		}
 
-		c.portCond.Wait()
+			ports, ok := c.portMap[id]
+			if !ok {
+				ports = &containerPorts{}
+				c.portMap[id] = ports
+			}
+
+			for _, p := range ports.Ports {
+				if p.Port == port {
+					close(done)
+					return
+				}
+			}
+
+			c.portCond.Wait()
+		}
+	}()
+
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		close(cancelled)
+		c.portCond.Broadcast() // Wake up the waiting goroutine
+		return fmt.Errorf("context cancelled while waiting for port %d: %w", port, ctx.Err())
+	case <-time.After(time.Until(deadline)):
+		close(cancelled)
+		c.portCond.Broadcast() // Wake up the waiting goroutine
+		return fmt.Errorf("timeout waiting for port %d to be bound after %v", port, timeout)
 	}
 }
 
@@ -528,9 +556,15 @@ func (c *SandboxController) createSandbox(ctx context.Context, co *compute.Sandb
 
 	c.Log.Info("sandbox started", "id", co.ID, "namespace", c.Namespace)
 
+	// Wait for ports with a shorter timeout (5 seconds per port)
+	// Many sandboxes don't actually bind their declared ports immediately
+	portTimeout := 5 * time.Second
 	for _, wp := range waitPorts {
-		c.Log.Info("waiting for ports to be bound", "id", cid, "port", wp.port)
-		c.waitForPort(wp.id, wp.port)
+		c.Log.Info("waiting for ports to be bound", "id", cid, "port", wp.port, "timeout", portTimeout)
+		if err := c.waitForPort(ctx, wp.id, wp.port, portTimeout); err != nil {
+			c.Log.Warn("failed to wait for port binding", "id", cid, "port", wp.port, "error", err)
+			// Continue anyway - the port might bind later or might not be critical
+		}
 	}
 
 	co.Status = compute.RUNNING

@@ -115,46 +115,101 @@ func (c *ReconcileController) Start(top context.Context) error {
 		c.Log.Info("Starting index watch")
 		defer c.Log.Info("Index watch stopped")
 
-		c.esc.WatchIndex(ctx, c.index, stream.Callback(func(op *entityserver_v1alpha.EntityOp) error {
-			var eventType EventType
+		// Retry logic with exponential backoff
+		retryDelay := time.Second
+		maxRetryDelay := time.Minute * 5
+		retryCount := 0
 
-			switch op.Operation() {
-			case 1:
-				eventType = EventAdded
-			case 2:
-				eventType = EventUpdated
-			case 3:
-				eventType = EventDeleted
-			default:
-				return nil
-			}
-
-			ev := Event{
-				Type:    eventType,
-				Id:      entity.Id(op.EntityId()),
-				PrevRev: op.Previous(),
-			}
-
-			if op.HasEntity() {
-				aen := op.Entity()
-
-				ev.Entity = &entity.Entity{
-					ID:        entity.Id(aen.Id()),
-					CreatedAt: aen.CreatedAt(),
-					UpdatedAt: aen.UpdatedAt(),
-					Attrs:     aen.Attrs(),
-				}
-			}
-
+		for {
 			select {
 			case <-ctx.Done():
-				return nil
-			case c.workQueue <- ev:
-				//ok
+				return
+			default:
 			}
 
-			return nil
-		}))
+			if retryCount > 0 {
+				c.Log.Info("Attempting to reconnect watch", "index", c.index.ID, "value", c.index.Value, "attempt", retryCount)
+			} else {
+				c.Log.Debug("Attempting to establish watch connection", "index", c.index.ID, "value", c.index.Value)
+			}
+
+			_, err := c.esc.WatchIndex(ctx, c.index, stream.Callback(func(op *entityserver_v1alpha.EntityOp) error {
+				// Log successful reconnection after retry
+				if retryCount > 0 {
+					c.Log.Info("Watch successfully reconnected", "index", c.index.ID, "value", c.index.Value, "afterAttempts", retryCount)
+					retryCount = 0
+					retryDelay = time.Second // Reset delay for future disconnects
+				}
+				var eventType EventType
+
+				switch op.Operation() {
+				case 1:
+					eventType = EventAdded
+				case 2:
+					eventType = EventUpdated
+				case 3:
+					eventType = EventDeleted
+				default:
+					return nil
+				}
+
+				ev := Event{
+					Type:    eventType,
+					Id:      entity.Id(op.EntityId()),
+					PrevRev: op.Previous(),
+				}
+
+				if op.HasEntity() {
+					aen := op.Entity()
+
+					ev.Entity = &entity.Entity{
+						ID:        entity.Id(aen.Id()),
+						CreatedAt: aen.CreatedAt(),
+						UpdatedAt: aen.UpdatedAt(),
+						Attrs:     aen.Attrs(),
+					}
+				}
+
+				select {
+				case <-ctx.Done():
+					return nil
+				case c.workQueue <- ev:
+					//ok
+				default:
+					// Queue is full, log and continue
+					c.Log.Warn("Work queue full, dropping watch event", "entity", ev.Id, "eventType", ev.Type, "queueSize", len(c.workQueue))
+				}
+
+				return nil
+			}))
+
+			if err != nil {
+				// Check if context was cancelled
+				if ctx.Err() != nil {
+					c.Log.Debug("Watch context cancelled, stopping watch")
+					return
+				}
+
+				retryCount++
+				c.Log.Error("Watch disconnected, will retry", "error", err, "retryDelay", retryDelay, "attempt", retryCount)
+
+				// Wait before retrying with exponential backoff
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(retryDelay):
+					// Exponential backoff with max delay
+					retryDelay = retryDelay * 2
+					if retryDelay > maxRetryDelay {
+						retryDelay = maxRetryDelay
+					}
+				}
+			} else {
+				// Watch completed normally (shouldn't happen unless context cancelled)
+				c.Log.Debug("Watch completed normally")
+				return
+			}
+		}
 	}()
 
 	// Start periodic resync
@@ -288,6 +343,9 @@ func (c *ReconcileController) periodicResync(ctx context.Context) {
 				return
 			case c.workQueue <- ev:
 				// Event added to queue
+			default:
+				// Queue is full, log and skip this event
+				c.Log.Warn("Work queue full during resync, dropping event", "entity", ev.Id, "queueSize", len(c.workQueue))
 			}
 		}
 
@@ -295,7 +353,7 @@ func (c *ReconcileController) periodicResync(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			break
+			// Continue to the next tick
 		}
 	}
 }
