@@ -40,6 +40,7 @@ import (
 	"miren.dev/runtime/pkg/grunge"
 	"miren.dev/runtime/pkg/ipdiscovery"
 	"miren.dev/runtime/pkg/netdb"
+	"miren.dev/runtime/pkg/registration"
 	"miren.dev/runtime/pkg/rpc"
 	"miren.dev/runtime/servers/httpingress"
 )
@@ -369,6 +370,32 @@ func Server(ctx *Context, opts struct {
 		return err
 	}
 
+	// Load registration if it exists
+	var cloudAuthConfig coordinate.CloudAuthConfig
+	registrationDir := filepath.Join(opts.DataPath, "server")
+	if reg, err := registration.LoadRegistration(registrationDir); err != nil {
+		ctx.Log.Warn("failed to load registration", "error", err, "dir", registrationDir)
+	} else if reg != nil && reg.Status == "approved" {
+		// Only use approved registrations
+		ctx.Log.Info("loaded cluster registration",
+			"cluster-id", reg.ClusterID,
+			"cluster-name", reg.ClusterName,
+			"org-id", reg.OrganizationID,
+			"cloud-url", reg.CloudURL)
+
+		// Configure cloud authentication from registration
+		cloudAuthConfig.Enabled = true
+		cloudAuthConfig.CloudURL = reg.CloudURL
+		cloudAuthConfig.PrivateKey = filepath.Join(registrationDir, "service-account.key")
+	} else if reg != nil && reg.Status == "pending" {
+		ctx.Log.Info("found pending cluster registration",
+			"cluster-name", reg.ClusterName,
+			"registration-id", reg.RegistrationID,
+			"expires-at", reg.ExpiresAt)
+	} else {
+		ctx.Log.Info("no cluster registration found")
+	}
+
 	co := coordinate.NewCoordinator(ctx.Log, coordinate.CoordinatorConfig{
 		Address:         opts.Address,
 		EtcdEndpoints:   opts.EtcdEndpoints,
@@ -378,6 +405,7 @@ func Server(ctx *Context, opts struct {
 		AdditionalIPs:   additionalIps,
 		Resolver:        res,
 		TempDir:         os.TempDir(),
+		CloudAuth:       cloudAuthConfig,
 		Mem:             &mem,
 		Cpu:             &cpu,
 		HTTP:            &httpMetrics,
