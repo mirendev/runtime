@@ -63,7 +63,6 @@ func (c *Context) setupServerComponents(ctx context.Context, reg *asm.Registry) 
 
 	reg.Register("tempdir", os.TempDir())
 
-
 	reg.Register("server-id", "miren-server")
 
 	reg.Register("data-path", "/var/lib/miren")

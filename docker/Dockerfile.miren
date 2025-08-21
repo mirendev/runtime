@@ -66,7 +66,7 @@ RUN chmod +x /usr/local/bin/runsc-ignore
 COPY --from=builder /build/bin/miren /usr/local/bin/miren
 
 # Create necessary directories
-RUN mkdir -p /data/containerd /data/containerd/state /data/buildkit /var/log /root/.config/miren /var/lib/miren/containerd
+RUN mkdir -p /var/lib/miren/containerd /var/lib/miren/containerd/state /var/log /root/.config/miren
 
 # Create entrypoint script
 # Copy and setup entrypoint script

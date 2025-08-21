@@ -3,28 +3,19 @@ set -e
 
 # Start containerd
 echo "Starting containerd..."
-containerd --config /data/containerd/config.toml \
-    --root /data/containerd \
-    --state /data/containerd/state &
+containerd --config /etc/containerd/config.toml \
+    --root /var/lib/miren/containerd \
+    --state /var/lib/miren/containerd/state &
 CONTAINERD_PID=$!
 
 # Wait for containerd to be ready
 sleep 2
 
-# Start buildkitd  
-echo "Starting buildkitd..."
-buildkitd --root /data/buildkit &
-BUILDKITD_PID=$!
-
-# Wait for buildkitd to be ready
-sleep 2
 
 # Function to cleanup on exit
 cleanup() {
     echo "Shutting down services..."
-    kill $BUILDKITD_PID 2>/dev/null || true
     kill $CONTAINERD_PID 2>/dev/null || true
-    wait $BUILDKITD_PID 2>/dev/null || true
     wait $CONTAINERD_PID 2>/dev/null || true
 }
 

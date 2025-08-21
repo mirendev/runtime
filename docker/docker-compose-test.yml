@@ -2,7 +2,7 @@ version: '3.8'
 
 services:
   miren:
-    image: oci.miren.cloud/miren:latest
+    image: miren:latest
     container_name: miren
     privileged: true
     ports:
