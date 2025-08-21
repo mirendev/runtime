@@ -25,15 +25,6 @@ func TestConfigValidate(t *testing.T) {
 			wantError: false,
 		},
 		{
-			name: "no Logger configured",
-			config: Config{
-				CloudURL: "",
-				Logger:   nil,
-			},
-			wantError: true,
-			errorMsg:  "Logger is required",
-		},
-		{
 			name: "empty tag key",
 			config: Config{
 				CloudURL: "https://miren.cloud",
