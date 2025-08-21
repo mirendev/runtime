@@ -59,8 +59,6 @@ RUN if [ "$TARGETARCH" = "arm64" ]; then \
 
 # Copy configuration files
 COPY hack/containerd-config.toml /etc/containerd/config.toml
-COPY hack/runsc-ignore /usr/local/bin/runsc-ignore
-RUN chmod +x /usr/local/bin/runsc-ignore
 
 # Copy miren binary from builder
 COPY --from=builder /build/bin/miren /usr/local/bin/miren
