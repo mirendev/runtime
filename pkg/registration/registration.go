@@ -155,13 +155,8 @@ func (c *Client) StartRegistration(ctx context.Context) (*Result, error) {
 	return &result, nil
 }
 
-// PollForApproval polls the registration status until approved or timeout
-func (c *Client) PollForApproval(ctx context.Context, pollURL string, pollInterval time.Duration) (*Status, error) {
-	return c.PollForApprovalWithCallback(ctx, pollURL, pollInterval, nil)
-}
-
-// PollForApprovalWithCallback polls the registration status with optional progress callback
-func (c *Client) PollForApprovalWithCallback(ctx context.Context, pollURL string, pollInterval time.Duration, progressCallback func()) (*Status, error) {
+// PollForApproval polls the registration status with optional progress callback
+func (c *Client) PollForApproval(ctx context.Context, pollURL string, pollInterval time.Duration, progressCallback func()) (*Status, error) {
 	ticker := time.NewTicker(pollInterval)
 	defer ticker.Stop()
 

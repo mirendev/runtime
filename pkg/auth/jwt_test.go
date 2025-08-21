@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -46,7 +47,7 @@ func TestJWTValidatorWithEdDSA(t *testing.T) {
 	defer server.Close()
 
 	// Create validator
-	validator := NewJWTValidator(server.URL)
+	validator := NewJWTValidator(server.URL, slog.Default())
 
 	// Create test claims
 	claims := &Claims{
@@ -125,7 +126,7 @@ func TestJWTValidatorWithMultipleKeys(t *testing.T) {
 	}))
 	defer server.Close()
 
-	validator := NewJWTValidator(server.URL)
+	validator := NewJWTValidator(server.URL, slog.Default())
 	ctx := context.Background()
 
 	// Test with first key
@@ -220,7 +221,7 @@ func TestJWKSCaching(t *testing.T) {
 	}))
 	defer server.Close()
 
-	validator := NewJWTValidator(server.URL)
+	validator := NewJWTValidator(server.URL, slog.Default())
 	ctx := context.Background()
 
 	// Create a valid token
@@ -288,7 +289,7 @@ func TestInvalidTokens(t *testing.T) {
 	}))
 	defer server.Close()
 
-	validator := NewJWTValidator(server.URL)
+	validator := NewJWTValidator(server.URL, slog.Default())
 	ctx := context.Background()
 
 	t.Run("expired token", func(t *testing.T) {

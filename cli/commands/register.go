@@ -14,13 +14,8 @@ func Register(ctx *Context, opts struct {
 	ClusterName string            `short:"n" long:"name" description:"Cluster name" required:"true"`
 	CloudURL    string            `short:"u" long:"url" description:"Cloud URL" default:"https://api.miren.cloud"`
 	Tags        map[string]string `short:"t" long:"tag" description:"Tags for the cluster (key:value)"`
-	OutputDir   string            `short:"o" long:"output" description:"Output directory for registration"`
+	OutputDir   string            `short:"o" long:"output" description:"Output directory for registration" default:"/var/lib/miren/server"`
 }) error {
-	if opts.OutputDir == "" {
-		// Default to /var/lib/miren/server
-		opts.OutputDir = "/var/lib/miren/server"
-	}
-
 	clean := map[string]string{}
 
 	// Validate tags
@@ -46,8 +41,9 @@ func Register(ctx *Context, opts struct {
 		return fmt.Errorf("failed to check existing registration: %w", err)
 	}
 	if existing != nil {
-		// Check if it's a pending registration that hasn't expired
-		if existing.Status == "pending" && existing.ExpiresAt.After(time.Now()) {
+		// Check if it's a pending registration that hasn't expired, but make sure we've still got
+		// at least a minute left.
+		if existing.Status == "pending" && existing.ExpiresAt.After(time.Now().Add(-5*time.Minute)) {
 			ctx.Warn("Found pending registration for cluster '%s' (ID: %s)", existing.ClusterName, existing.RegistrationID)
 			ctx.Info("Expires at: %s", existing.ExpiresAt.Format(time.RFC3339))
 			ctx.Info("Resuming registration process...")
@@ -64,7 +60,7 @@ func Register(ctx *Context, opts struct {
 			pollCtx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 			defer cancel()
 
-			status, err := client.PollForApprovalWithCallback(pollCtx, existing.PollURL, 5*time.Second, func() {
+			status, err := client.PollForApproval(pollCtx, existing.PollURL, 5*time.Second, func() {
 				fmt.Print(".")
 			})
 			if err != nil {
@@ -162,7 +158,7 @@ func Register(ctx *Context, opts struct {
 	pollCtx, cancel := context.WithTimeout(bgCtx, 30*time.Minute)
 	defer cancel()
 
-	status, err := client.PollForApprovalWithCallback(pollCtx, result.PollURL, 5*time.Second, func() {
+	status, err := client.PollForApproval(pollCtx, result.PollURL, 5*time.Second, func() {
 		fmt.Print(".")
 	})
 	if err != nil {

@@ -75,7 +75,7 @@ func NewRPCAuthenticator(ctx context.Context, config Config) (*RPCAuthenticator,
 	}
 
 	a := &RPCAuthenticator{
-		logger: config.Logger.With("component", "rpc-cloud-auth"),
+		logger: config.Logger.With("module", "cloud-auth"),
 		tags:   config.Tags,
 	}
 
@@ -85,7 +85,7 @@ func NewRPCAuthenticator(ctx context.Context, config Config) (*RPCAuthenticator,
 	}
 
 	// Initialize JWT validation and RBAC (CloudURL always has a value now)
-	a.jwtValidator = auth.NewJWTValidator(config.CloudURL)
+	a.jwtValidator = auth.NewJWTValidator(config.CloudURL, config.Logger)
 	a.tokenCache = auth.NewTokenCache(ctx)
 
 	// Always initialize RBAC when using cloud authentication

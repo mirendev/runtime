@@ -75,7 +75,7 @@ func NewEvaluator(ctx context.Context, provider PolicyProvider, logger *slog.Log
 
 	return &Evaluator{
 		provider: provider,
-		logger:   logger.With("component", "rbac-evaluator"),
+		logger:   logger.With("module", "rbac-evaluator"),
 		cache:    newDecisionCache(ctx),
 	}
 }

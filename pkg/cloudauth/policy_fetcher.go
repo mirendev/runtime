@@ -86,7 +86,7 @@ func NewPolicyFetcher(cloudURL string, authClient *AuthClient, opts ...PolicyFet
 		httpClient: &http.Client{
 			Timeout: options.HTTPTimeout,
 		},
-		logger:          options.Logger.With("component", "policy-fetcher"),
+		logger:          options.Logger.With("module", "policy-fetcher"),
 		refreshInterval: options.RefreshInterval,
 	}
 }

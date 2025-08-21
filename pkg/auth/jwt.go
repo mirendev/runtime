@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"sync"
 	"time"
@@ -20,6 +21,7 @@ import (
 type JWTValidator struct {
 	cloudURL   string
 	httpClient *http.Client
+	logger     *slog.Logger
 
 	mu        sync.RWMutex
 	keys      map[string]crypto.PublicKey // Map of kid -> public key
@@ -27,12 +29,13 @@ type JWTValidator struct {
 }
 
 // NewJWTValidator creates a new JWT validator
-func NewJWTValidator(cloudURL string) *JWTValidator {
+func NewJWTValidator(cloudURL string, logger *slog.Logger) *JWTValidator {
 	return &JWTValidator{
 		cloudURL: cloudURL,
 		httpClient: &http.Client{
 			Timeout: 10 * time.Second,
 		},
+		logger: logger.With("model", "jwt"),
 	}
 }
 
@@ -158,9 +161,13 @@ func (v *JWTValidator) getPublicKeys(ctx context.Context) (map[string]crypto.Pub
 		}
 
 		publicKey, err := parseEd25519Key(jwk)
-
 		if err != nil {
 			// Log error but continue with other keys
+			v.logger.Error("failed to parse Ed25519 key",
+				"kid", jwk.Kid,
+				"url", jwksURL,
+				"error", err,
+			)
 			continue
 		}
 
