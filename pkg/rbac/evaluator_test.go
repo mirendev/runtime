@@ -1,8 +1,34 @@
 package rbac
 
 import (
+	"sync"
 	"testing"
 )
+
+// MemoryPolicyStore is a simple in-memory implementation of PolicyProvider for testing
+type MemoryPolicyStore struct {
+	mu     sync.RWMutex
+	policy *Policy
+}
+
+// NewMemoryPolicyStore creates a new in-memory policy store
+func NewMemoryPolicyStore() *MemoryPolicyStore {
+	return &MemoryPolicyStore{}
+}
+
+// GetPolicy returns the current policy
+func (s *MemoryPolicyStore) GetPolicy() *Policy {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.policy
+}
+
+// UpdatePolicy updates the stored policy
+func (s *MemoryPolicyStore) UpdatePolicy(policy *Policy) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.policy = policy
+}
 
 func TestEvaluatorWithTags(t *testing.T) {
 	// Create a policy with tag-based rules
