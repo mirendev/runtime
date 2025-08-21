@@ -351,7 +351,7 @@ func (c *Coordinator) Start(ctx context.Context) error {
 		c.Log.Info("service account authentication configured",
 			"fingerprint", keyPair.Fingerprint())
 
-		authenticator, err := cloudauth.NewRPCAuthenticator(authConfig)
+		authenticator, err := cloudauth.NewRPCAuthenticator(ctx, authConfig)
 		if err != nil {
 			c.Log.Error("failed to create cloud authenticator", "error", err)
 			return err

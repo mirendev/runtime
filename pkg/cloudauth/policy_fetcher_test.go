@@ -144,20 +144,20 @@ func TestPolicyFetcherRefreshInterval(t *testing.T) {
 
 	// Create fetcher with 50ms refresh interval
 	fetcher := NewPolicyFetcher(server.URL, nil, WithRefreshInterval(50*time.Millisecond))
-	
+
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()
-	
+
 	err := fetcher.Start(ctx)
 	if err != nil {
 		t.Fatalf("failed to start fetcher: %v", err)
 	}
-	
+
 	// Wait for multiple refresh cycles
 	time.Sleep(180 * time.Millisecond)
-	
+
 	fetcher.Stop()
-	
+
 	// Should have fetched at least 3 times (initial + 3 refreshes in 180ms with 50ms interval)
 	if fetchCount < 3 {
 		t.Errorf("expected at least 3 fetches, got %d", fetchCount)
@@ -199,7 +199,7 @@ func TestPolicyFetcherIntegration(t *testing.T) {
 		},
 	}
 
-	auth, err := NewRPCAuthenticator(config)
+	auth, err := NewRPCAuthenticator(t.Context(), config)
 	if err != nil {
 		t.Fatalf("failed to create authenticator: %v", err)
 	}
@@ -231,4 +231,3 @@ func TestPolicyFetcherIntegration(t *testing.T) {
 		t.Errorf("expected deny decision, got %v", decision)
 	}
 }
-

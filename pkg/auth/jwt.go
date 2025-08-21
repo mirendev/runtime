@@ -230,12 +230,12 @@ type cacheEntry struct {
 }
 
 // NewTokenCache creates a new token cache
-func NewTokenCache() *TokenCache {
+func NewTokenCache(ctx context.Context) *TokenCache {
 	tc := &TokenCache{
 		cache: make(map[string]*cacheEntry),
 	}
 	// Start cleanup goroutine
-	go tc.cleanup()
+	go tc.cleanup(ctx)
 	return tc
 }
 
@@ -277,18 +277,23 @@ func (tc *TokenCache) Set(token string, claims *Claims) {
 }
 
 // cleanup periodically removes expired entries
-func (tc *TokenCache) cleanup() {
+func (tc *TokenCache) cleanup(ctx context.Context) {
 	ticker := time.NewTicker(5 * time.Minute)
 	defer ticker.Stop()
 
-	for range ticker.C {
-		tc.mu.Lock()
-		now := time.Now()
-		for token, entry := range tc.cache {
-			if now.After(entry.expires) {
-				delete(tc.cache, token)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			tc.mu.Lock()
+			now := time.Now()
+			for token, entry := range tc.cache {
+				if now.After(entry.expires) {
+					delete(tc.cache, token)
+				}
 			}
+			tc.mu.Unlock()
 		}
-		tc.mu.Unlock()
 	}
 }

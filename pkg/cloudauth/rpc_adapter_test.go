@@ -111,7 +111,7 @@ func TestNewRPCAuthenticatorValidation(t *testing.T) {
 		Logger: nil,
 	}
 
-	_, err := NewRPCAuthenticator(config)
+	_, err := NewRPCAuthenticator(t.Context(), config)
 	if err == nil {
 		t.Error("expected validation error, got nil")
 	}
@@ -127,7 +127,7 @@ func TestDefaultCloudURL(t *testing.T) {
 		Logger:   slog.Default(),
 	}
 
-	auth, err := NewRPCAuthenticator(config)
+	auth, err := NewRPCAuthenticator(t.Context(), config)
 	if err != nil {
 		t.Fatalf("failed to create authenticator: %v", err)
 	}
@@ -153,3 +153,4 @@ func TestDefaultCloudURL(t *testing.T) {
 func contains(s, substr string) bool {
 	return len(s) >= len(substr) && (s == substr || len(s) > 0 && len(substr) > 0 && (s[0:len(substr)] == substr || contains(s[1:], substr)))
 }
+

@@ -63,7 +63,7 @@ func (c *Config) Validate() error {
 }
 
 // NewRPCAuthenticator creates a new RPC authenticator
-func NewRPCAuthenticator(config Config) (*RPCAuthenticator, error) {
+func NewRPCAuthenticator(ctx context.Context, config Config) (*RPCAuthenticator, error) {
 	// Set default CloudURL if not provided
 	if config.CloudURL == "" {
 		config.CloudURL = DefaultCloudURL
@@ -86,7 +86,7 @@ func NewRPCAuthenticator(config Config) (*RPCAuthenticator, error) {
 
 	// Initialize JWT validation and RBAC (CloudURL always has a value now)
 	a.jwtValidator = auth.NewJWTValidator(config.CloudURL)
-	a.tokenCache = auth.NewTokenCache()
+	a.tokenCache = auth.NewTokenCache(ctx)
 
 	// Always initialize RBAC when using cloud authentication
 	// Create policy fetcher with the logger option
