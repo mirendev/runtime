@@ -66,8 +66,43 @@ jobs:
         path: miren-${{ matrix.os }}-${{ matrix.arch }}.zip
         retention-days: 1
 
+  build-and-push-docker:
+    needs: [package]
+    runs-on: depot-ubuntu-latest,dagger=0.18.9
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+          service_account: ${{ secrets.WIF_SERVICE_ACCOUNT }}
+          
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker us-central1-docker.pkg.dev
+        
+      - name: Build and push miren Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./docker/Dockerfile.miren
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            us-central1-docker.pkg.dev/miren-cloud/miren-oci/miren:latest
+            us-central1-docker.pkg.dev/miren-cloud/miren-oci/miren:${{ github.ref_name }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
   upload-to-miren:
-    needs: [package, build-binaries]
+    needs: [package, build-binaries, build-and-push-docker]
     runs-on: depot-ubuntu-latest,dagger=0.18.9
     concurrency:
       group: upload-to-miren-${{ github.ref_name }}
@@ -76,6 +111,9 @@ jobs:
       id-token: write
       contents: read
     steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
@@ -131,3 +169,21 @@ jobs:
                 https://api.miren.cloud/assets/release/miren/${{ github.ref_name }}/miren-${os}-${arch}.zip.sha256
             done
           done
+
+          # Upload docker-compose configuration
+          echo "Uploading docker-compose.yml"
+          # Generate SHA256 checksum for docker-compose file
+          sha256sum docker/docker-compose.yml | cut -d' ' -f1 | tee docker-compose.yml.sha256
+          
+          # Upload docker-compose file
+          curl --fail-with-body --retry 3 -X PUT \
+            -H "Authorization: Bearer ${{ steps.get-oidc-token.outputs.token }}" \
+            -F "file=@docker/docker-compose.yml" \
+            https://api.miren.cloud/assets/release/miren/${{ github.ref_name }}/docker-compose.yml
+          
+          # Upload docker-compose sha256
+          curl --fail-with-body --retry 3 -X PUT \
+            -H "Authorization: Bearer ${{ steps.get-oidc-token.outputs.token }}" \
+            -F "file=@docker-compose.yml.sha256" \
+            https://api.miren.cloud/assets/release/miren/${{ github.ref_name }}/docker-compose.yml.sha256
+

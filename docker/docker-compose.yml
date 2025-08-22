@@ -1,0 +1,48 @@
+version: '3.8'
+
+services:
+  miren:
+    image: oci.miren.cloud/miren:latest
+    container_name: miren
+    privileged: true
+    ports:
+      - "8080:8080"
+      - "8443:8443/udp"
+    volumes:
+      - miren-data:/var/lib/miren
+    environment:
+      - ETCD_ENDPOINTS=http://etcd:2379
+      - CLICKHOUSE_HOST=clickhouse
+      - CLICKHOUSE_PORT=9000
+    depends_on:
+      - etcd
+      - clickhouse
+
+  etcd:
+    image: oci.miren.cloud/etcd:v1
+    container_name: miren-etcd
+    command:
+      - etcd
+      - --listen-client-urls=http://0.0.0.0:2379
+      - --advertise-client-urls=http://etcd:2379
+      - --listen-peer-urls=http://0.0.0.0:2380
+      - --initial-advertise-peer-urls=http://etcd:2380
+      - --initial-cluster=default=http://etcd:2380
+      - --data-dir=/etcd-data
+    volumes:
+      - etcd-data:/etcd-data
+
+  clickhouse:
+    image: oci.miren.cloud/clickhouse:v1
+    container_name: miren-clickhouse
+    environment:
+      - CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT=1
+      - CLICKHOUSE_PASSWORD=default
+    volumes:
+      - clickhouse-data:/var/lib/clickhouse
+
+
+volumes:
+  miren-data:
+  etcd-data:
+  clickhouse-data:
