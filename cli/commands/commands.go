@@ -10,6 +10,10 @@ func AllCommands() map[string]cli.CommandFactory {
 			return Infer("version", "Print the version", Version), nil
 		},
 
+		"login": func() (cli.Command, error) {
+			return Infer("login", "Authenticate with miren.cloud", Login), nil
+		},
+
 		"init": func() (cli.Command, error) {
 			return Infer("init", "Initialize a new application", Init), nil
 		},
