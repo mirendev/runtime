@@ -305,7 +305,49 @@ func (s *Server) setupMux() {
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	//s.state.log.Info("HTTP Request", "method", r.Method, "path", r.URL.Path)
+	if s.state.authenticator == nil {
+		s.mux.ServeHTTP(w, r)
+		return
+	}
+
+	// Check for JWT token in Authorization header
+	authHeader := r.Header.Get("Authorization")
+	if authHeader != "" {
+		// Try JWT authentication
+		authenticated, identity, err := s.state.authenticator.AuthenticateRequest(r.Context(), r)
+		if err != nil {
+			s.state.log.Warn("authentication failed", "error", err, "path", r.URL.Path)
+			http.Error(w, "authentication failed", http.StatusUnauthorized)
+			return
+		}
+		if !authenticated {
+			s.state.log.Warn("request not authenticated", "path", r.URL.Path)
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		s.state.log.Debug("request authenticated", "identity", identity, "path", r.URL.Path)
+	} else {
+		// No Authorization header - let authenticator decide if this is allowed
+		allowed, identity, err := s.state.authenticator.NoAuthorization(r.Context(), r)
+		if err != nil {
+			s.state.log.Warn("authentication check failed", "error", err, "path", r.URL.Path)
+			http.Error(w, "authentication failed", http.StatusUnauthorized)
+			return
+		}
+		if !allowed {
+			// NOTE: This is a change from the old behavior. Previously during early development,
+			// the authentication was "best attempt" and we didn't reject requests that didn't
+			// present creds. We've since changed that to require	authentication.
+			s.state.log.Warn("request requires authentication", "path", r.URL.Path)
+			http.Error(w, "authentication required", http.StatusUnauthorized)
+			return
+		}
+		// Request is allowed without auth header (e.g., using client certs)
+		if identity != "" && identity != "anonymous" {
+			s.state.log.Debug("request allowed without auth header", "identity", identity, "path", r.URL.Path)
+		}
+	}
+
 	s.mux.ServeHTTP(w, r)
 }
 

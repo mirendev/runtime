@@ -225,6 +225,10 @@ func (c *Context) Info(format string, args ...interface{}) {
 	fmt.Fprintf(c.Stdout, "  "+format+"\n", args...)
 }
 
+func (c *Context) Warn(format string, args ...interface{}) {
+	fmt.Fprintf(c.Stdout, "W "+format+"\n", args...)
+}
+
 func (c *Context) Begin(format string, args ...interface{}) {
 	fmt.Fprintf(c.Stderr, ui.Play+" "+format+"\n", args...)
 }

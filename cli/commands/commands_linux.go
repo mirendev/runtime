@@ -22,6 +22,15 @@ import (
 
 func addCommands(cmds map[string]cli.CommandFactory) {
 	// Server command is now defined in commands.go (renamed from dev)
+
+	// Cloud registration commands
+	cmds["register"] = func() (cli.Command, error) {
+		return Infer("register", "Register this cluster with miren.cloud", Register), nil
+	}
+
+	cmds["register status"] = func() (cli.Command, error) {
+		return Infer("register status", "Show cluster registration status", RegisterStatus), nil
+	}
 }
 
 func (c *Context) setupServerComponents(ctx context.Context, reg *asm.Registry) {
@@ -62,7 +71,6 @@ func (c *Context) setupServerComponents(ctx context.Context, reg *asm.Registry) 
 	reg.Register("bridge-iface", "rt0")
 
 	reg.Register("tempdir", os.TempDir())
-
 
 	reg.Register("server-id", "miren-server")
 

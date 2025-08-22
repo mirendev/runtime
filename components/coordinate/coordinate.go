@@ -26,6 +26,7 @@ import (
 	"miren.dev/runtime/metrics"
 	"miren.dev/runtime/observability"
 	"miren.dev/runtime/pkg/caauth"
+	"miren.dev/runtime/pkg/cloudauth"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/schema"
 	"miren.dev/runtime/pkg/rpc"
@@ -46,13 +47,26 @@ type CoordinatorConfig struct {
 	AdditionalNames []string            `json:"additional_names" yaml:"additional_names"`
 	AdditionalIPs   []net.IP            `json:"additional_ips" yaml:"additional_ips"`
 
+	// Cloud authentication configuration
+	CloudAuth CloudAuthConfig `json:"cloud_auth" yaml:"cloud_auth"`
+
 	Mem  *metrics.MemoryUsage
 	Cpu  *metrics.CPUUsage
 	HTTP *metrics.HTTPMetrics
 	Logs *observability.LogReader
 }
 
-const DefaultProjectOwner = "miren.system@miren.dev"
+// CloudAuthConfig contains cloud authentication settings
+type CloudAuthConfig struct {
+	Enabled    bool   `json:"enabled" yaml:"enabled"`
+	CloudURL   string `json:"cloud_url" yaml:"cloud_url"`     // URL of miren.cloud (default: https://api.miren.cloud)
+	PrivateKey string `json:"private_key" yaml:"private_key"` // Required: Path to service account private key when enabled
+}
+
+const (
+	DefaultProjectOwner = "miren.system@miren.dev"
+	DefaultCloudURL     = "https://api.miren.cloud"
+)
 
 func NewCoordinator(log *slog.Logger, cfg CoordinatorConfig) *Coordinator {
 	return &Coordinator{
@@ -287,12 +301,68 @@ func (c *Coordinator) Start(ctx context.Context) error {
 		return err
 	}
 
-	rs, err := rpc.NewState(ctx,
+	// Prepare RPC options
+	rpcOpts := []rpc.StateOption{
 		rpc.WithCertPEMs(c.apiCert, c.apiKey),
 		rpc.WithCertificateVerification(c.authority.GetCACertificate()),
 		rpc.WithBindAddr(c.Address),
 		rpc.WithLogger(c.Log),
-	)
+	}
+
+	// Add cloud authenticator if enabled
+	if c.CloudAuth.Enabled {
+		// Private key is required for cloud authentication
+		if c.CloudAuth.PrivateKey == "" {
+			c.Log.Error("private key is required when cloud authentication is enabled")
+			return fmt.Errorf("cloud_auth.private_key is required when cloud authentication is enabled")
+		}
+
+		authConfig := cloudauth.Config{
+			CloudURL: c.CloudAuth.CloudURL, // cloudauth will use default if empty
+			Logger:   c.Log,
+		}
+
+		// Load the private key and create an AuthClient for the runtime
+		keyData, err := os.ReadFile(c.CloudAuth.PrivateKey)
+		if err != nil {
+			c.Log.Error("failed to load service account private key", "error", err, "path", c.CloudAuth.PrivateKey)
+			return fmt.Errorf("failed to load service account private key: %w", err)
+		}
+
+		keyPair, err := cloudauth.LoadKeyPairFromPEM(string(keyData))
+		if err != nil {
+			c.Log.Error("failed to parse service account private key", "error", err)
+			return fmt.Errorf("failed to parse service account private key: %w", err)
+		}
+
+		// Use CloudURL or default when creating auth client
+		authCloudURL := c.CloudAuth.CloudURL
+		if authCloudURL == "" {
+			authCloudURL = cloudauth.DefaultCloudURL
+		}
+
+		authClient, err := cloudauth.NewAuthClient(authCloudURL, keyPair)
+		if err != nil {
+			c.Log.Error("failed to create auth client", "error", err)
+			return fmt.Errorf("failed to create auth client: %w", err)
+		}
+
+		authConfig.AuthClient = authClient
+		c.Log.Info("service account authentication configured",
+			"fingerprint", keyPair.Fingerprint())
+
+		authenticator, err := cloudauth.NewRPCAuthenticator(ctx, authConfig)
+		if err != nil {
+			c.Log.Error("failed to create cloud authenticator", "error", err)
+			return err
+		}
+
+		rpcOpts = append(rpcOpts, rpc.WithAuthenticator(authenticator))
+		c.Log.Info("cloud authentication enabled",
+			"cloud_url", authCloudURL)
+	}
+
+	rs, err := rpc.NewState(ctx, rpcOpts...)
 	if err != nil {
 		c.Log.Error("failed to create RPC server", "error", err)
 		return err

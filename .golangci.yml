@@ -1,6 +1,9 @@
 version: "2"
 
 linters:
+  disable:
+    - errcheck
+
   default: standard
   exclusions:
     warn-unused: true

@@ -62,6 +62,8 @@ type StateCommon struct {
 	clientTlsCfg *tls.Config
 	cert         tls.Certificate
 
+	authenticator Authenticator
+
 	privkey ed25519.PrivateKey
 	pubkey  ed25519.PublicKey
 
@@ -124,6 +126,8 @@ type stateOptions struct {
 
 	serverLocalAddr string
 	clientLocalAddr string
+
+	authenticator Authenticator
 }
 
 type StateOption func(*stateOptions)
@@ -192,6 +196,12 @@ func WithRequireClientCerts(o *stateOptions) {
 func WithEndpoint(endpoint string) StateOption {
 	return func(o *stateOptions) {
 		o.endpoint = endpoint
+	}
+}
+
+func WithAuthenticator(auth Authenticator) StateOption {
+	return func(o *stateOptions) {
+		o.authenticator = auth
 	}
 }
 
@@ -272,13 +282,20 @@ func NewState(ctx context.Context, opts ...StateOption) (*State, error) {
 		}))
 	}
 
+	// Use NoOpAuthenticator if none provided
+	authenticator := so.authenticator
+	if authenticator == nil {
+		authenticator = &NoOpAuthenticator{}
+	}
+
 	s := &State{
 		StateCommon: &StateCommon{
-			top:          ctx,
-			log:          so.log,
-			clientTlsCfg: tlsCfg,
-			privkey:      priv,
-			pubkey:       pub,
+			top:           ctx,
+			log:           so.log,
+			clientTlsCfg:  tlsCfg,
+			privkey:       priv,
+			pubkey:        pub,
+			authenticator: authenticator,
 		},
 
 		defaultEndpoint: so.endpoint,
@@ -361,6 +378,8 @@ func (s *State) setupServerTls(so *stateOptions) error {
 			tlsCfg.ClientAuth = tls.RequestClientCert
 		}
 		tlsCfg.VerifyConnection = func(cs tls.ConnectionState) error {
+			// Standard certificate validation only
+			// The authenticator can use r.TLS to access certificates later in ServeHTTP
 			if len(cs.PeerCertificates) == 0 {
 				s.log.Warn("client connection has no certificates")
 			} else {
