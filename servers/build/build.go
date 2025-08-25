@@ -407,8 +407,9 @@ func (b *Builder) BuildFromTar(ctx context.Context, state *build_v1alpha.Builder
 	}
 
 	// Apply service-level concurrency from AppConfig if present
-	// We iterate through all services that have commands (from srvMap)
-	// and apply concurrency config if available in app config
+	// Build a new services list to replace the old one, ensuring no duplicates
+	serviceMap := make(map[string]core_v1alpha.Services)
+
 	for serviceName := range srvMap {
 		svc := core_v1alpha.Services{
 			Name: serviceName,
@@ -417,7 +418,6 @@ func (b *Builder) BuildFromTar(ctx context.Context, state *build_v1alpha.Builder
 		// Check if this service has concurrency config in app config
 		if ac != nil && ac.Services != nil {
 			if serviceConfig, ok := ac.Services[serviceName]; ok && serviceConfig != nil && serviceConfig.Concurrency != nil {
-				// Create service concurrency config
 				svcConcurrency := core_v1alpha.ServiceConcurrency{}
 
 				if serviceConfig.Concurrency.Mode != "" {
@@ -437,7 +437,12 @@ func (b *Builder) BuildFromTar(ctx context.Context, state *build_v1alpha.Builder
 			}
 		}
 
-		// Add to services list
+		serviceMap[serviceName] = svc
+	}
+
+	// Build the final services list from the map
+	mrv.Config.Services = nil
+	for _, svc := range serviceMap {
 		mrv.Config.Services = append(mrv.Config.Services, svc)
 	}
 
