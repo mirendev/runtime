@@ -423,6 +423,12 @@
       -->
     <total_memory_tracker_sample_probability>0</total_memory_tracker_sample_probability>
 
+    <!-- Whether background memory worker should correct internal memory tracker based on the
+         information from external sources like jemalloc and cgroups
+         NOTE: We are enabling this to try and address https://github.com/ClickHouse/ClickHouse/issues/77102
+      -->
+    <memory_worker_correct_memory_tracker>1</memory_worker_correct_memory_tracker>
+
     <!-- Set limit on number of open files (default: maximum). This setting makes sense on Mac OS X because getrlimit() fails to retrieve
          correct maximum value. -->
     <!-- <max_open_files>262144</max_open_files> -->

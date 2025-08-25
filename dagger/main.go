@@ -53,7 +53,7 @@ func init() {
 
 func (m *Runtime) WithServices(dir *dagger.Directory) *dagger.Container {
 	ch := dag.Container().
-		From("oci.miren.cloud/clickhouse:v1").
+		From("oci.miren.cloud/clickhouse:v2").
 		WithEnvVariable("CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT", "1").
 		WithEnvVariable("CLICKHOUSE_PASSWORD", "default").
 		WithExposedPort(9000).

@@ -5,7 +5,7 @@ package imagerefs
 // Infrastructure images
 const (
 	// ClickHouse database server
-	ClickHouse = "oci.miren.cloud/clickhouse:v1"
+	ClickHouse = "oci.miren.cloud/clickhouse:v2"
 
 	// etcd distributed key-value store
 	Etcd = "oci.miren.cloud/etcd:v1"

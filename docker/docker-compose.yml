@@ -33,7 +33,7 @@ services:
       - etcd-data:/etcd-data
 
   clickhouse:
-    image: oci.miren.cloud/clickhouse:v1
+    image: oci.miren.cloud/clickhouse:v2
     container_name: miren-clickhouse
     environment:
       - CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT=1
