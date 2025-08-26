@@ -3,6 +3,7 @@ package commands
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/mdp/qrterminal/v3"
 	"miren.dev/runtime/clientconfig"
+	"miren.dev/runtime/pkg/cloudauth"
 )
 
 // DeviceFlowInitResponse represents the response from /api/v1/device/code
@@ -36,12 +38,39 @@ type DeviceFlowExchangeResponse struct {
 	ExpiresIn        int    `json:"expires_in,omitempty"`
 }
 
+// BeginKeyRegistrationRequest represents the request to begin key registration
+type BeginKeyRegistrationRequest struct {
+	Name      string `json:"name"`
+	KeyType   string `json:"key_type"`
+	PublicKey string `json:"public_key"`
+}
+
+// BeginKeyRegistrationResponse represents the response from begin key registration
+type BeginKeyRegistrationResponse struct {
+	Envelope  string `json:"envelope"`
+	Challenge string `json:"challenge"`
+}
+
+// CompleteKeyRegistrationRequest represents the request to complete key registration
+type CompleteKeyRegistrationRequest struct {
+	Envelope  string `json:"envelope"`
+	Signature string `json:"signature"`
+}
+
+// KeyRegistrationResponse represents a successfully registered key
+type KeyRegistrationResponse struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Fingerprint string `json:"fingerprint"`
+	CreatedAt   string `json:"created_at"`
+}
+
 // Login authenticates with miren.cloud using device flow
 func Login(ctx *Context, opts struct {
-	CloudURL    string `short:"u" long:"url" description:"Cloud URL" default:"https://miren.cloud"`
-	ClusterName string `short:"n" long:"name" description:"Name for this cluster in config" default:"cloud"`
-	NoSave      bool   `long:"no-save" description:"Don't save credentials to config file"`
-	NoQR        bool   `long:"no-qr" description:"Don't display QR code"`
+	CloudURL     string `short:"u" long:"url" description:"Cloud URL" default:"https://miren.cloud"`
+	IdentityName string `short:"i" long:"identity" description:"Name for this identity in config" default:"cloud"`
+	NoSave       bool   `long:"no-save" description:"Don't save credentials to config file"`
+	NoQR         bool   `long:"no-qr" description:"Don't display QR code"`
 }) error {
 	// Initialize device flow
 	ctx.Info("Initiating device flow authentication...")
@@ -114,17 +143,55 @@ func Login(ctx *Context, opts struct {
 
 	ctx.Completed("Authentication successful!")
 
+	// Generate and register a keypair for future authentication
+	ctx.Info("Generating keypair for future authentication...")
+	keyPair, err := cloudauth.GenerateKeyPair()
+	if err != nil {
+		ctx.Warn("Failed to generate keypair: %v", err)
+		ctx.Info("You can still use token authentication")
+	} else {
+		// Register the public key with the server
+		hostname, err := os.Hostname()
+		if err != nil {
+			hostname = "miren-cli"
+		}
+		keyName := fmt.Sprintf("miren-cli@%s", hostname)
+
+		if err := registerPublicKey(opts.CloudURL, token, keyPair, keyName); err != nil {
+			ctx.Warn("Failed to register public key: %v", err)
+			ctx.Info("You can still use token authentication")
+			keyPair = nil // Don't save the key if registration failed
+		} else {
+			ctx.Info("Public key registered successfully")
+		}
+	}
+
 	// Save to config unless --no-save is specified
 	if !opts.NoSave {
-		if err := saveTokenToConfig(opts.ClusterName, opts.CloudURL, token); err != nil {
-			ctx.Warn("Failed to save credentials to config: %v", err)
+		if keyPair != nil {
+			// Save identity with keypair for future authentication
+			if err := saveKeyPairToConfig(opts.IdentityName, opts.CloudURL, keyPair); err != nil {
+				ctx.Warn("Failed to save identity to config: %v", err)
+			} else {
+				ctx.Info("Identity '%s' saved to config", opts.IdentityName)
+				ctx.Info("Future authentication will use the keypair (no login required)")
+				ctx.Info("")
+				ctx.Info("To use this identity with a cluster, add to your cluster config:")
+				ctx.Info("  identity: %s", opts.IdentityName)
+			}
+		} else {
+			// No keypair was registered
+			ctx.Warn("Authentication successful but no persistent credentials were saved")
 			ctx.Info("You can still use the token with --token flag:")
 			ctx.Info("  export MIREN_TOKEN=%s", token)
-		} else {
-			ctx.Info("Credentials saved to config as cluster '%s'", opts.ClusterName)
-			ctx.Info("Use 'miren config set-active %s' to make it the active cluster", opts.ClusterName)
 		}
 	} else {
+		if keyPair != nil {
+			privateKeyPEM, _ := keyPair.PrivateKeyPEM()
+			ctx.Info("Private key (not saved):")
+			ctx.Info("%s", privateKeyPEM)
+			ctx.Info("")
+		}
 		ctx.Info("Token (not saved):")
 		ctx.Info("  %s", token)
 		ctx.Info("")
@@ -270,59 +337,12 @@ func pollForToken(ctx context.Context, cloudURL, deviceCode string, interval, ma
 	}
 }
 
-func saveTokenToConfig(clusterName, cloudURL, token string) error {
-	// Load existing config or create new one
-	config, err := clientconfig.LoadConfig()
-	if err != nil {
-		if err == clientconfig.ErrNoConfig {
-			config = clientconfig.NewConfig()
-		} else {
-			return fmt.Errorf("failed to load config: %w", err)
-		}
-	}
-
-	// Create or update cluster config
-	if config.Clusters == nil {
-		config.Clusters = make(map[string]*clientconfig.ClusterConfig)
-	}
-
-	// Parse cloud URL to get hostname
-	hostname := strings.TrimPrefix(cloudURL, "https://")
-	hostname = strings.TrimPrefix(hostname, "http://")
-	hostname = strings.TrimSuffix(hostname, "/")
-
-	config.Clusters[clusterName] = &clientconfig.ClusterConfig{
-		Hostname:   hostname,
-		ClientCert: "",    // Token auth doesn't use certs
-		ClientKey:  token, // Store token in ClientKey field
-		CACert:     "",
-		Insecure:   false,
-	}
-
-	// Set as active cluster if it's the only one
-	if len(config.Clusters) == 1 {
-		config.ActiveCluster = clusterName
-	}
-
-	// Save config
-	configPath, err := getConfigPath()
-	if err != nil {
-		return fmt.Errorf("failed to determine config path: %w", err)
-	}
-
-	// Ensure directory exists
-	dir := filepath.Dir(configPath)
-	if err := os.MkdirAll(dir, 0700); err != nil {
-		return fmt.Errorf("failed to create config directory: %w", err)
-	}
-
-	return config.SaveTo(configPath)
-}
-
-func getConfigPath() (string, error) {
+// getConfigDirPath returns the path to the clientconfig.d directory
+func getConfigDirPath() (string, error) {
 	// Check environment variable first
 	if path := os.Getenv(clientconfig.EnvConfigPath); path != "" {
-		return path, nil
+		// If a custom config path is specified, use its directory
+		return filepath.Join(filepath.Dir(path), "clientconfig.d"), nil
 	}
 
 	// Use default path in home directory
@@ -331,5 +351,153 @@ func getConfigPath() (string, error) {
 		return "", fmt.Errorf("failed to get home directory: %w", err)
 	}
 
-	return filepath.Join(home, clientconfig.DefaultConfigPath), nil
+	return filepath.Join(home, ".config/miren/clientconfig.d"), nil
+}
+
+// registerPublicKey registers a public key with the cloud server
+func registerPublicKey(cloudURL, token string, keyPair *cloudauth.KeyPair, keyName string) error {
+	// Get public key in PEM format
+	publicKeyPEM, err := keyPair.PublicKeyPEM()
+	if err != nil {
+		return fmt.Errorf("failed to encode public key: %w", err)
+	}
+
+	// Step 1: Begin key registration
+	beginURL := strings.TrimSuffix(cloudURL, "/") + "/api/v1/users/keys/begin"
+	beginReq := BeginKeyRegistrationRequest{
+		Name:      keyName,
+		KeyType:   "ed25519",
+		PublicKey: publicKeyPEM,
+	}
+
+	beginData, err := json.Marshal(beginReq)
+	if err != nil {
+		return fmt.Errorf("failed to marshal begin request: %w", err)
+	}
+
+	req, err := http.NewRequest("POST", beginURL, bytes.NewBuffer(beginData))
+	if err != nil {
+		return fmt.Errorf("failed to create begin request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+token)
+
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to send begin request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("failed to read response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		var errResp map[string]string
+		json.Unmarshal(body, &errResp)
+		if errMsg, ok := errResp["error"]; ok {
+			return fmt.Errorf("server error: %s", errMsg)
+		}
+		return fmt.Errorf("server returned status %d: %s", resp.StatusCode, string(body))
+	}
+
+	var beginResp BeginKeyRegistrationResponse
+	if err := json.Unmarshal(body, &beginResp); err != nil {
+		return fmt.Errorf("failed to parse begin response: %w", err)
+	}
+
+	// Step 2: Sign the challenge
+	data, err := base64.StdEncoding.DecodeString(beginResp.Challenge)
+	if err != nil {
+		return fmt.Errorf("failed to decode challenge: %w", err)
+	}
+
+	signature, err := keyPair.Sign(data)
+	if err != nil {
+		return fmt.Errorf("failed to sign challenge: %w", err)
+	}
+
+	// Step 3: Complete key registration
+	completeURL := strings.TrimSuffix(cloudURL, "/") + "/api/v1/users/keys/complete"
+	completeReq := CompleteKeyRegistrationRequest{
+		Envelope:  beginResp.Envelope,
+		Signature: signature,
+	}
+
+	completeData, err := json.Marshal(completeReq)
+	if err != nil {
+		return fmt.Errorf("failed to marshal complete request: %w", err)
+	}
+
+	req, err = http.NewRequest("POST", completeURL, bytes.NewBuffer(completeData))
+	if err != nil {
+		return fmt.Errorf("failed to create complete request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+token)
+
+	resp, err = client.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to send complete request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err = io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("failed to read response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusOK {
+		var errResp map[string]string
+		json.Unmarshal(body, &errResp)
+		if errMsg, ok := errResp["error"]; ok {
+			return fmt.Errorf("server error: %s", errMsg)
+		}
+		return fmt.Errorf("server returned status %d: %s", resp.StatusCode, string(body))
+	}
+
+	return nil
+}
+
+// saveKeyPairToConfig saves a keypair as an identity in clientconfig.d
+func saveKeyPairToConfig(identityName, cloudURL string, keyPair *cloudauth.KeyPair) error {
+	// Get the clientconfig.d directory path
+	configDirPath, err := getConfigDirPath()
+	if err != nil {
+		return fmt.Errorf("failed to determine config directory: %w", err)
+	}
+
+	// Create the directory if it doesn't exist
+	if err := os.MkdirAll(configDirPath, 0755); err != nil {
+		return fmt.Errorf("failed to create config directory: %w", err)
+	}
+
+	// Get private key in PEM format
+	privateKeyPEM, err := keyPair.PrivateKeyPEM()
+	if err != nil {
+		return fmt.Errorf("failed to encode private key: %w", err)
+	}
+
+	// Parse cloud URL to get the issuer
+	issuer := strings.TrimSuffix(cloudURL, "/")
+	if !strings.HasPrefix(issuer, "http://") && !strings.HasPrefix(issuer, "https://") {
+		issuer = "https://" + issuer
+	}
+
+	// Create a config with just this identity
+	identityConfig := &clientconfig.Config{
+		Identities: map[string]*clientconfig.IdentityConfig{
+			identityName: {
+				Type:       "keypair",
+				Issuer:     issuer,
+				PrivateKey: privateKeyPEM,
+			},
+		},
+	}
+
+	// Save to identity-specific file in clientconfig.d
+	identityConfigPath := filepath.Join(configDirPath, "identity-"+identityName+".yaml")
+	return identityConfig.SaveTo(identityConfigPath)
 }

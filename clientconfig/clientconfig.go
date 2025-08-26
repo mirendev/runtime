@@ -19,19 +19,32 @@ const (
 	EnvConfigPath = "MIREN_CONFIG"
 )
 
+// IdentityConfig holds authentication credentials that can be used across clusters
+type IdentityConfig struct {
+	Type       string `yaml:"type"`                  // Type of identity: "keypair", "certificate", etc.
+	Issuer     string `yaml:"issuer,omitempty"`      // The auth server that issued this identity (e.g., "https://miren.cloud")
+	PrivateKey string `yaml:"private_key,omitempty"` // PEM encoded private key (for keypair auth)
+	ClientCert string `yaml:"client_cert,omitempty"` // PEM encoded client certificate (for cert auth)
+	ClientKey  string `yaml:"client_key,omitempty"`  // PEM encoded client key (for cert auth)
+}
+
 // ClusterConfig holds the configuration for a single cluster
 type ClusterConfig struct {
-	Hostname   string `yaml:"hostname"`
-	CACert     string `yaml:"ca_cert,omitempty"`     // PEM encoded CA certificate
-	ClientCert string `yaml:"client_cert,omitempty"` // PEM encoded client certificate
-	ClientKey  string `yaml:"client_key,omitempty"`  // PEM encoded client key
-	Insecure   bool   `yaml:"insecure,omitempty"`    // Skip TLS verification
+	Hostname     string   `yaml:"hostname"`
+	AllAddresses []string `yaml:"all_addresses,omitempty"` // All available addresses for this cluster
+	Identity     string   `yaml:"identity,omitempty"`      // Reference to an identity in the Identities section
+	CACert       string   `yaml:"ca_cert,omitempty"`       // PEM encoded CA certificate
+	ClientCert   string   `yaml:"client_cert,omitempty"`   // PEM encoded client certificate (deprecated, use identity)
+	ClientKey    string   `yaml:"client_key,omitempty"`    // PEM encoded client key (deprecated, use identity)
+	Insecure     bool     `yaml:"insecure,omitempty"`      // Skip TLS verification
+	CloudAuth    bool     `yaml:"cloud_auth,omitempty"`    // Use cloud authentication (deprecated, use identity)
 }
 
 // Config represents the complete client configuration
 type Config struct {
-	ActiveCluster string                    `yaml:"active_cluster,omitempty"`
-	Clusters      map[string]*ClusterConfig `yaml:"clusters,omitempty"`
+	ActiveCluster string                     `yaml:"active_cluster,omitempty"`
+	Clusters      map[string]*ClusterConfig  `yaml:"clusters,omitempty"`
+	Identities    map[string]*IdentityConfig `yaml:"identities,omitempty"`
 
 	// The path to the config file that was loaded, if any.
 	sourcePath string
@@ -39,7 +52,8 @@ type Config struct {
 
 func NewConfig() *Config {
 	return &Config{
-		Clusters: make(map[string]*ClusterConfig),
+		Clusters:   make(map[string]*ClusterConfig),
+		Identities: make(map[string]*IdentityConfig),
 	}
 }
 
@@ -64,6 +78,26 @@ func (c *Config) GetActiveCluster() (*ClusterConfig, error) {
 		return nil, fmt.Errorf("no active cluster configured")
 	}
 	return c.GetCluster(c.ActiveCluster)
+}
+
+// GetIdentity returns an identity configuration by name
+func (c *Config) GetIdentity(name string) (*IdentityConfig, error) {
+	if c.Identities == nil {
+		return nil, fmt.Errorf("no identities configured")
+	}
+	identity, exists := c.Identities[name]
+	if !exists {
+		return nil, fmt.Errorf("identity %q not found", name)
+	}
+	return identity, nil
+}
+
+// SetIdentity adds or updates an identity configuration
+func (c *Config) SetIdentity(name string, identity *IdentityConfig) {
+	if c.Identities == nil {
+		c.Identities = make(map[string]*IdentityConfig)
+	}
+	c.Identities[name] = identity
 }
 
 // SetActiveCluster sets the active cluster
@@ -234,6 +268,10 @@ func (c *Config) Merge(other *Config, updateActiveCluster, force bool) error {
 		c.Clusters = make(map[string]*ClusterConfig)
 	}
 
+	if c.Identities == nil {
+		c.Identities = make(map[string]*IdentityConfig)
+	}
+
 	// Merge clusters from other config
 	for name, cluster := range other.Clusters {
 		if _, exists := c.Clusters[name]; exists && !force {
@@ -241,6 +279,15 @@ func (c *Config) Merge(other *Config, updateActiveCluster, force bool) error {
 		}
 
 		c.Clusters[name] = cluster
+	}
+
+	// Merge identities from other config
+	for name, identity := range other.Identities {
+		if _, exists := c.Identities[name]; exists && !force {
+			return fmt.Errorf("identity %q already exists in current config, use --force to overwrite", name)
+		}
+
+		c.Identities[name] = identity
 	}
 
 	// Update active cluster if requested and other config has one

@@ -381,8 +381,8 @@ func (c *Context) RPCClient(name string) (*rpc.NetworkClient, error) {
 		err error
 	)
 
-	if c.ClusterConfig != nil {
-		cs, err = c.ClusterConfig.State(c, rpc.WithLogger(c.Log))
+	if c.ClusterConfig != nil && c.ClientConfig != nil {
+		cs, err = c.ClusterConfig.State(c, c.ClientConfig, rpc.WithLogger(c.Log))
 		if err == nil {
 			return cs.Client(name)
 		}

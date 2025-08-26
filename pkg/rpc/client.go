@@ -160,6 +160,11 @@ func (c *NetworkClient) sendIdentity(ctx context.Context) error {
 
 	req.Header.Set("rpc-public-key", base58.Encode(c.State.pubkey))
 
+	// Add bearer token if configured
+	if c.State.opts != nil && c.State.opts.bearerToken != "" {
+		req.Header.Set("Authorization", "Bearer "+c.State.opts.bearerToken)
+	}
+
 	Propagator().Inject(ctx, propagation.HeaderCarrier(req.Header))
 
 	ts := time.Now()
@@ -221,6 +226,11 @@ func (c *NetworkClient) resolveCapability(name string) error {
 	}
 
 	req.Header.Set("rpc-public-key", base58.Encode(c.State.pubkey))
+
+	// Add bearer token if configured
+	if c.State.opts != nil && c.State.opts.bearerToken != "" {
+		req.Header.Set("Authorization", "Bearer "+c.State.opts.bearerToken)
+	}
 	req.Header.Set("rpc-contact-addr", c.remote)
 
 	resp, err := c.roundTrip(req)
@@ -270,6 +280,11 @@ func (c *NetworkClient) reresolveCapability(rs *InterfaceState) error {
 
 	req.Header.Set("rpc-public-key", base58.Encode(c.State.pubkey))
 	req.Header.Set("rpc-contact-addr", c.remote)
+
+	// Add bearer token if configured
+	if c.State.opts != nil && c.State.opts.bearerToken != "" {
+		req.Header.Set("Authorization", "Bearer "+c.State.opts.bearerToken)
+	}
 
 	resp, err := c.roundTrip(req)
 	if err != nil {
@@ -420,6 +435,11 @@ func (c *NetworkClient) Close() error {
 
 func (c *NetworkClient) prepareRequest(ctx context.Context, req *http.Request) error {
 	Propagator().Inject(ctx, propagation.HeaderCarrier(req.Header))
+
+	// Add bearer token if configured
+	if c.State.opts.bearerToken != "" {
+		req.Header.Set("Authorization", "Bearer "+c.State.opts.bearerToken)
+	}
 
 	ts := time.Now()
 

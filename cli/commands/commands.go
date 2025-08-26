@@ -14,6 +14,14 @@ func AllCommands() map[string]cli.CommandFactory {
 			return Infer("login", "Authenticate with miren.cloud", Login), nil
 		},
 
+		"debug": func() (cli.Command, error) {
+			return Section("debug", "Debug and troubleshooting commands"), nil
+		},
+
+		"debug connection": func() (cli.Command, error) {
+			return Infer("debug connection", "Test connectivity and authentication with a server", DebugConnection), nil
+		},
+
 		"init": func() (cli.Command, error) {
 			return Infer("init", "Initialize a new application", Init), nil
 		},
@@ -89,6 +97,10 @@ func AllCommands() map[string]cli.CommandFactory {
 
 		"config set-active": func() (cli.Command, error) {
 			return Infer("config set-active", "Set the active cluster", ConfigSetActive), nil
+		},
+
+		"config bind": func() (cli.Command, error) {
+			return Infer("config bind", "Bind an identity to a cluster address", ConfigBind), nil
 		},
 
 		"config remove": func() (cli.Command, error) {

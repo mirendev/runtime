@@ -300,6 +300,7 @@ func (s *Server) setupMux() {
 	mux.HandleFunc("POST /_rpc/ref/{oid}", s.refCapa)
 	mux.HandleFunc("POST /_rpc/deref/{oid}", s.derefCapa)
 	mux.HandleFunc("POST /_rpc/identify", s.clientIdentify)
+	mux.HandleFunc("GET /api/v1/debug-auth", s.handleDebugAuth)
 
 	s.mux = mux
 }
@@ -425,6 +426,88 @@ func (s *Server) clientIdentify(w http.ResponseWriter, r *http.Request) {
 		Address:  r.RemoteAddr,
 		Identity: id,
 	})
+}
+
+// DebugAuthResponse represents the response from the debug-auth endpoint
+type DebugAuthResponse struct {
+	Success       bool              `json:"success"`
+	ServerVersion string            `json:"server_version,omitempty"`
+	AuthMethod    string            `json:"auth_method,omitempty"`
+	Identity      string            `json:"identity,omitempty"`
+	UserInfo      map[string]string `json:"user_info,omitempty"`
+	Message       string            `json:"message,omitempty"`
+}
+
+func (s *Server) handleDebugAuth(w http.ResponseWriter, r *http.Request) {
+	resp := DebugAuthResponse{
+		Success:       true,
+		ServerVersion: "1.0.0", // You can replace this with an actual version
+		UserInfo:      make(map[string]string),
+	}
+
+	// Check authentication
+	authHeader := r.Header.Get("Authorization")
+	if authHeader != "" {
+		// Has authentication header
+		if s.state.authenticator != nil {
+			authenticated, identity, err := s.state.authenticator.AuthenticateRequest(r.Context(), r)
+			if err != nil {
+				resp.Success = false
+				resp.Message = fmt.Sprintf("Authentication failed: %v", err)
+				w.WriteHeader(http.StatusUnauthorized)
+			} else if !authenticated {
+				resp.Success = false
+				resp.Message = "Authentication failed"
+				w.WriteHeader(http.StatusUnauthorized)
+			} else {
+				resp.AuthMethod = "bearer"
+				resp.Identity = identity
+				resp.UserInfo["authenticated"] = "true"
+				resp.UserInfo["identity"] = identity
+			}
+		} else {
+			resp.AuthMethod = "none"
+			resp.Message = "Server has no authenticator configured"
+		}
+	} else {
+		// Check client certificate
+		if r.TLS != nil && len(r.TLS.PeerCertificates) > 0 {
+			cert := r.TLS.PeerCertificates[0]
+			resp.AuthMethod = "certificate"
+			resp.Identity = cert.Subject.String()
+			resp.UserInfo["cert_subject"] = cert.Subject.String()
+			resp.UserInfo["cert_issuer"] = cert.Issuer.String()
+		} else {
+			// No authentication
+			if s.state.authenticator != nil {
+				allowed, identity, err := s.state.authenticator.NoAuthorization(r.Context(), r)
+				if err != nil {
+					resp.Success = false
+					resp.Message = fmt.Sprintf("Authentication check failed: %v", err)
+					w.WriteHeader(http.StatusUnauthorized)
+				} else if !allowed {
+					resp.Success = false
+					resp.Message = "Authentication required"
+					w.WriteHeader(http.StatusUnauthorized)
+				} else {
+					resp.AuthMethod = "none"
+					resp.Identity = identity
+					resp.Message = "No authentication provided, but allowed by server policy"
+				}
+			} else {
+				resp.AuthMethod = "none"
+				resp.Message = "No authentication configured"
+			}
+		}
+	}
+
+	// Add connection information
+	resp.UserInfo["remote_addr"] = r.RemoteAddr
+	resp.UserInfo["request_uri"] = r.RequestURI
+
+	// Write JSON response
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(resp)
 }
 
 func (s *Server) reexport(w http.ResponseWriter, r *http.Request) {

@@ -387,6 +387,8 @@ func Server(ctx *Context, opts struct {
 		cloudAuthConfig.Enabled = true
 		cloudAuthConfig.CloudURL = reg.CloudURL
 		cloudAuthConfig.PrivateKey = filepath.Join(registrationDir, "service-account.key")
+		cloudAuthConfig.Tags = reg.Tags
+		cloudAuthConfig.ClusterID = reg.ClusterID
 	} else if reg != nil && reg.Status == "pending" {
 		ctx.Log.Info("found pending cluster registration",
 			"cluster-name", reg.ClusterName,

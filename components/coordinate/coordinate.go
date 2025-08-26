@@ -2,7 +2,10 @@ package coordinate
 
 import (
 	"context"
+	"crypto/sha1"
 	"crypto/x509"
+	"encoding/hex"
+	"encoding/pem"
 	"fmt"
 	"log/slog"
 	"net"
@@ -58,9 +61,11 @@ type CoordinatorConfig struct {
 
 // CloudAuthConfig contains cloud authentication settings
 type CloudAuthConfig struct {
-	Enabled    bool   `json:"enabled" yaml:"enabled"`
-	CloudURL   string `json:"cloud_url" yaml:"cloud_url"`     // URL of miren.cloud (default: https://api.miren.cloud)
-	PrivateKey string `json:"private_key" yaml:"private_key"` // Required: Path to service account private key when enabled
+	Enabled    bool              `json:"enabled" yaml:"enabled"`
+	CloudURL   string            `json:"cloud_url" yaml:"cloud_url"`     // URL of miren.cloud (default: https://api.miren.cloud)
+	PrivateKey string            `json:"private_key" yaml:"private_key"` // Required: Path to service account private key when enabled
+	Tags       map[string]string `json:"tags" yaml:"tags"`               // Tags from registration for RBAC evaluation
+	ClusterID  string            `json:"cluster_id" yaml:"cluster_id"`   // Cluster ID for status reporting
 }
 
 const (
@@ -88,6 +93,8 @@ type Coordinator struct {
 
 	apiCert []byte
 	apiKey  []byte
+
+	authClient *cloudauth.AuthClient // For status reporting to cloud
 }
 
 func (c *Coordinator) Activator() activator.AppActivator {
@@ -322,6 +329,16 @@ func (c *Coordinator) Start(ctx context.Context) error {
 			Logger:   c.Log,
 		}
 
+		// Pass through tags from registration for RBAC evaluation
+		if c.CloudAuth.Tags != nil {
+			// Convert map[string]string to map[string]any
+			tags := make(map[string]any)
+			for k, v := range c.CloudAuth.Tags {
+				tags[k] = v
+			}
+			authConfig.Tags = tags
+		}
+
 		// Load the private key and create an AuthClient for the runtime
 		keyData, err := os.ReadFile(c.CloudAuth.PrivateKey)
 		if err != nil {
@@ -348,6 +365,7 @@ func (c *Coordinator) Start(ctx context.Context) error {
 		}
 
 		authConfig.AuthClient = authClient
+		c.authClient = authClient // Store for status reporting
 		c.Log.Info("service account authentication configured",
 			"fingerprint", keyPair.Fingerprint())
 
@@ -440,7 +458,127 @@ func (c *Coordinator) Start(ctx context.Context) error {
 	server.ExposeValue("dev.miren.runtime/logs", app_v1alpha.AdaptLogs(ls))
 
 	c.Log.Info("started RPC server")
+
+	// Report initial cluster status if cloud auth is enabled
+	if c.CloudAuth.Enabled && c.authClient != nil && c.CloudAuth.ClusterID != "" {
+		err = c.ReportStartupStatus(ctx)
+		if err != nil {
+			c.Log.Error("failed to report initial cluster status", "error", err)
+		}
+
+		go c.reportStatusPeriodically(ctx)
+	}
+
 	return nil
+}
+
+// ReportStatus reports the current cluster status to miren.cloud
+func (c *Coordinator) ReportStartupStatus(ctx context.Context) error {
+	if c.authClient == nil {
+		return fmt.Errorf("auth client not configured")
+	}
+
+	if c.CloudAuth.ClusterID == "" {
+		return fmt.Errorf("cluster ID not configured")
+	}
+
+	// Get CA certificate fingerprint
+	var caFingerprint string
+	if c.authority != nil {
+		caCertPEM := c.authority.GetCACertificate()
+		if caCertPEM != nil {
+			// Parse the PEM to get the certificate
+			block, _ := pem.Decode(caCertPEM)
+			if block != nil && block.Type == "CERTIFICATE" {
+				// Calculate SHA1 fingerprint of the raw DER bytes
+				sum := sha1.Sum(block.Bytes)
+				caFingerprint = hex.EncodeToString(sum[:])
+			}
+		}
+	}
+
+	// Build list of API addresses
+	apiAddresses := []string{c.Address}
+
+	// Add localhost addresses
+	apiAddresses = append(apiAddresses, "127.0.0.1:8443", "[::1]:8443")
+
+	// Add additional IPs
+	for _, ip := range c.AdditionalIPs {
+		// Format the IP address with port
+		if ip.To4() != nil {
+			apiAddresses = append(apiAddresses, fmt.Sprintf("%s:8443", ip.String()))
+		} else {
+			apiAddresses = append(apiAddresses, fmt.Sprintf("[%s]:8443", ip.String()))
+		}
+	}
+
+	// Build status report
+	status := &cloudauth.StatusReport{
+		ClusterID:         c.CloudAuth.ClusterID,
+		APIAddresses:      apiAddresses,
+		CACertFingerprint: caFingerprint,
+		// TODO: Add more fields as they become available:
+		// - Version (from build info)
+	}
+
+	return c.authClient.ReportClusterStatus(ctx, status)
+}
+
+// ReportStatus reports the current cluster status to miren.cloud
+func (c *Coordinator) ReportStatus(ctx context.Context) error {
+	if c.authClient == nil {
+		return fmt.Errorf("auth client not configured")
+	}
+
+	if c.CloudAuth.ClusterID == "" {
+		return fmt.Errorf("cluster ID not configured")
+	}
+
+	// Build status report
+	status := &cloudauth.StatusReport{
+		ClusterID: c.CloudAuth.ClusterID,
+		State:     "active", // TODO: Determine actual state based on health checks
+		// TODO: Add more fields as they become available:
+		// - Version (from build info)
+		// - NodeCount (from entity store)
+		// - WorkloadCount (from entity store)
+		// - ResourceUsage (from metrics)
+		// - HealthChecks (from component health)
+		// - RBACRulesVersion (from RBAC system)
+		// - LastRBACSync (from RBAC system)
+	}
+
+	return c.authClient.ReportClusterStatus(ctx, status)
+}
+
+// reportStatusPeriodically reports cluster status at regular intervals
+func (c *Coordinator) reportStatusPeriodically(ctx context.Context) {
+	// Initial report after a short delay to allow services to start
+	time.Sleep(5 * time.Second)
+
+	if err := c.ReportStatus(ctx); err != nil {
+		c.Log.Error("failed to report initial cluster status", "error", err)
+	} else {
+		c.Log.Info("reported cluster status to cloud")
+	}
+
+	// Report status every 5 minutes
+	ticker := time.NewTicker(5 * time.Minute)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if err := c.ReportStatus(ctx); err != nil {
+				c.Log.Error("failed to report cluster status", "error", err)
+			} else {
+				c.Log.Debug("reported cluster status to cloud")
+			}
+		}
+	}
 }
 
 func (c *Coordinator) Server() *rpc.Server {
