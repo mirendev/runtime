@@ -147,12 +147,11 @@ func ConfigBind(ctx *Context, opts struct {
 	}
 
 	// Determine the config.d directory path
-	homeDir, err := os.UserHomeDir()
+	configDirPath, err := getConfigDirPath()
 	if err != nil {
-		return fmt.Errorf("failed to get user home directory: %w", err)
+		return fmt.Errorf("failed to get config directory path: %w", err)
 	}
 
-	configDirPath := filepath.Join(homeDir, ".config/miren/clientconfig.d")
 	if err := os.MkdirAll(configDirPath, 0755); err != nil {
 		return fmt.Errorf("failed to create config.d directory: %w", err)
 	}
