@@ -121,7 +121,7 @@ func selectClusterFromList(ctx *Context, clusters []ClusterResponse) (*ClusterRe
 
 	// Create list items
 	items := make([]list.Item, 0, len(clusters))
-	for _, cluster := range clusters {
+	for i, cluster := range clusters {
 		if len(cluster.APIAddresses) == 0 {
 			continue // Skip clusters without API addresses
 		}
@@ -143,8 +143,8 @@ func selectClusterFromList(ctx *Context, clusters []ClusterResponse) (*ClusterRe
 				descLines = append(descLines, fmt.Sprintf("Address: %s", cluster.APIAddresses[0]))
 			} else {
 				descLines = append(descLines, fmt.Sprintf("Addresses (%d):", len(cluster.APIAddresses)))
-				for i, addr := range cluster.APIAddresses {
-					if i < 3 { // Show first 3 addresses
+				for j, addr := range cluster.APIAddresses {
+					if j < 3 { // Show first 3 addresses
 						descLines = append(descLines, fmt.Sprintf("  • %s", addr))
 					}
 				}
@@ -179,6 +179,7 @@ func selectClusterFromList(ctx *Context, clusters []ClusterResponse) (*ClusterRe
 		items = append(items, listItem{
 			title: cluster.Name,
 			desc:  strings.Join(descLines, "\n"),
+			index: i, // Store the cluster index for direct lookup
 		})
 	}
 
@@ -224,6 +225,7 @@ func selectClusterFromList(ctx *Context, clusters []ClusterResponse) (*ClusterRe
 
 type listItem struct {
 	title, desc string
+	index       int // Store the original cluster index for direct lookup
 }
 
 func (i listItem) Title() string       { return i.title }
@@ -412,23 +414,20 @@ func (m clusterListModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		case "enter":
 			if i, ok := m.list.SelectedItem().(listItem); ok {
-				// Find the index of the selected cluster
-				for idx, cluster := range m.clusters {
-					if cluster.Name == i.title {
-						m.selected = idx
-						// Switch to naming mode
-						m.state = "naming"
-						// Initialize text input with cluster name
-						m.textInput = textinput.New()
-						m.textInput.Placeholder = cluster.Name
-						m.textInput.SetValue(cluster.Name)
-						m.textInput.Focus()
-						m.textInput.CharLimit = 100
-						m.textInput.Width = 50
-						m.textInput.Prompt = "Local name: "
-						return m, textinput.Blink
-					}
-				}
+				// Use the stored index for direct cluster lookup
+				m.selected = i.index
+				cluster := m.clusters[i.index]
+				// Switch to naming mode
+				m.state = "naming"
+				// Initialize text input with cluster name
+				m.textInput = textinput.New()
+				m.textInput.Placeholder = cluster.Name
+				m.textInput.SetValue(cluster.Name)
+				m.textInput.Focus()
+				m.textInput.CharLimit = 100
+				m.textInput.Width = 50
+				m.textInput.Prompt = "Local name: "
+				return m, textinput.Blink
 			}
 			return m, nil
 		}
