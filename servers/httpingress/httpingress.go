@@ -307,7 +307,7 @@ func (h *Server) serveHTTPWithMetrics(w http.ResponseWriter, req *http.Request, 
 	}
 
 	if curLease != nil {
-		h.Log.Info("using existing lease", "app", targetAppId, "url", curLease.Lease.URL)
+		h.Log.Info("using existing lease", "app", targetAppId, "url", curLease.Lease.URL, "sandbox", curLease.Lease.Sandbox().ID)
 		h.forwardToLease(ctx, w, req, curLease)
 		return
 	}

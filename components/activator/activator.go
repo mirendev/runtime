@@ -2,11 +2,13 @@ package activator
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
 	"math/rand/v2"
 	"net/netip"
+	"os"
 	"sync"
 	"time"
 
@@ -144,6 +146,7 @@ func (a *localActivator) ensureFixedInstances(ctx context.Context) {
 
 			// Mark as pending before releasing lock
 			a.pendingCreations[key]++
+			a.dumpDebugState()
 
 			// Create sandbox in background to avoid holding lock
 			go func() {
@@ -152,6 +155,7 @@ func (a *localActivator) ensureFixedInstances(ctx context.Context) {
 				// Update pending count after creation attempt
 				a.mu.Lock()
 				a.pendingCreations[key]--
+				a.dumpDebugState()
 				a.mu.Unlock()
 
 				if err != nil {
@@ -191,7 +195,8 @@ func (a *localActivator) AcquireLease(ctx context.Context, ver *core_v1alpha.App
 		a.log.Info("no sandboxes available in version slot, creating new sandbox",
 			"app", ver.App,
 			"version", ver.Version,
-			"key", key)
+			"key", key,
+			"tracked_versions", len(a.versions))
 	} else {
 		a.log.Debug("reusing existing sandboxes", "app", ver.App, "version", ver.Version, "sandboxes", len(vs.sandboxes))
 
@@ -203,6 +208,7 @@ func (a *localActivator) AcquireLease(ctx context.Context, ver *core_v1alpha.App
 				s := vs.sandboxes[(start+i)%len(vs.sandboxes)]
 				if s.sandbox.Status == compute_v1alpha.RUNNING {
 					s.lastRenewal = time.Now()
+					a.dumpDebugState()
 					a.log.Debug("reusing fixed mode sandbox", "app", ver.App, "version", ver.Version, "sandbox", s.sandbox.ID, "service", service)
 					return &Lease{
 						ver:     ver,
@@ -225,6 +231,7 @@ func (a *localActivator) AcquireLease(ctx context.Context, ver *core_v1alpha.App
 				if s.inuseSlots+vs.leaseSlots < s.maxSlots {
 					s.inuseSlots += vs.leaseSlots
 					s.lastRenewal = time.Now()
+					a.dumpDebugState()
 
 					a.log.Debug("reusing sandbox", "app", ver.App, "version", ver.Version, "sandbox", s.sandbox.ID, "in-use", s.inuseSlots)
 					return &Lease{
@@ -422,6 +429,7 @@ func (a *localActivator) activateApp(ctx context.Context, ver *core_v1alpha.AppV
 	}
 
 	vs.sandboxes = append(vs.sandboxes, lsb)
+	a.dumpDebugState()
 
 	return lease, nil
 }
@@ -443,6 +451,7 @@ func (a *localActivator) ReleaseLease(ctx context.Context, lease *Lease) error {
 		for _, s := range vs.sandboxes {
 			if s.sandbox == lease.sandbox {
 				s.inuseSlots -= lease.Size
+				a.dumpDebugState()
 				break
 			}
 		}
@@ -463,6 +472,7 @@ func (a *localActivator) RenewLease(ctx context.Context, lease *Lease) (*Lease, 
 	for _, s := range vs.sandboxes {
 		if s.sandbox == lease.sandbox {
 			s.lastRenewal = time.Now()
+			a.dumpDebugState()
 			break
 		}
 	}
@@ -663,6 +673,8 @@ func (a *localActivator) recoverSandboxes(ctx context.Context) error {
 		a.log.Info("recovered sandbox", "app", appVer.App, "version", appVer.Version, "sandbox", sb.ID, "pool", pool, "service", service, "url", addr)
 	}
 
+	a.dumpDebugState()
+
 	a.log.Info("sandbox recovery summary",
 		"total", len(resp.Values()),
 		"running", runningCount,
@@ -672,6 +684,90 @@ func (a *localActivator) recoverSandboxes(ctx context.Context) error {
 		"tracked_keys", len(a.versions))
 
 	return nil
+}
+
+func (a *localActivator) dumpDebugState() {
+	type debugSandbox struct {
+		ID          string    `json:"id"`
+		Status      string    `json:"status"`
+		LastRenewal time.Time `json:"last_renewal"`
+		URL         string    `json:"url"`
+		MaxSlots    int       `json:"max_slots"`
+		InUseSlots  int       `json:"in_use_slots"`
+	}
+
+	type debugVerSandboxes struct {
+		AppID      string         `json:"app_id"`
+		AppName    string         `json:"app_name"`
+		Version    string         `json:"version"`
+		Pool       string         `json:"pool"`
+		Service    string         `json:"service"`
+		LeaseSlots int            `json:"lease_slots"`
+		Sandboxes  []debugSandbox `json:"sandboxes"`
+	}
+
+	debugState := struct {
+		Timestamp        time.Time                    `json:"timestamp"`
+		Versions         map[string]debugVerSandboxes `json:"versions"`
+		PendingCreations map[string]int               `json:"pending_creations"`
+		TotalVersions    int                          `json:"total_versions"`
+		TotalSandboxes   int                          `json:"total_sandboxes"`
+	}{
+		Timestamp:        time.Now(),
+		Versions:         make(map[string]debugVerSandboxes),
+		PendingCreations: make(map[string]int),
+		TotalVersions:    len(a.versions),
+	}
+
+	totalSandboxes := 0
+	for key, vs := range a.versions {
+		keyStr := fmt.Sprintf("%s_%s_%s", key.ver, key.pool, key.service)
+
+		debugVS := debugVerSandboxes{
+			AppID:      vs.ver.App.String(),
+			AppName:    vs.ver.App.String(),
+			Version:    vs.ver.Version,
+			Pool:       key.pool,
+			Service:    key.service,
+			LeaseSlots: vs.leaseSlots,
+			Sandboxes:  make([]debugSandbox, len(vs.sandboxes)),
+		}
+
+		for i, sb := range vs.sandboxes {
+			debugVS.Sandboxes[i] = debugSandbox{
+				ID:          sb.sandbox.ID.String(),
+				Status:      string(sb.sandbox.Status),
+				LastRenewal: sb.lastRenewal,
+				URL:         sb.url,
+				MaxSlots:    sb.maxSlots,
+				InUseSlots:  sb.inuseSlots,
+			}
+			totalSandboxes++
+		}
+
+		debugState.Versions[keyStr] = debugVS
+	}
+
+	for key, count := range a.pendingCreations {
+		keyStr := fmt.Sprintf("%s_%s_%s", key.ver, key.pool, key.service)
+		debugState.PendingCreations[keyStr] = count
+	}
+
+	debugState.TotalSandboxes = totalSandboxes
+
+	data, err := json.MarshalIndent(debugState, "", "  ")
+	if err != nil {
+		a.log.Error("failed to marshal debug state", "error", err)
+		return
+	}
+
+	debugFile := "/tmp/activator_debug.json"
+	if err := os.WriteFile(debugFile, data, 0644); err != nil {
+		a.log.Error("failed to write debug file", "file", debugFile, "error", err)
+		return
+	}
+
+	a.log.Debug("wrote debug state", "file", debugFile, "size", len(data))
 }
 
 func (a *localActivator) retireUnusedSandboxes() {
@@ -726,6 +822,18 @@ func (a *localActivator) retireUnusedSandboxes() {
 			}
 		}
 
+		oldSandboxIds := make([]string, len(vs.sandboxes))
+		for i, sb := range vs.sandboxes {
+			oldSandboxIds[i] = sb.sandbox.ID.String()
+		}
+		newSandboxIds := make([]string, len(newSandboxes))
+		for i, sb := range newSandboxes {
+			newSandboxIds[i] = sb.sandbox.ID.String()
+		}
+		a.log.Debug("retire scan complete", "app", vs.ver.App, "service", key.service, "before", oldSandboxIds, "after", newSandboxIds)
+
 		vs.sandboxes = newSandboxes
 	}
+
+	a.dumpDebugState()
 }
