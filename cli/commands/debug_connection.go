@@ -211,7 +211,7 @@ func DebugConnection(ctx *Context, opts struct {
 
 	// Create HTTP/3 client with appropriate TLS config
 	tlsConfig := &tls.Config{
-		InsecureSkipVerify: true,
+		InsecureSkipVerify: opts.Insecure,
 	}
 
 	if identity != nil && identity.Type == "certificate" {
