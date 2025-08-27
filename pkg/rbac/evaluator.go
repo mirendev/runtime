@@ -90,9 +90,9 @@ func (e *Evaluator) Evaluate(req *Request, opts ...EvaluateOption) Decision {
 	}
 
 	// Check cache first
-	//if decision, ok := e.cache.get(req); ok {
-	//return decision
-	//}
+	if decision, ok := e.cache.get(req); ok {
+		return decision
+	}
 
 	// Get current policy from provider
 	policy := e.provider.GetPolicy()
