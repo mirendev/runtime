@@ -240,6 +240,11 @@ func (h *Server) serveHTTPWithMetrics(w http.ResponseWriter, req *http.Request, 
 
 	ctx := req.Context()
 
+	// CRITICAL TO KNOW
+	// The context on requset is closed automaticaly when the client on the over side closes!
+	// So if you're doing critical work, don't use this context! Use a separate context and ping
+	// this one to figure out if you should continue with your critical work or clean up.
+
 	// Use ingress client to lookup route
 	route, err := h.ingressClient.Lookup(ctx, onlyHost)
 	if err != nil {
@@ -328,7 +333,10 @@ func (h *Server) serveHTTPWithMetrics(w http.ResponseWriter, req *http.Request, 
 	var av core_v1alpha.AppVersion
 	av.Decode(vr.Entity().Entity())
 
-	actLease, err := h.aa.AcquireLease(ctx, &av, "http", "web")
+	actContext, actCancel := context.WithCancel(context.Background())
+	defer actCancel()
+
+	actLease, err := h.aa.AcquireLease(actContext, &av, "http", "web")
 	if err != nil {
 		h.Log.Error("error acquiring lease", "error", err, "app", targetAppId)
 		http.Error(w, fmt.Sprintf("error acquiring lease: %s", targetAppId), http.StatusInternalServerError)
