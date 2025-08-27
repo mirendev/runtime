@@ -130,7 +130,7 @@ func Login(ctx *Context, opts struct {
 		pollInterval = time.Duration(initResp.PollingInterval) * time.Second
 	}
 
-	token, err := pollForToken(context.Background(), opts.CloudURL, initResp.DeviceCode, pollInterval, timeout, func(status string) {
+	token, err := pollForToken(ctx, opts.CloudURL, initResp.DeviceCode, pollInterval, timeout, func(status string) {
 		if status == "pending" {
 			fmt.Print(".")
 		}
