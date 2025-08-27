@@ -189,20 +189,64 @@ func ConfigBind(ctx *Context, opts struct {
 	return nil
 }
 
+// normalizeAddress handles robust address normalization for various formats:
+// - Strips optional scheme prefixes (https:// or http://)
+// - Handles IPv6 literals correctly (bracketed and unbracketed)
+// - Adds default port 8443 when no port is present
+// Returns normalized address and host for SNI (with brackets stripped for IPv6)
+func normalizeAddress(address string) (normalizedAddr, sniHost string, err error) {
+	// Strip scheme if present
+	addr := address
+	if strings.HasPrefix(addr, "https://") {
+		addr = strings.TrimPrefix(addr, "https://")
+	} else if strings.HasPrefix(addr, "http://") {
+		addr = strings.TrimPrefix(addr, "http://")
+	}
+
+	// Handle IPv6 literals and port logic
+	if strings.Contains(addr, "]") {
+		// Bracketed IPv6 format [::1]:8443 or [::1]
+		host, _, err := net.SplitHostPort(addr)
+		if err != nil {
+			// No port specified, assume it's just [::1]
+			if strings.HasSuffix(addr, "]") {
+				normalizedAddr = addr + ":8443"
+				sniHost = strings.Trim(addr, "[]")
+				return normalizedAddr, sniHost, nil
+			}
+			return "", "", fmt.Errorf("invalid IPv6 address format: %w", err)
+		}
+		normalizedAddr = addr
+		sniHost = strings.Trim(host, "[]")
+		return normalizedAddr, sniHost, nil
+	} else if strings.Count(addr, ":") > 1 && !strings.Contains(addr, "[") {
+		// Unbracketed IPv6 like ::1 or 2001:db8::1
+		// Need to wrap in brackets and add port
+		normalizedAddr = "[" + addr + "]:8443"
+		sniHost = addr
+		return normalizedAddr, sniHost, nil
+	} else {
+		// IPv4 or hostname
+		host, _, err := net.SplitHostPort(addr)
+		if err != nil {
+			// No port specified
+			normalizedAddr = addr + ":8443"
+			sniHost = addr
+			return normalizedAddr, sniHost, nil
+		}
+		normalizedAddr = addr
+		sniHost = host
+		return normalizedAddr, sniHost, nil
+	}
+}
+
 // extractTLSCertificate connects to the server via QUIC and extracts the TLS certificate
 // Returns the PEM-encoded certificate and its SHA1 fingerprint (hex-encoded)
 func extractTLSCertificate(ctx *Context, address string) (string, string, error) {
-	// Normalize the address - add default port if not specified
-	normalizedAddr := address
-	if !strings.Contains(address, ":") {
-		normalizedAddr = address + ":8443"
-	}
-
-	// Parse the address to get the hostname for SNI
-	host, _, err := net.SplitHostPort(normalizedAddr)
+	// Normalize the address with robust parsing
+	normalizedAddr, sniHost, err := normalizeAddress(address)
 	if err != nil {
-		// If splitting fails, the address might not have a port
-		host = address
+		return "", "", fmt.Errorf("failed to normalize address: %w", err)
 	}
 
 	// Create a context with timeout
@@ -211,9 +255,9 @@ func extractTLSCertificate(ctx *Context, address string) (string, string, error)
 
 	// Create TLS config that accepts any certificate for now (we're extracting it)
 	tlsConfig := &tls.Config{
-		ServerName:         host,
-		InsecureSkipVerify: true,           // We're extracting the cert, not verifying it yet
-		NextProtos:         []string{"h3"}, // HTTP/3 ALPN
+		ServerName:         sniHost,                                   // Use properly stripped SNI host
+		InsecureSkipVerify: true,                                      // We're extracting the cert, not verifying it yet
+		NextProtos:         []string{"h3", "h3-29", "h3-28", "h3-27"}, // HTTP/3 ALPN with common variants
 	}
 
 	// Create QUIC config
@@ -228,9 +272,15 @@ func extractTLSCertificate(ctx *Context, address string) (string, string, error)
 		return "", "", fmt.Errorf("failed to resolve address: %w", err)
 	}
 
-	udpConn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4zero, Port: 0})
+	// Try IPv6/dual-stack binding first, fallback to IPv4
+	var udpConn *net.UDPConn
+	udpConn, err = net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv6zero, Port: 0})
 	if err != nil {
-		return "", "", fmt.Errorf("failed to create UDP socket: %w", err)
+		// Fallback to IPv4 if IPv6 fails
+		udpConn, err = net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4zero, Port: 0})
+		if err != nil {
+			return "", "", fmt.Errorf("failed to create UDP socket: %w", err)
+		}
 	}
 	defer udpConn.Close()
 
