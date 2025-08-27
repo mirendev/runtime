@@ -8,7 +8,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/davecgh/go-spew/spew"
 	"miren.dev/runtime/pkg/mapx"
 )
 
@@ -103,8 +102,6 @@ func (e *Evaluator) Evaluate(req *Request, opts ...EvaluateOption) Decision {
 		}
 		return DecisionDeny
 	}
-
-	spew.Dump(policy)
 
 	// Evaluate each rule
 	for i := range policy.Rules {
