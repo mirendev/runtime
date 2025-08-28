@@ -9,12 +9,11 @@ import (
 func SandboxDelete(ctx *Context, opts struct {
 	Force bool `short:"f" long:"force" description:"Force delete without confirmation"`
 	ConfigCentric
-}, args []string) error {
-	if len(args) != 1 {
-		return fmt.Errorf("usage: sandbox delete <sandbox-id>")
-	}
-
-	sandboxID := args[0]
+	Args struct {
+		SandboxID string `positional-arg-name:"sandbox-id" description:"ID of the sandbox to delete"`
+	} `positional-args:"yes" required:"yes"`
+}) error {
+	sandboxID := opts.Args.SandboxID
 
 	client, err := ctx.RPCClient("entities")
 	if err != nil {
