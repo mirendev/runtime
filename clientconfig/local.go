@@ -10,6 +10,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -466,7 +467,10 @@ func AuthenticateWithKey(ctx context.Context, hostname string, keyPair *cloudaut
 	}
 
 	// Step 1: Begin authentication
-	beginURL := strings.TrimSuffix(cloudURL, "/") + "/auth/user-key/begin"
+	beginURL, err := url.JoinPath(cloudURL, "/auth/user-key/begin")
+	if err != nil {
+		return "", fmt.Errorf("invalid cloud URL: %w", err)
+	}
 	beginReq := BeginAuthRequest{
 		Fingerprint: keyPair.Fingerprint(),
 	}
@@ -520,7 +524,10 @@ func AuthenticateWithKey(ctx context.Context, hostname string, keyPair *cloudaut
 	}
 
 	// Step 3: Complete authentication
-	completeURL := strings.TrimSuffix(cloudURL, "/") + "/auth/user-key/complete"
+	completeURL, err := url.JoinPath(cloudURL, "/auth/user-key/complete")
+	if err != nil {
+		return "", fmt.Errorf("invalid cloud URL: %w", err)
+	}
 	completeReq := CompleteAuthRequest{
 		Envelope:  beginResp.Envelope,
 		Signature: signature,

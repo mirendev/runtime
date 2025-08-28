@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -54,7 +55,11 @@ func fetchAvailableClusters(ctx *Context, identity *clientconfig.IdentityConfig)
 	}
 
 	// Make request to fetch clusters
-	clustersURL := strings.TrimSuffix(issuerURL, "/") + "/api/v1/users/clusters"
+	clustersURL, err := url.JoinPath(issuerURL, "/api/v1/users/clusters")
+	if err != nil {
+		return nil, err
+	}
+
 	req, err := http.NewRequestWithContext(ctx, "GET", clustersURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)

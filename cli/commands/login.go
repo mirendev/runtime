@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -203,7 +204,10 @@ func Login(ctx *Context, opts struct {
 }
 
 func initiateDeviceFlow(cloudURL string) (*DeviceFlowInitResponse, error) {
-	url := strings.TrimSuffix(cloudURL, "/") + "/api/v1/device/code"
+	url, err := url.JoinPath(cloudURL, "/api/v1/device/code")
+	if err != nil {
+		return nil, fmt.Errorf("invalid cloud URL: %w", err)
+	}
 
 	reqBody := map[string]string{
 		"client_id": "miren-cli",
@@ -247,7 +251,10 @@ func initiateDeviceFlow(cloudURL string) (*DeviceFlowInitResponse, error) {
 }
 
 func pollForToken(ctx context.Context, cloudURL, deviceCode string, interval, maxDuration time.Duration, progress func(string)) (string, error) {
-	url := strings.TrimSuffix(cloudURL, "/") + "/api/v1/device/token"
+	url, err := url.JoinPath(cloudURL, "/api/v1/device/token")
+	if err != nil {
+		return "", fmt.Errorf("invalid cloud URL: %w", err)
+	}
 
 	reqBody := map[string]string{
 		"grant_type":  "urn:ietf:params:oauth:grant-type:device_code",
@@ -363,7 +370,10 @@ func registerPublicKey(cloudURL, token string, keyPair *cloudauth.KeyPair, keyNa
 	}
 
 	// Step 1: Begin key registration
-	beginURL := strings.TrimSuffix(cloudURL, "/") + "/api/v1/users/keys/begin"
+	beginURL, err := url.JoinPath(cloudURL, "/api/v1/users/keys/begin")
+	if err != nil {
+		return fmt.Errorf("invalid cloud URL: %w", err)
+	}
 	beginReq := BeginKeyRegistrationRequest{
 		Name:      keyName,
 		KeyType:   "ed25519",
@@ -420,7 +430,10 @@ func registerPublicKey(cloudURL, token string, keyPair *cloudauth.KeyPair, keyNa
 	}
 
 	// Step 3: Complete key registration
-	completeURL := strings.TrimSuffix(cloudURL, "/") + "/api/v1/users/keys/complete"
+	completeURL, err := url.JoinPath(cloudURL, "/api/v1/users/keys/complete")
+	if err != nil {
+		return fmt.Errorf("invalid cloud URL: %w", err)
+	}
 	completeReq := CompleteKeyRegistrationRequest{
 		Envelope:  beginResp.Envelope,
 		Signature: signature,
