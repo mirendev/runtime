@@ -1,19 +1,16 @@
 package commands
 
 import (
-	"fmt"
-
 	"miren.dev/runtime/api/compute"
 )
 
 func SandboxStop(ctx *Context, opts struct {
 	ConfigCentric
-}, args []string) error {
-	if len(args) != 1 {
-		return fmt.Errorf("usage: sandbox stop <sandbox-id>")
-	}
-
-	sandboxID := args[0]
+	Args struct {
+		SandboxID string `positional-arg-name:"sandbox-id" description:"ID of the sandbox to stop"`
+	} `positional-args:"yes" required:"yes"`
+}) error {
+	sandboxID := opts.Args.SandboxID
 
 	client, err := ctx.RPCClient("entities")
 	if err != nil {
