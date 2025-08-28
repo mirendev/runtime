@@ -128,6 +128,7 @@ type stateOptions struct {
 	clientLocalAddr string
 
 	authenticator Authenticator
+	bearerToken   string // JWT or other bearer token for authentication
 }
 
 type StateOption func(*stateOptions)
@@ -202,6 +203,12 @@ func WithEndpoint(endpoint string) StateOption {
 func WithAuthenticator(auth Authenticator) StateOption {
 	return func(o *stateOptions) {
 		o.authenticator = auth
+	}
+}
+
+func WithBearerToken(token string) StateOption {
+	return func(o *stateOptions) {
+		o.bearerToken = token
 	}
 }
 
@@ -292,6 +299,7 @@ func NewState(ctx context.Context, opts ...StateOption) (*State, error) {
 		StateCommon: &StateCommon{
 			top:           ctx,
 			log:           so.log,
+			opts:          &so,
 			clientTlsCfg:  tlsCfg,
 			privkey:       priv,
 			pubkey:        pub,
@@ -380,9 +388,7 @@ func (s *State) setupServerTls(so *stateOptions) error {
 		tlsCfg.VerifyConnection = func(cs tls.ConnectionState) error {
 			// Standard certificate validation only
 			// The authenticator can use r.TLS to access certificates later in ServeHTTP
-			if len(cs.PeerCertificates) == 0 {
-				s.log.Warn("client connection has no certificates")
-			} else {
+			if len(cs.PeerCertificates) != 0 {
 				cert := cs.PeerCertificates[0]
 				s.log.Info("verified client connection", "subject", cert.Subject)
 			}

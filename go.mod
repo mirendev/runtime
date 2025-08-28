@@ -54,11 +54,12 @@ require (
 	github.com/lab47/mode v0.0.0-20231220013342-9703805c0e9c
 	github.com/lima-vm/go-qcow2reader v0.1.1
 	github.com/lucasb-eyer/go-colorful v1.2.0
-	github.com/mattn/go-colorable v0.1.13
+	github.com/mattn/go-colorable v0.1.14
 	github.com/mattn/go-isatty v0.0.20
 	github.com/mattn/go-sqlite3 v1.14.24
 	github.com/mdlayher/genetlink v1.3.2
 	github.com/mdlayher/netlink v1.7.3-0.20250113171957-fbb4dce95f42
+	github.com/mdp/qrterminal/v3 v3.2.1
 	github.com/miekg/dns v1.1.63
 	github.com/mitchellh/cli v1.1.5
 	github.com/mitchellh/go-testing-interface v1.14.1
@@ -226,6 +227,7 @@ require (
 	github.com/quic-go/qpack v0.5.1 // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect
 	github.com/safchain/ethtool v0.5.9 // indirect
+	github.com/sahilm/fuzzy v0.1.1 // indirect
 	github.com/secure-systems-lab/go-securesystemslib v0.4.0 // indirect
 	github.com/segmentio/asm v1.2.0 // indirect
 	github.com/shopspring/decimal v1.4.0 // indirect
@@ -255,6 +257,7 @@ require (
 	gotest.tools/v3 v3.5.1 // indirect
 	k8s.io/apimachinery v0.31.2 // indirect
 	k8s.io/utils v0.0.0-20240902221715-702e33fdd3c3 // indirect
+	rsc.io/qr v0.2.0 // indirect
 	sigs.k8s.io/json v0.0.0-20221116044647-bc3834ca7abd // indirect
 	sigs.k8s.io/knftables v0.0.18 // indirect
 	sigs.k8s.io/yaml v1.4.0 // indirect

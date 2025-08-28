@@ -1,11 +1,14 @@
 package caauth
 
 import (
+	"bytes"
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/sha1"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding"
+	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
@@ -19,6 +22,8 @@ import (
 type Authority struct {
 	cert *x509.Certificate
 	key  ed25519.PrivateKey
+
+	certPEM []byte // Cached PEM encoding of the certificate
 }
 
 // Options for certificate generation
@@ -122,9 +127,15 @@ func LoadFromPEM(certPEM, keyPEM []byte) (*Authority, error) {
 	}
 
 	return &Authority{
-		cert: cert,
-		key:  privKey,
+		cert:    cert,
+		certPEM: certPEM,
+		key:     privKey,
 	}, nil
+}
+
+func (ca *Authority) Fingerprint() string {
+	hash := sha1.Sum(ca.cert.Raw)
+	return hex.EncodeToString(hash[:])
 }
 
 // ExportPEM exports the CA certificate and private key in PEM format
@@ -232,11 +243,15 @@ func (ca *Authority) IssueCertificate(opts Options) (*ClientCertificate, error) 
 		return nil, fmt.Errorf("creating certificate: %w", err)
 	}
 
-	// Export certificate
-	certPEM := pem.EncodeToMemory(&pem.Block{
+	// Export certificate and include CA cert so that it's advertised as a chain
+	var buf bytes.Buffer
+	pem.Encode(&buf, &pem.Block{
 		Type:  "CERTIFICATE",
 		Bytes: certBytes,
 	})
+	buf.Write(ca.certPEM)
+
+	certPEM := buf.Bytes()
 
 	// Export private key
 	keyBytes, err := x509.MarshalPKCS8PrivateKey(priv)
