@@ -1198,6 +1198,41 @@ func (c *SandboxController) buildSubContainerSpec(
 		},
 	}
 
+	// Add local storage mount if this sandbox has an associated app
+	if sb.Version != "" && c.DataPath != "" {
+		// Fetch the AppVersion to get the App ID
+		res, err := c.EAC.Get(ctx, sb.Version.String())
+		if err == nil {
+			var appVer core_v1alpha.AppVersion
+			appVer.Decode(res.Entity().Entity())
+
+			if appVer.App != "" {
+				// Create the local storage path for this app
+				// Using 0777 for simplicity - containers run as non-root app user and need write access
+				// TODO: Consider more restrictive permissions with proper UID/GID mapping or ACLs for production
+				localStoragePath := filepath.Join(c.DataPath, "data", "local", appVer.App.String())
+				if err = os.MkdirAll(localStoragePath, 0777); err != nil {
+					c.Log.Warn("failed to create local storage directory", "path", localStoragePath, "error", err)
+				} else {
+					// Explicitly chmod to 0777 since MkdirAll respects umask
+					if err = os.Chmod(localStoragePath, 0777); err != nil {
+						c.Log.Warn("failed to set permissions on local storage directory", "path", localStoragePath, "error", err)
+					}
+					// Add the bind mount for local storage
+					mounts = append(mounts, specs.Mount{
+						Destination: "/miren/data/local",
+						Type:        "bind",
+						Source:      localStoragePath,
+						Options:     []string{"rbind", "rprivate", "nosuid", "nodev", "rw"},
+					})
+					c.Log.Info("added local storage mount for container", "app", appVer.App.String(), "path", localStoragePath, "container", co.Name)
+				}
+			}
+		} else {
+			c.Log.Error("failed to fetch app version for local storage", "version", sb.Version.String(), "error", err)
+		}
+	}
+
 	for _, m := range co.Mount {
 		rawPath := c.sandboxPath(sb, "volumes", m.Source)
 		st, err := os.Lstat(rawPath)
