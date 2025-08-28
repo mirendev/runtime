@@ -9,6 +9,7 @@ import (
 	"encoding/base64"
 	"encoding/pem"
 	"fmt"
+	"strings"
 )
 
 // KeyPair represents an ED25519 key pair for cluster authentication
@@ -64,7 +65,7 @@ func (kp *KeyPair) PrivateKeyPEM() (string, error) {
 // in the format "SHA256:base64encoded" to match the server
 func (kp *KeyPair) Fingerprint() string {
 	hash := sha256.Sum256(kp.PublicKey)
-	return base64.StdEncoding.EncodeToString(hash[:])
+	return "SHA256:" + strings.TrimSuffix(base64.StdEncoding.EncodeToString(hash[:]), "=")
 }
 
 // Sign signs a message with the private key
