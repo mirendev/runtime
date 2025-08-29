@@ -20,9 +20,11 @@ import (
 
 // skipAddresses contains addresses that should be skipped when trying to connect
 var skipAddresses = map[string]bool{
-	"0.0.0.0":   true,
-	"127.0.0.1": true,
-	"::1":       true,
+	"0.0.0.0":               true,
+	"127.0.0.1":             true,
+	"::1":                   true,
+	"localhost":             true,
+	"localhost.localdomain": true,
 }
 
 func ConfigBind(ctx *Context, opts struct {
@@ -90,16 +92,15 @@ func ConfigBind(ctx *Context, opts struct {
 		// Try the cluster's advertised addresses first
 		for _, addr := range selectedCluster.APIAddresses {
 			// Check if this address should be skipped
-			// Parse the host from the address (handle both with and without port)
-			host, _, _ := net.SplitHostPort(addr)
-			if host == "" {
-				// No port in the address, use as-is
-				host = addr
+			// Use normalizeAddress to properly extract the host, handling schemes and ports
+			_, sniHost, err := normalizeAddress(addr)
+			if err != nil {
+				ctx.Warn("Failed to parse address %s: %v", addr, err)
+				lastErr = err
+				continue
 			}
-			// Strip brackets from IPv6 addresses
-			host = strings.Trim(host, "[]")
 
-			if skipAddresses[host] {
+			if skipAddresses[sniHost] {
 				continue
 			}
 
@@ -139,7 +140,6 @@ func ConfigBind(ctx *Context, opts struct {
 			localhostAddresses := []string{
 				"127.0.0.1:8443",
 				"[::1]:8443",
-				"0.0.0.0:8443",
 			}
 
 			for _, addr := range localhostAddresses {
