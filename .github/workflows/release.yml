@@ -102,7 +102,7 @@ jobs:
           cache-to: type=gha,mode=max
 
   upload-to-miren:
-    needs: [package, build-binaries, build-and-push-docker]
+    needs: [package, build-binaries]
     runs-on: depot-ubuntu-latest,dagger=0.18.9
     concurrency:
       group: upload-to-miren-${{ github.ref_name }}
