@@ -18,6 +18,13 @@ import (
 	"miren.dev/runtime/clientconfig"
 )
 
+// skipAddresses contains addresses that should be skipped when trying to connect
+var skipAddresses = map[string]bool{
+	"0.0.0.0":   true,
+	"127.0.0.1": true,
+	"::1":       true,
+}
+
 func ConfigBind(ctx *Context, opts struct {
 	Identity string `short:"i" long:"identity" required:"true" description:"Name of the identity to use"`
 	Cluster  string `short:"c" long:"cluster" description:"Name of the cluster to create (optional - will list available)"`
@@ -82,6 +89,21 @@ func ConfigBind(ctx *Context, opts struct {
 		var workingAddress string
 
 		for _, addr := range selectedCluster.APIAddresses {
+			// Check if this address should be skipped
+			// Parse the host from the address (handle both with and without port)
+			host, _, _ := net.SplitHostPort(addr)
+			if host == "" {
+				// No port in the address, use as-is
+				host = addr
+			}
+			// Strip brackets from IPv6 addresses
+			host = strings.Trim(host, "[]")
+
+			if skipAddresses[host] {
+				ctx.Info("Skipping localhost address %s", addr)
+				continue
+			}
+
 			ctx.Info("Trying to connect to %s...", addr)
 			cert, fingerprint, err := extractTLSCertificate(ctx, addr)
 			if err != nil {
