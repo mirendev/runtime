@@ -131,6 +131,47 @@ func ConfigBind(ctx *Context, opts struct {
 			break
 		}
 
+		// If all normal addresses failed, try localhost as a fallback
+		if workingAddress == "" {
+			ctx.Info("All cluster addresses failed, trying localhost as fallback...")
+
+			// Try common localhost addresses with default port
+			localhostAddresses := []string{
+				"127.0.0.1:8443",
+				"[::1]:8443",
+				"0.0.0.0:8443",
+			}
+
+			for _, addr := range localhostAddresses {
+				ctx.Info("Trying localhost address %s...", addr)
+				cert, fingerprint, err := extractTLSCertificate(ctx, addr)
+				if err != nil {
+					lastErr = err
+					continue
+				}
+
+				// Check fingerprint if we have an expected one
+				if selectedCluster.CACertFingerprint != "" {
+					if !strings.EqualFold(selectedCluster.CACertFingerprint, fingerprint) {
+						ctx.Warn("Certificate fingerprint mismatch for %s", addr)
+						ctx.Warn("Expected: %s", selectedCluster.CACertFingerprint)
+						ctx.Warn("Actual:   %s", fingerprint)
+						lastErr = fmt.Errorf("certificate fingerprint verification failed for %s", addr)
+						continue
+					}
+					ctx.Info("Certificate fingerprint verified for %s", addr)
+				}
+
+				// Successfully connected and verified
+				caCert = cert
+				actualFingerprint = fingerprint
+				workingAddress = addr
+				opts.Address = addr
+				ctx.Completed("Successfully connected to localhost at %s", addr)
+				break
+			}
+		}
+
 		if workingAddress == "" {
 			if lastErr != nil {
 				return fmt.Errorf("failed to connect to any cluster address: %w", lastErr)
