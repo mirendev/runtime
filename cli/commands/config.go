@@ -4,7 +4,6 @@ import (
 	"errors"
 
 	"miren.dev/runtime/clientconfig"
-	"miren.dev/runtime/pkg/mapx"
 )
 
 type ConfigCentric struct {
@@ -74,17 +73,16 @@ func ConfigInfo(ctx *Context, opts struct {
 		return err
 	}
 
-	for name, ccfg := range mapx.StableOrder(cfg.Clusters) {
+	return cfg.IterateClusters(func(name string, ccfg *clientconfig.ClusterConfig) error {
 		prefix := " "
 		if opts.Cluster != "" {
 			if name == opts.Cluster {
 				prefix = "*"
 			}
-		} else if name == cfg.ActiveCluster {
+		} else if name == cfg.ActiveCluster() {
 			prefix = "*"
 		}
 		ctx.Printf("%s %s at %s\n", prefix, name, ccfg.Hostname)
-	}
-
-	return nil
+		return nil
+	})
 }

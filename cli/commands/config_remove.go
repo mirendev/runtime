@@ -2,7 +2,6 @@ package commands
 
 import (
 	"fmt"
-	"sort"
 )
 
 func ConfigRemove(ctx *Context, opts struct {
@@ -18,7 +17,7 @@ func ConfigRemove(ctx *Context, opts struct {
 	}
 
 	// Check if there's only one cluster
-	if len(cfg.Clusters) <= 1 {
+	if cfg.GetClusterCount() <= 1 {
 		return fmt.Errorf("cannot remove the last cluster")
 	}
 
@@ -27,20 +26,16 @@ func ConfigRemove(ctx *Context, opts struct {
 	// If no cluster name provided, show interactive menu
 	if clusterName == "" {
 		// Get sorted list of cluster names
-		clusterNames := make([]string, 0, len(cfg.Clusters))
-		for name := range cfg.Clusters {
-			clusterNames = append(clusterNames, name)
-		}
-		sort.Strings(clusterNames)
+		clusterNames := cfg.GetClusterNames()
 
 		// Use the shared cluster selection with dimming for active cluster
-		selected, err := SelectCluster(ctx, "Select a cluster to remove:", clusterNames, cfg.ActiveCluster, true)
+		selected, err := SelectCluster(ctx, "Select a cluster to remove:", clusterNames, cfg.ActiveCluster(), true)
 		if err != nil {
 			// If we can't run interactive mode (no TTY), show available clusters
 			ctx.Printf("Cannot run interactive mode. Available clusters:\n")
 			for _, name := range clusterNames {
 				prefix := "  "
-				if name == cfg.ActiveCluster {
+				if name == cfg.ActiveCluster() {
 					prefix = "* "
 				}
 				ctx.Printf("%s%s\n", prefix, name)
@@ -58,16 +53,13 @@ func ConfigRemove(ctx *Context, opts struct {
 	}
 
 	// Check if the cluster exists
-	if _, exists := cfg.Clusters[clusterName]; !exists {
-		availableClusters := make([]string, 0, len(cfg.Clusters))
-		for name := range cfg.Clusters {
-			availableClusters = append(availableClusters, name)
-		}
+	if !cfg.HasCluster(clusterName) {
+		availableClusters := cfg.GetClusterNames()
 		return fmt.Errorf("cluster %q not found. Available clusters: %v", clusterName, availableClusters)
 	}
 
 	// Check if trying to remove the active cluster
-	if clusterName == cfg.ActiveCluster {
+	if clusterName == cfg.ActiveCluster() {
 		return fmt.Errorf("cannot remove the active cluster %q. Please switch to another cluster first", clusterName)
 	}
 
@@ -79,7 +71,10 @@ func ConfigRemove(ctx *Context, opts struct {
 	}
 
 	// Remove the cluster
-	delete(cfg.Clusters, clusterName)
+	err = cfg.RemoveCluster(clusterName)
+	if err != nil {
+		return err
+	}
 
 	// Save the configuration
 	err = cfg.Save()

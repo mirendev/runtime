@@ -685,10 +685,19 @@ func writeLocalClusterConfig(ctx *Context, cc *caauth.ClientCertificate, address
 		}
 	}
 
-	// Create the local cluster config
-	localConfigPath := filepath.Join(configDirPath, "50-local.yaml")
+	// Load or create the main client config
+	mainConfig, err := clientconfig.LoadConfig()
+	if err != nil {
+		// If no config exists, create a new one
+		if err == clientconfig.ErrNoConfig {
+			mainConfig = clientconfig.NewConfig()
+		} else {
+			return fmt.Errorf("failed to load client config: %w", err)
+		}
+	}
 
-	lcfg := &clientconfig.Config{
+	// Create the local cluster config data
+	leafConfigData := &clientconfig.ConfigData{
 		Clusters: map[string]*clientconfig.ClusterConfig{
 			clusterName: {
 				Hostname:   address,
@@ -699,11 +708,16 @@ func writeLocalClusterConfig(ctx *Context, cc *caauth.ClientCertificate, address
 		},
 	}
 
-	if err := lcfg.SaveTo(localConfigPath); err != nil {
+	// Add as a leaf config (this will be saved to clientconfig.d/50-local.yaml)
+	mainConfig.SetLeafConfig("50-local", leafConfigData)
+
+	// Save the main config (which will also save the leaf config)
+	if err := mainConfig.Save(); err != nil {
 		return fmt.Errorf("failed to save local cluster config: %w", err)
 	}
 
-	// Fix file ownership if running under sudo
+	// Fix file ownership for the created files if running under sudo
+	localConfigPath := filepath.Join(configDirPath, "50-local.yaml")
 	if err := fixOwnershipIfSudo(ctx, localConfigPath); err != nil {
 		ctx.Log.Warn("failed to fix config file ownership", "error", err)
 	}

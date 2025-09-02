@@ -48,8 +48,8 @@ func DebugConnection(ctx *Context, opts struct {
 		testServer = opts.Server
 	} else if opts.Cluster != "" && config != nil {
 		// Use cluster's hostname
-		cluster, exists := config.Clusters[opts.Cluster]
-		if !exists {
+		cluster, err := config.GetCluster(opts.Cluster)
+		if err != nil {
 			ctx.Warn("Cluster '%s' not found in config", opts.Cluster)
 			return fmt.Errorf("cluster not found")
 		}
@@ -97,8 +97,8 @@ func DebugConnection(ctx *Context, opts struct {
 	} else if opts.Cluster != "" {
 		// Use identity from cluster
 		if config != nil {
-			cluster, exists := config.Clusters[opts.Cluster]
-			if !exists {
+			cluster, err := config.GetCluster(opts.Cluster)
+			if err != nil {
 				ctx.Warn("Cluster '%s' not found in config", opts.Cluster)
 				return fmt.Errorf("cluster not found")
 			}

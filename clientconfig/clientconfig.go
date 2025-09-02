@@ -42,70 +42,237 @@ type ClusterConfig struct {
 
 // Config represents the complete client configuration
 type Config struct {
-	ActiveCluster string                     `yaml:"active_cluster,omitempty"`
-	Clusters      map[string]*ClusterConfig  `yaml:"clusters,omitempty"`
-	Identities    map[string]*IdentityConfig `yaml:"identities,omitempty"`
+	active     string
+	clusters   map[string]*ClusterConfig
+	identities map[string]*IdentityConfig
 
 	// The path to the config file that was loaded, if any.
 	sourcePath string
+
+	// Leaf configs loaded from config.d directory
+	// These are kept separate and checked when accessing clusters/identities
+	leafConfigs []*Config
+
+	// Unsaved leaf configs that need to be written to clientconfig.d/
+	// Map of filename -> ConfigData
+	unsavedLeafConfigs map[string]*ConfigData
+}
+
+// ConfigData is used for YAML unmarshaling to handle private fields
+type ConfigData struct {
+	Active     string                     `yaml:"active_cluster,omitempty"`
+	Clusters   map[string]*ClusterConfig  `yaml:"clusters,omitempty"`
+	Identities map[string]*IdentityConfig `yaml:"identities,omitempty"`
+}
+
+// UnmarshalYAML implements the yaml.Unmarshaler interface
+func (c *Config) UnmarshalYAML(unmarshal func(interface{}) error) error {
+	var temp ConfigData
+	if err := unmarshal(&temp); err != nil {
+		return err
+	}
+
+	c.active = temp.Active
+	c.clusters = temp.Clusters
+	c.identities = temp.Identities
+
+	return nil
+}
+
+// MarshalYAML implements the yaml.Marshaler interface
+func (c *Config) MarshalYAML() (interface{}, error) {
+	return &ConfigData{
+		Active:     c.active,
+		Clusters:   c.clusters,
+		Identities: c.identities,
+	}, nil
 }
 
 func NewConfig() *Config {
 	return &Config{
-		Clusters:   make(map[string]*ClusterConfig),
-		Identities: make(map[string]*IdentityConfig),
+		clusters:           make(map[string]*ClusterConfig),
+		identities:         make(map[string]*IdentityConfig),
+		unsavedLeafConfigs: make(map[string]*ConfigData),
 	}
 }
 
 // IsEmpty checks if the configuration has no clusters defined
 func (c *Config) IsEmpty() bool {
-	return len(c.Clusters) == 0
+	// Check main config
+	if len(c.clusters) > 0 {
+		return false
+	}
+
+	if len(c.identities) > 0 {
+		return false
+	}
+
+	// Check leaf configs
+	for _, leafConfig := range c.leafConfigs {
+		if len(leafConfig.clusters) > 0 {
+			return false
+		}
+
+		if len(leafConfig.identities) > 0 {
+			return false
+		}
+	}
+
+	return true
 }
 
 // Validate checks if the configuration is valid
 func (c *Config) Validate() error {
-	if c.ActiveCluster != "" {
-		if _, exists := c.Clusters[c.ActiveCluster]; !exists {
-			return fmt.Errorf("active cluster %q not found in configured clusters", c.ActiveCluster)
+	if c.active != "" {
+		if !c.HasCluster(c.active) {
+			return fmt.Errorf("active cluster %q not found in configured clusters", c.active)
 		}
 	}
 	return nil
 }
 
+// ActiveCluster returns the name of the active cluster
+func (c *Config) ActiveCluster() string {
+	return c.active
+}
+
 // GetActiveCluster returns the active cluster configuration
 func (c *Config) GetActiveCluster() (*ClusterConfig, error) {
-	if c.ActiveCluster == "" {
+	if c.active == "" {
 		return nil, fmt.Errorf("no active cluster configured")
 	}
-	return c.GetCluster(c.ActiveCluster)
+	return c.GetCluster(c.active)
 }
 
 // GetIdentity returns an identity configuration by name
 func (c *Config) GetIdentity(name string) (*IdentityConfig, error) {
-	if c.Identities == nil {
-		return nil, fmt.Errorf("no identities configured")
+	// Check leaf configs first (they override main config)
+	for _, leafConfig := range c.leafConfigs {
+		if leafIdentity, exists := leafConfig.identities[name]; exists {
+			return leafIdentity, nil
+		}
 	}
-	identity, exists := c.Identities[name]
-	if !exists {
-		return nil, fmt.Errorf("identity %q not found", name)
+
+	// Then check main config
+	identity, exists := c.identities[name]
+	if exists {
+		return identity, nil
 	}
-	return identity, nil
+
+	return nil, fmt.Errorf("identity %q not found", name)
 }
 
 // SetIdentity adds or updates an identity configuration
 func (c *Config) SetIdentity(name string, identity *IdentityConfig) {
-	if c.Identities == nil {
-		c.Identities = make(map[string]*IdentityConfig)
+	if c.identities == nil {
+		c.identities = make(map[string]*IdentityConfig)
 	}
-	c.Identities[name] = identity
+	c.identities[name] = identity
+
+	// SetIdentity always modifies the main config, never leaf configs
+}
+
+// SetLeafConfig adds or updates a leaf config that will be saved to clientconfig.d/name.yaml
+func (c *Config) SetLeafConfig(name string, configData *ConfigData) {
+	if c.unsavedLeafConfigs == nil {
+		c.unsavedLeafConfigs = make(map[string]*ConfigData)
+	}
+
+	// Store the config data to be saved later
+	c.unsavedLeafConfigs[name] = configData
+
+	// Create a Config from ConfigData and add to leafConfigs for immediate availability
+	leafConfig := &Config{
+		active:     configData.Active,
+		clusters:   configData.Clusters,
+		identities: configData.Identities,
+		sourcePath: name, // Store the name so we can identify this leaf config later
+	}
+
+	// Replace any existing leaf config with the same source name
+	found := false
+	for i, existing := range c.leafConfigs {
+		if existing.sourcePath == name {
+			c.leafConfigs[i] = leafConfig
+			found = true
+			break
+		}
+	}
+
+	// If not found, append to the list
+	if !found {
+		c.leafConfigs = append(c.leafConfigs, leafConfig)
+	}
+
+	// If the main config has no clusters and no active cluster set,
+	// and this leaf config has clusters, set the first cluster as active
+	if len(c.clusters) == 0 && c.active == "" && len(configData.Clusters) > 0 {
+		// Find the first cluster name from the leaf config
+		for clusterName := range configData.Clusters {
+			c.active = clusterName
+			break
+		}
+	}
+}
+
+// HasIdentity checks if an identity exists in the configuration
+func (c *Config) HasIdentity(name string) bool {
+	// First check main config
+	_, exists := c.identities[name]
+	if exists {
+		return true
+	}
+
+	// Then check leaf configs
+	for _, leafConfig := range c.leafConfigs {
+		if _, exists := leafConfig.identities[name]; exists {
+			return true
+		}
+	}
+
+	return false
+}
+
+// GetIdentityNames returns a sorted list of all identity names
+func (c *Config) GetIdentityNames() []string {
+	nameSet := make(map[string]bool)
+
+	// Add names from main config
+	for name := range c.identities {
+		nameSet[name] = true
+	}
+
+	// Add names from leaf configs
+	for _, leafConfig := range c.leafConfigs {
+		for name := range leafConfig.identities {
+			nameSet[name] = true
+		}
+	}
+
+	names := make([]string, 0, len(nameSet))
+	for name := range nameSet {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+// GetIdentityCount returns the number of configured identities
+func (c *Config) GetIdentityCount() int {
+	return len(c.GetIdentityNames())
+}
+
+// HasIdentities returns true if there are any identities configured
+func (c *Config) HasIdentities() bool {
+	return c.GetIdentityCount() > 0
 }
 
 // SetActiveCluster sets the active cluster
 func (c *Config) SetActiveCluster(name string) error {
-	if _, exists := c.Clusters[name]; !exists {
+	if !c.HasCluster(name) {
 		return fmt.Errorf("cannot set active cluster: cluster %q not found in configuration", name)
 	}
-	c.ActiveCluster = name
+	c.active = name
 	return nil
 }
 
@@ -139,12 +306,20 @@ func LoadConfig() (*Config, error) {
 		return config, nil
 	}
 
-	var config Config
+	var (
+		config Config
+		cdata  ConfigData
+	)
+
 	config.sourcePath = configPath
 
-	if err := yaml.Unmarshal(data, &config); err != nil {
+	if err := yaml.Unmarshal(data, &cdata); err != nil {
 		return nil, fmt.Errorf("failed to parse config file: %w", err)
 	}
+
+	config.active = cdata.Active
+	config.clusters = cdata.Clusters
+	config.identities = cdata.Identities
 
 	// Load additional configs from config.d directory
 	if err := loadConfigDir(&config); err != nil {
@@ -229,19 +404,67 @@ func (c *Config) SaveTo(path string) error {
 		return fmt.Errorf("invalid configuration: %w", err)
 	}
 
-	data, err := yaml.Marshal(c)
+	// Save only the main config data (not leaf configs)
+	var cdata ConfigData
+
+	cdata.Active = c.active
+	cdata.Clusters = c.clusters
+	cdata.Identities = c.identities
+	//}
+
+	data, err := yaml.Marshal(cdata)
 	if err != nil {
 		return fmt.Errorf("failed to marshal config: %w", err)
 	}
 
 	if path == "-" {
-		os.Stdout.Write(data)
+		_, err := os.Stdout.Write(data)
+		if err != nil {
+			return fmt.Errorf("failed to write config to stdout: %w", err)
+		}
 		return nil
 	}
 
 	if err := os.WriteFile(path, data, 0600); err != nil {
 		return fmt.Errorf("failed to write config file: %w", err)
 	}
+
+	// Save any unsaved leaf configs to clientconfig.d/
+	if len(c.unsavedLeafConfigs) > 0 {
+		if err := c.saveLeafConfigs(path); err != nil {
+			return fmt.Errorf("failed to save leaf configs: %w", err)
+		}
+	}
+
+	return nil
+}
+
+// saveLeafConfigs saves all unsaved leaf configs to clientconfig.d/ directory
+func (c *Config) saveLeafConfigs(mainConfigPath string) error {
+	// Determine the config.d directory path based on the main config path
+	configDirPath := filepath.Join(filepath.Dir(mainConfigPath), "clientconfig.d")
+
+	// Create the clientconfig.d directory if it doesn't exist
+	if err := os.MkdirAll(configDirPath, 0755); err != nil {
+		return fmt.Errorf("failed to create config.d directory: %w", err)
+	}
+
+	// Save each unsaved leaf config
+	for name, configData := range c.unsavedLeafConfigs {
+		leafPath := filepath.Join(configDirPath, name+".yaml")
+
+		data, err := yaml.Marshal(configData)
+		if err != nil {
+			return fmt.Errorf("failed to marshal leaf config %s: %w", name, err)
+		}
+
+		if err := os.WriteFile(leafPath, data, 0600); err != nil {
+			return fmt.Errorf("failed to write leaf config %s: %w", name, err)
+		}
+	}
+
+	// Clear the unsaved leaf configs since they've been saved
+	c.unsavedLeafConfigs = make(map[string]*ConfigData)
 
 	return nil
 }
@@ -260,51 +483,111 @@ func (c *Config) SaveToHome() error {
 	return c.SaveTo(configPath)
 }
 
-// Merge merges another Config with the current one
-// If updateActiveCluster is true, the ActiveCluster from the other config will override the current one
-// Cluster configurations from the other config will be merged into the current config's clusters
-func (c *Config) Merge(other *Config, updateActiveCluster, force bool) error {
-	if c.Clusters == nil {
-		c.Clusters = make(map[string]*ClusterConfig)
-	}
-
-	if c.Identities == nil {
-		c.Identities = make(map[string]*IdentityConfig)
-	}
-
-	// Merge clusters from other config
-	for name, cluster := range other.Clusters {
-		if _, exists := c.Clusters[name]; exists && !force {
-			return fmt.Errorf("cluster %q already exists in current config, use --force to overwrite", name)
+// GetCluster returns the configuration for a specific cluster
+func (c *Config) GetCluster(name string) (*ClusterConfig, error) {
+	// Check leaf configs first (they override main config)
+	for _, leafConfig := range c.leafConfigs {
+		if leafCluster, exists := leafConfig.clusters[name]; exists {
+			return leafCluster, nil
 		}
-
-		c.Clusters[name] = cluster
 	}
 
-	// Merge identities from other config
-	for name, identity := range other.Identities {
-		if _, exists := c.Identities[name]; exists && !force {
-			return fmt.Errorf("identity %q already exists in current config, use --force to overwrite", name)
+	// Then check main config
+	cluster, exists := c.clusters[name]
+	if exists {
+		return cluster, nil
+	}
+
+	return nil, fmt.Errorf("cluster %q not found in configuration", name)
+}
+
+// HasCluster checks if a cluster exists in the configuration
+func (c *Config) HasCluster(name string) bool {
+	// First check main config
+	_, exists := c.clusters[name]
+	if exists {
+		return true
+	}
+
+	// Then check leaf configs
+	for _, leafConfig := range c.leafConfigs {
+		if _, exists := leafConfig.clusters[name]; exists {
+			return true
 		}
-
-		c.Identities[name] = identity
 	}
 
-	// Update active cluster if requested and other config has one
-	if c.ActiveCluster == "" || (updateActiveCluster && other.ActiveCluster != "") {
-		c.ActiveCluster = other.ActiveCluster
+	return false
+}
+
+// SetCluster adds or updates a cluster in the configuration
+func (c *Config) SetCluster(name string, cluster *ClusterConfig) {
+	if c.clusters == nil {
+		c.clusters = make(map[string]*ClusterConfig)
 	}
+	c.clusters[name] = cluster
+
+	// SetCluster always modifies the main config, never leaf configs
+}
+
+// RemoveCluster removes a cluster from the configuration
+func (c *Config) RemoveCluster(name string) error {
+	if !c.HasCluster(name) {
+		return fmt.Errorf("cluster %q not found in configuration", name)
+	}
+
+	// Don't allow removing the active cluster
+	if c.active == name {
+		return fmt.Errorf("cannot remove active cluster %q", name)
+	}
+
+	delete(c.clusters, name)
 
 	return nil
 }
 
-// GetCluster returns the configuration for a specific cluster
-func (c *Config) GetCluster(name string) (*ClusterConfig, error) {
-	cluster, exists := c.Clusters[name]
-	if !exists {
-		return nil, fmt.Errorf("cluster %q not found in configuration", name)
+// GetClusterNames returns a sorted list of all cluster names
+func (c *Config) GetClusterNames() []string {
+	nameSet := make(map[string]bool)
+
+	// Add names from main config
+	for name := range c.clusters {
+		nameSet[name] = true
 	}
-	return cluster, nil
+
+	// Add names from leaf configs
+	for _, leafConfig := range c.leafConfigs {
+		for name := range leafConfig.clusters {
+			nameSet[name] = true
+		}
+	}
+
+	names := make([]string, 0, len(nameSet))
+	for name := range nameSet {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+// GetClusterCount returns the number of clusters in the configuration
+func (c *Config) GetClusterCount() int {
+	return len(c.GetClusterNames())
+}
+
+// IterateClusters calls the provided function for each cluster in sorted order
+// If the function returns an error, iteration stops and the error is returned
+func (c *Config) IterateClusters(fn func(name string, cluster *ClusterConfig) error) error {
+	names := c.GetClusterNames()
+	for _, name := range names {
+		cluster, err := c.GetCluster(name)
+		if err != nil {
+			return err
+		}
+		if err := fn(name, cluster); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // loadConfigDir loads additional config files from the config.d directory
@@ -340,22 +623,32 @@ func loadConfigDir(config *Config) error {
 	}
 	sort.Strings(yamlFiles)
 
-	// Load and merge each config file
+	// Load each config file as a leaf config
 	for _, file := range yamlFiles {
 		data, err := os.ReadFile(file)
 		if err != nil {
 			return fmt.Errorf("failed to read config file %s: %w", file, err)
 		}
 
-		var additionalConfig Config
-		if err := yaml.Unmarshal(data, &additionalConfig); err != nil {
+		var (
+			leafConfig Config
+			cdata      ConfigData
+		)
+
+		if err := yaml.Unmarshal(data, &cdata); err != nil {
 			return fmt.Errorf("failed to parse config file %s: %w", file, err)
 		}
 
-		// Merge the additional config into the main config
-		// Don't update active cluster from additional configs by default
-		if err := config.Merge(&additionalConfig, false, true); err != nil {
-			return fmt.Errorf("failed to merge config from %s: %w", file, err)
+		leafConfig.active = cdata.Active
+		leafConfig.clusters = cdata.Clusters
+		leafConfig.identities = cdata.Identities
+
+		// Store the leaf config separately
+		config.leafConfigs = append(config.leafConfigs, &leafConfig)
+
+		// If main config has no active cluster, use one from config.d
+		if config.active == "" && leafConfig.active != "" {
+			config.active = leafConfig.active
 		}
 	}
 

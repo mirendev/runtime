@@ -34,31 +34,29 @@ func Local(cc *caauth.ClientCertificate, listenAddr string) *Config {
 		}
 	}
 
-	return &Config{
-		ActiveCluster: "local",
+	cfg := NewConfig()
+	cfg.SetCluster("local", &ClusterConfig{
+		Hostname:   addr,
+		CACert:     string(cc.CACert),
+		ClientCert: string(cc.CertPEM),
+		ClientKey:  string(cc.KeyPEM),
+	})
+	cfg.SetActiveCluster("local")
 
-		Clusters: map[string]*ClusterConfig{
-			"local": {
-				Hostname:   addr,
-				CACert:     string(cc.CACert),
-				ClientCert: string(cc.CertPEM),
-				ClientKey:  string(cc.KeyPEM),
-			},
-		},
-	}
+	return cfg
 }
 
 func (c *Config) RPCOptions(ctx context.Context) ([]rpc.StateOption, error) {
-	if c.ActiveCluster == "" {
+	if c.ActiveCluster() == "" {
 		return nil, nil
 	}
 
-	active, exists := c.Clusters[c.ActiveCluster]
-	if !exists {
+	active, err := c.GetCluster(c.ActiveCluster())
+	if err != nil {
 		return nil, nil
 	}
 
-	return active.RPCOptionsWithName(ctx, c, c.ActiveCluster)
+	return active.RPCOptionsWithName(ctx, c, c.ActiveCluster())
 }
 
 func (c *Config) State(ctx context.Context, opts ...rpc.StateOption) (*rpc.State, error) {
