@@ -22,9 +22,21 @@ import (
 	"miren.dev/runtime/pkg/rpc"
 )
 
+const (
+	timeoutMessage = "Request timeout"
+	// leaseAcquisitionTimeout is the maximum time to wait for sandbox boot
+	// This is longer than request timeout to prevent dangling resources
+	leaseAcquisitionTimeout = 2 * time.Minute
+)
+
+type IngressConfig struct {
+	RequestTimeout time.Duration
+}
+
 type Server struct {
 	Log *slog.Logger
 
+	config        IngressConfig
 	rpcClient     rpc.Client
 	eac           *entityserver_v1alpha.EntityAccessClient
 	ingressClient *ingress.Client
@@ -45,14 +57,23 @@ type appUsage struct {
 func NewServer(
 	ctx context.Context,
 	log *slog.Logger,
+	config IngressConfig,
 	rpcClient rpc.Client,
 	aa activator.AppActivator,
 	httpMetrics *metrics.HTTPMetrics,
 ) *Server {
 	eac := entityserver_v1alpha.NewEntityAccessClient(rpcClient)
 
+	if config.RequestTimeout <= 0 {
+		if config.RequestTimeout < 0 {
+			log.Warn("invalid request timeout; using default 60s", "configured", config.RequestTimeout)
+		}
+		config.RequestTimeout = 60 * time.Second
+	}
+
 	serv := &Server{
 		Log:           log.With("module", "httpingress"),
+		config:        config,
 		rpcClient:     rpcClient,
 		eac:           eac,
 		ingressClient: ingress.NewClient(log, rpcClient),
@@ -194,41 +215,55 @@ func (h *Server) releaseLease(ctx context.Context, lease *lease) {
 }
 
 func (h *Server) ServeHTTP(w http.ResponseWriter, req *http.Request) {
-	// Start tracking request time
 	start := time.Now()
 
-	// Wrap response writer to capture status and size
-	rw := &responseWriter{
-		ResponseWriter: w,
-		statusCode:     http.StatusOK, // default if not explicitly set
+	var appName string
+	var statusCode int
+	var bytesWritten int
+
+	handler := http.TimeoutHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		rw := &responseWriter{
+			ResponseWriter: w,
+			statusCode:     http.StatusOK, // default if not explicitly set
+		}
+
+		h.serveHTTPWithMetrics(rw, r, &appName)
+
+		statusCode = rw.statusCode
+		bytesWritten = rw.bytesWritten
+	}), h.config.RequestTimeout, timeoutMessage)
+
+	handler.ServeHTTP(w, req)
+
+	// TimeoutHandler writes 503 on timeout, but our metrics would show the
+	// original status. Check if timeout occurred and override metrics accordingly.
+	if err := req.Context().Err(); err == context.DeadlineExceeded {
+		statusCode = http.StatusServiceUnavailable
+		if appName == "" {
+			appName = "unknown"
+		}
 	}
 
-	// Variable to capture app name from serveHTTPWithMetrics
-	var appName string
-
-	// Ensure we record metrics at the end
-	defer func() {
-		if h.httpMetrics != nil && appName != "" {
-			h.recordHTTPMetrics(appName, req, rw, start)
+	if h.httpMetrics != nil {
+		if appName == "" {
+			appName = "unknown"
 		}
-	}()
 
-	h.serveHTTPWithMetrics(rw, req, &appName)
-}
-
-func (h *Server) recordHTTPMetrics(appName string, req *http.Request, rw *responseWriter, start time.Time) {
-	duration := time.Since(start)
-	err := h.httpMetrics.RecordRequest(req.Context(), metrics.HTTPRequest{
-		Timestamp:    start,
-		App:          appName,
-		Method:       req.Method,
-		Path:         req.URL.Path,
-		StatusCode:   rw.statusCode,
-		DurationMs:   duration.Milliseconds(),
-		ResponseSize: int64(rw.bytesWritten),
-	})
-	if err != nil {
-		h.Log.Error("Failed to record HTTP request", "error", err, "app", appName)
+		duration := time.Since(start)
+		// Use background context to ensure metrics are recorded even if request context is cancelled
+		metricsCtx := context.Background()
+		err := h.httpMetrics.RecordRequest(metricsCtx, metrics.HTTPRequest{
+			Timestamp:    start,
+			App:          appName,
+			Method:       req.Method,
+			Path:         req.URL.Path,
+			StatusCode:   statusCode,
+			DurationMs:   duration.Milliseconds(),
+			ResponseSize: int64(bytesWritten),
+		})
+		if err != nil {
+			h.Log.Error("Failed to record HTTP request", "error", err, "app", appName)
+		}
 	}
 }
 
@@ -333,7 +368,9 @@ func (h *Server) serveHTTPWithMetrics(w http.ResponseWriter, req *http.Request, 
 	var av core_v1alpha.AppVersion
 	av.Decode(vr.Entity().Entity())
 
-	actContext, actCancel := context.WithCancel(context.Background())
+	// Give lease acquisition a generous timeout to complete sandbox boot
+	// even if the client request times out. This prevents dangling resources.
+	actContext, actCancel := context.WithTimeout(context.Background(), leaseAcquisitionTimeout)
 	defer actCancel()
 
 	actLease, err := h.aa.AcquireLease(actContext, &av, "http", "web")

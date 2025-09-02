@@ -181,7 +181,10 @@ func TestServer(t *testing.T) error {
 
 	aa := co.Activator()
 
-	hs := httpingress.NewServer(ctx, log, client, aa, nil)
+	ingressConfig := httpingress.IngressConfig{
+		RequestTimeout: 60 * time.Second, // Default timeout for tests
+	}
+	hs := httpingress.NewServer(ctx, log, ingressConfig, client, aa, nil)
 
 	reg.Register("app-activator", aa)
 	reg.Register("resolver", res)

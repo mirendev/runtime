@@ -57,6 +57,7 @@ func Server(ctx *Context, opts struct {
 	AdditionalNames           []string `long:"dns-names" description:"Additional DNS names assigned to the server cert"`
 	AdditionalIPs             []string `long:"ips" description:"Additional IPs assigned to the server cert"`
 	StandardTLS               bool     `long:"serve-tls" description:"Expose the http ingress on standard TLS ports"`
+	HTTPRequestTimeout        int      `long:"http-request-timeout" description:"HTTP request timeout in seconds" default:"60"`
 	StartEtcd                 bool     `long:"start-etcd" description:"Start embedded etcd server"`
 	EtcdClientPort            int      `long:"etcd-client-port" description:"Etcd client port" default:"12379"`
 	EtcdPeerPort              int      `long:"etcd-peer-port" description:"Etcd peer port" default:"12380"`
@@ -521,7 +522,15 @@ func Server(ctx *Context, opts struct {
 
 	aa := co.Activator()
 
-	hs := httpingress.NewServer(ctx, ctx.Log, client, aa, &httpMetrics)
+	if opts.HTTPRequestTimeout <= 0 {
+		ctx.Log.Warn("invalid http-request-timeout; using default 60s", "value", opts.HTTPRequestTimeout)
+		opts.HTTPRequestTimeout = 60
+	}
+
+	ingressConfig := httpingress.IngressConfig{
+		RequestTimeout: time.Duration(opts.HTTPRequestTimeout) * time.Second,
+	}
+	hs := httpingress.NewServer(ctx, ctx.Log, ingressConfig, client, aa, &httpMetrics)
 
 	reg.Register("app-activator", aa)
 	reg.Register("resolver", res)
