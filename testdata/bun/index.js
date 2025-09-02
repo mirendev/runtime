@@ -14,6 +14,17 @@ const server = Bun.serve({
       console.error("Failed to write to log file:", error);
     }
 
+    // Parse the URL to get the pathname
+    const url = new URL(request.url);
+    
+    // Handle /env endpoint
+    if (url.pathname === "/env") {
+      // Return environment variables as JSON
+      return new Response(JSON.stringify(process.env, null, 2), {
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+
     return new Response("Welcome to Bun!");
   },
 });

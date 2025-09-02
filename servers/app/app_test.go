@@ -9,7 +9,6 @@ import (
 	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/api/entityserver"
 	"miren.dev/runtime/metrics"
-	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/testutils"
 	"miren.dev/runtime/pkg/rpc"
 )
@@ -185,7 +184,7 @@ func TestSetConfiguration_DuplicateEnvVars(t *testing.T) {
 	})
 }
 
-func TestSetConfiguration_CleanupExistingDuplicates(t *testing.T) {
+func TestSetConfiguration_EnvVarDeletion(t *testing.T) {
 	ctx := context.Background()
 
 	// Setup in-memory entity server
@@ -208,8 +207,8 @@ func TestSetConfiguration_CleanupExistingDuplicates(t *testing.T) {
 		Client: rpc.LocalClient(app_v1alpha.AdaptCrud(appInfo)),
 	}
 
-	// Create a test app using the raw client
-	appName := "test-app-duplicates"
+	// Create a test app
+	appName := "test-app-delete"
 	app := &core_v1alpha.App{}
 	appID, err := inmem.Client.Create(ctx, appName, app)
 	if err != nil {
@@ -217,85 +216,32 @@ func TestSetConfiguration_CleanupExistingDuplicates(t *testing.T) {
 	}
 	app.ID = appID
 
-	// Simulate an entity with existing duplicates by directly creating an AppVersion
-	// with duplicate environment variables (as would exist from the old buggy code)
-	t.Run("SimulateExistingDuplicates", func(t *testing.T) {
-		appVer := &core_v1alpha.AppVersion{
-			ID:      entity.Id(""), // Will be set by Create
-			App:     appID,
-			Version: appName + "-v1",
-			Config: core_v1alpha.Config{
-				// Directly set duplicate variables to simulate the buggy state
-				// The bug would have appended duplicates, so we simulate that here
-				Variable: []core_v1alpha.Variable{
-					{Key: "FOO", Value: "first", Sensitive: false},
-					{Key: "BAR", Value: "baz", Sensitive: false},
-					{Key: "FOO", Value: "second", Sensitive: false}, // Duplicate!
-					{Key: "SECRET", Value: "hidden", Sensitive: true},
-					{Key: "FOO", Value: "third", Sensitive: true},      // Another duplicate!
-					{Key: "SECRET", Value: "updated", Sensitive: true}, // Duplicate!
-				},
-			},
-		}
-
-		// Create the version with duplicates using raw client
-		versionID, err := inmem.Client.Create(ctx, appVer.Version, appVer)
-		if err != nil {
-			t.Fatalf("failed to create app version: %v", err)
-		}
-		appVer.ID = versionID
-
-		// Update the app to point to this version
-		app.ActiveVersion = versionID
-		err = inmem.Client.Update(ctx, app)
-		if err != nil {
-			t.Fatalf("failed to update app: %v", err)
-		}
-
-		// Verify duplicates exist by checking entity directly
-		var appCheck core_v1alpha.App
-		err = inmem.Client.Get(ctx, appName, &appCheck)
-		if err != nil {
-			t.Fatalf("failed to get app: %v", err)
-		}
-
-		var appVerCheck core_v1alpha.AppVersion
-		err = inmem.Client.GetById(ctx, appCheck.ActiveVersion, &appVerCheck)
-		if err != nil {
-			t.Fatalf("failed to get app version: %v", err)
-		}
-
-		envVars := appVerCheck.Config.Variable
-		t.Logf("Initial state with duplicates: %d total env vars", len(envVars))
-		for i, ev := range envVars {
-			t.Logf("  [%d] %s = %s (sensitive: %v)", i, ev.Key, ev.Value, ev.Sensitive)
-		}
-
-		// We should have 6 total variables (including duplicates)
-		if len(envVars) != 6 {
-			t.Errorf("expected 6 env vars with duplicates, got %d", len(envVars))
-		}
-	})
-
-	// Now test that SetConfiguration cleans up the duplicates
-	// The last value should win for each key
-	t.Run("CleanupDuplicatesLastValueWins", func(t *testing.T) {
-		// Add a new env var to trigger SetConfiguration
+	// Step 1: Set initial env vars
+	t.Run("SetInitialVars", func(t *testing.T) {
 		env1 := &app_v1alpha.NamedValue{}
-		env1.SetKey("NEW_VAR")
-		env1.SetValue("new_value")
+		env1.SetKey("VAR1")
+		env1.SetValue("value1")
 		env1.SetSensitive(false)
 
-		cfg := &app_v1alpha.Configuration{}
-		cfg.SetEnvVars([]*app_v1alpha.NamedValue{env1})
+		env2 := &app_v1alpha.NamedValue{}
+		env2.SetKey("VAR2")
+		env2.SetValue("value2")
+		env2.SetSensitive(false)
 
-		// Use the client to set configuration
+		env3 := &app_v1alpha.NamedValue{}
+		env3.SetKey("VAR3")
+		env3.SetValue("value3")
+		env3.SetSensitive(true)
+
+		cfg := &app_v1alpha.Configuration{}
+		cfg.SetEnvVars([]*app_v1alpha.NamedValue{env1, env2, env3})
+
 		_, err := client.SetConfiguration(ctx, appName, cfg)
 		if err != nil {
-			t.Fatalf("failed to set configuration: %v", err)
+			t.Fatalf("failed to set initial configuration: %v", err)
 		}
 
-		// Get configuration and check that duplicates are cleaned up
+		// Verify all 3 vars are set
 		var appCheck core_v1alpha.App
 		err = ec.Get(ctx, appName, &appCheck)
 		if err != nil {
@@ -308,51 +254,103 @@ func TestSetConfiguration_CleanupExistingDuplicates(t *testing.T) {
 			t.Fatalf("failed to get app version: %v", err)
 		}
 
-		envVars := appVerCheck.Config.Variable
-		t.Logf("After cleanup: %d total env vars", len(envVars))
-		for i, ev := range envVars {
-			t.Logf("  [%d] %s = %s (sensitive: %v)", i, ev.Key, ev.Value, ev.Sensitive)
+		if len(appVerCheck.Config.Variable) != 3 {
+			t.Errorf("expected 3 env vars, got %d", len(appVerCheck.Config.Variable))
+		}
+	})
+
+	// Step 2: Delete one var (VAR2)
+	t.Run("DeleteOneVar", func(t *testing.T) {
+		// Send only VAR1 and VAR3, effectively deleting VAR2
+		env1 := &app_v1alpha.NamedValue{}
+		env1.SetKey("VAR1")
+		env1.SetValue("value1")
+		env1.SetSensitive(false)
+
+		env3 := &app_v1alpha.NamedValue{}
+		env3.SetKey("VAR3")
+		env3.SetValue("value3")
+		env3.SetSensitive(true)
+
+		cfg := &app_v1alpha.Configuration{}
+		cfg.SetEnvVars([]*app_v1alpha.NamedValue{env1, env3})
+
+		_, err := client.SetConfiguration(ctx, appName, cfg)
+		if err != nil {
+			t.Fatalf("failed to set configuration after deletion: %v", err)
 		}
 
-		// Check that duplicates are removed
-		// We should have: FOO (last value: "third", sensitive: true),
-		// BAR ("baz"), SECRET (last value: "updated"), NEW_VAR ("new_value")
-		if len(envVars) != 4 {
-			t.Errorf("expected 4 env vars after cleanup, got %d", len(envVars))
+		// Verify VAR2 is gone
+		var appCheck core_v1alpha.App
+		err = ec.Get(ctx, appName, &appCheck)
+		if err != nil {
+			t.Fatalf("failed to get app: %v", err)
 		}
 
-		// Verify the last values won
-		expectedVars := map[string]struct {
-			value     string
-			sensitive bool
-		}{
-			"FOO":     {"third", true}, // Last duplicate was sensitive
-			"BAR":     {"baz", false},
-			"SECRET":  {"updated", true}, // Last duplicate value
-			"NEW_VAR": {"new_value", false},
+		var appVerCheck core_v1alpha.AppVersion
+		err = ec.GetById(ctx, appCheck.ActiveVersion, &appVerCheck)
+		if err != nil {
+			t.Fatalf("failed to get app version: %v", err)
 		}
 
-		for _, ev := range envVars {
-			expected, ok := expectedVars[ev.Key]
-			if !ok {
-				t.Errorf("unexpected env var: %s", ev.Key)
-				continue
+		if len(appVerCheck.Config.Variable) != 2 {
+			t.Errorf("expected 2 env vars after deletion, got %d", len(appVerCheck.Config.Variable))
+		}
+
+		// Check that VAR2 is specifically gone
+		for _, ev := range appVerCheck.Config.Variable {
+			if ev.Key == "VAR2" {
+				t.Errorf("VAR2 should have been deleted but still exists")
 			}
-
-			if ev.Value != expected.value {
-				t.Errorf("%s: expected value '%s', got '%s'", ev.Key, expected.value, ev.Value)
-			}
-
-			if ev.Sensitive != expected.sensitive {
-				t.Errorf("%s: expected sensitive=%v, got %v", ev.Key, expected.sensitive, ev.Sensitive)
-			}
-
-			delete(expectedVars, ev.Key)
 		}
 
-		// Check if any expected vars are missing
-		for key := range expectedVars {
-			t.Errorf("missing expected env var: %s", key)
+		// Check that VAR1 and VAR3 still exist
+		hasVar1, hasVar3 := false, false
+		for _, ev := range appVerCheck.Config.Variable {
+			if ev.Key == "VAR1" && ev.Value == "value1" {
+				hasVar1 = true
+			}
+			if ev.Key == "VAR3" && ev.Value == "value3" {
+				hasVar3 = true
+			}
+		}
+		if !hasVar1 {
+			t.Error("VAR1 should still exist after deletion of VAR2")
+		}
+		if !hasVar3 {
+			t.Error("VAR3 should still exist after deletion of VAR2")
+		}
+	})
+
+	// Step 3: Delete all vars
+	t.Run("DeleteAllVars", func(t *testing.T) {
+		// Send empty env var list
+		cfg := &app_v1alpha.Configuration{}
+		cfg.SetEnvVars([]*app_v1alpha.NamedValue{})
+
+		_, err := client.SetConfiguration(ctx, appName, cfg)
+		if err != nil {
+			t.Fatalf("failed to set configuration with empty vars: %v", err)
+		}
+
+		// Verify all vars are gone
+		var appCheck core_v1alpha.App
+		err = ec.Get(ctx, appName, &appCheck)
+		if err != nil {
+			t.Fatalf("failed to get app: %v", err)
+		}
+
+		var appVerCheck core_v1alpha.AppVersion
+		err = ec.GetById(ctx, appCheck.ActiveVersion, &appVerCheck)
+		if err != nil {
+			t.Fatalf("failed to get app version: %v", err)
+		}
+
+		if len(appVerCheck.Config.Variable) != 0 {
+			t.Errorf("expected 0 env vars after deleting all, got %d", len(appVerCheck.Config.Variable))
+			for _, ev := range appVerCheck.Config.Variable {
+				t.Errorf("  unexpected var: %s = %s", ev.Key, ev.Value)
+			}
 		}
 	})
 }

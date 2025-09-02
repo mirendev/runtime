@@ -60,9 +60,30 @@ func AllCommands() map[string]cli.CommandFactory {
 			return Infer("apps", "List all applications", Apps), nil
 		},
 
-		"set": func() (cli.Command, error) {
-			return Infer("set", "Set environment variables for an application", Set), nil
+		"env": func() (cli.Command, error) {
+			return Section("env", "Environment variable management commands"), nil
 		},
+
+		"env set": func() (cli.Command, error) {
+			return Infer("env set", "Set environment variables for an application", EnvSet), nil
+		},
+
+		"env get": func() (cli.Command, error) {
+			return Infer("env get", "Get an environment variable value", EnvGet), nil
+		},
+
+		"env list": func() (cli.Command, error) {
+			return Infer("env list", "List all environment variables", EnvList), nil
+		},
+
+		"env delete": func() (cli.Command, error) {
+			return Infer("env delete", "Delete environment variables", EnvDelete), nil
+		},
+
+		"set": func() (cli.Command, error) {
+			return Infer("set", "Set concurrency for an application", Set), nil
+		},
+
 		"default-route set": func() (cli.Command, error) {
 			return Infer("default-route set", "Set an app as the default route", DefaultRouteSet), nil
 		},
