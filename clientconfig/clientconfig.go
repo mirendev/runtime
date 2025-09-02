@@ -59,7 +59,7 @@ func NewConfig() *Config {
 
 // IsEmpty checks if the configuration has no clusters defined
 func (c *Config) IsEmpty() bool {
-	return len(c.Clusters) == 0
+	return len(c.Clusters) == 0 && len(c.Identities) == 0
 }
 
 // Validate checks if the configuration is valid
