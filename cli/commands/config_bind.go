@@ -18,6 +18,15 @@ import (
 	"miren.dev/runtime/clientconfig"
 )
 
+// skipAddresses contains addresses that should be skipped when trying to connect
+var skipAddresses = map[string]bool{
+	"0.0.0.0":               true,
+	"127.0.0.1":             true,
+	"::1":                   true,
+	"localhost":             true,
+	"localhost.localdomain": true,
+}
+
 func ConfigBind(ctx *Context, opts struct {
 	Identity string `short:"i" long:"identity" required:"true" description:"Name of the identity to use"`
 	Cluster  string `short:"c" long:"cluster" description:"Name of the cluster to create (optional - will list available)"`
@@ -49,7 +58,6 @@ func ConfigBind(ctx *Context, opts struct {
 	}
 
 	// If no cluster name or address provided, query the identity server for available clusters
-	var expectedFingerprint string
 	var caCert string
 	var actualFingerprint string
 	var allAddresses []string
@@ -81,7 +89,21 @@ func ConfigBind(ctx *Context, opts struct {
 		var lastErr error
 		var workingAddress string
 
+		// Try the cluster's advertised addresses first
 		for _, addr := range selectedCluster.APIAddresses {
+			// Check if this address should be skipped
+			// Use normalizeAddress to properly extract the host, handling schemes and ports
+			_, sniHost, err := normalizeAddress(addr)
+			if err != nil {
+				ctx.Warn("Failed to parse address %s: %v", addr, err)
+				lastErr = err
+				continue
+			}
+
+			if skipAddresses[sniHost] {
+				continue
+			}
+
 			ctx.Info("Trying to connect to %s...", addr)
 			cert, fingerprint, err := extractTLSCertificate(ctx, addr)
 			if err != nil {
@@ -89,12 +111,65 @@ func ConfigBind(ctx *Context, opts struct {
 				lastErr = err
 				continue
 			}
-			// Successfully connected
+
+			// Check fingerprint if we have an expected one
+			if selectedCluster.CACertFingerprint != "" {
+				if !strings.EqualFold(selectedCluster.CACertFingerprint, fingerprint) {
+					ctx.Warn("Certificate fingerprint mismatch for %s", addr)
+					ctx.Warn("Expected: %s", selectedCluster.CACertFingerprint)
+					ctx.Warn("Actual:   %s", fingerprint)
+					lastErr = fmt.Errorf("certificate fingerprint verification failed for %s", addr)
+					continue
+				}
+				ctx.Info("Certificate fingerprint verified for %s", addr)
+			}
+
+			// Successfully connected and verified
 			caCert = cert
 			actualFingerprint = fingerprint
 			workingAddress = addr
 			opts.Address = addr
 			break
+		}
+
+		// If all normal addresses failed, try localhost as a fallback
+		if workingAddress == "" {
+			ctx.Info("All cluster addresses failed, trying localhost as fallback...")
+
+			// Try common localhost addresses with default port
+			localhostAddresses := []string{
+				"127.0.0.1:8443",
+				"[::1]:8443",
+			}
+
+			for _, addr := range localhostAddresses {
+				ctx.Info("Trying localhost address %s...", addr)
+				cert, fingerprint, err := extractTLSCertificate(ctx, addr)
+				if err != nil {
+					lastErr = err
+					continue
+				}
+
+				// Check fingerprint if we have an expected one
+				if selectedCluster.CACertFingerprint != "" {
+					if !strings.EqualFold(selectedCluster.CACertFingerprint, fingerprint) {
+						ctx.Warn("Certificate fingerprint mismatch for %s", addr)
+						ctx.Warn("Expected: %s", selectedCluster.CACertFingerprint)
+						ctx.Warn("Actual:   %s", fingerprint)
+						lastErr = fmt.Errorf("certificate fingerprint verification failed for %s", addr)
+						continue
+					}
+					ctx.Info("Certificate fingerprint verified for %s", addr)
+				}
+
+				// Successfully connected and verified
+				caCert = cert
+				actualFingerprint = fingerprint
+				workingAddress = addr
+				opts.Address = addr
+				ctx.Completed("Successfully connected to localhost at %s", addr)
+				break
+			}
 		}
 
 		if workingAddress == "" {
@@ -104,7 +179,6 @@ func ConfigBind(ctx *Context, opts struct {
 			return fmt.Errorf("no addresses available for cluster %s", selectedCluster.Name)
 		}
 
-		expectedFingerprint = selectedCluster.CACertFingerprint
 		if localName != selectedCluster.Name {
 			ctx.Info("Binding cluster '%s' as '%s' (connected to %s)", selectedCluster.Name, localName, workingAddress)
 		} else {
@@ -124,19 +198,6 @@ func ConfigBind(ctx *Context, opts struct {
 	}
 
 	ctx.Completed("Successfully extracted TLS certificate (fingerprint: %s)", actualFingerprint)
-
-	// If we have an expected fingerprint, verify it
-	if expectedFingerprint != "" {
-		// Compare fingerprints (case-insensitive)
-		if !strings.EqualFold(expectedFingerprint, actualFingerprint) {
-			ctx.Warn("Certificate fingerprint mismatch!")
-			ctx.Warn("Expected: %s", expectedFingerprint)
-			ctx.Warn("Actual:   %s", actualFingerprint)
-			return fmt.Errorf("certificate fingerprint verification failed - possible security issue")
-		}
-
-		ctx.Completed("Certificate fingerprint verified")
-	}
 
 	// Create the cluster configuration
 	clusterConfig := &clientconfig.ClusterConfig{
