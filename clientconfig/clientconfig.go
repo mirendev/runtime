@@ -439,6 +439,38 @@ func (c *Config) SaveTo(path string) error {
 	return nil
 }
 
+// sanitizeLeafName normalizes a leaf config name to prevent path traversal and weird filenames
+func sanitizeLeafName(name string) string {
+	// Remove any directory separators and parent directory references
+	name = strings.ReplaceAll(name, "/", "_")
+	name = strings.ReplaceAll(name, "\\", "_")
+	name = strings.ReplaceAll(name, "..", "_")
+
+	// Remove any file extensions to prevent confusion
+	if idx := strings.LastIndex(name, "."); idx > 0 {
+		name = name[:idx]
+	}
+
+	// Replace other potentially problematic characters
+	name = strings.ReplaceAll(name, ":", "_")
+	name = strings.ReplaceAll(name, "*", "_")
+	name = strings.ReplaceAll(name, "?", "_")
+	name = strings.ReplaceAll(name, "\"", "_")
+	name = strings.ReplaceAll(name, "<", "_")
+	name = strings.ReplaceAll(name, ">", "_")
+	name = strings.ReplaceAll(name, "|", "_")
+
+	// Trim any leading/trailing whitespace or underscores
+	name = strings.Trim(name, " _")
+
+	// If the name is empty after sanitization, use a default
+	if name == "" {
+		name = "unnamed"
+	}
+
+	return name
+}
+
 // saveLeafConfigs saves all unsaved leaf configs to clientconfig.d/ directory
 func (c *Config) saveLeafConfigs(mainConfigPath string) error {
 	// Determine the config.d directory path based on the main config path
@@ -451,7 +483,7 @@ func (c *Config) saveLeafConfigs(mainConfigPath string) error {
 
 	// Save each unsaved leaf config
 	for name, configData := range c.unsavedLeafConfigs {
-		leafPath := filepath.Join(configDirPath, name+".yaml")
+		leafPath := filepath.Join(configDirPath, sanitizeLeafName(name)+".yaml")
 
 		data, err := yaml.Marshal(configData)
 		if err != nil {
