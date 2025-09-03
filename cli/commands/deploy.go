@@ -15,6 +15,7 @@ import (
 
 	"miren.dev/runtime/api/build/build_v1alpha"
 	"miren.dev/runtime/appconfig"
+	"miren.dev/runtime/pkg/deploygating"
 	"miren.dev/runtime/pkg/progress/upload"
 	"miren.dev/runtime/pkg/rpc/stream"
 	"miren.dev/runtime/pkg/tarx"
@@ -35,6 +36,15 @@ func Deploy(ctx *Context, opts struct {
 
 	name := opts.App
 	dir := opts.Dir
+
+	// Check if deployment is allowed before proceeding
+	remedy, err := deploygating.CheckDeployAllowed(dir)
+	if err != nil {
+		if remedy != "" {
+			ctx.Printf("Error: %s\n%s\n\n", err, remedy)
+		}
+		return fmt.Errorf("deploy gate check failed: %w", err)
+	}
 
 	ctx.Log.Info("building code", "name", name, "dir", dir)
 
