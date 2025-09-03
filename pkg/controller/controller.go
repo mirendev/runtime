@@ -264,7 +264,7 @@ func (c *ReconcileController) runWorker(ctx context.Context) {
 			updates, err := c.processItem(ctx, event)
 			if err != nil {
 				c.Log.Error("error processing item", "event", event, "error", err)
-				continue
+				// we still try to process updates even if there is an error.
 			}
 
 			if len(updates) > 0 {
@@ -450,10 +450,10 @@ func AdaptController[
 			}
 
 			if err != nil {
-				return nil, fmt.Errorf("failed to process entity: %w", err)
+				err = fmt.Errorf("failed to process entity: %w", err)
 			}
 
-			return entity.Diff(meta.Entity, orig), nil
+			return entity.Diff(meta.Entity, orig), err
 
 		case EventDeleted:
 			if err := cont.Delete(ctx, event.Id); err != nil {
