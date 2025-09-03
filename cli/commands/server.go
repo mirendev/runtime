@@ -52,7 +52,7 @@ func Server(ctx *Context, opts struct {
 	EtcdEndpoints             []string `short:"e" long:"etcd" description:"Etcd endpoints" default:"http://etcd:2379"`
 	EtcdPrefix                string   `short:"p" long:"etcd-prefix" description:"Etcd prefix" default:"/miren"`
 	RunnerId                  string   `short:"r" long:"runner-id" description:"Runner ID" default:"miren"`
-	DataPath                  string   `short:"d" long:"data-path" description:"Data path" default:"/var/lib/miren"`
+	DataPath                  string   `short:"d" long:"data-path" description:"Data path" default:"/var/lib/miren" asm:"data-path"`
 	ReleasePath               string   `long:"release-path" description:"Path to release directory containing binaries"`
 	AdditionalNames           []string `long:"dns-names" description:"Additional DNS names assigned to the server cert"`
 	AdditionalIPs             []string `long:"ips" description:"Additional IPs assigned to the server cert"`
@@ -477,6 +477,7 @@ func Server(ctx *Context, opts struct {
 		if err := os.MkdirAll(opts.Dir, 0755); err != nil {
 			return nil, fmt.Errorf("failed to create directory %s: %w", opts.Dir, err)
 		}
+
 		ndb, err := netdb.New(filepath.Join(opts.Dir, "net.db"))
 		if err != nil {
 			return nil, fmt.Errorf("failed to open netdb: %w", err)
