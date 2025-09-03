@@ -22,18 +22,15 @@ func TestConfigLoadSave(t *testing.T) {
 	defer os.Unsetenv(EnvConfigPath)
 
 	// Create test configuration
-	originalConfig := &Config{
-		Clusters: map[string]*ClusterConfig{
-			"prod": {
-				Hostname: "prod.example.com",
-				CACert:   "-----BEGIN CERTIFICATE-----\nMIIE...\n-----END CERTIFICATE-----",
-			},
-			"staging": {
-				Hostname: "staging.example.com",
-				CACert:   "-----BEGIN CERTIFICATE-----\nMIIE...\n-----END CERTIFICATE-----",
-			},
-		},
-	}
+	originalConfig := NewConfig()
+	originalConfig.SetCluster("prod", &ClusterConfig{
+		Hostname: "prod.example.com",
+		CACert:   "-----BEGIN CERTIFICATE-----\nMIIE...\n-----END CERTIFICATE-----",
+	})
+	originalConfig.SetCluster("staging", &ClusterConfig{
+		Hostname: "staging.example.com",
+		CACert:   "-----BEGIN CERTIFICATE-----\nMIIE...\n-----END CERTIFICATE-----",
+	})
 
 	// Save configuration
 	err = originalConfig.Save()
@@ -44,23 +41,29 @@ func TestConfigLoadSave(t *testing.T) {
 	r.NoError(err)
 
 	// Verify loaded configuration matches original
-	r.Equal(originalConfig.Clusters["prod"].Hostname, loadedConfig.Clusters["prod"].Hostname)
-	r.Equal(originalConfig.Clusters["prod"].CACert, loadedConfig.Clusters["prod"].CACert)
-	r.Equal(originalConfig.Clusters["staging"].Hostname, loadedConfig.Clusters["staging"].Hostname)
-	r.Equal(originalConfig.Clusters["staging"].CACert, loadedConfig.Clusters["staging"].CACert)
+	origProd, err := originalConfig.GetCluster("prod")
+	r.NoError(err)
+	loadedProd, err := loadedConfig.GetCluster("prod")
+	r.NoError(err)
+	r.Equal(origProd.Hostname, loadedProd.Hostname)
+	r.Equal(origProd.CACert, loadedProd.CACert)
+
+	origStaging, err := originalConfig.GetCluster("staging")
+	r.NoError(err)
+	loadedStaging, err := loadedConfig.GetCluster("staging")
+	r.NoError(err)
+	r.Equal(origStaging.Hostname, loadedStaging.Hostname)
+	r.Equal(origStaging.CACert, loadedStaging.CACert)
 }
 
 func TestGetCluster(t *testing.T) {
 	r := require.New(t)
 
-	config := &Config{
-		Clusters: map[string]*ClusterConfig{
-			"prod": {
-				Hostname: "prod.example.com",
-				CACert:   "-----BEGIN CERTIFICATE-----\nMIIE...\n-----END CERTIFICATE-----",
-			},
-		},
-	}
+	config := NewConfig()
+	config.SetCluster("prod", &ClusterConfig{
+		Hostname: "prod.example.com",
+		CACert:   "-----BEGIN CERTIFICATE-----\nMIIE...\n-----END CERTIFICATE-----",
+	})
 
 	// Test getting existing cluster
 	cluster, err := config.GetCluster("prod")

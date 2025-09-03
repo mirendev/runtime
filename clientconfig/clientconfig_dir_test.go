@@ -71,8 +71,8 @@ clusters:
 	require.NotNil(t, config)
 
 	// Verify the main config was loaded
-	assert.Equal(t, "main", config.ActiveCluster)
-	assert.Len(t, config.Clusters, 3)
+	assert.Equal(t, "main", config.ActiveCluster())
+	assert.Equal(t, 3, config.GetClusterCount())
 
 	// Verify main cluster
 	mainCluster, err := config.GetCluster("main")
@@ -128,8 +128,8 @@ clusters:
 
 	// Verify only config.d was loaded
 	// When main config has no active cluster, it gets set from config.d files
-	assert.Equal(t, "dev", config.ActiveCluster)
-	assert.Len(t, config.Clusters, 1)
+	assert.Equal(t, "dev", config.ActiveCluster())
+	assert.Equal(t, 1, config.GetClusterCount())
 
 	// Verify dev cluster
 	devCluster, err := config.GetCluster("dev")

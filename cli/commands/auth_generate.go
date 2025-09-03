@@ -61,17 +61,15 @@ func AuthGenerate(ctx *Context, opts struct {
 		return fmt.Errorf("target hostname is empty, use --target to specify a hostname")
 	}
 
-	lcfg := &clientconfig.Config{
-		ActiveCluster: opts.ClusterName,
-
-		Clusters: map[string]*clientconfig.ClusterConfig{
-			opts.ClusterName: {
-				Hostname:   tgt,
-				CACert:     string(cc.CACert),
-				ClientCert: string(cc.CertPEM),
-				ClientKey:  string(cc.KeyPEM),
-			},
-		},
+	lcfg := clientconfig.NewConfig()
+	lcfg.SetCluster(opts.ClusterName, &clientconfig.ClusterConfig{
+		Hostname:   tgt,
+		CACert:     string(cc.CACert),
+		ClientCert: string(cc.CertPEM),
+		ClientKey:  string(cc.KeyPEM),
+	})
+	if err := lcfg.SetActiveCluster(opts.ClusterName); err != nil {
+		return fmt.Errorf("failed to set active cluster: %w", err)
 	}
 
 	return lcfg.SaveTo(opts.ConfigPath)

@@ -9,8 +9,6 @@ import (
 	"encoding/pem"
 	"fmt"
 	"net"
-	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -40,17 +38,14 @@ func ConfigBind(ctx *Context, opts struct {
 	}
 
 	// Check if the identity exists
-	if mainConfig == nil || mainConfig.Identities == nil {
+	if mainConfig == nil || !mainConfig.HasIdentities() {
 		return fmt.Errorf("no identities configured. Please run 'miren login' first")
 	}
 
-	identity, exists := mainConfig.Identities[opts.Identity]
-	if !exists {
+	identity, err := mainConfig.GetIdentity(opts.Identity)
+	if err != nil {
 		// List available identities to help the user
-		availableIdentities := make([]string, 0, len(mainConfig.Identities))
-		for name := range mainConfig.Identities {
-			availableIdentities = append(availableIdentities, name)
-		}
+		availableIdentities := mainConfig.GetIdentityNames()
 		if len(availableIdentities) > 0 {
 			return fmt.Errorf("identity %q not found. Available identities: %v", opts.Identity, availableIdentities)
 		}
@@ -207,41 +202,42 @@ func ConfigBind(ctx *Context, opts struct {
 		CACert:       caCert,
 	}
 
-	// Determine the config.d directory path
-	configDirPath, err := getConfigDirPath()
+	// Load or create the main client config
+	mainConfig, err = clientconfig.LoadConfig()
 	if err != nil {
-		return fmt.Errorf("failed to get config directory path: %w", err)
+		// If no config exists, create a new one
+		if err == clientconfig.ErrNoConfig {
+			mainConfig = clientconfig.NewConfig()
+		} else {
+			return fmt.Errorf("failed to load client config: %w", err)
+		}
 	}
 
-	if err := os.MkdirAll(configDirPath, 0755); err != nil {
-		return fmt.Errorf("failed to create config.d directory: %w", err)
-	}
-
-	// Create the config file path
-	configFilePath := filepath.Join(configDirPath, fmt.Sprintf("%s.yaml", opts.Cluster))
-
-	// Check if the file already exists
-	if _, err := os.Stat(configFilePath); err == nil && !opts.Force {
+	// Check if the leaf config already exists (by trying to get the cluster)
+	if mainConfig.HasCluster(opts.Cluster) && !opts.Force {
 		return fmt.Errorf("cluster configuration %q already exists. Use --force to overwrite", opts.Cluster)
 	}
 
-	// Create the configuration with just this cluster
-	config := &clientconfig.Config{
+	// Create the cluster config data
+	leafConfigData := &clientconfig.ConfigData{
 		Clusters: map[string]*clientconfig.ClusterConfig{
 			opts.Cluster: clusterConfig,
 		},
 	}
 
-	// Save the configuration to the config.d directory
-	if err := config.SaveTo(configFilePath); err != nil {
+	// Add as a leaf config (this will be saved to clientconfig.d/{cluster}.yaml)
+	mainConfig.SetLeafConfig(opts.Cluster, leafConfigData)
+
+	// Save the main config (which will also save the leaf config)
+	if err := mainConfig.Save(); err != nil {
 		return fmt.Errorf("failed to save cluster configuration: %w", err)
 	}
 
 	ctx.Completed("Successfully bound identity %q to cluster %q at %s", opts.Identity, opts.Cluster, opts.Address)
-	ctx.Info("Configuration saved to: %s", configFilePath)
+	ctx.Info("Configuration saved to clientconfig.d/%s.yaml", opts.Cluster)
 
 	// If there's no active cluster set, suggest setting this one
-	if mainConfig != nil && mainConfig.ActiveCluster == "" {
+	if mainConfig != nil && mainConfig.ActiveCluster() == "" {
 		ctx.Info("")
 		ctx.Info("Tip: Set this as your active cluster with:")
 		ctx.Info("  miren config set-active %s", opts.Cluster)

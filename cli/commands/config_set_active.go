@@ -2,7 +2,6 @@ package commands
 
 import (
 	"fmt"
-	"sort"
 )
 
 func ConfigSetActive(ctx *Context, opts struct {
@@ -21,20 +20,16 @@ func ConfigSetActive(ctx *Context, opts struct {
 	// If no cluster name provided, show interactive menu
 	if clusterName == "" {
 		// Get sorted list of cluster names
-		clusterNames := make([]string, 0, len(cfg.Clusters))
-		for name := range cfg.Clusters {
-			clusterNames = append(clusterNames, name)
-		}
-		sort.Strings(clusterNames)
+		clusterNames := cfg.GetClusterNames()
 
 		// Use the shared cluster selection
-		selected, err := SelectCluster(ctx, "Select a cluster to set as active:", clusterNames, cfg.ActiveCluster, false)
+		selected, err := SelectCluster(ctx, "Select a cluster to set as active:", clusterNames, cfg.ActiveCluster(), false)
 		if err != nil {
 			// If we can't run interactive mode (no TTY), show available clusters
 			ctx.Printf("Cannot run interactive mode. Available clusters:\n")
 			for _, name := range clusterNames {
 				prefix := "  "
-				if name == cfg.ActiveCluster {
+				if name == cfg.ActiveCluster() {
 					prefix = "* "
 				}
 				ctx.Printf("%s%s\n", prefix, name)
@@ -52,11 +47,8 @@ func ConfigSetActive(ctx *Context, opts struct {
 	}
 
 	// Check if the cluster exists
-	if _, exists := cfg.Clusters[clusterName]; !exists {
-		availableClusters := make([]string, 0, len(cfg.Clusters))
-		for name := range cfg.Clusters {
-			availableClusters = append(availableClusters, name)
-		}
+	if !cfg.HasCluster(clusterName) {
+		availableClusters := cfg.GetClusterNames()
 		return fmt.Errorf("cluster %q not found. Available clusters: %v", clusterName, availableClusters)
 	}
 
