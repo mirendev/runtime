@@ -504,6 +504,10 @@ func (c *SandboxController) createSandbox(ctx context.Context, co *compute.Sandb
 		if err != nil {
 			c.Log.Error("failed to create sandbox, cleaning up", "id", co.ID, "err", err)
 
+			// Be sure we have at least 60 seconds to do this action.
+			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+			defer cancel()
+
 			// Clean up network resources if they were allocated
 			c.deallocateNetwork(ctx, ep)
 
@@ -1113,7 +1117,7 @@ func (c *SandboxController) cleanupContainer(ctx context.Context, cont container
 
 	// Delete the container with snapshot cleanup
 	err = cont.Delete(ctx, containerd.WithSnapshotCleanup)
-	if err != nil {
+	if err != nil && !errdefs.IsNotFound(err) {
 		c.Log.Error("failed to cleanup container", "id", containerID, "err", err)
 	} else {
 		c.Log.Debug("cleaned up container", "id", containerID)
