@@ -56,6 +56,7 @@ require (
 	github.com/lucasb-eyer/go-colorful v1.2.0
 	github.com/mattn/go-colorable v0.1.14
 	github.com/mattn/go-isatty v0.0.20
+	github.com/mattn/go-runewidth v0.0.16
 	github.com/mattn/go-sqlite3 v1.14.24
 	github.com/mdlayher/genetlink v1.3.2
 	github.com/mdlayher/netlink v1.7.3-0.20250113171957-fbb4dce95f42
@@ -198,7 +199,6 @@ require (
 	github.com/klauspost/compress v1.17.11 // indirect
 	github.com/lrstanley/bubblezone v0.0.0-20240914071701-b48c55a5e78e // indirect
 	github.com/mattn/go-localereader v0.0.1 // indirect
-	github.com/mattn/go-runewidth v0.0.16 // indirect
 	github.com/mdlayher/socket v0.5.1 // indirect
 	github.com/mitchellh/copystructure v1.2.0 // indirect
 	github.com/mitchellh/go-wordwrap v0.0.0-20150314170334-ad45545899c7 // indirect
