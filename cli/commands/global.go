@@ -101,8 +101,8 @@ func setup(ctx context.Context, flags *GlobalFlags, opts any) *Context {
 
 	s.setupServerComponents(ctx, s.Server)
 
-	s.Server.InferFrom(opts)
-	s.Client.InferFrom(flags)
+	s.Server.InferFrom(opts, true)
+	s.Client.InferFrom(flags, true)
 
 	s.Client.Populate(&s.Config)
 
