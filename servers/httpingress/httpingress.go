@@ -2,6 +2,7 @@ package httpingress
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -338,8 +339,14 @@ func (h *Server) serveHTTPWithMetrics(w http.ResponseWriter, req *http.Request, 
 
 	actLease, err := h.aa.AcquireLease(actContext, &av, "http", "web")
 	if err != nil {
-		h.Log.Error("error acquiring lease", "error", err, "app", targetAppId)
-		http.Error(w, fmt.Sprintf("error acquiring lease: %s", targetAppId), http.StatusInternalServerError)
+		if errors.Is(err, activator.ErrSandboxDiedEarly) {
+			h.Log.Error("sandbox died early while acquiring lease", "error", err, "app", targetAppId)
+			http.Error(w, fmt.Sprintf("The application %s failed to boot. Please check the applications logs.\n", targetAppId), http.StatusRequestTimeout)
+		} else {
+			h.Log.Error("error acquiring lease", "error", err, "app", targetAppId)
+			http.Error(w, fmt.Sprintf("error acquiring lease: %s", targetAppId), http.StatusInternalServerError)
+		}
+
 		return
 	}
 
