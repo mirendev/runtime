@@ -513,6 +513,11 @@ func (c *SandboxController) createSandbox(ctx context.Context, co *compute.Sandb
 			// Clean up the pause container using the common cleanup function
 			pauseID := c.pauseContainerId(co.ID)
 			c.cleanupContainer(ctx, container, pauseID)
+
+			// Update sandbox status to DEAD in entity store
+			co.Status = compute.DEAD
+			meta.Attrs = co.Encode()
+			c.Log.Info("marked sandbox as DEAD due to boot failure", "id", co.ID)
 		}
 	}()
 
