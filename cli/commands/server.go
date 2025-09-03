@@ -383,6 +383,14 @@ func Server(ctx *Context, opts struct {
 			"org-id", reg.OrganizationID,
 			"cloud-url", reg.CloudURL)
 
+		if reg.Tags == nil {
+			reg.Tags = make(map[string]string)
+		}
+
+		reg.Tags["cluster_id"] = reg.ClusterID
+		reg.Tags["cluster_name"] = reg.ClusterName
+		reg.Tags["organization_id"] = reg.OrganizationID
+
 		// Configure cloud authentication from registration
 		cloudAuthConfig.Enabled = true
 		cloudAuthConfig.CloudURL = reg.CloudURL
