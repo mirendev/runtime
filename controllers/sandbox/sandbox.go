@@ -515,8 +515,7 @@ func (c *SandboxController) createSandbox(ctx context.Context, co *compute.Sandb
 			c.destroySubContainers(ctx, co)
 
 			// Clean up the pause container using the common cleanup function
-			pauseID := c.pauseContainerId(co.ID)
-			c.cleanupContainer(ctx, container, pauseID)
+			c.cleanupContainer(ctx, container)
 
 			// Update sandbox status to DEAD in entity store
 			co.Status = compute.DEAD
@@ -1081,14 +1080,12 @@ type waitPort struct {
 }
 
 // cleanupContainer removes a container and its snapshot during failure scenarios
-func (c *SandboxController) cleanupContainer(ctx context.Context, cont containerd.Container, containerID string) {
+func (c *SandboxController) cleanupContainer(ctx context.Context, cont containerd.Container) {
 	if cont == nil {
 		return
 	}
 
-	if containerID == "" {
-		containerID = cont.ID()
-	}
+	containerID := cont.ID()
 
 	c.Log.Debug("cleaning up container", "id", containerID)
 
@@ -1140,7 +1137,7 @@ func (c *SandboxController) cleanupContainer(ctx context.Context, cont container
 func (c *SandboxController) cleanupContainers(ctx context.Context, containers []containerd.Container) {
 	for _, cont := range containers {
 		if cont != nil {
-			c.cleanupContainer(ctx, cont, cont.ID())
+			c.cleanupContainer(ctx, cont)
 		}
 	}
 }
