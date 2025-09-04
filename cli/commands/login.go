@@ -476,17 +476,6 @@ func registerPublicKey(cloudURL, token string, keyPair *cloudauth.KeyPair, keyNa
 
 // saveKeyPairToConfig saves a keypair as an identity in clientconfig.d
 func saveKeyPairToConfig(identityName, cloudURL string, keyPair *cloudauth.KeyPair) error {
-	// Get the clientconfig.d directory path
-	configDirPath, err := getConfigDirPath()
-	if err != nil {
-		return fmt.Errorf("failed to determine config directory: %w", err)
-	}
-
-	// Create the directory if it doesn't exist
-	if err := os.MkdirAll(configDirPath, 0755); err != nil {
-		return fmt.Errorf("failed to create config directory: %w", err)
-	}
-
 	// Get private key in PEM format
 	privateKeyPEM, err := keyPair.PrivateKeyPEM()
 	if err != nil {
@@ -499,8 +488,19 @@ func saveKeyPairToConfig(identityName, cloudURL string, keyPair *cloudauth.KeyPa
 		issuer = "https://" + issuer
 	}
 
-	// Create a config with just this identity
-	identityConfig := &clientconfig.Config{
+	// Load or create the main client config
+	mainConfig, err := clientconfig.LoadConfig()
+	if err != nil {
+		// If no config exists, create a new one
+		if err == clientconfig.ErrNoConfig {
+			mainConfig = clientconfig.NewConfig()
+		} else {
+			return fmt.Errorf("failed to load client config: %w", err)
+		}
+	}
+
+	// Create the identity config data
+	leafConfigData := &clientconfig.ConfigData{
 		Identities: map[string]*clientconfig.IdentityConfig{
 			identityName: {
 				Type:       "keypair",
@@ -510,7 +510,9 @@ func saveKeyPairToConfig(identityName, cloudURL string, keyPair *cloudauth.KeyPa
 		},
 	}
 
-	// Save to identity-specific file in clientconfig.d
-	identityConfigPath := filepath.Join(configDirPath, "identity-"+identityName+".yaml")
-	return identityConfig.SaveTo(identityConfigPath)
+	// Add as a leaf config (this will be saved to clientconfig.d/identity-{name}.yaml)
+	mainConfig.SetLeafConfig("identity-"+identityName, leafConfigData)
+
+	// Save the main config (which will also save the leaf config)
+	return mainConfig.Save()
 }

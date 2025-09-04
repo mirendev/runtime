@@ -245,6 +245,8 @@ func (a *localActivator) AcquireLease(ctx context.Context, ver *core_v1alpha.App
 	return a.activateApp(ctx, ver, pool, service)
 }
 
+var ErrSandboxDiedEarly = fmt.Errorf("sandbox died while booting")
+
 func (a *localActivator) activateApp(ctx context.Context, ver *core_v1alpha.AppVersion, pool, service string) (*Lease, error) {
 	gr, err := a.eac.Get(ctx, ver.App.String())
 	if err != nil {
@@ -331,6 +333,8 @@ func (a *localActivator) activateApp(ctx context.Context, ver *core_v1alpha.AppV
 
 	a.log.Debug("watching sandbox", "app", ver.App, "sandbox", pr.Id())
 
+	var localErr error
+
 	a.eac.WatchEntity(ctx, pr.Id(), stream.Callback(func(op *entityserver_v1alpha.EntityOp) error {
 		var sb compute_v1alpha.Sandbox
 
@@ -338,11 +342,20 @@ func (a *localActivator) activateApp(ctx context.Context, ver *core_v1alpha.AppV
 			en := op.Entity().Entity()
 			sb.Decode(en)
 
-			if sb.Status == compute_v1alpha.RUNNING {
-				runningSB = sb
-				sbEnt = en
+			runningSB = sb
+			sbEnt = en
+
+			switch sb.Status {
+			case compute_v1alpha.RUNNING:
+				a.log.Info("sandbox is running", "app", ver.App, "sandbox", pr.Id(), "status", sb.Status)
 				// TODO figure out a better way to signal that we're done with the watch.
 				return io.EOF
+			case compute_v1alpha.STOPPED, compute_v1alpha.DEAD:
+				a.log.Info("sandbox failed to start while waiting for activator", "app", ver.App, "sandbox", pr.Id(), "status", sb.Status)
+				localErr = fmt.Errorf("%w: sandbox failed to start: %s (%s)", ErrSandboxDiedEarly, pr.Id(), sb.Status)
+				return io.EOF
+			default:
+				a.log.Debug("sandbox status update", "app", ver.App, "sandbox", pr.Id(), "status", sb.Status)
 			}
 		}
 
@@ -350,7 +363,14 @@ func (a *localActivator) activateApp(ctx context.Context, ver *core_v1alpha.AppV
 	}))
 
 	if runningSB.Status != compute_v1alpha.RUNNING {
-		return nil, err
+		a.log.Error("sandbox did not start successfully",
+			"app", ver.App,
+			"sandbox", pr.Id(),
+			"error", "sandbox did not reach RUNNING status")
+		if localErr == nil {
+			localErr = fmt.Errorf("sandbox did not reach RUNNING status: %s", pr.Id())
+		}
+		return nil, localErr
 	}
 
 	// Parse the address to extract just the IP from potential CIDR notation

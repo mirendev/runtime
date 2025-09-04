@@ -291,7 +291,7 @@ func parseTag(tag string) (string, bool) {
 	return name, optional
 }
 
-func (r *Registry) InferFrom(s any) error {
+func (r *Registry) InferFrom(s any, override bool) error {
 	rv := reflect.ValueOf(s)
 
 	rv = reflect.Indirect(rv)
@@ -318,7 +318,11 @@ func (r *Registry) InferFrom(s any) error {
 			continue
 		}
 
-		r.Register(tag, field.Interface())
+		if override {
+			r.Override(tag, field.Interface())
+		} else {
+			r.Register(tag, field.Interface())
+		}
 	}
 
 	return nil

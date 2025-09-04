@@ -36,9 +36,38 @@ func ConfigLoad(ctx *Context, opts struct {
 		return err
 	}
 
-	err = cfg.Merge(input, opts.SetActive, opts.Force)
+	// Merge clusters from input config
+	err = input.IterateClusters(func(name string, cluster *clientconfig.ClusterConfig) error {
+		if cfg.HasCluster(name) && !opts.Force {
+			return errors.New("cluster \"" + name + "\" already exists in current config, use --force to overwrite")
+		}
+		cfg.SetCluster(name, cluster)
+		return nil
+	})
 	if err != nil {
 		return err
+	}
+
+	// Merge identities from input config
+	for _, identityName := range input.GetIdentityNames() {
+		if cfg.HasIdentity(identityName) && !opts.Force {
+			return errors.New("identity \"" + identityName + "\" already exists in current config, use --force to overwrite")
+		}
+		identity, err := input.GetIdentity(identityName)
+		if err != nil {
+			return err
+		}
+		cfg.SetIdentity(identityName, identity)
+	}
+
+	// Update active cluster if requested and input config has one
+	if cfg.ActiveCluster() == "" || (opts.SetActive && input.ActiveCluster() != "") {
+		if input.ActiveCluster() != "" {
+			err = cfg.SetActiveCluster(input.ActiveCluster())
+			if err != nil {
+				return err
+			}
+		}
 	}
 
 	err = cfg.Save()
@@ -46,9 +75,11 @@ func ConfigLoad(ctx *Context, opts struct {
 		return err
 	}
 
-	for name, cluster := range input.Clusters {
+	// Report which clusters were added
+	err = input.IterateClusters(func(name string, cluster *clientconfig.ClusterConfig) error {
 		ctx.Printf("Added cluster %s: %s\n", name, cluster.Hostname)
-	}
+		return nil
+	})
 
-	return nil
+	return err
 }

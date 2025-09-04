@@ -133,21 +133,19 @@ func TestRPCOptionsWithAddressProbing(t *testing.T) {
 	tempDir := t.TempDir()
 	t.Setenv("HOME", tempDir)
 
-	config := &Config{
-		Clusters: map[string]*ClusterConfig{
-			"test": {
-				Hostname: "primary.example.com:8443",
-				AllAddresses: []string{
-					"primary.example.com:8443",
-					"secondary.example.com:8443",
-					"tertiary.example.com:8443",
-				},
-				Insecure: true,
-			},
+	config := NewConfig()
+	config.SetCluster("test", &ClusterConfig{
+		Hostname: "primary.example.com:8443",
+		AllAddresses: []string{
+			"primary.example.com:8443",
+			"secondary.example.com:8443",
+			"tertiary.example.com:8443",
 		},
-	}
+		Insecure: true,
+	})
 
-	cluster := config.Clusters["test"]
+	cluster, err := config.GetCluster("test")
+	require.NoError(t, err)
 	ctx := context.Background()
 
 	t.Run("uses cached address if available", func(t *testing.T) {

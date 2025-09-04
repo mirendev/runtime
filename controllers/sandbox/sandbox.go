@@ -482,11 +482,13 @@ func (c *SandboxController) createSandbox(ctx context.Context, co *compute.Sandb
 
 	opts, err := c.buildSpec(ctx, co, ep, meta)
 	if err != nil {
+		c.deallocateNetwork(ctx, ep)
 		return fmt.Errorf("failed to build container spec: %w", err)
 	}
 
 	err = c.configureVolumes(ctx, co)
 	if err != nil {
+		c.deallocateNetwork(ctx, ep)
 		return fmt.Errorf("failed to configure volumes: %w", err)
 	}
 
@@ -494,6 +496,7 @@ func (c *SandboxController) createSandbox(ctx context.Context, co *compute.Sandb
 
 	container, err := c.CC.NewContainer(ctx, cid, opts...)
 	if err != nil {
+		c.deallocateNetwork(ctx, ep)
 		return errors.Wrapf(err, "failed to create container %s", co.ID)
 	}
 
@@ -501,15 +504,23 @@ func (c *SandboxController) createSandbox(ctx context.Context, co *compute.Sandb
 		if err != nil {
 			c.Log.Error("failed to create sandbox, cleaning up", "id", co.ID, "err", err)
 
-			task, _ := container.Task(ctx, nil)
-			if task != nil {
-				task.Delete(ctx, containerd.WithProcessKill)
-			}
+			// Be sure we have at least 60 seconds to do this action.
+			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+			defer cancel()
 
-			derr := container.Delete(ctx, containerd.WithSnapshotCleanup)
-			if derr != nil {
-				c.Log.Error("failed to cleanup container", "id", co.ID, "err", derr)
-			}
+			// Clean up network resources if they were allocated
+			c.deallocateNetwork(ctx, ep)
+
+			// Clean up any subcontainers that might have been created
+			c.destroySubContainers(ctx, co)
+
+			// Clean up the pause container using the common cleanup function
+			c.cleanupContainer(ctx, container)
+
+			// Update sandbox status to DEAD in entity store
+			co.Status = compute.DEAD
+			meta.Attrs = co.Encode()
+			c.Log.Info("marked sandbox as DEAD due to boot failure", "id", co.ID)
 		}
 	}()
 
@@ -700,6 +711,21 @@ func (c *SandboxController) deleteEndpoints(ctx context.Context, sb *compute.San
 	}
 
 	return nil
+}
+
+// deallocateNetwork releases the network resources allocated for a sandbox
+func (c *SandboxController) deallocateNetwork(ctx context.Context, ep *network.EndpointConfig) {
+	if ep == nil {
+		return
+	}
+
+	for _, addr := range ep.Addresses {
+		if err := c.Subnet.ReleaseAddr(addr.Addr()); err != nil {
+			c.Log.Error("failed to release IP address during cleanup", "addr", addr.Addr(), "err", err)
+		} else {
+			c.Log.Debug("released IP address during cleanup", "addr", addr.Addr())
+		}
+	}
 }
 
 func (c *SandboxController) allocateNetwork(
@@ -1053,6 +1079,69 @@ type waitPort struct {
 	port int
 }
 
+// cleanupContainer removes a container and its snapshot during failure scenarios
+func (c *SandboxController) cleanupContainer(ctx context.Context, cont containerd.Container) {
+	if cont == nil {
+		return
+	}
+
+	containerID := cont.ID()
+
+	c.Log.Debug("cleaning up container", "id", containerID)
+
+	// Stop port monitoring for this container
+	if c.portMonitor != nil {
+		c.portMonitor.StopMonitoring(containerID)
+	}
+
+	// Try to kill and delete any task first
+	task, err := cont.Task(ctx, nil)
+	if err == nil && task != nil {
+		task.Kill(ctx, unix.SIGKILL)
+		_, err = task.Delete(ctx, containerd.WithProcessKill)
+		if err != nil {
+			c.Log.Debug("failed to delete task during cleanup", "id", containerID, "err", err)
+		}
+	}
+
+	// Get the snapshotter info from the container before deleting it
+	var snapshotKey string
+	var snapshotterName string
+	if info, ierr := cont.Info(ctx); ierr == nil {
+		snapshotKey = info.SnapshotKey
+		snapshotterName = info.Snapshotter
+	}
+
+	// Delete the container with snapshot cleanup
+	err = cont.Delete(ctx, containerd.WithSnapshotCleanup)
+	if err != nil && !errdefs.IsNotFound(err) {
+		c.Log.Error("failed to cleanup container", "id", containerID, "err", err)
+	} else {
+		c.Log.Debug("cleaned up container", "id", containerID)
+	}
+
+	// Always try to explicitly delete the snapshot to be absolutely sure
+	if snapshotterName != "" && snapshotKey != "" {
+		snapshotter := c.CC.SnapshotService(snapshotterName)
+		if snapshotter != nil {
+			if err := snapshotter.Remove(ctx, snapshotKey); err != nil && !errdefs.IsNotFound(err) {
+				c.Log.Debug("failed to explicitly delete snapshot", "id", containerID, "snapshot_key", snapshotKey, "err", err)
+			} else if err == nil {
+				c.Log.Debug("explicitly deleted snapshot", "id", containerID, "snapshot_key", snapshotKey)
+			}
+		}
+	}
+}
+
+// cleanupContainers removes containers and their snapshots during failure scenarios
+func (c *SandboxController) cleanupContainers(ctx context.Context, containers []containerd.Container) {
+	for _, cont := range containers {
+		if cont != nil {
+			c.cleanupContainer(ctx, cont)
+		}
+	}
+}
+
 func (c *SandboxController) bootContainers(
 	ctx context.Context,
 	sb *compute.Sandbox,
@@ -1065,10 +1154,21 @@ func (c *SandboxController) bootContainers(
 	ctx = namespaces.WithNamespace(ctx, c.Namespace)
 
 	var ret []waitPort
+	var createdContainers []containerd.Container
+
+	// Clean up any created containers on failure
+	defer func() {
+		if err := recover(); err != nil {
+			c.Log.Error("panic during container boot, cleaning up", "error", err)
+			c.cleanupContainers(ctx, createdContainers)
+			panic(err)
+		}
+	}()
 
 	for _, container := range sb.Container {
 		opts, err := c.buildSubContainerSpec(ctx, sb, &container, ep, sbPid)
 		if err != nil {
+			c.cleanupContainers(ctx, createdContainers)
 			return nil, fmt.Errorf("failed to build container spec: %w", err)
 		}
 
@@ -1087,11 +1187,14 @@ func (c *SandboxController) bootContainers(
 
 		cc, err := c.CC.NewContainer(ctx, id, opts...)
 		if err != nil {
+			c.cleanupContainers(ctx, createdContainers)
 			return nil, errors.Wrapf(err, "failed to create container %s", sb.ID)
 		}
+		createdContainers = append(createdContainers, cc)
 
 		spec, err := cc.Spec(ctx)
 		if err != nil {
+			c.cleanupContainers(ctx, createdContainers)
 			return nil, fmt.Errorf("failed to get container spec: %w", err)
 		}
 
@@ -1102,11 +1205,15 @@ func (c *SandboxController) bootContainers(
 		task, err := cc.NewTask(ctx, cio.NewCreator(
 			cio.WithStreams(nil, sl, sl.Stderr())))
 		if err != nil {
+			c.cleanupContainers(ctx, createdContainers)
 			return nil, err
 		}
 
 		err = task.Start(ctx)
 		if err != nil {
+			// Try to delete the task first if it was created but not started
+			task.Delete(ctx, containerd.WithProcessKill)
+			c.cleanupContainers(ctx, createdContainers)
 			return nil, err
 		}
 
