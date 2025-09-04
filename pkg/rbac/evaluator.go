@@ -152,8 +152,7 @@ func (e *Evaluator) Evaluate(req *Request, opts ...EvaluateOption) Decision {
 	if options.Explainer != nil {
 		options.Explainer.NoRulesMatched()
 	}
-	decision := DecisionDeny
-	e.cache.set(req, decision)
+	// Don't cache denials - they should be re-evaluated each time
 	e.logger.Debug("authorization denied",
 		"subject", req.Subject,
 		"groups", req.Groups,
@@ -161,7 +160,7 @@ func (e *Evaluator) Evaluate(req *Request, opts ...EvaluateOption) Decision {
 		"action", req.Action,
 		"tags", req.Tags,
 	)
-	return decision
+	return DecisionDeny
 }
 
 // ClearCache clears the decision cache

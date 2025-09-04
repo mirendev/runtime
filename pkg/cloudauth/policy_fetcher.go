@@ -257,12 +257,17 @@ func (pf *PolicyFetcher) RefreshIfNeeded(ctx context.Context) {
 
 	pf.logger.Info("refreshing RBAC rules after rejection")
 
+	// Clear the cache immediately to remove the cached denial
+	if pf.evaluator != nil {
+		pf.evaluator.ClearCache()
+	}
+
 	go func() {
 		if err := pf.fetchPolicy(ctx); err != nil {
 			pf.logger.Warn("failed to refresh policy after rejection", "error", err)
 		} else {
 			pf.logger.Info("successfully refreshed policy after rejection")
-			// Clear the evaluator's cache if we have one
+			// Clear again after successful fetch to ensure fresh evaluation
 			if pf.evaluator != nil {
 				pf.evaluator.ClearCache()
 			}
