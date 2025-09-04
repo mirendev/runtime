@@ -186,7 +186,14 @@ func (w *Cmd) clean(rv reflect.Value) error {
 func (w *Cmd) Help() string {
 	var buf bytes.Buffer
 	w.parser.WriteHelp(&buf)
-	return buf.String()
+	helpText := buf.String()
+
+	// Add custom footer message
+	if helpText != "" {
+		helpText += "\nmade lovingly by the Miren team\n"
+	}
+
+	return helpText
 }
 
 func (w *Cmd) Synopsis() string {

@@ -18,11 +18,12 @@ func TestRun(t *testing.T) {
 }
 
 func TestHelpOutput(t *testing.T) {
-	t.Run("Print current help output", func(t *testing.T) {
-		out, err := RunCommand(Deploy, "-h")
-		if err != nil {
-			t.Logf("Error (expected): %v", err)
-		}
-		t.Logf("Current help output:\n%s", out.Stderr.String())
+	t.Run("Help method includes Miren team message", func(t *testing.T) {
+		r := require.New(t)
+		
+		cmd := Infer("test command", "A command being tested", Deploy)
+		helpText := cmd.Help()
+		
+		r.Contains(helpText, "made lovingly by the Miren team")
 	})
 }
