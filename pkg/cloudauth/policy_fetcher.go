@@ -251,9 +251,7 @@ func (pf *PolicyFetcher) RefreshIfNeeded(ctx context.Context) {
 	pf.mu.Unlock()
 
 	if !shouldRefresh {
-		pf.logger.Debug("skipping refresh, too soon since last refresh",
-			"last_refresh", pf.lastRefresh,
-			"time_since", now.Sub(pf.lastRefresh))
+		// Don't log here, it's too noisy.
 		return
 	}
 
