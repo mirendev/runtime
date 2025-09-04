@@ -20,10 +20,10 @@ func TestRun(t *testing.T) {
 func TestHelpOutput(t *testing.T) {
 	t.Run("Help method includes Miren team message", func(t *testing.T) {
 		r := require.New(t)
-		
+
 		cmd := Infer("test command", "A command being tested", Deploy)
 		helpText := cmd.Help()
-		
-		r.Contains(helpText, "made lovingly by the Miren team")
+
+		r.Contains(helpText, "From your friends at Miren")
 	})
 }
