@@ -46,6 +46,7 @@ type Context struct {
 
 	ClientConfig  *clientconfig.Config
 	ClusterConfig *clientconfig.ClusterConfig
+	ClusterName   string
 
 	Config struct {
 		ServerAddress string `asm:"server-addr"`
@@ -118,11 +119,12 @@ func setup(ctx context.Context, flags *GlobalFlags, opts any) *Context {
 	}
 
 	if lc, ok := opts.(interface {
-		LoadCluster() (*clientconfig.ClusterConfig, error)
+		LoadCluster() (*clientconfig.ClusterConfig, string, error)
 	}); ok {
-		cfg, err := lc.LoadCluster()
+		cfg, name, err := lc.LoadCluster()
 		if err == nil {
 			s.ClusterConfig = cfg
+			s.ClusterName = name
 		} else {
 			s.Log.Warn("Failed to load cluster config", "error", err)
 		}

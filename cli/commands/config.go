@@ -2,6 +2,7 @@ package commands
 
 import (
 	"errors"
+	"fmt"
 
 	"miren.dev/runtime/clientconfig"
 )
@@ -52,17 +53,35 @@ func (c *ConfigCentric) SaveConfig() error {
 	return c.cfg.Save()
 }
 
-func (c *ConfigCentric) LoadCluster() (*clientconfig.ClusterConfig, error) {
+func (c *ConfigCentric) LoadCluster() (*clientconfig.ClusterConfig, string, error) {
 	cfg, err := c.LoadConfig()
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
+
+	var (
+		name string
+	)
 
 	if c.Cluster == "" {
-		return cfg.GetActiveCluster()
+		name = cfg.ActiveCluster()
+		if name == "" {
+			return nil, "", fmt.Errorf("no cluster specified and no active cluster set")
+		}
+	} else {
+		name = c.Cluster
 	}
 
-	return cfg.GetCluster(c.Cluster)
+	cc, err := cfg.GetCluster(name)
+	if err != nil {
+		return nil, "", err
+	}
+
+	if cc == nil {
+		return nil, "", ErrNoConfig
+	}
+
+	return cc, name, nil
 }
 
 func ConfigInfo(ctx *Context, opts struct {
