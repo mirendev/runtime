@@ -10,6 +10,7 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/moby/buildkit/client"
 	"github.com/moby/buildkit/util/progress/progresswriter"
 
@@ -27,6 +28,9 @@ func Deploy(ctx *Context, opts struct {
 	Explain       bool   `short:"x" long:"explain" description:"Explain the build process"`
 	ExplainFormat string `long:"explain-format" description:"Explain format" choice:"auto" choice:"plain" choice:"tty" choice:"rawjson" default:"auto"`
 }) error {
+	greenStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("10"))
+	ctx.Printf("  ✓ %s: %s\n", greenStyle.Render("Deploying to cluster"), ctx.ClusterName)
+
 	cl, err := ctx.RPCClient("dev.miren.runtime/build")
 	if err != nil {
 		return err
