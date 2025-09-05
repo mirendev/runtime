@@ -393,7 +393,10 @@ func (m Model) View() string {
 	)
 
 	if !m.graph {
-		cpuSamples := m.status.CpuOverHour()[len(m.status.CpuOverHour())-5:]
+		cpuSamples := m.status.CpuOverHour()
+		if len(cpuSamples) > 5 {
+			cpuSamples = cpuSamples[len(m.status.CpuOverHour())-5:]
+		}
 
 		var lines []string
 
@@ -403,7 +406,10 @@ func (m Model) View() string {
 			lines = append(lines, fmt.Sprintf("%s: %.3f", t.Format(of), s.Cores()))
 		}
 
-		memSamples := m.status.MemoryOverHour()[len(m.status.MemoryOverHour())-5:]
+		memSamples := m.status.MemoryOverHour()
+		if len(memSamples) > 5 {
+			memSamples = memSamples[len(m.status.MemoryOverHour())-5:]
+		}
 
 		var memlines []string
 
