@@ -80,15 +80,17 @@ func TestConfigPathResolution(t *testing.T) {
 	// Test environment variable path
 	testDir := "/tmp/test-config"
 	os.Setenv(EnvConfigPath, testDir)
-	path, err := getConfigPath()
+	path, loadConfigD, err := getConfigPath()
 	r.NoError(err)
 	r.Equal(filepath.Join(testDir, "clientconfig.yaml"), path)
+	r.True(loadConfigD, "Should load clientconfig.d when pointing to directory")
 	os.Unsetenv(EnvConfigPath)
 
 	// Test default path
 	homeDir, err := os.UserHomeDir()
 	r.NoError(err)
-	path, err = getConfigPath()
+	path, loadConfigD, err = getConfigPath()
 	r.NoError(err)
 	r.Equal(filepath.Join(homeDir, DefaultConfigPath), path)
+	r.True(loadConfigD, "Should load clientconfig.d by default")
 }

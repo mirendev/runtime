@@ -212,7 +212,7 @@ func TestMirenConfigPathResolution(t *testing.T) {
 			defer os.Setenv(EnvConfigPath, oldEnv)
 
 			// Get the config path
-			configPath, err := getConfigPath()
+			configPath, loadConfigD, err := getConfigPath()
 			require.NoError(t, err)
 
 			// Get the config dir path
@@ -222,10 +222,12 @@ func TestMirenConfigPathResolution(t *testing.T) {
 			if tt.expectedIsFile {
 				// Should treat as file
 				assert.Equal(t, testPath, configPath, "Config path should be the file itself")
+				assert.False(t, loadConfigD, "Should not load clientconfig.d when MIREN_CONFIG is a file")
 				assert.Empty(t, configDirPath, "Config dir should be empty when MIREN_CONFIG is a file")
 			} else {
 				// Should treat as directory
 				assert.Equal(t, filepath.Join(testPath, "clientconfig.yaml"), configPath, "Config path should be within the directory")
+				assert.True(t, loadConfigD, "Should load clientconfig.d when MIREN_CONFIG is a directory")
 				assert.Equal(t, filepath.Join(testPath, "clientconfig.d"), configDirPath, "Config dir should be within the directory")
 			}
 		})
