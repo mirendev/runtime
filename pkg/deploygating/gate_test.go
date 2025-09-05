@@ -197,4 +197,51 @@ command = "missing closing bracket"
 		assert.NoError(t, err)
 		assert.Empty(t, remedy)
 	})
+
+	t.Run("handles Procfile without ending newline", func(t *testing.T) {
+		tmpDir := t.TempDir()
+
+		// Create Procfile with web service but no ending newline
+		procfileContent := "web: python app.py"
+		procfilePath := filepath.Join(tmpDir, "Procfile")
+		err := os.WriteFile(procfilePath, []byte(procfileContent), 0644)
+		require.NoError(t, err)
+
+		// Should succeed - the parser now handles files without ending newlines
+		remedy, err := CheckDeployAllowed(tmpDir)
+		assert.NoError(t, err)
+		assert.Empty(t, remedy)
+	})
+
+	t.Run("handles multi-line Procfile without ending newline", func(t *testing.T) {
+		tmpDir := t.TempDir()
+
+		// Create Procfile with multiple services but no ending newline
+		procfileContent := "worker: python worker.py\nweb: python app.py"
+		procfilePath := filepath.Join(tmpDir, "Procfile")
+		err := os.WriteFile(procfilePath, []byte(procfileContent), 0644)
+		require.NoError(t, err)
+
+		// Should succeed - the parser now handles the last line without newline
+		remedy, err := CheckDeployAllowed(tmpDir)
+		assert.NoError(t, err)
+		assert.Empty(t, remedy)
+	})
+
+	t.Run("returns error for Procfile with invalid syntax", func(t *testing.T) {
+		tmpDir := t.TempDir()
+
+		// Create Procfile with invalid line (no colon separator)
+		procfileContent := "web python app.py\nworker: python worker.py"
+		procfilePath := filepath.Join(tmpDir, "Procfile")
+		err := os.WriteFile(procfilePath, []byte(procfileContent), 0644)
+		require.NoError(t, err)
+
+		// Should fail with parse error
+		remedy, err := CheckDeployAllowed(tmpDir)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "failed to parse Procfile")
+		assert.Contains(t, err.Error(), "invalid line")
+		assert.Empty(t, remedy)
+	})
 }
