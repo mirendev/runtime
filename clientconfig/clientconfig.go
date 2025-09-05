@@ -49,6 +49,9 @@ type Config struct {
 	// The path to the config file that was loaded, if any.
 	sourcePath string
 
+	// Whether clientconfig.d should be loaded for this config
+	loadConfigD bool
+
 	// Leaf configs loaded from config.d directory
 	// These are kept separate and checked when accessing clusters/identities
 	leafConfigs []*Config
@@ -278,7 +281,7 @@ func (c *Config) SetActiveCluster(name string) error {
 
 // LoadConfig loads the configuration from disk
 func LoadConfig() (*Config, error) {
-	configPath, err := getConfigPath()
+	configPath, loadConfigD, err := getConfigPath()
 	if err != nil {
 		return nil, fmt.Errorf("failed to determine config path: %w", err)
 	}
@@ -289,9 +292,12 @@ func LoadConfig() (*Config, error) {
 		// If main config doesn't exist, try loading from config.d directory
 		config := NewConfig()
 		config.sourcePath = configPath
+		config.loadConfigD = loadConfigD
 
-		if err := loadConfigDir(config); err != nil {
-			return nil, ErrNoConfig
+		if loadConfigD {
+			if err := loadConfigDir(config); err != nil {
+				return nil, ErrNoConfig
+			}
 		}
 
 		// Check if config is still empty after loading config.d
@@ -312,6 +318,7 @@ func LoadConfig() (*Config, error) {
 	)
 
 	config.sourcePath = configPath
+	config.loadConfigD = loadConfigD
 
 	if err := yaml.Unmarshal(data, &cdata); err != nil {
 		return nil, fmt.Errorf("failed to parse config file: %w", err)
@@ -321,9 +328,11 @@ func LoadConfig() (*Config, error) {
 	config.clusters = cdata.Clusters
 	config.identities = cdata.Identities
 
-	// Load additional configs from config.d directory
-	if err := loadConfigDir(&config); err != nil {
-		return nil, fmt.Errorf("failed to load config.d: %w", err)
+	// Load additional configs from config.d directory if enabled
+	if loadConfigD {
+		if err := loadConfigDir(&config); err != nil {
+			return nil, fmt.Errorf("failed to load config.d: %w", err)
+		}
 	}
 
 	if err := config.Validate(); err != nil {
@@ -384,7 +393,7 @@ func (c *Config) Save() error {
 
 	var err error
 	if configPath == "" {
-		configPath, err = getConfigPath()
+		configPath, _, err = getConfigPath()
 		if err != nil {
 			return fmt.Errorf("failed to determine config path: %w", err)
 		}
@@ -502,7 +511,7 @@ func (c *Config) saveLeafConfigs(mainConfigPath string) error {
 }
 
 func (c *Config) SaveToHome() error {
-	configPath, err := getConfigPath()
+	configPath, _, err := getConfigPath()
 	if err != nil {
 		return fmt.Errorf("failed to determine config path: %w", err)
 	}
@@ -544,6 +553,23 @@ func (c *Config) HasCluster(name string) bool {
 	// Then check leaf configs
 	for _, leafConfig := range c.leafConfigs {
 		if _, exists := leafConfig.clusters[name]; exists {
+			return true
+		}
+	}
+
+	return false
+}
+
+// HasAnyClusters checks if any clusters are configured
+func (c *Config) HasAnyClusters() bool {
+	// Check main config
+	if len(c.clusters) > 0 {
+		return true
+	}
+
+	// Check leaf configs
+	for _, leafConfig := range c.leafConfigs {
+		if len(leafConfig.clusters) > 0 {
 			return true
 		}
 	}
@@ -624,10 +650,28 @@ func (c *Config) IterateClusters(fn func(name string, cluster *ClusterConfig) er
 
 // loadConfigDir loads additional config files from the config.d directory
 func loadConfigDir(config *Config) error {
-	// Determine the config.d directory path
-	configDirPath, err := getConfigDirPath()
-	if err != nil {
-		return fmt.Errorf("failed to determine config.d path: %w", err)
+	// If clientconfig.d loading is disabled, return early
+	if !config.loadConfigD {
+		return nil
+	}
+
+	var (
+		configDirPath string
+		err           error
+	)
+
+	if config.sourcePath != "" {
+		configDirPath = filepath.Join(filepath.Dir(config.sourcePath), "clientconfig.d")
+	} else {
+		// Determine the config.d directory path
+		configDirPath, err = getConfigDirPath()
+		if err != nil {
+			return fmt.Errorf("failed to determine config.d path: %w", err)
+		}
+		// If configDirPath is empty, it means clientconfig.d is disabled
+		if configDirPath == "" {
+			return nil
+		}
 	}
 
 	// Check if the directory exists
@@ -688,11 +732,27 @@ func loadConfigDir(config *Config) error {
 }
 
 // getConfigDirPath determines the configuration directory path
+// Returns empty string if MIREN_CONFIG points to a file (disabling clientconfig.d)
 func getConfigDirPath() (string, error) {
 	// Check environment variable first
 	if envPath := os.Getenv(EnvConfigPath); envPath != "" {
-		// If a custom config path is specified, use its directory
-		return filepath.Join(filepath.Dir(envPath), "clientconfig.d"), nil
+		// Check if it's a file or directory
+		info, err := os.Stat(envPath)
+		if err == nil {
+			if !info.IsDir() {
+				// It's a file, don't use clientconfig.d
+				return "", nil
+			}
+			// It's a directory, use clientconfig.d within it
+			return filepath.Join(envPath, "clientconfig.d"), nil
+		}
+		// Path doesn't exist yet, check if it has a .yaml or .yml extension
+		if strings.HasSuffix(envPath, ".yaml") || strings.HasSuffix(envPath, ".yml") {
+			// Looks like a file path, don't use clientconfig.d
+			return "", nil
+		}
+		// Assume it's a directory
+		return filepath.Join(envPath, "clientconfig.d"), nil
 	}
 
 	// Fall back to default path in user's home directory
@@ -704,18 +764,35 @@ func getConfigDirPath() (string, error) {
 	return filepath.Join(homeDir, ".config/miren/clientconfig.d"), nil
 }
 
-// getConfigPath determines the configuration file path
-func getConfigPath() (string, error) {
+// getConfigPath determines the configuration file path and whether clientconfig.d should be loaded
+// Returns: (configPath, loadConfigD, error)
+func getConfigPath() (string, bool, error) {
 	// Check environment variable first
 	if envPath := os.Getenv(EnvConfigPath); envPath != "" {
-		return envPath, nil
+		// Check if it's a file or directory
+		info, err := os.Stat(envPath)
+		if err == nil {
+			if !info.IsDir() {
+				// It's a file, use it directly, don't load clientconfig.d
+				return envPath, false, nil
+			}
+			// It's a directory, append clientconfig.yaml and load clientconfig.d
+			return filepath.Join(envPath, "clientconfig.yaml"), true, nil
+		}
+		// Path doesn't exist yet, check if it has a .yaml or .yml extension
+		if strings.HasSuffix(envPath, ".yaml") || strings.HasSuffix(envPath, ".yml") {
+			// Looks like a file path, use it directly, don't load clientconfig.d
+			return envPath, false, nil
+		}
+		// Assume it's a directory, load clientconfig.d
+		return filepath.Join(envPath, "clientconfig.yaml"), true, nil
 	}
 
-	// Fall back to default path in user's home directory
+	// Fall back to default path in user's home directory, load clientconfig.d
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
-		return "", fmt.Errorf("failed to get user home directory: %w", err)
+		return "", false, fmt.Errorf("failed to get user home directory: %w", err)
 	}
 
-	return filepath.Join(homeDir, DefaultConfigPath), nil
+	return filepath.Join(homeDir, DefaultConfigPath), true, nil
 }

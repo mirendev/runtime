@@ -52,7 +52,7 @@ clusters:
 
 	// Set environment variable
 	oldEnv := os.Getenv(EnvConfigPath)
-	os.Setenv(EnvConfigPath, mainConfigPath)
+	os.Setenv(EnvConfigPath, tmpDir)
 	defer os.Setenv(EnvConfigPath, oldEnv)
 
 	// Load the config
@@ -132,7 +132,7 @@ clusters:
 
 	// Set environment variable
 	oldEnv := os.Getenv(EnvConfigPath)
-	os.Setenv(EnvConfigPath, mainConfigPath)
+	os.Setenv(EnvConfigPath, tmpDir)
 	defer os.Setenv(EnvConfigPath, oldEnv)
 
 	// Load the config
@@ -216,7 +216,7 @@ clusters:
 
 	// Set environment variable
 	oldEnv := os.Getenv(EnvConfigPath)
-	os.Setenv(EnvConfigPath, mainConfigPath)
+	os.Setenv(EnvConfigPath, tmpDir)
 	defer os.Setenv(EnvConfigPath, oldEnv)
 
 	// Load the config

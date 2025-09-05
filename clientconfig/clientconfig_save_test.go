@@ -68,7 +68,7 @@ clusters:
 
 	// Set environment variable to use our test directory
 	oldEnv := os.Getenv(EnvConfigPath)
-	os.Setenv(EnvConfigPath, mainConfigPath)
+	os.Setenv(EnvConfigPath, tmpDir)
 	defer os.Setenv(EnvConfigPath, oldEnv)
 
 	// Load the config (this will merge clientconfig.d entries)
@@ -152,7 +152,7 @@ clusters:
 
 	// Set environment variable
 	oldEnv := os.Getenv(EnvConfigPath)
-	os.Setenv(EnvConfigPath, mainConfigPath)
+	os.Setenv(EnvConfigPath, tmpDir)
 	defer os.Setenv(EnvConfigPath, oldEnv)
 
 	// Load the config
@@ -220,9 +220,8 @@ clusters:
 	require.NoError(t, err)
 
 	// Set environment variable
-	mainConfigPath := filepath.Join(tmpDir, "clientconfig.yaml")
 	oldEnv := os.Getenv(EnvConfigPath)
-	os.Setenv(EnvConfigPath, mainConfigPath)
+	os.Setenv(EnvConfigPath, tmpDir)
 	defer os.Setenv(EnvConfigPath, oldEnv)
 
 	// Load the config (should load from config.d only)
@@ -235,6 +234,7 @@ clusters:
 	require.NoError(t, err)
 
 	// Read back the saved config
+	mainConfigPath := filepath.Join(tmpDir, "clientconfig.yaml")
 	savedData, err := os.ReadFile(mainConfigPath)
 	require.NoError(t, err)
 

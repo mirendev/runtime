@@ -26,7 +26,7 @@ var skipAddresses = map[string]bool{
 }
 
 func ConfigBind(ctx *Context, opts struct {
-	Identity string `short:"i" long:"identity" required:"true" description:"Name of the identity to use"`
+	Identity string `short:"i" long:"identity" description:"Name of the identity to use (optional - will use the only one if single)"`
 	Cluster  string `short:"c" long:"cluster" description:"Name of the cluster to create (optional - will list available)"`
 	Address  string `short:"a" long:"address" description:"Address/hostname of the cluster (optional - will use from selected cluster)"`
 	Force    bool   `short:"f" long:"force" description:"Overwrite existing cluster configuration"`
@@ -42,6 +42,21 @@ func ConfigBind(ctx *Context, opts struct {
 		return fmt.Errorf("no identities configured. Please run 'miren login' first")
 	}
 
+	// If no identity specified, check if we can auto-select
+	if opts.Identity == "" {
+		availableIdentities := mainConfig.GetIdentityNames()
+		if len(availableIdentities) == 1 {
+			// Auto-select the only identity
+			opts.Identity = availableIdentities[0]
+			ctx.Info("Using identity '%s' (only one available)", opts.Identity)
+		} else if len(availableIdentities) > 1 {
+			// Multiple identities available, user must specify
+			return fmt.Errorf("multiple identities available, please specify one with --identity: %s", strings.Join(availableIdentities, ", "))
+		} else {
+			return fmt.Errorf("no identities configured. Please run 'miren login' first")
+		}
+	}
+
 	identity, err := mainConfig.GetIdentity(opts.Identity)
 	if err != nil {
 		// List available identities to help the user
@@ -54,7 +69,6 @@ func ConfigBind(ctx *Context, opts struct {
 
 	// If no cluster name or address provided, query the identity server for available clusters
 	var caCert string
-	var actualFingerprint string
 	var allAddresses []string
 
 	if opts.Cluster == "" && opts.Address == "" {
@@ -80,99 +94,14 @@ func ConfigBind(ctx *Context, opts struct {
 		// Store all available addresses
 		allAddresses = selectedCluster.APIAddresses
 
-		// Try each address until one works
-		var lastErr error
-		var workingAddress string
-
-		// Try the cluster's advertised addresses first
-		for _, addr := range selectedCluster.APIAddresses {
-			// Check if this address should be skipped
-			// Use normalizeAddress to properly extract the host, handling schemes and ports
-			_, sniHost, err := normalizeAddress(addr)
-			if err != nil {
-				ctx.Warn("Failed to parse address %s: %v", addr, err)
-				lastErr = err
-				continue
-			}
-
-			if skipAddresses[sniHost] {
-				continue
-			}
-
-			ctx.Info("Trying to connect to %s...", addr)
-			cert, fingerprint, err := extractTLSCertificate(ctx, addr)
-			if err != nil {
-				ctx.Warn("Failed to connect to %s: %v", addr, err)
-				lastErr = err
-				continue
-			}
-
-			// Check fingerprint if we have an expected one
-			if selectedCluster.CACertFingerprint != "" {
-				if !strings.EqualFold(selectedCluster.CACertFingerprint, fingerprint) {
-					ctx.Warn("Certificate fingerprint mismatch for %s", addr)
-					ctx.Warn("Expected: %s", selectedCluster.CACertFingerprint)
-					ctx.Warn("Actual:   %s", fingerprint)
-					lastErr = fmt.Errorf("certificate fingerprint verification failed for %s", addr)
-					continue
-				}
-				ctx.Info("Certificate fingerprint verified for %s", addr)
-			}
-
-			// Successfully connected and verified
-			caCert = cert
-			actualFingerprint = fingerprint
-			workingAddress = addr
-			opts.Address = addr
-			break
+		// Try to connect to the cluster
+		workingAddress, cert, err := tryConnectToCluster(ctx, selectedCluster, true)
+		if err != nil {
+			return err
 		}
 
-		// If all normal addresses failed, try localhost as a fallback
-		if workingAddress == "" {
-			ctx.Info("All cluster addresses failed, trying localhost as fallback...")
-
-			// Try common localhost addresses with default port
-			localhostAddresses := []string{
-				"127.0.0.1:8443",
-				"[::1]:8443",
-			}
-
-			for _, addr := range localhostAddresses {
-				ctx.Info("Trying localhost address %s...", addr)
-				cert, fingerprint, err := extractTLSCertificate(ctx, addr)
-				if err != nil {
-					lastErr = err
-					continue
-				}
-
-				// Check fingerprint if we have an expected one
-				if selectedCluster.CACertFingerprint != "" {
-					if !strings.EqualFold(selectedCluster.CACertFingerprint, fingerprint) {
-						ctx.Warn("Certificate fingerprint mismatch for %s", addr)
-						ctx.Warn("Expected: %s", selectedCluster.CACertFingerprint)
-						ctx.Warn("Actual:   %s", fingerprint)
-						lastErr = fmt.Errorf("certificate fingerprint verification failed for %s", addr)
-						continue
-					}
-					ctx.Info("Certificate fingerprint verified for %s", addr)
-				}
-
-				// Successfully connected and verified
-				caCert = cert
-				actualFingerprint = fingerprint
-				workingAddress = addr
-				opts.Address = addr
-				ctx.Completed("Successfully connected to localhost at %s", addr)
-				break
-			}
-		}
-
-		if workingAddress == "" {
-			if lastErr != nil {
-				return fmt.Errorf("failed to connect to any cluster address: %w", lastErr)
-			}
-			return fmt.Errorf("no addresses available for cluster %s", selectedCluster.Name)
-		}
+		caCert = cert
+		opts.Address = workingAddress
 
 		if localName != selectedCluster.Name {
 			ctx.Info("Binding cluster '%s' as '%s' (connected to %s)", selectedCluster.Name, localName, workingAddress)
@@ -186,13 +115,13 @@ func ConfigBind(ctx *Context, opts struct {
 		ctx.Info("Connecting to %s to extract TLS certificate...", opts.Address)
 
 		// Extract the TLS certificate from the server
-		caCert, actualFingerprint, err = extractTLSCertificate(ctx, opts.Address)
+		cert, fingerprint, err := extractTLSCertificate(ctx, opts.Address)
 		if err != nil {
 			return fmt.Errorf("failed to extract TLS certificate: %w", err)
 		}
+		caCert = cert
+		ctx.Completed("Successfully extracted TLS certificate (fingerprint: %s)", fingerprint)
 	}
-
-	ctx.Completed("Successfully extracted TLS certificate (fingerprint: %s)", actualFingerprint)
 
 	// Create the cluster configuration
 	clusterConfig := &clientconfig.ClusterConfig{

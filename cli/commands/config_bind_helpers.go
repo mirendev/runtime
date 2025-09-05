@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/charmbracelet/bubbles/list"
@@ -514,4 +515,159 @@ func isInteractive() bool {
 	}
 
 	return (fileInfo.Mode() & os.ModeCharDevice) != 0
+}
+
+// tryConnectToCluster attempts to connect to a cluster using its available addresses
+// and returns the working address and CA certificate. It tries all provided addresses
+// in parallel and optionally falls back to localhost if all addresses fail.
+func tryConnectToCluster(ctx *Context, cluster *ClusterResponse, tryLocalhost bool) (workingAddress string, caCert string, err error) {
+	// Filter out addresses we should skip
+	var addressesToTry []string
+	for _, addr := range cluster.APIAddresses {
+		_, sniHost, err := normalizeAddress(addr)
+		if err != nil {
+			ctx.Warn("Failed to parse address %s: %v", addr, err)
+			continue
+		}
+		if !skipAddresses[sniHost] {
+			addressesToTry = append(addressesToTry, addr)
+		}
+	}
+
+	if len(addressesToTry) == 0 && !tryLocalhost {
+		return "", "", fmt.Errorf("no valid addresses available for cluster %s", cluster.Name)
+	}
+
+	ctx.Info("Trying to connect to cluster addresses...")
+
+	// Result struct for each connection attempt
+	type connResult struct {
+		addr        string
+		cert        string
+		fingerprint string
+		err         error
+	}
+
+	// Try all addresses in parallel
+	resultChan := make(chan connResult, len(addressesToTry))
+	var wg sync.WaitGroup
+
+	for _, addr := range addressesToTry {
+		wg.Add(1)
+		go func(address string) {
+			defer wg.Done()
+
+			cert, fingerprint, err := extractTLSCertificate(ctx, address)
+			resultChan <- connResult{
+				addr:        address,
+				cert:        cert,
+				fingerprint: fingerprint,
+				err:         err,
+			}
+		}(addr)
+	}
+
+	// Close the channel when all goroutines are done
+	go func() {
+		wg.Wait()
+		close(resultChan)
+	}()
+
+	// Collect results and find the first successful connection
+	var lastErr error
+	var results []connResult
+	for result := range resultChan {
+		results = append(results, result)
+	}
+
+	// Process results - prefer successful connections
+	for _, result := range results {
+		if result.err != nil {
+			ctx.Warn("Failed to connect to %s: %v", result.addr, result.err)
+			lastErr = result.err
+			continue
+		}
+
+		// Check fingerprint if we have an expected one
+		if cluster.CACertFingerprint != "" {
+			if !strings.EqualFold(cluster.CACertFingerprint, result.fingerprint) {
+				ctx.Warn("Certificate fingerprint mismatch for %s", result.addr)
+				ctx.Warn("Expected: %s", cluster.CACertFingerprint)
+				ctx.Warn("Actual:   %s", result.fingerprint)
+				lastErr = fmt.Errorf("certificate fingerprint verification failed for %s", result.addr)
+				continue
+			}
+			ctx.Info("Certificate fingerprint verified for %s", result.addr)
+		}
+
+		// Successfully connected and verified
+		ctx.Completed("Successfully connected to %s", result.addr)
+		return result.addr, result.cert, nil
+	}
+
+	// If all normal addresses failed and tryLocalhost is true, try localhost as a fallback
+	if tryLocalhost {
+		ctx.Info("All cluster addresses failed, trying localhost as fallback...")
+
+		// Try common localhost addresses with default port
+		localhostAddresses := []string{
+			"127.0.0.1:8443",
+			"[::1]:8443",
+		}
+
+		// Try localhost addresses in parallel too
+		localResultChan := make(chan connResult, len(localhostAddresses))
+		var localWg sync.WaitGroup
+
+		for _, addr := range localhostAddresses {
+			localWg.Add(1)
+			go func(address string) {
+				defer localWg.Done()
+
+				cert, fingerprint, err := extractTLSCertificate(ctx, address)
+				localResultChan <- connResult{
+					addr:        address,
+					cert:        cert,
+					fingerprint: fingerprint,
+					err:         err,
+				}
+			}(addr)
+		}
+
+		// Close the channel when all goroutines are done
+		go func() {
+			localWg.Wait()
+			close(localResultChan)
+		}()
+
+		// Process localhost results
+		for result := range localResultChan {
+			if result.err != nil {
+				ctx.Info("Failed to connect to localhost %s: %v", result.addr, result.err)
+				lastErr = result.err
+				continue
+			}
+
+			// Check fingerprint if we have an expected one
+			if cluster.CACertFingerprint != "" {
+				if !strings.EqualFold(cluster.CACertFingerprint, result.fingerprint) {
+					ctx.Warn("Certificate fingerprint mismatch for %s", result.addr)
+					ctx.Warn("Expected: %s", cluster.CACertFingerprint)
+					ctx.Warn("Actual:   %s", result.fingerprint)
+					lastErr = fmt.Errorf("certificate fingerprint verification failed for %s", result.addr)
+					continue
+				}
+				ctx.Info("Certificate fingerprint verified for %s", result.addr)
+			}
+
+			// Successfully connected and verified
+			ctx.Completed("Successfully connected to localhost at %s", result.addr)
+			return result.addr, result.cert, nil
+		}
+	}
+
+	if lastErr != nil {
+		return "", "", fmt.Errorf("failed to connect to any cluster address: %w", lastErr)
+	}
+	return "", "", fmt.Errorf("no addresses available for cluster %s", cluster.Name)
 }
