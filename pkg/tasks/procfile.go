@@ -35,21 +35,36 @@ func ParseFile(path string) (*Procfile, error) {
 
 	for {
 		line, err := br.ReadBytes('\n')
+
+		// Process the line if we got any data, even if there was an error
+		if len(line) > 0 {
+			line = bytes.TrimSpace(line)
+
+			// Skip empty lines
+			if len(line) == 0 {
+				if err != nil {
+					break
+				}
+				continue
+			}
+
+			name, command, found := bytes.Cut(line, []byte(":"))
+			if !found {
+				return nil, fmt.Errorf("invalid line: %s", string(line))
+			}
+
+			procs = append(procs, &Proc{
+				Name:    string(name),
+				Command: []string{"sh", "-c", strings.TrimSpace(string(command))},
+			})
+		}
+
+		// If we hit EOF or another error, we're done
 		if err != nil {
+			// For non-EOF errors, we might want to return the error
+			// but for now, we'll just stop parsing regardless of error type
 			break
 		}
-
-		line = bytes.TrimSpace(line)
-
-		name, command, found := bytes.Cut(line, []byte(":"))
-		if !found {
-			return nil, fmt.Errorf("invalid line: %s", string(line))
-		}
-
-		procs = append(procs, &Proc{
-			Name:    string(name),
-			Command: []string{"sh", "-c", strings.TrimSpace(string(command))},
-		})
 	}
 
 	return &Procfile{Proceses: procs}, nil
