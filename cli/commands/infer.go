@@ -190,7 +190,7 @@ func (w *Cmd) Help() string {
 
 	// Add custom footer message
 	if helpText != "" {
-		helpText += "\n─── From your friends at Miren ───\n"
+		helpText += "\n╭─── From your friends at Miren ───╮\n"
 	}
 
 	return helpText
