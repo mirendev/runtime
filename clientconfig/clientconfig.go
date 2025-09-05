@@ -647,6 +647,14 @@ func loadConfigDir(config *Config) error {
 	)
 
 	if config.sourcePath != "" {
+		// Check if MIREN_CONFIG was set to a file (not a directory)
+		if envPath := os.Getenv(EnvConfigPath); envPath != "" {
+			// If sourcePath matches envPath, it means MIREN_CONFIG points directly to a file
+			if config.sourcePath == envPath {
+				// Don't load clientconfig.d when MIREN_CONFIG points to a file
+				return nil
+			}
+		}
 		configDirPath = filepath.Join(filepath.Dir(config.sourcePath), "clientconfig.d")
 	} else {
 		// Determine the config.d directory path
@@ -654,6 +662,11 @@ func loadConfigDir(config *Config) error {
 		if err != nil {
 			return fmt.Errorf("failed to determine config.d path: %w", err)
 		}
+	}
+
+	// If configDirPath is empty, it means clientconfig.d is disabled
+	if configDirPath == "" {
+		return nil
 	}
 
 	// Check if the directory exists
@@ -714,11 +727,27 @@ func loadConfigDir(config *Config) error {
 }
 
 // getConfigDirPath determines the configuration directory path
+// Returns empty string if MIREN_CONFIG points to a file (disabling clientconfig.d)
 func getConfigDirPath() (string, error) {
 	// Check environment variable first
 	if envPath := os.Getenv(EnvConfigPath); envPath != "" {
-		// If a custom config path is specified, use its directory
-		return filepath.Join(filepath.Dir(envPath), "clientconfig.d"), nil
+		// Check if it's a file or directory
+		info, err := os.Stat(envPath)
+		if err == nil {
+			if !info.IsDir() {
+				// It's a file, don't use clientconfig.d
+				return "", nil
+			}
+			// It's a directory, use clientconfig.d within it
+			return filepath.Join(envPath, "clientconfig.d"), nil
+		}
+		// Path doesn't exist yet, check if it has a .yaml or .yml extension
+		if strings.HasSuffix(envPath, ".yaml") || strings.HasSuffix(envPath, ".yml") {
+			// Looks like a file path, don't use clientconfig.d
+			return "", nil
+		}
+		// Assume it's a directory
+		return filepath.Join(envPath, "clientconfig.d"), nil
 	}
 
 	// Fall back to default path in user's home directory
@@ -734,6 +763,22 @@ func getConfigDirPath() (string, error) {
 func getConfigPath() (string, error) {
 	// Check environment variable first
 	if envPath := os.Getenv(EnvConfigPath); envPath != "" {
+		// Check if it's a file or directory
+		info, err := os.Stat(envPath)
+		if err == nil {
+			if !info.IsDir() {
+				// It's a file, use it directly
+				return envPath, nil
+			}
+			// It's a directory, append clientconfig.yaml
+			return filepath.Join(envPath, "clientconfig.yaml"), nil
+		}
+		// Path doesn't exist yet, check if it has a .yaml or .yml extension
+		if strings.HasSuffix(envPath, ".yaml") || strings.HasSuffix(envPath, ".yml") {
+			// Looks like a file path, use it directly
+			return envPath, nil
+		}
+		// Assume it's a directory
 		return filepath.Join(envPath, "clientconfig.yaml"), nil
 	}
 

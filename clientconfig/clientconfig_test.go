@@ -17,8 +17,7 @@ func TestConfigLoadSave(t *testing.T) {
 	defer os.RemoveAll(tmpDir)
 
 	// Set environment variable to use temporary directory
-	configPath := filepath.Join(tmpDir, "config.yaml")
-	os.Setenv(EnvConfigPath, configPath)
+	os.Setenv(EnvConfigPath, tmpDir)
 	defer os.Unsetenv(EnvConfigPath)
 
 	// Create test configuration
@@ -79,11 +78,11 @@ func TestConfigPathResolution(t *testing.T) {
 	r := require.New(t)
 
 	// Test environment variable path
-	testPath := "/tmp/test-config.yaml"
-	os.Setenv(EnvConfigPath, testPath)
+	testDir := "/tmp/test-config"
+	os.Setenv(EnvConfigPath, testDir)
 	path, err := getConfigPath()
 	r.NoError(err)
-	r.Equal(testPath, path)
+	r.Equal(filepath.Join(testDir, "clientconfig.yaml"), path)
 	os.Unsetenv(EnvConfigPath)
 
 	// Test default path

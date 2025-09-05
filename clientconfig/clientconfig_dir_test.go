@@ -62,7 +62,7 @@ clusters:
 
 	// Set environment variable to use our test directory
 	oldEnv := os.Getenv(EnvConfigPath)
-	os.Setenv(EnvConfigPath, mainConfigPath)
+	os.Setenv(EnvConfigPath, tmpDir)
 	defer os.Setenv(EnvConfigPath, oldEnv)
 
 	// Load the config
@@ -118,7 +118,7 @@ clusters:
 
 	// Set environment variable to use our test directory
 	oldEnv := os.Getenv(EnvConfigPath)
-	os.Setenv(EnvConfigPath, filepath.Join(tmpDir, "clientconfig.yaml"))
+	os.Setenv(EnvConfigPath, tmpDir)
 	defer os.Setenv(EnvConfigPath, oldEnv)
 
 	// Load the config
@@ -166,7 +166,7 @@ clusters:
 
 	// Set environment variable to use our test directory
 	oldEnv := os.Getenv(EnvConfigPath)
-	os.Setenv(EnvConfigPath, mainConfigPath)
+	os.Setenv(EnvConfigPath, tmpDir)
 	defer os.Setenv(EnvConfigPath, oldEnv)
 
 	// Load the config - should fail due to invalid YAML
