@@ -551,6 +551,23 @@ func (c *Config) HasCluster(name string) bool {
 	return false
 }
 
+// HasAnyClusters checks if any clusters are configured
+func (c *Config) HasAnyClusters() bool {
+	// Check main config
+	if len(c.clusters) > 0 {
+		return true
+	}
+
+	// Check leaf configs
+	for _, leafConfig := range c.leafConfigs {
+		if len(leafConfig.clusters) > 0 {
+			return true
+		}
+	}
+
+	return false
+}
+
 // SetCluster adds or updates a cluster in the configuration
 func (c *Config) SetCluster(name string, cluster *ClusterConfig) {
 	if c.clusters == nil {
@@ -624,10 +641,19 @@ func (c *Config) IterateClusters(fn func(name string, cluster *ClusterConfig) er
 
 // loadConfigDir loads additional config files from the config.d directory
 func loadConfigDir(config *Config) error {
-	// Determine the config.d directory path
-	configDirPath, err := getConfigDirPath()
-	if err != nil {
-		return fmt.Errorf("failed to determine config.d path: %w", err)
+	var (
+		configDirPath string
+		err           error
+	)
+
+	if config.sourcePath != "" {
+		configDirPath = filepath.Join(filepath.Dir(config.sourcePath), "clientconfig.d")
+	} else {
+		// Determine the config.d directory path
+		configDirPath, err = getConfigDirPath()
+		if err != nil {
+			return fmt.Errorf("failed to determine config.d path: %w", err)
+		}
 	}
 
 	// Check if the directory exists
@@ -708,7 +734,7 @@ func getConfigDirPath() (string, error) {
 func getConfigPath() (string, error) {
 	// Check environment variable first
 	if envPath := os.Getenv(EnvConfigPath); envPath != "" {
-		return envPath, nil
+		return filepath.Join(envPath, "clientconfig.yaml"), nil
 	}
 
 	// Fall back to default path in user's home directory

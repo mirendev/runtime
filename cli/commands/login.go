@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -17,6 +18,13 @@ import (
 	"github.com/mdp/qrterminal/v3"
 	"miren.dev/runtime/clientconfig"
 	"miren.dev/runtime/pkg/cloudauth"
+)
+
+var (
+	// ErrNoAutoConfigNeeded indicates that auto-configuration is not needed or not possible
+	ErrNoAutoConfigNeeded = errors.New("no auto-configuration needed")
+	// ErrAutoConfigFailed indicates that auto-configuration was attempted but failed
+	ErrAutoConfigFailed = errors.New("auto-configuration failed")
 )
 
 // DeviceFlowInitResponse represents the response from /api/v1/device/code
@@ -177,8 +185,15 @@ func Login(ctx *Context, opts struct {
 				ctx.Info("Identity '%s' saved to config", opts.IdentityName)
 				ctx.Info("Future authentication will use the keypair (no login required)")
 				ctx.Info("")
-				ctx.Info("To use this identity with a cluster, add to your cluster config:")
-				ctx.Info("  identity: %s", opts.IdentityName)
+
+				// Check if we should auto-configure a cluster
+				if err := autoConfigureCluster(ctx, opts.IdentityName, opts.CloudURL, keyPair); err != nil {
+					// Don't fail the login, just log if there's a real error
+					if !errors.Is(err, ErrNoAutoConfigNeeded) && !errors.Is(err, ErrAutoConfigFailed) {
+						// Only log unexpected errors, not expected ones
+						ctx.Info("Note: %v", err)
+					}
+				}
 			}
 		} else {
 			// No keypair was registered
@@ -515,4 +530,133 @@ func saveKeyPairToConfig(identityName, cloudURL string, keyPair *cloudauth.KeyPa
 
 	// Save the main config (which will also save the leaf config)
 	return mainConfig.Save()
+}
+
+// autoConfigureCluster checks if there are any local clusters configured,
+// and if not, fetches available clusters from the server and automatically
+// configures the client if there's only one cluster available
+func autoConfigureCluster(ctx *Context, identityName, cloudURL string, keyPair *cloudauth.KeyPair) error {
+	// Load the main config to check if any clusters are configured
+	mainConfig, err := clientconfig.LoadConfig()
+	if err != nil && err != clientconfig.ErrNoConfig {
+		return fmt.Errorf("failed to load configuration: %w", err)
+	}
+
+	// Check if any clusters are already configured
+	if mainConfig != nil && mainConfig.HasAnyClusters() {
+		// Clusters already configured, no auto-configuration needed
+		return ErrNoAutoConfigNeeded
+	}
+
+	ctx.Info("Checking for available clusters...")
+
+	// Create identity config for fetching clusters
+	issuer := strings.TrimSuffix(cloudURL, "/")
+	if !strings.HasPrefix(issuer, "http://") && !strings.HasPrefix(issuer, "https://") {
+		issuer = "https://" + issuer
+	}
+
+	privateKeyPEM, err := keyPair.PrivateKeyPEM()
+	if err != nil {
+		return fmt.Errorf("failed to encode private key: %w", err)
+	}
+
+	identity := &clientconfig.IdentityConfig{
+		Type:       "keypair",
+		Issuer:     issuer,
+		PrivateKey: privateKeyPEM,
+	}
+
+	// Fetch available clusters from the server
+	clusters, err := fetchAvailableClusters(ctx, identity)
+	if err != nil {
+		return fmt.Errorf("failed to fetch available clusters: %w", err)
+	}
+
+	// Filter out clusters without API addresses
+	var validClusters []ClusterResponse
+	for _, cluster := range clusters {
+		if len(cluster.APIAddresses) > 0 {
+			validClusters = append(validClusters, cluster)
+		}
+	}
+
+	if len(validClusters) == 0 {
+		ctx.Info("No clusters available for your account")
+		return ErrNoAutoConfigNeeded
+	}
+
+	if len(validClusters) > 1 {
+		// Multiple clusters available, don't auto-configure
+		ctx.Info("Multiple clusters available. Run 'miren config bind' to select one:")
+		for _, cluster := range validClusters {
+			ctx.Info("  - %s (%s)", cluster.Name, cluster.OrganizationName)
+		}
+		return ErrNoAutoConfigNeeded
+	}
+
+	// Only one cluster available, auto-configure it
+	cluster := validClusters[0]
+	ctx.Info("Found one cluster: %s (%s)", cluster.Name, cluster.OrganizationName)
+	ctx.Info("Automatically configuring cluster connection...")
+
+	// Try to connect to the cluster and extract TLS certificate
+	// Don't try localhost for auto-configuration - only try advertised addresses
+	workingAddress, caCert, err := tryConnectToCluster(ctx, &cluster, false)
+	if err != nil {
+		ctx.Warn("Could not automatically connect to cluster: %v", err)
+		ctx.Info("Run 'miren config bind' manually to configure the cluster connection")
+		return ErrAutoConfigFailed
+	}
+
+	// Create the cluster configuration
+	clusterConfig := &clientconfig.ClusterConfig{
+		Hostname:     workingAddress,
+		AllAddresses: cluster.APIAddresses,
+		Identity:     identityName,
+		CACert:       caCert,
+	}
+
+	// Reload config to get latest state
+	mainConfig, err = clientconfig.LoadConfig()
+	if err != nil {
+		if err == clientconfig.ErrNoConfig {
+			mainConfig = clientconfig.NewConfig()
+		} else {
+			return fmt.Errorf("failed to load client config: %w", err)
+		}
+	}
+
+	// Use cluster name as the local name
+	clusterName := cluster.Name
+
+	// Create the cluster config data
+	leafConfigData := &clientconfig.ConfigData{
+		Clusters: map[string]*clientconfig.ClusterConfig{
+			clusterName: clusterConfig,
+		},
+	}
+
+	// Add as a leaf config
+	mainConfig.SetLeafConfig(clusterName, leafConfigData)
+
+	// Save the main config
+	if err := mainConfig.Save(); err != nil {
+		return fmt.Errorf("failed to save cluster configuration: %w", err)
+	}
+
+	ctx.Completed("Automatically configured cluster '%s' at %s", clusterName, workingAddress)
+
+	// If there's no active cluster set, set this one
+	if mainConfig.ActiveCluster() == "" {
+		// Set as active cluster
+		mainConfig.SetActiveCluster(clusterName)
+		if err := mainConfig.Save(); err != nil {
+			ctx.Warn("Failed to set as active cluster: %v", err)
+		} else {
+			ctx.Info("Set '%s' as the active cluster", clusterName)
+		}
+	}
+
+	return nil
 }
