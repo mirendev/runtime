@@ -188,6 +188,6 @@ func ConfigInfo(ctx *Context, opts struct {
 		ui.WithRows(rows),
 	)
 
-	fmt.Println(table.Render())
+	ctx.Printf("%s\n", table.Render())
 	return nil
 }
