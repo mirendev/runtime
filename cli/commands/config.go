@@ -3,8 +3,11 @@ package commands
 import (
 	"errors"
 	"fmt"
+	"strings"
 
+	"github.com/charmbracelet/lipgloss"
 	"miren.dev/runtime/clientconfig"
+	"miren.dev/runtime/pkg/ui"
 )
 
 type ConfigCentric struct {
@@ -92,16 +95,70 @@ func ConfigInfo(ctx *Context, opts struct {
 		return err
 	}
 
-	return cfg.IterateClusters(func(name string, ccfg *clientconfig.ClusterConfig) error {
-		prefix := " "
+	// Prepare data for the table
+	headers := []string{"", "CLUSTER", "ADDRESS", "IDENTITY"}
+	var rows []ui.Row
+
+	err = cfg.IterateClusters(func(name string, ccfg *clientconfig.ClusterConfig) error {
+		// Determine if this is the active cluster
+		isActive := false
 		if opts.Cluster != "" {
-			if name == opts.Cluster {
-				prefix = "*"
-			}
-		} else if name == cfg.ActiveCluster() {
+			isActive = (name == opts.Cluster)
+		} else {
+			isActive = (name == cfg.ActiveCluster())
+		}
+
+		// Use a star for active cluster
+		prefix := " "
+		if isActive {
 			prefix = "*"
 		}
-		ctx.Printf("%s %s at %s\n", prefix, name, ccfg.Hostname)
+
+		// Get identity info if present
+		identity := ccfg.Identity
+		if identity == "" {
+			identity = "-"
+		}
+
+		// Format address - color port portion gray
+		address := ccfg.Hostname
+		// Check if it has a port specified
+		if strings.Contains(address, ":") {
+			// Find the last colon to handle IPv6 addresses properly
+			lastColon := strings.LastIndex(address, ":")
+			host := address[:lastColon]
+			port := address[lastColon+1:]
+
+			// Color the port gray
+			grayPort := lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(":" + port)
+			address = host + grayPort
+		}
+
+		rows = append(rows, ui.Row{
+			prefix,
+			name,
+			address,
+			identity,
+		})
 		return nil
 	})
+
+	if err != nil {
+		return err
+	}
+
+	if len(rows) == 0 {
+		ctx.Printf("No clusters configured\n")
+		return nil
+	}
+
+	// Create and render the table
+	columns := ui.AutoSizeColumns(headers, rows)
+	table := ui.NewTable(
+		ui.WithColumns(columns),
+		ui.WithRows(rows),
+	)
+
+	fmt.Println(table.Render())
+	return nil
 }
