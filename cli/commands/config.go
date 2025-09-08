@@ -3,7 +3,7 @@ package commands
 import (
 	"errors"
 	"fmt"
-	"strings"
+	"net"
 
 	"github.com/charmbracelet/lipgloss"
 	"miren.dev/runtime/clientconfig"
@@ -133,7 +133,7 @@ func ConfigInfo(ctx *Context, opts struct {
 		clusterInfo := ClusterInfo{
 			Name:     name,
 			Address:  ccfg.Hostname,
-			Identity: identity,
+			Identity: ccfg.Identity,
 			Active:   isActive,
 		}
 		clusters = append(clusters, clusterInfo)
@@ -142,14 +142,7 @@ func ConfigInfo(ctx *Context, opts struct {
 		if !opts.IsJSON() {
 			// Format address - color port portion gray for table display
 			address := ccfg.Hostname
-			// Check if it has a port specified
-			if strings.Contains(address, ":") {
-				// Find the last colon to handle IPv6 addresses properly
-				lastColon := strings.LastIndex(address, ":")
-				host := address[:lastColon]
-				port := address[lastColon+1:]
-
-				// Color the port gray
+			if host, port, err := net.SplitHostPort(address); err == nil {
 				grayPort := lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(":" + port)
 				address = host + grayPort
 			}
@@ -168,17 +161,14 @@ func ConfigInfo(ctx *Context, opts struct {
 		return err
 	}
 
-	if len(clusters) == 0 {
-		if opts.IsJSON() {
-			return PrintJSON([]interface{}{})
-		}
-		ctx.Printf("No clusters configured\n")
-		return nil
-	}
-
 	// Output based on format
 	if opts.IsJSON() {
 		return PrintJSON(clusters)
+	}
+
+	if len(clusters) == 0 {
+		ctx.Printf("No clusters configured\n")
+		return nil
 	}
 
 	// Create and render the table

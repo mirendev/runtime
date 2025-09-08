@@ -33,14 +33,6 @@ func SandboxList(ctx *Context, opts struct {
 		return err
 	}
 
-	if len(res.Values()) == 0 {
-		if opts.IsJSON() {
-			return PrintJSON([]interface{}{})
-		}
-		ctx.Printf("No sandboxes found\n")
-		return nil
-	}
-
 	// For JSON output, just filter and return the raw sandbox structs
 	if opts.IsJSON() {
 		var sandboxes []compute_v1alpha.Sandbox
@@ -67,7 +59,6 @@ func SandboxList(ctx *Context, opts struct {
 	// Table output - all the UI formatting logic
 	var rows []ui.Row
 	headers := []string{"ID", "STATUS", "VERSION", "CONTAINERS", "CREATED", "UPDATED"}
-	hasResults := false
 
 	for _, e := range res.Values() {
 		// Decode the sandbox entity
@@ -88,8 +79,6 @@ func SandboxList(ctx *Context, opts struct {
 			continue
 		}
 
-		hasResults = true
-
 		// Apply all UI formatting for table display
 		rows = append(rows, ui.Row{
 			ui.CleanEntityID(sandbox.ID.String()),
@@ -101,9 +90,8 @@ func SandboxList(ctx *Context, opts struct {
 		})
 	}
 
-	// If no results after filtering
-	if !hasResults {
-		ctx.Printf("No sandboxes found matching criteria\n")
+	if len(rows) == 0 {
+		ctx.Printf("No sandboxes found\n")
 		return nil
 	}
 

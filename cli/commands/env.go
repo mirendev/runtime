@@ -251,7 +251,7 @@ func EnvList(ctx *Context, opts struct {
 
 	if !cfg.HasEnvVars() {
 		if opts.IsJSON() {
-			return PrintJSON([]interface{}{})
+			return PrintJSON([]any{})
 		}
 		ctx.Printf("No environment variables set\n")
 		return nil
