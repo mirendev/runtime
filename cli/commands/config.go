@@ -88,6 +88,7 @@ func (c *ConfigCentric) LoadCluster() (*clientconfig.ClusterConfig, string, erro
 }
 
 func ConfigInfo(ctx *Context, opts struct {
+	FormatOptions
 	ConfigCentric
 }) error {
 	cfg, err := opts.LoadConfig()
@@ -95,9 +96,17 @@ func ConfigInfo(ctx *Context, opts struct {
 		return err
 	}
 
-	// Prepare data for the table
-	headers := []string{"", "CLUSTER", "ADDRESS", "IDENTITY"}
+	// Prepare structured data
+	type ClusterInfo struct {
+		Name     string `json:"name"`
+		Address  string `json:"address"`
+		Identity string `json:"identity"`
+		Active   bool   `json:"active"`
+	}
+
+	var clusters []ClusterInfo
 	var rows []ui.Row
+	headers := []string{"", "CLUSTER", "ADDRESS", "IDENTITY"}
 
 	err = cfg.IterateClusters(func(name string, ccfg *clientconfig.ClusterConfig) error {
 		// Determine if this is the active cluster
@@ -120,26 +129,38 @@ func ConfigInfo(ctx *Context, opts struct {
 			identity = "-"
 		}
 
-		// Format address - color port portion gray
-		address := ccfg.Hostname
-		// Check if it has a port specified
-		if strings.Contains(address, ":") {
-			// Find the last colon to handle IPv6 addresses properly
-			lastColon := strings.LastIndex(address, ":")
-			host := address[:lastColon]
-			port := address[lastColon+1:]
-
-			// Color the port gray
-			grayPort := lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(":" + port)
-			address = host + grayPort
+		// Build structured data for JSON
+		clusterInfo := ClusterInfo{
+			Name:     name,
+			Address:  ccfg.Hostname,
+			Identity: identity,
+			Active:   isActive,
 		}
+		clusters = append(clusters, clusterInfo)
 
-		rows = append(rows, ui.Row{
-			prefix,
-			name,
-			address,
-			identity,
-		})
+		// Build table row with formatting
+		if !opts.IsJSON() {
+			// Format address - color port portion gray for table display
+			address := ccfg.Hostname
+			// Check if it has a port specified
+			if strings.Contains(address, ":") {
+				// Find the last colon to handle IPv6 addresses properly
+				lastColon := strings.LastIndex(address, ":")
+				host := address[:lastColon]
+				port := address[lastColon+1:]
+
+				// Color the port gray
+				grayPort := lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(":" + port)
+				address = host + grayPort
+			}
+
+			rows = append(rows, ui.Row{
+				prefix,
+				name,
+				address,
+				identity,
+			})
+		}
 		return nil
 	})
 
@@ -147,9 +168,17 @@ func ConfigInfo(ctx *Context, opts struct {
 		return err
 	}
 
-	if len(rows) == 0 {
+	if len(clusters) == 0 {
+		if opts.IsJSON() {
+			return PrintJSON([]interface{}{})
+		}
 		ctx.Printf("No clusters configured\n")
 		return nil
+	}
+
+	// Output based on format
+	if opts.IsJSON() {
+		return PrintJSON(clusters)
 	}
 
 	// Create and render the table

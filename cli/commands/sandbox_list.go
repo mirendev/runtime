@@ -11,6 +11,7 @@ import (
 
 func SandboxList(ctx *Context, opts struct {
 	Status string `short:"s" long:"status" description:"Filter by status (pending, not_ready, running, stopped, dead)"`
+	FormatOptions
 	ConfigCentric
 }) error {
 	client, err := ctx.RPCClient("entities")
@@ -33,13 +34,40 @@ func SandboxList(ctx *Context, opts struct {
 	}
 
 	if len(res.Values()) == 0 {
+		if opts.IsJSON() {
+			return PrintJSON([]interface{}{})
+		}
 		ctx.Printf("No sandboxes found\n")
 		return nil
 	}
 
-	// Prepare data for the table
-	headers := []string{"ID", "STATUS", "VERSION", "CONTAINERS", "CREATED", "UPDATED"}
+	// For JSON output, just filter and return the raw sandbox structs
+	if opts.IsJSON() {
+		var sandboxes []compute_v1alpha.Sandbox
+
+		for _, e := range res.Values() {
+			var sandbox compute_v1alpha.Sandbox
+			sandbox.Decode(e.Entity())
+
+			// Apply status filter if specified
+			if opts.Status != "" {
+				status := string(sandbox.Status)
+				cleanStatus := ui.CleanStatus(status)
+				if cleanStatus != opts.Status {
+					continue
+				}
+			}
+
+			sandboxes = append(sandboxes, sandbox)
+		}
+
+		return PrintJSON(sandboxes)
+	}
+
+	// Table output - all the UI formatting logic
 	var rows []ui.Row
+	headers := []string{"ID", "STATUS", "VERSION", "CONTAINERS", "CREATED", "UPDATED"}
+	hasResults := false
 
 	for _, e := range res.Values() {
 		// Decode the sandbox entity
@@ -60,36 +88,21 @@ func SandboxList(ctx *Context, opts struct {
 			continue
 		}
 
-		// Apply color to status
-		coloredStatus := ui.DisplayStatus(status)
+		hasResults = true
 
-		// Get version string and format for display
-		version := ui.DisplayAppVersion(sandbox.Version.String())
-
-		// Clean sandbox ID prefix
-		sandboxID := ui.CleanEntityID(sandbox.ID.String())
-
-		// Count containers
-		containerCount := fmt.Sprintf("%d", len(sandbox.Container))
-
-		// Format created time (CreatedAt is in milliseconds)
-		created := humanFriendlyTimestamp(time.UnixMilli(e.CreatedAt()))
-
-		// Format updated time (UpdatedAt is in milliseconds)
-		updated := humanFriendlyTimestamp(time.UnixMilli(e.UpdatedAt()))
-
+		// Apply all UI formatting for table display
 		rows = append(rows, ui.Row{
-			sandboxID,
-			coloredStatus,
-			version,
-			containerCount,
-			created,
-			updated,
+			ui.CleanEntityID(sandbox.ID.String()),
+			ui.DisplayStatus(status),
+			ui.DisplayAppVersion(sandbox.Version.String()),
+			fmt.Sprintf("%d", len(sandbox.Container)),
+			humanFriendlyTimestamp(time.UnixMilli(e.CreatedAt())),
+			humanFriendlyTimestamp(time.UnixMilli(e.UpdatedAt())),
 		})
 	}
 
-	// If no rows after filtering, show message
-	if len(rows) == 0 {
+	// If no results after filtering
+	if !hasResults {
 		ctx.Printf("No sandboxes found matching criteria\n")
 		return nil
 	}

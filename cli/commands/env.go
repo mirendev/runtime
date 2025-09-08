@@ -232,6 +232,7 @@ func EnvGet(ctx *Context, opts struct {
 }
 
 func EnvList(ctx *Context, opts struct {
+	FormatOptions
 	AppCentric
 }) error {
 	cl, err := ctx.RPCClient("dev.miren.runtime/app")
@@ -249,6 +250,9 @@ func EnvList(ctx *Context, opts struct {
 	cfg := res.Configuration()
 
 	if !cfg.HasEnvVars() {
+		if opts.IsJSON() {
+			return PrintJSON([]interface{}{})
+		}
 		ctx.Printf("No environment variables set\n")
 		return nil
 	}
@@ -260,6 +264,29 @@ func EnvList(ctx *Context, opts struct {
 	sort.Slice(envvars, func(i, j int) bool {
 		return envvars[i].Key() < envvars[j].Key()
 	})
+
+	// For JSON output
+	if opts.IsJSON() {
+		type EnvVar struct {
+			Name      string `json:"name"`
+			Value     string `json:"value,omitempty"`
+			Sensitive bool   `json:"sensitive"`
+		}
+
+		var vars []EnvVar
+		for _, nv := range envvars {
+			ev := EnvVar{
+				Name:      nv.Key(),
+				Sensitive: nv.Sensitive(),
+			}
+			// Only include value for non-sensitive variables in JSON
+			if !nv.Sensitive() {
+				ev.Value = nv.Value()
+			}
+			vars = append(vars, ev)
+		}
+		return PrintJSON(vars)
+	}
 
 	// Create and print the table
 	printEnvTable(ctx, envvars)
