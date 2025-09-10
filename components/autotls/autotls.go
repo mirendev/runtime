@@ -33,8 +33,13 @@ func ServeTLS(ctx context.Context, log *slog.Logger, dataPath string, h http.Han
 
 	// Start HTTP server on port 80 for ACME challenges and HTTP to HTTPS redirect
 	httpServer := &http.Server{
-		Addr:    ":80",
-		Handler: mgr.HTTPHandler(nil), // nil fallback means automatic redirect to HTTPS
+		Addr:              ":80",
+		Handler:           mgr.HTTPHandler(nil),
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       10 * time.Second,
+		WriteTimeout:      10 * time.Second,
+		IdleTimeout:       120 * time.Second,
+		MaxHeaderBytes:    1 << 20,
 	}
 
 	go func() {
