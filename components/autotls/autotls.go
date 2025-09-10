@@ -31,17 +31,35 @@ func ServeTLS(ctx context.Context, log *slog.Logger, dataPath string, h http.Han
 		}
 	}()
 
-	// Monitor for context cancellation and gracefully shutdown the server
+	// Start HTTP server on port 80 for ACME challenges and HTTP to HTTPS redirect
+	httpServer := &http.Server{
+		Addr:    ":80",
+		Handler: mgr.HTTPHandler(nil), // nil fallback means automatic redirect to HTTPS
+	}
+
+	go func() {
+		log.Info("starting HTTP server for ACME challenges and HTTPS redirect", "addr", ":80")
+		err := httpServer.ListenAndServe()
+		if err != nil && err != http.ErrServerClosed {
+			log.Error("error serving HTTP", "error", err)
+		}
+	}()
+
+	// Monitor for context cancellation and gracefully shutdown both servers
 	go func() {
 		<-ctx.Done()
-		log.Info("shutting down TLS server")
+		log.Info("shutting down TLS and HTTP servers")
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 
+		// Shutdown both servers
 		if err := server.Shutdown(shutdownCtx); err != nil {
 			log.Error("TLS server shutdown error", "error", err)
 		}
-		log.Info("TLS server shutdown complete")
+		if err := httpServer.Shutdown(shutdownCtx); err != nil {
+			log.Error("HTTP server shutdown error", "error", err)
+		}
+		log.Info("TLS and HTTP servers shutdown complete")
 	}()
 
 	return nil
