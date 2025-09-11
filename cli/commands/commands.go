@@ -140,6 +140,18 @@ func AllCommands() map[string]cli.CommandFactory {
 			return Infer("download release", "Download and extract miren release", DownloadRelease), nil
 		},
 
+		"upgrade": func() (cli.Command, error) {
+			return Infer("upgrade", "Perform hot restart upgrade of miren server", UpgradeLocal), nil
+		},
+
+		"upgrade-status": func() (cli.Command, error) {
+			return Infer("upgrade-status", "Check status of ongoing upgrade", UpgradeStatus), nil
+		},
+
+		"upgrade-rollback": func() (cli.Command, error) {
+			return Infer("upgrade-rollback", "Rollback failed upgrade", UpgradeRollback), nil
+		},
+
 		"auth generate": func() (cli.Command, error) {
 			return Infer("auth generate", "Generate authentication config file", AuthGenerate), nil
 		},

@@ -11,9 +11,11 @@ import (
 	"net/netip"
 	"os"
 	"os/exec"
+	"os/signal"
 	"os/user"
 	"path/filepath"
 	"strconv"
+	"syscall"
 	"time"
 
 	containerd "github.com/containerd/containerd/v2/client"
@@ -33,6 +35,7 @@ import (
 	"miren.dev/runtime/components/ocireg"
 	"miren.dev/runtime/components/runner"
 	"miren.dev/runtime/components/scheduler"
+	"miren.dev/runtime/components/upgrade"
 	"miren.dev/runtime/metrics"
 	"miren.dev/runtime/observability"
 	"miren.dev/runtime/pkg/caauth"
@@ -43,6 +46,7 @@ import (
 	"miren.dev/runtime/pkg/registration"
 	"miren.dev/runtime/pkg/rpc"
 	"miren.dev/runtime/servers/httpingress"
+	upgradeserver "miren.dev/runtime/servers/upgrade"
 )
 
 func Server(ctx *Context, opts struct {
@@ -71,15 +75,65 @@ func Server(ctx *Context, opts struct {
 	ContainerdSocketPath      string   `long:"containerd-socket" description:"Path to containerd socket"`
 	SkipClientConfig          bool     `long:"skip-client-config" description:"Skip writing client config file to clientconfig.d"`
 	ConfigClusterName         string   `short:"C" long:"config-cluster-name" description:"Name of the cluster in client config" default:"local"`
+	Takeover                  bool     `long:"takeover" description:"Take over from existing process during upgrade"`
 }) error {
+	// Initialize upgrade coordinator
+	upgradeCoordinator := upgrade.NewCoordinator(ctx.Log, opts.DataPath)
+
+	// Check if this is a takeover from an existing process
+	if opts.Takeover {
+		ctx.Log.Info("starting in takeover mode, loading handoff state")
+
+		handoffState, err := upgradeCoordinator.LoadHandoffState()
+		if err != nil {
+			return fmt.Errorf("failed to load handoff state: %w", err)
+		}
+
+		if handoffState == nil {
+			return fmt.Errorf("takeover mode specified but no handoff state found")
+		}
+
+		// Override options from handoff state
+		ctx.Log.Info("restoring state from handoff",
+			"containerd_socket", handoffState.ContainerdSocket,
+			"etcd_endpoints", handoffState.EtcdEndpoints,
+			"mode", handoffState.Mode)
+
+		// Don't start embedded services in takeover mode
+		opts.StartContainerd = false
+		opts.StartEtcd = false
+		opts.StartClickHouse = false
+
+		// Use existing sockets and endpoints
+		if handoffState.ContainerdSocket != "" {
+			opts.ContainerdSocketPath = handoffState.ContainerdSocket
+		}
+		if len(handoffState.EtcdEndpoints) > 0 {
+			opts.EtcdEndpoints = handoffState.EtcdEndpoints
+		}
+		if handoffState.ClickHouseAddress != "" {
+			opts.ClickHouseAddress = handoffState.ClickHouseAddress
+		}
+
+		// Defer signaling readiness after server is up
+		defer func() {
+			if err := upgradeCoordinator.SignalReady(); err != nil {
+				ctx.Log.Error("failed to signal readiness to old process", "error", err)
+			}
+		}()
+	}
+
 	eg, sub := errgroup.WithContext(ctx)
 
 	// Handle mode configuration
 	switch opts.Mode {
 	case "standalone":
-		opts.StartContainerd = true
-		opts.StartEtcd = true
-		opts.StartClickHouse = true
+		// Only start embedded services if not in takeover mode
+		if !opts.Takeover {
+			opts.StartContainerd = true
+			opts.StartEtcd = true
+			opts.StartClickHouse = true
+		}
 
 		// Determine release path
 		if opts.ReleasePath == "" {
@@ -621,6 +675,56 @@ func Server(ctx *Context, opts struct {
 		if err := writeLocalClusterConfig(ctx, cert, opts.Address, opts.ConfigClusterName); err != nil {
 			ctx.Log.Warn("failed to write local cluster config", "error", err)
 			// Don't fail the whole command if we can't write the config
+		}
+	}
+
+	// Initialize the upgrade server with current state
+	upgradeServer := upgradeserver.NewServer(ctx.Log, opts.DataPath)
+	upgradeServer.SetServerState(
+		containerdSocketPath,
+		opts.EtcdEndpoints,
+		opts.ClickHouseAddress,
+		opts.Address,
+		opts.RunnerAddress,
+		opts.RunnerId,
+		opts.Mode,
+	)
+
+	// Register the upgrade server for RPC access
+	ctx.Server.Register("upgrade-server", upgradeServer)
+
+	// Set up signal handler for upgrade coordination
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGUSR1, syscall.SIGUSR2)
+
+	// Handle upgrade signals in a separate goroutine
+	eg.Go(func() error {
+		for {
+			select {
+			case <-sub.Done():
+				return nil
+			case sig := <-sigChan:
+				switch sig {
+				case syscall.SIGUSR1:
+					// Signal from new process that it's ready
+					ctx.Log.Info("received readiness signal from new process, initiating graceful shutdown")
+					upgradeCoordinator.HandleReadinessSignal()
+					// Return an error to trigger graceful shutdown
+					return fmt.Errorf("upgrade handoff complete")
+				case syscall.SIGUSR2:
+					// Signal to initiate upgrade (alternative to RPC)
+					ctx.Log.Info("received upgrade signal")
+					// This could trigger an upgrade if a new binary is available
+				}
+			}
+		}
+	})
+
+	// If this was a takeover, signal the old process that we're ready
+	if opts.Takeover {
+		ctx.Log.Info("takeover initialization complete, signaling old process")
+		if err := upgradeCoordinator.SignalReady(); err != nil {
+			ctx.Log.Error("failed to signal readiness to old process", "error", err)
 		}
 	}
 
