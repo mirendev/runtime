@@ -745,11 +745,26 @@ func Server(ctx *Context, opts struct {
 	}
 
 	// Initialize the upgrade server with current state
+	// Resolve the effective values from the registry
+	var resolvedContainerdSocket string
+	if err := ctx.Server.ResolveNamed(&resolvedContainerdSocket, "containerd-socket"); err != nil {
+		// Fall back to the original value if resolution fails
+		ctx.Log.Warn("failed to resolve containerd socket from registry, using original", "error", err)
+		resolvedContainerdSocket = containerdSocketPath
+	}
+
+	var resolvedClickHouseAddr string
+	if err := ctx.Server.ResolveNamed(&resolvedClickHouseAddr, "clickhouse-address"); err != nil {
+		// Fall back to the original value if resolution fails
+		ctx.Log.Warn("failed to resolve clickhouse address from registry, using original", "error", err)
+		resolvedClickHouseAddr = opts.ClickHouseAddress
+	}
+
 	upgradeServer := upgradeserver.NewServer(ctx.Log, opts.DataPath)
 	upgradeServer.SetServerState(
-		containerdSocketPath,
+		resolvedContainerdSocket,
 		opts.EtcdEndpoints,
-		opts.ClickHouseAddress,
+		resolvedClickHouseAddr,
 		opts.Address,
 		opts.RunnerAddress,
 		opts.RunnerId,
