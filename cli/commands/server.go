@@ -49,6 +49,41 @@ import (
 	upgradeserver "miren.dev/runtime/servers/upgrade"
 )
 
+// waitForPortsFree waits for the specified ports to become available
+func waitForPortsFree(ctx context.Context, addresses []string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+
+	for time.Now().Before(deadline) {
+		allFree := true
+		for _, addr := range addresses {
+			// Try to listen on the port
+			ln, err := net.Listen("tcp", addr)
+			if err != nil {
+				// Port is still in use
+				allFree = false
+				break
+			}
+			// Port is free, close immediately
+			ln.Close()
+		}
+
+		if allFree {
+			return nil
+		}
+
+		// Check if context is cancelled
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+			// Wait a bit before retrying
+			time.Sleep(100 * time.Millisecond)
+		}
+	}
+
+	return fmt.Errorf("timeout waiting for ports to be free")
+}
+
 func Server(ctx *Context, opts struct {
 	Mode                      string   `short:"m" long:"mode" description:"Server mode (standalone, distributed)" default:"standalone"`
 	Address                   string   `short:"a" long:"address" description:"Address to listen on" default:"localhost:8443"`
@@ -115,7 +150,43 @@ func Server(ctx *Context, opts struct {
 			opts.ClickHouseAddress = handoffState.ClickHouseAddress
 		}
 
-		// Signal readiness will happen after server is fully initialized
+		// Signal the old process early that we're ready to take over
+		// This allows it to start shutting down and freeing ports
+		ctx.Log.Info("signaling old process to begin shutdown")
+		if err := upgradeCoordinator.SignalReady(); err != nil {
+			return fmt.Errorf("failed to signal readiness to old process: %w", err)
+		}
+
+		// Adopt orphaned child processes into our cgroup (systemd only)
+		// This must happen quickly after signaling to avoid processes becoming orphaned
+		if upgrade.IsRunningUnderSystemd() {
+			ctx.Log.Info("adopting child processes into service cgroup")
+			cgroupMgr, err := upgrade.NewCgroupManager()
+			if err != nil {
+				ctx.Log.Warn("failed to create cgroup manager", "error", err)
+			} else if cgroupMgr != nil {
+				// Find and adopt containerd
+				if handoffState.ContainerdSocket != "" {
+					containerdPID, err := upgrade.FindContainerdPID(handoffState.ContainerdSocket)
+					if err != nil {
+						ctx.Log.Warn("failed to find containerd PID", "error", err)
+					} else if containerdPID > 0 {
+						ctx.Log.Info("adopting containerd process tree", "pid", containerdPID)
+						if err := cgroupMgr.AdoptChildProcesses(containerdPID); err != nil {
+							ctx.Log.Warn("failed to adopt containerd processes", "error", err)
+						} else {
+							ctx.Log.Info("successfully adopted containerd process tree into service cgroup")
+						}
+					}
+				}
+			}
+		}
+
+		// Wait for ports to be free before starting services
+		ctx.Log.Info("waiting for ports to become available")
+		if err := waitForPortsFree(ctx, []string{opts.Address, opts.RunnerAddress, ":8989"}, 30*time.Second); err != nil {
+			return fmt.Errorf("failed waiting for ports to be free: %w", err)
+		}
 	}
 
 	eg, sub := errgroup.WithContext(ctx)
@@ -716,36 +787,10 @@ func Server(ctx *Context, opts struct {
 		}
 	})
 
-	// If this was a takeover, signal the old process that we're ready
+	// If this was a takeover, log that we've completed initialization
 	if opts.Takeover {
-		ctx.Log.Info("takeover initialization complete, signaling old process")
-		if err := upgradeCoordinator.SignalReady(); err != nil {
-			ctx.Log.Error("failed to signal readiness to old process", "error", err)
-		}
-
-		// Adopt orphaned child processes into our cgroup (systemd only)
-		if upgrade.IsRunningUnderSystemd() {
-			ctx.Log.Info("adopting child processes into service cgroup")
-			cgroupMgr, err := upgrade.NewCgroupManager()
-			if err != nil {
-				ctx.Log.Warn("failed to create cgroup manager", "error", err)
-			} else if cgroupMgr != nil {
-				// Find and adopt containerd
-				if containerdSocketPath != "" {
-					containerdPID, err := upgrade.FindContainerdPID(containerdSocketPath)
-					if err != nil {
-						ctx.Log.Warn("failed to find containerd PID", "error", err)
-					} else if containerdPID > 0 {
-						ctx.Log.Info("adopting containerd process tree", "pid", containerdPID)
-						if err := cgroupMgr.AdoptChildProcesses(containerdPID); err != nil {
-							ctx.Log.Warn("failed to adopt containerd processes", "error", err)
-						} else {
-							ctx.Log.Info("successfully adopted containerd process tree into service cgroup")
-						}
-					}
-				}
-			}
-		}
+		ctx.Log.Info("takeover initialization complete, server is ready")
+		// Note: SignalReady and cgroup adoption already happened early, before binding ports
 	} else {
 		// Normal startup - notify systemd if applicable
 		if upgrade.IsRunningUnderSystemd() {
