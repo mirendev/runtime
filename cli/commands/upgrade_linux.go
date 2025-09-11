@@ -122,24 +122,8 @@ func UpgradeLocal(ctx *Context, opts struct {
 			"timestamp", existingState.Timestamp,
 			"old_pid", existingState.OldPID)
 	} else {
-		// Create a minimal handoff state
-		// The running server should have created one, but if not, we create a basic one
-		existingState = &upgrade.HandoffState{
-			OldPID:           opts.PID,
-			Timestamp:        time.Now(),
-			Mode:             "standalone",
-			DataPath:         opts.DataPath,
-			ServerAddress:    "localhost:8443",
-			RunnerAddress:    "localhost:8444",
-			RunnerID:         "miren",
-			ContainerdSocket: filepath.Join(opts.DataPath, "containerd", "containerd.sock"),
-			EtcdEndpoints:    []string{"http://localhost:12379"},
-		}
-
-		// Save the handoff state
-		if err := coordinator.SaveHandoffState(existingState); err != nil {
-			return fmt.Errorf("failed to save handoff state: %w", err)
-		}
+		// No handoff state found - fail fast
+		return fmt.Errorf("no handoff state found - the running server must initiate the upgrade first")
 	}
 
 	ctx.UILog.Info("initiating hot restart upgrade...")
