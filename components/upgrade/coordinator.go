@@ -135,7 +135,10 @@ func (c *Coordinator) SaveHandoffState(state *HandoffState) error {
 	const handoffVersion = 1
 	state.Version = handoffVersion
 	state.Timestamp = time.Now()
-	state.OldPID = os.Getpid()
+	// Only set OldPID if not already set (preserve prefilled value)
+	if state.OldPID == 0 {
+		state.OldPID = os.Getpid()
+	}
 
 	data, err := json.MarshalIndent(state, "", "  ")
 	if err != nil {

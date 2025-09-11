@@ -198,6 +198,10 @@ func UpgradeLocal(ctx *Context, opts struct {
 	for {
 		select {
 		case <-timeout:
+			// NOTE: We intentionally kill only the child process, not the process group.
+			// This preserves child processes like containerd that should continue running
+			// even if the upgrade times out. The child processes will be orphaned and
+			// reparented to init, but this is preferable to killing critical services.
 			if err := cmd.Process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
 				ctx.Log.Warn("failed to kill new process on timeout", "error", err)
 			}
