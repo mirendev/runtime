@@ -228,6 +228,10 @@ func UpgradeLocal(ctx *Context, opts struct {
 			// Check if the new process is still running
 			if err := syscall.Kill(cmd.Process.Pid, 0); err != nil {
 				// New process died, upgrade failed
+				// Clear the upgrade state to avoid leaving the system in an "upgrading" state
+				if cleanupErr := coordinator.ClearHandoffState(); cleanupErr != nil {
+					ctx.Log.Warn("failed to clear upgrade state after process failure", "error", cleanupErr)
+				}
 				return fmt.Errorf("new process exited unexpectedly")
 			}
 		}
