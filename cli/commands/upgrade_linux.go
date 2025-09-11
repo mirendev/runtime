@@ -193,8 +193,12 @@ func UpgradeLocal(ctx *Context, opts struct {
 
 		case <-ticker.C:
 			// Check if the old process has exited (which means handoff completed)
-			if err := syscall.Kill(opts.PID, 0); err != nil {
-				// Old process has exited, upgrade successful
+			err := syscall.Kill(opts.PID, 0)
+			if err == nil {
+				// Process still exists, continue waiting
+				continue
+			} else if errors.Is(err, syscall.ESRCH) {
+				// Old process has exited (No such process), upgrade successful
 				ctx.UILog.Info("upgrade completed successfully",
 					"old_pid", opts.PID,
 					"new_pid", cmd.Process.Pid)
@@ -223,6 +227,14 @@ func UpgradeLocal(ctx *Context, opts struct {
 				}
 
 				return nil
+			} else if errors.Is(err, syscall.EPERM) {
+				// Permission denied - old process exists but we can't signal it
+				ctx.Log.Error("permission denied checking old process status", "pid", opts.PID)
+				return fmt.Errorf("permission denied checking old process (PID %d) - upgrade cannot proceed", opts.PID)
+			} else {
+				// Other error checking old process
+				ctx.Log.Error("unexpected error checking old process status", "pid", opts.PID, "error", err)
+				return fmt.Errorf("failed to check old process status: %w", err)
 			}
 
 			// Check if the new process is still running
