@@ -11,9 +11,11 @@ import (
 	"net/netip"
 	"os"
 	"os/exec"
+	"os/signal"
 	"os/user"
 	"path/filepath"
 	"strconv"
+	"syscall"
 	"time"
 
 	containerd "github.com/containerd/containerd/v2/client"
@@ -33,6 +35,7 @@ import (
 	"miren.dev/runtime/components/ocireg"
 	"miren.dev/runtime/components/runner"
 	"miren.dev/runtime/components/scheduler"
+	"miren.dev/runtime/components/upgrade"
 	"miren.dev/runtime/metrics"
 	"miren.dev/runtime/observability"
 	"miren.dev/runtime/pkg/caauth"
@@ -43,7 +46,43 @@ import (
 	"miren.dev/runtime/pkg/registration"
 	"miren.dev/runtime/pkg/rpc"
 	"miren.dev/runtime/servers/httpingress"
+	upgradeserver "miren.dev/runtime/servers/upgrade"
 )
+
+// waitForPortsFree waits for the specified ports to become available
+func waitForPortsFree(ctx context.Context, addresses []string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+
+	for time.Now().Before(deadline) {
+		allFree := true
+		for _, addr := range addresses {
+			// Try to listen on the port
+			ln, err := net.Listen("tcp", addr)
+			if err != nil {
+				// Port is still in use
+				allFree = false
+				break
+			}
+			// Port is free, close immediately
+			ln.Close()
+		}
+
+		if allFree {
+			return nil
+		}
+
+		// Check if context is cancelled
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+			// Wait a bit before retrying
+			time.Sleep(100 * time.Millisecond)
+		}
+	}
+
+	return fmt.Errorf("timeout waiting for ports to be free")
+}
 
 func Server(ctx *Context, opts struct {
 	Mode                      string   `short:"m" long:"mode" description:"Server mode (standalone, distributed)" default:"standalone"`
@@ -71,15 +110,96 @@ func Server(ctx *Context, opts struct {
 	ContainerdSocketPath      string   `long:"containerd-socket" description:"Path to containerd socket"`
 	SkipClientConfig          bool     `long:"skip-client-config" description:"Skip writing client config file to clientconfig.d"`
 	ConfigClusterName         string   `short:"C" long:"config-cluster-name" description:"Name of the cluster in client config" default:"local"`
+	Takeover                  bool     `long:"takeover" description:"Take over from existing process during upgrade"`
 }) error {
+	// Initialize upgrade coordinator
+	upgradeCoordinator := upgrade.NewCoordinator(ctx.Log, opts.DataPath)
+
+	// Check if this is a takeover from an existing process
+	if opts.Takeover {
+		ctx.Log.Info("starting in takeover mode, loading handoff state")
+
+		handoffState, err := upgradeCoordinator.LoadHandoffState()
+		if err != nil {
+			return fmt.Errorf("failed to load handoff state: %w", err)
+		}
+
+		if handoffState == nil {
+			return fmt.Errorf("takeover mode specified but no handoff state found")
+		}
+
+		// Override options from handoff state
+		ctx.Log.Info("restoring state from handoff",
+			"containerd_socket", handoffState.ContainerdSocket,
+			"etcd_endpoints", handoffState.EtcdEndpoints,
+			"mode", handoffState.Mode)
+
+		// Don't start embedded services in takeover mode
+		opts.StartContainerd = false
+		opts.StartEtcd = false
+		opts.StartClickHouse = false
+
+		// Use existing sockets and endpoints
+		if handoffState.ContainerdSocket != "" {
+			opts.ContainerdSocketPath = handoffState.ContainerdSocket
+		}
+		if len(handoffState.EtcdEndpoints) > 0 {
+			opts.EtcdEndpoints = handoffState.EtcdEndpoints
+		}
+		if handoffState.ClickHouseAddress != "" {
+			opts.ClickHouseAddress = handoffState.ClickHouseAddress
+		}
+
+		// Signal the old process early that we're ready to take over
+		// This allows it to start shutting down and freeing ports
+		ctx.Log.Info("signaling old process to begin shutdown")
+		if err := upgradeCoordinator.SignalReady(); err != nil {
+			return fmt.Errorf("failed to signal readiness to old process: %w", err)
+		}
+
+		// Adopt orphaned child processes into our cgroup (systemd only)
+		// This must happen quickly after signaling to avoid processes becoming orphaned
+		if upgrade.IsRunningUnderSystemd() {
+			ctx.Log.Info("adopting child processes into service cgroup")
+			cgroupMgr, err := upgrade.NewCgroupManager()
+			if err != nil {
+				ctx.Log.Warn("failed to create cgroup manager", "error", err)
+			} else if cgroupMgr != nil {
+				// Find and adopt containerd
+				if handoffState.ContainerdSocket != "" {
+					containerdPID, err := upgrade.FindContainerdPID(handoffState.ContainerdSocket)
+					if err != nil {
+						ctx.Log.Warn("failed to find containerd PID", "error", err)
+					} else if containerdPID > 0 {
+						ctx.Log.Info("adopting containerd process tree", "pid", containerdPID)
+						if err := cgroupMgr.AdoptChildProcesses(containerdPID); err != nil {
+							ctx.Log.Warn("failed to adopt containerd processes", "error", err)
+						} else {
+							ctx.Log.Info("successfully adopted containerd process tree into service cgroup")
+						}
+					}
+				}
+			}
+		}
+
+		// Wait for ports to be free before starting services
+		ctx.Log.Info("waiting for ports to become available")
+		if err := waitForPortsFree(ctx, []string{opts.Address, opts.RunnerAddress, ":8989"}, 30*time.Second); err != nil {
+			return fmt.Errorf("failed waiting for ports to be free: %w", err)
+		}
+	}
+
 	eg, sub := errgroup.WithContext(ctx)
 
 	// Handle mode configuration
 	switch opts.Mode {
 	case "standalone":
-		opts.StartContainerd = true
-		opts.StartEtcd = true
-		opts.StartClickHouse = true
+		// Only start embedded services if not in takeover mode
+		if !opts.Takeover {
+			opts.StartContainerd = true
+			opts.StartEtcd = true
+			opts.StartClickHouse = true
+		}
 
 		// Determine release path
 		if opts.ReleasePath == "" {
@@ -621,6 +741,81 @@ func Server(ctx *Context, opts struct {
 		if err := writeLocalClusterConfig(ctx, cert, opts.Address, opts.ConfigClusterName); err != nil {
 			ctx.Log.Warn("failed to write local cluster config", "error", err)
 			// Don't fail the whole command if we can't write the config
+		}
+	}
+
+	// Initialize the upgrade server with current state
+	// Resolve the effective values from the registry
+	var resolvedContainerdSocket string
+	if err := ctx.Server.ResolveNamed(&resolvedContainerdSocket, "containerd-socket"); err != nil {
+		// Fall back to the original value if resolution fails
+		ctx.Log.Warn("failed to resolve containerd socket from registry, using original", "error", err)
+		resolvedContainerdSocket = containerdSocketPath
+	}
+
+	var resolvedClickHouseAddr string
+	if err := ctx.Server.ResolveNamed(&resolvedClickHouseAddr, "clickhouse-address"); err != nil {
+		// Fall back to the original value if resolution fails
+		ctx.Log.Warn("failed to resolve clickhouse address from registry, using original", "error", err)
+		resolvedClickHouseAddr = opts.ClickHouseAddress
+	}
+
+	upgradeServer := upgradeserver.NewServer(ctx.Log, opts.DataPath)
+	upgradeServer.SetServerState(
+		resolvedContainerdSocket,
+		opts.EtcdEndpoints,
+		resolvedClickHouseAddr,
+		opts.Address,
+		opts.RunnerAddress,
+		opts.RunnerId,
+		opts.Mode,
+	)
+
+	// Register the upgrade server for RPC access
+	ctx.Server.Register("upgrade-server", upgradeServer)
+
+	// Set up signal handler for upgrade coordination
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGUSR1, syscall.SIGUSR2)
+	defer signal.Stop(sigChan)
+
+	// Handle upgrade signals in a separate goroutine
+	eg.Go(func() error {
+		for {
+			select {
+			case <-sub.Done():
+				return nil
+			case sig := <-sigChan:
+				switch sig {
+				case syscall.SIGUSR1:
+					// Signal from new process that it's ready
+					ctx.Log.Info("received readiness signal from new process, initiating graceful shutdown")
+					upgradeCoordinator.HandleReadinessSignal()
+					// Return context.Canceled for clean shutdown
+					return context.Canceled
+				case syscall.SIGUSR2:
+					// Signal to initiate upgrade (alternative to RPC)
+					ctx.Log.Info("received upgrade signal")
+					// This could trigger an upgrade if a new binary is available
+				}
+			}
+		}
+	})
+
+	// If this was a takeover, log that we've completed initialization
+	if opts.Takeover {
+		ctx.Log.Info("takeover initialization complete, server is ready")
+		// Note: SignalReady and cgroup adoption already happened early, before binding ports
+	} else {
+		// Normal startup - notify systemd if applicable
+		if upgrade.IsRunningUnderSystemd() {
+			notifier := upgrade.NewSystemdNotifier()
+			if notifier != nil {
+				ctx.Log.Info("notifying systemd that server is ready")
+				if err := notifier.NotifyReady(); err != nil {
+					ctx.Log.Warn("failed to notify systemd", "error", err)
+				}
+			}
 		}
 	}
 
