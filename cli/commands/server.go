@@ -722,6 +722,17 @@ func Server(ctx *Context, opts struct {
 		if err := upgradeCoordinator.SignalReady(); err != nil {
 			ctx.Log.Error("failed to signal readiness to old process", "error", err)
 		}
+	} else {
+		// Normal startup - notify systemd if applicable
+		if upgrade.IsRunningUnderSystemd() {
+			notifier := upgrade.NewSystemdNotifier()
+			if notifier != nil {
+				ctx.Log.Info("notifying systemd that server is ready")
+				if err := notifier.NotifyReady(); err != nil {
+					ctx.Log.Warn("failed to notify systemd", "error", err)
+				}
+			}
+		}
 	}
 
 	ctx.UILog.Info("Miren server started", "address", opts.Address, "etcd_endpoints", opts.EtcdEndpoints, "etcd_prefix", opts.EtcdPrefix, "runner_id", opts.RunnerId)

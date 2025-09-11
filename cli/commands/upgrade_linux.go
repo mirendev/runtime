@@ -106,6 +106,10 @@ func UpgradeLocal(ctx *Context, opts struct {
 		return fmt.Errorf("current and new versions are the same (%s), use --force to upgrade anyway", currentVersion)
 	}
 
+	if upgrade.IsRunningUnderSystemd() {
+		ctx.Log.Info("detected systemd supervision, will notify systemd during upgrade")
+	}
+
 	// Load the current server's handoff state if it exists
 	coordinator := upgrade.NewCoordinator(ctx.Log, opts.DataPath)
 	existingState, err := coordinator.LoadHandoffState()

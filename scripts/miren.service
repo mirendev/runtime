@@ -1,0 +1,75 @@
+[Unit]
+Description=Miren Runtime Service
+Documentation=https://miren.dev/docs
+After=network-online.target
+Wants=network-online.target
+# Ensure proper ordering with dependencies
+After=systemd-resolved.service
+
+[Service]
+# Use notify type for proper PID tracking during upgrades
+Type=notify
+NotifyAccess=all
+
+# Pre-start setup
+ExecStartPre=/usr/local/bin/miren-env-setup
+EnvironmentFile=-/etc/default/miren
+
+# Environment configuration
+Environment="NO_COLOR=1"
+Environment="MIREN_DATA_PATH=/var/lib/miren"
+
+# Main service command
+ExecStart=/var/lib/miren/release/miren server -vv --address=0.0.0.0:8443 --serve-tls
+
+# Upgrade trigger - performs hot restart (auto-detects systemd)
+# Note: This assumes release.new directory contains the new version
+ExecReload=/bin/bash -c '\
+  if [ -f /var/lib/miren/release.new/miren ]; then \
+    /var/lib/miren/release.new/miren upgrade --timeout=90 || exit 1; \
+  else \
+    echo "No new release found at /var/lib/miren/release.new"; \
+    exit 1; \
+  fi'
+
+# Restart policy - only on failure to prevent restart during upgrade
+Restart=on-failure
+RestartSec=10
+StartLimitBurst=3
+StartLimitInterval=60s
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=miren
+
+# Security settings
+User=root  # Required for container management
+WorkingDirectory=/var/lib/miren/release
+PrivateTmp=false  # Need access to shared resources
+
+# Process management
+# mixed mode allows graceful shutdown of main process while preserving children
+KillMode=mixed
+KillSignal=SIGTERM
+TimeoutStopSec=90s
+TimeoutStartSec=120s  # Allow time for takeover during upgrade
+
+# Resource limits (adjust based on your needs)
+LimitNOFILE=1048576
+LimitNPROC=32768
+LimitCORE=infinity
+TasksMax=infinity
+
+# Cgroup configuration for container runtime
+Delegate=yes
+
+# Ensure service stops cleanly on shutdown
+# Higher number means stops later (containers can finish)
+DefaultDependencies=no
+Conflicts=shutdown.target
+Before=shutdown.target
+
+[Install]
+WantedBy=multi-user.target
+Alias=miren.service

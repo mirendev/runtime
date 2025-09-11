@@ -61,15 +61,32 @@ type Coordinator struct {
 	state        *HandoffState
 	upgrading    bool
 	readyChannel chan error
+	systemd      *SystemdNotifier
 }
 
 // NewCoordinator creates a new upgrade coordinator
 func NewCoordinator(log *slog.Logger, dataPath string) *Coordinator {
-	return &Coordinator{
+	c := &Coordinator{
 		log:       log.With("component", "upgrade-coordinator"),
 		dataPath:  dataPath,
 		statePath: filepath.Join(dataPath, "upgrade-state.json"),
+		systemd:   NewSystemdNotifier(),
 	}
+
+	// Log systemd detection status
+	if c.systemd != nil {
+		c.log.Info("systemd supervision detected, will send status notifications")
+		// Check if we have notify socket (Type=notify)
+		if os.Getenv("NOTIFY_SOCKET") != "" {
+			c.log.Info("systemd Type=notify detected, PID changes will be notified")
+		} else {
+			c.log.Info("systemd detected but not Type=notify, some notifications will be skipped")
+		}
+	} else {
+		c.log.Debug("not running under systemd supervision")
+	}
+
+	return c
 }
 
 // IsUpgrading returns true if an upgrade is in progress
@@ -280,6 +297,15 @@ func (c *Coordinator) SignalReady() error {
 		}
 	}
 
+	// Notify systemd of the PID change if running under systemd
+	if c.systemd != nil {
+		newPID := os.Getpid()
+		c.log.Info("notifying systemd of PID change", "new_pid", newPID)
+		if err := c.systemd.NotifyPIDChange(newPID); err != nil {
+			c.log.Warn("failed to notify systemd of PID change", "error", err)
+		}
+	}
+
 	// Clear the handoff state as we've successfully taken over
 	return c.ClearHandoffState()
 }
@@ -306,6 +332,14 @@ func (c *Coordinator) WaitForReadiness(ctx context.Context) error {
 func (c *Coordinator) HandleReadinessSignal() {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
+
+	// Notify systemd that we're stopping for upgrade
+	if c.systemd != nil {
+		c.log.Info("notifying systemd of graceful shutdown for upgrade")
+		if err := c.systemd.NotifyStopping(); err != nil {
+			c.log.Warn("failed to notify systemd of stopping", "error", err)
+		}
+	}
 
 	if c.readyChannel != nil {
 		select {
