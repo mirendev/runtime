@@ -722,6 +722,30 @@ func Server(ctx *Context, opts struct {
 		if err := upgradeCoordinator.SignalReady(); err != nil {
 			ctx.Log.Error("failed to signal readiness to old process", "error", err)
 		}
+
+		// Adopt orphaned child processes into our cgroup (systemd only)
+		if upgrade.IsRunningUnderSystemd() {
+			ctx.Log.Info("adopting child processes into service cgroup")
+			cgroupMgr, err := upgrade.NewCgroupManager()
+			if err != nil {
+				ctx.Log.Warn("failed to create cgroup manager", "error", err)
+			} else if cgroupMgr != nil {
+				// Find and adopt containerd
+				if containerdSocketPath != "" {
+					containerdPID, err := upgrade.FindContainerdPID(containerdSocketPath)
+					if err != nil {
+						ctx.Log.Warn("failed to find containerd PID", "error", err)
+					} else if containerdPID > 0 {
+						ctx.Log.Info("adopting containerd process tree", "pid", containerdPID)
+						if err := cgroupMgr.AdoptChildProcesses(containerdPID); err != nil {
+							ctx.Log.Warn("failed to adopt containerd processes", "error", err)
+						} else {
+							ctx.Log.Info("successfully adopted containerd process tree into service cgroup")
+						}
+					}
+				}
+			}
+		}
 	} else {
 		// Normal startup - notify systemd if applicable
 		if upgrade.IsRunningUnderSystemd() {
