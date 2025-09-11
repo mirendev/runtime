@@ -279,15 +279,18 @@ func (c *Coordinator) InitiateUpgrade(ctx context.Context, newBinaryPath string,
 
 // SignalReady signals that the new process is ready to take over
 func (c *Coordinator) SignalReady() error {
+	// Capture needed values while holding the lock
 	c.mu.Lock()
-	defer c.mu.Unlock()
-
 	if c.state == nil {
+		c.mu.Unlock()
 		return fmt.Errorf("no handoff state found")
 	}
 
-	// Signal the old process that we're ready
 	oldPID := c.state.OldPID
+	systemdNotifier := c.systemd
+	c.mu.Unlock()
+
+	// Signal the old process that we're ready (outside lock)
 	if oldPID > 0 && oldPID != os.Getpid() {
 		c.log.Info("signaling old process to shutdown", "old_pid", oldPID)
 
@@ -298,10 +301,10 @@ func (c *Coordinator) SignalReady() error {
 	}
 
 	// Notify systemd of the PID change if running under systemd
-	if c.systemd != nil {
+	if systemdNotifier != nil {
 		newPID := os.Getpid()
 		c.log.Info("notifying systemd of PID change", "new_pid", newPID)
-		if err := c.systemd.NotifyPIDChange(newPID); err != nil {
+		if err := systemdNotifier.NotifyPIDChange(newPID); err != nil {
 			c.log.Warn("failed to notify systemd of PID change", "error", err)
 		}
 	}
