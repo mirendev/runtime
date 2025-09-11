@@ -100,7 +100,9 @@ func (c *Coordinator) LoadHandoffState() (*HandoffState, error) {
 	// Check if state is stale (older than 5 minutes)
 	if time.Since(state.Timestamp) > 5*time.Minute {
 		c.log.Warn("handoff state is stale, ignoring", "age", time.Since(state.Timestamp))
-		os.Remove(c.statePath)
+		if err := os.Remove(c.statePath); err != nil && !os.IsNotExist(err) {
+			c.log.Warn("failed to remove stale handoff state", "error", err)
+		}
 		return nil, nil
 	}
 
@@ -113,7 +115,8 @@ func (c *Coordinator) SaveHandoffState(state *HandoffState) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	state.Version = 1
+	const handoffVersion = 1
+	state.Version = handoffVersion
 	state.Timestamp = time.Now()
 	state.OldPID = os.Getpid()
 
@@ -232,13 +235,15 @@ func (c *Coordinator) InitiateUpgrade(ctx context.Context, newBinaryPath string,
 	// Wait for the new process to signal readiness or timeout
 	select {
 	case <-ctx.Done():
-		cmd.Process.Kill()
+		// Kill the process group to avoid stray children
+		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 		c.ClearHandoffState()
 		return fmt.Errorf("upgrade cancelled: %w", ctx.Err())
 
 	case err := <-c.readyChannel:
 		if err != nil {
-			cmd.Process.Kill()
+			// Kill the process group to avoid stray children
+			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 			c.ClearHandoffState()
 			return fmt.Errorf("new process failed to start: %w", err)
 		}
@@ -247,8 +252,9 @@ func (c *Coordinator) InitiateUpgrade(ctx context.Context, newBinaryPath string,
 		// The new process is ready, we can now gracefully shutdown
 		return nil
 
-	case <-time.After(30 * time.Second):
-		cmd.Process.Kill()
+	case <-time.After(60 * time.Second):
+		// Kill the process group to avoid stray children
+		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 		c.ClearHandoffState()
 		return fmt.Errorf("timeout waiting for new process to be ready")
 	}

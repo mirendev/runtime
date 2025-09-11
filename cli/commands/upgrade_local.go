@@ -1,6 +1,10 @@
+//go:build linux
+// +build linux
+
 package commands
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -117,6 +121,8 @@ func UpgradeLocal(ctx *Context, opts struct {
 		// Create a minimal handoff state
 		// The running server should have created one, but if not, we create a basic one
 		existingState = &upgrade.HandoffState{
+			OldPID:           opts.PID,
+			Timestamp:        time.Now(),
 			Mode:             "standalone",
 			DataPath:         opts.DataPath,
 			ServerAddress:    "localhost:8443",
@@ -188,7 +194,9 @@ func UpgradeLocal(ctx *Context, opts struct {
 	for {
 		select {
 		case <-timeout:
-			cmd.Process.Kill()
+			if err := cmd.Process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
+				ctx.Log.Warn("failed to kill new process on timeout", "error", err)
+			}
 			return fmt.Errorf("timeout waiting for new process to be ready")
 
 		case <-ticker.C:
@@ -200,7 +208,9 @@ func UpgradeLocal(ctx *Context, opts struct {
 					"new_pid", cmd.Process.Pid)
 
 				// Clear the handoff state
-				coordinator.ClearHandoffState()
+				if err := coordinator.ClearHandoffState(); err != nil {
+					ctx.Log.Warn("failed to clear handoff state", "error", err)
+				}
 
 				// If there's a release.new directory, move it to release
 				newReleaseDir := filepath.Join(opts.DataPath, "release.new")

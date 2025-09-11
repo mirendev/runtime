@@ -5,17 +5,15 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"os/signal"
-	"syscall"
 
-	"miren.dev/runtime/components/upgrade"
+	upgcoord "miren.dev/runtime/components/upgrade"
 	"miren.dev/runtime/version"
 )
 
 // Server handles upgrade-related operations for the miren server
 type Server struct {
 	log         *slog.Logger
-	coordinator *upgrade.Coordinator
+	coordinator *upgcoord.Coordinator
 	dataPath    string
 
 	// Server state that needs to be preserved
@@ -32,7 +30,7 @@ type Server struct {
 func NewServer(log *slog.Logger, dataPath string) *Server {
 	return &Server{
 		log:         log.With("component", "upgrade-server"),
-		coordinator: upgrade.NewCoordinator(log, dataPath),
+		coordinator: upgcoord.NewCoordinator(log, dataPath),
 		dataPath:    dataPath,
 	}
 }
@@ -71,7 +69,7 @@ func (s *Server) InitiateUpgrade(ctx context.Context, newBinaryPath string, forc
 	}
 
 	// Create handoff state
-	handoffState := &upgrade.HandoffState{
+	handoffState := &upgcoord.HandoffState{
 		ContainerdSocket:  s.containerdSocket,
 		EtcdEndpoints:     s.etcdEndpoints,
 		ClickHouseAddress: s.clickhouseAddress,
@@ -82,17 +80,9 @@ func (s *Server) InitiateUpgrade(ctx context.Context, newBinaryPath string, forc
 		Mode:              s.mode,
 	}
 
-	// Set up signal handler for SIGUSR1 (readiness signal from new process)
-	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, syscall.SIGUSR1)
-	defer signal.Stop(sigChan)
-
-	// Create a goroutine to handle the readiness signal
-	go func() {
-		<-sigChan
-		s.log.Info("received readiness signal from new process")
-		s.coordinator.HandleReadinessSignal()
-	}()
+	// Note: Signal handling for SIGUSR1 is done in cli/commands/server.go
+	// to avoid duplicate handlers. The server.go handler will call
+	// HandleReadinessSignal() on the coordinator directly.
 
 	// Initiate the upgrade
 	if err := s.coordinator.InitiateUpgrade(ctx, newBinaryPath, handoffState); err != nil {
@@ -109,7 +99,7 @@ func (s *Server) InitiateUpgrade(ctx context.Context, newBinaryPath string, forc
 }
 
 // CheckUpgradeStatus checks if an upgrade is in progress
-func (s *Server) CheckUpgradeStatus(ctx context.Context) (bool, *upgrade.HandoffState, error) {
+func (s *Server) CheckUpgradeStatus(ctx context.Context) (bool, *upgcoord.HandoffState, error) {
 	state, err := s.coordinator.LoadHandoffState()
 	if err != nil {
 		return false, nil, err

@@ -115,12 +115,7 @@ func Server(ctx *Context, opts struct {
 			opts.ClickHouseAddress = handoffState.ClickHouseAddress
 		}
 
-		// Defer signaling readiness after server is up
-		defer func() {
-			if err := upgradeCoordinator.SignalReady(); err != nil {
-				ctx.Log.Error("failed to signal readiness to old process", "error", err)
-			}
-		}()
+		// Signal readiness will happen after server is fully initialized
 	}
 
 	eg, sub := errgroup.WithContext(ctx)
@@ -696,6 +691,7 @@ func Server(ctx *Context, opts struct {
 	// Set up signal handler for upgrade coordination
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGUSR1, syscall.SIGUSR2)
+	defer signal.Stop(sigChan)
 
 	// Handle upgrade signals in a separate goroutine
 	eg.Go(func() error {
@@ -709,8 +705,8 @@ func Server(ctx *Context, opts struct {
 					// Signal from new process that it's ready
 					ctx.Log.Info("received readiness signal from new process, initiating graceful shutdown")
 					upgradeCoordinator.HandleReadinessSignal()
-					// Return an error to trigger graceful shutdown
-					return fmt.Errorf("upgrade handoff complete")
+					// Return context.Canceled for clean shutdown
+					return context.Canceled
 				case syscall.SIGUSR2:
 					// Signal to initiate upgrade (alternative to RPC)
 					ctx.Log.Info("received upgrade signal")
