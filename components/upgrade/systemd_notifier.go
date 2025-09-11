@@ -128,4 +128,3 @@ func (n *SystemdNotifier) NotifyWatchdog() error {
 func (n *SystemdNotifier) NotifyStatus(status string) error {
 	return n.Notify(fmt.Sprintf("STATUS=%s", status))
 }
-
