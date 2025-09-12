@@ -52,16 +52,29 @@ import (
 // waitForPortsFree waits for the specified ports to become available
 func waitForPortsFree(ctx context.Context, addresses []string, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
+	maxAttempts := int(timeout / (100 * time.Millisecond))
+	attempts := 0
 
-	for time.Now().Before(deadline) {
+	for time.Now().Before(deadline) && attempts < maxAttempts {
+		attempts++
 		allFree := true
+
 		for _, addr := range addresses {
 			// Try to listen on the port
 			ln, err := net.Listen("tcp", addr)
 			if err != nil {
-				// Port is still in use
-				allFree = false
-				break
+				// Check if it's address in use error vs other errors (permission, invalid address)
+				if opErr, ok := err.(*net.OpError); ok {
+					if sysErr, ok := opErr.Err.(*os.SyscallError); ok {
+						// EADDRINUSE means port is in use, we should wait
+						if sysErr.Err == syscall.EADDRINUSE {
+							allFree = false
+							break
+						}
+					}
+				}
+				// For non-EADDRINUSE errors, fail immediately
+				return fmt.Errorf("failed to check port %s: %w", addr, err)
 			}
 			// Port is free, close immediately
 			ln.Close()
@@ -81,7 +94,7 @@ func waitForPortsFree(ctx context.Context, addresses []string, timeout time.Dura
 		}
 	}
 
-	return fmt.Errorf("timeout waiting for ports to be free")
+	return fmt.Errorf("timeout waiting for ports to be free after %d attempts", attempts)
 }
 
 func Server(ctx *Context, opts struct {

@@ -90,6 +90,10 @@ func (m *CgroupManager) writeToFile(path, content string) error {
 	}
 	defer file.Close()
 
+	// Add newline for broader kernel compatibility
+	if !strings.HasSuffix(content, "\n") {
+		content = content + "\n"
+	}
 	_, err = file.WriteString(content)
 	return err
 }

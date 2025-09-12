@@ -36,7 +36,7 @@ ExecReload=/bin/bash -c '\
 Restart=on-failure
 RestartSec=10
 StartLimitBurst=3
-StartLimitInterval=60s
+StartLimitIntervalSec=60s
 
 # Logging
 StandardOutput=journal

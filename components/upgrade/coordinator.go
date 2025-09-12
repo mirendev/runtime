@@ -147,12 +147,37 @@ func (c *Coordinator) SaveHandoffState(state *HandoffState) error {
 
 	// Write atomically by writing to temp file and renaming
 	tempPath := c.statePath + ".tmp"
-	if err := os.WriteFile(tempPath, data, 0600); err != nil {
+	// Write to temp file
+	f, err := os.OpenFile(tempPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
+	if err != nil {
+		return fmt.Errorf("failed to create temp handoff state: %w", err)
+	}
+	defer f.Close()
+
+	if _, err := f.Write(data); err != nil {
 		return fmt.Errorf("failed to write handoff state: %w", err)
 	}
 
+	// Sync file contents to disk before rename
+	if err := f.Sync(); err != nil {
+		return fmt.Errorf("failed to sync handoff state: %w", err)
+	}
+	f.Close()
+
+	// Atomic rename
 	if err := os.Rename(tempPath, c.statePath); err != nil {
 		return fmt.Errorf("failed to rename handoff state: %w", err)
+	}
+
+	// Sync directory to ensure rename is persisted
+	dir, err := os.Open(filepath.Dir(c.statePath))
+	if err != nil {
+		return fmt.Errorf("failed to open state directory: %w", err)
+	}
+	defer dir.Close()
+
+	if err := dir.Sync(); err != nil {
+		return fmt.Errorf("failed to sync state directory: %w", err)
 	}
 
 	c.state = state

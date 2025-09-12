@@ -6,9 +6,9 @@ package upgrade
 // SystemdNotifier handles systemd notification protocol (stub for Darwin)
 type SystemdNotifier struct{}
 
-// NewSystemdNotifier creates a new systemd notifier (returns nil on Darwin)
+// NewSystemdNotifier creates a new systemd notifier (returns no-op stub on Darwin)
 func NewSystemdNotifier() *SystemdNotifier {
-	return nil
+	return &SystemdNotifier{}
 }
 
 // IsRunningUnderSystemd always returns false on Darwin

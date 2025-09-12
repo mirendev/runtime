@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -252,21 +253,25 @@ func UpgradeLocal(ctx *Context, opts struct {
 
 // findMirenServerPID finds the PID of a running miren server process
 func findMirenServerPID() (int, error) {
-	// Look for miren server process
-	output, err := exec.Command("pgrep", "-f", "miren server").Output()
+	// Look for miren server process, use -o to get oldest (first started) process
+	output, err := exec.Command("pgrep", "-o", "-f", "miren server").Output()
 	if err != nil {
 		return 0, fmt.Errorf("no miren server process found")
 	}
 
-	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
-	if len(lines) == 0 {
+	pidStr := strings.TrimSpace(string(output))
+	if pidStr == "" {
 		return 0, fmt.Errorf("no miren server process found")
 	}
 
-	// Parse the first PID
-	var pid int
-	if _, err := fmt.Sscanf(lines[0], "%d", &pid); err != nil {
-		return 0, fmt.Errorf("failed to parse PID: %w", err)
+	// Validate and parse the PID
+	pid, err := strconv.Atoi(pidStr)
+	if err != nil {
+		return 0, fmt.Errorf("failed to parse PID %q: %w", pidStr, err)
+	}
+
+	if pid <= 0 {
+		return 0, fmt.Errorf("invalid PID: %d", pid)
 	}
 
 	return pid, nil

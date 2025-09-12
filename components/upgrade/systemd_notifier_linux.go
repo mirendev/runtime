@@ -60,7 +60,7 @@ func IsRunningUnderSystemd() bool {
 	if os.Getppid() == 1 {
 		// Check if init system is systemd
 		if data, err := os.ReadFile("/proc/1/comm"); err == nil {
-			if string(data) == "systemd\n" {
+			if strings.TrimSpace(string(data)) == "systemd" {
 				return true
 			}
 		}
