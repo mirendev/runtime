@@ -197,7 +197,11 @@ func Server(ctx *Context, opts struct {
 
 		// Wait for ports to be free before starting services
 		ctx.Log.Info("waiting for ports to become available")
-		if err := waitForPortsFree(ctx, []string{opts.Address, opts.RunnerAddress, ":8989"}, 30*time.Second); err != nil {
+		ports := []string{opts.Address, opts.RunnerAddress, ":8989", ":5000"}
+		if opts.StandardTLS {
+			ports = append(ports, ":80", ":443")
+		}
+		if err := waitForPortsFree(ctx, ports, 30*time.Second); err != nil {
 			return fmt.Errorf("failed waiting for ports to be free: %w", err)
 		}
 	}
@@ -773,7 +777,7 @@ func Server(ctx *Context, opts struct {
 		resolvedClickHouseAddr = opts.ClickHouseAddress
 	}
 
-	upgradeServer := upgradeserver.NewServer(ctx.Log, opts.DataPath)
+	upgradeServer := upgradeserver.NewServerWithCoordinator(ctx.Log, upgradeCoordinator)
 	upgradeServer.SetServerState(
 		resolvedContainerdSocket,
 		opts.EtcdEndpoints,

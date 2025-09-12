@@ -3,6 +3,8 @@
 
 package upgrade
 
+import "fmt"
+
 // CgroupManager handles cgroup operations (stub for Darwin)
 type CgroupManager struct{}
 
@@ -22,7 +24,7 @@ func (m *CgroupManager) AdoptChildProcesses(parentPID int) error {
 	return nil
 }
 
-// FindContainerdPID is a no-op on Darwin
+// FindContainerdPID returns an error on Darwin (cgroups not supported)
 func FindContainerdPID(socketPath string) (int, error) {
-	return 0, nil
+	return 0, fmt.Errorf("cgroup operations not supported on Darwin")
 }

@@ -4,6 +4,8 @@
 package commands
 
 import (
+	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -78,7 +80,11 @@ func UpgradeLocal(ctx *Context, opts struct {
 
 	// Verify the process exists
 	if err := syscall.Kill(opts.PID, 0); err != nil {
-		return fmt.Errorf("process with PID %d does not exist or is not accessible: %w", opts.PID, err)
+		// EPERM means the process exists but we can't signal it (different user)
+		// ESRCH means the process doesn't exist
+		if !errors.Is(err, syscall.EPERM) {
+			return fmt.Errorf("process with PID %d does not exist or is not accessible: %w", opts.PID, err)
+		}
 	}
 
 	// Get current version
@@ -226,12 +232,39 @@ func UpgradeLocal(ctx *Context, opts struct {
 					// Backup old release
 					if _, err := os.Stat(releaseDir); err == nil {
 						backupDir := filepath.Join(opts.DataPath, fmt.Sprintf("release.backup.%d", time.Now().Unix()))
-						os.Rename(releaseDir, backupDir)
-						ctx.Log.Info("backed up old release", "backup", backupDir)
+						if err := os.Rename(releaseDir, backupDir); err != nil {
+							// Handle cross-device move (EXDEV)
+							if errors.Is(err, syscall.EXDEV) {
+								ctx.Log.Warn("cross-device move detected, using copy for backup", "error", err)
+								// Fall back to copy+remove for cross-device
+								if err := copyDir(releaseDir, backupDir); err != nil {
+									ctx.Log.Warn("failed to copy old release for backup", "error", err)
+								} else {
+									os.RemoveAll(releaseDir)
+									ctx.Log.Info("backed up old release (via copy)", "backup", backupDir)
+								}
+							} else {
+								ctx.Log.Warn("failed to backup old release", "error", err)
+							}
+						} else {
+							ctx.Log.Info("backed up old release", "backup", backupDir)
+						}
 					}
 					// Move new release to active
 					if err := os.Rename(newReleaseDir, releaseDir); err != nil {
-						ctx.Log.Warn("failed to move release.new to release", "error", err)
+						// Handle cross-device move (EXDEV)
+						if errors.Is(err, syscall.EXDEV) {
+							ctx.Log.Warn("cross-device move detected, using copy for activation", "error", err)
+							// Fall back to copy+remove for cross-device
+							if err := copyDir(newReleaseDir, releaseDir); err != nil {
+								ctx.Log.Warn("failed to copy new release for activation", "error", err)
+							} else {
+								os.RemoveAll(newReleaseDir)
+								ctx.Log.Info("activated new release (via copy)", "path", releaseDir)
+							}
+						} else {
+							ctx.Log.Warn("failed to move release.new to release", "error", err)
+						}
 					} else {
 						ctx.Log.Info("activated new release", "path", releaseDir)
 					}
@@ -277,15 +310,36 @@ func findMirenServerPID() (int, error) {
 	return pid, nil
 }
 
-// getVersionFromBinary executes the binary with version flag to get its version
+// getVersionFromBinary executes the binary with version subcommand to get its version
 func getVersionFromBinary(binaryPath string) (string, error) {
-	cmd := exec.Command(binaryPath, "version")
-	output, err := cmd.Output()
-	if err != nil {
-		return "", err
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, binaryPath, "version")
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	if err := cmd.Run(); err != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			return "", fmt.Errorf("timeout getting version from %s", binaryPath)
+		}
+		return "", fmt.Errorf("failed to get version: %w (stderr: %s)", err, stderr.String())
 	}
 
-	return strings.TrimSpace(string(output)), nil
+	return strings.TrimSpace(stdout.String()), nil
+}
+
+// copyDir recursively copies a directory
+func copyDir(src, dst string) error {
+	// Create destination directory
+	if err := os.MkdirAll(dst, 0755); err != nil {
+		return err
+	}
+
+	// Copy directory contents
+	cmd := exec.Command("cp", "-r", src+"/.", dst)
+	return cmd.Run()
 }
 
 // UpgradeStatus checks the status of an ongoing upgrade

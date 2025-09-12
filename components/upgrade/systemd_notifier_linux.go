@@ -29,10 +29,8 @@ func NewSystemdNotifier() *SystemdNotifier {
 		return &SystemdNotifier{}
 	}
 
-	// Handle abstract socket (starts with @)
-	if socketPath[0] == '@' {
-		socketPath = "\x00" + socketPath[1:]
-	}
+	// Go's net package handles @ for abstract sockets automatically
+	// No need to convert @ to NUL byte
 
 	return &SystemdNotifier{
 		socketPath: socketPath,

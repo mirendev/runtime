@@ -35,6 +35,15 @@ func NewServer(log *slog.Logger, dataPath string) *Server {
 	}
 }
 
+// NewServerWithCoordinator creates a new upgrade server with a provided coordinator
+func NewServerWithCoordinator(log *slog.Logger, coordinator *upgcoord.Coordinator) *Server {
+	return &Server{
+		log:         log.With("component", "upgrade-server"),
+		coordinator: coordinator,
+		dataPath:    coordinator.DataPath(),
+	}
+}
+
 // SetServerState sets the current server state for preservation during upgrade
 func (s *Server) SetServerState(
 	containerdSocket string,

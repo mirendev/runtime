@@ -13,6 +13,9 @@ import (
 	"time"
 )
 
+// handoffVersion is the current version of the handoff protocol
+const handoffVersion = 1
+
 // HandoffState contains the state to be preserved during upgrade
 type HandoffState struct {
 	// Version of the handoff protocol
@@ -66,6 +69,11 @@ type Coordinator struct {
 
 // NewCoordinator creates a new upgrade coordinator
 func NewCoordinator(log *slog.Logger, dataPath string) *Coordinator {
+	// Ensure data directory exists
+	if err := os.MkdirAll(dataPath, 0755); err != nil {
+		log.Warn("failed to create data directory", "path", dataPath, "error", err)
+	}
+
 	c := &Coordinator{
 		log:       log.With("component", "upgrade-coordinator"),
 		dataPath:  dataPath,
@@ -87,6 +95,11 @@ func NewCoordinator(log *slog.Logger, dataPath string) *Coordinator {
 	}
 
 	return c
+}
+
+// DataPath returns the data path used by the coordinator
+func (c *Coordinator) DataPath() string {
+	return c.dataPath
 }
 
 // IsUpgrading returns true if an upgrade is in progress
@@ -114,6 +127,12 @@ func (c *Coordinator) LoadHandoffState() (*HandoffState, error) {
 		return nil, fmt.Errorf("failed to unmarshal handoff state: %w", err)
 	}
 
+	// Validate handoff version
+	if state.Version != handoffVersion {
+		c.log.Warn("handoff state version mismatch", "expected", handoffVersion, "got", state.Version)
+		return nil, fmt.Errorf("handoff state version mismatch: expected %d, got %d", handoffVersion, state.Version)
+	}
+
 	// Check if state is stale (older than 5 minutes)
 	if time.Since(state.Timestamp) > 5*time.Minute {
 		c.log.Warn("handoff state is stale, ignoring", "age", time.Since(state.Timestamp))
@@ -132,7 +151,6 @@ func (c *Coordinator) SaveHandoffState(state *HandoffState) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	const handoffVersion = 1
 	state.Version = handoffVersion
 	state.Timestamp = time.Now()
 	// Only set OldPID if not already set (preserve prefilled value)

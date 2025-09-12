@@ -36,8 +36,11 @@ func NewCgroupManager() (*CgroupManager, error) {
 
 // AdoptProcess moves a process (and its children) into our service cgroup
 func (m *CgroupManager) AdoptProcess(pid int) error {
+	// Normalize service cgroup path - remove leading slash if present
+	serviceCgroup := strings.TrimPrefix(m.serviceCgroup, "/")
+
 	// For cgroup v2 (unified hierarchy)
-	cgroupV2Path := filepath.Join("/sys/fs/cgroup", m.serviceCgroup, "cgroup.procs")
+	cgroupV2Path := filepath.Join("/sys/fs/cgroup", serviceCgroup, "cgroup.procs")
 	if err := m.writeToFile(cgroupV2Path, strconv.Itoa(pid)); err == nil {
 		return nil // Success with cgroup v2
 	}
@@ -49,7 +52,7 @@ func (m *CgroupManager) AdoptProcess(pid int) error {
 	successCount := 0
 
 	for _, controller := range controllers {
-		cgroupV1Path := filepath.Join("/sys/fs/cgroup", controller, m.serviceCgroup, "cgroup.procs")
+		cgroupV1Path := filepath.Join("/sys/fs/cgroup", controller, serviceCgroup, "cgroup.procs")
 		if err := m.writeToFile(cgroupV1Path, strconv.Itoa(pid)); err == nil {
 			successCount++
 		} else {
