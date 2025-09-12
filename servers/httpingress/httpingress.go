@@ -41,6 +41,7 @@ type Server struct {
 	eac           *entityserver_v1alpha.EntityAccessClient
 	ingressClient *ingress.Client
 	appClient     *app.Client
+	handler       http.Handler
 
 	aa activator.AppActivator
 
@@ -82,6 +83,13 @@ func NewServer(
 		httpMetrics:   httpMetrics,
 		apps:          make(map[string]*appUsage),
 	}
+
+	// Build the timeout handler once at initialization
+	serv.handler = http.TimeoutHandler(
+		http.HandlerFunc(serv.handleRequest),
+		config.RequestTimeout,
+		timeoutMessage,
+	)
 
 	if httpMetrics == nil {
 		serv.Log.Warn("HTTPMetrics is nil in httpingress")
@@ -215,25 +223,26 @@ func (h *Server) releaseLease(ctx context.Context, lease *lease) {
 }
 
 func (h *Server) ServeHTTP(w http.ResponseWriter, req *http.Request) {
+	h.handler.ServeHTTP(w, req)
+}
+
+// handleRequest is the inner handler wrapped by TimeoutHandler
+func (h *Server) handleRequest(w http.ResponseWriter, req *http.Request) {
 	start := time.Now()
 
 	var appName string
 	var statusCode int
 	var bytesWritten int
 
-	handler := http.TimeoutHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		rw := &responseWriter{
-			ResponseWriter: w,
-			statusCode:     http.StatusOK, // default if not explicitly set
-		}
+	rw := &responseWriter{
+		ResponseWriter: w,
+		statusCode:     http.StatusOK, // default if not explicitly set
+	}
 
-		h.serveHTTPWithMetrics(rw, r, &appName)
+	h.serveHTTPWithMetrics(rw, req, &appName)
 
-		statusCode = rw.statusCode
-		bytesWritten = rw.bytesWritten
-	}), h.config.RequestTimeout, timeoutMessage)
-
-	handler.ServeHTTP(w, req)
+	statusCode = rw.statusCode
+	bytesWritten = rw.bytesWritten
 
 	// TimeoutHandler writes 503 on timeout, but our metrics would show the
 	// original status. Check if timeout occurred and override metrics accordingly.
