@@ -2,16 +2,16 @@ package commands
 
 import (
 	"fmt"
-	"os"
-	"text/tabwriter"
 	"time"
 
 	"miren.dev/runtime/api/compute/compute_v1alpha"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
+	"miren.dev/runtime/pkg/ui"
 )
 
 func SandboxList(ctx *Context, opts struct {
 	Status string `short:"s" long:"status" description:"Filter by status (pending, not_ready, running, stopped, dead)"`
+	FormatOptions
 	ConfigCentric
 }) error {
 	client, err := ctx.RPCClient("entities")
@@ -33,14 +33,32 @@ func SandboxList(ctx *Context, opts struct {
 		return err
 	}
 
-	if len(res.Values()) == 0 {
-		ctx.Printf("No sandboxes found\n")
-		return nil
+	// For JSON output, just filter and return the raw sandbox structs
+	if opts.IsJSON() {
+		var sandboxes []compute_v1alpha.Sandbox
+
+		for _, e := range res.Values() {
+			var sandbox compute_v1alpha.Sandbox
+			sandbox.Decode(e.Entity())
+
+			// Apply status filter if specified
+			if opts.Status != "" {
+				status := string(sandbox.Status)
+				cleanStatus := ui.CleanStatus(status)
+				if cleanStatus != opts.Status {
+					continue
+				}
+			}
+
+			sandboxes = append(sandboxes, sandbox)
+		}
+
+		return PrintJSON(sandboxes)
 	}
 
-	// Create a tabwriter for formatted output
-	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	_, _ = fmt.Fprintf(w, "ID\tSTATUS\tVERSION\tCONTAINERS\tCREATED\tUPDATED\n")
+	// Table output - all the UI formatting logic
+	var rows []ui.Row
+	headers := []string{"ID", "STATUS", "VERSION", "CONTAINERS", "CREATED", "UPDATED"}
 
 	for _, e := range res.Values() {
 		// Decode the sandbox entity
@@ -53,37 +71,39 @@ func SandboxList(ctx *Context, opts struct {
 			status = "unknown"
 		}
 
+		// Clean status for filtering (removes "status." prefix)
+		cleanStatus := ui.CleanStatus(status)
+
 		// Filter by status if specified
-		if opts.Status != "" && status != "status."+opts.Status {
+		if opts.Status != "" && cleanStatus != opts.Status {
 			continue
 		}
 
-		// Get version string
-		version := sandbox.Version.String()
-		if version == "" {
-			version = "-"
-		}
-
-		// Count containers
-		containerCount := len(sandbox.Container)
-
-		// Format created time (CreatedAt is in milliseconds)
-		created := humanFriendlyTimestamp(time.UnixMilli(e.CreatedAt()))
-
-		// Format updated time (UpdatedAt is in milliseconds)
-		updated := humanFriendlyTimestamp(time.UnixMilli(e.UpdatedAt()))
-
-		_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%d\t%s\t%s\n",
-			sandbox.ID.String(),
-			status,
-			version,
-			containerCount,
-			created,
-			updated,
-		)
+		// Apply all UI formatting for table display
+		rows = append(rows, ui.Row{
+			ui.CleanEntityID(sandbox.ID.String()),
+			ui.DisplayStatus(status),
+			ui.DisplayAppVersion(sandbox.Version.String()),
+			fmt.Sprintf("%d", len(sandbox.Container)),
+			humanFriendlyTimestamp(time.UnixMilli(e.CreatedAt())),
+			humanFriendlyTimestamp(time.UnixMilli(e.UpdatedAt())),
+		})
 	}
 
-	return w.Flush()
+	if len(rows) == 0 {
+		ctx.Printf("No sandboxes found\n")
+		return nil
+	}
+
+	// Create and render the table
+	columns := ui.AutoSizeColumns(headers, rows)
+	table := ui.NewTable(
+		ui.WithColumns(columns),
+		ui.WithRows(rows),
+	)
+
+	ctx.Printf("%s\n", table.Render())
+	return nil
 }
 
 // humanFriendlyTimestamp formats a timestamp into a human-friendly format like Docker's
