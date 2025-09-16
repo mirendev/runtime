@@ -136,6 +136,18 @@ func AllCommands() map[string]cli.CommandFactory {
 			return Infer("server", "Start the miren server", Server), nil
 		},
 
+		"server config": func() (cli.Command, error) {
+			return Section("server config", "Server configuration management commands"), nil
+		},
+
+		"server config generate": func() (cli.Command, error) {
+			return Infer("server config generate", "Generate a server configuration file from current settings", ServerConfigGenerate), nil
+		},
+
+		"server config validate": func() (cli.Command, error) {
+			return Infer("server config validate", "Validate a server configuration file", ServerConfigValidate), nil
+		},
+
 		"download release": func() (cli.Command, error) {
 			return Infer("download release", "Download and extract miren release", DownloadRelease), nil
 		},
