@@ -42,10 +42,12 @@ import (
 	"miren.dev/runtime/pkg/netdb"
 	"miren.dev/runtime/pkg/registration"
 	"miren.dev/runtime/pkg/rpc"
+	"miren.dev/runtime/pkg/serverconfig"
 	"miren.dev/runtime/servers/httpingress"
 )
 
 func Server(ctx *Context, opts struct {
+	ConfigFile                string   `long:"config" description:"Path to configuration file"`
 	Mode                      string   `short:"m" long:"mode" description:"Server mode (standalone, distributed)" default:"standalone"`
 	Address                   string   `short:"a" long:"address" description:"Address to listen on" default:"localhost:8443"`
 	RunnerAddress             string   `long:"runner-address" description:"Address to listen on" default:"localhost:8444"`
@@ -75,7 +77,151 @@ func Server(ctx *Context, opts struct {
 }) error {
 	eg, sub := errgroup.WithContext(ctx)
 
-	// Handle mode configuration
+	// Load configuration from all sources with precedence:
+	// CLI flags > Environment variables > Config file > Defaults
+	cliFlags := &serverconfig.CLIFlags{
+		Mode:                      opts.Mode,
+		Address:                   opts.Address,
+		RunnerAddress:             opts.RunnerAddress,
+		EtcdEndpoints:             opts.EtcdEndpoints,
+		EtcdPrefix:                opts.EtcdPrefix,
+		RunnerID:                  opts.RunnerId,
+		DataPath:                  opts.DataPath,
+		ReleasePath:               opts.ReleasePath,
+		AdditionalNames:           opts.AdditionalNames,
+		AdditionalIPs:             opts.AdditionalIPs,
+		StandardTLS:               opts.StandardTLS,
+		HTTPRequestTimeout:        opts.HTTPRequestTimeout,
+		StartEtcd:                 opts.StartEtcd,
+		EtcdClientPort:            opts.EtcdClientPort,
+		EtcdPeerPort:              opts.EtcdPeerPort,
+		EtcdHTTPClientPort:        opts.EtcdHTTPClientPort,
+		StartClickHouse:           opts.StartClickHouse,
+		ClickHouseHTTPPort:        opts.ClickHouseHTTPPort,
+		ClickHouseNativePort:      opts.ClickHouseNativePort,
+		ClickHouseInterServerPort: opts.ClickHouseInterServerPort,
+		ClickHouseAddress:         opts.ClickHouseAddress,
+		StartContainerd:           opts.StartContainerd,
+		ContainerdBinary:          opts.ContainerdBinary,
+		ContainerdSocketPath:      opts.ContainerdSocketPath,
+		SkipClientConfig:          opts.SkipClientConfig,
+		ConfigClusterName:         opts.ConfigClusterName,
+		SetFlags:                  make(map[string]bool),
+	}
+
+	// Track which flags were explicitly set (differ from defaults)
+	if opts.Mode != "" && opts.Mode != "standalone" {
+		cliFlags.SetFlags["mode"] = true
+	}
+	if opts.Address != "" && opts.Address != "localhost:8443" {
+		cliFlags.SetFlags["address"] = true
+	}
+	if opts.RunnerAddress != "" && opts.RunnerAddress != "localhost:8444" {
+		cliFlags.SetFlags["runner-address"] = true
+	}
+	if len(opts.EtcdEndpoints) > 0 && (len(opts.EtcdEndpoints) != 1 || opts.EtcdEndpoints[0] != "http://etcd:2379") {
+		cliFlags.SetFlags["etcd"] = true
+	}
+	if opts.EtcdPrefix != "" && opts.EtcdPrefix != "/miren" {
+		cliFlags.SetFlags["etcd-prefix"] = true
+	}
+	if opts.RunnerId != "" && opts.RunnerId != "miren" {
+		cliFlags.SetFlags["runner-id"] = true
+	}
+	if opts.DataPath != "" && opts.DataPath != "/var/lib/miren" {
+		cliFlags.SetFlags["data-path"] = true
+	}
+	if opts.ReleasePath != "" {
+		cliFlags.SetFlags["release-path"] = true
+	}
+	if len(opts.AdditionalNames) > 0 {
+		cliFlags.SetFlags["dns-names"] = true
+	}
+	if len(opts.AdditionalIPs) > 0 {
+		cliFlags.SetFlags["ips"] = true
+	}
+	if opts.StandardTLS {
+		cliFlags.SetFlags["serve-tls"] = true
+	}
+	if opts.HTTPRequestTimeout != 60 {
+		cliFlags.SetFlags["http-request-timeout"] = true
+	}
+	if opts.StartEtcd {
+		cliFlags.SetFlags["start-etcd"] = true
+	}
+	if opts.EtcdClientPort != 12379 {
+		cliFlags.SetFlags["etcd-client-port"] = true
+	}
+	if opts.EtcdPeerPort != 12380 {
+		cliFlags.SetFlags["etcd-peer-port"] = true
+	}
+	if opts.EtcdHTTPClientPort != 12381 {
+		cliFlags.SetFlags["etcd-http-client-port"] = true
+	}
+	if opts.StartClickHouse {
+		cliFlags.SetFlags["start-clickhouse"] = true
+	}
+	if opts.ClickHouseHTTPPort != 8223 {
+		cliFlags.SetFlags["clickhouse-http-port"] = true
+	}
+	if opts.ClickHouseNativePort != 9009 {
+		cliFlags.SetFlags["clickhouse-native-port"] = true
+	}
+	if opts.ClickHouseInterServerPort != 9010 {
+		cliFlags.SetFlags["clickhouse-interserver-port"] = true
+	}
+	if opts.ClickHouseAddress != "" {
+		cliFlags.SetFlags["clickhouse-addr"] = true
+	}
+	if opts.StartContainerd {
+		cliFlags.SetFlags["start-containerd"] = true
+	}
+	if opts.ContainerdBinary != "" && opts.ContainerdBinary != "containerd" {
+		cliFlags.SetFlags["containerd-binary"] = true
+	}
+	if opts.ContainerdSocketPath != "" {
+		cliFlags.SetFlags["containerd-socket"] = true
+	}
+	if opts.SkipClientConfig {
+		cliFlags.SetFlags["skip-client-config"] = true
+	}
+	if opts.ConfigClusterName != "" && opts.ConfigClusterName != "local" {
+		cliFlags.SetFlags["config-cluster-name"] = true
+	}
+
+	sourcedConfig, err := serverconfig.Load(opts.ConfigFile, cliFlags, ctx.Log)
+	if err != nil {
+		return fmt.Errorf("failed to load configuration: %w", err)
+	}
+
+	cfg := &sourcedConfig.Config
+	opts.Mode = cfg.Mode
+	opts.Address = cfg.Server.Address
+	opts.RunnerAddress = cfg.Server.RunnerAddress
+	opts.DataPath = cfg.Server.DataPath
+	opts.RunnerId = cfg.Server.RunnerID
+	opts.ReleasePath = cfg.Server.ReleasePath
+	opts.ConfigClusterName = cfg.Server.ConfigClusterName
+	opts.SkipClientConfig = cfg.Server.SkipClientConfig
+	opts.HTTPRequestTimeout = cfg.Server.HTTPRequestTimeout
+	opts.AdditionalNames = cfg.TLS.AdditionalNames
+	opts.AdditionalIPs = cfg.TLS.AdditionalIPs
+	opts.StandardTLS = cfg.TLS.StandardTLS
+	opts.EtcdEndpoints = cfg.Etcd.Endpoints
+	opts.EtcdPrefix = cfg.Etcd.Prefix
+	opts.StartEtcd = cfg.Etcd.StartEmbedded
+	opts.EtcdClientPort = cfg.Etcd.ClientPort
+	opts.EtcdPeerPort = cfg.Etcd.PeerPort
+	opts.EtcdHTTPClientPort = cfg.Etcd.HTTPClientPort
+	opts.StartClickHouse = cfg.ClickHouse.StartEmbedded
+	opts.ClickHouseHTTPPort = cfg.ClickHouse.HTTPPort
+	opts.ClickHouseNativePort = cfg.ClickHouse.NativePort
+	opts.ClickHouseInterServerPort = cfg.ClickHouse.InterServerPort
+	opts.ClickHouseAddress = cfg.ClickHouse.Address
+	opts.StartContainerd = cfg.Containerd.StartEmbedded
+	opts.ContainerdBinary = cfg.Containerd.BinaryPath
+	opts.ContainerdSocketPath = cfg.Containerd.SocketPath
+
 	switch opts.Mode {
 	case "standalone":
 		opts.StartContainerd = true
@@ -312,7 +458,7 @@ func Server(ctx *Context, opts struct {
 		logs observability.LogReader
 	)
 
-	err := ctx.Server.Populate(&mem)
+	err = ctx.Server.Populate(&mem)
 	if err != nil {
 		ctx.Log.Error("failed to populate memory usage", "error", err)
 		return err
