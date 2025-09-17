@@ -38,7 +38,7 @@ func applyEnvironmentVariables(cfg *Config, sources map[string]ConfigSource, log
 	}
 
 	if len(appliedVars) > 0 {
-		log.Info("applied environment variables", "count", len(appliedVars), "vars", appliedVars)
+		log.Debug("applied environment variables", "count", len(appliedVars), "vars", appliedVars)
 	}
 
 	return nil

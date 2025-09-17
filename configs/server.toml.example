@@ -71,6 +71,9 @@ http_client_port = 12381
 
 [clickhouse]
 # Start an embedded ClickHouse server (automatically true in standalone mode)
+# SECURITY NOTE: The embedded ClickHouse instance is intended for local/standalone
+# use only. Do not expose it without proper authentication and TLS. For production
+# deployments, use an external ClickHouse instance with hardened authentication.
 start_embedded = false
 
 # Ports for embedded ClickHouse (only used when start_embedded = true)

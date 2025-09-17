@@ -506,12 +506,18 @@ func Server(ctx *Context, opts struct {
 	}
 
 	var additionalIps []net.IP
+	seen := make(map[string]struct{})
 	for _, ip := range opts.AdditionalIPs {
 		addr := net.ParseIP(ip)
 		if addr == nil {
 			ctx.Log.Error("failed to parse additional IP", "ip", ip)
 			return fmt.Errorf("failed to parse additional IP %s", ip)
 		}
+		key := addr.String()
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
 		additionalIps = append(additionalIps, addr)
 	}
 
@@ -737,7 +743,11 @@ func Server(ctx *Context, opts struct {
 	}()
 
 	if opts.StandardTLS {
-		_ = autotls.ServeTLS(sub, ctx.Log, opts.DataPath, hs)
+		go func() {
+			if err := autotls.ServeTLS(sub, ctx.Log, opts.DataPath, hs); err != nil {
+				ctx.Log.Error("failed to enable standard TLS", "error", err)
+			}
+		}()
 	}
 
 	var registry ocireg.Registry
@@ -837,7 +847,7 @@ func writeLocalClusterConfig(ctx *Context, cc *caauth.ClientCertificate, address
 	configDirPath := filepath.Join(homeDir, ".config/miren/clientconfig.d")
 
 	// Create the directory if it doesn't exist
-	if err := os.MkdirAll(configDirPath, 0755); err != nil {
+	if err := os.MkdirAll(configDirPath, 0700); err != nil {
 		return fmt.Errorf("failed to create config directory: %w", err)
 	}
 
@@ -888,6 +898,10 @@ func writeLocalClusterConfig(ctx *Context, cc *caauth.ClientCertificate, address
 
 	// Fix file ownership for the created files if running under sudo
 	localConfigPath := filepath.Join(configDirPath, "50-local.yaml")
+	// Ensure file is user-readable only since it contains client key
+	if err := os.Chmod(localConfigPath, 0600); err != nil {
+		ctx.Log.Warn("failed to set config file permissions", "error", err)
+	}
 	if err := fixOwnershipIfSudo(ctx, localConfigPath); err != nil {
 		ctx.Log.Warn("failed to fix config file ownership", "error", err)
 	}
