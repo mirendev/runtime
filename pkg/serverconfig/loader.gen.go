@@ -12,7 +12,7 @@ import (
 )
 
 // Load loads configuration from all sources with proper precedence:
-// CLI flags > Environment variables > Mode defaults > Config file > Defaults
+// CLI flags > Environment variables > Config file > Defaults
 func Load(configPath string, flags *CLIFlags, log *slog.Logger) (*Config, error) {
 	if log == nil {
 		log = slog.Default()
@@ -40,16 +40,30 @@ func Load(configPath string, flags *CLIFlags, log *slog.Logger) (*Config, error)
 		return nil, fmt.Errorf("config file not found: %s", configPath)
 	}
 
-	// Apply mode defaults (after config file, before env/CLI)
-	// These act as defaults that can be overridden
-	cfg.ApplyModeDefaults()
+	// Resolve the effective mode first (CLI > Env > Config > Default)
+	// We need this to apply mode-specific defaults correctly
+	effectiveMode := cfg.Mode
+	if envMode := os.Getenv("MIREN_MODE"); envMode != "" {
+		effectiveMode = envMode
+	}
+	if flags != nil && flags.Mode != nil && *flags.Mode != "" {
+		effectiveMode = *flags.Mode
+	}
 
-	// Apply environment variables
+	// Apply mode defaults based on the resolved mode
+	// These can still be overridden by explicit env/CLI values
+	if effectiveMode == "standalone" {
+		cfg.Etcd.StartEmbedded = true
+		cfg.Clickhouse.StartEmbedded = true
+		cfg.Containerd.StartEmbedded = true
+	}
+
+	// Apply environment variables (can override mode defaults)
 	if err := applyEnvironmentVariables(cfg, log); err != nil {
 		return nil, fmt.Errorf("failed to apply environment variables: %w", err)
 	}
 
-	// Apply CLI flags
+	// Apply CLI flags (can override everything)
 	if flags != nil {
 		applyCLIFlags(cfg, flags)
 	}
@@ -203,13 +217,4 @@ func applyCLIFlags(cfg *Config, flags *CLIFlags) {
 		cfg.Tls.StandardTls = *flags.TLSConfigStandardTls
 	}
 
-}
-
-// ApplyModeDefaults applies mode-specific defaults
-func (c *Config) ApplyModeDefaults() {
-	if c.Mode == "standalone" {
-		c.Etcd.StartEmbedded = true
-		c.Clickhouse.StartEmbedded = true
-		c.Containerd.StartEmbedded = true
-	}
 }
