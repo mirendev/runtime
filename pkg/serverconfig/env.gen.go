@@ -16,8 +16,8 @@ func applyEnvironmentVariables(cfg *Config, log *slog.Logger) error {
 	if val := os.Getenv("MIREN_CLICKHOUSE_ADDRESS"); val != "" {
 
 		cfg.Clickhouse.Address = val
+		log.Debug("applied env var", "key", "MIREN_CLICKHOUSE_ADDRESS")
 
-		log.Debug("applied env var", "key", "MIREN_CLICKHOUSE_ADDRESS", "value", val)
 	}
 
 	// Apply MIREN_CLICKHOUSE_HTTP_PORT
@@ -25,11 +25,11 @@ func applyEnvironmentVariables(cfg *Config, log *slog.Logger) error {
 
 		if i, err := strconv.Atoi(val); err == nil {
 			cfg.Clickhouse.HttpPort = i
+			log.Debug("applied env var", "key", "MIREN_CLICKHOUSE_HTTP_PORT")
 		} else {
 			log.Warn("invalid MIREN_CLICKHOUSE_HTTP_PORT value", "value", val, "error", err)
 		}
 
-		log.Debug("applied env var", "key", "MIREN_CLICKHOUSE_HTTP_PORT", "value", val)
 	}
 
 	// Apply MIREN_CLICKHOUSE_INTERSERVER_PORT
@@ -37,11 +37,11 @@ func applyEnvironmentVariables(cfg *Config, log *slog.Logger) error {
 
 		if i, err := strconv.Atoi(val); err == nil {
 			cfg.Clickhouse.InterserverPort = i
+			log.Debug("applied env var", "key", "MIREN_CLICKHOUSE_INTERSERVER_PORT")
 		} else {
 			log.Warn("invalid MIREN_CLICKHOUSE_INTERSERVER_PORT value", "value", val, "error", err)
 		}
 
-		log.Debug("applied env var", "key", "MIREN_CLICKHOUSE_INTERSERVER_PORT", "value", val)
 	}
 
 	// Apply MIREN_CLICKHOUSE_NATIVE_PORT
@@ -49,51 +49,67 @@ func applyEnvironmentVariables(cfg *Config, log *slog.Logger) error {
 
 		if i, err := strconv.Atoi(val); err == nil {
 			cfg.Clickhouse.NativePort = i
+			log.Debug("applied env var", "key", "MIREN_CLICKHOUSE_NATIVE_PORT")
 		} else {
 			log.Warn("invalid MIREN_CLICKHOUSE_NATIVE_PORT value", "value", val, "error", err)
 		}
 
-		log.Debug("applied env var", "key", "MIREN_CLICKHOUSE_NATIVE_PORT", "value", val)
 	}
 
 	// Apply MIREN_CLICKHOUSE_START_EMBEDDED
 	if val := os.Getenv("MIREN_CLICKHOUSE_START_EMBEDDED"); val != "" {
 
-		cfg.Clickhouse.StartEmbedded = val == "true" || val == "1" || val == "yes"
+		switch strings.ToLower(val) {
+		case "true", "yes", "on", "1":
+			cfg.Clickhouse.StartEmbedded = true
+			log.Debug("applied env var", "key", "MIREN_CLICKHOUSE_START_EMBEDDED")
+		case "false", "no", "off", "0":
+			cfg.Clickhouse.StartEmbedded = false
+			log.Debug("applied env var", "key", "MIREN_CLICKHOUSE_START_EMBEDDED")
+		default:
+			log.Warn("invalid MIREN_CLICKHOUSE_START_EMBEDDED value (use true/false, yes/no, on/off, 1/0)", "value", val)
+		}
 
-		log.Debug("applied env var", "key", "MIREN_CLICKHOUSE_START_EMBEDDED", "value", val)
 	}
 
 	// Apply MIREN_MODE
 	if val := os.Getenv("MIREN_MODE"); val != "" {
 
 		cfg.Mode = val
+		log.Debug("applied env var", "key", "MIREN_MODE")
 
-		log.Debug("applied env var", "key", "MIREN_MODE", "value", val)
 	}
 
 	// Apply MIREN_CONTAINERD_BINARY_PATH
 	if val := os.Getenv("MIREN_CONTAINERD_BINARY_PATH"); val != "" {
 
 		cfg.Containerd.BinaryPath = val
+		log.Debug("applied env var", "key", "MIREN_CONTAINERD_BINARY_PATH")
 
-		log.Debug("applied env var", "key", "MIREN_CONTAINERD_BINARY_PATH", "value", val)
 	}
 
 	// Apply MIREN_CONTAINERD_SOCKET_PATH
 	if val := os.Getenv("MIREN_CONTAINERD_SOCKET_PATH"); val != "" {
 
 		cfg.Containerd.SocketPath = val
+		log.Debug("applied env var", "key", "MIREN_CONTAINERD_SOCKET_PATH")
 
-		log.Debug("applied env var", "key", "MIREN_CONTAINERD_SOCKET_PATH", "value", val)
 	}
 
 	// Apply MIREN_CONTAINERD_START_EMBEDDED
 	if val := os.Getenv("MIREN_CONTAINERD_START_EMBEDDED"); val != "" {
 
-		cfg.Containerd.StartEmbedded = val == "true" || val == "1" || val == "yes"
+		switch strings.ToLower(val) {
+		case "true", "yes", "on", "1":
+			cfg.Containerd.StartEmbedded = true
+			log.Debug("applied env var", "key", "MIREN_CONTAINERD_START_EMBEDDED")
+		case "false", "no", "off", "0":
+			cfg.Containerd.StartEmbedded = false
+			log.Debug("applied env var", "key", "MIREN_CONTAINERD_START_EMBEDDED")
+		default:
+			log.Warn("invalid MIREN_CONTAINERD_START_EMBEDDED value (use true/false, yes/no, on/off, 1/0)", "value", val)
+		}
 
-		log.Debug("applied env var", "key", "MIREN_CONTAINERD_START_EMBEDDED", "value", val)
 	}
 
 	// Apply MIREN_ETCD_CLIENT_PORT
@@ -101,19 +117,34 @@ func applyEnvironmentVariables(cfg *Config, log *slog.Logger) error {
 
 		if i, err := strconv.Atoi(val); err == nil {
 			cfg.Etcd.ClientPort = i
+			log.Debug("applied env var", "key", "MIREN_ETCD_CLIENT_PORT")
 		} else {
 			log.Warn("invalid MIREN_ETCD_CLIENT_PORT value", "value", val, "error", err)
 		}
 
-		log.Debug("applied env var", "key", "MIREN_ETCD_CLIENT_PORT", "value", val)
 	}
 
 	// Apply MIREN_ETCD_ENDPOINTS
 	if val := os.Getenv("MIREN_ETCD_ENDPOINTS"); val != "" {
 
-		cfg.Etcd.Endpoints = strings.Split(val, ",")
+		// Split and clean CSV list
+		parts := strings.Split(val, ",")
+		cleaned := make([]string, 0, len(parts))
+		seen := make(map[string]struct{})
+		for _, p := range parts {
+			p = strings.TrimSpace(p)
+			if p == "" {
+				continue
+			}
+			if _, exists := seen[p]; exists {
+				continue
+			}
+			seen[p] = struct{}{}
+			cleaned = append(cleaned, p)
+		}
+		cfg.Etcd.Endpoints = cleaned
+		log.Debug("applied env var", "key", "MIREN_ETCD_ENDPOINTS", "count", len(cleaned))
 
-		log.Debug("applied env var", "key", "MIREN_ETCD_ENDPOINTS", "value", val)
 	}
 
 	// Apply MIREN_ETCD_HTTP_CLIENT_PORT
@@ -121,11 +152,11 @@ func applyEnvironmentVariables(cfg *Config, log *slog.Logger) error {
 
 		if i, err := strconv.Atoi(val); err == nil {
 			cfg.Etcd.HttpClientPort = i
+			log.Debug("applied env var", "key", "MIREN_ETCD_HTTP_CLIENT_PORT")
 		} else {
 			log.Warn("invalid MIREN_ETCD_HTTP_CLIENT_PORT value", "value", val, "error", err)
 		}
 
-		log.Debug("applied env var", "key", "MIREN_ETCD_HTTP_CLIENT_PORT", "value", val)
 	}
 
 	// Apply MIREN_ETCD_PEER_PORT
@@ -133,51 +164,59 @@ func applyEnvironmentVariables(cfg *Config, log *slog.Logger) error {
 
 		if i, err := strconv.Atoi(val); err == nil {
 			cfg.Etcd.PeerPort = i
+			log.Debug("applied env var", "key", "MIREN_ETCD_PEER_PORT")
 		} else {
 			log.Warn("invalid MIREN_ETCD_PEER_PORT value", "value", val, "error", err)
 		}
 
-		log.Debug("applied env var", "key", "MIREN_ETCD_PEER_PORT", "value", val)
 	}
 
 	// Apply MIREN_ETCD_PREFIX
 	if val := os.Getenv("MIREN_ETCD_PREFIX"); val != "" {
 
 		cfg.Etcd.Prefix = val
+		log.Debug("applied env var", "key", "MIREN_ETCD_PREFIX")
 
-		log.Debug("applied env var", "key", "MIREN_ETCD_PREFIX", "value", val)
 	}
 
 	// Apply MIREN_ETCD_START_EMBEDDED
 	if val := os.Getenv("MIREN_ETCD_START_EMBEDDED"); val != "" {
 
-		cfg.Etcd.StartEmbedded = val == "true" || val == "1" || val == "yes"
+		switch strings.ToLower(val) {
+		case "true", "yes", "on", "1":
+			cfg.Etcd.StartEmbedded = true
+			log.Debug("applied env var", "key", "MIREN_ETCD_START_EMBEDDED")
+		case "false", "no", "off", "0":
+			cfg.Etcd.StartEmbedded = false
+			log.Debug("applied env var", "key", "MIREN_ETCD_START_EMBEDDED")
+		default:
+			log.Warn("invalid MIREN_ETCD_START_EMBEDDED value (use true/false, yes/no, on/off, 1/0)", "value", val)
+		}
 
-		log.Debug("applied env var", "key", "MIREN_ETCD_START_EMBEDDED", "value", val)
 	}
 
 	// Apply MIREN_SERVER_ADDRESS
 	if val := os.Getenv("MIREN_SERVER_ADDRESS"); val != "" {
 
 		cfg.Server.Address = val
+		log.Debug("applied env var", "key", "MIREN_SERVER_ADDRESS")
 
-		log.Debug("applied env var", "key", "MIREN_SERVER_ADDRESS", "value", val)
 	}
 
 	// Apply MIREN_SERVER_CONFIG_CLUSTER_NAME
 	if val := os.Getenv("MIREN_SERVER_CONFIG_CLUSTER_NAME"); val != "" {
 
 		cfg.Server.ConfigClusterName = val
+		log.Debug("applied env var", "key", "MIREN_SERVER_CONFIG_CLUSTER_NAME")
 
-		log.Debug("applied env var", "key", "MIREN_SERVER_CONFIG_CLUSTER_NAME", "value", val)
 	}
 
 	// Apply MIREN_SERVER_DATA_PATH
 	if val := os.Getenv("MIREN_SERVER_DATA_PATH"); val != "" {
 
 		cfg.Server.DataPath = val
+		log.Debug("applied env var", "key", "MIREN_SERVER_DATA_PATH")
 
-		log.Debug("applied env var", "key", "MIREN_SERVER_DATA_PATH", "value", val)
 	}
 
 	// Apply MIREN_SERVER_HTTP_REQUEST_TIMEOUT
@@ -185,67 +224,113 @@ func applyEnvironmentVariables(cfg *Config, log *slog.Logger) error {
 
 		if i, err := strconv.Atoi(val); err == nil {
 			cfg.Server.HttpRequestTimeout = i
+			log.Debug("applied env var", "key", "MIREN_SERVER_HTTP_REQUEST_TIMEOUT")
 		} else {
 			log.Warn("invalid MIREN_SERVER_HTTP_REQUEST_TIMEOUT value", "value", val, "error", err)
 		}
 
-		log.Debug("applied env var", "key", "MIREN_SERVER_HTTP_REQUEST_TIMEOUT", "value", val)
 	}
 
 	// Apply MIREN_SERVER_RELEASE_PATH
 	if val := os.Getenv("MIREN_SERVER_RELEASE_PATH"); val != "" {
 
 		cfg.Server.ReleasePath = val
+		log.Debug("applied env var", "key", "MIREN_SERVER_RELEASE_PATH")
 
-		log.Debug("applied env var", "key", "MIREN_SERVER_RELEASE_PATH", "value", val)
 	}
 
 	// Apply MIREN_SERVER_RUNNER_ADDRESS
 	if val := os.Getenv("MIREN_SERVER_RUNNER_ADDRESS"); val != "" {
 
 		cfg.Server.RunnerAddress = val
+		log.Debug("applied env var", "key", "MIREN_SERVER_RUNNER_ADDRESS")
 
-		log.Debug("applied env var", "key", "MIREN_SERVER_RUNNER_ADDRESS", "value", val)
 	}
 
 	// Apply MIREN_SERVER_RUNNER_ID
 	if val := os.Getenv("MIREN_SERVER_RUNNER_ID"); val != "" {
 
 		cfg.Server.RunnerId = val
+		log.Debug("applied env var", "key", "MIREN_SERVER_RUNNER_ID")
 
-		log.Debug("applied env var", "key", "MIREN_SERVER_RUNNER_ID", "value", val)
 	}
 
 	// Apply MIREN_SERVER_SKIP_CLIENT_CONFIG
 	if val := os.Getenv("MIREN_SERVER_SKIP_CLIENT_CONFIG"); val != "" {
 
-		cfg.Server.SkipClientConfig = val == "true" || val == "1" || val == "yes"
+		switch strings.ToLower(val) {
+		case "true", "yes", "on", "1":
+			cfg.Server.SkipClientConfig = true
+			log.Debug("applied env var", "key", "MIREN_SERVER_SKIP_CLIENT_CONFIG")
+		case "false", "no", "off", "0":
+			cfg.Server.SkipClientConfig = false
+			log.Debug("applied env var", "key", "MIREN_SERVER_SKIP_CLIENT_CONFIG")
+		default:
+			log.Warn("invalid MIREN_SERVER_SKIP_CLIENT_CONFIG value (use true/false, yes/no, on/off, 1/0)", "value", val)
+		}
 
-		log.Debug("applied env var", "key", "MIREN_SERVER_SKIP_CLIENT_CONFIG", "value", val)
 	}
 
 	// Apply MIREN_TLS_ADDITIONAL_IPS
 	if val := os.Getenv("MIREN_TLS_ADDITIONAL_IPS"); val != "" {
 
-		cfg.Tls.AdditionalIps = strings.Split(val, ",")
+		// Split and clean CSV list
+		parts := strings.Split(val, ",")
+		cleaned := make([]string, 0, len(parts))
+		seen := make(map[string]struct{})
+		for _, p := range parts {
+			p = strings.TrimSpace(p)
+			if p == "" {
+				continue
+			}
+			if _, exists := seen[p]; exists {
+				continue
+			}
+			seen[p] = struct{}{}
+			cleaned = append(cleaned, p)
+		}
+		cfg.Tls.AdditionalIps = cleaned
+		log.Debug("applied env var", "key", "MIREN_TLS_ADDITIONAL_IPS", "count", len(cleaned))
 
-		log.Debug("applied env var", "key", "MIREN_TLS_ADDITIONAL_IPS", "value", val)
 	}
 
 	// Apply MIREN_TLS_ADDITIONAL_NAMES
 	if val := os.Getenv("MIREN_TLS_ADDITIONAL_NAMES"); val != "" {
 
-		cfg.Tls.AdditionalNames = strings.Split(val, ",")
+		// Split and clean CSV list
+		parts := strings.Split(val, ",")
+		cleaned := make([]string, 0, len(parts))
+		seen := make(map[string]struct{})
+		for _, p := range parts {
+			p = strings.TrimSpace(p)
+			if p == "" {
+				continue
+			}
+			if _, exists := seen[p]; exists {
+				continue
+			}
+			seen[p] = struct{}{}
+			cleaned = append(cleaned, p)
+		}
+		cfg.Tls.AdditionalNames = cleaned
+		log.Debug("applied env var", "key", "MIREN_TLS_ADDITIONAL_NAMES", "count", len(cleaned))
 
-		log.Debug("applied env var", "key", "MIREN_TLS_ADDITIONAL_NAMES", "value", val)
 	}
 
 	// Apply MIREN_TLS_STANDARD_TLS
 	if val := os.Getenv("MIREN_TLS_STANDARD_TLS"); val != "" {
 
-		cfg.Tls.StandardTls = val == "true" || val == "1" || val == "yes"
+		switch strings.ToLower(val) {
+		case "true", "yes", "on", "1":
+			cfg.Tls.StandardTls = true
+			log.Debug("applied env var", "key", "MIREN_TLS_STANDARD_TLS")
+		case "false", "no", "off", "0":
+			cfg.Tls.StandardTls = false
+			log.Debug("applied env var", "key", "MIREN_TLS_STANDARD_TLS")
+		default:
+			log.Warn("invalid MIREN_TLS_STANDARD_TLS value (use true/false, yes/no, on/off, 1/0)", "value", val)
+		}
 
-		log.Debug("applied env var", "key", "MIREN_TLS_STANDARD_TLS", "value", val)
 	}
 
 	return nil

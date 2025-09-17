@@ -61,9 +61,8 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 	}
 	switch cfg.Mode {
 	case "standalone":
-		cfg.Containerd.StartEmbedded = true
-		cfg.Etcd.StartEmbedded = true
-		cfg.Clickhouse.StartEmbedded = true
+		// Mode defaults are already applied by serverconfig.Load
+		// No need to manually set StartEmbedded flags here
 
 		// Determine release path
 		if cfg.Server.ReleasePath == "" {
@@ -74,12 +73,17 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 				homeDir = ""
 			}
 
-			// Try ~/.miren/release
-			userReleasePath := filepath.Join(homeDir, ".miren", "release")
-			if _, err := os.Stat(userReleasePath); err == nil {
-				cfg.Server.ReleasePath = userReleasePath
-				ctx.Log.Info("using user release path", "path", cfg.Server.ReleasePath)
-			} else {
+			// Try ~/.miren/release if home dir is available
+			var userReleasePath string
+			if homeDir != "" {
+				userReleasePath = filepath.Join(homeDir, ".miren", "release")
+				if _, err := os.Stat(userReleasePath); err == nil {
+					cfg.Server.ReleasePath = userReleasePath
+					ctx.Log.Info("using user release path", "path", cfg.Server.ReleasePath)
+				}
+			}
+
+			if cfg.Server.ReleasePath == "" {
 				ctx.Log.Info("user release path not found, trying system path")
 				// Try /var/lib/miren/release
 				systemReleasePath := "/var/lib/miren/release"
@@ -87,6 +91,9 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 					cfg.Server.ReleasePath = systemReleasePath
 					ctx.Log.Info("using system release path", "path", cfg.Server.ReleasePath)
 				} else {
+					if userReleasePath == "" {
+						return fmt.Errorf("no release directory found (tried %s)", systemReleasePath)
+					}
 					return fmt.Errorf("no release directory found (tried %s and %s)", userReleasePath, systemReleasePath)
 				}
 			}
@@ -523,10 +530,8 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 
 	aa := co.Activator()
 
-	if cfg.Server.HttpRequestTimeout <= 0 {
-		ctx.Log.Warn("invalid http-request-timeout; using default 60s", "value", cfg.Server.HttpRequestTimeout)
-		cfg.Server.HttpRequestTimeout = 60
-	}
+	// HttpRequestTimeout is already validated by cfg.Validate() to be >= 1
+	// No need for additional checks here
 
 	ingressConfig := httpingress.IngressConfig{
 		RequestTimeout: time.Duration(cfg.Server.HttpRequestTimeout) * time.Second,

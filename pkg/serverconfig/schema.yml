@@ -57,7 +57,7 @@ configs:
         cli:
           long: address
           short: a
-          description: Address to listen on
+          description: Address to listen on (host:port). For IPv6 use brackets, e.g. "[::1]:8443".
         env: MIREN_SERVER_ADDRESS
         toml: address
         validation:
@@ -68,7 +68,7 @@ configs:
         default: localhost:8444
         cli:
           long: runner-address
-          description: Runner address
+          description: Runner address (host:port). For IPv6 use brackets, e.g. "[::1]:8444".
         env: MIREN_SERVER_RUNNER_ADDRESS
         toml: runner_address
         validation:

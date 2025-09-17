@@ -620,18 +620,44 @@ func applyEnvironmentVariables(cfg *Config, log *slog.Logger) error {
 	if val := os.Getenv("{{$field.Env}}"); val != "" {
 		{{if eq $field.Type "string"}}
 		cfg.{{if ne $cname "Config"}}{{$structField}}.{{end}}{{$fname | title}} = val
+		log.Debug("applied env var", "key", "{{$field.Env}}")
 		{{else if eq $field.Type "int"}}
 		if i, err := strconv.Atoi(val); err == nil {
 			cfg.{{if ne $cname "Config"}}{{$structField}}.{{end}}{{$fname | title}} = i
+			log.Debug("applied env var", "key", "{{$field.Env}}")
 		} else {
 			log.Warn("invalid {{$field.Env}} value", "value", val, "error", err)
 		}
 		{{else if eq $field.Type "bool"}}
-		cfg.{{if ne $cname "Config"}}{{$structField}}.{{end}}{{$fname | title}} = val == "true" || val == "1" || val == "yes"
+		switch strings.ToLower(val) {
+		case "true", "yes", "on", "1":
+			cfg.{{if ne $cname "Config"}}{{$structField}}.{{end}}{{$fname | title}} = true
+			log.Debug("applied env var", "key", "{{$field.Env}}")
+		case "false", "no", "off", "0":
+			cfg.{{if ne $cname "Config"}}{{$structField}}.{{end}}{{$fname | title}} = false
+			log.Debug("applied env var", "key", "{{$field.Env}}")
+		default:
+			log.Warn("invalid {{$field.Env}} value (use true/false, yes/no, on/off, 1/0)", "value", val)
+		}
 		{{else if eq $field.Type "[]string"}}
-		cfg.{{if ne $cname "Config"}}{{$structField}}.{{end}}{{$fname | title}} = strings.Split(val, ",")
+		// Split and clean CSV list
+		parts := strings.Split(val, ",")
+		cleaned := make([]string, 0, len(parts))
+		seen := make(map[string]struct{})
+		for _, p := range parts {
+			p = strings.TrimSpace(p)
+			if p == "" {
+				continue
+			}
+			if _, exists := seen[p]; exists {
+				continue
+			}
+			seen[p] = struct{}{}
+			cleaned = append(cleaned, p)
+		}
+		cfg.{{if ne $cname "Config"}}{{$structField}}.{{end}}{{$fname | title}} = cleaned
+		log.Debug("applied env var", "key", "{{$field.Env}}", "count", len(cleaned))
 		{{end}}
-		log.Debug("applied env var", "key", "{{$field.Env}}", "value", val)
 	}
 	{{end}}
 	{{end}}
