@@ -1,0 +1,641 @@
+package main
+
+import (
+	"bytes"
+	"flag"
+	"fmt"
+	"go/format"
+	"log"
+	"os"
+	"path/filepath"
+	"strings"
+	"text/template"
+
+	"gopkg.in/yaml.v3"
+)
+
+var (
+	schemaPath = flag.String("schema", "", "Path to the schema YAML file")
+	outputDir  = flag.String("output", "", "Output directory for generated files")
+)
+
+// Schema represents the root of the configuration schema
+type Schema struct {
+	Package string             `yaml:"package"`
+	Imports []string           `yaml:"imports"`
+	Configs map[string]*Config `yaml:"configs"`
+}
+
+// Config represents a configuration struct
+type Config struct {
+	Description string            `yaml:"description"`
+	Fields      map[string]*Field `yaml:"fields"`
+}
+
+// Field represents a configuration field
+type Field struct {
+	Type        string         `yaml:"type"`
+	Default     any            `yaml:"default"`
+	CLI         *CLIConfig     `yaml:"cli"`
+	Env         string         `yaml:"env"`
+	TOML        string         `yaml:"toml"`
+	Validation  *Validation    `yaml:"validation"`
+	Nested      bool           `yaml:"nested"`
+	ModeDefault map[string]any `yaml:"mode_default"`
+	CLIOnly     bool           `yaml:"cli_only"`
+}
+
+// CLIConfig represents CLI flag configuration
+type CLIConfig struct {
+	Long        string `yaml:"long"`
+	Short       string `yaml:"short"`
+	Description string `yaml:"description"`
+}
+
+// Validation represents field validation rules
+type Validation struct {
+	Enum   []string `yaml:"enum"`
+	Format string   `yaml:"format"`
+	Min    *int     `yaml:"min"`
+	Max    *int     `yaml:"max"`
+	Port   bool     `yaml:"port"`
+}
+
+func main() {
+	flag.Parse()
+
+	if *schemaPath == "" || *outputDir == "" {
+		log.Fatal("Both -schema and -output flags are required")
+	}
+
+	// Read schema file
+	schemaData, err := os.ReadFile(*schemaPath)
+	if err != nil {
+		log.Fatalf("Failed to read schema file: %v", err)
+	}
+
+	var schema Schema
+	if err := yaml.Unmarshal(schemaData, &schema); err != nil {
+		log.Fatalf("Failed to parse schema: %v", err)
+	}
+
+	// Create output directory if it doesn't exist
+	if err := os.MkdirAll(*outputDir, 0755); err != nil {
+		log.Fatalf("Failed to create output directory: %v", err)
+	}
+
+	// Generate files
+	generators := []struct {
+		name     string
+		template string
+		genFunc  func(*Schema) (string, error)
+	}{
+		{"config.gen.go", configTemplate, generateConfig},
+		{"cli.gen.go", cliTemplate, generateCLI},
+		{"loader.gen.go", loaderTemplate, generateLoader},
+		{"defaults.gen.go", defaultsTemplate, generateDefaults},
+		{"validation.gen.go", validationTemplate, generateValidation},
+		{"env.gen.go", envTemplate, generateEnv},
+	}
+
+	for _, gen := range generators {
+		content, err := gen.genFunc(&schema)
+		if err != nil {
+			log.Fatalf("Failed to generate %s: %v", gen.name, err)
+		}
+
+		// Format the Go code
+		formatted, err := format.Source([]byte(content))
+		if err != nil {
+			// Write unformatted for debugging
+			debugPath := filepath.Join(*outputDir, gen.name+".debug")
+			os.WriteFile(debugPath, []byte(content), 0644)
+			log.Fatalf("Failed to format %s (debug output written to %s): %v", gen.name, debugPath, err)
+		}
+
+		// Write the file
+		outPath := filepath.Join(*outputDir, gen.name)
+		if err := os.WriteFile(outPath, formatted, 0644); err != nil {
+			log.Fatalf("Failed to write %s: %v", gen.name, err)
+		}
+
+		log.Printf("Generated %s", outPath)
+	}
+}
+
+// generateConfig generates the config structs
+func generateConfig(schema *Schema) (string, error) {
+	tmpl, err := template.New("config").Funcs(template.FuncMap{
+		"title": toGoName,
+	}).Parse(configTemplate)
+	if err != nil {
+		return "", err
+	}
+
+	var buf bytes.Buffer
+	if err := tmpl.Execute(&buf, schema); err != nil {
+		return "", err
+	}
+
+	return buf.String(), nil
+}
+
+// generateCLI generates the CLI flags struct
+func generateCLI(schema *Schema) (string, error) {
+	tmpl, err := template.New("cli").Funcs(template.FuncMap{
+		"goType": goTypeForCLI,
+		"title":  toGoName,
+	}).Parse(cliTemplate)
+	if err != nil {
+		return "", err
+	}
+
+	var buf bytes.Buffer
+	if err := tmpl.Execute(&buf, schema); err != nil {
+		return "", err
+	}
+
+	return buf.String(), nil
+}
+
+// generateLoader generates the loader code
+func generateLoader(schema *Schema) (string, error) {
+	tmpl, err := template.New("loader").Funcs(template.FuncMap{
+		"title": toGoName,
+	}).Parse(loaderTemplate)
+	if err != nil {
+		return "", err
+	}
+
+	var buf bytes.Buffer
+	if err := tmpl.Execute(&buf, schema); err != nil {
+		return "", err
+	}
+
+	return buf.String(), nil
+}
+
+// generateDefaults generates the default configuration
+func generateDefaults(schema *Schema) (string, error) {
+	tmpl, err := template.New("defaults").Funcs(template.FuncMap{
+		"formatDefault": formatDefault,
+		"title":         toGoName,
+	}).Parse(defaultsTemplate)
+	if err != nil {
+		return "", err
+	}
+
+	var buf bytes.Buffer
+	if err := tmpl.Execute(&buf, schema); err != nil {
+		return "", err
+	}
+
+	return buf.String(), nil
+}
+
+// generateValidation generates validation functions
+func generateValidation(schema *Schema) (string, error) {
+	tmpl, err := template.New("validation").Funcs(template.FuncMap{
+		"title": toGoName,
+	}).Parse(validationTemplate)
+	if err != nil {
+		return "", err
+	}
+
+	var buf bytes.Buffer
+	if err := tmpl.Execute(&buf, schema); err != nil {
+		return "", err
+	}
+
+	return buf.String(), nil
+}
+
+// generateEnv generates environment variable handling
+func generateEnv(schema *Schema) (string, error) {
+	tmpl, err := template.New("env").Funcs(template.FuncMap{
+		"title": toGoName,
+	}).Parse(envTemplate)
+	if err != nil {
+		return "", err
+	}
+
+	var buf bytes.Buffer
+	if err := tmpl.Execute(&buf, schema); err != nil {
+		return "", err
+	}
+
+	return buf.String(), nil
+}
+
+// Helper functions
+func toGoName(s string) string {
+	// Convert snake_case or kebab-case to PascalCase
+	parts := strings.FieldsFunc(s, func(r rune) bool {
+		return r == '_' || r == '-'
+	})
+
+	for i, part := range parts {
+		if len(part) > 0 {
+			parts[i] = strings.ToUpper(part[:1]) + part[1:]
+		}
+	}
+
+	return strings.Join(parts, "")
+}
+
+func goTypeForCLI(fieldType string) string {
+	// For CLI, we use pointers to distinguish set vs unset
+	switch fieldType {
+	case "string":
+		return "*string"
+	case "int":
+		return "*int"
+	case "bool":
+		return "*bool"
+	case "[]string":
+		return "[]string" // Slices can be nil
+	default:
+		return "*" + fieldType
+	}
+}
+
+func formatDefault(val interface{}, fieldType string) string {
+	if val == nil {
+		switch fieldType {
+		case "string":
+			return `""`
+		case "[]string":
+			return `[]string{}`
+		default:
+			return "nil"
+		}
+	}
+
+	switch v := val.(type) {
+	case string:
+		return fmt.Sprintf(`"%s"`, v)
+	case []interface{}:
+		if len(v) == 0 {
+			return "[]string{}"
+		}
+		var items []string
+		for _, item := range v {
+			items = append(items, fmt.Sprintf(`"%s"`, item))
+		}
+		return fmt.Sprintf("[]string{%s}", strings.Join(items, ", "))
+	case bool, int:
+		return fmt.Sprintf("%v", v)
+	default:
+		return fmt.Sprintf("%#v", v)
+	}
+}
+
+// Template definitions
+const configTemplate = `// Code generated by configgen. DO NOT EDIT.
+
+package {{.Package}}
+
+import (
+	"time"
+)
+
+{{range $name, $config := .Configs}}
+// {{$name}} {{if $config.Description}}{{$config.Description}}{{end}}
+type {{$name}} struct {
+	{{- range $fieldName, $field := $config.Fields}}
+	{{- if not $field.CLIOnly}}
+	{{- if $field.Nested}}
+	{{$fieldName | title}} {{$field.Type}} ` + "`" + `toml:"{{$field.TOML}}"` + "`" + `
+	{{- else}}
+	{{$fieldName | title}} {{$field.Type}} ` + "`" + `toml:"{{$field.TOML}}"{{if $field.Env}} env:"{{$field.Env}}"{{end}}` + "`" + `
+	{{- end}}
+	{{- end}}
+	{{- end}}
+}
+{{end}}
+
+// HTTPRequestTimeoutDuration returns the timeout as a time.Duration
+func (c *ServerConfig) HTTPRequestTimeoutDuration() time.Duration {
+	return time.Duration(c.HttpRequestTimeout) * time.Second
+}
+`
+
+const cliTemplate = `// Code generated by configgen. DO NOT EDIT.
+
+package {{.Package}}
+
+// CLIFlags represents command-line flags for server configuration
+// All fields are pointers to distinguish between set and unset values
+type CLIFlags struct {
+	{{- range $cname, $config := .Configs}}
+	{{- range $fname, $field := $config.Fields}}
+	{{- if $field.CLI}}
+	{{if eq $cname "Config"}}{{$fname | title}}{{else}}{{$cname}}{{$fname | title}}{{end}} {{goType $field.Type}} ` + "`" + `{{if $field.CLI.Long}}long:"{{$field.CLI.Long}}"{{end}}{{if $field.CLI.Short}} short:"{{$field.CLI.Short}}"{{end}}{{if $field.CLI.Description}} description:"{{$field.CLI.Description}}"{{end}}` + "`" + `
+	{{- end}}
+	{{- end}}
+	{{- end}}
+}
+
+// NewCLIFlags creates a new CLIFlags struct for parsing
+func NewCLIFlags() *CLIFlags {
+	return &CLIFlags{}
+}
+`
+
+const loaderTemplate = `// Code generated by configgen. DO NOT EDIT.
+
+package {{.Package}}
+
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"log/slog"
+
+	"github.com/pelletier/go-toml/v2"
+)
+
+// Load loads configuration from all sources with proper precedence:
+// CLI flags > Environment variables > Config file > Defaults
+func Load(configPath string, flags *CLIFlags, log *slog.Logger) (*Config, error) {
+	if log == nil {
+		log = slog.Default()
+	}
+
+	cfg := DefaultConfig()
+
+	// Load config file
+	filePath := findConfigFile(configPath, cfg.Server.DataPath)
+	if filePath != "" {
+		log.Info("loading config file", "path", filePath)
+		if err := loadConfigFile(filePath, cfg); err != nil {
+			return nil, fmt.Errorf("failed to load config file: %w", err)
+		}
+	} else if configPath != "" {
+		return nil, fmt.Errorf("config file not found: %s", configPath)
+	}
+
+	// Apply environment variables
+	if err := applyEnvironmentVariables(cfg, log); err != nil {
+		return nil, fmt.Errorf("failed to apply environment variables: %w", err)
+	}
+
+	// Apply CLI flags
+	if flags != nil {
+		applyCLIFlags(cfg, flags)
+	}
+
+	// Apply mode defaults
+	cfg.ApplyModeDefaults()
+
+	// Validate
+	if err := cfg.Validate(); err != nil {
+		return nil, fmt.Errorf("configuration validation failed: %w", err)
+	}
+
+	return cfg, nil
+}
+
+func findConfigFile(explicitPath, dataPath string) string {
+	if explicitPath != "" {
+		if _, err := os.Stat(explicitPath); err == nil {
+			return explicitPath
+		}
+		return ""
+	}
+
+	searchPaths := []string{
+		"/etc/miren/server.toml",
+		filepath.Join(dataPath, "config", "server.toml"),
+	}
+
+	for _, path := range searchPaths {
+		if _, err := os.Stat(path); err == nil {
+			return path
+		}
+	}
+
+	return ""
+}
+
+func loadConfigFile(path string, cfg *Config) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("failed to read config file: %w", err)
+	}
+
+	if err := toml.Unmarshal(data, cfg); err != nil {
+		return fmt.Errorf("failed to parse TOML: %w", err)
+	}
+
+	return nil
+}
+
+func applyCLIFlags(cfg *Config, flags *CLIFlags) {
+	{{range $cname, $config := .Configs}}
+	{{$structField := $cname}}{{range $k, $v := (index $.Configs "Config").Fields}}{{if eq $v.Type $cname}}{{$structField = ($k | title)}}{{end}}{{end}}
+	{{range $fname, $field := $config.Fields}}
+	{{if and $field.CLI (not $field.CLIOnly)}}
+	{{$flagName := $fname | title}}{{if ne $cname "Config"}}{{$flagName = print $cname ($fname | title)}}{{end}}
+	{{if eq $field.Type "string"}}
+	if flags.{{$flagName}} != nil && *flags.{{$flagName}} != "" {
+		cfg.{{if ne $cname "Config"}}{{$structField}}.{{end}}{{$fname | title}} = *flags.{{$flagName}}
+	}
+	{{else if eq $field.Type "int"}}
+	if flags.{{$flagName}} != nil {
+		cfg.{{if ne $cname "Config"}}{{$structField}}.{{end}}{{$fname | title}} = *flags.{{$flagName}}
+	}
+	{{else if eq $field.Type "bool"}}
+	if flags.{{$flagName}} != nil {
+		cfg.{{if ne $cname "Config"}}{{$structField}}.{{end}}{{$fname | title}} = *flags.{{$flagName}}
+	}
+	{{else if eq $field.Type "[]string"}}
+	if len(flags.{{$flagName}}) > 0 {
+		cfg.{{if ne $cname "Config"}}{{$structField}}.{{end}}{{$fname | title}} = flags.{{$flagName}}
+	}
+	{{end}}
+	{{end}}
+	{{end}}
+	{{end}}
+}
+
+// ApplyModeDefaults applies mode-specific defaults
+func (c *Config) ApplyModeDefaults() {
+	if c.Mode == "standalone" {
+		c.Etcd.StartEmbedded = true
+		c.Clickhouse.StartEmbedded = true
+		c.Containerd.StartEmbedded = true
+	}
+}
+`
+
+const defaultsTemplate = `// Code generated by configgen. DO NOT EDIT.
+
+package {{.Package}}
+
+// DefaultConfig returns the default configuration
+func DefaultConfig() *Config {
+	return &Config{
+		{{range $fname, $field := (index .Configs "Config").Fields}}
+		{{if not $field.CLIOnly}}
+		{{if $field.Nested}}
+		{{$fname | title}}: Default{{$field.Type}}(),
+		{{else}}
+		{{$fname | title}}: {{formatDefault $field.Default $field.Type}},
+		{{end}}
+		{{end}}
+		{{end}}
+	}
+}
+
+{{range $name, $config := .Configs}}
+{{if ne $name "Config"}}
+// Default{{$name}} returns default {{$name}}
+func Default{{$name}}() {{$name}} {
+	return {{$name}}{
+		{{range $fname, $field := $config.Fields}}
+		{{$fname | title}}: {{formatDefault $field.Default $field.Type}},
+		{{end}}
+	}
+}
+{{end}}
+{{end}}
+`
+
+const validationTemplate = `// Code generated by configgen. DO NOT EDIT.
+
+package {{.Package}}
+
+import (
+	"fmt"
+	"net"
+)
+
+// Validate validates the configuration
+func (c *Config) Validate() error {
+	{{range $fname, $field := (index .Configs "Config").Fields}}
+	{{if $field.Validation}}
+	{{if $field.Validation.Enum}}
+	// Validate {{$fname}}
+	validModes := map[string]bool{
+		{{range $val := $field.Validation.Enum}}"{{$val}}": true,
+		{{end}}
+	}
+	if !validModes[c.{{$fname | title}}] {
+		return fmt.Errorf("invalid {{$fname}} %q: must be one of {{$field.Validation.Enum}}", c.{{$fname | title}})
+	}
+	{{end}}
+	{{end}}
+	{{if $field.Nested}}
+	if err := c.{{$fname | title}}.Validate(); err != nil {
+		return fmt.Errorf("{{$fname}}: %w", err)
+	}
+	{{end}}
+	{{end}}
+	return nil
+}
+
+{{range $name, $config := .Configs}}
+{{if ne $name "Config"}}
+// Validate validates {{$name}}
+func (c *{{$name}}) Validate() error {
+	{{range $fname, $field := $config.Fields}}
+	{{if $field.Validation}}
+	{{if eq $field.Validation.Format "host:port"}}
+	// Validate {{$fname}}
+	if c.{{$fname | title}} != "" {
+		if _, _, err := net.SplitHostPort(c.{{$fname | title}}); err != nil {
+			return fmt.Errorf("invalid {{$fname}} %q: %w", c.{{$fname | title}}, err)
+		}
+	}
+	{{else if eq $field.Validation.Format "ip_list"}}
+	// Validate {{$fname}}
+	for _, ip := range c.{{$fname | title}} {
+		if net.ParseIP(ip) == nil {
+			return fmt.Errorf("invalid IP address %q in {{$fname}}", ip)
+		}
+	}
+	{{else if $field.Validation.Port}}
+	// Validate {{$fname}}
+	if c.{{$fname | title}} < 1 || c.{{$fname | title}} > 65535 {
+		return fmt.Errorf("{{$fname}} must be between 1 and 65535, got %d", c.{{$fname | title}})
+	}
+	{{else if $field.Validation.Min}}
+	// Validate {{$fname}}
+	if c.{{$fname | title}} < {{$field.Validation.Min}} {
+		return fmt.Errorf("{{$fname}} must be at least {{$field.Validation.Min}}, got %d", c.{{$fname | title}})
+	}
+	{{end}}
+	{{end}}
+	{{end}}
+	
+	// Check for port conflicts in {{$name}}
+	{{if or (eq $name "EtcdConfig") (eq $name "ClickHouseConfig")}}
+	ports := []int{
+		{{range $fname, $field := $config.Fields}}
+		{{if $field.Validation}}{{if $field.Validation.Port}}c.{{$fname | title}},
+		{{end}}{{end}}
+		{{end}}
+	}
+	seen := make(map[int]bool)
+	for _, port := range ports {
+		if seen[port] {
+			return fmt.Errorf("port conflict: port %d is used multiple times", port)
+		}
+		seen[port] = true
+	}
+	{{end}}
+	
+	{{if eq $name "EtcdConfig"}}
+	// Validate etcd endpoints requirement
+	if !c.StartEmbedded && len(c.Endpoints) == 0 {
+		return fmt.Errorf("etcd endpoints must be set when start_embedded=false")
+	}
+	{{end}}
+	
+	return nil
+}
+{{end}}
+{{end}}
+`
+
+const envTemplate = `// Code generated by configgen. DO NOT EDIT.
+
+package {{.Package}}
+
+import (
+	"log/slog"
+	"os"
+	"strconv"
+	"strings"
+)
+
+// applyEnvironmentVariables applies environment variables to the configuration
+func applyEnvironmentVariables(cfg *Config, log *slog.Logger) error {
+	{{range $cname, $config := .Configs}}
+	{{$structField := $cname}}{{range $k, $v := (index $.Configs "Config").Fields}}{{if eq $v.Type $cname}}{{$structField = ($k | title)}}{{end}}{{end}}
+	{{range $fname, $field := $config.Fields}}
+	{{if $field.Env}}
+	// Apply {{$field.Env}}
+	if val := os.Getenv("{{$field.Env}}"); val != "" {
+		{{if eq $field.Type "string"}}
+		cfg.{{if ne $cname "Config"}}{{$structField}}.{{end}}{{$fname | title}} = val
+		{{else if eq $field.Type "int"}}
+		if i, err := strconv.Atoi(val); err == nil {
+			cfg.{{if ne $cname "Config"}}{{$structField}}.{{end}}{{$fname | title}} = i
+		} else {
+			log.Warn("invalid {{$field.Env}} value", "value", val, "error", err)
+		}
+		{{else if eq $field.Type "bool"}}
+		cfg.{{if ne $cname "Config"}}{{$structField}}.{{end}}{{$fname | title}} = val == "true" || val == "1" || val == "yes"
+		{{else if eq $field.Type "[]string"}}
+		cfg.{{if ne $cname "Config"}}{{$structField}}.{{end}}{{$fname | title}} = strings.Split(val, ",")
+		{{end}}
+		log.Debug("applied env var", "key", "{{$field.Env}}", "value", val)
+	}
+	{{end}}
+	{{end}}
+	{{end}}
+	return nil
+}
+`

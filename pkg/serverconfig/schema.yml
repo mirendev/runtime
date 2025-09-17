@@ -1,0 +1,321 @@
+package: serverconfig
+
+configs:
+  Config:
+    description: Complete server configuration from all sources
+    fields:
+      config_file:
+        type: string
+        description: "Path to configuration file"
+        cli:
+          long: config
+          description: "Path to configuration file"
+        cli_only: true  # This field is only for CLI, not stored in config
+      mode:
+        type: string
+        default: standalone
+        cli:
+          long: mode
+          short: m
+          description: Server mode (standalone, distributed)
+        env: MIREN_MODE
+        toml: mode
+        validation:
+          enum: [standalone, distributed]
+
+      server:
+        type: ServerConfig
+        toml: server
+        nested: true
+
+      tls:
+        type: TLSConfig
+        toml: tls
+        nested: true
+
+      etcd:
+        type: EtcdConfig
+        toml: etcd
+        nested: true
+
+      clickhouse:
+        type: ClickHouseConfig
+        toml: clickhouse
+        nested: true
+
+      containerd:
+        type: ContainerdConfig
+        toml: containerd
+        nested: true
+
+  ServerConfig:
+    description: Core server settings
+    fields:
+      address:
+        type: string
+        default: localhost:8443
+        cli:
+          long: address
+          short: a
+          description: Address to listen on
+        env: MIREN_SERVER_ADDRESS
+        toml: address
+        validation:
+          format: host:port
+
+      runner_address:
+        type: string
+        default: localhost:8444
+        cli:
+          long: runner-address
+          description: Runner address
+        env: MIREN_SERVER_RUNNER_ADDRESS
+        toml: runner_address
+        validation:
+          format: host:port
+
+      data_path:
+        type: string
+        default: /var/lib/miren
+        cli:
+          long: data-path
+          short: d
+          description: Data path
+        env: MIREN_SERVER_DATA_PATH
+        toml: data_path
+
+      runner_id:
+        type: string
+        default: miren
+        cli:
+          long: runner-id
+          short: r
+          description: Runner ID
+        env: MIREN_SERVER_RUNNER_ID
+        toml: runner_id
+
+      release_path:
+        type: string
+        default: ""
+        cli:
+          long: release-path
+          description: Path to release directory containing binaries
+        env: MIREN_SERVER_RELEASE_PATH
+        toml: release_path
+
+      config_cluster_name:
+        type: string
+        default: local
+        cli:
+          long: config-cluster-name
+          short: C
+          description: Name of the cluster in client config
+        env: MIREN_SERVER_CONFIG_CLUSTER_NAME
+        toml: config_cluster_name
+
+      skip_client_config:
+        type: bool
+        default: false
+        cli:
+          long: skip-client-config
+          description: Skip writing client config file to clientconfig.d
+        env: MIREN_SERVER_SKIP_CLIENT_CONFIG
+        toml: skip_client_config
+
+      http_request_timeout:
+        type: int
+        default: 60
+        cli:
+          long: http-request-timeout
+          description: HTTP request timeout in seconds
+        env: MIREN_SERVER_HTTP_REQUEST_TIMEOUT
+        toml: http_request_timeout
+        validation:
+          min: 1
+
+  TLSConfig:
+    description: TLS/certificate settings
+    fields:
+      additional_names:
+        type: "[]string"
+        default: []
+        cli:
+          long: dns-names
+          description: Additional DNS names assigned to the server cert
+        env: MIREN_TLS_ADDITIONAL_NAMES
+        toml: additional_names
+
+      additional_ips:
+        type: "[]string"
+        default: []
+        cli:
+          long: ips
+          description: Additional IPs assigned to the server cert
+        env: MIREN_TLS_ADDITIONAL_IPS
+        toml: additional_ips
+        validation:
+          format: ip_list
+
+      standard_tls:
+        type: bool
+        default: false
+        cli:
+          long: serve-tls
+          description: Expose the http ingress on standard TLS ports
+        env: MIREN_TLS_STANDARD_TLS
+        toml: standard_tls
+
+  EtcdConfig:
+    description: Etcd configuration
+    fields:
+      endpoints:
+        type: "[]string"
+        default: ["http://etcd:2379"]
+        cli:
+          long: etcd
+          short: e
+          description: Etcd endpoints
+        env: MIREN_ETCD_ENDPOINTS
+        toml: endpoints
+
+      prefix:
+        type: string
+        default: /miren
+        cli:
+          long: etcd-prefix
+          short: p
+          description: Etcd prefix
+        env: MIREN_ETCD_PREFIX
+        toml: prefix
+
+      start_embedded:
+        type: bool
+        default: false
+        cli:
+          long: start-etcd
+          description: Start embedded etcd server
+        env: MIREN_ETCD_START_EMBEDDED
+        toml: start_embedded
+        mode_default:
+          standalone: true
+
+      client_port:
+        type: int
+        default: 12379
+        cli:
+          long: etcd-client-port
+          description: Etcd client port
+        env: MIREN_ETCD_CLIENT_PORT
+        toml: client_port
+        validation:
+          port: true
+
+      peer_port:
+        type: int
+        default: 12380
+        cli:
+          long: etcd-peer-port
+          description: Etcd peer port
+        env: MIREN_ETCD_PEER_PORT
+        toml: peer_port
+        validation:
+          port: true
+
+      http_client_port:
+        type: int
+        default: 12381
+        cli:
+          long: etcd-http-client-port
+          description: Etcd HTTP client port
+        env: MIREN_ETCD_HTTP_CLIENT_PORT
+        toml: http_client_port
+        validation:
+          port: true
+
+  ClickHouseConfig:
+    description: ClickHouse configuration
+    fields:
+      start_embedded:
+        type: bool
+        default: false
+        cli:
+          long: start-clickhouse
+          description: Start embedded ClickHouse server
+        env: MIREN_CLICKHOUSE_START_EMBEDDED
+        toml: start_embedded
+        mode_default:
+          standalone: true
+
+      http_port:
+        type: int
+        default: 8223
+        cli:
+          long: clickhouse-http-port
+          description: ClickHouse HTTP port
+        env: MIREN_CLICKHOUSE_HTTP_PORT
+        toml: http_port
+        validation:
+          port: true
+
+      native_port:
+        type: int
+        default: 9009
+        cli:
+          long: clickhouse-native-port
+          description: ClickHouse native port
+        env: MIREN_CLICKHOUSE_NATIVE_PORT
+        toml: native_port
+        validation:
+          port: true
+
+      interserver_port:
+        type: int
+        default: 9010
+        cli:
+          long: clickhouse-interserver-port
+          description: ClickHouse inter-server port
+        env: MIREN_CLICKHOUSE_INTERSERVER_PORT
+        toml: interserver_port
+        validation:
+          port: true
+
+      address:
+        type: string
+        default: ""
+        cli:
+          long: clickhouse-addr
+          description: ClickHouse address (when not using embedded)
+        env: MIREN_CLICKHOUSE_ADDRESS
+        toml: address
+
+  ContainerdConfig:
+    description: Containerd configuration
+    fields:
+      start_embedded:
+        type: bool
+        default: false
+        cli:
+          long: start-containerd
+          description: Start embedded containerd daemon
+        env: MIREN_CONTAINERD_START_EMBEDDED
+        toml: start_embedded
+        mode_default:
+          standalone: true
+
+      binary_path:
+        type: string
+        default: containerd
+        cli:
+          long: containerd-binary
+          description: Path to containerd binary
+        env: MIREN_CONTAINERD_BINARY_PATH
+        toml: binary_path
+
+      socket_path:
+        type: string
+        default: ""
+        cli:
+          long: containerd-socket
+          description: Path to containerd socket
+        env: MIREN_CONTAINERD_SOCKET_PATH
+        toml: socket_path

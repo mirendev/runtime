@@ -42,48 +42,31 @@ import (
 	"miren.dev/runtime/pkg/netdb"
 	"miren.dev/runtime/pkg/registration"
 	"miren.dev/runtime/pkg/rpc"
+	"miren.dev/runtime/pkg/serverconfig"
 	"miren.dev/runtime/servers/httpingress"
 )
 
-func Server(ctx *Context, opts struct {
-	Mode                      string   `short:"m" long:"mode" description:"Server mode (standalone, distributed)" default:"standalone"`
-	Address                   string   `short:"a" long:"address" description:"Address to listen on" default:"localhost:8443"`
-	RunnerAddress             string   `long:"runner-address" description:"Address to listen on" default:"localhost:8444"`
-	EtcdEndpoints             []string `short:"e" long:"etcd" description:"Etcd endpoints" default:"http://etcd:2379"`
-	EtcdPrefix                string   `short:"p" long:"etcd-prefix" description:"Etcd prefix" default:"/miren"`
-	RunnerId                  string   `short:"r" long:"runner-id" description:"Runner ID" default:"miren"`
-	DataPath                  string   `short:"d" long:"data-path" description:"Data path" default:"/var/lib/miren" asm:"data-path"`
-	ReleasePath               string   `long:"release-path" description:"Path to release directory containing binaries"`
-	AdditionalNames           []string `long:"dns-names" description:"Additional DNS names assigned to the server cert"`
-	AdditionalIPs             []string `long:"ips" description:"Additional IPs assigned to the server cert"`
-	StandardTLS               bool     `long:"serve-tls" description:"Expose the http ingress on standard TLS ports"`
-	HTTPRequestTimeout        int      `long:"http-request-timeout" description:"HTTP request timeout in seconds" default:"60"`
-	StartEtcd                 bool     `long:"start-etcd" description:"Start embedded etcd server"`
-	EtcdClientPort            int      `long:"etcd-client-port" description:"Etcd client port" default:"12379"`
-	EtcdPeerPort              int      `long:"etcd-peer-port" description:"Etcd peer port" default:"12380"`
-	EtcdHTTPClientPort        int      `long:"etcd-http-client-port" description:"Etcd client port" default:"12381"`
-	StartClickHouse           bool     `long:"start-clickhouse" description:"Start embedded ClickHouse server"`
-	ClickHouseHTTPPort        int      `long:"clickhouse-http-port" description:"ClickHouse HTTP port" default:"8223"`
-	ClickHouseNativePort      int      `long:"clickhouse-native-port" description:"ClickHouse native port" default:"9009"`
-	ClickHouseInterServerPort int      `long:"clickhouse-interserver-port" description:"ClickHouse inter-server port" default:"9010"`
-	ClickHouseAddress         string   `long:"clickhouse-addr" description:"ClickHouse address (when not using embedded)"`
-	StartContainerd           bool     `long:"start-containerd" description:"Start embedded containerd daemon"`
-	ContainerdBinary          string   `long:"containerd-binary" description:"Path to containerd binary" default:"containerd"`
-	ContainerdSocketPath      string   `long:"containerd-socket" description:"Path to containerd socket"`
-	SkipClientConfig          bool     `long:"skip-client-config" description:"Skip writing client config file to clientconfig.d"`
-	ConfigClusterName         string   `short:"C" long:"config-cluster-name" description:"Name of the cluster in client config" default:"local"`
-}) error {
+func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 	eg, sub := errgroup.WithContext(ctx)
 
-	// Handle mode configuration
-	switch opts.Mode {
+	// Load configuration from all sources with precedence:
+	// CLI flags > Environment variables > Config file > Defaults
+	configFile := ""
+	if opts.ConfigFile != nil {
+		configFile = *opts.ConfigFile
+	}
+	cfg, err := serverconfig.Load(configFile, &opts, ctx.Log)
+	if err != nil {
+		return fmt.Errorf("failed to load configuration: %w", err)
+	}
+	switch cfg.Mode {
 	case "standalone":
-		opts.StartContainerd = true
-		opts.StartEtcd = true
-		opts.StartClickHouse = true
+		cfg.Containerd.StartEmbedded = true
+		cfg.Etcd.StartEmbedded = true
+		cfg.Clickhouse.StartEmbedded = true
 
 		// Determine release path
-		if opts.ReleasePath == "" {
+		if cfg.Server.ReleasePath == "" {
 			// Check for user's home directory first, respecting SUDO_USER
 			homeDir, err := getUserHomeDir()
 			if err != nil {
@@ -94,51 +77,50 @@ func Server(ctx *Context, opts struct {
 			// Try ~/.miren/release
 			userReleasePath := filepath.Join(homeDir, ".miren", "release")
 			if _, err := os.Stat(userReleasePath); err == nil {
-				opts.ReleasePath = userReleasePath
-				ctx.Log.Info("using user release path", "path", opts.ReleasePath)
+				cfg.Server.ReleasePath = userReleasePath
+				ctx.Log.Info("using user release path", "path", cfg.Server.ReleasePath)
 			} else {
 				ctx.Log.Info("user release path not found, trying system path")
 				// Try /var/lib/miren/release
 				systemReleasePath := "/var/lib/miren/release"
 				if _, err := os.Stat(systemReleasePath); err == nil {
-					opts.ReleasePath = systemReleasePath
-					ctx.Log.Info("using system release path", "path", opts.ReleasePath)
+					cfg.Server.ReleasePath = systemReleasePath
+					ctx.Log.Info("using system release path", "path", cfg.Server.ReleasePath)
 				} else {
 					return fmt.Errorf("no release directory found (tried %s and %s)", userReleasePath, systemReleasePath)
 				}
 			}
 
 			// In standalone mode, automatically start all components
-			ctx.UILog.Info("running in standalone mode - starting all components", "release-path", opts.ReleasePath)
+			ctx.UILog.Info("running in standalone mode - starting all components", "release-path", cfg.Server.ReleasePath)
 		} else {
-			path, err := filepath.Abs(opts.ReleasePath)
+			path, err := filepath.Abs(cfg.Server.ReleasePath)
 			if err != nil {
 				return fmt.Errorf("failed to resolve absolute release path: %w", err)
 			}
 
-			opts.ReleasePath = path
+			cfg.Server.ReleasePath = path
 
 			// Verify the provided release path exists
-			if _, err := os.Stat(opts.ReleasePath); err != nil {
-				return fmt.Errorf("release path does not exist: %s", opts.ReleasePath)
+			if _, err := os.Stat(cfg.Server.ReleasePath); err != nil {
+				return fmt.Errorf("release path does not exist: %s", cfg.Server.ReleasePath)
 			}
 		}
 	case "distributed":
 		// In distributed mode, use the flags as provided
 		ctx.UILog.Info("running in distributed mode")
 	default:
-		return fmt.Errorf("unknown mode: %s (valid modes: standalone, distributed)", opts.Mode)
+		return fmt.Errorf("unknown mode: %s (valid modes: standalone, distributed)", cfg.Mode)
 	}
 
 	// Determine containerd socket path
-	containerdSocketPath := opts.ContainerdSocketPath
-	if containerdSocketPath == "" {
-		containerdSocketPath = filepath.Join(opts.DataPath, "containerd", "containerd.sock")
+	if cfg.Containerd.SocketPath == "" {
+		cfg.Containerd.SocketPath = filepath.Join(cfg.Server.DataPath, "containerd", "containerd.sock")
 	}
 
 	// Start embedded containerd if requested
-	if opts.StartContainerd {
-		ctx.Log.Info("starting embedded containerd", "binary", opts.ContainerdBinary, "release-path", opts.ReleasePath, "socket", containerdSocketPath)
+	if cfg.Containerd.StartEmbedded {
+		ctx.Log.Info("starting embedded containerd", "binary", cfg.Containerd.BinaryPath, "release-path", cfg.Server.ReleasePath, "socket", cfg.Containerd.SocketPath)
 
 		var (
 			containerdPath string
@@ -146,15 +128,15 @@ func Server(ctx *Context, opts struct {
 			err            error
 		)
 
-		if opts.ReleasePath == "" {
-			containerdPath, err = exec.LookPath(opts.ContainerdBinary)
+		if cfg.Server.ReleasePath == "" {
+			containerdPath, err = exec.LookPath(cfg.Containerd.BinaryPath)
 			if err != nil {
-				ctx.Log.Error("containerd binary not found in PATH", "binary", opts.ContainerdBinary, "error", err)
-				return fmt.Errorf("containerd binary not found: %s", opts.ContainerdBinary)
+				ctx.Log.Error("containerd binary not found in PATH", "binary", cfg.Containerd.BinaryPath, "error", err)
+				return fmt.Errorf("containerd binary not found: %s", cfg.Containerd.BinaryPath)
 			}
 		} else {
 			// Get directory containing binaries from release path
-			binDir = opts.ReleasePath
+			binDir = cfg.Server.ReleasePath
 
 			// Use containerd from release path
 			containerdPath = filepath.Join(binDir, "containerd")
@@ -166,14 +148,18 @@ func Server(ctx *Context, opts struct {
 			return fmt.Errorf("containerd binary not found at %s: %w", containerdPath, err)
 		}
 
-		containerdComponent := containerdcomp.NewContainerdComponent(ctx.Log, opts.DataPath)
+		containerdComponent := containerdcomp.NewContainerdComponent(ctx.Log, cfg.Server.DataPath)
 
+		envPath := os.Getenv("PATH")
+		if binDir != "" {
+			envPath = binDir + ":" + envPath
+		}
 		containerdConfig := &containerdcomp.Config{
 			BinaryPath: containerdPath,
-			BaseDir:    filepath.Join(opts.DataPath, "containerd"),
+			BaseDir:    filepath.Join(cfg.Server.DataPath, "containerd"),
 			BinDir:     binDir,
-			SocketPath: containerdSocketPath,
-			Env:        []string{"PATH=" + binDir + ":" + os.Getenv("PATH")},
+			SocketPath: cfg.Containerd.SocketPath,
+			Env:        []string{"PATH=" + envPath},
 		}
 
 		err = containerdComponent.Start(sub, containerdConfig)
@@ -198,16 +184,16 @@ func Server(ctx *Context, opts struct {
 	} else {
 		// Use existing containerd with provided or default socket path
 		defaultSocket := containerdx.DefaultSocket
-		if containerdSocketPath != "" {
-			defaultSocket = containerdSocketPath
+		if cfg.Containerd.SocketPath != "" {
+			defaultSocket = cfg.Containerd.SocketPath
 		}
 
 		ctx.Server.Override("containerd-socket", defaultSocket)
 	}
 
 	// Start embedded etcd server if requested
-	if opts.StartEtcd {
-		ctx.Log.Info("starting embedded etcd server", "client-port", opts.EtcdClientPort, "peer-port", opts.EtcdPeerPort)
+	if cfg.Etcd.StartEmbedded {
+		ctx.Log.Info("starting embedded etcd server", "client-port", cfg.Etcd.ClientPort, "peer-port", cfg.Etcd.PeerPort)
 
 		// Get containerd client from registry
 		var cc *containerd.Client
@@ -218,13 +204,13 @@ func Server(ctx *Context, opts struct {
 		}
 
 		// TODO figure out why I can't use ResolveNamed to pull out the namespace from ctx.Server
-		etcdComponent := etcd.NewEtcdComponent(ctx.Log, cc, "miren", opts.DataPath)
+		etcdComponent := etcd.NewEtcdComponent(ctx.Log, cc, "miren", cfg.Server.DataPath)
 
 		etcdConfig := etcd.EtcdConfig{
 			Name:           "miren-etcd",
-			ClientPort:     opts.EtcdClientPort,
-			HTTPClientPort: opts.EtcdHTTPClientPort,
-			PeerPort:       opts.EtcdPeerPort,
+			ClientPort:     cfg.Etcd.ClientPort,
+			HTTPClientPort: cfg.Etcd.HttpClientPort,
+			PeerPort:       cfg.Etcd.PeerPort,
 			ClusterState:   "new",
 		}
 
@@ -235,7 +221,7 @@ func Server(ctx *Context, opts struct {
 		}
 
 		// Update etcd endpoints to use local etcd
-		opts.EtcdEndpoints = []string{etcdComponent.ClientEndpoint()}
+		cfg.Etcd.Endpoints = []string{etcdComponent.ClientEndpoint()}
 		ctx.Log.Info("using embedded etcd", "endpoint", etcdComponent.ClientEndpoint())
 
 		// Ensure cleanup on exit
@@ -250,11 +236,11 @@ func Server(ctx *Context, opts struct {
 	}
 
 	// Start embedded ClickHouse server if requested
-	if opts.StartClickHouse {
+	if cfg.Clickhouse.StartEmbedded {
 		ctx.Log.Info("starting embedded clickhouse server",
-			"http-port", opts.ClickHouseHTTPPort,
-			"native-port", opts.ClickHouseNativePort,
-			"interserver-port", opts.ClickHouseInterServerPort)
+			"http-port", cfg.Clickhouse.HttpPort,
+			"native-port", cfg.Clickhouse.NativePort,
+			"interserver-port", cfg.Clickhouse.InterserverPort)
 
 		// Get containerd client from registry
 		var cc *containerd.Client
@@ -264,12 +250,12 @@ func Server(ctx *Context, opts struct {
 			return err
 		}
 
-		clickhouseComponent := clickhouse.NewClickHouseComponent(ctx.Log, cc, "miren", opts.DataPath)
+		clickhouseComponent := clickhouse.NewClickHouseComponent(ctx.Log, cc, "miren", cfg.Server.DataPath)
 
 		clickhouseConfig := clickhouse.ClickHouseConfig{
-			HTTPPort:        opts.ClickHouseHTTPPort,
-			NativePort:      opts.ClickHouseNativePort,
-			InterServerPort: opts.ClickHouseInterServerPort,
+			HTTPPort:        cfg.Clickhouse.HttpPort,
+			NativePort:      cfg.Clickhouse.NativePort,
+			InterServerPort: cfg.Clickhouse.InterserverPort,
 			User:            "default",
 			Password:        "default",
 		}
@@ -296,10 +282,10 @@ func Server(ctx *Context, opts struct {
 				ctx.Log.Error("failed to stop clickhouse component", "error", err)
 			}
 		}()
-	} else if opts.ClickHouseAddress != "" {
+	} else if cfg.Clickhouse.Address != "" {
 		// Override ClickHouse address if provided (for external ClickHouse)
-		ctx.Log.Info("using external clickhouse", "address", opts.ClickHouseAddress)
-		ctx.Server.Override("clickhouse-address", opts.ClickHouseAddress)
+		ctx.Log.Info("using external clickhouse", "address", cfg.Clickhouse.Address)
+		ctx.Server.Override("clickhouse-address", cfg.Clickhouse.Address)
 	}
 
 	klog.SetLogger(logr.FromSlogHandler(ctx.Log.With("module", "global").Handler()))
@@ -312,7 +298,7 @@ func Server(ctx *Context, opts struct {
 		logs observability.LogReader
 	)
 
-	err := ctx.Server.Populate(&mem)
+	err = ctx.Server.Populate(&mem)
 	if err != nil {
 		ctx.Log.Error("failed to populate memory usage", "error", err)
 		return err
@@ -341,25 +327,31 @@ func Server(ctx *Context, opts struct {
 			// Skip IPv6 link-local addresses
 			ip := net.ParseIP(addr.IP)
 			if ip != nil && !ip.IsLinkLocalUnicast() {
-				opts.AdditionalIPs = append(opts.AdditionalIPs, addr.IP)
+				cfg.Tls.AdditionalIps = append(cfg.Tls.AdditionalIps, addr.IP)
 			}
 		}
 
 		// Add public IP if available
 		if discovery.PublicIP != "" {
-			opts.AdditionalIPs = append(opts.AdditionalIPs, discovery.PublicIP)
+			cfg.Tls.AdditionalIps = append(cfg.Tls.AdditionalIps, discovery.PublicIP)
 		}
 
 		ctx.Log.Info("discovered IPs", "local-addresses", len(discovery.Addresses), "public", discovery.PublicIP)
 	}
 
 	var additionalIps []net.IP
-	for _, ip := range opts.AdditionalIPs {
+	seen := make(map[string]struct{})
+	for _, ip := range cfg.Tls.AdditionalIps {
 		addr := net.ParseIP(ip)
 		if addr == nil {
 			ctx.Log.Error("failed to parse additional IP", "ip", ip)
 			return fmt.Errorf("failed to parse additional IP %s", ip)
 		}
+		key := addr.String()
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
 		additionalIps = append(additionalIps, addr)
 	}
 
@@ -373,7 +365,7 @@ func Server(ctx *Context, opts struct {
 
 	// Load registration if it exists
 	var cloudAuthConfig coordinate.CloudAuthConfig
-	registrationDir := filepath.Join(opts.DataPath, "server")
+	registrationDir := filepath.Join(cfg.Server.DataPath, "server")
 	if reg, err := registration.LoadRegistration(registrationDir); err != nil {
 		ctx.Log.Warn("failed to load registration", "error", err, "dir", registrationDir)
 	} else if reg != nil && reg.Status == "approved" {
@@ -408,11 +400,11 @@ func Server(ctx *Context, opts struct {
 	}
 
 	co := coordinate.NewCoordinator(ctx.Log, coordinate.CoordinatorConfig{
-		Address:         opts.Address,
-		EtcdEndpoints:   opts.EtcdEndpoints,
-		Prefix:          opts.EtcdPrefix,
-		DataPath:        opts.DataPath,
-		AdditionalNames: opts.AdditionalNames,
+		Address:         cfg.Server.Address,
+		EtcdEndpoints:   cfg.Etcd.Endpoints,
+		Prefix:          cfg.Etcd.Prefix,
+		DataPath:        cfg.Server.DataPath,
+		AdditionalNames: cfg.Tls.AdditionalNames,
 		AdditionalIPs:   additionalIps,
 		Resolver:        res,
 		TempDir:         os.TempDir(),
@@ -441,8 +433,8 @@ func Server(ctx *Context, opts struct {
 	ctx.Server.Register("service-prefixes", subnets)
 
 	gn, err := grunge.NewNetwork(ctx.Log, grunge.NetworkOptions{
-		EtcdEndpoints: opts.EtcdEndpoints,
-		EtcdPrefix:    opts.EtcdPrefix + "/sub/flannel",
+		EtcdEndpoints: cfg.Etcd.Endpoints,
+		EtcdPrefix:    cfg.Etcd.Prefix + "/sub/flannel",
 	})
 	if err != nil {
 		ctx.Log.Error("failed to create grunge network", "error", err)
@@ -531,13 +523,13 @@ func Server(ctx *Context, opts struct {
 
 	aa := co.Activator()
 
-	if opts.HTTPRequestTimeout <= 0 {
-		ctx.Log.Warn("invalid http-request-timeout; using default 60s", "value", opts.HTTPRequestTimeout)
-		opts.HTTPRequestTimeout = 60
+	if cfg.Server.HttpRequestTimeout <= 0 {
+		ctx.Log.Warn("invalid http-request-timeout; using default 60s", "value", cfg.Server.HttpRequestTimeout)
+		cfg.Server.HttpRequestTimeout = 60
 	}
 
 	ingressConfig := httpingress.IngressConfig{
-		RequestTimeout: time.Duration(opts.HTTPRequestTimeout) * time.Second,
+		RequestTimeout: time.Duration(cfg.Server.HttpRequestTimeout) * time.Second,
 	}
 	hs := httpingress.NewServer(ctx, ctx.Log, ingressConfig, client, aa, &httpMetrics)
 
@@ -550,8 +542,8 @@ func Server(ctx *Context, opts struct {
 	}
 
 	r := runner.NewRunner(ctx.Log, ctx.Server, runner.RunnerConfig{
-		Id:            opts.RunnerId,
-		ListenAddress: opts.RunnerAddress,
+		Id:            cfg.Server.RunnerId,
+		ListenAddress: cfg.Server.RunnerAddress,
 		Workers:       runner.DefaulWorkers,
 		Config:        rcfg,
 	})
@@ -584,8 +576,10 @@ func Server(ctx *Context, opts struct {
 		}
 	}()
 
-	if opts.StandardTLS {
-		_ = autotls.ServeTLS(sub, ctx.Log, opts.DataPath, hs)
+	if cfg.Tls.StandardTls {
+		if err := autotls.ServeTLS(sub, ctx.Log, cfg.Server.DataPath, hs); err != nil {
+			ctx.Log.Error("failed to enable standard TLS", "error", err)
+		}
 	}
 
 	var registry ocireg.Registry
@@ -621,22 +615,22 @@ func Server(ctx *Context, opts struct {
 		return fmt.Errorf("failed to issue server certificate: %w", err)
 	}
 
-	if opts.ConfigClusterName == "" {
-		opts.ConfigClusterName = "local"
+	if cfg.Server.ConfigClusterName == "" {
+		cfg.Server.ConfigClusterName = "local"
 	}
 
 	// Write local cluster config to clientconfig.d
-	if opts.Mode == "standalone" && !opts.SkipClientConfig {
-		if err := writeLocalClusterConfig(ctx, cert, opts.Address, opts.ConfigClusterName); err != nil {
+	if cfg.Mode == "standalone" && !cfg.Server.SkipClientConfig {
+		if err := writeLocalClusterConfig(ctx, cert, cfg.Server.Address, cfg.Server.ConfigClusterName); err != nil {
 			ctx.Log.Warn("failed to write local cluster config", "error", err)
 			// Don't fail the whole command if we can't write the config
 		}
 	}
 
-	ctx.UILog.Info("Miren server started", "address", opts.Address, "etcd_endpoints", opts.EtcdEndpoints, "etcd_prefix", opts.EtcdPrefix, "runner_id", opts.RunnerId)
+	ctx.UILog.Info("Miren server started", "address", cfg.Server.Address, "etcd_endpoints", cfg.Etcd.Endpoints, "etcd_prefix", cfg.Etcd.Prefix, "runner_id", cfg.Server.RunnerId)
 
-	ctx.Info("Miren server started successfully! You can now connect to the cluster using `-C %s`\n", opts.ConfigClusterName)
-	ctx.Info("For example: cd my-app && miren deploy -C %s", opts.ConfigClusterName)
+	ctx.Info("Miren server started successfully! You can now connect to the cluster using `-C %s`\n", cfg.Server.ConfigClusterName)
+	ctx.Info("For example: cd my-app && miren deploy -C %s", cfg.Server.ConfigClusterName)
 
 	// Wait for all goroutines to complete or context to be cancelled
 	err = eg.Wait()
@@ -685,7 +679,7 @@ func writeLocalClusterConfig(ctx *Context, cc *caauth.ClientCertificate, address
 	configDirPath := filepath.Join(homeDir, ".config/miren/clientconfig.d")
 
 	// Create the directory if it doesn't exist
-	if err := os.MkdirAll(configDirPath, 0755); err != nil {
+	if err := os.MkdirAll(configDirPath, 0700); err != nil {
 		return fmt.Errorf("failed to create config directory: %w", err)
 	}
 
@@ -736,6 +730,10 @@ func writeLocalClusterConfig(ctx *Context, cc *caauth.ClientCertificate, address
 
 	// Fix file ownership for the created files if running under sudo
 	localConfigPath := filepath.Join(configDirPath, "50-local.yaml")
+	// Ensure file is user-readable only since it contains client key
+	if err := os.Chmod(localConfigPath, 0600); err != nil {
+		ctx.Log.Warn("failed to set config file permissions", "error", err)
+	}
 	if err := fixOwnershipIfSudo(ctx, localConfigPath); err != nil {
 		ctx.Log.Warn("failed to fix config file ownership", "error", err)
 	}

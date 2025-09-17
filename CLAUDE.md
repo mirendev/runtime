@@ -91,3 +91,7 @@ The system uses Dagger for containerized development with all dependencies (cont
 
 - **ALWAYS run `make lint-changed` before committing** - This runs go fmt, go vet on changed files and go mod tidy
 - The codebase follows standard Go formatting conventions
+- **Comment style**: Only add comments when they provide valuable context or explain "why" something is done
+  - Avoid redundant comments that restate what the code does (e.g., `// Start server` above `server.Start()`)
+  - Good comments explain complex logic, document assumptions, or clarify non-obvious behavior
+  - Function/method comments should explain the purpose and any important side effects, not just restate the name
