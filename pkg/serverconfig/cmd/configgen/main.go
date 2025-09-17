@@ -672,15 +672,11 @@ func applyEnvironmentVariables(cfg *Config, log *slog.Logger) error {
 			log.Warn("invalid {{$field.Env}} value", "value", val, "error", err)
 		}
 		{{else if eq $field.Type "bool"}}
-		switch strings.ToLower(val) {
-		case "true", "yes", "on", "1":
-			cfg.{{if ne $cname "Config"}}{{$structField}}.{{end}}{{$fname | title}} = true
+		if b, err := strconv.ParseBool(val); err == nil {
+			cfg.{{if ne $cname "Config"}}{{$structField}}.{{end}}{{$fname | title}} = b
 			log.Debug("applied env var", "key", "{{$field.Env}}")
-		case "false", "no", "off", "0":
-			cfg.{{if ne $cname "Config"}}{{$structField}}.{{end}}{{$fname | title}} = false
-			log.Debug("applied env var", "key", "{{$field.Env}}")
-		default:
-			log.Warn("invalid {{$field.Env}} value (use true/false, yes/no, on/off, 1/0)", "value", val)
+		} else {
+			log.Warn("invalid {{$field.Env}} value", "value", val, "error", err)
 		}
 		{{else if eq $field.Type "[]string"}}
 		// Split and clean CSV list

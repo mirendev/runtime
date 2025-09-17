@@ -59,15 +59,11 @@ func applyEnvironmentVariables(cfg *Config, log *slog.Logger) error {
 	// Apply MIREN_CLICKHOUSE_START_EMBEDDED
 	if val := os.Getenv("MIREN_CLICKHOUSE_START_EMBEDDED"); val != "" {
 
-		switch strings.ToLower(val) {
-		case "true", "yes", "on", "1":
-			cfg.Clickhouse.StartEmbedded = true
+		if b, err := strconv.ParseBool(val); err == nil {
+			cfg.Clickhouse.StartEmbedded = b
 			log.Debug("applied env var", "key", "MIREN_CLICKHOUSE_START_EMBEDDED")
-		case "false", "no", "off", "0":
-			cfg.Clickhouse.StartEmbedded = false
-			log.Debug("applied env var", "key", "MIREN_CLICKHOUSE_START_EMBEDDED")
-		default:
-			log.Warn("invalid MIREN_CLICKHOUSE_START_EMBEDDED value (use true/false, yes/no, on/off, 1/0)", "value", val)
+		} else {
+			log.Warn("invalid MIREN_CLICKHOUSE_START_EMBEDDED value", "value", val, "error", err)
 		}
 
 	}
@@ -99,15 +95,11 @@ func applyEnvironmentVariables(cfg *Config, log *slog.Logger) error {
 	// Apply MIREN_CONTAINERD_START_EMBEDDED
 	if val := os.Getenv("MIREN_CONTAINERD_START_EMBEDDED"); val != "" {
 
-		switch strings.ToLower(val) {
-		case "true", "yes", "on", "1":
-			cfg.Containerd.StartEmbedded = true
+		if b, err := strconv.ParseBool(val); err == nil {
+			cfg.Containerd.StartEmbedded = b
 			log.Debug("applied env var", "key", "MIREN_CONTAINERD_START_EMBEDDED")
-		case "false", "no", "off", "0":
-			cfg.Containerd.StartEmbedded = false
-			log.Debug("applied env var", "key", "MIREN_CONTAINERD_START_EMBEDDED")
-		default:
-			log.Warn("invalid MIREN_CONTAINERD_START_EMBEDDED value (use true/false, yes/no, on/off, 1/0)", "value", val)
+		} else {
+			log.Warn("invalid MIREN_CONTAINERD_START_EMBEDDED value", "value", val, "error", err)
 		}
 
 	}
@@ -182,15 +174,11 @@ func applyEnvironmentVariables(cfg *Config, log *slog.Logger) error {
 	// Apply MIREN_ETCD_START_EMBEDDED
 	if val := os.Getenv("MIREN_ETCD_START_EMBEDDED"); val != "" {
 
-		switch strings.ToLower(val) {
-		case "true", "yes", "on", "1":
-			cfg.Etcd.StartEmbedded = true
+		if b, err := strconv.ParseBool(val); err == nil {
+			cfg.Etcd.StartEmbedded = b
 			log.Debug("applied env var", "key", "MIREN_ETCD_START_EMBEDDED")
-		case "false", "no", "off", "0":
-			cfg.Etcd.StartEmbedded = false
-			log.Debug("applied env var", "key", "MIREN_ETCD_START_EMBEDDED")
-		default:
-			log.Warn("invalid MIREN_ETCD_START_EMBEDDED value (use true/false, yes/no, on/off, 1/0)", "value", val)
+		} else {
+			log.Warn("invalid MIREN_ETCD_START_EMBEDDED value", "value", val, "error", err)
 		}
 
 	}
@@ -258,15 +246,11 @@ func applyEnvironmentVariables(cfg *Config, log *slog.Logger) error {
 	// Apply MIREN_SERVER_SKIP_CLIENT_CONFIG
 	if val := os.Getenv("MIREN_SERVER_SKIP_CLIENT_CONFIG"); val != "" {
 
-		switch strings.ToLower(val) {
-		case "true", "yes", "on", "1":
-			cfg.Server.SkipClientConfig = true
+		if b, err := strconv.ParseBool(val); err == nil {
+			cfg.Server.SkipClientConfig = b
 			log.Debug("applied env var", "key", "MIREN_SERVER_SKIP_CLIENT_CONFIG")
-		case "false", "no", "off", "0":
-			cfg.Server.SkipClientConfig = false
-			log.Debug("applied env var", "key", "MIREN_SERVER_SKIP_CLIENT_CONFIG")
-		default:
-			log.Warn("invalid MIREN_SERVER_SKIP_CLIENT_CONFIG value (use true/false, yes/no, on/off, 1/0)", "value", val)
+		} else {
+			log.Warn("invalid MIREN_SERVER_SKIP_CLIENT_CONFIG value", "value", val, "error", err)
 		}
 
 	}
@@ -320,15 +304,11 @@ func applyEnvironmentVariables(cfg *Config, log *slog.Logger) error {
 	// Apply MIREN_TLS_STANDARD_TLS
 	if val := os.Getenv("MIREN_TLS_STANDARD_TLS"); val != "" {
 
-		switch strings.ToLower(val) {
-		case "true", "yes", "on", "1":
-			cfg.Tls.StandardTls = true
+		if b, err := strconv.ParseBool(val); err == nil {
+			cfg.Tls.StandardTls = b
 			log.Debug("applied env var", "key", "MIREN_TLS_STANDARD_TLS")
-		case "false", "no", "off", "0":
-			cfg.Tls.StandardTls = false
-			log.Debug("applied env var", "key", "MIREN_TLS_STANDARD_TLS")
-		default:
-			log.Warn("invalid MIREN_TLS_STANDARD_TLS value (use true/false, yes/no, on/off, 1/0)", "value", val)
+		} else {
+			log.Warn("invalid MIREN_TLS_STANDARD_TLS value", "value", val, "error", err)
 		}
 
 	}
