@@ -502,26 +502,26 @@ package {{.Package}}
 // DefaultConfig returns the default configuration
 func DefaultConfig() *Config {
 	return &Config{
-		{{range $fname, $field := (index .Configs "Config").Fields}}
-		{{if not $field.CLIOnly}}
-		{{if $field.Nested}}
+		{{- range $fname, $field := (index .Configs "Config").Fields}}
+		{{- if not $field.CLIOnly}}
+		{{- if $field.Nested}}
 		{{$fname | title}}: Default{{$field.Type}}(),
-		{{else}}
+		{{- else}}
 		{{$fname | title}}: {{formatDefault $field.Default $field.Type}},
-		{{end}}
-		{{end}}
-		{{end}}
+		{{- end}}
+		{{- end}}
+		{{- end}}
 	}
 }
 
 {{range $name, $config := .Configs}}
-{{if ne $name "Config"}}
+{{- if ne $name "Config"}}
 // Default{{$name}} returns default {{$name}}
 func Default{{$name}}() {{$name}} {
 	return {{$name}}{
-		{{range $fname, $field := $config.Fields}}
+		{{- range $fname, $field := $config.Fields}}
 		{{$fname | title}}: {{formatDefault $field.Default $field.Type}},
-		{{end}}
+		{{- end}}
 	}
 }
 {{end}}
@@ -539,34 +539,36 @@ import (
 
 // Validate validates the configuration
 func (c *Config) Validate() error {
-	{{range $fname, $field := (index .Configs "Config").Fields}}
-	{{if $field.Validation}}
-	{{if $field.Validation.Enum}}
+	{{- range $fname, $field := (index .Configs "Config").Fields}}
+	{{- if $field.Validation}}
+	{{- if $field.Validation.Enum}}
 	// Validate {{$fname}}
 	validModes := map[string]bool{
-		{{range $val := $field.Validation.Enum}}"{{$val}}": true,
-		{{end}}
+		{{- range $val := $field.Validation.Enum}}
+		"{{$val}}": true,
+		{{- end}}
 	}
 	if !validModes[c.{{$fname | title}}] {
 		return fmt.Errorf("invalid {{$fname}} %q: must be one of {{$field.Validation.Enum}}", c.{{$fname | title}})
 	}
-	{{end}}
-	{{end}}
-	{{if $field.Nested}}
+	{{- end}}
+	{{- end}}
+	{{- if $field.Nested}}
+
 	if err := c.{{$fname | title}}.Validate(); err != nil {
 		return fmt.Errorf("{{$fname}}: %w", err)
 	}
-	{{end}}
-	{{end}}
+	{{- end}}
+	{{- end}}
 	return nil
 }
 
 {{range $name, $config := .Configs}}
-{{if ne $name "Config"}}
+{{- if ne $name "Config"}}
 // Validate validates {{$name}}
 func (c *{{$name}}) Validate() error {
-	{{range $fname, $field := $config.Fields}}
-	{{if $field.Validation}}
+	{{- range $fname, $field := $config.Fields}}
+	{{- if $field.Validation}}
 	{{if eq $field.Validation.Format "host:port"}}
 	// Validate {{$fname}}
 	if c.{{$fname | title}} != "" {
@@ -602,8 +604,9 @@ func (c *{{$name}}) Validate() error {
 	{{if $field.Validation.Enum}}
 	// Validate {{$fname}} enum
 	valid{{$fname | title}} := map[string]bool{
-		{{range $val := $field.Validation.Enum}}"{{$val}}": true,
-		{{end}}
+		{{- range $val := $field.Validation.Enum}}
+		"{{$val}}": true,
+		{{- end}}
 	}
 	if !valid{{$fname | title}}[c.{{$fname | title}}] {
 		return fmt.Errorf("invalid {{$fname}} %q: must be one of {{$field.Validation.Enum}}", c.{{$fname | title}})
@@ -613,12 +616,13 @@ func (c *{{$name}}) Validate() error {
 	{{end}}
 	
 	// Check for port conflicts in {{$name}}
-	{{if or (eq $name "EtcdConfig") (eq $name "ClickHouseConfig")}}
+	{{- if or (eq $name "EtcdConfig") (eq $name "ClickHouseConfig")}}
 	ports := []int{
-		{{range $fname, $field := $config.Fields}}
-		{{if $field.Validation}}{{if $field.Validation.Port}}c.{{$fname | title}},
-		{{end}}{{end}}
-		{{end}}
+		{{- range $fname, $field := $config.Fields}}
+		{{- if $field.Validation}}{{if $field.Validation.Port}}
+		c.{{$fname | title}},
+		{{- end}}{{end}}
+		{{- end}}
 	}
 	seen := make(map[int]bool)
 	for _, port := range ports {

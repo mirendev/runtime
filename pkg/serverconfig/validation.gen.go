@@ -21,7 +21,6 @@ func (c *Config) Validate() error {
 	if err := c.Etcd.Validate(); err != nil {
 		return fmt.Errorf("etcd: %w", err)
 	}
-
 	// Validate mode
 	validModes := map[string]bool{
 		"standalone":  true,
@@ -38,7 +37,6 @@ func (c *Config) Validate() error {
 	if err := c.Tls.Validate(); err != nil {
 		return fmt.Errorf("tls: %w", err)
 	}
-
 	return nil
 }
 
@@ -61,13 +59,9 @@ func (c *ClickHouseConfig) Validate() error {
 	}
 
 	// Check for port conflicts in ClickHouseConfig
-
 	ports := []int{
-
 		c.HttpPort,
-
 		c.InterserverPort,
-
 		c.NativePort,
 	}
 	seen := make(map[int]bool)
@@ -108,13 +102,9 @@ func (c *EtcdConfig) Validate() error {
 	}
 
 	// Check for port conflicts in EtcdConfig
-
 	ports := []int{
-
 		c.ClientPort,
-
 		c.HttpClientPort,
-
 		c.PeerPort,
 	}
 	seen := make(map[int]bool)
