@@ -743,11 +743,9 @@ func Server(ctx *Context, opts struct {
 	}()
 
 	if opts.StandardTLS {
-		go func() {
-			if err := autotls.ServeTLS(sub, ctx.Log, opts.DataPath, hs); err != nil {
-				ctx.Log.Error("failed to enable standard TLS", "error", err)
-			}
-		}()
+		if err := autotls.ServeTLS(sub, ctx.Log, opts.DataPath, hs); err != nil {
+			ctx.Log.Error("failed to enable standard TLS", "error", err)
+		}
 	}
 
 	var registry ocireg.Registry
