@@ -143,7 +143,7 @@ func (c *ServerConfig) Validate() error {
 		}
 	}
 
-	// Validate http_request_timeout
+	// Validate http_request_timeout minimum
 	if c.HttpRequestTimeout < 1 {
 		return fmt.Errorf("http_request_timeout must be at least 1, got %d", c.HttpRequestTimeout)
 	}

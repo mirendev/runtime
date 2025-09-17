@@ -143,8 +143,9 @@ func generateConfig(schema *Schema) (string, error) {
 // generateCLI generates the CLI flags struct
 func generateCLI(schema *Schema) (string, error) {
 	tmpl, err := template.New("cli").Funcs(template.FuncMap{
-		"goType": goTypeForCLI,
-		"title":  toGoName,
+		"goType":    goTypeForCLI,
+		"title":     toGoName,
+		"escapeTag": escapeTagValue,
 	}).Parse(cliTemplate)
 	if err != nil {
 		return "", err
@@ -243,6 +244,17 @@ func toGoName(s string) string {
 	return strings.Join(parts, "")
 }
 
+// escapeTagValue escapes a string for use in struct tags
+func escapeTagValue(s string) string {
+	// Replace quotes with escaped quotes
+	s = strings.ReplaceAll(s, `"`, `\"`)
+	// Replace backticks with single quotes
+	s = strings.ReplaceAll(s, "`", "'")
+	// Replace newlines with spaces
+	s = strings.ReplaceAll(s, "\n", " ")
+	return s
+}
+
 func goTypeForCLI(fieldType string) string {
 	// For CLI, we use pointers to distinguish set vs unset
 	switch fieldType {
@@ -266,6 +278,10 @@ func formatDefault(val interface{}, fieldType string) string {
 			return `""`
 		case "[]string":
 			return `[]string{}`
+		case "bool":
+			return "false"
+		case "int":
+			return "0"
 		default:
 			return "nil"
 		}
@@ -330,7 +346,7 @@ type CLIFlags struct {
 	{{- range $cname, $config := .Configs}}
 	{{- range $fname, $field := $config.Fields}}
 	{{- if $field.CLI}}
-	{{if eq $cname "Config"}}{{$fname | title}}{{else}}{{$cname}}{{$fname | title}}{{end}} {{goType $field.Type}} ` + "`" + `{{if $field.CLI.Long}}long:"{{$field.CLI.Long}}"{{end}}{{if $field.CLI.Short}} short:"{{$field.CLI.Short}}"{{end}}{{if $field.CLI.Description}} description:"{{$field.CLI.Description}}"{{end}}` + "`" + `
+	{{if eq $cname "Config"}}{{$fname | title}}{{else}}{{$cname}}{{$fname | title}}{{end}} {{goType $field.Type}} ` + "`" + `{{if $field.CLI.Long}}long:"{{$field.CLI.Long}}"{{end}}{{if $field.CLI.Short}} short:"{{$field.CLI.Short}}"{{end}}{{if $field.CLI.Description}} description:"{{$field.CLI.Description | escapeTag}}"{{end}}` + "`" + `
 	{{- end}}
 	{{- end}}
 	{{- end}}
@@ -364,8 +380,17 @@ func Load(configPath string, flags *CLIFlags, log *slog.Logger) (*Config, error)
 
 	cfg := DefaultConfig()
 
+	// Determine data path for config discovery with proper precedence
+	// CLI > Env > Defaults
+	dataPathForSearch := cfg.Server.DataPath
+	if flags != nil && flags.ServerConfigDataPath != nil && *flags.ServerConfigDataPath != "" {
+		dataPathForSearch = *flags.ServerConfigDataPath
+	} else if envDataPath := os.Getenv("MIREN_SERVER_DATA_PATH"); envDataPath != "" {
+		dataPathForSearch = envDataPath
+	}
+
 	// Load config file
-	filePath := findConfigFile(configPath, cfg.Server.DataPath)
+	filePath := findConfigFile(configPath, dataPathForSearch)
 	if filePath != "" {
 		log.Info("loading config file", "path", filePath)
 		if err := loadConfigFile(filePath, cfg); err != nil {
@@ -560,10 +585,27 @@ func (c *{{$name}}) Validate() error {
 	if c.{{$fname | title}} < 1 || c.{{$fname | title}} > 65535 {
 		return fmt.Errorf("{{$fname}} must be between 1 and 65535, got %d", c.{{$fname | title}})
 	}
-	{{else if $field.Validation.Min}}
-	// Validate {{$fname}}
+	{{end}}
+	{{if $field.Validation.Min}}
+	// Validate {{$fname}} minimum
 	if c.{{$fname | title}} < {{$field.Validation.Min}} {
 		return fmt.Errorf("{{$fname}} must be at least {{$field.Validation.Min}}, got %d", c.{{$fname | title}})
+	}
+	{{end}}
+	{{if $field.Validation.Max}}
+	// Validate {{$fname}} maximum
+	if c.{{$fname | title}} > {{$field.Validation.Max}} {
+		return fmt.Errorf("{{$fname}} must be at most {{$field.Validation.Max}}, got %d", c.{{$fname | title}})
+	}
+	{{end}}
+	{{if $field.Validation.Enum}}
+	// Validate {{$fname}} enum
+	valid{{$fname | title}} := map[string]bool{
+		{{range $val := $field.Validation.Enum}}"{{$val}}": true,
+		{{end}}
+	}
+	if !valid{{$fname | title}}[c.{{$fname | title}}] {
+		return fmt.Errorf("invalid {{$fname}} %q: must be one of {{$field.Validation.Enum}}", c.{{$fname | title}})
 	}
 	{{end}}
 	{{end}}

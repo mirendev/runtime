@@ -20,8 +20,17 @@ func Load(configPath string, flags *CLIFlags, log *slog.Logger) (*Config, error)
 
 	cfg := DefaultConfig()
 
+	// Determine data path for config discovery with proper precedence
+	// CLI > Env > Defaults
+	dataPathForSearch := cfg.Server.DataPath
+	if flags != nil && flags.ServerConfigDataPath != nil && *flags.ServerConfigDataPath != "" {
+		dataPathForSearch = *flags.ServerConfigDataPath
+	} else if envDataPath := os.Getenv("MIREN_SERVER_DATA_PATH"); envDataPath != "" {
+		dataPathForSearch = envDataPath
+	}
+
 	// Load config file
-	filePath := findConfigFile(configPath, cfg.Server.DataPath)
+	filePath := findConfigFile(configPath, dataPathForSearch)
 	if filePath != "" {
 		log.Info("loading config file", "path", filePath)
 		if err := loadConfigFile(filePath, cfg); err != nil {

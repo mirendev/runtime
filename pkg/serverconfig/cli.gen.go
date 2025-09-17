@@ -21,12 +21,12 @@ type CLIFlags struct {
 	EtcdConfigPeerPort              *int     `long:"etcd-peer-port" description:"Etcd peer port"`
 	EtcdConfigPrefix                *string  `long:"etcd-prefix" short:"p" description:"Etcd prefix"`
 	EtcdConfigStartEmbedded         *bool    `long:"start-etcd" description:"Start embedded etcd server"`
-	ServerConfigAddress             *string  `long:"address" short:"a" description:"Address to listen on (host:port). For IPv6 use brackets, e.g. "[::1]:8443"."`
+	ServerConfigAddress             *string  `long:"address" short:"a" description:"Address to listen on (host:port). For IPv6 use brackets, e.g. \"[::1]:8443\"."`
 	ServerConfigConfigClusterName   *string  `long:"config-cluster-name" short:"C" description:"Name of the cluster in client config"`
 	ServerConfigDataPath            *string  `long:"data-path" short:"d" description:"Data path"`
 	ServerConfigHttpRequestTimeout  *int     `long:"http-request-timeout" description:"HTTP request timeout in seconds"`
 	ServerConfigReleasePath         *string  `long:"release-path" description:"Path to release directory containing binaries"`
-	ServerConfigRunnerAddress       *string  `long:"runner-address" description:"Runner address (host:port). For IPv6 use brackets, e.g. "[::1]:8444"."`
+	ServerConfigRunnerAddress       *string  `long:"runner-address" description:"Runner address (host:port). For IPv6 use brackets, e.g. \"[::1]:8444\"."`
 	ServerConfigRunnerId            *string  `long:"runner-id" short:"r" description:"Runner ID"`
 	ServerConfigSkipClientConfig    *bool    `long:"skip-client-config" description:"Skip writing client config file to clientconfig.d"`
 	TLSConfigAdditionalIps          []string `long:"ips" description:"Additional IPs assigned to the server cert"`
