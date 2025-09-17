@@ -56,11 +56,13 @@ type PolicyFetcher struct {
 	httpClient      *http.Client
 	logger          *slog.Logger
 	refreshInterval time.Duration
+	evaluator       *rbac.Evaluator
 
 	mu          sync.RWMutex
 	policy      *rbac.Policy
 	lastFetched time.Time
 	lastError   error
+	lastRefresh time.Time
 
 	stop func()
 	wg   sync.WaitGroup
@@ -196,6 +198,14 @@ func (pf *PolicyFetcher) fetchPolicy(ctx context.Context) error {
 	pf.setPolicy(&policy)
 	pf.logger.Info("policy fetched successfully", "rules", len(policy.Rules))
 
+	// Update refresh timestamp and clear evaluator cache
+	pf.mu.Lock()
+	pf.lastRefresh = time.Now()
+	if pf.evaluator != nil {
+		pf.evaluator.ClearCache()
+	}
+	pf.mu.Unlock()
+
 	return nil
 }
 
@@ -228,4 +238,46 @@ func (pf *PolicyFetcher) setError(err error) {
 	pf.mu.Lock()
 	defer pf.mu.Unlock()
 	pf.lastError = err
+}
+
+// RefreshIfNeeded performs an immediate refresh if more than 30 seconds have passed since last refresh
+func (pf *PolicyFetcher) RefreshIfNeeded(ctx context.Context) {
+	pf.mu.Lock()
+	now := time.Now()
+	shouldRefresh := now.Sub(pf.lastRefresh) > 30*time.Second
+	if shouldRefresh {
+		pf.lastRefresh = now
+	}
+	pf.mu.Unlock()
+
+	if !shouldRefresh {
+		// Don't log here, it's too noisy.
+		return
+	}
+
+	pf.logger.Info("refreshing RBAC rules after rejection")
+
+	// Clear the cache immediately to remove the cached denial
+	if pf.evaluator != nil {
+		pf.evaluator.ClearCache()
+	}
+
+	go func() {
+		if err := pf.fetchPolicy(ctx); err != nil {
+			pf.logger.Warn("failed to refresh policy after rejection", "error", err)
+		} else {
+			pf.logger.Info("successfully refreshed policy after rejection")
+			// Clear again after successful fetch to ensure fresh evaluation
+			if pf.evaluator != nil {
+				pf.evaluator.ClearCache()
+			}
+		}
+	}()
+}
+
+// SetEvaluator sets the RBAC evaluator (for cache clearing on refresh)
+func (pf *PolicyFetcher) SetEvaluator(evaluator *rbac.Evaluator) {
+	pf.mu.Lock()
+	defer pf.mu.Unlock()
+	pf.evaluator = evaluator
 }

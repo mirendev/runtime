@@ -100,6 +100,9 @@ func NewRPCAuthenticator(ctx context.Context, config Config) (*RPCAuthenticator,
 	// Create evaluator with the policy fetcher as provider
 	a.rbacEval = rbac.NewEvaluator(ctx, a.policyFetcher, config.Logger)
 
+	// Set the evaluator in the policy fetcher so it can clear the cache on refresh
+	a.policyFetcher.SetEvaluator(a.rbacEval)
+
 	return a, nil
 }
 
@@ -164,6 +167,10 @@ func (a *RPCAuthenticator) AuthenticateRequest(ctx context.Context, r *http.Requ
 			"action", r.Method,
 			"tags", a.tags,
 		)
+
+		// Trigger a refresh of RBAC rules (with 30-second cooldown)
+		a.policyFetcher.RefreshIfNeeded(ctx)
+
 		return false, "", fmt.Errorf("access denied by RBAC policy")
 	}
 
