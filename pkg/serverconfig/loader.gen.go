@@ -12,7 +12,7 @@ import (
 )
 
 // Load loads configuration from all sources with proper precedence:
-// CLI flags > Environment variables > Config file > Defaults
+// CLI flags > Environment variables > Mode defaults > Config file > Defaults
 func Load(configPath string, flags *CLIFlags, log *slog.Logger) (*Config, error) {
 	if log == nil {
 		log = slog.Default()
@@ -40,6 +40,10 @@ func Load(configPath string, flags *CLIFlags, log *slog.Logger) (*Config, error)
 		return nil, fmt.Errorf("config file not found: %s", configPath)
 	}
 
+	// Apply mode defaults (after config file, before env/CLI)
+	// These act as defaults that can be overridden
+	cfg.ApplyModeDefaults()
+
 	// Apply environment variables
 	if err := applyEnvironmentVariables(cfg, log); err != nil {
 		return nil, fmt.Errorf("failed to apply environment variables: %w", err)
@@ -49,9 +53,6 @@ func Load(configPath string, flags *CLIFlags, log *slog.Logger) (*Config, error)
 	if flags != nil {
 		applyCLIFlags(cfg, flags)
 	}
-
-	// Apply mode defaults
-	cfg.ApplyModeDefaults()
 
 	// Validate
 	if err := cfg.Validate(); err != nil {
@@ -205,10 +206,18 @@ func applyCLIFlags(cfg *Config, flags *CLIFlags) {
 }
 
 // ApplyModeDefaults applies mode-specific defaults
+// Only sets values when they are false to avoid overwriting explicit configurations
 func (c *Config) ApplyModeDefaults() {
 	if c.Mode == "standalone" {
-		c.Etcd.StartEmbedded = true
-		c.Clickhouse.StartEmbedded = true
-		c.Containerd.StartEmbedded = true
+		// Only set to true if not already set (false is the zero value)
+		if !c.Etcd.StartEmbedded {
+			c.Etcd.StartEmbedded = true
+		}
+		if !c.Clickhouse.StartEmbedded {
+			c.Clickhouse.StartEmbedded = true
+		}
+		if !c.Containerd.StartEmbedded {
+			c.Containerd.StartEmbedded = true
+		}
 	}
 }
