@@ -25,8 +25,12 @@ func ServerConfigGenerate(ctx *Context, opts struct {
 		}
 	}
 
-	// Apply mode defaults
-	cfg.ApplyModeDefaults()
+	// Apply mode defaults inline since we're not using Load()
+	if cfg.Mode == "standalone" {
+		cfg.Etcd.StartEmbedded = true
+		cfg.Clickhouse.StartEmbedded = true
+		cfg.Containerd.StartEmbedded = true
+	}
 
 	// Marshal to TOML
 	data, err := toml.Marshal(cfg)

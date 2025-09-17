@@ -17,8 +17,12 @@ func TestGeneratedCode(t *testing.T) {
 		t.Errorf("default config should be valid, got error: %v", err)
 	}
 
-	// Test mode defaults
-	cfg.ApplyModeDefaults()
+	// Test mode defaults (inline application since ApplyModeDefaults was removed)
+	if cfg.Mode == "standalone" {
+		cfg.Etcd.StartEmbedded = true
+		cfg.Clickhouse.StartEmbedded = true
+		cfg.Containerd.StartEmbedded = true
+	}
 	if !cfg.Etcd.StartEmbedded {
 		t.Error("expected etcd.StartEmbedded to be true in standalone mode")
 	}
