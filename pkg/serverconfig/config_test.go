@@ -3,6 +3,7 @@ package serverconfig
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -179,14 +180,9 @@ prefix = "/test"
 
 func TestEnvironmentVariableOverrides(t *testing.T) {
 	// Set environment variables
-	os.Setenv("MIREN_MODE", "distributed")
-	os.Setenv("MIREN_SERVER_ADDRESS", "env-server:1234")
-	os.Setenv("MIREN_ETCD_ENDPOINTS", "http://env-etcd:2379,http://env-etcd2:2379")
-	defer func() {
-		os.Unsetenv("MIREN_MODE")
-		os.Unsetenv("MIREN_SERVER_ADDRESS")
-		os.Unsetenv("MIREN_ETCD_ENDPOINTS")
-	}()
+	t.Setenv("MIREN_MODE", "distributed")
+	t.Setenv("MIREN_SERVER_ADDRESS", "env-server:1234")
+	t.Setenv("MIREN_ETCD_ENDPOINTS", "http://env-etcd:2379,http://env-etcd2:2379")
 
 	// Load config with env vars
 	sourcedCfg, err := Load("", nil, nil)
@@ -234,8 +230,7 @@ runner_id = "file-runner"
 	}
 
 	// Set environment variable (should override file)
-	os.Setenv("MIREN_SERVER_ADDRESS", "env:8443")
-	defer os.Unsetenv("MIREN_SERVER_ADDRESS")
+	t.Setenv("MIREN_SERVER_ADDRESS", "env:8443")
 
 	// CLI flags (should override everything)
 	cliFlags := &CLIFlags{
@@ -268,6 +263,5 @@ runner_id = "file-runner"
 }
 
 func contains(s, substr string) bool {
-	return len(s) >= len(substr) && s[:len(substr)] == substr ||
-		len(s) >= len(substr) && contains(s[1:], substr)
+	return strings.Contains(s, substr)
 }

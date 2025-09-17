@@ -2,6 +2,7 @@ package serverconfig
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 
 	"github.com/pelletier/go-toml/v2"
@@ -9,6 +10,10 @@ import (
 
 // GenerateTOML generates a TOML configuration file from a Config struct
 func GenerateTOML(cfg *Config) ([]byte, error) {
+	if cfg == nil {
+		return nil, errors.New("nil config")
+	}
+
 	buf := new(bytes.Buffer)
 	encoder := toml.NewEncoder(buf)
 	encoder.SetIndentTables(true)

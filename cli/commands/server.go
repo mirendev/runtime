@@ -14,6 +14,7 @@ import (
 	"os/user"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	containerd "github.com/containerd/containerd/v2/client"
@@ -109,83 +110,84 @@ func Server(ctx *Context, opts struct {
 		SetFlags:                  make(map[string]bool),
 	}
 
-	// Track which flags were explicitly set (differ from defaults)
-	if opts.Mode != "" && opts.Mode != "standalone" {
+	// Track which flags were explicitly provided on the CLI (independent of value)
+	argv := os.Args[1:]
+	if flagProvided("mode", "m", argv) {
 		cliFlags.SetFlags["mode"] = true
 	}
-	if opts.Address != "" && opts.Address != "localhost:8443" {
+	if flagProvided("address", "a", argv) {
 		cliFlags.SetFlags["address"] = true
 	}
-	if opts.RunnerAddress != "" && opts.RunnerAddress != "localhost:8444" {
+	if flagProvided("runner-address", "", argv) {
 		cliFlags.SetFlags["runner-address"] = true
 	}
-	if len(opts.EtcdEndpoints) > 0 && (len(opts.EtcdEndpoints) != 1 || opts.EtcdEndpoints[0] != "http://etcd:2379") {
+	if flagProvided("etcd", "e", argv) {
 		cliFlags.SetFlags["etcd"] = true
 	}
-	if opts.EtcdPrefix != "" && opts.EtcdPrefix != "/miren" {
+	if flagProvided("etcd-prefix", "p", argv) {
 		cliFlags.SetFlags["etcd-prefix"] = true
 	}
-	if opts.RunnerId != "" && opts.RunnerId != "miren" {
+	if flagProvided("runner-id", "r", argv) {
 		cliFlags.SetFlags["runner-id"] = true
 	}
-	if opts.DataPath != "" && opts.DataPath != "/var/lib/miren" {
+	if flagProvided("data-path", "d", argv) {
 		cliFlags.SetFlags["data-path"] = true
 	}
-	if opts.ReleasePath != "" {
+	if flagProvided("release-path", "", argv) {
 		cliFlags.SetFlags["release-path"] = true
 	}
-	if len(opts.AdditionalNames) > 0 {
+	if flagProvided("dns-names", "", argv) {
 		cliFlags.SetFlags["dns-names"] = true
 	}
-	if len(opts.AdditionalIPs) > 0 {
+	if flagProvided("ips", "", argv) {
 		cliFlags.SetFlags["ips"] = true
 	}
-	if opts.StandardTLS {
+	if flagProvided("serve-tls", "", argv) {
 		cliFlags.SetFlags["serve-tls"] = true
 	}
-	if opts.HTTPRequestTimeout != 60 {
+	if flagProvided("http-request-timeout", "", argv) {
 		cliFlags.SetFlags["http-request-timeout"] = true
 	}
-	if opts.StartEtcd {
+	if flagProvided("start-etcd", "", argv) {
 		cliFlags.SetFlags["start-etcd"] = true
 	}
-	if opts.EtcdClientPort != 12379 {
+	if flagProvided("etcd-client-port", "", argv) {
 		cliFlags.SetFlags["etcd-client-port"] = true
 	}
-	if opts.EtcdPeerPort != 12380 {
+	if flagProvided("etcd-peer-port", "", argv) {
 		cliFlags.SetFlags["etcd-peer-port"] = true
 	}
-	if opts.EtcdHTTPClientPort != 12381 {
+	if flagProvided("etcd-http-client-port", "", argv) {
 		cliFlags.SetFlags["etcd-http-client-port"] = true
 	}
-	if opts.StartClickHouse {
+	if flagProvided("start-clickhouse", "", argv) {
 		cliFlags.SetFlags["start-clickhouse"] = true
 	}
-	if opts.ClickHouseHTTPPort != 8223 {
+	if flagProvided("clickhouse-http-port", "", argv) {
 		cliFlags.SetFlags["clickhouse-http-port"] = true
 	}
-	if opts.ClickHouseNativePort != 9009 {
+	if flagProvided("clickhouse-native-port", "", argv) {
 		cliFlags.SetFlags["clickhouse-native-port"] = true
 	}
-	if opts.ClickHouseInterServerPort != 9010 {
+	if flagProvided("clickhouse-interserver-port", "", argv) {
 		cliFlags.SetFlags["clickhouse-interserver-port"] = true
 	}
-	if opts.ClickHouseAddress != "" {
+	if flagProvided("clickhouse-addr", "", argv) {
 		cliFlags.SetFlags["clickhouse-addr"] = true
 	}
-	if opts.StartContainerd {
+	if flagProvided("start-containerd", "", argv) {
 		cliFlags.SetFlags["start-containerd"] = true
 	}
-	if opts.ContainerdBinary != "" && opts.ContainerdBinary != "containerd" {
+	if flagProvided("containerd-binary", "", argv) {
 		cliFlags.SetFlags["containerd-binary"] = true
 	}
-	if opts.ContainerdSocketPath != "" {
+	if flagProvided("containerd-socket", "", argv) {
 		cliFlags.SetFlags["containerd-socket"] = true
 	}
-	if opts.SkipClientConfig {
+	if flagProvided("skip-client-config", "", argv) {
 		cliFlags.SetFlags["skip-client-config"] = true
 	}
-	if opts.ConfigClusterName != "" && opts.ConfigClusterName != "local" {
+	if flagProvided("config-cluster-name", "C", argv) {
 		cliFlags.SetFlags["config-cluster-name"] = true
 	}
 
@@ -314,12 +316,16 @@ func Server(ctx *Context, opts struct {
 
 		containerdComponent := containerdcomp.NewContainerdComponent(ctx.Log, opts.DataPath)
 
+		envPath := os.Getenv("PATH")
+		if binDir != "" {
+			envPath = binDir + ":" + envPath
+		}
 		containerdConfig := &containerdcomp.Config{
 			BinaryPath: containerdPath,
 			BaseDir:    filepath.Join(opts.DataPath, "containerd"),
 			BinDir:     binDir,
 			SocketPath: containerdSocketPath,
-			Env:        []string{"PATH=" + binDir + ":" + os.Getenv("PATH")},
+			Env:        []string{"PATH=" + envPath},
 		}
 
 		err = containerdComponent.Start(sub, containerdConfig)
@@ -925,4 +931,28 @@ func fixOwnershipIfSudo(ctx *Context, path string) error {
 	ctx.Log.Debug("fixed ownership for", "path", path, "uid", uid, "gid", gid)
 
 	return nil
+}
+
+// flagProvided reports whether a flag was present in argv (handles --long, --long=val, -s, -s=val, and -s val forms).
+func flagProvided(long, short string, argv []string) bool {
+	prefixLong := "--" + long
+	shortFlag := "-" + short
+	for i, a := range argv {
+		if strings.HasPrefix(a, prefixLong) { // matches --flag and --flag=val
+			return true
+		}
+		if short != "" {
+			if a == shortFlag {
+				// covers: -s val
+				return true
+			}
+			if strings.HasPrefix(a, shortFlag+"=") {
+				// covers: -s=val
+				return true
+			}
+			// Note: combined short flags (e.g., -abc) aren't used here.
+		}
+		_ = i
+	}
+	return false
 }

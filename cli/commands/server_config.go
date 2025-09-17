@@ -147,11 +147,6 @@ func ServerConfigValidate(ctx *Context, opts struct {
 
 	cfg := &sourcedConfig.Config
 
-	// Validate the configuration
-	if err := cfg.Validate(); err != nil {
-		return fmt.Errorf("configuration is invalid: %w", err)
-	}
-
 	ctx.Info("✓ Configuration file is valid")
 
 	if opts.Verbose {

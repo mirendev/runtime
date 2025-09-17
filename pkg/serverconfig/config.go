@@ -146,6 +146,9 @@ func (c *TLSConfig) Validate() error {
 }
 
 func (c *EtcdConfig) Validate() error {
+	if !c.StartEmbedded && len(c.Endpoints) == 0 {
+		return fmt.Errorf("etcd endpoints must be set when start_embedded=false")
+	}
 	if err := validatePort(c.ClientPort, "client_port"); err != nil {
 		return err
 	}
