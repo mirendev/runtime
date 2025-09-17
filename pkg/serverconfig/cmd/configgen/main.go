@@ -486,19 +486,11 @@ func applyCLIFlags(cfg *Config, flags *CLIFlags) {
 }
 
 // ApplyModeDefaults applies mode-specific defaults
-// Only sets values when they are false to avoid overwriting explicit configurations
 func (c *Config) ApplyModeDefaults() {
 	if c.Mode == "standalone" {
-		// Only set to true if not already set (false is the zero value)
-		if !c.Etcd.StartEmbedded {
-			c.Etcd.StartEmbedded = true
-		}
-		if !c.Clickhouse.StartEmbedded {
-			c.Clickhouse.StartEmbedded = true
-		}
-		if !c.Containerd.StartEmbedded {
-			c.Containerd.StartEmbedded = true
-		}
+		c.Etcd.StartEmbedded = true
+		c.Clickhouse.StartEmbedded = true
+		c.Containerd.StartEmbedded = true
 	}
 }
 `
