@@ -15,7 +15,7 @@ func applyEnvironmentVariables(cfg *Config, log *slog.Logger) error {
 	// Apply MIREN_CLICKHOUSE_ADDRESS
 	if val := os.Getenv("MIREN_CLICKHOUSE_ADDRESS"); val != "" {
 
-		cfg.Clickhouse.Address = val
+		cfg.Clickhouse.Address = &val
 		log.Debug("applied env var", "key", "MIREN_CLICKHOUSE_ADDRESS")
 
 	}
@@ -24,7 +24,7 @@ func applyEnvironmentVariables(cfg *Config, log *slog.Logger) error {
 	if val := os.Getenv("MIREN_CLICKHOUSE_HTTP_PORT"); val != "" {
 
 		if i, err := strconv.Atoi(val); err == nil {
-			cfg.Clickhouse.HttpPort = i
+			cfg.Clickhouse.HttpPort = &i
 			log.Debug("applied env var", "key", "MIREN_CLICKHOUSE_HTTP_PORT")
 		} else {
 			log.Warn("invalid MIREN_CLICKHOUSE_HTTP_PORT value", "value", val, "error", err)
@@ -36,7 +36,7 @@ func applyEnvironmentVariables(cfg *Config, log *slog.Logger) error {
 	if val := os.Getenv("MIREN_CLICKHOUSE_INTERSERVER_PORT"); val != "" {
 
 		if i, err := strconv.Atoi(val); err == nil {
-			cfg.Clickhouse.InterserverPort = i
+			cfg.Clickhouse.InterserverPort = &i
 			log.Debug("applied env var", "key", "MIREN_CLICKHOUSE_INTERSERVER_PORT")
 		} else {
 			log.Warn("invalid MIREN_CLICKHOUSE_INTERSERVER_PORT value", "value", val, "error", err)
@@ -48,7 +48,7 @@ func applyEnvironmentVariables(cfg *Config, log *slog.Logger) error {
 	if val := os.Getenv("MIREN_CLICKHOUSE_NATIVE_PORT"); val != "" {
 
 		if i, err := strconv.Atoi(val); err == nil {
-			cfg.Clickhouse.NativePort = i
+			cfg.Clickhouse.NativePort = &i
 			log.Debug("applied env var", "key", "MIREN_CLICKHOUSE_NATIVE_PORT")
 		} else {
 			log.Warn("invalid MIREN_CLICKHOUSE_NATIVE_PORT value", "value", val, "error", err)
@@ -60,7 +60,7 @@ func applyEnvironmentVariables(cfg *Config, log *slog.Logger) error {
 	if val := os.Getenv("MIREN_CLICKHOUSE_START_EMBEDDED"); val != "" {
 
 		if b, err := strconv.ParseBool(val); err == nil {
-			cfg.Clickhouse.StartEmbedded = b
+			cfg.Clickhouse.StartEmbedded = &b
 			log.Debug("applied env var", "key", "MIREN_CLICKHOUSE_START_EMBEDDED")
 		} else {
 			log.Warn("invalid MIREN_CLICKHOUSE_START_EMBEDDED value", "value", val, "error", err)
@@ -71,7 +71,7 @@ func applyEnvironmentVariables(cfg *Config, log *slog.Logger) error {
 	// Apply MIREN_MODE
 	if val := os.Getenv("MIREN_MODE"); val != "" {
 
-		cfg.Mode = val
+		cfg.Mode = &val
 		log.Debug("applied env var", "key", "MIREN_MODE")
 
 	}
@@ -79,7 +79,7 @@ func applyEnvironmentVariables(cfg *Config, log *slog.Logger) error {
 	// Apply MIREN_CONTAINERD_BINARY_PATH
 	if val := os.Getenv("MIREN_CONTAINERD_BINARY_PATH"); val != "" {
 
-		cfg.Containerd.BinaryPath = val
+		cfg.Containerd.BinaryPath = &val
 		log.Debug("applied env var", "key", "MIREN_CONTAINERD_BINARY_PATH")
 
 	}
@@ -87,7 +87,7 @@ func applyEnvironmentVariables(cfg *Config, log *slog.Logger) error {
 	// Apply MIREN_CONTAINERD_SOCKET_PATH
 	if val := os.Getenv("MIREN_CONTAINERD_SOCKET_PATH"); val != "" {
 
-		cfg.Containerd.SocketPath = val
+		cfg.Containerd.SocketPath = &val
 		log.Debug("applied env var", "key", "MIREN_CONTAINERD_SOCKET_PATH")
 
 	}
@@ -96,7 +96,7 @@ func applyEnvironmentVariables(cfg *Config, log *slog.Logger) error {
 	if val := os.Getenv("MIREN_CONTAINERD_START_EMBEDDED"); val != "" {
 
 		if b, err := strconv.ParseBool(val); err == nil {
-			cfg.Containerd.StartEmbedded = b
+			cfg.Containerd.StartEmbedded = &b
 			log.Debug("applied env var", "key", "MIREN_CONTAINERD_START_EMBEDDED")
 		} else {
 			log.Warn("invalid MIREN_CONTAINERD_START_EMBEDDED value", "value", val, "error", err)
@@ -108,7 +108,7 @@ func applyEnvironmentVariables(cfg *Config, log *slog.Logger) error {
 	if val := os.Getenv("MIREN_ETCD_CLIENT_PORT"); val != "" {
 
 		if i, err := strconv.Atoi(val); err == nil {
-			cfg.Etcd.ClientPort = i
+			cfg.Etcd.ClientPort = &i
 			log.Debug("applied env var", "key", "MIREN_ETCD_CLIENT_PORT")
 		} else {
 			log.Warn("invalid MIREN_ETCD_CLIENT_PORT value", "value", val, "error", err)
@@ -143,7 +143,7 @@ func applyEnvironmentVariables(cfg *Config, log *slog.Logger) error {
 	if val := os.Getenv("MIREN_ETCD_HTTP_CLIENT_PORT"); val != "" {
 
 		if i, err := strconv.Atoi(val); err == nil {
-			cfg.Etcd.HttpClientPort = i
+			cfg.Etcd.HttpClientPort = &i
 			log.Debug("applied env var", "key", "MIREN_ETCD_HTTP_CLIENT_PORT")
 		} else {
 			log.Warn("invalid MIREN_ETCD_HTTP_CLIENT_PORT value", "value", val, "error", err)
@@ -155,7 +155,7 @@ func applyEnvironmentVariables(cfg *Config, log *slog.Logger) error {
 	if val := os.Getenv("MIREN_ETCD_PEER_PORT"); val != "" {
 
 		if i, err := strconv.Atoi(val); err == nil {
-			cfg.Etcd.PeerPort = i
+			cfg.Etcd.PeerPort = &i
 			log.Debug("applied env var", "key", "MIREN_ETCD_PEER_PORT")
 		} else {
 			log.Warn("invalid MIREN_ETCD_PEER_PORT value", "value", val, "error", err)
@@ -166,7 +166,7 @@ func applyEnvironmentVariables(cfg *Config, log *slog.Logger) error {
 	// Apply MIREN_ETCD_PREFIX
 	if val := os.Getenv("MIREN_ETCD_PREFIX"); val != "" {
 
-		cfg.Etcd.Prefix = val
+		cfg.Etcd.Prefix = &val
 		log.Debug("applied env var", "key", "MIREN_ETCD_PREFIX")
 
 	}
@@ -175,7 +175,7 @@ func applyEnvironmentVariables(cfg *Config, log *slog.Logger) error {
 	if val := os.Getenv("MIREN_ETCD_START_EMBEDDED"); val != "" {
 
 		if b, err := strconv.ParseBool(val); err == nil {
-			cfg.Etcd.StartEmbedded = b
+			cfg.Etcd.StartEmbedded = &b
 			log.Debug("applied env var", "key", "MIREN_ETCD_START_EMBEDDED")
 		} else {
 			log.Warn("invalid MIREN_ETCD_START_EMBEDDED value", "value", val, "error", err)
@@ -186,7 +186,7 @@ func applyEnvironmentVariables(cfg *Config, log *slog.Logger) error {
 	// Apply MIREN_SERVER_ADDRESS
 	if val := os.Getenv("MIREN_SERVER_ADDRESS"); val != "" {
 
-		cfg.Server.Address = val
+		cfg.Server.Address = &val
 		log.Debug("applied env var", "key", "MIREN_SERVER_ADDRESS")
 
 	}
@@ -194,7 +194,7 @@ func applyEnvironmentVariables(cfg *Config, log *slog.Logger) error {
 	// Apply MIREN_SERVER_CONFIG_CLUSTER_NAME
 	if val := os.Getenv("MIREN_SERVER_CONFIG_CLUSTER_NAME"); val != "" {
 
-		cfg.Server.ConfigClusterName = val
+		cfg.Server.ConfigClusterName = &val
 		log.Debug("applied env var", "key", "MIREN_SERVER_CONFIG_CLUSTER_NAME")
 
 	}
@@ -202,7 +202,7 @@ func applyEnvironmentVariables(cfg *Config, log *slog.Logger) error {
 	// Apply MIREN_SERVER_DATA_PATH
 	if val := os.Getenv("MIREN_SERVER_DATA_PATH"); val != "" {
 
-		cfg.Server.DataPath = val
+		cfg.Server.DataPath = &val
 		log.Debug("applied env var", "key", "MIREN_SERVER_DATA_PATH")
 
 	}
@@ -211,7 +211,7 @@ func applyEnvironmentVariables(cfg *Config, log *slog.Logger) error {
 	if val := os.Getenv("MIREN_SERVER_HTTP_REQUEST_TIMEOUT"); val != "" {
 
 		if i, err := strconv.Atoi(val); err == nil {
-			cfg.Server.HttpRequestTimeout = i
+			cfg.Server.HttpRequestTimeout = &i
 			log.Debug("applied env var", "key", "MIREN_SERVER_HTTP_REQUEST_TIMEOUT")
 		} else {
 			log.Warn("invalid MIREN_SERVER_HTTP_REQUEST_TIMEOUT value", "value", val, "error", err)
@@ -222,7 +222,7 @@ func applyEnvironmentVariables(cfg *Config, log *slog.Logger) error {
 	// Apply MIREN_SERVER_RELEASE_PATH
 	if val := os.Getenv("MIREN_SERVER_RELEASE_PATH"); val != "" {
 
-		cfg.Server.ReleasePath = val
+		cfg.Server.ReleasePath = &val
 		log.Debug("applied env var", "key", "MIREN_SERVER_RELEASE_PATH")
 
 	}
@@ -230,7 +230,7 @@ func applyEnvironmentVariables(cfg *Config, log *slog.Logger) error {
 	// Apply MIREN_SERVER_RUNNER_ADDRESS
 	if val := os.Getenv("MIREN_SERVER_RUNNER_ADDRESS"); val != "" {
 
-		cfg.Server.RunnerAddress = val
+		cfg.Server.RunnerAddress = &val
 		log.Debug("applied env var", "key", "MIREN_SERVER_RUNNER_ADDRESS")
 
 	}
@@ -238,7 +238,7 @@ func applyEnvironmentVariables(cfg *Config, log *slog.Logger) error {
 	// Apply MIREN_SERVER_RUNNER_ID
 	if val := os.Getenv("MIREN_SERVER_RUNNER_ID"); val != "" {
 
-		cfg.Server.RunnerId = val
+		cfg.Server.RunnerId = &val
 		log.Debug("applied env var", "key", "MIREN_SERVER_RUNNER_ID")
 
 	}
@@ -247,7 +247,7 @@ func applyEnvironmentVariables(cfg *Config, log *slog.Logger) error {
 	if val := os.Getenv("MIREN_SERVER_SKIP_CLIENT_CONFIG"); val != "" {
 
 		if b, err := strconv.ParseBool(val); err == nil {
-			cfg.Server.SkipClientConfig = b
+			cfg.Server.SkipClientConfig = &b
 			log.Debug("applied env var", "key", "MIREN_SERVER_SKIP_CLIENT_CONFIG")
 		} else {
 			log.Warn("invalid MIREN_SERVER_SKIP_CLIENT_CONFIG value", "value", val, "error", err)
@@ -305,7 +305,7 @@ func applyEnvironmentVariables(cfg *Config, log *slog.Logger) error {
 	if val := os.Getenv("MIREN_TLS_STANDARD_TLS"); val != "" {
 
 		if b, err := strconv.ParseBool(val); err == nil {
-			cfg.Tls.StandardTls = b
+			cfg.Tls.StandardTls = &b
 			log.Debug("applied env var", "key", "MIREN_TLS_STANDARD_TLS")
 		} else {
 			log.Warn("invalid MIREN_TLS_STANDARD_TLS value", "value", val, "error", err)

@@ -190,7 +190,6 @@ configs:
 
       start_embedded:
         type: bool
-        default: false
         cli:
           long: start-etcd
           description: Start embedded etcd server
@@ -237,7 +236,6 @@ configs:
     fields:
       start_embedded:
         type: bool
-        default: false
         cli:
           long: start-clickhouse
           description: Start embedded ClickHouse server
@@ -293,7 +291,6 @@ configs:
     fields:
       start_embedded:
         type: bool
-        default: false
         cli:
           long: start-containerd
           description: Start embedded containerd daemon

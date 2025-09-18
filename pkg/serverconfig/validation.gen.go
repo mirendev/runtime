@@ -22,12 +22,14 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("etcd: %w", err)
 	}
 	// Validate mode
-	validModes := map[string]bool{
-		"standalone":  true,
-		"distributed": true,
-	}
-	if !validModes[c.Mode] {
-		return fmt.Errorf("invalid mode %q: must be one of [standalone distributed]", c.Mode)
+	if c.Mode != nil {
+		validModes := map[string]bool{
+			"standalone":  true,
+			"distributed": true,
+		}
+		if !validModes[*c.Mode] {
+			return fmt.Errorf("invalid mode %q: must be one of [standalone distributed]", *c.Mode)
+		}
 	}
 
 	if err := c.Server.Validate(); err != nil {
@@ -44,32 +46,39 @@ func (c *Config) Validate() error {
 func (c *ClickHouseConfig) Validate() error {
 
 	// Validate http_port
-	if c.HttpPort < 1 || c.HttpPort > 65535 {
-		return fmt.Errorf("http_port must be between 1 and 65535, got %d", c.HttpPort)
+	if c.HttpPort != nil && (*c.HttpPort < 1 || *c.HttpPort > 65535) {
+		return fmt.Errorf("http_port must be between 1 and 65535, got %d", *c.HttpPort)
 	}
 
 	// Validate interserver_port
-	if c.InterserverPort < 1 || c.InterserverPort > 65535 {
-		return fmt.Errorf("interserver_port must be between 1 and 65535, got %d", c.InterserverPort)
+	if c.InterserverPort != nil && (*c.InterserverPort < 1 || *c.InterserverPort > 65535) {
+		return fmt.Errorf("interserver_port must be between 1 and 65535, got %d", *c.InterserverPort)
 	}
 
 	// Validate native_port
-	if c.NativePort < 1 || c.NativePort > 65535 {
-		return fmt.Errorf("native_port must be between 1 and 65535, got %d", c.NativePort)
+	if c.NativePort != nil && (*c.NativePort < 1 || *c.NativePort > 65535) {
+		return fmt.Errorf("native_port must be between 1 and 65535, got %d", *c.NativePort)
 	}
 
 	// Check for port conflicts in ClickHouseConfig
-	ports := []int{
-		c.HttpPort,
-		c.InterserverPort,
-		c.NativePort,
-	}
 	seen := make(map[int]bool)
-	for _, port := range ports {
-		if seen[port] {
-			return fmt.Errorf("port conflict: port %d is used multiple times", port)
+	if c.HttpPort != nil {
+		if seen[*c.HttpPort] {
+			return fmt.Errorf("port conflict: port %d is used multiple times", *c.HttpPort)
 		}
-		seen[port] = true
+		seen[*c.HttpPort] = true
+	}
+	if c.InterserverPort != nil {
+		if seen[*c.InterserverPort] {
+			return fmt.Errorf("port conflict: port %d is used multiple times", *c.InterserverPort)
+		}
+		seen[*c.InterserverPort] = true
+	}
+	if c.NativePort != nil {
+		if seen[*c.NativePort] {
+			return fmt.Errorf("port conflict: port %d is used multiple times", *c.NativePort)
+		}
+		seen[*c.NativePort] = true
 	}
 
 	return nil
@@ -87,36 +96,43 @@ func (c *ContainerdConfig) Validate() error {
 func (c *EtcdConfig) Validate() error {
 
 	// Validate client_port
-	if c.ClientPort < 1 || c.ClientPort > 65535 {
-		return fmt.Errorf("client_port must be between 1 and 65535, got %d", c.ClientPort)
+	if c.ClientPort != nil && (*c.ClientPort < 1 || *c.ClientPort > 65535) {
+		return fmt.Errorf("client_port must be between 1 and 65535, got %d", *c.ClientPort)
 	}
 
 	// Validate http_client_port
-	if c.HttpClientPort < 1 || c.HttpClientPort > 65535 {
-		return fmt.Errorf("http_client_port must be between 1 and 65535, got %d", c.HttpClientPort)
+	if c.HttpClientPort != nil && (*c.HttpClientPort < 1 || *c.HttpClientPort > 65535) {
+		return fmt.Errorf("http_client_port must be between 1 and 65535, got %d", *c.HttpClientPort)
 	}
 
 	// Validate peer_port
-	if c.PeerPort < 1 || c.PeerPort > 65535 {
-		return fmt.Errorf("peer_port must be between 1 and 65535, got %d", c.PeerPort)
+	if c.PeerPort != nil && (*c.PeerPort < 1 || *c.PeerPort > 65535) {
+		return fmt.Errorf("peer_port must be between 1 and 65535, got %d", *c.PeerPort)
 	}
 
 	// Check for port conflicts in EtcdConfig
-	ports := []int{
-		c.ClientPort,
-		c.HttpClientPort,
-		c.PeerPort,
-	}
 	seen := make(map[int]bool)
-	for _, port := range ports {
-		if seen[port] {
-			return fmt.Errorf("port conflict: port %d is used multiple times", port)
+	if c.ClientPort != nil {
+		if seen[*c.ClientPort] {
+			return fmt.Errorf("port conflict: port %d is used multiple times", *c.ClientPort)
 		}
-		seen[port] = true
+		seen[*c.ClientPort] = true
+	}
+	if c.HttpClientPort != nil {
+		if seen[*c.HttpClientPort] {
+			return fmt.Errorf("port conflict: port %d is used multiple times", *c.HttpClientPort)
+		}
+		seen[*c.HttpClientPort] = true
+	}
+	if c.PeerPort != nil {
+		if seen[*c.PeerPort] {
+			return fmt.Errorf("port conflict: port %d is used multiple times", *c.PeerPort)
+		}
+		seen[*c.PeerPort] = true
 	}
 
 	// Validate etcd endpoints requirement
-	if !c.StartEmbedded && len(c.Endpoints) == 0 {
+	if c.StartEmbedded != nil && !*c.StartEmbedded && len(c.Endpoints) == 0 {
 		return fmt.Errorf("etcd endpoints must be set when start_embedded=false")
 	}
 
@@ -127,21 +143,21 @@ func (c *EtcdConfig) Validate() error {
 func (c *ServerConfig) Validate() error {
 
 	// Validate address
-	if c.Address != "" {
-		if _, _, err := net.SplitHostPort(c.Address); err != nil {
-			return fmt.Errorf("invalid address %q: %w", c.Address, err)
+	if c.Address != nil && *c.Address != "" {
+		if _, _, err := net.SplitHostPort(*c.Address); err != nil {
+			return fmt.Errorf("invalid address %q: %w", *c.Address, err)
 		}
 	}
 
 	// Validate http_request_timeout minimum
-	if c.HttpRequestTimeout < 1 {
-		return fmt.Errorf("http_request_timeout must be at least 1, got %d", c.HttpRequestTimeout)
+	if c.HttpRequestTimeout != nil && *c.HttpRequestTimeout < 1 {
+		return fmt.Errorf("http_request_timeout must be at least 1, got %d", *c.HttpRequestTimeout)
 	}
 
 	// Validate runner_address
-	if c.RunnerAddress != "" {
-		if _, _, err := net.SplitHostPort(c.RunnerAddress); err != nil {
-			return fmt.Errorf("invalid runner_address %q: %w", c.RunnerAddress, err)
+	if c.RunnerAddress != nil && *c.RunnerAddress != "" {
+		if _, _, err := net.SplitHostPort(*c.RunnerAddress); err != nil {
+			return fmt.Errorf("invalid runner_address %q: %w", *c.RunnerAddress, err)
 		}
 	}
 

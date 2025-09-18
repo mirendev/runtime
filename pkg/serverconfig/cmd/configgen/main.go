@@ -272,35 +272,40 @@ func goTypeForCLI(fieldType string) string {
 }
 
 func formatDefault(val interface{}, fieldType string) string {
-	if val == nil {
-		switch fieldType {
-		case "string":
-			return `""`
-		case "[]string":
-			return `[]string{}`
-		case "bool":
-			return "false"
-		case "int":
-			return "0"
-		default:
-			return "nil"
+	// Arrays don't need pointers, they have nil as a zero value
+	if fieldType == "[]string" {
+		if val == nil {
+			return "[]string{}"
 		}
+		switch v := val.(type) {
+		case []interface{}:
+			if len(v) == 0 {
+				return "[]string{}"
+			}
+			var items []string
+			for _, item := range v {
+				items = append(items, fmt.Sprintf(`"%s"`, item))
+			}
+			return fmt.Sprintf("[]string{%s}", strings.Join(items, ", "))
+		default:
+			return "[]string{}"
+		}
+	}
+
+	// For non-array types, use pointers
+	if val == nil {
+		// Return nil for pointer fields with no default
+		return "nil"
 	}
 
 	switch v := val.(type) {
 	case string:
-		return fmt.Sprintf(`"%s"`, v)
-	case []interface{}:
-		if len(v) == 0 {
-			return "[]string{}"
-		}
-		var items []string
-		for _, item := range v {
-			items = append(items, fmt.Sprintf(`"%s"`, item))
-		}
-		return fmt.Sprintf("[]string{%s}", strings.Join(items, ", "))
-	case bool, int:
-		return fmt.Sprintf("%v", v)
+		s := fmt.Sprintf(`"%s"`, v)
+		return fmt.Sprintf("strPtr(%s)", s)
+	case bool:
+		return fmt.Sprintf("boolPtr(%v)", v)
+	case int:
+		return fmt.Sprintf("intPtr(%d)", v)
 	default:
 		return fmt.Sprintf("%#v", v)
 	}
@@ -322,8 +327,10 @@ type {{$name}} struct {
 	{{- if not $field.CLIOnly}}
 	{{- if $field.Nested}}
 	{{$fieldName | title}} {{$field.Type}} ` + "`" + `toml:"{{$field.TOML}}"` + "`" + `
-	{{- else}}
+	{{- else if eq $field.Type "[]string"}}
 	{{$fieldName | title}} {{$field.Type}} ` + "`" + `toml:"{{$field.TOML}}"{{if $field.Env}} env:"{{$field.Env}}"{{end}}` + "`" + `
+	{{- else}}
+	{{$fieldName | title}} *{{$field.Type}} ` + "`" + `toml:"{{$field.TOML}}"{{if $field.Env}} env:"{{$field.Env}}"{{end}}` + "`" + `
 	{{- end}}
 	{{- end}}
 	{{- end}}
@@ -332,7 +339,10 @@ type {{$name}} struct {
 
 // HTTPRequestTimeoutDuration returns the timeout as a time.Duration
 func (c *ServerConfig) HTTPRequestTimeoutDuration() time.Duration {
-	return time.Duration(c.HttpRequestTimeout) * time.Second
+	if c.HttpRequestTimeout != nil {
+		return time.Duration(*c.HttpRequestTimeout) * time.Second
+	}
+	return 60 * time.Second // default
 }
 `
 
@@ -382,7 +392,10 @@ func Load(configPath string, flags *CLIFlags, log *slog.Logger) (*Config, error)
 
 	// Determine data path for config discovery with proper precedence
 	// CLI > Env > Defaults
-	dataPathForSearch := cfg.Server.DataPath
+	var dataPathForSearch string
+	if cfg.Server.DataPath != nil {
+		dataPathForSearch = *cfg.Server.DataPath
+	}
 	if flags != nil && flags.ServerConfigDataPath != nil && *flags.ServerConfigDataPath != "" {
 		dataPathForSearch = *flags.ServerConfigDataPath
 	} else if envDataPath := os.Getenv("MIREN_SERVER_DATA_PATH"); envDataPath != "" {
@@ -402,7 +415,10 @@ func Load(configPath string, flags *CLIFlags, log *slog.Logger) (*Config, error)
 
 	// Resolve the effective mode first (CLI > Env > Config > Default)
 	// We need this to apply mode-specific defaults correctly
-	effectiveMode := cfg.Mode
+	var effectiveMode string
+	if cfg.Mode != nil {
+		effectiveMode = *cfg.Mode
+	}
 	if envMode := os.Getenv("MIREN_MODE"); envMode != "" {
 		effectiveMode = envMode
 	}
@@ -411,11 +427,17 @@ func Load(configPath string, flags *CLIFlags, log *slog.Logger) (*Config, error)
 	}
 
 	// Apply mode defaults based on the resolved mode
-	// These can still be overridden by explicit env/CLI values
+	// Only set if not already set (nil check)
 	if effectiveMode == "standalone" {
-		cfg.Etcd.StartEmbedded = true
-		cfg.Clickhouse.StartEmbedded = true
-		cfg.Containerd.StartEmbedded = true
+		if cfg.Etcd.StartEmbedded == nil {
+			cfg.Etcd.StartEmbedded = boolPtr(true)
+		}
+		if cfg.Clickhouse.StartEmbedded == nil {
+			cfg.Clickhouse.StartEmbedded = boolPtr(true)
+		}
+		if cfg.Containerd.StartEmbedded == nil {
+			cfg.Containerd.StartEmbedded = boolPtr(true)
+		}
 	}
 
 	// Apply environment variables (can override mode defaults)
@@ -479,15 +501,15 @@ func applyCLIFlags(cfg *Config, flags *CLIFlags) {
 	{{$flagName := $fname | title}}{{if ne $cname "Config"}}{{$flagName = print $cname ($fname | title)}}{{end}}
 	{{if eq $field.Type "string"}}
 	if flags.{{$flagName}} != nil && *flags.{{$flagName}} != "" {
-		cfg.{{if ne $cname "Config"}}{{$structField}}.{{end}}{{$fname | title}} = *flags.{{$flagName}}
+		cfg.{{if ne $cname "Config"}}{{$structField}}.{{end}}{{$fname | title}} = flags.{{$flagName}}
 	}
 	{{else if eq $field.Type "int"}}
 	if flags.{{$flagName}} != nil {
-		cfg.{{if ne $cname "Config"}}{{$structField}}.{{end}}{{$fname | title}} = *flags.{{$flagName}}
+		cfg.{{if ne $cname "Config"}}{{$structField}}.{{end}}{{$fname | title}} = flags.{{$flagName}}
 	}
 	{{else if eq $field.Type "bool"}}
 	if flags.{{$flagName}} != nil {
-		cfg.{{if ne $cname "Config"}}{{$structField}}.{{end}}{{$fname | title}} = *flags.{{$flagName}}
+		cfg.{{if ne $cname "Config"}}{{$structField}}.{{end}}{{$fname | title}} = flags.{{$flagName}}
 	}
 	{{else if eq $field.Type "[]string"}}
 	if len(flags.{{$flagName}}) > 0 {
@@ -503,6 +525,11 @@ func applyCLIFlags(cfg *Config, flags *CLIFlags) {
 const defaultsTemplate = `// Code generated by configgen. DO NOT EDIT.
 
 package {{.Package}}
+
+// Helper functions for creating pointers to literals
+func boolPtr(b bool) *bool { return &b }
+func intPtr(i int) *int { return &i }
+func strPtr(s string) *string { return &s }
 
 // DefaultConfig returns the default configuration
 func DefaultConfig() *Config {
@@ -548,13 +575,15 @@ func (c *Config) Validate() error {
 	{{- if $field.Validation}}
 	{{- if $field.Validation.Enum}}
 	// Validate {{$fname}}
-	validModes := map[string]bool{
-		{{- range $val := $field.Validation.Enum}}
-		"{{$val}}": true,
-		{{- end}}
-	}
-	if !validModes[c.{{$fname | title}}] {
-		return fmt.Errorf("invalid {{$fname}} %q: must be one of {{$field.Validation.Enum}}", c.{{$fname | title}})
+	if c.{{$fname | title}} != nil {
+		validModes := map[string]bool{
+			{{- range $val := $field.Validation.Enum}}
+			"{{$val}}": true,
+			{{- end}}
+		}
+		if !validModes[*c.{{$fname | title}}] {
+			return fmt.Errorf("invalid {{$fname}} %q: must be one of {{$field.Validation.Enum}}", *c.{{$fname | title}})
+		}
 	}
 	{{- end}}
 	{{- end}}
@@ -576,9 +605,9 @@ func (c *{{$name}}) Validate() error {
 	{{- if $field.Validation}}
 	{{if eq $field.Validation.Format "host:port"}}
 	// Validate {{$fname}}
-	if c.{{$fname | title}} != "" {
-		if _, _, err := net.SplitHostPort(c.{{$fname | title}}); err != nil {
-			return fmt.Errorf("invalid {{$fname}} %q: %w", c.{{$fname | title}}, err)
+	if c.{{$fname | title}} != nil && *c.{{$fname | title}} != "" {
+		if _, _, err := net.SplitHostPort(*c.{{$fname | title}}); err != nil {
+			return fmt.Errorf("invalid {{$fname}} %q: %w", *c.{{$fname | title}}, err)
 		}
 	}
 	{{else if eq $field.Validation.Format "ip_list"}}
@@ -590,31 +619,33 @@ func (c *{{$name}}) Validate() error {
 	}
 	{{else if $field.Validation.Port}}
 	// Validate {{$fname}}
-	if c.{{$fname | title}} < 1 || c.{{$fname | title}} > 65535 {
-		return fmt.Errorf("{{$fname}} must be between 1 and 65535, got %d", c.{{$fname | title}})
+	if c.{{$fname | title}} != nil && (*c.{{$fname | title}} < 1 || *c.{{$fname | title}} > 65535) {
+		return fmt.Errorf("{{$fname}} must be between 1 and 65535, got %d", *c.{{$fname | title}})
 	}
 	{{end}}
 	{{if $field.Validation.Min}}
 	// Validate {{$fname}} minimum
-	if c.{{$fname | title}} < {{$field.Validation.Min}} {
-		return fmt.Errorf("{{$fname}} must be at least {{$field.Validation.Min}}, got %d", c.{{$fname | title}})
+	if c.{{$fname | title}} != nil && *c.{{$fname | title}} < {{$field.Validation.Min}} {
+		return fmt.Errorf("{{$fname}} must be at least {{$field.Validation.Min}}, got %d", *c.{{$fname | title}})
 	}
 	{{end}}
 	{{if $field.Validation.Max}}
 	// Validate {{$fname}} maximum
-	if c.{{$fname | title}} > {{$field.Validation.Max}} {
-		return fmt.Errorf("{{$fname}} must be at most {{$field.Validation.Max}}, got %d", c.{{$fname | title}})
+	if c.{{$fname | title}} != nil && *c.{{$fname | title}} > {{$field.Validation.Max}} {
+		return fmt.Errorf("{{$fname}} must be at most {{$field.Validation.Max}}, got %d", *c.{{$fname | title}})
 	}
 	{{end}}
 	{{if $field.Validation.Enum}}
 	// Validate {{$fname}} enum
-	valid{{$fname | title}} := map[string]bool{
-		{{- range $val := $field.Validation.Enum}}
-		"{{$val}}": true,
-		{{- end}}
-	}
-	if !valid{{$fname | title}}[c.{{$fname | title}}] {
-		return fmt.Errorf("invalid {{$fname}} %q: must be one of {{$field.Validation.Enum}}", c.{{$fname | title}})
+	if c.{{$fname | title}} != nil {
+		valid{{$fname | title}} := map[string]bool{
+			{{- range $val := $field.Validation.Enum}}
+			"{{$val}}": true,
+			{{- end}}
+		}
+		if !valid{{$fname | title}}[*c.{{$fname | title}}] {
+			return fmt.Errorf("invalid {{$fname}} %q: must be one of {{$field.Validation.Enum}}", *c.{{$fname | title}})
+		}
 	}
 	{{end}}
 	{{end}}
@@ -622,25 +653,22 @@ func (c *{{$name}}) Validate() error {
 	
 	// Check for port conflicts in {{$name}}
 	{{- if or (eq $name "EtcdConfig") (eq $name "ClickHouseConfig")}}
-	ports := []int{
-		{{- range $fname, $field := $config.Fields}}
-		{{- if $field.Validation}}{{if $field.Validation.Port}}
-		c.{{$fname | title}},
-		{{- end}}{{end}}
-		{{- end}}
-	}
 	seen := make(map[int]bool)
-	for _, port := range ports {
-		if seen[port] {
-			return fmt.Errorf("port conflict: port %d is used multiple times", port)
+	{{- range $fname, $field := $config.Fields}}
+	{{- if $field.Validation}}{{if $field.Validation.Port}}
+	if c.{{$fname | title}} != nil {
+		if seen[*c.{{$fname | title}}] {
+			return fmt.Errorf("port conflict: port %d is used multiple times", *c.{{$fname | title}})
 		}
-		seen[port] = true
+		seen[*c.{{$fname | title}}] = true
 	}
+	{{- end}}{{end}}
+	{{- end}}
 	{{end}}
 	
 	{{if eq $name "EtcdConfig"}}
 	// Validate etcd endpoints requirement
-	if !c.StartEmbedded && len(c.Endpoints) == 0 {
+	if c.StartEmbedded != nil && !*c.StartEmbedded && len(c.Endpoints) == 0 {
 		return fmt.Errorf("etcd endpoints must be set when start_embedded=false")
 	}
 	{{end}}
@@ -671,18 +699,18 @@ func applyEnvironmentVariables(cfg *Config, log *slog.Logger) error {
 	// Apply {{$field.Env}}
 	if val := os.Getenv("{{$field.Env}}"); val != "" {
 		{{if eq $field.Type "string"}}
-		cfg.{{if ne $cname "Config"}}{{$structField}}.{{end}}{{$fname | title}} = val
+		cfg.{{if ne $cname "Config"}}{{$structField}}.{{end}}{{$fname | title}} = &val
 		log.Debug("applied env var", "key", "{{$field.Env}}")
 		{{else if eq $field.Type "int"}}
 		if i, err := strconv.Atoi(val); err == nil {
-			cfg.{{if ne $cname "Config"}}{{$structField}}.{{end}}{{$fname | title}} = i
+			cfg.{{if ne $cname "Config"}}{{$structField}}.{{end}}{{$fname | title}} = &i
 			log.Debug("applied env var", "key", "{{$field.Env}}")
 		} else {
 			log.Warn("invalid {{$field.Env}} value", "value", val, "error", err)
 		}
 		{{else if eq $field.Type "bool"}}
 		if b, err := strconv.ParseBool(val); err == nil {
-			cfg.{{if ne $cname "Config"}}{{$structField}}.{{end}}{{$fname | title}} = b
+			cfg.{{if ne $cname "Config"}}{{$structField}}.{{end}}{{$fname | title}} = &b
 			log.Debug("applied env var", "key", "{{$field.Env}}")
 		} else {
 			log.Warn("invalid {{$field.Env}} value", "value", val, "error", err)

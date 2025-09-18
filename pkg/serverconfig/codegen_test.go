@@ -12,8 +12,8 @@ func TestGeneratedCode(t *testing.T) {
 	// Test that generated code compiles and basic functions work
 	cfg := DefaultConfig()
 
-	if cfg.Mode != "standalone" {
-		t.Errorf("expected default mode to be 'standalone', got %s", cfg.Mode)
+	if cfg.Mode == nil || *cfg.Mode != "standalone" {
+		t.Errorf("expected default mode to be 'standalone', got %v", cfg.Mode)
 	}
 
 	// Test validation
@@ -94,21 +94,21 @@ func TestLoad_ModeDefaultsPrecedence(t *testing.T) {
 		wantClickStart bool
 	}{
 		{
-			name: "standalone mode applies defaults",
-			configContent: `mode = "standalone"`,
-			wantMode:      "standalone",
-			wantEtcdStart: true,
+			name:           "standalone mode applies defaults",
+			configContent:  `mode = "standalone"`,
+			wantMode:       "standalone",
+			wantEtcdStart:  true,
 			wantClickStart: true,
 		},
 		{
-			name: "distributed mode no defaults",
-			configContent: `mode = "distributed"`,
-			wantMode:      "distributed",
-			wantEtcdStart: false,
+			name:           "distributed mode no defaults",
+			configContent:  `mode = "distributed"`,
+			wantMode:       "distributed",
+			wantEtcdStart:  false,
 			wantClickStart: false,
 		},
 		{
-			name: "CLI overrides mode and defaults apply",
+			name:          "CLI overrides mode and defaults apply",
 			configContent: `mode = "distributed"`,
 			flags: func() *CLIFlags {
 				f := NewCLIFlags()
@@ -116,22 +116,22 @@ func TestLoad_ModeDefaultsPrecedence(t *testing.T) {
 				f.Mode = &mode
 				return f
 			}(),
-			wantMode:      "standalone",
-			wantEtcdStart: true,
+			wantMode:       "standalone",
+			wantEtcdStart:  true,
 			wantClickStart: true,
 		},
 		{
-			name: "env overrides mode defaults",
+			name:          "env overrides mode defaults",
 			configContent: `mode = "standalone"`,
 			envVars: map[string]string{
 				"MIREN_ETCD_START_EMBEDDED": "false",
 			},
-			wantMode:      "standalone",
-			wantEtcdStart: false,
+			wantMode:       "standalone",
+			wantEtcdStart:  false,
 			wantClickStart: true, // Only etcd was overridden
 		},
 		{
-			name: "CLI flag overrides mode defaults",
+			name:          "CLI flag overrides mode defaults",
 			configContent: `mode = "standalone"`,
 			flags: func() *CLIFlags {
 				f := NewCLIFlags()
@@ -139,9 +139,9 @@ func TestLoad_ModeDefaultsPrecedence(t *testing.T) {
 				f.EtcdConfigStartEmbedded = &startEtcd
 				return f
 			}(),
-			wantMode:      "standalone",
-			wantEtcdStart: false, // CLI override
-			wantClickStart: true, // Not overridden
+			wantMode:       "standalone",
+			wantEtcdStart:  false, // CLI override
+			wantClickStart: true,  // Not overridden
 		},
 	}
 
@@ -164,14 +164,30 @@ func TestLoad_ModeDefaultsPrecedence(t *testing.T) {
 			}
 
 			// Verify results
-			if cfg.Mode != tt.wantMode {
-				t.Errorf("Mode = %q, want %q", cfg.Mode, tt.wantMode)
+			if cfg.Mode == nil || *cfg.Mode != tt.wantMode {
+				var got string
+				if cfg.Mode != nil {
+					got = *cfg.Mode
+				}
+				t.Errorf("Mode = %q, want %q", got, tt.wantMode)
 			}
-			if cfg.Etcd.StartEmbedded != tt.wantEtcdStart {
-				t.Errorf("Etcd.StartEmbedded = %v, want %v", cfg.Etcd.StartEmbedded, tt.wantEtcdStart)
+
+			// Check Etcd.StartEmbedded
+			var gotEtcd bool
+			if cfg.Etcd.StartEmbedded != nil {
+				gotEtcd = *cfg.Etcd.StartEmbedded
 			}
-			if cfg.Clickhouse.StartEmbedded != tt.wantClickStart {
-				t.Errorf("Clickhouse.StartEmbedded = %v, want %v", cfg.Clickhouse.StartEmbedded, tt.wantClickStart)
+			if gotEtcd != tt.wantEtcdStart {
+				t.Errorf("Etcd.StartEmbedded = %v, want %v", gotEtcd, tt.wantEtcdStart)
+			}
+
+			// Check Clickhouse.StartEmbedded
+			var gotClick bool
+			if cfg.Clickhouse.StartEmbedded != nil {
+				gotClick = *cfg.Clickhouse.StartEmbedded
+			}
+			if gotClick != tt.wantClickStart {
+				t.Errorf("Clickhouse.StartEmbedded = %v, want %v", gotClick, tt.wantClickStart)
 			}
 		})
 	}

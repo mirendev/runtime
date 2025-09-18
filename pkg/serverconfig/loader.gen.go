@@ -22,7 +22,10 @@ func Load(configPath string, flags *CLIFlags, log *slog.Logger) (*Config, error)
 
 	// Determine data path for config discovery with proper precedence
 	// CLI > Env > Defaults
-	dataPathForSearch := cfg.Server.DataPath
+	var dataPathForSearch string
+	if cfg.Server.DataPath != nil {
+		dataPathForSearch = *cfg.Server.DataPath
+	}
 	if flags != nil && flags.ServerConfigDataPath != nil && *flags.ServerConfigDataPath != "" {
 		dataPathForSearch = *flags.ServerConfigDataPath
 	} else if envDataPath := os.Getenv("MIREN_SERVER_DATA_PATH"); envDataPath != "" {
@@ -42,7 +45,10 @@ func Load(configPath string, flags *CLIFlags, log *slog.Logger) (*Config, error)
 
 	// Resolve the effective mode first (CLI > Env > Config > Default)
 	// We need this to apply mode-specific defaults correctly
-	effectiveMode := cfg.Mode
+	var effectiveMode string
+	if cfg.Mode != nil {
+		effectiveMode = *cfg.Mode
+	}
 	if envMode := os.Getenv("MIREN_MODE"); envMode != "" {
 		effectiveMode = envMode
 	}
@@ -51,11 +57,17 @@ func Load(configPath string, flags *CLIFlags, log *slog.Logger) (*Config, error)
 	}
 
 	// Apply mode defaults based on the resolved mode
-	// These can still be overridden by explicit env/CLI values
+	// Only set if not already set (nil check)
 	if effectiveMode == "standalone" {
-		cfg.Etcd.StartEmbedded = true
-		cfg.Clickhouse.StartEmbedded = true
-		cfg.Containerd.StartEmbedded = true
+		if cfg.Etcd.StartEmbedded == nil {
+			cfg.Etcd.StartEmbedded = boolPtr(true)
+		}
+		if cfg.Clickhouse.StartEmbedded == nil {
+			cfg.Clickhouse.StartEmbedded = boolPtr(true)
+		}
+		if cfg.Containerd.StartEmbedded == nil {
+			cfg.Containerd.StartEmbedded = boolPtr(true)
+		}
 	}
 
 	// Apply environment variables (can override mode defaults)
@@ -114,43 +126,43 @@ func loadConfigFile(path string, cfg *Config) error {
 func applyCLIFlags(cfg *Config, flags *CLIFlags) {
 
 	if flags.ClickHouseConfigAddress != nil && *flags.ClickHouseConfigAddress != "" {
-		cfg.Clickhouse.Address = *flags.ClickHouseConfigAddress
+		cfg.Clickhouse.Address = flags.ClickHouseConfigAddress
 	}
 
 	if flags.ClickHouseConfigHttpPort != nil {
-		cfg.Clickhouse.HttpPort = *flags.ClickHouseConfigHttpPort
+		cfg.Clickhouse.HttpPort = flags.ClickHouseConfigHttpPort
 	}
 
 	if flags.ClickHouseConfigInterserverPort != nil {
-		cfg.Clickhouse.InterserverPort = *flags.ClickHouseConfigInterserverPort
+		cfg.Clickhouse.InterserverPort = flags.ClickHouseConfigInterserverPort
 	}
 
 	if flags.ClickHouseConfigNativePort != nil {
-		cfg.Clickhouse.NativePort = *flags.ClickHouseConfigNativePort
+		cfg.Clickhouse.NativePort = flags.ClickHouseConfigNativePort
 	}
 
 	if flags.ClickHouseConfigStartEmbedded != nil {
-		cfg.Clickhouse.StartEmbedded = *flags.ClickHouseConfigStartEmbedded
+		cfg.Clickhouse.StartEmbedded = flags.ClickHouseConfigStartEmbedded
 	}
 
 	if flags.Mode != nil && *flags.Mode != "" {
-		cfg.Mode = *flags.Mode
+		cfg.Mode = flags.Mode
 	}
 
 	if flags.ContainerdConfigBinaryPath != nil && *flags.ContainerdConfigBinaryPath != "" {
-		cfg.Containerd.BinaryPath = *flags.ContainerdConfigBinaryPath
+		cfg.Containerd.BinaryPath = flags.ContainerdConfigBinaryPath
 	}
 
 	if flags.ContainerdConfigSocketPath != nil && *flags.ContainerdConfigSocketPath != "" {
-		cfg.Containerd.SocketPath = *flags.ContainerdConfigSocketPath
+		cfg.Containerd.SocketPath = flags.ContainerdConfigSocketPath
 	}
 
 	if flags.ContainerdConfigStartEmbedded != nil {
-		cfg.Containerd.StartEmbedded = *flags.ContainerdConfigStartEmbedded
+		cfg.Containerd.StartEmbedded = flags.ContainerdConfigStartEmbedded
 	}
 
 	if flags.EtcdConfigClientPort != nil {
-		cfg.Etcd.ClientPort = *flags.EtcdConfigClientPort
+		cfg.Etcd.ClientPort = flags.EtcdConfigClientPort
 	}
 
 	if len(flags.EtcdConfigEndpoints) > 0 {
@@ -158,51 +170,51 @@ func applyCLIFlags(cfg *Config, flags *CLIFlags) {
 	}
 
 	if flags.EtcdConfigHttpClientPort != nil {
-		cfg.Etcd.HttpClientPort = *flags.EtcdConfigHttpClientPort
+		cfg.Etcd.HttpClientPort = flags.EtcdConfigHttpClientPort
 	}
 
 	if flags.EtcdConfigPeerPort != nil {
-		cfg.Etcd.PeerPort = *flags.EtcdConfigPeerPort
+		cfg.Etcd.PeerPort = flags.EtcdConfigPeerPort
 	}
 
 	if flags.EtcdConfigPrefix != nil && *flags.EtcdConfigPrefix != "" {
-		cfg.Etcd.Prefix = *flags.EtcdConfigPrefix
+		cfg.Etcd.Prefix = flags.EtcdConfigPrefix
 	}
 
 	if flags.EtcdConfigStartEmbedded != nil {
-		cfg.Etcd.StartEmbedded = *flags.EtcdConfigStartEmbedded
+		cfg.Etcd.StartEmbedded = flags.EtcdConfigStartEmbedded
 	}
 
 	if flags.ServerConfigAddress != nil && *flags.ServerConfigAddress != "" {
-		cfg.Server.Address = *flags.ServerConfigAddress
+		cfg.Server.Address = flags.ServerConfigAddress
 	}
 
 	if flags.ServerConfigConfigClusterName != nil && *flags.ServerConfigConfigClusterName != "" {
-		cfg.Server.ConfigClusterName = *flags.ServerConfigConfigClusterName
+		cfg.Server.ConfigClusterName = flags.ServerConfigConfigClusterName
 	}
 
 	if flags.ServerConfigDataPath != nil && *flags.ServerConfigDataPath != "" {
-		cfg.Server.DataPath = *flags.ServerConfigDataPath
+		cfg.Server.DataPath = flags.ServerConfigDataPath
 	}
 
 	if flags.ServerConfigHttpRequestTimeout != nil {
-		cfg.Server.HttpRequestTimeout = *flags.ServerConfigHttpRequestTimeout
+		cfg.Server.HttpRequestTimeout = flags.ServerConfigHttpRequestTimeout
 	}
 
 	if flags.ServerConfigReleasePath != nil && *flags.ServerConfigReleasePath != "" {
-		cfg.Server.ReleasePath = *flags.ServerConfigReleasePath
+		cfg.Server.ReleasePath = flags.ServerConfigReleasePath
 	}
 
 	if flags.ServerConfigRunnerAddress != nil && *flags.ServerConfigRunnerAddress != "" {
-		cfg.Server.RunnerAddress = *flags.ServerConfigRunnerAddress
+		cfg.Server.RunnerAddress = flags.ServerConfigRunnerAddress
 	}
 
 	if flags.ServerConfigRunnerId != nil && *flags.ServerConfigRunnerId != "" {
-		cfg.Server.RunnerId = *flags.ServerConfigRunnerId
+		cfg.Server.RunnerId = flags.ServerConfigRunnerId
 	}
 
 	if flags.ServerConfigSkipClientConfig != nil {
-		cfg.Server.SkipClientConfig = *flags.ServerConfigSkipClientConfig
+		cfg.Server.SkipClientConfig = flags.ServerConfigSkipClientConfig
 	}
 
 	if len(flags.TLSConfigAdditionalIps) > 0 {
@@ -214,7 +226,7 @@ func applyCLIFlags(cfg *Config, flags *CLIFlags) {
 	}
 
 	if flags.TLSConfigStandardTls != nil {
-		cfg.Tls.StandardTls = *flags.TLSConfigStandardTls
+		cfg.Tls.StandardTls = flags.TLSConfigStandardTls
 	}
 
 }

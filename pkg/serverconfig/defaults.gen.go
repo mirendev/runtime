@@ -2,13 +2,18 @@
 
 package serverconfig
 
+// Helper functions for creating pointers to literals
+func boolPtr(b bool) *bool    { return &b }
+func intPtr(i int) *int       { return &i }
+func strPtr(s string) *string { return &s }
+
 // DefaultConfig returns the default configuration
 func DefaultConfig() *Config {
 	return &Config{
 		Clickhouse: DefaultClickHouseConfig(),
 		Containerd: DefaultContainerdConfig(),
 		Etcd:       DefaultEtcdConfig(),
-		Mode:       "standalone",
+		Mode:       strPtr("standalone"),
 		Server:     DefaultServerConfig(),
 		Tls:        DefaultTLSConfig(),
 	}
@@ -17,46 +22,46 @@ func DefaultConfig() *Config {
 // DefaultClickHouseConfig returns default ClickHouseConfig
 func DefaultClickHouseConfig() ClickHouseConfig {
 	return ClickHouseConfig{
-		Address:         "",
-		HttpPort:        8223,
-		InterserverPort: 9010,
-		NativePort:      9009,
-		StartEmbedded:   false,
+		Address:         strPtr(""),
+		HttpPort:        intPtr(8223),
+		InterserverPort: intPtr(9010),
+		NativePort:      intPtr(9009),
+		StartEmbedded:   nil,
 	}
 }
 
 // DefaultContainerdConfig returns default ContainerdConfig
 func DefaultContainerdConfig() ContainerdConfig {
 	return ContainerdConfig{
-		BinaryPath:    "containerd",
-		SocketPath:    "",
-		StartEmbedded: false,
+		BinaryPath:    strPtr("containerd"),
+		SocketPath:    strPtr(""),
+		StartEmbedded: nil,
 	}
 }
 
 // DefaultEtcdConfig returns default EtcdConfig
 func DefaultEtcdConfig() EtcdConfig {
 	return EtcdConfig{
-		ClientPort:     12379,
+		ClientPort:     intPtr(12379),
 		Endpoints:      []string{"http://etcd:2379"},
-		HttpClientPort: 12381,
-		PeerPort:       12380,
-		Prefix:         "/miren",
-		StartEmbedded:  false,
+		HttpClientPort: intPtr(12381),
+		PeerPort:       intPtr(12380),
+		Prefix:         strPtr("/miren"),
+		StartEmbedded:  nil,
 	}
 }
 
 // DefaultServerConfig returns default ServerConfig
 func DefaultServerConfig() ServerConfig {
 	return ServerConfig{
-		Address:            "localhost:8443",
-		ConfigClusterName:  "local",
-		DataPath:           "/var/lib/miren",
-		HttpRequestTimeout: 60,
-		ReleasePath:        "",
-		RunnerAddress:      "localhost:8444",
-		RunnerId:           "miren",
-		SkipClientConfig:   false,
+		Address:            strPtr("localhost:8443"),
+		ConfigClusterName:  strPtr("local"),
+		DataPath:           strPtr("/var/lib/miren"),
+		HttpRequestTimeout: intPtr(60),
+		ReleasePath:        strPtr(""),
+		RunnerAddress:      strPtr("localhost:8444"),
+		RunnerId:           strPtr("miren"),
+		SkipClientConfig:   boolPtr(false),
 	}
 }
 
@@ -65,6 +70,6 @@ func DefaultTLSConfig() TLSConfig {
 	return TLSConfig{
 		AdditionalIps:   []string{},
 		AdditionalNames: []string{},
-		StandardTls:     false,
+		StandardTls:     boolPtr(false),
 	}
 }

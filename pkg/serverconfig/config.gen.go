@@ -8,11 +8,11 @@ import (
 
 // ClickHouseConfig ClickHouse configuration
 type ClickHouseConfig struct {
-	Address         string `toml:"address" env:"MIREN_CLICKHOUSE_ADDRESS"`
-	HttpPort        int    `toml:"http_port" env:"MIREN_CLICKHOUSE_HTTP_PORT"`
-	InterserverPort int    `toml:"interserver_port" env:"MIREN_CLICKHOUSE_INTERSERVER_PORT"`
-	NativePort      int    `toml:"native_port" env:"MIREN_CLICKHOUSE_NATIVE_PORT"`
-	StartEmbedded   bool   `toml:"start_embedded" env:"MIREN_CLICKHOUSE_START_EMBEDDED"`
+	Address         *string `toml:"address" env:"MIREN_CLICKHOUSE_ADDRESS"`
+	HttpPort        *int    `toml:"http_port" env:"MIREN_CLICKHOUSE_HTTP_PORT"`
+	InterserverPort *int    `toml:"interserver_port" env:"MIREN_CLICKHOUSE_INTERSERVER_PORT"`
+	NativePort      *int    `toml:"native_port" env:"MIREN_CLICKHOUSE_NATIVE_PORT"`
+	StartEmbedded   *bool   `toml:"start_embedded" env:"MIREN_CLICKHOUSE_START_EMBEDDED"`
 }
 
 // Config Complete server configuration from all sources
@@ -20,48 +20,51 @@ type Config struct {
 	Clickhouse ClickHouseConfig `toml:"clickhouse"`
 	Containerd ContainerdConfig `toml:"containerd"`
 	Etcd       EtcdConfig       `toml:"etcd"`
-	Mode       string           `toml:"mode" env:"MIREN_MODE"`
+	Mode       *string          `toml:"mode" env:"MIREN_MODE"`
 	Server     ServerConfig     `toml:"server"`
 	Tls        TLSConfig        `toml:"tls"`
 }
 
 // ContainerdConfig Containerd configuration
 type ContainerdConfig struct {
-	BinaryPath    string `toml:"binary_path" env:"MIREN_CONTAINERD_BINARY_PATH"`
-	SocketPath    string `toml:"socket_path" env:"MIREN_CONTAINERD_SOCKET_PATH"`
-	StartEmbedded bool   `toml:"start_embedded" env:"MIREN_CONTAINERD_START_EMBEDDED"`
+	BinaryPath    *string `toml:"binary_path" env:"MIREN_CONTAINERD_BINARY_PATH"`
+	SocketPath    *string `toml:"socket_path" env:"MIREN_CONTAINERD_SOCKET_PATH"`
+	StartEmbedded *bool   `toml:"start_embedded" env:"MIREN_CONTAINERD_START_EMBEDDED"`
 }
 
 // EtcdConfig Etcd configuration
 type EtcdConfig struct {
-	ClientPort     int      `toml:"client_port" env:"MIREN_ETCD_CLIENT_PORT"`
+	ClientPort     *int     `toml:"client_port" env:"MIREN_ETCD_CLIENT_PORT"`
 	Endpoints      []string `toml:"endpoints" env:"MIREN_ETCD_ENDPOINTS"`
-	HttpClientPort int      `toml:"http_client_port" env:"MIREN_ETCD_HTTP_CLIENT_PORT"`
-	PeerPort       int      `toml:"peer_port" env:"MIREN_ETCD_PEER_PORT"`
-	Prefix         string   `toml:"prefix" env:"MIREN_ETCD_PREFIX"`
-	StartEmbedded  bool     `toml:"start_embedded" env:"MIREN_ETCD_START_EMBEDDED"`
+	HttpClientPort *int     `toml:"http_client_port" env:"MIREN_ETCD_HTTP_CLIENT_PORT"`
+	PeerPort       *int     `toml:"peer_port" env:"MIREN_ETCD_PEER_PORT"`
+	Prefix         *string  `toml:"prefix" env:"MIREN_ETCD_PREFIX"`
+	StartEmbedded  *bool    `toml:"start_embedded" env:"MIREN_ETCD_START_EMBEDDED"`
 }
 
 // ServerConfig Core server settings
 type ServerConfig struct {
-	Address            string `toml:"address" env:"MIREN_SERVER_ADDRESS"`
-	ConfigClusterName  string `toml:"config_cluster_name" env:"MIREN_SERVER_CONFIG_CLUSTER_NAME"`
-	DataPath           string `toml:"data_path" env:"MIREN_SERVER_DATA_PATH"`
-	HttpRequestTimeout int    `toml:"http_request_timeout" env:"MIREN_SERVER_HTTP_REQUEST_TIMEOUT"`
-	ReleasePath        string `toml:"release_path" env:"MIREN_SERVER_RELEASE_PATH"`
-	RunnerAddress      string `toml:"runner_address" env:"MIREN_SERVER_RUNNER_ADDRESS"`
-	RunnerId           string `toml:"runner_id" env:"MIREN_SERVER_RUNNER_ID"`
-	SkipClientConfig   bool   `toml:"skip_client_config" env:"MIREN_SERVER_SKIP_CLIENT_CONFIG"`
+	Address            *string `toml:"address" env:"MIREN_SERVER_ADDRESS"`
+	ConfigClusterName  *string `toml:"config_cluster_name" env:"MIREN_SERVER_CONFIG_CLUSTER_NAME"`
+	DataPath           *string `toml:"data_path" env:"MIREN_SERVER_DATA_PATH"`
+	HttpRequestTimeout *int    `toml:"http_request_timeout" env:"MIREN_SERVER_HTTP_REQUEST_TIMEOUT"`
+	ReleasePath        *string `toml:"release_path" env:"MIREN_SERVER_RELEASE_PATH"`
+	RunnerAddress      *string `toml:"runner_address" env:"MIREN_SERVER_RUNNER_ADDRESS"`
+	RunnerId           *string `toml:"runner_id" env:"MIREN_SERVER_RUNNER_ID"`
+	SkipClientConfig   *bool   `toml:"skip_client_config" env:"MIREN_SERVER_SKIP_CLIENT_CONFIG"`
 }
 
 // TLSConfig TLS/certificate settings
 type TLSConfig struct {
 	AdditionalIps   []string `toml:"additional_ips" env:"MIREN_TLS_ADDITIONAL_IPS"`
 	AdditionalNames []string `toml:"additional_names" env:"MIREN_TLS_ADDITIONAL_NAMES"`
-	StandardTls     bool     `toml:"standard_tls" env:"MIREN_TLS_STANDARD_TLS"`
+	StandardTls     *bool    `toml:"standard_tls" env:"MIREN_TLS_STANDARD_TLS"`
 }
 
 // HTTPRequestTimeoutDuration returns the timeout as a time.Duration
 func (c *ServerConfig) HTTPRequestTimeoutDuration() time.Duration {
-	return time.Duration(c.HttpRequestTimeout) * time.Second
+	if c.HttpRequestTimeout != nil {
+		return time.Duration(*c.HttpRequestTimeout) * time.Second
+	}
+	return 60 * time.Second // default
 }
