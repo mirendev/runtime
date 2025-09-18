@@ -734,6 +734,19 @@ func writeLocalClusterConfig(ctx *Context, cc *caauth.ClientCertificate, address
 	}
 
 	// Fix file ownership for the created files if running under sudo
+	// Fix main config file
+	mainConfigPath := filepath.Join(homeDir, ".config", "miren", "clientconfig.yaml")
+	if _, err := os.Stat(mainConfigPath); err == nil {
+		// Main config file exists, fix its permissions and ownership
+		if err := os.Chmod(mainConfigPath, 0600); err != nil {
+			ctx.Log.Warn("failed to set main config file permissions", "error", err)
+		}
+		if err := fixOwnershipIfSudo(ctx, mainConfigPath); err != nil {
+			ctx.Log.Warn("failed to fix main config file ownership", "error", err)
+		}
+	}
+
+	// Fix leaf config file
 	localConfigPath := filepath.Join(configDirPath, "50-local.yaml")
 	// Ensure file is user-readable only since it contains client key
 	if err := os.Chmod(localConfigPath, 0600); err != nil {
