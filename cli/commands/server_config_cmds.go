@@ -20,16 +20,17 @@ func ServerConfigGenerate(ctx *Context, opts struct {
 		cfg = serverconfig.DefaultConfig()
 	} else {
 		// Create minimal config
-		cfg = &serverconfig.Config{
-			Mode: opts.Mode,
+		cfg = &serverconfig.Config{}
+		if opts.Mode != "" {
+			cfg.SetMode(opts.Mode)
 		}
 	}
 
 	// Apply mode defaults inline since we're not using Load()
-	if cfg.Mode == "standalone" {
-		cfg.Etcd.StartEmbedded = true
-		cfg.Clickhouse.StartEmbedded = true
-		cfg.Containerd.StartEmbedded = true
+	if cfg.GetMode() == "standalone" {
+		cfg.Etcd.SetStartEmbedded(true)
+		cfg.Clickhouse.SetStartEmbedded(true)
+		cfg.Containerd.SetStartEmbedded(true)
 	}
 
 	// Marshal to TOML

@@ -335,6 +335,34 @@ type {{$name}} struct {
 	{{- end}}
 	{{- end}}
 }
+
+{{- range $fieldName, $field := $config.Fields}}
+{{- if not $field.CLIOnly}}
+{{- if not $field.Nested}}
+{{- if ne $field.Type "[]string"}}
+
+// Get{{$fieldName | title}} returns the value of {{$fieldName | title}} or its zero value if nil
+func (c *{{$name}}) Get{{$fieldName | title}}() {{$field.Type}} {
+	if c.{{$fieldName | title}} != nil {
+		return *c.{{$fieldName | title}}
+	}
+	{{- if eq $field.Type "string"}}
+	return ""
+	{{- else if eq $field.Type "int"}}
+	return 0
+	{{- else if eq $field.Type "bool"}}
+	return false
+	{{- end}}
+}
+
+// Set{{$fieldName | title}} sets the value of {{$fieldName | title}}
+func (c *{{$name}}) Set{{$fieldName | title}}(v {{$field.Type}}) {
+	c.{{$fieldName | title}} = &v
+}
+{{- end}}
+{{- end}}
+{{- end}}
+{{- end}}
 {{end}}
 
 // HTTPRequestTimeoutDuration returns the timeout as a time.Duration

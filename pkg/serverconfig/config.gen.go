@@ -15,6 +15,71 @@ type ClickHouseConfig struct {
 	StartEmbedded   *bool   `toml:"start_embedded" env:"MIREN_CLICKHOUSE_START_EMBEDDED"`
 }
 
+// GetAddress returns the value of Address or its zero value if nil
+func (c *ClickHouseConfig) GetAddress() string {
+	if c.Address != nil {
+		return *c.Address
+	}
+	return ""
+}
+
+// SetAddress sets the value of Address
+func (c *ClickHouseConfig) SetAddress(v string) {
+	c.Address = &v
+}
+
+// GetHttpPort returns the value of HttpPort or its zero value if nil
+func (c *ClickHouseConfig) GetHttpPort() int {
+	if c.HttpPort != nil {
+		return *c.HttpPort
+	}
+	return 0
+}
+
+// SetHttpPort sets the value of HttpPort
+func (c *ClickHouseConfig) SetHttpPort(v int) {
+	c.HttpPort = &v
+}
+
+// GetInterserverPort returns the value of InterserverPort or its zero value if nil
+func (c *ClickHouseConfig) GetInterserverPort() int {
+	if c.InterserverPort != nil {
+		return *c.InterserverPort
+	}
+	return 0
+}
+
+// SetInterserverPort sets the value of InterserverPort
+func (c *ClickHouseConfig) SetInterserverPort(v int) {
+	c.InterserverPort = &v
+}
+
+// GetNativePort returns the value of NativePort or its zero value if nil
+func (c *ClickHouseConfig) GetNativePort() int {
+	if c.NativePort != nil {
+		return *c.NativePort
+	}
+	return 0
+}
+
+// SetNativePort sets the value of NativePort
+func (c *ClickHouseConfig) SetNativePort(v int) {
+	c.NativePort = &v
+}
+
+// GetStartEmbedded returns the value of StartEmbedded or its zero value if nil
+func (c *ClickHouseConfig) GetStartEmbedded() bool {
+	if c.StartEmbedded != nil {
+		return *c.StartEmbedded
+	}
+	return false
+}
+
+// SetStartEmbedded sets the value of StartEmbedded
+func (c *ClickHouseConfig) SetStartEmbedded(v bool) {
+	c.StartEmbedded = &v
+}
+
 // Config Complete server configuration from all sources
 type Config struct {
 	Clickhouse ClickHouseConfig `toml:"clickhouse"`
@@ -25,11 +90,63 @@ type Config struct {
 	Tls        TLSConfig        `toml:"tls"`
 }
 
+// GetMode returns the value of Mode or its zero value if nil
+func (c *Config) GetMode() string {
+	if c.Mode != nil {
+		return *c.Mode
+	}
+	return ""
+}
+
+// SetMode sets the value of Mode
+func (c *Config) SetMode(v string) {
+	c.Mode = &v
+}
+
 // ContainerdConfig Containerd configuration
 type ContainerdConfig struct {
 	BinaryPath    *string `toml:"binary_path" env:"MIREN_CONTAINERD_BINARY_PATH"`
 	SocketPath    *string `toml:"socket_path" env:"MIREN_CONTAINERD_SOCKET_PATH"`
 	StartEmbedded *bool   `toml:"start_embedded" env:"MIREN_CONTAINERD_START_EMBEDDED"`
+}
+
+// GetBinaryPath returns the value of BinaryPath or its zero value if nil
+func (c *ContainerdConfig) GetBinaryPath() string {
+	if c.BinaryPath != nil {
+		return *c.BinaryPath
+	}
+	return ""
+}
+
+// SetBinaryPath sets the value of BinaryPath
+func (c *ContainerdConfig) SetBinaryPath(v string) {
+	c.BinaryPath = &v
+}
+
+// GetSocketPath returns the value of SocketPath or its zero value if nil
+func (c *ContainerdConfig) GetSocketPath() string {
+	if c.SocketPath != nil {
+		return *c.SocketPath
+	}
+	return ""
+}
+
+// SetSocketPath sets the value of SocketPath
+func (c *ContainerdConfig) SetSocketPath(v string) {
+	c.SocketPath = &v
+}
+
+// GetStartEmbedded returns the value of StartEmbedded or its zero value if nil
+func (c *ContainerdConfig) GetStartEmbedded() bool {
+	if c.StartEmbedded != nil {
+		return *c.StartEmbedded
+	}
+	return false
+}
+
+// SetStartEmbedded sets the value of StartEmbedded
+func (c *ContainerdConfig) SetStartEmbedded(v bool) {
+	c.StartEmbedded = &v
 }
 
 // EtcdConfig Etcd configuration
@@ -40,6 +157,71 @@ type EtcdConfig struct {
 	PeerPort       *int     `toml:"peer_port" env:"MIREN_ETCD_PEER_PORT"`
 	Prefix         *string  `toml:"prefix" env:"MIREN_ETCD_PREFIX"`
 	StartEmbedded  *bool    `toml:"start_embedded" env:"MIREN_ETCD_START_EMBEDDED"`
+}
+
+// GetClientPort returns the value of ClientPort or its zero value if nil
+func (c *EtcdConfig) GetClientPort() int {
+	if c.ClientPort != nil {
+		return *c.ClientPort
+	}
+	return 0
+}
+
+// SetClientPort sets the value of ClientPort
+func (c *EtcdConfig) SetClientPort(v int) {
+	c.ClientPort = &v
+}
+
+// GetHttpClientPort returns the value of HttpClientPort or its zero value if nil
+func (c *EtcdConfig) GetHttpClientPort() int {
+	if c.HttpClientPort != nil {
+		return *c.HttpClientPort
+	}
+	return 0
+}
+
+// SetHttpClientPort sets the value of HttpClientPort
+func (c *EtcdConfig) SetHttpClientPort(v int) {
+	c.HttpClientPort = &v
+}
+
+// GetPeerPort returns the value of PeerPort or its zero value if nil
+func (c *EtcdConfig) GetPeerPort() int {
+	if c.PeerPort != nil {
+		return *c.PeerPort
+	}
+	return 0
+}
+
+// SetPeerPort sets the value of PeerPort
+func (c *EtcdConfig) SetPeerPort(v int) {
+	c.PeerPort = &v
+}
+
+// GetPrefix returns the value of Prefix or its zero value if nil
+func (c *EtcdConfig) GetPrefix() string {
+	if c.Prefix != nil {
+		return *c.Prefix
+	}
+	return ""
+}
+
+// SetPrefix sets the value of Prefix
+func (c *EtcdConfig) SetPrefix(v string) {
+	c.Prefix = &v
+}
+
+// GetStartEmbedded returns the value of StartEmbedded or its zero value if nil
+func (c *EtcdConfig) GetStartEmbedded() bool {
+	if c.StartEmbedded != nil {
+		return *c.StartEmbedded
+	}
+	return false
+}
+
+// SetStartEmbedded sets the value of StartEmbedded
+func (c *EtcdConfig) SetStartEmbedded(v bool) {
+	c.StartEmbedded = &v
 }
 
 // ServerConfig Core server settings
@@ -54,11 +236,128 @@ type ServerConfig struct {
 	SkipClientConfig   *bool   `toml:"skip_client_config" env:"MIREN_SERVER_SKIP_CLIENT_CONFIG"`
 }
 
+// GetAddress returns the value of Address or its zero value if nil
+func (c *ServerConfig) GetAddress() string {
+	if c.Address != nil {
+		return *c.Address
+	}
+	return ""
+}
+
+// SetAddress sets the value of Address
+func (c *ServerConfig) SetAddress(v string) {
+	c.Address = &v
+}
+
+// GetConfigClusterName returns the value of ConfigClusterName or its zero value if nil
+func (c *ServerConfig) GetConfigClusterName() string {
+	if c.ConfigClusterName != nil {
+		return *c.ConfigClusterName
+	}
+	return ""
+}
+
+// SetConfigClusterName sets the value of ConfigClusterName
+func (c *ServerConfig) SetConfigClusterName(v string) {
+	c.ConfigClusterName = &v
+}
+
+// GetDataPath returns the value of DataPath or its zero value if nil
+func (c *ServerConfig) GetDataPath() string {
+	if c.DataPath != nil {
+		return *c.DataPath
+	}
+	return ""
+}
+
+// SetDataPath sets the value of DataPath
+func (c *ServerConfig) SetDataPath(v string) {
+	c.DataPath = &v
+}
+
+// GetHttpRequestTimeout returns the value of HttpRequestTimeout or its zero value if nil
+func (c *ServerConfig) GetHttpRequestTimeout() int {
+	if c.HttpRequestTimeout != nil {
+		return *c.HttpRequestTimeout
+	}
+	return 0
+}
+
+// SetHttpRequestTimeout sets the value of HttpRequestTimeout
+func (c *ServerConfig) SetHttpRequestTimeout(v int) {
+	c.HttpRequestTimeout = &v
+}
+
+// GetReleasePath returns the value of ReleasePath or its zero value if nil
+func (c *ServerConfig) GetReleasePath() string {
+	if c.ReleasePath != nil {
+		return *c.ReleasePath
+	}
+	return ""
+}
+
+// SetReleasePath sets the value of ReleasePath
+func (c *ServerConfig) SetReleasePath(v string) {
+	c.ReleasePath = &v
+}
+
+// GetRunnerAddress returns the value of RunnerAddress or its zero value if nil
+func (c *ServerConfig) GetRunnerAddress() string {
+	if c.RunnerAddress != nil {
+		return *c.RunnerAddress
+	}
+	return ""
+}
+
+// SetRunnerAddress sets the value of RunnerAddress
+func (c *ServerConfig) SetRunnerAddress(v string) {
+	c.RunnerAddress = &v
+}
+
+// GetRunnerId returns the value of RunnerId or its zero value if nil
+func (c *ServerConfig) GetRunnerId() string {
+	if c.RunnerId != nil {
+		return *c.RunnerId
+	}
+	return ""
+}
+
+// SetRunnerId sets the value of RunnerId
+func (c *ServerConfig) SetRunnerId(v string) {
+	c.RunnerId = &v
+}
+
+// GetSkipClientConfig returns the value of SkipClientConfig or its zero value if nil
+func (c *ServerConfig) GetSkipClientConfig() bool {
+	if c.SkipClientConfig != nil {
+		return *c.SkipClientConfig
+	}
+	return false
+}
+
+// SetSkipClientConfig sets the value of SkipClientConfig
+func (c *ServerConfig) SetSkipClientConfig(v bool) {
+	c.SkipClientConfig = &v
+}
+
 // TLSConfig TLS/certificate settings
 type TLSConfig struct {
 	AdditionalIps   []string `toml:"additional_ips" env:"MIREN_TLS_ADDITIONAL_IPS"`
 	AdditionalNames []string `toml:"additional_names" env:"MIREN_TLS_ADDITIONAL_NAMES"`
 	StandardTls     *bool    `toml:"standard_tls" env:"MIREN_TLS_STANDARD_TLS"`
+}
+
+// GetStandardTls returns the value of StandardTls or its zero value if nil
+func (c *TLSConfig) GetStandardTls() bool {
+	if c.StandardTls != nil {
+		return *c.StandardTls
+	}
+	return false
+}
+
+// SetStandardTls sets the value of StandardTls
+func (c *TLSConfig) SetStandardTls(v bool) {
+	c.StandardTls = &v
 }
 
 // HTTPRequestTimeoutDuration returns the timeout as a time.Duration
