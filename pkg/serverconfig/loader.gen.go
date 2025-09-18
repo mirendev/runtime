@@ -80,6 +80,16 @@ func Load(configPath string, flags *CLIFlags, log *slog.Logger) (*Config, error)
 		applyCLIFlags(cfg, flags)
 	}
 
+	// Post-process etcd configuration
+	// If embedded etcd is enabled and no endpoints are specified, set default endpoint
+	if cfg.Etcd.StartEmbedded != nil && *cfg.Etcd.StartEmbedded && len(cfg.Etcd.Endpoints) == 0 {
+		port := 12379
+		if cfg.Etcd.ClientPort != nil {
+			port = *cfg.Etcd.ClientPort
+		}
+		cfg.Etcd.Endpoints = []string{fmt.Sprintf("http://127.0.0.1:%d", port)}
+	}
+
 	// Validate
 	if err := cfg.Validate(); err != nil {
 		return nil, fmt.Errorf("configuration validation failed: %w", err)

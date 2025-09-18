@@ -43,7 +43,7 @@ func DefaultContainerdConfig() ContainerdConfig {
 func DefaultEtcdConfig() EtcdConfig {
 	return EtcdConfig{
 		ClientPort:     intPtr(12379),
-		Endpoints:      []string{"http://etcd:2379"},
+		Endpoints:      []string{},
 		HttpClientPort: intPtr(12381),
 		PeerPort:       intPtr(12380),
 		Prefix:         strPtr("/miren"),

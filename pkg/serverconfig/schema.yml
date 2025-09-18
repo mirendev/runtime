@@ -170,7 +170,7 @@ configs:
     fields:
       endpoints:
         type: "[]string"
-        default: ["http://etcd:2379"]
+        default: []
         cli:
           long: etcd
           short: e

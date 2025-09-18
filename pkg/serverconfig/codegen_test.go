@@ -125,6 +125,7 @@ func TestLoad_ModeDefaultsPrecedence(t *testing.T) {
 			configContent: `mode = "standalone"`,
 			envVars: map[string]string{
 				"MIREN_ETCD_START_EMBEDDED": "false",
+				"MIREN_ETCD_ENDPOINTS":      "http://etcd:2379",
 			},
 			wantMode:       "standalone",
 			wantEtcdStart:  false,
@@ -137,6 +138,7 @@ func TestLoad_ModeDefaultsPrecedence(t *testing.T) {
 				f := NewCLIFlags()
 				startEtcd := false
 				f.EtcdConfigStartEmbedded = &startEtcd
+				f.EtcdConfigEndpoints = []string{"http://etcd:2379"}
 				return f
 			}(),
 			wantMode:       "standalone",
@@ -188,6 +190,97 @@ func TestLoad_ModeDefaultsPrecedence(t *testing.T) {
 			}
 			if gotClick != tt.wantClickStart {
 				t.Errorf("Clickhouse.StartEmbedded = %v, want %v", gotClick, tt.wantClickStart)
+			}
+		})
+	}
+}
+
+func TestEtcdEndpointsDefault(t *testing.T) {
+	// Test that etcd endpoints are properly defaulted when embedded etcd is enabled
+	tmpDir := t.TempDir()
+
+	tests := []struct {
+		name          string
+		configContent string
+		flags         *CLIFlags
+		wantEndpoints []string
+		wantEtcdStart *bool
+	}{
+		{
+			name:          "standalone mode with default port",
+			configContent: `mode = "standalone"`,
+			wantEndpoints: []string{"http://127.0.0.1:12379"},
+			wantEtcdStart: boolPtr(true),
+		},
+		{
+			name: "standalone mode with custom port",
+			configContent: `mode = "standalone"
+[etcd]
+client_port = 9999`,
+			wantEndpoints: []string{"http://127.0.0.1:9999"},
+			wantEtcdStart: boolPtr(true),
+		},
+		{
+			name: "explicit endpoints override default",
+			configContent: `mode = "standalone"
+[etcd]
+endpoints = ["http://custom:2379"]`,
+			wantEndpoints: []string{"http://custom:2379"},
+			wantEtcdStart: boolPtr(true),
+		},
+		{
+			name: "distributed mode with no embedded etcd",
+			configContent: `mode = "distributed"
+[etcd]
+endpoints = ["http://etcd1:2379", "http://etcd2:2379"]`,
+			wantEndpoints: []string{"http://etcd1:2379", "http://etcd2:2379"},
+			wantEtcdStart: nil,
+		},
+		{
+			name:          "CLI flag overrides config for endpoints",
+			configContent: `mode = "standalone"`,
+			flags: &CLIFlags{
+				EtcdConfigEndpoints: []string{"http://cli-etcd:2379"},
+			},
+			wantEndpoints: []string{"http://cli-etcd:2379"},
+			wantEtcdStart: boolPtr(true),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Write config file
+			configPath := filepath.Join(tmpDir, tt.name+".toml")
+			if err := os.WriteFile(configPath, []byte(tt.configContent), 0644); err != nil {
+				t.Fatal(err)
+			}
+
+			// Load config
+			cfg, err := Load(configPath, tt.flags, nil)
+			if err != nil {
+				t.Fatalf("Load() error = %v", err)
+			}
+
+			// Check endpoints
+			if len(cfg.Etcd.Endpoints) != len(tt.wantEndpoints) {
+				t.Errorf("Etcd.Endpoints length = %d, want %d", len(cfg.Etcd.Endpoints), len(tt.wantEndpoints))
+			} else {
+				for i, ep := range cfg.Etcd.Endpoints {
+					if ep != tt.wantEndpoints[i] {
+						t.Errorf("Etcd.Endpoints[%d] = %s, want %s", i, ep, tt.wantEndpoints[i])
+					}
+				}
+			}
+
+			// Check StartEmbedded
+			if tt.wantEtcdStart != nil {
+				if cfg.Etcd.StartEmbedded == nil {
+					t.Errorf("Etcd.StartEmbedded is nil, want %v", *tt.wantEtcdStart)
+				} else if *cfg.Etcd.StartEmbedded != *tt.wantEtcdStart {
+					t.Errorf("Etcd.StartEmbedded = %v, want %v", *cfg.Etcd.StartEmbedded, *tt.wantEtcdStart)
+				}
+			} else if cfg.Etcd.StartEmbedded != nil {
+				t.Errorf("Etcd.StartEmbedded = %v, want nil", *cfg.Etcd.StartEmbedded)
 			}
 		})
 	}
