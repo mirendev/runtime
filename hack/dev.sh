@@ -61,12 +61,12 @@ if [[ -n "$USE_TMUX" ]]; then
 
   # Start with two panes with the server running on top and a shell running on the bottom
   tmux split-window -v
-  tmux send-keys -t dev:0.0 "./bin/miren server -vv --mode=distributed" Enter
+  tmux send-keys -t dev:0.0 "./bin/miren server -vv --mode=distributed --etcd=http://etcd:2379" Enter
   tmux select-pane -t dev:0.1
   tmux attach-session -t dev
 else
   # Start the server in the background
-  ./bin/miren server -vv --mode=distributed >/tmp/server.log 2>&1 &
+  ./bin/miren server -vv --mode=distributed --etcd=http://etcd:2379 >/tmp/server.log 2>&1 &
   echo "Server started, logs are in /tmp/server.log"
 
   # Start a shell
