@@ -1,0 +1,140 @@
+# Miren Server Configuration File
+# ================================
+# This file defines the configuration for the Miren server.
+#
+# Configuration Precedence (highest to lowest):
+# 1. CLI flags (operational overrides)
+# 2. Environment variables (container deployments)
+# 3. This config file (baseline configuration)
+# 4. Built-in defaults
+#
+# Environment variables follow the pattern: MIREN_<SECTION>_<KEY>
+# For example: MIREN_SERVER_ADDRESS, MIREN_ETCD_ENDPOINTS
+
+# Server mode: "standalone" or "distributed"
+# In standalone mode, embedded services (etcd, clickhouse, containerd) are automatically started
+mode = "standalone"
+
+[server]
+# Address for the main server to listen on
+address = "localhost:8443"
+
+# Address for the runner service to listen on
+runner_address = "localhost:8444"
+
+# Base directory for server data storage
+data_path = "/var/lib/miren"
+
+# Unique identifier for this runner instance
+runner_id = "miren"
+
+# Path to the release directory containing binaries
+# In standalone mode, this is auto-detected from ~/.miren/release or /var/lib/miren/release
+release_path = ""
+
+# Name of the cluster in client configuration
+config_cluster_name = "local"
+
+# Skip writing client config file to clientconfig.d
+skip_client_config = false
+
+# HTTP request timeout in seconds
+http_request_timeout = 60
+
+[tls]
+# Additional DNS names to include in the server certificate
+# Example: ["miren.local", "*.miren.local"]
+additional_names = []
+
+# Additional IP addresses to include in the server certificate
+# Example: ["10.0.0.1", "192.168.1.100"]
+additional_ips = []
+
+# Expose the HTTP ingress on standard TLS ports (443)
+standard_tls = false
+
+[etcd]
+# Etcd endpoints for distributed mode
+# In standalone mode, these are ignored and local etcd is used
+endpoints = ["http://etcd:2379"]
+
+# Etcd key prefix for all Miren data
+prefix = "/miren"
+
+# Start an embedded etcd server (automatically true in standalone mode)
+start_embedded = false
+
+# Ports for embedded etcd (only used when start_embedded = true)
+client_port = 12379
+peer_port = 12380
+http_client_port = 12381
+
+[clickhouse]
+# Start an embedded ClickHouse server (automatically true in standalone mode)
+# SECURITY NOTE: The embedded ClickHouse instance is intended for local/standalone
+# use only. Do not expose it without proper authentication and TLS. For production
+# deployments, use an external ClickHouse instance with hardened authentication.
+start_embedded = false
+
+# Ports for embedded ClickHouse (only used when start_embedded = true)
+http_port = 8223
+native_port = 9009
+interserver_port = 9010
+
+# External ClickHouse address (only used when start_embedded = false)
+# Example: "clickhouse.example.com:9000"
+address = ""
+
+[containerd]
+# Start an embedded containerd daemon (automatically true in standalone mode)
+start_embedded = false
+
+# Path to containerd binary
+binary_path = "containerd"
+
+# Path to containerd socket
+# If empty, defaults to ${data_path}/containerd/containerd.sock
+socket_path = ""
+
+# ================================
+# Example Configurations
+# ================================
+
+# Minimal Standalone Configuration (most defaults):
+# --------------------------------------------------
+# mode = "standalone"
+# [server]
+# address = "0.0.0.0:8443"
+
+# Distributed Mode with External Services:
+# ----------------------------------------
+# mode = "distributed"
+#
+# [server]
+# address = "0.0.0.0:8443"
+#
+# [etcd]
+# endpoints = ["http://etcd-1:2379", "http://etcd-2:2379", "http://etcd-3:2379"]
+#
+# [clickhouse]
+# address = "clickhouse.prod.example.com:9000"
+#
+# [containerd]
+# socket_path = "/run/containerd/containerd.sock"
+
+# Production with TLS and Custom Networking:
+# ------------------------------------------
+# mode = "distributed"
+#
+# [server]
+# address = "0.0.0.0:8443"
+# data_path = "/data/miren"
+#
+# [tls]
+# additional_names = ["miren.prod.example.com", "*.miren.prod.example.com"]
+# additional_ips = ["10.0.1.10", "10.0.2.10"]
+# standard_tls = true
+#
+# [etcd]
+# endpoints = ["https://etcd-1:2379", "https://etcd-2:2379"]
+# prefix = "/prod/miren"
