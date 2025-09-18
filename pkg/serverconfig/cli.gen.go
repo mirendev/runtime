@@ -6,7 +6,7 @@ package serverconfig
 // All fields are pointers to distinguish between set and unset values
 type CLIFlags struct {
 	ClickHouseConfigAddress         *string  `long:"clickhouse-addr" description:"ClickHouse address (when not using embedded)"`
-	ClickHouseConfigHttpPort        *int     `long:"clickhouse-http-port" description:"ClickHouse HTTP port"`
+	ClickHouseConfigHTTPPort        *int     `long:"clickhouse-http-port" description:"ClickHouse HTTP port"`
 	ClickHouseConfigInterserverPort *int     `long:"clickhouse-interserver-port" description:"ClickHouse inter-server port"`
 	ClickHouseConfigNativePort      *int     `long:"clickhouse-native-port" description:"ClickHouse native port"`
 	ClickHouseConfigStartEmbedded   *bool    `long:"start-clickhouse" description:"Start embedded ClickHouse server"`
@@ -17,21 +17,21 @@ type CLIFlags struct {
 	ContainerdConfigStartEmbedded   *bool    `long:"start-containerd" description:"Start embedded containerd daemon"`
 	EtcdConfigClientPort            *int     `long:"etcd-client-port" description:"Etcd client port"`
 	EtcdConfigEndpoints             []string `long:"etcd" short:"e" description:"Etcd endpoints"`
-	EtcdConfigHttpClientPort        *int     `long:"etcd-http-client-port" description:"Etcd HTTP client port"`
+	EtcdConfigHTTPClientPort        *int     `long:"etcd-http-client-port" description:"Etcd HTTP client port"`
 	EtcdConfigPeerPort              *int     `long:"etcd-peer-port" description:"Etcd peer port"`
 	EtcdConfigPrefix                *string  `long:"etcd-prefix" short:"p" description:"Etcd prefix"`
 	EtcdConfigStartEmbedded         *bool    `long:"start-etcd" description:"Start embedded etcd server"`
 	ServerConfigAddress             *string  `long:"address" short:"a" description:"Address to listen on (host:port). For IPv6 use brackets, e.g. \"[::1]:8443\"."`
 	ServerConfigConfigClusterName   *string  `long:"config-cluster-name" short:"C" description:"Name of the cluster in client config"`
 	ServerConfigDataPath            *string  `long:"data-path" short:"d" description:"Data path"`
-	ServerConfigHttpRequestTimeout  *int     `long:"http-request-timeout" description:"HTTP request timeout in seconds"`
+	ServerConfigHTTPRequestTimeout  *int     `long:"http-request-timeout" description:"HTTP request timeout in seconds"`
 	ServerConfigReleasePath         *string  `long:"release-path" description:"Path to release directory containing binaries"`
 	ServerConfigRunnerAddress       *string  `long:"runner-address" description:"Runner address (host:port). For IPv6 use brackets, e.g. \"[::1]:8444\"."`
-	ServerConfigRunnerId            *string  `long:"runner-id" short:"r" description:"Runner ID"`
+	ServerConfigRunnerID            *string  `long:"runner-id" short:"r" description:"Runner ID"`
 	ServerConfigSkipClientConfig    *bool    `long:"skip-client-config" description:"Skip writing client config file to clientconfig.d"`
-	TLSConfigAdditionalIps          []string `long:"ips" description:"Additional IPs assigned to the server cert"`
+	TLSConfigAdditionalIPs          []string `long:"ips" description:"Additional IPs assigned to the server cert"`
 	TLSConfigAdditionalNames        []string `long:"dns-names" description:"Additional DNS names assigned to the server cert"`
-	TLSConfigStandardTls            *bool    `long:"serve-tls" description:"Expose the http ingress on standard TLS ports"`
+	TLSConfigStandardTLS            *bool    `long:"serve-tls" description:"Expose the http ingress on standard TLS ports"`
 }
 
 // NewCLIFlags creates a new CLIFlags struct for parsing

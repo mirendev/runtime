@@ -230,18 +230,78 @@ func generateEnv(schema *Schema) (string, error) {
 
 // Helper functions
 func toGoName(s string) string {
-	// Convert snake_case or kebab-case to PascalCase
+	// Convert snake_case or kebab-case to PascalCase with proper Go initialisms
 	parts := strings.FieldsFunc(s, func(r rune) bool {
 		return r == '_' || r == '-'
 	})
 
 	for i, part := range parts {
 		if len(part) > 0 {
-			parts[i] = strings.ToUpper(part[:1]) + part[1:]
+			parts[i] = toGoInitialism(part)
 		}
 	}
 
 	return strings.Join(parts, "")
+}
+
+// toGoInitialism converts a word to proper Go naming convention
+// handling common initialisms like HTTP, TLS, IP, ID, etc.
+func toGoInitialism(s string) string {
+	// Common Go initialisms that should be all caps
+	initialisms := map[string]string{
+		"http":  "HTTP",
+		"https": "HTTPS",
+		"tls":   "TLS",
+		"ssl":   "SSL",
+		"ip":    "IP",
+		"ips":   "IPs",
+		"id":    "ID",
+		"ids":   "IDs",
+		"api":   "API",
+		"apis":  "APIs",
+		"url":   "URL",
+		"urls":  "URLs",
+		"uri":   "URI",
+		"uris":  "URIs",
+		"dns":   "DNS",
+		"tcp":   "TCP",
+		"udp":   "UDP",
+		"rpc":   "RPC",
+		"sql":   "SQL",
+		"db":    "DB",
+		"cpu":   "CPU",
+		"ram":   "RAM",
+		"json":  "JSON",
+		"xml":   "XML",
+		"yaml":  "YAML",
+		"toml":  "TOML",
+		"uuid":  "UUID",
+		"uuids": "UUIDs",
+		"vm":    "VM",
+		"vms":   "VMs",
+		"os":    "OS",
+		"io":    "IO",
+		"ui":    "UI",
+		"utf":   "UTF",
+		"utf8":  "UTF8",
+		"ascii": "ASCII",
+		"ttl":   "TTL",
+		"eof":   "EOF",
+		"lhs":   "LHS",
+		"rhs":   "RHS",
+		"etcd":  "Etcd", // Keep etcd as Etcd since it's a product name
+	}
+
+	lower := strings.ToLower(s)
+	if replacement, ok := initialisms[lower]; ok {
+		return replacement
+	}
+
+	// Default: capitalize first letter
+	if len(s) > 0 {
+		return strings.ToUpper(s[:1]) + strings.ToLower(s[1:])
+	}
+	return s
 }
 
 // escapeTagValue escapes a string for use in struct tags
@@ -367,8 +427,8 @@ func (c *{{$name}}) Set{{$fieldName | title}}(v {{$field.Type}}) {
 
 // HTTPRequestTimeoutDuration returns the timeout as a time.Duration
 func (c *ServerConfig) HTTPRequestTimeoutDuration() time.Duration {
-	if c.HttpRequestTimeout != nil {
-		return time.Duration(*c.HttpRequestTimeout) * time.Second
+	if c.HTTPRequestTimeout != nil {
+		return time.Duration(*c.HTTPRequestTimeout) * time.Second
 	}
 	return 60 * time.Second // default
 }

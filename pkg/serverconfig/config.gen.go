@@ -9,7 +9,7 @@ import (
 // ClickHouseConfig ClickHouse configuration
 type ClickHouseConfig struct {
 	Address         *string `toml:"address" env:"MIREN_CLICKHOUSE_ADDRESS"`
-	HttpPort        *int    `toml:"http_port" env:"MIREN_CLICKHOUSE_HTTP_PORT"`
+	HTTPPort        *int    `toml:"http_port" env:"MIREN_CLICKHOUSE_HTTP_PORT"`
 	InterserverPort *int    `toml:"interserver_port" env:"MIREN_CLICKHOUSE_INTERSERVER_PORT"`
 	NativePort      *int    `toml:"native_port" env:"MIREN_CLICKHOUSE_NATIVE_PORT"`
 	StartEmbedded   *bool   `toml:"start_embedded" env:"MIREN_CLICKHOUSE_START_EMBEDDED"`
@@ -28,17 +28,17 @@ func (c *ClickHouseConfig) SetAddress(v string) {
 	c.Address = &v
 }
 
-// GetHttpPort returns the value of HttpPort or its zero value if nil
-func (c *ClickHouseConfig) GetHttpPort() int {
-	if c.HttpPort != nil {
-		return *c.HttpPort
+// GetHTTPPort returns the value of HTTPPort or its zero value if nil
+func (c *ClickHouseConfig) GetHTTPPort() int {
+	if c.HTTPPort != nil {
+		return *c.HTTPPort
 	}
 	return 0
 }
 
-// SetHttpPort sets the value of HttpPort
-func (c *ClickHouseConfig) SetHttpPort(v int) {
-	c.HttpPort = &v
+// SetHTTPPort sets the value of HTTPPort
+func (c *ClickHouseConfig) SetHTTPPort(v int) {
+	c.HTTPPort = &v
 }
 
 // GetInterserverPort returns the value of InterserverPort or its zero value if nil
@@ -87,7 +87,7 @@ type Config struct {
 	Etcd       EtcdConfig       `toml:"etcd"`
 	Mode       *string          `toml:"mode" env:"MIREN_MODE"`
 	Server     ServerConfig     `toml:"server"`
-	Tls        TLSConfig        `toml:"tls"`
+	TLS        TLSConfig        `toml:"tls"`
 }
 
 // GetMode returns the value of Mode or its zero value if nil
@@ -153,7 +153,7 @@ func (c *ContainerdConfig) SetStartEmbedded(v bool) {
 type EtcdConfig struct {
 	ClientPort     *int     `toml:"client_port" env:"MIREN_ETCD_CLIENT_PORT"`
 	Endpoints      []string `toml:"endpoints" env:"MIREN_ETCD_ENDPOINTS"`
-	HttpClientPort *int     `toml:"http_client_port" env:"MIREN_ETCD_HTTP_CLIENT_PORT"`
+	HTTPClientPort *int     `toml:"http_client_port" env:"MIREN_ETCD_HTTP_CLIENT_PORT"`
 	PeerPort       *int     `toml:"peer_port" env:"MIREN_ETCD_PEER_PORT"`
 	Prefix         *string  `toml:"prefix" env:"MIREN_ETCD_PREFIX"`
 	StartEmbedded  *bool    `toml:"start_embedded" env:"MIREN_ETCD_START_EMBEDDED"`
@@ -172,17 +172,17 @@ func (c *EtcdConfig) SetClientPort(v int) {
 	c.ClientPort = &v
 }
 
-// GetHttpClientPort returns the value of HttpClientPort or its zero value if nil
-func (c *EtcdConfig) GetHttpClientPort() int {
-	if c.HttpClientPort != nil {
-		return *c.HttpClientPort
+// GetHTTPClientPort returns the value of HTTPClientPort or its zero value if nil
+func (c *EtcdConfig) GetHTTPClientPort() int {
+	if c.HTTPClientPort != nil {
+		return *c.HTTPClientPort
 	}
 	return 0
 }
 
-// SetHttpClientPort sets the value of HttpClientPort
-func (c *EtcdConfig) SetHttpClientPort(v int) {
-	c.HttpClientPort = &v
+// SetHTTPClientPort sets the value of HTTPClientPort
+func (c *EtcdConfig) SetHTTPClientPort(v int) {
+	c.HTTPClientPort = &v
 }
 
 // GetPeerPort returns the value of PeerPort or its zero value if nil
@@ -229,10 +229,10 @@ type ServerConfig struct {
 	Address            *string `toml:"address" env:"MIREN_SERVER_ADDRESS"`
 	ConfigClusterName  *string `toml:"config_cluster_name" env:"MIREN_SERVER_CONFIG_CLUSTER_NAME"`
 	DataPath           *string `toml:"data_path" env:"MIREN_SERVER_DATA_PATH"`
-	HttpRequestTimeout *int    `toml:"http_request_timeout" env:"MIREN_SERVER_HTTP_REQUEST_TIMEOUT"`
+	HTTPRequestTimeout *int    `toml:"http_request_timeout" env:"MIREN_SERVER_HTTP_REQUEST_TIMEOUT"`
 	ReleasePath        *string `toml:"release_path" env:"MIREN_SERVER_RELEASE_PATH"`
 	RunnerAddress      *string `toml:"runner_address" env:"MIREN_SERVER_RUNNER_ADDRESS"`
-	RunnerId           *string `toml:"runner_id" env:"MIREN_SERVER_RUNNER_ID"`
+	RunnerID           *string `toml:"runner_id" env:"MIREN_SERVER_RUNNER_ID"`
 	SkipClientConfig   *bool   `toml:"skip_client_config" env:"MIREN_SERVER_SKIP_CLIENT_CONFIG"`
 }
 
@@ -275,17 +275,17 @@ func (c *ServerConfig) SetDataPath(v string) {
 	c.DataPath = &v
 }
 
-// GetHttpRequestTimeout returns the value of HttpRequestTimeout or its zero value if nil
-func (c *ServerConfig) GetHttpRequestTimeout() int {
-	if c.HttpRequestTimeout != nil {
-		return *c.HttpRequestTimeout
+// GetHTTPRequestTimeout returns the value of HTTPRequestTimeout or its zero value if nil
+func (c *ServerConfig) GetHTTPRequestTimeout() int {
+	if c.HTTPRequestTimeout != nil {
+		return *c.HTTPRequestTimeout
 	}
 	return 0
 }
 
-// SetHttpRequestTimeout sets the value of HttpRequestTimeout
-func (c *ServerConfig) SetHttpRequestTimeout(v int) {
-	c.HttpRequestTimeout = &v
+// SetHTTPRequestTimeout sets the value of HTTPRequestTimeout
+func (c *ServerConfig) SetHTTPRequestTimeout(v int) {
+	c.HTTPRequestTimeout = &v
 }
 
 // GetReleasePath returns the value of ReleasePath or its zero value if nil
@@ -314,17 +314,17 @@ func (c *ServerConfig) SetRunnerAddress(v string) {
 	c.RunnerAddress = &v
 }
 
-// GetRunnerId returns the value of RunnerId or its zero value if nil
-func (c *ServerConfig) GetRunnerId() string {
-	if c.RunnerId != nil {
-		return *c.RunnerId
+// GetRunnerID returns the value of RunnerID or its zero value if nil
+func (c *ServerConfig) GetRunnerID() string {
+	if c.RunnerID != nil {
+		return *c.RunnerID
 	}
 	return ""
 }
 
-// SetRunnerId sets the value of RunnerId
-func (c *ServerConfig) SetRunnerId(v string) {
-	c.RunnerId = &v
+// SetRunnerID sets the value of RunnerID
+func (c *ServerConfig) SetRunnerID(v string) {
+	c.RunnerID = &v
 }
 
 // GetSkipClientConfig returns the value of SkipClientConfig or its zero value if nil
@@ -342,28 +342,28 @@ func (c *ServerConfig) SetSkipClientConfig(v bool) {
 
 // TLSConfig TLS/certificate settings
 type TLSConfig struct {
-	AdditionalIps   []string `toml:"additional_ips" env:"MIREN_TLS_ADDITIONAL_IPS"`
+	AdditionalIPs   []string `toml:"additional_ips" env:"MIREN_TLS_ADDITIONAL_IPS"`
 	AdditionalNames []string `toml:"additional_names" env:"MIREN_TLS_ADDITIONAL_NAMES"`
-	StandardTls     *bool    `toml:"standard_tls" env:"MIREN_TLS_STANDARD_TLS"`
+	StandardTLS     *bool    `toml:"standard_tls" env:"MIREN_TLS_STANDARD_TLS"`
 }
 
-// GetStandardTls returns the value of StandardTls or its zero value if nil
-func (c *TLSConfig) GetStandardTls() bool {
-	if c.StandardTls != nil {
-		return *c.StandardTls
+// GetStandardTLS returns the value of StandardTLS or its zero value if nil
+func (c *TLSConfig) GetStandardTLS() bool {
+	if c.StandardTLS != nil {
+		return *c.StandardTLS
 	}
 	return false
 }
 
-// SetStandardTls sets the value of StandardTls
-func (c *TLSConfig) SetStandardTls(v bool) {
-	c.StandardTls = &v
+// SetStandardTLS sets the value of StandardTLS
+func (c *TLSConfig) SetStandardTLS(v bool) {
+	c.StandardTLS = &v
 }
 
 // HTTPRequestTimeoutDuration returns the timeout as a time.Duration
 func (c *ServerConfig) HTTPRequestTimeoutDuration() time.Duration {
-	if c.HttpRequestTimeout != nil {
-		return time.Duration(*c.HttpRequestTimeout) * time.Second
+	if c.HTTPRequestTimeout != nil {
+		return time.Duration(*c.HTTPRequestTimeout) * time.Second
 	}
 	return 60 * time.Second // default
 }

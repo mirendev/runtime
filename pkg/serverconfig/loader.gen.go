@@ -139,8 +139,8 @@ func applyCLIFlags(cfg *Config, flags *CLIFlags) {
 		cfg.Clickhouse.Address = flags.ClickHouseConfigAddress
 	}
 
-	if flags.ClickHouseConfigHttpPort != nil {
-		cfg.Clickhouse.HttpPort = flags.ClickHouseConfigHttpPort
+	if flags.ClickHouseConfigHTTPPort != nil {
+		cfg.Clickhouse.HTTPPort = flags.ClickHouseConfigHTTPPort
 	}
 
 	if flags.ClickHouseConfigInterserverPort != nil {
@@ -179,8 +179,8 @@ func applyCLIFlags(cfg *Config, flags *CLIFlags) {
 		cfg.Etcd.Endpoints = flags.EtcdConfigEndpoints
 	}
 
-	if flags.EtcdConfigHttpClientPort != nil {
-		cfg.Etcd.HttpClientPort = flags.EtcdConfigHttpClientPort
+	if flags.EtcdConfigHTTPClientPort != nil {
+		cfg.Etcd.HTTPClientPort = flags.EtcdConfigHTTPClientPort
 	}
 
 	if flags.EtcdConfigPeerPort != nil {
@@ -207,8 +207,8 @@ func applyCLIFlags(cfg *Config, flags *CLIFlags) {
 		cfg.Server.DataPath = flags.ServerConfigDataPath
 	}
 
-	if flags.ServerConfigHttpRequestTimeout != nil {
-		cfg.Server.HttpRequestTimeout = flags.ServerConfigHttpRequestTimeout
+	if flags.ServerConfigHTTPRequestTimeout != nil {
+		cfg.Server.HTTPRequestTimeout = flags.ServerConfigHTTPRequestTimeout
 	}
 
 	if flags.ServerConfigReleasePath != nil && *flags.ServerConfigReleasePath != "" {
@@ -219,24 +219,24 @@ func applyCLIFlags(cfg *Config, flags *CLIFlags) {
 		cfg.Server.RunnerAddress = flags.ServerConfigRunnerAddress
 	}
 
-	if flags.ServerConfigRunnerId != nil && *flags.ServerConfigRunnerId != "" {
-		cfg.Server.RunnerId = flags.ServerConfigRunnerId
+	if flags.ServerConfigRunnerID != nil && *flags.ServerConfigRunnerID != "" {
+		cfg.Server.RunnerID = flags.ServerConfigRunnerID
 	}
 
 	if flags.ServerConfigSkipClientConfig != nil {
 		cfg.Server.SkipClientConfig = flags.ServerConfigSkipClientConfig
 	}
 
-	if len(flags.TLSConfigAdditionalIps) > 0 {
-		cfg.Tls.AdditionalIps = flags.TLSConfigAdditionalIps
+	if len(flags.TLSConfigAdditionalIPs) > 0 {
+		cfg.TLS.AdditionalIPs = flags.TLSConfigAdditionalIPs
 	}
 
 	if len(flags.TLSConfigAdditionalNames) > 0 {
-		cfg.Tls.AdditionalNames = flags.TLSConfigAdditionalNames
+		cfg.TLS.AdditionalNames = flags.TLSConfigAdditionalNames
 	}
 
-	if flags.TLSConfigStandardTls != nil {
-		cfg.Tls.StandardTls = flags.TLSConfigStandardTls
+	if flags.TLSConfigStandardTLS != nil {
+		cfg.TLS.StandardTLS = flags.TLSConfigStandardTLS
 	}
 
 }

@@ -36,7 +36,7 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("server: %w", err)
 	}
 
-	if err := c.Tls.Validate(); err != nil {
+	if err := c.TLS.Validate(); err != nil {
 		return fmt.Errorf("tls: %w", err)
 	}
 	return nil
@@ -46,8 +46,8 @@ func (c *Config) Validate() error {
 func (c *ClickHouseConfig) Validate() error {
 
 	// Validate http_port
-	if c.HttpPort != nil && (*c.HttpPort < 1 || *c.HttpPort > 65535) {
-		return fmt.Errorf("http_port must be between 1 and 65535, got %d", *c.HttpPort)
+	if c.HTTPPort != nil && (*c.HTTPPort < 1 || *c.HTTPPort > 65535) {
+		return fmt.Errorf("http_port must be between 1 and 65535, got %d", *c.HTTPPort)
 	}
 
 	// Validate interserver_port
@@ -62,11 +62,11 @@ func (c *ClickHouseConfig) Validate() error {
 
 	// Check for port conflicts in ClickHouseConfig
 	seen := make(map[int]bool)
-	if c.HttpPort != nil {
-		if seen[*c.HttpPort] {
-			return fmt.Errorf("port conflict: port %d is used multiple times", *c.HttpPort)
+	if c.HTTPPort != nil {
+		if seen[*c.HTTPPort] {
+			return fmt.Errorf("port conflict: port %d is used multiple times", *c.HTTPPort)
 		}
-		seen[*c.HttpPort] = true
+		seen[*c.HTTPPort] = true
 	}
 	if c.InterserverPort != nil {
 		if seen[*c.InterserverPort] {
@@ -101,8 +101,8 @@ func (c *EtcdConfig) Validate() error {
 	}
 
 	// Validate http_client_port
-	if c.HttpClientPort != nil && (*c.HttpClientPort < 1 || *c.HttpClientPort > 65535) {
-		return fmt.Errorf("http_client_port must be between 1 and 65535, got %d", *c.HttpClientPort)
+	if c.HTTPClientPort != nil && (*c.HTTPClientPort < 1 || *c.HTTPClientPort > 65535) {
+		return fmt.Errorf("http_client_port must be between 1 and 65535, got %d", *c.HTTPClientPort)
 	}
 
 	// Validate peer_port
@@ -118,11 +118,11 @@ func (c *EtcdConfig) Validate() error {
 		}
 		seen[*c.ClientPort] = true
 	}
-	if c.HttpClientPort != nil {
-		if seen[*c.HttpClientPort] {
-			return fmt.Errorf("port conflict: port %d is used multiple times", *c.HttpClientPort)
+	if c.HTTPClientPort != nil {
+		if seen[*c.HTTPClientPort] {
+			return fmt.Errorf("port conflict: port %d is used multiple times", *c.HTTPClientPort)
 		}
-		seen[*c.HttpClientPort] = true
+		seen[*c.HTTPClientPort] = true
 	}
 	if c.PeerPort != nil {
 		if seen[*c.PeerPort] {
@@ -150,8 +150,8 @@ func (c *ServerConfig) Validate() error {
 	}
 
 	// Validate http_request_timeout minimum
-	if c.HttpRequestTimeout != nil && *c.HttpRequestTimeout < 1 {
-		return fmt.Errorf("http_request_timeout must be at least 1, got %d", *c.HttpRequestTimeout)
+	if c.HTTPRequestTimeout != nil && *c.HTTPRequestTimeout < 1 {
+		return fmt.Errorf("http_request_timeout must be at least 1, got %d", *c.HTTPRequestTimeout)
 	}
 
 	// Validate runner_address
@@ -170,7 +170,7 @@ func (c *ServerConfig) Validate() error {
 func (c *TLSConfig) Validate() error {
 
 	// Validate additional_ips
-	for _, ip := range c.AdditionalIps {
+	for _, ip := range c.AdditionalIPs {
 		if net.ParseIP(ip) == nil {
 			return fmt.Errorf("invalid IP address %q in additional_ips", ip)
 		}

@@ -15,7 +15,7 @@ func DefaultConfig() *Config {
 		Etcd:       DefaultEtcdConfig(),
 		Mode:       strPtr("standalone"),
 		Server:     DefaultServerConfig(),
-		Tls:        DefaultTLSConfig(),
+		TLS:        DefaultTLSConfig(),
 	}
 }
 
@@ -23,7 +23,7 @@ func DefaultConfig() *Config {
 func DefaultClickHouseConfig() ClickHouseConfig {
 	return ClickHouseConfig{
 		Address:         strPtr(""),
-		HttpPort:        intPtr(8223),
+		HTTPPort:        intPtr(8223),
 		InterserverPort: intPtr(9010),
 		NativePort:      intPtr(9009),
 		StartEmbedded:   nil,
@@ -44,7 +44,7 @@ func DefaultEtcdConfig() EtcdConfig {
 	return EtcdConfig{
 		ClientPort:     intPtr(12379),
 		Endpoints:      []string{},
-		HttpClientPort: intPtr(12381),
+		HTTPClientPort: intPtr(12381),
 		PeerPort:       intPtr(12380),
 		Prefix:         strPtr("/miren"),
 		StartEmbedded:  nil,
@@ -57,10 +57,10 @@ func DefaultServerConfig() ServerConfig {
 		Address:            strPtr("localhost:8443"),
 		ConfigClusterName:  strPtr("local"),
 		DataPath:           strPtr("/var/lib/miren"),
-		HttpRequestTimeout: intPtr(60),
+		HTTPRequestTimeout: intPtr(60),
 		ReleasePath:        strPtr(""),
 		RunnerAddress:      strPtr("localhost:8444"),
-		RunnerId:           strPtr("miren"),
+		RunnerID:           strPtr("miren"),
 		SkipClientConfig:   boolPtr(false),
 	}
 }
@@ -68,8 +68,8 @@ func DefaultServerConfig() ServerConfig {
 // DefaultTLSConfig returns default TLSConfig
 func DefaultTLSConfig() TLSConfig {
 	return TLSConfig{
-		AdditionalIps:   []string{},
+		AdditionalIPs:   []string{},
 		AdditionalNames: []string{},
-		StandardTls:     boolPtr(false),
+		StandardTLS:     boolPtr(false),
 	}
 }

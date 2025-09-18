@@ -216,7 +216,7 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 		etcdConfig := etcd.EtcdConfig{
 			Name:           "miren-etcd",
 			ClientPort:     cfg.Etcd.GetClientPort(),
-			HTTPClientPort: cfg.Etcd.GetHttpClientPort(),
+			HTTPClientPort: cfg.Etcd.GetHTTPClientPort(),
 			PeerPort:       cfg.Etcd.GetPeerPort(),
 			ClusterState:   "new",
 		}
@@ -245,7 +245,7 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 	// Start embedded ClickHouse server if requested
 	if cfg.Clickhouse.GetStartEmbedded() {
 		ctx.Log.Info("starting embedded clickhouse server",
-			"http-port", cfg.Clickhouse.GetHttpPort(),
+			"http-port", cfg.Clickhouse.GetHTTPPort(),
 			"native-port", cfg.Clickhouse.GetNativePort(),
 			"interserver-port", cfg.Clickhouse.GetInterserverPort())
 
@@ -260,7 +260,7 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 		clickhouseComponent := clickhouse.NewClickHouseComponent(ctx.Log, cc, "miren", cfg.Server.GetDataPath())
 
 		clickhouseConfig := clickhouse.ClickHouseConfig{
-			HTTPPort:        cfg.Clickhouse.GetHttpPort(),
+			HTTPPort:        cfg.Clickhouse.GetHTTPPort(),
 			NativePort:      cfg.Clickhouse.GetNativePort(),
 			InterServerPort: cfg.Clickhouse.GetInterserverPort(),
 			User:            "default",
@@ -334,13 +334,13 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 			// Skip IPv6 link-local addresses
 			ip := net.ParseIP(addr.IP)
 			if ip != nil && !ip.IsLinkLocalUnicast() {
-				cfg.Tls.AdditionalIps = append(cfg.Tls.AdditionalIps, addr.IP)
+				cfg.TLS.AdditionalIPs = append(cfg.TLS.AdditionalIPs, addr.IP)
 			}
 		}
 
 		// Add public IP if available
 		if discovery.PublicIP != "" {
-			cfg.Tls.AdditionalIps = append(cfg.Tls.AdditionalIps, discovery.PublicIP)
+			cfg.TLS.AdditionalIPs = append(cfg.TLS.AdditionalIPs, discovery.PublicIP)
 		}
 
 		ctx.Log.Info("discovered IPs", "local-addresses", len(discovery.Addresses), "public", discovery.PublicIP)
@@ -348,7 +348,7 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 
 	var additionalIps []net.IP
 	seen := make(map[string]struct{})
-	for _, ip := range cfg.Tls.AdditionalIps {
+	for _, ip := range cfg.TLS.AdditionalIPs {
 		addr := net.ParseIP(ip)
 		if addr == nil {
 			ctx.Log.Error("failed to parse additional IP", "ip", ip)
@@ -411,7 +411,7 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 		EtcdEndpoints:   cfg.Etcd.Endpoints,
 		Prefix:          cfg.Etcd.GetPrefix(),
 		DataPath:        cfg.Server.GetDataPath(),
-		AdditionalNames: cfg.Tls.AdditionalNames,
+		AdditionalNames: cfg.TLS.AdditionalNames,
 		AdditionalIPs:   additionalIps,
 		Resolver:        res,
 		TempDir:         os.TempDir(),
@@ -547,7 +547,7 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 	}
 
 	r := runner.NewRunner(ctx.Log, ctx.Server, runner.RunnerConfig{
-		Id:            cfg.Server.GetRunnerId(),
+		Id:            cfg.Server.GetRunnerID(),
 		ListenAddress: cfg.Server.GetRunnerAddress(),
 		Workers:       runner.DefaulWorkers,
 		Config:        rcfg,
@@ -581,7 +581,7 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 		}
 	}()
 
-	if cfg.Tls.GetStandardTls() {
+	if cfg.TLS.GetStandardTLS() {
 		if err := autotls.ServeTLS(sub, ctx.Log, cfg.Server.GetDataPath(), hs); err != nil {
 			ctx.Log.Error("failed to enable standard TLS", "error", err)
 		}
@@ -632,7 +632,7 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 		}
 	}
 
-	ctx.UILog.Info("Miren server started", "address", cfg.Server.GetAddress(), "etcd_endpoints", cfg.Etcd.Endpoints, "etcd_prefix", cfg.Etcd.GetPrefix(), "runner_id", cfg.Server.GetRunnerId())
+	ctx.UILog.Info("Miren server started", "address", cfg.Server.GetAddress(), "etcd_endpoints", cfg.Etcd.Endpoints, "etcd_prefix", cfg.Etcd.GetPrefix(), "runner_id", cfg.Server.GetRunnerID())
 
 	ctx.Info("Miren server started successfully! You can now connect to the cluster using `-C %s`\n", cfg.Server.GetConfigClusterName())
 	ctx.Info("For example: cd my-app && miren deploy -C %s", cfg.Server.GetConfigClusterName())

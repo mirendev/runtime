@@ -24,7 +24,7 @@ func applyEnvironmentVariables(cfg *Config, log *slog.Logger) error {
 	if val := os.Getenv("MIREN_CLICKHOUSE_HTTP_PORT"); val != "" {
 
 		if i, err := strconv.Atoi(val); err == nil {
-			cfg.Clickhouse.HttpPort = &i
+			cfg.Clickhouse.HTTPPort = &i
 			log.Debug("applied env var", "key", "MIREN_CLICKHOUSE_HTTP_PORT")
 		} else {
 			log.Warn("invalid MIREN_CLICKHOUSE_HTTP_PORT value", "value", val, "error", err)
@@ -143,7 +143,7 @@ func applyEnvironmentVariables(cfg *Config, log *slog.Logger) error {
 	if val := os.Getenv("MIREN_ETCD_HTTP_CLIENT_PORT"); val != "" {
 
 		if i, err := strconv.Atoi(val); err == nil {
-			cfg.Etcd.HttpClientPort = &i
+			cfg.Etcd.HTTPClientPort = &i
 			log.Debug("applied env var", "key", "MIREN_ETCD_HTTP_CLIENT_PORT")
 		} else {
 			log.Warn("invalid MIREN_ETCD_HTTP_CLIENT_PORT value", "value", val, "error", err)
@@ -211,7 +211,7 @@ func applyEnvironmentVariables(cfg *Config, log *slog.Logger) error {
 	if val := os.Getenv("MIREN_SERVER_HTTP_REQUEST_TIMEOUT"); val != "" {
 
 		if i, err := strconv.Atoi(val); err == nil {
-			cfg.Server.HttpRequestTimeout = &i
+			cfg.Server.HTTPRequestTimeout = &i
 			log.Debug("applied env var", "key", "MIREN_SERVER_HTTP_REQUEST_TIMEOUT")
 		} else {
 			log.Warn("invalid MIREN_SERVER_HTTP_REQUEST_TIMEOUT value", "value", val, "error", err)
@@ -238,7 +238,7 @@ func applyEnvironmentVariables(cfg *Config, log *slog.Logger) error {
 	// Apply MIREN_SERVER_RUNNER_ID
 	if val := os.Getenv("MIREN_SERVER_RUNNER_ID"); val != "" {
 
-		cfg.Server.RunnerId = &val
+		cfg.Server.RunnerID = &val
 		log.Debug("applied env var", "key", "MIREN_SERVER_RUNNER_ID")
 
 	}
@@ -273,7 +273,7 @@ func applyEnvironmentVariables(cfg *Config, log *slog.Logger) error {
 			seen[p] = struct{}{}
 			cleaned = append(cleaned, p)
 		}
-		cfg.Tls.AdditionalIps = cleaned
+		cfg.TLS.AdditionalIPs = cleaned
 		log.Debug("applied env var", "key", "MIREN_TLS_ADDITIONAL_IPS", "count", len(cleaned))
 
 	}
@@ -296,7 +296,7 @@ func applyEnvironmentVariables(cfg *Config, log *slog.Logger) error {
 			seen[p] = struct{}{}
 			cleaned = append(cleaned, p)
 		}
-		cfg.Tls.AdditionalNames = cleaned
+		cfg.TLS.AdditionalNames = cleaned
 		log.Debug("applied env var", "key", "MIREN_TLS_ADDITIONAL_NAMES", "count", len(cleaned))
 
 	}
@@ -305,7 +305,7 @@ func applyEnvironmentVariables(cfg *Config, log *slog.Logger) error {
 	if val := os.Getenv("MIREN_TLS_STANDARD_TLS"); val != "" {
 
 		if b, err := strconv.ParseBool(val); err == nil {
-			cfg.Tls.StandardTls = &b
+			cfg.TLS.StandardTLS = &b
 			log.Debug("applied env var", "key", "MIREN_TLS_STANDARD_TLS")
 		} else {
 			log.Warn("invalid MIREN_TLS_STANDARD_TLS value", "value", val, "error", err)
