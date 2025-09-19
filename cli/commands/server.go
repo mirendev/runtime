@@ -406,8 +406,16 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 		ctx.Log.Info("no cluster registration found")
 	}
 
+	srvaddr := cfg.Server.GetAddress()
+	if _, _, err := net.SplitHostPort(srvaddr); err != nil {
+		// ok, add the default port.
+		srvaddr = net.JoinHostPort(srvaddr, strconv.Itoa(8443))
+		ctx.Log.Debug("no port specified in server address, using default 8443", "address", srvaddr)
+	}
+
+	// Create coordinator
 	co := coordinate.NewCoordinator(ctx.Log, coordinate.CoordinatorConfig{
-		Address:         cfg.Server.GetAddress(),
+		Address:         srvaddr,
 		EtcdEndpoints:   cfg.Etcd.Endpoints,
 		Prefix:          cfg.Etcd.GetPrefix(),
 		DataPath:        cfg.Server.GetDataPath(),
