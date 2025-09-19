@@ -531,13 +531,6 @@ func (a *localActivator) removeSandbox(sandboxID string) {
 
 // watchSandboxes monitors sandbox status changes and removes non-RUNNING sandboxes
 func (a *localActivator) watchSandboxes(ctx context.Context) {
-	const (
-		// Entity operation types from entityserver
-		opCreate = 1
-		opUpdate = 2
-		opDelete = 3
-	)
-
 	for {
 		select {
 		case <-ctx.Done():
@@ -550,30 +543,34 @@ func (a *localActivator) watchSandboxes(ctx context.Context) {
 
 		// Watch all sandbox entities for status changes
 		_, err := a.eac.WatchIndex(ctx, entity.Ref(entity.EntityKind, compute_v1alpha.KindSandbox), stream.Callback(func(op *entityserver_v1alpha.EntityOp) error {
-			// Check if entity was deleted
-			if op.Operation() == opDelete {
+			switch op.OperationType() {
+			case entityserver_v1alpha.EntityOperationDelete:
 				if op.EntityId() != "" {
 					a.log.Debug("sandbox entity deleted", "id", op.EntityId())
 					a.removeSandbox(op.EntityId())
 				}
 				return nil
-			}
 
-			// For add/update operations, check the entity status
-			if op.HasEntity() {
-				var sb compute_v1alpha.Sandbox
-				sb.Decode(op.Entity().Entity())
+			case entityserver_v1alpha.EntityOperationCreate, entityserver_v1alpha.EntityOperationUpdate:
+				if op.HasEntity() {
+					var sb compute_v1alpha.Sandbox
+					sb.Decode(op.Entity().Entity())
 
-				// Remove sandbox if it's not in RUNNING state
-				if sb.Status != compute_v1alpha.RUNNING {
-					a.log.Debug("sandbox status changed to non-RUNNING",
-						"sandbox_id", sb.ID,
-						"status", sb.Status)
-					a.removeSandbox(sb.ID.String())
+					// Remove sandbox if it's not in RUNNING state
+					if sb.Status != compute_v1alpha.RUNNING {
+						a.log.Debug("sandbox status changed to non-RUNNING",
+							"sandbox_id", sb.ID,
+							"status", sb.Status)
+						a.removeSandbox(sb.ID.String())
+					}
 				}
-			}
+				return nil
 
-			return nil
+			default:
+				// Unknown operation type, log for debugging
+				a.log.Warn("unknown entity operation type", "operation", op.Operation())
+				return nil
+			}
 		}))
 
 		if err != nil {
