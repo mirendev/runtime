@@ -146,18 +146,18 @@ func (a *localActivator) ensureFixedInstances(ctx context.Context) {
 			a.pendingCreations[key]++
 
 			// Create sandbox in background to avoid holding lock
-			go func() {
-				_, err := a.activateApp(ctx, vs.ver, key.pool, key.service)
+			go func(k verKey, v *core_v1alpha.AppVersion) {
+				_, err := a.activateApp(ctx, v, k.pool, k.service)
 
 				// Update pending count after creation attempt
 				a.mu.Lock()
-				a.pendingCreations[key]--
+				a.pendingCreations[k]--
 				a.mu.Unlock()
 
 				if err != nil {
-					a.log.Error("failed to start fixed instance", "app", vs.ver.App, "service", key.service, "error", err)
+					a.log.Error("failed to start fixed instance", "app", v.App, "service", k.service, "error", err)
 				}
-			}()
+			}(key, vs.ver)
 		}
 	}
 }
@@ -833,9 +833,15 @@ func (a *localActivator) recoverSandboxes(ctx context.Context) error {
 }
 
 func (a *localActivator) retireUnusedSandboxes() {
-	a.mu.Lock()
-	defer a.mu.Unlock()
+	// Build list of sandboxes to retire while holding lock
+	type retireInfo struct {
+		sandboxID string
+		appName   string
+		service   string
+	}
+	toStop := make([]retireInfo, 0, 8)
 
+	a.mu.Lock()
 	for key, vs := range a.versions {
 		// Get service-specific concurrency config
 		svcConcurrency := a.getServiceConcurrency(vs.ver, key.service)
@@ -860,30 +866,40 @@ func (a *localActivator) retireUnusedSandboxes() {
 				a.log.Debug("retiring unused sandbox", "app", vs.ver.App, "sandbox", sb.sandbox.ID, "service", key.service, "idle_time", time.Since(sb.lastRenewal))
 
 				if sb.sandbox.Status != compute_v1alpha.RUNNING {
+					// Already stopped, just remove from tracking
 					continue
 				}
 
+				// Mark as stopped in our tracking
 				sb.sandbox.Status = compute_v1alpha.STOPPED
 
-				var rpcE entityserver_v1alpha.Entity
-
-				rpcE.SetId(sb.sandbox.ID.String())
-
-				rpcE.SetAttrs(entity.Attrs(
-					(&compute_v1alpha.Sandbox{
-						Status: compute_v1alpha.STOPPED,
-					}).Encode,
-				))
-
-				_, err := a.eac.Put(context.Background(), &rpcE)
-				if err != nil {
-					a.log.Error("failed to retire sandbox", "error", err)
-				}
+				// Defer RPC outside the lock
+				toStop = append(toStop, retireInfo{
+					sandboxID: sb.sandbox.ID.String(),
+					appName:   vs.ver.App.String(),
+					service:   key.service,
+				})
 			} else {
 				newSandboxes = append(newSandboxes, sb)
 			}
 		}
 
 		vs.sandboxes = newSandboxes
+	}
+	a.mu.Unlock()
+
+	// Perform remote updates without holding the mutex
+	for _, info := range toStop {
+		var rpcE entityserver_v1alpha.Entity
+		rpcE.SetId(info.sandboxID)
+		rpcE.SetAttrs(entity.Attrs(
+			(&compute_v1alpha.Sandbox{
+				Status: compute_v1alpha.STOPPED,
+			}).Encode,
+		))
+
+		if _, err := a.eac.Put(context.Background(), &rpcE); err != nil {
+			a.log.Error("failed to retire sandbox", "sandbox", info.sandboxID, "app", info.appName, "service", info.service, "error", err)
+		}
 	}
 }
