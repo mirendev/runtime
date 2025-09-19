@@ -163,13 +163,24 @@ func (a *localActivator) ensureFixedInstances(ctx context.Context) {
 }
 
 func (a *localActivator) AcquireLease(ctx context.Context, ver *core_v1alpha.AppVersion, pool, service string) (*Lease, error) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
 	key := verKey{ver.ID.String(), pool, service}
-	vs, ok := a.versions[key]
 
 	// Get service concurrency config
 	svcConcurrency := a.getServiceConcurrency(ver, service)
+
+	// Check if we have an existing version entry
+	a.mu.Lock()
+	_, ok := a.versions[key]
+	trackedKeys := len(a.versions)
+	// Copy keys for debug logging outside the lock
+	var debugKeys []verKey
+	if !ok {
+		debugKeys = make([]verKey, 0, len(a.versions))
+		for k := range a.versions {
+			debugKeys = append(debugKeys, k)
+		}
+	}
+	a.mu.Unlock()
 
 	if !ok {
 		a.log.Info("version key not found in tracked versions",
@@ -179,21 +190,34 @@ func (a *localActivator) AcquireLease(ctx context.Context, ver *core_v1alpha.App
 			"pool", pool,
 			"service", service,
 			"key", key,
-			"tracked_keys", len(a.versions))
+			"tracked_keys", trackedKeys)
 		// Log what keys we ARE tracking for debugging
-		for k := range a.versions {
+		for _, k := range debugKeys {
 			a.log.Debug("tracked key", "key", k)
 		}
 		return a.activateApp(ctx, ver, pool, service)
 	}
 
-	if len(vs.sandboxes) == 0 {
+	// Need to reacquire lock to safely check sandboxes
+	a.mu.Lock()
+	// Double-check vs still exists after reacquiring lock
+	vs, ok := a.versions[key]
+	if !ok {
+		a.mu.Unlock()
+		// Version entry was removed while we didn't have the lock, need to activate
+		return a.activateApp(ctx, ver, pool, service)
+	}
+
+	sandboxCount := len(vs.sandboxes)
+
+	if sandboxCount == 0 {
+		a.mu.Unlock()
 		a.log.Info("no sandboxes available in version slot, creating new sandbox",
 			"app", ver.App,
 			"version", ver.Version,
 			"key", key)
 	} else {
-		a.log.Debug("reusing existing sandboxes", "app", ver.App, "version", ver.Version, "sandboxes", len(vs.sandboxes))
+		a.log.Debug("reusing existing sandboxes", "app", ver.App, "version", ver.Version, "sandboxes", sandboxCount)
 
 		// For fixed mode, just round-robin across available sandboxes
 		if svcConcurrency.Mode == "fixed" {
@@ -203,8 +227,7 @@ func (a *localActivator) AcquireLease(ctx context.Context, ver *core_v1alpha.App
 				s := vs.sandboxes[(start+i)%len(vs.sandboxes)]
 				if s.sandbox.Status == compute_v1alpha.RUNNING {
 					s.lastRenewal = time.Now()
-					a.log.Debug("reusing fixed mode sandbox", "app", ver.App, "version", ver.Version, "sandbox", s.sandbox.ID, "service", service)
-					return &Lease{
+					lease := &Lease{
 						ver:     ver,
 						sandbox: s.sandbox,
 						ent:     s.ent,
@@ -212,10 +235,14 @@ func (a *localActivator) AcquireLease(ctx context.Context, ver *core_v1alpha.App
 						service: service,
 						Size:    1, // Fixed mode doesn't use slots
 						URL:     s.url,
-					}, nil
+					}
+					a.mu.Unlock()
+					a.log.Debug("reusing fixed mode sandbox", "app", ver.App, "version", ver.Version, "sandbox", s.sandbox.ID, "service", service)
+					return lease, nil
 				}
 			}
 			// No running sandboxes found, will create new one below
+			a.mu.Unlock()
 			a.log.Info("no running sandboxes for fixed mode service, creating new sandbox", "app", ver.App, "version", ver.Version, "service", service)
 		} else {
 			// Auto mode: use slot-based allocation
@@ -225,9 +252,7 @@ func (a *localActivator) AcquireLease(ctx context.Context, ver *core_v1alpha.App
 				if s.inuseSlots+vs.leaseSlots < s.maxSlots {
 					s.inuseSlots += vs.leaseSlots
 					s.lastRenewal = time.Now()
-
-					a.log.Debug("reusing sandbox", "app", ver.App, "version", ver.Version, "sandbox", s.sandbox.ID, "in-use", s.inuseSlots)
-					return &Lease{
+					lease := &Lease{
 						ver:     ver,
 						sandbox: s.sandbox,
 						ent:     s.ent,
@@ -235,9 +260,13 @@ func (a *localActivator) AcquireLease(ctx context.Context, ver *core_v1alpha.App
 						service: service,
 						Size:    vs.leaseSlots,
 						URL:     s.url,
-					}, nil
+					}
+					a.mu.Unlock()
+					a.log.Debug("reusing sandbox", "app", ver.App, "version", ver.Version, "sandbox", s.sandbox.ID, "in-use", s.inuseSlots)
+					return lease, nil
 				}
 			}
+			a.mu.Unlock()
 			a.log.Info("no space in existing sandboxes, creating new sandbox for app", "app", ver.App, "version", ver.Version)
 		}
 	}
@@ -431,6 +460,8 @@ func (a *localActivator) activateApp(ctx context.Context, ver *core_v1alpha.AppV
 
 	key := verKey{ver.ID.String(), pool, service}
 
+	// Acquire mutex only for modifying shared state
+	a.mu.Lock()
 	vs, ok := a.versions[key]
 	if !ok {
 		vs = &verSandboxes{
@@ -442,6 +473,7 @@ func (a *localActivator) activateApp(ctx context.Context, ver *core_v1alpha.AppV
 	}
 
 	vs.sandboxes = append(vs.sandboxes, lsb)
+	a.mu.Unlock()
 
 	return lease, nil
 }
@@ -770,8 +802,9 @@ func (a *localActivator) recoverSandboxes(ctx context.Context) error {
 			inuseSlots:  0, // Start with no slots in use
 		}
 
-		// Add to versions map
+		// Add to versions map - need mutex protection
 		key := verKey{appVer.ID.String(), pool, service}
+		a.mu.Lock()
 		vs, ok := a.versions[key]
 		if !ok {
 			vs = &verSandboxes{
@@ -782,6 +815,7 @@ func (a *localActivator) recoverSandboxes(ctx context.Context) error {
 			a.versions[key] = vs
 		}
 		vs.sandboxes = append(vs.sandboxes, lsb)
+		a.mu.Unlock()
 		recoveredCount++
 
 		a.log.Info("recovered sandbox", "app", appVer.App, "version", appVer.Version, "sandbox", sb.ID, "pool", pool, "service", service, "url", addr)
