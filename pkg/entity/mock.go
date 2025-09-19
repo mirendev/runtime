@@ -35,6 +35,20 @@ func (m *MockStore) GetEntity(ctx context.Context, id Id) (*Entity, error) {
 	return nil, ErrNotFound
 }
 
+// AddEntity is a thread-safe helper to directly add an entity to the mock store
+func (m *MockStore) AddEntity(id Id, entity *Entity) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.Entities[id] = entity
+}
+
+// RemoveEntity is a thread-safe helper to directly remove an entity from the mock store
+func (m *MockStore) RemoveEntity(id Id) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.Entities, id)
+}
+
 func (m *MockStore) GetEntities(ctx context.Context, ids []Id) ([]*Entity, error) {
 	if m.GetEntitiesFunc != nil {
 		return m.GetEntitiesFunc(ctx, ids)
@@ -194,14 +208,13 @@ func (m *MockStore) CreateSession(ctx context.Context, id int64) ([]byte, error)
 
 // ListSessionEntities
 func (m *MockStore) ListSessionEntities(ctx context.Context, id []byte) ([]Id, error) {
-	return nil, nil
-
 	// For simplicity, return all entities as a list
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	var ids []Id
-	for id := range m.Entities {
-		ids = append(ids, id)
+	for eid := range m.Entities {
+		ids = append(ids, eid)
 	}
-
 	return ids, nil
 }
 

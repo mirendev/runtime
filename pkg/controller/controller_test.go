@@ -98,13 +98,13 @@ func TestReconcileController_EventProcessing(t *testing.T) {
 		1, // single worker
 	)
 
-	store.Entities[entity.Id("test/entity1")] = &entity.Entity{
+	store.AddEntity(entity.Id("test/entity1"), &entity.Entity{
 		ID: entity.Id("test/entity1"),
 		Attrs: entity.Attrs(
 			entity.Ident, "test/entity1",
 			entity.Type, "test/type",
 		),
-	}
+	})
 
 	// Setup mock watch handler
 	store.OnWatchIndex = func(ctx context.Context, attr entity.Attr) (clientv3.WatchChan, error) {
@@ -217,13 +217,13 @@ func TestReconcileController_Resync(t *testing.T) {
 	testIndex := entity.Any(entity.Type, "test/type")
 
 	// Setup test entities
-	store.Entities[entity.Id("test/entity1")] = &entity.Entity{
+	store.AddEntity(entity.Id("test/entity1"), &entity.Entity{
 		ID: entity.Id("test/entity1"),
 		Attrs: entity.Attrs(
 			entity.Ident, "test/entity1",
 			entity.Type, "test/type",
 		),
-	}
+	})
 
 	resyncCalls := 0
 	eventsChan := make(chan Event, 10)
@@ -498,20 +498,20 @@ func TestReconcileController_WatchReconnect(t *testing.T) {
 	}
 
 	// Add test entity to store
-	store.Entities[entity.Id("test/entity1")] = &entity.Entity{
+	store.AddEntity(entity.Id("test/entity1"), &entity.Entity{
 		ID: entity.Id("test/entity1"),
 		Attrs: entity.Attrs(
 			entity.Ident, "test/entity1",
 			entity.Type, "test/type",
 		),
-	}
-	store.Entities[entity.Id("test/entity2")] = &entity.Entity{
+	})
+	store.AddEntity(entity.Id("test/entity2"), &entity.Entity{
 		ID: entity.Id("test/entity2"),
 		Attrs: entity.Attrs(
 			entity.Ident, "test/entity2",
 			entity.Type, "test/type",
 		),
-	}
+	})
 
 	// Start controller
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -578,13 +578,13 @@ func TestReconcileController_QueueOverflow(t *testing.T) {
 	for i := range numEntities {
 		id := fmt.Sprintf("test/entity%d", i)
 		entityIds = append(entityIds, entity.Id(id))
-		store.Entities[entity.Id(id)] = &entity.Entity{
+		store.AddEntity(entity.Id(id), &entity.Entity{
 			ID: entity.Id(id),
 			Attrs: entity.Attrs(
 				entity.Ident, id,
 				entity.Type, "test/type",
 			),
-		}
+		})
 	}
 
 	// Track resync completion attempts
