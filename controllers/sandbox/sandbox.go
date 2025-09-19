@@ -175,6 +175,10 @@ func (c *SandboxController) waitForPort(ctx context.Context, id string, port int
 func (c *SandboxController) reconcileSandboxesOnBoot(ctx context.Context) error {
 	c.Log.Info("reconciling sandboxes on boot")
 
+	// Create a context with timeout for the entire reconciliation
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancel()
+
 	// List all sandboxes marked as RUNNING
 	resp, err := c.EAC.List(ctx, entity.Ref(entity.EntityKind, compute.KindSandbox))
 	if err != nil {
@@ -182,6 +186,7 @@ func (c *SandboxController) reconcileSandboxesOnBoot(ctx context.Context) error 
 	}
 
 	var unhealthySandboxes []entity.Id
+	runningCount := 0
 
 	for _, e := range resp.Values() {
 		var sb compute.Sandbox
@@ -191,6 +196,7 @@ func (c *SandboxController) reconcileSandboxesOnBoot(ctx context.Context) error 
 		if sb.Status != compute.RUNNING {
 			continue
 		}
+		runningCount++
 
 		// Check pause container health
 		pauseID := c.pauseContainerId(sb.ID)
@@ -234,7 +240,7 @@ func (c *SandboxController) reconcileSandboxesOnBoot(ctx context.Context) error 
 	}
 
 	c.Log.Info("boot reconciliation complete",
-		"total_running_sandboxes", len(resp.Values()),
+		"total_running_sandboxes", runningCount,
 		"unhealthy_sandboxes", len(unhealthySandboxes))
 
 	return nil
@@ -244,10 +250,14 @@ func (c *SandboxController) reconcileSandboxesOnBoot(ctx context.Context) error 
 func (c *SandboxController) cleanupOrphanedContainers(ctx context.Context) error {
 	c.Log.Info("cleaning up orphaned containers")
 
+	// Create a context with timeout for the entire cleanup
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancel()
+
 	ctx = namespaces.WithNamespace(ctx, c.Namespace)
 
 	// List all containers in the namespace
-	containers, err := c.CC.Containers(ctx)
+	containerList, err := c.CC.Containers(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to list containers: %w", err)
 	}
@@ -278,7 +288,7 @@ func (c *SandboxController) cleanupOrphanedContainers(ctx context.Context) error
 
 	// Clean up orphaned containers
 	orphanCount := 0
-	for _, container := range containers {
+	for _, container := range containerList {
 		containerID := container.ID()
 
 		// Skip if this is a valid container
@@ -319,7 +329,7 @@ func (c *SandboxController) cleanupOrphanedContainers(ctx context.Context) error
 	}
 
 	c.Log.Info("orphaned container cleanup complete",
-		"total_containers", len(containers),
+		"total_containers", len(containerList),
 		"orphaned_containers", orphanCount)
 
 	return nil

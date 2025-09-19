@@ -531,38 +531,66 @@ func (a *localActivator) removeSandbox(sandboxID string) {
 
 // watchSandboxes monitors sandbox status changes and removes non-RUNNING sandboxes
 func (a *localActivator) watchSandboxes(ctx context.Context) {
-	a.log.Info("starting sandbox watch")
+	const (
+		// Entity operation types from entityserver
+		opCreate = 1
+		opUpdate = 2
+		opDelete = 3
+	)
 
-	// Watch all sandbox entities for status changes
-	_, err := a.eac.WatchIndex(ctx, entity.Ref(entity.EntityKind, compute_v1alpha.KindSandbox), stream.Callback(func(op *entityserver_v1alpha.EntityOp) error {
-		// Check if entity was deleted (Operation == 3)
-		if op.Operation() == 3 {
-			if op.EntityId() != "" {
-				a.log.Debug("sandbox entity deleted", "id", op.EntityId())
-				a.removeSandbox(op.EntityId())
+	for {
+		select {
+		case <-ctx.Done():
+			a.log.Info("sandbox watch context cancelled")
+			return
+		default:
+		}
+
+		a.log.Info("starting sandbox watch")
+
+		// Watch all sandbox entities for status changes
+		_, err := a.eac.WatchIndex(ctx, entity.Ref(entity.EntityKind, compute_v1alpha.KindSandbox), stream.Callback(func(op *entityserver_v1alpha.EntityOp) error {
+			// Check if entity was deleted
+			if op.Operation() == opDelete {
+				if op.EntityId() != "" {
+					a.log.Debug("sandbox entity deleted", "id", op.EntityId())
+					a.removeSandbox(op.EntityId())
+				}
+				return nil
 			}
+
+			// For add/update operations, check the entity status
+			if op.HasEntity() {
+				var sb compute_v1alpha.Sandbox
+				sb.Decode(op.Entity().Entity())
+
+				// Remove sandbox if it's not in RUNNING state
+				if sb.Status != compute_v1alpha.RUNNING {
+					a.log.Debug("sandbox status changed to non-RUNNING",
+						"sandbox_id", sb.ID,
+						"status", sb.Status)
+					a.removeSandbox(sb.ID.String())
+				}
+			}
+
 			return nil
-		}
+		}))
 
-		// For add/update operations, check the entity status
-		if op.HasEntity() {
-			var sb compute_v1alpha.Sandbox
-			sb.Decode(op.Entity().Entity())
-
-			// Remove sandbox if it's not in RUNNING state
-			if sb.Status != compute_v1alpha.RUNNING {
-				a.log.Debug("sandbox status changed to non-RUNNING",
-					"sandbox_id", sb.ID,
-					"status", sb.Status)
-				a.removeSandbox(sb.ID.String())
+		if err != nil {
+			if ctx.Err() != nil {
+				// Context was cancelled, exit gracefully
+				a.log.Info("sandbox watch stopped due to context cancellation")
+				return
+			}
+			a.log.Error("sandbox watch ended with error, will restart", "error", err)
+			// Wait a bit before restarting to avoid tight loop on persistent errors
+			select {
+			case <-time.After(5 * time.Second):
+				// Continue to restart the watch
+			case <-ctx.Done():
+				return
 			}
 		}
-
-		return nil
-	}))
-
-	if err != nil {
-		a.log.Error("sandbox watch ended with error", "error", err)
 	}
 }
 
