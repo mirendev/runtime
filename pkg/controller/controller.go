@@ -142,12 +142,12 @@ func (c *ReconcileController) Start(top context.Context) error {
 				}
 				var eventType EventType
 
-				switch op.Operation() {
-				case 1:
+				switch op.OperationType() {
+				case entityserver_v1alpha.EntityOperationCreate:
 					eventType = EventAdded
-				case 2:
+				case entityserver_v1alpha.EntityOperationUpdate:
 					eventType = EventUpdated
-				case 3:
+				case entityserver_v1alpha.EntityOperationDelete:
 					eventType = EventDeleted
 				default:
 					return nil
