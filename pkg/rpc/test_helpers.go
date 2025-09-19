@@ -2,12 +2,14 @@ package rpc
 
 import (
 	"context"
+	"sync"
 
 	"github.com/fxamacker/cbor/v2"
 	"miren.dev/runtime/pkg/idgen"
 )
 
 type localEnv struct {
+	mu   sync.RWMutex
 	caps map[OID]*Interface
 }
 
@@ -19,7 +21,9 @@ type localCall struct {
 
 func (l *localCall) NewCapability(i *Interface) *Capability {
 	oid := OID(idgen.Gen("lcap"))
+	l.mu.Lock()
 	l.caps[oid] = i
+	l.mu.Unlock()
 
 	return &Capability{
 		OID: oid,
@@ -28,7 +32,9 @@ func (l *localCall) NewCapability(i *Interface) *Capability {
 
 func (l *localClient) NewCapability(i *Interface) *Capability {
 	oid := OID(idgen.Gen("lcap"))
+	l.mu.Lock()
 	l.caps[oid] = i
+	l.mu.Unlock()
 
 	return &Capability{
 		OID: oid,
@@ -36,23 +42,31 @@ func (l *localClient) NewCapability(i *Interface) *Capability {
 }
 
 func (l *localCall) NewClient(capa *Capability) *NetworkClient {
+	l.mu.RLock()
+	iface := l.caps[capa.OID]
+	l.mu.RUnlock()
+
 	return &NetworkClient{
 		oid: capa.OID,
 
 		localClient: &localClient{
 			localEnv: l.localEnv,
-			iface:    l.caps[capa.OID],
+			iface:    iface,
 		},
 	}
 }
 
 func (l *localClient) NewClient(capa *Capability) *NetworkClient {
+	l.mu.RLock()
+	iface := l.caps[capa.OID]
+	l.mu.RUnlock()
+
 	return &NetworkClient{
 		oid: capa.OID,
 
 		localClient: &localClient{
 			localEnv: l.localEnv,
-			iface:    l.caps[capa.OID],
+			iface:    iface,
 		},
 	}
 }
