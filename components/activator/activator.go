@@ -2,6 +2,7 @@ package activator
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -890,6 +891,10 @@ func (a *localActivator) retireUnusedSandboxes() {
 
 	// Perform remote updates without holding the mutex
 	for _, info := range toStop {
+		// Create a bounded context for each RPC call
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
 		var rpcE entityserver_v1alpha.Entity
 		rpcE.SetId(info.sandboxID)
 		rpcE.SetAttrs(entity.Attrs(
@@ -898,8 +903,15 @@ func (a *localActivator) retireUnusedSandboxes() {
 			}).Encode,
 		))
 
-		if _, err := a.eac.Put(context.Background(), &rpcE); err != nil {
-			a.log.Error("failed to retire sandbox", "sandbox", info.sandboxID, "app", info.appName, "service", info.service, "error", err)
+		if _, err := a.eac.Put(ctx, &rpcE); err != nil {
+			// Log with appropriate detail for timeout/cancellation vs other errors
+			if errors.Is(err, context.DeadlineExceeded) {
+				a.log.Error("timeout retiring sandbox", "sandbox", info.sandboxID, "app", info.appName, "service", info.service, "timeout", "5s")
+			} else if errors.Is(err, context.Canceled) {
+				a.log.Error("cancelled retiring sandbox", "sandbox", info.sandboxID, "app", info.appName, "service", info.service)
+			} else {
+				a.log.Error("failed to retire sandbox", "sandbox", info.sandboxID, "app", info.appName, "service", info.service, "error", err)
+			}
 		}
 	}
 }
