@@ -21,6 +21,12 @@ dev-tmux:
 dev:
 	dagger call -q dev --dir=.
 
+dev-standalone:
+	dagger call -q dev-standalone --dir=.
+
+dev-tmux-standalone:
+	dagger call -q dev-tmux-standalone --dir=.
+
 services:
 	dagger call debug --dir=.
 

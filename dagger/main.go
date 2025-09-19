@@ -271,3 +271,44 @@ func (m *Runtime) Debug(
 
 	return w.Stdout(ctx)
 }
+
+// DevStandalone runs the miren server in standalone mode with development environment
+func (m *Runtime) DevStandalone(
+	ctx context.Context,
+	dir *dagger.Directory,
+) (string, error) {
+	w := m.BuildEnv(dir).
+		WithDirectory("/src", dir).
+		WithWorkdir("/src").
+		WithMountedCache("/data", dag.CacheVolume("containerd")).
+		// Mount a persistent cache volume for the default data directory
+		WithMountedCache("/var/lib/miren", dag.CacheVolume("miren-data"))
+
+	w = w.Terminal(dagger.ContainerTerminalOpts{
+		InsecureRootCapabilities: true,
+		Cmd:                      []string{"/bin/bash", "/src/hack/dev-standalone.sh"},
+	})
+
+	return w.Stdout(ctx)
+}
+
+// DevTmuxStandalone runs the miren server in standalone mode with tmux splits
+func (m *Runtime) DevTmuxStandalone(
+	ctx context.Context,
+	dir *dagger.Directory,
+) (string, error) {
+	w := m.BuildEnv(dir).
+		WithDirectory("/src", dir).
+		WithWorkdir("/src").
+		WithMountedCache("/data", dag.CacheVolume("containerd")).
+		// Mount a persistent cache volume for the default data directory
+		WithMountedCache("/var/lib/miren", dag.CacheVolume("miren-data")).
+		WithEnvVariable("USE_TMUX", "1")
+
+	w = w.Terminal(dagger.ContainerTerminalOpts{
+		InsecureRootCapabilities: true,
+		Cmd:                      []string{"/bin/bash", "/src/hack/dev-standalone.sh"},
+	})
+
+	return w.Stdout(ctx)
+}
