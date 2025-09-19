@@ -490,7 +490,86 @@ func (a *localActivator) RenewLease(ctx context.Context, lease *Lease) (*Lease, 
 	return lease, nil
 }
 
+// removeSandbox removes a sandbox from tracking across all version keys
+func (a *localActivator) removeSandbox(sandboxID string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	removedCount := 0
+	for key, vs := range a.versions {
+		originalCount := len(vs.sandboxes)
+		newSandboxes := make([]*sandbox, 0, originalCount)
+
+		for _, sb := range vs.sandboxes {
+			if sb.sandbox.ID.String() != sandboxID {
+				newSandboxes = append(newSandboxes, sb)
+			} else {
+				removedCount++
+				a.log.Info("removing sandbox from tracking",
+					"sandbox_id", sandboxID,
+					"app", vs.ver.App,
+					"version", vs.ver.Version,
+					"pool", key.pool,
+					"service", key.service,
+					"status", sb.sandbox.Status)
+			}
+		}
+
+		vs.sandboxes = newSandboxes
+
+		// Clean up empty version entries
+		if len(vs.sandboxes) == 0 && a.pendingCreations[key] == 0 {
+			delete(a.versions, key)
+			a.log.Debug("removed empty version entry", "key", key)
+		}
+	}
+
+	if removedCount > 0 {
+		a.log.Info("sandbox removed from tracking", "sandbox_id", sandboxID, "removed_from_keys", removedCount)
+	}
+}
+
+// watchSandboxes monitors sandbox status changes and removes non-RUNNING sandboxes
+func (a *localActivator) watchSandboxes(ctx context.Context) {
+	a.log.Info("starting sandbox watch")
+
+	// Watch all sandbox entities for status changes
+	_, err := a.eac.WatchIndex(ctx, entity.Ref(entity.EntityKind, compute_v1alpha.KindSandbox), stream.Callback(func(op *entityserver_v1alpha.EntityOp) error {
+		// Check if entity was deleted (Operation == 3)
+		if op.Operation() == 3 {
+			if op.EntityId() != "" {
+				a.log.Debug("sandbox entity deleted", "id", op.EntityId())
+				a.removeSandbox(op.EntityId())
+			}
+			return nil
+		}
+
+		// For add/update operations, check the entity status
+		if op.HasEntity() {
+			var sb compute_v1alpha.Sandbox
+			sb.Decode(op.Entity().Entity())
+
+			// Remove sandbox if it's not in RUNNING state
+			if sb.Status != compute_v1alpha.RUNNING {
+				a.log.Debug("sandbox status changed to non-RUNNING",
+					"sandbox_id", sb.ID,
+					"status", sb.Status)
+				a.removeSandbox(sb.ID.String())
+			}
+		}
+
+		return nil
+	}))
+
+	if err != nil {
+		a.log.Error("sandbox watch ended with error", "error", err)
+	}
+}
+
 func (a *localActivator) InBackground(ctx context.Context) {
+	// Start watching sandboxes for status changes
+	go a.watchSandboxes(ctx)
+
 	retireTicker := time.NewTicker(20 * time.Second)
 	defer retireTicker.Stop()
 
