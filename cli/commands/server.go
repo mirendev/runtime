@@ -92,10 +92,38 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 					cfg.Server.SetReleasePath(systemReleasePath)
 					ctx.Log.Info("using system release path", "path", systemReleasePath)
 				} else {
-					if userReleasePath == "" {
-						return fmt.Errorf("no release directory found (tried %s)", systemReleasePath)
+					// No release directory found, try to download one
+					ctx.Log.Info("no release directory found, downloading release")
+
+					// Determine where to download based on permissions
+					downloadGlobal := false
+					downloadPath := ""
+
+					// Check if we can write to /var/lib/miren
+					if err := os.MkdirAll("/var/lib/miren", 0755); err == nil {
+						// We have permission to write to system path
+						downloadGlobal = true
+						downloadPath = systemReleasePath
+					} else if userReleasePath != "" {
+						// Use user's home directory
+						downloadPath = userReleasePath
+					} else {
+						return fmt.Errorf("unable to determine download location for release")
 					}
-					return fmt.Errorf("no release directory found (tried %s and %s)", userReleasePath, systemReleasePath)
+
+					// Download the release
+					if err := PerformDownloadRelease(ctx, DownloadReleaseOptions{
+						Branch: "main",
+						Global: downloadGlobal,
+						Force:  false,
+						Output: downloadPath,
+					}); err != nil {
+						return fmt.Errorf("failed to download release: %w", err)
+					}
+
+					// Set the release path to the downloaded location
+					cfg.Server.SetReleasePath(downloadPath)
+					ctx.Log.Info("using downloaded release", "path", downloadPath)
 				}
 			}
 

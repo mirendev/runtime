@@ -17,12 +17,16 @@ import (
 	"time"
 )
 
-func DownloadRelease(ctx *Context, opts struct {
-	Branch string `short:"b" long:"branch" description:"Branch name to download" default:"main"`
-	Global bool   `short:"g" long:"global" description:"Install globally to /var/lib/miren/release"`
-	Force  bool   `short:"f" long:"force" description:"Force download even if release directory exists"`
-	Output string `short:"o" long:"output" description:"Custom output directory"`
-}) error {
+// DownloadReleaseOptions contains options for downloading a release
+type DownloadReleaseOptions struct {
+	Branch string
+	Global bool
+	Force  bool
+	Output string
+}
+
+// PerformDownloadRelease performs the actual download with the given options
+func PerformDownloadRelease(ctx *Context, opts DownloadReleaseOptions) error {
 	// Determine the target architecture
 	arch := runtime.GOARCH
 
@@ -83,12 +87,14 @@ func DownloadRelease(ctx *Context, opts struct {
 	ctx.Log.Info("downloading checksum", "url", shaURL)
 	shaPath := filepath.Join(tempDir, "release.tar.gz.sha256")
 	if err := downloadFile(shaPath, shaURL); err != nil {
+		os.RemoveAll(releaseDir)
 		return fmt.Errorf("failed to download checksum: %w", err)
 	}
 
 	// Read expected checksum
 	shaData, err := os.ReadFile(shaPath)
 	if err != nil {
+		os.RemoveAll(releaseDir)
 		return fmt.Errorf("failed to read checksum file: %w", err)
 	}
 	expectedSum := strings.TrimSpace(strings.Split(string(shaData), " ")[0])
@@ -98,6 +104,7 @@ func DownloadRelease(ctx *Context, opts struct {
 	tarPath := filepath.Join(tempDir, "release.tar.gz")
 	fmt.Printf("Downloading from %s\n", baseURL)
 	if err := downloadFile(tarPath, baseURL); err != nil {
+		os.RemoveAll(releaseDir)
 		return fmt.Errorf("failed to download release: %w", err)
 	}
 
@@ -105,16 +112,19 @@ func DownloadRelease(ctx *Context, opts struct {
 	ctx.Log.Info("verifying checksum")
 	actualSum, err := calculateSHA256(tarPath)
 	if err != nil {
+		os.RemoveAll(releaseDir)
 		return fmt.Errorf("failed to calculate checksum: %w", err)
 	}
 
 	if actualSum != expectedSum {
+		os.RemoveAll(releaseDir)
 		return fmt.Errorf("checksum mismatch: expected %s, got %s", expectedSum, actualSum)
 	}
 
 	// Extract tarball
 	ctx.Log.Info("extracting release", "destination", releaseDir)
 	if err := extractTarGz(tarPath, releaseDir); err != nil {
+		os.RemoveAll(releaseDir)
 		return fmt.Errorf("failed to extract release: %w", err)
 	}
 
@@ -128,6 +138,21 @@ func DownloadRelease(ctx *Context, opts struct {
 
 	ctx.Log.Info("release downloaded successfully", "path", releaseDir)
 	return nil
+}
+
+// DownloadRelease is the CLI command handler for downloading a release
+func DownloadRelease(ctx *Context, opts struct {
+	Branch string `short:"b" long:"branch" description:"Branch name to download" default:"main"`
+	Global bool   `short:"g" long:"global" description:"Install globally to /var/lib/miren/release"`
+	Force  bool   `short:"f" long:"force" description:"Force download even if release directory exists"`
+	Output string `short:"o" long:"output" description:"Custom output directory"`
+}) error {
+	return PerformDownloadRelease(ctx, DownloadReleaseOptions{
+		Branch: opts.Branch,
+		Global: opts.Global,
+		Force:  opts.Force,
+		Output: opts.Output,
+	})
 }
 
 func downloadFile(filepath string, url string) error {
