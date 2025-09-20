@@ -14,6 +14,7 @@ import (
 	"os/user"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	containerd "github.com/containerd/containerd/v2/client"
@@ -407,10 +408,12 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 	}
 
 	srvaddr := cfg.Server.GetAddress()
-	if _, _, err := net.SplitHostPort(srvaddr); err != nil {
-		// ok, add the default port.
-		srvaddr = net.JoinHostPort(srvaddr, strconv.Itoa(8443))
-		ctx.Log.Debug("no port specified in server address, using default 8443", "address", srvaddr)
+	if !strings.HasPrefix(srvaddr, ":") {
+		if _, _, err := net.SplitHostPort(srvaddr); err != nil {
+			// ok, add the default port.
+			srvaddr = net.JoinHostPort(srvaddr, strconv.Itoa(8443))
+			ctx.Log.Debug("no port specified in server address, using default 8443", "address", srvaddr)
+		}
 	}
 
 	// Create coordinator
@@ -634,7 +637,12 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 
 	// Write local cluster config to clientconfig.d
 	if cfg.GetMode() == "standalone" && !cfg.Server.GetSkipClientConfig() {
-		if err := writeLocalClusterConfig(ctx, cert, cfg.Server.GetAddress(), cfg.Server.GetConfigClusterName()); err != nil {
+		srvaddr := cfg.Server.GetAddress()
+		if strings.HasPrefix(srvaddr, ":") {
+			srvaddr = "127.0.0.1" + srvaddr
+		}
+		ctx.Log.Info("writing local cluster config", "cluster-name", cfg.Server.GetConfigClusterName(), "server-address", srvaddr)
+		if err := writeLocalClusterConfig(ctx, cert, srvaddr, cfg.Server.GetConfigClusterName()); err != nil {
 			ctx.Log.Warn("failed to write local cluster config", "error", err)
 			// Don't fail the whole command if we can't write the config
 		}

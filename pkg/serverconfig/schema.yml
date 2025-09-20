@@ -53,7 +53,7 @@ configs:
     fields:
       address:
         type: string
-        default: localhost:8443
+        default: :8443
         cli:
           long: address
           short: a
