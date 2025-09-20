@@ -70,6 +70,6 @@ func DefaultTLSConfig() TLSConfig {
 	return TLSConfig{
 		AdditionalIPs:   []string{},
 		AdditionalNames: []string{},
-		StandardTLS:     boolPtr(false),
+		StandardTLS:     boolPtr(true),
 	}
 }

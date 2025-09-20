@@ -158,7 +158,7 @@ configs:
 
       standard_tls:
         type: bool
-        default: false
+        default: true
         cli:
           long: serve-tls
           description: Expose the http ingress on standard TLS ports
