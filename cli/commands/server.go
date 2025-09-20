@@ -737,7 +737,7 @@ func writeLocalClusterConfig(ctx *Context, cc *caauth.ClientCertificate, address
 	mainConfig.SetLeafConfig("50-local", leafConfigData)
 
 	// Save the main config (which will also save the leaf config)
-	if err := mainConfig.Save(); err != nil {
+	if err := mainConfig.SaveTo(filepath.Join(filepath.Dir(configDirPath), "clientconfig.yaml")); err != nil {
 		return fmt.Errorf("failed to save local cluster config: %w", err)
 	}
 
