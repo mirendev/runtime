@@ -100,15 +100,29 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 					downloadPath := ""
 
 					// Check if we can write to /var/lib/miren
+					// First ensure the directory exists
 					if err := os.MkdirAll("/var/lib/miren", 0755); err == nil {
-						// We have permission to write to system path
-						downloadGlobal = true
-						downloadPath = systemReleasePath
+						// Test actual writability by creating a temp file
+						tempFile := fmt.Sprintf("/var/lib/miren/.test_%d_%d", os.Getpid(), time.Now().UnixNano())
+						f, err := os.OpenFile(tempFile, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0644)
+						if err == nil {
+							// Successfully created temp file, clean it up
+							f.Close()
+							os.Remove(tempFile)
+							// We have write permission to system path
+							downloadGlobal = true
+							downloadPath = systemReleasePath
+						} else if userReleasePath != "" {
+							// Can't write to system path, fall back to user path
+							downloadPath = userReleasePath
+						} else {
+							return fmt.Errorf("unable to write to /var/lib/miren and no user path available: %w", err)
+						}
 					} else if userReleasePath != "" {
-						// Use user's home directory
+						// Can't create system directory, use user's home directory
 						downloadPath = userReleasePath
 					} else {
-						return fmt.Errorf("unable to determine download location for release")
+						return fmt.Errorf("unable to create /var/lib/miren and no user path available: %w", err)
 					}
 
 					// Download the release
