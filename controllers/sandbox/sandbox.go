@@ -580,13 +580,30 @@ func (c *SandboxController) isContainerHealthy(ctx context.Context, containerID 
 		return false
 	}
 
-	// Check if task is in a running state
-	if status.Status != containerd.Running {
-		c.Log.Debug("task not in running state", "id", containerID, "status", status.Status)
+	// Check if task is in a healthy state
+	// Only Running and Created (starting) are considered healthy
+	// Everything else (Stopped, Paused, Pausing, Unknown) is unhealthy
+	switch status.Status {
+	case containerd.Running:
+		// Definitely healthy - task is actively running
+		return true
+	case containerd.Created:
+		// Task created but not yet started - might still be starting up
+		c.Log.Debug("task in created state, considering healthy", "id", containerID)
+		return true
+	case containerd.Stopped:
+		// Task has stopped
+		c.Log.Debug("task stopped, marking unhealthy", "id", containerID)
+		return false
+	case containerd.Paused, containerd.Pausing:
+		// We don't expect paused sandboxes in normal operation
+		c.Log.Debug("task in paused/pausing state, marking unhealthy", "id", containerID, "status", status.Status)
+		return false
+	default:
+		// Unknown or any other status is unhealthy
+		c.Log.Debug("task in unknown/unhealthy state", "id", containerID, "status", status.Status)
 		return false
 	}
-
-	return true
 }
 
 func (c *SandboxController) saveEntity(ctx context.Context, sb *compute.Sandbox, meta *entity.Meta) error {
