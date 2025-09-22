@@ -2,8 +2,11 @@ package runner
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"time"
 
 	containerd "github.com/containerd/containerd/v2/client"
@@ -15,7 +18,9 @@ import (
 	"miren.dev/runtime/api/ingress/ingress_v1alpha"
 	"miren.dev/runtime/api/metric/metric_v1alpha"
 	"miren.dev/runtime/api/network/network_v1alpha"
+	"miren.dev/runtime/api/storage/storage_v1alpha"
 	"miren.dev/runtime/clientconfig"
+	"miren.dev/runtime/controllers/disk"
 	"miren.dev/runtime/controllers/ingress"
 	"miren.dev/runtime/controllers/sandbox"
 	"miren.dev/runtime/controllers/service"
@@ -30,9 +35,13 @@ import (
 
 type RunnerConfig struct {
 	Id            string `json:"id" cbor:"id" yaml:"id"`
-	ServerAddress string `json:"server_address" cbor:"server_address" yaml:"server_address"`
 	ListenAddress string `json:"listen_address" cbor:"listen_address" yaml:"listen_address"`
 	Workers       int    `json:"workers" cbor:"workers" yaml:"workers"`
+	DataPath      string `json:"data_path" cbor:"data_path" yaml:"data_path" asm:"data-path"`
+
+	// Optional RPC configuration for advanced setups
+	// If not provided, a default insecure connection will be used
+	// to connect to the server address.
 
 	Config *clientconfig.Config `json:"config" cbor:"config" yaml:"config"`
 }
@@ -41,12 +50,20 @@ const (
 	DefaulWorkers = 3
 )
 
-func NewRunner(log *slog.Logger, reg *asm.Registry, cfg RunnerConfig) *Runner {
+func NewRunner(log *slog.Logger, reg *asm.Registry, cfg RunnerConfig) (*Runner, error) {
+	if cfg.DataPath == "" {
+		return nil, fmt.Errorf("data_path is required")
+	}
+
+	if cfg.Id == "" {
+		return nil, fmt.Errorf("id is required")
+	}
+
 	return &Runner{
 		RunnerConfig: cfg,
 		Log:          log.With("module", "runner"),
 		reg:          reg,
-	}
+	}, nil
 }
 
 type Runner struct {
@@ -113,7 +130,7 @@ func (r *Runner) Start(ctx context.Context) error {
 			return err
 		}
 
-		client, err = rs.Connect(r.ServerAddress, "entities")
+		client, err = rs.Connect("", "entities")
 		if err != nil {
 			return err
 		}
@@ -233,12 +250,38 @@ func (r *Runner) SetupControllers(
 	defaultRouteAppController := ingress.NewDefaultRouteAppController(log, eas)
 	defaultRouteController := ingress.NewDefaultRouteController(log, eas)
 
-	err := sbc.Init(ctx)
+	// Initialize disk controllers
+	// Create LSVD client for disk operations
+	dataPath := filepath.Join(r.DataPath, "disk-data")
+	err := os.MkdirAll(dataPath, 0700)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create disk data path: %w", err)
+	}
+
+	lsvdClient := disk.NewLsvdClient(log, dataPath)
+
+	diskController := disk.NewDiskController(log, eas, lsvdClient)
+	diskLeaseController := disk.NewDiskLeaseController(log, eas, lsvdClient)
+
+	// Add disk controller to closers list so it gets cleaned up on shutdown
+	r.closers = append(r.closers, diskController)
+
+	err = sbc.Init(ctx)
 	if err != nil {
 		return nil, err
 	}
 
 	err = serviceController.Init(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	err = diskController.Init(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	err = diskLeaseController.Init(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -312,6 +355,37 @@ func (r *Runner) SetupControllers(
 			1, // Single worker is sufficient for this controller
 		),
 	)
+
+	// Add disk controller
+	cm.AddController(
+		controller.NewReconcileController(
+			"disk",
+			log,
+			entity.Ref(entity.EntityKind, storage_v1alpha.KindDisk),
+			eas,
+			controller.AdaptController(diskController),
+			time.Minute,
+			workers,
+		),
+	)
+
+	// Add disk lease controller
+	diskLeaseRC := controller.NewReconcileController(
+		"disk-lease",
+		log,
+		entity.Ref(entity.EntityKind, storage_v1alpha.KindDiskLease),
+		eas,
+		controller.AdaptController(diskLeaseController),
+		time.Minute,
+		workers,
+	)
+
+	// Set up periodic cleanup of old released leases (every 5 minutes)
+	diskLeaseRC.SetPeriodic(5*time.Minute, func(ctx context.Context) error {
+		return diskLeaseController.CleanupOldReleasedLeases(ctx)
+	})
+
+	cm.AddController(diskLeaseRC)
 
 	return cm, nil
 }

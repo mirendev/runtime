@@ -1,0 +1,95 @@
+domain: dev.miren.storage
+version: v1alpha
+kinds:
+  disk:
+    name:
+      type: string
+      doc: Human-readable name for the disk
+      required: true
+      indexed: true
+
+    size_gb:
+      type: int
+      doc: Storage capacity in gigabytes
+      required: true
+
+    filesystem:
+      type: enum
+      doc: Filesystem type for the disk
+      choices: [ext4, xfs, btrfs]
+      default: ext4
+
+    status:
+      type: enum
+      doc: Current state of the disk
+      choices: [provisioning, provisioned, attached, detached, deleting, error]
+      default: provisioning
+      indexed: true
+
+    lsvd_volume_id:
+      type: string
+      doc: LSVD backend volume identifier
+      indexed: true
+
+    created_by:
+      type: ref
+      doc: Application that created this disk (for tracking purposes)
+      indexed: true
+
+  disk_lease:
+    disk_id:
+      type: ref
+      doc: Reference to the leased disk
+      required: true
+      indexed: true
+
+    sandbox_id:
+      type: ref
+      doc: Reference to the sandbox using the disk
+      indexed: true
+
+    app_id:
+      type: ref
+      doc: Reference to the application (for debugging)
+      indexed: true
+
+    status:
+      type: enum
+      doc: Current state of the lease
+      choices: [pending, bound, failed, released]
+      default: pending
+      indexed: true
+      # pending - Lease requested but not yet bound
+      # bound - Lease successfully bound to disk
+      # failed - Lease could not be bound (conflict or error)
+      # released - Lease explicitly released
+
+    mount:
+      type: component
+      doc: Mount configuration for the disk
+      attrs:
+        path:
+          type: string
+          doc: Mount path in the container
+          required: true
+        options:
+          type: string
+          doc: Mount options (e.g., "rw,noatime")
+          default: "rw"
+        read_only:
+          type: bool
+          doc: Whether the mount is read-only
+          default: false
+
+    acquired_at:
+      type: time
+      doc: When the lease was acquired
+
+    node_id:
+      type: ref
+      doc: Node where the disk is mounted
+      required: true
+
+    error_message:
+      type: string
+      doc: Error details if lease binding failed
