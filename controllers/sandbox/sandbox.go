@@ -170,6 +170,171 @@ func (c *SandboxController) waitForPort(ctx context.Context, id string, port int
 	}
 }
 
+// reconcileSandboxesOnBoot checks all Running sandboxes and marks unhealthy ones as DEAD
+// This is called during controller initialization to clean up after containerd restarts
+func (c *SandboxController) reconcileSandboxesOnBoot(ctx context.Context) error {
+	c.Log.Info("reconciling sandboxes on boot")
+
+	// Create a context with timeout for the entire reconciliation
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancel()
+
+	// List all sandboxes marked as RUNNING
+	resp, err := c.EAC.List(ctx, entity.Ref(entity.EntityKind, compute.KindSandbox))
+	if err != nil {
+		return fmt.Errorf("failed to list sandboxes: %w", err)
+	}
+
+	var unhealthySandboxes []entity.Id
+	runningCount := 0
+
+	for _, e := range resp.Values() {
+		var sb compute.Sandbox
+		sb.Decode(e.Entity())
+
+		// Only check sandboxes that think they're running
+		if sb.Status != compute.RUNNING {
+			continue
+		}
+		runningCount++
+
+		// Check pause container health
+		pauseID := c.pauseContainerId(sb.ID)
+		if !c.isContainerHealthy(ctx, pauseID) {
+			c.Log.Warn("found unhealthy sandbox during boot reconciliation",
+				"sandbox_id", sb.ID,
+				"pause_container_id", pauseID)
+			unhealthySandboxes = append(unhealthySandboxes, sb.ID)
+			continue
+		}
+
+		// Check subcontainers health
+		allHealthy := true
+		for _, container := range sb.Container {
+			containerID := fmt.Sprintf("%s-%s", c.containerPrefix(sb.ID), container.Name)
+			if !c.isContainerHealthy(ctx, containerID) {
+				c.Log.Warn("found unhealthy subcontainer during boot reconciliation",
+					"sandbox_id", sb.ID,
+					"container_name", container.Name,
+					"container_id", containerID)
+				allHealthy = false
+				break
+			}
+		}
+
+		if !allHealthy {
+			unhealthySandboxes = append(unhealthySandboxes, sb.ID)
+		}
+	}
+
+	// Mark unhealthy sandboxes as DEAD and clean them up
+	for _, id := range unhealthySandboxes {
+		c.Log.Info("marking unhealthy sandbox as DEAD and cleaning up", "id", id)
+
+		// Try to clean up the sandbox
+		err := c.Delete(ctx, id)
+		if err != nil {
+			c.Log.Error("failed to cleanup unhealthy sandbox", "id", id, "err", err)
+			// Continue with other sandboxes even if one fails
+		}
+	}
+
+	c.Log.Info("boot reconciliation complete",
+		"total_running_sandboxes", runningCount,
+		"unhealthy_sandboxes", len(unhealthySandboxes))
+
+	return nil
+}
+
+// cleanupOrphanedContainers removes containers not associated with Running sandboxes
+func (c *SandboxController) cleanupOrphanedContainers(ctx context.Context) error {
+	c.Log.Info("cleaning up orphaned containers")
+
+	// Create a context with timeout for the entire cleanup
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancel()
+
+	ctx = namespaces.WithNamespace(ctx, c.Namespace)
+
+	// List all containers in the namespace
+	containerList, err := c.CC.Containers(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to list containers: %w", err)
+	}
+
+	// Build a set of valid container IDs from Running sandboxes
+	validContainers := make(map[string]bool)
+
+	resp, err := c.EAC.List(ctx, entity.Ref(entity.EntityKind, compute.KindSandbox))
+	if err != nil {
+		return fmt.Errorf("failed to list sandboxes for orphan check: %w", err)
+	}
+
+	for _, e := range resp.Values() {
+		var sb compute.Sandbox
+		sb.Decode(e.Entity())
+
+		// Only track containers for Running sandboxes
+		if sb.Status == compute.RUNNING {
+			// Add pause container
+			validContainers[c.pauseContainerId(sb.ID)] = true
+
+			// Add subcontainers
+			for _, container := range sb.Container {
+				validContainers[fmt.Sprintf("%s-%s", c.containerPrefix(sb.ID), container.Name)] = true
+			}
+		}
+	}
+
+	// Clean up orphaned containers
+	orphanCount := 0
+	for _, container := range containerList {
+		containerID := container.ID()
+
+		// Skip if this is a valid container
+		if validContainers[containerID] {
+			continue
+		}
+
+		// Check labels to see if this might be a special container we shouldn't touch
+		labels, err := container.Labels(ctx)
+		if err != nil {
+			c.Log.Error("failed to get container labels", "id", containerID, "err", err)
+			continue
+		}
+
+		// Skip if not a sandbox container (check for our labels)
+		if _, ok := labels[sandboxEntityLabel]; !ok {
+			c.Log.Debug("skipping non-sandbox container", "id", containerID)
+			continue
+		}
+
+		c.Log.Info("found orphaned container, cleaning up", "id", containerID)
+		orphanCount++
+
+		// Try to delete any task first
+		task, err := container.Task(ctx, nil)
+		if err == nil && task != nil {
+			_, err = task.Delete(ctx, containerd.WithProcessKill)
+			if err != nil {
+				c.Log.Error("failed to delete orphaned task", "id", containerID, "err", err)
+			}
+		}
+
+		// Delete the container
+		err = container.Delete(ctx, containerd.WithSnapshotCleanup)
+		if err != nil {
+			c.Log.Error("failed to delete orphaned container", "id", containerID, "err", err)
+		}
+	}
+
+	c.Log.Info("orphaned container cleanup complete",
+		"total_containers", len(containerList),
+		"orphaned_containers", orphanCount)
+
+	return nil
+}
+
 func (c *SandboxController) Init(ctx context.Context) error {
 	c.portCond = sync.NewCond(&c.portMu)
 	c.portMap = make(map[string]*containerPorts)
@@ -192,6 +357,22 @@ func (c *SandboxController) Init(ctx context.Context) error {
 	})
 	if err != nil {
 		return err
+	}
+
+	// Reconcile sandboxes after containerd restart
+	// This must happen after bridge setup but before starting normal operations
+	err = c.reconcileSandboxesOnBoot(ctx)
+	if err != nil {
+		// Log error but don't fail Init - we want the controller to start
+		// and handle new requests even if some cleanup failed
+		c.Log.Error("failed to reconcile sandboxes on boot", "err", err)
+	}
+
+	// Clean up any orphaned containers
+	err = c.cleanupOrphanedContainers(ctx)
+	if err != nil {
+		// Log error but don't fail Init
+		c.Log.Error("failed to cleanup orphaned containers on boot", "err", err)
 	}
 
 	go c.Metrics.Monitor(c.topCtx)
@@ -244,6 +425,7 @@ const (
 	notFound = iota
 	same
 	differentVersion
+	unhealthy // container exists but task is missing or dead
 )
 
 // canUpdateInPlace checks if the sandbox can be updated in place without destroying it.
@@ -340,7 +522,88 @@ func (c *SandboxController) checkSandbox(ctx context.Context, co *compute.Sandbo
 		return differentVersion, nil
 	}
 
+	// Check if the pause container has a healthy task
+	pauseID := c.pauseContainerId(co.ID)
+	if !c.isContainerHealthy(ctx, pauseID) {
+		c.Log.Warn("sandbox container exists but task is unhealthy", "id", co.ID, "pause_id", pauseID)
+		return unhealthy, nil
+	}
+
+	// Check subcontainers health
+	for _, container := range co.Container {
+		containerID := fmt.Sprintf("%s-%s", c.containerPrefix(co.ID), container.Name)
+		if !c.isContainerHealthy(ctx, containerID) {
+			c.Log.Warn("sandbox subcontainer exists but task is unhealthy",
+				"sandbox_id", co.ID,
+				"container_name", container.Name,
+				"container_id", containerID)
+			return unhealthy, nil
+		}
+	}
+
 	return same, nil
+}
+
+// isContainerHealthy checks if a container has a running task
+// Returns true if the container and its task are healthy, false otherwise
+func (c *SandboxController) isContainerHealthy(ctx context.Context, containerID string) bool {
+	ctx = namespaces.WithNamespace(ctx, c.Namespace)
+
+	container, err := c.CC.LoadContainer(ctx, containerID)
+	if err != nil {
+		if errdefs.IsNotFound(err) {
+			c.Log.Debug("container not found when checking health", "id", containerID)
+		} else {
+			c.Log.Error("failed to load container when checking health", "id", containerID, "err", err)
+		}
+		return false
+	}
+
+	task, err := container.Task(ctx, nil)
+	if err != nil {
+		if errdefs.IsNotFound(err) {
+			c.Log.Debug("task not found for container", "id", containerID)
+		} else {
+			c.Log.Error("failed to get task for container", "id", containerID, "err", err)
+		}
+		return false
+	}
+
+	if task == nil {
+		c.Log.Debug("task is nil for container", "id", containerID)
+		return false
+	}
+
+	status, err := task.Status(ctx)
+	if err != nil {
+		c.Log.Error("failed to get task status", "id", containerID, "err", err)
+		return false
+	}
+
+	// Check if task is in a healthy state
+	// Only Running and Created (starting) are considered healthy
+	// Everything else (Stopped, Paused, Pausing, Unknown) is unhealthy
+	switch status.Status {
+	case containerd.Running:
+		// Definitely healthy - task is actively running
+		return true
+	case containerd.Created:
+		// Task created but not yet started - might still be starting up
+		c.Log.Debug("task in created state, considering healthy", "id", containerID)
+		return true
+	case containerd.Stopped:
+		// Task has stopped
+		c.Log.Debug("task stopped, marking unhealthy", "id", containerID)
+		return false
+	case containerd.Paused, containerd.Pausing:
+		// We don't expect paused sandboxes in normal operation
+		c.Log.Debug("task in paused/pausing state, marking unhealthy", "id", containerID, "status", status.Status)
+		return false
+	default:
+		// Unknown or any other status is unhealthy
+		c.Log.Debug("task in unknown/unhealthy state", "id", containerID, "status", status.Status)
+		return false
+	}
 }
 
 func (c *SandboxController) saveEntity(ctx context.Context, sb *compute.Sandbox, meta *entity.Meta) error {
@@ -460,6 +723,15 @@ func (c *SandboxController) Create(ctx context.Context, co *compute.Sandbox, met
 				return nil
 			case differentVersion:
 				return c.updateSandbox(ctx, co, meta)
+			case unhealthy:
+				c.Log.Info("sandbox container exists but is unhealthy, cleaning up and recreating", "id", co.ID)
+				// Clean up the unhealthy sandbox
+				err := c.Delete(ctx, co.ID)
+				if err != nil {
+					c.Log.Error("failed to cleanup unhealthy sandbox", "id", co.ID, "err", err)
+					return fmt.Errorf("failed to cleanup unhealthy sandbox: %w", err)
+				}
+				// Fall through to create a new sandbox
 			}
 		}
 

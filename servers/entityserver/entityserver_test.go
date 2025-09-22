@@ -202,7 +202,7 @@ func TestEntityServer_WatchIndex(t *testing.T) {
 	_, err := sc.WatchIndex(ctx, index, stream.Callback(func(op *v1alpha.EntityOp) error {
 		r.NotNil(op)
 
-		r.Equal(int64(1), op.Operation())
+		r.Equal(int64(v1alpha.EntityOperationCreate), op.Operation())
 
 		r.True(op.HasEntity())
 

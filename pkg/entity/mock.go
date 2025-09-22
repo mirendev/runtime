@@ -2,6 +2,7 @@ package entity
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	"go.etcd.io/etcd/api/v3/mvccpb"
@@ -10,6 +11,7 @@ import (
 )
 
 type MockStore struct {
+	mu              sync.RWMutex
 	Entities        map[Id]*Entity
 	OnWatchIndex    func(ctx context.Context, attr Attr) (clientv3.WatchChan, error)
 	GetEntitiesFunc func(ctx context.Context, ids []Id) ([]*Entity, error)
@@ -25,10 +27,26 @@ func NewMockStore() *MockStore {
 }
 
 func (m *MockStore) GetEntity(ctx context.Context, id Id) (*Entity, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	if e, ok := m.Entities[id]; ok {
 		return e, nil
 	}
 	return nil, ErrNotFound
+}
+
+// AddEntity is a thread-safe helper to directly add an entity to the mock store
+func (m *MockStore) AddEntity(id Id, entity *Entity) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.Entities[id] = entity
+}
+
+// RemoveEntity is a thread-safe helper to directly remove an entity from the mock store
+func (m *MockStore) RemoveEntity(id Id) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.Entities, id)
 }
 
 func (m *MockStore) GetEntities(ctx context.Context, ids []Id) ([]*Entity, error) {
@@ -36,6 +54,8 @@ func (m *MockStore) GetEntities(ctx context.Context, ids []Id) ([]*Entity, error
 		return m.GetEntitiesFunc(ctx, ids)
 	}
 
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	entities := make([]*Entity, 0, len(ids))
 	for _, id := range ids {
 		if e, ok := m.Entities[id]; ok {
@@ -62,11 +82,15 @@ func (m *MockStore) CreateEntity(ctx context.Context, attrs []Attr, opts ...Enti
 		Attrs:    attrs,
 		Revision: 1,
 	}
+	m.mu.Lock()
 	m.Entities[e.ID] = e
+	m.mu.Unlock()
 	return e, nil
 }
 
 func (m *MockStore) UpdateEntity(ctx context.Context, id Id, attrs []Attr, opts ...EntityOption) (*Entity, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	e, ok := m.Entities[id]
 	if !ok {
 		return nil, ErrNotFound
@@ -104,6 +128,8 @@ func (m *MockStore) UpdateEntity(ctx context.Context, id Id, attrs []Attr, opts 
 }
 
 func (m *MockStore) DeleteEntity(ctx context.Context, id Id) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	delete(m.Entities, id)
 	return nil
 }
@@ -115,11 +141,13 @@ func (m *MockStore) WatchIndex(ctx context.Context, attr Attr) (clientv3.WatchCh
 
 	ch := make(chan clientv3.WatchResponse)
 
+	m.mu.Lock()
 	m.Entities[Id("/mock/entity")] = &Entity{
 		Attrs: []Attr{
 			Keyword(Ident, "mock/entity"),
 		},
 	}
+	m.mu.Unlock()
 
 	go func() {
 		// Simulate a watch event after some time
@@ -159,6 +187,8 @@ func (m *MockStore) ListIndex(ctx context.Context, attr Attr) ([]Id, error) {
 	}
 
 	// Default implementation: Filter entities by the given attribute
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	var ids []Id
 	for id, entity := range m.Entities {
 		for _, a := range entity.Attrs {
@@ -178,14 +208,13 @@ func (m *MockStore) CreateSession(ctx context.Context, id int64) ([]byte, error)
 
 // ListSessionEntities
 func (m *MockStore) ListSessionEntities(ctx context.Context, id []byte) ([]Id, error) {
-	return nil, nil
-
 	// For simplicity, return all entities as a list
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	var ids []Id
-	for id := range m.Entities {
-		ids = append(ids, id)
+	for eid := range m.Entities {
+		ids = append(ids, eid)
 	}
-
 	return ids, nil
 }
 

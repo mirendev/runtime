@@ -63,12 +63,16 @@ func NewInMemEntityServer(t *testing.T) (*InMemEntityServer, func()) {
 
 // AddEntity adds an entity to the mock store
 func (s *InMemEntityServer) AddEntity(ent *entity.Entity) {
-	s.Store.Entities[ent.ID] = ent
+	s.Store.AddEntity(ent.ID, ent)
 }
 
 // GetEntity retrieves an entity from the mock store
 func (s *InMemEntityServer) GetEntity(id entity.Id) *entity.Entity {
-	return s.Store.Entities[id]
+	ent, err := s.Store.GetEntity(context.Background(), id)
+	if err != nil {
+		return nil
+	}
+	return ent
 }
 
 // TestLogger creates a test logger that discards all output

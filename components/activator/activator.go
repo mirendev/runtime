@@ -2,6 +2,7 @@ package activator
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -146,30 +147,41 @@ func (a *localActivator) ensureFixedInstances(ctx context.Context) {
 			a.pendingCreations[key]++
 
 			// Create sandbox in background to avoid holding lock
-			go func() {
-				_, err := a.activateApp(ctx, vs.ver, key.pool, key.service)
+			go func(k verKey, v *core_v1alpha.AppVersion) {
+				_, err := a.activateApp(ctx, v, k.pool, k.service)
 
 				// Update pending count after creation attempt
 				a.mu.Lock()
-				a.pendingCreations[key]--
+				a.pendingCreations[k]--
 				a.mu.Unlock()
 
 				if err != nil {
-					a.log.Error("failed to start fixed instance", "app", vs.ver.App, "service", key.service, "error", err)
+					a.log.Error("failed to start fixed instance", "app", v.App, "service", k.service, "error", err)
 				}
-			}()
+			}(key, vs.ver)
 		}
 	}
 }
 
 func (a *localActivator) AcquireLease(ctx context.Context, ver *core_v1alpha.AppVersion, pool, service string) (*Lease, error) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
 	key := verKey{ver.ID.String(), pool, service}
-	vs, ok := a.versions[key]
 
 	// Get service concurrency config
 	svcConcurrency := a.getServiceConcurrency(ver, service)
+
+	// Check if we have an existing version entry
+	a.mu.Lock()
+	_, ok := a.versions[key]
+	trackedKeys := len(a.versions)
+	// Copy keys for debug logging outside the lock
+	var debugKeys []verKey
+	if !ok {
+		debugKeys = make([]verKey, 0, len(a.versions))
+		for k := range a.versions {
+			debugKeys = append(debugKeys, k)
+		}
+	}
+	a.mu.Unlock()
 
 	if !ok {
 		a.log.Info("version key not found in tracked versions",
@@ -179,21 +191,34 @@ func (a *localActivator) AcquireLease(ctx context.Context, ver *core_v1alpha.App
 			"pool", pool,
 			"service", service,
 			"key", key,
-			"tracked_keys", len(a.versions))
+			"tracked_keys", trackedKeys)
 		// Log what keys we ARE tracking for debugging
-		for k := range a.versions {
+		for _, k := range debugKeys {
 			a.log.Debug("tracked key", "key", k)
 		}
 		return a.activateApp(ctx, ver, pool, service)
 	}
 
-	if len(vs.sandboxes) == 0 {
+	// Need to reacquire lock to safely check sandboxes
+	a.mu.Lock()
+	// Double-check vs still exists after reacquiring lock
+	vs, ok := a.versions[key]
+	if !ok {
+		a.mu.Unlock()
+		// Version entry was removed while we didn't have the lock, need to activate
+		return a.activateApp(ctx, ver, pool, service)
+	}
+
+	sandboxCount := len(vs.sandboxes)
+
+	if sandboxCount == 0 {
+		a.mu.Unlock()
 		a.log.Info("no sandboxes available in version slot, creating new sandbox",
 			"app", ver.App,
 			"version", ver.Version,
 			"key", key)
 	} else {
-		a.log.Debug("reusing existing sandboxes", "app", ver.App, "version", ver.Version, "sandboxes", len(vs.sandboxes))
+		a.log.Debug("reusing existing sandboxes", "app", ver.App, "version", ver.Version, "sandboxes", sandboxCount)
 
 		// For fixed mode, just round-robin across available sandboxes
 		if svcConcurrency.Mode == "fixed" {
@@ -203,8 +228,7 @@ func (a *localActivator) AcquireLease(ctx context.Context, ver *core_v1alpha.App
 				s := vs.sandboxes[(start+i)%len(vs.sandboxes)]
 				if s.sandbox.Status == compute_v1alpha.RUNNING {
 					s.lastRenewal = time.Now()
-					a.log.Debug("reusing fixed mode sandbox", "app", ver.App, "version", ver.Version, "sandbox", s.sandbox.ID, "service", service)
-					return &Lease{
+					lease := &Lease{
 						ver:     ver,
 						sandbox: s.sandbox,
 						ent:     s.ent,
@@ -212,10 +236,14 @@ func (a *localActivator) AcquireLease(ctx context.Context, ver *core_v1alpha.App
 						service: service,
 						Size:    1, // Fixed mode doesn't use slots
 						URL:     s.url,
-					}, nil
+					}
+					a.mu.Unlock()
+					a.log.Debug("reusing fixed mode sandbox", "app", ver.App, "version", ver.Version, "sandbox", s.sandbox.ID, "service", service)
+					return lease, nil
 				}
 			}
 			// No running sandboxes found, will create new one below
+			a.mu.Unlock()
 			a.log.Info("no running sandboxes for fixed mode service, creating new sandbox", "app", ver.App, "version", ver.Version, "service", service)
 		} else {
 			// Auto mode: use slot-based allocation
@@ -225,9 +253,7 @@ func (a *localActivator) AcquireLease(ctx context.Context, ver *core_v1alpha.App
 				if s.inuseSlots+vs.leaseSlots < s.maxSlots {
 					s.inuseSlots += vs.leaseSlots
 					s.lastRenewal = time.Now()
-
-					a.log.Debug("reusing sandbox", "app", ver.App, "version", ver.Version, "sandbox", s.sandbox.ID, "in-use", s.inuseSlots)
-					return &Lease{
+					lease := &Lease{
 						ver:     ver,
 						sandbox: s.sandbox,
 						ent:     s.ent,
@@ -235,9 +261,13 @@ func (a *localActivator) AcquireLease(ctx context.Context, ver *core_v1alpha.App
 						service: service,
 						Size:    vs.leaseSlots,
 						URL:     s.url,
-					}, nil
+					}
+					a.mu.Unlock()
+					a.log.Debug("reusing sandbox", "app", ver.App, "version", ver.Version, "sandbox", s.sandbox.ID, "in-use", s.inuseSlots)
+					return lease, nil
 				}
 			}
+			a.mu.Unlock()
 			a.log.Info("no space in existing sandboxes, creating new sandbox for app", "app", ver.App, "version", ver.Version)
 		}
 	}
@@ -431,6 +461,8 @@ func (a *localActivator) activateApp(ctx context.Context, ver *core_v1alpha.AppV
 
 	key := verKey{ver.ID.String(), pool, service}
 
+	// Acquire mutex only for modifying shared state
+	a.mu.Lock()
 	vs, ok := a.versions[key]
 	if !ok {
 		vs = &verSandboxes{
@@ -442,6 +474,7 @@ func (a *localActivator) activateApp(ctx context.Context, ver *core_v1alpha.AppV
 	}
 
 	vs.sandboxes = append(vs.sandboxes, lsb)
+	a.mu.Unlock()
 
 	return lease, nil
 }
@@ -490,7 +523,112 @@ func (a *localActivator) RenewLease(ctx context.Context, lease *Lease) (*Lease, 
 	return lease, nil
 }
 
+// removeSandbox removes a sandbox from tracking across all version keys
+func (a *localActivator) removeSandbox(sandboxID string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	removedCount := 0
+	for key, vs := range a.versions {
+		originalCount := len(vs.sandboxes)
+		newSandboxes := make([]*sandbox, 0, originalCount)
+
+		for _, sb := range vs.sandboxes {
+			if sb.sandbox.ID.String() != sandboxID {
+				newSandboxes = append(newSandboxes, sb)
+			} else {
+				removedCount++
+				a.log.Info("removing sandbox from tracking",
+					"sandbox_id", sandboxID,
+					"app", vs.ver.App,
+					"version", vs.ver.Version,
+					"pool", key.pool,
+					"service", key.service,
+					"status", sb.sandbox.Status)
+			}
+		}
+
+		vs.sandboxes = newSandboxes
+
+		// Clean up empty version entries
+		if len(vs.sandboxes) == 0 && a.pendingCreations[key] == 0 {
+			delete(a.versions, key)
+			a.log.Debug("removed empty version entry", "key", key)
+		}
+	}
+
+	if removedCount > 0 {
+		a.log.Info("sandbox removed from tracking", "sandbox_id", sandboxID, "removed_from_keys", removedCount)
+	}
+}
+
+// watchSandboxes monitors sandbox status changes and removes non-RUNNING sandboxes
+func (a *localActivator) watchSandboxes(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			a.log.Info("sandbox watch context cancelled")
+			return
+		default:
+		}
+
+		a.log.Info("starting sandbox watch")
+
+		// Watch all sandbox entities for status changes
+		_, err := a.eac.WatchIndex(ctx, entity.Ref(entity.EntityKind, compute_v1alpha.KindSandbox), stream.Callback(func(op *entityserver_v1alpha.EntityOp) error {
+			switch op.OperationType() {
+			case entityserver_v1alpha.EntityOperationDelete:
+				if op.EntityId() != "" {
+					a.log.Debug("sandbox entity deleted", "id", op.EntityId())
+					a.removeSandbox(op.EntityId())
+				}
+				return nil
+
+			case entityserver_v1alpha.EntityOperationCreate, entityserver_v1alpha.EntityOperationUpdate:
+				if op.HasEntity() {
+					var sb compute_v1alpha.Sandbox
+					sb.Decode(op.Entity().Entity())
+
+					// Only remove sandboxes that are in terminal states
+					// Don't remove PENDING or blank status (still starting up)
+					if sb.Status == compute_v1alpha.STOPPED || sb.Status == compute_v1alpha.DEAD {
+						a.log.Debug("sandbox reached terminal state, removing from tracking",
+							"sandbox_id", sb.ID,
+							"status", sb.Status)
+						a.removeSandbox(sb.ID.String())
+					}
+				}
+				return nil
+
+			default:
+				// Unknown operation type, log for debugging
+				a.log.Warn("unknown entity operation type", "operation", op.Operation())
+				return nil
+			}
+		}))
+
+		if err != nil {
+			if ctx.Err() != nil {
+				// Context was cancelled, exit gracefully
+				a.log.Info("sandbox watch stopped due to context cancellation")
+				return
+			}
+			a.log.Error("sandbox watch ended with error, will restart", "error", err)
+			// Wait a bit before restarting to avoid tight loop on persistent errors
+			select {
+			case <-time.After(5 * time.Second):
+				// Continue to restart the watch
+			case <-ctx.Done():
+				return
+			}
+		}
+	}
+}
+
 func (a *localActivator) InBackground(ctx context.Context) {
+	// Start watching sandboxes for status changes
+	go a.watchSandboxes(ctx)
+
 	retireTicker := time.NewTicker(20 * time.Second)
 	defer retireTicker.Stop()
 
@@ -666,8 +804,9 @@ func (a *localActivator) recoverSandboxes(ctx context.Context) error {
 			inuseSlots:  0, // Start with no slots in use
 		}
 
-		// Add to versions map
+		// Add to versions map - need mutex protection
 		key := verKey{appVer.ID.String(), pool, service}
+		a.mu.Lock()
 		vs, ok := a.versions[key]
 		if !ok {
 			vs = &verSandboxes{
@@ -678,6 +817,7 @@ func (a *localActivator) recoverSandboxes(ctx context.Context) error {
 			a.versions[key] = vs
 		}
 		vs.sandboxes = append(vs.sandboxes, lsb)
+		a.mu.Unlock()
 		recoveredCount++
 
 		a.log.Info("recovered sandbox", "app", appVer.App, "version", appVer.Version, "sandbox", sb.ID, "pool", pool, "service", service, "url", addr)
@@ -695,9 +835,15 @@ func (a *localActivator) recoverSandboxes(ctx context.Context) error {
 }
 
 func (a *localActivator) retireUnusedSandboxes() {
-	a.mu.Lock()
-	defer a.mu.Unlock()
+	// Build list of sandboxes to retire while holding lock
+	type retireInfo struct {
+		sandboxID string
+		appName   string
+		service   string
+	}
+	toStop := make([]retireInfo, 0, 8)
 
+	a.mu.Lock()
 	for key, vs := range a.versions {
 		// Get service-specific concurrency config
 		svcConcurrency := a.getServiceConcurrency(vs.ver, key.service)
@@ -722,30 +868,51 @@ func (a *localActivator) retireUnusedSandboxes() {
 				a.log.Debug("retiring unused sandbox", "app", vs.ver.App, "sandbox", sb.sandbox.ID, "service", key.service, "idle_time", time.Since(sb.lastRenewal))
 
 				if sb.sandbox.Status != compute_v1alpha.RUNNING {
+					// Already stopped, just remove from tracking
 					continue
 				}
 
+				// Mark as stopped in our tracking
 				sb.sandbox.Status = compute_v1alpha.STOPPED
 
-				var rpcE entityserver_v1alpha.Entity
-
-				rpcE.SetId(sb.sandbox.ID.String())
-
-				rpcE.SetAttrs(entity.Attrs(
-					(&compute_v1alpha.Sandbox{
-						Status: compute_v1alpha.STOPPED,
-					}).Encode,
-				))
-
-				_, err := a.eac.Put(context.Background(), &rpcE)
-				if err != nil {
-					a.log.Error("failed to retire sandbox", "error", err)
-				}
+				// Defer RPC outside the lock
+				toStop = append(toStop, retireInfo{
+					sandboxID: sb.sandbox.ID.String(),
+					appName:   vs.ver.App.String(),
+					service:   key.service,
+				})
 			} else {
 				newSandboxes = append(newSandboxes, sb)
 			}
 		}
 
 		vs.sandboxes = newSandboxes
+	}
+	a.mu.Unlock()
+
+	// Perform remote updates without holding the mutex
+	for _, info := range toStop {
+		// Create a bounded context for each RPC call
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		var rpcE entityserver_v1alpha.Entity
+		rpcE.SetId(info.sandboxID)
+		rpcE.SetAttrs(entity.Attrs(
+			(&compute_v1alpha.Sandbox{
+				Status: compute_v1alpha.STOPPED,
+			}).Encode,
+		))
+
+		if _, err := a.eac.Put(ctx, &rpcE); err != nil {
+			// Log with appropriate detail for timeout/cancellation vs other errors
+			if errors.Is(err, context.DeadlineExceeded) {
+				a.log.Error("timeout retiring sandbox", "sandbox", info.sandboxID, "app", info.appName, "service", info.service, "timeout", "5s")
+			} else if errors.Is(err, context.Canceled) {
+				a.log.Error("cancelled retiring sandbox", "sandbox", info.sandboxID, "app", info.appName, "service", info.service)
+			} else {
+				a.log.Error("failed to retire sandbox", "sandbox", info.sandboxID, "app", info.appName, "service", info.service, "error", err)
+			}
+		}
 	}
 }

@@ -103,8 +103,8 @@ func (s *Scheduler) Watch(ctx context.Context, eac *eas.EntityAccessClient) erro
 			return nil
 		}
 
-		switch op.Operation() {
-		case 1, 2:
+		switch op.OperationType() {
+		case eas.EntityOperationCreate, eas.EntityOperationUpdate:
 			// fine
 		default:
 			return nil

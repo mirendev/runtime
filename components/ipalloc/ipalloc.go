@@ -166,8 +166,8 @@ func (a *Allocator) Watch(ctx context.Context, eac *entityserver_v1alpha.EntityA
 			return nil
 		}
 
-		switch op.Operation() {
-		case 1, 2:
+		switch op.OperationType() {
+		case entityserver_v1alpha.EntityOperationCreate, entityserver_v1alpha.EntityOperationUpdate:
 			// fine
 		default:
 			return nil
