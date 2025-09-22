@@ -54,7 +54,7 @@ func DefaultEtcdConfig() EtcdConfig {
 // DefaultServerConfig returns default ServerConfig
 func DefaultServerConfig() ServerConfig {
 	return ServerConfig{
-		Address:            strPtr("localhost:8443"),
+		Address:            strPtr(":8443"),
 		ConfigClusterName:  strPtr("local"),
 		DataPath:           strPtr("/var/lib/miren"),
 		HTTPRequestTimeout: intPtr(60),
@@ -70,6 +70,6 @@ func DefaultTLSConfig() TLSConfig {
 	return TLSConfig{
 		AdditionalIPs:   []string{},
 		AdditionalNames: []string{},
-		StandardTLS:     boolPtr(false),
+		StandardTLS:     boolPtr(true),
 	}
 }

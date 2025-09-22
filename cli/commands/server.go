@@ -14,6 +14,7 @@ import (
 	"os/user"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	containerd "github.com/containerd/containerd/v2/client"
@@ -91,10 +92,52 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 					cfg.Server.SetReleasePath(systemReleasePath)
 					ctx.Log.Info("using system release path", "path", systemReleasePath)
 				} else {
-					if userReleasePath == "" {
-						return fmt.Errorf("no release directory found (tried %s)", systemReleasePath)
+					// No release directory found, try to download one
+					ctx.Log.Info("no release directory found, downloading release")
+
+					// Determine where to download based on permissions
+					downloadGlobal := false
+					downloadPath := ""
+
+					// Check if we can write to /var/lib/miren
+					// First ensure the directory exists
+					if err := os.MkdirAll("/var/lib/miren", 0755); err == nil {
+						// Test actual writability by creating a temp file
+						tempFile := fmt.Sprintf("/var/lib/miren/.test_%d_%d", os.Getpid(), time.Now().UnixNano())
+						f, err := os.OpenFile(tempFile, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0644)
+						if err == nil {
+							// Successfully created temp file, clean it up
+							f.Close()
+							os.Remove(tempFile)
+							// We have write permission to system path
+							downloadGlobal = true
+							downloadPath = systemReleasePath
+						} else if userReleasePath != "" {
+							// Can't write to system path, fall back to user path
+							downloadPath = userReleasePath
+						} else {
+							return fmt.Errorf("unable to write to /var/lib/miren and no user path available: %w", err)
+						}
+					} else if userReleasePath != "" {
+						// Can't create system directory, use user's home directory
+						downloadPath = userReleasePath
+					} else {
+						return fmt.Errorf("unable to create /var/lib/miren and no user path available: %w", err)
 					}
-					return fmt.Errorf("no release directory found (tried %s and %s)", userReleasePath, systemReleasePath)
+
+					// Download the release
+					if err := PerformDownloadRelease(ctx, DownloadReleaseOptions{
+						Branch: "main",
+						Global: downloadGlobal,
+						Force:  false,
+						Output: downloadPath,
+					}); err != nil {
+						return fmt.Errorf("failed to download release: %w", err)
+					}
+
+					// Set the release path to the downloaded location
+					cfg.Server.SetReleasePath(downloadPath)
+					ctx.Log.Info("using downloaded release", "path", downloadPath)
 				}
 			}
 
@@ -406,8 +449,18 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 		ctx.Log.Info("no cluster registration found")
 	}
 
+	srvaddr := cfg.Server.GetAddress()
+	if !strings.HasPrefix(srvaddr, ":") {
+		if _, _, err := net.SplitHostPort(srvaddr); err != nil {
+			// ok, add the default port.
+			srvaddr = net.JoinHostPort(srvaddr, strconv.Itoa(8443))
+			ctx.Log.Debug("no port specified in server address, using default 8443", "address", srvaddr)
+		}
+	}
+
+	// Create coordinator
 	co := coordinate.NewCoordinator(ctx.Log, coordinate.CoordinatorConfig{
-		Address:         cfg.Server.GetAddress(),
+		Address:         srvaddr,
 		EtcdEndpoints:   cfg.Etcd.Endpoints,
 		Prefix:          cfg.Etcd.GetPrefix(),
 		DataPath:        cfg.Server.GetDataPath(),
@@ -626,7 +679,12 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 
 	// Write local cluster config to clientconfig.d
 	if cfg.GetMode() == "standalone" && !cfg.Server.GetSkipClientConfig() {
-		if err := writeLocalClusterConfig(ctx, cert, cfg.Server.GetAddress(), cfg.Server.GetConfigClusterName()); err != nil {
+		srvaddr := cfg.Server.GetAddress()
+		if strings.HasPrefix(srvaddr, ":") {
+			srvaddr = "127.0.0.1" + srvaddr
+		}
+		ctx.Log.Info("writing local cluster config", "cluster-name", cfg.Server.GetConfigClusterName(), "server-address", srvaddr)
+		if err := writeLocalClusterConfig(ctx, cert, srvaddr, cfg.Server.GetConfigClusterName()); err != nil {
 			ctx.Log.Warn("failed to write local cluster config", "error", err)
 			// Don't fail the whole command if we can't write the config
 		}
@@ -729,7 +787,7 @@ func writeLocalClusterConfig(ctx *Context, cc *caauth.ClientCertificate, address
 	mainConfig.SetLeafConfig("50-local", leafConfigData)
 
 	// Save the main config (which will also save the leaf config)
-	if err := mainConfig.Save(); err != nil {
+	if err := mainConfig.SaveTo(filepath.Join(filepath.Dir(configDirPath), "clientconfig.yaml")); err != nil {
 		return fmt.Errorf("failed to save local cluster config: %w", err)
 	}
 
