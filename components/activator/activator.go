@@ -589,9 +589,10 @@ func (a *localActivator) watchSandboxes(ctx context.Context) {
 					var sb compute_v1alpha.Sandbox
 					sb.Decode(op.Entity().Entity())
 
-					// Remove sandbox if it's not in RUNNING state
-					if sb.Status != compute_v1alpha.RUNNING {
-						a.log.Debug("sandbox status changed to non-RUNNING",
+					// Only remove sandboxes that are in terminal states
+					// Don't remove PENDING or blank status (still starting up)
+					if sb.Status == compute_v1alpha.STOPPED || sb.Status == compute_v1alpha.DEAD {
+						a.log.Debug("sandbox reached terminal state, removing from tracking",
 							"sandbox_id", sb.ID,
 							"status", sb.Status)
 						a.removeSandbox(sb.ID.String())
