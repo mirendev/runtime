@@ -796,3 +796,50 @@ func getConfigPath() (string, bool, error) {
 
 	return filepath.Join(homeDir, DefaultConfigPath), true, nil
 }
+
+// GetActiveConfigPath returns the path to the active configuration file
+func GetActiveConfigPath() string {
+	path, _, _ := getConfigPath()
+	return path
+}
+
+// GetConfigDirPath returns the path to the configuration directory
+func GetConfigDirPath() string {
+	path, _ := getConfigDirPath()
+	if path == "" {
+		// Fallback to default
+		homeDir, _ := os.UserHomeDir()
+		if homeDir != "" {
+			return filepath.Join(homeDir, ".config/miren/clientconfig.d")
+		}
+	}
+	return path
+}
+
+// GetLeafConfigNames returns the names of all leaf configs
+func (c *Config) GetLeafConfigNames() []string {
+	if c == nil {
+		return nil
+	}
+
+	var names []string
+	seen := make(map[string]bool)
+
+	// Get names from leafConfigs
+	for _, leaf := range c.leafConfigs {
+		if leaf.sourcePath != "" && !seen[leaf.sourcePath] {
+			names = append(names, leaf.sourcePath)
+			seen[leaf.sourcePath] = true
+		}
+	}
+
+	// Get names from unsaved leaf configs
+	for name := range c.unsavedLeafConfigs {
+		if !seen[name] {
+			names = append(names, name)
+			seen[name] = true
+		}
+	}
+
+	return names
+}

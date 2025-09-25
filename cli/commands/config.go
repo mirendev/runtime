@@ -3,11 +3,8 @@ package commands
 import (
 	"errors"
 	"fmt"
-	"net"
 
-	"github.com/charmbracelet/lipgloss"
 	"miren.dev/runtime/clientconfig"
-	"miren.dev/runtime/pkg/ui"
 )
 
 type ConfigCentric struct {
@@ -91,93 +88,94 @@ func ConfigInfo(ctx *Context, opts struct {
 	FormatOptions
 	ConfigCentric
 }) error {
+	// Get the config file paths
+	configPath := clientconfig.GetActiveConfigPath()
+	configDir := clientconfig.GetConfigDirPath()
+
+	// Load config to get some stats
 	cfg, err := opts.LoadConfig()
-	if err != nil {
+	if err != nil && err != clientconfig.ErrNoConfig {
 		return err
 	}
 
 	// Prepare structured data
-	type ClusterInfo struct {
-		Name     string `json:"name"`
-		Address  string `json:"address"`
-		Identity string `json:"identity"`
-		Active   bool   `json:"active"`
+	type ConfigInfo struct {
+		MainConfigFile  string   `json:"main_config_file"`
+		ConfigDirectory string   `json:"config_directory"`
+		Format          string   `json:"format"`
+		ActiveCluster   string   `json:"active_cluster,omitempty"`
+		ClusterCount    int      `json:"cluster_count"`
+		IdentityCount   int      `json:"identity_count"`
+		LeafConfigs     []string `json:"leaf_configs,omitempty"`
 	}
 
-	var clusters []ClusterInfo
-	var rows []ui.Row
-	headers := []string{"", "CLUSTER", "ADDRESS", "IDENTITY"}
+	info := ConfigInfo{
+		MainConfigFile:  configPath,
+		ConfigDirectory: configDir,
+		Format:          "YAML",
+	}
 
-	err = cfg.IterateClusters(func(name string, ccfg *clientconfig.ClusterConfig) error {
-		// Determine if this is the active cluster
-		isActive := false
-		if opts.Cluster != "" {
-			isActive = (name == opts.Cluster)
-		} else {
-			isActive = (name == cfg.ActiveCluster())
-		}
+	if cfg != nil {
+		info.ActiveCluster = cfg.ActiveCluster()
 
-		// Use a star for active cluster
-		prefix := " "
-		if isActive {
-			prefix = "*"
-		}
+		// Count clusters
+		clusterCount := 0
+		cfg.IterateClusters(func(name string, ccfg *clientconfig.ClusterConfig) error {
+			clusterCount++
+			return nil
+		})
+		info.ClusterCount = clusterCount
 
-		// Get identity info if present
-		identity := ccfg.Identity
-		if identity == "" {
-			identity = "-"
-		}
+		// Count identities
+		info.IdentityCount = len(cfg.GetIdentityNames())
 
-		// Build structured data for JSON
-		clusterInfo := ClusterInfo{
-			Name:     name,
-			Address:  ccfg.Hostname,
-			Identity: ccfg.Identity,
-			Active:   isActive,
-		}
-		clusters = append(clusters, clusterInfo)
-
-		// Build table row with formatting
-		if !opts.IsJSON() {
-			// Format address - color port portion gray for table display
-			address := ccfg.Hostname
-			if host, port, err := net.SplitHostPort(address); err == nil {
-				grayPort := lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(":" + port)
-				address = host + grayPort
+		// List leaf config files
+		leafConfigs := cfg.GetLeafConfigNames()
+		if len(leafConfigs) > 0 {
+			for i, name := range leafConfigs {
+				leafConfigs[i] = fmt.Sprintf("clientconfig.d/%s.yaml", name)
 			}
-
-			rows = append(rows, ui.Row{
-				prefix,
-				name,
-				address,
-				identity,
-			})
+			info.LeafConfigs = leafConfigs
 		}
-		return nil
-	})
-
-	if err != nil {
-		return err
 	}
 
 	// Output based on format
 	if opts.IsJSON() {
-		return PrintJSON(clusters)
+		return PrintJSON(info)
 	}
 
-	if len(clusters) == 0 {
-		ctx.Printf("No clusters configured\n")
-		return nil
+	// Text output
+	ctx.Printf("Miren Configuration\n")
+	ctx.Printf("===================\n\n")
+
+	ctx.Printf("Configuration Files:\n")
+	ctx.Printf("  Main config:    %s\n", configPath)
+	ctx.Printf("  Config dir:     %s\n", configDir)
+	ctx.Printf("  Format:         %s\n", "YAML")
+	ctx.Printf("\n")
+
+	if cfg != nil {
+		ctx.Printf("Current State:\n")
+		if info.ActiveCluster != "" {
+			ctx.Printf("  Active cluster: %s\n", info.ActiveCluster)
+		}
+		ctx.Printf("  Clusters:       %d configured\n", info.ClusterCount)
+		ctx.Printf("  Identities:     %d configured\n", info.IdentityCount)
+
+		if len(info.LeafConfigs) > 0 {
+			ctx.Printf("\nCluster Configs:\n")
+			for _, leaf := range info.LeafConfigs {
+				ctx.Printf("  - %s\n", leaf)
+			}
+		}
+	} else {
+		ctx.Printf("\nNo configuration found.\n")
+		ctx.Printf("\nGet started with:\n")
+		ctx.Printf("  miren login        # Set up an identity\n")
+		ctx.Printf("  miren cluster add  # Add a cluster\n")
 	}
 
-	// Create and render the table
-	columns := ui.AutoSizeColumns(headers, rows)
-	table := ui.NewTable(
-		ui.WithColumns(columns),
-		ui.WithRows(rows),
-	)
+	ctx.Printf("\nTip: Use 'miren cluster list' to see configured clusters\n")
 
-	ctx.Printf("%s\n", table.Render())
 	return nil
 }

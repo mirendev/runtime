@@ -588,7 +588,7 @@ func autoConfigureCluster(ctx *Context, identityName, cloudURL string, keyPair *
 
 	if len(validClusters) > 1 {
 		// Multiple clusters available, don't auto-configure
-		ctx.Info("Multiple clusters available. Run 'miren config bind' to select one:")
+		ctx.Info("Multiple clusters available. Run 'miren cluster add' to select one:")
 		for _, cluster := range validClusters {
 			ctx.Info("  - %s (%s)", cluster.Name, cluster.OrganizationName)
 		}
@@ -605,7 +605,7 @@ func autoConfigureCluster(ctx *Context, identityName, cloudURL string, keyPair *
 	workingAddress, caCert, err := tryConnectToCluster(ctx, &cluster, false)
 	if err != nil {
 		ctx.Warn("Could not automatically connect to cluster: %v", err)
-		ctx.Info("Run 'miren config bind' manually to configure the cluster connection")
+		ctx.Info("Run 'miren cluster add' manually to configure the cluster connection")
 		return ErrAutoConfigFailed
 	}
 
