@@ -75,19 +75,19 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-        
+
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v2
         with:
           workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
           service_account: ${{ secrets.WIF_SERVICE_ACCOUNT }}
-          
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
-        
+
       - name: Configure Docker for Artifact Registry
         run: gcloud auth configure-docker us-central1-docker.pkg.dev
-        
+
       - name: Build and push miren Docker image
         uses: docker/build-push-action@v5
         with:
@@ -113,7 +113,7 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-        
+
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
@@ -131,69 +131,115 @@ jobs:
         run: |
           set -e
 
-          # Generate version metadata
-          ./hack/generate-version-metadata.sh
+          # Create a manifest to track uploaded artifacts and their checksums
+          echo '[]' > artifact-manifest.json
 
-          # Upload version metadata
-          echo "Uploading version.json"
-          curl --fail-with-body --retry 3 -X PUT \
-            -H "Authorization: Bearer ${{ steps.get-oidc-token.outputs.token }}" \
-            -F "file=@version.json" \
-            https://api.miren.cloud/assets/release/miren/${{ github.ref_name }}/version.json
+          # Function to upload a file and its checksum, and track in manifest
+          upload_artifact() {
+            local file_path="$1"
+            local artifact_name="$2"
+            local platform="${3:-}"
+            local arch="${4:-}"
 
+            echo "Uploading ${artifact_name}..."
+
+            # Generate SHA256 checksum
+            local checksum=$(sha256sum "${file_path}" | cut -d' ' -f1)
+            echo "${checksum}" > "${artifact_name}.sha256"
+
+            # Get file size
+            local size=$(stat -c%s "${file_path}" 2>/dev/null || stat -f%z "${file_path}" 2>/dev/null || echo 0)
+
+            # Upload main file
+            curl --fail-with-body --retry 3 -X PUT \
+              -H "Authorization: Bearer ${{ steps.get-oidc-token.outputs.token }}" \
+              -F "file=@${file_path}" \
+              "https://api.miren.cloud/assets/release/miren/${{ github.ref_name }}/${artifact_name}"
+
+            # Upload checksum file
+            curl --fail-with-body --retry 3 -X PUT \
+              -H "Authorization: Bearer ${{ steps.get-oidc-token.outputs.token }}" \
+              -F "file=@${artifact_name}.sha256" \
+              "https://api.miren.cloud/assets/release/miren/${{ github.ref_name }}/${artifact_name}.sha256"
+
+            # Build artifact info object
+            local artifact_obj=$(jq -n \
+              --arg name "${artifact_name}" \
+              --arg sha256 "${checksum}" \
+              --argjson size "${size}" \
+              --arg platform "${platform}" \
+              --arg arch "${arch}" \
+              '{name: $name, sha256: $sha256, size: $size} |
+               if $platform != "" then . + {platform: $platform} else . end |
+               if $arch != "" then . + {arch: $arch} else . end')
+
+            # Add to manifest array
+            jq --argjson obj "$artifact_obj" '. += [$obj]' artifact-manifest.json > tmp.json && mv tmp.json artifact-manifest.json
+          }
+
+          # Upload release packages
           for arch in amd64 arm64; do
-            # Generate SHA256 checksums
-            echo "release-base-linux-${arch}.tar.gz SHA256"
-            sha256sum "artifacts/miren-base-linux-${arch}/release-base-linux-${arch}.tar.gz" | cut -d' ' -f1 | tee "release-base-linux-${arch}.tar.gz.sha256"
-
-            # Upload artifact
-            curl --fail-with-body --retry 3 -X PUT \
-              -H "Authorization: Bearer ${{ steps.get-oidc-token.outputs.token }}" \
-              -F "file=@artifacts/miren-base-linux-${arch}/release-base-linux-${arch}.tar.gz" \
-              https://api.miren.cloud/assets/release/miren/${{ github.ref_name }}/miren-base-linux-${arch}.tar.gz
-
-            # Upload sha256
-            curl --fail-with-body --retry 3 -X PUT \
-              -H "Authorization: Bearer ${{ steps.get-oidc-token.outputs.token }}" \
-              -F "file=@release-base-linux-${arch}.tar.gz.sha256" \
-              https://api.miren.cloud/assets/release/miren/${{ github.ref_name }}/miren-base-linux-${arch}.tar.gz.sha256
+            upload_artifact \
+              "artifacts/miren-base-linux-${arch}/release-base-linux-${arch}.tar.gz" \
+              "miren-base-linux-${arch}.tar.gz" \
+              "linux" \
+              "${arch}"
           done
 
           # Upload binary artifacts
           for os in linux darwin; do
             for arch in amd64 arm64; do
-              # Generate SHA256 checksum for binary
-              echo "miren-${os}-${arch}.zip SHA256"
-              sha256sum "artifacts/miren-${os}-${arch}/miren-${os}-${arch}.zip" | cut -d' ' -f1 | tee "miren-${os}-${arch}.zip.sha256"
-
-              # Upload binary zip
-              curl --fail-with-body --retry 3 -X PUT \
-                -H "Authorization: Bearer ${{ steps.get-oidc-token.outputs.token }}" \
-                -F "file=@artifacts/miren-${os}-${arch}/miren-${os}-${arch}.zip" \
-                https://api.miren.cloud/assets/release/miren/${{ github.ref_name }}/miren-${os}-${arch}.zip
-
-              # Upload binary sha256
-              curl --fail-with-body --retry 3 -X PUT \
-                -H "Authorization: Bearer ${{ steps.get-oidc-token.outputs.token }}" \
-                -F "file=@miren-${os}-${arch}.zip.sha256" \
-                https://api.miren.cloud/assets/release/miren/${{ github.ref_name }}/miren-${os}-${arch}.zip.sha256
+              upload_artifact \
+                "artifacts/miren-${os}-${arch}/miren-${os}-${arch}.zip" \
+                "miren-${os}-${arch}.zip" \
+                "${os}" \
+                "${arch}"
             done
           done
 
           # Upload docker-compose configuration
-          echo "Uploading docker-compose.yml"
-          # Generate SHA256 checksum for docker-compose file
-          sha256sum docker/docker-compose.yml | cut -d' ' -f1 | tee docker-compose.yml.sha256
-          
-          # Upload docker-compose file
+          upload_artifact \
+            "docker/docker-compose.yml" \
+            "docker-compose.yml"
+
+          # Generate version metadata with the artifact manifest
+          echo "Generating version.json with artifact manifest..."
+
+          # Get git information
+          COMMIT=$(git rev-parse HEAD)
+          COMMIT_SHORT=$(git rev-parse --short HEAD)
+          BRANCH="${{ github.ref_name }}"
+          BUILD_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+          # Determine version string (same logic as build.sh)
+          if [[ $BRANCH =~ ^release/(.*) ]]; then
+            VERSION="${BASH_REMATCH[1]}"
+          else
+            VERSION="$BRANCH:$COMMIT_SHORT"
+          fi
+
+          # Create version.json with the artifact manifest
+          jq -n \
+            --arg version "$VERSION" \
+            --arg commit "$COMMIT" \
+            --arg branch "$BRANCH" \
+            --arg build_date "$BUILD_DATE" \
+            --slurpfile artifacts artifact-manifest.json \
+            '{
+              version: $version,
+              commit: $commit,
+              branch: $branch,
+              build_date: $build_date,
+              artifacts: $artifacts[0]
+            }' > version.json
+
+          echo "Generated version.json:"
+          cat version.json
+
+          # Upload version metadata last
+          echo "Uploading version.json..."
           curl --fail-with-body --retry 3 -X PUT \
             -H "Authorization: Bearer ${{ steps.get-oidc-token.outputs.token }}" \
-            -F "file=@docker/docker-compose.yml" \
-            https://api.miren.cloud/assets/release/miren/${{ github.ref_name }}/docker-compose.yml
-          
-          # Upload docker-compose sha256
-          curl --fail-with-body --retry 3 -X PUT \
-            -H "Authorization: Bearer ${{ steps.get-oidc-token.outputs.token }}" \
-            -F "file=@docker-compose.yml.sha256" \
-            https://api.miren.cloud/assets/release/miren/${{ github.ref_name }}/docker-compose.yml.sha256
+            -F "file=@version.json" \
+            "https://api.miren.cloud/assets/release/miren/${{ github.ref_name }}/version.json"
 

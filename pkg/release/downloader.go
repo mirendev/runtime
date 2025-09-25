@@ -29,6 +29,8 @@ type DownloadOptions struct {
 	ProgressWriter io.Writer
 	// SkipChecksum skips checksum verification (not recommended)
 	SkipChecksum bool
+	// ExpectedChecksum allows providing a known checksum from metadata
+	ExpectedChecksum string
 }
 
 // assetDownloader implements Downloader using the Miren asset service
@@ -54,14 +56,20 @@ func (d *assetDownloader) Download(ctx context.Context, artifact Artifact, opts 
 	}
 	defer os.RemoveAll(tmpDir)
 
-	// Download checksum first
+	// Determine expected checksum
 	var expectedChecksum string
 	if !opts.SkipChecksum {
-		checksum, err := d.downloadChecksum(ctx, artifact)
-		if err != nil {
-			return nil, fmt.Errorf("failed to download checksum: %w", err)
+		if opts.ExpectedChecksum != "" {
+			// Use provided checksum from metadata
+			expectedChecksum = opts.ExpectedChecksum
+		} else {
+			// Download checksum file
+			checksum, err := d.downloadChecksum(ctx, artifact)
+			if err != nil {
+				return nil, fmt.Errorf("failed to download checksum: %w", err)
+			}
+			expectedChecksum = checksum
 		}
-		expectedChecksum = checksum
 	}
 
 	// Download artifact
@@ -96,35 +104,35 @@ func (d *assetDownloader) Download(ctx context.Context, artifact Artifact, opts 
 func (d *assetDownloader) GetLatestVersion(ctx context.Context, artifactType ArtifactType) (string, error) {
 	// Fetch version metadata file
 	metadataURL := fmt.Sprintf("%s/main/version.json", d.baseURL)
-	
+
 	req, err := http.NewRequestWithContext(ctx, "GET", metadataURL, nil)
 	if err != nil {
 		return "", fmt.Errorf("failed to create request: %w", err)
 	}
-	
+
 	resp, err := d.httpClient.Do(req)
 	if err != nil {
 		// Fall back to "main" if metadata doesn't exist yet
 		return "main", nil
 	}
 	defer resp.Body.Close()
-	
+
 	if resp.StatusCode != http.StatusOK {
 		// Fall back to "main" if metadata doesn't exist yet
 		return "main", nil
 	}
-	
+
 	data, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return "", fmt.Errorf("failed to read metadata: %w", err)
 	}
-	
+
 	metadata, err := ParseMetadata(data)
 	if err != nil {
 		// Fall back to "main" if metadata is invalid
 		return "main", nil
 	}
-	
+
 	return metadata.GetVersionString(), nil
 }
 
@@ -134,29 +142,29 @@ func (d *assetDownloader) GetVersionMetadata(ctx context.Context, version string
 	if version == "" {
 		version = "main"
 	}
-	
+
 	metadataURL := fmt.Sprintf("%s/%s/version.json", d.baseURL, version)
-	
+
 	req, err := http.NewRequestWithContext(ctx, "GET", metadataURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
-	
+
 	resp, err := d.httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch metadata: %w", err)
 	}
 	defer resp.Body.Close()
-	
+
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("metadata not found (HTTP %d)", resp.StatusCode)
 	}
-	
+
 	data, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read metadata: %w", err)
 	}
-	
+
 	return ParseMetadata(data)
 }
 
