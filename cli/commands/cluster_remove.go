@@ -39,11 +39,13 @@ func ClusterRemove(ctx *Context, opts struct {
 			}
 		}
 
-		// Run the picker with dimmed active style
+		// Run the picker with disabled check for active cluster
 		selected, err := ui.RunPicker(items,
 			ui.WithTitle("Select a cluster to remove:"),
-			ui.WithActiveMarker(),
-			ui.WithDimmedActiveStyle(),
+			ui.WithHeaders([]string{"CLUSTER"}),
+			ui.WithDisabledCheck(func(item ui.PickerItem) bool {
+				return item.ID() == activeCluster
+			}, "Cannot remove the active cluster"),
 			ui.WithFooter("Note: You cannot remove the active cluster"),
 		)
 
@@ -66,7 +68,7 @@ func ClusterRemove(ctx *Context, opts struct {
 			return nil
 		}
 
-		clusterName = selected.String()
+		clusterName = selected.ID()
 	}
 
 	// Check if the cluster exists

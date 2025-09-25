@@ -11,38 +11,57 @@ import (
 
 // PickerItem represents an item that can be selected in the picker
 type PickerItem interface {
-	// String returns the display text for the item
-	String() string
-	// IsActive returns true if this is the currently active/selected item
-	IsActive() bool
+	// Row returns the table row data for this item
+	Row() []string
+	// ID returns a unique identifier for this item
+	ID() string
 }
 
-// SimplePickerItem is a basic implementation of PickerItem
+// SimplePickerItem is a basic implementation of PickerItem for single-column pickers
 type SimplePickerItem struct {
 	Text   string
 	Active bool
 }
 
-func (s SimplePickerItem) String() string {
+func (s SimplePickerItem) Row() []string {
+	if s.Active {
+		return []string{fmt.Sprintf("%s *", s.Text)}
+	}
+	return []string{s.Text}
+}
+
+func (s SimplePickerItem) ID() string {
 	return s.Text
 }
 
-func (s SimplePickerItem) IsActive() bool {
-	return s.Active
+// TablePickerItem is a multi-column implementation of PickerItem
+type TablePickerItem struct {
+	Columns []string
+	ItemID  string
 }
 
-// PickerModel is a generic model for selecting from a list of items
+func (t TablePickerItem) Row() []string {
+	return t.Columns
+}
+
+func (t TablePickerItem) ID() string {
+	return t.ItemID
+}
+
+// PickerModel is a table-based picker for selecting from a list of items
 type PickerModel struct {
 	Title     string
+	Headers   []string
 	Items     []PickerItem
 	cursor    int
 	Selected  PickerItem
 	Cancelled bool
-	Footer    string // Optional footer text
+	Footer    string
 
-	// Optional styling/marking functions
-	ItemMarker func(item PickerItem) string         // Returns marker like " *" for special items
-	ItemStyle  func(item PickerItem) lipgloss.Style // Returns style for special items
+	// Optional filter function to disable certain items
+	IsDisabled func(item PickerItem) bool
+	// Optional message for disabled items
+	DisabledMessage string
 }
 
 func (m *PickerModel) Init() tea.Cmd {
@@ -59,7 +78,13 @@ func (m *PickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case "enter", " ":
 			if m.cursor >= 0 && m.cursor < len(m.Items) {
-				m.Selected = m.Items[m.cursor]
+				item := m.Items[m.cursor]
+				// Check if item is disabled
+				if m.IsDisabled != nil && m.IsDisabled(item) {
+					// Don't select disabled items
+					return m, nil
+				}
+				m.Selected = item
 			}
 			return m, tea.Quit
 
@@ -79,48 +104,154 @@ func (m *PickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *PickerModel) View() string {
-	var b strings.Builder
-
-	b.WriteString(m.Title + "\n\n")
-
-	for i, item := range m.Items {
-		cursor := " "
-		if m.cursor == i {
-			cursor = ">"
-		}
-
-		marker := "  "
-		if m.ItemMarker != nil {
-			marker = m.ItemMarker(item)
-		}
-
-		// Start with base style
-		style := lipgloss.NewStyle()
-
-		// Apply custom item style if provided
-		if m.ItemStyle != nil {
-			style = m.ItemStyle(item)
-		}
-
-		// Apply selection highlighting
-		if m.cursor == i {
-			// Override with selection color unless item already has custom styling
-			if m.ItemStyle == nil {
-				style = style.Foreground(lipgloss.Color("170"))
-			} else {
-				// If there's custom styling, just make it bold
-				style = style.Bold(true).Foreground(lipgloss.Color("170"))
-			}
-		}
-
-		line := fmt.Sprintf("%s %s%s", cursor, item.String(), marker)
-		b.WriteString(style.Render(line) + "\n")
+	if len(m.Items) == 0 {
+		return "No items to select"
 	}
 
-	b.WriteString("\n(Use arrow keys to navigate, enter to select, esc to cancel)\n")
+	var b strings.Builder
+
+	if m.Title != "" {
+		titleStyle := lipgloss.NewStyle().
+			Bold(true).
+			Foreground(lipgloss.Color("229")).
+			MarginBottom(1)
+		b.WriteString(titleStyle.Render(m.Title))
+		b.WriteString("\n\n")
+	}
+
+	// Prepare rows for the table
+	rows := make([]Row, len(m.Items))
+	for i, item := range m.Items {
+		rows[i] = item.Row()
+	}
+
+	// Calculate columns
+	headers := m.Headers
+	if len(headers) == 0 {
+		// No headers provided, create empty headers based on first row
+		if len(rows) > 0 {
+			headers = make([]string, len(rows[0]))
+		}
+	}
+
+	// Auto-size columns
+	columns := AutoSizeColumns(headers, rows)
+
+	// Style for selected row
+	selectedStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("170")).
+		Bold(true)
+
+	// Style for disabled rows
+	disabledStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("240"))
+
+	// Render the table with custom row styling
+	var tableLines []string
+
+	// Render headers if they exist and are not empty
+	hasHeaders := false
+	for _, h := range headers {
+		if h != "" {
+			hasHeaders = true
+			break
+		}
+	}
+
+	if hasHeaders {
+		headerCells := make([]string, 0, len(columns)*2-1)
+		for i, col := range columns {
+			if col.Width <= 0 {
+				continue
+			}
+			if i > 0 {
+				headerCells = append(headerCells, "  ")
+			}
+			cellStyle := lipgloss.NewStyle().
+				Width(col.Width).
+				MaxWidth(col.Width).
+				Inline(true).
+				Bold(true).
+				Underline(true).
+				UnderlineSpaces(true).
+				Foreground(lipgloss.Color("220"))
+			headerCells = append(headerCells, cellStyle.Render(col.Title))
+		}
+		tableLines = append(tableLines, lipgloss.JoinHorizontal(lipgloss.Top, headerCells...))
+		tableLines = append(tableLines, "") // Empty line after headers
+	}
+
+	// Render rows with selection highlight
+	for i, row := range rows {
+		cells := make([]string, 0, len(columns)*2-1)
+
+		// Determine if this row is disabled
+		isDisabled := m.IsDisabled != nil && m.IsDisabled(m.Items[i])
+
+		for j, col := range columns {
+			if col.Width <= 0 {
+				continue
+			}
+			if j > 0 {
+				cells = append(cells, "  ")
+			}
+
+			value := ""
+			if j < len(row) {
+				value = row[j]
+			}
+
+			// Add selection indicator to first column
+			if j == 0 {
+				if i == m.cursor {
+					value = fmt.Sprintf("▸ %s", value)
+				} else {
+					value = fmt.Sprintf("  %s", value)
+				}
+			}
+
+			cellStyle := lipgloss.NewStyle().
+				Width(col.Width).
+				MaxWidth(col.Width).
+				Inline(true)
+
+			// Apply selection or disabled styling
+			if isDisabled {
+				cellStyle = cellStyle.Inherit(disabledStyle)
+			} else if i == m.cursor {
+				cellStyle = cellStyle.Inherit(selectedStyle)
+			}
+
+			cells = append(cells, cellStyle.Render(value))
+		}
+
+		tableLines = append(tableLines, lipgloss.JoinHorizontal(lipgloss.Top, cells...))
+	}
+
+	b.WriteString(strings.Join(tableLines, "\n"))
+
+	// Help text
+	helpStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("241")).
+		MarginTop(1)
+
+	helpText := "\n(Use ↑/↓ or j/k to navigate, Enter to select, Esc to cancel)"
+	b.WriteString(helpStyle.Render(helpText))
 
 	if m.Footer != "" {
-		b.WriteString(m.Footer + "\n")
+		footerStyle := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("244"))
+		b.WriteString("\n")
+		b.WriteString(footerStyle.Render(m.Footer))
+	}
+
+	// Show disabled message if current item is disabled
+	if m.cursor < len(m.Items) && m.IsDisabled != nil && m.IsDisabled(m.Items[m.cursor]) && m.DisabledMessage != "" {
+		msgStyle := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("196")).
+			MarginTop(1)
+		b.WriteString("\n")
+		b.WriteString(msgStyle.Render("⚠ " + m.DisabledMessage))
 	}
 
 	return b.String()
@@ -130,16 +261,6 @@ func (m *PickerModel) View() string {
 func (m *PickerModel) SetCursor(index int) {
 	if index >= 0 && index < len(m.Items) {
 		m.cursor = index
-	}
-}
-
-// SetCursorToActive sets the cursor to the first active item
-func (m *PickerModel) SetCursorToActive() {
-	for i, item := range m.Items {
-		if item.IsActive() {
-			m.cursor = i
-			return
-		}
 	}
 }
 
@@ -153,6 +274,13 @@ func WithTitle(title string) PickerOption {
 	}
 }
 
+// WithHeaders sets the table headers for the picker
+func WithHeaders(headers []string) PickerOption {
+	return func(m *PickerModel) {
+		m.Headers = headers
+	}
+}
+
 // WithFooter sets the picker footer text
 func WithFooter(footer string) PickerOption {
 	return func(m *PickerModel) {
@@ -160,27 +288,11 @@ func WithFooter(footer string) PickerOption {
 	}
 }
 
-// WithActiveMarker sets a function to mark active items (e.g., with " *")
-func WithActiveMarker() PickerOption {
+// WithDisabledCheck sets a function to determine if items are disabled
+func WithDisabledCheck(check func(PickerItem) bool, message string) PickerOption {
 	return func(m *PickerModel) {
-		m.ItemMarker = func(item PickerItem) string {
-			if item.IsActive() {
-				return " *"
-			}
-			return "  "
-		}
-	}
-}
-
-// WithDimmedActiveStyle dims the active item (useful when it cannot be selected)
-func WithDimmedActiveStyle() PickerOption {
-	return func(m *PickerModel) {
-		m.ItemStyle = func(item PickerItem) lipgloss.Style {
-			if item.IsActive() {
-				return lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
-			}
-			return lipgloss.NewStyle()
-		}
+		m.IsDisabled = check
+		m.DisabledMessage = message
 	}
 }
 
@@ -194,9 +306,6 @@ func NewPicker(items []PickerItem, opts ...PickerOption) *PickerModel {
 	for _, opt := range opts {
 		opt(m)
 	}
-
-	// Set cursor to active item by default
-	m.SetCursorToActive()
 
 	return m
 }

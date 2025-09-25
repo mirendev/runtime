@@ -40,10 +40,10 @@ func ClusterSwitch(ctx *Context, opts struct {
 			}
 		}
 
-		// Run the picker
+		// Run the picker with single column
 		selected, err := ui.RunPicker(items,
 			ui.WithTitle("Select a cluster to switch to:"),
-			ui.WithActiveMarker(),
+			ui.WithHeaders([]string{"CLUSTER"}),
 		)
 
 		if err != nil {
@@ -65,7 +65,7 @@ func ClusterSwitch(ctx *Context, opts struct {
 			return nil
 		}
 
-		clusterName = selected.String()
+		clusterName = selected.ID()
 	}
 
 	// Check if the cluster exists
