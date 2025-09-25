@@ -131,6 +131,16 @@ jobs:
         run: |
           set -e
 
+          # Generate version metadata
+          ./hack/generate-version-metadata.sh
+
+          # Upload version metadata
+          echo "Uploading version.json"
+          curl --fail-with-body --retry 3 -X PUT \
+            -H "Authorization: Bearer ${{ steps.get-oidc-token.outputs.token }}" \
+            -F "file=@version.json" \
+            https://api.miren.cloud/assets/release/miren/${{ github.ref_name }}/version.json
+
           for arch in amd64 arm64; do
             # Generate SHA256 checksums
             echo "release-base-linux-${arch}.tar.gz SHA256"

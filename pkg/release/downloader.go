@@ -18,6 +18,7 @@ import (
 type Downloader interface {
 	Download(ctx context.Context, artifact Artifact, opts DownloadOptions) (*DownloadedArtifact, error)
 	GetLatestVersion(ctx context.Context, artifactType ArtifactType) (string, error)
+	GetVersionMetadata(ctx context.Context, version string) (*Metadata, error)
 }
 
 // DownloadOptions contains options for downloading artifacts
@@ -93,8 +94,70 @@ func (d *assetDownloader) Download(ctx context.Context, artifact Artifact, opts 
 
 // GetLatestVersion returns the latest available version
 func (d *assetDownloader) GetLatestVersion(ctx context.Context, artifactType ArtifactType) (string, error) {
-	// For now, always return "main" as we don't have version discovery yet
-	return "main", nil
+	// Fetch version metadata file
+	metadataURL := fmt.Sprintf("%s/main/version.json", d.baseURL)
+	
+	req, err := http.NewRequestWithContext(ctx, "GET", metadataURL, nil)
+	if err != nil {
+		return "", fmt.Errorf("failed to create request: %w", err)
+	}
+	
+	resp, err := d.httpClient.Do(req)
+	if err != nil {
+		// Fall back to "main" if metadata doesn't exist yet
+		return "main", nil
+	}
+	defer resp.Body.Close()
+	
+	if resp.StatusCode != http.StatusOK {
+		// Fall back to "main" if metadata doesn't exist yet
+		return "main", nil
+	}
+	
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("failed to read metadata: %w", err)
+	}
+	
+	metadata, err := ParseMetadata(data)
+	if err != nil {
+		// Fall back to "main" if metadata is invalid
+		return "main", nil
+	}
+	
+	return metadata.GetVersionString(), nil
+}
+
+// GetVersionMetadata returns detailed metadata for a specific version
+func (d *assetDownloader) GetVersionMetadata(ctx context.Context, version string) (*Metadata, error) {
+	// Default to "main" if no version specified
+	if version == "" {
+		version = "main"
+	}
+	
+	metadataURL := fmt.Sprintf("%s/%s/version.json", d.baseURL, version)
+	
+	req, err := http.NewRequestWithContext(ctx, "GET", metadataURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+	
+	resp, err := d.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch metadata: %w", err)
+	}
+	defer resp.Body.Close()
+	
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("metadata not found (HTTP %d)", resp.StatusCode)
+	}
+	
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read metadata: %w", err)
+	}
+	
+	return ParseMetadata(data)
 }
 
 // downloadChecksum downloads the checksum file for an artifact

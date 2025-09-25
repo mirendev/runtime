@@ -50,6 +50,19 @@ func Upgrade(ctx *Context, opts UpgradeOptions) error {
 		fmt.Printf("Current version: %s\n", current.Version)
 		fmt.Printf("Latest version:  %s\n", latest)
 
+		// Try to fetch detailed metadata for more info
+		downloader := release.NewDownloader()
+		if metadata, err := downloader.GetVersionMetadata(ctx, "main"); err == nil {
+			if metadata.Commit != "" && current.Commit != "" && len(metadata.Commit) > 7 && len(current.Commit) > 7 {
+				if metadata.Commit[:7] != current.Commit[:7] {
+					fmt.Printf("Latest commit:   %s\n", metadata.Commit[:7])
+					if metadata.BuildDate.IsZero() == false {
+						fmt.Printf("Build date:      %s\n", metadata.BuildDate.Format("2006-01-02 15:04:05 UTC"))
+					}
+				}
+			}
+		}
+
 		if current.Version != latest {
 			fmt.Println("\nAn update is available! Run 'miren upgrade' to install it.")
 		} else {
