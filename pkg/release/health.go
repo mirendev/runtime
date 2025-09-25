@@ -137,3 +137,14 @@ type NoOpHealthVerifier struct{}
 func (n *NoOpHealthVerifier) VerifyHealth(ctx context.Context, timeout time.Duration) error {
 	return nil
 }
+
+// IsServerRunning checks if the miren server is currently running as a systemd service
+func IsServerRunning() bool {
+	cmd := exec.Command("systemctl", "is-active", "miren")
+	output, err := cmd.Output()
+	if err != nil {
+		return false
+	}
+	status := strings.TrimSpace(string(output))
+	return status == "active"
+}

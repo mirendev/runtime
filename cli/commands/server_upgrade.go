@@ -24,6 +24,11 @@ func ServerUpgrade(ctx *Context, opts ServerUpgradeOptions) error {
 		return fmt.Errorf("server upgrade requires root privileges (use sudo)")
 	}
 
+	// Check if server is actually running
+	if !release.IsServerRunning() {
+		return fmt.Errorf("miren server is not running. Use 'miren upgrade' to upgrade the CLI binary instead")
+	}
+
 	// Create manager with server configuration
 	mgrOpts := release.DefaultManagerOptions()
 	mgrOpts.SkipHealthCheck = opts.SkipHealth

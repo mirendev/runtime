@@ -12,11 +12,16 @@ import (
 type UpgradeOptions struct {
 	Version string `flag:"version" help:"Specific version to upgrade to (default: latest)"`
 	Check   bool   `flag:"check" help:"Check for available updates only"`
-	Force   bool   `flag:"force" help:"Force upgrade even if already up to date"`
+	Force   bool   `flag:"force" help:"Force upgrade even if already up to date or server running"`
 }
 
 // Upgrade upgrades the miren CLI to the latest or specified version
 func Upgrade(ctx *Context, opts UpgradeOptions) error {
+	// Check if server is running (unless forced or just checking)
+	if !opts.Force && !opts.Check && release.IsServerRunning() {
+		return fmt.Errorf("miren server is running. Use 'sudo miren server upgrade' to upgrade the server, or use --force to upgrade the CLI anyway")
+	}
+
 	// Determine installation path
 	exe, err := os.Executable()
 	if err != nil {
