@@ -1,0 +1,270 @@
+package release
+
+import (
+	"archive/tar"
+	"compress/gzip"
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
+	"io"
+	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
+)
+
+// Downloader handles artifact downloads from the asset service
+type Downloader interface {
+	Download(ctx context.Context, artifact Artifact, opts DownloadOptions) (*DownloadedArtifact, error)
+	GetLatestVersion(ctx context.Context, artifactType ArtifactType) (string, error)
+}
+
+// DownloadOptions contains options for downloading artifacts
+type DownloadOptions struct {
+	// TargetDir is where to download the artifact
+	TargetDir string
+	// ProgressWriter receives progress updates (optional)
+	ProgressWriter io.Writer
+	// SkipChecksum skips checksum verification (not recommended)
+	SkipChecksum bool
+}
+
+// assetDownloader implements Downloader using the Miren asset service
+type assetDownloader struct {
+	httpClient *http.Client
+	baseURL    string
+}
+
+// NewDownloader creates a new asset service downloader
+func NewDownloader() Downloader {
+	return &assetDownloader{
+		httpClient: &http.Client{},
+		baseURL:    "https://api.miren.cloud/assets/release/miren",
+	}
+}
+
+// Download downloads an artifact from the asset service
+func (d *assetDownloader) Download(ctx context.Context, artifact Artifact, opts DownloadOptions) (*DownloadedArtifact, error) {
+	// Create temp directory for download
+	tmpDir, err := os.MkdirTemp(opts.TargetDir, "miren-download-*")
+	if err != nil {
+		return nil, fmt.Errorf("failed to create temp dir: %w", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	// Download checksum first
+	var expectedChecksum string
+	if !opts.SkipChecksum {
+		checksum, err := d.downloadChecksum(ctx, artifact)
+		if err != nil {
+			return nil, fmt.Errorf("failed to download checksum: %w", err)
+		}
+		expectedChecksum = checksum
+	}
+
+	// Download artifact
+	tarPath := filepath.Join(tmpDir, "artifact.tar.gz")
+	size, err := d.downloadFile(ctx, artifact.GetDownloadURL(), tarPath, opts.ProgressWriter)
+	if err != nil {
+		return nil, fmt.Errorf("failed to download artifact: %w", err)
+	}
+
+	// Verify checksum
+	if !opts.SkipChecksum {
+		if err := d.verifyChecksum(tarPath, expectedChecksum); err != nil {
+			return nil, fmt.Errorf("checksum verification failed: %w", err)
+		}
+	}
+
+	// Extract the binary
+	binaryPath, err := d.extractBinary(tarPath, opts.TargetDir)
+	if err != nil {
+		return nil, fmt.Errorf("failed to extract binary: %w", err)
+	}
+
+	return &DownloadedArtifact{
+		Artifact: artifact,
+		Path:     binaryPath,
+		Checksum: expectedChecksum,
+		Size:     size,
+	}, nil
+}
+
+// GetLatestVersion returns the latest available version
+func (d *assetDownloader) GetLatestVersion(ctx context.Context, artifactType ArtifactType) (string, error) {
+	// For now, always return "main" as we don't have version discovery yet
+	return "main", nil
+}
+
+// downloadChecksum downloads the checksum file for an artifact
+func (d *assetDownloader) downloadChecksum(ctx context.Context, artifact Artifact) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, "GET", artifact.GetChecksumURL(), nil)
+	if err != nil {
+		return "", err
+	}
+
+	resp, err := d.httpClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("HTTP %d: %s", resp.StatusCode, resp.Status)
+	}
+
+	checksumData, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", err
+	}
+
+	// Checksum file format: "hash  filename"
+	parts := strings.Fields(string(checksumData))
+	if len(parts) < 1 {
+		return "", fmt.Errorf("invalid checksum format")
+	}
+
+	return parts[0], nil
+}
+
+// downloadFile downloads a file from URL to path
+func (d *assetDownloader) downloadFile(ctx context.Context, url, path string, progressWriter io.Writer) (int64, error) {
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	if err != nil {
+		return 0, err
+	}
+
+	resp, err := d.httpClient.Do(req)
+	if err != nil {
+		return 0, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return 0, fmt.Errorf("HTTP %d: %s", resp.StatusCode, resp.Status)
+	}
+
+	out, err := os.Create(path)
+	if err != nil {
+		return 0, err
+	}
+	defer out.Close()
+
+	var reader io.Reader = resp.Body
+	if progressWriter != nil {
+		reader = io.TeeReader(resp.Body, progressWriter)
+	}
+
+	written, err := io.Copy(out, reader)
+	if err != nil {
+		return 0, err
+	}
+
+	return written, nil
+}
+
+// verifyChecksum verifies the SHA256 checksum of a file
+func (d *assetDownloader) verifyChecksum(filePath, expectedChecksum string) error {
+	file, err := os.Open(filePath)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	hasher := sha256.New()
+	if _, err := io.Copy(hasher, file); err != nil {
+		return err
+	}
+
+	actualChecksum := hex.EncodeToString(hasher.Sum(nil))
+	if actualChecksum != expectedChecksum {
+		return fmt.Errorf("checksum mismatch: expected %s, got %s", expectedChecksum, actualChecksum)
+	}
+
+	return nil
+}
+
+// extractBinary extracts the miren binary from a tar.gz archive
+func (d *assetDownloader) extractBinary(tarPath, targetDir string) (string, error) {
+	file, err := os.Open(tarPath)
+	if err != nil {
+		return "", err
+	}
+	defer file.Close()
+
+	gzReader, err := gzip.NewReader(file)
+	if err != nil {
+		return "", err
+	}
+	defer gzReader.Close()
+
+	tarReader := tar.NewReader(gzReader)
+
+	// Create temp extraction directory
+	extractDir, err := os.MkdirTemp(targetDir, "extract-*")
+	if err != nil {
+		return "", err
+	}
+
+	// Extract all files
+	for {
+		header, err := tarReader.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return "", err
+		}
+
+		targetPath := filepath.Join(extractDir, header.Name)
+
+		switch header.Typeflag {
+		case tar.TypeDir:
+			if err := os.MkdirAll(targetPath, 0755); err != nil {
+				return "", err
+			}
+		case tar.TypeReg:
+			// Create directory if needed
+			if err := os.MkdirAll(filepath.Dir(targetPath), 0755); err != nil {
+				return "", err
+			}
+
+			outFile, err := os.Create(targetPath)
+			if err != nil {
+				return "", err
+			}
+
+			if _, err := io.Copy(outFile, tarReader); err != nil {
+				outFile.Close()
+				return "", err
+			}
+			outFile.Close()
+
+			// Set permissions
+			if err := os.Chmod(targetPath, os.FileMode(header.Mode)); err != nil {
+				return "", err
+			}
+
+			// If this is the miren binary, remember its path
+			if filepath.Base(targetPath) == "miren" {
+				// Move to final location
+				finalPath := filepath.Join(targetDir, "miren.new")
+				if err := os.Rename(targetPath, finalPath); err != nil {
+					return "", err
+				}
+				// Make executable
+				if err := os.Chmod(finalPath, 0755); err != nil {
+					return "", err
+				}
+				// Clean up extraction directory
+				os.RemoveAll(extractDir)
+				return finalPath, nil
+			}
+		}
+	}
+
+	// Clean up
+	os.RemoveAll(extractDir)
+	return "", fmt.Errorf("miren binary not found in archive")
+}

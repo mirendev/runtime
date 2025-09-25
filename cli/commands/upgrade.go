@@ -1,0 +1,102 @@
+package commands
+
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+
+	"miren.dev/runtime/pkg/release"
+)
+
+// UpgradeOptions contains options for the upgrade command
+type UpgradeOptions struct {
+	Version string `flag:"version" help:"Specific version to upgrade to (default: latest)"`
+	Check   bool   `flag:"check" help:"Check for available updates only"`
+	Force   bool   `flag:"force" help:"Force upgrade even if already up to date"`
+}
+
+// Upgrade upgrades the miren CLI to the latest or specified version
+func Upgrade(ctx *Context, opts UpgradeOptions) error {
+	// Determine installation path
+	exe, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("failed to determine current binary path: %w", err)
+	}
+
+	// Resolve any symlinks
+	exe, err = filepath.EvalSymlinks(exe)
+	if err != nil {
+		return fmt.Errorf("failed to resolve binary path: %w", err)
+	}
+
+	// Create manager with appropriate install path
+	mgrOpts := release.DefaultManagerOptions()
+	mgrOpts.InstallPath = exe
+	mgrOpts.SkipHealthCheck = true // CLI doesn't need health check
+	mgr := release.NewManager(mgrOpts)
+
+	// Check mode - just report if update is available
+	if opts.Check {
+		current, err := mgr.GetCurrentVersion(ctx)
+		if err != nil {
+			return fmt.Errorf("failed to get current version: %w", err)
+		}
+
+		latest, err := mgr.GetLatestVersion(ctx, release.ArtifactTypeBase)
+		if err != nil {
+			return fmt.Errorf("failed to check for updates: %w", err)
+		}
+
+		fmt.Printf("Current version: %s\n", current.Version)
+		fmt.Printf("Latest version:  %s\n", latest)
+
+		if current.Version != latest {
+			fmt.Println("\nAn update is available! Run 'miren upgrade' to install it.")
+		} else {
+			fmt.Println("\nYou are already on the latest version.")
+		}
+		return nil
+	}
+
+	// Check current version
+	current, _ := mgr.GetCurrentVersion(ctx)
+
+	// Determine target version
+	version := opts.Version
+	if version == "" {
+		version = "main" // Default to main branch for now
+	}
+
+	// Check if already up to date (unless forced)
+	if !opts.Force && current.Version == version {
+		fmt.Printf("Already at version %s\n", version)
+		return nil
+	}
+
+	// Create artifact descriptor
+	artifact := release.NewArtifact(release.ArtifactTypeBase, version)
+
+	// Perform upgrade
+	if err := mgr.UpgradeArtifact(ctx, artifact); err != nil {
+		return fmt.Errorf("upgrade failed: %w", err)
+	}
+
+	// Report success
+	newVersion, _ := mgr.GetCurrentVersion(ctx)
+	if current.Version != "" {
+		fmt.Printf("\nUpgrade successful:\n")
+		fmt.Printf("  Old: %s", current.Version)
+		if current.Commit != "" && current.Commit != "unknown" {
+			fmt.Printf(" (%s)", current.Commit[:8])
+		}
+		fmt.Printf("\n  New: %s", newVersion.Version)
+		if newVersion.Commit != "" && newVersion.Commit != "unknown" {
+			fmt.Printf(" (%s)", newVersion.Commit[:8])
+		}
+		fmt.Printf("\n")
+	} else {
+		fmt.Printf("\nInstalled version %s successfully\n", newVersion.Version)
+	}
+
+	return nil
+}
