@@ -20,11 +20,13 @@ import (
 	"miren.dev/runtime/api/network/network_v1alpha"
 	"miren.dev/runtime/api/storage/storage_v1alpha"
 	"miren.dev/runtime/clientconfig"
+	"miren.dev/runtime/components/coordinate"
 	"miren.dev/runtime/controllers/disk"
 	"miren.dev/runtime/controllers/ingress"
 	"miren.dev/runtime/controllers/sandbox"
 	"miren.dev/runtime/controllers/service"
 	"miren.dev/runtime/pkg/asm"
+	"miren.dev/runtime/pkg/cloudauth"
 	"miren.dev/runtime/pkg/controller"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/types"
@@ -42,8 +44,10 @@ type RunnerConfig struct {
 	// Optional RPC configuration for advanced setups
 	// If not provided, a default insecure connection will be used
 	// to connect to the server address.
-
 	Config *clientconfig.Config `json:"config" cbor:"config" yaml:"config"`
+
+	// Optional cloud authentication configuration for disk replication
+	CloudAuth *coordinate.CloudAuthConfig `json:"cloud_auth,omitempty" cbor:"cloud_auth,omitempty" yaml:"cloud_auth,omitempty"`
 }
 
 const (
@@ -258,7 +262,27 @@ func (r *Runner) SetupControllers(
 		return nil, fmt.Errorf("failed to create disk data path: %w", err)
 	}
 
-	lsvdClient := disk.NewLsvdClient(log, dataPath)
+	// Create LSVD client with optional replication support
+	var lsvdClient disk.LsvdClient
+	if r.CloudAuth != nil && r.CloudAuth.Enabled {
+		log.Info("Creating LSVD client with cloud replication",
+			"cloud_url", r.CloudAuth.CloudURL)
+
+		// Create auth client from cloud auth config
+		keyPair, err := cloudauth.LoadKeyPairFromPEM(r.CloudAuth.PrivateKey)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load keypair from private key: %w", err)
+		}
+
+		authClient, err := cloudauth.NewAuthClient(r.CloudAuth.CloudURL, keyPair)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create auth client: %w", err)
+		}
+
+		lsvdClient = disk.NewLsvdClientWithReplica(log, dataPath, authClient, r.CloudAuth.CloudURL)
+	} else {
+		lsvdClient = disk.NewLsvdClient(log, dataPath)
+	}
 
 	diskController := disk.NewDiskController(log, eas, lsvdClient)
 	diskLeaseController := disk.NewDiskLeaseController(log, eas, lsvdClient)

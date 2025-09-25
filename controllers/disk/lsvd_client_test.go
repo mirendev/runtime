@@ -467,7 +467,9 @@ func TestLsvdClient_ReplicaWriter(t *testing.T) {
 
 		// Create client with replica configuration
 		// Using a mock URL for testing - in production this would be the actual DiskAPI endpoint
-		client := NewLsvdClientWithReplica(log, tempDir, "http://diskapi.example.com", "test-token")
+		// For testing, we pass nil AuthClient since we're not making actual network calls
+		cloudURL := "http://diskapi.example.com"
+		client := NewLsvdClientWithReplica(log, tempDir, nil, cloudURL)
 
 		ctx := context.Background()
 		volumeId := "replica-test-vol"

@@ -444,7 +444,7 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 		// Configure cloud authentication from registration
 		cloudAuthConfig.Enabled = true
 		cloudAuthConfig.CloudURL = reg.CloudURL
-		cloudAuthConfig.PrivateKey = filepath.Join(registrationDir, "service-account.key")
+		cloudAuthConfig.PrivateKey = reg.PrivateKey // Use the actual private key content from registration
 		cloudAuthConfig.Tags = reg.Tags
 		cloudAuthConfig.ClusterID = reg.ClusterID
 	} else if reg != nil && reg.Status == "pending" {
@@ -612,6 +612,11 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 	rc.ListenAddress = cfg.Server.GetRunnerAddress()
 	rc.Workers = runner.DefaulWorkers
 	rc.Config = rcfg
+
+	// Pass cloud authentication config if available
+	if cloudAuthConfig.Enabled {
+		rc.CloudAuth = &cloudAuthConfig
+	}
 
 	err = ctx.Server.Populate(&rc)
 	if err != nil {

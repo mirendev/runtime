@@ -5,6 +5,7 @@ import (
 	"crypto/md5"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"hash/crc32"
 	"io"
 	"net/http"
@@ -18,11 +19,63 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"miren.dev/runtime/pkg/cloudauth"
 )
+
+// createTestAuthClient creates a mock auth client for testing
+// This sets up a mock server that responds to authentication requests
+func createTestAuthClient() *cloudauth.AuthClient {
+	// Create a mock server that handles auth requests
+	authServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/auth/service-account/begin":
+			response := map[string]any{
+				"envelope":  "test-envelope",
+				"challenge": "test-challenge",
+			}
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(response)
+
+		case "/auth/service-account/complete":
+			// Create a simple but valid JWT token for testing
+			// Format: header.payload.signature (base64url encoded)
+			// This is a minimal valid JWT with exp claim set to 1 hour from now
+			expiry := time.Now().Add(time.Hour).Unix()
+			header := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"HS256","typ":"JWT"}`))
+			payload := base64.RawURLEncoding.EncodeToString([]byte(fmt.Sprintf(`{"exp":%d,"sub":"test"}`, expiry)))
+			signature := base64.RawURLEncoding.EncodeToString([]byte("test-signature"))
+			testToken := fmt.Sprintf("%s.%s.%s", header, payload, signature)
+
+			response := map[string]any{
+				"service_account": map[string]string{
+					"id":   "test-account",
+					"name": "Test Account",
+				},
+				"token": testToken,
+			}
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(response)
+
+		default:
+			w.WriteHeader(404)
+		}
+	}))
+
+	// Generate a real key pair for testing to avoid nil pointer issues
+	keyPair, err := cloudauth.GenerateKeyPair()
+	if err != nil {
+		// Fallback - this shouldn't happen in tests
+		panic(fmt.Sprintf("Failed to generate test key pair: %v", err))
+	}
+
+	authClient, _ := cloudauth.NewAuthClient(authServer.URL, keyPair)
+	return authClient
+}
 
 func TestDiskAPISegmentAccess_ImplementsInterface(t *testing.T) {
 	logger := slog.Default()
-	access := NewDiskAPISegmentAccess(logger, "http://localhost:8080", "test-token")
+	authClient := createTestAuthClient()
+	access := NewDiskAPISegmentAccess(logger, "http://localhost:8080", authClient)
 
 	var _ SegmentAccess = access
 }
@@ -82,7 +135,8 @@ func TestDiskAPISegmentAccess_WithMockServer_UploadFlow_AbsoluteURL(t *testing.T
 	}))
 	defer server.Close()
 
-	access := NewDiskAPISegmentAccess(logger, server.URL, "test-token")
+	authClient := createTestAuthClient()
+	access := NewDiskAPISegmentAccess(logger, server.URL, authClient)
 
 	// Test that we can create a volume object
 	vol, err := access.OpenVolume(ctx, "test-volume")
@@ -172,7 +226,8 @@ func TestDiskAPISegmentAccess_WithMockServer_UploadFlow(t *testing.T) {
 	}))
 	defer server.Close()
 
-	access := NewDiskAPISegmentAccess(logger, server.URL, "test-token")
+	authClient := createTestAuthClient()
+	access := NewDiskAPISegmentAccess(logger, server.URL, authClient)
 
 	// Test that we can create a volume object
 	vol, err := access.OpenVolume(ctx, "test-volume")
@@ -223,7 +278,8 @@ func TestDiskAPISegmentAccess_WithMockServer_DownloadFlow(t *testing.T) {
 	}))
 	defer server.Close()
 
-	access := NewDiskAPISegmentAccess(logger, server.URL, "test-token")
+	authClient := createTestAuthClient()
+	access := NewDiskAPISegmentAccess(logger, server.URL, authClient)
 	vol, err := access.OpenVolume(ctx, "test-volume")
 	require.NoError(t, err)
 
@@ -336,7 +392,8 @@ func TestDiskAPISegmentAccess_VolumeOperations_WithMockServer(t *testing.T) {
 	}))
 	defer server.Close()
 
-	access := NewDiskAPISegmentAccess(logger, server.URL, "test-token")
+	authClient := createTestAuthClient()
+	access := NewDiskAPISegmentAccess(logger, server.URL, authClient)
 
 	t.Run("InitVolume", func(t *testing.T) {
 		volInfo := &VolumeInfo{
@@ -442,7 +499,8 @@ func TestDiskAPIVolume_VolumeOperations_WithMockServer(t *testing.T) {
 	}))
 	defer server.Close()
 
-	access := NewDiskAPISegmentAccess(logger, server.URL, "test-token")
+	authClient := createTestAuthClient()
+	access := NewDiskAPISegmentAccess(logger, server.URL, authClient)
 	vol, err := access.OpenVolume(ctx, "test-volume")
 	require.NoError(t, err)
 
@@ -509,7 +567,8 @@ func TestDiskAPISegmentReader_URLRefresh(t *testing.T) {
 	}))
 	defer server.Close()
 
-	access := NewDiskAPISegmentAccess(logger, server.URL, "test-token")
+	authClient := createTestAuthClient()
+	access := NewDiskAPISegmentAccess(logger, server.URL, authClient)
 	vol, err := access.OpenVolume(ctx, "test-volume")
 	require.NoError(t, err)
 
@@ -614,7 +673,8 @@ func TestDiskAPISegmentAccess_Checksums(t *testing.T) {
 	}))
 	defer server.Close()
 
-	access := NewDiskAPISegmentAccess(logger, server.URL, "test-token")
+	authClient := createTestAuthClient()
+	access := NewDiskAPISegmentAccess(logger, server.URL, authClient)
 	vol, err := access.OpenVolume(ctx, "test-volume")
 	require.NoError(t, err)
 
@@ -714,7 +774,8 @@ func TestDiskAPISegmentAccess_LargeFileChecksums(t *testing.T) {
 	}))
 	defer server.Close()
 
-	access := NewDiskAPISegmentAccess(logger, server.URL, "test-token")
+	authClient := createTestAuthClient()
+	access := NewDiskAPISegmentAccess(logger, server.URL, authClient)
 	vol, err := access.OpenVolume(ctx, "test-volume")
 	require.NoError(t, err)
 
@@ -762,7 +823,8 @@ func TestDiskAPISegmentAccess_SegmentDeletion_WithMockServer(t *testing.T) {
 	}))
 	defer server.Close()
 
-	access := NewDiskAPISegmentAccess(logger, server.URL, "test-token")
+	authClient := createTestAuthClient()
+	access := NewDiskAPISegmentAccess(logger, server.URL, authClient)
 
 	t.Run("RemoveSegment via SegmentAccess", func(t *testing.T) {
 		segId, err := ParseSegment("01HQZP3K4K9XQJX8WB6QR5NTEZ")
@@ -785,7 +847,8 @@ func TestDiskAPISegmentAccess_SegmentDeletion_WithMockServer(t *testing.T) {
 
 	t.Run("RemoveSegment handles errors", func(t *testing.T) {
 		// Use invalid server URL to test error handling
-		badAccess := NewDiskAPISegmentAccess(logger, "http://invalid-server:99999", "test-token")
+		authClient := createTestAuthClient()
+		badAccess := NewDiskAPISegmentAccess(logger, "http://invalid-server:99999", authClient)
 
 		segId, err := ParseSegment("01HQZP3K4K9XQJX8WB6QR5NTEZ")
 		require.NoError(t, err)

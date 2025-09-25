@@ -19,6 +19,7 @@ import (
 	"miren.dev/runtime/lsvd/pkg/ext4"
 	"miren.dev/runtime/lsvd/pkg/nbd"
 	"miren.dev/runtime/lsvd/pkg/nbdnl"
+	"miren.dev/runtime/pkg/cloudauth"
 	"miren.dev/runtime/pkg/units"
 )
 
@@ -86,9 +87,9 @@ type lsvdClientImpl struct {
 	volumes map[string]*volumeState
 	disks   map[string]*lsvd.Disk
 
-	// Optional disk API configuration for replication
-	diskAPIURL    string
-	diskAPIToken  string
+	// Optional auth client and cloud URL for replication
+	authClient    *cloudauth.AuthClient
+	cloudURL      string
 	enableReplica bool
 }
 
@@ -118,15 +119,15 @@ func NewLsvdClient(log *slog.Logger, dataPath string) LsvdClient {
 }
 
 // NewLsvdClientWithReplica creates a new LSVD client with DiskAPI replication
-func NewLsvdClientWithReplica(log *slog.Logger, dataPath string, diskAPIURL, diskAPIToken string) LsvdClient {
+func NewLsvdClientWithReplica(log *slog.Logger, dataPath string, authClient *cloudauth.AuthClient, cloudURL string) LsvdClient {
 	client := &lsvdClientImpl{
 		log:           log.With("module", "lsvd"),
 		dataPath:      dataPath,
 		volumes:       make(map[string]*volumeState),
 		disks:         make(map[string]*lsvd.Disk),
-		diskAPIURL:    diskAPIURL,
-		diskAPIToken:  diskAPIToken,
-		enableReplica: true,
+		authClient:    authClient,
+		cloudURL:      cloudURL,
+		enableReplica: authClient != nil,
 	}
 
 	return client
@@ -168,13 +169,14 @@ func (c *lsvdClientImpl) CreateVolumeInSegmentAccess(ctx context.Context, volume
 	var sa lsvd.SegmentAccess = localSA
 
 	// If replication is enabled, wrap with ReplicaWriter
-	if c.enableReplica && c.diskAPIURL != "" {
+	if c.enableReplica && c.authClient != nil {
 		c.log.Info("Creating volume with DiskAPI replication",
 			"volume", volumeId,
-			"api_url", c.diskAPIURL)
+			"cloud_url", c.cloudURL)
 
-		// Create replica using DiskAPI
-		replicaSA := lsvd.NewDiskAPISegmentAccess(c.log, c.diskAPIURL, c.diskAPIToken)
+		// Create replica using DiskAPI with auth client
+		diskAPIURL := c.cloudURL
+		replicaSA := lsvd.NewDiskAPISegmentAccess(c.log, diskAPIURL, c.authClient)
 
 		// Wrap with ReplicaWriter
 		sa = lsvd.ReplicaWriter(localSA, replicaSA)
@@ -256,8 +258,10 @@ func (c *lsvdClientImpl) InitializeDisk(ctx context.Context, volumeId string, fi
 	var sa lsvd.SegmentAccess = localSA
 
 	// If replication is enabled, wrap with ReplicaWriter
-	if c.enableReplica && c.diskAPIURL != "" {
-		replicaSA := lsvd.NewDiskAPISegmentAccess(c.log, c.diskAPIURL, c.diskAPIToken)
+	if c.enableReplica && c.authClient != nil {
+		// Create replica using DiskAPI with auth client
+		diskAPIURL := c.cloudURL
+		replicaSA := lsvd.NewDiskAPISegmentAccess(c.log, diskAPIURL, c.authClient)
 		sa = lsvd.ReplicaWriter(localSA, replicaSA)
 	}
 

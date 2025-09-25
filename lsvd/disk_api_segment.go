@@ -16,22 +16,24 @@ import (
 	"sync"
 	"time"
 
+	"github.com/davecgh/go-spew/spew"
+	"miren.dev/runtime/pkg/cloudauth"
 	"miren.dev/runtime/pkg/units"
 )
 
 type DiskAPISegmentAccess struct {
-	log     *slog.Logger
-	baseURL string
-	token   string
-	client  *http.Client
+	log        *slog.Logger
+	baseURL    string
+	authClient *cloudauth.AuthClient
+	client     *http.Client
 }
 
-func NewDiskAPISegmentAccess(log *slog.Logger, baseURL, token string) *DiskAPISegmentAccess {
+func NewDiskAPISegmentAccess(log *slog.Logger, baseURL string, authClient *cloudauth.AuthClient) *DiskAPISegmentAccess {
 	return &DiskAPISegmentAccess{
-		log:     log,
-		baseURL: baseURL,
-		token:   token,
-		client:  &http.Client{},
+		log:        log.With("module", "cloud-disk"),
+		baseURL:    baseURL,
+		authClient: authClient,
+		client:     &http.Client{},
 	}
 }
 
@@ -53,6 +55,7 @@ type CompleteUploadRequest struct {
 	CRC32C      string `json:"crc32c"`
 	Size        int64  `json:"size"`
 	BlockLayout string `json:"block_layout,omitempty"`
+	VolumeID    string `json:"volume_id,omitempty"`
 }
 
 type CompleteSegmentUploadResponse struct {
@@ -142,7 +145,13 @@ func (d *DiskAPISegmentAccess) InitVolume(ctx context.Context, vol *VolumeInfo) 
 	}
 
 	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Authorization", "Bearer "+d.token)
+
+	// Get fresh auth token
+	token, err := d.authClient.Authenticate(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to authenticate: %w", err)
+	}
+	httpReq.Header.Set("Authorization", "Bearer "+token)
 
 	resp, err := d.client.Do(httpReq)
 	if err != nil {
@@ -175,7 +184,12 @@ func (d *DiskAPISegmentAccess) ListVolumes(ctx context.Context) ([]string, error
 		return nil, fmt.Errorf("failed to create list volumes request: %w", err)
 	}
 
-	req.Header.Set("Authorization", "Bearer "+d.token)
+	// Get fresh auth token
+	token, err := d.authClient.Authenticate(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to authenticate: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
 
 	resp, err := d.client.Do(req)
 	if err != nil {
@@ -212,7 +226,12 @@ func (d *DiskAPISegmentAccess) RemoveSegment(ctx context.Context, seg SegmentId)
 		return fmt.Errorf("failed to create delete segment request: %w", err)
 	}
 
-	req.Header.Set("Authorization", "Bearer "+d.token)
+	// Get fresh auth token
+	token, err := d.authClient.Authenticate(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to authenticate: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
 
 	resp, err := d.client.Do(req)
 	if err != nil {
@@ -253,7 +272,12 @@ func (d *DiskAPISegmentAccess) GetVolumeInfo(ctx context.Context, vol string) (*
 		return nil, fmt.Errorf("failed to create get volume request: %w", err)
 	}
 
-	req.Header.Set("Authorization", "Bearer "+d.token)
+	// Get fresh auth token
+	token, err := d.authClient.Authenticate(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to authenticate: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
 
 	resp, err := d.client.Do(req)
 	if err != nil {
@@ -265,13 +289,19 @@ func (d *DiskAPISegmentAccess) GetVolumeInfo(ctx context.Context, vol string) (*
 		return nil, fmt.Errorf("volume %s not found", vol)
 	}
 
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read volume response body: %w", err)
+	}
+
+	spew.Dump(body)
+
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
 		return nil, fmt.Errorf("get volume failed with status %d: %s", resp.StatusCode, string(body))
 	}
 
 	var volInfo VolumeInfoResponse
-	if err := json.NewDecoder(resp.Body).Decode(&volInfo); err != nil {
+	if err := json.Unmarshal(body, &volInfo); err != nil {
 		return nil, fmt.Errorf("failed to decode volume response: %w", err)
 	}
 
@@ -305,7 +335,13 @@ func (v *DiskAPIVolume) ListSegments(ctx context.Context) ([]SegmentId, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to create segments request: %w", err)
 	}
-	req.Header.Set("Authorization", "Bearer "+v.access.token)
+
+	// Get fresh auth token
+	token, err := v.access.authClient.Authenticate(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to authenticate: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
 
 	// Don't follow redirects automatically - we need to get the Location header
 	client := &http.Client{
@@ -384,7 +420,12 @@ func (v *DiskAPIVolume) OpenSegment(ctx context.Context, seg SegmentId) (Segment
 		return nil, fmt.Errorf("failed to create download request: %w", err)
 	}
 
-	req.Header.Set("Authorization", "Bearer "+v.access.token)
+	// Get fresh auth token
+	token, err := v.access.authClient.Authenticate(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to authenticate: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
 
 	resp, err := v.access.client.Do(req)
 	if err != nil {
@@ -455,7 +496,13 @@ func (v *DiskAPIVolume) NewSegment(ctx context.Context, seg SegmentId, layout *S
 	}
 
 	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Authorization", "Bearer "+v.access.token)
+
+	// Get fresh auth token
+	token, err := v.access.authClient.Authenticate(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to authenticate: %w", err)
+	}
+	httpReq.Header.Set("Authorization", "Bearer "+token)
 
 	resp, err := v.access.client.Do(httpReq)
 	if err != nil {
@@ -493,6 +540,14 @@ func (v *DiskAPIVolume) NewSegment(ctx context.Context, seg SegmentId, layout *S
 	defer uploadHttpResp.Body.Close()
 
 	if uploadHttpResp.StatusCode < 200 || uploadHttpResp.StatusCode >= 300 {
+		v.access.log.Error("data upload failed",
+			"url", uploadResp.UploadURL,
+			"segment_id", uploadResp.SegmentID,
+			"expires_at", uploadResp.ExpiresAt,
+			"size", size,
+			"status", uploadHttpResp.StatusCode)
+
+		// Try to read response body for more info
 		body, _ := io.ReadAll(uploadHttpResp.Body)
 		return fmt.Errorf("data upload failed with status %d: %s", uploadHttpResp.StatusCode, string(body))
 	}
@@ -503,9 +558,10 @@ func (v *DiskAPIVolume) NewSegment(ctx context.Context, seg SegmentId, layout *S
 
 	// Step 3: Complete the upload
 	completeReq := CompleteUploadRequest{
-		MD5:    md5Hash,
-		CRC32C: crc32cHash,
-		Size:   size,
+		MD5:      md5Hash,
+		CRC32C:   crc32cHash,
+		Size:     size,
+		VolumeID: v.name,
 	}
 
 	completeBody, err := json.Marshal(completeReq)
@@ -532,7 +588,13 @@ func (v *DiskAPIVolume) NewSegment(ctx context.Context, seg SegmentId, layout *S
 	}
 
 	completeHttpReq.Header.Set("Content-Type", "application/json")
-	completeHttpReq.Header.Set("Authorization", "Bearer "+v.access.token)
+
+	// Get fresh auth token for completion request
+	token, err = v.access.authClient.Authenticate(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to authenticate for completion: %w", err)
+	}
+	completeHttpReq.Header.Set("Authorization", "Bearer "+token)
 
 	completeHttpResp, err := v.access.client.Do(completeHttpReq)
 	if err != nil {
@@ -593,7 +655,12 @@ func (r *DiskAPISegmentReader) refreshDownloadURL() error {
 		return fmt.Errorf("failed to create download request: %w", err)
 	}
 
-	req.Header.Set("Authorization", "Bearer "+r.volume.access.token)
+	// Get fresh auth token
+	token, err := r.volume.access.authClient.Authenticate(r.ctx)
+	if err != nil {
+		return fmt.Errorf("failed to authenticate: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
 
 	resp, err := r.volume.access.client.Do(req)
 	if err != nil {
