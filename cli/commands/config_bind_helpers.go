@@ -4,9 +4,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -33,24 +33,25 @@ type ClusterResponse struct {
 
 // formatAddressWithGrayPort formats an address with the port portion grayed out
 func formatAddressWithGrayPort(address string) string {
-	// Check for IPv6 format with port
-	if strings.Contains(address, "]:") {
-		parts := strings.Split(address, "]:")
-		if len(parts) == 2 {
-			grayPort := lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render("]:" + parts[1])
-			return parts[0] + grayPort
-		}
-	} else if strings.Contains(address, ":") {
-		// IPv4 or hostname with port
-		lastColon := strings.LastIndex(address, ":")
-		if lastColon > 0 {
-			host := address[:lastColon]
-			port := address[lastColon:]
-			grayPort := lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(port)
-			return host + grayPort
-		}
+	host, port, err := net.SplitHostPort(address)
+	if err != nil {
+		// No port or invalid format, return as-is
+		return address
 	}
-	return address
+
+	// Gray out the port portion
+	grayStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
+
+	// Check if host needs brackets (IPv6)
+	if strings.Contains(host, ":") {
+		// IPv6 address - reconstruct with brackets
+		grayPort := grayStyle.Render("]:" + port)
+		return "[" + host + grayPort
+	}
+
+	// IPv4 or hostname
+	grayPort := grayStyle.Render(":" + port)
+	return host + grayPort
 }
 
 // sortAddresses sorts addresses to prioritize public/routable addresses over localhost/0.0.0.0
@@ -107,58 +108,56 @@ func shouldSwapAddresses(addr1, addr2 string) bool {
 }
 
 func extractHost(address string) string {
-	// Handle both host:port and plain host formats
-	if strings.Contains(address, "]:") {
-		// IPv6 with port [::1]:8443
-		end := strings.Index(address, "]")
-		if end > 0 {
-			return address[1:end]
-		}
-	} else if strings.Contains(address, ":") {
-		// IPv4 or hostname with port
-		parts := strings.Split(address, ":")
-		if len(parts) > 0 {
-			return parts[0]
-		}
+	host, _, err := net.SplitHostPort(address)
+	if err != nil {
+		// No port or invalid format, return as-is
+		return address
 	}
-	return address
+	return host
 }
 
 func isLocalAddress(host string) bool {
-	return host == "127.0.0.1" ||
-		host == "0.0.0.0" ||
-		host == "localhost" ||
-		host == "::1" ||
-		strings.HasPrefix(host, "127.")
+	// Handle localhost hostname
+	if host == "localhost" {
+		return true
+	}
+
+	// Parse as IP address
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return false
+	}
+
+	// Check for loopback (127.0.0.0/8 or ::1)
+	if ip.IsLoopback() {
+		return true
+	}
+
+	// Check for unspecified addresses (0.0.0.0 or ::)
+	if ip.IsUnspecified() {
+		return true
+	}
+
+	return false
 }
 
 func isPrivateAddress(host string) bool {
-	// Check for RFC1918 private addresses
-	if strings.HasPrefix(host, "10.") {
-		return true
+	// Parse as IP address
+	ip := net.ParseIP(host)
+	if ip == nil {
+		// Not a valid IP, could be a hostname
+		return false
 	}
-	if strings.HasPrefix(host, "192.168.") {
-		return true
-	}
-	// Check for 172.16.0.0/12 range
-	if strings.HasPrefix(host, "172.") {
-		parts := strings.Split(host, ".")
-		if len(parts) >= 2 {
-			// Second octet should be 16-31 for private range
-			secondOctet, err := strconv.Atoi(parts[1])
-			if err != nil {
-				return false
-			}
-			if secondOctet >= 16 && secondOctet <= 31 {
-				return true
-			}
-		}
-	}
-	// Also consider link-local addresses as private
-	if strings.HasPrefix(host, "169.254.") {
-		return true
-	}
-	return false
+
+	// Use the built-in IsPrivate method (available in Go 1.17+)
+	// This checks for:
+	// - 10.0.0.0/8 (RFC1918)
+	// - 172.16.0.0/12 (RFC1918)
+	// - 192.168.0.0/16 (RFC1918)
+	// - 169.254.0.0/16 (link-local)
+	// - fc00::/7 (IPv6 unique local)
+	// - fe80::/10 (IPv6 link-local)
+	return ip.IsPrivate()
 }
 
 // fetchAvailableClusters queries the identity server for available clusters
