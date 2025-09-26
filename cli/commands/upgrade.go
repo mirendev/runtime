@@ -61,7 +61,7 @@ func Upgrade(ctx *Context, opts UpgradeOptions) error {
 			if metadata.Commit != "" && current.Commit != "" && len(metadata.Commit) > 7 && len(current.Commit) > 7 {
 				if metadata.Commit[:7] != current.Commit[:7] {
 					fmt.Printf("Latest commit:   %s\n", metadata.Commit[:7])
-					if metadata.BuildDate.IsZero() == false {
+					if !metadata.BuildDate.IsZero() {
 						fmt.Printf("Build date:      %s\n", metadata.BuildDate.Format("2006-01-02 15:04:05 UTC"))
 					}
 				}
