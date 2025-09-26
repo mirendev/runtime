@@ -14,7 +14,6 @@ import (
 type ExtentReader struct {
 	log          *slog.Logger
 	openSegments *lru.Cache[SegmentId, SegmentReader]
-	sa           SegmentAccess
 	rangeCache   *RangeCache
 	vol          Volume
 }

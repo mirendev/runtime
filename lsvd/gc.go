@@ -40,7 +40,6 @@ type CopyIterator struct {
 	or  SegmentReader
 	//br  *bufio.Reader
 
-	err error
 
 	//hdr SegmentHeader
 

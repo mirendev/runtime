@@ -699,7 +699,7 @@ type reexportUpdateReceiver struct {
 	client rpc.Client
 }
 
-func (_ reexportUpdateReceiver) Update(ctx context.Context, state *UpdateReceiverUpdate) error {
+func (reexportUpdateReceiver) Update(ctx context.Context, state *UpdateReceiverUpdate) error {
 	panic("not implemented")
 }
 
@@ -846,7 +846,7 @@ type reexportMeterUpdates struct {
 	client rpc.Client
 }
 
-func (_ reexportMeterUpdates) RegisterUpdates(ctx context.Context, state *MeterUpdatesRegisterUpdates) error {
+func (reexportMeterUpdates) RegisterUpdates(ctx context.Context, state *MeterUpdatesRegisterUpdates) error {
 	panic("not implemented")
 }
 
@@ -1297,7 +1297,7 @@ type reexportEmitTemps struct {
 	client rpc.Client
 }
 
-func (_ reexportEmitTemps) Emit(ctx context.Context, state *EmitTempsEmit) error {
+func (reexportEmitTemps) Emit(ctx context.Context, state *EmitTempsEmit) error {
 	panic("not implemented")
 }
 

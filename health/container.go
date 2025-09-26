@@ -2,11 +2,8 @@ package health
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
-	"net"
-	"net/http"
 	"net/netip"
 	"strconv"
 	"strings"
@@ -470,72 +467,4 @@ func (c *ContainerMonitor) checkPort2(ctx context.Context, addr string, dur time
 	return nil
 }
 
-func (c *ContainerMonitor) checkPort(ctx context.Context, addr string, dur time.Duration, ep *Endpoint) error {
-	start := time.Now()
 
-	if strings.IndexByte(addr, ':') != -1 {
-		addr = fmt.Sprintf("[%s]:%d", addr, ep.Port)
-	} else {
-		addr = fmt.Sprintf("%s:%d", addr, ep.Port)
-	}
-
-	for time.Since(start) < dur {
-		conn, err := net.Dial("tcp", addr)
-		if err == nil {
-			conn.Close()
-
-			c.Log.Info("generic port active", "addr", addr, "port", ep.Port)
-
-			c.mu.Lock()
-			c.cond.Broadcast()
-			ep.Status = observability.PortStatusActive
-			c.mu.Unlock()
-			return nil
-		}
-
-		time.Sleep(500 * time.Millisecond)
-	}
-
-	return nil
-}
-
-func (c *ContainerMonitor) checkHTTP(ctx context.Context, addr string, dur time.Duration, ep *Endpoint) error {
-	start := time.Now()
-
-	var url string
-
-	if strings.IndexByte(addr, ':') != -1 {
-		url = fmt.Sprintf("http://[%s]:%d/", addr, ep.Port)
-	} else {
-		url = fmt.Sprintf("http://%s:%d/", addr, ep.Port)
-	}
-
-	for time.Since(start) < dur {
-		resp, err := http.Get(url)
-		if err != nil {
-			var netErr *net.OpError
-			if errors.As(err, &netErr) {
-				if !netErr.Temporary() && netErr.Op != "dial" {
-					c.Log.Error("unable to check http port", "addr", addr, "port", ep.Port, "error", err, "op", netErr.Op)
-				}
-			} else {
-				c.Log.Error("error checking http port", "addr", addr, "port", ep.Port, "error", err)
-			}
-		} else if resp.StatusCode < 400 {
-			c.mu.Lock()
-			c.cond.Broadcast()
-			ep.Status = observability.PortStatusActive
-			c.mu.Unlock()
-
-			c.Log.Info("http port active", "addr", addr, "port", ep.Port, "status", resp.StatusCode)
-			return nil
-		} else {
-			c.Log.Warn("http port bad status", "addr", addr, "port", ep.Port, "status", resp.StatusCode)
-		}
-
-		time.Sleep(500 * time.Millisecond)
-	}
-
-	c.Log.Warn("giving up on checking port status")
-	return nil
-}
