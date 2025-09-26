@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"os"
 	"os/exec"
 	"strings"
 	"time"
@@ -29,8 +30,10 @@ type HealthCheckOptions struct {
 // DefaultHealthCheckOptions returns default health check options
 func DefaultHealthCheckOptions() HealthCheckOptions {
 	return HealthCheckOptions{
-		ServiceName:    "miren",
-		HealthEndpoint: "http://localhost:8080/health",
+		ServiceName: "miren",
+		// TODO: Implement proper health check endpoint in miren server
+		// Once implemented, this should be set to the actual health endpoint URL
+		HealthEndpoint: "",
 		MaxRetries:     30,
 		RetryDelay:     2 * time.Second,
 	}
@@ -73,11 +76,21 @@ func (v *systemdHealthVerifier) VerifyHealth(ctx context.Context, timeout time.D
 
 // checkSystemdStatus checks if the systemd service is active
 func (v *systemdHealthVerifier) checkSystemdStatus(ctx context.Context) error {
-	cmd := exec.CommandContext(ctx, "systemctl", "is-active", v.opts.ServiceName)
+	// Use --user flag for user services when not running as root
+	args := []string{"is-active", v.opts.ServiceName}
+	if os.Geteuid() != 0 {
+		args = append([]string{"--user"}, args...)
+	}
+
+	cmd := exec.CommandContext(ctx, "systemctl", args...)
 	output, err := cmd.Output()
 	if err != nil {
 		// Check if service exists
-		checkCmd := exec.CommandContext(ctx, "systemctl", "status", v.opts.ServiceName)
+		statusArgs := []string{"status", v.opts.ServiceName}
+		if os.Geteuid() != 0 {
+			statusArgs = append([]string{"--user"}, statusArgs...)
+		}
+		checkCmd := exec.CommandContext(ctx, "systemctl", statusArgs...)
 		if checkErr := checkCmd.Run(); checkErr != nil {
 			return fmt.Errorf("service %s not found", v.opts.ServiceName)
 		}

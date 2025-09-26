@@ -34,9 +34,10 @@ type ManagerOptions struct {
 
 // DefaultManagerOptions returns default manager options
 func DefaultManagerOptions() ManagerOptions {
+	// Use os.TempDir() which respects TMPDIR environment variable
 	return ManagerOptions{
 		InstallPath:     "/var/lib/miren/release/miren",
-		TempDir:         "/tmp",
+		TempDir:         os.TempDir(),
 		ServiceName:     "miren",
 		HealthTimeout:   60 * time.Second,
 		SkipHealthCheck: false,

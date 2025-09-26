@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -159,7 +160,7 @@ func (d *assetDownloader) GetVersionMetadata(ctx context.Context, version string
 		version = "main"
 	}
 
-	metadataURL := fmt.Sprintf("%s/%s/version.json", d.baseURL, version)
+	metadataURL, _ := url.JoinPath(d.baseURL, version, "version.json")
 
 	req, err := http.NewRequestWithContext(ctx, "GET", metadataURL, nil)
 	if err != nil {

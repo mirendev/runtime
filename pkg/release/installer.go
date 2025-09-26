@@ -60,6 +60,11 @@ func (i *binaryInstaller) Install(ctx context.Context, downloaded *DownloadedArt
 		}
 	}
 
+	// Ensure binary is executable before moving to final location
+	if err := os.Chmod(downloaded.Path, 0755); err != nil {
+		return fmt.Errorf("failed to set binary permissions: %w", err)
+	}
+
 	// Atomic rename from downloaded location to install path
 	if err := os.Rename(downloaded.Path, i.opts.InstallPath); err != nil {
 		// If rename fails (e.g., cross-device), fall back to copy
@@ -68,11 +73,6 @@ func (i *binaryInstaller) Install(ctx context.Context, downloaded *DownloadedArt
 		}
 		// Clean up source file after successful copy
 		os.Remove(downloaded.Path)
-	}
-
-	// Ensure binary is executable
-	if err := os.Chmod(i.opts.InstallPath, 0755); err != nil {
-		return fmt.Errorf("failed to set binary permissions: %w", err)
 	}
 
 	// Write checksum file
@@ -112,6 +112,11 @@ func (i *binaryInstaller) Rollback(ctx context.Context) error {
 		return fmt.Errorf("no backup found at %s: %w", backupPath, err)
 	}
 
+	// Ensure backup has proper permissions before restoring
+	if err := os.Chmod(backupPath, 0755); err != nil {
+		return fmt.Errorf("failed to set backup permissions: %w", err)
+	}
+
 	// Remove current binary if it exists
 	os.Remove(i.opts.InstallPath)
 
@@ -123,11 +128,6 @@ func (i *binaryInstaller) Rollback(ctx context.Context) error {
 		}
 		// Remove backup after successful copy
 		os.Remove(backupPath)
-	}
-
-	// Ensure binary is executable
-	if err := os.Chmod(i.opts.InstallPath, 0755); err != nil {
-		return fmt.Errorf("failed to set binary permissions: %w", err)
 	}
 
 	return nil
