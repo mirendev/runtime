@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -144,10 +145,12 @@ func isPrivateAddress(host string) bool {
 		parts := strings.Split(host, ".")
 		if len(parts) >= 2 {
 			// Second octet should be 16-31 for private range
-			if second := parts[1]; len(second) > 0 {
-				if second >= "16" && second <= "31" {
-					return true
-				}
+			secondOctet, err := strconv.Atoi(parts[1])
+			if err != nil {
+				return false
+			}
+			if secondOctet >= 16 && secondOctet <= 31 {
+				return true
 			}
 		}
 	}
