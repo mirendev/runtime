@@ -153,7 +153,7 @@ func (m *PickerModel) View() string {
 
 	// Style for selected row
 	selectedStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("170")).
+		Foreground(lipgloss.Color("39")).
 		Bold(true)
 
 	// Style for disabled rows
