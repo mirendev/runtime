@@ -39,7 +39,7 @@ func Upgrade(ctx *Context, opts struct {
 
 	// Check mode - just report if update is available
 	if opts.Check {
-		current, latest, err := CheckVersionStatus(ctx, opts.Version)
+		current, latest, err := CheckVersionStatus(ctx, opts.Version, &mgrOpts)
 		if err != nil {
 			return err
 		}
@@ -61,7 +61,7 @@ func Upgrade(ctx *Context, opts struct {
 		version = "main" // Default to main branch
 	}
 
-	needsUpgrade, err := CheckIfUpgradeNeeded(ctx, version, opts.Force)
+	needsUpgrade, err := CheckIfUpgradeNeeded(ctx, version, opts.Force, &mgrOpts)
 	if err != nil {
 		ctx.Log.Warn("could not check version status", "error", err)
 		// Continue with upgrade if we can't check
@@ -82,7 +82,7 @@ func Upgrade(ctx *Context, opts struct {
 	}
 
 	// Report success
-	PrintUpgradeSuccess(ctx, current, "CLI")
+	PrintUpgradeSuccess(ctx, current, "CLI", &mgrOpts)
 
 	return nil
 }

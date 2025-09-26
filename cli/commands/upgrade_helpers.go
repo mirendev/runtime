@@ -9,8 +9,13 @@ import (
 
 // CheckVersionStatus checks if an update is available for the given target version
 // Returns the current and latest version info
-func CheckVersionStatus(ctx context.Context, targetVersion string) (current, latest release.VersionInfo, err error) {
-	mgr := release.NewManager(release.DefaultManagerOptions())
+// If mgrOpts is nil, uses default manager options (for server path)
+func CheckVersionStatus(ctx context.Context, targetVersion string, mgrOpts *release.ManagerOptions) (current, latest release.VersionInfo, err error) {
+	opts := release.DefaultManagerOptions()
+	if mgrOpts != nil {
+		opts = *mgrOpts
+	}
+	mgr := release.NewManager(opts)
 	current, _ = mgr.GetCurrentVersion(ctx)
 
 	if targetVersion == "" {
@@ -53,12 +58,13 @@ func PrintVersionComparison(current, latest release.VersionInfo) {
 
 // CheckIfUpgradeNeeded checks if target version is newer than current
 // Returns true if upgrade is needed, false if already up to date
-func CheckIfUpgradeNeeded(ctx context.Context, targetVersion string, force bool) (bool, error) {
+// If mgrOpts is nil, uses default manager options (for server path)
+func CheckIfUpgradeNeeded(ctx context.Context, targetVersion string, force bool, mgrOpts *release.ManagerOptions) (bool, error) {
 	if force {
 		return true, nil
 	}
 
-	current, latest, err := CheckVersionStatus(ctx, targetVersion)
+	current, latest, err := CheckVersionStatus(ctx, targetVersion, mgrOpts)
 	if err != nil {
 		// If we can't check, allow upgrade to proceed
 		return true, nil
@@ -82,8 +88,13 @@ func CheckIfUpgradeNeeded(ctx context.Context, targetVersion string, force bool)
 }
 
 // PrintUpgradeSuccess prints a formatted success message after upgrade
-func PrintUpgradeSuccess(ctx context.Context, oldVersion release.VersionInfo, commandType string) {
-	mgr := release.NewManager(release.DefaultManagerOptions())
+// If mgrOpts is nil, uses default manager options (for server path)
+func PrintUpgradeSuccess(ctx context.Context, oldVersion release.VersionInfo, commandType string, mgrOpts *release.ManagerOptions) {
+	opts := release.DefaultManagerOptions()
+	if mgrOpts != nil {
+		opts = *mgrOpts
+	}
+	mgr := release.NewManager(opts)
 	newVersion, _ := mgr.GetCurrentVersion(ctx)
 
 	if oldVersion.Version != "" {

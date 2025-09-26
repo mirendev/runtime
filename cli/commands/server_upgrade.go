@@ -34,9 +34,18 @@ func ServerUpgrade(ctx *Context, opts struct {
 		version = "main" // Default to main branch
 	}
 
+	// Create manager with server configuration
+	mgrOpts := release.DefaultManagerOptions()
+	mgrOpts.SkipHealthCheck = opts.SkipHealth
+	mgrOpts.AutoRollback = !opts.NoAutoRollback
+	if opts.HealthTimeout > 0 {
+		mgrOpts.HealthTimeout = time.Duration(opts.HealthTimeout) * time.Second
+	}
+
 	// If just checking for updates
 	if opts.Check {
-		current, latest, err := CheckVersionStatus(ctx, version)
+		// For server check, use default server path (nil passes through to default)
+		current, latest, err := CheckVersionStatus(ctx, version, nil)
 		if err != nil {
 			return err
 		}
@@ -53,20 +62,13 @@ func ServerUpgrade(ctx *Context, opts struct {
 	}
 
 	// Check if upgrade is needed (unless forced)
-	needsUpgrade, err := CheckIfUpgradeNeeded(ctx, version, opts.Force)
+	// For server upgrade, use default server path (nil passes through to default)
+	needsUpgrade, err := CheckIfUpgradeNeeded(ctx, version, opts.Force, nil)
 	if err != nil {
 		ctx.Log.Warn("could not check version status", "error", err)
 		// Continue with upgrade if we can't check
 	} else if !needsUpgrade {
 		return nil // Already up to date
-	}
-
-	// Create manager with server configuration
-	mgrOpts := release.DefaultManagerOptions()
-	mgrOpts.SkipHealthCheck = opts.SkipHealth
-	mgrOpts.AutoRollback = !opts.NoAutoRollback
-	if opts.HealthTimeout > 0 {
-		mgrOpts.HealthTimeout = time.Duration(opts.HealthTimeout) * time.Second
 	}
 
 	mgr := release.NewManager(mgrOpts)
@@ -93,7 +95,8 @@ func ServerUpgrade(ctx *Context, opts struct {
 	}
 
 	// Report final status
-	PrintUpgradeSuccess(ctx, current, "Server")
+	// For server upgrade, use default server path (nil passes through to default)
+	PrintUpgradeSuccess(ctx, current, "Server", nil)
 
 	return nil
 }
