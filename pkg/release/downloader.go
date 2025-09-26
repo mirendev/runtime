@@ -293,6 +293,7 @@ func (d *assetDownloader) extractTarGz(tarPath, targetDir string) (string, error
 	if err != nil {
 		return "", err
 	}
+	defer os.RemoveAll(extractDir)
 
 	// Extract all files
 	for {
@@ -344,15 +345,11 @@ func (d *assetDownloader) extractTarGz(tarPath, targetDir string) (string, error
 				if err := os.Chmod(finalPath, 0755); err != nil {
 					return "", err
 				}
-				// Clean up extraction directory
-				os.RemoveAll(extractDir)
 				return finalPath, nil
 			}
 		}
 	}
 
-	// Clean up
-	os.RemoveAll(extractDir)
 	return "", fmt.Errorf("miren binary not found in archive")
 }
 
@@ -369,6 +366,7 @@ func (d *assetDownloader) extractZip(zipPath, targetDir string) (string, error) 
 	if err != nil {
 		return "", err
 	}
+	defer os.RemoveAll(extractDir)
 
 	// Look for the miren binary
 	for _, file := range reader.File {
@@ -399,13 +397,9 @@ func (d *assetDownloader) extractZip(zipPath, targetDir string) (string, error) 
 				return "", err
 			}
 
-			// Clean up extraction directory
-			os.RemoveAll(extractDir)
 			return finalPath, nil
 		}
 	}
 
-	// Clean up
-	os.RemoveAll(extractDir)
 	return "", fmt.Errorf("miren binary not found in zip archive")
 }
