@@ -157,12 +157,46 @@ func (i *binaryInstaller) copyFile(src, dst string) error {
 	}
 	defer source.Close()
 
-	destination, err := os.Create(dst)
+	// Create temp file in the same directory as destination for atomic rename
+	tempFile, err := os.CreateTemp(filepath.Dir(dst), ".miren-install-*")
 	if err != nil {
 		return err
 	}
-	defer destination.Close()
+	tempPath := tempFile.Name()
 
-	_, err = io.Copy(destination, source)
-	return err
+	// Ensure temp file is cleaned up if we fail
+	defer func() {
+		if tempFile != nil {
+			tempFile.Close()
+			os.Remove(tempPath)
+		}
+	}()
+
+	// Copy contents to temp file
+	if _, err = io.Copy(tempFile, source); err != nil {
+		return err
+	}
+
+	// Sync to disk before rename
+	if err := tempFile.Sync(); err != nil {
+		return err
+	}
+
+	// Close temp file before rename
+	tempFile.Close()
+	tempFile = nil // Prevent defer cleanup
+
+	// Set permissions before rename
+	if err := os.Chmod(tempPath, 0755); err != nil {
+		os.Remove(tempPath)
+		return err
+	}
+
+	// Atomic rename
+	if err := os.Rename(tempPath, dst); err != nil {
+		os.Remove(tempPath)
+		return err
+	}
+
+	return nil
 }

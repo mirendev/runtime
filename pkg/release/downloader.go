@@ -2,6 +2,7 @@ package release
 
 import (
 	"archive/tar"
+	"archive/zip"
 	"compress/gzip"
 	"context"
 	"crypto/sha256"
@@ -12,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // Downloader handles artifact downloads from the asset service
@@ -42,8 +44,10 @@ type assetDownloader struct {
 // NewDownloader creates a new asset service downloader
 func NewDownloader() Downloader {
 	return &assetDownloader{
-		httpClient: &http.Client{},
-		baseURL:    "https://api.miren.cloud/assets/release/miren",
+		httpClient: &http.Client{
+			Timeout: 30 * time.Minute, // Allow long downloads for large artifacts
+		},
+		baseURL: "https://api.miren.cloud/assets/release/miren",
 	}
 }
 
@@ -72,22 +76,34 @@ func (d *assetDownloader) Download(ctx context.Context, artifact Artifact, opts 
 		}
 	}
 
-	// Download artifact
-	tarPath := filepath.Join(tmpDir, "artifact.tar.gz")
-	size, err := d.downloadFile(ctx, artifact.GetDownloadURL(), tarPath, opts.ProgressWriter)
+	// Download artifact - preserve original extension
+	downloadURL := artifact.GetDownloadURL()
+	var archivePath string
+	if strings.HasSuffix(downloadURL, ".zip") {
+		archivePath = filepath.Join(tmpDir, "artifact.zip")
+	} else {
+		archivePath = filepath.Join(tmpDir, "artifact.tar.gz")
+	}
+
+	size, err := d.downloadFile(ctx, downloadURL, archivePath, opts.ProgressWriter)
 	if err != nil {
 		return nil, fmt.Errorf("failed to download artifact: %w", err)
 	}
 
 	// Verify checksum
 	if !opts.SkipChecksum {
-		if err := d.verifyChecksum(tarPath, expectedChecksum); err != nil {
+		if err := d.verifyChecksum(archivePath, expectedChecksum); err != nil {
 			return nil, fmt.Errorf("checksum verification failed: %w", err)
 		}
 	}
 
-	// Extract the binary
-	binaryPath, err := d.extractBinary(tarPath, opts.TargetDir)
+	// Extract the binary based on file type
+	var binaryPath string
+	if strings.HasSuffix(archivePath, ".zip") {
+		binaryPath, err = d.extractZip(archivePath, opts.TargetDir)
+	} else {
+		binaryPath, err = d.extractTarGz(archivePath, opts.TargetDir)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to extract binary: %w", err)
 	}
@@ -256,8 +272,8 @@ func (d *assetDownloader) verifyChecksum(filePath, expectedChecksum string) erro
 	return nil
 }
 
-// extractBinary extracts the miren binary from a tar.gz archive
-func (d *assetDownloader) extractBinary(tarPath, targetDir string) (string, error) {
+// extractTarGz extracts the miren binary from a tar.gz archive
+func (d *assetDownloader) extractTarGz(tarPath, targetDir string) (string, error) {
 	file, err := os.Open(tarPath)
 	if err != nil {
 		return "", err
@@ -338,4 +354,58 @@ func (d *assetDownloader) extractBinary(tarPath, targetDir string) (string, erro
 	// Clean up
 	os.RemoveAll(extractDir)
 	return "", fmt.Errorf("miren binary not found in archive")
+}
+
+// extractZip extracts the miren binary from a zip archive
+func (d *assetDownloader) extractZip(zipPath, targetDir string) (string, error) {
+	reader, err := zip.OpenReader(zipPath)
+	if err != nil {
+		return "", err
+	}
+	defer reader.Close()
+
+	// Create temp extraction directory
+	extractDir, err := os.MkdirTemp(targetDir, "extract-*")
+	if err != nil {
+		return "", err
+	}
+
+	// Look for the miren binary
+	for _, file := range reader.File {
+		if filepath.Base(file.Name) == "miren" {
+			// Open the file in the zip
+			rc, err := file.Open()
+			if err != nil {
+				return "", err
+			}
+			defer rc.Close()
+
+			// Create the output file
+			finalPath := filepath.Join(targetDir, "miren.new")
+			outFile, err := os.Create(finalPath)
+			if err != nil {
+				return "", err
+			}
+
+			// Copy contents
+			if _, err := io.Copy(outFile, rc); err != nil {
+				outFile.Close()
+				return "", err
+			}
+			outFile.Close()
+
+			// Make executable
+			if err := os.Chmod(finalPath, 0755); err != nil {
+				return "", err
+			}
+
+			// Clean up extraction directory
+			os.RemoveAll(extractDir)
+			return finalPath, nil
+		}
+	}
+
+	// Clean up
+	os.RemoveAll(extractDir)
+	return "", fmt.Errorf("miren binary not found in zip archive")
 }

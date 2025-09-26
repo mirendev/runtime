@@ -91,8 +91,9 @@ func Upgrade(ctx *Context, opts UpgradeOptions) error {
 		return nil
 	}
 
-	// Create artifact descriptor
-	artifact := release.NewArtifact(release.ArtifactTypeBase, version)
+	// Create artifact descriptor - use binary type for CLI upgrades (just the miren binary)
+	// Binary artifacts are .zip files available for all platforms
+	artifact := release.NewArtifact(release.ArtifactTypeBinary, version)
 
 	// Perform upgrade
 	if err := mgr.UpgradeArtifact(ctx, artifact); err != nil {
@@ -104,12 +105,20 @@ func Upgrade(ctx *Context, opts UpgradeOptions) error {
 	if current.Version != "" {
 		fmt.Printf("\nUpgrade successful:\n")
 		fmt.Printf("  Old: %s", current.Version)
-		if current.Commit != "" && current.Commit != "unknown" {
-			fmt.Printf(" (%s)", current.Commit[:8])
+		if c := current.Commit; c != "" && c != "unknown" {
+			end := 8
+			if len(c) < end {
+				end = len(c)
+			}
+			fmt.Printf(" (%s)", c[:end])
 		}
 		fmt.Printf("\n  New: %s", newVersion.Version)
-		if newVersion.Commit != "" && newVersion.Commit != "unknown" {
-			fmt.Printf(" (%s)", newVersion.Commit[:8])
+		if c := newVersion.Commit; c != "" && c != "unknown" {
+			end := 8
+			if len(c) < end {
+				end = len(c)
+			}
+			fmt.Printf(" (%s)", c[:end])
 		}
 		fmt.Printf("\n")
 	} else {

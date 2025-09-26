@@ -5,7 +5,7 @@ After=network.target containerd.service
 Wants=containerd.service
 
 [Service]
-Type=notify
+Type=simple
 ExecStart=/var/lib/miren/release/miren server
 ExecReload=/bin/kill -s HUP $MAINPID
 

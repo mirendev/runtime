@@ -71,12 +71,20 @@ func ServerUpgrade(ctx *Context, opts ServerUpgradeOptions) error {
 	if current.Version != "" {
 		fmt.Printf("\nServer upgrade successful:\n")
 		fmt.Printf("  Old: %s", current.Version)
-		if current.Commit != "" && current.Commit != "unknown" {
-			fmt.Printf(" (%s)", current.Commit[:8])
+		if c := current.Commit; c != "" && c != "unknown" {
+			end := 8
+			if len(c) < end {
+				end = len(c)
+			}
+			fmt.Printf(" (%s)", c[:end])
 		}
 		fmt.Printf("\n  New: %s", newVersion.Version)
-		if newVersion.Commit != "" && newVersion.Commit != "unknown" {
-			fmt.Printf(" (%s)", newVersion.Commit[:8])
+		if c := newVersion.Commit; c != "" && c != "unknown" {
+			end := 8
+			if len(c) < end {
+				end = len(c)
+			}
+			fmt.Printf(" (%s)", c[:end])
 		}
 		fmt.Printf("\n")
 	}
