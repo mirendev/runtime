@@ -186,18 +186,24 @@ func (m *PickerModel) View() string {
 				Width(col.Width).
 				MaxWidth(col.Width).
 				Inline(true)
-			
+
 			// Render the cell with width constraints
 			renderedCell := cellStyle.Render(col.Title)
-			
-			// Then apply header styling (underline, bold, color)
-			headerStyle := lipgloss.NewStyle().
-				Bold(true).
-				Underline(true).
-				UnderlineSpaces(true).
-				Foreground(lipgloss.Color("220"))
-			
-			headerCells = append(headerCells, headerStyle.Render(renderedCell))
+
+			// Apply header styling - skip underline for selection column (first column)
+			if i == 0 && col.Title == "" {
+				// Selection indicator column - no underline
+				headerCells = append(headerCells, renderedCell)
+			} else {
+				// Regular header with underline
+				headerStyle := lipgloss.NewStyle().
+					Bold(true).
+					Underline(true).
+					UnderlineSpaces(true).
+					Foreground(lipgloss.Color("220"))
+
+				headerCells = append(headerCells, headerStyle.Render(renderedCell))
+			}
 		}
 		tableLines = append(tableLines, lipgloss.JoinHorizontal(lipgloss.Top, headerCells...))
 	}
