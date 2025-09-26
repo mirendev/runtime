@@ -11,6 +11,8 @@ import (
 // ServerUpgrade upgrades the miren server to the latest or specified version
 func ServerUpgrade(ctx *Context, opts struct {
 	Version        string `short:"v" long:"version" description:"Specific version to upgrade to (default: main)"`
+	Check          bool   `short:"c" long:"check" description:"Check for available updates only"`
+	Force          bool   `short:"f" long:"force" description:"Force upgrade even if already up to date"`
 	Release        bool   `short:"r" long:"release" description:"Upgrade full release package (not just base)"`
 	SkipHealth     bool   `long:"skip-health" description:"Skip health check after upgrade"`
 	NoAutoRollback bool   `long:"no-auto-rollback" description:"Disable automatic rollback on failure"`
@@ -26,6 +28,39 @@ func ServerUpgrade(ctx *Context, opts struct {
 		return fmt.Errorf("miren server is not running. Use 'miren upgrade' to upgrade the CLI binary instead")
 	}
 
+	// Determine target version
+	version := opts.Version
+	if version == "" {
+		version = "main" // Default to main branch
+	}
+
+	// If just checking for updates
+	if opts.Check {
+		current, latest, err := CheckVersionStatus(ctx, version)
+		if err != nil {
+			return err
+		}
+
+		PrintVersionComparison(current, latest)
+
+		// Use proper version comparison with build dates
+		if latest.IsNewer(current) {
+			fmt.Println("\nAn update is available! Run 'sudo miren server upgrade' to install it.")
+		} else {
+			fmt.Println("\nYour server is already on the latest version.")
+		}
+		return nil
+	}
+
+	// Check if upgrade is needed (unless forced)
+	needsUpgrade, err := CheckIfUpgradeNeeded(ctx, version, opts.Force)
+	if err != nil {
+		ctx.Log.Warn("could not check version status", "error", err)
+		// Continue with upgrade if we can't check
+	} else if !needsUpgrade {
+		return nil // Already up to date
+	}
+
 	// Create manager with server configuration
 	mgrOpts := release.DefaultManagerOptions()
 	mgrOpts.SkipHealthCheck = opts.SkipHealth
@@ -36,16 +71,10 @@ func ServerUpgrade(ctx *Context, opts struct {
 
 	mgr := release.NewManager(mgrOpts)
 
-	// Check current version
+	// Get current version for comparison after upgrade
 	current, err := mgr.GetCurrentVersion(ctx)
 	if err != nil {
 		ctx.Log.Warn("could not determine current version", "error", err)
-	}
-
-	// Determine target version
-	version := opts.Version
-	if version == "" {
-		version = "main" // Default to main branch
 	}
 
 	// Determine artifact type
@@ -64,27 +93,7 @@ func ServerUpgrade(ctx *Context, opts struct {
 	}
 
 	// Report final status
-	newVersion, _ := mgr.GetCurrentVersion(ctx)
-	if current.Version != "" {
-		fmt.Printf("\nServer upgrade successful:\n")
-		fmt.Printf("  Old: %s", current.Version)
-		if c := current.Commit; c != "" && c != "unknown" {
-			end := 8
-			if len(c) < end {
-				end = len(c)
-			}
-			fmt.Printf(" (%s)", c[:end])
-		}
-		fmt.Printf("\n  New: %s", newVersion.Version)
-		if c := newVersion.Commit; c != "" && c != "unknown" {
-			end := 8
-			if len(c) < end {
-				end = len(c)
-			}
-			fmt.Printf(" (%s)", c[:end])
-		}
-		fmt.Printf("\n")
-	}
+	PrintUpgradeSuccess(ctx, current, "Server")
 
 	return nil
 }
