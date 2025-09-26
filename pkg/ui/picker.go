@@ -113,25 +113,39 @@ func (m *PickerModel) View() string {
 	if m.Title != "" {
 		titleStyle := lipgloss.NewStyle().
 			Bold(true).
-			Foreground(lipgloss.Color("229")).
-			MarginBottom(1)
+			Foreground(lipgloss.Color("229"))
 		b.WriteString(titleStyle.Render(m.Title))
 		b.WriteString("\n\n")
 	}
 
-	// Prepare rows for the table
+	// Prepare rows for the table - add selection column
 	rows := make([]Row, len(m.Items))
 	for i, item := range m.Items {
-		rows[i] = item.Row()
+		itemRow := item.Row()
+		// Prepend selection indicator column
+		row := make([]string, len(itemRow)+1)
+		if i == m.cursor {
+			row[0] = "▸"
+		} else {
+			row[0] = " "
+		}
+		copy(row[1:], itemRow)
+		rows[i] = row
 	}
 
-	// Calculate columns
+	// Calculate columns - add empty header for selection column
 	headers := m.Headers
 	if len(headers) == 0 {
 		// No headers provided, create empty headers based on first row
 		if len(rows) > 0 {
 			headers = make([]string, len(rows[0]))
 		}
+	} else {
+		// Prepend empty header for selection column
+		newHeaders := make([]string, len(headers)+1)
+		newHeaders[0] = ""
+		copy(newHeaders[1:], headers)
+		headers = newHeaders
 	}
 
 	// Auto-size columns
@@ -178,7 +192,6 @@ func (m *PickerModel) View() string {
 			headerCells = append(headerCells, cellStyle.Render(col.Title))
 		}
 		tableLines = append(tableLines, lipgloss.JoinHorizontal(lipgloss.Top, headerCells...))
-		tableLines = append(tableLines, "") // Empty line after headers
 	}
 
 	// Render rows with selection highlight
@@ -199,15 +212,6 @@ func (m *PickerModel) View() string {
 			value := ""
 			if j < len(row) {
 				value = row[j]
-			}
-
-			// Add selection indicator to first column
-			if j == 0 {
-				if i == m.cursor {
-					value = fmt.Sprintf("▸ %s", value)
-				} else {
-					value = fmt.Sprintf("  %s", value)
-				}
 			}
 
 			cellStyle := lipgloss.NewStyle().
@@ -245,13 +249,18 @@ func (m *PickerModel) View() string {
 		b.WriteString(footerStyle.Render(m.Footer))
 	}
 
-	// Show disabled message if current item is disabled
-	if m.cursor < len(m.Items) && m.IsDisabled != nil && m.IsDisabled(m.Items[m.cursor]) && m.DisabledMessage != "" {
-		msgStyle := lipgloss.NewStyle().
-			Foreground(lipgloss.Color("196")).
-			MarginTop(1)
+	// Reserve space for disabled message to prevent jumping
+	if m.IsDisabled != nil && m.DisabledMessage != "" {
 		b.WriteString("\n")
-		b.WriteString(msgStyle.Render("⚠ " + m.DisabledMessage))
+		if m.cursor < len(m.Items) && m.IsDisabled(m.Items[m.cursor]) {
+			// Show the warning message
+			msgStyle := lipgloss.NewStyle().
+				Foreground(lipgloss.Color("196"))
+			b.WriteString(msgStyle.Render("⚠ " + m.DisabledMessage))
+		} else {
+			// Keep the space reserved but empty
+			b.WriteString(" ")
+		}
 	}
 
 	return b.String()

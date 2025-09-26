@@ -30,6 +30,134 @@ type ClusterResponse struct {
 	OrganizationName  string                 `json:"organization_name"`
 }
 
+// formatAddressWithGrayPort formats an address with the port portion grayed out
+func formatAddressWithGrayPort(address string) string {
+	// Check for IPv6 format with port
+	if strings.Contains(address, "]:") {
+		parts := strings.Split(address, "]:")
+		if len(parts) == 2 {
+			grayPort := lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render("]:" + parts[1])
+			return parts[0] + grayPort
+		}
+	} else if strings.Contains(address, ":") {
+		// IPv4 or hostname with port
+		lastColon := strings.LastIndex(address, ":")
+		if lastColon > 0 {
+			host := address[:lastColon]
+			port := address[lastColon:]
+			grayPort := lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(port)
+			return host + grayPort
+		}
+	}
+	return address
+}
+
+// sortAddresses sorts addresses to prioritize public/routable addresses over localhost/0.0.0.0
+func sortAddresses(addresses []string) []string {
+	if len(addresses) <= 1 {
+		return addresses
+	}
+
+	// Copy to avoid modifying original
+	sorted := make([]string, len(addresses))
+	copy(sorted, addresses)
+
+	// Sort with custom logic
+	for i := 0; i < len(sorted); i++ {
+		for j := i + 1; j < len(sorted); j++ {
+			// Check if addresses should be swapped
+			if shouldSwapAddresses(sorted[i], sorted[j]) {
+				sorted[i], sorted[j] = sorted[j], sorted[i]
+			}
+		}
+	}
+
+	return sorted
+}
+
+// shouldSwapAddresses returns true if addr1 should come after addr2
+func shouldSwapAddresses(addr1, addr2 string) bool {
+	// Extract host part from address
+	host1 := extractHost(addr1)
+	host2 := extractHost(addr2)
+
+	// Check address types
+	local1 := isLocalAddress(host1)
+	local2 := isLocalAddress(host2)
+	private1 := isPrivateAddress(host1)
+	private2 := isPrivateAddress(host2)
+
+	// Priority order: public > private > local
+	// If one is local and the other isn't, local goes last
+	if local1 && !local2 {
+		return true
+	}
+	if !local1 && local2 {
+		return false
+	}
+
+	// Both are local or both are not local
+	// If one is private and the other is public, private goes after
+	if private1 && !private2 {
+		return true
+	}
+
+	return false
+}
+
+func extractHost(address string) string {
+	// Handle both host:port and plain host formats
+	if strings.Contains(address, "]:") {
+		// IPv6 with port [::1]:8443
+		end := strings.Index(address, "]")
+		if end > 0 {
+			return address[1:end]
+		}
+	} else if strings.Contains(address, ":") {
+		// IPv4 or hostname with port
+		parts := strings.Split(address, ":")
+		if len(parts) > 0 {
+			return parts[0]
+		}
+	}
+	return address
+}
+
+func isLocalAddress(host string) bool {
+	return host == "127.0.0.1" ||
+		host == "0.0.0.0" ||
+		host == "localhost" ||
+		host == "::1" ||
+		strings.HasPrefix(host, "127.")
+}
+
+func isPrivateAddress(host string) bool {
+	// Check for RFC1918 private addresses
+	if strings.HasPrefix(host, "10.") {
+		return true
+	}
+	if strings.HasPrefix(host, "192.168.") {
+		return true
+	}
+	// Check for 172.16.0.0/12 range
+	if strings.HasPrefix(host, "172.") {
+		parts := strings.Split(host, ".")
+		if len(parts) >= 2 {
+			// Second octet should be 16-31 for private range
+			if second := parts[1]; len(second) > 0 {
+				if second >= "16" && second <= "31" {
+					return true
+				}
+			}
+		}
+	}
+	// Also consider link-local addresses as private
+	if strings.HasPrefix(host, "169.254.") {
+		return true
+	}
+	return false
+}
+
 // fetchAvailableClusters queries the identity server for available clusters
 func fetchAvailableClusters(ctx *Context, identity *clientconfig.IdentityConfig) ([]ClusterResponse, error) {
 	if identity.Type != "keypair" {
@@ -133,22 +261,13 @@ func selectClusterFromList(ctx *Context, clusters []ClusterResponse) (*ClusterRe
 			continue // Skip clusters without API addresses
 		}
 
-		// Primary address
-		address := cluster.APIAddresses[0]
-		if len(cluster.APIAddresses) > 1 {
-			address = fmt.Sprintf("%s (+%d)", address, len(cluster.APIAddresses)-1)
-		}
+		// Sort addresses to put localhost/0.0.0.0 last
+		addresses := sortAddresses(cluster.APIAddresses)
 
-		// Certificate status
-		status := "No cert"
-		if cluster.CACertFingerprint != "" {
-			// Show abbreviated fingerprint
-			fp := cluster.CACertFingerprint
-			if len(fp) >= 16 {
-				status = fmt.Sprintf("Cert: %s...%s", fp[:8], fp[len(fp)-8:])
-			} else {
-				status = "Has cert"
-			}
+		// Format primary address with grayed port
+		address := formatAddressWithGrayPort(addresses[0])
+		if len(addresses) > 1 {
+			address = fmt.Sprintf("%s (+%d)", address, len(addresses)-1)
 		}
 
 		// Create table item
@@ -158,7 +277,6 @@ func selectClusterFromList(ctx *Context, clusters []ClusterResponse) (*ClusterRe
 				cluster.Name,
 				cluster.OrganizationName,
 				address,
-				status,
 			},
 			ItemID: itemID,
 		})
@@ -168,7 +286,7 @@ func selectClusterFromList(ctx *Context, clusters []ClusterResponse) (*ClusterRe
 	// Run the table picker
 	selected, err := ui.RunPicker(items,
 		ui.WithTitle("Select a cluster to bind:"),
-		ui.WithHeaders([]string{"NAME", "ORGANIZATION", "ADDRESS", "CERTIFICATE"}),
+		ui.WithHeaders([]string{"NAME", "ORGANIZATION", "ADDRESS"}),
 	)
 
 	if err != nil {
