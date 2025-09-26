@@ -130,12 +130,13 @@ func ConfigInfo(ctx *Context, opts struct {
 		info.IdentityCount = len(cfg.GetIdentityNames())
 
 		// List leaf config files
-		leafConfigs := cfg.GetLeafConfigNames()
-		if len(leafConfigs) > 0 {
+		if leafConfigs := cfg.GetLeafConfigNames(); len(leafConfigs) > 0 {
+			// Create a new slice to avoid mutating the original
+			formatted := make([]string, len(leafConfigs))
 			for i, name := range leafConfigs {
-				leafConfigs[i] = fmt.Sprintf("clientconfig.d/%s.yaml", name)
+				formatted[i] = fmt.Sprintf("clientconfig.d/%s.yaml", name)
 			}
-			info.LeafConfigs = leafConfigs
+			info.LeafConfigs = formatted
 		}
 	}
 

@@ -718,6 +718,8 @@ func loadConfigDir(config *Config) error {
 		leafConfig.active = cdata.Active
 		leafConfig.clusters = cdata.Clusters
 		leafConfig.identities = cdata.Identities
+		// Store the source filename (without directory path and extension) for identification
+		leafConfig.sourcePath = strings.TrimSuffix(filepath.Base(file), filepath.Ext(file))
 
 		// Store the leaf config separately
 		config.leafConfigs = append(config.leafConfigs, &leafConfig)

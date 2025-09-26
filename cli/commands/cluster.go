@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"errors"
 	"net"
 
 	"github.com/charmbracelet/lipgloss"
@@ -15,6 +16,22 @@ func ClusterList(ctx *Context, opts struct {
 }) error {
 	cfg, err := opts.LoadConfig()
 	if err != nil {
+		// Handle missing config gracefully
+		if errors.Is(err, clientconfig.ErrNoConfig) {
+			if opts.IsJSON() {
+				// Return empty array for JSON
+				type ClusterInfo struct {
+					Name     string `json:"name"`
+					Address  string `json:"address"`
+					Identity string `json:"identity"`
+					Active   bool   `json:"active"`
+				}
+				return PrintJSON([]ClusterInfo{})
+			}
+			ctx.Printf("No clusters configured\n")
+			ctx.Printf("\nUse 'miren cluster add' to add a cluster\n")
+			return nil
+		}
 		return err
 	}
 
