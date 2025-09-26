@@ -347,10 +347,7 @@ func (d *assetDownloader) extractTarGz(tarPath, targetDir string) (string, error
 				if err := os.Rename(targetPath, finalPath); err != nil {
 					return "", err
 				}
-				// Make executable
-				if err := os.Chmod(finalPath, 0755); err != nil {
-					return "", err
-				}
+				// Permissions already set from tar header.Mode above
 				return finalPath, nil
 			}
 		}

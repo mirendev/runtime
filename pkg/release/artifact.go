@@ -2,6 +2,7 @@ package release
 
 import (
 	"fmt"
+	"net/url"
 	"runtime"
 )
 
@@ -37,24 +38,30 @@ func NewArtifact(artifactType ArtifactType, version string) Artifact {
 
 // GetDownloadURL returns the asset service URL for this artifact
 func (a Artifact) GetDownloadURL() string {
+	baseURL := "https://api.miren.cloud/assets/release/miren"
+
 	// Binary artifacts (just the miren binary) - available for all platforms as .zip
 	if a.Type == ArtifactTypeBinary {
-		return fmt.Sprintf("https://api.miren.cloud/assets/release/miren/%s/miren-%s-%s.zip",
-			a.Version, a.Platform, a.Arch)
+		filename := fmt.Sprintf("miren-%s-%s.zip", a.Platform, a.Arch)
+		fullURL, _ := url.JoinPath(baseURL, a.Version, filename)
+		return fullURL
 	}
 	// Base artifacts (full release package) - only available for Linux as .tar.gz
 	if a.Type == ArtifactTypeBase || a.Type == ArtifactTypeRelease {
 		if a.Platform == "linux" {
-			return fmt.Sprintf("https://api.miren.cloud/assets/release/miren/%s/miren-base-%s-%s.tar.gz",
-				a.Version, a.Platform, a.Arch)
+			filename := fmt.Sprintf("miren-base-%s-%s.tar.gz", a.Platform, a.Arch)
+			fullURL, _ := url.JoinPath(baseURL, a.Version, filename)
+			return fullURL
 		}
 		// Non-Linux platforms should use binary artifacts
-		return fmt.Sprintf("https://api.miren.cloud/assets/release/miren/%s/miren-%s-%s.zip",
-			a.Version, a.Platform, a.Arch)
+		filename := fmt.Sprintf("miren-%s-%s.zip", a.Platform, a.Arch)
+		fullURL, _ := url.JoinPath(baseURL, a.Version, filename)
+		return fullURL
 	}
 	// Fallback (shouldn't reach here)
-	return fmt.Sprintf("https://api.miren.cloud/assets/release/miren/%s/miren-%s-%s-%s.tar.gz",
-		a.Version, a.Type, a.Platform, a.Arch)
+	filename := fmt.Sprintf("miren-%s-%s-%s.tar.gz", a.Type, a.Platform, a.Arch)
+	fullURL, _ := url.JoinPath(baseURL, a.Version, filename)
+	return fullURL
 }
 
 // GetChecksumURL returns the checksum URL for this artifact
