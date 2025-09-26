@@ -76,21 +76,16 @@ func (v *systemdHealthVerifier) VerifyHealth(ctx context.Context, timeout time.D
 
 // checkSystemdStatus checks if the systemd service is active
 func (v *systemdHealthVerifier) checkSystemdStatus(ctx context.Context) error {
-	// Use --user flag for user services when not running as root
-	args := []string{"is-active", v.opts.ServiceName}
+	// Require root for systemd service management
 	if os.Geteuid() != 0 {
-		args = append([]string{"--user"}, args...)
+		return fmt.Errorf("systemd service management requires root privileges (running as uid %d)", os.Geteuid())
 	}
 
-	cmd := exec.CommandContext(ctx, "systemctl", args...)
+	cmd := exec.CommandContext(ctx, "systemctl", "is-active", v.opts.ServiceName)
 	output, err := cmd.Output()
 	if err != nil {
 		// Check if service exists
-		statusArgs := []string{"status", v.opts.ServiceName}
-		if os.Geteuid() != 0 {
-			statusArgs = append([]string{"--user"}, statusArgs...)
-		}
-		checkCmd := exec.CommandContext(ctx, "systemctl", statusArgs...)
+		checkCmd := exec.CommandContext(ctx, "systemctl", "status", v.opts.ServiceName)
 		if checkErr := checkCmd.Run(); checkErr != nil {
 			return fmt.Errorf("service %s not found", v.opts.ServiceName)
 		}
@@ -153,6 +148,11 @@ func (n *NoOpHealthVerifier) VerifyHealth(ctx context.Context, timeout time.Dura
 
 // IsServerRunning checks if the miren server is currently running as a systemd service
 func IsServerRunning() bool {
+	// Require root for systemd service checks
+	if os.Geteuid() != 0 {
+		return false
+	}
+	
 	cmd := exec.Command("systemctl", "is-active", "miren")
 	output, err := cmd.Output()
 	if err != nil {
