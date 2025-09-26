@@ -1,4 +1,4 @@
-name: Dagger
+name: Release
 
 on:
   push:
