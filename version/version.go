@@ -73,10 +73,6 @@ func (i Info) IsNewer(other Info) bool {
 	if !i.BuildDate.IsZero() && other.BuildDate.IsZero() {
 		return true
 	}
-	if i.BuildDate.IsZero() && !other.BuildDate.IsZero() {
-		return false
-	}
-
 	// Fall back to version string comparison
 	// This is simple and won't handle semantic versioning perfectly,
 	// but works for branch:commit format and simple versions

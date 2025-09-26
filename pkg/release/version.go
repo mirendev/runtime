@@ -92,9 +92,6 @@ func (v VersionInfo) IsNewer(other VersionInfo) bool {
 	if !v.BuildDate.IsZero() && other.BuildDate.IsZero() {
 		return true
 	}
-	if v.BuildDate.IsZero() && !other.BuildDate.IsZero() {
-		return false
-	}
 
 	// Fall back to version string comparison
 	// Don't upgrade if versions are the same

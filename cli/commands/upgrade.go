@@ -47,9 +47,13 @@ func Upgrade(ctx *Context, opts UpgradeOptions) error {
 			return fmt.Errorf("failed to get current version: %w", err)
 		}
 
-		// Get metadata for the latest version
+		// Get metadata for the requested (or default) target version
+		targetVersion := opts.Version
+		if targetVersion == "" {
+			targetVersion = "main"
+		}
 		downloader := release.NewDownloader()
-		metadata, err := downloader.GetVersionMetadata(ctx, "main")
+		metadata, err := downloader.GetVersionMetadata(ctx, targetVersion)
 		if err != nil {
 			return fmt.Errorf("failed to check for updates: %w", err)
 		}
