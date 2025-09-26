@@ -238,8 +238,14 @@ func (d *assetDownloader) downloadFile(ctx context.Context, url, path string, pr
 	}
 	defer out.Close()
 
+	// Set up progress tracking if a progress writer is provided
 	var reader io.Reader = resp.Body
 	if progressWriter != nil {
+		// If it's our ProgressWriter type, set the total
+		if pw, ok := progressWriter.(*ProgressWriter); ok {
+			pw.SetTotal(resp.ContentLength)
+			defer pw.Close()
+		}
 		reader = io.TeeReader(resp.Body, progressWriter)
 	}
 

@@ -91,7 +91,7 @@ func (m *Manager) UpgradeArtifact(ctx context.Context, artifact Artifact) error 
 	fmt.Printf("Downloading %s version %s...\n", artifact.Type, artifact.Version)
 	downloadOpts := DownloadOptions{
 		TargetDir:      m.opts.TempDir,
-		ProgressWriter: os.Stdout,
+		ProgressWriter: NewProgressWriter(os.Stdout),
 	}
 
 	downloaded, err := m.downloader.Download(ctx, artifact, downloadOpts)
