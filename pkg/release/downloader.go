@@ -312,7 +312,27 @@ func (d *assetDownloader) extractTarGz(tarPath, targetDir string) (string, error
 			return "", err
 		}
 
-		targetPath := filepath.Join(extractDir, header.Name)
+		// Sanitize and validate the path to prevent path traversal attacks
+		cleanName := filepath.Clean(header.Name)
+
+		// Skip entries with problematic names
+		if cleanName == "" || cleanName == "." || cleanName == ".." {
+			continue
+		}
+
+		// Reject absolute paths
+		if filepath.IsAbs(cleanName) {
+			return "", fmt.Errorf("tar contains absolute path: %s", header.Name)
+		}
+
+		// Compute destination path
+		targetPath := filepath.Join(extractDir, cleanName)
+
+		// Verify the target path is within extractDir
+		relPath, err := filepath.Rel(extractDir, targetPath)
+		if err != nil || strings.HasPrefix(relPath, "..") {
+			return "", fmt.Errorf("tar contains path traversal: %s", header.Name)
+		}
 
 		switch header.Typeflag {
 		case tar.TypeDir:
@@ -351,6 +371,9 @@ func (d *assetDownloader) extractTarGz(tarPath, targetDir string) (string, error
 				// Permissions already set from tar header.Mode above
 				return finalPath, nil
 			}
+		case tar.TypeSymlink, tar.TypeLink:
+			// Skip symlinks and hard links for security
+			continue
 		}
 	}
 
@@ -374,7 +397,25 @@ func (d *assetDownloader) extractZip(zipPath, targetDir string) (string, error) 
 
 	// Look for the miren binary
 	for _, file := range reader.File {
-		if filepath.Base(file.Name) == "miren" {
+		// Sanitize and validate the path to prevent path traversal attacks
+		cleanName := filepath.Clean(file.Name)
+
+		// Skip entries with problematic names
+		if cleanName == "" || cleanName == "." || cleanName == ".." {
+			continue
+		}
+
+		// Reject absolute paths
+		if filepath.IsAbs(cleanName) {
+			return "", fmt.Errorf("zip contains absolute path: %s", file.Name)
+		}
+
+		// Check for path traversal
+		if strings.Contains(cleanName, "..") {
+			return "", fmt.Errorf("zip contains path traversal: %s", file.Name)
+		}
+
+		if filepath.Base(cleanName) == "miren" {
 			// Open the file in the zip
 			rc, err := file.Open()
 			if err != nil {

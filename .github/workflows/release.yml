@@ -143,9 +143,9 @@ jobs:
 
             echo "Uploading ${artifact_name}..."
 
-            # Generate SHA256 checksum
+            # Generate SHA256 checksum in standard format for sha256sum -c compatibility
             local checksum=$(sha256sum "${file_path}" | cut -d' ' -f1)
-            echo "${checksum}" > "${artifact_name}.sha256"
+            echo "${checksum}  ${artifact_name}" > "${artifact_name}.sha256"
 
             # Get file size
             local size=$(stat -c%s "${file_path}" 2>/dev/null || stat -f%z "${file_path}" 2>/dev/null || echo 0)
