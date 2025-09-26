@@ -10,10 +10,7 @@ import (
 )
 
 var (
-	timeMu   sync.Mutex
-	lasttime uint64 // last time we returned
-	clockSeq uint16 // clock sequence for this run
-
+	timeMu  sync.Mutex
 	timeNow = time.Now // for testing
 )
 

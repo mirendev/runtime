@@ -141,9 +141,8 @@ func (a *ActorCall) NewClient(capa *Capability) Client {
 }
 
 type ActorClient struct {
-	name string
-	oid  OID
-	reg  *LocalActorRegistry
+	oid OID
+	reg *LocalActorRegistry
 }
 
 var _ Client = (*ActorClient)(nil)

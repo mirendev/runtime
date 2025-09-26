@@ -459,23 +459,6 @@ func isEmpty(a slog.Attr) bool {
 	return a.Key == "" && a.Value.Equal(slog.Value{})
 }
 
-// group returns the non-zero fields of s as a slice of attrs.
-// It is similar to a LogValue method, but we don't want Source
-// to implement LogValuer because it would be resolved before
-// the ReplaceAttr function was called.
-func sourceGroup(s *slog.Source) slog.Value {
-	var as []slog.Attr
-	if s.Function != "" {
-		as = append(as, slog.String("function", s.Function))
-	}
-	if s.File != "" {
-		as = append(as, slog.String("file", s.File))
-	}
-	if s.Line != 0 {
-		as = append(as, slog.Int("line", s.Line))
-	}
-	return slog.GroupValue(as...)
-}
 
 // appendAttr appends the Attr's key and value.
 // It handles replacement and checking for an empty key.

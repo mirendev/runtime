@@ -222,11 +222,6 @@ func (w *logWriter) processJSONLine(line string) {
 // keyValuePattern matches key=value pairs, handling quoted values
 var keyValuePattern = regexp.MustCompile(`(\w+)=("(?:[^"\\]|\\.)*"|[^\s]+)`)
 
-var kvIgnoreKeys = map[string]struct{}{
-	"time":  {},
-	"level": {},
-	"msg":   {},
-}
 
 // processKeyValueLine parses a line containing key=value pairs
 func (w *logWriter) processKeyValueLine(line string) {

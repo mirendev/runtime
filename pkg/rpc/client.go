@@ -348,38 +348,6 @@ func (c *NetworkClient) requestReexportCapability(ctx context.Context, capa *Cap
 	return lr.Capability, nil
 }
 
-func (c *NetworkClient) refOID(ctx context.Context, oid OID) error {
-	url := "https://" + c.remote + "/_rpc/ref/" + string(oid)
-	req, err := http.NewRequest(http.MethodPost, url, nil)
-	if err != nil {
-		return err
-	}
-
-	err = c.prepareRequest(ctx, req)
-	if err != nil {
-		return err
-	}
-
-	resp, err := c.roundTrip(req)
-	if err != nil {
-		return err
-	}
-
-	defer resp.Body.Close()
-
-	var lr refResponse
-
-	err = json.NewDecoder(resp.Body).Decode(&lr)
-	if err != nil {
-		return err
-	}
-
-	if lr.Error != "" {
-		return errors.New(lr.Error)
-	}
-
-	return nil
-}
 
 func (c *NetworkClient) derefOID(ctx context.Context, oid OID) error {
 	if c.inlineClient != nil {

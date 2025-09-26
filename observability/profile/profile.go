@@ -10,7 +10,6 @@ import (
 
 	_ "github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/ringbuf"
-	gprofile "github.com/google/pprof/profile"
 	"miren.dev/runtime/pkg/perf"
 )
 
@@ -53,8 +52,6 @@ type Profiler struct {
 	stacks []Stack
 
 	ct CallTree
-
-	gpprof gprofile.Profile
 
 	symzer *Symbolizer
 }

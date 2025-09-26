@@ -7,7 +7,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/containerd/containerd/v2/client"
 	buildkit "github.com/moby/buildkit/client"
 	"miren.dev/runtime/api/compute/compute_v1alpha"
 	"miren.dev/runtime/api/core/core_v1alpha"
@@ -28,13 +27,11 @@ type RunningBuildkit struct {
 	*LaunchBuildkit
 
 	addr string
-	task client.Task
 	id   string
 }
 
 type launchOptions struct {
 	logEntity string
-	cacheDir  string
 	attrs     map[string]string
 }
 

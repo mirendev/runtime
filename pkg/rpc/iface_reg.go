@@ -35,13 +35,6 @@ func CanBe[T, I any]() bool {
 	return true
 }
 
-func typeByHash(h string) (reflect.Type, bool) {
-	defaultIfaceReg.mu.RLock()
-	defer defaultIfaceReg.mu.RUnlock()
-
-	t, ok := defaultIfaceReg.byName[h]
-	return t, ok
-}
 
 type InterfaceCreators struct {
 	mu       sync.Mutex

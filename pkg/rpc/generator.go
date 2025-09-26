@@ -200,9 +200,6 @@ func toCamal(s string) string {
 	return b.String()
 }
 
-func toFunc(s string) string {
-	return capitalize(toCamal(s))
-}
 
 func private(s string) string {
 	return strings.ToLower(s[:1]) + s[1:]
@@ -2024,7 +2021,6 @@ type DescType struct {
 
 	access      int
 	includeCall bool
-	result      bool
 
 	dataSize int
 	pointers int

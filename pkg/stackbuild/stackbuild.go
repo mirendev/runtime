@@ -1,7 +1,6 @@
 package stackbuild
 
 import (
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
@@ -256,14 +255,6 @@ func (m *MetaStack) chownApp(cur llb.State) llb.State {
 	).Root()
 }
 
-func (h *highlevelBuilder) withConfig(state llb.State, img ocispecs.Image) (llb.State, error) {
-	configbytes, err := json.Marshal(img)
-	if err != nil {
-		return llb.State{}, err
-	}
-
-	return state.WithImageConfig(configbytes)
-}
 
 func (s *RubyStack) Gemfile() ([]byte, []byte, error) {
 	if s.gemfile != nil {

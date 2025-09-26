@@ -4,7 +4,6 @@
 package network
 
 import (
-	"crypto/sha256"
 	"crypto/sha512"
 	"fmt"
 	"log/slog"
@@ -40,19 +39,6 @@ func BridgeByName(name string) (*netlink.Bridge, error) {
 	return br, nil
 }
 
-func idToMac(id string) string {
-	h := sha256.New()
-	h.Write([]byte(id))
-
-	idBytes := h.Sum(nil)
-
-	hwaddr := make(net.HardwareAddr, 6)
-	copy(hwaddr, idBytes[2:])
-
-	hwaddr[0] = hwaddr[0] & 0b11111110
-
-	return hwaddr.String()
-}
 
 func ensureBridge(brName string, mtu int, promiscMode, vlanFiltering bool) (*netlink.Bridge, error) {
 	br := &netlink.Bridge{

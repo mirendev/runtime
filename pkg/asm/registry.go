@@ -157,9 +157,6 @@ func (r *Registry) buildByType(field reflect.Value, tag string) (reflect.Value, 
 	return ret, nil
 }
 
-func isExported(name string) bool {
-	return name != "" && name[0] >= 'A' && name[0] <= 'Z'
-}
 
 func isAssignableTo(a, b reflect.Type) bool {
 	if a == b {
@@ -263,7 +260,6 @@ func (r *Registry) ResolveNamed(s any, name string) error {
 	return nil
 }
 
-var injectFuncType = reflect.TypeFor[func(*Registry) error]()
 
 func (r *Registry) Init(values ...any) error {
 	for _, v := range values {

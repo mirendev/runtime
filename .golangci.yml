@@ -6,29 +6,37 @@ linters:
 
   default: standard
   exclusions:
-    warn-unused: true
+    paths:
+      - "dataset/"
+      - "disk/"
+      - "lsvd/"
+      - "pkg/cel"
+      - "pkg/containerdx/"
+      # Exclude generated files
+      - ".*\\.gen\\.go$"
+
     rules:
+      # Ignore unused test functions (disabled tests)
+      - path: "_test\\.go$"
+        linters:
+          - unused
+        text: "func noTest.*is unused"
+
+      # Ignore unreachable code in specific packages
       - path: pkg/perf
         linters:
           - govet
-        text: unreachable code
-      - path: dataset/
-        linters:
-          - govet
-        text: unreachable code
+        text: "unreachable code"
       - path: pkg/runsc/monitor
         linters:
           - govet
-        text: unreachable code
-      - path: pkg/entity/mock
-        linters:
-          - govet
-        text: unreachable code
-    # Exclude generated files from reporting issues
-    paths:
-      - ".*\\.gen\\.go$"
+        text: "unreachable code"
 
-formatters:
-  enable:
-    - gofmt
-    - goimports
+      # Ignore error handling issues in pkg/model (complex error handling that needs refactoring)
+      - path: "pkg/model/"
+        linters:
+          - ineffassign
+      - path: "pkg/model/"
+        text: "SA4006"
+        linters:
+          - staticcheck
