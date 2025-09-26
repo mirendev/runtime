@@ -8,15 +8,12 @@ import (
 	"miren.dev/runtime/pkg/release"
 )
 
-// UpgradeOptions contains options for the upgrade command
-type UpgradeOptions struct {
-	Version string `flag:"version" help:"Specific version to upgrade to (default: main)"`
-	Check   bool   `flag:"check" help:"Check for available updates only"`
-	Force   bool   `flag:"force" help:"Force upgrade even if already up to date or server running"`
-}
-
 // Upgrade upgrades the miren CLI to the latest or specified version
-func Upgrade(ctx *Context, opts UpgradeOptions) error {
+func Upgrade(ctx *Context, opts struct {
+	Version string `short:"v" long:"version" description:"Specific version to upgrade to (default: main)"`
+	Check   bool   `short:"c" long:"check" description:"Check for available updates only"`
+	Force   bool   `short:"f" long:"force" description:"Force upgrade even if already up to date or server running"`
+}) error {
 	// Check if server is running (unless forced or just checking)
 	if !opts.Force && !opts.Check && release.IsServerRunning() {
 		return fmt.Errorf("miren server is running. Use 'sudo miren server upgrade' to upgrade the server, or use --force to upgrade the CLI anyway")

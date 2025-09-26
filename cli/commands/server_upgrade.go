@@ -8,17 +8,14 @@ import (
 	"miren.dev/runtime/pkg/release"
 )
 
-// ServerUpgradeOptions contains options for the server upgrade command
-type ServerUpgradeOptions struct {
-	Version        string `flag:"version" help:"Specific version to upgrade to (default: main)"`
-	Release        bool   `flag:"release" help:"Upgrade full release package (not just base)"`
-	SkipHealth     bool   `flag:"skip-health" help:"Skip health check after upgrade"`
-	NoAutoRollback bool   `flag:"no-auto-rollback" help:"Disable automatic rollback on failure"`
-	HealthTimeout  int    `flag:"health-timeout" help:"Health check timeout in seconds (default: 60)"`
-}
-
 // ServerUpgrade upgrades the miren server to the latest or specified version
-func ServerUpgrade(ctx *Context, opts ServerUpgradeOptions) error {
+func ServerUpgrade(ctx *Context, opts struct {
+	Version        string `short:"v" long:"version" description:"Specific version to upgrade to (default: main)"`
+	Release        bool   `short:"r" long:"release" description:"Upgrade full release package (not just base)"`
+	SkipHealth     bool   `long:"skip-health" description:"Skip health check after upgrade"`
+	NoAutoRollback bool   `long:"no-auto-rollback" description:"Disable automatic rollback on failure"`
+	HealthTimeout  int    `long:"health-timeout" description:"Health check timeout in seconds (default: 60)"`
+}) error {
 	// Check if running with sufficient privileges
 	if os.Geteuid() != 0 {
 		return fmt.Errorf("server upgrade requires root privileges (use sudo)")
@@ -92,13 +89,10 @@ func ServerUpgrade(ctx *Context, opts ServerUpgradeOptions) error {
 	return nil
 }
 
-// ServerUpgradeRollbackOptions contains options for the server upgrade rollback command
-type ServerUpgradeRollbackOptions struct {
-	SkipHealth bool `flag:"skip-health" help:"Skip health check after rollback"`
-}
-
 // ServerUpgradeRollback rolls back the server to the previous version
-func ServerUpgradeRollback(ctx *Context, opts ServerUpgradeRollbackOptions) error {
+func ServerUpgradeRollback(ctx *Context, opts struct {
+	SkipHealth bool `long:"skip-health" description:"Skip health check after rollback"`
+}) error {
 	// Check if running with sufficient privileges
 	if os.Geteuid() != 0 {
 		return fmt.Errorf("server rollback requires root privileges (use sudo)")
