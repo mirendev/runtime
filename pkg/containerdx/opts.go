@@ -3,7 +3,6 @@ package containerdx
 import (
 	"context"
 	"fmt"
-	"io/ioutil"
 	"os"
 	"sort"
 	"strconv"
@@ -453,7 +452,7 @@ func cgroupv1HasHugetlb() (bool, error) {
 // cgroup v2.
 func cgroupv2HasHugetlb() (bool, error) {
 	_cgroupv2HasHugetlbOnce.Do(func() {
-		controllers, err := ioutil.ReadFile("/sys/fs/cgroup/cgroup.controllers")
+		controllers, err := os.ReadFile("/sys/fs/cgroup/cgroup.controllers")
 		if err != nil {
 			_cgroupv2HasHugetlbErr = errors.Wrap(err, "read /sys/fs/cgroup/cgroup.controllers")
 			return
@@ -583,7 +582,7 @@ func nullOpt(_ context.Context, _ oci.Client, _ *containers.Container, _ *runtim
 }
 
 func getCurrentOOMScoreAdj() (int, error) {
-	b, err := ioutil.ReadFile("/proc/self/oom_score_adj")
+	b, err := os.ReadFile("/proc/self/oom_score_adj")
 	if err != nil {
 		return 0, errors.Wrap(err, "could not get the daemon oom_score_adj")
 	}

@@ -346,11 +346,11 @@ type reexportMeter struct {
 	client rpc.Client
 }
 
-func (_ reexportMeter) ReadTemperature(ctx context.Context, state *MeterReadTemperature) error {
+func (reexportMeter) ReadTemperature(ctx context.Context, state *MeterReadTemperature) error {
 	panic("not implemented")
 }
 
-func (_ reexportMeter) GetSetter(ctx context.Context, state *MeterGetSetter) error {
+func (reexportMeter) GetSetter(ctx context.Context, state *MeterGetSetter) error {
 	panic("not implemented")
 }
 
@@ -544,7 +544,7 @@ type reexportSetTemp struct {
 	client rpc.Client
 }
 
-func (_ reexportSetTemp) SetTemp(ctx context.Context, state *SetTempSetTemp) error {
+func (reexportSetTemp) SetTemp(ctx context.Context, state *SetTempSetTemp) error {
 	panic("not implemented")
 }
 
@@ -998,7 +998,7 @@ type reexportAdjustTemp struct {
 	client rpc.Client
 }
 
-func (_ reexportAdjustTemp) Adjust(ctx context.Context, state *AdjustTempAdjust) error {
+func (reexportAdjustTemp) Adjust(ctx context.Context, state *AdjustTempAdjust) error {
 	panic("not implemented")
 }
 

@@ -751,6 +751,7 @@ func (c *NetworkClient) handleCallStream(
 		ctrl.CancelRead(cancelCode)
 	}()
 
+loop:
 	for {
 		var rs streamRequest
 
@@ -768,12 +769,12 @@ func (c *NetworkClient) handleCallStream(
 		switch rs.Kind {
 		case "result":
 			err = dec.Decode(result)
-			break
+			break loop
 		case "deref":
 			c.State.server.Deref(rs.OID)
 		case "error":
 			err = cond.RemoteError(rs.Category, rs.Code, rs.Error)
-			break
+			break loop
 		default:
 			c.State.log.Error("rpc.callstream: unknown control stream request", "kind", rs.Kind)
 		}
