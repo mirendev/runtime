@@ -181,15 +181,23 @@ func (m *PickerModel) View() string {
 			if i > 0 {
 				headerCells = append(headerCells, "  ")
 			}
+			// First apply width constraints
 			cellStyle := lipgloss.NewStyle().
 				Width(col.Width).
 				MaxWidth(col.Width).
-				Inline(true).
+				Inline(true)
+			
+			// Render the cell with width constraints
+			renderedCell := cellStyle.Render(col.Title)
+			
+			// Then apply header styling (underline, bold, color)
+			headerStyle := lipgloss.NewStyle().
 				Bold(true).
 				Underline(true).
 				UnderlineSpaces(true).
 				Foreground(lipgloss.Color("220"))
-			headerCells = append(headerCells, cellStyle.Render(col.Title))
+			
+			headerCells = append(headerCells, headerStyle.Render(renderedCell))
 		}
 		tableLines = append(tableLines, lipgloss.JoinHorizontal(lipgloss.Top, headerCells...))
 	}
