@@ -423,22 +423,39 @@ func (d *assetDownloader) extractZip(zipPath, targetDir string) (string, error) 
 			}
 			defer rc.Close()
 
-			// Create the output file
-			finalPath := filepath.Join(targetDir, "miren.new")
-			outFile, err := os.Create(finalPath)
+			// Create a temporary file in a private directory with restrictive permissions
+			tempFile, err := os.CreateTemp("", "miren-extract-*.tmp")
 			if err != nil {
 				return "", err
 			}
+			tempPath := tempFile.Name()
 
-			// Copy contents
-			if _, err := io.Copy(outFile, rc); err != nil {
-				outFile.Close()
+			// Ensure cleanup on error
+			defer func() {
+				if err != nil {
+					os.Remove(tempPath)
+				}
+			}()
+
+			// Copy contents to temp file
+			if _, err := io.Copy(tempFile, rc); err != nil {
+				tempFile.Close()
 				return "", err
 			}
-			outFile.Close()
 
-			// Make executable
-			if err := os.Chmod(finalPath, 0755); err != nil {
+			// Close the temp file before setting permissions and moving
+			if err := tempFile.Close(); err != nil {
+				return "", err
+			}
+
+			// Set executable permissions on temp file
+			if err := os.Chmod(tempPath, 0755); err != nil {
+				return "", err
+			}
+
+			// Atomically move temp file to final location
+			finalPath := filepath.Join(targetDir, "miren.new")
+			if err := os.Rename(tempPath, finalPath); err != nil {
 				return "", err
 			}
 

@@ -54,25 +54,65 @@ func (i *binaryInstaller) Install(ctx context.Context, downloaded *DownloadedArt
 	}
 
 	// Backup current binary if it exists
+	backedUp := false
 	if _, err := os.Stat(i.opts.InstallPath); err == nil {
 		if err := i.Backup(ctx); err != nil {
 			return fmt.Errorf("failed to backup current binary: %w", err)
 		}
+		backedUp = true
 	}
 
 	// Ensure binary is executable before moving to final location
 	if err := os.Chmod(downloaded.Path, 0755); err != nil {
+		// Restore backup if we created one
+		if backedUp {
+			i.Rollback(ctx)
+		}
 		return fmt.Errorf("failed to set binary permissions: %w", err)
 	}
+
+	// Sync the staged binary to disk before rename
+	stagedFile, err := os.Open(downloaded.Path)
+	if err != nil {
+		if backedUp {
+			i.Rollback(ctx)
+		}
+		return fmt.Errorf("failed to open staged binary for sync: %w", err)
+	}
+	if err := stagedFile.Sync(); err != nil {
+		stagedFile.Close()
+		if backedUp {
+			i.Rollback(ctx)
+		}
+		return fmt.Errorf("failed to sync staged binary to disk: %w", err)
+	}
+	stagedFile.Close()
 
 	// Atomic rename from downloaded location to install path
 	if err := os.Rename(downloaded.Path, i.opts.InstallPath); err != nil {
 		// If rename fails (e.g., cross-device), fall back to copy
 		if err := i.copyFile(downloaded.Path, i.opts.InstallPath); err != nil {
+			// Restore backup if we created one
+			if backedUp {
+				i.Rollback(ctx)
+			}
 			return fmt.Errorf("failed to install binary: %w", err)
 		}
 		// Clean up source file after successful copy
 		os.Remove(downloaded.Path)
+	}
+
+	// Sync directory to ensure rename/copy is persisted
+	dirFile, err := os.Open(targetDir)
+	if err != nil {
+		// Non-fatal but log it
+		fmt.Fprintf(os.Stderr, "Warning: failed to open directory for sync: %v\n", err)
+	} else {
+		if err := dirFile.Sync(); err != nil {
+			// Non-fatal but log it
+			fmt.Fprintf(os.Stderr, "Warning: failed to sync directory: %v\n", err)
+		}
+		dirFile.Close()
 	}
 
 	// Write checksum file
@@ -196,6 +236,17 @@ func (i *binaryInstaller) copyFile(src, dst string) error {
 	if err := os.Rename(tempPath, dst); err != nil {
 		os.Remove(tempPath)
 		return err
+	}
+
+	// Sync directory to ensure rename is persisted
+	dirFile, err := os.Open(filepath.Dir(dst))
+	if err != nil {
+		// Non-fatal but important enough to return as error since this is in copyFile
+		return fmt.Errorf("failed to open directory for sync: %w", err)
+	}
+	defer dirFile.Close()
+	if err := dirFile.Sync(); err != nil {
+		return fmt.Errorf("failed to sync directory: %w", err)
 	}
 
 	return nil

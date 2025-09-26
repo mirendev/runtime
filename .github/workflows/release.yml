@@ -129,7 +129,7 @@ jobs:
 
       - name: Upload to Miren API
         run: |
-          set -e
+          set -eo pipefail
 
           # Create a manifest to track uploaded artifacts and their checksums
           echo '[]' > artifact-manifest.json

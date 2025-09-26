@@ -210,10 +210,19 @@ func (m *Manager) CheckForUpdate(ctx context.Context, artifactType ArtifactType)
 		return false, "", err
 	}
 
-	// For now, just compare strings
-	// In the future, we'll do proper version comparison
-	hasUpdate := current.Version != latest
-	return hasUpdate, latest, nil
+	metadata, err := m.downloader.GetVersionMetadata(ctx, latest)
+	if err != nil {
+		return false, "", fmt.Errorf("failed to get metadata for %s: %w", latest, err)
+	}
+
+	latestInfo := VersionInfo{
+		Version:   metadata.Version,
+		Commit:    metadata.Commit,
+		BuildDate: metadata.BuildDate,
+	}
+
+	hasUpdate := latestInfo.IsNewer(current)
+	return hasUpdate, latestInfo.Version, nil
 }
 
 // restartService restarts the systemd service

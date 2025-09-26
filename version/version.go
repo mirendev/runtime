@@ -30,7 +30,7 @@ func GetInfo() Info {
 	// Parse build date if available
 	if BuildDate != "unknown" && BuildDate != "" {
 		if t, err := time.Parse(time.RFC3339, BuildDate); err == nil {
-			info.BuildDate = t
+			info.BuildDate = t.UTC()
 		}
 	}
 
