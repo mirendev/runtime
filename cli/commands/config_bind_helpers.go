@@ -4,19 +4,19 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
-	"os"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"miren.dev/runtime/clientconfig"
 	"miren.dev/runtime/pkg/cloudauth"
+	"miren.dev/runtime/pkg/ui"
 )
 
 // ClusterResponse represents a cluster returned from the API
@@ -29,6 +29,135 @@ type ClusterResponse struct {
 	CACertFingerprint string                 `json:"ca_cert_fingerprint,omitempty"`
 	OrganizationXID   string                 `json:"organization_xid"`
 	OrganizationName  string                 `json:"organization_name"`
+}
+
+// formatAddressWithGrayPort formats an address with the port portion grayed out
+func formatAddressWithGrayPort(address string) string {
+	host, port, err := net.SplitHostPort(address)
+	if err != nil {
+		// No port or invalid format, return as-is
+		return address
+	}
+
+	// Gray out the port portion
+	grayStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
+
+	// Check if host needs brackets (IPv6)
+	if strings.Contains(host, ":") {
+		// IPv6 address - reconstruct with brackets
+		grayPort := grayStyle.Render("]:" + port)
+		return "[" + host + grayPort
+	}
+
+	// IPv4 or hostname
+	grayPort := grayStyle.Render(":" + port)
+	return host + grayPort
+}
+
+// sortAddresses sorts addresses to prioritize public/routable addresses over localhost/0.0.0.0
+func sortAddresses(addresses []string) []string {
+	if len(addresses) <= 1 {
+		return addresses
+	}
+
+	// Copy to avoid modifying original
+	sorted := make([]string, len(addresses))
+	copy(sorted, addresses)
+
+	// Sort with custom logic
+	for i := 0; i < len(sorted); i++ {
+		for j := i + 1; j < len(sorted); j++ {
+			// Check if addresses should be swapped
+			if shouldSwapAddresses(sorted[i], sorted[j]) {
+				sorted[i], sorted[j] = sorted[j], sorted[i]
+			}
+		}
+	}
+
+	return sorted
+}
+
+// shouldSwapAddresses returns true if addr1 should come after addr2
+func shouldSwapAddresses(addr1, addr2 string) bool {
+	// Extract host part from address
+	host1 := extractHost(addr1)
+	host2 := extractHost(addr2)
+
+	// Check address types
+	local1 := isLocalAddress(host1)
+	local2 := isLocalAddress(host2)
+	private1 := isPrivateAddress(host1)
+	private2 := isPrivateAddress(host2)
+
+	// Priority order: public > private > local
+	// If one is local and the other isn't, local goes last
+	if local1 && !local2 {
+		return true
+	}
+	if !local1 && local2 {
+		return false
+	}
+
+	// Both are local or both are not local
+	// If one is private and the other is public, private goes after
+	if private1 && !private2 {
+		return true
+	}
+
+	return false
+}
+
+func extractHost(address string) string {
+	host, _, err := net.SplitHostPort(address)
+	if err != nil {
+		// No port or invalid format, return as-is
+		return address
+	}
+	return host
+}
+
+func isLocalAddress(host string) bool {
+	// Handle localhost hostname
+	if host == "localhost" {
+		return true
+	}
+
+	// Parse as IP address
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return false
+	}
+
+	// Check for loopback (127.0.0.0/8 or ::1)
+	if ip.IsLoopback() {
+		return true
+	}
+
+	// Check for unspecified addresses (0.0.0.0 or ::)
+	if ip.IsUnspecified() {
+		return true
+	}
+
+	return false
+}
+
+func isPrivateAddress(host string) bool {
+	// Parse as IP address
+	ip := net.ParseIP(host)
+	if ip == nil {
+		// Not a valid IP, could be a hostname
+		return false
+	}
+
+	// Use the built-in IsPrivate method (available in Go 1.17+)
+	// This checks for:
+	// - 10.0.0.0/8 (RFC1918)
+	// - 172.16.0.0/12 (RFC1918)
+	// - 192.168.0.0/16 (RFC1918)
+	// - 169.254.0.0/16 (link-local)
+	// - fc00::/7 (IPv6 unique local)
+	// - fe80::/10 (IPv6 link-local)
+	return ip.IsPrivate()
 }
 
 // fetchAvailableClusters queries the identity server for available clusters
@@ -97,7 +226,7 @@ func fetchAvailableClusters(ctx *Context, identity *clientconfig.IdentityConfig)
 // Returns the selected cluster and the local name to use
 func selectClusterFromList(ctx *Context, clusters []ClusterResponse) (*ClusterResponse, string, error) {
 	// Check if we can run interactive mode
-	if !isInteractive() {
+	if !ui.IsInteractive() {
 		// Non-interactive mode - list clusters and exit
 		ctx.Printf("Available clusters:\n\n")
 		clusterNum := 1
@@ -125,118 +254,179 @@ func selectClusterFromList(ctx *Context, clusters []ClusterResponse) (*ClusterRe
 		return nil, "", fmt.Errorf("interactive mode not available")
 	}
 
-	// Create list items
-	items := make([]list.Item, 0, len(clusters))
+	// Create table picker items
+	items := make([]ui.PickerItem, 0, len(clusters))
+	clusterMap := make(map[string]*ClusterResponse)
+
 	for i, cluster := range clusters {
 		if len(cluster.APIAddresses) == 0 {
 			continue // Skip clusters without API addresses
 		}
 
-		// Build multi-line description with all details
-		var descLines []string
+		// Sort addresses to put localhost/0.0.0.0 last
+		addresses := sortAddresses(cluster.APIAddresses)
 
-		// Organization
-		descLines = append(descLines, fmt.Sprintf("Organization: %s", cluster.OrganizationName))
-
-		// Description if available
-		if cluster.Description != "" {
-			descLines = append(descLines, fmt.Sprintf("Description: %s", cluster.Description))
+		// Format primary address with grayed port
+		address := formatAddressWithGrayPort(addresses[0])
+		if len(addresses) > 1 {
+			address = fmt.Sprintf("%s (+%d)", address, len(addresses)-1)
 		}
 
-		// API Addresses - show all of them
-		if len(cluster.APIAddresses) > 0 {
-			if len(cluster.APIAddresses) == 1 {
-				descLines = append(descLines, fmt.Sprintf("Address: %s", cluster.APIAddresses[0]))
-			} else {
-				descLines = append(descLines, fmt.Sprintf("Addresses (%d):", len(cluster.APIAddresses)))
-				for j, addr := range cluster.APIAddresses {
-					if j < 3 { // Show first 3 addresses
-						descLines = append(descLines, fmt.Sprintf("  • %s", addr))
-					}
-				}
-				if len(cluster.APIAddresses) > 3 {
-					descLines = append(descLines, fmt.Sprintf("  • ... and %d more", len(cluster.APIAddresses)-3))
-				}
-			}
-		}
-
-		// Certificate fingerprint if available
-		if cluster.CACertFingerprint != "" {
-			// Show first and last 8 chars of fingerprint for readability
-			fp := cluster.CACertFingerprint
-			if len(fp) > 20 {
-				fp = fmt.Sprintf("%s...%s", fp[:8], fp[len(fp)-8:])
-			}
-			descLines = append(descLines, fmt.Sprintf("Certificate: %s", fp))
-		}
-
-		// Tags if available
-		if len(cluster.Tags) > 0 {
-			var tagStrs []string
-			for k, v := range cluster.Tags {
-				tagStrs = append(tagStrs, fmt.Sprintf("%s=%v", k, v))
-				if len(tagStrs) >= 3 {
-					break // Only show first 3 tags
-				}
-			}
-			descLines = append(descLines, fmt.Sprintf("Tags: %s", strings.Join(tagStrs, ", ")))
-		}
-
-		items = append(items, listItem{
-			title: cluster.Name,
-			desc:  strings.Join(descLines, "\n"),
-			index: i, // Store the cluster index for direct lookup
+		// Create table item
+		itemID := fmt.Sprintf("cluster_%d", i)
+		items = append(items, ui.TablePickerItem{
+			Columns: []string{
+				cluster.Name,
+				cluster.OrganizationName,
+				address,
+			},
+			ItemID: itemID,
 		})
+		clusterMap[itemID] = &clusters[i]
 	}
 
-	// Create the list model
-	const defaultWidth = 100 // Increased width for more detail
-	const listHeight = 20    // Increased height since items are taller
+	// Run the table picker
+	selected, err := ui.RunPicker(items,
+		ui.WithTitle("Select a cluster to bind:"),
+		ui.WithHeaders([]string{"NAME", "ORGANIZATION", "ADDRESS"}),
+	)
 
-	delegate := &customDelegate{}
-	l := list.New(items, delegate, defaultWidth, listHeight)
-	l.Title = "Select a cluster to bind"
-	l.SetShowStatusBar(false)
-	l.SetFilteringEnabled(true)
-	l.SetShowHelp(true)
-	l.Styles.Title = listTitleStyle
-	l.Styles.HelpStyle = modalHelpStyle
-
-	m := clusterListModel{
-		list:     l,
-		clusters: clusters,
-		selected: -1,
-		state:    "selecting",
-	}
-
-	// Run the interactive selection
-	p := tea.NewProgram(m, tea.WithAltScreen())
-	result, err := p.Run()
 	if err != nil {
 		return nil, "", fmt.Errorf("failed to run cluster selection: %w", err)
 	}
 
-	model := result.(clusterListModel)
-	if model.cancelled {
+	if selected == nil {
 		return nil, "", fmt.Errorf("cluster selection cancelled")
 	}
 
-	if model.selected < 0 || model.selected >= len(clusters) {
+	// Get the selected cluster
+	selectedCluster := clusterMap[selected.ID()]
+	if selectedCluster == nil {
 		return nil, "", fmt.Errorf("invalid selection")
 	}
 
+	// Now prompt for local name using a text input modal
+	localName, err := promptForLocalName(ctx, selectedCluster)
+	if err != nil {
+		return nil, "", err
+	}
+
 	// Return both the selected cluster and the local name
-	return &clusters[model.selected], model.localName, nil
+	return selectedCluster, localName, nil
 }
 
-type listItem struct {
-	title, desc string
-	index       int // Store the original cluster index for direct lookup
+// promptForLocalName prompts the user to enter a local name for the cluster
+func promptForLocalName(ctx *Context, cluster *ClusterResponse) (string, error) {
+	if !ui.IsInteractive() {
+		// Non-interactive mode - use cluster name
+		return cluster.Name, nil
+	}
+
+	// Create a text input model
+	textInput := textinput.New()
+	textInput.Placeholder = cluster.Name
+	textInput.SetValue(cluster.Name)
+	textInput.Focus()
+	textInput.CharLimit = 100
+	textInput.Width = 50
+	textInput.Prompt = "Local name: "
+
+	m := localNameModel{
+		textInput: textInput,
+		cluster:   cluster,
+	}
+
+	// Run the text input
+	p := tea.NewProgram(m, tea.WithAltScreen())
+	result, err := p.Run()
+	if err != nil {
+		return "", fmt.Errorf("failed to run name input: %w", err)
+	}
+
+	model := result.(localNameModel)
+	if model.cancelled {
+		return "", fmt.Errorf("name input cancelled")
+	}
+
+	return model.localName, nil
 }
 
-func (i listItem) Title() string       { return i.title }
-func (i listItem) Description() string { return i.desc }
-func (i listItem) FilterValue() string { return i.title }
+type localNameModel struct {
+	textInput textinput.Model
+	cluster   *ClusterResponse
+	localName string
+	cancelled bool
+}
+
+func (m localNameModel) Init() tea.Cmd {
+	return textinput.Blink
+}
+
+func (m localNameModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		switch msg.String() {
+		case "ctrl+c":
+			m.cancelled = true
+			return m, tea.Quit
+		case "esc":
+			m.cancelled = true
+			return m, tea.Quit
+		case "enter":
+			value := m.textInput.Value()
+			if value == "" {
+				// Use placeholder if empty
+				value = m.textInput.Placeholder
+			}
+			// Validate the name
+			if strings.ContainsAny(value, "/\\:*?\"<>|") {
+				// Invalid characters - don't accept
+				return m, nil
+			}
+			m.localName = value
+			return m, tea.Quit
+		}
+	}
+
+	var cmd tea.Cmd
+	m.textInput, cmd = m.textInput.Update(msg)
+	return m, cmd
+}
+
+func (m localNameModel) View() string {
+	// Create the modal content
+	var modalContent strings.Builder
+
+	// Title
+	title := "Choose Local Name"
+	modalContent.WriteString(modalTitleStyle.Render(title))
+	modalContent.WriteString("\n\n")
+
+	// Show selected cluster info
+	info := fmt.Sprintf("Cluster: %s\nOrganization: %s", m.cluster.Name, m.cluster.OrganizationName)
+	if m.cluster.Description != "" {
+		info += fmt.Sprintf("\nDescription: %s", m.cluster.Description)
+	}
+	modalContent.WriteString(modalSubtitleStyle.Render(info))
+	modalContent.WriteString("\n\n")
+
+	// Text input
+	modalContent.WriteString(m.textInput.View())
+
+	// Show validation error if needed
+	value := m.textInput.Value()
+	if value != "" && strings.ContainsAny(value, "/\\:*?\"<>|") {
+		modalContent.WriteString("\n\n")
+		modalContent.WriteString(modalErrorStyle.Render("⚠ Name contains illegal characters (/\\:*?\"<>|)"))
+	}
+
+	// Help text
+	modalContent.WriteString("\n\n")
+	modalContent.WriteString(modalHelpStyle.Render("Enter: confirm • Esc: cancel • Ctrl+C: cancel"))
+
+	// Apply modal styling
+	return modalStyle.Render(modalContent.String())
+}
 
 // Define consistent styles for both list and modal
 var (
@@ -270,252 +460,7 @@ var (
 	modalHelpStyle = lipgloss.NewStyle().
 			Foreground(helpColor).
 			MarginTop(1)
-
-	// List styles
-	listTitleStyle = lipgloss.NewStyle().
-			Foreground(primaryColor).
-			Bold(true).
-			Padding(0, 0, 1, 0)
-
-	listItemStyle = lipgloss.NewStyle().
-			PaddingLeft(2)
-
-	selectedItemStyle = lipgloss.NewStyle().
-				PaddingLeft(1).
-				Foreground(primaryColor).
-				Background(lipgloss.Color("236")).
-				Bold(true)
-
-	listItemTitleStyle = lipgloss.NewStyle().
-				Foreground(primaryColor)
-
-	listItemDescStyle = lipgloss.NewStyle().
-				Foreground(secondaryColor)
 )
-
-// customDelegate implements list.ItemDelegate with our consistent styling
-type customDelegate struct{}
-
-func (d customDelegate) Height() int {
-	// Calculate height based on typical content (title + multi-line desc)
-	return 7 // Increased to accommodate more detail
-}
-func (d customDelegate) Spacing() int                            { return 1 }
-func (d customDelegate) Update(_ tea.Msg, _ *list.Model) tea.Cmd { return nil }
-
-func (d customDelegate) Render(w io.Writer, m list.Model, index int, item list.Item) {
-	i, ok := item.(listItem)
-	if !ok {
-		return
-	}
-
-	// Render title with bold styling
-	title := listItemTitleStyle.Bold(true).Render(i.title)
-
-	// Render description lines with proper indentation
-	descLines := strings.Split(i.desc, "\n")
-	var styledDesc []string
-	for _, line := range descLines {
-		styledDesc = append(styledDesc, listItemDescStyle.Render(line))
-	}
-	desc := strings.Join(styledDesc, "\n")
-
-	// Combine title and description
-	content := lipgloss.JoinVertical(lipgloss.Left, title, desc)
-
-	// Apply selection styling
-	if index == m.Index() {
-		// Add selection indicator and background
-		lines := strings.Split(content, "\n")
-		var selected []string
-		for idx, line := range lines {
-			if idx == 0 {
-				// Add arrow to title line
-				selected = append(selected, selectedItemStyle.Render("▸ "+line))
-			} else {
-				// Indent other lines under selection
-				selected = append(selected, selectedItemStyle.Render("  "+line))
-			}
-		}
-		content = strings.Join(selected, "\n")
-	} else {
-		// Regular item with padding
-		lines := strings.Split(content, "\n")
-		var padded []string
-		for _, line := range lines {
-			padded = append(padded, listItemStyle.Render(line))
-		}
-		content = strings.Join(padded, "\n")
-	}
-
-	fmt.Fprint(w, content)
-}
-
-type clusterListModel struct {
-	list         list.Model
-	textInput    textinput.Model
-	clusters     []ClusterResponse
-	selected     int
-	cancelled    bool
-	state        string // "selecting" or "naming"
-	localName    string // The final chosen local name
-	windowWidth  int
-	windowHeight int
-}
-
-func (m clusterListModel) Init() tea.Cmd {
-	return nil
-}
-
-func (m clusterListModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	// Handle window size updates in any state
-	if msg, ok := msg.(tea.WindowSizeMsg); ok {
-		m.windowWidth = msg.Width
-		m.windowHeight = msg.Height
-		m.list.SetWidth(msg.Width)
-		m.list.SetHeight(msg.Height - 2)
-	}
-
-	// Handle different states
-	if m.state == "naming" {
-		// In naming state, handle text input
-		switch msg := msg.(type) {
-		case tea.KeyMsg:
-			switch msg.String() {
-			case "ctrl+c":
-				m.cancelled = true
-				return m, tea.Quit
-			case "esc":
-				// Go back to selection
-				m.state = "selecting"
-				return m, nil
-			case "enter":
-				value := m.textInput.Value()
-				if value == "" {
-					// Use placeholder if empty
-					value = m.textInput.Placeholder
-				}
-				// Validate the name
-				if strings.ContainsAny(value, "/\\:*?\"<>|") {
-					// Show error but stay in naming mode
-					// We'll handle this in the view
-					return m, nil
-				}
-				m.localName = value
-				return m, tea.Quit
-			}
-		}
-
-		var cmd tea.Cmd
-		m.textInput, cmd = m.textInput.Update(msg)
-		return m, cmd
-	}
-
-	// In selecting state, handle list selection
-	switch msg := msg.(type) {
-	case tea.KeyMsg:
-		switch msg.String() {
-		case "ctrl+c", "q", "esc":
-			m.cancelled = true
-			return m, tea.Quit
-		case "enter":
-			if i, ok := m.list.SelectedItem().(listItem); ok {
-				// Use the stored index for direct cluster lookup
-				m.selected = i.index
-				cluster := m.clusters[i.index]
-				// Switch to naming mode
-				m.state = "naming"
-				// Initialize text input with cluster name
-				m.textInput = textinput.New()
-				m.textInput.Placeholder = cluster.Name
-				m.textInput.SetValue(cluster.Name)
-				m.textInput.Focus()
-				m.textInput.CharLimit = 100
-				m.textInput.Width = 50
-				m.textInput.Prompt = "Local name: "
-				return m, textinput.Blink
-			}
-			return m, nil
-		}
-	}
-
-	var cmd tea.Cmd
-	m.list, cmd = m.list.Update(msg)
-	return m, cmd
-}
-
-func (m clusterListModel) View() string {
-	if m.state == "naming" {
-		// Create the modal content
-		var modalContent strings.Builder
-
-		// Title
-		title := "Choose Local Name"
-		modalContent.WriteString(modalTitleStyle.Render(title))
-		modalContent.WriteString("\n\n")
-
-		// Show selected cluster info
-		if m.selected >= 0 && m.selected < len(m.clusters) {
-			cluster := m.clusters[m.selected]
-			info := fmt.Sprintf("Cluster: %s\nOrganization: %s", cluster.Name, cluster.OrganizationName)
-			if cluster.Description != "" {
-				info += fmt.Sprintf("\nDescription: %s", cluster.Description)
-			}
-			modalContent.WriteString(modalSubtitleStyle.Render(info))
-			modalContent.WriteString("\n\n")
-		}
-
-		// Text input
-		modalContent.WriteString(m.textInput.View())
-
-		// Show validation error if needed
-		value := m.textInput.Value()
-		if value != "" && strings.ContainsAny(value, "/\\:*?\"<>|") {
-			modalContent.WriteString("\n\n")
-			modalContent.WriteString(modalErrorStyle.Render("⚠ Name contains illegal characters (/\\:*?\"<>|)"))
-		}
-
-		// Help text
-		modalContent.WriteString("\n\n")
-		modalContent.WriteString(modalHelpStyle.Render("Enter: confirm • Esc: back • Ctrl+C: cancel"))
-
-		// Apply modal styling
-		modal := modalStyle.Render(modalContent.String())
-
-		// If window size is not set yet, just return the modal
-		if m.windowWidth == 0 || m.windowHeight == 0 {
-			return modal
-		}
-
-		// Create the overlay effect
-		// Place the modal centered on the screen with a subtle background
-		return lipgloss.Place(
-			m.windowWidth,
-			m.windowHeight,
-			lipgloss.Center,
-			lipgloss.Center,
-			modal,
-			lipgloss.WithWhitespaceBackground(lipgloss.Color("236")),
-		)
-	}
-
-	// In selecting state, show the list
-	return m.list.View()
-}
-
-// isInteractive checks if we're in an interactive terminal
-func isInteractive() bool {
-	if os.Getenv("CI") != "" {
-		return false
-	}
-
-	fileInfo, err := os.Stdout.Stat()
-	if err != nil {
-		return false
-	}
-
-	return (fileInfo.Mode() & os.ModeCharDevice) != 0
-}
 
 // tryConnectToCluster attempts to connect to a cluster using its available addresses
 // and returns the working address and CA certificate. It tries all provided addresses

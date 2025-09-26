@@ -104,28 +104,38 @@ func AllCommands() map[string]cli.CommandFactory {
 			return Infer("logs", "Get logs for an application", Logs), nil
 		},
 
+		// Config commands - for config file management
 		"config": func() (cli.Command, error) {
-			return Section("config", "Commands related to client configuration"), nil
+			return Section("config", "Configuration file management"), nil
 		},
 
 		"config info": func() (cli.Command, error) {
-			return Infer("config info", "Get information about the client configuration", ConfigInfo), nil
+			return Infer("config info", "Show configuration file locations and format", ConfigInfo), nil
 		},
 
 		"config load": func() (cli.Command, error) {
 			return Infer("config load", "Load config and merge it with your current config", ConfigLoad), nil
 		},
 
-		"config set-active": func() (cli.Command, error) {
-			return Infer("config set-active", "Set the active cluster", ConfigSetActive), nil
+		// Cluster commands - for cluster management
+		"cluster": func() (cli.Command, error) {
+			return Infer("cluster", "List configured clusters", Cluster), nil
 		},
 
-		"config bind": func() (cli.Command, error) {
-			return Infer("config bind", "Bind an identity to a cluster address", ConfigBind), nil
+		"cluster list": func() (cli.Command, error) {
+			return Infer("cluster list", "List all configured clusters", ClusterList), nil
 		},
 
-		"config remove": func() (cli.Command, error) {
-			return Infer("config remove", "Remove a cluster from the configuration", ConfigRemove), nil
+		"cluster switch": func() (cli.Command, error) {
+			return Infer("cluster switch", "Switch to a different cluster", ClusterSwitch), nil
+		},
+
+		"cluster add": func() (cli.Command, error) {
+			return Infer("cluster add", "Add a new cluster configuration", ClusterAdd), nil
+		},
+
+		"cluster remove": func() (cli.Command, error) {
+			return Infer("cluster remove", "Remove a cluster from the configuration", ClusterRemove), nil
 		},
 
 		"disk create": func() (cli.Command, error) {
