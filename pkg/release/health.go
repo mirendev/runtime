@@ -152,7 +152,7 @@ func IsServerRunning() bool {
 	if os.Geteuid() != 0 {
 		return false
 	}
-	
+
 	cmd := exec.Command("systemctl", "is-active", "miren")
 	output, err := cmd.Output()
 	if err != nil {
