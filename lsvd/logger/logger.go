@@ -285,7 +285,6 @@ func (h *commonHandler) handle(r slog.Record) error {
 	}
 
 	// level
-	key := slog.LevelKey
 	val := r.Level
 	str := val.String()
 
@@ -310,7 +309,7 @@ func (h *commonHandler) handle(r slog.Record) error {
 		state.appendAttr(slog.Any(slog.SourceKey, recordSource(r)))
 	}
 
-	key = slog.MessageKey
+	key := slog.MessageKey
 	msg := r.Message
 	if rep == nil {
 		state.appendRawString(msg)

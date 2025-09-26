@@ -20,7 +20,6 @@ import (
 	"miren.dev/runtime/api/build/build_v1alpha"
 	"miren.dev/runtime/api/core/core_v1alpha"
 	aes "miren.dev/runtime/api/entityserver"
-	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	esv1 "miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/api/exec/exec_v1alpha"
 	"miren.dev/runtime/clientconfig"
@@ -424,7 +423,7 @@ func (c *Coordinator) Start(ctx context.Context) error {
 		return err
 	}
 
-	eac := entityserver_v1alpha.NewEntityAccessClient(loopback)
+	eac := esv1.NewEntityAccessClient(loopback)
 	ec := aes.NewClient(c.Log, eac)
 
 	defaultProject := &core_v1alpha.Project{

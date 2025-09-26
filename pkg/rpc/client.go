@@ -649,10 +649,7 @@ func (c *NetworkClient) handleCallStream(
 		case "unknown-capability":
 			if c.capa.RestoreState != nil {
 				// We have a resolution, let's try to resolve it and update our capability.
-				rerr := c.reresolveCapability(c.capa.RestoreState)
-				if rerr != nil {
-					err = cond.NotFound("capability", c.capa.OID)
-				}
+				c.reresolveCapability(c.capa.RestoreState)
 			}
 
 			err = cond.NotFound("capability", c.capa.OID)

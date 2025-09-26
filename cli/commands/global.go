@@ -384,14 +384,14 @@ func (c *Context) RPCClient(name string) (*rpc.NetworkClient, error) {
 	)
 
 	if c.ClusterConfig != nil && c.ClientConfig != nil {
-		cs, err = c.ClusterConfig.State(c, c.ClientConfig, rpc.WithLogger(c.Log))
+		cs, err = c.ClusterConfig.State(c, c.ClientConfig, opts...)
 		if err == nil {
 			return cs.Client(name)
 		}
 	}
 
 	if c.ClientConfig != nil {
-		cs, err = c.ClientConfig.State(c, rpc.WithLogger(c.Log))
+		cs, err = c.ClientConfig.State(c, opts...)
 		if err == nil {
 			return cs.Client(name)
 		}

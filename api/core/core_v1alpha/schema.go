@@ -749,10 +749,7 @@ func (o *Project) Encode() (attrs []entity.Attr) {
 }
 
 func (o *Project) Empty() bool {
-	if !entity.Empty(o.Owner) {
-		return false
-	}
-	return true
+	return entity.Empty(o.Owner)
 }
 
 func (o *Project) InitSchema(sb *schema.SchemaBuilder) {

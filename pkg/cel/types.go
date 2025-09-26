@@ -309,7 +309,7 @@ func (f *DeclField) DefaultValue() ref.Val {
 
 // EnumValues returns the set of values that this field may take.
 func (f *DeclField) EnumValues() []ref.Val {
-	if f.enumValues == nil || len(f.enumValues) == 0 {
+	if len(f.enumValues) == 0 {
 		return []ref.Val{}
 	}
 	ev := make([]ref.Val, len(f.enumValues))

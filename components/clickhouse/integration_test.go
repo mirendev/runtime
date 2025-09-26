@@ -23,7 +23,6 @@ import (
 const testNamespace = "miren-clickhouse-test"
 
 func TestClickHouseComponentIntegration(t *testing.T) {
-	ctx := context.Background()
 	reg, cleanup := testutils.Registry()
 	defer cleanup()
 
