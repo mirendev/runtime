@@ -47,28 +47,38 @@ func Upgrade(ctx *Context, opts UpgradeOptions) error {
 			return fmt.Errorf("failed to get current version: %w", err)
 		}
 
-		latest, err := mgr.GetLatestVersion(ctx, release.ArtifactTypeBase)
+		// Get metadata for the latest version
+		downloader := release.NewDownloader()
+		metadata, err := downloader.GetVersionMetadata(ctx, "main")
 		if err != nil {
 			return fmt.Errorf("failed to check for updates: %w", err)
 		}
 
-		fmt.Printf("Current version: %s\n", current.Version)
-		fmt.Printf("Latest version:  %s\n", latest)
-
-		// Try to fetch detailed metadata for more info
-		downloader := release.NewDownloader()
-		if metadata, err := downloader.GetVersionMetadata(ctx, "main"); err == nil {
-			if metadata.Commit != "" && current.Commit != "" && len(metadata.Commit) > 7 && len(current.Commit) > 7 {
-				if metadata.Commit[:7] != current.Commit[:7] {
-					fmt.Printf("Latest commit:   %s\n", metadata.Commit[:7])
-					if !metadata.BuildDate.IsZero() {
-						fmt.Printf("Build date:      %s\n", metadata.BuildDate.Format("2006-01-02 15:04:05 UTC"))
-					}
-				}
-			}
+		// Convert metadata to VersionInfo for comparison
+		latestInfo := release.VersionInfo{
+			Version:   metadata.Version,
+			Commit:    metadata.Commit,
+			BuildDate: metadata.BuildDate,
 		}
 
-		if current.Version != latest {
+		fmt.Printf("Current version: %s\n", current.Version)
+		if current.Commit != "" && len(current.Commit) > 7 {
+			fmt.Printf("Current commit:  %s\n", current.Commit[:7])
+		}
+		if !current.BuildDate.IsZero() {
+			fmt.Printf("Current build:   %s\n", current.BuildDate.Format("2006-01-02 15:04:05 UTC"))
+		}
+
+		fmt.Printf("\nLatest version:  %s\n", latestInfo.Version)
+		if latestInfo.Commit != "" && len(latestInfo.Commit) > 7 {
+			fmt.Printf("Latest commit:   %s\n", latestInfo.Commit[:7])
+		}
+		if !latestInfo.BuildDate.IsZero() {
+			fmt.Printf("Latest build:    %s\n", latestInfo.BuildDate.Format("2006-01-02 15:04:05 UTC"))
+		}
+
+		// Use proper version comparison with build dates
+		if latestInfo.IsNewer(current) {
 			fmt.Println("\nAn update is available! Run 'miren upgrade' to install it.")
 		} else {
 			fmt.Println("\nYou are already on the latest version.")
@@ -85,10 +95,30 @@ func Upgrade(ctx *Context, opts UpgradeOptions) error {
 		version = "main" // Default to main branch
 	}
 
-	// Check if already up to date (unless forced)
-	if !opts.Force && current.Version == version {
-		fmt.Printf("Already at version %s\n", version)
-		return nil
+	// Get metadata for the target version to check if it's actually newer
+	if !opts.Force {
+		downloader := release.NewDownloader()
+		if metadata, err := downloader.GetVersionMetadata(ctx, version); err == nil {
+			targetInfo := release.VersionInfo{
+				Version:   metadata.Version,
+				Commit:    metadata.Commit,
+				BuildDate: metadata.BuildDate,
+			}
+
+			// Check if the target version is actually newer
+			if !targetInfo.IsNewer(current) {
+				if current.Version == targetInfo.Version {
+					fmt.Printf("Already at version %s\n", version)
+				} else {
+					fmt.Printf("Current version %s is already up to date (target: %s)\n", current.Version, targetInfo.Version)
+					if !current.BuildDate.IsZero() && !targetInfo.BuildDate.IsZero() {
+						fmt.Printf("Current build: %s\n", current.BuildDate.Format("2006-01-02 15:04:05 UTC"))
+						fmt.Printf("Target build:  %s\n", targetInfo.BuildDate.Format("2006-01-02 15:04:05 UTC"))
+					}
+				}
+				return nil
+			}
+		}
 	}
 
 	// Create artifact descriptor - use binary type for CLI upgrades (just the miren binary)
