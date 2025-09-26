@@ -10,7 +10,7 @@ import (
 
 // UpgradeOptions contains options for the upgrade command
 type UpgradeOptions struct {
-	Version string `flag:"version" help:"Specific version to upgrade to (default: latest)"`
+	Version string `flag:"version" help:"Specific version to upgrade to (default: main)"`
 	Check   bool   `flag:"check" help:"Check for available updates only"`
 	Force   bool   `flag:"force" help:"Force upgrade even if already up to date or server running"`
 }
@@ -82,7 +82,7 @@ func Upgrade(ctx *Context, opts UpgradeOptions) error {
 	// Determine target version
 	version := opts.Version
 	if version == "" {
-		version = "main" // Default to main branch for now
+		version = "main" // Default to main branch
 	}
 
 	// Check if already up to date (unless forced)

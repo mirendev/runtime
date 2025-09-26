@@ -10,7 +10,7 @@ import (
 
 // ServerUpgradeOptions contains options for the server upgrade command
 type ServerUpgradeOptions struct {
-	Version        string `flag:"version" help:"Specific version to upgrade to (default: latest)"`
+	Version        string `flag:"version" help:"Specific version to upgrade to (default: main)"`
 	Release        bool   `flag:"release" help:"Upgrade full release package (not just base)"`
 	SkipHealth     bool   `flag:"skip-health" help:"Skip health check after upgrade"`
 	NoAutoRollback bool   `flag:"no-auto-rollback" help:"Disable automatic rollback on failure"`
@@ -48,7 +48,7 @@ func ServerUpgrade(ctx *Context, opts ServerUpgradeOptions) error {
 	// Determine target version
 	version := opts.Version
 	if version == "" {
-		version = "main" // Default to main branch for now
+		version = "main" // Default to main branch
 	}
 
 	// Determine artifact type
