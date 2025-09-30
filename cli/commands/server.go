@@ -616,6 +616,8 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 	// Pass cloud authentication config if available
 	if cloudAuthConfig.Enabled {
 		rc.CloudAuth = &cloudAuthConfig
+	} else {
+		rc.CloudAuth = &coordinate.CloudAuthConfig{}
 	}
 
 	err = ctx.Server.Populate(&rc)
