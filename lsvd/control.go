@@ -145,7 +145,7 @@ func (c *Controller) improveDensity(ctx *Context) error {
 		return nil
 	}
 
-	if TargetDensity >= 90 {
+	if density >= TargetDensity {
 		return nil
 	}
 
