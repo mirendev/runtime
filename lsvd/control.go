@@ -105,7 +105,7 @@ func (c *Controller) handleControl(gctx context.Context) {
 }
 
 func (c *Controller) handleTick(ctx *Context) error {
-	if time.Since(c.lastNewSegment) >= 5*time.Minute {
+	if time.Since(c.lastNewSegment) >= 30*time.Second {
 		c.lastNewSegment = time.Now()
 
 		err := c.handleLongIdle(ctx)
