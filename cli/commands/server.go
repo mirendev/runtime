@@ -682,6 +682,9 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 		srvaddr := cfg.Server.GetAddress()
 		if strings.HasPrefix(srvaddr, ":") {
 			srvaddr = "127.0.0.1" + srvaddr
+		} else if strings.HasPrefix(srvaddr, "0.0.0.0:") {
+			// Replace 0.0.0.0 with 127.0.0.1 for local connections
+			srvaddr = strings.Replace(srvaddr, "0.0.0.0:", "127.0.0.1:", 1)
 		}
 		ctx.Log.Info("writing local cluster config", "cluster-name", cfg.Server.GetConfigClusterName(), "server-address", srvaddr)
 		if err := writeLocalClusterConfig(ctx, cert, srvaddr, cfg.Server.GetConfigClusterName()); err != nil {
