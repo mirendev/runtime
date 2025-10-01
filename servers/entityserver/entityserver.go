@@ -219,6 +219,133 @@ func (e *EntityServer) Put(ctx context.Context, req *entityserver_v1alpha.Entity
 	return nil
 }
 
+func (e *EntityServer) Create(ctx context.Context, req *entityserver_v1alpha.EntityAccessCreate) error {
+	args := req.Args()
+
+	attrs := args.Attrs()
+	if len(attrs) == 0 {
+		return cond.ValidationFailure("missing-field", "attrs")
+	}
+
+	entity, err := e.Store.CreateEntity(ctx, attrs)
+	if err != nil {
+		return fmt.Errorf("failed to create entity: %w", err)
+	}
+
+	results := req.Results()
+	results.SetRevision(entity.Revision)
+	results.SetId(entity.ID.String())
+
+	return nil
+}
+
+func (e *EntityServer) Replace(ctx context.Context, req *entityserver_v1alpha.EntityAccessReplace) error {
+	args := req.Args()
+
+	attrs := args.Attrs()
+	if len(attrs) == 0 {
+		return cond.ValidationFailure("missing-field", "attrs")
+	}
+
+	// Extract ID from attrs to validate it's present
+	var hasId bool
+	for _, attr := range attrs {
+		if attr.ID == entity.DBId {
+			hasId = true
+			break
+		}
+	}
+	if !hasId {
+		return cond.ValidationFailure("missing-field", "db/id attribute is required")
+	}
+
+	var opts []entity.EntityOption
+	if args.HasRevision() && args.Revision() > 0 {
+		opts = append(opts, entity.WithFromRevision(args.Revision()))
+	}
+
+	ent, err := e.Store.ReplaceEntity(ctx, attrs, opts...)
+	if err != nil {
+		return fmt.Errorf("failed to replace entity: %w", err)
+	}
+
+	results := req.Results()
+	results.SetRevision(ent.Revision)
+	results.SetId(ent.ID.String())
+
+	return nil
+}
+
+func (e *EntityServer) Patch(ctx context.Context, req *entityserver_v1alpha.EntityAccessPatch) error {
+	args := req.Args()
+
+	attrs := args.Attrs()
+	if len(attrs) == 0 {
+		return cond.ValidationFailure("missing-field", "attrs")
+	}
+
+	// Extract ID from attrs to validate it's present
+	var hasId bool
+	for _, attr := range attrs {
+		if attr.ID == entity.DBId {
+			hasId = true
+			break
+		}
+	}
+	if !hasId {
+		return cond.ValidationFailure("missing-field", "db/id attribute is required")
+	}
+
+	var opts []entity.EntityOption
+	if args.HasRevision() && args.Revision() > 0 {
+		opts = append(opts, entity.WithFromRevision(args.Revision()))
+	}
+
+	ent, err := e.Store.PatchEntity(ctx, attrs, opts...)
+	if err != nil {
+		return fmt.Errorf("failed to patch entity: %w", err)
+	}
+
+	results := req.Results()
+	results.SetRevision(ent.Revision)
+	results.SetId(ent.ID.String())
+
+	return nil
+}
+
+func (e *EntityServer) Ensure(ctx context.Context, req *entityserver_v1alpha.EntityAccessEnsure) error {
+	args := req.Args()
+
+	attrs := args.Attrs()
+	if len(attrs) == 0 {
+		return cond.ValidationFailure("missing-field", "attrs")
+	}
+
+	// Extract ID from attrs to validate it's present
+	var hasId bool
+	for _, attr := range attrs {
+		if attr.ID == entity.DBId {
+			hasId = true
+			break
+		}
+	}
+	if !hasId {
+		return cond.ValidationFailure("missing-field", "db/id attribute is required")
+	}
+
+	ent, created, err := e.Store.EnsureEntity(ctx, attrs)
+	if err != nil {
+		return fmt.Errorf("failed to ensure entity: %w", err)
+	}
+
+	results := req.Results()
+	results.SetRevision(ent.Revision)
+	results.SetId(ent.ID.String())
+	results.SetCreated(created)
+
+	return nil
+}
+
 func (e *EntityServer) PutSession(ctx context.Context, req *entityserver_v1alpha.EntityAccessPutSession) error {
 	args := req.Args()
 

@@ -36,6 +36,9 @@ type Store interface {
 	GetAttributeSchema(ctx context.Context, name Id) (*AttributeSchema, error)
 	CreateEntity(ctx context.Context, attributes []Attr, opts ...EntityOption) (*Entity, error)
 	UpdateEntity(ctx context.Context, id Id, attributes []Attr, opts ...EntityOption) (*Entity, error)
+	ReplaceEntity(ctx context.Context, attributes []Attr, opts ...EntityOption) (*Entity, error)
+	PatchEntity(ctx context.Context, attributes []Attr, opts ...EntityOption) (*Entity, error)
+	EnsureEntity(ctx context.Context, attributes []Attr, opts ...EntityOption) (*Entity, bool, error)
 	DeleteEntity(ctx context.Context, id Id) error
 	WatchIndex(ctx context.Context, attr Attr) (clientv3.WatchChan, error)
 	ListIndex(ctx context.Context, attr Attr) ([]Id, error)
@@ -171,6 +174,9 @@ func (s *EtcdStore) CreateEntity(
 	if entity.ID == "" {
 		entity.ID = Id(idgen.GenNS("e"))
 	}
+
+	entity.Attrs = append(entity.Attrs, Ref(DBId, entity.ID))
+	entity.Attrs = SortedAttrs(entity.Attrs)
 
 	var primary, session []Attr
 
@@ -711,6 +717,382 @@ func (s *EtcdStore) UpdateEntity(
 	entity.Revision = txnResp.Header.Revision
 
 	return entity, nil
+}
+
+// extractEntityId extracts the entity ID from the db/id attribute in the attributes list
+func extractEntityId(attributes []Attr) (Id, error) {
+	for _, attr := range attributes {
+		if attr.ID == DBId {
+			switch v := attr.Value.Any().(type) {
+			case Id:
+				return v, nil
+			case string:
+				return Id(v), nil
+			default:
+				return "", fmt.Errorf("invalid db/id attribute type: %T", attr.Value.Any())
+			}
+		}
+	}
+	return "", fmt.Errorf("db/id attribute is required")
+}
+
+// checkRevisionConflict checks if the entity revision matches the expected revision
+func (s *EtcdStore) checkRevisionConflict(entity *Entity, expectedRevision int64) error {
+	if expectedRevision != 0 && entity.Revision != expectedRevision {
+		s.log.Error("entity revision mismatch", "expected", expectedRevision, "actual", entity.Revision)
+		return cond.Conflict("entity", entity.ID)
+	}
+	return nil
+}
+
+// collectIndexedAttributes builds a map of indexed attributes from the entity
+func (s *EtcdStore) collectIndexedAttributes(ctx context.Context, attrs []Attr) (map[Id][]Attr, error) {
+	indexedAttrs := make(map[Id][]Attr)
+	for _, attr := range attrs {
+		schema, err := s.GetAttributeSchema(ctx, attr.ID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get attribute schema: %w", err)
+		}
+		if schema.Index {
+			indexedAttrs[attr.ID] = append(indexedAttrs[attr.ID], attr)
+		}
+	}
+	return indexedAttrs, nil
+}
+
+// separateSessionAttributes separates attributes into primary and session attributes
+func (s *EtcdStore) separateSessionAttributes(ctx context.Context, attrs []Attr) (primary, session []Attr, indexedAttrs map[Id][]Attr, err error) {
+	indexedAttrs = make(map[Id][]Attr)
+	for _, attr := range attrs {
+		schema, err := s.GetAttributeSchema(ctx, attr.ID)
+		if err != nil {
+			return nil, nil, nil, fmt.Errorf("failed to get attribute schema: %w", err)
+		}
+
+		if schema.Index {
+			indexedAttrs[attr.ID] = append(indexedAttrs[attr.ID], attr)
+		}
+
+		if schema.Session {
+			session = append(session, attr)
+		} else {
+			primary = append(primary, attr)
+		}
+	}
+	return primary, session, indexedAttrs, nil
+}
+
+// buildCollectionOps builds etcd operations for updating indexed attribute collections
+func (s *EtcdStore) buildCollectionOps(entity *Entity, originalIndexedAttrs, newIndexedAttrs map[Id][]Attr, sessPart string, sid int64) []clientv3.Op {
+	var ops []clientv3.Op
+
+	// Remove old indexed attributes that are no longer present or have changed
+	for attrID, oldAttrs := range originalIndexedAttrs {
+		newAttrs := newIndexedAttrs[attrID]
+		for _, oldAttr := range oldAttrs {
+			found := slices.ContainsFunc(newAttrs, oldAttr.Equal)
+			if !found {
+				ops = append(ops, s.deleteFromCollectionOp(entity, oldAttr.CAS()))
+			}
+		}
+	}
+
+	// Add all new indexed attributes
+	for _, newAttrs := range newIndexedAttrs {
+		for _, newAttr := range newAttrs {
+			ops = append(ops, s.addToCollectionOp(entity, newAttr.CAS()))
+			if sessPart != "" {
+				ops = append(ops, s.addToCollectionSessionOp(entity, newAttr.CAS(), sessPart, sid))
+			}
+		}
+	}
+
+	return ops
+}
+
+// buildEntitySaveOps builds etcd operations for saving entity data (primary and session attributes)
+func (s *EtcdStore) buildEntitySaveOps(entity *Entity, key string, primary, session []Attr, o *entityOpts) ([]clientv3.Op, error) {
+	var ops []clientv3.Op
+
+	entity.Attrs = primary
+	entity.UpdatedAt = now()
+
+	data, err := encoder.Marshal(entity)
+	if err != nil {
+		return nil, fmt.Errorf("failed to serialize entity: %w", err)
+	}
+
+	var sid int64
+	var sessPart string
+	if len(o.session) != 0 {
+		sid, _ = binary.Varint(o.session)
+		sessPart = base58.Encode(o.session)
+	}
+
+	if o.bind {
+		ops = append(ops, clientv3.OpPut(key, string(data), clientv3.WithLease(clientv3.LeaseID(sid))))
+	} else {
+		ops = append(ops, clientv3.OpPut(key, string(data)))
+	}
+
+	if len(session) > 0 {
+		if len(o.session) == 0 {
+			return nil, fmt.Errorf("session ID is required for session attributes")
+		}
+
+		skey := key + "/session/" + sessPart
+		sdata, err := encoder.Marshal(session)
+		if err != nil {
+			return nil, fmt.Errorf("failed to marshal session attributes: %w", err)
+		}
+		ops = append(ops, clientv3.OpPut(skey, string(sdata), clientv3.WithLease(clientv3.LeaseID(sid))))
+	}
+
+	return ops, nil
+}
+
+// ReplaceEntity atomically replaces all attributes of an entity
+// The db/id attribute must be present in the attributes to identify the entity
+func (s *EtcdStore) ReplaceEntity(
+	ctx context.Context,
+	attributes []Attr,
+	opts ...EntityOption,
+) (*Entity, error) {
+	var o entityOpts
+	for _, opt := range opts {
+		opt(&o)
+	}
+
+	// Extract ID from db/id attribute
+	id, err := extractEntityId(attributes)
+	if err != nil {
+		return nil, err
+	}
+
+	// Get current entity to check revision
+	entity, err := s.GetEntity(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+
+	// Check revision if specified
+	if err := s.checkRevisionConflict(entity, o.fromRevision); err != nil {
+		return nil, err
+	}
+
+	// Keep track of original indexed attributes for removal
+	originalIndexedAttrs, err := s.collectIndexedAttributes(ctx, entity.Attrs)
+	if err != nil {
+		return nil, err
+	}
+
+	// Create new entity with replacement attributes
+	entity.Attrs = attributes
+	entity.ID = id
+
+	// Validate replacement attributes
+	if err := s.validator.ValidateAttributes(ctx, entity.Attrs); err != nil {
+		return nil, err
+	}
+
+	// Separate primary and session attributes, collect new indexed attrs
+	primary, session, newIndexedAttrs, err := s.separateSessionAttributes(ctx, entity.Attrs)
+	if err != nil {
+		return nil, err
+	}
+
+	// Build collection update operations
+	var sid int64
+	var sessPart string
+	if len(o.session) != 0 {
+		sid, _ = binary.Varint(o.session)
+		sessPart = base58.Encode(o.session)
+	}
+	coltxopt := s.buildCollectionOps(entity, originalIndexedAttrs, newIndexedAttrs, sessPart, sid)
+
+	// Build entity save operations
+	key := s.buildKey(entity.ID)
+	txopt, err := s.buildEntitySaveOps(entity, key, primary, session, &o)
+	if err != nil {
+		return nil, err
+	}
+
+	txopt = append(txopt, coltxopt...)
+
+	// Use Txn to check that the entity hasn't changed
+	txnResp, err := s.client.Txn(ctx).
+		If(clientv3.Compare(clientv3.ModRevision(key), "=", entity.Revision)).
+		Then(txopt...).
+		Commit()
+
+	if err != nil {
+		return nil, fmt.Errorf("failed to replace entity in etcd: %w", err)
+	}
+
+	if !txnResp.Succeeded {
+		s.log.Error("failed to replace entity in etcd", "error", err, "id", entity.ID)
+		return nil, cond.Conflict("entity", entity.ID)
+	}
+
+	entity.Revision = txnResp.Header.Revision
+
+	return entity, nil
+}
+
+// PatchEntity merges attributes into an existing entity
+// For cardinality=one attributes, replaces the value
+// For cardinality=many attributes, adds to existing values
+// The db/id attribute must be present in the attributes to identify the entity
+func (s *EtcdStore) PatchEntity(
+	ctx context.Context,
+	attributes []Attr,
+	opts ...EntityOption,
+) (*Entity, error) {
+	var o entityOpts
+	for _, opt := range opts {
+		opt(&o)
+	}
+
+	// Extract ID from db/id attribute
+	id, err := extractEntityId(attributes)
+	if err != nil {
+		return nil, err
+	}
+
+	// Get current entity
+	entity, err := s.GetEntity(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+
+	// Check revision if specified
+	if err := s.checkRevisionConflict(entity, o.fromRevision); err != nil {
+		return nil, err
+	}
+
+	// Keep track of original indexed attributes for removal
+	originalIndexedAttrs, err := s.collectIndexedAttributes(ctx, entity.Attrs)
+	if err != nil {
+		return nil, err
+	}
+
+	// Validate and merge attributes (remove cardinality=one, keep cardinality=many)
+	for _, attr := range attributes {
+		schema, err := s.GetAttributeSchema(ctx, attr.ID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get attribute schema: %w", err)
+		}
+
+		if !schema.AllowMany {
+			if _, ok := entity.Get(attr.ID); ok {
+				entity.Remove(attr.ID)
+			}
+		}
+	}
+
+	err = entity.Update(attributes)
+	if err != nil {
+		return nil, fmt.Errorf("failed to update entity: %w", err)
+	}
+
+	err = s.validator.ValidateAttributes(ctx, entity.Attrs)
+	if err != nil {
+		return nil, err
+	}
+
+	// Separate primary and session attributes, collect new indexed attrs
+	primary, session, newIndexedAttrs, err := s.separateSessionAttributes(ctx, entity.Attrs)
+	if err != nil {
+		return nil, err
+	}
+
+	// Build collection update operations
+	var sid int64
+	var sessPart string
+	if len(o.session) != 0 {
+		sid, _ = binary.Varint(o.session)
+		sessPart = base58.Encode(o.session)
+	}
+	coltxopt := s.buildCollectionOps(entity, originalIndexedAttrs, newIndexedAttrs, sessPart, sid)
+
+	// Handle UpdatedAt attribute specially (legacy behavior)
+	entity.Attrs = primary
+	if updatedAtAttr, ok := entity.Get(UpdatedAt); ok && updatedAtAttr.Value.Kind() == KindInt64 {
+		entity.UpdatedAt = updatedAtAttr.Value.Int64()
+		entity.Remove(UpdatedAt)
+	} else {
+		entity.UpdatedAt = now()
+	}
+
+	// Build entity save operations
+	key := s.buildKey(entity.ID)
+	txopt, err := s.buildEntitySaveOps(entity, key, primary, session, &o)
+	if err != nil {
+		return nil, err
+	}
+
+	txopt = append(txopt, coltxopt...)
+
+	// Use Txn to check that the key exists before updating
+	txnResp, err := s.client.Txn(ctx).
+		If(clientv3.Compare(clientv3.ModRevision(key), "=", entity.Revision)).
+		Then(txopt...).
+		Commit()
+
+	if err != nil {
+		return nil, fmt.Errorf("failed to patch entity in etcd: %w", err)
+	}
+
+	if !txnResp.Succeeded {
+		s.log.Error("failed to patch entity in etcd", "error", err, "id", entity.ID)
+		return nil, cond.Conflict("entity", entity.ID)
+	}
+
+	entity.Revision = txnResp.Header.Revision
+
+	return entity, nil
+}
+
+// EnsureEntity creates an entity only if it doesn't already exist (idempotent create)
+// The db/id attribute must be present in the attributes to identify the entity
+// Returns (entity, true, nil) if created, (entity, false, nil) if already exists
+func (s *EtcdStore) EnsureEntity(
+	ctx context.Context,
+	attributes []Attr,
+	opts ...EntityOption,
+) (*Entity, bool, error) {
+	// Extract ID from db/id attribute
+	id, err := extractEntityId(attributes)
+	if err != nil {
+		return nil, false, err
+	}
+
+	// Check if entity already exists
+	existing, err := s.GetEntity(ctx, id)
+	if err == nil {
+		// Entity exists, return it with created=false
+		return existing, false, nil
+	}
+
+	// Entity doesn't exist, check that error is NotFound
+	if !errors.Is(err, cond.ErrNotFound{}) {
+		return nil, false, fmt.Errorf("failed to check entity existence: %w", err)
+	}
+
+	// Create the entity
+	entity, err := s.CreateEntity(ctx, attributes, opts...)
+	if err != nil {
+		// Check if it was created by another concurrent operation
+		if errors.Is(err, cond.ErrConflict{}) || errors.Is(err, ErrEntityAlreadyExists) {
+			existing, getErr := s.GetEntity(ctx, id)
+			if getErr == nil {
+				return existing, false, nil
+			}
+		}
+		return nil, false, err
+	}
+
+	return entity, true, nil
 }
 
 // DeleteEntity implements Store interface

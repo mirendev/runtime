@@ -39,6 +39,7 @@ func (m *MockStore) GetEntity(ctx context.Context, id Id) (*Entity, error) {
 func (m *MockStore) AddEntity(id Id, entity *Entity) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	entity.Attrs = append(entity.Attrs, Ref(DBId, id))
 	m.Entities[id] = entity
 }
 
@@ -82,6 +83,8 @@ func (m *MockStore) CreateEntity(ctx context.Context, attrs []Attr, opts ...Enti
 		Attrs:    attrs,
 		Revision: 1,
 	}
+
+	e.Attrs = append(e.Attrs, Ref(DBId, e.ID))
 	m.mu.Lock()
 	m.Entities[e.ID] = e
 	m.mu.Unlock()
@@ -127,6 +130,94 @@ func (m *MockStore) UpdateEntity(ctx context.Context, id Id, attrs []Attr, opts 
 	return updated, nil
 }
 
+func (m *MockStore) ReplaceEntity(ctx context.Context, attrs []Attr, opts ...EntityOption) (*Entity, error) {
+	// Extract ID from db/id attribute
+	var id Id
+	for _, attr := range attrs {
+		if attr.ID == DBId {
+			id = attr.Value.Id()
+			break
+		}
+	}
+
+	if id == "" {
+		return nil, ErrNotFound
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	e, ok := m.Entities[id]
+	if !ok {
+		return nil, ErrNotFound
+	}
+
+	// Create a copy with all new attributes
+	updated := &Entity{
+		ID:        id,
+		CreatedAt: e.CreatedAt,
+		UpdatedAt: time.Now().Unix(),
+		Revision:  e.Revision + 1,
+		Attrs:     attrs,
+	}
+
+	m.Entities[id] = updated
+	return updated, nil
+}
+
+func (m *MockStore) PatchEntity(ctx context.Context, attrs []Attr, opts ...EntityOption) (*Entity, error) {
+	// Extract ID from db/id attribute
+	var id Id
+	for _, attr := range attrs {
+		if attr.ID == DBId {
+			id = attr.Value.Id()
+			break
+		}
+	}
+
+	if id == "" {
+		return nil, ErrNotFound
+	}
+
+	// Use UpdateEntity logic
+	return m.UpdateEntity(ctx, id, attrs, opts...)
+}
+
+func (m *MockStore) EnsureEntity(ctx context.Context, attrs []Attr, opts ...EntityOption) (*Entity, bool, error) {
+	// Extract ID from db/id attribute
+	var id Id
+	for _, attr := range attrs {
+		if attr.ID == DBId {
+			id = attr.Value.Id()
+			break
+		}
+	}
+
+	if id == "" {
+		return nil, false, ErrNotFound
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	// Check if entity exists
+	if e, ok := m.Entities[id]; ok {
+		return e, false, nil
+	}
+
+	// Create new entity
+	e := &Entity{
+		ID:        id,
+		Attrs:     attrs,
+		Revision:  1,
+		CreatedAt: time.Now().Unix(),
+		UpdatedAt: time.Now().Unix(),
+	}
+
+	e.Attrs = append(e.Attrs, Ref(DBId, e.ID))
+	m.Entities[id] = e
+	return e, true, nil
+}
+
 func (m *MockStore) DeleteEntity(ctx context.Context, id Id) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -144,6 +235,7 @@ func (m *MockStore) WatchIndex(ctx context.Context, attr Attr) (clientv3.WatchCh
 	m.mu.Lock()
 	m.Entities[Id("/mock/entity")] = &Entity{
 		Attrs: []Attr{
+			Ref(DBId, "mock/entity"),
 			Keyword(Ident, "mock/entity"),
 		},
 	}

@@ -180,6 +180,10 @@ func (v *Validator) ValidateAttributes(ctx context.Context, attrs []Attr) error 
 func (v *Validator) ValidateAttribute(ctx context.Context, attr *Attr) error {
 	name := attr.ID
 
+	if name == DBId {
+		return nil
+	}
+
 	schema, err := v.store.GetAttributeSchema(ctx, name)
 	if err != nil {
 		return fmt.Errorf("schema not found for attribute %s: %w", name, err)

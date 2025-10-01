@@ -66,6 +66,16 @@ const (
 )
 
 func InitSystemEntities(save func(*Entity) error) error {
+	dbid := &Entity{
+		Attrs: Attrs(
+			Ident, types.Keyword(DBId),
+			Doc, "Internal entity ID",
+			Uniq, UniqueId,
+			Cardinality, CardinalityOne,
+			Type, TypeRef,
+		),
+	}
+
 	ident := &Entity{
 		Attrs: Attrs(
 			Named(string(Ident)),
@@ -308,6 +318,7 @@ func InitSystemEntities(save func(*Entity) error) error {
 	}
 
 	entities := []*Entity{
+		dbid,
 		ident, doc, uniq, card, typ, enumValues, enumType,
 		uniqueIdentity, uniqueValue, cardOne, cardMany,
 		typeAny, typeRef, typeStr, typeKW, typeInt, typeFloat, typeBool, typeTime, typeEnum,

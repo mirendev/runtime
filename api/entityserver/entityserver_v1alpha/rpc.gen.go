@@ -552,6 +552,315 @@ func (v *EntityAccessPutResults) UnmarshalJSON(data []byte) error {
 	return json.Unmarshal(data, &v.data)
 }
 
+type entityAccessCreateArgsData struct {
+	Attrs *[]entity.Attr `cbor:"0,keyasint,omitempty" json:"attrs,omitempty"`
+}
+
+type EntityAccessCreateArgs struct {
+	call rpc.Call
+	data entityAccessCreateArgsData
+}
+
+func (v *EntityAccessCreateArgs) HasAttrs() bool {
+	return v.data.Attrs != nil
+}
+
+func (v *EntityAccessCreateArgs) Attrs() []entity.Attr {
+	if v.data.Attrs == nil {
+		return nil
+	}
+	return *v.data.Attrs
+}
+
+func (v *EntityAccessCreateArgs) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *EntityAccessCreateArgs) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *EntityAccessCreateArgs) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *EntityAccessCreateArgs) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type entityAccessCreateResultsData struct {
+	Revision *int64  `cbor:"0,keyasint,omitempty" json:"revision,omitempty"`
+	Id       *string `cbor:"1,keyasint,omitempty" json:"id,omitempty"`
+}
+
+type EntityAccessCreateResults struct {
+	call rpc.Call
+	data entityAccessCreateResultsData
+}
+
+func (v *EntityAccessCreateResults) SetRevision(revision int64) {
+	v.data.Revision = &revision
+}
+
+func (v *EntityAccessCreateResults) SetId(id string) {
+	v.data.Id = &id
+}
+
+func (v *EntityAccessCreateResults) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *EntityAccessCreateResults) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *EntityAccessCreateResults) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *EntityAccessCreateResults) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type entityAccessReplaceArgsData struct {
+	Attrs    *[]entity.Attr `cbor:"0,keyasint,omitempty" json:"attrs,omitempty"`
+	Revision *int64         `cbor:"1,keyasint,omitempty" json:"revision,omitempty"`
+}
+
+type EntityAccessReplaceArgs struct {
+	call rpc.Call
+	data entityAccessReplaceArgsData
+}
+
+func (v *EntityAccessReplaceArgs) HasAttrs() bool {
+	return v.data.Attrs != nil
+}
+
+func (v *EntityAccessReplaceArgs) Attrs() []entity.Attr {
+	if v.data.Attrs == nil {
+		return nil
+	}
+	return *v.data.Attrs
+}
+
+func (v *EntityAccessReplaceArgs) HasRevision() bool {
+	return v.data.Revision != nil
+}
+
+func (v *EntityAccessReplaceArgs) Revision() int64 {
+	if v.data.Revision == nil {
+		return 0
+	}
+	return *v.data.Revision
+}
+
+func (v *EntityAccessReplaceArgs) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *EntityAccessReplaceArgs) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *EntityAccessReplaceArgs) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *EntityAccessReplaceArgs) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type entityAccessReplaceResultsData struct {
+	Revision *int64  `cbor:"0,keyasint,omitempty" json:"revision,omitempty"`
+	Id       *string `cbor:"1,keyasint,omitempty" json:"id,omitempty"`
+}
+
+type EntityAccessReplaceResults struct {
+	call rpc.Call
+	data entityAccessReplaceResultsData
+}
+
+func (v *EntityAccessReplaceResults) SetRevision(revision int64) {
+	v.data.Revision = &revision
+}
+
+func (v *EntityAccessReplaceResults) SetId(id string) {
+	v.data.Id = &id
+}
+
+func (v *EntityAccessReplaceResults) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *EntityAccessReplaceResults) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *EntityAccessReplaceResults) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *EntityAccessReplaceResults) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type entityAccessPatchArgsData struct {
+	Attrs    *[]entity.Attr `cbor:"0,keyasint,omitempty" json:"attrs,omitempty"`
+	Revision *int64         `cbor:"1,keyasint,omitempty" json:"revision,omitempty"`
+}
+
+type EntityAccessPatchArgs struct {
+	call rpc.Call
+	data entityAccessPatchArgsData
+}
+
+func (v *EntityAccessPatchArgs) HasAttrs() bool {
+	return v.data.Attrs != nil
+}
+
+func (v *EntityAccessPatchArgs) Attrs() []entity.Attr {
+	if v.data.Attrs == nil {
+		return nil
+	}
+	return *v.data.Attrs
+}
+
+func (v *EntityAccessPatchArgs) HasRevision() bool {
+	return v.data.Revision != nil
+}
+
+func (v *EntityAccessPatchArgs) Revision() int64 {
+	if v.data.Revision == nil {
+		return 0
+	}
+	return *v.data.Revision
+}
+
+func (v *EntityAccessPatchArgs) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *EntityAccessPatchArgs) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *EntityAccessPatchArgs) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *EntityAccessPatchArgs) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type entityAccessPatchResultsData struct {
+	Revision *int64  `cbor:"0,keyasint,omitempty" json:"revision,omitempty"`
+	Id       *string `cbor:"1,keyasint,omitempty" json:"id,omitempty"`
+}
+
+type EntityAccessPatchResults struct {
+	call rpc.Call
+	data entityAccessPatchResultsData
+}
+
+func (v *EntityAccessPatchResults) SetRevision(revision int64) {
+	v.data.Revision = &revision
+}
+
+func (v *EntityAccessPatchResults) SetId(id string) {
+	v.data.Id = &id
+}
+
+func (v *EntityAccessPatchResults) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *EntityAccessPatchResults) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *EntityAccessPatchResults) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *EntityAccessPatchResults) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type entityAccessEnsureArgsData struct {
+	Attrs *[]entity.Attr `cbor:"0,keyasint,omitempty" json:"attrs,omitempty"`
+}
+
+type EntityAccessEnsureArgs struct {
+	call rpc.Call
+	data entityAccessEnsureArgsData
+}
+
+func (v *EntityAccessEnsureArgs) HasAttrs() bool {
+	return v.data.Attrs != nil
+}
+
+func (v *EntityAccessEnsureArgs) Attrs() []entity.Attr {
+	if v.data.Attrs == nil {
+		return nil
+	}
+	return *v.data.Attrs
+}
+
+func (v *EntityAccessEnsureArgs) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *EntityAccessEnsureArgs) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *EntityAccessEnsureArgs) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *EntityAccessEnsureArgs) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type entityAccessEnsureResultsData struct {
+	Revision *int64  `cbor:"0,keyasint,omitempty" json:"revision,omitempty"`
+	Id       *string `cbor:"1,keyasint,omitempty" json:"id,omitempty"`
+	Created  *bool   `cbor:"2,keyasint,omitempty" json:"created,omitempty"`
+}
+
+type EntityAccessEnsureResults struct {
+	call rpc.Call
+	data entityAccessEnsureResultsData
+}
+
+func (v *EntityAccessEnsureResults) SetRevision(revision int64) {
+	v.data.Revision = &revision
+}
+
+func (v *EntityAccessEnsureResults) SetId(id string) {
+	v.data.Id = &id
+}
+
+func (v *EntityAccessEnsureResults) SetCreated(created bool) {
+	v.data.Created = &created
+}
+
+func (v *EntityAccessEnsureResults) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *EntityAccessEnsureResults) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *EntityAccessEnsureResults) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *EntityAccessEnsureResults) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
 type entityAccessPutSessionArgsData struct {
 	Entity  *Entity `cbor:"0,keyasint,omitempty" json:"entity,omitempty"`
 	Session *string `cbor:"1,keyasint,omitempty" json:"session,omitempty"`
@@ -1415,6 +1724,110 @@ func (t *EntityAccessPut) Results() *EntityAccessPutResults {
 	return results
 }
 
+type EntityAccessCreate struct {
+	rpc.Call
+	args    EntityAccessCreateArgs
+	results EntityAccessCreateResults
+}
+
+func (t *EntityAccessCreate) Args() *EntityAccessCreateArgs {
+	args := &t.args
+	if args.call != nil {
+		return args
+	}
+	args.call = t.Call
+	t.Call.Args(args)
+	return args
+}
+
+func (t *EntityAccessCreate) Results() *EntityAccessCreateResults {
+	results := &t.results
+	if results.call != nil {
+		return results
+	}
+	results.call = t.Call
+	t.Call.Results(results)
+	return results
+}
+
+type EntityAccessReplace struct {
+	rpc.Call
+	args    EntityAccessReplaceArgs
+	results EntityAccessReplaceResults
+}
+
+func (t *EntityAccessReplace) Args() *EntityAccessReplaceArgs {
+	args := &t.args
+	if args.call != nil {
+		return args
+	}
+	args.call = t.Call
+	t.Call.Args(args)
+	return args
+}
+
+func (t *EntityAccessReplace) Results() *EntityAccessReplaceResults {
+	results := &t.results
+	if results.call != nil {
+		return results
+	}
+	results.call = t.Call
+	t.Call.Results(results)
+	return results
+}
+
+type EntityAccessPatch struct {
+	rpc.Call
+	args    EntityAccessPatchArgs
+	results EntityAccessPatchResults
+}
+
+func (t *EntityAccessPatch) Args() *EntityAccessPatchArgs {
+	args := &t.args
+	if args.call != nil {
+		return args
+	}
+	args.call = t.Call
+	t.Call.Args(args)
+	return args
+}
+
+func (t *EntityAccessPatch) Results() *EntityAccessPatchResults {
+	results := &t.results
+	if results.call != nil {
+		return results
+	}
+	results.call = t.Call
+	t.Call.Results(results)
+	return results
+}
+
+type EntityAccessEnsure struct {
+	rpc.Call
+	args    EntityAccessEnsureArgs
+	results EntityAccessEnsureResults
+}
+
+func (t *EntityAccessEnsure) Args() *EntityAccessEnsureArgs {
+	args := &t.args
+	if args.call != nil {
+		return args
+	}
+	args.call = t.Call
+	t.Call.Args(args)
+	return args
+}
+
+func (t *EntityAccessEnsure) Results() *EntityAccessEnsureResults {
+	results := &t.results
+	if results.call != nil {
+		return results
+	}
+	results.call = t.Call
+	t.Call.Results(results)
+	return results
+}
+
 type EntityAccessPutSession struct {
 	rpc.Call
 	args    EntityAccessPutSessionArgs
@@ -1730,6 +2143,10 @@ func (t *EntityAccessPingSession) Results() *EntityAccessPingSessionResults {
 type EntityAccess interface {
 	Get(ctx context.Context, state *EntityAccessGet) error
 	Put(ctx context.Context, state *EntityAccessPut) error
+	Create(ctx context.Context, state *EntityAccessCreate) error
+	Replace(ctx context.Context, state *EntityAccessReplace) error
+	Patch(ctx context.Context, state *EntityAccessPatch) error
+	Ensure(ctx context.Context, state *EntityAccessEnsure) error
 	PutSession(ctx context.Context, state *EntityAccessPutSession) error
 	Delete(ctx context.Context, state *EntityAccessDelete) error
 	WatchIndex(ctx context.Context, state *EntityAccessWatchIndex) error
@@ -1753,6 +2170,22 @@ func (_ reexportEntityAccess) Get(ctx context.Context, state *EntityAccessGet) e
 }
 
 func (_ reexportEntityAccess) Put(ctx context.Context, state *EntityAccessPut) error {
+	panic("not implemented")
+}
+
+func (_ reexportEntityAccess) Create(ctx context.Context, state *EntityAccessCreate) error {
+	panic("not implemented")
+}
+
+func (_ reexportEntityAccess) Replace(ctx context.Context, state *EntityAccessReplace) error {
+	panic("not implemented")
+}
+
+func (_ reexportEntityAccess) Patch(ctx context.Context, state *EntityAccessPatch) error {
+	panic("not implemented")
+}
+
+func (_ reexportEntityAccess) Ensure(ctx context.Context, state *EntityAccessEnsure) error {
 	panic("not implemented")
 }
 
@@ -1824,6 +2257,38 @@ func AdaptEntityAccess(t EntityAccess) *rpc.Interface {
 			Index:         0,
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.Put(ctx, &EntityAccessPut{Call: call})
+			},
+		},
+		{
+			Name:          "create",
+			InterfaceName: "EntityAccess",
+			Index:         0,
+			Handler: func(ctx context.Context, call rpc.Call) error {
+				return t.Create(ctx, &EntityAccessCreate{Call: call})
+			},
+		},
+		{
+			Name:          "replace",
+			InterfaceName: "EntityAccess",
+			Index:         0,
+			Handler: func(ctx context.Context, call rpc.Call) error {
+				return t.Replace(ctx, &EntityAccessReplace{Call: call})
+			},
+		},
+		{
+			Name:          "patch",
+			InterfaceName: "EntityAccess",
+			Index:         0,
+			Handler: func(ctx context.Context, call rpc.Call) error {
+				return t.Patch(ctx, &EntityAccessPatch{Call: call})
+			},
+		},
+		{
+			Name:          "ensure",
+			InterfaceName: "EntityAccess",
+			Index:         0,
+			Handler: func(ctx context.Context, call rpc.Call) error {
+				return t.Ensure(ctx, &EntityAccessEnsure{Call: call})
 			},
 		},
 		{
@@ -2005,6 +2470,187 @@ func (v EntityAccessClient) Put(ctx context.Context, entity *Entity) (*EntityAcc
 	}
 
 	return &EntityAccessClientPutResults{client: v.Client, data: ret}, nil
+}
+
+type EntityAccessClientCreateResults struct {
+	client rpc.Client
+	data   entityAccessCreateResultsData
+}
+
+func (v *EntityAccessClientCreateResults) HasRevision() bool {
+	return v.data.Revision != nil
+}
+
+func (v *EntityAccessClientCreateResults) Revision() int64 {
+	if v.data.Revision == nil {
+		return 0
+	}
+	return *v.data.Revision
+}
+
+func (v *EntityAccessClientCreateResults) HasId() bool {
+	return v.data.Id != nil
+}
+
+func (v *EntityAccessClientCreateResults) Id() string {
+	if v.data.Id == nil {
+		return ""
+	}
+	return *v.data.Id
+}
+
+func (v EntityAccessClient) Create(ctx context.Context, attrs []entity.Attr) (*EntityAccessClientCreateResults, error) {
+	args := EntityAccessCreateArgs{}
+	x := slices.Clone(attrs)
+	args.data.Attrs = &x
+
+	var ret entityAccessCreateResultsData
+
+	err := v.Call(ctx, "create", &args, &ret)
+	if err != nil {
+		return nil, err
+	}
+
+	return &EntityAccessClientCreateResults{client: v.Client, data: ret}, nil
+}
+
+type EntityAccessClientReplaceResults struct {
+	client rpc.Client
+	data   entityAccessReplaceResultsData
+}
+
+func (v *EntityAccessClientReplaceResults) HasRevision() bool {
+	return v.data.Revision != nil
+}
+
+func (v *EntityAccessClientReplaceResults) Revision() int64 {
+	if v.data.Revision == nil {
+		return 0
+	}
+	return *v.data.Revision
+}
+
+func (v *EntityAccessClientReplaceResults) HasId() bool {
+	return v.data.Id != nil
+}
+
+func (v *EntityAccessClientReplaceResults) Id() string {
+	if v.data.Id == nil {
+		return ""
+	}
+	return *v.data.Id
+}
+
+func (v EntityAccessClient) Replace(ctx context.Context, attrs []entity.Attr, revision int64) (*EntityAccessClientReplaceResults, error) {
+	args := EntityAccessReplaceArgs{}
+	x := slices.Clone(attrs)
+	args.data.Attrs = &x
+	args.data.Revision = &revision
+
+	var ret entityAccessReplaceResultsData
+
+	err := v.Call(ctx, "replace", &args, &ret)
+	if err != nil {
+		return nil, err
+	}
+
+	return &EntityAccessClientReplaceResults{client: v.Client, data: ret}, nil
+}
+
+type EntityAccessClientPatchResults struct {
+	client rpc.Client
+	data   entityAccessPatchResultsData
+}
+
+func (v *EntityAccessClientPatchResults) HasRevision() bool {
+	return v.data.Revision != nil
+}
+
+func (v *EntityAccessClientPatchResults) Revision() int64 {
+	if v.data.Revision == nil {
+		return 0
+	}
+	return *v.data.Revision
+}
+
+func (v *EntityAccessClientPatchResults) HasId() bool {
+	return v.data.Id != nil
+}
+
+func (v *EntityAccessClientPatchResults) Id() string {
+	if v.data.Id == nil {
+		return ""
+	}
+	return *v.data.Id
+}
+
+func (v EntityAccessClient) Patch(ctx context.Context, attrs []entity.Attr, revision int64) (*EntityAccessClientPatchResults, error) {
+	args := EntityAccessPatchArgs{}
+	x := slices.Clone(attrs)
+	args.data.Attrs = &x
+	args.data.Revision = &revision
+
+	var ret entityAccessPatchResultsData
+
+	err := v.Call(ctx, "patch", &args, &ret)
+	if err != nil {
+		return nil, err
+	}
+
+	return &EntityAccessClientPatchResults{client: v.Client, data: ret}, nil
+}
+
+type EntityAccessClientEnsureResults struct {
+	client rpc.Client
+	data   entityAccessEnsureResultsData
+}
+
+func (v *EntityAccessClientEnsureResults) HasRevision() bool {
+	return v.data.Revision != nil
+}
+
+func (v *EntityAccessClientEnsureResults) Revision() int64 {
+	if v.data.Revision == nil {
+		return 0
+	}
+	return *v.data.Revision
+}
+
+func (v *EntityAccessClientEnsureResults) HasId() bool {
+	return v.data.Id != nil
+}
+
+func (v *EntityAccessClientEnsureResults) Id() string {
+	if v.data.Id == nil {
+		return ""
+	}
+	return *v.data.Id
+}
+
+func (v *EntityAccessClientEnsureResults) HasCreated() bool {
+	return v.data.Created != nil
+}
+
+func (v *EntityAccessClientEnsureResults) Created() bool {
+	if v.data.Created == nil {
+		return false
+	}
+	return *v.data.Created
+}
+
+func (v EntityAccessClient) Ensure(ctx context.Context, attrs []entity.Attr) (*EntityAccessClientEnsureResults, error) {
+	args := EntityAccessEnsureArgs{}
+	x := slices.Clone(attrs)
+	args.data.Attrs = &x
+
+	var ret entityAccessEnsureResultsData
+
+	err := v.Call(ctx, "ensure", &args, &ret)
+	if err != nil {
+		return nil, err
+	}
+
+	return &EntityAccessClientEnsureResults{client: v.Client, data: ret}, nil
 }
 
 type EntityAccessClientPutSessionResults struct {

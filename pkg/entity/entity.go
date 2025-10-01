@@ -74,7 +74,7 @@ func MustGet(e AttrGetter, name Id) Attr {
 }
 
 func (e *Entity) Get(name Id) (Attr, bool) {
-	if name == DBId {
+	if name == DBId && e.ID != "" {
 		return Attr{ID: DBId, Value: AnyValue(e.ID)}, true
 	}
 
@@ -256,7 +256,20 @@ func convertEntityToSchema(ctx context.Context, s EntityStore, entity *Entity) (
 
 func (e *Entity) Fixup() error {
 	if e.ID == "" {
-		if ident, ok := e.Get(Ident); ok {
+		// First check for db/id attribute (preferred)
+		if dbId, ok := e.Get(DBId); ok {
+			switch id := dbId.Value.Any().(type) {
+			case Id:
+				e.ID = id
+			case string:
+				e.ID = Id(id)
+			case types.Keyword:
+				e.ID = Id(id)
+			default:
+				return fmt.Errorf("invalid entity db/id (expected Id): %v (%T)", dbId.Value.Any(), dbId.Value)
+			}
+		} else if ident, ok := e.Get(Ident); ok {
+			// Fall back to db/ident for backwards compatibility
 			switch id := ident.Value.Any().(type) {
 			case Id:
 				e.ID = id
