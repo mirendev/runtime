@@ -147,7 +147,7 @@ func (l *LaunchBuildkit) Launch(ctx context.Context, addr string, lo ...LaunchOp
 		},
 	})
 
-	ver := idgen.Gen("buildkit")
+	ver := idgen.GenNS("sb")
 	l.log.Info("creating buildkit sandbox entity", "name", ver)
 
 	var rpcE entityserver_v1alpha.Entity
@@ -155,6 +155,7 @@ func (l *LaunchBuildkit) Launch(ctx context.Context, addr string, lo ...LaunchOp
 		(&core_v1alpha.Metadata{
 			Name: ver,
 		}).Encode,
+		entity.Ident, "sandbox/"+ver,
 		sb.Encode,
 	))
 
