@@ -612,7 +612,40 @@ func (v *DiskAPIVolume) NewSegment(ctx context.Context, seg SegmentId, layout *S
 }
 
 func (v *DiskAPIVolume) RemoveSegment(ctx context.Context, seg SegmentId) error {
-	return v.access.RemoveSegment(ctx, seg)
+	apiURL, err := url.JoinPath(v.access.baseURL, "api/v1/disk/volumes", v.name, "segments", seg.String())
+	if err != nil {
+		return fmt.Errorf("failed to construct segment URL: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "DELETE", apiURL, nil)
+	if err != nil {
+		return fmt.Errorf("failed to create delete segment request: %w", err)
+	}
+
+	token, err := v.access.authClient.Authenticate(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to authenticate: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+
+	resp, err := v.access.client.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to delete segment: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("delete segment failed with status %d: %s", resp.StatusCode, string(body))
+	}
+
+	var deleteResp DeleteSegmentResponse
+	if err := json.NewDecoder(resp.Body).Decode(&deleteResp); err != nil {
+		return fmt.Errorf("failed to decode delete segment response: %w", err)
+	}
+
+	v.access.log.Info("segment deleted", "lsvd_id", deleteResp.LsvdID, "status", deleteResp.Status, "volume", v.name)
+	return nil
 }
 
 var _ Volume = (*DiskAPIVolume)(nil)
