@@ -1,0 +1,33 @@
+[Unit]
+Description=Miren Runtime Service
+Documentation=https://miren.dev/docs
+After=network.target containerd.service
+Wants=containerd.service
+
+[Service]
+Type=simple
+ExecStart=/var/lib/miren/release/miren server
+User=root
+WorkingDirectory=/var/lib/miren/release
+
+# Critical for zero-downtime upgrades: Only kill the main process, not the entire cgroup.
+# This allows sandbox containers to persist through service restarts.
+KillMode=process
+
+# Restart configuration
+Restart=on-failure
+RestartSec=5
+TimeoutStartSec=300
+TimeoutStopSec=30
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=miren
+
+# Environment (optional)
+# EnvironmentFile=-/etc/default/miren
+# Environment="NO_COLOR=1"
+
+[Install]
+WantedBy=multi-user.target

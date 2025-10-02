@@ -1,0 +1,62 @@
+# Ubuntu container with systemd for testing miren upgrades
+FROM ubuntu:24.04
+
+ENV container=docker
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install systemd and essential tools
+RUN apt-get update && apt-get install -y \
+    systemd \
+    systemd-sysv \
+    curl \
+    wget \
+    sudo \
+    vim \
+    less \
+    ca-certificates \
+    gnupg \
+    lsb-release \
+    iproute2 \
+    net-tools \
+    iptables \
+    jq \
+    unzip \
+    && rm -rf /var/lib/apt/lists/*
+
+# Remove unnecessary systemd services for container
+RUN rm -f /lib/systemd/system/multi-user.target.wants/* \
+    /etc/systemd/system/*.wants/* \
+    /lib/systemd/system/local-fs.target.wants/* \
+    /lib/systemd/system/sockets.target.wants/*udev* \
+    /lib/systemd/system/sockets.target.wants/*initctl* \
+    /lib/systemd/system/sysinit.target.wants/systemd-tmpfiles-setup* \
+    /lib/systemd/system/systemd-update-utmp*
+
+# Create directories miren will need
+# Miren will bring its own containerd when installed
+RUN mkdir -p /var/lib/miren/release /etc/miren /var/log/miren
+
+# Set up a test user (optional, but can test non-root operations)
+RUN useradd -m -s /bin/bash testuser && \
+    echo 'testuser ALL=(ALL) NOPASSWD:ALL' >> /etc/sudoers
+
+# Copy entrypoint script that installs miren like production
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+VOLUME ["/sys/fs/cgroup"]
+VOLUME ["/run"]
+VOLUME ["/run/lock"]
+VOLUME ["/tmp"]
+
+# Systemd requires this
+STOPSIGNAL SIGRTMIN+3
+
+# Enable systemd to run in container
+ENV SYSTEMD_COLORS=0
+
+# Default to main branch for testing
+ENV RELEASE=main
+
+# Use our entrypoint that sets up miren like production
+ENTRYPOINT ["/entrypoint.sh"]
