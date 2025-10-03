@@ -7,7 +7,6 @@ import (
 
 	"go.etcd.io/etcd/api/v3/mvccpb"
 	clientv3 "go.etcd.io/etcd/client/v3"
-	"miren.dev/runtime/pkg/entity/types"
 )
 
 type MockStore struct {
@@ -39,7 +38,7 @@ func (m *MockStore) GetEntity(ctx context.Context, id Id) (*Entity, error) {
 func (m *MockStore) AddEntity(id Id, entity *Entity) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	entity.Attrs = append(entity.Attrs, Ref(DBId, id))
+	entity.Fixup()
 	m.Entities[id] = entity
 }
 
@@ -69,22 +68,13 @@ func (m *MockStore) GetEntities(ctx context.Context, ids []Id) ([]*Entity, error
 }
 
 func (m *MockStore) CreateEntity(ctx context.Context, attrs []Attr, opts ...EntityOption) (*Entity, error) {
-	// Find the ident attribute
-	var ident types.Keyword
-	for _, attr := range attrs {
-		if attr.ID == Ident {
-			ident = attr.Value.Keyword()
-			break
-		}
+	e, err := NewEntity(attrs)
+	if err != nil {
+		return nil, err
 	}
 
-	e := &Entity{
-		ID:       Id(ident),
-		Attrs:    attrs,
-		Revision: 1,
-	}
+	e.Revision = 1
 
-	e.Attrs = append(e.Attrs, Ref(DBId, e.ID))
 	m.mu.Lock()
 	m.Entities[e.ID] = e
 	m.mu.Unlock()
@@ -213,7 +203,7 @@ func (m *MockStore) EnsureEntity(ctx context.Context, attrs []Attr, opts ...Enti
 		UpdatedAt: time.Now().Unix(),
 	}
 
-	e.Attrs = append(e.Attrs, Ref(DBId, e.ID))
+	e.Fixup()
 	m.Entities[id] = e
 	return e, true, nil
 }

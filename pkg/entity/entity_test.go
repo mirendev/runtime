@@ -30,6 +30,7 @@ func TestCreateEntity(t *testing.T) {
 		name       string
 		entityType string
 		attrs      []Attr
+		out        []Attr
 		wantErr    bool
 	}{
 		{
@@ -37,6 +38,10 @@ func TestCreateEntity(t *testing.T) {
 			entityType: "test",
 			attrs: []Attr{
 				Any(Ident, KeywordValue("test/person")),
+				String(Doc, "A test person"),
+			},
+			out: []Attr{
+				Any(DBId, RefValue("test/person")),
 				String(Doc, "A test person"),
 			},
 			wantErr: false,
@@ -61,10 +66,10 @@ func TestCreateEntity(t *testing.T) {
 
 			require.NoError(t, err)
 			assert.NotEmpty(t, entity.ID)
-			assert.Equal(t, int64(1), entity.Revision)
+			assert.Equal(t, int64(0), entity.Revision)
 			assert.NotZero(t, entity.CreatedAt)
 			assert.NotZero(t, entity.UpdatedAt)
-			assert.Equal(t, SortedAttrs(tt.attrs), entity.Attrs)
+			assert.Equal(t, SortedAttrs(tt.out), entity.Attrs)
 		})
 	}
 }

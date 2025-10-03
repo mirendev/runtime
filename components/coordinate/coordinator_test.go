@@ -72,8 +72,8 @@ func TestCoordinatorParse(t *testing.T) {
 
 	r.Len(attrs, 7)
 
-	r.Equal(attrs[0].ID, entity.Id("db/ident"))
-	r.Equal(attrs[0].Value.Keyword(), types.Keyword("sandbox/nginx"))
+	r.Equal(attrs[0].ID, entity.Id("db/id"))
+	r.Equal(attrs[0].Value.Id(), types.Id("sandbox/nginx"))
 
 	r.Equal(attrs[1].ID, entity.Id("dev.miren.compute/sandbox.container"))
 

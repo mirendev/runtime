@@ -37,8 +37,6 @@ func TestTextFormatter_Format(t *testing.T) {
 		r.NoError(err)
 
 		expected := `attrs:
-  - id: db/ident
-    value: test/entity
   - id: db/doc
     value: Test entity
   - id: db/id
@@ -69,12 +67,10 @@ kind: dev.miren.core/project
 version: v1alpha
 spec: {}
 attrs:
-  - id: db/ident
+  - id: db/id
     value: test/myproject
   - id: entity/kind
     value: dev.miren.core/kind.project
-  - id: db/id
-    value: test/myproject
 `
 
 		r.Equal(expected, out)

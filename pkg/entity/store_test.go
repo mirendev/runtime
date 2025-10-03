@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -331,7 +332,7 @@ func TestEtcdStore_UpdateEntity(t *testing.T) {
 			}
 
 			require.NoError(t, err)
-			assert.Equal(t, tt.wantAttrs+1, len(updated.Attrs))
+			assert.Equal(t, tt.wantAttrs, len(updated.Attrs))
 			assert.NotEqual(t, 0, updated.Revision)
 			assert.NotEqual(t, updated.CreatedAt, updated.UpdatedAt)
 		})
@@ -466,10 +467,10 @@ func TestEtcdStore_GetEntities_Batching(t *testing.T) {
 			require.NotNil(t, entity, "entity at index %d should not be nil", i)
 
 			// Check the ident attribute matches what we created
-			identAttr, ok := entity.Get(Ident)
+			identAttr, ok := entity.Get(DBId)
 			require.True(t, ok)
 			expectedIdent := fmt.Sprintf("test-entity-%d", i)
-			require.Equal(t, KeywordValue(expectedIdent), identAttr.Value)
+			require.Equal(t, RefValue(Id(expectedIdent)), identAttr.Value)
 		}
 	})
 
@@ -497,10 +498,10 @@ func TestEtcdStore_GetEntities_Batching(t *testing.T) {
 		expectedIndices := []int{10, 70, 130, 63, 64, 127, 128, 0, 149}
 		for i, expectedIdx := range expectedIndices {
 			require.NotNil(t, entities[i])
-			identAttr, ok := entities[i].Get(Ident)
+			identAttr, ok := entities[i].Get(DBId)
 			require.True(t, ok)
 			expectedIdent := fmt.Sprintf("test-entity-%d", expectedIdx)
-			require.Equal(t, KeywordValue(expectedIdent), identAttr.Value)
+			require.Equal(t, RefValue(Id(expectedIdent)), identAttr.Value)
 
 			// Also verify the entity ID matches
 			require.Equal(t, orderedIds[i], entities[i].ID)
@@ -1553,15 +1554,72 @@ func TestEntity_Fixup_DbId(t *testing.T) {
 		assert.Contains(t, err.Error(), "invalid entity db/id")
 	})
 
-	t.Run("no ID attributes leaves entity ID empty", func(t *testing.T) {
+	t.Run("fixup populates a temporary Id", func(t *testing.T) {
 		entity := &Entity{
 			Attrs: []Attr{
 				Any(Doc, "Just a document"),
 			},
 		}
 
-		err := entity.Fixup()
+		entity.ForceID()
+		assert.NotEqual(t, Id(""), entity.ID)
+	})
+
+	t.Run("NewEntity uses entity kind for ID prefix when no ID provided", func(t *testing.T) {
+		entity, err := NewEntity([]Attr{
+			Ref(EntityKind, "test/project"),
+			Any(Doc, "A test project"),
+		})
 		require.NoError(t, err)
-		assert.Equal(t, Id(""), entity.ID)
+		require.NotNil(t, entity)
+
+		entity.ForceID()
+
+		// ID should be auto-generated with kind prefix (using last segment after / or .)
+		assert.NotEqual(t, Id(""), entity.ID)
+		// For "test/project", should use "project" as prefix
+		assert.True(t, strings.HasPrefix(string(entity.ID), "project-"), "ID %s should start with project-", entity.ID)
+	})
+
+	t.Run("NewEntity uses first kind for ID prefix when multiple kinds", func(t *testing.T) {
+		entity, err := NewEntity([]Attr{
+			Ref(EntityKind, "test/project"),
+			Ref(EntityKind, "test/resource"),
+			Any(Doc, "A multi-kind entity"),
+		})
+		require.NoError(t, err)
+		require.NotNil(t, entity)
+
+		entity.ForceID()
+
+		// ID should use the first kind's last segment as prefix
+		assert.True(t, strings.HasPrefix(string(entity.ID), "project-"), "ID %s should start with project-", entity.ID)
+	})
+
+	t.Run("NewEntity uses last segment after dot when kind has dots", func(t *testing.T) {
+		entity, err := NewEntity([]Attr{
+			Ref(EntityKind, "dev.miren.core/kind.project"),
+			Any(Doc, "A project with dotted kind"),
+		})
+		require.NoError(t, err)
+		require.NotNil(t, entity)
+
+		entity.ForceID()
+		// For "dev.miren.core/kind.project", rightmost separator is "." so should use "project" as prefix
+		assert.True(t, strings.HasPrefix(string(entity.ID), "project-"), "ID %s should start with project-", entity.ID)
+	})
+
+	t.Run("NewEntity falls back to generic ID when no kind provided", func(t *testing.T) {
+		entity, err := NewEntity([]Attr{
+			Any(Doc, "An entity without a kind"),
+		})
+		require.NoError(t, err)
+		require.NotNil(t, entity)
+
+		entity.ForceID()
+		// ID should be auto-generated with generic prefix (e-)
+		assert.NotEqual(t, Id(""), entity.ID)
+		// Should start with generic 'e-' prefix
+		assert.True(t, strings.HasPrefix(string(entity.ID), "e-"), "ID %s should start with e-", entity.ID)
 	})
 }

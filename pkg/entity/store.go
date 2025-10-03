@@ -15,7 +15,6 @@ import (
 	"go.etcd.io/etcd/api/v3/mvccpb"
 	clientv3 "go.etcd.io/etcd/client/v3"
 	"miren.dev/runtime/pkg/cond"
-	"miren.dev/runtime/pkg/idgen"
 )
 
 // EtcdStore implements Store using etcd
@@ -155,28 +154,17 @@ func (s *EtcdStore) CreateEntity(
 		opt(&o)
 	}
 
-	entity := &Entity{
-		Attrs:     attributes,
-		CreatedAt: now(),
-		UpdatedAt: now(),
+	entity, err := NewEntity(attributes)
+	if err != nil {
+		return nil, err
 	}
+
+	entity.ForceID()
 
 	// Validate attributes
 	if err := s.validator.ValidateEntity(ctx, entity); err != nil {
 		return nil, err
 	}
-
-	if err := entity.Fixup(); err != nil {
-		return nil, err
-	}
-
-	// A default ID
-	if entity.ID == "" {
-		entity.ID = Id(idgen.GenNS("e"))
-	}
-
-	entity.Attrs = append(entity.Attrs, Ref(DBId, entity.ID))
-	entity.Attrs = SortedAttrs(entity.Attrs)
 
 	var primary, session []Attr
 

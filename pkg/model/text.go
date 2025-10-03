@@ -97,22 +97,19 @@ func (f *TextFormatter) decode(ctx context.Context, sc *SchemaValue) (*entity.En
 		return nil, fmt.Errorf("failed to decode metadata: %w", err)
 	}
 
-	ent.ID = entity.Id(sc.Id)
+	if sc.Id != "" {
+		ent.SetID(entity.Id(sc.Id))
+	}
 
 	err = ent.Update(ment.Attrs)
 	if err != nil {
 		return nil, fmt.Errorf("failed to update entity: %w", err)
 	}
 
-	if _, ok := ent.Get(entity.Ident); !ok {
+	if _, ok := ent.Get(entity.DBId); !ok {
 		name, ok := sc.Metadata["name"].(string)
 		if sc.Metadata != nil && ok {
-			err = ent.Update(entity.Attrs(
-				entity.Keyword(entity.Ident, kind+"/"+name),
-			))
-			if err != nil {
-				return nil, fmt.Errorf("failed to set ident: %w", err)
-			}
+			ent.SetID(entity.Id(kind + "/" + name))
 		}
 	}
 

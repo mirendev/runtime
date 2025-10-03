@@ -688,11 +688,13 @@ func TestServiceController(t *testing.T) {
 			},
 		}
 
+		ent, err := entity.NewEntity(entity.Attrs(
+			entity.DBId, epID,
+			eps.Encode,
+		))
+		r.NoError(err)
 		event := controller.Event{
-			Entity: &entity.Entity{
-				ID:    epID,
-				Attrs: eps.Encode(),
-			},
+			Entity: ent,
 		}
 
 		// Update endpoints through the controller

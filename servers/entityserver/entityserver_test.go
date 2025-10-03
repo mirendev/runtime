@@ -297,7 +297,7 @@ func TestEntityServer_List(t *testing.T) {
 		},
 		{
 			name:      "list by specific ident",
-			index:     entity.Keyword(entity.Ident, "test/entity1"),
+			index:     entity.Ref(entity.DBId, "test/entity1"),
 			wantCount: 1,
 			wantIDs:   []string{"test/entity1"},
 			wantErr:   false,

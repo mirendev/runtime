@@ -6,12 +6,14 @@ import (
 	"fmt"
 	"reflect"
 	"slices"
+	"strings"
 	"time"
 	"unicode"
 	"unicode/utf8"
 
 	"github.com/fxamacker/cbor/v2"
 	"miren.dev/runtime/pkg/entity/types"
+	"miren.dev/runtime/pkg/idgen"
 )
 
 // Common errors
@@ -74,10 +76,6 @@ func MustGet(e AttrGetter, name Id) Attr {
 }
 
 func (e *Entity) Get(name Id) (Attr, bool) {
-	if name == DBId && e.ID != "" {
-		return Attr{ID: DBId, Value: AnyValue(e.ID)}, true
-	}
-
 	for _, attr := range e.Attrs {
 		if attr.ID == name {
 			return attr, true
@@ -268,24 +266,112 @@ func (e *Entity) Fixup() error {
 			default:
 				return fmt.Errorf("invalid entity db/id (expected Id): %v (%T)", dbId.Value.Any(), dbId.Value)
 			}
-		} else if ident, ok := e.Get(Ident); ok {
-			// Fall back to db/ident for backwards compatibility
+		}
+
+		// Fall back to db/ident for backwards compatibility
+		if ident, ok := e.Get(Ident); ok {
+			var identId Id
 			switch id := ident.Value.Any().(type) {
 			case Id:
-				e.ID = id
+				identId = id
 			case string:
-				e.ID = Id(id)
+				identId = Id(id)
 			case types.Keyword:
-				e.ID = Id(id)
+				identId = Id(id)
 			default:
 				return fmt.Errorf("invalid entity ident (expected EntityId): %v (%T)", ident.Value.Any(), ident.Value)
 			}
+
+			if identId != "" {
+				if e.ID == "" {
+					e.ID = identId
+				}
+			}
+
+			// We remove idents now that we're using db/id as the primary ID
+			e.Remove(Ident)
 		}
 	}
+
+	e.ensureDBId()
 
 	e.Attrs = SortedAttrs(e.Attrs)
 
 	return nil
+}
+
+func (e *Entity) ForceID() {
+	if e.ID != "" {
+		return
+	}
+
+	// Try to use entity kind as prefix for auto-generated ID
+	prefix := "e"
+	if kind, ok := e.Get(EntityKind); ok {
+		var kindStr string
+		switch k := kind.Value.Any().(type) {
+		case Id:
+			kindStr = string(k)
+		case string:
+			kindStr = k
+		case types.Keyword:
+			kindStr = string(k)
+		}
+
+		// Extract last segment after rightmost . or /
+		if kindStr != "" {
+			lastDot := strings.LastIndex(kindStr, ".")
+			lastSlash := strings.LastIndex(kindStr, "/")
+			cutPos := max(lastDot, lastSlash)
+			if cutPos >= 0 && cutPos < len(kindStr)-1 {
+				prefix = kindStr[cutPos+1:]
+			} else {
+				prefix = kindStr
+			}
+		}
+	}
+
+	e.ID = Id(idgen.GenNS(prefix))
+
+	e.ensureDBId()
+}
+
+func NewEntity(attrs []Attr) (*Entity, error) {
+	e := &Entity{
+		CreatedAt: now(),
+		UpdatedAt: now(),
+		Attrs:     attrs,
+	}
+
+	if err := e.Fixup(); err != nil {
+		return nil, err
+	}
+
+	return e, nil
+}
+
+func (e *Entity) ensureDBId() {
+	if _, ok := e.Get(DBId); ok {
+		return
+	}
+
+	if e.ID != "" {
+		e.Attrs = append(e.Attrs, Attr{
+			ID:    DBId,
+			Value: RefValue(e.ID),
+		})
+
+		e.Attrs = SortedAttrs(e.Attrs)
+	}
+}
+
+func (e *Entity) SetID(id Id) {
+	e.ID = id
+	if a, ok := e.Get(DBId); ok {
+		a.Value = RefValue(id)
+	} else {
+		e.ensureDBId()
+	}
 }
 
 var (
@@ -391,6 +477,9 @@ func Attrs(vals ...any) []Attr {
 		switch v := vals[i].(type) {
 		case func() []Attr:
 			attrs = append(attrs, v()...)
+			i++
+		case []Attr:
+			attrs = append(attrs, v...)
 			i++
 		case Attr:
 			attrs = append(attrs, v)

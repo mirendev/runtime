@@ -52,15 +52,13 @@ func NewFileStore(basePath string) (*FileStore, error) {
 
 // CreateEntity creates a new entity with the given type and attributes
 func (s *FileStore) CreateEntity(ctx context.Context, attributes []Attr, opts ...EntityOption) (*Entity, error) {
-	entity := &Entity{
-		Attrs:     attributes,
-		Revision:  1,
-		CreatedAt: now(),
-		UpdatedAt: now(),
+	entity, err := NewEntity(attributes)
+	if err != nil {
+		return nil, err
 	}
 
 	// Validate attributes against schemas
-	err := s.validator.ValidateEntity(ctx, entity)
+	err = s.validator.ValidateEntity(ctx, entity)
 	if err != nil {
 		return nil, err
 	}

@@ -99,10 +99,10 @@ func TestSandbox(t *testing.T) {
 
 		sb.Labels = append(sb.Labels, "runtime.computer/app=mn-nginx")
 
-		cont := &entity.Entity{
-			ID:    id,
-			Attrs: sb.Encode(),
-		}
+		cont, _ := entity.NewEntity(entity.Attrs(
+			entity.DBId, id,
+			sb.Encode(),
+		))
 
 		meta := &entity.Meta{
 			Entity:   cont,
@@ -245,10 +245,11 @@ func TestSandbox(t *testing.T) {
 
 			sb.Labels = append(sb.Labels, "runtime.computer/app=mn-test")
 
-			cont := &entity.Entity{
-				ID:    id,
-				Attrs: sb.Encode(),
-			}
+			cont, err := entity.NewEntity(entity.Attrs(
+				entity.DBId, id,
+				sb.Encode,
+			))
+			r.NoError(err)
 
 			meta := &entity.Meta{
 				Entity:   cont,
@@ -269,17 +270,18 @@ func TestSandbox(t *testing.T) {
 
 			sb.Labels = append(sb.Labels, "runtime.computer/app=mn-test")
 
-			cont := &entity.Entity{
-				ID:    id,
-				Attrs: sb.Encode(),
-			}
+			cont, err := entity.NewEntity(entity.Attrs(
+				entity.DBId, id,
+				sb.Encode,
+			))
+			r.NoError(err)
 
 			meta := &entity.Meta{
 				Entity:   cont,
 				Revision: 2,
 			}
 
-			err := co.Create(ctx, &sb, meta)
+			err = co.Create(ctx, &sb, meta)
 			r.NoError(err)
 
 			c, err := cc.LoadContainer(ctx, co.pauseContainerId(id))
@@ -312,10 +314,11 @@ func TestSandbox(t *testing.T) {
 				Image: "mn-nginx:latest",
 			})
 
-			cont := &entity.Entity{
-				ID:    id,
-				Attrs: sb.Encode(),
-			}
+			cont, err := entity.NewEntity(entity.Attrs(
+				entity.DBId, id,
+				sb.Encode,
+			))
+			r.NoError(err)
 
 			meta := &entity.Meta{
 				Entity:   cont,
@@ -407,10 +410,11 @@ func TestSandbox(t *testing.T) {
 			Image: "mn-sort:latest",
 		})
 
-		cont := &entity.Entity{
-			ID:    id,
-			Attrs: sb.Encode(),
-		}
+		cont, err := entity.NewEntity(entity.Attrs(
+			entity.DBId, id,
+			sb.Encode,
+		))
+		r.NoError(err)
 
 		meta := &entity.Meta{
 			Entity: cont,
@@ -520,10 +524,11 @@ func TestSandbox(t *testing.T) {
 			},
 		})
 
-		cont := &entity.Entity{
-			ID:    id,
-			Attrs: sb.Encode(),
-		}
+		cont, err := entity.NewEntity(entity.Attrs(
+			entity.DBId, id,
+			sb.Encode,
+		))
+		r.NoError(err)
 
 		meta := &entity.Meta{
 			Entity:   cont,
@@ -655,10 +660,11 @@ func TestSandbox(t *testing.T) {
 			},
 		})
 
-		cont := &entity.Entity{
-			ID:    id,
-			Attrs: sb.Encode(),
-		}
+		cont, err := entity.NewEntity(entity.Attrs(
+			entity.DBId, id,
+			sb.Encode,
+		))
+		r.NoError(err)
 
 		meta := &entity.Meta{
 			Entity:   cont,
@@ -782,10 +788,11 @@ func TestSandbox(t *testing.T) {
 			},
 		})
 
-		cont := &entity.Entity{
-			ID:    id,
-			Attrs: sb.Encode(),
-		}
+		cont, err := entity.NewEntity(entity.Attrs(
+			entity.DBId, id,
+			sb.Encode,
+		))
+		r.NoError(err)
 
 		meta := &entity.Meta{
 			Entity:   cont,
@@ -918,10 +925,11 @@ func TestSandbox(t *testing.T) {
 			},
 		})
 
-		cont := &entity.Entity{
-			ID:    id,
-			Attrs: sb.Encode(),
-		}
+		cont, err := entity.NewEntity(entity.Attrs(
+			entity.DBId, id,
+			sb.Encode,
+		))
+		r.NoError(err)
 
 		meta := &entity.Meta{
 			Entity:   cont,
@@ -1147,10 +1155,11 @@ func TestSandbox(t *testing.T) {
 			},
 		}
 
-		cont := &entity.Entity{
-			ID:    id,
-			Attrs: sb.Encode(),
-		}
+		cont, err := entity.NewEntity(entity.Attrs(
+			entity.DBId, id,
+			sb.Encode,
+		))
+		r.NoError(err)
 
 		meta := &entity.Meta{
 			Entity:   cont,
@@ -1271,10 +1280,11 @@ func TestSandbox(t *testing.T) {
 			},
 		}
 
-		cont := &entity.Entity{
-			ID:    id,
-			Attrs: sb.Encode(),
-		}
+		cont, err := entity.NewEntity(entity.Attrs(
+			entity.DBId, id,
+			sb.Encode,
+		))
+		r.NoError(err)
 
 		meta := &entity.Meta{
 			Entity:   cont,
