@@ -179,7 +179,7 @@ func (c *lsvdClientImpl) CreateVolumeInSegmentAccess(ctx context.Context, volume
 		replicaSA := lsvd.NewDiskAPISegmentAccess(c.log, diskAPIURL, c.authClient)
 
 		// Wrap with ReplicaWriter
-		sa = lsvd.ReplicaWriter(localSA, replicaSA)
+		sa = lsvd.ReplicaWriter(c.log, localSA, replicaSA)
 	}
 
 	// Initialize container
@@ -256,13 +256,14 @@ func (c *lsvdClientImpl) InitializeDisk(ctx context.Context, volumeId string, fi
 	}
 
 	var sa lsvd.SegmentAccess = localSA
+	var replicaSA lsvd.SegmentAccess
 
 	// If replication is enabled, wrap with ReplicaWriter
 	if c.enableReplica && c.authClient != nil {
 		// Create replica using DiskAPI with auth client
 		diskAPIURL := c.cloudURL
-		replicaSA := lsvd.NewDiskAPISegmentAccess(c.log, diskAPIURL, c.authClient)
-		sa = lsvd.ReplicaWriter(localSA, replicaSA)
+		replicaSA = lsvd.NewDiskAPISegmentAccess(c.log, diskAPIURL, c.authClient)
+		sa = lsvd.ReplicaWriter(c.log, localSA, replicaSA)
 	}
 
 	// Get volume info from segment access
@@ -322,6 +323,11 @@ func (c *lsvdClientImpl) InitializeDisk(ctx context.Context, volumeId string, fi
 		"uuid", volumeInfo.UUID,
 		"size_bytes", sizeBytes,
 		"filesystem", filesystem)
+
+	// Start background reconciliation if using replica
+	if c.enableReplica && replicaSA != nil {
+		go c.reconcileVolume(context.Background(), volumeId, localSA, replicaSA)
+	}
 
 	return nil
 }
@@ -765,7 +771,7 @@ func (c *lsvdClientImpl) getDevicePath(id string) string {
 // attachNBDDevice attaches an LSVD disk to an NBD device
 func (c *lsvdClientImpl) attachNBDDevice(ctx context.Context, state *volumeState) (string, func() error, error) {
 	// Setup NBD loopback
-	idx, conn, cleanup, err := nbdnl.Loopback(ctx, uint64(state.info.SizeBytes))
+	idx, conn, cf, cleanup, err := nbdnl.Loopback(ctx, uint64(state.info.SizeBytes))
 	if err != nil {
 		return "", nil, fmt.Errorf("failed to setup NBD loopback: %w", err)
 	}
@@ -816,6 +822,7 @@ func (c *lsvdClientImpl) attachNBDDevice(ctx context.Context, state *volumeState
 			MinimumBlockSize:   4096,
 			PreferredBlockSize: 4096,
 			MaximumBlockSize:   4096,
+			RawFile:            cf,
 		}
 
 		c.log.Info("Starting NBD handler", "device", devicePath)
@@ -972,6 +979,49 @@ func (c *lsvdClientImpl) isMounted(path string) bool {
 		}
 	}
 	return false
+}
+
+// reconcileVolume performs background segment reconciliation for a volume
+func (c *lsvdClientImpl) reconcileVolume(ctx context.Context, volumeId string, primarySA, replicaSA lsvd.SegmentAccess) {
+	c.log.Info("Starting background segment reconciliation", "volume", volumeId)
+
+	// Open primary and replica volumes
+	primaryVol, err := primarySA.OpenVolume(ctx, volumeId)
+	if err != nil {
+		c.log.Error("Failed to open primary volume for reconciliation", "volume", volumeId, "error", err)
+		return
+	}
+
+	replicaVol, err := replicaSA.OpenVolume(ctx, volumeId)
+	if err != nil {
+		c.log.Error("Failed to open replica volume for reconciliation", "volume", volumeId, "error", err)
+		return
+	}
+
+	// Create reconciler
+	reconciler := lsvd.NewSegmentReconciler(c.log, primaryVol, replicaVol)
+
+	// Perform reconciliation
+	result, err := reconciler.Reconcile(ctx)
+	if err != nil {
+		c.log.Error("Failed to reconcile volume", "volume", volumeId, "error", err)
+		return
+	}
+
+	c.log.Info("Segment reconciliation complete",
+		"volume", volumeId,
+		"total_primary", result.TotalPrimary,
+		"total_replica", result.TotalReplica,
+		"missing", result.Missing,
+		"uploaded", result.Uploaded,
+		"failed", result.Failed)
+
+	if result.Failed > 0 {
+		c.log.Warn("Some segments failed to reconcile",
+			"volume", volumeId,
+			"failed_count", result.Failed,
+			"failed_segments", result.FailedSegments)
+	}
 }
 
 // Close gracefully shuts down the LSVD client and unmounts all volumes

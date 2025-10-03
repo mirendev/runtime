@@ -105,7 +105,7 @@ func (c *Controller) handleControl(gctx context.Context) {
 }
 
 func (c *Controller) handleTick(ctx *Context) error {
-	if time.Since(c.lastNewSegment) >= 30*time.Second {
+	if time.Since(c.lastNewSegment) >= 5*time.Minute {
 		c.lastNewSegment = time.Now()
 
 		err := c.handleLongIdle(ctx)
@@ -194,12 +194,14 @@ func (c *Controller) closeSegment(ctx *Context, ev Event) error {
 	d := c.d
 
 	defer c.log.Debug("finished goroutine to close segment")
-	defer func() {
-		defer close(done)
-		done <- EventResult{
-			Segment: segId,
-		}
-	}()
+	if done != nil {
+		defer func() {
+			defer close(done)
+			done <- EventResult{
+				Segment: segId,
+			}
+		}()
+	}
 	defer segmentsWritten.Inc()
 	defer oc.Close()
 

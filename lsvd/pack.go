@@ -64,7 +64,7 @@ func (p *Packer) iterateExtents(ctx *Context) error {
 			live = data
 		}
 
-		if sb.ShouldFlush(FlushThreshHold) {
+		if sb.ShouldFlush(FlushThreshHold) != FlushNo {
 			err = p.flushSegment(ctx, sb)
 			if err != nil {
 				return err

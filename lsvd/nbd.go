@@ -8,10 +8,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/lab47/lsvd/logger"
-	"github.com/lab47/lsvd/pkg/nbd"
 	"github.com/lab47/mode"
 	"golang.org/x/sys/unix"
+	"miren.dev/runtime/lsvd/logger"
+	"miren.dev/runtime/lsvd/pkg/nbd"
 )
 
 type nbdWrapper struct {
@@ -23,6 +23,7 @@ type nbdWrapper struct {
 
 	gcRunning      bool
 	lastCheckpoint time.Time
+	lastAgeReport  time.Time
 
 	buf *Buffers
 
@@ -66,7 +67,23 @@ func logBlocks(log *slog.Logger, msg string, idx LBA, data []byte) {
 	}
 }
 
-func (n *nbdWrapper) Idle() {}
+func (n *nbdWrapper) Tick() {
+	if n.d.curOC != nil {
+		n.d.checkFlush(n.ctx)
+
+		// Report segment age every minute
+		now := time.Now()
+		if now.Sub(n.lastAgeReport) >= time.Minute {
+			age := time.Since(n.d.curOC.builder.openedAt)
+			n.log.Info("current segment age",
+				"age", age,
+				"body-size", n.d.curOC.BodySize(),
+				"extents", n.d.curOC.Entries(),
+			)
+			n.lastAgeReport = now
+		}
+	}
+}
 
 func (n *nbdWrapper) ReadAt(b []byte, off int64) (int, error) {
 	blk := LBA(off / BlockSize)

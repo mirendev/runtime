@@ -153,7 +153,7 @@ func (c *CLI) bind(ctx context.Context, opts struct {
 	// Will also include pprof via the init() in net/http/pprof
 	go http.ListenAndServe(opts.MetricsAddr, nil)
 
-	idx, conn, cleanup, err := nbdnl.Loopback(ctx, uint64(vol.Size))
+	idx, conn, _, cleanup, err := nbdnl.Loopback(ctx, uint64(vol.Size))
 	if err != nil {
 		log.Error("error setting up loopback", "error", err)
 		os.Exit(1)

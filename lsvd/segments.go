@@ -153,7 +153,7 @@ func (s *Segments) UpdateUsage(log *slog.Logger, self SegmentId, affected []Part
 			}
 
 			seg.Used -= uint64(rng.Blocks)
-		} else {
+		} else if self != r.Segment {
 			if _, seen := warnedSegments[r.Segment]; !seen {
 				log.Warn("missing segment during usage update", "id", r.Segment.String())
 				warnedSegments[r.Segment] = struct{}{}

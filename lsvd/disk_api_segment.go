@@ -16,7 +16,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/davecgh/go-spew/spew"
 	"miren.dev/runtime/pkg/cloudauth"
 	"miren.dev/runtime/pkg/units"
 )
@@ -293,8 +292,6 @@ func (d *DiskAPISegmentAccess) GetVolumeInfo(ctx context.Context, vol string) (*
 	if err != nil {
 		return nil, fmt.Errorf("failed to read volume response body: %w", err)
 	}
-
-	spew.Dump(body)
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("get volume failed with status %d: %s", resp.StatusCode, string(body))

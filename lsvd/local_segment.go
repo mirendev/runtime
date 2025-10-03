@@ -280,8 +280,15 @@ func (l *LocalFileAccess) ReadMetadata(ctx context.Context, vol, name string) (i
 }
 
 func (l *LocalFileAccess) RemoveSegment(ctx context.Context, seg SegmentId) error {
-	return os.Remove(
+	err := os.Remove(
 		filepath.Join(l.Dir, "segments", "segment."+ulid.ULID(seg).String()))
+
+	// Swallow errors that the segment is already missing.
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+
+	return nil
 }
 
 func (l *LocalFileAccess) WriteSegment(ctx context.Context, seg SegmentId) (io.WriteCloser, error) {

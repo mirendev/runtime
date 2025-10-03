@@ -84,29 +84,43 @@ var defaultBlockSizes = BlockSizeConstraints{
 // encountered while disconnecting will be returned by wait.
 //
 // This is a Linux-only API.
-func Loopback(ctx context.Context, size uint64) (uint32, net.Conn, func() error, error) {
-	sp, err := unix.Socketpair(unix.AF_UNIX, unix.SOCK_STREAM, 0)
-	if err != nil {
-		return 0, nil, nil, err
-	}
+func Loopback(ctx context.Context, size uint64) (uint32, net.Conn, *os.File, func() error, error) {
 	exp := Export{
 		Size:       size,
 		BlockSizes: &defaultBlockSizes,
 		Flags:      uint16(FlagHasFlags | FlagSendFlush | FlagSendTrim | FlagSendWriteZeros),
 	}
 
+	sp, err := unix.Socketpair(unix.AF_UNIX, unix.SOCK_STREAM, 0)
+	if err != nil {
+		return 0, nil, nil, nil, err
+	}
+
+	err = unix.SetNonblock(sp[0], true)
+	if err != nil {
+		unix.Close(sp[0])
+		unix.Close(sp[1])
+		return 0, nil, nil, nil, err
+	}
+
+	err = unix.SetNonblock(sp[1], true)
+	if err != nil {
+		unix.Close(sp[0])
+		unix.Close(sp[1])
+		return 0, nil, nil, nil, err
+	}
+
 	client, server := os.NewFile(uintptr(sp[0]), "client"), os.NewFile(uintptr(sp[1]), "server")
 	serverc, err := net.FileConn(server)
-	//server.Close()
 	if err != nil {
 		client.Close()
-		return 0, nil, nil, err
+		return 0, nil, nil, nil, err
 	}
 
 	idx, err := Configure(exp, client)
 	if err != nil {
 		client.Close()
-		return 0, nil, nil, err
+		return 0, nil, nil, nil, err
 	}
 
 	cleanup := func() error {
@@ -125,5 +139,5 @@ func Loopback(ctx context.Context, size uint64) (uint32, net.Conn, func() error,
 		return err
 	}
 
-	return idx, serverc, cleanup, nil
+	return idx, serverc, server, cleanup, nil
 }
