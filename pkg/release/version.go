@@ -83,6 +83,16 @@ func parseVersionText(output string) VersionInfo {
 
 // IsNewer returns true if this version is newer than the other
 func (v VersionInfo) IsNewer(other VersionInfo) bool {
+	// If both have commits, compare commits first
+	// Same commit means identical code regardless of build time
+	if v.Commit != "" && v.Commit != "unknown" &&
+		other.Commit != "" && other.Commit != "unknown" {
+		if v.Commit == other.Commit {
+			return false
+		}
+		// Different commits - fall through to build date comparison
+	}
+
 	// If both have build dates, use those for comparison
 	if !v.BuildDate.IsZero() && !other.BuildDate.IsZero() {
 		return v.BuildDate.After(other.BuildDate)
