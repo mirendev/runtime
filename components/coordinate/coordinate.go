@@ -303,7 +303,7 @@ func (c *Coordinator) Start(ctx context.Context) error {
 
 	err = c.LoadAPICert(ctx)
 	if err != nil {
-		c.Log.Error("failed to load CA", "error", err)
+		c.Log.Error("failed to load API cert", "error", err)
 		return err
 	}
 

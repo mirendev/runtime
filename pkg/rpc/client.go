@@ -616,10 +616,11 @@ func (c *NetworkClient) handleCallStream(
 			return false, err
 		case "unknown-capability":
 			if c.capa.RestoreState != nil {
-				// We have a resolution, let's try to resolve it and update our capability.
-				c.reresolveCapability(c.capa.RestoreState)
+				// Try to re-resolve and, if successful, signal caller to retry the request.
+				if rerr := c.reresolveCapability(c.capa.RestoreState); rerr == nil {
+					return true, nil
+				}
 			}
-
 			err = cond.NotFound("capability", c.capa.OID)
 		case "error":
 			errs := hr.Trailer.Get("rpc-error")

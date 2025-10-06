@@ -398,7 +398,7 @@ func (c *Context) RPCClient(name string) (*rpc.NetworkClient, error) {
 		c.Log.Warn("Client config could not provide RPC state", "error", err)
 	}
 
-	cs, err = rpc.NewState(c, rpc.WithLogger(c.Log), rpc.WithSkipVerify)
+	cs, err = rpc.NewState(c, append(opts, rpc.WithSkipVerify)...)
 	if err != nil {
 		return nil, err
 	}
