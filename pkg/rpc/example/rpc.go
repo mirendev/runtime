@@ -1150,7 +1150,7 @@ type reexportSetTempG[T any] struct {
 	client rpc.Client
 }
 
-func (_ reexportSetTempG[T]) SetTemp(ctx context.Context, state *SetTempGSetTemp[T]) error {
+func (reexportSetTempG[T]) SetTemp(ctx context.Context, state *SetTempGSetTemp[T]) error {
 	panic("not implemented")
 }
 

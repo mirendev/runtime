@@ -299,7 +299,7 @@ type reexportSandboxMetrics struct {
 	client rpc.Client
 }
 
-func (_ reexportSandboxMetrics) Snapshot(ctx context.Context, state *SandboxMetricsSnapshot) error {
+func (reexportSandboxMetrics) Snapshot(ctx context.Context, state *SandboxMetricsSnapshot) error {
 	panic("not implemented")
 }
 

@@ -1843,7 +1843,7 @@ func (g *Generator) generateInterfaces(f *j.File) error {
 		for _, m := range i.Method {
 			methodName := capitalize(m.Name)
 
-			f.Func().Params(j.Id("_").Add(recv)).Id(methodName).Params(
+			f.Func().Params(j.Add(recv)).Id(methodName).Params(
 				j.Id("ctx").Qual("context", "Context"),
 				j.Id("state").Op("*").Add(i.typeName(expName+capitalize(m.Name))),
 			).Error().Block(

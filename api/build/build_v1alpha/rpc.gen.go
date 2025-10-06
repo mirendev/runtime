@@ -222,7 +222,7 @@ type reexportStream struct {
 	client rpc.Client
 }
 
-func (_ reexportStream) Recv(ctx context.Context, state *StreamRecv) error {
+func (reexportStream) Recv(ctx context.Context, state *StreamRecv) error {
 	panic("not implemented")
 }
 
@@ -410,7 +410,7 @@ type reexportBuilder struct {
 	client rpc.Client
 }
 
-func (_ reexportBuilder) BuildFromTar(ctx context.Context, state *BuilderBuildFromTar) error {
+func (reexportBuilder) BuildFromTar(ctx context.Context, state *BuilderBuildFromTar) error {
 	panic("not implemented")
 }
 

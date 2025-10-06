@@ -111,7 +111,10 @@ func (o *Node) Encode() (attrs []entity.Attr) {
 }
 
 func (o *Node) Empty() bool {
-	return len(o.Endpoint) == 0
+	if len(o.Endpoint) != 0 {
+		return false
+	}
+	return true
 }
 
 func (o *Node) InitSchema(sb *schema.SchemaBuilder) {

@@ -981,7 +981,10 @@ func (o *Schedule) Encode() (attrs []entity.Attr) {
 }
 
 func (o *Schedule) Empty() bool {
-	return o.Key.Empty()
+	if !o.Key.Empty() {
+		return false
+	}
+	return true
 }
 
 func (o *Schedule) InitSchema(sb *schema.SchemaBuilder) {
