@@ -259,11 +259,11 @@ type reexportTown struct {
 	client rpc.Client
 }
 
-func (_ reexportTown) GetHero(ctx context.Context, state *TownGetHero) error {
+func (reexportTown) GetHero(ctx context.Context, state *TownGetHero) error {
 	panic("not implemented")
 }
 
-func (_ reexportTown) HireHero(ctx context.Context, state *TownHireHero) error {
+func (reexportTown) HireHero(ctx context.Context, state *TownHireHero) error {
 	panic("not implemented")
 }
 
@@ -468,7 +468,7 @@ type reexportEmpower struct {
 	client rpc.Client
 }
 
-func (_ reexportEmpower) IncreasePower(ctx context.Context, state *EmpowerIncreasePower) error {
+func (reexportEmpower) IncreasePower(ctx context.Context, state *EmpowerIncreasePower) error {
 	panic("not implemented")
 }
 
