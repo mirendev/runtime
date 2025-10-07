@@ -320,17 +320,17 @@ func (n *Network) extIface(ctx context.Context, sm subnet.Manager, v6 bool) (*ba
 		}
 
 		if err != nil {
-			return nil, fmt.Errorf("Failed to find interface matching %s: %s", n.Interface, err)
+			return nil, fmt.Errorf("failed to find interface matching %s: %s", n.Interface, err)
 		}
 	} else {
 		// Check explicitly specified interfaces
 		extIface, err = ipmatch.LookupExtIface(n.Interface, "", "", ipStack, optsPublicIP)
 		if err != nil {
-			return nil, fmt.Errorf("Failed to find interface matching %s: %s", n.Interface, err)
+			return nil, fmt.Errorf("failed to find interface matching %s: %s", n.Interface, err)
 		}
 
 		if extIface == nil {
-			return nil, fmt.Errorf("Failed to find interface matching %s", n.Interface)
+			return nil, fmt.Errorf("failed to find interface matching %s", n.Interface)
 		}
 	}
 

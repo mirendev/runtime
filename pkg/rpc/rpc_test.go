@@ -426,6 +426,7 @@ func noTestActor(t *testing.T) {
 		defer reg.Close(ctx)
 
 		err = reg.Register(ctx, "meter", s)
+		r.NoError(err)
 
 		cs, err := rpc.NewState(ctx, rpc.WithSkipVerify)
 		r.NoError(err)

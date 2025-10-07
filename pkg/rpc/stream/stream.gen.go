@@ -107,7 +107,7 @@ type reexportSendStream[T any] struct {
 	client rpc.Client
 }
 
-func (_ reexportSendStream[T]) Send(ctx context.Context, state *SendStreamSend[T]) error {
+func (reexportSendStream[T]) Send(ctx context.Context, state *SendStreamSend[T]) error {
 	panic("not implemented")
 }
 
@@ -271,7 +271,7 @@ type reexportRecvStream[T any] struct {
 	client rpc.Client
 }
 
-func (_ reexportRecvStream[T]) Recv(ctx context.Context, state *RecvStreamRecv[T]) error {
+func (reexportRecvStream[T]) Recv(ctx context.Context, state *RecvStreamRecv[T]) error {
 	panic("not implemented")
 }
 

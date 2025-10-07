@@ -49,7 +49,6 @@ type Disk struct {
 
 	readDisks []*Disk
 
-	bgmu sync.Mutex
 
 	autoGC bool
 

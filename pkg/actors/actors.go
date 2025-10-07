@@ -91,6 +91,9 @@ func (r *Registry) setActorState(ctx context.Context, name string, as ActorState
 		if errors.Is(err, cond.ErrNotFound{}) {
 			an.State = data
 			_, err = r.ec.Create(ctx, name, &an)
+			if err != nil {
+				r.log.Error("failed to create actor", "name", name, "err", err)
+			}
 		} else {
 			r.log.Error("failed to get actor", "name", name, "err", err)
 			return

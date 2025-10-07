@@ -380,19 +380,6 @@ func (c *SandboxController) Init(ctx context.Context) error {
 	return nil
 }
 
-func (c *SandboxController) exitMonitor() {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	c.monitors--
-	c.cond.Broadcast()
-}
-
-func (c *SandboxController) enterMonitor() {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.monitors++
-}
 
 func (c *SandboxController) Close() error {
 	c.cancel()

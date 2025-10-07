@@ -12,18 +12,6 @@ import (
 	"miren.dev/runtime/pkg/rpc/stream"
 )
 
-func currentConsole() console.Console {
-	// Usually all three streams (stdin, stdout, and stderr)
-	// are open to the same console, but some might be redirected,
-	// so try all three.
-	for _, s := range []*os.File{os.Stderr, os.Stdout, os.Stdin} {
-		if c, err := console.ConsoleFromFile(s); err == nil {
-			return c
-		}
-	}
-
-	return nil
-}
 
 func Console(ctx *Context, opts struct {
 	AppCentric

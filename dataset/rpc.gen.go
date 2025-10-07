@@ -620,19 +620,19 @@ type reexportSegmentReader struct {
 	client rpc.Client
 }
 
-func (_ reexportSegmentReader) ReadAt(ctx context.Context, state *SegmentReaderReadAt) error {
+func (reexportSegmentReader) ReadAt(ctx context.Context, state *SegmentReaderReadAt) error {
 	panic("not implemented")
 }
 
-func (_ reexportSegmentReader) Close(ctx context.Context, state *SegmentReaderClose) error {
+func (reexportSegmentReader) Close(ctx context.Context, state *SegmentReaderClose) error {
 	panic("not implemented")
 }
 
-func (_ reexportSegmentReader) Layout(ctx context.Context, state *SegmentReaderLayout) error {
+func (reexportSegmentReader) Layout(ctx context.Context, state *SegmentReaderLayout) error {
 	panic("not implemented")
 }
 
-func (_ reexportSegmentReader) DataPath(ctx context.Context, state *SegmentReaderDataPath) error {
+func (reexportSegmentReader) DataPath(ctx context.Context, state *SegmentReaderDataPath) error {
 	panic("not implemented")
 }
 
@@ -976,11 +976,11 @@ type reexportSegmentWriter struct {
 	client rpc.Client
 }
 
-func (_ reexportSegmentWriter) WriteAt(ctx context.Context, state *SegmentWriterWriteAt) error {
+func (reexportSegmentWriter) WriteAt(ctx context.Context, state *SegmentWriterWriteAt) error {
 	panic("not implemented")
 }
 
-func (_ reexportSegmentWriter) Close(ctx context.Context, state *SegmentWriterClose) error {
+func (reexportSegmentWriter) Close(ctx context.Context, state *SegmentWriterClose) error {
 	panic("not implemented")
 }
 
@@ -1536,23 +1536,23 @@ type reexportDataSet struct {
 	client rpc.Client
 }
 
-func (_ reexportDataSet) GetInfo(ctx context.Context, state *DataSetGetInfo) error {
+func (reexportDataSet) GetInfo(ctx context.Context, state *DataSetGetInfo) error {
 	panic("not implemented")
 }
 
-func (_ reexportDataSet) ListSegments(ctx context.Context, state *DataSetListSegments) error {
+func (reexportDataSet) ListSegments(ctx context.Context, state *DataSetListSegments) error {
 	panic("not implemented")
 }
 
-func (_ reexportDataSet) ReadSegment(ctx context.Context, state *DataSetReadSegment) error {
+func (reexportDataSet) ReadSegment(ctx context.Context, state *DataSetReadSegment) error {
 	panic("not implemented")
 }
 
-func (_ reexportDataSet) NewSegment(ctx context.Context, state *DataSetNewSegment) error {
+func (reexportDataSet) NewSegment(ctx context.Context, state *DataSetNewSegment) error {
 	panic("not implemented")
 }
 
-func (_ reexportDataSet) ReadBytes(ctx context.Context, state *DataSetReadBytes) error {
+func (reexportDataSet) ReadBytes(ctx context.Context, state *DataSetReadBytes) error {
 	panic("not implemented")
 }
 
@@ -2110,19 +2110,19 @@ type reexportDataSets struct {
 	client rpc.Client
 }
 
-func (_ reexportDataSets) List(ctx context.Context, state *DataSetsList) error {
+func (reexportDataSets) List(ctx context.Context, state *DataSetsList) error {
 	panic("not implemented")
 }
 
-func (_ reexportDataSets) Create(ctx context.Context, state *DataSetsCreate) error {
+func (reexportDataSets) Create(ctx context.Context, state *DataSetsCreate) error {
 	panic("not implemented")
 }
 
-func (_ reexportDataSets) Get(ctx context.Context, state *DataSetsGet) error {
+func (reexportDataSets) Get(ctx context.Context, state *DataSetsGet) error {
 	panic("not implemented")
 }
 
-func (_ reexportDataSets) Delete(ctx context.Context, state *DataSetsDelete) error {
+func (reexportDataSets) Delete(ctx context.Context, state *DataSetsDelete) error {
 	panic("not implemented")
 }
 

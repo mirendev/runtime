@@ -16,7 +16,7 @@ package requester
 
 import (
 	"bytes"
-	"io/ioutil"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -112,7 +112,7 @@ func TestRequest(t *testing.T) {
 func TestBody(t *testing.T) {
 	var count int64
 	handler := func(w http.ResponseWriter, r *http.Request) {
-		body, _ := ioutil.ReadAll(r.Body)
+		body, _ := io.ReadAll(r.Body)
 		if string(body) == "Body" {
 			atomic.AddInt64(&count, 1)
 		}

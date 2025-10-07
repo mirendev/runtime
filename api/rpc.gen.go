@@ -808,7 +808,7 @@ type reexportUserQuery struct {
 	client rpc.Client
 }
 
-func (_ reexportUserQuery) WhoAmI(ctx context.Context, state *UserQueryWhoAmI) error {
+func (reexportUserQuery) WhoAmI(ctx context.Context, state *UserQueryWhoAmI) error {
 	panic("not implemented")
 }
 
@@ -968,7 +968,7 @@ type reexportAppInfo struct {
 	client rpc.Client
 }
 
-func (_ reexportAppInfo) AppInfo(ctx context.Context, state *AppInfoAppInfo) error {
+func (reexportAppInfo) AppInfo(ctx context.Context, state *AppInfoAppInfo) error {
 	panic("not implemented")
 }
 
@@ -1151,7 +1151,7 @@ type reexportLogs struct {
 	client rpc.Client
 }
 
-func (_ reexportLogs) AppLogs(ctx context.Context, state *LogsAppLogs) error {
+func (reexportLogs) AppLogs(ctx context.Context, state *LogsAppLogs) error {
 	panic("not implemented")
 }
 
@@ -1679,23 +1679,23 @@ type reexportDisks struct {
 	client rpc.Client
 }
 
-func (_ reexportDisks) New(ctx context.Context, state *DisksNew) error {
+func (reexportDisks) New(ctx context.Context, state *DisksNew) error {
 	panic("not implemented")
 }
 
-func (_ reexportDisks) GetById(ctx context.Context, state *DisksGetById) error {
+func (reexportDisks) GetById(ctx context.Context, state *DisksGetById) error {
 	panic("not implemented")
 }
 
-func (_ reexportDisks) GetByName(ctx context.Context, state *DisksGetByName) error {
+func (reexportDisks) GetByName(ctx context.Context, state *DisksGetByName) error {
 	panic("not implemented")
 }
 
-func (_ reexportDisks) List(ctx context.Context, state *DisksList) error {
+func (reexportDisks) List(ctx context.Context, state *DisksList) error {
 	panic("not implemented")
 }
 
-func (_ reexportDisks) Delete(ctx context.Context, state *DisksDelete) error {
+func (reexportDisks) Delete(ctx context.Context, state *DisksDelete) error {
 	panic("not implemented")
 }
 
@@ -2221,15 +2221,15 @@ type reexportAddons struct {
 	client rpc.Client
 }
 
-func (_ reexportAddons) CreateInstance(ctx context.Context, state *AddonsCreateInstance) error {
+func (reexportAddons) CreateInstance(ctx context.Context, state *AddonsCreateInstance) error {
 	panic("not implemented")
 }
 
-func (_ reexportAddons) ListInstances(ctx context.Context, state *AddonsListInstances) error {
+func (reexportAddons) ListInstances(ctx context.Context, state *AddonsListInstances) error {
 	panic("not implemented")
 }
 
-func (_ reexportAddons) DeleteInstance(ctx context.Context, state *AddonsDeleteInstance) error {
+func (reexportAddons) DeleteInstance(ctx context.Context, state *AddonsDeleteInstance) error {
 	panic("not implemented")
 }
 

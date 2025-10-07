@@ -10,7 +10,6 @@ package perf_test
 import (
 	"errors"
 	"fmt"
-	"io/ioutil"
 	"os"
 	"runtime"
 	"strconv"
@@ -215,7 +214,7 @@ func (env *perfTestEnv) paranoidLevel() int {
 }
 
 func (env *perfTestEnv) initParanoid() {
-	content, err := ioutil.ReadFile("/proc/sys/kernel/perf_event_paranoid")
+	content, err := os.ReadFile("/proc/sys/kernel/perf_event_paranoid")
 	if err != nil {
 		env.paranoid.value = 3
 		return
@@ -235,7 +234,7 @@ func (env *perfTestEnv) initTracefs() {
 		return
 	}
 	env.tracefs.mounted = true
-	_, err = ioutil.ReadDir("/sys/kernel/debug/tracing")
+	_, err = os.ReadDir("/sys/kernel/debug/tracing")
 	if err != nil {
 		env.tracefs.readErr = err
 		return

@@ -224,11 +224,6 @@ func (s *ServiceController) setupEndpointChain(cmd *nftCommands, ip netip.Addr, 
 	return endpoint, nil
 }
 
-func (s *ServiceController) removeEndpointChain(cmd *nftCommands, ip netip.Addr, port uint16) error {
-	endpoint := s.endpointChain(ip, port)
-	cmd.append("delete chain inet %s %s", s.table, endpoint)
-	return nil
-}
 
 func (s *ServiceController) systemTables() ([]string, error) {
 	cmd := exec.Command("nft", "-j", "list", "tables")

@@ -153,9 +153,8 @@ func Unescape(escaped string) (string, bool) {
 			return "/"
 		}
 		if _, ok := celReservedSymbols[contents]; ok {
-			if len(s) != len(escaped) {
-				ok = false
-			}
+			// If the escaped part is not the entire string, it's invalid
+			// but we still return the contents as the outer ok will handle it
 			return contents
 		}
 		ok = false

@@ -5,6 +5,7 @@
 package slogout
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -151,7 +152,7 @@ func (w *logWriter) processLine(line string) {
 		w.processKeyValueLine(line)
 	default:
 		// Log as plain text
-		w.logger.Log(nil, w.level, line)
+		w.logger.Log(context.TODO(), w.level, line)
 	}
 }
 
@@ -168,7 +169,7 @@ func (w *logWriter) processJSONLine(line string) {
 	var jsonData map[string]interface{}
 	if err := json.Unmarshal([]byte(line), &jsonData); err != nil {
 		// If JSON parsing fails, log as plain text
-		w.logger.Log(nil, w.level, line,
+		w.logger.Log(context.TODO(), w.level, line,
 			"json_parse_error", err.Error())
 		return
 	}
@@ -215,24 +216,19 @@ func (w *logWriter) processJSONLine(line string) {
 		message = line // Use full JSON line as message
 	}
 
-	w.logger.LogAttrs(nil, level, message, attrs...)
+	w.logger.LogAttrs(context.TODO(), level, message, attrs...)
 }
 
 // keyValuePattern matches key=value pairs, handling quoted values
 var keyValuePattern = regexp.MustCompile(`(\w+)=("(?:[^"\\]|\\.)*"|[^\s]+)`)
 
-var kvIgnoreKeys = map[string]struct{}{
-	"time":  {},
-	"level": {},
-	"msg":   {},
-}
 
 // processKeyValueLine parses a line containing key=value pairs
 func (w *logWriter) processKeyValueLine(line string) {
 	matches := keyValuePattern.FindAllStringSubmatch(line, -1)
 	if len(matches) == 0 {
 		// No key=value pairs found, log as plain text
-		w.logger.Log(nil, w.level, line)
+		w.logger.Log(context.TODO(), w.level, line)
 		return
 	}
 
@@ -276,7 +272,7 @@ func (w *logWriter) processKeyValueLine(line string) {
 		attrs = append(attrs, slog.String("orig-level", level.String()))
 	}
 
-	w.logger.LogAttrs(nil, level, message, attrs...)
+	w.logger.LogAttrs(context.TODO(), level, message, attrs...)
 }
 
 // parseLogLevel converts a string level to slog.Level

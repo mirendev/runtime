@@ -423,11 +423,6 @@ func (h *Server) forwardToLease(ctx context.Context, w http.ResponseWriter, req 
 	he.ServeHTTP(w, req)
 }
 
-const (
-	appLabel       = "runtime.computer/app"
-	httpHostLabel  = "runtime.computer/http_host"
-	staticDirLabel = "runtime.computer/static_dir"
-)
 
 /*
 func (h *LeaseHTTP) extractEndpoint(ctx context.Context, container containerd.Container) (discovery.Endpoint, error) {

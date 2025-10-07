@@ -3,14 +3,12 @@ package exec
 import (
 	"context"
 	"fmt"
-	"io"
 	"log/slog"
 	"strings"
 
 	containerd "github.com/containerd/containerd/v2/client"
 	"github.com/containerd/containerd/v2/pkg/cio"
 	"github.com/containerd/containerd/v2/pkg/oci"
-	"github.com/davecgh/go-spew/spew"
 	"github.com/opencontainers/runtime-spec/specs-go"
 	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
@@ -19,26 +17,6 @@ import (
 	"miren.dev/runtime/pkg/rpc/stream"
 )
 
-type debugWriter struct {
-	w io.Writer
-}
-
-func (d *debugWriter) Write(p []byte) (n int, err error) {
-	spew.Printf("Writing data: %v\n", p)
-	return d.w.Write(p)
-}
-
-type debugReader struct {
-	r io.Reader
-}
-
-func (d *debugReader) Read(p []byte) (n int, err error) {
-	n, err = d.r.Read(p)
-
-	spew.Printf("Read data: %v\n", p[:n])
-
-	return n, err
-}
 
 type Server struct {
 	Log *slog.Logger

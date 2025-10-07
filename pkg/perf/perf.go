@@ -10,7 +10,6 @@ package perf
 import (
 	"bytes"
 	"fmt"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -1385,7 +1384,7 @@ func marshalBitwiseUint64(fields []bool) uint64 {
 // If readUint does not return an error, the returned integer is
 // guaranteed to fit in the specified number of bits.
 func readUint(sysfile string, bits int) (uint64, error) {
-	content, err := ioutil.ReadFile(sysfile)
+	content, err := os.ReadFile(sysfile)
 	if err != nil {
 		return 0, err
 	}
