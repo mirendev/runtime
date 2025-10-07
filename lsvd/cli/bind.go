@@ -33,6 +33,43 @@ func nbdRange() (int, error) {
 	return strconv.Atoi(strings.TrimSpace(string(data)))
 }
 
+// saveNBDIndex saves the NBD device index to a file in the disk directory
+// This allows recovery after a crash by reconnecting to the same NBD device
+func saveNBDIndex(path string, idx uint32) error {
+	indexPath := filepath.Join(path, "nbd-index")
+	return os.WriteFile(indexPath, []byte(strconv.FormatUint(uint64(idx), 10)), 0644)
+}
+
+// loadNBDIndex loads a previously saved NBD device index
+// Returns 0 and no error if the file doesn't exist
+func loadNBDIndex(path string) (uint32, error) {
+	indexPath := filepath.Join(path, "nbd-index")
+	data, err := os.ReadFile(indexPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return 0, nil // No saved index, return 0
+		}
+		return 0, err
+	}
+
+	idx, err := strconv.ParseUint(strings.TrimSpace(string(data)), 10, 32)
+	if err != nil {
+		return 0, errors.Wrapf(err, "invalid nbd-index file")
+	}
+
+	return uint32(idx), nil
+}
+
+// clearNBDIndex removes the saved NBD index file
+func clearNBDIndex(path string) error {
+	indexPath := filepath.Join(path, "nbd-index")
+	err := os.Remove(indexPath)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	return err
+}
+
 func (c *CLI) bind(ctx context.Context, opts struct {
 	Global
 	Path        string `short:"p" long:"path" description:"path for lve root" required:"true"`
@@ -153,10 +190,32 @@ func (c *CLI) bind(ctx context.Context, opts struct {
 	// Will also include pprof via the init() in net/http/pprof
 	go http.ListenAndServe(opts.MetricsAddr, nil)
 
-	idx, conn, _, cleanup, err := nbdnl.Loopback(ctx, uint64(vol.Size))
+	// Try to load saved NBD index for crash recovery
+	savedIdx, err := loadNBDIndex(path)
+	if err != nil {
+		log.Error("error loading saved NBD index", "error", err)
+		// Continue with auto-allocation
+		savedIdx = 0
+	}
+	if savedIdx != 0 {
+		log.Info("attempting to reconnect to saved NBD device", "index", savedIdx)
+	}
+
+	preferredIdx := nbdnl.IndexAny
+	if savedIdx != 0 {
+		preferredIdx = savedIdx
+	}
+
+	idx, conn, _, cleanup, err := nbdnl.Loopback(ctx, uint64(vol.Size), preferredIdx)
 	if err != nil {
 		log.Error("error setting up loopback", "error", err)
 		os.Exit(1)
+	}
+
+	// Save the NBD index for crash recovery
+	err = saveNBDIndex(path, idx)
+	if err != nil {
+		log.Warn("failed to save NBD index", "error", err)
 	}
 
 	devPath := filepath.Join(path, "dev")
@@ -258,6 +317,12 @@ func (c *CLI) bind(ctx context.Context, opts struct {
 	err = cleanup()
 	if err != nil {
 		c.log.Info("error cleaning up", "error", err)
+	}
+
+	// Clear saved NBD index on clean shutdown
+	err = clearNBDIndex(path)
+	if err != nil {
+		c.log.Warn("failed to clear NBD index", "error", err)
 	}
 
 	err = ctx.Err()

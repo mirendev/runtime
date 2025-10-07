@@ -200,7 +200,7 @@ func (d *DiskController) attachToExistingVolume(ctx context.Context, disk *stora
 	d.Log.Info("Verified existing volume",
 		"disk", disk.ID,
 		"volume", volumeId,
-		"volume_size", volumeInfo.Size)
+		"volume_size", volumeInfo.SizeBytes)
 
 	// Update status to PROVISIONED
 	disk.Status = storage_v1alpha.PROVISIONED

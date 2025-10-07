@@ -855,6 +855,47 @@ func (c *lsvdClientImpl) getVolumePath(volumeId string) string {
 	return filepath.Join(c.dataPath, "lsvd-volumes", volumeId)
 }
 
+// saveNBDIndex saves the NBD device index to a file in the volume directory
+func (c *lsvdClientImpl) saveNBDIndex(volumePath string, idx uint32) error {
+	// Ensure directory exists
+	if err := os.MkdirAll(volumePath, 0755); err != nil {
+		return fmt.Errorf("failed to create volume directory: %w", err)
+	}
+
+	indexPath := filepath.Join(volumePath, "nbd-index")
+	return os.WriteFile(indexPath, []byte(strconv.FormatUint(uint64(idx), 10)), 0644)
+}
+
+// loadNBDIndex loads a previously saved NBD device index
+// Returns 0 and no error if the file doesn't exist
+func (c *lsvdClientImpl) loadNBDIndex(volumePath string) (uint32, error) {
+	indexPath := filepath.Join(volumePath, "nbd-index")
+	data, err := os.ReadFile(indexPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return 0, nil // No saved index, return 0
+		}
+		return 0, err
+	}
+
+	idx, err := strconv.ParseUint(strings.TrimSpace(string(data)), 10, 32)
+	if err != nil {
+		return 0, fmt.Errorf("invalid nbd-index file: %w", err)
+	}
+
+	return uint32(idx), nil
+}
+
+// clearNBDIndex removes the saved NBD index file
+func (c *lsvdClientImpl) clearNBDIndex(volumePath string) error {
+	indexPath := filepath.Join(volumePath, "nbd-index")
+	err := os.Remove(indexPath)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	return err
+}
+
 // getVolumesBasePath returns the base path for all volumes
 func (c *lsvdClientImpl) getVolumesBasePath() string {
 	return filepath.Join(c.dataPath, "lsvd-volumes")
@@ -1004,10 +1045,32 @@ func (c *lsvdClientImpl) runNBDHandlerWithReconnect(
 
 // attachNBDDevice attaches an LSVD disk to an NBD device
 func (c *lsvdClientImpl) attachNBDDevice(ctx context.Context, state *volumeState) (string, func() error, error) {
+	volumePath := c.getVolumePath(state.info.ID)
+
+	// Try to load saved NBD index for crash recovery
+	savedIdx, err := c.loadNBDIndex(volumePath)
+	if err != nil {
+		c.log.Warn("Failed to load saved NBD index", "volume", state.info.ID, "error", err)
+		savedIdx = 0
+	}
+	if savedIdx != 0 {
+		c.log.Info("Attempting to reconnect to saved NBD device", "volume", state.info.ID, "index", savedIdx)
+	}
+
+	preferredIdx := nbdnl.IndexAny
+	if savedIdx != 0 {
+		preferredIdx = savedIdx
+	}
+
 	// Setup NBD loopback
-	idx, conn, client, cleanup, err := nbdnl.Loopback(ctx, uint64(state.info.SizeBytes))
+	idx, conn, client, cleanup, err := nbdnl.Loopback(ctx, uint64(state.info.SizeBytes), preferredIdx)
 	if err != nil {
 		return "", nil, fmt.Errorf("failed to setup NBD loopback: %w", err)
+	}
+
+	// Save the NBD index for crash recovery
+	if err := c.saveNBDIndex(volumePath, idx); err != nil {
+		c.log.Warn("Failed to save NBD index", "volume", state.info.ID, "error", err)
 	}
 
 	// Get NBD range for device path calculation
@@ -1042,6 +1105,15 @@ func (c *lsvdClientImpl) attachNBDDevice(ctx context.Context, state *volumeState
 		"dev-num", devNum,
 		"size_bytes", state.info.SizeBytes)
 
+	// Wrap cleanup to also clear NBD index
+	wrappedCleanup := func() error {
+		err := cleanup()
+		if clearErr := c.clearNBDIndex(volumePath); clearErr != nil {
+			c.log.Warn("Failed to clear NBD index", "volume", state.info.ID, "error", clearErr)
+		}
+		return err
+	}
+
 	// Create NBD handler context
 	nbdCtx, cancel := context.WithCancel(ctx)
 	state.nbdCancel = cancel
@@ -1063,7 +1135,7 @@ func (c *lsvdClientImpl) attachNBDDevice(ctx context.Context, state *volumeState
 		if err == nil {
 			// Device is ready
 			c.log.Debug("NBD device is ready", "device", devicePath, "index", idx, "status", status)
-			return devicePath, cleanup, nil
+			return devicePath, wrappedCleanup, nil
 		}
 
 		c.log.Warn("Waiting for NBD device to become ready", "device", devicePath, "index", idx, "error", err)
@@ -1071,7 +1143,7 @@ func (c *lsvdClientImpl) attachNBDDevice(ctx context.Context, state *volumeState
 		// Wait a short time before retrying
 		select {
 		case <-ctx.Done():
-			cleanup()
+			wrappedCleanup()
 			return "", nil, fmt.Errorf("context cancelled while waiting for NBD device")
 		case <-time.After(50 * time.Millisecond):
 			// Continue polling
@@ -1079,7 +1151,7 @@ func (c *lsvdClientImpl) attachNBDDevice(ctx context.Context, state *volumeState
 	}
 
 	// Timeout reached
-	cleanup()
+	wrappedCleanup()
 	return "", nil, fmt.Errorf("timeout waiting for NBD device %s to become ready", devicePath)
 }
 

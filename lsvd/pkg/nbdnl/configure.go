@@ -82,9 +82,10 @@ var defaultBlockSizes = BlockSizeConstraints{
 // blocks until ctx is cancelled or an error occurs (so it behaves like Serve).
 // When ctx is cancelled, the device will be disconnected, and any error
 // encountered while disconnecting will be returned by wait.
+// If preferredIdx is not IndexAny, it will attempt to use that specific device index.
 //
 // This is a Linux-only API.
-func Loopback(ctx context.Context, size uint64) (uint32, net.Conn, *os.File, func() error, error) {
+func Loopback(ctx context.Context, size uint64, preferredIdx uint32) (uint32, net.Conn, *os.File, func() error, error) {
 	exp := Export{
 		Size:       size,
 		BlockSizes: &defaultBlockSizes,
@@ -117,7 +118,11 @@ func Loopback(ctx context.Context, size uint64) (uint32, net.Conn, *os.File, fun
 		return 0, nil, nil, nil, err
 	}
 
-	idx, err := Configure(exp, client)
+	var opts []ConnectOption
+	if exp.BlockSizes != nil {
+		opts = append(opts, WithBlockSize(uint64(exp.BlockSizes.Preferred)))
+	}
+	idx, err := Connect(preferredIdx, []*os.File{client}, exp.Size, 0, ServerFlags(exp.Flags), opts...)
 	if err != nil {
 		client.Close()
 		return 0, nil, nil, nil, err
