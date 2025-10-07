@@ -145,9 +145,15 @@ func (d *DiskController) reconcileDisk(ctx context.Context, disk *storage_v1alph
 	return nil
 }
 
-// handleProvisioning provisions a new LSVD volume for the disk
+// handleProvisioning provisions a new LSVD volume or attaches to an existing one
 func (d *DiskController) handleProvisioning(ctx context.Context, disk *storage_v1alpha.Disk) error {
-	// Provision the volume in SegmentAccess only (no disk initialization or mounting)
+	// Check if user specified an existing volume ID to attach to
+	if disk.LsvdVolumeId != "" {
+		// Attach mode: verify the volume exists in SegmentAccess
+		return d.attachToExistingVolume(ctx, disk)
+	}
+
+	// Create mode: provision a new volume
 	volumeId, err := d.provisionVolume(ctx, disk)
 	if err != nil {
 		d.Log.Error("Failed to provision volume", "disk", disk.ID, "error", err)
@@ -161,6 +167,45 @@ func (d *DiskController) handleProvisioning(ctx context.Context, disk *storage_v
 	disk.LsvdVolumeId = volumeId
 
 	d.Log.Info("Disk provisioned successfully",
+		"disk", disk.ID,
+		"volume", volumeId)
+
+	return nil
+}
+
+// attachToExistingVolume attaches a disk entity to an existing LSVD volume
+func (d *DiskController) attachToExistingVolume(ctx context.Context, disk *storage_v1alpha.Disk) error {
+	volumeId := disk.LsvdVolumeId
+
+	d.Log.Info("Attaching disk to existing volume",
+		"disk", disk.ID,
+		"volume", volumeId)
+
+	// Get the appropriate client for this disk
+	client := d.getClientForDisk(disk)
+	if client == nil {
+		return fmt.Errorf("no LSVD client available for disk %s", disk.ID)
+	}
+
+	// Verify the volume exists in SegmentAccess
+	volumeInfo, err := client.GetVolumeInfo(ctx, volumeId)
+	if err != nil {
+		d.Log.Error("Failed to attach to volume - volume not found",
+			"disk", disk.ID,
+			"volume", volumeId,
+			"error", err)
+		return fmt.Errorf("volume %s does not exist in SegmentAccess: %w", volumeId, err)
+	}
+
+	d.Log.Info("Verified existing volume",
+		"disk", disk.ID,
+		"volume", volumeId,
+		"volume_size", volumeInfo.Size)
+
+	// Update status to PROVISIONED
+	disk.Status = storage_v1alpha.PROVISIONED
+
+	d.Log.Info("Disk attached to existing volume successfully",
 		"disk", disk.ID,
 		"volume", volumeId)
 

@@ -23,6 +23,7 @@ func DebugDiskCreate(ctx *Context, opts struct {
 	Filesystem string `short:"f" long:"filesystem" description:"Filesystem type (ext4, xfs, btrfs)" default:"ext4"`
 	CreatedBy  string `short:"c" long:"created-by" description:"Creator ID for the disk"`
 	RemoteOnly bool   `short:"r" long:"remote-only" description:"Store disk only in remote storage (no local replica)"`
+	VolumeID   string `short:"v" long:"volume-id" description:"Attach to existing LSVD volume instead of creating new one"`
 }) error {
 	// Use the context's RPC client
 	client, err := ctx.RPCClient("entities")
@@ -59,13 +60,22 @@ func DebugDiskCreate(ctx *Context, opts struct {
 		RemoteOnly: opts.RemoteOnly,
 	}
 
+	// Set volume ID if attaching to existing volume
+	if opts.VolumeID != "" {
+		disk.LsvdVolumeId = opts.VolumeID
+	}
+
 	// Set created by if provided
 	if opts.CreatedBy != "" {
 		disk.CreatedBy = entity.Id(opts.CreatedBy)
 	}
 
 	// Create the disk entity
-	ctx.Info("Creating disk entity...")
+	if opts.VolumeID != "" {
+		ctx.Info("Creating disk entity (attaching to existing volume)...")
+	} else {
+		ctx.Info("Creating disk entity (provisioning new volume)...")
+	}
 	result, err := ec.Create(ctx, diskId, disk)
 	if err != nil {
 		return fmt.Errorf("failed to create disk entity: %w", err)
@@ -77,6 +87,9 @@ func DebugDiskCreate(ctx *Context, opts struct {
 	ctx.Info("Size: %d GB", opts.Size)
 	ctx.Info("Filesystem: %s", opts.Filesystem)
 	ctx.Info("Remote Only: %v", opts.RemoteOnly)
+	if opts.VolumeID != "" {
+		ctx.Info("Volume ID (attach): %s", opts.VolumeID)
+	}
 	if opts.CreatedBy != "" {
 		ctx.Info("Created By: %s", opts.CreatedBy)
 	}
