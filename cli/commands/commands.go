@@ -258,6 +258,10 @@ func AllCommands() map[string]cli.CommandFactory {
 		"debug disk lease-status": func() (cli.Command, error) {
 			return Infer("debug disk lease-status", "Show detailed status of a disk lease", DebugDiskLeaseStatus), nil
 		},
+
+		"debug disk mounts": func() (cli.Command, error) {
+			return Infer("debug disk mounts", "List all mounted disks from /proc/mounts", DebugDiskMounts), nil
+		},
 	}
 
 	addCommands(base)

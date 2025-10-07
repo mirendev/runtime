@@ -1,9 +1,12 @@
 package commands
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"log/slog"
+	"os"
+	"strings"
 
 	"miren.dev/runtime/api/entityserver"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
@@ -225,6 +228,42 @@ func DebugDiskStatus(ctx *Context, opts struct {
 	// Check for mount path in attributes
 	// Note: Custom attributes like mount_path would need to be retrieved from the entity attributes
 	// This is left as a placeholder for future implementation
+
+	return nil
+}
+
+// DebugDiskMounts lists all mounted runtime-managed disks by reading /proc/mounts
+func DebugDiskMounts(ctx *Context, opts struct{}) error {
+	file, err := os.Open("/proc/mounts")
+	if err != nil {
+		return fmt.Errorf("failed to open /proc/mounts: %w", err)
+	}
+	defer file.Close()
+
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		line := scanner.Text()
+		fields := strings.Fields(line)
+
+		if len(fields) < 3 {
+			continue
+		}
+
+		device := fields[0]
+		mountPoint := fields[1]
+		fsType := fields[2]
+
+		// Only show LSVD volume devices (runtime-managed disks)
+		if !strings.Contains(device, "lsvd-vol") {
+			continue
+		}
+
+		ctx.Info("%s on %s type %s", device, mountPoint, fsType)
+	}
+
+	if err := scanner.Err(); err != nil {
+		return fmt.Errorf("error reading /proc/mounts: %w", err)
+	}
 
 	return nil
 }
