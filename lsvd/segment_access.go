@@ -168,17 +168,37 @@ func (t *teeVolume) Info(ctx context.Context) (*VolumeInfo, error) {
 	return wInfo, nil
 }
 
+// deduplicateSorted removes consecutive duplicate segment IDs from a sorted slice in-place
+func deduplicateSorted(segments []SegmentId) []SegmentId {
+	if len(segments) <= 1 {
+		return segments
+	}
+
+	writeIdx := 1
+	for readIdx := 1; readIdx < len(segments); readIdx++ {
+		if segments[readIdx] != segments[readIdx-1] {
+			segments[writeIdx] = segments[readIdx]
+			writeIdx++
+		}
+	}
+	return segments[:writeIdx]
+}
+
 // composeSegmentList merges two segment lists (primary and replica) intelligently:
 // - If one is a tail subset of the other, returns the longer list
 // - If they have overlapping segments, merges them
-// - Otherwise returns the list with the newer last segment
+// - Otherwise merges both lists, sorts by ULID timestamp, and deduplicates
+// - Always ensures no duplicate segment IDs in the result
 func composeSegmentList(primary, replica []SegmentId) ([]SegmentId, error) {
 	// Handle empty lists
 	if len(primary) == 0 {
-		return replica, nil
+		if len(replica) == 0 {
+			return nil, nil
+		}
+		return sortAndDeduplicate(replica), nil
 	}
 	if len(replica) == 0 {
-		return primary, nil
+		return sortAndDeduplicate(primary), nil
 	}
 
 	// Check if one list is a tail subset of the other - use the longer one
@@ -186,13 +206,13 @@ func composeSegmentList(primary, replica []SegmentId) ([]SegmentId, error) {
 		replicaTail := replica[len(replica)-len(primary):]
 		if slices.Equal(primary, replicaTail) {
 			// Primary only has tail segments, use replica's complete list
-			return replica, nil
+			return sortAndDeduplicate(replica), nil
 		}
 	} else if len(replica) < len(primary) {
 		primaryTail := primary[len(primary)-len(replica):]
 		if slices.Equal(replica, primaryTail) {
 			// Replica only has tail, use primary's complete list
-			return primary, nil
+			return sortAndDeduplicate(primary), nil
 		}
 	}
 
@@ -213,27 +233,22 @@ func composeSegmentList(primary, replica []SegmentId) ([]SegmentId, error) {
 		}
 	}
 
-	// No overlap found - merge and deduplicate to avoid losing segments
-	// Create a map to deduplicate
-	seen := make(map[SegmentId]bool)
+	// No overlap found - merge both lists
 	merged := make([]SegmentId, 0, len(primary)+len(replica))
+	merged = append(merged, replica...)
+	merged = append(merged, primary...)
 
-	for _, seg := range replica {
-		if !seen[seg] {
-			seen[seg] = true
-			merged = append(merged, seg)
-		}
-	}
+	return sortAndDeduplicate(merged), nil
+}
 
-	for _, seg := range primary {
-		if !seen[seg] {
-			seen[seg] = true
-			merged = append(merged, seg)
-		}
+// sortAndDeduplicate sorts segments by ULID timestamp and removes duplicates
+func sortAndDeduplicate(segments []SegmentId) []SegmentId {
+	if len(segments) <= 1 {
+		return segments
 	}
 
 	// Sort by ULID timestamp
-	slices.SortFunc(merged, func(a, b SegmentId) int {
+	slices.SortFunc(segments, func(a, b SegmentId) int {
 		aTime := ulid.ULID(a).Time()
 		bTime := ulid.ULID(b).Time()
 		if aTime < bTime {
@@ -244,7 +259,8 @@ func composeSegmentList(primary, replica []SegmentId) ([]SegmentId, error) {
 		return 0
 	})
 
-	return merged, nil
+	// Deduplicate in-place after sorting
+	return deduplicateSorted(segments)
 }
 
 func (t *teeVolume) ListSegments(ctx context.Context) ([]SegmentId, error) {

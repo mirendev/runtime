@@ -242,7 +242,7 @@ func (c *Controller) closeSegment(ctx *Context, ev Event) error {
 
 	mapStart := time.Now()
 
-	d.s.Create(segId, stats)
+	d.s.CreateWithExtents(segId, stats, len(entries))
 
 	err = d.lba2pba.UpdateBatch(c.log, entries, segId, d.s)
 	if err != nil {
@@ -266,6 +266,11 @@ func (c *Controller) closeSegment(ctx *Context, ev Event) error {
 	finDur := time.Since(start)
 
 	c.log.Info("uploaded new segment", "segment", segId, "flush-dur", flushDur, "map-dur", mapDur, "dur", finDur)
+
+	// Write segment usage information to cache directory
+	if err := d.writeSegmentUsage(segId); err != nil {
+		c.log.Error("error writing segment usage", "segment", segId, "error", err)
+	}
 
 	c.queueInternal(Event{
 		Kind: CleanupSegments,
@@ -421,6 +426,12 @@ func (c *Controller) packSegments(ctx *Context, ev Event, segments []SegmentId) 
 		err := ci.Reset(ctx, toGC)
 		if err != nil {
 			return c.returnError(ev, errors.Wrapf(err, "reseting copy iterator"))
+		}
+
+		// Skip processing if segment was completely dead (Reset detected and marked it deleted)
+		if ci.expectedBlocks == 0 {
+			d.log.Info("skipping GC of dead segment (no live blocks)", "segment", toGC)
+			continue
 		}
 
 		d.log.Info("beginning GC of segment", "segment", toGC)

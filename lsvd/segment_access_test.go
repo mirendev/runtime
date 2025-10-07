@@ -123,4 +123,48 @@ func TestComposeSegmentList(t *testing.T) {
 		r.NoError(err)
 		r.Equal(primary, result, "should return either list when identical")
 	})
+
+	t.Run("no duplicate segment IDs in result", func(t *testing.T) {
+		// Test various scenarios to ensure no duplicates are ever returned
+		testCases := []struct {
+			name    string
+			primary []SegmentId
+			replica []SegmentId
+		}{
+			{
+				name:    "identical lists",
+				primary: allSegs[0:3],
+				replica: allSegs[0:3],
+			},
+			{
+				name:    "overlapping segments",
+				primary: allSegs[2:5],
+				replica: allSegs[0:3],
+			},
+			{
+				name:    "mixed duplicates",
+				primary: []SegmentId{allSegs[0], allSegs[2], allSegs[4]},
+				replica: []SegmentId{allSegs[0], allSegs[2], allSegs[5]},
+			},
+			{
+				name:    "all same segment",
+				primary: []SegmentId{allSegs[0], allSegs[0], allSegs[0]},
+				replica: []SegmentId{allSegs[0], allSegs[0]},
+			},
+		}
+
+		for _, tc := range testCases {
+			t.Run(tc.name, func(t *testing.T) {
+				result, err := composeSegmentList(tc.primary, tc.replica)
+				r.NoError(err)
+
+				// Check for duplicates using a map
+				seen := make(map[SegmentId]bool)
+				for _, seg := range result {
+					r.False(seen[seg], "duplicate segment ID found: %s", seg.String())
+					seen[seg] = true
+				}
+			})
+		}
+	})
 }

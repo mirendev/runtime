@@ -129,15 +129,56 @@ func Loopback(ctx context.Context, size uint64) (uint32, net.Conn, *os.File, fun
 		if e := Disconnect(idx); e != nil {
 			err = fmt.Errorf("failed to disconnect device: %w", e)
 		}
-		if e := client.Close(); e != nil && err == nil {
-			err = fmt.Errorf("failed to close client socket: %w", e)
-		}
-		if e := serverc.Close(); e != nil && err == nil {
-			err = fmt.Errorf("failed to close server connection: %w", e)
-		}
+
+		// these might already be closed, so ignore errors
+		client.Close()
+		serverc.Close()
 
 		return err
 	}
 
 	return idx, serverc, server, cleanup, nil
+}
+
+// Reconnect creates a new socketpair and reconfigures an existing NBD device
+// Returns the server connection and client file for the NBD handler
+func Reconnect(ctx context.Context, idx uint32) (net.Conn, *os.File, error) {
+	sp, err := unix.Socketpair(unix.AF_UNIX, unix.SOCK_STREAM, 0)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to create socketpair: %w", err)
+	}
+
+	err = unix.SetNonblock(sp[0], true)
+	if err != nil {
+		unix.Close(sp[0])
+		unix.Close(sp[1])
+		return nil, nil, fmt.Errorf("failed to set client nonblocking: %w", err)
+	}
+
+	err = unix.SetNonblock(sp[1], true)
+	if err != nil {
+		unix.Close(sp[0])
+		unix.Close(sp[1])
+		return nil, nil, fmt.Errorf("failed to set server nonblocking: %w", err)
+	}
+
+	client := os.NewFile(uintptr(sp[0]), "client")
+	server := os.NewFile(uintptr(sp[1]), "server")
+
+	serverConn, err := net.FileConn(server)
+	if err != nil {
+		client.Close()
+		server.Close()
+		return nil, nil, fmt.Errorf("failed to create server connection: %w", err)
+	}
+
+	// Reconfigure the existing NBD device with new socket
+	err = Reconfigure(idx, []*os.File{client}, 0, 0)
+	if err != nil {
+		client.Close()
+		serverConn.Close()
+		return nil, nil, fmt.Errorf("failed to reconfigure NBD device: %w", err)
+	}
+
+	return serverConn, server, nil
 }

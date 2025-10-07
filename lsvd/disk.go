@@ -132,7 +132,7 @@ func NewDisk(ctx context.Context, log *slog.Logger, path string, options ...Opti
 		path:           path,
 		size:           sz,
 		volume:         vo,
-		lba2pba:        NewExtentMap(),
+		lba2pba:        nil, // Will be set by loadLBAMap or rebuildFromSegments
 		sa:             o.sa,
 		volName:        o.volName,
 		SeqGen:         o.seqGen,
@@ -183,7 +183,8 @@ func NewDisk(ctx context.Context, log *slog.Logger, path string, options ...Opti
 
 	goodMap, err := d.loadLBAMap(ctx)
 	if err != nil {
-		return nil, err
+		log.Error("error loading LBA map", "error", err)
+		goodMap = false
 	}
 
 	if goodMap {
