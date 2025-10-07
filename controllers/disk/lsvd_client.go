@@ -768,10 +768,148 @@ func (c *lsvdClientImpl) getDevicePath(id string) string {
 	return filepath.Join(c.dataPath, "devices", id)
 }
 
+// runNBDHandlerWithReconnect runs the NBD handler and automatically reconnects on disconnection
+func (c *lsvdClientImpl) runNBDHandlerWithReconnect(
+	ctx context.Context,
+	state *volumeState,
+	idx uint32,
+	devicePath string,
+	initialConn net.Conn,
+	initialClient *os.File,
+) {
+	defer c.log.Warn("NBD handler exited",
+		"device", devicePath,
+		"index", idx)
+	defer func() {
+		if state.nbdCancel != nil {
+			state.nbdCancel()
+		}
+	}()
+
+	reconnectDelay := 10 * time.Millisecond
+	maxReconnectDelay := 30 * time.Second
+	attemptNum := 0
+
+	// Use the initial connection from Loopback for the first iteration
+	serverConn := initialConn
+	client := initialClient
+
+	for {
+		attemptNum++
+
+		// Check if context is cancelled
+		select {
+		case <-ctx.Done():
+			c.log.Info("NBD handler stopping due to context cancellation", "device", devicePath, "index", idx)
+			if client != nil {
+				client.Close()
+			}
+			if serverConn != nil {
+				serverConn.Close()
+			}
+			return
+		default:
+		}
+
+		// Only reconnect if this is not the first iteration
+		if serverConn == nil || client == nil {
+			// Reconnect to NBD device with new socketpair
+			var err error
+			serverConn, client, err = nbdnl.Reconnect(ctx, idx)
+			if err != nil {
+				c.log.Error("Failed to reconnect to NBD device, will retry",
+					"device", devicePath,
+					"index", idx,
+					"attempt", attemptNum,
+					"error", err,
+					"retry_in", reconnectDelay)
+
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(reconnectDelay):
+					// Exponential backoff
+					reconnectDelay *= 2
+					if reconnectDelay > maxReconnectDelay {
+						reconnectDelay = maxReconnectDelay
+					}
+					continue
+				}
+			}
+
+			// Reset reconnect delay on successful connection
+			reconnectDelay = 1 * time.Second
+
+			c.log.Info("NBD handler reconnected successfully",
+				"device", devicePath,
+				"index", idx,
+				"attempt", attemptNum)
+		}
+
+		// Update state with new connection
+		// (no lock needed - state is only accessed during mount/unmount which hold the lock)
+		state.nbdConn = serverConn
+
+		if attemptNum == 1 {
+			c.log.Info("NBD handler starting with initial connection",
+				"device", devicePath,
+				"index", idx)
+		}
+
+		// Run NBD handler
+		nbdOpts := &nbd.Options{
+			MinimumBlockSize:   4096,
+			PreferredBlockSize: 4096,
+			MaximumBlockSize:   4096,
+			RawFile:            client,
+		}
+
+		err := nbd.HandleTransport(c.log, serverConn, lsvd.NBDWrapper(ctx, c.log, state.disk), nbdOpts)
+
+		// Clean up this iteration's resources
+		client.Close()
+		serverConn.Close()
+
+		// Mark as nil so we reconnect on next iteration
+		client = nil
+		serverConn = nil
+
+		// Check why we exited
+		if ctx.Err() != nil {
+			c.log.Info("NBD handler stopping due to context cancellation", "device", devicePath, "index", idx)
+			return
+		}
+
+		if err != nil {
+			c.log.Warn("NBD transport error, reconnecting",
+				"device", devicePath,
+				"index", idx,
+				"error", err,
+				"retry_in", reconnectDelay)
+		} else {
+			c.log.Warn("NBD transport ended normally, reconnecting",
+				"device", devicePath,
+				"index", idx,
+				"retry_in", reconnectDelay)
+		}
+
+		// Wait before reconnecting
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(reconnectDelay):
+			c.log.Warn("NBD handler reconnecting now",
+				"device", devicePath,
+				"index", idx)
+			// Continue to next iteration
+		}
+	}
+}
+
 // attachNBDDevice attaches an LSVD disk to an NBD device
 func (c *lsvdClientImpl) attachNBDDevice(ctx context.Context, state *volumeState) (string, func() error, error) {
 	// Setup NBD loopback
-	idx, conn, cf, cleanup, err := nbdnl.Loopback(ctx, uint64(state.info.SizeBytes))
+	idx, conn, client, cleanup, err := nbdnl.Loopback(ctx, uint64(state.info.SizeBytes))
 	if err != nil {
 		return "", nil, fmt.Errorf("failed to setup NBD loopback: %w", err)
 	}
@@ -814,35 +952,25 @@ func (c *lsvdClientImpl) attachNBDDevice(ctx context.Context, state *volumeState
 	state.nbdConn = conn
 	state.nbdIndex = idx
 
-	// Start NBD handler in background
-	go func() {
-		defer cancel()
+	c.log.Info("Starting NBD handler with auto-reconnect",
+		"device", devicePath,
+		"index", idx)
 
-		nbdOpts := &nbd.Options{
-			MinimumBlockSize:   4096,
-			PreferredBlockSize: 4096,
-			MaximumBlockSize:   4096,
-			RawFile:            cf,
-		}
-
-		c.log.Info("Starting NBD handler", "device", devicePath)
-
-		err := nbd.HandleTransport(c.log, conn, lsvd.NBDWrapper(nbdCtx, c.log, state.disk), nbdOpts)
-		if err != nil && err != context.Canceled {
-			c.log.Error("Error handling NBD transport", "error", err)
-		}
-	}()
+	// Start NBD handler with auto-reconnect in background, using initial connection from Loopback
+	go c.runNBDHandlerWithReconnect(nbdCtx, state, idx, devicePath, conn, client)
 
 	// Wait for NBD device to be ready (timeout after 10 seconds)
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
 		// Check if the device is ready using nbdnl.Status
-		_, err := nbdnl.Status(idx)
+		status, err := nbdnl.Status(idx)
 		if err == nil {
 			// Device is ready
-			c.log.Debug("NBD device is ready", "device", devicePath, "index", idx)
+			c.log.Debug("NBD device is ready", "device", devicePath, "index", idx, "status", status)
 			return devicePath, cleanup, nil
 		}
+
+		c.log.Warn("Waiting for NBD device to become ready", "device", devicePath, "index", idx, "error", err)
 
 		// Wait a short time before retrying
 		select {
