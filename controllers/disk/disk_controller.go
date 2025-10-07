@@ -18,8 +18,12 @@ type DiskController struct {
 	Log *slog.Logger
 	EAC *entityserver_v1alpha.EntityAccessClient
 
-	// LSVD client for volume operations
+	// LSVD client for volume operations (default client)
 	lsvdClient LsvdClient
+
+	// Separate clients for local+replica vs remote-only modes
+	localReplicaClient LsvdClient
+	remoteOnlyClient   LsvdClient
 
 	// Base path for disk mounts (e.g., /var/lib/miren/disks)
 	mountBasePath string
@@ -32,6 +36,18 @@ func NewDiskController(log *slog.Logger, eac *entityserver_v1alpha.EntityAccessC
 		EAC:           eac,
 		lsvdClient:    lsvdClient,
 		mountBasePath: "/var/lib/miren/disks", // Default mount base path
+	}
+}
+
+// NewDiskControllerWithClients creates a new disk controller with separate clients for local and remote-only modes
+func NewDiskControllerWithClients(log *slog.Logger, eac *entityserver_v1alpha.EntityAccessClient, defaultClient, localReplicaClient, remoteOnlyClient LsvdClient) *DiskController {
+	return &DiskController{
+		Log:                log.With("controller", "disk"),
+		EAC:                eac,
+		lsvdClient:         defaultClient,
+		localReplicaClient: localReplicaClient,
+		remoteOnlyClient:   remoteOnlyClient,
+		mountBasePath:      "/var/lib/miren/disks", // Default mount base path
 	}
 }
 
@@ -49,6 +65,17 @@ func NewDiskControllerWithMountPath(log *slog.Logger, eac *entityserver_v1alpha.
 func (d *DiskController) Init(ctx context.Context) error {
 	// No special initialization needed
 	return nil
+}
+
+// getClientForDisk returns the appropriate LSVD client based on disk's remote_only flag
+func (d *DiskController) getClientForDisk(disk *storage_v1alpha.Disk) LsvdClient {
+	if disk.RemoteOnly && d.remoteOnlyClient != nil {
+		return d.remoteOnlyClient
+	}
+	if !disk.RemoteOnly && d.localReplicaClient != nil {
+		return d.localReplicaClient
+	}
+	return d.lsvdClient
 }
 
 // Create handles creation of a new disk entity
@@ -149,12 +176,14 @@ func (d *DiskController) handleProvisioned(ctx context.Context, disk *storage_v1
 		return d.handleProvisioning(ctx, disk)
 	}
 
-	if d.lsvdClient == nil {
+	// Get the appropriate client for this disk
+	client := d.getClientForDisk(disk)
+	if client == nil {
 		return nil
 	}
 
 	// Verify the volume exists in SegmentAccess (not checking mount status)
-	volumeInfo, err := d.lsvdClient.GetVolumeInfo(ctx, disk.LsvdVolumeId)
+	volumeInfo, err := client.GetVolumeInfo(ctx, disk.LsvdVolumeId)
 	if err != nil {
 		d.Log.Warn("Volume not found for provisioned disk, re-provisioning",
 			"disk", disk.ID,
@@ -208,14 +237,18 @@ func (d *DiskController) provisionVolume(ctx context.Context, disk *storage_v1al
 	// Generate volume ID
 	volumeId := idgen.Gen("lsvd-vol-")
 
+	// Get the appropriate client for this disk
+	client := d.getClientForDisk(disk)
+
 	// Create volume in SegmentAccess only (no disk initialization)
-	if d.lsvdClient != nil {
+	if client != nil {
 		d.Log.Info("Creating LSVD volume in SegmentAccess",
 			"volume", volumeId,
 			"size_gb", disk.SizeGb,
-			"filesystem", disk.Filesystem)
+			"filesystem", disk.Filesystem,
+			"remote_only", disk.RemoteOnly)
 
-		err := d.lsvdClient.CreateVolumeInSegmentAccess(ctx, volumeId, disk.SizeGb, strings.TrimPrefix(string(disk.Filesystem), "filesystem."))
+		err := client.CreateVolumeInSegmentAccess(ctx, volumeId, disk.SizeGb, strings.TrimPrefix(string(disk.Filesystem), "filesystem."))
 		if err != nil {
 			return "", fmt.Errorf("failed to create LSVD volume in SegmentAccess: %w", err)
 		}
@@ -240,12 +273,39 @@ func (d *DiskController) deleteVolumeData(ctx context.Context, volumeId string) 
 func (d *DiskController) Close() error {
 	d.Log.Info("Shutting down disk controller")
 
-	// If we have an LSVD client that implements Close, call it
+	// Close all LSVD clients
+	var errs []error
+
+	// Close default client
 	if closer, ok := d.lsvdClient.(interface{ Close() error }); ok {
 		if err := closer.Close(); err != nil {
-			d.Log.Error("Failed to close LSVD client", "error", err)
-			return err
+			d.Log.Error("Failed to close default LSVD client", "error", err)
+			errs = append(errs, err)
 		}
+	}
+
+	// Close local+replica client if different from default
+	if d.localReplicaClient != nil && d.localReplicaClient != d.lsvdClient {
+		if closer, ok := d.localReplicaClient.(interface{ Close() error }); ok {
+			if err := closer.Close(); err != nil {
+				d.Log.Error("Failed to close local+replica LSVD client", "error", err)
+				errs = append(errs, err)
+			}
+		}
+	}
+
+	// Close remote-only client
+	if d.remoteOnlyClient != nil {
+		if closer, ok := d.remoteOnlyClient.(interface{ Close() error }); ok {
+			if err := closer.Close(); err != nil {
+				d.Log.Error("Failed to close remote-only LSVD client", "error", err)
+				errs = append(errs, err)
+			}
+		}
+	}
+
+	if len(errs) > 0 {
+		return errs[0]
 	}
 
 	return nil

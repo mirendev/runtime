@@ -91,6 +91,28 @@ type lsvdClientImpl struct {
 	authClient    *cloudauth.AuthClient
 	cloudURL      string
 	enableReplica bool
+	remoteOnly    bool // Use only remote storage, no local replica
+}
+
+// LsvdClientOption is a functional option for configuring LsvdClient
+type LsvdClientOption func(*lsvdClientImpl)
+
+// WithReplica enables replication to a remote DiskAPI endpoint
+func WithReplica(authClient *cloudauth.AuthClient, cloudURL string) LsvdClientOption {
+	return func(c *lsvdClientImpl) {
+		c.authClient = authClient
+		c.cloudURL = cloudURL
+		c.enableReplica = authClient != nil
+	}
+}
+
+// WithRemoteOnly configures the client to use only remote storage (no local replica)
+func WithRemoteOnly(authClient *cloudauth.AuthClient, cloudURL string) LsvdClientOption {
+	return func(c *lsvdClientImpl) {
+		c.authClient = authClient
+		c.cloudURL = cloudURL
+		c.remoteOnly = true
+	}
 }
 
 // volumeState tracks the state of a volume
@@ -107,7 +129,7 @@ type volumeState struct {
 }
 
 // NewLsvdClient creates a new LSVD client
-func NewLsvdClient(log *slog.Logger, dataPath string) LsvdClient {
+func NewLsvdClient(log *slog.Logger, dataPath string, opts ...LsvdClientOption) LsvdClient {
 	client := &lsvdClientImpl{
 		log:      log.With("module", "lsvd"),
 		dataPath: dataPath,
@@ -115,22 +137,18 @@ func NewLsvdClient(log *slog.Logger, dataPath string) LsvdClient {
 		disks:    make(map[string]*lsvd.Disk),
 	}
 
+	// Apply options
+	for _, opt := range opts {
+		opt(client)
+	}
+
 	return client
 }
 
 // NewLsvdClientWithReplica creates a new LSVD client with DiskAPI replication
+// Deprecated: Use NewLsvdClient with WithReplica option instead
 func NewLsvdClientWithReplica(log *slog.Logger, dataPath string, authClient *cloudauth.AuthClient, cloudURL string) LsvdClient {
-	client := &lsvdClientImpl{
-		log:           log.With("module", "lsvd"),
-		dataPath:      dataPath,
-		volumes:       make(map[string]*volumeState),
-		disks:         make(map[string]*lsvd.Disk),
-		authClient:    authClient,
-		cloudURL:      cloudURL,
-		enableReplica: authClient != nil,
-	}
-
-	return client
+	return NewLsvdClient(log, dataPath, WithReplica(authClient, cloudURL))
 }
 
 // CreateVolume creates a new LSVD volume (backwards compatibility)
@@ -154,32 +172,46 @@ func (c *lsvdClientImpl) CreateVolumeInSegmentAccess(ctx context.Context, volume
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	// Create volume directory
-	volumePath := c.getVolumePath(volumeId)
-	if err := os.MkdirAll(volumePath, 0755); err != nil {
-		return fmt.Errorf("failed to create volume directory: %w", err)
-	}
+	var sa lsvd.SegmentAccess
 
-	// Create primary local segment access
-	localSA := &lsvd.LocalFileAccess{
-		Dir: volumePath,
-		Log: c.log,
-	}
+	// If remoteOnly mode, use only DiskAPI without local storage
+	if c.remoteOnly {
+		if c.authClient == nil {
+			return fmt.Errorf("remoteOnly mode requires auth client")
+		}
 
-	var sa lsvd.SegmentAccess = localSA
-
-	// If replication is enabled, wrap with ReplicaWriter
-	if c.enableReplica && c.authClient != nil {
-		c.log.Info("Creating volume with DiskAPI replication",
+		c.log.Info("Creating volume in remote-only mode",
 			"volume", volumeId,
 			"cloud_url", c.cloudURL)
 
-		// Create replica using DiskAPI with auth client
-		diskAPIURL := c.cloudURL
-		replicaSA := lsvd.NewDiskAPISegmentAccess(c.log, diskAPIURL, c.authClient)
+		sa = lsvd.NewDiskAPISegmentAccess(c.log, c.cloudURL, c.authClient)
+	} else {
+		// Create volume directory
+		volumePath := c.getVolumePath(volumeId)
+		if err := os.MkdirAll(volumePath, 0755); err != nil {
+			return fmt.Errorf("failed to create volume directory: %w", err)
+		}
 
-		// Wrap with ReplicaWriter
-		sa = lsvd.ReplicaWriter(c.log, localSA, replicaSA)
+		// Create primary local segment access
+		localSA := &lsvd.LocalFileAccess{
+			Dir: volumePath,
+			Log: c.log,
+		}
+
+		sa = localSA
+
+		// If replication is enabled, wrap with ReplicaWriter
+		if c.enableReplica && c.authClient != nil {
+			c.log.Info("Creating volume with DiskAPI replication",
+				"volume", volumeId,
+				"cloud_url", c.cloudURL)
+
+			// Create replica using DiskAPI with auth client
+			replicaSA := lsvd.NewDiskAPISegmentAccess(c.log, c.cloudURL, c.authClient)
+
+			// Wrap with ReplicaWriter
+			sa = lsvd.ReplicaWriter(c.log, localSA, replicaSA)
+		}
 	}
 
 	// Initialize container
@@ -223,11 +255,19 @@ func (c *lsvdClientImpl) CreateVolumeInSegmentAccess(ctx context.Context, volume
 		return fmt.Errorf("failed to init volume: %w", err)
 	}
 
-	c.log.Info("Created LSVD volume in SegmentAccess",
-		"volume", volumeId,
-		"uuid", u.String(),
-		"size", volumeInfo.Size,
-		"path", volumePath)
+	if c.remoteOnly {
+		c.log.Info("Created LSVD volume in SegmentAccess (remote-only)",
+			"volume", volumeId,
+			"uuid", u.String(),
+			"size", volumeInfo.Size)
+	} else {
+		volumePath := c.getVolumePath(volumeId)
+		c.log.Info("Created LSVD volume in SegmentAccess",
+			"volume", volumeId,
+			"uuid", u.String(),
+			"size", volumeInfo.Size,
+			"path", volumePath)
+	}
 
 	return nil
 }
@@ -246,24 +286,44 @@ func (c *lsvdClientImpl) InitializeDisk(ctx context.Context, volumeId string, fi
 		// State exists but disk is not initialized, continue to initialize
 	}
 
-	// Get volume path
-	volumePath := c.getVolumePath(volumeId)
-
-	// Create segment access to check if volume exists
-	localSA := &lsvd.LocalFileAccess{
-		Dir: volumePath,
-		Log: c.log,
-	}
-
-	var sa lsvd.SegmentAccess = localSA
+	var sa lsvd.SegmentAccess
 	var replicaSA lsvd.SegmentAccess
+	var volumePath string
 
-	// If replication is enabled, wrap with ReplicaWriter
-	if c.enableReplica && c.authClient != nil {
-		// Create replica using DiskAPI with auth client
-		diskAPIURL := c.cloudURL
-		replicaSA = lsvd.NewDiskAPISegmentAccess(c.log, diskAPIURL, c.authClient)
-		sa = lsvd.ReplicaWriter(c.log, localSA, replicaSA)
+	// If remoteOnly mode, use only DiskAPI without local storage
+	if c.remoteOnly {
+		if c.authClient == nil {
+			return fmt.Errorf("remoteOnly mode requires auth client")
+		}
+
+		c.log.Info("Initializing disk in remote-only mode",
+			"volume", volumeId,
+			"cloud_url", c.cloudURL)
+
+		sa = lsvd.NewDiskAPISegmentAccess(c.log, c.cloudURL, c.authClient)
+		// Use a temporary path for remote-only volumes (no actual local storage)
+		volumePath = filepath.Join(c.dataPath, "lsvd-cache", volumeId)
+		if err := os.MkdirAll(volumePath, 0755); err != nil {
+			return fmt.Errorf("failed to create cache directory: %w", err)
+		}
+	} else {
+		// Get volume path
+		volumePath = c.getVolumePath(volumeId)
+
+		// Create segment access to check if volume exists
+		localSA := &lsvd.LocalFileAccess{
+			Dir: volumePath,
+			Log: c.log,
+		}
+
+		sa = localSA
+
+		// If replication is enabled, wrap with ReplicaWriter
+		if c.enableReplica && c.authClient != nil {
+			// Create replica using DiskAPI with auth client
+			replicaSA = lsvd.NewDiskAPISegmentAccess(c.log, c.cloudURL, c.authClient)
+			sa = lsvd.ReplicaWriter(c.log, localSA, replicaSA)
+		}
 	}
 
 	// Get volume info from segment access
@@ -322,11 +382,15 @@ func (c *lsvdClientImpl) InitializeDisk(ctx context.Context, volumeId string, fi
 		"volume_id", volumeId,
 		"uuid", volumeInfo.UUID,
 		"size_bytes", sizeBytes,
-		"filesystem", filesystem)
+		"filesystem", filesystem,
+		"remote_only", c.remoteOnly)
 
-	// Start background reconciliation if using replica
-	if c.enableReplica && replicaSA != nil {
-		go c.reconcileVolume(context.Background(), volumeId, localSA, replicaSA)
+	// Start background reconciliation if using replica (not for remoteOnly mode)
+	if !c.remoteOnly && c.enableReplica && replicaSA != nil {
+		// Extract localSA from the ReplicaWriter wrapper
+		// Since we created localSA earlier, we need to pass it to reconciliation
+		// However, in remoteOnly mode, there's no localSA to reconcile
+		go c.reconcileVolume(context.Background(), volumeId, sa, replicaSA)
 	}
 
 	return nil
@@ -520,7 +584,14 @@ func (c *lsvdClientImpl) MountVolume(ctx context.Context, volumeId string, mount
 		fsType = "ext4"
 	}
 
+	c.log.Info("Mounting filesystem",
+		"volume_id", volumeId,
+		"device", devicePath,
+		"mount_path", mountPath,
+		"filesystem", fsType,
+	)
 	if err := unix.Mount(devicePath, mountPath, fsType, 0, mountOpts); err != nil {
+		c.log.Error("Failed to mount filesystem", "error", err, "device", devicePath, "path", mountPath)
 		if state.nbdCleanup != nil {
 			state.nbdCleanup()
 		}
@@ -641,11 +712,22 @@ func (c *lsvdClientImpl) GetVolumeInfo(ctx context.Context, volumeId string) (*V
 
 	state, exists := c.volumes[volumeId]
 	if !exists {
-		// Try to load from disk
-		volumePath := c.getVolumePath(volumeId)
-		sa := &lsvd.LocalFileAccess{
-			Dir: volumePath,
-			Log: c.log,
+		// Try to load from storage
+		var sa lsvd.SegmentAccess
+
+		if c.remoteOnly {
+			// For remote-only mode, check remote storage
+			if c.authClient == nil {
+				return nil, fmt.Errorf("remote-only mode requires auth client")
+			}
+			sa = lsvd.NewDiskAPISegmentAccess(c.log, c.cloudURL, c.authClient)
+		} else {
+			// For local/replica mode, check local storage
+			volumePath := c.getVolumePath(volumeId)
+			sa = &lsvd.LocalFileAccess{
+				Dir: volumePath,
+				Log: c.log,
+			}
 		}
 
 		vi, err := sa.GetVolumeInfo(ctx, volumeId)
@@ -712,7 +794,21 @@ func (c *lsvdClientImpl) ListVolumes(ctx context.Context) ([]string, error) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
-	// List volumes from disk
+	if c.remoteOnly {
+		// For remote-only mode, list from remote storage
+		if c.authClient == nil {
+			return nil, fmt.Errorf("remote-only mode requires auth client")
+		}
+
+		sa := lsvd.NewDiskAPISegmentAccess(c.log, c.cloudURL, c.authClient)
+		volumes, err := sa.ListVolumes(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("failed to list remote volumes: %w", err)
+		}
+		return volumes, nil
+	}
+
+	// List volumes from local disk
 	volumesPath := c.getVolumesBasePath()
 	entries, err := os.ReadDir(volumesPath)
 	if err != nil {

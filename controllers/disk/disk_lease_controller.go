@@ -35,8 +35,12 @@ type DiskLeaseController struct {
 	Log *slog.Logger
 	EAC *entityserver_v1alpha.EntityAccessClient
 
-	// LSVD client for volume operations
+	// LSVD client for volume operations (default client)
 	lsvdClient LsvdClient
+
+	// Separate clients for local+replica vs remote-only modes
+	localReplicaClient LsvdClient
+	remoteOnlyClient   LsvdClient
 
 	// Base path for disk mounts (e.g., /var/lib/miren/disks)
 	mountBasePath string
@@ -59,6 +63,20 @@ func NewDiskLeaseController(log *slog.Logger, eac *entityserver_v1alpha.EntityAc
 		mountBasePath: "/var/lib/miren/disks", // Default mount base path
 		activeLeases:  make(map[string]string),
 		leaseDetails:  make(map[string]*leaseInfo),
+	}
+}
+
+// NewDiskLeaseControllerWithClients creates a new disk lease controller with separate clients for local and remote-only modes
+func NewDiskLeaseControllerWithClients(log *slog.Logger, eac *entityserver_v1alpha.EntityAccessClient, defaultClient, localReplicaClient, remoteOnlyClient LsvdClient) *DiskLeaseController {
+	return &DiskLeaseController{
+		Log:                log.With("module", "disk-lease"),
+		EAC:                eac,
+		lsvdClient:         defaultClient,
+		localReplicaClient: localReplicaClient,
+		remoteOnlyClient:   remoteOnlyClient,
+		mountBasePath:      "/var/lib/miren/disks", // Default mount base path
+		activeLeases:       make(map[string]string),
+		leaseDetails:       make(map[string]*leaseInfo),
 	}
 }
 
@@ -94,6 +112,17 @@ func (d *DiskLeaseController) GetTestDisk(diskId entity.Id) *storage_v1alpha.Dis
 func (d *DiskLeaseController) Init(ctx context.Context) error {
 	// No special initialization needed
 	return nil
+}
+
+// getClientForDisk returns the appropriate LSVD client based on disk's remote_only flag
+func (d *DiskLeaseController) getClientForDisk(disk *storage_v1alpha.Disk) LsvdClient {
+	if disk.RemoteOnly && d.remoteOnlyClient != nil {
+		return d.remoteOnlyClient
+	}
+	if !disk.RemoteOnly && d.localReplicaClient != nil {
+		return d.localReplicaClient
+	}
+	return d.lsvdClient
 }
 
 // Create handles creation of a new disk lease entity
@@ -332,11 +361,14 @@ func (d *DiskLeaseController) handlePendingLease(ctx context.Context, lease *sto
 		return nil
 	}
 
+	// Get the appropriate client for this disk
+	client := d.getClientForDisk(disk)
+
 	// Initialize disk and mount if we have an LSVD client
-	if d.lsvdClient != nil {
+	if client != nil {
 		// Initialize disk (calls lsvd.NewDisk)
 		filesystem := strings.TrimPrefix(string(disk.Filesystem), "filesystem.")
-		if err := d.lsvdClient.InitializeDisk(ctx, volumeId, filesystem); err != nil {
+		if err := client.InitializeDisk(ctx, volumeId, filesystem); err != nil {
 			d.Log.Error("Failed to initialize disk", "volume", volumeId, "error", err)
 			d.cleanupLeaseReservation(diskId)
 
@@ -349,7 +381,7 @@ func (d *DiskLeaseController) handlePendingLease(ctx context.Context, lease *sto
 		// Mount the volume
 		mountPath := d.getDiskMountPath(volumeId)
 		readOnly := lease.Mount.ReadOnly
-		if err := d.lsvdClient.MountVolume(ctx, volumeId, mountPath, readOnly); err != nil {
+		if err := client.MountVolume(ctx, volumeId, mountPath, readOnly); err != nil {
 			d.Log.Error("Failed to mount volume", "volume", volumeId, "error", err)
 			d.cleanupLeaseReservation(diskId)
 			lease.Status = storage_v1alpha.FAILED
@@ -371,8 +403,8 @@ func (d *DiskLeaseController) handlePendingLease(ctx context.Context, lease *sto
 	if existingLease, exists := d.activeLeases[diskId]; exists && existingLease != leaseId {
 		d.mu.Unlock()
 		// Someone else bound it (shouldn't happen with our reservation), need to clean up
-		if d.lsvdClient != nil && volumeId != "" {
-			if err := d.lsvdClient.UnmountVolume(ctx, volumeId); err != nil {
+		if client != nil && volumeId != "" {
+			if err := client.UnmountVolume(ctx, volumeId); err != nil {
 				d.Log.Warn("Failed to unmount volume after lease conflict", "volume", volumeId, "error", err)
 			}
 		}
@@ -531,8 +563,11 @@ func (d *DiskLeaseController) handleBoundLease(ctx context.Context, lease *stora
 	}
 	d.mu.Unlock()
 
+	// Get the appropriate client for this disk
+	client := d.getClientForDisk(disk)
+
 	// Check if the volume is mounted
-	mounted, err := d.lsvdClient.IsVolumeMounted(ctx, volumeId)
+	mounted, err := client.IsVolumeMounted(ctx, volumeId)
 	if err != nil {
 		d.Log.Error("Failed to check mount status", "volume", volumeId, "error", err)
 		return nil // Don't fail the lease
@@ -546,7 +581,7 @@ func (d *DiskLeaseController) handleBoundLease(ctx context.Context, lease *stora
 
 		// Initialize disk (calls lsvd.NewDisk) if needed
 		filesystem := strings.TrimPrefix(string(disk.Filesystem), "filesystem.")
-		if err := d.lsvdClient.InitializeDisk(ctx, volumeId, filesystem); err != nil {
+		if err := client.InitializeDisk(ctx, volumeId, filesystem); err != nil {
 			d.Log.Error("Failed to initialize disk for bound lease", "volume", volumeId, "error", err)
 
 			lease.Status = storage_v1alpha.FAILED
@@ -558,7 +593,7 @@ func (d *DiskLeaseController) handleBoundLease(ctx context.Context, lease *stora
 		// Mount the volume
 		mountPath := d.getDiskMountPath(volumeId)
 		readOnly := lease.Mount.ReadOnly
-		if err := d.lsvdClient.MountVolume(ctx, volumeId, mountPath, readOnly); err != nil {
+		if err := client.MountVolume(ctx, volumeId, mountPath, readOnly); err != nil {
 			d.Log.Error("Failed to mount volume for bound lease", "volume", volumeId, "error", err)
 			lease.Status = storage_v1alpha.FAILED
 			lease.ErrorMessage = fmt.Sprintf("Failed to mount volume: %v", err)

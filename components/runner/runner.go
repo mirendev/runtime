@@ -264,6 +264,9 @@ func (r *Runner) SetupControllers(
 
 	// Create LSVD client with optional replication support
 	var lsvdClient disk.LsvdClient
+	var diskController *disk.DiskController
+	var diskLeaseController *disk.DiskLeaseController
+
 	if r.CloudAuth != nil && r.CloudAuth.Enabled {
 		log.Info("Creating LSVD client with cloud replication",
 			"cloud_url", r.CloudAuth.CloudURL)
@@ -279,13 +282,18 @@ func (r *Runner) SetupControllers(
 			return nil, fmt.Errorf("failed to create auth client: %w", err)
 		}
 
-		lsvdClient = disk.NewLsvdClientWithReplica(log, dataPath, authClient, r.CloudAuth.CloudURL)
+		// Create both local+replica and remote-only clients to support both modes
+		localReplicaClient := disk.NewLsvdClient(log, dataPath, disk.WithReplica(authClient, r.CloudAuth.CloudURL))
+		remoteOnlyClient := disk.NewLsvdClient(log, dataPath, disk.WithRemoteOnly(authClient, r.CloudAuth.CloudURL))
+
+		lsvdClient = localReplicaClient
+		diskController = disk.NewDiskControllerWithClients(log, eas, lsvdClient, localReplicaClient, remoteOnlyClient)
+		diskLeaseController = disk.NewDiskLeaseControllerWithClients(log, eas, lsvdClient, localReplicaClient, remoteOnlyClient)
 	} else {
 		lsvdClient = disk.NewLsvdClient(log, dataPath)
+		diskController = disk.NewDiskController(log, eas, lsvdClient)
+		diskLeaseController = disk.NewDiskLeaseController(log, eas, lsvdClient)
 	}
-
-	diskController := disk.NewDiskController(log, eas, lsvdClient)
-	diskLeaseController := disk.NewDiskLeaseController(log, eas, lsvdClient)
 
 	// Add disk controller to closers list so it gets cleaned up on shutdown
 	r.closers = append(r.closers, diskController)

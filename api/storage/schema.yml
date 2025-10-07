@@ -31,6 +31,11 @@ kinds:
       doc: LSVD backend volume identifier
       indexed: true
 
+    remote_only:
+      type: bool
+      doc: If true, disk is stored only remotely without local replica
+      default: false
+
     created_by:
       type: ref
       doc: Application that created this disk (for tracking purposes)

@@ -22,6 +22,7 @@ func DebugDiskCreate(ctx *Context, opts struct {
 	Size       int64  `short:"s" long:"size" description:"Size of disk in GB" default:"10"`
 	Filesystem string `short:"f" long:"filesystem" description:"Filesystem type (ext4, xfs, btrfs)" default:"ext4"`
 	CreatedBy  string `short:"c" long:"created-by" description:"Creator ID for the disk"`
+	RemoteOnly bool   `short:"r" long:"remote-only" description:"Store disk only in remote storage (no local replica)"`
 }) error {
 	// Use the context's RPC client
 	client, err := ctx.RPCClient("entities")
@@ -55,6 +56,7 @@ func DebugDiskCreate(ctx *Context, opts struct {
 		SizeGb:     opts.Size,
 		Filesystem: fs,
 		Status:     storage_v1alpha.PROVISIONING,
+		RemoteOnly: opts.RemoteOnly,
 	}
 
 	// Set created by if provided
@@ -74,6 +76,7 @@ func DebugDiskCreate(ctx *Context, opts struct {
 	ctx.Info("Name: %s", opts.Name)
 	ctx.Info("Size: %d GB", opts.Size)
 	ctx.Info("Filesystem: %s", opts.Filesystem)
+	ctx.Info("Remote Only: %v", opts.RemoteOnly)
 	if opts.CreatedBy != "" {
 		ctx.Info("Created By: %s", opts.CreatedBy)
 	}
@@ -120,6 +123,7 @@ func DebugDiskList(ctx *Context, opts struct {
 		ctx.Info("  Size: %d GB", disk.SizeGb)
 		ctx.Info("  Filesystem: %s", disk.Filesystem)
 		ctx.Info("  Status: %s", disk.Status)
+		ctx.Info("  Remote Only: %v", disk.RemoteOnly)
 		if disk.CreatedBy != "" {
 			ctx.Info("  Created By: %s", disk.CreatedBy)
 		}
@@ -216,6 +220,7 @@ func DebugDiskStatus(ctx *Context, opts struct {
 	ctx.Info("  Size: %d GB", disk.SizeGb)
 	ctx.Info("  Filesystem: %s", disk.Filesystem)
 	ctx.Info("  Status: %s", disk.Status)
+	ctx.Info("  Remote Only: %v", disk.RemoteOnly)
 
 	if disk.CreatedBy != "" {
 		ctx.Info("  Created By: %s", disk.CreatedBy)
