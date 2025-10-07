@@ -806,8 +806,9 @@ func TestDiskAPISegmentAccess_SegmentDeletion_WithMockServer(t *testing.T) {
 
 	// Mock server for segment deletion
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasPrefix(r.URL.Path, "/api/v1/disk/segments/") && r.Method == "DELETE" {
-			// Extract segment ID from path
+		// Handle both direct segment deletion and volume-scoped deletion
+		if r.Method == "DELETE" && (strings.HasPrefix(r.URL.Path, "/api/v1/disk/segments/") || strings.Contains(r.URL.Path, "/segments/")) {
+			// Extract segment ID from path (last component)
 			pathParts := strings.Split(r.URL.Path, "/")
 			segmentID := pathParts[len(pathParts)-1]
 

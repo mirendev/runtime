@@ -234,6 +234,8 @@ func (d *DiskController) handleProvisioned(ctx context.Context, disk *storage_v1
 			"disk", disk.ID,
 			"volume", disk.LsvdVolumeId,
 			"error", err)
+		// Clear the volume ID so handleProvisioning creates a new volume
+		disk.LsvdVolumeId = ""
 		// Volume doesn't exist, need to re-provision
 		return d.handleProvisioning(ctx, disk)
 	}
