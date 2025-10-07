@@ -206,6 +206,22 @@ func AllCommands() map[string]cli.CommandFactory {
 		"debug rbac test": func() (cli.Command, error) {
 			return Infer("debug rbac test", "Test RBAC evaluation with fetched rules", DebugRBACTest), nil
 		},
+
+		"debug entity create": func() (cli.Command, error) {
+			return Infer("debug entity create", "Create a new entity", EntityCreate), nil
+		},
+
+		"debug entity replace": func() (cli.Command, error) {
+			return Infer("debug entity replace", "Replace an existing entity", EntityReplace), nil
+		},
+
+		"debug entity patch": func() (cli.Command, error) {
+			return Infer("debug entity patch", "Patch an existing entity", EntityPatch), nil
+		},
+
+		"debug entity ensure": func() (cli.Command, error) {
+			return Infer("debug entity ensure", "Ensure an entity exists", EntityEnsure), nil
+		},
 	}
 
 	addCommands(base)
