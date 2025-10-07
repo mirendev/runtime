@@ -39,7 +39,7 @@ func (d *Disk) finalizeSegment(gctx context.Context) error {
 
 	d.log.Info("flushing last segment to storage", "segment", d.curSeq)
 
-	done := make(chan EventResult)
+	done := make(chan EventResult, 1)
 	select {
 	case <-gctx.Done():
 		return gctx.Err()

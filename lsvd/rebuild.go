@@ -17,6 +17,9 @@ import (
 )
 
 func (d *Disk) rebuildFromSegments(ctx context.Context) error {
+	// Create a fresh extent map to ensure we start with a clean state
+	d.lba2pba = NewExtentMap()
+
 	for idx, ld := range d.readDisks {
 		// We don't populate from... ourselves.
 		if ld == d {
@@ -31,12 +34,34 @@ func (d *Disk) rebuildFromSegments(ctx context.Context) error {
 		return err
 	}
 
+	// Clear existing segments before rebuild to ensure clean state
+	d.s.Clear()
+
+	// Pre-create all segments so they exist when UpdateUsage is called during rebuild.
+	// They start with Size=0, Used=0 and will be incremented as extents are processed.
+	for _, seg := range entries {
+		d.s.Create(seg, &SegmentStats{Blocks: 0})
+	}
+
 	for _, ent := range entries {
 		err := d.rebuildFromSegment(ctx, ent)
 		if err != nil {
 			return err
 		}
 	}
+
+	// Log rebuild statistics
+	numSegments := len(d.s.LiveSegments())
+	totalBlocks := d.s.TotalBlocks()
+	usedBlocks := d.s.UsedBlocks()
+	density := d.s.Usage()
+
+	d.log.Info("rebuild complete",
+		"segments", numSegments,
+		"total_blocks", totalBlocks,
+		"used_blocks", usedBlocks,
+		"density_pct", density,
+	)
 
 	return nil
 }
@@ -56,13 +81,15 @@ func (d *Disk) rebuildFromSegment(ctx context.Context, seg SegmentId) error {
 		return err
 	}
 
-	stats := &SegmentStats{}
+	// Segment was pre-created by rebuildFromSegments with Size=0, Used=0
+	// For each extent: increment Size/Used, then UpdateUsage decrements garbage
 
 	if layout != nil {
 		d.log.Debug("loading extents from segment layout", "extents", len(layout.Extents()))
 
 		for _, ext := range layout.Extents() {
-			stats.Blocks += uint64(ext.Blocks())
+			blocks := uint64(ext.Blocks())
+			d.s.IncrementSegment(seg, blocks)
 
 			var eh ExtentHeader
 			eh.LBA = LBA(ext.Lba())
@@ -101,7 +128,7 @@ func (d *Disk) rebuildFromSegment(ctx context.Context, seg SegmentId) error {
 				return err
 			}
 
-			stats.Blocks += uint64(eh.Blocks)
+			d.s.IncrementSegment(seg, uint64(eh.Blocks))
 
 			eh.Offset += hdr.DataOffset
 
@@ -116,9 +143,6 @@ func (d *Disk) rebuildFromSegment(ctx context.Context, seg SegmentId) error {
 			d.s.UpdateUsage(d.log, seg, affected)
 		}
 	}
-
-	// Now reset the stats for our seg to the correct ones.
-	d.s.Create(seg, stats)
 
 	return nil
 }
@@ -244,7 +268,11 @@ func (d *Disk) loadLBAMap(ctx context.Context) (bool, error) {
 
 	d.log.Info("validated cached lba map", "created-at", hdr.CreatedAt, "hash", sh)
 
+	// Replace extent map with the loaded one (ensures clean state)
 	d.lba2pba = m
+
+	// Clear existing segments before loading from cache
+	d.s.Clear()
 
 	var total, used uint64
 
@@ -281,8 +309,8 @@ func (d *Disk) loadLBAMap(ctx context.Context) (bool, error) {
 }
 
 type segmentStats struct {
-	Size uint64 `json:"used" cbor:"1,keyasint"`
-	Used uint64 `json:"size" cbor:"2,keyasint"`
+	Size uint64 `json:"size" cbor:"1,keyasint"`
+	Used uint64 `json:"used" cbor:"2,keyasint"`
 }
 
 type lbaCacheMapHeader struct {

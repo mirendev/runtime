@@ -60,9 +60,12 @@ func TestRunnerCoordinatorIntegration(t *testing.T) {
 	r.NoError(err)
 
 	runnerCfg.Config = rcfg
+	runnerCfg.DataPath = t.TempDir()
 
 	// Create and start runner
-	runner := NewRunner(log, reg, runnerCfg)
+	runner, err := NewRunner(log, reg, runnerCfg)
+	r.NoError(err)
+
 	runnerDone := make(chan error, 1)
 	go func() {
 		runnerDone <- runner.Start(ctx)

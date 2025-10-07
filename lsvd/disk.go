@@ -20,6 +20,9 @@ const (
 
 	// How big the segment gets before we flush it to S3
 	FlushThreshHold = 32 * 1024 * 1024
+
+	// Maximum time a segment can stay open before being flushed
+	MaxSegmentLifetime = 10 * time.Minute
 )
 
 type Disk struct {
@@ -129,7 +132,7 @@ func NewDisk(ctx context.Context, log *slog.Logger, path string, options ...Opti
 		path:           path,
 		size:           sz,
 		volume:         vo,
-		lba2pba:        NewExtentMap(),
+		lba2pba:        nil, // Will be set by loadLBAMap or rebuildFromSegments
 		sa:             o.sa,
 		volName:        o.volName,
 		SeqGen:         o.seqGen,
@@ -180,7 +183,8 @@ func NewDisk(ctx context.Context, log *slog.Logger, path string, options ...Opti
 
 	goodMap, err := d.loadLBAMap(ctx)
 	if err != nil {
-		return nil, err
+		log.Error("error loading LBA map", "error", err)
+		goodMap = false
 	}
 
 	if goodMap {
@@ -665,29 +669,61 @@ func (d *Disk) ZeroBlocks(ctx context.Context, rng Extent) error {
 }
 
 func (d *Disk) checkFlush(ctx context.Context) error {
-	if d.curOC.ShouldFlush(FlushThreshHold) {
-		d.log.Info("flushing new segment",
-			"body-size", d.curOC.BodySize(),
-			"extents", d.curOC.Entries(),
-			"blocks", d.curOC.TotalBlocks(),
-			"input-bytes", d.curOC.InputBytes(),
-			"empty-blocks", d.curOC.EmptyBlocks(),
-			"single-bes", d.curOC.builder.singleBEs,
-			"compression-rate", d.curOC.CompressionRate(),
-			"storage-ratio", d.curOC.StorageRatio(),
-			"comp-rate-histo", d.curOC.CompressionRateHistogram(),
-		)
-		ch, err := d.closeSegmentAsync(ctx)
-		if err != nil {
-			return err
-		}
+	reason := d.curOC.ShouldFlush(FlushThreshHold)
+	if reason == FlushNo {
+		return nil
+	}
 
-		if mode.Debug() {
-			select {
-			case <-ch:
-				d.trace(ctx, "segment has been flushed")
-			case <-ctx.Done():
-			}
+	switch reason {
+	case FlushTime:
+		d.log.Info("flushing segment due to maximum segment lifetime",
+			"age", time.Since(d.curOC.builder.openedAt),
+			"threshold", MaxSegmentLifetime,
+		)
+	case FlushSize:
+		d.log.Info("flushing segment due to size threshold",
+			"body-size", d.curOC.BodySize(),
+			"threshold", FlushThreshHold,
+		)
+	default:
+		d.log.Warn("flushing segment for unknown reason", "reason", reason)
+	}
+
+	// Log segment statistics when flushing. This indicates a segment is closed and ready for upload.
+	// Keys explained:
+	//   body-size: compressed segment size in bytes
+	//   extents: number of extents in the segment
+	//   blocks: number of 4KB blocks covered by the extents
+	//   input-bytes: total uncompressed data written (compression-rate = input-bytes / body-size)
+	//   empty-blocks: number of blocks that were all zeros
+	//   single-bes: number of extents with a single block
+	//   compression-rate: average compression ratio (input / output)
+	//   storage-ratio: inverse of compression rate (output / input)
+	//   comp-rate-histo: histogram of per-extent compression ratios with buckets [1, 2, 3, 5, 10, 20, 50, 100, 200, 1000]
+	//                    Each bucket counts extents with compression ratio less than that band threshold.
+	//                    e.g., "[0 1910 3546 ...]" means 0 extents <1x, 1910 extents <2x, 3546 extents <3x, etc.
+	d.log.Info("flushing segment",
+		"body-size", d.curOC.BodySize(),
+		"extents", d.curOC.Entries(),
+		"blocks", d.curOC.TotalBlocks(),
+		"input-bytes", d.curOC.InputBytes(),
+		"empty-blocks", d.curOC.EmptyBlocks(),
+		"single-bes", d.curOC.builder.singleBEs,
+		"compression-rate", d.curOC.CompressionRate(),
+		"storage-ratio", d.curOC.StorageRatio(),
+		"comp-rate-histo", d.curOC.CompressionRateHistogram(),
+	)
+
+	ch, err := d.closeSegmentAsync(ctx)
+	if err != nil {
+		return err
+	}
+
+	if mode.Debug() {
+		select {
+		case <-ch:
+			d.trace(ctx, "segment has been flushed")
+		case <-ctx.Done():
 		}
 	}
 

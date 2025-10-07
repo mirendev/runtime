@@ -680,6 +680,273 @@ func TestLSVD(t *testing.T) {
 		blockEqual(t, d2.RawBlocks().BlockView(0), testData)
 	})
 
+	t.Run("tracks segment size and used blocks correctly with non-overlapping extents", func(t *testing.T) {
+		r := require.New(t)
+
+		tmpdir, err := os.MkdirTemp("", "lsvd")
+		r.NoError(err)
+		defer os.RemoveAll(tmpdir)
+
+		d, err := NewDisk(ctx, log, tmpdir)
+		r.NoError(err)
+		defer d.Close(ctx)
+
+		// Write 10 non-overlapping extents of various lengths
+		// LBA 0-9: 10 blocks
+		// LBA 100-104: 5 blocks
+		// LBA 200-202: 3 blocks
+		// LBA 300-307: 8 blocks
+		// LBA 400-400: 1 block
+		// LBA 500-511: 12 blocks
+		// LBA 600-605: 6 blocks
+		// LBA 700-701: 2 blocks
+		// LBA 800-814: 15 blocks
+		// LBA 900-903: 4 blocks
+		// Total: 66 blocks
+
+		extents := []struct {
+			lba    LBA
+			blocks int
+		}{
+			{0, 10},
+			{100, 5},
+			{200, 3},
+			{300, 8},
+			{400, 1},
+			{500, 12},
+			{600, 6},
+			{700, 2},
+			{800, 15},
+			{900, 4},
+		}
+
+		totalBlocks := 0
+		for _, ext := range extents {
+			// Create test data for this extent
+			data := make([]byte, ext.blocks*BlockSize)
+			for i := range data {
+				data[i] = byte(ext.lba)
+			}
+			rb := BlockDataView(data)
+
+			err = d.WriteExtent(ctx, rb.MapTo(ext.lba))
+			r.NoError(err)
+
+			totalBlocks += ext.blocks
+		}
+
+		// Close the segment to flush it
+		err = d.CloseSegment(ctx)
+		r.NoError(err)
+
+		// Get the segment ID that was written
+		segments, err := d.volume.ListSegments(ctx)
+		r.NoError(err)
+		r.Len(segments, 1, "should have exactly one segment")
+
+		segId := segments[0]
+
+		// Check segment stats before rebuild
+		segTotal, segUsed, segExtents := d.s.SegmentInfo(segId)
+		t.Logf("Before rebuild - Segment %s: total=%d, used=%d, extents=%d", segId, segTotal, segUsed, segExtents)
+		r.Equal(uint64(totalBlocks), segTotal, "segment total should equal total blocks written")
+		r.Equal(uint64(totalBlocks), segUsed, "segment used should equal total blocks (no overlaps)")
+		r.Equal(len(extents), segExtents, "segment should have correct extent count")
+
+		// Now create a new disk - it will automatically rebuild from segments
+		d2, err := NewDisk(ctx, log, tmpdir)
+		r.NoError(err)
+		defer d2.Close(ctx)
+
+		// Check segment stats after rebuild (NewDisk already called rebuildFromSegments)
+		segTotal2, segUsed2, segExtents2 := d2.s.SegmentInfo(segId)
+		t.Logf("After rebuild - Segment %s: total=%d, used=%d, extents=%d", segId, segTotal2, segUsed2, segExtents2)
+
+		// These should match the original values
+		r.Equal(segTotal, segTotal2, "segment total should be preserved after rebuild")
+		r.Equal(segUsed, segUsed2, "segment used should be preserved after rebuild")
+		r.Equal(segExtents, segExtents2, "segment extent count should be preserved after rebuild")
+
+		// Verify all extents are readable
+		for _, ext := range extents {
+			readData, err := d2.ReadExtent(ctx, Extent{LBA: ext.lba, Blocks: uint32(ext.blocks)})
+			r.NoError(err)
+			r.NotNil(readData)
+
+			// Verify data content
+			rb := readData.RawBlocks()
+			for i := 0; i < ext.blocks; i++ {
+				block := rb.BlockView(i)
+				r.Equal(byte(ext.lba), block[0], "block should contain correct marker byte")
+			}
+		}
+
+		// Verify UsedBlocks returns the correct total
+		totalUsed := d2.s.UsedBlocks()
+		t.Logf("Total used blocks across all segments: %d", totalUsed)
+		r.Equal(uint64(totalBlocks), totalUsed, "UsedBlocks should return correct total")
+	})
+
+	t.Run("tracks segment size and used blocks correctly with overlapping extents", func(t *testing.T) {
+		r := require.New(t)
+
+		tmpdir, err := os.MkdirTemp("", "lsvd")
+		r.NoError(err)
+		defer os.RemoveAll(tmpdir)
+
+		d, err := NewDisk(ctx, log, tmpdir)
+		r.NoError(err)
+		defer d.Close(ctx)
+
+		// Write extents with overlaps
+		// First write some extents
+		extents := []struct {
+			lba    LBA
+			blocks int
+		}{
+			{0, 10},   // Blocks 0-9
+			{100, 20}, // Blocks 100-119
+			{200, 15}, // Blocks 200-214
+		}
+
+		var totalBlocksWritten int
+		for _, ext := range extents {
+			data := make([]byte, ext.blocks*int(BlockSize))
+			// Mark each block with its LBA for verification
+			for i := 0; i < ext.blocks; i++ {
+				data[i*int(BlockSize)] = byte(ext.lba)
+			}
+			err := d.WriteExtent(ctx, BlockDataView(data).MapTo(ext.lba))
+			r.NoError(err)
+			totalBlocksWritten += ext.blocks
+		}
+
+		// Now overwrite some of the extents
+		overlaps := []struct {
+			lba    LBA
+			blocks int
+		}{
+			{5, 3},    // Overlaps with first extent (blocks 5-7)
+			{110, 5},  // Overlaps with second extent (blocks 110-114)
+			{200, 10}, // Overlaps with third extent (blocks 200-209)
+		}
+
+		for _, ext := range overlaps {
+			data := make([]byte, ext.blocks*int(BlockSize))
+			for i := 0; i < ext.blocks; i++ {
+				data[i*int(BlockSize)] = byte(ext.lba + 128) // Different marker
+			}
+			err := d.WriteExtent(ctx, BlockDataView(data).MapTo(ext.lba))
+			r.NoError(err)
+			totalBlocksWritten += ext.blocks
+		}
+
+		// Total blocks written = 10 + 20 + 15 + 3 + 5 + 10 = 63
+		// Total unique blocks = 10 + 20 + 15 = 45 (the overlaps don't add new unique blocks)
+		expectedTotalBlocks := 63
+		expectedUsedBlocks := 45
+
+		err = d.CloseSegment(ctx)
+		r.NoError(err)
+
+		segments := d.s.LiveSegments()
+		r.Len(segments, 1, "should have exactly one segment")
+
+		segId := segments[0]
+
+		// Check segment stats before rebuild
+		segTotal, segUsed, segExtents := d.s.SegmentInfo(segId)
+		t.Logf("Before rebuild - Segment %s: total=%d, used=%d, extents=%d", segId, segTotal, segUsed, segExtents)
+		r.Equal(uint64(expectedTotalBlocks), segTotal, "segment total should equal total blocks written (including overlaps)")
+		r.Equal(uint64(expectedUsedBlocks), segUsed, "segment used should reflect only live blocks after overlaps")
+		r.Equal(len(extents)+len(overlaps), segExtents, "segment should have correct extent count")
+
+		// Now create a new disk - it will automatically rebuild from segments
+		d2, err := NewDisk(ctx, log, tmpdir)
+		r.NoError(err)
+		defer d2.Close(ctx)
+
+		// Check segment stats after rebuild
+		segTotal2, segUsed2, segExtents2 := d2.s.SegmentInfo(segId)
+		t.Logf("After rebuild - Segment %s: total=%d, used=%d, extents=%d", segId, segTotal2, segUsed2, segExtents2)
+
+		// These should match the original values
+		r.Equal(segTotal, segTotal2, "segment total should be preserved after rebuild")
+		r.Equal(segUsed, segUsed2, "segment used should be preserved after rebuild")
+		r.Equal(segExtents, segExtents2, "segment extent count should be preserved after rebuild")
+
+		// Verify UsedBlocks returns the correct total
+		totalUsed := d2.s.UsedBlocks()
+		t.Logf("Total used blocks across all segments: %d", totalUsed)
+		r.Equal(uint64(expectedUsedBlocks), totalUsed, "UsedBlocks should return correct total after rebuild")
+	})
+
+	t.Run("preserves segment usage through LBA map cache save and load", func(t *testing.T) {
+		r := require.New(t)
+
+		tmpdir, err := os.MkdirTemp("", "lsvd")
+		r.NoError(err)
+		defer os.RemoveAll(tmpdir)
+
+		d, err := NewDisk(ctx, log, tmpdir)
+		r.NoError(err)
+		defer d.Close(ctx)
+
+		// Write some extents with known size
+		extents := []struct {
+			lba    LBA
+			blocks int
+		}{
+			{0, 100},
+			{200, 50},
+		}
+
+		for _, ext := range extents {
+			data := make([]byte, ext.blocks*int(BlockSize))
+			err := d.WriteExtent(ctx, BlockDataView(data).MapTo(ext.lba))
+			r.NoError(err)
+		}
+
+		// Total = 150 blocks, Used = 150 blocks (no overlaps)
+		expectedTotal := uint64(150)
+		expectedUsed := uint64(150)
+
+		err = d.CloseSegment(ctx)
+		r.NoError(err)
+
+		// Get segment ID
+		segments := d.s.LiveSegments()
+		r.Len(segments, 1)
+		segId := segments[0]
+
+		// Verify before save
+		total1, used1, _ := d.s.SegmentInfo(segId)
+		t.Logf("Before save - total=%d, used=%d", total1, used1)
+		r.Equal(expectedTotal, total1)
+		r.Equal(expectedUsed, used1)
+
+		// Save the LBA map
+		err = d.saveLBAMap(ctx)
+		r.NoError(err)
+
+		// Close and reopen - this should load from the cached LBA map
+		d.Close(ctx)
+
+		d2, err := NewDisk(ctx, log, tmpdir)
+		r.NoError(err)
+		defer d2.Close(ctx)
+
+		// Verify after load - the values should be preserved correctly
+		total2, used2, _ := d2.s.SegmentInfo(segId)
+		t.Logf("After load from cache - total=%d, used=%d", total2, used2)
+		r.Equal(expectedTotal, total2, "total should be preserved through cache save/load")
+		r.Equal(expectedUsed, used2, "used should be preserved through cache save/load")
+
+		// Verify the total used blocks is also correct
+		totalUsed := d2.s.UsedBlocks()
+		r.Equal(expectedUsed, totalUsed, "UsedBlocks should return correct total")
+	})
+
 	t.Run("serializes the lba to pba mapping", func(t *testing.T) {
 		r := require.New(t)
 

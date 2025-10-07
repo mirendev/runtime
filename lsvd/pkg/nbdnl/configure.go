@@ -82,31 +82,50 @@ var defaultBlockSizes = BlockSizeConstraints{
 // blocks until ctx is cancelled or an error occurs (so it behaves like Serve).
 // When ctx is cancelled, the device will be disconnected, and any error
 // encountered while disconnecting will be returned by wait.
+// If preferredIdx is not IndexAny, it will attempt to use that specific device index.
 //
 // This is a Linux-only API.
-func Loopback(ctx context.Context, size uint64) (uint32, net.Conn, func() error, error) {
-	sp, err := unix.Socketpair(unix.AF_UNIX, unix.SOCK_STREAM, 0)
-	if err != nil {
-		return 0, nil, nil, err
-	}
+func Loopback(ctx context.Context, size uint64, preferredIdx uint32) (uint32, net.Conn, *os.File, func() error, error) {
 	exp := Export{
 		Size:       size,
 		BlockSizes: &defaultBlockSizes,
 		Flags:      uint16(FlagHasFlags | FlagSendFlush | FlagSendTrim | FlagSendWriteZeros),
 	}
 
-	client, server := os.NewFile(uintptr(sp[0]), "client"), os.NewFile(uintptr(sp[1]), "server")
-	serverc, err := net.FileConn(server)
-	//server.Close()
+	sp, err := unix.Socketpair(unix.AF_UNIX, unix.SOCK_STREAM, 0)
 	if err != nil {
-		client.Close()
-		return 0, nil, nil, err
+		return 0, nil, nil, nil, err
 	}
 
-	idx, err := Configure(exp, client)
+	err = unix.SetNonblock(sp[0], true)
+	if err != nil {
+		unix.Close(sp[0])
+		unix.Close(sp[1])
+		return 0, nil, nil, nil, err
+	}
+
+	err = unix.SetNonblock(sp[1], true)
+	if err != nil {
+		unix.Close(sp[0])
+		unix.Close(sp[1])
+		return 0, nil, nil, nil, err
+	}
+
+	client, server := os.NewFile(uintptr(sp[0]), "client"), os.NewFile(uintptr(sp[1]), "server")
+	serverc, err := net.FileConn(server)
 	if err != nil {
 		client.Close()
-		return 0, nil, nil, err
+		return 0, nil, nil, nil, err
+	}
+
+	var opts []ConnectOption
+	if exp.BlockSizes != nil {
+		opts = append(opts, WithBlockSize(uint64(exp.BlockSizes.Preferred)))
+	}
+	idx, err := Connect(preferredIdx, []*os.File{client}, exp.Size, 0, ServerFlags(exp.Flags), opts...)
+	if err != nil {
+		client.Close()
+		return 0, nil, nil, nil, err
 	}
 
 	cleanup := func() error {
@@ -115,15 +134,56 @@ func Loopback(ctx context.Context, size uint64) (uint32, net.Conn, func() error,
 		if e := Disconnect(idx); e != nil {
 			err = fmt.Errorf("failed to disconnect device: %w", e)
 		}
-		if e := client.Close(); e != nil && err == nil {
-			err = fmt.Errorf("failed to close client socket: %w", e)
-		}
-		if e := serverc.Close(); e != nil && err == nil {
-			err = fmt.Errorf("failed to close server connection: %w", e)
-		}
+
+		// these might already be closed, so ignore errors
+		client.Close()
+		serverc.Close()
 
 		return err
 	}
 
-	return idx, serverc, cleanup, nil
+	return idx, serverc, server, cleanup, nil
+}
+
+// Reconnect creates a new socketpair and reconfigures an existing NBD device
+// Returns the server connection and client file for the NBD handler
+func Reconnect(ctx context.Context, idx uint32) (net.Conn, *os.File, error) {
+	sp, err := unix.Socketpair(unix.AF_UNIX, unix.SOCK_STREAM, 0)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to create socketpair: %w", err)
+	}
+
+	err = unix.SetNonblock(sp[0], true)
+	if err != nil {
+		unix.Close(sp[0])
+		unix.Close(sp[1])
+		return nil, nil, fmt.Errorf("failed to set client nonblocking: %w", err)
+	}
+
+	err = unix.SetNonblock(sp[1], true)
+	if err != nil {
+		unix.Close(sp[0])
+		unix.Close(sp[1])
+		return nil, nil, fmt.Errorf("failed to set server nonblocking: %w", err)
+	}
+
+	client := os.NewFile(uintptr(sp[0]), "client")
+	server := os.NewFile(uintptr(sp[1]), "server")
+
+	serverConn, err := net.FileConn(server)
+	if err != nil {
+		client.Close()
+		server.Close()
+		return nil, nil, fmt.Errorf("failed to create server connection: %w", err)
+	}
+
+	// Reconfigure the existing NBD device with new socket
+	err = Reconfigure(idx, []*os.File{client}, 0, 0)
+	if err != nil {
+		client.Close()
+		serverConn.Close()
+		return nil, nil, fmt.Errorf("failed to reconfigure NBD device: %w", err)
+	}
+
+	return serverConn, server, nil
 }
