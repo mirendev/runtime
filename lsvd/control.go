@@ -267,11 +267,6 @@ func (c *Controller) closeSegment(ctx *Context, ev Event) error {
 
 	c.log.Info("uploaded new segment", "segment", segId, "flush-dur", flushDur, "map-dur", mapDur, "dur", finDur)
 
-	// Write segment usage information to cache directory
-	if err := d.writeSegmentUsage(segId); err != nil {
-		c.log.Error("error writing segment usage", "segment", segId, "error", err)
-	}
-
 	c.queueInternal(Event{
 		Kind: CleanupSegments,
 	})
