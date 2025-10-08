@@ -19,6 +19,7 @@ import (
 func ServerInstall(ctx *Context, opts struct {
 	Address   string `short:"a" long:"address" description:"Server address to bind to" default:"0.0.0.0:8443"`
 	Verbosity string `short:"v" long:"verbosity" description:"Verbosity level" default:"-vv"`
+	Branch    string `short:"b" long:"branch" description:"Branch to download if release not found" default:"main"`
 	Start     bool   `long:"start" description:"Start the service immediately after installation"`
 	Force     bool   `short:"f" long:"force" description:"Overwrite existing service file"`
 }) error {
@@ -27,10 +28,22 @@ func ServerInstall(ctx *Context, opts struct {
 		return fmt.Errorf("server install requires root privileges (use sudo)")
 	}
 
-	// Verify the miren binary exists at the expected location
+	// Check if miren binary exists, download if not
 	mirenPath := "/var/lib/miren/release/miren"
 	if _, err := os.Stat(mirenPath); err != nil {
-		return fmt.Errorf("miren binary not found at %s. Run 'miren download release --global' first", mirenPath)
+		ctx.Info("Miren release not found at %s, downloading...", mirenPath)
+
+		// Download the release
+		if err := PerformDownloadRelease(ctx, DownloadReleaseOptions{
+			Branch: opts.Branch,
+			Global: true,
+			Force:  false,
+			Output: "/var/lib/miren/release",
+		}); err != nil {
+			return fmt.Errorf("failed to download release: %w", err)
+		}
+
+		ctx.Completed("Release downloaded successfully")
 	}
 
 	ctx.Info("Installing miren systemd service...")
