@@ -194,21 +194,19 @@ func (o *AppVersion) InitSchema(sb *schema.SchemaBuilder) {
 }
 
 const (
-	ConfigCommandsId    = entity.Id("dev.miren.core/config.commands")
-	ConfigConcurrencyId = entity.Id("dev.miren.core/config.concurrency")
-	ConfigEntrypointId  = entity.Id("dev.miren.core/config.entrypoint")
-	ConfigPortId        = entity.Id("dev.miren.core/config.port")
-	ConfigServicesId    = entity.Id("dev.miren.core/config.services")
-	ConfigVariableId    = entity.Id("dev.miren.core/config.variable")
+	ConfigCommandsId   = entity.Id("dev.miren.core/config.commands")
+	ConfigEntrypointId = entity.Id("dev.miren.core/config.entrypoint")
+	ConfigPortId       = entity.Id("dev.miren.core/config.port")
+	ConfigServicesId   = entity.Id("dev.miren.core/config.services")
+	ConfigVariableId   = entity.Id("dev.miren.core/config.variable")
 )
 
 type Config struct {
-	Commands    []Commands  `cbor:"commands,omitempty" json:"commands,omitempty"`
-	Concurrency Concurrency `cbor:"concurrency,omitempty" json:"concurrency,omitempty"`
-	Entrypoint  string      `cbor:"entrypoint,omitempty" json:"entrypoint,omitempty"`
-	Port        int64       `cbor:"port,omitempty" json:"port,omitempty"`
-	Services    []Services  `cbor:"services,omitempty" json:"services,omitempty"`
-	Variable    []Variable  `cbor:"variable,omitempty" json:"variable,omitempty"`
+	Commands   []Commands `cbor:"commands,omitempty" json:"commands,omitempty"`
+	Entrypoint string     `cbor:"entrypoint,omitempty" json:"entrypoint,omitempty"`
+	Port       int64      `cbor:"port,omitempty" json:"port,omitempty"`
+	Services   []Services `cbor:"services,omitempty" json:"services,omitempty"`
+	Variable   []Variable `cbor:"variable,omitempty" json:"variable,omitempty"`
 }
 
 func (o *Config) Decode(e entity.AttrGetter) {
@@ -218,9 +216,6 @@ func (o *Config) Decode(e entity.AttrGetter) {
 			v.Decode(a.Value.Component())
 			o.Commands = append(o.Commands, v)
 		}
-	}
-	if a, ok := e.Get(ConfigConcurrencyId); ok && a.Value.Kind() == entity.KindComponent {
-		o.Concurrency.Decode(a.Value.Component())
 	}
 	if a, ok := e.Get(ConfigEntrypointId); ok && a.Value.Kind() == entity.KindString {
 		o.Entrypoint = a.Value.String()
@@ -248,9 +243,6 @@ func (o *Config) Encode() (attrs []entity.Attr) {
 	for _, v := range o.Commands {
 		attrs = append(attrs, entity.Component(ConfigCommandsId, v.Encode()))
 	}
-	if !o.Concurrency.Empty() {
-		attrs = append(attrs, entity.Component(ConfigConcurrencyId, o.Concurrency.Encode()))
-	}
 	if !entity.Empty(o.Entrypoint) {
 		attrs = append(attrs, entity.String(ConfigEntrypointId, o.Entrypoint))
 	}
@@ -268,9 +260,6 @@ func (o *Config) Encode() (attrs []entity.Attr) {
 
 func (o *Config) Empty() bool {
 	if len(o.Commands) != 0 {
-		return false
-	}
-	if !o.Concurrency.Empty() {
 		return false
 	}
 	if !entity.Empty(o.Entrypoint) {
@@ -291,8 +280,6 @@ func (o *Config) Empty() bool {
 func (o *Config) InitSchema(sb *schema.SchemaBuilder) {
 	sb.Component("commands", "dev.miren.core/config.commands", schema.Doc("The command to run for a specific service type"), schema.Many)
 	(&Commands{}).InitSchema(sb.Builder("commands"))
-	sb.Component("concurrency", "dev.miren.core/config.concurrency", schema.Doc("How to control the concurrency for the application (deprecated, use services)"))
-	(&Concurrency{}).InitSchema(sb.Builder("concurrency"))
 	sb.String("entrypoint", "dev.miren.core/config.entrypoint", schema.Doc("The container entrypoint command"))
 	sb.Int64("port", "dev.miren.core/config.port", schema.Doc("The TCP port to access, default to 3000"))
 	sb.Component("services", "dev.miren.core/config.services", schema.Doc("Per-service configuration including concurrency controls"), schema.Many)
@@ -343,50 +330,6 @@ func (o *Commands) Empty() bool {
 func (o *Commands) InitSchema(sb *schema.SchemaBuilder) {
 	sb.String("command", "dev.miren.core/commands.command", schema.Doc("The command to run for the service"))
 	sb.String("service", "dev.miren.core/commands.service", schema.Doc("The service name"))
-}
-
-const (
-	ConcurrencyAutoId  = entity.Id("dev.miren.core/concurrency.auto")
-	ConcurrencyFixedId = entity.Id("dev.miren.core/concurrency.fixed")
-)
-
-type Concurrency struct {
-	Auto  int64 `cbor:"auto,omitempty" json:"auto,omitempty"`
-	Fixed int64 `cbor:"fixed,omitempty" json:"fixed,omitempty"`
-}
-
-func (o *Concurrency) Decode(e entity.AttrGetter) {
-	if a, ok := e.Get(ConcurrencyAutoId); ok && a.Value.Kind() == entity.KindInt64 {
-		o.Auto = a.Value.Int64()
-	}
-	if a, ok := e.Get(ConcurrencyFixedId); ok && a.Value.Kind() == entity.KindInt64 {
-		o.Fixed = a.Value.Int64()
-	}
-}
-
-func (o *Concurrency) Encode() (attrs []entity.Attr) {
-	if !entity.Empty(o.Auto) {
-		attrs = append(attrs, entity.Int64(ConcurrencyAutoId, o.Auto))
-	}
-	if !entity.Empty(o.Fixed) {
-		attrs = append(attrs, entity.Int64(ConcurrencyFixedId, o.Fixed))
-	}
-	return
-}
-
-func (o *Concurrency) Empty() bool {
-	if !entity.Empty(o.Auto) {
-		return false
-	}
-	if !entity.Empty(o.Fixed) {
-		return false
-	}
-	return true
-}
-
-func (o *Concurrency) InitSchema(sb *schema.SchemaBuilder) {
-	sb.Int64("auto", "dev.miren.core/concurrency.auto", schema.Doc("How to scale the application based on the node"))
-	sb.Int64("fixed", "dev.miren.core/concurrency.fixed", schema.Doc("How concurrent requests this app can handle"))
 }
 
 const (
@@ -776,5 +719,5 @@ func init() {
 		(&Metadata{}).InitSchema(sb)
 		(&Project{}).InitSchema(sb)
 	})
-	schema.RegisterEncodedSchema("dev.miren.core", "v1alpha", []byte("\x1f\x8b\b\x00\x00\x00\x00\x00\x00\xff\xa4Wَ\xd3<\x14~\x8f\xffg\a\ti\x10\x01\xc4\rW\xbcJ\xe4\xc6'\xa9\xa7\xf1\x82\xedf\xa6\x97,\x82\a\x99\x19\xde\x10\xae\x91צ\xae\xe3X37\x95\x97|\x9f\xcf\xf9\xceR\xfb\x163D\x81a\x98\x1aJ$\xb0\xa6\xe3\x12`G\x18VwW\xa7\xab\xef\xccj\x83\x84\xf8m12\xd9EB8\xdc\xdf\x1es\x8a\bKH\xfb\x9e\xc0\x88շ\x9b\r\xc1\xd7\xcf\xcf\xc1\r\xea4\x99\xa0\x9d@*\u0099\xb3+Y\xd3\a\x01\x1b\x82-\xc5\x7f\x19\n!\xf9%t\xdab\x870\xf1\xa0\xc1\x93\f\xd3\a4\x8a-\x1a\x85$\x14\xc9Ck\x8c\xee\x90\x10\xd7\xff\xe7\xfc\xf5,\xce\xe7)\xf9\xc2o\xd6\xf8\xfd\xd5\x1a\xfd(O\xd0\xf0+\x06\xd2\x1e\x01nh\x8c\ue556\x84\rEÃ\x97g\xcc.XR\x93\x1e\x05\xeb\xd3x\x86\xdd\x1a\xf3\xbf[\xf3S\x85\x02\x83\xc9\n{\x84\xd1\xf1$Jϖ\x10\x141҃r\xb1\xda\xc6\xd9\xcco\x8b\x7f\xbd\x86o1\x19\x02\rO\x17kU\xdc\x06ڼ\x8c\x144\xc2H\xa3\xbc\x8ca\xb7J\xc6[\xe3ԓ\x05\x86fD\x1b\x18\x15\xa6\x88\x1d\xfeسz\xbfb\x1c\x01;ΦQ$0\x18|\xfcI\xd5|\xba\x84\xbbw\xe1l\x03\xc5\x19w\xe8\x16\xa1x\x9dx\xb9\xb2\r_\xd4\b\xf8\xeb&'\xe0\x8cd9\x15_\x96@>\xfe.\x1b\xe3\xcc\xc3o\x17ZV\x84w\x9c\xf5dp\x11\xf3c\x03%\x1d\xa7\x823`\xfa8\xf22$l\xcd9[\x8d\x1a?\xefrj8|\xd3qJ\x11\xc3\xf3t\xdaƵ\x15\xf3.V͋\xf4\xf5M?͐\xc0\x10\xa8\\\xf6\x85\xc9Z\xeeF\xb4\x029\x91\xcee\xfc\x10&Օ\x1fh\xb21\x8e\xae\xb2n/%\xb0\xee`O\xd9\xcd\x17V\x94|[\xa3dd{\x88\x98\x91\xa4A{\xcd]\x03\xb0#caG\x98\xce6\xe49\xae'\xd7\xe0\xa2\x00n\x18\x90E\t\xe7j,\x1da\xdc\x04\xa6\xe5Ap\xc2\\\x95]\xce\xe6i\xac\xd3&\xe1\x19\x04\x97\x0e\x8b\xed(XW*\x02\x9f\x0f'E\x10\xd7\x1e^\x04\x81\xaa>ni\xeb\x0e\f\x85\xd6mS\xf3\xcd\x12\xce\x0f\xda4IUnc\xc5\xe3\xcf\xf5\x1e\xe7έQ\xe1G\xf6o=C\xd6P\x8e\xbd\x16v\x94\xe6\xc8\xfb\n\n\xb6\xa7-aJ#f\xc2m\xb8\xe8\xe9\xd2Ii|\xaa`\x94\xf0e\x0fJ\xabV\x80\x8c<\x96y\x9f\xdf:9\xe1c\xc5\t\xaaC#\xb4\x98_\xb1\x16È\\0\xc5\xd9jm\x83\x93\xfe\x8c\xd9\x11\xe5\x86\x18\x02\\\xaa\xaa\tI\x826#̫*\xae=\xbc\xaa\x02\xd5\xfd/\xa6\x81\xa1ف\x13\xb03\x834\x85\xd2v\x1fQ\n\x98\"\xe6\xe5a\xb1\xe485\fxù\xbb\x86=^\xc2Oh\xdc;,\xb8a\xf5\xdfQ\xa0(~\xe5\xef\x18ֆW\x85k\t\xa1h\x80v/G\xe7\xc6q\x9a\nQ\xba\x1aU^\xd4/*(j\xef\xea\x96\xf0E\x81p\xfeF\x1c\xe6\x8f\xc3\x1a\x8dw3\xa6\xf4Ý\xdar\xa9[\xf7\xfe57ȥ7p|w\x95\x1e\x8d+ϊ\xb0{\xbcC\x17_\x1fs\xbbWo\xdb\xff\x00\x00\x00\xff\xff\x01\x00\x00\xff\xff\x99JLg\xd8\x0f\x00\x00"))
+	schema.RegisterEncodedSchema("dev.miren.core", "v1alpha", []byte("\x1f\x8b\b\x00\x00\x00\x00\x00\x00\xff\xa4\x97In\xdb0\x14\x86\xef\xd1y\x02\n\xa4\x80ڢ\x9b\xaez\x15\x81&\x9fd\xc6\xe2PRV\xe2e'\xf4 Iz\xc3v]px\xb2LS\x12\x91l\f\x0e\xfe?\xbe\x89\x14y\xcb$\x11 \x19\f\x95\xe0\x06dE\x95\x01\xd8q\xc9\xec\xdd\xd5\xe9\xe8{7Z\x11\xad\xffx\x8dIf\x89\xd6A\xf7\xafaJ\x10.\x13h\xd3p\xe8\x98\xfd~\xb3\xe1\xec\xfa幸\"\xb4\xe7\x03\xd4\x03\x18˕\fv%c\xfdAÆ3\x8fx\x94Ah\xa3.\x81\xf6^\xdbb'\x8a\xda\bi\x87\x8f\xa4\xd3[\xd2i\xc3\x051\x87\xda\x19M\x89\xd6\u05cfs\xfeFJ\xf0yH\xfe\x11'K\xfc\xfe\xe6\x8d~\x92\aT\xeaJ\x82\xf1K@h:\xa3\x1b\xdb\x1b.\xdbE\xc3\xd1\xcb3rH\x96\xe9yC\xd0\xfa4\x9f8[b\xfe\x0fo~\x1a!$\xb8\xaa\xf0K\xb88\x9ed\xe9ŜB\x10\xc9\x1b\xb0!W۱7\xf1\xdb\xeb߮\xe9k\xc6[Ĩt\xb04\x8a[\xc4\xe6\xc3(\xa0'\x8c\xf4$\x1fF\x9c-\n\xe3\xads\xea\xd9\f\xa1\xea\xc8\x06:\xcb\x04\x91\x87\xbf~\xad&\x8e8G\xc0\xb7\xb3e4\x02\x9c\x86\x1d\x7f\xd2h>\x9f\xd3\xdd{\xe3l\x11q\xc6\xc6\xd3\x027o\b^n\xdb\xe2?J\x02\xf8\xfb&\x17\xc0\td\xbe\x14_/\x89b\xfeC5\x8e\xbd(\xbf\x9d9\xb2F9U\xb2\xe1m\xc8Xl;)\xa7Jh%A\xf6\xc7V\fCB\xab\xcei%\xd1\xf8u\x97\x8bF\xd0WT\tA$\x9b\x96\xd3v\x1c[1\xefbռ\x11_~\xe8\xa7\x15\x82\x04D\x85\xea\xc3\xceZ\xed\x8ej\vf\xe04T|\x8b\x9d❏\x98\xeci\x15]\x05ٛ\x83V\\\x86\xfa\xb8\x9c\xf4S+\xd3\xf2\x8e\x04\xadL\xd02\xdfr*\xcae\xbf\x94\xbe\xe8\xc9I\xfaƱ\x87\xa7\x0fQ\xe5\xe9K\x0f\x1d$,\x1c:~㼛\xd3\xc5FM\x95\xa4{c@҃'\xd8\xdcĊ\xc7_\xca=έ[\x12\x85\x9f\xd9\x0fR\x06V\t\xc5b,|+\xad\x91\x0f\x05\b\xb9\x175\x97\xb6'ҥ۱\xc4\xe9\x10\x96\x90'~. \x1a\xf8\xba\a\xdb\xdbZ\x83\x199\x9e\xbc\xcfO\x9d\xac\xf0\xa9`\x05KI\a5SW\xb2fБ\x90L}6Z\xba5M\\c\xb2\xc4\xf2V\xc6\x04/\xed\xaa\x81\x18N6\x1dLw\xd58\xf6\xf0]\x85\xa8\xfb_\xa9\x90P\xed \x04\x90\xbaFZB\xe9\xc7hTY\x90\x96\xbb;\xb3\xd7\xf2c\xd7\x11\xd8F\xa9p\x81x:\xa7\x1fH\xb7\x0fZ\b\xcd\xe2\x83\x14\x11\x8b\xff\x8a_GoÛ\x85\x0f*\x17\xa4\x85zo\xba\xe0Ʊ\x9b\x06b\xe9\xa3^xż(@\x94\xde2=\xf0\xd5\x02p\xfa\xbai\xa7Ϛ\x92\x18\xef&\xa4\xf4\x8f;\xbbU\xa6\xaf\xc3\xcb\xcd\xdd}\xe6^o\xe3\x8ba鹳r!\xc6\xd9\xe3\xedo\xf1\xde<\xb5{\xf5\x9e\xf8\x1f\x00\x00\xff\xff\x01\x00\x00\xff\xffPN-ǒ\x0e\x00\x00"))
 }

@@ -661,20 +661,15 @@ func (a *localActivator) getServiceConcurrency(ver *core_v1alpha.AppVersion, ser
 		}
 	}
 
-	// Check for legacy global concurrency configuration
-	if ver.Config.Concurrency.Fixed > 0 || ver.Config.Concurrency.Auto > 0 {
-		// Use global config for backward compatibility
-		if ver.Config.Concurrency.Fixed > 0 {
-			return &core_v1alpha.ServiceConcurrency{
-				Mode:                "auto",
-				RequestsPerInstance: ver.Config.Concurrency.Fixed,
-				ScaleDownDelay:      "2m", // Legacy default
-			}
-		}
-		// Handle auto mode from legacy config if needed
-	}
+	// Fallback to runtime defaults for backward compatibility with old AppVersions
+	// that don't have Config.Services[] populated (created before RFD 0034 migration).
+	// This should rarely be hit - new builds populate Config.Services[] at build time.
+	a.log.Warn("using runtime fallback defaults for service concurrency",
+		"app", ver.App,
+		"version", ver.Version,
+		"service", service,
+		"reason", "Config.Services[] not populated - rebuild app to use build-time defaults")
 
-	// Apply defaults based on service name
 	if service == "web" {
 		return &core_v1alpha.ServiceConcurrency{
 			Mode:                "auto",
