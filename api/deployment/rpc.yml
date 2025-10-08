@@ -1,0 +1,244 @@
+name: deployment
+version: v1alpha
+doc: Service for managing deployment records
+
+imports:
+  standard:
+    path: ../../pkg/rpc/standard/standard.yml
+    import: miren.dev/runtime/pkg/rpc/standard
+
+interfaces:
+  - name: Deployment
+    doc: Deployment management service
+    methods:
+      - name: CreateDeployment
+        doc: Create a new deployment record
+        parameters:
+          - name: app_name
+            type: string
+            doc: The name of the application
+          - name: cluster_id
+            type: string
+            doc: The cluster where deployment is happening
+          - name: app_version_id
+            type: string
+            doc: The ID of the app version being deployed
+          - name: git_info
+            type: GitInfo
+            doc: Git information at time of deployment (optional)
+        results:
+          - name: deployment
+            type: DeploymentInfo
+            doc: The created deployment
+          - name: error
+            type: string
+            doc: Error message if deployment creation failed
+
+      - name: UpdateDeploymentStatus
+        doc: Update the status of a deployment
+        parameters:
+          - name: deployment_id
+            type: string
+            doc: The ID of the deployment to update
+          - name: status
+            type: string
+            doc: New status (active, failed, rolled_back)
+          - name: error_message
+            type: string
+            doc: Error message if status is failed (optional)
+        results:
+          - name: deployment
+            type: DeploymentInfo
+            doc: The updated deployment
+
+      - name: UpdateDeploymentPhase
+        doc: Update the current phase of a deployment
+        parameters:
+          - name: deployment_id
+            type: string
+            doc: The ID of the deployment to update
+          - name: phase
+            type: string
+            doc: New phase (preparing, building, pushing, activating)
+        results:
+          - name: deployment
+            type: DeploymentInfo
+            doc: The updated deployment
+
+      - name: UpdateFailedDeployment
+        doc: Update a failed deployment with error details and logs
+        parameters:
+          - name: deployment_id
+            type: string
+            doc: The ID of the deployment to update
+          - name: error_message
+            type: string
+            doc: Error message describing the failure
+          - name: build_logs
+            type: string
+            doc: Build logs from the failed deployment
+        results:
+          - name: deployment
+            type: DeploymentInfo
+            doc: The updated deployment
+
+      - name: UpdateDeploymentAppVersion
+        doc: Update deployment with the actual app version ID after build
+        parameters:
+          - name: deployment_id
+            type: string
+            doc: The ID of the deployment to update
+          - name: app_version_id
+            type: string
+            doc: The actual app version ID created by the build
+        results:
+          - name: deployment
+            type: DeploymentInfo
+            doc: The updated deployment
+
+      - name: ListDeployments
+        doc: List deployments with optional filters
+        parameters:
+          - name: app_name
+            type: string
+            doc: Filter by application name (optional)
+          - name: cluster_id
+            type: string
+            doc: Filter by cluster (optional)
+          - name: status
+            type: string
+            doc: Filter by status (optional)
+          - name: limit
+            type: int32
+            doc: Maximum number of results (optional)
+        results:
+          - name: deployments
+            type: list
+            element: DeploymentInfo
+            doc: List of deployments
+
+      - name: GetDeploymentById
+        doc: Get a specific deployment by ID
+        parameters:
+          - name: deployment_id
+            type: string
+            doc: The deployment ID
+        results:
+          - name: deployment
+            type: DeploymentInfo
+            doc: The deployment details
+
+      - name: GetActiveDeployment
+        doc: Get the currently active deployment for an app/cluster
+        parameters:
+          - name: app_name
+            type: string
+            doc: The application name
+          - name: cluster_id
+            type: string
+            doc: The cluster ID
+        results:
+          - name: deployment
+            type: DeploymentInfo
+            doc: The active deployment (if any)
+
+types:
+  - type: DeploymentInfo
+    doc: Information about a deployment
+    fields:
+      - name: id
+        type: string
+        index: 0
+        doc: Unique deployment ID
+      - name: app_name
+        type: string
+        index: 1
+        doc: The application name
+      - name: app_version_id
+        type: string
+        index: 2
+        doc: The app version ID
+      - name: cluster_id
+        type: string
+        index: 3
+        doc: The cluster ID
+      - name: status
+        type: string
+        index: 4
+        doc: Current deployment status
+      - name: phase
+        type: string
+        index: 5
+        doc: Current deployment phase
+      - name: deployed_by_user_id
+        type: string
+        index: 6
+        doc: ID of the user who deployed
+      - name: deployed_by_user_email
+        type: string
+        index: 7
+        doc: Email of the user who deployed
+      - name: deployed_at
+        type: standard.Timestamp
+        index: 8
+        doc: When the deployment was initiated
+      - name: completed_at
+        type: standard.Timestamp
+        index: 9
+        doc: When the deployment was completed (optional)
+      - name: error_message
+        type: string
+        index: 10
+        doc: Error message if deployment failed (optional)
+      - name: build_logs
+        type: string
+        index: 11
+        doc: Build logs from the deployment (especially for failures)
+      - name: git_info
+        type: GitInfo
+        index: 12
+        doc: Git information at time of deployment (optional)
+
+  - type: GitInfo
+    doc: Git repository information
+    fields:
+      - name: sha
+        type: string
+        index: 0
+        doc: Git commit SHA
+      - name: ref
+        type: string
+        index: 1
+        doc: Git reference (tag or branch)
+      - name: branch
+        type: string
+        index: 2
+        doc: Git branch name
+      - name: repository
+        type: string
+        index: 3
+        doc: Git repository URL
+      - name: is_dirty
+        type: bool
+        index: 4
+        doc: Whether working tree had uncommitted changes
+      - name: working_tree_hash
+        type: string
+        index: 5
+        doc: Hash of working tree if dirty
+      - name: commit_message
+        type: string
+        index: 6
+        doc: Git commit message
+      - name: commit_author_name
+        type: string
+        index: 7
+        doc: Name of commit author
+      - name: commit_author_email
+        type: string
+        index: 8
+        doc: Email of commit author
+      - name: commit_timestamp
+        type: standard.Timestamp
+        index: 9
+        doc: When the commit was made

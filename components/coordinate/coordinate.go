@@ -20,6 +20,7 @@ import (
 	"miren.dev/runtime/api/app/app_v1alpha"
 	"miren.dev/runtime/api/build/build_v1alpha"
 	"miren.dev/runtime/api/core/core_v1alpha"
+	deployment_v1alpha "miren.dev/runtime/api/deployment/deployment_v1alpha"
 	aes "miren.dev/runtime/api/entityserver"
 	esv1 "miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/api/exec/exec_v1alpha"
@@ -35,6 +36,7 @@ import (
 	"miren.dev/runtime/pkg/rpc"
 	"miren.dev/runtime/servers/app"
 	"miren.dev/runtime/servers/build"
+	"miren.dev/runtime/servers/deployment"
 	"miren.dev/runtime/servers/entityserver"
 	execproxy "miren.dev/runtime/servers/exec_proxy"
 	"miren.dev/runtime/servers/logs"
@@ -462,6 +464,13 @@ func (c *Coordinator) Start(ctx context.Context) error {
 
 	ls := logs.NewServer(c.Log, ec, c.Logs)
 	server.ExposeValue("dev.miren.runtime/logs", app_v1alpha.AdaptLogs(ls))
+
+	ds, err := deployment.NewDeploymentServer(c.Log, eac)
+	if err != nil {
+		c.Log.Error("failed to create deployment server", "error", err)
+		return err
+	}
+	server.ExposeValue("dev.miren.runtime/deployment", deployment_v1alpha.AdaptDeployment(ds))
 
 	c.Log.Info("started RPC server")
 

@@ -136,4 +136,71 @@ kinds:
               type: bool
               doc: Whether or not the value is sensitive
 
+  deployment:
+    app_name:
+      type: string
+      doc: The name of the app being deployed
+      indexed: true
+    
+    app_version:
+      type: string
+      doc: The app version ID or temporary value (pending-build, failed-{id})
+    
+    cluster_id:
+      type: string
+      doc: The cluster where the deployment is happening
+      indexed: true
+    
+    status:
+      type: string
+      doc: Deployment status (in_progress, active, failed, rolled_back)
+      indexed: true
+    
+    phase:
+      type: string
+      doc: Current phase of deployment (preparing, building, pushing, activating)
+    
+    deployed_by:
+      type: component
+      doc: Information about who initiated the deployment
+      attrs:
+        user_id:
+          type: string
+          doc: The ID of the user who deployed
+        user_email:
+          type: string
+          doc: The email of the user who deployed
+        timestamp:
+          type: string
+          doc: When the deployment was initiated (RFC3339 format)
+    
+    completed_at:
+      type: string
+      doc: When the deployment was completed (RFC3339 format)
+    
+    error_message:
+      type: string
+      doc: Error message if deployment failed
+    
+    build_logs:
+      type: string
+      doc: Build logs concatenated with newlines (especially useful for failed deployments)
+      
+    git_info:
+      type: component
+      doc: Git information at time of deployment
+      attrs:
+        sha:
+          type: string
+          doc: Git commit SHA
+        branch:
+          type: string
+          doc: Git branch name
+        message:
+          type: string
+          doc: Git commit message
+        author:
+          type: string
+          doc: Git commit author
+
 
