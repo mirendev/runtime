@@ -1,6 +1,7 @@
 package httpingress
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -112,5 +113,43 @@ func TestHTTPTimeoutHandler(t *testing.T) {
 				t.Errorf("Expected body to contain '%s', got '%s'", tt.expectedBody, body)
 			}
 		})
+	}
+}
+
+func TestHealthEndpoint(t *testing.T) {
+	// Create a simple server instance
+	server := &Server{}
+
+	// Create test request
+	req := httptest.NewRequest("GET", "/.well-known/miren/health", nil)
+	rec := httptest.NewRecorder()
+
+	// Call handler directly
+	server.handleHealth(rec, req)
+
+	// Check status code
+	if rec.Code != http.StatusOK {
+		t.Errorf("Expected status %d, got %d", http.StatusOK, rec.Code)
+	}
+
+	// Check content type
+	contentType := rec.Header().Get("Content-Type")
+	if contentType != "application/json" {
+		t.Errorf("Expected Content-Type 'application/json', got '%s'", contentType)
+	}
+
+	// Parse JSON response
+	var response HealthResponse
+	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
+		t.Fatalf("Failed to decode JSON response: %v", err)
+	}
+
+	// Verify response structure
+	if response.Status == "" {
+		t.Error("Expected status field in response")
+	}
+
+	if response.Checks == nil {
+		t.Error("Expected checks field in response")
 	}
 }
