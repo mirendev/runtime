@@ -13,15 +13,21 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"miren.dev/runtime/pkg/registration"
 )
 
 // ServerInstall sets up systemd units to run the miren server
 func ServerInstall(ctx *Context, opts struct {
-	Address   string `short:"a" long:"address" description:"Server address to bind to" default:"0.0.0.0:8443"`
-	Verbosity string `short:"v" long:"verbosity" description:"Verbosity level" default:"-vv"`
-	Branch    string `short:"b" long:"branch" description:"Branch to download if release not found" default:"main"`
-	Force     bool   `short:"f" long:"force" description:"Overwrite existing service file"`
-	NoStart   bool   `long:"no-start" description:"Do not start the service after installation"`
+	Address      string            `short:"a" long:"address" description:"Server address to bind to" default:"0.0.0.0:8443"`
+	Verbosity    string            `short:"v" long:"verbosity" description:"Verbosity level" default:"-vv"`
+	Branch       string            `short:"b" long:"branch" description:"Branch to download if release not found" default:"main"`
+	Force        bool              `short:"f" long:"force" description:"Overwrite existing service file"`
+	NoStart      bool              `long:"no-start" description:"Do not start the service after installation"`
+	WithoutCloud bool              `long:"without-cloud" description:"Skip cloud registration setup"`
+	ClusterName  string            `short:"n" long:"name" description:"Cluster name for cloud registration"`
+	CloudURL     string            `short:"u" long:"url" description:"Cloud URL for registration" default:"https://miren.cloud"`
+	Tags         map[string]string `short:"t" long:"tag" description:"Tags for the cluster (key:value)"`
 }) error {
 	// Check if running with sufficient privileges
 	if os.Geteuid() != 0 {
@@ -46,32 +52,101 @@ func ServerInstall(ctx *Context, opts struct {
 		ctx.Completed("Release downloaded successfully")
 	}
 
+	// Register with cloud unless --without-cloud is specified
+	if !opts.WithoutCloud {
+		// Check if already registered
+		existing, err := registration.LoadRegistration("/var/lib/miren/server")
+		if err == nil && existing != nil && existing.Status == "approved" {
+			ctx.Info("Cluster already registered as '%s' (ID: %s)", existing.ClusterName, existing.ClusterID)
+		} else if err == nil && existing != nil && existing.Status == "pending" {
+			ctx.Info("Found pending registration for cluster '%s', attempting to complete...", existing.ClusterName)
+
+			// Use cluster name from flag or existing registration
+			clusterName := opts.ClusterName
+			if clusterName == "" {
+				clusterName = existing.ClusterName
+			}
+
+			registerOpts := RegisterOptions{
+				ClusterName: clusterName,
+				CloudURL:    opts.CloudURL,
+				Tags:        opts.Tags,
+				OutputDir:   "/var/lib/miren/server",
+			}
+
+			if err := Register(ctx, registerOpts); err != nil {
+				ctx.Warn("Cloud registration failed: %v", err)
+				ctx.Info("Continuing with installation without cloud registration")
+				ctx.Info("You can register later with: miren register")
+			} else {
+				ctx.Completed("Cloud registration complete")
+			}
+		} else {
+			ctx.Info("Setting up cloud registration...")
+
+			// Use cluster name from flag or hostname
+			clusterName := opts.ClusterName
+			if clusterName == "" {
+				hostname, err := os.Hostname()
+				if err != nil {
+					hostname = "miren-cluster"
+				}
+				clusterName = hostname
+			}
+
+			registerOpts := RegisterOptions{
+				ClusterName: clusterName,
+				CloudURL:    opts.CloudURL,
+				Tags:        opts.Tags,
+				OutputDir:   "/var/lib/miren/server",
+			}
+
+			if err := Register(ctx, registerOpts); err != nil {
+				ctx.Warn("Cloud registration failed: %v", err)
+				ctx.Info("Continuing with installation without cloud registration")
+				ctx.Info("You can register later with: miren register")
+			} else {
+				ctx.Completed("Cloud registration complete")
+			}
+		}
+	} else {
+		ctx.Info("Skipping cloud registration (--without-cloud specified)")
+	}
+
 	ctx.Info("Installing miren systemd service...")
 
 	// Check if service file already exists
 	servicePath := "/etc/systemd/system/miren.service"
-	if _, err := os.Stat(servicePath); err == nil && !opts.Force {
-		return fmt.Errorf("service file already exists at %s (use --force to overwrite)", servicePath)
+	serviceExists := false
+	if _, err := os.Stat(servicePath); err == nil {
+		serviceExists = true
+		if !opts.Force {
+			ctx.Info("Service file already exists at %s (skipping, use --force to overwrite)", servicePath)
+		} else {
+			ctx.Info("Service file exists, overwriting due to --force flag")
+		}
 	}
 
-	// Build ExecStart command
-	var execStartParts []string
-	execStartParts = append(execStartParts, mirenPath, "server")
+	// Only write service file if it doesn't exist or --force is specified
+	if !serviceExists || opts.Force {
+		// Build ExecStart command
+		var execStartParts []string
+		execStartParts = append(execStartParts, mirenPath, "server")
 
-	if opts.Verbosity != "" {
-		execStartParts = append(execStartParts, opts.Verbosity)
-	}
+		if opts.Verbosity != "" {
+			execStartParts = append(execStartParts, opts.Verbosity)
+		}
 
-	if opts.Address != "" {
-		execStartParts = append(execStartParts, fmt.Sprintf("--address=%s", opts.Address))
-	}
+		if opts.Address != "" {
+			execStartParts = append(execStartParts, fmt.Sprintf("--address=%s", opts.Address))
+		}
 
-	execStartParts = append(execStartParts, "--serve-tls")
+		execStartParts = append(execStartParts, "--serve-tls")
 
-	execStart := strings.Join(execStartParts, " ")
+		execStart := strings.Join(execStartParts, " ")
 
-	// Create systemd service file content
-	serviceContent := fmt.Sprintf(`[Unit]
+		// Create systemd service file content
+		serviceContent := fmt.Sprintf(`[Unit]
 Description=Miren Service
 After=network-online.target
 Wants=network-online.target
@@ -94,41 +169,42 @@ TimeoutStopSec=90s
 WantedBy=multi-user.target
 `, execStart)
 
-	ctx.Log.Info("creating systemd service file", "path", servicePath)
+		ctx.Log.Info("creating systemd service file", "path", servicePath)
 
-	// Write the service file
-	if err := os.WriteFile(servicePath, []byte(serviceContent), 0644); err != nil {
-		return fmt.Errorf("failed to write service file: %w", err)
-	}
+		// Write the service file
+		if err := os.WriteFile(servicePath, []byte(serviceContent), 0644); err != nil {
+			return fmt.Errorf("failed to write service file: %w", err)
+		}
 
-	ctx.Completed("Service file created at %s", servicePath)
+		ctx.Completed("Service file created at %s", servicePath)
 
-	// Reload systemd
-	ctx.Info("Reloading systemd daemon...")
-	cmd := exec.Command("systemctl", "daemon-reload")
-	if output, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("failed to reload systemd: %w\nOutput: %s", err, output)
+		// Reload systemd
+		ctx.Info("Reloading systemd daemon...")
+		cmd := exec.Command("systemctl", "daemon-reload")
+		if output, err := cmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("failed to reload systemd: %w\nOutput: %s", err, output)
+		}
 	}
 
 	// Enable the service (and optionally start it)
 	if opts.NoStart {
 		ctx.Info("Enabling miren service...")
-		cmd = exec.Command("systemctl", "enable", "miren.service")
+		cmd := exec.Command("systemctl", "enable", "miren.service")
 		if output, err := cmd.CombinedOutput(); err != nil {
 			return fmt.Errorf("failed to enable service: %w\nOutput: %s", err, output)
 		}
 		ctx.Completed("Miren service enabled (but not started)")
 	} else {
 		ctx.Info("Enabling and starting miren service...")
-		cmd = exec.Command("systemctl", "enable", "--now", "miren.service")
+		cmd := exec.Command("systemctl", "enable", "--now", "miren.service")
 		if output, err := cmd.CombinedOutput(); err != nil {
 			return fmt.Errorf("failed to enable and start service: %w\nOutput: %s", err, output)
 		}
 		ctx.Completed("Miren service enabled and started")
 
 		// Check service status
-		cmd = exec.Command("systemctl", "is-active", "miren.service")
-		if output, err := cmd.CombinedOutput(); err == nil && strings.TrimSpace(string(output)) == "active" {
+		statusCmd := exec.Command("systemctl", "is-active", "miren.service")
+		if output, err := statusCmd.CombinedOutput(); err == nil && strings.TrimSpace(string(output)) == "active" {
 			ctx.Completed("Service is running")
 		} else {
 			ctx.Warn("Service may not be running, check status with: systemctl status miren")
