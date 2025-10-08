@@ -20,8 +20,8 @@ func ServerInstall(ctx *Context, opts struct {
 	Address   string `short:"a" long:"address" description:"Server address to bind to" default:"0.0.0.0:8443"`
 	Verbosity string `short:"v" long:"verbosity" description:"Verbosity level" default:"-vv"`
 	Branch    string `short:"b" long:"branch" description:"Branch to download if release not found" default:"main"`
-	Start     bool   `long:"start" description:"Start the service immediately after installation"`
 	Force     bool   `short:"f" long:"force" description:"Overwrite existing service file"`
+	NoStart   bool   `long:"no-start" description:"Do not start the service after installation"`
 }) error {
 	// Check if running with sufficient privileges
 	if os.Geteuid() != 0 {
@@ -110,28 +110,28 @@ WantedBy=multi-user.target
 		return fmt.Errorf("failed to reload systemd: %w\nOutput: %s", err, output)
 	}
 
-	// Enable the service
-	ctx.Info("Enabling miren service...")
-	cmd = exec.Command("systemctl", "enable", "miren.service")
-	if output, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("failed to enable service: %w\nOutput: %s", err, output)
-	}
-
-	ctx.Completed("Miren service enabled")
-
-	// Start the service if requested
-	if opts.Start {
-		ctx.Info("Starting miren service...")
-		cmd = exec.Command("systemctl", "start", "miren.service")
+	// Enable the service (and optionally start it)
+	if opts.NoStart {
+		ctx.Info("Enabling miren service...")
+		cmd = exec.Command("systemctl", "enable", "miren.service")
 		if output, err := cmd.CombinedOutput(); err != nil {
-			return fmt.Errorf("failed to start service: %w\nOutput: %s", err, output)
+			return fmt.Errorf("failed to enable service: %w\nOutput: %s", err, output)
 		}
-		ctx.Completed("Miren service started")
+		ctx.Completed("Miren service enabled (but not started)")
+	} else {
+		ctx.Info("Enabling and starting miren service...")
+		cmd = exec.Command("systemctl", "enable", "--now", "miren.service")
+		if output, err := cmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("failed to enable and start service: %w\nOutput: %s", err, output)
+		}
+		ctx.Completed("Miren service enabled and started")
 
 		// Check service status
 		cmd = exec.Command("systemctl", "is-active", "miren.service")
 		if output, err := cmd.CombinedOutput(); err == nil && strings.TrimSpace(string(output)) == "active" {
 			ctx.Completed("Service is running")
+		} else {
+			ctx.Warn("Service may not be running, check status with: systemctl status miren")
 		}
 	}
 
@@ -139,11 +139,6 @@ WantedBy=multi-user.target
 	fmt.Println()
 	ctx.Info("Installation complete!")
 	fmt.Println()
-	if !opts.Start {
-		ctx.Info("To start the service now, run:")
-		fmt.Println("  sudo systemctl start miren")
-		fmt.Println()
-	}
 	ctx.Info("To check service status:")
 	fmt.Println("  systemctl status miren")
 	fmt.Println()
