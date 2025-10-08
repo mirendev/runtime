@@ -526,9 +526,9 @@ func (e *EntityServer) List(ctx context.Context, req *entityserver_v1alpha.Entit
 	if index.ID == entity.AttrSession {
 		str := index.Value.String()
 
-		data, err := base58.Decode(str)
-		if err != nil {
-			return fmt.Errorf("invalid session id: %w", err)
+		data, decodeErr := base58.Decode(str)
+		if decodeErr != nil {
+			return fmt.Errorf("invalid session id: %w", decodeErr)
 		}
 
 		ids, err = e.Store.ListSessionEntities(ctx, data)

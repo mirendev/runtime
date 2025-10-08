@@ -13,7 +13,6 @@ import (
 	"github.com/moby/buildkit/client/llb"
 	"github.com/moby/buildkit/frontend"
 	gateway "github.com/moby/buildkit/frontend/gateway/client"
-	"miren.dev/runtime/appconfig"
 	"miren.dev/runtime/pkg/idgen"
 	"miren.dev/runtime/pkg/stackbuild"
 
@@ -288,26 +287,6 @@ type ImageConfig struct {
 	Services map[string]string
 }
 
-func (b *Buildkit) loadAppConfig(dfs fsutil.FS) (*appconfig.AppConfig, error) {
-	dr, err := dfs.Open("app.json")
-	if err != nil {
-		return nil, nil
-	}
-
-	defer dr.Close()
-
-	data, err := io.ReadAll(dr)
-	if err != nil {
-		return nil, err
-	}
-
-	ac, err := appconfig.Parse(data)
-	if err != nil {
-		return nil, err
-	}
-
-	return ac, nil
-}
 
 type BuildResult struct {
 	Entrypoint string

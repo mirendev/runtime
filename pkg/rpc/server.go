@@ -10,7 +10,6 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"reflect"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -127,8 +126,6 @@ type Interface struct {
 	value         any
 	aroundContext func(ctx context.Context, call Call) (context.Context, func())
 
-	methodMissing func(ctx context.Context, method string, call Call) error
-
 	forbidRestore bool
 	restoreState  HasRestoreState
 	constructor   HasReconstructFromState
@@ -142,11 +139,6 @@ func (i *Interface) SetAroundContext(fn func(ctx context.Context, call Call) (co
 	i.aroundContext = fn
 }
 
-func typeNameHash(obj any) string {
-	t := reflect.TypeOf(obj)
-	name := t.PkgPath() + "." + t.Name()
-	return base58.Encode([]byte(name))
-}
 
 func NewInterface(methods []Method, obj any) *Interface {
 	m := make(map[string]Method)

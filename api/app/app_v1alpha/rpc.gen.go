@@ -2008,27 +2008,27 @@ type reexportCrud struct {
 	client rpc.Client
 }
 
-func (_ reexportCrud) New(ctx context.Context, state *CrudNew) error {
+func (reexportCrud) New(ctx context.Context, state *CrudNew) error {
 	panic("not implemented")
 }
 
-func (_ reexportCrud) SetConfiguration(ctx context.Context, state *CrudSetConfiguration) error {
+func (reexportCrud) SetConfiguration(ctx context.Context, state *CrudSetConfiguration) error {
 	panic("not implemented")
 }
 
-func (_ reexportCrud) GetConfiguration(ctx context.Context, state *CrudGetConfiguration) error {
+func (reexportCrud) GetConfiguration(ctx context.Context, state *CrudGetConfiguration) error {
 	panic("not implemented")
 }
 
-func (_ reexportCrud) SetHost(ctx context.Context, state *CrudSetHost) error {
+func (reexportCrud) SetHost(ctx context.Context, state *CrudSetHost) error {
 	panic("not implemented")
 }
 
-func (_ reexportCrud) List(ctx context.Context, state *CrudList) error {
+func (reexportCrud) List(ctx context.Context, state *CrudList) error {
 	panic("not implemented")
 }
 
-func (_ reexportCrud) Destroy(ctx context.Context, state *CrudDestroy) error {
+func (reexportCrud) Destroy(ctx context.Context, state *CrudDestroy) error {
 	panic("not implemented")
 }
 
@@ -2356,7 +2356,7 @@ type reexportUserQuery struct {
 	client rpc.Client
 }
 
-func (_ reexportUserQuery) WhoAmI(ctx context.Context, state *UserQueryWhoAmI) error {
+func (reexportUserQuery) WhoAmI(ctx context.Context, state *UserQueryWhoAmI) error {
 	panic("not implemented")
 }
 
@@ -2516,7 +2516,7 @@ type reexportAppStatus struct {
 	client rpc.Client
 }
 
-func (_ reexportAppStatus) AppInfo(ctx context.Context, state *AppStatusAppInfo) error {
+func (reexportAppStatus) AppInfo(ctx context.Context, state *AppStatusAppInfo) error {
 	panic("not implemented")
 }
 
@@ -2813,11 +2813,11 @@ type reexportLogs struct {
 	client rpc.Client
 }
 
-func (_ reexportLogs) AppLogs(ctx context.Context, state *LogsAppLogs) error {
+func (reexportLogs) AppLogs(ctx context.Context, state *LogsAppLogs) error {
 	panic("not implemented")
 }
 
-func (_ reexportLogs) SandboxLogs(ctx context.Context, state *LogsSandboxLogs) error {
+func (reexportLogs) SandboxLogs(ctx context.Context, state *LogsSandboxLogs) error {
 	panic("not implemented")
 }
 
@@ -3385,23 +3385,23 @@ type reexportDisks struct {
 	client rpc.Client
 }
 
-func (_ reexportDisks) New(ctx context.Context, state *DisksNew) error {
+func (reexportDisks) New(ctx context.Context, state *DisksNew) error {
 	panic("not implemented")
 }
 
-func (_ reexportDisks) GetById(ctx context.Context, state *DisksGetById) error {
+func (reexportDisks) GetById(ctx context.Context, state *DisksGetById) error {
 	panic("not implemented")
 }
 
-func (_ reexportDisks) GetByName(ctx context.Context, state *DisksGetByName) error {
+func (reexportDisks) GetByName(ctx context.Context, state *DisksGetByName) error {
 	panic("not implemented")
 }
 
-func (_ reexportDisks) List(ctx context.Context, state *DisksList) error {
+func (reexportDisks) List(ctx context.Context, state *DisksList) error {
 	panic("not implemented")
 }
 
-func (_ reexportDisks) Delete(ctx context.Context, state *DisksDelete) error {
+func (reexportDisks) Delete(ctx context.Context, state *DisksDelete) error {
 	panic("not implemented")
 }
 
@@ -3927,15 +3927,15 @@ type reexportAddons struct {
 	client rpc.Client
 }
 
-func (_ reexportAddons) CreateInstance(ctx context.Context, state *AddonsCreateInstance) error {
+func (reexportAddons) CreateInstance(ctx context.Context, state *AddonsCreateInstance) error {
 	panic("not implemented")
 }
 
-func (_ reexportAddons) ListInstances(ctx context.Context, state *AddonsListInstances) error {
+func (reexportAddons) ListInstances(ctx context.Context, state *AddonsListInstances) error {
 	panic("not implemented")
 }
 
-func (_ reexportAddons) DeleteInstance(ctx context.Context, state *AddonsDeleteInstance) error {
+func (reexportAddons) DeleteInstance(ctx context.Context, state *AddonsDeleteInstance) error {
 	panic("not implemented")
 }
 

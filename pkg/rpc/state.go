@@ -75,7 +75,6 @@ type State struct {
 
 	transport      *quic.Transport
 	localTransport *quic.Transport
-	localRemote    net.Addr
 
 	defaultEndpoint string
 
@@ -100,10 +99,6 @@ func (s *State) LoopbackAddr() string {
 	return addr
 }
 
-type cachedConn struct {
-	ec quic.EarlyConnection
-	hc *http3.ClientConn
-}
 
 type stateOptions struct {
 	certPath string

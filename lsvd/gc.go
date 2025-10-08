@@ -40,7 +40,6 @@ type CopyIterator struct {
 	or  SegmentReader
 	//br  *bufio.Reader
 
-	err error
 
 	//hdr SegmentHeader
 
@@ -79,11 +78,15 @@ func (c *CopyIterator) gatherExtents() {
 	for i := c.d.lba2pba.LockedIterator(); i.Valid(); i.Next() {
 		pe := i.CompactValuePtr()
 		if pe.segIdx == idx {
-			c.extents = append(c.extents, gcExtent{
-				CE:      pe,
-				Live:    pe.Live(),
-				Segment: idx,
-			})
+			live := pe.Live()
+			// Only include extents that have live blocks
+			if live.Blocks > 0 {
+				c.extents = append(c.extents, gcExtent{
+					CE:      pe,
+					Live:    live,
+					Segment: idx,
+				})
+			}
 		}
 	}
 }
@@ -136,6 +139,12 @@ func (d *CopyIterator) fetchExtent(
 
 func (c *CopyIterator) ProcessFromExtents(ctx *Context, log *slog.Logger) error {
 	log.Debug("copying extents for segment", "extents", len(c.extents), "segment", c.seg, "new-segment", c.newSegment)
+
+	// Defensive check: ensure we have a valid segment reader
+	if c.or == nil {
+		return fmt.Errorf("segment reader is nil for segment %s (expectedBlocks=%d, extents=%d)",
+			c.seg, c.expectedBlocks, len(c.extents))
+	}
 
 	marker := ctx.Marker()
 
@@ -248,14 +257,17 @@ func (c *CopyIterator) updateDisk(ctx context.Context) error {
 }
 
 func (c *CopyIterator) Close(ctx context.Context) error {
-	err := c.updateDisk(ctx)
-	if err != nil {
-		return err
-	}
+	// Only update disk if we actually processed extents and have a valid new segment
+	if c.newSegment.Valid() && c.copiedExtents > 0 {
+		err := c.updateDisk(ctx)
+		if err != nil {
+			return err
+		}
 
-	if !c.errorPatching {
-		for _, seg := range c.segmentsProcessed {
-			c.d.s.SetDeleted(seg, c.d.log)
+		if !c.errorPatching {
+			for _, seg := range c.segmentsProcessed {
+				c.d.s.SetDeleted(seg, c.d.log)
+			}
 		}
 	}
 
@@ -271,10 +283,19 @@ func (c *CopyIterator) Close(ctx context.Context) error {
 
 	c.builder.Close(c.d.log)
 
-	return c.or.Close()
+	if c.or != nil {
+		return c.or.Close()
+	}
+	return nil
 }
 
 func (ci *CopyIterator) Reset(ctx context.Context, seg SegmentId) error {
+	// Close previous segment reader if reusing CopyIterator
+	if ci.or != nil {
+		ci.or.Close()
+		ci.or = nil
+	}
+
 	ci.seg = seg
 	ci.gatherExtents()
 
@@ -340,6 +361,13 @@ func (d *Disk) CopyIterator(ctx context.Context, seg SegmentId) (*CopyIterator, 
 	err := ci.Reset(ctx, seg)
 	if err != nil {
 		return nil, err
+	}
+
+	// If the segment was completely dead (all garbage), Reset marked it deleted
+	// and returned early without opening it. Return nil to signal to the caller
+	// that GC should be skipped.
+	if ci.expectedBlocks == 0 {
+		return nil, nil
 	}
 
 	return ci, nil

@@ -85,7 +85,7 @@ func (r *Runner) Start(ctx context.Context, name, fsPath, bindAddr string) error
 		return fmt.Errorf("unable to locate volume: %s", err)
 	}
 
-	idx, conn, cleanup, err := nbdnl.Loopback(ctx, uint64(vol.Size))
+	idx, conn, _, cleanup, err := nbdnl.Loopback(ctx, uint64(vol.Size), nbdnl.IndexAny)
 	if err != nil {
 		return errors.Wrapf(err, "setting up loopback")
 	}
@@ -304,7 +304,7 @@ func (r *Runner) Run(ctx context.Context, name, fsPath, bindAddr string) error {
 		return fmt.Errorf("unable to locate volume: %s", err)
 	}
 
-	idx, conn, cleanup, err := nbdnl.Loopback(ctx, uint64(vol.Size))
+	idx, conn, _, cleanup, err := nbdnl.Loopback(ctx, uint64(vol.Size), nbdnl.IndexAny)
 	if err != nil {
 		return errors.Wrapf(err, "setting up loopback")
 	}

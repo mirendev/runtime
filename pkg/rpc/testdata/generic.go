@@ -150,7 +150,7 @@ type reexportReader[T any] struct {
 	client rpc.Client
 }
 
-func (_ reexportReader[T]) Read(ctx context.Context, state *ReaderRead[T]) error {
+func (reexportReader[T]) Read(ctx context.Context, state *ReaderRead[T]) error {
 	panic("not implemented")
 }
 

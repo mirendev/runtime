@@ -195,13 +195,17 @@ func TestServer(t *testing.T) error {
 		return err
 	}
 
-	r := runner.NewRunner(log, reg, runner.RunnerConfig{
+	r, err := runner.NewRunner(log, reg, runner.RunnerConfig{
 		Id:            optsRunnerId,
-		ServerAddress: optsAddress,
 		ListenAddress: optsRunnerAddress,
 		Workers:       1,
 		Config:        rcfg,
+		DataPath:      t.TempDir(),
 	})
+	if err != nil {
+		ctxCancel()
+		return err
+	}
 
 	err = r.Start(sub)
 	if err != nil {

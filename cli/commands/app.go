@@ -139,28 +139,7 @@ func App(ctx *Context, opts struct {
 	return err
 }
 
-const (
-	columnKeyName    = "name"
-	columnKeyVersion = "version"
-	columnKeyLeases  = "leases"
-	columnKeyIdle    = "idle"
-	columnKeyUsage   = "usage"
 
-	colorNormal   = "#fa0"
-	colorFire     = "#f64"
-	colorElectric = "#ff0"
-	colorWater    = "#44f"
-	colorPlant    = "#8b8"
-)
-
-var (
-	styleSubtle = lipgloss.NewStyle().Foreground(lipgloss.Color("#888"))
-
-	styleBase = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#a7a")).
-			BorderForeground(lipgloss.Color("#a38")).
-			Align(lipgloss.Right)
-)
 
 type Model struct {
 	cfg    *app_v1alpha.Configuration
@@ -173,7 +152,6 @@ type Model struct {
 	mem       timeserieslinechart.Model
 	rps       timeserieslinechart.Model
 	errorRate timeserieslinechart.Model
-	max       float64
 
 	width        int
 	stack, graph bool
@@ -181,28 +159,12 @@ type Model struct {
 	quitting bool
 }
 
-var randomFloat64 float64
-
 var defaultStyle = lipgloss.NewStyle().
 	BorderStyle(lipgloss.RoundedBorder()).
 	BorderForeground(lipgloss.Color(lightBlue)).
 	PaddingLeft(1).PaddingRight(1)
 
 var titleStyle = lipgloss.NewStyle().
-	Foreground(lipgloss.Color("3")) // yellow
-
-var blockStyle = lipgloss.NewStyle().
-	Foreground(lipgloss.Color("63")) // purple
-
-var blockStyle2 = lipgloss.NewStyle().
-	Foreground(lipgloss.Color("9")). // red
-	Background(lipgloss.Color("2"))  // green
-
-var blockStyle3 = lipgloss.NewStyle().
-	Foreground(lipgloss.Color("6")). // cyan
-	Background(lipgloss.Color("3"))  // yellow
-
-var blockStyle4 = lipgloss.NewStyle().
 	Foreground(lipgloss.Color("3")) // yellow
 
 func (m Model) Init() tea.Cmd {

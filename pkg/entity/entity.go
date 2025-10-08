@@ -454,11 +454,7 @@ func ValidKeyword(str string) bool {
 		return false
 	}
 
-	if special {
-		return false
-	}
-
-	return true
+	return !special
 }
 
 func MustKeyword(str string) types.Keyword {

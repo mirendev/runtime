@@ -3,14 +3,12 @@ package schema
 import (
 	"context"
 	"errors"
-	"sync"
 
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/types"
 )
 
 type SchemaRegistry struct {
-	mu      sync.Mutex
 	schemas map[string]*SchemaBuilder
 }
 

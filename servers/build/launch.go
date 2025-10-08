@@ -7,7 +7,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/containerd/containerd/v2/client"
 	buildkit "github.com/moby/buildkit/client"
 	"miren.dev/runtime/api/compute/compute_v1alpha"
 	"miren.dev/runtime/api/core/core_v1alpha"
@@ -28,13 +27,11 @@ type RunningBuildkit struct {
 	*LaunchBuildkit
 
 	addr string
-	task client.Task
 	id   string
 }
 
 type launchOptions struct {
 	logEntity string
-	cacheDir  string
 	attrs     map[string]string
 }
 
@@ -147,7 +144,7 @@ func (l *LaunchBuildkit) Launch(ctx context.Context, addr string, lo ...LaunchOp
 		},
 	})
 
-	ver := idgen.Gen("buildkit")
+	ver := idgen.GenNS("sb")
 	l.log.Info("creating buildkit sandbox entity", "name", ver)
 
 	var rpcE entityserver_v1alpha.Entity
@@ -155,6 +152,7 @@ func (l *LaunchBuildkit) Launch(ctx context.Context, addr string, lo ...LaunchOp
 		(&core_v1alpha.Metadata{
 			Name: ver,
 		}).Encode,
+		entity.Ident, "sandbox/"+ver,
 		sb.Encode,
 	))
 

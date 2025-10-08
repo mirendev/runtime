@@ -335,7 +335,7 @@ type reexportSandboxExec struct {
 	client rpc.Client
 }
 
-func (_ reexportSandboxExec) Exec(ctx context.Context, state *SandboxExecExec) error {
+func (reexportSandboxExec) Exec(ctx context.Context, state *SandboxExecExec) error {
 	panic("not implemented")
 }
 

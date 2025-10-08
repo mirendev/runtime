@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"time"
 
 	clientv3 "go.etcd.io/etcd/client/v3"
@@ -20,7 +21,6 @@ import (
 	"miren.dev/runtime/api/build/build_v1alpha"
 	"miren.dev/runtime/api/core/core_v1alpha"
 	aes "miren.dev/runtime/api/entityserver"
-	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	esv1 "miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/api/exec/exec_v1alpha"
 	"miren.dev/runtime/clientconfig"
@@ -304,7 +304,7 @@ func (c *Coordinator) Start(ctx context.Context) error {
 
 	err = c.LoadAPICert(ctx)
 	if err != nil {
-		c.Log.Error("failed to load CA", "error", err)
+		c.Log.Error("failed to load API cert", "error", err)
 		return err
 	}
 
@@ -339,11 +339,17 @@ func (c *Coordinator) Start(ctx context.Context) error {
 			authConfig.Tags = tags
 		}
 
-		// Load the private key and create an AuthClient for the runtime
-		keyData, err := os.ReadFile(c.CloudAuth.PrivateKey)
-		if err != nil {
-			c.Log.Error("failed to load service account private key", "error", err, "path", c.CloudAuth.PrivateKey)
-			return fmt.Errorf("failed to load service account private key: %w", err)
+		var keyData []byte
+
+		if strings.HasPrefix(c.CloudAuth.PrivateKey, "-----BEGIN PRIVATE KEY----") {
+			keyData = []byte(c.CloudAuth.PrivateKey)
+		} else {
+			// Load the private key and create an AuthClient for the runtime
+			keyData, err = os.ReadFile(c.CloudAuth.PrivateKey)
+			if err != nil {
+				c.Log.Error("failed to load service account private key", "error", err, "path", c.CloudAuth.PrivateKey)
+				return fmt.Errorf("failed to load service account private key: %w", err)
+			}
 		}
 
 		keyPair, err := cloudauth.LoadKeyPairFromPEM(string(keyData))
@@ -424,7 +430,7 @@ func (c *Coordinator) Start(ctx context.Context) error {
 		return err
 	}
 
-	eac := entityserver_v1alpha.NewEntityAccessClient(loopback)
+	eac := esv1.NewEntityAccessClient(loopback)
 	ec := aes.NewClient(c.Log, eac)
 
 	defaultProject := &core_v1alpha.Project{

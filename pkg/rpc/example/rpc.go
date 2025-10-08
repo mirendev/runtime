@@ -346,11 +346,11 @@ type reexportMeter struct {
 	client rpc.Client
 }
 
-func (_ reexportMeter) ReadTemperature(ctx context.Context, state *MeterReadTemperature) error {
+func (reexportMeter) ReadTemperature(ctx context.Context, state *MeterReadTemperature) error {
 	panic("not implemented")
 }
 
-func (_ reexportMeter) GetSetter(ctx context.Context, state *MeterGetSetter) error {
+func (reexportMeter) GetSetter(ctx context.Context, state *MeterGetSetter) error {
 	panic("not implemented")
 }
 
@@ -544,7 +544,7 @@ type reexportSetTemp struct {
 	client rpc.Client
 }
 
-func (_ reexportSetTemp) SetTemp(ctx context.Context, state *SetTempSetTemp) error {
+func (reexportSetTemp) SetTemp(ctx context.Context, state *SetTempSetTemp) error {
 	panic("not implemented")
 }
 
@@ -699,7 +699,7 @@ type reexportUpdateReceiver struct {
 	client rpc.Client
 }
 
-func (_ reexportUpdateReceiver) Update(ctx context.Context, state *UpdateReceiverUpdate) error {
+func (reexportUpdateReceiver) Update(ctx context.Context, state *UpdateReceiverUpdate) error {
 	panic("not implemented")
 }
 
@@ -846,7 +846,7 @@ type reexportMeterUpdates struct {
 	client rpc.Client
 }
 
-func (_ reexportMeterUpdates) RegisterUpdates(ctx context.Context, state *MeterUpdatesRegisterUpdates) error {
+func (reexportMeterUpdates) RegisterUpdates(ctx context.Context, state *MeterUpdatesRegisterUpdates) error {
 	panic("not implemented")
 }
 
@@ -998,7 +998,7 @@ type reexportAdjustTemp struct {
 	client rpc.Client
 }
 
-func (_ reexportAdjustTemp) Adjust(ctx context.Context, state *AdjustTempAdjust) error {
+func (reexportAdjustTemp) Adjust(ctx context.Context, state *AdjustTempAdjust) error {
 	panic("not implemented")
 }
 
@@ -1150,7 +1150,7 @@ type reexportSetTempG[T any] struct {
 	client rpc.Client
 }
 
-func (_ reexportSetTempG[T]) SetTemp(ctx context.Context, state *SetTempGSetTemp[T]) error {
+func (reexportSetTempG[T]) SetTemp(ctx context.Context, state *SetTempGSetTemp[T]) error {
 	panic("not implemented")
 }
 
@@ -1297,7 +1297,7 @@ type reexportEmitTemps struct {
 	client rpc.Client
 }
 
-func (_ reexportEmitTemps) Emit(ctx context.Context, state *EmitTempsEmit) error {
+func (reexportEmitTemps) Emit(ctx context.Context, state *EmitTempsEmit) error {
 	panic("not implemented")
 }
 

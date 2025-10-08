@@ -58,6 +58,19 @@ func (s *Segments) SegmentBlocks(seg SegmentId) (uint64, uint64) {
 	return stats.Size, stats.Used
 }
 
+// SegmentInfo returns size, used blocks, and extent count for a segment
+func (s *Segments) SegmentInfo(seg SegmentId) (uint64, uint64, int) {
+	s.segmentsMu.Lock()
+	defer s.segmentsMu.Unlock()
+
+	stats, ok := s.segments[seg]
+	if !ok {
+		return 0, 0, 0
+	}
+
+	return stats.Size, stats.Used, stats.Extents
+}
+
 func (s *Segments) TotalBytes() uint64 {
 	s.segmentsMu.Lock()
 	defer s.segmentsMu.Unlock()
@@ -72,6 +85,45 @@ func (s *Segments) TotalBytes() uint64 {
 	}
 
 	return size * BlockSize
+}
+
+func (s *Segments) TotalBlocks() uint64 {
+	s.segmentsMu.Lock()
+	defer s.segmentsMu.Unlock()
+
+	var size uint64
+
+	for _, s := range s.segments {
+		if s.deleted {
+			continue
+		}
+		size += s.Size
+	}
+
+	return size
+}
+
+func (s *Segments) UsedBlocks() uint64 {
+	s.segmentsMu.Lock()
+	defer s.segmentsMu.Unlock()
+
+	var used uint64
+
+	for id, seg := range s.segments {
+		if seg.deleted {
+			continue
+		}
+		if seg.Used > 0 {
+			// Debug: log segments with non-zero Used
+			slog.Default().Debug("UsedBlocks: segment has used blocks",
+				"segment", id,
+				"used", seg.Used,
+				"size", seg.Size)
+		}
+		used += seg.Used
+	}
+
+	return used
 }
 
 func (s *Segments) Usage() float64 {
@@ -92,6 +144,14 @@ func (s *Segments) Usage() float64 {
 	return 100.0 * (float64(used) / float64(size)) // report as a percent
 }
 
+// Clear removes all segments
+func (s *Segments) Clear() {
+	s.segmentsMu.Lock()
+	defer s.segmentsMu.Unlock()
+
+	s.segments = make(map[SegmentId]*Segment)
+}
+
 func (s *Segments) Create(segId SegmentId, stats *SegmentStats) {
 	s.segmentsMu.Lock()
 	defer s.segmentsMu.Unlock()
@@ -102,6 +162,18 @@ func (s *Segments) Create(segId SegmentId, stats *SegmentStats) {
 	}
 }
 
+// CreateWithExtents creates a segment with a specific extent count
+func (s *Segments) CreateWithExtents(segId SegmentId, stats *SegmentStats, extents int) {
+	s.segmentsMu.Lock()
+	defer s.segmentsMu.Unlock()
+
+	s.segments[segId] = &Segment{
+		Size:    stats.Blocks,
+		Used:    stats.Blocks,
+		Extents: extents,
+	}
+}
+
 func (s *Segments) SetSegment(segId SegmentId, total, used uint64) {
 	s.segmentsMu.Lock()
 	defer s.segmentsMu.Unlock()
@@ -109,6 +181,24 @@ func (s *Segments) SetSegment(segId SegmentId, total, used uint64) {
 	s.segments[segId] = &Segment{
 		Size: total,
 		Used: used,
+	}
+}
+
+func (s *Segments) IncrementSegment(segId SegmentId, blocks uint64) {
+	s.segmentsMu.Lock()
+	defer s.segmentsMu.Unlock()
+
+	seg, ok := s.segments[segId]
+	if !ok {
+		s.segments[segId] = &Segment{
+			Size:    blocks,
+			Used:    blocks,
+			Extents: 1,
+		}
+	} else {
+		seg.Size += blocks
+		seg.Used += blocks
+		seg.Extents++
 	}
 }
 
@@ -153,7 +243,7 @@ func (s *Segments) UpdateUsage(log *slog.Logger, self SegmentId, affected []Part
 			}
 
 			seg.Used -= uint64(rng.Blocks)
-		} else {
+		} else if self != r.Segment {
 			if _, seen := warnedSegments[r.Segment]; !seen {
 				log.Warn("missing segment during usage update", "id", r.Segment.String())
 				warnedSegments[r.Segment] = struct{}{}

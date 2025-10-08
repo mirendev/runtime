@@ -200,9 +200,6 @@ func toCamal(s string) string {
 	return b.String()
 }
 
-func toFunc(s string) string {
-	return capitalize(toCamal(s))
-}
 
 func private(s string) string {
 	return strings.ToLower(s[:1]) + s[1:]
@@ -1846,7 +1843,7 @@ func (g *Generator) generateInterfaces(f *j.File) error {
 		for _, m := range i.Method {
 			methodName := capitalize(m.Name)
 
-			f.Func().Params(j.Id("_").Add(recv)).Id(methodName).Params(
+			f.Func().Params(j.Add(recv)).Id(methodName).Params(
 				j.Id("ctx").Qual("context", "Context"),
 				j.Id("state").Op("*").Add(i.typeName(expName+capitalize(m.Name))),
 			).Error().Block(
@@ -2024,7 +2021,6 @@ type DescType struct {
 
 	access      int
 	includeCall bool
-	result      bool
 
 	dataSize int
 	pointers int

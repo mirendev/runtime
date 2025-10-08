@@ -384,21 +384,21 @@ func (c *Context) RPCClient(name string) (*rpc.NetworkClient, error) {
 	)
 
 	if c.ClusterConfig != nil && c.ClientConfig != nil {
-		cs, err = c.ClusterConfig.State(c, c.ClientConfig, rpc.WithLogger(c.Log))
+		cs, err = c.ClusterConfig.State(c, c.ClientConfig, opts...)
 		if err == nil {
 			return cs.Client(name)
 		}
 	}
 
 	if c.ClientConfig != nil {
-		cs, err = c.ClientConfig.State(c, rpc.WithLogger(c.Log))
+		cs, err = c.ClientConfig.State(c, opts...)
 		if err == nil {
 			return cs.Client(name)
 		}
 		c.Log.Warn("Client config could not provide RPC state", "error", err)
 	}
 
-	cs, err = rpc.NewState(c, rpc.WithLogger(c.Log), rpc.WithSkipVerify)
+	cs, err = rpc.NewState(c, append(opts, rpc.WithSkipVerify)...)
 	if err != nil {
 		return nil, err
 	}

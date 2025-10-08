@@ -17,10 +17,6 @@ type (
 	}
 )
 
-const (
-	smallRangeBlocks = 20
-	smallRange       = BlockSize * smallRangeBlocks
-)
 
 func (e RawBlocks) Blocks() uint32 {
 	return uint32(len(e) / BlockSize)

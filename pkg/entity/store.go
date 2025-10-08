@@ -1155,29 +1155,7 @@ func (s *EtcdStore) GetAttributeSchema(ctx context.Context, id Id) (*AttributeSc
 	return schema, nil
 }
 
-func (s *EtcdStore) addToCollectionSession(entity *Entity, collection, suffix string, sid int64) error {
-	key := base58.Encode([]byte(entity.ID))
-	colKey := tr.Replace(collection)
 
-	ctx := context.Background()
-	key = fmt.Sprintf("%s/collections/%s/%s", s.prefix, colKey, key)
-
-	key = fmt.Sprintf("%s/%s", key, suffix)
-
-	_, err := s.client.Put(ctx, key, entity.ID.String(), clientv3.WithLease(clientv3.LeaseID(sid)))
-	return err
-}
-
-func (s *EtcdStore) addToCollection(entity *Entity, collection string) error {
-	key := base58.Encode([]byte(entity.ID))
-	colKey := tr.Replace(collection)
-
-	ctx := context.Background()
-	key = fmt.Sprintf("%s/collections/%s/%s", s.prefix, colKey, key)
-
-	_, err := s.client.Put(ctx, key, entity.ID.String())
-	return err
-}
 
 func (s *EtcdStore) addToCollectionSessionOp(entity *Entity, collection, suffix string, sid int64) clientv3.Op {
 	key := base58.Encode([]byte(entity.ID))

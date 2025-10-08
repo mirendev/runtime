@@ -4,7 +4,6 @@ import (
 	"context"
 	"io"
 
-	"github.com/containerd/containerd/v2/client"
 	containerd "github.com/containerd/containerd/v2/client"
 	tarchive "github.com/containerd/containerd/v2/core/transfer/archive"
 	"github.com/containerd/containerd/v2/core/transfer/image"
@@ -42,7 +41,7 @@ func (i *ImageImporter) ImportImage(ctx context.Context, r io.Reader, indexName 
 	return i.CC.Transfer(ctx, iis, is)
 }
 
-func (i *ImageImporter) PullImage(ctx context.Context, ref string) (client.Image, error) {
+func (i *ImageImporter) PullImage(ctx context.Context, ref string) (containerd.Image, error) {
 	ctx = namespaces.WithNamespace(ctx, i.Namespace)
 
 	img, err := i.CC.GetImage(ctx, ref)

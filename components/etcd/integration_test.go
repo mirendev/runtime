@@ -22,7 +22,6 @@ import (
 const testNamespace = "miren-etcd-test"
 
 func TestEtcdComponentIntegration(t *testing.T) {
-	ctx := t.Context()
 	reg, cleanup := testutils.Registry()
 	defer cleanup()
 
@@ -55,13 +54,10 @@ func TestEtcdComponentIntegration(t *testing.T) {
 		ClusterState: "new",
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-	defer cancel()
-
 	// Ensure cleanup
 	defer func() {
 		if component.IsRunning() {
-			err := component.Stop(ctx)
+			err := component.Stop(context.Background())
 			if err != nil {
 				t.Logf("failed to stop component: %v", err)
 			}
@@ -73,7 +69,7 @@ func TestEtcdComponentIntegration(t *testing.T) {
 
 	// Start the etcd component
 	t.Log("Starting etcd component...")
-	err = component.Start(ctx, config)
+	err = component.Start(context.Background(), config)
 	if err != nil {
 		if strings.Contains(err.Error(), "permission denied") {
 			t.Skip("permission denied error, skipping test")
@@ -181,13 +177,13 @@ func TestEtcdComponentIntegration(t *testing.T) {
 
 	// Test restart functionality
 	t.Log("Testing restart functionality...")
-	err = component.Stop(ctx)
+	err = component.Stop(context.Background())
 	require.NoError(t, err, "failed to stop component")
 
 	assert.False(t, component.IsRunning(), "component should not report as running after stop")
 
 	// Start again - this should use the restart logic
-	err = component.Start(ctx, config)
+	err = component.Start(context.Background(), config)
 	require.NoError(t, err, "failed to restart etcd component")
 
 	assert.True(t, component.IsRunning(), "component should report as running after restart")

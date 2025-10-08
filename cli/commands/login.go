@@ -11,7 +11,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -359,22 +358,6 @@ func pollForToken(ctx context.Context, cloudURL, deviceCode string, interval, ma
 	}
 }
 
-// getConfigDirPath returns the path to the clientconfig.d directory
-func getConfigDirPath() (string, error) {
-	// Check environment variable first
-	if path := os.Getenv(clientconfig.EnvConfigPath); path != "" {
-		// If a custom config path is specified, use its directory
-		return filepath.Join(filepath.Dir(path), "clientconfig.d"), nil
-	}
-
-	// Use default path in home directory
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", fmt.Errorf("failed to get home directory: %w", err)
-	}
-
-	return filepath.Join(home, ".config/miren/clientconfig.d"), nil
-}
 
 // registerPublicKey registers a public key with the cloud server
 func registerPublicKey(cloudURL, token string, keyPair *cloudauth.KeyPair, keyName string) error {

@@ -79,7 +79,7 @@ func (p *parser) Parse() ([]string, error) {
 			}
 
 		default:
-			return nil, fmt.Errorf("Unhandled character %c at pos %d", r, p.pos)
+			return nil, fmt.Errorf("unhandled character %c at pos %d", r, p.pos)
 		}
 	}
 
@@ -98,7 +98,7 @@ func (p *parser) scanQuote(delim rune) (string, error) {
 		r := p.nextRune()
 		if r == eof {
 			return "", fmt.Errorf(
-				"Expected closing quote %c at offset %d, got EOF", delim, p.pos-1)
+				"expected closing quote %c at offset %d, got EOF", delim, p.pos-1)
 		}
 		// Check for escaped characters
 		if escapeChar, escaped := p.isQuoteEscape(r); escaped {

@@ -355,7 +355,7 @@ type reexportStream struct {
 	client rpc.Client
 }
 
-func (_ reexportStream) Recv(ctx context.Context, state *StreamRecv) error {
+func (reexportStream) Recv(ctx context.Context, state *StreamRecv) error {
 	panic("not implemented")
 }
 
@@ -2165,75 +2165,75 @@ type reexportEntityAccess struct {
 	client rpc.Client
 }
 
-func (_ reexportEntityAccess) Get(ctx context.Context, state *EntityAccessGet) error {
+func (reexportEntityAccess) Get(ctx context.Context, state *EntityAccessGet) error {
 	panic("not implemented")
 }
 
-func (_ reexportEntityAccess) Put(ctx context.Context, state *EntityAccessPut) error {
+func (reexportEntityAccess) Put(ctx context.Context, state *EntityAccessPut) error {
 	panic("not implemented")
 }
 
-func (_ reexportEntityAccess) Create(ctx context.Context, state *EntityAccessCreate) error {
+func (reexportEntityAccess) Create(ctx context.Context, state *EntityAccessCreate) error {
 	panic("not implemented")
 }
 
-func (_ reexportEntityAccess) Replace(ctx context.Context, state *EntityAccessReplace) error {
+func (reexportEntityAccess) Replace(ctx context.Context, state *EntityAccessReplace) error {
 	panic("not implemented")
 }
 
-func (_ reexportEntityAccess) Patch(ctx context.Context, state *EntityAccessPatch) error {
+func (reexportEntityAccess) Patch(ctx context.Context, state *EntityAccessPatch) error {
 	panic("not implemented")
 }
 
-func (_ reexportEntityAccess) Ensure(ctx context.Context, state *EntityAccessEnsure) error {
+func (reexportEntityAccess) Ensure(ctx context.Context, state *EntityAccessEnsure) error {
 	panic("not implemented")
 }
 
-func (_ reexportEntityAccess) PutSession(ctx context.Context, state *EntityAccessPutSession) error {
+func (reexportEntityAccess) PutSession(ctx context.Context, state *EntityAccessPutSession) error {
 	panic("not implemented")
 }
 
-func (_ reexportEntityAccess) Delete(ctx context.Context, state *EntityAccessDelete) error {
+func (reexportEntityAccess) Delete(ctx context.Context, state *EntityAccessDelete) error {
 	panic("not implemented")
 }
 
-func (_ reexportEntityAccess) WatchIndex(ctx context.Context, state *EntityAccessWatchIndex) error {
+func (reexportEntityAccess) WatchIndex(ctx context.Context, state *EntityAccessWatchIndex) error {
 	panic("not implemented")
 }
 
-func (_ reexportEntityAccess) WatchEntity(ctx context.Context, state *EntityAccessWatchEntity) error {
+func (reexportEntityAccess) WatchEntity(ctx context.Context, state *EntityAccessWatchEntity) error {
 	panic("not implemented")
 }
 
-func (_ reexportEntityAccess) List(ctx context.Context, state *EntityAccessList) error {
+func (reexportEntityAccess) List(ctx context.Context, state *EntityAccessList) error {
 	panic("not implemented")
 }
 
-func (_ reexportEntityAccess) MakeAttr(ctx context.Context, state *EntityAccessMakeAttr) error {
+func (reexportEntityAccess) MakeAttr(ctx context.Context, state *EntityAccessMakeAttr) error {
 	panic("not implemented")
 }
 
-func (_ reexportEntityAccess) LookupKind(ctx context.Context, state *EntityAccessLookupKind) error {
+func (reexportEntityAccess) LookupKind(ctx context.Context, state *EntityAccessLookupKind) error {
 	panic("not implemented")
 }
 
-func (_ reexportEntityAccess) Parse(ctx context.Context, state *EntityAccessParse) error {
+func (reexportEntityAccess) Parse(ctx context.Context, state *EntityAccessParse) error {
 	panic("not implemented")
 }
 
-func (_ reexportEntityAccess) Format(ctx context.Context, state *EntityAccessFormat) error {
+func (reexportEntityAccess) Format(ctx context.Context, state *EntityAccessFormat) error {
 	panic("not implemented")
 }
 
-func (_ reexportEntityAccess) CreateSession(ctx context.Context, state *EntityAccessCreateSession) error {
+func (reexportEntityAccess) CreateSession(ctx context.Context, state *EntityAccessCreateSession) error {
 	panic("not implemented")
 }
 
-func (_ reexportEntityAccess) RevokeSession(ctx context.Context, state *EntityAccessRevokeSession) error {
+func (reexportEntityAccess) RevokeSession(ctx context.Context, state *EntityAccessRevokeSession) error {
 	panic("not implemented")
 }
 
-func (_ reexportEntityAccess) PingSession(ctx context.Context, state *EntityAccessPingSession) error {
+func (reexportEntityAccess) PingSession(ctx context.Context, state *EntityAccessPingSession) error {
 	panic("not implemented")
 }
 

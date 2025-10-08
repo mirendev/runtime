@@ -15,8 +15,6 @@ type localEnv struct {
 
 type localCall struct {
 	*localEnv
-	args any
-	ret  any
 }
 
 func (l *localCall) NewCapability(i *Interface) *Capability {

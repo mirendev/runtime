@@ -280,11 +280,11 @@ type reexportDiskManagement struct {
 	client rpc.Client
 }
 
-func (_ reexportDiskManagement) Unmount(ctx context.Context, state *DiskManagementUnmount) error {
+func (reexportDiskManagement) Unmount(ctx context.Context, state *DiskManagementUnmount) error {
 	panic("not implemented")
 }
 
-func (_ reexportDiskManagement) Status(ctx context.Context, state *DiskManagementStatus) error {
+func (reexportDiskManagement) Status(ctx context.Context, state *DiskManagementStatus) error {
 	panic("not implemented")
 }
 

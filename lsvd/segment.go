@@ -16,6 +16,14 @@ import (
 	"github.com/pkg/errors"
 )
 
+type FlushReason int
+
+const (
+	FlushNo FlushReason = iota
+	FlushSize
+	FlushTime
+)
+
 type SegmentCreator struct {
 	log *slog.Logger
 
@@ -56,6 +64,8 @@ type SegmentBuilder struct {
 	logF      *os.File
 	logW      *bufio.Writer
 	curOffset int64
+
+	openedAt time.Time
 
 	em *ExtentMap
 
@@ -160,6 +170,7 @@ func (o *SegmentBuilder) OpenWrite(path string, log *slog.Logger) error {
 
 	o.logF = f
 	o.logW = bufio.NewWriter(f)
+	o.openedAt = time.Now()
 
 	return nil
 }
@@ -198,16 +209,28 @@ func (o *SegmentCreator) EmptyP() bool {
 	return o.builder == nil || o.builder.cnt == 0
 }
 
-func (o *SegmentBuilder) ShouldFlush(sizeThreshold int) bool {
-	return o.BodySize() >= sizeThreshold
+func (o *SegmentBuilder) ShouldFlush(sizeThreshold int) FlushReason {
+	if o.BodySize() >= sizeThreshold {
+		return FlushSize
+	}
+
+	if !o.openedAt.IsZero() && time.Since(o.openedAt) >= MaxSegmentLifetime {
+		return FlushTime
+	}
+
+	return FlushNo
 }
 
 func (o *SegmentBuilder) BodySize() int {
 	return int(o.offset)
 }
 
-func (o *SegmentCreator) ShouldFlush(sizeThreshold int) bool {
-	return o.BodySize() >= sizeThreshold
+func (o *SegmentCreator) ShouldFlush(sizeThreshold int) FlushReason {
+	if o.EmptyP() {
+		return FlushNo
+	}
+
+	return o.builder.ShouldFlush(sizeThreshold)
 }
 
 func (o *SegmentCreator) BodySize() int {

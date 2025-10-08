@@ -348,38 +348,6 @@ func (c *NetworkClient) requestReexportCapability(ctx context.Context, capa *Cap
 	return lr.Capability, nil
 }
 
-func (c *NetworkClient) refOID(ctx context.Context, oid OID) error {
-	url := "https://" + c.remote + "/_rpc/ref/" + string(oid)
-	req, err := http.NewRequest(http.MethodPost, url, nil)
-	if err != nil {
-		return err
-	}
-
-	err = c.prepareRequest(ctx, req)
-	if err != nil {
-		return err
-	}
-
-	resp, err := c.roundTrip(req)
-	if err != nil {
-		return err
-	}
-
-	defer resp.Body.Close()
-
-	var lr refResponse
-
-	err = json.NewDecoder(resp.Body).Decode(&lr)
-	if err != nil {
-		return err
-	}
-
-	if lr.Error != "" {
-		return errors.New(lr.Error)
-	}
-
-	return nil
-}
 
 func (c *NetworkClient) derefOID(ctx context.Context, oid OID) error {
 	if c.inlineClient != nil {
@@ -648,13 +616,11 @@ func (c *NetworkClient) handleCallStream(
 			return false, err
 		case "unknown-capability":
 			if c.capa.RestoreState != nil {
-				// We have a resolution, let's try to resolve it and update our capability.
-				rerr := c.reresolveCapability(c.capa.RestoreState)
-				if rerr != nil {
-					err = cond.NotFound("capability", c.capa.OID)
+				// Try to re-resolve and, if successful, signal caller to retry the request.
+				if rerr := c.reresolveCapability(c.capa.RestoreState); rerr == nil {
+					return true, nil
 				}
 			}
-
 			err = cond.NotFound("capability", c.capa.OID)
 		case "error":
 			errs := hr.Trailer.Get("rpc-error")
@@ -754,6 +720,7 @@ func (c *NetworkClient) handleCallStream(
 		ctrl.CancelRead(cancelCode)
 	}()
 
+loop:
 	for {
 		var rs streamRequest
 
@@ -771,12 +738,12 @@ func (c *NetworkClient) handleCallStream(
 		switch rs.Kind {
 		case "result":
 			err = dec.Decode(result)
-			break
+			break loop
 		case "deref":
 			c.State.server.Deref(rs.OID)
 		case "error":
 			err = cond.RemoteError(rs.Category, rs.Code, rs.Error)
-			break
+			break loop
 		default:
 			c.State.log.Error("rpc.callstream: unknown control stream request", "kind", rs.Kind)
 		}
