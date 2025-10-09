@@ -226,7 +226,6 @@ WantedBy=multi-user.target
 
 // ServerUninstall removes the systemd service and optionally removes /var/lib/miren
 func ServerUninstall(ctx *Context, opts struct {
-	Stop       bool   `long:"stop" description:"Stop the service before uninstalling"`
 	RemoveData bool   `long:"remove-data" description:"Remove /var/lib/miren directory after backing it up"`
 	BackupDir  string `long:"backup-dir" description:"Directory to save backup tarball" default:"."`
 	SkipBackup bool   `long:"skip-backup" description:"Skip backup when removing data (dangerous)"`
@@ -263,20 +262,18 @@ func ServerUninstall(ctx *Context, opts struct {
 		}
 	}
 
-	// Stop the service if requested or if it's running
-	if opts.Stop || isRunning {
-		ctx.Info("Stopping miren service...")
-		cmd := exec.Command("systemctl", "stop", "miren.service")
-		if output, err := cmd.CombinedOutput(); err != nil {
-			ctx.Warn("Failed to stop service: %v\nOutput: %s", err, output)
-		} else {
-			ctx.Completed("Service stopped")
-		}
+	// Stop the service
+	ctx.Info("Stopping miren service...")
+	cmd := exec.Command("systemctl", "stop", "miren.service")
+	if output, err := cmd.CombinedOutput(); err != nil {
+		ctx.Warn("Failed to stop service: %v\nOutput: %s", err, output)
+	} else {
+		ctx.Completed("Service stopped")
 	}
 
 	// Disable the service
 	ctx.Info("Disabling miren service...")
-	cmd := exec.Command("systemctl", "disable", "miren.service")
+	cmd = exec.Command("systemctl", "disable", "miren.service")
 	if output, err := cmd.CombinedOutput(); err != nil {
 		ctx.Warn("Failed to disable service: %v\nOutput: %s", err, output)
 	} else {
