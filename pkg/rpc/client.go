@@ -220,7 +220,7 @@ func (c *NetworkClient) resolveCapability(name string) error {
 	c.State.log.Debug("rpc.resolve", "name", name, "url", url)
 	req, err := http.NewRequest(http.MethodPost, url, nil)
 	if err != nil {
-		return fmt.Errorf("error creating new http request: %w", err)
+		return NewResolveHTTPError(err, "error creating new http request: %v", err)
 	}
 
 	req.Header.Set("rpc-public-key", base58.Encode(c.State.pubkey))
@@ -231,24 +231,24 @@ func (c *NetworkClient) resolveCapability(name string) error {
 
 	resp, err := c.roundTrip(req)
 	if err != nil {
-		return fmt.Errorf("error performing http request: %w", err)
+		return NewResolveHTTPError(err, "error performing http request: %v", err)
 	}
 
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return errors.Errorf("unexpected status code: %d", resp.StatusCode)
+		return NewResolveStatusError(resp.StatusCode)
 	}
 
 	var lr lookupResponse
 
 	err = cbor.NewDecoder(resp.Body).Decode(&lr)
 	if err != nil {
-		return fmt.Errorf("unable to decode response body: %w", err)
+		return NewResolveDecodeError(err)
 	}
 
 	if lr.Error != "" {
-		return errors.New(lr.Error)
+		return NewResolveLookupError(lr.Error)
 	}
 
 	c.capa = lr.Capability
