@@ -218,6 +218,50 @@ func AllCommands() map[string]cli.CommandFactory {
 		"debug rbac test": func() (cli.Command, error) {
 			return Infer("debug rbac test", "Test RBAC evaluation with fetched rules", DebugRBACTest), nil
 		},
+
+		"debug disk": func() (cli.Command, error) {
+			return Section("debug disk", "Disk entity debug commands"), nil
+		},
+
+		"debug disk create": func() (cli.Command, error) {
+			return Infer("debug disk create", "Create a disk entity for testing", DebugDiskCreate), nil
+		},
+
+		"debug disk list": func() (cli.Command, error) {
+			return Infer("debug disk list", "List all disk entities", DebugDiskList), nil
+		},
+
+		"debug disk delete": func() (cli.Command, error) {
+			return Infer("debug disk delete", "Delete a disk entity", DebugDiskDelete), nil
+		},
+
+		"debug disk status": func() (cli.Command, error) {
+			return Infer("debug disk status", "Show status of a disk entity", DebugDiskStatus), nil
+		},
+
+		"debug disk lease": func() (cli.Command, error) {
+			return Infer("debug disk lease", "Create a disk lease for testing", DebugDiskLease), nil
+		},
+
+		"debug disk lease-list": func() (cli.Command, error) {
+			return Infer("debug disk lease-list", "List all disk lease entities", DebugDiskLeaseList), nil
+		},
+
+		"debug disk lease-release": func() (cli.Command, error) {
+			return Infer("debug disk lease-release", "Release a disk lease", DebugDiskLeaseRelease), nil
+		},
+
+		"debug disk lease-delete": func() (cli.Command, error) {
+			return Infer("debug disk lease-delete", "Delete a disk lease entity", DebugDiskLeaseDelete), nil
+		},
+
+		"debug disk lease-status": func() (cli.Command, error) {
+			return Infer("debug disk lease-status", "Show detailed status of a disk lease", DebugDiskLeaseStatus), nil
+		},
+
+		"debug disk mounts": func() (cli.Command, error) {
+			return Infer("debug disk mounts", "List all mounted disks from /proc/mounts", DebugDiskMounts), nil
+		},
 	}
 
 	addCommands(base)

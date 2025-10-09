@@ -257,6 +257,8 @@ func (v *Validator) ValidateAttribute(ctx context.Context, attr *Attr) error {
 					return fmt.Errorf("attribute %s is not a valid timestamp: %w", name, err)
 				}
 			}
+		case time.Time:
+			// Valid
 		default:
 			return fmt.Errorf("attribute %s must be a timestamp (int64 or RFC3339 string), got %T", name, v)
 		}

@@ -9,8 +9,9 @@ import (
 )
 
 type Segment struct {
-	Size uint64
-	Used uint64
+	Size    uint64
+	Used    uint64
+	Extents int // Number of extents in this segment
 
 	deleted bool
 	cleared []Extent

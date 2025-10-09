@@ -100,6 +100,7 @@ func (m *Runtime) BuildEnv(dir *dagger.Directory) *dagger.Container {
 			"vim",
 			"netcat-openbsd",
 			"util-linux",
+			"e2fsprogs",
 		}).
 		WithFile("/upstream/containerd.tar.gz", dag.HTTP(containerd)).
 		WithFile("/upstream/buildkit.tar.gz", dag.HTTP(buildkit)).
@@ -183,6 +184,7 @@ func (m *Runtime) Test(
 		WithDirectory("/src", dir).
 		WithWorkdir("/src").
 		WithEnvVariable("S3_URL", "http://minio:9000").
+		WithEnvVariable("DISABLE_NBD_TEST", "1").
 		WithMountedCache("/data", dag.CacheVolume("containerd"))
 
 	if tests == "" {

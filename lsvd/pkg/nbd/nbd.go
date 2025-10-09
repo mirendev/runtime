@@ -38,6 +38,8 @@ type Options struct {
 
 	MaximumRequestSize int
 	SupportsMultiConn  bool
+
+	RawFile *os.File
 }
 
 type filer interface {
@@ -370,19 +372,12 @@ nego:
 }
 
 func HandleTransport(log *slog.Logger, conn net.Conn, backend Backend, options *Options) error {
-	var (
-		sc  *os.File
-		err error
-	)
-
-	if filer, ok := conn.(filer); ok {
-		log.Info("enabling use of sendfile(2)")
-		sc, err = filer.File()
-		if err != nil {
-			return errors.Wrapf(err, "extracting file")
-		}
-	} else {
-		log.Info("sendfile(2) unavailable based on connection type")
+	// We used to use filer here to get the File back out, but it seems to break polling?
+	// It's very odd so for now we allow the caller to pass the file in, which they probably
+	// already have because we use nbdnl.Lookback() which creates files first anyway.
+	sc := options.RawFile
+	if sc != nil {
+		log.Info("enabling use of sendfile(2) for reads")
 	}
 
 	// Transmission
@@ -401,22 +396,26 @@ func HandleTransport(log *slog.Logger, conn net.Conn, backend Backend, options *
 		return err
 	}
 
+	lastTick := time.Now()
+
 	for {
-		conn.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
+		now := time.Now()
 
-		//var requestHeader TransmissionRequestHeader
+		if now.Sub(lastTick) >= 10*time.Second {
+			backend.Tick()
 
-		for {
-			if _, err := io.ReadFull(conn, request); err != nil {
-				if errors.Is(err, os.ErrDeadlineExceeded) {
-					conn.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
-					continue
-				}
+			now = time.Now()
+			lastTick = now
+		}
 
-				return err
-			} else {
-				break
+		conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+
+		if _, err := io.ReadFull(conn, request); err != nil {
+			if errors.Is(err, os.ErrDeadlineExceeded) {
+				continue
 			}
+
+			return err
 		}
 
 		conn.SetReadDeadline(time.Time{})
@@ -552,6 +551,8 @@ func HandleTransport(log *slog.Logger, conn net.Conn, backend Backend, options *
 
 			return nil
 		default:
+			log.Warn("unknown request type", "type", typ)
+
 			_, err := io.CopyN(io.Discard, conn, int64(length)) // Discard the unknown command's data
 			if err != nil {
 				return err

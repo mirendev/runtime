@@ -42,6 +42,7 @@ import (
 	"miren.dev/runtime/pkg/containerdx"
 	"miren.dev/runtime/pkg/grunge"
 	"miren.dev/runtime/pkg/ipdiscovery"
+	"miren.dev/runtime/pkg/nbd"
 	"miren.dev/runtime/pkg/netdb"
 	"miren.dev/runtime/pkg/registration"
 	"miren.dev/runtime/pkg/rpc"
@@ -163,6 +164,12 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 		ctx.UILog.Info("running in distributed mode")
 	default:
 		return fmt.Errorf("unknown mode: %s (valid modes: standalone, distributed)", cfg.GetMode())
+	}
+
+	// Initialize NBD kernel module for disk provisioning
+	if err := nbd.InitializeNBDModule(ctx.Log); err != nil {
+		ctx.Log.Warn("Failed to initialize NBD module (disk provisioning may not work)", "error", err)
+		// Don't fail server startup if NBD isn't available
 	}
 
 	// Determine containerd socket path
@@ -439,7 +446,7 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 		// Configure cloud authentication from registration
 		cloudAuthConfig.Enabled = true
 		cloudAuthConfig.CloudURL = reg.CloudURL
-		cloudAuthConfig.PrivateKey = filepath.Join(registrationDir, "service-account.key")
+		cloudAuthConfig.PrivateKey = reg.PrivateKey // Use the actual private key content from registration
 		cloudAuthConfig.Tags = reg.Tags
 		cloudAuthConfig.ClusterID = reg.ClusterID
 	} else if reg != nil && reg.Status == "pending" {
@@ -601,13 +608,33 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 		return err
 	}
 
-	r := runner.NewRunner(ctx.Log, ctx.Server, runner.RunnerConfig{
-		Id:            cfg.Server.GetRunnerID(),
-		ListenAddress: cfg.Server.GetRunnerAddress(),
-		Workers:       runner.DefaulWorkers,
-		Config:        rcfg,
-	})
+	var rc runner.RunnerConfig
 
+	rc.Id = cfg.Server.GetRunnerID()
+	rc.ListenAddress = cfg.Server.GetRunnerAddress()
+	rc.Workers = runner.DefaulWorkers
+	rc.Config = rcfg
+
+	// Pass cloud authentication config if available
+	if cloudAuthConfig.Enabled {
+		rc.CloudAuth = &cloudAuthConfig
+	} else {
+		rc.CloudAuth = &coordinate.CloudAuthConfig{}
+	}
+
+	err = ctx.Server.Populate(&rc)
+	if err != nil {
+		ctx.Log.Error("failed to populate runner config", "error", err)
+		return err
+	}
+
+	r, err := runner.NewRunner(ctx.Log, ctx.Server, rc)
+	if err != nil {
+		ctx.Log.Error("failed to create runner", "error", err)
+		return err
+	}
+
+	// Start runner
 	err = r.Start(sub)
 	if err != nil {
 		return err
