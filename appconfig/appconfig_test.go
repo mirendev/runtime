@@ -212,3 +212,92 @@ num_instances = 1
 	assert.Equal(t, "", workerSvc.Concurrency.ScaleDownDelay)
 	assert.Equal(t, 1, workerSvc.Concurrency.NumInstances)
 }
+
+func TestResolveDefaults_WebService(t *testing.T) {
+	ac := &AppConfig{}
+	ac.ResolveDefaults([]string{"web"})
+
+	require.NotNil(t, ac.Services)
+	webSvc, ok := ac.Services["web"]
+	require.True(t, ok, "web service should be created")
+	require.NotNil(t, webSvc.Concurrency)
+	assert.Equal(t, "auto", webSvc.Concurrency.Mode)
+	assert.Equal(t, 10, webSvc.Concurrency.RequestsPerInstance)
+	assert.Equal(t, "15m", webSvc.Concurrency.ScaleDownDelay)
+}
+
+func TestResolveDefaults_OtherService(t *testing.T) {
+	ac := &AppConfig{}
+	ac.ResolveDefaults([]string{"worker"})
+
+	require.NotNil(t, ac.Services)
+	workerSvc, ok := ac.Services["worker"]
+	require.True(t, ok, "worker service should be created")
+	require.NotNil(t, workerSvc.Concurrency)
+	assert.Equal(t, "fixed", workerSvc.Concurrency.Mode)
+	assert.Equal(t, 1, workerSvc.Concurrency.NumInstances)
+}
+
+func TestResolveDefaults_PreservesExistingConfig(t *testing.T) {
+	ac := &AppConfig{
+		Services: map[string]*ServiceConfig{
+			"web": {
+				Concurrency: &ServiceConcurrencyConfig{
+					Mode:                "auto",
+					RequestsPerInstance: 20, // Custom value
+					ScaleDownDelay:      "30m",
+				},
+			},
+		},
+	}
+
+	ac.ResolveDefaults([]string{"web", "worker"})
+
+	// Existing config preserved
+	webSvc := ac.Services["web"]
+	assert.Equal(t, 20, webSvc.Concurrency.RequestsPerInstance)
+	assert.Equal(t, "30m", webSvc.Concurrency.ScaleDownDelay)
+
+	// New service gets defaults
+	workerSvc, ok := ac.Services["worker"]
+	require.True(t, ok, "worker service should be created")
+	require.NotNil(t, workerSvc.Concurrency)
+	assert.Equal(t, "fixed", workerSvc.Concurrency.Mode)
+	assert.Equal(t, 1, workerSvc.Concurrency.NumInstances)
+}
+
+func TestResolveDefaults_MultipleServices(t *testing.T) {
+	ac := &AppConfig{}
+	ac.ResolveDefaults([]string{"web", "worker", "scheduler"})
+
+	require.Len(t, ac.Services, 3)
+
+	// web gets auto mode
+	assert.Equal(t, "auto", ac.Services["web"].Concurrency.Mode)
+	assert.Equal(t, 10, ac.Services["web"].Concurrency.RequestsPerInstance)
+
+	// Others get fixed mode
+	assert.Equal(t, "fixed", ac.Services["worker"].Concurrency.Mode)
+	assert.Equal(t, 1, ac.Services["worker"].Concurrency.NumInstances)
+
+	assert.Equal(t, "fixed", ac.Services["scheduler"].Concurrency.Mode)
+	assert.Equal(t, 1, ac.Services["scheduler"].Concurrency.NumInstances)
+}
+
+func TestResolveDefaults_EmptyServicesList(t *testing.T) {
+	ac := &AppConfig{}
+	ac.ResolveDefaults([]string{})
+
+	require.NotNil(t, ac.Services, "Services map should be initialized")
+	assert.Len(t, ac.Services, 0, "No services should be created")
+}
+
+func TestResolveDefaults_NilAppConfig(t *testing.T) {
+	// Verify it doesn't panic with nil config
+	var ac *AppConfig
+	assert.NotPanics(t, func() {
+		if ac != nil {
+			ac.ResolveDefaults([]string{"web"})
+		}
+	})
+}

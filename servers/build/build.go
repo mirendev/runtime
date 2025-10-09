@@ -20,7 +20,6 @@ import (
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/appconfig"
 	"miren.dev/runtime/components/netresolve"
-	"miren.dev/runtime/defaults"
 	"miren.dev/runtime/pkg/cond"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/idgen"
@@ -86,8 +85,6 @@ func (b *Builder) nextVersion(ctx context.Context, name string) (
 		}
 
 		currentCfg = verRec.Config
-	} else {
-		currentCfg.Concurrency.Fixed = defaults.Concurrency
 	}
 
 	ver := name + "-" + idgen.Gen("v")
@@ -401,48 +398,39 @@ func (b *Builder) BuildFromTar(ctx context.Context, state *build_v1alpha.Builder
 
 	mrv.Config.Commands = serviceCmds
 
-	// Apply app-level concurrency from AppConfig if present (backwards compatibility)
-	if ac != nil && ac.Concurrency != nil {
-		mrv.Config.Concurrency.Fixed = int64(*ac.Concurrency)
+	// Collect all service names
+	allServiceNames := make([]string, 0, len(srvMap))
+	for serviceName := range srvMap {
+		allServiceNames = append(allServiceNames, serviceName)
 	}
 
-	// Apply service-level concurrency from AppConfig if present
-	// Build a new services list to replace the old one, ensuring no duplicates
-	serviceMap := make(map[string]core_v1alpha.Services)
+	// Resolve defaults for all services
+	if ac != nil {
+		ac.ResolveDefaults(allServiceNames)
+	} else {
+		// No app.toml - create minimal config with defaults
+		ac = &appconfig.AppConfig{}
+		ac.ResolveDefaults(allServiceNames)
+	}
 
+	// Build Config.Services[] from fully-resolved appconfig
+	mrv.Config.Services = nil
 	for serviceName := range srvMap {
 		svc := core_v1alpha.Services{
 			Name: serviceName,
 		}
 
-		// Check if this service has concurrency config in app config
-		if ac != nil && ac.Services != nil {
-			if serviceConfig, ok := ac.Services[serviceName]; ok && serviceConfig != nil && serviceConfig.Concurrency != nil {
-				svcConcurrency := core_v1alpha.ServiceConcurrency{}
-
-				if serviceConfig.Concurrency.Mode != "" {
-					svcConcurrency.Mode = serviceConfig.Concurrency.Mode
-				}
-				if serviceConfig.Concurrency.NumInstances > 0 {
-					svcConcurrency.NumInstances = int64(serviceConfig.Concurrency.NumInstances)
-				}
-				if serviceConfig.Concurrency.RequestsPerInstance > 0 {
-					svcConcurrency.RequestsPerInstance = int64(serviceConfig.Concurrency.RequestsPerInstance)
-				}
-				if serviceConfig.Concurrency.ScaleDownDelay != "" {
-					svcConcurrency.ScaleDownDelay = serviceConfig.Concurrency.ScaleDownDelay
-				}
-
-				svc.ServiceConcurrency = svcConcurrency
+		// Map from appconfig to entity schema
+		// After ResolveDefaults(), every service is guaranteed to have config
+		if serviceConfig, ok := ac.Services[serviceName]; ok && serviceConfig.Concurrency != nil {
+			svc.ServiceConcurrency = core_v1alpha.ServiceConcurrency{
+				Mode:                serviceConfig.Concurrency.Mode,
+				NumInstances:        int64(serviceConfig.Concurrency.NumInstances),
+				RequestsPerInstance: int64(serviceConfig.Concurrency.RequestsPerInstance),
+				ScaleDownDelay:      serviceConfig.Concurrency.ScaleDownDelay,
 			}
 		}
 
-		serviceMap[serviceName] = svc
-	}
-
-	// Build the final services list from the map
-	mrv.Config.Services = nil
-	for _, svc := range serviceMap {
 		mrv.Config.Services = append(mrv.Config.Services, svc)
 	}
 

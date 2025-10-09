@@ -73,16 +73,6 @@ kinds:
         port:
           type: int
           doc: The TCP port to access, default to 3000
-        concurrency:
-          type: component
-          doc: How to control the concurrency for the application (deprecated, use services)
-          attrs:
-            fixed:
-              type: int
-              doc: How concurrent requests this app can handle
-            auto:
-              type: int
-              doc: How to scale the application based on the node
         services:
           type: component
           doc: Per-service configuration including concurrency controls
