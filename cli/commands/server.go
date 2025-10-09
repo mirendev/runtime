@@ -11,10 +11,12 @@ import (
 	"net/netip"
 	"os"
 	"os/exec"
+	"os/signal"
 	"os/user"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	containerd "github.com/containerd/containerd/v2/client"
@@ -724,6 +726,31 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 
 	ctx.Info("Miren server started successfully! You can now connect to the cluster using `-C %s`\n", cfg.Server.GetConfigClusterName())
 	ctx.Info("For example: cd my-app && miren deploy -C %s", cfg.Server.GetConfigClusterName())
+
+	// Set up signal handling for graceful drain on SIGUSR2
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGUSR2)
+
+	eg.Go(func() error {
+		select {
+		case <-sub.Done():
+			return nil
+		case sig := <-sigChan:
+			ctx.Log.Info("received signal, draining runner", "signal", sig)
+
+			// Drain the runner
+			drainCtx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+			defer cancel()
+
+			if err := r.Drain(drainCtx); err != nil {
+				ctx.Log.Error("failed to drain runner", "error", err)
+				return err
+			}
+
+			ctx.Log.Info("runner drained successfully, shutting down")
+			return fmt.Errorf("runner drained, shutting down")
+		}
+	})
 
 	// Wait for all goroutines to complete or context to be cancelled
 	err = eg.Wait()

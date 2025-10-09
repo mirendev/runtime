@@ -2,6 +2,7 @@ package commands
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -386,14 +387,22 @@ func (c *Context) RPCClient(name string) (*rpc.NetworkClient, error) {
 	if c.ClusterConfig != nil && c.ClientConfig != nil {
 		cs, err = c.ClusterConfig.State(c, c.ClientConfig, opts...)
 		if err == nil {
-			return cs.Client(name)
+			client, err := cs.Client(name)
+			if err != nil {
+				return nil, c.wrapRPCError(err)
+			}
+			return client, nil
 		}
 	}
 
 	if c.ClientConfig != nil {
 		cs, err = c.ClientConfig.State(c, opts...)
 		if err == nil {
-			return cs.Client(name)
+			client, err := cs.Client(name)
+			if err != nil {
+				return nil, c.wrapRPCError(err)
+			}
+			return client, nil
 		}
 		c.Log.Warn("Client config could not provide RPC state", "error", err)
 	}
@@ -405,8 +414,25 @@ func (c *Context) RPCClient(name string) (*rpc.NetworkClient, error) {
 
 	client, err := cs.Connect(c.Config.ServerAddress, name)
 	if err != nil {
-		return nil, err
+		return nil, c.wrapRPCError(err)
 	}
 
 	return client, nil
+}
+
+var ErrAccessDenied = errors.New("access denied")
+
+// wrapRPCError wraps RPC errors with user-friendly messages
+func (c *Context) wrapRPCError(err error) error {
+	var resolveErr *rpc.ResolveError
+	if errors.As(err, &resolveErr) && resolveErr.StatusCode == 401 {
+		clusterName := c.ClusterName
+		if clusterName == "" {
+			clusterName = "the cluster"
+		}
+
+		c.Warn("access denied: you don't have permission to access %s\nPlease check your credentials or request access from the cluster administrator", clusterName)
+		return ErrAccessDenied
+	}
+	return err
 }
