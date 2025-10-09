@@ -243,8 +243,28 @@ func ServerUninstall(ctx *Context, opts struct {
 		return fmt.Errorf("service file not found at %s", servicePath)
 	}
 
+	// Check if service is running
+	isRunningCmd := exec.Command("systemctl", "is-active", "miren.service")
+	output, err := isRunningCmd.CombinedOutput()
+	isRunning := err == nil && strings.TrimSpace(string(output)) == "active"
+
+	// If service is running, drain it first
+	if isRunning {
+		ctx.Info("Service is running, draining before shutdown...")
+		ctx.Info("Sending SIGUSR2 to drain runner...")
+
+		// Send SIGUSR2 to the service using systemctl kill
+		killCmd := exec.Command("systemctl", "kill", "-s", "SIGUSR2", "miren.service")
+		if err := killCmd.Run(); err != nil {
+			ctx.Warn("Failed to send SIGUSR2: %v", err)
+		} else {
+			ctx.Info("Drain signal sent, waiting 5 seconds for graceful shutdown...")
+			time.Sleep(5 * time.Second)
+		}
+	}
+
 	// Stop the service if requested or if it's running
-	if opts.Stop {
+	if opts.Stop || isRunning {
 		ctx.Info("Stopping miren service...")
 		cmd := exec.Command("systemctl", "stop", "miren.service")
 		if output, err := cmd.CombinedOutput(); err != nil {
