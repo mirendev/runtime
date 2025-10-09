@@ -226,10 +226,10 @@ WantedBy=multi-user.target
 
 // ServerUninstall removes the systemd service and optionally removes /var/lib/miren
 func ServerUninstall(ctx *Context, opts struct {
-	Stop         bool   `long:"stop" description:"Stop the service before uninstalling"`
-	RemoveData   bool   `long:"remove-data" description:"Remove /var/lib/miren directory after backing it up"`
-	BackupDir    string `long:"backup-dir" description:"Directory to save backup tarball" default:"/tmp"`
-	SkipBackup   bool   `long:"skip-backup" description:"Skip backup when removing data (dangerous)"`
+	Stop       bool   `long:"stop" description:"Stop the service before uninstalling"`
+	RemoveData bool   `long:"remove-data" description:"Remove /var/lib/miren directory after backing it up"`
+	BackupDir  string `long:"backup-dir" description:"Directory to save backup tarball" default:"."`
+	SkipBackup bool   `long:"skip-backup" description:"Skip backup when removing data (dangerous)"`
 }) error {
 	// Check if running with sufficient privileges
 	if os.Geteuid() != 0 {
