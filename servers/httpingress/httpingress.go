@@ -2,6 +2,7 @@ package httpingress
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -229,6 +230,13 @@ func (h *Server) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 
 // handleRequest is the inner handler wrapped by TimeoutHandler
 func (h *Server) handleRequest(w http.ResponseWriter, req *http.Request) {
+	// Handle Miren server health check endpoint before routing
+	// Using .well-known per RFC 8615 to avoid collision with app routes
+	if req.URL.Path == "/.well-known/miren/health" {
+		h.handleHealth(w, req)
+		return
+	}
+
 	start := time.Now()
 
 	var appName string
@@ -479,4 +487,54 @@ func (rw *responseWriter) Write(b []byte) (int, error) {
 // Unwrap returns the underlying ResponseWriter for middleware compatibility
 func (rw *responseWriter) Unwrap() http.ResponseWriter {
 	return rw.ResponseWriter
+}
+
+// HealthResponse represents the JSON response for /health endpoint
+type HealthResponse struct {
+	Status string              `json:"status"`
+	Checks map[string]HealthCheck `json:"checks"`
+}
+
+// HealthCheck represents a single component health check
+type HealthCheck struct {
+	Status string `json:"status"`
+	Error  string `json:"error,omitempty"`
+}
+
+// handleHealth responds to /.well-known/miren/health endpoint with component health checks
+// Uses .well-known URI per RFC 8615 to avoid collision with application routes
+func (h *Server) handleHealth(w http.ResponseWriter, req *http.Request) {
+	ctx := req.Context()
+
+	response := HealthResponse{
+		Status: "healthy",
+		Checks: make(map[string]HealthCheck),
+	}
+
+	// Check etcd connection by listing apps (lightweight query)
+	if h.eac != nil {
+		_, err := h.eac.List(ctx, entity.Ref(entity.EntityKind, core_v1alpha.KindApp))
+		if err != nil {
+			response.Status = "unhealthy"
+			response.Checks["etcd"] = HealthCheck{
+				Status: "unhealthy",
+				Error:  err.Error(),
+			}
+		} else {
+			response.Checks["etcd"] = HealthCheck{
+				Status: "healthy",
+			}
+		}
+	}
+
+	// Set response headers and status
+	w.Header().Set("Content-Type", "application/json")
+	if response.Status == "healthy" {
+		w.WriteHeader(http.StatusOK)
+	} else {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}
+
+	// Encode response as JSON
+	json.NewEncoder(w).Encode(response)
 }
