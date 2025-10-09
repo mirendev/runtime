@@ -48,10 +48,7 @@ func (e *ResolveError) Unwrap() error {
 
 func (e *ResolveError) Is(target error) bool {
 	_, ok := target.(*ResolveError)
-	if !ok {
-		return false
-	}
-	return true
+	return ok
 }
 
 // Exported sentinel errors for common resolve error kinds
