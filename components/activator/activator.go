@@ -115,8 +115,10 @@ func (a *localActivator) ensureFixedInstances(ctx context.Context) {
 
 	// Check existing sandboxes
 	for key, vs := range a.versions {
-		svcConcurrency := a.getServiceConcurrency(vs.ver, key.service)
-		if svcConcurrency.Mode != "fixed" {
+		// Skip non-fixed mode services
+		targetInstances := vs.strategy.DesiredInstances()
+		if targetInstances == 0 {
+			// Auto mode (scale to zero) - skip
 			continue
 		}
 
@@ -128,11 +130,6 @@ func (a *localActivator) ensureFixedInstances(ctx context.Context) {
 			if sb.sandbox.Status == compute_v1alpha.RUNNING {
 				runningCount++
 			}
-		}
-
-		targetInstances := int(svcConcurrency.NumInstances)
-		if targetInstances <= 0 {
-			targetInstances = 1
 		}
 
 		// Account for pending creations to avoid over-provisioning
