@@ -74,7 +74,7 @@ func AppHistory(ctx *Context, opts struct {
 
 	// Table header
 	if opts.Detailed {
-		ctx.Printf("%-12s %-8s %-25s %-20s %-15s %-10s %-15s %-40s\n",
+		ctx.Printf("%-12s %-8s %-25s %-20s %-15s %-17s %-15s %-33s\n",
 			"STATUS", "CLUSTER", "VERSION", "DEPLOYED BY", "WHEN", "GIT SHA", "BRANCH", "COMMIT MESSAGE")
 		ctx.Printf("%s\n", strings.Repeat("-", 160))
 	} else {
@@ -150,6 +150,10 @@ func AppHistory(ctx *Context, opts struct {
 				if len(gitSha) > 10 {
 					gitSha = gitSha[:10]
 				}
+				// Append -dirty if working tree was dirty
+				if git.HasIsDirty() && git.IsDirty() {
+					gitSha += "-dirty"
+				}
 			}
 			if git.HasBranch() && git.Branch() != "" {
 				gitBranch = git.Branch()
@@ -169,7 +173,7 @@ func AppHistory(ctx *Context, opts struct {
 		}
 
 		if opts.Detailed {
-			ctx.Printf("%-12s %-8s %-25s %-20s %-15s %-10s %-15s %-40s\n",
+			ctx.Printf("%-12s %-8s %-25s %-20s %-15s %-17s %-15s %-33s\n",
 				styledStatus,
 				cluster,
 				version,

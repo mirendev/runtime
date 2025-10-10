@@ -73,10 +73,12 @@ func (d *DeploymentServer) CreateDeployment(ctx context.Context, req *deployment
 	if args.HasGitInfo() && args.GitInfo() != nil {
 		gitInfo := args.GitInfo()
 		deployment.GitInfo = core_v1alpha.GitInfo{
-			Sha:     gitInfo.Sha(),
-			Branch:  gitInfo.Branch(),
-			Message: gitInfo.CommitMessage(),
-			Author:  gitInfo.CommitAuthorName(),
+			Sha:             gitInfo.Sha(),
+			Branch:          gitInfo.Branch(),
+			Message:         gitInfo.CommitMessage(),
+			Author:          gitInfo.CommitAuthorName(),
+			IsDirty:         gitInfo.IsDirty(),
+			WorkingTreeHash: gitInfo.WorkingTreeHash(),
 		}
 	}
 
@@ -565,6 +567,8 @@ func (d *DeploymentServer) toDeploymentInfo(deployment *core_v1alpha.Deployment)
 		gitInfo.SetBranch(deployment.GitInfo.Branch)
 		gitInfo.SetCommitMessage(deployment.GitInfo.Message)
 		gitInfo.SetCommitAuthorName(deployment.GitInfo.Author)
+		gitInfo.SetIsDirty(deployment.GitInfo.IsDirty)
+		gitInfo.SetWorkingTreeHash(deployment.GitInfo.WorkingTreeHash)
 		info.SetGitInfo(gitInfo)
 	}
 

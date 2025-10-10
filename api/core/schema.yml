@@ -202,5 +202,11 @@ kinds:
         author:
           type: string
           doc: Git commit author
+        is_dirty:
+          type: bool
+          doc: Whether working tree had uncommitted changes
+        working_tree_hash:
+          type: string
+          doc: Hash of working tree if dirty
 
 
