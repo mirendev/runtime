@@ -76,6 +76,24 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Download amd64 package
+        uses: actions/download-artifact@v4
+        with:
+          name: miren-base-linux-amd64
+          path: artifacts/amd64
+
+      - name: Download arm64 package
+        uses: actions/download-artifact@v4
+        with:
+          name: miren-base-linux-arm64
+          path: artifacts/arm64
+
+      - name: Extract pre-built binaries
+        run: |
+          mkdir -p docker/artifacts/amd64 docker/artifacts/arm64
+          tar -xzf artifacts/amd64/release-base-linux-amd64.tar.gz -C docker/artifacts/amd64
+          tar -xzf artifacts/arm64/release-base-linux-arm64.tar.gz -C docker/artifacts/arm64
+
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v2
         with:
