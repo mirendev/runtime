@@ -89,7 +89,8 @@ The system uses Dagger for containerized development with all dependencies (cont
 
 ### Code Style & Formatting
 
-- **ALWAYS run `make lint-changed` before committing** - This runs go fmt, go vet on changed files and go mod tidy
+- **ALWAYS run `make lint` before committing** - This runs golangci-lint on the entire codebase
+- Run `make lint-fix` to automatically fix issues where possible
 - The codebase follows standard Go formatting conventions
 - **Comment style**: Only add comments when they provide valuable context or explain "why" something is done
   - Avoid redundant comments that restate what the code does (e.g., `// Start server` above `server.Start()`)
