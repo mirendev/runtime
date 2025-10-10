@@ -85,6 +85,8 @@ type Runner struct {
 	closers []io.Closer
 
 	namespace string
+
+	sbController *sandbox.SandboxController
 }
 
 func (r *Runner) Close() error {
@@ -98,6 +100,63 @@ func (r *Runner) Close() error {
 	}
 
 	return err
+}
+
+// Drain sets the runner's node status to disabled and stops all running sandboxes
+func (r *Runner) Drain(ctx context.Context) error {
+	if r.ec == nil || r.Id == "" {
+		return fmt.Errorf("runner not initialized with entity client")
+	}
+
+	r.Log.Info("draining runner", "id", r.Id)
+
+	// Set node status to disabled
+	r.Log.Info("setting node status to disabled", "id", r.Id)
+	err := r.ec.UpdateAttrs(ctx, entity.Id(r.Id), (&compute_v1alpha.Node{
+		Status: compute_v1alpha.DISABLED,
+	}).Encode)
+	if err != nil {
+		return fmt.Errorf("failed to set node status to disabled: %w", err)
+	}
+
+	r.Log.Info("node status set to disabled", "id", r.Id)
+
+	// List all sandboxes scheduled to this node
+	idx := compute_v1alpha.Index(compute_v1alpha.KindSandbox, entity.Id("node/"+r.Id))
+	results, err := r.ec.List(ctx, idx)
+	if err != nil {
+		return fmt.Errorf("failed to query sandboxes on node: %w", err)
+	}
+
+	sandboxCount := results.Length()
+	r.Log.Info("found sandboxes to drain", "count", sandboxCount, "node", r.Id)
+
+	// Stop each sandbox
+	var drainErr error
+	stoppedCount := 0
+	for results.Next() {
+		md := results.Metadata()
+		if md == nil {
+			continue
+		}
+
+		r.Log.Info("stopping sandbox", "id", md.ID)
+		err := r.sbController.Delete(ctx, md.ID)
+		if err != nil {
+			r.Log.Error("failed to stop sandbox", "id", md.ID, "error", err)
+			drainErr = multierror.Append(drainErr, fmt.Errorf("failed to stop sandbox %s: %w", md.ID, err))
+		} else {
+			r.Log.Info("stopped sandbox", "id", md.ID)
+			stoppedCount++
+		}
+	}
+
+	if drainErr != nil {
+		return fmt.Errorf("errors during drain: %w", drainErr)
+	}
+
+	r.Log.Info("runner drained successfully", "id", r.Id, "sandboxes_stopped", stoppedCount)
+	return nil
 }
 
 func (r *Runner) ContainerdNamespace() string {
@@ -320,6 +379,7 @@ func (r *Runner) SetupControllers(
 
 	r.cc = sbc.CC
 	r.namespace = sbc.Namespace
+	r.sbController = &sbc
 
 	workers := r.Workers
 	if workers <= 0 {

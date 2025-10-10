@@ -76,9 +76,16 @@ func New(opts Options) (*Authority, error) {
 		return nil, fmt.Errorf("parsing CA certificate: %w", err)
 	}
 
+	// Export certificate
+	certPEM := pem.EncodeToMemory(&pem.Block{
+		Type:  "CERTIFICATE",
+		Bytes: cert.Raw,
+	})
+
 	return &Authority{
-		cert: cert,
-		key:  priv,
+		cert:    cert,
+		certPEM: certPEM,
+		key:     priv,
 	}, nil
 }
 

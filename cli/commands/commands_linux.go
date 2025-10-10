@@ -31,6 +31,19 @@ func addCommands(cmds map[string]cli.CommandFactory) {
 	cmds["register status"] = func() (cli.Command, error) {
 		return Infer("register status", "Show cluster registration status", RegisterStatus), nil
 	}
+
+	// Server management commands
+	cmds["server install"] = func() (cli.Command, error) {
+		return Infer("server install", "Install systemd service for miren server", ServerInstall), nil
+	}
+
+	cmds["server uninstall"] = func() (cli.Command, error) {
+		return Infer("server uninstall", "Remove systemd service for miren server", ServerUninstall), nil
+	}
+
+	cmds["server status"] = func() (cli.Command, error) {
+		return Infer("server status", "Show miren service status", ServerStatus), nil
+	}
 }
 
 func (c *Context) setupServerComponents(ctx context.Context, reg *asm.Registry) {

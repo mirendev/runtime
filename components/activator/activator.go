@@ -7,7 +7,6 @@ import (
 	"io"
 	"log/slog"
 	"math/rand/v2"
-	"net/netip"
 	"sync"
 	"time"
 
@@ -17,6 +16,7 @@ import (
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/types"
 	"miren.dev/runtime/pkg/idgen"
+	"miren.dev/runtime/pkg/netutil"
 	"miren.dev/runtime/pkg/rpc/stream"
 )
 
@@ -403,17 +403,11 @@ func (a *localActivator) activateApp(ctx context.Context, ver *core_v1alpha.AppV
 		return nil, localErr
 	}
 
-	// Parse the address to extract just the IP from potential CIDR notation
-	ip := runningSB.Network[0].Address
-	if prefix, err := netip.ParsePrefix(ip); err == nil {
-		// New format: extract IP from CIDR
-		ip = prefix.Addr().String()
-	} else if _, err := netip.ParseAddr(ip); err != nil {
-		// Not a valid IP either, return error
-		return nil, fmt.Errorf("invalid address format: %s", ip)
+	// Build HTTP URL from address and port (handles CIDR and IPv6)
+	addr, err := netutil.BuildHTTPURL(runningSB.Network[0].Address, port)
+	if err != nil {
+		return nil, err
 	}
-	// If it's already a plain IP (old format), use as-is
-	addr := fmt.Sprintf("http://%s:%d", ip, port)
 
 	// Get service-specific concurrency configuration
 	svcConcurrency := a.getServiceConcurrency(ver, service)
@@ -667,20 +661,15 @@ func (a *localActivator) getServiceConcurrency(ver *core_v1alpha.AppVersion, ser
 		}
 	}
 
-	// Check for legacy global concurrency configuration
-	if ver.Config.Concurrency.Fixed > 0 || ver.Config.Concurrency.Auto > 0 {
-		// Use global config for backward compatibility
-		if ver.Config.Concurrency.Fixed > 0 {
-			return &core_v1alpha.ServiceConcurrency{
-				Mode:                "auto",
-				RequestsPerInstance: ver.Config.Concurrency.Fixed,
-				ScaleDownDelay:      "2m", // Legacy default
-			}
-		}
-		// Handle auto mode from legacy config if needed
-	}
+	// Fallback to runtime defaults for backward compatibility with old AppVersions
+	// that don't have Config.Services[] populated (created before RFD 0034 migration).
+	// This should rarely be hit - new builds populate Config.Services[] at build time.
+	a.log.Warn("using runtime fallback defaults for service concurrency",
+		"app", ver.App,
+		"version", ver.Version,
+		"service", service,
+		"reason", "Config.Services[] not populated - rebuild app to use build-time defaults")
 
-	// Apply defaults based on service name
 	if service == "web" {
 		return &core_v1alpha.ServiceConcurrency{
 			Mode:                "auto",
@@ -758,18 +747,12 @@ func (a *localActivator) recoverSandboxes(ctx context.Context) error {
 			continue
 		}
 
-		// Parse the address to extract just the IP from potential CIDR notation
-		ipAddr := sb.Network[0].Address
-		if prefix, err := netip.ParsePrefix(ipAddr); err == nil {
-			// New format: extract IP from CIDR
-			ipAddr = prefix.Addr().String()
-		} else if _, err := netip.ParseAddr(ipAddr); err != nil {
-			// Not a valid IP either, skip this sandbox
-			a.log.Error("invalid address format", "address", ipAddr, "sandbox", sb.ID)
+		// Build HTTP URL from address and port (handles CIDR and IPv6)
+		addr, err := netutil.BuildHTTPURL(sb.Network[0].Address, port)
+		if err != nil {
+			a.log.Error("failed to build HTTP URL", "error", err, "sandbox", sb.ID)
 			continue
 		}
-		// If it's already a plain IP (old format), use as-is
-		addr := fmt.Sprintf("http://%s:%d", ipAddr, port)
 
 		// Get service-specific concurrency configuration
 		svcConcurrency := a.getServiceConcurrency(&appVer, service)

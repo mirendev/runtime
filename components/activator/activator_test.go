@@ -142,7 +142,16 @@ func TestActivatorLeaseOperations(t *testing.T) {
 		Version:  "v1",
 		ImageUrl: "test:latest",
 		Config: core_v1alpha.Config{
-			Concurrency: core_v1alpha.Concurrency{Fixed: 10},
+			Services: []core_v1alpha.Services{
+				{
+					Name: "web",
+					ServiceConcurrency: core_v1alpha.ServiceConcurrency{
+						Mode:                "auto",
+						RequestsPerInstance: 10,
+						ScaleDownDelay:      "15m",
+					},
+				},
+			},
 		},
 	}
 
@@ -257,8 +266,15 @@ func TestActivatorRecoverSandboxesWithEntityServer(t *testing.T) {
 		ImageUrl: "test:latest",
 		Config: core_v1alpha.Config{
 			Port: 8080,
-			Concurrency: core_v1alpha.Concurrency{
-				Fixed: 10,
+			Services: []core_v1alpha.Services{
+				{
+					Name: "web",
+					ServiceConcurrency: core_v1alpha.ServiceConcurrency{
+						Mode:                "auto",
+						RequestsPerInstance: 10,
+						ScaleDownDelay:      "2m",
+					},
+				},
 			},
 		},
 	}
@@ -366,8 +382,15 @@ func TestActivatorRecoveryIntegration(t *testing.T) {
 		ImageUrl: "test:latest",
 		Config: core_v1alpha.Config{
 			Port: 8080,
-			Concurrency: core_v1alpha.Concurrency{
-				Fixed: 10,
+			Services: []core_v1alpha.Services{
+				{
+					Name: "web",
+					ServiceConcurrency: core_v1alpha.ServiceConcurrency{
+						Mode:                "auto",
+						RequestsPerInstance: 10,
+						ScaleDownDelay:      "15m",
+					},
+				},
 			},
 		},
 	}
@@ -460,8 +483,15 @@ func TestActivatorRecoverSandboxesWithCIDR(t *testing.T) {
 		ImageUrl: "test:latest",
 		Config: core_v1alpha.Config{
 			Port: 3000,
-			Concurrency: core_v1alpha.Concurrency{
-				Fixed: 5,
+			Services: []core_v1alpha.Services{
+				{
+					Name: "web",
+					ServiceConcurrency: core_v1alpha.ServiceConcurrency{
+						Mode:                "auto",
+						RequestsPerInstance: 5,
+						ScaleDownDelay:      "15m",
+					},
+				},
 			},
 		},
 	}

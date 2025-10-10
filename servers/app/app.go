@@ -203,8 +203,6 @@ func (r *AppInfo) SetConfiguration(ctx context.Context, state *app_v1alpha.CrudS
 
 	appVer.Config.Entrypoint = cfg.Entrypoint()
 
-	appVer.Config.Concurrency.Fixed = int64(cfg.Concurrency())
-
 	appVer.Version = name + "-" + idgen.Gen("v")
 
 	avid, err := r.EC.Create(ctx, appVer.Version, &appVer)
@@ -285,7 +283,6 @@ func (r *AppInfo) GetConfiguration(ctx context.Context, state *app_v1alpha.CrudG
 	cfg.SetEnvVars(envVars)
 
 	cfg.SetEntrypoint(appVer.Config.Entrypoint)
-	cfg.SetConcurrency(int32(appVer.Config.Concurrency.Fixed))
 
 	state.Results().SetConfiguration(&cfg)
 
