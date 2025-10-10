@@ -18,7 +18,8 @@ func (t *ConcurrencyTracker) HasCapacity() bool {
 	return t.strategy.checkCapacity(t.used, t.maxCapacity)
 }
 
-// AcquireLease allocates capacity and returns the lease size
+// AcquireLease allocates capacity and returns the lease size.
+// Caller must check HasCapacity() before calling this method.
 func (t *ConcurrencyTracker) AcquireLease() int {
 	size := t.strategy.LeaseSize()
 	t.used += size
@@ -40,7 +41,9 @@ func (t *ConcurrencyTracker) Max() int {
 	return t.maxCapacity
 }
 
-// ConcurrencyStrategy encapsulates mode-specific capacity management logic
+// ConcurrencyStrategy encapsulates mode-specific capacity management logic.
+// Implementations of this interface are package-internal only - the lowercase
+// methods (checkCapacity, releaseCapacity) enforce implementation locality.
 type ConcurrencyStrategy interface {
 	// InitializeTracker creates a new tracker for a sandbox
 	InitializeTracker() *ConcurrencyTracker
@@ -48,10 +51,10 @@ type ConcurrencyStrategy interface {
 	// LeaseSize returns how much capacity to allocate per lease (for two-tier leasing)
 	LeaseSize() int
 
-	// checkCapacity checks if sandbox can accept another lease (internal)
+	// checkCapacity checks if sandbox can accept another lease (package-internal)
 	checkCapacity(used, maxCapacity int) bool
 
-	// releaseCapacity frees capacity (internal, allows mode-specific behavior)
+	// releaseCapacity frees capacity (package-internal, allows mode-specific behavior)
 	releaseCapacity(tracker *ConcurrencyTracker, size int)
 
 	// ScaleDownDelay returns how long to wait before retiring idle sandbox
