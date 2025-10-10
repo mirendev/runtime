@@ -13,7 +13,6 @@ type ConcurrencyTracker struct {
 	strategy    ConcurrencyStrategy
 }
 
-// HasCapacity checks if sandbox can accept another lease
 func (t *ConcurrencyTracker) HasCapacity() bool {
 	return t.strategy.checkCapacity(t.used, t.maxCapacity)
 }
@@ -26,17 +25,14 @@ func (t *ConcurrencyTracker) AcquireLease() int {
 	return size
 }
 
-// ReleaseLease frees capacity
 func (t *ConcurrencyTracker) ReleaseLease(size int) {
 	t.strategy.releaseCapacity(t, size)
 }
 
-// Used returns current capacity usage
 func (t *ConcurrencyTracker) Used() int {
 	return t.used
 }
 
-// Max returns maximum capacity
 func (t *ConcurrencyTracker) Max() int {
 	return t.maxCapacity
 }
@@ -117,7 +113,7 @@ func (s *FixedStrategy) InitializeTracker() *ConcurrencyTracker {
 }
 
 func (s *FixedStrategy) LeaseSize() int {
-	return 1 // Always "full" after first lease
+	return 1 // Used to mark sandbox as active; capacity checks disabled in fixed mode
 }
 
 func (s *FixedStrategy) checkCapacity(used, maxCapacity int) bool {
