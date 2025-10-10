@@ -134,6 +134,14 @@ func (s *FixedStrategy) DesiredInstances() int {
 
 // NewStrategy creates a strategy from ServiceConcurrency config
 func NewStrategy(svc *core_v1alpha.ServiceConcurrency) ConcurrencyStrategy {
+	if svc == nil {
+		// Defensive: return safe auto mode defaults if nil
+		return &AutoStrategy{
+			requestsPerInstance: 10,
+			scaleDownDelay:      2 * time.Minute,
+		}
+	}
+
 	if svc.Mode == "fixed" {
 		return &FixedStrategy{
 			numInstances: int(svc.NumInstances),

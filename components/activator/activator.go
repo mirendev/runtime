@@ -797,7 +797,6 @@ func (a *localActivator) retireUnusedSandboxes() {
 	for _, info := range toStop {
 		// Create a bounded context for each RPC call
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
 
 		var rpcE entityserver_v1alpha.Entity
 		rpcE.SetId(info.sandboxID)
@@ -817,5 +816,6 @@ func (a *localActivator) retireUnusedSandboxes() {
 				a.log.Error("failed to retire sandbox", "sandbox", info.sandboxID, "app", info.appName, "service", info.service, "error", err)
 			}
 		}
+		cancel()
 	}
 }
