@@ -70,11 +70,6 @@ lint-fix:
 
 .PHONY: lint-fix
 
-lint-changed:
-	@bash ./hack/lint-changed.sh
-
-.PHONY: lint-changed
-
 lint-pr:
 	golangci-lint run --new-from-rev main ./...
 
