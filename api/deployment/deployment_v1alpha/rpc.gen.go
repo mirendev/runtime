@@ -1314,35 +1314,35 @@ type reexportDeployment struct {
 	client rpc.Client
 }
 
-func (_ reexportDeployment) CreateDeployment(ctx context.Context, state *DeploymentCreateDeployment) error {
+func (reexportDeployment) CreateDeployment(ctx context.Context, state *DeploymentCreateDeployment) error {
 	panic("not implemented")
 }
 
-func (_ reexportDeployment) UpdateDeploymentStatus(ctx context.Context, state *DeploymentUpdateDeploymentStatus) error {
+func (reexportDeployment) UpdateDeploymentStatus(ctx context.Context, state *DeploymentUpdateDeploymentStatus) error {
 	panic("not implemented")
 }
 
-func (_ reexportDeployment) UpdateDeploymentPhase(ctx context.Context, state *DeploymentUpdateDeploymentPhase) error {
+func (reexportDeployment) UpdateDeploymentPhase(ctx context.Context, state *DeploymentUpdateDeploymentPhase) error {
 	panic("not implemented")
 }
 
-func (_ reexportDeployment) UpdateFailedDeployment(ctx context.Context, state *DeploymentUpdateFailedDeployment) error {
+func (reexportDeployment) UpdateFailedDeployment(ctx context.Context, state *DeploymentUpdateFailedDeployment) error {
 	panic("not implemented")
 }
 
-func (_ reexportDeployment) UpdateDeploymentAppVersion(ctx context.Context, state *DeploymentUpdateDeploymentAppVersion) error {
+func (reexportDeployment) UpdateDeploymentAppVersion(ctx context.Context, state *DeploymentUpdateDeploymentAppVersion) error {
 	panic("not implemented")
 }
 
-func (_ reexportDeployment) ListDeployments(ctx context.Context, state *DeploymentListDeployments) error {
+func (reexportDeployment) ListDeployments(ctx context.Context, state *DeploymentListDeployments) error {
 	panic("not implemented")
 }
 
-func (_ reexportDeployment) GetDeploymentById(ctx context.Context, state *DeploymentGetDeploymentById) error {
+func (reexportDeployment) GetDeploymentById(ctx context.Context, state *DeploymentGetDeploymentById) error {
 	panic("not implemented")
 }
 
-func (_ reexportDeployment) GetActiveDeployment(ctx context.Context, state *DeploymentGetActiveDeployment) error {
+func (reexportDeployment) GetActiveDeployment(ctx context.Context, state *DeploymentGetActiveDeployment) error {
 	panic("not implemented")
 }
 
@@ -1363,7 +1363,7 @@ func AdaptDeployment(t Deployment) *rpc.Interface {
 		{
 			Name:          "UpdateDeploymentStatus",
 			InterfaceName: "Deployment",
-			Index:         0,
+			Index:         1,
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.UpdateDeploymentStatus(ctx, &DeploymentUpdateDeploymentStatus{Call: call})
 			},
@@ -1371,7 +1371,7 @@ func AdaptDeployment(t Deployment) *rpc.Interface {
 		{
 			Name:          "UpdateDeploymentPhase",
 			InterfaceName: "Deployment",
-			Index:         0,
+			Index:         2,
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.UpdateDeploymentPhase(ctx, &DeploymentUpdateDeploymentPhase{Call: call})
 			},
@@ -1379,7 +1379,7 @@ func AdaptDeployment(t Deployment) *rpc.Interface {
 		{
 			Name:          "UpdateFailedDeployment",
 			InterfaceName: "Deployment",
-			Index:         0,
+			Index:         3,
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.UpdateFailedDeployment(ctx, &DeploymentUpdateFailedDeployment{Call: call})
 			},
@@ -1387,7 +1387,7 @@ func AdaptDeployment(t Deployment) *rpc.Interface {
 		{
 			Name:          "UpdateDeploymentAppVersion",
 			InterfaceName: "Deployment",
-			Index:         0,
+			Index:         4,
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.UpdateDeploymentAppVersion(ctx, &DeploymentUpdateDeploymentAppVersion{Call: call})
 			},
@@ -1395,7 +1395,7 @@ func AdaptDeployment(t Deployment) *rpc.Interface {
 		{
 			Name:          "ListDeployments",
 			InterfaceName: "Deployment",
-			Index:         0,
+			Index:         5,
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.ListDeployments(ctx, &DeploymentListDeployments{Call: call})
 			},
@@ -1403,7 +1403,7 @@ func AdaptDeployment(t Deployment) *rpc.Interface {
 		{
 			Name:          "GetDeploymentById",
 			InterfaceName: "Deployment",
-			Index:         0,
+			Index:         6,
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.GetDeploymentById(ctx, &DeploymentGetDeploymentById{Call: call})
 			},
@@ -1411,7 +1411,7 @@ func AdaptDeployment(t Deployment) *rpc.Interface {
 		{
 			Name:          "GetActiveDeployment",
 			InterfaceName: "Deployment",
-			Index:         0,
+			Index:         7,
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.GetActiveDeployment(ctx, &DeploymentGetActiveDeployment{Call: call})
 			},

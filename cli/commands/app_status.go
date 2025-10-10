@@ -39,8 +39,15 @@ func AppStatus(ctx *Context, opts struct {
 	}
 	depClient := deployment_v1alpha.NewDeploymentClient(depCl)
 
+	// Determine which cluster to query
+	// Use explicit cluster if specified with -C flag, otherwise use current context
+	clusterId := ctx.ClusterName
+	if opts.Cluster != "" {
+		clusterId = opts.Cluster
+	}
+
 	// Get active deployment
-	activeDeployment, err := depClient.GetActiveDeployment(ctx, opts.App, ctx.ClusterName)
+	activeDeployment, err := depClient.GetActiveDeployment(ctx, opts.App, clusterId)
 	if err != nil {
 		// It's okay if there's no active deployment
 		activeDeployment = nil
@@ -58,7 +65,7 @@ func AppStatus(ctx *Context, opts struct {
 
 	// App info
 	ctx.Printf("%s %s\n", labelStyle.Render("App:"), opts.App)
-	ctx.Printf("%s %s\n", labelStyle.Render("Cluster:"), ctx.ClusterName)
+	ctx.Printf("%s %s\n", labelStyle.Render("Cluster:"), clusterId)
 
 	// Version info
 	if appResult.HasVersionId() && appResult.VersionId() != "" {
@@ -188,7 +195,7 @@ func AppStatus(ctx *Context, opts struct {
 	ctx.Printf("\n%s\n", labelStyle.Render("Recent Activity:"))
 
 	// Get last 5 deployments
-	recentResult, err := depClient.ListDeployments(ctx, opts.App, ctx.ClusterName, "", 5)
+	recentResult, err := depClient.ListDeployments(ctx, opts.App, clusterId, "", 5)
 	if err == nil && recentResult.HasDeployments() && len(recentResult.Deployments()) > 0 {
 		for i, dep := range recentResult.Deployments() {
 			if i >= 3 { // Only show top 3

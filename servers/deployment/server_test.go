@@ -531,3 +531,100 @@ func indexString(s, substr string) int {
 	}
 	return -1
 }
+
+func TestUpdateDeploymentStatusToInProgress(t *testing.T) {
+	ctx := context.Background()
+	
+	// Setup in-memory entity server
+	inmem, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	// Create deployment server
+	logger := slog.Default()
+	server, err := NewDeploymentServer(logger, inmem.EAC)
+	if err != nil {
+		t.Fatalf("Failed to create deployment server: %v", err)
+	}
+
+	// First create a deployment directly in entity store for testing  
+	testDeployment := &core_v1alpha.Deployment{
+		AppName:    "test-app",
+		ClusterId:  "test-cluster",
+		AppVersion: "v1.0.0",
+		Status:     "in_progress",
+		Phase:      "preparing",
+		DeployedBy: core_v1alpha.DeployedBy{
+			UserId:    "test-user",
+			UserEmail: "test@example.com",
+			Timestamp: time.Now().Format(time.RFC3339),
+		},
+	}
+	
+	// Create entity
+	deploymentName := "test-deployment"
+	deploymentId, err := inmem.Client.Create(ctx, deploymentName, testDeployment)
+	if err != nil {
+		t.Fatalf("Failed to create test deployment: %v", err)
+	}
+	testDeployment.ID = deploymentId
+
+	// Create RPC client
+	client := &deployment_v1alpha.DeploymentClient{
+		Client: rpc.LocalClient(deployment_v1alpha.AdaptDeployment(server)),
+	}
+
+	// Test 1: Update to active status
+	updateResult, err := client.UpdateDeploymentStatus(ctx, string(deploymentId), "active", "")
+	if err != nil {
+		t.Fatalf("Failed to update deployment status to active: %v", err)
+	}
+	if updateResult.Deployment().Status() != "active" {
+		t.Errorf("Expected status 'active', got %s", updateResult.Deployment().Status())
+	}
+	if !updateResult.Deployment().HasCompletedAt() {
+		t.Error("CompletedAt should be set for active deployment")
+	}
+
+	// Test 2: Try to update back to in_progress (should fail - completed deployments can't go back)
+	_, err = client.UpdateDeploymentStatus(ctx, string(deploymentId), "in_progress", "")
+	if err == nil {
+		t.Error("Expected error when updating completed deployment back to in_progress")
+	}
+	if !containsString(err.Error(), "cannot update deployment in active state") {
+		t.Errorf("Unexpected error message: %v", err)
+	}
+
+	// Test 3: Create another deployment and verify we can keep it in_progress
+	testDeployment2 := &core_v1alpha.Deployment{
+		AppName:    "test-app2",
+		ClusterId:  "test-cluster",
+		AppVersion: "v1.0.0",
+		Status:     "in_progress",
+		Phase:      "building",
+		DeployedBy: core_v1alpha.DeployedBy{
+			UserId:    "test-user",
+			UserEmail: "test@example.com",
+			Timestamp: time.Now().Format(time.RFC3339),
+		},
+	}
+	
+	deploymentName2 := "test-deployment2"
+	deploymentId2, err := inmem.Client.Create(ctx, deploymentName2, testDeployment2)
+	if err != nil {
+		t.Fatalf("Failed to create test deployment 2: %v", err)
+	}
+	
+	// Update to in_progress (should work since it's already in_progress)
+	updateResult2, err := client.UpdateDeploymentStatus(ctx, string(deploymentId2), "in_progress", "")
+	if err != nil {
+		t.Fatalf("Failed to update deployment status to in_progress: %v", err)
+	}
+	if updateResult2.Deployment().Status() != "in_progress" {
+		t.Errorf("Expected status 'in_progress', got %s", updateResult2.Deployment().Status())
+	}
+	
+	// Verify CompletedAt is not set when status is in_progress
+	if updateResult2.Deployment().HasCompletedAt() {
+		t.Error("CompletedAt should not be set for in_progress deployment")
+	}
+}

@@ -208,5 +208,14 @@ kinds:
         working_tree_hash:
           type: string
           doc: Hash of working tree if dirty
+        commit_author_email:
+          type: string
+          doc: Git commit author email address
+        commit_timestamp:
+          type: string
+          doc: Git commit timestamp in RFC3339 format
+        repository:
+          type: string
+          doc: Git repository remote URL
 
 

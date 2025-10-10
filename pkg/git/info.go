@@ -57,13 +57,27 @@ func GetInfo(dir string) (*Info, error) {
 
 	// If dirty, get a hash of the working tree state
 	if info.IsDirty {
-		// This creates a hash of all tracked files including uncommitted changes
-		hash, _ := runGitCommand(absDir, "hash-object", "--stdin")
-		if hash == "" {
-			// Fallback: use status output as a simple indicator
+		// Get a combined view of the dirty state:
+		// 1. Status output showing which files are modified
+		// 2. Actual diff of changes
+		statusOutput, _ := runGitCommand(absDir, "status", "--porcelain", "-z")
+		diffOutput, _ := runGitCommand(absDir, "diff", "HEAD", "--no-ext-diff")
+		
+		// Combine both outputs to create a unique fingerprint of the dirty state
+		combinedState := fmt.Sprintf("status:\n%s\ndiff:\n%s", statusOutput, diffOutput)
+		
+		// Create a hash of the combined state
+		cmd := exec.Command("git", "hash-object", "--stdin")
+		cmd.Dir = absDir
+		cmd.Stdin = strings.NewReader(combinedState)
+		output, err := cmd.Output()
+		
+		if err != nil || len(output) == 0 {
+			// Fallback: use a simple hash of the status
 			info.WorkingTreeHash = "dirty"
 		} else {
-			info.WorkingTreeHash = strings.TrimSpace(hash)[:8]
+			// Use first 8 characters of the hash
+			info.WorkingTreeHash = strings.TrimSpace(string(output))[:8]
 		}
 	}
 

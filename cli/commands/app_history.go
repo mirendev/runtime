@@ -62,6 +62,19 @@ func AppHistory(ctx *Context, opts struct {
 			}
 		}
 		deployments = filtered
+		
+		// Check if all deployments were filtered out
+		if len(deployments) == 0 {
+			ctx.Printf("No deployments found for app '%s'", opts.App)
+			if !opts.All {
+				ctx.Printf(" on cluster '%s'", ctx.ClusterName)
+			}
+			if opts.Status != "" {
+				ctx.Printf(" with status '%s'", opts.Status)
+			}
+			ctx.Printf(" (failed deployments hidden)\n")
+			return nil
+		}
 	}
 
 	// Header

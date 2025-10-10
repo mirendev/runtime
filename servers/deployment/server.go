@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"sort"
 	"time"
 
 	"github.com/google/uuid"
@@ -73,12 +74,19 @@ func (d *DeploymentServer) CreateDeployment(ctx context.Context, req *deployment
 	if args.HasGitInfo() && args.GitInfo() != nil {
 		gitInfo := args.GitInfo()
 		deployment.GitInfo = core_v1alpha.GitInfo{
-			Sha:             gitInfo.Sha(),
-			Branch:          gitInfo.Branch(),
-			Message:         gitInfo.CommitMessage(),
-			Author:          gitInfo.CommitAuthorName(),
-			IsDirty:         gitInfo.IsDirty(),
-			WorkingTreeHash: gitInfo.WorkingTreeHash(),
+			Sha:               gitInfo.Sha(),
+			Branch:            gitInfo.Branch(),
+			Message:           gitInfo.CommitMessage(),
+			Author:            gitInfo.CommitAuthorName(),
+			IsDirty:           gitInfo.IsDirty(),
+			WorkingTreeHash:   gitInfo.WorkingTreeHash(),
+			CommitAuthorEmail: gitInfo.CommitAuthorEmail(),
+			Repository:        gitInfo.Repository(),
+		}
+		
+		// Handle optional timestamp
+		if gitInfo.HasCommitTimestamp() && gitInfo.CommitTimestamp() != nil {
+			deployment.GitInfo.CommitTimestamp = standard.FromTimestamp(gitInfo.CommitTimestamp()).Format(time.RFC3339)
 		}
 	}
 
@@ -127,13 +135,14 @@ func (d *DeploymentServer) UpdateDeploymentStatus(ctx context.Context, req *depl
 
 	// Validate status value
 	validStatuses := map[string]bool{
+		"in_progress": true,
 		"active":      true,
 		"failed":      true,
 		"rolled_back": true,
 	}
 	if !validStatuses[newStatus] {
 		return cond.ValidationFailure("invalid-status",
-			"status must be one of: active, failed, rolled_back")
+			"status must be one of: in_progress, active, failed, rolled_back")
 	}
 
 	// Get existing deployment
@@ -155,7 +164,11 @@ func (d *DeploymentServer) UpdateDeploymentStatus(ctx context.Context, req *depl
 
 	// Update deployment status
 	deployment.Status = newStatus
-	deployment.CompletedAt = time.Now().Format(time.RFC3339)
+	
+	// Only set CompletedAt if moving to a terminal state
+	if newStatus != "in_progress" {
+		deployment.CompletedAt = time.Now().Format(time.RFC3339)
+	}
 
 	// Update error message if failed
 	if newStatus == "failed" && args.HasErrorMessage() {
@@ -489,15 +502,9 @@ func (d *DeploymentServer) listDeploymentsInternal(ctx context.Context, appName,
 	// Decode and filter deployments
 	deployments := make([]*core_v1alpha.Deployment, 0)
 	for _, e := range entities {
-		// Get the actual entity data
-		entityResp, err := d.EAC.Get(ctx, e.Id())
-		if err != nil {
-			d.Log.Error("Failed to get deployment", "id", e.Id(), "error", err)
-			continue
-		}
-
+		// List already returns full entity data with attributes, no need to fetch again
 		var dep core_v1alpha.Deployment
-		decodeEntity(entityResp.Entity(), &dep)
+		decodeEntity(e, &dep)
 
 		// Apply filters
 		if appName != "" && dep.AppName != appName {
@@ -511,20 +518,16 @@ func (d *DeploymentServer) listDeploymentsInternal(ctx context.Context, appName,
 		}
 
 		deployments = append(deployments, &dep)
-
-		// Check limit
-		if len(deployments) >= limit {
-			break
-		}
 	}
 
-	// Sort by timestamp (newest first)
-	for i := 0; i < len(deployments)-1; i++ {
-		for j := i + 1; j < len(deployments); j++ {
-			if deployments[i].DeployedBy.Timestamp < deployments[j].DeployedBy.Timestamp {
-				deployments[i], deployments[j] = deployments[j], deployments[i]
-			}
-		}
+	// Sort by timestamp (newest first) using efficient sort.Slice
+	sort.Slice(deployments, func(i, j int) bool {
+		return deployments[i].DeployedBy.Timestamp > deployments[j].DeployedBy.Timestamp
+	})
+
+	// Apply limit after sorting
+	if limit > 0 && len(deployments) > limit {
+		deployments = deployments[:limit]
 	}
 
 	return deployments, nil
@@ -569,6 +572,16 @@ func (d *DeploymentServer) toDeploymentInfo(deployment *core_v1alpha.Deployment)
 		gitInfo.SetCommitAuthorName(deployment.GitInfo.Author)
 		gitInfo.SetIsDirty(deployment.GitInfo.IsDirty)
 		gitInfo.SetWorkingTreeHash(deployment.GitInfo.WorkingTreeHash)
+		gitInfo.SetCommitAuthorEmail(deployment.GitInfo.CommitAuthorEmail)
+		gitInfo.SetRepository(deployment.GitInfo.Repository)
+		
+		// Handle optional timestamp
+		if deployment.GitInfo.CommitTimestamp != "" {
+			if ts, err := time.Parse(time.RFC3339, deployment.GitInfo.CommitTimestamp); err == nil {
+				gitInfo.SetCommitTimestamp(standard.ToTimestamp(ts))
+			}
+		}
+		
 		info.SetGitInfo(gitInfo)
 	}
 
