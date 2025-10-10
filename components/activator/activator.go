@@ -230,8 +230,9 @@ func (a *localActivator) AcquireLease(ctx context.Context, ver *core_v1alpha.App
 					Size:    leaseSize,
 					URL:     s.url,
 				}
+				used := s.tracker.Used()
 				a.mu.Unlock()
-				a.log.Debug("reusing sandbox", "app", ver.App, "version", ver.Version, "sandbox", s.sandbox.ID, "used", s.tracker.Used())
+				a.log.Debug("reusing sandbox", "app", ver.App, "version", ver.Version, "sandbox", s.sandbox.ID, "used", used)
 				return lease, nil
 			}
 		}
