@@ -3,6 +3,7 @@ package model
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 	"miren.dev/runtime/pkg/entity"
@@ -27,6 +28,12 @@ func TestTextFormatter_Format(t *testing.T) {
 	t.Run("works with simple entity", func(t *testing.T) {
 		r := require.New(t)
 		tf, store := testTextFormatter(t)
+
+		ts := time.Unix(1136214245, 0) // 2006-01-02T15:04:05Z
+
+		store.NowFunc = func() time.Time {
+			return ts
+		}
 		testEntity, err := store.CreateEntity(context.Background(), []entity.Attr{
 			{ID: entity.Ident, Value: entity.KeywordValue("test/entity")},
 			{ID: entity.Doc, Value: entity.StringValue("Test entity")},
@@ -39,6 +46,12 @@ func TestTextFormatter_Format(t *testing.T) {
 		expected := `attrs:
   - id: db/doc
     value: Test entity
+  - id: db/entity.created-at
+    value: 2006-01-02T15:04:05Z
+  - id: db/entity.revision
+    value: 1
+  - id: db/entity.updated-at
+    value: 2006-01-02T15:04:05Z
   - id: db/id
     value: test/entity
 `
@@ -48,6 +61,12 @@ func TestTextFormatter_Format(t *testing.T) {
 	t.Run("works for simple entity with schema", func(t *testing.T) {
 		r := require.New(t)
 		tf, store := testTextFormatter(t)
+
+		ts := time.Unix(1136214245, 0).UTC() // 2006-01-02T15:04:05Z
+
+		store.NowFunc = func() time.Time {
+			return ts
+		}
 
 		// TODO: we're depending on a real schema/kind here, it would be better if we could create isolated schemas and kinds in the context of tests
 		err := schema.Apply(ctx, store)
@@ -67,6 +86,12 @@ kind: dev.miren.core/project
 version: v1alpha
 spec: {}
 attrs:
+  - id: db/entity.created-at
+    value: 2006-01-02T15:04:05Z
+  - id: db/entity.revision
+    value: 1
+  - id: db/entity.updated-at
+    value: 2006-01-02T15:04:05Z
   - id: db/id
     value: test/myproject
   - id: entity/kind

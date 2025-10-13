@@ -146,12 +146,15 @@ func TestActivatorLeaseOperations(t *testing.T) {
 		},
 	}
 
+	ent, _ := entity.NewEntity(nil)
+	ent.SetID("sb-1")
+
 	testSandbox := &sandbox{
 		sandbox: &compute_v1alpha.Sandbox{
 			ID:     entity.Id("sb-1"),
 			Status: compute_v1alpha.RUNNING,
 		},
-		ent:         &entity.Entity{ID: entity.Id("sb-1")},
+		ent:         ent,
 		lastRenewal: time.Now(),
 		url:         "http://localhost:3000",
 		maxSlots:    10,

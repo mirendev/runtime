@@ -3,7 +3,9 @@ package schema
 import (
 	"context"
 	"errors"
+	"slices"
 
+	"github.com/davecgh/go-spew/spew"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/types"
 )
@@ -67,7 +69,7 @@ func (b *SchemaBuilder) Apply(ctx context.Context, store entity.Store) error {
 	}
 
 	for _, e := range b.attrs {
-		_, err := store.CreateEntity(ctx, e.Attrs, entity.WithOverwrite)
+		_, err := store.CreateEntity(ctx, slices.Clone(e.Attrs), entity.WithOverwrite)
 		if err != nil && !errors.Is(err, entity.ErrEntityAlreadyExists) {
 			return err
 		}
@@ -209,6 +211,10 @@ func (s *SchemaBuilder) Attr(name, id string, typ entity.Id, opts ...AttrOption)
 
 	if ab.session {
 		ent.Attrs = append(ent.Attrs, entity.Bool(entity.Session, true))
+	}
+
+	if id == "dev.miren.network/endpoints.service" {
+		spew.Dump(ent)
 	}
 
 	s.attrs[eid] = ent

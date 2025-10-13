@@ -99,7 +99,6 @@ func TestReconcileController_EventProcessing(t *testing.T) {
 	)
 
 	store.AddEntity(entity.Id("test/entity1"), &entity.Entity{
-		ID: entity.Id("test/entity1"),
 		Attrs: entity.Attrs(
 			entity.Ident, "test/entity1",
 			entity.Type, "test/type",
@@ -218,7 +217,6 @@ func TestReconcileController_Resync(t *testing.T) {
 
 	// Setup test entities
 	store.AddEntity(entity.Id("test/entity1"), &entity.Entity{
-		ID: entity.Id("test/entity1"),
 		Attrs: entity.Attrs(
 			entity.Ident, "test/entity1",
 			entity.Type, "test/type",
@@ -317,7 +315,6 @@ func TestAdaptController_WithoutUpdateMethod(t *testing.T) {
 
 	// Test EventAdded - should call Create
 	entity1 := &entity.Entity{
-		ID: "test1",
 		Attrs: entity.Attrs(
 			entity.Ident, "test1",
 			NameAttr, "Test Entity 1",
@@ -351,7 +348,6 @@ func TestAdaptController_WithUpdateMethod(t *testing.T) {
 
 	// Test EventAdded - should call Create
 	entity1 := &entity.Entity{
-		ID: "test1",
 		Attrs: entity.Attrs(
 			entity.Ident, "test1",
 			NameAttr, "Test Entity 1",
@@ -499,14 +495,12 @@ func TestReconcileController_WatchReconnect(t *testing.T) {
 
 	// Add test entity to store
 	store.AddEntity(entity.Id("test/entity1"), &entity.Entity{
-		ID: entity.Id("test/entity1"),
 		Attrs: entity.Attrs(
 			entity.Ident, "test/entity1",
 			entity.Type, "test/type",
 		),
 	})
 	store.AddEntity(entity.Id("test/entity2"), &entity.Entity{
-		ID: entity.Id("test/entity2"),
 		Attrs: entity.Attrs(
 			entity.Ident, "test/entity2",
 			entity.Type, "test/type",
@@ -579,7 +573,6 @@ func TestReconcileController_QueueOverflow(t *testing.T) {
 		id := fmt.Sprintf("test/entity%d", i)
 		entityIds = append(entityIds, entity.Id(id))
 		store.AddEntity(entity.Id(id), &entity.Entity{
-			ID: entity.Id(id),
 			Attrs: entity.Attrs(
 				entity.Ident, id,
 				entity.Type, "test/type",

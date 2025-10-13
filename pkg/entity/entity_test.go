@@ -1,7 +1,9 @@
 package entity
 
 import (
+	"fmt"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -20,6 +22,48 @@ func setupTestStore(t *testing.T) (*FileStore, func()) {
 	}
 
 	return store, cleanup
+}
+
+func assertEntityEqual(t *testing.T, expected, actual *Entity, msgAndArgs ...interface{}) bool {
+	t.Helper()
+
+	// Make copies to avoid modifying the original entities
+	expectedCopy := &Entity{Attrs: append([]Attr(nil), expected.Attrs...)}
+	actualCopy := &Entity{Attrs: append([]Attr(nil), actual.Attrs...)}
+
+	// Remove system timestamp attributes for comparison
+	expectedCopy.Remove(UpdatedAt)
+	expectedCopy.Remove(CreatedAt)
+	actualCopy.Remove(UpdatedAt)
+	actualCopy.Remove(CreatedAt)
+
+	if expectedCopy.Compare(actualCopy) == 0 {
+		return true
+	}
+
+	var msg strings.Builder
+	msg.WriteString("Entities differ:\n\n")
+
+	if expectedCopy.Id() != actualCopy.Id() {
+		msg.WriteString(fmt.Sprintf("ID mismatch:\n  Expected: %s\n  Actual:   %s\n\n", expectedCopy.Id(), actualCopy.Id()))
+	}
+
+	msg.WriteString(fmt.Sprintf("Expected Attrs (%d):\n", len(expectedCopy.Attrs)))
+	for i, attr := range expectedCopy.Attrs {
+		msg.WriteString(fmt.Sprintf("  [%d] %s = %v\n", i, attr.ID, attr.Value.Any()))
+	}
+
+	msg.WriteString(fmt.Sprintf("\nActual Attrs (%d):\n", len(actualCopy.Attrs)))
+	for i, attr := range actualCopy.Attrs {
+		msg.WriteString(fmt.Sprintf("  [%d] %s = %v\n", i, attr.ID, attr.Value.Any()))
+	}
+
+	if len(msgAndArgs) > 0 {
+		msg.WriteString("\n")
+		msg.WriteString(fmt.Sprint(msgAndArgs...))
+	}
+
+	return assert.Fail(t, msg.String())
 }
 
 func TestCreateEntity(t *testing.T) {
@@ -65,11 +109,12 @@ func TestCreateEntity(t *testing.T) {
 			}
 
 			require.NoError(t, err)
-			assert.NotEmpty(t, entity.ID)
-			assert.Equal(t, int64(0), entity.Revision)
-			assert.NotZero(t, entity.CreatedAt)
-			assert.NotZero(t, entity.UpdatedAt)
-			assert.Equal(t, SortedAttrs(tt.out), entity.Attrs)
+			assert.NotEmpty(t, entity.Id())
+			assert.Equal(t, int64(0), entity.GetRevision())
+			assert.False(t, entity.GetCreatedAt().IsZero())
+			assert.False(t, entity.GetUpdatedAt().IsZero())
+
+			assertEntityEqual(t, &Entity{Attrs: SortedAttrs(tt.out)}, entity)
 		})
 	}
 }
@@ -87,10 +132,9 @@ func TestGetEntity(t *testing.T) {
 	require.NoError(t, err)
 
 	// Test getting the entity
-	entity, err := store.GetEntity(t.Context(), Id(created.ID))
-	require.NoError(t, err, "missing %s, %s", created.ID, err)
-	assert.Equal(t, created.ID, entity.ID)
-	assert.Equal(t, created.Attrs, entity.Attrs)
+	entity, err := store.GetEntity(t.Context(), Id(created.Id()))
+	require.NoError(t, err, "missing %s, %s", created.Id(), err)
+	assertEntityEqual(t, created, entity)
 
 	// Test getting non-existent entity
 	_, err = store.GetEntity(t.Context(), "nonexistent")
@@ -114,17 +158,17 @@ func TestUpdateEntity(t *testing.T) {
 		Any(Doc, "Updated description"),
 	}
 	time.Sleep(10 * time.Millisecond)
-	updated, err := store.UpdateEntity(t.Context(), Id(entity.ID), updates)
+	updated, err := store.UpdateEntity(t.Context(), Id(entity.Id()), updates)
 	require.NoError(t, err)
 
-	assert.Equal(t, entity.ID, updated.ID)
-	assert.Equal(t, entity.Revision+1, updated.Revision)
-	assert.Greater(t, updated.UpdatedAt, entity.UpdatedAt)
+	assert.Equal(t, entity.Id(), updated.Id())
+	assert.Equal(t, entity.GetRevision()+1, updated.GetRevision())
+	assert.True(t, updated.GetUpdatedAt().After(entity.GetUpdatedAt()))
 
 	// Verify the update
-	retrieved, err := store.GetEntity(t.Context(), Id(entity.ID))
+	retrieved, err := store.GetEntity(t.Context(), Id(entity.Id()))
 	require.NoError(t, err)
-	assert.Equal(t, updated.Attrs, retrieved.Attrs)
+	assertEntityEqual(t, updated, retrieved)
 }
 
 func TestDeleteEntity(t *testing.T) {
@@ -140,11 +184,11 @@ func TestDeleteEntity(t *testing.T) {
 	require.NoError(t, err)
 
 	// Delete the entity
-	err = store.DeleteEntity(t.Context(), Id(entity.ID))
+	err = store.DeleteEntity(t.Context(), Id(entity.Id()))
 	require.NoError(t, err)
 
 	// Verify the entity is deleted
-	_, err = store.GetEntity(t.Context(), Id(entity.ID))
+	_, err = store.GetEntity(t.Context(), Id(entity.Id()))
 	assert.ErrorIs(t, err, ErrEntityNotFound)
 
 	// Try to delete non-existent entity
@@ -154,7 +198,6 @@ func TestDeleteEntity(t *testing.T) {
 
 func TestEntityAttributes(t *testing.T) {
 	entity := &Entity{
-		ID: "test",
 		Attrs: []Attr{
 			Any(Ident, KeywordValue("test/person")),
 			Any(Doc, "A test person"),
@@ -251,17 +294,17 @@ func TestIndices(t *testing.T) {
 	attrs := []Attr{
 		Any(Ident, "test/person"),
 		Any(Doc, "A test person"),
-		Ref(EntityKind, pk.ID),
+		Ref(EntityKind, pk.Id()),
 	}
 
 	// Create a test entity
 	entity, err := store.CreateEntity(t.Context(), attrs)
 	require.NoError(t, err)
 
-	ids, err := store.ListIndex(t.Context(), Ref(EntityKind, pk.ID))
+	ids, err := store.ListIndex(t.Context(), Ref(EntityKind, pk.Id()))
 	require.NoError(t, err)
 
-	assert.Contains(t, ids, Id(entity.ID))
+	assert.Contains(t, ids, Id(entity.Id()))
 }
 
 func TestValidKeyword(t *testing.T) {

@@ -11,6 +11,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/davecgh/go-spew/spew"
 	"github.com/fxamacker/cbor/v2"
 	"miren.dev/runtime/pkg/entity/types"
 	"miren.dev/runtime/pkg/idgen"
@@ -50,12 +51,22 @@ type AttributeSchema struct {
 
 // Entity represents an entity with a set of attributes
 type Entity struct {
-	ID        types.Id `json:"id" cbor:"id"`
-	Revision  int64    `json:"revision,omitempty" cbor:"revision,omitempty"`
-	CreatedAt int64    `json:"created_at" cbor:"created_at"`
-	UpdatedAt int64    `json:"updated_at" cbor:"updated_at"`
+	//ID        types.Id  `json:"id" cbor:"id"`
+	//Revision  int64     `json:"revision,omitempty" cbor:"revision,omitempty"`
+	//CreatedAt time.Time `json:"created_at" cbor:"created_at"`
+	//UpdatedAt time.Time `json:"updated_at" cbor:"updated_at"`
 
 	Attrs []Attr `json:"attrs" cbor:"attrs"`
+}
+
+func (e *Entity) Id() Id {
+	if a, ok := e.Get(DBId); ok {
+		if a.Value.Kind() == KindId {
+			return a.Value.Id()
+		}
+	}
+
+	return ""
 }
 
 type AttrGetter interface {
@@ -88,10 +99,6 @@ func (e *Entity) Get(name Id) (Attr, bool) {
 func (e *Entity) GetAll(name Id) []Attr {
 	var attrs []Attr
 
-	if name == DBId {
-		return []Attr{{ID: DBId, Value: AnyValue(e.ID)}}
-	}
-
 	for _, attr := range e.Attrs {
 		if attr.ID == name {
 			attrs = append(attrs, attr)
@@ -111,8 +118,52 @@ func (e *Entity) Remove(id Id) {
 	})
 }
 
+func (e *Entity) GetRevision() int64 {
+	if attr, ok := e.Get(Revision); ok {
+		return attr.Value.Int64()
+	}
+	return 0
+}
+
+func (e *Entity) SetRevision(rev int64) {
+	e.Remove(Revision)
+	e.Attrs = append(e.Attrs, Int64(Revision, rev))
+	e.Attrs = SortedAttrs(e.Attrs)
+}
+
+func (e *Entity) GetCreatedAt() time.Time {
+	if attr, ok := e.Get(CreatedAt); ok {
+		return attr.Value.Time()
+	}
+	return time.Time{}
+}
+
+func (e *Entity) SetCreatedAt(ts time.Time) {
+	e.Remove(CreatedAt)
+	e.Attrs = append(e.Attrs, Time(CreatedAt, ts))
+	e.Attrs = SortedAttrs(e.Attrs)
+}
+
+func (e *Entity) GetUpdatedAt() time.Time {
+	if attr, ok := e.Get(UpdatedAt); ok {
+		return attr.Value.Time()
+	}
+	return time.Time{}
+}
+
+func (e *Entity) SetUpdatedAt(ts time.Time) {
+	e.Remove(UpdatedAt)
+	e.Attrs = append(e.Attrs, Time(UpdatedAt, ts))
+	e.Attrs = SortedAttrs(e.Attrs)
+}
+
+func (e *Entity) Compare(other *Entity) int {
+	return slices.CompareFunc(e.Attrs, other.Attrs, func(a, b Attr) int {
+		return a.Compare(b)
+	})
+}
+
 func (e *Entity) Update(attrs []Attr) error {
-	e.UpdatedAt = now()
 	e.Attrs = append(e.Attrs, attrs...)
 	return e.Fixup()
 }
@@ -248,26 +299,20 @@ func convertEntityToSchema(ctx context.Context, s EntityStore, entity *Entity) (
 			}
 		}
 	}
+	if schema.Type == "" {
+		spew.Dump(entity)
+	}
 
 	return &schema, nil
 }
 
 func (e *Entity) Fixup() error {
-	if e.ID == "" {
-		// First check for db/id attribute (preferred)
-		if dbId, ok := e.Get(DBId); ok {
-			switch id := dbId.Value.Any().(type) {
-			case Id:
-				e.ID = id
-			case string:
-				e.ID = Id(id)
-			case types.Keyword:
-				e.ID = Id(id)
-			default:
-				return fmt.Errorf("invalid entity db/id (expected Id): %v (%T)", dbId.Value.Any(), dbId.Value)
-			}
+	// First check for db/id attribute (preferred)
+	if attr, ok := e.Get(DBId); ok {
+		if attr.Value.Kind() != KindId {
+			return fmt.Errorf("invalid db/id attribute (expected KindId): %s", attr.Value.Kind())
 		}
-
+	} else {
 		// Fall back to db/ident for backwards compatibility
 		if ident, ok := e.Get(Ident); ok {
 			var identId Id
@@ -283,9 +328,7 @@ func (e *Entity) Fixup() error {
 			}
 
 			if identId != "" {
-				if e.ID == "" {
-					e.ID = identId
-				}
+				e.SetID(identId)
 			}
 
 			// We remove idents now that we're using db/id as the primary ID
@@ -293,15 +336,13 @@ func (e *Entity) Fixup() error {
 		}
 	}
 
-	e.ensureDBId()
-
 	e.Attrs = SortedAttrs(e.Attrs)
 
 	return nil
 }
 
 func (e *Entity) ForceID() {
-	if e.ID != "" {
+	if e.Id() != "" {
 		return
 	}
 
@@ -331,46 +372,40 @@ func (e *Entity) ForceID() {
 		}
 	}
 
-	e.ID = Id(idgen.GenNS(prefix))
+	e.SetID(Id(idgen.GenNS(prefix)))
 
 	e.ensureDBId()
 }
 
 func NewEntity(attrs []Attr) (*Entity, error) {
+	ts := time.Now()
 	e := &Entity{
-		CreatedAt: now(),
-		UpdatedAt: now(),
-		Attrs:     attrs,
+		Attrs: slices.Clone(attrs),
 	}
 
 	if err := e.Fixup(); err != nil {
 		return nil, err
 	}
 
+	e.SetCreatedAt(ts)
+	e.SetUpdatedAt(ts)
+
 	return e, nil
 }
 
 func (e *Entity) ensureDBId() {
-	if _, ok := e.Get(DBId); ok {
-		return
-	}
-
-	if e.ID != "" {
-		e.Attrs = append(e.Attrs, Attr{
-			ID:    DBId,
-			Value: RefValue(e.ID),
-		})
-
-		e.Attrs = SortedAttrs(e.Attrs)
-	}
 }
 
 func (e *Entity) SetID(id Id) {
-	e.ID = id
 	if a, ok := e.Get(DBId); ok {
 		a.Value = RefValue(id)
 	} else {
-		e.ensureDBId()
+		e.Attrs = append(e.Attrs, Attr{
+			ID:    DBId,
+			Value: RefValue(id),
+		})
+		// Make sure attrs are sorted after adding new one
+		e.Attrs = SortedAttrs(e.Attrs)
 	}
 }
 
@@ -417,8 +452,8 @@ func init() {
 }
 
 // Helper function to get current time
-func now() int64 {
-	return int64(time.Now().UnixNano() / 1000000) // milliseconds
+func now() time.Time {
+	return time.Now()
 }
 
 type (

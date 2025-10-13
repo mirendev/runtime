@@ -52,10 +52,10 @@ func EntityList(ctx *Context, opts struct {
 		fres, err := eac.Format(ctx, e)
 		if err != nil {
 			// Print warning but continue with raw attrs
-			fmt.Fprintf(os.Stderr, "Warning: failed to format entity %s: %v\n", e.Entity().ID, err)
+			fmt.Fprintf(os.Stderr, "Warning: failed to format entity %s: %v\n", e.Entity().Id(), err)
 
 			// Fall back to printing raw attrs
-			fmt.Printf("id: %s\n", e.Entity().ID)
+			fmt.Printf("id: %s\n", e.Entity().Id())
 			fmt.Printf("attrs:\n")
 			for k, v := range e.Entity().Attrs {
 				fmt.Printf("  %d: %v\n", k, v)

@@ -49,12 +49,13 @@ func TestEtcdStore_CreateEntity(t *testing.T) {
 	))
 	require.NoError(t, err)
 
-	require.Equal(t, Id("test/addresses"), e.ID)
+	require.Equal(t, Id("test/addresses"), e.Id())
 
 	tests := []struct {
 		name       string
 		entityType string
 		attrs      []Attr
+		expected   []Attr
 		wantErr    bool
 		errMsg     string
 	}{
@@ -63,6 +64,10 @@ func TestEtcdStore_CreateEntity(t *testing.T) {
 			entityType: "test",
 			attrs: []Attr{
 				Any(Ident, KeywordValue("test1")),
+				Any(Doc, "test document"),
+			},
+			expected: []Attr{
+				Ref(DBId, Id("test1")),
 				Any(Doc, "test document"),
 			},
 			wantErr: false,
@@ -104,6 +109,11 @@ func TestEtcdStore_CreateEntity(t *testing.T) {
 				Any(Id("test/addresses"), "val1"),
 				Any(Id("test/addresses"), "val2"),
 			},
+			expected: []Attr{
+				Ref(DBId, Id("test5")),
+				Any(Id("test/addresses"), "val1"),
+				Any(Id("test/addresses"), "val2"),
+			},
 			wantErr: false,
 		},
 	}
@@ -117,12 +127,26 @@ func TestEtcdStore_CreateEntity(t *testing.T) {
 			}
 
 			require.NoError(t, err)
-			assert.NotEmpty(t, entity.ID)
-			tt.attrs = append(tt.attrs, Ref(DBId, entity.ID))
-			assert.Equal(t, SortedAttrs(tt.attrs), entity.Attrs)
-			assert.Greater(t, entity.Revision, int64(0))
-			assert.NotZero(t, entity.CreatedAt)
-			assert.NotZero(t, entity.UpdatedAt)
+			assert.NotEmpty(t, entity.Id())
+			tt.attrs = append(tt.attrs, Ref(DBId, entity.Id()))
+			// Check that each expected attribute is present (entity will have additional system attributes)
+			expected := tt.expected
+			if expected == nil {
+				expected = tt.attrs
+			}
+			for _, expectedAttr := range expected {
+				found := false
+				for _, actualAttr := range entity.Attrs {
+					if expectedAttr.Equal(actualAttr) {
+						found = true
+						break
+					}
+				}
+				assert.True(t, found, "expected attribute %s not found in entity %s", expectedAttr.ID, entity.Id())
+			}
+			assert.Greater(t, entity.GetRevision(), int64(0))
+			assert.False(t, entity.GetCreatedAt().IsZero())
+			assert.False(t, entity.GetUpdatedAt().IsZero())
 		})
 	}
 
@@ -149,7 +173,7 @@ func TestEtcdStore_CreateEntity(t *testing.T) {
 		entity, err := store.CreateEntity(t.Context(), attrs, WithSession(sid))
 		require.NoError(t, err)
 
-		e2, err := store.GetEntity(t.Context(), entity.ID)
+		e2, err := store.GetEntity(t.Context(), entity.Id())
 		r.NoError(err)
 
 		sa, ok := e2.Get(Id("test/status"))
@@ -159,7 +183,7 @@ func TestEtcdStore_CreateEntity(t *testing.T) {
 
 		r.NoError(store.RevokeSession(t.Context(), sid))
 
-		e3, err := store.GetEntity(t.Context(), entity.ID)
+		e3, err := store.GetEntity(t.Context(), entity.Id())
 		r.NoError(err)
 
 		_, ok = e3.Get(Id("test/status"))
@@ -181,7 +205,7 @@ func TestEtcdStore_AttrPred(t *testing.T) {
 	))
 	require.NoError(t, err)
 
-	require.Equal(t, Id("test/address"), e.ID)
+	require.Equal(t, Id("test/address"), e.Id())
 
 	tests := []struct {
 		name       string
@@ -218,12 +242,22 @@ func TestEtcdStore_AttrPred(t *testing.T) {
 			}
 
 			require.NoError(t, err)
-			assert.NotEmpty(t, entity.ID)
-			tt.attrs = append(tt.attrs, Ref(DBId, entity.ID))
-			assert.Equal(t, SortedAttrs(tt.attrs), entity.Attrs)
-			assert.Greater(t, entity.Revision, int64(0))
-			assert.NotZero(t, entity.CreatedAt)
-			assert.NotZero(t, entity.UpdatedAt)
+			assert.NotEmpty(t, entity.Id())
+			tt.attrs = append(tt.attrs, Ref(DBId, entity.Id()))
+			// Check that each expected attribute is present (entity will have additional system attributes)
+			for _, expectedAttr := range tt.attrs {
+				found := false
+				for _, actualAttr := range entity.Attrs {
+					if expectedAttr.Equal(actualAttr) {
+						found = true
+						break
+					}
+				}
+				assert.True(t, found, "expected attribute %s not found in entity", expectedAttr.ID)
+			}
+			assert.Greater(t, entity.GetRevision(), int64(0))
+			assert.False(t, entity.GetCreatedAt().IsZero())
+			assert.False(t, entity.GetUpdatedAt().IsZero())
 		})
 	}
 }
@@ -248,7 +282,7 @@ func TestEtcdStore_GetEntity(t *testing.T) {
 	}{
 		{
 			name:    "existing entity",
-			id:      Id(created.ID),
+			id:      Id(created.Id()),
 			want:    created,
 			wantErr: false,
 		},
@@ -269,8 +303,7 @@ func TestEtcdStore_GetEntity(t *testing.T) {
 			}
 
 			require.NoError(t, err)
-			assert.Equal(t, tt.want.ID, got.ID)
-			assert.Equal(t, tt.want.Attrs, got.Attrs)
+			assertEntityEqual(t, tt.want, got)
 		})
 	}
 }
@@ -296,16 +329,16 @@ func TestEtcdStore_UpdateEntity(t *testing.T) {
 	}{
 		{
 			name: "valid update",
-			id:   Id(entity.ID),
+			id:   Id(entity.Id()),
 			attrs: []Attr{
 				Any(Doc, "updated doc"),
 			},
-			wantAttrs: 2,
+			wantAttrs: 5,
 			wantErr:   false,
 		},
 		{
 			name: "invalid attribute",
-			id:   Id(entity.ID),
+			id:   Id(entity.Id()),
 			attrs: []Attr{
 				Any(Ident, 123), // Wrong type
 			},
@@ -333,8 +366,8 @@ func TestEtcdStore_UpdateEntity(t *testing.T) {
 
 			require.NoError(t, err)
 			assert.Equal(t, tt.wantAttrs, len(updated.Attrs))
-			assert.NotEqual(t, 0, updated.Revision)
-			assert.NotEqual(t, updated.CreatedAt, updated.UpdatedAt)
+			assert.NotEqual(t, 0, updated.GetRevision())
+			assert.NotEqual(t, updated.GetCreatedAt(), updated.GetUpdatedAt())
 		})
 	}
 
@@ -371,10 +404,10 @@ func TestEtcdStore_UpdateEntity(t *testing.T) {
 
 		attrs := []Attr{addr}
 
-		_, err = store.UpdateEntity(t.Context(), entity.ID, attrs, WithSession(sid))
+		_, err = store.UpdateEntity(t.Context(), entity.Id(), attrs, WithSession(sid))
 		require.NoError(t, err)
 
-		e2, err := store.GetEntity(t.Context(), entity.ID)
+		e2, err := store.GetEntity(t.Context(), entity.Id())
 		r.NoError(err)
 
 		sa, ok := e2.Get(Id("test/status"))
@@ -399,13 +432,13 @@ func TestEtcdStore_UpdateEntity(t *testing.T) {
 			// The session revoke should send an event to the index watcher
 			r.Len(x.Events, 1)
 			r.Equal(x.Events[0].Type, mvccpb.DELETE)
-			r.Equal(x.Events[0].PrevKv.Value, []byte(entity.ID))
+			r.Equal(x.Events[0].PrevKv.Value, []byte(entity.Id()))
 			// This delete should be for the session-based index, not the main entity one
 			r.Contains(string(x.Events[0].PrevKv.Key), base58.Encode(sid))
 		}
 
 		// Entity should still exist, but no longer have the test/status
-		e3, err := store.GetEntity(t.Context(), entity.ID)
+		e3, err := store.GetEntity(t.Context(), entity.Id())
 		r.NoError(err)
 
 		_, ok = e3.Get(Id("test/status"))
@@ -415,20 +448,20 @@ func TestEtcdStore_UpdateEntity(t *testing.T) {
 	t.Run("from a fixed revision", func(t *testing.T) {
 		r := require.New(t)
 
-		e, err := store.GetEntity(t.Context(), entity.ID)
+		e, err := store.GetEntity(t.Context(), entity.Id())
 		r.NoError(err)
 
-		_, err = store.UpdateEntity(t.Context(), e.ID, []Attr{
+		_, err = store.UpdateEntity(t.Context(), e.Id(), []Attr{
 			Any(Doc, "updated document"),
-		}, WithFromRevision(e.Revision-1))
+		}, WithFromRevision(e.GetRevision()-1))
 		r.Error(err)
 
-		_, err = store.UpdateEntity(t.Context(), e.ID, []Attr{
+		_, err = store.UpdateEntity(t.Context(), e.Id(), []Attr{
 			Any(Doc, "updated document from rev"),
-		}, WithFromRevision(e.Revision))
+		}, WithFromRevision(e.GetRevision()))
 		r.NoError(err)
 
-		e2, err := store.GetEntity(t.Context(), entity.ID)
+		e2, err := store.GetEntity(t.Context(), entity.Id())
 		r.NoError(err)
 
 		a, ok := e2.Get(Doc)
@@ -453,7 +486,7 @@ func TestEtcdStore_GetEntities_Batching(t *testing.T) {
 			Any(Doc, fmt.Sprintf("Test entity %d", i)),
 		})
 		require.NoError(t, err)
-		entityIds = append(entityIds, entity.ID)
+		entityIds = append(entityIds, entity.Id())
 	}
 
 	// Test getting all entities at once
@@ -504,7 +537,7 @@ func TestEtcdStore_GetEntities_Batching(t *testing.T) {
 			require.Equal(t, RefValue(Id(expectedIdent)), identAttr.Value)
 
 			// Also verify the entity ID matches
-			require.Equal(t, orderedIds[i], entities[i].ID)
+			require.Equal(t, orderedIds[i], entities[i].Id())
 		}
 	})
 
@@ -569,7 +602,7 @@ func TestEtcdStore_DeleteEntity(t *testing.T) {
 	}{
 		{
 			name:    "existing entity",
-			id:      Id(entity.ID),
+			id:      Id(entity.Id()),
 			wantErr: false,
 		},
 		{
@@ -609,13 +642,13 @@ func TestEtcdStore_ListIndex(t *testing.T) {
 	// Create test entities with indexed attributes
 	_, err = store.CreateEntity(t.Context(), []Attr{
 		Any(Ident, KeywordValue("test1")),
-		Ref(EntityKind, k.ID),
+		Ref(EntityKind, k.Id()),
 	})
 	require.NoError(t, err)
 
 	_, err = store.CreateEntity(t.Context(), []Attr{
 		Any(Ident, KeywordValue("test2")),
-		Ref(EntityKind, k.ID),
+		Ref(EntityKind, k.Id()),
 	})
 	require.NoError(t, err)
 
@@ -629,7 +662,7 @@ func TestEtcdStore_ListIndex(t *testing.T) {
 		{
 			name:      "valid index",
 			attrID:    EntityKind,
-			value:     RefValue(k.ID),
+			value:     RefValue(k.Id()),
 			wantCount: 2,
 			wantErr:   false,
 		},
@@ -701,14 +734,14 @@ func TestWatchIndex(t *testing.T) {
 	}
 
 	// Start watching the index before creating any entities
-	watcher, err := store.WatchIndex(ctx, String(attr.ID, "value1"))
+	watcher, err := store.WatchIndex(ctx, String(attr.Id(), "value1"))
 	if err != nil {
 		t.Fatalf("Failed to create watcher: %v", err)
 	}
 
 	// Create an entity with the indexed attribute
 	entity1, err := store.CreateEntity(ctx, []Attr{
-		String(attr.ID, "value1"),
+		String(attr.Id(), "value1"),
 		String(Ident, "test-entity-1"),
 	})
 	if err != nil {
@@ -723,8 +756,8 @@ func TestWatchIndex(t *testing.T) {
 			if event.Type != clientv3.EventTypePut {
 				t.Errorf("Expected PUT event, got %v", event.Type)
 			}
-			if string(event.Kv.Value) != string(entity1.ID) {
-				t.Errorf("Expected entity ID %s, got %s", entity1.ID, event.Kv.Value)
+			if string(event.Kv.Value) != string(entity1.Id()) {
+				t.Errorf("Expected entity ID %s, got %s", entity1.Id(), event.Kv.Value)
 			}
 		}
 	case <-time.After(time.Second):
@@ -732,8 +765,8 @@ func TestWatchIndex(t *testing.T) {
 	}
 
 	// Update the entity with a new value for the indexed attribute
-	_, err = store.UpdateEntity(ctx, entity1.ID, []Attr{
-		String(attr.ID, "value2"),
+	_, err = store.UpdateEntity(ctx, entity1.Id(), []Attr{
+		String(attr.Id(), "value2"),
 	})
 	if err != nil {
 		t.Fatalf("Failed to update entity: %v", err)
@@ -755,13 +788,13 @@ func TestWatchIndex(t *testing.T) {
 	*/
 
 	// Create a new watcher for the new value
-	watcher2, err := store.WatchIndex(ctx, String(attr.ID, "value2"))
+	watcher2, err := store.WatchIndex(ctx, String(attr.Id(), "value2"))
 	if err != nil {
 		t.Fatalf("Failed to create second watcher: %v", err)
 	}
 
 	// Delete the entity
-	err = store.DeleteEntity(ctx, entity1.ID)
+	err = store.DeleteEntity(ctx, entity1.Id())
 	if err != nil {
 		t.Fatalf("Failed to delete entity: %v", err)
 	}
@@ -789,7 +822,7 @@ func TestWatchIndex(t *testing.T) {
 		t.Fatalf("Failed to create non-indexed schema: %v", err)
 	}
 
-	_, err = store.WatchIndex(ctx, String(nonIndexedSchema.ID, "value"))
+	_, err = store.WatchIndex(ctx, String(nonIndexedSchema.Id(), "value"))
 	if err == nil {
 		t.Error("Expected error when watching non-indexed attribute")
 	}
@@ -816,7 +849,7 @@ func TestWatchIndex_DBID(t *testing.T) {
 		t.Fatalf("Failed to create watcher: %v", err)
 	}
 
-	_, err = store.UpdateEntity(ctx, entity1.ID, []Attr{
+	_, err = store.UpdateEntity(ctx, entity1.Id(), []Attr{
 		String(Doc, "now with more doc"),
 	})
 	if err != nil {
@@ -831,8 +864,8 @@ func TestWatchIndex_DBID(t *testing.T) {
 			if event.Type != clientv3.EventTypePut {
 				t.Errorf("Expected PUT event, got %v", event.Type)
 			}
-			if string(event.Kv.Value) != string(entity1.ID) {
-				t.Errorf("Expected entity ID %s, got %s", entity1.ID, event.Kv.Value)
+			if string(event.Kv.Value) != string(entity1.Id()) {
+				t.Errorf("Expected entity ID %s, got %s", entity1.Id(), event.Kv.Value)
 			}
 		}
 	case <-time.After(time.Second):
@@ -867,39 +900,39 @@ func TestEtcdStore_UpdateIndexedAttribute_Bug(t *testing.T) {
 	// Create first entity with default=true
 	entity1, err := store.CreateEntity(t.Context(), []Attr{
 		String(Ident, "app1"),
-		String(kindAttr.ID, "test/app"),
-		Bool(indexedAttr.ID, true),
+		String(kindAttr.Id(), "test/app"),
+		Bool(indexedAttr.Id(), true),
 	})
 	require.NoError(t, err)
 
 	// Create second entity with default=false
 	entity2, err := store.CreateEntity(t.Context(), []Attr{
 		String(Ident, "app2"),
-		String(kindAttr.ID, "test/app"),
-		Bool(indexedAttr.ID, false),
+		String(kindAttr.Id(), "test/app"),
+		Bool(indexedAttr.Id(), false),
 	})
 	require.NoError(t, err)
 
 	// Verify initial state: only entity1 should be found when searching for default=true
-	entitiesWithTrue, err := store.ListIndex(t.Context(), Bool(indexedAttr.ID, true))
+	entitiesWithTrue, err := store.ListIndex(t.Context(), Bool(indexedAttr.Id(), true))
 	require.NoError(t, err)
 	assert.Len(t, entitiesWithTrue, 1)
-	assert.Equal(t, entity1.ID, entitiesWithTrue[0])
+	assert.Equal(t, entity1.Id(), entitiesWithTrue[0])
 
 	// Verify only entity2 is found when searching for default=false
-	entitiesWithFalse, err := store.ListIndex(t.Context(), Bool(indexedAttr.ID, false))
+	entitiesWithFalse, err := store.ListIndex(t.Context(), Bool(indexedAttr.Id(), false))
 	require.NoError(t, err)
 	assert.Len(t, entitiesWithFalse, 1)
-	assert.Equal(t, entity2.ID, entitiesWithFalse[0])
+	assert.Equal(t, entity2.Id(), entitiesWithFalse[0])
 
 	// Now update: set entity2 to default=true
-	_, err = store.UpdateEntity(t.Context(), entity2.ID, []Attr{
-		Bool(indexedAttr.ID, true),
+	_, err = store.UpdateEntity(t.Context(), entity2.Id(), []Attr{
+		Bool(indexedAttr.Id(), true),
 	})
 	require.NoError(t, err)
 
 	// Verify after update: both entities should be found with default=true
-	entitiesWithTrueAfter, err := store.ListIndex(t.Context(), Bool(indexedAttr.ID, true))
+	entitiesWithTrueAfter, err := store.ListIndex(t.Context(), Bool(indexedAttr.Id(), true))
 	require.NoError(t, err)
 	assert.Len(t, entitiesWithTrueAfter, 2)
 
@@ -908,14 +941,14 @@ func TestEtcdStore_UpdateIndexedAttribute_Bug(t *testing.T) {
 	if foundIDs[0] > foundIDs[1] {
 		foundIDs[0], foundIDs[1] = foundIDs[1], foundIDs[0]
 	}
-	expectedIDs := []string{string(entity1.ID), string(entity2.ID)}
+	expectedIDs := []string{string(entity1.Id()), string(entity2.Id())}
 	if expectedIDs[0] > expectedIDs[1] {
 		expectedIDs[0], expectedIDs[1] = expectedIDs[1], expectedIDs[0]
 	}
 	assert.Equal(t, expectedIDs, foundIDs)
 
 	// Verify none have default=false
-	entitiesWithFalseAfter, err := store.ListIndex(t.Context(), Bool(indexedAttr.ID, false))
+	entitiesWithFalseAfter, err := store.ListIndex(t.Context(), Bool(indexedAttr.Id(), false))
 	require.NoError(t, err)
 	assert.Len(t, entitiesWithFalseAfter, 0)
 }
@@ -961,7 +994,7 @@ func TestEtcdStore_GetEntities(t *testing.T) {
 		},
 		{
 			name:       "single existing entity",
-			ids:        []Id{entity1.ID},
+			ids:        []Id{entity1.Id()},
 			wantCount:  1,
 			wantNils:   0,
 			checkOrder: true,
@@ -969,7 +1002,7 @@ func TestEtcdStore_GetEntities(t *testing.T) {
 		},
 		{
 			name:       "multiple existing entities",
-			ids:        []Id{entity1.ID, entity2.ID, entity3.ID},
+			ids:        []Id{entity1.Id(), entity2.Id(), entity3.Id()},
 			wantCount:  3,
 			wantNils:   0,
 			checkOrder: true,
@@ -977,7 +1010,7 @@ func TestEtcdStore_GetEntities(t *testing.T) {
 		},
 		{
 			name:       "multiple existing entities in different order",
-			ids:        []Id{entity3.ID, entity1.ID, entity2.ID},
+			ids:        []Id{entity3.Id(), entity1.Id(), entity2.Id()},
 			wantCount:  3,
 			wantNils:   0,
 			checkOrder: true,
@@ -992,7 +1025,7 @@ func TestEtcdStore_GetEntities(t *testing.T) {
 		},
 		{
 			name:       "mixed existing and non-existing entities",
-			ids:        []Id{entity1.ID, "non-existent", entity2.ID, "another-non-existent"},
+			ids:        []Id{entity1.Id(), "non-existent", entity2.Id(), "another-non-existent"},
 			wantCount:  4,
 			wantNils:   2,
 			checkOrder: true,
@@ -1000,7 +1033,7 @@ func TestEtcdStore_GetEntities(t *testing.T) {
 		},
 		{
 			name:       "duplicate IDs",
-			ids:        []Id{entity1.ID, entity1.ID, entity2.ID},
+			ids:        []Id{entity1.Id(), entity1.Id(), entity2.Id()},
 			wantCount:  3,
 			wantNils:   0,
 			checkOrder: true,
@@ -1032,7 +1065,7 @@ func TestEtcdStore_GetEntities(t *testing.T) {
 			if tt.checkOrder {
 				for i, id := range tt.ids {
 					if got[i] != nil {
-						assert.Equal(t, id, got[i].ID, "Entity at index %d should have ID %s", i, id)
+						assert.Equal(t, id, got[i].Id(), "Entity at index %d should have ID %s", i, id)
 					}
 				}
 			}
@@ -1042,12 +1075,12 @@ func TestEtcdStore_GetEntities(t *testing.T) {
 				if entity != nil {
 					// Verify it has expected attributes
 					assert.NotEmpty(t, entity.Attrs)
-					assert.Greater(t, entity.Revision, int64(0))
-					assert.NotZero(t, entity.CreatedAt)
-					assert.NotZero(t, entity.UpdatedAt)
+					assert.Greater(t, entity.GetRevision(), int64(0))
+					assert.False(t, entity.GetCreatedAt().IsZero())
+					assert.False(t, entity.GetUpdatedAt().IsZero())
 
 					// Check that the ID matches what we requested
-					assert.Equal(t, tt.ids[i], entity.ID)
+					assert.Equal(t, tt.ids[i], entity.Id())
 				}
 			}
 		})
@@ -1077,7 +1110,7 @@ func TestEtcdStore_GetEntities(t *testing.T) {
 		r.NoError(err)
 
 		// Add session attribute
-		_, err = store.UpdateEntity(t.Context(), entity4.ID, []Attr{
+		_, err = store.UpdateEntity(t.Context(), entity4.Id(), []Attr{
 			String(Id("test/session-status"), "active"),
 		}, WithSession(sid))
 		r.NoError(err)
@@ -1089,7 +1122,7 @@ func TestEtcdStore_GetEntities(t *testing.T) {
 		r.NoError(err)
 
 		// Get entities with session attributes
-		entities, err := store.GetEntities(t.Context(), []Id{entity4.ID, entity5.ID})
+		entities, err := store.GetEntities(t.Context(), []Id{entity4.Id(), entity5.Id()})
 		r.NoError(err)
 		r.Len(entities, 2)
 
@@ -1110,7 +1143,7 @@ func TestEtcdStore_GetEntities(t *testing.T) {
 		r.NoError(store.RevokeSession(t.Context(), sid))
 
 		// Get entities again
-		entities, err = store.GetEntities(t.Context(), []Id{entity4.ID, entity5.ID})
+		entities, err = store.GetEntities(t.Context(), []Id{entity4.Id(), entity5.Id()})
 		r.NoError(err)
 		r.Len(entities, 2)
 
@@ -1134,7 +1167,7 @@ func TestEtcdStore_GetEntities(t *testing.T) {
 				Any(Doc, fmt.Sprintf("Batch document %d", i)),
 			})
 			r.NoError(err)
-			ids = append(ids, entity.ID)
+			ids = append(ids, entity.Id())
 		}
 
 		// Add some non-existent IDs
@@ -1157,7 +1190,7 @@ func TestEtcdStore_GetEntities(t *testing.T) {
 		// Verify order is preserved
 		for i := 0; i < numEntities; i++ {
 			r.NotNil(entities[i])
-			r.Equal(ids[i], entities[i].ID)
+			r.Equal(ids[i], entities[i].Id())
 		}
 
 		// Last two should be nil
@@ -1190,20 +1223,20 @@ func TestEtcdStore_ReplaceEntity(t *testing.T) {
 			String(Id("test/tags"), "tag3"),
 		})
 		require.NoError(t, err)
-		require.Equal(t, Id("test-replace-1"), initial.ID)
+		require.Equal(t, Id("test-replace-1"), initial.Id())
 
 		// Replace with new attributes using db/id
 		replaced, err := store.ReplaceEntity(t.Context(), []Attr{
-			Ref(DBId, initial.ID),
+			Ref(DBId, initial.Id()),
 			Any(Doc, "Replaced document"),
 			String(Id("test/tags"), "new-tag"),
 		})
 		require.NoError(t, err)
-		assert.Equal(t, initial.ID, replaced.ID)
-		assert.Greater(t, replaced.Revision, initial.Revision)
+		assert.Equal(t, initial.Id(), replaced.Id())
+		assert.Greater(t, replaced.GetRevision(), initial.GetRevision())
 
 		// Verify old tags are removed
-		retrieved, err := store.GetEntity(t.Context(), initial.ID)
+		retrieved, err := store.GetEntity(t.Context(), initial.Id())
 		require.NoError(t, err)
 
 		tags := retrieved.GetAll(Id("test/tags"))
@@ -1239,11 +1272,11 @@ func TestEtcdStore_ReplaceEntity(t *testing.T) {
 		require.NoError(t, err)
 
 		replaced, err := store.ReplaceEntity(t.Context(), []Attr{
-			Any(DBId, initial.ID),
+			Any(DBId, initial.Id()),
 			Any(Doc, "Replaced with revision"),
-		}, WithFromRevision(initial.Revision))
+		}, WithFromRevision(initial.GetRevision()))
 		require.NoError(t, err)
-		assert.Greater(t, replaced.Revision, initial.Revision)
+		assert.Greater(t, replaced.GetRevision(), initial.GetRevision())
 	})
 
 	t.Run("replace with wrong revision fails", func(t *testing.T) {
@@ -1254,7 +1287,7 @@ func TestEtcdStore_ReplaceEntity(t *testing.T) {
 		require.NoError(t, err)
 
 		_, err = store.ReplaceEntity(t.Context(), []Attr{
-			Any(DBId, initial.ID),
+			Any(DBId, initial.Id()),
 			Any(Doc, "Will fail"),
 		}, WithFromRevision(9999))
 		assert.Error(t, err)
@@ -1286,15 +1319,15 @@ func TestEtcdStore_PatchEntity(t *testing.T) {
 
 		// Patch to add more labels
 		patched, err := store.PatchEntity(t.Context(), []Attr{
-			Any(DBId, initial.ID),
+			Any(DBId, initial.Id()),
 			String(Id("test/labels"), "label3"),
 			String(Id("test/labels"), "label4"),
 		})
 		require.NoError(t, err)
-		assert.Greater(t, patched.Revision, initial.Revision)
+		assert.Greater(t, patched.GetRevision(), initial.GetRevision())
 
 		// Verify all labels exist
-		retrieved, err := store.GetEntity(t.Context(), initial.ID)
+		retrieved, err := store.GetEntity(t.Context(), initial.Id())
 		require.NoError(t, err)
 
 		labels := retrieved.GetAll(Id("test/labels"))
@@ -1310,13 +1343,13 @@ func TestEtcdStore_PatchEntity(t *testing.T) {
 
 		// Patch to update doc
 		_, err = store.PatchEntity(t.Context(), []Attr{
-			Any(DBId, initial.ID),
+			Any(DBId, initial.Id()),
 			Any(Doc, "Updated document"),
 		})
 		require.NoError(t, err)
 
 		// Verify doc was replaced
-		retrieved, err := store.GetEntity(t.Context(), initial.ID)
+		retrieved, err := store.GetEntity(t.Context(), initial.Id())
 		require.NoError(t, err)
 
 		doc, ok := retrieved.Get(Doc)
@@ -1348,11 +1381,11 @@ func TestEtcdStore_PatchEntity(t *testing.T) {
 		require.NoError(t, err)
 
 		patched, err := store.PatchEntity(t.Context(), []Attr{
-			Any(DBId, initial.ID),
+			Any(DBId, initial.Id()),
 			Any(Doc, "Patched with revision"),
-		}, WithFromRevision(initial.Revision))
+		}, WithFromRevision(initial.GetRevision()))
 		require.NoError(t, err)
-		assert.Greater(t, patched.Revision, initial.Revision)
+		assert.Greater(t, patched.GetRevision(), initial.GetRevision())
 	})
 
 	t.Run("patch with wrong revision fails", func(t *testing.T) {
@@ -1363,7 +1396,7 @@ func TestEtcdStore_PatchEntity(t *testing.T) {
 		require.NoError(t, err)
 
 		_, err = store.PatchEntity(t.Context(), []Attr{
-			Any(DBId, initial.ID),
+			Any(DBId, initial.Id()),
 			Any(Doc, "Will fail"),
 		}, WithFromRevision(9999))
 		assert.Error(t, err)
@@ -1382,12 +1415,12 @@ func TestEtcdStore_EnsureEntity(t *testing.T) {
 		})
 		require.NoError(t, err)
 		assert.True(t, created, "Should be created on first ensure")
-		assert.Equal(t, Id("test-ensure-1"), entity.ID)
+		assert.Equal(t, Id("test-ensure-1"), entity.Id())
 
 		// Verify entity was created
 		retrieved, err := store.GetEntity(t.Context(), Id("test-ensure-1"))
 		require.NoError(t, err)
-		assert.Equal(t, entity.ID, retrieved.ID)
+		assert.Equal(t, entity.Id(), retrieved.Id())
 	})
 
 	t.Run("ensure returns existing entity when exists", func(t *testing.T) {
@@ -1400,13 +1433,13 @@ func TestEtcdStore_EnsureEntity(t *testing.T) {
 
 		// Ensure with same ID should return existing
 		entity, created, err := store.EnsureEntity(t.Context(), []Attr{
-			Any(DBId, initial.ID),
+			Any(DBId, initial.Id()),
 			Any(Doc, "Different document"), // This should be ignored
 		})
 		require.NoError(t, err)
 		assert.False(t, created, "Should not be created on second ensure")
-		assert.Equal(t, initial.ID, entity.ID)
-		assert.Equal(t, initial.Revision, entity.Revision)
+		assert.Equal(t, initial.Id(), entity.Id())
+		assert.Equal(t, initial.GetRevision(), entity.GetRevision())
 
 		// Verify original attributes are unchanged
 		doc, ok := entity.Get(Doc)
@@ -1438,8 +1471,8 @@ func TestEtcdStore_EnsureEntity(t *testing.T) {
 		})
 		require.NoError(t, err)
 		assert.False(t, created2)
-		assert.Equal(t, entity1.ID, entity2.ID)
-		assert.Equal(t, entity1.Revision, entity2.Revision)
+		assert.Equal(t, entity1.Id(), entity2.Id())
+		assert.Equal(t, entity1.GetRevision(), entity2.GetRevision())
 
 		// Third ensure also returns existing
 		entity3, created3, err := store.EnsureEntity(t.Context(), []Attr{
@@ -1448,8 +1481,8 @@ func TestEtcdStore_EnsureEntity(t *testing.T) {
 		})
 		require.NoError(t, err)
 		assert.False(t, created3)
-		assert.Equal(t, entity1.ID, entity3.ID)
-		assert.Equal(t, entity1.Revision, entity3.Revision)
+		assert.Equal(t, entity1.Id(), entity3.Id())
+		assert.Equal(t, entity1.GetRevision(), entity3.GetRevision())
 	})
 
 	t.Run("concurrent ensure creates only once", func(t *testing.T) {
@@ -1471,11 +1504,11 @@ func TestEtcdStore_EnsureEntity(t *testing.T) {
 
 		// One should be created, one should return existing
 		assert.True(t, created1 != created2, "Exactly one should be created")
-		assert.Equal(t, entity1.ID, entity2.ID)
+		assert.Equal(t, entity1.Id(), entity2.Id())
 
 		// The one that wasn't created should have the same revision
 		if !created2 {
-			assert.Equal(t, entity1.Revision, entity2.Revision)
+			assert.Equal(t, entity1.GetRevision(), entity2.GetRevision())
 		}
 	})
 }
@@ -1491,7 +1524,7 @@ func TestEntity_Fixup_DbId(t *testing.T) {
 
 		err := entity.Fixup()
 		require.NoError(t, err)
-		assert.Equal(t, Id("id-from-dbid"), entity.ID, "db/id should take precedence")
+		assert.Equal(t, Id("id-from-dbid"), entity.Id(), "db/id should take precedence")
 	})
 
 	t.Run("db/ident used when db/id not present", func(t *testing.T) {
@@ -1503,19 +1536,19 @@ func TestEntity_Fixup_DbId(t *testing.T) {
 
 		err := entity.Fixup()
 		require.NoError(t, err)
-		assert.Equal(t, Id("id-from-ident"), entity.ID, "db/ident should be used as fallback")
+		assert.Equal(t, Id("id-from-ident"), entity.Id(), "db/ident should be used as fallback")
 	})
 
-	t.Run("db/id with string value", func(t *testing.T) {
+	t.Run("db/ident with string value", func(t *testing.T) {
 		entity := &Entity{
 			Attrs: []Attr{
-				Any(DBId, "string-id"),
+				Any(Ident, "string-id"),
 			},
 		}
 
 		err := entity.Fixup()
 		require.NoError(t, err)
-		assert.Equal(t, Id("string-id"), entity.ID)
+		assert.Equal(t, Id("string-id"), entity.Id())
 	})
 
 	t.Run("db/id with Id value", func(t *testing.T) {
@@ -1527,19 +1560,19 @@ func TestEntity_Fixup_DbId(t *testing.T) {
 
 		err := entity.Fixup()
 		require.NoError(t, err)
-		assert.Equal(t, Id("typed-id"), entity.ID)
+		assert.Equal(t, Id("typed-id"), entity.Id())
 	})
 
-	t.Run("db/id with keyword value", func(t *testing.T) {
+	t.Run("db/ident with keyword value", func(t *testing.T) {
 		entity := &Entity{
 			Attrs: []Attr{
-				Keyword(DBId, "keyword-id"),
+				Keyword(Ident, "keyword-id"),
 			},
 		}
 
 		err := entity.Fixup()
 		require.NoError(t, err)
-		assert.Equal(t, Id("keyword-id"), entity.ID)
+		assert.Equal(t, Id("keyword-id"), entity.Id())
 	})
 
 	t.Run("invalid db/id type fails", func(t *testing.T) {
@@ -1551,7 +1584,7 @@ func TestEntity_Fixup_DbId(t *testing.T) {
 
 		err := entity.Fixup()
 		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "invalid entity db/id")
+		assert.Contains(t, err.Error(), "invalid db/id")
 	})
 
 	t.Run("fixup populates a temporary Id", func(t *testing.T) {
@@ -1562,7 +1595,7 @@ func TestEntity_Fixup_DbId(t *testing.T) {
 		}
 
 		entity.ForceID()
-		assert.NotEqual(t, Id(""), entity.ID)
+		assert.NotEqual(t, Id(""), entity.Id())
 	})
 
 	t.Run("NewEntity uses entity kind for ID prefix when no ID provided", func(t *testing.T) {
@@ -1576,9 +1609,9 @@ func TestEntity_Fixup_DbId(t *testing.T) {
 		entity.ForceID()
 
 		// ID should be auto-generated with kind prefix (using last segment after / or .)
-		assert.NotEqual(t, Id(""), entity.ID)
+		assert.NotEqual(t, Id(""), entity.Id())
 		// For "test/project", should use "project" as prefix
-		assert.True(t, strings.HasPrefix(string(entity.ID), "project-"), "ID %s should start with project-", entity.ID)
+		assert.True(t, strings.HasPrefix(string(entity.Id()), "project-"), "ID %s should start with project-", entity.Id())
 	})
 
 	t.Run("NewEntity uses first kind for ID prefix when multiple kinds", func(t *testing.T) {
@@ -1593,7 +1626,7 @@ func TestEntity_Fixup_DbId(t *testing.T) {
 		entity.ForceID()
 
 		// ID should use the first kind's last segment as prefix
-		assert.True(t, strings.HasPrefix(string(entity.ID), "project-"), "ID %s should start with project-", entity.ID)
+		assert.True(t, strings.HasPrefix(string(entity.Id()), "project-"), "ID %s should start with project-", entity.Id())
 	})
 
 	t.Run("NewEntity uses last segment after dot when kind has dots", func(t *testing.T) {
@@ -1606,7 +1639,7 @@ func TestEntity_Fixup_DbId(t *testing.T) {
 
 		entity.ForceID()
 		// For "dev.miren.core/kind.project", rightmost separator is "." so should use "project" as prefix
-		assert.True(t, strings.HasPrefix(string(entity.ID), "project-"), "ID %s should start with project-", entity.ID)
+		assert.True(t, strings.HasPrefix(string(entity.Id()), "project-"), "ID %s should start with project-", entity.Id())
 	})
 
 	t.Run("NewEntity falls back to generic ID when no kind provided", func(t *testing.T) {
@@ -1618,8 +1651,8 @@ func TestEntity_Fixup_DbId(t *testing.T) {
 
 		entity.ForceID()
 		// ID should be auto-generated with generic prefix (e-)
-		assert.NotEqual(t, Id(""), entity.ID)
+		assert.NotEqual(t, Id(""), entity.Id())
 		// Should start with generic 'e-' prefix
-		assert.True(t, strings.HasPrefix(string(entity.ID), "e-"), "ID %s should start with e-", entity.ID)
+		assert.True(t, strings.HasPrefix(string(entity.Id()), "e-"), "ID %s should start with e-", entity.Id())
 	})
 }

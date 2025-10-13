@@ -108,23 +108,23 @@ func (m *Runtime) BuildEnv(dir *dagger.Directory) *dagger.Container {
 		WithFile("/upstream/runc", dag.HTTP(runc), dagger.ContainerWithFileOpts{
 			Permissions: 0755,
 		}).
-		WithFile("/upstream/runsc", dag.HTTP(runsc), dagger.ContainerWithFileOpts{
-			Permissions: 0755,
-		}).
-		WithFile("/upstream/containerd-shim-runsc-v1", dag.HTTP(runscshim), dagger.ContainerWithFileOpts{
-			Permissions: 0755,
-		}).
-		WithFile("/usr/local/bin/runsc-ignore", dir.File("hack/runsc-ignore"), dagger.ContainerWithFileOpts{
-			Permissions: 0755,
-		}).
+		//WithFile("/upstream/runsc", dag.HTTP(runsc), dagger.ContainerWithFileOpts{
+		//Permissions: 0755,
+		//}).
+		//WithFile("/upstream/containerd-shim-runsc-v1", dag.HTTP(runscshim), dagger.ContainerWithFileOpts{
+		//Permissions: 0755,
+		//}).
+		//WithFile("/usr/local/bin/runsc-ignore", dir.File("hack/runsc-ignore"), dagger.ContainerWithFileOpts{
+		//Permissions: 0755,
+		//}).
 		WithFile("/etc/containerd/config.toml", dir.File("hack/containerd-config.toml")).
 		WithExec([]string{"tar", "-C", "/usr/local", "-xvf", "/upstream/containerd.tar.gz"}).
 		WithExec([]string{"tar", "-C", "/usr/local", "-xvf", "/upstream/buildkit.tar.gz"}).
 		WithExec([]string{"tar", "-C", "/usr/local/bin", "-xvf", "/upstream/nerdctl.tar.gz"}).
 		WithExec([]string{"mv", "/upstream/runc", "/usr/local/bin/runc"}).
-		WithExec([]string{"mv", "/upstream/runsc", "/usr/local/bin/runsc"}).
-		WithExec([]string{"mv", "/upstream/containerd-shim-runsc-v1", "/usr/local/bin/containerd-shim-runsc-v1"}).
-		WithExec([]string{"/usr/local/bin/runsc", "install"}).
+		//WithExec([]string{"mv", "/upstream/runsc", "/usr/local/bin/runsc"}).
+		//WithExec([]string{"mv", "/upstream/containerd-shim-runsc-v1", "/usr/local/bin/containerd-shim-runsc-v1"}).
+		//WithExec([]string{"/usr/local/bin/runsc", "install"}).
 		WithMountedCache("/go/pkg/mod", dag.CacheVolume("go-mod-124")).
 		WithEnvVariable("GOMODCACHE", "/go/pkg/mod").
 		WithMountedCache("/go/build-cache", dag.CacheVolume("go-build-124")).
@@ -144,7 +144,7 @@ func (m *Runtime) Package(
 		mkdir -p /tmp/package
 		cp bin/miren /tmp/package
 		cp /usr/local/bin/runc /tmp/package
-		cp /usr/local/bin/containerd-shim-runsc-v1 /tmp/package
+			# cp /usr/local/bin/containerd-shim-runsc-v1 /tmp/package
 		cp /usr/local/bin/containerd-shim-runc-v2 /tmp/package
 		cp /usr/local/bin/containerd /tmp/package
 		cp /usr/local/bin/nerdctl /tmp/package

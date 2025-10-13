@@ -77,6 +77,12 @@ func TestActivatorFixedModeRoundRobin(t *testing.T) {
 		},
 	}
 
+	ent := func(id string) *entity.Entity {
+		e, _ := entity.NewEntity(nil)
+		e.SetID(entity.Id(id))
+		return e
+	}
+
 	// Create activator with pre-existing sandboxes
 	activator := &localActivator{
 		log: log.With("module", "activator"),
@@ -87,7 +93,7 @@ func TestActivatorFixedModeRoundRobin(t *testing.T) {
 				sandboxes: []*sandbox{
 					{
 						sandbox:     sb1,
-						ent:         &entity.Entity{ID: entity.Id("sb-1")},
+						ent:         ent("sb-1"),
 						lastRenewal: time.Now(),
 						url:         "http://10.0.0.1:3000",
 						maxSlots:    1,
@@ -95,7 +101,7 @@ func TestActivatorFixedModeRoundRobin(t *testing.T) {
 					},
 					{
 						sandbox:     sb2,
-						ent:         &entity.Entity{ID: entity.Id("sb-2")},
+						ent:         ent("sb-2"),
 						lastRenewal: time.Now(),
 						url:         "http://10.0.0.2:3000",
 						maxSlots:    1,
@@ -182,6 +188,12 @@ func TestActivatorFixedModeNoSlotExhaustion(t *testing.T) {
 		},
 	}
 
+	ent := func(id string) *entity.Entity {
+		e, _ := entity.NewEntity(nil)
+		e.SetID(entity.Id(id))
+		return e
+	}
+
 	// Create activator with one sandbox
 	activator := &localActivator{
 		log: log.With("module", "activator"),
@@ -195,7 +207,7 @@ func TestActivatorFixedModeNoSlotExhaustion(t *testing.T) {
 							ID:     entity.Id("sb-1"),
 							Status: compute_v1alpha.RUNNING,
 						},
-						ent:         &entity.Entity{ID: entity.Id("sb-1")},
+						ent:         ent("sb-1"),
 						lastRenewal: time.Now(),
 						url:         "http://10.0.0.1:3000",
 						maxSlots:    1,

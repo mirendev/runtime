@@ -177,7 +177,6 @@ func TestValidateEntity(t *testing.T) {
 		{
 			name: "valid entity",
 			entity: &Entity{
-				ID: "test",
 				Attrs: []Attr{
 					Any(Ident, "test/entity"),
 					Any(Doc, "Test entity"),
@@ -188,7 +187,6 @@ func TestValidateEntity(t *testing.T) {
 		{
 			name: "invalid attribute",
 			entity: &Entity{
-				ID: "test",
 				Attrs: []Attr{
 					Any(Ident, 123), // Should be string
 					Any(Doc, "Test entity"),

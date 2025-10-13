@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/davecgh/go-spew/spew"
 	"github.com/mr-tron/base58"
 	"go.etcd.io/etcd/api/v3/mvccpb"
 	clientv3 "go.etcd.io/etcd/client/v3"
@@ -87,7 +88,7 @@ func (s *EtcdStore) basicSave(ctx context.Context, entity *Entity) error {
 		return fmt.Errorf("failed to marshal entity: %w", err)
 	}
 
-	key := s.buildKey(entity.ID)
+	key := s.buildKey(entity.Id())
 
 	// Use Txn to check that the key doesn't exist yet
 	txnResp, err := s.client.Txn(ctx).
@@ -100,7 +101,7 @@ func (s *EtcdStore) basicSave(ctx context.Context, entity *Entity) error {
 	}
 
 	if !txnResp.Succeeded {
-		return fmt.Errorf("creating %s: %w", entity.ID, ErrEntityAlreadyExists)
+		return fmt.Errorf("creating %s: %w", entity.Id(), ErrEntityAlreadyExists)
 	}
 
 	return nil
@@ -203,34 +204,11 @@ func (s *EtcdStore) CreateEntity(
 
 	entity.Attrs = primary
 
-	var txopt []clientv3.Op
-
-	data, err := encoder.Marshal(entity)
+	// Build entity save operations
+	key := s.buildKey(entity.Id())
+	txopt, err := s.buildEntitySaveOps(entity, key, primary, session, &o)
 	if err != nil {
-		return nil, fmt.Errorf("failed to marshal entity: %w", err)
-	}
-
-	key := s.buildKey(entity.ID)
-
-	if o.bind {
-		txopt = append(txopt, clientv3.OpPut(key, string(data), clientv3.WithLease(clientv3.LeaseID(sid))))
-	} else {
-		txopt = append(txopt, clientv3.OpPut(key, string(data)))
-	}
-
-	if len(session) > 0 {
-		if len(o.session) == 0 {
-			return nil, fmt.Errorf("session ID is required for session attributes")
-		}
-
-		skey := key + "/session/" + sessPart
-		sdata, err := encoder.Marshal(session)
-		if err != nil {
-			return nil, fmt.Errorf("failed to marshal session attributes: %w", err)
-		}
-
-		txopt = append(txopt,
-			clientv3.OpPut(skey, string(sdata), clientv3.WithLease(clientv3.LeaseID(sid))))
+		return nil, err
 	}
 
 	txopt = append(txopt, coltxopt...)
@@ -255,12 +233,12 @@ func (s *EtcdStore) CreateEntity(
 			var curr Entity
 
 			if decoder.Unmarshal(rng.Kvs[0].Value, &curr) == nil {
-				s.log.Debug("entity already exists, checking if attrs match", "id", entity.ID)
+				s.log.Debug("entity already exists, checking if attrs match", "id", entity.Id())
 				if slices.EqualFunc(curr.Attrs, entity.Attrs, func(a, b Attr) bool {
 					return a.Equal(b)
 				}) {
-					s.log.Debug("attrs match, so returning success", "id", entity.ID, "revision", rng.Header.Revision)
-					entity.Revision = rng.Header.Revision
+					s.log.Debug("attrs match, so returning success", "id", entity.Id(), "revision", rng.Header.Revision)
+					entity.SetRevision(rng.Header.Revision)
 					return entity, nil
 				}
 			}
@@ -274,16 +252,16 @@ func (s *EtcdStore) CreateEntity(
 					return nil, fmt.Errorf("failed to create entity in etcd (on overwrite): %w", err)
 				}
 
-				entity.Revision = txnResp.Header.Revision
+				entity.SetRevision(txnResp.Header.Revision)
 				return entity, nil
 			}
 		}
 
-		s.log.Error("failed to create entity in etcd", "id", entity.ID)
-		return nil, cond.Conflict("entity", entity.ID)
+		s.log.Error("failed to create entity in etcd", "id", entity.Id())
+		return nil, cond.Conflict("entity", entity.Id())
 	}
 
-	entity.Revision = txnResp.Header.Revision
+	entity.SetRevision(txnResp.Header.Revision)
 
 	return entity, nil
 }
@@ -328,7 +306,7 @@ func (s *EtcdStore) GetEntity(ctx context.Context, id Id) (*Entity, error) {
 		}
 	}
 
-	entity.Revision = resp.Kvs[0].ModRevision
+	entity.SetRevision(resp.Kvs[0].ModRevision)
 
 	resp = tr.Responses[1].GetResponseRange()
 
@@ -412,7 +390,7 @@ func (s *EtcdStore) GetEntities(ctx context.Context, ids []Id) ([]*Entity, error
 				continue
 			}
 
-			entity.Revision = primaryResp.Kvs[0].ModRevision
+			entity.SetRevision(primaryResp.Kvs[0].ModRevision)
 
 			// Process session attributes
 			sessionResp := tr.Responses[sessionIdx].GetResponseRange()
@@ -504,7 +482,7 @@ func (s *EtcdStore) WatchEntity(ctx context.Context, id Id) (chan EntityOp, erro
 							continue
 						}
 
-						entity.Revision = event.Kv.ModRevision
+						entity.SetRevision(event.Kv.ModRevision)
 
 						entity.postUnmarshal()
 						op.Entity = &entity
@@ -545,9 +523,9 @@ func (s *EtcdStore) UpdateEntity(
 		return nil, err
 	}
 
-	if o.fromRevision != 0 && entity.Revision != o.fromRevision {
-		s.log.Error("entity revision mismatch", "expected", o.fromRevision, "actual", entity.Revision)
-		return nil, cond.Conflict("entity", entity.ID)
+	if o.fromRevision != 0 && entity.GetRevision() != o.fromRevision {
+		s.log.Error("entity revision mismatch", "expected", o.fromRevision, "actual", entity.GetRevision())
+		return nil, cond.Conflict("entity", entity.Id())
 	}
 
 	// Keep track of original indexed attributes for removal
@@ -576,6 +554,8 @@ func (s *EtcdStore) UpdateEntity(
 		}
 	}
 
+	before := slices.Clone(entity.Attrs)
+
 	err = entity.Update(attributes)
 	if err != nil {
 		return nil, fmt.Errorf("failed to update entity: %w", err)
@@ -583,6 +563,9 @@ func (s *EtcdStore) UpdateEntity(
 
 	err = s.validator.ValidateAttributes(ctx, entity.Attrs)
 	if err != nil {
+		spew.Dump(before)
+		spew.Dump(attributes)
+		spew.Dump(entity)
 		return nil, err
 	}
 
@@ -646,50 +629,18 @@ func (s *EtcdStore) UpdateEntity(
 
 	entity.Attrs = primary
 
-	// Set UpdatedAt based on whether it was explicitly provided or already exists
-	// Check if UpdatedAt attribute exists in the entity after update
-	if updatedAtAttr, ok := entity.Get(UpdatedAt); ok && updatedAtAttr.Value.Kind() == KindInt64 {
-		entity.UpdatedAt = updatedAtAttr.Value.Int64()
-		// Remove it from attributes since we're promoting it to the field
-		entity.Remove(UpdatedAt)
-	} else {
-		entity.UpdatedAt = now()
-	}
-
-	data, err := encoder.Marshal(entity)
+	// Build entity save operations
+	key := s.buildKey(entity.Id())
+	txopt, err := s.buildEntitySaveOps(entity, key, primary, session, &o)
 	if err != nil {
-		return nil, fmt.Errorf("failed to serialize entity: %w", err)
-	}
-
-	key := s.buildKey(entity.ID)
-
-	var txopt []clientv3.Op
-
-	if o.bind {
-		txopt = append(txopt, clientv3.OpPut(key, string(data), clientv3.WithLease(clientv3.LeaseID(sid))))
-	} else {
-		txopt = append(txopt, clientv3.OpPut(key, string(data)))
-	}
-
-	if len(session) > 0 {
-		if len(o.session) == 0 {
-			return nil, fmt.Errorf("session ID is required for session attributes")
-		}
-
-		skey := key + "/session/" + sessPart
-		sdata, err := encoder.Marshal(session)
-		if err != nil {
-			return nil, fmt.Errorf("failed to marshal session attributes: %w", err)
-		}
-		txopt = append(txopt,
-			clientv3.OpPut(skey, string(sdata), clientv3.WithLease(clientv3.LeaseID(sid))))
+		return nil, err
 	}
 
 	txopt = append(txopt, coltxopt...)
 
 	// Use Txn to check that the key exists before updating
 	txnResp, err := s.client.Txn(ctx).
-		If(clientv3.Compare(clientv3.ModRevision(key), "=", entity.Revision)).
+		If(clientv3.Compare(clientv3.ModRevision(key), "=", entity.GetRevision())).
 		Then(txopt...).
 		Commit()
 
@@ -698,11 +649,11 @@ func (s *EtcdStore) UpdateEntity(
 	}
 
 	if !txnResp.Succeeded {
-		s.log.Error("failed to update entity in etcd", "error", err, "id", entity.ID)
-		return nil, cond.Conflict("entity", entity.ID)
+		s.log.Error("failed to update entity in etcd", "error", err, "id", entity.Id())
+		return nil, cond.Conflict("entity", entity.Id())
 	}
 
-	entity.Revision = txnResp.Header.Revision
+	entity.SetRevision(txnResp.Header.Revision)
 
 	return entity, nil
 }
@@ -726,9 +677,10 @@ func extractEntityId(attributes []Attr) (Id, error) {
 
 // checkRevisionConflict checks if the entity revision matches the expected revision
 func (s *EtcdStore) checkRevisionConflict(entity *Entity, expectedRevision int64) error {
-	if expectedRevision != 0 && entity.Revision != expectedRevision {
-		s.log.Error("entity revision mismatch", "expected", expectedRevision, "actual", entity.Revision)
-		return cond.Conflict("entity", entity.ID)
+	actualRevision := entity.GetRevision()
+	if expectedRevision != 0 && actualRevision != expectedRevision {
+		s.log.Error("entity revision mismatch", "expected", expectedRevision, "actual", actualRevision)
+		return cond.Conflict("entity", entity.Id())
 	}
 	return nil
 }
@@ -803,7 +755,7 @@ func (s *EtcdStore) buildEntitySaveOps(entity *Entity, key string, primary, sess
 	var ops []clientv3.Op
 
 	entity.Attrs = primary
-	entity.UpdatedAt = now()
+	entity.SetUpdatedAt(time.Now())
 
 	data, err := encoder.Marshal(entity)
 	if err != nil {
@@ -863,28 +815,39 @@ func (s *EtcdStore) ReplaceEntity(
 		return nil, err
 	}
 
-	// Check revision if specified
-	if err := s.checkRevisionConflict(entity, o.fromRevision); err != nil {
-		return nil, err
-	}
+	rev := entity.GetRevision()
 
-	// Keep track of original indexed attributes for removal
-	originalIndexedAttrs, err := s.collectIndexedAttributes(ctx, entity.Attrs)
+	repl, err := NewEntity(attributes)
 	if err != nil {
 		return nil, err
 	}
 
-	// Create new entity with replacement attributes
-	entity.Attrs = attributes
-	entity.ID = id
+	if repl.Id() != id {
+		return nil, fmt.Errorf("db/id attribute does not match existing entity ID")
+	}
+
+	if repl.GetRevision() == 0 {
+		repl.SetRevision(rev)
+	}
+
+	// Check revision if specified
+	if err := s.checkRevisionConflict(repl, o.fromRevision); err != nil {
+		return nil, err
+	}
+
+	// Keep track of original indexed attributes for removal
+	originalIndexedAttrs, err := s.collectIndexedAttributes(ctx, repl.Attrs)
+	if err != nil {
+		return nil, err
+	}
 
 	// Validate replacement attributes
-	if err := s.validator.ValidateAttributes(ctx, entity.Attrs); err != nil {
+	if err := s.validator.ValidateAttributes(ctx, repl.Attrs); err != nil {
 		return nil, err
 	}
 
 	// Separate primary and session attributes, collect new indexed attrs
-	primary, session, newIndexedAttrs, err := s.separateSessionAttributes(ctx, entity.Attrs)
+	primary, session, newIndexedAttrs, err := s.separateSessionAttributes(ctx, repl.Attrs)
 	if err != nil {
 		return nil, err
 	}
@@ -896,11 +859,11 @@ func (s *EtcdStore) ReplaceEntity(
 		sid, _ = binary.Varint(o.session)
 		sessPart = base58.Encode(o.session)
 	}
-	coltxopt := s.buildCollectionOps(entity, originalIndexedAttrs, newIndexedAttrs, sessPart, sid)
+	coltxopt := s.buildCollectionOps(repl, originalIndexedAttrs, newIndexedAttrs, sessPart, sid)
 
 	// Build entity save operations
-	key := s.buildKey(entity.ID)
-	txopt, err := s.buildEntitySaveOps(entity, key, primary, session, &o)
+	key := s.buildKey(repl.Id())
+	txopt, err := s.buildEntitySaveOps(repl, key, primary, session, &o)
 	if err != nil {
 		return nil, err
 	}
@@ -909,7 +872,7 @@ func (s *EtcdStore) ReplaceEntity(
 
 	// Use Txn to check that the entity hasn't changed
 	txnResp, err := s.client.Txn(ctx).
-		If(clientv3.Compare(clientv3.ModRevision(key), "=", entity.Revision)).
+		If(clientv3.Compare(clientv3.ModRevision(key), "=", repl.GetRevision())).
 		Then(txopt...).
 		Commit()
 
@@ -918,13 +881,13 @@ func (s *EtcdStore) ReplaceEntity(
 	}
 
 	if !txnResp.Succeeded {
-		s.log.Error("failed to replace entity in etcd", "error", err, "id", entity.ID)
-		return nil, cond.Conflict("entity", entity.ID)
+		s.log.Error("failed to replace entity in etcd", "error", err, "id", repl.Id())
+		return nil, cond.Conflict("entity", repl.Id())
 	}
 
-	entity.Revision = txnResp.Header.Revision
+	repl.SetRevision(txnResp.Header.Revision)
 
-	return entity, nil
+	return repl, nil
 }
 
 // PatchEntity merges attributes into an existing entity
@@ -1003,17 +966,10 @@ func (s *EtcdStore) PatchEntity(
 	}
 	coltxopt := s.buildCollectionOps(entity, originalIndexedAttrs, newIndexedAttrs, sessPart, sid)
 
-	// Handle UpdatedAt attribute specially (legacy behavior)
 	entity.Attrs = primary
-	if updatedAtAttr, ok := entity.Get(UpdatedAt); ok && updatedAtAttr.Value.Kind() == KindInt64 {
-		entity.UpdatedAt = updatedAtAttr.Value.Int64()
-		entity.Remove(UpdatedAt)
-	} else {
-		entity.UpdatedAt = now()
-	}
 
 	// Build entity save operations
-	key := s.buildKey(entity.ID)
+	key := s.buildKey(entity.Id())
 	txopt, err := s.buildEntitySaveOps(entity, key, primary, session, &o)
 	if err != nil {
 		return nil, err
@@ -1023,7 +979,7 @@ func (s *EtcdStore) PatchEntity(
 
 	// Use Txn to check that the key exists before updating
 	txnResp, err := s.client.Txn(ctx).
-		If(clientv3.Compare(clientv3.ModRevision(key), "=", entity.Revision)).
+		If(clientv3.Compare(clientv3.ModRevision(key), "=", entity.GetRevision())).
 		Then(txopt...).
 		Commit()
 
@@ -1032,11 +988,11 @@ func (s *EtcdStore) PatchEntity(
 	}
 
 	if !txnResp.Succeeded {
-		s.log.Error("failed to patch entity in etcd", "error", err, "id", entity.ID)
-		return nil, cond.Conflict("entity", entity.ID)
+		s.log.Error("failed to patch entity in etcd", "error", err, "id", entity.Id())
+		return nil, cond.Conflict("entity", entity.Id())
 	}
 
-	entity.Revision = txnResp.Header.Revision
+	entity.SetRevision(txnResp.Header.Revision)
 
 	return entity, nil
 }
@@ -1112,7 +1068,7 @@ func (s *EtcdStore) DeleteEntity(ctx context.Context, id Id) error {
 
 	// Use Txn to check that the key exists before deleting
 	txnResp, err := s.client.Txn(ctx).
-		If(clientv3.Compare(clientv3.ModRevision(key), "=", entity.Revision)).
+		If(clientv3.Compare(clientv3.ModRevision(key), "=", entity.GetRevision())).
 		Then(clientv3.OpDelete(key)).
 		Commit()
 
@@ -1135,6 +1091,9 @@ func (s *EtcdStore) GetAttributeSchema(ctx context.Context, id Id) (*AttributeSc
 	s.mu.RUnlock()
 
 	if ok {
+		if schema.Type == "" {
+			panic("attribute schema in cache has empty type")
+		}
 		return schema, nil
 	}
 	entity, err := s.GetEntity(ctx, id)
@@ -1155,28 +1114,26 @@ func (s *EtcdStore) GetAttributeSchema(ctx context.Context, id Id) (*AttributeSc
 	return schema, nil
 }
 
-
-
 func (s *EtcdStore) addToCollectionSessionOp(entity *Entity, collection, suffix string, sid int64) clientv3.Op {
-	key := base58.Encode([]byte(entity.ID))
+	key := base58.Encode([]byte(entity.Id()))
 	colKey := tr.Replace(collection)
 
 	key = fmt.Sprintf("%s/collections/%s/%s/%s", s.prefix, colKey, key, suffix)
 
-	return clientv3.OpPut(key, entity.ID.String(), clientv3.WithLease(clientv3.LeaseID(sid)))
+	return clientv3.OpPut(key, entity.Id().String(), clientv3.WithLease(clientv3.LeaseID(sid)))
 }
 
 func (s *EtcdStore) addToCollectionOp(entity *Entity, collection string) clientv3.Op {
-	key := base58.Encode([]byte(entity.ID))
+	key := base58.Encode([]byte(entity.Id()))
 	colKey := tr.Replace(collection)
 
 	key = fmt.Sprintf("%s/collections/%s/%s", s.prefix, colKey, key)
 
-	return clientv3.OpPut(key, entity.ID.String())
+	return clientv3.OpPut(key, entity.Id().String())
 }
 
 func (s *EtcdStore) deleteFromCollectionOp(entity *Entity, collection string) clientv3.Op {
-	key := base58.Encode([]byte(entity.ID))
+	key := base58.Encode([]byte(entity.Id()))
 	colKey := tr.Replace(collection)
 
 	key = fmt.Sprintf("%s/collections/%s/%s", s.prefix, colKey, key)
@@ -1185,7 +1142,7 @@ func (s *EtcdStore) deleteFromCollectionOp(entity *Entity, collection string) cl
 }
 
 func (s *EtcdStore) deleteFromCollection(entity *Entity, collection string) error {
-	key := base58.Encode([]byte(entity.ID))
+	key := base58.Encode([]byte(entity.Id()))
 	colKey := tr.Replace(collection)
 
 	ctx := context.Background()

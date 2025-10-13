@@ -2,6 +2,7 @@ package entity
 
 import (
 	"context"
+	"slices"
 	"sync"
 	"time"
 
@@ -15,6 +16,8 @@ type MockStore struct {
 	OnWatchIndex    func(ctx context.Context, attr Attr) (clientv3.WatchChan, error)
 	GetEntitiesFunc func(ctx context.Context, ids []Id) ([]*Entity, error)
 	OnListIndex     func(ctx context.Context, attr Attr) ([]Id, error) // Hook to track ListIndex calls
+
+	NowFunc func() time.Time // Optional function to override current time
 }
 
 var _ Store = &MockStore{}
@@ -23,6 +26,13 @@ func NewMockStore() *MockStore {
 	return &MockStore{
 		Entities: make(map[Id]*Entity),
 	}
+}
+
+func (m *MockStore) Now() time.Time {
+	if m.NowFunc != nil {
+		return m.NowFunc()
+	}
+	return time.Now()
 }
 
 func (m *MockStore) GetEntity(ctx context.Context, id Id) (*Entity, error) {
@@ -73,10 +83,13 @@ func (m *MockStore) CreateEntity(ctx context.Context, attrs []Attr, opts ...Enti
 		return nil, err
 	}
 
-	e.Revision = 1
+	e.SetCreatedAt(m.Now())
+	e.SetUpdatedAt(m.Now())
+
+	e.SetRevision(1)
 
 	m.mu.Lock()
-	m.Entities[e.ID] = e
+	m.Entities[e.Id()] = e
 	m.mu.Unlock()
 	return e, nil
 }
@@ -91,11 +104,7 @@ func (m *MockStore) UpdateEntity(ctx context.Context, id Id, attrs []Attr, opts 
 
 	// Create a copy to avoid modifying the original
 	updated := &Entity{
-		ID:        e.ID,
-		CreatedAt: e.CreatedAt,
-		UpdatedAt: e.UpdatedAt,
-		Revision:  e.Revision + 1,
-		Attrs:     make([]Attr, 0, len(e.Attrs)),
+		Attrs: make([]Attr, 0, len(e.Attrs)),
 	}
 
 	// First, copy over existing attributes that aren't being updated
@@ -112,7 +121,8 @@ func (m *MockStore) UpdateEntity(ctx context.Context, id Id, attrs []Attr, opts 
 
 	// Then add the new/updated attributes
 	updated.Attrs = append(updated.Attrs, attrs...)
-	updated.UpdatedAt = time.Now().Unix()
+	updated.SetRevision(updated.GetRevision() + 1)
+	updated.SetUpdatedAt(m.Now())
 
 	// Update the entity in the store
 	m.Entities[id] = updated
@@ -136,19 +146,17 @@ func (m *MockStore) ReplaceEntity(ctx context.Context, attrs []Attr, opts ...Ent
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	e, ok := m.Entities[id]
+	_, ok := m.Entities[id]
 	if !ok {
 		return nil, ErrNotFound
 	}
 
 	// Create a copy with all new attributes
 	updated := &Entity{
-		ID:        id,
-		CreatedAt: e.CreatedAt,
-		UpdatedAt: time.Now().Unix(),
-		Revision:  e.Revision + 1,
-		Attrs:     attrs,
+		Attrs: attrs,
 	}
+	updated.SetRevision(updated.GetRevision() + 1)
+	updated.SetUpdatedAt(m.Now())
 
 	m.Entities[id] = updated
 	return updated, nil
@@ -195,15 +203,15 @@ func (m *MockStore) EnsureEntity(ctx context.Context, attrs []Attr, opts ...Enti
 	}
 
 	// Create new entity
+	ts := time.Now()
 	e := &Entity{
-		ID:        id,
-		Attrs:     attrs,
-		Revision:  1,
-		CreatedAt: time.Now().Unix(),
-		UpdatedAt: time.Now().Unix(),
+		Attrs: slices.Clone(attrs),
 	}
 
 	e.Fixup()
+	e.SetRevision(1)
+	e.SetCreatedAt(ts)
+	e.SetUpdatedAt(ts)
 	m.Entities[id] = e
 	return e, true, nil
 }

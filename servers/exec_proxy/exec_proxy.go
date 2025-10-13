@@ -87,7 +87,7 @@ func (s *Server) Exec(ctx context.Context, req *exec_v1alpha.SandboxExecExec) er
 		defer s.AppAct.ReleaseLease(ctx, lease)
 
 		found = lease.SandboxEntity()
-		id = found.ID.String()
+		id = found.Id().String()
 	}
 
 	if found == nil {

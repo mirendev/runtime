@@ -62,6 +62,8 @@ const (
 
 	TTL Id = "db/entity.ttl"
 
+	Revision  Id = "db/entity.revision"
+	CreatedAt Id = "db/entity.created-at"
 	UpdatedAt Id = "db/entity.updated-at"
 )
 
@@ -163,11 +165,25 @@ func InitSystemEntities(save func(*Entity) error) error {
 		Type, TypeDuration,
 	))
 
+	revision, _ := NewEntity(Attrs(
+		Ident, types.Keyword(Revision),
+		Doc, "Entity revision number from etcd",
+		Cardinality, CardinalityOne,
+		Type, TypeInt,
+	))
+
+	createdAt, _ := NewEntity(Attrs(
+		Ident, types.Keyword(CreatedAt),
+		Doc, "Creation timestamp for this entity",
+		Cardinality, CardinalityOne,
+		Type, TypeTime,
+	))
+
 	updatedAt, _ := NewEntity(Attrs(
 		Ident, types.Keyword(UpdatedAt),
 		Doc, "Last update timestamp for this entity",
 		Cardinality, CardinalityOne,
-		Type, TypeInt,
+		Type, TypeTime,
 	))
 
 	entityKind, _ := NewEntity(Attrs(
@@ -275,7 +291,8 @@ func InitSystemEntities(save func(*Entity) error) error {
 		ident, doc, uniq, card, typ, enumValues, enumType,
 		uniqueIdentity, uniqueValue, cardOne, cardMany,
 		typeAny, typeRef, typeStr, typeKW, typeInt, typeFloat, typeBool, typeTime, typeEnum,
-		typeArray, typeDuration, typeComponent, typeLabel, typeBytes, index, session, ttl, updatedAt,
+		typeArray, typeDuration, typeComponent, typeLabel, typeBytes, index, session, ttl,
+		revision, createdAt, updatedAt,
 		attrSession,
 		attrPred, predIP, predCidr, entityAttrs, entityPreds, entityEnsure,
 		entityKind, entitySchema, entityESchema, schemaKind,

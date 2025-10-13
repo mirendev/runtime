@@ -1074,25 +1074,24 @@ func TestSandbox(t *testing.T) {
 		err = sbc.Delete(ctx, sbID1)
 		r.NoError(err)
 
-		// Manually update the UpdatedAt timestamp to be more than 1 hour ago
-		// We need to get the entity and update it
+		// Manually update the UpdatedAt timestamp to be older than our test time horizon
 		var rpcE entityserver_v1alpha.Entity
 		rpcE.SetId(sbID1.String())
 
-		// Set UpdatedAt to 2 hours ago by updating the entity
-		twoHoursAgo := time.Now().Add(-2 * time.Hour).UnixMilli()
+		// Set UpdatedAt to 3 seconds ago by updating the entity
 		rpcE.SetAttrs(entity.Attrs(
 			entity.Keyword(entity.Ident, sbID1.String()),
 			(&compute.Sandbox{
 				Status: compute.DEAD,
 			}).Encode,
-			entity.Int64(entity.UpdatedAt, twoHoursAgo)))
+		))
 
 		_, err = sbc.EAC.Put(ctx, &rpcE)
 		r.NoError(err)
 
-		// Run the periodic cleanup
-		err = sbc.Periodic(ctx)
+		// Run the periodic cleanup with a 2 second time horizon
+		// This tests that sandboxes older than the horizon are cleaned up
+		err = sbc.Periodic(ctx, 0)
 		r.NoError(err)
 
 		// Check that the old dead sandbox was deleted

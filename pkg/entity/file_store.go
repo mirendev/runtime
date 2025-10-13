@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
 	"github.com/mr-tron/base58"
 )
@@ -164,8 +165,8 @@ func (s *FileStore) UpdateEntity(ctx context.Context, id Id, attributes []Attr, 
 
 	// TODO: Revalidate attributes tooking for duplicates
 
-	entity.Revision++
-	entity.UpdatedAt = now()
+	entity.SetRevision(entity.GetRevision() + 1)
+	entity.SetUpdatedAt(time.Now())
 
 	if err := s.saveEntity(entity); err != nil {
 		return nil, err
@@ -227,7 +228,7 @@ func (s *FileStore) saveEntity(entity *Entity) error {
 		return fmt.Errorf("failed to marshal entity: %w", err)
 	}
 
-	key := base58.Encode([]byte(entity.ID))
+	key := base58.Encode([]byte(entity.Id()))
 
 	path := filepath.Join(s.basePath, "entities", key+".cbor")
 
@@ -239,14 +240,14 @@ func (s *FileStore) saveEntity(entity *Entity) error {
 }
 
 func (s *FileStore) addToCollection(entity *Entity, collection string) error {
-	key := base58.Encode([]byte(entity.ID))
+	key := base58.Encode([]byte(entity.Id()))
 	colKey := base58.Encode([]byte(collection))
 
 	path := filepath.Join(s.basePath, "collections", colKey, key)
 
 	os.MkdirAll(filepath.Dir(path), 0755)
 
-	if err := os.WriteFile(path, []byte(entity.ID), 0644); err != nil {
+	if err := os.WriteFile(path, []byte(entity.Id()), 0644); err != nil {
 		return fmt.Errorf("failed to write collection file: %w", err)
 	}
 

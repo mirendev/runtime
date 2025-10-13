@@ -708,7 +708,7 @@ func (d *DiskLeaseController) CleanupOldReleasedLeases(ctx context.Context) erro
 	}
 
 	now := time.Now()
-	cutoffTimeMs := now.Add(-1*time.Hour).UnixNano() / 1000000 // 1 hour ago in milliseconds
+	cutoffTime := now.Add(-1 * time.Hour) // 1 hour ago
 	deletedCount := 0
 
 	for _, e := range results.Values() {
@@ -718,10 +718,9 @@ func (d *DiskLeaseController) CleanupOldReleasedLeases(ctx context.Context) erro
 
 		// Only delete if:
 		// 1. Status is RELEASED
-		// 2. UpdatedAt is more than 1 hour ago (UpdatedAt is in milliseconds)
-		if lease.Status == storage_v1alpha.RELEASED && e.Entity().UpdatedAt < cutoffTimeMs {
-			// Convert milliseconds to time.Time for logging
-			updatedAtTime := time.UnixMilli(e.Entity().UpdatedAt)
+		// 2. UpdatedAt is more than 1 hour ago
+		if lease.Status == storage_v1alpha.RELEASED && e.Entity().GetUpdatedAt().Before(cutoffTime) {
+			updatedAtTime := e.Entity().GetUpdatedAt()
 			age := time.Since(updatedAtTime)
 			d.Log.Info("Deleting old released lease",
 				"lease", lease.ID,

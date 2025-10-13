@@ -7,6 +7,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/davecgh/go-spew/spew"
 	"github.com/google/cel-go/cel"
 	"github.com/google/cel-go/common/types"
 	"github.com/google/cel-go/ext"
@@ -307,7 +308,8 @@ func (v *Validator) ValidateAttribute(ctx context.Context, attr *Attr) error {
 		}
 
 	default:
-		return fmt.Errorf("unknown attribute type %s for attribute %s", schema.Type, name)
+		spew.Dump(schema)
+		return fmt.Errorf("unknown attribute type %s for attribute %s (%T)", schema.Type, name, v.store)
 	}
 
 	for _, prog := range schema.CheckProgs {

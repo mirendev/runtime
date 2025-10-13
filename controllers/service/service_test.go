@@ -74,7 +74,6 @@ func TestServiceController(t *testing.T) {
 
 		meta := &entity.Meta{
 			Entity: &entity.Entity{
-				ID:    svcID,
 				Attrs: svc.Encode(),
 			},
 			Revision: 1,
@@ -131,7 +130,6 @@ func TestServiceController(t *testing.T) {
 		}
 
 		svcEntity := &entity.Entity{
-			ID:    svcID,
 			Attrs: svc.Encode(),
 		}
 
@@ -173,9 +171,10 @@ func TestServiceController(t *testing.T) {
 		attrs = append(attrs, entity.Label(core_v1alpha.MetadataLabelsId, "app", "nginx"))
 
 		sbEntity := &entity.Entity{
-			ID:    sbID,
 			Attrs: attrs,
 		}
+
+		sbEntity.SetID(sbID)
 
 		sbMeta := &entity.Meta{
 			Entity:   sbEntity,
@@ -273,7 +272,6 @@ func TestServiceController(t *testing.T) {
 
 		meta := &entity.Meta{
 			Entity: &entity.Entity{
-				ID:    svcID,
 				Attrs: svc.Encode(),
 			},
 			Revision: 1,
@@ -304,9 +302,10 @@ func TestServiceController(t *testing.T) {
 		attrs = append(attrs, entity.Label(core_v1alpha.MetadataLabelsId, "app", "nginx"))
 
 		sbEntity := &entity.Entity{
-			ID:    sbID,
 			Attrs: attrs,
 		}
+
+		sbEntity.SetID(sbID)
 
 		sbMeta := &entity.Meta{
 			Entity:   sbEntity,
@@ -408,7 +407,6 @@ func TestServiceController(t *testing.T) {
 
 		meta := &entity.Meta{
 			Entity: &entity.Entity{
-				ID:    svcID,
 				Attrs: svc.Encode(),
 			},
 			Revision: 1,
@@ -487,7 +485,6 @@ func TestServiceController(t *testing.T) {
 
 		meta := &entity.Meta{
 			Entity: &entity.Entity{
-				ID:    svcID,
 				Attrs: svc.Encode(),
 			},
 			Revision: 1,
@@ -518,7 +515,6 @@ func TestServiceController(t *testing.T) {
 		attrs1 = append(attrs1, entity.Label(core_v1alpha.MetadataLabelsId, "app", "nginx"))
 
 		sbEntity1 := &entity.Entity{
-			ID:    sbID1,
 			Attrs: attrs1,
 		}
 
@@ -526,6 +522,8 @@ func TestServiceController(t *testing.T) {
 			Entity:   sbEntity1,
 			Revision: 1,
 		}
+
+		sbEntity1.SetID(sbID1)
 
 		err = sbC.Create(ctx, sb1, sbMeta1)
 		r.NoError(err)
@@ -552,9 +550,10 @@ func TestServiceController(t *testing.T) {
 		attrs2 = append(attrs2, entity.Label(core_v1alpha.MetadataLabelsId, "app", "nginx"))
 
 		sbEntity2 := &entity.Entity{
-			ID:    sbID2,
 			Attrs: attrs2,
 		}
+
+		sbEntity2.SetID(sbID2)
 
 		sbMeta2 := &entity.Meta{
 			Entity:   sbEntity2,
@@ -666,7 +665,6 @@ func TestServiceController(t *testing.T) {
 
 		meta := &entity.Meta{
 			Entity: &entity.Entity{
-				ID:    svcID,
 				Attrs: svc.Encode(),
 			},
 			Revision: 1,
@@ -771,7 +769,6 @@ func TestServiceController(t *testing.T) {
 		// Create both services
 		meta1 := &entity.Meta{
 			Entity: &entity.Entity{
-				ID:    svcID1,
 				Attrs: svc1.Encode(),
 			},
 			Revision: 1,
@@ -781,7 +778,6 @@ func TestServiceController(t *testing.T) {
 
 		meta2 := &entity.Meta{
 			Entity: &entity.Entity{
-				ID:    svcID2,
 				Attrs: svc2.Encode(),
 			},
 			Revision: 1,
@@ -822,7 +818,6 @@ func TestServiceController(t *testing.T) {
 		event := controller.Event{
 			Type: controller.EventDeleted,
 			Entity: &entity.Entity{
-				ID:    epID,
 				Attrs: eps.Encode(),
 			},
 		}
@@ -879,7 +874,6 @@ func TestServiceController(t *testing.T) {
 
 		meta := &entity.Meta{
 			Entity: &entity.Entity{
-				ID:    svcID,
 				Attrs: svc.Encode(),
 			},
 			Revision: 1,
@@ -956,7 +950,6 @@ func TestServiceController(t *testing.T) {
 
 		meta := &entity.Meta{
 			Entity: &entity.Entity{
-				ID:    svcID,
 				Attrs: svc.Encode(),
 			},
 			Revision: 1,

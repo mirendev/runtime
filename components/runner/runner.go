@@ -336,7 +336,9 @@ func (r *Runner) SetupControllers(
 		workers,
 	)
 
-	sbController.SetPeriodic(5*time.Minute, sbc.Periodic)
+	sbController.SetPeriodic(5*time.Minute, func(ctx context.Context) error {
+		return sbc.Periodic(ctx, time.Hour)
+	})
 
 	cm.AddController(sbController)
 
