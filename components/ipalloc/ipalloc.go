@@ -197,7 +197,7 @@ func (a *Allocator) assignService(ctx context.Context, ent *entity.Entity, eac *
 		return nil
 	}
 
-	ips, err := a.Allocate(ctx, srv.Entity.Id())
+	ips, err := a.Allocate(ctx, srv.Id())
 	if err != nil {
 		return err
 	}
@@ -207,11 +207,11 @@ func (a *Allocator) assignService(ctx context.Context, ent *entity.Entity, eac *
 	}
 
 	var rpcE entityserver_v1alpha.Entity
-	rpcE.SetId(string(srv.Entity.Id()))
+	rpcE.SetId(string(srv.Id()))
 	rpcE.SetAttrs(srv.Encode())
 
 	if _, err := eac.Put(ctx, &rpcE); err != nil {
-		a.log.Error("failed to assign service ips", "error", err, "service", srv.Entity.Id())
+		a.log.Error("failed to assign service ips", "error", err, "service", srv.Id())
 		return err
 	}
 

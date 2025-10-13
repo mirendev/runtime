@@ -451,11 +451,6 @@ func init() {
 	}
 }
 
-// Helper function to get current time
-func now() time.Time {
-	return time.Now()
-}
-
 type (
 	Id = types.Id
 )

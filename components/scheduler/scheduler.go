@@ -150,7 +150,7 @@ func (s *Scheduler) AssignSandboxes(ctx context.Context, eac *eas.EntityAccessCl
 	for _, sandbox := range sandboxes {
 		err = s.assignSandbox(ctx, sandbox.Entity, eac)
 		if err != nil {
-			s.log.Error("failed to assign sandbox", "error", err, "sandbox", sandbox.Entity.Id())
+			s.log.Error("failed to assign sandbox", "error", err, "sandbox", sandbox.Id())
 		}
 	}
 
@@ -178,7 +178,7 @@ func (s *Scheduler) assignSandbox(ctx context.Context, ent *entity.Entity, eac *
 	}
 
 	if len(nodes) == 0 {
-		s.log.Error("no nodes available for scheduling", "sandbox", sandbox.Entity.Id())
+		s.log.Error("no nodes available for scheduling", "sandbox", sandbox.Id())
 		return nil
 	}
 
@@ -202,11 +202,11 @@ func (s *Scheduler) assignSandbox(ctx context.Context, ent *entity.Entity, eac *
 	}
 
 	var rpcE eas.Entity
-	rpcE.SetId(string(sandbox.Entity.Id()))
+	rpcE.SetId(string(sandbox.Id()))
 	rpcE.SetAttrs(sandbox.Attrs)
 
 	if _, err := eac.Put(ctx, &rpcE); err != nil {
-		s.log.Error("failed to assign sandbox", "error", err, "sandbox", sandbox.Entity.Id())
+		s.log.Error("failed to assign sandbox", "error", err, "sandbox", sandbox.Id())
 		return err
 	}
 
