@@ -788,7 +788,7 @@ func (g *gen) attr(name string, attr *schemaAttr) {
 		simpleDecl("Component")
 
 		g.decl = append(g.decl,
-			j.Parens(j.Op("&").Id(typeName).Values()).Dot("InitSchema").Call(j.Id("sb").Dot("Builder").Call(j.Lit(name))))
+			j.Parens(j.Op("&").Id(typeName).Values()).Dot("InitSchema").Call(j.Id("sb").Dot("Builder").Call(j.Lit(attr.Attr))))
 
 		g.ec.Fields = append(g.ec.Fields, &entity.SchemaField{
 			Name:      name,
