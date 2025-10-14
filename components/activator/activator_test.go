@@ -72,7 +72,7 @@ func TestActivatorRetireUnusedSandboxes(t *testing.T) {
 		log: log,
 		eac: server.EAC,
 		versions: map[verKey]*verSandboxes{
-			{"ver-1", "default", "web"}: {
+			{"ver-1", "web"}: {
 				ver: ver,
 				sandboxes: []*sandbox{
 					// Old sandbox - should be retired
@@ -170,7 +170,7 @@ func TestActivatorLeaseOperations(t *testing.T) {
 	activator := &localActivator{
 		log: log,
 		versions: map[verKey]*verSandboxes{
-			{"ver-1", "default", "web"}: {
+			{"ver-1", "web"}: {
 				ver:        testVer,
 				sandboxes:  []*sandbox{testSandbox},
 				leaseSlots: 2,
@@ -327,7 +327,7 @@ func TestActivatorRecoverSandboxesWithEntityServer(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify sandbox was recovered
-	key := verKey{appVer.ID.String(), "production", "web"}
+	key := verKey{appVer.ID.String(), "web"}
 	vs, ok := activator.versions[key]
 	require.True(t, ok, "version should be in map")
 	require.Len(t, vs.sandboxes, 1, "should have recovered 1 running sandbox")

@@ -82,7 +82,7 @@ func TestActivatorFixedModeRoundRobin(t *testing.T) {
 		log: log.With("module", "activator"),
 		eac: server.EAC,
 		versions: map[verKey]*verSandboxes{
-			{appVer.ID.String(), "default", "web"}: {
+			{appVer.ID.String(), "web"}: {
 				ver: appVer,
 				sandboxes: []*sandbox{
 					{
@@ -187,7 +187,7 @@ func TestActivatorFixedModeNoSlotExhaustion(t *testing.T) {
 		log: log.With("module", "activator"),
 		eac: server.EAC,
 		versions: map[verKey]*verSandboxes{
-			{appVer.ID.String(), "default", "web"}: {
+			{appVer.ID.String(), "web"}: {
 				ver: appVer,
 				sandboxes: []*sandbox{
 					{
