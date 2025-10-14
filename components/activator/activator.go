@@ -1048,7 +1048,7 @@ func (a *localActivator) createPoolForService(ctx context.Context, ver *core_v1a
 	pool := compute_v1alpha.SandboxPool{
 		Service:          service,
 		SandboxSpec:      *spec,
-		Mode:             svcConcurrency.Mode,
+		Mode:             compute_v1alpha.SandboxPoolMode(svcConcurrency.Mode),
 		MaxSlots:         maxSlots,
 		LeaseSlots:       leaseSlots,
 		ScaleDownDelay:   scaleDownDelay,

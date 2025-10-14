@@ -330,8 +330,9 @@ kinds:
 
     # Concurrency/scaling configuration
     mode:
-      type: string
-      doc: Concurrency mode (auto or fixed)
+      type: enum
+      doc: Concurrency mode
+      choices: [auto, fixed]
 
     max_slots:
       type: int

@@ -673,7 +673,12 @@ func (g *gen) attr(name string, attr *schemaAttr) {
 		var args []j.Code
 
 		for _, v := range attr.Choices {
-			g.decl = append(g.decl, j.Id("sb").Dot("Singleton").Call(j.Lit(g.sf.Domain+"/"+name+"."+v)))
+			// Use full attribute path for standalone components (backward compatibility for kinds)
+			singletonPath := name + "." + v
+			if g.isComponent {
+				singletonPath = attr.Attr + "." + v
+			}
+			g.decl = append(g.decl, j.Id("sb").Dot("Singleton").Call(j.Lit(g.sf.Domain+"/"+singletonPath)))
 			args = append(args, g.Ident(fname+toCamal(v)))
 		}
 
