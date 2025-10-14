@@ -1,16 +1,173 @@
 domain: dev.miren.compute
 version: v1alpha
-kinds:
-  sandbox:
-    labels:
+
+components:
+  # Immutable build-time sandbox configuration
+  # Shared between Sandbox (as spec field) and SandboxPool (as template)
+  sandbox_spec:
+    version:
+      type: ref
+      doc: Application version reference
+
+    logEntity:
       type: string
-      doc: Label for the sandbox
+      doc: Entity to associate log output with
+
+    logAttribute:
+      type: label
+      doc: Labels for log entries
       many: true
 
+    hostNetwork:
+      type: bool
+      doc: Whether to use host networking
+
+    route:
+      type: component
+      doc: Network route configuration
+      many: true
+      attrs:
+        destination:
+          type: string
+          doc: Network destination
+        gateway:
+          type: string
+          doc: Next hop for destination
+
+    volume:
+      type: component
+      doc: Volume configuration
+      many: true
+      attrs:
+        name:
+          type: string
+          doc: Volume name
+        provider:
+          type: string
+          doc: Volume provider
+        labels:
+          type: label
+          doc: Labels identifying the volume
+          many: true
+
+    static_host:
+      type: component
+      doc: Static host-to-IP mapping
+      many: true
+      attrs:
+        host:
+          type: string
+          doc: Hostname
+        ip:
+          type: string
+          doc: IP address
+
+    container:
+      type: component
+      doc: Container specification
+      many: true
+      required: true
+      attrs:
+        image:
+          type: string
+          doc: Container image
+          required: true
+        name:
+          type: string
+          doc: Container name
+        privileged:
+          type: bool
+          doc: Whether container runs in privileged mode
+        command:
+          type: string
+          doc: Command to run
+        directory:
+          type: string
+          doc: Working directory
+        env:
+          type: string
+          doc: Environment variable
+          many: true
+        port:
+          type: component
+          doc: Network port declaration
+          many: true
+          attrs:
+            port:
+              type: int
+              doc: Port number
+              required: true
+            name:
+              type: string
+              doc: Port name
+              required: true
+            protocol:
+              type: enum
+              doc: Port protocol
+              choices: [tcp, udp]
+            type:
+              type: string
+              doc: High-level port type (e.g., http)
+        mount:
+          type: component
+          doc: Mounted directory
+          many: true
+          attrs:
+            source:
+              type: string
+              doc: Mount source path
+            destination:
+              type: string
+              doc: Mount destination path
+        oom_score:
+          type: int
+          doc: OOM score adjustment
+        config_file:
+          type: component
+          doc: File to write into container
+          many: true
+          attrs:
+            path:
+              type: string
+              doc: File path in container
+            data:
+              type: string
+              doc: File contents
+            mode:
+              type: string
+              doc: File mode
+
+kinds:
+  sandbox:
+    # Runtime fields
     status:
       type: enum
       doc: The status of the pod
       choices: [pending, not_ready, running, stopped, dead]
+
+    last_activity:
+      type: time
+      doc: Last lease activity (throttled updates, ~30s granularity for scale-down)
+
+    # Network is runtime field (address allocated by controller)
+    network:
+      type: component
+      doc: Network accessability for the container
+      many: true
+      attrs:
+        address:
+          doc: A network address to reach the container at
+          type: string
+        subnet:
+          doc: The subnet that the address is associated with
+          type: string
+
+    # Legacy fields - kept for backward compatibility with existing sandboxes
+    # New sandboxes should use spec field instead
+    labels:
+      type: string
+      doc: Label for the sandbox
+      many: true
 
     hostNetwork:
       type: bool
@@ -31,18 +188,6 @@ kinds:
       type: ref
       doc: A reference to the application version entity for the sandbox
       indexed: true
-
-    network:
-      type: component
-      doc: Network accessability for the container
-      many: true
-      attrs:
-        address:
-          doc: A network address to reach the container at
-          type: string
-        subnet:
-          doc: The subnet that the address is associated with
-          type: string
 
     route:
       type: component
@@ -166,6 +311,53 @@ kinds:
             mode:
               type: string
               doc: The file mode to set the configuration to
+
+    # Immutable config - reference to standalone component (for new sandboxes)
+    spec:
+      type: sandbox_spec
+      doc: Immutable sandbox configuration
+
+  sandbox_pool:
+    service:
+      type: string
+      doc: Service name (e.g., web, worker) - pool identifier
+      indexed: true
+
+    # Template for creating sandboxes - references same component as sandbox.spec
+    sandbox_spec:
+      type: sandbox_spec
+      doc: Complete sandbox specification template
+
+    # Concurrency/scaling configuration
+    mode:
+      type: string
+      doc: Concurrency mode (auto or fixed)
+
+    max_slots:
+      type: int
+      doc: For auto mode - max capacity per sandbox
+
+    lease_slots:
+      type: int
+      doc: For auto mode - capacity allocated per lease
+
+    scale_down_delay:
+      type: duration
+      doc: For auto mode - delay before retiring idle sandboxes
+
+    # Desired state (managed by Activator)
+    desired_instances:
+      type: int
+      doc: Target number of sandbox instances
+
+    # Observable state (maintained by SandboxPoolManager)
+    current_instances:
+      type: int
+      doc: Current number of sandbox instances
+
+    ready_instances:
+      type: int
+      doc: Number of RUNNING sandboxes
 
   node:
     constraints:
