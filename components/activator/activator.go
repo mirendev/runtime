@@ -76,7 +76,8 @@ type verKey struct {
 type localActivator struct {
 	mu               sync.Mutex
 	versions         map[verKey]*verSandboxes
-	pendingCreations map[verKey]int // Track pending sandbox creations per service
+	pools            map[verKey]*compute_v1alpha.SandboxPool // Track SandboxPool entities
+	pendingCreations map[verKey]int                          // Track pending sandbox creations per service
 
 	log *slog.Logger
 	eac *entityserver_v1alpha.EntityAccessClient
@@ -89,6 +90,7 @@ func NewLocalActivator(ctx context.Context, log *slog.Logger, eac *entityserver_
 		log:              log.With("module", "activator"),
 		eac:              eac,
 		versions:         make(map[verKey]*verSandboxes),
+		pools:            make(map[verKey]*compute_v1alpha.SandboxPool),
 		pendingCreations: make(map[verKey]int),
 	}
 
@@ -98,6 +100,20 @@ func NewLocalActivator(ctx context.Context, log *slog.Logger, eac *entityserver_
 		la.log.Error("failed to recover sandboxes", "error", err)
 	} else {
 		la.log.Info("activator recovery complete", "tracked_versions", len(la.versions))
+	}
+
+	// Recover existing pools
+	la.log.Info("recovering sandbox pools")
+	if err := la.recoverPools(ctx); err != nil {
+		la.log.Error("failed to recover pools", "error", err)
+	} else {
+		la.log.Info("pool recovery complete", "tracked_pools", len(la.pools))
+	}
+
+	// Migrate existing sandboxes to pools (one-time operation)
+	if err := la.migrateToSandboxPools(ctx); err != nil {
+		la.log.Error("failed to migrate sandboxes to pools", "error", err)
+		// Continue anyway - partial migration is acceptable
 	}
 
 	go la.InBackground(ctx)
@@ -895,4 +911,218 @@ func (a *localActivator) retireUnusedSandboxes() {
 			}
 		}
 	}
+}
+
+func (a *localActivator) recoverPools(ctx context.Context) error {
+	resp, err := a.eac.List(ctx, entity.Ref(entity.EntityKind, compute_v1alpha.KindSandboxPool))
+	if err != nil {
+		return fmt.Errorf("failed to list sandbox pools: %w", err)
+	}
+
+	a.log.Info("recovering sandbox pools on startup", "total_pools", len(resp.Values()))
+
+	recoveredCount := 0
+	for _, ent := range resp.Values() {
+		var pool compute_v1alpha.SandboxPool
+		pool.Decode(ent.Entity())
+
+		// Skip pools without a version reference
+		if pool.SandboxSpec.Version.String() == "" {
+			a.log.Debug("skipping pool without version", "pool", pool.ID)
+			continue
+		}
+
+		// Create key from version and service
+		key := verKey{pool.SandboxSpec.Version.String(), pool.Service}
+
+		a.mu.Lock()
+		a.pools[key] = &pool
+		a.mu.Unlock()
+
+		recoveredCount++
+		a.log.Info("recovered pool",
+			"pool_id", pool.ID,
+			"service", pool.Service,
+			"version", pool.SandboxSpec.Version,
+			"desired", pool.DesiredInstances,
+			"current", pool.CurrentInstances)
+	}
+
+	a.log.Info("pool recovery summary", "recovered", recoveredCount, "total", len(resp.Values()))
+	return nil
+}
+
+func (a *localActivator) migrateToSandboxPools(ctx context.Context) error {
+	a.log.Info("checking for sandboxes to migrate to pools")
+
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	migratedCount := 0
+	for key, vs := range a.versions {
+		// Check if pool already exists
+		if _, exists := a.pools[key]; exists {
+			a.log.Debug("pool already exists for service", "service", key.service)
+			continue
+		}
+
+		if len(vs.sandboxes) == 0 {
+			a.log.Debug("no sandboxes to migrate for service", "service", key.service)
+			continue
+		}
+
+		// Get service concurrency config
+		svcConcurrency := a.getServiceConcurrency(vs.ver, key.service)
+
+		// Create pool entity without holding the lock for the RPC call
+		a.mu.Unlock()
+		pool, err := a.createPoolForService(ctx, vs.ver, key.service, svcConcurrency)
+		a.mu.Lock()
+
+		if err != nil {
+			a.log.Error("failed to create pool during migration",
+				"app", vs.ver.App,
+				"service", key.service,
+				"error", err)
+			continue
+		}
+
+		a.pools[key] = pool
+		migratedCount++
+
+		a.log.Info("migrated sandboxes to pool",
+			"app", vs.ver.App,
+			"service", key.service,
+			"sandbox_count", len(vs.sandboxes),
+			"pool_id", pool.ID)
+	}
+
+	a.log.Info("migration complete", "pools_created", migratedCount)
+	return nil
+}
+
+func (a *localActivator) createPoolForService(ctx context.Context, ver *core_v1alpha.AppVersion, service string, svcConcurrency *core_v1alpha.ServiceConcurrency) (*compute_v1alpha.SandboxPool, error) {
+	// Build the sandbox spec from the version config
+	spec := a.buildSandboxSpec(ver, service)
+
+	// Determine scaling parameters based on mode
+	var desiredInstances int64
+	var maxSlots int64
+	var leaseSlots int64
+	var scaleDownDelay time.Duration
+
+	if svcConcurrency.Mode == "fixed" {
+		desiredInstances = svcConcurrency.NumInstances
+		if desiredInstances <= 0 {
+			desiredInstances = 1
+		}
+		maxSlots = 1
+		leaseSlots = 1
+	} else {
+		// Auto mode starts with 1 instance
+		desiredInstances = 1
+		
+		if svcConcurrency.RequestsPerInstance <= 0 {
+			maxSlots = 10 // default
+		} else {
+			maxSlots = svcConcurrency.RequestsPerInstance
+		}
+
+		leaseSlots = int64(float32(maxSlots) * 0.20)
+		if leaseSlots < 1 {
+			leaseSlots = 1
+		}
+
+		// Scale down delay (default 15 minutes)
+		scaleDownDelay = 15 * time.Minute
+	}
+
+	pool := compute_v1alpha.SandboxPool{
+		Service:          service,
+		SandboxSpec:      *spec,
+		Mode:             svcConcurrency.Mode,
+		MaxSlots:         maxSlots,
+		LeaseSlots:       leaseSlots,
+		ScaleDownDelay:   scaleDownDelay,
+		DesiredInstances: desiredInstances,
+		CurrentInstances: 0,
+		ReadyInstances:   0,
+	}
+
+	// Create the pool entity
+	var rpcE entityserver_v1alpha.Entity
+	rpcE.SetAttrs(entity.Attrs(
+		(&core_v1alpha.Metadata{
+			Name:   idgen.GenNS("pool"),
+			Labels: types.LabelSet("app", ver.App.String(), "service", service),
+		}).Encode,
+		pool.Encode,
+	))
+
+	pr, err := a.eac.Put(ctx, &rpcE)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create pool: %w", err)
+	}
+
+	pool.ID = entity.Id(pr.Id())
+	a.log.Info("created sandbox pool",
+		"pool_id", pool.ID,
+		"app", ver.App,
+		"service", service,
+		"mode", pool.Mode,
+		"desired_instances", pool.DesiredInstances)
+
+	return &pool, nil
+}
+
+func (a *localActivator) buildSandboxSpec(ver *core_v1alpha.AppVersion, service string) *compute_v1alpha.SandboxSpec {
+	spec := &compute_v1alpha.SandboxSpec{
+		Version:   ver.ID,
+		LogEntity: ver.App.String(),
+		LogAttribute: types.LabelSet("stage", "app-run", "service", service),
+	}
+
+	// Determine port from config or default to 3000
+	port := int64(3000)
+	if ver.Config.Port > 0 {
+		port = ver.Config.Port
+	}
+
+	appCont := compute_v1alpha.SandboxSpecContainer{
+		Name:  "app",
+		Image: ver.ImageUrl,
+		Env: []string{
+			"MIREN_APP=" + ver.App.String(),
+			"MIREN_VERSION=" + ver.Version,
+		},
+		Directory: "/app",
+		Port: []compute_v1alpha.SandboxSpecContainerPort{
+			{
+				Port: port,
+				Name: "http",
+				Type: "http",
+			},
+		},
+	}
+
+	// Add environment variables from config
+	for _, x := range ver.Config.Variable {
+		appCont.Env = append(appCont.Env, x.Key+"="+x.Value)
+	}
+
+	// Add service-specific command
+	for _, s := range ver.Config.Commands {
+		if s.Service == service && s.Command != "" {
+			if ver.Config.Entrypoint != "" {
+				appCont.Command = ver.Config.Entrypoint + " " + s.Command
+			} else {
+				appCont.Command = s.Command
+			}
+			break
+		}
+	}
+
+	spec.Container = []compute_v1alpha.SandboxSpecContainer{appCont}
+
+	return spec
 }
