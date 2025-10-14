@@ -817,3 +817,482 @@ func TestRegisterEncodedSchemaStableWithDifferentFieldOrder(t *testing.T) {
 		}
 	}
 }
+
+func TestStandaloneComponent(t *testing.T) {
+	sf := &schemaFile{
+		Domain:  "test.example",
+		Version: "v1",
+		Components: map[string]schemaAttrs{
+			"config": {
+				"name": &schemaAttr{
+					Type: "string",
+					Doc:  "Configuration name",
+				},
+				"value": &schemaAttr{
+					Type: "int",
+					Doc:  "Configuration value",
+				},
+			},
+		},
+		Kinds: map[string]schemaAttrs{
+			"service": {
+				"config": &schemaAttr{
+					Type: "config",
+					Doc:  "Service configuration",
+				},
+			},
+		},
+	}
+
+	code, err := GenerateSchema(sf, "test")
+	if err != nil {
+		t.Fatalf("Failed to generate schema: %v", err)
+	}
+
+	// Verify Config component struct is generated
+	if !strings.Contains(code, "type Config struct") {
+		t.Error("Expected Config struct to be generated for component")
+		t.Logf("Generated code:\n%s", code)
+	}
+
+	// Verify Config has the expected fields
+	if !strings.Contains(code, "Name") || !strings.Contains(code, "string") {
+		t.Error("Expected Name string field in Config component")
+	}
+
+	if !strings.Contains(code, "Value") || !strings.Contains(code, "int64") {
+		t.Error("Expected Value int64 field in Config component")
+	}
+
+	// Verify Service struct references Config
+	if !strings.Contains(code, "type Service struct") {
+		t.Error("Expected Service struct to be generated")
+	}
+
+	if !strings.Contains(code, "Config Config") {
+		t.Error("Expected Service to have Config field of type Config")
+		t.Logf("Generated code:\n%s", code)
+	}
+
+	// Verify Config has Decode, Encode, Empty methods
+	if !strings.Contains(code, "func (o *Config) Decode(e entity.AttrGetter)") {
+		t.Error("Expected Config.Decode() method")
+	}
+
+	if !strings.Contains(code, "func (o *Config) Encode() (attrs []entity.Attr)") {
+		t.Error("Expected Config.Encode() method")
+	}
+
+	if !strings.Contains(code, "func (o *Config) Empty() bool") {
+		t.Error("Expected Config.Empty() method")
+	}
+
+	// Verify Config does NOT have entity-specific methods
+	if strings.Contains(code, "func (o *Config) Kind()") {
+		t.Error("Config component should not have Kind() method")
+	}
+
+	if strings.Contains(code, "func (o *Config) EntityId()") {
+		t.Error("Config component should not have EntityId() method")
+	}
+
+	if strings.Contains(code, "func (o *Config) ShortKind()") {
+		t.Error("Config component should not have ShortKind() method")
+	}
+
+	if strings.Contains(code, "func (o *Config) Is(") {
+		t.Error("Config component should not have Is() method")
+	}
+}
+
+func TestComponentReference(t *testing.T) {
+	// Test that referencing same component multiple times works
+	sf := &schemaFile{
+		Domain:  "test.example",
+		Version: "v1",
+		Components: map[string]schemaAttrs{
+			"address": {
+				"street": &schemaAttr{Type: "string"},
+				"city":   &schemaAttr{Type: "string"},
+			},
+		},
+		Kinds: map[string]schemaAttrs{
+			"user": {
+				"home_address": &schemaAttr{Type: "address"},
+				"work_address": &schemaAttr{Type: "address"},
+			},
+		},
+	}
+
+	code, err := GenerateSchema(sf, "test")
+	if err != nil {
+		t.Fatalf("Failed to generate schema: %v", err)
+	}
+
+	// Verify Address type defined once
+	addressCount := strings.Count(code, "type Address struct")
+	if addressCount != 1 {
+		t.Errorf("Expected Address struct to be defined exactly once, found %d times", addressCount)
+	}
+
+	// Verify User struct references Address twice
+	if !strings.Contains(code, "HomeAddress Address") {
+		t.Error("Expected User to have HomeAddress field of type Address")
+	}
+
+	if !strings.Contains(code, "WorkAddress Address") {
+		t.Error("Expected User to have WorkAddress field of type Address")
+	}
+
+	// Verify Address has component methods but not entity methods
+	if !strings.Contains(code, "func (o *Address) Decode(e entity.AttrGetter)") {
+		t.Error("Expected Address.Decode() method")
+	}
+
+	if strings.Contains(code, "func (o *Address) Kind()") {
+		t.Error("Address component should not have Kind() method")
+	}
+}
+
+func TestNestedComponentsInStandalone(t *testing.T) {
+	// Test that standalone components can contain inline components
+	sf := &schemaFile{
+		Domain:  "test.example",
+		Version: "v1",
+		Components: map[string]schemaAttrs{
+			"container_spec": {
+				"image": &schemaAttr{Type: "string"},
+				"port": &schemaAttr{
+					Type: "component",
+					Many: true,
+					Attrs: map[string]*schemaAttr{
+						"number":   {Type: "int"},
+						"protocol": {Type: "string"},
+					},
+				},
+			},
+		},
+	}
+
+	code, err := GenerateSchema(sf, "test")
+	if err != nil {
+		t.Fatalf("Failed to generate schema: %v", err)
+	}
+
+	// Verify ContainerSpec has nested Port type
+	if !strings.Contains(code, "type ContainerSpec struct") {
+		t.Error("Expected ContainerSpec struct to be generated")
+	}
+
+	// Check for Port field - should be ContainerSpecPort to avoid collisions
+	if !strings.Contains(code, "Port") || !strings.Contains(code, "[]ContainerSpecPort") {
+		t.Error("Expected ContainerSpec to have Port []ContainerSpecPort field")
+		t.Logf("Generated code:\n%s", code)
+	}
+
+	if !strings.Contains(code, "type ContainerSpecPort struct") {
+		t.Error("Expected ContainerSpecPort struct to be generated as nested type with unique name")
+	}
+
+	// Verify nested ContainerSpecPort has expected fields
+	if !strings.Contains(code, "Number") || !strings.Contains(code, "Protocol") {
+		t.Error("Expected ContainerSpecPort struct to have Number and Protocol fields")
+	}
+}
+
+func TestComponentManyReference(t *testing.T) {
+	// Test that component references work with many=true
+	sf := &schemaFile{
+		Domain:  "test.example",
+		Version: "v1",
+		Components: map[string]schemaAttrs{
+			"tag": {
+				"key":   &schemaAttr{Type: "string"},
+				"value": &schemaAttr{Type: "string"},
+			},
+		},
+		Kinds: map[string]schemaAttrs{
+			"resource": {
+				"tags": &schemaAttr{
+					Type: "tag",
+					Many: true,
+					Doc:  "Resource tags",
+				},
+			},
+		},
+	}
+
+	code, err := GenerateSchema(sf, "test")
+	if err != nil {
+		t.Fatalf("Failed to generate schema: %v", err)
+	}
+
+	// Verify Tag component struct
+	if !strings.Contains(code, "type Tag struct") {
+		t.Error("Expected Tag struct to be generated")
+	}
+
+	// Verify Resource references Tag as array
+	if !strings.Contains(code, "Tags []Tag") {
+		t.Error("Expected Resource to have Tags []Tag field")
+		t.Logf("Generated code:\n%s", code)
+	}
+
+	// Check decoder handles many component references
+	decodeStart := strings.Index(code, "func (o *Resource) Decode(e entity.AttrGetter)")
+	if decodeStart == -1 {
+		t.Fatal("Could not find Resource.Decode() method")
+	}
+	decodeEnd := strings.Index(code[decodeStart:], "\n}")
+	decodeMethod := code[decodeStart : decodeStart+decodeEnd]
+
+	// Should use GetAll for many values
+	if !strings.Contains(decodeMethod, "GetAll(ResourceTagsId)") {
+		t.Error("Decoder should use GetAll for many component references")
+	}
+
+	// Should decode each component
+	if !strings.Contains(decodeMethod, "var v Tag") {
+		t.Error("Decoder should declare Tag variable")
+	}
+
+	if !strings.Contains(decodeMethod, "v.Decode(") {
+		t.Error("Decoder should call Decode on component")
+	}
+
+	// Check encoder handles many component references
+	encodeStart := strings.Index(code, "func (o *Resource) Encode() (attrs []entity.Attr)")
+	if encodeStart == -1 {
+		t.Fatal("Could not find Resource.Encode() method")
+	}
+	encodeEnd := strings.Index(code[encodeStart:], "\n}")
+	encodeMethod := code[encodeStart : encodeStart+encodeEnd]
+
+	// Should loop through array
+	if !strings.Contains(encodeMethod, "for _, v := range o.Tags") {
+		t.Error("Encoder should loop through Tags array")
+	}
+
+	// Should encode each component
+	if !strings.Contains(encodeMethod, "v.Encode()") {
+		t.Error("Encoder should call Encode on each component")
+	}
+}
+
+func TestComponentWithoutKinds(t *testing.T) {
+	// Test that components can be defined without any kinds
+	sf := &schemaFile{
+		Domain:  "test.example",
+		Version: "v1",
+		Components: map[string]schemaAttrs{
+			"metadata": {
+				"created_at": &schemaAttr{Type: "string"},
+				"updated_at": &schemaAttr{Type: "string"},
+			},
+		},
+		Kinds: map[string]schemaAttrs{},
+	}
+
+	code, err := GenerateSchema(sf, "test")
+	if err != nil {
+		t.Fatalf("Failed to generate schema: %v", err)
+	}
+
+	// Verify Metadata component is still generated
+	if !strings.Contains(code, "type Metadata struct") {
+		t.Error("Expected Metadata struct to be generated even without kinds")
+	}
+
+	// Verify it has component methods
+	if !strings.Contains(code, "func (o *Metadata) Decode(e entity.AttrGetter)") {
+		t.Error("Expected Metadata.Decode() method")
+	}
+
+	if !strings.Contains(code, "func (o *Metadata) Encode() (attrs []entity.Attr)") {
+		t.Error("Expected Metadata.Encode() method")
+	}
+}
+
+func TestComponentAttributeNamespacing(t *testing.T) {
+	// Test that component attributes are properly namespaced
+	sf := &schemaFile{
+		Domain:  "test.example",
+		Version: "v1",
+		Components: map[string]schemaAttrs{
+			"spec": {
+				"version": &schemaAttr{Type: "string"},
+			},
+		},
+	}
+
+	code, err := GenerateSchema(sf, "test")
+	if err != nil {
+		t.Fatalf("Failed to generate schema: %v", err)
+	}
+
+	// Check that attribute ID uses component namespace
+	// Looking for something like: SpecVersionId = entity.Id("test.example/component.spec.version")
+	if !strings.Contains(code, `"test.example/component.spec.version"`) {
+		t.Error("Component attributes should be namespaced with 'component.' prefix")
+		t.Logf("Generated code:\n%s", code)
+	}
+}
+
+func TestComponentAndKindWithSameNestedStructure(t *testing.T) {
+	// Test that components and kinds can have the same nested inline component structure
+	// This is a critical test for allowing SandboxSpec component to coexist with Sandbox kind
+	// Key behavior: standalone components get prefixed names (ConfigSpecNested),
+	// kinds get simple names (Nested) for backward compatibility
+	sf := &schemaFile{
+		Domain:  "test.example",
+		Version: "v1",
+		Components: map[string]schemaAttrs{
+			"config_spec": {
+				"nested": &schemaAttr{
+					Type: "component",
+					Attrs: map[string]*schemaAttr{
+						"field1": {Type: "string"},
+						"field2": {Type: "int"},
+					},
+				},
+			},
+		},
+		Kinds: map[string]schemaAttrs{
+			"config": {
+				"nested": &schemaAttr{
+					Type: "component",
+					Attrs: map[string]*schemaAttr{
+						"field1": {Type: "string"},
+						"field2": {Type: "int"},
+					},
+				},
+				"spec": &schemaAttr{
+					Type: "config_spec",
+					Doc:  "Reference to component",
+				},
+			},
+		},
+	}
+
+	code, err := GenerateSchema(sf, "test")
+	if err != nil {
+		t.Fatalf("Failed to generate schema: %v", err)
+	}
+
+	// Both should have their nested structures generated independently
+	// Component version should have: "test.example/component.config_spec.nested.field1"
+	if !strings.Contains(code, `"test.example/component.config_spec.nested.field1"`) {
+		t.Error("Component nested attributes should be namespaced properly")
+		t.Logf("Generated code:\n%s", code)
+	}
+
+	// Kind version should use simple path for backward compatibility
+	if !strings.Contains(code, `"test.example/nested.field1"`) {
+		t.Error("Kind nested attributes should use simple paths for backward compatibility")
+		t.Logf("Generated code:\n%s", code)
+	}
+
+	// Component's nested type should be prefixed (ConfigSpecNested)
+	if !strings.Contains(code, "type ConfigSpecNested struct") {
+		t.Error("Expected ConfigSpecNested struct for component's nested type")
+		t.Logf("Generated code:\n%s", code)
+	}
+
+	// Kind's nested type should be simple (Nested) for backward compatibility
+	if !strings.Contains(code, "type Nested struct") {
+		t.Error("Expected Nested struct for kind's nested type (backward compatibility)")
+		t.Logf("Generated code:\n%s", code)
+	}
+
+	// Both parent structs should exist
+	if !strings.Contains(code, "type ConfigSpec struct") {
+		t.Error("Expected ConfigSpec component struct")
+	}
+
+	if !strings.Contains(code, "type Config struct") {
+		t.Error("Expected Config kind struct")
+	}
+
+	// Verify the field types are correct
+	if !strings.Contains(code, "Nested ConfigSpecNested") {
+		t.Error("Expected ConfigSpec to have field of type ConfigSpecNested")
+	}
+
+	if !strings.Contains(code, "Nested Nested") {
+		t.Error("Expected Config to have field of type Nested (simple name)")
+	}
+}
+
+func TestEnumInNestedComponentsNamespacing(t *testing.T) {
+	// Test that enum constants in nested components are properly namespaced
+	// to avoid collisions when component and kind have same nested structure with enums
+	// Key behavior: standalone components get prefixed enums (PortSpecTCP),
+	// kinds get simple enums (TCP) for backward compatibility
+	sf := &schemaFile{
+		Domain:  "test.example",
+		Version: "v1",
+		Components: map[string]schemaAttrs{
+			"port_spec": {
+				"protocol": &schemaAttr{
+					Type:    "enum",
+					Choices: []string{"tcp", "udp"},
+				},
+			},
+		},
+		Kinds: map[string]schemaAttrs{
+			"port": {
+				"protocol": &schemaAttr{
+					Type:    "enum",
+					Choices: []string{"tcp", "udp"},
+				},
+				"spec": &schemaAttr{
+					Type: "port_spec",
+					Doc:  "Reference to component",
+				},
+			},
+		},
+	}
+
+	code, err := GenerateSchema(sf, "test")
+	if err != nil {
+		t.Fatalf("Failed to generate schema: %v", err)
+	}
+
+	// Component enum constants should be prefixed with PortSpec
+	if !strings.Contains(code, "PortSpecTCP") {
+		t.Error("Component enum constants should be prefixed with parent context (PortSpecTCP)")
+		t.Logf("Generated code:\n%s", code)
+	}
+	if !strings.Contains(code, "PortSpecUDP") {
+		t.Error("Component enum constants should be prefixed with parent context (PortSpecUDP)")
+	}
+
+	// Kind enum constants should be simple (backward compatibility)
+	if !strings.Contains(code, "\tTCP ") {
+		t.Error("Kind enum constants should be simple (TCP) for backward compatibility")
+		t.Logf("Generated code:\n%s", code)
+	}
+	if !strings.Contains(code, "\tUDP ") {
+		t.Error("Kind enum constants should be simple (UDP) for backward compatibility")
+	}
+
+	// Check that enum attribute IDs
+	// Components should have full path
+	if !strings.Contains(code, `"test.example/component.port_spec.protocol.tcp"`) {
+		t.Error("Component enum attribute IDs should have full path")
+	}
+	// Kinds should have simple path (backward compatibility)
+	if !strings.Contains(code, `"test.example/protocol.tcp"`) {
+		t.Error("Kind enum attribute IDs should have simple path for backward compatibility")
+	}
+
+	// Check enum constant values
+	// Components should have full path in constant value
+	if !strings.Contains(code, `PortSpecTCP PortSpecProtocol = "component.port_spec.protocol.tcp"`) {
+		t.Error("Component enum constant values should use full attribute path")
+	}
+	// Kinds should have simple path in constant value (backward compatibility)
+	if !strings.Contains(code, `TCP PortProtocol = "protocol.tcp"`) {
+		t.Error("Kind enum constant values should use simple path for backward compatibility")
+	}
+}

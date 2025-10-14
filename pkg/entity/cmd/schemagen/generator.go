@@ -19,10 +19,11 @@ const (
 )
 
 type schemaFile struct {
-	Domain  string                 `yaml:"domain"`
-	Version string                 `yaml:"version"`
-	Major   string                 `yaml:"kind-major"`
-	Kinds   map[string]schemaAttrs `yaml:"kinds"`
+	Domain     string                 `yaml:"domain"`
+	Version    string                 `yaml:"version"`
+	Major      string                 `yaml:"kind-major"`
+	Components map[string]schemaAttrs `yaml:"components"`
+	Kinds      map[string]schemaAttrs `yaml:"kinds"`
 }
 
 type schemaAttrs map[string]*schemaAttr
@@ -42,10 +43,11 @@ type schemaAttr struct {
 }
 
 type gen struct {
-	kind   string
-	name   string
-	prefix string
-	local  string
+	kind        string
+	name        string
+	prefix      string
+	local       string
+	isComponent bool // true if generating a standalone component (not an entity kind)
 
 	usedAttrs map[string]struct{}
 
@@ -86,6 +88,43 @@ func GenerateSchema(sf *schemaFile, pkg string) (string, error) {
 
 	usedAttrs := map[string]struct{}{}
 
+	// Generate standalone components first (they may be referenced by kinds)
+	for compName, attrs := range mapx.StableOrder(sf.Components) {
+		var g gen
+		g.usedAttrs = usedAttrs
+		g.isComponent = true
+		g.name = compName
+		g.prefix = sf.Domain + ".component." + compName
+		g.local = toCamal(compName)
+		g.sf = sf
+		g.f = jf
+		g.ec = &entity.EncodedSchema{
+			Domain:  sf.Domain,
+			Name:    sf.Domain + "/component." + compName,
+			Version: sf.Version,
+		}
+
+		for name, attr := range mapx.StableOrder(attrs) {
+			if attr.Attr == "" {
+				attr.Attr = "component." + compName + "." + name
+			}
+
+			// Use full attribute ID for duplicate checking (includes domain)
+			fullAttrId := sf.Domain + "/" + attr.Attr
+			if _, ok := usedAttrs[fullAttrId]; ok {
+				return "", fmt.Errorf("duplicate attribute name: %s", fullAttrId)
+			}
+
+			g.usedAttrs[fullAttrId] = struct{}{}
+
+			g.attr(name, attr)
+		}
+
+		g.generate()
+		structs = append(structs, g.structName)
+		g.f.Line()
+	}
+
 	for kind, attrs := range mapx.StableOrder(sf.Kinds) {
 		kinds = append(kinds, kind)
 
@@ -122,11 +161,13 @@ func GenerateSchema(sf *schemaFile, pkg string) (string, error) {
 				attr.Attr = kind + "." + name
 			}
 
-			if _, ok := usedAttrs[attr.Attr]; ok {
-				return "", fmt.Errorf("duplicate attribute name: %s", attr.Attr)
+			// Use full attribute ID for duplicate checking (includes domain)
+			fullAttrId := sf.Domain + "/" + attr.Attr
+			if _, ok := usedAttrs[fullAttrId]; ok {
+				return "", fmt.Errorf("duplicate attribute name: %s", fullAttrId)
 			}
 
-			g.usedAttrs[attr.Attr] = struct{}{}
+			g.usedAttrs[fullAttrId] = struct{}{}
 
 			g.attr(name, attr)
 		}
@@ -362,6 +403,65 @@ func (g *gen) attr(name string, attr *schemaAttr) {
 		})
 	}
 
+	// Check if this is a reference to a standalone component
+	if attr.Type != "" && attr.Type != "component" && g.sf.Components[attr.Type] != nil {
+		componentName := toCamal(attr.Type)
+
+		// Add field with component type
+		if attr.Many {
+			g.fields = append(g.fields, j.Id(fname).Index().Id(componentName).Tag(tag))
+		} else {
+			g.fields = append(g.fields, j.Id(fname).Id(componentName).Tag(tag))
+		}
+
+		// Decoder - decode component from entity attribute
+		if attr.Many {
+			d := j.For(j.List(j.Op("_"), j.Id("a")).Op(":=").Range().Id("e").Dot("GetAll").Call(g.Ident(fname))).Block(
+				j.If(
+					j.Id("a").Dot("Value").Dot("Kind").Call().Op("==").Qual(top, "KindComponent"),
+				).Block(
+					j.Var().Id("v").Id(componentName),
+					j.Id("v").Dot("Decode").Call(j.Id("a").Dot("Value").Dot("Component").Call()),
+					j.Id("o").Dot(fname).Op("=").Append(j.Id("o").Dot(fname), j.Id("v")),
+				),
+			)
+			g.decoders = append(g.decoders, d)
+		} else {
+			d := j.If(
+				j.List(j.Id("a"), j.Id("ok")).Op(":=").Id("e").Dot("Get").Call(g.Ident(fname)),
+				j.Id("ok").Op("&&").Id("a").Dot("Value").Dot("Kind").Call().Op("==").Qual(top, "KindComponent"),
+			).Block(
+				j.Id("o").Dot(fname).Dot("Decode").Call(j.Id("a").Dot("Value").Dot("Component").Call()),
+			)
+			g.decoders = append(g.decoders, d)
+		}
+
+		// Encoder - encode component to entity attribute
+		if attr.Many {
+			g.encoders = append(g.encoders,
+				j.For(j.List(j.Op("_"), j.Id("v")).Op(":=").Range().Id("o").Dot(fname)).Block(
+					j.Id("attrs").Op("=").Append(j.Id("attrs"), j.Qual(top, "Component").
+						Call(g.Ident(fname), j.Id("v").Dot("Encode").Call())),
+				),
+			)
+			g.empties = append(g.empties,
+				j.If(j.Len(j.Id("o").Dot(fname)).Op("!=").Lit(0)).Block(j.Return(j.False())))
+		} else {
+			g.encoders = append(g.encoders,
+				j.If(j.Op("!").Id("o").Dot(fname).Dot("Empty").Call()).Block(
+					j.Id("attrs").Op("=").Append(j.Id("attrs"), j.Qual(top, "Component").
+						Call(g.Ident(fname), j.Id("o").Dot(fname).Dot("Encode").Call()))),
+			)
+			g.empties = append(g.empties,
+				j.If(j.Op("!").Id("o").Dot(fname).Dot("Empty").Call()).Block(j.Return(j.False())))
+		}
+
+		simpleDecl("Component")
+		simpleField("component")
+
+		return // Early return - handled as component reference
+	}
+
 	switch attr.Type {
 	case "string":
 		if attr.Many {
@@ -475,13 +575,19 @@ func (g *gen) attr(name string, attr *schemaAttr) {
 		fc := map[string]entity.Id{}
 
 		for _, v := range attr.Choices {
-			id := name + "." + v
-
-			if _, ok := g.usedAttrs[id]; ok {
-				panic(fmt.Sprintf("Duplicate attribute name: %s", id))
+			// Enum ID path - use full path for components, simple for kinds (backward compatibility)
+			id := name + "." + v // For kinds: simple "status.unknown"
+			if g.isComponent {
+				id = attr.Attr + "." + v // For components: full "component.port_spec.protocol.tcp"
 			}
 
-			g.usedAttrs[id] = struct{}{}
+			// Use full attribute ID for duplicate checking (includes domain)
+			fullAttrId := g.sf.Domain + "/" + id
+			if _, ok := g.usedAttrs[fullAttrId]; ok {
+				panic(fmt.Sprintf("Duplicate attribute name: %s", fullAttrId))
+			}
+
+			g.usedAttrs[fullAttrId] = struct{}{}
 
 			g.idents = append(g.idents, j.Add(g.Ident(fname+toCamal(v))).Op("=").Qual(top, "Id").
 				Call(j.Lit(g.sf.Domain+"/"+id)))
@@ -491,21 +597,36 @@ func (g *gen) attr(name string, attr *schemaAttr) {
 
 		g.decodeouter = append(g.decodeouter, j.Const().DefsFunc(func(b *j.Group) {
 			for _, v := range attr.Choices {
-				b.Add(j.Id(strings.ToUpper(v)).Add(g.NSd(fname)).Op("=").Add(j.Lit(name + "." + v)))
+				// Only prefix enum constants for standalone components (backward compatibility for kinds)
+				constName := strings.ToUpper(v)
+				enumValue := name + "." + v // For kinds: simple "status.pending" format
+				if g.isComponent {
+					constName = g.local + constName
+					enumValue = attr.Attr + "." + v // For components: full "component.port_spec.protocol.tcp" format
+				}
+				b.Add(j.Id(constName).Add(g.NSd(fname)).Op("=").Add(j.Lit(enumValue)))
 			}
 		}))
 
 		g.decodeouter = append(g.decodeouter, j.Var().Id(g.name+name+"FromId").Op("=").Map(j.Qual(top, "Id")).Add(g.NSd(fname)).
 			ValuesFunc(func(b *j.Group) {
 				for _, v := range attr.Choices {
-					b.Add(g.Ident(fname + toCamal(v))).Op(":").Id(strings.ToUpper(v))
+					constName := strings.ToUpper(v)
+					if g.isComponent {
+						constName = g.local + constName
+					}
+					b.Add(g.Ident(fname + toCamal(v))).Op(":").Id(constName)
 				}
 			}))
 
 		g.decodeouter = append(g.decodeouter, j.Var().Id(g.name+name+"ToId").Op("=").Map(g.NSd(fname)).Qual(top, "Id").
 			ValuesFunc(func(b *j.Group) {
 				for _, v := range attr.Choices {
-					b.Add(j.Id(strings.ToUpper(v)).Op(":").Add(g.Ident(fname + toCamal(v))))
+					constName := strings.ToUpper(v)
+					if g.isComponent {
+						constName = g.local + constName
+					}
+					b.Add(j.Id(constName).Op(":").Add(g.Ident(fname + toCamal(v))))
 				}
 			}))
 
@@ -569,19 +690,30 @@ func (g *gen) attr(name string, attr *schemaAttr) {
 			EnumValues: fc,
 		})
 	case "component":
-		if attr.Many {
-			g.fields = append(g.fields, j.Id(fname).Index().Id(fname).Tag(tag))
-		} else {
-			g.fields = append(g.fields, j.Id(fname).Id(fname).Tag(tag))
-		}
-
 		var sg gen
 		sg.usedAttrs = g.usedAttrs
-		sg.name = fname
+		sg.isComponent = g.isComponent // Inherit component context from parent
 		sg.sf = g.sf
 		sg.f = g.f
-		sg.local = fname
 		sg.prefix = g.prefix + "." + name
+
+		// Only apply parent prefixing for standalone components (isComponent=true)
+		// This avoids breaking changes for existing kinds
+		if g.isComponent {
+			sg.name = g.local + fname  // Prefixed: e.g., "ConfigSpecNested"
+			sg.local = g.local + fname // Prefixed identifiers
+		} else {
+			sg.name = fname  // Simple: e.g., "Nested" (backward compatibility)
+			sg.local = fname // Simple identifiers
+		}
+
+		// Use the nested struct's name for the field type
+		typeName := sg.name
+		if attr.Many {
+			g.fields = append(g.fields, j.Id(fname).Index().Id(typeName).Tag(tag))
+		} else {
+			g.fields = append(g.fields, j.Id(fname).Id(typeName).Tag(tag))
+		}
 		sg.ec = &entity.EncodedSchema{
 			Domain:  g.sf.Domain,
 			Name:    g.prefix + "." + name,
@@ -590,14 +722,22 @@ func (g *gen) attr(name string, attr *schemaAttr) {
 
 		for k, v := range mapx.StableOrder(attr.Attrs) {
 			if v.Attr == "" {
-				v.Attr = name + "." + k
+				// For kinds: use simple path (backward compatibility)
+				// For components: use full parent path for namespacing
+				if g.isComponent {
+					v.Attr = attr.Attr + "." + k
+				} else {
+					v.Attr = name + "." + k
+				}
 			}
 
-			if _, ok := g.usedAttrs[v.Attr]; ok {
-				panic(fmt.Sprintf("Duplicate attribute name: %s", v.Attr))
+			// Use full attribute ID for duplicate checking (includes domain)
+			fullAttrId := g.sf.Domain + "/" + v.Attr
+			if _, ok := g.usedAttrs[fullAttrId]; ok {
+				panic(fmt.Sprintf("Duplicate attribute name: %s", fullAttrId))
 			}
 
-			g.usedAttrs[v.Attr] = struct{}{}
+			g.usedAttrs[fullAttrId] = struct{}{}
 
 			sg.attr(k, v)
 		}
@@ -610,7 +750,7 @@ func (g *gen) attr(name string, attr *schemaAttr) {
 					j.If(
 						j.Id("a").Dot("Value").Dot("Kind").Call().Op("==").Qual(top, "KindComponent"),
 					).Block(
-						j.Var().Id("v").Id(fname),
+						j.Var().Id("v").Id(typeName),
 						j.Id("v").Dot("Decode").Call(j.Id("a").Dot("Value").Dot("Component").Call()),
 						j.Id("o").Dot(fname).Op("=").Append(j.Id("o").Dot(fname), j.Id("v")),
 					),
@@ -648,7 +788,7 @@ func (g *gen) attr(name string, attr *schemaAttr) {
 		simpleDecl("Component")
 
 		g.decl = append(g.decl,
-			j.Parens(j.Op("&").Id(fname).Values()).Dot("InitSchema").Call(j.Id("sb").Dot("Builder").Call(j.Lit(name))))
+			j.Parens(j.Op("&").Id(typeName).Values()).Dot("InitSchema").Call(j.Id("sb").Dot("Builder").Call(j.Lit(name))))
 
 		g.ec.Fields = append(g.ec.Fields, &entity.SchemaField{
 			Name:      name,
@@ -703,7 +843,8 @@ func (g *gen) generate() {
 
 	f.Line()
 
-	if g.kind != "" {
+	// Only generate entity-specific methods for kinds, not standalone components
+	if g.kind != "" && !g.isComponent {
 		f.Func().
 			Params(j.Id("o").Op("*").Id(structName)).Id("Is").
 			Params(j.Id("e").Qual(top, "AttrGetter")).Bool().
@@ -749,7 +890,8 @@ func (g *gen) generate() {
 			for _, d := range g.encoders {
 				b.Add(d)
 			}
-			if g.kind != "" {
+			// Only append Kind reference for entity kinds, not standalone components
+			if g.kind != "" && !g.isComponent {
 				b.Id("attrs").Op("=").Append(
 					j.Id("attrs"),
 					j.Qual(top, "Ref").Call(j.Qual(top, "EntityKind"), j.Id("Kind"+toCamal(g.kind))),
