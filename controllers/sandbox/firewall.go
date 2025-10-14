@@ -8,7 +8,6 @@ import (
 	"strconv"
 
 	"github.com/containernetworking/plugins/pkg/utils/sysctl"
-	"github.com/davecgh/go-spew/spew"
 	compute "miren.dev/runtime/api/compute/compute_v1alpha"
 	"miren.dev/runtime/network"
 )
@@ -48,8 +47,7 @@ func (c *SandboxController) configurePort(p compute.Port, ep *network.EndpointCo
 			"-j", "DNAT", "--to-destination", fmt.Sprintf("%s:%d", addr.Addr(), p.Port),
 		)
 
-		if output, err := exe.CombinedOutput(); err != nil {
-			spew.Dump(string(output))
+		if _, err := exe.CombinedOutput(); err != nil {
 			return fmt.Errorf("failed to configure port %d: %w", p.NodePort, err)
 		}
 
@@ -63,8 +61,7 @@ func (c *SandboxController) configurePort(p compute.Port, ep *network.EndpointCo
 			"-j", "DNAT", "--to-destination", fmt.Sprintf("%s:%d", addr.Addr(), p.Port),
 		)
 
-		if output, err := exe.CombinedOutput(); err != nil {
-			spew.Dump(string(output))
+		if _, err := exe.CombinedOutput(); err != nil {
 			return fmt.Errorf("failed to configure port %d: %w", p.NodePort, err)
 		}
 
@@ -78,8 +75,7 @@ func (c *SandboxController) configurePort(p compute.Port, ep *network.EndpointCo
 			"-j", "MASQUERADE",
 		)
 
-		if output, err := exe.CombinedOutput(); err != nil {
-			spew.Dump(string(output))
+		if _, err := exe.CombinedOutput(); err != nil {
 			return fmt.Errorf("failed to configure port %d: %w", p.NodePort, err)
 		}
 	}

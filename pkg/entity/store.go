@@ -11,7 +11,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/davecgh/go-spew/spew"
 	"github.com/mr-tron/base58"
 	"go.etcd.io/etcd/api/v3/mvccpb"
 	clientv3 "go.etcd.io/etcd/client/v3"
@@ -554,8 +553,6 @@ func (s *EtcdStore) UpdateEntity(
 		}
 	}
 
-	before := slices.Clone(entity.Attrs)
-
 	err = entity.Update(attributes)
 	if err != nil {
 		return nil, fmt.Errorf("failed to update entity: %w", err)
@@ -563,9 +560,6 @@ func (s *EtcdStore) UpdateEntity(
 
 	err = s.validator.ValidateAttributes(ctx, entity.Attrs)
 	if err != nil {
-		spew.Dump(before)
-		spew.Dump(attributes)
-		spew.Dump(entity)
 		return nil, err
 	}
 

@@ -11,7 +11,6 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/davecgh/go-spew/spew"
 	"github.com/fxamacker/cbor/v2"
 	"miren.dev/runtime/pkg/entity/types"
 	"miren.dev/runtime/pkg/idgen"
@@ -298,9 +297,6 @@ func convertEntityToSchema(ctx context.Context, s EntityStore, entity *Entity) (
 				return nil, fmt.Errorf("invalid predicate: %v", attr.Value)
 			}
 		}
-	}
-	if schema.Type == "" {
-		spew.Dump(entity)
 	}
 
 	return &schema, nil

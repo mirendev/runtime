@@ -7,7 +7,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/davecgh/go-spew/spew"
 	"github.com/stretchr/testify/require"
 
 	compute "miren.dev/runtime/api/compute/compute_v1alpha"
@@ -200,7 +199,6 @@ func TestServiceController(t *testing.T) {
 		for _, epEntity := range endpoints.Values() {
 			var ep network_v1alpha.Endpoints
 			ep.Decode(epEntity.Entity())
-			spew.Dump(ep)
 			if ep.Service == svcID {
 				found = true
 				r.Len(ep.Endpoint, 1)
