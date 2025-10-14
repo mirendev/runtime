@@ -141,7 +141,7 @@ func TestActivatorFixedModeRoundRobin(t *testing.T) {
 	assert.Equal(t, 10, totalRequests, "all requests should be handled")
 
 	// Verify no slots were tracked for fixed mode
-	vs := activator.versions[verKey{appVer.ID.String(), "web"}]
+	vs := activator.versions[verKey{ver: appVer.ID.String(), service: "web"}]
 	for _, s := range vs.sandboxes {
 		assert.Equal(t, 0, s.inuseSlots, "fixed mode should not track slots")
 	}
@@ -219,7 +219,7 @@ func TestActivatorFixedModeNoSlotExhaustion(t *testing.T) {
 	}
 
 	// Verify still only one sandbox exists
-	vs := activator.versions[verKey{appVer.ID.String(), "web"}]
+	vs := activator.versions[verKey{ver: appVer.ID.String(), service: "web"}]
 	assert.Equal(t, 1, len(vs.sandboxes), "should not create new sandboxes for fixed mode")
 
 	// Release all leases

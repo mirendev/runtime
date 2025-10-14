@@ -109,14 +109,14 @@ func TestActivatorRetireUnusedSandboxes(t *testing.T) {
 	}
 
 	// Count initial sandboxes
-	initialCount := len(activator.versions[verKey{"ver-1", "web"}].sandboxes)
+	initialCount := len(activator.versions[verKey{ver: "ver-1", service: "web"}].sandboxes)
 	assert.Equal(t, 3, initialCount)
 
 	// Run retirement
 	activator.retireUnusedSandboxes()
 
 	// Check that non-RUNNING sandbox was removed and old sandbox was marked for retirement
-	vs := activator.versions[verKey{"ver-1", "web"}]
+	vs := activator.versions[verKey{ver: "ver-1", service: "web"}]
 	assert.Equal(t, 1, len(vs.sandboxes), "should only have recent sandbox left")
 	assert.Equal(t, sb2.ID, vs.sandboxes[0].sandbox.ID, "should be the recent sandbox")
 
@@ -214,7 +214,7 @@ func TestActivatorConcurrentSafety(t *testing.T) {
 	go func() {
 		for range 100 {
 			activator.mu.Lock()
-			activator.versions[verKey{"ver-1", "web"}] = &verSandboxes{
+			activator.versions[verKey{ver: "ver-1", service: "web"}] = &verSandboxes{
 				sandboxes: []*sandbox{},
 			}
 			activator.mu.Unlock()
@@ -226,7 +226,7 @@ func TestActivatorConcurrentSafety(t *testing.T) {
 	go func() {
 		for range 100 {
 			activator.mu.Lock()
-			_ = activator.versions[verKey{"ver-1", "web"}]
+			_ = activator.versions[verKey{ver: "ver-1", service: "web"}]
 			activator.mu.Unlock()
 		}
 		done <- true
@@ -236,7 +236,7 @@ func TestActivatorConcurrentSafety(t *testing.T) {
 	go func() {
 		for range 100 {
 			activator.mu.Lock()
-			delete(activator.versions, verKey{"ver-1", "web"})
+			delete(activator.versions, verKey{ver: "ver-1", service: "web"})
 			activator.mu.Unlock()
 		}
 		done <- true
@@ -327,7 +327,7 @@ func TestActivatorRecoverSandboxesWithEntityServer(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify sandbox was recovered
-	key := verKey{appVer.ID.String(), "web"}
+	key := verKey{ver: appVer.ID.String(), service: "web"}
 	vs, ok := activator.versions[key]
 	require.True(t, ok, "version should be in map")
 	require.Len(t, vs.sandboxes, 1, "should have recovered 1 running sandbox")
@@ -537,7 +537,7 @@ func TestActivatorRecoverSandboxesWithCIDR(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify sandbox was recovered with correct URL (without CIDR notation)
-	key := verKey{appVer.ID.String(), "web"}
+	key := verKey{ver: appVer.ID.String(), service: "web"}
 	vs, ok := activator.versions[key]
 	require.True(t, ok, "version should be in map")
 	require.Len(t, vs.sandboxes, 1, "should have recovered 1 running sandbox")
