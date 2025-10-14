@@ -1163,8 +1163,10 @@ func (a *localActivator) updateSandboxLastActivity(ctx context.Context, sb *comp
 				"sandbox", sb.ID,
 				"error", err)
 		} else {
-			// Update local copy on success
+			// Update local copy on success (must lock since sb is in shared map)
+			a.mu.Lock()
 			sb.LastActivity = now
+			a.mu.Unlock()
 		}
 	}()
 }
