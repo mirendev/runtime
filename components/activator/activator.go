@@ -1010,8 +1010,17 @@ func (a *localActivator) migrateToSandboxPools(ctx context.Context) error {
 }
 
 func (a *localActivator) createPoolForService(ctx context.Context, ver *core_v1alpha.AppVersion, service string, svcConcurrency *core_v1alpha.ServiceConcurrency) (*compute_v1alpha.SandboxPool, error) {
+	// Fetch app metadata to get human-friendly name for MIREN_APP env var
+	appResp, err := a.eac.Get(ctx, ver.App.String())
+	if err != nil {
+		return nil, fmt.Errorf("failed to load app metadata: %w", err)
+	}
+
+	var appMD core_v1alpha.Metadata
+	appMD.Decode(appResp.Entity().Entity())
+
 	// Build the sandbox spec from the version config
-	spec := a.buildSandboxSpec(ver, service)
+	spec := a.buildSandboxSpec(ver, service, appMD.Name)
 
 	// Determine scaling parameters based on mode
 	var desiredInstances int64
@@ -1083,7 +1092,12 @@ func (a *localActivator) createPoolForService(ctx context.Context, ver *core_v1a
 	return &pool, nil
 }
 
-func (a *localActivator) buildSandboxSpec(ver *core_v1alpha.AppVersion, service string) *compute_v1alpha.SandboxSpec {
+func (a *localActivator) buildSandboxSpec(ver *core_v1alpha.AppVersion, service string, appName string) *compute_v1alpha.SandboxSpec {
+	// Fallback to entity ID if name is empty
+	if appName == "" {
+		appName = ver.App.String()
+	}
+
 	spec := &compute_v1alpha.SandboxSpec{
 		Version:   ver.ID,
 		LogEntity: ver.App.String(),
@@ -1100,7 +1114,7 @@ func (a *localActivator) buildSandboxSpec(ver *core_v1alpha.AppVersion, service 
 		Name:  "app",
 		Image: ver.ImageUrl,
 		Env: []string{
-			"MIREN_APP=" + ver.App.String(),
+			"MIREN_APP=" + appName,
 			"MIREN_VERSION=" + ver.Version,
 		},
 		Directory: "/app",
