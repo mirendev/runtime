@@ -243,6 +243,10 @@ func (a *localActivator) AcquireLease(ctx context.Context, ver *core_v1alpha.App
 				s := vs.sandboxes[(start+i)%len(vs.sandboxes)]
 				if s.sandbox.Status == compute_v1alpha.RUNNING {
 					s.lastRenewal = time.Now()
+
+					// Update sandbox last_activity with throttling
+					a.updateSandboxLastActivity(ctx, s.sandbox, s.ent)
+
 					lease := &Lease{
 						ver:     ver,
 						sandbox: s.sandbox,
@@ -268,6 +272,10 @@ func (a *localActivator) AcquireLease(ctx context.Context, ver *core_v1alpha.App
 				if s.inuseSlots+vs.leaseSlots < s.maxSlots {
 					s.inuseSlots += vs.leaseSlots
 					s.lastRenewal = time.Now()
+
+					// Update sandbox last_activity with throttling
+					a.updateSandboxLastActivity(ctx, s.sandbox, s.ent)
+
 					lease := &Lease{
 						ver:     ver,
 						sandbox: s.sandbox,
@@ -1125,4 +1133,38 @@ func (a *localActivator) buildSandboxSpec(ver *core_v1alpha.AppVersion, service 
 	spec.Container = []compute_v1alpha.SandboxSpecContainer{appCont}
 
 	return spec
+}
+
+// updateSandboxLastActivity updates the last_activity timestamp on a sandbox entity
+// with throttling to avoid excessive writes to etcd (~30s granularity)
+func (a *localActivator) updateSandboxLastActivity(ctx context.Context, sb *compute_v1alpha.Sandbox, sbEnt *entity.Entity) {
+	now := time.Now()
+	
+	// Only update if > 30 seconds since last update
+	if !sb.LastActivity.IsZero() && now.Sub(sb.LastActivity) < 30*time.Second {
+		return
+	}
+
+	// Update in background to avoid blocking lease acquisition
+	go func() {
+		updateCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+
+		var rpcE entityserver_v1alpha.Entity
+		rpcE.SetId(sb.ID.String())
+		rpcE.SetAttrs(entity.Attrs(
+			(&compute_v1alpha.Sandbox{
+				LastActivity: now,
+			}).Encode,
+		))
+
+		if _, err := a.eac.Put(updateCtx, &rpcE); err != nil {
+			a.log.Debug("failed to update sandbox last_activity",
+				"sandbox", sb.ID,
+				"error", err)
+		} else {
+			// Update local copy on success
+			sb.LastActivity = now
+		}
+	}()
 }
