@@ -391,6 +391,13 @@ func TestActivatorRecoveryIntegration(t *testing.T) {
 						ScaleDownDelay:      "15m",
 					},
 				},
+				{
+					Name: "worker",
+					ServiceConcurrency: core_v1alpha.ServiceConcurrency{
+						Mode:         "fixed",
+						NumInstances: 1,
+					},
+				},
 			},
 		},
 	}
@@ -410,9 +417,9 @@ func TestActivatorRecoveryIntegration(t *testing.T) {
 	require.NoError(t, err)
 
 	// Simulate existing sandboxes that would be present after a restart
-	// Create 3 sandboxes: 2 running, 1 stopped
-	pools := []string{"default", "production", "default"}
-	statuses := []compute_v1alpha.SandboxStatus{compute_v1alpha.RUNNING, compute_v1alpha.RUNNING, compute_v1alpha.STOPPED}
+	// Create 3 sandboxes: 1 running web, 1 stopped web, 1 running worker
+	services := []string{"web", "web", "worker"}
+	statuses := []compute_v1alpha.SandboxStatus{compute_v1alpha.RUNNING, compute_v1alpha.STOPPED, compute_v1alpha.RUNNING}
 	addresses := []string{"10.0.0.1", "10.0.0.2", "10.0.0.3"}
 
 	for i := 0; i < 3; i++ {
@@ -426,7 +433,7 @@ func TestActivatorRecoveryIntegration(t *testing.T) {
 
 		name := "sb-recovery-" + string(rune('a'+i))
 		_, err := server.Client.Create(ctx, name, sb,
-			apiserver.WithLabels(types.LabelSet("app", "test-recovery-app", "pool", pools[i])))
+			apiserver.WithLabels(types.LabelSet("app", "test-recovery-app", "service", services[i])))
 		require.NoError(t, err)
 	}
 
@@ -447,7 +454,7 @@ func TestActivatorRecoveryIntegration(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	// Now test that the second activator can:
-	// 1. Acquire a lease on existing sandbox
+	// 1. Acquire a lease on existing web sandbox (should get the one running sandbox)
 	lease, err := activator2.AcquireLease(ctx, appVer, "web")
 	require.NoError(t, err)
 	assert.NotNil(t, lease)
@@ -457,10 +464,11 @@ func TestActivatorRecoveryIntegration(t *testing.T) {
 	err = activator2.ReleaseLease(ctx, lease)
 	require.NoError(t, err)
 
-	// 3. Create a new sandbox in production pool (since only one exists there)
-	lease2, err := activator2.AcquireLease(ctx, appVer, "web")
+	// 3. Acquire another lease for worker service (should get the worker sandbox)
+	lease2, err := activator2.AcquireLease(ctx, appVer, "worker")
 	require.NoError(t, err)
 	assert.NotNil(t, lease2)
+	assert.Equal(t, "http://10.0.0.3:8080", lease2.URL)
 
 	// Note: The activators created by NewLocalActivator do not have background goroutines
 	// that need explicit cleanup - they start a ticker that gets garbage collected.
