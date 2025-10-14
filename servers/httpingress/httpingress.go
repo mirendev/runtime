@@ -391,7 +391,7 @@ func (h *Server) serveHTTPWithMetrics(w http.ResponseWriter, req *http.Request, 
 	actContext, actCancel := context.WithTimeout(context.Background(), leaseAcquisitionTimeout)
 	defer actCancel()
 
-	actLease, err := h.aa.AcquireLease(actContext, &av, "http", "web")
+	actLease, err := h.aa.AcquireLease(actContext, &av, "web")
 	if err != nil {
 		if errors.Is(err, activator.ErrSandboxDiedEarly) {
 			h.Log.Error("sandbox died early while acquiring lease", "error", err, "app", targetAppId)

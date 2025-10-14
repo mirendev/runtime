@@ -109,14 +109,14 @@ func TestActivatorRetireUnusedSandboxes(t *testing.T) {
 	}
 
 	// Count initial sandboxes
-	initialCount := len(activator.versions[verKey{"ver-1", "default", "web"}].sandboxes)
+	initialCount := len(activator.versions[verKey{"ver-1", "web"}].sandboxes)
 	assert.Equal(t, 3, initialCount)
 
 	// Run retirement
 	activator.retireUnusedSandboxes()
 
 	// Check that non-RUNNING sandbox was removed and old sandbox was marked for retirement
-	vs := activator.versions[verKey{"ver-1", "default", "web"}]
+	vs := activator.versions[verKey{"ver-1", "web"}]
 	assert.Equal(t, 1, len(vs.sandboxes), "should only have recent sandbox left")
 	assert.Equal(t, sb2.ID, vs.sandboxes[0].sandbox.ID, "should be the recent sandbox")
 
@@ -214,7 +214,7 @@ func TestActivatorConcurrentSafety(t *testing.T) {
 	go func() {
 		for range 100 {
 			activator.mu.Lock()
-			activator.versions[verKey{"ver-1", "default", "web"}] = &verSandboxes{
+			activator.versions[verKey{"ver-1", "web"}] = &verSandboxes{
 				sandboxes: []*sandbox{},
 			}
 			activator.mu.Unlock()
@@ -226,7 +226,7 @@ func TestActivatorConcurrentSafety(t *testing.T) {
 	go func() {
 		for range 100 {
 			activator.mu.Lock()
-			_ = activator.versions[verKey{"ver-1", "default", "web"}]
+			_ = activator.versions[verKey{"ver-1", "web"}]
 			activator.mu.Unlock()
 		}
 		done <- true
@@ -236,7 +236,7 @@ func TestActivatorConcurrentSafety(t *testing.T) {
 	go func() {
 		for range 100 {
 			activator.mu.Lock()
-			delete(activator.versions, verKey{"ver-1", "default", "web"})
+			delete(activator.versions, verKey{"ver-1", "web"})
 			activator.mu.Unlock()
 		}
 		done <- true
@@ -448,7 +448,7 @@ func TestActivatorRecoveryIntegration(t *testing.T) {
 
 	// Now test that the second activator can:
 	// 1. Acquire a lease on existing sandbox
-	lease, err := activator2.AcquireLease(ctx, appVer, "default", "web")
+	lease, err := activator2.AcquireLease(ctx, appVer, "web")
 	require.NoError(t, err)
 	assert.NotNil(t, lease)
 	assert.Equal(t, "http://10.0.0.1:8080", lease.URL)
@@ -458,7 +458,7 @@ func TestActivatorRecoveryIntegration(t *testing.T) {
 	require.NoError(t, err)
 
 	// 3. Create a new sandbox in production pool (since only one exists there)
-	lease2, err := activator2.AcquireLease(ctx, appVer, "production", "web")
+	lease2, err := activator2.AcquireLease(ctx, appVer, "web")
 	require.NoError(t, err)
 	assert.NotNil(t, lease2)
 
@@ -529,7 +529,7 @@ func TestActivatorRecoverSandboxesWithCIDR(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify sandbox was recovered with correct URL (without CIDR notation)
-	key := verKey{appVer.ID.String(), "default", "web"}
+	key := verKey{appVer.ID.String(), "web"}
 	vs, ok := activator.versions[key]
 	require.True(t, ok, "version should be in map")
 	require.Len(t, vs.sandboxes, 1, "should have recovered 1 running sandbox")

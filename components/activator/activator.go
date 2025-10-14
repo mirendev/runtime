@@ -48,7 +48,7 @@ func (l *Lease) Pool() string {
 }
 
 type AppActivator interface {
-	AcquireLease(ctx context.Context, ver *core_v1alpha.AppVersion, pool, service string) (*Lease, error)
+	AcquireLease(ctx context.Context, ver *core_v1alpha.AppVersion, service string) (*Lease, error)
 	ReleaseLease(ctx context.Context, lease *Lease) error
 	RenewLease(ctx context.Context, lease *Lease) (*Lease, error)
 }
@@ -70,7 +70,7 @@ type verSandboxes struct {
 }
 
 type verKey struct {
-	ver, pool, service string
+	ver, service string
 }
 
 type localActivator struct {
@@ -148,7 +148,7 @@ func (a *localActivator) ensureFixedInstances(ctx context.Context) {
 
 			// Create sandbox in background to avoid holding lock
 			go func(k verKey, v *core_v1alpha.AppVersion) {
-				_, err := a.activateApp(ctx, v, k.pool, k.service)
+				_, err := a.activateApp(ctx, v, k.service)
 
 				// Update pending count after creation attempt
 				a.mu.Lock()
@@ -163,8 +163,8 @@ func (a *localActivator) ensureFixedInstances(ctx context.Context) {
 	}
 }
 
-func (a *localActivator) AcquireLease(ctx context.Context, ver *core_v1alpha.AppVersion, pool, service string) (*Lease, error) {
-	key := verKey{ver.ID.String(), pool, service}
+func (a *localActivator) AcquireLease(ctx context.Context, ver *core_v1alpha.AppVersion, service string) (*Lease, error) {
+	key := verKey{ver.ID.String(), service}
 
 	// Get service concurrency config
 	svcConcurrency := a.getServiceConcurrency(ver, service)
@@ -188,7 +188,6 @@ func (a *localActivator) AcquireLease(ctx context.Context, ver *core_v1alpha.App
 			"app", ver.App,
 			"version", ver.Version,
 			"version_id", ver.ID.String(),
-			"pool", pool,
 			"service", service,
 			"key", key,
 			"tracked_keys", trackedKeys)
@@ -196,7 +195,7 @@ func (a *localActivator) AcquireLease(ctx context.Context, ver *core_v1alpha.App
 		for _, k := range debugKeys {
 			a.log.Debug("tracked key", "key", k)
 		}
-		return a.activateApp(ctx, ver, pool, service)
+		return a.activateApp(ctx, ver, service)
 	}
 
 	// Need to reacquire lock to safely check sandboxes
@@ -206,7 +205,7 @@ func (a *localActivator) AcquireLease(ctx context.Context, ver *core_v1alpha.App
 	if !ok {
 		a.mu.Unlock()
 		// Version entry was removed while we didn't have the lock, need to activate
-		return a.activateApp(ctx, ver, pool, service)
+		return a.activateApp(ctx, ver, service)
 	}
 
 	sandboxCount := len(vs.sandboxes)
@@ -232,7 +231,7 @@ func (a *localActivator) AcquireLease(ctx context.Context, ver *core_v1alpha.App
 						ver:     ver,
 						sandbox: s.sandbox,
 						ent:     s.ent,
-						pool:    pool,
+						pool:    service, // Pool identifier is now the service name
 						service: service,
 						Size:    1, // Fixed mode doesn't use slots
 						URL:     s.url,
@@ -257,7 +256,7 @@ func (a *localActivator) AcquireLease(ctx context.Context, ver *core_v1alpha.App
 						ver:     ver,
 						sandbox: s.sandbox,
 						ent:     s.ent,
-						pool:    pool,
+						pool:    service, // Pool identifier is now the service name
 						service: service,
 						Size:    vs.leaseSlots,
 						URL:     s.url,
@@ -272,12 +271,12 @@ func (a *localActivator) AcquireLease(ctx context.Context, ver *core_v1alpha.App
 		}
 	}
 
-	return a.activateApp(ctx, ver, pool, service)
+	return a.activateApp(ctx, ver, service)
 }
 
 var ErrSandboxDiedEarly = fmt.Errorf("sandbox died while booting")
 
-func (a *localActivator) activateApp(ctx context.Context, ver *core_v1alpha.AppVersion, pool, service string) (*Lease, error) {
+func (a *localActivator) activateApp(ctx context.Context, ver *core_v1alpha.AppVersion, service string) (*Lease, error) {
 	gr, err := a.eac.Get(ctx, ver.App.String())
 	if err != nil {
 		return nil, err
@@ -293,7 +292,7 @@ func (a *localActivator) activateApp(ctx context.Context, ver *core_v1alpha.AppV
 	sb.Version = app.ActiveVersion
 
 	sb.LogEntity = app.EntityId().String()
-	sb.LogAttribute = types.LabelSet("stage", "app-run", "pool", pool, "service", service)
+	sb.LogAttribute = types.LabelSet("stage", "app-run", "service", service)
 
 	// Determine port from config or default to 3000
 	port := int64(3000)
@@ -343,7 +342,7 @@ func (a *localActivator) activateApp(ctx context.Context, ver *core_v1alpha.AppV
 	rpcE.SetAttrs(entity.Attrs(
 		(&core_v1alpha.Metadata{
 			Name:   name,
-			Labels: types.LabelSet("app", appMD.Name, "pool", pool, "service", service),
+			Labels: types.LabelSet("app", appMD.Name, "service", service),
 		}).Encode,
 		entity.Ident, "sandbox/"+name,
 		sb.Encode,
@@ -447,13 +446,13 @@ func (a *localActivator) activateApp(ctx context.Context, ver *core_v1alpha.AppV
 		ver:     ver,
 		sandbox: lsb.sandbox,
 		ent:     lsb.ent,
-		pool:    pool,
+		pool:    service, // Pool identifier is now the service name
 		service: service,
 		Size:    leaseSlots,
 		URL:     lsb.url,
 	}
 
-	key := verKey{ver.ID.String(), pool, service}
+	key := verKey{ver.ID.String(), service}
 
 	// Acquire mutex only for modifying shared state
 	a.mu.Lock()
@@ -477,7 +476,7 @@ func (a *localActivator) ReleaseLease(ctx context.Context, lease *Lease) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
-	vs, ok := a.versions[verKey{lease.ver.ID.String(), lease.pool, lease.service}]
+	vs, ok := a.versions[verKey{lease.ver.ID.String(), lease.service}]
 	if !ok {
 		return nil
 	}
@@ -502,7 +501,7 @@ func (a *localActivator) RenewLease(ctx context.Context, lease *Lease) (*Lease, 
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
-	vs, ok := a.versions[verKey{lease.ver.ID.String(), lease.pool, lease.service}]
+	vs, ok := a.versions[verKey{lease.ver.ID.String(), lease.service}]
 	if !ok {
 		return nil, fmt.Errorf("lease not found")
 	}
@@ -536,7 +535,6 @@ func (a *localActivator) removeSandbox(sandboxID string) {
 					"sandbox_id", sandboxID,
 					"app", vs.ver.App,
 					"version", vs.ver.Version,
-					"pool", key.pool,
 					"service", key.service,
 					"status", sb.sandbox.Status)
 			}
@@ -729,10 +727,9 @@ func (a *localActivator) recoverSandboxes(ctx context.Context) error {
 		var appVer core_v1alpha.AppVersion
 		appVer.Decode(verResp.Entity().Entity())
 
-		// Extract pool and service from sandbox labels - default to "default" if not found
+		// Extract service from sandbox labels - default to "web" if not found
 		var metadata core_v1alpha.Metadata
 		metadata.Decode(ent.Entity())
-		pool := getLabel(&metadata, "pool", "default")
 		service := getLabel(&metadata, "service", "web") // Default to web if not found
 
 		// Calculate the URL
@@ -788,7 +785,7 @@ func (a *localActivator) recoverSandboxes(ctx context.Context) error {
 		}
 
 		// Add to versions map - need mutex protection
-		key := verKey{appVer.ID.String(), pool, service}
+		key := verKey{appVer.ID.String(), service}
 		a.mu.Lock()
 		vs, ok := a.versions[key]
 		if !ok {
@@ -803,7 +800,7 @@ func (a *localActivator) recoverSandboxes(ctx context.Context) error {
 		a.mu.Unlock()
 		recoveredCount++
 
-		a.log.Info("recovered sandbox", "app", appVer.App, "version", appVer.Version, "sandbox", sb.ID, "pool", pool, "service", service, "url", addr)
+		a.log.Info("recovered sandbox", "app", appVer.App, "version", appVer.Version, "sandbox", sb.ID, "service", service, "url", addr)
 	}
 
 	a.log.Info("sandbox recovery summary",
