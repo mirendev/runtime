@@ -416,6 +416,17 @@ func (c *Coordinator) Start(ctx context.Context) error {
 		return err
 	}
 
+	// Migrate entities from old format to new attribute-based format
+	migrated, skipped, err := entity.MigrateEntityStore(ctx, c.Log, client, entity.MigrateOptions{
+		Prefix: c.Prefix,
+		DryRun: false,
+	})
+	if err != nil {
+		c.Log.Warn("entity migration completed with errors", "migrated", migrated, "skipped", skipped, "error", err)
+	} else if migrated > 0 {
+		c.Log.Info("entity migration completed", "migrated", migrated, "skipped", skipped)
+	}
+
 	ess, err := entityserver.NewEntityServer(c.Log, etcdStore)
 	if err != nil {
 		c.Log.Error("failed to create entity server", "error", err)
