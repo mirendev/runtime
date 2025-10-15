@@ -592,6 +592,9 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 
 	aa := co.Activator()
 
+	// Create SandboxPoolManager to reconcile pool entities
+	spm := co.SandboxPoolManager()
+
 	// HttpRequestTimeout is already validated by cfg.Validate() to be >= 1
 	// No need for additional checks here
 
@@ -601,6 +604,7 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 	hs := httpingress.NewServer(ctx, ctx.Log, ingressConfig, client, aa, &httpMetrics)
 
 	reg.Register("app-activator", aa)
+	reg.Register("sandbox-pool-manager", spm)
 	reg.Register("resolver", res)
 
 	rcfg, err := co.NamedConfig("runner")
