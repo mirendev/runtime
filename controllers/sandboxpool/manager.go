@@ -200,6 +200,7 @@ func (m *Manager) createSandbox(ctx context.Context, pool *compute_v1alpha.Sandb
 				"pool", pool.ID.String(),
 			),
 		}).Encode,
+		entity.Ident, entity.MustKeyword("sandbox/"+sbName),
 		sb.Encode,
 	))
 
