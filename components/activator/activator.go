@@ -13,6 +13,7 @@ import (
 	"miren.dev/runtime/api/compute/compute_v1alpha"
 	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
+	"miren.dev/runtime/pkg/concurrency"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/types"
 	"miren.dev/runtime/pkg/idgen"
@@ -58,15 +59,14 @@ type sandbox struct {
 	ent         *entity.Entity
 	lastRenewal time.Time
 	url         string
-	maxSlots    int
-	inuseSlots  int
+	tracker     *concurrency.ConcurrencyTracker
 }
 
 type verSandboxes struct {
 	ver       *core_v1alpha.AppVersion
 	sandboxes []*sandbox
 
-	leaseSlots int
+	strategy concurrency.ConcurrencyStrategy
 }
 
 type verKey struct {
@@ -115,8 +115,10 @@ func (a *localActivator) ensureFixedInstances(ctx context.Context) {
 
 	// Check existing sandboxes
 	for key, vs := range a.versions {
-		svcConcurrency := a.getServiceConcurrency(vs.ver, key.service)
-		if svcConcurrency.Mode != "fixed" {
+		// Skip non-fixed mode services
+		targetInstances := vs.strategy.DesiredInstances()
+		if targetInstances == 0 {
+			// Auto mode (scale to zero) - skip
 			continue
 		}
 
@@ -128,11 +130,6 @@ func (a *localActivator) ensureFixedInstances(ctx context.Context) {
 			if sb.sandbox.Status == compute_v1alpha.RUNNING {
 				runningCount++
 			}
-		}
-
-		targetInstances := int(svcConcurrency.NumInstances)
-		if targetInstances <= 0 {
-			targetInstances = 1
 		}
 
 		// Account for pending creations to avoid over-provisioning
@@ -165,9 +162,6 @@ func (a *localActivator) ensureFixedInstances(ctx context.Context) {
 
 func (a *localActivator) AcquireLease(ctx context.Context, ver *core_v1alpha.AppVersion, pool, service string) (*Lease, error) {
 	key := verKey{ver.ID.String(), pool, service}
-
-	// Get service concurrency config
-	svcConcurrency := a.getServiceConcurrency(ver, service)
 
 	// Check if we have an existing version entry
 	a.mu.Lock()
@@ -220,56 +214,30 @@ func (a *localActivator) AcquireLease(ctx context.Context, ver *core_v1alpha.App
 	} else {
 		a.log.Debug("reusing existing sandboxes", "app", ver.App, "version", ver.Version, "sandboxes", sandboxCount)
 
-		// For fixed mode, just round-robin across available sandboxes
-		if svcConcurrency.Mode == "fixed" {
-			// Find a running sandbox
-			start := rand.Int() % len(vs.sandboxes)
-			for i := 0; i < len(vs.sandboxes); i++ {
-				s := vs.sandboxes[(start+i)%len(vs.sandboxes)]
-				if s.sandbox.Status == compute_v1alpha.RUNNING {
-					s.lastRenewal = time.Now()
-					lease := &Lease{
-						ver:     ver,
-						sandbox: s.sandbox,
-						ent:     s.ent,
-						pool:    pool,
-						service: service,
-						Size:    1, // Fixed mode doesn't use slots
-						URL:     s.url,
-					}
-					a.mu.Unlock()
-					a.log.Debug("reusing fixed mode sandbox", "app", ver.App, "version", ver.Version, "sandbox", s.sandbox.ID, "service", service)
-					return lease, nil
+		// Unified lease acquisition for both fixed and auto modes
+		start := rand.Int() % len(vs.sandboxes)
+		for i := 0; i < len(vs.sandboxes); i++ {
+			s := vs.sandboxes[(start+i)%len(vs.sandboxes)]
+			if s.tracker.HasCapacity() {
+				leaseSize := s.tracker.AcquireLease()
+				s.lastRenewal = time.Now()
+				lease := &Lease{
+					ver:     ver,
+					sandbox: s.sandbox,
+					ent:     s.ent,
+					pool:    pool,
+					service: service,
+					Size:    leaseSize,
+					URL:     s.url,
 				}
+				used := s.tracker.Used()
+				a.mu.Unlock()
+				a.log.Debug("reusing sandbox", "app", ver.App, "version", ver.Version, "sandbox", s.sandbox.ID, "used", used)
+				return lease, nil
 			}
-			// No running sandboxes found, will create new one below
-			a.mu.Unlock()
-			a.log.Info("no running sandboxes for fixed mode service, creating new sandbox", "app", ver.App, "version", ver.Version, "service", service)
-		} else {
-			// Auto mode: use slot-based allocation
-			start := rand.Int() % len(vs.sandboxes)
-			for i := 0; i < len(vs.sandboxes); i++ {
-				s := vs.sandboxes[(start+i)%len(vs.sandboxes)]
-				if s.inuseSlots+vs.leaseSlots < s.maxSlots {
-					s.inuseSlots += vs.leaseSlots
-					s.lastRenewal = time.Now()
-					lease := &Lease{
-						ver:     ver,
-						sandbox: s.sandbox,
-						ent:     s.ent,
-						pool:    pool,
-						service: service,
-						Size:    vs.leaseSlots,
-						URL:     s.url,
-					}
-					a.mu.Unlock()
-					a.log.Debug("reusing sandbox", "app", ver.App, "version", ver.Version, "sandbox", s.sandbox.ID, "in-use", s.inuseSlots)
-					return lease, nil
-				}
-			}
-			a.mu.Unlock()
-			a.log.Info("no space in existing sandboxes, creating new sandbox for app", "app", ver.App, "version", ver.Version)
 		}
+		a.mu.Unlock()
+		a.log.Info("no capacity in existing sandboxes, creating new sandbox", "app", ver.App, "version", ver.Version)
 	}
 
 	return a.activateApp(ctx, ver, pool, service)
@@ -409,39 +377,23 @@ func (a *localActivator) activateApp(ctx context.Context, ver *core_v1alpha.AppV
 		return nil, err
 	}
 
-	// Get service-specific concurrency configuration
+	// Get service-specific concurrency configuration and create strategy
 	svcConcurrency := a.getServiceConcurrency(ver, service)
+	strategy := concurrency.NewStrategy(svcConcurrency)
 
-	var leaseSlots int
-	var maxSlots int
-
-	if svcConcurrency.Mode == "fixed" {
-		// For fixed mode, we don't use slots - the sandbox handles one instance
-		leaseSlots = 1
-		maxSlots = 1
-	} else {
-		// For auto mode, use requests_per_instance as max slots
-		if svcConcurrency.RequestsPerInstance <= 0 {
-			maxSlots = 10 // default
-		} else {
-			maxSlots = int(svcConcurrency.RequestsPerInstance)
-		}
-
-		// Lease slots is 20% of max slots
-		leaseSlots = int(float32(maxSlots) * 0.20)
-		if leaseSlots < 1 {
-			leaseSlots = 1
-		}
-	}
+	// Initialize tracker for this sandbox
+	tracker := strategy.InitializeTracker()
 
 	lsb := &sandbox{
 		sandbox:     &runningSB,
 		ent:         sbEnt,
 		lastRenewal: time.Now(),
 		url:         addr,
-		maxSlots:    maxSlots,
-		inuseSlots:  leaseSlots,
+		tracker:     tracker,
 	}
+
+	// Acquire first lease from the tracker
+	leaseSize := tracker.AcquireLease()
 
 	lease := &Lease{
 		ver:     ver,
@@ -449,7 +401,7 @@ func (a *localActivator) activateApp(ctx context.Context, ver *core_v1alpha.AppV
 		ent:     lsb.ent,
 		pool:    pool,
 		service: service,
-		Size:    leaseSlots,
+		Size:    leaseSize,
 		URL:     lsb.url,
 	}
 
@@ -460,9 +412,9 @@ func (a *localActivator) activateApp(ctx context.Context, ver *core_v1alpha.AppV
 	vs, ok := a.versions[key]
 	if !ok {
 		vs = &verSandboxes{
-			ver:        ver,
-			sandboxes:  []*sandbox{},
-			leaseSlots: leaseSlots,
+			ver:       ver,
+			sandboxes: []*sandbox{},
+			strategy:  strategy,
 		}
 		a.versions[key] = vs
 	}
@@ -482,16 +434,11 @@ func (a *localActivator) ReleaseLease(ctx context.Context, lease *Lease) error {
 		return nil
 	}
 
-	// Get service concurrency config
-	svcConcurrency := a.getServiceConcurrency(lease.ver, lease.service)
-
-	// Only adjust slots for auto mode
-	if svcConcurrency.Mode != "fixed" {
-		for _, s := range vs.sandboxes {
-			if s.sandbox == lease.sandbox {
-				s.inuseSlots -= lease.Size
-				break
-			}
+	// Release capacity via tracker (mode-specific behavior is handled by strategy)
+	for _, s := range vs.sandboxes {
+		if s.sandbox == lease.sandbox {
+			s.tracker.ReleaseLease(lease.Size)
+			break
 		}
 	}
 
@@ -754,28 +701,12 @@ func (a *localActivator) recoverSandboxes(ctx context.Context) error {
 			continue
 		}
 
-		// Get service-specific concurrency configuration
+		// Get service-specific concurrency configuration and create strategy
 		svcConcurrency := a.getServiceConcurrency(&appVer, service)
+		strategy := concurrency.NewStrategy(svcConcurrency)
 
-		// Calculate lease slots
-		var leaseSlots int
-		var maxSlots int
-
-		if svcConcurrency.Mode == "fixed" {
-			leaseSlots = 1
-			maxSlots = 1
-		} else {
-			if svcConcurrency.RequestsPerInstance <= 0 {
-				maxSlots = 10 // default
-			} else {
-				maxSlots = int(svcConcurrency.RequestsPerInstance)
-			}
-
-			leaseSlots = int(float32(maxSlots) * 0.20)
-			if leaseSlots < 1 {
-				leaseSlots = 1
-			}
-		}
+		// Initialize tracker for recovered sandbox (starts empty)
+		tracker := strategy.InitializeTracker()
 
 		// Create sandbox tracking entry
 		lsb := &sandbox{
@@ -783,8 +714,7 @@ func (a *localActivator) recoverSandboxes(ctx context.Context) error {
 			ent:         ent.Entity(),
 			lastRenewal: recoveryTime, // Set to now to give grace period
 			url:         addr,
-			maxSlots:    maxSlots,
-			inuseSlots:  0, // Start with no slots in use
+			tracker:     tracker,
 		}
 
 		// Add to versions map - need mutex protection
@@ -793,9 +723,9 @@ func (a *localActivator) recoverSandboxes(ctx context.Context) error {
 		vs, ok := a.versions[key]
 		if !ok {
 			vs = &verSandboxes{
-				ver:        &appVer,
-				sandboxes:  []*sandbox{},
-				leaseSlots: leaseSlots,
+				ver:       &appVer,
+				sandboxes: []*sandbox{},
+				strategy:  strategy,
 			}
 			a.versions[key] = vs
 		}
@@ -828,20 +758,11 @@ func (a *localActivator) retireUnusedSandboxes() {
 
 	a.mu.Lock()
 	for key, vs := range a.versions {
-		// Get service-specific concurrency config
-		svcConcurrency := a.getServiceConcurrency(vs.ver, key.service)
-
-		// Never retire fixed mode sandboxes
-		if svcConcurrency.Mode == "fixed" {
+		// Check if we should scale down based on strategy
+		scaleDownDelay := vs.strategy.ScaleDownDelay()
+		if scaleDownDelay == 0 {
+			// Never retire (fixed mode)
 			continue
-		}
-
-		// Calculate scale down delay for auto mode
-		scaleDownDelay := 2 * time.Minute // default
-		if svcConcurrency.ScaleDownDelay != "" {
-			if duration, err := time.ParseDuration(svcConcurrency.ScaleDownDelay); err == nil {
-				scaleDownDelay = duration
-			}
 		}
 
 		var newSandboxes []*sandbox
@@ -877,7 +798,6 @@ func (a *localActivator) retireUnusedSandboxes() {
 	for _, info := range toStop {
 		// Create a bounded context for each RPC call
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
 
 		var rpcE entityserver_v1alpha.Entity
 		rpcE.SetId(info.sandboxID)
@@ -897,5 +817,6 @@ func (a *localActivator) retireUnusedSandboxes() {
 				a.log.Error("failed to retire sandbox", "sandbox", info.sandboxID, "app", info.appName, "service", info.service, "error", err)
 			}
 		}
+		cancel()
 	}
 }
