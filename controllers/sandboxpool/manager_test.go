@@ -128,9 +128,10 @@ func TestManagerScaleUpPartial(t *testing.T) {
 	running := 0
 	pending := 0
 	for _, sb := range sandboxes {
-		if sb.Status == compute_v1alpha.RUNNING {
+		switch sb.Status {
+		case compute_v1alpha.RUNNING:
 			running++
-		} else if sb.Status == compute_v1alpha.PENDING {
+		case compute_v1alpha.PENDING:
 			pending++
 		}
 	}
