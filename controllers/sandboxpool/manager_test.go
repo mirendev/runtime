@@ -2,6 +2,7 @@ package sandboxpool
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -109,7 +110,7 @@ func TestManagerScaleUpPartial(t *testing.T) {
 			Version: pool.SandboxSpec.Version,
 			Spec:    pool.SandboxSpec,
 		}
-		_, err := server.Client.Create(ctx, "existing-sb", sb,
+		_, err := server.Client.Create(ctx, fmt.Sprintf("existing-sb-%d", i), sb,
 			entityserver.WithLabels(types.LabelSet("service", "api", "pool", poolID.String())))
 		require.NoError(t, err)
 	}

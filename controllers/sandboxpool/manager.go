@@ -118,6 +118,12 @@ func (m *Manager) reconcile(ctx context.Context, pool *compute_v1alpha.SandboxPo
 				// Continue - partial scaling is acceptable
 			}
 		}
+
+		// Recount after creating sandboxes
+		actual, ready, err = m.countSandboxes(ctx, pool)
+		if err != nil {
+			return fmt.Errorf("failed to count sandboxes after scale up: %w", err)
+		}
 	}
 
 	// Scale down if needed (TODO: implement with delay + safety checks)
