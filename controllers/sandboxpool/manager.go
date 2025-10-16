@@ -49,12 +49,16 @@ func (m *Manager) Run(ctx context.Context) error {
 			ctx,
 			entity.Ref(entity.EntityKind, compute_v1alpha.KindSandboxPool),
 			stream.Callback(func(op *entityserver_v1alpha.EntityOp) error {
+				m.log.Debug("received watch event", "op_type", op.OperationType(), "has_entity", op.HasEntity())
+
 				if !op.HasEntity() {
 					return nil
 				}
 
 				var pool compute_v1alpha.SandboxPool
 				pool.Decode(op.Entity().Entity())
+
+				m.log.Info("watch callback triggered for pool", "pool", pool.ID, "service", pool.Service)
 
 				// Trigger reconciliation for this pool
 				if err := m.reconcile(ctx, &pool); err != nil {

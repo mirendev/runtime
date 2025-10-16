@@ -171,6 +171,108 @@ func (c *SandboxController) waitForPort(ctx context.Context, id string, port int
 	}
 }
 
+// migrateLegacySandboxes converts sandboxes using legacy top-level fields to use Spec field
+func (c *SandboxController) migrateLegacySandboxes(ctx context.Context) error {
+	c.Log.Info("migrating legacy sandboxes to Spec format")
+
+	resp, err := c.EAC.List(ctx, entity.Ref(entity.EntityKind, compute.KindSandbox))
+	if err != nil {
+		return fmt.Errorf("failed to list sandboxes for migration: %w", err)
+	}
+
+	migratedCount := 0
+	for _, e := range resp.Values() {
+		var sb compute.Sandbox
+		sb.Decode(e.Entity())
+
+		// Skip if already has Spec populated (check if it has containers)
+		if len(sb.Spec.Container) > 0 {
+			continue
+		}
+
+		// Skip if no legacy fields to migrate
+		if len(sb.Container) == 0 {
+			continue
+		}
+
+		c.Log.Info("migrating sandbox to Spec format", "sandbox", sb.ID)
+
+		// Build Spec from legacy fields
+		sb.Spec.Version = sb.Version
+		sb.Spec.LogEntity = sb.LogEntity
+		sb.Spec.LogAttribute = sb.LogAttribute
+		sb.Spec.HostNetwork = sb.HostNetwork
+
+		// Convert Container to SandboxSpecContainer
+		for _, legacyCont := range sb.Container {
+			specCont := compute.SandboxSpecContainer{
+				Name:       legacyCont.Name,
+				Image:      legacyCont.Image,
+				Privileged: legacyCont.Privileged,
+				Command:    legacyCont.Command,
+				Directory:  legacyCont.Directory,
+				Env:        legacyCont.Env,
+				OomScore:   legacyCont.OomScore,
+			}
+
+			// Convert ports
+			for _, p := range legacyCont.Port {
+				specCont.Port = append(specCont.Port, compute.SandboxSpecContainerPort{
+					Port:     p.Port,
+					Name:     p.Name,
+					Protocol: compute.SandboxSpecContainerPortProtocol(p.Protocol),
+					Type:     p.Type,
+					NodePort: p.NodePort,
+				})
+			}
+
+			// Convert mounts
+			for _, m := range legacyCont.Mount {
+				specCont.Mount = append(specCont.Mount, compute.SandboxSpecContainerMount(m))
+			}
+
+			// Convert config files
+			for _, cf := range legacyCont.ConfigFile {
+				specCont.ConfigFile = append(specCont.ConfigFile, compute.SandboxSpecContainerConfigFile(cf))
+			}
+
+			sb.Spec.Container = append(sb.Spec.Container, specCont)
+		}
+
+		// Convert routes
+		for _, r := range sb.Route {
+			sb.Spec.Route = append(sb.Spec.Route, compute.SandboxSpecRoute(r))
+		}
+
+		// Convert volumes
+		for _, v := range sb.Volume {
+			sb.Spec.Volume = append(sb.Spec.Volume, compute.SandboxSpecVolume(v))
+		}
+
+		// Convert static hosts
+		for _, sh := range sb.StaticHost {
+			sb.Spec.StaticHost = append(sb.Spec.StaticHost, compute.SandboxSpecStaticHost(sh))
+		}
+
+		// Update the entity with the populated Spec
+		var rpcE entityserver_v1alpha.Entity
+		rpcE.SetId(sb.ID.String())
+		rpcE.SetAttrs(entity.New(sb.Encode).Attrs())
+
+		_, err := c.EAC.Put(ctx, &rpcE)
+		if err != nil {
+			c.Log.Error("failed to migrate sandbox", "sandbox", sb.ID, "err", err)
+			continue
+		}
+
+		migratedCount++
+		c.Log.Info("migrated sandbox to Spec format", "sandbox", sb.ID)
+	}
+
+	c.Log.Info("legacy sandbox migration complete", "migrated", migratedCount)
+	return nil
+}
+
 // reconcileSandboxesOnBoot checks all Running sandboxes and marks unhealthy ones as DEAD
 // This is called during controller initialization to clean up after containerd restarts
 func (c *SandboxController) reconcileSandboxesOnBoot(ctx context.Context) error {
@@ -179,6 +281,12 @@ func (c *SandboxController) reconcileSandboxesOnBoot(ctx context.Context) error 
 	// Create a context with timeout for the entire reconciliation
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
+
+	// First, migrate any legacy sandboxes to use Spec field
+	if err := c.migrateLegacySandboxes(ctx); err != nil {
+		c.Log.Error("failed to migrate legacy sandboxes", "err", err)
+		// Continue with reconciliation even if migration fails
+	}
 
 	// List all sandboxes marked as RUNNING
 	resp, err := c.EAC.List(ctx, entity.Ref(entity.EntityKind, compute.KindSandbox))
@@ -222,7 +330,7 @@ func (c *SandboxController) reconcileSandboxesOnBoot(ctx context.Context) error 
 
 		// Reattach logs and check subcontainers health
 		allHealthy := true
-		for _, container := range sb.Container {
+		for _, container := range sb.Spec.Container {
 			containerID := fmt.Sprintf("%s-%s", c.containerPrefix(sb.ID), container.Name)
 
 			// Reattach logs for this subcontainer
@@ -307,7 +415,7 @@ func (c *SandboxController) cleanupOrphanedContainers(ctx context.Context) error
 			validContainers[c.pauseContainerId(sb.ID)] = true
 
 			// Add subcontainers
-			for _, container := range sb.Container {
+			for _, container := range sb.Spec.Container {
 				validContainers[fmt.Sprintf("%s-%s", c.containerPrefix(sb.ID), container.Name)] = true
 			}
 		}
@@ -462,39 +570,39 @@ func (c *SandboxController) canUpdateInPlace(ctx context.Context, sb *compute.Sa
 	oldSb.Decode(oldMeta)
 
 	// TODO: handle adding a new container without destroying the sandbox first.
-	if len(sb.Container) != len(oldSb.Container) {
+	if len(sb.Spec.Container) != len(oldSb.Spec.Container) {
 		return false, nil, nil
 	}
 
-	for i, container := range sb.Container {
-		if container.Name != oldSb.Container[i].Name {
+	for i, container := range sb.Spec.Container {
+		if container.Name != oldSb.Spec.Container[i].Name {
 			return false, nil, nil
 		}
 
-		if container.Image != oldSb.Container[i].Image {
+		if container.Image != oldSb.Spec.Container[i].Image {
 			return false, nil, nil
 		}
 
-		if container.Command != oldSb.Container[i].Command {
+		if container.Command != oldSb.Spec.Container[i].Command {
 			return false, nil, nil
 		}
 
-		if !slices.Equal(container.Env, oldSb.Container[i].Env) {
+		if !slices.Equal(container.Env, oldSb.Spec.Container[i].Env) {
 			return false, nil, nil
 		}
 
-		if !slices.Equal(container.Mount, oldSb.Container[i].Mount) {
+		if !slices.Equal(container.Mount, oldSb.Spec.Container[i].Mount) {
 			return false, nil, nil
 		}
 
-		if container.Privileged != oldSb.Container[i].Privileged {
+		if container.Privileged != oldSb.Spec.Container[i].Privileged {
 			return false, nil, nil
 		}
 
-		if container.OomScore != oldSb.Container[i].OomScore {
+		if container.OomScore != oldSb.Spec.Container[i].OomScore {
 			return false, nil, nil
 		}
-		if !slices.Equal(container.Port, oldSb.Container[i].Port) {
+		if !slices.Equal(container.Port, oldSb.Spec.Container[i].Port) {
 			return false, nil, nil
 		}
 	}
@@ -758,6 +866,7 @@ func (c *SandboxController) updateSandbox(ctx context.Context, sb *compute.Sandb
 
 func (c *SandboxController) Create(ctx context.Context, co *compute.Sandbox, meta *entity.Meta) error {
 	c.Log.Info("considering sandbox create or update", "id", co.ID, "status", co.Status)
+
 	switch co.Status {
 	case compute.DEAD:
 		return nil
@@ -956,9 +1065,9 @@ func (c *SandboxController) addEndpoint(
 	ep *network.EndpointConfig,
 	srv *network_v1alpha.Service,
 ) error {
-	c.Log.Debug("adding endpoint to service", "service", srv.ID, "sandbox", sb.ID, "containers", len(sb.Container))
+	c.Log.Debug("adding endpoint to service", "service", srv.ID, "sandbox", sb.ID, "containers", len(sb.Spec.Container))
 
-	for _, co := range sb.Container {
+	for _, co := range sb.Spec.Container {
 		for _, p := range co.Port {
 			var add bool
 			for _, sp := range srv.Port {
@@ -1119,7 +1228,7 @@ func (c *SandboxController) setupHosts(sb *compute.Sandbox, name string) error {
 	lines = append(lines, fmt.Sprintf("127.0.0.1\tlocalhost localhost.localdomain %s", name))
 	lines = append(lines, fmt.Sprintf("::1\tlocalhost localhost.localdomain %s", name))
 
-	for _, addr := range sb.StaticHost {
+	for _, addr := range sb.Spec.StaticHost {
 		lines = append(lines, fmt.Sprintf("%s\t%s", addr.Ip, addr.Host))
 	}
 	lines = append(lines, "")
@@ -1218,8 +1327,8 @@ func (c *SandboxController) buildSpec(
 	lbls[sandboxEntityLabel] = sb.ID.String()
 	lbls[sandboxKindLabel] = "sandbox"
 
-	if sb.Version != "" {
-		lbls[sandboxVerEntityLabel] = sb.Version.String()
+	if sb.Spec.Version != "" {
+		lbls[sandboxVerEntityLabel] = sb.Spec.Version.String()
 	}
 
 	// Add IP addresses from endpoint configuration
@@ -1295,7 +1404,7 @@ func (c *SandboxController) buildSpec(
 		containerdx.WithOOMScoreAdj(defaultSandboxOOMAdj, false),
 	}
 
-	if sb.HostNetwork {
+	if sb.Spec.HostNetwork {
 		specOpts = append(specOpts, oci.WithHostNamespace(specs.NetworkNamespace))
 	}
 
@@ -1333,7 +1442,7 @@ func (c *SandboxController) writeResolve(path string, ep *network.EndpointConfig
 }
 
 func (c *SandboxController) logConsumer(sb *compute.Sandbox, container string) *SandboxLogs {
-	le := sb.LogEntity
+	le := sb.Spec.LogEntity
 	if le == "" {
 		le = sb.ID.String()
 	}
@@ -1350,11 +1459,11 @@ func (c *SandboxController) logConsumer(sb *compute.Sandbox, container string) *
 		attrs["container"] = container
 	}
 
-	if sb.Version != "" {
-		attrs["version"] = sb.Version.String()
+	if sb.Spec.Version != "" {
+		attrs["version"] = sb.Spec.Version.String()
 	}
 
-	for _, lbl := range sb.LogAttribute {
+	for _, lbl := range sb.Spec.LogAttribute {
 		attrs[lbl.Key] = lbl.Value
 	}
 
@@ -1470,7 +1579,7 @@ func (c *SandboxController) bootContainers(
 	sbPid int,
 	cgroups map[string]string,
 ) ([]waitPort, error) {
-	c.Log.Info("booting containers", "count", len(sb.Container))
+	c.Log.Info("booting containers", "count", len(sb.Spec.Container))
 
 	ctx = namespaces.WithNamespace(ctx, c.Namespace)
 
@@ -1486,7 +1595,7 @@ func (c *SandboxController) bootContainers(
 		}
 	}()
 
-	for _, container := range sb.Container {
+	for _, container := range sb.Spec.Container {
 		opts, err := c.buildSubContainerSpec(ctx, sb, &container, ep, sbPid)
 		if err != nil {
 			c.cleanupContainers(ctx, createdContainers)
@@ -1562,7 +1671,7 @@ func (c *SandboxController) sandboxPath(sb *compute.Sandbox, sub ...string) stri
 func (c *SandboxController) buildSubContainerSpec(
 	ctx context.Context,
 	sb *compute.Sandbox,
-	co *compute.Container,
+	co *compute.SandboxSpecContainer,
 	ep *network.EndpointConfig,
 	sbPid int,
 ) (
@@ -1627,9 +1736,9 @@ func (c *SandboxController) buildSubContainerSpec(
 	}
 
 	// Add local storage mount if this sandbox has an associated app
-	if sb.Version != "" && c.DataPath != "" {
+	if sb.Spec.Version != "" && c.DataPath != "" {
 		// Fetch the AppVersion to get the App ID
-		res, err := c.EAC.Get(ctx, sb.Version.String())
+		res, err := c.EAC.Get(ctx, sb.Spec.Version.String())
 		if err == nil {
 			var appVer core_v1alpha.AppVersion
 			appVer.Decode(res.Entity().Entity())
@@ -1657,7 +1766,7 @@ func (c *SandboxController) buildSubContainerSpec(
 				}
 			}
 		} else {
-			c.Log.Error("failed to fetch app version for local storage", "version", sb.Version.String(), "error", err)
+			c.Log.Error("failed to fetch app version for local storage", "version", sb.Spec.Version.String(), "error", err)
 		}
 	}
 
@@ -1769,8 +1878,8 @@ func (c *SandboxController) buildSubContainerSpec(
 	lbls := map[string]string{}
 	lbls[sandboxEntityLabel] = sb.ID.String()
 
-	if sb.Version != "" {
-		lbls[sandboxVerEntityLabel] = sb.Version.String()
+	if sb.Spec.Version != "" {
+		lbls[sandboxVerEntityLabel] = sb.Spec.Version.String()
 	}
 
 	opts = append(opts,
@@ -1784,7 +1893,7 @@ func (c *SandboxController) buildSubContainerSpec(
 }
 
 func (c *SandboxController) destroySubContainers(ctx context.Context, sb *compute.Sandbox) error {
-	if len(sb.Container) == 0 {
+	if len(sb.Spec.Container) == 0 {
 		return nil
 	}
 
@@ -1795,11 +1904,11 @@ func (c *SandboxController) destroySubContainers(ctx context.Context, sb *comput
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	c.Log.Info("starting subcontainer destruction", "id", sb.ID, "containers", len(sb.Container), "timeout", timeout)
+	c.Log.Info("starting subcontainer destruction", "id", sb.ID, "containers", len(sb.Spec.Container), "timeout", timeout)
 
 	// Track containers that need to be destroyed
-	containerIds := make([]string, 0, len(sb.Container))
-	for _, container := range sb.Container {
+	containerIds := make([]string, 0, len(sb.Spec.Container))
+	for _, container := range sb.Spec.Container {
 		id := fmt.Sprintf("%s-%s", c.containerPrefix(sb.ID), container.Name)
 		containerIds = append(containerIds, id)
 		// Stop port monitoring for this container
@@ -1937,7 +2046,7 @@ func (c *SandboxController) Delete(ctx context.Context, id entity.Id) error {
 func (c *SandboxController) stopSandbox(ctx context.Context, sb *compute.Sandbox) error {
 	ctx = namespaces.WithNamespace(ctx, c.Namespace)
 
-	le := sb.LogEntity
+	le := sb.Spec.LogEntity
 	if le == "" {
 		le = sb.ID.String()
 	}

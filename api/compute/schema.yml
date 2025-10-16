@@ -108,6 +108,9 @@ components:
             type:
               type: string
               doc: High-level port type (e.g., http)
+            node_port:
+              type: int
+              doc: The port number that should be forwarded from the node to the container
         mount:
           type: component
           doc: Mounted directory

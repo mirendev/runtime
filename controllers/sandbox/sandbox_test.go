@@ -307,7 +307,7 @@ func TestSandbox(t *testing.T) {
 			sb.ID = id
 
 			sb.Labels = append(sb.Labels, "runtime.computer/app=mn-test")
-			sb.Container = append(sb.Container, compute.Container{
+			sb.Spec.Container = append(sb.Spec.Container, compute.SandboxSpecContainer{
 				Name:  "nginx",
 				Image: "mn-nginx:latest",
 			})
@@ -402,7 +402,7 @@ func TestSandbox(t *testing.T) {
 
 		sb.Labels = append(sb.Labels, "runtime.computer/app=mn-nginx")
 
-		sb.Container = append(sb.Container, compute.Container{
+		sb.Spec.Container = append(sb.Spec.Container, compute.SandboxSpecContainer{
 			Name:  "sort",
 			Image: "mn-sort:latest",
 		})
@@ -506,15 +506,15 @@ func TestSandbox(t *testing.T) {
 
 		sb.Labels = append(sb.Labels, "runtime.computer/app=mn-nginx")
 
-		sb.Container = append(sb.Container, compute.Container{
+		sb.Spec.Container = append(sb.Spec.Container, compute.SandboxSpecContainer{
 			Name:  "nginx",
 			Image: "mn-nginx:latest",
-			Port: []compute.Port{
+			Port: []compute.SandboxSpecContainerPort{
 				{
 					Name:     "http",
 					NodePort: 31001,
 					Port:     80,
-					Protocol: compute.TCP,
+					Protocol: compute.SandboxSpecContainerPortProtocol(compute.TCP),
 					Type:     "http",
 				},
 			},
@@ -636,20 +636,20 @@ func TestSandbox(t *testing.T) {
 			Labels:   types.LabelSet("path", spath),
 		})
 
-		sb.Container = append(sb.Container, compute.Container{
+		sb.Spec.Container = append(sb.Spec.Container, compute.SandboxSpecContainer{
 			Name:  "nginx",
 			Image: "mn-nginx:latest",
-			Mount: []compute.Mount{
+			Mount: []compute.SandboxSpecContainerMount{
 				{
 					Destination: "/usr/share/nginx/html",
 					Source:      "static-site",
 				},
 			},
-			Port: []compute.Port{
+			Port: []compute.SandboxSpecContainerPort{
 				{
 					Name:     "http",
 					Port:     80,
-					Protocol: compute.TCP,
+					Protocol: compute.SandboxSpecContainerPortProtocol(compute.TCP),
 					Type:     "http",
 				},
 			},
@@ -763,20 +763,20 @@ func TestSandbox(t *testing.T) {
 			Labels:   types.LabelSet("name", "site-data"),
 		})
 
-		sb.Container = append(sb.Container, compute.Container{
+		sb.Spec.Container = append(sb.Spec.Container, compute.SandboxSpecContainer{
 			Name:  "nginx",
 			Image: "mn-nginx:latest",
-			Mount: []compute.Mount{
+			Mount: []compute.SandboxSpecContainerMount{
 				{
 					Destination: "/usr/share/nginx/html",
 					Source:      "static-site",
 				},
 			},
-			Port: []compute.Port{
+			Port: []compute.SandboxSpecContainerPort{
 				{
 					Name:     "http",
 					Port:     80,
-					Protocol: compute.TCP,
+					Protocol: compute.SandboxSpecContainerPortProtocol(compute.TCP),
 					Type:     "http",
 				},
 			},
@@ -899,20 +899,20 @@ func TestSandbox(t *testing.T) {
 			Labels:   types.LabelSet("name", "testing", "size", "50MB"),
 		})
 
-		sb.Container = append(sb.Container, compute.Container{
+		sb.Spec.Container = append(sb.Spec.Container, compute.SandboxSpecContainer{
 			Name:  "nginx",
 			Image: "mn-nginx:latest",
-			Mount: []compute.Mount{
+			Mount: []compute.SandboxSpecContainerMount{
 				{
 					Destination: "/usr/share/nginx/html",
 					Source:      "static-site",
 				},
 			},
-			Port: []compute.Port{
+			Port: []compute.SandboxSpecContainerPort{
 				{
 					Name:     "http",
 					Port:     80,
-					Protocol: compute.TCP,
+					Protocol: compute.SandboxSpecContainerPortProtocol(compute.TCP),
 					Type:     "http",
 				},
 			},
@@ -1134,14 +1134,16 @@ func TestSandbox(t *testing.T) {
 		sb.Labels = append(sb.Labels, "runtime.computer/app=test-port")
 
 		// Add a container that runs a simple HTTP server on port 8080
-		sb.Container = []compute.Container{
-			{
-				Name:  "http-server",
-				Image: "docker.io/library/busybox:latest",
-				// Run a simple HTTP server using nc (netcat) on port 8080
-				Command: "while true; do echo -e 'HTTP/1.1 200 OK\n\nHello' | nc -l -p 8080; done",
-				Port: []compute.Port{
-					{Port: 8080, Protocol: "tcp"},
+		sb.Spec = compute.SandboxSpec{
+			Container: []compute.SandboxSpecContainer{
+				{
+					Name:  "http-server",
+					Image: "docker.io/library/busybox:latest",
+					// Run a simple HTTP server using nc (netcat) on port 8080
+					Command: "while true; do echo -e 'HTTP/1.1 200 OK\n\nHello' | nc -l -p 8080; done",
+					Port: []compute.SandboxSpecContainerPort{
+						{Port: 8080, Protocol: "tcp"},
+					},
 				},
 			},
 		}
@@ -1251,21 +1253,23 @@ func TestSandbox(t *testing.T) {
 		sb.ID = id
 
 		// Add a container that listens on multiple ports
-		sb.Container = []compute.Container{
-			{
-				Name:  "multi-port",
-				Image: "docker.io/library/busybox:latest",
-				// Script that listens on multiple ports
-				Command: `sh -c '
-					nc -l -p 8080 &
-					nc -l -p 8081 &
-					nc -l -p 8082 &
-					wait
-				'`,
-				Port: []compute.Port{
-					{Port: 8080, Protocol: "tcp"},
-					{Port: 8081, Protocol: "tcp"},
-					{Port: 8082, Protocol: "tcp"},
+		sb.Spec = compute.SandboxSpec{
+			Container: []compute.SandboxSpecContainer{
+				{
+					Name:  "multi-port",
+					Image: "docker.io/library/busybox:latest",
+					// Script that listens on multiple ports
+					Command: `sh -c '
+						nc -l -p 8080 &
+						nc -l -p 8081 &
+						nc -l -p 8082 &
+						wait
+					'`,
+					Port: []compute.SandboxSpecContainerPort{
+						{Port: 8080, Protocol: "tcp"},
+						{Port: 8081, Protocol: "tcp"},
+						{Port: 8082, Protocol: "tcp"},
+					},
 				},
 			},
 		}

@@ -401,6 +401,7 @@ func (o *SandboxSpecContainerMount) InitSchema(sb *schema.SchemaBuilder) {
 
 const (
 	SandboxSpecContainerPortNameId        = entity.Id("dev.miren.compute/component.sandbox_spec.container.port.name")
+	SandboxSpecContainerPortNodePortId    = entity.Id("dev.miren.compute/component.sandbox_spec.container.port.node_port")
 	SandboxSpecContainerPortPortId        = entity.Id("dev.miren.compute/component.sandbox_spec.container.port.port")
 	SandboxSpecContainerPortProtocolId    = entity.Id("dev.miren.compute/component.sandbox_spec.container.port.protocol")
 	SandboxSpecContainerPortProtocolTcpId = entity.Id("dev.miren.compute/component.sandbox_spec.container.port.protocol.tcp")
@@ -410,6 +411,7 @@ const (
 
 type SandboxSpecContainerPort struct {
 	Name     string                           `cbor:"name" json:"name"`
+	NodePort int64                            `cbor:"node_port,omitempty" json:"node_port,omitempty"`
 	Port     int64                            `cbor:"port" json:"port"`
 	Protocol SandboxSpecContainerPortProtocol `cbor:"protocol,omitempty" json:"protocol,omitempty"`
 	Type     string                           `cbor:"type,omitempty" json:"type,omitempty"`
@@ -429,6 +431,9 @@ func (o *SandboxSpecContainerPort) Decode(e entity.AttrGetter) {
 	if a, ok := e.Get(SandboxSpecContainerPortNameId); ok && a.Value.Kind() == entity.KindString {
 		o.Name = a.Value.String()
 	}
+	if a, ok := e.Get(SandboxSpecContainerPortNodePortId); ok && a.Value.Kind() == entity.KindInt64 {
+		o.NodePort = a.Value.Int64()
+	}
 	if a, ok := e.Get(SandboxSpecContainerPortPortId); ok && a.Value.Kind() == entity.KindInt64 {
 		o.Port = a.Value.Int64()
 	}
@@ -443,6 +448,9 @@ func (o *SandboxSpecContainerPort) Decode(e entity.AttrGetter) {
 func (o *SandboxSpecContainerPort) Encode() (attrs []entity.Attr) {
 	if !entity.Empty(o.Name) {
 		attrs = append(attrs, entity.String(SandboxSpecContainerPortNameId, o.Name))
+	}
+	if !entity.Empty(o.NodePort) {
+		attrs = append(attrs, entity.Int64(SandboxSpecContainerPortNodePortId, o.NodePort))
 	}
 	if !entity.Empty(o.Port) {
 		attrs = append(attrs, entity.Int64(SandboxSpecContainerPortPortId, o.Port))
@@ -460,6 +468,9 @@ func (o *SandboxSpecContainerPort) Empty() bool {
 	if !entity.Empty(o.Name) {
 		return false
 	}
+	if !entity.Empty(o.NodePort) {
+		return false
+	}
 	if !entity.Empty(o.Port) {
 		return false
 	}
@@ -474,6 +485,7 @@ func (o *SandboxSpecContainerPort) Empty() bool {
 
 func (o *SandboxSpecContainerPort) InitSchema(sb *schema.SchemaBuilder) {
 	sb.String("name", "dev.miren.compute/component.sandbox_spec.container.port.name", schema.Doc("Port name"), schema.Required)
+	sb.Int64("node_port", "dev.miren.compute/component.sandbox_spec.container.port.node_port", schema.Doc("The port number that should be forwarded from the node to the container"))
 	sb.Int64("port", "dev.miren.compute/component.sandbox_spec.container.port.port", schema.Doc("Port number"), schema.Required)
 	sb.Singleton("dev.miren.compute/component.sandbox_spec.container.port.protocol.tcp")
 	sb.Singleton("dev.miren.compute/component.sandbox_spec.container.port.protocol.udp")
