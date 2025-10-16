@@ -455,6 +455,11 @@ func (c *Coordinator) Start(ctx context.Context) error {
 
 	spm := sandboxpool.NewManager(c.Log, eac)
 	c.spm = spm
+	go func() {
+		if err := spm.Run(ctx); err != nil && ctx.Err() == nil {
+			c.Log.Error("sandbox pool manager stopped", "error", err)
+		}
+	}()
 
 	eps := execproxy.NewServer(c.Log, eac, rs, aa)
 	server.ExposeValue("dev.miren.runtime/exec", exec_v1alpha.AdaptSandboxExec(eps))
