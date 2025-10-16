@@ -340,7 +340,7 @@ func (a *localActivator) activateApp(ctx context.Context, ver *core_v1alpha.AppV
 	a.log.Debug("creating sandbox", "app", ver.App, "sandbox", name, "command", appCont.Command)
 
 	var rpcE entityserver_v1alpha.Entity
-	rpcE.SetAttrs(entity.Attrs(
+	rpcE.SetAttrs(entity.New(
 		(&core_v1alpha.Metadata{
 			Name:   name,
 			Labels: types.LabelSet("app", appMD.Name, "pool", pool, "service", service),
@@ -898,7 +898,7 @@ func (a *localActivator) retireUnusedSandboxes() {
 
 		var rpcE entityserver_v1alpha.Entity
 		rpcE.SetId(info.sandboxID)
-		rpcE.SetAttrs(entity.Attrs(
+		rpcE.SetAttrs(entity.New(
 			(&compute_v1alpha.Sandbox{
 				Status: compute_v1alpha.STOPPED,
 			}).Encode,

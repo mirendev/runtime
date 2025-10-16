@@ -71,7 +71,7 @@ func TestServiceController(t *testing.T) {
 			},
 		}
 
-		svcEntity := entity.NewEntity(svc.Encode)
+		svcEntity := entity.New(svc.Encode)
 
 		meta := &entity.Meta{
 			Entity:   svcEntity,
@@ -128,11 +128,11 @@ func TestServiceController(t *testing.T) {
 			},
 		}
 
-		svcEntity := entity.NewEntity(svc.Encode)
+		svcEntity := entity.New(svc.Encode)
 
 		// Store the service in entity store
 		var rpcE entityserver_v1alpha.Entity
-		rpcE.SetAttrs(entity.Attrs(
+		rpcE.SetAttrs(entity.New(
 			entity.Keyword(entity.Ident, svcID.String()),
 			svc.Encode).Attrs())
 		_, err = eac.Put(ctx, &rpcE)
@@ -167,7 +167,7 @@ func TestServiceController(t *testing.T) {
 		attrs := sb.Encode()
 		attrs = append(attrs, entity.Label(core_v1alpha.MetadataLabelsId, "app", "nginx"))
 
-		sbEntity := entity.NewEntity(attrs...)
+		sbEntity := entity.New(attrs)
 
 		sbEntity.SetID(sbID)
 
@@ -258,13 +258,13 @@ func TestServiceController(t *testing.T) {
 
 		// Store the service in entity store
 		var rpcE entityserver_v1alpha.Entity
-		rpcE.SetAttrs(entity.Attrs(
+		rpcE.SetAttrs(entity.New(
 			entity.Keyword(entity.Ident, svcID.String()),
 			svc.Encode).Attrs())
 		_, err = eac.Put(ctx, &rpcE)
 		r.NoError(err)
 
-		svcEntity := entity.NewEntity(svc.Encode)
+		svcEntity := entity.New(svc.Encode)
 
 		meta := &entity.Meta{
 			Entity:   svcEntity,
@@ -295,7 +295,7 @@ func TestServiceController(t *testing.T) {
 		attrs := sb.Encode()
 		attrs = append(attrs, entity.Label(core_v1alpha.MetadataLabelsId, "app", "nginx"))
 
-		sbEntity := entity.NewEntity(attrs...)
+		sbEntity := entity.New(attrs)
 
 		sbEntity.SetID(sbID)
 
@@ -397,7 +397,7 @@ func TestServiceController(t *testing.T) {
 			},
 		}
 
-		svcEntity := entity.NewEntity(svc.Encode)
+		svcEntity := entity.New(svc.Encode)
 
 		meta := &entity.Meta{
 			Entity:   svcEntity,
@@ -413,7 +413,7 @@ func TestServiceController(t *testing.T) {
 			Port: 443,
 		})
 
-		meta.Entity = entity.NewEntity(svc.Encode())
+		meta.Entity = entity.New(svc.Encode())
 		meta.Revision = 2
 
 		// Re-create the service with updated configuration
@@ -469,13 +469,13 @@ func TestServiceController(t *testing.T) {
 
 		// Store the service in entity store
 		var rpcE entityserver_v1alpha.Entity
-		rpcE.SetAttrs(entity.Attrs(
+		rpcE.SetAttrs(entity.New(
 			entity.Keyword(entity.Ident, svcID.String()),
 			svc.Encode).Attrs())
 		_, err = eac.Put(ctx, &rpcE)
 		r.NoError(err)
 
-		svcEntity := entity.NewEntity(svc.Encode)
+		svcEntity := entity.New(svc.Encode)
 
 		meta := &entity.Meta{
 			Entity:   svcEntity,
@@ -506,7 +506,7 @@ func TestServiceController(t *testing.T) {
 		attrs1 := sb1.Encode()
 		attrs1 = append(attrs1, entity.Label(core_v1alpha.MetadataLabelsId, "app", "nginx"))
 
-		sbEntity1 := entity.NewEntity(attrs1...)
+		sbEntity1 := entity.New(attrs1)
 
 		sbMeta1 := &entity.Meta{
 			Entity:   sbEntity1,
@@ -539,7 +539,7 @@ func TestServiceController(t *testing.T) {
 		attrs2 := sb2.Encode()
 		attrs2 = append(attrs2, entity.Label(core_v1alpha.MetadataLabelsId, "app", "nginx"))
 
-		sbEntity2 := entity.NewEntity(attrs2...)
+		sbEntity2 := entity.New(attrs2)
 
 		sbEntity2.SetID(sbID2)
 
@@ -645,13 +645,13 @@ func TestServiceController(t *testing.T) {
 
 		// Store the service in entity store
 		var rpcE entityserver_v1alpha.Entity
-		rpcE.SetAttrs(entity.Attrs(
+		rpcE.SetAttrs(entity.New(
 			entity.Keyword(entity.Ident, svcID.String()),
 			svc.Encode).Attrs())
 		_, err = eac.Put(ctx, &rpcE)
 		r.NoError(err)
 
-		svcEntity := entity.NewEntity(svc.Encode)
+		svcEntity := entity.New(svc.Encode)
 
 		meta := &entity.Meta{
 			Entity:   svcEntity,
@@ -674,10 +674,10 @@ func TestServiceController(t *testing.T) {
 			},
 		}
 
-		ent := entity.NewEntity(entity.Attrs(
+		ent := entity.New(
 			entity.DBId, epID,
 			eps.Encode,
-		))
+		)
 		event := controller.Event{
 			Entity: ent,
 		}
@@ -740,21 +740,21 @@ func TestServiceController(t *testing.T) {
 
 		// Store both services in entity store
 		var rpcE1 entityserver_v1alpha.Entity
-		rpcE1.SetAttrs(entity.Attrs(
+		rpcE1.SetAttrs(entity.New(
 			entity.Keyword(entity.Ident, svcID1.String()),
 			svc1.Encode).Attrs())
 		_, err = eac.Put(ctx, &rpcE1)
 		r.NoError(err)
 
 		var rpcE2 entityserver_v1alpha.Entity
-		rpcE2.SetAttrs(entity.Attrs(
+		rpcE2.SetAttrs(entity.New(
 			entity.Keyword(entity.Ident, svcID2.String()),
 			svc2.Encode).Attrs())
 		_, err = eac.Put(ctx, &rpcE2)
 		r.NoError(err)
 
 		// Create both services
-		svc1Entity := entity.NewEntity(svc1.Encode)
+		svc1Entity := entity.New(svc1.Encode)
 
 		meta1 := &entity.Meta{
 			Entity:   svc1Entity,
@@ -763,7 +763,7 @@ func TestServiceController(t *testing.T) {
 		err = sc.Create(ctx, svc1, meta1)
 		r.NoError(err)
 
-		svc2Entity := entity.NewEntity(svc2.Encode)
+		svc2Entity := entity.New(svc2.Encode)
 
 		meta2 := &entity.Meta{
 			Entity:   svc2Entity,
@@ -787,7 +787,7 @@ func TestServiceController(t *testing.T) {
 
 		// Store the endpoints in entity store first
 		var epEntity entityserver_v1alpha.Entity
-		epEntity.SetAttrs(entity.Attrs(
+		epEntity.SetAttrs(entity.New(
 			entity.Keyword(entity.Ident, epID.String()),
 			eps.Encode).Attrs())
 		_, err = eac.Put(ctx, &epEntity)
@@ -802,7 +802,7 @@ func TestServiceController(t *testing.T) {
 		r.Error(err, "Expected endpoint to be deleted")
 
 		// Simulate endpoint deletion event (EventDeleted type)
-		epsEntity := entity.NewEntity(eps.Encode)
+		epsEntity := entity.New(eps.Encode)
 
 		event := controller.Event{
 			Type:   controller.EventDeleted,
@@ -859,7 +859,7 @@ func TestServiceController(t *testing.T) {
 			},
 		}
 
-		svcEntity := entity.NewEntity(svc.Encode)
+		svcEntity := entity.New(svc.Encode)
 
 		meta := &entity.Meta{
 			Entity:   svcEntity,
@@ -929,13 +929,13 @@ func TestServiceController(t *testing.T) {
 
 		// Store the service in entity store first
 		var rpcE entityserver_v1alpha.Entity
-		rpcE.SetAttrs(entity.Attrs(
+		rpcE.SetAttrs(entity.New(
 			entity.Keyword(entity.Ident, svcID.String()),
 			svc.Encode).Attrs())
 		_, err = eac.Put(ctx, &rpcE)
 		r.NoError(err)
 
-		svcEntity := entity.NewEntity(svc.Encode)
+		svcEntity := entity.New(svc.Encode)
 
 		meta := &entity.Meta{
 			Entity:   svcEntity,

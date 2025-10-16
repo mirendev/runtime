@@ -27,11 +27,8 @@ func assertEntityEqual(t *testing.T, expected, actual *Entity, msgAndArgs ...int
 	t.Helper()
 
 	// Make copies to avoid modifying the original entities
-	expectedAttrs := append([]Attr(nil), expected.Attrs()...)
-	actualAttrs := append([]Attr(nil), actual.Attrs()...)
-
-	expectedCopy := NewEntity(expectedAttrs)
-	actualCopy := NewEntity(actualAttrs)
+	expectedCopy := expected.Clone()
+	actualCopy := actual.Clone()
 
 	// Remove system timestamp attributes for comparison
 	expectedCopy.Remove(UpdatedAt)
@@ -104,7 +101,7 @@ func TestCreateEntity(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			entity, err := store.CreateEntity(t.Context(), Attrs(tt.attrs))
+			entity, err := store.CreateEntity(t.Context(), New(tt.attrs))
 			if tt.wantErr {
 				assert.Error(t, err)
 				return
@@ -116,7 +113,7 @@ func TestCreateEntity(t *testing.T) {
 			assert.False(t, entity.GetCreatedAt().IsZero())
 			assert.False(t, entity.GetUpdatedAt().IsZero())
 
-			expected := NewEntity(SortedAttrs(tt.out))
+			expected := New(SortedAttrs(tt.out))
 			assertEntityEqual(t, expected, entity)
 		})
 	}
@@ -131,7 +128,7 @@ func TestGetEntity(t *testing.T) {
 		Any(Ident, "test/person"),
 		Any(Doc, "A test person"),
 	}
-	created, err := store.CreateEntity(t.Context(), Attrs(attrs))
+	created, err := store.CreateEntity(t.Context(), New(attrs))
 	require.NoError(t, err)
 
 	// Test getting the entity
@@ -153,7 +150,7 @@ func TestUpdateEntity(t *testing.T) {
 		Any(Ident, "test/person"),
 		Any(Doc, "A test person"),
 	}
-	entity, err := store.CreateEntity(t.Context(), Attrs(initial))
+	entity, err := store.CreateEntity(t.Context(), New(initial))
 	require.NoError(t, err)
 
 	// Update the entity
@@ -161,7 +158,7 @@ func TestUpdateEntity(t *testing.T) {
 		Any(Doc, "Updated description"),
 	}
 	time.Sleep(10 * time.Millisecond)
-	updated, err := store.UpdateEntity(t.Context(), Id(entity.Id()), Attrs(updates))
+	updated, err := store.UpdateEntity(t.Context(), Id(entity.Id()), New(updates))
 	require.NoError(t, err)
 
 	assert.Equal(t, entity.Id(), updated.Id())
@@ -183,7 +180,7 @@ func TestDeleteEntity(t *testing.T) {
 		Any(Ident, "test/person"),
 		Any(Doc, "A test person"),
 	}
-	entity, err := store.CreateEntity(t.Context(), Attrs(attrs))
+	entity, err := store.CreateEntity(t.Context(), New(attrs))
 	require.NoError(t, err)
 
 	// Delete the entity
@@ -200,7 +197,7 @@ func TestDeleteEntity(t *testing.T) {
 }
 
 func TestEntityAttributes(t *testing.T) {
-	entity := NewEntity(
+	entity := New(
 		Any(Ident, KeywordValue("test/person")),
 		Any(Doc, "A test person"),
 	)
@@ -275,12 +272,12 @@ func TestAttrsHelper(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if tt.wantPanic {
 				assert.Panics(t, func() {
-					Attrs(tt.input...)
+					New(tt.input...)
 				})
 				return
 			}
 
-			attrs := Attrs(tt.input...).Timeless()
+			attrs := New(tt.input...).Timeless()
 			assert.Equal(t, tt.want, attrs.Attrs())
 		})
 	}
@@ -291,7 +288,7 @@ func TestIndices(t *testing.T) {
 	store, cleanup := setupTestStore(t)
 	defer cleanup()
 
-	pk, err := store.CreateEntity(t.Context(), Attrs(
+	pk, err := store.CreateEntity(t.Context(), New(
 		Any(Ident, "attr/person"),
 		Any(Index, true),
 	))
@@ -305,7 +302,7 @@ func TestIndices(t *testing.T) {
 	}
 
 	// Create a test entity
-	entity, err := store.CreateEntity(t.Context(), Attrs(attrs))
+	entity, err := store.CreateEntity(t.Context(), New(attrs))
 	require.NoError(t, err)
 
 	ids, err := store.ListIndex(t.Context(), Ref(EntityKind, pk.Id()))
@@ -389,7 +386,7 @@ func TestValidKeyword(t *testing.T) {
 
 func TestRemove(t *testing.T) {
 	// Create a test entity
-	ent := NewEntity(
+	ent := New(
 		Any(Ident, "test/person"),
 		Any(Doc, "A test person"),
 	)
@@ -398,7 +395,7 @@ func TestRemove(t *testing.T) {
 
 	r := require.New(t)
 
-	// NewEntity adds db/id, created_at, and updated_at automatically
+	// New adds db/id, created_at, and updated_at automatically
 	// After removing Doc, we should have 3 attrs (db/id, created_at, updated_at)
 	r.Len(ent.Attrs(), 3)
 
@@ -411,7 +408,7 @@ func TestEntity(t *testing.T) {
 	t.Run("dedups attributes", func(t *testing.T) {
 		r := require.New(t)
 
-		ent := NewEntity(
+		ent := New(
 			Any(Ident, "test/person"),
 			Any(Doc, "A test person"),
 			Any(Doc, "A test person"),
@@ -419,7 +416,7 @@ func TestEntity(t *testing.T) {
 
 		ent.Fixup()
 
-		// NewEntity adds db/id, created_at, updated_at and dedupes the duplicate Doc
+		// New adds db/id, created_at, updated_at and dedupes the duplicate Doc
 		// So we should have 4 attrs: db/id, Doc, created_at, updated_at
 		r.Len(ent.Attrs(), 4)
 

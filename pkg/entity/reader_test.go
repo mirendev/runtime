@@ -14,7 +14,7 @@ func TestEntityReader(t *testing.T) {
 
 	r := require.New(t)
 
-	e, err := store.CreateEntity(t.Context(), Attrs(
+	e, err := store.CreateEntity(t.Context(), New(
 		Named("test/person"),
 		Doc, "A test person",
 	))

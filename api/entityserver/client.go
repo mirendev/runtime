@@ -165,7 +165,7 @@ func (c *Client) Create(ctx context.Context, name string, sc SchemaEncoder, opts
 
 	var rpcE entityserver_v1alpha.Entity
 
-	rpcE.SetAttrs(entity.Attrs(
+	rpcE.SetAttrs(entity.New(
 		(&core_v1alpha.Metadata{
 			Name:   name,
 			Labels: op.labels,
@@ -208,7 +208,7 @@ func (c *Client) CreateOrUpdate(ctx context.Context, name string, sc SchemaEncod
 			return "", err
 		}
 		rpcE.SetAttrs(
-			entity.Attrs(
+			entity.New(
 				(&core_v1alpha.Metadata{
 					Name:   name,
 					Labels: op.labels,
@@ -266,7 +266,7 @@ func (c *Client) Update(ctx context.Context, sc SchemaEncoderWithId) error {
 func (c *Client) UpdateAttrs(ctx context.Context, id entity.Id, attrs ...any) error {
 	var rpcE2 entityserver_v1alpha.Entity
 	rpcE2.SetId(string(id))
-	rpcE2.SetAttrs(entity.Attrs(attrs...).Attrs())
+	rpcE2.SetAttrs(entity.New(attrs...).Attrs())
 
 	if c.sessionId != "" {
 		_, err := c.eac.PutSession(ctx, &rpcE2, c.sessionId)

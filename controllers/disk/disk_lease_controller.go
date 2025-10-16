@@ -254,7 +254,7 @@ func (d *DiskLeaseController) reconcileLease(ctx context.Context, lease *storage
 	if meta != nil {
 		// Ensure meta.Entity is initialized
 		if meta.Entity == nil {
-			meta.Entity = entity.NewEntity(lease.Encode())
+			meta.Entity = entity.New(lease.Encode())
 		} else {
 			// Update meta.Entity with the new attributes
 			meta.Entity.Update(lease.Encode())

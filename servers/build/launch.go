@@ -148,7 +148,7 @@ func (l *LaunchBuildkit) Launch(ctx context.Context, addr string, lo ...LaunchOp
 	l.log.Info("creating buildkit sandbox entity", "name", ver)
 
 	var rpcE entityserver_v1alpha.Entity
-	rpcE.SetAttrs(entity.Attrs(
+	rpcE.SetAttrs(entity.New(
 		(&core_v1alpha.Metadata{
 			Name: ver,
 		}).Encode,

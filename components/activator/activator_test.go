@@ -383,7 +383,7 @@ func TestActivatorRecoveryIntegration(t *testing.T) {
 	app.ActiveVersion = appVer.ID
 	var updateEntity entityserver_v1alpha.Entity
 	updateEntity.SetId(app.ID.String())
-	updateEntity.SetAttrs(entity.Attrs(
+	updateEntity.SetAttrs(entity.New(
 		app.Encode,
 	).Attrs())
 	_, err = server.EAC.Put(ctx, &updateEntity)

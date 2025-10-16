@@ -806,7 +806,7 @@ func (s *EtcdStore) ReplaceEntity(
 
 	rev := entity.GetRevision()
 
-	repl := NewEntity(current.attrs...)
+	repl := current.Clone()
 
 	if repl.Id() != id {
 		return nil, fmt.Errorf("db/id attribute does not match existing entity ID")

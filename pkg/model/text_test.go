@@ -34,7 +34,7 @@ func TestTextFormatter_Format(t *testing.T) {
 		store.NowFunc = func() time.Time {
 			return ts
 		}
-		testEntity, err := store.CreateEntity(context.Background(), entity.NewEntity([]entity.Attr{
+		testEntity, err := store.CreateEntity(context.Background(), entity.New([]entity.Attr{
 			{ID: entity.Ident, Value: entity.KeywordValue("test/entity")},
 			{ID: entity.Doc, Value: entity.StringValue("Test entity")},
 		}))
@@ -72,7 +72,7 @@ func TestTextFormatter_Format(t *testing.T) {
 		err := schema.Apply(ctx, store)
 		r.NoError(err)
 
-		testEntity, err := store.CreateEntity(context.Background(), entity.Attrs(
+		testEntity, err := store.CreateEntity(context.Background(), entity.New(
 			entity.Ident, types.Keyword("test/myproject"),
 			entity.EntityKind, entity.RefValue("dev.miren.core/kind.project"),
 		))

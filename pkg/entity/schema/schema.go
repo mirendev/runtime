@@ -59,7 +59,7 @@ func Register(domain string, version string, fn func(schema *SchemaBuilder)) {
 
 func (b *SchemaBuilder) Apply(ctx context.Context, store entity.Store) error {
 	for _, eid := range b.singletons {
-		_, err := store.CreateEntity(ctx, entity.Attrs(
+		_, err := store.CreateEntity(ctx, entity.New(
 			entity.Ident, types.Keyword(eid),
 		), entity.WithOverwrite)
 		if err != nil && !errors.Is(err, entity.ErrEntityAlreadyExists) {
@@ -68,7 +68,7 @@ func (b *SchemaBuilder) Apply(ctx context.Context, store entity.Store) error {
 	}
 
 	for _, e := range b.attrs {
-		_, err := store.CreateEntity(ctx, entity.NewEntity(slices.Clone(e.Attrs())), entity.WithOverwrite)
+		_, err := store.CreateEntity(ctx, entity.New(slices.Clone(e.Attrs())), entity.WithOverwrite)
 		if err != nil && !errors.Is(err, entity.ErrEntityAlreadyExists) {
 			return err
 		}
@@ -103,13 +103,13 @@ func Apply(ctx context.Context, store entity.Store) error {
 			)
 			}
 
-			_, err := store.CreateEntity(ctx, entity.NewEntity(attrs), entity.WithOverwrite)
+			_, err := store.CreateEntity(ctx, entity.New(attrs), entity.WithOverwrite)
 			if err != nil && !errors.Is(err, entity.ErrEntityAlreadyExists) {
 				return err
 			}
 
 			for kw := range schema.schema.Kinds {
-				_, err := store.CreateEntity(ctx, entity.Attrs(
+				_, err := store.CreateEntity(ctx, entity.New(
 					entity.Ident, types.Keyword(kw),
 					entity.EntitySchema, schemaId,
 				), entity.WithOverwrite)
@@ -210,7 +210,7 @@ func (s *SchemaBuilder) Attr(name, id string, typ entity.Id, opts ...AttrOption)
 		attrs = append(attrs, entity.Session, true)
 	}
 
-	ent := entity.NewEntity(entity.Attrs(attrs...))
+	ent := entity.New(attrs...)
 
 	s.attrs[eid] = ent
 

@@ -109,7 +109,7 @@ func MigrateEntityStore(ctx context.Context, log *slog.Logger, client *clientv3.
 			"attrs_count", len(oldEnt.Attrs))
 
 		// Create new entity starting with existing attributes
-		newEnt := NewEntity(oldEnt.Attrs)
+		newEnt := New(oldEnt.Attrs)
 
 		// Track whether we added db/id or it already existed
 		var addedDBId bool

@@ -62,7 +62,7 @@ func TestValidateComponentAttribute(t *testing.T) {
 	}
 
 	// First create a schema for the component attribute
-	_, err := store.CreateEntity(t.Context(), Attrs(
+	_, err := store.CreateEntity(t.Context(), New(
 		Ident, "test/component",
 		Type, TypeComponent,
 	))
@@ -71,7 +71,7 @@ func TestValidateComponentAttribute(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// First create a schema for the component attribute
-			_, err := store.CreateEntity(t.Context(), Attrs(
+			_, err := store.CreateEntity(t.Context(), New(
 				tt.attr,
 			))
 			if tt.wantErr {
@@ -171,7 +171,7 @@ func TestValidateEntity(t *testing.T) {
 		{
 			name: "valid entity",
 			entity: func() *Entity {
-				e := NewEntity(
+				e := New(
 					Keyword(Ident, "test/entity"),
 					Any(Doc, "Test entity"),
 				)
@@ -182,7 +182,7 @@ func TestValidateEntity(t *testing.T) {
 		{
 			name: "invalid attribute",
 			entity: func() *Entity {
-				e := NewEntity(
+				e := New(
 					Any(Ident, 123), // Should be string
 					Any(Doc, "Test entity"),
 				)
@@ -302,7 +302,7 @@ func TestValidate_EntityAttrs(t *testing.T) {
 
 	r := require.New(t)
 
-	_, err := store.CreateEntity(t.Context(), Attrs(
+	_, err := store.CreateEntity(t.Context(), New(
 		Ident, "test/name",
 		Doc, "Entity name",
 		Cardinality, CardinalityOne,
@@ -310,7 +310,7 @@ func TestValidate_EntityAttrs(t *testing.T) {
 	))
 	r.NoError(err)
 
-	_, err = store.CreateEntity(t.Context(), Attrs(
+	_, err = store.CreateEntity(t.Context(), New(
 		Ident, "test/has_name",
 		Doc, "Test entity",
 		Cardinality, CardinalityOne,
@@ -320,14 +320,14 @@ func TestValidate_EntityAttrs(t *testing.T) {
 
 	validator := NewValidator(store)
 
-	bad := NewEntity(
+	bad := New(
 		Ref(Ensure, "test/has_name"),
 	)
 
 	err = validator.ValidateEntity(t.Context(), bad)
 	r.Error(err)
 
-	good := NewEntity(
+	good := New(
 		Ref(Ensure, "test/has_name"),
 		String("test/name", "test"),
 	)

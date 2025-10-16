@@ -56,7 +56,7 @@ func TestMigrateEntityStore(t *testing.T) {
 	r.NoError(err)
 
 	// Create one entity that's already in new format
-	newEnt := NewEntity(
+	newEnt := New(
 		Ref(DBId, "sandbox/already-migrated"),
 		Int64(Revision, 1),
 		Time(CreatedAt, time.Date(2024, 1, 4, 0, 0, 0, 0, time.UTC)),

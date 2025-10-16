@@ -12,11 +12,11 @@ func TestMetaEncodeDecode(t *testing.T) {
 		r := require.New(t)
 
 		// Create a meta with an entity
-		originalEntity := NewEntity(Attrs(
+		originalEntity := New(
 			Ident, "test/entity",
 			Doc, "Test documentation",
 			Type, TypeStr,
-		))
+		)
 
 		originalMeta := &Meta{
 			Entity:   originalEntity,
@@ -76,7 +76,7 @@ func TestMetaEncodeDecode(t *testing.T) {
 
 	t.Run("GetRevision uses meta revision when set", func(t *testing.T) {
 		meta := &Meta{
-			Entity:   NewEntity(Attrs(Ident, "test/entity")),
+			Entity:   New(Ident, "test/entity"),
 			Revision: 100,
 		}
 
@@ -84,7 +84,7 @@ func TestMetaEncodeDecode(t *testing.T) {
 	})
 
 	t.Run("GetRevision uses entity revision when meta revision is zero", func(t *testing.T) {
-		entity := NewEntity(Attrs(Ident, "test/entity"))
+		entity := New(Ident, "test/entity")
 		entity.SetRevision(50)
 
 		meta := &Meta{

@@ -114,7 +114,7 @@ func (m *MockStore) UpdateEntity(ctx context.Context, id Id, entity *Entity, opt
 	combinedAttrs = append(combinedAttrs, entity.attrs...)
 
 	// Create a copy to avoid modifying the original
-	updated := NewEntity(combinedAttrs)
+	updated := New(combinedAttrs)
 
 	updated.SetRevision(e.GetRevision() + 1)
 	updated.SetUpdatedAt(m.Now())
@@ -193,7 +193,7 @@ func (m *MockStore) WatchIndex(ctx context.Context, attr Attr) (clientv3.WatchCh
 	ch := make(chan clientv3.WatchResponse)
 
 	m.mu.Lock()
-	mockEntity := NewEntity(
+	mockEntity := New(
 		Ref(DBId, "mock/entity"),
 		Keyword(Ident, "mock/entity"),
 	)

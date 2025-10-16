@@ -1954,7 +1954,7 @@ func (c *SandboxController) stopSandbox(ctx context.Context, sb *compute.Sandbox
 
 	rpcE.SetId(sb.ID.String())
 
-	rpcE.SetAttrs(entity.Attrs(
+	rpcE.SetAttrs(entity.New(
 		(&compute.Sandbox{
 			Status: compute.DEAD,
 		}).Encode,

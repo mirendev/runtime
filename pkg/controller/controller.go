@@ -165,7 +165,7 @@ func (c *ReconcileController) Start(top context.Context) error {
 					createdAt := time.UnixMilli(aen.CreatedAt())
 					updatedAt := time.UnixMilli(aen.UpdatedAt())
 
-					ev.Entity = entity.NewEntity(aen.Attrs())
+					ev.Entity = entity.New(aen.Attrs())
 
 					ev.Entity.SetCreatedAt(createdAt)
 					ev.Entity.SetUpdatedAt(updatedAt)
@@ -330,7 +330,7 @@ func (c *ReconcileController) periodicResync(ctx context.Context) {
 			createdAt := time.UnixMilli(aen.CreatedAt())
 			updatedAt := time.UnixMilli(aen.UpdatedAt())
 
-			en := entity.NewEntity(aen.Attrs())
+			en := entity.New(aen.Attrs())
 
 			en.SetCreatedAt(createdAt)
 			en.SetUpdatedAt(updatedAt)

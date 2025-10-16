@@ -26,7 +26,7 @@ func NaturalDecode(data any, es *entity.EncodedSchema) (*entity.Entity, error) {
 		return nil, err
 	}
 
-	return entity.NewEntity(attrs), nil
+	return entity.New(attrs), nil
 }
 
 func naturalDecode(data any, es *entity.EncodedSchema, top bool) ([]entity.Attr, error) {
@@ -227,7 +227,7 @@ func encodeNaturalValue(f *entity.SchemaField, val entity.Value) (any, error) {
 		if comp == nil {
 			return nil, nil
 		}
-		return naturalEncodeMap(entity.NewEntity(comp.Attrs()), f.Component)
+		return naturalEncodeMap(entity.New(comp.Attrs()), f.Component)
 	default:
 		return nil, fmt.Errorf("unsupported type: %s", f.Type)
 	}

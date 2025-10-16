@@ -54,6 +54,51 @@ type Entity struct {
 	attrs []Attr
 }
 
+// New constructs a slice of attributes from a variadic list of Attr, []Attr, func() []Attr, or key-value pairs.
+func New(vals ...any) *Entity {
+	var attrs []Attr
+
+	i := 0
+	for i < len(vals) {
+		switch v := vals[i].(type) {
+		case func() []Attr:
+			attrs = append(attrs, v()...)
+			i++
+		case []Attr:
+			attrs = append(attrs, v...)
+			i++
+		case Attr:
+			attrs = append(attrs, v)
+			i++
+		case Id:
+			attrs = append(attrs, Attr{
+				ID:    v,
+				Value: AnyValue(vals[i+1]),
+			})
+			i += 2
+		default:
+			panic(fmt.Sprintf("expected Id key, got %T", v))
+		}
+	}
+
+	ts := time.Now()
+	e := &Entity{
+		attrs: SortedAttrs(attrs),
+	}
+
+	e.removeIdent()
+
+	// Only set timestamps if they don't already exist
+	if e.GetCreatedAt().IsZero() {
+		e.SetCreatedAt(ts)
+	}
+	if e.GetUpdatedAt().IsZero() {
+		e.SetUpdatedAt(ts)
+	}
+
+	return e
+}
+
 // Attrs returns a clone of the entity's attributes
 func (e *Entity) Attrs() []Attr {
 	return slices.Clone(e.attrs)
@@ -472,44 +517,6 @@ func (e *Entity) ForceID() {
 	e.SetID(Id(idgen.GenNS(prefix)))
 }
 
-type ToAttr interface {
-	Attr | []Attr | func() []Attr | *Entity
-}
-
-func NewEntity[T ToAttr](attrs ...T) *Entity {
-	var attrList []Attr
-
-	for _, a := range attrs {
-		switch v := any(a).(type) {
-		case func() []Attr:
-			attrList = append(attrList, v()...)
-		case []Attr:
-			attrList = append(attrList, v...)
-		case Attr:
-			attrList = append(attrList, v)
-		case *Entity:
-			attrList = append(attrList, v.Attrs()...)
-		}
-	}
-
-	ts := time.Now()
-	e := &Entity{
-		attrs: attrList,
-	}
-
-	e.removeIdent()
-
-	// Only set timestamps if they don't already exist
-	if e.GetCreatedAt().IsZero() {
-		e.SetCreatedAt(ts)
-	}
-	if e.GetUpdatedAt().IsZero() {
-		e.SetUpdatedAt(ts)
-	}
-
-	return e
-}
-
 // Timeless returns a copy of the entity without CreatedAt, UpdatedAt and Revision attributes
 func (e *Entity) Timeless() *Entity {
 	o := e.Clone()
@@ -619,49 +626,4 @@ func MustKeyword(str string) types.Keyword {
 	}
 
 	return types.Keyword(str)
-}
-
-// Attrs constructs a slice of attributes from a variadic list of Attr, []Attr, func() []Attr, or key-value pairs.
-func Attrs(vals ...any) *Entity {
-	var attrs []Attr
-
-	i := 0
-	for i < len(vals) {
-		switch v := vals[i].(type) {
-		case func() []Attr:
-			attrs = append(attrs, v()...)
-			i++
-		case []Attr:
-			attrs = append(attrs, v...)
-			i++
-		case Attr:
-			attrs = append(attrs, v)
-			i++
-		case Id:
-			attrs = append(attrs, Attr{
-				ID:    v,
-				Value: AnyValue(vals[i+1]),
-			})
-			i += 2
-		default:
-			panic(fmt.Sprintf("expected Id key, got %T", v))
-		}
-	}
-
-	ts := time.Now()
-	e := &Entity{
-		attrs: SortedAttrs(attrs),
-	}
-
-	e.removeIdent()
-
-	// Only set timestamps if they don't already exist
-	if e.GetCreatedAt().IsZero() {
-		e.SetCreatedAt(ts)
-	}
-	if e.GetUpdatedAt().IsZero() {
-		e.SetUpdatedAt(ts)
-	}
-
-	return e
 }
