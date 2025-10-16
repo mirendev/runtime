@@ -134,7 +134,7 @@ func TestServiceController(t *testing.T) {
 		var rpcE entityserver_v1alpha.Entity
 		rpcE.SetAttrs(entity.Attrs(
 			entity.Keyword(entity.Ident, svcID.String()),
-			svc.Encode))
+			svc.Encode).Attrs())
 		_, err = eac.Put(ctx, &rpcE)
 		r.NoError(err)
 
@@ -260,7 +260,7 @@ func TestServiceController(t *testing.T) {
 		var rpcE entityserver_v1alpha.Entity
 		rpcE.SetAttrs(entity.Attrs(
 			entity.Keyword(entity.Ident, svcID.String()),
-			svc.Encode))
+			svc.Encode).Attrs())
 		_, err = eac.Put(ctx, &rpcE)
 		r.NoError(err)
 
@@ -471,7 +471,7 @@ func TestServiceController(t *testing.T) {
 		var rpcE entityserver_v1alpha.Entity
 		rpcE.SetAttrs(entity.Attrs(
 			entity.Keyword(entity.Ident, svcID.String()),
-			svc.Encode))
+			svc.Encode).Attrs())
 		_, err = eac.Put(ctx, &rpcE)
 		r.NoError(err)
 
@@ -647,7 +647,7 @@ func TestServiceController(t *testing.T) {
 		var rpcE entityserver_v1alpha.Entity
 		rpcE.SetAttrs(entity.Attrs(
 			entity.Keyword(entity.Ident, svcID.String()),
-			svc.Encode))
+			svc.Encode).Attrs())
 		_, err = eac.Put(ctx, &rpcE)
 		r.NoError(err)
 
@@ -742,14 +742,14 @@ func TestServiceController(t *testing.T) {
 		var rpcE1 entityserver_v1alpha.Entity
 		rpcE1.SetAttrs(entity.Attrs(
 			entity.Keyword(entity.Ident, svcID1.String()),
-			svc1.Encode))
+			svc1.Encode).Attrs())
 		_, err = eac.Put(ctx, &rpcE1)
 		r.NoError(err)
 
 		var rpcE2 entityserver_v1alpha.Entity
 		rpcE2.SetAttrs(entity.Attrs(
 			entity.Keyword(entity.Ident, svcID2.String()),
-			svc2.Encode))
+			svc2.Encode).Attrs())
 		_, err = eac.Put(ctx, &rpcE2)
 		r.NoError(err)
 
@@ -789,7 +789,7 @@ func TestServiceController(t *testing.T) {
 		var epEntity entityserver_v1alpha.Entity
 		epEntity.SetAttrs(entity.Attrs(
 			entity.Keyword(entity.Ident, epID.String()),
-			eps.Encode))
+			eps.Encode).Attrs())
 		_, err = eac.Put(ctx, &epEntity)
 		r.NoError(err)
 
@@ -931,7 +931,7 @@ func TestServiceController(t *testing.T) {
 		var rpcE entityserver_v1alpha.Entity
 		rpcE.SetAttrs(entity.Attrs(
 			entity.Keyword(entity.Ident, svcID.String()),
-			svc.Encode))
+			svc.Encode).Attrs())
 		_, err = eac.Put(ctx, &rpcE)
 		r.NoError(err)
 

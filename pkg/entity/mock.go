@@ -76,21 +76,18 @@ func (m *MockStore) GetEntities(ctx context.Context, ids []Id) ([]*Entity, error
 	return entities, nil
 }
 
-func (m *MockStore) CreateEntity(ctx context.Context, attrs []Attr, opts ...EntityOption) (*Entity, error) {
-	e := NewEntity(attrs)
-
-	e.SetCreatedAt(m.Now())
-	e.SetUpdatedAt(m.Now())
-
-	e.SetRevision(1)
+func (m *MockStore) CreateEntity(ctx context.Context, entity *Entity, opts ...EntityOption) (*Entity, error) {
+	entity.SetCreatedAt(m.Now())
+	entity.SetUpdatedAt(m.Now())
+	entity.SetRevision(1)
 
 	m.mu.Lock()
-	m.Entities[e.Id()] = e
+	m.Entities[entity.Id()] = entity
 	m.mu.Unlock()
-	return e, nil
+	return entity, nil
 }
 
-func (m *MockStore) UpdateEntity(ctx context.Context, id Id, attrs []Attr, opts ...EntityOption) (*Entity, error) {
+func (m *MockStore) UpdateEntity(ctx context.Context, id Id, entity *Entity, opts ...EntityOption) (*Entity, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	e, ok := m.Entities[id]
@@ -103,7 +100,7 @@ func (m *MockStore) UpdateEntity(ctx context.Context, id Id, attrs []Attr, opts 
 
 	// First, copy over existing attributes that aren't being updated
 	attrMap := make(map[Id]Attr)
-	for _, attr := range attrs {
+	for _, attr := range entity.attrs {
 		attrMap[attr.ID] = attr
 	}
 
@@ -114,12 +111,12 @@ func (m *MockStore) UpdateEntity(ctx context.Context, id Id, attrs []Attr, opts 
 	}
 
 	// Then add the new/updated attributes
-	combinedAttrs = append(combinedAttrs, attrs...)
+	combinedAttrs = append(combinedAttrs, entity.attrs...)
 
 	// Create a copy to avoid modifying the original
 	updated := NewEntity(combinedAttrs)
 
-	updated.SetRevision(updated.GetRevision() + 1)
+	updated.SetRevision(e.GetRevision() + 1)
 	updated.SetUpdatedAt(m.Now())
 
 	// Update the entity in the store
@@ -128,64 +125,39 @@ func (m *MockStore) UpdateEntity(ctx context.Context, id Id, attrs []Attr, opts 
 	return updated, nil
 }
 
-func (m *MockStore) ReplaceEntity(ctx context.Context, attrs []Attr, opts ...EntityOption) (*Entity, error) {
-	// Extract ID from db/id attribute
-	var id Id
-	for _, attr := range attrs {
-		if attr.ID == DBId {
-			id = attr.Value.Id()
-			break
-		}
-	}
-
+func (m *MockStore) ReplaceEntity(ctx context.Context, entity *Entity, opts ...EntityOption) (*Entity, error) {
+	id := entity.Id()
 	if id == "" {
 		return nil, ErrNotFound
 	}
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	_, ok := m.Entities[id]
+	existing, ok := m.Entities[id]
 	if !ok {
 		return nil, ErrNotFound
 	}
 
-	// Create a copy with all new attributes
-	updated := NewEntity(attrs)
-	updated.SetRevision(updated.GetRevision() + 1)
-	updated.SetUpdatedAt(m.Now())
+	// Update revision and timestamp
+	entity.SetRevision(existing.GetRevision() + 1)
+	entity.SetUpdatedAt(m.Now())
 
-	m.Entities[id] = updated
-	return updated, nil
+	m.Entities[id] = entity
+	return entity, nil
 }
 
-func (m *MockStore) PatchEntity(ctx context.Context, attrs []Attr, opts ...EntityOption) (*Entity, error) {
-	// Extract ID from db/id attribute
-	var id Id
-	for _, attr := range attrs {
-		if attr.ID == DBId {
-			id = attr.Value.Id()
-			break
-		}
-	}
-
+func (m *MockStore) PatchEntity(ctx context.Context, entity *Entity, opts ...EntityOption) (*Entity, error) {
+	id := entity.Id()
 	if id == "" {
 		return nil, ErrNotFound
 	}
 
 	// Use UpdateEntity logic
-	return m.UpdateEntity(ctx, id, attrs, opts...)
+	return m.UpdateEntity(ctx, id, entity, opts...)
 }
 
-func (m *MockStore) EnsureEntity(ctx context.Context, attrs []Attr, opts ...EntityOption) (*Entity, bool, error) {
-	// Extract ID from db/id attribute
-	var id Id
-	for _, attr := range attrs {
-		if attr.ID == DBId {
-			id = attr.Value.Id()
-			break
-		}
-	}
-
+func (m *MockStore) EnsureEntity(ctx context.Context, entity *Entity, opts ...EntityOption) (*Entity, bool, error) {
+	id := entity.Id()
 	if id == "" {
 		return nil, false, ErrNotFound
 	}
@@ -199,10 +171,11 @@ func (m *MockStore) EnsureEntity(ctx context.Context, attrs []Attr, opts ...Enti
 	}
 
 	// Create new entity
-	e := NewEntity(attrs)
-	e.SetRevision(1)
-	m.Entities[id] = e
-	return e, true, nil
+	entity.SetRevision(1)
+	entity.SetCreatedAt(m.Now())
+	entity.SetUpdatedAt(m.Now())
+	m.Entities[id] = entity
+	return entity, true, nil
 }
 
 func (m *MockStore) DeleteEntity(ctx context.Context, id Id) error {

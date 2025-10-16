@@ -70,15 +70,15 @@ func TestCoordinatorParse(t *testing.T) {
 
 	enttest.EqualAttr(t, ent, entity.Id("db/id"), types.Id("sandbox/nginx"))
 
-	cv := entity.ComponentValue(entity.Attrs(
+	cv := entity.ComponentValue(
 		compute.ContainerImageId, "docker.io/library/nginx:latest",
 		compute.ContainerNameId, "nginx",
-		compute.ContainerPortId, entity.ComponentValue(entity.Attrs(
+		compute.ContainerPortId, entity.ComponentValue(
 			compute.PortNameId, "http",
 			compute.PortPortId, 80,
 			compute.PortTypeId, "http",
-		)),
-	)).Component()
+		),
+	).Component()
 
 	enttest.EqualAttr(t, ent, entity.Id("dev.miren.compute/sandbox.container"), cv)
 

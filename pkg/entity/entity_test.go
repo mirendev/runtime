@@ -104,7 +104,7 @@ func TestCreateEntity(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			entity, err := store.CreateEntity(t.Context(), tt.attrs)
+			entity, err := store.CreateEntity(t.Context(), Attrs(tt.attrs))
 			if tt.wantErr {
 				assert.Error(t, err)
 				return
@@ -131,7 +131,7 @@ func TestGetEntity(t *testing.T) {
 		Any(Ident, "test/person"),
 		Any(Doc, "A test person"),
 	}
-	created, err := store.CreateEntity(t.Context(), attrs)
+	created, err := store.CreateEntity(t.Context(), Attrs(attrs))
 	require.NoError(t, err)
 
 	// Test getting the entity
@@ -153,7 +153,7 @@ func TestUpdateEntity(t *testing.T) {
 		Any(Ident, "test/person"),
 		Any(Doc, "A test person"),
 	}
-	entity, err := store.CreateEntity(t.Context(), initial)
+	entity, err := store.CreateEntity(t.Context(), Attrs(initial))
 	require.NoError(t, err)
 
 	// Update the entity
@@ -161,7 +161,7 @@ func TestUpdateEntity(t *testing.T) {
 		Any(Doc, "Updated description"),
 	}
 	time.Sleep(10 * time.Millisecond)
-	updated, err := store.UpdateEntity(t.Context(), Id(entity.Id()), updates)
+	updated, err := store.UpdateEntity(t.Context(), Id(entity.Id()), Attrs(updates))
 	require.NoError(t, err)
 
 	assert.Equal(t, entity.Id(), updated.Id())
@@ -183,7 +183,7 @@ func TestDeleteEntity(t *testing.T) {
 		Any(Ident, "test/person"),
 		Any(Doc, "A test person"),
 	}
-	entity, err := store.CreateEntity(t.Context(), attrs)
+	entity, err := store.CreateEntity(t.Context(), Attrs(attrs))
 	require.NoError(t, err)
 
 	// Delete the entity
@@ -280,8 +280,8 @@ func TestAttrsHelper(t *testing.T) {
 				return
 			}
 
-			attrs := Attrs(tt.input...)
-			assert.Equal(t, tt.want, attrs)
+			attrs := Attrs(tt.input...).Timeless()
+			assert.Equal(t, tt.want, attrs.Attrs())
 		})
 	}
 }
@@ -305,7 +305,7 @@ func TestIndices(t *testing.T) {
 	}
 
 	// Create a test entity
-	entity, err := store.CreateEntity(t.Context(), attrs)
+	entity, err := store.CreateEntity(t.Context(), Attrs(attrs))
 	require.NoError(t, err)
 
 	ids, err := store.ListIndex(t.Context(), Ref(EntityKind, pk.Id()))

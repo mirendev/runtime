@@ -273,7 +273,7 @@ func (e *TestEntity) Encode() []entity.Attr {
 	return entity.Attrs(
 		entity.Ident, e.ID,
 		NameAttr, e.Name,
-	)
+	).Attrs()
 }
 
 // Controller that only implements GenericController (no Update method)

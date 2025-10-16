@@ -1015,7 +1015,7 @@ func TestSandbox(t *testing.T) {
 		rpcE1.SetId(sbID1.String())
 		rpcE1.SetAttrs(entity.Attrs(
 			entity.Keyword(entity.Ident, sbID1.String()),
-			sb1.Encode))
+			sb1.Encode).Attrs())
 		_, err = sbc.EAC.Put(ctx, &rpcE1)
 		r.NoError(err)
 
@@ -1043,7 +1043,7 @@ func TestSandbox(t *testing.T) {
 		rpcE2.SetId(sbID2.String())
 		rpcE2.SetAttrs(entity.Attrs(
 			entity.Keyword(entity.Ident, sbID2.String()),
-			sb2.Encode))
+			sb2.Encode).Attrs())
 		_, err = sbc.EAC.Put(ctx, &rpcE2)
 		r.NoError(err)
 
@@ -1076,7 +1076,7 @@ func TestSandbox(t *testing.T) {
 			(&compute.Sandbox{
 				Status: compute.DEAD,
 			}).Encode,
-		))
+		).Attrs())
 
 		_, err = sbc.EAC.Put(ctx, &rpcE)
 		r.NoError(err)

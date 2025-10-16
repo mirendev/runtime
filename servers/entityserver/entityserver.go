@@ -194,7 +194,7 @@ func (e *EntityServer) Put(ctx context.Context, req *entityserver_v1alpha.Entity
 			opts = append(opts, entity.WithFromRevision(rev))
 		}
 
-		re, err := e.Store.UpdateEntity(ctx, entity.Id(rpcE.Id()), attrs, opts...)
+		re, err := e.Store.UpdateEntity(ctx, entity.Id(rpcE.Id()), entity.NewEntity(attrs), opts...)
 		if err != nil {
 			if !errors.Is(err, cond.ErrNotFound{}) {
 				// We got an error that _wasn't_ a not found error, so we should return it
@@ -208,7 +208,7 @@ func (e *EntityServer) Put(ctx context.Context, req *entityserver_v1alpha.Entity
 		}
 	}
 
-	re, err := e.Store.CreateEntity(ctx, attrs, opts...)
+	re, err := e.Store.CreateEntity(ctx, entity.NewEntity(attrs), opts...)
 	if err != nil {
 		return fmt.Errorf("failed to create entity in put: %w", err)
 	}
@@ -227,7 +227,7 @@ func (e *EntityServer) Create(ctx context.Context, req *entityserver_v1alpha.Ent
 		return cond.ValidationFailure("missing-field", "attrs")
 	}
 
-	entity, err := e.Store.CreateEntity(ctx, attrs)
+	entity, err := e.Store.CreateEntity(ctx, entity.NewEntity(attrs))
 	if err != nil {
 		return fmt.Errorf("failed to create entity: %w", err)
 	}
@@ -264,7 +264,7 @@ func (e *EntityServer) Replace(ctx context.Context, req *entityserver_v1alpha.En
 		opts = append(opts, entity.WithFromRevision(args.Revision()))
 	}
 
-	ent, err := e.Store.ReplaceEntity(ctx, attrs, opts...)
+	ent, err := e.Store.ReplaceEntity(ctx, entity.NewEntity(attrs), opts...)
 	if err != nil {
 		return fmt.Errorf("failed to replace entity: %w", err)
 	}
@@ -301,7 +301,7 @@ func (e *EntityServer) Patch(ctx context.Context, req *entityserver_v1alpha.Enti
 		opts = append(opts, entity.WithFromRevision(args.Revision()))
 	}
 
-	ent, err := e.Store.PatchEntity(ctx, attrs, opts...)
+	ent, err := e.Store.PatchEntity(ctx, entity.NewEntity(attrs), opts...)
 	if err != nil {
 		return fmt.Errorf("failed to patch entity: %w", err)
 	}
@@ -333,7 +333,7 @@ func (e *EntityServer) Ensure(ctx context.Context, req *entityserver_v1alpha.Ent
 		return cond.ValidationFailure("missing-field", "db/id attribute is required")
 	}
 
-	ent, created, err := e.Store.EnsureEntity(ctx, attrs)
+	ent, created, err := e.Store.EnsureEntity(ctx, entity.NewEntity(attrs))
 	if err != nil {
 		return fmt.Errorf("failed to ensure entity: %w", err)
 	}
@@ -377,7 +377,7 @@ func (e *EntityServer) PutSession(ctx context.Context, req *entityserver_v1alpha
 	opts = append(opts, entity.WithSession(data))
 
 	if rpcE.HasId() {
-		re, err := e.Store.UpdateEntity(ctx, entity.Id(rpcE.Id()), attrs, opts...)
+		re, err := e.Store.UpdateEntity(ctx, entity.Id(rpcE.Id()), entity.NewEntity(attrs), opts...)
 		if err != nil {
 			if !errors.Is(err, entity.ErrNotFound) {
 				return fmt.Errorf("failed to create entity: %w", err)
@@ -387,7 +387,7 @@ func (e *EntityServer) PutSession(ctx context.Context, req *entityserver_v1alpha
 			results.SetId(re.Id().String())
 		}
 	} else {
-		re, err := e.Store.CreateEntity(ctx, attrs, opts...)
+		re, err := e.Store.CreateEntity(ctx, entity.NewEntity(attrs), opts...)
 		if err != nil {
 			return fmt.Errorf("failed to create entity: %w", err)
 		}

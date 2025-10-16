@@ -68,7 +68,7 @@ func (b *SchemaBuilder) Apply(ctx context.Context, store entity.Store) error {
 	}
 
 	for _, e := range b.attrs {
-		_, err := store.CreateEntity(ctx, slices.Clone(e.Attrs()), entity.WithOverwrite)
+		_, err := store.CreateEntity(ctx, entity.NewEntity(slices.Clone(e.Attrs())), entity.WithOverwrite)
 		if err != nil && !errors.Is(err, entity.ErrEntityAlreadyExists) {
 			return err
 		}
@@ -91,19 +91,19 @@ func Apply(ctx context.Context, store entity.Store) error {
 		for ver, schema := range vers {
 			schemaId := entity.Id(domain + "/schema." + ver)
 
-			attrs := entity.Attrs(
-				entity.Ident, types.Keyword(schemaId),
-				entity.Schema, entity.BytesValue(schema.encoded),
-			)
-
-			for k, v := range schema.schema.ShortKinds {
-				attrs = append(attrs, entity.Attrs(
-					entity.SchemaKind, k,
-					entity.SchemaKind, v,
-				)...)
+			attrs := []entity.Attr{
+				entity.Any(entity.Ident, types.Keyword(schemaId)),
+				entity.Any(entity.Schema, entity.BytesValue(schema.encoded)),
 			}
 
-			_, err := store.CreateEntity(ctx, attrs, entity.WithOverwrite)
+			for k, v := range schema.schema.ShortKinds {
+				attrs = append(attrs,
+				entity.Any(entity.SchemaKind, k),
+				entity.Any(entity.SchemaKind, v),
+			)
+			}
+
+			_, err := store.CreateEntity(ctx, entity.NewEntity(attrs), entity.WithOverwrite)
 			if err != nil && !errors.Is(err, entity.ErrEntityAlreadyExists) {
 				return err
 			}

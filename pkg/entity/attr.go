@@ -23,6 +23,10 @@ type Attr struct {
 	Value Value `json:"v" cbor:"v"`
 }
 
+type AttrsFunc func() []Attr
+
+type AttrList []Attr
+
 func (a Attr) Kind() any {
 	return a.Value.any
 }
@@ -511,7 +515,32 @@ func KeywordValue[T Keywordable](v T) Value {
 	}
 }
 
-func ComponentValue(attrs []Attr) Value {
+func ComponentValue(vals ...any) Value {
+	var attrs []Attr
+
+	i := 0
+	for i < len(vals) {
+		switch v := vals[i].(type) {
+		case func() []Attr:
+			attrs = append(attrs, v()...)
+			i++
+		case []Attr:
+			attrs = append(attrs, v...)
+			i++
+		case Attr:
+			attrs = append(attrs, v)
+			i++
+		case Id:
+			attrs = append(attrs, Attr{
+				ID:    v,
+				Value: AnyValue(vals[i+1]),
+			})
+			i += 2
+		default:
+			panic(fmt.Sprintf("expected Id key, got %T", v))
+		}
+	}
+
 	return Value{any: &EntityComponent{attrs: attrs}}
 }
 

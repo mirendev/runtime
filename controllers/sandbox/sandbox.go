@@ -1958,7 +1958,7 @@ func (c *SandboxController) stopSandbox(ctx context.Context, sb *compute.Sandbox
 		(&compute.Sandbox{
 			Status: compute.DEAD,
 		}).Encode,
-	))
+	).Attrs())
 
 	_, err = c.EAC.Put(context.Background(), &rpcE)
 	if err != nil {

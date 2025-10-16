@@ -34,10 +34,10 @@ func TestTextFormatter_Format(t *testing.T) {
 		store.NowFunc = func() time.Time {
 			return ts
 		}
-		testEntity, err := store.CreateEntity(context.Background(), []entity.Attr{
+		testEntity, err := store.CreateEntity(context.Background(), entity.NewEntity([]entity.Attr{
 			{ID: entity.Ident, Value: entity.KeywordValue("test/entity")},
 			{ID: entity.Doc, Value: entity.StringValue("Test entity")},
-		})
+		}))
 		r.NoError(err)
 
 		out, err := tf.Format(ctx, testEntity)

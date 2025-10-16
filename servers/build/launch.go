@@ -154,7 +154,7 @@ func (l *LaunchBuildkit) Launch(ctx context.Context, addr string, lo ...LaunchOp
 		}).Encode,
 		entity.Ident, "sandbox/"+ver,
 		sb.Encode,
-	))
+	).Attrs())
 
 	l.log.Debug("putting sandbox entity to entity store")
 	pr, err := l.eac.Put(ctx, &rpcE)

@@ -28,10 +28,10 @@ func TestEntityServer_Get(t *testing.T) {
 	ctx := context.TODO()
 
 	// Create a test entity
-	testEntity, err := store.CreateEntity(context.Background(), []entity.Attr{
+	testEntity, err := store.CreateEntity(context.Background(), entity.NewEntity([]entity.Attr{
 		{ID: entity.Ident, Value: entity.KeywordValue("test/entity")},
 		{ID: entity.Doc, Value: entity.StringValue("Test entity")},
-	})
+	}))
 	require.NoError(t, err)
 
 	tests := []struct {
@@ -141,10 +141,10 @@ func TestEntityServer_Delete(t *testing.T) {
 	ctx := context.TODO()
 
 	// Create a test entity
-	_, err := store.CreateEntity(context.Background(), []entity.Attr{
+	_, err := store.CreateEntity(context.Background(), entity.NewEntity([]entity.Attr{
 		{ID: entity.Ident, Value: entity.KeywordValue("test/entity")},
 		{ID: entity.Doc, Value: entity.StringValue("Test entity")},
-	})
+	}))
 	require.NoError(t, err)
 
 	tests := []struct {
@@ -266,7 +266,7 @@ func TestEntityServer_List(t *testing.T) {
 	}
 
 	for _, e := range entities {
-		_, err := store.CreateEntity(ctx, e.attrs)
+		_, err := store.CreateEntity(ctx, entity.NewEntity(e.attrs))
 		require.NoError(t, err)
 	}
 
@@ -354,10 +354,10 @@ func TestEntityServer_List_WithMissingEntity(t *testing.T) {
 	ctx := context.TODO()
 
 	// Create an entity
-	_, err := store.CreateEntity(ctx, []entity.Attr{
+	_, err := store.CreateEntity(ctx, entity.NewEntity([]entity.Attr{
 		{ID: entity.Ident, Value: entity.KeywordValue("test/entity1")},
 		{ID: entity.EntityKind, Value: entity.KeywordValue("test")},
-	})
+	}))
 	require.NoError(t, err)
 
 	// Override GetEntities to return a nil entry to simulate missing entity

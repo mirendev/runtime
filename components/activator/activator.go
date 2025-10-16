@@ -347,7 +347,7 @@ func (a *localActivator) activateApp(ctx context.Context, ver *core_v1alpha.AppV
 		}).Encode,
 		entity.Ident, "sandbox/"+name,
 		sb.Encode,
-	))
+	).Attrs())
 
 	pr, err := a.eac.Put(ctx, &rpcE)
 	if err != nil {
@@ -902,7 +902,7 @@ func (a *localActivator) retireUnusedSandboxes() {
 			(&compute_v1alpha.Sandbox{
 				Status: compute_v1alpha.STOPPED,
 			}).Encode,
-		))
+		).Attrs())
 
 		if _, err := a.eac.Put(ctx, &rpcE); err != nil {
 			// Log with appropriate detail for timeout/cancellation vs other errors

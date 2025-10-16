@@ -277,8 +277,8 @@ func (e *EntityComponent) GetAll(name Id) []Attr {
 type EntityStore interface {
 	GetEntity(ctx context.Context, id Id) (*Entity, error)
 	GetAttributeSchema(ctx context.Context, name Id) (*AttributeSchema, error)
-	CreateEntity(ctx context.Context, attributes []Attr, opts ...EntityOption) (*Entity, error)
-	UpdateEntity(ctx context.Context, id Id, attributes []Attr, opts ...EntityOption) (*Entity, error)
+	CreateEntity(ctx context.Context, entity *Entity, opts ...EntityOption) (*Entity, error)
+	UpdateEntity(ctx context.Context, id Id, entity *Entity, opts ...EntityOption) (*Entity, error)
 	DeleteEntity(ctx context.Context, id Id) error
 	ListIndex(ctx context.Context, attr Attr) ([]Id, error)
 	ListCollection(ctx context.Context, collection string) ([]Id, error)
@@ -473,7 +473,7 @@ func (e *Entity) ForceID() {
 }
 
 type ToAttr interface {
-	Attr | []Attr | func() []Attr
+	Attr | []Attr | func() []Attr | *Entity
 }
 
 func NewEntity[T ToAttr](attrs ...T) *Entity {
@@ -487,6 +487,8 @@ func NewEntity[T ToAttr](attrs ...T) *Entity {
 			attrList = append(attrList, v...)
 		case Attr:
 			attrList = append(attrList, v)
+		case *Entity:
+			attrList = append(attrList, v.Attrs()...)
 		}
 	}
 
@@ -620,7 +622,7 @@ func MustKeyword(str string) types.Keyword {
 }
 
 // Attrs constructs a slice of attributes from a variadic list of Attr, []Attr, func() []Attr, or key-value pairs.
-func Attrs(vals ...any) []Attr {
+func Attrs(vals ...any) *Entity {
 	var attrs []Attr
 
 	i := 0
@@ -644,7 +646,22 @@ func Attrs(vals ...any) []Attr {
 		default:
 			panic(fmt.Sprintf("expected Id key, got %T", v))
 		}
-
 	}
-	return SortedAttrs(attrs)
+
+	ts := time.Now()
+	e := &Entity{
+		attrs: SortedAttrs(attrs),
+	}
+
+	e.removeIdent()
+
+	// Only set timestamps if they don't already exist
+	if e.GetCreatedAt().IsZero() {
+		e.SetCreatedAt(ts)
+	}
+	if e.GetUpdatedAt().IsZero() {
+		e.SetUpdatedAt(ts)
+	}
+
+	return e
 }

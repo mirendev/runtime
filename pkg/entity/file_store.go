@@ -52,9 +52,7 @@ func NewFileStore(basePath string) (*FileStore, error) {
 }
 
 // CreateEntity creates a new entity with the given type and attributes
-func (s *FileStore) CreateEntity(ctx context.Context, attributes []Attr, opts ...EntityOption) (*Entity, error) {
-	entity := NewEntity(attributes)
-
+func (s *FileStore) CreateEntity(ctx context.Context, entity *Entity, opts ...EntityOption) (*Entity, error) {
 	// Validate attributes against schemas
 	err := s.validator.ValidateEntity(ctx, entity)
 	if err != nil {
@@ -146,24 +144,20 @@ func (s *FileStore) GetEntities(_ context.Context, ids []Id) ([]*Entity, error) 
 }
 
 // UpdateEntity updates an existing entity
-func (s *FileStore) UpdateEntity(ctx context.Context, id Id, attributes []Attr, opts ...EntityOption) (*Entity, error) {
+func (s *FileStore) UpdateEntity(ctx context.Context, id Id, updates *Entity, opts ...EntityOption) (*Entity, error) {
 	entity, err := s.GetEntity(ctx, id)
 	if err != nil {
 		return nil, err
 	}
 
+	entity.SetRevision(entity.GetRevision() + 1)
+	entity.SetUpdatedAt(time.Now())
+
 	// Validate attributes against schemas
-	err = s.validator.ValidateAttributes(ctx, attributes)
+	err = s.validator.ValidateAttributes(ctx, entity.attrs)
 	if err != nil {
 		return nil, err
 	}
-
-	entity.attrs = append(entity.attrs, attributes...)
-
-	// TODO: Revalidate attributes tooking for duplicates
-
-	entity.SetRevision(entity.GetRevision() + 1)
-	entity.SetUpdatedAt(time.Now())
 
 	if err := s.saveEntity(entity); err != nil {
 		return nil, err

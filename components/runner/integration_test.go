@@ -127,7 +127,7 @@ func TestRunnerCoordinatorIntegration(t *testing.T) {
 	sandbox.SetAttrs(entity.Attrs(
 		entity.EntityKind, compute.KindSandbox,
 		entity.Keyword(entity.Ident, id),
-	))
+	).Attrs())
 
 	_, err = eac.Put(ctx, sandbox)
 	r.NoError(err)

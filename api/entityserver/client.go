@@ -172,7 +172,7 @@ func (c *Client) Create(ctx context.Context, name string, sc SchemaEncoder, opts
 		}).Encode,
 		sc.Encode,
 		entity.Ident, types.Keyword(sc.ShortKind()+"/"+name),
-	))
+	).Attrs())
 
 	if c.sessionId != "" {
 		pr, err := c.eac.PutSession(ctx, &rpcE, c.sessionId)
@@ -215,7 +215,7 @@ func (c *Client) CreateOrUpdate(ctx context.Context, name string, sc SchemaEncod
 				}).Encode,
 				sc.Encode,
 				entity.Ident, types.Keyword(sc.ShortKind()+"/"+name),
-			))
+			).Attrs())
 	}
 
 	if c.sessionId != "" {
@@ -266,7 +266,7 @@ func (c *Client) Update(ctx context.Context, sc SchemaEncoderWithId) error {
 func (c *Client) UpdateAttrs(ctx context.Context, id entity.Id, attrs ...any) error {
 	var rpcE2 entityserver_v1alpha.Entity
 	rpcE2.SetId(string(id))
-	rpcE2.SetAttrs(entity.Attrs(attrs...))
+	rpcE2.SetAttrs(entity.Attrs(attrs...).Attrs())
 
 	if c.sessionId != "" {
 		_, err := c.eac.PutSession(ctx, &rpcE2, c.sessionId)

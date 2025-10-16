@@ -59,7 +59,7 @@ func TestActivatorFixedModeRoundRobin(t *testing.T) {
 	updateEntity.SetId(app.ID.String())
 	updateEntity.SetAttrs(entity.Attrs(
 		app.Encode,
-	))
+	).Attrs())
 	_, err = server.EAC.Put(ctx, &updateEntity)
 	require.NoError(t, err)
 

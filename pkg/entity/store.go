@@ -33,11 +33,11 @@ type Store interface {
 	GetEntities(ctx context.Context, ids []Id) ([]*Entity, error)
 	WatchEntity(ctx context.Context, id Id) (chan EntityOp, error)
 	GetAttributeSchema(ctx context.Context, name Id) (*AttributeSchema, error)
-	CreateEntity(ctx context.Context, attributes []Attr, opts ...EntityOption) (*Entity, error)
-	UpdateEntity(ctx context.Context, id Id, attributes []Attr, opts ...EntityOption) (*Entity, error)
-	ReplaceEntity(ctx context.Context, attributes []Attr, opts ...EntityOption) (*Entity, error)
-	PatchEntity(ctx context.Context, attributes []Attr, opts ...EntityOption) (*Entity, error)
-	EnsureEntity(ctx context.Context, attributes []Attr, opts ...EntityOption) (*Entity, bool, error)
+	CreateEntity(ctx context.Context, entity *Entity, opts ...EntityOption) (*Entity, error)
+	UpdateEntity(ctx context.Context, id Id, entity *Entity, opts ...EntityOption) (*Entity, error)
+	ReplaceEntity(ctx context.Context, entity *Entity, opts ...EntityOption) (*Entity, error)
+	PatchEntity(ctx context.Context, entity *Entity, opts ...EntityOption) (*Entity, error)
+	EnsureEntity(ctx context.Context, entity *Entity, opts ...EntityOption) (*Entity, bool, error)
 	DeleteEntity(ctx context.Context, id Id) error
 	WatchIndex(ctx context.Context, attr Attr) (clientv3.WatchChan, error)
 	ListIndex(ctx context.Context, attr Attr) ([]Id, error)
@@ -146,15 +146,13 @@ func WithOverwrite(opts *entityOpts) {
 // CreateEntity implements Store interface
 func (s *EtcdStore) CreateEntity(
 	ctx context.Context,
-	attributes []Attr,
+	entity *Entity,
 	opts ...EntityOption,
 ) (*Entity, error) {
 	var o entityOpts
 	for _, opt := range opts {
 		opt(&o)
 	}
-
-	entity := NewEntity(attributes)
 
 	entity.ForceID()
 
@@ -502,7 +500,7 @@ func (s *EtcdStore) WatchEntity(ctx context.Context, id Id) (chan EntityOp, erro
 func (s *EtcdStore) UpdateEntity(
 	ctx context.Context,
 	id Id,
-	attributes []Attr,
+	changes *Entity,
 	opts ...EntityOption,
 ) (*Entity, error) {
 	var o entityOpts
@@ -537,7 +535,7 @@ func (s *EtcdStore) UpdateEntity(
 	}
 
 	// Validate attributes
-	for _, attr := range attributes {
+	for _, attr := range changes.attrs {
 		schema, err := s.GetAttributeSchema(ctx, attr.ID)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get attribute schema: %w", err)
@@ -550,7 +548,7 @@ func (s *EtcdStore) UpdateEntity(
 		}
 	}
 
-	err = entity.Update(attributes)
+	err = entity.Update(changes.attrs)
 	if err != nil {
 		return nil, fmt.Errorf("failed to update entity: %w", err)
 	}
@@ -786,7 +784,7 @@ func (s *EtcdStore) buildEntitySaveOps(entity *Entity, key string, primary, sess
 // The db/id attribute must be present in the attributes to identify the entity
 func (s *EtcdStore) ReplaceEntity(
 	ctx context.Context,
-	attributes []Attr,
+	current *Entity,
 	opts ...EntityOption,
 ) (*Entity, error) {
 	var o entityOpts
@@ -795,7 +793,7 @@ func (s *EtcdStore) ReplaceEntity(
 	}
 
 	// Extract ID from db/id attribute
-	id, err := extractEntityId(attributes)
+	id, err := extractEntityId(current.attrs)
 	if err != nil {
 		return nil, err
 	}
@@ -808,7 +806,7 @@ func (s *EtcdStore) ReplaceEntity(
 
 	rev := entity.GetRevision()
 
-	repl := NewEntity(attributes)
+	repl := NewEntity(current.attrs...)
 
 	if repl.Id() != id {
 		return nil, fmt.Errorf("db/id attribute does not match existing entity ID")
@@ -884,7 +882,7 @@ func (s *EtcdStore) ReplaceEntity(
 // The db/id attribute must be present in the attributes to identify the entity
 func (s *EtcdStore) PatchEntity(
 	ctx context.Context,
-	attributes []Attr,
+	current *Entity,
 	opts ...EntityOption,
 ) (*Entity, error) {
 	var o entityOpts
@@ -893,7 +891,7 @@ func (s *EtcdStore) PatchEntity(
 	}
 
 	// Extract ID from db/id attribute
-	id, err := extractEntityId(attributes)
+	id, err := extractEntityId(current.attrs)
 	if err != nil {
 		return nil, err
 	}
@@ -916,7 +914,7 @@ func (s *EtcdStore) PatchEntity(
 	}
 
 	// Validate and merge attributes (remove cardinality=one, keep cardinality=many)
-	for _, attr := range attributes {
+	for _, attr := range current.attrs {
 		schema, err := s.GetAttributeSchema(ctx, attr.ID)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get attribute schema: %w", err)
@@ -929,7 +927,7 @@ func (s *EtcdStore) PatchEntity(
 		}
 	}
 
-	err = entity.Update(attributes)
+	err = entity.Update(current.attrs)
 	if err != nil {
 		return nil, fmt.Errorf("failed to update entity: %w", err)
 	}
@@ -990,11 +988,11 @@ func (s *EtcdStore) PatchEntity(
 // Returns (entity, true, nil) if created, (entity, false, nil) if already exists
 func (s *EtcdStore) EnsureEntity(
 	ctx context.Context,
-	attributes []Attr,
+	entity *Entity,
 	opts ...EntityOption,
 ) (*Entity, bool, error) {
 	// Extract ID from db/id attribute
-	id, err := extractEntityId(attributes)
+	id, err := extractEntityId(entity.attrs)
 	if err != nil {
 		return nil, false, err
 	}
@@ -1012,7 +1010,7 @@ func (s *EtcdStore) EnsureEntity(
 	}
 
 	// Create the entity
-	entity, err := s.CreateEntity(ctx, attributes, opts...)
+	entity, err = s.CreateEntity(ctx, entity, opts...)
 	if err != nil {
 		// Check if it was created by another concurrent operation
 		if errors.Is(err, cond.ErrConflict{}) || errors.Is(err, ErrEntityAlreadyExists) {
