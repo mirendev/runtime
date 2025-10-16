@@ -87,7 +87,7 @@ func TestActivatorRetireUnusedSandboxes(t *testing.T) {
 		log: log,
 		eac: server.EAC,
 		versions: map[verKey]*verSandboxes{
-			{"ver-1", "default", "web"}: {
+			{"ver-1", "web"}: {
 				ver: ver,
 				sandboxes: []*sandbox{
 					// Old sandbox - should be retired
@@ -121,14 +121,14 @@ func TestActivatorRetireUnusedSandboxes(t *testing.T) {
 	}
 
 	// Count initial sandboxes
-	initialCount := len(activator.versions[verKey{"ver-1", "default", "web"}].sandboxes)
+	initialCount := len(activator.versions[verKey{ver: "ver-1", service: "web"}].sandboxes)
 	assert.Equal(t, 3, initialCount)
 
 	// Run retirement
 	activator.retireUnusedSandboxes()
 
 	// Check that non-RUNNING sandbox was removed and old sandbox was marked for retirement
-	vs := activator.versions[verKey{"ver-1", "default", "web"}]
+	vs := activator.versions[verKey{ver: "ver-1", service: "web"}]
 	assert.Equal(t, 1, len(vs.sandboxes), "should only have recent sandbox left")
 	assert.Equal(t, sb2.ID, vs.sandboxes[0].sandbox.ID, "should be the recent sandbox")
 
@@ -204,7 +204,7 @@ func TestActivatorAutoModeSlotTracking(t *testing.T) {
 		log: log.With("module", "activator"),
 		eac: server.EAC,
 		versions: map[verKey]*verSandboxes{
-			{appVer.ID.String(), "default", "web"}: {
+			{appVer.ID.String(), "web"}: {
 				ver: appVer,
 				sandboxes: []*sandbox{
 					{
@@ -220,7 +220,7 @@ func TestActivatorAutoModeSlotTracking(t *testing.T) {
 		},
 	}
 
-	key := verKey{appVer.ID.String(), "default", "web"}
+	key := verKey{appVer.ID.String(), "web"}
 	vs := activator.versions[key]
 	s := vs.sandboxes[0]
 
@@ -228,27 +228,27 @@ func TestActivatorAutoModeSlotTracking(t *testing.T) {
 	assert.Equal(t, 2, s.tracker.Used(), "should start with one lease's worth")
 
 	// Acquire first additional lease - should succeed
-	lease1, err := activator.AcquireLease(ctx, appVer, "default", "web")
+	lease1, err := activator.AcquireLease(ctx, appVer, "web")
 	require.NoError(t, err)
 	require.NotNil(t, lease1)
 	assert.Equal(t, 2, lease1.Size, "lease size should be 20% of 10 = 2")
 	assert.Equal(t, 4, s.tracker.Used(), "should increment to 4 slots")
 
 	// Acquire second additional lease - should succeed
-	lease2, err := activator.AcquireLease(ctx, appVer, "default", "web")
+	lease2, err := activator.AcquireLease(ctx, appVer, "web")
 	require.NoError(t, err)
 	require.NotNil(t, lease2)
 	assert.Equal(t, 2, lease2.Size)
 	assert.Equal(t, 6, s.tracker.Used(), "should increment to 6 slots")
 
 	// Acquire third additional lease - should succeed
-	lease3, err := activator.AcquireLease(ctx, appVer, "default", "web")
+	lease3, err := activator.AcquireLease(ctx, appVer, "web")
 	require.NoError(t, err)
 	require.NotNil(t, lease3)
 	assert.Equal(t, 8, s.tracker.Used(), "should increment to 8 slots")
 
 	// Try to acquire fourth lease - should succeed (8+2=10, at capacity)
-	lease4, err := activator.AcquireLease(ctx, appVer, "default", "web")
+	lease4, err := activator.AcquireLease(ctx, appVer, "web")
 	require.NoError(t, err)
 	require.NotNil(t, lease4)
 	assert.Equal(t, 10, s.tracker.Used(), "should be at max capacity")
@@ -325,7 +325,7 @@ func TestActivatorLeaseOperations(t *testing.T) {
 	activator := &localActivator{
 		log: log,
 		versions: map[verKey]*verSandboxes{
-			{"ver-1", "default", "web"}: {
+			{"ver-1", "web"}: {
 				ver:       testVer,
 				sandboxes: []*sandbox{testSandbox},
 				strategy:  strategy,
@@ -369,7 +369,7 @@ func TestActivatorConcurrentSafety(t *testing.T) {
 	go func() {
 		for range 100 {
 			activator.mu.Lock()
-			activator.versions[verKey{"ver-1", "default", "web"}] = &verSandboxes{
+			activator.versions[verKey{ver: "ver-1", service: "web"}] = &verSandboxes{
 				sandboxes: []*sandbox{},
 			}
 			activator.mu.Unlock()
@@ -381,7 +381,7 @@ func TestActivatorConcurrentSafety(t *testing.T) {
 	go func() {
 		for range 100 {
 			activator.mu.Lock()
-			_ = activator.versions[verKey{"ver-1", "default", "web"}]
+			_ = activator.versions[verKey{ver: "ver-1", service: "web"}]
 			activator.mu.Unlock()
 		}
 		done <- true
@@ -391,7 +391,7 @@ func TestActivatorConcurrentSafety(t *testing.T) {
 	go func() {
 		for range 100 {
 			activator.mu.Lock()
-			delete(activator.versions, verKey{"ver-1", "default", "web"})
+			delete(activator.versions, verKey{ver: "ver-1", service: "web"})
 			activator.mu.Unlock()
 		}
 		done <- true
@@ -482,7 +482,7 @@ func TestActivatorRecoverSandboxesWithEntityServer(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify sandbox was recovered
-	key := verKey{appVer.ID.String(), "production", "web"}
+	key := verKey{ver: appVer.ID.String(), service: "web"}
 	vs, ok := activator.versions[key]
 	require.True(t, ok, "version should be in map")
 	require.Len(t, vs.sandboxes, 1, "should have recovered 1 running sandbox")
@@ -546,6 +546,13 @@ func TestActivatorRecoveryIntegration(t *testing.T) {
 						ScaleDownDelay:      "15m",
 					},
 				},
+				{
+					Name: "worker",
+					ServiceConcurrency: core_v1alpha.ServiceConcurrency{
+						Mode:         "fixed",
+						NumInstances: 1,
+					},
+				},
 			},
 		},
 	}
@@ -565,9 +572,9 @@ func TestActivatorRecoveryIntegration(t *testing.T) {
 	require.NoError(t, err)
 
 	// Simulate existing sandboxes that would be present after a restart
-	// Create 3 sandboxes: 2 running, 1 stopped
-	pools := []string{"default", "production", "default"}
-	statuses := []compute_v1alpha.SandboxStatus{compute_v1alpha.RUNNING, compute_v1alpha.RUNNING, compute_v1alpha.STOPPED}
+	// Create 3 sandboxes: 1 running web, 1 stopped web, 1 running worker
+	services := []string{"web", "web", "worker"}
+	statuses := []compute_v1alpha.SandboxStatus{compute_v1alpha.RUNNING, compute_v1alpha.STOPPED, compute_v1alpha.RUNNING}
 	addresses := []string{"10.0.0.1", "10.0.0.2", "10.0.0.3"}
 
 	for i := 0; i < 3; i++ {
@@ -581,7 +588,7 @@ func TestActivatorRecoveryIntegration(t *testing.T) {
 
 		name := "sb-recovery-" + string(rune('a'+i))
 		_, err := server.Client.Create(ctx, name, sb,
-			apiserver.WithLabels(types.LabelSet("app", "test-recovery-app", "pool", pools[i])))
+			apiserver.WithLabels(types.LabelSet("app", "test-recovery-app", "service", services[i])))
 		require.NoError(t, err)
 	}
 
@@ -602,8 +609,8 @@ func TestActivatorRecoveryIntegration(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	// Now test that the second activator can:
-	// 1. Acquire a lease on existing sandbox
-	lease, err := activator2.AcquireLease(ctx, appVer, "default", "web")
+	// 1. Acquire a lease on existing web sandbox (should get the one running sandbox)
+	lease, err := activator2.AcquireLease(ctx, appVer, "web")
 	require.NoError(t, err)
 	assert.NotNil(t, lease)
 	assert.Equal(t, "http://10.0.0.1:8080", lease.URL)
@@ -612,10 +619,11 @@ func TestActivatorRecoveryIntegration(t *testing.T) {
 	err = activator2.ReleaseLease(ctx, lease)
 	require.NoError(t, err)
 
-	// 3. Create a new sandbox in production pool (since only one exists there)
-	lease2, err := activator2.AcquireLease(ctx, appVer, "production", "web")
+	// 3. Acquire another lease for worker service (should get the worker sandbox)
+	lease2, err := activator2.AcquireLease(ctx, appVer, "worker")
 	require.NoError(t, err)
 	assert.NotNil(t, lease2)
+	assert.Equal(t, "http://10.0.0.3:8080", lease2.URL)
 
 	// Note: The activators created by NewLocalActivator do not have background goroutines
 	// that need explicit cleanup - they start a ticker that gets garbage collected.
@@ -684,7 +692,7 @@ func TestActivatorRecoverSandboxesWithCIDR(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify sandbox was recovered with correct URL (without CIDR notation)
-	key := verKey{appVer.ID.String(), "default", "web"}
+	key := verKey{ver: appVer.ID.String(), service: "web"}
 	vs, ok := activator.versions[key]
 	require.True(t, ok, "version should be in map")
 	require.Len(t, vs.sandboxes, 1, "should have recovered 1 running sandbox")
