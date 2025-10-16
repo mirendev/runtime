@@ -154,10 +154,7 @@ func (s *EtcdStore) CreateEntity(
 		opt(&o)
 	}
 
-	entity, err := NewEntity(attributes)
-	if err != nil {
-		return nil, err
-	}
+	entity := NewEntity(attributes)
 
 	entity.ForceID()
 
@@ -811,10 +808,7 @@ func (s *EtcdStore) ReplaceEntity(
 
 	rev := entity.GetRevision()
 
-	repl, err := NewEntity(attributes)
-	if err != nil {
-		return nil, err
-	}
+	repl := NewEntity(attributes)
 
 	if repl.Id() != id {
 		return nil, fmt.Errorf("db/id attribute does not match existing entity ID")

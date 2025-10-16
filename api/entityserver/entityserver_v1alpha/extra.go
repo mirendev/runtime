@@ -11,10 +11,7 @@ func (e *Entity) Entity() *entity.Entity {
 	createdAt := time.UnixMilli(e.CreatedAt())
 	updatedAt := time.UnixMilli(e.UpdatedAt())
 
-	ent, err := entity.NewEntity(e.Attrs())
-	if err != nil {
-		panic(err)
-	}
+	ent := entity.NewEntity(e.Attrs())
 
 	ent.SetID(types.Id(e.Id()))
 

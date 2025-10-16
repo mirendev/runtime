@@ -21,6 +21,15 @@ type OldEntity struct {
 	Attrs     []Attr   `cbor:"attrs"`
 }
 
+func (e *OldEntity) Get(attr Id) (Attr, bool) {
+	for _, a := range e.Attrs {
+		if a.ID == attr {
+			return a, true
+		}
+	}
+	return Attr{}, false
+}
+
 // MigrateOptions configures the migration behavior
 type MigrateOptions struct {
 	// DryRun prevents writing changes back to etcd
@@ -100,54 +109,51 @@ func MigrateEntityStore(ctx context.Context, log *slog.Logger, client *clientv3.
 			"attrs_count", len(oldEnt.Attrs))
 
 		// Create new entity starting with existing attributes
-		newEnt := &Entity{
-			Attrs: oldEnt.Attrs,
-		}
+		newEnt := NewEntity(oldEnt.Attrs)
 
 		// Track whether we added db/id or it already existed
 		var addedDBId bool
 
 		// Add ID as attribute if present and not already in attributes
 		if oldEnt.ID != "" {
-			if _, ok := newEnt.Get(DBId); !ok {
-				newEnt.Attrs = append(newEnt.Attrs, Ref(DBId, Id(oldEnt.ID)))
-				log.Debug("added db/id attribute", "key", key, "id", oldEnt.ID)
-				addedDBId = true
-			} else {
-				log.Debug("db/id already exists in attributes", "key", key)
+			if _, ok := oldEnt.Get(DBId); !ok {
+				if newEnt.SetID(oldEnt.ID) {
+					log.Debug("db/id updated", "new_id", oldEnt.ID)
+				} else {
+					log.Debug("db/id not updated, already set", "key", key, "existing", newEnt.Id(), "candidate", oldEnt.ID)
+				}
 			}
 		}
 
-		// Add Revision as attribute if present and not already in attributes
 		if oldEnt.Revision != 0 {
-			if _, ok := newEnt.Get(Revision); !ok {
-				newEnt.Attrs = append(newEnt.Attrs, Int64(Revision, oldEnt.Revision))
-				log.Debug("added db/revision attribute", "key", key, "revision", oldEnt.Revision)
+			if newEnt.Set(Int64(Revision, oldEnt.Revision)) {
+				log.Debug("db/revision updated", "revision", oldEnt.Revision)
 			} else {
-				log.Debug("db/revision already exists in attributes", "key", key)
+				log.Debug("added db/revision attribute", "key", key, "revision", oldEnt.Revision)
 			}
 		}
 
-		// Add CreatedAt as attribute if present and not already in attributes
 		if oldEnt.CreatedAt != 0 {
 			createdAt := time.Unix(0, oldEnt.CreatedAt*int64(time.Millisecond))
-			if _, ok := newEnt.Get(CreatedAt); !ok {
-				newEnt.Attrs = append(newEnt.Attrs, Time(CreatedAt, createdAt))
-				log.Debug("added db/created-at attribute", "key", key, "created_at", createdAt)
+			if newEnt.SetCreatedAt(createdAt) {
+				log.Debug("db/created-at updated")
 			} else {
-				log.Debug("db/created-at already exists in attributes", "key", key)
+				log.Debug("added db/created-at attribute", "key", key, "created_at", createdAt)
 			}
+		} else if _, ok := oldEnt.Get(CreatedAt); !ok {
+			newEnt.Remove(CreatedAt)
 		}
 
-		// Add UpdatedAt as attribute if present and not already in attributes
 		if oldEnt.UpdatedAt != 0 {
 			updatedAt := time.Unix(0, oldEnt.UpdatedAt*int64(time.Millisecond))
-			if _, ok := newEnt.Get(UpdatedAt); !ok {
-				newEnt.Attrs = append(newEnt.Attrs, Time(UpdatedAt, updatedAt))
-				log.Debug("added db/updated-at attribute", "key", key, "updated_at", updatedAt)
+
+			if newEnt.SetUpdatedAt(updatedAt) {
+				log.Debug("db/updated-at updated")
 			} else {
-				log.Debug("db/updated-at already exists in attributes", "key", key)
+				log.Debug("db/updated-at not updated, already newer", "key", key, "existing", newEnt.GetUpdatedAt(), "candidate", updatedAt)
 			}
+		} else if _, ok := oldEnt.Get(UpdatedAt); !ok {
+			newEnt.Remove(UpdatedAt)
 		}
 
 		// Sort attributes for consistency

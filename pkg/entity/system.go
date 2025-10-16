@@ -68,7 +68,7 @@ const (
 )
 
 func InitSystemEntities(save func(*Entity) error) error {
-	dbid, _ := NewEntity(Attrs(
+	dbid := NewEntity(Attrs(
 		Ident, types.Keyword(DBId),
 		Doc, "Internal entity ID",
 		Uniq, UniqueId,
@@ -76,7 +76,7 @@ func InitSystemEntities(save func(*Entity) error) error {
 		Type, TypeRef,
 	))
 
-	ident, _ := NewEntity(Attrs(
+	ident := NewEntity(Attrs(
 		Named(string(Ident)),
 		Doc, "Entity identifier",
 		Uniq, UniqueId,
@@ -84,21 +84,21 @@ func InitSystemEntities(save func(*Entity) error) error {
 		Type, TypeKeyword,
 	))
 
-	doc, _ := NewEntity(Attrs(
+	doc := NewEntity(Attrs(
 		Ident, types.Keyword(Doc),
 		Doc, "Entity documentation",
 		Cardinality, CardinalityOne,
 		Type, TypeStr,
 	))
 
-	uniq, _ := NewEntity(Attrs(
+	uniq := NewEntity(Attrs(
 		Ident, types.Keyword(Uniq),
 		Doc, "Unique attribute value",
 		Cardinality, CardinalityOne,
 		Type, TypeRef,
 	))
 
-	card, _ := NewEntity(Attrs(
+	card := NewEntity(Attrs(
 		Ident, types.Keyword(Cardinality),
 		Doc, "Cardinality of an attribute",
 		Cardinality, CardinalityOne,
@@ -113,14 +113,14 @@ func InitSystemEntities(save func(*Entity) error) error {
 		TypeEnum, TypeArray, TypeLabel, TypeBytes,
 	)
 
-	typ, _ := NewEntity(Attrs(
+	typ := NewEntity(Attrs(
 		Ident, types.Keyword(Type),
 		Doc, "Type of an attribute",
 		Cardinality, CardinalityOne,
 		Type, TypeRef,
 	))
 
-	enumValues, _ := NewEntity(Attrs(
+	enumValues := NewEntity(Attrs(
 		Ident, types.Keyword(EnumValues),
 		Doc, "Enum values",
 		Cardinality, CardinalityMany,
@@ -128,7 +128,7 @@ func InitSystemEntities(save func(*Entity) error) error {
 		EntityElemType, TypeAny,
 	))
 
-	enumType, _ := NewEntity(Attrs(
+	enumType := NewEntity(Attrs(
 		Ident, types.Keyword(EntityElemType),
 		Doc, "Enum type",
 		Cardinality, CardinalityOne,
@@ -137,56 +137,56 @@ func InitSystemEntities(save func(*Entity) error) error {
 		EnumValues, xtypes,
 	))
 
-	index, _ := NewEntity(Attrs(
+	index := NewEntity(Attrs(
 		Ident, types.Keyword(Index),
 		Doc, "Index",
 		Cardinality, CardinalityOne,
 		Type, TypeBool,
 	))
 
-	session, _ := NewEntity(Attrs(
+	session := NewEntity(Attrs(
 		Ident, types.Keyword(Session),
 		Doc, "Values of this attribute are stored in a session",
 		Cardinality, CardinalityOne,
 		Type, TypeBool,
 	))
 
-	attrSession, _ := NewEntity(Attrs(
+	attrSession := NewEntity(Attrs(
 		Ident, types.Keyword(AttrSession),
 		Doc, "The session id in use for this attribute",
 		Cardinality, CardinalityMany,
 		Type, TypeStr,
 	))
 
-	ttl, _ := NewEntity(Attrs(
+	ttl := NewEntity(Attrs(
 		Ident, types.Keyword(TTL),
 		Doc, "Time to live for this entity",
 		Cardinality, CardinalityOne,
 		Type, TypeDuration,
 	))
 
-	revision, _ := NewEntity(Attrs(
+	revision := NewEntity(Attrs(
 		Ident, types.Keyword(Revision),
 		Doc, "Entity revision number from etcd",
 		Cardinality, CardinalityOne,
 		Type, TypeInt,
 	))
 
-	createdAt, _ := NewEntity(Attrs(
+	createdAt := NewEntity(Attrs(
 		Ident, types.Keyword(CreatedAt),
 		Doc, "Creation timestamp for this entity",
 		Cardinality, CardinalityOne,
 		Type, TypeTime,
 	))
 
-	updatedAt, _ := NewEntity(Attrs(
+	updatedAt := NewEntity(Attrs(
 		Ident, types.Keyword(UpdatedAt),
 		Doc, "Last update timestamp for this entity",
 		Cardinality, CardinalityOne,
 		Type, TypeTime,
 	))
 
-	entityKind, _ := NewEntity(Attrs(
+	entityKind := NewEntity(Attrs(
 		Ident, types.Keyword(EntityKind),
 		Doc, "Entity kind",
 		Cardinality, CardinalityMany,
@@ -194,7 +194,7 @@ func InitSystemEntities(save func(*Entity) error) error {
 		Index, true,
 	))
 
-	schemaKind, _ := NewEntity(Attrs(
+	schemaKind := NewEntity(Attrs(
 		Ident, types.Keyword(SchemaKind),
 		Doc, "A kind that is defined by the schema entity",
 		Cardinality, CardinalityMany,
@@ -203,7 +203,7 @@ func InitSystemEntities(save func(*Entity) error) error {
 	))
 
 	id := func(id Id, doc string) *Entity {
-		e, _ := NewEntity(Attrs(
+		e := NewEntity(Attrs(
 			Ident, types.Keyword(id),
 			Doc, doc,
 		))
@@ -230,26 +230,26 @@ func InitSystemEntities(save func(*Entity) error) error {
 	typeLabel := id(TypeLabel, "Label type")
 	typeBytes := id(TypeBytes, "Bytes type")
 
-	attrPred, _ := NewEntity(Attrs(
+	attrPred := NewEntity(Attrs(
 		Ident, types.Keyword(AttrPred),
 		Doc, "Attribute predicate",
 		Cardinality, CardinalityMany,
 		Type, TypeRef,
 	))
 
-	predIP, _ := NewEntity(Attrs(
+	predIP := NewEntity(Attrs(
 		Ident, types.Keyword(PredIP),
 		Doc, "A program that checks if a value is an IP address",
 		Program, "isIP(value)",
 	))
 
-	predCidr, _ := NewEntity(Attrs(
+	predCidr := NewEntity(Attrs(
 		Ident, types.Keyword(PredCIDR),
 		Doc, "A program that checks if a value is an IP CIDR address",
 		Program, "isCIDR(value)",
 	))
 
-	entityAttrs, _ := NewEntity(Attrs(
+	entityAttrs := NewEntity(Attrs(
 		Ident, types.Keyword(EntityAttrs),
 		Doc, "Entity attributes",
 		Cardinality, CardinalityOne,
@@ -257,7 +257,7 @@ func InitSystemEntities(save func(*Entity) error) error {
 		EntityElemType, TypeRef,
 	))
 
-	entityPreds, _ := NewEntity(Attrs(
+	entityPreds := NewEntity(Attrs(
 		Ident, types.Keyword(EntityPreds),
 		Doc, "Entity predicates",
 		Cardinality, CardinalityOne,
@@ -265,21 +265,21 @@ func InitSystemEntities(save func(*Entity) error) error {
 		EntityElemType, TypeRef,
 	))
 
-	entityEnsure, _ := NewEntity(Attrs(
+	entityEnsure := NewEntity(Attrs(
 		Ident, types.Keyword(Ensure),
 		Doc, "Ensure entity",
 		Cardinality, CardinalityOne,
 		Type, TypeRef,
 	))
 
-	entitySchema, _ := NewEntity(Attrs(
+	entitySchema := NewEntity(Attrs(
 		Ident, types.Keyword(Schema),
 		Doc, "An encoded Schema",
 		Cardinality, CardinalityOne,
 		Type, TypeBytes,
 	))
 
-	entityESchema, _ := NewEntity(Attrs(
+	entityESchema := NewEntity(Attrs(
 		Ident, types.Keyword(EntitySchema),
 		Doc, "A reference to the schema used by the entity",
 		Cardinality, CardinalityOne,

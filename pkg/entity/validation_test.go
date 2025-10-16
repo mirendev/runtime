@@ -119,7 +119,7 @@ func TestValidateAttribute(t *testing.T) {
 		},
 		{
 			name: "valid keyword",
-			attr: String(
+			attr: Keyword(
 				Ident,
 				"test/ident",
 			),
@@ -176,22 +176,24 @@ func TestValidateEntity(t *testing.T) {
 	}{
 		{
 			name: "valid entity",
-			entity: &Entity{
-				Attrs: []Attr{
-					Any(Ident, "test/entity"),
+			entity: func() *Entity {
+				e := NewEntity(
+					Keyword(Ident, "test/entity"),
 					Any(Doc, "Test entity"),
-				},
-			},
+				)
+				return e
+			}(),
 			wantErr: false,
 		},
 		{
 			name: "invalid attribute",
-			entity: &Entity{
-				Attrs: []Attr{
+			entity: func() *Entity {
+				e := NewEntity(
 					Any(Ident, 123), // Should be string
 					Any(Doc, "Test entity"),
-				},
-			},
+				)
+				return e
+			}(),
 			wantErr: true,
 		},
 	}
@@ -324,21 +326,17 @@ func TestValidate_EntityAttrs(t *testing.T) {
 
 	validator := NewValidator(store)
 
-	bad := &Entity{
-		Attrs: Attrs(
-			Ensure, Id("test/has_name"),
-		),
-	}
+	bad := NewEntity(
+		Ref(Ensure, "test/has_name"),
+	)
 
 	err = validator.ValidateEntity(t.Context(), bad)
 	r.Error(err)
 
-	good := &Entity{
-		Attrs: Attrs(
-			Ensure, Id("test/has_name"),
-			Id("test/name"), "test",
-		),
-	}
+	good := NewEntity(
+		Ref(Ensure, "test/has_name"),
+		String("test/name", "test"),
+	)
 
 	err = validator.ValidateEntity(t.Context(), good)
 	r.NoError(err)

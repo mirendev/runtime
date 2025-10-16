@@ -30,7 +30,6 @@ func TestMigrateEntityStore(t *testing.T) {
 		CreatedAt: time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC).UnixMilli(),
 		UpdatedAt: time.Date(2024, 1, 2, 0, 0, 0, 0, time.UTC).UnixMilli(),
 		Attrs: []Attr{
-			Keyword(Ident, "test-app"),
 			String("app/name", "Test App"),
 		},
 	}
@@ -41,7 +40,6 @@ func TestMigrateEntityStore(t *testing.T) {
 		CreatedAt: time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC).UnixMilli(),
 		UpdatedAt: time.Date(2024, 1, 3, 0, 0, 0, 0, time.UTC).UnixMilli(),
 		Attrs: []Attr{
-			Keyword(Ident, "test-project"),
 			String("project/owner", "test@example.com"),
 		},
 	}
@@ -58,16 +56,13 @@ func TestMigrateEntityStore(t *testing.T) {
 	r.NoError(err)
 
 	// Create one entity that's already in new format
-	newEnt := &Entity{
-		Attrs: []Attr{
-			Ref(DBId, "sandbox/already-migrated"),
-			Keyword(Ident, "already-migrated"),
-			Int64(Revision, 1),
-			Time(CreatedAt, time.Date(2024, 1, 4, 0, 0, 0, 0, time.UTC)),
-			Time(UpdatedAt, time.Date(2024, 1, 4, 0, 0, 0, 0, time.UTC)),
-			String("sandbox/status", "running"),
-		},
-	}
+	newEnt := NewEntity(
+		Ref(DBId, "sandbox/already-migrated"),
+		Int64(Revision, 1),
+		Time(CreatedAt, time.Date(2024, 1, 4, 0, 0, 0, 0, time.UTC)),
+		Time(UpdatedAt, time.Date(2024, 1, 4, 0, 0, 0, 0, time.UTC)),
+		String("sandbox/status", "running"),
+	)
 	data3, err := Encode(newEnt)
 	r.NoError(err)
 	_, err = client.Put(ctx, prefix+"sandbox/already-migrated", string(data3))

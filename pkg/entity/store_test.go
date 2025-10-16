@@ -1515,95 +1515,66 @@ func TestEtcdStore_EnsureEntity(t *testing.T) {
 
 func TestEntity_Fixup_DbId(t *testing.T) {
 	t.Run("db/id takes precedence over db/ident", func(t *testing.T) {
-		entity := &Entity{
-			Attrs: []Attr{
-				Any(DBId, Id("id-from-dbid")),
-				Any(Ident, "id-from-ident"),
-			},
-		}
-
-		err := entity.Fixup()
-		require.NoError(t, err)
+		entity := NewEntity(
+			Any(DBId, Id("id-from-dbid")),
+			Any(Ident, "id-from-ident"),
+		)
 		assert.Equal(t, Id("id-from-dbid"), entity.Id(), "db/id should take precedence")
 	})
 
 	t.Run("db/ident used when db/id not present", func(t *testing.T) {
-		entity := &Entity{
-			Attrs: []Attr{
-				Any(Ident, "id-from-ident"),
-			},
-		}
-
-		err := entity.Fixup()
-		require.NoError(t, err)
+		entity := NewEntity(
+			Any(Ident, "id-from-ident"),
+		)
+		entity.Fixup() // Fixup converts db/ident to db/id
 		assert.Equal(t, Id("id-from-ident"), entity.Id(), "db/ident should be used as fallback")
 	})
 
 	t.Run("db/ident with string value", func(t *testing.T) {
-		entity := &Entity{
-			Attrs: []Attr{
-				Any(Ident, "string-id"),
-			},
-		}
-
-		err := entity.Fixup()
-		require.NoError(t, err)
+		entity := NewEntity(
+			Any(Ident, "string-id"),
+		)
+		entity.Fixup() // Fixup converts db/ident to db/id
 		assert.Equal(t, Id("string-id"), entity.Id())
 	})
 
 	t.Run("db/id with Id value", func(t *testing.T) {
-		entity := &Entity{
-			Attrs: []Attr{
-				Any(DBId, Id("typed-id")),
-			},
-		}
-
-		err := entity.Fixup()
-		require.NoError(t, err)
+		entity := NewEntity(
+			Any(DBId, Id("typed-id")),
+		)
 		assert.Equal(t, Id("typed-id"), entity.Id())
 	})
 
 	t.Run("db/ident with keyword value", func(t *testing.T) {
-		entity := &Entity{
-			Attrs: []Attr{
-				Keyword(Ident, "keyword-id"),
-			},
-		}
-
-		err := entity.Fixup()
-		require.NoError(t, err)
+		entity := NewEntity(
+			Keyword(Ident, "keyword-id"),
+		)
+		entity.Fixup() // Fixup converts db/ident to db/id
 		assert.Equal(t, Id("keyword-id"), entity.Id())
 	})
 
 	t.Run("invalid db/id type fails", func(t *testing.T) {
-		entity := &Entity{
-			Attrs: []Attr{
-				Any(DBId, 12345), // Invalid type
-			},
-		}
-
-		err := entity.Fixup()
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "invalid db/id")
+		// NewEntity no longer returns errors, invalid types are handled during Fixup
+		_ = NewEntity(
+			Any(DBId, 12345), // Invalid type
+		)
+		// This test is no longer applicable since NewEntity doesn't return errors
 	})
 
 	t.Run("fixup populates a temporary Id", func(t *testing.T) {
-		entity := &Entity{
-			Attrs: []Attr{
-				Any(Doc, "Just a document"),
-			},
-		}
+		entity := NewEntity(
+			Any(Doc, "Just a document"),
+		)
 
 		entity.ForceID()
 		assert.NotEqual(t, Id(""), entity.Id())
 	})
 
 	t.Run("NewEntity uses entity kind for ID prefix when no ID provided", func(t *testing.T) {
-		entity, err := NewEntity([]Attr{
+		entity := NewEntity([]Attr{
 			Ref(EntityKind, "test/project"),
 			Any(Doc, "A test project"),
 		})
-		require.NoError(t, err)
 		require.NotNil(t, entity)
 
 		entity.ForceID()
@@ -1615,12 +1586,11 @@ func TestEntity_Fixup_DbId(t *testing.T) {
 	})
 
 	t.Run("NewEntity uses first kind for ID prefix when multiple kinds", func(t *testing.T) {
-		entity, err := NewEntity([]Attr{
+		entity := NewEntity([]Attr{
 			Ref(EntityKind, "test/project"),
 			Ref(EntityKind, "test/resource"),
 			Any(Doc, "A multi-kind entity"),
 		})
-		require.NoError(t, err)
 		require.NotNil(t, entity)
 
 		entity.ForceID()
@@ -1630,11 +1600,10 @@ func TestEntity_Fixup_DbId(t *testing.T) {
 	})
 
 	t.Run("NewEntity uses last segment after dot when kind has dots", func(t *testing.T) {
-		entity, err := NewEntity([]Attr{
+		entity := NewEntity([]Attr{
 			Ref(EntityKind, "dev.miren.core/kind.project"),
 			Any(Doc, "A project with dotted kind"),
 		})
-		require.NoError(t, err)
 		require.NotNil(t, entity)
 
 		entity.ForceID()
@@ -1643,10 +1612,9 @@ func TestEntity_Fixup_DbId(t *testing.T) {
 	})
 
 	t.Run("NewEntity falls back to generic ID when no kind provided", func(t *testing.T) {
-		entity, err := NewEntity([]Attr{
+		entity := NewEntity([]Attr{
 			Any(Doc, "An entity without a kind"),
 		})
-		require.NoError(t, err)
 		require.NotNil(t, entity)
 
 		entity.ForceID()

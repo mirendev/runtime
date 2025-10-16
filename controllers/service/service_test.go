@@ -71,10 +71,10 @@ func TestServiceController(t *testing.T) {
 			},
 		}
 
+		svcEntity := entity.NewEntity(svc.Encode)
+
 		meta := &entity.Meta{
-			Entity: &entity.Entity{
-				Attrs: svc.Encode(),
-			},
+			Entity:   svcEntity,
 			Revision: 1,
 		}
 
@@ -128,9 +128,7 @@ func TestServiceController(t *testing.T) {
 			},
 		}
 
-		svcEntity := &entity.Entity{
-			Attrs: svc.Encode(),
-		}
+		svcEntity := entity.NewEntity(svc.Encode)
 
 		// Store the service in entity store
 		var rpcE entityserver_v1alpha.Entity
@@ -169,9 +167,7 @@ func TestServiceController(t *testing.T) {
 		attrs := sb.Encode()
 		attrs = append(attrs, entity.Label(core_v1alpha.MetadataLabelsId, "app", "nginx"))
 
-		sbEntity := &entity.Entity{
-			Attrs: attrs,
-		}
+		sbEntity := entity.NewEntity(attrs...)
 
 		sbEntity.SetID(sbID)
 
@@ -268,10 +264,10 @@ func TestServiceController(t *testing.T) {
 		_, err = eac.Put(ctx, &rpcE)
 		r.NoError(err)
 
+		svcEntity := entity.NewEntity(svc.Encode)
+
 		meta := &entity.Meta{
-			Entity: &entity.Entity{
-				Attrs: svc.Encode(),
-			},
+			Entity:   svcEntity,
 			Revision: 1,
 		}
 
@@ -299,9 +295,7 @@ func TestServiceController(t *testing.T) {
 		attrs := sb.Encode()
 		attrs = append(attrs, entity.Label(core_v1alpha.MetadataLabelsId, "app", "nginx"))
 
-		sbEntity := &entity.Entity{
-			Attrs: attrs,
-		}
+		sbEntity := entity.NewEntity(attrs...)
 
 		sbEntity.SetID(sbID)
 
@@ -403,10 +397,10 @@ func TestServiceController(t *testing.T) {
 			},
 		}
 
+		svcEntity := entity.NewEntity(svc.Encode)
+
 		meta := &entity.Meta{
-			Entity: &entity.Entity{
-				Attrs: svc.Encode(),
-			},
+			Entity:   svcEntity,
 			Revision: 1,
 		}
 
@@ -481,10 +475,10 @@ func TestServiceController(t *testing.T) {
 		_, err = eac.Put(ctx, &rpcE)
 		r.NoError(err)
 
+		svcEntity := entity.NewEntity(svc.Encode)
+
 		meta := &entity.Meta{
-			Entity: &entity.Entity{
-				Attrs: svc.Encode(),
-			},
+			Entity:   svcEntity,
 			Revision: 1,
 		}
 
@@ -512,9 +506,7 @@ func TestServiceController(t *testing.T) {
 		attrs1 := sb1.Encode()
 		attrs1 = append(attrs1, entity.Label(core_v1alpha.MetadataLabelsId, "app", "nginx"))
 
-		sbEntity1 := &entity.Entity{
-			Attrs: attrs1,
-		}
+		sbEntity1 := entity.NewEntity(attrs1...)
 
 		sbMeta1 := &entity.Meta{
 			Entity:   sbEntity1,
@@ -547,9 +539,7 @@ func TestServiceController(t *testing.T) {
 		attrs2 := sb2.Encode()
 		attrs2 = append(attrs2, entity.Label(core_v1alpha.MetadataLabelsId, "app", "nginx"))
 
-		sbEntity2 := &entity.Entity{
-			Attrs: attrs2,
-		}
+		sbEntity2 := entity.NewEntity(attrs2...)
 
 		sbEntity2.SetID(sbID2)
 
@@ -661,10 +651,10 @@ func TestServiceController(t *testing.T) {
 		_, err = eac.Put(ctx, &rpcE)
 		r.NoError(err)
 
+		svcEntity := entity.NewEntity(svc.Encode)
+
 		meta := &entity.Meta{
-			Entity: &entity.Entity{
-				Attrs: svc.Encode(),
-			},
+			Entity:   svcEntity,
 			Revision: 1,
 		}
 
@@ -684,11 +674,10 @@ func TestServiceController(t *testing.T) {
 			},
 		}
 
-		ent, err := entity.NewEntity(entity.Attrs(
+		ent := entity.NewEntity(entity.Attrs(
 			entity.DBId, epID,
 			eps.Encode,
 		))
-		r.NoError(err)
 		event := controller.Event{
 			Entity: ent,
 		}
@@ -765,19 +754,19 @@ func TestServiceController(t *testing.T) {
 		r.NoError(err)
 
 		// Create both services
+		svc1Entity := entity.NewEntity(svc1.Encode)
+
 		meta1 := &entity.Meta{
-			Entity: &entity.Entity{
-				Attrs: svc1.Encode(),
-			},
+			Entity:   svc1Entity,
 			Revision: 1,
 		}
 		err = sc.Create(ctx, svc1, meta1)
 		r.NoError(err)
 
+		svc2Entity := entity.NewEntity(svc2.Encode)
+
 		meta2 := &entity.Meta{
-			Entity: &entity.Entity{
-				Attrs: svc2.Encode(),
-			},
+			Entity:   svc2Entity,
 			Revision: 1,
 		}
 		err = sc.Create(ctx, svc2, meta2)
@@ -813,11 +802,11 @@ func TestServiceController(t *testing.T) {
 		r.Error(err, "Expected endpoint to be deleted")
 
 		// Simulate endpoint deletion event (EventDeleted type)
+		epsEntity := entity.NewEntity(eps.Encode)
+
 		event := controller.Event{
-			Type: controller.EventDeleted,
-			Entity: &entity.Entity{
-				Attrs: eps.Encode(),
-			},
+			Type:   controller.EventDeleted,
+			Entity: epsEntity,
 		}
 
 		// Call UpdateEndpoints with delete event
@@ -870,10 +859,10 @@ func TestServiceController(t *testing.T) {
 			},
 		}
 
+		svcEntity := entity.NewEntity(svc.Encode)
+
 		meta := &entity.Meta{
-			Entity: &entity.Entity{
-				Attrs: svc.Encode(),
-			},
+			Entity:   svcEntity,
 			Revision: 1,
 		}
 
@@ -946,10 +935,10 @@ func TestServiceController(t *testing.T) {
 		_, err = eac.Put(ctx, &rpcE)
 		r.NoError(err)
 
+		svcEntity := entity.NewEntity(svc.Encode)
+
 		meta := &entity.Meta{
-			Entity: &entity.Entity{
-				Attrs: svc.Encode(),
-			},
+			Entity:   svcEntity,
 			Revision: 1,
 		}
 

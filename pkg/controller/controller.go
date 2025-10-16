@@ -165,7 +165,7 @@ func (c *ReconcileController) Start(top context.Context) error {
 					createdAt := time.UnixMilli(aen.CreatedAt())
 					updatedAt := time.UnixMilli(aen.UpdatedAt())
 
-					ev.Entity, _ = entity.NewEntity(aen.Attrs())
+					ev.Entity = entity.NewEntity(aen.Attrs())
 
 					ev.Entity.SetCreatedAt(createdAt)
 					ev.Entity.SetUpdatedAt(updatedAt)
@@ -330,11 +330,7 @@ func (c *ReconcileController) periodicResync(ctx context.Context) {
 			createdAt := time.UnixMilli(aen.CreatedAt())
 			updatedAt := time.UnixMilli(aen.UpdatedAt())
 
-			en, err := entity.NewEntity(aen.Attrs())
-			if err != nil {
-				c.Log.Error("error decoding entity during resync", "error", err, "entityId", aen.Id())
-				continue
-			}
+			en := entity.NewEntity(aen.Attrs())
 
 			en.SetCreatedAt(createdAt)
 			en.SetUpdatedAt(updatedAt)

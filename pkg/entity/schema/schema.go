@@ -195,14 +195,12 @@ func (s *SchemaBuilder) Attr(name, id string, typ entity.Id, opts ...AttrOption)
 		opt(&ab)
 	}
 
-	ent := &entity.Entity{
-		Attrs: entity.Attrs(
-			entity.Ident, types.Keyword(eid),
-			entity.Doc, ab.doc,
-			entity.Type, typ,
-			entity.Cardinality, ab.card,
-		),
-	}
+	ent := entity.NewEntity(entity.Attrs(
+		entity.Ident, types.Keyword(eid),
+		entity.Doc, ab.doc,
+		entity.Type, typ,
+		entity.Cardinality, ab.card,
+	))
 
 	if ab.indexed {
 		ent.Attrs = append(ent.Attrs, entity.Bool(entity.Index, true))

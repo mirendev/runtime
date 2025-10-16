@@ -99,7 +99,7 @@ func TestSandbox(t *testing.T) {
 
 		sb.Labels = append(sb.Labels, "runtime.computer/app=mn-nginx")
 
-		cont, _ := entity.NewEntity(entity.Attrs(
+		cont := entity.NewEntity(entity.Attrs(
 			entity.DBId, id,
 			sb.Encode(),
 		))
@@ -245,11 +245,10 @@ func TestSandbox(t *testing.T) {
 
 			sb.Labels = append(sb.Labels, "runtime.computer/app=mn-test")
 
-			cont, err := entity.NewEntity(entity.Attrs(
+			cont := entity.NewEntity(entity.Attrs(
 				entity.DBId, id,
 				sb.Encode,
 			))
-			r.NoError(err)
 
 			meta := &entity.Meta{
 				Entity:   cont,
@@ -270,11 +269,10 @@ func TestSandbox(t *testing.T) {
 
 			sb.Labels = append(sb.Labels, "runtime.computer/app=mn-test")
 
-			cont, err := entity.NewEntity(entity.Attrs(
+			cont := entity.NewEntity(entity.Attrs(
 				entity.DBId, id,
 				sb.Encode,
 			))
-			r.NoError(err)
 
 			meta := &entity.Meta{
 				Entity:   cont,
@@ -314,11 +312,10 @@ func TestSandbox(t *testing.T) {
 				Image: "mn-nginx:latest",
 			})
 
-			cont, err := entity.NewEntity(entity.Attrs(
+			cont := entity.NewEntity(entity.Attrs(
 				entity.DBId, id,
 				sb.Encode,
 			))
-			r.NoError(err)
 
 			meta := &entity.Meta{
 				Entity:   cont,
@@ -410,11 +407,10 @@ func TestSandbox(t *testing.T) {
 			Image: "mn-sort:latest",
 		})
 
-		cont, err := entity.NewEntity(entity.Attrs(
+		cont := entity.NewEntity(entity.Attrs(
 			entity.DBId, id,
 			sb.Encode,
 		))
-		r.NoError(err)
 
 		meta := &entity.Meta{
 			Entity: cont,
@@ -524,11 +520,10 @@ func TestSandbox(t *testing.T) {
 			},
 		})
 
-		cont, err := entity.NewEntity(entity.Attrs(
+		cont := entity.NewEntity(entity.Attrs(
 			entity.DBId, id,
 			sb.Encode,
 		))
-		r.NoError(err)
 
 		meta := &entity.Meta{
 			Entity:   cont,
@@ -660,11 +655,10 @@ func TestSandbox(t *testing.T) {
 			},
 		})
 
-		cont, err := entity.NewEntity(entity.Attrs(
+		cont := entity.NewEntity(entity.Attrs(
 			entity.DBId, id,
 			sb.Encode,
 		))
-		r.NoError(err)
 
 		meta := &entity.Meta{
 			Entity:   cont,
@@ -788,11 +782,10 @@ func TestSandbox(t *testing.T) {
 			},
 		})
 
-		cont, err := entity.NewEntity(entity.Attrs(
+		cont := entity.NewEntity(entity.Attrs(
 			entity.DBId, id,
 			sb.Encode,
 		))
-		r.NoError(err)
 
 		meta := &entity.Meta{
 			Entity:   cont,
@@ -925,11 +918,10 @@ func TestSandbox(t *testing.T) {
 			},
 		})
 
-		cont, err := entity.NewEntity(entity.Attrs(
+		cont := entity.NewEntity(entity.Attrs(
 			entity.DBId, id,
 			sb.Encode,
 		))
-		r.NoError(err)
 
 		meta := &entity.Meta{
 			Entity:   cont,
@@ -1154,11 +1146,10 @@ func TestSandbox(t *testing.T) {
 			},
 		}
 
-		cont, err := entity.NewEntity(entity.Attrs(
-			entity.DBId, id,
+		cont := entity.NewEntity(entity.Attrs(
+			entity.Ref(entity.DBId, id),
 			sb.Encode,
 		))
-		r.NoError(err)
 
 		meta := &entity.Meta{
 			Entity:   cont,
@@ -1279,11 +1270,10 @@ func TestSandbox(t *testing.T) {
 			},
 		}
 
-		cont, err := entity.NewEntity(entity.Attrs(
+		cont := entity.NewEntity(entity.Attrs(
 			entity.DBId, id,
 			sb.Encode,
 		))
-		r.NoError(err)
 
 		meta := &entity.Meta{
 			Entity:   cont,

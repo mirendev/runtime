@@ -111,10 +111,13 @@ func (e *Entity) AllAttrs() []Attr {
 	return e.Attrs
 }
 
-func (e *Entity) Remove(id Id) {
+func (e *Entity) Remove(id Id) bool {
+	orig := len(e.Attrs)
 	e.Attrs = slices.DeleteFunc(e.Attrs, func(attr Attr) bool {
 		return attr.ID == id
 	})
+
+	return orig != len(e.Attrs)
 }
 
 func (e *Entity) GetRevision() int64 {
@@ -137,10 +140,8 @@ func (e *Entity) GetCreatedAt() time.Time {
 	return time.Time{}
 }
 
-func (e *Entity) SetCreatedAt(ts time.Time) {
-	e.Remove(CreatedAt)
-	e.Attrs = append(e.Attrs, Time(CreatedAt, ts))
-	e.Attrs = SortedAttrs(e.Attrs)
+func (e *Entity) SetCreatedAt(ts time.Time) bool {
+	return e.Set(Time(CreatedAt, ts))
 }
 
 func (e *Entity) GetUpdatedAt() time.Time {
@@ -150,10 +151,8 @@ func (e *Entity) GetUpdatedAt() time.Time {
 	return time.Time{}
 }
 
-func (e *Entity) SetUpdatedAt(ts time.Time) {
-	e.Remove(UpdatedAt)
-	e.Attrs = append(e.Attrs, Time(UpdatedAt, ts))
-	e.Attrs = SortedAttrs(e.Attrs)
+func (e *Entity) SetUpdatedAt(ts time.Time) bool {
+	return e.Set(Time(UpdatedAt, ts))
 }
 
 func (e *Entity) Compare(other *Entity) int {
@@ -181,6 +180,23 @@ func (e *EntityComponent) Get(name Id) (Attr, bool) {
 	}
 
 	return Attr{}, false
+}
+
+func (e *Entity) Set(newAttr Attr) bool {
+	for i, attr := range e.Attrs {
+		if attr.ID == newAttr.ID {
+			e.Attrs[i].Value = newAttr.Value
+
+			// The value impacts the sort order.
+			e.Attrs = SortedAttrs(e.Attrs)
+			return true
+		}
+	}
+
+	e.Attrs = append(e.Attrs, newAttr)
+	e.Attrs = SortedAttrs(e.Attrs)
+
+	return false
 }
 
 func (e *EntityComponent) GetAll(name Id) []Attr {
@@ -302,6 +318,31 @@ func convertEntityToSchema(ctx context.Context, s EntityStore, entity *Entity) (
 	return &schema, nil
 }
 
+func (e *Entity) removeIdent() {
+	// First check for db/id attribute (preferred)
+	if _, ok := e.Get(DBId); !ok {
+		// Fall back to db/ident for backwards compatibility
+		if ident, ok := e.Get(Ident); ok {
+			var identId Id
+			switch id := ident.Value.Any().(type) {
+			case Id:
+				identId = id
+			case string:
+				identId = Id(id)
+			case types.Keyword:
+				identId = Id(id)
+			}
+
+			if identId != "" {
+				e.SetID(identId)
+
+				// We remove idents now that we're using db/id as the primary ID
+				e.Remove(Ident)
+			}
+		}
+	}
+}
+
 func (e *Entity) Fixup() error {
 	// First check for db/id attribute (preferred)
 	if attr, ok := e.Get(DBId); ok {
@@ -373,36 +414,51 @@ func (e *Entity) ForceID() {
 	e.ensureDBId()
 }
 
-func NewEntity(attrs []Attr) (*Entity, error) {
+type ToAttr interface {
+	Attr | []Attr | func() []Attr
+}
+
+func NewEntity[T ToAttr](attrs ...T) *Entity {
+	var attrList []Attr
+
+	for _, a := range attrs {
+		switch v := any(a).(type) {
+		case func() []Attr:
+			attrList = append(attrList, v()...)
+		case []Attr:
+			attrList = append(attrList, v...)
+		case Attr:
+			attrList = append(attrList, v)
+		}
+	}
+
 	ts := time.Now()
 	e := &Entity{
-		Attrs: slices.Clone(attrs),
+		Attrs: attrList,
 	}
 
-	if err := e.Fixup(); err != nil {
-		return nil, err
+	e.removeIdent()
+
+	// Only set timestamps if they don't already exist
+	if e.GetCreatedAt().IsZero() {
+		e.SetCreatedAt(ts)
+	}
+	if e.GetUpdatedAt().IsZero() {
+		e.SetUpdatedAt(ts)
 	}
 
-	e.SetCreatedAt(ts)
-	e.SetUpdatedAt(ts)
+	return e
+}
 
-	return e, nil
+func Blank() *Entity {
+	return &Entity{}
 }
 
 func (e *Entity) ensureDBId() {
 }
 
-func (e *Entity) SetID(id Id) {
-	if a, ok := e.Get(DBId); ok {
-		a.Value = RefValue(id)
-	} else {
-		e.Attrs = append(e.Attrs, Attr{
-			ID:    DBId,
-			Value: RefValue(id),
-		})
-		// Make sure attrs are sorted after adding new one
-		e.Attrs = SortedAttrs(e.Attrs)
-	}
+func (e *Entity) SetID(id Id) bool {
+	return e.Set(Ref(DBId, id))
 }
 
 var (

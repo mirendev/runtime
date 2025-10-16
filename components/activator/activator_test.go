@@ -146,7 +146,7 @@ func TestActivatorLeaseOperations(t *testing.T) {
 		},
 	}
 
-	ent, _ := entity.NewEntity(nil)
+	ent := entity.Blank()
 	ent.SetID("sb-1")
 
 	testSandbox := &sandbox{

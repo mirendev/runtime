@@ -2,7 +2,6 @@ package entity
 
 import (
 	"context"
-	"slices"
 	"sync"
 	"time"
 
@@ -78,10 +77,7 @@ func (m *MockStore) GetEntities(ctx context.Context, ids []Id) ([]*Entity, error
 }
 
 func (m *MockStore) CreateEntity(ctx context.Context, attrs []Attr, opts ...EntityOption) (*Entity, error) {
-	e, err := NewEntity(attrs)
-	if err != nil {
-		return nil, err
-	}
+	e := NewEntity(attrs)
 
 	e.SetCreatedAt(m.Now())
 	e.SetUpdatedAt(m.Now())
@@ -102,10 +98,8 @@ func (m *MockStore) UpdateEntity(ctx context.Context, id Id, attrs []Attr, opts 
 		return nil, ErrNotFound
 	}
 
-	// Create a copy to avoid modifying the original
-	updated := &Entity{
-		Attrs: make([]Attr, 0, len(e.Attrs)),
-	}
+	// Build combined attribute list
+	combinedAttrs := make([]Attr, 0, len(e.Attrs))
 
 	// First, copy over existing attributes that aren't being updated
 	attrMap := make(map[Id]Attr)
@@ -115,12 +109,16 @@ func (m *MockStore) UpdateEntity(ctx context.Context, id Id, attrs []Attr, opts 
 
 	for _, existing := range e.Attrs {
 		if _, isUpdated := attrMap[existing.ID]; !isUpdated {
-			updated.Attrs = append(updated.Attrs, existing)
+			combinedAttrs = append(combinedAttrs, existing)
 		}
 	}
 
 	// Then add the new/updated attributes
-	updated.Attrs = append(updated.Attrs, attrs...)
+	combinedAttrs = append(combinedAttrs, attrs...)
+
+	// Create a copy to avoid modifying the original
+	updated := NewEntity(combinedAttrs)
+
 	updated.SetRevision(updated.GetRevision() + 1)
 	updated.SetUpdatedAt(m.Now())
 
@@ -152,9 +150,7 @@ func (m *MockStore) ReplaceEntity(ctx context.Context, attrs []Attr, opts ...Ent
 	}
 
 	// Create a copy with all new attributes
-	updated := &Entity{
-		Attrs: attrs,
-	}
+	updated := NewEntity(attrs)
 	updated.SetRevision(updated.GetRevision() + 1)
 	updated.SetUpdatedAt(m.Now())
 
@@ -203,15 +199,8 @@ func (m *MockStore) EnsureEntity(ctx context.Context, attrs []Attr, opts ...Enti
 	}
 
 	// Create new entity
-	ts := time.Now()
-	e := &Entity{
-		Attrs: slices.Clone(attrs),
-	}
-
-	e.Fixup()
+	e := NewEntity(attrs)
 	e.SetRevision(1)
-	e.SetCreatedAt(ts)
-	e.SetUpdatedAt(ts)
 	m.Entities[id] = e
 	return e, true, nil
 }
@@ -231,12 +220,11 @@ func (m *MockStore) WatchIndex(ctx context.Context, attr Attr) (clientv3.WatchCh
 	ch := make(chan clientv3.WatchResponse)
 
 	m.mu.Lock()
-	m.Entities[Id("/mock/entity")] = &Entity{
-		Attrs: []Attr{
-			Ref(DBId, "mock/entity"),
-			Keyword(Ident, "mock/entity"),
-		},
-	}
+	mockEntity := NewEntity(
+		Ref(DBId, "mock/entity"),
+		Keyword(Ident, "mock/entity"),
+	)
+	m.Entities[Id("/mock/entity")] = mockEntity
 	m.mu.Unlock()
 
 	go func() {

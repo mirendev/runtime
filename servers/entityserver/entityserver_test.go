@@ -211,9 +211,9 @@ func TestEntityServer_WatchIndex(t *testing.T) {
 
 		ae := op.Entity()
 
-		r.Len(ae.Attrs(), 2)
+		r.Len(ae.Attrs(), 4)
 
-		r.Equal(entity.Keyword(entity.Ident, "mock/entity"), ae.Attrs()[1])
+		r.Equal(entity.Ref(entity.DBId, "mock/entity"), ae.Attrs()[2])
 
 		return nil
 	}))

@@ -78,7 +78,7 @@ func TestActivatorFixedModeRoundRobin(t *testing.T) {
 	}
 
 	ent := func(id string) *entity.Entity {
-		e, _ := entity.NewEntity(nil)
+		e := entity.Blank()
 		e.SetID(entity.Id(id))
 		return e
 	}
@@ -189,7 +189,7 @@ func TestActivatorFixedModeNoSlotExhaustion(t *testing.T) {
 	}
 
 	ent := func(id string) *entity.Entity {
-		e, _ := entity.NewEntity(nil)
+		e := entity.Blank()
 		e.SetID(entity.Id(id))
 		return e
 	}

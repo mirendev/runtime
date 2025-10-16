@@ -9,7 +9,6 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"miren.dev/runtime/pkg/entity/types"
 )
 
 func setupTestStore(t *testing.T) (*FileStore, func()) {
@@ -28,8 +27,11 @@ func assertEntityEqual(t *testing.T, expected, actual *Entity, msgAndArgs ...int
 	t.Helper()
 
 	// Make copies to avoid modifying the original entities
-	expectedCopy := &Entity{Attrs: append([]Attr(nil), expected.Attrs...)}
-	actualCopy := &Entity{Attrs: append([]Attr(nil), actual.Attrs...)}
+	expectedAttrs := append([]Attr(nil), expected.Attrs...)
+	actualAttrs := append([]Attr(nil), actual.Attrs...)
+
+	expectedCopy := NewEntity(expectedAttrs)
+	actualCopy := NewEntity(actualAttrs)
 
 	// Remove system timestamp attributes for comparison
 	expectedCopy.Remove(UpdatedAt)
@@ -114,7 +116,8 @@ func TestCreateEntity(t *testing.T) {
 			assert.False(t, entity.GetCreatedAt().IsZero())
 			assert.False(t, entity.GetUpdatedAt().IsZero())
 
-			assertEntityEqual(t, &Entity{Attrs: SortedAttrs(tt.out)}, entity)
+			expected := NewEntity(SortedAttrs(tt.out))
+			assertEntityEqual(t, expected, entity)
 		})
 	}
 }
@@ -197,17 +200,21 @@ func TestDeleteEntity(t *testing.T) {
 }
 
 func TestEntityAttributes(t *testing.T) {
-	entity := &Entity{
-		Attrs: []Attr{
-			Any(Ident, KeywordValue("test/person")),
-			Any(Doc, "A test person"),
-		},
-	}
+	entity := NewEntity(
+		Any(Ident, KeywordValue("test/person")),
+		Any(Doc, "A test person"),
+	)
+	entity.Fixup() // Fixup converts Ident to db/id
 
-	// Test Get
-	attr, ok := entity.Get(Ident)
+	// Test Get - Ident is converted to db/id by Fixup
+	attr, ok := entity.Get(DBId)
 	require.True(t, ok)
-	assert.Equal(t, types.Keyword("test/person"), attr.Value.Any())
+	assert.Equal(t, Id("test/person"), attr.Value.Id())
+
+	// Test Get Doc
+	docAttr, ok := entity.Get(Doc)
+	require.True(t, ok)
+	assert.Equal(t, "A test person", docAttr.Value.String())
 
 	// Test Get non-existent
 	_, ok = entity.Get("nonexistent")
@@ -382,34 +389,42 @@ func TestValidKeyword(t *testing.T) {
 
 func TestRemove(t *testing.T) {
 	// Create a test entity
-	attrs := []Attr{
+	ent := NewEntity(
 		Any(Ident, "test/person"),
 		Any(Doc, "A test person"),
-	}
-
-	ent := &Entity{Attrs: attrs}
+	)
 
 	ent.Remove(Doc)
 
 	r := require.New(t)
 
-	r.Len(ent.Attrs, 1)
+	// NewEntity adds db/id, created_at, and updated_at automatically
+	// After removing Doc, we should have 3 attrs (db/id, created_at, updated_at)
+	r.Len(ent.Attrs, 3)
+
+	// Verify Doc was actually removed
+	_, ok := ent.Get(Doc)
+	r.False(ok)
 }
 
 func TestEntity(t *testing.T) {
 	t.Run("dedups attributes", func(t *testing.T) {
 		r := require.New(t)
 
-		attrs := []Attr{
+		ent := NewEntity(
 			Any(Ident, "test/person"),
 			Any(Doc, "A test person"),
 			Any(Doc, "A test person"),
-		}
-
-		ent := &Entity{Attrs: attrs}
+		)
 
 		ent.Fixup()
 
-		r.Len(ent.Attrs, 2)
+		// NewEntity adds db/id, created_at, updated_at and dedupes the duplicate Doc
+		// So we should have 4 attrs: db/id, Doc, created_at, updated_at
+		r.Len(ent.Attrs, 4)
+
+		// Verify Doc appears only once
+		docAttrs := ent.GetAll(Doc)
+		r.Len(docAttrs, 1)
 	})
 }
