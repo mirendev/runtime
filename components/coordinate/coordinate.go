@@ -26,6 +26,7 @@ import (
 	"miren.dev/runtime/clientconfig"
 	"miren.dev/runtime/components/activator"
 	"miren.dev/runtime/components/netresolve"
+	"miren.dev/runtime/controllers/sandboxpool"
 	"miren.dev/runtime/metrics"
 	"miren.dev/runtime/observability"
 	"miren.dev/runtime/pkg/caauth"
@@ -87,7 +88,8 @@ type Coordinator struct {
 
 	state *rpc.State
 
-	aa activator.AppActivator
+	aa  activator.AppActivator
+	spm *sandboxpool.Manager
 
 	authority *caauth.Authority
 
@@ -99,6 +101,10 @@ type Coordinator struct {
 
 func (c *Coordinator) Activator() activator.AppActivator {
 	return c.aa
+}
+
+func (c *Coordinator) SandboxPoolManager() *sandboxpool.Manager {
+	return c.spm
 }
 
 const (
@@ -446,6 +452,14 @@ func (c *Coordinator) Start(ctx context.Context) error {
 
 	aa := activator.NewLocalActivator(ctx, c.Log, eac)
 	c.aa = aa
+
+	spm := sandboxpool.NewManager(c.Log, eac)
+	c.spm = spm
+	go func() {
+		if err := spm.Run(ctx); err != nil && ctx.Err() == nil {
+			c.Log.Error("sandbox pool manager stopped", "error", err)
+		}
+	}()
 
 	eps := execproxy.NewServer(c.Log, eac, rs, aa)
 	server.ExposeValue("dev.miren.runtime/exec", exec_v1alpha.AdaptSandboxExec(eps))
