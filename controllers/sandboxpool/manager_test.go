@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -368,9 +367,6 @@ func TestManagerNoUpdateWhenStatusUnchanged(t *testing.T) {
 	_, err = server.Client.Create(ctx, "sb", sb,
 		entityserver.WithLabels(types.LabelSet("service", "web", "pool", poolID.String())))
 	require.NoError(t, err)
-
-	// Wait a bit to ensure any processing completes
-	time.Sleep(10 * time.Millisecond)
 
 	// Run reconciliation
 	manager := NewManager(log, server.EAC)

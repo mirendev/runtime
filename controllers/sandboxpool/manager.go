@@ -70,7 +70,11 @@ func (m *Manager) Run(ctx context.Context) error {
 
 		if err != nil && ctx.Err() == nil {
 			m.log.Error("watch failed, restarting in 5s", "error", err)
-			time.Sleep(5 * time.Second)
+			select {
+			case <-time.After(5 * time.Second):
+			case <-ctx.Done():
+				return ctx.Err()
+			}
 			continue
 		}
 
@@ -140,8 +144,8 @@ func (m *Manager) reconcile(ctx context.Context, pool *compute_v1alpha.SandboxPo
 
 // countSandboxes returns the total and ready sandbox count for a pool
 func (m *Manager) countSandboxes(ctx context.Context, pool *compute_v1alpha.SandboxPool) (total, ready int64, err error) {
-	// List all sandboxes (no filtering by label in List API)
-	resp, err := m.eac.List(ctx, entity.Ref(entity.EntityKind, compute_v1alpha.KindSandbox))
+	// Query sandboxes by version index (reduces O(N) to O(N_version))
+	resp, err := m.eac.List(ctx, entity.Ref(compute_v1alpha.SandboxVersionId, pool.SandboxSpec.Version))
 	if err != nil {
 		return 0, 0, fmt.Errorf("failed to list sandboxes: %w", err)
 	}
@@ -153,23 +157,11 @@ func (m *Manager) countSandboxes(ctx context.Context, pool *compute_v1alpha.Sand
 		var sb compute_v1alpha.Sandbox
 		sb.Decode(ent.Entity())
 
-		// Filter: only count sandboxes for this pool's version and service
-		if sb.Version.String() != pool.SandboxSpec.Version.String() {
-			continue
-		}
-
-		// Check service label
+		// Filter by service label (labels not indexed, must filter in-memory)
 		var md core_v1alpha.Metadata
 		md.Decode(ent.Entity())
 
-		serviceLabel := ""
-		for _, label := range md.Labels {
-			if label.Key == "service" {
-				serviceLabel = label.Value
-				break
-			}
-		}
-
+		serviceLabel, _ := md.Labels.Get("service")
 		if serviceLabel != pool.Service {
 			continue
 		}
