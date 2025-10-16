@@ -13,6 +13,7 @@ import (
 	"miren.dev/runtime/api/core/core_v1alpha"
 	apiserver "miren.dev/runtime/api/entityserver"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
+	"miren.dev/runtime/pkg/concurrency"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/testutils"
 	"miren.dev/runtime/pkg/entity/types"
@@ -67,6 +68,20 @@ func TestActivatorRetireUnusedSandboxes(t *testing.T) {
 	require.NoError(t, err)
 	sb3.ID = sb3ID
 
+	// Create trackers for each sandbox
+	strategy := concurrency.NewStrategy(&core_v1alpha.ServiceConcurrency{
+		Mode:                "auto",
+		RequestsPerInstance: 10,
+		ScaleDownDelay:      "2m",
+	})
+
+	tracker1 := strategy.InitializeTracker()
+	tracker2 := strategy.InitializeTracker()
+	// Acquire some capacity for sb2 to simulate in-use
+	tracker2.AcquireLease()
+	tracker2.AcquireLease() // 2 leases = 4 slots used
+	tracker3 := strategy.InitializeTracker()
+
 	// Create activator with sandboxes to test
 	activator := &localActivator{
 		log: log,
@@ -81,8 +96,7 @@ func TestActivatorRetireUnusedSandboxes(t *testing.T) {
 						ent:         server.GetEntity(sb1.ID),
 						lastRenewal: time.Now().Add(-3 * time.Minute),
 						url:         "http://localhost:3000",
-						maxSlots:    10,
-						inuseSlots:  0,
+						tracker:     tracker1,
 					},
 					// Recent sandbox - should NOT be retired
 					{
@@ -90,8 +104,7 @@ func TestActivatorRetireUnusedSandboxes(t *testing.T) {
 						ent:         server.GetEntity(sb2.ID),
 						lastRenewal: time.Now().Add(-30 * time.Second),
 						url:         "http://localhost:3001",
-						maxSlots:    10,
-						inuseSlots:  5,
+						tracker:     tracker2,
 					},
 					// Already stopped - should be removed from list
 					{
@@ -99,11 +112,10 @@ func TestActivatorRetireUnusedSandboxes(t *testing.T) {
 						ent:         server.GetEntity(sb3.ID),
 						lastRenewal: time.Now().Add(-5 * time.Minute),
 						url:         "http://localhost:3002",
-						maxSlots:    10,
-						inuseSlots:  0,
+						tracker:     tracker3,
 					},
 				},
-				leaseSlots: 1,
+				strategy: strategy,
 			},
 		},
 	}
@@ -132,6 +144,143 @@ func TestActivatorRetireUnusedSandboxes(t *testing.T) {
 	}, 1*time.Second, 10*time.Millisecond, "sandbox should be marked as stopped")
 }
 
+// Test auto mode slot tracking mechanics
+func TestActivatorAutoModeSlotTracking(t *testing.T) {
+	ctx := context.Background()
+	log := testutils.TestLogger(t)
+
+	// Create in-memory entity server
+	server, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	// Create app entity
+	app := &core_v1alpha.App{}
+	appID, err := server.Client.Create(ctx, "test-auto-slots", app)
+	require.NoError(t, err)
+	app.ID = appID
+
+	// Create app version with auto mode (10 requests per instance = 2 slot leases)
+	appVer := &core_v1alpha.AppVersion{
+		App:      app.ID,
+		Version:  "v1",
+		ImageUrl: "test:latest",
+		Config: core_v1alpha.Config{
+			Port: 3000,
+			Services: []core_v1alpha.Services{
+				{
+					Name: "web",
+					ServiceConcurrency: core_v1alpha.ServiceConcurrency{
+						Mode:                "auto",
+						RequestsPerInstance: 10,
+						ScaleDownDelay:      "15m",
+					},
+				},
+			},
+		},
+	}
+
+	verID, err := server.Client.Create(ctx, "test-auto-v1", appVer)
+	require.NoError(t, err)
+	appVer.ID = verID
+
+	// Create activator with one sandbox (10 max slots, 2 in use initially)
+	sb1 := &compute_v1alpha.Sandbox{
+		Status: compute_v1alpha.RUNNING,
+		Network: []compute_v1alpha.Network{
+			{Address: "10.0.0.1"},
+		},
+	}
+
+	strategy := concurrency.NewStrategy(&core_v1alpha.ServiceConcurrency{
+		Mode:                "auto",
+		RequestsPerInstance: 10,
+		ScaleDownDelay:      "15m",
+	})
+	tracker := strategy.InitializeTracker()
+	// Acquire one lease to simulate initial state
+	tracker.AcquireLease()
+
+	activator := &localActivator{
+		log: log.With("module", "activator"),
+		eac: server.EAC,
+		versions: map[verKey]*verSandboxes{
+			{appVer.ID.String(), "web"}: {
+				ver: appVer,
+				sandboxes: []*sandbox{
+					{
+						sandbox:     sb1,
+						ent:         &entity.Entity{ID: entity.Id("sb-1")},
+						lastRenewal: time.Now(),
+						url:         "http://10.0.0.1:3000",
+						tracker:     tracker,
+					},
+				},
+				strategy: strategy,
+			},
+		},
+	}
+
+	key := verKey{appVer.ID.String(), "web"}
+	vs := activator.versions[key]
+	s := vs.sandboxes[0]
+
+	// Initial state: 2 slots in use (one lease)
+	assert.Equal(t, 2, s.tracker.Used(), "should start with one lease's worth")
+
+	// Acquire first additional lease - should succeed
+	lease1, err := activator.AcquireLease(ctx, appVer, "web")
+	require.NoError(t, err)
+	require.NotNil(t, lease1)
+	assert.Equal(t, 2, lease1.Size, "lease size should be 20% of 10 = 2")
+	assert.Equal(t, 4, s.tracker.Used(), "should increment to 4 slots")
+
+	// Acquire second additional lease - should succeed
+	lease2, err := activator.AcquireLease(ctx, appVer, "web")
+	require.NoError(t, err)
+	require.NotNil(t, lease2)
+	assert.Equal(t, 2, lease2.Size)
+	assert.Equal(t, 6, s.tracker.Used(), "should increment to 6 slots")
+
+	// Acquire third additional lease - should succeed
+	lease3, err := activator.AcquireLease(ctx, appVer, "web")
+	require.NoError(t, err)
+	require.NotNil(t, lease3)
+	assert.Equal(t, 8, s.tracker.Used(), "should increment to 8 slots")
+
+	// Try to acquire fourth lease - should succeed (8+2=10, at capacity)
+	lease4, err := activator.AcquireLease(ctx, appVer, "web")
+	require.NoError(t, err)
+	require.NotNil(t, lease4)
+	assert.Equal(t, 10, s.tracker.Used(), "should be at max capacity")
+
+	// Try to acquire fifth lease - should fail (10+2 > 10)
+	// Since we don't have sandbox creation wired up, this will try to acquire
+	// and find no capacity - the test setup doesn't include activateApp
+	// so we just verify the sandbox is full
+	assert.Equal(t, 10, s.tracker.Used(), "sandbox should be full")
+	assert.False(t, s.tracker.HasCapacity(), "should have no capacity")
+
+	// Release lease2 - should free 2 slots
+	err = activator.ReleaseLease(ctx, lease2)
+	require.NoError(t, err)
+	assert.Equal(t, 8, s.tracker.Used(), "should decrement to 8 slots")
+	assert.True(t, s.tracker.HasCapacity(), "should have capacity again")
+
+	// Release lease1 - should free 2 more slots
+	err = activator.ReleaseLease(ctx, lease1)
+	require.NoError(t, err)
+	assert.Equal(t, 6, s.tracker.Used(), "should decrement to 6 slots")
+
+	// Release lease3 and lease4
+	err = activator.ReleaseLease(ctx, lease3)
+	require.NoError(t, err)
+	assert.Equal(t, 4, s.tracker.Used())
+
+	err = activator.ReleaseLease(ctx, lease4)
+	require.NoError(t, err)
+	assert.Equal(t, 2, s.tracker.Used(), "should be back to initial state")
+}
+
 // Test lease operations
 func TestActivatorLeaseOperations(t *testing.T) {
 	log := slog.New(slog.NewTextHandler(nil, nil))
@@ -155,6 +304,13 @@ func TestActivatorLeaseOperations(t *testing.T) {
 		},
 	}
 
+	strategy := concurrency.NewStrategy(&core_v1alpha.ServiceConcurrency{
+		Mode:                "auto",
+		RequestsPerInstance: 10,
+		ScaleDownDelay:      "15m",
+	})
+	tracker := strategy.InitializeTracker()
+
 	testSandbox := &sandbox{
 		sandbox: &compute_v1alpha.Sandbox{
 			ID:     entity.Id("sb-1"),
@@ -163,17 +319,16 @@ func TestActivatorLeaseOperations(t *testing.T) {
 		ent:         &entity.Entity{ID: entity.Id("sb-1")},
 		lastRenewal: time.Now(),
 		url:         "http://localhost:3000",
-		maxSlots:    10,
-		inuseSlots:  0,
+		tracker:     tracker,
 	}
 
 	activator := &localActivator{
 		log: log,
 		versions: map[verKey]*verSandboxes{
 			{"ver-1", "web"}: {
-				ver:        testVer,
-				sandboxes:  []*sandbox{testSandbox},
-				leaseSlots: 2,
+				ver:       testVer,
+				sandboxes: []*sandbox{testSandbox},
+				strategy:  strategy,
 			},
 		},
 	}
@@ -188,14 +343,14 @@ func TestActivatorLeaseOperations(t *testing.T) {
 	}
 
 	// Acquire slots
-	testSandbox.inuseSlots = 2
+	tracker.AcquireLease()
 
 	// Release lease
 	err := activator.ReleaseLease(t.Context(), lease)
 	require.NoError(t, err)
 
 	// Verify slots were released
-	assert.Equal(t, 0, testSandbox.inuseSlots)
+	assert.Equal(t, 0, tracker.Used())
 }
 
 // Test concurrent access safety
@@ -337,8 +492,8 @@ func TestActivatorRecoverSandboxesWithEntityServer(t *testing.T) {
 	assert.Equal(t, sb.ID, recoveredSb.sandbox.ID)
 	assert.Equal(t, compute_v1alpha.RUNNING, recoveredSb.sandbox.Status)
 	assert.Equal(t, "http://10.0.0.100:8080", recoveredSb.url)
-	assert.Equal(t, 10, recoveredSb.maxSlots)
-	assert.Equal(t, 0, recoveredSb.inuseSlots)
+	assert.Equal(t, 10, recoveredSb.tracker.Max())
+	assert.Equal(t, 0, recoveredSb.tracker.Used())
 	assert.WithinDuration(t, time.Now(), recoveredSb.lastRenewal, 5*time.Second)
 
 	// Test that we can retire the sandbox

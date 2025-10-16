@@ -10,6 +10,7 @@ import (
 	"miren.dev/runtime/api/compute/compute_v1alpha"
 	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
+	"miren.dev/runtime/pkg/concurrency"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/testutils"
 )
@@ -77,6 +78,14 @@ func TestActivatorFixedModeRoundRobin(t *testing.T) {
 		},
 	}
 
+	// Create strategy and trackers for each sandbox
+	strategy := concurrency.NewStrategy(&core_v1alpha.ServiceConcurrency{
+		Mode:         "fixed",
+		NumInstances: 2,
+	})
+	tracker1 := strategy.InitializeTracker()
+	tracker2 := strategy.InitializeTracker()
+
 	// Create activator with pre-existing sandboxes
 	activator := &localActivator{
 		log: log.With("module", "activator"),
@@ -90,19 +99,17 @@ func TestActivatorFixedModeRoundRobin(t *testing.T) {
 						ent:         &entity.Entity{ID: entity.Id("sb-1")},
 						lastRenewal: time.Now(),
 						url:         "http://10.0.0.1:3000",
-						maxSlots:    1,
-						inuseSlots:  0,
+						tracker:     tracker1,
 					},
 					{
 						sandbox:     sb2,
 						ent:         &entity.Entity{ID: entity.Id("sb-2")},
 						lastRenewal: time.Now(),
 						url:         "http://10.0.0.2:3000",
-						maxSlots:    1,
-						inuseSlots:  0,
+						tracker:     tracker2,
 					},
 				},
-				leaseSlots: 1,
+				strategy: strategy,
 			},
 		},
 	}
@@ -140,10 +147,14 @@ func TestActivatorFixedModeRoundRobin(t *testing.T) {
 	}
 	assert.Equal(t, 10, totalRequests, "all requests should be handled")
 
-	// Verify no slots were tracked for fixed mode
+	// Verify fixed mode tracker behavior (ReleaseLease is a no-op)
+	// Fixed mode trackers increment on acquire but don't decrement on release
+	// Since leases are acquired and released, trackers accumulate
 	vs := activator.versions[verKey{ver: appVer.ID.String(), service: "web"}]
 	for _, s := range vs.sandboxes {
-		assert.Equal(t, 0, s.inuseSlots, "fixed mode should not track slots")
+		// Each sandbox had 5 leases acquired (10 total / 2 sandboxes)
+		// Since release is a no-op, used count keeps incrementing
+		assert.Greater(t, s.tracker.Used(), 0, "fixed mode tracker should show leases acquired")
 	}
 }
 
@@ -182,6 +193,13 @@ func TestActivatorFixedModeNoSlotExhaustion(t *testing.T) {
 		},
 	}
 
+	// Create strategy and tracker
+	strategy := concurrency.NewStrategy(&core_v1alpha.ServiceConcurrency{
+		Mode:         "fixed",
+		NumInstances: 1,
+	})
+	tracker := strategy.InitializeTracker()
+
 	// Create activator with one sandbox
 	activator := &localActivator{
 		log: log.With("module", "activator"),
@@ -198,11 +216,10 @@ func TestActivatorFixedModeNoSlotExhaustion(t *testing.T) {
 						ent:         &entity.Entity{ID: entity.Id("sb-1")},
 						lastRenewal: time.Now(),
 						url:         "http://10.0.0.1:3000",
-						maxSlots:    1,
-						inuseSlots:  0,
+						tracker:     tracker,
 					},
 				},
-				leaseSlots: 1,
+				strategy: strategy,
 			},
 		},
 	}
