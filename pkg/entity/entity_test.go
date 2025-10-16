@@ -27,8 +27,8 @@ func assertEntityEqual(t *testing.T, expected, actual *Entity, msgAndArgs ...int
 	t.Helper()
 
 	// Make copies to avoid modifying the original entities
-	expectedAttrs := append([]Attr(nil), expected.Attrs...)
-	actualAttrs := append([]Attr(nil), actual.Attrs...)
+	expectedAttrs := append([]Attr(nil), expected.Attrs()...)
+	actualAttrs := append([]Attr(nil), actual.Attrs()...)
 
 	expectedCopy := NewEntity(expectedAttrs)
 	actualCopy := NewEntity(actualAttrs)
@@ -50,13 +50,13 @@ func assertEntityEqual(t *testing.T, expected, actual *Entity, msgAndArgs ...int
 		msg.WriteString(fmt.Sprintf("ID mismatch:\n  Expected: %s\n  Actual:   %s\n\n", expectedCopy.Id(), actualCopy.Id()))
 	}
 
-	msg.WriteString(fmt.Sprintf("Expected Attrs (%d):\n", len(expectedCopy.Attrs)))
-	for i, attr := range expectedCopy.Attrs {
+	msg.WriteString(fmt.Sprintf("Expected Attrs (%d):\n", len(expectedCopy.Attrs())))
+	for i, attr := range expectedCopy.Attrs() {
 		msg.WriteString(fmt.Sprintf("  [%d] %s = %v\n", i, attr.ID, attr.Value.Any()))
 	}
 
-	msg.WriteString(fmt.Sprintf("\nActual Attrs (%d):\n", len(actualCopy.Attrs)))
-	for i, attr := range actualCopy.Attrs {
+	msg.WriteString(fmt.Sprintf("\nActual Attrs (%d):\n", len(actualCopy.Attrs())))
+	for i, attr := range actualCopy.Attrs() {
 		msg.WriteString(fmt.Sprintf("  [%d] %s = %v\n", i, attr.ID, attr.Value.Any()))
 	}
 
@@ -223,7 +223,7 @@ func TestEntityAttributes(t *testing.T) {
 
 func TestEntityComponentAttributes(t *testing.T) {
 	component := &EntityComponent{
-		Attrs: []Attr{
+		attrs: []Attr{
 			Any(Doc, "A test component"),
 			Any(Type, "test/type"),
 		},
@@ -400,7 +400,7 @@ func TestRemove(t *testing.T) {
 
 	// NewEntity adds db/id, created_at, and updated_at automatically
 	// After removing Doc, we should have 3 attrs (db/id, created_at, updated_at)
-	r.Len(ent.Attrs, 3)
+	r.Len(ent.Attrs(), 3)
 
 	// Verify Doc was actually removed
 	_, ok := ent.Get(Doc)
@@ -421,7 +421,7 @@ func TestEntity(t *testing.T) {
 
 		// NewEntity adds db/id, created_at, updated_at and dedupes the duplicate Doc
 		// So we should have 4 attrs: db/id, Doc, created_at, updated_at
-		r.Len(ent.Attrs, 4)
+		r.Len(ent.Attrs(), 4)
 
 		// Verify Doc appears only once
 		docAttrs := ent.GetAll(Doc)

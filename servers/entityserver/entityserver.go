@@ -69,7 +69,7 @@ func (e *EntityServer) Get(ctx context.Context, req *entityserver_v1alpha.Entity
 	rpcEntity.SetCreatedAt(entity.GetCreatedAt().UnixMilli())
 	rpcEntity.SetUpdatedAt(entity.GetUpdatedAt().UnixMilli())
 	rpcEntity.SetRevision(entity.GetRevision())
-	rpcEntity.SetAttrs(entity.Attrs)
+	rpcEntity.SetAttrs(entity.Attrs())
 
 	req.Results().SetEntity(&rpcEntity)
 
@@ -98,7 +98,7 @@ func (e *EntityServer) WatchEntity(ctx context.Context, req *entityserver_v1alph
 		rpcEntity.SetCreatedAt(en.GetCreatedAt().UnixMilli())
 		rpcEntity.SetUpdatedAt(en.GetUpdatedAt().UnixMilli())
 		rpcEntity.SetRevision(en.GetRevision())
-		rpcEntity.SetAttrs(en.Attrs)
+		rpcEntity.SetAttrs(en.Attrs())
 
 		var op entityserver_v1alpha.EntityOp
 		op.SetOperation(1)
@@ -150,7 +150,7 @@ func (e *EntityServer) WatchEntity(ctx context.Context, req *entityserver_v1alph
 				rpcEntity.SetCreatedAt(en.GetCreatedAt().UnixMilli())
 				rpcEntity.SetUpdatedAt(en.GetUpdatedAt().UnixMilli())
 				rpcEntity.SetRevision(en.GetRevision())
-				rpcEntity.SetAttrs(en.Attrs)
+				rpcEntity.SetAttrs(en.Attrs())
 
 				op.SetEntity(&rpcEntity)
 			}
@@ -489,7 +489,7 @@ func (e *EntityServer) WatchIndex(ctx context.Context, req *entityserver_v1alpha
 					rpcEntity.SetCreatedAt(en.GetCreatedAt().UnixMilli())
 					rpcEntity.SetUpdatedAt(en.GetUpdatedAt().UnixMilli())
 					rpcEntity.SetRevision(en.GetRevision())
-					rpcEntity.SetAttrs(en.Attrs)
+					rpcEntity.SetAttrs(en.Attrs())
 
 					op.SetEntity(&rpcEntity)
 				} else if event.PrevKv != nil {
@@ -557,7 +557,7 @@ func (e *EntityServer) List(ctx context.Context, req *entityserver_v1alpha.Entit
 		rpcEntity.SetCreatedAt(entity.GetCreatedAt().UnixMilli())
 		rpcEntity.SetUpdatedAt(entity.GetUpdatedAt().UnixMilli())
 		rpcEntity.SetRevision(entity.GetRevision())
-		rpcEntity.SetAttrs(entity.Attrs)
+		rpcEntity.SetAttrs(entity.Attrs())
 
 		ret = append(ret, &rpcEntity)
 	}
@@ -746,7 +746,7 @@ func (e *EntityServer) Parse(ctx context.Context, req *entityserver_v1alpha.Enti
 	var ents []*entityserver_v1alpha.Entity
 	for _, ent := range pf.Entities {
 		var rpcEntity entityserver_v1alpha.Entity
-		rpcEntity.SetAttrs(ent.Attrs)
+		rpcEntity.SetAttrs(ent.Attrs())
 		if ent.Id() != "" {
 			rpcEntity.SetId(ent.Id().String())
 		}

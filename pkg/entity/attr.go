@@ -312,7 +312,7 @@ func Named[T Keywordable](v T) Attr {
 }
 
 func Component(id Id, attrs []Attr) Attr {
-	return Attr{id, ComponentValue(&EntityComponent{attrs})}
+	return Attr{id, ComponentValue(attrs)}
 }
 
 func Label(id Id, key, val string) Attr {
@@ -511,8 +511,8 @@ func KeywordValue[T Keywordable](v T) Value {
 	}
 }
 
-func ComponentValue(v *EntityComponent) Value {
-	return Value{any: v}
+func ComponentValue(attrs []Attr) Value {
+	return Value{any: &EntityComponent{attrs: attrs}}
 }
 
 func LabelValue(key, val string) Value {
@@ -590,9 +590,9 @@ func AnyValue(v any) Value {
 	case []Value, types.Label, []byte:
 		return Value{any: v}
 	case *EntityComponent:
-		return ComponentValue(v)
+		return ComponentValue(v.attrs)
 	case []Attr:
-		return ComponentValue(&EntityComponent{Attrs: v})
+		return ComponentValue(v)
 	default:
 		return Value{any: v}
 	}
@@ -879,12 +879,12 @@ func (v Value) Compare(w Value) int {
 }
 
 func (e *EntityComponent) Compare(other *EntityComponent) int {
-	if len(e.Attrs) != len(other.Attrs) {
-		return cmp.Compare(len(e.Attrs), len(other.Attrs))
+	if len(e.attrs) != len(other.attrs) {
+		return cmp.Compare(len(e.attrs), len(other.attrs))
 	}
 
-	for i := 0; i < len(e.Attrs); i++ {
-		if cmp := e.Attrs[i].Compare(other.Attrs[i]); cmp != 0 {
+	for i := 0; i < len(e.attrs); i++ {
+		if cmp := e.attrs[i].Compare(other.attrs[i]); cmp != 0 {
 			return cmp
 		}
 	}
@@ -964,7 +964,7 @@ func (v Value) sum(w io.Writer) {
 	case KindId, KindKeyword, KindAny:
 		fmt.Fprint(w, v.any)
 	case KindComponent:
-		for _, a := range v.Component().Attrs {
+		for _, a := range v.Component().attrs {
 			a.Sum(w)
 			w.Write([]byte{';'})
 		}

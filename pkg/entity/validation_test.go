@@ -21,10 +21,8 @@ func TestValidateComponentAttribute(t *testing.T) {
 			name: "valid component",
 			attr: Attr{
 				ID: Id("test/component"),
-				Value: ComponentValue(&EntityComponent{
-					Attrs: []Attr{
-						Any(Doc, "Test component"),
-					},
+				Value: ComponentValue([]Attr{
+					Any(Doc, "Test component"),
 				}),
 			},
 			wantErr: false,
@@ -33,10 +31,8 @@ func TestValidateComponentAttribute(t *testing.T) {
 			name: "component with invalid attribute",
 			attr: Attr{
 				ID: Id("test/component"),
-				Value: ComponentValue(&EntityComponent{
-					Attrs: []Attr{
-						Any(Doc, 123), // Should be string
-					},
+				Value: ComponentValue([]Attr{
+					Any(Doc, 123), // Should be string
 				}),
 			},
 			wantErr: true,
@@ -46,11 +42,9 @@ func TestValidateComponentAttribute(t *testing.T) {
 			name: "component with forbidden Ident",
 			attr: Attr{
 				ID: Id("test/component"),
-				Value: ComponentValue(&EntityComponent{
-					Attrs: []Attr{
-						Any(Ident, "test/ident"), // Components cannot have Ident
-						Any(Doc, "Test component"),
-					},
+				Value: ComponentValue([]Attr{
+					Any(Ident, "test/ident"), // Components cannot have Ident
+					Any(Doc, "Test component"),
 				}),
 			},
 			wantErr: true,

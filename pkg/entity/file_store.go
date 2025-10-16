@@ -65,7 +65,7 @@ func (s *FileStore) CreateEntity(ctx context.Context, attributes []Attr, opts ..
 		return nil, err
 	}
 
-	for _, attr := range entity.Attrs {
+	for _, attr := range entity.attrs {
 		schema, err := s.GetAttributeSchema(ctx, attr.ID)
 		if err != nil {
 			return nil, err
@@ -158,7 +158,7 @@ func (s *FileStore) UpdateEntity(ctx context.Context, id Id, attributes []Attr, 
 		return nil, err
 	}
 
-	entity.Attrs = append(entity.Attrs, attributes...)
+	entity.attrs = append(entity.attrs, attributes...)
 
 	// TODO: Revalidate attributes tooking for duplicates
 

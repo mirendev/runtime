@@ -99,7 +99,7 @@ func (m *MockStore) UpdateEntity(ctx context.Context, id Id, attrs []Attr, opts 
 	}
 
 	// Build combined attribute list
-	combinedAttrs := make([]Attr, 0, len(e.Attrs))
+	combinedAttrs := make([]Attr, 0, len(e.attrs))
 
 	// First, copy over existing attributes that aren't being updated
 	attrMap := make(map[Id]Attr)
@@ -107,7 +107,7 @@ func (m *MockStore) UpdateEntity(ctx context.Context, id Id, attrs []Attr, opts 
 		attrMap[attr.ID] = attr
 	}
 
-	for _, existing := range e.Attrs {
+	for _, existing := range e.attrs {
 		if _, isUpdated := attrMap[existing.ID]; !isUpdated {
 			combinedAttrs = append(combinedAttrs, existing)
 		}
@@ -269,7 +269,7 @@ func (m *MockStore) ListIndex(ctx context.Context, attr Attr) ([]Id, error) {
 	defer m.mu.RUnlock()
 	var ids []Id
 	for id, entity := range m.Entities {
-		for _, a := range entity.Attrs {
+		for _, a := range entity.attrs {
 			if a.ID == attr.ID && a.Value.Equal(attr.Value) {
 				ids = append(ids, id)
 				break

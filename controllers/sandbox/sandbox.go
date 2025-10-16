@@ -777,7 +777,7 @@ func (c *SandboxController) createSandbox(ctx context.Context, co *compute.Sandb
 
 			// Update sandbox status to DEAD in entity store
 			co.Status = compute.DEAD
-			meta.Attrs = co.Encode()
+			meta.Entity.Update(co.Encode())
 			c.Log.Info("marked sandbox as DEAD due to boot failure", "id", co.ID)
 		}
 	}()

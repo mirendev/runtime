@@ -157,7 +157,7 @@ func MigrateEntityStore(ctx context.Context, log *slog.Logger, client *clientv3.
 		}
 
 		// Sort attributes for consistency
-		newEnt.Attrs = SortedAttrs(newEnt.Attrs)
+		newEnt.attrs = SortedAttrs(newEnt.attrs)
 
 		// Encode new entity
 		newData, err := Encode(newEnt)

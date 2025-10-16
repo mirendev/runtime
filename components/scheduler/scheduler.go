@@ -203,7 +203,7 @@ func (s *Scheduler) assignSandbox(ctx context.Context, ent *entity.Entity, eac *
 
 	var rpcE eas.Entity
 	rpcE.SetId(string(sandbox.Id()))
-	rpcE.SetAttrs(sandbox.Attrs)
+	rpcE.SetAttrs(sandbox.Attrs())
 
 	if _, err := eac.Put(ctx, &rpcE); err != nil {
 		s.log.Error("failed to assign sandbox", "error", err, "sandbox", sandbox.Id())

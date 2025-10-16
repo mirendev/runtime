@@ -413,7 +413,7 @@ func TestServiceController(t *testing.T) {
 			Port: 443,
 		})
 
-		meta.Attrs = svc.Encode()
+		meta.Entity = entity.NewEntity(svc.Encode())
 		meta.Revision = 2
 
 		// Re-create the service with updated configuration

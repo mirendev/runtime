@@ -64,7 +64,7 @@ func TestDiskLeaseController_Create(t *testing.T) {
 
 		// Should update status to BOUND
 		hasStatus := false
-		for _, attr := range meta.Attrs {
+		for _, attr := range meta.Attrs() {
 			if attr.ID == storage_v1alpha.DiskLeaseStatusId {
 				hasStatus = true
 				assert.Equal(t, storage_v1alpha.DiskLeaseStatusBoundId, attr.Value.Id())
@@ -102,7 +102,7 @@ func TestDiskLeaseController_Create(t *testing.T) {
 		// Should update status to FAILED with error message
 		hasStatus := false
 		hasError := false
-		for _, attr := range meta.Attrs {
+		for _, attr := range meta.Attrs() {
 			if attr.ID == storage_v1alpha.DiskLeaseStatusId {
 				hasStatus = true
 				assert.Equal(t, storage_v1alpha.DiskLeaseStatusFailedId, attr.Value.Id())
@@ -424,7 +424,7 @@ func TestDiskLeaseController_HandleBoundLease(t *testing.T) {
 
 		// Should detect conflict and fail the new lease
 		hasFailure := false
-		for _, attr := range meta.Attrs {
+		for _, attr := range meta.Attrs() {
 			if attr.ID == storage_v1alpha.DiskLeaseStatusId {
 				assert.Equal(t, storage_v1alpha.DiskLeaseStatusFailedId, attr.Value.Id())
 				hasFailure = true

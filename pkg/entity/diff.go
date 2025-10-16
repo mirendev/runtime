@@ -5,7 +5,7 @@ import "slices"
 func (e *Entity) Clone() *Entity {
 	f := *e
 
-	f.Attrs = slices.Clone(f.Attrs)
+	f.attrs = slices.Clone(f.attrs)
 
 	return &f
 }
@@ -15,9 +15,9 @@ func (e *Entity) Clone() *Entity {
 func Diff(a, b *Entity) []Attr {
 	var diff []Attr
 
-	for _, aAttr := range a.Attrs {
+	for _, aAttr := range a.attrs {
 		found := false
-		for _, bAttr := range b.Attrs {
+		for _, bAttr := range b.attrs {
 			if aAttr.Equal(bAttr) {
 				found = true
 				break

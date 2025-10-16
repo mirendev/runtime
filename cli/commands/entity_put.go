@@ -54,14 +54,14 @@ func EntityPut(ctx *Context, opts struct {
 				ent.Remove(entity.Ident)
 			}
 
-			rpcE.SetAttrs(ent.Attrs)
+			rpcE.SetAttrs(ent.Attrs())
 
 			if opts.DryRun {
 				ctx.Log.Info("Dry run, not putting entity")
 				return nil
 			}
 
-			res, err := eac.Ensure(ctx, ent.Attrs)
+			res, err := eac.Ensure(ctx, ent.Attrs())
 			if err != nil {
 				return fmt.Errorf("failed to put entity: %v", err)
 			}
@@ -69,7 +69,7 @@ func EntityPut(ctx *Context, opts struct {
 			if res.Created() {
 				ctx.Log.Info("Entity created", "id", res.Id, "revision", res.Revision)
 			} else {
-				rres, err := eac.Replace(ctx, ent.Attrs, res.Revision())
+				rres, err := eac.Replace(ctx, ent.Attrs(), res.Revision())
 				if err != nil {
 					return fmt.Errorf("failed to update entity: %v", err)
 				}

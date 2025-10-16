@@ -101,7 +101,7 @@ func (f *TextFormatter) decode(ctx context.Context, sc *SchemaValue) (*entity.En
 		ent.SetID(entity.Id(sc.Id))
 	}
 
-	err = ent.Update(ment.Attrs)
+	err = ent.Update(ment.Attrs())
 	if err != nil {
 		return nil, fmt.Errorf("failed to update entity: %w", err)
 	}
@@ -160,7 +160,7 @@ func (f *TextFormatter) Format(ctx context.Context, ent *entity.Entity) (string,
 	// All the entity's raw attributes are going into the YAML output
 	var n yaml.Node
 	err := n.Encode(map[string]any{
-		"attrs": ent.Attrs,
+		"attrs": ent.Attrs(),
 	})
 	if err != nil {
 		return "", fmt.Errorf("failed to encode raw attrs for entity %s: %w", ent.Id(), err)

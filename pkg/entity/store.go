@@ -177,7 +177,7 @@ func (s *EtcdStore) CreateEntity(
 		sessPart = base58.Encode(o.session)
 	}
 
-	for _, attr := range entity.Attrs {
+	for _, attr := range entity.attrs {
 		schema, err := s.GetAttributeSchema(ctx, attr.ID)
 		if err != nil {
 			return nil, err
@@ -198,7 +198,7 @@ func (s *EtcdStore) CreateEntity(
 		}
 	}
 
-	entity.Attrs = primary
+	entity.attrs = primary
 
 	// Build entity save operations
 	key := s.buildKey(entity.Id())
@@ -230,7 +230,7 @@ func (s *EtcdStore) CreateEntity(
 
 			if decoder.Unmarshal(rng.Kvs[0].Value, &curr) == nil {
 				s.log.Debug("entity already exists, checking if attrs match", "id", entity.Id())
-				if slices.EqualFunc(curr.Attrs, entity.Attrs, func(a, b Attr) bool {
+				if slices.EqualFunc(curr.attrs, entity.attrs, func(a, b Attr) bool {
 					return a.Equal(b)
 				}) {
 					s.log.Debug("attrs match, so returning success", "id", entity.Id(), "revision", rng.Header.Revision)
@@ -298,7 +298,7 @@ func (s *EtcdStore) GetEntity(ctx context.Context, id Id) (*Entity, error) {
 	if resp.Kvs[0].Lease != 0 {
 		ttlr, err := s.client.TimeToLive(ctx, clientv3.LeaseID(resp.Kvs[0].Lease))
 		if err == nil {
-			entity.Attrs = append(entity.Attrs, Duration(TTL, time.Duration(ttlr.TTL)*time.Second))
+			entity.attrs = append(entity.attrs, Duration(TTL, time.Duration(ttlr.TTL)*time.Second))
 		}
 	}
 
@@ -321,7 +321,7 @@ func (s *EtcdStore) GetEntity(ctx context.Context, id Id) (*Entity, error) {
 			attrs = append(attrs, String(AttrSession, sid))
 		}
 
-		entity.Attrs = append(entity.Attrs, attrs...)
+		entity.attrs = append(entity.attrs, attrs...)
 	}
 
 	entity.postUnmarshal()
@@ -405,7 +405,7 @@ func (s *EtcdStore) GetEntities(ctx context.Context, ids []Id) ([]*Entity, error
 					attrs = append(attrs, String(AttrSession, sid))
 				}
 
-				entity.Attrs = append(entity.Attrs, attrs...)
+				entity.attrs = append(entity.attrs, attrs...)
 			}
 
 			entity.postUnmarshal()
@@ -526,7 +526,7 @@ func (s *EtcdStore) UpdateEntity(
 
 	// Keep track of original indexed attributes for removal
 	originalIndexedAttrs := make(map[Id][]Attr)
-	for _, attr := range entity.Attrs {
+	for _, attr := range entity.attrs {
 		schema, err := s.GetAttributeSchema(ctx, attr.ID)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get attribute schema: %w", err)
@@ -555,7 +555,7 @@ func (s *EtcdStore) UpdateEntity(
 		return nil, fmt.Errorf("failed to update entity: %w", err)
 	}
 
-	err = s.validator.ValidateAttributes(ctx, entity.Attrs)
+	err = s.validator.ValidateAttributes(ctx, entity.attrs)
 	if err != nil {
 		return nil, err
 	}
@@ -576,7 +576,7 @@ func (s *EtcdStore) UpdateEntity(
 
 	// Build map of new indexed attributes
 	newIndexedAttrs := make(map[Id][]Attr)
-	for _, attr := range entity.Attrs {
+	for _, attr := range entity.attrs {
 		schema, err := s.GetAttributeSchema(ctx, attr.ID)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get attribute schema: %w", err)
@@ -618,7 +618,7 @@ func (s *EtcdStore) UpdateEntity(
 		}
 	}
 
-	entity.Attrs = primary
+	entity.attrs = primary
 
 	// Build entity save operations
 	key := s.buildKey(entity.Id())
@@ -745,7 +745,7 @@ func (s *EtcdStore) buildCollectionOps(entity *Entity, originalIndexedAttrs, new
 func (s *EtcdStore) buildEntitySaveOps(entity *Entity, key string, primary, session []Attr, o *entityOpts) ([]clientv3.Op, error) {
 	var ops []clientv3.Op
 
-	entity.Attrs = primary
+	entity.attrs = primary
 	entity.SetUpdatedAt(time.Now())
 
 	data, err := encoder.Marshal(entity)
@@ -824,18 +824,18 @@ func (s *EtcdStore) ReplaceEntity(
 	}
 
 	// Keep track of original indexed attributes for removal
-	originalIndexedAttrs, err := s.collectIndexedAttributes(ctx, repl.Attrs)
+	originalIndexedAttrs, err := s.collectIndexedAttributes(ctx, repl.attrs)
 	if err != nil {
 		return nil, err
 	}
 
 	// Validate replacement attributes
-	if err := s.validator.ValidateAttributes(ctx, repl.Attrs); err != nil {
+	if err := s.validator.ValidateAttributes(ctx, repl.attrs); err != nil {
 		return nil, err
 	}
 
 	// Separate primary and session attributes, collect new indexed attrs
-	primary, session, newIndexedAttrs, err := s.separateSessionAttributes(ctx, repl.Attrs)
+	primary, session, newIndexedAttrs, err := s.separateSessionAttributes(ctx, repl.attrs)
 	if err != nil {
 		return nil, err
 	}
@@ -910,7 +910,7 @@ func (s *EtcdStore) PatchEntity(
 	}
 
 	// Keep track of original indexed attributes for removal
-	originalIndexedAttrs, err := s.collectIndexedAttributes(ctx, entity.Attrs)
+	originalIndexedAttrs, err := s.collectIndexedAttributes(ctx, entity.attrs)
 	if err != nil {
 		return nil, err
 	}
@@ -934,13 +934,13 @@ func (s *EtcdStore) PatchEntity(
 		return nil, fmt.Errorf("failed to update entity: %w", err)
 	}
 
-	err = s.validator.ValidateAttributes(ctx, entity.Attrs)
+	err = s.validator.ValidateAttributes(ctx, entity.attrs)
 	if err != nil {
 		return nil, err
 	}
 
 	// Separate primary and session attributes, collect new indexed attrs
-	primary, session, newIndexedAttrs, err := s.separateSessionAttributes(ctx, entity.Attrs)
+	primary, session, newIndexedAttrs, err := s.separateSessionAttributes(ctx, entity.attrs)
 	if err != nil {
 		return nil, err
 	}
@@ -954,7 +954,7 @@ func (s *EtcdStore) PatchEntity(
 	}
 	coltxopt := s.buildCollectionOps(entity, originalIndexedAttrs, newIndexedAttrs, sessPart, sid)
 
-	entity.Attrs = primary
+	entity.attrs = primary
 
 	// Build entity save operations
 	key := s.buildKey(entity.Id())
@@ -1037,7 +1037,7 @@ func (s *EtcdStore) DeleteEntity(ctx context.Context, id Id) error {
 		return err
 	}
 
-	for _, attr := range entity.Attrs {
+	for _, attr := range entity.attrs {
 		schema, err := s.GetAttributeSchema(ctx, attr.ID)
 		if err != nil {
 			return err

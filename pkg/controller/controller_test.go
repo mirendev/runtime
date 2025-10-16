@@ -98,12 +98,10 @@ func TestReconcileController_EventProcessing(t *testing.T) {
 		1, // single worker
 	)
 
-	store.AddEntity(entity.Id("test/entity1"), &entity.Entity{
-		Attrs: entity.Attrs(
-			entity.Ident, "test/entity1",
-			entity.Type, "test/type",
-		),
-	})
+	store.AddEntity(entity.Id("test/entity1"), entity.NewEntity(entity.Attrs(
+		entity.Ident, "test/entity1",
+		entity.Type, "test/type",
+	)))
 
 	// Setup mock watch handler
 	store.OnWatchIndex = func(ctx context.Context, attr entity.Attr) (clientv3.WatchChan, error) {
@@ -216,12 +214,10 @@ func TestReconcileController_Resync(t *testing.T) {
 	testIndex := entity.Any(entity.Type, "test/type")
 
 	// Setup test entities
-	store.AddEntity(entity.Id("test/entity1"), &entity.Entity{
-		Attrs: entity.Attrs(
-			entity.Ident, "test/entity1",
-			entity.Type, "test/type",
-		),
-	})
+	store.AddEntity(entity.Id("test/entity1"), entity.NewEntity(entity.Attrs(
+		entity.Ident, "test/entity1",
+		entity.Type, "test/type",
+	)))
 
 	resyncCalls := 0
 	eventsChan := make(chan Event, 10)
@@ -267,7 +263,7 @@ type TestEntity struct {
 var NameAttr = entity.Id("name")
 
 func (e *TestEntity) Decode(getter entity.AttrGetter) {
-	e.ID = entity.MustGet(getter, entity.Ident).Value.String()
+	e.ID = entity.MustGet(getter, entity.DBId).Value.String()
 	if attr, ok := getter.Get(NameAttr); ok {
 		e.Name = attr.Value.String()
 	}
@@ -314,12 +310,10 @@ func TestAdaptController_WithoutUpdateMethod(t *testing.T) {
 	handler := AdaptController[TestEntity](basicController)
 
 	// Test EventAdded - should call Create
-	entity1 := &entity.Entity{
-		Attrs: entity.Attrs(
-			entity.Ident, "test1",
-			NameAttr, "Test Entity 1",
-		),
-	}
+	entity1 := entity.NewEntity(entity.Attrs(
+		entity.Ident, "test1",
+		NameAttr, "Test Entity 1",
+	))
 
 	event := Event{
 		Type:   EventAdded,
@@ -336,7 +330,7 @@ func TestAdaptController_WithoutUpdateMethod(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify calls
-	assert.Equal(t, []string{"test1", "test1"}, basicController.CreateCalls)
+	assert.Equal(t, []string{"id: test1", "id: test1"}, basicController.CreateCalls)
 	assert.Empty(t, basicController.DeleteCalls)
 }
 
@@ -347,12 +341,10 @@ func TestAdaptController_WithUpdateMethod(t *testing.T) {
 	handler := AdaptController[TestEntity](updatingController)
 
 	// Test EventAdded - should call Create
-	entity1 := &entity.Entity{
-		Attrs: entity.Attrs(
-			entity.Ident, "test1",
-			NameAttr, "Test Entity 1",
-		),
-	}
+	entity1 := entity.NewEntity(entity.Attrs(
+		entity.Ident, "test1",
+		NameAttr, "Test Entity 1",
+	))
 
 	event := Event{
 		Type:   EventAdded,
@@ -369,8 +361,8 @@ func TestAdaptController_WithUpdateMethod(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify calls
-	assert.Equal(t, []string{"test1"}, updatingController.CreateCalls)
-	assert.Equal(t, []string{"test1"}, updatingController.UpdateCalls)
+	assert.Equal(t, []string{"id: test1"}, updatingController.CreateCalls)
+	assert.Equal(t, []string{"id: test1"}, updatingController.UpdateCalls)
 	assert.Empty(t, updatingController.DeleteCalls)
 }
 
@@ -494,18 +486,14 @@ func TestReconcileController_WatchReconnect(t *testing.T) {
 	}
 
 	// Add test entity to store
-	store.AddEntity(entity.Id("test/entity1"), &entity.Entity{
-		Attrs: entity.Attrs(
-			entity.Ident, "test/entity1",
-			entity.Type, "test/type",
-		),
-	})
-	store.AddEntity(entity.Id("test/entity2"), &entity.Entity{
-		Attrs: entity.Attrs(
-			entity.Ident, "test/entity2",
-			entity.Type, "test/type",
-		),
-	})
+	store.AddEntity(entity.Id("test/entity1"), entity.NewEntity(entity.Attrs(
+		entity.Ident, "test/entity1",
+		entity.Type, "test/type",
+	)))
+	store.AddEntity(entity.Id("test/entity2"), entity.NewEntity(entity.Attrs(
+		entity.Ident, "test/entity2",
+		entity.Type, "test/type",
+	)))
 
 	// Start controller
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -572,12 +560,10 @@ func TestReconcileController_QueueOverflow(t *testing.T) {
 	for i := range numEntities {
 		id := fmt.Sprintf("test/entity%d", i)
 		entityIds = append(entityIds, entity.Id(id))
-		store.AddEntity(entity.Id(id), &entity.Entity{
-			Attrs: entity.Attrs(
-				entity.Ident, id,
-				entity.Type, "test/type",
-			),
-		})
+		store.AddEntity(entity.Id(id), entity.NewEntity(entity.Attrs(
+			entity.Ident, id,
+			entity.Type, "test/type",
+		)))
 	}
 
 	// Track resync completion attempts

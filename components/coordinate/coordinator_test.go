@@ -7,12 +7,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/davecgh/go-spew/spew"
 	"github.com/stretchr/testify/require"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/components/coordinate"
 	"miren.dev/runtime/observability"
 	"miren.dev/runtime/pkg/entity"
+	"miren.dev/runtime/pkg/entity/enttest"
 	"miren.dev/runtime/pkg/entity/types"
 	"miren.dev/runtime/pkg/rpc"
 	"miren.dev/runtime/pkg/testutils"
@@ -66,49 +66,31 @@ func TestCoordinatorParse(t *testing.T) {
 	res, err := eac.Parse(ctx, data)
 	r.NoError(err)
 
-	attrs := res.File().Entities()[0].Attrs()
+	ent := res.File().Entities()[0].Entity()
 
-	entity.SortedAttrs(attrs)
+	enttest.EqualAttr(t, ent, entity.Id("db/id"), types.Id("sandbox/nginx"))
 
-	r.Len(attrs, 7)
+	cv := entity.ComponentValue(entity.Attrs(
+		compute.ContainerImageId, "docker.io/library/nginx:latest",
+		compute.ContainerNameId, "nginx",
+		compute.ContainerPortId, entity.ComponentValue(entity.Attrs(
+			compute.PortNameId, "http",
+			compute.PortPortId, 80,
+			compute.PortTypeId, "http",
+		)),
+	)).Component()
 
-	r.Equal(attrs[0].ID, entity.Id("db/id"))
-	r.Equal(attrs[0].Value.Id(), types.Id("sandbox/nginx"))
+	enttest.EqualAttr(t, ent, entity.Id("dev.miren.compute/sandbox.container"), cv)
 
-	r.Equal(attrs[1].ID, entity.Id("dev.miren.compute/sandbox.container"))
-
-	spew.Dump(attrs[1].Value.Component().Attrs)
-	r.Equal(attrs[1].Value.Component(), &entity.EntityComponent{
-		Attrs: entity.Attrs(
-			compute.ContainerImageId, "docker.io/library/nginx:latest",
-			compute.ContainerNameId, "nginx",
-			compute.ContainerPortId, &entity.EntityComponent{
-				Attrs: entity.Attrs(
-					compute.PortNameId, "http",
-					compute.PortPortId, 80,
-					compute.PortTypeId, "http",
-				),
-			},
-		),
-	})
-
-	r.Equal(attrs[2].ID, entity.Id("dev.miren.compute/sandbox.labels"))
-	r.Equal(attrs[2].Value.String(), "app=nginx")
-
-	r.Equal(attrs[3].ID, entity.Id("dev.miren.core/metadata.labels"))
-	r.Equal(attrs[3].Value.Label(), types.Label{
+	enttest.EqualAttr(t, ent, entity.Id("dev.miren.compute/sandbox.labels"), "app=nginx")
+	enttest.EqualAttr(t, ent, entity.Id("dev.miren.core/metadata.labels"), types.Label{
 		Key:   "app",
 		Value: "nginx",
 	})
 
-	r.Equal(attrs[4].ID, entity.Id("dev.miren.core/metadata.name"))
-	r.Equal(attrs[4].Value.String(), "nginx")
-
-	r.Equal(attrs[5].ID, entity.Id("entity/kind"))
-	r.Equal(attrs[5].Value.Id(), entity.Id("dev.miren.compute/kind.sandbox"))
-
-	r.Equal(attrs[6].ID, entity.Id("entity/kind"))
-	r.Equal(attrs[6].Value.Id(), entity.Id("dev.miren.core/kind.metadata"))
+	enttest.EqualAttr(t, ent, entity.Id("dev.miren.core/metadata.name"), "nginx")
+	enttest.EqualAttr(t, ent, entity.Id("entity/kind"), types.Id("dev.miren.compute/kind.sandbox"))
+	enttest.EqualAttr(t, ent, entity.Id("entity/kind"), types.Id("dev.miren.core/kind.metadata"))
 
 	/*
 		r.Equal(attrs[2].ID, entity.Id("dev.miren.sandbox/port"))

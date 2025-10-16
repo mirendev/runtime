@@ -57,7 +57,7 @@ func EntityList(ctx *Context, opts struct {
 			// Fall back to printing raw attrs
 			fmt.Printf("id: %s\n", e.Entity().Id())
 			fmt.Printf("attrs:\n")
-			for k, v := range e.Entity().Attrs {
+			for k, v := range e.Entity().Attrs() {
 				fmt.Printf("  %d: %v\n", k, v)
 			}
 		} else {

@@ -68,7 +68,7 @@ func (b *SchemaBuilder) Apply(ctx context.Context, store entity.Store) error {
 	}
 
 	for _, e := range b.attrs {
-		_, err := store.CreateEntity(ctx, slices.Clone(e.Attrs), entity.WithOverwrite)
+		_, err := store.CreateEntity(ctx, slices.Clone(e.Attrs()), entity.WithOverwrite)
 		if err != nil && !errors.Is(err, entity.ErrEntityAlreadyExists) {
 			return err
 		}
@@ -195,20 +195,22 @@ func (s *SchemaBuilder) Attr(name, id string, typ entity.Id, opts ...AttrOption)
 		opt(&ab)
 	}
 
-	ent := entity.NewEntity(entity.Attrs(
+	attrs := []any{
 		entity.Ident, types.Keyword(eid),
 		entity.Doc, ab.doc,
 		entity.Type, typ,
 		entity.Cardinality, ab.card,
-	))
+	}
 
 	if ab.indexed {
-		ent.Attrs = append(ent.Attrs, entity.Bool(entity.Index, true))
+		attrs = append(attrs, entity.Index, true)
 	}
 
 	if ab.session {
-		ent.Attrs = append(ent.Attrs, entity.Bool(entity.Session, true))
+		attrs = append(attrs, entity.Session, true)
 	}
+
+	ent := entity.NewEntity(entity.Attrs(attrs...))
 
 	s.attrs[eid] = ent
 

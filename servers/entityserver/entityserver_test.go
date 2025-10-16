@@ -67,8 +67,8 @@ func TestEntityServer_Get(t *testing.T) {
 				result := resp.Entity()
 
 				assert.Equal(t, tt.id, result.Id())
-				assert.Len(t, result.Attrs(), len(testEntity.Attrs))
-				for i, attr := range testEntity.Attrs {
+				assert.Len(t, result.Attrs(), len(testEntity.Attrs()))
+				for i, attr := range testEntity.Attrs() {
 					assert.Equal(t, 0, attr.Compare(result.Attrs()[i]))
 				}
 				assert.Equal(t, testEntity.GetRevision(), result.Revision())

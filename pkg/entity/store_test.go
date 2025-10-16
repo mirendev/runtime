@@ -136,7 +136,7 @@ func TestEtcdStore_CreateEntity(t *testing.T) {
 			}
 			for _, expectedAttr := range expected {
 				found := false
-				for _, actualAttr := range entity.Attrs {
+				for _, actualAttr := range entity.Attrs() {
 					if expectedAttr.Equal(actualAttr) {
 						found = true
 						break
@@ -247,7 +247,7 @@ func TestEtcdStore_AttrPred(t *testing.T) {
 			// Check that each expected attribute is present (entity will have additional system attributes)
 			for _, expectedAttr := range tt.attrs {
 				found := false
-				for _, actualAttr := range entity.Attrs {
+				for _, actualAttr := range entity.Attrs() {
 					if expectedAttr.Equal(actualAttr) {
 						found = true
 						break
@@ -365,7 +365,7 @@ func TestEtcdStore_UpdateEntity(t *testing.T) {
 			}
 
 			require.NoError(t, err)
-			assert.Equal(t, tt.wantAttrs, len(updated.Attrs))
+			assert.Equal(t, tt.wantAttrs, len(updated.Attrs()))
 			assert.NotEqual(t, 0, updated.GetRevision())
 			assert.NotEqual(t, updated.GetCreatedAt(), updated.GetUpdatedAt())
 		})
@@ -1074,7 +1074,7 @@ func TestEtcdStore_GetEntities(t *testing.T) {
 			for i, entity := range got {
 				if entity != nil {
 					// Verify it has expected attributes
-					assert.NotEmpty(t, entity.Attrs)
+					assert.NotEmpty(t, entity.Attrs())
 					assert.Greater(t, entity.GetRevision(), int64(0))
 					assert.False(t, entity.GetCreatedAt().IsZero())
 					assert.False(t, entity.GetUpdatedAt().IsZero())

@@ -102,9 +102,7 @@ func TestRunnerCoordinatorIntegration(t *testing.T) {
 
 	r.True(res.HasEntity())
 
-	node := &entity.Entity{
-		Attrs: res.Entity().Attrs(),
-	}
+	node := entity.NewEntity(res.Entity().Attrs())
 
 	status, ok := node.Get(compute.NodeStatusId)
 	r.True(ok)

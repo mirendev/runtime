@@ -43,7 +43,7 @@ func EntityCreate(ctx *Context, opts struct {
 		for _, rpcEnt := range pf.Entities() {
 			ent := rpcEnt.Entity()
 
-			attrs := ent.Attrs
+			attrs := ent.Attrs()
 
 			// Add db/id attribute if ID is provided
 			if rpcEnt.HasId() {

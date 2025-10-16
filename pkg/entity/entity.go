@@ -2,6 +2,7 @@ package entity
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"reflect"
@@ -50,12 +51,43 @@ type AttributeSchema struct {
 
 // Entity represents an entity with a set of attributes
 type Entity struct {
-	//ID        types.Id  `json:"id" cbor:"id"`
-	//Revision  int64     `json:"revision,omitempty" cbor:"revision,omitempty"`
-	//CreatedAt time.Time `json:"created_at" cbor:"created_at"`
-	//UpdatedAt time.Time `json:"updated_at" cbor:"updated_at"`
+	attrs []Attr
+}
 
+// Attrs returns a clone of the entity's attributes
+func (e *Entity) Attrs() []Attr {
+	return slices.Clone(e.attrs)
+}
+
+// entityExternal is used for JSON marshaling/unmarshaling
+type entityExternal struct {
 	Attrs []Attr `json:"attrs" cbor:"attrs"`
+}
+
+func (e *Entity) MarshalJSON() ([]byte, error) {
+	return json.Marshal(entityExternal{Attrs: e.attrs})
+}
+
+func (e *Entity) UnmarshalJSON(data []byte) error {
+	var ej entityExternal
+	if err := json.Unmarshal(data, &ej); err != nil {
+		return err
+	}
+	e.attrs = ej.Attrs
+	return nil
+}
+
+func (e *Entity) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(entityExternal{Attrs: e.attrs})
+}
+
+func (e *Entity) UnmarshalCBOR(data []byte) error {
+	var ec entityExternal
+	if err := cbor.Unmarshal(data, &ec); err != nil {
+		return err
+	}
+	e.attrs = ec.Attrs
+	return nil
 }
 
 func (e *Entity) Id() Id {
@@ -72,7 +104,7 @@ type AttrGetter interface {
 	Get(name Id) (Attr, bool)
 	GetAll(name Id) []Attr
 
-	AllAttrs() []Attr
+	Attrs() []Attr
 }
 
 var _ AttrGetter = (*Entity)(nil)
@@ -86,7 +118,7 @@ func MustGet(e AttrGetter, name Id) Attr {
 }
 
 func (e *Entity) Get(name Id) (Attr, bool) {
-	for _, attr := range e.Attrs {
+	for _, attr := range e.attrs {
 		if attr.ID == name {
 			return attr, true
 		}
@@ -98,7 +130,7 @@ func (e *Entity) Get(name Id) (Attr, bool) {
 func (e *Entity) GetAll(name Id) []Attr {
 	var attrs []Attr
 
-	for _, attr := range e.Attrs {
+	for _, attr := range e.attrs {
 		if attr.ID == name {
 			attrs = append(attrs, attr)
 		}
@@ -107,17 +139,13 @@ func (e *Entity) GetAll(name Id) []Attr {
 	return attrs
 }
 
-func (e *Entity) AllAttrs() []Attr {
-	return e.Attrs
-}
-
 func (e *Entity) Remove(id Id) bool {
-	orig := len(e.Attrs)
-	e.Attrs = slices.DeleteFunc(e.Attrs, func(attr Attr) bool {
+	orig := len(e.attrs)
+	e.attrs = slices.DeleteFunc(e.attrs, func(attr Attr) bool {
 		return attr.ID == id
 	})
 
-	return orig != len(e.Attrs)
+	return orig != len(e.attrs)
 }
 
 func (e *Entity) GetRevision() int64 {
@@ -129,8 +157,8 @@ func (e *Entity) GetRevision() int64 {
 
 func (e *Entity) SetRevision(rev int64) {
 	e.Remove(Revision)
-	e.Attrs = append(e.Attrs, Int64(Revision, rev))
-	e.Attrs = SortedAttrs(e.Attrs)
+	e.attrs = append(e.attrs, Int64(Revision, rev))
+	e.attrs = SortedAttrs(e.attrs)
 }
 
 func (e *Entity) GetCreatedAt() time.Time {
@@ -156,24 +184,60 @@ func (e *Entity) SetUpdatedAt(ts time.Time) bool {
 }
 
 func (e *Entity) Compare(other *Entity) int {
-	return slices.CompareFunc(e.Attrs, other.Attrs, func(a, b Attr) int {
+	return slices.CompareFunc(e.attrs, other.attrs, func(a, b Attr) int {
 		return a.Compare(b)
 	})
 }
 
 func (e *Entity) Update(attrs []Attr) error {
-	e.Attrs = append(e.Attrs, attrs...)
+	e.attrs = append(e.attrs, attrs...)
 	return e.Fixup()
 }
 
 type EntityComponent struct {
+	attrs []Attr
+}
+
+// Attrs returns a clone of the component's attributes
+func (e *EntityComponent) Attrs() []Attr {
+	return append([]Attr(nil), e.attrs...)
+}
+
+// entityComponentExternal is used for JSON marshaling/unmarshaling
+type entityComponentExternal struct {
 	Attrs []Attr `json:"attrs" cbor:"attrs"`
+}
+
+func (e *EntityComponent) MarshalJSON() ([]byte, error) {
+	return json.Marshal(entityComponentExternal{Attrs: e.attrs})
+}
+
+func (e *EntityComponent) UnmarshalJSON(data []byte) error {
+	var ec entityComponentExternal
+	if err := json.Unmarshal(data, &ec); err != nil {
+		return err
+	}
+	e.attrs = ec.Attrs
+	return nil
+}
+
+func (e *EntityComponent) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(entityComponentExternal{Attrs: e.attrs})
+}
+
+func (e *EntityComponent) UnmarshalCBOR(data []byte) error {
+	var ec entityComponentExternal
+	if err := cbor.Unmarshal(data, &ec); err != nil {
+		return err
+	}
+	e.attrs = ec.Attrs
+	return nil
 }
 
 var _ AttrGetter = (*EntityComponent)(nil)
 
 func (e *EntityComponent) Get(name Id) (Attr, bool) {
-	for _, attr := range e.Attrs {
+	for _, attr := range e.attrs {
 		if attr.ID == name {
 			return attr, true
 		}
@@ -183,35 +247,31 @@ func (e *EntityComponent) Get(name Id) (Attr, bool) {
 }
 
 func (e *Entity) Set(newAttr Attr) bool {
-	for i, attr := range e.Attrs {
+	for i, attr := range e.attrs {
 		if attr.ID == newAttr.ID {
-			e.Attrs[i].Value = newAttr.Value
+			e.attrs[i].Value = newAttr.Value
 
 			// The value impacts the sort order.
-			e.Attrs = SortedAttrs(e.Attrs)
+			e.attrs = SortedAttrs(e.attrs)
 			return true
 		}
 	}
 
-	e.Attrs = append(e.Attrs, newAttr)
-	e.Attrs = SortedAttrs(e.Attrs)
+	e.attrs = append(e.attrs, newAttr)
+	e.attrs = SortedAttrs(e.attrs)
 
 	return false
 }
 
 func (e *EntityComponent) GetAll(name Id) []Attr {
 	var attrs []Attr
-	for _, attr := range e.Attrs {
+	for _, attr := range e.attrs {
 		if attr.ID == name {
 			attrs = append(attrs, attr)
 		}
 	}
 
 	return attrs
-}
-
-func (e *EntityComponent) AllAttrs() []Attr {
-	return e.Attrs
 }
 
 type EntityStore interface {
@@ -231,7 +291,7 @@ func (e *Entity) postUnmarshal() error {
 func convertEntityToSchema(ctx context.Context, s EntityStore, entity *Entity) (*AttributeSchema, error) {
 	var schema AttributeSchema
 
-	for _, attr := range entity.Attrs {
+	for _, attr := range entity.attrs {
 		switch attr.ID {
 		case Ident:
 			switch id := attr.Value.Any().(type) {
@@ -303,7 +363,7 @@ func convertEntityToSchema(ctx context.Context, s EntityStore, entity *Entity) (
 
 				schema.Predicate = append(schema.Predicate, e)
 
-				for _, predAttr := range e.Attrs {
+				for _, predAttr := range e.attrs {
 					if predAttr.ID == Program {
 						schema.CheckProgs = append(schema.CheckProgs, predAttr.Value.Any().(string))
 					}
@@ -373,7 +433,7 @@ func (e *Entity) Fixup() error {
 		}
 	}
 
-	e.Attrs = SortedAttrs(e.Attrs)
+	e.attrs = SortedAttrs(e.attrs)
 
 	return nil
 }
@@ -410,8 +470,6 @@ func (e *Entity) ForceID() {
 	}
 
 	e.SetID(Id(idgen.GenNS(prefix)))
-
-	e.ensureDBId()
 }
 
 type ToAttr interface {
@@ -434,7 +492,7 @@ func NewEntity[T ToAttr](attrs ...T) *Entity {
 
 	ts := time.Now()
 	e := &Entity{
-		Attrs: attrList,
+		attrs: attrList,
 	}
 
 	e.removeIdent()
@@ -450,13 +508,23 @@ func NewEntity[T ToAttr](attrs ...T) *Entity {
 	return e
 }
 
+// Timeless returns a copy of the entity without CreatedAt, UpdatedAt and Revision attributes
+func (e *Entity) Timeless() *Entity {
+	o := e.Clone()
+
+	o.Remove(CreatedAt)
+	o.Remove(UpdatedAt)
+	o.Remove(Revision)
+
+	return o
+}
+
+// Blank creates a new empty entity
 func Blank() *Entity {
 	return &Entity{}
 }
 
-func (e *Entity) ensureDBId() {
-}
-
+// SetID sets the entity ID (db/id attribute) and returns true if it replaced an existing ID
 func (e *Entity) SetID(id Id) bool {
 	return e.Set(Ref(DBId, id))
 }
@@ -467,10 +535,12 @@ var (
 	tags    = cbor.NewTagSet()
 )
 
+// Encode encodes a value to CBOR format
 func Encode(v any) ([]byte, error) {
 	return encoder.Marshal(v)
 }
 
+// Decode decodes CBOR data into a value
 func Decode(data []byte, v any) error {
 	return decoder.Unmarshal(data, v)
 }
@@ -509,6 +579,7 @@ type (
 
 var keySpecial = []rune{'_', '-', '/', '.', ':'}
 
+// ValidKeyword checks if a string is a valid keyword
 func ValidKeyword(str string) bool {
 	r, sz := utf8.DecodeRuneInString(str)
 	if !unicode.IsLetter(r) {
@@ -539,6 +610,7 @@ func ValidKeyword(str string) bool {
 	return !special
 }
 
+// MustKeyword converts a string to a Keyword, panicking if it's not valid
 func MustKeyword(str string) types.Keyword {
 	if !ValidKeyword(str) {
 		panic(fmt.Sprintf("invalid keyword: %q", str))
@@ -547,6 +619,7 @@ func MustKeyword(str string) types.Keyword {
 	return types.Keyword(str)
 }
 
+// Attrs constructs a slice of attributes from a variadic list of Attr, []Attr, func() []Attr, or key-value pairs.
 func Attrs(vals ...any) []Attr {
 	var attrs []Attr
 

@@ -45,7 +45,7 @@ func EntityPatch(ctx *Context, opts struct {
 			ent := rpcEnt.Entity()
 
 			// Add db/id attribute with the provided ID
-			attrs := append(ent.Attrs, entity.Attr{
+			attrs := append(ent.Attrs(), entity.Attr{
 				ID:    entity.DBId,
 				Value: entity.AnyValue(entity.Id(opts.Id)),
 			})
