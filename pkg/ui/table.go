@@ -88,11 +88,19 @@ func AutoSizeColumns(headers []string, rows []Row, maxWidths ...int) []Column {
 		return nil
 	}
 
-	// Get terminal width
-	termWidth := 80 // default fallback
-	if width, _, err := term.GetSize(int(os.Stdout.Fd())); err == nil && width > 0 {
-		termWidth = width
+	// Check if stdout is a terminal
+	isTTY := term.IsTerminal(int(os.Stdout.Fd()))
+
+	// Get terminal width only if stdout is a TTY
+	var termWidth int
+	if isTTY {
+		if width, _, err := term.GetSize(int(os.Stdout.Fd())); err == nil && width > 0 {
+			termWidth = width
+		} else {
+			termWidth = 80 // fallback for TTY
+		}
 	}
+	// If not a TTY (piped/redirected), don't constrain width
 
 	// Initialize widths with header lengths
 	widths := make([]int, len(headers))
@@ -104,7 +112,6 @@ func AutoSizeColumns(headers []string, rows []Row, maxWidths ...int) []Column {
 	for _, row := range rows {
 		for i, value := range row {
 			if i < len(widths) {
-				// For styled content, we need to measure the actual display width
 				displayWidth := measureDisplayWidth(value)
 				if displayWidth > widths[i] {
 					widths[i] = displayWidth
@@ -120,27 +127,30 @@ func AutoSizeColumns(headers []string, rows []Row, maxWidths ...int) []Column {
 		}
 	}
 
-	// Calculate total width needed (including spaces between columns)
-	totalWidth := 0
-	for _, w := range widths {
-		totalWidth += w
-	}
-	totalWidth += (len(headers) - 1) * 2 // 2 spaces between each column
+	// Only apply terminal width constraints if stdout is a TTY
+	if isTTY && termWidth > 0 {
+		// Calculate total width needed (including spaces between columns)
+		totalWidth := 0
+		for _, w := range widths {
+			totalWidth += w
+		}
+		totalWidth += (len(headers) - 1) * 2 // 2 spaces between each column
 
-	// If total width exceeds terminal width, scale down proportionally
-	if totalWidth > termWidth {
-		availableWidth := termWidth - (len(headers)-1)*2 // subtract space for margins
+		// If total width exceeds terminal width, scale down proportionally
+		if totalWidth > termWidth {
+			availableWidth := termWidth - (len(headers)-1)*2 // subtract space for margins
 
-		// Calculate scaling factor
-		scaleFactor := float64(availableWidth) / float64(totalWidth-(len(headers)-1)*2)
+			// Calculate scaling factor
+			scaleFactor := float64(availableWidth) / float64(totalWidth-(len(headers)-1)*2)
 
-		// Scale each column width
-		for i := range widths {
-			newWidth := int(float64(widths[i]) * scaleFactor)
-			if newWidth < 10 { // Minimum column width
-				newWidth = 10
+			// Scale each column width
+			for i := range widths {
+				newWidth := int(float64(widths[i]) * scaleFactor)
+				if newWidth < 10 { // Minimum column width
+					newWidth = 10
+				}
+				widths[i] = newWidth
 			}
-			widths[i] = newWidth
 		}
 	}
 
