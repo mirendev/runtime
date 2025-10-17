@@ -833,6 +833,37 @@ func (v Value) Bytes() []byte {
 
 //////////////// Other
 
+// Clone returns a deep copy of the Value.
+// For bytes, arrays, and components, this creates new copies of the underlying data.
+// For other types (strings, primitives, immutable types), a shallow copy is sufficient.
+func (v Value) Clone() Value {
+	switch v.Kind() {
+	case KindBytes:
+		return BytesValue(slices.Clone(v.Bytes()))
+	case KindArray:
+		arr := v.Array()
+		cloned := make([]Value, len(arr))
+		for i, val := range arr {
+			cloned[i] = val.Clone()
+		}
+		return Value{any: cloned}
+	case KindComponent:
+		comp := v.Component()
+		clonedAttrs := make([]Attr, len(comp.attrs))
+		for i, attr := range comp.attrs {
+			clonedAttrs[i] = Attr{
+				ID:    attr.ID,
+				Value: attr.Value.Clone(),
+			}
+		}
+		return Value{any: &EntityComponent{attrs: clonedAttrs}}
+	default:
+		// For all other types (strings, primitives, time, id, keyword, label),
+		// the value is either stored in num or is an immutable type, so shallow copy is fine
+		return v
+	}
+}
+
 // Equal reports whether v and w represent the same Go value.
 func (v Value) Equal(w Value) bool {
 	return v.Compare(w) == 0
