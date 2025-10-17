@@ -15,9 +15,12 @@ import (
 	"github.com/moby/buildkit/util/progress/progresswriter"
 
 	"miren.dev/runtime/api/build/build_v1alpha"
+	"miren.dev/runtime/api/deployment/deployment_v1alpha"
 	"miren.dev/runtime/appconfig"
 	"miren.dev/runtime/pkg/deploygating"
+	"miren.dev/runtime/pkg/git"
 	"miren.dev/runtime/pkg/progress/upload"
+	"miren.dev/runtime/pkg/rpc/standard"
 	"miren.dev/runtime/pkg/rpc/stream"
 	"miren.dev/runtime/pkg/tarx"
 )
@@ -52,24 +55,122 @@ func Deploy(ctx *Context, opts struct {
 
 	ctx.Log.Info("building code", "name", name, "dir", dir)
 
+	// Capture git information before creating deployment record
+	var gitInfo *git.Info
+	gitInfo, gitErr := git.GetInfo(dir)
+	if gitErr != nil {
+		ctx.Log.Debug("Failed to get git info", "error", gitErr)
+		// Don't fail deployment if git info is unavailable
+	}
+
+	// Create deployment record early in the process
+	depCl, err := ctx.RPCClient("dev.miren.runtime/deployment")
+	if err != nil {
+		return fmt.Errorf("failed to connect to deployment service: %w", err)
+	}
+	depClient := deployment_v1alpha.NewDeploymentClient(depCl)
+
+	// Convert git.Info to deployment GitInfo
+	var deploymentGitInfo *deployment_v1alpha.GitInfo
+	if gitInfo != nil {
+		deploymentGitInfo = &deployment_v1alpha.GitInfo{}
+		deploymentGitInfo.SetSha(gitInfo.SHA)
+		deploymentGitInfo.SetBranch(gitInfo.Branch)
+		deploymentGitInfo.SetIsDirty(gitInfo.IsDirty)
+		deploymentGitInfo.SetWorkingTreeHash(gitInfo.WorkingTreeHash)
+		deploymentGitInfo.SetCommitMessage(gitInfo.CommitMessage)
+		deploymentGitInfo.SetCommitAuthorName(gitInfo.CommitAuthor)
+		deploymentGitInfo.SetCommitAuthorEmail(gitInfo.CommitEmail)
+		deploymentGitInfo.SetRepository(gitInfo.RemoteURL)
+
+		// Convert timestamp string to standard.Timestamp if available
+		if gitInfo.CommitTimestamp != "" {
+			if ts, err := time.Parse(time.RFC3339, gitInfo.CommitTimestamp); err == nil {
+				deploymentGitInfo.SetCommitTimestamp(standard.ToTimestamp(ts))
+			}
+		}
+	}
+
+	// Create deployment as "in_progress" with a temporary app version
+	createResult, err := depClient.CreateDeployment(ctx, name, ctx.ClusterName, "pending-build", deploymentGitInfo)
+	if err != nil {
+		return fmt.Errorf("failed to create deployment record: %w", err)
+	}
+
+	if createResult.HasError() && createResult.Error() != "" {
+		return fmt.Errorf("deployment creation failed: %s", createResult.Error())
+	}
+
+	if !createResult.HasDeployment() || createResult.Deployment() == nil {
+		return fmt.Errorf("deployment creation returned no deployment")
+	}
+
+	deploymentId := createResult.Deployment().Id()
+	ctx.Log.Info("Created deployment record", "deployment_id", deploymentId)
+
+	// Initialize build error/log tracking
+	var buildErrors []string
+	var buildLogs []string
+
+	// Helper function to update deployment phase
+	updateDeploymentPhase := func(phase string) {
+		if deploymentId != "" {
+			_, updateErr := depClient.UpdateDeploymentPhase(ctx, deploymentId, phase)
+			if updateErr != nil {
+				ctx.Log.Error("Failed to update deployment phase", "error", updateErr, "phase", phase)
+			}
+		}
+	}
+
+	// Helper function to update deployment status on failure
+	updateDeploymentOnError := func(errMsg string) {
+		if deploymentId != "" {
+			// Use a separate context with timeout for status updates to ensure they complete
+			// even if the main context is canceled
+			statusCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			
+			// Collect build logs if available
+			logs := strings.Join(buildLogs, "\n")
+			if logs == "" && len(buildErrors) > 0 {
+				logs = strings.Join(buildErrors, "\n")
+			}
+
+			_, updateErr := depClient.UpdateFailedDeployment(statusCtx, deploymentId, errMsg, logs)
+			if updateErr != nil {
+				// Fallback to simple status update
+				_, updateErr = depClient.UpdateDeploymentStatus(statusCtx, deploymentId, "failed", errMsg)
+				if updateErr != nil {
+					ctx.Log.Error("Failed to update deployment status to failed", "error", updateErr)
+				}
+			}
+		}
+	}
+
 	// Load AppConfig to get include patterns
 	var includePatterns []string
 	ac, err := appconfig.LoadAppConfigUnder(dir)
 	if err != nil {
+		updateDeploymentOnError(fmt.Sprintf("Failed to load app config: %v", err))
 		return err
 	}
 	if ac != nil && ac.Include != nil {
 		// Validate patterns before using them
 		for _, pattern := range ac.Include {
 			if err := tarx.ValidatePattern(pattern); err != nil {
+				updateDeploymentOnError(fmt.Sprintf("Invalid include pattern: %v", err))
 				return fmt.Errorf("invalid include pattern %q: %w", pattern, err)
 			}
 		}
 		includePatterns = ac.Include
 	}
 
+	// Update phase to building
+	updateDeploymentPhase("building")
+
 	r, err := tarx.MakeTar(dir, includePatterns)
 	if err != nil {
+		updateDeploymentOnError(fmt.Sprintf("Failed to create tar: %v", err))
 		return err
 	}
 
@@ -77,9 +178,6 @@ func Deploy(ctx *Context, opts struct {
 		cb      stream.SendStream[*build_v1alpha.Status]
 		results *build_v1alpha.BuilderClientBuildFromTarResults
 	)
-
-	var buildErrors []string
-	var buildLogs []string
 
 	if opts.Explain {
 		// In explain mode, write to stderr
@@ -134,6 +232,7 @@ func Deploy(ctx *Context, opts struct {
 		if err != nil {
 			ctx.Printf("\n\nBuild failed with the following errors:\n")
 			printBuildErrors(ctx, buildErrors, nil)
+			updateDeploymentOnError(fmt.Sprintf("Build failed: %v", err))
 			return err
 		}
 
@@ -216,23 +315,29 @@ func Deploy(ctx *Context, opts struct {
 
 			// Only print the final build phase summary (TEA UI already showed the others)
 			ctx.Printf("%s\n", renderPhaseSummary(buildPhase))
+
+			// Update phase to pushing (build includes push in buildkit)
+			updateDeploymentPhase("pushing")
 		}
 
 		if err != nil {
 			// Check if this was a user interruption
 			if dm, ok := finalModel.(*deployInfo); ok && dm.interrupted {
 				ctx.Printf("\n\n❌ Deploy cancelled.\n")
+				updateDeploymentOnError("Deploy cancelled by user")
 				return deployCtx.Err()
 			}
 
 			// Check if this was a buildkit startup timeout (handled by UI)
 			if dm, ok := finalModel.(*deployInfo); ok && dm.currentPhase == "timeout" {
 				// The UI already printed the timeout message
+				updateDeploymentOnError("Buildkit startup timeout")
 				return fmt.Errorf("buildkit startup timeout")
 			}
 
 			ctx.Printf("\n\nBuild failed.\n")
 			printBuildErrors(ctx, buildErrors, buildLogs)
+			updateDeploymentOnError(fmt.Sprintf("Build failed: %v", err))
 			return err
 		}
 
@@ -241,7 +346,41 @@ func Deploy(ctx *Context, opts struct {
 	if results.Version() == "" {
 		ctx.Printf("\n\nError detected in building %s. No version returned.\n", name)
 		printBuildErrors(ctx, buildErrors, buildLogs)
+		updateDeploymentOnError("Build failed: no version returned")
 		return fmt.Errorf("build failed: no version returned")
+	}
+
+	ctx.Log.Debug("Build completed", "version", results.Version())
+
+	// For now, use the version string as the app version identifier
+	// The build service creates app_version entities but we can't easily look them up yet
+	// TODO: Implement proper app version entity lookup when entity service access is available in CLI
+	appVersionId := results.Version()
+	if appVersionId == "" {
+		updateDeploymentOnError("Build did not return a version")
+		return fmt.Errorf("build did not return a version")
+	}
+	
+	ctx.Log.Debug("Build completed with version", "version", appVersionId)
+
+	// Update phase to pushing (build completed, now pushing)
+	updateDeploymentPhase("pushing")
+
+	// Update deployment with actual app version ID
+	_, err = depClient.UpdateDeploymentAppVersion(ctx, deploymentId, appVersionId)
+	if err != nil {
+		ctx.Log.Error("Failed to update deployment app version", "error", err)
+		// Continue anyway - the deployment is proceeding
+	}
+
+	// Update phase to activating
+	updateDeploymentPhase("activating")
+
+	// Mark deployment as active
+	_, err = depClient.UpdateDeploymentStatus(ctx, deploymentId, "active", "")
+	if err != nil {
+		// Log error but don't fail - deployment is already done
+		ctx.Log.Error("Failed to update deployment status", "error", err)
 	}
 
 	ctx.Printf("\n\nUpdated version %s deployed. All traffic moved to new version.\n", results.Version())
