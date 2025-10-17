@@ -1,0 +1,73 @@
+# syntax=docker/dockerfile:1
+
+FROM golang:1.24
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    bash \
+    ca-certificates \
+    curl \
+    e2fsprogs \
+    gotestsum \
+    inetutils-ping \
+    iproute2 \
+    iptables \
+    netcat-openbsd \
+    tmux \
+    util-linux \
+    vim \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install delve for remote debugging
+RUN go install github.com/go-delve/delve/cmd/dlv@latest
+
+# Set up architecture-specific binary URLs
+ARG TARGETARCH
+RUN if [ "$TARGETARCH" = "arm64" ]; then \
+        echo "https://github.com/containerd/containerd/releases/download/v2.0.4/containerd-2.0.4-linux-arm64.tar.gz" > /tmp/containerd-url && \
+        echo "https://github.com/moby/buildkit/releases/download/v0.17.1/buildkit-v0.17.1.linux-arm64.tar.gz" > /tmp/buildkit-url && \
+        echo "https://github.com/opencontainers/runc/releases/download/v1.2.2/runc.arm64" > /tmp/runc-url && \
+        echo "https://storage.googleapis.com/gvisor/releases/release/latest/aarch64/runsc" > /tmp/runsc-url && \
+        echo "https://storage.googleapis.com/gvisor/releases/release/latest/aarch64/containerd-shim-runsc-v1" > /tmp/runscshim-url && \
+        echo "https://github.com/containerd/nerdctl/releases/download/v2.0.5/nerdctl-2.0.5-linux-arm64.tar.gz" > /tmp/nerdctl-url; \
+    else \
+        echo "https://github.com/containerd/containerd/releases/download/v2.0.4/containerd-2.0.4-linux-amd64.tar.gz" > /tmp/containerd-url && \
+        echo "https://github.com/moby/buildkit/releases/download/v0.17.1/buildkit-v0.17.1.linux-amd64.tar.gz" > /tmp/buildkit-url && \
+        echo "https://github.com/opencontainers/runc/releases/download/v1.2.2/runc.amd64" > /tmp/runc-url && \
+        echo "https://storage.googleapis.com/gvisor/releases/release/latest/x86_64/runsc" > /tmp/runsc-url && \
+        echo "https://storage.googleapis.com/gvisor/releases/release/latest/x86_64/containerd-shim-runsc-v1" > /tmp/runscshim-url && \
+        echo "https://github.com/containerd/nerdctl/releases/download/v2.0.5/nerdctl-2.0.5-linux-amd64.tar.gz" > /tmp/nerdctl-url; \
+    fi
+
+# Download and extract binaries
+RUN curl -L $(cat /tmp/containerd-url) -o /tmp/containerd.tar.gz && \
+    curl -L $(cat /tmp/buildkit-url) -o /tmp/buildkit.tar.gz && \
+    curl -L $(cat /tmp/runc-url) -o /tmp/runc && \
+    curl -L $(cat /tmp/runsc-url) -o /tmp/runsc && \
+    curl -L $(cat /tmp/runscshim-url) -o /tmp/containerd-shim-runsc-v1 && \
+    curl -L $(cat /tmp/nerdctl-url) -o /tmp/nerdctl.tar.gz && \
+    tar -C /usr/local -xzf /tmp/containerd.tar.gz && \
+    tar -C /usr/local -xzf /tmp/buildkit.tar.gz && \
+    tar -C /usr/local/bin -xzf /tmp/nerdctl.tar.gz && \
+    install -m 755 /tmp/runc /usr/local/bin/runc && \
+    install -m 755 /tmp/runsc /usr/local/bin/runsc && \
+    install -m 755 /tmp/containerd-shim-runsc-v1 /usr/local/bin/containerd-shim-runsc-v1 && \
+    rm -rf /tmp/*.tar.gz /tmp/runc /tmp/runsc /tmp/containerd-shim-runsc-v1 /tmp/*-url
+
+# Install runsc configuration
+RUN /usr/local/bin/runsc install
+
+# Copy setup scripts and config files
+COPY hack/common-setup.sh /usr/local/bin/common-setup.sh
+COPY hack/containerd-config.toml /etc/containerd/config.toml
+COPY hack/runsc-ignore /usr/local/bin/runsc-ignore
+RUN chmod +x /usr/local/bin/common-setup.sh /usr/local/bin/runsc-ignore
+
+# Set up Go cache environment
+ENV GOMODCACHE=/go/pkg/mod
+ENV GOCACHE=/go/build-cache
+
+WORKDIR /src
+
+# Default to keeping container alive (overridden by dev-daemon.sh)
+CMD ["tail", "-f", "/dev/null"]

@@ -1,46 +1,18 @@
-# Silence Dagger message about using its cloud
-export DAGGER_NO_NAG=1
-# Disable telemetry in Dagger and anything else that honors DNT
-export DO_NOT_TRACK=1
-
 test:
-	dagger call -q test --dir=.
-
-test-i:
-	dagger call -i -q test --dir=.
-
-test-shell:
-	dagger call -q test --dir=. --shell
+	@./hack/dev-run.sh go test -p 1 ./...
 
 test-e2e:
-	dagger call -q test --dir=. --tests="./e2e" --tags=e2e
-
-dev-tmux:
-	dagger call -q dev --dir=. --tmux
+	@./hack/dev-run.sh go test -p 1 -tags=e2e ./e2e
 
 dev:
-	dagger call -q dev --dir=.
+	@./hack/dev-start.sh shell
 
-dev-standalone:
-	dagger call -q dev-standalone --dir=.
+dev-stop:
+	@docker stop miren-dev 2>/dev/null || true
+	@docker rm miren-dev 2>/dev/null || true
+	@docker compose down
 
-dev-tmux-standalone:
-	dagger call -q dev-tmux-standalone --dir=.
-
-services:
-	dagger call debug --dir=.
-
-.PHONY: services
-
-image:
-	dagger call -q container --dir=. export --path=tmp/latest.tar
-	docker import tmp/latest.tar miren:latest
-	rm tmp/latest.tar
-
-release-data:
-	dagger call package --dir=. export --path=release.tar.gz
-
-.PHONY: release-data
+.PHONY: test test-e2e dev dev-stop
 
 clean:
 	rm -f bin/miren bin/miren-debug

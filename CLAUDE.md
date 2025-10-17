@@ -10,19 +10,29 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - `make release` - Build release version using hack/build-release.sh
 
 ### Testing
-- `make test` - Run all tests using Dagger (equivalent to `dagger call -q test --dir=.`)
-- `hack/it <gopkg>` - Run all tests in a package using Dagger
-- `hack/run <gopkg> <testname>` - Run a single focused test using Dagger
+- `make test` - Run all tests in dev container
+- `make test-e2e` - Run e2e tests in dev container
+- `go test ./...` - Run tests directly on host (hitting services on localhost)
+- `./hack/dev-run.sh go test ./pkg/entity` - Run specific tests in dev container
 
 ### Development Environment
-- `make dev` - Start development environment with Dagger
-- `make dev-tmux` - Start development environment with tmux splits
-- The dev environment automatically:
-  - Sets up containerd, buildkit, and gvisor (runsc)
-  - Builds the miren binary and creates `/bin/m` symlink
-  - Generates auth config in `~/.config/miren/clientconfig.yaml`
-  - Cleans the miren namespace
-  - Starts the miren server and provides a shell
+- `make dev` - Start dev environment and attach to shell
+- `make dev-stop` - Stop dev environment and services
+- `./hack/dev-run.sh <cmd>` - Execute any command in dev container context
+- `docker exec -it miren-dev bash` - Attach another shell to running dev container
+
+The dev environment provides:
+- Long-running privileged container with containerd, buildkit, and gvisor (runsc)
+- Source code mounted at `/src` (edits on host immediately visible)
+- Miren binary built and available at `/bin/m`
+- Services accessible: etcd:2379, clickhouse:9000, minio:9000
+- Auth config generated at `~/.config/miren/clientconfig.yaml`
+- Persistent caches for Go modules, build artifacts, and containerd data
+
+**Debugging:**
+- Native: Run `go test` on host for most tests (services on localhost)
+- Remote: Use `./hack/dev-run.sh dlv test --headless --listen=:2345 --api-version=2 <pkg>` for containerd-dependent tests
+- GoLand: Create "Go Remote" config pointing to localhost:2345 with path mapping to `/src`
 
 ### Other Commands
 - `make image` - Build and import Docker image as `miren:latest`
