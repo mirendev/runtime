@@ -1,17 +1,6 @@
 # Multi-stage Dockerfile for Miren Runtime OCI image
 # This image contains all executables needed to run the miren server
 
-# Build stage
-FROM golang:1.24 AS builder
-
-WORKDIR /build
-
-# Copy source code
-COPY . .
-
-# Build miren binary
-RUN make bin/miren
-
 # Final stage
 FROM ubuntu:22.04
 
@@ -30,38 +19,12 @@ RUN apt-get update && apt-get install -y \
 ARG TARGETARCH
 RUN echo "Building for architecture: $TARGETARCH"
 
-# Download and install containerd
-RUN if [ "$TARGETARCH" = "arm64" ]; then \
-        CONTAINERD_URL="https://github.com/containerd/containerd/releases/download/v2.0.4/containerd-2.0.4-linux-arm64.tar.gz"; \
-    else \
-        CONTAINERD_URL="https://github.com/containerd/containerd/releases/download/v2.0.4/containerd-2.0.4-linux-amd64.tar.gz"; \
-    fi && \
-    curl -L "$CONTAINERD_URL" | tar -C /usr/local -xz
-
-
-# Download and install runc
-RUN if [ "$TARGETARCH" = "arm64" ]; then \
-        RUNC_URL="https://github.com/opencontainers/runc/releases/download/v1.2.2/runc.arm64"; \
-    else \
-        RUNC_URL="https://github.com/opencontainers/runc/releases/download/v1.2.2/runc.amd64"; \
-    fi && \
-    curl -L "$RUNC_URL" -o /usr/local/bin/runc && \
-    chmod +x /usr/local/bin/runc
-
-
-# Download and install nerdctl (for debugging)
-RUN if [ "$TARGETARCH" = "arm64" ]; then \
-        NERDCTL_URL="https://github.com/containerd/nerdctl/releases/download/v2.0.5/nerdctl-2.0.5-linux-arm64.tar.gz"; \
-    else \
-        NERDCTL_URL="https://github.com/containerd/nerdctl/releases/download/v2.0.5/nerdctl-2.0.5-linux-amd64.tar.gz"; \
-    fi && \
-    curl -L "$NERDCTL_URL" | tar -C /usr/local/bin -xz
+# Copy pre-built artifacts from extracted tarballs
+# These are extracted in the GitHub Actions workflow before the Docker build
+COPY docker/artifacts/${TARGETARCH}/ /usr/local/bin/
 
 # Copy configuration files
 COPY hack/containerd-config.toml /etc/containerd/config.toml
-
-# Copy miren binary from builder
-COPY --from=builder /build/bin/miren /usr/local/bin/miren
 
 # Create necessary directories
 RUN mkdir -p /var/lib/miren/containerd /var/lib/miren/containerd/state /var/log /root/.config/miren

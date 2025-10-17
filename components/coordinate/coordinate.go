@@ -20,12 +20,14 @@ import (
 	"miren.dev/runtime/api/app/app_v1alpha"
 	"miren.dev/runtime/api/build/build_v1alpha"
 	"miren.dev/runtime/api/core/core_v1alpha"
+	deployment_v1alpha "miren.dev/runtime/api/deployment/deployment_v1alpha"
 	aes "miren.dev/runtime/api/entityserver"
 	esv1 "miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/api/exec/exec_v1alpha"
 	"miren.dev/runtime/clientconfig"
 	"miren.dev/runtime/components/activator"
 	"miren.dev/runtime/components/netresolve"
+	"miren.dev/runtime/controllers/sandboxpool"
 	"miren.dev/runtime/metrics"
 	"miren.dev/runtime/observability"
 	"miren.dev/runtime/pkg/caauth"
@@ -35,6 +37,7 @@ import (
 	"miren.dev/runtime/pkg/rpc"
 	"miren.dev/runtime/servers/app"
 	"miren.dev/runtime/servers/build"
+	"miren.dev/runtime/servers/deployment"
 	"miren.dev/runtime/servers/entityserver"
 	execproxy "miren.dev/runtime/servers/exec_proxy"
 	"miren.dev/runtime/servers/logs"
@@ -87,7 +90,8 @@ type Coordinator struct {
 
 	state *rpc.State
 
-	aa activator.AppActivator
+	aa  activator.AppActivator
+	spm *sandboxpool.Manager
 
 	authority *caauth.Authority
 
@@ -99,6 +103,10 @@ type Coordinator struct {
 
 func (c *Coordinator) Activator() activator.AppActivator {
 	return c.aa
+}
+
+func (c *Coordinator) SandboxPoolManager() *sandboxpool.Manager {
+	return c.spm
 }
 
 const (
@@ -458,6 +466,14 @@ func (c *Coordinator) Start(ctx context.Context) error {
 	aa := activator.NewLocalActivator(ctx, c.Log, eac)
 	c.aa = aa
 
+	spm := sandboxpool.NewManager(c.Log, eac)
+	c.spm = spm
+	go func() {
+		if err := spm.Run(ctx); err != nil && ctx.Err() == nil {
+			c.Log.Error("sandbox pool manager stopped", "error", err)
+		}
+	}()
+
 	eps := execproxy.NewServer(c.Log, eac, rs, aa)
 	server.ExposeValue("dev.miren.runtime/exec", exec_v1alpha.AdaptSandboxExec(eps))
 
@@ -473,6 +489,13 @@ func (c *Coordinator) Start(ctx context.Context) error {
 
 	ls := logs.NewServer(c.Log, ec, c.Logs)
 	server.ExposeValue("dev.miren.runtime/logs", app_v1alpha.AdaptLogs(ls))
+
+	ds, err := deployment.NewDeploymentServer(c.Log, eac)
+	if err != nil {
+		c.Log.Error("failed to create deployment server", "error", err)
+		return err
+	}
+	server.ExposeValue("dev.miren.runtime/deployment", deployment_v1alpha.AdaptDeployment(ds))
 
 	c.Log.Info("started RPC server")
 

@@ -28,6 +28,7 @@ import (
 	"github.com/pkg/errors"
 	"golang.org/x/crypto/blake2b"
 	"golang.org/x/sys/unix"
+	"miren.dev/runtime/pkg/netutil"
 	"miren.dev/runtime/components/netresolve"
 	"miren.dev/runtime/network"
 	"miren.dev/runtime/observability"
@@ -1007,18 +1008,20 @@ func (c *SandboxController) allocateNetwork(
 		var prefixes []netip.Prefix
 
 		for _, net := range co.Network {
-			// Try to parse as CIDR first (new format)
-			prefix, err := netip.ParsePrefix(net.Address)
+			// Parse address (handles both CIDR and plain IP formats)
+			ipStr, err := netutil.ParseNetworkAddress(net.Address)
 			if err != nil {
-				// Fall back to parsing as plain IP (old format) and assume /32
-				addr, err2 := netip.ParseAddr(net.Address)
-				if err2 != nil {
-					return nil, fmt.Errorf("invalid address: %s (not a valid CIDR or IP)", net.Address)
-				}
-				// Convert plain IP to /32 prefix
-				prefix = netip.PrefixFrom(addr, addr.BitLen())
+				return nil, fmt.Errorf("invalid address: %s (%w)", net.Address, err)
 			}
 
+			// Convert to netip.Addr
+			addr, err := netip.ParseAddr(ipStr)
+			if err != nil {
+				return nil, fmt.Errorf("failed to parse IP: %s (%w)", ipStr, err)
+			}
+
+			// Convert to prefix (assume /32 for IPv4, /128 for IPv6)
+			prefix := netip.PrefixFrom(addr, addr.BitLen())
 			prefixes = append(prefixes, prefix)
 		}
 

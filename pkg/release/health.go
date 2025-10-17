@@ -31,8 +31,8 @@ type HealthCheckOptions struct {
 func DefaultHealthCheckOptions() HealthCheckOptions {
 	return HealthCheckOptions{
 		ServiceName: "miren",
-		// TODO: Implement proper health check endpoint in miren server
-		// Once implemented, this should be set to the actual health endpoint URL
+		// Health endpoint available at :8989/.well-known/miren/health (returns JSON with component checks)
+		// Set this to check server health during upgrades
 		HealthEndpoint: "",
 		MaxRetries:     30,
 		RetryDelay:     2 * time.Second,

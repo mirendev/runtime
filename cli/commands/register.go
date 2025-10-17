@@ -9,13 +9,16 @@ import (
 	"miren.dev/runtime/pkg/registration"
 )
 
-// Register handles cluster registration with miren.cloud
-func Register(ctx *Context, opts struct {
+// RegisterOptions contains options for cluster registration
+type RegisterOptions struct {
 	ClusterName string            `short:"n" long:"name" description:"Cluster name" required:"true"`
 	CloudURL    string            `short:"u" long:"url" description:"Cloud URL" default:"https://miren.cloud"`
 	Tags        map[string]string `short:"t" long:"tag" description:"Tags for the cluster (key:value)"`
 	OutputDir   string            `short:"o" long:"output" description:"Output directory for registration" default:"/var/lib/miren/server"`
-}) error {
+}
+
+// Register handles cluster registration with miren.cloud
+func Register(ctx *Context, opts RegisterOptions) error {
 	clean := map[string]string{}
 
 	// Validate tags

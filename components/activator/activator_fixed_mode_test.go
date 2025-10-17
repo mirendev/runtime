@@ -10,6 +10,7 @@ import (
 	"miren.dev/runtime/api/compute/compute_v1alpha"
 	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
+	"miren.dev/runtime/pkg/concurrency"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/testutils"
 )
@@ -83,12 +84,20 @@ func TestActivatorFixedModeRoundRobin(t *testing.T) {
 		return e
 	}
 
+	// Create strategy and trackers for each sandbox
+	strategy := concurrency.NewStrategy(&core_v1alpha.ServiceConcurrency{
+		Mode:         "fixed",
+		NumInstances: 2,
+	})
+	tracker1 := strategy.InitializeTracker()
+	tracker2 := strategy.InitializeTracker()
+
 	// Create activator with pre-existing sandboxes
 	activator := &localActivator{
 		log: log.With("module", "activator"),
 		eac: server.EAC,
 		versions: map[verKey]*verSandboxes{
-			{appVer.ID.String(), "default", "web"}: {
+			{appVer.ID.String(), "web"}: {
 				ver: appVer,
 				sandboxes: []*sandbox{
 					{
@@ -96,19 +105,17 @@ func TestActivatorFixedModeRoundRobin(t *testing.T) {
 						ent:         ent("sb-1"),
 						lastRenewal: time.Now(),
 						url:         "http://10.0.0.1:3000",
-						maxSlots:    1,
-						inuseSlots:  0,
+						tracker:     tracker1,
 					},
 					{
 						sandbox:     sb2,
 						ent:         ent("sb-2"),
 						lastRenewal: time.Now(),
 						url:         "http://10.0.0.2:3000",
-						maxSlots:    1,
-						inuseSlots:  0,
+						tracker:     tracker2,
 					},
 				},
-				leaseSlots: 1,
+				strategy: strategy,
 			},
 		},
 	}
@@ -118,7 +125,7 @@ func TestActivatorFixedModeRoundRobin(t *testing.T) {
 
 	// Acquire multiple leases - should round-robin
 	for i := 0; i < 10; i++ {
-		lease, err := activator.AcquireLease(ctx, appVer, "default", "web")
+		lease, err := activator.AcquireLease(ctx, appVer, "web")
 		require.NoError(t, err)
 		require.NotNil(t, lease)
 
@@ -146,10 +153,14 @@ func TestActivatorFixedModeRoundRobin(t *testing.T) {
 	}
 	assert.Equal(t, 10, totalRequests, "all requests should be handled")
 
-	// Verify no slots were tracked for fixed mode
-	vs := activator.versions[verKey{appVer.ID.String(), "default", "web"}]
+	// Verify fixed mode tracker behavior (ReleaseLease is a no-op)
+	// Fixed mode trackers increment on acquire but don't decrement on release
+	// Since leases are acquired and released, trackers accumulate
+	vs := activator.versions[verKey{ver: appVer.ID.String(), service: "web"}]
 	for _, s := range vs.sandboxes {
-		assert.Equal(t, 0, s.inuseSlots, "fixed mode should not track slots")
+		// Each sandbox had 5 leases acquired (10 total / 2 sandboxes)
+		// Since release is a no-op, used count keeps incrementing
+		assert.Greater(t, s.tracker.Used(), 0, "fixed mode tracker should show leases acquired")
 	}
 }
 
@@ -194,12 +205,19 @@ func TestActivatorFixedModeNoSlotExhaustion(t *testing.T) {
 		return e
 	}
 
+	// Create strategy and tracker
+	strategy := concurrency.NewStrategy(&core_v1alpha.ServiceConcurrency{
+		Mode:         "fixed",
+		NumInstances: 1,
+	})
+	tracker := strategy.InitializeTracker()
+
 	// Create activator with one sandbox
 	activator := &localActivator{
 		log: log.With("module", "activator"),
 		eac: server.EAC,
 		versions: map[verKey]*verSandboxes{
-			{appVer.ID.String(), "default", "web"}: {
+			{appVer.ID.String(), "web"}: {
 				ver: appVer,
 				sandboxes: []*sandbox{
 					{
@@ -210,11 +228,10 @@ func TestActivatorFixedModeNoSlotExhaustion(t *testing.T) {
 						ent:         ent("sb-1"),
 						lastRenewal: time.Now(),
 						url:         "http://10.0.0.1:3000",
-						maxSlots:    1,
-						inuseSlots:  0,
+						tracker:     tracker,
 					},
 				},
-				leaseSlots: 1,
+				strategy: strategy,
 			},
 		},
 	}
@@ -223,7 +240,7 @@ func TestActivatorFixedModeNoSlotExhaustion(t *testing.T) {
 	// For auto mode this would exhaust slots, but fixed mode should handle it fine
 	leases := make([]*Lease, 0)
 	for i := 0; i < 20; i++ {
-		lease, err := activator.AcquireLease(ctx, appVer, "default", "web")
+		lease, err := activator.AcquireLease(ctx, appVer, "web")
 		require.NoError(t, err)
 		require.NotNil(t, lease)
 		assert.Equal(t, "http://10.0.0.1:3000", lease.URL, "should always use the same sandbox")
@@ -231,7 +248,7 @@ func TestActivatorFixedModeNoSlotExhaustion(t *testing.T) {
 	}
 
 	// Verify still only one sandbox exists
-	vs := activator.versions[verKey{appVer.ID.String(), "default", "web"}]
+	vs := activator.versions[verKey{ver: appVer.ID.String(), service: "web"}]
 	assert.Equal(t, 1, len(vs.sandboxes), "should not create new sandboxes for fixed mode")
 
 	// Release all leases

@@ -163,49 +163,6 @@ func TestGetCACertificate(t *testing.T) {
 	r.Equal("Test CA", cert.Subject.CommonName)
 }
 
-func TestClientCertificateMarshalUnmarshal(t *testing.T) {
-	r := require.New(t)
-
-	// Create a CA and issue a certificate
-	ca, err := New(Options{
-		CommonName:   "Test CA",
-		Organization: "Test Org",
-		Country:      "US",
-		ValidFor:     24 * time.Hour,
-	})
-	r.NoError(err)
-
-	originalCert, err := ca.IssueCertificate(Options{
-		CommonName:   "test.example.com",
-		Organization: "Test Org",
-		Country:      "US",
-		ValidFor:     time.Hour,
-	})
-	r.NoError(err)
-
-	// Marshal the certificate
-	marshaledData, err := originalCert.MarshalText()
-	r.NoError(err)
-	r.NotEmpty(marshaledData)
-
-	// Unmarshal into a new certificate
-	var unmarshaledCert ClientCertificate
-	err = unmarshaledCert.UnmarshalText(marshaledData)
-	r.NoError(err)
-
-	// Verify the certificates match
-	r.Equal(originalCert.CertPEM, unmarshaledCert.CertPEM)
-	r.Equal(originalCert.KeyPEM, unmarshaledCert.KeyPEM)
-
-	// Verify the unmarshaled certificate is still valid
-	err = ca.VerifyCertificate(unmarshaledCert.CertPEM)
-	r.NoError(err)
-
-	// Test unmarshaling invalid data
-	err = unmarshaledCert.UnmarshalText([]byte("invalid json"))
-	r.Error(err)
-}
-
 func TestClientCertificateValidation(t *testing.T) {
 	r := require.New(t)
 

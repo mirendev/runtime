@@ -167,3 +167,39 @@ func (ac *AppConfig) Validate() error {
 
 	return nil
 }
+
+// ResolveDefaults populates Services map for all service names with fully-resolved defaults.
+// If a service already has explicit config in app.toml, it is preserved.
+// Otherwise, defaults are applied based on service name:
+//   - "web": auto mode, requests_per_instance=10, scale_down_delay=15m
+//   - others: fixed mode, num_instances=1
+func (ac *AppConfig) ResolveDefaults(services []string) {
+	if ac.Services == nil {
+		ac.Services = make(map[string]*ServiceConfig)
+	}
+
+	for _, serviceName := range services {
+		// Skip if service already has config
+		if _, exists := ac.Services[serviceName]; exists {
+			continue
+		}
+
+		// Apply defaults based on service name
+		if serviceName == "web" {
+			ac.Services[serviceName] = &ServiceConfig{
+				Concurrency: &ServiceConcurrencyConfig{
+					Mode:                "auto",
+					RequestsPerInstance: 10,
+					ScaleDownDelay:      "15m",
+				},
+			}
+		} else {
+			ac.Services[serviceName] = &ServiceConfig{
+				Concurrency: &ServiceConcurrencyConfig{
+					Mode:         "fixed",
+					NumInstances: 1,
+				},
+			}
+		}
+	}
+}
