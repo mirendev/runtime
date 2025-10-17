@@ -958,7 +958,7 @@ func (a *localActivator) createPoolForService(ctx context.Context, ver *core_v1a
 	} else {
 		// Auto mode starts with 1 instance
 		desiredInstances = 1
-		
+
 		if svcConcurrency.RequestsPerInstance <= 0 {
 			maxSlots = 10 // default
 		} else {
@@ -988,13 +988,13 @@ func (a *localActivator) createPoolForService(ctx context.Context, ver *core_v1a
 
 	// Create the pool entity
 	var rpcE entityserver_v1alpha.Entity
-	rpcE.SetAttrs(entity.Attrs(
+	rpcE.SetAttrs(entity.New(
 		(&core_v1alpha.Metadata{
 			Name:   idgen.GenNS("pool"),
 			Labels: types.LabelSet("app", ver.App.String(), "service", service),
 		}).Encode,
 		pool.Encode,
-	))
+	).Attrs())
 
 	pr, err := a.eac.Put(ctx, &rpcE)
 	if err != nil {
@@ -1019,8 +1019,8 @@ func (a *localActivator) buildSandboxSpec(ver *core_v1alpha.AppVersion, service 
 	}
 
 	spec := &compute_v1alpha.SandboxSpec{
-		Version:   ver.ID,
-		LogEntity: ver.App.String(),
+		Version:      ver.ID,
+		LogEntity:    ver.App.String(),
 		LogAttribute: types.LabelSet("stage", "app-run", "service", service),
 	}
 
@@ -1087,11 +1087,11 @@ func (a *localActivator) updateSandboxLastActivity(ctx context.Context, sb *comp
 
 		var rpcE entityserver_v1alpha.Entity
 		rpcE.SetId(sb.ID.String())
-		rpcE.SetAttrs(entity.Attrs(
+		rpcE.SetAttrs(entity.New(
 			(&compute_v1alpha.Sandbox{
 				LastActivity: now,
 			}).Encode,
-		))
+		).Attrs())
 
 		if _, err := a.eac.Put(updateCtx, &rpcE); err != nil {
 			a.log.Debug("failed to update sandbox last_activity",

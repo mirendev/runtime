@@ -531,6 +531,9 @@ func ComponentValue(vals ...any) Value {
 			attrs = append(attrs, v)
 			i++
 		case Id:
+			if i+1 >= len(vals) {
+				panic("expected value after Id key")
+			}
 			attrs = append(attrs, Attr{
 				ID:    v,
 				Value: AnyValue(vals[i+1]),

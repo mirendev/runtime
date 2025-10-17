@@ -237,6 +237,13 @@ func InitSystemEntities(save func(*Entity) error) error {
 		Type, TypeRef,
 	)
 
+	program := New(
+		Ident, types.Keyword(Program),
+		Doc, "A program associated with a predicate",
+		Cardinality, CardinalityOne,
+		Type, TypeStr,
+	)
+
 	predIP := New(
 		Ident, types.Keyword(PredIP),
 		Doc, "A program that checks if a value is an IP address",
@@ -294,7 +301,7 @@ func InitSystemEntities(save func(*Entity) error) error {
 		typeArray, typeDuration, typeComponent, typeLabel, typeBytes, index, session, ttl,
 		revision, createdAt, updatedAt,
 		attrSession,
-		attrPred, predIP, predCidr, entityAttrs, entityPreds, entityEnsure,
+		attrPred, program, predIP, predCidr, entityAttrs, entityPreds, entityEnsure,
 		entityKind, entitySchema, entityESchema, schemaKind,
 	}
 
