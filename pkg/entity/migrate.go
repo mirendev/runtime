@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"path"
+	"strings"
 	"time"
 
 	"github.com/fxamacker/cbor/v2"
@@ -49,9 +51,7 @@ type MigrateOptions struct {
 //
 // Returns the number of entities migrated, skipped, and any error encountered.
 func MigrateEntityStore(ctx context.Context, log *slog.Logger, client *clientv3.Client, opts MigrateOptions) (migrated int, skipped int, err error) {
-	if opts.Prefix == "" {
-		opts.Prefix = "/entity/"
-	}
+	opts.Prefix = path.Join(opts.Prefix, "entity")
 
 	log.Info("starting entity migration", "prefix", opts.Prefix, "dry_run", opts.DryRun)
 
@@ -67,6 +67,10 @@ func MigrateEntityStore(ctx context.Context, log *slog.Logger, client *clientv3.
 
 	for _, kv := range resp.Kvs {
 		key := string(kv.Key)
+
+		if strings.Contains(key, "/session/") {
+			continue
+		}
 
 		// Try to decode as old format first
 		var oldEnt OldEntity
@@ -84,8 +88,6 @@ func MigrateEntityStore(ctx context.Context, log *slog.Logger, client *clientv3.
 				continue
 			}
 
-			// Successfully decoded as new format - skip
-			log.Debug("entity already in new format", "key", key, "id", newEnt.Id())
 			skipped++
 			continue
 		}
@@ -95,7 +97,6 @@ func MigrateEntityStore(ctx context.Context, log *slog.Logger, client *clientv3.
 		needsMigration := oldEnt.ID != "" || oldEnt.Revision != 0 || oldEnt.CreatedAt != 0 || oldEnt.UpdatedAt != 0
 
 		if !needsMigration {
-			log.Debug("entity has no old-style fields, skipping", "key", key)
 			skipped++
 			continue
 		}
@@ -155,6 +156,38 @@ func MigrateEntityStore(ctx context.Context, log *slog.Logger, client *clientv3.
 		} else if _, ok := oldEnt.Get(UpdatedAt); !ok {
 			newEnt.Remove(UpdatedAt)
 		}
+
+		// Migrate old timestamp attribute names
+		// db/entity.created-at (Int) -> db/entity.created (Time)
+		// db/entity.updated-at (Int) -> db/entity.updated (Time)
+		oldCreatedAtId := Id("db/entity.created-at")
+		if oldAttr, ok := newEnt.Get(oldCreatedAtId); ok && oldAttr.Value.Kind() == KindInt64 {
+			createdAtMs := oldAttr.Value.Int64()
+			createdAt := time.Unix(0, createdAtMs*int64(time.Millisecond))
+			newEnt.SetCreatedAt(createdAt)
+			newEnt.Remove(oldCreatedAtId)
+
+			log.Info("migrated db/entity.created-at (Int) to db/entity.created (Time)",
+				"key", key,
+				"old_value_ms", createdAtMs,
+				"new_value", createdAt)
+		}
+
+		oldUpdatedAtId := Id("db/entity.updated-at")
+		if oldAttr, ok := newEnt.Get(oldUpdatedAtId); ok && oldAttr.Value.Kind() == KindInt64 {
+			updatedAtMs := oldAttr.Value.Int64()
+			updatedAt := time.Unix(0, updatedAtMs*int64(time.Millisecond))
+			newEnt.SetUpdatedAt(updatedAt)
+			newEnt.Remove(oldUpdatedAtId)
+
+			log.Info("migrated db/entity.updated-at (Int) to db/entity.updated (Time)",
+				"key", key,
+				"old_value_ms", updatedAtMs,
+				"new_value", updatedAt)
+		}
+
+		// Fix a bug where we'd sometimes set a session attribute on entities
+		newEnt.Remove(AttrSession)
 
 		// Sort attributes for consistency
 		newEnt.attrs = SortedAttrs(newEnt.attrs)

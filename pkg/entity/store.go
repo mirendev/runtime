@@ -227,11 +227,9 @@ func (s *EtcdStore) CreateEntity(
 			var curr Entity
 
 			if decoder.Unmarshal(rng.Kvs[0].Value, &curr) == nil {
-				s.log.Debug("entity already exists, checking if attrs match", "id", entity.Id())
 				if slices.EqualFunc(curr.attrs, entity.attrs, func(a, b Attr) bool {
 					return a.Equal(b)
 				}) {
-					s.log.Debug("attrs match, so returning success", "id", entity.Id(), "revision", rng.Header.Revision)
 					entity.SetRevision(rng.Header.Revision)
 					return entity, nil
 				}
@@ -547,6 +545,10 @@ func (s *EtcdStore) UpdateEntity(
 			}
 		}
 	}
+
+	// Remove AttrSession attributes from changes because they're virtual
+	// and we just ignore if someone gives us one
+	changes.Remove(AttrSession)
 
 	err = entity.Update(changes.attrs)
 	if err != nil {
@@ -926,6 +928,10 @@ func (s *EtcdStore) PatchEntity(
 			}
 		}
 	}
+
+	// Remove AttrSession attributes from changes because they're virtual
+	// and we just ignore if someone gives us one
+	current.Remove(AttrSession)
 
 	err = entity.Update(current.attrs)
 	if err != nil {

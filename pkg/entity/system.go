@@ -63,8 +63,8 @@ const (
 	TTL Id = "db/entity.ttl"
 
 	Revision  Id = "db/entity.revision"
-	CreatedAt Id = "db/entity.created-at"
-	UpdatedAt Id = "db/entity.updated-at"
+	CreatedAt Id = "db/entity.created"
+	UpdatedAt Id = "db/entity.updated"
 )
 
 func InitSystemEntities(save func(*Entity) error) error {
