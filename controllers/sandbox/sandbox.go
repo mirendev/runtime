@@ -28,7 +28,6 @@ import (
 	"github.com/pkg/errors"
 	"golang.org/x/crypto/blake2b"
 	"golang.org/x/sys/unix"
-	"miren.dev/runtime/pkg/netutil"
 	"miren.dev/runtime/components/netresolve"
 	"miren.dev/runtime/network"
 	"miren.dev/runtime/observability"
@@ -36,6 +35,7 @@ import (
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/imagerefs"
 	"miren.dev/runtime/pkg/netdb"
+	"miren.dev/runtime/pkg/netutil"
 
 	compute "miren.dev/runtime/api/compute/compute_v1alpha"
 	"miren.dev/runtime/api/core/core_v1alpha"
@@ -778,7 +778,7 @@ func (c *SandboxController) createSandbox(ctx context.Context, co *compute.Sandb
 
 			// Update sandbox status to DEAD in entity store
 			co.Status = compute.DEAD
-			meta.Entity.Update(co.Encode())
+			meta.Update(co.Encode())
 			c.Log.Info("marked sandbox as DEAD due to boot failure", "id", co.ID)
 		}
 	}()

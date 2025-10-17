@@ -112,9 +112,6 @@ func MigrateEntityStore(ctx context.Context, log *slog.Logger, client *clientv3.
 		// Create new entity starting with existing attributes
 		newEnt := New(oldEnt.Attrs)
 
-		// Track whether we added db/id or it already existed
-		var addedDBId bool
-
 		// Add ID as attribute if present and not already in attributes
 		if oldEnt.ID != "" {
 			if _, ok := oldEnt.Get(DBId); !ok {
@@ -205,18 +202,6 @@ func MigrateEntityStore(ctx context.Context, log *slog.Logger, client *clientv3.
 		err = Decode(newData, &verifyEnt)
 		if err != nil {
 			log.Error("failed to verify encoded entity", "key", key, "error", err)
-			errors++
-			continue
-		}
-
-		// Verify critical fields match
-		// Only check ID if we added it from the struct field
-		// (if db/id already existed in attributes, it takes precedence)
-		if addedDBId && verifyEnt.Id() != oldEnt.ID {
-			log.Error("ID mismatch after migration",
-				"key", key,
-				"old", oldEnt.ID,
-				"new", verifyEnt.Id())
 			errors++
 			continue
 		}

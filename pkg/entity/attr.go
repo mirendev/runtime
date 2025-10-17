@@ -23,10 +23,6 @@ type Attr struct {
 	Value Value `json:"v" cbor:"v"`
 }
 
-type AttrsFunc func() []Attr
-
-type AttrList []Attr
-
 func (a Attr) Kind() any {
 	return a.Value.any
 }
@@ -842,7 +838,7 @@ func (v Value) Bytes() []byte {
 func (v Value) Clone() Value {
 	switch v.Kind() {
 	case KindBytes:
-		return BytesValue(slices.Clone(v.Bytes()))
+		return BytesValue(v.Bytes())
 	case KindArray:
 		arr := v.Array()
 		cloned := make([]Value, len(arr))

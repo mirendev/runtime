@@ -83,7 +83,7 @@ func (d *DeploymentServer) CreateDeployment(ctx context.Context, req *deployment
 			CommitAuthorEmail: gitInfo.CommitAuthorEmail(),
 			Repository:        gitInfo.Repository(),
 		}
-		
+
 		// Handle optional timestamp
 		if gitInfo.HasCommitTimestamp() && gitInfo.CommitTimestamp() != nil {
 			deployment.GitInfo.CommitTimestamp = standard.FromTimestamp(gitInfo.CommitTimestamp()).Format(time.RFC3339)
@@ -164,7 +164,7 @@ func (d *DeploymentServer) UpdateDeploymentStatus(ctx context.Context, req *depl
 
 	// Update deployment status
 	deployment.Status = newStatus
-	
+
 	// Only set CompletedAt if moving to a terminal state
 	if newStatus != "in_progress" {
 		deployment.CompletedAt = time.Now().Format(time.RFC3339)
@@ -574,14 +574,14 @@ func (d *DeploymentServer) toDeploymentInfo(deployment *core_v1alpha.Deployment)
 		gitInfo.SetWorkingTreeHash(deployment.GitInfo.WorkingTreeHash)
 		gitInfo.SetCommitAuthorEmail(deployment.GitInfo.CommitAuthorEmail)
 		gitInfo.SetRepository(deployment.GitInfo.Repository)
-		
+
 		// Handle optional timestamp
 		if deployment.GitInfo.CommitTimestamp != "" {
 			if ts, err := time.Parse(time.RFC3339, deployment.GitInfo.CommitTimestamp); err == nil {
 				gitInfo.SetCommitTimestamp(standard.ToTimestamp(ts))
 			}
 		}
-		
+
 		info.SetGitInfo(gitInfo)
 	}
 
@@ -609,7 +609,7 @@ func (w *rpcEntityWrapper) Get(id entity.Id) (entity.Attr, bool) {
 	if id == entity.DBId {
 		return entity.Ref(entity.DBId, entity.Id(w.entity.Id())), true
 	}
-	
+
 	attrs := w.entity.Attrs()
 	for _, attr := range attrs {
 		if entity.Id(attr.ID) == id {
@@ -630,6 +630,6 @@ func (w *rpcEntityWrapper) GetAll(name entity.Id) []entity.Attr {
 	return result
 }
 
-func (w *rpcEntityWrapper) AllAttrs() []entity.Attr {
+func (w *rpcEntityWrapper) Attrs() []entity.Attr {
 	return w.entity.Attrs()
 }
