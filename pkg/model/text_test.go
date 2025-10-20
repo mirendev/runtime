@@ -46,11 +46,11 @@ func TestTextFormatter_Format(t *testing.T) {
 		expected := `attrs:
   - id: db/doc
     value: Test entity
-  - id: db/entity.created-at
+  - id: db/entity.created
     value: 2006-01-02T15:04:05Z
   - id: db/entity.revision
     value: 1
-  - id: db/entity.updated-at
+  - id: db/entity.updated
     value: 2006-01-02T15:04:05Z
   - id: db/id
     value: test/entity
@@ -86,11 +86,11 @@ kind: dev.miren.core/project
 version: v1alpha
 spec: {}
 attrs:
-  - id: db/entity.created-at
+  - id: db/entity.created
     value: 2006-01-02T15:04:05Z
   - id: db/entity.revision
     value: 1
-  - id: db/entity.updated-at
+  - id: db/entity.updated
     value: 2006-01-02T15:04:05Z
   - id: db/id
     value: test/myproject

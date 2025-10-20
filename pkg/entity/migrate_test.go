@@ -47,12 +47,12 @@ func TestMigrateEntityStore(t *testing.T) {
 	// Encode and store old entities
 	data1, err := cbor.Marshal(oldEnt1)
 	r.NoError(err)
-	_, err = client.Put(ctx, prefix+"app/test-app", string(data1))
+	_, err = client.Put(ctx, prefix+"entity/app/test-app", string(data1))
 	r.NoError(err)
 
 	data2, err := cbor.Marshal(oldEnt2)
 	r.NoError(err)
-	_, err = client.Put(ctx, prefix+"project/test-project", string(data2))
+	_, err = client.Put(ctx, prefix+"entity/project/test-project", string(data2))
 	r.NoError(err)
 
 	// Create one entity that's already in new format
@@ -65,7 +65,7 @@ func TestMigrateEntityStore(t *testing.T) {
 	)
 	data3, err := Encode(newEnt)
 	r.NoError(err)
-	_, err = client.Put(ctx, prefix+"sandbox/already-migrated", string(data3))
+	_, err = client.Put(ctx, prefix+"entity/sandbox/already-migrated", string(data3))
 	r.NoError(err)
 
 	// Test dry run first
@@ -79,7 +79,7 @@ func TestMigrateEntityStore(t *testing.T) {
 		r.Equal(1, skipped, "should have skipped 1 already-migrated entity")
 
 		// Verify nothing was actually written (entities should still in old format)
-		resp, err := client.Get(ctx, prefix+"app/test-app")
+		resp, err := client.Get(ctx, prefix+"entity/app/test-app")
 		r.NoError(err)
 		r.Len(resp.Kvs, 1)
 
@@ -100,7 +100,7 @@ func TestMigrateEntityStore(t *testing.T) {
 		r.Equal(1, skipped, "should have skipped 1 already-migrated entity")
 
 		// Verify first entity was migrated
-		resp, err := client.Get(ctx, prefix+"app/test-app")
+		resp, err := client.Get(ctx, prefix+"entity/app/test-app")
 		r.NoError(err)
 		r.Len(resp.Kvs, 1)
 
@@ -119,7 +119,7 @@ func TestMigrateEntityStore(t *testing.T) {
 		r.Equal("Test App", nameAttr.Value.String())
 
 		// Verify second entity was migrated
-		resp, err = client.Get(ctx, prefix+"project/test-project")
+		resp, err = client.Get(ctx, prefix+"entity/project/test-project")
 		r.NoError(err)
 		r.Len(resp.Kvs, 1)
 
@@ -137,7 +137,7 @@ func TestMigrateEntityStore(t *testing.T) {
 		r.Equal("test@example.com", ownerAttr.Value.String())
 
 		// Verify already-migrated entity was not touched
-		resp, err = client.Get(ctx, prefix+"sandbox/already-migrated")
+		resp, err = client.Get(ctx, prefix+"entity/sandbox/already-migrated")
 		r.NoError(err)
 		r.Len(resp.Kvs, 1)
 
@@ -184,7 +184,7 @@ func TestMigrateEntityWithMissingFields(t *testing.T) {
 
 	data, err := cbor.Marshal(oldEnt)
 	r.NoError(err)
-	_, err = client.Put(ctx, prefix+"app/partial", string(data))
+	_, err = client.Put(ctx, prefix+"entity/app/partial", string(data))
 	r.NoError(err)
 
 	// Migrate
@@ -197,7 +197,7 @@ func TestMigrateEntityWithMissingFields(t *testing.T) {
 	r.Equal(0, skipped)
 
 	// Verify migration
-	resp, err := client.Get(ctx, prefix+"app/partial")
+	resp, err := client.Get(ctx, prefix+"entity/app/partial")
 	r.NoError(err)
 	r.Len(resp.Kvs, 1)
 
@@ -238,7 +238,7 @@ func TestMigrateEntityPreservesExistingAttributes(t *testing.T) {
 
 	data, err := cbor.Marshal(oldEnt)
 	r.NoError(err)
-	_, err = client.Put(ctx, prefix+"app/conflict", string(data))
+	_, err = client.Put(ctx, prefix+"entity/app/conflict", string(data))
 	r.NoError(err)
 
 	// Migrate
@@ -250,7 +250,7 @@ func TestMigrateEntityPreservesExistingAttributes(t *testing.T) {
 	r.Equal(1, migrated)
 
 	// Verify the attribute version was preserved
-	resp, err := client.Get(ctx, prefix+"app/conflict")
+	resp, err := client.Get(ctx, prefix+"entity/app/conflict")
 	r.NoError(err)
 	r.Len(resp.Kvs, 1)
 
