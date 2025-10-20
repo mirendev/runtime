@@ -234,8 +234,34 @@ func (e *Entity) Compare(other *Entity) int {
 	})
 }
 
+func (e *Entity) Merge(other *Entity) error {
+	for _, attr := range other.attrs {
+		switch attr.ID {
+		case CreatedAt:
+			// Keep existing CreatedAt if there is one
+			if e.GetCreatedAt().IsZero() {
+				e.Set(attr)
+			}
+		case UpdatedAt:
+			e.Set(attr)
+		case Revision:
+			// Keep existing Revision if there is one
+			if e.GetRevision() == 0 {
+				e.Set(attr)
+			}
+		default:
+			// Don't use Set because we might be merging card many attributes
+			e.attrs = append(e.attrs, attr.Clone())
+		}
+	}
+
+	return e.Fixup()
+}
+
 func (e *Entity) Update(attrs []Attr) error {
-	e.attrs = append(e.attrs, attrs...)
+	for _, attr := range attrs {
+		e.Set(attr)
+	}
 	return e.Fixup()
 }
 

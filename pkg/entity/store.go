@@ -550,7 +550,7 @@ func (s *EtcdStore) UpdateEntity(
 	// and we just ignore if someone gives us one
 	changes.Remove(AttrSession)
 
-	err = entity.Update(changes.attrs)
+	err = entity.Merge(changes)
 	if err != nil {
 		return nil, fmt.Errorf("failed to update entity: %w", err)
 	}
@@ -640,7 +640,7 @@ func (s *EtcdStore) UpdateEntity(
 	}
 
 	if !txnResp.Succeeded {
-		s.log.Error("failed to update entity in etcd", "error", err, "id", entity.Id())
+		s.log.Error("failed to update entity in etcd", "error", err, "id", entity.Id(), "rev", entity.GetRevision(), "server-rev", txnResp.Header.Revision)
 		return nil, cond.Conflict("entity", entity.Id())
 	}
 
@@ -933,7 +933,7 @@ func (s *EtcdStore) PatchEntity(
 	// and we just ignore if someone gives us one
 	current.Remove(AttrSession)
 
-	err = entity.Update(current.attrs)
+	err = entity.Merge(current)
 	if err != nil {
 		return nil, fmt.Errorf("failed to update entity: %w", err)
 	}

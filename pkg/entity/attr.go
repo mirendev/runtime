@@ -27,6 +27,13 @@ func (a Attr) Kind() any {
 	return a.Value.any
 }
 
+func (a Attr) Clone() Attr {
+	return Attr{
+		ID:    a.ID,
+		Value: a.Value.Clone(),
+	}
+}
+
 func (a Attr) Sum(h io.Writer) {
 	h.Write([]byte(a.ID))
 	h.Write([]byte{':'})

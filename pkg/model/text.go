@@ -101,7 +101,7 @@ func (f *TextFormatter) decode(ctx context.Context, sc *SchemaValue) (*entity.En
 		ent.SetID(entity.Id(sc.Id))
 	}
 
-	err = ent.Update(ment.Attrs())
+	err = ent.Merge(ment)
 	if err != nil {
 		return nil, fmt.Errorf("failed to update entity: %w", err)
 	}

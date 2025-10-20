@@ -425,3 +425,94 @@ func TestEntity(t *testing.T) {
 		r.Len(docAttrs, 1)
 	})
 }
+
+func TestEntity_Update_SpecialAttributes(t *testing.T) {
+	r := require.New(t)
+
+	// Create an entity with initial values
+	created := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	updated := time.Date(2024, 1, 2, 0, 0, 0, 0, time.UTC)
+
+	ent := New(
+		Ref(DBId, "test/entity"),
+		Int64(Revision, 1),
+		Time(CreatedAt, created),
+		Time(UpdatedAt, updated),
+		String("test/name", "Original Name"),
+	)
+
+	// Verify initial state
+	r.Equal("test/entity", string(ent.Id()))
+	r.Equal(int64(1), ent.GetRevision())
+	r.Equal(created, ent.GetCreatedAt())
+	r.Equal(updated, ent.GetUpdatedAt())
+
+	// Update with new special attributes
+	newCreated := time.Date(2024, 2, 1, 0, 0, 0, 0, time.UTC)
+	newUpdated := time.Date(2024, 2, 2, 0, 0, 0, 0, time.UTC)
+
+	err := ent.Update([]Attr{
+		Int64(Revision, 2),
+		Time(CreatedAt, newCreated),
+		Time(UpdatedAt, newUpdated),
+		String("test/name", "Updated Name"),
+		String("test/extra", "Extra Value"),
+	})
+	r.NoError(err)
+
+	// Verify updated values
+	r.Equal(int64(2), ent.GetRevision())
+	r.Equal(newCreated, ent.GetCreatedAt())
+	r.Equal(newUpdated, ent.GetUpdatedAt())
+
+	// Verify each special attribute appears only once
+	revisionAttrs := ent.GetAll(Revision)
+	r.Len(revisionAttrs, 1, "Revision should appear only once")
+
+	createdAttrs := ent.GetAll(CreatedAt)
+	r.Len(createdAttrs, 1, "CreatedAt should appear only once")
+
+	updatedAttrs := ent.GetAll(UpdatedAt)
+	r.Len(updatedAttrs, 1, "UpdatedAt should appear only once")
+
+	// Verify regular attributes were updated/added properly
+	nameAttr, ok := ent.Get("test/name")
+	r.True(ok)
+	r.Equal("Updated Name", nameAttr.Value.String())
+
+	extraAttr, ok := ent.Get("test/extra")
+	r.True(ok)
+	r.Equal("Extra Value", extraAttr.Value.String())
+}
+
+func TestEntity_Update_MultipleTimesDoesNotDuplicate(t *testing.T) {
+	r := require.New(t)
+
+	ent := New(
+		Ref(DBId, "test/entity"),
+		Int64(Revision, 1),
+	)
+
+	// Update multiple times with the same special attributes
+	for i := 2; i <= 5; i++ {
+		err := ent.Update([]Attr{
+			Int64(Revision, int64(i)),
+			Time(CreatedAt, time.Now()),
+			Time(UpdatedAt, time.Now()),
+		})
+		r.NoError(err)
+	}
+
+	// Verify each special attribute appears only once
+	revisionAttrs := ent.GetAll(Revision)
+	r.Len(revisionAttrs, 1, "Revision should appear only once after multiple updates")
+
+	createdAttrs := ent.GetAll(CreatedAt)
+	r.Len(createdAttrs, 1, "CreatedAt should appear only once after multiple updates")
+
+	updatedAttrs := ent.GetAll(UpdatedAt)
+	r.Len(updatedAttrs, 1, "UpdatedAt should appear only once after multiple updates")
+
+	// Verify final revision value is correct
+	r.Equal(int64(5), ent.GetRevision())
+}
