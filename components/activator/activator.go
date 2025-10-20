@@ -7,6 +7,8 @@ import (
 	"io"
 	"log/slog"
 	"math/rand/v2"
+	"net"
+	"os/exec"
 	"sync"
 	"time"
 
@@ -721,6 +723,29 @@ func (a *localActivator) recoverSandboxes(ctx context.Context) error {
 			continue
 		}
 
+		// Verify sandbox network connectivity before recovering
+		// This ensures the sandbox can respond to ARP requests and accept traffic
+		if err := a.verifySandboxNetwork(ctx, &sb); err != nil {
+			a.log.Warn("recovered sandbox failed network verification, marking as dead",
+				"sandbox", sb.ID,
+				"address", sb.Network[0].Address,
+				"error", err)
+
+			// Mark sandbox as DEAD so it gets cleaned up and replaced
+			var rpcE entityserver_v1alpha.Entity
+			rpcE.SetId(sb.ID.String())
+			rpcE.SetAttrs(entity.Attrs(
+				(&compute_v1alpha.Sandbox{
+					Status: compute_v1alpha.DEAD,
+				}).Encode,
+			))
+
+			if _, err := a.eac.Put(ctx, &rpcE); err != nil {
+				a.log.Error("failed to mark sandbox as dead", "sandbox", sb.ID, "error", err)
+			}
+			continue
+		}
+
 		// Get service-specific concurrency configuration and create strategy
 		svcConcurrency := a.getServiceConcurrency(&appVer, service)
 		strategy := concurrency.NewStrategy(svcConcurrency)
@@ -763,6 +788,34 @@ func (a *localActivator) recoverSandboxes(ctx context.Context) error {
 		"skipped_not_running", skippedNotRunning,
 		"skipped_no_version", skippedNoVersion,
 		"tracked_keys", len(a.versions))
+
+	return nil
+}
+
+// verifySandboxNetwork checks if a recovered sandbox can respond to network traffic.
+// This is critical after miren restarts, as recovered sandboxes may have broken
+// network state (unable to respond to ARP requests) even though the container is running.
+func (a *localActivator) verifySandboxNetwork(ctx context.Context, sb *compute_v1alpha.Sandbox) error {
+	if len(sb.Network) == 0 {
+		return fmt.Errorf("no network configuration")
+	}
+
+	// Extract IP from CIDR notation (e.g., "10.8.81.29/24" -> "10.8.81.29")
+	addr := sb.Network[0].Address
+	ip, _, err := net.ParseCIDR(addr)
+	if err != nil {
+		return fmt.Errorf("failed to parse IP from %s: %w", addr, err)
+	}
+
+	// Use ping to verify the sandbox responds to ARP and ICMP
+	// Timeout of 1 second is sufficient - if it doesn't respond quickly, it's broken
+	ctx, cancel := context.WithTimeout(ctx, 1*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "ping", "-c", "1", "-W", "1", ip.String())
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("ping failed: %w", err)
+	}
 
 	return nil
 }
