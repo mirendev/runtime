@@ -3,6 +3,11 @@
 
 # Setup cgroups for runsc
 setup_cgroups() {
+    if [ -d /sys/fs/cgroup/inner ]; then
+        # Already set up
+        return
+    fi
+
     # Solve the issue of runsc not being able to manipulate subtree_control
     # by moving everything here into a new cgroup so the root can be changed.
     mkdir /sys/fs/cgroup/inner
