@@ -50,6 +50,10 @@ type PersistentLogWriter struct {
 var _ = autoreg.Register[PersistentLogWriter]()
 
 func (l *PersistentLogWriter) Populated() error {
+	if l.Timeout == 0 {
+		l.Timeout = 30 * time.Second
+	}
+
 	l.client = &http.Client{
 		Timeout: l.Timeout,
 	}
@@ -105,6 +109,10 @@ type PersistentLogReader struct {
 }
 
 func (l *PersistentLogReader) Populated() error {
+	if l.Timeout == 0 {
+		l.Timeout = 30 * time.Second
+	}
+
 	l.client = &http.Client{
 		Timeout: l.Timeout,
 	}
@@ -152,6 +160,10 @@ type LogReader struct {
 var _ = autoreg.Register[LogReader]()
 
 func (l *LogReader) Populated() error {
+	if l.Timeout == 0 {
+		l.Timeout = 30 * time.Second
+	}
+
 	l.client = &http.Client{
 		Timeout: l.Timeout,
 	}
