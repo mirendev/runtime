@@ -36,6 +36,7 @@ import (
 	"miren.dev/runtime/components/ocireg"
 	"miren.dev/runtime/components/runner"
 	"miren.dev/runtime/components/scheduler"
+	"miren.dev/runtime/components/victorialogs"
 	"miren.dev/runtime/metrics"
 	"miren.dev/runtime/observability"
 	"miren.dev/runtime/pkg/caauth"
@@ -347,6 +348,51 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 		ctx.Server.Override("clickhouse-address", cfg.Clickhouse.GetAddress())
 	}
 
+	// Start embedded VictoriaLogs server if requested
+	if cfg.Victorialogs.GetStartEmbedded() {
+		ctx.Log.Info("starting embedded victorialogs server", "http-port", cfg.Victorialogs.GetHTTPPort())
+
+		// Get containerd client from registry
+		var cc *containerd.Client
+		err := ctx.Server.Resolve(&cc)
+		if err != nil {
+			ctx.Log.Error("failed to get containerd client for victorialogs", "error", err)
+			return err
+		}
+
+		victoriaLogsComponent := victorialogs.NewVictoriaLogsComponent(ctx.Log, cc, "miren", cfg.Server.GetDataPath())
+
+		victoriaLogsConfig := victorialogs.VictoriaLogsConfig{
+			HTTPPort:        cfg.Victorialogs.GetHTTPPort(),
+			RetentionPeriod: cfg.Victorialogs.GetRetentionPeriod(),
+		}
+
+		err = victoriaLogsComponent.Start(sub, victoriaLogsConfig)
+		if err != nil {
+			ctx.Log.Error("failed to start victorialogs component", "error", err)
+			return err
+		}
+
+		ctx.Log.Info("embedded victorialogs started", "http-endpoint", victoriaLogsComponent.HTTPEndpoint())
+
+		// Register VictoriaLogs component in the registry for other components to use
+		ctx.Server.Override("victorialogs-address", victoriaLogsComponent.HTTPEndpoint())
+
+		// Ensure cleanup on exit
+		defer func() {
+			ctx.Log.Info("stopping embedded victorialogs")
+			stopCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			if err := victoriaLogsComponent.Stop(stopCtx); err != nil {
+				ctx.Log.Error("failed to stop victorialogs component", "error", err)
+			}
+		}()
+	} else if cfg.Victorialogs.GetAddress() != "" {
+		// Override VictoriaLogs address if provided (for external VictoriaLogs)
+		ctx.Log.Info("using external victorialogs", "address", cfg.Victorialogs.GetAddress())
+		ctx.Server.Override("victorialogs-address", cfg.Victorialogs.GetAddress())
+	}
+
 	klog.SetLogger(logr.FromSlogHandler(ctx.Log.With("module", "global").Handler()))
 
 	res, hm := netresolve.NewLocalResolver()
@@ -354,7 +400,7 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 	var (
 		cpu  metrics.CPUUsage
 		mem  metrics.MemoryUsage
-		logs observability.LogReader
+		logs *observability.LogReader
 	)
 
 	err = ctx.Server.Populate(&mem)
@@ -369,9 +415,9 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 		return err
 	}
 
-	err = ctx.Server.Populate(&logs)
+	err = ctx.Server.Resolve(&logs)
 	if err != nil {
-		ctx.Log.Error("failed to populate log reader", "error", err)
+		ctx.Log.Error("failed to resolve log reader", "error", err)
 		return err
 	}
 
@@ -481,7 +527,7 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 		Mem:             &mem,
 		Cpu:             &cpu,
 		HTTP:            &httpMetrics,
-		Logs:            &logs,
+		Logs:            logs,
 	})
 
 	err = co.Start(sub)

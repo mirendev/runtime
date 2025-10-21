@@ -82,12 +82,13 @@ func (c *ClickHouseConfig) SetStartEmbedded(v bool) {
 
 // Config Complete server configuration from all sources
 type Config struct {
-	Clickhouse ClickHouseConfig `toml:"clickhouse"`
-	Containerd ContainerdConfig `toml:"containerd"`
-	Etcd       EtcdConfig       `toml:"etcd"`
-	Mode       *string          `toml:"mode" env:"MIREN_MODE"`
-	Server     ServerConfig     `toml:"server"`
-	TLS        TLSConfig        `toml:"tls"`
+	Clickhouse   ClickHouseConfig   `toml:"clickhouse"`
+	Containerd   ContainerdConfig   `toml:"containerd"`
+	Etcd         EtcdConfig         `toml:"etcd"`
+	Mode         *string            `toml:"mode" env:"MIREN_MODE"`
+	Server       ServerConfig       `toml:"server"`
+	TLS          TLSConfig          `toml:"tls"`
+	Victorialogs VictoriaLogsConfig `toml:"victorialogs"`
 }
 
 // GetMode returns the value of Mode or its zero value if nil
@@ -358,6 +359,66 @@ func (c *TLSConfig) GetStandardTLS() bool {
 // SetStandardTLS sets the value of StandardTLS
 func (c *TLSConfig) SetStandardTLS(v bool) {
 	c.StandardTLS = &v
+}
+
+// VictoriaLogsConfig VictoriaLogs configuration
+type VictoriaLogsConfig struct {
+	Address         *string `toml:"address" env:"MIREN_VICTORIALOGS_ADDRESS"`
+	HTTPPort        *int    `toml:"http_port" env:"MIREN_VICTORIALOGS_HTTP_PORT"`
+	RetentionPeriod *string `toml:"retention_period" env:"MIREN_VICTORIALOGS_RETENTION_PERIOD"`
+	StartEmbedded   *bool   `toml:"start_embedded" env:"MIREN_VICTORIALOGS_START_EMBEDDED"`
+}
+
+// GetAddress returns the value of Address or its zero value if nil
+func (c *VictoriaLogsConfig) GetAddress() string {
+	if c.Address != nil {
+		return *c.Address
+	}
+	return ""
+}
+
+// SetAddress sets the value of Address
+func (c *VictoriaLogsConfig) SetAddress(v string) {
+	c.Address = &v
+}
+
+// GetHTTPPort returns the value of HTTPPort or its zero value if nil
+func (c *VictoriaLogsConfig) GetHTTPPort() int {
+	if c.HTTPPort != nil {
+		return *c.HTTPPort
+	}
+	return 0
+}
+
+// SetHTTPPort sets the value of HTTPPort
+func (c *VictoriaLogsConfig) SetHTTPPort(v int) {
+	c.HTTPPort = &v
+}
+
+// GetRetentionPeriod returns the value of RetentionPeriod or its zero value if nil
+func (c *VictoriaLogsConfig) GetRetentionPeriod() string {
+	if c.RetentionPeriod != nil {
+		return *c.RetentionPeriod
+	}
+	return ""
+}
+
+// SetRetentionPeriod sets the value of RetentionPeriod
+func (c *VictoriaLogsConfig) SetRetentionPeriod(v string) {
+	c.RetentionPeriod = &v
+}
+
+// GetStartEmbedded returns the value of StartEmbedded or its zero value if nil
+func (c *VictoriaLogsConfig) GetStartEmbedded() bool {
+	if c.StartEmbedded != nil {
+		return *c.StartEmbedded
+	}
+	return false
+}
+
+// SetStartEmbedded sets the value of StartEmbedded
+func (c *VictoriaLogsConfig) SetStartEmbedded(v bool) {
+	c.StartEmbedded = &v
 }
 
 // HTTPRequestTimeoutDuration returns the timeout as a time.Duration

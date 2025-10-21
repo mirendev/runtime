@@ -147,6 +147,9 @@ func Registry(extra ...func(*asm.Registry)) (*asm.Registry, func()) {
 		})
 	})
 
+	r.Register("victorialogs-address", "victorialogs:9428")
+	r.Register("victorialogs-timeout", 30*time.Second)
+
 	res, hm := netresolve.NewLocalResolver()
 
 	r.Provide(func() netresolve.Resolver {

@@ -239,4 +239,20 @@ func applyCLIFlags(cfg *Config, flags *CLIFlags) {
 		cfg.TLS.StandardTLS = flags.TLSConfigStandardTLS
 	}
 
+	if flags.VictoriaLogsConfigAddress != nil && *flags.VictoriaLogsConfigAddress != "" {
+		cfg.Victorialogs.Address = flags.VictoriaLogsConfigAddress
+	}
+
+	if flags.VictoriaLogsConfigHTTPPort != nil {
+		cfg.Victorialogs.HTTPPort = flags.VictoriaLogsConfigHTTPPort
+	}
+
+	if flags.VictoriaLogsConfigRetentionPeriod != nil && *flags.VictoriaLogsConfigRetentionPeriod != "" {
+		cfg.Victorialogs.RetentionPeriod = flags.VictoriaLogsConfigRetentionPeriod
+	}
+
+	if flags.VictoriaLogsConfigStartEmbedded != nil {
+		cfg.Victorialogs.StartEmbedded = flags.VictoriaLogsConfigStartEmbedded
+	}
+
 }

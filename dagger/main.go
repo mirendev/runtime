@@ -59,6 +59,11 @@ func (m *Runtime) WithServices(dir *dagger.Directory) *dagger.Container {
 		WithExposedPort(9000).
 		AsService()
 
+	vl := dag.Container().
+		From("docker.io/victoriametrics/victoria-logs:v1.0.0-victorialogs").
+		WithExposedPort(9428).
+		AsService()
+
 	etcd := dag.Container().
 		From("oci.miren.cloud/etcd:v1").
 		WithExposedPort(2379).
@@ -72,7 +77,8 @@ func (m *Runtime) WithServices(dir *dagger.Directory) *dagger.Container {
 
 	return m.BuildEnv(dir).
 		WithServiceBinding("clickhouse", ch).
-		WithServiceBinding("etcd", etcd)
+		WithServiceBinding("etcd", etcd).
+		WithServiceBinding("victorialogs", vl)
 }
 
 func (m *Runtime) BuildEnv(dir *dagger.Directory) *dagger.Container {
@@ -172,6 +178,7 @@ func (m *Runtime) Test(
 	w := m.WithServices(dir).
 		WithDirectory("/src", dir).
 		WithWorkdir("/src").
+		WithEnvVariable("VICTORIALOGS_ADDR", "victorialogs:9428").
 		WithEnvVariable("DISABLE_NBD_TEST", "1").
 		WithMountedCache("/data", dag.CacheVolume("containerd"))
 

@@ -43,6 +43,11 @@ configs:
         toml: clickhouse
         nested: true
 
+      victorialogs:
+        type: VictoriaLogsConfig
+        toml: victorialogs
+        nested: true
+
       containerd:
         type: ContainerdConfig
         toml: containerd
@@ -284,6 +289,48 @@ configs:
           long: clickhouse-addr
           description: ClickHouse address (when not using embedded)
         env: MIREN_CLICKHOUSE_ADDRESS
+        toml: address
+
+  VictoriaLogsConfig:
+    description: VictoriaLogs configuration
+    fields:
+      start_embedded:
+        type: bool
+        cli:
+          long: start-victorialogs
+          description: Start embedded VictoriaLogs server
+        env: MIREN_VICTORIALOGS_START_EMBEDDED
+        toml: start_embedded
+        mode_default:
+          standalone: true
+
+      http_port:
+        type: int
+        default: 9428
+        cli:
+          long: victorialogs-http-port
+          description: VictoriaLogs HTTP port
+        env: MIREN_VICTORIALOGS_HTTP_PORT
+        toml: http_port
+        validation:
+          port: true
+
+      retention_period:
+        type: string
+        default: "30d"
+        cli:
+          long: victorialogs-retention
+          description: VictoriaLogs retention period
+        env: MIREN_VICTORIALOGS_RETENTION_PERIOD
+        toml: retention_period
+
+      address:
+        type: string
+        default: ""
+        cli:
+          long: victorialogs-addr
+          description: VictoriaLogs address (when not using embedded)
+        env: MIREN_VICTORIALOGS_ADDRESS
         toml: address
 
   ContainerdConfig:

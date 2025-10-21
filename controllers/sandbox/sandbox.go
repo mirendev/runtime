@@ -72,6 +72,7 @@ type SandboxController struct {
 	Tempdir  string `asm:"tempdir"`
 
 	LogsMaintainer *observability.LogsMaintainer
+	LogWriter      observability.LogWriter
 
 	StatusMon *observability.StatusMonitor
 
@@ -1428,10 +1429,6 @@ func (c *SandboxController) logConsumer(sb *compute.Sandbox, container string) *
 		le = sb.ID.String()
 	}
 
-	lw := &observability.PersistentLogWriter{
-		DB: c.Clickhouse,
-	}
-
 	attrs := map[string]string{
 		"sandbox": sb.ID.String(),
 	}
@@ -1448,7 +1445,7 @@ func (c *SandboxController) logConsumer(sb *compute.Sandbox, container string) *
 		attrs[lbl.Key] = lbl.Value
 	}
 
-	return NewSandboxLogs(c.Log, le, attrs, lw)
+	return NewSandboxLogs(c.Log, le, attrs, c.LogWriter)
 }
 
 func (c *SandboxController) bootInitialTask(

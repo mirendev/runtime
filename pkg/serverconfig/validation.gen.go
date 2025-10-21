@@ -39,6 +39,10 @@ func (c *Config) Validate() error {
 	if err := c.TLS.Validate(); err != nil {
 		return fmt.Errorf("tls: %w", err)
 	}
+
+	if err := c.Victorialogs.Validate(); err != nil {
+		return fmt.Errorf("victorialogs: %w", err)
+	}
 	return nil
 }
 
@@ -177,6 +181,19 @@ func (c *TLSConfig) Validate() error {
 	}
 
 	// Check for port conflicts in TLSConfig
+
+	return nil
+}
+
+// Validate validates VictoriaLogsConfig
+func (c *VictoriaLogsConfig) Validate() error {
+
+	// Validate http_port
+	if c.HTTPPort != nil && (*c.HTTPPort < 1 || *c.HTTPPort > 65535) {
+		return fmt.Errorf("http_port must be between 1 and 65535, got %d", *c.HTTPPort)
+	}
+
+	// Check for port conflicts in VictoriaLogsConfig
 
 	return nil
 }

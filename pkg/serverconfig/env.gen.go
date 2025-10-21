@@ -313,5 +313,45 @@ func applyEnvironmentVariables(cfg *Config, log *slog.Logger) error {
 
 	}
 
+	// Apply MIREN_VICTORIALOGS_ADDRESS
+	if val := os.Getenv("MIREN_VICTORIALOGS_ADDRESS"); val != "" {
+
+		cfg.Victorialogs.Address = &val
+		log.Debug("applied env var", "key", "MIREN_VICTORIALOGS_ADDRESS")
+
+	}
+
+	// Apply MIREN_VICTORIALOGS_HTTP_PORT
+	if val := os.Getenv("MIREN_VICTORIALOGS_HTTP_PORT"); val != "" {
+
+		if i, err := strconv.Atoi(val); err == nil {
+			cfg.Victorialogs.HTTPPort = &i
+			log.Debug("applied env var", "key", "MIREN_VICTORIALOGS_HTTP_PORT")
+		} else {
+			log.Warn("invalid MIREN_VICTORIALOGS_HTTP_PORT value", "value", val, "error", err)
+		}
+
+	}
+
+	// Apply MIREN_VICTORIALOGS_RETENTION_PERIOD
+	if val := os.Getenv("MIREN_VICTORIALOGS_RETENTION_PERIOD"); val != "" {
+
+		cfg.Victorialogs.RetentionPeriod = &val
+		log.Debug("applied env var", "key", "MIREN_VICTORIALOGS_RETENTION_PERIOD")
+
+	}
+
+	// Apply MIREN_VICTORIALOGS_START_EMBEDDED
+	if val := os.Getenv("MIREN_VICTORIALOGS_START_EMBEDDED"); val != "" {
+
+		if b, err := strconv.ParseBool(val); err == nil {
+			cfg.Victorialogs.StartEmbedded = &b
+			log.Debug("applied env var", "key", "MIREN_VICTORIALOGS_START_EMBEDDED")
+		} else {
+			log.Warn("invalid MIREN_VICTORIALOGS_START_EMBEDDED value", "value", val, "error", err)
+		}
+
+	}
+
 	return nil
 }

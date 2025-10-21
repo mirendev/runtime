@@ -103,6 +103,14 @@ func (c *Context) setupServerComponents(ctx context.Context, reg *asm.Registry) 
 	reg.Register("clickhouse-address", fmt.Sprintf("%s:%s", clickhouseHost, clickhousePort))
 	reg.Register("clickhouse-debug", false)
 
+	// VictoriaLogs configuration
+	victoriaLogsAddr := os.Getenv("VICTORIALOGS_ADDR")
+	if victoriaLogsAddr == "" {
+		victoriaLogsAddr = "localhost:9428"
+	}
+	reg.Register("victorialogs-address", victoriaLogsAddr)
+	reg.Register("victorialogs-timeout", 30*time.Second)
+
 	reg.Register("container_idle_timeout", time.Minute)
 
 	reg.Register("http_domain", "local.miren.run")
@@ -137,8 +145,12 @@ func (c *Context) setupServerComponents(ctx context.Context, reg *asm.Registry) 
 		return &observability.PersistentLogWriter{}
 	})
 
-	reg.Provide(func() *observability.StatusMonitor {
-		return &observability.StatusMonitor{}
+	reg.Provide(func(opts struct {
+		Log *slog.Logger
+	}) *observability.StatusMonitor {
+		return &observability.StatusMonitor{
+			Log: opts.Log,
+		}
 	})
 
 	for _, f := range autoreg.All() {

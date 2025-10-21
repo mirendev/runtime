@@ -50,6 +50,8 @@ func TestSandboxLifecycleEndToEnd(t *testing.T) {
 	r.Equal(200, resp.StatusCode)
 	r.Contains(string(body), "Welcome to nginx!")
 
+	time.Sleep(2 * time.Second)
+
 	// Fetch logs from app
 	var logsCode int
 	output, err := testutils.CaptureStdout(func() {

@@ -19,6 +19,9 @@ const (
 	// Minio object storage server
 	Minio = "oci.miren.cloud/minio:v1"
 
+	// VictoriaLogs log storage server
+	VictoriaLogs = "docker.io/victoriametrics/victoria-logs:v1.0.0-victorialogs"
+
 	// Miren runtime server
 	Miren = "oci.miren.cloud/miren:latest"
 )
