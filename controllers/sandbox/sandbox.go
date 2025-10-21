@@ -188,6 +188,7 @@ func (c *SandboxController) reconcileSandboxesOnBoot(ctx context.Context) error 
 
 	var unhealthySandboxes []entity.Id
 	runningCount := 0
+	reattachedCount := 0
 
 	for _, e := range resp.Values() {
 		var sb compute.Sandbox
@@ -199,8 +200,18 @@ func (c *SandboxController) reconcileSandboxesOnBoot(ctx context.Context) error 
 		}
 		runningCount++
 
-		// Check pause container health
+		// Reattach logs to pause container
 		pauseID := c.pauseContainerId(sb.ID)
+		if err := c.reattachLogs(ctx, &sb, pauseID, ""); err != nil {
+			c.Log.Warn("failed to reattach logs to pause container",
+				"sandbox_id", sb.ID,
+				"pause_container_id", pauseID,
+				"error", err)
+			unhealthySandboxes = append(unhealthySandboxes, sb.ID)
+			continue
+		}
+
+		// Check pause container health
 		if !c.isContainerHealthy(ctx, pauseID) {
 			c.Log.Warn("found unhealthy sandbox during boot reconciliation",
 				"sandbox_id", sb.ID,
@@ -209,10 +220,22 @@ func (c *SandboxController) reconcileSandboxesOnBoot(ctx context.Context) error 
 			continue
 		}
 
-		// Check subcontainers health
+		// Reattach logs and check subcontainers health
 		allHealthy := true
 		for _, container := range sb.Container {
 			containerID := fmt.Sprintf("%s-%s", c.containerPrefix(sb.ID), container.Name)
+
+			// Reattach logs for this subcontainer
+			if err := c.reattachLogs(ctx, &sb, containerID, container.Name); err != nil {
+				c.Log.Warn("failed to reattach logs to subcontainer",
+					"sandbox_id", sb.ID,
+					"container_name", container.Name,
+					"container_id", containerID,
+					"error", err)
+				allHealthy = false
+				break
+			}
+
 			if !c.isContainerHealthy(ctx, containerID) {
 				c.Log.Warn("found unhealthy subcontainer during boot reconciliation",
 					"sandbox_id", sb.ID,
@@ -225,6 +248,8 @@ func (c *SandboxController) reconcileSandboxesOnBoot(ctx context.Context) error 
 
 		if !allHealthy {
 			unhealthySandboxes = append(unhealthySandboxes, sb.ID)
+		} else {
+			reattachedCount++
 		}
 	}
 
@@ -242,6 +267,7 @@ func (c *SandboxController) reconcileSandboxesOnBoot(ctx context.Context) error 
 
 	c.Log.Info("boot reconciliation complete",
 		"total_running_sandboxes", runningCount,
+		"reattached_sandboxes", reattachedCount,
 		"unhealthy_sandboxes", len(unhealthySandboxes))
 
 	return nil
@@ -592,6 +618,39 @@ func (c *SandboxController) isContainerHealthy(ctx context.Context, containerID 
 		c.Log.Debug("task in unknown/unhealthy state", "id", containerID, "status", status.Status)
 		return false
 	}
+}
+
+// reattachLogs reattaches log consumers to a container's task after controller restart.
+// This is critical to prevent stdout/stderr buffers from filling up and blocking the process.
+// containerName should be empty string for the pause container, or the subcontainer name otherwise.
+func (c *SandboxController) reattachLogs(ctx context.Context, sb *compute.Sandbox, containerID string, containerName string) error {
+	ctx = namespaces.WithNamespace(ctx, c.Namespace)
+
+	container, err := c.CC.LoadContainer(ctx, containerID)
+	if err != nil {
+		return fmt.Errorf("failed to load container: %w", err)
+	}
+
+	// Create log consumer for this container
+	sl := c.logConsumer(sb, containerName)
+
+	// Reattach to the existing task with our log consumer
+	// This drains stdout/stderr and prevents the process from blocking on writes
+	task, err := container.Task(ctx, cio.NewAttach(cio.WithStreams(nil, sl, sl.Stderr())))
+	if err != nil {
+		return fmt.Errorf("failed to attach to task: %w", err)
+	}
+
+	if task == nil {
+		return fmt.Errorf("task is nil after attach")
+	}
+
+	c.Log.Info("reattached logs to container",
+		"sandbox_id", sb.ID,
+		"container_id", containerID,
+		"container_name", containerName)
+
+	return nil
 }
 
 func (c *SandboxController) saveEntity(ctx context.Context, sb *compute.Sandbox, meta *entity.Meta) error {
