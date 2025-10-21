@@ -9,10 +9,19 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"miren.dev/runtime/pkg/asm/autoreg"
 )
+
+// normalizeBaseURL ensures the address has a scheme and no trailing slash
+func normalizeBaseURL(address string) string {
+	if !strings.HasPrefix(address, "http://") && !strings.HasPrefix(address, "https://") {
+		address = "http://" + address
+	}
+	return strings.TrimRight(address, "/")
+}
 
 type LogStream string
 
@@ -72,7 +81,8 @@ func (l *PersistentLogWriter) WriteEntry(entity string, le LogEntry) error {
 	jsonData = append(jsonData, '\n')
 
 	// Send to VictoriaLogs
-	insertURL := fmt.Sprintf("http://%s/insert/jsonline", l.Address)
+	baseURL := normalizeBaseURL(l.Address)
+	insertURL := baseURL + "/insert/jsonline"
 	resp, err := l.client.Post(insertURL, "application/x-ndjson", bytes.NewReader(jsonData))
 	if err != nil {
 		return fmt.Errorf("failed to send log to victorialogs: %w", err)
@@ -218,7 +228,8 @@ func (l *LogReader) ReadBySandbox(ctx context.Context, sandboxID string, opts ..
 
 func (l *LogReader) executeQuery(ctx context.Context, query string, limit int, start, end time.Time) ([]LogEntry, error) {
 	// VictoriaLogs uses /select/logsql/query for queries
-	queryURL := fmt.Sprintf("http://%s/select/logsql/query", l.Address)
+	baseURL := normalizeBaseURL(l.Address)
+	queryURL := baseURL + "/select/logsql/query"
 
 	params := url.Values{}
 	params.Set("query", query)

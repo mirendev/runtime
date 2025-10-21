@@ -5,6 +5,7 @@ package serverconfig
 import (
 	"fmt"
 	"net"
+	"regexp"
 )
 
 // Validate validates the configuration
@@ -188,9 +189,27 @@ func (c *TLSConfig) Validate() error {
 // Validate validates VictoriaLogsConfig
 func (c *VictoriaLogsConfig) Validate() error {
 
+	// Validate address
+	if c.Address != nil && *c.Address != "" {
+		if _, _, err := net.SplitHostPort(*c.Address); err != nil {
+			return fmt.Errorf("invalid address %q: %w", *c.Address, err)
+		}
+	}
+
 	// Validate http_port
 	if c.HTTPPort != nil && (*c.HTTPPort < 1 || *c.HTTPPort > 65535) {
 		return fmt.Errorf("http_port must be between 1 and 65535, got %d", *c.HTTPPort)
+	}
+
+	// Validate retention_period regex
+	if c.RetentionPeriod != nil && *c.RetentionPeriod != "" {
+		matched, err := regexp.MatchString(`^\d+(ms|s|m|h|d|w|y)$`, *c.RetentionPeriod)
+		if err != nil {
+			return fmt.Errorf("invalid regex pattern for retention_period: %w", err)
+		}
+		if !matched {
+			return fmt.Errorf("invalid retention_period %q: must match pattern %q", *c.RetentionPeriod, `^\d+(ms|s|m|h|d|w|y)$`)
+		}
 	}
 
 	// Check for port conflicts in VictoriaLogsConfig

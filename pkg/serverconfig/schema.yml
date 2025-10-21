@@ -320,9 +320,11 @@ configs:
         default: "30d"
         cli:
           long: victorialogs-retention
-          description: VictoriaLogs retention period
+          description: VictoriaLogs retention period (e.g. 30d, 2w, 1y)
         env: MIREN_VICTORIALOGS_RETENTION_PERIOD
         toml: retention_period
+        validation:
+          regex: '^\d+(ms|s|m|h|d|w|y)$'
 
       address:
         type: string
@@ -332,6 +334,8 @@ configs:
           description: VictoriaLogs address (when not using embedded)
         env: MIREN_VICTORIALOGS_ADDRESS
         toml: address
+        validation:
+          format: host:port
 
   ContainerdConfig:
     description: Containerd configuration

@@ -56,6 +56,7 @@ type CLIConfig struct {
 type Validation struct {
 	Enum   []string `yaml:"enum"`
 	Format string   `yaml:"format"`
+	Regex  string   `yaml:"regex"`
 	Min    *int     `yaml:"min"`
 	Max    *int     `yaml:"max"`
 	Port   bool     `yaml:"port"`
@@ -665,6 +666,7 @@ package {{.Package}}
 import (
 	"fmt"
 	"net"
+	"regexp"
 )
 
 // Validate validates the configuration
@@ -719,6 +721,18 @@ func (c *{{$name}}) Validate() error {
 	// Validate {{$fname}}
 	if c.{{$fname | title}} != nil && (*c.{{$fname | title}} < 1 || *c.{{$fname | title}} > 65535) {
 		return fmt.Errorf("{{$fname}} must be between 1 and 65535, got %d", *c.{{$fname | title}})
+	}
+	{{end}}
+	{{if $field.Validation.Regex}}
+	// Validate {{$fname}} regex
+	if c.{{$fname | title}} != nil && *c.{{$fname | title}} != "" {
+		matched, err := regexp.MatchString(` + "`{{$field.Validation.Regex}}`" + `, *c.{{$fname | title}})
+		if err != nil {
+			return fmt.Errorf("invalid regex pattern for {{$fname}}: %w", err)
+		}
+		if !matched {
+			return fmt.Errorf("invalid {{$fname}} %q: must match pattern %q", *c.{{$fname | title}}, ` + "`{{$field.Validation.Regex}}`" + `)
+		}
 	}
 	{{end}}
 	{{if $field.Validation.Min}}

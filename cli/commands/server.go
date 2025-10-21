@@ -377,6 +377,7 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 
 		// Register VictoriaLogs component in the registry for other components to use
 		ctx.Server.Override("victorialogs-address", victoriaLogsComponent.HTTPEndpoint())
+		ctx.Server.Override("victorialogs-timeout", 30*time.Second)
 
 		// Ensure cleanup on exit
 		defer func() {
@@ -391,6 +392,7 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 		// Override VictoriaLogs address if provided (for external VictoriaLogs)
 		ctx.Log.Info("using external victorialogs", "address", cfg.Victorialogs.GetAddress())
 		ctx.Server.Override("victorialogs-address", cfg.Victorialogs.GetAddress())
+		ctx.Server.Override("victorialogs-timeout", 30*time.Second)
 	}
 
 	klog.SetLogger(logr.FromSlogHandler(ctx.Log.With("module", "global").Handler()))

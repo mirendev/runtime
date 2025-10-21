@@ -148,8 +148,12 @@ func (c *Context) setupServerComponents(ctx context.Context, reg *asm.Registry) 
 	reg.Provide(func(opts struct {
 		Log *slog.Logger
 	}) *observability.StatusMonitor {
+		log := opts.Log
+		if log == nil {
+			log = slog.Default()
+		}
 		return &observability.StatusMonitor{
-			Log: opts.Log,
+			Log: log,
 		}
 	})
 
