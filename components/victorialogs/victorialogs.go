@@ -123,7 +123,11 @@ func (c *VictoriaLogsComponent) Start(ctx context.Context, config VictoriaLogsCo
 	}
 
 	// Wait for VictoriaLogs to be ready
-	c.waitForReady(ctx, "localhost", config.HTTPPort)
+	if err := c.waitForReady(ctx, "localhost", config.HTTPPort); err != nil {
+		task.Delete(ctx)
+		container.Delete(ctx, containerd.WithSnapshotCleanup)
+		return err
+	}
 
 	c.running = true
 	c.Log.Info("victorialogs server started", "container_id", container.ID(), "http_port", config.HTTPPort)
@@ -249,8 +253,7 @@ func (c *VictoriaLogsComponent) restartExistingContainer(ctx context.Context, co
 		} else if status.Status == containerd.Running {
 			c.Log.Info("victorialogs container is already running")
 			c.running = true
-			c.waitForReady(ctx, "localhost", config.HTTPPort)
-			return nil
+			return c.waitForReady(ctx, "localhost", config.HTTPPort)
 		}
 
 		c.Log.Info("starting existing victorialogs task")
@@ -258,8 +261,7 @@ func (c *VictoriaLogsComponent) restartExistingContainer(ctx context.Context, co
 		if err == nil {
 			c.running = true
 			c.Log.Info("victorialogs server restarted", "container_id", container.ID(), "http_port", config.HTTPPort)
-			c.waitForReady(ctx, "localhost", config.HTTPPort)
-			return nil
+			return c.waitForReady(ctx, "localhost", config.HTTPPort)
 		}
 
 		c.Log.Warn("failed to start existing task, deleting it", "error", err)
@@ -278,7 +280,10 @@ func (c *VictoriaLogsComponent) restartExistingContainer(ctx context.Context, co
 		return fmt.Errorf("failed to start new task for existing container: %w", err)
 	}
 
-	c.waitForReady(ctx, "localhost", config.HTTPPort)
+	if err := c.waitForReady(ctx, "localhost", config.HTTPPort); err != nil {
+		task.Delete(ctx)
+		return err
+	}
 
 	c.running = true
 	c.Log.Info("victorialogs server restarted with new task", "container_id", container.ID(), "http_port", config.HTTPPort)
@@ -325,24 +330,25 @@ func (c *VictoriaLogsComponent) createContainer(ctx context.Context, image conta
 	return container, nil
 }
 
-func (c *VictoriaLogsComponent) waitForReady(ctx context.Context, host string, port int) {
-	endpoint := fmt.Sprintf("%s:%d", host, port)
+func (c *VictoriaLogsComponent) waitForReady(ctx context.Context, host string, port int) error {
+	endpoint := net.JoinHostPort(host, fmt.Sprintf("%d", port))
 
 	for i := 0; i < 30; i++ {
 		conn, err := net.DialTimeout("tcp", endpoint, 2*time.Second)
 		if err == nil {
 			conn.Close()
 			c.Log.Info("victorialogs server is ready", "endpoint", endpoint)
-			return
+			return err
 		}
 
 		select {
 		case <-ctx.Done():
-			return
+			return ctx.Err()
 		case <-time.After(2 * time.Second):
 			continue
 		}
 	}
 
 	c.Log.Warn("victorialogs server readiness check timed out", "endpoint", endpoint)
+	return nil
 }
