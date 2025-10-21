@@ -189,6 +189,12 @@ func WithLimit(l int) LogReaderOption {
 	}
 }
 
+func logsQLQuote(s string) string {
+	s = strings.ReplaceAll(s, `\`, `\\`)
+	s = strings.ReplaceAll(s, `"`, `\"`)
+	return `"` + s + `"`
+}
+
 func (l *LogReader) Read(ctx context.Context, id string, opts ...LogReaderOption) ([]LogEntry, error) {
 	var o logReadOpts
 
@@ -202,7 +208,7 @@ func (l *LogReader) Read(ctx context.Context, id string, opts ...LogReaderOption
 	}
 
 	// Build LogsQL query - use simple field matching
-	query := fmt.Sprintf(`entity:"%s"`, id)
+	query := `entity:` + logsQLQuote(id)
 
 	// Victoria Logs often requires a time range
 	// If not provided, use last 24 hours
@@ -227,7 +233,7 @@ func (l *LogReader) ReadBySandbox(ctx context.Context, sandboxID string, opts ..
 	}
 
 	// Build LogsQL query filtering by sandbox attribute
-	query := fmt.Sprintf(`sandbox:"%s"`, sandboxID)
+	query := `sandbox:` + logsQLQuote(sandboxID)
 
 	// Victoria Logs often requires a time range
 	startTime := o.From
