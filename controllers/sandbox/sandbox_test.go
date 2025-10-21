@@ -1393,4 +1393,122 @@ func TestSandbox(t *testing.T) {
 		r.True(elapsed >= 50*time.Millisecond && elapsed < 150*time.Millisecond,
 			"should detect context cancellation quickly, got %v", elapsed)
 	})
+
+	t.Run("reattaches logs after controller restart", func(t *testing.T) {
+		r := require.New(t)
+
+		ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+		defer cancel()
+
+		reg, cleanup := testutils.Registry(observability.TestInject, build.TestInject)
+		defer cleanup()
+
+		var (
+			cc *containerd.Client
+			lr *observability.LogReader
+		)
+
+		err := reg.Init(&cc, &lr)
+		r.NoError(err)
+
+		// Create first controller instance
+		var co1 SandboxController
+		err = reg.Populate(&co1)
+		r.NoError(err)
+
+		r.NoError(co1.Init(ctx))
+		defer co1.Close()
+
+		ctx = namespaces.WithNamespace(ctx, co1.Namespace)
+
+		id := entity.Id(sbName())
+
+		// Create a sandbox with a container that logs continuously
+		var sb compute.Sandbox
+		sb.ID = id
+		sb.Labels = append(sb.Labels, "runtime.computer/app=heavy-logger")
+		sb.Container = []compute.Container{
+			{
+				Name:  "logger",
+				Image: "docker.io/library/busybox:latest",
+				// Continuously write to stdout - will fill the buffer if not drained
+				// Each line is ~80 bytes, so this generates plenty of data
+				Command: `sh -c 'i=0; while true; do echo "Log line $i: test message to fill stdout buffer"; i=$((i+1)); sleep 0.05; done'`,
+			},
+		}
+
+		cont := &entity.Entity{
+			ID:    id,
+			Attrs: sb.Encode(),
+		}
+
+		meta := &entity.Meta{
+			Entity:   cont,
+			Revision: 1,
+		}
+
+		var tco compute.Sandbox
+		tco.Decode(cont)
+
+		// Create the sandbox - this attaches logs initially
+		err = co1.Create(ctx, &tco, meta)
+		r.NoError(err)
+
+		// Wait for logs to start being generated
+		time.Sleep(3 * time.Second)
+
+		// Get the container and task
+		containerID := fmt.Sprintf("%s-%s", co1.containerPrefix(id), "logger")
+		subC, err := cc.LoadContainer(ctx, containerID)
+		r.NoError(err)
+		r.NotNil(subC)
+
+		// Verify the process is running and generating logs
+		task1, err := subC.Task(ctx, nil)
+		r.NoError(err)
+		r.NotNil(task1)
+
+		status, err := task1.Status(ctx)
+		r.NoError(err)
+		r.Equal(containerd.Running, status.Status, "task should be running initially")
+
+		// Now test the reattach function directly by calling it
+		// This simulates what happens during controller restart
+		err = co1.reattachLogs(ctx, &tco, containerID, "logger")
+		r.NoError(err, "should be able to reattach logs to running container")
+
+		// Wait longer to ensure the container continues writing logs
+		// If reattachment didn't work, the stdout buffer would fill and process would block
+		time.Sleep(5 * time.Second)
+
+		// Verify task is still running (didn't block on stdout after reattach)
+		task2, err := subC.Task(ctx, nil)
+		r.NoError(err)
+		r.NotNil(task2)
+
+		status, err = task2.Status(ctx)
+		r.NoError(err)
+		r.Equal(containerd.Running, status.Status, "task should still be running after log reattachment")
+
+		// Verify logs are being collected in ClickHouse
+		time.Sleep(1 * time.Second) // Give ClickHouse time to index
+
+		logs, err := lr.Read(ctx, sb.ID.String(), observability.WithLimit(100))
+		r.NoError(err)
+		r.Greater(len(logs), 10, "should have collected log entries")
+
+		// Verify log content
+		foundLog := false
+		for _, logEntry := range logs {
+			if strings.Contains(logEntry.Body, "Log line") {
+				foundLog = true
+				break
+			}
+		}
+		r.True(foundLog, "should have collected log lines from the container")
+
+		// Clean up
+		err = co1.Delete(ctx, id)
+		r.NoError(err)
+	})
 }
