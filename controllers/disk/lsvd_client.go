@@ -997,7 +997,6 @@ func (c *lsvdClientImpl) runNBDHandlerWithReconnect(
 		nbdOpts := &nbd.Options{
 			MinimumBlockSize:   4096,
 			PreferredBlockSize: 4096,
-			MaximumBlockSize:   4096,
 			RawFile:            client,
 		}
 

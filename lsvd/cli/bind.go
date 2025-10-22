@@ -232,7 +232,6 @@ func (c *CLI) bind(ctx context.Context, opts struct {
 	nbdOpts := &nbd.Options{
 		MinimumBlockSize:   4096,
 		PreferredBlockSize: 4096,
-		MaximumBlockSize:   4096,
 	}
 
 	ctx, cancel := context.WithCancel(ctx)
