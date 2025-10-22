@@ -271,9 +271,6 @@ func (a *localActivator) ensurePoolAndWaitForSandbox(ctx context.Context, ver *c
 			strategy := concurrency.NewStrategy(svcConcurrency)
 			tracker := strategy.InitializeTracker()
 
-			// Acquire first lease from the tracker
-			_ = tracker.AcquireLease()
-
 			lsb := &sandbox{
 				sandbox:     &sb,
 				ent:         en,
@@ -293,6 +290,22 @@ func (a *localActivator) ensurePoolAndWaitForSandbox(ctx context.Context, ver *c
 			}
 			vs.sandboxes = append(vs.sandboxes, lsb)
 			a.mu.Unlock()
+
+			// Acquire first lease from the tracker (AFTER releasing lock to avoid holding lock during lease acquisition)
+			leaseSize := tracker.AcquireLease()
+			if leaseSize == 0 {
+				// Lease acquisition failed (no capacity) - remove the sandbox we just added
+				a.mu.Lock()
+				for i, s := range vs.sandboxes {
+					if s == lsb {
+						vs.sandboxes = append(vs.sandboxes[:i], vs.sandboxes[i+1:]...)
+						break
+					}
+				}
+				a.mu.Unlock()
+				resultCh <- sandboxResult{err: fmt.Errorf("failed to acquire initial lease")}
+				return io.EOF
+			}
 
 			// Return the lease
 			resultCh <- sandboxResult{
