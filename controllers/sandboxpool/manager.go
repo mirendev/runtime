@@ -94,10 +94,22 @@ func (m *Manager) reconcile(ctx context.Context, pool *compute_v1alpha.SandboxPo
 		"service", pool.Service,
 		"desired", pool.DesiredInstances)
 
-	// Count actual sandboxes for this pool
-	actual, ready, err := m.countSandboxes(ctx, pool)
+	// Get all sandboxes for this pool
+	sandboxes, err := m.listSandboxes(ctx, pool)
 	if err != nil {
-		return fmt.Errorf("failed to count sandboxes: %w", err)
+		return fmt.Errorf("failed to list sandboxes: %w", err)
+	}
+
+	// Count only non-STOPPED sandboxes as "actual" - STOPPED sandboxes are being retired
+	actual := int64(0)
+	ready := int64(0)
+	for _, sb := range sandboxes {
+		if sb.Status != compute_v1alpha.STOPPED {
+			actual++
+		}
+		if sb.Status == compute_v1alpha.RUNNING {
+			ready++
+		}
 	}
 
 	desired := pool.DesiredInstances
@@ -128,34 +140,69 @@ func (m *Manager) reconcile(ctx context.Context, pool *compute_v1alpha.SandboxPo
 		}
 
 		// Recount after creating sandboxes
-		actual, ready, err = m.countSandboxes(ctx, pool)
+		sandboxes, err = m.listSandboxes(ctx, pool)
 		if err != nil {
-			return fmt.Errorf("failed to count sandboxes after scale up: %w", err)
+			return fmt.Errorf("failed to list sandboxes after scale up: %w", err)
+		}
+		actual = 0
+		ready = 0
+		for _, sb := range sandboxes {
+			if sb.Status != compute_v1alpha.STOPPED {
+				actual++
+			}
+			if sb.Status == compute_v1alpha.RUNNING {
+				ready++
+			}
 		}
 	}
 
-	// Scale down if needed (TODO: implement with delay + safety checks)
+	// Scale down if needed
 	if actual > desired {
-		m.log.Info("scale down needed but not yet implemented",
+		toStop := actual - desired
+		m.log.Info("scaling down pool",
 			"pool", pool.ID,
+			"service", pool.Service,
 			"current", actual,
-			"desired", desired)
+			"desired", desired,
+			"stopping", toStop)
+
+		if err := m.scaleDown(ctx, pool, sandboxes, toStop); err != nil {
+			m.log.Error("failed to scale down",
+				"pool", pool.ID,
+				"error", err)
+			// Continue - update status with current state
+		}
+
+		// Recount after stopping sandboxes
+		sandboxes, err = m.listSandboxes(ctx, pool)
+		if err != nil {
+			return fmt.Errorf("failed to list sandboxes after scale down: %w", err)
+		}
+		actual = 0
+		ready = 0
+		for _, sb := range sandboxes {
+			if sb.Status != compute_v1alpha.STOPPED {
+				actual++
+			}
+			if sb.Status == compute_v1alpha.RUNNING {
+				ready++
+			}
+		}
 	}
 
 	// Update pool status
 	return m.updatePoolStatus(ctx, pool, actual, ready)
 }
 
-// countSandboxes returns the total and ready sandbox count for a pool
-func (m *Manager) countSandboxes(ctx context.Context, pool *compute_v1alpha.SandboxPool) (total, ready int64, err error) {
+// listSandboxes returns all sandboxes for a pool
+func (m *Manager) listSandboxes(ctx context.Context, pool *compute_v1alpha.SandboxPool) ([]*compute_v1alpha.Sandbox, error) {
 	// Query sandboxes by version index (reduces O(N) to O(N_version))
 	resp, err := m.eac.List(ctx, entity.Ref(compute_v1alpha.SandboxVersionId, pool.SandboxSpec.Version))
 	if err != nil {
-		return 0, 0, fmt.Errorf("failed to list sandboxes: %w", err)
+		return nil, fmt.Errorf("failed to list sandboxes: %w", err)
 	}
 
-	total = 0
-	ready = 0
+	var sandboxes []*compute_v1alpha.Sandbox
 
 	for _, ent := range resp.Values() {
 		var sb compute_v1alpha.Sandbox
@@ -170,14 +217,10 @@ func (m *Manager) countSandboxes(ctx context.Context, pool *compute_v1alpha.Sand
 			continue
 		}
 
-		total++
-
-		if sb.Status == compute_v1alpha.RUNNING {
-			ready++
-		}
+		sandboxes = append(sandboxes, &sb)
 	}
 
-	return total, ready, nil
+	return sandboxes, nil
 }
 
 // createSandbox creates a new sandbox from the pool's SandboxSpec template
@@ -215,6 +258,111 @@ func (m *Manager) createSandbox(ctx context.Context, pool *compute_v1alpha.Sandb
 		"sandbox", resp.Id(),
 		"pool", pool.ID,
 		"service", pool.Service)
+
+	return nil
+}
+
+// scaleDown stops excess sandboxes based on LastActivity and ScaleDownDelay
+func (m *Manager) scaleDown(ctx context.Context, pool *compute_v1alpha.SandboxPool, sandboxes []*compute_v1alpha.Sandbox, count int64) error {
+	// Skip scale-down if ScaleDownDelay is 0 (fixed mode - never retire)
+	if pool.ScaleDownDelay == 0 {
+		m.log.Debug("skipping scale-down for fixed mode pool", "pool", pool.ID)
+		return nil
+	}
+
+	now := time.Now()
+
+	// Filter for candidates: RUNNING sandboxes that are idle (LastActivity + ScaleDownDelay < now)
+	type candidate struct {
+		sb           *compute_v1alpha.Sandbox
+		idleTime     time.Duration
+		lastActivity time.Time
+	}
+
+	var candidates []candidate
+
+	for _, sb := range sandboxes {
+		// Only consider RUNNING sandboxes
+		if sb.Status != compute_v1alpha.RUNNING {
+			continue
+		}
+
+		// Check if idle based on LastActivity
+		lastActivity := sb.LastActivity
+		if lastActivity.IsZero() {
+			// No activity recorded yet - treat as recently active (don't retire)
+			continue
+		}
+
+		idleTime := now.Sub(lastActivity)
+		if idleTime > pool.ScaleDownDelay {
+			candidates = append(candidates, candidate{
+				sb:           sb,
+				idleTime:     idleTime,
+				lastActivity: lastActivity,
+			})
+		}
+	}
+
+	// If we don't have enough idle sandboxes, we can't scale down the requested amount
+	if int64(len(candidates)) < count {
+		m.log.Warn("not enough idle sandboxes to scale down",
+			"pool", pool.ID,
+			"requested", count,
+			"idle", len(candidates))
+		count = int64(len(candidates))
+	}
+
+	if count == 0 {
+		m.log.Debug("no idle sandboxes to retire", "pool", pool.ID)
+		return nil
+	}
+
+	// Sort by LastActivity (oldest first) - retire least recently active sandboxes
+	// Use a simple bubble sort since count is typically small
+	for i := 0; i < len(candidates)-1; i++ {
+		for j := i + 1; j < len(candidates); j++ {
+			if candidates[i].lastActivity.After(candidates[j].lastActivity) {
+				candidates[i], candidates[j] = candidates[j], candidates[i]
+			}
+		}
+	}
+
+	// Stop the first 'count' sandboxes
+	stopped := int64(0)
+	for i := int64(0); i < count && int(i) < len(candidates); i++ {
+		sb := candidates[i].sb
+
+		m.log.Info("retiring idle sandbox",
+			"pool", pool.ID,
+			"sandbox", sb.ID,
+			"last_activity", candidates[i].lastActivity,
+			"idle_time", candidates[i].idleTime)
+
+		// Mark sandbox as STOPPED
+		var rpcE entityserver_v1alpha.Entity
+		rpcE.SetId(sb.ID.String())
+		rpcE.SetAttrs(entity.New(
+			(&compute_v1alpha.Sandbox{
+				Status: compute_v1alpha.STOPPED,
+			}).Encode,
+		).Attrs())
+
+		if _, err := m.eac.Put(ctx, &rpcE); err != nil {
+			m.log.Error("failed to stop sandbox",
+				"pool", pool.ID,
+				"sandbox", sb.ID,
+				"error", err)
+			continue
+		}
+
+		stopped++
+	}
+
+	m.log.Info("scale-down complete",
+		"pool", pool.ID,
+		"requested", count,
+		"stopped", stopped)
 
 	return nil
 }

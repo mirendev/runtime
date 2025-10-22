@@ -18,10 +18,6 @@ import (
 	"miren.dev/runtime/pkg/entity/types"
 )
 
-func TestActivatorRetireUnusedSandboxes(t *testing.T) {
-	t.Skip("Retirement functionality moved to SandboxPoolManager")
-}
-
 // Test lease operations
 func TestActivatorLeaseOperations(t *testing.T) {
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
