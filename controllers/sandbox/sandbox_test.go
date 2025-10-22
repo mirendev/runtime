@@ -514,7 +514,7 @@ func TestSandbox(t *testing.T) {
 					Name:     "http",
 					NodePort: 31001,
 					Port:     80,
-					Protocol: compute.SandboxSpecContainerPortProtocol(compute.TCP),
+					Protocol: compute.SandboxSpecContainerPortTCP,
 					Type:     "http",
 				},
 			},
@@ -649,7 +649,7 @@ func TestSandbox(t *testing.T) {
 				{
 					Name:     "http",
 					Port:     80,
-					Protocol: compute.SandboxSpecContainerPortProtocol(compute.TCP),
+					Protocol: compute.SandboxSpecContainerPortTCP,
 					Type:     "http",
 				},
 			},
@@ -776,7 +776,7 @@ func TestSandbox(t *testing.T) {
 				{
 					Name:     "http",
 					Port:     80,
-					Protocol: compute.SandboxSpecContainerPortProtocol(compute.TCP),
+					Protocol: compute.SandboxSpecContainerPortTCP,
 					Type:     "http",
 				},
 			},
@@ -912,7 +912,7 @@ func TestSandbox(t *testing.T) {
 				{
 					Name:     "http",
 					Port:     80,
-					Protocol: compute.SandboxSpecContainerPortProtocol(compute.TCP),
+					Protocol: compute.SandboxSpecContainerPortTCP,
 					Type:     "http",
 				},
 			},
@@ -1142,7 +1142,7 @@ func TestSandbox(t *testing.T) {
 					// Run a simple HTTP server using nc (netcat) on port 8080
 					Command: "while true; do echo -e 'HTTP/1.1 200 OK\n\nHello' | nc -l -p 8080; done",
 					Port: []compute.SandboxSpecContainerPort{
-						{Port: 8080, Protocol: "tcp"},
+						{Port: 8080, Protocol: compute.SandboxSpecContainerPortTCP},
 					},
 				},
 			},
@@ -1266,9 +1266,9 @@ func TestSandbox(t *testing.T) {
 						wait
 					'`,
 					Port: []compute.SandboxSpecContainerPort{
-						{Port: 8080, Protocol: "tcp"},
-						{Port: 8081, Protocol: "tcp"},
-						{Port: 8082, Protocol: "tcp"},
+						{Port: 8080, Protocol: compute.SandboxSpecContainerPortTCP},
+						{Port: 8081, Protocol: compute.SandboxSpecContainerPortTCP},
+						{Port: 8082, Protocol: compute.SandboxSpecContainerPortTCP},
 					},
 				},
 			},

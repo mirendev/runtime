@@ -216,7 +216,12 @@ func (a *localActivator) ensurePoolAndWaitForSandbox(ctx context.Context, ver *c
 			sb.Decode(en)
 
 			// Check if this sandbox matches our version and service
-			if sb.Version != ver.ID {
+			// Check version - support both legacy and Spec formats
+			sbVersion := sb.Version
+			if sbVersion == "" {
+				sbVersion = sb.Spec.Version
+			}
+			if sbVersion != ver.ID {
 				return nil
 			}
 
@@ -519,15 +524,20 @@ func (a *localActivator) recoverSandboxes(ctx context.Context) error {
 		}
 
 		// Skip sandboxes without a version (e.g., buildkit sandboxes)
-		if sb.Version == "" {
+		// Support both legacy and Spec formats
+		sbVersion := sb.Version
+		if sbVersion == "" {
+			sbVersion = sb.Spec.Version
+		}
+		if sbVersion == "" {
 			skippedNoVersion++
 			continue
 		}
 
 		// Get app version to determine service
-		verResp, err := a.eac.Get(ctx, sb.Version.String())
+		verResp, err := a.eac.Get(ctx, sbVersion.String())
 		if err != nil {
-			a.log.Error("failed to get version for sandbox", "sandbox", sb.ID, "version", sb.Version, "error", err)
+			a.log.Error("failed to get version for sandbox", "sandbox", sb.ID, "version", sbVersion, "error", err)
 			continue
 		}
 

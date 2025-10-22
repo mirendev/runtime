@@ -254,6 +254,16 @@ func (c *SandboxController) migrateLegacySandboxes(ctx context.Context) error {
 			sb.Spec.StaticHost = append(sb.Spec.StaticHost, compute.SandboxSpecStaticHost(sh))
 		}
 
+		// Clear legacy fields - Spec is now the single source of truth
+		sb.Container = nil
+		sb.Route = nil
+		sb.Volume = nil
+		sb.StaticHost = nil
+		sb.Version = ""
+		sb.LogEntity = ""
+		sb.LogAttribute = nil
+		sb.HostNetwork = false
+
 		// Update the entity with the populated Spec
 		var rpcE entityserver_v1alpha.Entity
 		rpcE.SetId(sb.ID.String())
