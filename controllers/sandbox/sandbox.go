@@ -378,10 +378,16 @@ func (c *SandboxController) Init(ctx context.Context) error {
 
 	c.cond = sync.NewCond(&c.mu)
 
-	_, err = network.SetupBridge(&network.BridgeConfig{
+	bc := &network.BridgeConfig{
 		Name:      c.Bridge,
 		Addresses: []netip.Prefix{c.Subnet.Router()},
-	})
+	}
+	_, err = network.SetupBridge(bc)
+	if err != nil {
+		return err
+	}
+
+	err = c.NetServ.SetupDNS(bc)
 	if err != nil {
 		return err
 	}
@@ -1372,11 +1378,6 @@ func (c *SandboxController) bootInitialTask(
 	}
 
 	err = network.ConfigureNetNS(c.Log, int(task.Pid()), ep)
-	if err != nil {
-		return nil, err
-	}
-
-	err = c.NetServ.SetupDNS(ep.Bridge)
 	if err != nil {
 		return nil, err
 	}
