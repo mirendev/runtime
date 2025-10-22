@@ -208,12 +208,17 @@ func (m *Manager) listSandboxes(ctx context.Context, pool *compute_v1alpha.Sandb
 		var sb compute_v1alpha.Sandbox
 		sb.Decode(ent.Entity())
 
-		// Filter by service label (labels not indexed, must filter in-memory)
+		// Filter by service and pool labels (labels not indexed, must filter in-memory)
 		var md core_v1alpha.Metadata
 		md.Decode(ent.Entity())
 
 		serviceLabel, _ := md.Labels.Get("service")
 		if serviceLabel != pool.Service {
+			continue
+		}
+
+		poolLabel, _ := md.Labels.Get("pool")
+		if poolLabel != pool.ID.String() {
 			continue
 		}
 

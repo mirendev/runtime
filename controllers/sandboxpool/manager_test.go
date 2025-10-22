@@ -553,6 +553,12 @@ func listSandboxesForPool(t *testing.T, ctx context.Context, server *testutils.I
 			continue
 		}
 
+		// Filter by pool ID to prevent cross-pool contamination
+		poolLabel := getLabel(md.Labels, "pool")
+		if poolLabel != pool.ID.String() {
+			continue
+		}
+
 		// Exclude STOPPED sandboxes (they're being retired)
 		if sb.Status == compute_v1alpha.STOPPED {
 			continue

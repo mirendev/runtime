@@ -656,8 +656,8 @@ func (c *SandboxController) checkSandbox(ctx context.Context, co *compute.Sandbo
 		return unhealthy, nil
 	}
 
-	// Check subcontainers health
-	for _, container := range co.Container {
+	// Check subcontainers health (from Spec)
+	for _, container := range co.Spec.Container {
 		containerID := fmt.Sprintf("%s-%s", c.containerPrefix(co.ID), container.Name)
 		if !c.isContainerHealthy(ctx, containerID) {
 			c.Log.Warn("sandbox subcontainer exists but task is unhealthy",
@@ -976,7 +976,7 @@ func (c *SandboxController) createSandbox(ctx context.Context, co *compute.Sandb
 		return err
 	}
 
-	le := co.LogEntity
+	le := co.Spec.LogEntity
 	if le == "" {
 		le = co.ID.String()
 	}
@@ -985,11 +985,11 @@ func (c *SandboxController) createSandbox(ctx context.Context, co *compute.Sandb
 		"sandbox": co.ID.String(),
 	}
 
-	if co.Version != "" {
-		attrs["version"] = co.Version.String()
+	if co.Spec.Version != "" {
+		attrs["version"] = co.Spec.Version.String()
 	}
 
-	for _, lbl := range co.LogAttribute {
+	for _, lbl := range co.Spec.LogAttribute {
 		attrs[lbl.Key] = lbl.Value
 	}
 

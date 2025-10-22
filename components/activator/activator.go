@@ -233,7 +233,7 @@ func (a *localActivator) ensurePoolAndWaitForSandbox(ctx context.Context, ver *c
 				return nil
 			}
 
-			// Check if we already track this sandbox
+			// Check if we already track this sandbox (hold lock throughout to prevent duplicates)
 			a.mu.Lock()
 			vs, ok := a.versions[key]
 			if ok {
@@ -244,19 +244,20 @@ func (a *localActivator) ensurePoolAndWaitForSandbox(ctx context.Context, ver *c
 					}
 				}
 			}
-			a.mu.Unlock()
 
 			// Found a new matching sandbox!
 			a.log.Info("found new sandbox from pool", "sandbox", sb.ID, "service", service, "status", sb.Status)
 
 			// Build HTTP URL
 			if len(sb.Network) == 0 {
+				a.mu.Unlock()
 				resultCh <- sandboxResult{err: fmt.Errorf("sandbox has no network addresses")}
 				return io.EOF
 			}
 
 			addr, err := netutil.BuildHTTPURL(sb.Network[0].Address, port)
 			if err != nil {
+				a.mu.Unlock()
 				resultCh <- sandboxResult{err: fmt.Errorf("failed to build HTTP URL: %w", err)}
 				return io.EOF
 			}
@@ -276,9 +277,7 @@ func (a *localActivator) ensurePoolAndWaitForSandbox(ctx context.Context, ver *c
 				tracker:     tracker,
 			}
 
-			// Add to versions map
-			a.mu.Lock()
-			vs, ok = a.versions[key]
+			// Add to versions map (still holding lock from duplicate check above)
 			if !ok {
 				vs = &verSandboxes{
 					ver:       ver,
@@ -332,8 +331,10 @@ func (a *localActivator) ensureSandboxPool(ctx context.Context, ver *core_v1alph
 	a.mu.Unlock()
 
 	if exists {
-		// Update existing pool - increment DesiredInstances
+		// Update existing pool - increment DesiredInstances atomically under lock
+		a.mu.Lock()
 		existingPool.DesiredInstances++
+		a.mu.Unlock()
 
 		var rpcE entityserver_v1alpha.Entity
 		rpcE.SetId(existingPool.ID.String())
@@ -346,15 +347,36 @@ func (a *localActivator) ensureSandboxPool(ctx context.Context, ver *core_v1alph
 			return nil, fmt.Errorf("failed to update pool: %w", err)
 		}
 
-		a.mu.Lock()
-		a.pools[key] = existingPool
-		a.mu.Unlock()
-
 		a.log.Info("incremented pool capacity", "pool", existingPool.ID, "desired_instances", existingPool.DesiredInstances)
 		return existingPool, nil
 	}
 
-	// Create new pool
+	// Create new pool - acquire lock first to prevent duplicate creation
+	a.mu.Lock()
+	// Double-check that another goroutine didn't create the pool while we were waiting for the lock
+	if existingPool, exists = a.pools[key]; exists {
+		a.mu.Unlock()
+		// Another goroutine created the pool, increment it instead
+		a.mu.Lock()
+		existingPool.DesiredInstances++
+		a.mu.Unlock()
+
+		var rpcE entityserver_v1alpha.Entity
+		rpcE.SetId(existingPool.ID.String())
+		rpcE.SetAttrs(entity.New(
+			existingPool.Encode,
+		).Attrs())
+
+		_, err := a.eac.Put(ctx, &rpcE)
+		if err != nil {
+			return nil, fmt.Errorf("failed to update pool: %w", err)
+		}
+
+		a.log.Info("incremented pool capacity (created by another goroutine)", "pool", existingPool.ID, "desired_instances", existingPool.DesiredInstances)
+		return existingPool, nil
+	}
+	a.mu.Unlock()
+
 	spec, err := a.buildSandboxSpec(ctx, ver, service, svcConcurrency)
 	if err != nil {
 		return nil, fmt.Errorf("failed to build sandbox spec: %w", err)
