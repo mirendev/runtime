@@ -76,5 +76,5 @@ type NegotiationReplyBlockSize struct {
 	Type               uint16
 	MinimumBlockSize   uint32
 	PreferredBlockSize uint32
-	MaximumBlockSize   uint32
+	MaximumRequestSize uint32
 }

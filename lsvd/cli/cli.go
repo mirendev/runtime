@@ -523,7 +523,6 @@ func (c *CLI) nbdServe(ctx context.Context, opts struct {
 	nbdOpts := &nbd.Options{
 		MinimumBlockSize:   4096,
 		PreferredBlockSize: 4096,
-		MaximumBlockSize:   4096,
 	}
 
 	http.Handle("/metrics", promhttp.Handler())

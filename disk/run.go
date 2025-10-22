@@ -115,7 +115,6 @@ func (r *Runner) Start(ctx context.Context, name, fsPath, bindAddr string) error
 	nbdOpts := &nbd.Options{
 		MinimumBlockSize:   4096,
 		PreferredBlockSize: 4096,
-		MaximumBlockSize:   4096,
 	}
 
 	ctx, cancel := context.WithCancel(ctx)
@@ -332,7 +331,6 @@ func (r *Runner) Run(ctx context.Context, name, fsPath, bindAddr string) error {
 	nbdOpts := &nbd.Options{
 		MinimumBlockSize:   4096,
 		PreferredBlockSize: 4096,
-		MaximumBlockSize:   4096,
 	}
 
 	ctx, cancel := context.WithCancel(ctx)
