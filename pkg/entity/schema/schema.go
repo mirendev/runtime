@@ -3,6 +3,7 @@ package schema
 import (
 	"context"
 	"errors"
+	"slices"
 
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/types"
@@ -58,7 +59,7 @@ func Register(domain string, version string, fn func(schema *SchemaBuilder)) {
 
 func (b *SchemaBuilder) Apply(ctx context.Context, store entity.Store) error {
 	for _, eid := range b.singletons {
-		_, err := store.CreateEntity(ctx, entity.Attrs(
+		_, err := store.CreateEntity(ctx, entity.New(
 			entity.Ident, types.Keyword(eid),
 		), entity.WithOverwrite)
 		if err != nil && !errors.Is(err, entity.ErrEntityAlreadyExists) {
@@ -67,7 +68,7 @@ func (b *SchemaBuilder) Apply(ctx context.Context, store entity.Store) error {
 	}
 
 	for _, e := range b.attrs {
-		_, err := store.CreateEntity(ctx, e.Attrs, entity.WithOverwrite)
+		_, err := store.CreateEntity(ctx, entity.New(slices.Clone(e.Attrs())), entity.WithOverwrite)
 		if err != nil && !errors.Is(err, entity.ErrEntityAlreadyExists) {
 			return err
 		}
@@ -90,25 +91,25 @@ func Apply(ctx context.Context, store entity.Store) error {
 		for ver, schema := range vers {
 			schemaId := entity.Id(domain + "/schema." + ver)
 
-			attrs := entity.Attrs(
-				entity.Ident, types.Keyword(schemaId),
-				entity.Schema, entity.BytesValue(schema.encoded),
-			)
-
-			for k, v := range schema.schema.ShortKinds {
-				attrs = append(attrs, entity.Attrs(
-					entity.SchemaKind, k,
-					entity.SchemaKind, v,
-				)...)
+			attrs := []entity.Attr{
+				entity.Any(entity.Ident, types.Keyword(schemaId)),
+				entity.Any(entity.Schema, entity.BytesValue(schema.encoded)),
 			}
 
-			_, err := store.CreateEntity(ctx, attrs, entity.WithOverwrite)
+			for k, v := range schema.schema.ShortKinds {
+				attrs = append(attrs,
+				entity.Any(entity.SchemaKind, k),
+				entity.Any(entity.SchemaKind, v),
+			)
+			}
+
+			_, err := store.CreateEntity(ctx, entity.New(attrs), entity.WithOverwrite)
 			if err != nil && !errors.Is(err, entity.ErrEntityAlreadyExists) {
 				return err
 			}
 
 			for kw := range schema.schema.Kinds {
-				_, err := store.CreateEntity(ctx, entity.Attrs(
+				_, err := store.CreateEntity(ctx, entity.New(
 					entity.Ident, types.Keyword(kw),
 					entity.EntitySchema, schemaId,
 				), entity.WithOverwrite)
@@ -194,22 +195,22 @@ func (s *SchemaBuilder) Attr(name, id string, typ entity.Id, opts ...AttrOption)
 		opt(&ab)
 	}
 
-	ent := &entity.Entity{
-		Attrs: entity.Attrs(
-			entity.Ident, types.Keyword(eid),
-			entity.Doc, ab.doc,
-			entity.Type, typ,
-			entity.Cardinality, ab.card,
-		),
+	attrs := []any{
+		entity.Ident, types.Keyword(eid),
+		entity.Doc, ab.doc,
+		entity.Type, typ,
+		entity.Cardinality, ab.card,
 	}
 
 	if ab.indexed {
-		ent.Attrs = append(ent.Attrs, entity.Bool(entity.Index, true))
+		attrs = append(attrs, entity.Index, true)
 	}
 
 	if ab.session {
-		ent.Attrs = append(ent.Attrs, entity.Bool(entity.Session, true))
+		attrs = append(attrs, entity.Session, true)
 	}
+
+	ent := entity.New(attrs...)
 
 	s.attrs[eid] = ent
 

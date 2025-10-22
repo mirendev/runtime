@@ -102,9 +102,7 @@ func TestRunnerCoordinatorIntegration(t *testing.T) {
 
 	r.True(res.HasEntity())
 
-	node := &entity.Entity{
-		Attrs: res.Entity().Attrs(),
-	}
+	node := entity.New(res.Entity().Attrs())
 
 	status, ok := node.Get(compute.NodeStatusId)
 	r.True(ok)
@@ -126,10 +124,10 @@ func TestRunnerCoordinatorIntegration(t *testing.T) {
 
 	// Test creating a sandbox entity
 	sandbox := &entityserver_v1alpha.Entity{}
-	sandbox.SetAttrs(entity.Attrs(
+	sandbox.SetAttrs(entity.New(
 		entity.EntityKind, compute.KindSandbox,
 		entity.Keyword(entity.Ident, id),
-	))
+	).Attrs())
 
 	_, err = eac.Put(ctx, sandbox)
 	r.NoError(err)

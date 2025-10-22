@@ -190,7 +190,7 @@ func (m *Manager) createSandbox(ctx context.Context, pool *compute_v1alpha.Sandb
 
 	// Create entity with metadata (Put without ID creates new entity)
 	var rpcE entityserver_v1alpha.Entity
-	rpcE.SetAttrs(entity.Attrs(
+	rpcE.SetAttrs(entity.New(
 		(&core_v1alpha.Metadata{
 			Name: sbName,
 			Labels: types.LabelSet(
@@ -200,7 +200,7 @@ func (m *Manager) createSandbox(ctx context.Context, pool *compute_v1alpha.Sandb
 		}).Encode,
 		entity.Ident, entity.MustKeyword("sandbox/"+sbName),
 		sb.Encode,
-	))
+	).Attrs())
 
 	resp, err := m.eac.Put(ctx, &rpcE)
 	if err != nil {
@@ -227,12 +227,12 @@ func (m *Manager) updatePoolStatus(ctx context.Context, pool *compute_v1alpha.Sa
 
 	var rpcE entityserver_v1alpha.Entity
 	rpcE.SetId(pool.ID.String())
-	rpcE.SetAttrs(entity.Attrs(
+	rpcE.SetAttrs(entity.New(
 		(&compute_v1alpha.SandboxPool{
 			CurrentInstances: current,
 			ReadyInstances:   ready,
 		}).Encode,
-	))
+	).Attrs())
 
 	if _, err := m.eac.Put(ctx, &rpcE); err != nil {
 		return fmt.Errorf("failed to update pool status: %w", err)

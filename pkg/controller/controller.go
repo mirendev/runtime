@@ -162,12 +162,14 @@ func (c *ReconcileController) Start(top context.Context) error {
 				if op.HasEntity() {
 					aen := op.Entity()
 
-					ev.Entity = &entity.Entity{
-						ID:        entity.Id(aen.Id()),
-						CreatedAt: aen.CreatedAt(),
-						UpdatedAt: aen.UpdatedAt(),
-						Attrs:     aen.Attrs(),
-					}
+					createdAt := time.UnixMilli(aen.CreatedAt())
+					updatedAt := time.UnixMilli(aen.UpdatedAt())
+
+					ev.Entity = entity.New(aen.Attrs())
+
+					ev.Entity.SetCreatedAt(createdAt)
+					ev.Entity.SetUpdatedAt(updatedAt)
+					ev.Entity.SetRevision(aen.Revision())
 				}
 
 				select {
@@ -325,12 +327,14 @@ func (c *ReconcileController) periodicResync(ctx context.Context) {
 		entities := resp.Values()
 
 		for _, aen := range entities {
-			en := &entity.Entity{
-				ID:        entity.Id(aen.Id()),
-				CreatedAt: aen.CreatedAt(),
-				UpdatedAt: aen.UpdatedAt(),
-				Attrs:     aen.Attrs(),
-			}
+			createdAt := time.UnixMilli(aen.CreatedAt())
+			updatedAt := time.UnixMilli(aen.UpdatedAt())
+
+			en := entity.New(aen.Attrs())
+
+			en.SetCreatedAt(createdAt)
+			en.SetUpdatedAt(updatedAt)
+			en.SetRevision(aen.Revision())
 
 			ev := Event{
 				Type:   EventUpdated,
@@ -433,7 +437,7 @@ func AdaptController[
 
 			meta := &entity.Meta{
 				Entity:   e,
-				Revision: e.Revision,
+				Revision: e.GetRevision(),
 				Previous: event.PrevRev,
 			}
 

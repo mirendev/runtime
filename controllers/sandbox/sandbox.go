@@ -28,7 +28,6 @@ import (
 	"github.com/pkg/errors"
 	"golang.org/x/crypto/blake2b"
 	"golang.org/x/sys/unix"
-	"miren.dev/runtime/pkg/netutil"
 	"miren.dev/runtime/components/netresolve"
 	"miren.dev/runtime/network"
 	"miren.dev/runtime/observability"
@@ -36,6 +35,7 @@ import (
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/imagerefs"
 	"miren.dev/runtime/pkg/netdb"
+	"miren.dev/runtime/pkg/netutil"
 
 	compute "miren.dev/runtime/api/compute/compute_v1alpha"
 	"miren.dev/runtime/api/core/core_v1alpha"
@@ -407,7 +407,6 @@ func (c *SandboxController) Init(ctx context.Context) error {
 	return nil
 }
 
-
 func (c *SandboxController) Close() error {
 	c.cancel()
 
@@ -743,7 +742,7 @@ func (c *SandboxController) updateSandbox(ctx context.Context, sb *compute.Sandb
 
 	c.Log.Debug("destroying existing sandbox to recreate it")
 
-	err = c.Delete(ctx, meta.ID)
+	err = c.Delete(ctx, meta.Id())
 	if err != nil {
 		return fmt.Errorf("failed to delete existing sandbox: %w", err)
 	}
@@ -838,7 +837,7 @@ func (c *SandboxController) createSandbox(ctx context.Context, co *compute.Sandb
 
 			// Update sandbox status to DEAD in entity store
 			co.Status = compute.DEAD
-			meta.Attrs = co.Encode()
+			meta.Update(co.Encode())
 			c.Log.Info("marked sandbox as DEAD due to boot failure", "id", co.ID)
 		}
 	}()
@@ -2017,11 +2016,11 @@ func (c *SandboxController) stopSandbox(ctx context.Context, sb *compute.Sandbox
 
 	rpcE.SetId(sb.ID.String())
 
-	rpcE.SetAttrs(entity.Attrs(
+	rpcE.SetAttrs(entity.New(
 		(&compute.Sandbox{
 			Status: compute.DEAD,
 		}).Encode,
-	))
+	).Attrs())
 
 	_, err = c.EAC.Put(context.Background(), &rpcE)
 	if err != nil {
@@ -2040,10 +2039,9 @@ func (c *SandboxController) stopSandbox(ctx context.Context, sb *compute.Sandbox
 	return nil
 }
 
-// Periodic implements the PeriodicController interface
-// It runs every 10 minutes to clean up dead sandboxes that are older than 1 hour
-func (c *SandboxController) Periodic(ctx context.Context) error {
-	c.Log.Info("running periodic cleanup of dead sandboxes")
+// Periodic cleans up dead sandboxes that are older than the specified time horizon
+func (c *SandboxController) Periodic(ctx context.Context, timeHorizon time.Duration) error {
+	c.Log.Info("running periodic cleanup of dead sandboxes", "time_horizon", timeHorizon)
 
 	// List all sandboxes
 	resp, err := c.EAC.List(ctx, entity.Ref(entity.EntityKind, compute.KindSandbox))
@@ -2052,17 +2050,16 @@ func (c *SandboxController) Periodic(ctx context.Context) error {
 	}
 
 	now := time.Now()
-	oneHourAgo := now.Add(-1 * time.Hour)
+	cutoffTime := now.Add(-timeHorizon)
 
 	var deleted int
 	for _, e := range resp.Values() {
 		var sb compute.Sandbox
 		sb.Decode(e.Entity())
 
-		// Check if sandbox is DEAD and UpdatedAt is more than 1 hour ago
+		// Check if sandbox is DEAD and UpdatedAt is older than time horizon
 		if sb.Status == compute.DEAD {
-			// Convert UpdatedAt from milliseconds to time.Time
-			updatedAt := time.Unix(0, e.Entity().UpdatedAt*int64(time.Millisecond))
+			updatedAt := e.Entity().GetUpdatedAt()
 
 			c.Log.Debug("checking sandbox for cleanup",
 				"id", sb.ID,
@@ -2070,7 +2067,7 @@ func (c *SandboxController) Periodic(ctx context.Context) error {
 				"updated_at", updatedAt.Format(time.RFC3339),
 				"age", now.Sub(updatedAt).String())
 
-			if updatedAt.Before(oneHourAgo) {
+			if updatedAt.Before(cutoffTime) {
 				c.Log.Info("deleting old dead sandbox",
 					"id", sb.ID,
 					"updated_at", updatedAt.Format(time.RFC3339),

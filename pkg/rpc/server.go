@@ -14,7 +14,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/davecgh/go-spew/spew"
 	"github.com/fxamacker/cbor/v2"
 	"github.com/mr-tron/base58"
 	"go.opentelemetry.io/otel/attribute"
@@ -138,7 +137,6 @@ func (i *Interface) Value() any {
 func (i *Interface) SetAroundContext(fn func(ctx context.Context, call Call) (context.Context, func())) {
 	i.aroundContext = fn
 }
-
 
 func NewInterface(methods []Method, obj any) *Interface {
 	m := make(map[string]Method)
@@ -972,8 +970,6 @@ func (s *Server) startCallStream(w http.ResponseWriter, r *http.Request) {
 		if ecode, ok := err.(ErrorCode); ok {
 			sr.Code = ecode.ErrorCode()
 		}
-
-		spew.Dump(sr, err)
 
 		cs.NoReply(sr, nil)
 	} else {

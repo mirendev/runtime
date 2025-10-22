@@ -35,7 +35,7 @@ func TestDiskAndLeaseIntegration(t *testing.T) {
 
 		// Should set status to PROVISIONED
 		hasVolumeId := false
-		for _, attr := range diskMeta.Attrs {
+		for _, attr := range diskMeta.Attrs() {
 			if attr.ID == storage_v1alpha.DiskLsvdVolumeIdId {
 				hasVolumeId = true
 				assert.NotEmpty(t, attr.Value.String())
@@ -47,7 +47,7 @@ func TestDiskAndLeaseIntegration(t *testing.T) {
 		assert.True(t, hasVolumeId, "Should have volume ID after provisioning")
 
 		// Update disk with the volume ID from attrs
-		for _, attr := range diskMeta.Attrs {
+		for _, attr := range diskMeta.Attrs() {
 			if attr.ID == storage_v1alpha.DiskLsvdVolumeIdId {
 				disk.LsvdVolumeId = attr.Value.String()
 			}
@@ -82,7 +82,7 @@ func TestDiskAndLeaseIntegration(t *testing.T) {
 
 		// Should update status to BOUND
 		hasStatus := false
-		for _, attr := range leaseMeta.Attrs {
+		for _, attr := range leaseMeta.Attrs() {
 			if attr.ID == storage_v1alpha.DiskLeaseStatusId {
 				hasStatus = true
 				assert.Equal(t, storage_v1alpha.DiskLeaseStatusBoundId, attr.Value.Id())
@@ -115,7 +115,7 @@ func TestDiskAndLeaseIntegration(t *testing.T) {
 
 		// Should fail with conflict
 		hasFailure := false
-		for _, attr := range conflictMeta.Attrs {
+		for _, attr := range conflictMeta.Attrs() {
 			if attr.ID == storage_v1alpha.DiskLeaseStatusId {
 				assert.Equal(t, storage_v1alpha.DiskLeaseStatusFailedId, attr.Value.Id())
 				hasFailure = true

@@ -58,9 +58,9 @@ func TestActivatorFixedModeRoundRobin(t *testing.T) {
 	app.ActiveVersion = appVer.ID
 	var updateEntity entityserver_v1alpha.Entity
 	updateEntity.SetId(app.ID.String())
-	updateEntity.SetAttrs(entity.Attrs(
+	updateEntity.SetAttrs(entity.New(
 		app.Encode,
-	))
+	).Attrs())
 	_, err = server.EAC.Put(ctx, &updateEntity)
 	require.NoError(t, err)
 
@@ -76,6 +76,12 @@ func TestActivatorFixedModeRoundRobin(t *testing.T) {
 		Network: []compute_v1alpha.Network{
 			{Address: "10.0.0.2"},
 		},
+	}
+
+	ent := func(id string) *entity.Entity {
+		e := entity.Blank()
+		e.SetID(entity.Id(id))
+		return e
 	}
 
 	// Create strategy and trackers for each sandbox
@@ -96,14 +102,14 @@ func TestActivatorFixedModeRoundRobin(t *testing.T) {
 				sandboxes: []*sandbox{
 					{
 						sandbox:     sb1,
-						ent:         &entity.Entity{ID: entity.Id("sb-1")},
+						ent:         ent("sb-1"),
 						lastRenewal: time.Now(),
 						url:         "http://10.0.0.1:3000",
 						tracker:     tracker1,
 					},
 					{
 						sandbox:     sb2,
-						ent:         &entity.Entity{ID: entity.Id("sb-2")},
+						ent:         ent("sb-2"),
 						lastRenewal: time.Now(),
 						url:         "http://10.0.0.2:3000",
 						tracker:     tracker2,
@@ -193,6 +199,12 @@ func TestActivatorFixedModeNoSlotExhaustion(t *testing.T) {
 		},
 	}
 
+	ent := func(id string) *entity.Entity {
+		e := entity.Blank()
+		e.SetID(entity.Id(id))
+		return e
+	}
+
 	// Create strategy and tracker
 	strategy := concurrency.NewStrategy(&core_v1alpha.ServiceConcurrency{
 		Mode:         "fixed",
@@ -213,7 +225,7 @@ func TestActivatorFixedModeNoSlotExhaustion(t *testing.T) {
 							ID:     entity.Id("sb-1"),
 							Status: compute_v1alpha.RUNNING,
 						},
-						ent:         &entity.Entity{ID: entity.Id("sb-1")},
+						ent:         ent("sb-1"),
 						lastRenewal: time.Now(),
 						url:         "http://10.0.0.1:3000",
 						tracker:     tracker,

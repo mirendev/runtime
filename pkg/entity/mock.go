@@ -7,7 +7,6 @@ import (
 
 	"go.etcd.io/etcd/api/v3/mvccpb"
 	clientv3 "go.etcd.io/etcd/client/v3"
-	"miren.dev/runtime/pkg/entity/types"
 )
 
 type MockStore struct {
@@ -16,6 +15,8 @@ type MockStore struct {
 	OnWatchIndex    func(ctx context.Context, attr Attr) (clientv3.WatchChan, error)
 	GetEntitiesFunc func(ctx context.Context, ids []Id) ([]*Entity, error)
 	OnListIndex     func(ctx context.Context, attr Attr) ([]Id, error) // Hook to track ListIndex calls
+
+	NowFunc func() time.Time // Optional function to override current time
 }
 
 var _ Store = &MockStore{}
@@ -24,6 +25,13 @@ func NewMockStore() *MockStore {
 	return &MockStore{
 		Entities: make(map[Id]*Entity),
 	}
+}
+
+func (m *MockStore) Now() time.Time {
+	if m.NowFunc != nil {
+		return m.NowFunc()
+	}
+	return time.Now()
 }
 
 func (m *MockStore) GetEntity(ctx context.Context, id Id) (*Entity, error) {
@@ -39,6 +47,7 @@ func (m *MockStore) GetEntity(ctx context.Context, id Id) (*Entity, error) {
 func (m *MockStore) AddEntity(id Id, entity *Entity) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	entity.Fixup()
 	m.Entities[id] = entity
 }
 
@@ -67,28 +76,18 @@ func (m *MockStore) GetEntities(ctx context.Context, ids []Id) ([]*Entity, error
 	return entities, nil
 }
 
-func (m *MockStore) CreateEntity(ctx context.Context, attrs []Attr, opts ...EntityOption) (*Entity, error) {
-	// Find the ident attribute
-	var ident types.Keyword
-	for _, attr := range attrs {
-		if attr.ID == Ident {
-			ident = attr.Value.Keyword()
-			break
-		}
-	}
+func (m *MockStore) CreateEntity(ctx context.Context, entity *Entity, opts ...EntityOption) (*Entity, error) {
+	entity.SetCreatedAt(m.Now())
+	entity.SetUpdatedAt(m.Now())
+	entity.SetRevision(1)
 
-	e := &Entity{
-		ID:       Id(ident),
-		Attrs:    attrs,
-		Revision: 1,
-	}
 	m.mu.Lock()
-	m.Entities[e.ID] = e
+	m.Entities[entity.Id()] = entity
 	m.mu.Unlock()
-	return e, nil
+	return entity, nil
 }
 
-func (m *MockStore) UpdateEntity(ctx context.Context, id Id, attrs []Attr, opts ...EntityOption) (*Entity, error) {
+func (m *MockStore) UpdateEntity(ctx context.Context, id Id, entity *Entity, opts ...EntityOption) (*Entity, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	e, ok := m.Entities[id]
@@ -96,35 +95,87 @@ func (m *MockStore) UpdateEntity(ctx context.Context, id Id, attrs []Attr, opts 
 		return nil, ErrNotFound
 	}
 
-	// Create a copy to avoid modifying the original
-	updated := &Entity{
-		ID:        e.ID,
-		CreatedAt: e.CreatedAt,
-		UpdatedAt: e.UpdatedAt,
-		Revision:  e.Revision + 1,
-		Attrs:     make([]Attr, 0, len(e.Attrs)),
-	}
+	// Build combined attribute list
+	combinedAttrs := make([]Attr, 0, len(e.attrs))
 
 	// First, copy over existing attributes that aren't being updated
 	attrMap := make(map[Id]Attr)
-	for _, attr := range attrs {
+	for _, attr := range entity.attrs {
 		attrMap[attr.ID] = attr
 	}
 
-	for _, existing := range e.Attrs {
+	for _, existing := range e.attrs {
 		if _, isUpdated := attrMap[existing.ID]; !isUpdated {
-			updated.Attrs = append(updated.Attrs, existing)
+			combinedAttrs = append(combinedAttrs, existing)
 		}
 	}
 
 	// Then add the new/updated attributes
-	updated.Attrs = append(updated.Attrs, attrs...)
-	updated.UpdatedAt = time.Now().Unix()
+	combinedAttrs = append(combinedAttrs, entity.attrs...)
+
+	// Create a copy to avoid modifying the original
+	updated := New(combinedAttrs)
+
+	updated.SetRevision(e.GetRevision() + 1)
+	updated.SetUpdatedAt(m.Now())
 
 	// Update the entity in the store
 	m.Entities[id] = updated
 
 	return updated, nil
+}
+
+func (m *MockStore) ReplaceEntity(ctx context.Context, entity *Entity, opts ...EntityOption) (*Entity, error) {
+	id := entity.Id()
+	if id == "" {
+		return nil, ErrNotFound
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	existing, ok := m.Entities[id]
+	if !ok {
+		return nil, ErrNotFound
+	}
+
+	// Update revision and timestamp
+	entity.SetRevision(existing.GetRevision() + 1)
+	entity.SetUpdatedAt(m.Now())
+
+	m.Entities[id] = entity
+	return entity, nil
+}
+
+func (m *MockStore) PatchEntity(ctx context.Context, entity *Entity, opts ...EntityOption) (*Entity, error) {
+	id := entity.Id()
+	if id == "" {
+		return nil, ErrNotFound
+	}
+
+	// Use UpdateEntity logic
+	return m.UpdateEntity(ctx, id, entity, opts...)
+}
+
+func (m *MockStore) EnsureEntity(ctx context.Context, entity *Entity, opts ...EntityOption) (*Entity, bool, error) {
+	id := entity.Id()
+	if id == "" {
+		return nil, false, ErrNotFound
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	// Check if entity exists
+	if e, ok := m.Entities[id]; ok {
+		return e, false, nil
+	}
+
+	// Create new entity
+	entity.SetRevision(1)
+	entity.SetCreatedAt(m.Now())
+	entity.SetUpdatedAt(m.Now())
+	m.Entities[id] = entity
+	return entity, true, nil
 }
 
 func (m *MockStore) DeleteEntity(ctx context.Context, id Id) error {
@@ -142,11 +193,11 @@ func (m *MockStore) WatchIndex(ctx context.Context, attr Attr) (clientv3.WatchCh
 	ch := make(chan clientv3.WatchResponse)
 
 	m.mu.Lock()
-	m.Entities[Id("/mock/entity")] = &Entity{
-		Attrs: []Attr{
-			Keyword(Ident, "mock/entity"),
-		},
-	}
+	mockEntity := New(
+		Ref(DBId, "mock/entity"),
+		Keyword(Ident, "mock/entity"),
+	)
+	m.Entities[Id("/mock/entity")] = mockEntity
 	m.mu.Unlock()
 
 	go func() {
@@ -191,7 +242,7 @@ func (m *MockStore) ListIndex(ctx context.Context, attr Attr) ([]Id, error) {
 	defer m.mu.RUnlock()
 	var ids []Id
 	for id, entity := range m.Entities {
-		for _, a := range entity.Attrs {
+		for _, a := range entity.attrs {
 			if a.ID == attr.ID && a.Value.Equal(attr.Value) {
 				ids = append(ids, id)
 				break

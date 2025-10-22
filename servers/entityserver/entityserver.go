@@ -65,11 +65,11 @@ func (e *EntityServer) Get(ctx context.Context, req *entityserver_v1alpha.Entity
 	}
 
 	var rpcEntity entityserver_v1alpha.Entity
-	rpcEntity.SetId(entity.ID.String())
-	rpcEntity.SetCreatedAt(entity.CreatedAt)
-	rpcEntity.SetUpdatedAt(entity.UpdatedAt)
-	rpcEntity.SetRevision(entity.Revision)
-	rpcEntity.SetAttrs(entity.Attrs)
+	rpcEntity.SetId(entity.Id().String())
+	rpcEntity.SetCreatedAt(entity.GetCreatedAt().UnixMilli())
+	rpcEntity.SetUpdatedAt(entity.GetUpdatedAt().UnixMilli())
+	rpcEntity.SetRevision(entity.GetRevision())
+	rpcEntity.SetAttrs(entity.Attrs())
 
 	req.Results().SetEntity(&rpcEntity)
 
@@ -94,11 +94,11 @@ func (e *EntityServer) WatchEntity(ctx context.Context, req *entityserver_v1alph
 	en, err := e.Store.GetEntity(ctx, entity.Id(args.Id()))
 	if err == nil {
 		var rpcEntity entityserver_v1alpha.Entity
-		rpcEntity.SetId(en.ID.String())
-		rpcEntity.SetCreatedAt(en.CreatedAt)
-		rpcEntity.SetUpdatedAt(en.UpdatedAt)
-		rpcEntity.SetRevision(en.Revision)
-		rpcEntity.SetAttrs(en.Attrs)
+		rpcEntity.SetId(en.Id().String())
+		rpcEntity.SetCreatedAt(en.GetCreatedAt().UnixMilli())
+		rpcEntity.SetUpdatedAt(en.GetUpdatedAt().UnixMilli())
+		rpcEntity.SetRevision(en.GetRevision())
+		rpcEntity.SetAttrs(en.Attrs())
 
 		var op entityserver_v1alpha.EntityOp
 		op.SetOperation(1)
@@ -146,11 +146,11 @@ func (e *EntityServer) WatchEntity(ctx context.Context, req *entityserver_v1alph
 			if read {
 				en = event.Entity
 				var rpcEntity entityserver_v1alpha.Entity
-				rpcEntity.SetId(en.ID.String())
-				rpcEntity.SetCreatedAt(en.CreatedAt)
-				rpcEntity.SetUpdatedAt(en.UpdatedAt)
-				rpcEntity.SetRevision(en.Revision)
-				rpcEntity.SetAttrs(en.Attrs)
+				rpcEntity.SetId(en.Id().String())
+				rpcEntity.SetCreatedAt(en.GetCreatedAt().UnixMilli())
+				rpcEntity.SetUpdatedAt(en.GetUpdatedAt().UnixMilli())
+				rpcEntity.SetRevision(en.GetRevision())
+				rpcEntity.SetAttrs(en.Attrs())
 
 				op.SetEntity(&rpcEntity)
 			}
@@ -194,7 +194,7 @@ func (e *EntityServer) Put(ctx context.Context, req *entityserver_v1alpha.Entity
 			opts = append(opts, entity.WithFromRevision(rev))
 		}
 
-		re, err := e.Store.UpdateEntity(ctx, entity.Id(rpcE.Id()), attrs, opts...)
+		re, err := e.Store.UpdateEntity(ctx, entity.Id(rpcE.Id()), entity.New(attrs), opts...)
 		if err != nil {
 			if !errors.Is(err, cond.ErrNotFound{}) {
 				// We got an error that _wasn't_ a not found error, so we should return it
@@ -202,19 +202,146 @@ func (e *EntityServer) Put(ctx context.Context, req *entityserver_v1alpha.Entity
 			}
 			// Otherwise we got a not found error, so we can fall through to create the entity
 		} else {
-			results.SetRevision(re.Revision)
-			results.SetId(re.ID.String())
+			results.SetRevision(re.GetRevision())
+			results.SetId(re.Id().String())
 			return nil
 		}
 	}
 
-	re, err := e.Store.CreateEntity(ctx, attrs, opts...)
+	re, err := e.Store.CreateEntity(ctx, entity.New(attrs), opts...)
 	if err != nil {
 		return fmt.Errorf("failed to create entity in put: %w", err)
 	}
 
-	results.SetRevision(re.Revision)
-	results.SetId(re.ID.String())
+	results.SetRevision(re.GetRevision())
+	results.SetId(re.Id().String())
+
+	return nil
+}
+
+func (e *EntityServer) Create(ctx context.Context, req *entityserver_v1alpha.EntityAccessCreate) error {
+	args := req.Args()
+
+	attrs := args.Attrs()
+	if len(attrs) == 0 {
+		return cond.ValidationFailure("missing-field", "attrs")
+	}
+
+	entity, err := e.Store.CreateEntity(ctx, entity.New(attrs))
+	if err != nil {
+		return fmt.Errorf("failed to create entity: %w", err)
+	}
+
+	results := req.Results()
+	results.SetRevision(entity.GetRevision())
+	results.SetId(entity.Id().String())
+
+	return nil
+}
+
+func (e *EntityServer) Replace(ctx context.Context, req *entityserver_v1alpha.EntityAccessReplace) error {
+	args := req.Args()
+
+	attrs := args.Attrs()
+	if len(attrs) == 0 {
+		return cond.ValidationFailure("missing-field", "attrs")
+	}
+
+	// Extract ID from attrs to validate it's present
+	var hasId bool
+	for _, attr := range attrs {
+		if attr.ID == entity.DBId {
+			hasId = true
+			break
+		}
+	}
+	if !hasId {
+		return cond.ValidationFailure("missing-field", "db/id attribute is required")
+	}
+
+	var opts []entity.EntityOption
+	if args.HasRevision() && args.Revision() > 0 {
+		opts = append(opts, entity.WithFromRevision(args.Revision()))
+	}
+
+	ent, err := e.Store.ReplaceEntity(ctx, entity.New(attrs), opts...)
+	if err != nil {
+		return fmt.Errorf("failed to replace entity: %w", err)
+	}
+
+	results := req.Results()
+	results.SetRevision(ent.GetRevision())
+	results.SetId(ent.Id().String())
+
+	return nil
+}
+
+func (e *EntityServer) Patch(ctx context.Context, req *entityserver_v1alpha.EntityAccessPatch) error {
+	args := req.Args()
+
+	attrs := args.Attrs()
+	if len(attrs) == 0 {
+		return cond.ValidationFailure("missing-field", "attrs")
+	}
+
+	// Extract ID from attrs to validate it's present
+	var hasId bool
+	for _, attr := range attrs {
+		if attr.ID == entity.DBId {
+			hasId = true
+			break
+		}
+	}
+	if !hasId {
+		return cond.ValidationFailure("missing-field", "db/id attribute is required")
+	}
+
+	var opts []entity.EntityOption
+	if args.HasRevision() && args.Revision() > 0 {
+		opts = append(opts, entity.WithFromRevision(args.Revision()))
+	}
+
+	ent, err := e.Store.PatchEntity(ctx, entity.New(attrs), opts...)
+	if err != nil {
+		return fmt.Errorf("failed to patch entity: %w", err)
+	}
+
+	results := req.Results()
+	results.SetRevision(ent.GetRevision())
+	results.SetId(ent.Id().String())
+
+	return nil
+}
+
+func (e *EntityServer) Ensure(ctx context.Context, req *entityserver_v1alpha.EntityAccessEnsure) error {
+	args := req.Args()
+
+	attrs := args.Attrs()
+	if len(attrs) == 0 {
+		return cond.ValidationFailure("missing-field", "attrs")
+	}
+
+	// Extract ID from attrs to validate it's present
+	var hasId bool
+	for _, attr := range attrs {
+		if attr.ID == entity.DBId {
+			hasId = true
+			break
+		}
+	}
+	if !hasId {
+		return cond.ValidationFailure("missing-field", "db/id attribute is required")
+	}
+
+	ent, created, err := e.Store.EnsureEntity(ctx, entity.New(attrs))
+	if err != nil {
+		return fmt.Errorf("failed to ensure entity: %w", err)
+	}
+
+	results := req.Results()
+	results.SetRevision(ent.GetRevision())
+	results.SetId(ent.Id().String())
+	results.SetCreated(created)
 
 	return nil
 }
@@ -250,23 +377,23 @@ func (e *EntityServer) PutSession(ctx context.Context, req *entityserver_v1alpha
 	opts = append(opts, entity.WithSession(data))
 
 	if rpcE.HasId() {
-		re, err := e.Store.UpdateEntity(ctx, entity.Id(rpcE.Id()), attrs, opts...)
+		re, err := e.Store.UpdateEntity(ctx, entity.Id(rpcE.Id()), entity.New(attrs), opts...)
 		if err != nil {
 			if !errors.Is(err, entity.ErrNotFound) {
 				return fmt.Errorf("failed to create entity: %w", err)
 			}
 		} else {
-			results.SetRevision(re.Revision)
-			results.SetId(re.ID.String())
+			results.SetRevision(re.GetRevision())
+			results.SetId(re.Id().String())
 		}
 	} else {
-		re, err := e.Store.CreateEntity(ctx, attrs, opts...)
+		re, err := e.Store.CreateEntity(ctx, entity.New(attrs), opts...)
 		if err != nil {
 			return fmt.Errorf("failed to create entity: %w", err)
 		}
 
-		results.SetRevision(re.Revision)
-		results.SetId(re.ID.String())
+		results.SetRevision(re.GetRevision())
+		results.SetId(re.Id().String())
 
 	}
 	return nil
@@ -358,11 +485,11 @@ func (e *EntityServer) WatchIndex(ctx context.Context, req *entityserver_v1alpha
 					}
 
 					var rpcEntity entityserver_v1alpha.Entity
-					rpcEntity.SetId(en.ID.String())
-					rpcEntity.SetCreatedAt(en.CreatedAt)
-					rpcEntity.SetUpdatedAt(en.UpdatedAt)
-					rpcEntity.SetRevision(en.Revision)
-					rpcEntity.SetAttrs(en.Attrs)
+					rpcEntity.SetId(en.Id().String())
+					rpcEntity.SetCreatedAt(en.GetCreatedAt().UnixMilli())
+					rpcEntity.SetUpdatedAt(en.GetUpdatedAt().UnixMilli())
+					rpcEntity.SetRevision(en.GetRevision())
+					rpcEntity.SetAttrs(en.Attrs())
 
 					op.SetEntity(&rpcEntity)
 				} else if event.PrevKv != nil {
@@ -426,11 +553,11 @@ func (e *EntityServer) List(ctx context.Context, req *entityserver_v1alpha.Entit
 		}
 
 		var rpcEntity entityserver_v1alpha.Entity
-		rpcEntity.SetId(entity.ID.String())
-		rpcEntity.SetCreatedAt(entity.CreatedAt)
-		rpcEntity.SetUpdatedAt(entity.UpdatedAt)
-		rpcEntity.SetRevision(entity.Revision)
-		rpcEntity.SetAttrs(entity.Attrs)
+		rpcEntity.SetId(entity.Id().String())
+		rpcEntity.SetCreatedAt(entity.GetCreatedAt().UnixMilli())
+		rpcEntity.SetUpdatedAt(entity.GetUpdatedAt().UnixMilli())
+		rpcEntity.SetRevision(entity.GetRevision())
+		rpcEntity.SetAttrs(entity.Attrs())
 
 		ret = append(ret, &rpcEntity)
 	}
@@ -619,9 +746,9 @@ func (e *EntityServer) Parse(ctx context.Context, req *entityserver_v1alpha.Enti
 	var ents []*entityserver_v1alpha.Entity
 	for _, ent := range pf.Entities {
 		var rpcEntity entityserver_v1alpha.Entity
-		rpcEntity.SetAttrs(ent.Attrs)
-		if ent.ID != "" {
-			rpcEntity.SetId(ent.ID.String())
+		rpcEntity.SetAttrs(ent.Attrs())
+		if ent.Id() != "" {
+			rpcEntity.SetId(ent.Id().String())
 		}
 
 		ents = append(ents, &rpcEntity)
@@ -673,7 +800,7 @@ func (e *EntityServer) CreateSession(ctx context.Context, req *entityserver_v1al
 	sess.Usage = args.Usage()
 	sess.UniqueId = nice
 
-	_, err = e.Store.CreateEntity(ctx, entity.Attrs(
+	_, err = e.Store.CreateEntity(ctx, entity.New(
 		entity.Ident, "session/"+nice,
 		sess.Encode,
 		(&core_v1alpha.Metadata{

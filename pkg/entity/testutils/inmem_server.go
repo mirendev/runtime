@@ -63,7 +63,7 @@ func NewInMemEntityServer(t *testing.T) (*InMemEntityServer, func()) {
 
 // AddEntity adds an entity to the mock store
 func (s *InMemEntityServer) AddEntity(ent *entity.Entity) {
-	s.Store.AddEntity(ent.ID, ent)
+	s.Store.AddEntity(ent.Id(), ent)
 }
 
 // GetEntity retrieves an entity from the mock store

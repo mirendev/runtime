@@ -3,6 +3,7 @@ package model
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 	"miren.dev/runtime/pkg/entity"
@@ -27,20 +28,32 @@ func TestTextFormatter_Format(t *testing.T) {
 	t.Run("works with simple entity", func(t *testing.T) {
 		r := require.New(t)
 		tf, store := testTextFormatter(t)
-		testEntity, err := store.CreateEntity(context.Background(), []entity.Attr{
+
+		ts := time.Unix(1136214245, 0) // 2006-01-02T15:04:05Z
+
+		store.NowFunc = func() time.Time {
+			return ts
+		}
+		testEntity, err := store.CreateEntity(context.Background(), entity.New([]entity.Attr{
 			{ID: entity.Ident, Value: entity.KeywordValue("test/entity")},
 			{ID: entity.Doc, Value: entity.StringValue("Test entity")},
-		})
+		}))
 		r.NoError(err)
 
 		out, err := tf.Format(ctx, testEntity)
 		r.NoError(err)
 
 		expected := `attrs:
-  - id: db/ident
-    value: test/entity
   - id: db/doc
     value: Test entity
+  - id: db/entity.created
+    value: 2006-01-02T15:04:05Z
+  - id: db/entity.revision
+    value: 1
+  - id: db/entity.updated
+    value: 2006-01-02T15:04:05Z
+  - id: db/id
+    value: test/entity
 `
 		r.Equal(expected, out)
 	})
@@ -49,11 +62,17 @@ func TestTextFormatter_Format(t *testing.T) {
 		r := require.New(t)
 		tf, store := testTextFormatter(t)
 
+		ts := time.Unix(1136214245, 0).UTC() // 2006-01-02T15:04:05Z
+
+		store.NowFunc = func() time.Time {
+			return ts
+		}
+
 		// TODO: we're depending on a real schema/kind here, it would be better if we could create isolated schemas and kinds in the context of tests
 		err := schema.Apply(ctx, store)
 		r.NoError(err)
 
-		testEntity, err := store.CreateEntity(context.Background(), entity.Attrs(
+		testEntity, err := store.CreateEntity(context.Background(), entity.New(
 			entity.Ident, types.Keyword("test/myproject"),
 			entity.EntityKind, entity.RefValue("dev.miren.core/kind.project"),
 		))
@@ -67,7 +86,13 @@ kind: dev.miren.core/project
 version: v1alpha
 spec: {}
 attrs:
-  - id: db/ident
+  - id: db/entity.created
+    value: 2006-01-02T15:04:05Z
+  - id: db/entity.revision
+    value: 1
+  - id: db/entity.updated
+    value: 2006-01-02T15:04:05Z
+  - id: db/id
     value: test/myproject
   - id: entity/kind
     value: dev.miren.core/kind.project

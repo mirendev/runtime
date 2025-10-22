@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/davecgh/go-spew/spew"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/pkg/entity"
 )
@@ -53,24 +52,29 @@ func EntityPut(ctx *Context, opts struct {
 			} else if opts.Id != "" {
 				rpcE.SetId(opts.Id)
 				ent.Remove(entity.Ident)
-				ent.Attrs = append(ent.Attrs, entity.Attrs(
-					entity.Ident, opts.Id,
-				)...)
 			}
 
-			rpcE.SetAttrs(ent.Attrs)
-
-			spew.Dump(rpcE.Id())
-			spew.Dump(ent.Attrs)
+			rpcE.SetAttrs(ent.Attrs())
 
 			if opts.DryRun {
 				ctx.Log.Info("Dry run, not putting entity")
 				return nil
 			}
 
-			res, err := eac.Put(ctx, &rpcE)
+			res, err := eac.Ensure(ctx, ent.Attrs())
 			if err != nil {
 				return fmt.Errorf("failed to put entity: %v", err)
+			}
+
+			if res.Created() {
+				ctx.Log.Info("Entity created", "id", res.Id, "revision", res.Revision)
+			} else {
+				rres, err := eac.Replace(ctx, ent.Attrs(), res.Revision())
+				if err != nil {
+					return fmt.Errorf("failed to update entity: %v", err)
+				}
+
+				ctx.Log.Info("Entity updated", "id", res.Id, "revision", rres.Revision)
 			}
 
 			ctx.Log.Info("Entity put successfully", "id", res.Id, "revision", res.Revision)

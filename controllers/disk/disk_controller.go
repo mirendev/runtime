@@ -135,11 +135,11 @@ func (d *DiskController) reconcileDisk(ctx context.Context, disk *storage_v1alph
 	if meta != nil {
 		// Ensure meta.Entity is initialized
 		if meta.Entity == nil {
-			meta.Entity = &entity.Entity{}
+			meta.Entity = entity.New(disk.Encode())
+		} else {
+			// Caller does a diff so we can always send it back
+			meta.Entity.Update(disk.Encode())
 		}
-
-		// Caller does a diff so we can always send it back
-		meta.Attrs = disk.Encode()
 	}
 
 	return nil
