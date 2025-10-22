@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net/netip"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -37,6 +38,20 @@ type Provisioner struct {
 }
 
 var _ = autoreg.Register[Provisioner]()
+
+func (p *Provisioner) Init(ctx context.Context) error {
+	bc := &network.BridgeConfig{
+		Name:      p.Bridge,
+		Addresses: []netip.Prefix{p.Subnet.Router()},
+	}
+
+	err := p.NetServ.SetupDNS(bc)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
 
 type ProvisionConfig struct {
 	Name      string
@@ -252,11 +267,6 @@ func (c *Provisioner) bootInitialTask(
 	c.Log.Info("task created", "pid", task.Pid())
 
 	err = network.ConfigureNetNS(c.Log, int(task.Pid()), ep)
-	if err != nil {
-		return err
-	}
-
-	err = c.NetServ.SetupDNS(ep.Bridge)
 	if err != nil {
 		return err
 	}
