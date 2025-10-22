@@ -19,15 +19,16 @@ import (
 
 // ServerInstall sets up systemd units to run the miren server
 func ServerInstall(ctx *Context, opts struct {
-	Address      string            `short:"a" long:"address" description:"Server address to bind to" default:"0.0.0.0:8443"`
-	Verbosity    string            `short:"v" long:"verbosity" description:"Verbosity level" default:"-vv"`
-	Branch       string            `short:"b" long:"branch" description:"Branch to download if release not found" default:"main"`
-	Force        bool              `short:"f" long:"force" description:"Overwrite existing service file"`
-	NoStart      bool              `long:"no-start" description:"Do not start the service after installation"`
-	WithoutCloud bool              `long:"without-cloud" description:"Skip cloud registration setup"`
-	ClusterName  string            `short:"n" long:"name" description:"Cluster name for cloud registration"`
-	CloudURL     string            `short:"u" long:"url" description:"Cloud URL for registration" default:"https://miren.cloud"`
-	Tags         map[string]string `short:"t" long:"tag" description:"Tags for the cluster (key:value)"`
+	Address          string            `short:"a" long:"address" description:"Server address to bind to" default:"0.0.0.0:8443"`
+	Verbosity        string            `short:"v" long:"verbosity" description:"Verbosity level" default:"-vv"`
+	Branch           string            `short:"b" long:"branch" description:"Branch to download if release not found" default:"main"`
+	Force            bool              `short:"f" long:"force" description:"Overwrite existing service file"`
+	NoStart          bool              `long:"no-start" description:"Do not start the service after installation"`
+	WithoutCloud     bool              `long:"without-cloud" description:"Skip cloud registration setup"`
+	ClusterName      string            `short:"n" long:"name" description:"Cluster name for cloud registration"`
+	CloudURL         string            `short:"u" long:"url" description:"Cloud URL for registration" default:"https://miren.cloud"`
+	Tags             map[string]string `short:"t" long:"tag" description:"Tags for the cluster (key:value)"`
+	PreApprovalToken string            `long:"token" description:"Pre-approval token for automated registration"`
 }) error {
 	// Check if running with sufficient privileges
 	if os.Geteuid() != 0 {
@@ -68,10 +69,11 @@ func ServerInstall(ctx *Context, opts struct {
 			}
 
 			registerOpts := RegisterOptions{
-				ClusterName: clusterName,
-				CloudURL:    opts.CloudURL,
-				Tags:        opts.Tags,
-				OutputDir:   "/var/lib/miren/server",
+				ClusterName:      clusterName,
+				CloudURL:         opts.CloudURL,
+				Tags:             opts.Tags,
+				OutputDir:        "/var/lib/miren/server",
+				PreApprovalToken: opts.PreApprovalToken,
 			}
 
 			if err := Register(ctx, registerOpts); err != nil {
@@ -95,10 +97,11 @@ func ServerInstall(ctx *Context, opts struct {
 			}
 
 			registerOpts := RegisterOptions{
-				ClusterName: clusterName,
-				CloudURL:    opts.CloudURL,
-				Tags:        opts.Tags,
-				OutputDir:   "/var/lib/miren/server",
+				ClusterName:      clusterName,
+				CloudURL:         opts.CloudURL,
+				Tags:             opts.Tags,
+				OutputDir:        "/var/lib/miren/server",
+				PreApprovalToken: opts.PreApprovalToken,
 			}
 
 			if err := Register(ctx, registerOpts); err != nil {

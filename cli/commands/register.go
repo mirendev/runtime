@@ -11,10 +11,11 @@ import (
 
 // RegisterOptions contains options for cluster registration
 type RegisterOptions struct {
-	ClusterName string            `short:"n" long:"name" description:"Cluster name" required:"true"`
-	CloudURL    string            `short:"u" long:"url" description:"Cloud URL" default:"https://miren.cloud"`
-	Tags        map[string]string `short:"t" long:"tag" description:"Tags for the cluster (key:value)"`
-	OutputDir   string            `short:"o" long:"output" description:"Output directory for registration" default:"/var/lib/miren/server"`
+	ClusterName      string            `short:"n" long:"name" description:"Cluster name" required:"true"`
+	CloudURL         string            `short:"u" long:"url" description:"Cloud URL" default:"https://miren.cloud"`
+	Tags             map[string]string `short:"t" long:"tag" description:"Tags for the cluster (key:value)"`
+	OutputDir        string            `short:"o" long:"output" description:"Output directory for registration" default:"/var/lib/miren/server"`
+	PreApprovalToken string            `long:"token" description:"Pre-approval token for automated registration"`
 }
 
 // Register handles cluster registration with miren.cloud
@@ -120,9 +121,10 @@ func Register(ctx *Context, opts RegisterOptions) error {
 
 	// Create registration config
 	config := registration.Config{
-		ClusterName: opts.ClusterName,
-		Tags:        opts.Tags,
-		PublicKey:   publicKey,
+		ClusterName:      opts.ClusterName,
+		Tags:             opts.Tags,
+		PublicKey:        publicKey,
+		PreApprovalToken: opts.PreApprovalToken,
 	}
 
 	// Create registration client
@@ -135,6 +137,37 @@ func Register(ctx *Context, opts RegisterOptions) error {
 		return fmt.Errorf("failed to start registration: %w", err)
 	}
 
+	// Check if registration was immediately approved via pre-approval token
+	if result.IsPreApproved() {
+		ctx.Completed("Registration automatically approved via pre-approval token!")
+
+		// Save the approved registration immediately
+		stored := &registration.StoredRegistration{
+			ClusterID:        result.ClusterID,
+			ClusterName:      opts.ClusterName,
+			OrganizationID:   result.OrganizationID,
+			ServiceAccountID: result.ServiceAccountID,
+			PrivateKey:       privateKey,
+			CloudURL:         opts.CloudURL,
+			RegisteredAt:     time.Now(),
+			Tags:             opts.Tags,
+			Status:           "approved",
+		}
+
+		if err := registration.SaveRegistration(opts.OutputDir, stored); err != nil {
+			return fmt.Errorf("failed to save registration: %w", err)
+		}
+
+		ctx.Completed("Registration successful!")
+		ctx.Info("Cluster ID: %s", result.ClusterID)
+		ctx.Info("Organization ID: %s", result.OrganizationID)
+		ctx.Info("Service Account ID: %s", result.ServiceAccountID)
+		ctx.Info("Configuration saved to: %s", opts.OutputDir)
+
+		return nil
+	}
+
+	// Manual approval flow
 	ctx.Completed("Registration initiated!")
 	ctx.Info("Please approve the registration at: %s", result.AuthURL)
 	ctx.Info("Registration ID: %s", result.RegistrationID)

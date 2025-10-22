@@ -19,10 +19,11 @@ import (
 
 // Config contains the configuration for cluster registration
 type Config struct {
-	ClusterName    string            `json:"cluster_name"`
-	OrganizationID string            `json:"organization_id,omitempty"` // Optional - user will select in UI
-	Tags           map[string]string `json:"tags,omitempty"`
-	PublicKey      string            `json:"public_key,omitempty"` // PEM encoded public key
+	ClusterName      string            `json:"cluster_name"`
+	OrganizationID   string            `json:"organization_id,omitempty"`   // Optional - user will select in UI
+	Tags             map[string]string `json:"tags,omitempty"`
+	PublicKey        string            `json:"public_key,omitempty"`        // PEM encoded public key
+	PreApprovalToken string            `json:"pre_approval_token,omitempty"` // Pre-approval token for automated registration
 }
 
 // GenerateKeyPair generates a new ED25519 key pair for registration
@@ -65,6 +66,18 @@ type Result struct {
 	AuthURL        string    `json:"auth_url"`
 	PollURL        string    `json:"poll_url"`
 	ExpiresAt      time.Time `json:"expires_at"`
+
+	// Pre-approval fields (returned when using pre-approval token)
+	Status           string `json:"status,omitempty"`             // "approved" when pre-approved
+	ClusterID        string `json:"cluster_id,omitempty"`
+	ClusterName      string `json:"cluster_name,omitempty"`
+	OrganizationID   string `json:"organization_id,omitempty"`
+	ServiceAccountID string `json:"service_account_id,omitempty"`
+}
+
+// IsPreApproved returns true if the registration was immediately approved via pre-approval token
+func (r *Result) IsPreApproved() bool {
+	return r.Status == "approved"
 }
 
 // Status represents the status of a registration during polling
@@ -133,7 +146,8 @@ func (c *Client) StartRegistration(ctx context.Context) (*Result, error) {
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
+	// Accept both 200 (manual approval) and 201 (pre-approved)
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
 		var errResp map[string]string
 		if err := json.NewDecoder(resp.Body).Decode(&errResp); err != nil {
 			return nil, fmt.Errorf("failed to decode error response: %w", err)
