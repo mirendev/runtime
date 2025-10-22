@@ -1436,10 +1436,10 @@ func TestSandbox(t *testing.T) {
 			},
 		}
 
-		cont := &entity.Entity{
-			ID:    id,
-			Attrs: sb.Encode(),
-		}
+		cont := entity.New(
+			entity.DBId, id,
+			sb.Encode,
+		)
 
 		meta := &entity.Meta{
 			Entity:   cont,
