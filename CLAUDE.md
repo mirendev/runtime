@@ -122,8 +122,7 @@ The system uses **iso** (isolated Docker environment) for containerized developm
 
 To get started with iso:
 1. Ensure `iso` is installed and available in your PATH
-2. Run `docker build -t runtime-shell -f .iso/Dockerfile .` to build the development container image (first time only)
-3. Run `make dev` or `make test` - iso will automatically start services and run commands
+2. Run `make dev` or `make test` - iso will automatically start services and run commands
 
 **Dagger (For CI/CD and compatibility):**
 The system also uses **Dagger** for CI/CD with the same dependencies. Dagger configuration is in the `dagger/` directory.
