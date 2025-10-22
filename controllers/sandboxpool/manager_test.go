@@ -426,7 +426,7 @@ func TestManagerScaleDownIdle(t *testing.T) {
 		Spec:         pool.SandboxSpec,
 	}
 	sb1ID, err := server.Client.Create(ctx, "sb-1", sb1,
-		entityserver.WithLabels(types.LabelSet("service", pool.Service)))
+		entityserver.WithLabels(types.LabelSet("service", pool.Service, "pool", poolID.String())))
 	require.NoError(t, err)
 	sb1.ID = sb1ID
 
@@ -438,7 +438,7 @@ func TestManagerScaleDownIdle(t *testing.T) {
 		Spec:         pool.SandboxSpec,
 	}
 	sb2ID, err := server.Client.Create(ctx, "sb-2", sb2,
-		entityserver.WithLabels(types.LabelSet("service", pool.Service)))
+		entityserver.WithLabels(types.LabelSet("service", pool.Service, "pool", poolID.String())))
 	require.NoError(t, err)
 	sb2.ID = sb2ID
 
@@ -450,7 +450,7 @@ func TestManagerScaleDownIdle(t *testing.T) {
 		Spec:         pool.SandboxSpec,
 	}
 	sb3ID, err := server.Client.Create(ctx, "sb-3", sb3,
-		entityserver.WithLabels(types.LabelSet("service", pool.Service)))
+		entityserver.WithLabels(types.LabelSet("service", pool.Service, "pool", poolID.String())))
 	require.NoError(t, err)
 	sb3.ID = sb3ID
 
@@ -511,7 +511,7 @@ func TestManagerScaleDownFixedMode(t *testing.T) {
 			Spec:         pool.SandboxSpec,
 		}
 		_, err := server.Client.Create(ctx, fmt.Sprintf("sb-%d", i), sb,
-			entityserver.WithLabels(types.LabelSet("service", pool.Service)))
+			entityserver.WithLabels(types.LabelSet("service", pool.Service, "pool", poolID.String())))
 		require.NoError(t, err)
 	}
 
