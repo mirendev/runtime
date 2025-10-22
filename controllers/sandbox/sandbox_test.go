@@ -1430,13 +1430,15 @@ func TestSandbox(t *testing.T) {
 		var sb compute.Sandbox
 		sb.ID = id
 		sb.Labels = append(sb.Labels, "runtime.computer/app=heavy-logger")
-		sb.Container = []compute.Container{
-			{
-				Name:  "logger",
-				Image: "docker.io/library/busybox:latest",
-				// Continuously write to stdout - will fill the buffer if not drained
-				// Each line is ~80 bytes, so this generates plenty of data
-				Command: `sh -c 'i=0; while true; do echo "Log line $i: test message to fill stdout buffer"; i=$((i+1)); sleep 0.05; done'`,
+		sb.Spec = compute.SandboxSpec{
+			Container: []compute.SandboxSpecContainer{
+				{
+					Name:  "logger",
+					Image: "docker.io/library/busybox:latest",
+					// Continuously write to stdout - will fill the buffer if not drained
+					// Each line is ~80 bytes, so this generates plenty of data
+					Command: `sh -c 'i=0; while true; do echo "Log line $i: test message to fill stdout buffer"; i=$((i+1)); sleep 0.05; done'`,
+				},
 			},
 		}
 
