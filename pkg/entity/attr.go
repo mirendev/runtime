@@ -27,6 +27,13 @@ func (a Attr) Kind() any {
 	return a.Value.any
 }
 
+func (a Attr) Clone() Attr {
+	return Attr{
+		ID:    a.ID,
+		Value: a.Value.Clone(),
+	}
+}
+
 func (a Attr) Sum(h io.Writer) {
 	h.Write([]byte(a.ID))
 	h.Write([]byte{':'})
@@ -312,7 +319,7 @@ func Named[T Keywordable](v T) Attr {
 }
 
 func Component(id Id, attrs []Attr) Attr {
-	return Attr{id, ComponentValue(&EntityComponent{attrs})}
+	return Attr{id, ComponentValue(attrs)}
 }
 
 func Label(id Id, key, val string) Attr {
@@ -511,8 +518,36 @@ func KeywordValue[T Keywordable](v T) Value {
 	}
 }
 
-func ComponentValue(v *EntityComponent) Value {
-	return Value{any: v}
+func ComponentValue(vals ...any) Value {
+	var attrs []Attr
+
+	i := 0
+	for i < len(vals) {
+		switch v := vals[i].(type) {
+		case func() []Attr:
+			attrs = append(attrs, v()...)
+			i++
+		case []Attr:
+			attrs = append(attrs, v...)
+			i++
+		case Attr:
+			attrs = append(attrs, v)
+			i++
+		case Id:
+			if i+1 >= len(vals) {
+				panic("expected value after Id key")
+			}
+			attrs = append(attrs, Attr{
+				ID:    v,
+				Value: AnyValue(vals[i+1]),
+			})
+			i += 2
+		default:
+			panic(fmt.Sprintf("expected Id key, got %T", v))
+		}
+	}
+
+	return Value{any: &EntityComponent{attrs: attrs}}
 }
 
 func LabelValue(key, val string) Value {
@@ -590,9 +625,9 @@ func AnyValue(v any) Value {
 	case []Value, types.Label, []byte:
 		return Value{any: v}
 	case *EntityComponent:
-		return ComponentValue(v)
+		return ComponentValue(v.attrs)
 	case []Attr:
-		return ComponentValue(&EntityComponent{Attrs: v})
+		return ComponentValue(v)
 	default:
 		return Value{any: v}
 	}
@@ -804,6 +839,37 @@ func (v Value) Bytes() []byte {
 
 //////////////// Other
 
+// Clone returns a deep copy of the Value.
+// For bytes, arrays, and components, this creates new copies of the underlying data.
+// For other types (strings, primitives, immutable types), a shallow copy is sufficient.
+func (v Value) Clone() Value {
+	switch v.Kind() {
+	case KindBytes:
+		return BytesValue(v.Bytes())
+	case KindArray:
+		arr := v.Array()
+		cloned := make([]Value, len(arr))
+		for i, val := range arr {
+			cloned[i] = val.Clone()
+		}
+		return Value{any: cloned}
+	case KindComponent:
+		comp := v.Component()
+		clonedAttrs := make([]Attr, len(comp.attrs))
+		for i, attr := range comp.attrs {
+			clonedAttrs[i] = Attr{
+				ID:    attr.ID,
+				Value: attr.Value.Clone(),
+			}
+		}
+		return Value{any: &EntityComponent{attrs: clonedAttrs}}
+	default:
+		// For all other types (strings, primitives, time, id, keyword, label),
+		// the value is either stored in num or is an immutable type, so shallow copy is fine
+		return v
+	}
+}
+
 // Equal reports whether v and w represent the same Go value.
 func (v Value) Equal(w Value) bool {
 	return v.Compare(w) == 0
@@ -879,12 +945,12 @@ func (v Value) Compare(w Value) int {
 }
 
 func (e *EntityComponent) Compare(other *EntityComponent) int {
-	if len(e.Attrs) != len(other.Attrs) {
-		return cmp.Compare(len(e.Attrs), len(other.Attrs))
+	if len(e.attrs) != len(other.attrs) {
+		return cmp.Compare(len(e.attrs), len(other.attrs))
 	}
 
-	for i := 0; i < len(e.Attrs); i++ {
-		if cmp := e.Attrs[i].Compare(other.Attrs[i]); cmp != 0 {
+	for i := 0; i < len(e.attrs); i++ {
+		if cmp := e.attrs[i].Compare(other.attrs[i]); cmp != 0 {
 			return cmp
 		}
 	}
@@ -964,7 +1030,7 @@ func (v Value) sum(w io.Writer) {
 	case KindId, KindKeyword, KindAny:
 		fmt.Fprint(w, v.any)
 	case KindComponent:
-		for _, a := range v.Component().Attrs {
+		for _, a := range v.Component().attrs {
 			a.Sum(w)
 			w.Write([]byte{';'})
 		}

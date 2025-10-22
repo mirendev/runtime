@@ -97,22 +97,19 @@ func (f *TextFormatter) decode(ctx context.Context, sc *SchemaValue) (*entity.En
 		return nil, fmt.Errorf("failed to decode metadata: %w", err)
 	}
 
-	ent.ID = entity.Id(sc.Id)
+	if sc.Id != "" {
+		ent.SetID(entity.Id(sc.Id))
+	}
 
-	err = ent.Update(ment.Attrs)
+	err = ent.Merge(ment)
 	if err != nil {
 		return nil, fmt.Errorf("failed to update entity: %w", err)
 	}
 
-	if _, ok := ent.Get(entity.Ident); !ok {
+	if _, ok := ent.Get(entity.DBId); !ok {
 		name, ok := sc.Metadata["name"].(string)
 		if sc.Metadata != nil && ok {
-			err = ent.Update(entity.Attrs(
-				entity.Keyword(entity.Ident, kind+"/"+name),
-			))
-			if err != nil {
-				return nil, fmt.Errorf("failed to set ident: %w", err)
-			}
+			ent.SetID(entity.Id(kind + "/" + name))
 		}
 	}
 
@@ -137,7 +134,7 @@ func (f *TextFormatter) Format(ctx context.Context, ent *entity.Entity) (string,
 		if kindid.Value.Id() == core_v1alpha.KindMetadata {
 			md, err := naturalEncodeMap(ent, es)
 			if err != nil {
-				return "", fmt.Errorf("failed to encode metadata for entity %s: %w", ent.ID, err)
+				return "", fmt.Errorf("failed to encode metadata for entity %s: %w", ent.Id(), err)
 			}
 
 			metadata = md
@@ -145,7 +142,7 @@ func (f *TextFormatter) Format(ctx context.Context, ent *entity.Entity) (string,
 			// Everything else gets decoded based on its schema
 			m, err := NaturalEncode(ent, es)
 			if err != nil {
-				return "", fmt.Errorf("failed to encode kind %s for entity %s: %w", kindid.Value.Id(), ent.ID, err)
+				return "", fmt.Errorf("failed to encode kind %s for entity %s: %w", kindid.Value.Id(), ent.Id(), err)
 			}
 
 			results = append(results, m)
@@ -153,7 +150,7 @@ func (f *TextFormatter) Format(ctx context.Context, ent *entity.Entity) (string,
 	}
 
 	if len(results) > 0 {
-		results[0].Id = ent.ID.String()
+		results[0].Id = ent.Id().String()
 
 		if metadata != nil {
 			results[0].Metadata = metadata
@@ -163,10 +160,10 @@ func (f *TextFormatter) Format(ctx context.Context, ent *entity.Entity) (string,
 	// All the entity's raw attributes are going into the YAML output
 	var n yaml.Node
 	err := n.Encode(map[string]any{
-		"attrs": ent.Attrs,
+		"attrs": ent.Attrs(),
 	})
 	if err != nil {
-		return "", fmt.Errorf("failed to encode raw attrs for entity %s: %w", ent.ID, err)
+		return "", fmt.Errorf("failed to encode raw attrs for entity %s: %w", ent.Id(), err)
 	}
 
 	// If there's any data we could encode using schemas, we'll prepend that
@@ -177,7 +174,7 @@ func (f *TextFormatter) Format(ctx context.Context, ent *entity.Entity) (string,
 		var n2 yaml.Node
 		err = n2.Encode(results[0])
 		if err != nil {
-			return "", fmt.Errorf("failed to encode schema results for entity %s: %w", ent.ID, err)
+			return "", fmt.Errorf("failed to encode schema results for entity %s: %w", ent.Id(), err)
 		}
 
 		n.Content = append(n2.Content, n.Content...)
@@ -187,7 +184,7 @@ func (f *TextFormatter) Format(ctx context.Context, ent *entity.Entity) (string,
 			"kinds": results,
 		})
 		if err != nil {
-			return "", fmt.Errorf("failed to encode multiple kinds for entity %s: %w", ent.ID, err)
+			return "", fmt.Errorf("failed to encode multiple kinds for entity %s: %w", ent.Id(), err)
 		}
 
 		n.Content = append(n2.Content, n.Content...)
@@ -200,7 +197,7 @@ func (f *TextFormatter) Format(ctx context.Context, ent *entity.Entity) (string,
 
 	err = enc.Encode(&n)
 	if err != nil {
-		return "", fmt.Errorf("failed to encode final YAML for entity %s: %w", ent.ID, err)
+		return "", fmt.Errorf("failed to encode final YAML for entity %s: %w", ent.Id(), err)
 	}
 
 	return buf.String(), nil

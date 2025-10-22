@@ -86,6 +86,58 @@ interfaces:
           - name: id
             type: string
 
+      - name: create
+        parameters:
+          - name: attrs
+            type: list
+            element: entity.Attr
+        results:
+          - name: revision
+            type: int64
+          - name: id
+            type: string
+
+      - name: replace
+        parameters:
+          - name: attrs
+            type: list
+            element: entity.Attr
+          - name: revision
+            type: int64
+            optional: true
+        results:
+          - name: revision
+            type: int64
+          - name: id
+            type: string
+
+      - name: patch
+        parameters:
+          - name: attrs
+            type: list
+            element: entity.Attr
+          - name: revision
+            type: int64
+            optional: true
+        results:
+          - name: revision
+            type: int64
+          - name: id
+            type: string
+
+      - name: ensure
+        parameters:
+          - name: attrs
+            type: list
+            element: entity.Attr
+        results:
+          - name: revision
+            type: int64
+          - name: id
+            type: string
+          - name: created
+            type: bool
+
       - name: put_session
         parameters:
           - name: entity

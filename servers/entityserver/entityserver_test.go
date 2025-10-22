@@ -28,10 +28,10 @@ func TestEntityServer_Get(t *testing.T) {
 	ctx := context.TODO()
 
 	// Create a test entity
-	testEntity, err := store.CreateEntity(context.Background(), []entity.Attr{
+	testEntity, err := store.CreateEntity(context.Background(), entity.New([]entity.Attr{
 		{ID: entity.Ident, Value: entity.KeywordValue("test/entity")},
 		{ID: entity.Doc, Value: entity.StringValue("Test entity")},
-	})
+	}))
 	require.NoError(t, err)
 
 	tests := []struct {
@@ -67,8 +67,11 @@ func TestEntityServer_Get(t *testing.T) {
 				result := resp.Entity()
 
 				assert.Equal(t, tt.id, result.Id())
-				assert.Equal(t, testEntity.Attrs, result.Attrs())
-				assert.Equal(t, testEntity.Revision, result.Revision())
+				assert.Len(t, result.Attrs(), len(testEntity.Attrs()))
+				for i, attr := range testEntity.Attrs() {
+					assert.Equal(t, 0, attr.Compare(result.Attrs()[i]))
+				}
+				assert.Equal(t, testEntity.GetRevision(), result.Revision())
 			}
 		})
 	}
@@ -138,10 +141,10 @@ func TestEntityServer_Delete(t *testing.T) {
 	ctx := context.TODO()
 
 	// Create a test entity
-	_, err := store.CreateEntity(context.Background(), []entity.Attr{
+	_, err := store.CreateEntity(context.Background(), entity.New([]entity.Attr{
 		{ID: entity.Ident, Value: entity.KeywordValue("test/entity")},
 		{ID: entity.Doc, Value: entity.StringValue("Test entity")},
-	})
+	}))
 	require.NoError(t, err)
 
 	tests := []struct {
@@ -208,9 +211,9 @@ func TestEntityServer_WatchIndex(t *testing.T) {
 
 		ae := op.Entity()
 
-		r.Len(ae.Attrs(), 1)
+		r.Len(ae.Attrs(), 4)
 
-		r.Equal(entity.Keyword(entity.Ident, "mock/entity"), ae.Attrs()[0])
+		r.Equal(entity.Ref(entity.DBId, "mock/entity"), ae.Attrs()[2])
 
 		return nil
 	}))
@@ -263,7 +266,7 @@ func TestEntityServer_List(t *testing.T) {
 	}
 
 	for _, e := range entities {
-		_, err := store.CreateEntity(ctx, e.attrs)
+		_, err := store.CreateEntity(ctx, entity.New(e.attrs))
 		require.NoError(t, err)
 	}
 
@@ -297,7 +300,7 @@ func TestEntityServer_List(t *testing.T) {
 		},
 		{
 			name:      "list by specific ident",
-			index:     entity.Keyword(entity.Ident, "test/entity1"),
+			index:     entity.Ref(entity.DBId, "test/entity1"),
 			wantCount: 1,
 			wantIDs:   []string{"test/entity1"},
 			wantErr:   false,
@@ -351,10 +354,10 @@ func TestEntityServer_List_WithMissingEntity(t *testing.T) {
 	ctx := context.TODO()
 
 	// Create an entity
-	_, err := store.CreateEntity(ctx, []entity.Attr{
+	_, err := store.CreateEntity(ctx, entity.New([]entity.Attr{
 		{ID: entity.Ident, Value: entity.KeywordValue("test/entity1")},
 		{ID: entity.EntityKind, Value: entity.KeywordValue("test")},
-	})
+	}))
 	require.NoError(t, err)
 
 	// Override GetEntities to return a nil entry to simulate missing entity

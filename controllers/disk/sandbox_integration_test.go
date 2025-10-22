@@ -41,7 +41,7 @@ func TestSandboxDiskIntegration(t *testing.T) {
 
 		// Verify disk was provisioned
 		var volumeId string
-		for _, attr := range meta.Attrs {
+		for _, attr := range meta.Attrs() {
 			if attr.ID == storage_v1alpha.DiskLsvdVolumeIdId {
 				volumeId = attr.Value.String()
 			}
@@ -100,7 +100,7 @@ func TestSandboxDiskIntegration(t *testing.T) {
 
 		// Verify lease was bound
 		hasStatus := false
-		for _, attr := range leaseMeta.Attrs {
+		for _, attr := range leaseMeta.Attrs() {
 			if attr.ID == storage_v1alpha.DiskLeaseStatusId {
 				hasStatus = true
 				assert.Equal(t, storage_v1alpha.DiskLeaseStatusBoundId, attr.Value.Id())
@@ -137,7 +137,7 @@ func TestSandboxDiskIntegration(t *testing.T) {
 
 		// Verify conflict was detected
 		hasFailure := false
-		for _, attr := range conflictMeta.Attrs {
+		for _, attr := range conflictMeta.Attrs() {
 			if attr.ID == storage_v1alpha.DiskLeaseStatusId {
 				hasFailure = true
 				assert.Equal(t, storage_v1alpha.DiskLeaseStatusFailedId, attr.Value.Id())
@@ -171,7 +171,7 @@ func TestSandboxDiskIntegration(t *testing.T) {
 
 		// Verify new lease was successful
 		hasNewStatus := false
-		for _, attr := range newMeta.Attrs {
+		for _, attr := range newMeta.Attrs() {
 			if attr.ID == storage_v1alpha.DiskLeaseStatusId {
 				hasNewStatus = true
 				assert.Equal(t, storage_v1alpha.DiskLeaseStatusBoundId, attr.Value.Id())
@@ -227,7 +227,7 @@ func TestSandboxDiskIntegration(t *testing.T) {
 			require.NoError(t, err)
 
 			// Update disk with volume ID
-			for _, attr := range meta.Attrs {
+			for _, attr := range meta.Attrs() {
 				if attr.ID == storage_v1alpha.DiskLsvdVolumeIdId {
 					disks[i].LsvdVolumeId = attr.Value.String()
 					disks[i].Status = storage_v1alpha.PROVISIONED
@@ -297,7 +297,7 @@ func TestSandboxDiskIntegration(t *testing.T) {
 			require.NoError(t, err)
 
 			// Verify lease was bound
-			for _, attr := range meta.Attrs {
+			for _, attr := range meta.Attrs() {
 				if attr.ID == storage_v1alpha.DiskLeaseStatusId {
 					assert.Equal(t, storage_v1alpha.DiskLeaseStatusBoundId, attr.Value.Id())
 				}

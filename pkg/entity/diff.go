@@ -1,13 +1,14 @@
 package entity
 
-import "slices"
-
 func (e *Entity) Clone() *Entity {
-	f := *e
-
-	f.Attrs = slices.Clone(f.Attrs)
-
-	return &f
+	clonedAttrs := make([]Attr, len(e.attrs))
+	for i, attr := range e.attrs {
+		clonedAttrs[i] = Attr{
+			ID:    attr.ID,
+			Value: attr.Value.Clone(),
+		}
+	}
+	return &Entity{attrs: clonedAttrs}
 }
 
 // Diff returns the difference between two entities.
@@ -15,9 +16,9 @@ func (e *Entity) Clone() *Entity {
 func Diff(a, b *Entity) []Attr {
 	var diff []Attr
 
-	for _, aAttr := range a.Attrs {
+	for _, aAttr := range a.attrs {
 		found := false
-		for _, bAttr := range b.Attrs {
+		for _, bAttr := range b.attrs {
 			if aAttr.Equal(bAttr) {
 				found = true
 				break

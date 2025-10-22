@@ -92,7 +92,7 @@ func (f *SchemaCache) GetKindSchema(ctx context.Context, id Id) (*EncodedSchema,
 		return nil, err
 	}
 
-	es, ok = ed.Kinds[string(kind.ID)]
+	es, ok = ed.Kinds[string(kind.Id())]
 	if !ok {
 		return nil, fmt.Errorf("missing schema for kind")
 	}

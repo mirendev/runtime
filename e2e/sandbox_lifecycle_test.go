@@ -35,7 +35,7 @@ func TestSandboxLifecycleEndToEnd(t *testing.T) {
 
 	t.Log("putting entities")
 	// Spin up combo
-	putCode := cli.Run([]string{"miren", "entity", "put", "--config", cfgPath, "-p", filePath})
+	putCode := cli.Run([]string{"miren", "entity", "put", "-v", "--config", cfgPath, "-p", filePath})
 	r.Equal(0, putCode)
 
 	// Ensure we can route to nginx container
@@ -75,7 +75,7 @@ func writeTempContents(t *testing.T, filename, contents string) string {
 var comboYaml = `kind: dev.miren.core/project
 version: v1alpha
 metadata:
-  name: default
+  name: sample
 spec:
   owner: mbot@miren.dev
 ---
@@ -84,7 +84,7 @@ version: v1alpha
 metadata:
   name: nginx
 spec:
-  project: project/default
+  project: project/sample
 ---
 kind: dev.miren.core/app_version
 version: v1alpha
@@ -111,7 +111,7 @@ version: v1alpha
 metadata:
   name: nginx
 spec:
-  project: project/default
+  project: project/sample
   active_version: app_version/abcdef
 ---
 kind: dev.miren.network/service

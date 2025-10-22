@@ -200,6 +200,9 @@ func TestActivatorAutoModeSlotTracking(t *testing.T) {
 	// Acquire one lease to simulate initial state
 	tracker.AcquireLease()
 
+	ent := entity.Blank()
+	ent.SetID("sb-1")
+
 	activator := &localActivator{
 		log: log.With("module", "activator"),
 		eac: server.EAC,
@@ -209,7 +212,7 @@ func TestActivatorAutoModeSlotTracking(t *testing.T) {
 				sandboxes: []*sandbox{
 					{
 						sandbox:     sb1,
-						ent:         &entity.Entity{ID: entity.Id("sb-1")},
+						ent:         ent,
 						lastRenewal: time.Now(),
 						url:         "http://10.0.0.1:3000",
 						tracker:     tracker,
@@ -304,6 +307,9 @@ func TestActivatorLeaseOperations(t *testing.T) {
 		},
 	}
 
+	ent := entity.Blank()
+	ent.SetID("sb-1")
+
 	strategy := concurrency.NewStrategy(&core_v1alpha.ServiceConcurrency{
 		Mode:                "auto",
 		RequestsPerInstance: 10,
@@ -316,7 +322,7 @@ func TestActivatorLeaseOperations(t *testing.T) {
 			ID:     entity.Id("sb-1"),
 			Status: compute_v1alpha.RUNNING,
 		},
-		ent:         &entity.Entity{ID: entity.Id("sb-1")},
+		ent:         ent,
 		lastRenewal: time.Now(),
 		url:         "http://localhost:3000",
 		tracker:     tracker,
@@ -565,9 +571,9 @@ func TestActivatorRecoveryIntegration(t *testing.T) {
 	app.ActiveVersion = appVer.ID
 	var updateEntity entityserver_v1alpha.Entity
 	updateEntity.SetId(app.ID.String())
-	updateEntity.SetAttrs(entity.Attrs(
+	updateEntity.SetAttrs(entity.New(
 		app.Encode,
-	))
+	).Attrs())
 	_, err = server.EAC.Put(ctx, &updateEntity)
 	require.NoError(t, err)
 

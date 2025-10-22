@@ -28,7 +28,6 @@ import (
 	"github.com/pkg/errors"
 	"golang.org/x/crypto/blake2b"
 	"golang.org/x/sys/unix"
-	"miren.dev/runtime/pkg/netutil"
 	"miren.dev/runtime/components/netresolve"
 	"miren.dev/runtime/network"
 	"miren.dev/runtime/observability"
@@ -36,6 +35,7 @@ import (
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/imagerefs"
 	"miren.dev/runtime/pkg/netdb"
+	"miren.dev/runtime/pkg/netutil"
 
 	compute "miren.dev/runtime/api/compute/compute_v1alpha"
 	"miren.dev/runtime/api/core/core_v1alpha"
@@ -188,6 +188,7 @@ func (c *SandboxController) reconcileSandboxesOnBoot(ctx context.Context) error 
 
 	var unhealthySandboxes []entity.Id
 	runningCount := 0
+	reattachedCount := 0
 
 	for _, e := range resp.Values() {
 		var sb compute.Sandbox
@@ -199,8 +200,18 @@ func (c *SandboxController) reconcileSandboxesOnBoot(ctx context.Context) error 
 		}
 		runningCount++
 
-		// Check pause container health
+		// Reattach logs to pause container
 		pauseID := c.pauseContainerId(sb.ID)
+		if err := c.reattachLogs(ctx, &sb, pauseID, ""); err != nil {
+			c.Log.Warn("failed to reattach logs to pause container",
+				"sandbox_id", sb.ID,
+				"pause_container_id", pauseID,
+				"error", err)
+			unhealthySandboxes = append(unhealthySandboxes, sb.ID)
+			continue
+		}
+
+		// Check pause container health
 		if !c.isContainerHealthy(ctx, pauseID) {
 			c.Log.Warn("found unhealthy sandbox during boot reconciliation",
 				"sandbox_id", sb.ID,
@@ -209,10 +220,22 @@ func (c *SandboxController) reconcileSandboxesOnBoot(ctx context.Context) error 
 			continue
 		}
 
-		// Check subcontainers health
+		// Reattach logs and check subcontainers health
 		allHealthy := true
 		for _, container := range sb.Container {
 			containerID := fmt.Sprintf("%s-%s", c.containerPrefix(sb.ID), container.Name)
+
+			// Reattach logs for this subcontainer
+			if err := c.reattachLogs(ctx, &sb, containerID, container.Name); err != nil {
+				c.Log.Warn("failed to reattach logs to subcontainer",
+					"sandbox_id", sb.ID,
+					"container_name", container.Name,
+					"container_id", containerID,
+					"error", err)
+				allHealthy = false
+				break
+			}
+
 			if !c.isContainerHealthy(ctx, containerID) {
 				c.Log.Warn("found unhealthy subcontainer during boot reconciliation",
 					"sandbox_id", sb.ID,
@@ -225,6 +248,8 @@ func (c *SandboxController) reconcileSandboxesOnBoot(ctx context.Context) error 
 
 		if !allHealthy {
 			unhealthySandboxes = append(unhealthySandboxes, sb.ID)
+		} else {
+			reattachedCount++
 		}
 	}
 
@@ -242,6 +267,7 @@ func (c *SandboxController) reconcileSandboxesOnBoot(ctx context.Context) error 
 
 	c.Log.Info("boot reconciliation complete",
 		"total_running_sandboxes", runningCount,
+		"reattached_sandboxes", reattachedCount,
 		"unhealthy_sandboxes", len(unhealthySandboxes))
 
 	return nil
@@ -352,10 +378,16 @@ func (c *SandboxController) Init(ctx context.Context) error {
 
 	c.cond = sync.NewCond(&c.mu)
 
-	_, err = network.SetupBridge(&network.BridgeConfig{
+	bc := &network.BridgeConfig{
 		Name:      c.Bridge,
 		Addresses: []netip.Prefix{c.Subnet.Router()},
-	})
+	}
+	_, err = network.SetupBridge(bc)
+	if err != nil {
+		return err
+	}
+
+	err = c.NetServ.SetupDNS(bc)
 	if err != nil {
 		return err
 	}
@@ -380,7 +412,6 @@ func (c *SandboxController) Init(ctx context.Context) error {
 
 	return nil
 }
-
 
 func (c *SandboxController) Close() error {
 	c.cancel()
@@ -594,6 +625,39 @@ func (c *SandboxController) isContainerHealthy(ctx context.Context, containerID 
 	}
 }
 
+// reattachLogs reattaches log consumers to a container's task after controller restart.
+// This is critical to prevent stdout/stderr buffers from filling up and blocking the process.
+// containerName should be empty string for the pause container, or the subcontainer name otherwise.
+func (c *SandboxController) reattachLogs(ctx context.Context, sb *compute.Sandbox, containerID string, containerName string) error {
+	ctx = namespaces.WithNamespace(ctx, c.Namespace)
+
+	container, err := c.CC.LoadContainer(ctx, containerID)
+	if err != nil {
+		return fmt.Errorf("failed to load container: %w", err)
+	}
+
+	// Create log consumer for this container
+	sl := c.logConsumer(sb, containerName)
+
+	// Reattach to the existing task with our log consumer
+	// This drains stdout/stderr and prevents the process from blocking on writes
+	task, err := container.Task(ctx, cio.NewAttach(cio.WithStreams(nil, sl, sl.Stderr())))
+	if err != nil {
+		return fmt.Errorf("failed to attach to task: %w", err)
+	}
+
+	if task == nil {
+		return fmt.Errorf("task is nil after attach")
+	}
+
+	c.Log.Info("reattached logs to container",
+		"sandbox_id", sb.ID,
+		"container_id", containerID,
+		"container_name", containerName)
+
+	return nil
+}
+
 func (c *SandboxController) saveEntity(ctx context.Context, sb *compute.Sandbox, meta *entity.Meta) error {
 	path := c.sandboxPath(sb, "entity.cbor")
 
@@ -684,7 +748,7 @@ func (c *SandboxController) updateSandbox(ctx context.Context, sb *compute.Sandb
 
 	c.Log.Debug("destroying existing sandbox to recreate it")
 
-	err = c.Delete(ctx, meta.ID)
+	err = c.Delete(ctx, meta.Id())
 	if err != nil {
 		return fmt.Errorf("failed to delete existing sandbox: %w", err)
 	}
@@ -779,7 +843,7 @@ func (c *SandboxController) createSandbox(ctx context.Context, co *compute.Sandb
 
 			// Update sandbox status to DEAD in entity store
 			co.Status = compute.DEAD
-			meta.Attrs = co.Encode()
+			meta.Update(co.Encode())
 			c.Log.Info("marked sandbox as DEAD due to boot failure", "id", co.ID)
 		}
 	}()
@@ -1314,11 +1378,6 @@ func (c *SandboxController) bootInitialTask(
 	}
 
 	err = network.ConfigureNetNS(c.Log, int(task.Pid()), ep)
-	if err != nil {
-		return nil, err
-	}
-
-	err = c.NetServ.SetupDNS(ep.Bridge)
 	if err != nil {
 		return nil, err
 	}
@@ -1958,11 +2017,11 @@ func (c *SandboxController) stopSandbox(ctx context.Context, sb *compute.Sandbox
 
 	rpcE.SetId(sb.ID.String())
 
-	rpcE.SetAttrs(entity.Attrs(
+	rpcE.SetAttrs(entity.New(
 		(&compute.Sandbox{
 			Status: compute.DEAD,
 		}).Encode,
-	))
+	).Attrs())
 
 	_, err = c.EAC.Put(context.Background(), &rpcE)
 	if err != nil {
@@ -1981,10 +2040,9 @@ func (c *SandboxController) stopSandbox(ctx context.Context, sb *compute.Sandbox
 	return nil
 }
 
-// Periodic implements the PeriodicController interface
-// It runs every 10 minutes to clean up dead sandboxes that are older than 1 hour
-func (c *SandboxController) Periodic(ctx context.Context) error {
-	c.Log.Info("running periodic cleanup of dead sandboxes")
+// Periodic cleans up dead sandboxes that are older than the specified time horizon
+func (c *SandboxController) Periodic(ctx context.Context, timeHorizon time.Duration) error {
+	c.Log.Info("running periodic cleanup of dead sandboxes", "time_horizon", timeHorizon)
 
 	// List all sandboxes
 	resp, err := c.EAC.List(ctx, entity.Ref(entity.EntityKind, compute.KindSandbox))
@@ -1993,17 +2051,16 @@ func (c *SandboxController) Periodic(ctx context.Context) error {
 	}
 
 	now := time.Now()
-	oneHourAgo := now.Add(-1 * time.Hour)
+	cutoffTime := now.Add(-timeHorizon)
 
 	var deleted int
 	for _, e := range resp.Values() {
 		var sb compute.Sandbox
 		sb.Decode(e.Entity())
 
-		// Check if sandbox is DEAD and UpdatedAt is more than 1 hour ago
+		// Check if sandbox is DEAD and UpdatedAt is older than time horizon
 		if sb.Status == compute.DEAD {
-			// Convert UpdatedAt from milliseconds to time.Time
-			updatedAt := time.Unix(0, e.Entity().UpdatedAt*int64(time.Millisecond))
+			updatedAt := e.Entity().GetUpdatedAt()
 
 			c.Log.Debug("checking sandbox for cleanup",
 				"id", sb.ID,
@@ -2011,7 +2068,7 @@ func (c *SandboxController) Periodic(ctx context.Context) error {
 				"updated_at", updatedAt.Format(time.RFC3339),
 				"age", now.Sub(updatedAt).String())
 
-			if updatedAt.Before(oneHourAgo) {
+			if updatedAt.Before(cutoffTime) {
 				c.Log.Info("deleting old dead sandbox",
 					"id", sb.ID,
 					"updated_at", updatedAt.Format(time.RFC3339),

@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
 	"github.com/mr-tron/base58"
 )
@@ -51,14 +52,7 @@ func NewFileStore(basePath string) (*FileStore, error) {
 }
 
 // CreateEntity creates a new entity with the given type and attributes
-func (s *FileStore) CreateEntity(ctx context.Context, attributes []Attr, opts ...EntityOption) (*Entity, error) {
-	entity := &Entity{
-		Attrs:     attributes,
-		Revision:  1,
-		CreatedAt: now(),
-		UpdatedAt: now(),
-	}
-
+func (s *FileStore) CreateEntity(ctx context.Context, entity *Entity, opts ...EntityOption) (*Entity, error) {
 	// Validate attributes against schemas
 	err := s.validator.ValidateEntity(ctx, entity)
 	if err != nil {
@@ -69,7 +63,7 @@ func (s *FileStore) CreateEntity(ctx context.Context, attributes []Attr, opts ..
 		return nil, err
 	}
 
-	for _, attr := range entity.Attrs {
+	for _, attr := range entity.attrs {
 		schema, err := s.GetAttributeSchema(ctx, attr.ID)
 		if err != nil {
 			return nil, err
@@ -150,24 +144,20 @@ func (s *FileStore) GetEntities(_ context.Context, ids []Id) ([]*Entity, error) 
 }
 
 // UpdateEntity updates an existing entity
-func (s *FileStore) UpdateEntity(ctx context.Context, id Id, attributes []Attr, opts ...EntityOption) (*Entity, error) {
+func (s *FileStore) UpdateEntity(ctx context.Context, id Id, updates *Entity, opts ...EntityOption) (*Entity, error) {
 	entity, err := s.GetEntity(ctx, id)
 	if err != nil {
 		return nil, err
 	}
 
+	entity.SetRevision(entity.GetRevision() + 1)
+	entity.SetUpdatedAt(time.Now())
+
 	// Validate attributes against schemas
-	err = s.validator.ValidateAttributes(ctx, attributes)
+	err = s.validator.ValidateAttributes(ctx, entity.attrs)
 	if err != nil {
 		return nil, err
 	}
-
-	entity.Attrs = append(entity.Attrs, attributes...)
-
-	// TODO: Revalidate attributes tooking for duplicates
-
-	entity.Revision++
-	entity.UpdatedAt = now()
 
 	if err := s.saveEntity(entity); err != nil {
 		return nil, err
@@ -229,7 +219,7 @@ func (s *FileStore) saveEntity(entity *Entity) error {
 		return fmt.Errorf("failed to marshal entity: %w", err)
 	}
 
-	key := base58.Encode([]byte(entity.ID))
+	key := base58.Encode([]byte(entity.Id()))
 
 	path := filepath.Join(s.basePath, "entities", key+".cbor")
 
@@ -241,14 +231,14 @@ func (s *FileStore) saveEntity(entity *Entity) error {
 }
 
 func (s *FileStore) addToCollection(entity *Entity, collection string) error {
-	key := base58.Encode([]byte(entity.ID))
+	key := base58.Encode([]byte(entity.Id()))
 	colKey := base58.Encode([]byte(collection))
 
 	path := filepath.Join(s.basePath, "collections", colKey, key)
 
 	os.MkdirAll(filepath.Dir(path), 0755)
 
-	if err := os.WriteFile(path, []byte(entity.ID), 0644); err != nil {
+	if err := os.WriteFile(path, []byte(entity.Id()), 0644); err != nil {
 		return fmt.Errorf("failed to write collection file: %w", err)
 	}
 

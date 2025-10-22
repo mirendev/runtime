@@ -21,10 +21,8 @@ func TestValidateComponentAttribute(t *testing.T) {
 			name: "valid component",
 			attr: Attr{
 				ID: Id("test/component"),
-				Value: ComponentValue(&EntityComponent{
-					Attrs: []Attr{
-						Any(Doc, "Test component"),
-					},
+				Value: ComponentValue([]Attr{
+					Any(Doc, "Test component"),
 				}),
 			},
 			wantErr: false,
@@ -33,10 +31,8 @@ func TestValidateComponentAttribute(t *testing.T) {
 			name: "component with invalid attribute",
 			attr: Attr{
 				ID: Id("test/component"),
-				Value: ComponentValue(&EntityComponent{
-					Attrs: []Attr{
-						Any(Doc, 123), // Should be string
-					},
+				Value: ComponentValue([]Attr{
+					Any(Doc, 123), // Should be string
 				}),
 			},
 			wantErr: true,
@@ -46,11 +42,9 @@ func TestValidateComponentAttribute(t *testing.T) {
 			name: "component with forbidden Ident",
 			attr: Attr{
 				ID: Id("test/component"),
-				Value: ComponentValue(&EntityComponent{
-					Attrs: []Attr{
-						Any(Ident, "test/ident"), // Components cannot have Ident
-						Any(Doc, "Test component"),
-					},
+				Value: ComponentValue([]Attr{
+					Any(Ident, "test/ident"), // Components cannot have Ident
+					Any(Doc, "Test component"),
 				}),
 			},
 			wantErr: true,
@@ -68,7 +62,7 @@ func TestValidateComponentAttribute(t *testing.T) {
 	}
 
 	// First create a schema for the component attribute
-	_, err := store.CreateEntity(t.Context(), Attrs(
+	_, err := store.CreateEntity(t.Context(), New(
 		Ident, "test/component",
 		Type, TypeComponent,
 	))
@@ -77,7 +71,7 @@ func TestValidateComponentAttribute(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// First create a schema for the component attribute
-			_, err := store.CreateEntity(t.Context(), Attrs(
+			_, err := store.CreateEntity(t.Context(), New(
 				tt.attr,
 			))
 			if tt.wantErr {
@@ -119,7 +113,7 @@ func TestValidateAttribute(t *testing.T) {
 		},
 		{
 			name: "valid keyword",
-			attr: String(
+			attr: Keyword(
 				Ident,
 				"test/ident",
 			),
@@ -176,24 +170,24 @@ func TestValidateEntity(t *testing.T) {
 	}{
 		{
 			name: "valid entity",
-			entity: &Entity{
-				ID: "test",
-				Attrs: []Attr{
-					Any(Ident, "test/entity"),
+			entity: func() *Entity {
+				e := New(
+					Keyword(Ident, "test/entity"),
 					Any(Doc, "Test entity"),
-				},
-			},
+				)
+				return e
+			}(),
 			wantErr: false,
 		},
 		{
 			name: "invalid attribute",
-			entity: &Entity{
-				ID: "test",
-				Attrs: []Attr{
+			entity: func() *Entity {
+				e := New(
 					Any(Ident, 123), // Should be string
 					Any(Doc, "Test entity"),
-				},
-			},
+				)
+				return e
+			}(),
 			wantErr: true,
 		},
 	}
@@ -308,7 +302,7 @@ func TestValidate_EntityAttrs(t *testing.T) {
 
 	r := require.New(t)
 
-	_, err := store.CreateEntity(t.Context(), Attrs(
+	_, err := store.CreateEntity(t.Context(), New(
 		Ident, "test/name",
 		Doc, "Entity name",
 		Cardinality, CardinalityOne,
@@ -316,7 +310,7 @@ func TestValidate_EntityAttrs(t *testing.T) {
 	))
 	r.NoError(err)
 
-	_, err = store.CreateEntity(t.Context(), Attrs(
+	_, err = store.CreateEntity(t.Context(), New(
 		Ident, "test/has_name",
 		Doc, "Test entity",
 		Cardinality, CardinalityOne,
@@ -326,21 +320,17 @@ func TestValidate_EntityAttrs(t *testing.T) {
 
 	validator := NewValidator(store)
 
-	bad := &Entity{
-		Attrs: Attrs(
-			Ensure, Id("test/has_name"),
-		),
-	}
+	bad := New(
+		Ref(Ensure, "test/has_name"),
+	)
 
 	err = validator.ValidateEntity(t.Context(), bad)
 	r.Error(err)
 
-	good := &Entity{
-		Attrs: Attrs(
-			Ensure, Id("test/has_name"),
-			Id("test/name"), "test",
-		),
-	}
+	good := New(
+		Ref(Ensure, "test/has_name"),
+		String("test/name", "test"),
+	)
 
 	err = validator.ValidateEntity(t.Context(), good)
 	r.NoError(err)

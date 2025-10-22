@@ -74,7 +74,7 @@ func (v *Validator) ValidateEntity(ctx context.Context, entity *Entity) error {
 
 	var valid []Attr
 
-	for _, attr := range entity.Attrs {
+	for _, attr := range entity.attrs {
 		if attr.ID == Ensure {
 			ensure, ok := attr.Value.Any().(Id)
 			if !ok {
@@ -89,7 +89,7 @@ func (v *Validator) ValidateEntity(ctx context.Context, entity *Entity) error {
 					return fmt.Errorf("attribute %s must be a valid entity ref", Ensure)
 				}
 
-				for _, elem := range ee.Attrs {
+				for _, elem := range ee.attrs {
 					if elem.ID == EntityAttrs {
 						attrs, ok := elem.Value.Any().([]any)
 						if !ok {
@@ -142,7 +142,7 @@ func (v *Validator) ValidateEntity(ctx context.Context, entity *Entity) error {
 		}
 	}
 
-	entity.Attrs = valid
+	entity.attrs = valid
 
 	return nil
 }
@@ -179,6 +179,10 @@ func (v *Validator) ValidateAttributes(ctx context.Context, attrs []Attr) error 
 // ValidateAttribute validates a single attribute against its schema
 func (v *Validator) ValidateAttribute(ctx context.Context, attr *Attr) error {
 	name := attr.ID
+
+	if name == DBId {
+		return nil
+	}
 
 	schema, err := v.store.GetAttributeSchema(ctx, name)
 	if err != nil {
@@ -291,7 +295,7 @@ func (v *Validator) ValidateAttribute(ctx context.Context, attr *Attr) error {
 		}
 
 		comp := attr.Value.Component()
-		err := v.ValidateAttributes(ctx, comp.Attrs)
+		err := v.ValidateAttributes(ctx, comp.attrs)
 		if err != nil {
 			return fmt.Errorf("attribute %s must be a valid component: %w", name, err)
 		}
@@ -303,7 +307,7 @@ func (v *Validator) ValidateAttribute(ctx context.Context, attr *Attr) error {
 		}
 
 	default:
-		return fmt.Errorf("unknown attribute type %s for attribute %s", schema.Type, name)
+		return fmt.Errorf("unknown attribute type %s for attribute %s (%T)", schema.Type, name, v.store)
 	}
 
 	for _, prog := range schema.CheckProgs {
