@@ -94,9 +94,14 @@ spec:
   app: app/nginx
   version: abcdef
   image_url: docker.io/library/nginx:latest
-  concurrency: 10
   config:
     port: 80
+    services:
+      - name: web
+        service_concurrency:
+          mode: auto
+          requests_per_instance: 10
+          scale_down_delay: "15m"
 ---
 kind: dev.miren.ingress/http_route
 version: v1alpha
