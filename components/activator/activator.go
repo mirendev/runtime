@@ -72,7 +72,7 @@ type verKey struct {
 }
 
 type localActivator struct {
-	mu       sync.Mutex
+	mu       sync.RWMutex
 	versions map[verKey]*verSandboxes
 	pools    map[verKey]*compute_v1alpha.SandboxPool // Track SandboxPool entities
 
@@ -115,37 +115,50 @@ func NewLocalActivator(ctx context.Context, log *slog.Logger, eac *entityserver_
 func (a *localActivator) AcquireLease(ctx context.Context, ver *core_v1alpha.AppVersion, service string) (*Lease, error) {
 	key := verKey{ver.ID.String(), service}
 
-	// Try to find an available sandbox with capacity
-	a.mu.Lock()
+	// Try to find an available sandbox with capacity (read lock for scanning)
+	a.mu.RLock()
 	vs, ok := a.versions[key]
+	var candidateSandbox *sandbox
 	if ok && len(vs.sandboxes) > 0 {
 		a.log.Debug("checking existing sandboxes", "app", ver.App, "version", ver.Version, "sandboxes", len(vs.sandboxes))
 
-		// Unified lease acquisition for both fixed and auto modes using ConcurrencyTracker
+		// Scan for a sandbox with capacity
 		start := rand.Int() % len(vs.sandboxes)
 		for i := 0; i < len(vs.sandboxes); i++ {
 			s := vs.sandboxes[(start+i)%len(vs.sandboxes)]
 			if s.tracker.HasCapacity() {
-				leaseSize := s.tracker.AcquireLease()
-				s.lastRenewal = time.Now()
-
-				lease := &Lease{
-					ver:     ver,
-					sandbox: s.sandbox,
-					ent:     s.ent,
-					pool:    service, // Pool identifier is now the service name
-					service: service,
-					Size:    leaseSize,
-					URL:     s.url,
-				}
-				used := s.tracker.Used()
-				a.mu.Unlock()
-				a.log.Debug("reusing sandbox", "app", ver.App, "version", ver.Version, "sandbox", s.sandbox.ID, "used", used)
-				return lease, nil
+				candidateSandbox = s
+				break
 			}
 		}
 	}
-	a.mu.Unlock()
+	a.mu.RUnlock()
+
+	// If we found a candidate, acquire write lock and double-check capacity
+	if candidateSandbox != nil {
+		a.mu.Lock()
+		// Double-check capacity still available (may have changed between locks)
+		if candidateSandbox.tracker.HasCapacity() {
+			leaseSize := candidateSandbox.tracker.AcquireLease()
+			candidateSandbox.lastRenewal = time.Now()
+
+			lease := &Lease{
+				ver:     ver,
+				sandbox: candidateSandbox.sandbox,
+				ent:     candidateSandbox.ent,
+				pool:    service, // Pool identifier is now the service name
+				service: service,
+				Size:    leaseSize,
+				URL:     candidateSandbox.url,
+			}
+			used := candidateSandbox.tracker.Used()
+			a.mu.Unlock()
+			a.log.Debug("reusing sandbox", "app", ver.App, "version", ver.Version, "sandbox", candidateSandbox.sandbox.ID, "used", used)
+			return lease, nil
+		}
+		a.mu.Unlock()
+		// Capacity was taken between RLock and Lock, fall through to pool request
+	}
 
 	// No available sandboxes with capacity - need to scale up via pool
 	a.log.Info("no available sandboxes, requesting capacity from pool",
@@ -190,38 +203,50 @@ func (a *localActivator) ensurePoolAndWaitForSandbox(ctx context.Context, ver *c
 		case <-pollCtx.Done():
 			return nil, fmt.Errorf("%w: no sandbox became available within 2 minutes", ErrPoolTimeout)
 		case <-ticker.C:
-			// Check if any sandbox has capacity now
-			a.mu.Lock()
+			// Check if any sandbox has capacity now (read lock for scan)
+			a.mu.RLock()
 			vs, ok := a.versions[key]
+			var candidateSandbox *sandbox
 			if ok && len(vs.sandboxes) > 0 {
 				// Try to find a sandbox with capacity
 				start := rand.Int() % len(vs.sandboxes)
 				for i := 0; i < len(vs.sandboxes); i++ {
 					s := vs.sandboxes[(start+i)%len(vs.sandboxes)]
 					if s.tracker.HasCapacity() {
-						leaseSize := s.tracker.AcquireLease()
-						s.lastRenewal = time.Now()
-						a.mu.Unlock()
-
-						a.log.Info("acquired lease from pool sandbox",
-							"app", ver.App,
-							"version", ver.Version,
-							"sandbox", s.sandbox.ID,
-							"service", service)
-
-						return &Lease{
-							ver:     ver,
-							sandbox: s.sandbox,
-							ent:     s.ent,
-							pool:    service,
-							service: service,
-							Size:    leaseSize,
-							URL:     s.url,
-						}, nil
+						candidateSandbox = s
+						break
 					}
 				}
 			}
-			a.mu.Unlock()
+			a.mu.RUnlock()
+
+			// If we found a candidate, acquire write lock and double-check
+			if candidateSandbox != nil {
+				a.mu.Lock()
+				if candidateSandbox.tracker.HasCapacity() {
+					leaseSize := candidateSandbox.tracker.AcquireLease()
+					candidateSandbox.lastRenewal = time.Now()
+					a.mu.Unlock()
+
+					a.log.Info("acquired lease from pool sandbox",
+						"app", ver.App,
+						"version", ver.Version,
+						"sandbox", candidateSandbox.sandbox.ID,
+						"service", service)
+
+					return &Lease{
+						ver:     ver,
+						sandbox: candidateSandbox.sandbox,
+						ent:     candidateSandbox.ent,
+						pool:    service,
+						service: service,
+						Size:    leaseSize,
+						URL:     candidateSandbox.url,
+					}, nil
+				}
+				a.mu.Unlock()
+				// Capacity was taken, continue polling
+			}
 
 			// No capacity yet, continue polling
 		}
@@ -233,9 +258,10 @@ func (a *localActivator) ensurePoolAndWaitForSandbox(ctx context.Context, ver *c
 func (a *localActivator) ensureSandboxPool(ctx context.Context, ver *core_v1alpha.AppVersion, service string) (*compute_v1alpha.SandboxPool, error) {
 	key := verKey{ver.ID.String(), service}
 
-	a.mu.Lock()
+	// Check if pool exists (read lock)
+	a.mu.RLock()
 	existingPool, exists := a.pools[key]
-	a.mu.Unlock()
+	a.mu.RUnlock()
 
 	if exists {
 		// Update existing pool - increment DesiredInstances atomically under lock
@@ -258,7 +284,7 @@ func (a *localActivator) ensureSandboxPool(ctx context.Context, ver *core_v1alph
 		return existingPool, nil
 	}
 
-	// Create new pool - acquire lock first to prevent duplicate creation
+	// Create new pool - acquire write lock first to prevent duplicate creation
 	a.mu.Lock()
 	// Double-check that another goroutine didn't create the pool while we were waiting for the lock
 	if existingPool, exists = a.pools[key]; exists {
@@ -364,30 +390,32 @@ func (a *localActivator) InBackground(ctx context.Context) {
 			var sb compute_v1alpha.Sandbox
 			sb.Decode(en)
 
-			// First, check if we're already tracking this sandbox (update status if so)
-			a.mu.Lock()
-			alreadyTracked := false
+			// First, check if we're already tracking this sandbox (read lock for scan)
+			a.mu.RLock()
+			var trackedSandbox *sandbox
 			for _, vs := range a.versions {
 				for _, s := range vs.sandboxes {
 					if s.sandbox.ID == sb.ID {
-						// Update status
-						oldStatus := s.sandbox.Status
-						s.sandbox.Status = sb.Status
-
-						if oldStatus != sb.Status {
-							a.log.Info("sandbox status changed", "sandbox", sb.ID, "old_status", oldStatus, "new_status", sb.Status)
-						}
-						alreadyTracked = true
+						trackedSandbox = s
 						break
 					}
 				}
-				if alreadyTracked {
+				if trackedSandbox != nil {
 					break
 				}
 			}
-			a.mu.Unlock()
+			a.mu.RUnlock()
 
-			if alreadyTracked {
+			// If already tracked, acquire write lock to update status
+			if trackedSandbox != nil {
+				a.mu.Lock()
+				oldStatus := trackedSandbox.sandbox.Status
+				trackedSandbox.sandbox.Status = sb.Status
+				a.mu.Unlock()
+
+				if oldStatus != sb.Status {
+					a.log.Info("sandbox status changed", "sandbox", sb.ID, "old_status", oldStatus, "new_status", sb.Status)
+				}
 				return nil
 			}
 
@@ -782,7 +810,7 @@ func (a *localActivator) syncLastActivity(ctx context.Context) {
 func (a *localActivator) syncLastActivityOnce(ctx context.Context) {
 	now := time.Now()
 
-	// Collect sandboxes that need updates (do this under lock)
+	// Collect sandboxes that need updates (read lock for scan)
 	type update struct {
 		sandboxID    entity.Id
 		lastRenewal  time.Time
@@ -790,7 +818,7 @@ func (a *localActivator) syncLastActivityOnce(ctx context.Context) {
 	}
 	var updates []update
 
-	a.mu.Lock()
+	a.mu.RLock()
 	for _, vs := range a.versions {
 		for _, s := range vs.sandboxes {
 			// Only update if lastRenewal is newer and it's been > 30s since last update
@@ -804,7 +832,7 @@ func (a *localActivator) syncLastActivityOnce(ctx context.Context) {
 			}
 		}
 	}
-	a.mu.Unlock()
+	a.mu.RUnlock()
 
 	// Perform updates without holding lock
 	if len(updates) > 0 {
