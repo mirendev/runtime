@@ -107,6 +107,7 @@ func NewLocalActivator(ctx context.Context, log *slog.Logger, eac *entityserver_
 	}
 
 	go la.InBackground(ctx)
+	go la.syncLastActivity(ctx)
 
 	return la
 }
@@ -128,13 +129,6 @@ func (a *localActivator) AcquireLease(ctx context.Context, ver *core_v1alpha.App
 				leaseSize := s.tracker.AcquireLease()
 				s.lastRenewal = time.Now()
 
-				// Read lastActivity while we hold the lock
-				lastActivity := s.sandbox.LastActivity
-				a.mu.Unlock()
-
-				// Update sandbox last_activity with throttling (after releasing lock)
-				a.updateSandboxLastActivity(ctx, s.sandbox, s.ent, lastActivity)
-
 				lease := &Lease{
 					ver:     ver,
 					sandbox: s.sandbox,
@@ -145,6 +139,7 @@ func (a *localActivator) AcquireLease(ctx context.Context, ver *core_v1alpha.App
 					URL:     s.url,
 				}
 				used := s.tracker.Used()
+				a.mu.Unlock()
 				a.log.Debug("reusing sandbox", "app", ver.App, "version", ver.Version, "sandbox", s.sandbox.ID, "used", used)
 				return lease, nil
 			}
@@ -206,13 +201,7 @@ func (a *localActivator) ensurePoolAndWaitForSandbox(ctx context.Context, ver *c
 					if s.tracker.HasCapacity() {
 						leaseSize := s.tracker.AcquireLease()
 						s.lastRenewal = time.Now()
-
-						// Read lastActivity while we hold the lock
-						lastActivity := s.sandbox.LastActivity
 						a.mu.Unlock()
-
-						// Update sandbox last_activity with throttling (after releasing lock)
-						a.updateSandboxLastActivity(ctx, s.sandbox, s.ent, lastActivity)
 
 						a.log.Info("acquired lease from pool sandbox",
 							"app", ver.App,
@@ -766,32 +755,91 @@ func (a *localActivator) buildSandboxSpec(ctx context.Context, ver *core_v1alpha
 	return spec, nil
 }
 
-// updateSandboxLastActivity updates the last_activity timestamp on a sandbox entity
-// with throttling to avoid excessive writes to etcd (~30s granularity)
-// lastActivity should be passed by the caller who already holds a.mu
-func (a *localActivator) updateSandboxLastActivity(ctx context.Context, sb *compute_v1alpha.Sandbox, sbEnt *entity.Entity, lastActivity time.Time) {
+// syncLastActivity periodically syncs in-memory lastRenewal timestamps to
+// sandbox.LastActivity in the entity store. This enables the pool manager to
+// make accurate scale-down decisions based on actual lease activity.
+//
+// Runs every 30 seconds, updating LastActivity for any sandbox where:
+// - lastRenewal is newer than the persisted LastActivity
+// - It's been > 30s since the last update (throttling)
+func (a *localActivator) syncLastActivity(ctx context.Context) {
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+
+	a.log.Info("last activity sync started")
+
+	for {
+		select {
+		case <-ctx.Done():
+			a.log.Info("last activity sync stopped")
+			return
+		case <-ticker.C:
+			a.syncLastActivityOnce(ctx)
+		}
+	}
+}
+
+func (a *localActivator) syncLastActivityOnce(ctx context.Context) {
 	now := time.Now()
 
-	// Only update if > 30 seconds since last update
-	if !lastActivity.IsZero() && now.Sub(lastActivity) < 30*time.Second {
-		return
+	// Collect sandboxes that need updates (do this under lock)
+	type update struct {
+		sandboxID    entity.Id
+		lastRenewal  time.Time
+		lastActivity time.Time
+	}
+	var updates []update
+
+	a.mu.Lock()
+	for _, vs := range a.versions {
+		for _, s := range vs.sandboxes {
+			// Only update if lastRenewal is newer and it's been > 30s since last update
+			if s.lastRenewal.After(s.sandbox.LastActivity) &&
+				(s.sandbox.LastActivity.IsZero() || now.Sub(s.sandbox.LastActivity) > 30*time.Second) {
+				updates = append(updates, update{
+					sandboxID:    s.sandbox.ID,
+					lastRenewal:  s.lastRenewal,
+					lastActivity: s.sandbox.LastActivity,
+				})
+			}
+		}
+	}
+	a.mu.Unlock()
+
+	// Perform updates without holding lock
+	if len(updates) > 0 {
+		a.log.Debug("syncing last activity", "count", len(updates))
 	}
 
-	// Update in background to avoid blocking lease acquisition
-	go func() {
-		updateCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		defer cancel()
+	for _, u := range updates {
+		updateCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 
 		var rpcE entityserver_v1alpha.Entity
-		rpcE.SetId(sbEnt.Id().String())
+		rpcE.SetId(u.sandboxID.String())
 		rpcE.SetAttrs(entity.New(
 			(&compute_v1alpha.Sandbox{
-				LastActivity: now,
+				LastActivity: u.lastRenewal,
 			}).Encode,
 		).Attrs())
 
 		if _, err := a.eac.Put(updateCtx, &rpcE); err != nil {
-			a.log.Error("failed to update sandbox last_activity", "sandbox", sbEnt.Id(), "error", err)
+			a.log.Error("failed to sync sandbox last_activity",
+				"sandbox", u.sandboxID,
+				"error", err)
+		} else {
+			// Update our in-memory copy to reflect the sync
+			a.mu.Lock()
+			for _, vs := range a.versions {
+				for _, s := range vs.sandboxes {
+					if s.sandbox.ID == u.sandboxID {
+						s.sandbox.LastActivity = u.lastRenewal
+						break
+					}
+				}
+			}
+			a.mu.Unlock()
 		}
-	}()
+
+		cancel()
+	}
 }
