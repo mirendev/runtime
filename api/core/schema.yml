@@ -103,7 +103,7 @@ kinds:
         commands:
           type: component
           doc: The command to run for a specific service type
-         many: true
+          many: true
           attrs:
             service:
               type: string
