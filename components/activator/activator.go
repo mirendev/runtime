@@ -1,5 +1,34 @@
 package activator
 
+// CONCURRENCY & LOCK DESIGN
+//
+// The activator coordinates between multiple concurrent goroutines:
+// - Request threads calling AcquireLease/ReleaseLease/RenewLease (high QPS hot path)
+// - Background watchSandboxes goroutine discovering new sandboxes from etcd watches
+// - Background syncLastActivity goroutine updating entity store every 30s
+//
+// All share access to the same state maps (versions, pools, newSandboxChans), protected
+// by a single RWMutex. Read locks allow concurrent capacity checks on the hot path, while
+// write locks serialize state updates (adding sandboxes, updating capacity).
+//
+// Key Locking Patterns:
+//
+// 1. Double-Check Pattern (AcquireLease, checkForSandbox)
+//    Prevents TOCTOU races when upgrading from read to write lock:
+//      RLock → check capacity → RUnlock
+//      Lock → re-check capacity → acquire if still available → Unlock
+//
+// 2. Sentinel Pattern (ensureSandboxPool)
+//    Prevents duplicate pool creation by concurrent requests:
+//      - First request inserts sentinel with inProgress=true
+//      - Concurrent requests wait on sentinel's done channel
+//      - Creator replaces sentinel with real pool or error
+//
+// 3. Channel Notification (ensurePoolAndWaitForSandbox, watchSandboxes)
+//    Immediate notification when new sandboxes become available:
+//      - Waiter: Lock → register notification channel → Unlock → wait on channel
+//      - Watcher: Lock → add sandbox → notify all registered channels → Unlock
+
 import (
 	"context"
 	"fmt"
@@ -316,15 +345,19 @@ func (a *localActivator) ensureSandboxPool(ctx context.Context, ver *core_v1alph
 			// If creation is in progress, wait for it to complete
 			if state.inProgress {
 				a.log.Debug("pool creation in progress, waiting", "service", service)
-				<-state.done
+				select {
+				case <-state.done:
+					// Creation completed, check result
+				case <-ctx.Done():
+					return nil, ctx.Err()
+				}
 				// Check if creation succeeded or failed
 				if state.err != nil {
 					return nil, fmt.Errorf("pool creation failed: %w", state.err)
 				}
-				// Creation succeeded, fall through to increment logic below
-				a.mu.RLock()
-				state = a.pools[key]
-				a.mu.RUnlock()
+				// Creation succeeded, loop back to re-check the pool state
+				// (it might already have capacity, or another racer might have incremented)
+				continue
 			}
 
 			// Update existing pool - increment DesiredInstances atomically under lock
@@ -665,8 +698,8 @@ func (a *localActivator) recoverSandboxes(ctx context.Context) error {
 		md.Decode(ent.Entity())
 		service, _ := md.Labels.Get("service")
 		if service == "" {
-			a.log.Warn("sandbox missing service label", "sandbox", sb.ID)
-			continue
+			// Skip sandboxes without service label (e.g., buildkit, other non-app sandboxes)
+			return nil
 		}
 
 		// Determine port from version config or default to 3000
