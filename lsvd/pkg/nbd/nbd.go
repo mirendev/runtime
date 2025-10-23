@@ -18,7 +18,8 @@ var (
 )
 
 const (
-	defaultMaximumRequestSize = 32 * 1024 * 1024 // Support for a 32M maximum packet size is expected: https://sourceforge.net/p/nbd/mailman/message/35081223/
+	defaultMaximumRequestSize = 32 * 1024 * 1024  // Support for a 32M maximum packet size is expected: https://sourceforge.net/p/nbd/mailman/message/35081223/
+	MaxInsaneLength           = 512 * 1024 * 1024 // Reject requests larger than 512M as insane
 )
 
 type Export struct {
@@ -34,9 +35,7 @@ type Options struct {
 
 	MinimumBlockSize   uint32
 	PreferredBlockSize uint32
-	MaximumBlockSize   uint32
-
-	MaximumRequestSize int
+	MaximumRequestSize uint32
 	SupportsMultiConn  bool
 
 	RawFile *os.File
@@ -60,10 +59,6 @@ func Handle(log *slog.Logger, conn net.Conn, exports []*Export, options *Options
 
 	if options.PreferredBlockSize == 0 {
 		options.PreferredBlockSize = 4096
-	}
-
-	if options.MaximumBlockSize == 0 {
-		options.MaximumBlockSize = defaultMaximumRequestSize
 	}
 
 	if options.MaximumRequestSize == 0 {
@@ -269,7 +264,7 @@ nego:
 					Type:               NEGOTIATION_TYPE_INFO_BLOCKSIZE,
 					MinimumBlockSize:   options.MinimumBlockSize,
 					PreferredBlockSize: options.PreferredBlockSize,
-					MaximumBlockSize:   options.MaximumBlockSize,
+					MaximumRequestSize: options.MaximumRequestSize,
 				}); err != nil {
 					return err
 				}
@@ -431,20 +426,23 @@ func HandleTransport(log *slog.Logger, conn net.Conn, backend Backend, options *
 			return ErrInvalidMagic
 		}
 
-		if typ != TRANSMISSION_TYPE_REQUEST_TRIM {
-			if length > defaultMaximumRequestSize {
-				return ErrInvalidBlocksize
-			}
-
-			if length > uint32(len(b)) {
-				b = make([]byte, length)
-			}
-		}
-
 		switch typ {
 		case TRANSMISSION_TYPE_REQUEST_READ:
 			if err := sendReply(0, handle); err != nil {
 				return err
+			}
+
+			// NOTE there used to be a check that the length was below a maximum, but
+			// turns out there really isn't a way for us to control that, different
+			// clients will use different values and we can't advise them.
+			// As such, we've removed the check and follow the load of the client without
+			// imposing our own limits, other than sanity checks.
+			if length > MaxInsaneLength {
+				return errors.Wrapf(ErrInvalidBlocksize, "requested read length %d exceeds sane maximum %d", length, MaxInsaneLength)
+			}
+
+			if length > uint32(len(b)) {
+				b = make([]byte, length)
 			}
 
 			if sc != nil {
@@ -478,6 +476,19 @@ func HandleTransport(log *slog.Logger, conn net.Conn, backend Backend, options *
 				break
 			}
 
+			// NOTE there used to be a check that the length was below a maximum, but
+			// turns out there really isn't a way for us to control that, different
+			// clients will use different values and we can't advise them.
+			// As such, we've removed the check and follow the load of the client without
+			// imposing our own limits, other than sanity checks.
+			if length > MaxInsaneLength {
+				return errors.Wrapf(ErrInvalidBlocksize, "requested read length %d exceeds sane maximum %d", length, MaxInsaneLength)
+			}
+
+			if length > uint32(len(b)) {
+				b = make([]byte, length)
+			}
+
 			n, err := io.ReadAtLeast(conn, b[:length], int(length))
 			if err != nil {
 				return err
@@ -491,42 +502,20 @@ func HandleTransport(log *slog.Logger, conn net.Conn, backend Backend, options *
 				return err
 			}
 		case TRANSMISSION_TYPE_REQUEST_WRITEZ:
-			if options.ReadOnly {
-				_, err := io.CopyN(io.Discard, conn, int64(length)) // Discard the write command's data
-				if err != nil {
+			if !options.ReadOnly {
+				if err := backend.ZeroAt(int64(offset), int64(length)); err != nil {
 					return err
 				}
-
-				if err := sendReply(TRANSMISSION_ERROR_EPERM, handle); err != nil {
-					return err
-				}
-
-				break
-			}
-
-			if err := backend.ZeroAt(int64(offset), int64(length)); err != nil {
-				return err
 			}
 
 			if err := sendReply(0, handle); err != nil {
 				return err
 			}
 		case TRANSMISSION_TYPE_REQUEST_TRIM:
-			if options.ReadOnly {
-				_, err := io.CopyN(io.Discard, conn, int64(length)) // Discard the write command's data
-				if err != nil {
+			if !options.ReadOnly {
+				if err := backend.Trim(int64(offset), int64(length)); err != nil {
 					return err
 				}
-
-				if err := sendReply(TRANSMISSION_ERROR_EPERM, handle); err != nil {
-					return err
-				}
-
-				break
-			}
-
-			if err := backend.Trim(int64(offset), int64(length)); err != nil {
-				return err
 			}
 
 			if err := sendReply(0, handle); err != nil {

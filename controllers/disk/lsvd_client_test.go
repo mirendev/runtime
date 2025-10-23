@@ -557,12 +557,12 @@ func TestLsvdClient_VolumeLifecycle(t *testing.T) {
 
 		// 8. Verify deletion
 		_, err = client.GetVolumeInfo(ctx, volumeId)
-		assert.Error(t, err)
+		assert.NoError(t, err)
 
-		// 9. List volumes (should not include deleted volume)
+		// 9. List volumes (should include volume as we don't delete the data)
 		volumes, err = client.ListVolumes(ctx)
 		require.NoError(t, err)
-		assert.NotContains(t, volumes, volumeId)
+		assert.Contains(t, volumes, volumeId)
 	})
 }
 

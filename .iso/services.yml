@@ -1,0 +1,31 @@
+services:
+  clickhouse:
+    image: oci.miren.cloud/clickhouse:v2
+    port: 9000
+    environment:
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+      CLICKHOUSE_PASSWORD: default
+
+  etcd:
+    image: oci.miren.cloud/etcd:v1
+    port: 2379
+    command:
+      - etcd
+      - --listen-client-urls
+      - http://0.0.0.0:2379
+      - --advertise-client-urls
+      - http://etcd:2379
+      - --initial-advertise-peer-urls
+      - http://localhost:2380
+
+  minio:
+    image: oci.miren.cloud/minio:v1
+    port: 9000
+    environment:
+      MINIO_ROOT_USER: admin
+      MINIO_ROOT_PASSWORD: password
+      MINIO_UPDATE: "off"
+    command:
+      - minio
+      - server
+      - /data
