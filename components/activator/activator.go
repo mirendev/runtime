@@ -2,9 +2,7 @@ package activator
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"math/rand/v2"
 	"sync"
@@ -170,11 +168,12 @@ var ErrSandboxDiedEarly = fmt.Errorf("sandbox died while booting")
 var ErrPoolTimeout = fmt.Errorf("timeout waiting for sandbox from pool")
 
 // ensurePoolAndWaitForSandbox ensures a SandboxPool exists with sufficient DesiredInstances,
-// then waits for a new RUNNING sandbox to become available in the pool.
+// then polls for a sandbox with capacity to become available.
+// The background watcher (InBackground) handles discovering new sandboxes.
 func (a *localActivator) ensurePoolAndWaitForSandbox(ctx context.Context, ver *core_v1alpha.AppVersion, service string, svcConcurrency *core_v1alpha.ServiceConcurrency) (*Lease, error) {
 	key := verKey{ver.ID.String(), service}
 
-	// Ensure pool exists and has desired capacity
+	// Ensure pool exists and increment desired capacity
 	pool, err := a.ensureSandboxPool(ctx, ver, service, svcConcurrency)
 	if err != nil {
 		return nil, fmt.Errorf("failed to ensure sandbox pool: %w", err)
@@ -186,156 +185,60 @@ func (a *localActivator) ensurePoolAndWaitForSandbox(ctx context.Context, ver *c
 		"pool_id", pool.ID,
 		"desired_instances", pool.DesiredInstances)
 
-	// Watch for new sandboxes matching this pool (version + service)
-	// We'll watch all sandboxes and filter by version and service labels
-	watchCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	// Poll for capacity with timeout
+	// The background watcher will discover new sandboxes and add them to a.versions
+	pollCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
 
-	// Determine port from config or default to 3000
-	port := int64(3000)
-	if ver.Config.Port > 0 {
-		port = ver.Config.Port
-	}
+	ticker := time.NewTicker(200 * time.Millisecond)
+	defer ticker.Stop()
 
-	// Channel to signal when we found a sandbox
-	type sandboxResult struct {
-		sandbox *sandbox
-		err     error
-	}
-	resultCh := make(chan sandboxResult, 1)
-
-	// Start watching for new sandboxes
-	go func() {
-		_, watchErr := a.eac.WatchIndex(watchCtx, entity.Ref(entity.EntityKind, compute_v1alpha.KindSandbox), stream.Callback(func(op *entityserver_v1alpha.EntityOp) error {
-			if !op.HasEntity() {
-				return nil
-			}
-
-			en := op.Entity().Entity()
-			var sb compute_v1alpha.Sandbox
-			sb.Decode(en)
-
-			// Check if this sandbox matches our version and service
-			// Check version - support both legacy and Spec formats
-			sbVersion := sb.Version
-			if sbVersion == "" {
-				sbVersion = sb.Spec.Version
-			}
-			if sbVersion != ver.ID {
-				return nil
-			}
-
-			// Check service label
-			var md core_v1alpha.Metadata
-			md.Decode(en)
-			serviceLabel, _ := md.Labels.Get("service")
-			if serviceLabel != service {
-				return nil
-			}
-
-			// Only consider RUNNING sandboxes
-			if sb.Status != compute_v1alpha.RUNNING {
-				return nil
-			}
-
-			// Check if we already track this sandbox (hold lock throughout to prevent duplicates)
+	for {
+		select {
+		case <-pollCtx.Done():
+			return nil, fmt.Errorf("%w: no sandbox became available within 2 minutes", ErrPoolTimeout)
+		case <-ticker.C:
+			// Check if any sandbox has capacity now
 			a.mu.Lock()
 			vs, ok := a.versions[key]
-			if ok {
-				for _, existing := range vs.sandboxes {
-					if existing.sandbox.ID == sb.ID {
+			if ok && len(vs.sandboxes) > 0 {
+				// Try to find a sandbox with capacity
+				start := rand.Int() % len(vs.sandboxes)
+				for i := 0; i < len(vs.sandboxes); i++ {
+					s := vs.sandboxes[(start+i)%len(vs.sandboxes)]
+					if s.tracker.HasCapacity() {
+						leaseSize := s.tracker.AcquireLease()
+						s.lastRenewal = time.Now()
+
+						// Read lastActivity while we hold the lock
+						lastActivity := s.sandbox.LastActivity
 						a.mu.Unlock()
-						return nil // Already tracking
+
+						// Update sandbox last_activity with throttling (after releasing lock)
+						a.updateSandboxLastActivity(ctx, s.sandbox, s.ent, lastActivity)
+
+						a.log.Info("acquired lease from pool sandbox",
+							"app", ver.App,
+							"version", ver.Version,
+							"sandbox", s.sandbox.ID,
+							"service", service)
+
+						return &Lease{
+							ver:     ver,
+							sandbox: s.sandbox,
+							ent:     s.ent,
+							pool:    service,
+							service: service,
+							Size:    leaseSize,
+							URL:     s.url,
+						}, nil
 					}
 				}
 			}
-
-			// Found a new matching sandbox!
-			a.log.Info("found new sandbox from pool", "sandbox", sb.ID, "service", service, "status", sb.Status)
-
-			// Build HTTP URL
-			if len(sb.Network) == 0 {
-				a.mu.Unlock()
-				resultCh <- sandboxResult{err: fmt.Errorf("sandbox has no network addresses")}
-				return io.EOF
-			}
-
-			addr, err := netutil.BuildHTTPURL(sb.Network[0].Address, port)
-			if err != nil {
-				a.mu.Unlock()
-				resultCh <- sandboxResult{err: fmt.Errorf("failed to build HTTP URL: %w", err)}
-				return io.EOF
-			}
-
-			// Create strategy and tracker for this sandbox
-			strategy := concurrency.NewStrategy(svcConcurrency)
-			tracker := strategy.InitializeTracker()
-
-			lsb := &sandbox{
-				sandbox:     &sb,
-				ent:         en,
-				lastRenewal: time.Now(),
-				url:         addr,
-				tracker:     tracker,
-			}
-
-			// Add to versions map (still holding lock from duplicate check above)
-			if !ok {
-				vs = &verSandboxes{
-					ver:       ver,
-					sandboxes: []*sandbox{},
-					strategy:  strategy,
-				}
-				a.versions[key] = vs
-			}
-			vs.sandboxes = append(vs.sandboxes, lsb)
 			a.mu.Unlock()
 
-			// Acquire first lease from the tracker (AFTER releasing lock to avoid holding lock during lease acquisition)
-			leaseSize := tracker.AcquireLease()
-			if leaseSize == 0 {
-				// Lease acquisition failed (no capacity) - remove the sandbox we just added
-				a.mu.Lock()
-				for i, s := range vs.sandboxes {
-					if s == lsb {
-						vs.sandboxes = append(vs.sandboxes[:i], vs.sandboxes[i+1:]...)
-						break
-					}
-				}
-				a.mu.Unlock()
-				resultCh <- sandboxResult{err: fmt.Errorf("failed to acquire initial lease")}
-				return io.EOF
-			}
-
-			// Return the lease
-			resultCh <- sandboxResult{
-				sandbox: lsb,
-			}
-			return io.EOF
-		}))
-
-		if watchErr != nil && !errors.Is(watchErr, io.EOF) && !errors.Is(watchErr, context.DeadlineExceeded) {
-			resultCh <- sandboxResult{err: fmt.Errorf("watch failed: %w", watchErr)}
+			// No capacity yet, continue polling
 		}
-	}()
-
-	// Wait for result
-	select {
-	case result := <-resultCh:
-		if result.err != nil {
-			return nil, result.err
-		}
-		return &Lease{
-			ver:     ver,
-			sandbox: result.sandbox.sandbox,
-			ent:     result.sandbox.ent,
-			pool:    service,
-			service: service,
-			Size:    result.sandbox.tracker.Used(),
-			URL:     result.sandbox.url,
-		}, nil
-	case <-watchCtx.Done():
-		return nil, fmt.Errorf("%w: no sandbox became available within 2 minutes", ErrPoolTimeout)
 	}
 }
 
@@ -453,7 +356,8 @@ func (a *localActivator) RenewLease(ctx context.Context, lease *Lease) (*Lease, 
 }
 
 func (a *localActivator) InBackground(ctx context.Context) {
-	// Watch for sandbox status changes to update our local tracking
+	// Watch for sandbox changes: update status AND discover new RUNNING sandboxes
+	// This is the single source of sandbox discovery for the activator
 	// Retry loop to handle transient failures
 	for {
 		select {
@@ -463,7 +367,7 @@ func (a *localActivator) InBackground(ctx context.Context) {
 		default:
 		}
 
-		a.log.Info("starting sandbox status watch")
+		a.log.Info("starting sandbox discovery watch")
 
 		_, err := a.eac.WatchIndex(ctx, entity.Ref(entity.EntityKind, compute_v1alpha.KindSandbox), stream.Callback(func(op *entityserver_v1alpha.EntityOp) error {
 			if !op.HasEntity() {
@@ -474,10 +378,9 @@ func (a *localActivator) InBackground(ctx context.Context) {
 			var sb compute_v1alpha.Sandbox
 			sb.Decode(en)
 
-			// Update status in our tracking if we have this sandbox
+			// First, check if we're already tracking this sandbox (update status if so)
 			a.mu.Lock()
-			defer a.mu.Unlock()
-
+			alreadyTracked := false
 			for _, vs := range a.versions {
 				for _, s := range vs.sandboxes {
 					if s.sandbox.ID == sb.ID {
@@ -488,11 +391,105 @@ func (a *localActivator) InBackground(ctx context.Context) {
 						if oldStatus != sb.Status {
 							a.log.Info("sandbox status changed", "sandbox", sb.ID, "old_status", oldStatus, "new_status", sb.Status)
 						}
-						return nil
+						alreadyTracked = true
+						break
 					}
 				}
+				if alreadyTracked {
+					break
+				}
+			}
+			a.mu.Unlock()
+
+			if alreadyTracked {
+				return nil
 			}
 
+			// Not tracked yet - check if this is a RUNNING sandbox we should track
+			if sb.Status != compute_v1alpha.RUNNING {
+				return nil // Only track RUNNING sandboxes
+			}
+
+			// Get version to determine service
+			sbVersion := sb.Version
+			if sbVersion == "" {
+				sbVersion = sb.Spec.Version
+			}
+			if sbVersion == "" {
+				return nil // Skip sandboxes without version (e.g., buildkit)
+			}
+
+			// Get service from labels
+			var md core_v1alpha.Metadata
+			md.Decode(en)
+			service, _ := md.Labels.Get("service")
+			if service == "" {
+				return nil // Skip sandboxes without service label
+			}
+
+			// Get app version to build tracking entry
+			verResp, err := a.eac.Get(ctx, sbVersion.String())
+			if err != nil {
+				a.log.Error("failed to get version for sandbox", "sandbox", sb.ID, "version", sbVersion, "error", err)
+				return nil
+			}
+
+			var appVer core_v1alpha.AppVersion
+			appVer.Decode(verResp.Entity().Entity())
+
+			// Build HTTP URL
+			if len(sb.Network) == 0 {
+				a.log.Warn("sandbox has no network addresses", "sandbox", sb.ID)
+				return nil
+			}
+
+			port := int64(3000)
+			if appVer.Config.Port > 0 {
+				port = appVer.Config.Port
+			}
+
+			addr, err := netutil.BuildHTTPURL(sb.Network[0].Address, port)
+			if err != nil {
+				a.log.Error("failed to build HTTP URL", "error", err, "sandbox", sb.ID)
+				return nil
+			}
+
+			// Get service concurrency and create strategy/tracker
+			svcConcurrency := a.getServiceConcurrency(&appVer, service)
+			strategy := concurrency.NewStrategy(svcConcurrency)
+			tracker := strategy.InitializeTracker()
+
+			lsb := &sandbox{
+				sandbox:     &sb,
+				ent:         en,
+				lastRenewal: time.Now(),
+				url:         addr,
+				tracker:     tracker,
+			}
+
+			// Add to versions map
+			key := verKey{appVer.ID.String(), service}
+			a.mu.Lock()
+			vs, ok := a.versions[key]
+			if !ok {
+				vs = &verSandboxes{
+					ver:       &appVer,
+					sandboxes: []*sandbox{},
+					strategy:  strategy,
+				}
+				a.versions[key] = vs
+			}
+			// Double-check for duplicates (race between unlock above and lock here)
+			for _, existing := range vs.sandboxes {
+				if existing.sandbox.ID == sb.ID {
+					a.mu.Unlock()
+					return nil // Already added by another goroutine
+				}
+			}
+			vs.sandboxes = append(vs.sandboxes, lsb)
+			a.mu.Unlock()
+
+			a.log.Info("discovered and tracking new sandbox", "sandbox", sb.ID, "service", service, "url", addr)
 			return nil
 		}))
 
