@@ -2,30 +2,20 @@ package metrics
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"log/slog"
-	"sync"
+	"strconv"
 	"time"
 
 	"miren.dev/runtime/pkg/asm/autoreg"
 )
 
-// HTTPMetrics tracks HTTP request metrics for applications
+// HTTPMetrics tracks HTTP request metrics for applications using VictoriaMetrics
 type HTTPMetrics struct {
-	Log *slog.Logger
-	DB  *sql.DB `asm:"clickhouse"`
-
-	// Buffering
-	buffer    []HTTPRequest
-	mu        sync.Mutex
-	flushCtx  context.Context
-	cancel    context.CancelFunc
-	flushChan chan struct{} // Signal channel for flush requests
-	wg        sync.WaitGroup
+	Log    *slog.Logger
+	Writer *VictoriaMetricsWriter `asm:"victoriametrics-writer,optional"`
+	Reader *VictoriaMetricsReader `asm:"victoriametrics-reader,optional"`
 }
-
-const defaultBufferSize = 1000
 
 var _ = autoreg.Register[HTTPMetrics]()
 
@@ -34,35 +24,9 @@ func (h *HTTPMetrics) Populated() error {
 }
 
 func (h *HTTPMetrics) Setup() error {
-	_, err := h.DB.Exec(`
-CREATE TABLE IF NOT EXISTS http_requests (
-    timestamp DateTime64(6) CODEC(Delta(8), ZSTD(1)),
-    app LowCardinality(String) CODEC(ZSTD(1)),
-    method LowCardinality(String) CODEC(ZSTD(1)),
-    path String CODEC(ZSTD(1)),
-    status_code UInt16 CODEC(T64, ZSTD(1)),
-    duration_ms UInt32 CODEC(T64, ZSTD(1)),
-    response_size UInt64 CODEC(T64, ZSTD(1)),
-    INDEX idx_path path TYPE tokenbf_v1(32768, 3, 0) GRANULARITY 1
-) 
-ENGINE = MergeTree
-ORDER BY (app, toUnixTimestamp(timestamp))
-TTL toDateTime(timestamp) + INTERVAL 7 DAY
-SETTINGS ttl_only_drop_parts = 1;
-`)
-	if err != nil {
-		return err
-	}
-
-	// Initialize buffer and channels
-	h.buffer = make([]HTTPRequest, 0, defaultBufferSize)
-	h.flushChan = make(chan struct{}, 1) // Buffered to avoid blocking
-
-	// Start background flush routine
-	h.flushCtx, h.cancel = context.WithCancel(context.Background())
-	h.wg.Add(1)
-	go h.flushLoop()
-
+	// For VictoriaMetrics, we don't need to create tables/schemas
+	// The metrics are created dynamically when first written
+	h.Log.Info("HTTP metrics initialized with VictoriaMetrics backend")
 	return nil
 }
 
@@ -77,114 +41,74 @@ type HTTPRequest struct {
 	ResponseSize int64
 }
 
-// RecordRequest adds a request to the buffer for async processing
+// RecordRequest records an HTTP request as metrics in VictoriaMetrics
 func (h *HTTPMetrics) RecordRequest(ctx context.Context, req HTTPRequest) error {
-	if h == nil || h.DB == nil {
+	if h == nil || h.Writer == nil {
 		return nil
 	}
 
-	h.mu.Lock()
-	h.buffer = append(h.buffer, req)
-	needsFlush := len(h.buffer) >= defaultBufferSize
-	h.mu.Unlock()
-
-	// Signal flush if buffer is full (non-blocking)
-	if needsFlush {
-		select {
-		case h.flushChan <- struct{}{}:
-			// Signaled flush
-		default:
-			// Channel full, flush already pending
-		}
+	// Convert HTTP request to multiple metric points
+	points := []MetricPoint{
+		{
+			Name: "http_request_total",
+			Labels: map[string]string{
+				"app":    req.App,
+				"method": req.Method,
+				"path":   req.Path,
+				"status": strconv.Itoa(req.StatusCode),
+			},
+			Value:     1,
+			Timestamp: req.Timestamp,
+		},
+		{
+			Name: "http_request_duration_ms",
+			Labels: map[string]string{
+				"app":    req.App,
+				"method": req.Method,
+				"path":   req.Path,
+			},
+			Value:     float64(req.DurationMs),
+			Timestamp: req.Timestamp,
+		},
+		{
+			Name: "http_response_size_bytes",
+			Labels: map[string]string{
+				"app":    req.App,
+				"method": req.Method,
+				"path":   req.Path,
+			},
+			Value:     float64(req.ResponseSize),
+			Timestamp: req.Timestamp,
+		},
 	}
 
-	return nil
-}
-
-// flushLoop runs in the background to periodically flush the buffer
-func (h *HTTPMetrics) flushLoop() {
-	defer h.wg.Done()
-	ticker := time.NewTicker(5 * time.Second)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ticker.C:
-			h.flush()
-		case <-h.flushChan:
-			h.flush()
-		case <-h.flushCtx.Done():
-			return
-		}
-	}
-}
-
-// flush writes buffered requests to ClickHouse
-func (h *HTTPMetrics) flush() {
-	h.mu.Lock()
-	if len(h.buffer) == 0 {
-		h.mu.Unlock()
-		return
-	}
-
-	// Swap buffer
-	toFlush := h.buffer
-	h.buffer = make([]HTTPRequest, 0, 1000)
-	h.mu.Unlock()
-
-	// Batch insert
-	tx, err := h.DB.Begin()
-	if err != nil {
-		h.Log.Error("Failed to begin transaction", "error", err)
-		return
-	}
-	defer tx.Rollback()
-
-	stmt, err := tx.Prepare(`
-		INSERT INTO http_requests (
-			timestamp, app, method, path, status_code, duration_ms, response_size
-		) VALUES (?, ?, ?, ?, ?, ?, ?)
-	`)
-	if err != nil {
-		h.Log.Error("Failed to prepare statement", "error", err)
-		return
-	}
-	defer stmt.Close()
-
-	for _, req := range toFlush {
-		_, err = stmt.Exec(
-			req.Timestamp,
-			req.App,
-			req.Method,
-			req.Path,
-			req.StatusCode,
-			req.DurationMs,
-			req.ResponseSize,
-		)
-		if err != nil {
-			h.Log.Error("Failed to insert request", "error", err, "app", req.App)
-		}
-	}
-
-	if err = tx.Commit(); err != nil {
-		h.Log.Error("Failed to commit transaction", "error", err)
-	} else {
-		h.Log.Debug("Flushed HTTP metrics", "count", len(toFlush))
-	}
+	return h.Writer.WritePoints(ctx, points)
 }
 
 // RPSLastMinute returns requests per second for the last minute
 func (h *HTTPMetrics) RPSLastMinute(app string) (float64, error) {
-	query := `
-		SELECT count(*) / 60.0 as rps
-		FROM http_requests
-		WHERE app = ? AND timestamp > now() - INTERVAL 1 MINUTE
-	`
+	if h.Reader == nil {
+		return 0, fmt.Errorf("reader not initialized")
+	}
 
-	var rps float64
-	err := h.DB.QueryRow(query, app).Scan(&rps)
+	query := fmt.Sprintf(`rate(http_request_total{app="%s"}[1m])`, app)
+	result, err := h.Reader.InstantQuery(context.Background(), query, time.Time{})
 	if err != nil {
 		return 0, fmt.Errorf("failed to query RPS: %w", err)
+	}
+
+	if len(result.Data.Result) == 0 {
+		return 0, nil
+	}
+
+	valueStr, ok := result.Data.Result[0].Value[1].(string)
+	if !ok {
+		return 0, fmt.Errorf("unexpected value type")
+	}
+
+	rps, err := strconv.ParseFloat(valueStr, 64)
+	if err != nil {
+		return 0, fmt.Errorf("failed to parse RPS value: %w", err)
 	}
 
 	return rps, nil
@@ -202,34 +126,108 @@ type RequestStats struct {
 
 // StatsLastHour returns request statistics for the last hour in 1-minute buckets
 func (h *HTTPMetrics) StatsLastHour(app string) ([]RequestStats, error) {
-	query := `
-		SELECT
-			toStartOfMinute(timestamp) as minute,
-			count(*) as count,
-			avg(duration_ms) as avg_duration,
-			quantile(0.95)(duration_ms) as p95_duration,
-			quantile(0.99)(duration_ms) as p99_duration,
-			sum(CASE WHEN status_code >= 400 THEN 1 ELSE 0 END) / count(*) as error_rate
-		FROM http_requests
-		WHERE app = ? AND timestamp > now() - INTERVAL 1 HOUR
-		GROUP BY minute
-		ORDER BY minute
-	`
-
-	rows, err := h.DB.Query(query, app)
-	if err != nil {
-		return nil, fmt.Errorf("failed to query request stats: %w", err)
+	if h.Reader == nil {
+		return nil, fmt.Errorf("reader not initialized")
 	}
-	defer rows.Close()
 
-	var stats []RequestStats
-	for rows.Next() {
-		var s RequestStats
-		err := rows.Scan(&s.Time, &s.Count, &s.AvgDurationMs, &s.P95DurationMs, &s.P99DurationMs, &s.ErrorRate)
-		if err != nil {
-			return nil, fmt.Errorf("failed to scan request stats: %w", err)
+	now := time.Now()
+	start := now.Add(-1 * time.Hour)
+
+	// Query for count per minute
+	countQuery := fmt.Sprintf(`sum(increase(http_request_total{app="%s"}[1m]))`, app)
+	countResult, err := h.Reader.RangeQuery(context.Background(), countQuery, start, now, "1m")
+	if err != nil {
+		return nil, fmt.Errorf("failed to query count: %w", err)
+	}
+
+	// Query for average duration
+	avgQuery := fmt.Sprintf(`avg_over_time(http_request_duration_ms{app="%s"}[1m])`, app)
+	avgResult, err := h.Reader.RangeQuery(context.Background(), avgQuery, start, now, "1m")
+	if err != nil {
+		return nil, fmt.Errorf("failed to query avg duration: %w", err)
+	}
+
+	// Query for p95 duration
+	p95Query := fmt.Sprintf(`quantile_over_time(0.95, http_request_duration_ms{app="%s"}[1m])`, app)
+	p95Result, err := h.Reader.RangeQuery(context.Background(), p95Query, start, now, "1m")
+	if err != nil {
+		return nil, fmt.Errorf("failed to query p95: %w", err)
+	}
+
+	// Query for p99 duration
+	p99Query := fmt.Sprintf(`quantile_over_time(0.99, http_request_duration_ms{app="%s"}[1m])`, app)
+	p99Result, err := h.Reader.RangeQuery(context.Background(), p99Query, start, now, "1m")
+	if err != nil {
+		return nil, fmt.Errorf("failed to query p99: %w", err)
+	}
+
+	// Query for error rate
+	errorQuery := fmt.Sprintf(`sum(rate(http_request_total{app="%s",status=~"[45].."}[1m])) / sum(rate(http_request_total{app="%s"}[1m]))`, app, app)
+	errorResult, err := h.Reader.RangeQuery(context.Background(), errorQuery, start, now, "1m")
+	if err != nil {
+		return nil, fmt.Errorf("failed to query error rate: %w", err)
+	}
+
+	// Combine results
+	stats := make([]RequestStats, 0)
+	if len(countResult.Data.Result) > 0 {
+		for _, value := range countResult.Data.Result[0].Values {
+			timestamp, _ := value[0].(float64)
+			countStr, _ := value[1].(string)
+			count, _ := strconv.ParseInt(countStr, 10, 64)
+
+			stat := RequestStats{
+				Time:  time.Unix(int64(timestamp), 0),
+				Count: count,
+			}
+
+			// Find corresponding values from other queries
+			if len(avgResult.Data.Result) > 0 {
+				for _, v := range avgResult.Data.Result[0].Values {
+					t, _ := v[0].(float64)
+					if int64(t) == int64(timestamp) {
+						avgStr, _ := v[1].(string)
+						stat.AvgDurationMs, _ = strconv.ParseFloat(avgStr, 64)
+						break
+					}
+				}
+			}
+
+			if len(p95Result.Data.Result) > 0 {
+				for _, v := range p95Result.Data.Result[0].Values {
+					t, _ := v[0].(float64)
+					if int64(t) == int64(timestamp) {
+						p95Str, _ := v[1].(string)
+						stat.P95DurationMs, _ = strconv.ParseFloat(p95Str, 64)
+						break
+					}
+				}
+			}
+
+			if len(p99Result.Data.Result) > 0 {
+				for _, v := range p99Result.Data.Result[0].Values {
+					t, _ := v[0].(float64)
+					if int64(t) == int64(timestamp) {
+						p99Str, _ := v[1].(string)
+						stat.P99DurationMs, _ = strconv.ParseFloat(p99Str, 64)
+						break
+					}
+				}
+			}
+
+			if len(errorResult.Data.Result) > 0 {
+				for _, v := range errorResult.Data.Result[0].Values {
+					t, _ := v[0].(float64)
+					if int64(t) == int64(timestamp) {
+						errStr, _ := v[1].(string)
+						stat.ErrorRate, _ = strconv.ParseFloat(errStr, 64)
+						break
+					}
+				}
+			}
+
+			stats = append(stats, stat)
 		}
-		stats = append(stats, s)
 	}
 
 	return stats, nil
@@ -245,33 +243,47 @@ type PathStats struct {
 
 // TopPaths returns the most frequently accessed paths for an app
 func (h *HTTPMetrics) TopPaths(app string, limit int) ([]PathStats, error) {
-	query := `
-		SELECT
-			path,
-			count(*) as count,
-			avg(duration_ms) as avg_duration,
-			sum(CASE WHEN status_code >= 400 THEN 1 ELSE 0 END) / count(*) as error_rate
-		FROM http_requests
-		WHERE app = ? AND timestamp > now() - INTERVAL 1 HOUR
-		GROUP BY path
-		ORDER BY count DESC
-		LIMIT ?
-	`
+	if h.Reader == nil {
+		return nil, fmt.Errorf("reader not initialized")
+	}
 
-	rows, err := h.DB.Query(query, app, limit)
+	// Query for top paths by count
+	query := fmt.Sprintf(`topk(%d, sum by(path) (increase(http_request_total{app="%s"}[1h])))`, limit, app)
+	result, err := h.Reader.InstantQuery(context.Background(), query, time.Time{})
 	if err != nil {
 		return nil, fmt.Errorf("failed to query top paths: %w", err)
 	}
-	defer rows.Close()
 
 	var paths []PathStats
-	for rows.Next() {
-		var p PathStats
-		err := rows.Scan(&p.Path, &p.Count, &p.AvgDurationMs, &p.ErrorRate)
-		if err != nil {
-			return nil, fmt.Errorf("failed to scan path stats: %w", err)
+	for _, r := range result.Data.Result {
+		path := r.Metric["path"]
+		countStr, _ := r.Value[1].(string)
+		count, _ := strconv.ParseInt(countStr, 10, 64)
+
+		// Query average duration for this path
+		avgQuery := fmt.Sprintf(`avg_over_time(http_request_duration_ms{app="%s",path="%s"}[1h])`, app, path)
+		avgResult, err := h.Reader.InstantQuery(context.Background(), avgQuery, time.Time{})
+		var avgDuration float64
+		if err == nil && len(avgResult.Data.Result) > 0 {
+			avgStr, _ := avgResult.Data.Result[0].Value[1].(string)
+			avgDuration, _ = strconv.ParseFloat(avgStr, 64)
 		}
-		paths = append(paths, p)
+
+		// Query error rate for this path
+		errorQuery := fmt.Sprintf(`sum(rate(http_request_total{app="%s",path="%s",status=~"[45].."}[1h])) / sum(rate(http_request_total{app="%s",path="%s"}[1h]))`, app, path, app, path)
+		errorResult, err := h.Reader.InstantQuery(context.Background(), errorQuery, time.Time{})
+		var errorRate float64
+		if err == nil && len(errorResult.Data.Result) > 0 {
+			errStr, _ := errorResult.Data.Result[0].Value[1].(string)
+			errorRate, _ = strconv.ParseFloat(errStr, 64)
+		}
+
+		paths = append(paths, PathStats{
+			Path:          path,
+			Count:         count,
+			AvgDurationMs: avgDuration,
+			ErrorRate:     errorRate,
+		})
 	}
 
 	return paths, nil
@@ -286,34 +298,31 @@ type ErrorBreakdown struct {
 
 // ErrorsLastHour returns breakdown of errors by status code for the last hour
 func (h *HTTPMetrics) ErrorsLastHour(app string) ([]ErrorBreakdown, error) {
-	query := `
-		SELECT
-			status_code,
-			count(*) as count
-		FROM http_requests
-		WHERE app = ? AND timestamp > now() - INTERVAL 1 HOUR AND status_code >= 400
-		GROUP BY status_code
-		ORDER BY count DESC
-	`
-
-	rows, err := h.DB.Query(query, app)
-	if err != nil {
-		return nil, fmt.Errorf("failed to query error breakdown: %w", err)
+	if h.Reader == nil {
+		return nil, fmt.Errorf("reader not initialized")
 	}
-	defer rows.Close()
+
+	// Query for errors grouped by status code
+	query := fmt.Sprintf(`sum by(status) (increase(http_request_total{app="%s",status=~"[45].."}[1h]))`, app)
+	result, err := h.Reader.InstantQuery(context.Background(), query, time.Time{})
+	if err != nil {
+		return nil, fmt.Errorf("failed to query errors: %w", err)
+	}
 
 	var errors []ErrorBreakdown
 	var totalErrors int64
 
-	// First pass to collect data and count total
-	for rows.Next() {
-		var e ErrorBreakdown
-		err := rows.Scan(&e.StatusCode, &e.Count)
-		if err != nil {
-			return nil, fmt.Errorf("failed to scan error breakdown: %w", err)
-		}
-		totalErrors += e.Count
-		errors = append(errors, e)
+	for _, r := range result.Data.Result {
+		statusStr := r.Metric["status"]
+		status, _ := strconv.Atoi(statusStr)
+		countStr, _ := r.Value[1].(string)
+		count, _ := strconv.ParseInt(countStr, 10, 64)
+
+		totalErrors += count
+		errors = append(errors, ErrorBreakdown{
+			StatusCode: status,
+			Count:      count,
+		})
 	}
 
 	// Calculate percentages
@@ -326,14 +335,7 @@ func (h *HTTPMetrics) ErrorsLastHour(app string) ([]ErrorBreakdown, error) {
 	return errors, nil
 }
 
-// Close stops the background flush routine and flushes remaining data
+// Close is a no-op for VictoriaMetrics (writer handles its own lifecycle)
 func (h *HTTPMetrics) Close() error {
-	if h.cancel != nil {
-		h.cancel()
-	}
-	// Wait for the flush loop to finish
-	h.wg.Wait()
-	// Final flush for any remaining data
-	h.flush()
 	return nil
 }

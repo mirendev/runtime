@@ -258,4 +258,20 @@ func applyCLIFlags(cfg *Config, flags *CLIFlags) {
 		cfg.Victorialogs.StartEmbedded = flags.VictoriaLogsConfigStartEmbedded
 	}
 
+	if flags.VictoriaMetricsConfigAddress != nil && *flags.VictoriaMetricsConfigAddress != "" {
+		cfg.Victoriametrics.Address = flags.VictoriaMetricsConfigAddress
+	}
+
+	if flags.VictoriaMetricsConfigHTTPPort != nil {
+		cfg.Victoriametrics.HTTPPort = flags.VictoriaMetricsConfigHTTPPort
+	}
+
+	if flags.VictoriaMetricsConfigRetentionPeriod != nil && *flags.VictoriaMetricsConfigRetentionPeriod != "" {
+		cfg.Victoriametrics.RetentionPeriod = flags.VictoriaMetricsConfigRetentionPeriod
+	}
+
+	if flags.VictoriaMetricsConfigStartEmbedded != nil {
+		cfg.Victoriametrics.StartEmbedded = flags.VictoriaMetricsConfigStartEmbedded
+	}
+
 }

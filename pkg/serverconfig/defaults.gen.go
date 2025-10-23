@@ -10,13 +10,14 @@ func strPtr(s string) *string { return &s }
 // DefaultConfig returns the default configuration
 func DefaultConfig() *Config {
 	return &Config{
-		Clickhouse:   DefaultClickHouseConfig(),
-		Containerd:   DefaultContainerdConfig(),
-		Etcd:         DefaultEtcdConfig(),
-		Mode:         strPtr("standalone"),
-		Server:       DefaultServerConfig(),
-		TLS:          DefaultTLSConfig(),
-		Victorialogs: DefaultVictoriaLogsConfig(),
+		Clickhouse:      DefaultClickHouseConfig(),
+		Containerd:      DefaultContainerdConfig(),
+		Etcd:            DefaultEtcdConfig(),
+		Mode:            strPtr("standalone"),
+		Server:          DefaultServerConfig(),
+		TLS:             DefaultTLSConfig(),
+		Victorialogs:    DefaultVictoriaLogsConfig(),
+		Victoriametrics: DefaultVictoriaMetricsConfig(),
 	}
 }
 
@@ -81,6 +82,16 @@ func DefaultVictoriaLogsConfig() VictoriaLogsConfig {
 		Address:         strPtr(""),
 		HTTPPort:        intPtr(9428),
 		RetentionPeriod: strPtr("30d"),
+		StartEmbedded:   nil,
+	}
+}
+
+// DefaultVictoriaMetricsConfig returns default VictoriaMetricsConfig
+func DefaultVictoriaMetricsConfig() VictoriaMetricsConfig {
+	return VictoriaMetricsConfig{
+		Address:         strPtr(""),
+		HTTPPort:        intPtr(8428),
+		RetentionPeriod: strPtr("1"),
 		StartEmbedded:   nil,
 	}
 }

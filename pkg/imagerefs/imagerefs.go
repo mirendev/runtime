@@ -22,6 +22,9 @@ const (
 	// VictoriaLogs log storage server
 	VictoriaLogs = "oci.miren.cloud/victoria-logs:v1"
 
+	// VictoriaMetrics metrics storage server
+	VictoriaMetrics = "docker.io/victoriametrics/victoria-metrics:v1.106.1"
+
 	// Miren runtime server
 	Miren = "oci.miren.cloud/miren:latest"
 )

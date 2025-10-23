@@ -2,8 +2,9 @@ package metrics
 
 import (
 	"context"
-	"database/sql"
+	"fmt"
 	"log/slog"
+	"strconv"
 	"time"
 
 	"miren.dev/runtime/pkg/asm/autoreg"
@@ -11,9 +12,9 @@ import (
 )
 
 type CPUUsage struct {
-	Log *slog.Logger
-
-	DB *sql.DB `asm:"clickhouse"`
+	Log    *slog.Logger
+	Writer *VictoriaMetricsWriter `asm:"victoriametrics-writer,optional"`
+	Reader *VictoriaMetricsReader `asm:"victoriametrics-reader,optional"`
 }
 
 var _ = autoreg.Register[CPUUsage]()
@@ -23,33 +24,40 @@ func (m *CPUUsage) Populated() error {
 }
 
 func (m *CPUUsage) Setup() error {
-	_, err := m.DB.Exec(
-		`
-CREATE TABLE IF NOT EXISTS cpu_usage (
-    timestamp DateTime64(6) CODEC(Delta(8), ZSTD(1)),
-    window_end DateTime64(6) CODEC(Delta(8), ZSTD(1)),
-    entity LowCardinality(String) CODEC(ZSTD(1)),
-		cpu_usec UInt64,
-		attributes Map(LowCardinality(String), String) CODEC(ZSTD(1)),
-    INDEX idx_attr_key mapKeys(attributes) TYPE bloom_filter(0.01) GRANULARITY 1,
-    INDEX idx_attr_value mapValues(attributes) TYPE bloom_filter(0.01) GRANULARITY 1
-) 
-		ENGINE = MergeTree
-		ORDER BY (entity, toUnixTimestamp(timestamp))
-		TTL toDateTime(timestamp) + INTERVAL 30 DAY
-		SETTINGS ttl_only_drop_parts = 1;
-`)
-	return err
+	m.Log.Info("CPU usage metrics initialized with VictoriaMetrics backend")
+	return nil
 }
 
 func (m *CPUUsage) RecordUsage(ctx context.Context, entity string, windowStart, windowEnd time.Time, cpuUsec units.Microseconds, attrs map[string]string) error {
-	_, err := m.DB.ExecContext(ctx, `
-    INSERT INTO cpu_usage 
-      (timestamp, window_end, entity, cpu_usec, attributes)
-    VALUES (toDateTime64('?', 6), toDateTime64('?', 6), ?, ?, ?)
-`,
-		windowStart.UnixMicro(), windowEnd.UnixMicro(), entity, cpuUsec, attrs)
-	return err
+	if m.Writer == nil {
+		return nil
+	}
+
+	// Calculate CPU cores used during this window
+	windowDurationUsec := windowEnd.Sub(windowStart).Microseconds()
+	if windowDurationUsec == 0 {
+		return nil
+	}
+
+	// cores = cpu_usec / window_duration_usec
+	cores := float64(cpuUsec) / float64(windowDurationUsec)
+
+	// Build labels from attributes
+	labels := make(map[string]string)
+	labels["entity"] = entity
+	for k, v := range attrs {
+		labels[k] = v
+	}
+
+	// Write CPU usage in cores
+	point := MetricPoint{
+		Name:      "cpu_usage_cores",
+		Labels:    labels,
+		Value:     cores,
+		Timestamp: windowEnd,
+	}
+
+	return m.Writer.WritePoint(ctx, point)
 }
 
 type UsageAtTime struct {
@@ -58,130 +66,111 @@ type UsageAtTime struct {
 }
 
 func (m *CPUUsage) CPUUsageLastHour(entity string) ([]UsageAtTime, error) {
-	query := `
-WITH 
-minute_boundaries AS (
-    SELECT 
-        timestamp,
-        window_end,
-        cpu_usec,
-        dateDiff('microsecond', timestamp, window_end) as window_duration_usec,
-        bucket_minute
-    FROM cpu_usage
-    ARRAY JOIN 
-        arrayDistinct(
-            arrayMap(
-                x -> toStartOfMinute(timestamp) + toIntervalMinute(x),
-                range(0, dateDiff('minute', timestamp, window_end) + 1)
-            )
-        ) as bucket_minute
-    WHERE entity = @entity
-      AND bucket_minute >= now() - INTERVAL 1 HOUR
-),
-intersections AS (
-    SELECT 
-        bucket_minute,
-        (cpu_usec * (
-            dateDiff(
-                'microsecond',
-                greatest(bucket_minute, timestamp),
-                least(bucket_minute + toIntervalMinute(1), window_end)
-            ) / window_duration_usec
-        )) / (60 * 1000000) as distributed_cpu_cores
-    FROM minute_boundaries
-    WHERE dateDiff('second', bucket_minute, window_end) > 0
-        AND dateDiff('second', timestamp, bucket_minute + toIntervalMinute(1)) > 0
-)
-SELECT 
-    bucket_minute,
-    sum(distributed_cpu_cores) as total_cpu_cores
-FROM intersections
-GROUP BY 
-    bucket_minute
-ORDER BY 
-    bucket_minute
-WITH FILL 
-     FROM toStartOfMinute(now()- INTERVAL 1 HOUR) 
-	   TO toStartOfMinute(now())
-	   STEP INTERVAL 1 MINUTE;
-`
+	if m.Reader == nil {
+		return nil, fmt.Errorf("reader not initialized")
+	}
 
-	rows, err := m.DB.Query(query, sql.Named("entity", entity))
+	now := time.Now()
+	start := now.Add(-1 * time.Hour)
+
+	// Query average CPU cores per minute over the last hour
+	query := fmt.Sprintf(`avg_over_time(cpu_usage_cores{entity="%s"}[1m])`, entity)
+	result, err := m.Reader.RangeQuery(context.Background(), query, start, now, "1m")
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to query CPU usage: %w", err)
 	}
 
 	var results []UsageAtTime
+	if len(result.Data.Result) > 0 {
+		for _, value := range result.Data.Result[0].Values {
+			timestamp, _ := value[0].(float64)
+			coresStr, _ := value[1].(string)
+			cores, _ := strconv.ParseFloat(coresStr, 64)
 
-	for rows.Next() {
-		var result UsageAtTime
-		err = rows.Scan(&result.Timestamp, &result.Cores)
-		if err != nil {
-			return nil, err
+			results = append(results, UsageAtTime{
+				Timestamp: time.Unix(int64(timestamp), 0),
+				Cores:     cores,
+			})
 		}
-		results = append(results, result)
 	}
 
-	return results, err
+	return results, nil
 }
 
-// Returns the cpu usage in cores for the given entity in the last minute
+// Returns the cpu usage in cores for the given entity over a given interval
 func (m *CPUUsage) CPUUsageOver(entity string, interval string) (float64, error) {
-	// TODO: this will overcount/undercount when a window doesn't fit exactly in the interval.
-	// For now, we're going to not worry about that, but we should!
-	query := `
-SELECT
-    -- Sum total CPU microseconds in the window
-    round(
-      sum(cpu_usec) / 
-     (dateDiff('microsecond', min(timestamp), max(window_end))
-    ), 3) AS avg_cores
-FROM cpu_usage
-WHERE entity = ? AND timestamp >= now() - INTERVAL ?
-`
-	var cores float64
-	err := m.DB.QueryRow(query, entity, interval).Scan(&cores)
-	if err != nil {
-		return 0, err
+	if m.Reader == nil {
+		return 0, fmt.Errorf("reader not initialized")
 	}
 
-	return cores, err
+	// Use avg_over_time to get average cores over the interval
+	query := fmt.Sprintf(`avg_over_time(cpu_usage_cores{entity="%s"}[%s])`, entity, interval)
+	result, err := m.Reader.InstantQuery(context.Background(), query, time.Time{})
+	if err != nil {
+		return 0, fmt.Errorf("failed to query CPU usage: %w", err)
+	}
+
+	if len(result.Data.Result) == 0 {
+		return 0, nil
+	}
+
+	coresStr, ok := result.Data.Result[0].Value[1].(string)
+	if !ok {
+		return 0, fmt.Errorf("unexpected value type")
+	}
+
+	cores, err := strconv.ParseFloat(coresStr, 64)
+	if err != nil {
+		return 0, fmt.Errorf("failed to parse cores value: %w", err)
+	}
+
+	return cores, nil
 }
 
 // Returns the cpu usage in cores for the given entity in the last minute
 func (m *CPUUsage) CurrentCPUUsage(entity string) (float64, error) {
-	return m.CPUUsageOver(entity, "1 MINUTE")
+	return m.CPUUsageOver(entity, "1m")
 }
 
 func (m *CPUUsage) CPUUsageOverLastHour(entity string) (float64, error) {
-	return m.CPUUsageOver(entity, "1 HOUR")
+	return m.CPUUsageOver(entity, "1h")
 }
 
 func (m *CPUUsage) CPUUsageOverDay(entity string) (float64, error) {
-	return m.CPUUsageOver(entity, "24 HOUR")
+	return m.CPUUsageOver(entity, "24h")
 }
 
-// Returns the cpu usage in cores for the given entity in the last minute
+// Returns the cpu usage in cores for the given entity for a specific day in the past
 func (m *CPUUsage) CPUUsageDayAgo(entity string, day units.Days) (float64, error) {
-	query := `-- Calculate 1-minute rolling average
-SELECT
-    -- Sum total CPU microseconds in the window
-    round(sum(cpu_usec) / 
-    -- Divide by total microseconds in the window to get core fraction
-    (dateDiff('microsecond', 
-        min(timestamp), 
-        max(window_end))
-    ), 3) AS avg_cores
-FROM cpu_usage
-WHERE entity = ? 
-  AND timestamp >= (today() - INTERVAL ? DAYS)
-  AND timestamp < (today() - INTERVAL ? DAYS)
-`
-	var cores float64
-	err := m.DB.QueryRow(query, entity, day+1, day).Scan(&cores)
-	if err != nil {
-		return 0, err
+	if m.Reader == nil {
+		return 0, fmt.Errorf("reader not initialized")
 	}
 
-	return cores, err
+	// Calculate the time range for the specific day
+	now := time.Now()
+	dayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location()).AddDate(0, 0, -int(day))
+	dayEnd := dayStart.Add(24 * time.Hour)
+
+	// Query average CPU cores for that specific day
+	query := fmt.Sprintf(`avg_over_time(cpu_usage_cores{entity="%s"}[24h])`, entity)
+	result, err := m.Reader.InstantQuery(context.Background(), query, dayEnd)
+	if err != nil {
+		return 0, fmt.Errorf("failed to query CPU usage: %w", err)
+	}
+
+	if len(result.Data.Result) == 0 {
+		return 0, nil
+	}
+
+	coresStr, ok := result.Data.Result[0].Value[1].(string)
+	if !ok {
+		return 0, fmt.Errorf("unexpected value type")
+	}
+
+	cores, err := strconv.ParseFloat(coresStr, 64)
+	if err != nil {
+		return 0, fmt.Errorf("failed to parse cores value: %w", err)
+	}
+
+	return cores, nil
 }

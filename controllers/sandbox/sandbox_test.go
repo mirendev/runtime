@@ -28,6 +28,7 @@ import (
 	core_v1alpha "miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/image"
+	"miren.dev/runtime/metrics"
 	"miren.dev/runtime/observability"
 	build "miren.dev/runtime/pkg/buildkit"
 	"miren.dev/runtime/pkg/entity"
@@ -354,7 +355,7 @@ func TestSandbox(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 		defer cancel()
 
-		reg, cleanup := testutils.Registry(observability.TestInject, build.TestInject)
+		reg, cleanup := testutils.Registry(observability.TestInject, build.TestInject, metrics.TestInject)
 		defer cleanup()
 
 		var (

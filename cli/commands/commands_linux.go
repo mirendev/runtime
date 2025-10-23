@@ -14,6 +14,7 @@ import (
 	"github.com/ClickHouse/clickhouse-go/v2"
 	containerd "github.com/containerd/containerd/v2/client"
 	buildkit "github.com/moby/buildkit/client"
+	"miren.dev/runtime/metrics"
 	"miren.dev/runtime/observability"
 	"miren.dev/runtime/pkg/asm"
 	"miren.dev/runtime/pkg/asm/autoreg"
@@ -111,6 +112,14 @@ func (c *Context) setupServerComponents(ctx context.Context, reg *asm.Registry) 
 	reg.Register("victorialogs-address", victoriaLogsAddr)
 	reg.Register("victorialogs-timeout", 30*time.Second)
 
+	// VictoriaMetrics configuration
+	victoriaMetricsAddr := os.Getenv("VICTORIAMETRICS_ADDR")
+	if victoriaMetricsAddr == "" {
+		victoriaMetricsAddr = "localhost:8428"
+	}
+	reg.Register("victoriametrics-address", victoriaMetricsAddr)
+	reg.Register("victoriametrics-timeout", 30*time.Second)
+
 	reg.Register("container_idle_timeout", time.Minute)
 
 	reg.Register("http_domain", "local.miren.run")
@@ -139,6 +148,26 @@ func (c *Context) setupServerComponents(ctx context.Context, reg *asm.Registry) 
 				opts.Log.Debug(fmt.Sprintf(format, v...))
 			},
 		})
+	})
+
+	// VictoriaMetrics writer provider
+	reg.ProvideName("victoriametrics-writer", func(opts struct {
+		Log     *slog.Logger
+		Address string        `asm:"victoriametrics-address"`
+		Timeout time.Duration `asm:"victoriametrics-timeout"`
+	}) *metrics.VictoriaMetricsWriter {
+		writer := metrics.NewVictoriaMetricsWriter(opts.Log, opts.Address, opts.Timeout)
+		writer.Start()
+		return writer
+	})
+
+	// VictoriaMetrics reader provider
+	reg.ProvideName("victoriametrics-reader", func(opts struct {
+		Log     *slog.Logger
+		Address string        `asm:"victoriametrics-address"`
+		Timeout time.Duration `asm:"victoriametrics-timeout"`
+	}) *metrics.VictoriaMetricsReader {
+		return metrics.NewVictoriaMetricsReader(opts.Log, opts.Address, opts.Timeout)
 	})
 
 	reg.Provide(func(opts struct {
