@@ -693,14 +693,13 @@ func (c *SandboxController) readEntity(ctx context.Context, id entity.Id) (*enti
 		return nil, fmt.Errorf("failed to open entity file: %w", err)
 	}
 
-	var meta entity.Meta
-
-	err = entity.Decode(data, &meta)
+	// Use MigrateMetaFromBytes for automatic migration from old format
+	meta, err := entity.MigrateMetaFromBytes(data)
 	if err != nil {
 		return nil, fmt.Errorf("failed to decode entity file: %w", err)
 	}
 
-	return &meta, nil
+	return meta, nil
 }
 
 func (c *SandboxController) updateSandbox(ctx context.Context, sb *compute.Sandbox, meta *entity.Meta) error {

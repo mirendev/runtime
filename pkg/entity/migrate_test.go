@@ -261,3 +261,121 @@ func TestMigrateEntityPreservesExistingAttributes(t *testing.T) {
 	// Should use the ID from attributes, not from struct field
 	r.Equal("app/from-attrs", string(migratedEnt.Id()))
 }
+
+func TestMigrateMetaFromBytes(t *testing.T) {
+	r := require.New(t)
+
+	t.Run("migrates old Meta format", func(t *testing.T) {
+		// Create an entity in old format with struct fields
+		oldMeta := OldMeta{
+			Entity: OldEntity{
+				ID:        "sandbox/test-sandbox",
+				Revision:  42,
+				CreatedAt: time.Date(2024, 6, 15, 10, 30, 0, 0, time.UTC).UnixMilli(),
+				UpdatedAt: time.Date(2024, 6, 15, 12, 45, 0, 0, time.UTC).UnixMilli(),
+				Attrs: []Attr{
+					String("sandbox/status", "running"),
+					String("sandbox/image", "test-image:latest"),
+				},
+			},
+			Revision: 5,
+			Previous: 4,
+		}
+
+		// Encode in old format
+		data, err := cbor.Marshal(oldMeta)
+		r.NoError(err)
+
+		// Migrate using MigrateMetaFromBytes
+		migratedMeta, err := MigrateMetaFromBytes(data)
+		r.NoError(err)
+		r.NotNil(migratedMeta)
+
+		// Verify Meta-level fields
+		r.Equal(int64(5), migratedMeta.Revision)
+		r.Equal(int64(4), migratedMeta.Previous)
+
+		// Verify Entity was migrated correctly
+		r.Equal("sandbox/test-sandbox", string(migratedMeta.Entity.Id()))
+		r.Equal(int64(42), migratedMeta.Entity.GetRevision())
+		r.True(migratedMeta.Entity.GetCreatedAt().Equal(time.Date(2024, 6, 15, 10, 30, 0, 0, time.UTC)))
+		r.True(migratedMeta.Entity.GetUpdatedAt().Equal(time.Date(2024, 6, 15, 12, 45, 0, 0, time.UTC)))
+
+		// Verify original attributes are preserved
+		statusAttr, ok := migratedMeta.Entity.Get("sandbox/status")
+		r.True(ok)
+		r.Equal("running", statusAttr.Value.String())
+
+		imageAttr, ok := migratedMeta.Entity.Get("sandbox/image")
+		r.True(ok)
+		r.Equal("test-image:latest", imageAttr.Value.String())
+	})
+
+	t.Run("handles new Meta format without migration", func(t *testing.T) {
+		// Create an entity in new format
+		newEnt := New(
+			Ref(DBId, "sandbox/new-sandbox"),
+			Int64(Revision, 10),
+			Time(CreatedAt, time.Date(2024, 7, 1, 0, 0, 0, 0, time.UTC)),
+			Time(UpdatedAt, time.Date(2024, 7, 1, 1, 0, 0, 0, time.UTC)),
+			String("sandbox/status", "stopped"),
+		)
+
+		newMeta := &Meta{
+			Entity:   newEnt,
+			Revision: 15,
+			Previous: 14,
+		}
+
+		// Encode in new format
+		data, err := Encode(newMeta)
+		r.NoError(err)
+
+		// Decode using MigrateMetaFromBytes (should work without migration)
+		decodedMeta, err := MigrateMetaFromBytes(data)
+		r.NoError(err)
+		r.NotNil(decodedMeta)
+
+		// Verify it's identical to original
+		r.Equal(int64(15), decodedMeta.Revision)
+		r.Equal(int64(14), decodedMeta.Previous)
+		r.Equal("sandbox/new-sandbox", string(decodedMeta.Entity.Id()))
+		r.Equal(int64(10), decodedMeta.Entity.GetRevision())
+
+		statusAttr, ok := decodedMeta.Entity.Get("sandbox/status")
+		r.True(ok)
+		r.Equal("stopped", statusAttr.Value.String())
+	})
+
+	t.Run("migrates entity without timestamps", func(t *testing.T) {
+		// Create old format entity with no timestamps
+		oldMeta := OldMeta{
+			Entity: OldEntity{
+				ID:       "sandbox/minimal",
+				Revision: 1,
+				// No CreatedAt/UpdatedAt
+				Attrs: []Attr{
+					String("sandbox/name", "minimal-sandbox"),
+				},
+			},
+			Revision: 1,
+			Previous: 0,
+		}
+
+		data, err := cbor.Marshal(oldMeta)
+		r.NoError(err)
+
+		migratedMeta, err := MigrateMetaFromBytes(data)
+		r.NoError(err)
+
+		r.Equal("sandbox/minimal", string(migratedMeta.Entity.Id()))
+		r.Equal(int64(1), migratedMeta.Entity.GetRevision())
+		// Timestamps should be zero since they weren't set
+		r.True(migratedMeta.Entity.GetCreatedAt().IsZero())
+		r.True(migratedMeta.Entity.GetUpdatedAt().IsZero())
+
+		nameAttr, ok := migratedMeta.Entity.Get("sandbox/name")
+		r.True(ok)
+		r.Equal("minimal-sandbox", nameAttr.Value.String())
+	})
+}

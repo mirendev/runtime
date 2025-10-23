@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"reflect"
 	"slices"
 	"strings"
@@ -132,6 +133,47 @@ func (e *Entity) UnmarshalCBOR(data []byte) error {
 		return err
 	}
 	e.attrs = ec.Attrs
+
+	// Defensive programming: if no DBId attribute, try migrating from old format
+	// TODO remove this when we feel that everything has been migrated.
+	if _, ok := e.Get(DBId); !ok {
+		// Try to decode as old format with struct fields
+		var oldEnt OldEntity
+		if err := cbor.Unmarshal(data, &oldEnt); err == nil {
+			slog.Default().Warn("Entity missing db/id attribute, attempting migration from old format", "id", oldEnt.ID)
+			// Check if this actually needs migration (has old-style struct fields)
+			needsMigration := oldEnt.ID != "" || oldEnt.Revision != 0 || oldEnt.CreatedAt != 0 || oldEnt.UpdatedAt != 0
+
+			if needsMigration {
+				// Migrate struct fields to attributes
+				if oldEnt.ID != "" {
+					if _, ok := oldEnt.Get(DBId); !ok {
+						e.SetID(oldEnt.ID)
+					}
+				}
+
+				if oldEnt.Revision != 0 {
+					e.Set(Int64(Revision, oldEnt.Revision))
+				}
+
+				if oldEnt.CreatedAt != 0 {
+					createdAt := time.Unix(0, oldEnt.CreatedAt*int64(time.Millisecond))
+					e.SetCreatedAt(createdAt)
+				}
+
+				if oldEnt.UpdatedAt != 0 {
+					updatedAt := time.Unix(0, oldEnt.UpdatedAt*int64(time.Millisecond))
+					e.SetUpdatedAt(updatedAt)
+				}
+
+				// Sort attributes for consistency
+				e.attrs = SortedAttrs(e.attrs)
+			}
+		} else {
+			slog.Default().Warn("Entity missing db/id attribute, attempted migration from old format failed", "error", err)
+		}
+	}
+
 	return nil
 }
 
