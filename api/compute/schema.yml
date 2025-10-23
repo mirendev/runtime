@@ -329,27 +329,9 @@ kinds:
     # Template for creating sandboxes - references same component as sandbox.spec
     sandbox_spec:
       type: sandbox_spec
-      doc: Complete sandbox specification template
+      doc: Complete sandbox specification template (includes version ref to AppVersion)
 
-    # Concurrency/scaling configuration
-    mode:
-      type: enum
-      doc: Concurrency mode
-      choices: [auto, fixed]
-
-    max_slots:
-      type: int
-      doc: For auto mode - max capacity per sandbox
-
-    lease_slots:
-      type: int
-      doc: For auto mode - capacity allocated per lease
-
-    scale_down_delay:
-      type: duration
-      doc: For auto mode - delay before retiring idle sandboxes
-
-    # Desired state (managed by Activator)
+    # Desired state (managed by Activator based on traffic demand)
     desired_instances:
       type: int
       doc: Target number of sandbox instances
@@ -357,7 +339,7 @@ kinds:
     # Observable state (maintained by SandboxPoolManager)
     current_instances:
       type: int
-      doc: Current number of sandbox instances
+      doc: Current number of sandbox instances (non-STOPPED)
 
     ready_instances:
       type: int

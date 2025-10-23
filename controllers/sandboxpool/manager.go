@@ -9,6 +9,7 @@ import (
 	"miren.dev/runtime/api/compute/compute_v1alpha"
 	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
+	"miren.dev/runtime/pkg/concurrency"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/types"
 	"miren.dev/runtime/pkg/idgen"
@@ -36,6 +37,9 @@ func NewManager(
 // Run starts the reconciliation loop that watches SandboxPool entities
 // and reconciles them to match desired state.
 func (m *Manager) Run(ctx context.Context) error {
+	// Start background scale-down monitor
+	go m.runScaleDownMonitor(ctx)
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -269,8 +273,26 @@ func (m *Manager) createSandbox(ctx context.Context, pool *compute_v1alpha.Sandb
 
 // scaleDown stops excess sandboxes based on LastActivity and ScaleDownDelay
 func (m *Manager) scaleDown(ctx context.Context, pool *compute_v1alpha.SandboxPool, sandboxes []*compute_v1alpha.Sandbox, count int64) error {
+	// Get AppVersion to derive concurrency config
+	verResp, err := m.eac.Get(ctx, pool.SandboxSpec.Version.String())
+	if err != nil {
+		return fmt.Errorf("failed to get version: %w", err)
+	}
+	var ver core_v1alpha.AppVersion
+	ver.Decode(verResp.Entity().Entity())
+
+	// Get service concurrency config to determine scale-down behavior
+	svcConcurrency, err := core_v1alpha.GetServiceConcurrency(&ver, pool.Service)
+	if err != nil {
+		return fmt.Errorf("failed to get service concurrency: %w", err)
+	}
+
+	// Use concurrency strategy to determine scale-down delay
+	strategy := concurrency.NewStrategy(svcConcurrency)
+	scaleDownDelay := strategy.ScaleDownDelay()
+
 	// Skip scale-down if ScaleDownDelay is 0 (fixed mode - never retire)
-	if pool.ScaleDownDelay == 0 {
+	if scaleDownDelay == 0 {
 		m.log.Debug("skipping scale-down for fixed mode pool", "pool", pool.ID)
 		return nil
 	}
@@ -300,7 +322,7 @@ func (m *Manager) scaleDown(ctx context.Context, pool *compute_v1alpha.SandboxPo
 		}
 
 		idleTime := now.Sub(lastActivity)
-		if idleTime > pool.ScaleDownDelay {
+		if idleTime > scaleDownDelay {
 			candidates = append(candidates, candidate{
 				sb:           sb,
 				idleTime:     idleTime,
@@ -399,6 +421,143 @@ func (m *Manager) updatePoolStatus(ctx context.Context, pool *compute_v1alpha.Sa
 		"pool", pool.ID,
 		"current", current,
 		"ready", ready)
+
+	return nil
+}
+
+// runScaleDownMonitor periodically checks all pools for idle sandboxes that exceed
+// their ScaleDownDelay, and proactively decrements DesiredInstances to trigger scale-down.
+func (m *Manager) runScaleDownMonitor(ctx context.Context) {
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+
+	m.log.Info("scale-down monitor started")
+
+	for {
+		select {
+		case <-ctx.Done():
+			m.log.Info("scale-down monitor stopped")
+			return
+		case <-ticker.C:
+			if err := m.checkAllPoolsForScaleDown(ctx); err != nil {
+				m.log.Error("scale-down check failed", "error", err)
+			}
+		}
+	}
+}
+
+// checkAllPoolsForScaleDown examines all pools and decrements DesiredInstances
+// if idle sandboxes exceed their ScaleDownDelay threshold.
+func (m *Manager) checkAllPoolsForScaleDown(ctx context.Context) error {
+	// List all sandbox pools
+	resp, err := m.eac.List(ctx, entity.Ref(entity.EntityKind, compute_v1alpha.KindSandboxPool))
+	if err != nil {
+		return fmt.Errorf("failed to list pools: %w", err)
+	}
+
+	for _, ent := range resp.Values() {
+		var pool compute_v1alpha.SandboxPool
+		pool.Decode(ent.Entity())
+
+		// Get AppVersion to derive concurrency config
+		verResp, err := m.eac.Get(ctx, pool.SandboxSpec.Version.String())
+		if err != nil {
+			m.log.Error("failed to get version for pool", "pool", pool.ID, "error", err)
+			continue
+		}
+		var ver core_v1alpha.AppVersion
+		ver.Decode(verResp.Entity().Entity())
+
+		// Get service concurrency config
+		svcConcurrency, err := core_v1alpha.GetServiceConcurrency(&ver, pool.Service)
+		if err != nil {
+			m.log.Error("failed to get service concurrency", "pool", pool.ID, "error", err)
+			continue
+		}
+
+		// Use concurrency strategy to determine scale-down delay
+		strategy := concurrency.NewStrategy(svcConcurrency)
+		scaleDownDelay := strategy.ScaleDownDelay()
+
+		// Skip pools that never scale down (fixed mode)
+		if scaleDownDelay == 0 {
+			continue
+		}
+
+		// Get desired instances from strategy (for fixed mode minimum)
+		minInstances := int64(strategy.DesiredInstances())
+
+		// Check if this pool has idle sandboxes that should be retired
+		if err := m.checkPoolForScaleDown(ctx, &pool, scaleDownDelay, minInstances); err != nil {
+			m.log.Error("failed to check pool for scale-down",
+				"pool", pool.ID,
+				"error", err)
+		}
+	}
+
+	return nil
+}
+
+// checkPoolForScaleDown examines a single pool and decrements DesiredInstances
+// if there are idle sandboxes that exceed the ScaleDownDelay threshold.
+func (m *Manager) checkPoolForScaleDown(ctx context.Context, pool *compute_v1alpha.SandboxPool, scaleDownDelay time.Duration, minInstances int64) error {
+	// Get all sandboxes for this pool
+	sandboxes, err := m.listSandboxes(ctx, pool)
+	if err != nil {
+		return fmt.Errorf("failed to list sandboxes: %w", err)
+	}
+
+	now := time.Now()
+	idleCount := int64(0)
+
+	// Count RUNNING sandboxes that are idle beyond ScaleDownDelay
+	for _, sb := range sandboxes {
+		if sb.Status != compute_v1alpha.RUNNING {
+			continue
+		}
+
+		lastActivity := sb.LastActivity
+		if lastActivity.IsZero() {
+			// No activity recorded yet - treat as recently active
+			continue
+		}
+
+		idleTime := now.Sub(lastActivity)
+		if idleTime > scaleDownDelay {
+			idleCount++
+		}
+	}
+
+	// If we have idle sandboxes and we're above minimum instances, decrement desired
+	if idleCount > 0 && pool.DesiredInstances > minInstances {
+		// Only decrement by the number of idle sandboxes, but respect minimum
+		newDesired := pool.DesiredInstances - idleCount
+		if newDesired < minInstances {
+			newDesired = minInstances
+		}
+
+		if newDesired < pool.DesiredInstances {
+			m.log.Info("proactively scaling down pool",
+				"pool", pool.ID,
+				"service", pool.Service,
+				"current_desired", pool.DesiredInstances,
+				"new_desired", newDesired,
+				"idle_sandboxes", idleCount)
+
+			// Update pool with new desired instances
+			var rpcE entityserver_v1alpha.Entity
+			rpcE.SetId(pool.ID.String())
+			rpcE.SetAttrs(entity.New(
+				(&compute_v1alpha.SandboxPool{
+					DesiredInstances: newDesired,
+				}).Encode,
+			).Attrs())
+
+			if _, err := m.eac.Put(ctx, &rpcE); err != nil {
+				return fmt.Errorf("failed to update pool desired instances: %w", err)
+			}
+		}
+	}
 
 	return nil
 }

@@ -31,7 +31,6 @@ func TestManagerScaleUpFromZero(t *testing.T) {
 		DesiredInstances: 3,
 		CurrentInstances: 0,
 		ReadyInstances:   0,
-		Mode:             compute_v1alpha.AUTO,
 		SandboxSpec: compute_v1alpha.SandboxSpec{
 			Version: entity.Id("ver-1"),
 			Container: []compute_v1alpha.SandboxSpecContainer{
@@ -392,16 +391,34 @@ func TestManagerScaleDownIdle(t *testing.T) {
 	server, cleanup := testutils.NewInMemEntityServer(t)
 	defer cleanup()
 
-	// Create a sandbox pool with ScaleDownDelay
+	// Create AppVersion with auto mode concurrency (2 minute scale-down delay)
+	appVer := &core_v1alpha.AppVersion{
+		App:     entity.Id("app-1"),
+		Version: "v1",
+		Config: core_v1alpha.Config{
+			Services: []core_v1alpha.Services{
+				{
+					Name: "web",
+					ServiceConcurrency: core_v1alpha.ServiceConcurrency{
+						Mode:                "auto",
+						RequestsPerInstance: 10,
+						ScaleDownDelay:      "2m",
+					},
+				},
+			},
+		},
+	}
+	appVerID, err := server.Client.Create(ctx, "app-ver-1", appVer)
+	require.NoError(t, err)
+
+	// Create a sandbox pool
 	pool := &compute_v1alpha.SandboxPool{
 		Service:          "web",
-		DesiredInstances: 1,  // Want to scale down to 1
+		DesiredInstances: 1, // Want to scale down to 1
 		CurrentInstances: 0,
 		ReadyInstances:   0,
-		Mode:             compute_v1alpha.AUTO,
-		ScaleDownDelay:   2 * time.Minute,
 		SandboxSpec: compute_v1alpha.SandboxSpec{
-			Version: entity.Id("ver-1"),
+			Version: appVerID,
 			Container: []compute_v1alpha.SandboxSpecContainer{
 				{
 					Image: "test:latest",
@@ -479,16 +496,33 @@ func TestManagerScaleDownFixedMode(t *testing.T) {
 	server, cleanup := testutils.NewInMemEntityServer(t)
 	defer cleanup()
 
-	// Create a fixed mode pool (ScaleDownDelay = 0)
+	// Create AppVersion with fixed mode concurrency
+	appVer := &core_v1alpha.AppVersion{
+		App:     entity.Id("app-1"),
+		Version: "v1",
+		Config: core_v1alpha.Config{
+			Services: []core_v1alpha.Services{
+				{
+					Name: "web",
+					ServiceConcurrency: core_v1alpha.ServiceConcurrency{
+						Mode:         "fixed",
+						NumInstances: 3,
+					},
+				},
+			},
+		},
+	}
+	appVerID, err := server.Client.Create(ctx, "app-ver-1", appVer)
+	require.NoError(t, err)
+
+	// Create a fixed mode pool
 	pool := &compute_v1alpha.SandboxPool{
 		Service:          "web",
-		DesiredInstances: 1,  // Want 1, but have 3
+		DesiredInstances: 1, // Want 1, but have 3
 		CurrentInstances: 0,
 		ReadyInstances:   0,
-		Mode:             compute_v1alpha.FIXED,
-		ScaleDownDelay:   0,  // Fixed mode - never scale down
 		SandboxSpec: compute_v1alpha.SandboxSpec{
-			Version: entity.Id("ver-1"),
+			Version: appVerID,
 			Container: []compute_v1alpha.SandboxSpecContainer{
 				{
 					Image: "test:latest",

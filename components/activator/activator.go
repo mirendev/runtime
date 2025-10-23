@@ -663,61 +663,23 @@ func (a *localActivator) recoverPools(ctx context.Context) error {
 
 
 func (a *localActivator) createSandboxPool(ctx context.Context, ver *core_v1alpha.AppVersion, service string, spec *compute_v1alpha.SandboxSpec) (*compute_v1alpha.SandboxPool, error) {
-	// Get service concurrency config
+	// Get service concurrency config to determine initial instance count
 	svcConcurrency, err := core_v1alpha.GetServiceConcurrency(ver, service)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get service concurrency: %w", err)
 	}
 
-	// Calculate pool parameters based on mode
-	var maxSlots int64
-	var leaseSlots int64
-	var scaleDownDelay time.Duration
-
-	if svcConcurrency.Mode == "fixed" {
-		// Fixed mode: no slot tracking, just instance count
-		maxSlots = 1
-		leaseSlots = 1
-		scaleDownDelay = 0 // Never scale down
-	} else {
-		// Auto mode: slot-based capacity management
-		if svcConcurrency.RequestsPerInstance <= 0 {
-			maxSlots = 10 // default
-		} else {
-			maxSlots = svcConcurrency.RequestsPerInstance
-		}
-
-		leaseSlots = int64(float32(maxSlots) * 0.20)
-		if leaseSlots < 1 {
-			leaseSlots = 1
-		}
-
-		// Scale down delay (default 15 minutes)
-		scaleDownDelay = 15 * time.Minute
-		if d := svcConcurrency.ScaleDownDelay; d != "" {
-			if parsed, err := time.ParseDuration(d); err == nil {
-				scaleDownDelay = parsed
-			} else {
-				a.log.Warn("invalid ScaleDownDelay, using default", "value", d, "error", err)
-			}
-		}
+	// Determine initial desired instances based on mode
+	desiredInstances := int64(1) // Default: start with 1 instance
+	if svcConcurrency.Mode == "fixed" && svcConcurrency.NumInstances > 0 {
+		// Fixed mode: use configured instance count
+		desiredInstances = svcConcurrency.NumInstances
 	}
 
 	pool := compute_v1alpha.SandboxPool{
 		Service:          service,
 		SandboxSpec:      *spec,
-		Mode:             compute_v1alpha.SandboxPoolMode(svcConcurrency.Mode),
-		MaxSlots:         maxSlots,
-		LeaseSlots:       leaseSlots,
-		ScaleDownDelay:   scaleDownDelay,
-		DesiredInstances: 1, // Start with 1 instance
-	}
-
-	// Set num_instances for fixed mode
-	if svcConcurrency.Mode == "fixed" {
-		if svcConcurrency.NumInstances > 0 {
-			pool.DesiredInstances = svcConcurrency.NumInstances
-		}
+		DesiredInstances: desiredInstances,
 	}
 
 	name := idgen.GenNS("pool")
