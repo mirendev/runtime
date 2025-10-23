@@ -71,10 +71,18 @@ type verKey struct {
 	ver, service string
 }
 
+// poolState represents either a real pool or an in-progress creation sentinel
+type poolState struct {
+	pool       *compute_v1alpha.SandboxPool
+	inProgress bool
+	done       chan struct{} // Closed when creation completes (success or failure)
+	err        error         // Set if creation failed
+}
+
 type localActivator struct {
 	mu       sync.RWMutex
 	versions map[verKey]*verSandboxes
-	pools    map[verKey]*compute_v1alpha.SandboxPool // Track SandboxPool entities
+	pools    map[verKey]*poolState // Track SandboxPool entities or creation sentinels
 
 	log *slog.Logger
 	eac *entityserver_v1alpha.EntityAccessClient
@@ -87,7 +95,7 @@ func NewLocalActivator(ctx context.Context, log *slog.Logger, eac *entityserver_
 		log:      log.With("module", "activator"),
 		eac:      eac,
 		versions: make(map[verKey]*verSandboxes),
-		pools:    make(map[verKey]*compute_v1alpha.SandboxPool),
+		pools:    make(map[verKey]*poolState),
 	}
 
 	// Recover existing sandboxes on startup
@@ -255,77 +263,105 @@ func (a *localActivator) ensurePoolAndWaitForSandbox(ctx context.Context, ver *c
 
 // ensureSandboxPool creates or updates a SandboxPool for the given app version and service.
 // It increments DesiredInstances to request additional capacity.
+// Uses a sentinel pattern to prevent duplicate pool creation races.
 func (a *localActivator) ensureSandboxPool(ctx context.Context, ver *core_v1alpha.AppVersion, service string) (*compute_v1alpha.SandboxPool, error) {
 	key := verKey{ver.ID.String(), service}
 
-	// Check if pool exists (read lock)
-	a.mu.RLock()
-	existingPool, exists := a.pools[key]
-	a.mu.RUnlock()
+	for {
+		// Check if pool exists or is being created (read lock)
+		a.mu.RLock()
+		state, exists := a.pools[key]
+		a.mu.RUnlock()
 
-	if exists {
-		// Update existing pool - increment DesiredInstances atomically under lock
-		a.mu.Lock()
-		existingPool.DesiredInstances++
-		a.mu.Unlock()
+		if exists {
+			// If creation is in progress, wait for it to complete
+			if state.inProgress {
+				a.log.Debug("pool creation in progress, waiting", "service", service)
+				<-state.done
+				// Check if creation succeeded or failed
+				if state.err != nil {
+					return nil, fmt.Errorf("pool creation failed: %w", state.err)
+				}
+				// Creation succeeded, fall through to increment logic below
+				a.mu.RLock()
+				state = a.pools[key]
+				a.mu.RUnlock()
+			}
 
-		var rpcE entityserver_v1alpha.Entity
-		rpcE.SetId(existingPool.ID.String())
-		rpcE.SetAttrs(entity.New(
-			existingPool.Encode,
-		).Attrs())
+			// Update existing pool - increment DesiredInstances atomically under lock
+			a.mu.Lock()
+			state.pool.DesiredInstances++
+			a.mu.Unlock()
 
-		_, err := a.eac.Put(ctx, &rpcE)
-		if err != nil {
-			return nil, fmt.Errorf("failed to update pool: %w", err)
+			var rpcE entityserver_v1alpha.Entity
+			rpcE.SetId(state.pool.ID.String())
+			rpcE.SetAttrs(entity.New(
+				state.pool.Encode,
+			).Attrs())
+
+			_, err := a.eac.Put(ctx, &rpcE)
+			if err != nil {
+				return nil, fmt.Errorf("failed to update pool: %w", err)
+			}
+
+			a.log.Info("incremented pool capacity", "pool", state.pool.ID, "desired_instances", state.pool.DesiredInstances)
+			return state.pool, nil
 		}
 
-		a.log.Info("incremented pool capacity", "pool", existingPool.ID, "desired_instances", existingPool.DesiredInstances)
-		return existingPool, nil
-	}
-
-	// Create new pool - acquire write lock first to prevent duplicate creation
-	a.mu.Lock()
-	// Double-check that another goroutine didn't create the pool while we were waiting for the lock
-	if existingPool, exists = a.pools[key]; exists {
-		a.mu.Unlock()
-		// Another goroutine created the pool, increment it instead
+		// Pool doesn't exist - try to claim creation rights with sentinel
 		a.mu.Lock()
-		existingPool.DesiredInstances++
-		a.mu.Unlock()
-
-		var rpcE entityserver_v1alpha.Entity
-		rpcE.SetId(existingPool.ID.String())
-		rpcE.SetAttrs(entity.New(
-			existingPool.Encode,
-		).Attrs())
-
-		_, err := a.eac.Put(ctx, &rpcE)
-		if err != nil {
-			return nil, fmt.Errorf("failed to update pool: %w", err)
+		_, exists = a.pools[key]
+		if exists {
+			// Another goroutine claimed creation while we waited for lock
+			a.mu.Unlock()
+			continue // Loop back to wait/increment logic
 		}
 
-		a.log.Info("incremented pool capacity (created by another goroutine)", "pool", existingPool.ID, "desired_instances", existingPool.DesiredInstances)
-		return existingPool, nil
+		// Claim creation by inserting sentinel
+		sentinel := &poolState{
+			inProgress: true,
+			done:       make(chan struct{}),
+		}
+		a.pools[key] = sentinel
+		a.mu.Unlock()
+
+		// Perform pool creation outside the lock
+		a.log.Info("creating new sandbox pool", "service", service)
+
+		spec, err := a.buildSandboxSpec(ctx, ver, service)
+		if err != nil {
+			// Creation failed - remove sentinel and notify waiters
+			a.mu.Lock()
+			sentinel.err = fmt.Errorf("failed to build sandbox spec: %w", err)
+			delete(a.pools, key)
+			close(sentinel.done)
+			a.mu.Unlock()
+			return nil, sentinel.err
+		}
+
+		pool, err := a.createSandboxPool(ctx, ver, service, spec)
+		if err != nil {
+			// Creation failed - remove sentinel and notify waiters
+			a.mu.Lock()
+			sentinel.err = fmt.Errorf("failed to create pool: %w", err)
+			delete(a.pools, key)
+			close(sentinel.done)
+			a.mu.Unlock()
+			return nil, sentinel.err
+		}
+
+		// Creation succeeded - replace sentinel with real pool
+		a.mu.Lock()
+		a.pools[key] = &poolState{
+			pool:       pool,
+			inProgress: false,
+		}
+		close(sentinel.done) // Notify waiters
+		a.mu.Unlock()
+
+		a.log.Info("created new sandbox pool", "pool", pool.ID, "service", service, "desired_instances", pool.DesiredInstances)
+		return pool, nil
 	}
-	a.mu.Unlock()
-
-	spec, err := a.buildSandboxSpec(ctx, ver, service)
-	if err != nil {
-		return nil, fmt.Errorf("failed to build sandbox spec: %w", err)
-	}
-
-	pool, err := a.createSandboxPool(ctx, ver, service, spec)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create pool: %w", err)
-	}
-
-	a.mu.Lock()
-	a.pools[key] = pool
-	a.mu.Unlock()
-
-	a.log.Info("created new sandbox pool", "pool", pool.ID, "service", service, "desired_instances", pool.DesiredInstances)
-	return pool, nil
 }
 
 func (a *localActivator) ReleaseLease(ctx context.Context, lease *Lease) error {
@@ -669,7 +705,10 @@ func (a *localActivator) recoverPools(ctx context.Context) error {
 		key := verKey{versionID.String(), pool.Service}
 
 		a.mu.Lock()
-		a.pools[key] = &pool
+		a.pools[key] = &poolState{
+			pool:       &pool,
+			inProgress: false,
+		}
 		a.mu.Unlock()
 
 		a.log.Info("recovered pool", "pool", pool.ID, "service", pool.Service, "version", versionID, "desired_instances", pool.DesiredInstances)

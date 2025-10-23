@@ -210,7 +210,7 @@ func TestActivatorRecoverSandboxesWithEntityServer(t *testing.T) {
 		log:      log,
 		eac:      server.EAC,
 		versions: make(map[verKey]*verSandboxes),
-		pools:    make(map[verKey]*compute_v1alpha.SandboxPool),
+		pools:    make(map[verKey]*poolState),
 	}
 
 	err = activator.recoverSandboxes(ctx)
