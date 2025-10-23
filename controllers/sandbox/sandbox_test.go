@@ -1516,4 +1516,24 @@ func TestSandbox(t *testing.T) {
 		err = co1.Delete(ctx, id)
 		r.NoError(err)
 	})
+
+	t.Run("maps legacy port protocols correctly", func(t *testing.T) {
+		r := require.New(t)
+
+		// Test legacy enum constants
+		r.Equal(compute.SandboxSpecContainerPortTCP, mapLegacyProtocol(compute.TCP))
+		r.Equal(compute.SandboxSpecContainerPortUDP, mapLegacyProtocol(compute.UDP))
+
+		// Test raw string values (in case of direct string values in old data)
+		r.Equal(compute.SandboxSpecContainerPortTCP, mapLegacyProtocol("tcp"))
+		r.Equal(compute.SandboxSpecContainerPortUDP, mapLegacyProtocol("udp"))
+
+		// Test unknown/empty defaults to TCP
+		r.Equal(compute.SandboxSpecContainerPortTCP, mapLegacyProtocol(""))
+		r.Equal(compute.SandboxSpecContainerPortTCP, mapLegacyProtocol("unknown"))
+
+		// Verify the mapped values are the correct fully-qualified enum paths
+		r.Equal("component.sandbox_spec.container.port.protocol.tcp", string(mapLegacyProtocol(compute.TCP)))
+		r.Equal("component.sandbox_spec.container.port.protocol.udp", string(mapLegacyProtocol(compute.UDP)))
+	})
 }

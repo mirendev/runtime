@@ -171,6 +171,19 @@ func (c *SandboxController) waitForPort(ctx context.Context, id string, port int
 	}
 }
 
+// mapLegacyProtocol converts legacy PortProtocol values to SandboxSpecContainerPortProtocol
+func mapLegacyProtocol(legacy compute.PortProtocol) compute.SandboxSpecContainerPortProtocol {
+	switch legacy {
+	case compute.TCP, "tcp":
+		return compute.SandboxSpecContainerPortTCP
+	case compute.UDP, "udp":
+		return compute.SandboxSpecContainerPortUDP
+	default:
+		// Default to TCP for unknown protocols
+		return compute.SandboxSpecContainerPortTCP
+	}
+}
+
 // migrateLegacySandboxes converts sandboxes using legacy top-level fields to use Spec field
 func (c *SandboxController) migrateLegacySandboxes(ctx context.Context) error {
 	c.Log.Info("migrating legacy sandboxes to Spec format")
@@ -220,7 +233,7 @@ func (c *SandboxController) migrateLegacySandboxes(ctx context.Context) error {
 				specCont.Port = append(specCont.Port, compute.SandboxSpecContainerPort{
 					Port:     p.Port,
 					Name:     p.Name,
-					Protocol: compute.SandboxSpecContainerPortProtocol(p.Protocol),
+					Protocol: mapLegacyProtocol(p.Protocol),
 					Type:     p.Type,
 					NodePort: p.NodePort,
 				})
