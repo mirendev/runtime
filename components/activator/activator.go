@@ -699,7 +699,7 @@ func (a *localActivator) recoverSandboxes(ctx context.Context) error {
 		service, _ := md.Labels.Get("service")
 		if service == "" {
 			// Skip sandboxes without service label (e.g., buildkit, other non-app sandboxes)
-			return nil
+			continue
 		}
 
 		// Determine port from version config or default to 3000
