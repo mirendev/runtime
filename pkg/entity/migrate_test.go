@@ -296,17 +296,17 @@ func TestMigrateMetaFromBytes(t *testing.T) {
 		r.Equal(int64(4), migratedMeta.Previous)
 
 		// Verify Entity was migrated correctly
-		r.Equal("sandbox/test-sandbox", string(migratedMeta.Entity.Id()))
+		r.Equal("sandbox/test-sandbox", string(migratedMeta.Id()))
 		r.Equal(int64(42), migratedMeta.Entity.GetRevision())
-		r.True(migratedMeta.Entity.GetCreatedAt().Equal(time.Date(2024, 6, 15, 10, 30, 0, 0, time.UTC)))
-		r.True(migratedMeta.Entity.GetUpdatedAt().Equal(time.Date(2024, 6, 15, 12, 45, 0, 0, time.UTC)))
+		r.True(migratedMeta.GetCreatedAt().Equal(time.Date(2024, 6, 15, 10, 30, 0, 0, time.UTC)))
+		r.True(migratedMeta.GetUpdatedAt().Equal(time.Date(2024, 6, 15, 12, 45, 0, 0, time.UTC)))
 
 		// Verify original attributes are preserved
-		statusAttr, ok := migratedMeta.Entity.Get("sandbox/status")
+		statusAttr, ok := migratedMeta.Get("sandbox/status")
 		r.True(ok)
 		r.Equal("running", statusAttr.Value.String())
 
-		imageAttr, ok := migratedMeta.Entity.Get("sandbox/image")
+		imageAttr, ok := migratedMeta.Get("sandbox/image")
 		r.True(ok)
 		r.Equal("test-image:latest", imageAttr.Value.String())
 	})
@@ -339,10 +339,10 @@ func TestMigrateMetaFromBytes(t *testing.T) {
 		// Verify it's identical to original
 		r.Equal(int64(15), decodedMeta.Revision)
 		r.Equal(int64(14), decodedMeta.Previous)
-		r.Equal("sandbox/new-sandbox", string(decodedMeta.Entity.Id()))
+		r.Equal("sandbox/new-sandbox", string(decodedMeta.Id()))
 		r.Equal(int64(10), decodedMeta.Entity.GetRevision())
 
-		statusAttr, ok := decodedMeta.Entity.Get("sandbox/status")
+		statusAttr, ok := decodedMeta.Get("sandbox/status")
 		r.True(ok)
 		r.Equal("stopped", statusAttr.Value.String())
 	})
@@ -368,13 +368,13 @@ func TestMigrateMetaFromBytes(t *testing.T) {
 		migratedMeta, err := MigrateMetaFromBytes(data)
 		r.NoError(err)
 
-		r.Equal("sandbox/minimal", string(migratedMeta.Entity.Id()))
-		r.Equal(int64(1), migratedMeta.Entity.GetRevision())
+		r.Equal("sandbox/minimal", string(migratedMeta.Id()))
+		r.Equal(int64(1), migratedMeta.GetRevision())
 		// Timestamps should be zero since they weren't set
-		r.True(migratedMeta.Entity.GetCreatedAt().IsZero())
-		r.True(migratedMeta.Entity.GetUpdatedAt().IsZero())
+		r.True(migratedMeta.GetCreatedAt().IsZero())
+		r.True(migratedMeta.GetUpdatedAt().IsZero())
 
-		nameAttr, ok := migratedMeta.Entity.Get("sandbox/name")
+		nameAttr, ok := migratedMeta.Get("sandbox/name")
 		r.True(ok)
 		r.Equal("minimal-sandbox", nameAttr.Value.String())
 	})
