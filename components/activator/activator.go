@@ -114,9 +114,6 @@ func NewLocalActivator(ctx context.Context, log *slog.Logger, eac *entityserver_
 func (a *localActivator) AcquireLease(ctx context.Context, ver *core_v1alpha.AppVersion, service string) (*Lease, error) {
 	key := verKey{ver.ID.String(), service}
 
-	// Get service concurrency config
-	svcConcurrency := a.getServiceConcurrency(ver, service)
-
 	// Try to find an available sandbox with capacity
 	a.mu.Lock()
 	vs, ok := a.versions[key]
@@ -161,7 +158,7 @@ func (a *localActivator) AcquireLease(ctx context.Context, ver *core_v1alpha.App
 		"version", ver.Version,
 		"service", service)
 
-	return a.ensurePoolAndWaitForSandbox(ctx, ver, service, svcConcurrency)
+	return a.ensurePoolAndWaitForSandbox(ctx, ver, service)
 }
 
 var ErrSandboxDiedEarly = fmt.Errorf("sandbox died while booting")
@@ -170,11 +167,11 @@ var ErrPoolTimeout = fmt.Errorf("timeout waiting for sandbox from pool")
 // ensurePoolAndWaitForSandbox ensures a SandboxPool exists with sufficient DesiredInstances,
 // then polls for a sandbox with capacity to become available.
 // The background watcher (InBackground) handles discovering new sandboxes.
-func (a *localActivator) ensurePoolAndWaitForSandbox(ctx context.Context, ver *core_v1alpha.AppVersion, service string, svcConcurrency *core_v1alpha.ServiceConcurrency) (*Lease, error) {
+func (a *localActivator) ensurePoolAndWaitForSandbox(ctx context.Context, ver *core_v1alpha.AppVersion, service string) (*Lease, error) {
 	key := verKey{ver.ID.String(), service}
 
 	// Ensure pool exists and increment desired capacity
-	pool, err := a.ensureSandboxPool(ctx, ver, service, svcConcurrency)
+	pool, err := a.ensureSandboxPool(ctx, ver, service)
 	if err != nil {
 		return nil, fmt.Errorf("failed to ensure sandbox pool: %w", err)
 	}
@@ -244,7 +241,7 @@ func (a *localActivator) ensurePoolAndWaitForSandbox(ctx context.Context, ver *c
 
 // ensureSandboxPool creates or updates a SandboxPool for the given app version and service.
 // It increments DesiredInstances to request additional capacity.
-func (a *localActivator) ensureSandboxPool(ctx context.Context, ver *core_v1alpha.AppVersion, service string, svcConcurrency *core_v1alpha.ServiceConcurrency) (*compute_v1alpha.SandboxPool, error) {
+func (a *localActivator) ensureSandboxPool(ctx context.Context, ver *core_v1alpha.AppVersion, service string) (*compute_v1alpha.SandboxPool, error) {
 	key := verKey{ver.ID.String(), service}
 
 	a.mu.Lock()
@@ -298,12 +295,12 @@ func (a *localActivator) ensureSandboxPool(ctx context.Context, ver *core_v1alph
 	}
 	a.mu.Unlock()
 
-	spec, err := a.buildSandboxSpec(ctx, ver, service, svcConcurrency)
+	spec, err := a.buildSandboxSpec(ctx, ver, service)
 	if err != nil {
 		return nil, fmt.Errorf("failed to build sandbox spec: %w", err)
 	}
 
-	pool, err := a.createSandboxPool(ctx, ver, service, svcConcurrency, spec)
+	pool, err := a.createSandboxPool(ctx, ver, service, spec)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create pool: %w", err)
 	}
@@ -455,7 +452,11 @@ func (a *localActivator) InBackground(ctx context.Context) {
 			}
 
 			// Get service concurrency and create strategy/tracker
-			svcConcurrency := a.getServiceConcurrency(&appVer, service)
+			svcConcurrency, err := core_v1alpha.GetServiceConcurrency(&appVer, service)
+			if err != nil {
+				a.log.Error("failed to get service concurrency", "error", err, "sandbox", sb.ID, "service", service)
+				return nil
+			}
 			strategy := concurrency.NewStrategy(svcConcurrency)
 			tracker := strategy.InitializeTracker()
 
@@ -582,7 +583,11 @@ func (a *localActivator) recoverSandboxes(ctx context.Context) error {
 		}
 
 		// Get service-specific concurrency configuration and create strategy
-		svcConcurrency := a.getServiceConcurrency(&appVer, service)
+		svcConcurrency, err := core_v1alpha.GetServiceConcurrency(&appVer, service)
+		if err != nil {
+			a.log.Error("failed to get service concurrency for sandbox", "error", err, "sandbox", sb.ID, "service", service)
+			continue
+		}
 		strategy := concurrency.NewStrategy(svcConcurrency)
 
 		// Initialize tracker for recovered sandbox (starts empty)
@@ -656,23 +661,14 @@ func (a *localActivator) recoverPools(ctx context.Context) error {
 	return nil
 }
 
-func (a *localActivator) getServiceConcurrency(ver *core_v1alpha.AppVersion, service string) *core_v1alpha.ServiceConcurrency {
-	// Find service-specific concurrency config
-	for _, svc := range ver.Config.Services {
-		if svc.Name == service {
-			return &svc.ServiceConcurrency
-		}
+
+func (a *localActivator) createSandboxPool(ctx context.Context, ver *core_v1alpha.AppVersion, service string, spec *compute_v1alpha.SandboxSpec) (*compute_v1alpha.SandboxPool, error) {
+	// Get service concurrency config
+	svcConcurrency, err := core_v1alpha.GetServiceConcurrency(ver, service)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get service concurrency: %w", err)
 	}
 
-	// Return default config
-	return &core_v1alpha.ServiceConcurrency{
-		Mode:                "auto",
-		RequestsPerInstance: 10,
-		ScaleDownDelay:      "15m",
-	}
-}
-
-func (a *localActivator) createSandboxPool(ctx context.Context, ver *core_v1alpha.AppVersion, service string, svcConcurrency *core_v1alpha.ServiceConcurrency, spec *compute_v1alpha.SandboxSpec) (*compute_v1alpha.SandboxPool, error) {
 	// Calculate pool parameters based on mode
 	var maxSlots int64
 	var leaseSlots int64
@@ -749,7 +745,7 @@ func (a *localActivator) createSandboxPool(ctx context.Context, ver *core_v1alph
 	return &pool, nil
 }
 
-func (a *localActivator) buildSandboxSpec(ctx context.Context, ver *core_v1alpha.AppVersion, service string, svcConcurrency *core_v1alpha.ServiceConcurrency) (*compute_v1alpha.SandboxSpec, error) {
+func (a *localActivator) buildSandboxSpec(ctx context.Context, ver *core_v1alpha.AppVersion, service string) (*compute_v1alpha.SandboxSpec, error) {
 	// Get app metadata
 	appResp, err := a.eac.Get(ctx, ver.App.String())
 	if err != nil {
