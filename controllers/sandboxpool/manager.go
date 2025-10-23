@@ -288,7 +288,7 @@ func (m *Manager) scaleDown(ctx context.Context, pool *compute_v1alpha.SandboxPo
 	}
 
 	// Use concurrency strategy to determine scale-down delay
-	strategy := concurrency.NewStrategy(svcConcurrency)
+	strategy := concurrency.NewStrategy(&svcConcurrency)
 	scaleDownDelay := strategy.ScaleDownDelay()
 
 	// Skip scale-down if ScaleDownDelay is 0 (fixed mode - never retire)
@@ -476,7 +476,7 @@ func (m *Manager) checkAllPoolsForScaleDown(ctx context.Context) error {
 		}
 
 		// Use concurrency strategy to determine scale-down delay
-		strategy := concurrency.NewStrategy(svcConcurrency)
+		strategy := concurrency.NewStrategy(&svcConcurrency)
 		scaleDownDelay := strategy.ScaleDownDelay()
 
 		// Skip pools that never scale down (fixed mode)

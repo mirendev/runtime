@@ -582,7 +582,7 @@ func (a *localActivator) watchSandboxes(ctx context.Context) {
 				a.log.Error("failed to get service concurrency", "error", err, "sandbox", sb.ID, "service", service)
 				return nil
 			}
-			strategy := concurrency.NewStrategy(svcConcurrency)
+			strategy := concurrency.NewStrategy(&svcConcurrency)
 			tracker := strategy.InitializeTracker()
 
 			lsb := &sandbox{
@@ -726,7 +726,7 @@ func (a *localActivator) recoverSandboxes(ctx context.Context) error {
 			a.log.Error("failed to get service concurrency for sandbox", "error", err, "sandbox", sb.ID, "service", service)
 			continue
 		}
-		strategy := concurrency.NewStrategy(svcConcurrency)
+		strategy := concurrency.NewStrategy(&svcConcurrency)
 
 		// Initialize tracker for recovered sandbox (starts empty)
 		tracker := strategy.InitializeTracker()
