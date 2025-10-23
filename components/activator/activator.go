@@ -84,6 +84,10 @@ type localActivator struct {
 	versions map[verKey]*verSandboxes
 	pools    map[verKey]*poolState // Track SandboxPool entities or creation sentinels
 
+	// Channels to notify waiters when new sandboxes become available
+	// Map key is verKey (version + service), value is list of channels to notify
+	newSandboxChans map[verKey][]chan struct{}
+
 	log *slog.Logger
 	eac *entityserver_v1alpha.EntityAccessClient
 }
@@ -92,10 +96,11 @@ var _ AppActivator = (*localActivator)(nil)
 
 func NewLocalActivator(ctx context.Context, log *slog.Logger, eac *entityserver_v1alpha.EntityAccessClient) AppActivator {
 	la := &localActivator{
-		log:      log.With("module", "activator"),
-		eac:      eac,
-		versions: make(map[verKey]*verSandboxes),
-		pools:    make(map[verKey]*poolState),
+		log:             log.With("module", "activator"),
+		eac:             eac,
+		versions:        make(map[verKey]*verSandboxes),
+		pools:           make(map[verKey]*poolState),
+		newSandboxChans: make(map[verKey][]chan struct{}),
 	}
 
 	// Recover existing sandboxes on startup
@@ -114,7 +119,7 @@ func NewLocalActivator(ctx context.Context, log *slog.Logger, eac *entityserver_
 		la.log.Info("pool recovery complete", "tracked_pools", len(la.pools))
 	}
 
-	go la.InBackground(ctx)
+	go la.watchSandboxes(ctx)
 	go la.syncLastActivity(ctx)
 
 	return la
@@ -181,8 +186,8 @@ var ErrSandboxDiedEarly = fmt.Errorf("sandbox died while booting")
 var ErrPoolTimeout = fmt.Errorf("timeout waiting for sandbox from pool")
 
 // ensurePoolAndWaitForSandbox ensures a SandboxPool exists with sufficient DesiredInstances,
-// then polls for a sandbox with capacity to become available.
-// The background watcher (InBackground) handles discovering new sandboxes.
+// then waits for a sandbox with capacity to become available.
+// The background watcher (watchSandboxes) handles discovering new sandboxes and notifying waiters.
 func (a *localActivator) ensurePoolAndWaitForSandbox(ctx context.Context, ver *core_v1alpha.AppVersion, service string) (*Lease, error) {
 	key := verKey{ver.ID.String(), service}
 
@@ -198,65 +203,99 @@ func (a *localActivator) ensurePoolAndWaitForSandbox(ctx context.Context, ver *c
 		"pool_id", pool.ID,
 		"desired_instances", pool.DesiredInstances)
 
-	// Poll for capacity with timeout
-	// The background watcher will discover new sandboxes and add them to a.versions
-	pollCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	// Register notification channel for this wait
+	notifyChan := make(chan struct{}, 1)
+	a.mu.Lock()
+	a.newSandboxChans[key] = append(a.newSandboxChans[key], notifyChan)
+	a.mu.Unlock()
+
+	// Clean up the channel on exit
+	defer func() {
+		a.mu.Lock()
+		chans := a.newSandboxChans[key]
+		for i, ch := range chans {
+			if ch == notifyChan {
+				a.newSandboxChans[key] = append(chans[:i], chans[i+1:]...)
+				break
+			}
+		}
+		if len(a.newSandboxChans[key]) == 0 {
+			delete(a.newSandboxChans, key)
+		}
+		a.mu.Unlock()
+		close(notifyChan)
+	}()
+
+	pollCtx, cancel := context.WithTimeout(ctx, 50*time.Second)
 	defer cancel()
 
-	ticker := time.NewTicker(200 * time.Millisecond)
+	// Fallback ticker at 5s interval as safety net
+	// If this fires, it means channel notification failed somehow
+	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 
+	// Helper to check for available sandbox
+	checkForSandbox := func() (*Lease, bool) {
+		a.mu.RLock()
+		vs, ok := a.versions[key]
+		var candidateSandbox *sandbox
+		if ok && len(vs.sandboxes) > 0 {
+			// Try to find a sandbox with capacity
+			start := rand.Int() % len(vs.sandboxes)
+			for i := 0; i < len(vs.sandboxes); i++ {
+				s := vs.sandboxes[(start+i)%len(vs.sandboxes)]
+				if s.tracker.HasCapacity() {
+					candidateSandbox = s
+					break
+				}
+			}
+		}
+		a.mu.RUnlock()
+
+		if candidateSandbox != nil {
+			a.mu.Lock()
+			if candidateSandbox.tracker.HasCapacity() {
+				leaseSize := candidateSandbox.tracker.AcquireLease()
+				candidateSandbox.lastRenewal = time.Now()
+				a.mu.Unlock()
+
+				a.log.Info("acquired lease from pool sandbox",
+					"app", ver.App,
+					"version", ver.Version,
+					"sandbox", candidateSandbox.sandbox.ID,
+					"service", service)
+
+				return &Lease{
+					ver:     ver,
+					sandbox: candidateSandbox.sandbox,
+					ent:     candidateSandbox.ent,
+					pool:    service,
+					service: service,
+					Size:    leaseSize,
+					URL:     candidateSandbox.url,
+				}, true
+			}
+			a.mu.Unlock()
+		}
+		return nil, false
+	}
+
 	for {
+		// Check for available sandbox immediately
+		if lease, found := checkForSandbox(); found {
+			return lease, nil
+		}
+
 		select {
 		case <-pollCtx.Done():
-			return nil, fmt.Errorf("%w: no sandbox became available within 2 minutes", ErrPoolTimeout)
+			return nil, fmt.Errorf("%w: no sandbox became available within 50 seconds", ErrPoolTimeout)
+		case <-notifyChan:
+			// Notified of new sandbox availability, loop back to check
 		case <-ticker.C:
-			// Check if any sandbox has capacity now (read lock for scan)
-			a.mu.RLock()
-			vs, ok := a.versions[key]
-			var candidateSandbox *sandbox
-			if ok && len(vs.sandboxes) > 0 {
-				// Try to find a sandbox with capacity
-				start := rand.Int() % len(vs.sandboxes)
-				for i := 0; i < len(vs.sandboxes); i++ {
-					s := vs.sandboxes[(start+i)%len(vs.sandboxes)]
-					if s.tracker.HasCapacity() {
-						candidateSandbox = s
-						break
-					}
-				}
-			}
-			a.mu.RUnlock()
-
-			// If we found a candidate, acquire write lock and double-check
-			if candidateSandbox != nil {
-				a.mu.Lock()
-				if candidateSandbox.tracker.HasCapacity() {
-					leaseSize := candidateSandbox.tracker.AcquireLease()
-					candidateSandbox.lastRenewal = time.Now()
-					a.mu.Unlock()
-
-					a.log.Info("acquired lease from pool sandbox",
-						"app", ver.App,
-						"version", ver.Version,
-						"sandbox", candidateSandbox.sandbox.ID,
-						"service", service)
-
-					return &Lease{
-						ver:     ver,
-						sandbox: candidateSandbox.sandbox,
-						ent:     candidateSandbox.ent,
-						pool:    service,
-						service: service,
-						Size:    leaseSize,
-						URL:     candidateSandbox.url,
-					}, nil
-				}
-				a.mu.Unlock()
-				// Capacity was taken, continue polling
-			}
-
-			// No capacity yet, continue polling
+			// Fallback safety check - log warning if this catches something
+			a.log.Warn("fallback ticker fired while waiting for sandbox - channel notification may have failed",
+				"app", ver.App,
+				"service", service)
 		}
 	}
 }
@@ -403,7 +442,7 @@ func (a *localActivator) RenewLease(ctx context.Context, lease *Lease) (*Lease, 
 	return nil, fmt.Errorf("sandbox not found")
 }
 
-func (a *localActivator) InBackground(ctx context.Context) {
+func (a *localActivator) watchSandboxes(ctx context.Context) {
 	// Watch for sandbox changes: update status AND discover new RUNNING sandboxes
 	// This is the single source of sandbox discovery for the activator
 	// Retry loop to handle transient failures
@@ -541,6 +580,19 @@ func (a *localActivator) InBackground(ctx context.Context) {
 				}
 			}
 			vs.sandboxes = append(vs.sandboxes, lsb)
+
+			// Notify any waiters for this version+service that a new sandbox is available
+			if chans, ok := a.newSandboxChans[key]; ok {
+				for _, ch := range chans {
+					select {
+					case ch <- struct{}{}:
+						// Notification sent
+					default:
+						// Channel buffer full (already has notification pending)
+					}
+				}
+			}
+
 			a.mu.Unlock()
 
 			a.log.Info("discovered and tracking new sandbox", "sandbox", sb.ID, "service", service, "url", addr)
