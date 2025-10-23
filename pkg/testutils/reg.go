@@ -177,6 +177,7 @@ func Registry(extra ...func(*asm.Registry)) (*asm.Registry, func()) {
 			Prefix:        opts.Prefix,
 			Resolver:      res,
 			TempDir:       tempDir,
+			DataPath:      filepath.Join(tempDir, "coordinator"),
 			Mem:           opts.Mem,
 			Cpu:           opts.CPU,
 		})
