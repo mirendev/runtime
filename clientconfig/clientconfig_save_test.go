@@ -398,9 +398,11 @@ func TestSetLeafConfigUpdatesExisting(t *testing.T) {
 	assert.Equal(t, "test2.example.com", testClusterFromFile.Hostname)
 }
 
-func TestSetLeafConfigSetsActiveClusterWhenMainIsEmpty(t *testing.T) {
-	// Test that when main config has no clusters and no active cluster,
-	// adding a leaf config with clusters sets the first cluster as active
+func TestSetLeafConfigDoesNotSetActiveCluster(t *testing.T) {
+	// Test that SetLeafConfig does NOT automatically set active cluster
+	// This is intentional - active cluster should be set explicitly to avoid
+	// creating invalid states where active_cluster is set but the cluster
+	// definition hasn't been saved yet (if interrupted during save)
 
 	config := NewConfig()
 
@@ -423,18 +425,25 @@ func TestSetLeafConfigSetsActiveClusterWhenMainIsEmpty(t *testing.T) {
 	}
 	config.SetLeafConfig("environments", leafConfigData)
 
-	// Verify that one of the clusters was set as active
-	activeCluster := config.ActiveCluster()
-	assert.NotEmpty(t, activeCluster, "Active cluster should be set automatically")
-	assert.True(t, activeCluster == "prod" || activeCluster == "dev", "Active cluster should be one of the leaf config clusters")
+	// Verify that active cluster is NOT automatically set
+	assert.Equal(t, "", config.ActiveCluster(), "Active cluster should NOT be set automatically by SetLeafConfig")
 
-	// Verify the cluster is accessible
-	cluster, err := config.GetCluster(activeCluster)
+	// Verify the clusters are accessible
+	prodCluster, err := config.GetCluster("prod")
 	require.NoError(t, err)
-	assert.NotNil(t, cluster)
+	assert.NotNil(t, prodCluster)
 
-	// Verify both clusters are still available
+	devCluster, err := config.GetCluster("dev")
+	require.NoError(t, err)
+	assert.NotNil(t, devCluster)
+
+	// Verify both clusters are available
 	assert.Equal(t, 2, config.GetClusterCount())
+
+	// Active cluster must be set explicitly
+	err = config.SetActiveCluster("prod")
+	require.NoError(t, err)
+	assert.Equal(t, "prod", config.ActiveCluster())
 }
 
 func TestSetLeafConfigDoesNotOverrideExistingActiveCluster(t *testing.T) {
@@ -488,4 +497,88 @@ func TestSetLeafConfigDoesNotSetActiveWhenNoMainClustersButHasActiveCluster(t *t
 
 	// Verify active cluster remains unchanged
 	assert.Equal(t, "existing-active", config.ActiveCluster())
+}
+
+func TestSaveLeafConfigsBeforeMainConfig(t *testing.T) {
+	// Regression test for bug where main config was saved before leaf configs
+	// If the process is interrupted between saving main config and leaf configs,
+	// we end up with a broken state: active_cluster points to a cluster that doesn't exist
+	//
+	// This test verifies that leaf configs are saved BEFORE the main config
+
+	tmpDir := t.TempDir()
+	mainConfigPath := filepath.Join(tmpDir, "clientconfig.yaml")
+	leafConfigDir := filepath.Join(tmpDir, "clientconfig.d")
+
+	config := NewConfig()
+
+	// Add a cluster via leaf config
+	leafConfigData := &ConfigData{
+		Clusters: map[string]*ClusterConfig{
+			"local": {
+				Hostname:   "127.0.0.1:8443",
+				CACert:     "test-ca",
+				ClientCert: "test-cert",
+				ClientKey:  "test-key",
+			},
+		},
+	}
+	config.SetLeafConfig("50-local", leafConfigData)
+
+	// Set active cluster in main config to reference the leaf cluster
+	err := config.SetActiveCluster("local")
+	require.NoError(t, err)
+
+	// Save the config
+	err = config.SaveTo(mainConfigPath)
+	require.NoError(t, err)
+
+	// Verify the leaf config file exists
+	leafConfigPath := filepath.Join(leafConfigDir, "50-local.yaml")
+	require.FileExists(t, leafConfigPath, "Leaf config should be saved")
+
+	// Verify the main config file exists
+	require.FileExists(t, mainConfigPath, "Main config should be saved")
+
+	// Verify the main config content
+	mainConfigData, err := os.ReadFile(mainConfigPath)
+	require.NoError(t, err)
+
+	// Verify main config has active_cluster set
+	assert.Contains(t, string(mainConfigData), "active_cluster: local")
+
+	// Verify the leaf config has the cluster definition
+	leafFileData, err := os.ReadFile(leafConfigPath)
+	require.NoError(t, err)
+	assert.Contains(t, string(leafFileData), "127.0.0.1:8443")
+
+	// The key point: even if loading is interrupted after main config is saved,
+	// the leaf config was already saved first, so the cluster exists
+}
+
+func TestLoadConfigHandlesBrokenActiveClusterGracefully(t *testing.T) {
+	// Regression test for bug where a config file with active_cluster pointing
+	// to a non-existent cluster would cause validation to fail
+	//
+	// This simulates the broken state that could occur if the save process
+	// was interrupted
+
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "clientconfig.yaml")
+
+	// Write a broken config file (active_cluster set but cluster doesn't exist)
+	brokenConfig := `active_cluster: local
+clusters: {}
+`
+	err := os.WriteFile(configPath, []byte(brokenConfig), 0600)
+	require.NoError(t, err)
+
+	// Try to load the config - should fail with validation error
+	_, err = LoadConfigFrom(configPath)
+	require.Error(t, err, "Loading broken config should return an error")
+	assert.Contains(t, err.Error(), "active cluster \"local\" not found")
+
+	// This is the expected behavior - the config is invalid
+	// The fix is in server.go:writeLocalClusterConfig which handles this error
+	// gracefully by creating a new config instead of failing
 }

@@ -828,12 +828,10 @@ func writeLocalClusterConfig(ctx *Context, cc *caauth.ClientCertificate, address
 	// Load or create the main client config
 	mainConfig, err := clientconfig.LoadConfig()
 	if err != nil {
-		// If no config exists, create a new one
-		if err == clientconfig.ErrNoConfig {
-			mainConfig = clientconfig.NewConfig()
-		} else {
-			return fmt.Errorf("failed to load client config: %w", err)
-		}
+		// If config is missing or invalid, create a new one
+		// This handles cases where the config references a missing cluster
+		ctx.Log.Warn("creating new client config", "reason", err.Error())
+		mainConfig = clientconfig.NewConfig()
 	}
 
 	// Create the local cluster config data

@@ -206,16 +206,6 @@ func (c *Config) SetLeafConfig(name string, configData *ConfigData) {
 	if !found {
 		c.leafConfigs = append(c.leafConfigs, leafConfig)
 	}
-
-	// If the main config has no clusters and no active cluster set,
-	// and this leaf config has clusters, set the first cluster as active
-	if len(c.clusters) == 0 && c.active == "" && len(configData.Clusters) > 0 {
-		// Find the first cluster name from the leaf config
-		for clusterName := range configData.Clusters {
-			c.active = clusterName
-			break
-		}
-	}
 }
 
 // HasIdentity checks if an identity exists in the configuration
@@ -413,6 +403,15 @@ func (c *Config) SaveTo(path string) error {
 		return fmt.Errorf("invalid configuration: %w", err)
 	}
 
+	// Save any unsaved leaf configs to clientconfig.d/ FIRST
+	// This ensures that if we're interrupted, the main config won't reference
+	// clusters that don't exist yet
+	if len(c.unsavedLeafConfigs) > 0 {
+		if err := c.saveLeafConfigs(path); err != nil {
+			return fmt.Errorf("failed to save leaf configs: %w", err)
+		}
+	}
+
 	// Save only the main config data (not leaf configs)
 	var cdata ConfigData
 
@@ -436,13 +435,6 @@ func (c *Config) SaveTo(path string) error {
 
 	if err := os.WriteFile(path, data, 0600); err != nil {
 		return fmt.Errorf("failed to write config file: %w", err)
-	}
-
-	// Save any unsaved leaf configs to clientconfig.d/
-	if len(c.unsavedLeafConfigs) > 0 {
-		if err := c.saveLeafConfigs(path); err != nil {
-			return fmt.Errorf("failed to save leaf configs: %w", err)
-		}
 	}
 
 	return nil
