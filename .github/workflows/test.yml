@@ -23,11 +23,26 @@ jobs:
         go-version-file: 'go.mod'
         cache: true
 
-    - name: Cache system dependencies
-      uses: awalsh128/cache-apt-pkgs-action@latest
+    - name: Cache apt packages
+      uses: actions/cache@v4
+      id: cache-apt
       with:
-        packages: clang llvm
-        version: 1.0
+        path: |
+          /var/cache/apt/archives
+          /var/lib/apt/lists
+        key: ${{ runner.os }}-apt-${{ hashFiles('.github/workflows/test.yml') }}-clang-llvm
+        restore-keys: |
+          ${{ runner.os }}-apt-${{ hashFiles('.github/workflows/test.yml') }}-
+          ${{ runner.os }}-apt-
+
+    - name: Install system dependencies
+      if: steps.cache-apt.outputs.cache-hit != 'true'
+      run: |
+        # Disable expensive operations on throwaway CI runners
+        sudo sed -i 's/^DPkg::Post-Invoke.*//' /etc/apt/apt.conf.d/90_man-db || true
+        # Install packages
+        sudo DEBIAN_FRONTEND=noninteractive apt-get update
+        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends clang llvm
 
     - name: Cache Go tools
       id: cache-go-tools
