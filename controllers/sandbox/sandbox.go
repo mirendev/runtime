@@ -112,7 +112,9 @@ func (c *SandboxController) SetPortStatus(id string, port observability.BoundPor
 
 	switch status {
 	case observability.PortStatusBound:
-		ports.Ports = append(ports.Ports, port)
+		if !slices.Contains(ports.Ports, port) {
+			ports.Ports = append(ports.Ports, port)
+		}
 	case observability.PortStatusUnbound:
 		ports.Ports = slices.DeleteFunc(ports.Ports, func(p observability.BoundPort) bool {
 			return p == port
@@ -513,7 +515,22 @@ func (c *SandboxController) Init(ctx context.Context) error {
 		Name:      c.Bridge,
 		Addresses: []netip.Prefix{c.Subnet.Router()},
 	}
-	_, err = network.SetupBridge(bc)
+
+	link, err := network.SetupBridge(bc)
+	if err != nil {
+		return err
+	}
+
+	ep := &network.EndpointConfig{
+		Bridge: bc,
+	}
+
+	err = network.ConfigureGW(link, ep)
+	if err != nil {
+		return err
+	}
+
+	err = network.MasqueradeEndpoint(ep)
 	if err != nil {
 		return err
 	}
@@ -824,14 +841,13 @@ func (c *SandboxController) readEntity(ctx context.Context, id entity.Id) (*enti
 		return nil, fmt.Errorf("failed to open entity file: %w", err)
 	}
 
-	var meta entity.Meta
-
-	err = entity.Decode(data, &meta)
+	// Use MigrateMetaFromBytes for automatic migration from old format
+	meta, err := entity.MigrateMetaFromBytes(data)
 	if err != nil {
 		return nil, fmt.Errorf("failed to decode entity file: %w", err)
 	}
 
-	return &meta, nil
+	return meta, nil
 }
 
 func (c *SandboxController) updateSandbox(ctx context.Context, sb *compute.Sandbox, meta *entity.Meta) error {

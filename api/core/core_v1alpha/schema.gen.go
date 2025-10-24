@@ -186,7 +186,7 @@ func (o *AppVersion) InitSchema(sb *schema.SchemaBuilder) {
 	sb.Ref("app", "dev.miren.core/app_version.app", schema.Doc("The application the version is for"))
 	sb.Ref("artifact", "dev.miren.core/app_version.artifact", schema.Doc("The artifact to deploy for the version"))
 	sb.Component("config", "dev.miren.core/app_version.config", schema.Doc("The configuration of the version"))
-	(&Config{}).InitSchema(sb.Builder("config"))
+	(&Config{}).InitSchema(sb.Builder("app_version.config"))
 	sb.String("image_url", "dev.miren.core/app_version.image_url", schema.Doc("The OCI url for the versions code"))
 	sb.String("manifest", "dev.miren.core/app_version.manifest", schema.Doc("The OCI image manifest for the version"))
 	sb.String("manifest_digest", "dev.miren.core/app_version.manifest_digest", schema.Doc("The digest of the manifest"), schema.Indexed)
@@ -279,13 +279,13 @@ func (o *Config) Empty() bool {
 
 func (o *Config) InitSchema(sb *schema.SchemaBuilder) {
 	sb.Component("commands", "dev.miren.core/config.commands", schema.Doc("The command to run for a specific service type"), schema.Many)
-	(&Commands{}).InitSchema(sb.Builder("commands"))
+	(&Commands{}).InitSchema(sb.Builder("config.commands"))
 	sb.String("entrypoint", "dev.miren.core/config.entrypoint", schema.Doc("The container entrypoint command"))
 	sb.Int64("port", "dev.miren.core/config.port", schema.Doc("The TCP port to access, default to 3000"))
 	sb.Component("services", "dev.miren.core/config.services", schema.Doc("Per-service configuration including concurrency controls"), schema.Many)
-	(&Services{}).InitSchema(sb.Builder("services"))
+	(&Services{}).InitSchema(sb.Builder("config.services"))
 	sb.Component("variable", "dev.miren.core/config.variable", schema.Doc("A variable to be exposed to the app"), schema.Many)
-	(&Variable{}).InitSchema(sb.Builder("variable"))
+	(&Variable{}).InitSchema(sb.Builder("config.variable"))
 }
 
 const (
@@ -374,7 +374,7 @@ func (o *Services) Empty() bool {
 func (o *Services) InitSchema(sb *schema.SchemaBuilder) {
 	sb.String("name", "dev.miren.core/services.name", schema.Doc("The service name (e.g. web, worker)"))
 	sb.Component("service_concurrency", "dev.miren.core/services.service_concurrency", schema.Doc("Concurrency configuration for this service"))
-	(&ServiceConcurrency{}).InitSchema(sb.Builder("service_concurrency"))
+	(&ServiceConcurrency{}).InitSchema(sb.Builder("services.service_concurrency"))
 }
 
 const (
@@ -727,10 +727,10 @@ func (o *Deployment) InitSchema(sb *schema.SchemaBuilder) {
 	sb.String("cluster_id", "dev.miren.core/deployment.cluster_id", schema.Doc("The cluster where the deployment is happening"), schema.Indexed)
 	sb.String("completed_at", "dev.miren.core/deployment.completed_at", schema.Doc("When the deployment was completed (RFC3339 format)"))
 	sb.Component("deployed_by", "dev.miren.core/deployment.deployed_by", schema.Doc("Information about who initiated the deployment"))
-	(&DeployedBy{}).InitSchema(sb.Builder("deployed_by"))
+	(&DeployedBy{}).InitSchema(sb.Builder("deployment.deployed_by"))
 	sb.String("error_message", "dev.miren.core/deployment.error_message", schema.Doc("Error message if deployment failed"))
 	sb.Component("git_info", "dev.miren.core/deployment.git_info", schema.Doc("Git information at time of deployment"))
-	(&GitInfo{}).InitSchema(sb.Builder("git_info"))
+	(&GitInfo{}).InitSchema(sb.Builder("deployment.git_info"))
 	sb.String("phase", "dev.miren.core/deployment.phase", schema.Doc("Current phase of deployment (preparing, building, pushing, activating)"))
 	sb.String("status", "dev.miren.core/deployment.status", schema.Doc("Deployment status (in_progress, active, failed, rolled_back)"), schema.Indexed)
 }

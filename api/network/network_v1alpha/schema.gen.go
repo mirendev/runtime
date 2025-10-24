@@ -70,7 +70,7 @@ func (o *Endpoints) Empty() bool {
 
 func (o *Endpoints) InitSchema(sb *schema.SchemaBuilder) {
 	sb.Component("endpoint", "dev.miren.network/endpoints.endpoint", schema.Doc("The endpoint configuration, per endpoint"), schema.Many)
-	(&Endpoint{}).InitSchema(sb.Builder("endpoint"))
+	(&Endpoint{}).InitSchema(sb.Builder("endpoints.endpoint"))
 	sb.Ref("service", "dev.miren.network/endpoints.service", schema.Doc("The service that uses these endpoints"), schema.Indexed)
 }
 
@@ -199,7 +199,7 @@ func (o *Service) InitSchema(sb *schema.SchemaBuilder) {
 	sb.String("ip", "dev.miren.network/service.ip", schema.Doc("The IP allocated to the service"), schema.Many)
 	sb.Label("match", "dev.miren.network/service.match", schema.Doc("A label to match against a sandbox"), schema.Many)
 	sb.Component("port", "dev.miren.network/service.port", schema.Doc("A network port the service exposes"), schema.Many)
-	(&Port{}).InitSchema(sb.Builder("port"))
+	(&Port{}).InitSchema(sb.Builder("service.port"))
 }
 
 const (

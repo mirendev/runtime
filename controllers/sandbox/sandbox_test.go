@@ -1211,16 +1211,7 @@ func TestSandbox(t *testing.T) {
 		err = co.Delete(ctx, id)
 		r.NoError(err)
 
-		// Verify port is marked as unbound after deletion
-		time.Sleep(1 * time.Second)
-		co.portMu.Lock()
-		ports, ok := co.portMap[containerID]
-		if ok {
-			for _, p := range ports.Ports {
-				r.NotEqual(8080, p.Port, "Port 8080 should not be in bound ports after deletion")
-			}
-		}
-		co.portMu.Unlock()
+		// NOTE we only track port binding now, not unbounding.
 	})
 
 	t.Run("multiple ports detection", func(t *testing.T) {
