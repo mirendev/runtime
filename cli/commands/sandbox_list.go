@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"miren.dev/runtime/api/compute/compute_v1alpha"
+	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/pkg/ui"
 )
@@ -33,9 +34,12 @@ func SandboxList(ctx *Context, opts struct {
 		return err
 	}
 
-	// For JSON output, just filter and return the raw sandbox structs
+	// For JSON output, just filter and return the raw sandbox structs with pool info
 	if opts.IsJSON() {
-		var sandboxes []compute_v1alpha.Sandbox
+		var sandboxes []struct {
+			compute_v1alpha.Sandbox
+			Pool string `json:"pool,omitempty"`
+		}
 
 		for _, e := range res.Values() {
 			var sandbox compute_v1alpha.Sandbox
@@ -50,7 +54,18 @@ func SandboxList(ctx *Context, opts struct {
 				}
 			}
 
-			sandboxes = append(sandboxes, sandbox)
+			// Extract pool label from metadata
+			var md core_v1alpha.Metadata
+			md.Decode(e.Entity())
+			poolLabel, _ := md.Labels.Get("pool")
+
+			sandboxes = append(sandboxes, struct {
+				compute_v1alpha.Sandbox
+				Pool string `json:"pool,omitempty"`
+			}{
+				Sandbox: sandbox,
+				Pool:    poolLabel,
+			})
 		}
 
 		return PrintJSON(sandboxes)
@@ -58,7 +73,7 @@ func SandboxList(ctx *Context, opts struct {
 
 	// Table output - all the UI formatting logic
 	var rows []ui.Row
-	headers := []string{"ID", "STATUS", "VERSION", "CONTAINERS", "CREATED", "UPDATED"}
+	headers := []string{"ID", "STATUS", "VERSION", "CONTAINERS", "POOL", "CREATED", "UPDATED"}
 
 	for _, e := range res.Values() {
 		// Decode the sandbox entity
@@ -79,12 +94,23 @@ func SandboxList(ctx *Context, opts struct {
 			continue
 		}
 
+		// Extract pool label from metadata
+		var md core_v1alpha.Metadata
+		md.Decode(e.Entity())
+		poolLabel, _ := md.Labels.Get("pool")
+		if poolLabel == "" {
+			poolLabel = "-"
+		} else {
+			poolLabel = ui.CleanEntityID(poolLabel)
+		}
+
 		// Apply all UI formatting for table display
 		rows = append(rows, ui.Row{
 			ui.CleanEntityID(sandbox.ID.String()),
 			ui.DisplayStatus(status),
 			ui.DisplayAppVersion(sandbox.Version.String()),
 			fmt.Sprintf("%d", len(sandbox.Container)),
+			poolLabel,
 			humanFriendlyTimestamp(time.UnixMilli(e.CreatedAt())),
 			humanFriendlyTimestamp(time.UnixMilli(e.UpdatedAt())),
 		})

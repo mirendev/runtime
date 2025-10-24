@@ -52,6 +52,10 @@ func AllCommands() map[string]cli.CommandFactory {
 			return Infer("sandbox metrics", "Get metrics from a sandbox", SandboxMetrics), nil
 		},
 
+		"sandbox-pool list": func() (cli.Command, error) {
+			return Infer("sandbox-pool list", "List all sandbox pools", SandboxPoolList), nil
+		},
+
 		"app": func() (cli.Command, error) {
 			return Infer("app", "Get information about an application", App), nil
 		},
