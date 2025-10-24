@@ -397,6 +397,11 @@ func (c *SandboxController) Init(ctx context.Context) error {
 		return err
 	}
 
+	err = network.MasqueradeEndpoint(ep)
+	if err != nil {
+		return err
+	}
+
 	err = c.NetServ.SetupDNS(bc)
 	if err != nil {
 		return err
