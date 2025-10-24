@@ -6,6 +6,75 @@ import (
 	"miren.dev/runtime/pkg/entity"
 )
 
+// buildTestSchemas is a test helper that builds component and kind schemas
+// for testing. It processes the schemaFile's Components and the specified kind,
+// returning the component schemas map and the kind's EncodedSchema.
+func buildTestSchemas(t *testing.T, sf *schemaFile, kindName string) (map[string]*entity.EncodedSchema, *entity.EncodedSchema) {
+	t.Helper()
+
+	componentSchemas := make(map[string]*entity.EncodedSchema)
+	usedAttrs := make(map[string]struct{})
+
+	// Build standalone component schemas
+	for compName, attrs := range sf.Components {
+		var g gen
+		g.usedAttrs = usedAttrs
+		g.componentSchemas = componentSchemas
+		g.isComponent = true
+		g.name = compName
+		g.prefix = sf.Domain + ".component." + compName
+		g.local = toCamal(compName)
+		g.sf = sf
+		g.ec = &entity.EncodedSchema{
+			Domain:  sf.Domain,
+			Name:    sf.Domain + "/component." + compName,
+			Version: sf.Version,
+		}
+
+		for name, attr := range attrs {
+			if attr.Attr == "" {
+				attr.Attr = "component." + compName + "." + name
+			}
+			fullAttrId := sf.Domain + "/" + attr.Attr
+			usedAttrs[fullAttrId] = struct{}{}
+			g.attr(name, attr)
+		}
+
+		componentSchemas[compName] = g.ec
+	}
+
+	// Build the kind schema
+	kindAttrs, ok := sf.Kinds[kindName]
+	if !ok {
+		t.Fatalf("Kind %s not found in schema", kindName)
+	}
+
+	var kindGen gen
+	kindGen.usedAttrs = usedAttrs
+	kindGen.componentSchemas = componentSchemas
+	kindGen.kind = kindName
+	kindGen.name = kindName
+	kindGen.prefix = sf.Domain + "." + kindName
+	kindGen.local = toCamal(kindName)
+	kindGen.sf = sf
+	kindGen.ec = &entity.EncodedSchema{
+		Domain:  sf.Domain,
+		Name:    sf.Domain + "/" + kindName,
+		Version: sf.Version,
+	}
+
+	for name, attr := range kindAttrs {
+		if attr.Attr == "" {
+			attr.Attr = kindName + "." + name
+		}
+		fullAttrId := sf.Domain + "/" + attr.Attr
+		usedAttrs[fullAttrId] = struct{}{}
+		kindGen.attr(name, attr)
+	}
+
+	return componentSchemas, kindGen.ec
+}
+
 // TestComponentFieldSchemaPopulated verifies that when a kind field references
 // a standalone component, the SchemaField.Component is properly populated.
 // This is a regression test for a panic that occurred when encoding entities
@@ -40,73 +109,18 @@ func TestComponentFieldSchemaPopulated(t *testing.T) {
 		},
 	}
 
-	// Generate the schema
+	// Generate the schema code (validates it compiles without errors)
 	_, err := GenerateSchema(sf, "test")
 	if err != nil {
 		t.Fatalf("Failed to generate schema: %v", err)
 	}
 
-	// Now verify the in-memory EncodedSchema structure
-	// We need to examine the gen struct to check the EncodedSchema
-	// Since GenerateSchema doesn't return the EncodedSchema, we need to
-	// verify it through the generated code structure
-
-	// Create the generator and process standalone components
-	var componentSchemas = make(map[string]*entity.EncodedSchema)
-	for compName, attrs := range sf.Components {
-		var g gen
-		g.usedAttrs = make(map[string]struct{})
-		g.componentSchemas = componentSchemas
-		g.isComponent = true
-		g.name = compName
-		g.prefix = sf.Domain + ".component." + compName
-		g.local = toCamal(compName)
-		g.sf = sf
-		g.ec = &entity.EncodedSchema{
-			Domain:  sf.Domain,
-			Name:    sf.Domain + "/component." + compName,
-			Version: sf.Version,
-		}
-
-		for name, attr := range attrs {
-			if attr.Attr == "" {
-				attr.Attr = "component." + compName + "." + name
-			}
-			fullAttrId := sf.Domain + "/" + attr.Attr
-			g.usedAttrs[fullAttrId] = struct{}{}
-			g.attr(name, attr)
-		}
-
-		componentSchemas[compName] = g.ec
-	}
-
-	// Now process the kind that references the component
-	var kindGen gen
-	kindGen.usedAttrs = make(map[string]struct{})
-	kindGen.componentSchemas = componentSchemas
-	kindGen.kind = "service"
-	kindGen.name = "service"
-	kindGen.prefix = sf.Domain + ".service"
-	kindGen.local = "Service"
-	kindGen.sf = sf
-	kindGen.ec = &entity.EncodedSchema{
-		Domain:  sf.Domain,
-		Name:    sf.Domain + "/service",
-		Version: sf.Version,
-	}
-
-	for name, attr := range sf.Kinds["service"] {
-		if attr.Attr == "" {
-			attr.Attr = "service." + name
-		}
-		fullAttrId := sf.Domain + "/" + attr.Attr
-		kindGen.usedAttrs[fullAttrId] = struct{}{}
-		kindGen.attr(name, attr)
-	}
+	// Build test schemas to verify the in-memory EncodedSchema structure
+	_, serviceSchema := buildTestSchemas(t, sf, "service")
 
 	// Verify that the config field has a non-nil Component schema
 	var configField *entity.SchemaField
-	for _, field := range kindGen.ec.Fields {
+	for _, field := range serviceSchema.Fields {
 		if field.Name == "config" {
 			configField = field
 			break
@@ -176,62 +190,12 @@ func TestMultipleComponentReferencesShareSchema(t *testing.T) {
 		},
 	}
 
-	// Generate component schemas
-	var componentSchemas = make(map[string]*entity.EncodedSchema)
-	for compName, attrs := range sf.Components {
-		var g gen
-		g.usedAttrs = make(map[string]struct{})
-		g.componentSchemas = componentSchemas
-		g.isComponent = true
-		g.name = compName
-		g.prefix = sf.Domain + ".component." + compName
-		g.local = toCamal(compName)
-		g.sf = sf
-		g.ec = &entity.EncodedSchema{
-			Domain:  sf.Domain,
-			Name:    sf.Domain + "/component." + compName,
-			Version: sf.Version,
-		}
-
-		for name, attr := range attrs {
-			if attr.Attr == "" {
-				attr.Attr = "component." + compName + "." + name
-			}
-			fullAttrId := sf.Domain + "/" + attr.Attr
-			g.usedAttrs[fullAttrId] = struct{}{}
-			g.attr(name, attr)
-		}
-
-		componentSchemas[compName] = g.ec
-	}
-
-	// Process the kind
-	var kindGen gen
-	kindGen.usedAttrs = make(map[string]struct{})
-	kindGen.componentSchemas = componentSchemas
-	kindGen.kind = "api"
-	kindGen.name = "api"
-	kindGen.prefix = sf.Domain + ".api"
-	kindGen.local = "Api"
-	kindGen.sf = sf
-	kindGen.ec = &entity.EncodedSchema{
-		Domain:  sf.Domain,
-		Name:    sf.Domain + "/api",
-		Version: sf.Version,
-	}
-
-	for name, attr := range sf.Kinds["api"] {
-		if attr.Attr == "" {
-			attr.Attr = "api." + name
-		}
-		fullAttrId := sf.Domain + "/" + attr.Attr
-		kindGen.usedAttrs[fullAttrId] = struct{}{}
-		kindGen.attr(name, attr)
-	}
+	// Build test schemas
+	_, apiSchema := buildTestSchemas(t, sf, "api")
 
 	// Find both fields
 	var primaryField, secondaryField *entity.SchemaField
-	for _, field := range kindGen.ec.Fields {
+	for _, field := range apiSchema.Fields {
 		if field.Name == "primary" {
 			primaryField = field
 		}
