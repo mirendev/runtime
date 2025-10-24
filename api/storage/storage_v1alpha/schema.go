@@ -317,7 +317,7 @@ func (o *DiskLease) InitSchema(sb *schema.SchemaBuilder) {
 	sb.Ref("disk_id", "dev.miren.storage/disk_lease.disk_id", schema.Doc("Reference to the leased disk"), schema.Required, schema.Indexed)
 	sb.String("error_message", "dev.miren.storage/disk_lease.error_message", schema.Doc("Error details if lease binding failed"))
 	sb.Component("mount", "dev.miren.storage/disk_lease.mount", schema.Doc("Mount configuration for the disk"))
-	(&Mount{}).InitSchema(sb.Builder("mount"))
+	(&Mount{}).InitSchema(sb.Builder("disk_lease.mount"))
 	sb.Ref("node_id", "dev.miren.storage/disk_lease.node_id", schema.Doc("Node where the disk is mounted"), schema.Required)
 	sb.Ref("sandbox_id", "dev.miren.storage/disk_lease.sandbox_id", schema.Doc("Reference to the sandbox using the disk"), schema.Indexed)
 	sb.Singleton("dev.miren.storage/status.pending")
