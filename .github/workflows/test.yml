@@ -39,6 +39,9 @@ jobs:
         fi
         echo "go.mod and go.sum are tidy."
 
+    - name: Check go generate
+      run: make generate-check
+
   test:
     needs: lint
     runs-on: depot-ubuntu-latest,dagger=0.18.9
