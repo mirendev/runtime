@@ -32,6 +32,79 @@ func (e *OldEntity) Get(attr Id) (Attr, bool) {
 	return Attr{}, false
 }
 
+// OldMeta represents the Meta format before the entity migration
+// where the embedded Entity might be in OldEntity format
+type OldMeta struct {
+	Entity   OldEntity `cbor:"entity"`
+	Revision int64     `cbor:"version"`
+	Previous int64     `cbor:"previous"`
+}
+
+// MigrateMetaFromBytes attempts to decode CBOR bytes as Meta,
+// automatically migrating from old format if needed.
+// This is used for read-time migration of persisted entity files.
+func MigrateMetaFromBytes(data []byte) (*Meta, error) {
+	// Try to decode as old format first
+	var oldMeta OldMeta
+	err := cbor.Unmarshal(data, &oldMeta)
+	if err == nil {
+		// Check if this is actually old format by looking for struct field ID
+		// If entity.ID is set, this is old format that needs migration
+		if oldMeta.Entity.ID != "" {
+			// Migrate old format to new format
+			// Create new entity from old entity's attributes
+			newEnt := New(oldMeta.Entity.Attrs)
+
+			// Migrate ID if not already in attributes
+			if _, ok := oldMeta.Entity.Get(DBId); !ok {
+				newEnt.SetID(oldMeta.Entity.ID)
+			}
+
+			// Migrate Revision
+			if oldMeta.Entity.Revision != 0 {
+				newEnt.Set(Int64(Revision, oldMeta.Entity.Revision))
+			}
+
+			// Migrate CreatedAt (or remove if wasn't set)
+			if oldMeta.Entity.CreatedAt != 0 {
+				createdAt := time.Unix(0, oldMeta.Entity.CreatedAt*int64(time.Millisecond))
+				newEnt.SetCreatedAt(createdAt)
+			} else {
+				// Remove auto-generated timestamp from New() if old entity didn't have one
+				newEnt.Remove(CreatedAt)
+			}
+
+			// Migrate UpdatedAt (or remove if wasn't set)
+			if oldMeta.Entity.UpdatedAt != 0 {
+				updatedAt := time.Unix(0, oldMeta.Entity.UpdatedAt*int64(time.Millisecond))
+				newEnt.SetUpdatedAt(updatedAt)
+			} else {
+				// Remove auto-generated timestamp from New() if old entity didn't have one
+				newEnt.Remove(UpdatedAt)
+			}
+
+			// Sort attributes for consistency
+			newEnt.attrs = SortedAttrs(newEnt.attrs)
+
+			return &Meta{
+				Entity:   newEnt,
+				Revision: oldMeta.Revision,
+				Previous: oldMeta.Previous,
+			}, nil
+		}
+	}
+
+	// Try to decode as new format
+	var meta Meta
+	err = Decode(data, &meta)
+	if err == nil {
+		// Successfully decoded as new format
+		return &meta, nil
+	}
+
+	return nil, fmt.Errorf("failed to decode as both old and new Meta format: %w", err)
+}
+
 // MigrateOptions configures the migration behavior
 type MigrateOptions struct {
 	// DryRun prevents writing changes back to etcd
