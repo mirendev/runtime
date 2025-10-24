@@ -39,6 +39,15 @@ jobs:
         fi
         echo "go.mod and go.sum are tidy."
 
+    - name: Install go generate dependencies
+      run: |
+        # Install system dependencies for go generate
+        sudo apt-get update
+        sudo apt-get install -y clang llvm
+        # Install Go tools
+        go install golang.org/x/tools/cmd/goimports@latest
+        go install go.uber.org/mock/mockgen@latest
+
     - name: Check go generate
       run: make generate-check
 
