@@ -105,6 +105,8 @@ func (pm *PortMonitor) monitorPorts(ctx context.Context, task *monitorTask) {
 	// Track which ports are currently bound
 	boundPorts := make(map[int]bool)
 
+	defer pm.log.Debug("ended port monitoring", "container", task.containerID, "bound_ports", len(boundPorts))
+
 	// Initial delay to let container start
 	select {
 	case <-ctx.Done():
@@ -112,10 +114,16 @@ func (pm *PortMonitor) monitorPorts(ctx context.Context, task *monitorTask) {
 	case <-time.After(100 * time.Millisecond):
 	}
 
+	// We run this HOT because we want to pickup the bound port as quickly as possible.
+	// We used to also run this forever to pick up port changes AFTER the container
+	// was running, but it's way too much traffic for that. So we modified this to only
+	// run until all ports are bound.
+
 	ticker := time.NewTicker(500 * time.Millisecond)
 	defer ticker.Stop()
 
-	for {
+	// Run this until we observe all the ports bound.
+	for len(boundPorts) < len(task.ports) {
 		select {
 		case <-ctx.Done():
 			// Mark all ports as unbound when stopping
@@ -133,32 +141,26 @@ func (pm *PortMonitor) monitorPorts(ctx context.Context, task *monitorTask) {
 		case <-ticker.C:
 			// Check each port
 			for _, port := range task.ports {
-				isBound := pm.checkPort(task.ip, port)
 				wasBound := boundPorts[port]
-
-				if isBound && !wasBound {
-					// Port became bound
-					bp := observability.BoundPort{
-						Port: port,
-					}
-					if addr := pm.resolveIP(task.ip); addr.IsValid() {
-						bp.Addr = addr
-					}
-					pm.ports.SetPortStatus(task.containerID, bp, observability.PortStatusBound)
-					boundPorts[port] = true
-					pm.log.Debug("port became bound", "container", task.containerID, "port", port)
-				} else if !isBound && wasBound {
-					// Port became unbound
-					bp := observability.BoundPort{
-						Port: port,
-					}
-					if addr := pm.resolveIP(task.ip); addr.IsValid() {
-						bp.Addr = addr
-					}
-					pm.ports.SetPortStatus(task.containerID, bp, observability.PortStatusUnbound)
-					delete(boundPorts, port)
-					pm.log.Debug("port became unbound", "container", task.containerID, "port", port)
+				if wasBound {
+					continue // Already bound
 				}
+
+				isBound := pm.checkPort(task.ip, port)
+				if !isBound {
+					continue // Still unbound
+				}
+
+				// Port became bound
+				bp := observability.BoundPort{
+					Port: port,
+				}
+				if addr := pm.resolveIP(task.ip); addr.IsValid() {
+					bp.Addr = addr
+				}
+				pm.ports.SetPortStatus(task.containerID, bp, observability.PortStatusBound)
+				boundPorts[port] = true
+				pm.log.Debug("port became bound", "container", task.containerID, "port", port)
 			}
 		}
 	}

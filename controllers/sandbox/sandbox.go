@@ -112,7 +112,9 @@ func (c *SandboxController) SetPortStatus(id string, port observability.BoundPor
 
 	switch status {
 	case observability.PortStatusBound:
-		ports.Ports = append(ports.Ports, port)
+		if !slices.Contains(ports.Ports, port) {
+			ports.Ports = append(ports.Ports, port)
+		}
 	case observability.PortStatusUnbound:
 		ports.Ports = slices.DeleteFunc(ports.Ports, func(p observability.BoundPort) bool {
 			return p == port
