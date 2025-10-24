@@ -59,11 +59,13 @@ func (m *Manager) Reconcile(ctx context.Context, pool *compute_v1alpha.SandboxPo
 		return fmt.Errorf("failed to list sandboxes: %w", err)
 	}
 
-	// Count only non-STOPPED sandboxes as "actual" - STOPPED sandboxes are being retired
+	// Count RUNNING and PENDING as "actual" (prevents duplicates while sandboxes boot)
+	// Count only RUNNING as "ready" (sandboxes serving traffic)
+	// We exclude STOPPED (being retired), DEAD (failed), and "" (uninitialized)
 	actual := int64(0)
 	ready := int64(0)
 	for _, sb := range sandboxes {
-		if sb.Status != compute_v1alpha.STOPPED {
+		if sb.Status == compute_v1alpha.RUNNING || sb.Status == compute_v1alpha.PENDING {
 			actual++
 		}
 		if sb.Status == compute_v1alpha.RUNNING {
@@ -106,7 +108,7 @@ func (m *Manager) Reconcile(ctx context.Context, pool *compute_v1alpha.SandboxPo
 		actual = 0
 		ready = 0
 		for _, sb := range sandboxes {
-			if sb.Status != compute_v1alpha.STOPPED {
+			if sb.Status == compute_v1alpha.RUNNING || sb.Status == compute_v1alpha.PENDING {
 				actual++
 			}
 			if sb.Status == compute_v1alpha.RUNNING {
@@ -140,7 +142,7 @@ func (m *Manager) Reconcile(ctx context.Context, pool *compute_v1alpha.SandboxPo
 		actual = 0
 		ready = 0
 		for _, sb := range sandboxes {
-			if sb.Status != compute_v1alpha.STOPPED {
+			if sb.Status == compute_v1alpha.RUNNING || sb.Status == compute_v1alpha.PENDING {
 				actual++
 			}
 			if sb.Status == compute_v1alpha.RUNNING {
