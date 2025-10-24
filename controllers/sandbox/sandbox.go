@@ -382,7 +382,22 @@ func (c *SandboxController) Init(ctx context.Context) error {
 		Name:      c.Bridge,
 		Addresses: []netip.Prefix{c.Subnet.Router()},
 	}
-	_, err = network.SetupBridge(bc)
+
+	link, err := network.SetupBridge(bc)
+	if err != nil {
+		return err
+	}
+
+	ep := &network.EndpointConfig{
+		Bridge: bc,
+	}
+
+	err = network.ConfigureGW(link, ep)
+	if err != nil {
+		return err
+	}
+
+	err = network.MasqueradeEndpoint(ep)
 	if err != nil {
 		return err
 	}

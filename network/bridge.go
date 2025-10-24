@@ -39,7 +39,6 @@ func BridgeByName(name string) (*netlink.Bridge, error) {
 	return br, nil
 }
 
-
 func ensureBridge(brName string, mtu int, promiscMode, vlanFiltering bool) (*netlink.Bridge, error) {
 	br := &netlink.Bridge{
 		LinkAttrs: netlink.LinkAttrs{
@@ -76,10 +75,6 @@ func ensureBridge(brName string, mtu int, promiscMode, vlanFiltering bool) (*net
 
 	// we want to own the routes for this interface
 	_, _ = sysctl.Sysctl(fmt.Sprintf("net/ipv6/conf/%s/accept_ra", brName), "0")
-
-	if err := netlink.LinkSetUp(br); err != nil {
-		return nil, err
-	}
 
 	return br, nil
 }
@@ -126,6 +121,19 @@ func SetupVeth(netns ns.NetNS, br *netlink.Bridge, ifName string, mtu int, hairp
 		if err != nil {
 			return nil, nil, fmt.Errorf("failed to setup vlan tag on interface %q: %v", hostIface.Name, err)
 		}
+	}
+
+	// Set the bridge's MAC to itself. Otherwise, the bridge will take the
+	// lowest-numbered mac on the bridge, and will change as ifs churn
+	// NOTE This is only done after an interface is added, otherwise the bridge will go
+	// into a status == unknown state and not forward traffic.
+	if err := netlink.LinkSetHardwareAddr(br, br.Attrs().HardwareAddr); err != nil {
+		return nil, nil, fmt.Errorf("could not set bridge's mac: %v (%v)", err, br.Attrs().HardwareAddr)
+	}
+
+	// Now that the bridge has an interface, let's bring it up.
+	if err := netlink.LinkSetUp(br); err != nil {
+		return nil, nil, err
 	}
 
 	return hostIface, contIface, nil
@@ -251,7 +259,7 @@ func ensureAddr(br netlink.Link, family int, ipn *net.IPNet, forceAddress bool) 
 
 		// string comp is actually easiest for doing IPNet comps
 		if a.IPNet.String() == ipnStr {
-			return nil
+			continue
 		}
 
 		// Multiple addresses are allowed on the bridge if the
@@ -272,12 +280,6 @@ func ensureAddr(br netlink.Link, family int, ipn *net.IPNet, forceAddress bool) 
 	addr := &netlink.Addr{IPNet: ipn, Label: ""}
 	if err := netlink.AddrAdd(br, addr); err != nil && err != syscall.EEXIST {
 		return fmt.Errorf("could not add IP address to %q: %v", br.Attrs().Name, err)
-	}
-
-	// Set the bridge's MAC to itself. Otherwise, the bridge will take the
-	// lowest-numbered mac on the bridge, and will change as ifs churn
-	if err := netlink.LinkSetHardwareAddr(br, br.Attrs().HardwareAddr); err != nil {
-		return fmt.Errorf("could not set bridge's mac: %v (%v)", err, br.Attrs().HardwareAddr)
 	}
 
 	return nil
