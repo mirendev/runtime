@@ -18,7 +18,7 @@ import (
 	"miren.dev/runtime/pkg/idgen"
 )
 
-//go:generate go run ../pkg/rpc/cmd/rpcgen -pkg app -input rpc.yml -output rpc.gen.go
+//go:generate go run ../../pkg/rpc/cmd/rpcgen -pkg app -input rpc.yml -output rpc.gen.go
 
 type ClearVersioner interface {
 	ClearOldVersions(ctx context.Context, current *core_v1alpha.AppVersion) error
