@@ -95,12 +95,15 @@ func TestServer(t *testing.T) error {
 		return err
 	}
 
+	tempDir := t.TempDir()
+
 	co := coordinate.NewCoordinator(log, coordinate.CoordinatorConfig{
 		Address:       optsAddress,
 		EtcdEndpoints: optsEtcdEndpoints,
 		Prefix:        optsEtcdPrefix,
 		Resolver:      res,
-		TempDir:       os.TempDir(),
+		TempDir:       tempDir,
+		DataPath:      filepath.Join(tempDir, "coordinator"),
 		Mem:           &mem,
 		Cpu:           &cpu,
 		Logs:          &logs,
