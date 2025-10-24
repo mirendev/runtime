@@ -1,10 +1,37 @@
 package activator
 
+// CONCURRENCY & LOCK DESIGN
+//
+// The activator coordinates between multiple concurrent goroutines:
+// - Request threads calling AcquireLease/ReleaseLease/RenewLease (high QPS hot path)
+// - Background watchSandboxes goroutine discovering new sandboxes from etcd watches
+// - Background syncLastActivity goroutine updating entity store every 30s
+//
+// All share access to the same state maps (versions, pools, newSandboxChans), protected
+// by a single RWMutex. Read locks allow concurrent capacity checks on the hot path, while
+// write locks serialize state updates (adding sandboxes, updating capacity).
+//
+// Key Locking Patterns:
+//
+// 1. Double-Check Pattern (AcquireLease, checkForSandbox)
+//    Prevents TOCTOU races when upgrading from read to write lock:
+//      RLock → check capacity → RUnlock
+//      Lock → re-check capacity → acquire if still available → Unlock
+//
+// 2. Sentinel Pattern (ensureSandboxPool)
+//    Prevents duplicate pool creation by concurrent requests:
+//      - First request inserts sentinel with inProgress=true
+//      - Concurrent requests wait on sentinel's done channel
+//      - Creator replaces sentinel with real pool or error
+//
+// 3. Channel Notification (ensurePoolAndWaitForSandbox, watchSandboxes)
+//    Immediate notification when new sandboxes become available:
+//      - Waiter: Lock → register notification channel → Unlock → wait on channel
+//      - Watcher: Lock → add sandbox → notify all registered channels → Unlock
+
 import (
 	"context"
-	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"math/rand/v2"
 	"sync"
@@ -73,11 +100,22 @@ type verKey struct {
 	ver, service string
 }
 
+// poolState represents either a real pool or an in-progress creation sentinel
+type poolState struct {
+	pool       *compute_v1alpha.SandboxPool
+	inProgress bool
+	done       chan struct{} // Closed when creation completes (success or failure)
+	err        error         // Set if creation failed
+}
+
 type localActivator struct {
-	mu               sync.Mutex
-	versions         map[verKey]*verSandboxes
-	pools            map[verKey]*compute_v1alpha.SandboxPool // Track SandboxPool entities
-	pendingCreations map[verKey]int                          // Track pending sandbox creations per service
+	mu       sync.RWMutex
+	versions map[verKey]*verSandboxes
+	pools    map[verKey]*poolState // Track SandboxPool entities or creation sentinels
+
+	// Channels to notify waiters when new sandboxes become available
+	// Map key is verKey (version + service), value is list of channels to notify
+	newSandboxChans map[verKey][]chan struct{}
 
 	log *slog.Logger
 	eac *entityserver_v1alpha.EntityAccessClient
@@ -87,11 +125,11 @@ var _ AppActivator = (*localActivator)(nil)
 
 func NewLocalActivator(ctx context.Context, log *slog.Logger, eac *entityserver_v1alpha.EntityAccessClient) AppActivator {
 	la := &localActivator{
-		log:              log.With("module", "activator"),
-		eac:              eac,
-		versions:         make(map[verKey]*verSandboxes),
-		pools:            make(map[verKey]*compute_v1alpha.SandboxPool),
-		pendingCreations: make(map[verKey]int),
+		log:             log.With("module", "activator"),
+		eac:             eac,
+		versions:        make(map[verKey]*verSandboxes),
+		pools:           make(map[verKey]*poolState),
+		newSandboxChans: make(map[verKey][]chan struct{}),
 	}
 
 	// Recover existing sandboxes on startup
@@ -110,341 +148,292 @@ func NewLocalActivator(ctx context.Context, log *slog.Logger, eac *entityserver_
 		la.log.Info("pool recovery complete", "tracked_pools", len(la.pools))
 	}
 
-	// Migrate existing sandboxes to pools (one-time operation)
-	if err := la.migrateToSandboxPools(ctx); err != nil {
-		la.log.Error("failed to migrate sandboxes to pools", "error", err)
-		// Continue anyway - partial migration is acceptable
-	}
-
-	go la.InBackground(ctx)
+	go la.watchSandboxes(ctx)
+	go la.syncLastActivity(ctx)
 
 	return la
-}
-
-// ensureFixedInstances ensures that fixed mode services have the required number of instances running
-func (a *localActivator) ensureFixedInstances(ctx context.Context) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-
-	// Track which versions/services we've seen
-	seenServices := make(map[verKey]bool)
-
-	// Check existing sandboxes
-	for key, vs := range a.versions {
-		// Skip non-fixed mode services
-		targetInstances := vs.strategy.DesiredInstances()
-		if targetInstances == 0 {
-			// Auto mode (scale to zero) - skip
-			continue
-		}
-
-		seenServices[key] = true
-
-		// Count running sandboxes
-		runningCount := 0
-		for _, sb := range vs.sandboxes {
-			if sb.sandbox.Status == compute_v1alpha.RUNNING {
-				runningCount++
-			}
-		}
-
-		// Account for pending creations to avoid over-provisioning
-		pendingCount := a.pendingCreations[key]
-		totalExpected := runningCount + pendingCount
-
-		// Start additional instances if needed
-		for i := totalExpected; i < targetInstances; i++ {
-			a.log.Info("starting fixed instance", "app", vs.ver.App, "service", key.service, "current", runningCount, "pending", pendingCount, "target", targetInstances)
-
-			// Mark as pending before releasing lock
-			a.pendingCreations[key]++
-
-			// Create sandbox in background to avoid holding lock
-			go func(k verKey, v *core_v1alpha.AppVersion) {
-				_, err := a.activateApp(ctx, v, k.service)
-
-				// Update pending count after creation attempt
-				a.mu.Lock()
-				a.pendingCreations[k]--
-				a.mu.Unlock()
-
-				if err != nil {
-					a.log.Error("failed to start fixed instance", "app", v.App, "service", k.service, "error", err)
-				}
-			}(key, vs.ver)
-		}
-	}
 }
 
 func (a *localActivator) AcquireLease(ctx context.Context, ver *core_v1alpha.AppVersion, service string) (*Lease, error) {
 	key := verKey{ver.ID.String(), service}
 
-	// Check if we have an existing version entry
-	a.mu.Lock()
-	_, ok := a.versions[key]
-	trackedKeys := len(a.versions)
-	// Copy keys for debug logging outside the lock
-	var debugKeys []verKey
-	if !ok {
-		debugKeys = make([]verKey, 0, len(a.versions))
-		for k := range a.versions {
-			debugKeys = append(debugKeys, k)
-		}
-	}
-	a.mu.Unlock()
-
-	if !ok {
-		a.log.Info("version key not found in tracked versions",
-			"app", ver.App,
-			"version", ver.Version,
-			"version_id", ver.ID.String(),
-			"service", service,
-			"key", key,
-			"tracked_keys", trackedKeys)
-		// Log what keys we ARE tracking for debugging
-		for _, k := range debugKeys {
-			a.log.Debug("tracked key", "key", k)
-		}
-		return a.activateApp(ctx, ver, service)
-	}
-
-	// Need to reacquire lock to safely check sandboxes
-	a.mu.Lock()
-	// Double-check vs still exists after reacquiring lock
+	// Try to find an available sandbox with capacity (read lock for scanning)
+	a.mu.RLock()
 	vs, ok := a.versions[key]
-	if !ok {
-		a.mu.Unlock()
-		// Version entry was removed while we didn't have the lock, need to activate
-		return a.activateApp(ctx, ver, service)
-	}
+	var candidateSandbox *sandbox
+	if ok && len(vs.sandboxes) > 0 {
+		a.log.Debug("checking existing sandboxes", "app", ver.App, "version", ver.Version, "sandboxes", len(vs.sandboxes))
 
-	sandboxCount := len(vs.sandboxes)
-
-	if sandboxCount == 0 {
-		a.mu.Unlock()
-		a.log.Info("no sandboxes available in version slot, creating new sandbox",
-			"app", ver.App,
-			"version", ver.Version,
-			"key", key)
-	} else {
-		a.log.Debug("reusing existing sandboxes", "app", ver.App, "version", ver.Version, "sandboxes", sandboxCount)
-
-		// Unified lease acquisition for both fixed and auto modes
+		// Scan for a sandbox with capacity
 		start := rand.Int() % len(vs.sandboxes)
 		for i := 0; i < len(vs.sandboxes); i++ {
 			s := vs.sandboxes[(start+i)%len(vs.sandboxes)]
 			if s.tracker.HasCapacity() {
-				leaseSize := s.tracker.AcquireLease()
-				s.lastRenewal = time.Now()
-
-				// Read lastActivity while we hold the lock
-				lastActivity := s.sandbox.LastActivity
-				a.mu.Unlock()
-
-				// Update sandbox last_activity with throttling (after releasing lock)
-				a.updateSandboxLastActivity(ctx, s.sandbox, s.ent, lastActivity)
-
-				lease := &Lease{
-					ver:     ver,
-					sandbox: s.sandbox,
-					ent:     s.ent,
-					pool:    service, // Pool identifier is now the service name
-					service: service,
-					Size:    leaseSize,
-					URL:     s.url,
-				}
-				used := s.tracker.Used()
-				a.log.Debug("reusing sandbox", "app", ver.App, "version", ver.Version, "sandbox", s.sandbox.ID, "used", used)
-				return lease, nil
+				candidateSandbox = s
+				break
 			}
 		}
+	}
+	a.mu.RUnlock()
+
+	// If we found a candidate, acquire write lock and double-check capacity
+	if candidateSandbox != nil {
+		a.mu.Lock()
+		// Double-check capacity still available (may have changed between locks)
+		if candidateSandbox.tracker.HasCapacity() {
+			leaseSize := candidateSandbox.tracker.AcquireLease()
+			candidateSandbox.lastRenewal = time.Now()
+
+			lease := &Lease{
+				ver:     ver,
+				sandbox: candidateSandbox.sandbox,
+				ent:     candidateSandbox.ent,
+				pool:    service, // Pool identifier is now the service name
+				service: service,
+				Size:    leaseSize,
+				URL:     candidateSandbox.url,
+			}
+			used := candidateSandbox.tracker.Used()
+			a.mu.Unlock()
+			a.log.Debug("reusing sandbox", "app", ver.App, "version", ver.Version, "sandbox", candidateSandbox.sandbox.ID, "used", used)
+			return lease, nil
+		}
 		a.mu.Unlock()
-		a.log.Info("no capacity in existing sandboxes, creating new sandbox", "app", ver.App, "version", ver.Version)
+		// Capacity was taken between RLock and Lock, fall through to pool request
 	}
 
-	return a.activateApp(ctx, ver, service)
+	// No available sandboxes with capacity - need to scale up via pool
+	a.log.Info("no available sandboxes, requesting capacity from pool",
+		"app", ver.App,
+		"version", ver.Version,
+		"service", service)
+
+	return a.ensurePoolAndWaitForSandbox(ctx, ver, service)
 }
 
 var ErrSandboxDiedEarly = fmt.Errorf("sandbox died while booting")
+var ErrPoolTimeout = fmt.Errorf("timeout waiting for sandbox from pool")
 
-func (a *localActivator) activateApp(ctx context.Context, ver *core_v1alpha.AppVersion, service string) (*Lease, error) {
-	gr, err := a.eac.Get(ctx, ver.App.String())
-	if err != nil {
-		return nil, err
-	}
-
-	var app core_v1alpha.App
-	app.Decode(gr.Entity().Entity())
-
-	var appMD core_v1alpha.Metadata
-	appMD.Decode(gr.Entity().Entity())
-
-	var sb compute_v1alpha.Sandbox
-	sb.Version = app.ActiveVersion
-
-	sb.LogEntity = app.EntityId().String()
-	sb.LogAttribute = types.LabelSet("stage", "app-run", "service", service)
-
-	// Determine port from config or default to 3000
-	port := int64(3000)
-	if ver.Config.Port > 0 {
-		port = ver.Config.Port
-	}
-
-	appCont := compute_v1alpha.Container{
-		Name:  "app",
-		Image: ver.ImageUrl,
-		Env: []string{
-			"MIREN_APP=" + appMD.Name,
-			"MIREN_VERSION=" + ver.Version,
-		},
-		Directory: "/app",
-		Port: []compute_v1alpha.Port{
-			{
-				Port: port,
-				Name: "http",
-				Type: "http",
-			},
-		},
-	}
-
-	for _, x := range ver.Config.Variable {
-		appCont.Env = append(appCont.Env, x.Key+"="+x.Value)
-	}
-
-	for _, s := range ver.Config.Commands {
-		if s.Service == service && s.Command != "" {
-			if ver.Config.Entrypoint != "" {
-				appCont.Command = ver.Config.Entrypoint + " " + s.Command
-			} else {
-				appCont.Command = s.Command
-			}
-			break
-		}
-	}
-
-	sb.Container = append(sb.Container, appCont)
-
-	name := idgen.GenNS("sb")
-
-	a.log.Debug("creating sandbox", "app", ver.App, "sandbox", name, "command", appCont.Command)
-
-	var rpcE entityserver_v1alpha.Entity
-	rpcE.SetAttrs(entity.New(
-		(&core_v1alpha.Metadata{
-			Name:   name,
-			Labels: types.LabelSet("app", appMD.Name, "service", service),
-		}).Encode,
-		entity.Ident, "sandbox/"+name,
-		sb.Encode,
-	).Attrs())
-
-	pr, err := a.eac.Put(ctx, &rpcE)
-	if err != nil {
-		return nil, err
-	}
-
-	a.log.Debug("created sandbox", "app", ver.App, "sandbox", pr.Id())
-
-	var (
-		runningSB compute_v1alpha.Sandbox
-		sbEnt     *entity.Entity
-	)
-
-	a.log.Debug("watching sandbox", "app", ver.App, "sandbox", pr.Id())
-
-	var localErr error
-
-	a.eac.WatchEntity(ctx, pr.Id(), stream.Callback(func(op *entityserver_v1alpha.EntityOp) error {
-		var sb compute_v1alpha.Sandbox
-
-		if op.HasEntity() {
-			en := op.Entity().Entity()
-			sb.Decode(en)
-
-			runningSB = sb
-			sbEnt = en
-
-			switch sb.Status {
-			case compute_v1alpha.RUNNING:
-				a.log.Info("sandbox is running", "app", ver.App, "sandbox", pr.Id(), "status", sb.Status)
-				// TODO figure out a better way to signal that we're done with the watch.
-				return io.EOF
-			case compute_v1alpha.STOPPED, compute_v1alpha.DEAD:
-				a.log.Info("sandbox failed to start while waiting for activator", "app", ver.App, "sandbox", pr.Id(), "status", sb.Status)
-				localErr = fmt.Errorf("%w: sandbox failed to start: %s (%s)", ErrSandboxDiedEarly, pr.Id(), sb.Status)
-				return io.EOF
-			default:
-				a.log.Debug("sandbox status update", "app", ver.App, "sandbox", pr.Id(), "status", sb.Status)
-			}
-		}
-
-		return nil
-	}))
-
-	if runningSB.Status != compute_v1alpha.RUNNING {
-		a.log.Error("sandbox did not start successfully",
-			"app", ver.App,
-			"sandbox", pr.Id(),
-			"error", "sandbox did not reach RUNNING status")
-		if localErr == nil {
-			localErr = fmt.Errorf("sandbox did not reach RUNNING status: %s", pr.Id())
-		}
-		return nil, localErr
-	}
-
-	// Build HTTP URL from address and port (handles CIDR and IPv6)
-	addr, err := netutil.BuildHTTPURL(runningSB.Network[0].Address, port)
-	if err != nil {
-		return nil, err
-	}
-
-	// Get service-specific concurrency configuration and create strategy
-	svcConcurrency := a.getServiceConcurrency(ver, service)
-	strategy := concurrency.NewStrategy(svcConcurrency)
-
-	// Initialize tracker for this sandbox
-	tracker := strategy.InitializeTracker()
-
-	lsb := &sandbox{
-		sandbox:     &runningSB,
-		ent:         sbEnt,
-		lastRenewal: time.Now(),
-		url:         addr,
-		tracker:     tracker,
-	}
-
-	// Acquire first lease from the tracker
-	leaseSize := tracker.AcquireLease()
-
-	lease := &Lease{
-		ver:     ver,
-		sandbox: lsb.sandbox,
-		ent:     lsb.ent,
-		pool:    service, // Pool identifier is now the service name
-		service: service,
-		Size:    leaseSize,
-		URL:     lsb.url,
-	}
-
+// ensurePoolAndWaitForSandbox ensures a SandboxPool exists with sufficient DesiredInstances,
+// then waits for a sandbox with capacity to become available.
+// The background watcher (watchSandboxes) handles discovering new sandboxes and notifying waiters.
+func (a *localActivator) ensurePoolAndWaitForSandbox(ctx context.Context, ver *core_v1alpha.AppVersion, service string) (*Lease, error) {
 	key := verKey{ver.ID.String(), service}
 
-	// Acquire mutex only for modifying shared state
-	a.mu.Lock()
-	vs, ok := a.versions[key]
-	if !ok {
-		vs = &verSandboxes{
-			ver:       ver,
-			sandboxes: []*sandbox{},
-			strategy:  strategy,
-		}
-		a.versions[key] = vs
+	// Ensure pool exists and increment desired capacity
+	pool, err := a.ensureSandboxPool(ctx, ver, service)
+	if err != nil {
+		return nil, fmt.Errorf("failed to ensure sandbox pool: %w", err)
 	}
 
-	vs.sandboxes = append(vs.sandboxes, lsb)
+	a.log.Info("waiting for sandbox from pool",
+		"app", ver.App,
+		"service", service,
+		"pool_id", pool.ID,
+		"desired_instances", pool.DesiredInstances)
+
+	// Register notification channel for this wait
+	notifyChan := make(chan struct{}, 1)
+	a.mu.Lock()
+	a.newSandboxChans[key] = append(a.newSandboxChans[key], notifyChan)
 	a.mu.Unlock()
 
-	return lease, nil
+	// Clean up the channel on exit
+	defer func() {
+		a.mu.Lock()
+		chans := a.newSandboxChans[key]
+		for i, ch := range chans {
+			if ch == notifyChan {
+				a.newSandboxChans[key] = append(chans[:i], chans[i+1:]...)
+				break
+			}
+		}
+		if len(a.newSandboxChans[key]) == 0 {
+			delete(a.newSandboxChans, key)
+		}
+		a.mu.Unlock()
+		close(notifyChan)
+	}()
+
+	pollCtx, cancel := context.WithTimeout(ctx, 50*time.Second)
+	defer cancel()
+
+	// Fallback ticker at 5s interval as safety net
+	// If this fires, it means channel notification failed somehow
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+
+	// Helper to check for available sandbox
+	checkForSandbox := func() (*Lease, bool) {
+		a.mu.RLock()
+		vs, ok := a.versions[key]
+		var candidateSandbox *sandbox
+		if ok && len(vs.sandboxes) > 0 {
+			// Try to find a sandbox with capacity
+			start := rand.Int() % len(vs.sandboxes)
+			for i := 0; i < len(vs.sandboxes); i++ {
+				s := vs.sandboxes[(start+i)%len(vs.sandboxes)]
+				if s.tracker.HasCapacity() {
+					candidateSandbox = s
+					break
+				}
+			}
+		}
+		a.mu.RUnlock()
+
+		if candidateSandbox != nil {
+			a.mu.Lock()
+			if candidateSandbox.tracker.HasCapacity() {
+				leaseSize := candidateSandbox.tracker.AcquireLease()
+				candidateSandbox.lastRenewal = time.Now()
+				a.mu.Unlock()
+
+				a.log.Info("acquired lease from pool sandbox",
+					"app", ver.App,
+					"version", ver.Version,
+					"sandbox", candidateSandbox.sandbox.ID,
+					"service", service)
+
+				return &Lease{
+					ver:     ver,
+					sandbox: candidateSandbox.sandbox,
+					ent:     candidateSandbox.ent,
+					pool:    service,
+					service: service,
+					Size:    leaseSize,
+					URL:     candidateSandbox.url,
+				}, true
+			}
+			a.mu.Unlock()
+		}
+		return nil, false
+	}
+
+	for {
+		// Check for available sandbox immediately
+		if lease, found := checkForSandbox(); found {
+			return lease, nil
+		}
+
+		select {
+		case <-pollCtx.Done():
+			return nil, fmt.Errorf("%w: no sandbox became available within 50 seconds", ErrPoolTimeout)
+		case <-notifyChan:
+			// Notified of new sandbox availability, loop back to check
+		case <-ticker.C:
+			// Fallback safety check - log warning if this catches something
+			a.log.Warn("fallback ticker fired while waiting for sandbox - channel notification may have failed",
+				"app", ver.App,
+				"service", service)
+		}
+	}
+}
+
+// ensureSandboxPool creates or updates a SandboxPool for the given app version and service.
+// It increments DesiredInstances to request additional capacity.
+// Uses a sentinel pattern to prevent duplicate pool creation races.
+func (a *localActivator) ensureSandboxPool(ctx context.Context, ver *core_v1alpha.AppVersion, service string) (*compute_v1alpha.SandboxPool, error) {
+	key := verKey{ver.ID.String(), service}
+
+	for {
+		// Check if pool exists or is being created (read lock)
+		a.mu.RLock()
+		state, exists := a.pools[key]
+		a.mu.RUnlock()
+
+		if exists {
+			// If creation is in progress, wait for it to complete
+			if state.inProgress {
+				a.log.Debug("pool creation in progress, waiting", "service", service)
+				select {
+				case <-state.done:
+					// Creation completed, check result
+				case <-ctx.Done():
+					return nil, ctx.Err()
+				}
+				// Check if creation succeeded or failed
+				if state.err != nil {
+					return nil, fmt.Errorf("pool creation failed: %w", state.err)
+				}
+				// Creation succeeded, loop back to re-check the pool state
+				// (it might already have capacity, or another racer might have incremented)
+				continue
+			}
+
+			// Update existing pool - increment DesiredInstances atomically under lock
+			a.mu.Lock()
+			state.pool.DesiredInstances++
+			a.mu.Unlock()
+
+			var rpcE entityserver_v1alpha.Entity
+			rpcE.SetId(state.pool.ID.String())
+			rpcE.SetAttrs(entity.New(
+				state.pool.Encode,
+			).Attrs())
+
+			_, err := a.eac.Put(ctx, &rpcE)
+			if err != nil {
+				return nil, fmt.Errorf("failed to update pool: %w", err)
+			}
+
+			a.log.Info("incremented pool capacity", "pool", state.pool.ID, "desired_instances", state.pool.DesiredInstances)
+			return state.pool, nil
+		}
+
+		// Pool doesn't exist - try to claim creation rights with sentinel
+		a.mu.Lock()
+		_, exists = a.pools[key]
+		if exists {
+			// Another goroutine claimed creation while we waited for lock
+			a.mu.Unlock()
+			continue // Loop back to wait/increment logic
+		}
+
+		// Claim creation by inserting sentinel
+		sentinel := &poolState{
+			inProgress: true,
+			done:       make(chan struct{}),
+		}
+		a.pools[key] = sentinel
+		a.mu.Unlock()
+
+		// Perform pool creation outside the lock
+		a.log.Info("creating new sandbox pool", "service", service)
+
+		spec, err := a.buildSandboxSpec(ctx, ver, service)
+		if err != nil {
+			// Creation failed - remove sentinel and notify waiters
+			a.mu.Lock()
+			sentinel.err = fmt.Errorf("failed to build sandbox spec: %w", err)
+			delete(a.pools, key)
+			close(sentinel.done)
+			a.mu.Unlock()
+			return nil, sentinel.err
+		}
+
+		pool, err := a.createSandboxPool(ctx, ver, service, spec)
+		if err != nil {
+			// Creation failed - remove sentinel and notify waiters
+			a.mu.Lock()
+			sentinel.err = fmt.Errorf("failed to create pool: %w", err)
+			delete(a.pools, key)
+			close(sentinel.done)
+			a.mu.Unlock()
+			return nil, sentinel.err
+		}
+
+		// Creation succeeded - replace sentinel with real pool
+		a.mu.Lock()
+		a.pools[key] = &poolState{
+			pool:       pool,
+			inProgress: false,
+		}
+		close(sentinel.done) // Notify waiters
+		a.mu.Unlock()
+
+		a.log.Info("created new sandbox pool", "pool", pool.ID, "service", service, "desired_instances", pool.DesiredInstances)
+		return pool, nil
+	}
 }
 
 func (a *localActivator) ReleaseLease(ctx context.Context, lease *Lease) error {
@@ -473,59 +462,23 @@ func (a *localActivator) RenewLease(ctx context.Context, lease *Lease) (*Lease, 
 
 	vs, ok := a.versions[verKey{lease.ver.ID.String(), lease.service}]
 	if !ok {
-		return nil, fmt.Errorf("lease not found")
+		return nil, fmt.Errorf("version not found")
 	}
 
 	for _, s := range vs.sandboxes {
 		if s.sandbox == lease.sandbox {
 			s.lastRenewal = time.Now()
-			break
+			return lease, nil
 		}
 	}
 
-	return lease, nil
+	return nil, fmt.Errorf("sandbox not found")
 }
 
-// removeSandbox removes a sandbox from tracking across all version keys
-func (a *localActivator) removeSandbox(sandboxID string) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-
-	removedCount := 0
-	for key, vs := range a.versions {
-		originalCount := len(vs.sandboxes)
-		newSandboxes := make([]*sandbox, 0, originalCount)
-
-		for _, sb := range vs.sandboxes {
-			if sb.sandbox.ID.String() != sandboxID {
-				newSandboxes = append(newSandboxes, sb)
-			} else {
-				removedCount++
-				a.log.Info("removing sandbox from tracking",
-					"sandbox_id", sandboxID,
-					"app", vs.ver.App,
-					"version", vs.ver.Version,
-					"service", key.service,
-					"status", sb.sandbox.Status)
-			}
-		}
-
-		vs.sandboxes = newSandboxes
-
-		// Clean up empty version entries
-		if len(vs.sandboxes) == 0 && a.pendingCreations[key] == 0 {
-			delete(a.versions, key)
-			a.log.Debug("removed empty version entry", "key", key)
-		}
-	}
-
-	if removedCount > 0 {
-		a.log.Info("sandbox removed from tracking", "sandbox_id", sandboxID, "removed_from_keys", removedCount)
-	}
-}
-
-// watchSandboxes monitors sandbox status changes and removes non-RUNNING sandboxes
 func (a *localActivator) watchSandboxes(ctx context.Context) {
+	// Watch for sandbox changes: update status AND discover new RUNNING sandboxes
+	// This is the single source of sandbox discovery for the activator
+	// Retry loop to handle transient failures
 	for {
 		select {
 		case <-ctx.Done():
@@ -534,39 +487,149 @@ func (a *localActivator) watchSandboxes(ctx context.Context) {
 		default:
 		}
 
-		a.log.Info("starting sandbox watch")
+		a.log.Info("starting sandbox discovery watch")
 
-		// Watch all sandbox entities for status changes
 		_, err := a.eac.WatchIndex(ctx, entity.Ref(entity.EntityKind, compute_v1alpha.KindSandbox), stream.Callback(func(op *entityserver_v1alpha.EntityOp) error {
-			switch op.OperationType() {
-			case entityserver_v1alpha.EntityOperationDelete:
-				if op.EntityId() != "" {
-					a.log.Debug("sandbox entity deleted", "id", op.EntityId())
-					a.removeSandbox(op.EntityId())
-				}
-				return nil
-
-			case entityserver_v1alpha.EntityOperationCreate, entityserver_v1alpha.EntityOperationUpdate:
-				if op.HasEntity() {
-					var sb compute_v1alpha.Sandbox
-					sb.Decode(op.Entity().Entity())
-
-					// Only remove sandboxes that are in terminal states
-					// Don't remove PENDING or blank status (still starting up)
-					if sb.Status == compute_v1alpha.STOPPED || sb.Status == compute_v1alpha.DEAD {
-						a.log.Debug("sandbox reached terminal state, removing from tracking",
-							"sandbox_id", sb.ID,
-							"status", sb.Status)
-						a.removeSandbox(sb.ID.String())
-					}
-				}
-				return nil
-
-			default:
-				// Unknown operation type, log for debugging
-				a.log.Warn("unknown entity operation type", "operation", op.Operation())
+			if !op.HasEntity() {
 				return nil
 			}
+
+			en := op.Entity().Entity()
+			var sb compute_v1alpha.Sandbox
+			sb.Decode(en)
+
+			// First, check if we're already tracking this sandbox (read lock for scan)
+			a.mu.RLock()
+			var trackedSandbox *sandbox
+			for _, vs := range a.versions {
+				for _, s := range vs.sandboxes {
+					if s.sandbox.ID == sb.ID {
+						trackedSandbox = s
+						break
+					}
+				}
+				if trackedSandbox != nil {
+					break
+				}
+			}
+			a.mu.RUnlock()
+
+			// If already tracked, acquire write lock to update status
+			if trackedSandbox != nil {
+				a.mu.Lock()
+				oldStatus := trackedSandbox.sandbox.Status
+				trackedSandbox.sandbox.Status = sb.Status
+				a.mu.Unlock()
+
+				if oldStatus != sb.Status {
+					a.log.Info("sandbox status changed", "sandbox", sb.ID, "old_status", oldStatus, "new_status", sb.Status)
+				}
+				return nil
+			}
+
+			// Not tracked yet - check if this is a RUNNING sandbox we should track
+			if sb.Status != compute_v1alpha.RUNNING {
+				return nil // Only track RUNNING sandboxes
+			}
+
+			// Get version to determine service
+			sbVersion := sb.Version
+			if sbVersion == "" {
+				sbVersion = sb.Spec.Version
+			}
+			if sbVersion == "" {
+				return nil // Skip sandboxes without version (e.g., buildkit)
+			}
+
+			// Get service from labels
+			var md core_v1alpha.Metadata
+			md.Decode(en)
+			service, _ := md.Labels.Get("service")
+			if service == "" {
+				return nil // Skip sandboxes without service label
+			}
+
+			// Get app version to build tracking entry
+			verResp, err := a.eac.Get(ctx, sbVersion.String())
+			if err != nil {
+				a.log.Error("failed to get version for sandbox", "sandbox", sb.ID, "version", sbVersion, "error", err)
+				return nil
+			}
+
+			var appVer core_v1alpha.AppVersion
+			appVer.Decode(verResp.Entity().Entity())
+
+			// Build HTTP URL
+			if len(sb.Network) == 0 {
+				a.log.Warn("sandbox has no network addresses", "sandbox", sb.ID)
+				return nil
+			}
+
+			port := int64(3000)
+			if appVer.Config.Port > 0 {
+				port = appVer.Config.Port
+			}
+
+			addr, err := netutil.BuildHTTPURL(sb.Network[0].Address, port)
+			if err != nil {
+				a.log.Error("failed to build HTTP URL", "error", err, "sandbox", sb.ID)
+				return nil
+			}
+
+			// Get service concurrency and create strategy/tracker
+			svcConcurrency, err := core_v1alpha.GetServiceConcurrency(&appVer, service)
+			if err != nil {
+				a.log.Error("failed to get service concurrency", "error", err, "sandbox", sb.ID, "service", service)
+				return nil
+			}
+			strategy := concurrency.NewStrategy(&svcConcurrency)
+			tracker := strategy.InitializeTracker()
+
+			lsb := &sandbox{
+				sandbox:     &sb,
+				ent:         en,
+				lastRenewal: time.Now(),
+				url:         addr,
+				tracker:     tracker,
+			}
+
+			// Add to versions map
+			key := verKey{appVer.ID.String(), service}
+			a.mu.Lock()
+			vs, ok := a.versions[key]
+			if !ok {
+				vs = &verSandboxes{
+					ver:       &appVer,
+					sandboxes: []*sandbox{},
+					strategy:  strategy,
+				}
+				a.versions[key] = vs
+			}
+			// Double-check for duplicates (race between unlock above and lock here)
+			for _, existing := range vs.sandboxes {
+				if existing.sandbox.ID == sb.ID {
+					a.mu.Unlock()
+					return nil // Already added by another goroutine
+				}
+			}
+			vs.sandboxes = append(vs.sandboxes, lsb)
+
+			// Notify any waiters for this version+service that a new sandbox is available
+			if chans, ok := a.newSandboxChans[key]; ok {
+				for _, ch := range chans {
+					select {
+					case ch <- struct{}{}:
+						// Notification sent
+					default:
+						// Channel buffer full (already has notification pending)
+					}
+				}
+			}
+
+			a.mu.Unlock()
+
+			a.log.Info("discovered and tracking new sandbox", "sandbox", sb.ID, "service", service, "url", addr)
+			return nil
 		}))
 
 		if err != nil {
@@ -576,85 +639,17 @@ func (a *localActivator) watchSandboxes(ctx context.Context) {
 				return
 			}
 			a.log.Error("sandbox watch ended with error, will restart", "error", err)
-			// Wait a bit before restarting to avoid tight loop on persistent errors
-			select {
-			case <-time.After(5 * time.Second):
-				// Continue to restart the watch
-			case <-ctx.Done():
-				return
-			}
+			time.Sleep(5 * time.Second) // Brief delay before retry
+			continue
 		}
-	}
-}
 
-func (a *localActivator) InBackground(ctx context.Context) {
-	// Start watching sandboxes for status changes
-	go a.watchSandboxes(ctx)
-
-	retireTicker := time.NewTicker(20 * time.Second)
-	defer retireTicker.Stop()
-
-	fixedTicker := time.NewTicker(30 * time.Second)
-	defer fixedTicker.Stop()
-
-	for {
-		select {
-		case <-retireTicker.C:
-			a.retireUnusedSandboxes()
-		case <-fixedTicker.C:
-			a.ensureFixedInstances(ctx)
-		case <-ctx.Done():
-			return
-		}
-	}
-}
-
-// getLabel extracts a label value from metadata, returning defaultValue if not found
-func getLabel(metadata *core_v1alpha.Metadata, key string, defaultValue string) string {
-	for _, label := range metadata.Labels {
-		if label.Key == key {
-			return label.Value
-		}
-	}
-	return defaultValue
-}
-
-// getServiceConcurrency returns the concurrency configuration for a specific service
-// If no service-specific config is found, it falls back to defaults based on service name
-func (a *localActivator) getServiceConcurrency(ver *core_v1alpha.AppVersion, service string) *core_v1alpha.ServiceConcurrency {
-	// Look for service-specific configuration
-	for _, svc := range ver.Config.Services {
-		if svc.Name == service {
-			return &svc.ServiceConcurrency
-		}
-	}
-
-	// Fallback to runtime defaults for backward compatibility with old AppVersions
-	// that don't have Config.Services[] populated (created before RFD 0034 migration).
-	// This should rarely be hit - new builds populate Config.Services[] at build time.
-	a.log.Warn("using runtime fallback defaults for service concurrency",
-		"app", ver.App,
-		"version", ver.Version,
-		"service", service,
-		"reason", "Config.Services[] not populated - rebuild app to use build-time defaults")
-
-	if service == "web" {
-		return &core_v1alpha.ServiceConcurrency{
-			Mode:                "auto",
-			RequestsPerInstance: 10,
-			ScaleDownDelay:      "15m",
-		}
-	}
-
-	// Default for all other services is fixed with 1 instance
-	return &core_v1alpha.ServiceConcurrency{
-		Mode:         "fixed",
-		NumInstances: 1,
+		// Watch ended without error (shouldn't happen), restart it
+		a.log.Warn("sandbox watch ended unexpectedly, restarting")
+		time.Sleep(5 * time.Second)
 	}
 }
 
 func (a *localActivator) recoverSandboxes(ctx context.Context) error {
-	// List all sandboxes
 	resp, err := a.eac.List(ctx, entity.Ref(entity.EntityKind, compute_v1alpha.KindSandbox))
 	if err != nil {
 		return fmt.Errorf("failed to list sandboxes: %w", err)
@@ -662,59 +657,63 @@ func (a *localActivator) recoverSandboxes(ctx context.Context) error {
 
 	a.log.Info("recovering sandboxes on startup", "total_sandboxes", len(resp.Values()))
 
-	recoveryTime := time.Now()
-	runningCount := 0
-	skippedNoVersion := 0
-	skippedNotRunning := 0
 	recoveredCount := 0
+	skippedNotRunning := 0
+	skippedNoVersion := 0
+	recoveryTime := time.Now()
 
 	for _, ent := range resp.Values() {
 		var sb compute_v1alpha.Sandbox
 		sb.Decode(ent.Entity())
 
-		// Only recover running sandboxes
+		// Only recover RUNNING sandboxes
 		if sb.Status != compute_v1alpha.RUNNING {
 			skippedNotRunning++
-			a.log.Debug("skipping non-running sandbox", "sandbox", sb.ID, "status", sb.Status)
 			continue
 		}
-		runningCount++
 
-		// Skip sandboxes without a version reference
-		if sb.Version.String() == "" {
+		// Skip sandboxes without a version (e.g., buildkit sandboxes)
+		// Support both legacy and Spec formats
+		sbVersion := sb.Version
+		if sbVersion == "" {
+			sbVersion = sb.Spec.Version
+		}
+		if sbVersion == "" {
 			skippedNoVersion++
-			a.log.Debug("skipping sandbox without version", "sandbox", sb.ID)
 			continue
 		}
 
-		// Get the app version details
-		verResp, err := a.eac.Get(ctx, sb.Version.String())
+		// Get app version to determine service
+		verResp, err := a.eac.Get(ctx, sbVersion.String())
 		if err != nil {
-			a.log.Error("failed to get app version", "version", sb.Version, "error", err)
+			a.log.Error("failed to get version for sandbox", "sandbox", sb.ID, "version", sbVersion, "error", err)
 			continue
 		}
 
 		var appVer core_v1alpha.AppVersion
 		appVer.Decode(verResp.Entity().Entity())
 
-		// Extract service from sandbox labels - default to "web" if not found
-		var metadata core_v1alpha.Metadata
-		metadata.Decode(ent.Entity())
-		service := getLabel(&metadata, "service", "web") // Default to web if not found
+		// Extract service from sandbox labels
+		var md core_v1alpha.Metadata
+		md.Decode(ent.Entity())
+		service, _ := md.Labels.Get("service")
+		if service == "" {
+			// Skip sandboxes without service label (e.g., buildkit, other non-app sandboxes)
+			continue
+		}
 
-		// Calculate the URL
+		// Determine port from version config or default to 3000
 		port := int64(3000)
 		if appVer.Config.Port > 0 {
 			port = appVer.Config.Port
 		}
 
-		// Skip if no network address assigned yet
-		if len(sb.Network) == 0 || sb.Network[0].Address == "" {
-			a.log.Debug("skipping sandbox without network address", "sandbox", sb.ID)
+		// Build HTTP URL from address and port (handles CIDR and IPv6)
+		if len(sb.Network) == 0 {
+			a.log.Warn("sandbox has no network addresses", "sandbox", sb.ID)
 			continue
 		}
 
-		// Build HTTP URL from address and port (handles CIDR and IPv6)
 		addr, err := netutil.BuildHTTPURL(sb.Network[0].Address, port)
 		if err != nil {
 			a.log.Error("failed to build HTTP URL", "error", err, "sandbox", sb.ID)
@@ -722,8 +721,12 @@ func (a *localActivator) recoverSandboxes(ctx context.Context) error {
 		}
 
 		// Get service-specific concurrency configuration and create strategy
-		svcConcurrency := a.getServiceConcurrency(&appVer, service)
-		strategy := concurrency.NewStrategy(svcConcurrency)
+		svcConcurrency, err := core_v1alpha.GetServiceConcurrency(&appVer, service)
+		if err != nil {
+			a.log.Error("failed to get service concurrency for sandbox", "error", err, "sandbox", sb.ID, "service", service)
+			continue
+		}
+		strategy := concurrency.NewStrategy(&svcConcurrency)
 
 		// Initialize tracker for recovered sandbox (starts empty)
 		tracker := strategy.InitializeTracker()
@@ -756,89 +759,13 @@ func (a *localActivator) recoverSandboxes(ctx context.Context) error {
 		a.log.Info("recovered sandbox", "app", appVer.App, "version", appVer.Version, "sandbox", sb.ID, "service", service, "url", addr)
 	}
 
-	a.log.Info("sandbox recovery summary",
-		"total", len(resp.Values()),
-		"running", runningCount,
+	a.log.Info("sandbox recovery complete",
 		"recovered", recoveredCount,
 		"skipped_not_running", skippedNotRunning,
 		"skipped_no_version", skippedNoVersion,
 		"tracked_keys", len(a.versions))
 
 	return nil
-}
-
-func (a *localActivator) retireUnusedSandboxes() {
-	// Build list of sandboxes to retire while holding lock
-	type retireInfo struct {
-		sandboxID string
-		appName   string
-		service   string
-	}
-	toStop := make([]retireInfo, 0, 8)
-
-	a.mu.Lock()
-	for key, vs := range a.versions {
-		// Check if we should scale down based on strategy
-		scaleDownDelay := vs.strategy.ScaleDownDelay()
-		if scaleDownDelay == 0 {
-			// Never retire (fixed mode)
-			continue
-		}
-
-		var newSandboxes []*sandbox
-
-		for _, sb := range vs.sandboxes {
-			if time.Since(sb.lastRenewal) > scaleDownDelay {
-				a.log.Debug("retiring unused sandbox", "app", vs.ver.App, "sandbox", sb.sandbox.ID, "service", key.service, "idle_time", time.Since(sb.lastRenewal))
-
-				if sb.sandbox.Status != compute_v1alpha.RUNNING {
-					// Already stopped, just remove from tracking
-					continue
-				}
-
-				// Mark as stopped in our tracking
-				sb.sandbox.Status = compute_v1alpha.STOPPED
-
-				// Defer RPC outside the lock
-				toStop = append(toStop, retireInfo{
-					sandboxID: sb.sandbox.ID.String(),
-					appName:   vs.ver.App.String(),
-					service:   key.service,
-				})
-			} else {
-				newSandboxes = append(newSandboxes, sb)
-			}
-		}
-
-		vs.sandboxes = newSandboxes
-	}
-	a.mu.Unlock()
-
-	// Perform remote updates without holding the mutex
-	for _, info := range toStop {
-		// Create a bounded context for each RPC call
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-
-		var rpcE entityserver_v1alpha.Entity
-		rpcE.SetId(info.sandboxID)
-		rpcE.SetAttrs(entity.New(
-			(&compute_v1alpha.Sandbox{
-				Status: compute_v1alpha.STOPPED,
-			}).Encode,
-		).Attrs())
-
-		if _, err := a.eac.Put(ctx, &rpcE); err != nil {
-			// Log with appropriate detail for timeout/cancellation vs other errors
-			if errors.Is(err, context.DeadlineExceeded) {
-				a.log.Error("timeout retiring sandbox", "sandbox", info.sandboxID, "app", info.appName, "service", info.service, "timeout", "5s")
-			} else if errors.Is(err, context.Canceled) {
-				a.log.Error("cancelled retiring sandbox", "sandbox", info.sandboxID, "app", info.appName, "service", info.service)
-			} else {
-				a.log.Error("failed to retire sandbox", "sandbox", info.sandboxID, "app", info.appName, "service", info.service, "error", err)
-			}
-		}
-		cancel()
-	}
 }
 
 func (a *localActivator) recoverPools(ctx context.Context) error {
@@ -849,174 +776,87 @@ func (a *localActivator) recoverPools(ctx context.Context) error {
 
 	a.log.Info("recovering sandbox pools on startup", "total_pools", len(resp.Values()))
 
-	recoveredCount := 0
 	for _, ent := range resp.Values() {
 		var pool compute_v1alpha.SandboxPool
 		pool.Decode(ent.Entity())
 
-		// Skip pools without a version reference
-		if pool.SandboxSpec.Version.String() == "" {
-			a.log.Debug("skipping pool without version", "pool", pool.ID)
+		// Get version ID from SandboxSpec
+		versionID := pool.SandboxSpec.Version
+		if versionID == "" {
+			a.log.Warn("pool missing version in spec", "pool", pool.ID)
 			continue
 		}
 
-		// Create key from version and service
-		key := verKey{pool.SandboxSpec.Version.String(), pool.Service}
+		key := verKey{versionID.String(), pool.Service}
 
 		a.mu.Lock()
-		a.pools[key] = &pool
+		a.pools[key] = &poolState{
+			pool:       &pool,
+			inProgress: false,
+		}
 		a.mu.Unlock()
 
-		recoveredCount++
-		a.log.Info("recovered pool",
-			"pool_id", pool.ID,
-			"service", pool.Service,
-			"version", pool.SandboxSpec.Version,
-			"desired", pool.DesiredInstances,
-			"current", pool.CurrentInstances)
+		a.log.Info("recovered pool", "pool", pool.ID, "service", pool.Service, "version", versionID, "desired_instances", pool.DesiredInstances)
 	}
 
-	a.log.Info("pool recovery summary", "recovered", recoveredCount, "total", len(resp.Values()))
 	return nil
 }
 
-func (a *localActivator) migrateToSandboxPools(ctx context.Context) error {
-	a.log.Info("checking for sandboxes to migrate to pools")
 
-	a.mu.Lock()
-	defer a.mu.Unlock()
-
-	migratedCount := 0
-	for key, vs := range a.versions {
-		// Check if pool already exists
-		if _, exists := a.pools[key]; exists {
-			a.log.Debug("pool already exists for service", "service", key.service)
-			continue
-		}
-
-		if len(vs.sandboxes) == 0 {
-			a.log.Debug("no sandboxes to migrate for service", "service", key.service)
-			continue
-		}
-
-		// Get service concurrency config
-		svcConcurrency := a.getServiceConcurrency(vs.ver, key.service)
-
-		// Create pool entity without holding the lock for the RPC call
-		a.mu.Unlock()
-		pool, err := a.createPoolForService(ctx, vs.ver, key.service, svcConcurrency)
-		a.mu.Lock()
-
-		if err != nil {
-			a.log.Error("failed to create pool during migration",
-				"app", vs.ver.App,
-				"service", key.service,
-				"error", err)
-			continue
-		}
-
-		a.pools[key] = pool
-		migratedCount++
-
-		a.log.Info("migrated sandboxes to pool",
-			"app", vs.ver.App,
-			"service", key.service,
-			"sandbox_count", len(vs.sandboxes),
-			"pool_id", pool.ID)
-	}
-
-	a.log.Info("migration complete", "pools_created", migratedCount)
-	return nil
-}
-
-func (a *localActivator) createPoolForService(ctx context.Context, ver *core_v1alpha.AppVersion, service string, svcConcurrency *core_v1alpha.ServiceConcurrency) (*compute_v1alpha.SandboxPool, error) {
-	// Fetch app metadata to get human-friendly name for MIREN_APP env var
-	appResp, err := a.eac.Get(ctx, ver.App.String())
+func (a *localActivator) createSandboxPool(ctx context.Context, ver *core_v1alpha.AppVersion, service string, spec *compute_v1alpha.SandboxSpec) (*compute_v1alpha.SandboxPool, error) {
+	// Get service concurrency config to determine initial instance count
+	svcConcurrency, err := core_v1alpha.GetServiceConcurrency(ver, service)
 	if err != nil {
-		return nil, fmt.Errorf("failed to load app metadata: %w", err)
+		return nil, fmt.Errorf("failed to get service concurrency: %w", err)
 	}
 
-	var appMD core_v1alpha.Metadata
-	appMD.Decode(appResp.Entity().Entity())
-
-	// Build the sandbox spec from the version config
-	spec := a.buildSandboxSpec(ver, service, appMD.Name)
-
-	// Determine scaling parameters based on mode
-	var desiredInstances int64
-	var maxSlots int64
-	var leaseSlots int64
-	var scaleDownDelay time.Duration
-
-	if svcConcurrency.Mode == "fixed" {
+	// Determine initial desired instances based on mode
+	desiredInstances := int64(1) // Default: start with 1 instance
+	if svcConcurrency.Mode == "fixed" && svcConcurrency.NumInstances > 0 {
+		// Fixed mode: use configured instance count
 		desiredInstances = svcConcurrency.NumInstances
-		if desiredInstances <= 0 {
-			desiredInstances = 1
-		}
-		maxSlots = 1
-		leaseSlots = 1
-	} else {
-		// Auto mode starts with 1 instance
-		desiredInstances = 1
-
-		if svcConcurrency.RequestsPerInstance <= 0 {
-			maxSlots = 10 // default
-		} else {
-			maxSlots = svcConcurrency.RequestsPerInstance
-		}
-
-		leaseSlots = int64(float32(maxSlots) * 0.20)
-		if leaseSlots < 1 {
-			leaseSlots = 1
-		}
-
-		// Scale down delay (default 15 minutes)
-		scaleDownDelay = 15 * time.Minute
 	}
 
 	pool := compute_v1alpha.SandboxPool{
 		Service:          service,
 		SandboxSpec:      *spec,
-		Mode:             compute_v1alpha.SandboxPoolMode(svcConcurrency.Mode),
-		MaxSlots:         maxSlots,
-		LeaseSlots:       leaseSlots,
-		ScaleDownDelay:   scaleDownDelay,
 		DesiredInstances: desiredInstances,
-		CurrentInstances: 0,
-		ReadyInstances:   0,
 	}
 
-	// Create the pool entity
+	name := idgen.GenNS("pool")
+
 	var rpcE entityserver_v1alpha.Entity
 	rpcE.SetAttrs(entity.New(
 		(&core_v1alpha.Metadata{
-			Name:   idgen.GenNS("pool"),
-			Labels: types.LabelSet("app", ver.App.String(), "service", service),
+			Name: name,
+			Labels: types.LabelSet(
+				"app", ver.App.String(),
+				"version", ver.Version,
+				"service", service,
+			),
 		}).Encode,
+		entity.Ident, "pool/"+name,
 		pool.Encode,
 	).Attrs())
 
 	pr, err := a.eac.Put(ctx, &rpcE)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create pool: %w", err)
+		return nil, fmt.Errorf("failed to create pool entity: %w", err)
 	}
 
 	pool.ID = entity.Id(pr.Id())
-	a.log.Info("created sandbox pool",
-		"pool_id", pool.ID,
-		"app", ver.App,
-		"service", service,
-		"mode", pool.Mode,
-		"desired_instances", pool.DesiredInstances)
-
 	return &pool, nil
 }
 
-func (a *localActivator) buildSandboxSpec(ver *core_v1alpha.AppVersion, service string, appName string) *compute_v1alpha.SandboxSpec {
-	// Fallback to entity ID if name is empty
-	if appName == "" {
-		appName = ver.App.String()
+func (a *localActivator) buildSandboxSpec(ctx context.Context, ver *core_v1alpha.AppVersion, service string) (*compute_v1alpha.SandboxSpec, error) {
+	// Get app metadata
+	appResp, err := a.eac.Get(ctx, ver.App.String())
+	if err != nil {
+		return nil, fmt.Errorf("failed to get app: %w", err)
 	}
+
+	var appMD core_v1alpha.Metadata
+	appMD.Decode(appResp.Entity().Entity())
 
 	spec := &compute_v1alpha.SandboxSpec{
 		Version:      ver.ID,
@@ -1034,7 +874,7 @@ func (a *localActivator) buildSandboxSpec(ver *core_v1alpha.AppVersion, service 
 		Name:  "app",
 		Image: ver.ImageUrl,
 		Env: []string{
-			"MIREN_APP=" + appName,
+			"MIREN_APP=" + appMD.Name,
 			"MIREN_VERSION=" + ver.Version,
 		},
 		Directory: "/app",
@@ -1047,12 +887,10 @@ func (a *localActivator) buildSandboxSpec(ver *core_v1alpha.AppVersion, service 
 		},
 	}
 
-	// Add environment variables from config
 	for _, x := range ver.Config.Variable {
 		appCont.Env = append(appCont.Env, x.Key+"="+x.Value)
 	}
 
-	// Add service-specific command
 	for _, s := range ver.Config.Commands {
 		if s.Service == service && s.Command != "" {
 			if ver.Config.Entrypoint != "" {
@@ -1066,42 +904,94 @@ func (a *localActivator) buildSandboxSpec(ver *core_v1alpha.AppVersion, service 
 
 	spec.Container = []compute_v1alpha.SandboxSpecContainer{appCont}
 
-	return spec
+	return spec, nil
 }
 
-// updateSandboxLastActivity updates the last_activity timestamp on a sandbox entity
-// with throttling to avoid excessive writes to etcd (~30s granularity)
-// lastActivity should be passed by the caller who already holds a.mu
-func (a *localActivator) updateSandboxLastActivity(ctx context.Context, sb *compute_v1alpha.Sandbox, sbEnt *entity.Entity, lastActivity time.Time) {
+// syncLastActivity periodically syncs in-memory lastRenewal timestamps to
+// sandbox.LastActivity in the entity store. This enables the pool manager to
+// make accurate scale-down decisions based on actual lease activity.
+//
+// Runs every 30 seconds, updating LastActivity for any sandbox where:
+// - lastRenewal is newer than the persisted LastActivity
+// - It's been > 30s since the last update (throttling)
+func (a *localActivator) syncLastActivity(ctx context.Context) {
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+
+	a.log.Info("last activity sync started")
+
+	for {
+		select {
+		case <-ctx.Done():
+			a.log.Info("last activity sync stopped")
+			return
+		case <-ticker.C:
+			a.syncLastActivityOnce(ctx)
+		}
+	}
+}
+
+func (a *localActivator) syncLastActivityOnce(ctx context.Context) {
 	now := time.Now()
 
-	// Only update if > 30 seconds since last update
-	if !lastActivity.IsZero() && now.Sub(lastActivity) < 30*time.Second {
-		return
+	// Collect sandboxes that need updates (read lock for scan)
+	type update struct {
+		sandboxID    entity.Id
+		lastRenewal  time.Time
+		lastActivity time.Time
+	}
+	var updates []update
+
+	a.mu.RLock()
+	for _, vs := range a.versions {
+		for _, s := range vs.sandboxes {
+			// Only update if lastRenewal is newer and it's been > 30s since last update
+			if s.lastRenewal.After(s.sandbox.LastActivity) &&
+				(s.sandbox.LastActivity.IsZero() || now.Sub(s.sandbox.LastActivity) > 30*time.Second) {
+				updates = append(updates, update{
+					sandboxID:    s.sandbox.ID,
+					lastRenewal:  s.lastRenewal,
+					lastActivity: s.sandbox.LastActivity,
+				})
+			}
+		}
+	}
+	a.mu.RUnlock()
+
+	// Perform updates without holding lock
+	if len(updates) > 0 {
+		a.log.Debug("syncing last activity", "count", len(updates))
 	}
 
-	// Update in background to avoid blocking lease acquisition
-	go func() {
-		updateCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		defer cancel()
+	for _, u := range updates {
+		updateCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 
 		var rpcE entityserver_v1alpha.Entity
-		rpcE.SetId(sb.ID.String())
+		rpcE.SetId(u.sandboxID.String())
 		rpcE.SetAttrs(entity.New(
 			(&compute_v1alpha.Sandbox{
-				LastActivity: now,
+				LastActivity: u.lastRenewal,
 			}).Encode,
 		).Attrs())
 
 		if _, err := a.eac.Put(updateCtx, &rpcE); err != nil {
-			a.log.Debug("failed to update sandbox last_activity",
-				"sandbox", sb.ID,
+			a.log.Error("failed to sync sandbox last_activity",
+				"sandbox", u.sandboxID,
 				"error", err)
 		} else {
-			// Update local copy on success (must lock since sb is in shared map)
+			// Update our in-memory copy to reflect the sync
 			a.mu.Lock()
-			sb.LastActivity = now
+			for _, vs := range a.versions {
+				for _, s := range vs.sandboxes {
+					if s.sandbox.ID == u.sandboxID {
+						s.sandbox.LastActivity = u.lastRenewal
+						break
+					}
+				}
+			}
 			a.mu.Unlock()
 		}
-	}()
+
+		cancel()
+	}
 }

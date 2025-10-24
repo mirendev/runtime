@@ -104,38 +104,40 @@ func (l *LaunchBuildkit) Launch(ctx context.Context, addr string, lo ...LaunchOp
 
 	l.log.Debug("creating sandbox configuration")
 	var sb compute_v1alpha.Sandbox
-	sb.LogEntity = "build"
+
+	// Use Spec field for new sandbox configuration
+	sb.Spec.LogEntity = "build"
 	if opts.logEntity != "" {
-		sb.LogEntity = opts.logEntity
+		sb.Spec.LogEntity = opts.logEntity
 	}
-	l.log.Debug("sandbox log entity set", "logEntity", sb.LogEntity)
+	l.log.Debug("sandbox log entity set", "logEntity", sb.Spec.LogEntity)
 
 	for k, v := range opts.attrs {
-		sb.LogAttribute = append(sb.LogAttribute, types.Label{
+		sb.Spec.LogAttribute = append(sb.Spec.LogAttribute, types.Label{
 			Key:   k,
 			Value: v,
 		})
 	}
 
-	sb.StaticHost = append(sb.StaticHost, compute_v1alpha.StaticHost{
+	sb.Spec.StaticHost = append(sb.Spec.StaticHost, compute_v1alpha.SandboxSpecStaticHost{
 		Host: "cluster.local",
 		Ip:   addr,
 	})
 	l.log.Debug("configuring buildkit container", "image", imagerefs.BuildKit)
 	config := l.generateConfig()
 	l.log.Debug("generated buildkit config", "configSize", len(config))
-	sb.Container = append(sb.Container, compute_v1alpha.Container{
+	sb.Spec.Container = append(sb.Spec.Container, compute_v1alpha.SandboxSpecContainer{
 		Name:       "app",
 		Image:      imagerefs.BuildKit,
 		Privileged: true,
-		Port: []compute_v1alpha.Port{
+		Port: []compute_v1alpha.SandboxSpecContainerPort{
 			{
 				Port: 3000,
 				Name: "http",
 				Type: "http",
 			},
 		},
-		ConfigFile: []compute_v1alpha.ConfigFile{
+		ConfigFile: []compute_v1alpha.SandboxSpecContainerConfigFile{
 			{
 				Path: "/etc/buildkit/buildkitd.toml",
 				Mode: "0644",

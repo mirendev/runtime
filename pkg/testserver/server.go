@@ -181,12 +181,15 @@ func TestServer(t *testing.T) error {
 
 	aa := co.Activator()
 
+	spm := co.SandboxPoolManager()
+
 	ingressConfig := httpingress.IngressConfig{
 		RequestTimeout: 60 * time.Second, // Default timeout for tests
 	}
 	hs := httpingress.NewServer(ctx, log, ingressConfig, client, aa, nil)
 
 	reg.Register("app-activator", aa)
+	reg.Register("sandbox-pool-manager", spm)
 	reg.Register("resolver", res)
 
 	rcfg, err := co.NamedConfig("runner")
@@ -223,6 +226,11 @@ func TestServer(t *testing.T) error {
 	eg.Go(func() error {
 		defer t.Log("scheduled watch complete")
 		return sch.Watch(ctx, eac)
+	})
+
+	eg.Go(func() error {
+		defer t.Log("sandboxpool-manager complete")
+		return spm.Run(sub)
 	})
 
 	httpServer := &http.Server{

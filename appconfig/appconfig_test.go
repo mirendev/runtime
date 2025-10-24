@@ -301,3 +301,80 @@ func TestResolveDefaults_NilAppConfig(t *testing.T) {
 		}
 	})
 }
+
+func TestGetDefaultsForServices(t *testing.T) {
+	tests := []struct {
+		name         string
+		serviceNames []string
+		validate     func(t *testing.T, ac *AppConfig)
+	}{
+		{
+			name:         "web service gets auto mode defaults",
+			serviceNames: []string{"web"},
+			validate: func(t *testing.T, ac *AppConfig) {
+				require.Contains(t, ac.Services, "web")
+				svc := ac.Services["web"]
+				require.NotNil(t, svc)
+				require.NotNil(t, svc.Concurrency)
+				assert.Equal(t, "auto", svc.Concurrency.Mode)
+				assert.Equal(t, 10, svc.Concurrency.RequestsPerInstance)
+				assert.Equal(t, "15m", svc.Concurrency.ScaleDownDelay)
+				assert.Equal(t, 0, svc.Concurrency.NumInstances)
+			},
+		},
+		{
+			name:         "non-web service gets fixed mode defaults",
+			serviceNames: []string{"worker"},
+			validate: func(t *testing.T, ac *AppConfig) {
+				require.Contains(t, ac.Services, "worker")
+				svc := ac.Services["worker"]
+				require.NotNil(t, svc)
+				require.NotNil(t, svc.Concurrency)
+				assert.Equal(t, "fixed", svc.Concurrency.Mode)
+				assert.Equal(t, 1, svc.Concurrency.NumInstances)
+				assert.Equal(t, 0, svc.Concurrency.RequestsPerInstance)
+				assert.Equal(t, "", svc.Concurrency.ScaleDownDelay)
+			},
+		},
+		{
+			name:         "multiple services",
+			serviceNames: []string{"web", "worker", "cron"},
+			validate: func(t *testing.T, ac *AppConfig) {
+				require.Len(t, ac.Services, 3)
+
+				// web should be auto
+				require.Contains(t, ac.Services, "web")
+				webSvc := ac.Services["web"]
+				require.NotNil(t, webSvc.Concurrency)
+				assert.Equal(t, "auto", webSvc.Concurrency.Mode)
+
+				// worker should be fixed
+				require.Contains(t, ac.Services, "worker")
+				workerSvc := ac.Services["worker"]
+				require.NotNil(t, workerSvc.Concurrency)
+				assert.Equal(t, "fixed", workerSvc.Concurrency.Mode)
+
+				// cron should be fixed
+				require.Contains(t, ac.Services, "cron")
+				cronSvc := ac.Services["cron"]
+				require.NotNil(t, cronSvc.Concurrency)
+				assert.Equal(t, "fixed", cronSvc.Concurrency.Mode)
+			},
+		},
+		{
+			name:         "empty service list",
+			serviceNames: []string{},
+			validate: func(t *testing.T, ac *AppConfig) {
+				assert.Empty(t, ac.Services)
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ac := GetDefaultsForServices(tt.serviceNames)
+			require.NotNil(t, ac)
+			tt.validate(t, ac)
+		})
+	}
+}

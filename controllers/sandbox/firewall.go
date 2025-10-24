@@ -13,7 +13,7 @@ import (
 )
 
 func (c *SandboxController) configureFirewall(sb *compute.Sandbox, ep *network.EndpointConfig) error {
-	for _, co := range sb.Container {
+	for _, co := range sb.Spec.Container {
 		c.Log.Info("configuring firewall", "sandbox", sb.ID.String(), "ports", len(co.Port))
 
 		for _, p := range co.Port {
@@ -26,7 +26,7 @@ func (c *SandboxController) configureFirewall(sb *compute.Sandbox, ep *network.E
 	return nil
 }
 
-func (c *SandboxController) configurePort(p compute.Port, ep *network.EndpointConfig) error {
+func (c *SandboxController) configurePort(p compute.SandboxSpecContainerPort, ep *network.EndpointConfig) error {
 	// Configure the firewall to forward traffic on node port to port
 
 	if p.NodePort != 0 {

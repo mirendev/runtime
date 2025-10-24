@@ -150,13 +150,15 @@ func TestServiceController(t *testing.T) {
 		sbID := entity.Id(sbName())
 		sb := &compute.Sandbox{
 			ID: sbID,
-			Container: []compute.Container{
-				{
-					Name:  "nginx",
-					Image: "docker.io/library/nginx:latest",
-					Port: []compute.Port{
-						{
-							Port: 80,
+			Spec: compute.SandboxSpec{
+				Container: []compute.SandboxSpecContainer{
+					{
+						Name:  "nginx",
+						Image: "docker.io/library/nginx:latest",
+						Port: []compute.SandboxSpecContainerPort{
+							{
+								Port: 80,
+							},
 						},
 					},
 				},
@@ -278,13 +280,15 @@ func TestServiceController(t *testing.T) {
 		sbID := entity.Id(sbName())
 		sb := &compute.Sandbox{
 			ID: sbID,
-			Container: []compute.Container{
-				{
-					Name:  "nginx",
-					Image: "docker.io/library/nginx:latest",
-					Port: []compute.Port{
-						{
-							Port: 80,
+			Spec: compute.SandboxSpec{
+				Container: []compute.SandboxSpecContainer{
+					{
+						Name:  "nginx",
+						Image: "docker.io/library/nginx:latest",
+						Port: []compute.SandboxSpecContainerPort{
+							{
+								Port: 80,
+							},
 						},
 					},
 				},
@@ -489,13 +493,15 @@ func TestServiceController(t *testing.T) {
 		sbID1 := entity.Id(sbName())
 		sb1 := &compute.Sandbox{
 			ID: sbID1,
-			Container: []compute.Container{
-				{
-					Name:  "nginx",
-					Image: "docker.io/library/nginx:latest",
-					Port: []compute.Port{
-						{
-							Port: 80,
+			Spec: compute.SandboxSpec{
+				Container: []compute.SandboxSpecContainer{
+					{
+						Name:  "nginx",
+						Image: "docker.io/library/nginx:latest",
+						Port: []compute.SandboxSpecContainerPort{
+							{
+								Port: 80,
+							},
 						},
 					},
 				},
@@ -522,13 +528,15 @@ func TestServiceController(t *testing.T) {
 		sbID2 := entity.Id(sbName())
 		sb2 := &compute.Sandbox{
 			ID: sbID2,
-			Container: []compute.Container{
-				{
-					Name:  "nginx",
-					Image: "docker.io/library/nginx:latest",
-					Port: []compute.Port{
-						{
-							Port: 80,
+			Spec: compute.SandboxSpec{
+				Container: []compute.SandboxSpecContainer{
+					{
+						Name:  "nginx",
+						Image: "docker.io/library/nginx:latest",
+						Port: []compute.SandboxSpecContainerPort{
+							{
+								Port: 80,
+							},
 						},
 					},
 				},

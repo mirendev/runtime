@@ -463,6 +463,14 @@ func (c *Coordinator) Start(ctx context.Context) error {
 		return err
 	}
 
+	// Migrate app versions before starting components that depend on them
+	migrationCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancel()
+	if err := core_v1alpha.MigrateAppVersionConcurrency(migrationCtx, c.Log, eac); err != nil {
+		c.Log.Error("failed to migrate app versions", "error", err)
+		// Continue even if migration fails
+	}
+
 	aa := activator.NewLocalActivator(ctx, c.Log, eac)
 	c.aa = aa
 

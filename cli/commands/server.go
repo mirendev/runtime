@@ -660,6 +660,10 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 		return sch.Watch(sub, eac)
 	})
 
+	eg.Go(func() error {
+		return spm.Run(sub)
+	})
+
 	go func() {
 		err := http.ListenAndServe(":8989", hs)
 		if err != nil {
