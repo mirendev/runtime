@@ -21,6 +21,28 @@ jobs:
       uses: actions/setup-go@v4
       with:
         go-version-file: 'go.mod'
+        cache: true
+
+    - name: Cache system dependencies
+      uses: awalsh128/cache-apt-pkgs-action@latest
+      with:
+        packages: clang llvm
+        version: 1.0
+
+    - name: Cache Go tools
+      id: cache-go-tools
+      uses: actions/cache@v4
+      with:
+        path: ~/go/bin
+        key: ${{ runner.os }}-go-tools-${{ hashFiles('go.mod') }}
+        restore-keys: |
+          ${{ runner.os }}-go-tools-
+
+    - name: Install Go tools
+      if: steps.cache-go-tools.outputs.cache-hit != 'true'
+      run: |
+        go install golang.org/x/tools/cmd/goimports@latest
+        go install go.uber.org/mock/mockgen@latest
 
     - name: golangci-lint
       uses: golangci/golangci-lint-action@v8
@@ -38,15 +60,6 @@ jobs:
           exit 1
         fi
         echo "go.mod and go.sum are tidy."
-
-    - name: Install go generate dependencies
-      run: |
-        # Install system dependencies for go generate
-        sudo apt-get update
-        sudo apt-get install -y clang llvm
-        # Install Go tools
-        go install golang.org/x/tools/cmd/goimports@latest
-        go install go.uber.org/mock/mockgen@latest
 
     - name: Check go generate
       run: make generate-check
