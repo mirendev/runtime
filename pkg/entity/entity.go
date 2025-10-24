@@ -243,9 +243,7 @@ func (e *Entity) GetRevision() int64 {
 }
 
 func (e *Entity) SetRevision(rev int64) {
-	e.Remove(Revision)
-	e.attrs = append(e.attrs, Int64(Revision, rev))
-	e.attrs = SortedAttrs(e.attrs)
+	e.Set(Int64(Revision, rev))
 }
 
 func (e *Entity) GetCreatedAt() time.Time {

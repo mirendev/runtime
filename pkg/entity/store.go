@@ -156,6 +156,11 @@ func (s *EtcdStore) CreateEntity(
 
 	entity.ForceID()
 
+	// Revision is an attr maintained by the store itself, so we remove it
+	// and allow it to be repopulated later. This is mostly to avoid confusion
+	// when retrieving an entity, before stamping it with the current etcd revision.
+	entity.Remove(Revision)
+
 	// Validate attributes
 	if err := s.validator.ValidateEntity(ctx, entity); err != nil {
 		return nil, err
@@ -555,6 +560,11 @@ func (s *EtcdStore) UpdateEntity(
 		return nil, fmt.Errorf("failed to update entity: %w", err)
 	}
 
+	rev := entity.GetRevision()
+
+	// Revision is a store-maintained attr, so we remove it from the changes.
+	entity.Remove(Revision)
+
 	err = s.validator.ValidateAttributes(ctx, entity.attrs)
 	if err != nil {
 		return nil, err
@@ -631,7 +641,7 @@ func (s *EtcdStore) UpdateEntity(
 
 	// Use Txn to check that the key exists before updating
 	txnResp, err := s.client.Txn(ctx).
-		If(clientv3.Compare(clientv3.ModRevision(key), "=", entity.GetRevision())).
+		If(clientv3.Compare(clientv3.ModRevision(key), "=", rev)).
 		Then(txopt...).
 		Commit()
 
@@ -640,7 +650,7 @@ func (s *EtcdStore) UpdateEntity(
 	}
 
 	if !txnResp.Succeeded {
-		s.log.Error("failed to update entity in etcd", "error", err, "id", entity.Id(), "rev", entity.GetRevision(), "server-rev", txnResp.Header.Revision)
+		s.log.Error("failed to update entity in etcd", "error", err, "id", entity.Id(), "rev", rev, "server-rev", txnResp.Header.Revision)
 		return nil, cond.Conflict("entity", entity.Id())
 	}
 
@@ -829,6 +839,9 @@ func (s *EtcdStore) ReplaceEntity(
 		return nil, err
 	}
 
+	// Revision is a store-maintained attr, so we remove it from the replacement.
+	repl.Remove(Revision)
+
 	// Validate replacement attributes
 	if err := s.validator.ValidateAttributes(ctx, repl.attrs); err != nil {
 		return nil, err
@@ -860,7 +873,7 @@ func (s *EtcdStore) ReplaceEntity(
 
 	// Use Txn to check that the entity hasn't changed
 	txnResp, err := s.client.Txn(ctx).
-		If(clientv3.Compare(clientv3.ModRevision(key), "=", repl.GetRevision())).
+		If(clientv3.Compare(clientv3.ModRevision(key), "=", rev)).
 		Then(txopt...).
 		Commit()
 
@@ -938,6 +951,11 @@ func (s *EtcdStore) PatchEntity(
 		return nil, fmt.Errorf("failed to update entity: %w", err)
 	}
 
+	rev := entity.GetRevision()
+
+	// Revision is a store-maintained attr, so we remove it from the changes.
+	entity.Remove(Revision)
+
 	err = s.validator.ValidateAttributes(ctx, entity.attrs)
 	if err != nil {
 		return nil, err
@@ -971,7 +989,7 @@ func (s *EtcdStore) PatchEntity(
 
 	// Use Txn to check that the key exists before updating
 	txnResp, err := s.client.Txn(ctx).
-		If(clientv3.Compare(clientv3.ModRevision(key), "=", entity.GetRevision())).
+		If(clientv3.Compare(clientv3.ModRevision(key), "=", rev)).
 		Then(txopt...).
 		Commit()
 

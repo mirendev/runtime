@@ -549,12 +549,10 @@ func (c *SandboxController) checkSandbox(ctx context.Context, co *compute.Sandbo
 	}
 
 	if _, ok := labels[sandboxVersionLabel]; !ok {
-		c.Log.Debug("sandbox version label not found, assuming new sandbox")
 		return differentVersion, nil
 	}
 
 	if labels[sandboxVersionLabel] != fmt.Sprint(meta.Revision) {
-		c.Log.Debug("sandbox version mismatch", "expected", meta.Revision, "found", labels[sandboxVersionLabel])
 		return differentVersion, nil
 	}
 
@@ -752,6 +750,8 @@ func (c *SandboxController) updateSandbox(ctx context.Context, sb *compute.Sandb
 					labels[strings.TrimSpace(k)] = strings.TrimSpace(v)
 				}
 			}
+
+			labels[sandboxVersionLabel] = strconv.FormatInt(meta.Revision, 10)
 
 			_, err = cont.SetLabels(ctx, labels)
 			if err != nil {
