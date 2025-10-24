@@ -490,7 +490,7 @@ func (c *Coordinator) Start(ctx context.Context) error {
 	poolController := controller.NewReconcileController(
 		"sandboxpool",
 		c.Log,
-		entity.Ref(entity.EntityKind, "SandboxPool"),
+		entity.Ref(entity.EntityKind, compute_v1alpha.KindSandboxPool),
 		eac,
 		controller.AdaptReconcileController[compute_v1alpha.SandboxPool](spm),
 		time.Minute, // Resync every minute to ensure pools are reconciled
