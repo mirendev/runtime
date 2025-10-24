@@ -766,6 +766,7 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 	}
 
 	ctx.Log.Info("miren server shutting down, cleaning up resources")
+	co.Stop()
 	return err
 }
 

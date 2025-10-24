@@ -94,6 +94,7 @@ type Coordinator struct {
 
 	aa  activator.AppActivator
 	spm *sandboxpool.Manager
+	cm  *controller.ControllerManager
 
 	authority *caauth.Authority
 
@@ -109,6 +110,13 @@ func (c *Coordinator) Activator() activator.AppActivator {
 
 func (c *Coordinator) SandboxPoolManager() *sandboxpool.Manager {
 	return c.spm
+}
+
+// Stop stops the coordinator and all managed controllers
+func (c *Coordinator) Stop() {
+	if c.cm != nil {
+		c.cm.Stop()
+	}
 }
 
 const (
@@ -486,7 +494,7 @@ func (c *Coordinator) Start(ctx context.Context) error {
 	}
 
 	// Create controller manager and add pool controller
-	cm := controller.NewControllerManager()
+	c.cm = controller.NewControllerManager()
 	poolController := controller.NewReconcileController(
 		"sandboxpool",
 		c.Log,
@@ -496,10 +504,10 @@ func (c *Coordinator) Start(ctx context.Context) error {
 		time.Minute, // Resync every minute to ensure pools are reconciled
 		3,           // 3 workers
 	)
-	cm.AddController(poolController)
+	c.cm.AddController(poolController)
 
 	// Start the controller manager
-	if err := cm.Start(ctx); err != nil {
+	if err := c.cm.Start(ctx); err != nil {
 		c.Log.Error("failed to start controller manager", "error", err)
 		return err
 	}

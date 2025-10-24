@@ -309,6 +309,9 @@ func TestServer(t *testing.T) error {
 		// 	client.Close()
 		// }
 
+		log.Info("Stopping coordinator and controllers")
+		co.Stop()
+
 		log.Info("Canceling context to stop all components")
 		ctxCancel()
 
