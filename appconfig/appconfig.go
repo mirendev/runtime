@@ -203,3 +203,11 @@ func (ac *AppConfig) ResolveDefaults(services []string) {
 		}
 	}
 }
+
+// GetDefaultsForServices returns an AppConfig with defaults resolved for given service names.
+// This is useful for migration - it provides the same defaults used at build time.
+func GetDefaultsForServices(serviceNames []string) *AppConfig {
+	ac := &AppConfig{}
+	ac.ResolveDefaults(serviceNames)
+	return ac
+}
