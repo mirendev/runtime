@@ -797,25 +797,8 @@ func (a *localActivator) recoverPools(ctx context.Context) error {
 		a.mu.Unlock()
 
 		// Migrate existing sandboxes without pool labels to this pool
-		migratedCount, err := a.migrateOrphanedSandboxes(ctx, &pool)
-		if err != nil {
+		if err := a.migrateOrphanedSandboxes(ctx, &pool); err != nil {
 			a.log.Error("failed to migrate orphaned sandboxes to pool", "pool", pool.ID, "error", err)
-		}
-
-		// If we migrated sandboxes, trigger pool reconciliation by updating the pool entity
-		// This ensures the pool manager immediately sees and reconciles the new sandbox count
-		if migratedCount > 0 {
-			// Touch the pool entity to trigger a watch event and immediate reconciliation
-			var rpcE entityserver_v1alpha.Entity
-			rpcE.SetId(pool.ID.String())
-			rpcE.SetAttrs(entity.New(
-				(&core_v1alpha.Metadata{
-					Labels: types.LabelSet("migration-trigger", time.Now().Format(time.RFC3339)),
-				}).Encode,
-			).Attrs())
-			if _, err := a.eac.Put(ctx, &rpcE); err != nil {
-				a.log.Error("failed to trigger pool reconciliation", "pool", pool.ID, "error", err)
-			}
 		}
 
 		a.log.Info("recovered pool", "pool", pool.ID, "service", pool.Service, "version", versionID, "desired_instances", pool.DesiredInstances)
@@ -827,12 +810,11 @@ func (a *localActivator) recoverPools(ctx context.Context) error {
 // migrateOrphanedSandboxes finds RUNNING sandboxes that match a pool's version+service
 // but don't have a pool label, and labels them with this pool's ID.
 // This handles migration of pre-pool sandboxes into the pool system.
-// Returns the count of migrated sandboxes and any error.
-func (a *localActivator) migrateOrphanedSandboxes(ctx context.Context, pool *compute_v1alpha.SandboxPool) (int, error) {
+func (a *localActivator) migrateOrphanedSandboxes(ctx context.Context, pool *compute_v1alpha.SandboxPool) error {
 	// Query sandboxes by version
 	resp, err := a.eac.List(ctx, entity.Ref(compute_v1alpha.SandboxVersionId, pool.SandboxSpec.Version))
 	if err != nil {
-		return 0, fmt.Errorf("failed to list sandboxes by version: %w", err)
+		return fmt.Errorf("failed to list sandboxes by version: %w", err)
 	}
 
 	migratedCount := 0
@@ -895,7 +877,7 @@ func (a *localActivator) migrateOrphanedSandboxes(ctx context.Context, pool *com
 			"migrated_sandboxes", migratedCount)
 	}
 
-	return migratedCount, nil
+	return nil
 }
 
 func (a *localActivator) createSandboxPool(ctx context.Context, ver *core_v1alpha.AppVersion, service string, spec *compute_v1alpha.SandboxSpec) (*compute_v1alpha.SandboxPool, error) {

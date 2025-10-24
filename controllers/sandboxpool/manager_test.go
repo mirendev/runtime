@@ -48,7 +48,7 @@ func TestManagerScaleUpFromZero(t *testing.T) {
 
 	// Create manager and run reconciliation
 	manager := NewManager(log, server.EAC)
-	err = manager.reconcile(ctx, pool)
+	err = manager.Reconcile(ctx, pool, nil)
 	require.NoError(t, err)
 
 	// Verify 3 sandboxes were created
@@ -115,7 +115,7 @@ func TestManagerScaleUpPartial(t *testing.T) {
 
 	// Run reconciliation
 	manager := NewManager(log, server.EAC)
-	err = manager.reconcile(ctx, pool)
+	err = manager.Reconcile(ctx, pool, nil)
 	require.NoError(t, err)
 
 	// Verify total is now 5 (2 existing + 3 new)
@@ -183,9 +183,9 @@ func TestManagerServiceIsolation(t *testing.T) {
 
 	// Run reconciliation for both
 	manager := NewManager(log, server.EAC)
-	err = manager.reconcile(ctx, pool1)
+	err = manager.Reconcile(ctx, pool1, nil)
 	require.NoError(t, err)
-	err = manager.reconcile(ctx, pool2)
+	err = manager.Reconcile(ctx, pool2, nil)
 	require.NoError(t, err)
 
 	// Verify each pool has correct count
@@ -250,7 +250,7 @@ func TestManagerVersionFiltering(t *testing.T) {
 
 	// Run reconciliation
 	manager := NewManager(log, server.EAC)
-	err = manager.reconcile(ctx, pool)
+	err = manager.Reconcile(ctx, pool, nil)
 	require.NoError(t, err)
 
 	// Should create 3 new sandboxes (old version doesn't count)
@@ -316,7 +316,7 @@ func TestManagerStatusOnlyUpdate(t *testing.T) {
 
 	// Run reconciliation
 	manager := NewManager(log, server.EAC)
-	err = manager.reconcile(ctx, pool)
+	err = manager.Reconcile(ctx, pool, nil)
 	require.NoError(t, err)
 
 	// Should not create new sandboxes
@@ -367,7 +367,7 @@ func TestManagerNoUpdateWhenStatusUnchanged(t *testing.T) {
 
 	// Run reconciliation
 	manager := NewManager(log, server.EAC)
-	err = manager.reconcile(ctx, pool)
+	err = manager.Reconcile(ctx, pool, nil)
 	require.NoError(t, err)
 
 	// Get pool again and verify status is correct
@@ -473,7 +473,7 @@ func TestManagerScaleDownIdle(t *testing.T) {
 
 	// Create manager and run reconciliation
 	manager := NewManager(log, server.EAC)
-	err = manager.reconcile(ctx, pool)
+	err = manager.Reconcile(ctx, pool, nil)
 	require.NoError(t, err)
 
 	// Verify pool status was updated
@@ -551,7 +551,7 @@ func TestManagerScaleDownFixedMode(t *testing.T) {
 
 	// Run reconciliation
 	manager := NewManager(log, server.EAC)
-	err = manager.reconcile(ctx, pool)
+	err = manager.Reconcile(ctx, pool, nil)
 	require.NoError(t, err)
 
 	// Verify NO sandboxes were stopped (fixed mode never scales down)

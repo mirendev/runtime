@@ -13,14 +13,16 @@ import (
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/types"
 	"miren.dev/runtime/pkg/idgen"
-	"miren.dev/runtime/pkg/rpc/stream"
 )
 
 // Manager reconciles SandboxPool entities by ensuring the actual number of
 // sandbox instances matches the desired number specified in the pool.
+// Implements controller.ReconcileControllerI[*compute_v1alpha.SandboxPool]
 type Manager struct {
-	log *slog.Logger
-	eac *entityserver_v1alpha.EntityAccessClient
+	log    *slog.Logger
+	eac    *entityserver_v1alpha.EntityAccessClient
+	ctx    context.Context
+	cancel context.CancelFunc
 }
 
 // NewManager creates a new SandboxPoolManager
@@ -34,65 +36,18 @@ func NewManager(
 	}
 }
 
-// Run starts the reconciliation loop that watches SandboxPool entities
-// and reconciles them to match desired state.
-func (m *Manager) Run(ctx context.Context) error {
+// Init initializes the controller (required by ReconcileControllerI)
+func (m *Manager) Init(ctx context.Context) error {
+	m.ctx, m.cancel = context.WithCancel(ctx)
 	// Start background scale-down monitor
-	go m.runScaleDownMonitor(ctx)
-
-	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
-		}
-
-		m.log.Info("starting sandbox pool watch")
-
-		_, err := m.eac.WatchIndex(
-			ctx,
-			entity.Ref(entity.EntityKind, compute_v1alpha.KindSandboxPool),
-			stream.Callback(func(op *entityserver_v1alpha.EntityOp) error {
-				m.log.Debug("received watch event", "op_type", op.OperationType(), "has_entity", op.HasEntity())
-
-				if !op.HasEntity() {
-					return nil
-				}
-
-				var pool compute_v1alpha.SandboxPool
-				pool.Decode(op.Entity().Entity())
-
-				m.log.Info("watch callback triggered for pool", "pool", pool.ID, "service", pool.Service)
-
-				// Trigger reconciliation for this pool
-				if err := m.reconcile(ctx, &pool); err != nil {
-					m.log.Error("reconcile failed",
-						"pool", pool.ID,
-						"service", pool.Service,
-						"error", err)
-				}
-
-				return nil
-			}),
-		)
-
-		if err != nil && ctx.Err() == nil {
-			m.log.Error("watch failed, restarting in 5s", "error", err)
-			select {
-			case <-time.After(5 * time.Second):
-			case <-ctx.Done():
-				return ctx.Err()
-			}
-			continue
-		}
-
-		return err
-	}
+	go m.runScaleDownMonitor(m.ctx)
+	return nil
 }
 
-// reconcile brings the actual sandbox state in line with the desired state
+// Reconcile brings the actual sandbox state in line with the desired state
 // specified in the pool entity.
-func (m *Manager) reconcile(ctx context.Context, pool *compute_v1alpha.SandboxPool) error {
+// This method is called by the controller framework for both Add and Update events.
+func (m *Manager) Reconcile(ctx context.Context, pool *compute_v1alpha.SandboxPool, meta *entity.Meta) error {
 	m.log.Debug("reconciling pool",
 		"pool", pool.ID,
 		"service", pool.Service,
@@ -196,6 +151,57 @@ func (m *Manager) reconcile(ctx context.Context, pool *compute_v1alpha.SandboxPo
 
 	// Update pool status
 	return m.updatePoolStatus(ctx, pool, actual, ready)
+}
+
+// Delete handles pool deletion by stopping all sandboxes in the pool.
+// This prevents orphaned sandboxes when a pool is deleted.
+// Implements controller.DeletingReconcileController
+func (m *Manager) Delete(ctx context.Context, poolID entity.Id) error {
+	m.log.Info("deleting pool, stopping all sandboxes", "pool", poolID)
+
+	// We need to query all sandboxes with this pool label and stop them
+	// Query all sandboxes (we can't filter by pool label in the query, so we filter in memory)
+	resp, err := m.eac.List(ctx, entity.Ref(entity.EntityKind, compute_v1alpha.KindSandbox))
+	if err != nil {
+		return fmt.Errorf("failed to list sandboxes: %w", err)
+	}
+
+	stoppedCount := 0
+	for _, ent := range resp.Values() {
+		var sb compute_v1alpha.Sandbox
+		sb.Decode(ent.Entity())
+
+		// Check if this sandbox belongs to the deleted pool
+		var md core_v1alpha.Metadata
+		md.Decode(ent.Entity())
+		poolLabel, _ := md.Labels.Get("pool")
+		if poolLabel != poolID.String() {
+			continue // Not our pool's sandbox
+		}
+
+		// Mark sandbox as STOPPED
+		m.log.Info("stopping sandbox from deleted pool", "sandbox", sb.ID, "pool", poolID)
+		var rpcE entityserver_v1alpha.Entity
+		rpcE.SetId(sb.ID.String())
+		rpcE.SetAttrs(entity.New(
+			(&compute_v1alpha.Sandbox{
+				Status: compute_v1alpha.STOPPED,
+			}).Encode,
+		).Attrs())
+
+		if _, err := m.eac.Put(ctx, &rpcE); err != nil {
+			m.log.Error("failed to stop sandbox from deleted pool",
+				"sandbox", sb.ID,
+				"pool", poolID,
+				"error", err)
+			continue
+		}
+
+		stoppedCount++
+	}
+
+	m.log.Info("stopped all sandboxes from deleted pool", "pool", poolID, "stopped", stoppedCount)
+	return nil
 }
 
 // listSandboxes returns all sandboxes for a pool
