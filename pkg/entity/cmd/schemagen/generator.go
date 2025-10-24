@@ -49,7 +49,8 @@ type gen struct {
 	local       string
 	isComponent bool // true if generating a standalone component (not an entity kind)
 
-	usedAttrs map[string]struct{}
+	usedAttrs        map[string]struct{}
+	componentSchemas map[string]*entity.EncodedSchema
 
 	ec *entity.EncodedSchema
 
@@ -87,6 +88,7 @@ func GenerateSchema(sf *schemaFile, pkg string) (string, error) {
 	)
 
 	usedAttrs := map[string]struct{}{}
+	componentSchemas := make(map[string]*entity.EncodedSchema)
 
 	// Generate standalone components first (they may be referenced by kinds)
 	for compName, attrs := range mapx.StableOrder(sf.Components) {
@@ -122,6 +124,7 @@ func GenerateSchema(sf *schemaFile, pkg string) (string, error) {
 
 		g.generate()
 		structs = append(structs, g.structName)
+		componentSchemas[compName] = g.ec
 		g.f.Line()
 	}
 
@@ -130,6 +133,7 @@ func GenerateSchema(sf *schemaFile, pkg string) (string, error) {
 
 		var g gen
 		g.usedAttrs = usedAttrs
+		g.componentSchemas = componentSchemas
 		g.kind = kind
 		g.name = kind
 		g.prefix = sf.Domain + "." + kind
@@ -457,7 +461,15 @@ func (g *gen) attr(name string, attr *schemaAttr) {
 		}
 
 		simpleDecl("Component")
-		simpleField("component")
+
+		// Populate Component field with the schema of the referenced component
+		g.ec.Fields = append(g.ec.Fields, &entity.SchemaField{
+			Name:      name,
+			Type:      "component",
+			Id:        entity.Id(eid),
+			Many:      attr.Many,
+			Component: g.componentSchemas[attr.Type],
+		})
 
 		return // Early return - handled as component reference
 	}
@@ -697,6 +709,7 @@ func (g *gen) attr(name string, attr *schemaAttr) {
 	case "component":
 		var sg gen
 		sg.usedAttrs = g.usedAttrs
+		sg.componentSchemas = g.componentSchemas
 		sg.isComponent = g.isComponent // Inherit component context from parent
 		sg.sf = g.sf
 		sg.f = g.f

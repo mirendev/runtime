@@ -227,6 +227,9 @@ func encodeNaturalValue(f *entity.SchemaField, val entity.Value) (any, error) {
 		if comp == nil {
 			return nil, nil
 		}
+		if f.Component == nil {
+			return nil, fmt.Errorf("component field %s has nil Component schema", f.Name)
+		}
 		return naturalEncodeMap(entity.New(comp.Attrs()), f.Component)
 	default:
 		return nil, fmt.Errorf("unsupported type: %s", f.Type)
