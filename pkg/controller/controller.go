@@ -412,6 +412,21 @@ type UpdatingController[P ControllerEntity] interface {
 	Update(ctx context.Context, obj P, meta *entity.Meta) error
 }
 
+// ReconcileControllerI is for controllers that maintain aggregate state
+// across multiple entities. Unlike GenericController which maps 1:1 between
+// an entity and a resource, ReconcileControllerI handles controllers where
+// one entity drives reconciliation of N resources.
+type ReconcileControllerI[P ControllerEntity] interface {
+	Init(context.Context) error
+	Reconcile(ctx context.Context, obj P, meta *entity.Meta) error
+}
+
+// DeletingReconcileController is an optional interface that reconcile controllers
+// can implement to handle deletion of their managed entities.
+type DeletingReconcileController interface {
+	Delete(ctx context.Context, e entity.Id) error
+}
+
 func AdaptController[
 	T any,
 	P interface {
@@ -463,6 +478,59 @@ func AdaptController[
 			if err := cont.Delete(ctx, event.Id); err != nil {
 				return nil, fmt.Errorf("failed to create entity: %w", err)
 			}
+		}
+
+		return nil, nil
+	}
+}
+
+// AdaptReconcileController adapts a ReconcileControllerI into a HandlerFunc.
+// It calls Reconcile() for both Add and Update events.
+// If the controller implements DeletingReconcileController, Delete() is called for Delete events.
+func AdaptReconcileController[
+	T any,
+	P interface {
+		*T
+		ControllerEntity
+	},
+	C ReconcileControllerI[P],
+](cont C) HandlerFunc {
+	return func(ctx context.Context, event Event) ([]entity.Attr, error) {
+		switch event.Type {
+		case EventAdded, EventUpdated:
+			e := event.Entity
+
+			if e == nil {
+				return nil, fmt.Errorf("entity not found: %s", event.Id)
+			}
+
+			// Decode the entity into the controller entity type
+			var obj P = new(T)
+			obj.Decode(e)
+
+			orig := e.Clone()
+
+			meta := &entity.Meta{
+				Entity:   e,
+				Revision: e.GetRevision(),
+				Previous: event.PrevRev,
+			}
+
+			err := cont.Reconcile(ctx, obj, meta)
+			if err != nil {
+				err = fmt.Errorf("failed to reconcile entity: %w", err)
+			}
+
+			return entity.Diff(meta.Entity, orig), err
+
+		case EventDeleted:
+			// Check if the controller implements DeletingReconcileController
+			if deleter, ok := any(cont).(DeletingReconcileController); ok {
+				if err := deleter.Delete(ctx, event.Id); err != nil {
+					return nil, fmt.Errorf("failed to delete entity: %w", err)
+				}
+			}
+			return nil, nil
 		}
 
 		return nil, nil

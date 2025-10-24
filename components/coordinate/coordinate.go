@@ -19,6 +19,7 @@ import (
 	appclient "miren.dev/runtime/api/app"
 	"miren.dev/runtime/api/app/app_v1alpha"
 	"miren.dev/runtime/api/build/build_v1alpha"
+	"miren.dev/runtime/api/compute/compute_v1alpha"
 	"miren.dev/runtime/api/core/core_v1alpha"
 	deployment_v1alpha "miren.dev/runtime/api/deployment/deployment_v1alpha"
 	aes "miren.dev/runtime/api/entityserver"
@@ -29,6 +30,7 @@ import (
 	"miren.dev/runtime/components/netresolve"
 	"miren.dev/runtime/controllers/sandboxpool"
 	"miren.dev/runtime/metrics"
+	"miren.dev/runtime/pkg/controller"
 	"miren.dev/runtime/observability"
 	"miren.dev/runtime/pkg/caauth"
 	"miren.dev/runtime/pkg/cloudauth"
@@ -92,6 +94,7 @@ type Coordinator struct {
 
 	aa  activator.AppActivator
 	spm *sandboxpool.Manager
+	cm  *controller.ControllerManager
 
 	authority *caauth.Authority
 
@@ -107,6 +110,13 @@ func (c *Coordinator) Activator() activator.AppActivator {
 
 func (c *Coordinator) SandboxPoolManager() *sandboxpool.Manager {
 	return c.spm
+}
+
+// Stop stops the coordinator and all managed controllers
+func (c *Coordinator) Stop() {
+	if c.cm != nil {
+		c.cm.Stop()
+	}
 }
 
 const (
@@ -476,11 +486,31 @@ func (c *Coordinator) Start(ctx context.Context) error {
 
 	spm := sandboxpool.NewManager(c.Log, eac)
 	c.spm = spm
-	go func() {
-		if err := spm.Run(ctx); err != nil && ctx.Err() == nil {
-			c.Log.Error("sandbox pool manager stopped", "error", err)
-		}
-	}()
+
+	// Initialize the pool manager
+	if err := spm.Init(ctx); err != nil {
+		c.Log.Error("failed to initialize pool manager", "error", err)
+		return err
+	}
+
+	// Create controller manager and add pool controller
+	c.cm = controller.NewControllerManager()
+	poolController := controller.NewReconcileController(
+		"sandboxpool",
+		c.Log,
+		entity.Ref(entity.EntityKind, compute_v1alpha.KindSandboxPool),
+		eac,
+		controller.AdaptReconcileController[compute_v1alpha.SandboxPool](spm),
+		time.Minute, // Resync every minute to ensure pools are reconciled
+		3,           // 3 workers
+	)
+	c.cm.AddController(poolController)
+
+	// Start the controller manager
+	if err := c.cm.Start(ctx); err != nil {
+		c.Log.Error("failed to start controller manager", "error", err)
+		return err
+	}
 
 	eps := execproxy.NewServer(c.Log, eac, rs, aa)
 	server.ExposeValue("dev.miren.runtime/exec", exec_v1alpha.AdaptSandboxExec(eps))

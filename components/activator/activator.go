@@ -796,12 +796,89 @@ func (a *localActivator) recoverPools(ctx context.Context) error {
 		}
 		a.mu.Unlock()
 
+		// Migrate existing sandboxes without pool labels to this pool
+		if err := a.migrateOrphanedSandboxes(ctx, &pool); err != nil {
+			a.log.Error("failed to migrate orphaned sandboxes to pool", "pool", pool.ID, "error", err)
+		}
+
 		a.log.Info("recovered pool", "pool", pool.ID, "service", pool.Service, "version", versionID, "desired_instances", pool.DesiredInstances)
 	}
 
 	return nil
 }
 
+// migrateOrphanedSandboxes finds RUNNING sandboxes that match a pool's version+service
+// but don't have a pool label, and labels them with this pool's ID.
+// This handles migration of pre-pool sandboxes into the pool system.
+func (a *localActivator) migrateOrphanedSandboxes(ctx context.Context, pool *compute_v1alpha.SandboxPool) error {
+	// Query sandboxes by version
+	resp, err := a.eac.List(ctx, entity.Ref(compute_v1alpha.SandboxVersionId, pool.SandboxSpec.Version))
+	if err != nil {
+		return fmt.Errorf("failed to list sandboxes by version: %w", err)
+	}
+
+	migratedCount := 0
+
+	for _, ent := range resp.Values() {
+		var sb compute_v1alpha.Sandbox
+		sb.Decode(ent.Entity())
+
+		// Only consider RUNNING sandboxes
+		if sb.Status != compute_v1alpha.RUNNING {
+			continue
+		}
+
+		// Check labels
+		var md core_v1alpha.Metadata
+		md.Decode(ent.Entity())
+
+		// Must match service
+		serviceLabel, _ := md.Labels.Get("service")
+		if serviceLabel != pool.Service {
+			continue
+		}
+
+		// Check if already has a pool label
+		poolLabel, _ := md.Labels.Get("pool")
+		if poolLabel != "" {
+			continue // Already belongs to a pool
+		}
+
+		// This is an orphaned sandbox - label it with this pool
+		a.log.Info("migrating orphaned sandbox to pool",
+			"sandbox", sb.ID,
+			"pool", pool.ID,
+			"service", pool.Service)
+
+		// Update the sandbox entity with pool label (add to existing labels)
+		newLabels := types.LabelSet("pool", pool.ID.String())
+		md.Labels = append(md.Labels, newLabels...)
+
+		var rpcE entityserver_v1alpha.Entity
+		rpcE.SetId(sb.ID.String())
+		rpcE.SetAttrs(entity.New(
+			md.Encode,
+		).Attrs())
+
+		if _, err := a.eac.Put(ctx, &rpcE); err != nil {
+			a.log.Error("failed to label orphaned sandbox",
+				"sandbox", sb.ID,
+				"pool", pool.ID,
+				"error", err)
+			continue
+		}
+
+		migratedCount++
+	}
+
+	if migratedCount > 0 {
+		a.log.Info("migration complete",
+			"pool", pool.ID,
+			"migrated_sandboxes", migratedCount)
+	}
+
+	return nil
+}
 
 func (a *localActivator) createSandboxPool(ctx context.Context, ver *core_v1alpha.AppVersion, service string, spec *compute_v1alpha.SandboxSpec) (*compute_v1alpha.SandboxPool, error) {
 	// Get service concurrency config to determine initial instance count

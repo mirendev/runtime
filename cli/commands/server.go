@@ -660,9 +660,8 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 		return sch.Watch(sub, eac)
 	})
 
-	eg.Go(func() error {
-		return spm.Run(sub)
-	})
+	// SandboxPool manager is now managed by the controller framework in coordinator.Start()
+	// No need to run it separately here
 
 	go func() {
 		err := http.ListenAndServe(":8989", hs)
@@ -767,6 +766,7 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 	}
 
 	ctx.Log.Info("miren server shutting down, cleaning up resources")
+	co.Stop()
 	return err
 }
 

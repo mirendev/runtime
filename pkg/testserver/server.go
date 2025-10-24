@@ -231,10 +231,7 @@ func TestServer(t *testing.T) error {
 		return sch.Watch(ctx, eac)
 	})
 
-	eg.Go(func() error {
-		defer t.Log("sandboxpool-manager complete")
-		return spm.Run(sub)
-	})
+	// Note: sandboxpool-manager is now managed by the controller framework in coordinate
 
 	httpServer := &http.Server{
 		Addr:    ":8989",
@@ -314,6 +311,9 @@ func TestServer(t *testing.T) error {
 		// 	log.Info("Closing RPC client connections")
 		// 	client.Close()
 		// }
+
+		log.Info("Stopping coordinator and controllers")
+		co.Stop()
 
 		log.Info("Canceling context to stop all components")
 		ctxCancel()
