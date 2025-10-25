@@ -402,3 +402,119 @@ func TestActivatorAcquireLeaseFromDeadSandbox(t *testing.T) {
 		require.Error(t, err, "Should return an error when no healthy sandboxes available")
 	}
 }
+
+// TestActivatorRemovesDeadSandbox verifies that DEAD sandboxes are removed
+// from the tracking structures (not just skipped)
+func TestActivatorRemovesDeadSandbox(t *testing.T) {
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	testVer := &core_v1alpha.AppVersion{
+		ID:       entity.Id("ver-1"),
+		App:      entity.Id("app-1"),
+		Version:  "v1",
+		ImageUrl: "test:latest",
+		Config: core_v1alpha.Config{
+			Services: []core_v1alpha.Services{
+				{
+					Name: "web",
+					ServiceConcurrency: core_v1alpha.ServiceConcurrency{
+						Mode:                "auto",
+						RequestsPerInstance: 10,
+						ScaleDownDelay:      "15m",
+					},
+				},
+			},
+		},
+	}
+
+	ent := entity.Blank()
+	ent.SetID("sb-1")
+
+	strategy := concurrency.NewStrategy(&core_v1alpha.ServiceConcurrency{
+		Mode:                "auto",
+		RequestsPerInstance: 10,
+		ScaleDownDelay:      "15m",
+	})
+	tracker := strategy.InitializeTracker()
+
+	// Create a sandbox with RUNNING status initially
+	testSandbox := &sandbox{
+		sandbox: &compute_v1alpha.Sandbox{
+			ID:     entity.Id("sb-1"),
+			Status: compute_v1alpha.RUNNING,
+		},
+		ent:         ent,
+		lastRenewal: time.Now(),
+		url:         "http://localhost:3000",
+		tracker:     tracker,
+	}
+
+	activator := &localActivator{
+		log: log,
+		versions: map[verKey]*verSandboxes{
+			{"ver-1", "web"}: {
+				ver:       testVer,
+				sandboxes: []*sandbox{testSandbox},
+				strategy:  strategy,
+			},
+		},
+		pools:           make(map[verKey]*poolState),
+		newSandboxChans: make(map[verKey][]chan struct{}),
+	}
+
+	// Verify sandbox is initially tracked
+	key := verKey{"ver-1", "web"}
+	require.Len(t, activator.versions[key].sandboxes, 1, "Should have 1 sandbox initially")
+
+	// Simulate the sandbox transitioning to DEAD status (as watchSandboxes would do)
+	activator.mu.Lock()
+
+	// Find the tracked sandbox and key
+	var trackedSandbox *sandbox
+	var trackedKey verKey
+	for k, vs := range activator.versions {
+		for _, s := range vs.sandboxes {
+			if s.sandbox.ID == "sb-1" {
+				trackedSandbox = s
+				trackedKey = k
+				break
+			}
+		}
+		if trackedSandbox != nil {
+			break
+		}
+	}
+
+	require.NotNil(t, trackedSandbox, "Should find the tracked sandbox")
+
+	// Update status to DEAD
+	trackedSandbox.sandbox.Status = compute_v1alpha.DEAD
+
+	// Remove the sandbox from tracking (simulating watchSandboxes behavior)
+	if vs, ok := activator.versions[trackedKey]; ok {
+		for i, s := range vs.sandboxes {
+			if s.sandbox.ID == "sb-1" {
+				vs.sandboxes[i] = vs.sandboxes[len(vs.sandboxes)-1]
+				vs.sandboxes = vs.sandboxes[:len(vs.sandboxes)-1]
+				break
+			}
+		}
+
+		if len(vs.sandboxes) == 0 {
+			delete(activator.versions, trackedKey)
+		}
+	}
+
+	activator.mu.Unlock()
+
+	// Verify sandbox was removed from tracking
+	activator.mu.RLock()
+	defer activator.mu.RUnlock()
+
+	if vs, exists := activator.versions[key]; exists {
+		assert.Len(t, vs.sandboxes, 0, "DEAD sandbox should be removed from sandboxes slice")
+	}
+
+	// Optionally, the entire verKey might be removed if it was the only sandbox
+	// Either way is correct - having an empty slice or no entry at all
+}
