@@ -308,3 +308,97 @@ func TestActivatorRecoveryIntegration(t *testing.T) {
 	// Verify strategy configuration
 	assert.Equal(t, 0, vs.strategy.DesiredInstances()) // Auto mode scales to zero
 }
+
+// TestActivatorAcquireLeaseFromDeadSandbox verifies that DEAD sandboxes
+// are NOT considered for lease acquisition
+func TestActivatorAcquireLeaseFromDeadSandbox(t *testing.T) {
+	ctx := context.Background()
+
+	// Create in-memory entity server
+	server, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	// Create app entity
+	app := &core_v1alpha.App{}
+	appID, err := server.Client.Create(ctx, "test-app", app)
+	require.NoError(t, err)
+	app.ID = appID
+
+	testVer := &core_v1alpha.AppVersion{
+		App:      app.ID,
+		Version:  "v1",
+		ImageUrl: "test:latest",
+		Config: core_v1alpha.Config{
+			Services: []core_v1alpha.Services{
+				{
+					Name: "web",
+					ServiceConcurrency: core_v1alpha.ServiceConcurrency{
+						Mode:                "auto",
+						RequestsPerInstance: 10,
+						ScaleDownDelay:      "15m",
+					},
+				},
+			},
+		},
+	}
+	verID, err := server.Client.Create(ctx, "test-ver", testVer)
+	require.NoError(t, err)
+	testVer.ID = verID
+
+	ent := entity.Blank()
+	ent.SetID("sb-1")
+
+	strategy := concurrency.NewStrategy(&core_v1alpha.ServiceConcurrency{
+		Mode:                "auto",
+		RequestsPerInstance: 10,
+		ScaleDownDelay:      "15m",
+	})
+	tracker := strategy.InitializeTracker()
+
+	// Create a sandbox with DEAD status but available capacity
+	testSandbox := &sandbox{
+		sandbox: &compute_v1alpha.Sandbox{
+			ID:     entity.Id("sb-1"),
+			Status: compute_v1alpha.DEAD, // Sandbox is DEAD
+		},
+		ent:         ent,
+		lastRenewal: time.Now(),
+		url:         "http://localhost:3000",
+		tracker:     tracker, // Tracker has capacity (10 available)
+	}
+
+	log := testutils.TestLogger(t)
+	activator := &localActivator{
+		log: log,
+		eac: server.EAC,
+		versions: map[verKey]*verSandboxes{
+			{testVer.ID.String(), "web"}: {
+				ver:       testVer,
+				sandboxes: []*sandbox{testSandbox},
+				strategy:  strategy,
+			},
+		},
+		pools:           make(map[verKey]*poolState),
+		newSandboxChans: make(map[verKey][]chan struct{}),
+	}
+
+	// Try to acquire a lease - this should NOT succeed with a DEAD sandbox
+	// With the bug present, this will incorrectly return a lease from the DEAD sandbox
+	// This test uses a timeout context since without a pool, it should timeout trying to get capacity
+	timeoutCtx, cancel := context.WithTimeout(ctx, 100*time.Millisecond)
+	defer cancel()
+
+	lease, err := activator.AcquireLease(timeoutCtx, testVer, "web")
+
+	// The correct behavior is to NOT grant a lease from a DEAD sandbox
+	// It should either timeout or return an error
+	if lease != nil {
+		// This assertion will FAIL with the current buggy code
+		require.NotEqual(t, compute_v1alpha.DEAD, lease.sandbox.Status,
+			"Should not grant lease from DEAD sandbox, but got one from sandbox %s with status %s",
+			lease.sandbox.ID, lease.sandbox.Status)
+	} else {
+		// Correct behavior - no lease granted from DEAD sandbox
+		require.Error(t, err, "Should return an error when no healthy sandboxes available")
+	}
+}

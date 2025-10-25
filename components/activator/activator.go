@@ -168,7 +168,7 @@ func (a *localActivator) AcquireLease(ctx context.Context, ver *core_v1alpha.App
 		start := rand.Int() % len(vs.sandboxes)
 		for i := 0; i < len(vs.sandboxes); i++ {
 			s := vs.sandboxes[(start+i)%len(vs.sandboxes)]
-			if s.tracker.HasCapacity() {
+			if s.sandbox.Status == compute_v1alpha.RUNNING && s.tracker.HasCapacity() {
 				candidateSandbox = s
 				break
 			}
@@ -273,7 +273,7 @@ func (a *localActivator) ensurePoolAndWaitForSandbox(ctx context.Context, ver *c
 			start := rand.Int() % len(vs.sandboxes)
 			for i := 0; i < len(vs.sandboxes); i++ {
 				s := vs.sandboxes[(start+i)%len(vs.sandboxes)]
-				if s.tracker.HasCapacity() {
+				if s.sandbox.Status == compute_v1alpha.RUNNING && s.tracker.HasCapacity() {
 					candidateSandbox = s
 					break
 				}
