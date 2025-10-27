@@ -294,7 +294,7 @@ func TestActivatorRecoveryIntegration(t *testing.T) {
 
 	// Create activator - should recover all sandboxes
 	log := testutils.TestLogger(t)
-	activator := NewLocalActivator(ctx, log, es.EAC).(*localActivator)
+	activator := NewLocalActivator(ctx, log, es.EAC, true).(*localActivator)
 
 	// Give a moment for recovery to complete
 	time.Sleep(100 * time.Millisecond)

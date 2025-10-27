@@ -58,6 +58,11 @@ type CoordinatorConfig struct {
 	// Cloud authentication configuration
 	CloudAuth CloudAuthConfig `json:"cloud_auth" yaml:"cloud_auth"`
 
+	// Feature flag to enable sandbox pool integration
+	// When false, activator creates sandboxes directly (pre-pool behavior)
+	// When true, activator uses SandboxPool entities and pool manager (new behavior)
+	UseSandboxPools bool `json:"use_sandbox_pools" yaml:"use_sandbox_pools"`
+
 	Mem  *metrics.MemoryUsage
 	Cpu  *metrics.CPUUsage
 	HTTP *metrics.HTTPMetrics
@@ -481,35 +486,42 @@ func (c *Coordinator) Start(ctx context.Context) error {
 		// Continue even if migration fails
 	}
 
-	aa := activator.NewLocalActivator(ctx, c.Log, eac)
+	aa := activator.NewLocalActivator(ctx, c.Log, eac, c.UseSandboxPools)
 	c.aa = aa
 
-	spm := sandboxpool.NewManager(c.Log, eac)
-	c.spm = spm
+	// Only start sandbox pool manager if the feature flag is enabled
+	if c.UseSandboxPools {
+		c.Log.Info("sandbox pools enabled, starting pool manager")
 
-	// Initialize the pool manager
-	if err := spm.Init(ctx); err != nil {
-		c.Log.Error("failed to initialize pool manager", "error", err)
-		return err
-	}
+		spm := sandboxpool.NewManager(c.Log, eac)
+		c.spm = spm
 
-	// Create controller manager and add pool controller
-	c.cm = controller.NewControllerManager()
-	poolController := controller.NewReconcileController(
-		"sandboxpool",
-		c.Log,
-		entity.Ref(entity.EntityKind, compute_v1alpha.KindSandboxPool),
-		eac,
-		controller.AdaptReconcileController[compute_v1alpha.SandboxPool](spm),
-		time.Minute, // Resync every minute to ensure pools are reconciled
-		3,           // 3 workers
-	)
-	c.cm.AddController(poolController)
+		// Initialize the pool manager
+		if err := spm.Init(ctx); err != nil {
+			c.Log.Error("failed to initialize pool manager", "error", err)
+			return err
+		}
 
-	// Start the controller manager
-	if err := c.cm.Start(ctx); err != nil {
-		c.Log.Error("failed to start controller manager", "error", err)
-		return err
+		// Create controller manager and add pool controller
+		c.cm = controller.NewControllerManager()
+		poolController := controller.NewReconcileController(
+			"sandboxpool",
+			c.Log,
+			entity.Ref(entity.EntityKind, compute_v1alpha.KindSandboxPool),
+			eac,
+			controller.AdaptReconcileController[compute_v1alpha.SandboxPool](spm),
+			time.Minute, // Resync every minute to ensure pools are reconciled
+			3,           // 3 workers
+		)
+		c.cm.AddController(poolController)
+
+		// Start the controller manager
+		if err := c.cm.Start(ctx); err != nil {
+			c.Log.Error("failed to start controller manager", "error", err)
+			return err
+		}
+	} else {
+		c.Log.Info("sandbox pools disabled, using direct sandbox creation")
 	}
 
 	eps := execproxy.NewServer(c.Log, eac, rs, aa)

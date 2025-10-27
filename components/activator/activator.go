@@ -117,44 +117,65 @@ type localActivator struct {
 	// Map key is verKey (version + service), value is list of channels to notify
 	newSandboxChans map[verKey][]chan struct{}
 
+	// Track pending sandbox creations to avoid over-provisioning (direct mode only)
+	pendingCreations map[verKey]int
+
+	usePools bool // Feature flag: true = pool-based, false = direct creation
+
 	log *slog.Logger
 	eac *entityserver_v1alpha.EntityAccessClient
 }
 
 var _ AppActivator = (*localActivator)(nil)
 
-func NewLocalActivator(ctx context.Context, log *slog.Logger, eac *entityserver_v1alpha.EntityAccessClient) AppActivator {
+func NewLocalActivator(ctx context.Context, log *slog.Logger, eac *entityserver_v1alpha.EntityAccessClient, usePools bool) AppActivator {
 	la := &localActivator{
-		log:             log.With("module", "activator"),
-		eac:             eac,
-		versions:        make(map[verKey]*verSandboxes),
-		pools:           make(map[verKey]*poolState),
-		newSandboxChans: make(map[verKey][]chan struct{}),
+		log:              log.With("module", "activator"),
+		eac:              eac,
+		versions:         make(map[verKey]*verSandboxes),
+		pools:            make(map[verKey]*poolState),
+		newSandboxChans:  make(map[verKey][]chan struct{}),
+		pendingCreations: make(map[verKey]int),
+		usePools:         usePools,
 	}
 
 	// Recover existing sandboxes on startup
-	la.log.Info("activator starting, attempting to recover existing sandboxes")
+	la.log.Info("activator starting", "use_pools", usePools)
 	if err := la.recoverSandboxes(ctx); err != nil {
 		la.log.Error("failed to recover sandboxes", "error", err)
 	} else {
 		la.log.Info("activator recovery complete", "tracked_versions", len(la.versions))
 	}
 
-	// Recover existing pools
-	la.log.Info("recovering sandbox pools")
-	if err := la.recoverPools(ctx); err != nil {
-		la.log.Error("failed to recover pools", "error", err)
-	} else {
-		la.log.Info("pool recovery complete", "tracked_pools", len(la.pools))
+	// Recover existing pools (only if using pool mode)
+	if usePools {
+		la.log.Info("recovering sandbox pools")
+		if err := la.recoverPools(ctx); err != nil {
+			la.log.Error("failed to recover pools", "error", err)
+		} else {
+			la.log.Info("pool recovery complete", "tracked_pools", len(la.pools))
+		}
 	}
 
 	go la.watchSandboxes(ctx)
-	go la.syncLastActivity(ctx)
+
+	if usePools {
+		// Pool mode: sync activity to entity store for pool manager
+		go la.syncLastActivity(ctx)
+	} else {
+		// Direct mode: run background tasks for fixed instances and retirement
+		go la.InBackground(ctx)
+	}
 
 	return la
 }
 
 func (a *localActivator) AcquireLease(ctx context.Context, ver *core_v1alpha.AppVersion, service string) (*Lease, error) {
+	// Route to appropriate implementation based on feature flag
+	if !a.usePools {
+		return a.acquireLeaseDirectMode(ctx, ver, service)
+	}
+
 	key := verKey{ver.ID.String(), service}
 
 	// Try to find an available sandbox with capacity (read lock for scanning)
