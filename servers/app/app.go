@@ -18,7 +18,9 @@ import (
 	"miren.dev/runtime/pkg/idgen"
 )
 
-//go:generate go run ../../pkg/rpc/cmd/rpcgen -pkg app -input rpc.yml -output rpc.gen.go
+// TODO: Removed broken go:generate directive - no rpc.yml file exists in servers/app/
+// If RPC generation is needed here, create rpc.yml first
+// //go:generate go run ../../pkg/rpc/cmd/rpcgen -pkg app -input rpc.yml -output rpc.gen.go
 
 type ClearVersioner interface {
 	ClearOldVersions(ctx context.Context, current *core_v1alpha.AppVersion) error
