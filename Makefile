@@ -139,6 +139,26 @@ lint-pr:
 
 .PHONY: lint-pr
 
+generate-check:
+	@echo "Checking if go generate produces any changes..."
+	@if [ -n "$$(git status --porcelain)" ]; then \
+		echo "Error: Working directory is not clean. Please commit or stash changes before running generate-check."; \
+		exit 1; \
+	fi
+	@go generate ./...
+	@if [ -n "$$(git status --porcelain)" ]; then \
+		echo ""; \
+		echo "Error: go generate produced changes. Please run 'go generate ./...' and commit the results."; \
+		echo ""; \
+		echo "Files that changed:"; \
+		git status --short; \
+		git diff; \
+		exit 1; \
+	fi
+	@echo "✓ go generate is up to date"
+
+.PHONY: generate-check
+
 dist:
 	@bash ./hack/build-dist.sh
 

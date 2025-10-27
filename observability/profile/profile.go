@@ -13,7 +13,9 @@ import (
 	"miren.dev/runtime/pkg/perf"
 )
 
-//go:generate go run github.com/cilium/ebpf/cmd/bpf2go -type stack_key -type arguments perf ebpf/perf_event.c -- -I ../../../ebpf/include
+// TODO: eBPF code generation currently disabled - missing ebpf/include/vmlinux.h
+// The generated files (perf_bpfeb.go, perf_bpfel.go, etc.) are checked into git for now
+// //go:generate go run github.com/cilium/ebpf/cmd/bpf2go -type stack_key -type arguments perf ebpf/perf_event.c -- -I ../../../ebpf/include
 
 const samplesPerSecond = 20
 

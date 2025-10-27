@@ -21,6 +21,43 @@ jobs:
       uses: actions/setup-go@v4
       with:
         go-version-file: 'go.mod'
+        cache: true
+
+    - name: Cache apt packages
+      uses: actions/cache@v4
+      id: cache-apt
+      with:
+        path: |
+          /var/cache/apt/archives
+          /var/lib/apt/lists
+        key: ${{ runner.os }}-apt-${{ hashFiles('.github/workflows/test.yml') }}-clang-llvm
+        restore-keys: |
+          ${{ runner.os }}-apt-${{ hashFiles('.github/workflows/test.yml') }}-
+          ${{ runner.os }}-apt-
+
+    - name: Install system dependencies
+      if: steps.cache-apt.outputs.cache-hit != 'true'
+      run: |
+        # Disable expensive operations on throwaway CI runners
+        sudo sed -i 's/^DPkg::Post-Invoke.*//' /etc/apt/apt.conf.d/90_man-db || true
+        # Install packages
+        sudo DEBIAN_FRONTEND=noninteractive apt-get update
+        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends clang llvm
+
+    - name: Cache Go tools
+      id: cache-go-tools
+      uses: actions/cache@v4
+      with:
+        path: ~/go/bin
+        key: ${{ runner.os }}-go-tools-${{ hashFiles('go.mod') }}
+        restore-keys: |
+          ${{ runner.os }}-go-tools-
+
+    - name: Install Go tools
+      if: steps.cache-go-tools.outputs.cache-hit != 'true'
+      run: |
+        go install golang.org/x/tools/cmd/goimports@latest
+        go install go.uber.org/mock/mockgen@latest
 
     - name: golangci-lint
       uses: golangci/golangci-lint-action@v8
@@ -38,6 +75,9 @@ jobs:
           exit 1
         fi
         echo "go.mod and go.sum are tidy."
+
+    - name: Check go generate
+      run: make generate-check
 
   test:
     needs: lint
