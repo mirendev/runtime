@@ -181,11 +181,12 @@ func (a *localActivator) AcquireLease(ctx context.Context, ver *core_v1alpha.App
 	}
 	a.mu.RUnlock()
 
-	// If we found a candidate, acquire write lock and double-check capacity
+	// If we found a candidate, acquire write lock and double-check status and capacity
 	if candidateSandbox != nil {
 		a.mu.Lock()
-		// Double-check capacity still available (may have changed between locks)
-		if candidateSandbox.tracker.HasCapacity() {
+		// Double-check status and capacity (may have changed between locks)
+		if candidateSandbox.sandbox.Status == compute_v1alpha.RUNNING &&
+			candidateSandbox.tracker.HasCapacity() {
 			leaseSize := candidateSandbox.tracker.AcquireLease()
 			candidateSandbox.lastRenewal = time.Now()
 
@@ -204,7 +205,7 @@ func (a *localActivator) AcquireLease(ctx context.Context, ver *core_v1alpha.App
 			return lease, nil
 		}
 		a.mu.Unlock()
-		// Capacity was taken between RLock and Lock, fall through to pool request
+		// Status changed or capacity was taken between RLock and Lock, fall through to pool request
 	}
 
 	// No available sandboxes with capacity
@@ -307,7 +308,9 @@ func (a *localActivator) waitForSandbox(ctx context.Context, ver *core_v1alpha.A
 
 		if candidateSandbox != nil {
 			a.mu.Lock()
-			if candidateSandbox.tracker.HasCapacity() {
+			// Double-check status and capacity (may have changed between locks)
+			if candidateSandbox.sandbox.Status == compute_v1alpha.RUNNING &&
+				candidateSandbox.tracker.HasCapacity() {
 				leaseSize := candidateSandbox.tracker.AcquireLease()
 				candidateSandbox.lastRenewal = time.Now()
 				a.mu.Unlock()
