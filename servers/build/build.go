@@ -9,6 +9,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 
 	"github.com/moby/buildkit/client"
 	"github.com/tonistiigi/fsutil"
@@ -49,6 +50,80 @@ func NewBuilder(log *slog.Logger, eas *entityserver_v1alpha.EntityAccessClient, 
 		TempDir:   tmpdir,
 		ec:        entityserver.NewClient(log, eas),
 	}
+}
+
+// buildServicesConfig collects services from app config and procfile,
+// resolves defaults, and returns the final service configurations.
+// This is the core logic for determining which services exist in an app_version
+// and what their concurrency settings should be.
+func buildServicesConfig(appConfig *appconfig.AppConfig, procfileServices map[string]string) []core_v1alpha.Services {
+	// Build command map from app config
+	srvMap := map[string]string{}
+	if appConfig != nil {
+		for k, v := range appConfig.Services {
+			if v != nil && v.Command != "" {
+				srvMap[k] = v.Command
+			}
+		}
+	}
+
+	// Add procfile services (app config takes precedence)
+	for k, v := range procfileServices {
+		if _, ok := srvMap[k]; !ok {
+			srvMap[k] = v
+		}
+	}
+
+	// Collect all service names from both commands and app config
+	// Services may have concurrency config without explicit commands
+	allServiceNames := make([]string, 0, len(srvMap))
+	for serviceName := range srvMap {
+		allServiceNames = append(allServiceNames, serviceName)
+	}
+
+	// Also include services that have config in app.toml but no commands
+	if appConfig != nil {
+		for serviceName := range appConfig.Services {
+			if !slices.Contains(allServiceNames, serviceName) {
+				allServiceNames = append(allServiceNames, serviceName)
+			}
+		}
+	}
+
+	// Resolve defaults for all services
+	ac := appConfig
+	if ac != nil {
+		ac.ResolveDefaults(allServiceNames)
+	} else {
+		// No app.toml - create minimal config with defaults
+		ac = &appconfig.AppConfig{}
+		ac.ResolveDefaults(allServiceNames)
+	}
+
+	// Build Config.Services[] from fully-resolved appconfig
+	// IMPORTANT: Iterate over allServiceNames, not srvMap, because services
+	// may have concurrency config without commands
+	var services []core_v1alpha.Services
+	for _, serviceName := range allServiceNames {
+		svc := core_v1alpha.Services{
+			Name: serviceName,
+		}
+
+		// Map from appconfig to entity schema
+		// After ResolveDefaults(), every service is guaranteed to have config
+		if serviceConfig, ok := ac.Services[serviceName]; ok && serviceConfig.Concurrency != nil {
+			svc.ServiceConcurrency = core_v1alpha.ServiceConcurrency{
+				Mode:                serviceConfig.Concurrency.Mode,
+				NumInstances:        int64(serviceConfig.Concurrency.NumInstances),
+				RequestsPerInstance: int64(serviceConfig.Concurrency.RequestsPerInstance),
+				ScaleDownDelay:      serviceConfig.Concurrency.ScaleDownDelay,
+			}
+		}
+
+		services = append(services, svc)
+	}
+
+	return services
 }
 
 func (b *Builder) nextVersion(ctx context.Context, name string) (
@@ -360,79 +435,43 @@ func (b *Builder) BuildFromTar(ctx context.Context, state *build_v1alpha.Builder
 		mrv.Config.Entrypoint = res.Entrypoint
 	}
 
-	var serviceCmds []core_v1alpha.Commands
-
-	srvMap := map[string]string{}
-
-	if ac != nil {
-		// If the appconfig contains any commands, extract those
-		for k, v := range ac.Services {
-			if v != nil && v.Command != "" {
-				srvMap[k] = v.Command
-			}
-		}
-	}
-
-	services, err := b.readProcFile(tr)
+	procfileServices, err := b.readProcFile(tr)
 	if err != nil {
 		return fmt.Errorf("error reading procfile: %w", err)
-	} else if services == nil {
+	} else if procfileServices == nil {
 		b.Log.Debug("no procfile found, using app config")
 	} else {
-		b.Log.Debug("using procfile", "services", maps.Keys(services))
+		b.Log.Debug("using procfile", "services", maps.Keys(procfileServices))
 	}
 
-	// Prioritize the app config over the Procfile; if a service is defined in both, use the app config
-	for k, v := range services {
-		if _, ok := srvMap[k]; !ok {
-			srvMap[k] = v
+	// Build service configurations with concurrency settings
+	mrv.Config.Services = buildServicesConfig(ac, procfileServices)
+
+	// Build commands list for services that have explicit commands
+	var serviceCmds []core_v1alpha.Commands
+	for _, svc := range mrv.Config.Services {
+		// Check if this service has a command from app config or procfile
+		var cmd string
+		if ac != nil {
+			if svcConfig, ok := ac.Services[svc.Name]; ok && svcConfig.Command != "" {
+				cmd = svcConfig.Command
+			}
 		}
-	}
+		if cmd == "" {
+			if procCmd, ok := procfileServices[svc.Name]; ok {
+				cmd = procCmd
+			}
+		}
 
-	for k, v := range srvMap {
-		serviceCmds = append(serviceCmds, core_v1alpha.Commands{
-			Service: k,
-			Command: v,
-		})
+		if cmd != "" {
+			serviceCmds = append(serviceCmds, core_v1alpha.Commands{
+				Service: svc.Name,
+				Command: cmd,
+			})
+		}
 	}
 
 	mrv.Config.Commands = serviceCmds
-
-	// Collect all service names
-	allServiceNames := make([]string, 0, len(srvMap))
-	for serviceName := range srvMap {
-		allServiceNames = append(allServiceNames, serviceName)
-	}
-
-	// Resolve defaults for all services
-	if ac != nil {
-		ac.ResolveDefaults(allServiceNames)
-	} else {
-		// No app.toml - create minimal config with defaults
-		ac = &appconfig.AppConfig{}
-		ac.ResolveDefaults(allServiceNames)
-	}
-
-	// Build Config.Services[] from fully-resolved appconfig
-	mrv.Config.Services = nil
-	for serviceName := range srvMap {
-		svc := core_v1alpha.Services{
-			Name: serviceName,
-		}
-
-		// Map from appconfig to entity schema
-		// After ResolveDefaults(), every service is guaranteed to have config
-		if serviceConfig, ok := ac.Services[serviceName]; ok && serviceConfig.Concurrency != nil {
-			svc.ServiceConcurrency = core_v1alpha.ServiceConcurrency{
-				Mode:                serviceConfig.Concurrency.Mode,
-				NumInstances:        int64(serviceConfig.Concurrency.NumInstances),
-				RequestsPerInstance: int64(serviceConfig.Concurrency.RequestsPerInstance),
-				ScaleDownDelay:      serviceConfig.Concurrency.ScaleDownDelay,
-			}
-		}
-
-		mrv.Config.Services = append(mrv.Config.Services, svc)
-	}
 
 	id, err := b.ec.Create(ctx, mrv.Version, mrv)
 	if err != nil {
