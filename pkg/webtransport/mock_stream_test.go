@@ -14,7 +14,7 @@ import (
 	reflect "reflect"
 	time "time"
 
-	"github.com/quic-go/quic-go"
+	quic "github.com/quic-go/quic-go"
 	gomock "go.uber.org/mock/gomock"
 )
 
@@ -22,6 +22,7 @@ import (
 type MockStream struct {
 	ctrl     *gomock.Controller
 	recorder *MockStreamMockRecorder
+	isgomock struct{}
 }
 
 // MockStreamMockRecorder is the mock recorder for MockStream.
@@ -94,18 +95,18 @@ func (mr *MockStreamMockRecorder) Context() *gomock.Call {
 }
 
 // Read mocks base method.
-func (m *MockStream) Read(arg0 []byte) (int, error) {
+func (m *MockStream) Read(p []byte) (int, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Read", arg0)
+	ret := m.ctrl.Call(m, "Read", p)
 	ret0, _ := ret[0].(int)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // Read indicates an expected call of Read.
-func (mr *MockStreamMockRecorder) Read(arg0 any) *gomock.Call {
+func (mr *MockStreamMockRecorder) Read(p any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Read", reflect.TypeOf((*MockStream)(nil).Read), arg0)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Read", reflect.TypeOf((*MockStream)(nil).Read), p)
 }
 
 // ReceiveDatagram mocks base method.
@@ -138,45 +139,45 @@ func (mr *MockStreamMockRecorder) SendDatagram(arg0 any) *gomock.Call {
 }
 
 // SetDeadline mocks base method.
-func (m *MockStream) SetDeadline(arg0 time.Time) error {
+func (m *MockStream) SetDeadline(t time.Time) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "SetDeadline", arg0)
+	ret := m.ctrl.Call(m, "SetDeadline", t)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // SetDeadline indicates an expected call of SetDeadline.
-func (mr *MockStreamMockRecorder) SetDeadline(arg0 any) *gomock.Call {
+func (mr *MockStreamMockRecorder) SetDeadline(t any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetDeadline", reflect.TypeOf((*MockStream)(nil).SetDeadline), arg0)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetDeadline", reflect.TypeOf((*MockStream)(nil).SetDeadline), t)
 }
 
 // SetReadDeadline mocks base method.
-func (m *MockStream) SetReadDeadline(arg0 time.Time) error {
+func (m *MockStream) SetReadDeadline(t time.Time) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "SetReadDeadline", arg0)
+	ret := m.ctrl.Call(m, "SetReadDeadline", t)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // SetReadDeadline indicates an expected call of SetReadDeadline.
-func (mr *MockStreamMockRecorder) SetReadDeadline(arg0 any) *gomock.Call {
+func (mr *MockStreamMockRecorder) SetReadDeadline(t any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetReadDeadline", reflect.TypeOf((*MockStream)(nil).SetReadDeadline), arg0)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetReadDeadline", reflect.TypeOf((*MockStream)(nil).SetReadDeadline), t)
 }
 
 // SetWriteDeadline mocks base method.
-func (m *MockStream) SetWriteDeadline(arg0 time.Time) error {
+func (m *MockStream) SetWriteDeadline(t time.Time) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "SetWriteDeadline", arg0)
+	ret := m.ctrl.Call(m, "SetWriteDeadline", t)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // SetWriteDeadline indicates an expected call of SetWriteDeadline.
-func (mr *MockStreamMockRecorder) SetWriteDeadline(arg0 any) *gomock.Call {
+func (mr *MockStreamMockRecorder) SetWriteDeadline(t any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetWriteDeadline", reflect.TypeOf((*MockStream)(nil).SetWriteDeadline), arg0)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetWriteDeadline", reflect.TypeOf((*MockStream)(nil).SetWriteDeadline), t)
 }
 
 // StreamID mocks base method.
@@ -194,16 +195,16 @@ func (mr *MockStreamMockRecorder) StreamID() *gomock.Call {
 }
 
 // Write mocks base method.
-func (m *MockStream) Write(arg0 []byte) (int, error) {
+func (m *MockStream) Write(p []byte) (int, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Write", arg0)
+	ret := m.ctrl.Call(m, "Write", p)
 	ret0, _ := ret[0].(int)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // Write indicates an expected call of Write.
-func (mr *MockStreamMockRecorder) Write(arg0 any) *gomock.Call {
+func (mr *MockStreamMockRecorder) Write(p any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Write", reflect.TypeOf((*MockStream)(nil).Write), arg0)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Write", reflect.TypeOf((*MockStream)(nil).Write), p)
 }
