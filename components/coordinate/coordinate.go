@@ -511,7 +511,7 @@ func (c *Coordinator) Start(ctx context.Context) error {
 			eac,
 			controller.AdaptReconcileController[compute_v1alpha.SandboxPool](spm),
 			time.Minute, // Resync every minute to ensure pools are reconciled
-			3,           // 3 workers
+			1,           // Single worker to prevent duplicate sandbox creation races (from PR #270)
 		)
 		c.cm.AddController(poolController)
 
