@@ -161,6 +161,7 @@ func (a *localActivator) AcquireLease(ctx context.Context, ver *core_v1alpha.App
 	a.mu.RLock()
 	vs, ok := a.versions[key]
 	var candidateSandbox *sandbox
+	hasPending := false
 	if ok && len(vs.sandboxes) > 0 {
 		a.log.Debug("checking existing sandboxes", "app", ver.App, "version", ver.Version, "sandboxes", len(vs.sandboxes))
 
@@ -171,6 +172,10 @@ func (a *localActivator) AcquireLease(ctx context.Context, ver *core_v1alpha.App
 			if s.sandbox.Status == compute_v1alpha.RUNNING && s.tracker.HasCapacity() {
 				candidateSandbox = s
 				break
+			}
+			// Track if we have PENDING sandboxes (being created/booting)
+			if s.sandbox.Status == compute_v1alpha.PENDING {
+				hasPending = true
 			}
 		}
 	}
@@ -202,35 +207,54 @@ func (a *localActivator) AcquireLease(ctx context.Context, ver *core_v1alpha.App
 		// Capacity was taken between RLock and Lock, fall through to pool request
 	}
 
-	// No available sandboxes with capacity - need to scale up via pool
+	// No available sandboxes with capacity
+	if hasPending {
+		// We have PENDING sandboxes booting - wait for them instead of creating more
+		a.log.Info("no running sandboxes available, but pending sandboxes exist - waiting",
+			"app", ver.App,
+			"version", ver.Version,
+			"service", service)
+		return a.waitForSandbox(ctx, ver, service, false)
+	}
+
+	// No RUNNING or PENDING sandboxes - need to scale up via pool
 	a.log.Info("no available sandboxes, requesting capacity from pool",
 		"app", ver.App,
 		"version", ver.Version,
 		"service", service)
 
-	return a.ensurePoolAndWaitForSandbox(ctx, ver, service)
+	return a.waitForSandbox(ctx, ver, service, true)
 }
 
 var ErrSandboxDiedEarly = fmt.Errorf("sandbox died while booting")
 var ErrPoolTimeout = fmt.Errorf("timeout waiting for sandbox from pool")
 
-// ensurePoolAndWaitForSandbox ensures a SandboxPool exists with sufficient DesiredInstances,
-// then waits for a sandbox with capacity to become available.
+// waitForSandbox waits for a sandbox with capacity to become available.
+// If incrementPool is true, it will ensure the pool exists and increment DesiredInstances.
+// If incrementPool is false, it assumes PENDING sandboxes exist and just waits for them.
 // The background watcher (watchSandboxes) handles discovering new sandboxes and notifying waiters.
-func (a *localActivator) ensurePoolAndWaitForSandbox(ctx context.Context, ver *core_v1alpha.AppVersion, service string) (*Lease, error) {
+func (a *localActivator) waitForSandbox(ctx context.Context, ver *core_v1alpha.AppVersion, service string, incrementPool bool) (*Lease, error) {
 	key := verKey{ver.ID.String(), service}
 
-	// Ensure pool exists and increment desired capacity
-	pool, err := a.ensureSandboxPool(ctx, ver, service)
-	if err != nil {
-		return nil, fmt.Errorf("failed to ensure sandbox pool: %w", err)
-	}
+	var pool *compute_v1alpha.SandboxPool
+	if incrementPool {
+		// Ensure pool exists and increment desired capacity
+		var err error
+		pool, err = a.ensureSandboxPool(ctx, ver, service)
+		if err != nil {
+			return nil, fmt.Errorf("failed to ensure sandbox pool: %w", err)
+		}
 
-	a.log.Info("waiting for sandbox from pool",
-		"app", ver.App,
-		"service", service,
-		"pool_id", pool.ID,
-		"desired_instances", pool.DesiredInstances)
+		a.log.Info("waiting for sandbox from pool",
+			"app", ver.App,
+			"service", service,
+			"pool_id", pool.ID,
+			"desired_instances", pool.DesiredInstances)
+	} else {
+		a.log.Info("waiting for pending sandbox to become ready",
+			"app", ver.App,
+			"service", service)
+	}
 
 	// Register notification channel for this wait
 	notifyChan := make(chan struct{}, 1)
@@ -553,9 +577,10 @@ func (a *localActivator) watchSandboxes(ctx context.Context) {
 				return nil
 			}
 
-			// Not tracked yet - check if this is a RUNNING sandbox we should track
-			if sb.Status != compute_v1alpha.RUNNING {
-				return nil // Only track RUNNING sandboxes
+			// Not tracked yet - check if this is a RUNNING or PENDING sandbox we should track
+			// PENDING sandboxes are tracked to prevent runaway pool growth during boot
+			if sb.Status != compute_v1alpha.RUNNING && sb.Status != compute_v1alpha.PENDING {
+				return nil // Only track RUNNING and PENDING sandboxes
 			}
 
 			// Get version to determine service
