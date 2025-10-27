@@ -15,6 +15,12 @@ import (
 	"miren.dev/runtime/pkg/idgen"
 )
 
+const (
+	// MaxPoolSize is the maximum number of sandboxes allowed in a pool
+	// This prevents runaway growth even if there are bugs in scaling logic
+	MaxPoolSize = 20
+)
+
 // Manager reconciles SandboxPool entities by ensuring the actual number of
 // sandbox instances matches the desired number specified in the pool.
 // Implements controller.ReconcileControllerI[*compute_v1alpha.SandboxPool]
@@ -74,6 +80,15 @@ func (m *Manager) Reconcile(ctx context.Context, pool *compute_v1alpha.SandboxPo
 	}
 
 	desired := pool.DesiredInstances
+
+	// Cap desired at MaxPoolSize as a defensive measure
+	if desired > MaxPoolSize {
+		m.log.Warn("pool desired instances exceeds maximum, capping",
+			"pool", pool.ID,
+			"desired", desired,
+			"max_size", MaxPoolSize)
+		desired = MaxPoolSize
+	}
 
 	m.log.Debug("sandbox counts",
 		"pool", pool.ID,

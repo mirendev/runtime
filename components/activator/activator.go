@@ -48,6 +48,12 @@ import (
 	"miren.dev/runtime/pkg/rpc/stream"
 )
 
+const (
+	// MaxPoolSize is the maximum number of sandboxes allowed in a pool
+	// This prevents runaway growth even if there are bugs in scaling logic
+	MaxPoolSize = 20
+)
+
 type Lease struct {
 	ver     *core_v1alpha.AppVersion
 	sandbox *compute_v1alpha.Sandbox
@@ -389,6 +395,14 @@ func (a *localActivator) ensureSandboxPool(ctx context.Context, ver *core_v1alph
 
 			// Update existing pool - increment DesiredInstances atomically under lock
 			a.mu.Lock()
+			if state.pool.DesiredInstances >= MaxPoolSize {
+				a.mu.Unlock()
+				a.log.Warn("pool at maximum size, cannot increment further",
+					"pool", state.pool.ID,
+					"max_size", MaxPoolSize,
+					"current", state.pool.DesiredInstances)
+				return state.pool, fmt.Errorf("pool has reached maximum size of %d", MaxPoolSize)
+			}
 			state.pool.DesiredInstances++
 			a.mu.Unlock()
 
