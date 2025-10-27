@@ -592,6 +592,7 @@ func TestActivatorPendingSandboxAwareness(t *testing.T) {
 		versions:        make(map[verKey]*verSandboxes),
 		pools:           make(map[verKey]*poolState),
 		newSandboxChans: make(map[verKey][]chan struct{}),
+		usePools:        true, // Test is for pool mode behavior
 	}
 
 	// Manually add the PENDING sandbox to activator's tracking
@@ -713,6 +714,7 @@ func TestActivatorNoPendingCreatesPool(t *testing.T) {
 		versions:        make(map[verKey]*verSandboxes),
 		pools:           make(map[verKey]*poolState),
 		newSandboxChans: make(map[verKey][]chan struct{}),
+		usePools:        true, // Test is for pool mode behavior
 	}
 
 	// Create a goroutine that simulates a sandbox becoming available after pool creation
