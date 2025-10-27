@@ -2,4 +2,6 @@ privileged: true
 workdir: /src
 volumes:
   - /data
+cache:
   - /go/pkg
+  - /root/.cache
