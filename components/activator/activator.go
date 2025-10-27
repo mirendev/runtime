@@ -168,7 +168,7 @@ func (a *localActivator) AcquireLease(ctx context.Context, ver *core_v1alpha.App
 		start := rand.Int() % len(vs.sandboxes)
 		for i := 0; i < len(vs.sandboxes); i++ {
 			s := vs.sandboxes[(start+i)%len(vs.sandboxes)]
-			if s.tracker.HasCapacity() {
+			if s.sandbox.Status == compute_v1alpha.RUNNING && s.tracker.HasCapacity() {
 				candidateSandbox = s
 				break
 			}
@@ -273,7 +273,7 @@ func (a *localActivator) ensurePoolAndWaitForSandbox(ctx context.Context, ver *c
 			start := rand.Int() % len(vs.sandboxes)
 			for i := 0; i < len(vs.sandboxes); i++ {
 				s := vs.sandboxes[(start+i)%len(vs.sandboxes)]
-				if s.tracker.HasCapacity() {
+				if s.sandbox.Status == compute_v1alpha.RUNNING && s.tracker.HasCapacity() {
 					candidateSandbox = s
 					break
 				}
@@ -501,10 +501,12 @@ func (a *localActivator) watchSandboxes(ctx context.Context) {
 			// First, check if we're already tracking this sandbox (read lock for scan)
 			a.mu.RLock()
 			var trackedSandbox *sandbox
-			for _, vs := range a.versions {
+			var trackedKey verKey
+			for key, vs := range a.versions {
 				for _, s := range vs.sandboxes {
 					if s.sandbox.ID == sb.ID {
 						trackedSandbox = s
+						trackedKey = key
 						break
 					}
 				}
@@ -519,10 +521,34 @@ func (a *localActivator) watchSandboxes(ctx context.Context) {
 				a.mu.Lock()
 				oldStatus := trackedSandbox.sandbox.Status
 				trackedSandbox.sandbox.Status = sb.Status
+
+				// If sandbox transitioned to DEAD, remove it from tracking
+				if sb.Status == compute_v1alpha.DEAD {
+					if vs, ok := a.versions[trackedKey]; ok {
+						// Find and remove the sandbox from the slice
+						for i, s := range vs.sandboxes {
+							if s.sandbox.ID == sb.ID {
+								// Remove by replacing with last element and truncating
+								vs.sandboxes[i] = vs.sandboxes[len(vs.sandboxes)-1]
+								vs.sandboxes = vs.sandboxes[:len(vs.sandboxes)-1]
+								break
+							}
+						}
+
+						// If no sandboxes remain for this version+service, remove the entry
+						if len(vs.sandboxes) == 0 {
+							delete(a.versions, trackedKey)
+						}
+					}
+				}
+
 				a.mu.Unlock()
 
 				if oldStatus != sb.Status {
 					a.log.Info("sandbox status changed", "sandbox", sb.ID, "old_status", oldStatus, "new_status", sb.Status)
+					if sb.Status == compute_v1alpha.DEAD {
+						a.log.Info("removed DEAD sandbox from tracking", "sandbox", sb.ID)
+					}
 				}
 				return nil
 			}
