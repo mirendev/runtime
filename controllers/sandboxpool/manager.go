@@ -427,16 +427,15 @@ func (m *Manager) updatePoolStatus(ctx context.Context, pool *compute_v1alpha.Sa
 	pool.CurrentInstances = current
 	pool.ReadyInstances = ready
 
-	var rpcE entityserver_v1alpha.Entity
-	rpcE.SetId(pool.ID.String())
-	rpcE.SetAttrs(entity.New(
-		(&compute_v1alpha.SandboxPool{
-			CurrentInstances: current,
-			ReadyInstances:   ready,
-		}).Encode,
-	).Attrs())
+	// Use Patch to update just the status counter fields
+	// This explicitly sets the values, even when they are 0 (empty pool)
+	attrs := []entity.Attr{
+		entity.Ref(entity.DBId, pool.ID),
+		entity.Int64(compute_v1alpha.SandboxPoolCurrentInstancesId, current),
+		entity.Int64(compute_v1alpha.SandboxPoolReadyInstancesId, ready),
+	}
 
-	if _, err := m.eac.Put(ctx, &rpcE); err != nil {
+	if _, err := m.eac.Patch(ctx, attrs, 0); err != nil {
 		return fmt.Errorf("failed to update pool status: %w", err)
 	}
 
@@ -567,16 +566,14 @@ func (m *Manager) checkPoolForScaleDown(ctx context.Context, pool *compute_v1alp
 				"new_desired", newDesired,
 				"idle_sandboxes", idleCount)
 
-			// Update pool with new desired instances
-			var rpcE entityserver_v1alpha.Entity
-			rpcE.SetId(pool.ID.String())
-			rpcE.SetAttrs(entity.New(
-				(&compute_v1alpha.SandboxPool{
-					DesiredInstances: newDesired,
-				}).Encode,
-			).Attrs())
+			// Use Patch to update just the DesiredInstances field
+			// This explicitly sets the value, even when newDesired is 0 (scale-to-zero)
+			attrs := []entity.Attr{
+				entity.Ref(entity.DBId, pool.ID),
+				entity.Int64(compute_v1alpha.SandboxPoolDesiredInstancesId, newDesired),
+			}
 
-			if _, err := m.eac.Put(ctx, &rpcE); err != nil {
+			if _, err := m.eac.Patch(ctx, attrs, 0); err != nil {
 				return fmt.Errorf("failed to update pool desired instances: %w", err)
 			}
 		}

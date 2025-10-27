@@ -562,6 +562,74 @@ func TestManagerScaleDownFixedMode(t *testing.T) {
 	}
 }
 
+// TestManagerZeroValuePersistence tests that zero values persist correctly
+// when using Patch. This is a regression test for a bug where zero values
+// were silently dropped during encoding, preventing scale-to-zero from working.
+func TestManagerZeroValuePersistence(t *testing.T) {
+	ctx := context.Background()
+	log := testutils.TestLogger(t)
+
+	server, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	// Create a pool with non-zero values
+	pool := &compute_v1alpha.SandboxPool{
+		Service:          "web",
+		DesiredInstances: 5,
+		CurrentInstances: 5,
+		ReadyInstances:   5,
+		SandboxSpec: compute_v1alpha.SandboxSpec{
+			Version: entity.Id("ver-1"),
+			Container: []compute_v1alpha.SandboxSpecContainer{
+				{Image: "test:latest"},
+			},
+		},
+	}
+
+	poolID, err := server.Client.Create(ctx, "test-pool", pool)
+	require.NoError(t, err)
+	pool.ID = poolID
+
+	// Verify initial values persisted
+	updatedPool := getPool(t, ctx, server, poolID)
+	assert.Equal(t, int64(5), updatedPool.DesiredInstances)
+	assert.Equal(t, int64(5), updatedPool.CurrentInstances)
+	assert.Equal(t, int64(5), updatedPool.ReadyInstances)
+
+	// Now update each field to 0 using Patch (this is what the bug prevented)
+	manager := NewManager(log, server.EAC)
+
+	// Test 1: Update DesiredInstances to 0 via checkPoolForScaleDown
+	// Create 5 idle sandboxes so checkPoolForScaleDown will decrement DesiredInstances to 0
+	now := time.Now()
+	for i := 0; i < 5; i++ {
+		sb := &compute_v1alpha.Sandbox{
+			Version:      pool.SandboxSpec.Version,
+			Status:       compute_v1alpha.RUNNING,
+			LastActivity: now.Add(-10 * time.Minute),
+			Spec:         pool.SandboxSpec,
+		}
+		_, err = server.Client.Create(ctx, fmt.Sprintf("sb-%d", i), sb,
+			entityserver.WithLabels(types.LabelSet("service", pool.Service, "pool", poolID.String())))
+		require.NoError(t, err)
+	}
+
+	pool.DesiredInstances = 5
+	err = manager.checkPoolForScaleDown(ctx, pool, 1*time.Second, 0)
+	require.NoError(t, err)
+
+	updatedPool = getPool(t, ctx, server, poolID)
+	assert.Equal(t, int64(0), updatedPool.DesiredInstances, "DesiredInstances=0 should persist")
+
+	// Test 2: Update CurrentInstances and ReadyInstances to 0 via updatePoolStatus
+	err = manager.updatePoolStatus(ctx, updatedPool, 0, 0)
+	require.NoError(t, err)
+
+	updatedPool = getPool(t, ctx, server, poolID)
+	assert.Equal(t, int64(0), updatedPool.CurrentInstances, "CurrentInstances=0 should persist")
+	assert.Equal(t, int64(0), updatedPool.ReadyInstances, "ReadyInstances=0 should persist")
+}
+
 // Helper functions
 
 func listSandboxesForPool(t *testing.T, ctx context.Context, server *testutils.InMemEntityServer, pool *compute_v1alpha.SandboxPool) []*compute_v1alpha.Sandbox {
