@@ -282,9 +282,9 @@ func (a *localActivator) waitForSandbox(ctx context.Context, ver *core_v1alpha.A
 	pollCtx, cancel := context.WithTimeout(ctx, 50*time.Second)
 	defer cancel()
 
-	// Fallback ticker at 5s interval as safety net
+	// Fallback ticker at 30s interval as safety net
 	// If this fires, it means channel notification failed somehow
-	ticker := time.NewTicker(5 * time.Second)
+	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
 
 	// Helper to check for available sandbox
@@ -562,6 +562,18 @@ func (a *localActivator) watchSandboxes(ctx context.Context) {
 						// If no sandboxes remain for this version+service, remove the entry
 						if len(vs.sandboxes) == 0 {
 							delete(a.versions, trackedKey)
+						}
+					}
+				}
+
+				// Notify waiters when sandbox becomes RUNNING (ready to serve traffic)
+				if oldStatus != sb.Status && sb.Status == compute_v1alpha.RUNNING {
+					if chans, ok := a.newSandboxChans[trackedKey]; ok {
+						for _, ch := range chans {
+							select {
+							case ch <- struct{}{}:
+							default:
+							}
 						}
 					}
 				}
