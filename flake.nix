@@ -23,6 +23,7 @@
           packages = [
             pkgs.go_1_24
             pkgs.golangci-lint
+            pkgs.gotools
             dagger.packages.${system}.dagger
           ];
 
