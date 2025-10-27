@@ -346,8 +346,10 @@ func (g *gen) attr(name string, attr *schemaAttr) {
 			g.empties = append(g.empties,
 				j.If(j.Len(j.Id("o").Dot(fname)).Op("!=").Lit(0)).Block(j.Return(j.False())))
 		} else {
-			// Special handling for bool type to always encode, even false values
-			if attr.Type == "bool" {
+			// Special handling for required fields and bool type to always encode, even zero values
+			// Required int/duration fields need to encode 0 (scale-to-zero, zero duration, etc.)
+			// Bool fields always encode false values
+			if attr.Required && (attr.Type == "int" || attr.Type == "duration") || attr.Type == "bool" {
 				g.encoders = append(g.encoders,
 					j.Id("attrs").Op("=").Append(j.Id("attrs"), j.Qual(top, method).Call(g.Ident(fname), j.Id("o").Dot(fname))),
 				)
