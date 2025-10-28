@@ -39,7 +39,7 @@ func (c *Client) GetSandbox(ctx context.Context, sandboxID string) (*compute_v1a
 		// If Get fails, try GetById in case the user provided an unprefixed ID
 		err2 := c.ec.GetById(ctx, entity.Id(sandboxID), &sandbox)
 		if err2 != nil {
-			return nil, fmt.Errorf("failed to get sandbox %s: %w", sandboxID, err)
+			return nil, fmt.Errorf("sandbox %q not found (tried as name and as ID): %w", sandboxID, err2)
 		}
 	}
 
