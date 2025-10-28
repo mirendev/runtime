@@ -20,7 +20,7 @@ const (
 	Minio = "oci.miren.cloud/minio:v1"
 
 	// VictoriaLogs log storage server
-	VictoriaLogs = "docker.io/victoriametrics/victoria-logs:v1.0.0-victorialogs"
+	VictoriaLogs = "oci.miren.cloud/victoria-logs:v1"
 
 	// Miren runtime server
 	Miren = "oci.miren.cloud/miren:latest"
