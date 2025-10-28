@@ -17,3 +17,7 @@ services:
       - http://etcd:2379
       - --initial-advertise-peer-urls
       - http://localhost:2380
+
+  victorialogs:
+    image: oci.miren.cloud/victoria-logs:v1
+    port: 9428
