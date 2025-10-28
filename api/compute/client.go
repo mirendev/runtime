@@ -8,6 +8,7 @@ import (
 	"miren.dev/runtime/api/compute/compute_v1alpha"
 	"miren.dev/runtime/api/entityserver"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
+	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/rpc"
 )
 
@@ -28,14 +29,28 @@ func NewClient(log *slog.Logger, client rpc.Client) *Client {
 	}
 }
 
-// StopSandbox updates a sandbox status to stopped
-func (c *Client) StopSandbox(ctx context.Context, sandboxID string) error {
+// GetSandbox retrieves a sandbox by name or ID
+func (c *Client) GetSandbox(ctx context.Context, sandboxID string) (*compute_v1alpha.Sandbox, error) {
 	var sandbox compute_v1alpha.Sandbox
 
-	// Get the current sandbox
+	// Try as name first, then as ID
 	err := c.ec.Get(ctx, sandboxID, &sandbox)
 	if err != nil {
-		return fmt.Errorf("failed to get sandbox %s: %w", sandboxID, err)
+		// If Get fails, try GetById in case the user provided an unprefixed ID
+		err2 := c.ec.GetById(ctx, entity.Id(sandboxID), &sandbox)
+		if err2 != nil {
+			return nil, fmt.Errorf("sandbox %q not found (tried as name and as ID): %w", sandboxID, err2)
+		}
+	}
+
+	return &sandbox, nil
+}
+
+// StopSandbox updates a sandbox status to stopped
+func (c *Client) StopSandbox(ctx context.Context, sandboxID string) error {
+	sandbox, err := c.GetSandbox(ctx, sandboxID)
+	if err != nil {
+		return err
 	}
 
 	// Check if already stopped or dead
@@ -48,7 +63,7 @@ func (c *Client) StopSandbox(ctx context.Context, sandboxID string) error {
 	sandbox.Status = compute_v1alpha.STOPPED
 
 	// Update the entity
-	err = c.ec.Update(ctx, &sandbox)
+	err = c.ec.Update(ctx, sandbox)
 	if err != nil {
 		return fmt.Errorf("failed to update sandbox %s: %w", sandboxID, err)
 	}
@@ -59,12 +74,9 @@ func (c *Client) StopSandbox(ctx context.Context, sandboxID string) error {
 
 // DeleteSandbox deletes a sandbox, but only if it's dead
 func (c *Client) DeleteSandbox(ctx context.Context, sandboxID string) error {
-	var sandbox compute_v1alpha.Sandbox
-
-	// Get the current sandbox
-	err := c.ec.Get(ctx, sandboxID, &sandbox)
+	sandbox, err := c.GetSandbox(ctx, sandboxID)
 	if err != nil {
-		return fmt.Errorf("failed to get sandbox %s: %w", sandboxID, err)
+		return err
 	}
 
 	// Check if sandbox is dead

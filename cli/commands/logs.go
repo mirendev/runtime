@@ -2,10 +2,10 @@ package commands
 
 import (
 	"fmt"
-	"strings"
 	"time"
 
 	"miren.dev/runtime/api/app/app_v1alpha"
+	"miren.dev/runtime/api/compute"
 	"miren.dev/runtime/appconfig"
 	"miren.dev/runtime/pkg/rpc/standard"
 )
@@ -48,6 +48,27 @@ func Logs(ctx *Context, opts struct {
 
 	ac := app_v1alpha.LogsClient{Client: cl}
 
+	// If sandbox ID is provided, resolve it to the full entity ID
+	// (logs are stored with the full entity ID, not the prefixed name)
+	if opts.Sandbox != "" {
+		entityClient, err := ctx.RPCClient("entities")
+		if err != nil {
+			return err
+		}
+
+		computeClient := compute.NewClient(ctx.Log, entityClient)
+
+		// Get the sandbox to retrieve its full entity ID
+		// This will try both Get (name-based) and GetById (ID-based) lookups
+		sandbox, err := computeClient.GetSandbox(ctx, opts.Sandbox)
+		if err != nil {
+			return fmt.Errorf("failed to find sandbox %s: %w", opts.Sandbox, err)
+		}
+
+		// Use the full entity ID for log queries
+		opts.Sandbox = sandbox.ID.String()
+	}
+
 	typ := map[string]string{
 		"stdout":   "S",
 		"stderr":   "E",
@@ -74,12 +95,8 @@ func Logs(ctx *Context, opts struct {
 		)
 
 		if opts.Sandbox != "" {
-			// Normalize sandbox ID - ensure it has the "sandbox/" prefix
-			sandboxID := opts.Sandbox
-			if !strings.HasPrefix(sandboxID, "sandbox/") {
-				sandboxID = "sandbox/" + sandboxID
-			}
-			res, err = ac.SandboxLogs(ctx, sandboxID, ts, false)
+			// opts.Sandbox has already been resolved to the full entity ID above
+			res, err = ac.SandboxLogs(ctx, opts.Sandbox, ts, false)
 		} else {
 			res, err = ac.AppLogs(ctx, opts.App, ts, false)
 		}
