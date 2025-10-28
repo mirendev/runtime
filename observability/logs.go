@@ -60,6 +60,14 @@ func (l *PersistentLogWriter) Populated() error {
 	return nil
 }
 
+func (l *PersistentLogWriter) Client() *http.Client {
+	if l.client == nil {
+		return http.DefaultClient
+	}
+
+	return l.client
+}
+
 func (l *PersistentLogWriter) WriteEntry(entity string, le LogEntry) error {
 	// Convert LogEntry to VictoriaLogs JSON format
 	logData := map[string]interface{}{
@@ -87,7 +95,7 @@ func (l *PersistentLogWriter) WriteEntry(entity string, le LogEntry) error {
 	// Send to VictoriaLogs
 	baseURL := normalizeBaseURL(l.Address)
 	insertURL := baseURL + "/insert/jsonline"
-	resp, err := l.client.Post(insertURL, "application/x-ndjson", bytes.NewReader(jsonData))
+	resp, err := l.Client().Post(insertURL, "application/x-ndjson", bytes.NewReader(jsonData))
 	if err != nil {
 		return fmt.Errorf("failed to send log to victorialogs: %w", err)
 	}
