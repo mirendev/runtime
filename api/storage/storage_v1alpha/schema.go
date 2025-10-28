@@ -117,9 +117,7 @@ func (o *Disk) Encode() (attrs []entity.Attr) {
 		attrs = append(attrs, entity.String(DiskNameId, o.Name))
 	}
 	attrs = append(attrs, entity.Bool(DiskRemoteOnlyId, o.RemoteOnly))
-	if !entity.Empty(o.SizeGb) {
-		attrs = append(attrs, entity.Int64(DiskSizeGbId, o.SizeGb))
-	}
+	attrs = append(attrs, entity.Int64(DiskSizeGbId, o.SizeGb))
 	if a, ok := diskstatusToId[o.Status]; ok {
 		attrs = append(attrs, entity.Ref(DiskStatusId, a))
 	}

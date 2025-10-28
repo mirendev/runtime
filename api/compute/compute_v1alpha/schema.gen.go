@@ -452,9 +452,7 @@ func (o *SandboxSpecContainerPort) Encode() (attrs []entity.Attr) {
 	if !entity.Empty(o.NodePort) {
 		attrs = append(attrs, entity.Int64(SandboxSpecContainerPortNodePortId, o.NodePort))
 	}
-	if !entity.Empty(o.Port) {
-		attrs = append(attrs, entity.Int64(SandboxSpecContainerPortPortId, o.Port))
-	}
+	attrs = append(attrs, entity.Int64(SandboxSpecContainerPortPortId, o.Port))
 	if a, ok := SandboxSpecContainerPortprotocolToId[o.Protocol]; ok {
 		attrs = append(attrs, entity.Ref(SandboxSpecContainerPortProtocolId, a))
 	}
@@ -1364,9 +1362,7 @@ func (o *Port) Encode() (attrs []entity.Attr) {
 	if !entity.Empty(o.NodePort) {
 		attrs = append(attrs, entity.Int64(PortNodePortId, o.NodePort))
 	}
-	if !entity.Empty(o.Port) {
-		attrs = append(attrs, entity.Int64(PortPortId, o.Port))
-	}
+	attrs = append(attrs, entity.Int64(PortPortId, o.Port))
 	if a, ok := PortprotocolToId[o.Protocol]; ok {
 		attrs = append(attrs, entity.Ref(PortProtocolId, a))
 	}
