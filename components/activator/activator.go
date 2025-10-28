@@ -31,6 +31,7 @@ package activator
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"math/rand/v2"
@@ -414,6 +415,17 @@ func (a *localActivator) ensureSandboxPool(ctx context.Context, ver *core_v1alph
 
 			_, err := a.eac.Put(ctx, &rpcE)
 			if err != nil {
+				// If pool was deleted (e.g., by cleanup after deployment), clear stale reference and create new pool
+				if errors.Is(err, entity.ErrNotFound) {
+					a.log.Info("pool was deleted, clearing stale reference and creating new pool",
+						"pool", state.pool.ID,
+						"service", service)
+					a.mu.Lock()
+					delete(a.pools, key)
+					a.mu.Unlock()
+					// Loop back to create a fresh pool
+					continue
+				}
 				return nil, fmt.Errorf("failed to update pool: %w", err)
 			}
 

@@ -789,3 +789,101 @@ func TestActivatorNoPendingCreatesPool(t *testing.T) {
 		assert.Equal(t, int64(1), poolState.pool.DesiredInstances, "Pool should have incremented desired instances")
 	}
 }
+
+// TestActivatorDeletedPoolRecovery verifies that the activator can recover from
+// deleted pools by clearing stale references and creating fresh pools. This simulates
+// the scenario where a pool is cleaned up (e.g., after deployment handover) while
+// the activator still has it cached.
+func TestActivatorDeletedPoolRecovery(t *testing.T) {
+	ctx := context.Background()
+	log := testutils.TestLogger(t)
+
+	server, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	// Create app entity
+	app := &core_v1alpha.App{
+		Project: entity.Id("project-1"),
+	}
+	appID, err := server.Client.Create(ctx, "test-app", app)
+	require.NoError(t, err)
+	app.ID = appID
+
+	// Create app version
+	testVer := &core_v1alpha.AppVersion{
+		App:      app.ID,
+		Version:  "v1",
+		ImageUrl: "test:latest",
+		Config: core_v1alpha.Config{
+			Port: 3000,
+			Services: []core_v1alpha.Services{
+				{
+					Name: "web",
+					ServiceConcurrency: core_v1alpha.ServiceConcurrency{
+						Mode:                "auto",
+						RequestsPerInstance: 10,
+						ScaleDownDelay:      "15m",
+					},
+				},
+			},
+		},
+	}
+	verID, err := server.Client.Create(ctx, "test-ver", testVer)
+	require.NoError(t, err)
+	testVer.ID = verID
+
+	activator := NewLocalActivator(ctx, log, server.EAC)
+
+	// First AcquireLease attempt - will create a pool and timeout waiting for sandbox
+	// (since we don't have a sandbox controller running)
+	timeoutCtx, cancel := context.WithTimeout(ctx, 100*time.Millisecond)
+	defer cancel()
+
+	_, err = activator.AcquireLease(timeoutCtx, testVer, "web")
+	require.Error(t, err, "Should timeout since no sandbox controller is running")
+	require.Contains(t, err.Error(), "timeout", "Should be a timeout error")
+
+	// At this point, a pool should have been created and cached by the activator
+	// Let's verify the pool exists in the entity store
+	resp, err := server.EAC.List(ctx, entity.Ref(entity.EntityKind, compute_v1alpha.KindSandboxPool))
+	require.NoError(t, err)
+	pools := resp.Values()
+	require.Len(t, pools, 1, "Should have created one pool")
+
+	pool := &compute_v1alpha.SandboxPool{}
+	pool.Decode(pools[0].Entity())
+	originalPoolID := pool.ID
+
+	// Now simulate cleanup: delete the pool from the entity store
+	// (this is what happens during deployment handover after scaling to zero)
+	_, err = server.EAC.Delete(ctx, originalPoolID.String())
+	require.NoError(t, err)
+
+	// Verify pool is gone from entity store
+	_, err = server.EAC.Get(ctx, originalPoolID.String())
+	require.Error(t, err, "Pool should be deleted from entity store")
+
+	// Second AcquireLease attempt - should detect deleted pool and create a new one
+	timeoutCtx2, cancel2 := context.WithTimeout(ctx, 100*time.Millisecond)
+	defer cancel2()
+
+	_, err = activator.AcquireLease(timeoutCtx2, testVer, "web")
+	require.Error(t, err, "Should timeout since no sandbox controller is running")
+	require.Contains(t, err.Error(), "timeout", "Should be a timeout error")
+
+	// Verify recovery: a NEW pool should now exist (different ID from the original)
+	resp, err = server.EAC.List(ctx, entity.Ref(entity.EntityKind, compute_v1alpha.KindSandboxPool))
+	require.NoError(t, err)
+	pools = resp.Values()
+	require.Len(t, pools, 1, "Should have one pool after recovery")
+
+	newPool := &compute_v1alpha.SandboxPool{}
+	newPool.Decode(pools[0].Entity())
+	require.NotEqual(t, originalPoolID, newPool.ID,
+		"Should have created a new pool with different ID after detecting deletion")
+
+	// Verify the new pool has correct configuration
+	require.Equal(t, "web", newPool.Service, "New pool should have correct service name")
+	require.Equal(t, testVer.ID, newPool.SandboxSpec.Version, "New pool should reference correct version")
+	require.Greater(t, newPool.DesiredInstances, int64(0), "New pool should have desired instances > 0")
+}
