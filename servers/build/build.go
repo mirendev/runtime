@@ -450,36 +450,45 @@ func (b *Builder) BuildFromTar(ctx context.Context, state *build_v1alpha.Builder
 
 	b.Log.Info("app version updated", "app", name, "version", mrv.Version)
 
-	// Stop sandboxes running the old version
+	// Scale down old version pools (immutable pool approach)
 	if oldVersion != "" {
-		b.Log.Info("stopping sandboxes with old version", "oldVersion", oldVersion)
+		b.Log.Info("scaling down old version pools", "oldVersion", oldVersion)
 
-		// Query for sandboxes with the old version
-		sandboxes, err := b.ec.List(ctx, entity.Ref(compute.SandboxVersionId, oldVersion))
+		// Query for all SandboxPool entities
+		pools, err := b.ec.List(ctx, entity.Ref(entity.EntityKind, compute.KindSandboxPool))
 		if err != nil {
-			b.Log.Error("error listing sandboxes with old version", "error", err)
-			// Don't fail the build if we can't stop old sandboxes
+			b.Log.Error("error listing sandbox pools", "error", err)
+			// Don't fail the build if we can't scale down old pools
 		} else {
-			for sandboxes.Next() {
-				var sb compute.Sandbox
-				err := sandboxes.Read(&sb)
+			for pools.Next() {
+				var pool compute.SandboxPool
+				err := pools.Read(&pool)
 				if err != nil {
-					b.Log.Error("error reading sandbox", "error", err)
+					b.Log.Error("error reading sandbox pool", "error", err)
 					continue
 				}
 
-				// Only stop running sandboxes
-				if sb.Status == compute.RUNNING || sb.Status == compute.PENDING {
-					b.Log.Info("marking sandbox for stop", "sandbox", sb.ID, "status", sb.Status)
+				// Only scale down pools that reference the old version
+				if pool.SandboxSpec.Version == oldVersion {
+					b.Log.Info("scaling down old pool", "pool", pool.ID, "service", pool.Service)
 
-					// Update sandbox status to STOPPED
-					err = b.ec.UpdateAttrs(ctx, sb.ID,
-						entity.Ref(compute.SandboxStatusId, compute.SandboxStatusStoppedId))
+					// Set desired_instances to 0 to trigger scale-down
+					// Pool will be cleaned up later by SandboxPoolManager
+					pool.DesiredInstances = 0
+
+					var rpcE entityserver_v1alpha.Entity
+					rpcE.SetId(pool.ID.String())
+					rpcE.SetAttrs(entity.New(
+						pool.Encode,
+					).Attrs())
+
+					_, err = b.EAS.Put(ctx, &rpcE)
 					if err != nil {
-						b.Log.Error("error updating sandbox status", "sandbox", sb.ID, "error", err)
+						b.Log.Error("error scaling down old pool", "pool", pool.ID, "error", err)
+						continue
 					}
 
-					b.Log.Info("sandbox marked for stop", "sandbox", sb.ID)
+					b.Log.Info("old pool scaled to zero", "pool", pool.ID, "service", pool.Service)
 				}
 			}
 		}

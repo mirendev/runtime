@@ -449,6 +449,7 @@ func (m *Manager) updatePoolStatus(ctx context.Context, pool *compute_v1alpha.Sa
 
 // runScaleDownMonitor periodically checks all pools for idle sandboxes that exceed
 // their ScaleDownDelay, and proactively decrements DesiredInstances to trigger scale-down.
+// Also cleans up empty pools that have been idle for over an hour.
 func (m *Manager) runScaleDownMonitor(ctx context.Context) {
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
@@ -463,6 +464,9 @@ func (m *Manager) runScaleDownMonitor(ctx context.Context) {
 		case <-ticker.C:
 			if err := m.checkAllPoolsForScaleDown(ctx); err != nil {
 				m.log.Error("scale-down check failed", "error", err)
+			}
+			if err := m.cleanupEmptyPools(ctx); err != nil {
+				m.log.Error("pool cleanup failed", "error", err)
 			}
 		}
 	}
@@ -577,6 +581,58 @@ func (m *Manager) checkPoolForScaleDown(ctx context.Context, pool *compute_v1alp
 				return fmt.Errorf("failed to update pool desired instances: %w", err)
 			}
 		}
+	}
+
+	return nil
+}
+
+// cleanupEmptyPools deletes pools that have desired_instances=0, no associated sandboxes,
+// and haven't been updated in over an hour. This matches the sandbox controller's behavior
+// of deleting DEAD sandboxes after an hour.
+func (m *Manager) cleanupEmptyPools(ctx context.Context) error {
+	resp, err := m.eac.List(ctx, entity.Ref(entity.EntityKind, compute_v1alpha.KindSandboxPool))
+	if err != nil {
+		return fmt.Errorf("failed to list pools: %w", err)
+	}
+
+	now := time.Now()
+	oneHourAgo := now.Add(-1 * time.Hour)
+
+	for _, ent := range resp.Values() {
+		var pool compute_v1alpha.SandboxPool
+		pool.Decode(ent.Entity())
+
+		// Only consider pools with desired_instances=0
+		if pool.DesiredInstances != 0 {
+			continue
+		}
+
+		// Check if pool has been idle for over an hour
+		updatedAt := time.UnixMilli(ent.UpdatedAt())
+		if updatedAt.After(oneHourAgo) {
+			continue
+		}
+
+		// Check if pool has any associated sandboxes
+		sandboxes, err := m.listSandboxes(ctx, &pool)
+		if err != nil {
+			m.log.Error("failed to list sandboxes for pool cleanup", "pool", pool.ID, "error", err)
+			continue
+		}
+
+		if len(sandboxes) > 0 {
+			continue
+		}
+
+		// Pool is empty, scaled to zero, and idle for over an hour - delete it
+		m.log.Info("cleaning up empty pool", "pool", pool.ID, "service", pool.Service, "age", now.Sub(updatedAt))
+
+		if _, err := m.eac.Delete(ctx, pool.ID.String()); err != nil {
+			m.log.Error("failed to delete empty pool", "pool", pool.ID, "error", err)
+			continue
+		}
+
+		m.log.Info("deleted empty pool", "pool", pool.ID)
 	}
 
 	return nil

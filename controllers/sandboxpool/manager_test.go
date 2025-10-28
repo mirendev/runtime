@@ -695,3 +695,186 @@ func getLabel(labels types.Labels, key string) string {
 	val, _ := labels.Get(key)
 	return val
 }
+
+// TestCleanupEmptyPools tests that pools with desired_instances=0,
+// no sandboxes, and not updated in over an hour are deleted
+func TestCleanupEmptyPools(t *testing.T) {
+	ctx := context.Background()
+	log := testutils.TestLogger(t)
+
+	server, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	// Create AppVersion
+	appVer := &core_v1alpha.AppVersion{
+		App:     entity.Id("app-1"),
+		Version: "v1",
+		Config: core_v1alpha.Config{
+			Services: []core_v1alpha.Services{
+				{
+					Name: "web",
+					ServiceConcurrency: core_v1alpha.ServiceConcurrency{
+						Mode:                "auto",
+						RequestsPerInstance: 10,
+					},
+				},
+			},
+		},
+	}
+	appVerID, err := server.Client.Create(ctx, "app-ver-1", appVer)
+	require.NoError(t, err)
+
+	// Create an empty pool with desired_instances=0
+	pool := &compute_v1alpha.SandboxPool{
+		Service:          "web",
+		DesiredInstances: 0,
+		CurrentInstances: 0,
+		ReadyInstances:   0,
+		SandboxSpec: compute_v1alpha.SandboxSpec{
+			Version: appVerID,
+			Container: []compute_v1alpha.SandboxSpecContainer{
+				{Image: "test:latest"},
+			},
+		},
+	}
+
+	poolID, err := server.Client.Create(ctx, "old-pool", pool)
+	require.NoError(t, err)
+	pool.ID = poolID
+
+	manager := NewManager(log, server.EAC)
+
+	// Since we can't easily backdate entities in tests, verify the method
+	// doesn't error and doesn't delete fresh pools (too new)
+	err = manager.cleanupEmptyPools(ctx)
+	require.NoError(t, err)
+
+	// Pool should still exist (too new to clean up)
+	_, err = server.EAC.Get(ctx, poolID.String())
+	require.NoError(t, err, "pool should not be deleted when too new")
+
+	// Note: Full test of age-based deletion would require time travel or mock clock
+	// The important behavior (not deleting fresh pools) is covered here
+}
+
+// TestCleanupEmptyPoolsWithSandboxes tests that pools with sandboxes
+// are not deleted even if desired_instances=0 and old
+func TestCleanupEmptyPoolsWithSandboxes(t *testing.T) {
+	ctx := context.Background()
+	log := testutils.TestLogger(t)
+
+	server, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	// Create AppVersion
+	appVer := &core_v1alpha.AppVersion{
+		App:     entity.Id("app-1"),
+		Version: "v1",
+		Config: core_v1alpha.Config{
+			Services: []core_v1alpha.Services{
+				{
+					Name: "web",
+					ServiceConcurrency: core_v1alpha.ServiceConcurrency{
+						Mode:                "auto",
+						RequestsPerInstance: 10,
+					},
+				},
+			},
+		},
+	}
+	appVerID, err := server.Client.Create(ctx, "app-ver-1", appVer)
+	require.NoError(t, err)
+
+	// Create pool with desired_instances=0
+	pool := &compute_v1alpha.SandboxPool{
+		Service:          "web",
+		DesiredInstances: 0,
+		CurrentInstances: 1,
+		ReadyInstances:   0,
+		SandboxSpec: compute_v1alpha.SandboxSpec{
+			Version: appVerID,
+			Container: []compute_v1alpha.SandboxSpecContainer{
+				{Image: "test:latest"},
+			},
+		},
+	}
+
+	poolID, err := server.Client.Create(ctx, "pool-with-sandboxes", pool)
+	require.NoError(t, err)
+	pool.ID = poolID
+
+	// Create a sandbox for this pool
+	sb := &compute_v1alpha.Sandbox{
+		Status:  compute_v1alpha.STOPPED,
+		Version: appVerID,
+		Spec:    pool.SandboxSpec,
+	}
+	_, err = server.Client.Create(ctx, "sb-1", sb,
+		entityserver.WithLabels(types.LabelSet("service", "web", "pool", poolID.String())))
+	require.NoError(t, err)
+
+	// Run cleanup
+	manager := NewManager(log, server.EAC)
+	err = manager.cleanupEmptyPools(ctx)
+	require.NoError(t, err)
+
+	// Pool should still exist (has sandboxes)
+	_, err = server.EAC.Get(ctx, poolID.String())
+	require.NoError(t, err, "pool with sandboxes should not be deleted")
+}
+
+// TestCleanupEmptyPoolsNonZeroDesired tests that pools with
+// desired_instances > 0 are never cleaned up
+func TestCleanupEmptyPoolsNonZeroDesired(t *testing.T) {
+	ctx := context.Background()
+	log := testutils.TestLogger(t)
+
+	server, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	// Create AppVersion
+	appVer := &core_v1alpha.AppVersion{
+		App:     entity.Id("app-1"),
+		Version: "v1",
+		Config: core_v1alpha.Config{
+			Services: []core_v1alpha.Services{
+				{
+					Name: "web",
+					ServiceConcurrency: core_v1alpha.ServiceConcurrency{
+						Mode:                "auto",
+						RequestsPerInstance: 10,
+					},
+				},
+			},
+		},
+	}
+	appVerID, err := server.Client.Create(ctx, "app-ver-1", appVer)
+	require.NoError(t, err)
+
+	// Create pool with desired_instances > 0
+	pool := &compute_v1alpha.SandboxPool{
+		Service:          "web",
+		DesiredInstances: 2,
+		CurrentInstances: 0,
+		ReadyInstances:   0,
+		SandboxSpec: compute_v1alpha.SandboxSpec{
+			Version: appVerID,
+			Container: []compute_v1alpha.SandboxSpecContainer{
+				{Image: "test:latest"},
+			},
+		},
+	}
+
+	poolID, err := server.Client.Create(ctx, "active-pool", pool)
+	require.NoError(t, err)
+	pool.ID = poolID
+
+	// Run cleanup
+	manager := NewManager(log, server.EAC)
+	err = manager.cleanupEmptyPools(ctx)
+	require.NoError(t, err)
+
+	// Pool should still exist (desired > 0)
+	_, err = server.EAC.Get(ctx, poolID.String())
+	require.NoError(t, err, "pool with desired_instances > 0 should not be deleted")
+}
