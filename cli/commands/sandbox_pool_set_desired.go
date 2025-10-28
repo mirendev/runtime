@@ -82,8 +82,8 @@ func SandboxPoolSetDesired(ctx *Context, opts struct {
 		},
 	}
 
-	// Apply the patch
-	patchRes, err := eac.Patch(ctx, attrs, 0)
+	// Apply the patch with optimistic concurrency control
+	patchRes, err := eac.Patch(ctx, attrs, getRes.Entity().Revision())
 	if err != nil {
 		return fmt.Errorf("failed to patch sandbox pool: %v", err)
 	}
