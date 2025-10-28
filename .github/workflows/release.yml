@@ -1,11 +1,83 @@
 name: Release
 
 on:
-  push:
-    branches: [ "main" ]
+  workflow_run:
+    workflows: ["Test"]
+    types: [completed]
+    branches: [main]
 
 jobs:
+  check-test-success:
+    runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    steps:
+      - name: Check test workflow status
+        run: echo "Tests passed successfully, proceeding with release"
+
+  tests-failed:
+    runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.conclusion != 'success' }}
+    steps:
+      - name: Tests failed - blocking release
+        run: |
+          echo "
+          ╔═══════════════════════════════════════════════════════════════════════════╗
+          ║                                                                           ║
+          ║   ❌ ❌ ❌  TESTS FAILED ON MAIN - RELEASE BLOCKED  ❌ ❌ ❌              ║
+          ║                                                                           ║
+          ║   The test workflow did not pass successfully.                           ║
+          ║   Release artifacts will NOT be built or pushed.                         ║
+          ║                                                                           ║
+          ║   Test workflow conclusion: ${{ github.event.workflow_run.conclusion }}  ║
+          ║   Test workflow run: ${{ github.event.workflow_run.html_url }}           ║
+          ║                                                                           ║
+          ╚═══════════════════════════════════════════════════════════════════════════╝
+          "
+          exit 1
+
+      - name: Send Slack notification for test failure
+        if: always()
+        uses: slackapi/slack-github-action@v2.1.1
+        with:
+          method: chat.postMessage
+          token: ${{ secrets.SLACK_BOT_TOKEN }}
+          payload: |
+            {
+              "text": "❌ Tests failed on main branch - Release blocked",
+              "blocks": [
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "❌ *Tests failed on main branch*\nRelease artifacts will not be built or pushed."
+                  }
+                },
+                {
+                  "type": "section",
+                  "fields": [
+                    {
+                      "type": "mrkdwn",
+                      "text": "*Commit:*\n<${{ github.event.workflow_run.head_commit.url }}|${{ github.event.workflow_run.head_commit.message }}>"
+                    },
+                    {
+                      "type": "mrkdwn",
+                      "text": "*Author:*\n${{ github.event.workflow_run.head_commit.author.name }}"
+                    }
+                  ]
+                },
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "<${{ github.event.workflow_run.html_url }}|View failed test run>"
+                  }
+                }
+              ],
+              "unfurl_links": false,
+              "unfurl_media": false
+            }
   package:
+    needs: check-test-success
     strategy:
       matrix:
         include:
@@ -28,6 +100,7 @@ jobs:
         retention-days: 1
 
   build-binaries:
+    needs: check-test-success
     strategy:
       matrix:
         include:
@@ -118,6 +191,48 @@ jobs:
             us-central1-docker.pkg.dev/miren-cloud/miren-oci/miren:${{ github.ref_name }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      - name: Send Slack notification on Docker build failure
+        if: failure()
+        uses: slackapi/slack-github-action@v2.1.1
+        with:
+          method: chat.postMessage
+          token: ${{ secrets.SLACK_BOT_TOKEN }}
+          payload: |
+            {
+              "text": "❌ Miren Docker build/push failed on main branch",
+              "blocks": [
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "❌ *Miren Docker build/push failed*\nFailed to build or push Docker image to Artifact Registry."
+                  }
+                },
+                {
+                  "type": "section",
+                  "fields": [
+                    {
+                      "type": "mrkdwn",
+                      "text": "*Branch:*\n`${{ github.ref_name }}`"
+                    },
+                    {
+                      "type": "mrkdwn",
+                      "text": "*Commit:*\n<${{ github.event.workflow_run.head_commit.url }}|${{ github.event.workflow_run.head_commit.message }}>"
+                    }
+                  ]
+                },
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View workflow run>"
+                  }
+                }
+              ],
+              "unfurl_links": false,
+              "unfurl_media": false
+            }
 
   upload-to-miren:
     needs: [package, build-binaries]
@@ -260,4 +375,46 @@ jobs:
             -H "Authorization: Bearer ${{ steps.get-oidc-token.outputs.token }}" \
             -F "file=@version.json" \
             "https://api.miren.cloud/assets/release/miren/${{ github.ref_name }}/version.json"
+
+      - name: Send Slack notification on upload failure
+        if: failure()
+        uses: slackapi/slack-github-action@v2.1.1
+        with:
+          method: chat.postMessage
+          token: ${{ secrets.SLACK_BOT_TOKEN }}
+          payload: |
+            {
+              "text": "❌ Miren release upload failed on main branch",
+              "blocks": [
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "❌ *Miren release upload failed*\nFailed to upload release artifacts to Miren API."
+                  }
+                },
+                {
+                  "type": "section",
+                  "fields": [
+                    {
+                      "type": "mrkdwn",
+                      "text": "*Branch:*\n`${{ github.ref_name }}`"
+                    },
+                    {
+                      "type": "mrkdwn",
+                      "text": "*Commit:*\n<${{ github.event.workflow_run.head_commit.url }}|${{ github.event.workflow_run.head_commit.message }}>"
+                    }
+                  ]
+                },
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View workflow run>"
+                  }
+                }
+              ],
+              "unfurl_links": false,
+              "unfurl_media": false
+            }
 
