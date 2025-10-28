@@ -111,7 +111,7 @@ func buildServicesConfig(appConfig *appconfig.AppConfig, procfileServices map[st
 
 		// Map from appconfig to entity schema
 		// After ResolveDefaults(), every service is guaranteed to have config
-		if serviceConfig, ok := ac.Services[serviceName]; ok && serviceConfig.Concurrency != nil {
+		if serviceConfig, ok := ac.Services[serviceName]; ok && serviceConfig != nil && serviceConfig.Concurrency != nil {
 			svc.ServiceConcurrency = core_v1alpha.ServiceConcurrency{
 				Mode:                serviceConfig.Concurrency.Mode,
 				NumInstances:        int64(serviceConfig.Concurrency.NumInstances),
@@ -453,7 +453,7 @@ func (b *Builder) BuildFromTar(ctx context.Context, state *build_v1alpha.Builder
 		// Check if this service has a command from app config or procfile
 		var cmd string
 		if ac != nil {
-			if svcConfig, ok := ac.Services[svc.Name]; ok && svcConfig.Command != "" {
+			if svcConfig, ok := ac.Services[svc.Name]; ok && svcConfig != nil && svcConfig.Command != "" {
 				cmd = svcConfig.Command
 			}
 		}
