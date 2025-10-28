@@ -472,17 +472,12 @@ func (b *Builder) BuildFromTar(ctx context.Context, state *build_v1alpha.Builder
 				if pool.SandboxSpec.Version == oldVersion {
 					b.Log.Info("scaling down old pool", "pool", pool.ID, "service", pool.Service)
 
-					// Set desired_instances to 0 to trigger scale-down
-					// Pool will be cleaned up later by SandboxPoolManager
-					pool.DesiredInstances = 0
-
-					var rpcE entityserver_v1alpha.Entity
-					rpcE.SetId(pool.ID.String())
-					rpcE.SetAttrs(entity.New(
-						pool.Encode,
-					).Attrs())
-
-					_, err = b.EAS.Put(ctx, &rpcE)
+					// Set desired_instances to 0 explicitly; Patch preserves zero values
+					attrs := []entity.Attr{
+						entity.Ref(entity.DBId, pool.ID),
+						entity.Int64(compute.SandboxPoolDesiredInstancesId, 0),
+					}
+					_, err = b.EAS.Patch(ctx, attrs, 0)
 					if err != nil {
 						b.Log.Error("error scaling down old pool", "pool", pool.ID, "error", err)
 						continue
