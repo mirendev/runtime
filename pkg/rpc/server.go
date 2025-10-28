@@ -18,6 +18,8 @@ import (
 	"github.com/mr-tron/base58"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/propagation"
+	"miren.dev/runtime/pkg/auth"
+	"miren.dev/runtime/pkg/cloudauth"
 	"miren.dev/runtime/pkg/cond"
 	"miren.dev/runtime/pkg/webtransport"
 )
@@ -865,6 +867,15 @@ func (s *Server) startCallStream(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
+	
+	// Add JWT claims to context if available
+	if s.state.authenticator != nil {
+		if cloudAuth, ok := s.state.authenticator.(*cloudauth.RPCAuthenticator); ok {
+			if claims := cloudAuth.GetLastClaims(); claims != nil {
+				ctx = auth.WithClaims(ctx, claims)
+			}
+		}
+	}
 
 	s.mu.Lock()
 	iface, ok := s.objects[oid]
@@ -996,6 +1007,15 @@ func (s *Server) handleCalls(w http.ResponseWriter, r *http.Request) {
 	method := r.PathValue("method")
 
 	ctx := r.Context()
+	
+	// Add JWT claims to context if available
+	if s.state.authenticator != nil {
+		if cloudAuth, ok := s.state.authenticator.(*cloudauth.RPCAuthenticator); ok {
+			if claims := cloudAuth.GetLastClaims(); claims != nil {
+				ctx = auth.WithClaims(ctx, claims)
+			}
+		}
+	}
 
 	defer r.Body.Close()
 

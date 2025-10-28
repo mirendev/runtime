@@ -6,6 +6,8 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"sync"
+	"time"
 
 	"miren.dev/runtime/pkg/auth"
 	"miren.dev/runtime/pkg/rbac"
@@ -16,14 +18,19 @@ const DefaultCloudURL = "https://api.miren.cloud"
 
 // RPCAuthenticator adapts cloud authentication for RPC usage
 type RPCAuthenticator struct {
-	jwtValidator  *auth.JWTValidator
-	tokenCache    *auth.TokenCache
-	rbacEval      *rbac.Evaluator
-	policyFetcher *PolicyFetcher
-	logger        *slog.Logger
+	jwtValidator    *auth.JWTValidator
+	tokenCache      *auth.TokenCache
+	rbacEval        *rbac.Evaluator
+	policyFetcher   *PolicyFetcher
+	logger          *slog.Logger
+	groupsTracker   *GroupsVersionTracker
 
 	// Tags to use for RBAC evaluation
 	tags map[string]any
+	
+	// Last authenticated claims (temporary storage for passing to RPC layer)
+	lastClaims *auth.Claims
+	mu         sync.RWMutex
 }
 
 // Config for RPCAuthenticator
@@ -75,8 +82,9 @@ func NewRPCAuthenticator(ctx context.Context, config Config) (*RPCAuthenticator,
 	}
 
 	a := &RPCAuthenticator{
-		logger: config.Logger.With("module", "cloud-auth"),
-		tags:   config.Tags,
+		logger:        config.Logger.With("module", "cloud-auth"),
+		tags:          config.Tags,
+		groupsTracker: NewGroupsVersionTracker(),
 	}
 
 	// Set default tags if not provided
@@ -102,6 +110,9 @@ func NewRPCAuthenticator(ctx context.Context, config Config) (*RPCAuthenticator,
 
 	// Set the evaluator in the policy fetcher so it can clear the cache on refresh
 	a.policyFetcher.SetEvaluator(a.rbacEval)
+	
+	// Start groups version tracker cleanup
+	go a.startGroupsTrackerCleanup(ctx)
 
 	return a, nil
 }
@@ -140,6 +151,18 @@ func (a *RPCAuthenticator) AuthenticateRequest(ctx context.Context, r *http.Requ
 		a.tokenCache.Set(token, claims)
 	}
 
+	// Check if groups version has changed (indicates permissions were modified)
+	if claims.GroupsVersion != "" && claims.Subject != "" {
+		if a.groupsTracker.CheckAndUpdate(claims.Subject, claims.GroupsVersion) {
+			// Groups version changed, invalidate cached token and reject
+			a.tokenCache.Delete(token)
+			a.logger.Warn("groups version changed, rejecting cached token",
+				"subject", claims.Subject,
+				"groups_version", claims.GroupsVersion)
+			return false, "", fmt.Errorf("permissions have changed, please authenticate again")
+		}
+	}
+
 	// TODO For now we're going to hardcode the resource and action
 	// as being related to cluster access. In the future, we'll make changes
 	// to this where we request authorization for specific high level actions,
@@ -174,6 +197,11 @@ func (a *RPCAuthenticator) AuthenticateRequest(ctx context.Context, r *http.Requ
 		return false, "", fmt.Errorf("access denied by RBAC policy")
 	}
 
+	// Store claims for retrieval by RPC layer
+	a.mu.Lock()
+	a.lastClaims = claims
+	a.mu.Unlock()
+
 	a.logger.Debug("JWT authentication successful",
 		"subject", claims.Subject,
 		"organization_id", claims.OrganizationID,
@@ -204,4 +232,43 @@ func (a *RPCAuthenticator) NoAuthorization(ctx context.Context, r *http.Request)
 func (a *RPCAuthenticator) Stop() {
 	a.policyFetcher.Stop()
 	a.rbacEval.Stop()
+}
+
+// GetLastClaims returns the claims from the last successful authentication
+// This is a temporary mechanism until we can properly pass claims through the RPC layer
+func (a *RPCAuthenticator) GetLastClaims() *auth.Claims {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.lastClaims
+}
+
+// startGroupsTrackerCleanup periodically cleans up old entries from the groups version tracker
+func (a *RPCAuthenticator) startGroupsTrackerCleanup(ctx context.Context) {
+	ticker := time.NewTicker(30 * time.Minute)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			// Clean entries older than 2 hours
+			a.groupsTracker.Clean(2 * time.Hour)
+		}
+	}
+}
+
+// GetEvaluator returns the RBAC evaluator
+func (a *RPCAuthenticator) GetEvaluator() *rbac.Evaluator {
+	return a.rbacEval
+}
+
+// GetPolicyFetcher returns the policy fetcher
+func (a *RPCAuthenticator) GetPolicyFetcher() *PolicyFetcher {
+	return a.policyFetcher
+}
+
+// GetTags returns the configured tags
+func (a *RPCAuthenticator) GetTags() map[string]any {
+	return a.tags
 }

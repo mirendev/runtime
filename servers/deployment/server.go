@@ -7,26 +7,33 @@ import (
 	"sort"
 	"time"
 
-	"github.com/google/uuid"
 	"miren.dev/runtime/api/core/core_v1alpha"
 	deployment_v1alpha "miren.dev/runtime/api/deployment/deployment_v1alpha"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
+	"miren.dev/runtime/pkg/cloudauth"
 	"miren.dev/runtime/pkg/cond"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/rpc/standard"
 )
 
 type DeploymentServer struct {
-	Log *slog.Logger
-	EAC *entityserver_v1alpha.EntityAccessClient
+	Log        *slog.Logger
+	EAC        *entityserver_v1alpha.EntityAccessClient
+	Authorizer DeploymentAuthorizer
+}
+
+// DeploymentAuthorizer interface for checking deployment permissions
+type DeploymentAuthorizer interface {
+	AuthorizeDeployment(ctx context.Context, appName string) error
 }
 
 var _ deployment_v1alpha.Deployment = (*DeploymentServer)(nil)
 
-func NewDeploymentServer(log *slog.Logger, eac *entityserver_v1alpha.EntityAccessClient) (*DeploymentServer, error) {
+func NewDeploymentServer(log *slog.Logger, eac *entityserver_v1alpha.EntityAccessClient, authorizer DeploymentAuthorizer) (*DeploymentServer, error) {
 	return &DeploymentServer{
-		Log: log.With("module", "deployment"),
-		EAC: eac,
+		Log:        log.With("module", "deployment"),
+		EAC:        eac,
+		Authorizer: authorizer,
 	}, nil
 }
 
@@ -49,10 +56,18 @@ func (d *DeploymentServer) CreateDeployment(ctx context.Context, req *deployment
 	clusterId := args.ClusterId()
 	appVersionId := args.AppVersionId()
 
-	// Get user info from context (will be implemented with auth integration)
-	// For now, use placeholder values
-	userId := "user-" + uuid.New().String()
-	userEmail := "user@example.com"
+	// Check deployment permission if authorizer is configured
+	if d.Authorizer != nil {
+		if err := d.Authorizer.AuthorizeDeployment(ctx, appName); err != nil {
+			d.Log.Warn("Deployment authorization failed",
+				"app", appName,
+				"error", err)
+			return cond.Error(err.Error())
+		}
+	}
+
+	// Get user info from context
+	userId, userEmail := cloudauth.GetDeploymentUserInfo(ctx)
 
 	// Create deployment entity
 	now := time.Now()

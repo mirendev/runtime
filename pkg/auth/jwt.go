@@ -44,6 +44,7 @@ type Claims struct {
 	jwt.RegisteredClaims
 	OrganizationID string   `json:"organization_id,omitempty"`
 	GroupIDs       []string `json:"group_ids,omitempty"`
+	GroupsVersion  string   `json:"groups_version,omitempty"` // Version/timestamp of group membership
 }
 
 // ValidateToken validates a JWT token and returns the claims
@@ -281,6 +282,13 @@ func (tc *TokenCache) Set(token string, claims *Claims) {
 		claims:  claims,
 		expires: expiry,
 	}
+}
+
+// Delete removes a token from the cache
+func (tc *TokenCache) Delete(token string) {
+	tc.mu.Lock()
+	defer tc.mu.Unlock()
+	delete(tc.cache, token)
 }
 
 // cleanup periodically removes expired entries
