@@ -141,10 +141,6 @@ func (c *Context) setupServerComponents(ctx context.Context, reg *asm.Registry) 
 		})
 	})
 
-	reg.Provide(func() observability.LogWriter {
-		return &observability.PersistentLogWriter{}
-	})
-
 	reg.Provide(func(opts struct {
 		Log *slog.Logger
 	}) *observability.StatusMonitor {
