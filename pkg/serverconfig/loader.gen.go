@@ -68,6 +68,9 @@ func Load(configPath string, flags *CLIFlags, log *slog.Logger) (*Config, error)
 		if cfg.Containerd.StartEmbedded == nil {
 			cfg.Containerd.StartEmbedded = boolPtr(true)
 		}
+		if cfg.Victorialogs.StartEmbedded == nil {
+			cfg.Victorialogs.StartEmbedded = boolPtr(true)
+		}
 	}
 
 	// Apply environment variables (can override mode defaults)
