@@ -262,8 +262,18 @@ func (h *RegistryHandler) putManifest(w http.ResponseWriter, r *http.Request, na
 	sum := sha256.Sum256(manifestData)
 	digest := "sha256:" + hex.EncodeToString(sum[:])
 
-	// Set the digest header
+	// Check if an artifact with this manifest digest already exists
+	var existingArtifact core_v1alpha.Artifact
+	err = h.ec.OneAtIndex(r.Context(), entity.String(core_v1alpha.ArtifactManifestDigestId, digest), &existingArtifact)
+	if err == nil {
+		// Artifact already exists, return success without creating a duplicate
+		h.log.Info("Found existing artifact with same digest", "digest", digest, "existing_id", existingArtifact.ID, "reference", reference)
+		w.Header().Set("Docker-Content-Digest", digest)
+		w.WriteHeader(http.StatusCreated)
+		return
+	}
 
+	// Only proceed to create a new artifact if one doesn't exist
 	var (
 		app      core_v1alpha.App
 		artifact core_v1alpha.Artifact
