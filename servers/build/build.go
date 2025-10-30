@@ -15,14 +15,12 @@ import (
 	"github.com/tonistiigi/fsutil"
 	"miren.dev/runtime/api/app"
 	"miren.dev/runtime/api/build/build_v1alpha"
-	compute "miren.dev/runtime/api/compute/compute_v1alpha"
 	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/api/entityserver"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/appconfig"
 	"miren.dev/runtime/components/netresolve"
 	"miren.dev/runtime/pkg/cond"
-	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/idgen"
 	"miren.dev/runtime/pkg/procfile"
 	"miren.dev/runtime/pkg/rpc/stream"
@@ -361,7 +359,7 @@ func (b *Builder) BuildFromTar(ctx context.Context, state *build_v1alpha.Builder
 		//LogWriter: b.LogWriter,
 	}
 
-	appRec, mrv, artName, err := b.nextVersion(ctx, name)
+	_, mrv, artName, err := b.nextVersion(ctx, name)
 	if err != nil {
 		b.Log.Error("error getting next version", "error", err)
 		b.sendErrorStatus(ctx, status, "Error getting next version: %v", err)
@@ -478,9 +476,6 @@ func (b *Builder) BuildFromTar(ctx context.Context, state *build_v1alpha.Builder
 		return fmt.Errorf("error creating app version: %w", err)
 	}
 
-	// Remember the old version before updating
-	oldVersion := appRec.ActiveVersion
-
 	b.Log.Info("updating app entity with new version", "app", name, "version", mrv.Version)
 	err = b.appClient.SetActiveVersion(ctx, name, string(id))
 	if err != nil {
@@ -489,44 +484,9 @@ func (b *Builder) BuildFromTar(ctx context.Context, state *build_v1alpha.Builder
 
 	b.Log.Info("app version updated", "app", name, "version", mrv.Version)
 
-	// Scale down old version pools (immutable pool approach)
-	if oldVersion != "" {
-		b.Log.Info("scaling down old version pools", "oldVersion", oldVersion)
-
-		// Query for all SandboxPool entities
-		pools, err := b.ec.List(ctx, entity.Ref(entity.EntityKind, compute.KindSandboxPool))
-		if err != nil {
-			b.Log.Error("error listing sandbox pools", "error", err)
-			// Don't fail the build if we can't scale down old pools
-		} else {
-			for pools.Next() {
-				var pool compute.SandboxPool
-				err := pools.Read(&pool)
-				if err != nil {
-					b.Log.Error("error reading sandbox pool", "error", err)
-					continue
-				}
-
-				// Only scale down pools that reference the old version
-				if pool.SandboxSpec.Version == oldVersion {
-					b.Log.Info("scaling down old pool", "pool", pool.ID, "service", pool.Service)
-
-					// Set desired_instances to 0 explicitly; Patch preserves zero values
-					attrs := []entity.Attr{
-						entity.Ref(entity.DBId, pool.ID),
-						entity.Int64(compute.SandboxPoolDesiredInstancesId, 0),
-					}
-					_, err = b.EAS.Patch(ctx, attrs, 0)
-					if err != nil {
-						b.Log.Error("error scaling down old pool", "pool", pool.ID, "error", err)
-						continue
-					}
-
-					b.Log.Info("old pool scaled to zero", "pool", pool.ID, "service", pool.Service)
-				}
-			}
-		}
-	}
+	// Note: Old version pool cleanup is now handled by the DeploymentLauncher controller
+	// via the referenced_by_versions field. The launcher removes version references and
+	// scales down pools when they're no longer in use.
 
 	state.Results().SetVersion(mrv.Version)
 
