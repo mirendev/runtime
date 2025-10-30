@@ -166,10 +166,6 @@ func (s *EtcdStore) CreateEntity(
 		return nil, err
 	}
 
-	var primary, session []Attr
-
-	var coltxopt []clientv3.Op
-
 	var (
 		sid      int64
 		sessPart string
@@ -180,35 +176,21 @@ func (s *EtcdStore) CreateEntity(
 		sessPart = base58.Encode(o.session)
 	}
 
-	// Enumerate all attributes including nested ones in components
-	allAttrs := enumerateAllAttrs(entity.attrs)
+	// Separate attributes into primary and session, and collect indexed attributes
+	primary, session, indexedAttrs, err := s.separateSessionAttributes(ctx, entity.attrs)
+	if err != nil {
+		return nil, err
+	}
 
-	for _, attr := range allAttrs {
-		schema, err := s.GetAttributeSchema(ctx, attr.ID)
-		if err != nil {
-			return nil, err
-		}
-
-		if schema.Index {
+	// Build collection operations for indexed attributes
+	var coltxopt []clientv3.Op
+	for _, attrs := range indexedAttrs {
+		for _, attr := range attrs {
 			coltxopt = append(coltxopt, s.addToCollectionOp(entity, attr.CAS()))
 
 			if sessPart != "" {
 				coltxopt = append(coltxopt, s.addToCollectionSessionOp(entity, attr.CAS(), sessPart, sid))
 			}
-		}
-	}
-
-	// Separate top-level attrs into primary and session
-	for _, attr := range entity.attrs {
-		schema, err := s.GetAttributeSchema(ctx, attr.ID)
-		if err != nil {
-			return nil, err
-		}
-
-		if schema.Session {
-			session = append(session, attr)
-		} else {
-			primary = append(primary, attr)
 		}
 	}
 
@@ -537,16 +519,9 @@ func (s *EtcdStore) UpdateEntity(
 	}
 
 	// Keep track of original indexed attributes for removal (including nested ones)
-	originalIndexedAttrs := make(map[Id][]Attr)
-	allOriginalAttrs := enumerateAllAttrs(entity.attrs)
-	for _, attr := range allOriginalAttrs {
-		schema, err := s.GetAttributeSchema(ctx, attr.ID)
-		if err != nil {
-			return nil, fmt.Errorf("failed to get attribute schema: %w", err)
-		}
-		if schema.Index {
-			originalIndexedAttrs[attr.ID] = append(originalIndexedAttrs[attr.ID], attr)
-		}
+	originalIndexedAttrs, err := s.collectIndexedAttributes(ctx, entity.attrs)
+	if err != nil {
+		return nil, err
 	}
 
 	// Validate attributes
@@ -592,36 +567,12 @@ func (s *EtcdStore) UpdateEntity(
 		sessPart = base58.Encode(o.session)
 	}
 
-	var primary, session []Attr
-
 	var coltxopt []clientv3.Op
 
-	// Build map of new indexed attributes (including nested ones)
-	newIndexedAttrs := make(map[Id][]Attr)
-	allNewAttrs := enumerateAllAttrs(entity.attrs)
-	for _, attr := range allNewAttrs {
-		schema, err := s.GetAttributeSchema(ctx, attr.ID)
-		if err != nil {
-			return nil, fmt.Errorf("failed to get attribute schema: %w", err)
-		}
-
-		if schema.Index {
-			newIndexedAttrs[attr.ID] = append(newIndexedAttrs[attr.ID], attr)
-		}
-	}
-
-	// Separate top-level attrs into primary and session
-	for _, attr := range entity.attrs {
-		schema, err := s.GetAttributeSchema(ctx, attr.ID)
-		if err != nil {
-			return nil, fmt.Errorf("failed to get attribute schema: %w", err)
-		}
-
-		if schema.Session {
-			session = append(session, attr)
-		} else {
-			primary = append(primary, attr)
-		}
+	// Separate attributes into primary and session, and collect indexed attributes (including nested ones)
+	primary, session, newIndexedAttrs, err := s.separateSessionAttributes(ctx, entity.attrs)
+	if err != nil {
+		return nil, err
 	}
 
 	// Compare old and new indexed attributes and only update collections when values change
