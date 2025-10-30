@@ -839,7 +839,8 @@ func TestActivatorDeletedPoolRecovery(t *testing.T) {
 
 	// First AcquireLease attempt - will create a pool and timeout waiting for sandbox
 	// (since we don't have a sandbox controller running)
-	timeoutCtx, cancel := context.WithTimeout(ctx, 100*time.Millisecond)
+	// Timeout must be longer than retry logic (~700ms) to avoid context deadline during retries
+	timeoutCtx, cancel := context.WithTimeout(ctx, 1*time.Second)
 	defer cancel()
 
 	_, err = activator.AcquireLease(timeoutCtx, testVer, "web")
@@ -867,7 +868,8 @@ func TestActivatorDeletedPoolRecovery(t *testing.T) {
 	require.Error(t, err, "Pool should be deleted from entity store")
 
 	// Second AcquireLease attempt - should detect deleted pool and create a new one
-	timeoutCtx2, cancel2 := context.WithTimeout(ctx, 100*time.Millisecond)
+	// Timeout must be longer than retry logic (~700ms) to avoid context deadline during retries
+	timeoutCtx2, cancel2 := context.WithTimeout(ctx, 1*time.Second)
 	defer cancel2()
 
 	_, err = activator.AcquireLease(timeoutCtx2, testVer, "web")

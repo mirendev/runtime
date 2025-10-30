@@ -442,6 +442,91 @@ func (a *localActivator) ensureSandboxPool(ctx context.Context, ver *core_v1alph
 			continue // Loop back to wait/increment logic
 		}
 
+		// Before creating a pool, try to find it in the entity store with retries
+		// DeploymentLauncher may have created it, and we just haven't seen it yet
+		const maxRetries = 3
+		const baseRetryDelay = 100 * time.Millisecond
+
+		var foundPool *compute_v1alpha.SandboxPool
+		for attempt := 0; attempt < maxRetries; attempt++ {
+			if attempt > 0 {
+				// Release lock during retry delay
+				a.mu.Unlock()
+
+				// Exponential backoff: 100ms, 200ms, 400ms
+				delay := baseRetryDelay * (1 << (attempt - 1))
+				a.log.Debug("retrying pool lookup from store",
+					"attempt", attempt+1,
+					"max_retries", maxRetries,
+					"service", service,
+					"delay_ms", delay.Milliseconds())
+
+				select {
+				case <-time.After(delay):
+				case <-ctx.Done():
+					return nil, ctx.Err()
+				}
+
+				// Re-acquire lock and check if another goroutine found/created the pool
+				a.mu.Lock()
+				_, exists = a.pools[key]
+				if exists {
+					// Another goroutine found or created the pool while we were waiting
+					a.mu.Unlock()
+					continue // Loop back to main logic
+				}
+			}
+
+			// Try to find pool in entity store (holds lock during query)
+			a.mu.Unlock()
+			pool, err := a.findPoolInStore(ctx, ver.ID, service)
+			a.mu.Lock()
+
+			if err != nil {
+				a.log.Warn("failed to query pool from store",
+					"error", err,
+					"attempt", attempt+1,
+					"service", service)
+				continue
+			}
+
+			if pool != nil {
+				foundPool = pool
+				break
+			}
+		}
+
+		if foundPool != nil {
+			// Found pool created by DeploymentLauncher - cache it and increment
+			foundPool.DesiredInstances++
+			a.pools[key] = &poolState{
+				pool:       foundPool,
+				inProgress: false,
+			}
+			a.mu.Unlock()
+
+			// Persist incremented desired_instances
+			var rpcE entityserver_v1alpha.Entity
+			rpcE.SetId(foundPool.ID.String())
+			rpcE.SetAttrs(entity.New(foundPool.Encode).Attrs())
+			_, err := a.eac.Put(ctx, &rpcE)
+			if err != nil {
+				return nil, fmt.Errorf("failed to update launcher-created pool: %w", err)
+			}
+
+			a.log.Info("found launcher-created pool after retries",
+				"pool", foundPool.ID,
+				"service", service,
+				"desired_instances", foundPool.DesiredInstances)
+			return foundPool, nil
+		}
+
+		// Pool not found after retries - fall back to creating it
+		a.log.Warn("pool not found in store after retries, creating as fallback",
+			"service", service,
+			"version", ver.Version,
+			"retries", maxRetries)
+
 		// Claim creation by inserting sentinel
 		sentinel := &poolState{
 			inProgress: true,
