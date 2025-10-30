@@ -1513,6 +1513,144 @@ func TestEtcdStore_EnsureEntity(t *testing.T) {
 	})
 }
 
+func TestEtcdStore_NestedComponentFieldIndexing(t *testing.T) {
+	client := setupTestEtcd(t)
+	store, err := NewEtcdStore(t.Context(), slog.Default(), client, "/test-entities")
+	require.NoError(t, err)
+
+	t.Run("top-level indexed fields work", func(t *testing.T) {
+		// Create version entities first
+		v1 := Id("version/v1")
+		v2 := Id("version/v2")
+
+		_, err := store.CreateEntity(t.Context(), New(
+			Ref(DBId, v1),
+		))
+		require.NoError(t, err)
+
+		_, err = store.CreateEntity(t.Context(), New(
+			Ref(DBId, v2),
+		))
+		require.NoError(t, err)
+
+		// Create an indexed attribute at the top level
+		_, err = store.CreateEntity(t.Context(), New(
+			Ident, "test/version",
+			Doc, "Top-level version field",
+			Cardinality, CardinalityOne,
+			Type, TypeRef,
+			Index, true,
+		))
+		require.NoError(t, err)
+
+		// Create entities with this top-level indexed field
+		entity1, err := store.CreateEntity(t.Context(), New(
+			Ident, "sandbox1",
+			Ref(Id("test/version"), v1),
+		))
+		require.NoError(t, err)
+
+		entity2, err := store.CreateEntity(t.Context(), New(
+			Ident, "sandbox2",
+			Ref(Id("test/version"), v1),
+		))
+		require.NoError(t, err)
+
+		entity3, err := store.CreateEntity(t.Context(), New(
+			Ident, "sandbox3",
+			Ref(Id("test/version"), v2),
+		))
+		require.NoError(t, err)
+
+		// Query by the top-level indexed field - THIS WORKS
+		results, err := store.ListIndex(t.Context(), Ref(Id("test/version"), v1))
+		require.NoError(t, err)
+		assert.Len(t, results, 2, "Should find both entities with v1")
+
+		// Verify we got the right entities
+		foundIds := map[Id]bool{results[0]: true, results[1]: true}
+		assert.True(t, foundIds[entity1.Id()])
+		assert.True(t, foundIds[entity2.Id()])
+		assert.False(t, foundIds[entity3.Id()])
+	})
+
+	t.Run("nested component fields can be indexed", func(t *testing.T) {
+		// This test verifies that nested fields within components are automatically indexed
+		// when marked with indexed: true in the schema.
+
+		// Create a component attribute type
+		_, err := store.CreateEntity(t.Context(), New(
+			Ident, "test/indexed-spec",
+			Doc, "A component type",
+			Cardinality, CardinalityOne,
+			Type, TypeComponent,
+		))
+		require.NoError(t, err)
+
+		// Create an indexed field that will be nested in the component
+		_, err = store.CreateEntity(t.Context(), New(
+			Ident, "test/indexed-spec.version",
+			Doc, "Version field within indexed-spec component",
+			Cardinality, CardinalityOne,
+			Type, TypeRef,
+			Index, true, // Mark nested field as indexed
+		))
+		require.NoError(t, err)
+
+		// Create version entities
+		v1 := Id("version/indexed-v1")
+		v2 := Id("version/indexed-v2")
+
+		_, err = store.CreateEntity(t.Context(), New(Ref(DBId, v1)))
+		require.NoError(t, err)
+
+		_, err = store.CreateEntity(t.Context(), New(Ref(DBId, v2)))
+		require.NoError(t, err)
+
+		// Create entities with components containing the indexed nested field
+		entity1, err := store.CreateEntity(t.Context(), New([]Attr{
+			Keyword(Ident, "indexed-resource1"),
+			Component(Id("test/indexed-spec"), []Attr{
+				Ref(Id("test/indexed-spec.version"), v1), // Nested indexed field
+			}),
+		}))
+		require.NoError(t, err)
+
+		entity2, err := store.CreateEntity(t.Context(), New([]Attr{
+			Keyword(Ident, "indexed-resource2"),
+			Component(Id("test/indexed-spec"), []Attr{
+				Ref(Id("test/indexed-spec.version"), v1), // Same version
+			}),
+		}))
+		require.NoError(t, err)
+
+		entity3, err := store.CreateEntity(t.Context(), New([]Attr{
+			Keyword(Ident, "indexed-resource3"),
+			Component(Id("test/indexed-spec"), []Attr{
+				Ref(Id("test/indexed-spec.version"), v2), // Different version
+			}),
+		}))
+		require.NoError(t, err)
+
+		// Query by the nested indexed field
+		results, err := store.ListIndex(t.Context(), Ref(Id("test/indexed-spec.version"), v1))
+		require.NoError(t, err)
+		assert.Len(t, results, 2, "Should find both entities with v1")
+
+		// Verify we got the right entities
+		foundIds := map[Id]bool{results[0]: true, results[1]: true}
+		assert.True(t, foundIds[entity1.Id()])
+		assert.True(t, foundIds[entity2.Id()])
+		assert.False(t, foundIds[entity3.Id()])
+
+		// Query by v2
+		resultsV2, err := store.ListIndex(t.Context(), Ref(Id("test/indexed-spec.version"), v2))
+		require.NoError(t, err)
+		assert.Len(t, resultsV2, 1, "Should find entity with v2")
+		assert.Equal(t, entity3.Id(), resultsV2[0])
+	})
+}
+
 func TestEntity_Fixup_DbId(t *testing.T) {
 	t.Run("db/id takes precedence over db/ident", func(t *testing.T) {
 		entity := New(

@@ -58,7 +58,7 @@ func TestManagerScaleUpFromZero(t *testing.T) {
 	// Verify all sandboxes have correct labels and specs
 	for _, sb := range sandboxes {
 		assert.Equal(t, compute_v1alpha.PENDING, sb.Status, "new sandboxes should be PENDING")
-		assert.Equal(t, pool.SandboxSpec.Version, sb.Version, "sandbox should use pool version")
+		assert.Equal(t, pool.SandboxSpec.Version, sb.Spec.Version, "sandbox should use pool version")
 		require.NotEmpty(t, sb.Spec.Container, "sandbox should have containers")
 		assert.Equal(t, "test:latest", sb.Spec.Container[0].Image, "sandbox should use pool image")
 
@@ -104,9 +104,8 @@ func TestManagerScaleUpPartial(t *testing.T) {
 	// Create 2 existing sandboxes for this pool
 	for i := 0; i < 2; i++ {
 		sb := &compute_v1alpha.Sandbox{
-			Status:  compute_v1alpha.RUNNING,
-			Version: pool.SandboxSpec.Version,
-			Spec:    pool.SandboxSpec,
+			Status: compute_v1alpha.RUNNING,
+			Spec:   pool.SandboxSpec,
 		}
 		_, err := server.Client.Create(ctx, fmt.Sprintf("existing-sb-%d", i), sb,
 			entityserver.WithLabels(types.LabelSet("service", "api", "pool", poolID.String())))
@@ -234,8 +233,7 @@ func TestManagerVersionFiltering(t *testing.T) {
 	// Create 2 sandboxes with old version (should be ignored)
 	for i := 0; i < 2; i++ {
 		sb := &compute_v1alpha.Sandbox{
-			Status:  compute_v1alpha.RUNNING,
-			Version: entity.Id("ver-1"), // Old version
+			Status: compute_v1alpha.RUNNING,
 			Spec: compute_v1alpha.SandboxSpec{
 				Version: entity.Id("ver-1"),
 				Container: []compute_v1alpha.SandboxSpecContainer{
@@ -257,7 +255,7 @@ func TestManagerVersionFiltering(t *testing.T) {
 	sandboxes := listSandboxesForPool(t, ctx, server, pool)
 	ver2Count := 0
 	for _, sb := range sandboxes {
-		if sb.Version.String() == "ver-2" {
+		if sb.Spec.Version.String() == "ver-2" {
 			ver2Count++
 		}
 	}
@@ -297,18 +295,16 @@ func TestManagerStatusOnlyUpdate(t *testing.T) {
 
 	// Create 2 existing sandboxes (1 running, 1 pending)
 	sb1 := &compute_v1alpha.Sandbox{
-		Status:  compute_v1alpha.RUNNING,
-		Version: pool.SandboxSpec.Version,
-		Spec:    pool.SandboxSpec,
+		Status: compute_v1alpha.RUNNING,
+		Spec:   pool.SandboxSpec,
 	}
 	_, err = server.Client.Create(ctx, "sb1", sb1,
 		entityserver.WithLabels(types.LabelSet("service", "web", "pool", poolID.String())))
 	require.NoError(t, err)
 
 	sb2 := &compute_v1alpha.Sandbox{
-		Status:  compute_v1alpha.PENDING,
-		Version: pool.SandboxSpec.Version,
-		Spec:    pool.SandboxSpec,
+		Status: compute_v1alpha.PENDING,
+		Spec:   pool.SandboxSpec,
 	}
 	_, err = server.Client.Create(ctx, "sb2", sb2,
 		entityserver.WithLabels(types.LabelSet("service", "web", "pool", poolID.String())))
@@ -358,7 +354,6 @@ func TestManagerNoUpdateWhenStatusUnchanged(t *testing.T) {
 	// Create 1 running sandbox
 	sb := &compute_v1alpha.Sandbox{
 		Status:  compute_v1alpha.RUNNING,
-		Version: pool.SandboxSpec.Version,
 		Spec:    pool.SandboxSpec,
 	}
 	_, err = server.Client.Create(ctx, "sb", sb,
@@ -437,7 +432,6 @@ func TestManagerScaleDownIdle(t *testing.T) {
 
 	// Sandbox 1: idle for 5 minutes (should be retired)
 	sb1 := &compute_v1alpha.Sandbox{
-		Version:      pool.SandboxSpec.Version,
 		Status:       compute_v1alpha.RUNNING,
 		LastActivity: now.Add(-5 * time.Minute),
 		Spec:         pool.SandboxSpec,
@@ -449,7 +443,6 @@ func TestManagerScaleDownIdle(t *testing.T) {
 
 	// Sandbox 2: idle for 3 minutes (should be retired)
 	sb2 := &compute_v1alpha.Sandbox{
-		Version:      pool.SandboxSpec.Version,
 		Status:       compute_v1alpha.RUNNING,
 		LastActivity: now.Add(-3 * time.Minute),
 		Spec:         pool.SandboxSpec,
@@ -461,7 +454,6 @@ func TestManagerScaleDownIdle(t *testing.T) {
 
 	// Sandbox 3: active recently (should NOT be retired)
 	sb3 := &compute_v1alpha.Sandbox{
-		Version:      pool.SandboxSpec.Version,
 		Status:       compute_v1alpha.RUNNING,
 		LastActivity: now.Add(-30 * time.Second),
 		Spec:         pool.SandboxSpec,
@@ -539,7 +531,6 @@ func TestManagerScaleDownFixedMode(t *testing.T) {
 	now := time.Now()
 	for i := 0; i < 3; i++ {
 		sb := &compute_v1alpha.Sandbox{
-			Version:      pool.SandboxSpec.Version,
 			Status:       compute_v1alpha.RUNNING,
 			LastActivity: now.Add(-10 * time.Minute),
 			Spec:         pool.SandboxSpec,
@@ -604,7 +595,6 @@ func TestManagerZeroValuePersistence(t *testing.T) {
 	now := time.Now()
 	for i := 0; i < 5; i++ {
 		sb := &compute_v1alpha.Sandbox{
-			Version:      pool.SandboxSpec.Version,
 			Status:       compute_v1alpha.RUNNING,
 			LastActivity: now.Add(-10 * time.Minute),
 			Spec:         pool.SandboxSpec,
@@ -643,7 +633,7 @@ func listSandboxesForPool(t *testing.T, ctx context.Context, server *testutils.I
 		sb.Decode(ent.Entity())
 
 		// Filter by version and service
-		if sb.Version.String() != pool.SandboxSpec.Version.String() {
+		if sb.Spec.Version.String() != pool.SandboxSpec.Version.String() {
 			continue
 		}
 
@@ -805,9 +795,8 @@ func TestCleanupEmptyPoolsWithSandboxes(t *testing.T) {
 
 	// Create a sandbox for this pool
 	sb := &compute_v1alpha.Sandbox{
-		Status:  compute_v1alpha.STOPPED,
-		Version: appVerID,
-		Spec:    pool.SandboxSpec,
+		Status: compute_v1alpha.STOPPED,
+		Spec:   pool.SandboxSpec,
 	}
 	_, err = server.Client.Create(ctx, "sb-1", sb,
 		entityserver.WithLabels(types.LabelSet("service", "web", "pool", poolID.String())))

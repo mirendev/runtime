@@ -186,119 +186,6 @@ func mapLegacyProtocol(legacy compute.PortProtocol) compute.SandboxSpecContainer
 	}
 }
 
-// migrateLegacySandboxes converts sandboxes using legacy top-level fields to use Spec field
-func (c *SandboxController) migrateLegacySandboxes(ctx context.Context) error {
-	c.Log.Info("migrating legacy sandboxes to Spec format")
-
-	resp, err := c.EAC.List(ctx, entity.Ref(entity.EntityKind, compute.KindSandbox))
-	if err != nil {
-		return fmt.Errorf("failed to list sandboxes for migration: %w", err)
-	}
-
-	migratedCount := 0
-	for _, e := range resp.Values() {
-		var sb compute.Sandbox
-		sb.Decode(e.Entity())
-
-		// Skip if already has Spec populated (check if it has containers)
-		if len(sb.Spec.Container) > 0 {
-			continue
-		}
-
-		// Skip if no legacy fields to migrate
-		if len(sb.Container) == 0 {
-			continue
-		}
-
-		c.Log.Info("migrating sandbox to Spec format", "sandbox", sb.ID)
-
-		// Build Spec from legacy fields
-		sb.Spec.Version = sb.Version
-		sb.Spec.LogEntity = sb.LogEntity
-		sb.Spec.LogAttribute = sb.LogAttribute
-		sb.Spec.HostNetwork = sb.HostNetwork
-
-		// Convert Container to SandboxSpecContainer
-		for _, legacyCont := range sb.Container {
-			specCont := compute.SandboxSpecContainer{
-				Name:       legacyCont.Name,
-				Image:      legacyCont.Image,
-				Privileged: legacyCont.Privileged,
-				Command:    legacyCont.Command,
-				Directory:  legacyCont.Directory,
-				Env:        legacyCont.Env,
-				OomScore:   legacyCont.OomScore,
-			}
-
-			// Convert ports
-			for _, p := range legacyCont.Port {
-				specCont.Port = append(specCont.Port, compute.SandboxSpecContainerPort{
-					Port:     p.Port,
-					Name:     p.Name,
-					Protocol: mapLegacyProtocol(p.Protocol),
-					Type:     p.Type,
-					NodePort: p.NodePort,
-				})
-			}
-
-			// Convert mounts
-			for _, m := range legacyCont.Mount {
-				specCont.Mount = append(specCont.Mount, compute.SandboxSpecContainerMount(m))
-			}
-
-			// Convert config files
-			for _, cf := range legacyCont.ConfigFile {
-				specCont.ConfigFile = append(specCont.ConfigFile, compute.SandboxSpecContainerConfigFile(cf))
-			}
-
-			sb.Spec.Container = append(sb.Spec.Container, specCont)
-		}
-
-		// Convert routes
-		for _, r := range sb.Route {
-			sb.Spec.Route = append(sb.Spec.Route, compute.SandboxSpecRoute(r))
-		}
-
-		// Convert volumes
-		for _, v := range sb.Volume {
-			sb.Spec.Volume = append(sb.Spec.Volume, compute.SandboxSpecVolume(v))
-		}
-
-		// Convert static hosts
-		for _, sh := range sb.StaticHost {
-			sb.Spec.StaticHost = append(sb.Spec.StaticHost, compute.SandboxSpecStaticHost(sh))
-		}
-
-		// Clear legacy fields that have been migrated to Spec
-		// Note: We keep Version populated because it's still used for backward compatibility
-		// and as a denormalized field. The migration maintains both sb.Version and sb.Spec.Version.
-		sb.Container = nil
-		sb.Route = nil
-		sb.Volume = nil
-		sb.StaticHost = nil
-		// sb.Version - kept for backward compatibility (already copied to sb.Spec.Version)
-		sb.LogEntity = ""
-		sb.LogAttribute = nil
-		sb.HostNetwork = false
-
-		// Update the entity with the populated Spec
-		var rpcE entityserver_v1alpha.Entity
-		rpcE.SetId(sb.ID.String())
-		rpcE.SetAttrs(entity.New(sb.Encode).Attrs())
-
-		_, err := c.EAC.Put(ctx, &rpcE)
-		if err != nil {
-			c.Log.Error("failed to migrate sandbox", "sandbox", sb.ID, "err", err)
-			continue
-		}
-
-		migratedCount++
-		c.Log.Info("migrated sandbox to Spec format", "sandbox", sb.ID)
-	}
-
-	c.Log.Info("legacy sandbox migration complete", "migrated", migratedCount)
-	return nil
-}
 
 // reconcileSandboxesOnBoot checks all Running sandboxes and marks unhealthy ones as DEAD
 // This is called during controller initialization to clean up after containerd restarts
@@ -308,12 +195,6 @@ func (c *SandboxController) reconcileSandboxesOnBoot(ctx context.Context) error 
 	// Create a context with timeout for the entire reconciliation
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
-
-	// First, migrate any legacy sandboxes to use Spec field
-	if err := c.migrateLegacySandboxes(ctx); err != nil {
-		c.Log.Error("failed to migrate legacy sandboxes", "err", err)
-		// Continue with reconciliation even if migration fails
-	}
 
 	// List all sandboxes marked as RUNNING
 	resp, err := c.EAC.List(ctx, entity.Ref(entity.EntityKind, compute.KindSandbox))

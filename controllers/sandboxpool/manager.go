@@ -224,10 +224,8 @@ func (m *Manager) Delete(ctx context.Context, poolID entity.Id) error {
 // listSandboxes returns all sandboxes for a pool
 func (m *Manager) listSandboxes(ctx context.Context, pool *compute_v1alpha.SandboxPool) ([]*compute_v1alpha.Sandbox, error) {
 	// Query sandboxes by version index (reduces O(N) to O(N_version))
-	// Note: We use the top-level sandbox.version field for indexing (not sandbox.spec.version)
-	// because nested fields within components cannot be indexed at the entity level.
-	// Both fields are maintained in sync - version is a denormalized index field.
-	resp, err := m.eac.List(ctx, entity.Ref(compute_v1alpha.SandboxVersionId, pool.SandboxSpec.Version))
+	// We can now query by the nested sandbox.spec.version field directly!
+	resp, err := m.eac.List(ctx, entity.Ref(compute_v1alpha.SandboxSpecVersionId, pool.SandboxSpec.Version))
 	if err != nil {
 		return nil, fmt.Errorf("failed to list sandboxes: %w", err)
 	}
@@ -265,9 +263,8 @@ func (m *Manager) createSandbox(ctx context.Context, pool *compute_v1alpha.Sandb
 
 	// Clone the SandboxSpec into a Sandbox entity
 	sb := compute_v1alpha.Sandbox{
-		Status:  compute_v1alpha.PENDING,
-		Version: pool.SandboxSpec.Version,
-		Spec:    pool.SandboxSpec,
+		Status: compute_v1alpha.PENDING,
+		Spec:   pool.SandboxSpec,
 	}
 
 	// Create entity with metadata (Put without ID creates new entity)

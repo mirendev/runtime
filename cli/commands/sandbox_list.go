@@ -108,7 +108,7 @@ func SandboxList(ctx *Context, opts struct {
 		rows = append(rows, ui.Row{
 			ui.CleanEntityID(sandbox.ID.String()),
 			ui.DisplayStatus(status),
-			ui.DisplayAppVersion(sandbox.Version.String()),
+			ui.DisplayAppVersion(sandbox.Spec.Version.String()),
 			fmt.Sprintf("%d", len(sandbox.Container)),
 			poolLabel,
 			humanFriendlyTimestamp(time.UnixMilli(e.CreatedAt())),

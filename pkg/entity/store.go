@@ -180,7 +180,10 @@ func (s *EtcdStore) CreateEntity(
 		sessPart = base58.Encode(o.session)
 	}
 
-	for _, attr := range entity.attrs {
+	// Enumerate all attributes including nested ones in components
+	allAttrs := enumerateAllAttrs(entity.attrs)
+
+	for _, attr := range allAttrs {
 		schema, err := s.GetAttributeSchema(ctx, attr.ID)
 		if err != nil {
 			return nil, err
@@ -192,6 +195,14 @@ func (s *EtcdStore) CreateEntity(
 			if sessPart != "" {
 				coltxopt = append(coltxopt, s.addToCollectionSessionOp(entity, attr.CAS(), sessPart, sid))
 			}
+		}
+	}
+
+	// Separate top-level attrs into primary and session
+	for _, attr := range entity.attrs {
+		schema, err := s.GetAttributeSchema(ctx, attr.ID)
+		if err != nil {
+			return nil, err
 		}
 
 		if schema.Session {
@@ -525,9 +536,10 @@ func (s *EtcdStore) UpdateEntity(
 		return nil, cond.Conflict("entity", entity.Id())
 	}
 
-	// Keep track of original indexed attributes for removal
+	// Keep track of original indexed attributes for removal (including nested ones)
 	originalIndexedAttrs := make(map[Id][]Attr)
-	for _, attr := range entity.attrs {
+	allOriginalAttrs := enumerateAllAttrs(entity.attrs)
+	for _, attr := range allOriginalAttrs {
 		schema, err := s.GetAttributeSchema(ctx, attr.ID)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get attribute schema: %w", err)
@@ -584,9 +596,10 @@ func (s *EtcdStore) UpdateEntity(
 
 	var coltxopt []clientv3.Op
 
-	// Build map of new indexed attributes
+	// Build map of new indexed attributes (including nested ones)
 	newIndexedAttrs := make(map[Id][]Attr)
-	for _, attr := range entity.attrs {
+	allNewAttrs := enumerateAllAttrs(entity.attrs)
+	for _, attr := range allNewAttrs {
 		schema, err := s.GetAttributeSchema(ctx, attr.ID)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get attribute schema: %w", err)
@@ -594,6 +607,14 @@ func (s *EtcdStore) UpdateEntity(
 
 		if schema.Index {
 			newIndexedAttrs[attr.ID] = append(newIndexedAttrs[attr.ID], attr)
+		}
+	}
+
+	// Separate top-level attrs into primary and session
+	for _, attr := range entity.attrs {
+		schema, err := s.GetAttributeSchema(ctx, attr.ID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get attribute schema: %w", err)
 		}
 
 		if schema.Session {
@@ -1389,4 +1410,23 @@ func (s *EtcdStore) AssertLease(ctx context.Context, lease int64) error {
 	}
 
 	return nil
+}
+
+// enumerateAllAttrs recursively enumerates all attributes including those nested in components.
+// This allows indexing of nested component fields.
+func enumerateAllAttrs(attrs []Attr) []Attr {
+	var result []Attr
+	for _, attr := range attrs {
+		result = append(result, attr)
+
+		// If this is a component, recursively enumerate its nested attributes
+		if attr.Value.Kind() == KindComponent {
+			comp := attr.Value.Component()
+			if comp != nil {
+				nestedAttrs := comp.Attrs()
+				result = append(result, enumerateAllAttrs(nestedAttrs)...)
+			}
+		}
+	}
+	return result
 }
