@@ -341,6 +341,12 @@ kinds:
       type: int
       doc: Number of RUNNING sandboxes
 
+    # Version references for pool reuse across deployments
+    referenced_by_versions:
+      type: ref
+      doc: AppVersions that reference this pool (enables reuse when specs match)
+      many: true
+
   node:
     constraints:
       type: label
