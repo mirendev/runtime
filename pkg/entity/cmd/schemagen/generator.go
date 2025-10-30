@@ -524,11 +524,31 @@ func (g *gen) attr(name string, attr *schemaAttr) {
 		simpleDecl("Duration")
 		simpleField("duration")
 	case "ref":
-		g.fields = append(g.fields, j.Id(fname).Qual(top, "Id").Tag(tag))
-		simpleDecoder("KindId", "Id")
-		simpleEncoder("Ref")
-		simpleDecl("Ref")
-		simpleField("id")
+		if attr.Many {
+			g.fields = append(g.fields, j.Id(fname).Index().Qual(top, "Id").Tag(tag))
+			g.decoders = append(g.decoders,
+				j.For(j.List(j.Op("_"), j.Id("a")).Op(":=").Range().Id("e").Dot("GetAll").Call(g.Ident(fname))).Block(
+					j.If(j.Id("a").Dot("Value").Dot("Kind").Call().Op("==").Qual(top, "KindId")).Block(
+						j.Id("o").Dot(fname).Op("=").Append(j.Id("o").Dot(fname), j.Id("a").Dot("Value").Dot("Id").Call()),
+					),
+				),
+			)
+			g.encoders = append(g.encoders,
+				j.For(j.List(j.Op("_"), j.Id("v")).Op(":=").Range().Id("o").Dot(fname)).Block(
+					j.Id("attrs").Op("=").Append(j.Id("attrs"), j.Qual(top, "Ref").Call(g.Ident(fname), j.Id("v"))),
+				),
+			)
+			g.empties = append(g.empties,
+				j.If(j.Len(j.Id("o").Dot(fname)).Op("!=").Lit(0)).Block(j.Return(j.False())))
+			simpleDecl("Ref")
+			simpleField("id")
+		} else {
+			g.fields = append(g.fields, j.Id(fname).Qual(top, "Id").Tag(tag))
+			simpleDecoder("KindId", "Id")
+			simpleEncoder("Ref")
+			simpleDecl("Ref")
+			simpleField("id")
+		}
 	case "bool":
 		g.fields = append(g.fields, j.Id(fname).Bool().Tag(tag))
 		simpleDecoder("KindBool", "Bool")
