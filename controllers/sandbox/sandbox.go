@@ -196,11 +196,36 @@ func (c *SandboxController) reconcileSandboxesOnBoot(ctx context.Context) error 
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
 
-	// List all sandboxes marked as RUNNING
+	// List all sandboxes
 	resp, err := c.EAC.List(ctx, entity.Ref(entity.EntityKind, compute.KindSandbox))
 	if err != nil {
 		return fmt.Errorf("failed to list sandboxes: %w", err)
 	}
+
+	// Migrate sandbox indexes: touch each sandbox to ensure nested component field indexes are created.
+	// This is needed because we changed from top-level sandbox.version to nested sandbox.spec.version indexing.
+	// We patch each entity with empty attributes to trigger index recreation without changing the data.
+	// We can remove this migration code after all environments have been updated.
+	migratedCount := 0
+	for _, e := range resp.Values() {
+		var sb compute.Sandbox
+		sb.Decode(e.Entity())
+
+		// Patch with empty attributes to trigger index recreation without modifying data
+		_, err := c.EAC.Patch(ctx, []entity.Attr{}, e.Revision())
+		if err != nil {
+			c.Log.Warn("failed to migrate sandbox indexes",
+				"sandbox_id", sb.ID,
+				"error", err)
+			// Continue with other sandboxes even if one fails
+			continue
+		}
+		migratedCount++
+	}
+
+	c.Log.Info("migrated sandbox indexes",
+		"migrated_count", migratedCount,
+		"total_count", len(resp.Values()))
 
 	var unhealthySandboxes []entity.Id
 	runningCount := 0
