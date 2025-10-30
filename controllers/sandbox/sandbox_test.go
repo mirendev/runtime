@@ -1557,28 +1557,32 @@ func TestSandbox(t *testing.T) {
 
 		// Create sandboxes in entity store
 		for i, sb := range sandboxes {
-			attrs := []entity.Attr{
-				entity.Keyword(entity.Ident, sb.id.String()),
-			}
-
-			// Create sandbox entity
+			// Create sandbox entity with metadata
 			sandbox := &compute.Sandbox{
 				ID:     sb.id,
 				Status: sb.status,
 			}
-			attrs = append(attrs, sandbox.Encode()...)
+
+			attrs := entity.New(
+				entity.Keyword(entity.Ident, sb.id.String()),
+				sandbox.Encode,
+			)
 
 			// Mark the last sandbox as already migrated
 			if i == 3 {
 				md := core_v1alpha.Metadata{
 					Labels: types.LabelSet("index-migration-v1", "true"),
 				}
-				attrs = append(attrs, md.Encode()...)
+				attrs = entity.New(
+					entity.Keyword(entity.Ident, sb.id.String()),
+					sandbox.Encode,
+					md.Encode,
+				)
 			}
 
 			var rpcE entityserver_v1alpha.Entity
 			rpcE.SetId(sb.id.String())
-			rpcE.SetAttrs(attrs)
+			rpcE.SetAttrs(attrs.Attrs())
 			_, err := sbc.EAC.Put(ctx, &rpcE)
 			r.NoError(err)
 		}
