@@ -236,9 +236,12 @@ func (c *SandboxController) reconcileSandboxesOnBoot(ctx context.Context) error 
 		newLabels := types.LabelSet(migrationLabel, "true")
 		md.Labels = append(md.Labels, newLabels...)
 
-		patchAttrs := md.Encode()
+		patchAttrs := entity.New(
+			entity.Ref(entity.DBId, sb.ID),
+			md.Encode,
+		)
 
-		_, err := c.EAC.Patch(ctx, patchAttrs, e.Revision())
+		_, err := c.EAC.Patch(ctx, patchAttrs.Attrs(), e.Revision())
 		if err != nil {
 			c.Log.Warn("failed to migrate sandbox indexes",
 				"sandbox_id", sb.ID,
