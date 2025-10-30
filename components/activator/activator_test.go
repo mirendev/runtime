@@ -893,6 +893,153 @@ func TestActivatorDeletedPoolRecovery(t *testing.T) {
 	require.Greater(t, newPool.DesiredInstances, int64(0), "New pool should have desired instances > 0")
 }
 
+// TestActivatorFindsLauncherCreatedPool verifies that the activator can find and use
+// pools created by the DeploymentLauncher controller instead of creating its own.
+func TestActivatorFindsLauncherCreatedPool(t *testing.T) {
+	ctx := context.Background()
+
+	// Create in-memory entity server
+	server, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	// Create app entity
+	app := &core_v1alpha.App{}
+	appID, err := server.Client.Create(ctx, "test-app", app)
+	require.NoError(t, err)
+	app.ID = appID
+
+	testVer := &core_v1alpha.AppVersion{
+		App:      app.ID,
+		Version:  "v1",
+		ImageUrl: "test:latest",
+		Config: core_v1alpha.Config{
+			Port: 3000,
+			Services: []core_v1alpha.Services{
+				{
+					Name: "web",
+					ServiceConcurrency: core_v1alpha.ServiceConcurrency{
+						Mode:                "auto",
+						RequestsPerInstance: 10,
+						ScaleDownDelay:      "15m",
+					},
+				},
+			},
+		},
+	}
+	verID, err := server.Client.Create(ctx, "test-ver", testVer)
+	require.NoError(t, err)
+	testVer.ID = verID
+
+	log := testutils.TestLogger(t)
+
+	// Pre-create a pool in the entity store (simulating DeploymentLauncher behavior)
+	launcherPool := &compute_v1alpha.SandboxPool{
+		Service: "web",
+		SandboxSpec: compute_v1alpha.SandboxSpec{
+			Version: testVer.ID,
+			Container: []compute_v1alpha.SandboxSpecContainer{
+				{
+					Name:  "app",
+					Image: "test:latest",
+					Port: []compute_v1alpha.SandboxSpecContainerPort{
+						{Port: 3000, Name: "http", Type: "http"},
+					},
+				},
+			},
+		},
+		DesiredInstances: 0, // Launcher starts at 0 for auto mode
+	}
+	poolID, err := server.Client.Create(ctx, "launcher-pool", launcherPool)
+	require.NoError(t, err)
+	launcherPool.ID = poolID
+
+	// Create activator with NO sandboxes and empty cache
+	activator := &localActivator{
+		log:             log,
+		eac:             server.EAC,
+		versions:        make(map[verKey]*verSandboxes),
+		pools:           make(map[verKey]*poolState),
+		newSandboxChans: make(map[verKey][]chan struct{}),
+	}
+
+	// Simulate a sandbox becoming available (created by SandboxPoolManager)
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+
+		key := verKey{testVer.ID.String(), "web"}
+
+		// Create a RUNNING sandbox
+		strategy := concurrency.NewStrategy(&testVer.Config.Services[0].ServiceConcurrency)
+		tracker := strategy.InitializeTracker()
+
+		ent := entity.Blank()
+		ent.SetID("sb-launcher")
+
+		newSandbox := &sandbox{
+			sandbox: &compute_v1alpha.Sandbox{
+				ID:     entity.Id("sb-launcher"),
+				Status: compute_v1alpha.RUNNING,
+			},
+			ent:         ent,
+			lastRenewal: time.Now(),
+			url:         "http://10.0.0.1:3000",
+			tracker:     tracker,
+		}
+
+		activator.mu.Lock()
+		vs, ok := activator.versions[key]
+		if !ok {
+			vs = &verSandboxes{
+				ver:       testVer,
+				sandboxes: []*sandbox{},
+				strategy:  strategy,
+			}
+			activator.versions[key] = vs
+		}
+		vs.sandboxes = append(vs.sandboxes, newSandbox)
+
+		// Notify any waiters
+		if chans, ok := activator.newSandboxChans[key]; ok {
+			for _, ch := range chans {
+				select {
+				case ch <- struct{}{}:
+				default:
+				}
+			}
+		}
+		activator.mu.Unlock()
+
+		log.Info("sandbox ready from launcher pool", "sandbox", newSandbox.sandbox.ID)
+	}()
+
+	// Acquire a lease - should find launcher-created pool via retry logic
+	timeoutCtx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
+	defer cancel()
+
+	lease, err := activator.AcquireLease(timeoutCtx, testVer, "web")
+	require.NoError(t, err)
+	require.NotNil(t, lease)
+
+	// Verify the activator found and used the launcher-created pool
+	key := verKey{testVer.ID.String(), "web"}
+	activator.mu.RLock()
+	poolState, poolExists := activator.pools[key]
+	activator.mu.RUnlock()
+
+	assert.True(t, poolExists, "Pool should be found and cached")
+	if poolExists {
+		assert.NotNil(t, poolState.pool, "Pool state should have pool entity")
+		assert.Equal(t, poolID, poolState.pool.ID, "Should have found the launcher-created pool, not created a new one")
+		assert.Equal(t, int64(1), poolState.pool.DesiredInstances, "Pool should have incremented desired instances to 1")
+	}
+
+	// Verify only one pool exists in the store (no duplicate creation)
+	resp, err := server.EAC.List(ctx, entity.Ref(entity.EntityKind, compute_v1alpha.KindSandboxPool))
+	require.NoError(t, err)
+	pools := resp.Values()
+	assert.Len(t, pools, 1, "Should have exactly one pool (the launcher-created one)")
+}
+
 // TestFindPoolInStore verifies that findPoolInStore correctly queries the entity store
 // for pools created by the DeploymentLauncher controller.
 func TestFindPoolInStore(t *testing.T) {
