@@ -81,6 +81,9 @@ kinds:
             name:
               type: string
               doc: The service name (e.g. web, worker)
+            image:
+              type: string
+              doc: Optional container image for this service (e.g. postgres:16). If not specified, uses the app-level built image.
             service_concurrency:
               type: component
               doc: Concurrency configuration for this service

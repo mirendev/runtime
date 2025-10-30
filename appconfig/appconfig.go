@@ -34,6 +34,7 @@ type ServiceConcurrencyConfig struct {
 // ServiceConfig represents configuration for a specific service
 type ServiceConfig struct {
 	Command     string                    `toml:"command"`
+	Image       string                    `toml:"image"`
 	Concurrency *ServiceConcurrencyConfig `toml:"concurrency"`
 }
 
