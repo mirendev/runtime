@@ -187,8 +187,16 @@ func (c *VictoriaMetricsComponent) stopTask(ctx context.Context, task containerd
 			if err := task.Kill(killCtx, unix.SIGKILL); err != nil {
 				c.Log.Error("failed to send SIGKILL to victoriametrics task", "error", err)
 			} else {
-				if _, waitErr := task.Wait(killCtx); waitErr != nil {
+				statusChan, waitErr := task.Wait(killCtx)
+				if waitErr != nil {
 					c.Log.Error("victoriametrics task wait after SIGKILL failed", "error", waitErr)
+				} else {
+					select {
+					case es := <-statusChan:
+						c.Log.Info("victoriametrics task exited after SIGKILL", "code", es.ExitCode())
+					case <-killCtx.Done():
+						c.Log.Error("victoriametrics task did not exit after SIGKILL timeout")
+					}
 				}
 			}
 		}
