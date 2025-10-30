@@ -204,18 +204,31 @@ func (c *SandboxController) reconcileSandboxesOnBoot(ctx context.Context) error 
 
 	// Migrate sandbox indexes: touch each sandbox to ensure nested component field indexes are created.
 	// This is needed because we changed from top-level sandbox.version to nested sandbox.spec.version indexing.
-	// We patch each entity with empty attributes to trigger index recreation without changing the data.
+	// We patch each entity with a timestamp update to trigger index recreation.
 	// We can remove this migration code after all environments have been updated.
 	migratedCount := 0
+	skippedCount := 0
 	for _, e := range resp.Values() {
 		var sb compute.Sandbox
 		sb.Decode(e.Entity())
 
-		// Patch with empty attributes to trigger index recreation without modifying data
-		_, err := c.EAC.Patch(ctx, []entity.Attr{}, e.Revision())
+		// Skip DEAD sandboxes - no need to rebuild their indexes
+		if sb.Status == compute.DEAD {
+			skippedCount++
+			continue
+		}
+
+		// Patch with last_activity timestamp to trigger index recreation
+		// This is a harmless update that won't affect sandbox behavior
+		patchAttrs := []entity.Attr{
+			entity.Time(compute.SandboxLastActivityId, time.Now()),
+		}
+
+		_, err := c.EAC.Patch(ctx, patchAttrs, e.Revision())
 		if err != nil {
 			c.Log.Warn("failed to migrate sandbox indexes",
 				"sandbox_id", sb.ID,
+				"patch_attrs", patchAttrs,
 				"error", err)
 			// Continue with other sandboxes even if one fails
 			continue
@@ -225,6 +238,7 @@ func (c *SandboxController) reconcileSandboxesOnBoot(ctx context.Context) error 
 
 	c.Log.Info("migrated sandbox indexes",
 		"migrated_count", migratedCount,
+		"skipped_dead", skippedCount,
 		"total_count", len(resp.Values()))
 
 	var unhealthySandboxes []entity.Id
