@@ -224,6 +224,9 @@ func (m *Manager) Delete(ctx context.Context, poolID entity.Id) error {
 // listSandboxes returns all sandboxes for a pool
 func (m *Manager) listSandboxes(ctx context.Context, pool *compute_v1alpha.SandboxPool) ([]*compute_v1alpha.Sandbox, error) {
 	// Query sandboxes by version index (reduces O(N) to O(N_version))
+	// Note: We use the top-level sandbox.version field for indexing (not sandbox.spec.version)
+	// because nested fields within components cannot be indexed at the entity level.
+	// Both fields are maintained in sync - version is a denormalized index field.
 	resp, err := m.eac.List(ctx, entity.Ref(compute_v1alpha.SandboxVersionId, pool.SandboxSpec.Version))
 	if err != nil {
 		return nil, fmt.Errorf("failed to list sandboxes: %w", err)

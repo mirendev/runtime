@@ -269,12 +269,14 @@ func (c *SandboxController) migrateLegacySandboxes(ctx context.Context) error {
 			sb.Spec.StaticHost = append(sb.Spec.StaticHost, compute.SandboxSpecStaticHost(sh))
 		}
 
-		// Clear legacy fields - Spec is now the single source of truth
+		// Clear legacy fields that have been migrated to Spec
+		// Note: We keep Version populated because it's still used for backward compatibility
+		// and as a denormalized field. The migration maintains both sb.Version and sb.Spec.Version.
 		sb.Container = nil
 		sb.Route = nil
 		sb.Volume = nil
 		sb.StaticHost = nil
-		sb.Version = ""
+		// sb.Version - kept for backward compatibility (already copied to sb.Spec.Version)
 		sb.LogEntity = ""
 		sb.LogAttribute = nil
 		sb.HostNetwork = false
