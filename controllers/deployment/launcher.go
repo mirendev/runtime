@@ -70,8 +70,14 @@ func (l *Launcher) reconcileAppVersion(ctx context.Context, app *core_v1alpha.Ap
 		}
 	}
 
-	// TODO: Clean up old version pools (pools not referenced by current version)
-	// For now, we'll rely on SandboxPoolManager's existing cleanup logic
+	// Clean up old version pools (pools not referenced by current version)
+	if err := l.cleanupOldVersionPools(ctx, app, ver.ID); err != nil {
+		l.Log.Error("failed to cleanup old version pools",
+			"app", app.ID,
+			"version", ver.ID,
+			"error", err)
+		// Don't fail the entire reconciliation if cleanup fails
+	}
 
 	return nil
 }
@@ -310,25 +316,46 @@ func (l *Launcher) specsMatch(spec1, spec2 *compute_v1alpha.SandboxSpec) bool {
 	return true
 }
 
-// envVarsEqual compares two env var slices in an order-independent way
+// envVarsEqual compares two env var slices in an order-independent way,
+// ignoring version-specific system env vars (MIREN_VERSION, MIREN_APP)
 func envVarsEqual(env1, env2 []string) bool {
-	if len(env1) != len(env2) {
+	// Filter out system env vars
+	filtered1 := filterSystemEnvVars(env1)
+	filtered2 := filterSystemEnvVars(env2)
+
+	if len(filtered1) != len(filtered2) {
 		return false
 	}
 
 	// Build map for O(n) comparison
 	envMap := make(map[string]bool)
-	for _, e := range env1 {
+	for _, e := range filtered1 {
 		envMap[e] = true
 	}
 
-	for _, e := range env2 {
+	for _, e := range filtered2 {
 		if !envMap[e] {
 			return false
 		}
 	}
 
 	return true
+}
+
+// filterSystemEnvVars filters out system-managed env vars that shouldn't affect pool reuse
+func filterSystemEnvVars(envVars []string) []string {
+	filtered := []string{}
+	for _, e := range envVars {
+		// Skip MIREN_VERSION and MIREN_APP - these are set automatically and change per version
+		if len(e) >= 13 && e[:13] == "MIREN_VERSION" {
+			continue
+		}
+		if len(e) >= 9 && e[:9] == "MIREN_APP" {
+			continue
+		}
+		filtered = append(filtered, e)
+	}
+	return filtered
 }
 
 // portsEqual compares two port slices
@@ -370,6 +397,96 @@ func (l *Launcher) updatePool(ctx context.Context, pool *compute_v1alpha.Sandbox
 	_, err := l.EAC.Put(ctx, &rpcE)
 	if err != nil {
 		return fmt.Errorf("failed to update pool: %w", err)
+	}
+
+	return nil
+}
+
+// cleanupOldVersionPools removes old version references from pools and scales down unreferenced pools
+func (l *Launcher) cleanupOldVersionPools(ctx context.Context, app *core_v1alpha.App, currentVersionID entity.Id) error {
+	l.Log.Info("cleaning up old version pools",
+		"app", app.ID,
+		"current_version", currentVersionID)
+
+	// List all pools
+	poolsResp, err := l.EAC.List(ctx, entity.Ref(entity.EntityKind, compute_v1alpha.KindSandboxPool))
+	if err != nil {
+		return fmt.Errorf("failed to list pools: %w", err)
+	}
+
+	poolCount := len(poolsResp.Values())
+	l.Log.Info("found pools to check", "count", poolCount)
+
+	for _, ent := range poolsResp.Values() {
+		var pool compute_v1alpha.SandboxPool
+		pool.Decode(ent.Entity())
+
+		// Get pool metadata to check app label
+		var poolMeta core_v1alpha.Metadata
+		poolMeta.Decode(ent.Entity())
+
+		// Check if pool belongs to this app
+		appLabel, _ := poolMeta.Labels.Get("app")
+		if appLabel != app.ID.String() {
+			l.Log.Debug("skipping pool for different app",
+				"pool", pool.ID,
+				"pool_app", appLabel,
+				"our_app", app.ID)
+			continue
+		}
+
+		l.Log.Info("checking pool for cleanup",
+			"pool", pool.ID,
+			"service", pool.Service,
+			"references", pool.ReferencedByVersions)
+
+		// Check if this pool is being used by the current version
+		isUsedByCurrentVersion := containsRef(pool.ReferencedByVersions, currentVersionID)
+
+		if isUsedByCurrentVersion {
+			// Pool is being reused by current version - keep ALL references
+			// (both old and new versions are using the same pool)
+			l.Log.Info("pool is being reused by current version, keeping all references",
+				"pool", pool.ID,
+				"service", pool.Service)
+			continue
+		}
+
+		// Pool is NOT being used by current version - remove old references and scale down
+		updated := false
+		newRefs := []entity.Id{}
+
+		for _, ref := range pool.ReferencedByVersions {
+			// Remove any version references (they're all old versions since current version isn't using this pool)
+			updated = true
+			l.Log.Info("removing old version reference from unused pool",
+				"pool", pool.ID,
+				"service", pool.Service,
+				"old_version", ref)
+		}
+
+		if !updated {
+			continue
+		}
+
+		// Update pool with new references
+		pool.ReferencedByVersions = newRefs
+
+		// If no versions reference this pool, scale to 0
+		if len(newRefs) == 0 {
+			l.Log.Info("scaling down unreferenced pool",
+				"pool", pool.ID,
+				"service", pool.Service,
+				"app", app.ID)
+			pool.DesiredInstances = 0
+		}
+
+		// Persist changes
+		err := l.updatePool(ctx, &pool)
+		if err != nil {
+			l.Log.Error("failed to update pool", "error", err, "pool", pool.ID)
+			continue
+		}
 	}
 
 	return nil
