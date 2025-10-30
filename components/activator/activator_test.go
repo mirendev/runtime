@@ -890,3 +890,111 @@ func TestActivatorDeletedPoolRecovery(t *testing.T) {
 	require.Equal(t, testVer.ID, newPool.SandboxSpec.Version, "New pool should reference correct version")
 	require.Greater(t, newPool.DesiredInstances, int64(0), "New pool should have desired instances > 0")
 }
+
+// TestFindPoolInStore verifies that findPoolInStore correctly queries the entity store
+// for pools created by the DeploymentLauncher controller.
+func TestFindPoolInStore(t *testing.T) {
+	ctx := context.Background()
+
+	// Create in-memory entity server
+	server, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	// Create app entity
+	app := &core_v1alpha.App{}
+	appID, err := server.Client.Create(ctx, "test-app", app)
+	require.NoError(t, err)
+	app.ID = appID
+
+	// Create app version
+	testVer := &core_v1alpha.AppVersion{
+		App:      app.ID,
+		Version:  "v1",
+		ImageUrl: "test:latest",
+		Config: core_v1alpha.Config{
+			Port: 3000,
+			Services: []core_v1alpha.Services{
+				{
+					Name: "web",
+					ServiceConcurrency: core_v1alpha.ServiceConcurrency{
+						Mode:                "auto",
+						RequestsPerInstance: 10,
+					},
+				},
+			},
+		},
+	}
+	verID, err := server.Client.Create(ctx, "test-ver", testVer)
+	require.NoError(t, err)
+	testVer.ID = verID
+
+	log := testutils.TestLogger(t)
+
+	// Create activator
+	activator := &localActivator{
+		log: log,
+		eac: server.EAC,
+	}
+
+	t.Run("finds existing pool", func(t *testing.T) {
+		// Create a pool in the entity store (simulating DeploymentLauncher)
+		pool := &compute_v1alpha.SandboxPool{
+			Service: "web",
+			SandboxSpec: compute_v1alpha.SandboxSpec{
+				Version: testVer.ID,
+				Container: []compute_v1alpha.SandboxSpecContainer{
+					{
+						Name:  "app",
+						Image: "test:latest",
+						Port: []compute_v1alpha.SandboxSpecContainerPort{
+							{Port: 3000, Name: "http"},
+						},
+					},
+				},
+			},
+			DesiredInstances: 1,
+		}
+
+		poolID, err := server.Client.Create(ctx, "test-pool", pool)
+		require.NoError(t, err)
+		pool.ID = poolID
+
+		// Try to find the pool
+		foundPool, err := activator.findPoolInStore(ctx, testVer.ID, "web")
+		require.NoError(t, err)
+		require.NotNil(t, foundPool, "Should find the pool")
+		assert.Equal(t, poolID, foundPool.ID)
+		assert.Equal(t, "web", foundPool.Service)
+		assert.Equal(t, testVer.ID, foundPool.SandboxSpec.Version)
+	})
+
+	t.Run("returns nil for wrong service", func(t *testing.T) {
+		// Try to find pool with wrong service name
+		foundPool, err := activator.findPoolInStore(ctx, testVer.ID, "worker")
+		require.NoError(t, err)
+		assert.Nil(t, foundPool, "Should not find pool with wrong service name")
+	})
+
+	t.Run("returns nil for wrong version", func(t *testing.T) {
+		// Try to find pool with wrong version
+		wrongVersionID := entity.Id("ver-wrong")
+		foundPool, err := activator.findPoolInStore(ctx, wrongVersionID, "web")
+		require.NoError(t, err)
+		assert.Nil(t, foundPool, "Should not find pool with wrong version")
+	})
+
+	t.Run("returns nil when no pools exist", func(t *testing.T) {
+		// Create a fresh entity server with no pools
+		freshServer, cleanup := testutils.NewInMemEntityServer(t)
+		defer cleanup()
+
+		freshActivator := &localActivator{
+			log: log,
+			eac: freshServer.EAC,
+		}
+
+		foundPool, err := freshActivator.findPoolInStore(ctx, testVer.ID, "web")
+		require.NoError(t, err)
+		assert.Nil(t, foundPool, "Should return nil when no pools exist")
+	})
+}

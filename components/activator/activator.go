@@ -489,6 +489,38 @@ func (a *localActivator) ensureSandboxPool(ctx context.Context, ver *core_v1alph
 	}
 }
 
+// findPoolInStore queries the entity store for a pool matching the given version and service.
+// This is used to find pools created by the DeploymentLauncher controller.
+// Returns nil if no matching pool is found (not an error - caller should decide whether to retry or create).
+func (a *localActivator) findPoolInStore(ctx context.Context, versionID entity.Id, service string) (*compute_v1alpha.SandboxPool, error) {
+	// List all sandbox pools
+	poolsResp, err := a.eac.List(ctx, entity.Ref(entity.EntityKind, compute_v1alpha.KindSandboxPool))
+	if err != nil {
+		return nil, fmt.Errorf("failed to list pools: %w", err)
+	}
+
+	// Find pool matching version + service
+	for _, ent := range poolsResp.Values() {
+		var pool compute_v1alpha.SandboxPool
+		pool.Decode(ent.Entity())
+
+		if pool.Service != service {
+			continue
+		}
+
+		// Check if this pool is for our version
+		if pool.SandboxSpec.Version == versionID {
+			a.log.Debug("found pool in store",
+				"pool", pool.ID,
+				"service", service,
+				"version", versionID)
+			return &pool, nil
+		}
+	}
+
+	return nil, nil // Not found
+}
+
 func (a *localActivator) ReleaseLease(ctx context.Context, lease *Lease) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
