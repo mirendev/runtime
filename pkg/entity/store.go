@@ -710,7 +710,9 @@ func (s *EtcdStore) checkRevisionConflict(entity *Entity, expectedRevision int64
 // collectIndexedAttributes builds a map of indexed attributes from the entity
 func (s *EtcdStore) collectIndexedAttributes(ctx context.Context, attrs []Attr) (map[Id][]Attr, error) {
 	indexedAttrs := make(map[Id][]Attr)
-	for _, attr := range attrs {
+	// Enumerate all attributes including nested ones in components
+	allAttrs := enumerateAllAttrs(attrs)
+	for _, attr := range allAttrs {
 		schema, err := s.GetAttributeSchema(ctx, attr.ID)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get attribute schema: %w", err)
@@ -725,7 +727,9 @@ func (s *EtcdStore) collectIndexedAttributes(ctx context.Context, attrs []Attr) 
 // separateSessionAttributes separates attributes into primary and session attributes
 func (s *EtcdStore) separateSessionAttributes(ctx context.Context, attrs []Attr) (primary, session []Attr, indexedAttrs map[Id][]Attr, err error) {
 	indexedAttrs = make(map[Id][]Attr)
-	for _, attr := range attrs {
+	// Enumerate all attributes including nested ones in components for indexing
+	allAttrs := enumerateAllAttrs(attrs)
+	for _, attr := range allAttrs {
 		schema, err := s.GetAttributeSchema(ctx, attr.ID)
 		if err != nil {
 			return nil, nil, nil, fmt.Errorf("failed to get attribute schema: %w", err)
@@ -733,6 +737,14 @@ func (s *EtcdStore) separateSessionAttributes(ctx context.Context, attrs []Attr)
 
 		if schema.Index {
 			indexedAttrs[attr.ID] = append(indexedAttrs[attr.ID], attr)
+		}
+	}
+
+	// Separate top-level attributes into session vs primary (don't enumerate here)
+	for _, attr := range attrs {
+		schema, err := s.GetAttributeSchema(ctx, attr.ID)
+		if err != nil {
+			return nil, nil, nil, fmt.Errorf("failed to get attribute schema: %w", err)
 		}
 
 		if schema.Session {

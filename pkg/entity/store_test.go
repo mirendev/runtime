@@ -1649,6 +1649,82 @@ func TestEtcdStore_NestedComponentFieldIndexing(t *testing.T) {
 		assert.Len(t, resultsV2, 1, "Should find entity with v2")
 		assert.Equal(t, entity3.Id(), resultsV2[0])
 	})
+
+	t.Run("PatchEntity rebuilds indexes for nested component fields", func(t *testing.T) {
+		// This test verifies that PatchEntity properly handles nested indexed fields
+		// when updating entities - both creating new indexes and removing old ones.
+
+		// Create a component attribute type
+		_, err := store.CreateEntity(t.Context(), New(
+			Ident, "test/patch-spec",
+			Doc, "A component type for patch testing",
+			Cardinality, CardinalityOne,
+			Type, TypeComponent,
+		))
+		require.NoError(t, err)
+
+		// Create an indexed field that will be nested in the component
+		_, err = store.CreateEntity(t.Context(), New(
+			Ident, "test/patch-spec.version",
+			Doc, "Version field within patch-spec component",
+			Cardinality, CardinalityOne,
+			Type, TypeRef,
+			Index, true, // Mark nested field as indexed
+		))
+		require.NoError(t, err)
+
+		// Create version entities
+		v1 := Id("version/patch-v1")
+		v2 := Id("version/patch-v2")
+
+		_, err = store.CreateEntity(t.Context(), New(Ref(DBId, v1)))
+		require.NoError(t, err)
+
+		_, err = store.CreateEntity(t.Context(), New(Ref(DBId, v2)))
+		require.NoError(t, err)
+
+		// Create an entity with nested indexed field pointing to v1
+		entity, err := store.CreateEntity(t.Context(), New([]Attr{
+			Keyword(Ident, "patch-resource"),
+			Component(Id("test/patch-spec"), []Attr{
+				Ref(Id("test/patch-spec.version"), v1),
+			}),
+		}))
+		require.NoError(t, err)
+
+		// Verify it's indexed under v1
+		results, err := store.ListIndex(t.Context(), Ref(Id("test/patch-spec.version"), v1))
+		require.NoError(t, err)
+		assert.Len(t, results, 1, "Should find entity indexed under v1")
+		assert.Equal(t, entity.Id(), results[0])
+
+		// Verify it's NOT indexed under v2
+		results, err = store.ListIndex(t.Context(), Ref(Id("test/patch-spec.version"), v2))
+		require.NoError(t, err)
+		assert.Len(t, results, 0, "Should not find entity indexed under v2")
+
+		// Patch the entity to change the nested version from v1 to v2
+		patched := New([]Attr{
+			Ref(DBId, entity.Id()),
+			Component(Id("test/patch-spec"), []Attr{
+				Ref(Id("test/patch-spec.version"), v2), // Changed to v2
+			}),
+		})
+
+		_, err = store.PatchEntity(t.Context(), patched, WithFromRevision(entity.GetRevision()))
+		require.NoError(t, err)
+
+		// After patch, entity should be indexed under v2
+		results, err = store.ListIndex(t.Context(), Ref(Id("test/patch-spec.version"), v2))
+		require.NoError(t, err)
+		assert.Len(t, results, 1, "Should find entity indexed under v2 after patch")
+		assert.Equal(t, entity.Id(), results[0])
+
+		// After patch, entity should NO LONGER be indexed under v1
+		results, err = store.ListIndex(t.Context(), Ref(Id("test/patch-spec.version"), v1))
+		require.NoError(t, err)
+		assert.Len(t, results, 0, "Should not find entity indexed under v1 after patch")
+	})
 }
 
 func TestEntity_Fixup_DbId(t *testing.T) {
