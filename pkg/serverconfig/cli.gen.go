@@ -33,11 +33,11 @@ type CLIFlags struct {
 	TLSConfigAdditionalNames             []string `long:"dns-names" description:"Additional DNS names assigned to the server cert"`
 	TLSConfigStandardTLS                 *bool    `long:"serve-tls" description:"Expose the http ingress on standard TLS ports"`
 	VictoriaLogsConfigAddress            *string  `long:"victorialogs-addr" description:"VictoriaLogs address (when not using embedded)"`
-	VictoriaLogsConfigHTTPPort           *int     `long:"victorialogs-http-port" description:"VictoriaLogs HTTP port"`
+	VictoriaLogsConfigHTTPPort           *int     `long:"victorialogs-http-port" description:"VictoriaLogs HTTP port in embedded mode"`
 	VictoriaLogsConfigRetentionPeriod    *string  `long:"victorialogs-retention" description:"VictoriaLogs retention period (e.g. 30d, 2w, 1y)"`
 	VictoriaLogsConfigStartEmbedded      *bool    `long:"start-victorialogs" description:"Start embedded VictoriaLogs server"`
 	VictoriaMetricsConfigAddress         *string  `long:"victoriametrics-addr" description:"VictoriaMetrics address (when not using embedded)"`
-	VictoriaMetricsConfigHTTPPort        *int     `long:"victoriametrics-http-port" description:"VictoriaMetrics HTTP port"`
+	VictoriaMetricsConfigHTTPPort        *int     `long:"victoriametrics-http-port" description:"VictoriaMetrics HTTP port in embedded mode"`
 	VictoriaMetricsConfigRetentionPeriod *string  `long:"victoriametrics-retention" description:"VictoriaMetrics retention period in months"`
 	VictoriaMetricsConfigStartEmbedded   *bool    `long:"start-victoriametrics" description:"Start embedded VictoriaMetrics server"`
 }

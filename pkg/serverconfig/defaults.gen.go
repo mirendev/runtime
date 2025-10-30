@@ -79,7 +79,7 @@ func DefaultTLSConfig() TLSConfig {
 // DefaultVictoriaLogsConfig returns default VictoriaLogsConfig
 func DefaultVictoriaLogsConfig() VictoriaLogsConfig {
 	return VictoriaLogsConfig{
-		Address:         strPtr(""),
+		Address:         strPtr("victorialogs:9428"),
 		HTTPPort:        intPtr(9428),
 		RetentionPeriod: strPtr("30d"),
 		StartEmbedded:   nil,
@@ -89,7 +89,7 @@ func DefaultVictoriaLogsConfig() VictoriaLogsConfig {
 // DefaultVictoriaMetricsConfig returns default VictoriaMetricsConfig
 func DefaultVictoriaMetricsConfig() VictoriaMetricsConfig {
 	return VictoriaMetricsConfig{
-		Address:         strPtr(""),
+		Address:         strPtr("victoriametrics:8428"),
 		HTTPPort:        intPtr(8428),
 		RetentionPeriod: strPtr("1"),
 		StartEmbedded:   nil,

@@ -338,7 +338,12 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 				ctx.Log.Error("failed to stop victorialogs component", "error", err)
 			}
 		}()
-	} else if cfg.Victorialogs.GetAddress() != "" {
+	} else {
+		if cfg.Victorialogs.GetAddress() == "" {
+			ctx.Log.Error("victorialogs address specified but embedded victorialogs not started", "address", cfg.Victorialogs.GetAddress())
+			return fmt.Errorf("victorialogs address specified but embedded victorialogs not started")
+		}
+
 		// Override VictoriaLogs address if provided (for external VictoriaLogs)
 		ctx.Log.Info("using external victorialogs", "address", cfg.Victorialogs.GetAddress())
 		ctx.Server.Override("victorialogs-address", cfg.Victorialogs.GetAddress())
@@ -396,7 +401,12 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 				ctx.Log.Error("failed to stop victoriametrics component", "error", err)
 			}
 		}()
-	} else if cfg.Victoriametrics.GetAddress() != "" {
+	} else {
+		if cfg.Victoriametrics.GetAddress() == "" {
+			ctx.Log.Error("victoriametrics address specified but embedded victorialogs not started", "address", cfg.Victorialogs.GetAddress())
+			return fmt.Errorf("victoriametrics address specified but embedded victorialogs not started")
+		}
+
 		// Override VictoriaMetrics address if provided (for external VictoriaMetrics)
 		ctx.Log.Info("using external victoriametrics", "address", cfg.Victoriametrics.GetAddress())
 		ctx.Server.Override("victoriametrics-address", cfg.Victoriametrics.GetAddress())

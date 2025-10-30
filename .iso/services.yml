@@ -21,3 +21,7 @@ services:
   victorialogs:
     image: oci.miren.cloud/victoria-logs:v1
     port: 9428
+
+  victoriametrics:
+    image: oci.miren.cloud/victoria-metrics:v1
+    port: 8428

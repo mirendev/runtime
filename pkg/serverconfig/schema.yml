@@ -314,7 +314,7 @@ configs:
         default: 9428
         cli:
           long: victorialogs-http-port
-          description: VictoriaLogs HTTP port
+          description: VictoriaLogs HTTP port in embedded mode
         env: MIREN_VICTORIALOGS_HTTP_PORT
         toml: http_port
         validation:
@@ -333,7 +333,7 @@ configs:
 
       address:
         type: string
-        default: ""
+        default: "victorialogs:9428"
         cli:
           long: victorialogs-addr
           description: VictoriaLogs address (when not using embedded)
@@ -360,7 +360,7 @@ configs:
         default: 8428
         cli:
           long: victoriametrics-http-port
-          description: VictoriaMetrics HTTP port
+          description: VictoriaMetrics HTTP port in embedded mode
         env: MIREN_VICTORIAMETRICS_HTTP_PORT
         toml: http_port
         validation:
@@ -379,7 +379,7 @@ configs:
 
       address:
         type: string
-        default: ""
+        default: "victoriametrics:8428"
         cli:
           long: victoriametrics-addr
           description: VictoriaMetrics address (when not using embedded)
