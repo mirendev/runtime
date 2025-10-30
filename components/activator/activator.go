@@ -44,7 +44,6 @@ import (
 	"miren.dev/runtime/pkg/concurrency"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/types"
-	"miren.dev/runtime/pkg/idgen"
 	"miren.dev/runtime/pkg/netutil"
 	"miren.dev/runtime/pkg/rpc/stream"
 )
@@ -521,56 +520,19 @@ func (a *localActivator) ensureSandboxPool(ctx context.Context, ver *core_v1alph
 			return foundPool, nil
 		}
 
-		// Pool not found after retries - fall back to creating it
-		a.log.Warn("pool not found in store after retries, creating as fallback",
+		// Pool not found after retries - DeploymentLauncher should have created it
+		a.mu.Unlock()
+		a.log.Error("pool not found in store after retries",
 			"service", service,
 			"version", ver.Version,
-			"retries", maxRetries)
+			"version_id", ver.ID,
+			"retries", maxRetries,
+			"error", "DeploymentLauncher should have created this pool")
 
-		// Claim creation by inserting sentinel
-		sentinel := &poolState{
-			inProgress: true,
-			done:       make(chan struct{}),
-		}
-		a.pools[key] = sentinel
-		a.mu.Unlock()
-
-		// Perform pool creation outside the lock
-		a.log.Info("creating new sandbox pool", "service", service)
-
-		spec, err := a.buildSandboxSpec(ctx, ver, service)
-		if err != nil {
-			// Creation failed - remove sentinel and notify waiters
-			a.mu.Lock()
-			sentinel.err = fmt.Errorf("failed to build sandbox spec: %w", err)
-			delete(a.pools, key)
-			close(sentinel.done)
-			a.mu.Unlock()
-			return nil, sentinel.err
-		}
-
-		pool, err := a.createSandboxPool(ctx, ver, service, spec)
-		if err != nil {
-			// Creation failed - remove sentinel and notify waiters
-			a.mu.Lock()
-			sentinel.err = fmt.Errorf("failed to create pool: %w", err)
-			delete(a.pools, key)
-			close(sentinel.done)
-			a.mu.Unlock()
-			return nil, sentinel.err
-		}
-
-		// Creation succeeded - replace sentinel with real pool
-		a.mu.Lock()
-		a.pools[key] = &poolState{
-			pool:       pool,
-			inProgress: false,
-		}
-		close(sentinel.done) // Notify waiters
-		a.mu.Unlock()
-
-		a.log.Info("created new sandbox pool", "pool", pool.ID, "service", service, "desired_instances", pool.DesiredInstances)
-		return pool, nil
+		return nil, fmt.Errorf(
+			"pool not found for app=%s version=%s service=%s after %d retries - "+
+				"DeploymentLauncher controller should have created this pool on deployment",
+			ver.App, ver.Version, service, maxRetries)
 	}
 }
 
@@ -1080,110 +1042,6 @@ func (a *localActivator) migrateOrphanedSandboxes(ctx context.Context, pool *com
 	}
 
 	return nil
-}
-
-func (a *localActivator) createSandboxPool(ctx context.Context, ver *core_v1alpha.AppVersion, service string, spec *compute_v1alpha.SandboxSpec) (*compute_v1alpha.SandboxPool, error) {
-	// Get service concurrency config to determine initial instance count
-	svcConcurrency, err := core_v1alpha.GetServiceConcurrency(ver, service)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get service concurrency: %w", err)
-	}
-
-	// Determine initial desired instances based on mode
-	desiredInstances := int64(1) // Default: start with 1 instance
-	if svcConcurrency.Mode == "fixed" && svcConcurrency.NumInstances > 0 {
-		// Fixed mode: use configured instance count
-		desiredInstances = svcConcurrency.NumInstances
-	}
-
-	pool := compute_v1alpha.SandboxPool{
-		Service:          service,
-		SandboxSpec:      *spec,
-		DesiredInstances: desiredInstances,
-	}
-
-	name := idgen.GenNS("pool")
-
-	var rpcE entityserver_v1alpha.Entity
-	rpcE.SetAttrs(entity.New(
-		(&core_v1alpha.Metadata{
-			Name: name,
-			Labels: types.LabelSet(
-				"app", ver.App.String(),
-				"version", ver.Version,
-				"service", service,
-			),
-		}).Encode,
-		entity.Ident, "pool/"+name,
-		pool.Encode,
-	).Attrs())
-
-	pr, err := a.eac.Put(ctx, &rpcE)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create pool entity: %w", err)
-	}
-
-	pool.ID = entity.Id(pr.Id())
-	return &pool, nil
-}
-
-func (a *localActivator) buildSandboxSpec(ctx context.Context, ver *core_v1alpha.AppVersion, service string) (*compute_v1alpha.SandboxSpec, error) {
-	// Get app metadata
-	appResp, err := a.eac.Get(ctx, ver.App.String())
-	if err != nil {
-		return nil, fmt.Errorf("failed to get app: %w", err)
-	}
-
-	var appMD core_v1alpha.Metadata
-	appMD.Decode(appResp.Entity().Entity())
-
-	spec := &compute_v1alpha.SandboxSpec{
-		Version:      ver.ID,
-		LogEntity:    ver.App.String(),
-		LogAttribute: types.LabelSet("stage", "app-run", "service", service),
-	}
-
-	// Determine port from config or default to 3000
-	port := int64(3000)
-	if ver.Config.Port > 0 {
-		port = ver.Config.Port
-	}
-
-	appCont := compute_v1alpha.SandboxSpecContainer{
-		Name:  "app",
-		Image: ver.ImageUrl,
-		Env: []string{
-			"MIREN_APP=" + appMD.Name,
-			"MIREN_VERSION=" + ver.Version,
-		},
-		Directory: "/app",
-		Port: []compute_v1alpha.SandboxSpecContainerPort{
-			{
-				Port: port,
-				Name: "http",
-				Type: "http",
-			},
-		},
-	}
-
-	for _, x := range ver.Config.Variable {
-		appCont.Env = append(appCont.Env, x.Key+"="+x.Value)
-	}
-
-	for _, s := range ver.Config.Commands {
-		if s.Service == service && s.Command != "" {
-			if ver.Config.Entrypoint != "" {
-				appCont.Command = ver.Config.Entrypoint + " " + s.Command
-			} else {
-				appCont.Command = s.Command
-			}
-			break
-		}
-	}
-
-	spec.Container = []compute_v1alpha.SandboxSpecContainer{appCont}
-
-	return spec, nil
 }
 
 // syncLastActivity periodically syncs in-memory lastRenewal timestamps to

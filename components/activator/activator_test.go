@@ -709,6 +709,27 @@ func TestActivatorNoPendingCreatesPool(t *testing.T) {
 
 	log := testutils.TestLogger(t)
 
+	// Pre-create a pool in the entity store (simulating DeploymentLauncher behavior)
+	launcherPool := &compute_v1alpha.SandboxPool{
+		Service: "web",
+		SandboxSpec: compute_v1alpha.SandboxSpec{
+			Version: testVer.ID,
+			Container: []compute_v1alpha.SandboxSpecContainer{
+				{
+					Name:  "app",
+					Image: "test:latest",
+					Port: []compute_v1alpha.SandboxSpecContainerPort{
+						{Port: 3000, Name: "http", Type: "http"},
+					},
+				},
+			},
+		},
+		DesiredInstances: 0, // Launcher starts at 0 for auto mode
+	}
+	poolID, err := server.Client.Create(ctx, "launcher-pool", launcherPool)
+	require.NoError(t, err)
+	launcherPool.ID = poolID
+
 	// Create activator with NO sandboxes
 	activator := &localActivator{
 		log:             log,
@@ -776,28 +797,29 @@ func TestActivatorNoPendingCreatesPool(t *testing.T) {
 
 	lease, err := activator.AcquireLease(timeoutCtx, testVer, "web")
 
-	// Should succeed after pool creates sandbox
+	// Should succeed after finding launcher-created pool and waiting for sandbox
 	require.NoError(t, err)
 	require.NotNil(t, lease)
 
-	// Verify pool was created and incremented
+	// Verify activator found the launcher-created pool and incremented it
 	key := verKey{testVer.ID.String(), "web"}
 	activator.mu.RLock()
 	poolState, poolExists := activator.pools[key]
 	activator.mu.RUnlock()
 
-	assert.True(t, poolExists, "Pool should be created when no sandboxes exist")
+	assert.True(t, poolExists, "Pool should be found and cached")
 	if poolExists {
 		assert.NotNil(t, poolState.pool, "Pool state should have pool entity")
+		assert.Equal(t, poolID, poolState.pool.ID, "Should have found the launcher-created pool")
 		assert.Equal(t, int64(1), poolState.pool.DesiredInstances, "Pool should have incremented desired instances")
 	}
 }
 
-// TestActivatorDeletedPoolRecovery verifies that the activator can recover from
-// deleted pools by clearing stale references and creating fresh pools. This simulates
-// the scenario where a pool is cleaned up (e.g., after deployment handover) while
-// the activator still has it cached.
-func TestActivatorDeletedPoolRecovery(t *testing.T) {
+// TestActivatorDeletedPoolDetection verifies that the activator correctly detects
+// when a cached pool has been deleted from the entity store and clears the stale cache.
+// In the new architecture, deleted pools are expected to be recreated by the
+// DeploymentLauncher, not the activator.
+func TestActivatorDeletedPoolDetection(t *testing.T) {
 	ctx := context.Background()
 	log := testutils.TestLogger(t)
 
@@ -835,28 +857,46 @@ func TestActivatorDeletedPoolRecovery(t *testing.T) {
 	require.NoError(t, err)
 	testVer.ID = verID
 
-	activator := NewLocalActivator(ctx, log, server.EAC)
+	// Pre-create a pool in the entity store (simulating DeploymentLauncher)
+	pool := &compute_v1alpha.SandboxPool{
+		Service: "web",
+		SandboxSpec: compute_v1alpha.SandboxSpec{
+			Version: testVer.ID,
+			Container: []compute_v1alpha.SandboxSpecContainer{
+				{
+					Name:  "app",
+					Image: "test:latest",
+					Port: []compute_v1alpha.SandboxSpecContainerPort{
+						{Port: 3000, Name: "http", Type: "http"},
+					},
+				},
+			},
+		},
+		DesiredInstances: 0,
+	}
+	poolID, err := server.Client.Create(ctx, "launcher-pool", pool)
+	require.NoError(t, err)
+	pool.ID = poolID
 
-	// First AcquireLease attempt - will create a pool and timeout waiting for sandbox
-	// (since we don't have a sandbox controller running)
-	// Timeout must be longer than retry logic (~700ms) to avoid context deadline during retries
-	timeoutCtx, cancel := context.WithTimeout(ctx, 1*time.Second)
+	activator := NewLocalActivator(ctx, log, server.EAC).(*localActivator)
+
+	// First AcquireLease - cache the pool and then increment it
+	// Use a very short timeout to fail fast (no sandbox will become available)
+	timeoutCtx, cancel := context.WithTimeout(ctx, 100*time.Millisecond)
 	defer cancel()
 
 	_, err = activator.AcquireLease(timeoutCtx, testVer, "web")
 	require.Error(t, err, "Should timeout since no sandbox controller is running")
 	require.Contains(t, err.Error(), "timeout", "Should be a timeout error")
 
-	// At this point, a pool should have been created and cached by the activator
-	// Let's verify the pool exists in the entity store
-	resp, err := server.EAC.List(ctx, entity.Ref(entity.EntityKind, compute_v1alpha.KindSandboxPool))
-	require.NoError(t, err)
-	pools := resp.Values()
-	require.Len(t, pools, 1, "Should have created one pool")
+	// Verify the pool was found and cached
+	key := verKey{testVer.ID.String(), "web"}
+	activator.mu.RLock()
+	_, exists := activator.pools[key]
+	activator.mu.RUnlock()
+	require.True(t, exists, "Pool should be cached after first acquire")
 
-	pool := &compute_v1alpha.SandboxPool{}
-	pool.Decode(pools[0].Entity())
-	originalPoolID := pool.ID
+	originalPoolID := poolID
 
 	// Now simulate cleanup: delete the pool from the entity store
 	// (this is what happens during deployment handover after scaling to zero)
@@ -867,30 +907,27 @@ func TestActivatorDeletedPoolRecovery(t *testing.T) {
 	_, err = server.EAC.Get(ctx, originalPoolID.String())
 	require.Error(t, err, "Pool should be deleted from entity store")
 
-	// Second AcquireLease attempt - should detect deleted pool and create a new one
-	// Timeout must be longer than retry logic (~700ms) to avoid context deadline during retries
+	// Second AcquireLease attempt - should detect deleted pool and clear cache
+	// Then fail with "pool not found" error (launcher should recreate)
 	timeoutCtx2, cancel2 := context.WithTimeout(ctx, 1*time.Second)
 	defer cancel2()
 
 	_, err = activator.AcquireLease(timeoutCtx2, testVer, "web")
-	require.Error(t, err, "Should timeout since no sandbox controller is running")
-	require.Contains(t, err.Error(), "timeout", "Should be a timeout error")
+	require.Error(t, err, "Should error since pool was deleted")
+	require.Contains(t, err.Error(), "pool not found", "Should be pool not found error")
+	require.Contains(t, err.Error(), "DeploymentLauncher", "Error should mention DeploymentLauncher")
 
-	// Verify recovery: a NEW pool should now exist (different ID from the original)
-	resp, err = server.EAC.List(ctx, entity.Ref(entity.EntityKind, compute_v1alpha.KindSandboxPool))
+	// Verify the cache was cleared (activator detected the deletion)
+	activator.mu.RLock()
+	_, stillCached := activator.pools[key]
+	activator.mu.RUnlock()
+	require.False(t, stillCached, "Pool should have been removed from cache after detecting deletion")
+
+	// Verify no new pool was created (activator doesn't create pools anymore)
+	resp, err := server.EAC.List(ctx, entity.Ref(entity.EntityKind, compute_v1alpha.KindSandboxPool))
 	require.NoError(t, err)
-	pools = resp.Values()
-	require.Len(t, pools, 1, "Should have one pool after recovery")
-
-	newPool := &compute_v1alpha.SandboxPool{}
-	newPool.Decode(pools[0].Entity())
-	require.NotEqual(t, originalPoolID, newPool.ID,
-		"Should have created a new pool with different ID after detecting deletion")
-
-	// Verify the new pool has correct configuration
-	require.Equal(t, "web", newPool.Service, "New pool should have correct service name")
-	require.Equal(t, testVer.ID, newPool.SandboxSpec.Version, "New pool should reference correct version")
-	require.Greater(t, newPool.DesiredInstances, int64(0), "New pool should have desired instances > 0")
+	pools := resp.Values()
+	require.Len(t, pools, 0, "Activator should not have created a new pool")
 }
 
 // TestActivatorFindsLauncherCreatedPool verifies that the activator can find and use
