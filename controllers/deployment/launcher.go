@@ -148,10 +148,10 @@ func (l *Launcher) ensurePoolForService(ctx context.Context, app *core_v1alpha.A
 	}
 
 	pool := &compute_v1alpha.SandboxPool{
-		Service:               serviceName,
-		SandboxSpec:           *spec,
-		DesiredInstances:      desiredInstances,
-		ReferencedByVersions:  []entity.Id{ver.ID},
+		Service:              serviceName,
+		SandboxSpec:          *spec,
+		DesiredInstances:     desiredInstances,
+		ReferencedByVersions: []entity.Id{ver.ID},
 	}
 
 	name := idgen.GenNS("pool")
@@ -390,14 +390,24 @@ func containsRef(refs []entity.Id, ref entity.Id) bool {
 
 // updatePool updates a pool entity in the store
 func (l *Launcher) updatePool(ctx context.Context, pool *compute_v1alpha.SandboxPool) error {
+	l.Log.Info("updating pool",
+		"pool", pool.ID,
+		"desired_instances", pool.DesiredInstances,
+		"references", pool.ReferencedByVersions)
+
+	// Use Put to update the pool - this replaces the entity and properly handles empty slices
 	var rpcE entityserver_v1alpha.Entity
 	rpcE.SetId(pool.ID.String())
-	rpcE.SetAttrs(entity.New(pool.Encode).Attrs())
+	rpcE.SetAttrs(entity.New(
+		pool.Encode,
+	).Attrs())
 
 	_, err := l.EAC.Put(ctx, &rpcE)
 	if err != nil {
 		return fmt.Errorf("failed to update pool: %w", err)
 	}
+
+	l.Log.Info("pool update successful", "pool", pool.ID)
 
 	return nil
 }
@@ -454,7 +464,6 @@ func (l *Launcher) cleanupOldVersionPools(ctx context.Context, app *core_v1alpha
 
 		// Pool is NOT being used by current version - remove old references and scale down
 		updated := false
-		newRefs := []entity.Id{}
 
 		for _, ref := range pool.ReferencedByVersions {
 			// Remove any version references (they're all old versions since current version isn't using this pool)
@@ -469,17 +478,16 @@ func (l *Launcher) cleanupOldVersionPools(ctx context.Context, app *core_v1alpha
 			continue
 		}
 
-		// Update pool with new references
-		pool.ReferencedByVersions = newRefs
+		// Update pool with nil slice to ensure zero value is properly encoded
+		// (empty slice []entity.Id{} might be filtered out by entity encoder)
+		pool.ReferencedByVersions = nil
 
-		// If no versions reference this pool, scale to 0
-		if len(newRefs) == 0 {
-			l.Log.Info("scaling down unreferenced pool",
-				"pool", pool.ID,
-				"service", pool.Service,
-				"app", app.ID)
-			pool.DesiredInstances = 0
-		}
+		// Scale to 0 since no versions reference this pool
+		l.Log.Info("scaling down unreferenced pool",
+			"pool", pool.ID,
+			"service", pool.Service,
+			"app", app.ID)
+		pool.DesiredInstances = 0
 
 		// Persist changes
 		err := l.updatePool(ctx, &pool)

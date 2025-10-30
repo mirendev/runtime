@@ -79,3 +79,18 @@ func (s *InMemEntityServer) GetEntity(id entity.Id) *entity.Entity {
 func TestLogger(t *testing.T) *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelDebug}))
 }
+
+// TestDebugLogger creates a test logger that outputs logs
+func TestDebugLogger(t *testing.T) *slog.Logger {
+	return slog.New(slog.NewTextHandler(testWriter{t}, &slog.HandlerOptions{Level: slog.LevelDebug}))
+}
+
+// testWriter wraps *testing.T to implement io.Writer
+type testWriter struct {
+	t *testing.T
+}
+
+func (tw testWriter) Write(p []byte) (n int, err error) {
+	tw.t.Log(string(p))
+	return len(p), nil
+}
