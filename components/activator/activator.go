@@ -625,10 +625,7 @@ func (a *localActivator) watchSandboxes(ctx context.Context) {
 			}
 
 			// Get version to determine service
-			sbVersion := sb.Version
-			if sbVersion == "" {
-				sbVersion = sb.Spec.Version
-			}
+			sbVersion := sb.Spec.Version
 			if sbVersion == "" {
 				return nil // Skip sandboxes without version (e.g., buildkit)
 			}
@@ -765,11 +762,7 @@ func (a *localActivator) recoverSandboxes(ctx context.Context) error {
 		}
 
 		// Skip sandboxes without a version (e.g., buildkit sandboxes)
-		// Support both legacy and Spec formats
-		sbVersion := sb.Version
-		if sbVersion == "" {
-			sbVersion = sb.Spec.Version
-		}
+		sbVersion := sb.Spec.Version
 		if sbVersion == "" {
 			skippedNoVersion++
 			continue
@@ -903,8 +896,8 @@ func (a *localActivator) recoverPools(ctx context.Context) error {
 // but don't have a pool label, and labels them with this pool's ID.
 // This handles migration of pre-pool sandboxes into the pool system.
 func (a *localActivator) migrateOrphanedSandboxes(ctx context.Context, pool *compute_v1alpha.SandboxPool) error {
-	// Query sandboxes by version
-	resp, err := a.eac.List(ctx, entity.Ref(compute_v1alpha.SandboxVersionId, pool.SandboxSpec.Version))
+	// Query sandboxes by version (using nested indexed field)
+	resp, err := a.eac.List(ctx, entity.Ref(compute_v1alpha.SandboxSpecVersionId, pool.SandboxSpec.Version))
 	if err != nil {
 		return fmt.Errorf("failed to list sandboxes by version: %w", err)
 	}

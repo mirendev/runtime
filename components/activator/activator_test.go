@@ -183,8 +183,10 @@ func TestActivatorRecoverSandboxesWithEntityServer(t *testing.T) {
 
 	// Create sandbox entity
 	sb := compute_v1alpha.Sandbox{
-		Version: appVer.ID,
-		Status:  compute_v1alpha.RUNNING,
+		Status: compute_v1alpha.RUNNING,
+		Spec: compute_v1alpha.SandboxSpec{
+			Version: appVer.ID,
+		},
 		Network: []compute_v1alpha.Network{
 			{Address: "10.0.0.100"},
 		},
@@ -271,8 +273,10 @@ func TestActivatorRecoveryIntegration(t *testing.T) {
 	// Create multiple running sandboxes
 	for i := 0; i < 3; i++ {
 		sb := compute_v1alpha.Sandbox{
-			Version: appVer.ID,
-			Status:  compute_v1alpha.RUNNING,
+			Status: compute_v1alpha.RUNNING,
+			Spec: compute_v1alpha.SandboxSpec{
+				Version: appVer.ID,
+			},
 			Network: []compute_v1alpha.Network{
 				{Address: "10.0.0.100/32"},
 			},
@@ -557,8 +561,7 @@ func TestActivatorPendingSandboxAwareness(t *testing.T) {
 
 	// Create a PENDING sandbox (booting up)
 	pendingSandbox := &compute_v1alpha.Sandbox{
-		Status:  compute_v1alpha.PENDING,
-		Version: testVer.ID,
+		Status: compute_v1alpha.PENDING,
 		Spec: compute_v1alpha.SandboxSpec{
 			Version: testVer.ID,
 		},

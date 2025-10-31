@@ -238,11 +238,13 @@ func (m *MockStore) ListIndex(ctx context.Context, attr Attr) ([]Id, error) {
 	}
 
 	// Default implementation: Filter entities by the given attribute
+	// Recursively enumerate attributes including nested ones in components
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	var ids []Id
 	for id, entity := range m.Entities {
-		for _, a := range entity.attrs {
+		allAttrs := enumerateAllAttrs(entity.attrs)
+		for _, a := range allAttrs {
 			if a.ID == attr.ID && a.Value.Equal(attr.Value) {
 				ids = append(ids, id)
 				break
