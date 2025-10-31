@@ -33,17 +33,40 @@ This is a two-phase migration: Phase 1 uses iso for development and Dagger for C
 ### Development Environment
 
 **With iso (local development - recommended):**
-- `make dev` - Start development environment with iso
-- `make dev-tmux` - Start development environment with tmux splits
+
+**Starting the dev environment:**
+- `make dev` - Start persistent development environment with iso
+- `make dev-tmux` - Start persistent development environment with tmux splits
 - `make dev-standalone` - Start standalone mode development environment
 - `make dev-tmux-standalone` - Start standalone mode with tmux splits
-- The dev environment automatically:
-  - Sets up containerd, buildkit, and gvisor (runsc)
-  - Starts services (etcd, ClickHouse, MinIO)
-  - Builds the miren binary and creates `/bin/m` symlink
-  - Generates auth config in `~/.config/miren/clientconfig.yaml`
-  - Cleans the miren namespace
-  - Starts the miren server and provides a shell
+
+The dev environment automatically:
+- Sets up containerd, buildkit, and gvisor (runsc)
+- Starts services (etcd, ClickHouse, MinIO)
+- Builds the miren binary and creates `/bin/m` symlink
+- Generates auth config in `~/.config/miren/clientconfig.yaml`
+- Cleans the miren namespace
+- Starts the miren server and provides a shell
+
+**Working in the persistent dev environment:**
+
+The dev environment uses persistent containers (via `iso --reuse`), which means:
+- The container and all services stay running between commands
+- Each worktree gets its own isolated dev environment
+- You can run commands in the same environment from different terminals or LLM sessions
+
+To execute commands in the persistent dev environment:
+- `./hack/dev-exec <command>` - Run any command in the persistent dev container
+- Examples:
+  - `./hack/dev-exec go test ./pkg/entity/...` - Run tests in the dev environment
+  - `./hack/dev-exec m app list` - Run miren CLI commands
+  - `./hack/dev-exec bash` - Get an interactive shell in the dev environment
+  - `./hack/dev-exec make bin/miren` - Build miren in the dev environment
+
+**Managing the dev environment:**
+- `make dev-stop` - Stop and remove the persistent dev container
+- `make dev-restart` - Restart the dev environment (stop + start)
+- `make dev-status` - Check the status of the dev environment
 
 **With Dagger (for CI compatibility):**
 - `make dev-dagger` - Start development environment with Dagger

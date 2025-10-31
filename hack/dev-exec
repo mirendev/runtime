@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+# dev-exec - Execute commands in the persistent dev environment
+#
+# Usage:
+#   ./hack/dev-exec go test ./pkg/...
+#   ./hack/dev-exec m app list
+#   ./hack/dev-exec bash  # Get a shell
+#
+# This script executes commands in the persistent dev container created by
+# `make dev`. The session name is automatically derived from the current
+# directory, ensuring each worktree has its own isolated dev environment.
+
+set -e
+
+# Check if .iso directory exists (indicates we're in the repo root)
+if [ ! -d ".iso" ]; then
+  echo "Error: This script must be run from the repository root" >&2
+  echo "" >&2
+  echo "Current directory: $(pwd)" >&2
+  echo "" >&2
+  echo "Please cd to the repository root directory first." >&2
+  exit 1
+fi
+
+# Generate session name based on current directory
+SESSION="dev-$(basename "$(pwd)")"
+
+# Check if the dev environment is running by checking iso status output
+STATUS_OUTPUT=$(ISO_SESSION="$SESSION" iso status --session "$SESSION" 2>&1)
+
+if echo "$STATUS_OUTPUT" | grep -q "Container does not exist"; then
+  echo "Error: Dev environment session '$SESSION' is not running" >&2
+  echo "" >&2
+  echo "Please start the dev environment first with:" >&2
+  echo "  make dev" >&2
+  echo "  or" >&2
+  echo "  make dev-tmux" >&2
+  exit 1
+fi
+
+# Execute command in the persistent dev container
+ISO_SESSION="$SESSION" iso run "$@"

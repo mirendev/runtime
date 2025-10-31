@@ -12,10 +12,14 @@ export DAGGER_NO_NAG=1
 # Disable telemetry in Dagger and anything else that honors DNT
 export DO_NOT_TRACK=1
 
+# Generate a unique session name based on the project directory
+ISO_SESSION ?= dev-$(shell basename "$$(pwd)")
+
 #
 # ISO targets (for local development)
 #
 
+# Isolated test runs (clean environment every time)
 test:
 	iso run bash hack/test.sh ./...
 
@@ -25,17 +29,29 @@ test-shell:
 test-e2e:
 	iso run bash hack/test.sh ./e2e --tags=e2e
 
-dev-tmux:
-	iso run USE_TMUX=1 bash hack/dev.sh
-
+# Persistent dev environments (session-based for container persistence)
 dev:
-	iso run bash hack/dev.sh
+	ISO_SESSION=$(ISO_SESSION) iso start --session $(ISO_SESSION) && ISO_SESSION=$(ISO_SESSION) iso run bash hack/dev.sh
+
+dev-tmux:
+	ISO_SESSION=$(ISO_SESSION) iso start --session $(ISO_SESSION) && ISO_SESSION=$(ISO_SESSION) iso run USE_TMUX=1 bash hack/dev.sh
 
 dev-standalone:
-	iso run bash hack/dev-standalone.sh
+	ISO_SESSION=$(ISO_SESSION) iso start --session $(ISO_SESSION) && ISO_SESSION=$(ISO_SESSION) iso run bash hack/dev-standalone.sh
 
 dev-tmux-standalone:
-	iso run USE_TMUX=1 bash hack/dev-standalone.sh
+	ISO_SESSION=$(ISO_SESSION) iso start --session $(ISO_SESSION) && ISO_SESSION=$(ISO_SESSION) iso run USE_TMUX=1 bash hack/dev-standalone.sh
+
+# Dev environment management
+dev-stop:
+	ISO_SESSION=$(ISO_SESSION) iso stop --session $(ISO_SESSION)
+
+dev-restart: dev-stop dev
+
+dev-status:
+	ISO_SESSION=$(ISO_SESSION) iso status --session $(ISO_SESSION)
+
+.PHONY: dev-stop dev-restart dev-status
 
 services:
 	iso run bash hack/run-services.sh
