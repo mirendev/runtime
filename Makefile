@@ -12,10 +12,14 @@ export DAGGER_NO_NAG=1
 # Disable telemetry in Dagger and anything else that honors DNT
 export DO_NOT_TRACK=1
 
+# Generate a unique session name based on the project directory
+ISO_SESSION ?= dev-$(shell basename "$$(pwd)")
+
 #
 # ISO targets (for local development)
 #
 
+# Isolated test runs (clean environment every time)
 test:
 	iso run bash hack/test.sh ./...
 
@@ -25,17 +29,46 @@ test-shell:
 test-e2e:
 	iso run bash hack/test.sh ./e2e --tags=e2e
 
-dev-tmux:
-	iso run USE_TMUX=1 bash hack/dev.sh
+# Persistent dev environment (standalone mode)
+dev-start:
+	ISO_SESSION=$(ISO_SESSION) iso start && \
+	ISO_SESSION=$(ISO_SESSION) iso run bash hack/dev.sh
 
-dev:
-	iso run bash hack/dev.sh
+# Start environment, server, and open shell (default for teammates)
+dev: dev-start dev-server-start dev-shell
 
-dev-standalone:
-	iso run bash hack/dev-standalone.sh
+# Interactive shell
+dev-shell:
+	./hack/dev-exec bash
 
-dev-tmux-standalone:
-	iso run USE_TMUX=1 bash hack/dev-standalone.sh
+# Server lifecycle
+dev-server-start:
+	./hack/dev-exec bash hack/dev-server start
+
+dev-server-stop:
+	./hack/dev-exec bash hack/dev-server stop
+
+dev-server-restart:
+	./hack/dev-exec bash hack/dev-server restart
+
+dev-server-status:
+	./hack/dev-exec bash hack/dev-server status
+
+dev-server-logs:
+	./hack/dev-exec bash hack/dev-server logs
+
+# Environment management
+dev-stop:
+	ISO_SESSION=$(ISO_SESSION) iso stop
+
+dev-restart: dev-stop dev-start
+
+dev-status:
+	ISO_SESSION=$(ISO_SESSION) iso status
+
+.PHONY: dev dev-start dev-shell dev-server-start dev-server-stop \
+        dev-server-restart dev-server-status dev-server-logs \
+        dev-stop dev-restart dev-status
 
 services:
 	iso run bash hack/run-services.sh
@@ -75,17 +108,8 @@ test-shell-dagger:
 test-e2e-dagger:
 	dagger call -q test --dir=. --tests="./e2e" --tags=e2e
 
-dev-tmux-dagger:
-	dagger call -q dev --dir=. --tmux
-
 dev-dagger:
 	dagger call -q dev --dir=.
-
-dev-standalone-dagger:
-	dagger call -q dev-standalone --dir=.
-
-dev-tmux-standalone-dagger:
-	dagger call -q dev-tmux-standalone --dir=.
 
 services-dagger:
 	dagger call debug --dir=.
