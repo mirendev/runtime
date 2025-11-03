@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"sync"
 
 	"miren.dev/runtime/pkg/auth"
 	"miren.dev/runtime/pkg/rbac"
@@ -16,14 +17,18 @@ const DefaultCloudURL = "https://api.miren.cloud"
 
 // RPCAuthenticator adapts cloud authentication for RPC usage
 type RPCAuthenticator struct {
-	jwtValidator  *auth.JWTValidator
-	tokenCache    *auth.TokenCache
-	rbacEval      *rbac.Evaluator
-	policyFetcher *PolicyFetcher
-	logger        *slog.Logger
+	jwtValidator    *auth.JWTValidator
+	tokenCache      *auth.TokenCache
+	rbacEval        *rbac.Evaluator
+	policyFetcher   *PolicyFetcher
+	logger          *slog.Logger
 
 	// Tags to use for RBAC evaluation
 	tags map[string]any
+	
+	// Last authenticated claims (temporary storage for passing to RPC layer)
+	lastClaims *auth.Claims
+	mu         sync.RWMutex
 }
 
 // Config for RPCAuthenticator
@@ -75,8 +80,8 @@ func NewRPCAuthenticator(ctx context.Context, config Config) (*RPCAuthenticator,
 	}
 
 	a := &RPCAuthenticator{
-		logger: config.Logger.With("module", "cloud-auth"),
-		tags:   config.Tags,
+		logger:        config.Logger.With("module", "cloud-auth"),
+		tags:          config.Tags,
 	}
 
 	// Set default tags if not provided
@@ -174,6 +179,11 @@ func (a *RPCAuthenticator) AuthenticateRequest(ctx context.Context, r *http.Requ
 		return false, "", fmt.Errorf("access denied by RBAC policy")
 	}
 
+	// Store claims for retrieval by RPC layer
+	a.mu.Lock()
+	a.lastClaims = claims
+	a.mu.Unlock()
+
 	a.logger.Debug("JWT authentication successful",
 		"subject", claims.Subject,
 		"organization_id", claims.OrganizationID,
@@ -204,4 +214,27 @@ func (a *RPCAuthenticator) NoAuthorization(ctx context.Context, r *http.Request)
 func (a *RPCAuthenticator) Stop() {
 	a.policyFetcher.Stop()
 	a.rbacEval.Stop()
+}
+
+// GetLastClaims returns the claims from the last successful authentication
+// This is a temporary mechanism until we can properly pass claims through the RPC layer
+func (a *RPCAuthenticator) GetLastClaims() *auth.Claims {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.lastClaims
+}
+
+// GetEvaluator returns the RBAC evaluator
+func (a *RPCAuthenticator) GetEvaluator() *rbac.Evaluator {
+	return a.rbacEval
+}
+
+// GetPolicyFetcher returns the policy fetcher
+func (a *RPCAuthenticator) GetPolicyFetcher() *PolicyFetcher {
+	return a.policyFetcher
+}
+
+// GetTags returns the configured tags
+func (a *RPCAuthenticator) GetTags() map[string]any {
+	return a.tags
 }
