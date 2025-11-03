@@ -27,6 +27,26 @@ wait_for_service "buildkitd" "buildctl debug info"
 
 cd /src
 
+# Normalize package path arguments for convenience
+# Supports: pkg/entity, ./pkg/entity, miren.dev/runtime/pkg/entity
+normalize_args() {
+  local args=()
+  for arg in "$@"; do
+    # Check if this looks like a package path (not a flag starting with -)
+    if [[ ! "$arg" =~ ^- ]] && [[ "$arg" =~ / ]]; then
+      # If it starts with the module path, convert to relative
+      if [[ "$arg" =~ ^miren\.dev/runtime/ ]]; then
+        arg="./${arg#miren.dev/runtime/}"
+      # If it doesn't start with ./ add it
+      elif [[ ! "$arg" =~ ^\. ]]; then
+        arg="./$arg"
+      fi
+    fi
+    args+=("$arg")
+  done
+  echo "${args[@]}"
+}
+
 if test "$USESHELL" != ""; then
   setup_bash_environment
   bash
@@ -34,7 +54,9 @@ if test "$USESHELL" != ""; then
 # make sure that they don't interfere with each other. For now, we do that by passing
 # -p 1, but in the future we should run each test in a separate namespace.
 elif test "$VERBOSE" != ""; then
-  go test -p 1 -v "$@"
+  normalized_args=($(normalize_args "$@"))
+  go test -p 1 -v "${normalized_args[@]}"
 else
-  gotestsum --format testname -- -p 1 "$@"
+  normalized_args=($(normalize_args "$@"))
+  gotestsum --format testname -- -p 1 "${normalized_args[@]}"
 fi
