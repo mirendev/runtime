@@ -49,6 +49,12 @@ case "${1:-}" in
         fi
         sleep 0.5
       done
+      # Force kill if still running
+      if kill -0 "$PID" 2>/dev/null; then
+        echo "Warning: Graceful shutdown timed out, forcing termination..."
+        kill -9 "$PID" 2>/dev/null || true
+        sleep 0.5
+      fi
       echo "Server stopped"
     else
       echo "Server not running (stale PID file)"
