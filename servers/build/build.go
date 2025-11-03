@@ -109,12 +109,19 @@ func buildServicesConfig(appConfig *appconfig.AppConfig, procfileServices map[st
 
 		// Map from appconfig to entity schema
 		// After ResolveDefaults(), every service is guaranteed to have config
-		if serviceConfig, ok := ac.Services[serviceName]; ok && serviceConfig != nil && serviceConfig.Concurrency != nil {
-			svc.ServiceConcurrency = core_v1alpha.ServiceConcurrency{
-				Mode:                serviceConfig.Concurrency.Mode,
-				NumInstances:        int64(serviceConfig.Concurrency.NumInstances),
-				RequestsPerInstance: int64(serviceConfig.Concurrency.RequestsPerInstance),
-				ScaleDownDelay:      serviceConfig.Concurrency.ScaleDownDelay,
+		if serviceConfig, ok := ac.Services[serviceName]; ok && serviceConfig != nil {
+			// Copy image if specified
+			if serviceConfig.Image != "" {
+				svc.Image = serviceConfig.Image
+			}
+
+			if serviceConfig.Concurrency != nil {
+				svc.ServiceConcurrency = core_v1alpha.ServiceConcurrency{
+					Mode:                serviceConfig.Concurrency.Mode,
+					NumInstances:        int64(serviceConfig.Concurrency.NumInstances),
+					RequestsPerInstance: int64(serviceConfig.Concurrency.RequestsPerInstance),
+					ScaleDownDelay:      serviceConfig.Concurrency.ScaleDownDelay,
+				}
 			}
 		}
 
