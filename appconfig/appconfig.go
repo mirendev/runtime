@@ -10,9 +10,9 @@ import (
 )
 
 type AppEnvVar struct {
-	Name      string `json:"name"`
-	Value     string `json:"value"`
-	Generator string `json:"generator"`
+	Name      string `json:"name" toml:"key"`
+	Value     string `json:"value" toml:"value"`
+	Generator string `json:"generator" toml:"generator"`
 }
 
 type BuildConfig struct {
