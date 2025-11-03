@@ -18,10 +18,6 @@ func AllCommands() map[string]cli.CommandFactory {
 			return Infer("whoami", "Display information about the current authenticated user", Whoami), nil
 		},
 
-		"logout": func() (cli.Command, error) {
-			return Infer("logout", "Clear cached authentication tokens", Logout), nil
-		},
-
 		"debug": func() (cli.Command, error) {
 			return Section("debug", "Debug and troubleshooting commands"), nil
 		},
