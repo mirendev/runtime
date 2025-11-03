@@ -29,21 +29,10 @@ func ParseUnverifiedClaims(token string) (*ExtendedClaims, error) {
 		return nil, fmt.Errorf("failed to decode claims: %w", err)
 	}
 
-	// First unmarshal into a map to see all fields
-	var rawClaims map[string]interface{}
-	if err := json.Unmarshal(claimsData, &rawClaims); err != nil {
-		return nil, fmt.Errorf("failed to parse raw claims: %w", err)
-	}
-
-	// Then unmarshal into our extended claims structure
+	// Unmarshal into our extended claims structure
 	var claims ExtendedClaims
 	if err := json.Unmarshal(claimsData, &claims); err != nil {
 		return nil, fmt.Errorf("failed to parse claims: %w", err)
-	}
-	
-	// Map additional fields that might have different names
-	if orgID, ok := rawClaims["organization_id"].(string); ok {
-		claims.OrganizationID = orgID
 	}
 	
 	// The subject field is the user ID in miren JWTs

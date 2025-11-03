@@ -6,7 +6,6 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
-	"sync"
 
 	"miren.dev/runtime/pkg/auth"
 	"miren.dev/runtime/pkg/rbac"
@@ -25,10 +24,6 @@ type RPCAuthenticator struct {
 
 	// Tags to use for RBAC evaluation
 	tags map[string]any
-	
-	// Last authenticated claims (temporary storage for passing to RPC layer)
-	lastClaims *auth.Claims
-	mu         sync.RWMutex
 }
 
 // Config for RPCAuthenticator
@@ -179,10 +174,8 @@ func (a *RPCAuthenticator) AuthenticateRequest(ctx context.Context, r *http.Requ
 		return false, "", fmt.Errorf("access denied by RBAC policy")
 	}
 
-	// Store claims for retrieval by RPC layer
-	a.mu.Lock()
-	a.lastClaims = claims
-	a.mu.Unlock()
+	// TODO: Pass claims through context when RPC layer supports it
+	// For now, claims are validated and used for authorization only
 
 	a.logger.Debug("JWT authentication successful",
 		"subject", claims.Subject,
@@ -216,12 +209,10 @@ func (a *RPCAuthenticator) Stop() {
 	a.rbacEval.Stop()
 }
 
-// GetLastClaims returns the claims from the last successful authentication
-// This is a temporary mechanism until we can properly pass claims through the RPC layer
+// GetLastClaims is deprecated and returns nil
+// Claims should be retrieved from context using auth.ClaimsFromContext
 func (a *RPCAuthenticator) GetLastClaims() *auth.Claims {
-	a.mu.RLock()
-	defer a.mu.RUnlock()
-	return a.lastClaims
+	return nil
 }
 
 // GetEvaluator returns the RBAC evaluator
