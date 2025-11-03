@@ -131,6 +131,21 @@ func buildServicesConfig(appConfig *appconfig.AppConfig, procfileServices map[st
 	return services
 }
 
+func buildVariablesFromAppConfig(appConfig *appconfig.AppConfig) []core_v1alpha.Variable {
+	if appConfig == nil || len(appConfig.EnvVars) == 0 {
+		return nil
+	}
+
+	variables := make([]core_v1alpha.Variable, 0, len(appConfig.EnvVars))
+	for _, envVar := range appConfig.EnvVars {
+		variables = append(variables, core_v1alpha.Variable{
+			Key:   envVar.Name,
+			Value: envVar.Value,
+		})
+	}
+	return variables
+}
+
 func (b *Builder) nextVersion(ctx context.Context, name string) (
 	*core_v1alpha.App,
 	*core_v1alpha.AppVersion,
@@ -482,22 +497,11 @@ func (b *Builder) BuildFromTar(ctx context.Context, state *build_v1alpha.Builder
 	mrv.Config.Commands = serviceCmds
 
 	// Copy environment variables from app config
-	if ac != nil && len(ac.EnvVars) > 0 {
-		b.Log.Info("copying env vars from app config", "count", len(ac.EnvVars))
-		for _, envVar := range ac.EnvVars {
-			b.Log.Info("adding env var", "key", envVar.Name, "value", envVar.Value)
-			mrv.Config.Variable = append(mrv.Config.Variable, core_v1alpha.Variable{
-				Key:   envVar.Name,
-				Value: envVar.Value,
-			})
-		}
+	mrv.Config.Variable = buildVariablesFromAppConfig(ac)
+	if len(mrv.Config.Variable) > 0 {
+		b.Log.Info("copied env vars from app config", "count", len(mrv.Config.Variable))
 	} else {
-		b.Log.Info("no env vars to copy", "ac_nil", ac == nil, "env_count", func() int {
-			if ac == nil {
-				return -1
-			}
-			return len(ac.EnvVars)
-		}())
+		b.Log.Info("no env vars to copy")
 	}
 
 	id, err := b.ec.Create(ctx, mrv.Version, mrv)

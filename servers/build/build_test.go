@@ -9,6 +9,80 @@ import (
 	"miren.dev/runtime/appconfig"
 )
 
+func TestBuildVariablesFromAppConfig(t *testing.T) {
+	tests := []struct {
+		name          string
+		appConfig     *appconfig.AppConfig
+		wantVariables []core_v1alpha.Variable
+	}{
+		{
+			name:          "nil app config",
+			appConfig:     nil,
+			wantVariables: nil,
+		},
+		{
+			name: "empty env vars",
+			appConfig: &appconfig.AppConfig{
+				EnvVars: []appconfig.AppEnvVar{},
+			},
+			wantVariables: nil,
+		},
+		{
+			name: "single env var",
+			appConfig: &appconfig.AppConfig{
+				EnvVars: []appconfig.AppEnvVar{
+					{Name: "DATABASE_URL", Value: "postgres://localhost/db"},
+				},
+			},
+			wantVariables: []core_v1alpha.Variable{
+				{Key: "DATABASE_URL", Value: "postgres://localhost/db"},
+			},
+		},
+		{
+			name: "multiple env vars",
+			appConfig: &appconfig.AppConfig{
+				EnvVars: []appconfig.AppEnvVar{
+					{Name: "DATABASE_URL", Value: "postgres://localhost/db"},
+					{Name: "API_KEY", Value: "secret123"},
+					{Name: "PORT", Value: "8080"},
+				},
+			},
+			wantVariables: []core_v1alpha.Variable{
+				{Key: "DATABASE_URL", Value: "postgres://localhost/db"},
+				{Key: "API_KEY", Value: "secret123"},
+				{Key: "PORT", Value: "8080"},
+			},
+		},
+		{
+			name: "env var with generator field (ignored)",
+			appConfig: &appconfig.AppConfig{
+				EnvVars: []appconfig.AppEnvVar{
+					{Name: "SECRET_KEY", Value: "default", Generator: "random"},
+				},
+			},
+			wantVariables: []core_v1alpha.Variable{
+				{Key: "SECRET_KEY", Value: "default"},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := buildVariablesFromAppConfig(tt.appConfig)
+			if tt.wantVariables == nil {
+				assert.Nil(t, result)
+			} else {
+				require.NotNil(t, result)
+				require.Len(t, result, len(tt.wantVariables))
+				for i, want := range tt.wantVariables {
+					assert.Equal(t, want.Key, result[i].Key, "variable %d key mismatch", i)
+					assert.Equal(t, want.Value, result[i].Value, "variable %d value mismatch", i)
+				}
+			}
+		})
+	}
+}
+
 func TestBuildServicesConfig(t *testing.T) {
 	tests := []struct {
 		name             string
