@@ -67,11 +67,11 @@ func (m *Manager) Reconcile(ctx context.Context, pool *compute_v1alpha.SandboxPo
 
 	// Count RUNNING and PENDING as "actual" (prevents duplicates while sandboxes boot)
 	// Count only RUNNING as "ready" (sandboxes serving traffic)
-	// We exclude STOPPED (being retired), DEAD (failed), and "" (uninitialized)
+	// We exclude STOPPED (being retired) and DEAD (failed)
 	actual := int64(0)
 	ready := int64(0)
 	for _, sb := range sandboxes {
-		if sb.Status == compute_v1alpha.RUNNING || sb.Status == compute_v1alpha.PENDING {
+		if sb.Status == compute_v1alpha.RUNNING || sb.Status == compute_v1alpha.CREATED || sb.Status == compute_v1alpha.PENDING {
 			actual++
 		}
 		if sb.Status == compute_v1alpha.RUNNING {
@@ -123,7 +123,7 @@ func (m *Manager) Reconcile(ctx context.Context, pool *compute_v1alpha.SandboxPo
 		actual = 0
 		ready = 0
 		for _, sb := range sandboxes {
-			if sb.Status == compute_v1alpha.RUNNING || sb.Status == compute_v1alpha.PENDING {
+			if sb.Status == compute_v1alpha.RUNNING || sb.Status == compute_v1alpha.CREATED || sb.Status == compute_v1alpha.PENDING {
 				actual++
 			}
 			if sb.Status == compute_v1alpha.RUNNING {
@@ -157,7 +157,7 @@ func (m *Manager) Reconcile(ctx context.Context, pool *compute_v1alpha.SandboxPo
 		actual = 0
 		ready = 0
 		for _, sb := range sandboxes {
-			if sb.Status == compute_v1alpha.RUNNING || sb.Status == compute_v1alpha.PENDING {
+			if sb.Status == compute_v1alpha.RUNNING || sb.Status == compute_v1alpha.CREATED || sb.Status == compute_v1alpha.PENDING {
 				actual++
 			}
 			if sb.Status == compute_v1alpha.RUNNING {
@@ -263,7 +263,7 @@ func (m *Manager) createSandbox(ctx context.Context, pool *compute_v1alpha.Sandb
 
 	// Clone the SandboxSpec into a Sandbox entity
 	sb := compute_v1alpha.Sandbox{
-		Status: compute_v1alpha.PENDING,
+		Status: compute_v1alpha.CREATED,
 		Spec:   pool.SandboxSpec,
 	}
 

@@ -57,7 +57,7 @@ func TestManagerScaleUpFromZero(t *testing.T) {
 
 	// Verify all sandboxes have correct labels and specs
 	for _, sb := range sandboxes {
-		assert.Equal(t, compute_v1alpha.PENDING, sb.Status, "new sandboxes should be PENDING")
+		assert.Equal(t, compute_v1alpha.CREATED, sb.Status, "new sandboxes should be CREATED")
 		assert.Equal(t, pool.SandboxSpec.Version, sb.Spec.Version, "sandbox should use pool version")
 		require.NotEmpty(t, sb.Spec.Container, "sandbox should have containers")
 		assert.Equal(t, "test:latest", sb.Spec.Container[0].Image, "sandbox should use pool image")
@@ -121,20 +121,20 @@ func TestManagerScaleUpPartial(t *testing.T) {
 	sandboxes := listSandboxesForPool(t, ctx, server, pool)
 	assert.Equal(t, 5, len(sandboxes), "should have 5 total sandboxes")
 
-	// Count RUNNING vs PENDING
+	// Count RUNNING vs CREATED
 	running := 0
-	pending := 0
+	created := 0
 	for _, sb := range sandboxes {
 		switch sb.Status {
 		case compute_v1alpha.RUNNING:
 			running++
-		case compute_v1alpha.PENDING:
-			pending++
+		case compute_v1alpha.CREATED:
+			created++
 		}
 	}
 
 	assert.Equal(t, 2, running, "should have 2 running (existing)")
-	assert.Equal(t, 3, pending, "should have 3 pending (newly created)")
+	assert.Equal(t, 3, created, "should have 3 created (newly created)")
 
 	// Verify pool status
 	updatedPool := getPool(t, ctx, server, poolID)
