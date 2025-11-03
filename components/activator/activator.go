@@ -180,8 +180,8 @@ func (a *localActivator) AcquireLease(ctx context.Context, ver *core_v1alpha.App
 				candidateSandbox = s
 				break
 			}
-			// Track if we have CREATED or PENDING sandboxes (being created/booting)
-			if s.sandbox.Status == compute_v1alpha.CREATED || s.sandbox.Status == compute_v1alpha.PENDING {
+			// Track if we have PENDING sandboxes (being created/booting)
+			if s.sandbox.Status == compute_v1alpha.PENDING {
 				hasPending = true
 			}
 		}

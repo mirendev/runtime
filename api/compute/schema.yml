@@ -147,7 +147,7 @@ kinds:
     status:
       type: enum
       doc: The status of the pod
-      choices: [created, pending, not_ready, running, stopped, dead]
+      choices: [pending, not_ready, running, stopped, dead]
 
     last_activity:
       type: time

@@ -104,7 +104,7 @@ func (l *LaunchBuildkit) Launch(ctx context.Context, addr string, lo ...LaunchOp
 
 	l.log.Debug("creating sandbox configuration")
 	var sb compute_v1alpha.Sandbox
-	sb.Status = compute_v1alpha.CREATED
+	sb.Status = compute_v1alpha.PENDING
 
 	// Use Spec field for new sandbox configuration
 	sb.Spec.LogEntity = "build"

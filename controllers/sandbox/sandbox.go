@@ -851,7 +851,7 @@ func (c *SandboxController) Create(ctx context.Context, co *compute.Sandbox, met
 	case compute.STOPPED:
 		c.Log.Debug("sandbox is stopped, verifying it is no longer running")
 		return c.stopSandbox(ctx, co)
-	case compute.CREATED, compute.PENDING, compute.RUNNING:
+	case "", compute.PENDING, compute.RUNNING:
 		searchRes, err := c.checkSandbox(ctx, co, meta)
 		if err != nil {
 			c.Log.Error("error checking sandbox, proceeding with create", "err", err)
