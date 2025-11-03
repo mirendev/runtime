@@ -169,6 +169,90 @@ func TestBuildServicesConfig(t *testing.T) {
 			},
 		},
 		{
+			name: "service with custom image",
+			appConfig: &appconfig.AppConfig{
+				Services: map[string]*appconfig.ServiceConfig{
+					"postgres": {
+						Image: "postgres:15",
+						Concurrency: &appconfig.ServiceConcurrencyConfig{
+							Mode:         "fixed",
+							NumInstances: 1,
+						},
+					},
+				},
+			},
+			procfileServices: nil,
+			validateServices: func(t *testing.T, services []core_v1alpha.Services) {
+				require.Len(t, services, 1)
+				assert.Equal(t, "postgres", services[0].Name)
+				assert.Equal(t, "postgres:15", services[0].Image)
+			},
+		},
+		{
+			name: "service without custom image",
+			appConfig: &appconfig.AppConfig{
+				Services: map[string]*appconfig.ServiceConfig{
+					"web": {
+						Concurrency: &appconfig.ServiceConcurrencyConfig{
+							Mode:                "auto",
+							RequestsPerInstance: 10,
+						},
+					},
+				},
+			},
+			procfileServices: nil,
+			validateServices: func(t *testing.T, services []core_v1alpha.Services) {
+				require.Len(t, services, 1)
+				assert.Equal(t, "web", services[0].Name)
+				assert.Equal(t, "", services[0].Image, "image should be empty when not specified")
+			},
+		},
+		{
+			name: "multiple services with mixed image configs",
+			appConfig: &appconfig.AppConfig{
+				Services: map[string]*appconfig.ServiceConfig{
+					"postgres": {
+						Image: "postgres:15",
+						Concurrency: &appconfig.ServiceConcurrencyConfig{
+							Mode:         "fixed",
+							NumInstances: 1,
+						},
+					},
+					"redis": {
+						Image: "redis:7-alpine",
+						Concurrency: &appconfig.ServiceConcurrencyConfig{
+							Mode:         "fixed",
+							NumInstances: 1,
+						},
+					},
+					"web": {
+						Concurrency: &appconfig.ServiceConcurrencyConfig{
+							Mode:                "auto",
+							RequestsPerInstance: 10,
+						},
+					},
+				},
+			},
+			procfileServices: nil,
+			validateServices: func(t *testing.T, services []core_v1alpha.Services) {
+				require.Len(t, services, 3)
+
+				serviceMap := make(map[string]core_v1alpha.Services)
+				for _, svc := range services {
+					serviceMap[svc.Name] = svc
+				}
+
+				require.Contains(t, serviceMap, "postgres")
+				assert.Equal(t, "postgres:15", serviceMap["postgres"].Image)
+
+				require.Contains(t, serviceMap, "redis")
+				assert.Equal(t, "redis:7-alpine", serviceMap["redis"].Image)
+
+				require.Contains(t, serviceMap, "web")
+				assert.Equal(t, "", serviceMap["web"].Image, "web service should not have custom image")
+			},
+		},
+		{
 			name:             "no config no procfile",
 			appConfig:        nil,
 			procfileServices: nil,
