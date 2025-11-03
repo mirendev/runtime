@@ -2,6 +2,7 @@ privileged: true
 workdir: /src
 volumes:
   - /data
+  - /var/lib/miren
 cache:
   - /go/pkg
   - /go/build-cache

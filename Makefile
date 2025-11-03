@@ -29,29 +29,46 @@ test-shell:
 test-e2e:
 	iso run bash hack/test.sh ./e2e --tags=e2e
 
-# Persistent dev environments (session-based for container persistence)
-dev:
-	ISO_SESSION=$(ISO_SESSION) iso start --session $(ISO_SESSION) && ISO_SESSION=$(ISO_SESSION) iso run bash hack/dev.sh
+# Persistent dev environment (standalone mode)
+dev-start:
+	ISO_SESSION=$(ISO_SESSION) iso start && \
+	ISO_SESSION=$(ISO_SESSION) iso run bash hack/dev.sh
 
-dev-tmux:
-	ISO_SESSION=$(ISO_SESSION) iso start --session $(ISO_SESSION) && ISO_SESSION=$(ISO_SESSION) iso run USE_TMUX=1 bash hack/dev.sh
+# Start environment, server, and open shell (default for teammates)
+dev: dev-start dev-server-start dev-shell
 
-dev-standalone:
-	ISO_SESSION=$(ISO_SESSION) iso start --session $(ISO_SESSION) && ISO_SESSION=$(ISO_SESSION) iso run bash hack/dev-standalone.sh
+# Interactive shell
+dev-shell:
+	./hack/dev-exec bash
 
-dev-tmux-standalone:
-	ISO_SESSION=$(ISO_SESSION) iso start --session $(ISO_SESSION) && ISO_SESSION=$(ISO_SESSION) iso run USE_TMUX=1 bash hack/dev-standalone.sh
+# Server lifecycle
+dev-server-start:
+	./hack/dev-exec bash hack/dev-server start
 
-# Dev environment management
+dev-server-stop:
+	./hack/dev-exec bash hack/dev-server stop
+
+dev-server-restart:
+	./hack/dev-exec bash hack/dev-server restart
+
+dev-server-status:
+	./hack/dev-exec bash hack/dev-server status
+
+dev-server-logs:
+	./hack/dev-exec bash hack/dev-server logs
+
+# Environment management
 dev-stop:
-	ISO_SESSION=$(ISO_SESSION) iso stop --session $(ISO_SESSION)
+	ISO_SESSION=$(ISO_SESSION) iso stop
 
-dev-restart: dev-stop dev
+dev-restart: dev-stop dev-start
 
 dev-status:
-	ISO_SESSION=$(ISO_SESSION) iso status --session $(ISO_SESSION)
+	ISO_SESSION=$(ISO_SESSION) iso status
 
-.PHONY: dev-stop dev-restart dev-status
+.PHONY: dev dev-start dev-shell dev-server-start dev-server-stop \
+        dev-server-restart dev-server-status dev-server-logs \
+        dev-stop dev-restart dev-status
 
 services:
 	iso run bash hack/run-services.sh
@@ -91,17 +108,8 @@ test-shell-dagger:
 test-e2e-dagger:
 	dagger call -q test --dir=. --tests="./e2e" --tags=e2e
 
-dev-tmux-dagger:
-	dagger call -q dev --dir=. --tmux
-
 dev-dagger:
 	dagger call -q dev --dir=.
-
-dev-standalone-dagger:
-	dagger call -q dev-standalone --dir=.
-
-dev-tmux-standalone-dagger:
-	dagger call -q dev-tmux-standalone --dir=.
 
 services-dagger:
 	dagger call debug --dir=.
