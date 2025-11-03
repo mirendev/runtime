@@ -174,9 +174,6 @@ func (a *RPCAuthenticator) AuthenticateRequest(ctx context.Context, r *http.Requ
 		return false, "", fmt.Errorf("access denied by RBAC policy")
 	}
 
-	// TODO: Pass claims through context when RPC layer supports it
-	// For now, claims are validated and used for authorization only
-
 	a.logger.Debug("JWT authentication successful",
 		"subject", claims.Subject,
 		"organization_id", claims.OrganizationID,
