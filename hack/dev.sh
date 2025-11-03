@@ -16,9 +16,7 @@ setup_kernel_mounts
 
 cd /src
 
-# Wait for external services to be ready
-wait_for_service "etcd" "nc -z etcd 2379"
-wait_for_service "clickhouse" "nc -z clickhouse 9000"
+# Wait for minio to be ready (etcd and clickhouse are started by miren in standalone mode)
 wait_for_service "minio" "nc -z minio 9000"
 
 # Build miren

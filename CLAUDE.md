@@ -42,7 +42,7 @@ The dev environment uses **standalone mode** where miren manages its own contain
 
 The dev environment automatically:
 - Sets up gvisor (runsc) and kernel mounts
-- Starts external services (etcd, ClickHouse, MinIO)
+- Starts MinIO service (etcd and ClickHouse are managed by miren in standalone mode)
 - Builds the miren binary and creates `/bin/m` symlink
 - Generates auth config in `~/.config/miren/clientconfig.yaml`
 - Prepares release directory with required binaries
@@ -118,9 +118,10 @@ make dev-stop                 # Tear down environment
 ### ISO Environment
 The project uses **iso** for containerized development with all dependencies provided:
 - `.iso/Dockerfile` - Defines the build environment (Go 1.24, containerd, buildkit, gvisor, etc.)
-- `.iso/services.yml` - Defines service containers (etcd, ClickHouse, MinIO)
+- `.iso/services.yml` - Defines external service containers (MinIO for object storage)
 - All default `make` targets and `hack/` scripts run inside the isolated container
 - Services are automatically started and ready before commands run
+- In standalone mode, miren manages etcd and ClickHouse internally
 
 ### Dagger Environment (CI/CD)
 The project also maintains **Dagger** for CI/CD:
