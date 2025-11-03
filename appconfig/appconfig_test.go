@@ -302,6 +302,111 @@ func TestResolveDefaults_NilAppConfig(t *testing.T) {
 	})
 }
 
+func TestParseAppConfigWithEnvVars(t *testing.T) {
+	tests := []struct {
+		name     string
+		config   string
+		wantVars []AppEnvVar
+	}{
+		{
+			name: "single env var",
+			config: `
+name = "test-app"
+
+[[env]]
+key = "DATABASE_URL"
+value = "postgres://localhost/db"
+`,
+			wantVars: []AppEnvVar{
+				{Name: "DATABASE_URL", Value: "postgres://localhost/db"},
+			},
+		},
+		{
+			name: "multiple env vars",
+			config: `
+name = "test-app"
+
+[[env]]
+key = "DATABASE_URL"
+value = "postgres://localhost/db"
+
+[[env]]
+key = "API_KEY"
+value = "secret123"
+
+[[env]]
+key = "PORT"
+value = "8080"
+`,
+			wantVars: []AppEnvVar{
+				{Name: "DATABASE_URL", Value: "postgres://localhost/db"},
+				{Name: "API_KEY", Value: "secret123"},
+				{Name: "PORT", Value: "8080"},
+			},
+		},
+		{
+			name: "env var with generator",
+			config: `
+name = "test-app"
+
+[[env]]
+key = "SECRET_KEY"
+value = "default-value"
+generator = "random"
+`,
+			wantVars: []AppEnvVar{
+				{Name: "SECRET_KEY", Value: "default-value", Generator: "random"},
+			},
+		},
+		{
+			name: "no env vars",
+			config: `
+name = "test-app"
+`,
+			wantVars: nil,
+		},
+		{
+			name: "env vars with services",
+			config: `
+name = "test-app"
+
+[[env]]
+key = "DATABASE_URL"
+value = "postgres://localhost/db"
+
+[services.postgres]
+image = "postgres:15"
+
+[services.postgres.concurrency]
+mode = "fixed"
+num_instances = 1
+`,
+			wantVars: []AppEnvVar{
+				{Name: "DATABASE_URL", Value: "postgres://localhost/db"},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ac, err := Parse([]byte(tt.config))
+			require.NoError(t, err)
+			require.NotNil(t, ac)
+
+			if tt.wantVars == nil {
+				assert.Nil(t, ac.EnvVars)
+			} else {
+				require.Len(t, ac.EnvVars, len(tt.wantVars))
+				for i, want := range tt.wantVars {
+					assert.Equal(t, want.Name, ac.EnvVars[i].Name, "env var %d name mismatch", i)
+					assert.Equal(t, want.Value, ac.EnvVars[i].Value, "env var %d value mismatch", i)
+					assert.Equal(t, want.Generator, ac.EnvVars[i].Generator, "env var %d generator mismatch", i)
+				}
+			}
+		})
+	}
+}
+
 func TestGetDefaultsForServices(t *testing.T) {
 	tests := []struct {
 		name         string
