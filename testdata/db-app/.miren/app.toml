@@ -1,0 +1,24 @@
+name = "db-app"
+
+[[env]]
+key = "POSTGRES_HOST_AUTH_METHOD"
+value = "trust"
+
+[[env]]
+key = "TEST_VAR"
+value = "test123"
+
+[[env]]
+key = "DATABASE_URL"
+value = "postgres://postgres@10.8.29.9:5432/postgres?sslmode=disable"
+
+[[env]]
+key = "TRIGGER_CHANGE"
+value = "test-pool-cleanup-v2"
+
+[services.postgres]
+image = "postgres:15"
+
+[services.postgres.concurrency]
+mode = "fixed"
+num_instances = 1
