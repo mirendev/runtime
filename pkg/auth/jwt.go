@@ -283,13 +283,6 @@ func (tc *TokenCache) Set(token string, claims *Claims) {
 	}
 }
 
-// Delete removes a token from the cache
-func (tc *TokenCache) Delete(token string) {
-	tc.mu.Lock()
-	defer tc.mu.Unlock()
-	delete(tc.cache, token)
-}
-
 // Context key for storing claims
 type contextKey string
 
