@@ -259,6 +259,9 @@ func (b *Builder) BuildFromTar(ctx context.Context, state *build_v1alpha.Builder
 	if err != nil {
 		b.Log.Warn("error loading app config, ignoring", "error", err)
 	}
+	if ac != nil {
+		b.Log.Info("loaded app config", "name", ac.Name, "envVarCount", len(ac.EnvVars), "serviceCount", len(ac.Services))
+	}
 
 	var buildStack BuildStack
 	buildStack.CodeDir = path
@@ -477,6 +480,25 @@ func (b *Builder) BuildFromTar(ctx context.Context, state *build_v1alpha.Builder
 	}
 
 	mrv.Config.Commands = serviceCmds
+
+	// Copy environment variables from app config
+	if ac != nil && len(ac.EnvVars) > 0 {
+		b.Log.Info("copying env vars from app config", "count", len(ac.EnvVars))
+		for _, envVar := range ac.EnvVars {
+			b.Log.Info("adding env var", "key", envVar.Name, "value", envVar.Value)
+			mrv.Config.Variable = append(mrv.Config.Variable, core_v1alpha.Variable{
+				Key:   envVar.Name,
+				Value: envVar.Value,
+			})
+		}
+	} else {
+		b.Log.Info("no env vars to copy", "ac_nil", ac == nil, "env_count", func() int {
+			if ac == nil {
+				return -1
+			}
+			return len(ac.EnvVars)
+		}())
+	}
 
 	id, err := b.ec.Create(ctx, mrv.Version, mrv)
 	if err != nil {
