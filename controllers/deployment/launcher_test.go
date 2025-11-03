@@ -540,6 +540,170 @@ func TestMultipleServices(t *testing.T) {
 	}
 }
 
+// TestInMemStoreMultiValuedAttributeUpdate tests whether the inmem store
+// properly handles Replace operations with multi-valued attributes
+func TestInMemStoreMultiValuedAttributeUpdate(t *testing.T) {
+	ctx := context.Background()
+	server, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	// Create a pool with one reference
+	pool := &compute_v1alpha.SandboxPool{
+		Service:          "postgres",
+		DesiredInstances: 1,
+		SandboxSpec: compute_v1alpha.SandboxSpec{
+			Version: entity.Id("version-1"),
+		},
+		ReferencedByVersions: []entity.Id{entity.Id("version-1")},
+	}
+
+	poolID, err := server.Client.Create(ctx, "test-pool", pool)
+	require.NoError(t, err)
+	pool.ID = poolID
+
+	// Verify initial state
+	initialResp, err := server.EAC.Get(ctx, string(poolID))
+	require.NoError(t, err)
+	var initialPool compute_v1alpha.SandboxPool
+	initialPool.Decode(initialResp.Entity().Entity())
+	assert.Len(t, initialPool.ReferencedByVersions, 1, "should have 1 reference initially")
+	assert.Contains(t, initialPool.ReferencedByVersions, entity.Id("version-1"))
+
+	// Now update to add a second reference using Replace (simulating what updatePool does)
+	poolWithTwoRefs := &compute_v1alpha.SandboxPool{
+		Service:              "postgres",
+		DesiredInstances:     1,
+		SandboxSpec:          pool.SandboxSpec,
+		ReferencedByVersions: []entity.Id{entity.Id("version-1"), entity.Id("version-2")},
+	}
+	poolWithTwoRefs.ID = poolID
+
+	// Get the existing entity
+	resp, err := server.EAC.Get(ctx, string(poolID))
+	require.NoError(t, err)
+	ent := resp.Entity().Entity()
+
+	// Build new attrs from poolWithTwoRefs
+	newAttrs := poolWithTwoRefs.Encode()
+
+	// Filter out ReferencedByVersions from encoded attrs - we'll add them separately
+	filteredAttrs := make([]entity.Attr, 0, len(newAttrs))
+	for _, attr := range newAttrs {
+		if attr.ID != compute_v1alpha.SandboxPoolReferencedByVersionsId {
+			filteredAttrs = append(filteredAttrs, attr)
+		}
+	}
+	newAttrs = filteredAttrs
+
+	// Build final attrs: metadata from existing + new pool attrs
+	finalAttrs := make([]entity.Attr, 0, len(ent.Attrs())+len(newAttrs))
+
+	// Collect IDs we're replacing
+	replacingIDs := make(map[entity.Id]bool)
+	for _, attr := range newAttrs {
+		replacingIDs[attr.ID] = true
+	}
+	// Always replace ReferencedByVersions since we're explicitly setting them
+	replacingIDs[compute_v1alpha.SandboxPoolReferencedByVersionsId] = true
+
+	// Add existing attrs except those we're replacing
+	for _, attr := range ent.Attrs() {
+		if !replacingIDs[attr.ID] {
+			finalAttrs = append(finalAttrs, attr)
+		}
+	}
+
+	// Add all new attrs
+	finalAttrs = append(finalAttrs, newAttrs...)
+
+	// Add all references (multi-valued attribute - can't use entity.Update/Set)
+	for _, ref := range poolWithTwoRefs.ReferencedByVersions {
+		finalAttrs = append(finalAttrs, entity.Ref(compute_v1alpha.SandboxPoolReferencedByVersionsId, ref))
+	}
+
+	// Use Replace with the combined attributes
+	_, err = server.EAC.Replace(ctx, finalAttrs, 0)
+	require.NoError(t, err)
+
+	// Verify the update persisted
+	updatedResp, err := server.EAC.Get(ctx, string(poolID))
+	require.NoError(t, err)
+	var updatedPool compute_v1alpha.SandboxPool
+	updatedPool.Decode(updatedResp.Entity().Entity())
+
+	t.Logf("After update: ReferencedByVersions = %v", updatedPool.ReferencedByVersions)
+
+	// This is the key assertion - does the inmem store preserve both references?
+	assert.Len(t, updatedPool.ReferencedByVersions, 2, "should have 2 references after update")
+	assert.Contains(t, updatedPool.ReferencedByVersions, entity.Id("version-1"), "should still have version-1")
+	assert.Contains(t, updatedPool.ReferencedByVersions, entity.Id("version-2"), "should have version-2")
+}
+
+// TestUpdatePoolPreservesMetadata verifies that updatePool doesn't wipe out
+// entity metadata like CreatedAt and UpdatedAt when setting zero values
+func TestUpdatePoolPreservesMetadata(t *testing.T) {
+	ctx := context.Background()
+	log := testutils.TestLogger(t)
+
+	server, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	// Create a pool with some initial values
+	pool := &compute_v1alpha.SandboxPool{
+		Service:          "postgres",
+		DesiredInstances: 1,
+		CurrentInstances: 1,
+		ReadyInstances:   1,
+		SandboxSpec: compute_v1alpha.SandboxSpec{
+			Version: entity.Id("version-1"),
+		},
+		ReferencedByVersions: []entity.Id{entity.Id("version-1")},
+	}
+
+	poolID, err := server.Client.Create(ctx, "test-pool", pool)
+	require.NoError(t, err)
+	pool.ID = poolID
+
+	// Get the entity to check initial metadata
+	initialResp, err := server.EAC.Get(ctx, string(poolID))
+	require.NoError(t, err)
+	initialEntity := initialResp.Entity().Entity()
+
+	initialCreatedAt := initialEntity.GetCreatedAt()
+	initialUpdatedAt := initialEntity.GetUpdatedAt()
+	require.False(t, initialCreatedAt.IsZero(), "pool should have CreatedAt set")
+	require.False(t, initialUpdatedAt.IsZero(), "pool should have UpdatedAt set")
+
+	// Now update the pool with zero values (simulating scale-down)
+	pool.DesiredInstances = 0
+	pool.CurrentInstances = 0
+	pool.ReadyInstances = 0
+	pool.ReferencedByVersions = []entity.Id{} // Empty refs
+
+	launcher := NewLauncher(log, server.EAC)
+	err = launcher.updatePool(ctx, pool)
+	require.NoError(t, err)
+
+	// Get the entity again to verify metadata is preserved
+	updatedResp, err := server.EAC.Get(ctx, string(poolID))
+	require.NoError(t, err)
+	updatedEntity := updatedResp.Entity().Entity()
+
+	// Verify metadata was preserved
+	assert.Equal(t, initialCreatedAt, updatedEntity.GetCreatedAt(),
+		"CreatedAt should be preserved during update")
+	assert.GreaterOrEqual(t, updatedEntity.GetUpdatedAt(), initialUpdatedAt,
+		"UpdatedAt should be updated but not zeroed")
+
+	// Verify the zero values were actually set
+	var updatedPool compute_v1alpha.SandboxPool
+	updatedPool.Decode(updatedEntity)
+	assert.Equal(t, int64(0), updatedPool.DesiredInstances, "should set DesiredInstances to 0")
+	assert.Equal(t, int64(0), updatedPool.CurrentInstances, "should set CurrentInstances to 0")
+	assert.Equal(t, int64(0), updatedPool.ReadyInstances, "should set ReadyInstances to 0")
+	assert.Empty(t, updatedPool.ReferencedByVersions, "should clear ReferencedByVersions")
+}
+
 // Helper functions
 
 func listAllPools(t *testing.T, ctx context.Context, server *testutils.InMemEntityServer) []compute_v1alpha.SandboxPool {

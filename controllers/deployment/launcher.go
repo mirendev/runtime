@@ -395,40 +395,79 @@ func (l *Launcher) updatePool(ctx context.Context, pool *compute_v1alpha.Sandbox
 	l.Log.Info("updating pool",
 		"pool", pool.ID,
 		"desired_instances", pool.DesiredInstances,
-		"references", pool.ReferencedByVersions)
+		"references", pool.ReferencedByVersions,
+		"num_refs", len(pool.ReferencedByVersions))
 
-	// Start with pool.Encode() to get all non-zero fields
-	attrs := pool.Encode()
+	// Get the existing entity to preserve metadata (CreatedAt, UpdatedAt, etc.)
+	resp, err := l.EAC.Get(ctx, string(pool.ID))
+	if err != nil {
+		return fmt.Errorf("failed to get pool entity: %w", err)
+	}
 
-	// Add db/id attribute (required for Replace, not included in Encode())
-	attrs = append(attrs, entity.Attr{
-		ID:    entity.DBId,
-		Value: entity.AnyValue(pool.ID),
-	})
+	ent := resp.Entity().Entity()
 
-	// Override critical fields that might be zero but still need to be set explicitly
-	// (pool.Encode() filters out zero values with entity.Empty() checks)
+	// Build new attributes from the pool
+	newAttrs := pool.Encode()
+
+	// Filter out ReferencedByVersions from encoded attrs - we'll add them separately
+	// (pool.Encode() includes them, but we need explicit control to handle empty arrays)
+	filteredAttrs := make([]entity.Attr, 0, len(newAttrs))
+	for _, attr := range newAttrs {
+		if attr.ID != compute_v1alpha.SandboxPoolReferencedByVersionsId {
+			filteredAttrs = append(filteredAttrs, attr)
+		}
+	}
+	newAttrs = filteredAttrs
+
+	// Add critical fields that Encode() filters out
+	// (Encode() uses entity.Empty() which filters out zero/empty values)
 
 	// Always include DesiredInstances, even when 0 (for scale-down)
 	if pool.DesiredInstances == 0 {
-		attrs = append(attrs, entity.Int64(compute_v1alpha.SandboxPoolDesiredInstancesId, 0))
+		newAttrs = append(newAttrs, entity.Int64(compute_v1alpha.SandboxPoolDesiredInstancesId, 0))
 	}
 
 	// Always include CurrentInstances, even when 0
 	if pool.CurrentInstances == 0 {
-		attrs = append(attrs, entity.Int64(compute_v1alpha.SandboxPoolCurrentInstancesId, 0))
+		newAttrs = append(newAttrs, entity.Int64(compute_v1alpha.SandboxPoolCurrentInstancesId, 0))
 	}
 
 	// Always include ReadyInstances, even when 0
 	if pool.ReadyInstances == 0 {
-		attrs = append(attrs, entity.Int64(compute_v1alpha.SandboxPoolReadyInstancesId, 0))
+		newAttrs = append(newAttrs, entity.Int64(compute_v1alpha.SandboxPoolReadyInstancesId, 0))
 	}
 
-	// Note: ReferencedByVersions is handled correctly by Encode() -
-	// empty array means no refs will be added, which clears them with Replace
+	// Build the final attribute list: metadata from existing + new pool attrs
+	finalAttrs := make([]entity.Attr, 0, len(ent.Attrs())+len(newAttrs))
 
-	// Use Replace to update all attributes, including zero values
-	_, err := l.EAC.Replace(ctx, attrs, 0)
+	// Collect IDs we're replacing (including multi-valued attrs we'll handle separately)
+	replacingIDs := make(map[entity.Id]bool)
+	for _, attr := range newAttrs {
+		replacingIDs[attr.ID] = true
+	}
+	// Always replace ReferencedByVersions (even if empty) since we're explicitly setting them
+	replacingIDs[compute_v1alpha.SandboxPoolReferencedByVersionsId] = true
+
+	// Add existing attrs except those we're replacing
+	for _, attr := range ent.Attrs() {
+		if !replacingIDs[attr.ID] {
+			finalAttrs = append(finalAttrs, attr)
+		}
+	}
+
+	// Add all new attrs
+	finalAttrs = append(finalAttrs, newAttrs...)
+
+	// Now add ALL the references from the pool (multi-valued attribute)
+	// NOTE: We can't use entity.Update() for multi-valued attributes because
+	// entity.Set() replaces the first matching attribute instead of adding a new one.
+	// This is why we manually append each reference.
+	for _, ref := range pool.ReferencedByVersions {
+		finalAttrs = append(finalAttrs, entity.Ref(compute_v1alpha.SandboxPoolReferencedByVersionsId, ref))
+	}
+
+	// Use Replace with the combined attributes (preserves metadata)
+	_, err = l.EAC.Replace(ctx, finalAttrs, 0)
 	if err != nil {
 		return fmt.Errorf("failed to update pool: %w", err)
 	}
