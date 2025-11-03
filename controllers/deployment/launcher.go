@@ -95,10 +95,11 @@ func (l *Launcher) ensurePoolForService(ctx context.Context, app *core_v1alpha.A
 	image := ver.ImageUrl
 	for _, svc := range ver.Config.Services {
 		if svc.Name == serviceName && svc.Image != "" {
-			image = svc.Image
+			image = containerdx.NormalizeImageReference(svc.Image)
 			l.Log.Info("using custom image for service",
 				"service", serviceName,
-				"image", image)
+				"image", image,
+				"original", svc.Image)
 			break
 		}
 	}
@@ -396,14 +397,38 @@ func (l *Launcher) updatePool(ctx context.Context, pool *compute_v1alpha.Sandbox
 		"desired_instances", pool.DesiredInstances,
 		"references", pool.ReferencedByVersions)
 
-	// Use Put to update the pool - this replaces the entity and properly handles empty slices
-	var rpcE entityserver_v1alpha.Entity
-	rpcE.SetId(pool.ID.String())
-	rpcE.SetAttrs(entity.New(
-		pool.Encode,
-	).Attrs())
+	// Start with pool.Encode() to get all non-zero fields
+	attrs := pool.Encode()
 
-	_, err := l.EAC.Put(ctx, &rpcE)
+	// Add db/id attribute (required for Replace, not included in Encode())
+	attrs = append(attrs, entity.Attr{
+		ID:    entity.DBId,
+		Value: entity.AnyValue(pool.ID),
+	})
+
+	// Override critical fields that might be zero but still need to be set explicitly
+	// (pool.Encode() filters out zero values with entity.Empty() checks)
+
+	// Always include DesiredInstances, even when 0 (for scale-down)
+	if pool.DesiredInstances == 0 {
+		attrs = append(attrs, entity.Int64(compute_v1alpha.SandboxPoolDesiredInstancesId, 0))
+	}
+
+	// Always include CurrentInstances, even when 0
+	if pool.CurrentInstances == 0 {
+		attrs = append(attrs, entity.Int64(compute_v1alpha.SandboxPoolCurrentInstancesId, 0))
+	}
+
+	// Always include ReadyInstances, even when 0
+	if pool.ReadyInstances == 0 {
+		attrs = append(attrs, entity.Int64(compute_v1alpha.SandboxPoolReadyInstancesId, 0))
+	}
+
+	// Note: ReferencedByVersions is handled correctly by Encode() -
+	// empty array means no refs will be added, which clears them with Replace
+
+	// Use Replace to update all attributes, including zero values
+	_, err := l.EAC.Replace(ctx, attrs, 0)
 	if err != nil {
 		return fmt.Errorf("failed to update pool: %w", err)
 	}
