@@ -712,6 +712,89 @@ func TestUpdatePoolPreservesMetadata(t *testing.T) {
 	assert.Empty(t, updatedPool.ReferencedByVersions, "should clear ReferencedByVersions")
 }
 
+// TestAutoModePoolReusePreservesDesiredInstances tests that when reusing a pool
+// for an auto mode service, the launcher does NOT reset desired_instances.
+// For auto mode, the activator manages desired_instances based on traffic,
+// so the launcher should not interfere.
+func TestAutoModePoolReusePreservesDesiredInstances(t *testing.T) {
+	ctx := context.Background()
+	log := testutils.TestLogger(t)
+
+	server, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	// Create app
+	app := &core_v1alpha.App{
+		Project: entity.Id("project-1"),
+	}
+	appID, err := server.Client.Create(ctx, "test-app", app)
+	require.NoError(t, err)
+	app.ID = appID
+
+	// Create version with auto-mode service
+	version := &core_v1alpha.AppVersion{
+		App:      app.ID,
+		Version:  "v1",
+		ImageUrl: "web:latest",
+		Config: core_v1alpha.Config{
+			Port: 8080,
+			Services: []core_v1alpha.Services{
+				{
+					Name: "web",
+					ServiceConcurrency: core_v1alpha.ServiceConcurrency{
+						Mode:                "auto",
+						RequestsPerInstance: 10,
+						ScaleDownDelay:      "15m",
+					},
+				},
+			},
+		},
+	}
+	verID, err := server.Client.Create(ctx, "test-ver", version)
+	require.NoError(t, err)
+	version.ID = verID
+
+	// Set as active version
+	app.ActiveVersion = version.ID
+	err = server.Client.Update(ctx, app)
+	require.NoError(t, err)
+
+	// First reconciliation - creates pool with desired=0 (correct for auto mode)
+	launcher := NewLauncher(log, server.EAC)
+	err = launcher.Reconcile(ctx, app, nil)
+	require.NoError(t, err)
+
+	pools := listAllPools(t, ctx, server)
+	require.Len(t, pools, 1, "should create one pool")
+	pool := pools[0]
+	assert.Equal(t, "web", pool.Service)
+	assert.Equal(t, int64(0), pool.DesiredInstances, "auto mode should start with desired=0")
+
+	// Simulate activator scaling up the pool (e.g., traffic arrived)
+	pool.DesiredInstances = 1
+	err = server.Client.Update(ctx, &pool)
+	require.NoError(t, err)
+
+	// Verify pool now has desired=1
+	pools = listAllPools(t, ctx, server)
+	require.Len(t, pools, 1)
+	assert.Equal(t, int64(1), pools[0].DesiredInstances, "activator scaled to 1")
+
+	// Second reconciliation - reuses the same pool
+	// BUG: Before the fix, this would reset desired_instances back to 0
+	err = launcher.Reconcile(ctx, app, nil)
+	require.NoError(t, err)
+
+	// CRITICAL: For auto mode, desired_instances should NOT be reset by launcher
+	pools = listAllPools(t, ctx, server)
+	require.Len(t, pools, 1, "should still have one pool (reused)")
+	pool = pools[0]
+	assert.Equal(t, int64(1), pool.DesiredInstances,
+		"auto mode pool desired_instances should be preserved (not reset to 0)")
+	assert.Contains(t, pool.ReferencedByVersions, version.ID,
+		"pool should still reference the version")
+}
+
 // Helper functions
 
 func listAllPools(t *testing.T, ctx context.Context, server *testutils.InMemEntityServer) []compute_v1alpha.SandboxPool {
