@@ -18,11 +18,11 @@ package activator
 //      RLock → check capacity → RUnlock
 //      Lock → re-check capacity → acquire if still available → Unlock
 //
-// 2. Sentinel Pattern (ensureSandboxPool)
-//    Prevents duplicate pool creation by concurrent requests:
+// 2. Sentinel Pattern (requestPoolCapacity)
+//    Prevents duplicate pool updates by concurrent requests:
 //      - First request inserts sentinel with inProgress=true
 //      - Concurrent requests wait on sentinel's done channel
-//      - Creator replaces sentinel with real pool or error
+//      - First request finds pool and increments capacity, then replaces sentinel
 //
 // 3. Channel Notification (ensurePoolAndWaitForSandbox, watchSandboxes)
 //    Immediate notification when new sandboxes become available:
@@ -245,11 +245,11 @@ func (a *localActivator) waitForSandbox(ctx context.Context, ver *core_v1alpha.A
 
 	var pool *compute_v1alpha.SandboxPool
 	if incrementPool {
-		// Ensure pool exists and increment desired capacity
+		// Request additional capacity from pool
 		var err error
-		pool, err = a.ensureSandboxPool(ctx, ver, service)
+		pool, err = a.requestPoolCapacity(ctx, ver, service)
 		if err != nil {
-			return nil, fmt.Errorf("failed to ensure sandbox pool: %w", err)
+			return nil, fmt.Errorf("failed to request pool capacity: %w", err)
 		}
 
 		a.log.Info("waiting for sandbox from pool",
@@ -362,10 +362,11 @@ func (a *localActivator) waitForSandbox(ctx context.Context, ver *core_v1alpha.A
 	}
 }
 
-// ensureSandboxPool creates or updates a SandboxPool for the given app version and service.
-// It increments DesiredInstances to request additional capacity.
-// Uses a sentinel pattern to prevent duplicate pool creation races.
-func (a *localActivator) ensureSandboxPool(ctx context.Context, ver *core_v1alpha.AppVersion, service string) (*compute_v1alpha.SandboxPool, error) {
+// requestPoolCapacity finds the SandboxPool created by DeploymentLauncher and increments DesiredInstances.
+// It uses retry logic with exponential backoff to handle the race where Activator receives
+// a request before DeploymentLauncher has finished creating the pool.
+// Uses a sentinel pattern to prevent duplicate capacity requests from concurrent callers.
+func (a *localActivator) requestPoolCapacity(ctx context.Context, ver *core_v1alpha.AppVersion, service string) (*compute_v1alpha.SandboxPool, error) {
 	key := verKey{ver.ID.String(), service}
 
 	for {
@@ -539,9 +540,11 @@ func (a *localActivator) ensureSandboxPool(ctx context.Context, ver *core_v1alph
 			"error", "DeploymentLauncher should have created this pool")
 
 		return nil, fmt.Errorf(
-			"pool not found for app=%s version=%s service=%s after %d retries - "+
-				"DeploymentLauncher controller should have created this pool on deployment",
-			ver.App, ver.Version, service, maxRetries)
+			"pool not found for app=%s version=%s service=%s after %d query attempts over ~%dms - "+
+				"DeploymentLauncher should create pools when an app version is deployed. "+
+				"Verify the app is deployed and check DeploymentLauncher logs",
+			ver.App, ver.Version, service, maxRetries,
+			int((baseRetryDelay*(1<<maxRetries))/time.Millisecond))
 	}
 }
 
