@@ -191,6 +191,7 @@ func TestPoolReuseOnConfigChange(t *testing.T) {
 	poolsV1 := listAllPools(t, ctx, server)
 	require.Len(t, poolsV1, 1, "should create one pool for v1")
 	poolV1ID := poolsV1[0].ID
+	assert.Equal(t, int64(1), poolsV1[0].DesiredInstances, "v1 pool should have DesiredInstances=1 for fixed mode")
 
 	// Create v2 with same image and env vars, only concurrency settings changed
 	v2 := &core_v1alpha.AppVersion{
@@ -234,13 +235,16 @@ func TestPoolReuseOnConfigChange(t *testing.T) {
 	assert.Contains(t, pool.ReferencedByVersions, v1.ID, "pool should still reference v1")
 	assert.Contains(t, pool.ReferencedByVersions, v2.ID, "pool should now also reference v2")
 	assert.Len(t, pool.ReferencedByVersions, 2, "pool should reference both versions")
+
+	// CRITICAL: When reusing a pool, DesiredInstances should be updated to match new version's concurrency settings
+	assert.Equal(t, int64(2), pool.DesiredInstances, "pool should update DesiredInstances from 1 to 2 when v2 changes NumInstances")
 }
 
 // TestNewPoolOnImageChange tests that DeploymentLauncher creates a new pool
 // when the image changes (SandboxSpec doesn't match), and scales down the old pool
 func TestNewPoolOnImageChange(t *testing.T) {
 	ctx := context.Background()
-	log := testutils.TestDebugLogger(t)
+	log := testutils.TestLogger(t)
 
 	server, cleanup := testutils.NewInMemEntityServer(t)
 	defer cleanup()

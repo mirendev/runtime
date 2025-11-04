@@ -146,6 +146,17 @@ func buildVariablesFromAppConfig(appConfig *appconfig.AppConfig) []core_v1alpha.
 	return variables
 }
 
+// mergeVariablesFromAppConfig merges environment variables from app.toml into existing variables.
+// If appConfig has env vars, they replace the existing variables.
+// If appConfig is nil or has no env vars, the existing variables are preserved.
+func mergeVariablesFromAppConfig(existingVars []core_v1alpha.Variable, appConfig *appconfig.AppConfig) []core_v1alpha.Variable {
+	newVars := buildVariablesFromAppConfig(appConfig)
+	if newVars != nil {
+		return newVars
+	}
+	return existingVars
+}
+
 func (b *Builder) nextVersion(ctx context.Context, name string) (
 	*core_v1alpha.App,
 	*core_v1alpha.AppVersion,
@@ -496,12 +507,13 @@ func (b *Builder) BuildFromTar(ctx context.Context, state *build_v1alpha.Builder
 
 	mrv.Config.Commands = serviceCmds
 
-	// Copy environment variables from app config
-	mrv.Config.Variable = buildVariablesFromAppConfig(ac)
-	if len(mrv.Config.Variable) > 0 {
-		b.Log.Info("copied env vars from app config", "count", len(mrv.Config.Variable))
+	// Merge environment variables from app config
+	// Preserves existing variables when app.toml has no [[env]] section
+	mrv.Config.Variable = mergeVariablesFromAppConfig(mrv.Config.Variable, ac)
+	if ac != nil && len(ac.EnvVars) > 0 {
+		b.Log.Info("merged env vars from app config", "count", len(ac.EnvVars))
 	} else {
-		b.Log.Info("no env vars to copy")
+		b.Log.Info("no new env vars from app config, preserving existing variables")
 	}
 
 	id, err := b.ec.Create(ctx, mrv.Version, mrv)

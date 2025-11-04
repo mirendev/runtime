@@ -116,6 +116,13 @@ func (l *Launcher) ensurePoolForService(ctx context.Context, app *core_v1alpha.A
 		return fmt.Errorf("failed to build sandbox spec: %w", err)
 	}
 
+	// Calculate desired instances based on concurrency mode
+	desiredInstances := int64(0)
+	fixedMode := svcConcurrency.Mode == "fixed" && svcConcurrency.NumInstances > 0
+	if fixedMode {
+		desiredInstances = svcConcurrency.NumInstances
+	}
+
 	// Try to find existing pool with matching spec
 	poolWithEntity, err := l.findMatchingPool(ctx, app.ID, serviceName, spec)
 	if err != nil {
@@ -129,11 +136,28 @@ func (l *Launcher) ensurePoolForService(ctx context.Context, app *core_v1alpha.A
 			"service", serviceName,
 			"app", app.ID)
 
+		needsUpdate := false
+
 		// Add this version to referenced_by_versions if not already present
 		if !containsRef(poolWithEntity.Pool.ReferencedByVersions, ver.ID) {
 			poolWithEntity.Pool.ReferencedByVersions = append(poolWithEntity.Pool.ReferencedByVersions, ver.ID)
+			needsUpdate = true
+		}
+
+		// Update desired instances if they've changed
+		if poolWithEntity.Pool.DesiredInstances != desiredInstances {
+			poolWithEntity.Pool.DesiredInstances = desiredInstances
+			if fixedMode {
+				l.Log.Info("fixed mode service, updating desired instances",
+					"service", serviceName,
+					"desired_instances", desiredInstances)
+			}
+			needsUpdate = true
+		}
+
+		if needsUpdate {
 			if err := l.updatePool(ctx, poolWithEntity); err != nil {
-				return fmt.Errorf("failed to update pool references: %w", err)
+				return fmt.Errorf("failed to update pool: %w", err)
 			}
 		}
 
@@ -146,10 +170,7 @@ func (l *Launcher) ensurePoolForService(ctx context.Context, app *core_v1alpha.A
 		"app", app.ID,
 		"version", ver.Version)
 
-	// Determine initial desired_instances based on mode
-	desiredInstances := int64(0) // Default: auto mode starts at 0
-	if svcConcurrency.Mode == "fixed" && svcConcurrency.NumInstances > 0 {
-		desiredInstances = svcConcurrency.NumInstances
+	if fixedMode {
 		l.Log.Info("fixed mode service, starting with desired instances",
 			"service", serviceName,
 			"desired_instances", desiredInstances)

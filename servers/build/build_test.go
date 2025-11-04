@@ -353,3 +353,90 @@ func TestBuildServicesConfig(t *testing.T) {
 		})
 	}
 }
+
+func TestMergeVariablesFromAppConfig(t *testing.T) {
+	tests := []struct {
+		name         string
+		existingVars []core_v1alpha.Variable
+		appConfig    *appconfig.AppConfig
+		wantVars     []core_v1alpha.Variable
+	}{
+		{
+			name: "preserve existing vars when app.toml has no env section",
+			existingVars: []core_v1alpha.Variable{
+				{Key: "API_KEY", Value: "secret123"},
+				{Key: "DATABASE_URL", Value: "postgres://localhost/db"},
+			},
+			appConfig: nil,
+			wantVars: []core_v1alpha.Variable{
+				{Key: "API_KEY", Value: "secret123"},
+				{Key: "DATABASE_URL", Value: "postgres://localhost/db"},
+			},
+		},
+		{
+			name: "preserve existing vars when app.toml has empty env section",
+			existingVars: []core_v1alpha.Variable{
+				{Key: "API_KEY", Value: "secret123"},
+			},
+			appConfig: &appconfig.AppConfig{
+				EnvVars: []appconfig.AppEnvVar{},
+			},
+			wantVars: []core_v1alpha.Variable{
+				{Key: "API_KEY", Value: "secret123"},
+			},
+		},
+		{
+			name: "replace vars when app.toml has new env vars",
+			existingVars: []core_v1alpha.Variable{
+				{Key: "OLD_VAR", Value: "old_value"},
+			},
+			appConfig: &appconfig.AppConfig{
+				EnvVars: []appconfig.AppEnvVar{
+					{Name: "NEW_VAR", Value: "new_value"},
+				},
+			},
+			wantVars: []core_v1alpha.Variable{
+				{Key: "NEW_VAR", Value: "new_value"},
+			},
+		},
+		{
+			name:         "handle nil existing vars with no app config",
+			existingVars: nil,
+			appConfig:    nil,
+			wantVars:     nil,
+		},
+		{
+			name:         "handle empty existing vars with no app config",
+			existingVars: []core_v1alpha.Variable{},
+			appConfig:    nil,
+			wantVars:     []core_v1alpha.Variable{},
+		},
+		{
+			name:         "set new vars when there are no existing vars",
+			existingVars: nil,
+			appConfig: &appconfig.AppConfig{
+				EnvVars: []appconfig.AppEnvVar{
+					{Name: "NEW_VAR", Value: "new_value"},
+				},
+			},
+			wantVars: []core_v1alpha.Variable{
+				{Key: "NEW_VAR", Value: "new_value"},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := mergeVariablesFromAppConfig(tt.existingVars, tt.appConfig)
+			if tt.wantVars == nil {
+				assert.Nil(t, result)
+			} else {
+				require.Equal(t, len(tt.wantVars), len(result))
+				for i, want := range tt.wantVars {
+					assert.Equal(t, want.Key, result[i].Key, "variable %d key mismatch", i)
+					assert.Equal(t, want.Value, result[i].Value, "variable %d value mismatch", i)
+				}
+			}
+		})
+	}
+}

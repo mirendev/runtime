@@ -496,7 +496,16 @@ func (a *localActivator) ensureSandboxPool(ctx context.Context, ver *core_v1alph
 		}
 
 		if foundPool != nil {
-			// Found pool created by DeploymentLauncher - cache it and increment
+			// Found pool created by DeploymentLauncher - check MaxPoolSize before incrementing
+			if foundPool.DesiredInstances >= MaxPoolSize {
+				a.mu.Unlock()
+				a.log.Warn("launcher-created pool at maximum size, cannot increment further",
+					"pool", foundPool.ID,
+					"max_size", MaxPoolSize,
+					"current", foundPool.DesiredInstances)
+				return foundPool, fmt.Errorf("pool has reached maximum size of %d", MaxPoolSize)
+			}
+
 			foundPool.DesiredInstances++
 			a.pools[key] = &poolState{
 				pool:       foundPool,

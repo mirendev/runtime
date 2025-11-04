@@ -4,6 +4,8 @@ import (
 	"context"
 	"io"
 	"log/slog"
+	"strings"
+	"sync/atomic"
 	"testing"
 
 	apiserver "miren.dev/runtime/api/entityserver"
@@ -82,15 +84,22 @@ func TestLogger(t *testing.T) *slog.Logger {
 
 // TestDebugLogger creates a test logger that outputs logs
 func TestDebugLogger(t *testing.T) *slog.Logger {
-	return slog.New(slog.NewTextHandler(testWriter{t}, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	w := &testWriter{t: t}
+	t.Cleanup(func() { w.closed.Store(true) })
+	return slog.New(slog.NewTextHandler(w, &slog.HandlerOptions{Level: slog.LevelDebug}))
 }
 
 // testWriter wraps *testing.T to implement io.Writer
 type testWriter struct {
-	t *testing.T
+	t      *testing.T
+	closed atomic.Bool
 }
 
-func (tw testWriter) Write(p []byte) (n int, err error) {
-	tw.t.Log(string(p))
+func (tw *testWriter) Write(p []byte) (n int, err error) {
+	if tw.closed.Load() {
+		return len(p), nil
+	}
+	tw.t.Helper()
+	tw.t.Log(strings.TrimRight(string(p), "\n"))
 	return len(p), nil
 }
