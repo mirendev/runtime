@@ -82,6 +82,10 @@ func TestLsvdClient_IdempotentCreateAndMount(t *testing.T) {
 	})
 
 	t.Run("MountVolume requires CreateVolume first", func(t *testing.T) {
+		if !allowNBDTest() {
+			t.Skip("Skipping test that requires root privileges for NBD operations")
+		}
+
 		tempDir := t.TempDir()
 		log := slog.Default()
 		client := NewLsvdClient(log, tempDir)
@@ -110,6 +114,10 @@ func TestLsvdClient_IdempotentCreateAndMount(t *testing.T) {
 	})
 
 	t.Run("CreateVolume loads existing volumes from disk", func(t *testing.T) {
+		if !allowNBDTest() {
+			t.Skip("Skipping test that requires root privileges for NBD operations")
+		}
+
 		tempDir := t.TempDir()
 		log := slog.Default()
 
@@ -821,6 +829,10 @@ func TestLsvdClient_CreateVolumeStatus(t *testing.T) {
 	})
 
 	t.Run("mount and unmount update status correctly", func(t *testing.T) {
+		if !allowNBDTest() {
+			t.Skip("Skipping test that requires root privileges for NBD operations")
+		}
+
 		ctx := context.Background()
 		tempDir := t.TempDir()
 		log := slog.Default()
@@ -882,6 +894,10 @@ func TestLsvdClient_CreateVolumeStatus(t *testing.T) {
 
 func TestLsvdClient_MountStateVerification(t *testing.T) {
 	t.Run("corrects mount state mismatch on MountVolume", func(t *testing.T) {
+		if !allowNBDTest() {
+			t.Skip("Skipping test that requires root privileges for NBD operations")
+		}
+
 		ctx := context.Background()
 		tempDir := t.TempDir()
 		log := slog.Default()
@@ -1056,6 +1072,10 @@ func TestLsvdClient_DiskInitialization(t *testing.T) {
 	})
 
 	t.Run("MountVolume fails if disk not initialized", func(t *testing.T) {
+		if !allowNBDTest() {
+			t.Skip("Skipping test that requires root privileges for NBD operations")
+		}
+
 		ctx := context.Background()
 		tempDir := t.TempDir()
 		log := slog.Default()

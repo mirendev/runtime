@@ -13,12 +13,12 @@ permissions:
 
 jobs:
   lint:
-    runs-on: ubuntu-latest
+    runs-on: depot-ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v5
 
     - name: Set up Go
-      uses: actions/setup-go@v4
+      uses: actions/setup-go@v6
       with:
         go-version-file: 'go.mod'
         cache: true
@@ -81,19 +81,81 @@ jobs:
 
   test:
     needs: lint
-    runs-on: depot-ubuntu-latest,dagger=0.18.9
+    runs-on: depot-ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v5
+
+    - name: Set up Go
+      uses: actions/setup-go@v6
+      with:
+        go-version-file: 'go.mod'
+        cache: true
+
+    - name: Generate GitHub App token
+      id: generate-token
+      uses: actions/create-github-app-token@v2
+      with:
+        app-id: ${{ vars.MIREN_RFD_DEPLOY_GH_APP_ID }}
+        private-key: ${{ secrets.MIREN_RFD_DEPLOY_GH_APP_KEY }}
+        owner: mirendev
+
+    - name: Configure Git for private Go modules
+      run: |
+        # Set GOPRIVATE to include miren.dev modules
+        echo "GOPRIVATE=miren.dev,github.com/mirendev" >> $GITHUB_ENV
+        # Configure git to use the token for GitHub access
+        git config --global url."https://x-access-token:${{ steps.generate-token.outputs.token }}@github.com/".insteadOf "https://github.com/"
+
+    - name: Install iso
+      env:
+        GOPRIVATE: miren.dev
+        CGO_ENABLED: 0
+      run: |
+        go install miren.dev/iso/cmd/iso@latest
+        echo "$(go env GOPATH)/bin" >> $GITHUB_PATH
+
     - name: Test
-      run: dagger --progress=plain call test --dir=.
+      env:
+        DISABLE_NBD_TEST: 1
+      run: make test
 
   test-e2e:
     needs: lint
-    runs-on: depot-ubuntu-latest,dagger=0.18.9
+    runs-on: depot-ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v5
+
+    - name: Set up Go
+      uses: actions/setup-go@v6
+      with:
+        go-version-file: 'go.mod'
+        cache: true
+
+    - name: Generate GitHub App token
+      id: generate-token
+      uses: actions/create-github-app-token@v2
+      with:
+        app-id: ${{ vars.MIREN_RFD_DEPLOY_GH_APP_ID }}
+        private-key: ${{ secrets.MIREN_RFD_DEPLOY_GH_APP_KEY }}
+        owner: mirendev
+
+    - name: Configure Git for private Go modules
+      run: |
+        # Set GOPRIVATE to include miren.dev modules
+        echo "GOPRIVATE=miren.dev,github.com/mirendev" >> $GITHUB_ENV
+        # Configure git to use the token for GitHub access
+        git config --global url."https://x-access-token:${{ steps.generate-token.outputs.token }}@github.com/".insteadOf "https://github.com/"
+
+    - name: Install iso
+      env:
+        GOPRIVATE: miren.dev
+        CGO_ENABLED: 0
+      run: |
+        go install miren.dev/iso/cmd/iso@latest
+        echo "$(go env GOPATH)/bin" >> $GITHUB_PATH
+
     - name: Test
-      run: dagger --progress=plain call test --dir=. --tests="./e2e" --tags="e2e"
+      run: make test-e2e
 
   build-binaries:
     needs: lint
@@ -102,10 +164,10 @@ jobs:
         include:
           - os: linux
             arch: amd64
-            runner: depot-ubuntu-latest,dagger=0.18.9
+            runner: depot-ubuntu-latest
           - os: linux
             arch: arm64
-            runner: depot-ubuntu-latest-arm,dagger=0.18.9
+            runner: depot-ubuntu-latest-arm
           - os: darwin
             arch: amd64
             runner: macos-latest
@@ -118,9 +180,9 @@ jobs:
       attestations: write
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Set up Go
-        uses: actions/setup-go@v4
+        uses: actions/setup-go@v6
         with:
           go-version-file: 'go.mod'
       - name: Build binary for ${{ matrix.os }}-${{ matrix.arch }}
@@ -133,10 +195,10 @@ jobs:
     needs: lint
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v5
 
     - name: Set up Go
-      uses: actions/setup-go@v4
+      uses: actions/setup-go@v6
       with:
         go-version-file: 'go.mod'
 

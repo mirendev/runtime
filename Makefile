@@ -1,15 +1,8 @@
 # Miren Runtime Makefile
 #
-# This Makefile supports two containerized build systems:
-# - iso: For local development (default targets)
-# - Dagger: For CI/CD (targets with -dagger suffix)
-#
-# Phase 1: Development uses iso, CI uses Dagger
-# Phase 2: CI will migrate to iso (future)
+# This project uses iso for containerized builds and testing.
 
-# Silence Dagger message about using its cloud
-export DAGGER_NO_NAG=1
-# Disable telemetry in Dagger and anything else that honors DNT
+# Disable telemetry
 export DO_NOT_TRACK=1
 
 # Generate a unique session name based on the project directory
@@ -67,7 +60,22 @@ dev-rebuild: ## Rebuild dev environment image
 
 .PHONY: dev dev-start dev-shell dev-server-start dev-server-stop \
         dev-server-restart dev-server-status dev-server-logs \
-        dev-stop dev-restart dev-status dev-rebuild
+        dev-stop dev-restart dev-status dev-rebuild \
+        dev-stop dev-restart dev-status
+
+services:
+	iso run bash hack/run-services.sh
+
+.PHONY: services
+
+image:
+	iso run sh -c "docker save runtime-shell | gzip > /workspace/tmp/miren-image.tar.gz"
+	@echo "Image saved to tmp/miren-image.tar.gz"
+
+release-data:
+	bash hack/release-data.sh
+
+.PHONY: release-data
 
 #
 # Testing (iso)
