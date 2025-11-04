@@ -144,14 +144,13 @@ func (l *Launcher) ensurePoolForService(ctx context.Context, app *core_v1alpha.A
 			needsUpdate = true
 		}
 
-		// Update desired instances if they've changed
-		if poolWithEntity.Pool.DesiredInstances != desiredInstances {
+		// For fixed mode services, update desired instances if they've changed
+		// For auto mode, the activator manages desired instances - don't touch it
+		if fixedMode && poolWithEntity.Pool.DesiredInstances != desiredInstances {
 			poolWithEntity.Pool.DesiredInstances = desiredInstances
-			if fixedMode {
-				l.Log.Info("fixed mode service, updating desired instances",
-					"service", serviceName,
-					"desired_instances", desiredInstances)
-			}
+			l.Log.Info("fixed mode service, updating desired instances",
+				"service", serviceName,
+				"desired_instances", desiredInstances)
 			needsUpdate = true
 		}
 
