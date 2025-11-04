@@ -31,10 +31,11 @@ type IdentityConfig struct {
 
 // KeyConfig holds a reusable cryptographic key
 type KeyConfig struct {
-	Name        string `yaml:"name"`                  // Name of the key (e.g., "miren-cli@hostname")
-	Type        string `yaml:"type"`                  // Type of key: "ed25519", etc.
-	PrivateKey  string `yaml:"private_key"`           // PEM encoded private key
-	Fingerprint string `yaml:"fingerprint,omitempty"` // Fingerprint of the public key
+	Name        string            `yaml:"name"`                  // Name of the key (e.g., "miren-cli@hostname")
+	Type        string            `yaml:"type"`                  // Type of key: "ed25519", etc.
+	PrivateKey  string            `yaml:"private_key"`           // PEM encoded private key
+	Fingerprint string            `yaml:"fingerprint,omitempty"` // Fingerprint of the public key
+	Metadata    map[string]string `yaml:"metadata,omitempty"`    // Arbitrary metadata about the key
 }
 
 // ClusterConfig holds the configuration for a single cluster

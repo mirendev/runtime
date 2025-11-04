@@ -535,6 +535,18 @@ func saveKeyPairToConfig(identityName, cloudURL string, keyPair *cloudauth.KeyPa
 
 	// Save the key separately (if it doesn't already exist)
 	if !mainConfig.HasKey(keyName) {
+		// Get hostname for metadata
+		hostname, err := os.Hostname()
+		if err != nil {
+			hostname = "unknown"
+		}
+
+		// Create metadata with hostname and creation timestamp
+		metadata := map[string]string{
+			"hostname":   hostname,
+			"created_at": time.Now().UTC().Format(time.RFC3339),
+		}
+
 		keyConfigData := &clientconfig.ConfigData{
 			Keys: map[string]*clientconfig.KeyConfig{
 				keyName: {
@@ -542,6 +554,7 @@ func saveKeyPairToConfig(identityName, cloudURL string, keyPair *cloudauth.KeyPa
 					Type:        "ed25519",
 					PrivateKey:  privateKeyPEM,
 					Fingerprint: keyPair.Fingerprint(),
+					Metadata:    metadata,
 				},
 			},
 		}
