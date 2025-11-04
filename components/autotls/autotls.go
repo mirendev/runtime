@@ -14,7 +14,6 @@ func ServeTLS(ctx context.Context, log *slog.Logger, dataPath string, h http.Han
 	mgr := &autocert.Manager{
 		Prompt: autocert.AcceptTOS,
 		Cache:  autocert.DirCache(filepath.Join(dataPath, "certs")),
-		Email:  "info@miren.dev",
 		// TODO set HostPolicy to only allow certain domains
 	}
 
