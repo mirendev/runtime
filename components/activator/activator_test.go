@@ -724,7 +724,8 @@ func TestActivatorNoPendingCreatesPool(t *testing.T) {
 				},
 			},
 		},
-		DesiredInstances: 0, // Launcher starts at 0 for auto mode
+		ReferencedByVersions: []entity.Id{testVer.ID},
+		DesiredInstances:     0, // Launcher starts at 0 for auto mode
 	}
 	poolID, err := server.Client.Create(ctx, "launcher-pool", launcherPool)
 	require.NoError(t, err)
@@ -872,7 +873,8 @@ func TestActivatorDeletedPoolDetection(t *testing.T) {
 				},
 			},
 		},
-		DesiredInstances: 0,
+		ReferencedByVersions: []entity.Id{testVer.ID},
+		DesiredInstances:     0,
 	}
 	poolID, err := server.Client.Create(ctx, "launcher-pool", pool)
 	require.NoError(t, err)
@@ -984,7 +986,8 @@ func TestActivatorFindsLauncherCreatedPool(t *testing.T) {
 				},
 			},
 		},
-		DesiredInstances: 0, // Launcher starts at 0 for auto mode
+		ReferencedByVersions: []entity.Id{testVer.ID},
+		DesiredInstances:     0, // Launcher starts at 0 for auto mode
 	}
 	poolID, err := server.Client.Create(ctx, "launcher-pool", launcherPool)
 	require.NoError(t, err)
@@ -1138,7 +1141,8 @@ func TestFindPoolInStore(t *testing.T) {
 					},
 				},
 			},
-			DesiredInstances: 1,
+			ReferencedByVersions: []entity.Id{testVer.ID},
+			DesiredInstances:     1,
 		}
 
 		poolID, err := server.Client.Create(ctx, "test-pool", pool)
@@ -1149,9 +1153,9 @@ func TestFindPoolInStore(t *testing.T) {
 		foundPool, err := activator.findPoolInStore(ctx, testVer.ID, "web")
 		require.NoError(t, err)
 		require.NotNil(t, foundPool, "Should find the pool")
-		assert.Equal(t, poolID, foundPool.ID)
-		assert.Equal(t, "web", foundPool.Service)
-		assert.Equal(t, testVer.ID, foundPool.SandboxSpec.Version)
+		assert.Equal(t, poolID, foundPool.pool.ID)
+		assert.Equal(t, "web", foundPool.pool.Service)
+		assert.Equal(t, testVer.ID, foundPool.pool.SandboxSpec.Version)
 	})
 
 	t.Run("returns nil for wrong service", func(t *testing.T) {
@@ -1182,5 +1186,194 @@ func TestFindPoolInStore(t *testing.T) {
 		foundPool, err := freshActivator.findPoolInStore(ctx, testVer.ID, "web")
 		require.NoError(t, err)
 		assert.Nil(t, foundPool, "Should return nil when no pools exist")
+	})
+}
+
+// TestFindPoolByReferencedByVersions tests that pools can be found when a version
+// is in the referenced_by_versions list (pool reuse across deployments).
+func TestFindPoolByReferencedByVersions(t *testing.T) {
+	ctx := context.Background()
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	// Create entity server
+	server, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	// Create two app versions
+	oldVersion := entity.Id("app_version/db-app-v1")
+	newVersion := entity.Id("app_version/db-app-v2")
+
+	// Create a pool that was originally created for oldVersion
+	// but now references both oldVersion and newVersion (due to pool reuse)
+	pool := &compute_v1alpha.SandboxPool{
+		Service: "web",
+		SandboxSpec: compute_v1alpha.SandboxSpec{
+			Version: oldVersion, // Original version
+		},
+		ReferencedByVersions: []entity.Id{oldVersion, newVersion}, // Now references both
+		DesiredInstances:     1,
+		CurrentInstances:     1,
+		ReadyInstances:       1,
+	}
+
+	// Store the pool
+	poolID, err := server.Client.Create(ctx, "test-pool", pool)
+	require.NoError(t, err)
+	pool.ID = poolID
+
+	// Create activator
+	activator := &localActivator{
+		log:             log,
+		eac:             server.EAC,
+		versions:        make(map[verKey]*verSandboxes),
+		pools:           make(map[verKey]*poolState),
+		newSandboxChans: make(map[verKey][]chan struct{}),
+	}
+
+	// Test: Should find pool by oldVersion (in referenced_by_versions)
+	t.Run("finds pool by old version", func(t *testing.T) {
+		foundPoolWithRev, err := activator.findPoolInStore(ctx, oldVersion, "web")
+		require.NoError(t, err)
+		require.NotNil(t, foundPoolWithRev)
+		assert.Equal(t, pool.ID, foundPoolWithRev.pool.ID)
+		assert.Equal(t, "web", foundPoolWithRev.pool.Service)
+		assert.Greater(t, foundPoolWithRev.revision, int64(0), "Should have non-zero revision")
+	})
+
+	// Test: Should find pool by newVersion (in referenced_by_versions)
+	t.Run("finds pool by new version via referenced_by_versions", func(t *testing.T) {
+		foundPoolWithRev, err := activator.findPoolInStore(ctx, newVersion, "web")
+		require.NoError(t, err)
+		require.NotNil(t, foundPoolWithRev, "Should find pool even though SandboxSpec.Version != newVersion")
+		assert.Equal(t, pool.ID, foundPoolWithRev.pool.ID)
+		assert.Equal(t, "web", foundPoolWithRev.pool.Service)
+	})
+
+	// Test: Should NOT find pool by version not in referenced_by_versions
+	t.Run("does not find pool by unrelated version", func(t *testing.T) {
+		unrelatedVersion := entity.Id("app_version/db-app-v3")
+		foundPoolWithRev, err := activator.findPoolInStore(ctx, unrelatedVersion, "web")
+		require.NoError(t, err)
+		assert.Nil(t, foundPoolWithRev, "Should not find pool for version not in referenced_by_versions")
+	})
+}
+
+// TestPoolIncrementWithOCC tests that the activator uses optimistic concurrency control
+// when incrementing pool desired_instances to prevent stale cache writes.
+func TestPoolIncrementWithOCC(t *testing.T) {
+	ctx := context.Background()
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	// Create entity server
+	server, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	// Create app and version entities
+	app := &core_v1alpha.App{}
+	appID, err := server.Client.Create(ctx, "test-app", app)
+	require.NoError(t, err)
+
+	testVer := &core_v1alpha.AppVersion{
+		App:      appID,
+		Version:  "v1",
+		ImageUrl: "test:latest",
+		Config: core_v1alpha.Config{
+			Services: []core_v1alpha.Services{
+				{Name: "web"},
+			},
+		},
+	}
+	verID, err := server.Client.Create(ctx, "test-ver", testVer)
+	require.NoError(t, err)
+	testVer.ID = verID
+
+	// Create initial pool
+	pool := &compute_v1alpha.SandboxPool{
+		Service:              "web",
+		SandboxSpec:          compute_v1alpha.SandboxSpec{Version: testVer.ID},
+		ReferencedByVersions: []entity.Id{testVer.ID},
+		DesiredInstances:     0,
+		CurrentInstances:     0,
+		ReadyInstances:       0,
+	}
+
+	poolID, err := server.Client.Create(ctx, "test-pool", pool)
+	require.NoError(t, err)
+	pool.ID = poolID
+
+	// Get the revision from the created pool
+	getRes, err := server.EAC.Get(ctx, poolID.String())
+	require.NoError(t, err)
+	initialRevision := getRes.Entity().Revision()
+
+	// Create activator with cached pool state
+	activator := &localActivator{
+		log:             log,
+		eac:             server.EAC,
+		versions:        make(map[verKey]*verSandboxes),
+		pools:           make(map[verKey]*poolState),
+		newSandboxChans: make(map[verKey][]chan struct{}),
+	}
+
+	// Cache the pool
+	key := verKey{testVer.ID.String(), "web"}
+	activator.pools[key] = &poolState{
+		pool:       pool,
+		revision:   initialRevision,
+		inProgress: false,
+	}
+
+	t.Run("succeeds when no concurrent modification", func(t *testing.T) {
+		// Request pool capacity - should succeed and increment from 0 to 1
+		resultPool, err := activator.requestPoolCapacity(ctx, testVer, "web")
+		require.NoError(t, err)
+		require.NotNil(t, resultPool)
+
+		// Verify pool was incremented
+		assert.Equal(t, int64(1), resultPool.DesiredInstances)
+
+		// Verify cache was updated with new revision
+		cachedState := activator.pools[key]
+		assert.Equal(t, int64(1), cachedState.pool.DesiredInstances)
+		assert.Greater(t, cachedState.revision, initialRevision, "Revision should have been updated")
+	})
+
+	t.Run("retries on revision conflict", func(t *testing.T) {
+		// Get current state from store
+		getRes, err := server.EAC.Get(ctx, pool.ID.String())
+		require.NoError(t, err)
+		var currentPool compute_v1alpha.SandboxPool
+		currentPool.Decode(getRes.Entity().Entity())
+		currentRevision := getRes.Entity().Revision()
+
+		// Simulate stale cache: Set cache to an old revision
+		activator.pools[key] = &poolState{
+			pool:       &currentPool,
+			revision:   initialRevision, // Stale revision!
+			inProgress: false,
+		}
+
+		// Meanwhile, simulate another process modifying the pool
+		// (e.g., pool manager scales it up)
+		currentPool.DesiredInstances = 5
+		patchAttrs := []entity.Attr{
+			{ID: entity.DBId, Value: entity.AnyValue(pool.ID)},
+			{ID: compute_v1alpha.SandboxPoolDesiredInstancesId, Value: entity.AnyValue(int64(5))},
+		}
+		_, err = server.EAC.Patch(ctx, patchAttrs, currentRevision)
+		require.NoError(t, err)
+
+		// Now request pool capacity with stale cache
+		// Should detect conflict and retry with fresh state
+		resultPool, err := activator.requestPoolCapacity(ctx, testVer, "web")
+		require.NoError(t, err)
+		require.NotNil(t, resultPool)
+
+		// Should have incremented from the FRESH value (5) not the stale cache (1)
+		assert.Equal(t, int64(6), resultPool.DesiredInstances, "Should increment from fresh value after conflict")
+
+		// Verify cache was updated
+		cachedState := activator.pools[key]
+		assert.Equal(t, int64(6), cachedState.pool.DesiredInstances)
 	})
 }

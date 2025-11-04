@@ -876,9 +876,10 @@ func TestPerServiceEnvVarsDoNotRestartOtherServices(t *testing.T) {
 	// Find web and postgres pools
 	var webPool, postgresPool *compute_v1alpha.SandboxPool
 	for i := range pools {
-		if pools[i].Service == "web" {
+		switch pools[i].Service {
+		case "web":
 			webPool = &pools[i]
-		} else if pools[i].Service == "postgres" {
+		case "postgres":
 			postgresPool = &pools[i]
 		}
 	}

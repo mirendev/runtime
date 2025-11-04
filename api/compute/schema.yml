@@ -346,6 +346,7 @@ kinds:
       type: ref
       doc: AppVersions that reference this pool (enables reuse when specs match)
       many: true
+      indexed: true
 
   node:
     constraints:
