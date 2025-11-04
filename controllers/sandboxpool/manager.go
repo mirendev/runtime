@@ -294,78 +294,49 @@ func (m *Manager) createSandbox(ctx context.Context, pool *compute_v1alpha.Sandb
 	return nil
 }
 
-// scaleDown stops excess sandboxes based on LastActivity and ScaleDownDelay
+// scaleDown stops excess sandboxes to bring actual count down to desired count.
+// This is called when actual > desired (proactive scale-down).
+// Sandboxes are retired in priority order: oldest LastActivity first.
 func (m *Manager) scaleDown(ctx context.Context, pool *compute_v1alpha.SandboxPool, sandboxes []*compute_v1alpha.Sandbox, count int64) error {
-	// Get AppVersion to derive concurrency config
-	verResp, err := m.eac.Get(ctx, pool.SandboxSpec.Version.String())
-	if err != nil {
-		return fmt.Errorf("failed to get version: %w", err)
-	}
-	var ver core_v1alpha.AppVersion
-	ver.Decode(verResp.Entity().Entity())
-
-	// Get service concurrency config to determine scale-down behavior
-	svcConcurrency, err := core_v1alpha.GetServiceConcurrency(&ver, pool.Service)
-	if err != nil {
-		return fmt.Errorf("failed to get service concurrency: %w", err)
-	}
-
-	// Use concurrency strategy to determine scale-down delay
-	strategy := concurrency.NewStrategy(&svcConcurrency)
-	scaleDownDelay := strategy.ScaleDownDelay()
-
-	// Skip scale-down if ScaleDownDelay is 0 (fixed mode - never retire)
-	if scaleDownDelay == 0 {
-		m.log.Debug("skipping scale-down for fixed mode pool", "pool", pool.ID)
-		return nil
-	}
-
 	now := time.Now()
 
-	// Filter for candidates: RUNNING sandboxes that are idle (LastActivity + ScaleDownDelay < now)
+	// Collect all RUNNING sandboxes as candidates
 	type candidate struct {
 		sb           *compute_v1alpha.Sandbox
-		idleTime     time.Duration
 		lastActivity time.Time
 	}
 
 	var candidates []candidate
-
 	for _, sb := range sandboxes {
 		// Only consider RUNNING sandboxes
 		if sb.Status != compute_v1alpha.RUNNING {
 			continue
 		}
 
-		// Check if idle based on LastActivity
 		lastActivity := sb.LastActivity
+		// If LastActivity is not set, treat as current time (most recently active)
 		if lastActivity.IsZero() {
-			// No activity recorded yet - treat as recently active (don't retire)
-			continue
+			lastActivity = now
 		}
 
-		idleTime := now.Sub(lastActivity)
-		if idleTime > scaleDownDelay {
-			candidates = append(candidates, candidate{
-				sb:           sb,
-				idleTime:     idleTime,
-				lastActivity: lastActivity,
-			})
-		}
+		candidates = append(candidates, candidate{
+			sb:           sb,
+			lastActivity: lastActivity,
+		})
 	}
 
-	// If we don't have enough idle sandboxes, we can't scale down the requested amount
+	if len(candidates) == 0 {
+		m.log.Debug("no RUNNING sandboxes available to retire", "pool", pool.ID)
+		return nil
+	}
+
+	// Ensure we don't try to stop more than available
 	if int64(len(candidates)) < count {
-		m.log.Warn("not enough idle sandboxes to scale down",
+		m.log.Warn("not enough sandboxes to scale down",
 			"pool", pool.ID,
 			"requested", count,
-			"idle", len(candidates))
+			"available", len(candidates))
 		count = int64(len(candidates))
-	}
-
-	if count == 0 {
-		m.log.Debug("no idle sandboxes to retire", "pool", pool.ID)
-		return nil
 	}
 
 	// Sort by LastActivity (oldest first) - retire least recently active sandboxes
@@ -378,16 +349,15 @@ func (m *Manager) scaleDown(ctx context.Context, pool *compute_v1alpha.SandboxPo
 		}
 	}
 
-	// Stop the first 'count' sandboxes
+	// Stop the first 'count' sandboxes (those with oldest LastActivity)
 	stopped := int64(0)
 	for i := int64(0); i < count && int(i) < len(candidates); i++ {
 		sb := candidates[i].sb
 
-		m.log.Info("retiring idle sandbox",
+		m.log.Info("retiring sandbox",
 			"pool", pool.ID,
 			"sandbox", sb.ID,
-			"last_activity", candidates[i].lastActivity,
-			"idle_time", candidates[i].idleTime)
+			"last_activity", candidates[i].lastActivity)
 
 		// Mark sandbox as STOPPED
 		var rpcE entityserver_v1alpha.Entity
