@@ -16,9 +16,6 @@ setup_kernel_mounts
 
 cd /src
 
-# Wait for minio to be ready (etcd and clickhouse are started by miren in standalone mode)
-wait_for_service "minio" "nc -z minio 9000"
-
 # Build miren
 make bin/miren
 
