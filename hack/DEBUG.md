@@ -4,7 +4,7 @@ This guide explains how to debug the Miren runtime locally with your IDE while u
 
 ## Overview
 
-Miren can be debugged locally while connecting to services (etcd, MinIO, ClickHouse) running in a Dagger container. This setup allows you to:
+Miren can be debugged locally while connecting to services (etcd, ClickHouse) running in a Dagger container. This setup allows you to:
 - Use your local IDE debugger (e.g., GoLand, VS Code)
 - Make code changes without rebuilding containers
 - Debug with breakpoints and step through code
@@ -18,7 +18,6 @@ Miren can be debugged locally while connecting to services (etcd, MinIO, ClickHo
    ```
    This starts a Dagger container with:
    - etcd (distributed key-value store for entity storage)
-   - MinIO (S3-compatible object storage)
    - ClickHouse (analytics database)
 
    These services run inside the container but will be made accessible to your local miren.
@@ -52,7 +51,6 @@ Miren can be debugged locally while connecting to services (etcd, MinIO, ClickHo
 ### Service Endpoints
 
 After running the port forwarding script, services are available at:
-- **MinIO**: `localhost:9001` (S3 API)
 - **etcd**: `localhost:2379`
 - **ClickHouse**:
   - Native protocol: `localhost:9000`
@@ -61,7 +59,6 @@ After running the port forwarding script, services are available at:
 ### Environment Variables
 
 The following environment variables are automatically exported when you source the script:
-- `S3_URL=http://localhost:9001`
 - `ETCD_ENDPOINTS=localhost:2379`
 - `CLICKHOUSE_URL=http://localhost:8123`
 
@@ -74,7 +71,6 @@ The following environment variables are automatically exported when you source t
    - **Package path**: `miren.dev/runtime/cmd/miren`
    - **Program arguments**: `server -vv --data-path=/var/lib/miren/data --etcd=localhost:2379 --clickhouse-addr=localhost:9000`
    - **Environment variables**:
-     - `S3_URL=minio://admin123:admin123@localhost:9001/buckets`
      - `ETCD_ENDPOINTS=http://localhost:2379`
      - `CLICKHOUSE_URL=clickhouse://localhost:9000`
    - **Run with sudo**: Yes (required for sandbox operations)
@@ -100,7 +96,6 @@ Add to `.vscode/launch.json`:
                 "--clickhouse-addr=localhost:9000"
             ],
             "env": {
-                "S3_URL": "minio://admin123:admin123@localhost:9001/buckets",
                 "ETCD_ENDPOINTS": "http://localhost:2379",
                 "CLICKHOUSE_URL": "clickhouse://localhost:9000"
             },
@@ -117,7 +112,7 @@ Add to `.vscode/launch.json`:
 
 If automatic IP detection fails, you can manually specify service IPs:
 ```bash
-MINIO_IP=10.87.x.x ETCD_IP=10.87.x.x CLICKHOUSE_IP=10.87.x.x ./hack/forward-services.sh
+ETCD_IP=10.87.x.x CLICKHOUSE_IP=10.87.x.x ./hack/forward-services.sh
 ```
 
 To find the correct IPs, check the container logs or run:
