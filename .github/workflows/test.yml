@@ -84,6 +84,27 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version-file: 'go.mod'
+        cache: true
+
+    - name: Configure git for private modules
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        git config --global url."https://x-access-token:${GH_TOKEN}@github.com/".insteadOf "https://github.com/"
+
+    - name: Install iso
+      env:
+        GOPRIVATE: miren.dev
+        CGO_ENABLED: 0
+      run: |
+        go install miren.dev/iso/cmd/iso@latest
+        echo "$(go env GOPATH)/bin" >> $GITHUB_PATH
+
     - name: Test
       run: make test
 
@@ -92,6 +113,27 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version-file: 'go.mod'
+        cache: true
+
+    - name: Configure git for private modules
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        git config --global url."https://x-access-token:${GH_TOKEN}@github.com/".insteadOf "https://github.com/"
+
+    - name: Install iso
+      env:
+        GOPRIVATE: miren.dev
+        CGO_ENABLED: 0
+      run: |
+        go install miren.dev/iso/cmd/iso@latest
+        echo "$(go env GOPATH)/bin" >> $GITHUB_PATH
+
     - name: Test
       run: make test-e2e
 
