@@ -252,9 +252,25 @@ func (l *Launcher) buildSandboxSpec(ctx context.Context, app *core_v1alpha.App, 
 		},
 	}
 
-	// Add config env vars
+	// Add global config env vars
+	envMap := make(map[string]string)
 	for _, x := range ver.Config.Variable {
-		appCont.Env = append(appCont.Env, x.Key+"="+x.Value)
+		envMap[x.Key] = x.Value
+	}
+
+	// Find and merge per-service env vars (these override global vars)
+	for _, svc := range ver.Config.Services {
+		if svc.Name == serviceName {
+			for _, x := range svc.Env {
+				envMap[x.Key] = x.Value
+			}
+			break
+		}
+	}
+
+	// Convert map to env var slice
+	for k, v := range envMap {
+		appCont.Env = append(appCont.Env, k+"="+v)
 	}
 
 	// Find service command
@@ -544,7 +560,7 @@ func (l *Launcher) cleanupOldVersionPools(ctx context.Context, app *core_v1alpha
 
 		if isUsedByCurrentVersion {
 			// Pool is being reused by current version - keep ALL references
-			// (both old and new versions are using the same pool)
+			// Multiple versions may reference the same pool during rolling deployments
 			l.Log.Info("pool is being reused by current version, keeping all references",
 				"pool", pool.ID,
 				"service", pool.Service)

@@ -14,6 +14,7 @@ import (
 
 func EnvSet(ctx *Context, opts struct {
 	AppCentric
+	Service   string   `short:"S" long:"service" description:"Set env var for specific service only (if not specified, sets for all services)"`
 	Env       []string `short:"e" long:"env" description:"Set environment variables (use KEY to prompt, KEY=VALUE to set directly, KEY=@file to read from file)"`
 	Sensitive []string `short:"s" long:"sensitive" description:"Set sensitive environment variables (use KEY to prompt with masking, KEY=VALUE to set directly, KEY=@file to read from file)"`
 }) error {
@@ -33,15 +34,83 @@ func EnvSet(ctx *Context, opts struct {
 
 	var changes bool
 
+	// Determine if we're setting global or per-service env vars
+	isServiceSpecific := opts.Service != ""
+
 	// Create a map to track existing env vars for efficient lookup
 	envMap := make(map[string]*app_v1alpha.NamedValue)
 	var envvars []*app_v1alpha.NamedValue
 
-	if cfg.HasEnvVars() {
-		// Build map from existing env vars
-		for _, ev := range cfg.EnvVars() {
-			envMap[ev.Key()] = ev
-			envvars = append(envvars, ev)
+	if isServiceSpecific {
+		// Validate that the service exists by checking the actual deployed services
+		// This includes both statically defined and dynamically detected services (like "web" from Procfile)
+		if cfg.HasServices() || cfg.HasCommands() {
+			serviceExists := false
+
+			// Check services list
+			for _, svc := range cfg.Services() {
+				if svc.Service() == opts.Service {
+					serviceExists = true
+					break
+				}
+			}
+
+			// Check commands list (services with commands are valid services)
+			if !serviceExists {
+				for _, cmd := range cfg.Commands() {
+					if cmd.Service() == opts.Service {
+						serviceExists = true
+						break
+					}
+				}
+			}
+
+			if !serviceExists {
+				// Build a helpful error message with available services
+				var availableServices []string
+				seenServices := make(map[string]bool)
+
+				for _, svc := range cfg.Services() {
+					if !seenServices[svc.Service()] {
+						availableServices = append(availableServices, svc.Service())
+						seenServices[svc.Service()] = true
+					}
+				}
+				for _, cmd := range cfg.Commands() {
+					if !seenServices[cmd.Service()] {
+						availableServices = append(availableServices, cmd.Service())
+						seenServices[cmd.Service()] = true
+					}
+				}
+
+				if len(availableServices) > 0 {
+					return fmt.Errorf("service %q not found. Available services: %s", opts.Service, strings.Join(availableServices, ", "))
+				} else {
+					return fmt.Errorf("service %q not found (no services detected in app)", opts.Service)
+				}
+			}
+		}
+
+		// Find the service and get its existing env vars
+		for _, svc := range cfg.Services() {
+			if svc.Service() == opts.Service {
+				if svc.HasServiceEnv() {
+					for _, ev := range svc.ServiceEnv() {
+						envMap[ev.Key()] = ev
+						envvars = append(envvars, ev)
+					}
+				}
+				break
+			}
+		}
+	} else {
+		// Global env vars
+		if cfg.HasEnvVars() {
+			// Build map from existing env vars
+			for _, ev := range cfg.EnvVars() {
+				envMap[ev.Key()] = ev
+				envvars = append(envvars, ev)
+			}
 		}
 	}
 
@@ -174,7 +243,22 @@ func EnvSet(ctx *Context, opts struct {
 		return nil
 	}
 
-	cfg.SetEnvVars(envvars)
+	// Update configuration based on whether it's global or per-service
+	if isServiceSpecific {
+		// Update the service's env vars
+		services := cfg.Services()
+		for i, svc := range services {
+			if svc.Service() == opts.Service {
+				svc.SetServiceEnv(envvars)
+				services[i] = svc
+				break
+			}
+		}
+		cfg.SetServices(services)
+	} else {
+		// Update global env vars
+		cfg.SetEnvVars(envvars)
+	}
 
 	setres, err := ac.SetConfiguration(ctx, opts.App, cfg)
 	if err != nil {

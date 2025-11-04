@@ -19,6 +19,16 @@ types:
         type: string
         index: 1
 
+  - type: ServiceConfig
+    fields:
+      - name: service
+        type: string
+        index: 0
+      - name: service_env
+        type: list
+        element: NamedValue
+        index: 1
+
   - type: Configuration
     fields:
       - name: env_vars
@@ -39,6 +49,11 @@ types:
         type: string
         index: 4
         doc: "Prefixed to all commands run in the container"
+      - name: services
+        type: list
+        element: ServiceConfig
+        index: 5
+        doc: "Per-service configuration including environment variables"
 
   - type: NamedValue
     fields:

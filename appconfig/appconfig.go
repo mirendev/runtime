@@ -35,6 +35,7 @@ type ServiceConcurrencyConfig struct {
 type ServiceConfig struct {
 	Command     string                    `toml:"command"`
 	Image       string                    `toml:"image"`
+	EnvVars     []AppEnvVar               `toml:"env"`
 	Concurrency *ServiceConcurrencyConfig `toml:"concurrency"`
 }
 

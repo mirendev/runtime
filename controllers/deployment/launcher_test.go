@@ -812,3 +812,174 @@ func listAllPools(t *testing.T, ctx context.Context, server *testutils.InMemEnti
 
 	return pools
 }
+
+// TestPerServiceEnvVarsDoNotRestartOtherServices verifies that changing env vars
+// for one service doesn't cause other services to restart (pool reuse works correctly)
+func TestPerServiceEnvVarsDoNotRestartOtherServices(t *testing.T) {
+	ctx := context.Background()
+	log := testutils.TestLogger(t)
+
+	server, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	// Create app
+	app := &core_v1alpha.App{
+		Project: entity.Id("project-1"),
+	}
+	appID, err := server.Client.Create(ctx, "test-app", app)
+	require.NoError(t, err)
+	app.ID = appID
+
+	// Create version v1 with two services: web and postgres
+	version1 := &core_v1alpha.AppVersion{
+		App:      app.ID,
+		Version:  "v1",
+		ImageUrl: "test:latest",
+		Config: core_v1alpha.Config{
+			Port: 3000,
+			Services: []core_v1alpha.Services{
+				{
+					Name: "web",
+					ServiceConcurrency: core_v1alpha.ServiceConcurrency{
+						Mode:         "fixed",
+						NumInstances: 1,
+					},
+				},
+				{
+					Name: "postgres",
+					ServiceConcurrency: core_v1alpha.ServiceConcurrency{
+						Mode:         "fixed",
+						NumInstances: 1,
+					},
+				},
+			},
+		},
+	}
+	ver1ID, err := server.Client.Create(ctx, "test-ver-v1", version1)
+	require.NoError(t, err)
+	version1.ID = ver1ID
+
+	// Set as active version
+	app.ActiveVersion = version1.ID
+	err = server.Client.Update(ctx, app)
+	require.NoError(t, err)
+
+	// Create launcher and reconcile to create pools
+	launcher := NewLauncher(log, server.EAC)
+	err = launcher.Reconcile(ctx, app, nil)
+	require.NoError(t, err)
+
+	// Verify both pools were created
+	pools := listAllPools(t, ctx, server)
+	require.Len(t, pools, 2, "should create two pools")
+
+	// Find web and postgres pools
+	var webPool, postgresPool *compute_v1alpha.SandboxPool
+	for i := range pools {
+		if pools[i].Service == "web" {
+			webPool = &pools[i]
+		} else if pools[i].Service == "postgres" {
+			postgresPool = &pools[i]
+		}
+	}
+	require.NotNil(t, webPool, "web pool should exist")
+	require.NotNil(t, postgresPool, "postgres pool should exist")
+
+	// Save postgres pool ID for later comparison
+	postgresPoolID := postgresPool.ID
+
+	// Create version v2 with env var ONLY for web service
+	version2 := &core_v1alpha.AppVersion{
+		App:      app.ID,
+		Version:  "v2",
+		ImageUrl: "test:latest",
+		Config: core_v1alpha.Config{
+			Port: 3000,
+			Services: []core_v1alpha.Services{
+				{
+					Name: "web",
+					Env: []core_v1alpha.Env{
+						{
+							Key:   "API_KEY",
+							Value: "secret123",
+						},
+					},
+					ServiceConcurrency: core_v1alpha.ServiceConcurrency{
+						Mode:         "fixed",
+						NumInstances: 1,
+					},
+				},
+				{
+					Name: "postgres",
+					ServiceConcurrency: core_v1alpha.ServiceConcurrency{
+						Mode:         "fixed",
+						NumInstances: 1,
+					},
+				},
+			},
+		},
+	}
+	ver2ID, err := server.Client.Create(ctx, "test-ver-v2", version2)
+	require.NoError(t, err)
+	version2.ID = ver2ID
+
+	// Update active version to v2
+	app.ActiveVersion = version2.ID
+	err = server.Client.Update(ctx, app)
+	require.NoError(t, err)
+
+	// Reconcile with new version
+	err = launcher.Reconcile(ctx, app, nil)
+	require.NoError(t, err)
+
+	// Verify pools after update
+	poolsAfter := listAllPools(t, ctx, server)
+	require.Len(t, poolsAfter, 3, "should have 3 pools total (old web, new web, reused postgres)")
+
+	// Find the postgres pool - it should be the SAME pool (reused)
+	var postgresPoolAfter *compute_v1alpha.SandboxPool
+	var webV2Pool *compute_v1alpha.SandboxPool
+	for i := range poolsAfter {
+		if poolsAfter[i].Service == "postgres" && poolsAfter[i].ID == postgresPoolID {
+			postgresPoolAfter = &poolsAfter[i]
+		}
+		if poolsAfter[i].Service == "web" && poolsAfter[i].SandboxSpec.Version == version2.ID {
+			webV2Pool = &poolsAfter[i]
+		}
+	}
+
+	// CRITICAL: Postgres pool should be reused (same ID)
+	require.NotNil(t, postgresPoolAfter, "postgres pool should still exist with same ID")
+	assert.Equal(t, postgresPoolID, postgresPoolAfter.ID, "postgres pool ID should be unchanged (reused)")
+	assert.Contains(t, postgresPoolAfter.ReferencedByVersions, version2.ID, "postgres pool should be referenced by v2")
+	// Note: During rolling deployments, pools can be referenced by multiple versions
+	// The old v1 reference will remain until the pool is no longer needed
+	assert.Contains(t, postgresPoolAfter.ReferencedByVersions, version1.ID, "postgres pool should still reference v1 during transition")
+
+	// Web pool should be NEW (different spec due to env var)
+	require.NotNil(t, webV2Pool, "web pool for v2 should exist")
+	assert.NotEqual(t, webPool.ID, webV2Pool.ID, "web pool should be recreated with new ID")
+	assert.Contains(t, webV2Pool.ReferencedByVersions, version2.ID, "web v2 pool should be referenced by v2")
+
+	// Verify env vars are in the web pool spec
+	require.Len(t, webV2Pool.SandboxSpec.Container, 1, "web pool should have one container")
+	foundAPIKey := false
+	for _, envVar := range webV2Pool.SandboxSpec.Container[0].Env {
+		if envVar == "API_KEY=secret123" {
+			foundAPIKey = true
+			break
+		}
+	}
+	assert.True(t, foundAPIKey, "web pool should have API_KEY env var")
+
+	// Verify postgres pool spec does NOT have the API_KEY env var
+	require.Len(t, postgresPoolAfter.SandboxSpec.Container, 1, "postgres pool should have one container")
+	foundAPIKeyInPostgres := false
+	for _, envVar := range postgresPoolAfter.SandboxSpec.Container[0].Env {
+		if envVar == "API_KEY=secret123" {
+			foundAPIKeyInPostgres = true
+			break
+		}
+	}
+	assert.False(t, foundAPIKeyInPostgres, "postgres pool should NOT have API_KEY env var")
+}
