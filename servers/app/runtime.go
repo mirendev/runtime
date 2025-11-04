@@ -39,41 +39,9 @@ func (a *AppInfo) AppInfo(ctx context.Context, state *app_v1alpha.AppStatusAppIn
 			return err
 		}
 		rai.SetActiveVersion(appVer.Version)
-		//rai.SetLastDeploy(standard.ToTimestamp(ver.CreatedAt))
 	} else {
 		appVer.App = appRec.ID
 	}
-
-	/*
-		ai, err := a.Lease.AppInfo(ac.Xid)
-		if err != nil {
-			return err
-		}
-	*/
-
-	/*
-
-		cores, err := a.CPU.CurrentCPUUsage(ac.Xid)
-		if err != nil {
-			return err
-		}
-
-		rai.SetLastMinCPU(cores)
-
-		cores, err = a.CPU.CPUUsageOverLastHour(ac.Xid)
-		if err != nil {
-			return err
-		}
-
-		rai.SetLastHourCPU(cores)
-
-		cores, err = a.CPU.CPUUsageOverDay(ac.Xid)
-		if err != nil {
-			return err
-		}
-
-		rai.SetLastDayCPU(cores)
-	*/
 
 	uats, err := a.CPU.CPUUsageLastHour(name)
 	if err != nil {
@@ -91,7 +59,7 @@ func (a *AppInfo) AppInfo(ctx context.Context, state *app_v1alpha.AppStatusAppIn
 		usages = append(usages, &rcpu)
 	}
 
-	memusages, err := a.Mem.UsageLastHour(name)
+	memusages, err := a.Mem.UsageLastHour(appRec.ID.String())
 	if err != nil {
 		return err
 	}

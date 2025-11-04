@@ -2,11 +2,14 @@ package metrics
 
 import (
 	"context"
+	"crypto/rand"
 	"fmt"
 	"log/slog"
 	"strconv"
+	"sync"
 	"time"
 
+	"github.com/oklog/ulid/v2"
 	"miren.dev/runtime/pkg/asm/autoreg"
 	"miren.dev/runtime/pkg/units"
 )
@@ -15,6 +18,10 @@ type CPUUsage struct {
 	Log    *slog.Logger
 	Writer *VictoriaMetricsWriter `asm:"victoriametrics-writer,optional"`
 	Reader *VictoriaMetricsReader `asm:"victoriametrics-reader,optional"`
+
+	mu         sync.Mutex
+	cpuSeconds map[string]float64
+	instance   string
 }
 
 var _ = autoreg.Register[CPUUsage]()
@@ -24,7 +31,12 @@ func (m *CPUUsage) Populated() error {
 }
 
 func (m *CPUUsage) Setup() error {
-	m.Log.Info("CPU usage metrics initialized with VictoriaMetrics backend")
+	m.cpuSeconds = make(map[string]float64)
+
+	// Generate unique instance ID using ULID
+	m.instance = ulid.MustNew(ulid.Now(), rand.Reader).String()
+
+	m.Log.Info("CPU usage metrics initialized with VictoriaMetrics backend", "instance", m.instance)
 	return nil
 }
 
@@ -33,27 +45,30 @@ func (m *CPUUsage) RecordUsage(ctx context.Context, entity string, windowStart, 
 		return nil
 	}
 
-	// Calculate CPU cores used during this window
-	windowDurationUsec := windowEnd.Sub(windowStart).Microseconds()
-	if windowDurationUsec == 0 {
-		return nil
-	}
+	// Convert CPU microseconds to seconds
+	cpuSecondsIncrement := float64(cpuUsec) / 1_000_000.0
 
-	// cores = cpu_usec / window_duration_usec
-	cores := float64(cpuUsec) / float64(windowDurationUsec)
+	// Create a key for this entity (could include attrs if needed for different time series)
+	key := entity
+
+	m.mu.Lock()
+	m.cpuSeconds[key] += cpuSecondsIncrement
+	totalCPUSeconds := m.cpuSeconds[key]
+	m.mu.Unlock()
 
 	// Build labels from attributes
 	labels := make(map[string]string)
 	labels["entity"] = entity
+	labels["instance"] = m.instance
 	for k, v := range attrs {
 		labels[k] = v
 	}
 
-	// Write CPU usage in cores
+	// Write cumulative CPU seconds counter
 	point := MetricPoint{
-		Name:      "cpu_usage_cores",
+		Name:      "cpu_usage_seconds_total",
 		Labels:    labels,
-		Value:     cores,
+		Value:     totalCPUSeconds,
 		Timestamp: windowEnd,
 	}
 
@@ -73,8 +88,8 @@ func (m *CPUUsage) CPUUsageLastHour(entity string) ([]UsageAtTime, error) {
 	now := time.Now()
 	start := now.Add(-1 * time.Hour)
 
-	// Query average CPU cores per minute over the last hour
-	query := fmt.Sprintf(`avg_over_time(cpu_usage_cores{entity="%s"}[1m])`, entity)
+	// Query CPU cores (rate of CPU seconds) per minute over the last hour
+	query := fmt.Sprintf(`rate(cpu_usage_seconds_total{entity="%s"}[1m])`, entity)
 	result, err := m.Reader.RangeQuery(context.Background(), query, start, now, "1m")
 	if err != nil {
 		return nil, fmt.Errorf("failed to query CPU usage: %w", err)
@@ -103,8 +118,8 @@ func (m *CPUUsage) CPUUsageOver(entity string, interval string) (float64, error)
 		return 0, fmt.Errorf("reader not initialized")
 	}
 
-	// Use avg_over_time to get average cores over the interval
-	query := fmt.Sprintf(`avg_over_time(cpu_usage_cores{entity="%s"}[%s])`, entity, interval)
+	// Use rate() to get average cores over the interval
+	query := fmt.Sprintf(`rate(cpu_usage_seconds_total{entity="%s"}[%s])`, entity, interval)
 	result, err := m.Reader.InstantQuery(context.Background(), query, time.Time{})
 	if err != nil {
 		return 0, fmt.Errorf("failed to query CPU usage: %w", err)
@@ -152,7 +167,7 @@ func (m *CPUUsage) CPUUsageDayAgo(entity string, day units.Days) (float64, error
 	dayEnd := dayStart.Add(24 * time.Hour)
 
 	// Query average CPU cores for that specific day
-	query := fmt.Sprintf(`avg_over_time(cpu_usage_cores{entity="%s"}[24h])`, entity)
+	query := fmt.Sprintf(`rate(cpu_usage_seconds_total{entity="%s"}[24h])`, entity)
 	result, err := m.Reader.InstantQuery(context.Background(), query, dayEnd)
 	if err != nil {
 		return 0, fmt.Errorf("failed to query CPU usage: %w", err)

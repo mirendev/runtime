@@ -2,11 +2,14 @@ package metrics
 
 import (
 	"context"
+	"crypto/rand"
 	"fmt"
 	"log/slog"
 	"strconv"
+	"sync"
 	"time"
 
+	"github.com/oklog/ulid/v2"
 	"miren.dev/runtime/pkg/asm/autoreg"
 )
 
@@ -15,6 +18,16 @@ type HTTPMetrics struct {
 	Log    *slog.Logger
 	Writer *VictoriaMetricsWriter `asm:"victoriametrics-writer,optional"`
 	Reader *VictoriaMetricsReader `asm:"victoriametrics-reader,optional"`
+
+	mu       sync.Mutex
+	counters map[string]*counterState
+	instance string
+}
+
+type counterState struct {
+	requestCount  float64
+	durationSum   float64
+	durationCount float64
 }
 
 var _ = autoreg.Register[HTTPMetrics]()
@@ -26,7 +39,12 @@ func (h *HTTPMetrics) Populated() error {
 func (h *HTTPMetrics) Setup() error {
 	// For VictoriaMetrics, we don't need to create tables/schemas
 	// The metrics are created dynamically when first written
-	h.Log.Info("HTTP metrics initialized with VictoriaMetrics backend")
+	h.counters = make(map[string]*counterState)
+
+	// Generate unique instance ID using ULID
+	h.instance = ulid.MustNew(ulid.Now(), rand.Reader).String()
+
+	h.Log.Info("HTTP metrics initialized with VictoriaMetrics backend", "instance", h.instance)
 	return nil
 }
 
@@ -47,37 +65,83 @@ func (h *HTTPMetrics) RecordRequest(ctx context.Context, req HTTPRequest) error 
 		return nil
 	}
 
-	// Convert HTTP request to multiple metric points
+	// Create keys for counter lookups
+	requestKey := fmt.Sprintf("%s:%s:%s:%d", req.App, req.Method, req.Path, req.StatusCode)
+	durationKey := fmt.Sprintf("%s:%s:%s", req.App, req.Method, req.Path)
+
+	h.mu.Lock()
+
+	if h.counters == nil {
+		h.counters = make(map[string]*counterState)
+	}
+
+	// Get or create request counter
+	reqCounter, ok := h.counters[requestKey]
+	if !ok {
+		reqCounter = &counterState{}
+		h.counters[requestKey] = reqCounter
+	}
+	reqCounter.requestCount++
+	requestCount := reqCounter.requestCount
+
+	// Get or create duration counter
+	durCounter, ok := h.counters[durationKey]
+	if !ok {
+		durCounter = &counterState{}
+		h.counters[durationKey] = durCounter
+	}
+	durCounter.durationSum += float64(req.DurationMs) / 1000.0 // Convert ms to seconds
+	durCounter.durationCount++
+	durationSum := durCounter.durationSum
+	durationCount := durCounter.durationCount
+
+	h.mu.Unlock()
+
+	// Write cumulative counter values and individual duration sample
 	points := []MetricPoint{
 		{
-			Name: "http_request_total",
+			Name: "http_requests_total",
 			Labels: map[string]string{
-				"app":    req.App,
-				"method": req.Method,
-				"path":   req.Path,
-				"status": strconv.Itoa(req.StatusCode),
+				"app":      req.App,
+				"method":   req.Method,
+				"path":     req.Path,
+				"status":   strconv.Itoa(req.StatusCode),
+				"instance": h.instance,
 			},
-			Value:     1,
+			Value:     requestCount,
 			Timestamp: req.Timestamp,
 		},
 		{
-			Name: "http_request_duration_ms",
+			Name: "http_request_duration_seconds_sum",
 			Labels: map[string]string{
-				"app":    req.App,
-				"method": req.Method,
-				"path":   req.Path,
+				"app":      req.App,
+				"method":   req.Method,
+				"path":     req.Path,
+				"instance": h.instance,
 			},
-			Value:     float64(req.DurationMs),
+			Value:     durationSum,
 			Timestamp: req.Timestamp,
 		},
 		{
-			Name: "http_response_size_bytes",
+			Name: "http_request_duration_seconds_count",
 			Labels: map[string]string{
-				"app":    req.App,
-				"method": req.Method,
-				"path":   req.Path,
+				"app":      req.App,
+				"method":   req.Method,
+				"path":     req.Path,
+				"instance": h.instance,
 			},
-			Value:     float64(req.ResponseSize),
+			Value:     durationCount,
+			Timestamp: req.Timestamp,
+		},
+		{
+			Name: "http_request_duration_seconds",
+			Labels: map[string]string{
+				"app":      req.App,
+				"method":   req.Method,
+				"path":     req.Path,
+				"instance": h.instance,
+			},
+			Value:     float64(req.DurationMs) / 1000.0,
 			Timestamp: req.Timestamp,
 		},
 	}
@@ -91,7 +155,7 @@ func (h *HTTPMetrics) RPSLastMinute(app string) (float64, error) {
 		return 0, fmt.Errorf("reader not initialized")
 	}
 
-	query := fmt.Sprintf(`rate(http_request_total{app="%s"}[1m])`, app)
+	query := fmt.Sprintf(`sum(rate(http_requests_total{app="%s"}[1m]))`, app)
 	result, err := h.Reader.InstantQuery(context.Background(), query, time.Time{})
 	if err != nil {
 		return 0, fmt.Errorf("failed to query RPS: %w", err)
@@ -134,35 +198,35 @@ func (h *HTTPMetrics) StatsLastHour(app string) ([]RequestStats, error) {
 	start := now.Add(-1 * time.Hour)
 
 	// Query for count per minute
-	countQuery := fmt.Sprintf(`sum(increase(http_request_total{app="%s"}[1m]))`, app)
+	countQuery := fmt.Sprintf(`sum(increase(http_requests_total{app="%s"}[1m]))`, app)
 	countResult, err := h.Reader.RangeQuery(context.Background(), countQuery, start, now, "1m")
 	if err != nil {
 		return nil, fmt.Errorf("failed to query count: %w", err)
 	}
 
-	// Query for average duration
-	avgQuery := fmt.Sprintf(`avg_over_time(http_request_duration_ms{app="%s"}[1m])`, app)
+	// Query for average duration in milliseconds
+	avgQuery := fmt.Sprintf(`(sum(rate(http_request_duration_seconds_sum{app="%s"}[1m])) / sum(rate(http_request_duration_seconds_count{app="%s"}[1m]))) * 1000`, app, app)
 	avgResult, err := h.Reader.RangeQuery(context.Background(), avgQuery, start, now, "1m")
 	if err != nil {
 		return nil, fmt.Errorf("failed to query avg duration: %w", err)
 	}
 
-	// Query for p95 duration
-	p95Query := fmt.Sprintf(`quantile_over_time(0.95, http_request_duration_ms{app="%s"}[1m])`, app)
+	// Query for p95 duration in milliseconds
+	p95Query := fmt.Sprintf(`quantile_over_time(0.95, http_request_duration_seconds{app="%s"}[1m]) * 1000`, app)
 	p95Result, err := h.Reader.RangeQuery(context.Background(), p95Query, start, now, "1m")
 	if err != nil {
 		return nil, fmt.Errorf("failed to query p95: %w", err)
 	}
 
-	// Query for p99 duration
-	p99Query := fmt.Sprintf(`quantile_over_time(0.99, http_request_duration_ms{app="%s"}[1m])`, app)
+	// Query for p99 duration in milliseconds
+	p99Query := fmt.Sprintf(`quantile_over_time(0.99, http_request_duration_seconds{app="%s"}[1m]) * 1000`, app)
 	p99Result, err := h.Reader.RangeQuery(context.Background(), p99Query, start, now, "1m")
 	if err != nil {
 		return nil, fmt.Errorf("failed to query p99: %w", err)
 	}
 
 	// Query for error rate
-	errorQuery := fmt.Sprintf(`sum(rate(http_request_total{app="%s",status=~"[45].."}[1m])) / sum(rate(http_request_total{app="%s"}[1m]))`, app, app)
+	errorQuery := fmt.Sprintf(`sum(rate(http_requests_total{app="%s",status=~"[45].."}[1m])) / sum(rate(http_requests_total{app="%s"}[1m]))`, app, app)
 	errorResult, err := h.Reader.RangeQuery(context.Background(), errorQuery, start, now, "1m")
 	if err != nil {
 		return nil, fmt.Errorf("failed to query error rate: %w", err)
@@ -248,7 +312,7 @@ func (h *HTTPMetrics) TopPaths(app string, limit int) ([]PathStats, error) {
 	}
 
 	// Query for top paths by count
-	query := fmt.Sprintf(`topk(%d, sum by(path) (increase(http_request_total{app="%s"}[1h])))`, limit, app)
+	query := fmt.Sprintf(`topk(%d, sum by(path) (increase(http_requests_total{app="%s"}[1h])))`, limit, app)
 	result, err := h.Reader.InstantQuery(context.Background(), query, time.Time{})
 	if err != nil {
 		return nil, fmt.Errorf("failed to query top paths: %w", err)
@@ -260,8 +324,8 @@ func (h *HTTPMetrics) TopPaths(app string, limit int) ([]PathStats, error) {
 		countStr, _ := r.Value[1].(string)
 		count, _ := strconv.ParseInt(countStr, 10, 64)
 
-		// Query average duration for this path
-		avgQuery := fmt.Sprintf(`avg_over_time(http_request_duration_ms{app="%s",path="%s"}[1h])`, app, path)
+		// Query average duration for this path in milliseconds
+		avgQuery := fmt.Sprintf(`(sum(rate(http_request_duration_seconds_sum{app="%s",path="%s"}[1h])) / sum(rate(http_request_duration_seconds_count{app="%s",path="%s"}[1h]))) * 1000`, app, path, app, path)
 		avgResult, err := h.Reader.InstantQuery(context.Background(), avgQuery, time.Time{})
 		var avgDuration float64
 		if err == nil && len(avgResult.Data.Result) > 0 {
@@ -270,7 +334,7 @@ func (h *HTTPMetrics) TopPaths(app string, limit int) ([]PathStats, error) {
 		}
 
 		// Query error rate for this path
-		errorQuery := fmt.Sprintf(`sum(rate(http_request_total{app="%s",path="%s",status=~"[45].."}[1h])) / sum(rate(http_request_total{app="%s",path="%s"}[1h]))`, app, path, app, path)
+		errorQuery := fmt.Sprintf(`sum(rate(http_requests_total{app="%s",path="%s",status=~"[45].."}[1h])) / sum(rate(http_requests_total{app="%s",path="%s"}[1h]))`, app, path, app, path)
 		errorResult, err := h.Reader.InstantQuery(context.Background(), errorQuery, time.Time{})
 		var errorRate float64
 		if err == nil && len(errorResult.Data.Result) > 0 {
@@ -303,7 +367,7 @@ func (h *HTTPMetrics) ErrorsLastHour(app string) ([]ErrorBreakdown, error) {
 	}
 
 	// Query for errors grouped by status code
-	query := fmt.Sprintf(`sum by(status) (increase(http_request_total{app="%s",status=~"[45].."}[1h]))`, app)
+	query := fmt.Sprintf(`sum by(status) (increase(http_requests_total{app="%s",status=~"[45].."}[1h]))`, app)
 	result, err := h.Reader.InstantQuery(context.Background(), query, time.Time{})
 	if err != nil {
 		return nil, fmt.Errorf("failed to query errors: %w", err)
