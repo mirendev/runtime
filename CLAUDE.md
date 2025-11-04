@@ -4,11 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Development Commands
 
-**IMPORTANT: This project supports two containerized build systems:**
-- **iso**: For local development (default `make` targets) - **Recommended**
-- **Dagger**: For CI/CD (targets with `-dagger` suffix)
-
-This is a two-phase migration: Phase 1 uses iso for development and Dagger for CI. Phase 2 will migrate CI to iso.
+**IMPORTANT: This project uses iso for containerized builds and testing.**
 
 ### Building
 - `make bin/miren` - Build the miren binary using hack/build.sh (includes version info)
@@ -17,22 +13,13 @@ This is a two-phase migration: Phase 1 uses iso for development and Dagger for C
 
 ### Testing
 
-**With iso (local development - recommended):**
 - `make test` - Run all tests using iso (runs hack/test.sh in isolated container)
 - `make test-shell` - Run tests with interactive shell (set USESHELL=1)
 - `make test-e2e` - Run end-to-end tests
 - `hack/it <gopkg>` - Run all tests in a package using iso
 - `hack/run <gopkg> <testname>` - Run a single focused test using iso
 
-**With Dagger (for CI compatibility):**
-- `make test-dagger` - Run all tests using Dagger
-- `make test-dagger-interactive` - Run tests interactively with Dagger
-- `make test-shell-dagger` - Run tests with shell using Dagger
-- `make test-e2e-dagger` - Run end-to-end tests with Dagger
-
 ### Development Environment
-
-**With iso (local development - recommended):**
 
 The dev environment uses **standalone mode** where miren manages its own containerd and buildkit internally, matching how it runs in production.
 
@@ -104,15 +91,9 @@ make dev-shell                # Open another shell (from host)
 make dev-stop                 # Tear down environment
 ```
 
-**With Dagger (for CI compatibility):**
-- `make dev-dagger` - Start development environment with Dagger
-- `make services-dagger` - Run services container for debugging
-
 ### Other Commands
-- `make image` - Export Docker image (iso)
-- `make image-dagger` - Build and import Docker image as `miren:latest` (Dagger)
-- `make release-data` - Create release package tar.gz (iso)
-- `make release-data-dagger` - Create release package tar.gz (Dagger)
+- `make image` - Export Docker image
+- `make release-data` - Create release package tar.gz
 - `make clean` - Remove built binaries
 
 ### ISO Environment
@@ -122,12 +103,6 @@ The project uses **iso** for containerized development with all dependencies pro
 - All default `make` targets and `hack/` scripts run inside the isolated container
 - Services are automatically started and ready before commands run
 - In standalone mode, miren manages etcd and ClickHouse internally
-
-### Dagger Environment (CI/CD)
-The project also maintains **Dagger** for CI/CD:
-- `dagger/main.go` - Dagger module definition
-- `dagger.json` - Dagger configuration
-- Use targets with `-dagger` suffix to run commands with Dagger
 
 ## Architecture Overview
 
@@ -172,21 +147,11 @@ This is the **Miren Runtime** - a container orchestration system built on contai
 
 ### Development Environment Setup
 
-The system supports two containerized development environments:
-
-**ISO (Recommended for local development):**
 The system uses **iso** (isolated Docker environment) for containerized development with all dependencies (containerd, buildkit, gvisor, etcd, ClickHouse, MinIO) provided as services. The development container includes proper cgroup setup for gvisor compatibility.
 
 To get started with iso:
 1. Ensure `iso` is installed and available in your PATH
 2. Run `make dev` or `make test` - iso will automatically start services and run commands
-
-**Dagger (For CI/CD and compatibility):**
-The system also uses **Dagger** for CI/CD with the same dependencies. Dagger configuration is in the `dagger/` directory.
-
-To use Dagger:
-1. Ensure `dagger` is installed and available in your PATH
-2. Run `make test-dagger` or `make dev-dagger` - Dagger will automatically build and run containers
 
 ### Testing Notes
 

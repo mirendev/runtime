@@ -81,19 +81,19 @@ jobs:
 
   test:
     needs: lint
-    runs-on: depot-ubuntu-latest,dagger=0.18.9
+    runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
     - name: Test
-      run: dagger --progress=plain call test --dir=.
+      run: make test
 
   test-e2e:
     needs: lint
-    runs-on: depot-ubuntu-latest,dagger=0.18.9
+    runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
     - name: Test
-      run: dagger --progress=plain call test --dir=. --tests="./e2e" --tags="e2e"
+      run: make test-e2e
 
   build-binaries:
     needs: lint
@@ -102,10 +102,10 @@ jobs:
         include:
           - os: linux
             arch: amd64
-            runner: depot-ubuntu-latest,dagger=0.18.9
+            runner: ubuntu-latest
           - os: linux
             arch: arm64
-            runner: depot-ubuntu-latest-arm,dagger=0.18.9
+            runner: ubuntu-latest-arm
           - os: darwin
             arch: amd64
             runner: macos-latest

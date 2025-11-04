@@ -82,16 +82,23 @@ jobs:
       matrix:
         include:
           - arch: amd64
-            runner: depot-ubuntu-latest,dagger=0.18.9
+            runner: ubuntu-latest
           - arch: arm64
-            runner: depot-ubuntu-latest-arm,dagger=0.18.9
+            runner: ubuntu-latest-arm
     runs-on: ${{ matrix.runner }}
     permissions:
       contents: write
     steps:
     - uses: actions/checkout@v4
     - name: Build and package for ${{ matrix.arch }}
-      run: dagger call package --dir=. export --path=release-base-linux-${{ matrix.arch }}.tar.gz
+      env:
+        GIT_BRANCH: ${{ github.ref_name }}
+        GIT_COMMIT: ${{ github.sha }}
+      run: |
+        # Pass git info from GitHub Actions context to avoid git commands in iso
+        export BUILD_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+        make release-data
+        mv release.tar.gz release-base-linux-${{ matrix.arch }}.tar.gz
     - name: Upload build artifact
       uses: actions/upload-artifact@v4
       with:
@@ -106,10 +113,10 @@ jobs:
         include:
           - os: linux
             arch: amd64
-            runner: depot-ubuntu-latest,dagger=0.18.9
+            runner: ubuntu-latest
           - os: linux
             arch: arm64
-            runner: depot-ubuntu-latest-arm,dagger=0.18.9
+            runner: ubuntu-latest-arm
           - os: darwin
             arch: amd64
             runner: macos-latest
@@ -141,7 +148,7 @@ jobs:
 
   build-and-push-docker:
     needs: [package]
-    runs-on: depot-ubuntu-latest,dagger=0.18.9
+    runs-on: ubuntu-latest
     permissions:
       contents: read
       id-token: write
@@ -236,7 +243,7 @@ jobs:
 
   upload-to-miren:
     needs: [package, build-binaries]
-    runs-on: depot-ubuntu-latest,dagger=0.18.9
+    runs-on: ubuntu-latest
     concurrency:
       group: upload-to-miren-${{ github.ref_name }}
       cancel-in-progress: false

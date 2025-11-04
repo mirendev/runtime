@@ -1,15 +1,8 @@
 # Miren Runtime Makefile
 #
-# This Makefile supports two containerized build systems:
-# - iso: For local development (default targets)
-# - Dagger: For CI/CD (targets with -dagger suffix)
-#
-# Phase 1: Development uses iso, CI uses Dagger
-# Phase 2: CI will migrate to iso (future)
+# This project uses iso for containerized builds and testing.
 
-# Silence Dagger message about using its cloud
-export DAGGER_NO_NAG=1
-# Disable telemetry in Dagger and anything else that honors DNT
+# Disable telemetry
 export DO_NOT_TRACK=1
 
 # Generate a unique session name based on the project directory
@@ -80,51 +73,9 @@ image:
 	@echo "Image saved to tmp/miren-image.tar.gz"
 
 release-data:
-	iso run bash -c "make bin/miren && mkdir -p /tmp/package && \
-		cp bin/miren /tmp/package && \
-		cp /usr/local/bin/runc /tmp/package && \
-		cp /usr/local/bin/containerd-shim-runsc-v1 /tmp/package && \
-		cp /usr/local/bin/containerd-shim-runc-v2 /tmp/package && \
-		cp /usr/local/bin/containerd /tmp/package && \
-		cp /usr/local/bin/nerdctl /tmp/package && \
-		cp /usr/local/bin/ctr /tmp/package && \
-		tar -C /tmp/package -czf /workspace/release.tar.gz ."
+	bash hack/release-data.sh
 
 .PHONY: release-data
-
-#
-# Dagger targets (for CI/CD)
-#
-
-test-dagger:
-	dagger call -q test --dir=.
-
-test-dagger-interactive:
-	dagger call -i -q test --dir=.
-
-test-shell-dagger:
-	dagger call -q test --dir=. --shell
-
-test-e2e-dagger:
-	dagger call -q test --dir=. --tests="./e2e" --tags=e2e
-
-dev-dagger:
-	dagger call -q dev --dir=.
-
-services-dagger:
-	dagger call debug --dir=.
-
-.PHONY: services-dagger
-
-image-dagger:
-	dagger call -q container --dir=. export --path=tmp/latest.tar
-	docker import tmp/latest.tar miren:latest
-	rm tmp/latest.tar
-
-release-data-dagger:
-	dagger call package --dir=. export --path=release.tar.gz
-
-.PHONY: release-data-dagger
 
 #
 # Common targets (work without containerization)
