@@ -146,7 +146,24 @@ func DebugConnection(ctx *Context, opts struct {
 		case "keypair":
 			// For keypair auth, we need to get a JWT token
 			// The server we're testing should be the cluster, not the auth server
-			keyPair, err := cloudauth.LoadKeyPairFromPEM(identity.PrivateKey)
+
+			// Get the private key (handles both direct PrivateKey and KeyRef)
+			var privateKeyPEM string
+			if config != nil {
+				privateKeyPEM, err = config.GetPrivateKeyPEM(identity)
+				if err != nil {
+					ctx.Warn("Failed to get private key: %v", err)
+					return err
+				}
+			} else if identity.PrivateKey != "" {
+				// Fallback for backward compatibility (when identity is created on-the-fly)
+				privateKeyPEM = identity.PrivateKey
+			} else {
+				ctx.Warn("Identity has no private key or key reference")
+				return fmt.Errorf("no private key available")
+			}
+
+			keyPair, err := cloudauth.LoadKeyPairFromPEM(privateKeyPEM)
 			if err != nil {
 				ctx.Warn("Failed to load private key: %v", err)
 				return err

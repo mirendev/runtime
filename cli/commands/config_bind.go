@@ -74,7 +74,7 @@ func ConfigBind(ctx *Context, opts struct {
 	if opts.Cluster == "" && opts.Address == "" {
 		ctx.Info("Fetching available clusters from identity server...")
 
-		clusters, err := fetchAvailableClusters(ctx, identity)
+		clusters, err := fetchAvailableClusters(ctx, mainConfig, identity)
 		if err != nil {
 			return fmt.Errorf("failed to fetch available clusters: %w", err)
 		}

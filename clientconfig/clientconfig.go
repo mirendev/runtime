@@ -23,9 +23,18 @@ const (
 type IdentityConfig struct {
 	Type       string `yaml:"type"`                  // Type of identity: "keypair", "certificate", etc.
 	Issuer     string `yaml:"issuer,omitempty"`      // The auth server that issued this identity (e.g., "https://miren.cloud")
-	PrivateKey string `yaml:"private_key,omitempty"` // PEM encoded private key (for keypair auth)
+	KeyRef     string `yaml:"key_ref,omitempty"`     // Reference to a key in the Keys section (for keypair auth)
+	PrivateKey string `yaml:"private_key,omitempty"` // PEM encoded private key (for keypair auth, deprecated - use KeyRef)
 	ClientCert string `yaml:"client_cert,omitempty"` // PEM encoded client certificate (for cert auth)
 	ClientKey  string `yaml:"client_key,omitempty"`  // PEM encoded client key (for cert auth)
+}
+
+// KeyConfig holds a reusable cryptographic key
+type KeyConfig struct {
+	Name        string `yaml:"name"`                  // Name of the key (e.g., "miren-cli@hostname")
+	Type        string `yaml:"type"`                  // Type of key: "ed25519", etc.
+	PrivateKey  string `yaml:"private_key"`           // PEM encoded private key
+	Fingerprint string `yaml:"fingerprint,omitempty"` // Fingerprint of the public key
 }
 
 // ClusterConfig holds the configuration for a single cluster
@@ -45,6 +54,7 @@ type Config struct {
 	active     string
 	clusters   map[string]*ClusterConfig
 	identities map[string]*IdentityConfig
+	keys       map[string]*KeyConfig
 
 	// The path to the config file that was loaded, if any.
 	sourcePath string
@@ -53,7 +63,7 @@ type Config struct {
 	loadConfigD bool
 
 	// Leaf configs loaded from config.d directory
-	// These are kept separate and checked when accessing clusters/identities
+	// These are kept separate and checked when accessing clusters/identities/keys
 	leafConfigs []*Config
 
 	// Unsaved leaf configs that need to be written to clientconfig.d/
@@ -66,6 +76,7 @@ type ConfigData struct {
 	Active     string                     `yaml:"active_cluster,omitempty"`
 	Clusters   map[string]*ClusterConfig  `yaml:"clusters,omitempty"`
 	Identities map[string]*IdentityConfig `yaml:"identities,omitempty"`
+	Keys       map[string]*KeyConfig      `yaml:"keys,omitempty"`
 }
 
 // UnmarshalYAML implements the yaml.Unmarshaler interface
@@ -78,6 +89,7 @@ func (c *Config) UnmarshalYAML(unmarshal func(interface{}) error) error {
 	c.active = temp.Active
 	c.clusters = temp.Clusters
 	c.identities = temp.Identities
+	c.keys = temp.Keys
 
 	return nil
 }
@@ -88,6 +100,7 @@ func (c *Config) MarshalYAML() (interface{}, error) {
 		Active:     c.active,
 		Clusters:   c.clusters,
 		Identities: c.identities,
+		Keys:       c.keys,
 	}, nil
 }
 
@@ -95,6 +108,7 @@ func NewConfig() *Config {
 	return &Config{
 		clusters:           make(map[string]*ClusterConfig),
 		identities:         make(map[string]*IdentityConfig),
+		keys:               make(map[string]*KeyConfig),
 		unsavedLeafConfigs: make(map[string]*ConfigData),
 	}
 }
@@ -110,6 +124,10 @@ func (c *Config) IsEmpty() bool {
 		return false
 	}
 
+	if len(c.keys) > 0 {
+		return false
+	}
+
 	// Check leaf configs
 	for _, leafConfig := range c.leafConfigs {
 		if len(leafConfig.clusters) > 0 {
@@ -117,6 +135,10 @@ func (c *Config) IsEmpty() bool {
 		}
 
 		if len(leafConfig.identities) > 0 {
+			return false
+		}
+
+		if len(leafConfig.keys) > 0 {
 			return false
 		}
 	}
@@ -163,6 +185,25 @@ func (c *Config) GetIdentity(name string) (*IdentityConfig, error) {
 	}
 
 	return nil, fmt.Errorf("identity %q not found", name)
+}
+
+// GetPrivateKeyPEM resolves and returns the private key PEM for an identity.
+// It handles both direct PrivateKey fields and KeyRef references.
+func (c *Config) GetPrivateKeyPEM(identity *IdentityConfig) (string, error) {
+	// If the identity has a KeyRef, resolve it
+	if identity.KeyRef != "" {
+		key, err := c.GetKey(identity.KeyRef)
+		if err != nil {
+			return "", fmt.Errorf("failed to resolve key reference %q: %w", identity.KeyRef, err)
+		}
+		return key.PrivateKey, nil
+	}
+
+	// Otherwise use the direct PrivateKey field (backward compatibility)
+	if identity.PrivateKey == "" {
+		return "", fmt.Errorf("identity has no private key or key reference")
+	}
+	return identity.PrivateKey, nil
 }
 
 // SetIdentity adds or updates an identity configuration
@@ -260,6 +301,74 @@ func (c *Config) HasIdentities() bool {
 	return c.GetIdentityCount() > 0
 }
 
+// GetKey returns a key configuration by name
+func (c *Config) GetKey(name string) (*KeyConfig, error) {
+	// Check leaf configs first (they override main config)
+	for _, leafConfig := range c.leafConfigs {
+		if leafKey, exists := leafConfig.keys[name]; exists {
+			return leafKey, nil
+		}
+	}
+
+	// Then check main config
+	key, exists := c.keys[name]
+	if exists {
+		return key, nil
+	}
+
+	return nil, fmt.Errorf("key %q not found", name)
+}
+
+// SetKey adds or updates a key configuration
+func (c *Config) SetKey(name string, key *KeyConfig) {
+	if c.keys == nil {
+		c.keys = make(map[string]*KeyConfig)
+	}
+	c.keys[name] = key
+}
+
+// HasKey checks if a key exists in the configuration
+func (c *Config) HasKey(name string) bool {
+	// First check main config
+	_, exists := c.keys[name]
+	if exists {
+		return true
+	}
+
+	// Then check leaf configs
+	for _, leafConfig := range c.leafConfigs {
+		if _, exists := leafConfig.keys[name]; exists {
+			return true
+		}
+	}
+
+	return false
+}
+
+// GetKeyNames returns a sorted list of all key names
+func (c *Config) GetKeyNames() []string {
+	nameSet := make(map[string]bool)
+
+	// Add names from main config
+	for name := range c.keys {
+		nameSet[name] = true
+	}
+
+	// Add names from leaf configs
+	for _, leafConfig := range c.leafConfigs {
+		for name := range leafConfig.keys {
+			nameSet[name] = true
+		}
+	}
+
+	names := make([]string, 0, len(nameSet))
+	for name := range nameSet {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
 // SetActiveCluster sets the active cluster
 func (c *Config) SetActiveCluster(name string) error {
 	if !c.HasCluster(name) {
@@ -317,6 +426,7 @@ func LoadConfig() (*Config, error) {
 	config.active = cdata.Active
 	config.clusters = cdata.Clusters
 	config.identities = cdata.Identities
+	config.keys = cdata.Keys
 
 	// Load additional configs from config.d directory if enabled
 	if loadConfigD {
@@ -418,7 +528,7 @@ func (c *Config) SaveTo(path string) error {
 	cdata.Active = c.active
 	cdata.Clusters = c.clusters
 	cdata.Identities = c.identities
-	//}
+	cdata.Keys = c.keys
 
 	data, err := yaml.Marshal(cdata)
 	if err != nil {
@@ -710,6 +820,7 @@ func loadConfigDir(config *Config) error {
 		leafConfig.active = cdata.Active
 		leafConfig.clusters = cdata.Clusters
 		leafConfig.identities = cdata.Identities
+		leafConfig.keys = cdata.Keys
 		// Store the source filename (without directory path and extension) for identification
 		leafConfig.sourcePath = strings.TrimSuffix(filepath.Base(file), filepath.Ext(file))
 

@@ -161,7 +161,7 @@ func isPrivateAddress(host string) bool {
 }
 
 // fetchAvailableClusters queries the identity server for available clusters
-func fetchAvailableClusters(ctx *Context, identity *clientconfig.IdentityConfig) ([]ClusterResponse, error) {
+func fetchAvailableClusters(ctx *Context, config *clientconfig.Config, identity *clientconfig.IdentityConfig) ([]ClusterResponse, error) {
 	if identity.Type != "keypair" {
 		return nil, fmt.Errorf("cluster listing is only supported for keypair identities")
 	}
@@ -172,8 +172,14 @@ func fetchAvailableClusters(ctx *Context, identity *clientconfig.IdentityConfig)
 		return nil, fmt.Errorf("identity has no issuer configured")
 	}
 
+	// Get the private key (handles both direct PrivateKey and KeyRef)
+	privateKeyPEM, err := config.GetPrivateKeyPEM(identity)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get private key: %w", err)
+	}
+
 	// Load the private key
-	keyPair, err := cloudauth.LoadKeyPairFromPEM(identity.PrivateKey)
+	keyPair, err := cloudauth.LoadKeyPairFromPEM(privateKeyPEM)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load private key: %w", err)
 	}
