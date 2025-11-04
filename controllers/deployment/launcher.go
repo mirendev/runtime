@@ -21,6 +21,12 @@ type Launcher struct {
 	EAC *entityserver_v1alpha.EntityAccessClient
 }
 
+// PoolWithEntity wraps a SandboxPool with its entity, allowing updates without re-fetching
+type PoolWithEntity struct {
+	Pool   *compute_v1alpha.SandboxPool
+	Entity entity.Entity
+}
+
 func NewLauncher(log *slog.Logger, eac *entityserver_v1alpha.EntityAccessClient) *Launcher {
 	return &Launcher{
 		Log: log.With("controller", "deploymentlauncher"),
@@ -111,22 +117,22 @@ func (l *Launcher) ensurePoolForService(ctx context.Context, app *core_v1alpha.A
 	}
 
 	// Try to find existing pool with matching spec
-	existingPool, err := l.findMatchingPool(ctx, app.ID, serviceName, spec)
+	poolWithEntity, err := l.findMatchingPool(ctx, app.ID, serviceName, spec)
 	if err != nil {
 		return fmt.Errorf("failed to find matching pool: %w", err)
 	}
 
-	if existingPool != nil {
+	if poolWithEntity != nil {
 		// Reuse existing pool
 		l.Log.Info("reusing existing pool",
-			"pool", existingPool.ID,
+			"pool", poolWithEntity.Pool.ID,
 			"service", serviceName,
 			"app", app.ID)
 
 		// Add this version to referenced_by_versions if not already present
-		if !containsRef(existingPool.ReferencedByVersions, ver.ID) {
-			existingPool.ReferencedByVersions = append(existingPool.ReferencedByVersions, ver.ID)
-			if err := l.updatePool(ctx, existingPool); err != nil {
+		if !containsRef(poolWithEntity.Pool.ReferencedByVersions, ver.ID) {
+			poolWithEntity.Pool.ReferencedByVersions = append(poolWithEntity.Pool.ReferencedByVersions, ver.ID)
+			if err := l.updatePool(ctx, poolWithEntity); err != nil {
 				return fmt.Errorf("failed to update pool references: %w", err)
 			}
 		}
@@ -248,7 +254,7 @@ func (l *Launcher) buildSandboxSpec(ctx context.Context, app *core_v1alpha.App, 
 }
 
 // findMatchingPool searches for an existing pool with matching spec
-func (l *Launcher) findMatchingPool(ctx context.Context, appID entity.Id, serviceName string, desiredSpec *compute_v1alpha.SandboxSpec) (*compute_v1alpha.SandboxPool, error) {
+func (l *Launcher) findMatchingPool(ctx context.Context, appID entity.Id, serviceName string, desiredSpec *compute_v1alpha.SandboxSpec) (*PoolWithEntity, error) {
 	// List all sandbox pools for this app
 	poolsResp, err := l.EAC.List(ctx, entity.Ref(entity.EntityKind, compute_v1alpha.KindSandboxPool))
 	if err != nil {
@@ -277,7 +283,10 @@ func (l *Launcher) findMatchingPool(ctx context.Context, appID entity.Id, servic
 
 		// Check if specs match
 		if l.specsMatch(&pool.SandboxSpec, desiredSpec) {
-			return &pool, nil
+			return &PoolWithEntity{
+				Pool:   &pool,
+				Entity: *ent.Entity(),
+			}, nil
 		}
 	}
 
@@ -391,20 +400,15 @@ func containsRef(refs []entity.Id, ref entity.Id) bool {
 }
 
 // updatePool updates a pool entity in the store
-func (l *Launcher) updatePool(ctx context.Context, pool *compute_v1alpha.SandboxPool) error {
+func (l *Launcher) updatePool(ctx context.Context, poolWithEntity *PoolWithEntity) error {
+	pool := poolWithEntity.Pool
+	ent := poolWithEntity.Entity
+
 	l.Log.Info("updating pool",
 		"pool", pool.ID,
 		"desired_instances", pool.DesiredInstances,
 		"references", pool.ReferencedByVersions,
 		"num_refs", len(pool.ReferencedByVersions))
-
-	// Get the existing entity to preserve metadata (CreatedAt, UpdatedAt, etc.)
-	resp, err := l.EAC.Get(ctx, string(pool.ID))
-	if err != nil {
-		return fmt.Errorf("failed to get pool entity: %w", err)
-	}
-
-	ent := resp.Entity().Entity()
 
 	// Build new attributes from the pool
 	newAttrs := pool.Encode()
@@ -467,7 +471,7 @@ func (l *Launcher) updatePool(ctx context.Context, pool *compute_v1alpha.Sandbox
 	}
 
 	// Use Replace with the combined attributes (preserves metadata)
-	_, err = l.EAC.Replace(ctx, finalAttrs, 0)
+	_, err := l.EAC.Replace(ctx, finalAttrs, 0)
 	if err != nil {
 		return fmt.Errorf("failed to update pool: %w", err)
 	}
@@ -555,7 +559,11 @@ func (l *Launcher) cleanupOldVersionPools(ctx context.Context, app *core_v1alpha
 		pool.DesiredInstances = 0
 
 		// Persist changes
-		err := l.updatePool(ctx, &pool)
+		poolWithEntity := &PoolWithEntity{
+			Pool:   &pool,
+			Entity: *ent.Entity(),
+		}
+		err := l.updatePool(ctx, poolWithEntity)
 		if err != nil {
 			l.Log.Error("failed to update pool", "error", err, "pool", pool.ID)
 			continue

@@ -681,7 +681,11 @@ func TestUpdatePoolPreservesMetadata(t *testing.T) {
 	pool.ReferencedByVersions = []entity.Id{} // Empty refs
 
 	launcher := NewLauncher(log, server.EAC)
-	err = launcher.updatePool(ctx, pool)
+	poolWithEntity := &PoolWithEntity{
+		Pool:   pool,
+		Entity: *initialEntity,
+	}
+	err = launcher.updatePool(ctx, poolWithEntity)
 	require.NoError(t, err)
 
 	// Get the entity again to verify metadata is preserved
