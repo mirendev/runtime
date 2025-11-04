@@ -33,10 +33,9 @@ func TestGetOrCreateKey(t *testing.T) {
 		keyName := "test-key"
 
 		// Get or create key (should create)
-		keyPair, alreadyRegistered, err := getOrCreateKey(ctx, keyName)
+		keyPair, err := getOrCreateKey(ctx, keyName)
 		require.NoError(t, err)
 		require.NotNil(t, keyPair)
-		assert.False(t, alreadyRegistered, "Should indicate key was newly created")
 
 		// Verify keypair is valid
 		privateKeyPEM, err := keyPair.PrivateKeyPEM()
@@ -58,10 +57,9 @@ func TestGetOrCreateKey(t *testing.T) {
 		keyName := "test-key"
 
 		// First call - create the key
-		keyPair1, alreadyRegistered1, err := getOrCreateKey(ctx, keyName)
+		keyPair1, err := getOrCreateKey(ctx, keyName)
 		require.NoError(t, err)
 		require.NotNil(t, keyPair1)
-		assert.False(t, alreadyRegistered1)
 
 		// Save the key to config
 		config := clientconfig.NewConfig()
@@ -80,10 +78,9 @@ func TestGetOrCreateKey(t *testing.T) {
 		require.NoError(t, err)
 
 		// Second call - should reuse the key
-		keyPair2, alreadyRegistered2, err := getOrCreateKey(ctx, keyName)
+		keyPair2, err := getOrCreateKey(ctx, keyName)
 		require.NoError(t, err)
 		require.NotNil(t, keyPair2)
-		assert.True(t, alreadyRegistered2, "Should indicate key was reused")
 
 		// Verify the keys are the same
 		assert.Equal(t, keyPair1.Fingerprint(), keyPair2.Fingerprint())
@@ -98,11 +95,11 @@ func TestGetOrCreateKey(t *testing.T) {
 		ctx := newTestContext()
 
 		// Create first key
-		keyPair1, _, err := getOrCreateKey(ctx, "key1")
+		keyPair1, err := getOrCreateKey(ctx, "key1")
 		require.NoError(t, err)
 
 		// Create second key
-		keyPair2, _, err := getOrCreateKey(ctx, "key2")
+		keyPair2, err := getOrCreateKey(ctx, "key2")
 		require.NoError(t, err)
 
 		// Verify they're different
@@ -288,9 +285,8 @@ func TestKeyManagementIntegration(t *testing.T) {
 		cloudURL := "https://miren.cloud"
 
 		// Step 1: Create a new key
-		keyPair1, alreadyRegistered1, err := getOrCreateKey(ctx, keyName)
+		keyPair1, err := getOrCreateKey(ctx, keyName)
 		require.NoError(t, err)
-		assert.False(t, alreadyRegistered1)
 		fingerprint1 := keyPair1.Fingerprint()
 
 		// Step 2: Save the key to config
@@ -298,9 +294,8 @@ func TestKeyManagementIntegration(t *testing.T) {
 		require.NoError(t, err)
 
 		// Step 3: Simulate a new login attempt - should reuse the key
-		keyPair2, alreadyRegistered2, err := getOrCreateKey(ctx, keyName)
+		keyPair2, err := getOrCreateKey(ctx, keyName)
 		require.NoError(t, err)
-		assert.True(t, alreadyRegistered2, "Should reuse existing key")
 		assert.Equal(t, fingerprint1, keyPair2.Fingerprint(), "Should have same fingerprint")
 
 		// Step 4: Load config and verify we can resolve the private key
