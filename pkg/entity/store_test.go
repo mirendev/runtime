@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.etcd.io/etcd/api/v3/mvccpb"
 	clientv3 "go.etcd.io/etcd/client/v3"
+	"miren.dev/runtime/pkg/cond"
 )
 
 func setupTestEtcd(t *testing.T) *clientv3.Client {
@@ -1725,6 +1726,10 @@ func TestEtcdStore_NestedComponentFieldIndexing(t *testing.T) {
 		require.NoError(t, err)
 		assert.Len(t, results, 0, "Should not find entity indexed under v1 after patch")
 	})
+
+	// Note: DeleteEntity nested index cleanup is tested at the entityserver level
+	// in servers/entityserver/entityserver_test.go::TestEntityServer_List_NestedIndexCleanup
+	// That test properly catches the bug by testing the full RPC path that production uses.
 }
 
 func TestEntity_Fixup_DbId(t *testing.T) {
