@@ -145,9 +145,6 @@ jobs:
           - os: linux
             arch: amd64
             runner: ubuntu-latest
-          - os: linux
-            arch: arm64
-            runner: ubuntu-latest-arm
           - os: darwin
             arch: amd64
             runner: macos-latest
