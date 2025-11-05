@@ -501,13 +501,17 @@ func (c *SandboxController) Init(ctx context.Context) error {
 }
 
 func (c *SandboxController) Close() error {
-	c.cancel()
-
-	c.mu.Lock()
-	for c.monitors > 0 {
-		c.cond.Wait()
+	if c.cancel != nil {
+		c.cancel()
 	}
-	c.mu.Unlock()
+
+	if c.cond != nil {
+		c.mu.Lock()
+		for c.monitors > 0 {
+			c.cond.Wait()
+		}
+		c.mu.Unlock()
+	}
 
 	var err error
 
