@@ -1223,6 +1223,159 @@ func TestComponentAndKindWithSameNestedStructure(t *testing.T) {
 	}
 }
 
+func TestRefFieldWithMany(t *testing.T) {
+	// Test that ref fields with many=true generate correct code for slices of entity.Id
+	sf := &schemaFile{
+		Domain:  "test",
+		Version: "v1",
+		Kinds: map[string]schemaAttrs{
+			"pool": {
+				"referenced_by": &schemaAttr{
+					Type: "ref",
+					Many: true,
+					Doc:  "References to entities that use this pool",
+				},
+			},
+		},
+	}
+
+	// Generate the schema code
+	code, err := GenerateSchema(sf, "test")
+	if err != nil {
+		t.Fatalf("Failed to generate schema: %v", err)
+	}
+
+	// Test 1: Check struct generation with []entity.Id type
+	t.Run("StructGeneration", func(t *testing.T) {
+		if !strings.Contains(code, "type Pool struct") {
+			t.Error("Expected Pool struct to be generated")
+		}
+
+		// Check that ref field with many=true uses []entity.Id type
+		if !strings.Contains(code, "ReferencedBy []entity.Id") {
+			t.Error("Expected ReferencedBy field with []entity.Id type")
+			t.Logf("Generated code:\n%s", code)
+		}
+	})
+
+	// Test 2: Check decoder implementation for many refs
+	t.Run("Decoder", func(t *testing.T) {
+		// Find the Decode method
+		decodeStart := strings.Index(code, "func (o *Pool) Decode(e entity.AttrGetter) {")
+		if decodeStart == -1 {
+			t.Fatal("Could not find Decode() method")
+		}
+		decodeEnd := strings.Index(code[decodeStart:], "\n}")
+		if decodeEnd == -1 {
+			t.Fatal("Could not find end of Decode() method")
+		}
+		decodeMethod := code[decodeStart : decodeStart+decodeEnd]
+
+		// Should use GetAll for many values
+		if !strings.Contains(decodeMethod, "GetAll(PoolReferencedById)") {
+			t.Error("Decoder should use GetAll for many ref values")
+			t.Logf("Decode method:\n%s", decodeMethod)
+		}
+
+		// Should check for KindId
+		if !strings.Contains(decodeMethod, "KindId") {
+			t.Error("Decoder should check for KindId")
+		}
+
+		// Should call .Id() to extract value
+		if !strings.Contains(decodeMethod, ".Id()") {
+			t.Error("Decoder should call Id() method to extract value")
+		}
+
+		// Should append to slice
+		if !strings.Contains(decodeMethod, "o.ReferencedBy = append(o.ReferencedBy") {
+			t.Error("Decoder should append values to ReferencedBy slice")
+		}
+	})
+
+	// Test 3: Check encoder implementation for many refs
+	t.Run("Encoder", func(t *testing.T) {
+		// Find the Encode method
+		encodeStart := strings.Index(code, "func (o *Pool) Encode() (attrs []entity.Attr) {")
+		if encodeStart == -1 {
+			t.Fatal("Could not find Encode() method")
+		}
+		encodeEnd := strings.Index(code[encodeStart:], "\n}")
+		if encodeEnd == -1 {
+			t.Fatal("Could not find end of Encode() method")
+		}
+		encodeMethod := code[encodeStart : encodeStart+encodeEnd]
+
+		// Should loop through the slice
+		if !strings.Contains(encodeMethod, "for _, v := range o.ReferencedBy") {
+			t.Error("Encoder should loop through ReferencedBy array")
+			t.Logf("Encode method:\n%s", encodeMethod)
+		}
+
+		// Should use entity.Ref encoder for each value
+		if !strings.Contains(encodeMethod, "entity.Ref(PoolReferencedById, v)") {
+			t.Error("Encoder should use entity.Ref function for each value")
+		}
+	})
+
+	// Test 4: Check Empty() method implementation
+	t.Run("EmptyMethod", func(t *testing.T) {
+		// Find the Empty method
+		emptyStart := strings.Index(code, "func (o *Pool) Empty() bool {")
+		if emptyStart == -1 {
+			t.Fatal("Could not find Empty() method")
+		}
+		emptyEnd := strings.Index(code[emptyStart:], "\n}")
+		if emptyEnd == -1 {
+			t.Fatal("Could not find end of Empty() method")
+		}
+		emptyMethod := code[emptyStart : emptyStart+emptyEnd]
+
+		// Many ref fields should be checked for non-zero length
+		if !strings.Contains(emptyMethod, "len(o.ReferencedBy) != 0") {
+			t.Error("Empty() should check if ReferencedBy slice has elements")
+			t.Logf("Empty method:\n%s", emptyMethod)
+		}
+
+		// Should return false when slice has elements
+		if !strings.Contains(emptyMethod, "return false") {
+			t.Error("Empty() should return false when ref slice has elements")
+		}
+	})
+
+	// Test 5: Compare with single ref behavior
+	t.Run("CompareWithSingleRef", func(t *testing.T) {
+		// Generate schema with single ref for comparison
+		singleRefSchema := &schemaFile{
+			Domain:  "test",
+			Version: "v1",
+			Kinds: map[string]schemaAttrs{
+				"item": {
+					"owner": &schemaAttr{
+						Type: "ref",
+						Doc:  "Single reference to owner entity",
+					},
+				},
+			},
+		}
+
+		singleCode, err := GenerateSchema(singleRefSchema, "test")
+		if err != nil {
+			t.Fatalf("Failed to generate single ref schema: %v", err)
+		}
+
+		// Single ref should use entity.Id (not []entity.Id)
+		if !strings.Contains(singleCode, "Owner entity.Id") {
+			t.Error("Single ref should use entity.Id type")
+		}
+
+		// Single ref should NOT use GetAll
+		if strings.Contains(singleCode, "GetAll(ItemOwnerId)") {
+			t.Error("Single ref should not use GetAll")
+		}
+	})
+}
+
 func TestEnumInNestedComponentsNamespacing(t *testing.T) {
 	// Test that enum constants in nested components are properly namespaced
 	// to avoid collisions when component and kind have same nested structure with enums

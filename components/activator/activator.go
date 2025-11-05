@@ -18,11 +18,11 @@ package activator
 //      RLock → check capacity → RUnlock
 //      Lock → re-check capacity → acquire if still available → Unlock
 //
-// 2. Sentinel Pattern (ensureSandboxPool)
-//    Prevents duplicate pool creation by concurrent requests:
+// 2. Sentinel Pattern (requestPoolCapacity)
+//    Prevents duplicate pool updates by concurrent requests:
 //      - First request inserts sentinel with inProgress=true
 //      - Concurrent requests wait on sentinel's done channel
-//      - Creator replaces sentinel with real pool or error
+//      - First request finds pool and increments capacity, then replaces sentinel
 //
 // 3. Channel Notification (ensurePoolAndWaitForSandbox, watchSandboxes)
 //    Immediate notification when new sandboxes become available:
@@ -42,9 +42,9 @@ import (
 	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/pkg/concurrency"
+	"miren.dev/runtime/pkg/cond"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/types"
-	"miren.dev/runtime/pkg/idgen"
 	"miren.dev/runtime/pkg/netutil"
 	"miren.dev/runtime/pkg/rpc/stream"
 )
@@ -110,6 +110,7 @@ type verKey struct {
 // poolState represents either a real pool or an in-progress creation sentinel
 type poolState struct {
 	pool       *compute_v1alpha.SandboxPool
+	revision   int64 // Entity revision for optimistic concurrency control
 	inProgress bool
 	done       chan struct{} // Closed when creation completes (success or failure)
 	err        error         // Set if creation failed
@@ -246,11 +247,11 @@ func (a *localActivator) waitForSandbox(ctx context.Context, ver *core_v1alpha.A
 
 	var pool *compute_v1alpha.SandboxPool
 	if incrementPool {
-		// Ensure pool exists and increment desired capacity
+		// Request additional capacity from pool
 		var err error
-		pool, err = a.ensureSandboxPool(ctx, ver, service)
+		pool, err = a.requestPoolCapacity(ctx, ver, service)
 		if err != nil {
-			return nil, fmt.Errorf("failed to ensure sandbox pool: %w", err)
+			return nil, fmt.Errorf("failed to request pool capacity: %w", err)
 		}
 
 		a.log.Info("waiting for sandbox from pool",
@@ -363,10 +364,11 @@ func (a *localActivator) waitForSandbox(ctx context.Context, ver *core_v1alpha.A
 	}
 }
 
-// ensureSandboxPool creates or updates a SandboxPool for the given app version and service.
-// It increments DesiredInstances to request additional capacity.
-// Uses a sentinel pattern to prevent duplicate pool creation races.
-func (a *localActivator) ensureSandboxPool(ctx context.Context, ver *core_v1alpha.AppVersion, service string) (*compute_v1alpha.SandboxPool, error) {
+// requestPoolCapacity finds the SandboxPool created by DeploymentLauncher and increments DesiredInstances.
+// It uses retry logic with exponential backoff to handle the race where Activator receives
+// a request before DeploymentLauncher has finished creating the pool.
+// Uses a sentinel pattern to prevent duplicate capacity requests from concurrent callers.
+func (a *localActivator) requestPoolCapacity(ctx context.Context, ver *core_v1alpha.AppVersion, service string) (*compute_v1alpha.SandboxPool, error) {
 	key := verKey{ver.ID.String(), service}
 
 	for {
@@ -394,43 +396,129 @@ func (a *localActivator) ensureSandboxPool(ctx context.Context, ver *core_v1alph
 				continue
 			}
 
-			// Update existing pool - increment DesiredInstances atomically under lock
+			// Update existing pool - increment DesiredInstances with optimistic concurrency control
+			// Calculate target ONCE based on the state captured at the start of this iteration
+			// This ensures concurrent goroutines that all saw the same initial value
+			// will calculate the same target
 			a.mu.Lock()
-			if state.pool.DesiredInstances >= MaxPoolSize {
-				a.mu.Unlock()
-				a.log.Warn("pool at maximum size, cannot increment further",
-					"pool", state.pool.ID,
-					"max_size", MaxPoolSize,
-					"current", state.pool.DesiredInstances)
-				return state.pool, fmt.Errorf("pool has reached maximum size of %d", MaxPoolSize)
-			}
-			state.pool.DesiredInstances++
+			newDesired := state.pool.DesiredInstances + 1
 			a.mu.Unlock()
 
-			var rpcE entityserver_v1alpha.Entity
-			rpcE.SetId(state.pool.ID.String())
-			rpcE.SetAttrs(entity.New(
-				state.pool.Encode,
-			).Attrs())
-
-			_, err := a.eac.Put(ctx, &rpcE)
-			if err != nil {
-				// If pool was deleted (e.g., by cleanup after deployment), clear stale reference and create new pool
-				if errors.Is(err, entity.ErrNotFound) {
-					a.log.Info("pool was deleted, clearing stale reference and creating new pool",
-						"pool", state.pool.ID,
-						"service", service)
-					a.mu.Lock()
-					delete(a.pools, key)
+			const maxRetries = 3
+			poolDeleted := false
+			for attempt := 0; attempt < maxRetries; attempt++ {
+				a.mu.Lock()
+				if state.pool.DesiredInstances >= MaxPoolSize {
 					a.mu.Unlock()
-					// Loop back to create a fresh pool
-					continue
+					a.log.Warn("pool at maximum size, cannot increment further",
+						"pool", state.pool.ID,
+						"max_size", MaxPoolSize,
+						"current", state.pool.DesiredInstances)
+					return state.pool, fmt.Errorf("pool has reached maximum size of %d", MaxPoolSize)
 				}
-				return nil, fmt.Errorf("failed to update pool: %w", err)
+
+				// Check if we've already reached our target (another goroutine may have incremented)
+				if state.pool.DesiredInstances >= newDesired {
+					a.mu.Unlock()
+					a.log.Debug("pool capacity already at or above target, no increment needed",
+						"pool", state.pool.ID,
+						"current_desired", state.pool.DesiredInstances,
+						"target_desired", newDesired)
+					return state.pool, nil
+				}
+
+				currentRevision := state.revision
+				poolID := state.pool.ID
+				a.mu.Unlock()
+
+				// Build attrs for Patch
+				attrs := []entity.Attr{
+					{
+						ID:    entity.DBId,
+						Value: entity.AnyValue(poolID),
+					},
+					{
+						ID:    compute_v1alpha.SandboxPoolDesiredInstancesId,
+						Value: entity.AnyValue(newDesired),
+					},
+				}
+
+				// Use Patch with revision check for optimistic concurrency control
+				patchRes, err := a.eac.Patch(ctx, attrs, currentRevision)
+				if err != nil {
+					// Check for revision conflict
+					if errors.Is(err, cond.ErrConflict{}) {
+						a.log.Debug("pool revision conflict, refetching and retrying",
+							"pool", poolID,
+							"attempt", attempt+1,
+							"max_retries", maxRetries)
+
+						// Fetch fresh pool state
+						freshPoolEnt, getErr := a.eac.Get(ctx, poolID.String())
+						if getErr != nil {
+							if errors.Is(getErr, entity.ErrNotFound) {
+								// Pool was deleted, clear cache and break out to outer loop
+								a.log.Info("pool was deleted during update, clearing stale reference",
+									"pool", poolID,
+									"service", service)
+								a.mu.Lock()
+								delete(a.pools, key)
+								a.mu.Unlock()
+								poolDeleted = true
+								break // Break out of OCC retry loop to re-query for pools
+							}
+							return nil, fmt.Errorf("failed to fetch fresh pool after conflict: %w", getErr)
+						}
+
+						// Decode fresh pool
+						var freshPool compute_v1alpha.SandboxPool
+						freshPool.Decode(freshPoolEnt.Entity().Entity())
+
+						// Update cache with fresh state
+						a.mu.Lock()
+						state.pool = &freshPool
+						state.revision = freshPoolEnt.Entity().Revision()
+						a.pools[key] = state
+						a.mu.Unlock()
+
+						// Retry the increment with fresh state
+						continue
+					}
+
+					// If pool was deleted, clear stale reference and break to re-query
+					if errors.Is(err, entity.ErrNotFound) {
+						a.log.Info("pool was deleted, clearing stale reference",
+							"pool", poolID,
+							"service", service)
+						a.mu.Lock()
+						delete(a.pools, key)
+						a.mu.Unlock()
+						poolDeleted = true
+						// Break out of OCC retry loop to re-query for pools
+						break
+					}
+
+					return nil, fmt.Errorf("failed to patch pool: %w", err)
+				}
+
+				// Success - update cache with new state
+				a.mu.Lock()
+				state.pool.DesiredInstances = newDesired
+				state.revision = patchRes.Revision()
+				a.mu.Unlock()
+
+				a.log.Info("incremented pool capacity", "pool", poolID, "desired_instances", newDesired, "revision", patchRes.Revision())
+				return state.pool, nil
 			}
 
-			a.log.Info("incremented pool capacity", "pool", state.pool.ID, "desired_instances", state.pool.DesiredInstances)
-			return state.pool, nil
+			// Check if we broke out because pool was deleted
+			if poolDeleted {
+				// Pool was deleted, continue outer loop to re-query for pools
+				continue
+			}
+
+			// Max retries exceeded
+			return nil, fmt.Errorf("failed to increment pool after %d retries due to conflicts", maxRetries)
 		}
 
 		// Pool doesn't exist - try to claim creation rights with sentinel
@@ -442,51 +530,196 @@ func (a *localActivator) ensureSandboxPool(ctx context.Context, ver *core_v1alph
 			continue // Loop back to wait/increment logic
 		}
 
-		// Claim creation by inserting sentinel
-		sentinel := &poolState{
-			inProgress: true,
-			done:       make(chan struct{}),
-		}
-		a.pools[key] = sentinel
-		a.mu.Unlock()
+		// Try to find an existing pool in the entity store with retries
+		// DeploymentLauncher may have already created it, but we haven't seen it yet in our cache
+		const maxRetries = 3
+		const baseRetryDelay = 100 * time.Millisecond
 
-		// Perform pool creation outside the lock
-		a.log.Info("creating new sandbox pool", "service", service)
+		var foundPoolWithRev *poolWithRevision
+		for attempt := 0; attempt < maxRetries; attempt++ {
+			if attempt > 0 {
+				// Release lock during retry delay
+				a.mu.Unlock()
 
-		spec, err := a.buildSandboxSpec(ctx, ver, service)
-		if err != nil {
-			// Creation failed - remove sentinel and notify waiters
-			a.mu.Lock()
-			sentinel.err = fmt.Errorf("failed to build sandbox spec: %w", err)
-			delete(a.pools, key)
-			close(sentinel.done)
+				// Exponential backoff: 100ms, 200ms, 400ms
+				delay := baseRetryDelay * (1 << (attempt - 1))
+				a.log.Debug("retrying pool lookup from store",
+					"attempt", attempt+1,
+					"max_retries", maxRetries,
+					"service", service,
+					"delay_ms", delay.Milliseconds())
+
+				select {
+				case <-time.After(delay):
+				case <-ctx.Done():
+					return nil, ctx.Err()
+				}
+
+				// Re-acquire lock and check if another goroutine found/created the pool
+				a.mu.Lock()
+				_, exists = a.pools[key]
+				if exists {
+					// Another goroutine found or created the pool while we were waiting
+					a.mu.Unlock()
+					continue // Loop back to main logic
+				}
+			}
+
+			// Try to find pool in entity store (holds lock during query)
 			a.mu.Unlock()
-			return nil, sentinel.err
-		}
-
-		pool, err := a.createSandboxPool(ctx, ver, service, spec)
-		if err != nil {
-			// Creation failed - remove sentinel and notify waiters
+			poolWithRev, err := a.findPoolInStore(ctx, ver.ID, service)
 			a.mu.Lock()
-			sentinel.err = fmt.Errorf("failed to create pool: %w", err)
-			delete(a.pools, key)
-			close(sentinel.done)
+
+			if err != nil {
+				a.log.Warn("failed to query pool from store",
+					"error", err,
+					"attempt", attempt+1,
+					"service", service)
+				continue
+			}
+
+			if poolWithRev != nil {
+				foundPoolWithRev = poolWithRev
+				break
+			}
+		}
+
+		if foundPoolWithRev != nil {
+			// Found pool created by DeploymentLauncher - increment with OCC
+			foundPool := foundPoolWithRev.pool
+			currentRevision := foundPoolWithRev.revision
+
+			if foundPool.DesiredInstances >= MaxPoolSize {
+				a.mu.Unlock()
+				a.log.Warn("launcher-created pool at maximum size, cannot increment further",
+					"pool", foundPool.ID,
+					"max_size", MaxPoolSize,
+					"current", foundPool.DesiredInstances)
+				return foundPool, fmt.Errorf("pool has reached maximum size of %d", MaxPoolSize)
+			}
+
+			newDesired := foundPool.DesiredInstances + 1
+			poolID := foundPool.ID
+
+			// Cache the pool before releasing lock
+			a.pools[key] = &poolState{
+				pool:       foundPool,
+				revision:   currentRevision,
+				inProgress: false,
+			}
 			a.mu.Unlock()
-			return nil, sentinel.err
+
+			// Build attrs for Patch
+			attrs := []entity.Attr{
+				{
+					ID:    entity.DBId,
+					Value: entity.AnyValue(poolID),
+				},
+				{
+					ID:    compute_v1alpha.SandboxPoolDesiredInstancesId,
+					Value: entity.AnyValue(newDesired),
+				},
+			}
+
+			// Use Patch with revision check
+			patchRes, err := a.eac.Patch(ctx, attrs, currentRevision)
+			if err != nil {
+				// On conflict or error, clear cache and let caller retry
+				if errors.Is(err, cond.ErrConflict{}) {
+					a.log.Warn("launcher-created pool revision conflict, clearing cache for retry",
+						"pool", poolID)
+					a.mu.Lock()
+					delete(a.pools, key)
+					a.mu.Unlock()
+					continue // Retry from the beginning
+				}
+				// If pool was deleted, clear cache and retry
+				if errors.Is(err, entity.ErrNotFound) {
+					a.log.Info("launcher-created pool was deleted, clearing cache",
+						"pool", poolID)
+					a.mu.Lock()
+					delete(a.pools, key)
+					a.mu.Unlock()
+					continue // Retry from the beginning
+				}
+				return nil, fmt.Errorf("failed to patch launcher-created pool: %w", err)
+			}
+
+			// Success - update cache
+			a.mu.Lock()
+			if state, ok := a.pools[key]; ok {
+				state.pool.DesiredInstances = newDesired
+				state.revision = patchRes.Revision()
+			}
+			a.mu.Unlock()
+
+			a.log.Info("found launcher-created pool after retries",
+				"pool", poolID,
+				"service", service,
+				"desired_instances", newDesired,
+				"revision", patchRes.Revision())
+			return foundPool, nil
 		}
 
-		// Creation succeeded - replace sentinel with real pool
-		a.mu.Lock()
-		a.pools[key] = &poolState{
-			pool:       pool,
-			inProgress: false,
-		}
-		close(sentinel.done) // Notify waiters
+		// Pool not found after retries - DeploymentLauncher should have created it
 		a.mu.Unlock()
+		a.log.Error("pool not found in store after retries",
+			"service", service,
+			"version", ver.Version,
+			"version_id", ver.ID,
+			"retries", maxRetries,
+			"error", "DeploymentLauncher should have created this pool")
 
-		a.log.Info("created new sandbox pool", "pool", pool.ID, "service", service, "desired_instances", pool.DesiredInstances)
-		return pool, nil
+		return nil, fmt.Errorf(
+			"pool not found for app=%s version=%s service=%s after %d query attempts over ~%dms - "+
+				"DeploymentLauncher should create pools when an app version is deployed. "+
+				"Verify the app is deployed and check DeploymentLauncher logs",
+			ver.App, ver.Version, service, maxRetries,
+			int((baseRetryDelay*(1<<maxRetries))/time.Millisecond))
 	}
+}
+
+type poolWithRevision struct {
+	pool     *compute_v1alpha.SandboxPool
+	revision int64
+}
+
+// findPoolInStore queries the entity store for a pool matching the given version and service.
+// This is used to find pools created by the DeploymentLauncher controller.
+// Returns nil if no matching pool is found (not an error - caller should decide whether to retry or create).
+func (a *localActivator) findPoolInStore(ctx context.Context, versionID entity.Id, service string) (*poolWithRevision, error) {
+	// List all sandbox pools
+	poolsResp, err := a.eac.List(ctx, entity.Ref(entity.EntityKind, compute_v1alpha.KindSandboxPool))
+	if err != nil {
+		return nil, fmt.Errorf("failed to list pools: %w", err)
+	}
+
+	// Find pool matching version + service
+	for _, ent := range poolsResp.Values() {
+		var pool compute_v1alpha.SandboxPool
+		pool.Decode(ent.Entity())
+
+		if pool.Service != service {
+			continue
+		}
+
+		// Check if this pool references our version (pool reuse mechanism)
+		for _, refVersion := range pool.ReferencedByVersions {
+			if refVersion == versionID {
+				a.log.Debug("found pool in store via referenced_by_versions",
+					"pool", pool.ID,
+					"service", service,
+					"version", versionID,
+					"num_refs", len(pool.ReferencedByVersions))
+				return &poolWithRevision{
+					pool:     &pool,
+					revision: ent.Revision(),
+				}, nil
+			}
+		}
+	}
+
+	return nil, nil // Not found
 }
 
 func (a *localActivator) ReleaseLease(ctx context.Context, lease *Lease) error {
@@ -877,6 +1110,7 @@ func (a *localActivator) recoverPools(ctx context.Context) error {
 		a.mu.Lock()
 		a.pools[key] = &poolState{
 			pool:       &pool,
+			revision:   ent.Revision(),
 			inProgress: false,
 		}
 		a.mu.Unlock()
@@ -963,110 +1197,6 @@ func (a *localActivator) migrateOrphanedSandboxes(ctx context.Context, pool *com
 	}
 
 	return nil
-}
-
-func (a *localActivator) createSandboxPool(ctx context.Context, ver *core_v1alpha.AppVersion, service string, spec *compute_v1alpha.SandboxSpec) (*compute_v1alpha.SandboxPool, error) {
-	// Get service concurrency config to determine initial instance count
-	svcConcurrency, err := core_v1alpha.GetServiceConcurrency(ver, service)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get service concurrency: %w", err)
-	}
-
-	// Determine initial desired instances based on mode
-	desiredInstances := int64(1) // Default: start with 1 instance
-	if svcConcurrency.Mode == "fixed" && svcConcurrency.NumInstances > 0 {
-		// Fixed mode: use configured instance count
-		desiredInstances = svcConcurrency.NumInstances
-	}
-
-	pool := compute_v1alpha.SandboxPool{
-		Service:          service,
-		SandboxSpec:      *spec,
-		DesiredInstances: desiredInstances,
-	}
-
-	name := idgen.GenNS("pool")
-
-	var rpcE entityserver_v1alpha.Entity
-	rpcE.SetAttrs(entity.New(
-		(&core_v1alpha.Metadata{
-			Name: name,
-			Labels: types.LabelSet(
-				"app", ver.App.String(),
-				"version", ver.Version,
-				"service", service,
-			),
-		}).Encode,
-		entity.Ident, "pool/"+name,
-		pool.Encode,
-	).Attrs())
-
-	pr, err := a.eac.Put(ctx, &rpcE)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create pool entity: %w", err)
-	}
-
-	pool.ID = entity.Id(pr.Id())
-	return &pool, nil
-}
-
-func (a *localActivator) buildSandboxSpec(ctx context.Context, ver *core_v1alpha.AppVersion, service string) (*compute_v1alpha.SandboxSpec, error) {
-	// Get app metadata
-	appResp, err := a.eac.Get(ctx, ver.App.String())
-	if err != nil {
-		return nil, fmt.Errorf("failed to get app: %w", err)
-	}
-
-	var appMD core_v1alpha.Metadata
-	appMD.Decode(appResp.Entity().Entity())
-
-	spec := &compute_v1alpha.SandboxSpec{
-		Version:      ver.ID,
-		LogEntity:    ver.App.String(),
-		LogAttribute: types.LabelSet("stage", "app-run", "service", service),
-	}
-
-	// Determine port from config or default to 3000
-	port := int64(3000)
-	if ver.Config.Port > 0 {
-		port = ver.Config.Port
-	}
-
-	appCont := compute_v1alpha.SandboxSpecContainer{
-		Name:  "app",
-		Image: ver.ImageUrl,
-		Env: []string{
-			"MIREN_APP=" + appMD.Name,
-			"MIREN_VERSION=" + ver.Version,
-		},
-		Directory: "/app",
-		Port: []compute_v1alpha.SandboxSpecContainerPort{
-			{
-				Port: port,
-				Name: "http",
-				Type: "http",
-			},
-		},
-	}
-
-	for _, x := range ver.Config.Variable {
-		appCont.Env = append(appCont.Env, x.Key+"="+x.Value)
-	}
-
-	for _, s := range ver.Config.Commands {
-		if s.Service == service && s.Command != "" {
-			if ver.Config.Entrypoint != "" {
-				appCont.Command = ver.Config.Entrypoint + " " + s.Command
-			} else {
-				appCont.Command = s.Command
-			}
-			break
-		}
-	}
-
-	spec.Container = []compute_v1alpha.SandboxSpecContainer{appCont}
-
-	return spec, nil
 }
 
 // syncLastActivity periodically syncs in-memory lastRenewal timestamps to

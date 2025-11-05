@@ -9,6 +9,80 @@ import (
 	"miren.dev/runtime/appconfig"
 )
 
+func TestBuildVariablesFromAppConfig(t *testing.T) {
+	tests := []struct {
+		name          string
+		appConfig     *appconfig.AppConfig
+		wantVariables []core_v1alpha.Variable
+	}{
+		{
+			name:          "nil app config",
+			appConfig:     nil,
+			wantVariables: nil,
+		},
+		{
+			name: "empty env vars",
+			appConfig: &appconfig.AppConfig{
+				EnvVars: []appconfig.AppEnvVar{},
+			},
+			wantVariables: nil,
+		},
+		{
+			name: "single env var",
+			appConfig: &appconfig.AppConfig{
+				EnvVars: []appconfig.AppEnvVar{
+					{Name: "DATABASE_URL", Value: "postgres://localhost/db"},
+				},
+			},
+			wantVariables: []core_v1alpha.Variable{
+				{Key: "DATABASE_URL", Value: "postgres://localhost/db"},
+			},
+		},
+		{
+			name: "multiple env vars",
+			appConfig: &appconfig.AppConfig{
+				EnvVars: []appconfig.AppEnvVar{
+					{Name: "DATABASE_URL", Value: "postgres://localhost/db"},
+					{Name: "API_KEY", Value: "secret123"},
+					{Name: "PORT", Value: "8080"},
+				},
+			},
+			wantVariables: []core_v1alpha.Variable{
+				{Key: "DATABASE_URL", Value: "postgres://localhost/db"},
+				{Key: "API_KEY", Value: "secret123"},
+				{Key: "PORT", Value: "8080"},
+			},
+		},
+		{
+			name: "env var with generator field (ignored)",
+			appConfig: &appconfig.AppConfig{
+				EnvVars: []appconfig.AppEnvVar{
+					{Name: "SECRET_KEY", Value: "default", Generator: "random"},
+				},
+			},
+			wantVariables: []core_v1alpha.Variable{
+				{Key: "SECRET_KEY", Value: "default"},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := buildVariablesFromAppConfig(tt.appConfig)
+			if tt.wantVariables == nil {
+				assert.Nil(t, result)
+			} else {
+				require.NotNil(t, result)
+				require.Len(t, result, len(tt.wantVariables))
+				for i, want := range tt.wantVariables {
+					assert.Equal(t, want.Key, result[i].Key, "variable %d key mismatch", i)
+					assert.Equal(t, want.Value, result[i].Value, "variable %d value mismatch", i)
+				}
+			}
+		})
+	}
+}
+
 func TestBuildServicesConfig(t *testing.T) {
 	tests := []struct {
 		name             string
@@ -169,6 +243,90 @@ func TestBuildServicesConfig(t *testing.T) {
 			},
 		},
 		{
+			name: "service with custom image",
+			appConfig: &appconfig.AppConfig{
+				Services: map[string]*appconfig.ServiceConfig{
+					"postgres": {
+						Image: "postgres:15",
+						Concurrency: &appconfig.ServiceConcurrencyConfig{
+							Mode:         "fixed",
+							NumInstances: 1,
+						},
+					},
+				},
+			},
+			procfileServices: nil,
+			validateServices: func(t *testing.T, services []core_v1alpha.Services) {
+				require.Len(t, services, 1)
+				assert.Equal(t, "postgres", services[0].Name)
+				assert.Equal(t, "postgres:15", services[0].Image)
+			},
+		},
+		{
+			name: "service without custom image",
+			appConfig: &appconfig.AppConfig{
+				Services: map[string]*appconfig.ServiceConfig{
+					"web": {
+						Concurrency: &appconfig.ServiceConcurrencyConfig{
+							Mode:                "auto",
+							RequestsPerInstance: 10,
+						},
+					},
+				},
+			},
+			procfileServices: nil,
+			validateServices: func(t *testing.T, services []core_v1alpha.Services) {
+				require.Len(t, services, 1)
+				assert.Equal(t, "web", services[0].Name)
+				assert.Equal(t, "", services[0].Image, "image should be empty when not specified")
+			},
+		},
+		{
+			name: "multiple services with mixed image configs",
+			appConfig: &appconfig.AppConfig{
+				Services: map[string]*appconfig.ServiceConfig{
+					"postgres": {
+						Image: "postgres:15",
+						Concurrency: &appconfig.ServiceConcurrencyConfig{
+							Mode:         "fixed",
+							NumInstances: 1,
+						},
+					},
+					"redis": {
+						Image: "redis:7-alpine",
+						Concurrency: &appconfig.ServiceConcurrencyConfig{
+							Mode:         "fixed",
+							NumInstances: 1,
+						},
+					},
+					"web": {
+						Concurrency: &appconfig.ServiceConcurrencyConfig{
+							Mode:                "auto",
+							RequestsPerInstance: 10,
+						},
+					},
+				},
+			},
+			procfileServices: nil,
+			validateServices: func(t *testing.T, services []core_v1alpha.Services) {
+				require.Len(t, services, 3)
+
+				serviceMap := make(map[string]core_v1alpha.Services)
+				for _, svc := range services {
+					serviceMap[svc.Name] = svc
+				}
+
+				require.Contains(t, serviceMap, "postgres")
+				assert.Equal(t, "postgres:15", serviceMap["postgres"].Image)
+
+				require.Contains(t, serviceMap, "redis")
+				assert.Equal(t, "redis:7-alpine", serviceMap["redis"].Image)
+
+				require.Contains(t, serviceMap, "web")
+				assert.Equal(t, "", serviceMap["web"].Image, "web service should not have custom image")
+			},
+		},
+		{
 			name:             "no config no procfile",
 			appConfig:        nil,
 			procfileServices: nil,
@@ -192,6 +350,93 @@ func TestBuildServicesConfig(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			services := buildServicesConfig(tt.appConfig, tt.procfileServices)
 			tt.validateServices(t, services)
+		})
+	}
+}
+
+func TestMergeVariablesFromAppConfig(t *testing.T) {
+	tests := []struct {
+		name         string
+		existingVars []core_v1alpha.Variable
+		appConfig    *appconfig.AppConfig
+		wantVars     []core_v1alpha.Variable
+	}{
+		{
+			name: "preserve existing vars when app.toml has no env section",
+			existingVars: []core_v1alpha.Variable{
+				{Key: "API_KEY", Value: "secret123"},
+				{Key: "DATABASE_URL", Value: "postgres://localhost/db"},
+			},
+			appConfig: nil,
+			wantVars: []core_v1alpha.Variable{
+				{Key: "API_KEY", Value: "secret123"},
+				{Key: "DATABASE_URL", Value: "postgres://localhost/db"},
+			},
+		},
+		{
+			name: "preserve existing vars when app.toml has empty env section",
+			existingVars: []core_v1alpha.Variable{
+				{Key: "API_KEY", Value: "secret123"},
+			},
+			appConfig: &appconfig.AppConfig{
+				EnvVars: []appconfig.AppEnvVar{},
+			},
+			wantVars: []core_v1alpha.Variable{
+				{Key: "API_KEY", Value: "secret123"},
+			},
+		},
+		{
+			name: "replace vars when app.toml has new env vars",
+			existingVars: []core_v1alpha.Variable{
+				{Key: "OLD_VAR", Value: "old_value"},
+			},
+			appConfig: &appconfig.AppConfig{
+				EnvVars: []appconfig.AppEnvVar{
+					{Name: "NEW_VAR", Value: "new_value"},
+				},
+			},
+			wantVars: []core_v1alpha.Variable{
+				{Key: "NEW_VAR", Value: "new_value"},
+			},
+		},
+		{
+			name:         "handle nil existing vars with no app config",
+			existingVars: nil,
+			appConfig:    nil,
+			wantVars:     nil,
+		},
+		{
+			name:         "handle empty existing vars with no app config",
+			existingVars: []core_v1alpha.Variable{},
+			appConfig:    nil,
+			wantVars:     []core_v1alpha.Variable{},
+		},
+		{
+			name:         "set new vars when there are no existing vars",
+			existingVars: nil,
+			appConfig: &appconfig.AppConfig{
+				EnvVars: []appconfig.AppEnvVar{
+					{Name: "NEW_VAR", Value: "new_value"},
+				},
+			},
+			wantVars: []core_v1alpha.Variable{
+				{Key: "NEW_VAR", Value: "new_value"},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := mergeVariablesFromAppConfig(tt.existingVars, tt.appConfig)
+			if tt.wantVars == nil {
+				assert.Nil(t, result)
+			} else {
+				require.Equal(t, len(tt.wantVars), len(result))
+				for i, want := range tt.wantVars {
+					assert.Equal(t, want.Key, result[i].Key, "variable %d key mismatch", i)
+					assert.Equal(t, want.Value, result[i].Value, "variable %d value mismatch", i)
+				}
+			}
 		})
 	}
 }

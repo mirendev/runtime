@@ -709,6 +709,28 @@ func TestActivatorNoPendingCreatesPool(t *testing.T) {
 
 	log := testutils.TestLogger(t)
 
+	// Pre-create a pool in the entity store (simulating DeploymentLauncher behavior)
+	launcherPool := &compute_v1alpha.SandboxPool{
+		Service: "web",
+		SandboxSpec: compute_v1alpha.SandboxSpec{
+			Version: testVer.ID,
+			Container: []compute_v1alpha.SandboxSpecContainer{
+				{
+					Name:  "app",
+					Image: "test:latest",
+					Port: []compute_v1alpha.SandboxSpecContainerPort{
+						{Port: 3000, Name: "http", Type: "http"},
+					},
+				},
+			},
+		},
+		ReferencedByVersions: []entity.Id{testVer.ID},
+		DesiredInstances:     0, // Launcher starts at 0 for auto mode
+	}
+	poolID, err := server.Client.Create(ctx, "launcher-pool", launcherPool)
+	require.NoError(t, err)
+	launcherPool.ID = poolID
+
 	// Create activator with NO sandboxes
 	activator := &localActivator{
 		log:             log,
@@ -776,28 +798,29 @@ func TestActivatorNoPendingCreatesPool(t *testing.T) {
 
 	lease, err := activator.AcquireLease(timeoutCtx, testVer, "web")
 
-	// Should succeed after pool creates sandbox
+	// Should succeed after finding launcher-created pool and waiting for sandbox
 	require.NoError(t, err)
 	require.NotNil(t, lease)
 
-	// Verify pool was created and incremented
+	// Verify activator found the launcher-created pool and incremented it
 	key := verKey{testVer.ID.String(), "web"}
 	activator.mu.RLock()
 	poolState, poolExists := activator.pools[key]
 	activator.mu.RUnlock()
 
-	assert.True(t, poolExists, "Pool should be created when no sandboxes exist")
+	assert.True(t, poolExists, "Pool should be found and cached")
 	if poolExists {
 		assert.NotNil(t, poolState.pool, "Pool state should have pool entity")
+		assert.Equal(t, poolID, poolState.pool.ID, "Should have found the launcher-created pool")
 		assert.Equal(t, int64(1), poolState.pool.DesiredInstances, "Pool should have incremented desired instances")
 	}
 }
 
-// TestActivatorDeletedPoolRecovery verifies that the activator can recover from
-// deleted pools by clearing stale references and creating fresh pools. This simulates
-// the scenario where a pool is cleaned up (e.g., after deployment handover) while
-// the activator still has it cached.
-func TestActivatorDeletedPoolRecovery(t *testing.T) {
+// TestActivatorDeletedPoolDetection verifies that the activator correctly detects
+// when a cached pool has been deleted from the entity store and clears the stale cache.
+// In the new architecture, deleted pools are expected to be recreated by the
+// DeploymentLauncher, not the activator.
+func TestActivatorDeletedPoolDetection(t *testing.T) {
 	ctx := context.Background()
 	log := testutils.TestLogger(t)
 
@@ -835,10 +858,32 @@ func TestActivatorDeletedPoolRecovery(t *testing.T) {
 	require.NoError(t, err)
 	testVer.ID = verID
 
-	activator := NewLocalActivator(ctx, log, server.EAC)
+	// Pre-create a pool in the entity store (simulating DeploymentLauncher)
+	pool := &compute_v1alpha.SandboxPool{
+		Service: "web",
+		SandboxSpec: compute_v1alpha.SandboxSpec{
+			Version: testVer.ID,
+			Container: []compute_v1alpha.SandboxSpecContainer{
+				{
+					Name:  "app",
+					Image: "test:latest",
+					Port: []compute_v1alpha.SandboxSpecContainerPort{
+						{Port: 3000, Name: "http", Type: "http"},
+					},
+				},
+			},
+		},
+		ReferencedByVersions: []entity.Id{testVer.ID},
+		DesiredInstances:     0,
+	}
+	poolID, err := server.Client.Create(ctx, "launcher-pool", pool)
+	require.NoError(t, err)
+	pool.ID = poolID
 
-	// First AcquireLease attempt - will create a pool and timeout waiting for sandbox
-	// (since we don't have a sandbox controller running)
+	activator := NewLocalActivator(ctx, log, server.EAC).(*localActivator)
+
+	// First AcquireLease - cache the pool and then increment it
+	// Use a very short timeout to fail fast (no sandbox will become available)
 	timeoutCtx, cancel := context.WithTimeout(ctx, 100*time.Millisecond)
 	defer cancel()
 
@@ -846,16 +891,14 @@ func TestActivatorDeletedPoolRecovery(t *testing.T) {
 	require.Error(t, err, "Should timeout since no sandbox controller is running")
 	require.Contains(t, err.Error(), "timeout", "Should be a timeout error")
 
-	// At this point, a pool should have been created and cached by the activator
-	// Let's verify the pool exists in the entity store
-	resp, err := server.EAC.List(ctx, entity.Ref(entity.EntityKind, compute_v1alpha.KindSandboxPool))
-	require.NoError(t, err)
-	pools := resp.Values()
-	require.Len(t, pools, 1, "Should have created one pool")
+	// Verify the pool was found and cached
+	key := verKey{testVer.ID.String(), "web"}
+	activator.mu.RLock()
+	_, exists := activator.pools[key]
+	activator.mu.RUnlock()
+	require.True(t, exists, "Pool should be cached after first acquire")
 
-	pool := &compute_v1alpha.SandboxPool{}
-	pool.Decode(pools[0].Entity())
-	originalPoolID := pool.ID
+	originalPoolID := poolID
 
 	// Now simulate cleanup: delete the pool from the entity store
 	// (this is what happens during deployment handover after scaling to zero)
@@ -866,27 +909,639 @@ func TestActivatorDeletedPoolRecovery(t *testing.T) {
 	_, err = server.EAC.Get(ctx, originalPoolID.String())
 	require.Error(t, err, "Pool should be deleted from entity store")
 
-	// Second AcquireLease attempt - should detect deleted pool and create a new one
-	timeoutCtx2, cancel2 := context.WithTimeout(ctx, 100*time.Millisecond)
+	// Second AcquireLease attempt - should detect deleted pool and clear cache
+	// Then fail with "pool not found" error (launcher should recreate)
+	timeoutCtx2, cancel2 := context.WithTimeout(ctx, 1*time.Second)
 	defer cancel2()
 
 	_, err = activator.AcquireLease(timeoutCtx2, testVer, "web")
-	require.Error(t, err, "Should timeout since no sandbox controller is running")
-	require.Contains(t, err.Error(), "timeout", "Should be a timeout error")
+	require.Error(t, err, "Should error since pool was deleted")
+	require.Contains(t, err.Error(), "pool not found", "Should be pool not found error")
+	require.Contains(t, err.Error(), "DeploymentLauncher", "Error should mention DeploymentLauncher")
 
-	// Verify recovery: a NEW pool should now exist (different ID from the original)
-	resp, err = server.EAC.List(ctx, entity.Ref(entity.EntityKind, compute_v1alpha.KindSandboxPool))
+	// Verify the cache was cleared (activator detected the deletion)
+	activator.mu.RLock()
+	_, stillCached := activator.pools[key]
+	activator.mu.RUnlock()
+	require.False(t, stillCached, "Pool should have been removed from cache after detecting deletion")
+
+	// Verify no new pool was created (activator doesn't create pools anymore)
+	resp, err := server.EAC.List(ctx, entity.Ref(entity.EntityKind, compute_v1alpha.KindSandboxPool))
 	require.NoError(t, err)
-	pools = resp.Values()
-	require.Len(t, pools, 1, "Should have one pool after recovery")
+	pools := resp.Values()
+	require.Len(t, pools, 0, "Activator should not have created a new pool")
+}
 
-	newPool := &compute_v1alpha.SandboxPool{}
-	newPool.Decode(pools[0].Entity())
-	require.NotEqual(t, originalPoolID, newPool.ID,
-		"Should have created a new pool with different ID after detecting deletion")
+// TestActivatorFindsLauncherCreatedPool verifies that the activator can find and use
+// pools created by the DeploymentLauncher controller instead of creating its own.
+func TestActivatorFindsLauncherCreatedPool(t *testing.T) {
+	ctx := context.Background()
 
-	// Verify the new pool has correct configuration
-	require.Equal(t, "web", newPool.Service, "New pool should have correct service name")
-	require.Equal(t, testVer.ID, newPool.SandboxSpec.Version, "New pool should reference correct version")
-	require.Greater(t, newPool.DesiredInstances, int64(0), "New pool should have desired instances > 0")
+	// Create in-memory entity server
+	server, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	// Create app entity
+	app := &core_v1alpha.App{}
+	appID, err := server.Client.Create(ctx, "test-app", app)
+	require.NoError(t, err)
+	app.ID = appID
+
+	testVer := &core_v1alpha.AppVersion{
+		App:      app.ID,
+		Version:  "v1",
+		ImageUrl: "test:latest",
+		Config: core_v1alpha.Config{
+			Port: 3000,
+			Services: []core_v1alpha.Services{
+				{
+					Name: "web",
+					ServiceConcurrency: core_v1alpha.ServiceConcurrency{
+						Mode:                "auto",
+						RequestsPerInstance: 10,
+						ScaleDownDelay:      "15m",
+					},
+				},
+			},
+		},
+	}
+	verID, err := server.Client.Create(ctx, "test-ver", testVer)
+	require.NoError(t, err)
+	testVer.ID = verID
+
+	log := testutils.TestLogger(t)
+
+	// Pre-create a pool in the entity store (simulating DeploymentLauncher behavior)
+	launcherPool := &compute_v1alpha.SandboxPool{
+		Service: "web",
+		SandboxSpec: compute_v1alpha.SandboxSpec{
+			Version: testVer.ID,
+			Container: []compute_v1alpha.SandboxSpecContainer{
+				{
+					Name:  "app",
+					Image: "test:latest",
+					Port: []compute_v1alpha.SandboxSpecContainerPort{
+						{Port: 3000, Name: "http", Type: "http"},
+					},
+				},
+			},
+		},
+		ReferencedByVersions: []entity.Id{testVer.ID},
+		DesiredInstances:     0, // Launcher starts at 0 for auto mode
+	}
+	poolID, err := server.Client.Create(ctx, "launcher-pool", launcherPool)
+	require.NoError(t, err)
+	launcherPool.ID = poolID
+
+	// Create activator with NO sandboxes and empty cache
+	activator := &localActivator{
+		log:             log,
+		eac:             server.EAC,
+		versions:        make(map[verKey]*verSandboxes),
+		pools:           make(map[verKey]*poolState),
+		newSandboxChans: make(map[verKey][]chan struct{}),
+	}
+
+	// Simulate a sandbox becoming available (created by SandboxPoolManager)
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+
+		key := verKey{testVer.ID.String(), "web"}
+
+		// Create a RUNNING sandbox
+		strategy := concurrency.NewStrategy(&testVer.Config.Services[0].ServiceConcurrency)
+		tracker := strategy.InitializeTracker()
+
+		ent := entity.Blank()
+		ent.SetID("sb-launcher")
+
+		newSandbox := &sandbox{
+			sandbox: &compute_v1alpha.Sandbox{
+				ID:     entity.Id("sb-launcher"),
+				Status: compute_v1alpha.RUNNING,
+			},
+			ent:         ent,
+			lastRenewal: time.Now(),
+			url:         "http://10.0.0.1:3000",
+			tracker:     tracker,
+		}
+
+		activator.mu.Lock()
+		vs, ok := activator.versions[key]
+		if !ok {
+			vs = &verSandboxes{
+				ver:       testVer,
+				sandboxes: []*sandbox{},
+				strategy:  strategy,
+			}
+			activator.versions[key] = vs
+		}
+		vs.sandboxes = append(vs.sandboxes, newSandbox)
+
+		// Notify any waiters
+		if chans, ok := activator.newSandboxChans[key]; ok {
+			for _, ch := range chans {
+				select {
+				case ch <- struct{}{}:
+				default:
+				}
+			}
+		}
+		activator.mu.Unlock()
+
+		log.Info("sandbox ready from launcher pool", "sandbox", newSandbox.sandbox.ID)
+	}()
+
+	// Acquire a lease - should find launcher-created pool via retry logic
+	timeoutCtx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
+	defer cancel()
+
+	lease, err := activator.AcquireLease(timeoutCtx, testVer, "web")
+	require.NoError(t, err)
+	require.NotNil(t, lease)
+
+	// Verify the activator found and used the launcher-created pool
+	key := verKey{testVer.ID.String(), "web"}
+	activator.mu.RLock()
+	poolState, poolExists := activator.pools[key]
+	activator.mu.RUnlock()
+
+	assert.True(t, poolExists, "Pool should be found and cached")
+	if poolExists {
+		assert.NotNil(t, poolState.pool, "Pool state should have pool entity")
+		assert.Equal(t, poolID, poolState.pool.ID, "Should have found the launcher-created pool, not created a new one")
+		assert.Equal(t, int64(1), poolState.pool.DesiredInstances, "Pool should have incremented desired instances to 1")
+	}
+
+	// Verify only one pool exists in the store (no duplicate creation)
+	resp, err := server.EAC.List(ctx, entity.Ref(entity.EntityKind, compute_v1alpha.KindSandboxPool))
+	require.NoError(t, err)
+	pools := resp.Values()
+	assert.Len(t, pools, 1, "Should have exactly one pool (the launcher-created one)")
+}
+
+// TestFindPoolInStore verifies that findPoolInStore correctly queries the entity store
+// for pools created by the DeploymentLauncher controller.
+func TestFindPoolInStore(t *testing.T) {
+	ctx := context.Background()
+
+	// Create in-memory entity server
+	server, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	// Create app entity
+	app := &core_v1alpha.App{}
+	appID, err := server.Client.Create(ctx, "test-app", app)
+	require.NoError(t, err)
+	app.ID = appID
+
+	// Create app version
+	testVer := &core_v1alpha.AppVersion{
+		App:      app.ID,
+		Version:  "v1",
+		ImageUrl: "test:latest",
+		Config: core_v1alpha.Config{
+			Port: 3000,
+			Services: []core_v1alpha.Services{
+				{
+					Name: "web",
+					ServiceConcurrency: core_v1alpha.ServiceConcurrency{
+						Mode:                "auto",
+						RequestsPerInstance: 10,
+					},
+				},
+			},
+		},
+	}
+	verID, err := server.Client.Create(ctx, "test-ver", testVer)
+	require.NoError(t, err)
+	testVer.ID = verID
+
+	log := testutils.TestLogger(t)
+
+	// Create activator
+	activator := &localActivator{
+		log: log,
+		eac: server.EAC,
+	}
+
+	t.Run("finds existing pool", func(t *testing.T) {
+		// Create a pool in the entity store (simulating DeploymentLauncher)
+		pool := &compute_v1alpha.SandboxPool{
+			Service: "web",
+			SandboxSpec: compute_v1alpha.SandboxSpec{
+				Version: testVer.ID,
+				Container: []compute_v1alpha.SandboxSpecContainer{
+					{
+						Name:  "app",
+						Image: "test:latest",
+						Port: []compute_v1alpha.SandboxSpecContainerPort{
+							{Port: 3000, Name: "http"},
+						},
+					},
+				},
+			},
+			ReferencedByVersions: []entity.Id{testVer.ID},
+			DesiredInstances:     1,
+		}
+
+		poolID, err := server.Client.Create(ctx, "test-pool", pool)
+		require.NoError(t, err)
+		pool.ID = poolID
+
+		// Try to find the pool
+		foundPool, err := activator.findPoolInStore(ctx, testVer.ID, "web")
+		require.NoError(t, err)
+		require.NotNil(t, foundPool, "Should find the pool")
+		assert.Equal(t, poolID, foundPool.pool.ID)
+		assert.Equal(t, "web", foundPool.pool.Service)
+		assert.Equal(t, testVer.ID, foundPool.pool.SandboxSpec.Version)
+	})
+
+	t.Run("returns nil for wrong service", func(t *testing.T) {
+		// Try to find pool with wrong service name
+		foundPool, err := activator.findPoolInStore(ctx, testVer.ID, "worker")
+		require.NoError(t, err)
+		assert.Nil(t, foundPool, "Should not find pool with wrong service name")
+	})
+
+	t.Run("returns nil for wrong version", func(t *testing.T) {
+		// Try to find pool with wrong version
+		wrongVersionID := entity.Id("ver-wrong")
+		foundPool, err := activator.findPoolInStore(ctx, wrongVersionID, "web")
+		require.NoError(t, err)
+		assert.Nil(t, foundPool, "Should not find pool with wrong version")
+	})
+
+	t.Run("returns nil when no pools exist", func(t *testing.T) {
+		// Create a fresh entity server with no pools
+		freshServer, cleanup := testutils.NewInMemEntityServer(t)
+		defer cleanup()
+
+		freshActivator := &localActivator{
+			log: log,
+			eac: freshServer.EAC,
+		}
+
+		foundPool, err := freshActivator.findPoolInStore(ctx, testVer.ID, "web")
+		require.NoError(t, err)
+		assert.Nil(t, foundPool, "Should return nil when no pools exist")
+	})
+}
+
+// TestFindPoolByReferencedByVersions tests that pools can be found when a version
+// is in the referenced_by_versions list (pool reuse across deployments).
+func TestFindPoolByReferencedByVersions(t *testing.T) {
+	ctx := context.Background()
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	// Create entity server
+	server, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	// Create two app versions
+	oldVersion := entity.Id("app_version/db-app-v1")
+	newVersion := entity.Id("app_version/db-app-v2")
+
+	// Create a pool that was originally created for oldVersion
+	// but now references both oldVersion and newVersion (due to pool reuse)
+	pool := &compute_v1alpha.SandboxPool{
+		Service: "web",
+		SandboxSpec: compute_v1alpha.SandboxSpec{
+			Version: oldVersion, // Original version
+		},
+		ReferencedByVersions: []entity.Id{oldVersion, newVersion}, // Now references both
+		DesiredInstances:     1,
+		CurrentInstances:     1,
+		ReadyInstances:       1,
+	}
+
+	// Store the pool
+	poolID, err := server.Client.Create(ctx, "test-pool", pool)
+	require.NoError(t, err)
+	pool.ID = poolID
+
+	// Create activator
+	activator := &localActivator{
+		log:             log,
+		eac:             server.EAC,
+		versions:        make(map[verKey]*verSandboxes),
+		pools:           make(map[verKey]*poolState),
+		newSandboxChans: make(map[verKey][]chan struct{}),
+	}
+
+	// Test: Should find pool by oldVersion (in referenced_by_versions)
+	t.Run("finds pool by old version", func(t *testing.T) {
+		foundPoolWithRev, err := activator.findPoolInStore(ctx, oldVersion, "web")
+		require.NoError(t, err)
+		require.NotNil(t, foundPoolWithRev)
+		assert.Equal(t, pool.ID, foundPoolWithRev.pool.ID)
+		assert.Equal(t, "web", foundPoolWithRev.pool.Service)
+		assert.Greater(t, foundPoolWithRev.revision, int64(0), "Should have non-zero revision")
+	})
+
+	// Test: Should find pool by newVersion (in referenced_by_versions)
+	t.Run("finds pool by new version via referenced_by_versions", func(t *testing.T) {
+		foundPoolWithRev, err := activator.findPoolInStore(ctx, newVersion, "web")
+		require.NoError(t, err)
+		require.NotNil(t, foundPoolWithRev, "Should find pool even though SandboxSpec.Version != newVersion")
+		assert.Equal(t, pool.ID, foundPoolWithRev.pool.ID)
+		assert.Equal(t, "web", foundPoolWithRev.pool.Service)
+	})
+
+	// Test: Should NOT find pool by version not in referenced_by_versions
+	t.Run("does not find pool by unrelated version", func(t *testing.T) {
+		unrelatedVersion := entity.Id("app_version/db-app-v3")
+		foundPoolWithRev, err := activator.findPoolInStore(ctx, unrelatedVersion, "web")
+		require.NoError(t, err)
+		assert.Nil(t, foundPoolWithRev, "Should not find pool for version not in referenced_by_versions")
+	})
+}
+
+// TestPoolIncrementWithOCC tests that the activator uses optimistic concurrency control
+// when incrementing pool desired_instances to prevent stale cache writes.
+func TestPoolIncrementWithOCC(t *testing.T) {
+	ctx := context.Background()
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	// Create entity server
+	server, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	// Create app and version entities
+	app := &core_v1alpha.App{}
+	appID, err := server.Client.Create(ctx, "test-app", app)
+	require.NoError(t, err)
+
+	testVer := &core_v1alpha.AppVersion{
+		App:      appID,
+		Version:  "v1",
+		ImageUrl: "test:latest",
+		Config: core_v1alpha.Config{
+			Services: []core_v1alpha.Services{
+				{Name: "web"},
+			},
+		},
+	}
+	verID, err := server.Client.Create(ctx, "test-ver", testVer)
+	require.NoError(t, err)
+	testVer.ID = verID
+
+	// Create initial pool
+	pool := &compute_v1alpha.SandboxPool{
+		Service:              "web",
+		SandboxSpec:          compute_v1alpha.SandboxSpec{Version: testVer.ID},
+		ReferencedByVersions: []entity.Id{testVer.ID},
+		DesiredInstances:     0,
+		CurrentInstances:     0,
+		ReadyInstances:       0,
+	}
+
+	poolID, err := server.Client.Create(ctx, "test-pool", pool)
+	require.NoError(t, err)
+	pool.ID = poolID
+
+	// Get the revision from the created pool
+	getRes, err := server.EAC.Get(ctx, poolID.String())
+	require.NoError(t, err)
+	initialRevision := getRes.Entity().Revision()
+
+	// Create activator with cached pool state
+	activator := &localActivator{
+		log:             log,
+		eac:             server.EAC,
+		versions:        make(map[verKey]*verSandboxes),
+		pools:           make(map[verKey]*poolState),
+		newSandboxChans: make(map[verKey][]chan struct{}),
+	}
+
+	// Cache the pool
+	key := verKey{testVer.ID.String(), "web"}
+	activator.pools[key] = &poolState{
+		pool:       pool,
+		revision:   initialRevision,
+		inProgress: false,
+	}
+
+	t.Run("succeeds when no concurrent modification", func(t *testing.T) {
+		// Request pool capacity - should succeed and increment from 0 to 1
+		resultPool, err := activator.requestPoolCapacity(ctx, testVer, "web")
+		require.NoError(t, err)
+		require.NotNil(t, resultPool)
+
+		// Verify pool was incremented
+		assert.Equal(t, int64(1), resultPool.DesiredInstances)
+
+		// Verify cache was updated with new revision
+		cachedState := activator.pools[key]
+		assert.Equal(t, int64(1), cachedState.pool.DesiredInstances)
+		assert.Greater(t, cachedState.revision, initialRevision, "Revision should have been updated")
+	})
+
+	t.Run("retries on revision conflict", func(t *testing.T) {
+		// Get current state from store
+		getRes, err := server.EAC.Get(ctx, pool.ID.String())
+		require.NoError(t, err)
+		var currentPool compute_v1alpha.SandboxPool
+		currentPool.Decode(getRes.Entity().Entity())
+		currentRevision := getRes.Entity().Revision()
+
+		// Simulate stale cache: Set cache to an old revision
+		activator.pools[key] = &poolState{
+			pool:       &currentPool,
+			revision:   initialRevision, // Stale revision!
+			inProgress: false,
+		}
+
+		// Meanwhile, simulate another process modifying the pool
+		// (e.g., pool manager scales it up)
+		currentPool.DesiredInstances = 5
+		patchAttrs := []entity.Attr{
+			{ID: entity.DBId, Value: entity.AnyValue(pool.ID)},
+			{ID: compute_v1alpha.SandboxPoolDesiredInstancesId, Value: entity.AnyValue(int64(5))},
+		}
+		_, err = server.EAC.Patch(ctx, patchAttrs, currentRevision)
+		require.NoError(t, err)
+
+		// Now request pool capacity with stale cache
+		// Should detect conflict and retry with fresh state
+		resultPool, err := activator.requestPoolCapacity(ctx, testVer, "web")
+		require.NoError(t, err)
+		require.NotNil(t, resultPool)
+
+		// Should have incremented from the FRESH value (5) not the stale cache (1)
+		assert.Equal(t, int64(6), resultPool.DesiredInstances, "Should increment from fresh value after conflict")
+
+		// Verify cache was updated
+		cachedState := activator.pools[key]
+		assert.Equal(t, int64(6), cachedState.pool.DesiredInstances)
+	})
+}
+
+// TestConcurrentPoolIncrement tests that concurrent calls to requestPoolCapacity
+// handle optimistic concurrency control correctly.
+//
+// IMPORTANT: This test requires etcd to properly enforce OCC. Run with:
+//
+//	./hack/dev-exec go test -v -run TestConcurrentPoolIncrement ./components/activator
+//
+// Key behaviors tested:
+// 1. Each goroutine calculates its target DesiredInstances ONCE (before retry loop)
+// 2. After OCC conflicts, goroutines check if target is already reached (early return)
+// 3. The etcd store properly rejects stale revisions, triggering conflict retry logic
+//
+// Expected behavior with proper OCC:
+// - All 5 goroutines start with DesiredInstances=1, calculate target=2
+// - One succeeds in patching to 2, others get revision conflicts
+// - Conflicting goroutines retry, refetch state, see DesiredInstances=2 >= target=2
+// - Early return prevents redundant increments
+// - Final result: DesiredInstances=2 (exactly one increment)
+//
+// What the bug looked like:
+// Without the fix, goroutines recalculated target on each retry:
+//   - Goroutine sees conflict, refetches DesiredInstances=2
+//   - BUG: Recalculates target = 2+1 = 3 (should stay at original target=2)
+//   - Patches to 3, causing redundant increments
+//   - Result: DesiredInstances=3, 4, or even 5
+func TestConcurrentPoolIncrement(t *testing.T) {
+	ctx := context.Background()
+
+	// Create etcd-backed entity server for proper OCC testing
+	// Run with: ./hack/dev-exec go test -v -run TestConcurrentPoolIncrement ./components/activator
+	server, cleanup := testutils.NewEtcdEntityServer(t)
+	defer cleanup()
+
+	// Create test app
+	app := &core_v1alpha.App{}
+	appID, err := server.Client.Create(ctx, "test-app-concurrent", app)
+	require.NoError(t, err)
+	app.ID = appID
+
+	// Create test version
+	testVer := &core_v1alpha.AppVersion{
+		App:      app.ID,
+		Version:  "v1",
+		ImageUrl: "test:latest",
+		Config: core_v1alpha.Config{
+			Services: []core_v1alpha.Services{
+				{
+					Name: "web",
+					ServiceConcurrency: core_v1alpha.ServiceConcurrency{
+						Mode:                "auto",
+						RequestsPerInstance: 10,
+					},
+				},
+			},
+		},
+	}
+	verID, err := server.Client.Create(ctx, "test-ver-concurrent", testVer)
+	require.NoError(t, err)
+	testVer.ID = verID
+
+	// Create a sandbox pool with DesiredInstances = 1
+	pool := &compute_v1alpha.SandboxPool{
+		Service: "web",
+		SandboxSpec: compute_v1alpha.SandboxSpec{
+			Version: testVer.ID,
+		},
+		ReferencedByVersions: []entity.Id{
+			testVer.ID,
+		},
+		DesiredInstances: 1,
+		CurrentInstances: 0,
+	}
+
+	poolEnt := entity.New(
+		(&core_v1alpha.Metadata{
+			Name:   "test-pool-concurrent",
+			Labels: types.LabelSet("service", "web"),
+		}).Encode,
+		entity.Ident, entity.MustKeyword("sandboxpool/concurrent-pool"),
+		pool.Encode,
+	)
+
+	var rpcE entityserver_v1alpha.Entity
+	rpcE.SetAttrs(poolEnt.Attrs())
+	poolRes, err := server.EAC.Put(ctx, &rpcE)
+	require.NoError(t, err)
+	pool.ID = entity.Id(poolRes.Id())
+	poolRevision := poolRes.Revision()
+
+	// Create activator and pre-populate cache
+	log := testutils.TestDebugLogger(t)
+	activator := &localActivator{
+		log:      log,
+		eac:      server.EAC,
+		versions: make(map[verKey]*verSandboxes),
+		pools:    make(map[verKey]*poolState),
+	}
+
+	key := verKey{testVer.ID.String(), "web"}
+	activator.pools[key] = &poolState{
+		pool:       pool,
+		revision:   poolRevision,
+		inProgress: false,
+	}
+
+	// Launch 5 concurrent goroutines that all try to increment the pool
+	// Use a barrier to ensure all goroutines start at approximately the same time
+	const numGoroutines = 5
+	results := make(chan *compute_v1alpha.SandboxPool, numGoroutines)
+	errors := make(chan error, numGoroutines)
+	barrier := make(chan struct{})
+
+	for i := 0; i < numGoroutines; i++ {
+		go func(id int) {
+			// Wait for all goroutines to be ready
+			<-barrier
+
+			result, err := activator.requestPoolCapacity(ctx, testVer, "web")
+			if err != nil {
+				errors <- err
+				return
+			}
+			results <- result
+		}(i)
+	}
+
+	// Release all goroutines simultaneously
+	close(barrier)
+
+	// Collect all results
+	var returnedPools []*compute_v1alpha.SandboxPool
+	for i := 0; i < numGoroutines; i++ {
+		select {
+		case pool := <-results:
+			returnedPools = append(returnedPools, pool)
+		case err := <-errors:
+			t.Fatalf("goroutine returned error: %v", err)
+		case <-time.After(5 * time.Second):
+			t.Fatal("test timed out waiting for goroutines")
+		}
+	}
+
+	// All goroutines should have succeeded
+	require.Len(t, returnedPools, numGoroutines, "all goroutines should return a pool")
+
+	// Log what each goroutine saw
+	for i, pool := range returnedPools {
+		t.Logf("Goroutine %d saw DesiredInstances: %d", i, pool.DesiredInstances)
+	}
+
+	// Fetch the final pool state from the entity store
+	finalPoolEnt, err := server.EAC.Get(ctx, pool.ID.String())
+	require.NoError(t, err)
+
+	var finalPool compute_v1alpha.SandboxPool
+	finalPool.Decode(finalPoolEnt.Entity().Entity())
+
+	t.Logf("Final DesiredInstances: %d (started at 1)", finalPool.DesiredInstances)
+
+	// With proper OCC enforcement from etcd, we should see exactly 2:
+	// - All 5 goroutines start with DesiredInstances=1, calculate target=2
+	// - One succeeds, others get conflicts and early-return after seeing target reached
+	// - Result: exactly one increment from 1 to 2
+	t.Logf("Final DesiredInstances after %d concurrent increments: %d", numGoroutines, finalPool.DesiredInstances)
+	assert.Equal(t, int64(2), finalPool.DesiredInstances,
+		"With OCC enforcement, should get exactly one increment despite %d concurrent calls", numGoroutines)
 }

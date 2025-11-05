@@ -10,9 +10,9 @@ import (
 )
 
 type AppEnvVar struct {
-	Name      string `json:"name"`
-	Value     string `json:"value"`
-	Generator string `json:"generator"`
+	Name      string `json:"name" toml:"key"`
+	Value     string `json:"value" toml:"value"`
+	Generator string `json:"generator" toml:"generator"`
 }
 
 type BuildConfig struct {
@@ -34,6 +34,8 @@ type ServiceConcurrencyConfig struct {
 // ServiceConfig represents configuration for a specific service
 type ServiceConfig struct {
 	Command     string                    `toml:"command"`
+	Image       string                    `toml:"image"`
+	EnvVars     []AppEnvVar               `toml:"env"`
 	Concurrency *ServiceConcurrencyConfig `toml:"concurrency"`
 }
 

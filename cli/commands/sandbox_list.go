@@ -34,11 +34,31 @@ func SandboxList(ctx *Context, opts struct {
 		return err
 	}
 
+	// Get all sandbox pools to map pool ID -> service
+	poolKindRes, err := eac.LookupKind(ctx, "sandbox_pool")
+	if err != nil {
+		return err
+	}
+	poolsRes, err := eac.List(ctx, poolKindRes.Attr())
+	if err != nil {
+		return err
+	}
+
+	// Create a map of pool ID -> service
+	poolServiceMap := make(map[string]string)
+	for _, e := range poolsRes.Values() {
+		var pool compute_v1alpha.SandboxPool
+		pool.Decode(e.Entity())
+		poolServiceMap[pool.ID.String()] = pool.Service
+	}
+
 	// For JSON output, just filter and return the raw sandbox structs with pool info
 	if opts.IsJSON() {
 		var sandboxes []struct {
 			compute_v1alpha.Sandbox
-			Pool string `json:"pool,omitempty"`
+			Pool    string `json:"pool,omitempty"`
+			Service string `json:"service,omitempty"`
+			Address string `json:"address,omitempty"`
 		}
 
 		for _, e := range res.Values() {
@@ -59,12 +79,25 @@ func SandboxList(ctx *Context, opts struct {
 			md.Decode(e.Entity())
 			poolLabel, _ := md.Labels.Get("pool")
 
+			// Get service from pool
+			service := poolServiceMap[poolLabel]
+
+			// Get network address
+			address := ""
+			if len(sandbox.Network) > 0 && sandbox.Network[0].Address != "" {
+				address = sandbox.Network[0].Address
+			}
+
 			sandboxes = append(sandboxes, struct {
 				compute_v1alpha.Sandbox
-				Pool string `json:"pool,omitempty"`
+				Pool    string `json:"pool,omitempty"`
+				Service string `json:"service,omitempty"`
+				Address string `json:"address,omitempty"`
 			}{
 				Sandbox: sandbox,
 				Pool:    poolLabel,
+				Service: service,
+				Address: address,
 			})
 		}
 
@@ -73,7 +106,7 @@ func SandboxList(ctx *Context, opts struct {
 
 	// Table output - all the UI formatting logic
 	var rows []ui.Row
-	headers := []string{"ID", "STATUS", "VERSION", "CONTAINERS", "POOL", "CREATED", "UPDATED"}
+	headers := []string{"ID", "VERSION", "SERVICE", "POOL", "ADDRESS", "STATUS", "CREATED", "UPDATED"}
 
 	for _, e := range res.Values() {
 		// Decode the sandbox entity
@@ -98,19 +131,33 @@ func SandboxList(ctx *Context, opts struct {
 		var md core_v1alpha.Metadata
 		md.Decode(e.Entity())
 		poolLabel, _ := md.Labels.Get("pool")
-		if poolLabel == "" {
-			poolLabel = "-"
+		poolLabelDisplay := poolLabel
+		if poolLabelDisplay == "" {
+			poolLabelDisplay = "-"
 		} else {
-			poolLabel = ui.CleanEntityID(poolLabel)
+			poolLabelDisplay = ui.CleanEntityID(poolLabelDisplay)
+		}
+
+		// Get service from pool
+		service := poolServiceMap[poolLabel]
+		if service == "" {
+			service = "-"
+		}
+
+		// Get network address
+		address := "-"
+		if len(sandbox.Network) > 0 && sandbox.Network[0].Address != "" {
+			address = sandbox.Network[0].Address
 		}
 
 		// Apply all UI formatting for table display
 		rows = append(rows, ui.Row{
 			ui.CleanEntityID(sandbox.ID.String()),
-			ui.DisplayStatus(status),
 			ui.DisplayAppVersion(sandbox.Spec.Version.String()),
-			fmt.Sprintf("%d", len(sandbox.Container)),
-			poolLabel,
+			service,
+			poolLabelDisplay,
+			address,
+			ui.DisplayStatus(status),
 			humanFriendlyTimestamp(time.UnixMilli(e.CreatedAt())),
 			humanFriendlyTimestamp(time.UnixMilli(e.UpdatedAt())),
 		})
