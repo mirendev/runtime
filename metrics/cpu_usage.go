@@ -48,14 +48,6 @@ func (m *CPUUsage) RecordUsage(ctx context.Context, entity string, windowStart, 
 	// Convert CPU microseconds to seconds
 	cpuSecondsIncrement := float64(cpuUsec) / 1_000_000.0
 
-	// Create a key for this entity (could include attrs if needed for different time series)
-	key := entity
-
-	m.mu.Lock()
-	m.cpuSeconds[key] += cpuSecondsIncrement
-	totalCPUSeconds := m.cpuSeconds[key]
-	m.mu.Unlock()
-
 	// Build labels from attributes
 	labels := make(map[string]string)
 	labels["entity"] = entity
@@ -63,6 +55,17 @@ func (m *CPUUsage) RecordUsage(ctx context.Context, entity string, windowStart, 
 	for k, v := range attrs {
 		labels[k] = v
 	}
+
+	// Create a key that matches the time series identity (entity + all label values)
+	key := fmt.Sprintf("%s:%s", entity, m.instance)
+	for k, v := range attrs {
+		key = fmt.Sprintf("%s:%s=%s", key, k, v)
+	}
+
+	m.mu.Lock()
+	m.cpuSeconds[key] += cpuSecondsIncrement
+	totalCPUSeconds := m.cpuSeconds[key]
+	m.mu.Unlock()
 
 	// Write cumulative CPU seconds counter
 	point := MetricPoint{
@@ -85,12 +88,14 @@ func (m *CPUUsage) CPUUsageLastHour(entity string) ([]UsageAtTime, error) {
 		return nil, fmt.Errorf("reader not initialized")
 	}
 
+	// Align to minute boundaries for predictable evaluation points
 	now := time.Now()
-	start := now.Add(-1 * time.Hour)
+	end := time.Unix(now.Unix()/60*60, 0)
+	start := end.Add(-1 * time.Hour)
 
 	// Query CPU cores (rate of CPU seconds) per minute over the last hour
 	query := fmt.Sprintf(`rate(cpu_usage_seconds_total{entity="%s"}[1m])`, entity)
-	result, err := m.Reader.RangeQuery(context.Background(), query, start, now, "1m")
+	result, err := m.Reader.RangeQuery(context.Background(), query, start, end, "1m")
 	if err != nil {
 		return nil, fmt.Errorf("failed to query CPU usage: %w", err)
 	}
@@ -102,8 +107,10 @@ func (m *CPUUsage) CPUUsageLastHour(entity string) ([]UsageAtTime, error) {
 			coresStr, _ := value[1].(string)
 			cores, _ := strconv.ParseFloat(coresStr, 64)
 
+			// Shift timestamp back 1 minute to represent bucket start time
+			// (VictoriaMetrics returns the end of the measurement window)
 			results = append(results, UsageAtTime{
-				Timestamp: time.Unix(int64(timestamp), 0),
+				Timestamp: time.Unix(int64(timestamp), 0).Add(-1 * time.Minute),
 				Cores:     cores,
 			})
 		}

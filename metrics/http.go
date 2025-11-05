@@ -194,40 +194,42 @@ func (h *HTTPMetrics) StatsLastHour(app string) ([]RequestStats, error) {
 		return nil, fmt.Errorf("reader not initialized")
 	}
 
+	// Align to minute boundaries for predictable evaluation points
 	now := time.Now()
-	start := now.Add(-1 * time.Hour)
+	end := time.Unix(now.Unix()/60*60, 0)
+	start := end.Add(-1 * time.Hour)
 
 	// Query for count per minute
 	countQuery := fmt.Sprintf(`sum(increase(http_requests_total{app="%s"}[1m]))`, app)
-	countResult, err := h.Reader.RangeQuery(context.Background(), countQuery, start, now, "1m")
+	countResult, err := h.Reader.RangeQuery(context.Background(), countQuery, start, end, "1m")
 	if err != nil {
 		return nil, fmt.Errorf("failed to query count: %w", err)
 	}
 
 	// Query for average duration in milliseconds
 	avgQuery := fmt.Sprintf(`(sum(rate(http_request_duration_seconds_sum{app="%s"}[1m])) / sum(rate(http_request_duration_seconds_count{app="%s"}[1m]))) * 1000`, app, app)
-	avgResult, err := h.Reader.RangeQuery(context.Background(), avgQuery, start, now, "1m")
+	avgResult, err := h.Reader.RangeQuery(context.Background(), avgQuery, start, end, "1m")
 	if err != nil {
 		return nil, fmt.Errorf("failed to query avg duration: %w", err)
 	}
 
 	// Query for p95 duration in milliseconds
 	p95Query := fmt.Sprintf(`quantile_over_time(0.95, http_request_duration_seconds{app="%s"}[1m]) * 1000`, app)
-	p95Result, err := h.Reader.RangeQuery(context.Background(), p95Query, start, now, "1m")
+	p95Result, err := h.Reader.RangeQuery(context.Background(), p95Query, start, end, "1m")
 	if err != nil {
 		return nil, fmt.Errorf("failed to query p95: %w", err)
 	}
 
 	// Query for p99 duration in milliseconds
 	p99Query := fmt.Sprintf(`quantile_over_time(0.99, http_request_duration_seconds{app="%s"}[1m]) * 1000`, app)
-	p99Result, err := h.Reader.RangeQuery(context.Background(), p99Query, start, now, "1m")
+	p99Result, err := h.Reader.RangeQuery(context.Background(), p99Query, start, end, "1m")
 	if err != nil {
 		return nil, fmt.Errorf("failed to query p99: %w", err)
 	}
 
 	// Query for error rate
 	errorQuery := fmt.Sprintf(`sum(rate(http_requests_total{app="%s",status=~"[45].."}[1m])) / sum(rate(http_requests_total{app="%s"}[1m]))`, app, app)
-	errorResult, err := h.Reader.RangeQuery(context.Background(), errorQuery, start, now, "1m")
+	errorResult, err := h.Reader.RangeQuery(context.Background(), errorQuery, start, end, "1m")
 	if err != nil {
 		return nil, fmt.Errorf("failed to query error rate: %w", err)
 	}
@@ -240,8 +242,10 @@ func (h *HTTPMetrics) StatsLastHour(app string) ([]RequestStats, error) {
 			countStr, _ := value[1].(string)
 			count, _ := strconv.ParseInt(countStr, 10, 64)
 
+			// Shift timestamp back 1 minute to represent bucket start time
+			// (VictoriaMetrics returns the end of the measurement window)
 			stat := RequestStats{
-				Time:  time.Unix(int64(timestamp), 0),
+				Time:  time.Unix(int64(timestamp), 0).Add(-1 * time.Minute),
 				Count: count,
 			}
 

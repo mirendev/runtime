@@ -43,7 +43,7 @@ func (a *AppInfo) AppInfo(ctx context.Context, state *app_v1alpha.AppStatusAppIn
 		appVer.App = appRec.ID
 	}
 
-	uats, err := a.CPU.CPUUsageLastHour(name)
+	uats, err := a.CPU.CPUUsageLastHour(appRec.ID.String())
 	if err != nil {
 		return err
 	}
