@@ -430,7 +430,8 @@ func (a *localActivator) requestPoolCapacity(ctx context.Context, ver *core_v1al
 				patchRes, err := a.eac.Patch(ctx, attrs, currentRevision)
 				if err != nil {
 					// Check for revision conflict
-					if errors.As(err, &cond.ErrConflict{}) {
+					var conflictErr *cond.ErrConflict
+					if errors.As(err, &conflictErr) {
 						a.log.Debug("pool revision conflict, refetching and retrying",
 							"pool", poolID,
 							"attempt", attempt+1,
@@ -608,7 +609,8 @@ func (a *localActivator) requestPoolCapacity(ctx context.Context, ver *core_v1al
 			patchRes, err := a.eac.Patch(ctx, attrs, currentRevision)
 			if err != nil {
 				// On conflict or error, clear cache and let caller retry
-				if errors.As(err, &cond.ErrConflict{}) {
+				var conflictErr *cond.ErrConflict
+				if errors.As(err, &conflictErr) {
 					a.log.Warn("launcher-created pool revision conflict, clearing cache for retry",
 						"pool", poolID)
 					a.mu.Lock()

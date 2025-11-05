@@ -569,15 +569,9 @@ func TestManagerScaleDownFixedModeProactive(t *testing.T) {
 	}
 
 	// We should have scaled down from 3 to 1 RUNNING
-	// The exact number of entities depends on whether STOPPED sandboxes are deleted or retained
 	assert.Equal(t, 1, runningCount, "should have 1 RUNNING sandbox (desired count)")
-	if len(sandboxes) == 3 {
-		// If STOPPED sandboxes are retained
-		assert.Equal(t, 2, stoppedCount, "should have 2 STOPPED sandboxes")
-	} else {
-		// If STOPPED sandboxes were deleted, we should only have the 1 RUNNING
-		assert.Equal(t, 1, len(sandboxes), "should have 1 sandbox if STOPPED ones are deleted")
-	}
+	// listSandboxesForPool filters STOPPED sandboxes, so we only see RUNNING ones
+	assert.Equal(t, 1, len(sandboxes), "should have exactly 1 RUNNING sandbox after scale-down")
 }
 
 // TestManagerZeroValuePersistence tests that zero values persist correctly

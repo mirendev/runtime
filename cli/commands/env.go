@@ -247,12 +247,20 @@ func EnvSet(ctx *Context, opts struct {
 	if isServiceSpecific {
 		// Update the service's env vars
 		services := cfg.Services()
+		found := false
 		for i, svc := range services {
 			if svc.Service() == opts.Service {
 				svc.SetServiceEnv(envvars)
 				services[i] = svc
+				found = true
 				break
 			}
+		}
+		if !found {
+			newSvc := &app_v1alpha.ServiceConfig{}
+			newSvc.SetService(opts.Service)
+			newSvc.SetServiceEnv(envvars)
+			services = append(services, newSvc)
 		}
 		cfg.SetServices(services)
 	} else {

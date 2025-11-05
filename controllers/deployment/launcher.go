@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 
 	"miren.dev/runtime/api/compute/compute_v1alpha"
 	"miren.dev/runtime/api/core/core_v1alpha"
@@ -394,10 +395,10 @@ func filterSystemEnvVars(envVars []string) []string {
 	filtered := []string{}
 	for _, e := range envVars {
 		// Skip MIREN_VERSION and MIREN_APP - these are set automatically and change per version
-		if len(e) >= 13 && e[:13] == "MIREN_VERSION" {
+		if strings.HasPrefix(e, "MIREN_VERSION=") {
 			continue
 		}
-		if len(e) >= 9 && e[:9] == "MIREN_APP" {
+		if strings.HasPrefix(e, "MIREN_APP=") {
 			continue
 		}
 		filtered = append(filtered, e)
