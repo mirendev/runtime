@@ -13,6 +13,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/moby/buildkit/client"
 	"github.com/moby/buildkit/util/progress/progresswriter"
+	"golang.org/x/term"
 
 	"miren.dev/runtime/api/build/build_v1alpha"
 	"miren.dev/runtime/api/deployment/deployment_v1alpha"
@@ -179,7 +180,11 @@ func Deploy(ctx *Context, opts struct {
 		results *build_v1alpha.BuilderClientBuildFromTarResults
 	)
 
-	if opts.Explain {
+	// Detect if we have a TTY - if not, force explain mode
+	isTTY := term.IsTerminal(int(os.Stdout.Fd()))
+	useExplainMode := opts.Explain || !isTTY
+
+	if useExplainMode {
 		// In explain mode, write to stderr
 		pw, err := progresswriter.NewPrinter(ctx, os.Stderr, opts.ExplainFormat)
 		if err != nil {
