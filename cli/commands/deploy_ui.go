@@ -67,12 +67,12 @@ func line(str string) string {
 // Meter is the custom spinner animation
 var Meter = spinner.Spinner{
 	Frames: []string{
-		line("   "),
-		line("▰  "),
-		line("▰▰ "),
-		line("▰▰▰"),
-		line(" ▰▰"),
-		line("  ▰"),
+		line("    "),
+		line("▰   "),
+		line("▰▰  "),
+		line("▰▰▰ "),
+		line(" ▰▰ "),
+		line("  ▰ "),
 	},
 	FPS: time.Second / 7, //nolint:mnd
 }
