@@ -75,39 +75,39 @@ type KeyRegistrationResponse struct {
 
 // getOrCreateKey checks if a key with the given name already exists in the config,
 // and reuses it if found. Otherwise, it generates a new key.
-// Returns the keypair, whether it was already registered, and any error.
-func getOrCreateKey(ctx *Context, keyName string) (*cloudauth.KeyPair, bool, error) {
+// Returns the keypair and any error.
+func getOrCreateKey(ctx *Context, keyName string) (*cloudauth.KeyPair, error) {
 	// Try to load existing config
 	config, err := clientconfig.LoadConfig()
 	if err != nil && err != clientconfig.ErrNoConfig {
-		return nil, false, fmt.Errorf("failed to load config: %w", err)
+		return nil, fmt.Errorf("failed to load config: %w", err)
 	}
 
 	// Check if key already exists
 	if config != nil && config.HasKey(keyName) {
 		keyConfig, err := config.GetKey(keyName)
 		if err != nil {
-			return nil, false, fmt.Errorf("failed to get key: %w", err)
+			return nil, fmt.Errorf("failed to get key: %w", err)
 		}
 
 		// Load the keypair from the stored private key
 		keyPair, err := cloudauth.LoadKeyPairFromPEM(keyConfig.PrivateKey)
 		if err != nil {
-			return nil, false, fmt.Errorf("failed to load keypair from config: %w", err)
+			return nil, fmt.Errorf("failed to load keypair from config: %w", err)
 		}
 
 		ctx.Info("Found existing key: %s", keyName)
-		return keyPair, true, nil
+		return keyPair, nil
 	}
 
 	// No existing key found, generate a new one
 	ctx.Info("Generating new keypair for future authentication...")
 	keyPair, err := cloudauth.GenerateKeyPair()
 	if err != nil {
-		return nil, false, fmt.Errorf("failed to generate keypair: %w", err)
+		return nil, fmt.Errorf("failed to generate keypair: %w", err)
 	}
 
-	return keyPair, false, nil
+	return keyPair, nil
 }
 
 // Login authenticates with miren.cloud using device flow
@@ -190,12 +190,12 @@ func Login(ctx *Context, opts struct {
 	ctx.Completed("Authentication successful!")
 
 	// Get or create a keypair for future authentication
-	keyPair, keyAlreadyRegistered, err := getOrCreateKey(ctx, opts.KeyName)
+	keyPair, err := getOrCreateKey(ctx, opts.KeyName)
 	if err != nil {
 		ctx.Warn("Failed to get or create keypair: %v", err)
 		ctx.Info("You can still use token authentication")
 		keyPair = nil
-	} else if !keyAlreadyRegistered {
+	} else {
 		// Register the public key with the server (only if it's a new key)
 		ctx.Info("Registering public key with server...")
 		if err := registerPublicKey(opts.CloudURL, token, keyPair, opts.KeyName); err != nil {
@@ -205,8 +205,6 @@ func Login(ctx *Context, opts struct {
 		} else {
 			ctx.Info("Public key registered successfully")
 		}
-	} else {
-		ctx.Info("Reusing existing keypair for authentication")
 	}
 
 	// Save to config unless --no-save is specified
@@ -393,7 +391,6 @@ func pollForToken(ctx context.Context, cloudURL, deviceCode string, interval, ma
 	}
 }
 
-
 // registerPublicKey registers a public key with the cloud server
 func registerPublicKey(cloudURL, token string, keyPair *cloudauth.KeyPair, keyName string) error {
 	// Get public key in PEM format
@@ -435,6 +432,11 @@ func registerPublicKey(cloudURL, token string, keyPair *cloudauth.KeyPair, keyNa
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return fmt.Errorf("failed to read response: %w", err)
+	}
+
+	if resp.StatusCode == http.StatusConflict {
+		// Key already registered
+		return nil
 	}
 
 	if resp.StatusCode != http.StatusOK {
