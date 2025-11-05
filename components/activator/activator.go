@@ -1095,6 +1095,7 @@ func (a *localActivator) recoverPools(ctx context.Context) error {
 		a.mu.Lock()
 		a.pools[key] = &poolState{
 			pool:       &pool,
+			revision:   ent.Revision(),
 			inProgress: false,
 		}
 		a.mu.Unlock()
