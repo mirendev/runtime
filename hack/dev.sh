@@ -40,6 +40,15 @@ cp /usr/local/bin/ctr /var/lib/miren/release/
 # Setup environment variables
 setup_bash_environment
 
+# Clear stale containerd state to avoid race condition on fresh boot
+# Keep root directory (images/snapshots) for performance, but clear state (runtime metadata)
+# This prevents the sandbox reconciler from cleaning up newly created containers
+# that it mistakes for stale containers from previous dev sessions
+if [ -d /var/lib/miren/containerd/state ]; then
+    echo "Cleaning stale containerd state..."
+    rm -rf /var/lib/miren/containerd/state/*
+fi
+
 echo ""
 echo "✓ Development environment ready!"
 echo ""
