@@ -1043,13 +1043,15 @@ func (s *EtcdStore) DeleteEntity(ctx context.Context, id Id) error {
 		return err
 	}
 
-	for _, attr := range entity.attrs {
-		schema, err := s.GetAttributeSchema(ctx, attr.ID)
-		if err != nil {
-			return err
-		}
+	// Collect all indexed attributes including nested ones within components
+	indexedAttrs, err := s.collectIndexedAttributes(ctx, entity.attrs)
+	if err != nil {
+		return err
+	}
 
-		if schema.Index {
+	// Delete all index entries for this entity
+	for _, attrs := range indexedAttrs {
+		for _, attr := range attrs {
 			// TODO: Batch this as an op into the below txn
 			err := s.deleteFromCollection(entity, attr.CAS())
 			if err != nil {
