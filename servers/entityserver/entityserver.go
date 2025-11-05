@@ -959,15 +959,33 @@ func (e *EntityServer) Reindex(ctx context.Context, req *entityserver_v1alpha.En
 		stats.collectionEntriesScanned = int64(len(resp.Kvs))
 
 		var staleKeys []string
+		staleEntries := make(map[entity.Id][]string) // Track which collections have stale entries per entity
 		for _, kv := range resp.Kvs {
 			// Collection entry value contains the entity ID
 			entityID := entity.Id(kv.Value)
 			if !validEntityIDs[entityID] {
-				staleKeys = append(staleKeys, string(kv.Key))
+				key := string(kv.Key)
+				staleKeys = append(staleKeys, key)
+				staleEntries[entityID] = append(staleEntries[entityID], key)
 			}
 		}
 
 		stats.staleEntriesFound = int64(len(staleKeys))
+
+		// Log details about stale entries for debugging
+		if len(staleEntries) > 0 {
+			e.Log.Info("found stale index entries details")
+			for entityID, keys := range staleEntries {
+				sampleKeys := keys
+				if len(keys) > 3 {
+					sampleKeys = keys[:3]
+				}
+				e.Log.Warn("stale index entries for deleted entity",
+					"entity_id", entityID,
+					"count", len(keys),
+					"sample_keys", sampleKeys)
+			}
+		}
 
 		// Delete stale entries in batches (only if not dry run)
 		if !dryRun && len(staleKeys) > 0 {
