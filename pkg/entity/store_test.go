@@ -1735,12 +1735,12 @@ func TestEtcdStore_NestedComponentFieldIndexing(t *testing.T) {
 // cleans up indexes by directly querying etcd to inspect the index collections.
 //
 // Why direct etcd queries are necessary:
-// - ListIndex internally deduplicates results, so calling ListIndex after deletion
-//   may return the correct count even if stale index entries remain in etcd
-// - This test queries etcd directly to verify that the actual index collection keys
-//   are removed, not just that ListIndex returns the right IDs
-// - When the bug exists, this test shows 2 keys remain in etcd after deletion
-// - When fixed, only 1 key remains (the non-deleted entity)
+//   - ListIndex internally deduplicates results, so calling ListIndex after deletion
+//     may return the correct count even if stale index entries remain in etcd
+//   - This test queries etcd directly to verify that the actual index collection keys
+//     are removed, not just that ListIndex returns the right IDs
+//   - When the bug exists, this test shows 2 keys remain in etcd after deletion
+//   - When fixed, only 1 key remains (the non-deleted entity)
 func TestEtcdStore_DeleteEntity_IndexCleanup_DirectQuery(t *testing.T) {
 	client := setupTestEtcd(t)
 	store, err := NewEtcdStore(t.Context(), slog.Default(), client, "/test-entities-debug")

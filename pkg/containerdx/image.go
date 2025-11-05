@@ -18,8 +18,8 @@ func NormalizeImageReference(image string) string {
 
 		// If it contains a '.', ':', or is 'localhost', it's likely a registry
 		if strings.Contains(registryPart, ".") ||
-		   strings.Contains(registryPart, ":") ||
-		   registryPart == "localhost" {
+			strings.Contains(registryPart, ":") ||
+			registryPart == "localhost" {
 			return image
 		}
 
