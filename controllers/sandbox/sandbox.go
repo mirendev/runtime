@@ -187,7 +187,6 @@ func mapLegacyProtocol(legacy compute.PortProtocol) compute.SandboxSpecContainer
 	}
 }
 
-
 // reconcileSandboxesOnBoot checks all Running sandboxes and marks unhealthy ones as DEAD
 // This is called during controller initialization to clean up after containerd restarts
 func (c *SandboxController) reconcileSandboxesOnBoot(ctx context.Context) error {

@@ -99,7 +99,6 @@ func (s *State) LoopbackAddr() string {
 	return addr
 }
 
-
 type stateOptions struct {
 	certPath string
 	keyPath  string

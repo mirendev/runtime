@@ -200,7 +200,6 @@ func toCamal(s string) string {
 	return b.String()
 }
 
-
 func private(s string) string {
 	return strings.ToLower(s[:1]) + s[1:]
 }

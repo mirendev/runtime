@@ -353,8 +353,8 @@ func TestManagerNoUpdateWhenStatusUnchanged(t *testing.T) {
 
 	// Create 1 running sandbox
 	sb := &compute_v1alpha.Sandbox{
-		Status:  compute_v1alpha.RUNNING,
-		Spec:    pool.SandboxSpec,
+		Status: compute_v1alpha.RUNNING,
+		Spec:   pool.SandboxSpec,
 	}
 	_, err = server.Client.Create(ctx, "sb", sb,
 		entityserver.WithLabels(types.LabelSet("service", "web", "pool", poolID.String())))

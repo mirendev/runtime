@@ -35,7 +35,6 @@ func CanBe[T, I any]() bool {
 	return true
 }
 
-
 type InterfaceCreators struct {
 	mu       sync.Mutex
 	creators map[reflect.Type]reflect.Value

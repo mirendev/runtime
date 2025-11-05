@@ -129,7 +129,7 @@ func Deploy(ctx *Context, opts struct {
 			// even if the main context is canceled
 			statusCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
-			
+
 			// Collect build logs if available
 			logs := strings.Join(buildLogs, "\n")
 			if logs == "" && len(buildErrors) > 0 {
@@ -360,7 +360,7 @@ func Deploy(ctx *Context, opts struct {
 		updateDeploymentOnError("Build did not return a version")
 		return fmt.Errorf("build did not return a version")
 	}
-	
+
 	ctx.Log.Debug("Build completed with version", "version", appVersionId)
 
 	// Update phase to pushing (build completed, now pushing)

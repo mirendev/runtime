@@ -17,7 +17,6 @@ type (
 	}
 )
 
-
 func (e RawBlocks) Blocks() uint32 {
 	return uint32(len(e) / BlockSize)
 }

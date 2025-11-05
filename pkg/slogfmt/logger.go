@@ -459,7 +459,6 @@ func isEmpty(a slog.Attr) bool {
 	return a.Key == "" && a.Value.Equal(slog.Value{})
 }
 
-
 // appendAttr appends the Attr's key and value.
 // It handles replacement and checking for an empty key.
 // It reports whether something was appended.
