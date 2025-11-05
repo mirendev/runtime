@@ -625,8 +625,7 @@ func (a *localActivator) requestPoolCapacity(ctx context.Context, ver *core_v1al
 			patchRes, err := a.eac.Patch(ctx, attrs, currentRevision)
 			if err != nil {
 				// On conflict or error, clear cache and let caller retry
-				var conflictErr *cond.ErrConflict
-				if errors.As(err, &conflictErr) {
+				if errors.Is(err, cond.ErrConflict{}) {
 					a.log.Warn("launcher-created pool revision conflict, clearing cache for retry",
 						"pool", poolID)
 					a.mu.Lock()
