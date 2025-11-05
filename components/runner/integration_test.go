@@ -77,15 +77,6 @@ func TestRunnerCoordinatorIntegration(t *testing.T) {
 
 	defer runner.Close()
 
-	// Wait for runner to start
-	time.Sleep(1 * time.Second)
-
-	select {
-	case err := <-runnerDone:
-		require.NoError(t, err)
-	default:
-	}
-
 	cfg, err := coord.LocalConfig()
 	r.NoError(err)
 
@@ -101,8 +92,33 @@ func TestRunnerCoordinatorIntegration(t *testing.T) {
 	// Check the node entity for the runner
 	nodeId := "node/" + runnerCfg.Id
 
-	res, err := eac.Get(ctx, nodeId)
-	r.NoError(err)
+	// Poll for the node entity to be ready (wait for runner startup to complete)
+	var res *entityserver_v1alpha.EntityAccessClientGetResults
+	pollTimeout := time.After(10 * time.Second)
+	pollTicker := time.NewTicker(100 * time.Millisecond)
+	defer pollTicker.Stop()
+
+	for {
+		select {
+		case err := <-runnerDone:
+			// runner.Start() completed, check for error
+			require.NoError(t, err, "runner.Start() failed")
+			// If it succeeded, the node should now be available, try one more time
+			res, err = eac.Get(ctx, nodeId)
+			require.NoError(t, err, "failed to get node entity after runner started")
+			require.True(t, res.HasEntity(), "node entity not found after runner started")
+			goto nodeReady
+		case <-pollTimeout:
+			t.Fatal("timeout waiting for node entity to be created")
+		case <-pollTicker.C:
+			res, err = eac.Get(ctx, nodeId)
+			if err == nil && res.HasEntity() {
+				goto nodeReady
+			}
+		}
+	}
+
+nodeReady:
 
 	r.True(res.HasEntity())
 
