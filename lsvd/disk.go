@@ -52,7 +52,6 @@ type Disk struct {
 
 	readDisks []*Disk
 
-
 	autoGC bool
 
 	deleteMu sync.Mutex

@@ -62,16 +62,16 @@ func GetInfo(dir string) (*Info, error) {
 		// 2. Actual diff of changes
 		statusOutput, _ := runGitCommand(absDir, "status", "--porcelain", "-z")
 		diffOutput, _ := runGitCommand(absDir, "diff", "HEAD", "--no-ext-diff")
-		
+
 		// Combine both outputs to create a unique fingerprint of the dirty state
 		combinedState := fmt.Sprintf("status:\n%s\ndiff:\n%s", statusOutput, diffOutput)
-		
+
 		// Create a hash of the combined state
 		cmd := exec.Command("git", "hash-object", "--stdin")
 		cmd.Dir = absDir
 		cmd.Stdin = strings.NewReader(combinedState)
 		output, err := cmd.Output()
-		
+
 		if err != nil || len(output) == 0 {
 			// Fallback: use a simple hash of the status
 			info.WorkingTreeHash = "dirty"

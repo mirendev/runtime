@@ -17,7 +17,6 @@ import (
 	"miren.dev/runtime/pkg/rpc/stream"
 )
 
-
 type Server struct {
 	Log *slog.Logger
 	CC  *containerd.Client

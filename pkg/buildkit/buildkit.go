@@ -287,7 +287,6 @@ type ImageConfig struct {
 	Services map[string]string
 }
 
-
 type BuildResult struct {
 	Entrypoint string
 }

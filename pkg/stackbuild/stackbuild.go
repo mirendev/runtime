@@ -255,7 +255,6 @@ func (m *MetaStack) chownApp(cur llb.State) llb.State {
 	).Root()
 }
 
-
 func (s *RubyStack) Gemfile() ([]byte, []byte, error) {
 	if s.gemfile != nil {
 		return s.gemfile, s.gemfileLock, nil
