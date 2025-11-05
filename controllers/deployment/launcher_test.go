@@ -341,24 +341,17 @@ func TestNewPoolOnImageChange(t *testing.T) {
 	assert.Contains(t, poolV2.ReferencedByVersions, v2.ID, "new pool should reference v2")
 	assert.NotContains(t, poolV2.ReferencedByVersions, v1.ID, "new pool should not reference v1")
 
-	// Verify old pool was scaled down
-	var poolV1 *compute_v1alpha.SandboxPool
-	for i := range poolsV2 {
-		if poolsV2[i].ID == poolV1ID {
-			poolV1 = &poolsV2[i]
-			break
-		}
-	}
-	require.NotNil(t, poolV1, "old pool should still exist")
-	t.Logf("Old pool state: DesiredInstances=%d, ReferencedByVersions=%v", poolV1.DesiredInstances, poolV1.ReferencedByVersions)
-	// NOTE: These assertions are skipped because the inmem entity store
-	// doesn't properly persist updates (both Put and Patch fail to update existing entities).
-	// The cleanup logic is correct - see logs showing "pool update successful" -
-	// but the test infrastructure limitation prevents verification.
-	// This will work correctly in production with real etcd store.
-	// assert.Equal(t, int64(0), poolV1.DesiredInstances, "old pool should be scaled to 0")
-	// assert.NotContains(t, poolV1.ReferencedByVersions, v2.ID, "old pool should not reference v2")
-	// assert.Len(t, poolV1.ReferencedByVersions, 0, "old pool should have no version references")
+	// Verify old pool was scaled down by re-fetching from store
+	getRes, err := server.EAC.Get(ctx, poolV1ID.String())
+	require.NoError(t, err)
+	var poolV1Refreshed compute_v1alpha.SandboxPool
+	poolV1Refreshed.Decode(getRes.Entity().Entity())
+
+	t.Logf("Old pool state after refresh: DesiredInstances=%d, ReferencedByVersions=%v",
+		poolV1Refreshed.DesiredInstances, poolV1Refreshed.ReferencedByVersions)
+	assert.Equal(t, int64(0), poolV1Refreshed.DesiredInstances, "old pool should be scaled to 0")
+	assert.NotContains(t, poolV1Refreshed.ReferencedByVersions, v2.ID, "old pool should not reference v2")
+	assert.Len(t, poolV1Refreshed.ReferencedByVersions, 0, "old pool should have no version references")
 }
 
 // TestServiceRemoval tests that DeploymentLauncher scales down pools
@@ -437,16 +430,18 @@ func TestServiceRemoval(t *testing.T) {
 	err = launcher.Reconcile(ctx, app, nil)
 	require.NoError(t, err)
 
-	// Verify postgres pool was scaled to 0
+	// Verify postgres pool was scaled to 0 by re-fetching from store
 	poolsV2 := listAllPools(t, ctx, server)
 	require.Len(t, poolsV2, 1, "pool should still exist")
-	// NOTE: These assertions are skipped because the inmem entity store
-	// doesn't properly persist updates (both Put and Patch fail to update existing entities).
-	// The cleanup logic is correct - see logs showing "pool update successful" -
-	// but the test infrastructure limitation prevents verification.
-	// This will work correctly in production with real etcd store.
-	// assert.Equal(t, int64(0), poolsV2[0].DesiredInstances, "postgres pool should be scaled to 0")
-	// assert.NotContains(t, poolsV2[0].ReferencedByVersions, v2.ID, "pool should not reference v2")
+	poolID := poolsV2[0].ID
+
+	getRes, err := server.EAC.Get(ctx, poolID.String())
+	require.NoError(t, err)
+	var refreshedPool compute_v1alpha.SandboxPool
+	refreshedPool.Decode(getRes.Entity().Entity())
+
+	assert.Equal(t, int64(0), refreshedPool.DesiredInstances, "postgres pool should be scaled to 0")
+	assert.NotContains(t, refreshedPool.ReferencedByVersions, v2.ID, "pool should not reference v2")
 }
 
 // TestMultipleServices tests that DeploymentLauncher creates pools for
