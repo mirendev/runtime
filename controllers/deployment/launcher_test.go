@@ -76,7 +76,7 @@ func TestPoolCreationFixedMode(t *testing.T) {
 }
 
 // TestPoolCreationAutoMode tests that DeploymentLauncher creates pools with
-// desired_instances=0 for auto-mode services (activator will scale up on demand)
+// desired_instances=1 for auto-mode services to boot immediately after deploy
 func TestPoolCreationAutoMode(t *testing.T) {
 	ctx := context.Background()
 	log := testutils.TestLogger(t)
@@ -126,13 +126,13 @@ func TestPoolCreationAutoMode(t *testing.T) {
 	err = launcher.Reconcile(ctx, app, nil)
 	require.NoError(t, err)
 
-	// Verify pool was created with desired_instances=0
+	// Verify pool was created with desired_instances=1
 	pools := listAllPools(t, ctx, server)
 	require.Len(t, pools, 1, "should create one pool")
 
 	pool := pools[0]
 	assert.Equal(t, "web", pool.Service, "pool should be for web service")
-	assert.Equal(t, int64(0), pool.DesiredInstances, "auto mode should start with desired_instances=0")
+	assert.Equal(t, int64(1), pool.DesiredInstances, "auto mode should start with desired_instances=1 to boot immediately")
 	assert.Equal(t, version.ID, pool.SandboxSpec.Version, "pool should reference version")
 }
 
@@ -521,7 +521,7 @@ func TestMultipleServices(t *testing.T) {
 	// Verify web pool (auto mode)
 	webPool, ok := poolsByService["web"]
 	require.True(t, ok, "should have web pool")
-	assert.Equal(t, int64(0), webPool.DesiredInstances, "web (auto) should start at 0")
+	assert.Equal(t, int64(1), webPool.DesiredInstances, "web (auto) should start at 1")
 
 	// Verify worker pool (fixed mode, 3 instances)
 	workerPool, ok := poolsByService["worker"]
@@ -754,7 +754,7 @@ func TestAutoModePoolReusePreservesDesiredInstances(t *testing.T) {
 	err = server.Client.Update(ctx, app)
 	require.NoError(t, err)
 
-	// First reconciliation - creates pool with desired=0 (correct for auto mode)
+	// First reconciliation - creates pool with desired=1 (boots immediately after deploy)
 	launcher := NewLauncher(log, server.EAC)
 	err = launcher.Reconcile(ctx, app, nil)
 	require.NoError(t, err)
@@ -763,17 +763,17 @@ func TestAutoModePoolReusePreservesDesiredInstances(t *testing.T) {
 	require.Len(t, pools, 1, "should create one pool")
 	pool := pools[0]
 	assert.Equal(t, "web", pool.Service)
-	assert.Equal(t, int64(0), pool.DesiredInstances, "auto mode should start with desired=0")
+	assert.Equal(t, int64(1), pool.DesiredInstances, "auto mode should start with desired=1")
 
 	// Simulate activator scaling up the pool (e.g., traffic arrived)
-	pool.DesiredInstances = 1
+	pool.DesiredInstances = 2
 	err = server.Client.Update(ctx, &pool)
 	require.NoError(t, err)
 
-	// Verify pool now has desired=1
+	// Verify pool now has desired=2
 	pools = listAllPools(t, ctx, server)
 	require.Len(t, pools, 1)
-	assert.Equal(t, int64(1), pools[0].DesiredInstances, "activator scaled to 1")
+	assert.Equal(t, int64(2), pools[0].DesiredInstances, "activator scaled to 2")
 
 	// Second reconciliation - reuses the same pool
 	// BUG: Before the fix, this would reset desired_instances back to 0
@@ -784,8 +784,8 @@ func TestAutoModePoolReusePreservesDesiredInstances(t *testing.T) {
 	pools = listAllPools(t, ctx, server)
 	require.Len(t, pools, 1, "should still have one pool (reused)")
 	pool = pools[0]
-	assert.Equal(t, int64(1), pool.DesiredInstances,
-		"auto mode pool desired_instances should be preserved (not reset to 0)")
+	assert.Equal(t, int64(2), pool.DesiredInstances,
+		"auto mode pool desired_instances should be preserved (not reset to 1)")
 	assert.Contains(t, pool.ReferencedByVersions, version.ID,
 		"pool should still reference the version")
 }

@@ -118,7 +118,9 @@ func (l *Launcher) ensurePoolForService(ctx context.Context, app *core_v1alpha.A
 	}
 
 	// Calculate desired instances based on concurrency mode
-	desiredInstances := int64(0)
+	// Auto mode starts with 1 to boot immediately after deploy (can scale down later)
+	// Fixed mode uses the configured number of instances
+	desiredInstances := int64(1)
 	fixedMode := svcConcurrency.Mode == "fixed" && svcConcurrency.NumInstances > 0
 	if fixedMode {
 		desiredInstances = svcConcurrency.NumInstances
