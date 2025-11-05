@@ -41,8 +41,8 @@ import (
 	"miren.dev/runtime/api/compute/compute_v1alpha"
 	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
-	"miren.dev/runtime/pkg/cond"
 	"miren.dev/runtime/pkg/concurrency"
+	"miren.dev/runtime/pkg/cond"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/types"
 	"miren.dev/runtime/pkg/netutil"
@@ -110,7 +110,7 @@ type verKey struct {
 // poolState represents either a real pool or an in-progress creation sentinel
 type poolState struct {
 	pool       *compute_v1alpha.SandboxPool
-	revision   int64         // Entity revision for optimistic concurrency control
+	revision   int64 // Entity revision for optimistic concurrency control
 	inProgress bool
 	done       chan struct{} // Closed when creation completes (success or failure)
 	err        error         // Set if creation failed
@@ -396,7 +396,14 @@ func (a *localActivator) requestPoolCapacity(ctx context.Context, ver *core_v1al
 				continue
 			}
 
-				// Update existing pool - increment DesiredInstances with optimistic concurrency control
+			// Update existing pool - increment DesiredInstances with optimistic concurrency control
+			// Calculate target ONCE based on the state captured at the start of this iteration
+			// This ensures concurrent goroutines that all saw the same initial value
+			// will calculate the same target
+			a.mu.Lock()
+			newDesired := state.pool.DesiredInstances + 1
+			a.mu.Unlock()
+
 			const maxRetries = 3
 			poolDeleted := false
 			for attempt := 0; attempt < maxRetries; attempt++ {
@@ -409,7 +416,17 @@ func (a *localActivator) requestPoolCapacity(ctx context.Context, ver *core_v1al
 						"current", state.pool.DesiredInstances)
 					return state.pool, fmt.Errorf("pool has reached maximum size of %d", MaxPoolSize)
 				}
-				newDesired := state.pool.DesiredInstances + 1
+
+				// Check if we've already reached our target (another goroutine may have incremented)
+				if state.pool.DesiredInstances >= newDesired {
+					a.mu.Unlock()
+					a.log.Debug("pool capacity already at or above target, no increment needed",
+						"pool", state.pool.ID,
+						"current_desired", state.pool.DesiredInstances,
+						"target_desired", newDesired)
+					return state.pool, nil
+				}
+
 				currentRevision := state.revision
 				poolID := state.pool.ID
 				a.mu.Unlock()
@@ -430,8 +447,7 @@ func (a *localActivator) requestPoolCapacity(ctx context.Context, ver *core_v1al
 				patchRes, err := a.eac.Patch(ctx, attrs, currentRevision)
 				if err != nil {
 					// Check for revision conflict
-					var conflictErr *cond.ErrConflict
-					if errors.As(err, &conflictErr) {
+					if errors.Is(err, cond.ErrConflict{}) {
 						a.log.Debug("pool revision conflict, refetching and retrying",
 							"pool", poolID,
 							"attempt", attempt+1,
@@ -514,8 +530,8 @@ func (a *localActivator) requestPoolCapacity(ctx context.Context, ver *core_v1al
 			continue // Loop back to wait/increment logic
 		}
 
-		// Before creating a pool, try to find it in the entity store with retries
-		// DeploymentLauncher may have created it, and we just hasn't seen it yet
+		// Try to find an existing pool in the entity store with retries
+		// DeploymentLauncher may have already created it, but we haven't seen it yet in our cache
 		const maxRetries = 3
 		const baseRetryDelay = 100 * time.Millisecond
 

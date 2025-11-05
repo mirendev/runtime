@@ -1377,3 +1377,171 @@ func TestPoolIncrementWithOCC(t *testing.T) {
 		assert.Equal(t, int64(6), cachedState.pool.DesiredInstances)
 	})
 }
+
+// TestConcurrentPoolIncrement tests that concurrent calls to requestPoolCapacity
+// handle optimistic concurrency control correctly.
+//
+// IMPORTANT: This test requires etcd to properly enforce OCC. Run with:
+//
+//	./hack/dev-exec go test -v -run TestConcurrentPoolIncrement ./components/activator
+//
+// Key behaviors tested:
+// 1. Each goroutine calculates its target DesiredInstances ONCE (before retry loop)
+// 2. After OCC conflicts, goroutines check if target is already reached (early return)
+// 3. The etcd store properly rejects stale revisions, triggering conflict retry logic
+//
+// Expected behavior with proper OCC:
+// - All 5 goroutines start with DesiredInstances=1, calculate target=2
+// - One succeeds in patching to 2, others get revision conflicts
+// - Conflicting goroutines retry, refetch state, see DesiredInstances=2 >= target=2
+// - Early return prevents redundant increments
+// - Final result: DesiredInstances=2 (exactly one increment)
+//
+// What the bug looked like:
+// Without the fix, goroutines recalculated target on each retry:
+//   - Goroutine sees conflict, refetches DesiredInstances=2
+//   - BUG: Recalculates target = 2+1 = 3 (should stay at original target=2)
+//   - Patches to 3, causing redundant increments
+//   - Result: DesiredInstances=3, 4, or even 5
+func TestConcurrentPoolIncrement(t *testing.T) {
+	ctx := context.Background()
+
+	// Create etcd-backed entity server for proper OCC testing
+	// Run with: ./hack/dev-exec go test -v -run TestConcurrentPoolIncrement ./components/activator
+	server, cleanup := testutils.NewEtcdEntityServer(t)
+	defer cleanup()
+
+	// Create test app
+	app := &core_v1alpha.App{}
+	appID, err := server.Client.Create(ctx, "test-app-concurrent", app)
+	require.NoError(t, err)
+	app.ID = appID
+
+	// Create test version
+	testVer := &core_v1alpha.AppVersion{
+		App:      app.ID,
+		Version:  "v1",
+		ImageUrl: "test:latest",
+		Config: core_v1alpha.Config{
+			Services: []core_v1alpha.Services{
+				{
+					Name: "web",
+					ServiceConcurrency: core_v1alpha.ServiceConcurrency{
+						Mode:                "auto",
+						RequestsPerInstance: 10,
+					},
+				},
+			},
+		},
+	}
+	verID, err := server.Client.Create(ctx, "test-ver-concurrent", testVer)
+	require.NoError(t, err)
+	testVer.ID = verID
+
+	// Create a sandbox pool with DesiredInstances = 1
+	pool := &compute_v1alpha.SandboxPool{
+		Service: "web",
+		SandboxSpec: compute_v1alpha.SandboxSpec{
+			Version: testVer.ID,
+		},
+		ReferencedByVersions: []entity.Id{
+			testVer.ID,
+		},
+		DesiredInstances: 1,
+		CurrentInstances: 0,
+	}
+
+	poolEnt := entity.New(
+		(&core_v1alpha.Metadata{
+			Name:   "test-pool-concurrent",
+			Labels: types.LabelSet("service", "web"),
+		}).Encode,
+		entity.Ident, entity.MustKeyword("sandboxpool/concurrent-pool"),
+		pool.Encode,
+	)
+
+	var rpcE entityserver_v1alpha.Entity
+	rpcE.SetAttrs(poolEnt.Attrs())
+	poolRes, err := server.EAC.Put(ctx, &rpcE)
+	require.NoError(t, err)
+	pool.ID = entity.Id(poolRes.Id())
+	poolRevision := poolRes.Revision()
+
+	// Create activator and pre-populate cache
+	log := testutils.TestDebugLogger(t)
+	activator := &localActivator{
+		log:      log,
+		eac:      server.EAC,
+		versions: make(map[verKey]*verSandboxes),
+		pools:    make(map[verKey]*poolState),
+	}
+
+	key := verKey{testVer.ID.String(), "web"}
+	activator.pools[key] = &poolState{
+		pool:       pool,
+		revision:   poolRevision,
+		inProgress: false,
+	}
+
+	// Launch 5 concurrent goroutines that all try to increment the pool
+	// Use a barrier to ensure all goroutines start at approximately the same time
+	const numGoroutines = 5
+	results := make(chan *compute_v1alpha.SandboxPool, numGoroutines)
+	errors := make(chan error, numGoroutines)
+	barrier := make(chan struct{})
+
+	for i := 0; i < numGoroutines; i++ {
+		go func(id int) {
+			// Wait for all goroutines to be ready
+			<-barrier
+
+			result, err := activator.requestPoolCapacity(ctx, testVer, "web")
+			if err != nil {
+				errors <- err
+				return
+			}
+			results <- result
+		}(i)
+	}
+
+	// Release all goroutines simultaneously
+	close(barrier)
+
+	// Collect all results
+	var returnedPools []*compute_v1alpha.SandboxPool
+	for i := 0; i < numGoroutines; i++ {
+		select {
+		case pool := <-results:
+			returnedPools = append(returnedPools, pool)
+		case err := <-errors:
+			t.Fatalf("goroutine returned error: %v", err)
+		case <-time.After(5 * time.Second):
+			t.Fatal("test timed out waiting for goroutines")
+		}
+	}
+
+	// All goroutines should have succeeded
+	require.Len(t, returnedPools, numGoroutines, "all goroutines should return a pool")
+
+	// Log what each goroutine saw
+	for i, pool := range returnedPools {
+		t.Logf("Goroutine %d saw DesiredInstances: %d", i, pool.DesiredInstances)
+	}
+
+	// Fetch the final pool state from the entity store
+	finalPoolEnt, err := server.EAC.Get(ctx, pool.ID.String())
+	require.NoError(t, err)
+
+	var finalPool compute_v1alpha.SandboxPool
+	finalPool.Decode(finalPoolEnt.Entity().Entity())
+
+	t.Logf("Final DesiredInstances: %d (started at 1)", finalPool.DesiredInstances)
+
+	// With proper OCC enforcement from etcd, we should see exactly 2:
+	// - All 5 goroutines start with DesiredInstances=1, calculate target=2
+	// - One succeeds, others get conflicts and early-return after seeing target reached
+	// - Result: exactly one increment from 1 to 2
+	t.Logf("Final DesiredInstances after %d concurrent increments: %d", numGoroutines, finalPool.DesiredInstances)
+	assert.Equal(t, int64(2), finalPool.DesiredInstances,
+		"With OCC enforcement, should get exactly one increment despite %d concurrent calls", numGoroutines)
+}
