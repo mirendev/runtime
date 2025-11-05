@@ -22,6 +22,10 @@ func AllCommands() map[string]cli.CommandFactory {
 			return Infer("debug connection", "Test connectivity and authentication with a server", DebugConnection), nil
 		},
 
+		"debug reindex": func() (cli.Command, error) {
+			return Infer("debug reindex", "Rebuild all entity indexes from scratch", DebugReindex), nil
+		},
+
 		"init": func() (cli.Command, error) {
 			return Infer("init", "Initialize a new application", Init), nil
 		},
