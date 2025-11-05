@@ -43,6 +43,7 @@ jobs:
           token: ${{ secrets.SLACK_BOT_TOKEN }}
           payload: |
             {
+              "channel": "${{ vars.SLACK_CHANNEL_ID }}",
               "text": "❌ Tests failed on main branch - Release blocked",
               "blocks": [
                 {
@@ -200,6 +201,7 @@ jobs:
           token: ${{ secrets.SLACK_BOT_TOKEN }}
           payload: |
             {
+              "channel": "${{ vars.SLACK_CHANNEL_ID }}",
               "text": "❌ Miren Docker build/push failed on main branch",
               "blocks": [
                 {
@@ -384,6 +386,7 @@ jobs:
           token: ${{ secrets.SLACK_BOT_TOKEN }}
           payload: |
             {
+              "channel": "${{ vars.SLACK_CHANNEL_ID }}",
               "text": "❌ Miren release upload failed on main branch",
               "blocks": [
                 {
