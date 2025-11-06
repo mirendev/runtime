@@ -18,6 +18,7 @@ RUN apt-get update && apt-get install -y \
     less \
     file \
     htop \
+    sudo \
     && rm -rf /var/lib/apt/lists/*
 
 RUN if [ "$(uname -m)" = "aarch64" ]; then \

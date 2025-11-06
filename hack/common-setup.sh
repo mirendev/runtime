@@ -159,6 +159,12 @@ EOF
         chown "$uid:$gid" "$homedir/.bashrc"
     fi
 
+    # Configure sudo for passwordless access
+    if command -v sudo >/dev/null 2>&1; then
+        echo "$username ALL=(ALL) NOPASSWD: ALL" > "/etc/sudoers.d/$username"
+        chmod 440 "/etc/sudoers.d/$username"
+    fi
+
     # Export for use by callers
     export HOST_UID="$uid"
     export HOST_GID="$gid"
