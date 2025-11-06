@@ -18,6 +18,7 @@ RUN apt-get update && apt-get install -y \
     less \
     file \
     htop \
+    sudo \
     && rm -rf /var/lib/apt/lists/*
 
 RUN if [ "$(uname -m)" = "aarch64" ]; then \
@@ -60,6 +61,15 @@ RUN chmod +x /usr/local/bin/runsc-ignore
 # Create containerd config directory
 RUN mkdir -p /etc/containerd
 COPY ./hack/containerd-config.toml /etc/containerd/config.toml
+
+# Install bashrc for persistent shell configuration
+COPY ./.iso/.bashrc /root/.bashrc
+RUN chmod 755 /root && \
+    chmod 644 /root/.bashrc && \
+    mkdir -p /root/.cache && \
+    chmod 777 /root/.cache && \
+    touch /root/.cache/.bash_history && \
+    chmod 666 /root/.cache/.bash_history
 
 # Install runsc
 RUN /usr/local/bin/runsc install

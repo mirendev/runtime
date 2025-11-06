@@ -31,15 +31,19 @@ test-e2e:
 
 # Persistent dev environment (standalone mode)
 dev-start:
-	ISO_SESSION=$(ISO_SESSION) iso start && \
-	ISO_SESSION=$(ISO_SESSION) iso run bash hack/dev.sh
+	@if ! ISO_SESSION=$(ISO_SESSION) iso status 2>&1 | grep -q "Container is running"; then \
+		ISO_SESSION=$(ISO_SESSION) iso start && \
+		ISO_SESSION=$(ISO_SESSION) iso run bash hack/dev.sh; \
+	else \
+		echo "✓ Container already running"; \
+	fi
 
-# Start environment, server, and open shell (default for teammates)
+# Start environment, server, and open shell (default for teammates - idempotent)
 dev: dev-start dev-server-start dev-shell
 
-# Interactive shell
+# Interactive shell as host user (preserves file ownership)
 dev-shell:
-	./hack/dev-exec bash
+	@./hack/dev-exec bash hack/dev-shell
 
 # Server lifecycle
 dev-server-start:
@@ -66,9 +70,12 @@ dev-restart: dev-stop dev-start
 dev-status:
 	ISO_SESSION=$(ISO_SESSION) iso status
 
+dev-rebuild:
+	ISO_SESSION=$(ISO_SESSION) iso build --rebuild
+
 .PHONY: dev dev-start dev-shell dev-server-start dev-server-stop \
         dev-server-restart dev-server-status dev-server-logs \
-        dev-stop dev-restart dev-status
+        dev-stop dev-restart dev-status dev-rebuild
 
 services:
 	iso run bash hack/run-services.sh
