@@ -148,9 +148,32 @@ setup_host_user() {
     local username=$(getent passwd "$uid" | cut -d: -f1)
     local homedir=$(getent passwd "$uid" | cut -d: -f6)
 
+    # Create ~/bin with shims for containerd tools
+    if [ -n "$homedir" ] && [ -d "$homedir" ]; then
+        mkdir -p "$homedir/bin"
+
+        # Create ctr shim
+        cat > "$homedir/bin/ctr" <<'EOF'
+#!/bin/bash
+exec sudo -E /usr/local/bin/ctr "$@"
+EOF
+
+        # Create nerdctl shim
+        cat > "$homedir/bin/nerdctl" <<'EOF'
+#!/bin/bash
+exec sudo -E /usr/local/bin/nerdctl "$@"
+EOF
+
+        chmod +x "$homedir/bin/ctr" "$homedir/bin/nerdctl"
+        chown -R "$uid:$gid" "$homedir/bin"
+    fi
+
     # Create .bashrc in user's home that sources the main one
     if [ -n "$homedir" ] && [ -d "$homedir" ]; then
         cat > "$homedir/.bashrc" <<'EOF'
+# Add ~/bin to PATH for shims
+export PATH="$HOME/bin:$PATH"
+
 # Source the shared bashrc
 if [ -f /root/.bashrc ]; then
     source /root/.bashrc

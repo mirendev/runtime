@@ -13,6 +13,7 @@ if [[ $- == *i* ]]; then
 fi
 
 export CONTAINERD_ADDRESS="/var/lib/miren/containerd/containerd.sock"
+export CONTAINERD_NAMESPACE="miren"
 export OTEL_SDK_DISABLED=true
 
 # Less configuration
