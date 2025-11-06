@@ -122,8 +122,45 @@ wait_for_service() {
     echo "$service_name is ready"
 }
 
-# Setup bash history and common exports
-setup_bash_environment() {
-    export HISTFILE=/data/.bash_history
-    export HISTIGNORE=exit
+# Setup host user for file ownership preservation
+# Creates a user matching the host UID/GID if it doesn't exist
+setup_host_user() {
+    local uid="${ISO_UID}"
+    local gid="${ISO_GID}"
+
+    # If ISO_UID not set, detect from mounted directory ownership
+    if [ -z "$uid" ]; then
+        uid=$(stat -c "%u" /src 2>/dev/null || echo "1000")
+        gid=$(stat -c "%g" /src 2>/dev/null || echo "1000")
+    fi
+
+    # Check if user with this UID already exists
+    if ! getent passwd "$uid" >/dev/null 2>&1; then
+        # Create group if it doesn't exist
+        if ! getent group "$gid" >/dev/null 2>&1; then
+            groupadd -g "$gid" dev
+        fi
+        # Create user
+        useradd -u "$uid" -g "$gid" -m -s /bin/bash dev
+    fi
+
+    # Get the username for this UID
+    local username=$(getent passwd "$uid" | cut -d: -f1)
+    local homedir=$(getent passwd "$uid" | cut -d: -f6)
+
+    # Create .bashrc in user's home that sources the main one
+    if [ -n "$homedir" ] && [ -d "$homedir" ]; then
+        cat > "$homedir/.bashrc" <<'EOF'
+# Source the shared bashrc
+if [ -f /root/.bashrc ]; then
+    source /root/.bashrc
+fi
+EOF
+        chown "$uid:$gid" "$homedir/.bashrc"
+    fi
+
+    # Export for use by callers
+    export HOST_UID="$uid"
+    export HOST_GID="$gid"
+    export HOST_USER="$username"
 }

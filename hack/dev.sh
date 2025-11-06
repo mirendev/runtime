@@ -1,32 +1,24 @@
 #!/usr/bin/env bash
 set -e
 
-# Source common setup functions
 source "$(dirname "$0")/common-setup.sh"
 
-# Setup environment
 setup_cgroups
 setup_environment
-
-# In standalone mode, miren manages its own containerd
-export CONTAINERD_ADDRESS="/var/lib/miren/containerd/containerd.sock"
-
-# Setup kernel mounts
+setup_host_user
 setup_kernel_mounts
 
 cd /src
 
-# Build miren
-make bin/miren
+echo "Building miren as host user (UID ${ISO_UID})..."
+su -s /bin/bash "$HOST_USER" -c "make bin/miren"
 
-# Create symlink
 ln -sf "$PWD"/bin/miren /bin/m
 
-# Setup miren config
-mkdir -p ~/.config/miren
-m auth generate -c ~/.config/miren/clientconfig.yaml
+mkdir -p /var/lib/miren/server
+chown -R "$HOST_UID:$HOST_GID" /var/lib/miren
+su -s /bin/bash "$HOST_USER" -c "mkdir -p ~/.config/miren && m auth generate -c ~/.config/miren/clientconfig.yaml"
 
-# Setup release directory for standalone mode
 echo "Setting up release directory for standalone mode..."
 mkdir -p /var/lib/miren/release
 cp bin/miren /var/lib/miren/release/
@@ -37,18 +29,13 @@ cp /usr/local/bin/containerd /var/lib/miren/release/
 cp /usr/local/bin/nerdctl /var/lib/miren/release/
 cp /usr/local/bin/ctr /var/lib/miren/release/
 
-# Setup environment variables
-setup_bash_environment
-
 echo ""
 echo "✓ Development environment ready!"
-echo ""
-echo "  Server command: m server -vv --mode standalone"
 echo ""
 echo "Useful commands:"
 echo "  make dev-server-start   # Start miren server"
 echo "  make dev-server-status  # Check server status"
 echo "  make dev-server-logs    # Watch server logs"
 echo "  make dev-server-restart # Restart after code changes"
-echo "  m app list              # Use miren CLI"
+echo "  m sandbox list          # Use miren CLI"
 echo ""

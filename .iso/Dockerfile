@@ -61,6 +61,10 @@ RUN chmod +x /usr/local/bin/runsc-ignore
 RUN mkdir -p /etc/containerd
 COPY ./hack/containerd-config.toml /etc/containerd/config.toml
 
+# Install bashrc for persistent shell configuration
+COPY ./.iso/.bashrc /root/.bashrc
+RUN chmod 755 /root && chmod 644 /root/.bashrc && mkdir -p /root/.cache
+
 # Install runsc
 RUN /usr/local/bin/runsc install
 
