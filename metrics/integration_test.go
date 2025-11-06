@@ -44,7 +44,7 @@ func TestHTTPMetrics_Integration(t *testing.T) {
 			result.Status = "success"
 			result.Data.ResultType = "vector"
 
-			if strings.Contains(query, "rate(http_request_total") {
+			if strings.Contains(query, "rate(http_requests_total") {
 				// RPSLastMinute query
 				result.Data.Result = []Result{
 					{
@@ -97,7 +97,7 @@ func TestHTTPMetrics_Integration(t *testing.T) {
 
 			baseTime := time.Now().Add(-1 * time.Hour).Unix()
 
-			if strings.Contains(query, "sum(increase(http_request_total") {
+			if strings.Contains(query, "sum(increase(http_requests_total") {
 				// Count query
 				result.Data.Result = []Result{
 					{
@@ -109,8 +109,8 @@ func TestHTTPMetrics_Integration(t *testing.T) {
 						},
 					},
 				}
-			} else if strings.Contains(query, "avg_over_time") {
-				// Avg duration query
+			} else if strings.Contains(query, "rate(http_request_duration_seconds_sum") {
+				// Avg duration query (using counter-based formula)
 				result.Data.Result = []Result{
 					{
 						Metric: map[string]string{},
@@ -173,6 +173,7 @@ func TestHTTPMetrics_Integration(t *testing.T) {
 		Writer: writer,
 		Reader: reader,
 	}
+	require.NoError(t, httpMetrics.Setup())
 
 	t.Run("RecordRequest writes all metrics", func(t *testing.T) {
 		req := HTTPRequest{
@@ -194,10 +195,11 @@ func TestHTTPMetrics_Integration(t *testing.T) {
 		data := strings.Join(writtenMetrics, "\n")
 		mu.Unlock()
 
-		// Verify all 3 metrics were written
-		assert.Contains(t, data, "http_request_total")
-		assert.Contains(t, data, "http_request_duration_ms")
-		assert.Contains(t, data, "http_response_size_bytes")
+		// Verify all 4 metrics were written (counters + sample)
+		assert.Contains(t, data, "http_requests_total")
+		assert.Contains(t, data, "http_request_duration_seconds_sum")
+		assert.Contains(t, data, "http_request_duration_seconds_count")
+		assert.Contains(t, data, "http_request_duration_seconds{")
 
 		// Verify labels
 		assert.Contains(t, data, `app="testapp"`)
@@ -205,9 +207,8 @@ func TestHTTPMetrics_Integration(t *testing.T) {
 		assert.Contains(t, data, `path="/api/users"`)
 		assert.Contains(t, data, `status="200"`)
 
-		// Verify values
-		assert.Contains(t, data, " 150 ") // duration
-		assert.Contains(t, data, " 1024 ") // size
+		// Verify duration is in seconds (150ms = 0.15s)
+		assert.Contains(t, data, " 0.15")
 	})
 
 	t.Run("RPSLastMinute queries rate", func(t *testing.T) {
@@ -311,8 +312,9 @@ func TestCPUUsage_Integration(t *testing.T) {
 		Writer: writer,
 		Reader: reader,
 	}
+	require.NoError(t, cpuUsage.Setup())
 
-	t.Run("RecordUsage writes cpu_usage_cores metric", func(t *testing.T) {
+	t.Run("RecordUsage writes cpu_usage_seconds_total metric", func(t *testing.T) {
 		windowStart := time.Now().Add(-10 * time.Second)
 		windowEnd := time.Now()
 		cpuUsec := units.Microseconds(5_000_000) // 5 seconds of CPU time
@@ -333,15 +335,15 @@ func TestCPUUsage_Integration(t *testing.T) {
 		data := strings.Join(writtenMetrics, "\n")
 		mu.Unlock()
 
-		// Verify metric name
-		assert.Contains(t, data, "cpu_usage_cores")
+		// Verify metric name (cumulative counter)
+		assert.Contains(t, data, "cpu_usage_seconds_total")
 
 		// Verify labels
 		assert.Contains(t, data, `entity="test-app"`)
 		assert.Contains(t, data, `version="v1"`)
 
-		// Verify value (5 seconds of CPU / 10 seconds elapsed = 0.5 cores)
-		assert.Contains(t, data, " 0.5 ")
+		// Verify value is cumulative CPU seconds (5 seconds)
+		assert.Contains(t, data, " 5")
 	})
 
 	t.Run("CPUUsageLastHour returns time series", func(t *testing.T) {
@@ -367,36 +369,31 @@ func TestCPUUsage_Integration(t *testing.T) {
 		require.NoError(t, err) // Should not error, just not write anything
 	})
 
-	t.Run("calculates cores correctly for different windows", func(t *testing.T) {
+	t.Run("accumulates CPU seconds correctly", func(t *testing.T) {
 		tests := []struct {
-			name        string
-			windowDur   time.Duration
-			cpuUsec     int64
-			expectedCpu float64
+			name           string
+			cpuUsec        int64
+			expectedCpuSec float64
 		}{
 			{
-				name:        "half a core",
-				windowDur:   time.Second,
-				cpuUsec:     500_000, // 0.5 seconds
-				expectedCpu: 0.5,
+				name:           "half second",
+				cpuUsec:        500_000, // 0.5 seconds
+				expectedCpuSec: 0.5,
 			},
 			{
-				name:        "full core",
-				windowDur:   time.Second,
-				cpuUsec:     1_000_000, // 1 second
-				expectedCpu: 1.0,
+				name:           "one second",
+				cpuUsec:        1_000_000, // 1 second
+				expectedCpuSec: 1.0,
 			},
 			{
-				name:        "two cores",
-				windowDur:   time.Second,
-				cpuUsec:     2_000_000, // 2 seconds
-				expectedCpu: 2.0,
+				name:           "two seconds",
+				cpuUsec:        2_000_000, // 2 seconds
+				expectedCpuSec: 2.0,
 			},
 			{
-				name:        "fractional usage over longer window",
-				windowDur:   10 * time.Second,
-				cpuUsec:     2_500_000, // 2.5 seconds over 10 seconds
-				expectedCpu: 0.25,
+				name:           "fractional seconds",
+				cpuUsec:        2_500_000, // 2.5 seconds
+				expectedCpuSec: 2.5,
 			},
 		}
 
@@ -406,10 +403,18 @@ func TestCPUUsage_Integration(t *testing.T) {
 				writtenMetrics = []string{} // Reset
 				mu.Unlock()
 
-				windowStart := time.Now()
-				windowEnd := windowStart.Add(tt.windowDur)
+				// Create a fresh CPUUsage instance for each test to avoid counter accumulation
+				freshCpuUsage := &CPUUsage{
+					Log:    log,
+					Writer: writer,
+					Reader: reader,
+				}
+				require.NoError(t, freshCpuUsage.Setup())
 
-				err := cpuUsage.RecordUsage(
+				windowStart := time.Now()
+				windowEnd := windowStart.Add(time.Second)
+
+				err := freshCpuUsage.RecordUsage(
 					context.Background(),
 					"test",
 					windowStart,
@@ -425,10 +430,9 @@ func TestCPUUsage_Integration(t *testing.T) {
 				data := strings.Join(writtenMetrics, "\n")
 				mu.Unlock()
 
-				// Verify the core value is present (may be formatted as "0.5" or "0.50")
-				// Just verify it contains a reasonable representation of the expected value
-				expectedStr := strconv.FormatFloat(tt.expectedCpu, 'f', -1, 64)
-				assert.Contains(t, data, " "+expectedStr+" ", "should contain the expected CPU value")
+				// Verify the cumulative CPU seconds value
+				expectedStr := strconv.FormatFloat(tt.expectedCpuSec, 'f', -1, 64)
+				assert.Contains(t, data, " "+expectedStr, "should contain the expected cumulative CPU seconds")
 			})
 		}
 	})
@@ -480,6 +484,7 @@ func TestMemoryUsage_Integration(t *testing.T) {
 		Writer: writer,
 		Reader: reader,
 	}
+	require.NoError(t, memUsage.Setup())
 
 	t.Run("RecordUsage writes memory_usage_bytes metric", func(t *testing.T) {
 		memory := units.Bytes(100 * 1024 * 1024) // 100 MB
