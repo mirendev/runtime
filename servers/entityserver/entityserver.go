@@ -964,9 +964,23 @@ func (e *EntityServer) Reindex(ctx context.Context, req *entityserver_v1alpha.En
 			// Collection entry value contains the entity ID
 			entityID := entity.Id(kv.Value)
 			if !validEntityIDs[entityID] {
-				key := string(kv.Key)
-				staleKeys = append(staleKeys, key)
-				staleEntries[entityID] = append(staleEntries[entityID], key)
+				// Re-check entity existence to handle entities created during reindex
+				// (race condition: entity created after Phase 1 but before Phase 2)
+				if _, err := e.Store.GetEntity(ctx, entityID); err != nil {
+					if errors.Is(err, cond.ErrNotFound{}) {
+						// Entity truly doesn't exist - this is a stale entry
+						key := string(kv.Key)
+						staleKeys = append(staleKeys, key)
+						staleEntries[entityID] = append(staleEntries[entityID], key)
+					} else {
+						// Unexpected error - log and skip this entry to be safe
+						e.Log.Warn("could not verify entity existence; skipping collection entry",
+							"entity_id", entityID,
+							"key", string(kv.Key),
+							"error", err)
+					}
+				}
+				// else: entity exists (created during reindex), skip - not stale
 			}
 		}
 
