@@ -909,6 +909,10 @@ func (e *EntityServer) Reindex(ctx context.Context, req *entityserver_v1alpha.En
 	for i, id := range allEntityIDs {
 		ent, err := e.Store.GetEntity(ctx, id)
 		if err != nil {
+			if errors.Is(err, cond.ErrNotFound{}) {
+				delete(validEntityIDs, id)
+				continue
+			}
 			e.Log.Warn("failed to get entity", "id", id, "error", err)
 			continue
 		}
