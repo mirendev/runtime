@@ -75,8 +75,12 @@ func AllCommands() map[string]cli.CommandFactory {
 			return Infer("app status", "Show current status of an application", AppStatus), nil
 		},
 
+		"app list": func() (cli.Command, error) {
+			return Infer("app list", "List all applications", AppList), nil
+		},
+
 		"apps": func() (cli.Command, error) {
-			return Infer("apps", "List all applications", Apps), nil
+			return Infer("apps", "List all applications (alias for 'app list')", AppList), nil
 		},
 
 		"env": func() (cli.Command, error) {
