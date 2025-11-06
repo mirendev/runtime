@@ -440,11 +440,20 @@ func TestSandbox(t *testing.T) {
 
 		defer testutils.ClearContainer(ctx, c)
 
-		// Let sort ... sort.
-		time.Sleep(3 * time.Second)
+		var cpu float64
 
-		cpu, err := co.Metrics.CPUUsage.CurrentCPUUsage(id.String())
-		r.NoError(err)
+		// We need to wait a bit for metrics to start being recorded.
+		for range 5 {
+			// Let sort ... sort.
+			time.Sleep(3 * time.Second)
+
+			cpu, err = co.Metrics.CPUUsage.CurrentCPUUsage(id.String())
+			r.NoError(err)
+
+			if cpu > 0 {
+				break
+			}
+		}
 
 		t.Logf("last delta: %f", cpu)
 
