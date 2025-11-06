@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
+	"sort"
 	"strconv"
 	"sync"
 	"time"
@@ -56,9 +57,17 @@ func (m *CPUUsage) RecordUsage(ctx context.Context, entity string, windowStart, 
 	maps.Copy(labels, attrs)
 
 	// Create a key that matches the time series identity (entity + all label values)
+	// Sort attribute keys to ensure consistent key generation
 	key := fmt.Sprintf("%s:%s", entity, m.instance)
-	for k, v := range attrs {
-		key = fmt.Sprintf("%s:%s=%s", key, k, v)
+	if len(attrs) > 0 {
+		keys := make([]string, 0, len(attrs))
+		for k := range attrs {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			key = fmt.Sprintf("%s:%s=%s", key, k, attrs[k])
+		}
 	}
 
 	m.mu.Lock()
@@ -97,7 +106,8 @@ func (m *CPUUsage) CPUUsageLastHour(entity string) ([]UsageAtTime, error) {
 	start := end.Add(-1 * time.Hour)
 
 	// Query CPU cores (rate of CPU seconds) per minute over the last hour
-	query := fmt.Sprintf(`rate(cpu_usage_seconds_total{entity="%s"}[1m])`, entity)
+	// Aggregate across all instances/attributes using sum()
+	query := fmt.Sprintf(`sum(rate(cpu_usage_seconds_total{entity="%s"}[1m]))`, entity)
 	result, err := m.Reader.RangeQuery(context.Background(), query, start, end, "1m")
 	if err != nil {
 		return nil, fmt.Errorf("failed to query CPU usage: %w", err)
@@ -128,8 +138,8 @@ func (m *CPUUsage) CPUUsageOver(entity string, interval string) (float64, error)
 		return 0, fmt.Errorf("reader not initialized")
 	}
 
-	// Use rate() to get average cores over the interval
-	query := fmt.Sprintf(`rate(cpu_usage_seconds_total{entity="%s"}[%s])`, entity, interval)
+	// Use rate() to get average cores over the interval, summed across all instances/attributes
+	query := fmt.Sprintf(`sum(rate(cpu_usage_seconds_total{entity="%s"}[%s]))`, entity, interval)
 	result, err := m.Reader.InstantQuery(context.Background(), query, time.Time{})
 	if err != nil {
 		return 0, fmt.Errorf("failed to query CPU usage: %w", err)
@@ -176,8 +186,8 @@ func (m *CPUUsage) CPUUsageDayAgo(entity string, day units.Days) (float64, error
 	dayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location()).AddDate(0, 0, -int(day))
 	dayEnd := dayStart.Add(24 * time.Hour)
 
-	// Query average CPU cores for that specific day
-	query := fmt.Sprintf(`rate(cpu_usage_seconds_total{entity="%s"}[24h])`, entity)
+	// Query average CPU cores for that specific day, summed across all instances/attributes
+	query := fmt.Sprintf(`sum(rate(cpu_usage_seconds_total{entity="%s"}[24h]))`, entity)
 	result, err := m.Reader.InstantQuery(context.Background(), query, dayEnd)
 	if err != nil {
 		return 0, fmt.Errorf("failed to query CPU usage: %w", err)
