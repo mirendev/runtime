@@ -25,8 +25,11 @@ func SandboxPoolSetDesired(ctx *Context, opts struct {
 	eac := entityserver_v1alpha.NewEntityAccessClient(client)
 
 	// Normalize the pool ID - accept both "pool-ABC" and "pool/pool-ABC" formats
-	// TrimPrefix only removes the prefix if it exists, so this handles both forms
-	poolID := strings.TrimPrefix(opts.Args.PoolID, "pool/")
+	// Add the "pool/" prefix if it's not already present
+	poolID := opts.Args.PoolID
+	if !strings.HasPrefix(poolID, "pool/") {
+		poolID = "pool/" + poolID
+	}
 
 	// Look up the pool by ID
 	var pool compute_v1alpha.SandboxPool
