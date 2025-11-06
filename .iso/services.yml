@@ -25,3 +25,8 @@ services:
   victoriametrics:
     image: oci.miren.cloud/victoria-metrics:v1
     port: 8428
+    command:
+      - -storageDataPath=/victoria-metrics-data
+      - -retentionPeriod=1
+      - -httpListenAddr=:8428
+      - -search.latencyOffset=2s

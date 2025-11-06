@@ -210,6 +210,32 @@ func Registry(extra ...func(*asm.Registry)) (*asm.Registry, func()) {
 		return eac, nil
 	})
 
+	endpoint := "victoriametrics:8428"
+
+	// Provide a test VictoriaMetrics writer
+	r.ProvideName("victoriametrics-writer", func(opts struct {
+		Log *slog.Logger
+	}) *metrics.VictoriaMetricsWriter {
+		log := opts.Log
+		if log == nil {
+			log = slog.Default()
+		}
+		writer := metrics.NewVictoriaMetricsWriter(log, endpoint, 30*time.Second)
+		writer.Start()
+		return writer
+	})
+
+	// Provide a test VictoriaMetrics reader
+	r.ProvideName("victoriametrics-reader", func(opts struct {
+		Log *slog.Logger
+	}) *metrics.VictoriaMetricsReader {
+		log := opts.Log
+		if log == nil {
+			log = slog.Default()
+		}
+		return metrics.NewVictoriaMetricsReader(log, endpoint, 30*time.Second)
+	})
+
 	for _, f := range autoreg.All() {
 		r.Provide(f.Interface())
 	}

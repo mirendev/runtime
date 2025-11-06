@@ -310,6 +310,7 @@ func (c *VictoriaMetricsComponent) createContainer(ctx context.Context, image co
 			"-storageDataPath=/victoria-metrics-data",
 			"-retentionPeriod="+config.RetentionPeriod,
 			"-httpListenAddr="+listenAddr,
+			"-search.latencyOffset=2s",
 		),
 		oci.WithHostHostsFile,
 		oci.WithHostResolvconf,

@@ -18,8 +18,8 @@ import (
 
 type CPUUsage struct {
 	Log    *slog.Logger
-	Writer *VictoriaMetricsWriter `asm:"victoriametrics-writer,optional"`
-	Reader *VictoriaMetricsReader `asm:"victoriametrics-reader,optional"`
+	Writer *VictoriaMetricsWriter `asm:"victoriametrics-writer"`
+	Reader *VictoriaMetricsReader `asm:"victoriametrics-reader"`
 
 	mu         sync.Mutex
 	cpuSeconds map[string]float64

@@ -57,6 +57,7 @@ type Result struct {
 func (r *VictoriaMetricsReader) InstantQuery(ctx context.Context, query string, ts time.Time) (*QueryResult, error) {
 	params := url.Values{}
 	params.Set("query", query)
+	params.Set("latency_offset", "2s")
 	if !ts.IsZero() {
 		params.Set("time", strconv.FormatInt(ts.Unix(), 10))
 	}
@@ -97,6 +98,7 @@ func (r *VictoriaMetricsReader) RangeQuery(ctx context.Context, query string, st
 	params.Set("query", query)
 	params.Set("start", strconv.FormatInt(start.Unix(), 10))
 	params.Set("end", strconv.FormatInt(end.Unix(), 10))
+	params.Set("latency_offset", "2s")
 	if step != "" {
 		params.Set("step", step)
 	}
