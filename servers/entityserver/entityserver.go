@@ -907,6 +907,12 @@ func (e *EntityServer) Reindex(ctx context.Context, req *entityserver_v1alpha.En
 	// This overwrites correct entries and ensures all current entities are indexed
 	e.Log.Info("rebuilding indexes for current entities")
 	for i, id := range allEntityIDs {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+
 		ent, err := e.Store.GetEntity(ctx, id)
 		if err != nil {
 			if errors.Is(err, cond.ErrNotFound{}) {
@@ -965,6 +971,12 @@ func (e *EntityServer) Reindex(ctx context.Context, req *entityserver_v1alpha.En
 		var staleKeys []string
 		staleEntries := make(map[entity.Id][]string) // Track which collections have stale entries per entity
 		for _, kv := range resp.Kvs {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			default:
+			}
+
 			// Collection entry value contains the entity ID
 			entityID := entity.Id(kv.Value)
 			if !validEntityIDs[entityID] {
@@ -1071,7 +1083,8 @@ func collectIndexedAttributes(ctx context.Context, store entity.Store, attrs []e
 	for _, attr := range allAttrs {
 		schema, err := store.GetAttributeSchema(ctx, attr.ID)
 		if err != nil {
-			return nil, fmt.Errorf("failed to get attribute schema: %w", err)
+			// Skip attributes with missing/invalid schemas during reindex
+			continue
 		}
 		if schema.Index {
 			indexedAttrs[attr.ID] = append(indexedAttrs[attr.ID], attr)
