@@ -869,3 +869,253 @@ func (e *EntityServer) PingSession(ctx context.Context, req *entityserver_v1alph
 
 	return nil
 }
+
+func (e *EntityServer) Reindex(ctx context.Context, req *entityserver_v1alpha.EntityAccessReindex) error {
+	args := req.Args()
+	dryRun := args.HasDryRun() && args.DryRun()
+
+	e.Log.Info("starting entity reindex", "dry_run", dryRun)
+
+	var stats struct {
+		entitiesProcessed        int64
+		indexesRebuilt           int64
+		collectionEntriesScanned int64
+		staleEntriesFound        int64
+		staleEntriesRemoved      int64
+	}
+
+	store, ok := e.Store.(*entity.EtcdStore)
+	if !ok {
+		return fmt.Errorf("reindex requires EtcdStore")
+	}
+
+	// Step 1: List all entities
+	allEntityIDs, err := store.ListAllEntityIDs(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to list entities: %w", err)
+	}
+
+	e.Log.Info("found entities", "count", len(allEntityIDs))
+
+	// Create a set of valid entity IDs for fast lookup
+	validEntityIDs := make(map[entity.Id]bool, len(allEntityIDs))
+	for _, id := range allEntityIDs {
+		validEntityIDs[id] = true
+	}
+
+	// Step 2: Rebuild indexes for all existing entities
+	// This overwrites correct entries and ensures all current entities are indexed
+	e.Log.Info("rebuilding indexes for current entities")
+	for i, id := range allEntityIDs {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+
+		ent, err := e.Store.GetEntity(ctx, id)
+		if err != nil {
+			if errors.Is(err, cond.ErrNotFound{}) {
+				delete(validEntityIDs, id)
+				continue
+			}
+			e.Log.Warn("failed to get entity", "id", id, "error", err)
+			continue
+		}
+
+		if !dryRun {
+			// Collect indexed attributes (including nested ones)
+			indexedAttrs, err := collectIndexedAttributes(ctx, e.Store, ent.Attrs())
+			if err != nil {
+				e.Log.Warn("failed to collect indexed attrs", "id", id, "error", err)
+				continue
+			}
+
+			// Rebuild index entries for all indexed attributes
+			for _, attrs := range indexedAttrs {
+				for _, attr := range attrs {
+					err := addToCollection(ctx, store, ent, attr.CAS())
+					if err != nil {
+						e.Log.Warn("failed to add to collection", "id", id, "attr", attr.ID, "error", err)
+					} else {
+						stats.indexesRebuilt++
+					}
+				}
+			}
+		}
+
+		stats.entitiesProcessed++
+
+		// Log progress every 100 entities
+		if (i+1)%100 == 0 {
+			e.Log.Info("reindex progress",
+				"processed", stats.entitiesProcessed,
+				"total", len(allEntityIDs),
+				"percent", (i+1)*100/len(allEntityIDs))
+		}
+	}
+
+	// Step 3: Clean up stale index entries
+	// Iterate through all collection entries and remove those pointing to non-existent entities
+	e.Log.Info("cleaning up stale index entries")
+	collectionPrefix := store.Prefix() + "/collections/"
+	client := store.Client()
+
+	// Get all collection entries with their values
+	resp, err := client.Get(ctx, collectionPrefix, clientv3.WithPrefix())
+	if err != nil {
+		e.Log.Warn("failed to list collection entries", "error", err)
+	} else {
+		stats.collectionEntriesScanned = int64(len(resp.Kvs))
+
+		var staleKeys []string
+		staleEntries := make(map[entity.Id][]string) // Track which collections have stale entries per entity
+		for _, kv := range resp.Kvs {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			default:
+			}
+
+			// Collection entry value contains the entity ID
+			entityID := entity.Id(kv.Value)
+			if !validEntityIDs[entityID] {
+				// Re-check entity existence to handle entities created during reindex
+				// (race condition: entity created after Phase 1 but before Phase 2)
+				if _, err := e.Store.GetEntity(ctx, entityID); err != nil {
+					if errors.Is(err, cond.ErrNotFound{}) {
+						// Entity truly doesn't exist - this is a stale entry
+						key := string(kv.Key)
+						staleKeys = append(staleKeys, key)
+						staleEntries[entityID] = append(staleEntries[entityID], key)
+					} else {
+						// Unexpected error - log and skip this entry to be safe
+						e.Log.Warn("could not verify entity existence; skipping collection entry",
+							"entity_id", entityID,
+							"key", string(kv.Key),
+							"error", err)
+					}
+				}
+				// else: entity exists (created during reindex), skip - not stale
+			}
+		}
+
+		stats.staleEntriesFound = int64(len(staleKeys))
+
+		// Log details about stale entries for debugging
+		if len(staleEntries) > 0 {
+			e.Log.Info("found stale index entries details")
+			for entityID, keys := range staleEntries {
+				sampleKeys := keys
+				if len(keys) > 3 {
+					sampleKeys = keys[:3]
+				}
+				e.Log.Warn("stale index entries for deleted entity",
+					"entity_id", entityID,
+					"count", len(keys),
+					"sample_keys", sampleKeys)
+			}
+		}
+
+		// Delete stale entries in batches (only if not dry run)
+		if !dryRun && len(staleKeys) > 0 {
+			e.Log.Info("removing stale entries", "count", len(staleKeys))
+			for i := 0; i < len(staleKeys); i += 100 {
+				end := i + 100
+				if end > len(staleKeys) {
+					end = len(staleKeys)
+				}
+				batch := staleKeys[i:end]
+
+				var ops []clientv3.Op
+				for _, key := range batch {
+					ops = append(ops, clientv3.OpDelete(key))
+				}
+
+				if len(ops) > 0 {
+					_, err := client.Txn(ctx).Then(ops...).Commit()
+					if err != nil {
+						e.Log.Warn("failed to delete stale entries", "error", err)
+					} else {
+						stats.staleEntriesRemoved += int64(len(ops))
+					}
+				}
+			}
+		}
+	}
+
+	e.Log.Info("reindex complete",
+		"entities_processed", stats.entitiesProcessed,
+		"indexes_rebuilt", stats.indexesRebuilt,
+		"collection_entries_scanned", stats.collectionEntriesScanned,
+		"stale_entries_found", stats.staleEntriesFound,
+		"stale_entries_removed", stats.staleEntriesRemoved)
+
+	// Build response stats list
+	results := req.Results()
+
+	statsData := []struct {
+		name  string
+		value int64
+	}{
+		{"entities_processed", stats.entitiesProcessed},
+		{"indexes_rebuilt", stats.indexesRebuilt},
+		{"collection_entries_scanned", stats.collectionEntriesScanned},
+		{"stale_entries_found", stats.staleEntriesFound},
+		{"stale_entries_removed", stats.staleEntriesRemoved},
+	}
+
+	var rpcStats []*entityserver_v1alpha.ReindexStat
+	for _, data := range statsData {
+		stat := &entityserver_v1alpha.ReindexStat{}
+		stat.SetName(data.name)
+		stat.SetValue(data.value)
+		rpcStats = append(rpcStats, stat)
+	}
+	results.SetStats(rpcStats)
+
+	return nil
+}
+
+func collectIndexedAttributes(ctx context.Context, store entity.Store, attrs []entity.Attr) (map[entity.Id][]entity.Attr, error) {
+	indexedAttrs := make(map[entity.Id][]entity.Attr)
+	allAttrs := enumerateAllAttrs(attrs)
+	for _, attr := range allAttrs {
+		schema, err := store.GetAttributeSchema(ctx, attr.ID)
+		if err != nil {
+			// Skip attributes with missing/invalid schemas during reindex
+			continue
+		}
+		if schema.Index {
+			indexedAttrs[attr.ID] = append(indexedAttrs[attr.ID], attr)
+		}
+	}
+	return indexedAttrs, nil
+}
+
+func enumerateAllAttrs(attrs []entity.Attr) []entity.Attr {
+	var result []entity.Attr
+	for _, attr := range attrs {
+		result = append(result, attr)
+
+		if attr.Value.Kind() == entity.KindComponent {
+			comp := attr.Value.Component()
+			if comp != nil {
+				nestedAttrs := comp.Attrs()
+				result = append(result, enumerateAllAttrs(nestedAttrs)...)
+			}
+		}
+	}
+	return result
+}
+
+func addToCollection(ctx context.Context, store *entity.EtcdStore, ent *entity.Entity, collection string) error {
+	key := base58.Encode([]byte(ent.Id()))
+	colKey := strings.NewReplacer("/", "_", ":", "_").Replace(collection)
+
+	key = fmt.Sprintf("%s/collections/%s/%s", store.Prefix(), colKey, key)
+
+	client := store.Client()
+	_, err := client.Put(ctx, key, ent.Id().String())
+	return err
+}

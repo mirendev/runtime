@@ -11,6 +11,15 @@ imports:
       - Attr
 
 types:
+  - type: ReindexStat
+    fields:
+      - name: name
+        type: string
+        index: 0
+      - name: value
+        type: int64
+        index: 1
+
   - type: Entity
     fields:
       - name: id
@@ -234,3 +243,12 @@ interfaces:
         parameters:
           - name: id
             type: string
+
+      - name: reindex
+        parameters:
+          - name: dry_run
+            type: bool
+        results:
+          - name: stats
+            type: list
+            element: ReindexStat
