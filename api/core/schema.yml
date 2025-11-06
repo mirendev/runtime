@@ -27,6 +27,10 @@ kinds:
       type: ref
       doc: The version of the project that should be used
 
+    deleted_at:
+      type: time
+      doc: Timestamp when the app was soft-deleted (zero value if active)
+
   artifact:
     app:
       type: ref

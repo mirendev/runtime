@@ -41,14 +41,26 @@ func (c *DefaultRouteAppController) Init(context.Context) error {
 func (c *DefaultRouteAppController) Create(ctx context.Context, app *core_v1alpha.App, meta *entity.Meta) error {
 	c.Log.Info("App created", "app", app.ID)
 
-	// Check if this is the first app
+	if !app.DeletedAt.IsZero() {
+		c.Log.Debug("App is deleted, skipping", "app", app.ID)
+		return nil
+	}
+
 	appList, err := c.EAC.List(ctx, entity.Ref(entity.EntityKind, core_v1alpha.KindApp))
 	if err != nil {
 		return fmt.Errorf("failed to list apps: %w", err)
 	}
 
-	// If this is the only app (count == 1), create a default route for it
-	if len(appList.Values()) == 1 {
+	activeCount := 0
+	for _, e := range appList.Values() {
+		var a core_v1alpha.App
+		a.Decode(e.Entity())
+		if a.DeletedAt.IsZero() {
+			activeCount++
+		}
+	}
+
+	if activeCount == 1 {
 		c.Log.Info("First app created, creating default route", "app", app.ID)
 
 		route, err := c.ic.SetDefault(ctx, app.ID)
@@ -62,9 +74,44 @@ func (c *DefaultRouteAppController) Create(ctx context.Context, app *core_v1alph
 	return nil
 }
 
-// Update handles app update events - we don't need to do anything here
+// Update handles app update events - check if app was soft-deleted
 func (c *DefaultRouteAppController) Update(ctx context.Context, app *core_v1alpha.App, meta *entity.Meta) error {
-	c.Log.Debug("App updated, no action needed", "app", app.ID)
+	c.Log.Debug("App updated", "app", app.ID, "deleted", !app.DeletedAt.IsZero())
+
+	if !app.DeletedAt.IsZero() {
+		defaultRoute, err := c.ic.LookupDefault(ctx)
+		if err != nil {
+			return fmt.Errorf("failed to lookup default route: %w", err)
+		}
+
+		if defaultRoute != nil && defaultRoute.App == app.ID {
+			c.Log.Info("Soft-deleted app had default route, removing it", "app", app.ID, "route", defaultRoute.ID)
+			if _, err := c.ic.UnsetDefault(ctx); err != nil {
+				return fmt.Errorf("failed to unset default route: %w", err)
+			}
+		}
+
+		appList, err := c.EAC.List(ctx, entity.Ref(entity.EntityKind, core_v1alpha.KindApp))
+		if err != nil {
+			return fmt.Errorf("failed to list apps: %w", err)
+		}
+
+		activeCount := 0
+		for _, e := range appList.Values() {
+			var a core_v1alpha.App
+			a.Decode(e.Entity())
+			if a.DeletedAt.IsZero() {
+				activeCount++
+			}
+		}
+
+		if activeCount == 0 {
+			c.Log.Info("Last app soft-deleted, removing any remaining default routes")
+			_, err := c.ic.UnsetDefault(ctx)
+			return err
+		}
+	}
+
 	return nil
 }
 
@@ -86,18 +133,23 @@ func (c *DefaultRouteAppController) Delete(ctx context.Context, id entity.Id) er
 		}
 	}
 
-	// Check if there are any remaining apps
 	appList, err := c.EAC.List(ctx, entity.Ref(entity.EntityKind, core_v1alpha.KindApp))
 	if err != nil {
 		return fmt.Errorf("failed to list apps: %w", err)
 	}
 
-	// If no apps remain, delete all default routes (safety check in case of inconsistency)
-	if len(appList.Values()) == 0 {
+	activeCount := 0
+	for _, e := range appList.Values() {
+		var a core_v1alpha.App
+		a.Decode(e.Entity())
+		if a.DeletedAt.IsZero() {
+			activeCount++
+		}
+	}
+
+	if activeCount == 0 {
 		c.Log.Info("Last app deleted, removing any remaining default routes")
-
 		_, err := c.ic.UnsetDefault(ctx)
-
 		return err
 	}
 

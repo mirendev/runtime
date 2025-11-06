@@ -41,6 +41,11 @@ func (l *Launcher) Init(ctx context.Context) error {
 }
 
 func (l *Launcher) Reconcile(ctx context.Context, app *core_v1alpha.App, meta *entity.Meta) error {
+	if !app.DeletedAt.IsZero() {
+		l.Log.Debug("app is deleted, skipping", "app", app.ID)
+		return nil
+	}
+
 	if app.ActiveVersion == "" {
 		l.Log.Debug("app has no active version, skipping", "app", app.ID)
 		return nil

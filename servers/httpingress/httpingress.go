@@ -354,6 +354,12 @@ func (h *Server) serveHTTPWithMetrics(w http.ResponseWriter, req *http.Request, 
 	// Store app name for metrics
 	*appName = appMD.Name
 
+	if !app.DeletedAt.IsZero() {
+		h.Log.Info("app is deleted, rejecting request", "app", targetAppId, "name", *appName)
+		http.Error(w, "Application not found", http.StatusNotFound)
+		return
+	}
+
 	h.Log.Info("routing request", "host", onlyHost, "app", targetAppId, "name", *appName, "type", routeType)
 
 	// Common lease handling logic

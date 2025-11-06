@@ -13,6 +13,7 @@ import (
 func AppList(ctx *Context, opts struct {
 	FormatOptions
 	ConfigCentric
+	Deleted bool `long:"deleted" description:"Show deleted apps"`
 }) error {
 	client, err := ctx.RPCClient("entities")
 	if err != nil {
@@ -89,6 +90,10 @@ func AppList(ctx *Context, opts struct {
 			var app core_v1alpha.App
 			app.Decode(e.Entity())
 
+			if !opts.Deleted && !app.DeletedAt.IsZero() {
+				continue
+			}
+
 			var md core_v1alpha.Metadata
 			md.Decode(e.Entity())
 
@@ -135,6 +140,10 @@ func AppList(ctx *Context, opts struct {
 	for _, e := range res.Values() {
 		var app core_v1alpha.App
 		app.Decode(e.Entity())
+
+		if !opts.Deleted && !app.DeletedAt.IsZero() {
+			continue
+		}
 
 		var md core_v1alpha.Metadata
 		md.Decode(e.Entity())

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/api/entityserver"
@@ -59,19 +60,21 @@ func (c *Client) GetByName(ctx context.Context, name string) (*core_v1alpha.App,
 	return &app, nil
 }
 
-// Destroy deletes an app by its name
+// Destroy soft-deletes an app by its name
 func (c *Client) Destroy(ctx context.Context, name string) error {
-	// First get the app to ensure it exists and get its ID
 	app, err := c.GetByName(ctx, name)
 	if err != nil {
-		// If app doesn't exist, that's fine
 		return nil
 	}
 
-	// Delete the app entity
-	err = c.entityClient.Delete(ctx, app.ID)
+	if !app.DeletedAt.IsZero() {
+		return nil
+	}
+
+	app.DeletedAt = time.Now()
+	err = c.entityClient.Update(ctx, app)
 	if err != nil {
-		return fmt.Errorf("failed to delete app %s: %w", name, err)
+		return fmt.Errorf("failed to soft delete app %s: %w", name, err)
 	}
 
 	return nil
