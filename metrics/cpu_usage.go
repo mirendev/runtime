@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"fmt"
 	"log/slog"
+	"maps"
 	"strconv"
 	"sync"
 	"time"
@@ -52,9 +53,7 @@ func (m *CPUUsage) RecordUsage(ctx context.Context, entity string, windowStart, 
 	labels := make(map[string]string)
 	labels["entity"] = entity
 	labels["instance"] = m.instance
-	for k, v := range attrs {
-		labels[k] = v
-	}
+	maps.Copy(labels, attrs)
 
 	// Create a key that matches the time series identity (entity + all label values)
 	key := fmt.Sprintf("%s:%s", entity, m.instance)
@@ -63,6 +62,10 @@ func (m *CPUUsage) RecordUsage(ctx context.Context, entity string, windowStart, 
 	}
 
 	m.mu.Lock()
+	if m.cpuSeconds == nil {
+		m.cpuSeconds = make(map[string]float64)
+	}
+
 	m.cpuSeconds[key] += cpuSecondsIncrement
 	totalCPUSeconds := m.cpuSeconds[key]
 	m.mu.Unlock()
