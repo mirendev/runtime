@@ -15,6 +15,7 @@ case "${1:-}" in
 
     echo "Starting miren server in standalone mode..."
     # Use nohup and disown to fully detach from the shell
+    # (Script runs as root for process management privileges)
     nohup ./bin/miren server -vv --mode standalone >"$LOGFILE" 2>&1 </dev/null &
     pid=$!
     disown

@@ -10,6 +10,11 @@ setup_kernel_mounts
 
 cd /src
 
+# Ensure Go cache directories are owned by the host user
+# These may be owned by root from previous runs before we switched to building as host user
+chown -R "$HOST_UID:$HOST_GID" /go/build-cache /go/pkg 2>/dev/null || true
+chmod -R 770 /go/build-cache /go/pkg 2>/dev/null || true
+
 echo "Building miren as host user (UID ${ISO_UID})..."
 su -s /bin/bash "$HOST_USER" -c "make bin/miren"
 

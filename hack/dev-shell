@@ -1,4 +1,0 @@
-#!/bin/bash
-# Helper script to launch an interactive shell as the host user
-cd /src
-exec su dev

@@ -38,5 +38,28 @@ if echo "$STATUS_OUTPUT" | grep -q "Container does not exist"; then
   exit 1
 fi
 
-# Execute command in the persistent dev container
-ISO_SESSION="$SESSION" iso run "$@"
+# Execute command in the persistent dev container as the host user
+
+# Guard: if no arguments, drop into an interactive shell
+if [ "$#" -eq 0 ]; then
+  ISO_SESSION="$SESSION" iso run bash -c "cd /src && exec su dev"
+  exit
+fi
+
+# Special case: dev-server needs to run as root for process management
+if [[ "$1" == "bash" && "$2" == "hack/dev-server" ]]; then
+  # Run dev-server as root (needs to manage root-owned server process)
+  ISO_SESSION="$SESSION" iso run "$@"
+# Special case: interactive bash shell needs proper TTY (no -c flag)
+elif [[ "$1" == "bash" && $# -eq 1 ]]; then
+  # Use exec su dev for proper interactive shell with job control
+  ISO_SESSION="$SESSION" iso run bash -c "cd /src && exec su dev"
+else
+  # Build a properly quoted command string to preserve arguments with spaces/special chars
+  # Use -s /bin/bash to ensure ANSI-C quoting ($'...' from printf %q) is supported
+  CMD="cd /src && "
+  for arg in "$@"; do
+    CMD+="$(printf '%q ' "$arg")"
+  done
+  ISO_SESSION="$SESSION" iso run su -s /bin/bash dev -c "$CMD"
+fi
