@@ -154,6 +154,12 @@ func (w *VictoriaMetricsWriter) flush() {
 
 	err := w.sendMetrics(toFlush)
 	if err != nil {
+		w.mu.Lock()
+		defer w.mu.Unlock()
+
+		// Re-add failed metrics to the front of the buffer
+		w.buffer = append(toFlush, w.buffer...)
+
 		w.Log.Error("failed to send metrics to victoriametrics", "error", err, "count", len(toFlush))
 	} else {
 		w.Log.Debug("flushed metrics to victoriametrics", "count", len(toFlush))
