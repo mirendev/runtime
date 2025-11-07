@@ -43,7 +43,7 @@ dev: dev-start dev-server-start dev-shell
 
 # Interactive shell as host user (preserves file ownership)
 dev-shell:
-	@./hack/dev-exec bash hack/dev-shell
+	@./hack/dev-exec bash
 
 # Server lifecycle
 dev-server-start:
