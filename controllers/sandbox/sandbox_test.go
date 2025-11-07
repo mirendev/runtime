@@ -28,6 +28,7 @@ import (
 	core_v1alpha "miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/image"
+	"miren.dev/runtime/metrics"
 	"miren.dev/runtime/observability"
 	build "miren.dev/runtime/pkg/buildkit"
 	"miren.dev/runtime/pkg/entity"
@@ -354,7 +355,7 @@ func TestSandbox(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 		defer cancel()
 
-		reg, cleanup := testutils.Registry(observability.TestInject, build.TestInject)
+		reg, cleanup := testutils.Registry(observability.TestInject, build.TestInject, metrics.TestInject)
 		defer cleanup()
 
 		var (
@@ -439,11 +440,20 @@ func TestSandbox(t *testing.T) {
 
 		defer testutils.ClearContainer(ctx, c)
 
-		// Let sort ... sort.
-		time.Sleep(3 * time.Second)
+		var cpu float64
 
-		cpu, err := co.Metrics.CPUUsage.CurrentCPUUsage(id.String())
-		r.NoError(err)
+		// We need to wait a bit for metrics to start being recorded.
+		for range 5 {
+			// Let sort ... sort.
+			time.Sleep(3 * time.Second)
+
+			cpu, err = co.Metrics.CPUUsage.CurrentCPUUsage(id.String())
+			r.NoError(err)
+
+			if cpu > 0 {
+				break
+			}
+		}
 
 		t.Logf("last delta: %f", cpu)
 
@@ -1487,8 +1497,8 @@ func TestSandbox(t *testing.T) {
 		r.NoError(err)
 		r.Equal(containerd.Running, status.Status, "task should still be running after log reattachment")
 
-		// Verify logs are being collected in ClickHouse
-		time.Sleep(1 * time.Second) // Give ClickHouse time to index
+		// Verify logs are being collected in VictoriaLogs
+		time.Sleep(1 * time.Second)
 
 		logs, err := lr.Read(ctx, sb.ID.String(), observability.WithLimit(100))
 		r.NoError(err)

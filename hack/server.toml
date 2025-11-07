@@ -1,5 +1,4 @@
 pg-addr = "localhost:5432"
-clickhouse-addr = "localhost:9000"
 temp-dir = "../mn-tmp/server"
 data-path = "../mn-tmp/server-data"
 runsc-binary = "./hack/runsc-ignore"

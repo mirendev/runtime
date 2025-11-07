@@ -5,37 +5,36 @@ package serverconfig
 // CLIFlags represents command-line flags for server configuration
 // All fields are pointers to distinguish between set and unset values
 type CLIFlags struct {
-	ClickHouseConfigAddress           *string  `long:"clickhouse-addr" description:"ClickHouse address (when not using embedded)"`
-	ClickHouseConfigHTTPPort          *int     `long:"clickhouse-http-port" description:"ClickHouse HTTP port"`
-	ClickHouseConfigInterserverPort   *int     `long:"clickhouse-interserver-port" description:"ClickHouse inter-server port"`
-	ClickHouseConfigNativePort        *int     `long:"clickhouse-native-port" description:"ClickHouse native port"`
-	ClickHouseConfigStartEmbedded     *bool    `long:"start-clickhouse" description:"Start embedded ClickHouse server"`
-	ConfigFile                        *string  `long:"config" description:"Path to configuration file"`
-	Mode                              *string  `long:"mode" short:"m" description:"Server mode (standalone, distributed)"`
-	ContainerdConfigBinaryPath        *string  `long:"containerd-binary" description:"Path to containerd binary"`
-	ContainerdConfigSocketPath        *string  `long:"containerd-socket" description:"Path to containerd socket"`
-	ContainerdConfigStartEmbedded     *bool    `long:"start-containerd" description:"Start embedded containerd daemon"`
-	EtcdConfigClientPort              *int     `long:"etcd-client-port" description:"Etcd client port"`
-	EtcdConfigEndpoints               []string `long:"etcd" short:"e" description:"Etcd endpoints"`
-	EtcdConfigHTTPClientPort          *int     `long:"etcd-http-client-port" description:"Etcd HTTP client port"`
-	EtcdConfigPeerPort                *int     `long:"etcd-peer-port" description:"Etcd peer port"`
-	EtcdConfigPrefix                  *string  `long:"etcd-prefix" short:"p" description:"Etcd prefix"`
-	EtcdConfigStartEmbedded           *bool    `long:"start-etcd" description:"Start embedded etcd server"`
-	ServerConfigAddress               *string  `long:"address" short:"a" description:"Address to listen on (host:port). For IPv6 use brackets, e.g. \"[::1]:8443\"."`
-	ServerConfigConfigClusterName     *string  `long:"config-cluster-name" short:"C" description:"Name of the cluster in client config"`
-	ServerConfigDataPath              *string  `long:"data-path" short:"d" description:"Data path"`
-	ServerConfigHTTPRequestTimeout    *int     `long:"http-request-timeout" description:"HTTP request timeout in seconds"`
-	ServerConfigReleasePath           *string  `long:"release-path" description:"Path to release directory containing binaries"`
-	ServerConfigRunnerAddress         *string  `long:"runner-address" description:"Runner address (host:port). For IPv6 use brackets, e.g. \"[::1]:8444\"."`
-	ServerConfigRunnerID              *string  `long:"runner-id" short:"r" description:"Runner ID"`
-	ServerConfigSkipClientConfig      *bool    `long:"skip-client-config" description:"Skip writing client config file to clientconfig.d"`
-	TLSConfigAdditionalIPs            []string `long:"ips" description:"Additional IPs assigned to the server cert"`
-	TLSConfigAdditionalNames          []string `long:"dns-names" description:"Additional DNS names assigned to the server cert"`
-	TLSConfigStandardTLS              *bool    `long:"serve-tls" description:"Expose the http ingress on standard TLS ports"`
-	VictoriaLogsConfigAddress         *string  `long:"victorialogs-addr" description:"VictoriaLogs address (when not using embedded)"`
-	VictoriaLogsConfigHTTPPort        *int     `long:"victorialogs-http-port" description:"VictoriaLogs HTTP port"`
-	VictoriaLogsConfigRetentionPeriod *string  `long:"victorialogs-retention" description:"VictoriaLogs retention period (e.g. 30d, 2w, 1y)"`
-	VictoriaLogsConfigStartEmbedded   *bool    `long:"start-victorialogs" description:"Start embedded VictoriaLogs server"`
+	ConfigFile                           *string  `long:"config" description:"Path to configuration file"`
+	Mode                                 *string  `long:"mode" short:"m" description:"Server mode (standalone, distributed)"`
+	ContainerdConfigBinaryPath           *string  `long:"containerd-binary" description:"Path to containerd binary"`
+	ContainerdConfigSocketPath           *string  `long:"containerd-socket" description:"Path to containerd socket"`
+	ContainerdConfigStartEmbedded        *bool    `long:"start-containerd" description:"Start embedded containerd daemon"`
+	EtcdConfigClientPort                 *int     `long:"etcd-client-port" description:"Etcd client port"`
+	EtcdConfigEndpoints                  []string `long:"etcd" short:"e" description:"Etcd endpoints"`
+	EtcdConfigHTTPClientPort             *int     `long:"etcd-http-client-port" description:"Etcd HTTP client port"`
+	EtcdConfigPeerPort                   *int     `long:"etcd-peer-port" description:"Etcd peer port"`
+	EtcdConfigPrefix                     *string  `long:"etcd-prefix" short:"p" description:"Etcd prefix"`
+	EtcdConfigStartEmbedded              *bool    `long:"start-etcd" description:"Start embedded etcd server"`
+	ServerConfigAddress                  *string  `long:"address" short:"a" description:"Address to listen on (host:port). For IPv6 use brackets, e.g. \"[::1]:8443\"."`
+	ServerConfigConfigClusterName        *string  `long:"config-cluster-name" short:"C" description:"Name of the cluster in client config"`
+	ServerConfigDataPath                 *string  `long:"data-path" short:"d" description:"Data path"`
+	ServerConfigHTTPRequestTimeout       *int     `long:"http-request-timeout" description:"HTTP request timeout in seconds"`
+	ServerConfigReleasePath              *string  `long:"release-path" description:"Path to release directory containing binaries"`
+	ServerConfigRunnerAddress            *string  `long:"runner-address" description:"Runner address (host:port). For IPv6 use brackets, e.g. \"[::1]:8444\"."`
+	ServerConfigRunnerID                 *string  `long:"runner-id" short:"r" description:"Runner ID"`
+	ServerConfigSkipClientConfig         *bool    `long:"skip-client-config" description:"Skip writing client config file to clientconfig.d"`
+	TLSConfigAdditionalIPs               []string `long:"ips" description:"Additional IPs assigned to the server cert"`
+	TLSConfigAdditionalNames             []string `long:"dns-names" description:"Additional DNS names assigned to the server cert"`
+	TLSConfigStandardTLS                 *bool    `long:"serve-tls" description:"Expose the http ingress on standard TLS ports"`
+	VictoriaLogsConfigAddress            *string  `long:"victorialogs-addr" description:"VictoriaLogs address (when not using embedded)"`
+	VictoriaLogsConfigHTTPPort           *int     `long:"victorialogs-http-port" description:"VictoriaLogs HTTP port in embedded mode"`
+	VictoriaLogsConfigRetentionPeriod    *string  `long:"victorialogs-retention" description:"VictoriaLogs retention period (e.g. 30d, 2w, 1y)"`
+	VictoriaLogsConfigStartEmbedded      *bool    `long:"start-victorialogs" description:"Start embedded VictoriaLogs server"`
+	VictoriaMetricsConfigAddress         *string  `long:"victoriametrics-addr" description:"VictoriaMetrics address (when not using embedded)"`
+	VictoriaMetricsConfigHTTPPort        *int     `long:"victoriametrics-http-port" description:"VictoriaMetrics HTTP port in embedded mode"`
+	VictoriaMetricsConfigRetentionPeriod *string  `long:"victoriametrics-retention" description:"VictoriaMetrics retention period in months"`
+	VictoriaMetricsConfigStartEmbedded   *bool    `long:"start-victoriametrics" description:"Start embedded VictoriaMetrics server"`
 }
 
 // NewCLIFlags creates a new CLIFlags struct for parsing

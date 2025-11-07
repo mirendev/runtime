@@ -2,7 +2,6 @@ package testutils
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"log/slog"
 	"net/netip"
@@ -24,8 +23,6 @@ import (
 	"miren.dev/runtime/pkg/netdb"
 	"miren.dev/runtime/pkg/rpc"
 	"miren.dev/runtime/pkg/slogfmt"
-
-	clickhouse "github.com/ClickHouse/clickhouse-go/v2"
 )
 
 func Registry(extra ...func(*asm.Registry)) (*asm.Registry, func()) {
@@ -124,29 +121,6 @@ func Registry(extra ...func(*asm.Registry)) (*asm.Registry, func()) {
 
 	r.Register("log", log)
 
-	r.Register("clickhouse-address", "clickhouse:9000")
-
-	r.ProvideName("clickhouse", func(opts struct {
-		Log *slog.Logger
-	}) *sql.DB {
-		return clickhouse.OpenDB(&clickhouse.Options{
-			Addr: []string{"clickhouse:9000"},
-			Auth: clickhouse.Auth{
-				Database: "default",
-				Username: "default",
-				Password: "default",
-			},
-			DialTimeout: time.Second * 30,
-			Compression: &clickhouse.Compression{
-				Method: clickhouse.CompressionLZ4,
-			},
-			Debug: false,
-			Debugf: func(format string, v ...interface{}) {
-				opts.Log.Debug(fmt.Sprintf(format, v...))
-			},
-		})
-	})
-
 	r.Register("victorialogs-address", "victorialogs:9428")
 	r.Register("victorialogs-timeout", 30*time.Second)
 
@@ -208,6 +182,32 @@ func Registry(extra ...func(*asm.Registry)) (*asm.Registry, func()) {
 
 		eac := entityserver_v1alpha.NewEntityAccessClient(client)
 		return eac, nil
+	})
+
+	endpoint := "victoriametrics:8428"
+
+	// Provide a test VictoriaMetrics writer
+	r.ProvideName("victoriametrics-writer", func(opts struct {
+		Log *slog.Logger
+	}) *metrics.VictoriaMetricsWriter {
+		log := opts.Log
+		if log == nil {
+			log = slog.Default()
+		}
+		writer := metrics.NewVictoriaMetricsWriter(log, endpoint, 30*time.Second)
+		writer.Start()
+		return writer
+	})
+
+	// Provide a test VictoriaMetrics reader
+	r.ProvideName("victoriametrics-reader", func(opts struct {
+		Log *slog.Logger
+	}) *metrics.VictoriaMetricsReader {
+		log := opts.Log
+		if log == nil {
+			log = slog.Default()
+		}
+		return metrics.NewVictoriaMetricsReader(log, endpoint, 30*time.Second)
 	})
 
 	for _, f := range autoreg.All() {

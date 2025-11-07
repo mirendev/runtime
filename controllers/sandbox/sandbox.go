@@ -2,7 +2,6 @@ package sandbox
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -76,9 +75,8 @@ type SandboxController struct {
 
 	StatusMon *observability.StatusMonitor
 
-	Resolver   netresolve.Resolver
-	Clickhouse *sql.DB `asm:"clickhouse"`
-	Metrics    *Metrics
+	Resolver netresolve.Resolver
+	Metrics  *Metrics
 
 	topCtx context.Context
 	cancel func()

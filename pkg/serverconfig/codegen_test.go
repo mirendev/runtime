@@ -85,27 +85,27 @@ func TestLoad_ModeDefaultsPrecedence(t *testing.T) {
 	configPath := filepath.Join(tmpDir, "server.toml")
 
 	tests := []struct {
-		name           string
-		configContent  string
-		envVars        map[string]string
-		flags          *CLIFlags
-		wantMode       string
-		wantEtcdStart  bool
-		wantClickStart bool
+		name          string
+		configContent string
+		envVars       map[string]string
+		flags         *CLIFlags
+		wantMode      string
+		wantEtcdStart bool
+		wantVicStart  bool
 	}{
 		{
-			name:           "standalone mode applies defaults",
-			configContent:  `mode = "standalone"`,
-			wantMode:       "standalone",
-			wantEtcdStart:  true,
-			wantClickStart: true,
+			name:          "standalone mode applies defaults",
+			configContent: `mode = "standalone"`,
+			wantMode:      "standalone",
+			wantEtcdStart: true,
+			wantVicStart:  true,
 		},
 		{
-			name:           "distributed mode no defaults",
-			configContent:  `mode = "distributed"`,
-			wantMode:       "distributed",
-			wantEtcdStart:  false,
-			wantClickStart: false,
+			name:          "distributed mode no defaults",
+			configContent: `mode = "distributed"`,
+			wantMode:      "distributed",
+			wantEtcdStart: false,
+			wantVicStart:  false,
 		},
 		{
 			name:          "CLI overrides mode and defaults apply",
@@ -116,9 +116,9 @@ func TestLoad_ModeDefaultsPrecedence(t *testing.T) {
 				f.Mode = &mode
 				return f
 			}(),
-			wantMode:       "standalone",
-			wantEtcdStart:  true,
-			wantClickStart: true,
+			wantMode:      "standalone",
+			wantEtcdStart: true,
+			wantVicStart:  true,
 		},
 		{
 			name:          "env overrides mode defaults",
@@ -127,9 +127,9 @@ func TestLoad_ModeDefaultsPrecedence(t *testing.T) {
 				"MIREN_ETCD_START_EMBEDDED": "false",
 				"MIREN_ETCD_ENDPOINTS":      "http://etcd:2379",
 			},
-			wantMode:       "standalone",
-			wantEtcdStart:  false,
-			wantClickStart: true, // Only etcd was overridden
+			wantMode:      "standalone",
+			wantEtcdStart: false,
+			wantVicStart:  true, // Only etcd was overridden
 		},
 		{
 			name:          "CLI flag overrides mode defaults",
@@ -141,9 +141,9 @@ func TestLoad_ModeDefaultsPrecedence(t *testing.T) {
 				f.EtcdConfigEndpoints = []string{"http://etcd:2379"}
 				return f
 			}(),
-			wantMode:       "standalone",
-			wantEtcdStart:  false, // CLI override
-			wantClickStart: true,  // Not overridden
+			wantMode:      "standalone",
+			wantEtcdStart: false, // CLI override
+			wantVicStart:  true,  // Not overridden
 		},
 	}
 
@@ -183,13 +183,22 @@ func TestLoad_ModeDefaultsPrecedence(t *testing.T) {
 				t.Errorf("Etcd.StartEmbedded = %v, want %v", gotEtcd, tt.wantEtcdStart)
 			}
 
-			// Check Clickhouse.StartEmbedded
-			var gotClick bool
-			if cfg.Clickhouse.StartEmbedded != nil {
-				gotClick = *cfg.Clickhouse.StartEmbedded
+			// Check Victorialogs.StartEmbedded
+			var gotLogs bool
+			if cfg.Victorialogs.StartEmbedded != nil {
+				gotLogs = *cfg.Victorialogs.StartEmbedded
 			}
-			if gotClick != tt.wantClickStart {
-				t.Errorf("Clickhouse.StartEmbedded = %v, want %v", gotClick, tt.wantClickStart)
+			if gotLogs != tt.wantVicStart {
+				t.Errorf("Victorialogs.StartEmbedded = %v, want %v", gotLogs, tt.wantVicStart)
+			}
+
+			// Check Victoriametrics.StartEmbedded
+			var gotMetrics bool
+			if cfg.Victoriametrics.StartEmbedded != nil {
+				gotMetrics = *cfg.Victoriametrics.StartEmbedded
+			}
+			if gotMetrics != tt.wantVicStart {
+				t.Errorf("Victoriametrics.StartEmbedded = %v, want %v", gotLogs, tt.wantVicStart)
 			}
 		})
 	}

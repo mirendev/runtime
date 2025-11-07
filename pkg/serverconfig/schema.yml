@@ -38,14 +38,14 @@ configs:
         toml: etcd
         nested: true
 
-      clickhouse:
-        type: ClickHouseConfig
-        toml: clickhouse
-        nested: true
-
       victorialogs:
         type: VictoriaLogsConfig
         toml: victorialogs
+        nested: true
+
+      victoriametrics:
+        type: VictoriaMetricsConfig
+        toml: victoriametrics
         nested: true
 
       containerd:
@@ -236,61 +236,6 @@ configs:
         validation:
           port: true
 
-  ClickHouseConfig:
-    description: ClickHouse configuration
-    fields:
-      start_embedded:
-        type: bool
-        cli:
-          long: start-clickhouse
-          description: Start embedded ClickHouse server
-        env: MIREN_CLICKHOUSE_START_EMBEDDED
-        toml: start_embedded
-        mode_default:
-          standalone: true
-
-      http_port:
-        type: int
-        default: 8223
-        cli:
-          long: clickhouse-http-port
-          description: ClickHouse HTTP port
-        env: MIREN_CLICKHOUSE_HTTP_PORT
-        toml: http_port
-        validation:
-          port: true
-
-      native_port:
-        type: int
-        default: 9009
-        cli:
-          long: clickhouse-native-port
-          description: ClickHouse native port
-        env: MIREN_CLICKHOUSE_NATIVE_PORT
-        toml: native_port
-        validation:
-          port: true
-
-      interserver_port:
-        type: int
-        default: 9010
-        cli:
-          long: clickhouse-interserver-port
-          description: ClickHouse inter-server port
-        env: MIREN_CLICKHOUSE_INTERSERVER_PORT
-        toml: interserver_port
-        validation:
-          port: true
-
-      address:
-        type: string
-        default: ""
-        cli:
-          long: clickhouse-addr
-          description: ClickHouse address (when not using embedded)
-        env: MIREN_CLICKHOUSE_ADDRESS
-        toml: address
-
   VictoriaLogsConfig:
     description: VictoriaLogs configuration
     fields:
@@ -309,7 +254,7 @@ configs:
         default: 9428
         cli:
           long: victorialogs-http-port
-          description: VictoriaLogs HTTP port
+          description: VictoriaLogs HTTP port in embedded mode
         env: MIREN_VICTORIALOGS_HTTP_PORT
         toml: http_port
         validation:
@@ -328,11 +273,57 @@ configs:
 
       address:
         type: string
-        default: ""
+        default: "victorialogs:9428"
         cli:
           long: victorialogs-addr
           description: VictoriaLogs address (when not using embedded)
         env: MIREN_VICTORIALOGS_ADDRESS
+        toml: address
+        validation:
+          format: host:port
+
+  VictoriaMetricsConfig:
+    description: VictoriaMetrics configuration
+    fields:
+      start_embedded:
+        type: bool
+        cli:
+          long: start-victoriametrics
+          description: Start embedded VictoriaMetrics server
+        env: MIREN_VICTORIAMETRICS_START_EMBEDDED
+        toml: start_embedded
+        mode_default:
+          standalone: true
+
+      http_port:
+        type: int
+        default: 8428
+        cli:
+          long: victoriametrics-http-port
+          description: VictoriaMetrics HTTP port in embedded mode
+        env: MIREN_VICTORIAMETRICS_HTTP_PORT
+        toml: http_port
+        validation:
+          port: true
+
+      retention_period:
+        type: string
+        default: "1"
+        cli:
+          long: victoriametrics-retention
+          description: VictoriaMetrics retention period in months
+        env: MIREN_VICTORIAMETRICS_RETENTION_PERIOD
+        toml: retention_period
+        validation:
+          regex: '^\d+$'
+
+      address:
+        type: string
+        default: "victoriametrics:8428"
+        cli:
+          long: victoriametrics-addr
+          description: VictoriaMetrics address (when not using embedded)
+        env: MIREN_VICTORIAMETRICS_ADDRESS
         toml: address
         validation:
           format: host:port
