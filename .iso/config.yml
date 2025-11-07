@@ -7,3 +7,5 @@ cache:
   - /go/pkg
   - /go/build-cache
   - /root/.cache
+extra_hosts:
+  - "miren.host:host-gateway"
