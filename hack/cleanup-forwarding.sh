@@ -6,9 +6,7 @@ echo "=== Cleaning up Development Environment ==="
 # Kill any existing port forwarding processes
 echo "Stopping port forwarding..."
 pkill -f "socat.*9001" 2>/dev/null && echo "  ✓ Stopped MinIO forwarding" || echo "  - No MinIO forwarding found"
-pkill -f "socat.*9000" 2>/dev/null && echo "  ✓ Stopped ClickHouse native forwarding" || echo "  - No ClickHouse native forwarding found"
 pkill -f "socat.*2379" 2>/dev/null && echo "  ✓ Stopped etcd forwarding" || echo "  - No etcd forwarding found"
-pkill -f "socat.*8123" 2>/dev/null && echo "  ✓ Stopped ClickHouse HTTP forwarding" || echo "  - No ClickHouse HTTP forwarding found"
 
 # Optional: Stop Dagger services
 read -p "Stop Dagger services? (y/N) " -n 1 -r

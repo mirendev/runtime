@@ -1,13 +1,27 @@
 package observability
 
 import (
+	"bytes"
 	"context"
-	"database/sql"
+	"encoding/json"
+	"fmt"
+	"io"
 	"log/slog"
+	"net/http"
+	"net/url"
+	"strings"
 	"time"
 
 	"miren.dev/runtime/pkg/asm/autoreg"
 )
+
+// normalizeBaseURL ensures the address has a scheme and no trailing slash
+func normalizeBaseURL(address string) string {
+	if !strings.HasPrefix(address, "http://") && !strings.HasPrefix(address, "https://") {
+		address = "http://" + address
+	}
+	return strings.TrimRight(address, "/")
+}
 
 type LogStream string
 
@@ -27,68 +41,108 @@ type LogEntry struct {
 }
 
 type PersistentLogWriter struct {
-	DB *sql.DB `asm:"clickhouse"`
+	Address string        `asm:"victorialogs-address"`
+	Timeout time.Duration `asm:"victorialogs-timeout"`
+
+	client *http.Client
+}
+
+var _ = autoreg.Register[PersistentLogWriter]()
+
+func (l *PersistentLogWriter) Populated() error {
+	if l.Timeout == 0 {
+		l.Timeout = 30 * time.Second
+	}
+
+	l.client = &http.Client{
+		Timeout: l.Timeout,
+	}
+	return nil
+}
+
+func (l *PersistentLogWriter) Client() *http.Client {
+	if l.client == nil {
+		return http.DefaultClient
+	}
+
+	return l.client
 }
 
 func (l *PersistentLogWriter) WriteEntry(entity string, le LogEntry) error {
-	_, err := l.DB.Exec("INSERT INTO logs (timestamp, entity, stream, trace_id, attributes, body) VALUES (?, ?, ?, ?, ?, ?)",
-		le.Timestamp.UnixMicro(), entity, le.Stream, le.TraceID, le.Attributes, le.Body)
-	return err
+	// Convert LogEntry to VictoriaLogs JSON format
+	logData := map[string]interface{}{
+		"_msg":     le.Body,
+		"_time":    le.Timestamp.UTC().Format(time.RFC3339Nano),
+		"entity":   entity,
+		"stream":   string(le.Stream),
+		"trace_id": le.TraceID,
+	}
+
+	// Add all attributes as top-level fields
+	for k, v := range le.Attributes {
+		logData[k] = v
+	}
+
+	// Marshal to JSON
+	jsonData, err := json.Marshal(logData)
+	if err != nil {
+		return fmt.Errorf("failed to marshal log entry: %w", err)
+	}
+
+	// Add newline for JSON lines format
+	jsonData = append(jsonData, '\n')
+
+	// Send to VictoriaLogs
+	baseURL := normalizeBaseURL(l.Address)
+	insertURL := baseURL + "/insert/jsonline"
+	resp, err := l.Client().Post(insertURL, "application/x-ndjson", bytes.NewReader(jsonData))
+	if err != nil {
+		return fmt.Errorf("failed to send log to victorialogs: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("victorialogs returned status %d: %s", resp.StatusCode, string(body))
+	}
+
+	return nil
 }
 
 type PersistentLogReader struct {
-	DB *sql.DB `asm:"clickhouse"`
+	Address string        `asm:"victorialogs-address"`
+	Timeout time.Duration `asm:"victorialogs-timeout"`
+
+	client *http.Client
+}
+
+func (l *PersistentLogReader) Populated() error {
+	if l.Timeout == 0 {
+		l.Timeout = 30 * time.Second
+	}
+
+	l.client = &http.Client{
+		Timeout: l.Timeout,
+	}
+	return nil
 }
 
 func (l *PersistentLogReader) Read(ctx context.Context, id string) ([]LogEntry, error) {
-	rows, err := l.DB.QueryContext(ctx, "SELECT timestamp, body, trace_id, attributes FROM logs WHERE entity = ?", id)
-	if err != nil {
-		return nil, err
+	reader := &LogReader{
+		Address: l.Address,
+		client:  l.client,
 	}
-
-	var entries []LogEntry
-
-	for rows.Next() {
-		var e LogEntry
-		err := rows.Scan(&e.Timestamp, &e.Body, &e.TraceID, &e.Attributes)
-		if err != nil {
-			return nil, err
-		}
-		entries = append(entries, e)
-	}
-
-	return entries, nil
+	return reader.Read(ctx, id)
 }
 
 type LogsMaintainer struct {
-	DB *sql.DB `asm:"clickhouse"`
 }
 
 var _ = autoreg.Register[LogsMaintainer]()
 
 func (m *LogsMaintainer) Setup(ctx context.Context) error {
-	_, err := m.DB.ExecContext(ctx, `
-CREATE TABLE IF NOT EXISTS logs
-(
-    timestamp DateTime64(6) CODEC(Delta(8), ZSTD(1)),
-    entity LowCardinality(String) CODEC(ZSTD(1)),
-		stream Enum8('stdout' = 1, 'stderr' = 2, 'error' = 3, 'user-oob' = 4) CODEC(ZSTD(1)),
-    trace_id String CODEC(ZSTD(1)),
-		attributes Map(LowCardinality(String), String) CODEC(ZSTD(1)),
-    body String CODEC(ZSTD(1)),
-    INDEX idx_trace_id trace_id TYPE bloom_filter(0.001) GRANULARITY 1,
-    INDEX idx_attr_key mapKeys(attributes) TYPE bloom_filter(0.01) GRANULARITY 1,
-    INDEX idx_attr_value mapValues(attributes) TYPE bloom_filter(0.01) GRANULARITY 1,
-    INDEX idx_body body TYPE tokenbf_v1(32768, 3, 0) GRANULARITY 1
-)
-ENGINE = MergeTree
-PARTITION BY toDate(timestamp)
-ORDER BY (entity, toUnixTimestamp(timestamp), trace_id)
-TTL toDateTime(timestamp) + toIntervalDay(30)
-SETTINGS ttl_only_drop_parts = 1
-`)
-
-	return err
+	// VictoriaLogs is schemaless, no setup needed
+	return nil
 }
 
 type LogWriter interface {
@@ -105,10 +159,24 @@ func (d *DebugLogWriter) WriteEntry(entity string, le LogEntry) error {
 }
 
 type LogReader struct {
-	DB *sql.DB `asm:"clickhouse"`
+	Address string        `asm:"victorialogs-address"`
+	Timeout time.Duration `asm:"victorialogs-timeout"`
+
+	client *http.Client
 }
 
 var _ = autoreg.Register[LogReader]()
+
+func (l *LogReader) Populated() error {
+	if l.Timeout == 0 {
+		l.Timeout = 30 * time.Second
+	}
+
+	l.client = &http.Client{
+		Timeout: l.Timeout,
+	}
+	return nil
+}
 
 type logReadOpts struct {
 	From  time.Time
@@ -129,6 +197,12 @@ func WithLimit(l int) LogReaderOption {
 	}
 }
 
+func logsQLQuote(s string) string {
+	s = strings.ReplaceAll(s, `\`, `\\`)
+	s = strings.ReplaceAll(s, `"`, `\"`)
+	return `"` + s + `"`
+}
+
 func (l *LogReader) Read(ctx context.Context, id string, opts ...LogReaderOption) ([]LogEntry, error) {
 	var o logReadOpts
 
@@ -136,64 +210,24 @@ func (l *LogReader) Read(ctx context.Context, id string, opts ...LogReaderOption
 		opt(&o)
 	}
 
-	var (
-		rows *sql.Rows
-		err  error
-
-		limit = o.Limit
-	)
-
+	limit := o.Limit
 	if limit == 0 {
 		limit = 100
 	}
 
-	if !o.From.IsZero() {
-		fromMicros := o.From.UnixMicro()
-		rows, err = l.DB.QueryContext(ctx,
-			`SELECT timestamp, stream, body, trace_id, attributes
-			   FROM logs
-			  WHERE entity = ? AND timestamp >= fromUnixTimestamp64Micro(?)
-			  ORDER BY timestamp ASC
-			  LIMIT ?`, id, fromMicros, limit)
-		if err != nil {
-			return nil, err
-		}
-	} else {
-		rows, err = l.DB.QueryContext(ctx,
-			`SELECT timestamp, stream, body, trace_id, attributes
-			   FROM logs
-			  WHERE entity = ?
-			  ORDER BY timestamp ASC
-			  LIMIT ?`, id, limit)
-		if err != nil {
-			return nil, err
-		}
+	// Build LogsQL query - use simple field matching
+	query := `entity:` + logsQLQuote(id)
+
+	// Victoria Logs often requires a time range
+	// If not provided, use last 24 hours
+	startTime := o.From
+	if startTime.IsZero() {
+		startTime = time.Now().Add(-24 * time.Hour)
 	}
 
-	var entries []LogEntry
-
-	for rows.Next() {
-		var e LogEntry
-		err := rows.Scan(&e.Timestamp, &e.Stream, &e.Body, &e.TraceID, &e.Attributes)
-		if err != nil {
-			_ = rows.Close()
-			return nil, err
-		}
-		entries = append(entries, e)
-	}
-
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-
-	return entries, nil
+	return l.executeQuery(ctx, query, limit, startTime, time.Now())
 }
 
-// ReadBySandbox reads logs for a specific sandbox ID by filtering on the sandbox attribute
 func (l *LogReader) ReadBySandbox(ctx context.Context, sandboxID string, opts ...LogReaderOption) ([]LogEntry, error) {
 	var o logReadOpts
 
@@ -201,58 +235,113 @@ func (l *LogReader) ReadBySandbox(ctx context.Context, sandboxID string, opts ..
 		opt(&o)
 	}
 
-	var (
-		rows *sql.Rows
-		err  error
-
-		limit = o.Limit
-	)
-
+	limit := o.Limit
 	if limit == 0 {
 		limit = 100
 	}
 
-	if !o.From.IsZero() {
-		fromMicros := o.From.UnixMicro()
-		rows, err = l.DB.QueryContext(ctx,
-			`SELECT timestamp, stream, body, trace_id, attributes
-			   FROM logs
-			  WHERE attributes['sandbox'] = ? AND timestamp >= fromUnixTimestamp64Micro(?)
-			  ORDER BY timestamp ASC
-			  LIMIT ?`, sandboxID, fromMicros, limit)
-		if err != nil {
-			return nil, err
-		}
-	} else {
-		rows, err = l.DB.QueryContext(ctx,
-			`SELECT timestamp, stream, body, trace_id, attributes
-			   FROM logs
-			  WHERE attributes['sandbox'] = ?
-			  ORDER BY timestamp ASC
-			  LIMIT ?`, sandboxID, limit)
-		if err != nil {
-			return nil, err
-		}
+	// Build LogsQL query filtering by sandbox attribute
+	query := `sandbox:` + logsQLQuote(sandboxID)
+
+	// Victoria Logs often requires a time range
+	startTime := o.From
+	if startTime.IsZero() {
+		startTime = time.Now().Add(-24 * time.Hour)
 	}
 
+	return l.executeQuery(ctx, query, limit, startTime, time.Now())
+}
+
+func (l *LogReader) executeQuery(ctx context.Context, query string, limit int, start, end time.Time) ([]LogEntry, error) {
+	// VictoriaLogs uses /select/logsql/query for queries
+	baseURL := normalizeBaseURL(l.Address)
+	queryURL := baseURL + "/select/logsql/query"
+
+	params := url.Values{}
+	params.Set("query", query)
+	params.Set("limit", fmt.Sprintf("%d", limit))
+	// Add time range - VictoriaLogs uses RFC3339 timestamps
+	params.Set("start", start.Format(time.RFC3339Nano))
+	params.Set("end", end.Format(time.RFC3339Nano))
+
+	fullURL := fmt.Sprintf("%s?%s", queryURL, params.Encode())
+
+	req, err := http.NewRequestWithContext(ctx, "GET", fullURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	resp, err := l.client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query victorialogs: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("victorialogs returned status %d: %s", resp.StatusCode, string(body))
+	}
+
+	// VictoriaLogs returns NDJSON (newline-delimited JSON)
 	var entries []LogEntry
 
-	for rows.Next() {
-		var e LogEntry
-		err := rows.Scan(&e.Timestamp, &e.Stream, &e.Body, &e.TraceID, &e.Attributes)
-		if err != nil {
-			_ = rows.Close()
-			return nil, err
+	// If empty response, return empty list
+	if len(bytes.TrimSpace(body)) == 0 {
+		return entries, nil
+	}
+
+	// Split by newlines and parse each line
+	lines := bytes.Split(body, []byte("\n"))
+	for _, line := range lines {
+		line = bytes.TrimSpace(line)
+		if len(line) == 0 {
+			continue
 		}
-		entries = append(entries, e)
-	}
 
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
+		var logData map[string]interface{}
+		if err := json.Unmarshal(line, &logData); err != nil {
+			// Log the error but continue - might be partial data
+			continue
+		}
 
-	if err := rows.Err(); err != nil {
-		return nil, err
+		entry := LogEntry{
+			Attributes: make(map[string]string),
+		}
+
+		// Parse standard fields
+		if msg, ok := logData["_msg"].(string); ok {
+			entry.Body = msg
+		}
+
+		if timeStr, ok := logData["_time"].(string); ok {
+			if t, err := time.Parse(time.RFC3339Nano, timeStr); err == nil {
+				entry.Timestamp = t
+			}
+		}
+
+		if stream, ok := logData["stream"].(string); ok {
+			entry.Stream = LogStream(stream)
+		}
+
+		if traceID, ok := logData["trace_id"].(string); ok {
+			entry.TraceID = traceID
+		}
+
+		// Add all other fields as attributes
+		for k, v := range logData {
+			if k == "_msg" || k == "_time" || k == "stream" || k == "trace_id" || k == "entity" {
+				continue
+			}
+			if strVal, ok := v.(string); ok {
+				entry.Attributes[k] = strVal
+			}
+		}
+
+		entries = append(entries, entry)
 	}
 
 	return entries, nil

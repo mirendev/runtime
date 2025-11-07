@@ -3,37 +3,28 @@ package observability
 import (
 	"bytes"
 	"context"
-	"database/sql"
 	"errors"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"strconv"
 	"time"
 
+	"miren.dev/runtime/metrics"
 	"miren.dev/runtime/pkg/asm/autoreg"
 )
 
 type ResourcesMonitor struct {
-	DB  *sql.DB `asm:"clickhouse"`
-	Log *slog.Logger
+	Writer *metrics.VictoriaMetricsWriter `asm:"victoriametrics-writer"`
+	Reader *metrics.VictoriaMetricsReader `asm:"victoriametrics-reader"`
+	Log    *slog.Logger
 }
 
 func (m *ResourcesMonitor) Setup(ctx context.Context) error {
-	_, err := m.DB.ExecContext(ctx, `
-CREATE TABLE IF NOT EXISTS resource_usage
-(
-    timestamp DateTime64(9) CODEC(Delta(8), ZSTD(1)),
-    container_id LowCardinality(String) CODEC(ZSTD(1)),
-		cpu Float32 CODEC(ZSTD(1)),
-		memory UInt64 CODEC(ZSTD(1))
-)
-ENGINE = MergeTree
-PARTITION BY toDate(timestamp)
-ORDER BY (container_id, toUnixTimestamp(timestamp))
-`)
-
-	return err
+	// For VictoriaMetrics, no table creation needed
+	m.Log.Info("resource monitor initialized with VictoriaMetrics backend")
+	return nil
 }
 
 var _ = autoreg.Register[ResourcesMonitor]()
@@ -89,10 +80,29 @@ func (m *ResourcesMonitor) Monitor(ctx context.Context, id, cgroupPath string) e
 					m.Log.Error("failed to read memory stats", "err", err)
 				}
 
-				m.DB.ExecContext(ctx,
-					`INSERT INTO resource_usage (timestamp, container_id, cpu, memory) VALUES (NOW(), ?, ?, ?)`,
-					id, perc, mem,
-				)
+				// Write metrics to VictoriaMetrics
+				points := []metrics.MetricPoint{
+					{
+						Name: "resource_cpu",
+						Labels: map[string]string{
+							"container_id": id,
+						},
+						Value:     perc,
+						Timestamp: ts,
+					},
+					{
+						Name: "resource_memory",
+						Labels: map[string]string{
+							"container_id": id,
+						},
+						Value:     float64(mem),
+						Timestamp: ts,
+					},
+				}
+
+				if err := m.Writer.WritePoints(ctx, points); err != nil {
+					m.Log.Error("failed to write resource usage metrics", "err", err)
+				}
 			}
 
 			lastTick = ts
@@ -102,19 +112,23 @@ func (m *ResourcesMonitor) Monitor(ctx context.Context, id, cgroupPath string) e
 }
 
 func (m *ResourcesMonitor) LastestUsage(id string) (float64, uint64, error) {
-	var (
-		perc float64
-		mem  uint64
-	)
-
-	err := m.DB.QueryRow(
-		"SELECT cpu, memory FROM resource_usage WHERE container_id = ? ORDER BY timestamp DESC LIMIT 1", id,
-	).Scan(&perc, &mem)
+	// Query latest CPU value
+	cpuValue, err := m.Reader.GetLatestValue(context.Background(), "resource_cpu", map[string]string{
+		"container_id": id,
+	})
 	if err != nil {
-		return 0, 0, err
+		return 0, 0, fmt.Errorf("failed to get latest CPU usage: %w", err)
 	}
 
-	return perc, mem, nil
+	// Query latest memory value
+	memValue, err := m.Reader.GetLatestValue(context.Background(), "resource_memory", map[string]string{
+		"container_id": id,
+	})
+	if err != nil {
+		return 0, 0, fmt.Errorf("failed to get latest memory usage: %w", err)
+	}
+
+	return cpuValue, uint64(memValue), nil
 }
 
 func (m *ResourcesMonitor) readFile(cgroupPath string, sb []byte) ([]byte, error) {

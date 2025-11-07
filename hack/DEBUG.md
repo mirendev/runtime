@@ -4,7 +4,7 @@ This guide explains how to debug the Miren runtime locally with your IDE while u
 
 ## Overview
 
-Miren can be debugged locally while connecting to services (etcd, ClickHouse) running in a Dagger container. This setup allows you to:
+Miren can be debugged locally while connecting to services (etcd) running in a Dagger container. This setup allows you to:
 - Use your local IDE debugger (e.g., GoLand, VS Code)
 - Make code changes without rebuilding containers
 - Debug with breakpoints and step through code
@@ -18,7 +18,6 @@ Miren can be debugged locally while connecting to services (etcd, ClickHouse) ru
    ```
    This starts a Dagger container with:
    - etcd (distributed key-value store for entity storage)
-   - ClickHouse (analytics database)
 
    These services run inside the container but will be made accessible to your local miren.
 
@@ -35,7 +34,7 @@ Miren can be debugged locally while connecting to services (etcd, ClickHouse) ru
 
 3. **Run miren locally:**
    ```bash
-   m server -vv --etcd=localhost:2379 --clickhouse-addr=localhost:9000
+   m server -vv --etcd=localhost:2379
    ```
    Your local runtime now connects to the containerized services.
 
@@ -52,15 +51,11 @@ Miren can be debugged locally while connecting to services (etcd, ClickHouse) ru
 
 After running the port forwarding script, services are available at:
 - **etcd**: `localhost:2379`
-- **ClickHouse**:
-  - Native protocol: `localhost:9000`
-  - HTTP interface: `localhost:8123`
 
 ### Environment Variables
 
 The following environment variables are automatically exported when you source the script:
 - `ETCD_ENDPOINTS=localhost:2379`
-- `CLICKHOUSE_URL=http://localhost:8123`
 
 ### IDE Configuration
 
@@ -69,10 +64,9 @@ The following environment variables are automatically exported when you source t
 1. Create a new "Go Application" run configuration
 2. Set the following:
    - **Package path**: `miren.dev/runtime/cmd/miren`
-   - **Program arguments**: `server -vv --data-path=/var/lib/miren/data --etcd=localhost:2379 --clickhouse-addr=localhost:9000`
+   - **Program arguments**: `server -vv --data-path=/var/lib/miren/data --etcd=localhost:2379
    - **Environment variables**:
      - `ETCD_ENDPOINTS=http://localhost:2379`
-     - `CLICKHOUSE_URL=clickhouse://localhost:9000`
    - **Run with sudo**: Yes (required for sandbox operations)
 
 #### VS Code
@@ -93,11 +87,9 @@ Add to `.vscode/launch.json`:
                 "-vv",
                 "--data-path=/var/lib/miren/data",
                 "--etcd=localhost:2379",
-                "--clickhouse-addr=localhost:9000"
             ],
             "env": {
                 "ETCD_ENDPOINTS": "http://localhost:2379",
-                "CLICKHOUSE_URL": "clickhouse://localhost:9000"
             },
             "console": "integratedTerminal",
             "asRoot": true
@@ -112,7 +104,7 @@ Add to `.vscode/launch.json`:
 
 If automatic IP detection fails, you can manually specify service IPs:
 ```bash
-ETCD_IP=10.87.x.x CLICKHOUSE_IP=10.87.x.x ./hack/forward-services.sh
+ETCD_IP=10.87.x.x ./hack/forward-services.sh
 ```
 
 To find the correct IPs, check the container logs or run:

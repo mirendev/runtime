@@ -62,11 +62,14 @@ func Load(configPath string, flags *CLIFlags, log *slog.Logger) (*Config, error)
 		if cfg.Etcd.StartEmbedded == nil {
 			cfg.Etcd.StartEmbedded = boolPtr(true)
 		}
-		if cfg.Clickhouse.StartEmbedded == nil {
-			cfg.Clickhouse.StartEmbedded = boolPtr(true)
-		}
 		if cfg.Containerd.StartEmbedded == nil {
 			cfg.Containerd.StartEmbedded = boolPtr(true)
+		}
+		if cfg.Victorialogs.StartEmbedded == nil {
+			cfg.Victorialogs.StartEmbedded = boolPtr(true)
+		}
+		if cfg.Victoriametrics.StartEmbedded == nil {
+			cfg.Victoriametrics.StartEmbedded = boolPtr(true)
 		}
 	}
 
@@ -134,26 +137,6 @@ func loadConfigFile(path string, cfg *Config) error {
 }
 
 func applyCLIFlags(cfg *Config, flags *CLIFlags) {
-
-	if flags.ClickHouseConfigAddress != nil && *flags.ClickHouseConfigAddress != "" {
-		cfg.Clickhouse.Address = flags.ClickHouseConfigAddress
-	}
-
-	if flags.ClickHouseConfigHTTPPort != nil {
-		cfg.Clickhouse.HTTPPort = flags.ClickHouseConfigHTTPPort
-	}
-
-	if flags.ClickHouseConfigInterserverPort != nil {
-		cfg.Clickhouse.InterserverPort = flags.ClickHouseConfigInterserverPort
-	}
-
-	if flags.ClickHouseConfigNativePort != nil {
-		cfg.Clickhouse.NativePort = flags.ClickHouseConfigNativePort
-	}
-
-	if flags.ClickHouseConfigStartEmbedded != nil {
-		cfg.Clickhouse.StartEmbedded = flags.ClickHouseConfigStartEmbedded
-	}
 
 	if flags.Mode != nil && *flags.Mode != "" {
 		cfg.Mode = flags.Mode
@@ -237,6 +220,38 @@ func applyCLIFlags(cfg *Config, flags *CLIFlags) {
 
 	if flags.TLSConfigStandardTLS != nil {
 		cfg.TLS.StandardTLS = flags.TLSConfigStandardTLS
+	}
+
+	if flags.VictoriaLogsConfigAddress != nil && *flags.VictoriaLogsConfigAddress != "" {
+		cfg.Victorialogs.Address = flags.VictoriaLogsConfigAddress
+	}
+
+	if flags.VictoriaLogsConfigHTTPPort != nil {
+		cfg.Victorialogs.HTTPPort = flags.VictoriaLogsConfigHTTPPort
+	}
+
+	if flags.VictoriaLogsConfigRetentionPeriod != nil && *flags.VictoriaLogsConfigRetentionPeriod != "" {
+		cfg.Victorialogs.RetentionPeriod = flags.VictoriaLogsConfigRetentionPeriod
+	}
+
+	if flags.VictoriaLogsConfigStartEmbedded != nil {
+		cfg.Victorialogs.StartEmbedded = flags.VictoriaLogsConfigStartEmbedded
+	}
+
+	if flags.VictoriaMetricsConfigAddress != nil && *flags.VictoriaMetricsConfigAddress != "" {
+		cfg.Victoriametrics.Address = flags.VictoriaMetricsConfigAddress
+	}
+
+	if flags.VictoriaMetricsConfigHTTPPort != nil {
+		cfg.Victoriametrics.HTTPPort = flags.VictoriaMetricsConfigHTTPPort
+	}
+
+	if flags.VictoriaMetricsConfigRetentionPeriod != nil && *flags.VictoriaMetricsConfigRetentionPeriod != "" {
+		cfg.Victoriametrics.RetentionPeriod = flags.VictoriaMetricsConfigRetentionPeriod
+	}
+
+	if flags.VictoriaMetricsConfigStartEmbedded != nil {
+		cfg.Victoriametrics.StartEmbedded = flags.VictoriaMetricsConfigStartEmbedded
 	}
 
 }

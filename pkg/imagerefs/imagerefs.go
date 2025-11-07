@@ -4,9 +4,6 @@ package imagerefs
 
 // Infrastructure images
 const (
-	// ClickHouse database server
-	ClickHouse = "oci.miren.cloud/clickhouse:v2"
-
 	// etcd distributed key-value store
 	Etcd = "oci.miren.cloud/etcd:v1"
 
@@ -18,6 +15,12 @@ const (
 
 	// Minio object storage server
 	Minio = "oci.miren.cloud/minio:v1"
+
+	// VictoriaLogs log storage server
+	VictoriaLogs = "oci.miren.cloud/victoria-logs:v1"
+
+	// VictoriaMetrics metrics storage server
+	VictoriaMetrics = "oci.miren.cloud/victoria-metrics:v1"
 
 	// Miren runtime server
 	Miren = "oci.miren.cloud/miren:latest"

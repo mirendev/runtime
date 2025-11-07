@@ -5,14 +5,11 @@ package serverconfig
 import (
 	"fmt"
 	"net"
+	"regexp"
 )
 
 // Validate validates the configuration
 func (c *Config) Validate() error {
-
-	if err := c.Clickhouse.Validate(); err != nil {
-		return fmt.Errorf("clickhouse: %w", err)
-	}
 
 	if err := c.Containerd.Validate(); err != nil {
 		return fmt.Errorf("containerd: %w", err)
@@ -39,48 +36,14 @@ func (c *Config) Validate() error {
 	if err := c.TLS.Validate(); err != nil {
 		return fmt.Errorf("tls: %w", err)
 	}
-	return nil
-}
 
-// Validate validates ClickHouseConfig
-func (c *ClickHouseConfig) Validate() error {
-
-	// Validate http_port
-	if c.HTTPPort != nil && (*c.HTTPPort < 1 || *c.HTTPPort > 65535) {
-		return fmt.Errorf("http_port must be between 1 and 65535, got %d", *c.HTTPPort)
+	if err := c.Victorialogs.Validate(); err != nil {
+		return fmt.Errorf("victorialogs: %w", err)
 	}
 
-	// Validate interserver_port
-	if c.InterserverPort != nil && (*c.InterserverPort < 1 || *c.InterserverPort > 65535) {
-		return fmt.Errorf("interserver_port must be between 1 and 65535, got %d", *c.InterserverPort)
+	if err := c.Victoriametrics.Validate(); err != nil {
+		return fmt.Errorf("victoriametrics: %w", err)
 	}
-
-	// Validate native_port
-	if c.NativePort != nil && (*c.NativePort < 1 || *c.NativePort > 65535) {
-		return fmt.Errorf("native_port must be between 1 and 65535, got %d", *c.NativePort)
-	}
-
-	// Check for port conflicts in ClickHouseConfig
-	seen := make(map[int]bool)
-	if c.HTTPPort != nil {
-		if seen[*c.HTTPPort] {
-			return fmt.Errorf("port conflict: port %d is used multiple times", *c.HTTPPort)
-		}
-		seen[*c.HTTPPort] = true
-	}
-	if c.InterserverPort != nil {
-		if seen[*c.InterserverPort] {
-			return fmt.Errorf("port conflict: port %d is used multiple times", *c.InterserverPort)
-		}
-		seen[*c.InterserverPort] = true
-	}
-	if c.NativePort != nil {
-		if seen[*c.NativePort] {
-			return fmt.Errorf("port conflict: port %d is used multiple times", *c.NativePort)
-		}
-		seen[*c.NativePort] = true
-	}
-
 	return nil
 }
 
@@ -177,6 +140,68 @@ func (c *TLSConfig) Validate() error {
 	}
 
 	// Check for port conflicts in TLSConfig
+
+	return nil
+}
+
+// Validate validates VictoriaLogsConfig
+func (c *VictoriaLogsConfig) Validate() error {
+
+	// Validate address
+	if c.Address != nil && *c.Address != "" {
+		if _, _, err := net.SplitHostPort(*c.Address); err != nil {
+			return fmt.Errorf("invalid address %q: %w", *c.Address, err)
+		}
+	}
+
+	// Validate http_port
+	if c.HTTPPort != nil && (*c.HTTPPort < 1 || *c.HTTPPort > 65535) {
+		return fmt.Errorf("http_port must be between 1 and 65535, got %d", *c.HTTPPort)
+	}
+
+	// Validate retention_period regex
+	if c.RetentionPeriod != nil && *c.RetentionPeriod != "" {
+		matched, err := regexp.MatchString(`^\d+(ms|s|m|h|d|w|y)$`, *c.RetentionPeriod)
+		if err != nil {
+			return fmt.Errorf("invalid regex pattern for retention_period: %w", err)
+		}
+		if !matched {
+			return fmt.Errorf("invalid retention_period %q: must match pattern %q", *c.RetentionPeriod, `^\d+(ms|s|m|h|d|w|y)$`)
+		}
+	}
+
+	// Check for port conflicts in VictoriaLogsConfig
+
+	return nil
+}
+
+// Validate validates VictoriaMetricsConfig
+func (c *VictoriaMetricsConfig) Validate() error {
+
+	// Validate address
+	if c.Address != nil && *c.Address != "" {
+		if _, _, err := net.SplitHostPort(*c.Address); err != nil {
+			return fmt.Errorf("invalid address %q: %w", *c.Address, err)
+		}
+	}
+
+	// Validate http_port
+	if c.HTTPPort != nil && (*c.HTTPPort < 1 || *c.HTTPPort > 65535) {
+		return fmt.Errorf("http_port must be between 1 and 65535, got %d", *c.HTTPPort)
+	}
+
+	// Validate retention_period regex
+	if c.RetentionPeriod != nil && *c.RetentionPeriod != "" {
+		matched, err := regexp.MatchString(`^\d+$`, *c.RetentionPeriod)
+		if err != nil {
+			return fmt.Errorf("invalid regex pattern for retention_period: %w", err)
+		}
+		if !matched {
+			return fmt.Errorf("invalid retention_period %q: must match pattern %q", *c.RetentionPeriod, `^\d+$`)
+		}
+	}
+
+	// Check for port conflicts in VictoriaMetricsConfig
 
 	return nil
 }

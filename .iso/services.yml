@@ -17,3 +17,16 @@ services:
       - http://etcd:2379
       - --initial-advertise-peer-urls
       - http://localhost:2380
+
+  victorialogs:
+    image: oci.miren.cloud/victoria-logs:v1
+    port: 9428
+
+  victoriametrics:
+    image: oci.miren.cloud/victoria-metrics:v1
+    port: 8428
+    command:
+      - -storageDataPath=/victoria-metrics-data
+      - -retentionPeriod=1
+      - -httpListenAddr=:8428
+      - -search.latencyOffset=2s

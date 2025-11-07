@@ -95,7 +95,7 @@ Environment variables:
 1. Same steps as above
 2. After restart, check logs: `INFO reattached logs to container`
 3. **App continues working** - requests succeed
-4. Logs continue being collected in ClickHouse
+4. Logs continue being collected in Victorialogs
 
 ## Response Format
 

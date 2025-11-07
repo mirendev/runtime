@@ -12,11 +12,8 @@ services:
       - miren-data:/var/lib/miren
     environment:
       - ETCD_ENDPOINTS=http://etcd:2379
-      - CLICKHOUSE_HOST=clickhouse
-      - CLICKHOUSE_PORT=9000
     depends_on:
       - etcd
-      - clickhouse
 
   etcd:
     image: oci.miren.cloud/etcd:v1
@@ -32,17 +29,7 @@ services:
     volumes:
       - etcd-data:/etcd-data
 
-  clickhouse:
-    image: oci.miren.cloud/clickhouse:v2
-    container_name: miren-clickhouse
-    environment:
-      - CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT=1
-      - CLICKHOUSE_PASSWORD=default
-    volumes:
-      - clickhouse-data:/var/lib/clickhouse
-
 
 volumes:
   miren-data:
   etcd-data:
-  clickhouse-data:

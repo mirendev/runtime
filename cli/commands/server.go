@@ -27,7 +27,6 @@ import (
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/clientconfig"
 	"miren.dev/runtime/components/autotls"
-	"miren.dev/runtime/components/clickhouse"
 	containerdcomp "miren.dev/runtime/components/containerd"
 	"miren.dev/runtime/components/coordinate"
 	"miren.dev/runtime/components/etcd"
@@ -36,6 +35,8 @@ import (
 	"miren.dev/runtime/components/ocireg"
 	"miren.dev/runtime/components/runner"
 	"miren.dev/runtime/components/scheduler"
+	"miren.dev/runtime/components/victorialogs"
+	"miren.dev/runtime/components/victoriametrics"
 	"miren.dev/runtime/metrics"
 	"miren.dev/runtime/observability"
 	"miren.dev/runtime/pkg/caauth"
@@ -294,57 +295,119 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 		}()
 	}
 
-	// Start embedded ClickHouse server if requested
-	if cfg.Clickhouse.GetStartEmbedded() {
-		ctx.Log.Info("starting embedded clickhouse server",
-			"http-port", cfg.Clickhouse.GetHTTPPort(),
-			"native-port", cfg.Clickhouse.GetNativePort(),
-			"interserver-port", cfg.Clickhouse.GetInterserverPort())
+	// Start embedded VictoriaLogs server if requested
+	if cfg.Victorialogs.GetStartEmbedded() {
+		ctx.Log.Info("starting embedded victorialogs server", "http-port", cfg.Victorialogs.GetHTTPPort())
 
 		// Get containerd client from registry
 		var cc *containerd.Client
 		err := ctx.Server.Resolve(&cc)
 		if err != nil {
-			ctx.Log.Error("failed to get containerd client for clickhouse", "error", err)
+			ctx.Log.Error("failed to get containerd client for victorialogs", "error", err)
 			return err
 		}
 
-		clickhouseComponent := clickhouse.NewClickHouseComponent(ctx.Log, cc, "miren", cfg.Server.GetDataPath())
+		victoriaLogsComponent := victorialogs.NewVictoriaLogsComponent(ctx.Log, cc, "miren", cfg.Server.GetDataPath())
 
-		clickhouseConfig := clickhouse.ClickHouseConfig{
-			HTTPPort:        cfg.Clickhouse.GetHTTPPort(),
-			NativePort:      cfg.Clickhouse.GetNativePort(),
-			InterServerPort: cfg.Clickhouse.GetInterserverPort(),
-			User:            "default",
-			Password:        "default",
+		victoriaLogsConfig := victorialogs.VictoriaLogsConfig{
+			HTTPPort:        cfg.Victorialogs.GetHTTPPort(),
+			RetentionPeriod: cfg.Victorialogs.GetRetentionPeriod(),
 		}
 
-		err = clickhouseComponent.Start(sub, clickhouseConfig)
+		err = victoriaLogsComponent.Start(sub, victoriaLogsConfig)
 		if err != nil {
-			ctx.Log.Error("failed to start clickhouse component", "error", err)
+			ctx.Log.Error("failed to start victorialogs component", "error", err)
 			return err
 		}
 
-		ctx.Log.Info("embedded clickhouse started",
-			"http-endpoint", clickhouseComponent.HTTPEndpoint(),
-			"native-endpoint", clickhouseComponent.NativeEndpoint())
+		ctx.Log.Info("embedded victorialogs started", "http-endpoint", victoriaLogsComponent.HTTPEndpoint())
 
-		// Register ClickHouse component in the registry for other components to use
-		ctx.Server.Override("clickhouse-address", clickhouseComponent.NativeEndpoint())
+		// Register VictoriaLogs component in the registry for other components to use
+		ctx.Server.Override("victorialogs-address", victoriaLogsComponent.HTTPEndpoint())
+		ctx.Server.Override("victorialogs-timeout", 30*time.Second)
 
 		// Ensure cleanup on exit
 		defer func() {
-			ctx.Log.Info("stopping embedded clickhouse")
+			ctx.Log.Info("stopping embedded victorialogs")
 			stopCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
-			if err := clickhouseComponent.Stop(stopCtx); err != nil {
-				ctx.Log.Error("failed to stop clickhouse component", "error", err)
+			if err := victoriaLogsComponent.Stop(stopCtx); err != nil {
+				ctx.Log.Error("failed to stop victorialogs component", "error", err)
 			}
 		}()
-	} else if cfg.Clickhouse.GetAddress() != "" {
-		// Override ClickHouse address if provided (for external ClickHouse)
-		ctx.Log.Info("using external clickhouse", "address", cfg.Clickhouse.GetAddress())
-		ctx.Server.Override("clickhouse-address", cfg.Clickhouse.GetAddress())
+	} else {
+		if cfg.Victorialogs.GetAddress() == "" {
+			ctx.Log.Error("victorialogs address specified but embedded victorialogs not started", "address", cfg.Victorialogs.GetAddress())
+			return fmt.Errorf("victorialogs address specified but embedded victorialogs not started")
+		}
+
+		// Override VictoriaLogs address if provided (for external VictoriaLogs)
+		ctx.Log.Info("using external victorialogs", "address", cfg.Victorialogs.GetAddress())
+		ctx.Server.Override("victorialogs-address", cfg.Victorialogs.GetAddress())
+		ctx.Server.Override("victorialogs-timeout", 30*time.Second)
+	}
+
+	// Start embedded VictoriaMetrics server if requested
+	if cfg.Victoriametrics.GetStartEmbedded() {
+		ctx.Log.Info("starting embedded victoriametrics server", "http-port", cfg.Victoriametrics.GetHTTPPort())
+
+		// Get containerd client from registry
+		var cc *containerd.Client
+		err := ctx.Server.Resolve(&cc)
+		if err != nil {
+			ctx.Log.Error("failed to get containerd client for victoriametrics", "error", err)
+			return err
+		}
+
+		victoriaMetricsComponent := victoriametrics.NewVictoriaMetricsComponent(ctx.Log, cc, "miren", cfg.Server.GetDataPath())
+
+		victoriaMetricsConfig := victoriametrics.VictoriaMetricsConfig{
+			HTTPPort:        cfg.Victoriametrics.GetHTTPPort(),
+			RetentionPeriod: cfg.Victoriametrics.GetRetentionPeriod(),
+		}
+
+		err = victoriaMetricsComponent.Start(sub, victoriaMetricsConfig)
+		if err != nil {
+			ctx.Log.Error("failed to start victoriametrics component", "error", err)
+			return err
+		}
+
+		ctx.Log.Info("embedded victoriametrics started", "http-endpoint", victoriaMetricsComponent.HTTPEndpoint())
+
+		// Register VictoriaMetrics component in the registry for other components to use
+		ctx.Server.Override("victoriametrics-address", victoriaMetricsComponent.HTTPEndpoint())
+		ctx.Server.Override("victoriametrics-timeout", 30*time.Second)
+
+		// Ensure cleanup on exit
+		defer func() {
+			ctx.Log.Info("stopping embedded victoriametrics")
+
+			// First, close the writer to flush any remaining metrics
+			var writer *metrics.VictoriaMetricsWriter
+			if err := ctx.Server.Resolve(&writer); err == nil && writer != nil {
+				ctx.Log.Info("flushing and closing victoriametrics writer")
+				if err := writer.Close(); err != nil {
+					ctx.Log.Error("failed to close victoriametrics writer", "error", err)
+				}
+			}
+
+			// Then stop the VictoriaMetrics component
+			stopCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			if err := victoriaMetricsComponent.Stop(stopCtx); err != nil {
+				ctx.Log.Error("failed to stop victoriametrics component", "error", err)
+			}
+		}()
+	} else {
+		if cfg.Victoriametrics.GetAddress() == "" {
+			ctx.Log.Error("victoriametrics address specified but embedded victorialogs not started", "address", cfg.Victorialogs.GetAddress())
+			return fmt.Errorf("victoriametrics address specified but embedded victorialogs not started")
+		}
+
+		// Override VictoriaMetrics address if provided (for external VictoriaMetrics)
+		ctx.Log.Info("using external victoriametrics", "address", cfg.Victoriametrics.GetAddress())
+		ctx.Server.Override("victoriametrics-address", cfg.Victoriametrics.GetAddress())
+		ctx.Server.Override("victoriametrics-timeout", 30*time.Second)
 	}
 
 	klog.SetLogger(logr.FromSlogHandler(ctx.Log.With("module", "global").Handler()))
@@ -354,7 +417,7 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 	var (
 		cpu  metrics.CPUUsage
 		mem  metrics.MemoryUsage
-		logs observability.LogReader
+		logs *observability.LogReader
 	)
 
 	err = ctx.Server.Populate(&mem)
@@ -369,9 +432,9 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 		return err
 	}
 
-	err = ctx.Server.Populate(&logs)
+	err = ctx.Server.Resolve(&logs)
 	if err != nil {
-		ctx.Log.Error("failed to populate log reader", "error", err)
+		ctx.Log.Error("failed to resolve log reader", "error", err)
 		return err
 	}
 
@@ -481,7 +544,7 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 		Mem:             &mem,
 		Cpu:             &cpu,
 		HTTP:            &httpMetrics,
-		Logs:            &logs,
+		Logs:            logs,
 	})
 
 	err = co.Start(sub)

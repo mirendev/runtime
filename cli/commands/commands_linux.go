@@ -2,8 +2,6 @@ package commands
 
 import (
 	"context"
-	"database/sql"
-	"fmt"
 	"log/slog"
 	"net/netip"
 	"os"
@@ -11,9 +9,9 @@ import (
 
 	"github.com/mitchellh/cli"
 
-	"github.com/ClickHouse/clickhouse-go/v2"
 	containerd "github.com/containerd/containerd/v2/client"
 	buildkit "github.com/moby/buildkit/client"
+	"miren.dev/runtime/metrics"
 	"miren.dev/runtime/observability"
 	"miren.dev/runtime/pkg/asm"
 	"miren.dev/runtime/pkg/asm/autoreg"
@@ -91,17 +89,21 @@ func (c *Context) setupServerComponents(ctx context.Context, reg *asm.Registry) 
 
 	reg.Register("service-subnet", netip.MustParsePrefix("10.10.0.0/16"))
 
-	// Configure ClickHouse address from environment variables or default
-	clickhouseHost := os.Getenv("CLICKHOUSE_HOST")
-	if clickhouseHost == "" {
-		clickhouseHost = "clickhouse"
+	// VictoriaLogs configuration
+	victoriaLogsAddr := os.Getenv("VICTORIALOGS_ADDR")
+	if victoriaLogsAddr == "" {
+		victoriaLogsAddr = "localhost:9428"
 	}
-	clickhousePort := os.Getenv("CLICKHOUSE_PORT")
-	if clickhousePort == "" {
-		clickhousePort = "9000"
+	reg.Register("victorialogs-address", victoriaLogsAddr)
+	reg.Register("victorialogs-timeout", 30*time.Second)
+
+	// VictoriaMetrics configuration
+	victoriaMetricsAddr := os.Getenv("VICTORIAMETRICS_ADDR")
+	if victoriaMetricsAddr == "" {
+		victoriaMetricsAddr = "localhost:8428"
 	}
-	reg.Register("clickhouse-address", fmt.Sprintf("%s:%s", clickhouseHost, clickhousePort))
-	reg.Register("clickhouse-debug", false)
+	reg.Register("victoriametrics-address", victoriaMetricsAddr)
+	reg.Register("victoriametrics-timeout", 30*time.Second)
 
 	reg.Register("container_idle_timeout", time.Minute)
 
@@ -110,35 +112,36 @@ func (c *Context) setupServerComponents(ctx context.Context, reg *asm.Registry) 
 
 	reg.Register("rollback_window", 2)
 
-	reg.ProvideName("clickhouse", func(opts struct {
+	// VictoriaMetrics writer provider
+	reg.ProvideName("victoriametrics-writer", func(opts struct {
 		Log     *slog.Logger
-		Address string `asm:"clickhouse-address"`
-		Debug   bool   `asm:"clickhouse-debug"`
-	}) *sql.DB {
-		return clickhouse.OpenDB(&clickhouse.Options{
-			Addr: []string{opts.Address},
-			Auth: clickhouse.Auth{
-				Database: "default",
-				Username: "default",
-				Password: "default",
-			},
-			DialTimeout: time.Second * 30,
-			Compression: &clickhouse.Compression{
-				Method: clickhouse.CompressionLZ4,
-			},
-			Debug: opts.Debug,
-			Debugf: func(format string, v ...interface{}) {
-				opts.Log.Debug(fmt.Sprintf(format, v...))
-			},
-		})
+		Address string        `asm:"victoriametrics-address"`
+		Timeout time.Duration `asm:"victoriametrics-timeout"`
+	}) *metrics.VictoriaMetricsWriter {
+		writer := metrics.NewVictoriaMetricsWriter(opts.Log, opts.Address, opts.Timeout)
+		writer.Start()
+		return writer
 	})
 
-	reg.Provide(func() observability.LogWriter {
-		return &observability.PersistentLogWriter{}
+	// VictoriaMetrics reader provider
+	reg.ProvideName("victoriametrics-reader", func(opts struct {
+		Log     *slog.Logger
+		Address string        `asm:"victoriametrics-address"`
+		Timeout time.Duration `asm:"victoriametrics-timeout"`
+	}) *metrics.VictoriaMetricsReader {
+		return metrics.NewVictoriaMetricsReader(opts.Log, opts.Address, opts.Timeout)
 	})
 
-	reg.Provide(func() *observability.StatusMonitor {
-		return &observability.StatusMonitor{}
+	reg.Provide(func(opts struct {
+		Log *slog.Logger
+	}) *observability.StatusMonitor {
+		log := opts.Log
+		if log == nil {
+			log = slog.Default()
+		}
+		return &observability.StatusMonitor{
+			Log: log,
+		}
 	})
 
 	for _, f := range autoreg.All() {

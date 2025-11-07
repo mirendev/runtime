@@ -63,7 +63,7 @@ func (r *Registry) buildByType(field reflect.Value, tag string) (reflect.Value, 
 
 	var (
 		builder reflect.Value
-		ok      bool
+		found   []reflect.Type
 	)
 
 	for k, v := range r.builders {
@@ -72,13 +72,17 @@ func (r *Registry) buildByType(field reflect.Value, tag string) (reflect.Value, 
 		}
 
 		if isAssignableTo(field.Type(), k.typ) {
-			ok = true
+			found = append(found, k.typ)
 			builder = v
-			break
 		}
 	}
 
-	if !ok {
+	if len(found) > 1 {
+		return reflect.Value{},
+			fmt.Errorf("multiple builders found for type %s (name: %s, types: %v)", field.Type(), tag, found)
+	}
+
+	if len(found) == 0 {
 		// Special case: for pointers to structs, we have an implicit builder
 		// that creates an empty struct BUT ONLY if the struct comes from
 		// within the runtime package. This prevents us from making random

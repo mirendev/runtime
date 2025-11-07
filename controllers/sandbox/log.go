@@ -18,14 +18,14 @@ type SandboxLogs struct {
 	attrs  map[string]string
 	buf    bytes.Buffer
 	stream observability.LogStream
-	lw     *observability.PersistentLogWriter
+	lw     observability.LogWriter
 }
 
 func NewSandboxLogs(
 	log *slog.Logger,
 	entity string,
 	attrs map[string]string,
-	lw *observability.PersistentLogWriter,
+	lw observability.LogWriter,
 ) *SandboxLogs {
 	return &SandboxLogs{
 		log:    log,

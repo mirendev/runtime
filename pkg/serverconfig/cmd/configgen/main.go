@@ -56,6 +56,7 @@ type CLIConfig struct {
 type Validation struct {
 	Enum   []string `yaml:"enum"`
 	Format string   `yaml:"format"`
+	Regex  string   `yaml:"regex"`
 	Min    *int     `yaml:"min"`
 	Max    *int     `yaml:"max"`
 	Port   bool     `yaml:"port"`
@@ -520,11 +521,14 @@ func Load(configPath string, flags *CLIFlags, log *slog.Logger) (*Config, error)
 		if cfg.Etcd.StartEmbedded == nil {
 			cfg.Etcd.StartEmbedded = boolPtr(true)
 		}
-		if cfg.Clickhouse.StartEmbedded == nil {
-			cfg.Clickhouse.StartEmbedded = boolPtr(true)
-		}
 		if cfg.Containerd.StartEmbedded == nil {
 			cfg.Containerd.StartEmbedded = boolPtr(true)
+		}
+		if cfg.Victorialogs.StartEmbedded == nil {
+			cfg.Victorialogs.StartEmbedded = boolPtr(true)
+		}
+		if cfg.Victoriametrics.StartEmbedded == nil {
+			cfg.Victoriametrics.StartEmbedded = boolPtr(true)
 		}
 	}
 
@@ -665,6 +669,7 @@ package {{.Package}}
 import (
 	"fmt"
 	"net"
+	"regexp"
 )
 
 // Validate validates the configuration
@@ -721,6 +726,18 @@ func (c *{{$name}}) Validate() error {
 		return fmt.Errorf("{{$fname}} must be between 1 and 65535, got %d", *c.{{$fname | title}})
 	}
 	{{end}}
+	{{if $field.Validation.Regex}}
+	// Validate {{$fname}} regex
+	if c.{{$fname | title}} != nil && *c.{{$fname | title}} != "" {
+		matched, err := regexp.MatchString(` + "`{{$field.Validation.Regex}}`" + `, *c.{{$fname | title}})
+		if err != nil {
+			return fmt.Errorf("invalid regex pattern for {{$fname}}: %w", err)
+		}
+		if !matched {
+			return fmt.Errorf("invalid {{$fname}} %q: must match pattern %q", *c.{{$fname | title}}, ` + "`{{$field.Validation.Regex}}`" + `)
+		}
+	}
+	{{end}}
 	{{if $field.Validation.Min}}
 	// Validate {{$fname}} minimum
 	if c.{{$fname | title}} != nil && *c.{{$fname | title}} < {{$field.Validation.Min}} {
@@ -750,7 +767,7 @@ func (c *{{$name}}) Validate() error {
 	{{end}}
 	
 	// Check for port conflicts in {{$name}}
-	{{- if or (eq $name "EtcdConfig") (eq $name "ClickHouseConfig")}}
+	{{- if or (eq $name "EtcdConfig") }}
 	seen := make(map[int]bool)
 	{{- range $fname, $field := $config.Fields}}
 	{{- if $field.Validation}}{{if $field.Validation.Port}}

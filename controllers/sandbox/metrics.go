@@ -148,7 +148,7 @@ func (m *Metrics) Snapshot(ctx context.Context, req *metric_v1alpha.SandboxMetri
 	return nil
 }
 
-func (m *Metrics) writeStatsToClickhouse(ctx context.Context) error {
+func (m *Metrics) writeStatsToStorage(ctx context.Context) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -214,8 +214,8 @@ func (m *Metrics) Monitor(ctx context.Context) {
 	for {
 		select {
 		case <-ticker.C:
-			if err := m.writeStatsToClickhouse(ctx); err != nil {
-				m.Log.Error("failed to write stats to Clickhouse", "err", err)
+			if err := m.writeStatsToStorage(ctx); err != nil {
+				m.Log.Error("failed to write stats to storage", "err", err)
 			}
 		case <-ctx.Done():
 			return

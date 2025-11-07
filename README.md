@@ -57,7 +57,6 @@ make dev-tmux
 The development environment automatically sets up:
 - containerd for container runtime
 - etcd for state storage
-- ClickHouse for metrics
 
 ### Building
 

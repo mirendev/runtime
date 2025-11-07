@@ -29,7 +29,6 @@ func ServerConfigGenerate(ctx *Context, opts struct {
 	// Apply mode defaults inline since we're not using Load()
 	if cfg.GetMode() == "standalone" {
 		cfg.Etcd.SetStartEmbedded(true)
-		cfg.Clickhouse.SetStartEmbedded(true)
 		cfg.Containerd.SetStartEmbedded(true)
 	}
 

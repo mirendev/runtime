@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -50,14 +51,23 @@ func TestSandboxLifecycleEndToEnd(t *testing.T) {
 	r.Equal(200, resp.StatusCode)
 	r.Contains(string(body), "Welcome to nginx!")
 
-	// Fetch logs from app
-	var logsCode int
-	output, err := testutils.CaptureStdout(func() {
-		logsCode = cli.Run([]string{"miren", "logs", "--config", cfgPath, "-a", "nginx"})
-	})
-	r.NoError(err)
-	r.Equal(0, logsCode)
-	r.Contains(output, `"GET / HTTP/1.1"`)
+	//time.Sleep( time.Second)
+
+	require.Eventually(t, func() bool {
+		// Fetch logs from app
+		var logsCode int
+		output, err := testutils.CaptureStdout(func() {
+			logsCode = cli.Run([]string{"miren", "logs", "--config", cfgPath, "-a", "nginx"})
+		})
+		if err != nil {
+			return false
+		}
+		if logsCode != 0 {
+			return false
+		}
+
+		return strings.Contains(output, `"GET / HTTP/1.1"`)
+	}, 30*time.Second, time.Second, "waiting for logs to appear")
 }
 
 func writeTempContents(t *testing.T, filename, contents string) string {

@@ -12,7 +12,7 @@
 # For example: MIREN_SERVER_ADDRESS, MIREN_ETCD_ENDPOINTS
 
 # Server mode: "standalone" or "distributed"
-# In standalone mode, embedded services (etcd, clickhouse, containerd) are automatically started
+# In standalone mode, embedded services (etcd, containerd) are automatically started
 mode = "standalone"
 
 [server]
@@ -69,22 +69,6 @@ client_port = 12379
 peer_port = 12380
 http_client_port = 12381
 
-[clickhouse]
-# Start an embedded ClickHouse server (automatically true in standalone mode)
-# SECURITY NOTE: The embedded ClickHouse instance is intended for local/standalone
-# use only. Do not expose it without proper authentication and TLS. For production
-# deployments, use an external ClickHouse instance with hardened authentication.
-start_embedded = false
-
-# Ports for embedded ClickHouse (only used when start_embedded = true)
-http_port = 8223
-native_port = 9009
-interserver_port = 9010
-
-# External ClickHouse address (only used when start_embedded = false)
-# Example: "clickhouse.example.com:9000"
-address = ""
-
 [containerd]
 # Start an embedded containerd daemon (automatically true in standalone mode)
 start_embedded = false
@@ -115,9 +99,6 @@ socket_path = ""
 #
 # [etcd]
 # endpoints = ["http://etcd-1:2379", "http://etcd-2:2379", "http://etcd-3:2379"]
-#
-# [clickhouse]
-# address = "clickhouse.prod.example.com:9000"
 #
 # [containerd]
 # socket_path = "/run/containerd/containerd.sock"

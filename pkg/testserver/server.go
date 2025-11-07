@@ -53,8 +53,26 @@ func TestServer(t *testing.T) error {
 	// Create a cancellable context
 	ctx, ctxCancel := context.WithCancel(ctx)
 	eg, sub := errgroup.WithContext(ctx)
-	reg, cleanup := testutils.Registry(observability.TestInject)
+	reg, cleanup := testutils.Registry()
 	t.Cleanup(cleanup)
+
+	// Don't use observability.TestInject because it injects a LogWriter that
+	// is a no-op. The registry appears to have a bug where it isn't always picking
+	// the same implementation, and sometimes it picks the DebugLogWriter and the test
+	// fails because of that.
+
+	reg.Provide(func(opts struct {
+		Log *slog.Logger
+	}) *observability.StatusMonitor {
+		log := opts.Log
+		if log == nil {
+			log = slog.Default()
+		}
+		return &observability.StatusMonitor{
+			Log: log,
+			//entities: make(map[string]*EntityStatus),
+		}
+	})
 
 	// Mirroring defaults from cli/commands/dev.go
 	optsAddress := "localhost:8443"

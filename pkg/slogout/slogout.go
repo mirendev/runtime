@@ -1,6 +1,6 @@
 // Package slogout provides adapters to route container output through slog.Logger
 // instead of directly to stdout/stderr. This is useful for modules that launch
-// containers (like etcd and clickhouse) where we want structured logging instead
+// containers (like etcd) where we want structured logging instead
 // of raw container output mixed with our application logs.
 package slogout
 
@@ -292,7 +292,7 @@ func parseLogLevel(levelStr string) slog.Level {
 
 // WithLogger creates a cio.Creator that routes container output through slog.Logger
 // instead of the default stdio. The module parameter is used to tag log entries
-// with the source module (e.g., "etcd", "clickhouse").
+// with the source module (e.g., "etcd").
 func WithLogger(logger *slog.Logger, module string, options ...LoggerOption) cio.Creator {
 	opts := LoggerOpts{}
 	for _, option := range options {

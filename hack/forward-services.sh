@@ -29,7 +29,7 @@ if [ $MISSING_DEPS -eq 1 ]; then
 fi
 
 # Try to get IPs automatically from the container
-if [ -z "$ETCD_IP" ] || [ -z "$CLICKHOUSE_IP" ]; then
+if [ -z "$ETCD_IP" ]; then
     echo "Getting service IPs from container..."
     
     # Find the container PID running bash
@@ -37,11 +37,10 @@ if [ -z "$ETCD_IP" ] || [ -z "$CLICKHOUSE_IP" ]; then
     
     if [ -n "$CONTAINER_PID" ]; then
         # Get the IPs using nsenter
-        SERVICE_IPS=$(docker exec dagger-engine-v0.18.9 nsenter -t $CONTAINER_PID -m -n sh -c 'getent hosts etcd clickhouse' 2>/dev/null)
+        SERVICE_IPS=$(docker exec dagger-engine-v0.18.9 nsenter -t $CONTAINER_PID -m -n sh -c 'getent hosts etcd' 2>/dev/null)
         
         if [ -n "$SERVICE_IPS" ]; then
             ETCD_IP=$(echo "$SERVICE_IPS" | grep etcd | awk '{print $1}')
-            CLICKHOUSE_IP=$(echo "$SERVICE_IPS" | grep clickhouse | awk '{print $1}')
             echo "✓ Found service IPs automatically"
         else
             echo "✗ Could not get service IPs automatically"
@@ -53,15 +52,13 @@ fi
 
 # Fallback to defaults if auto-detection failed
 ETCD_IP=${ETCD_IP:-10.87.3.128}
-CLICKHOUSE_IP=${CLICKHOUSE_IP:-10.87.3.129}
 
 echo "=== Forwarding Debug Services ==="
 echo "Using IPs:"
 echo "  etcd:       $ETCD_IP"
-echo "  ClickHouse: $CLICKHOUSE_IP"
 echo ""
 echo "To update IPs, run:"
-echo "  ETCD_IP=10.87.x.x CLICKHOUSE_IP=10.87.x.x $0"
+echo "  ETCD_IP=10.87.x.x $0"
 echo ""
 
 # Kill any existing forwards
@@ -83,28 +80,6 @@ if socat TCP-LISTEN:2379,reuseaddr,fork EXEC:"docker exec -i dagger-engine-v0.18
     echo "✓ etcd forwarded: localhost:2379 → $ETCD_IP:2379"
 else
     echo "✗ Failed to forward etcd port"
-    # Kill already started processes
-    for pid in ${SOCAT_PIDS[@]}; do kill $pid 2>/dev/null; done
-    exit 1
-fi
-
-# ClickHouse native protocol
-if socat TCP-LISTEN:9000,reuseaddr,fork EXEC:"docker exec -i dagger-engine-v0.18.9 nc $CLICKHOUSE_IP 9000" & then
-    SOCAT_PIDS+=($!)
-    echo "✓ ClickHouse native forwarded: localhost:9000 → $CLICKHOUSE_IP:9000"
-else
-    echo "✗ Failed to forward ClickHouse native port"
-    # Kill already started processes
-    for pid in ${SOCAT_PIDS[@]}; do kill $pid 2>/dev/null; done
-    exit 1
-fi
-
-# ClickHouse HTTP
-if socat TCP-LISTEN:8123,reuseaddr,fork EXEC:"docker exec -i dagger-engine-v0.18.9 nc $CLICKHOUSE_IP 8123" & then
-    SOCAT_PIDS+=($!)
-    echo "✓ ClickHouse HTTP forwarded: localhost:8123 → $CLICKHOUSE_IP:8123"
-else
-    echo "✗ Failed to forward ClickHouse HTTP port"
     # Kill already started processes
     for pid in ${SOCAT_PIDS[@]}; do kill $pid 2>/dev/null; done
     exit 1
@@ -132,22 +107,16 @@ fi
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
     # Script is being run directly
     echo "Environment variables to export:"
-    echo "  export S3_URL=http://localhost:9001"
     echo "  export ETCD_ENDPOINTS=localhost:2379"  
-    echo "  export CLICKHOUSE_URL=http://localhost:8123"
     echo ""
     echo "To automatically export these variables, run:"
     echo "  source ./hack/forward-services.sh"
 else
     # Script is being sourced
-    export S3_URL=http://localhost:9001
     export ETCD_ENDPOINTS=localhost:2379
-    export CLICKHOUSE_URL=http://localhost:8123
     
     echo "✓ Environment variables exported:"
-    echo "  S3_URL=$S3_URL"
     echo "  ETCD_ENDPOINTS=$ETCD_ENDPOINTS"
-    echo "  CLICKHOUSE_URL=$CLICKHOUSE_URL"
     
     # Build miren if needed and create 'm' alias
     SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
@@ -169,7 +138,7 @@ fi
 
 echo ""
 if [[ "${BASH_SOURCE[0]}" != "${0}" ]] && [[ -f "$MIREN_BIN" ]]; then
-    echo "You can now run: m server -vv --etcd=localhost:2379 --clickhouse-addr=localhost:9000"
+    echo "You can now run: m server -vv --etcd=localhost:2379"
 else
-    echo "You can now run: ./bin/miren server -vv --etcd=localhost:2379 --clickhouse-addr=localhost:9000"
+    echo "You can now run: ./bin/miren server -vv --etcd=localhost:2379"
 fi

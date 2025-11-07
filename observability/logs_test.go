@@ -2,7 +2,6 @@ package observability_test
 
 import (
 	"context"
-	"database/sql"
 	"testing"
 	"time"
 
@@ -55,17 +54,5 @@ func TestLogs(t *testing.T) {
 		r.Len(entries, 1)
 
 		r.Equal("this is a log line", entries[0].Body)
-
-		var db *sql.DB
-
-		err = reg.ResolveNamed(&db, "clickhouse")
-		r.NoError(err)
-
-		var count int
-
-		err = db.QueryRow("SELECT count() FROM logs WHERE entity = ?", id).Scan(&count)
-		r.NoError(err)
-
-		r.Equal(1, count)
 	})
 }

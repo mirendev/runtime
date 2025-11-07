@@ -2,18 +2,23 @@ package metrics
 
 import (
 	"context"
-	"database/sql"
+	"crypto/rand"
+	"fmt"
 	"log/slog"
+	"strconv"
 	"time"
 
+	"github.com/oklog/ulid/v2"
 	"miren.dev/runtime/pkg/asm/autoreg"
 	"miren.dev/runtime/pkg/units"
 )
 
 type MemoryUsage struct {
-	Log *slog.Logger
+	Log    *slog.Logger
+	Writer *VictoriaMetricsWriter `asm:"victoriametrics-writer,optional"`
+	Reader *VictoriaMetricsReader `asm:"victoriametrics-reader,optional"`
 
-	DB *sql.DB `asm:"clickhouse"`
+	instance string
 }
 
 var _ = autoreg.Register[MemoryUsage]()
@@ -23,48 +28,10 @@ func (m *MemoryUsage) Populated() error {
 }
 
 func (m *MemoryUsage) Setup() error {
-	stmts := []string{`
--- Table to store cgroup memory measurements
-CREATE TABLE IF NOT EXISTS memory_usage (
-    timestamp DateTime64(3), -- Millisecond precision timestamp
-		entity LowCardinality(String), -- Entity identifier
-    memory_usage UInt64,     -- Memory usage in bytes
+	// Generate unique instance ID using ULID
+	m.instance = ulid.MustNew(ulid.Now(), rand.Reader).String()
 
-		attributes Map(LowCardinality(String), String) CODEC(ZSTD(1)),
-    INDEX idx_attr_key mapKeys(attributes) TYPE bloom_filter(0.01) GRANULARITY 1,
-    INDEX idx_attr_value mapValues(attributes) TYPE bloom_filter(0.01) GRANULARITY 1
-    
-    -- Order by timestamp and container for efficient time-series queries
-    -- Partition by day to allow efficient data retention and queries
-    -- Using ReplacingMergeTree to handle potential duplicate measurements
-) ENGINE = ReplacingMergeTree
-PARTITION BY toYYYYMMDD(timestamp)
-ORDER BY (timestamp, entity);`,
-		`
--- Create a materialized view with minute-level aggregation
--- This will improve query performance for minute-level analysis
-CREATE MATERIALIZED VIEW IF NOT EXISTS memory_usage_minute
-ENGINE = AggregatingMergeTree()
-PARTITION BY toYYYYMMDD(timestamp_minute)
-ORDER BY (timestamp_minute, entity)
-AS SELECT
-    toStartOfMinute(timestamp) as timestamp_minute,
-    entity,
-    max(memory_usage) as max_memory_usage
-FROM memory_usage
-GROUP BY
-    timestamp_minute,
-    entity;
-
-`}
-
-	for _, stmt := range stmts {
-		_, err := m.DB.Exec(stmt)
-		if err != nil {
-			return err
-		}
-	}
-
+	m.Log.Info("memory usage metrics initialized with VictoriaMetrics backend", "instance", m.instance)
 	return nil
 }
 
@@ -75,13 +42,27 @@ func (m *MemoryUsage) RecordUsage(
 	memory units.Bytes,
 	attrs map[string]string,
 ) error {
-	_, err := m.DB.ExecContext(ctx, `
-    INSERT INTO memory_usage 
-      (timestamp, entity, memory_usage, attributes)
-    VALUES (toDateTime64('?', 6), ?, ?, ?)
-`,
-		ts.UnixMicro(), entity, memory.Int64(), attrs)
-	return err
+	if m.Writer == nil {
+		return nil
+	}
+
+	// Build labels from attributes
+	labels := make(map[string]string)
+	labels["entity"] = entity
+	labels["instance"] = m.instance
+	for k, v := range attrs {
+		labels[k] = v
+	}
+
+	// Write memory usage in bytes
+	point := MetricPoint{
+		Name:      "memory_usage_bytes",
+		Labels:    labels,
+		Value:     float64(memory.Int64()),
+		Timestamp: ts,
+	}
+
+	return m.Writer.WritePoint(ctx, point)
 }
 
 type MemoryUsageAtTime struct {
@@ -90,38 +71,37 @@ type MemoryUsageAtTime struct {
 }
 
 func (m *MemoryUsage) UsageLastHour(entity string) ([]MemoryUsageAtTime, error) {
-	query := `
--- Query to get memory usage over the last hour in 1-minute increments
--- Using the materialized view for better performance
-SELECT
-    timestamp_minute,
-    max_memory_usage,
-FROM memory_usage_minute
-WHERE
-    entity = @entity AND
-    timestamp_minute >= now() - INTERVAL 1 HOUR
-ORDER BY timestamp_minute ASC
-WITH FILL 
-	   FROM toStartOfMinute(now() - INTERVAL 1 HOUR) 
-	   TO toStartOfMinute(now())
-	   STEP INTERVAL 1 MINUTE;
-`
+	if m.Reader == nil {
+		return nil, fmt.Errorf("reader not initialized")
+	}
 
-	rows, err := m.DB.Query(query, sql.Named("entity", entity))
+	// Align to minute boundaries for predictable evaluation points
+	now := time.Now()
+	end := time.Unix(now.Unix()/60*60, 0)
+	start := end.Add(-1 * time.Hour)
+
+	// Query max memory usage per minute over the last hour
+	query := fmt.Sprintf(`max_over_time(memory_usage_bytes{entity="%s"}[1m])`, entity)
+	result, err := m.Reader.RangeQuery(context.Background(), query, start, end, "1m")
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to query memory usage: %w", err)
 	}
 
 	var results []MemoryUsageAtTime
+	if len(result.Data.Result) > 0 {
+		for _, value := range result.Data.Result[0].Values {
+			timestamp, _ := value[0].(float64)
+			memoryStr, _ := value[1].(string)
+			memoryBytes, _ := strconv.ParseFloat(memoryStr, 64)
 
-	for rows.Next() {
-		var result MemoryUsageAtTime
-		err = rows.Scan(&result.Timestamp, &result.Memory)
-		if err != nil {
-			return nil, err
+			// Shift timestamp back 1 minute to represent bucket start time
+			// (VictoriaMetrics returns the end of the measurement window)
+			results = append(results, MemoryUsageAtTime{
+				Timestamp: time.Unix(int64(timestamp), 0).Add(-1 * time.Minute),
+				Memory:    units.Bytes(int64(memoryBytes)),
+			})
 		}
-		results = append(results, result)
 	}
 
-	return results, err
+	return results, nil
 }
