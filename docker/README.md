@@ -44,7 +44,6 @@ The Docker setup includes:
 
 - **Miren Container**: Contains miren server with containerd and container runtime
 - **etcd**: Distributed key-value store for state management  
-- **ClickHouse**: Analytics database for metrics
 
 ## Configuration
 
@@ -105,4 +104,3 @@ Ensure no other services are using the required ports:
 - 8080 (HTTP ingress)
 - 8443 (Miren server QUIC)
 - 2379 (etcd)
-- 9000, 8123 (ClickHouse)

@@ -5,11 +5,6 @@ package serverconfig
 // CLIFlags represents command-line flags for server configuration
 // All fields are pointers to distinguish between set and unset values
 type CLIFlags struct {
-	ClickHouseConfigAddress              *string  `long:"clickhouse-addr" description:"ClickHouse address (when not using embedded)"`
-	ClickHouseConfigHTTPPort             *int     `long:"clickhouse-http-port" description:"ClickHouse HTTP port"`
-	ClickHouseConfigInterserverPort      *int     `long:"clickhouse-interserver-port" description:"ClickHouse inter-server port"`
-	ClickHouseConfigNativePort           *int     `long:"clickhouse-native-port" description:"ClickHouse native port"`
-	ClickHouseConfigStartEmbedded        *bool    `long:"start-clickhouse" description:"Start embedded ClickHouse server"`
 	ConfigFile                           *string  `long:"config" description:"Path to configuration file"`
 	Mode                                 *string  `long:"mode" short:"m" description:"Server mode (standalone, distributed)"`
 	ContainerdConfigBinaryPath           *string  `long:"containerd-binary" description:"Path to containerd binary"`

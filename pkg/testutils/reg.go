@@ -2,7 +2,6 @@ package testutils
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"log/slog"
 	"net/netip"
@@ -24,8 +23,6 @@ import (
 	"miren.dev/runtime/pkg/netdb"
 	"miren.dev/runtime/pkg/rpc"
 	"miren.dev/runtime/pkg/slogfmt"
-
-	clickhouse "github.com/ClickHouse/clickhouse-go/v2"
 )
 
 func Registry(extra ...func(*asm.Registry)) (*asm.Registry, func()) {
@@ -123,29 +120,6 @@ func Registry(extra ...func(*asm.Registry)) (*asm.Registry, func()) {
 	}))
 
 	r.Register("log", log)
-
-	r.Register("clickhouse-address", "clickhouse:9000")
-
-	r.ProvideName("clickhouse", func(opts struct {
-		Log *slog.Logger
-	}) *sql.DB {
-		return clickhouse.OpenDB(&clickhouse.Options{
-			Addr: []string{"clickhouse:9000"},
-			Auth: clickhouse.Auth{
-				Database: "default",
-				Username: "default",
-				Password: "default",
-			},
-			DialTimeout: time.Second * 30,
-			Compression: &clickhouse.Compression{
-				Method: clickhouse.CompressionLZ4,
-			},
-			Debug: false,
-			Debugf: func(format string, v ...interface{}) {
-				opts.Log.Debug(fmt.Sprintf(format, v...))
-			},
-		})
-	})
 
 	r.Register("victorialogs-address", "victorialogs:9428")
 	r.Register("victorialogs-timeout", 30*time.Second)

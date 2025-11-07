@@ -520,9 +520,9 @@ func TestMemoryUsage_Integration(t *testing.T) {
 		require.NoError(t, err)
 		require.Len(t, usage, 3)
 
-		assert.Equal(t, units.Bytes(134217728), usage[0].Memory)   // 128 MB
-		assert.Equal(t, units.Bytes(268435456), usage[1].Memory)   // 256 MB
-		assert.Equal(t, units.Bytes(536870912), usage[2].Memory)   // 512 MB
+		assert.Equal(t, units.Bytes(134217728), usage[0].Memory) // 128 MB
+		assert.Equal(t, units.Bytes(268435456), usage[1].Memory) // 256 MB
+		assert.Equal(t, units.Bytes(536870912), usage[2].Memory) // 512 MB
 	})
 
 	t.Run("handles various memory sizes", func(t *testing.T) {

@@ -52,13 +52,6 @@ func init() {
 }
 
 func (m *Runtime) WithServices(dir *dagger.Directory) *dagger.Container {
-	ch := dag.Container().
-		From("oci.miren.cloud/clickhouse:v2").
-		WithEnvVariable("CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT", "1").
-		WithEnvVariable("CLICKHOUSE_PASSWORD", "default").
-		WithExposedPort(9000).
-		AsService()
-
 	vl := dag.Container().
 		From("docker.io/victoriametrics/victoria-logs:v1.0.0-victorialogs").
 		WithExposedPort(9428).
@@ -81,7 +74,6 @@ func (m *Runtime) WithServices(dir *dagger.Directory) *dagger.Container {
 		})
 
 	return m.BuildEnv(dir).
-		WithServiceBinding("clickhouse", ch).
 		WithServiceBinding("etcd", etcd).
 		WithServiceBinding("victorialogs", vl).
 		WithServiceBinding("victoriametrics", vm)
@@ -259,7 +251,7 @@ func (m *Runtime) Dev(
 	return w.Stdout(ctx)
 }
 
-// Debug returns a container with just the services (etcd, clickhouse) for local debugging
+// Debug returns a container with just the services (etcd) for local debugging
 func (m *Runtime) Debug(
 	ctx context.Context,
 	dir *dagger.Directory,

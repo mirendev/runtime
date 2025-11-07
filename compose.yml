@@ -1,13 +1,5 @@
 name: rundev
 services:
-  clickhouse:
-    image: clickhouse/clickhouse-server:latest
-    environment:
-      - CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT=1
-      - CLICKHOUSE_PASSWORD=default
-    ports:
-      - 9000:9000
-
   etcd:
     image: bitnami/etcd:3.5.19
     environment:

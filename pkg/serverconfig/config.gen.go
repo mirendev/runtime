@@ -6,83 +6,8 @@ import (
 	"time"
 )
 
-// ClickHouseConfig ClickHouse configuration
-type ClickHouseConfig struct {
-	Address         *string `toml:"address" env:"MIREN_CLICKHOUSE_ADDRESS"`
-	HTTPPort        *int    `toml:"http_port" env:"MIREN_CLICKHOUSE_HTTP_PORT"`
-	InterserverPort *int    `toml:"interserver_port" env:"MIREN_CLICKHOUSE_INTERSERVER_PORT"`
-	NativePort      *int    `toml:"native_port" env:"MIREN_CLICKHOUSE_NATIVE_PORT"`
-	StartEmbedded   *bool   `toml:"start_embedded" env:"MIREN_CLICKHOUSE_START_EMBEDDED"`
-}
-
-// GetAddress returns the value of Address or its zero value if nil
-func (c *ClickHouseConfig) GetAddress() string {
-	if c.Address != nil {
-		return *c.Address
-	}
-	return ""
-}
-
-// SetAddress sets the value of Address
-func (c *ClickHouseConfig) SetAddress(v string) {
-	c.Address = &v
-}
-
-// GetHTTPPort returns the value of HTTPPort or its zero value if nil
-func (c *ClickHouseConfig) GetHTTPPort() int {
-	if c.HTTPPort != nil {
-		return *c.HTTPPort
-	}
-	return 0
-}
-
-// SetHTTPPort sets the value of HTTPPort
-func (c *ClickHouseConfig) SetHTTPPort(v int) {
-	c.HTTPPort = &v
-}
-
-// GetInterserverPort returns the value of InterserverPort or its zero value if nil
-func (c *ClickHouseConfig) GetInterserverPort() int {
-	if c.InterserverPort != nil {
-		return *c.InterserverPort
-	}
-	return 0
-}
-
-// SetInterserverPort sets the value of InterserverPort
-func (c *ClickHouseConfig) SetInterserverPort(v int) {
-	c.InterserverPort = &v
-}
-
-// GetNativePort returns the value of NativePort or its zero value if nil
-func (c *ClickHouseConfig) GetNativePort() int {
-	if c.NativePort != nil {
-		return *c.NativePort
-	}
-	return 0
-}
-
-// SetNativePort sets the value of NativePort
-func (c *ClickHouseConfig) SetNativePort(v int) {
-	c.NativePort = &v
-}
-
-// GetStartEmbedded returns the value of StartEmbedded or its zero value if nil
-func (c *ClickHouseConfig) GetStartEmbedded() bool {
-	if c.StartEmbedded != nil {
-		return *c.StartEmbedded
-	}
-	return false
-}
-
-// SetStartEmbedded sets the value of StartEmbedded
-func (c *ClickHouseConfig) SetStartEmbedded(v bool) {
-	c.StartEmbedded = &v
-}
-
 // Config Complete server configuration from all sources
 type Config struct {
-	Clickhouse      ClickHouseConfig      `toml:"clickhouse"`
 	Containerd      ContainerdConfig      `toml:"containerd"`
 	Etcd            EtcdConfig            `toml:"etcd"`
 	Mode            *string               `toml:"mode" env:"MIREN_MODE"`

@@ -29,11 +29,6 @@ while ! nc -z etcd 2379; do
     sleep 1
 done
 
-while ! nc -z clickhouse 9000; do
-    echo "Waiting for ClickHouse..."
-    sleep 1
-done
-
 echo "External services are ready!"
 
 # Execute command or start miren server

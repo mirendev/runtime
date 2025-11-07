@@ -1497,8 +1497,8 @@ func TestSandbox(t *testing.T) {
 		r.NoError(err)
 		r.Equal(containerd.Running, status.Status, "task should still be running after log reattachment")
 
-		// Verify logs are being collected in ClickHouse
-		time.Sleep(1 * time.Second) // Give ClickHouse time to index
+		// Verify logs are being collected in VictoriaLogs
+		time.Sleep(1 * time.Second)
 
 		logs, err := lr.Read(ctx, sb.ID.String(), observability.WithLimit(100))
 		r.NoError(err)

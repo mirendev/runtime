@@ -295,9 +295,6 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 		}()
 	}
 
-	// ClickHouse has been replaced by VictoriaMetrics for metrics storage
-	// Keeping config for backward compatibility but not starting the service
-
 	// Start embedded VictoriaLogs server if requested
 	if cfg.Victorialogs.GetStartEmbedded() {
 		ctx.Log.Info("starting embedded victorialogs server", "http-port", cfg.Victorialogs.GetHTTPPort())

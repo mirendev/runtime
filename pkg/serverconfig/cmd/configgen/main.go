@@ -521,14 +521,14 @@ func Load(configPath string, flags *CLIFlags, log *slog.Logger) (*Config, error)
 		if cfg.Etcd.StartEmbedded == nil {
 			cfg.Etcd.StartEmbedded = boolPtr(true)
 		}
-		if cfg.Clickhouse.StartEmbedded == nil {
-			cfg.Clickhouse.StartEmbedded = boolPtr(true)
-		}
 		if cfg.Containerd.StartEmbedded == nil {
 			cfg.Containerd.StartEmbedded = boolPtr(true)
 		}
 		if cfg.Victorialogs.StartEmbedded == nil {
 			cfg.Victorialogs.StartEmbedded = boolPtr(true)
+		}
+		if cfg.Victoriametrics.StartEmbedded == nil {
+			cfg.Victoriametrics.StartEmbedded = boolPtr(true)
 		}
 	}
 
@@ -767,7 +767,7 @@ func (c *{{$name}}) Validate() error {
 	{{end}}
 	
 	// Check for port conflicts in {{$name}}
-	{{- if or (eq $name "EtcdConfig") (eq $name "ClickHouseConfig")}}
+	{{- if or (eq $name "EtcdConfig") }}
 	seen := make(map[int]bool)
 	{{- range $fname, $field := $config.Fields}}
 	{{- if $field.Validation}}{{if $field.Validation.Port}}
