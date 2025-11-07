@@ -1,0 +1,92 @@
+#!/usr/bin/env bash
+# Server lifecycle management for persistent dev environment
+
+set -e
+
+PIDFILE="/tmp/miren-server.pid"
+LOGFILE="/tmp/miren-server.log"
+
+case "${1:-}" in
+  start)
+    if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
+      echo "Server already running (PID $(cat "$PIDFILE"))"
+      exit 0
+    fi
+
+    echo "Starting miren server in standalone mode..."
+    # Use nohup and disown to fully detach from the shell
+    # (Script runs as root for process management privileges)
+    nohup ./bin/miren server -vv --mode standalone >"$LOGFILE" 2>&1 </dev/null &
+    pid=$!
+    disown
+    echo $pid > "$PIDFILE"
+
+    # Wait a moment and verify it started
+    sleep 0.5
+    if kill -0 "$pid" 2>/dev/null; then
+      echo "Server started (PID $pid)"
+      echo "Logs: tail -f $LOGFILE"
+    else
+      echo "Error: Server failed to start. Check $LOGFILE"
+      rm -f "$PIDFILE"
+      exit 1
+    fi
+    ;;
+
+  stop)
+    if [ ! -f "$PIDFILE" ]; then
+      echo "Server not running (no PID file)"
+      exit 0
+    fi
+
+    PID=$(cat "$PIDFILE")
+    if kill -0 "$PID" 2>/dev/null; then
+      echo "Stopping server (PID $PID)..."
+      kill "$PID"
+      # Wait for graceful shutdown
+      for i in {1..10}; do
+        if ! kill -0 "$PID" 2>/dev/null; then
+          break
+        fi
+        sleep 0.5
+      done
+      # Force kill if still running
+      if kill -0 "$PID" 2>/dev/null; then
+        echo "Warning: Graceful shutdown timed out, forcing termination..."
+        kill -9 "$PID" 2>/dev/null || true
+        sleep 0.5
+      fi
+      echo "Server stopped"
+    else
+      echo "Server not running (stale PID file)"
+    fi
+    rm -f "$PIDFILE"
+    ;;
+
+  restart)
+    $0 stop
+    sleep 1
+    $0 start
+    ;;
+
+  status)
+    if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
+      PID=$(cat "$PIDFILE")
+      echo "Server running (PID $PID)"
+      echo "Logs: $LOGFILE"
+      exit 0
+    else
+      echo "Server not running"
+      exit 1
+    fi
+    ;;
+
+  logs)
+    tail -f "$LOGFILE"
+    ;;
+
+  *)
+    echo "Usage: $0 {start|stop|restart|status|logs}"
+    exit 1
+    ;;
+esac

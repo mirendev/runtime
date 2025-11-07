@@ -28,12 +28,13 @@ import (
 	"miren.dev/runtime/clientconfig"
 	"miren.dev/runtime/components/activator"
 	"miren.dev/runtime/components/netresolve"
+	deploymentctrl "miren.dev/runtime/controllers/deployment"
 	"miren.dev/runtime/controllers/sandboxpool"
 	"miren.dev/runtime/metrics"
-	"miren.dev/runtime/pkg/controller"
 	"miren.dev/runtime/observability"
 	"miren.dev/runtime/pkg/caauth"
 	"miren.dev/runtime/pkg/cloudauth"
+	"miren.dev/runtime/pkg/controller"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/schema"
 	"miren.dev/runtime/pkg/rpc"
@@ -493,8 +494,29 @@ func (c *Coordinator) Start(ctx context.Context) error {
 		return err
 	}
 
-	// Create controller manager and add pool controller
+	// Create DeploymentLauncher to watch App entities and create pools
+	launcher := deploymentctrl.NewLauncher(c.Log, eac)
+	if err := launcher.Init(ctx); err != nil {
+		c.Log.Error("failed to initialize deployment launcher", "error", err)
+		return err
+	}
+
+	// Create controller manager and add controllers
 	c.cm = controller.NewControllerManager()
+
+	// Add deployment launcher controller (watches App entities for ActiveVersion changes)
+	launcherController := controller.NewReconcileController(
+		"deploymentlauncher",
+		c.Log,
+		entity.Ref(entity.EntityKind, core_v1alpha.KindApp),
+		eac,
+		controller.AdaptReconcileController[core_v1alpha.App](launcher),
+		time.Minute, // Resync every minute to ensure pools exist
+		1,           // Single worker to prevent race conditions
+	)
+	c.cm.AddController(launcherController)
+
+	// Add sandbox pool controller (reconciles pool desired_instances to actual sandboxes)
 	poolController := controller.NewReconcileController(
 		"sandboxpool",
 		c.Log,

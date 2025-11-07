@@ -43,6 +43,7 @@ jobs:
           token: ${{ secrets.SLACK_BOT_TOKEN }}
           payload: |
             {
+              "channel": "${{ vars.SLACK_CHANNEL_ID }}",
               "text": "❌ Tests failed on main branch - Release blocked",
               "blocks": [
                 {
@@ -54,23 +55,26 @@ jobs:
                 },
                 {
                   "type": "section",
-                  "fields": [
-                    {
-                      "type": "mrkdwn",
-                      "text": "*Commit:*\n<${{ github.event.workflow_run.head_commit.url }}|${{ github.event.workflow_run.head_commit.message }}>"
-                    },
-                    {
-                      "type": "mrkdwn",
-                      "text": "*Author:*\n${{ github.event.workflow_run.head_commit.author.name }}"
-                    }
-                  ]
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "*Commit:*\n${{ github.event.workflow_run.head_commit.message }}"
+                  }
                 },
                 {
                   "type": "section",
                   "text": {
                     "type": "mrkdwn",
-                    "text": "<${{ github.event.workflow_run.html_url }}|View failed test run>"
+                    "text": "*Author:* ${{ github.event.workflow_run.head_commit.author.name }}"
                   }
+                },
+                {
+                  "type": "context",
+                  "elements": [
+                    {
+                      "type": "mrkdwn",
+                      "text": "<${{ github.event.workflow_run.head_commit.url }}|View commit> • <${{ github.event.workflow_run.html_url }}|View test run>"
+                    }
+                  ]
                 }
               ],
               "unfurl_links": false,
@@ -200,6 +204,7 @@ jobs:
           token: ${{ secrets.SLACK_BOT_TOKEN }}
           payload: |
             {
+              "channel": "${{ vars.SLACK_CHANNEL_ID }}",
               "text": "❌ Miren Docker build/push failed on main branch",
               "blocks": [
                 {
@@ -384,6 +389,7 @@ jobs:
           token: ${{ secrets.SLACK_BOT_TOKEN }}
           payload: |
             {
+              "channel": "${{ vars.SLACK_CHANNEL_ID }}",
               "text": "❌ Miren release upload failed on main branch",
               "blocks": [
                 {

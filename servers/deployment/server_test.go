@@ -14,7 +14,7 @@ import (
 
 func TestCreateDeploymentWithGitInfo(t *testing.T) {
 	ctx := context.Background()
-	
+
 	// Setup in-memory entity server
 	inmem, cleanup := testutils.NewInMemEntityServer(t)
 	defer cleanup()
@@ -32,10 +32,10 @@ func TestCreateDeploymentWithGitInfo(t *testing.T) {
 	}
 
 	tests := []struct {
-		name           string
-		gitInfo        *deployment_v1alpha.GitInfo
-		expectedDirty  bool
-		expectedHash   string
+		name          string
+		gitInfo       *deployment_v1alpha.GitInfo
+		expectedDirty bool
+		expectedHash  string
 	}{
 		{
 			name: "clean git state",
@@ -88,7 +88,7 @@ func TestCreateDeploymentWithGitInfo(t *testing.T) {
 			}
 
 			deploymentInfo := results.Deployment()
-			
+
 			if tt.gitInfo == nil {
 				if deploymentInfo.HasGitInfo() {
 					t.Error("Expected no git info, but got some")
@@ -99,7 +99,7 @@ func TestCreateDeploymentWithGitInfo(t *testing.T) {
 				}
 
 				gitInfo := deploymentInfo.GitInfo()
-				
+
 				// Check IsDirty flag
 				if gitInfo.IsDirty() != tt.expectedDirty {
 					t.Errorf("Expected IsDirty = %v, got %v", tt.expectedDirty, gitInfo.IsDirty())
@@ -118,7 +118,7 @@ func TestToDeploymentInfo(t *testing.T) {
 	logger := slog.Default()
 	inmem, cleanup := testutils.NewInMemEntityServer(t)
 	defer cleanup()
-	
+
 	server, _ := NewDeploymentServer(logger, inmem.EAC)
 
 	tests := []struct {
@@ -152,16 +152,16 @@ func TestToDeploymentInfo(t *testing.T) {
 				if !info.HasGitInfo() {
 					t.Fatal("Expected git info")
 				}
-				
+
 				gitInfo := info.GitInfo()
 				if !gitInfo.IsDirty() {
 					t.Error("Expected IsDirty = true")
 				}
-				
+
 				if gitInfo.WorkingTreeHash() != "dirty-hash" {
 					t.Errorf("Expected WorkingTreeHash = dirty-hash, got %s", gitInfo.WorkingTreeHash())
 				}
-				
+
 				// Verify all git fields are preserved
 				if gitInfo.Sha() != "e0bdb661891c2e4f5e7e6c5c5d5c5d5c5d5c5d5c" {
 					t.Errorf("Expected SHA = e0bdb661891c2e4f5e7e6c5c5d5c5d5c5d5c5d5c, got %s", gitInfo.Sha())
@@ -202,12 +202,12 @@ func TestToDeploymentInfo(t *testing.T) {
 				if !info.HasGitInfo() {
 					t.Fatal("Expected git info")
 				}
-				
+
 				gitInfo := info.GitInfo()
 				if gitInfo.IsDirty() {
 					t.Error("Expected IsDirty = false")
 				}
-				
+
 				if gitInfo.WorkingTreeHash() != "" {
 					t.Errorf("Expected empty WorkingTreeHash, got %s", gitInfo.WorkingTreeHash())
 				}
@@ -225,7 +225,7 @@ func TestToDeploymentInfo(t *testing.T) {
 
 func TestCreateDeploymentErrorCases(t *testing.T) {
 	ctx := context.Background()
-	
+
 	// Setup in-memory entity server
 	inmem, cleanup := testutils.NewInMemEntityServer(t)
 	defer cleanup()
@@ -275,11 +275,11 @@ func TestCreateDeploymentErrorCases(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			_, err := client.CreateDeployment(ctx, tt.appName, tt.clusterId, tt.appVersionId, nil)
-			
+
 			if err == nil {
 				t.Fatal("Expected error but got none")
 			}
-			
+
 			if !containsError(err.Error(), tt.expectedError) {
 				t.Errorf("Expected error containing '%s', got '%s'", tt.expectedError, err.Error())
 			}
@@ -289,7 +289,7 @@ func TestCreateDeploymentErrorCases(t *testing.T) {
 
 func TestListDeployments(t *testing.T) {
 	ctx := context.Background()
-	
+
 	// Setup in-memory entity server
 	inmem, cleanup := testutils.NewInMemEntityServer(t)
 	defer cleanup()
@@ -327,7 +327,7 @@ func TestListDeployments(t *testing.T) {
 			Status:     "active",
 		},
 	}
-	
+
 	for i, d := range testDeployments {
 		deploymentName := d.AppName + "-" + d.ClusterId + "-" + d.AppVersion
 		id, err := inmem.Client.Create(ctx, deploymentName, d)
@@ -383,14 +383,14 @@ func TestListDeployments(t *testing.T) {
 			if err != nil {
 				t.Fatalf("ListDeployments failed: %v", err)
 			}
-			
+
 			if !results.HasDeployments() {
 				if tt.expectedCount > 0 {
 					t.Fatalf("Expected deployments, got none")
 				}
 				return
 			}
-			
+
 			deployments := results.Deployments()
 			if len(deployments) != tt.expectedCount {
 				t.Errorf("Expected %d deployments, got %d", tt.expectedCount, len(deployments))
@@ -401,7 +401,7 @@ func TestListDeployments(t *testing.T) {
 
 func TestGetDeploymentById(t *testing.T) {
 	ctx := context.Background()
-	
+
 	// Setup in-memory entity server
 	inmem, cleanup := testutils.NewInMemEntityServer(t)
 	defer cleanup()
@@ -433,7 +433,7 @@ func TestGetDeploymentById(t *testing.T) {
 			Author:          "Test User",
 		},
 	}
-	
+
 	deploymentId, err := inmem.Client.Create(ctx, "test-deployment", testDeployment)
 	if err != nil {
 		t.Fatalf("Failed to create test deployment: %v", err)
@@ -486,7 +486,7 @@ func TestGetDeploymentById(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			result, err := client.GetDeploymentById(ctx, tt.deploymentId)
-			
+
 			if tt.expectError {
 				if err == nil {
 					t.Fatal("Expected error but got none")
@@ -498,11 +498,11 @@ func TestGetDeploymentById(t *testing.T) {
 				if err != nil {
 					t.Fatalf("GetDeploymentById failed: %v", err)
 				}
-				
+
 				if !result.HasDeployment() {
 					t.Fatal("Expected deployment in results")
 				}
-				
+
 				if tt.verifyFunc != nil {
 					tt.verifyFunc(t, result.Deployment())
 				}
@@ -512,15 +512,15 @@ func TestGetDeploymentById(t *testing.T) {
 }
 
 func containsError(actual, expected string) bool {
-	return actual == expected || 
-		   (expected != "" && actual != "" && 
-		    (actual == expected || 
-		     containsString(actual, expected)))
+	return actual == expected ||
+		(expected != "" && actual != "" &&
+			(actual == expected ||
+				containsString(actual, expected)))
 }
 
 func containsString(str, substr string) bool {
-	return len(substr) > 0 && len(str) >= len(substr) && 
-		   (str == substr || indexString(str, substr) >= 0)
+	return len(substr) > 0 && len(str) >= len(substr) &&
+		(str == substr || indexString(str, substr) >= 0)
 }
 
 func indexString(s, substr string) int {
@@ -534,7 +534,7 @@ func indexString(s, substr string) int {
 
 func TestUpdateDeploymentStatusToInProgress(t *testing.T) {
 	ctx := context.Background()
-	
+
 	// Setup in-memory entity server
 	inmem, cleanup := testutils.NewInMemEntityServer(t)
 	defer cleanup()
@@ -546,7 +546,7 @@ func TestUpdateDeploymentStatusToInProgress(t *testing.T) {
 		t.Fatalf("Failed to create deployment server: %v", err)
 	}
 
-	// First create a deployment directly in entity store for testing  
+	// First create a deployment directly in entity store for testing
 	testDeployment := &core_v1alpha.Deployment{
 		AppName:    "test-app",
 		ClusterId:  "test-cluster",
@@ -559,7 +559,7 @@ func TestUpdateDeploymentStatusToInProgress(t *testing.T) {
 			Timestamp: time.Now().Format(time.RFC3339),
 		},
 	}
-	
+
 	// Create entity
 	deploymentName := "test-deployment"
 	deploymentId, err := inmem.Client.Create(ctx, deploymentName, testDeployment)
@@ -607,13 +607,13 @@ func TestUpdateDeploymentStatusToInProgress(t *testing.T) {
 			Timestamp: time.Now().Format(time.RFC3339),
 		},
 	}
-	
+
 	deploymentName2 := "test-deployment2"
 	deploymentId2, err := inmem.Client.Create(ctx, deploymentName2, testDeployment2)
 	if err != nil {
 		t.Fatalf("Failed to create test deployment 2: %v", err)
 	}
-	
+
 	// Update to in_progress (should work since it's already in_progress)
 	updateResult2, err := client.UpdateDeploymentStatus(ctx, string(deploymentId2), "in_progress", "")
 	if err != nil {
@@ -622,7 +622,7 @@ func TestUpdateDeploymentStatusToInProgress(t *testing.T) {
 	if updateResult2.Deployment().Status() != "in_progress" {
 		t.Errorf("Expected status 'in_progress', got %s", updateResult2.Deployment().Status())
 	}
-	
+
 	// Verify CompletedAt is not set when status is in_progress
 	if updateResult2.Deployment().HasCompletedAt() {
 		t.Error("CompletedAt should not be set for in_progress deployment")

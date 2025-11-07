@@ -466,5 +466,3 @@ func (c *ContainerMonitor) checkPort2(ctx context.Context, addr string, dur time
 
 	return nil
 }
-
-

@@ -13,6 +13,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/moby/buildkit/client"
 	"github.com/moby/buildkit/util/progress/progresswriter"
+	"golang.org/x/term"
 
 	"miren.dev/runtime/api/build/build_v1alpha"
 	"miren.dev/runtime/api/deployment/deployment_v1alpha"
@@ -129,7 +130,7 @@ func Deploy(ctx *Context, opts struct {
 			// even if the main context is canceled
 			statusCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
-			
+
 			// Collect build logs if available
 			logs := strings.Join(buildLogs, "\n")
 			if logs == "" && len(buildErrors) > 0 {
@@ -179,7 +180,11 @@ func Deploy(ctx *Context, opts struct {
 		results *build_v1alpha.BuilderClientBuildFromTarResults
 	)
 
-	if opts.Explain {
+	// Detect if we have a TTY - if not, force explain mode
+	isTTY := term.IsTerminal(int(os.Stdout.Fd()))
+	useExplainMode := opts.Explain || !isTTY
+
+	if useExplainMode {
 		// In explain mode, write to stderr
 		pw, err := progresswriter.NewPrinter(ctx, os.Stderr, opts.ExplainFormat)
 		if err != nil {
@@ -360,7 +365,7 @@ func Deploy(ctx *Context, opts struct {
 		updateDeploymentOnError("Build did not return a version")
 		return fmt.Errorf("build did not return a version")
 	}
-	
+
 	ctx.Log.Debug("Build completed with version", "version", appVersionId)
 
 	// Update phase to pushing (build completed, now pushing)

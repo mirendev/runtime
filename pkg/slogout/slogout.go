@@ -222,7 +222,6 @@ func (w *logWriter) processJSONLine(line string) {
 // keyValuePattern matches key=value pairs, handling quoted values
 var keyValuePattern = regexp.MustCompile(`(\w+)=("(?:[^"\\]|\\.)*"|[^\s]+)`)
 
-
 // processKeyValueLine parses a line containing key=value pairs
 func (w *logWriter) processKeyValueLine(line string) {
 	matches := keyValuePattern.FindAllStringSubmatch(line, -1)

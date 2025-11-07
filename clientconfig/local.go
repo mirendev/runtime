@@ -110,8 +110,14 @@ foundAddress:
 		// Handle different identity types
 		switch identity.Type {
 		case "keypair":
-			// Load the private key from identity
-			keyPair, err := cloudauth.LoadKeyPairFromPEM(identity.PrivateKey)
+			// Get the private key (handles both direct PrivateKey and KeyRef)
+			privateKeyPEM, err := config.GetPrivateKeyPEM(identity)
+			if err != nil {
+				return nil, fmt.Errorf("failed to get private key: %w", err)
+			}
+
+			// Load the private key
+			keyPair, err := cloudauth.LoadKeyPairFromPEM(privateKeyPEM)
 			if err != nil {
 				return nil, fmt.Errorf("failed to load private key: %w", err)
 			}

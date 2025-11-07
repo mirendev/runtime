@@ -98,9 +98,9 @@ func Apply(ctx context.Context, store entity.Store) error {
 
 			for k, v := range schema.schema.ShortKinds {
 				attrs = append(attrs,
-				entity.Any(entity.SchemaKind, k),
-				entity.Any(entity.SchemaKind, v),
-			)
+					entity.Any(entity.SchemaKind, k),
+					entity.Any(entity.SchemaKind, v),
+				)
 			}
 
 			_, err := store.CreateEntity(ctx, entity.New(attrs), entity.WithOverwrite)

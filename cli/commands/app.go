@@ -139,8 +139,6 @@ func App(ctx *Context, opts struct {
 	return err
 }
 
-
-
 type Model struct {
 	cfg    *app_v1alpha.Configuration
 	cl     *app_v1alpha.AppStatusClient

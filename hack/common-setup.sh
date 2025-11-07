@@ -122,8 +122,74 @@ wait_for_service() {
     echo "$service_name is ready"
 }
 
-# Setup bash history and common exports
-setup_bash_environment() {
-    export HISTFILE=/data/.bash_history
-    export HISTIGNORE=exit
+# Setup host user for file ownership preservation
+# Creates a user matching the host UID/GID if it doesn't exist
+setup_host_user() {
+    local uid="${ISO_UID}"
+    local gid="${ISO_GID}"
+
+    # If ISO_UID not set, detect from mounted directory ownership
+    if [ -z "$uid" ]; then
+        uid=$(stat -c "%u" /src 2>/dev/null || echo "1000")
+        gid=$(stat -c "%g" /src 2>/dev/null || echo "1000")
+    fi
+
+    # Check if user with this UID already exists
+    if ! getent passwd "$uid" >/dev/null 2>&1; then
+        # Create group if it doesn't exist
+        if ! getent group "$gid" >/dev/null 2>&1; then
+            groupadd -g "$gid" dev
+        fi
+        # Create user
+        useradd -u "$uid" -g "$gid" -m -s /bin/bash dev
+    fi
+
+    # Get the username for this UID
+    local username=$(getent passwd "$uid" | cut -d: -f1)
+    local homedir=$(getent passwd "$uid" | cut -d: -f6)
+
+    # Create ~/bin with shims for containerd tools
+    if [ -n "$homedir" ] && [ -d "$homedir" ]; then
+        mkdir -p "$homedir/bin"
+
+        # Create ctr shim
+        cat > "$homedir/bin/ctr" <<'EOF'
+#!/bin/bash
+exec sudo -E /usr/local/bin/ctr "$@"
+EOF
+
+        # Create nerdctl shim
+        cat > "$homedir/bin/nerdctl" <<'EOF'
+#!/bin/bash
+exec sudo -E /usr/local/bin/nerdctl "$@"
+EOF
+
+        chmod +x "$homedir/bin/ctr" "$homedir/bin/nerdctl"
+        chown -R "$uid:$gid" "$homedir/bin"
+    fi
+
+    # Create .bashrc in user's home that sources the main one
+    if [ -n "$homedir" ] && [ -d "$homedir" ]; then
+        cat > "$homedir/.bashrc" <<'EOF'
+# Add ~/bin to PATH for shims
+export PATH="$HOME/bin:$PATH"
+
+# Source the shared bashrc
+if [ -f /root/.bashrc ]; then
+    source /root/.bashrc
+fi
+EOF
+        chown "$uid:$gid" "$homedir/.bashrc"
+    fi
+
+    # Configure sudo for passwordless access
+    if command -v sudo >/dev/null 2>&1; then
+        echo "$username ALL=(ALL) NOPASSWD: ALL" > "/etc/sudoers.d/$username"
+        chmod 440 "/etc/sudoers.d/$username"
+    fi
+
+    # Export for use by callers
+    export HOST_UID="$uid"
+    export HOST_GID="$gid"
+    export HOST_USER="$username"
 }

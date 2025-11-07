@@ -348,7 +348,6 @@ func (c *NetworkClient) requestReexportCapability(ctx context.Context, capa *Cap
 	return lr.Capability, nil
 }
 
-
 func (c *NetworkClient) derefOID(ctx context.Context, oid OID) error {
 	if c.inlineClient != nil {
 		return c.inlineClient.derefOID(ctx, oid)

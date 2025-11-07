@@ -66,7 +66,6 @@ func (t *tarOutput) Close() error {
 	return pe
 }
 
-
 type transformOpt struct {
 	statusUpdates func(ss *client.SolveStatus, sj []byte)
 	phaseUpdates  func(phase string)
@@ -273,7 +272,6 @@ type BuildStack struct {
 type ImageConfig struct {
 	Services map[string]string
 }
-
 
 type BuildResult struct {
 	Entrypoint string

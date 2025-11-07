@@ -40,3 +40,8 @@ linters:
         text: "SA4006"
         linters:
           - staticcheck
+
+formatters:
+  enable:
+    - gofmt
+    - goimports

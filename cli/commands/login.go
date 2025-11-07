@@ -73,10 +73,48 @@ type KeyRegistrationResponse struct {
 	CreatedAt   string `json:"created_at"`
 }
 
+// getOrCreateKey checks if a key with the given name already exists in the config,
+// and reuses it if found. Otherwise, it generates a new key.
+// Returns the keypair and any error.
+func getOrCreateKey(ctx *Context, keyName string) (*cloudauth.KeyPair, error) {
+	// Try to load existing config
+	config, err := clientconfig.LoadConfig()
+	if err != nil && err != clientconfig.ErrNoConfig {
+		return nil, fmt.Errorf("failed to load config: %w", err)
+	}
+
+	// Check if key already exists
+	if config != nil && config.HasKey(keyName) {
+		keyConfig, err := config.GetKey(keyName)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get key: %w", err)
+		}
+
+		// Load the keypair from the stored private key
+		keyPair, err := cloudauth.LoadKeyPairFromPEM(keyConfig.PrivateKey)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load keypair from config: %w", err)
+		}
+
+		ctx.Info("Found existing key: %s", keyName)
+		return keyPair, nil
+	}
+
+	// No existing key found, generate a new one
+	ctx.Info("Generating new keypair for future authentication...")
+	keyPair, err := cloudauth.GenerateKeyPair()
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate keypair: %w", err)
+	}
+
+	return keyPair, nil
+}
+
 // Login authenticates with miren.cloud using device flow
 func Login(ctx *Context, opts struct {
 	CloudURL     string `short:"u" long:"url" description:"Cloud URL" default:"https://miren.cloud"`
 	IdentityName string `short:"i" long:"identity" description:"Name for this identity in config" default:"cloud"`
+	KeyName      string `short:"k" long:"key-name" description:"Name for the authentication key" default:"miren-cli"`
 	NoSave       bool   `long:"no-save" description:"Don't save credentials to config file"`
 	NoQR         bool   `long:"no-qr" description:"Don't display QR code"`
 }) error {
@@ -151,21 +189,16 @@ func Login(ctx *Context, opts struct {
 
 	ctx.Completed("Authentication successful!")
 
-	// Generate and register a keypair for future authentication
-	ctx.Info("Generating keypair for future authentication...")
-	keyPair, err := cloudauth.GenerateKeyPair()
+	// Get or create a keypair for future authentication
+	keyPair, err := getOrCreateKey(ctx, opts.KeyName)
 	if err != nil {
-		ctx.Warn("Failed to generate keypair: %v", err)
+		ctx.Warn("Failed to get or create keypair: %v", err)
 		ctx.Info("You can still use token authentication")
+		keyPair = nil
 	} else {
-		// Register the public key with the server
-		hostname, err := os.Hostname()
-		if err != nil {
-			hostname = "miren-cli"
-		}
-		keyName := fmt.Sprintf("miren-cli@%s", hostname)
-
-		if err := registerPublicKey(opts.CloudURL, token, keyPair, keyName); err != nil {
+		// Register the public key with the server (only if it's a new key)
+		ctx.Info("Registering public key with server...")
+		if err := registerPublicKey(opts.CloudURL, token, keyPair, opts.KeyName); err != nil {
 			ctx.Warn("Failed to register public key: %v", err)
 			ctx.Info("You can still use token authentication")
 			keyPair = nil // Don't save the key if registration failed
@@ -178,7 +211,7 @@ func Login(ctx *Context, opts struct {
 	if !opts.NoSave {
 		if keyPair != nil {
 			// Save identity with keypair for future authentication
-			if err := saveKeyPairToConfig(opts.IdentityName, opts.CloudURL, keyPair); err != nil {
+			if err := saveKeyPairToConfig(opts.IdentityName, opts.CloudURL, keyPair, opts.KeyName); err != nil {
 				ctx.Warn("Failed to save identity to config: %v", err)
 			} else {
 				ctx.Info("Identity '%s' saved to config", opts.IdentityName)
@@ -358,7 +391,6 @@ func pollForToken(ctx context.Context, cloudURL, deviceCode string, interval, ma
 	}
 }
 
-
 // registerPublicKey registers a public key with the cloud server
 func registerPublicKey(cloudURL, token string, keyPair *cloudauth.KeyPair, keyName string) error {
 	// Get public key in PEM format
@@ -400,6 +432,11 @@ func registerPublicKey(cloudURL, token string, keyPair *cloudauth.KeyPair, keyNa
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return fmt.Errorf("failed to read response: %w", err)
+	}
+
+	if resp.StatusCode == http.StatusConflict {
+		// Key already registered
+		return nil
 	}
 
 	if resp.StatusCode != http.StatusOK {
@@ -472,8 +509,9 @@ func registerPublicKey(cloudURL, token string, keyPair *cloudauth.KeyPair, keyNa
 	return nil
 }
 
-// saveKeyPairToConfig saves a keypair as an identity in clientconfig.d
-func saveKeyPairToConfig(identityName, cloudURL string, keyPair *cloudauth.KeyPair) error {
+// saveKeyPairToConfig saves a keypair as a key in clientconfig.d and creates
+// an identity that references it
+func saveKeyPairToConfig(identityName, cloudURL string, keyPair *cloudauth.KeyPair, keyName string) error {
 	// Get private key in PEM format
 	privateKeyPEM, err := keyPair.PrivateKeyPEM()
 	if err != nil {
@@ -497,13 +535,43 @@ func saveKeyPairToConfig(identityName, cloudURL string, keyPair *cloudauth.KeyPa
 		}
 	}
 
-	// Create the identity config data
+	// Save the key separately (if it doesn't already exist)
+	if !mainConfig.HasKey(keyName) {
+		// Get hostname for metadata
+		hostname, err := os.Hostname()
+		if err != nil {
+			hostname = "unknown"
+		}
+
+		// Create metadata with hostname and creation timestamp
+		metadata := map[string]string{
+			"hostname":   hostname,
+			"created_at": time.Now().UTC().Format(time.RFC3339),
+		}
+
+		keyConfigData := &clientconfig.ConfigData{
+			Keys: map[string]*clientconfig.KeyConfig{
+				keyName: {
+					Name:        keyName,
+					Type:        "ed25519",
+					PrivateKey:  privateKeyPEM,
+					Fingerprint: keyPair.Fingerprint(),
+					Metadata:    metadata,
+				},
+			},
+		}
+
+		// Add as a leaf config (this will be saved to clientconfig.d/key-{name}.yaml)
+		mainConfig.SetLeafConfig("key-"+keyName, keyConfigData)
+	}
+
+	// Create the identity config data that references the key
 	leafConfigData := &clientconfig.ConfigData{
 		Identities: map[string]*clientconfig.IdentityConfig{
 			identityName: {
-				Type:       "keypair",
-				Issuer:     issuer,
-				PrivateKey: privateKeyPEM,
+				Type:   "keypair",
+				Issuer: issuer,
+				KeyRef: keyName,
 			},
 		},
 	}
@@ -511,7 +579,7 @@ func saveKeyPairToConfig(identityName, cloudURL string, keyPair *cloudauth.KeyPa
 	// Add as a leaf config (this will be saved to clientconfig.d/identity-{name}.yaml)
 	mainConfig.SetLeafConfig("identity-"+identityName, leafConfigData)
 
-	// Save the main config (which will also save the leaf config)
+	// Save the main config (which will also save the leaf configs)
 	return mainConfig.Save()
 }
 
@@ -551,7 +619,12 @@ func autoConfigureCluster(ctx *Context, identityName, cloudURL string, keyPair *
 	}
 
 	// Fetch available clusters from the server
-	clusters, err := fetchAvailableClusters(ctx, identity)
+	// Pass mainConfig even though this identity has a direct PrivateKey (not KeyRef)
+	// The helper will handle both cases
+	if mainConfig == nil {
+		mainConfig = clientconfig.NewConfig()
+	}
+	clusters, err := fetchAvailableClusters(ctx, mainConfig, identity)
 	if err != nil {
 		return fmt.Errorf("failed to fetch available clusters: %w", err)
 	}

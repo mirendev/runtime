@@ -1043,13 +1043,15 @@ func (s *EtcdStore) DeleteEntity(ctx context.Context, id Id) error {
 		return err
 	}
 
-	for _, attr := range entity.attrs {
-		schema, err := s.GetAttributeSchema(ctx, attr.ID)
-		if err != nil {
-			return err
-		}
+	// Collect all indexed attributes including nested ones within components
+	indexedAttrs, err := s.collectIndexedAttributes(ctx, entity.attrs)
+	if err != nil {
+		return err
+	}
 
-		if schema.Index {
+	// Delete all index entries for this entity
+	for _, attrs := range indexedAttrs {
+		for _, attr := range attrs {
 			// TODO: Batch this as an op into the below txn
 			err := s.deleteFromCollection(entity, attr.CAS())
 			if err != nil {
@@ -1392,4 +1394,57 @@ func enumerateAllAttrs(attrs []Attr) []Attr {
 		}
 	}
 	return result
+}
+
+// ListAllEntityIDs returns all entity IDs in the store
+func (s *EtcdStore) ListAllEntityIDs(ctx context.Context) ([]Id, error) {
+	prefix := fmt.Sprintf("%s/entity/", s.prefix)
+	resp, err := s.client.Get(ctx, prefix,
+		clientv3.WithPrefix(),
+		clientv3.WithKeysOnly())
+	if err != nil {
+		return nil, fmt.Errorf("failed to list entities: %w", err)
+	}
+
+	var ids []Id
+	for _, kv := range resp.Kvs {
+		key := string(kv.Key)
+		// Skip session keys (they have /session/ in the path)
+		if strings.Contains(key, "/session/") {
+			continue
+		}
+		// Extract entity ID from key
+		// Key format: /prefix/entity/base58(entityid)
+		key = strings.TrimPrefix(key, prefix)
+		if key == "" {
+			continue
+		}
+		decoded, err := base58.Decode(key)
+		if err != nil {
+			s.log.Warn("failed to decode entity ID", "key", key, "error", err)
+			continue
+		}
+		ids = append(ids, Id(decoded))
+	}
+
+	return ids, nil
+}
+
+// DeletePrefixCount deletes all keys with prefix and returns count
+func (s *EtcdStore) DeletePrefixCount(ctx context.Context, prefix string) (int64, error) {
+	resp, err := s.client.Delete(ctx, prefix, clientv3.WithPrefix())
+	if err != nil {
+		return 0, fmt.Errorf("failed to delete prefix: %w", err)
+	}
+	return resp.Deleted, nil
+}
+
+// Prefix returns the etcd prefix used by this store
+func (s *EtcdStore) Prefix() string {
+	return s.prefix
+}
+
+// Client returns the underlying etcd client
+func (s *EtcdStore) Client() *clientv3.Client {
+	return s.client
 }

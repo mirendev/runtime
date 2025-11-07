@@ -70,20 +70,9 @@ func (m *Runtime) WithServices(dir *dagger.Directory) *dagger.Container {
 			},
 		})
 
-	minio := dag.Container().
-		From("oci.miren.cloud/minio:v1").
-		WithEnvVariable("MINIO_ROOT_USER", "admin").
-		WithEnvVariable("MINIO_ROOT_PASSWORD", "password").
-		WithEnvVariable("MINIO_UPDATE", "off").
-		WithExposedPort(9000).
-		AsService(dagger.ContainerAsServiceOpts{
-			Args: []string{"minio", "server", "/data"},
-		})
-
 	return m.BuildEnv(dir).
 		WithServiceBinding("clickhouse", ch).
-		WithServiceBinding("etcd", etcd).
-		WithServiceBinding("minio", minio)
+		WithServiceBinding("etcd", etcd)
 }
 
 func (m *Runtime) BuildEnv(dir *dagger.Directory) *dagger.Container {
@@ -183,7 +172,6 @@ func (m *Runtime) Test(
 	w := m.WithServices(dir).
 		WithDirectory("/src", dir).
 		WithWorkdir("/src").
-		WithEnvVariable("S3_URL", "http://minio:9000").
 		WithEnvVariable("DISABLE_NBD_TEST", "1").
 		WithMountedCache("/data", dag.CacheVolume("containerd"))
 
@@ -242,8 +230,8 @@ func (m *Runtime) Dev(
 	w := m.WithServices(dir).
 		WithDirectory("/src", dir).
 		WithWorkdir("/src").
-		WithEnvVariable("S3_URL", "http://minio:9000").
-		WithMountedCache("/data", dag.CacheVolume("containerd"))
+		WithMountedCache("/data", dag.CacheVolume("containerd")).
+		WithMountedCache("/var/lib/miren", dag.CacheVolume("miren-data"))
 
 	if tmux {
 		w = w.WithEnvVariable("USE_TMUX", "1")
@@ -257,7 +245,7 @@ func (m *Runtime) Dev(
 	return w.Stdout(ctx)
 }
 
-// Debug returns a container with just the services (etcd, minio, clickhouse) for local debugging
+// Debug returns a container with just the services (etcd, clickhouse) for local debugging
 func (m *Runtime) Debug(
 	ctx context.Context,
 	dir *dagger.Directory,
@@ -269,47 +257,6 @@ func (m *Runtime) Debug(
 
 	w = w.Terminal(dagger.ContainerTerminalOpts{
 		Cmd: []string{"/bin/bash", "/src/hack/run-services.sh"},
-	})
-
-	return w.Stdout(ctx)
-}
-
-// DevStandalone runs the miren server in standalone mode with development environment
-func (m *Runtime) DevStandalone(
-	ctx context.Context,
-	dir *dagger.Directory,
-) (string, error) {
-	w := m.BuildEnv(dir).
-		WithDirectory("/src", dir).
-		WithWorkdir("/src").
-		WithMountedCache("/data", dag.CacheVolume("containerd")).
-		// Mount a persistent cache volume for the default data directory
-		WithMountedCache("/var/lib/miren", dag.CacheVolume("miren-data"))
-
-	w = w.Terminal(dagger.ContainerTerminalOpts{
-		InsecureRootCapabilities: true,
-		Cmd:                      []string{"/bin/bash", "/src/hack/dev-standalone.sh"},
-	})
-
-	return w.Stdout(ctx)
-}
-
-// DevTmuxStandalone runs the miren server in standalone mode with tmux splits
-func (m *Runtime) DevTmuxStandalone(
-	ctx context.Context,
-	dir *dagger.Directory,
-) (string, error) {
-	w := m.BuildEnv(dir).
-		WithDirectory("/src", dir).
-		WithWorkdir("/src").
-		WithMountedCache("/data", dag.CacheVolume("containerd")).
-		// Mount a persistent cache volume for the default data directory
-		WithMountedCache("/var/lib/miren", dag.CacheVolume("miren-data")).
-		WithEnvVariable("USE_TMUX", "1")
-
-	w = w.Terminal(dagger.ContainerTerminalOpts{
-		InsecureRootCapabilities: true,
-		Cmd:                      []string{"/bin/bash", "/src/hack/dev-standalone.sh"},
 	})
 
 	return w.Stdout(ctx)

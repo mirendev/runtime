@@ -43,7 +43,7 @@ func SandboxPoolList(ctx *Context, opts struct {
 	}
 
 	var rows []ui.Row
-	headers := []string{"ID", "SERVICE", "DESIRED", "CURRENT", "READY", "VERSION", "CREATED", "UPDATED"}
+	headers := []string{"ID", "VERSION", "SERVICE", "DESIRED", "CURRENT", "READY", "CREATED", "UPDATED"}
 
 	for _, e := range res.Values() {
 		var pool compute_v1alpha.SandboxPool
@@ -51,11 +51,11 @@ func SandboxPoolList(ctx *Context, opts struct {
 
 		rows = append(rows, ui.Row{
 			ui.CleanEntityID(pool.ID.String()),
+			ui.DisplayAppVersion(pool.SandboxSpec.Version.String()),
 			pool.Service,
 			fmt.Sprintf("%d", pool.DesiredInstances),
 			fmt.Sprintf("%d", pool.CurrentInstances),
 			fmt.Sprintf("%d", pool.ReadyInstances),
-			ui.DisplayAppVersion(pool.SandboxSpec.Version.String()),
 			humanFriendlyTimestamp(time.UnixMilli(e.CreatedAt())),
 			humanFriendlyTimestamp(time.UnixMilli(e.UpdatedAt())),
 		})

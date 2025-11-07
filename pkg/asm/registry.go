@@ -157,7 +157,6 @@ func (r *Registry) buildByType(field reflect.Value, tag string) (reflect.Value, 
 	return ret, nil
 }
 
-
 func isAssignableTo(a, b reflect.Type) bool {
 	if a == b {
 		return true
@@ -259,7 +258,6 @@ func (r *Registry) ResolveNamed(s any, name string) error {
 
 	return nil
 }
-
 
 func (r *Registry) Init(values ...any) error {
 	for _, v := range values {

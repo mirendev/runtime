@@ -115,7 +115,6 @@ type ExtentMap struct {
 	mu sync.Mutex
 	m  *treemap.TreeMap[LBA, compactPE]
 
-
 	segmentsMu    sync.Mutex
 	segmentByDesc map[segLocations]uint32
 	segmentByIdx  map[uint32]segLocations

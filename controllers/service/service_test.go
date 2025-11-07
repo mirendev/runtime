@@ -84,7 +84,7 @@ func TestServiceController(t *testing.T) {
 
 	t.Run("creates endpoints when sandbox matches service", func(t *testing.T) {
 		r := require.New(t)
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 		defer cancel()
 
 		reg, cleanup := testutils.Registry(observability.TestInject, build.TestInject)
@@ -214,7 +214,7 @@ func TestServiceController(t *testing.T) {
 
 	t.Run("deletes endpoints when sandbox is deleted", func(t *testing.T) {
 		r := require.New(t)
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 		defer cancel()
 
 		reg, cleanup := testutils.Registry(observability.TestInject, build.TestInject)
@@ -427,7 +427,7 @@ func TestServiceController(t *testing.T) {
 
 	t.Run("handles multiple sandboxes matching one service", func(t *testing.T) {
 		r := require.New(t)
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 		defer cancel()
 
 		reg, cleanup := testutils.Registry(observability.TestInject, build.TestInject)

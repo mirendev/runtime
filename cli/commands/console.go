@@ -12,7 +12,6 @@ import (
 	"miren.dev/runtime/pkg/rpc/stream"
 )
 
-
 func Console(ctx *Context, opts struct {
 	AppCentric
 	Pool string `long:"pool" default:"shell" description:"Pool to use"`

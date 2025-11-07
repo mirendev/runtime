@@ -33,23 +33,79 @@ This is a two-phase migration: Phase 1 uses iso for development and Dagger for C
 ### Development Environment
 
 **With iso (local development - recommended):**
-- `make dev` - Start development environment with iso
-- `make dev-tmux` - Start development environment with tmux splits
-- `make dev-standalone` - Start standalone mode development environment
-- `make dev-tmux-standalone` - Start standalone mode with tmux splits
-- The dev environment automatically:
-  - Sets up containerd, buildkit, and gvisor (runsc)
-  - Starts services (etcd, ClickHouse, MinIO)
-  - Builds the miren binary and creates `/bin/m` symlink
-  - Generates auth config in `~/.config/miren/clientconfig.yaml`
-  - Cleans the miren namespace
-  - Starts the miren server and provides a shell
+
+The dev environment uses **standalone mode** where miren manages its own containerd and buildkit internally, matching how it runs in production.
+
+**Initial setup (once per worktree):**
+- `make dev` - Start persistent dev environment, launch server, and open a shell (recommended)
+- `make dev-start` - Start environment only (no server, no shell)
+
+The dev environment automatically:
+- Sets up gvisor (runsc) and kernel mounts
+- Starts MinIO service (etcd and ClickHouse are managed by miren in standalone mode)
+- Builds the miren binary and creates `/bin/m` symlink
+- Generates auth config in `~/.config/miren/clientconfig.yaml`
+- Prepares release directory with required binaries
+
+When you run `make dev`, the server starts automatically in the background, so commands like `m app list` work immediately.
+
+**Server lifecycle management:**
+
+The miren server runs independently from your shell session:
+- `make dev-server-start` - Start miren server (standalone mode)
+- `make dev-server-stop` - Stop miren server
+- `make dev-server-restart` - Restart server (useful after rebuilding)
+- `make dev-server-status` - Check if server is running
+- `make dev-server-logs` - Watch server logs
+
+**Working in the persistent dev environment:**
+
+The dev environment uses persistent containers, which means:
+- The container and all services stay running between commands
+- Each worktree gets its own isolated dev environment
+- You can run commands from different terminals or LLM sessions
+- The miren server runs independently and survives shell exits
+
+Running commands:
+- `make dev-shell` - Open an interactive shell
+- `./hack/dev-exec <command>` - Run any command in the dev container
+- Examples:
+  - `./hack/dev-exec go test ./pkg/entity/...` - Run tests
+  - `./hack/dev-exec m app list` - Use miren CLI
+  - `make bin/miren` - Rebuild binary (then `make dev-server-restart`)
+
+**Managing the dev environment:**
+- `make dev-stop` - Stop and remove the persistent dev container
+- `make dev-restart` - Restart the dev environment (stop + start)
+- `make dev-status` - Check the status of the dev environment
+
+**Typical workflow:**
+```bash
+# Initial setup (once per worktree)
+make dev                      # Starts environment, server, and gives you a shell
+
+# Now you're in a shell with server running - try it:
+m app list                    # Works immediately!
+
+# Development iteration
+vim path/to/code.go           # Edit code
+make bin/miren                # Rebuild
+make dev-server-restart       # Bounce server with new code
+
+# Debugging
+make dev-server-logs          # Watch logs
+make dev-server-status        # Check if running
+
+# Multiple shells
+make dev-shell                # Open another shell (from host)
+./hack/dev-exec m app list    # One-off commands
+
+# Cleanup
+make dev-stop                 # Tear down environment
+```
 
 **With Dagger (for CI compatibility):**
 - `make dev-dagger` - Start development environment with Dagger
-- `make dev-tmux-dagger` - Start development environment with tmux splits using Dagger
-- `make dev-standalone-dagger` - Start standalone mode with Dagger
-- `make dev-tmux-standalone-dagger` - Start standalone mode with tmux using Dagger
 - `make services-dagger` - Run services container for debugging
 
 ### Other Commands
@@ -62,9 +118,10 @@ This is a two-phase migration: Phase 1 uses iso for development and Dagger for C
 ### ISO Environment
 The project uses **iso** for containerized development with all dependencies provided:
 - `.iso/Dockerfile` - Defines the build environment (Go 1.24, containerd, buildkit, gvisor, etc.)
-- `.iso/services.yml` - Defines service containers (etcd, ClickHouse, MinIO)
+- `.iso/services.yml` - Defines external service containers (MinIO for object storage)
 - All default `make` targets and `hack/` scripts run inside the isolated container
 - Services are automatically started and ready before commands run
+- In standalone mode, miren manages etcd and ClickHouse internally
 
 ### Dagger Environment (CI/CD)
 The project also maintains **Dagger** for CI/CD:

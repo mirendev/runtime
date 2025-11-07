@@ -353,8 +353,8 @@ func TestManagerNoUpdateWhenStatusUnchanged(t *testing.T) {
 
 	// Create 1 running sandbox
 	sb := &compute_v1alpha.Sandbox{
-		Status:  compute_v1alpha.RUNNING,
-		Spec:    pool.SandboxSpec,
+		Status: compute_v1alpha.RUNNING,
+		Spec:   pool.SandboxSpec,
 	}
 	_, err = server.Client.Create(ctx, "sb", sb,
 		entityserver.WithLabels(types.LabelSet("service", "web", "pool", poolID.String())))
@@ -480,8 +480,10 @@ func TestManagerScaleDownIdle(t *testing.T) {
 	assert.Equal(t, compute_v1alpha.RUNNING, sandboxes[0].Status, "remaining sandbox should still be RUNNING")
 }
 
-// TestManagerScaleDownFixedMode tests that fixed mode pools never scale down
-func TestManagerScaleDownFixedMode(t *testing.T) {
+// TestManagerScaleDownFixedModeProactive tests that fixed mode pools
+// MUST scale down when desired < actual (proactive scale-down for deployments)
+// even though they don't opportunistically scale down based on idle time
+func TestManagerScaleDownFixedModeProactive(t *testing.T) {
 	ctx := context.Background()
 	log := testutils.TestLogger(t)
 
@@ -510,7 +512,7 @@ func TestManagerScaleDownFixedMode(t *testing.T) {
 	// Create a fixed mode pool
 	pool := &compute_v1alpha.SandboxPool{
 		Service:          "web",
-		DesiredInstances: 1, // Want 1, but have 3
+		DesiredInstances: 1, // Want 1, but have 3 - MUST scale down to 1
 		CurrentInstances: 0,
 		ReadyInstances:   0,
 		SandboxSpec: compute_v1alpha.SandboxSpec{
@@ -527,13 +529,13 @@ func TestManagerScaleDownFixedMode(t *testing.T) {
 	require.NoError(t, err)
 	pool.ID = poolID
 
-	// Create 3 RUNNING sandboxes, all idle
-	now := time.Now()
+	// Create 3 RUNNING sandboxes, all with no activity yet (LastActivity.IsZero())
+	// This simulates a deployment where sandboxes just started
 	for i := 0; i < 3; i++ {
 		sb := &compute_v1alpha.Sandbox{
-			Status:       compute_v1alpha.RUNNING,
-			LastActivity: now.Add(-10 * time.Minute),
-			Spec:         pool.SandboxSpec,
+			Status: compute_v1alpha.RUNNING,
+			// LastActivity is zero (not set) - simulates fresh sandboxes
+			Spec: pool.SandboxSpec,
 		}
 		_, err := server.Client.Create(ctx, fmt.Sprintf("sb-%d", i), sb,
 			entityserver.WithLabels(types.LabelSet("service", pool.Service, "pool", poolID.String())))
@@ -545,12 +547,31 @@ func TestManagerScaleDownFixedMode(t *testing.T) {
 	err = manager.Reconcile(ctx, pool, nil)
 	require.NoError(t, err)
 
-	// Verify NO sandboxes were stopped (fixed mode never scales down)
+	// Verify 2 sandboxes were stopped (scale down from 3 to 1)
 	sandboxes := listSandboxesForPool(t, ctx, server, pool)
-	assert.Len(t, sandboxes, 3, "fixed mode should not scale down")
-	for _, sb := range sandboxes {
-		assert.Equal(t, compute_v1alpha.RUNNING, sb.Status, "all sandboxes should remain RUNNING in fixed mode")
+
+	// Debug: print what we got
+	t.Logf("Found %d sandboxes after scale-down", len(sandboxes))
+	for i, sb := range sandboxes {
+		t.Logf("  Sandbox %d: ID=%s Status=%s", i, sb.ID, sb.Status)
 	}
+
+	// Count RUNNING vs STOPPED
+	runningCount := 0
+	stoppedCount := 0
+	for _, sb := range sandboxes {
+		switch sb.Status {
+		case compute_v1alpha.RUNNING:
+			runningCount++
+		case compute_v1alpha.STOPPED:
+			stoppedCount++
+		}
+	}
+
+	// We should have scaled down from 3 to 1 RUNNING
+	assert.Equal(t, 1, runningCount, "should have 1 RUNNING sandbox (desired count)")
+	// listSandboxesForPool filters STOPPED sandboxes, so we only see RUNNING ones
+	assert.Equal(t, 1, len(sandboxes), "should have exactly 1 RUNNING sandbox after scale-down")
 }
 
 // TestManagerZeroValuePersistence tests that zero values persist correctly

@@ -12,134 +12,110 @@ export DAGGER_NO_NAG=1
 # Disable telemetry in Dagger and anything else that honors DNT
 export DO_NOT_TRACK=1
 
+# Generate a unique session name based on the project directory
+ISO_SESSION ?= dev-$(shell basename "$$(pwd)")
+
+.PHONY: help
+help: ## Show this help message
+	@echo "Miren Runtime"
+	@echo ""
+	@echo "Available targets:"
+	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z0-9_/-]+:.*?## / {printf "  \033[36m%-25s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
+
 #
-# ISO targets (for local development)
+# Development (iso - recommended)
 #
 
-test:
+dev: dev-start dev-server-start dev-shell ## Start dev environment, server, and open shell
+
+dev-shell: ## Open interactive shell in dev environment
+	@./hack/dev-exec bash
+
+dev-server-start: ## Start the miren server
+	./hack/dev-exec bash hack/dev-server start
+
+dev-server-stop: ## Stop the miren server
+	./hack/dev-exec bash hack/dev-server stop
+
+dev-server-restart: ## Restart the miren server
+	./hack/dev-exec bash hack/dev-server restart
+
+dev-server-status: ## Check miren server status
+	./hack/dev-exec bash hack/dev-server status
+
+dev-server-logs: ## View miren server logs
+	./hack/dev-exec bash hack/dev-server logs
+
+dev-start: ## Start dev environment (internal - use 'dev' instead)
+	@if ! ISO_SESSION=$(ISO_SESSION) iso status 2>&1 | grep -q "Container is running"; then \
+		ISO_SESSION=$(ISO_SESSION) iso start && \
+		ISO_SESSION=$(ISO_SESSION) iso run bash hack/dev.sh; \
+	else \
+		echo "✓ Container already running"; \
+	fi
+
+dev-stop: ## Stop the dev environment
+	ISO_SESSION=$(ISO_SESSION) iso stop
+
+dev-restart: dev-stop dev-start ## Restart the dev environment
+
+dev-status: ## Check dev environment status
+	ISO_SESSION=$(ISO_SESSION) iso status
+
+dev-rebuild: ## Rebuild dev environment image
+	ISO_SESSION=$(ISO_SESSION) iso build --rebuild
+
+.PHONY: dev dev-start dev-shell dev-server-start dev-server-stop \
+        dev-server-restart dev-server-status dev-server-logs \
+        dev-stop dev-restart dev-status dev-rebuild
+
+#
+# Testing (iso)
+#
+
+test: ## Run all tests
 	iso run bash hack/test.sh ./...
 
-test-shell:
+test-shell: ## Run tests with interactive shell
 	iso run USESHELL=1 bash hack/test.sh
 
-test-e2e:
+test-e2e: ## Run end-to-end tests
 	iso run bash hack/test.sh ./e2e --tags=e2e
 
-dev-tmux:
-	iso run USE_TMUX=1 bash hack/dev.sh
-
-dev:
-	iso run bash hack/dev.sh
-
-dev-standalone:
-	iso run bash hack/dev-standalone.sh
-
-dev-tmux-standalone:
-	iso run USE_TMUX=1 bash hack/dev-standalone.sh
-
-services:
-	iso run bash hack/run-services.sh
-
-.PHONY: services
-
-image:
-	iso run sh -c "docker save runtime-shell | gzip > /workspace/tmp/miren-image.tar.gz"
-	@echo "Image saved to tmp/miren-image.tar.gz"
-
-release-data:
-	iso run bash -c "make bin/miren && mkdir -p /tmp/package && \
-		cp bin/miren /tmp/package && \
-		cp /usr/local/bin/runc /tmp/package && \
-		cp /usr/local/bin/containerd-shim-runsc-v1 /tmp/package && \
-		cp /usr/local/bin/containerd-shim-runc-v2 /tmp/package && \
-		cp /usr/local/bin/containerd /tmp/package && \
-		cp /usr/local/bin/nerdctl /tmp/package && \
-		cp /usr/local/bin/ctr /tmp/package && \
-		tar -C /tmp/package -czf /workspace/release.tar.gz ."
-
-.PHONY: release-data
+.PHONY: test test-shell test-e2e
 
 #
-# Dagger targets (for CI/CD)
+# Building
 #
 
-test-dagger:
-	dagger call -q test --dir=.
-
-test-dagger-interactive:
-	dagger call -i -q test --dir=.
-
-test-shell-dagger:
-	dagger call -q test --dir=. --shell
-
-test-e2e-dagger:
-	dagger call -q test --dir=. --tests="./e2e" --tags=e2e
-
-dev-tmux-dagger:
-	dagger call -q dev --dir=. --tmux
-
-dev-dagger:
-	dagger call -q dev --dir=.
-
-dev-standalone-dagger:
-	dagger call -q dev-standalone --dir=.
-
-dev-tmux-standalone-dagger:
-	dagger call -q dev-tmux-standalone --dir=.
-
-services-dagger:
-	dagger call debug --dir=.
-
-.PHONY: services-dagger
-
-image-dagger:
-	dagger call -q container --dir=. export --path=tmp/latest.tar
-	docker import tmp/latest.tar miren:latest
-	rm tmp/latest.tar
-
-release-data-dagger:
-	dagger call package --dir=. export --path=release.tar.gz
-
-.PHONY: release-data-dagger
-
-#
-# Common targets (work without containerization)
-#
-
-clean:
-	rm -f bin/miren bin/miren-debug
-
-bin/miren:
+bin/miren: ## Build the miren binary
 	@bash ./hack/build.sh
 
-.PHONY: bin/miren
-
-release:
+release: ## Build release version
 	@bash ./hack/build-release.sh
 
-.PHONY: release
-
-bin/miren-debug:
+bin/miren-debug: ## Build with debug symbols
 	go build -gcflags="all=-N -l" -o bin/miren-debug ./cmd/miren
 
-.PHONY: bin/miren-debug
+clean: ## Remove built binaries
+	rm -f bin/miren bin/miren-debug
 
-lint:
+.PHONY: bin/miren release bin/miren-debug clean
+
+#
+# Code Quality
+#
+
+lint: ## Run golangci-lint
 	golangci-lint run ./...
 
-.PHONY: lint
-
-lint-fix:
+lint-fix: ## Run golangci-lint with auto-fix
 	golangci-lint run --fix ./...
 
-.PHONY: lint-fix
-
-lint-pr:
+lint-pr: ## Run golangci-lint on changes from main
 	golangci-lint run --new-from-rev main ./...
 
-.PHONY: lint-pr
-
-generate-check:
+generate-check: ## Verify go generate is up to date
 	@echo "Checking if go generate produces any changes..."
 	@if [ -n "$$(git status --porcelain)" ]; then \
 		echo "Error: Working directory is not clean. Please commit or stash changes before running generate-check."; \
@@ -157,9 +133,70 @@ generate-check:
 	fi
 	@echo "✓ go generate is up to date"
 
-.PHONY: generate-check
+.PHONY: lint lint-fix lint-pr generate-check
 
-dist:
+#
+# Release Packaging
+#
+
+release-data: ## Create release package tar.gz (iso)
+	iso run bash -c "make bin/miren && mkdir -p /tmp/package && \
+		cp bin/miren /tmp/package && \
+		cp /usr/local/bin/runc /tmp/package && \
+		cp /usr/local/bin/containerd-shim-runsc-v1 /tmp/package && \
+		cp /usr/local/bin/containerd-shim-runc-v2 /tmp/package && \
+		cp /usr/local/bin/containerd /tmp/package && \
+		cp /usr/local/bin/nerdctl /tmp/package && \
+		cp /usr/local/bin/ctr /tmp/package && \
+		tar -C /tmp/package -czf /workspace/release.tar.gz ."
+
+image: ## Export Docker image (iso)
+	iso run sh -c "docker save runtime-shell | gzip > /workspace/tmp/miren-image.tar.gz"
+	@echo "Image saved to tmp/miren-image.tar.gz"
+
+dist: ## Build distribution packages
 	@bash ./hack/build-dist.sh
 
-.PHONY: dist
+.PHONY: release-data image dist
+
+#
+# Other (iso)
+#
+
+services: ## Run services container for debugging
+	iso run bash hack/run-services.sh
+
+.PHONY: services
+
+#
+# Dagger targets (for CI/CD)
+#
+
+test-dagger: ## Run all tests (Dagger)
+	dagger call -q test --dir=.
+
+test-dagger-interactive: ## Run tests interactively (Dagger)
+	dagger call -i -q test --dir=.
+
+test-shell-dagger: ## Run tests with shell (Dagger)
+	dagger call -q test --dir=. --shell
+
+test-e2e-dagger: ## Run end-to-end tests (Dagger)
+	dagger call -q test --dir=. --tests="./e2e" --tags=e2e
+
+dev-dagger: ## Start dev environment (Dagger)
+	dagger call -q dev --dir=.
+
+services-dagger: ## Run services container (Dagger)
+	dagger call debug --dir=.
+
+image-dagger: ## Build and import Docker image (Dagger)
+	dagger call -q container --dir=. export --path=tmp/latest.tar
+	docker import tmp/latest.tar miren:latest
+	rm tmp/latest.tar
+
+release-data-dagger: ## Create release package (Dagger)
+	dagger call package --dir=. export --path=release.tar.gz
+
+.PHONY: test-dagger test-dagger-interactive test-shell-dagger test-e2e-dagger \
+        dev-dagger services-dagger image-dagger release-data-dagger

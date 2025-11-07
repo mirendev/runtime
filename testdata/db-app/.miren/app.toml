@@ -1,0 +1,13 @@
+name = "db-app"
+
+# POSTGRES_HOST_AUTH_METHOD is required for the postgres container to work without password
+[[env]]
+key = "POSTGRES_HOST_AUTH_METHOD"
+value = "trust"
+
+[services.postgres]
+image = "postgres:15"
+
+[services.postgres.concurrency]
+mode = "fixed"
+num_instances = 1

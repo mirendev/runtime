@@ -104,12 +104,69 @@ func (v *ServiceCommand) UnmarshalJSON(data []byte) error {
 	return json.Unmarshal(data, &v.data)
 }
 
+type serviceConfigData struct {
+	Service    *string        `cbor:"0,keyasint,omitempty" json:"service,omitempty"`
+	ServiceEnv *[]*NamedValue `cbor:"1,keyasint,omitempty" json:"service_env,omitempty"`
+}
+
+type ServiceConfig struct {
+	data serviceConfigData
+}
+
+func (v *ServiceConfig) HasService() bool {
+	return v.data.Service != nil
+}
+
+func (v *ServiceConfig) Service() string {
+	if v.data.Service == nil {
+		return ""
+	}
+	return *v.data.Service
+}
+
+func (v *ServiceConfig) SetService(service string) {
+	v.data.Service = &service
+}
+
+func (v *ServiceConfig) HasServiceEnv() bool {
+	return v.data.ServiceEnv != nil
+}
+
+func (v *ServiceConfig) ServiceEnv() []*NamedValue {
+	if v.data.ServiceEnv == nil {
+		return nil
+	}
+	return *v.data.ServiceEnv
+}
+
+func (v *ServiceConfig) SetServiceEnv(service_env []*NamedValue) {
+	x := slices.Clone(service_env)
+	v.data.ServiceEnv = &x
+}
+
+func (v *ServiceConfig) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *ServiceConfig) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *ServiceConfig) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *ServiceConfig) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
 type configurationData struct {
 	EnvVars         *[]*NamedValue     `cbor:"0,keyasint,omitempty" json:"env_vars,omitempty"`
 	Concurrency     *int32             `cbor:"1,keyasint,omitempty" json:"concurrency,omitempty"`
 	AutoConcurrency *AutoConcurrency   `cbor:"2,keyasint,omitempty" json:"auto_concurrency,omitempty"`
 	Commands        *[]*ServiceCommand `cbor:"3,keyasint,omitempty" json:"commands,omitempty"`
 	Entrypoint      *string            `cbor:"4,keyasint,omitempty" json:"entrypoint,omitempty"`
+	Services        *[]*ServiceConfig  `cbor:"5,keyasint,omitempty" json:"services,omitempty"`
 }
 
 type Configuration struct {
@@ -188,6 +245,22 @@ func (v *Configuration) Entrypoint() string {
 
 func (v *Configuration) SetEntrypoint(entrypoint string) {
 	v.data.Entrypoint = &entrypoint
+}
+
+func (v *Configuration) HasServices() bool {
+	return v.data.Services != nil
+}
+
+func (v *Configuration) Services() []*ServiceConfig {
+	if v.data.Services == nil {
+		return nil
+	}
+	return *v.data.Services
+}
+
+func (v *Configuration) SetServices(services []*ServiceConfig) {
+	x := slices.Clone(services)
+	v.data.Services = &x
 }
 
 func (v *Configuration) MarshalCBOR() ([]byte, error) {

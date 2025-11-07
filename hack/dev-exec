@@ -1,0 +1,65 @@
+#!/usr/bin/env bash
+# dev-exec - Execute commands in the persistent dev environment
+#
+# Usage:
+#   ./hack/dev-exec go test ./pkg/...
+#   ./hack/dev-exec m app list
+#   ./hack/dev-exec bash  # Get a shell
+#
+# This script executes commands in the persistent dev container created by
+# `make dev`. The session name is automatically derived from the current
+# directory, ensuring each worktree has its own isolated dev environment.
+
+set -e
+
+# Check if .iso directory exists (indicates we're in the repo root)
+if [ ! -d ".iso" ]; then
+  echo "Error: This script must be run from the repository root" >&2
+  echo "" >&2
+  echo "Current directory: $(pwd)" >&2
+  echo "" >&2
+  echo "Please cd to the repository root directory first." >&2
+  exit 1
+fi
+
+# Generate session name based on current directory
+SESSION="dev-$(basename "$(pwd)")"
+
+# Check if the dev environment is running by checking iso status output
+STATUS_OUTPUT=$(ISO_SESSION="$SESSION" iso status --session "$SESSION" 2>&1)
+
+if echo "$STATUS_OUTPUT" | grep -q "Container does not exist"; then
+  echo "Error: Dev environment session '$SESSION' is not running" >&2
+  echo "" >&2
+  echo "Please start the dev environment first with:" >&2
+  echo "  make dev" >&2
+  echo "  or" >&2
+  echo "  make dev-tmux" >&2
+  exit 1
+fi
+
+# Execute command in the persistent dev container as the host user
+
+# Guard: if no arguments, drop into an interactive shell
+if [ "$#" -eq 0 ]; then
+  ISO_SESSION="$SESSION" iso run bash -c "cd /src && exec su dev"
+  exit
+fi
+
+# Special case: dev-server needs to run as root for process management
+if [[ "$1" == "bash" && "$2" == "hack/dev-server" ]]; then
+  # Run dev-server as root (needs to manage root-owned server process)
+  ISO_SESSION="$SESSION" iso run "$@"
+# Special case: interactive bash shell needs proper TTY (no -c flag)
+elif [[ "$1" == "bash" && $# -eq 1 ]]; then
+  # Use exec su dev for proper interactive shell with job control
+  ISO_SESSION="$SESSION" iso run bash -c "cd /src && exec su dev"
+else
+  # Build a properly quoted command string to preserve arguments with spaces/special chars
+  # Use -s /bin/bash to ensure ANSI-C quoting ($'...' from printf %q) is supported
+  CMD="cd /src && "
+  for arg in "$@"; do
+    CMD+="$(printf '%q ' "$arg")"
+  done
+  ISO_SESSION="$SESSION" iso run su -s /bin/bash dev -c "$CMD"
+fi

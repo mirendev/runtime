@@ -431,7 +431,6 @@ func (h *Server) forwardToLease(ctx context.Context, w http.ResponseWriter, req 
 	he.ServeHTTP(w, req)
 }
 
-
 /*
 func (h *LeaseHTTP) extractEndpoint(ctx context.Context, container containerd.Container) (discovery.Endpoint, error) {
 	labels, err := container.Labels(ctx)
@@ -491,7 +490,7 @@ func (rw *responseWriter) Unwrap() http.ResponseWriter {
 
 // HealthResponse represents the JSON response for /health endpoint
 type HealthResponse struct {
-	Status string              `json:"status"`
+	Status string                 `json:"status"`
 	Checks map[string]HealthCheck `json:"checks"`
 }
 

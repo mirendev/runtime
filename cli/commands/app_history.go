@@ -62,7 +62,7 @@ func AppHistory(ctx *Context, opts struct {
 			}
 		}
 		deployments = filtered
-		
+
 		// Check if all deployments were filtered out
 		if len(deployments) == 0 {
 			ctx.Printf("No deployments found for app '%s'", opts.App)
@@ -155,7 +155,7 @@ func AppHistory(ctx *Context, opts struct {
 		gitSha := "-"
 		gitBranch := "-"
 		gitMessage := "-"
-		
+
 		if dep.HasGitInfo() && dep.GitInfo() != nil {
 			git := dep.GitInfo()
 			if git.HasSha() && git.Sha() != "" {

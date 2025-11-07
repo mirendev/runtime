@@ -203,6 +203,57 @@ func (r *AppInfo) SetConfiguration(ctx context.Context, state *app_v1alpha.CrudS
 		}
 	}
 
+	// Handle per-service env vars
+	if cfg.HasServices() {
+		for _, svcCfg := range cfg.Services() {
+			// Validate per-service env vars
+			if svcCfg.HasServiceEnv() {
+				for _, nv := range svcCfg.ServiceEnv() {
+					if strings.HasPrefix(nv.Key(), "MIREN_") {
+						return fmt.Errorf("cannot set MIREN_ environment variables")
+					}
+				}
+			}
+
+			// Find or create the service in appVer.Config.Services
+			var found bool
+			for i := range appVer.Config.Services {
+				if appVer.Config.Services[i].Name == svcCfg.Service() {
+					// Update existing service's env vars
+					appVer.Config.Services[i].Env = nil
+					if svcCfg.HasServiceEnv() {
+						for _, ev := range svcCfg.ServiceEnv() {
+							nv := core_v1alpha.Env{
+								Key:       ev.Key(),
+								Value:     ev.Value(),
+								Sensitive: ev.Sensitive(),
+							}
+							appVer.Config.Services[i].Env = append(appVer.Config.Services[i].Env, nv)
+						}
+					}
+					found = true
+					break
+				}
+			}
+
+			// If service doesn't exist yet, create it
+			if !found && svcCfg.HasServiceEnv() {
+				svc := core_v1alpha.Services{
+					Name: svcCfg.Service(),
+				}
+				for _, ev := range svcCfg.ServiceEnv() {
+					nv := core_v1alpha.Env{
+						Key:       ev.Key(),
+						Value:     ev.Value(),
+						Sensitive: ev.Sensitive(),
+					}
+					svc.Env = append(svc.Env, nv)
+				}
+				appVer.Config.Services = append(appVer.Config.Services, svc)
+			}
+		}
+	}
+
 	appVer.Config.Entrypoint = cfg.Entrypoint()
 
 	appVer.Version = name + "-" + idgen.Gen("v")
@@ -283,6 +334,29 @@ func (r *AppInfo) GetConfiguration(ctx context.Context, state *app_v1alpha.CrudG
 	}
 
 	cfg.SetEnvVars(envVars)
+
+	// Add per-service configurations
+	var services []*app_v1alpha.ServiceConfig
+	for _, svc := range appVer.Config.Services {
+		var sc app_v1alpha.ServiceConfig
+		sc.SetService(svc.Name)
+
+		// Add service env vars
+		if len(svc.Env) > 0 {
+			var svcEnvVars []*app_v1alpha.NamedValue
+			for _, ev := range svc.Env {
+				var env app_v1alpha.NamedValue
+				env.SetKey(ev.Key)
+				env.SetValue(ev.Value)
+				env.SetSensitive(ev.Sensitive)
+				svcEnvVars = append(svcEnvVars, &env)
+			}
+			sc.SetServiceEnv(svcEnvVars)
+		}
+
+		services = append(services, &sc)
+	}
+	cfg.SetServices(services)
 
 	cfg.SetEntrypoint(appVer.Config.Entrypoint)
 

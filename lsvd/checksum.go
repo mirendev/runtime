@@ -6,7 +6,6 @@ import (
 	"github.com/mr-tron/base58"
 )
 
-
 func blkSum(b []byte) string {
 	b = b[:BlockSize]
 

@@ -81,6 +81,23 @@ kinds:
             name:
               type: string
               doc: The service name (e.g. web, worker)
+            image:
+              type: string
+              doc: Optional container image for this service (e.g. postgres:16). If not specified, uses the app-level built image.
+            env:
+              type: component
+              doc: Environment variables for this service only
+              many: true
+              attrs:
+                key:
+                  type: string
+                  doc: The name of the variable
+                value:
+                  type: string
+                  doc: The value of the variable
+                sensitive:
+                  type: bool
+                  doc: Whether or not the value is sensitive
             service_concurrency:
               type: component
               doc: Concurrency configuration for this service

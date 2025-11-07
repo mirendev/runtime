@@ -15,14 +15,12 @@ import (
 	"github.com/tonistiigi/fsutil"
 	"miren.dev/runtime/api/app"
 	"miren.dev/runtime/api/build/build_v1alpha"
-	compute "miren.dev/runtime/api/compute/compute_v1alpha"
 	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/api/entityserver"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/appconfig"
 	"miren.dev/runtime/components/netresolve"
 	"miren.dev/runtime/pkg/cond"
-	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/idgen"
 	"miren.dev/runtime/pkg/procfile"
 	"miren.dev/runtime/pkg/rpc/stream"
@@ -111,12 +109,19 @@ func buildServicesConfig(appConfig *appconfig.AppConfig, procfileServices map[st
 
 		// Map from appconfig to entity schema
 		// After ResolveDefaults(), every service is guaranteed to have config
-		if serviceConfig, ok := ac.Services[serviceName]; ok && serviceConfig != nil && serviceConfig.Concurrency != nil {
-			svc.ServiceConcurrency = core_v1alpha.ServiceConcurrency{
-				Mode:                serviceConfig.Concurrency.Mode,
-				NumInstances:        int64(serviceConfig.Concurrency.NumInstances),
-				RequestsPerInstance: int64(serviceConfig.Concurrency.RequestsPerInstance),
-				ScaleDownDelay:      serviceConfig.Concurrency.ScaleDownDelay,
+		if serviceConfig, ok := ac.Services[serviceName]; ok && serviceConfig != nil {
+			// Copy image if specified
+			if serviceConfig.Image != "" {
+				svc.Image = serviceConfig.Image
+			}
+
+			if serviceConfig.Concurrency != nil {
+				svc.ServiceConcurrency = core_v1alpha.ServiceConcurrency{
+					Mode:                serviceConfig.Concurrency.Mode,
+					NumInstances:        int64(serviceConfig.Concurrency.NumInstances),
+					RequestsPerInstance: int64(serviceConfig.Concurrency.RequestsPerInstance),
+					ScaleDownDelay:      serviceConfig.Concurrency.ScaleDownDelay,
+				}
 			}
 		}
 
@@ -124,6 +129,32 @@ func buildServicesConfig(appConfig *appconfig.AppConfig, procfileServices map[st
 	}
 
 	return services
+}
+
+func buildVariablesFromAppConfig(appConfig *appconfig.AppConfig) []core_v1alpha.Variable {
+	if appConfig == nil || len(appConfig.EnvVars) == 0 {
+		return nil
+	}
+
+	variables := make([]core_v1alpha.Variable, 0, len(appConfig.EnvVars))
+	for _, envVar := range appConfig.EnvVars {
+		variables = append(variables, core_v1alpha.Variable{
+			Key:   envVar.Name,
+			Value: envVar.Value,
+		})
+	}
+	return variables
+}
+
+// mergeVariablesFromAppConfig merges environment variables from app.toml into existing variables.
+// If appConfig has env vars, they replace the existing variables.
+// If appConfig is nil or has no env vars, the existing variables are preserved.
+func mergeVariablesFromAppConfig(existingVars []core_v1alpha.Variable, appConfig *appconfig.AppConfig) []core_v1alpha.Variable {
+	newVars := buildVariablesFromAppConfig(appConfig)
+	if newVars != nil {
+		return newVars
+	}
+	return existingVars
 }
 
 func (b *Builder) nextVersion(ctx context.Context, name string) (
@@ -254,6 +285,9 @@ func (b *Builder) BuildFromTar(ctx context.Context, state *build_v1alpha.Builder
 	if err != nil {
 		b.Log.Warn("error loading app config, ignoring", "error", err)
 	}
+	if ac != nil {
+		b.Log.Info("loaded app config", "name", ac.Name, "envVarCount", len(ac.EnvVars), "serviceCount", len(ac.Services))
+	}
 
 	var buildStack BuildStack
 	buildStack.CodeDir = path
@@ -361,7 +395,7 @@ func (b *Builder) BuildFromTar(ctx context.Context, state *build_v1alpha.Builder
 		//LogWriter: b.LogWriter,
 	}
 
-	appRec, mrv, artName, err := b.nextVersion(ctx, name)
+	_, mrv, artName, err := b.nextVersion(ctx, name)
 	if err != nil {
 		b.Log.Error("error getting next version", "error", err)
 		b.sendErrorStatus(ctx, status, "Error getting next version: %v", err)
@@ -473,13 +507,19 @@ func (b *Builder) BuildFromTar(ctx context.Context, state *build_v1alpha.Builder
 
 	mrv.Config.Commands = serviceCmds
 
+	// Merge environment variables from app config
+	// Preserves existing variables when app.toml has no [[env]] section
+	mrv.Config.Variable = mergeVariablesFromAppConfig(mrv.Config.Variable, ac)
+	if ac != nil && len(ac.EnvVars) > 0 {
+		b.Log.Info("merged env vars from app config", "count", len(ac.EnvVars))
+	} else {
+		b.Log.Info("no new env vars from app config, preserving existing variables")
+	}
+
 	id, err := b.ec.Create(ctx, mrv.Version, mrv)
 	if err != nil {
 		return fmt.Errorf("error creating app version: %w", err)
 	}
-
-	// Remember the old version before updating
-	oldVersion := appRec.ActiveVersion
 
 	b.Log.Info("updating app entity with new version", "app", name, "version", mrv.Version)
 	err = b.appClient.SetActiveVersion(ctx, name, string(id))
@@ -489,44 +529,9 @@ func (b *Builder) BuildFromTar(ctx context.Context, state *build_v1alpha.Builder
 
 	b.Log.Info("app version updated", "app", name, "version", mrv.Version)
 
-	// Scale down old version pools (immutable pool approach)
-	if oldVersion != "" {
-		b.Log.Info("scaling down old version pools", "oldVersion", oldVersion)
-
-		// Query for all SandboxPool entities
-		pools, err := b.ec.List(ctx, entity.Ref(entity.EntityKind, compute.KindSandboxPool))
-		if err != nil {
-			b.Log.Error("error listing sandbox pools", "error", err)
-			// Don't fail the build if we can't scale down old pools
-		} else {
-			for pools.Next() {
-				var pool compute.SandboxPool
-				err := pools.Read(&pool)
-				if err != nil {
-					b.Log.Error("error reading sandbox pool", "error", err)
-					continue
-				}
-
-				// Only scale down pools that reference the old version
-				if pool.SandboxSpec.Version == oldVersion {
-					b.Log.Info("scaling down old pool", "pool", pool.ID, "service", pool.Service)
-
-					// Set desired_instances to 0 explicitly; Patch preserves zero values
-					attrs := []entity.Attr{
-						entity.Ref(entity.DBId, pool.ID),
-						entity.Int64(compute.SandboxPoolDesiredInstancesId, 0),
-					}
-					_, err = b.EAS.Patch(ctx, attrs, 0)
-					if err != nil {
-						b.Log.Error("error scaling down old pool", "pool", pool.ID, "error", err)
-						continue
-					}
-
-					b.Log.Info("old pool scaled to zero", "pool", pool.ID, "service", pool.Service)
-				}
-			}
-		}
-	}
+	// Note: Old version pool cleanup is now handled by the DeploymentLauncher controller
+	// via the referenced_by_versions field. The launcher removes version references and
+	// scales down pools when they're no longer in use.
 
 	state.Results().SetVersion(mrv.Version)
 

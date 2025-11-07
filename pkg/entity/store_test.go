@@ -1725,6 +1725,101 @@ func TestEtcdStore_NestedComponentFieldIndexing(t *testing.T) {
 		require.NoError(t, err)
 		assert.Len(t, results, 0, "Should not find entity indexed under v1 after patch")
 	})
+
+	// Note: DeleteEntity nested index cleanup is tested at the entityserver level
+	// in servers/entityserver/entityserver_test.go::TestEntityServer_List_NestedIndexCleanup
+	// That test properly catches the bug by testing the full RPC path that production uses.
+}
+
+// TestEtcdStore_DeleteEntity_IndexCleanup_DirectQuery tests that DeleteEntity properly
+// cleans up indexes by directly querying etcd to inspect the index collections.
+//
+// Why direct etcd queries are necessary:
+//   - ListIndex internally deduplicates results, so calling ListIndex after deletion
+//     may return the correct count even if stale index entries remain in etcd
+//   - This test queries etcd directly to verify that the actual index collection keys
+//     are removed, not just that ListIndex returns the right IDs
+//   - When the bug exists, this test shows 2 keys remain in etcd after deletion
+//   - When fixed, only 1 key remains (the non-deleted entity)
+func TestEtcdStore_DeleteEntity_IndexCleanup_DirectQuery(t *testing.T) {
+	client := setupTestEtcd(t)
+	store, err := NewEtcdStore(t.Context(), slog.Default(), client, "/test-entities-debug")
+	require.NoError(t, err)
+
+	// Create schema for a component with a nested indexed field
+	_, err = store.CreateEntity(t.Context(), New(
+		Ident, "debug/spec",
+		Doc, "A component type",
+		Cardinality, CardinalityOne,
+		Type, TypeComponent,
+	))
+	require.NoError(t, err)
+
+	_, err = store.CreateEntity(t.Context(), New(
+		Ident, "debug/spec.version",
+		Doc, "Version field within spec component",
+		Cardinality, CardinalityOne,
+		Type, TypeRef,
+		Index, true,
+	))
+	require.NoError(t, err)
+
+	// Create a version entity
+	v1 := Id("version/debug-v1")
+	_, err = store.CreateEntity(t.Context(), New(Ref(DBId, v1)))
+	require.NoError(t, err)
+
+	// Create two entities with nested indexed fields
+	entity1, err := store.CreateEntity(t.Context(), New([]Attr{
+		Keyword(Ident, "debug-resource1"),
+		Component(Id("debug/spec"), []Attr{
+			Ref(Id("debug/spec.version"), v1),
+		}),
+	}))
+	require.NoError(t, err)
+
+	entity2, err := store.CreateEntity(t.Context(), New([]Attr{
+		Keyword(Ident, "debug-resource2"),
+		Component(Id("debug/spec"), []Attr{
+			Ref(Id("debug/spec.version"), v1),
+		}),
+	}))
+	require.NoError(t, err)
+
+	// Query etcd directly to see the collection keys BEFORE deletion
+	attr := Ref(Id("debug/spec.version"), v1)
+	collectionKey := attr.CAS()
+	prefix, err := store.CollectionPrefix(t.Context(), collectionKey)
+	require.NoError(t, err)
+
+	t.Logf("Collection prefix: %s", prefix)
+
+	resp, err := client.Get(t.Context(), prefix, clientv3.WithPrefix())
+	require.NoError(t, err)
+	t.Logf("BEFORE DELETE: Found %d keys in etcd collection", len(resp.Kvs))
+	for _, kv := range resp.Kvs {
+		t.Logf("  Key: %s, Value: %s", string(kv.Key), string(kv.Value))
+	}
+	require.Len(t, resp.Kvs, 2, "Should have 2 index entries before deletion")
+
+	// Delete entity1
+	err = store.DeleteEntity(t.Context(), entity1.Id())
+	require.NoError(t, err)
+
+	// Query etcd directly AFTER deletion
+	resp, err = client.Get(t.Context(), prefix, clientv3.WithPrefix())
+	require.NoError(t, err)
+	t.Logf("AFTER DELETE: Found %d keys in etcd collection", len(resp.Kvs))
+	for _, kv := range resp.Kvs {
+		t.Logf("  Key: %s, Value: %s", string(kv.Key), string(kv.Value))
+	}
+
+	// CRITICAL: If the bug exists, this should show 2 keys (stale index)
+	// If the fix works, this should show 1 key
+	require.Len(t, resp.Kvs, 1, "Should have only 1 index entry after deletion - entity1's entry should be removed")
+
+	// Verify the remaining entry is for entity2
+	assert.Equal(t, entity2.Id().String(), string(resp.Kvs[0].Value))
 }
 
 func TestEntity_Fixup_DbId(t *testing.T) {

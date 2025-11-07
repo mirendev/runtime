@@ -11,6 +11,61 @@ import (
 	"miren.dev/runtime/pkg/rpc/stream"
 )
 
+type reindexStatData struct {
+	Name  *string `cbor:"0,keyasint,omitempty" json:"name,omitempty"`
+	Value *int64  `cbor:"1,keyasint,omitempty" json:"value,omitempty"`
+}
+
+type ReindexStat struct {
+	data reindexStatData
+}
+
+func (v *ReindexStat) HasName() bool {
+	return v.data.Name != nil
+}
+
+func (v *ReindexStat) Name() string {
+	if v.data.Name == nil {
+		return ""
+	}
+	return *v.data.Name
+}
+
+func (v *ReindexStat) SetName(name string) {
+	v.data.Name = &name
+}
+
+func (v *ReindexStat) HasValue() bool {
+	return v.data.Value != nil
+}
+
+func (v *ReindexStat) Value() int64 {
+	if v.data.Value == nil {
+		return 0
+	}
+	return *v.data.Value
+}
+
+func (v *ReindexStat) SetValue(value int64) {
+	v.data.Value = &value
+}
+
+func (v *ReindexStat) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *ReindexStat) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *ReindexStat) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *ReindexStat) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
 type entityData struct {
 	Id        *string        `cbor:"0,keyasint,omitempty" json:"id,omitempty"`
 	Revision  *int64         `cbor:"1,keyasint,omitempty" json:"revision,omitempty"`
@@ -1672,6 +1727,72 @@ func (v *EntityAccessPingSessionResults) UnmarshalJSON(data []byte) error {
 	return json.Unmarshal(data, &v.data)
 }
 
+type entityAccessReindexArgsData struct {
+	DryRun *bool `cbor:"0,keyasint,omitempty" json:"dry_run,omitempty"`
+}
+
+type EntityAccessReindexArgs struct {
+	call rpc.Call
+	data entityAccessReindexArgsData
+}
+
+func (v *EntityAccessReindexArgs) HasDryRun() bool {
+	return v.data.DryRun != nil
+}
+
+func (v *EntityAccessReindexArgs) DryRun() bool {
+	if v.data.DryRun == nil {
+		return false
+	}
+	return *v.data.DryRun
+}
+
+func (v *EntityAccessReindexArgs) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *EntityAccessReindexArgs) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *EntityAccessReindexArgs) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *EntityAccessReindexArgs) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type entityAccessReindexResultsData struct {
+	Stats *[]*ReindexStat `cbor:"0,keyasint,omitempty" json:"stats,omitempty"`
+}
+
+type EntityAccessReindexResults struct {
+	call rpc.Call
+	data entityAccessReindexResultsData
+}
+
+func (v *EntityAccessReindexResults) SetStats(stats []*ReindexStat) {
+	x := slices.Clone(stats)
+	v.data.Stats = &x
+}
+
+func (v *EntityAccessReindexResults) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *EntityAccessReindexResults) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *EntityAccessReindexResults) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *EntityAccessReindexResults) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
 type EntityAccessGet struct {
 	rpc.Call
 	args    EntityAccessGetArgs
@@ -2140,6 +2261,32 @@ func (t *EntityAccessPingSession) Results() *EntityAccessPingSessionResults {
 	return results
 }
 
+type EntityAccessReindex struct {
+	rpc.Call
+	args    EntityAccessReindexArgs
+	results EntityAccessReindexResults
+}
+
+func (t *EntityAccessReindex) Args() *EntityAccessReindexArgs {
+	args := &t.args
+	if args.call != nil {
+		return args
+	}
+	args.call = t.Call
+	t.Call.Args(args)
+	return args
+}
+
+func (t *EntityAccessReindex) Results() *EntityAccessReindexResults {
+	results := &t.results
+	if results.call != nil {
+		return results
+	}
+	results.call = t.Call
+	t.Call.Results(results)
+	return results
+}
+
 type EntityAccess interface {
 	Get(ctx context.Context, state *EntityAccessGet) error
 	Put(ctx context.Context, state *EntityAccessPut) error
@@ -2159,6 +2306,7 @@ type EntityAccess interface {
 	CreateSession(ctx context.Context, state *EntityAccessCreateSession) error
 	RevokeSession(ctx context.Context, state *EntityAccessRevokeSession) error
 	PingSession(ctx context.Context, state *EntityAccessPingSession) error
+	Reindex(ctx context.Context, state *EntityAccessReindex) error
 }
 
 type reexportEntityAccess struct {
@@ -2234,6 +2382,10 @@ func (reexportEntityAccess) RevokeSession(ctx context.Context, state *EntityAcce
 }
 
 func (reexportEntityAccess) PingSession(ctx context.Context, state *EntityAccessPingSession) error {
+	panic("not implemented")
+}
+
+func (reexportEntityAccess) Reindex(ctx context.Context, state *EntityAccessReindex) error {
 	panic("not implemented")
 }
 
@@ -2385,6 +2537,14 @@ func AdaptEntityAccess(t EntityAccess) *rpc.Interface {
 			Index:         0,
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.PingSession(ctx, &EntityAccessPingSession{Call: call})
+			},
+		},
+		{
+			Name:          "reindex",
+			InterfaceName: "EntityAccess",
+			Index:         0,
+			Handler: func(ctx context.Context, call rpc.Call) error {
+				return t.Reindex(ctx, &EntityAccessReindex{Call: call})
 			},
 		},
 	}
@@ -2984,4 +3144,34 @@ func (v EntityAccessClient) PingSession(ctx context.Context, id string) (*Entity
 	}
 
 	return &EntityAccessClientPingSessionResults{client: v.Client, data: ret}, nil
+}
+
+type EntityAccessClientReindexResults struct {
+	client rpc.Client
+	data   entityAccessReindexResultsData
+}
+
+func (v *EntityAccessClientReindexResults) HasStats() bool {
+	return v.data.Stats != nil
+}
+
+func (v *EntityAccessClientReindexResults) Stats() []*ReindexStat {
+	if v.data.Stats == nil {
+		return nil
+	}
+	return *v.data.Stats
+}
+
+func (v EntityAccessClient) Reindex(ctx context.Context, dry_run bool) (*EntityAccessClientReindexResults, error) {
+	args := EntityAccessReindexArgs{}
+	args.data.DryRun = &dry_run
+
+	var ret entityAccessReindexResultsData
+
+	err := v.Call(ctx, "reindex", &args, &ret)
+	if err != nil {
+		return nil, err
+	}
+
+	return &EntityAccessClientReindexResults{client: v.Client, data: ret}, nil
 }

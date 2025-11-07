@@ -224,7 +224,6 @@ func (s *ServiceController) setupEndpointChain(cmd *nftCommands, ip netip.Addr, 
 	return endpoint, nil
 }
 
-
 func (s *ServiceController) systemTables() ([]string, error) {
 	cmd := exec.Command("nft", "-j", "list", "tables")
 	out, err := cmd.Output()
