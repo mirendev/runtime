@@ -115,9 +115,7 @@ jobs:
         echo "$(go env GOPATH)/bin" >> $GITHUB_PATH
 
     - name: Test
-      env:
-        DISABLE_NBD_TEST: 1
-      run: make test
+      run: make test-ci
 
   test-e2e:
     needs: lint

@@ -84,6 +84,9 @@ release-data:
 test: ## Run all tests
 	iso run bash hack/test.sh ./...
 
+test-ci: ## Run all tests for CI
+	iso run DISABLE_NBD_TEST=1 bash hack/test.sh ./...
+
 test-shell: ## Run tests with interactive shell
 	iso run USESHELL=1 bash hack/test.sh
 
