@@ -59,7 +59,7 @@ func (d *DeploymentServer) CreateDeployment(ctx context.Context, req *deployment
 	if len(existingDeployments) > 0 {
 		// Found an existing in_progress deployment
 		existing := existingDeployments[0]
-		
+
 		// Parse the deployment timestamp
 		deploymentTime, err := time.Parse(time.RFC3339, existing.DeployedBy.Timestamp)
 		if err != nil {
@@ -113,13 +113,13 @@ func (d *DeploymentServer) CreateDeployment(ctx context.Context, req *deployment
 		existing.Status = "failed"
 		existing.ErrorMessage = "Deployment timed out after 30 minutes"
 		existing.CompletedAt = time.Now().Format(time.RFC3339)
-		
+
 		// Update entity
 		updateAttrs := existing.Encode()
 		updateEntity := &entityserver_v1alpha.Entity{}
 		updateEntity.SetId(string(existing.ID))
 		updateEntity.SetAttrs(updateAttrs)
-		
+
 		// We don't have the revision here, so we need to get it
 		if existingEntity, err := d.EAC.Get(ctx, string(existing.ID)); err == nil {
 			updateEntity.SetRevision(existingEntity.Entity().Revision())
