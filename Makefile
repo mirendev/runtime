@@ -63,20 +63,6 @@ dev-rebuild: ## Rebuild dev environment image
         dev-stop dev-restart dev-status dev-rebuild \
         dev-stop dev-restart dev-status
 
-services:
-	iso run bash hack/run-services.sh
-
-.PHONY: services
-
-image:
-	iso run sh -c "docker save runtime-shell | gzip > /workspace/tmp/miren-image.tar.gz"
-	@echo "Image saved to tmp/miren-image.tar.gz"
-
-release-data:
-	bash hack/release-data.sh
-
-.PHONY: release-data
-
 #
 # Testing (iso)
 #
@@ -178,36 +164,3 @@ services: ## Run services container for debugging
 	iso run bash hack/run-services.sh
 
 .PHONY: services
-
-#
-# Dagger targets (for CI/CD)
-#
-
-test-dagger: ## Run all tests (Dagger)
-	dagger call -q test --dir=.
-
-test-dagger-interactive: ## Run tests interactively (Dagger)
-	dagger call -i -q test --dir=.
-
-test-shell-dagger: ## Run tests with shell (Dagger)
-	dagger call -q test --dir=. --shell
-
-test-e2e-dagger: ## Run end-to-end tests (Dagger)
-	dagger call -q test --dir=. --tests="./e2e" --tags=e2e
-
-dev-dagger: ## Start dev environment (Dagger)
-	dagger call -q dev --dir=.
-
-services-dagger: ## Run services container (Dagger)
-	dagger call debug --dir=.
-
-image-dagger: ## Build and import Docker image (Dagger)
-	dagger call -q container --dir=. export --path=tmp/latest.tar
-	docker import tmp/latest.tar miren:latest
-	rm tmp/latest.tar
-
-release-data-dagger: ## Create release package (Dagger)
-	dagger call package --dir=. export --path=release.tar.gz
-
-.PHONY: test-dagger test-dagger-interactive test-shell-dagger test-e2e-dagger \
-        dev-dagger services-dagger image-dagger release-data-dagger

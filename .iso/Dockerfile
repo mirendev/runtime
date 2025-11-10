@@ -1,5 +1,4 @@
 # Miren Runtime Build Environment
-# Based on the Dagger BuildEnv() function
 
 FROM golang:1.24
 

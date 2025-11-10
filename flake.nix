@@ -6,13 +6,10 @@
     url = "github:numtide/flake-utils";
     inputs.systems.follows = "systems";
   };
-  inputs.dagger.url = "github:dagger/nix";
-  inputs.dagger.inputs.nixpkgs.follows = "nixpkgs";
 
   outputs = {
     nixpkgs,
     flake-utils,
-    dagger,
     ...
   }:
     flake-utils.lib.eachDefaultSystem (
@@ -24,7 +21,6 @@
             pkgs.go_1_24
             pkgs.golangci-lint
             pkgs.gotools
-            dagger.packages.${system}.dagger
           ];
 
           # Allow gopls to work in e2e tests
