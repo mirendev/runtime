@@ -90,6 +90,50 @@ make dev-shell                # Open another shell (from host)
 make dev-stop                 # Tear down environment
 ```
 
+**Connecting to a local Miren Cloud instance:**
+
+The dev environment can connect to a local copy of Miren Cloud for testing the full authentication and registration flow.
+
+Prerequisites:
+- Miren Cloud running locally (typically on `http://localhost:3001`)
+- The `.iso/config.yml` includes `extra_hosts` configuration for host access:
+  ```yaml
+  extra_hosts:
+    - "miren.host:host-gateway"
+  ```
+  This allows containers to reach the host machine via `miren.host` instead of `localhost`.
+
+Workflow:
+```bash
+# 1. Start the dev environment
+make dev
+
+# 2. Login to your local cloud (inside dev shell or via dev-exec)
+m login --url http://miren.host:3001
+# Follow the URL to authenticate in your browser
+
+# 3. Register the cluster with cloud
+m register -u http://miren.host:3001 -n my-dev-cluster
+# Approve the registration in the browser when prompted
+
+# 4. Restart server to activate registration
+make dev-server-restart
+
+# 5. Verify the setup
+m cluster list
+m app list
+```
+
+**Important notes:**
+- Use `miren.host:3001` (not `localhost:3001`) from inside the dev container
+- The server must be restarted after registration to load the new cluster configuration
+- Registration creates `/var/lib/miren/server/registration.json` with cluster credentials
+- Login creates `~/.config/miren/clientconfig.yaml` with user credentials
+
+**With Dagger (for CI compatibility):**
+- `make dev-dagger` - Start development environment with Dagger
+- `make services-dagger` - Run services container for debugging
+
 ### Other Commands
 - `make image` - Export Docker image
 - `make release-data` - Create release package tar.gz
