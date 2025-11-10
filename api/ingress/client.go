@@ -18,6 +18,7 @@ import (
 type Client struct {
 	log *slog.Logger
 	ec  *entityserver.Client
+	eac *entityserver_v1alpha.EntityAccessClient
 }
 
 // NewClient creates a new Ingress client from an RPC client
@@ -28,6 +29,7 @@ func NewClient(log *slog.Logger, client rpc.Client) *Client {
 	return &Client{
 		log: log.With("module", "ingress-client"),
 		ec:  entityClient,
+		eac: eac,
 	}
 }
 
@@ -120,6 +122,73 @@ func (c *Client) EnsureSingleDefault(ctx context.Context, routeToKeep *ingress_v
 		if err := c.ec.Delete(ctx, route.ID); err != nil {
 			return fmt.Errorf("failed to delete old default route %s: %w", route.ID, err)
 		}
+	}
+
+	return nil
+}
+
+// RouteWithMeta includes an http_route with its metadata
+type RouteWithMeta struct {
+	Route     *ingress_v1alpha.HttpRoute
+	CreatedAt int64
+	UpdatedAt int64
+}
+
+// List returns all http_routes with metadata
+func (c *Client) List(ctx context.Context) ([]*RouteWithMeta, error) {
+	kindRes, err := c.eac.LookupKind(ctx, "http_route")
+	if err != nil {
+		return nil, fmt.Errorf("failed to lookup http_route kind: %w", err)
+	}
+
+	res, err := c.eac.List(ctx, kindRes.Attr())
+	if err != nil {
+		return nil, fmt.Errorf("failed to list routes: %w", err)
+	}
+
+	var routes []*RouteWithMeta
+	for _, e := range res.Values() {
+		var route ingress_v1alpha.HttpRoute
+		route.Decode(e.Entity())
+		routes = append(routes, &RouteWithMeta{
+			Route:     &route,
+			CreatedAt: e.CreatedAt(),
+			UpdatedAt: e.UpdatedAt(),
+		})
+	}
+
+	return routes, nil
+}
+
+// SetRoute creates or updates an http_route for the given host and app
+func (c *Client) SetRoute(ctx context.Context, host string, appId entity.Id) (*ingress_v1alpha.HttpRoute, error) {
+	route := &ingress_v1alpha.HttpRoute{
+		Host: host,
+		App:  appId,
+	}
+
+	// Use the host as the route name/ID
+	_, err := c.ec.CreateOrUpdate(ctx, host, route)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create/update route: %w", err)
+	}
+
+	return route, nil
+}
+
+// DeleteByHost deletes an http_route by hostname
+func (c *Client) DeleteByHost(ctx context.Context, host string) error {
+	route, err := c.Lookup(ctx, host)
+	if err != nil {
+		return err
+	}
+
+	if route == nil {
+		return fmt.Errorf("route not found: %s", host)
+	}
+
+	if err := c.ec.Delete(ctx, route.ID); err != nil {
+		return fmt.Errorf("failed to delete route: %w", err)
 	}
 
 	return nil

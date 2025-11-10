@@ -107,20 +107,32 @@ func AllCommands() map[string]cli.CommandFactory {
 			return Infer("set", "Set concurrency for an application", Set), nil
 		},
 
-		"default-route set": func() (cli.Command, error) {
-			return Infer("default-route set", "Set an app as the default route", DefaultRouteSet), nil
+		"route": func() (cli.Command, error) {
+			return Infer("route", "List all HTTP routes", Route), nil
 		},
 
-		"default-route unset": func() (cli.Command, error) {
-			return Infer("default-route unset", "Remove default route flag from all apps", DefaultRouteUnset), nil
+		"route list": func() (cli.Command, error) {
+			return Infer("route list", "List all HTTP routes", RouteList), nil
 		},
 
-		"default-route show": func() (cli.Command, error) {
-			return Infer("default-route show", "Show which app is currently the default route", DefaultRouteShow), nil
+		"route set": func() (cli.Command, error) {
+			return Infer("route set", "Create or update an HTTP route", RouteSet), nil
 		},
 
-		"set host": func() (cli.Command, error) {
-			return Infer("set host", "Set the hostname of an application", SetHost), nil
+		"route remove": func() (cli.Command, error) {
+			return Infer("route remove", "Remove an HTTP route", RouteRemove), nil
+		},
+
+		"route show": func() (cli.Command, error) {
+			return Infer("route show", "Show details of an HTTP route", RouteShow), nil
+		},
+
+		"route set-default": func() (cli.Command, error) {
+			return Infer("route set-default", "Set an app as the default route", RouteSetDefault), nil
+		},
+
+		"route unset-default": func() (cli.Command, error) {
+			return Infer("route unset-default", "Remove the default route", RouteUnsetDefault), nil
 		},
 
 		"logs": func() (cli.Command, error) {
