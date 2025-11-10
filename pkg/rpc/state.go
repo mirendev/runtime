@@ -40,13 +40,17 @@ func init() {
 	}
 
 	DefaultQUICConfig = quic.Config{
-		EnableDatagrams:       true,
-		MaxIncomingStreams:    1000,
-		MaxIncomingUniStreams: 1000,
-		Allow0RTT:             true,
-		KeepAlivePeriod:       10 * time.Second,
-		MaxIdleTimeout:        30 * time.Second,
-		Tracer:                qlog.DefaultConnectionTracer,
+		EnableDatagrams:                true,
+		MaxIncomingStreams:             1000,
+		MaxIncomingUniStreams:          1000,
+		Allow0RTT:                      true,
+		KeepAlivePeriod:                10 * time.Second,
+		MaxIdleTimeout:                 30 * time.Second,
+		Tracer:                         qlog.DefaultConnectionTracer,
+		InitialStreamReceiveWindow:     5 * 1024 * 1024,  // 5MB per stream
+		MaxStreamReceiveWindow:         20 * 1024 * 1024, // 20MB max per stream
+		InitialConnectionReceiveWindow: 10 * 1024 * 1024, // 10MB total
+		MaxConnectionReceiveWindow:     20 * 1024 * 1024, // 20MB total max
 	}
 
 	DefaultTransport.QUICConfig = &DefaultQUICConfig

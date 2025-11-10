@@ -45,7 +45,7 @@ func StreamRecv[T any](fn func(T) error) SendStream[T] {
 	return &Receiver[T]{fn: fn}
 }
 
-const streamChunkSize = 1024 * 1024 // 1MB chunks for efficient streaming
+const streamChunkSize = 10 * 1024 * 1024 // 10MB chunks for efficient streaming over high-latency links
 
 type rscReader struct {
 	ctx    context.Context
