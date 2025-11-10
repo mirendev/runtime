@@ -72,7 +72,7 @@ jobs:
                   "elements": [
                     {
                       "type": "mrkdwn",
-                      "text": "<${{ github.event.workflow_run.head_commit.url }}|View commit> • <${{ github.event.workflow_run.html_url }}|View test run>"
+                      "text": "<${{ github.event.workflow_run.repository.html_url }}/commit/${{ github.event.workflow_run.head_sha }}|View commit> • <${{ github.event.workflow_run.html_url }}|View test run>"
                     }
                   ]
                 }
@@ -251,7 +251,7 @@ jobs:
                     },
                     {
                       "type": "mrkdwn",
-                      "text": "*Commit:*\n<${{ github.event.workflow_run.head_commit.url }}|${{ github.event.workflow_run.head_commit.message }}>"
+                      "text": "*Commit:*\n<${{ github.event.workflow_run.repository.html_url }}/commit/${{ github.event.workflow_run.head_sha }}|${{ github.event.workflow_run.head_commit.message }}>"
                     }
                   ]
                 },
@@ -436,7 +436,7 @@ jobs:
                     },
                     {
                       "type": "mrkdwn",
-                      "text": "*Commit:*\n<${{ github.event.workflow_run.head_commit.url }}|${{ github.event.workflow_run.head_commit.message }}>"
+                      "text": "*Commit:*\n<${{ github.event.workflow_run.repository.html_url }}/commit/${{ github.event.workflow_run.head_sha }}|${{ github.event.workflow_run.head_commit.message }}>"
                     }
                   ]
                 },
