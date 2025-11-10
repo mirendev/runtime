@@ -61,12 +61,19 @@ func TestProfile(t *testing.T) {
 		err = profiler.Start(ctx)
 		r.NoError(err)
 
-		time.Sleep(5 * time.Second)
+		// Poll for samples instead of just sleeping to avoid race conditions
+		var stacks []Stack
+		deadline := time.Now().Add(10 * time.Second)
+		for time.Now().Before(deadline) {
+			stacks, err = profiler.Stacks()
+			r.NoError(err)
+			if len(stacks) > 1 {
+				break
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
 
-		stacks, err := profiler.Stacks()
-		r.NoError(err)
-
-		r.Greater(len(stacks), 1)
+		r.Greater(len(stacks), 1, "expected to collect multiple stack samples within timeout")
 
 		r.NotEmpty(stacks[0].User())
 

@@ -7,6 +7,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 
 	_ "github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/ringbuf"
@@ -51,6 +52,7 @@ type Profiler struct {
 
 	events []*perf.Event
 
+	mu     sync.Mutex
 	stacks []Stack
 
 	ct CallTree
@@ -140,7 +142,9 @@ func (p *Profiler) readEvents(ctx context.Context, r *ringbuf.Reader) {
 
 		stk := Stack{data: rec.RawSample}
 
+		p.mu.Lock()
 		p.stacks = append(p.stacks, stk)
+		p.mu.Unlock()
 
 		p.ct.IngestStack(stk.User(), p.symzer)
 	}
@@ -155,6 +159,8 @@ func (p *Profiler) Stop() error {
 }
 
 func (p *Profiler) Stacks() ([]Stack, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	return p.stacks, nil
 }
 
