@@ -23,6 +23,8 @@ type DeploymentServer struct {
 
 var _ deployment_v1alpha.Deployment = (*DeploymentServer)(nil)
 
+const deploymentLockTimeout = 30 * time.Minute
+
 func NewDeploymentServer(log *slog.Logger, eac *entityserver_v1alpha.EntityAccessClient) (*DeploymentServer, error) {
 	return &DeploymentServer{
 		Log: log.With("module", "deployment"),
@@ -61,16 +63,22 @@ func (d *DeploymentServer) CreateDeployment(ctx context.Context, req *deployment
 		existing := existingDeployments[0]
 
 		// Parse the deployment timestamp
+		// Treat malformed/empty timestamps as expired to avoid blocking deployments
 		deploymentTime, err := time.Parse(time.RFC3339, existing.DeployedBy.Timestamp)
 		if err != nil {
-			d.Log.Error("Failed to parse deployment timestamp", "error", err)
-			return cond.Error("failed to parse deployment timestamp")
+			d.Log.Warn("Deployment has malformed timestamp, treating as expired",
+				"deployment_id", string(existing.ID),
+				"timestamp", existing.DeployedBy.Timestamp,
+				"error", err)
+			// Fall through to mark as failed below
+			deploymentTime = time.Time{} // Zero time, will be treated as expired
 		}
 
-		// Check if the existing deployment is expired (older than 30 minutes)
-		if time.Since(deploymentTime) < 30*time.Minute {
+		// Check if the existing deployment is expired (older than deploymentLockTimeout)
+		isExpired := deploymentTime.IsZero() || time.Since(deploymentTime) >= deploymentLockTimeout
+		if !isExpired {
 			// Deployment is still within the lock timeout
-			timeRemaining := 30*time.Minute - time.Since(deploymentTime)
+			timeRemaining := deploymentLockTimeout - time.Since(deploymentTime)
 
 			// Format user email for display
 			displayEmail := existing.DeployedBy.UserEmail
@@ -111,7 +119,7 @@ func (d *DeploymentServer) CreateDeployment(ctx context.Context, req *deployment
 		// Update the expired deployment to failed status
 		// We need to call the internal method since we're in the server, not using the client
 		existing.Status = "failed"
-		existing.ErrorMessage = "Deployment timed out after 30 minutes"
+		existing.ErrorMessage = fmt.Sprintf("Deployment timed out after %v", deploymentLockTimeout)
 		existing.CompletedAt = time.Now().Format(time.RFC3339)
 
 		// Update entity
@@ -120,7 +128,11 @@ func (d *DeploymentServer) CreateDeployment(ctx context.Context, req *deployment
 		updateEntity.SetId(string(existing.ID))
 		updateEntity.SetAttrs(updateAttrs)
 
-		// We don't have the revision here, so we need to get it
+		// Get the current revision for the update
+		// Note: If another process updates this entity between our Get and Put,
+		// the Put will fail with a revision conflict. This is acceptable because
+		// it means another process already handled this expired deployment.
+		// We continue creating the new deployment either way.
 		if existingEntity, err := d.EAC.Get(ctx, string(existing.ID)); err == nil {
 			updateEntity.SetRevision(existingEntity.Entity().Revision())
 			if _, err := d.EAC.Put(ctx, updateEntity); err != nil {
