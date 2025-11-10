@@ -125,8 +125,13 @@ func AppStatus(ctx *Context, opts struct {
 		}
 
 		// Deployed info
-		if deployment.HasDeployedByUserEmail() && deployment.DeployedByUserEmail() != "" {
-			ctx.Printf("  Deployed By: %s\n", deployment.DeployedByUserEmail())
+		if deployment.HasDeployedByUserEmail() {
+			email := deployment.DeployedByUserEmail()
+			// Replace placeholder emails with dash
+			if email == "" || email == "unknown@example.com" || email == "user@example.com" {
+				email = "-"
+			}
+			ctx.Printf("  Deployed By: %s\n", email)
 		}
 
 		if deployment.HasDeployedAt() && deployment.DeployedAt() != nil {

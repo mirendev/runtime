@@ -99,7 +99,9 @@ func Deploy(ctx *Context, opts struct {
 	}
 
 	if createResult.HasError() && createResult.Error() != "" {
-		return fmt.Errorf("deployment creation failed: %s", createResult.Error())
+		// Deployment lock error - provide clear user feedback
+		ctx.Printf("\n❌ Deployment blocked:\n\n%s\n", createResult.Error())
+		return fmt.Errorf("deployment blocked by lock")
 	}
 
 	if !createResult.HasDeployment() || createResult.Deployment() == nil {

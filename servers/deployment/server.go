@@ -49,10 +49,94 @@ func (d *DeploymentServer) CreateDeployment(ctx context.Context, req *deployment
 	clusterId := args.ClusterId()
 	appVersionId := args.AppVersionId()
 
+	// Check for existing in_progress deployments for this app+cluster
+	existingDeployments, err := d.listDeploymentsInternal(ctx, appName, clusterId, "in_progress", 1)
+	if err != nil {
+		d.Log.Error("Failed to check for existing deployments", "error", err)
+		return cond.Error("failed to check deployment lock")
+	}
+
+	if len(existingDeployments) > 0 {
+		// Found an existing in_progress deployment
+		existing := existingDeployments[0]
+		
+		// Parse the deployment timestamp
+		deploymentTime, err := time.Parse(time.RFC3339, existing.DeployedBy.Timestamp)
+		if err != nil {
+			d.Log.Error("Failed to parse deployment timestamp", "error", err)
+			return cond.Error("failed to parse deployment timestamp")
+		}
+
+		// Check if the existing deployment is expired (older than 30 minutes)
+		if time.Since(deploymentTime) < 30*time.Minute {
+			// Deployment is still within the lock timeout
+			timeRemaining := 30*time.Minute - time.Since(deploymentTime)
+
+			// Format user email for display
+			displayEmail := existing.DeployedBy.UserEmail
+			if displayEmail == "" || displayEmail == "unknown@example.com" || displayEmail == "user@example.com" {
+				displayEmail = "-"
+			}
+
+			// Build contact message
+			contactMsg := "Please wait for it to complete."
+			if displayEmail != "-" {
+				contactMsg = fmt.Sprintf("Please wait for it to complete or contact %s to coordinate.", displayEmail)
+			}
+
+			results.SetError(fmt.Sprintf("Another deployment is already in progress for app '%s' on cluster '%s'.\n\n"+
+				"Existing deployment details:\n"+
+				"  • Deployment ID: %s\n"+
+				"  • Started by: %s\n"+
+				"  • Started at: %s (%s ago)\n"+
+				"  • Current phase: %s\n"+
+				"  • Lock expires in: %s\n\n"+
+				"%s",
+				appName, clusterId,
+				string(existing.ID),
+				displayEmail,
+				deploymentTime.Format("2006-01-02 15:04:05 MST"),
+				time.Since(deploymentTime).Round(time.Second),
+				existing.Phase,
+				timeRemaining.Round(time.Second),
+				contactMsg))
+			return nil
+		}
+
+		// Existing deployment is expired, mark it as failed
+		d.Log.Warn("Found expired in_progress deployment, marking as failed",
+			"deployment_id", string(existing.ID),
+			"age", time.Since(deploymentTime))
+
+		// Update the expired deployment to failed status
+		// We need to call the internal method since we're in the server, not using the client
+		existing.Status = "failed"
+		existing.ErrorMessage = "Deployment timed out after 30 minutes"
+		existing.CompletedAt = time.Now().Format(time.RFC3339)
+		
+		// Update entity
+		updateAttrs := existing.Encode()
+		updateEntity := &entityserver_v1alpha.Entity{}
+		updateEntity.SetId(string(existing.ID))
+		updateEntity.SetAttrs(updateAttrs)
+		
+		// We don't have the revision here, so we need to get it
+		if existingEntity, err := d.EAC.Get(ctx, string(existing.ID)); err == nil {
+			updateEntity.SetRevision(existingEntity.Entity().Revision())
+			if _, err := d.EAC.Put(ctx, updateEntity); err != nil {
+				d.Log.Error("Failed to mark expired deployment as failed", "error", err)
+				// Continue anyway - we'll create the new deployment
+			}
+		} else {
+			d.Log.Error("Failed to get expired deployment for update", "error", err)
+			// Continue anyway - we'll create the new deployment
+		}
+	}
+
 	// Get user info from context (will be implemented with auth integration)
 	// For now, use placeholder values
 	userId := "user-" + uuid.New().String()
-	userEmail := "user@example.com"
+	userEmail := ""
 
 	// Create deployment entity
 	now := time.Now()
