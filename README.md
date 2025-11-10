@@ -38,7 +38,7 @@ The Miren runtime provides a platform for deploying and managing containerized a
 ### Prerequisites
 
 - Go 1.24+ (required for building)
-- Dagger (optional, for containerized development environment)
+- iso (optional, for containerized development environment)
 
 ### Development Setup
 
