@@ -309,16 +309,7 @@ func NewState(ctx context.Context, opts ...StateOption) (*State, error) {
 		transport:       &quic.Transport{Conn: udpConn},
 	}
 
-	qc := quic.Config{
-		EnableDatagrams:       true,
-		MaxIncomingStreams:    1000,
-		MaxIncomingUniStreams: 1000,
-		Allow0RTT:             true,
-		KeepAlivePeriod:       10 * time.Second,
-		Tracer:                qlog.DefaultConnectionTracer,
-	}
-
-	s.qc = qc
+	s.qc = DefaultQUICConfig
 
 	err = s.startListener(ctx, &so)
 	if err != nil {
