@@ -12,7 +12,8 @@ import (
 
 func SandboxPoolSetDesired(ctx *Context, opts struct {
 	ConfigCentric
-	Args struct {
+	RawID bool `long:"raw-id" description:"Use the provided ID as-is without adding the pool/ prefix"`
+	Args  struct {
 		PoolID  string `positional-arg-name:"pool-id" description:"Pool ID (e.g., pool-CUSkT8J58BmgkDeGyPP2e or pool/pool-CUSkT8J58BmgkDeGyPP2e)" required:"true"`
 		Desired string `positional-arg-name:"desired" description:"Desired instance count (absolute number, +N to increase, or -N to decrease)" required:"true"`
 	} `positional-args:"yes"`
@@ -25,9 +26,9 @@ func SandboxPoolSetDesired(ctx *Context, opts struct {
 	eac := entityserver_v1alpha.NewEntityAccessClient(client)
 
 	// Normalize the pool ID - accept both "pool-ABC" and "pool/pool-ABC" formats
-	// Add the "pool/" prefix if it's not already present
+	// Add the "pool/" prefix if it's not already present (unless --raw-id is used)
 	poolID := opts.Args.PoolID
-	if !strings.HasPrefix(poolID, "pool/") {
+	if !opts.RawID && !strings.HasPrefix(poolID, "pool/") {
 		poolID = "pool/" + poolID
 	}
 
