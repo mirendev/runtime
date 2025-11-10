@@ -31,12 +31,23 @@ type ServiceConcurrencyConfig struct {
 	NumInstances        int    `toml:"num_instances"`
 }
 
+// DiskConfig represents a disk attachment for a service
+type DiskConfig struct {
+	Name         string `toml:"name"`
+	MountPath    string `toml:"mount_path"`
+	ReadOnly     bool   `toml:"read_only"`
+	SizeGB       int    `toml:"size_gb"`
+	Filesystem   string `toml:"filesystem"`
+	LeaseTimeout string `toml:"lease_timeout"`
+}
+
 // ServiceConfig represents configuration for a specific service
 type ServiceConfig struct {
 	Command     string                    `toml:"command"`
 	Image       string                    `toml:"image"`
 	EnvVars     []AppEnvVar               `toml:"env"`
 	Concurrency *ServiceConcurrencyConfig `toml:"concurrency"`
+	Disks       []DiskConfig              `toml:"disks"`
 }
 
 type AppConfig struct {
@@ -127,42 +138,73 @@ func Parse(data []byte) (*AppConfig, error) {
 func (ac *AppConfig) Validate() error {
 	// Validate service configurations
 	for serviceName, svcConfig := range ac.Services {
-		if svcConfig == nil || svcConfig.Concurrency == nil {
+		if svcConfig == nil {
 			continue
 		}
 
-		concurrency := svcConfig.Concurrency
+		// Validate concurrency if present
+		if svcConfig.Concurrency != nil {
+			concurrency := svcConfig.Concurrency
 
-		// Validate mode
-		if concurrency.Mode != "" && concurrency.Mode != "auto" && concurrency.Mode != "fixed" {
-			return fmt.Errorf("service %s: invalid concurrency mode %q, must be \"auto\" or \"fixed\"", serviceName, concurrency.Mode)
-		}
-
-		// Validate auto mode settings
-		if concurrency.Mode == "auto" || concurrency.Mode == "" {
-			if concurrency.RequestsPerInstance < 0 {
-				return fmt.Errorf("service %s: requests_per_instance must be non-negative", serviceName)
+			// Validate mode
+			if concurrency.Mode != "" && concurrency.Mode != "auto" && concurrency.Mode != "fixed" {
+				return fmt.Errorf("service %s: invalid concurrency mode %q, must be \"auto\" or \"fixed\"", serviceName, concurrency.Mode)
 			}
-			if concurrency.ScaleDownDelay != "" {
-				if _, err := time.ParseDuration(concurrency.ScaleDownDelay); err != nil {
-					return fmt.Errorf("service %s: invalid scale_down_delay %q: %v", serviceName, concurrency.ScaleDownDelay, err)
+
+			// Validate auto mode settings
+			if concurrency.Mode == "auto" || concurrency.Mode == "" {
+				if concurrency.RequestsPerInstance < 0 {
+					return fmt.Errorf("service %s: requests_per_instance must be non-negative", serviceName)
+				}
+				if concurrency.ScaleDownDelay != "" {
+					if _, err := time.ParseDuration(concurrency.ScaleDownDelay); err != nil {
+						return fmt.Errorf("service %s: invalid scale_down_delay %q: %v", serviceName, concurrency.ScaleDownDelay, err)
+					}
+				}
+				if concurrency.NumInstances > 0 {
+					return fmt.Errorf("service %s: num_instances cannot be set in auto mode", serviceName)
 				}
 			}
-			if concurrency.NumInstances > 0 {
-				return fmt.Errorf("service %s: num_instances cannot be set in auto mode", serviceName)
+
+			// Validate fixed mode settings
+			if concurrency.Mode == "fixed" {
+				if concurrency.NumInstances <= 0 {
+					return fmt.Errorf("service %s: num_instances must be at least 1 for fixed mode", serviceName)
+				}
+				if concurrency.RequestsPerInstance > 0 {
+					return fmt.Errorf("service %s: requests_per_instance cannot be set in fixed mode", serviceName)
+				}
+				if concurrency.ScaleDownDelay != "" {
+					return fmt.Errorf("service %s: scale_down_delay cannot be set in fixed mode", serviceName)
+				}
 			}
 		}
 
-		// Validate fixed mode settings
-		if concurrency.Mode == "fixed" {
-			if concurrency.NumInstances <= 0 {
-				return fmt.Errorf("service %s: num_instances must be at least 1 for fixed mode", serviceName)
+		// Validate disk configurations
+		if len(svcConfig.Disks) > 0 {
+			// Services with disks must use fixed concurrency mode
+			if svcConfig.Concurrency == nil || svcConfig.Concurrency.Mode != "fixed" {
+				return fmt.Errorf("service %s: disks can only be attached to services with fixed concurrency mode", serviceName)
 			}
-			if concurrency.RequestsPerInstance > 0 {
-				return fmt.Errorf("service %s: requests_per_instance cannot be set in fixed mode", serviceName)
-			}
-			if concurrency.ScaleDownDelay != "" {
-				return fmt.Errorf("service %s: scale_down_delay cannot be set in fixed mode", serviceName)
+
+			for i, disk := range svcConfig.Disks {
+				if disk.Name == "" {
+					return fmt.Errorf("service %s: disk[%d] must have a name", serviceName, i)
+				}
+				if disk.MountPath == "" {
+					return fmt.Errorf("service %s: disk[%d] (%s) must have a mount_path", serviceName, i, disk.Name)
+				}
+				if disk.Filesystem != "" && disk.Filesystem != "ext4" && disk.Filesystem != "xfs" && disk.Filesystem != "btrfs" {
+					return fmt.Errorf("service %s: disk[%d] (%s) has invalid filesystem %q, must be ext4, xfs, or btrfs", serviceName, i, disk.Name, disk.Filesystem)
+				}
+				if disk.SizeGB < 0 {
+					return fmt.Errorf("service %s: disk[%d] (%s) size_gb must be non-negative", serviceName, i, disk.Name)
+				}
+				if disk.LeaseTimeout != "" {
+					if _, err := time.ParseDuration(disk.LeaseTimeout); err != nil {
+						return fmt.Errorf("service %s: disk[%d] (%s) invalid lease_timeout %q: %v", serviceName, i, disk.Name, disk.LeaseTimeout, err)
+					}
+				}
 			}
 		}
 	}

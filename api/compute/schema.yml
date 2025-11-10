@@ -50,6 +50,25 @@ components:
           type: label
           doc: Labels identifying the volume
           many: true
+        # Disk-specific configuration (when provider="miren")
+        disk_name:
+          type: string
+          doc: Name of the disk to attach (for disk provider)
+        mount_path:
+          type: string
+          doc: Path where disk should be mounted (for disk provider)
+        read_only:
+          type: bool
+          doc: Whether to mount disk as read-only (for disk provider)
+        size_gb:
+          type: int
+          doc: Disk size in GB for auto-creation (for disk provider)
+        filesystem:
+          type: string
+          doc: Filesystem type for auto-creation (for disk provider)
+        lease_timeout:
+          type: string
+          doc: Timeout for acquiring disk lease (for disk provider)
 
     static_host:
       type: component

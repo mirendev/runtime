@@ -199,6 +199,18 @@ func applyEnvironmentVariables(cfg *Config, log *slog.Logger) error {
 
 	}
 
+	// Apply MIREN_SERVER_STOP_SANDBOXES_ON_SHUTDOWN
+	if val := os.Getenv("MIREN_SERVER_STOP_SANDBOXES_ON_SHUTDOWN"); val != "" {
+
+		if b, err := strconv.ParseBool(val); err == nil {
+			cfg.Server.StopSandboxesOnShutdown = &b
+			log.Debug("applied env var", "key", "MIREN_SERVER_STOP_SANDBOXES_ON_SHUTDOWN")
+		} else {
+			log.Warn("invalid MIREN_SERVER_STOP_SANDBOXES_ON_SHUTDOWN value", "value", val, "error", err)
+		}
+
+	}
+
 	// Apply MIREN_TLS_ADDITIONAL_IPS
 	if val := os.Getenv("MIREN_TLS_ADDITIONAL_IPS"); val != "" {
 

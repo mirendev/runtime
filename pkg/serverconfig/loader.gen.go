@@ -210,6 +210,10 @@ func applyCLIFlags(cfg *Config, flags *CLIFlags) {
 		cfg.Server.SkipClientConfig = flags.ServerConfigSkipClientConfig
 	}
 
+	if flags.ServerConfigStopSandboxesOnShutdown != nil {
+		cfg.Server.StopSandboxesOnShutdown = flags.ServerConfigStopSandboxesOnShutdown
+	}
+
 	if len(flags.TLSConfigAdditionalIPs) > 0 {
 		cfg.TLS.AdditionalIPs = flags.TLSConfigAdditionalIPs
 	}

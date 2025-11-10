@@ -239,6 +239,17 @@ func (c *ReconcileController) Stop() {
 	close(c.workQueue)
 }
 
+// Enqueue adds an event to the work queue for processing
+func (c *ReconcileController) Enqueue(event Event) {
+	select {
+	case c.workQueue <- event:
+		// Successfully enqueued
+	default:
+		// Queue is full, log and drop
+		c.Log.Warn("Work queue full, dropping enqueued event", "entity", event.Id, "eventType", event.Type, "queueSize", len(c.workQueue))
+	}
+}
+
 // runWorker processes items from the work queue
 func (c *ReconcileController) runWorker(ctx context.Context) {
 	id := idgen.Gen("worker")

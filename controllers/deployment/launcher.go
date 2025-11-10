@@ -288,7 +288,49 @@ func (l *Launcher) buildSandboxSpec(ctx context.Context, app *core_v1alpha.App, 
 		}
 	}
 
+	// Add disk volumes and mounts for this service
+	for _, svc := range ver.Config.Services {
+		if svc.Name == serviceName {
+			// Only add disks for fixed concurrency services
+			if len(svc.Disks) > 0 {
+				// Verify this is a fixed mode service
+				svcConcurrency, err := core_v1alpha.GetServiceConcurrency(ver, serviceName)
+				if err != nil {
+					return nil, fmt.Errorf("failed to get service concurrency: %w", err)
+				}
+
+				if svcConcurrency.Mode != "fixed" {
+					l.Log.Warn("skipping disk attachment for non-fixed service",
+						"service", serviceName,
+						"mode", svcConcurrency.Mode)
+					break
+				}
+			}
+
+			for _, disk := range svc.Disks {
+				spec.Volume = append(spec.Volume, compute_v1alpha.SandboxSpecVolume{
+					Name:         disk.Name,
+					Provider:     "miren",
+					DiskName:     disk.Name,
+					MountPath:    disk.MountPath,
+					ReadOnly:     disk.ReadOnly,
+					SizeGb:       disk.SizeGb,
+					Filesystem:   disk.Filesystem,
+					LeaseTimeout: disk.LeaseTimeout,
+				})
+
+				// Add mount to container
+				appCont.Mount = append(appCont.Mount, compute_v1alpha.SandboxSpecContainerMount{
+					Source:      disk.Name,
+					Destination: disk.MountPath,
+				})
+			}
+			break
+		}
+	}
+
 	spec.Container = []compute_v1alpha.SandboxSpecContainer{appCont}
+
 	return spec, nil
 }
 
@@ -321,22 +363,25 @@ func (l *Launcher) findMatchingPool(ctx context.Context, appID entity.Id, servic
 		}
 
 		// Check if specs match
-		if l.specsMatch(&pool.SandboxSpec, desiredSpec) {
+		reason, matches := l.specsMatch(&pool.SandboxSpec, desiredSpec)
+		if matches {
 			return &PoolWithEntity{
 				Pool:   &pool,
 				Entity: *ent.Entity(),
 			}, nil
 		}
+		l.Log.Debug("Pool spec mismatch", "pool", pool.ID, "reason", reason)
 	}
 
 	return nil, nil
 }
 
 // specsMatch compares two SandboxSpecs, ignoring the version field
-func (l *Launcher) specsMatch(spec1, spec2 *compute_v1alpha.SandboxSpec) bool {
+// Returns (reason, matches) where reason explains why specs don't match (empty if they do match)
+func (l *Launcher) specsMatch(spec1, spec2 *compute_v1alpha.SandboxSpec) (string, bool) {
 	// Quick checks first
 	if len(spec1.Container) != len(spec2.Container) {
-		return false
+		return fmt.Sprintf("container count mismatch: %d vs %d", len(spec1.Container), len(spec2.Container)), false
 	}
 
 	// Compare containers
@@ -344,26 +389,32 @@ func (l *Launcher) specsMatch(spec1, spec2 *compute_v1alpha.SandboxSpec) bool {
 		c1 := &spec1.Container[i]
 		c2 := &spec2.Container[i]
 
-		if c1.Name != c2.Name ||
-			c1.Image != c2.Image ||
-			c1.Command != c2.Command ||
-			c1.Directory != c2.Directory {
-			return false
+		if c1.Name != c2.Name {
+			return fmt.Sprintf("container[%d] name mismatch: %s vs %s", i, c1.Name, c2.Name), false
+		}
+		if c1.Image != c2.Image {
+			return fmt.Sprintf("container[%d] image mismatch: %s vs %s", i, c1.Image, c2.Image), false
+		}
+		if c1.Command != c2.Command {
+			return fmt.Sprintf("container[%d] command mismatch: %s vs %s", i, c1.Command, c2.Command), false
+		}
+		if c1.Directory != c2.Directory {
+			return fmt.Sprintf("container[%d] directory mismatch: %s vs %s", i, c1.Directory, c2.Directory), false
 		}
 
 		// Compare env vars (order-independent)
 		if !envVarsEqual(c1.Env, c2.Env) {
-			return false
+			return fmt.Sprintf("container[%d] environment variables mismatch", i), false
 		}
 
 		// Compare ports
 		if !portsEqual(c1.Port, c2.Port) {
-			return false
+			return fmt.Sprintf("container[%d] ports mismatch", i), false
 		}
 	}
 
 	// All fields match (excluding version)
-	return true
+	return "", true
 }
 
 // envVarsEqual compares two env var slices in an order-independent way,
@@ -396,11 +447,14 @@ func envVarsEqual(env1, env2 []string) bool {
 func filterSystemEnvVars(envVars []string) []string {
 	filtered := []string{}
 	for _, e := range envVars {
-		// Skip MIREN_VERSION and MIREN_APP - these are set automatically and change per version
+		// Skip MIREN_VERSION, MIREN_APP, and MIREN_INSTANCE_NUM - these are set automatically
 		if strings.HasPrefix(e, "MIREN_VERSION=") {
 			continue
 		}
 		if strings.HasPrefix(e, "MIREN_APP=") {
+			continue
+		}
+		if strings.HasPrefix(e, "MIREN_INSTANCE_NUM=") {
 			continue
 		}
 		filtered = append(filtered, e)

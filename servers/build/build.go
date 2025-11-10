@@ -123,6 +123,21 @@ func buildServicesConfig(appConfig *appconfig.AppConfig, procfileServices map[st
 					ScaleDownDelay:      serviceConfig.Concurrency.ScaleDownDelay,
 				}
 			}
+
+			// Convert disk configurations
+			if len(serviceConfig.Disks) > 0 {
+				svc.Disks = make([]core_v1alpha.Disks, 0, len(serviceConfig.Disks))
+				for _, disk := range serviceConfig.Disks {
+					svc.Disks = append(svc.Disks, core_v1alpha.Disks{
+						Name:         disk.Name,
+						MountPath:    disk.MountPath,
+						ReadOnly:     disk.ReadOnly,
+						SizeGb:       int64(disk.SizeGB),
+						Filesystem:   disk.Filesystem,
+						LeaseTimeout: disk.LeaseTimeout,
+					})
+				}
+			}
 		}
 
 		services = append(services, svc)

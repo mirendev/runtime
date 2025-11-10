@@ -44,14 +44,15 @@ func DefaultEtcdConfig() EtcdConfig {
 // DefaultServerConfig returns default ServerConfig
 func DefaultServerConfig() ServerConfig {
 	return ServerConfig{
-		Address:            strPtr(":8443"),
-		ConfigClusterName:  strPtr("local"),
-		DataPath:           strPtr("/var/lib/miren"),
-		HTTPRequestTimeout: intPtr(60),
-		ReleasePath:        strPtr(""),
-		RunnerAddress:      strPtr("localhost:8444"),
-		RunnerID:           strPtr("miren"),
-		SkipClientConfig:   boolPtr(false),
+		Address:                 strPtr(":8443"),
+		ConfigClusterName:       strPtr("local"),
+		DataPath:                strPtr("/var/lib/miren"),
+		HTTPRequestTimeout:      intPtr(60),
+		ReleasePath:             strPtr(""),
+		RunnerAddress:           strPtr("localhost:8444"),
+		RunnerID:                strPtr("miren"),
+		SkipClientConfig:        boolPtr(false),
+		StopSandboxesOnShutdown: boolPtr(false),
 	}
 }
 
