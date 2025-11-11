@@ -471,6 +471,8 @@ func LoadConfigFrom(configPath string) (*Config, error) {
 
 	var config Config
 	config.sourcePath = configPath
+	config.loadConfigD = true
+
 	if err := yaml.Unmarshal(data, &config); err != nil {
 		return nil, fmt.Errorf("failed to parse config file: %w", err)
 	}
