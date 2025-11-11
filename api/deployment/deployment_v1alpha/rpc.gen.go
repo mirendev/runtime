@@ -412,6 +412,135 @@ func (v *GitInfo) UnmarshalJSON(data []byte) error {
 	return json.Unmarshal(data, &v.data)
 }
 
+type deploymentLockInfoData struct {
+	AppName              *string             `cbor:"0,keyasint,omitempty" json:"app_name,omitempty"`
+	ClusterId            *string             `cbor:"1,keyasint,omitempty" json:"cluster_id,omitempty"`
+	BlockingDeploymentId *string             `cbor:"2,keyasint,omitempty" json:"blocking_deployment_id,omitempty"`
+	StartedBy            *string             `cbor:"3,keyasint,omitempty" json:"started_by,omitempty"`
+	StartedAt            *standard.Timestamp `cbor:"4,keyasint,omitempty" json:"started_at,omitempty"`
+	CurrentPhase         *string             `cbor:"5,keyasint,omitempty" json:"current_phase,omitempty"`
+	LockExpiresAt        *standard.Timestamp `cbor:"6,keyasint,omitempty" json:"lock_expires_at,omitempty"`
+}
+
+type DeploymentLockInfo struct {
+	data deploymentLockInfoData
+}
+
+func (v *DeploymentLockInfo) HasAppName() bool {
+	return v.data.AppName != nil
+}
+
+func (v *DeploymentLockInfo) AppName() string {
+	if v.data.AppName == nil {
+		return ""
+	}
+	return *v.data.AppName
+}
+
+func (v *DeploymentLockInfo) SetAppName(app_name string) {
+	v.data.AppName = &app_name
+}
+
+func (v *DeploymentLockInfo) HasClusterId() bool {
+	return v.data.ClusterId != nil
+}
+
+func (v *DeploymentLockInfo) ClusterId() string {
+	if v.data.ClusterId == nil {
+		return ""
+	}
+	return *v.data.ClusterId
+}
+
+func (v *DeploymentLockInfo) SetClusterId(cluster_id string) {
+	v.data.ClusterId = &cluster_id
+}
+
+func (v *DeploymentLockInfo) HasBlockingDeploymentId() bool {
+	return v.data.BlockingDeploymentId != nil
+}
+
+func (v *DeploymentLockInfo) BlockingDeploymentId() string {
+	if v.data.BlockingDeploymentId == nil {
+		return ""
+	}
+	return *v.data.BlockingDeploymentId
+}
+
+func (v *DeploymentLockInfo) SetBlockingDeploymentId(blocking_deployment_id string) {
+	v.data.BlockingDeploymentId = &blocking_deployment_id
+}
+
+func (v *DeploymentLockInfo) HasStartedBy() bool {
+	return v.data.StartedBy != nil
+}
+
+func (v *DeploymentLockInfo) StartedBy() string {
+	if v.data.StartedBy == nil {
+		return ""
+	}
+	return *v.data.StartedBy
+}
+
+func (v *DeploymentLockInfo) SetStartedBy(started_by string) {
+	v.data.StartedBy = &started_by
+}
+
+func (v *DeploymentLockInfo) HasStartedAt() bool {
+	return v.data.StartedAt != nil
+}
+
+func (v *DeploymentLockInfo) StartedAt() *standard.Timestamp {
+	return v.data.StartedAt
+}
+
+func (v *DeploymentLockInfo) SetStartedAt(started_at *standard.Timestamp) {
+	v.data.StartedAt = started_at
+}
+
+func (v *DeploymentLockInfo) HasCurrentPhase() bool {
+	return v.data.CurrentPhase != nil
+}
+
+func (v *DeploymentLockInfo) CurrentPhase() string {
+	if v.data.CurrentPhase == nil {
+		return ""
+	}
+	return *v.data.CurrentPhase
+}
+
+func (v *DeploymentLockInfo) SetCurrentPhase(current_phase string) {
+	v.data.CurrentPhase = &current_phase
+}
+
+func (v *DeploymentLockInfo) HasLockExpiresAt() bool {
+	return v.data.LockExpiresAt != nil
+}
+
+func (v *DeploymentLockInfo) LockExpiresAt() *standard.Timestamp {
+	return v.data.LockExpiresAt
+}
+
+func (v *DeploymentLockInfo) SetLockExpiresAt(lock_expires_at *standard.Timestamp) {
+	v.data.LockExpiresAt = lock_expires_at
+}
+
+func (v *DeploymentLockInfo) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *DeploymentLockInfo) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *DeploymentLockInfo) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *DeploymentLockInfo) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
 type deploymentCreateDeploymentArgsData struct {
 	AppName      *string  `cbor:"0,keyasint,omitempty" json:"app_name,omitempty"`
 	ClusterId    *string  `cbor:"1,keyasint,omitempty" json:"cluster_id,omitempty"`
@@ -482,8 +611,9 @@ func (v *DeploymentCreateDeploymentArgs) UnmarshalJSON(data []byte) error {
 }
 
 type deploymentCreateDeploymentResultsData struct {
-	Deployment *DeploymentInfo `cbor:"0,keyasint,omitempty" json:"deployment,omitempty"`
-	Error      *string         `cbor:"1,keyasint,omitempty" json:"error,omitempty"`
+	Deployment *DeploymentInfo     `cbor:"0,keyasint,omitempty" json:"deployment,omitempty"`
+	Error      *string             `cbor:"1,keyasint,omitempty" json:"error,omitempty"`
+	LockInfo   *DeploymentLockInfo `cbor:"2,keyasint,omitempty" json:"lock_info,omitempty"`
 }
 
 type DeploymentCreateDeploymentResults struct {
@@ -497,6 +627,10 @@ func (v *DeploymentCreateDeploymentResults) SetDeployment(deployment *Deployment
 
 func (v *DeploymentCreateDeploymentResults) SetError(error string) {
 	v.data.Error = &error
+}
+
+func (v *DeploymentCreateDeploymentResults) SetLockInfo(lock_info *DeploymentLockInfo) {
+	v.data.LockInfo = lock_info
 }
 
 func (v *DeploymentCreateDeploymentResults) MarshalCBOR() ([]byte, error) {
@@ -1455,6 +1589,14 @@ func (v *DeploymentClientCreateDeploymentResults) Error() string {
 		return ""
 	}
 	return *v.data.Error
+}
+
+func (v *DeploymentClientCreateDeploymentResults) HasLockInfo() bool {
+	return v.data.LockInfo != nil
+}
+
+func (v *DeploymentClientCreateDeploymentResults) LockInfo() *DeploymentLockInfo {
+	return v.data.LockInfo
 }
 
 func (v DeploymentClient) CreateDeployment(ctx context.Context, app_name string, cluster_id string, app_version_id string, git_info *GitInfo) (*DeploymentClientCreateDeploymentResults, error) {

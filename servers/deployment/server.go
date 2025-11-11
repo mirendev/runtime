@@ -77,8 +77,8 @@ func (d *DeploymentServer) CreateDeployment(ctx context.Context, req *deployment
 		// Check if the existing deployment is expired (older than deploymentLockTimeout)
 		isExpired := deploymentTime.IsZero() || time.Since(deploymentTime) >= deploymentLockTimeout
 		if !isExpired {
-			// Deployment is still within the lock timeout
-			timeRemaining := deploymentLockTimeout - time.Since(deploymentTime)
+			// Deployment is still within the lock timeout - return structured lock info
+			lockExpiresAt := deploymentTime.Add(deploymentLockTimeout)
 
 			// Format user email for display
 			displayEmail := existing.DeployedBy.UserEmail
@@ -86,28 +86,20 @@ func (d *DeploymentServer) CreateDeployment(ctx context.Context, req *deployment
 				displayEmail = "-"
 			}
 
-			// Build contact message
-			contactMsg := "Please wait for it to complete."
-			if displayEmail != "-" {
-				contactMsg = fmt.Sprintf("Please wait for it to complete or contact %s to coordinate.", displayEmail)
-			}
+			// Create structured lock info
+			lockInfo := &deployment_v1alpha.DeploymentLockInfo{}
+			lockInfo.SetAppName(appName)
+			lockInfo.SetClusterId(clusterId)
+			lockInfo.SetBlockingDeploymentId(string(existing.ID))
+			lockInfo.SetStartedBy(displayEmail)
+			lockInfo.SetStartedAt(standard.ToTimestamp(deploymentTime))
+			lockInfo.SetCurrentPhase(existing.Phase)
+			lockInfo.SetLockExpiresAt(standard.ToTimestamp(lockExpiresAt))
 
-			results.SetError(fmt.Sprintf("Another deployment is already in progress for app '%s' on cluster '%s'.\n\n"+
-				"Existing deployment details:\n"+
-				"  • Deployment ID: %s\n"+
-				"  • Started by: %s\n"+
-				"  • Started at: %s (%s ago)\n"+
-				"  • Current phase: %s\n"+
-				"  • Lock expires in: %s\n\n"+
-				"%s",
-				appName, clusterId,
-				string(existing.ID),
-				displayEmail,
-				deploymentTime.Format("2006-01-02 15:04:05 MST"),
-				time.Since(deploymentTime).Round(time.Second),
-				existing.Phase,
-				timeRemaining.Round(time.Second),
-				contactMsg))
+			results.SetLockInfo(lockInfo)
+
+			// Also set a simple error message for backwards compatibility
+			results.SetError("deployment blocked by existing in-progress deployment")
 			return nil
 		}
 
