@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/user"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -106,12 +107,21 @@ func (c *Config) MarshalYAML() (interface{}, error) {
 }
 
 func NewConfig() *Config {
-	return &Config{
+	cfg := &Config{
 		clusters:           make(map[string]*ClusterConfig),
 		identities:         make(map[string]*IdentityConfig),
 		keys:               make(map[string]*KeyConfig),
 		unsavedLeafConfigs: make(map[string]*ConfigData),
 	}
+
+	// When creating a new config, assume it's going to be saved to the default path
+	configPath, loadConfigD, err := getConfigPath()
+	if err == nil {
+		cfg.sourcePath = configPath
+		cfg.loadConfigD = loadConfigD
+	}
+
+	return cfg
 }
 
 // IsEmpty checks if the configuration has no clusters defined
@@ -391,8 +401,6 @@ func LoadConfig() (*Config, error) {
 	if err != nil {
 		// If main config doesn't exist, try loading from config.d directory
 		config := NewConfig()
-		config.sourcePath = configPath
-		config.loadConfigD = loadConfigD
 
 		if loadConfigD {
 			if err := loadConfigDir(config); err != nil {
@@ -463,8 +471,15 @@ func LoadConfigFrom(configPath string) (*Config, error) {
 
 	var config Config
 	config.sourcePath = configPath
+	config.loadConfigD = true
+
 	if err := yaml.Unmarshal(data, &config); err != nil {
 		return nil, fmt.Errorf("failed to parse config file: %w", err)
+	}
+
+	err = loadConfigDir(&config)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load config.d: %w", err)
 	}
 
 	if err := config.Validate(); err != nil {
@@ -507,6 +522,11 @@ func (c *Config) Save() error {
 	}
 
 	return c.SaveTo(configPath)
+}
+
+// SourcePath returns the path to the config file that was loaded, if any.
+func (c *Config) SourcePath() string {
+	return c.sourcePath
 }
 
 func (c *Config) SaveTo(path string) error {
@@ -894,10 +914,25 @@ func getConfigPath() (string, bool, error) {
 		return filepath.Join(envPath, "clientconfig.yaml"), true, nil
 	}
 
-	// Fall back to default path in user's home directory, load clientconfig.d
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		return "", false, fmt.Errorf("failed to get user home directory: %w", err)
+	var (
+		homeDir string
+		err     error
+	)
+
+	if sudoUser := os.Getenv("SUDO_USER"); sudoUser != "" {
+		// Running under sudo, get the original user's home
+		u, err := user.Lookup(sudoUser)
+		if err == nil {
+			homeDir = u.HomeDir
+		}
+	}
+
+	if homeDir == "" {
+		// Fall back to default path in user's home directory, load clientconfig.d
+		homeDir, err = os.UserHomeDir()
+		if err != nil {
+			return "", false, fmt.Errorf("failed to get user home directory: %w", err)
+		}
 	}
 
 	return filepath.Join(homeDir, DefaultConfigPath), true, nil
