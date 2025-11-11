@@ -5,6 +5,9 @@
 
 set -euo pipefail
 
+# Configure git to trust the mounted source directory for VCS stamping
+git config --global --add safe.directory /src
+
 echo "Building miren binary..."
 bash hack/build-ci.sh
 
