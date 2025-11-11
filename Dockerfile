@@ -2,7 +2,7 @@
 
 FROM ghcr.io/mirendev/runsc:latest AS binaries
 
-FROM golang:1.24-alpine AS builder
+FROM golang:1.25-alpine AS builder
 
 RUN apk add --no-cache clang
 

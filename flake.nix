@@ -18,7 +18,7 @@
       in {
         devShells.default = pkgs.mkShell {
           packages = [
-            pkgs.go_1_24
+            pkgs.go_1_25
             pkgs.golangci-lint
             pkgs.gotools
           ];
