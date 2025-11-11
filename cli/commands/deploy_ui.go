@@ -37,12 +37,6 @@ func init() {
 var (
 	mirenBlue = "#3E53FB"
 	lightBlue = colortheory.ChangeLightness(mirenBlue, -10)
-	square    = "▰"
-
-	spinBlankStyle = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{
-		Light: "#111111",
-		Dark:  colortheory.ChangeLightness(mirenBlue, 25),
-	})
 
 	spinStyle = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{
 		Light: "#3E53FB",
