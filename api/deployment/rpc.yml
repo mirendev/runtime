@@ -34,6 +34,9 @@ interfaces:
           - name: error
             type: string
             doc: Error message if deployment creation failed
+          - name: lock_info
+            type: DeploymentLockInfo
+            doc: Structured information about the deployment lock (if blocked)
 
       - name: UpdateDeploymentStatus
         index: 1
@@ -250,3 +253,35 @@ types:
         type: standard.Timestamp
         index: 9
         doc: When the commit was made
+
+  - type: DeploymentLockInfo
+    doc: Information about a deployment lock blocking a new deployment
+    fields:
+      - name: app_name
+        type: string
+        index: 0
+        doc: The application name
+      - name: cluster_id
+        type: string
+        index: 1
+        doc: The cluster ID
+      - name: blocking_deployment_id
+        type: string
+        index: 2
+        doc: The ID of the deployment holding the lock
+      - name: started_by
+        type: string
+        index: 3
+        doc: Email or username of who started the blocking deployment
+      - name: started_at
+        type: standard.Timestamp
+        index: 4
+        doc: When the blocking deployment was started
+      - name: current_phase
+        type: string
+        index: 5
+        doc: Current phase of the blocking deployment
+      - name: lock_expires_at
+        type: standard.Timestamp
+        index: 6
+        doc: When the lock will expire

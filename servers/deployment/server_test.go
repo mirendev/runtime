@@ -2,6 +2,7 @@ package deployment
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"testing"
 	"time"
@@ -74,10 +75,11 @@ func TestCreateDeploymentWithGitInfo(t *testing.T) {
 		},
 	}
 
-	for _, tt := range tests {
+	for i, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Create deployment
-			results, err := client.CreateDeployment(ctx, "test-app", "test-cluster", "v1.0.0", tt.gitInfo)
+			// Create deployment with unique app name to avoid deployment lock conflicts
+			appName := fmt.Sprintf("test-app-%d", i)
+			results, err := client.CreateDeployment(ctx, appName, "test-cluster", "v1.0.0", tt.gitInfo)
 			if err != nil {
 				t.Fatalf("CreateDeployment failed: %v", err)
 			}

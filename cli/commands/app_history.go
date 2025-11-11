@@ -87,13 +87,13 @@ func AppHistory(ctx *Context, opts struct {
 
 	// Table header
 	if opts.Detailed {
-		ctx.Printf("%-12s %-8s %-25s %-20s %-15s %-17s %-15s %-33s\n",
-			"STATUS", "CLUSTER", "VERSION", "DEPLOYED BY", "WHEN", "GIT SHA", "BRANCH", "COMMIT MESSAGE")
-		ctx.Printf("%s\n", strings.Repeat("-", 160))
+		ctx.Printf("%-12s %-25s %-8s %-25s %-20s %-15s %-17s %-15s %-33s\n",
+			"STATUS", "ID", "CLUSTER", "VERSION", "DEPLOYED BY", "WHEN", "GIT SHA", "BRANCH", "COMMIT MESSAGE")
+		ctx.Printf("%s\n", strings.Repeat("-", 185))
 	} else {
-		ctx.Printf("%-12s %-25s %-25s %-15s\n",
-			"STATUS", "VERSION", "DEPLOYED BY", "WHEN")
-		ctx.Printf("%s\n", strings.Repeat("-", 80))
+		ctx.Printf("%-12s %-25s %-25s %-25s %-15s\n",
+			"STATUS", "ID", "VERSION", "DEPLOYED BY", "WHEN")
+		ctx.Printf("%s\n", strings.Repeat("-", 105))
 	}
 
 	// Status colors
@@ -144,11 +144,17 @@ func AppHistory(ctx *Context, opts struct {
 
 		// Format user
 		user := dep.DeployedByUserEmail()
-		if user == "" {
-			user = dep.DeployedByUserId()
-		}
-		if len(user) > 20 {
+		// Replace placeholder emails with dash
+		if user == "" || user == "unknown@example.com" || user == "user@example.com" {
+			user = "-"
+		} else if len(user) > 20 {
 			user = user[:17] + "..."
+		}
+
+		// Format deployment ID
+		deploymentId := dep.Id()
+		if len(deploymentId) > 25 {
+			deploymentId = deploymentId[:22] + "..."
 		}
 
 		// Format git info
@@ -186,8 +192,9 @@ func AppHistory(ctx *Context, opts struct {
 		}
 
 		if opts.Detailed {
-			ctx.Printf("%-12s %-8s %-25s %-20s %-15s %-17s %-15s %-33s\n",
+			ctx.Printf("%-12s %-25s %-8s %-25s %-20s %-15s %-17s %-15s %-33s\n",
 				styledStatus,
+				deploymentId,
 				cluster,
 				version,
 				user,
@@ -196,8 +203,9 @@ func AppHistory(ctx *Context, opts struct {
 				gitBranch,
 				gitMessage)
 		} else {
-			ctx.Printf("%-12s %-25s %-25s %-15s\n",
+			ctx.Printf("%-12s %-25s %-25s %-25s %-15s\n",
 				styledStatus,
+				deploymentId,
 				version,
 				user,
 				timeStr)

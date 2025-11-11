@@ -23,6 +23,8 @@ type DeploymentServer struct {
 
 var _ deployment_v1alpha.Deployment = (*DeploymentServer)(nil)
 
+const deploymentLockTimeout = 30 * time.Minute
+
 func NewDeploymentServer(log *slog.Logger, eac *entityserver_v1alpha.EntityAccessClient) (*DeploymentServer, error) {
 	return &DeploymentServer{
 		Log: log.With("module", "deployment"),
@@ -49,10 +51,96 @@ func (d *DeploymentServer) CreateDeployment(ctx context.Context, req *deployment
 	clusterId := args.ClusterId()
 	appVersionId := args.AppVersionId()
 
+	// Check for existing in_progress deployments for this app+cluster
+	existingDeployments, err := d.listDeploymentsInternal(ctx, appName, clusterId, "in_progress", 1)
+	if err != nil {
+		d.Log.Error("Failed to check for existing deployments", "error", err)
+		return cond.Error("failed to check deployment lock")
+	}
+
+	if len(existingDeployments) > 0 {
+		// Found an existing in_progress deployment
+		existing := existingDeployments[0]
+
+		// Parse the deployment timestamp
+		// Treat malformed/empty timestamps as expired to avoid blocking deployments
+		deploymentTime, err := time.Parse(time.RFC3339, existing.DeployedBy.Timestamp)
+		if err != nil {
+			d.Log.Warn("Deployment has malformed timestamp, treating as expired",
+				"deployment_id", string(existing.ID),
+				"timestamp", existing.DeployedBy.Timestamp,
+				"error", err)
+			// Fall through to mark as failed below
+			deploymentTime = time.Time{} // Zero time, will be treated as expired
+		}
+
+		// Check if the existing deployment is expired (older than deploymentLockTimeout)
+		isExpired := deploymentTime.IsZero() || time.Since(deploymentTime) >= deploymentLockTimeout
+		if !isExpired {
+			// Deployment is still within the lock timeout - return structured lock info
+			lockExpiresAt := deploymentTime.Add(deploymentLockTimeout)
+
+			// Format user email for display
+			displayEmail := existing.DeployedBy.UserEmail
+			if displayEmail == "" || displayEmail == "unknown@example.com" || displayEmail == "user@example.com" {
+				displayEmail = "-"
+			}
+
+			// Create structured lock info
+			lockInfo := &deployment_v1alpha.DeploymentLockInfo{}
+			lockInfo.SetAppName(appName)
+			lockInfo.SetClusterId(clusterId)
+			lockInfo.SetBlockingDeploymentId(string(existing.ID))
+			lockInfo.SetStartedBy(displayEmail)
+			lockInfo.SetStartedAt(standard.ToTimestamp(deploymentTime))
+			lockInfo.SetCurrentPhase(existing.Phase)
+			lockInfo.SetLockExpiresAt(standard.ToTimestamp(lockExpiresAt))
+
+			results.SetLockInfo(lockInfo)
+
+			// Also set a simple error message for backwards compatibility
+			results.SetError("deployment blocked by existing in-progress deployment")
+			return nil
+		}
+
+		// Existing deployment is expired, mark it as failed
+		d.Log.Warn("Found expired in_progress deployment, marking as failed",
+			"deployment_id", string(existing.ID),
+			"age", time.Since(deploymentTime))
+
+		// Update the expired deployment to failed status
+		// We need to call the internal method since we're in the server, not using the client
+		existing.Status = "failed"
+		existing.ErrorMessage = fmt.Sprintf("Deployment timed out after %v", deploymentLockTimeout)
+		existing.CompletedAt = time.Now().Format(time.RFC3339)
+
+		// Update entity
+		updateAttrs := existing.Encode()
+		updateEntity := &entityserver_v1alpha.Entity{}
+		updateEntity.SetId(string(existing.ID))
+		updateEntity.SetAttrs(updateAttrs)
+
+		// Get the current revision for the update
+		// Note: If another process updates this entity between our Get and Put,
+		// the Put will fail with a revision conflict. This is acceptable because
+		// it means another process already handled this expired deployment.
+		// We continue creating the new deployment either way.
+		if existingEntity, err := d.EAC.Get(ctx, string(existing.ID)); err == nil {
+			updateEntity.SetRevision(existingEntity.Entity().Revision())
+			if _, err := d.EAC.Put(ctx, updateEntity); err != nil {
+				d.Log.Error("Failed to mark expired deployment as failed", "error", err)
+				// Continue anyway - we'll create the new deployment
+			}
+		} else {
+			d.Log.Error("Failed to get expired deployment for update", "error", err)
+			// Continue anyway - we'll create the new deployment
+		}
+	}
+
 	// Get user info from context (will be implemented with auth integration)
 	// For now, use placeholder values
 	userId := "user-" + uuid.New().String()
-	userEmail := "user@example.com"
+	userEmail := ""
 
 	// Create deployment entity
 	now := time.Now()

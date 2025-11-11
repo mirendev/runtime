@@ -99,7 +99,45 @@ func Deploy(ctx *Context, opts struct {
 	}
 
 	if createResult.HasError() && createResult.Error() != "" {
-		return fmt.Errorf("deployment creation failed: %s", createResult.Error())
+		// Check if we have structured lock info
+		if createResult.HasLockInfo() && createResult.LockInfo() != nil {
+			lockInfo := createResult.LockInfo()
+
+			// Format the deployment lock message
+			ctx.Printf("\n❌ Deployment blocked:\n\n")
+			ctx.Printf("Another deployment is already in progress for app '%s' on cluster '%s'.\n\n",
+				lockInfo.AppName(), lockInfo.ClusterId())
+
+			ctx.Printf("Existing deployment details:\n")
+			ctx.Printf("  • Deployment ID: %s\n", lockInfo.BlockingDeploymentId())
+			ctx.Printf("  • Started by: %s\n", lockInfo.StartedBy())
+
+			if lockInfo.HasStartedAt() && lockInfo.StartedAt() != nil {
+				startedAt := time.Unix(lockInfo.StartedAt().Seconds(), 0)
+				ctx.Printf("  • Started at: %s (%s ago)\n",
+					startedAt.Format("2006-01-02 15:04:05 MST"),
+					time.Since(startedAt).Round(time.Second))
+			}
+
+			ctx.Printf("  • Current phase: %s\n", lockInfo.CurrentPhase())
+
+			if lockInfo.HasLockExpiresAt() && lockInfo.LockExpiresAt() != nil {
+				expiresAt := time.Unix(lockInfo.LockExpiresAt().Seconds(), 0)
+				timeRemaining := time.Until(expiresAt).Round(time.Second)
+				ctx.Printf("  • Lock expires in: %s\n\n", timeRemaining)
+			}
+
+			// Build contact message
+			if lockInfo.StartedBy() != "-" {
+				ctx.Printf("Please wait for it to complete or contact %s to coordinate.\n", lockInfo.StartedBy())
+			} else {
+				ctx.Printf("Please wait for it to complete.\n")
+			}
+		} else {
+			// Fall back to plain error message
+			ctx.Printf("\n❌ Deployment blocked:\n\n%s\n", createResult.Error())
+		}
+		return fmt.Errorf("deployment blocked by lock")
 	}
 
 	if !createResult.HasDeployment() || createResult.Deployment() == nil {
