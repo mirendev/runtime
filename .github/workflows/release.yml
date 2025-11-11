@@ -101,11 +101,20 @@ jobs:
         go-version-file: 'go.mod'
         cache: true
 
+    - name: Generate GitHub App token
+      id: generate-token
+      uses: actions/create-github-app-token@v2
+      with:
+        app-id: ${{ vars.MIREN_RFD_DEPLOY_GH_APP_ID }}
+        private-key: ${{ secrets.MIREN_RFD_DEPLOY_GH_APP_KEY }}
+        owner: mirendev
+
     - name: Configure git for private modules
-      env:
-        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
-        git config --global url."https://x-access-token:${GH_TOKEN}@github.com/".insteadOf "https://github.com/"
+        # Set GOPRIVATE to include miren.dev modules
+        echo "GOPRIVATE=miren.dev,github.com/mirendev" >> $GITHUB_ENV
+        # Configure git to use the token for GitHub access
+        git config --global url."https://x-access-token:${{ steps.generate-token.outputs.token }}@github.com/".insteadOf "https://github.com/"
 
     - name: Install iso
       env:
@@ -130,6 +139,65 @@ jobs:
         name: miren-base-linux-${{ matrix.arch }}
         path: release-base-linux-${{ matrix.arch }}.tar.gz
         retention-days: 1
+
+    - name: Send Slack notification on package failure
+      if: failure()
+      uses: slackapi/slack-github-action@v2.1.1
+      with:
+        method: chat.postMessage
+        token: ${{ secrets.SLACK_BOT_TOKEN }}
+        payload: |
+          {
+            "channel": "${{ vars.SLACK_CHANNEL_ID }}",
+            "text": "❌ Miren release packaging failed on main branch",
+            "blocks": [
+              {
+                "type": "section",
+                "text": {
+                  "type": "mrkdwn",
+                  "text": "❌ *Miren release packaging failed (${{ matrix.arch }})*\nFailed to build or package release artifacts."
+                }
+              },
+              {
+                "type": "section",
+                "fields": [
+                  {
+                    "type": "mrkdwn",
+                    "text": "*Branch:*\n`${{ github.ref_name }}`"
+                  },
+                  {
+                    "type": "mrkdwn",
+                    "text": "*Architecture:*\n`${{ matrix.arch }}`"
+                  }
+                ]
+              },
+              {
+                "type": "section",
+                "text": {
+                  "type": "mrkdwn",
+                  "text": "*Commit:*\n${{ github.event.workflow_run.head_commit.message }}"
+                }
+              },
+              {
+                "type": "section",
+                "text": {
+                  "type": "mrkdwn",
+                  "text": "*Author:* ${{ github.event.workflow_run.head_commit.author.name }}"
+                }
+              },
+              {
+                "type": "context",
+                "elements": [
+                  {
+                    "type": "mrkdwn",
+                    "text": "<${{ github.event.workflow_run.repository.html_url }}/commit/${{ github.event.workflow_run.head_sha }}|View commit> • <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View workflow run>"
+                  }
+                ]
+              }
+            ],
+            "unfurl_links": false,
+            "unfurl_media": false
+          }
 
   build-binaries:
     needs: check-test-success
