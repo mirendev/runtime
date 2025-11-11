@@ -140,6 +140,7 @@ func (d *DeploymentServer) CreateDeployment(ctx context.Context, req *deployment
 	// Get user info from context (will be implemented with auth integration)
 	// For now, use placeholder values
 	userId := "user-" + uuid.New().String()
+	userName := "testuser"
 	userEmail := ""
 
 	// Create deployment entity
@@ -153,6 +154,7 @@ func (d *DeploymentServer) CreateDeployment(ctx context.Context, req *deployment
 		Phase:      "preparing",
 		DeployedBy: core_v1alpha.DeployedBy{
 			UserId:    userId,
+			UserName:  userName,
 			UserEmail: userEmail,
 			Timestamp: now.Format(time.RFC3339),
 		},

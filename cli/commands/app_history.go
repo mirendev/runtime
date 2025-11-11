@@ -87,13 +87,13 @@ func AppHistory(ctx *Context, opts struct {
 
 	// Table header
 	if opts.Detailed {
-		ctx.Printf("%-12s %-25s %-8s %-25s %-20s %-15s %-17s %-15s %-33s\n",
-			"STATUS", "ID", "CLUSTER", "VERSION", "DEPLOYED BY", "WHEN", "GIT SHA", "BRANCH", "COMMIT MESSAGE")
-		ctx.Printf("%s\n", strings.Repeat("-", 185))
+		ctx.Printf("%-12s %-8s %-25s %-20s %-15s %-17s %-15s %-33s\n",
+			"STATUS", "CLUSTER", "VERSION", "DEPLOYED BY", "WHEN", "GIT SHA", "BRANCH", "COMMIT MESSAGE")
+		ctx.Printf("%s\n", strings.Repeat("-", 160))
 	} else {
-		ctx.Printf("%-12s %-25s %-25s %-25s %-15s\n",
-			"STATUS", "ID", "VERSION", "DEPLOYED BY", "WHEN")
-		ctx.Printf("%s\n", strings.Repeat("-", 105))
+		ctx.Printf("%-12s %-25s %-25s %-15s\n",
+			"STATUS", "VERSION", "DEPLOYED BY", "WHEN")
+		ctx.Printf("%s\n", strings.Repeat("-", 80))
 	}
 
 	// Status colors
@@ -142,19 +142,18 @@ func AppHistory(ctx *Context, opts struct {
 			version = version[:22] + "..."
 		}
 
-		// Format user
+		// Format user (prefer email, fallback to username, then user ID)
 		user := dep.DeployedByUserEmail()
-		// Replace placeholder emails with dash
+		// Replace placeholder emails with username or user ID as fallback
 		if user == "" || user == "unknown@example.com" || user == "user@example.com" {
-			user = "-"
-		} else if len(user) > 20 {
-			user = user[:17] + "..."
+			if dep.HasDeployedByUserName() && dep.DeployedByUserName() != "" {
+				user = dep.DeployedByUserName()
+			} else {
+				user = dep.DeployedByUserId()
+			}
 		}
-
-		// Format deployment ID
-		deploymentId := dep.Id()
-		if len(deploymentId) > 25 {
-			deploymentId = deploymentId[:22] + "..."
+		if len(user) > 20 {
+			user = user[:17] + "..."
 		}
 
 		// Format git info
@@ -192,9 +191,8 @@ func AppHistory(ctx *Context, opts struct {
 		}
 
 		if opts.Detailed {
-			ctx.Printf("%-12s %-25s %-8s %-25s %-20s %-15s %-17s %-15s %-33s\n",
+			ctx.Printf("%-12s %-8s %-25s %-20s %-15s %-17s %-15s %-33s\n",
 				styledStatus,
-				deploymentId,
 				cluster,
 				version,
 				user,
@@ -203,9 +201,8 @@ func AppHistory(ctx *Context, opts struct {
 				gitBranch,
 				gitMessage)
 		} else {
-			ctx.Printf("%-12s %-25s %-25s %-25s %-15s\n",
+			ctx.Printf("%-12s %-25s %-25s %-15s\n",
 				styledStatus,
-				deploymentId,
 				version,
 				user,
 				timeStr)
