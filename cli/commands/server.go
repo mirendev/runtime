@@ -6,6 +6,7 @@ package commands
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/netip"
@@ -20,6 +21,7 @@ import (
 	"time"
 
 	containerd "github.com/containerd/containerd/v2/client"
+	"github.com/containerd/containerd/v2/pkg/namespaces"
 	"github.com/go-logr/logr"
 	"golang.org/x/sync/errgroup"
 	"k8s.io/klog/v2"
@@ -829,6 +831,27 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 	}
 
 	ctx.Log.Info("miren server shutting down, cleaning up resources")
+
+	// Stop all sandboxes if requested
+	if cfg.Server.GetStopSandboxesOnShutdown() {
+		// First close the runner to stop accepting new work
+		ctx.Log.Info("closing runner before stopping sandboxes")
+		if err := r.Close(); err != nil {
+			ctx.Log.Error("failed to close runner during shutdown", "error", err)
+		}
+
+		// Get containerd client from registry
+		var cc *containerd.Client
+		if err := ctx.Server.Resolve(&cc); err != nil {
+			ctx.Log.Error("failed to get containerd client for shutdown", "error", err)
+		} else {
+			// Stop all sandbox containers via containerd
+			if err := stopAllSandboxContainers(context.Background(), ctx.Log, cc); err != nil {
+				ctx.Log.Error("failed to stop all sandbox containers during shutdown", "error", err)
+			}
+		}
+	}
+
 	co.Stop()
 	return err
 }
@@ -978,5 +1001,58 @@ func fixOwnershipIfSudo(ctx *Context, path string) error {
 
 	ctx.Log.Debug("fixed ownership for", "path", path, "uid", uid, "gid", gid)
 
+	return nil
+}
+
+// stopAllSandboxContainers stops all running sandbox containers via containerd during server shutdown
+func stopAllSandboxContainers(ctx context.Context, log *slog.Logger, cc *containerd.Client) error {
+	log.Info("stopping all sandbox containers via containerd")
+
+	// Create a context with timeout for the entire cleanup
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancel()
+
+	// Use the miren namespace
+	ctx = namespaces.WithNamespace(ctx, "miren")
+
+	// List all containers in the namespace
+	containerList, err := cc.Containers(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to list containers: %w", err)
+	}
+
+	stoppedCount := 0
+	for _, container := range containerList {
+		containerID := container.ID()
+
+		// Get the task (if it exists and is running)
+		task, err := container.Task(ctx, nil)
+		if err != nil {
+			// No task running, skip
+			continue
+		}
+
+		log.Info("stopping container", "container", containerID)
+
+		// Send SIGTERM to gracefully stop the task
+		if err := task.Kill(ctx, syscall.SIGTERM); err != nil {
+			log.Debug("failed to send SIGTERM to task", "container", containerID, "error", err)
+		} else {
+			log.Debug("sent SIGTERM to task", "container", containerID)
+		}
+
+		// Wait a bit for graceful shutdown
+		time.Sleep(100 * time.Millisecond)
+
+		// Delete the task (will force kill if still running)
+		_, err = task.Delete(ctx, containerd.WithProcessKill)
+		if err != nil {
+			log.Debug("failed to delete task", "container", containerID, "error", err)
+		} else {
+			stoppedCount++
+		}
+	}
+
+	log.Info("stopped sandbox containers", "count", stoppedCount)
 	return nil
 }

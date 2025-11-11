@@ -61,6 +61,8 @@ func Registry(extra ...func(*asm.Registry)) (*asm.Registry, func()) {
 		netip.MustParsePrefix("fd47:cafe:d00d::/64"),
 	}
 
+	r.Register("node-id", "test")
+
 	r.Register("service-prefixes", subnets)
 
 	r.Register("data-path", tempDir)

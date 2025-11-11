@@ -11,3 +11,11 @@ image = "postgres:15"
 [services.postgres.concurrency]
 mode = "fixed"
 num_instances = 1
+
+# Persistent disk for PostgreSQL data
+[[services.postgres.disks]]
+name = "postgres-data"
+mount_path = "/var/lib/postgresql"
+size_gb = 10
+filesystem = "ext4"
+lease_timeout = "5m"

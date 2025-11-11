@@ -327,6 +327,124 @@ func TestBuildServicesConfig(t *testing.T) {
 			},
 		},
 		{
+			name: "service with disk configuration",
+			appConfig: &appconfig.AppConfig{
+				Services: map[string]*appconfig.ServiceConfig{
+					"postgres": {
+						Image: "postgres:15",
+						Concurrency: &appconfig.ServiceConcurrencyConfig{
+							Mode:         "fixed",
+							NumInstances: 1,
+						},
+						Disks: []appconfig.DiskConfig{
+							{
+								Name:         "postgres-data",
+								MountPath:    "/var/lib/postgresql/data",
+								SizeGB:       100,
+								Filesystem:   "ext4",
+								LeaseTimeout: "5m",
+							},
+						},
+					},
+				},
+			},
+			procfileServices: nil,
+			validateServices: func(t *testing.T, services []core_v1alpha.Services) {
+				require.Len(t, services, 1)
+				svc := services[0]
+				assert.Equal(t, "postgres", svc.Name)
+				assert.Equal(t, "postgres:15", svc.Image)
+
+				require.Len(t, svc.Disks, 1, "should have one disk")
+				disk := svc.Disks[0]
+				assert.Equal(t, "postgres-data", disk.Name)
+				assert.Equal(t, "/var/lib/postgresql/data", disk.MountPath)
+				assert.Equal(t, int64(100), disk.SizeGb)
+				assert.Equal(t, "ext4", disk.Filesystem)
+				assert.Equal(t, "5m", disk.LeaseTimeout)
+				assert.False(t, disk.ReadOnly)
+			},
+		},
+		{
+			name: "service with multiple disks",
+			appConfig: &appconfig.AppConfig{
+				Services: map[string]*appconfig.ServiceConfig{
+					"database": {
+						Concurrency: &appconfig.ServiceConcurrencyConfig{
+							Mode:         "fixed",
+							NumInstances: 2,
+						},
+						Disks: []appconfig.DiskConfig{
+							{
+								Name:       "db-data",
+								MountPath:  "/data",
+								SizeGB:     200,
+								Filesystem: "ext4",
+							},
+							{
+								Name:       "db-wal",
+								MountPath:  "/wal",
+								SizeGB:     50,
+								Filesystem: "xfs",
+								ReadOnly:   false,
+							},
+						},
+					},
+				},
+			},
+			procfileServices: nil,
+			validateServices: func(t *testing.T, services []core_v1alpha.Services) {
+				require.Len(t, services, 1)
+				svc := services[0]
+				assert.Equal(t, "database", svc.Name)
+
+				require.Len(t, svc.Disks, 2, "should have two disks")
+
+				disk1 := svc.Disks[0]
+				assert.Equal(t, "db-data", disk1.Name)
+				assert.Equal(t, "/data", disk1.MountPath)
+				assert.Equal(t, int64(200), disk1.SizeGb)
+				assert.Equal(t, "ext4", disk1.Filesystem)
+
+				disk2 := svc.Disks[1]
+				assert.Equal(t, "db-wal", disk2.Name)
+				assert.Equal(t, "/wal", disk2.MountPath)
+				assert.Equal(t, int64(50), disk2.SizeGb)
+				assert.Equal(t, "xfs", disk2.Filesystem)
+			},
+		},
+		{
+			name: "service with read-only disk",
+			appConfig: &appconfig.AppConfig{
+				Services: map[string]*appconfig.ServiceConfig{
+					"reader": {
+						Concurrency: &appconfig.ServiceConcurrencyConfig{
+							Mode:         "fixed",
+							NumInstances: 1,
+						},
+						Disks: []appconfig.DiskConfig{
+							{
+								Name:      "shared-data",
+								MountPath: "/data",
+								ReadOnly:  true,
+								SizeGB:    50,
+							},
+						},
+					},
+				},
+			},
+			procfileServices: nil,
+			validateServices: func(t *testing.T, services []core_v1alpha.Services) {
+				require.Len(t, services, 1)
+				svc := services[0]
+
+				require.Len(t, svc.Disks, 1)
+				disk := svc.Disks[0]
+				assert.Equal(t, "shared-data", disk.Name)
+				assert.True(t, disk.ReadOnly, "disk should be read-only")
+			},
+		},
+		{
 			name:             "no config no procfile",
 			appConfig:        nil,
 			procfileServices: nil,

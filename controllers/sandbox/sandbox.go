@@ -61,6 +61,7 @@ type SandboxController struct {
 	EAC *entityserver_v1alpha.EntityAccessClient
 
 	Namespace string `asm:"namespace"`
+	NodeId    string `asm:"node-id"`
 
 	NetServ *network.ServiceManager
 
@@ -899,7 +900,7 @@ func (c *SandboxController) createSandbox(ctx context.Context, co *compute.Sandb
 		return fmt.Errorf("failed to build container spec: %w", err)
 	}
 
-	err = c.configureVolumes(ctx, co)
+	volumeMounts, err := c.configureVolumes(ctx, co, meta)
 	if err != nil {
 		c.deallocateNetwork(ctx, ep)
 		return fmt.Errorf("failed to configure volumes: %w", err)
@@ -951,7 +952,7 @@ func (c *SandboxController) createSandbox(ctx context.Context, co *compute.Sandb
 		"": rootSpec.Linux.CgroupsPath,
 	}
 
-	waitPorts, err := c.bootContainers(ctx, co, ep, int(task.Pid()), cgroups)
+	waitPorts, err := c.bootContainers(ctx, co, ep, int(task.Pid()), cgroups, meta, volumeMounts)
 	if err != nil {
 		return err
 	}
@@ -1554,6 +1555,8 @@ func (c *SandboxController) bootContainers(
 	ep *network.EndpointConfig,
 	sbPid int,
 	cgroups map[string]string,
+	meta *entity.Meta,
+	volumeMounts map[string]string,
 ) ([]waitPort, error) {
 	c.Log.Info("booting containers", "count", len(sb.Spec.Container))
 
@@ -1572,7 +1575,7 @@ func (c *SandboxController) bootContainers(
 	}()
 
 	for _, container := range sb.Spec.Container {
-		opts, err := c.buildSubContainerSpec(ctx, sb, &container, ep, sbPid)
+		opts, err := c.buildSubContainerSpec(ctx, sb, &container, ep, sbPid, meta, volumeMounts)
 		if err != nil {
 			c.cleanupContainers(ctx, createdContainers)
 			return nil, fmt.Errorf("failed to build container spec: %w", err)
@@ -1650,6 +1653,8 @@ func (c *SandboxController) buildSubContainerSpec(
 	co *compute.SandboxSpecContainer,
 	ep *network.EndpointConfig,
 	sbPid int,
+	meta *entity.Meta,
+	volumeMounts map[string]string,
 ) (
 	[]containerd.NewContainerOpts,
 	error,
@@ -1747,24 +1752,39 @@ func (c *SandboxController) buildSubContainerSpec(
 	}
 
 	for _, m := range co.Mount {
-		rawPath := c.sandboxPath(sb, "volumes", m.Source)
-		st, err := os.Lstat(rawPath)
-		if err != nil {
-			return nil, fmt.Errorf("volume %s does not exist", rawPath)
-		}
+		var rawPath string
+		var ok bool
 
-		for st.Mode().Type() == os.ModeSymlink {
-			tgt, err := os.Readlink(rawPath)
-			if err != nil {
-				return nil, fmt.Errorf("failed to read symlink %s: %w", rawPath, err)
-			}
-
-			rawPath = tgt
-			st, err = os.Stat(rawPath)
+		// First try to get the volume from the volumeMounts map (for configured volumes)
+		rawPath, ok = volumeMounts[m.Source]
+		if !ok {
+			// If not in configured volumes, look for it in the sandbox volumes directory
+			// This supports the old-style volume mounts
+			rawPath = c.sandboxPath(sb, "volumes", m.Source)
+			st, err := os.Lstat(rawPath)
 			if err != nil {
 				return nil, fmt.Errorf("volume %s does not exist", rawPath)
 			}
+
+			// Follow symlinks to get the real path
+			for st.Mode().Type() == os.ModeSymlink {
+				tgt, err := os.Readlink(rawPath)
+				if err != nil {
+					return nil, fmt.Errorf("failed to read symlink %s: %w", rawPath, err)
+				}
+
+				rawPath = tgt
+				st, err = os.Stat(rawPath)
+				if err != nil {
+					return nil, fmt.Errorf("volume %s does not exist", rawPath)
+				}
+			}
 		}
+
+		c.Log.Debug("adding container mount",
+			"volume", m.Source,
+			"source_path", rawPath,
+			"container_dest", m.Destination)
 
 		mounts = append(mounts, specs.Mount{
 			Destination: m.Destination,
@@ -1813,6 +1833,16 @@ func (c *SandboxController) buildSubContainerSpec(
 		dir = "/"
 	}
 
+	// Extract instance number from metadata labels and inject MIREN_INSTANCE_NUM
+	envVars := co.Env
+	var md core_v1alpha.Metadata
+	md.Decode(meta)
+
+	if instanceStr, ok := md.Labels.Get("instance"); ok {
+		envVars = append([]string{fmt.Sprintf("MIREN_INSTANCE_NUM=%s", instanceStr)}, envVars...)
+		c.Log.Debug("injected instance number into container env", "sandbox_id", sb.ID, "container", co.Name, "instance", instanceStr)
+	}
+
 	specOpts := []oci.SpecOpts{
 		oci.WithImageConfig(img),
 		oci.WithDefaultUnixDevices,
@@ -1831,7 +1861,7 @@ func (c *SandboxController) buildSubContainerSpec(
 			Type: specs.TimeNamespace,
 			Path: fmt.Sprintf("/proc/%d/ns/time", sbPid),
 		}),
-		oci.WithEnv(co.Env),
+		oci.WithEnv(envVars),
 	}
 
 	if co.Command != "" {

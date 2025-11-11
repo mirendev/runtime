@@ -138,6 +138,15 @@ configs:
         validation:
           min: 1
 
+      stop_sandboxes_on_shutdown:
+        type: bool
+        default: false
+        cli:
+          long: stop-sandboxes-on-shutdown
+          description: Stop all sandboxes when server shuts down (useful in development)
+        env: MIREN_SERVER_STOP_SANDBOXES_ON_SHUTDOWN
+        toml: stop_sandboxes_on_shutdown
+
   TLSConfig:
     description: TLS/certificate settings
     fields:

@@ -34,7 +34,6 @@ import (
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/types"
 	"miren.dev/runtime/pkg/idgen"
-	"miren.dev/runtime/pkg/mountinfo"
 	"miren.dev/runtime/pkg/tarx"
 	"miren.dev/runtime/pkg/testutils"
 )
@@ -641,7 +640,7 @@ func TestSandbox(t *testing.T) {
 		spath, err := filepath.Abs("testdata/static-site")
 		r.NoError(err)
 
-		sb.Volume = append(sb.Volume, compute.Volume{
+		sb.Spec.Volume = append(sb.Spec.Volume, compute.SandboxSpecVolume{
 			Name:     "static-site",
 			Provider: "host",
 			Labels:   types.LabelSet("path", spath),
@@ -768,7 +767,7 @@ func TestSandbox(t *testing.T) {
 
 		sb.Labels = append(sb.Labels, "runtime.computer/app=mn-nginx")
 
-		sb.Volume = append(sb.Volume, compute.Volume{
+		sb.Spec.Volume = append(sb.Spec.Volume, compute.SandboxSpecVolume{
 			Name:     "static-site",
 			Provider: "host",
 			Labels:   types.LabelSet("name", "site-data"),
@@ -824,148 +823,6 @@ func TestSandbox(t *testing.T) {
 		time.Sleep(5 * time.Second)
 
 		rawPath := filepath.Join(co.DataPath, "host-volumes", "site-data", "index.html")
-
-		err = os.WriteFile(rawPath, []byte("this is from testdata/static-site"), 0644)
-		r.NoError(err)
-
-		hc := http.Client{
-			Timeout: 1 * time.Second,
-		}
-
-		resp, err := hc.Get(fmt.Sprintf("http://%s:80", ca.Addr().String()))
-		r.NoError(err)
-
-		defer resp.Body.Close()
-
-		data, err := io.ReadAll(resp.Body)
-		r.NoError(err)
-
-		r.Contains(string(data), "this is from testdata/static-site")
-
-		r.Equal(http.StatusOK, resp.StatusCode)
-	})
-
-	t.Run("sets up miren volumes", func(t *testing.T) {
-		if !testutils.IsModuleLoaded("nbd") {
-			t.Skip("miren volumes require nbd kernel module and it doesn't look loaded")
-		}
-
-		r := require.New(t)
-
-		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-		defer cancel()
-
-		reg, cleanup := testutils.Registry(observability.TestInject, build.TestInject)
-		defer cleanup()
-
-		var (
-			cc  *containerd.Client
-			bkl *build.Buildkit
-		)
-
-		err := reg.Init(&cc, &bkl)
-		r.NoError(err)
-
-		dfr, err := tarx.MakeTar("testdata/nginx", nil)
-		r.NoError(err)
-
-		datafs, err := tarx.TarFS(dfr, t.TempDir())
-		r.NoError(err)
-
-		o, _, err := bkl.Transform(ctx, datafs)
-		r.NoError(err)
-
-		var ii image.ImageImporter
-
-		err = reg.Populate(&ii)
-		r.NoError(err)
-
-		err = ii.ImportImage(ctx, o, "mn-nginx:latest")
-		r.NoError(err)
-
-		ctx = namespaces.WithNamespace(ctx, ii.Namespace)
-
-		_, err = cc.GetImage(ctx, "mn-nginx:latest")
-		r.NoError(err)
-
-		var co SandboxController
-
-		err = reg.Populate(&co)
-		r.NoError(err)
-
-		defer co.Close()
-		r.NoError(co.Init(ctx))
-
-		id := entity.Id("sb-xyz")
-
-		var sb compute.Sandbox
-
-		sb.ID = id
-
-		sb.Labels = append(sb.Labels, "runtime.computer/app=mn-nginx")
-
-		sb.Volume = append(sb.Volume, compute.Volume{
-			Name:     "static-site",
-			Provider: "miren",
-			Labels:   types.LabelSet("name", "testing", "size", "50MB"),
-		})
-
-		sb.Spec.Container = append(sb.Spec.Container, compute.SandboxSpecContainer{
-			Name:  "nginx",
-			Image: "mn-nginx:latest",
-			Mount: []compute.SandboxSpecContainerMount{
-				{
-					Destination: "/usr/share/nginx/html",
-					Source:      "static-site",
-				},
-			},
-			Port: []compute.SandboxSpecContainerPort{
-				{
-					Name:     "http",
-					Port:     80,
-					Protocol: compute.SandboxSpecContainerPortTCP,
-					Type:     "http",
-				},
-			},
-		})
-
-		cont := entity.New(
-			entity.DBId, id,
-			sb.Encode,
-		)
-
-		meta := &entity.Meta{
-			Entity:   cont,
-			Revision: 1,
-		}
-
-		var tco compute.Sandbox
-		tco.Decode(cont)
-
-		err = co.Create(ctx, &tco, meta)
-		r.NoError(err)
-
-		r.Len(tco.Network, 1)
-
-		ca, err := netip.ParsePrefix(tco.Network[0].Address)
-		r.NoError(err)
-
-		c, err := cc.LoadContainer(ctx, co.pauseContainerId(id))
-		r.NoError(err)
-
-		r.NotNil(c)
-
-		defer testutils.ClearContainer(ctx, c)
-
-		time.Sleep(5 * time.Second)
-
-		rawPath := co.sandboxPath(&sb, "volumes", "static-site", "index.html")
-
-		mp, err := mountinfo.MountPoint(rawPath)
-		r.NoError(err)
-		r.NotNil(mp)
-
-		r.Equal(filepath.Dir(rawPath), mp.Mountpoint)
 
 		err = os.WriteFile(rawPath, []byte("this is from testdata/static-site"), 0644)
 		r.NoError(err)

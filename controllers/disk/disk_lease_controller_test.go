@@ -585,6 +585,115 @@ func TestDiskLeaseController_HandleBoundLease(t *testing.T) {
 	})
 }
 
+func TestDiskLeaseController_WaitsForProvisioning(t *testing.T) {
+	t.Run("waits for disk to finish provisioning", func(t *testing.T) {
+		log := slog.Default()
+		mockClient := NewMockLsvdClient()
+		dlc := NewDiskLeaseController(log, nil, mockClient)
+
+		// Create a disk that is still provisioning
+		disk := &storage_v1alpha.Disk{
+			ID:           entity.Id("disk/provisioning-disk"),
+			Status:       storage_v1alpha.PROVISIONING,
+			LsvdVolumeId: "", // No volume ID yet
+			SizeGb:       100,
+			Filesystem:   storage_v1alpha.EXT4,
+		}
+		dlc.SetTestDisk(disk)
+
+		// Create a pending lease for this disk
+		lease := &storage_v1alpha.DiskLease{
+			ID:        entity.Id("disk-lease/waiting-lease"),
+			DiskId:    entity.Id("disk/provisioning-disk"),
+			SandboxId: entity.Id("sandbox/waiting-sandbox"),
+			Status:    storage_v1alpha.PENDING,
+			Mount: storage_v1alpha.Mount{
+				Path:     "/data",
+				Options:  "rw",
+				ReadOnly: false,
+			},
+		}
+
+		// First reconciliation - disk is still provisioning
+		meta := &entity.Meta{}
+		err := dlc.Create(context.Background(), lease, meta)
+		require.NoError(t, err)
+
+		// Lease should remain in PENDING state (not FAILED)
+		assert.Equal(t, storage_v1alpha.PENDING, lease.Status)
+		assert.Equal(t, "", lease.ErrorMessage)
+
+		// Disk should not be reserved (we cleaned up the reservation)
+		_, exists := dlc.activeLeases["disk/provisioning-disk"]
+		assert.False(t, exists, "Disk should not be reserved while provisioning")
+
+		// Now simulate disk becoming provisioned
+		disk.Status = storage_v1alpha.PROVISIONED
+		disk.LsvdVolumeId = "test-volume-789"
+
+		// Add the volume to mock client
+		mockClient.volumes["test-volume-789"] = VolumeInfo{
+			ID:         "test-volume-789",
+			Name:       "test-volume-789",
+			SizeBytes:  100 * 1024 * 1024 * 1024,
+			Status:     VolumeStatusOnDisk,
+			Filesystem: "ext4",
+		}
+
+		// Second reconciliation - disk is now provisioned
+		meta2 := &entity.Meta{}
+		err = dlc.Create(context.Background(), lease, meta2)
+		require.NoError(t, err)
+
+		// Lease should now be BOUND
+		assert.Equal(t, storage_v1alpha.BOUND, lease.Status)
+		assert.Equal(t, "", lease.ErrorMessage)
+
+		// Disk should now be reserved
+		currentLease, exists := dlc.activeLeases["disk/provisioning-disk"]
+		assert.True(t, exists, "Disk should be reserved after provisioning completes")
+		assert.Equal(t, "disk-lease/waiting-lease", currentLease)
+	})
+
+	t.Run("fails lease if disk is in failed state", func(t *testing.T) {
+		log := slog.Default()
+		dlc := NewDiskLeaseController(log, nil, NewMockLsvdClient())
+
+		// Create a disk that failed provisioning
+		disk := &storage_v1alpha.Disk{
+			ID:           entity.Id("disk/failed-disk"),
+			Status:       storage_v1alpha.ERROR,
+			LsvdVolumeId: "",
+			SizeGb:       100,
+			Filesystem:   storage_v1alpha.EXT4,
+		}
+		dlc.SetTestDisk(disk)
+
+		// Create a pending lease for this failed disk
+		lease := &storage_v1alpha.DiskLease{
+			ID:        entity.Id("disk-lease/failed-lease"),
+			DiskId:    entity.Id("disk/failed-disk"),
+			SandboxId: entity.Id("sandbox/failed-sandbox"),
+			Status:    storage_v1alpha.PENDING,
+			Mount: storage_v1alpha.Mount{
+				Path:     "/data",
+				Options:  "rw",
+				ReadOnly: false,
+			},
+		}
+
+		// Process the lease
+		meta := &entity.Meta{}
+		err := dlc.Create(context.Background(), lease, meta)
+		require.NoError(t, err)
+
+		// Lease should be FAILED
+		assert.Equal(t, storage_v1alpha.FAILED, lease.Status)
+		assert.Contains(t, lease.ErrorMessage, "not provisioned")
+		assert.Contains(t, lease.ErrorMessage, "status.error")
+	})
+}
+
 func TestDiskLeaseController_CleanupOldReleasedLeases(t *testing.T) {
 	t.Run("cleans up old released leases", func(t *testing.T) {
 		log := slog.Default()

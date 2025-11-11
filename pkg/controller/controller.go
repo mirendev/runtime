@@ -60,6 +60,7 @@ type ReconcileController struct {
 	Log *slog.Logger
 
 	cancel func()
+	top    context.Context
 
 	esc          *entityserver_v1alpha.EntityAccessClient
 	name         string
@@ -99,6 +100,7 @@ func (c *ReconcileController) SetPeriodic(often time.Duration, fn func(ctx conte
 func (c *ReconcileController) Start(top context.Context) error {
 	ctx, cancel := context.WithCancel(top)
 	c.cancel = cancel
+	c.top = top
 
 	c.Log.Info("Starting controller", "name", c.name, "id", c.index.ID, "value", c.index.Value)
 
@@ -237,6 +239,20 @@ func (c *ReconcileController) Stop() {
 	}
 	c.wg.Wait()
 	close(c.workQueue)
+}
+
+// Enqueue adds an event to the work queue for processing
+func (c *ReconcileController) Enqueue(event Event) {
+	select {
+	case <-c.top.Done():
+		// Controller is stopping, do not enqueue
+		return
+	case c.workQueue <- event:
+		// Successfully enqueued
+	default:
+		// Queue is full, log and drop
+		c.Log.Warn("Work queue full, dropping enqueued event", "entity", event.Id, "eventType", event.Type, "queueSize", len(c.workQueue))
+	}
 }
 
 // runWorker processes items from the work queue

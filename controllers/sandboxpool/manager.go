@@ -106,10 +106,41 @@ func (m *Manager) Reconcile(ctx context.Context, pool *compute_v1alpha.SandboxPo
 			"desired", desired,
 			"creating", toCreate)
 
-		for i := int64(0); i < toCreate; i++ {
-			if err := m.createSandbox(ctx, pool); err != nil {
+		// Determine which instance numbers to create
+		// Collect existing instance numbers
+		existingInstances := make(map[int]bool)
+		for _, sb := range sandboxes {
+			// Get instance number from sandbox metadata
+			resp, err := m.eac.Get(ctx, sb.ID.String())
+			if err != nil {
+				m.log.Warn("failed to get sandbox metadata", "sandbox", sb.ID, "error", err)
+				continue
+			}
+
+			var md core_v1alpha.Metadata
+			md.Decode(resp.Entity().Entity())
+
+			if instanceStr, ok := md.Labels.Get("instance"); ok {
+				var instanceNum int
+				fmt.Sscanf(instanceStr, "%d", &instanceNum)
+				existingInstances[instanceNum] = true
+			}
+		}
+
+		// Find next available instance numbers
+		instancesNeeded := make([]int, 0, toCreate)
+		for instanceNum := 0; len(instancesNeeded) < int(toCreate); instanceNum++ {
+			if !existingInstances[instanceNum] {
+				instancesNeeded = append(instancesNeeded, instanceNum)
+			}
+		}
+
+		// Create sandboxes with assigned instance numbers
+		for _, instanceNum := range instancesNeeded {
+			if err := m.createSandbox(ctx, pool, instanceNum); err != nil {
 				m.log.Error("failed to create sandbox",
 					"pool", pool.ID,
+					"instance", instanceNum,
 					"error", err)
 				// Continue - partial scaling is acceptable
 			}
@@ -257,7 +288,7 @@ func (m *Manager) listSandboxes(ctx context.Context, pool *compute_v1alpha.Sandb
 }
 
 // createSandbox creates a new sandbox from the pool's SandboxSpec template
-func (m *Manager) createSandbox(ctx context.Context, pool *compute_v1alpha.SandboxPool) error {
+func (m *Manager) createSandbox(ctx context.Context, pool *compute_v1alpha.SandboxPool, instanceNum int) error {
 	// Generate sandbox name
 	sbName := idgen.GenNS("sb")
 
@@ -275,6 +306,7 @@ func (m *Manager) createSandbox(ctx context.Context, pool *compute_v1alpha.Sandb
 			Labels: types.LabelSet(
 				"service", pool.Service,
 				"pool", pool.ID.String(),
+				"instance", fmt.Sprintf("%d", instanceNum),
 			),
 		}).Encode,
 		entity.Ident, entity.MustKeyword("sandbox/"+sbName),
@@ -289,7 +321,8 @@ func (m *Manager) createSandbox(ctx context.Context, pool *compute_v1alpha.Sandb
 	m.log.Info("created sandbox",
 		"sandbox", resp.Id(),
 		"pool", pool.ID,
-		"service", pool.Service)
+		"service", pool.Service,
+		"instance", instanceNum)
 
 	return nil
 }

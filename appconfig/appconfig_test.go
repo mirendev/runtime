@@ -483,3 +483,146 @@ func TestGetDefaultsForServices(t *testing.T) {
 		})
 	}
 }
+
+func TestValidateDiskConcurrencyRequirement(t *testing.T) {
+	t.Run("fixed mode service with disk succeeds", func(t *testing.T) {
+		config := `
+name = "test-app"
+
+[services.database.concurrency]
+mode = "fixed"
+num_instances = 1
+
+[[services.database.disks]]
+name = "data"
+mount_path = "/data"
+size_gb = 100
+`
+		ac, err := Parse([]byte(config))
+		require.NoError(t, err)
+		assert.NotNil(t, ac)
+	})
+
+	t.Run("auto mode service with disk fails", func(t *testing.T) {
+		config := `
+name = "test-app"
+
+[services.web.concurrency]
+mode = "auto"
+requests_per_instance = 10
+
+[[services.web.disks]]
+name = "data"
+mount_path = "/data"
+size_gb = 100
+`
+		_, err := Parse([]byte(config))
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "disks can only be attached to services with fixed concurrency mode")
+	})
+
+	t.Run("service with disk but no concurrency config fails", func(t *testing.T) {
+		config := `
+name = "test-app"
+
+[[services.app.disks]]
+name = "data"
+mount_path = "/data"
+size_gb = 100
+`
+		_, err := Parse([]byte(config))
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "disks can only be attached to services with fixed concurrency mode")
+	})
+
+	t.Run("service without disks can be auto mode", func(t *testing.T) {
+		config := `
+name = "test-app"
+
+[services.web.concurrency]
+mode = "auto"
+requests_per_instance = 10
+`
+		ac, err := Parse([]byte(config))
+		require.NoError(t, err)
+		assert.NotNil(t, ac)
+	})
+
+	t.Run("multiple disks on fixed service succeeds", func(t *testing.T) {
+		config := `
+name = "test-app"
+
+[services.database.concurrency]
+mode = "fixed"
+num_instances = 1
+
+[[services.database.disks]]
+name = "data"
+mount_path = "/data"
+size_gb = 100
+
+[[services.database.disks]]
+name = "wal"
+mount_path = "/wal"
+size_gb = 50
+filesystem = "xfs"
+`
+		ac, err := Parse([]byte(config))
+		require.NoError(t, err)
+		assert.NotNil(t, ac)
+		require.Len(t, ac.Services["database"].Disks, 2)
+	})
+
+	t.Run("invalid filesystem type fails", func(t *testing.T) {
+		config := `
+name = "test-app"
+
+[services.database.concurrency]
+mode = "fixed"
+num_instances = 1
+
+[[services.database.disks]]
+name = "data"
+mount_path = "/data"
+size_gb = 100
+filesystem = "ntfs"
+`
+		_, err := Parse([]byte(config))
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "invalid filesystem")
+	})
+
+	t.Run("missing disk name fails", func(t *testing.T) {
+		config := `
+name = "test-app"
+
+[services.database.concurrency]
+mode = "fixed"
+num_instances = 1
+
+[[services.database.disks]]
+mount_path = "/data"
+size_gb = 100
+`
+		_, err := Parse([]byte(config))
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "must have a name")
+	})
+
+	t.Run("missing mount_path fails", func(t *testing.T) {
+		config := `
+name = "test-app"
+
+[services.database.concurrency]
+mode = "fixed"
+num_instances = 1
+
+[[services.database.disks]]
+name = "data"
+size_gb = 100
+`
+		_, err := Parse([]byte(config))
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "must have a mount_path")
+	})
+}

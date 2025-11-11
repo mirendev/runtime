@@ -114,6 +114,29 @@ kinds:
                 num_instances:
                   type: int
                   doc: For fixed mode, number of instances to maintain
+            disks:
+              type: component
+              doc: Disk attachments for this service
+              many: true
+              attrs:
+                name:
+                  type: string
+                  doc: The name of the disk entity to attach
+                mount_path:
+                  type: string
+                  doc: The path inside the container where the disk will be mounted
+                read_only:
+                  type: bool
+                  doc: Whether to mount the disk as read-only
+                size_gb:
+                  type: int
+                  doc: Size in GB for auto-creating the disk if it doesn't exist
+                filesystem:
+                  type: string
+                  doc: Filesystem type (ext4, xfs, btrfs) for auto-creating the disk
+                lease_timeout:
+                  type: string
+                  doc: Timeout for acquiring the disk lease (e.g. 5m, 10m)
         entrypoint:
           type: string
           doc: The container entrypoint command

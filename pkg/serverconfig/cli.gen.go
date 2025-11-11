@@ -24,6 +24,7 @@ type CLIFlags struct {
 	ServerConfigRunnerAddress            *string  `long:"runner-address" description:"Runner address (host:port). For IPv6 use brackets, e.g. \"[::1]:8444\"."`
 	ServerConfigRunnerID                 *string  `long:"runner-id" short:"r" description:"Runner ID"`
 	ServerConfigSkipClientConfig         *bool    `long:"skip-client-config" description:"Skip writing client config file to clientconfig.d"`
+	ServerConfigStopSandboxesOnShutdown  *bool    `long:"stop-sandboxes-on-shutdown" description:"Stop all sandboxes when server shuts down (useful in development)"`
 	TLSConfigAdditionalIPs               []string `long:"ips" description:"Additional IPs assigned to the server cert"`
 	TLSConfigAdditionalNames             []string `long:"dns-names" description:"Additional DNS names assigned to the server cert"`
 	TLSConfigStandardTLS                 *bool    `long:"serve-tls" description:"Expose the http ingress on standard TLS ports"`

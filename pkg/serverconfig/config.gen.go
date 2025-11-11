@@ -153,14 +153,15 @@ func (c *EtcdConfig) SetStartEmbedded(v bool) {
 
 // ServerConfig Core server settings
 type ServerConfig struct {
-	Address            *string `toml:"address" env:"MIREN_SERVER_ADDRESS"`
-	ConfigClusterName  *string `toml:"config_cluster_name" env:"MIREN_SERVER_CONFIG_CLUSTER_NAME"`
-	DataPath           *string `toml:"data_path" env:"MIREN_SERVER_DATA_PATH"`
-	HTTPRequestTimeout *int    `toml:"http_request_timeout" env:"MIREN_SERVER_HTTP_REQUEST_TIMEOUT"`
-	ReleasePath        *string `toml:"release_path" env:"MIREN_SERVER_RELEASE_PATH"`
-	RunnerAddress      *string `toml:"runner_address" env:"MIREN_SERVER_RUNNER_ADDRESS"`
-	RunnerID           *string `toml:"runner_id" env:"MIREN_SERVER_RUNNER_ID"`
-	SkipClientConfig   *bool   `toml:"skip_client_config" env:"MIREN_SERVER_SKIP_CLIENT_CONFIG"`
+	Address                 *string `toml:"address" env:"MIREN_SERVER_ADDRESS"`
+	ConfigClusterName       *string `toml:"config_cluster_name" env:"MIREN_SERVER_CONFIG_CLUSTER_NAME"`
+	DataPath                *string `toml:"data_path" env:"MIREN_SERVER_DATA_PATH"`
+	HTTPRequestTimeout      *int    `toml:"http_request_timeout" env:"MIREN_SERVER_HTTP_REQUEST_TIMEOUT"`
+	ReleasePath             *string `toml:"release_path" env:"MIREN_SERVER_RELEASE_PATH"`
+	RunnerAddress           *string `toml:"runner_address" env:"MIREN_SERVER_RUNNER_ADDRESS"`
+	RunnerID                *string `toml:"runner_id" env:"MIREN_SERVER_RUNNER_ID"`
+	SkipClientConfig        *bool   `toml:"skip_client_config" env:"MIREN_SERVER_SKIP_CLIENT_CONFIG"`
+	StopSandboxesOnShutdown *bool   `toml:"stop_sandboxes_on_shutdown" env:"MIREN_SERVER_STOP_SANDBOXES_ON_SHUTDOWN"`
 }
 
 // GetAddress returns the value of Address or its zero value if nil
@@ -265,6 +266,19 @@ func (c *ServerConfig) GetSkipClientConfig() bool {
 // SetSkipClientConfig sets the value of SkipClientConfig
 func (c *ServerConfig) SetSkipClientConfig(v bool) {
 	c.SkipClientConfig = &v
+}
+
+// GetStopSandboxesOnShutdown returns the value of StopSandboxesOnShutdown or its zero value if nil
+func (c *ServerConfig) GetStopSandboxesOnShutdown() bool {
+	if c.StopSandboxesOnShutdown != nil {
+		return *c.StopSandboxesOnShutdown
+	}
+	return false
+}
+
+// SetStopSandboxesOnShutdown sets the value of StopSandboxesOnShutdown
+func (c *ServerConfig) SetStopSandboxesOnShutdown(v bool) {
+	c.StopSandboxesOnShutdown = &v
 }
 
 // TLSConfig TLS/certificate settings
