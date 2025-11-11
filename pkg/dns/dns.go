@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"net/netip"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -27,6 +29,7 @@ type Server struct {
 
 	mu              sync.RWMutex
 	ipToApp         map[string]string              // source IP → app name
+	ipToService     map[string]string              // IP → service name (for PTR lookups)
 	appServiceToIPs map[string]map[string][]string // app name → service name → []IPs
 	entityToIP      map[string]string              // entity ID → IP address
 
@@ -58,6 +61,7 @@ func New(addr string, entityClient *entityserver_v1alpha.EntityAccessClient, log
 		entityClient:    entityClient,
 		log:             log,
 		ipToApp:         make(map[string]string),
+		ipToService:     make(map[string]string),
 		appServiceToIPs: make(map[string]map[string][]string),
 		entityToIP:      make(map[string]string),
 	}
@@ -72,9 +76,41 @@ func (s *Server) handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 		question := r.Question[0]
 		qname := strings.ToLower(question.Name)
 
-		// Check if query matches *.app.miren pattern
+		// Handle TXT query for app.miren (service discovery)
+		if qname == "app.miren." && question.Qtype == dns.TypeTXT {
+			s.handleServiceListQuery(w, r)
+			return
+		}
+
+		// Handle queries for *.app.miren pattern
 		if strings.HasSuffix(qname, ".app.miren.") {
-			s.handleAppMirenQuery(w, r, qname)
+			switch question.Qtype {
+			case dns.TypeA:
+				s.handleAppMirenQuery(w, r, qname)
+				return
+			case dns.TypeAAAA:
+				// Return empty response for IPv6 queries
+				response := new(dns.Msg)
+				response.SetReply(r)
+				response.RecursionAvailable = true
+				response.Authoritative = true
+				w.WriteMsg(response)
+				return
+			default:
+				// Return NXDOMAIN for any other query type on app.miren domains
+				response := new(dns.Msg)
+				response.SetReply(r)
+				response.RecursionAvailable = true
+				response.Authoritative = true
+				response.Rcode = dns.RcodeNameError
+				w.WriteMsg(response)
+				return
+			}
+		}
+
+		// Handle PTR queries for .in-addr.arpa (reverse DNS)
+		if strings.HasSuffix(qname, ".in-addr.arpa.") && question.Qtype == dns.TypePTR {
+			s.handlePTRQuery(w, r, qname)
 			return
 		}
 	}
@@ -106,6 +142,175 @@ func (s *Server) handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 	response.RecursionAvailable = true
 	response.Response = true
 
+	w.WriteMsg(response)
+}
+
+func (s *Server) handleServiceListQuery(w dns.ResponseWriter, r *dns.Msg) {
+	response := new(dns.Msg)
+	response.SetReply(r)
+	response.RecursionAvailable = true
+	response.Authoritative = true
+
+	// Get source IP from request
+	remoteAddr := w.RemoteAddr()
+	var sourceIP string
+	switch addr := remoteAddr.(type) {
+	case *net.UDPAddr:
+		sourceIP = addr.IP.String()
+	case *net.TCPAddr:
+		sourceIP = addr.IP.String()
+	default:
+		s.log.Warn("unknown remote address type", "type", fmt.Sprintf("%T", remoteAddr))
+		w.WriteMsg(response)
+		return
+	}
+
+	// Look up which app this source IP belongs to
+	s.mu.RLock()
+	appName, found := s.ipToApp[sourceIP]
+	if !found {
+		s.mu.RUnlock()
+		// Source IP not from any known sandbox, return empty response
+		s.log.Debug("service list query from unknown IP", "ip", sourceIP)
+		w.WriteMsg(response)
+		return
+	}
+
+	// Get all services for this app
+	var services []string
+	if serviceMap, ok := s.appServiceToIPs[appName]; ok {
+		for service := range serviceMap {
+			services = append(services, service)
+		}
+	}
+	s.mu.RUnlock()
+
+	sort.Strings(services)
+
+	// Return all services in a single TXT record, space-separated
+	if len(services) > 0 {
+		rr := &dns.TXT{
+			Hdr: dns.RR_Header{
+				Name:   r.Question[0].Name,
+				Rrtype: dns.TypeTXT,
+				Class:  dns.ClassINET,
+				Ttl:    30,
+			},
+			Txt: []string{strings.Join(services, " ")},
+		}
+		response.Answer = append(response.Answer, rr)
+	}
+
+	s.log.Debug("resolved service list query", "app", appName, "source_ip", sourceIP, "services", services)
+	w.WriteMsg(response)
+}
+
+func (s *Server) handlePTRQuery(w dns.ResponseWriter, r *dns.Msg, qname string) {
+	response := new(dns.Msg)
+	response.SetReply(r)
+	response.RecursionAvailable = true
+
+	// Parse IP from reversed .in-addr.arpa format
+	// e.g., "5.0.10.10.in-addr.arpa." → "10.10.0.5"
+	parts := strings.Split(qname, ".")
+	if len(parts) < 6 {
+		// Invalid format, forward to upstream
+		s.forwardToUpstream(w, r)
+		return
+	}
+
+	// Reverse the first 4 octets
+	ip := fmt.Sprintf("%s.%s.%s.%s", parts[3], parts[2], parts[1], parts[0])
+
+	// Get source IP from request to determine requesting app
+	remoteAddr := w.RemoteAddr()
+	var sourceIP string
+	switch addr := remoteAddr.(type) {
+	case *net.UDPAddr:
+		sourceIP = addr.IP.String()
+	case *net.TCPAddr:
+		sourceIP = addr.IP.String()
+	default:
+		s.forwardToUpstream(w, r)
+		return
+	}
+
+	// Look up which app this source IP belongs to
+	s.mu.RLock()
+	sourceAppName, foundSource := s.ipToApp[sourceIP]
+	if !foundSource {
+		s.mu.RUnlock()
+		// Source IP not from any known sandbox, forward to upstream
+		s.forwardToUpstream(w, r)
+		return
+	}
+
+	// Look up which app the queried IP belongs to
+	targetAppName, foundTarget := s.ipToApp[ip]
+	if !foundTarget {
+		s.mu.RUnlock()
+		// Queried IP not tracked, forward to upstream
+		s.forwardToUpstream(w, r)
+		return
+	}
+
+	// App-scoped security: only return PTR if both IPs belong to same app
+	if sourceAppName != targetAppName {
+		s.mu.RUnlock()
+		s.forwardToUpstream(w, r)
+		return
+	}
+
+	// Look up service name for the queried IP
+	serviceName, found := s.ipToService[ip]
+	s.mu.RUnlock()
+
+	if !found {
+		// No service mapping found, forward to upstream
+		s.forwardToUpstream(w, r)
+		return
+	}
+
+	// Build PTR record pointing to service.app.miren.
+	response.Authoritative = true
+	ptrRecord := &dns.PTR{
+		Hdr: dns.RR_Header{
+			Name:   r.Question[0].Name,
+			Rrtype: dns.TypePTR,
+			Class:  dns.ClassINET,
+			Ttl:    30,
+		},
+		Ptr: fmt.Sprintf("%s.app.miren.", serviceName),
+	}
+	response.Answer = append(response.Answer, ptrRecord)
+
+	s.log.Debug("resolved PTR query", "ip", ip, "service", serviceName, "app", sourceAppName, "source_ip", sourceIP)
+	w.WriteMsg(response)
+}
+
+func (s *Server) forwardToUpstream(w dns.ResponseWriter, r *dns.Msg) {
+	var response *dns.Msg
+	var err error
+
+	for _, upstream := range s.upstreams {
+		upstream = net.JoinHostPort(upstream, "53")
+		response, _, err = s.client.Exchange(r, upstream)
+		if err == nil && response != nil {
+			break
+		}
+	}
+
+	if err != nil || response == nil {
+		response = new(dns.Msg)
+		response.SetReply(r)
+		response.Rcode = dns.RcodeServerFailure
+		w.WriteMsg(response)
+		return
+	}
+
+	response.Id = r.Id
+	response.RecursionAvailable = true
+	response.Response = true
 	w.WriteMsg(response)
 }
 
@@ -166,14 +371,14 @@ func (s *Server) handleAppMirenQuery(w dns.ResponseWriter, r *dns.Msg, qname str
 
 	// Build A records for all matching sandbox IPs
 	for _, ip := range ips {
-		parsedIP := net.ParseIP(ip)
-		if parsedIP == nil {
-			s.log.Warn("invalid IP address in mapping", "ip", ip, "app", appName, "service", serviceName)
+		parsedIP, err := netip.ParseAddr(ip)
+		if err != nil {
+			s.log.Warn("invalid IP address in mapping", "ip", ip, "app", appName, "service", serviceName, "error", err)
 			continue
 		}
 
 		// Only return A records for IPv4 addresses
-		if parsedIP.To4() != nil {
+		if parsedIP.Is4() {
 			rr := &dns.A{
 				Hdr: dns.RR_Header{
 					Name:   r.Question[0].Name,
@@ -181,7 +386,7 @@ func (s *Server) handleAppMirenQuery(w dns.ResponseWriter, r *dns.Msg, qname str
 					Class:  dns.ClassINET,
 					Ttl:    30, // Short TTL for dynamic service discovery
 				},
-				A: parsedIP.To4(),
+				A: parsedIP.AsSlice(),
 			}
 			response.Answer = append(response.Answer, rr)
 		}
@@ -324,6 +529,9 @@ func (s *Server) handleSandboxUpdate(ctx context.Context, sb *compute_v1alpha.Sa
 	// Update ipToApp mapping
 	s.ipToApp[ipAddr] = appName
 
+	// Update ipToService mapping for PTR queries
+	s.ipToService[ipAddr] = service
+
 	// Update appServiceToIPs mapping
 	if s.appServiceToIPs[appName] == nil {
 		s.appServiceToIPs[appName] = make(map[string][]string)
@@ -367,6 +575,9 @@ func (s *Server) handleSandboxDeleteByID(entityID string) {
 
 	// Remove from ipToApp
 	delete(s.ipToApp, ipAddr)
+
+	// Remove from ipToService
+	delete(s.ipToService, ipAddr)
 
 	// Remove from appServiceToIPs - need to find and remove IP from all services
 	if serviceMap, ok := s.appServiceToIPs[appName]; ok {
@@ -445,6 +656,9 @@ func (s *Server) handleSandboxDelete(sb *compute_v1alpha.Sandbox) {
 
 	// Remove from ipToApp
 	delete(s.ipToApp, ipAddr)
+
+	// Remove from ipToService
+	delete(s.ipToService, ipAddr)
 
 	// Remove from appServiceToIPs - need to find and remove IP from all services
 	if serviceMap, ok := s.appServiceToIPs[appName]; ok {
