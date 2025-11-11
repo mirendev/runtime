@@ -640,7 +640,7 @@ func TestSandbox(t *testing.T) {
 		spath, err := filepath.Abs("testdata/static-site")
 		r.NoError(err)
 
-		sb.Volume = append(sb.Volume, compute.Volume{
+		sb.Spec.Volume = append(sb.Spec.Volume, compute.SandboxSpecVolume{
 			Name:     "static-site",
 			Provider: "host",
 			Labels:   types.LabelSet("path", spath),
@@ -767,7 +767,7 @@ func TestSandbox(t *testing.T) {
 
 		sb.Labels = append(sb.Labels, "runtime.computer/app=mn-nginx")
 
-		sb.Volume = append(sb.Volume, compute.Volume{
+		sb.Spec.Volume = append(sb.Spec.Volume, compute.SandboxSpecVolume{
 			Name:     "static-site",
 			Provider: "host",
 			Labels:   types.LabelSet("name", "site-data"),

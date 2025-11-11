@@ -289,7 +289,7 @@ func (r *Runner) SetupControllers(
 	cm := controller.NewControllerManager()
 
 	r.reg.Register("entity-client", eas)
-	r.reg.Register("node-id", r.Id)
+	r.reg.Override("node-id", r.Id)
 
 	var sbc sandbox.SandboxController
 	if err := r.reg.Populate(&sbc); err != nil {
