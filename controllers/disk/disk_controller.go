@@ -32,7 +32,7 @@ type DiskController struct {
 // NewDiskController creates a new disk controller
 func NewDiskController(log *slog.Logger, eac *entityserver_v1alpha.EntityAccessClient, lsvdClient LsvdClient) *DiskController {
 	return &DiskController{
-		Log:           log.With("controller", "disk"),
+		Log:           log.With("module", "disk"),
 		EAC:           eac,
 		lsvdClient:    lsvdClient,
 		mountBasePath: "/var/lib/miren/disks", // Default mount base path
@@ -42,7 +42,7 @@ func NewDiskController(log *slog.Logger, eac *entityserver_v1alpha.EntityAccessC
 // NewDiskControllerWithClients creates a new disk controller with separate clients for local and remote-only modes
 func NewDiskControllerWithClients(log *slog.Logger, eac *entityserver_v1alpha.EntityAccessClient, defaultClient, localReplicaClient, remoteOnlyClient LsvdClient) *DiskController {
 	return &DiskController{
-		Log:                log.With("controller", "disk"),
+		Log:                log.With("module", "disk"),
 		EAC:                eac,
 		lsvdClient:         defaultClient,
 		localReplicaClient: localReplicaClient,
@@ -54,7 +54,7 @@ func NewDiskControllerWithClients(log *slog.Logger, eac *entityserver_v1alpha.En
 // NewDiskControllerWithMountPath creates a new disk controller with custom mount path
 func NewDiskControllerWithMountPath(log *slog.Logger, eac *entityserver_v1alpha.EntityAccessClient, lsvdClient LsvdClient, mountPath string) *DiskController {
 	return &DiskController{
-		Log:           log.With("controller", "disk"),
+		Log:           log.With("module", "disk"),
 		EAC:           eac,
 		lsvdClient:    lsvdClient,
 		mountBasePath: mountPath,

@@ -803,8 +803,8 @@ func (d *DiskLeaseController) watchDiskChanges(ctx context.Context, rc *controll
 		diskId := entity.Id(op.EntityId())
 		d.Log.Debug("Disk state changed, finding dependent leases", "disk", diskId)
 
-		// Find all leases that reference this disk
-		listResp, err := d.EAC.List(ctx, entity.Ref(entity.EntityKind, storage_v1alpha.KindDiskLease))
+		// Find all leases that reference this disk using the DiskId index
+		listResp, err := d.EAC.List(ctx, entity.Ref(storage_v1alpha.DiskLeaseDiskIdId, diskId))
 		if err != nil {
 			d.Log.Error("failed to list disk leases for disk change", "disk", diskId, "error", err)
 			return nil
@@ -816,22 +816,20 @@ func (d *DiskLeaseController) watchDiskChanges(ctx context.Context, rc *controll
 			var lease storage_v1alpha.DiskLease
 			lease.Decode(e.Entity())
 
-			if lease.DiskId == diskId {
-				d.Log.Debug("Reconciling lease due to disk state change",
-					"disk", diskId,
-					"lease", lease.ID,
-					"leaseStatus", lease.Status)
+			d.Log.Debug("Reconciling lease due to disk state change",
+				"disk", diskId,
+				"lease", lease.ID,
+				"leaseStatus", lease.Status)
 
-				// Trigger reconciliation by creating an event
-				ev := controller.Event{
-					Type: controller.EventUpdated,
-					Id:   lease.ID,
-				}
-
-				// Add to the reconcile controller's work queue
-				rc.Enqueue(ev)
-				reconciledCount++
+			// Trigger reconciliation by creating an event
+			ev := controller.Event{
+				Type: controller.EventUpdated,
+				Id:   lease.ID,
 			}
+
+			// Add to the reconcile controller's work queue
+			rc.Enqueue(ev)
+			reconciledCount++
 		}
 
 		if reconciledCount > 0 {

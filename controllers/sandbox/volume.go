@@ -155,23 +155,23 @@ func (c *SandboxController) configureMirenVolume(ctx context.Context, sb *comput
 }
 
 func (c *SandboxController) ensureDisk(ctx context.Context, diskName string, sizeGB int64, filesystem string) (entity.Id, error) {
-	// Search for existing disk by name
-	listResp, err := c.EAC.List(ctx, entity.Ref(entity.EntityKind, storage.KindDisk))
+	// Search for existing disk by name using the name index
+	listResp, err := c.EAC.List(ctx, entity.String(storage.DiskNameId, diskName))
 	if err != nil {
-		return entity.Id(""), fmt.Errorf("failed to list disks: %w", err)
+		return entity.Id(""), fmt.Errorf("failed to query disks by name: %w", err)
 	}
 
-	for _, e := range listResp.Values() {
+	if len(listResp.Values()) > 0 {
+		// Found an existing disk
+		e := listResp.Values()[0]
 		var disk storage.Disk
 		disk.Decode(e.Entity())
 
-		if disk.Name == diskName {
-			c.Log.Info("found existing disk", "disk", disk.ID, "name", diskName, "status", disk.Status)
-			// Don't wait here - let the lease controller handle provisioning
-			// If there's an existing lease, it's already waiting
-			// If we create a new lease, the lease controller will wait
-			return disk.ID, nil
-		}
+		c.Log.Info("found existing disk", "disk", disk.ID, "name", diskName, "status", disk.Status)
+		// Don't wait here - let the lease controller handle provisioning
+		// If there's an existing lease, it's already waiting
+		// If we create a new lease, the lease controller will wait
+		return disk.ID, nil
 	}
 
 	// Disk doesn't exist, create it if size is specified
