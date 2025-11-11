@@ -107,13 +107,21 @@ func TestRunnerCoordinatorIntegration(t *testing.T) {
 			res, err = eac.Get(ctx, nodeId)
 			require.NoError(t, err, "failed to get node entity after runner started")
 			require.True(t, res.HasEntity(), "node entity not found after runner started")
+			// Verify status field is present
+			node := entity.New(res.Entity().Attrs())
+			_, ok := node.Get(compute.NodeStatusId)
+			require.True(t, ok, "node entity status not set after runner started")
 			goto nodeReady
 		case <-pollTimeout:
-			t.Fatal("timeout waiting for node entity to be created")
+			t.Fatal("timeout waiting for node entity to be created with status")
 		case <-pollTicker.C:
 			res, err = eac.Get(ctx, nodeId)
 			if err == nil && res.HasEntity() {
-				goto nodeReady
+				// Check that status field is present before proceeding
+				node := entity.New(res.Entity().Attrs())
+				if _, ok := node.Get(compute.NodeStatusId); ok {
+					goto nodeReady
+				}
 			}
 		}
 	}
