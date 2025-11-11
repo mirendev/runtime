@@ -33,7 +33,7 @@ echo "Building portable Linux amd64 binary (version $version)..."
 
 # Create the Dockerfile content
 cat >"$DOCKERFILE" <<EOF
-FROM golang:1.24-alpine AS builder
+FROM golang:1.25-alpine AS builder
 
 # Accept version as a build argument
 ARG VERSION

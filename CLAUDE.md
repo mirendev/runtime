@@ -141,7 +141,7 @@ m app list
 
 ### ISO Environment
 The project uses **iso** for containerized development with all dependencies provided:
-- `.iso/Dockerfile` - Defines the build environment (Go 1.24, containerd, buildkit, gvisor, etc.)
+- `.iso/Dockerfile` - Defines the build environment (Go 1.25, containerd, buildkit, gvisor, etc.)
 - `.iso/services.yml` - Defines external service containers (MinIO for object storage)
 - All default `make` targets and `hack/` scripts run inside the isolated container
 - Services are automatically started and ready before commands run
