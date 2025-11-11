@@ -549,7 +549,10 @@ func (e *EntityServer) List(ctx context.Context, req *entityserver_v1alpha.Entit
 	var ret []*entityserver_v1alpha.Entity
 	for i, entity := range entities {
 		if entity == nil {
-			return fmt.Errorf("entity not found: %s", ids[i])
+			e.Log.Error("entity in index but not in store, skipping",
+				"id", ids[i],
+				"index", index)
+			continue
 		}
 
 		var rpcEntity entityserver_v1alpha.Entity
