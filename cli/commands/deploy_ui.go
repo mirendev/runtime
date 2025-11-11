@@ -53,13 +53,7 @@ var (
 func line(str string) string {
 	var sb strings.Builder
 
-	for _, b := range str {
-		if b == ' ' {
-			sb.WriteString(spinBlankStyle.Render(square))
-		} else {
-			sb.WriteString(spinStyle.Render(square))
-		}
-	}
+	sb.WriteString(spinStyle.Render(str))
 
 	return sb.String()
 }
@@ -67,14 +61,18 @@ func line(str string) string {
 // Meter is the custom spinner animation
 var Meter = spinner.Spinner{
 	Frames: []string{
-		line("    "),
-		line("▰   "),
-		line("▰▰  "),
-		line("▰▰▰ "),
-		line(" ▰▰ "),
-		line("  ▰ "),
+		line("⠋"),
+		line("⠙"),
+		line("⠹"),
+		line("⠸"),
+		line("⠼"),
+		line("⠴"),
+		line("⠦"),
+		line("⠧"),
+		line("⠇"),
+		line("⠏"),
 	},
-	FPS: time.Second / 7, //nolint:mnd
+	FPS: time.Second / 10, //nolint:mnd
 }
 
 // Data types for UI
