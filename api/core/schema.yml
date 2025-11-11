@@ -197,6 +197,9 @@ kinds:
         user_id:
           type: string
           doc: The ID of the user who deployed
+        user_name:
+          type: string
+          doc: The username of the user who deployed
         user_email:
           type: string
           doc: The email of the user who deployed
