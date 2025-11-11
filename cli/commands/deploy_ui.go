@@ -37,12 +37,6 @@ func init() {
 var (
 	mirenBlue = "#3E53FB"
 	lightBlue = colortheory.ChangeLightness(mirenBlue, -10)
-	square    = "▰"
-
-	spinBlankStyle = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{
-		Light: "#111111",
-		Dark:  colortheory.ChangeLightness(mirenBlue, 25),
-	})
 
 	spinStyle = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{
 		Light: "#3E53FB",
@@ -53,13 +47,7 @@ var (
 func line(str string) string {
 	var sb strings.Builder
 
-	for _, b := range str {
-		if b == ' ' {
-			sb.WriteString(spinBlankStyle.Render(square))
-		} else {
-			sb.WriteString(spinStyle.Render(square))
-		}
-	}
+	sb.WriteString(spinStyle.Render(str))
 
 	return sb.String()
 }
@@ -67,14 +55,18 @@ func line(str string) string {
 // Meter is the custom spinner animation
 var Meter = spinner.Spinner{
 	Frames: []string{
-		line("    "),
-		line("▰   "),
-		line("▰▰  "),
-		line("▰▰▰ "),
-		line(" ▰▰ "),
-		line("  ▰ "),
+		line("⠋"),
+		line("⠙"),
+		line("⠹"),
+		line("⠸"),
+		line("⠼"),
+		line("⠴"),
+		line("⠦"),
+		line("⠧"),
+		line("⠇"),
+		line("⠏"),
 	},
-	FPS: time.Second / 7, //nolint:mnd
+	FPS: time.Second / 10, //nolint:mnd
 }
 
 // Data types for UI
