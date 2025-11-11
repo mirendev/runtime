@@ -2,11 +2,23 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 )
 
 func main() {
+
+	r, err := http.Get("http://ipconfig.io/json")
+	if err != nil {
+		fmt.Printf("Error fetching IP config: %v\n", err)
+	} else {
+		defer r.Body.Close()
+		fmt.Println("Successfully fetched IP config")
+		data, _ := io.ReadAll(r.Body)
+		fmt.Println(string(data))
+	}
+
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "3000"
