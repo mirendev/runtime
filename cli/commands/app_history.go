@@ -98,6 +98,7 @@ func AppHistory(ctx *Context, opts struct {
 
 	// Status colors
 	activeStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("10"))     // Green
+	succeededStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("12"))  // Blue
 	failedStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("9"))      // Red
 	rolledBackStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("11")) // Yellow
 	inProgressStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("14")) // Cyan
@@ -109,6 +110,8 @@ func AppHistory(ctx *Context, opts struct {
 		switch status {
 		case "active":
 			styledStatus = activeStyle.Render("✓ " + status)
+		case "succeeded":
+			styledStatus = succeededStyle.Render("✓ " + status)
 		case "failed":
 			styledStatus = failedStyle.Render("✗ " + status)
 		case "rolled_back":
