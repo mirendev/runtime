@@ -14,7 +14,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mdp/qrterminal/v3"
 	"miren.dev/runtime/clientconfig"
 	"miren.dev/runtime/pkg/cloudauth"
 )
@@ -116,7 +115,6 @@ func Login(ctx *Context, opts struct {
 	IdentityName string `short:"i" long:"identity" description:"Name for this identity in config" default:"cloud"`
 	KeyName      string `short:"k" long:"key-name" description:"Name for the authentication key" default:"miren-cli"`
 	NoSave       bool   `long:"no-save" description:"Don't save credentials to config file"`
-	NoQR         bool   `long:"no-qr" description:"Don't display QR code"`
 }) error {
 	// Initialize device flow
 	ctx.Info("Initiating device flow authentication...")
@@ -127,23 +125,7 @@ func Login(ctx *Context, opts struct {
 
 	// Display instructions to user
 	if initResp.VerificationURLComplete != "" {
-		// Display QR code if we have a complete URL and QR is not disabled
-		if !opts.NoQR {
-			ctx.Completed("Scan this QR code with your phone to authenticate:")
-			ctx.Info("")
-			// Generate ASCII QR code to stdout
-			qrterminal.GenerateWithConfig(initResp.VerificationURLComplete, qrterminal.Config{
-				Level:     qrterminal.L,
-				Writer:    os.Stdout,
-				BlackChar: qrterminal.BLACK,
-				WhiteChar: qrterminal.WHITE,
-				QuietZone: 1,
-			})
-			ctx.Info("")
-			ctx.Info("Or use one of these methods:")
-		} else {
-			ctx.Completed("Please authenticate using one of these methods:")
-		}
+		ctx.Completed("Please authenticate using one of these methods:")
 		ctx.Info("")
 		ctx.Info("Option 1: Visit this URL (code included):")
 		ctx.Info("  %s", initResp.VerificationURLComplete)
@@ -153,7 +135,6 @@ func Login(ctx *Context, opts struct {
 		ctx.Info("  Code: %s", initResp.UserCode)
 		ctx.Info("")
 	} else {
-		// Show the traditional flow with separate URL and code
 		ctx.Completed("Please visit the following URL to authenticate:")
 		ctx.Info("  %s", initResp.VerificationURL)
 		ctx.Info("")

@@ -59,7 +59,6 @@ require (
 	github.com/mattn/go-sqlite3 v1.14.24
 	github.com/mdlayher/genetlink v1.3.2
 	github.com/mdlayher/netlink v1.7.3-0.20250113171957-fbb4dce95f42
-	github.com/mdp/qrterminal/v3 v3.2.1
 	github.com/miekg/dns v1.1.63
 	github.com/mitchellh/cli v1.1.5
 	github.com/mitchellh/go-testing-interface v1.14.1
@@ -249,7 +248,6 @@ require (
 	gotest.tools/v3 v3.5.1 // indirect
 	k8s.io/apimachinery v0.31.2 // indirect
 	k8s.io/utils v0.0.0-20240902221715-702e33fdd3c3 // indirect
-	rsc.io/qr v0.2.0 // indirect
 	sigs.k8s.io/json v0.0.0-20221116044647-bc3834ca7abd // indirect
 	sigs.k8s.io/knftables v0.0.18 // indirect
 	sigs.k8s.io/yaml v1.4.0 // indirect
