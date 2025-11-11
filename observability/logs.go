@@ -69,9 +69,17 @@ func (l *PersistentLogWriter) Client() *http.Client {
 }
 
 func (l *PersistentLogWriter) WriteEntry(entity string, le LogEntry) error {
+	// VictoriaLogs requires a non-empty _msg field but we want to preserve
+	// empty log messages because they'll show up as blank lines in the output.
+	// So use a single space if empty
+	msg := le.Body
+	if msg == "" {
+		msg = " "
+	}
+
 	// Convert LogEntry to VictoriaLogs JSON format
-	logData := map[string]interface{}{
-		"_msg":     le.Body,
+	logData := map[string]any{
+		"_msg":     msg,
 		"_time":    le.Timestamp.UTC().Format(time.RFC3339Nano),
 		"entity":   entity,
 		"stream":   string(le.Stream),
