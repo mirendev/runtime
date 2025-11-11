@@ -137,15 +137,7 @@ generate-check: ## Verify go generate is up to date
 #
 
 release-data: ## Create release package tar.gz (iso)
-	iso run bash -c "make bin/miren && mkdir -p /tmp/package && \
-		cp bin/miren /tmp/package && \
-		cp /usr/local/bin/runc /tmp/package && \
-		cp /usr/local/bin/containerd-shim-runsc-v1 /tmp/package && \
-		cp /usr/local/bin/containerd-shim-runc-v2 /tmp/package && \
-		cp /usr/local/bin/containerd /tmp/package && \
-		cp /usr/local/bin/nerdctl /tmp/package && \
-		cp /usr/local/bin/ctr /tmp/package && \
-		tar -C /tmp/package -czf /workspace/release.tar.gz ."
+	bash hack/release-data.sh
 
 image: ## Export Docker image (iso)
 	iso run sh -c "docker save runtime-shell | gzip > /workspace/tmp/miren-image.tar.gz"

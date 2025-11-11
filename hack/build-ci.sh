@@ -46,5 +46,4 @@ go build -ldflags "\
   -X miren.dev/runtime/version.Version=$version \
   -X miren.dev/runtime/version.Commit=$commit \
   -X miren.dev/runtime/version.BuildDate=$build_date" \
-  -buildvcs=false \
   -o bin/miren ./cmd/miren
