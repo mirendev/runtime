@@ -525,6 +525,9 @@ type SegmentStats struct {
 func (o *SegmentCreator) Flush(ctx context.Context,
 	vol Volume, seg SegmentId,
 ) ([]ExtentLocation, *SegmentStats, error) {
+	if o.builder == nil {
+		return nil, nil, fmt.Errorf("segment builder is closed")
+	}
 	locs, stats, err := o.builder.Flush(ctx, o.log, vol, seg, o.volName)
 	if err != nil {
 		return locs, stats, err
