@@ -6,7 +6,7 @@ package serverconfig
 // All fields are pointers to distinguish between set and unset values
 type CLIFlags struct {
 	ConfigFile                           *string  `long:"config" description:"Path to configuration file"`
-	Mode                                 *string  `long:"mode" short:"m" description:"Server mode (standalone, distributed)"`
+	Mode                                 *string  `long:"mode" short:"m" description:"Server mode: standalone (default), distributed (experimental)"`
 	ContainerdConfigBinaryPath           *string  `long:"containerd-binary" description:"Path to containerd binary"`
 	ContainerdConfigSocketPath           *string  `long:"containerd-socket" description:"Path to containerd socket"`
 	ContainerdConfigStartEmbedded        *bool    `long:"start-containerd" description:"Start embedded containerd daemon"`

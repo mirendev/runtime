@@ -17,7 +17,7 @@ configs:
         cli:
           long: mode
           short: m
-          description: Server mode (standalone, distributed)
+          description: "Server mode: standalone (default), distributed (experimental)"
         env: MIREN_MODE
         toml: mode
         validation:
