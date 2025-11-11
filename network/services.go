@@ -58,9 +58,7 @@ func (sm *ServiceManager) SetupDNS(ctx context.Context, bc *BridgeConfig) error 
 	sm.bridges[bridgeName] = bs
 
 	// Store context for DNS watcher
-	if sm.ctx == nil {
-		sm.ctx = ctx
-	}
+	sm.ctx = ctx
 
 	for _, addr := range bs.ips {
 		// Create and start DNS server with entity client and logger
