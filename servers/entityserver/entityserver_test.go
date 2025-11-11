@@ -394,10 +394,11 @@ func TestEntityServer_List_WithMissingEntity(t *testing.T) {
 		return []*entity.Entity{nil}, nil
 	}
 
-	// List should fail when GetEntities returns nil entry
-	_, err = sc.List(ctx, entity.Keyword(entity.EntityKind, "test"))
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "entity not found")
+	// List should succeed and skip the missing entity
+	resp, err := sc.List(ctx, entity.Keyword(entity.EntityKind, "test"))
+	require.NoError(t, err)
+	results := resp.Values()
+	assert.Len(t, results, 0, "should return empty list when all entities are missing")
 }
 
 // TestEntityServer_List_NestedIndexCleanup tests that DeleteEntity properly cleans up
