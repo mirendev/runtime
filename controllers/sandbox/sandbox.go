@@ -1752,10 +1752,33 @@ func (c *SandboxController) buildSubContainerSpec(
 	}
 
 	for _, m := range co.Mount {
-		// Get the actual mount path from the volumeMounts map
-		rawPath, ok := volumeMounts[m.Source]
+		var rawPath string
+		var ok bool
+
+		// First try to get the volume from the volumeMounts map (for configured volumes)
+		rawPath, ok = volumeMounts[m.Source]
 		if !ok {
-			return nil, fmt.Errorf("volume %s not found in configured volumes", m.Source)
+			// If not in configured volumes, look for it in the sandbox volumes directory
+			// This supports the old-style volume mounts
+			rawPath = c.sandboxPath(sb, "volumes", m.Source)
+			st, err := os.Lstat(rawPath)
+			if err != nil {
+				return nil, fmt.Errorf("volume %s does not exist", rawPath)
+			}
+
+			// Follow symlinks to get the real path
+			for st.Mode().Type() == os.ModeSymlink {
+				tgt, err := os.Readlink(rawPath)
+				if err != nil {
+					return nil, fmt.Errorf("failed to read symlink %s: %w", rawPath, err)
+				}
+
+				rawPath = tgt
+				st, err = os.Stat(rawPath)
+				if err != nil {
+					return nil, fmt.Errorf("volume %s does not exist", rawPath)
+				}
+			}
 		}
 
 		c.Log.Debug("adding container mount",
