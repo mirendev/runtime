@@ -229,7 +229,7 @@ func (e *EntityServer) Create(ctx context.Context, req *entityserver_v1alpha.Ent
 
 	entity, err := e.Store.CreateEntity(ctx, entity.New(attrs))
 	if err != nil {
-		return fmt.Errorf("failed to create entity: %w", err)
+		return err
 	}
 
 	results := req.Results()
@@ -266,7 +266,7 @@ func (e *EntityServer) Replace(ctx context.Context, req *entityserver_v1alpha.En
 
 	ent, err := e.Store.ReplaceEntity(ctx, entity.New(attrs), opts...)
 	if err != nil {
-		return fmt.Errorf("failed to replace entity: %w", err)
+		return err
 	}
 
 	results := req.Results()
@@ -303,7 +303,7 @@ func (e *EntityServer) Patch(ctx context.Context, req *entityserver_v1alpha.Enti
 
 	ent, err := e.Store.PatchEntity(ctx, entity.New(attrs), opts...)
 	if err != nil {
-		return fmt.Errorf("failed to patch entity: %w", err)
+		return err
 	}
 
 	results := req.Results()
