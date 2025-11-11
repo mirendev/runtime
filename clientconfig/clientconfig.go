@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/user"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -467,6 +468,11 @@ func LoadConfigFrom(configPath string) (*Config, error) {
 		return nil, fmt.Errorf("failed to parse config file: %w", err)
 	}
 
+	err = loadConfigDir(&config)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load config.d: %w", err)
+	}
+
 	if err := config.Validate(); err != nil {
 		return nil, fmt.Errorf("invalid configuration: %w", err)
 	}
@@ -507,6 +513,11 @@ func (c *Config) Save() error {
 	}
 
 	return c.SaveTo(configPath)
+}
+
+// SourcePath returns the path to the config file that was loaded, if any.
+func (c *Config) SourcePath() string {
+	return c.sourcePath
 }
 
 func (c *Config) SaveTo(path string) error {
@@ -894,10 +905,25 @@ func getConfigPath() (string, bool, error) {
 		return filepath.Join(envPath, "clientconfig.yaml"), true, nil
 	}
 
-	// Fall back to default path in user's home directory, load clientconfig.d
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		return "", false, fmt.Errorf("failed to get user home directory: %w", err)
+	var (
+		homeDir string
+		err     error
+	)
+
+	if sudoUser := os.Getenv("SUDO_USER"); sudoUser != "" {
+		// Running under sudo, get the original user's home
+		u, err := user.Lookup(sudoUser)
+		if err == nil {
+			homeDir = u.HomeDir
+		}
+	}
+
+	if homeDir == "" {
+		// Fall back to default path in user's home directory, load clientconfig.d
+		homeDir, err = os.UserHomeDir()
+		if err != nil {
+			return "", false, fmt.Errorf("failed to get user home directory: %w", err)
+		}
 	}
 
 	return filepath.Join(homeDir, DefaultConfigPath), true, nil

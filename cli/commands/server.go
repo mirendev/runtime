@@ -5,6 +5,7 @@ package commands
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -861,40 +862,14 @@ func getUserHomeDir() (string, error) {
 
 // writeLocalClusterConfig writes a client config file for the local cluster
 func writeLocalClusterConfig(ctx *Context, cc *caauth.ClientCertificate, address, clusterName string) error {
-	// Determine the config.d directory path, respecting SUDO_USER
-	homeDir, err := getUserHomeDir()
+	config, err := clientconfig.LoadConfig()
 	if err != nil {
-		return fmt.Errorf("failed to get user home directory: %w", err)
-	}
-
-	configDirPath := filepath.Join(homeDir, ".config/miren/clientconfig.d")
-
-	// Create the directory if it doesn't exist
-	if err := os.MkdirAll(configDirPath, 0700); err != nil {
-		return fmt.Errorf("failed to create config directory: %w", err)
-	}
-
-	// Fix directory ownership if running under sudo
-	// Fix ownership for all parent directories that we may have created
-	dirsToFix := []string{
-		filepath.Join(homeDir, ".config"),
-		filepath.Join(homeDir, ".config/miren"),
-		configDirPath,
-	}
-
-	for _, dir := range dirsToFix {
-		if err := fixOwnershipIfSudo(ctx, dir); err != nil {
-			ctx.Log.Warn("failed to fix directory ownership", "dir", dir, "error", err)
+		if errors.Is(err, clientconfig.ErrNoConfig) {
+			return fmt.Errorf("failed to load existing client config: %w", err)
 		}
-	}
 
-	// Load or create the main client config
-	mainConfig, err := clientconfig.LoadConfig()
-	if err != nil {
-		// If config is missing or invalid, create a new one
-		// This handles cases where the config references a missing cluster
-		ctx.Log.Warn("creating new client config", "reason", err.Error())
-		mainConfig = clientconfig.NewConfig()
+		ctx.Log.Warn("error loading existing client config, creating new one", "error", err)
+		config = clientconfig.NewConfig()
 	}
 
 	// Create the local cluster config data
@@ -910,37 +885,45 @@ func writeLocalClusterConfig(ctx *Context, cc *caauth.ClientCertificate, address
 	}
 
 	// Add as a leaf config (this will be saved to clientconfig.d/50-local.yaml)
-	mainConfig.SetLeafConfig("50-local", leafConfigData)
+	config.SetLeafConfig("50-local", leafConfigData)
 
-	// Save the main config (which will also save the leaf config)
-	if err := mainConfig.SaveTo(filepath.Join(filepath.Dir(configDirPath), "clientconfig.yaml")); err != nil {
-		return fmt.Errorf("failed to save local cluster config: %w", err)
+	if err := config.Save(); err != nil {
+		return fmt.Errorf("failed to save local cluster leaf config: %w", err)
 	}
 
-	// Fix file ownership for the created files if running under sudo
-	// Fix main config file
-	mainConfigPath := filepath.Join(homeDir, ".config", "miren", "clientconfig.yaml")
-	if _, err := os.Stat(mainConfigPath); err == nil {
-		// Main config file exists, fix its permissions and ownership
-		if err := os.Chmod(mainConfigPath, 0600); err != nil {
+	spath := config.SourcePath()
+
+	// Fix directory ownership if running under sudo
+	// Fix ownership for all parent directories that we may have created
+	pathsToFix := []string{
+		filepath.Dir(filepath.Dir(spath)),
+		filepath.Dir(spath),
+		filepath.Join(filepath.Dir(spath), "clientconfig.d"),
+		filepath.Join(filepath.Dir(spath), "clientconfig.d", "50-local.yaml"),
+		spath,
+	}
+
+	for _, entry := range pathsToFix {
+		if err := fixOwnershipIfSudo(ctx, entry); err != nil {
+			ctx.Log.Warn("failed to fix directory ownership", "dir", entry, "error", err)
+		}
+
+		fi, err := os.Stat(entry)
+		if err != nil {
+			ctx.Log.Warn("failed to stat directory for permission fix", "dir", entry, "error", err)
+			continue
+		}
+
+		if fi.IsDir() {
+			continue
+		}
+
+		if err := os.Chmod(spath, 0600); err != nil {
 			ctx.Log.Warn("failed to set main config file permissions", "error", err)
 		}
-		if err := fixOwnershipIfSudo(ctx, mainConfigPath); err != nil {
-			ctx.Log.Warn("failed to fix main config file ownership", "error", err)
-		}
 	}
 
-	// Fix leaf config file
-	localConfigPath := filepath.Join(configDirPath, "50-local.yaml")
-	// Ensure file is user-readable only since it contains client key
-	if err := os.Chmod(localConfigPath, 0600); err != nil {
-		ctx.Log.Warn("failed to set config file permissions", "error", err)
-	}
-	if err := fixOwnershipIfSudo(ctx, localConfigPath); err != nil {
-		ctx.Log.Warn("failed to fix config file ownership", "error", err)
-	}
-
-	ctx.Log.Info("wrote local cluster config", "path", localConfigPath, "name", clusterName, "address", address)
+	ctx.Log.Info("wrote local cluster config", "path", spath, "name", clusterName, "address", address)
 	return nil
 }
 
