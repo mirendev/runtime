@@ -1,12 +1,14 @@
 package network
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"net/netip"
 	"slices"
 	"sync"
 
+	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/pkg/asm/autoreg"
 	"miren.dev/runtime/pkg/dns"
 )
@@ -14,9 +16,11 @@ import (
 // ServiceManager handles network services (DNS, etc) for bridges
 type ServiceManager struct {
 	Log *slog.Logger
+	EAC *entityserver_v1alpha.EntityAccessClient
 
 	mu      sync.Mutex
 	bridges map[string]*BridgeServices
+	ctx     context.Context
 }
 
 var _ = autoreg.Register[ServiceManager]()
@@ -33,7 +37,7 @@ type BridgeServices struct {
 }
 
 // SetupDNS ensures a DNS server is running for the given bridge
-func (sm *ServiceManager) SetupDNS(bc *BridgeConfig) error {
+func (sm *ServiceManager) SetupDNS(ctx context.Context, bc *BridgeConfig) error {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
@@ -53,18 +57,30 @@ func (sm *ServiceManager) SetupDNS(bc *BridgeConfig) error {
 	// Create new services entry if needed
 	sm.bridges[bridgeName] = bs
 
+	// Store context for DNS watcher
+	if sm.ctx == nil {
+		sm.ctx = ctx
+	}
+
 	for _, addr := range bs.ips {
-		// Create and start DNS server
-		server, err := dns.New(fmt.Sprintf("%s:53", addr.Addr().String()))
+		// Create and start DNS server with entity client and logger
+		server, err := dns.New(fmt.Sprintf("%s:53", addr.Addr().String()), sm.EAC, sm.Log)
 		if err != nil {
 			return fmt.Errorf("creating DNS server for bridge %s: %w", bridgeName, err)
 		}
 
 		sm.Log.Info("Binding DNS server", "bridge", bridgeName, "addr", addr.String())
 
+		// Start DNS entity watcher if entity client is available
+		if sm.EAC != nil {
+			if err := server.Watch(ctx); err != nil {
+				return fmt.Errorf("starting DNS watcher for bridge %s: %w", bridgeName, err)
+			}
+			sm.Log.Info("DNS watcher started", "bridge", bridgeName)
+		}
+
 		go func() {
 			if err := server.ListenAndServe(); err != nil {
-				// TODO: proper error handling/logging
 				sm.Log.Error("DNS server error", "bridge", bridgeName, "error", err)
 			}
 		}()
@@ -77,11 +93,8 @@ func (sm *ServiceManager) SetupDNS(bc *BridgeConfig) error {
 	return nil
 }
 
-// ShutdownBridge stops all services for a given bridge
-func (sm *ServiceManager) ShutdownBridge(bridgeName string) error {
-	sm.mu.Lock()
-	defer sm.mu.Unlock()
-
+// shutdownBridgeUnlocked stops all services for a given bridge (caller must hold lock)
+func (sm *ServiceManager) shutdownBridgeUnlocked(bridgeName string) error {
 	services, exists := sm.bridges[bridgeName]
 	if !exists {
 		return nil
@@ -97,6 +110,14 @@ func (sm *ServiceManager) ShutdownBridge(bridgeName string) error {
 	return nil
 }
 
+// ShutdownBridge stops all services for a given bridge
+func (sm *ServiceManager) ShutdownBridge(bridgeName string) error {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+
+	return sm.shutdownBridgeUnlocked(bridgeName)
+}
+
 // ShutdownAll stops all services on all bridges
 func (sm *ServiceManager) ShutdownAll() error {
 	sm.mu.Lock()
@@ -104,7 +125,8 @@ func (sm *ServiceManager) ShutdownAll() error {
 
 	var lastErr error
 	for bridgeName := range sm.bridges {
-		if err := sm.ShutdownBridge(bridgeName); err != nil {
+		if err := sm.shutdownBridgeUnlocked(bridgeName); err != nil {
+			sm.Log.Error("failed to shutdown bridge services", "bridge", bridgeName, "error", err)
 			lastErr = err
 		}
 	}

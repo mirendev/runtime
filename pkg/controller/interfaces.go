@@ -10,6 +10,9 @@ import (
 
 // EntityAccessClient defines the interface for interacting with the entity server
 type EntityAccessClient interface {
+	// Get returns a single entity by its ID
+	Get(ctx context.Context, id string) (*entityserver_v1alpha.EntityAccessClientGetResults, error)
+
 	// List returns all entities matching the given index
 	List(ctx context.Context, index entity.Attr) (*entityserver_v1alpha.EntityAccessClientListResults, error)
 

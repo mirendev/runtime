@@ -473,7 +473,7 @@ func (c *SandboxController) Init(ctx context.Context) error {
 		return err
 	}
 
-	err = c.NetServ.SetupDNS(bc)
+	err = c.NetServ.SetupDNS(c.topCtx, bc)
 	if err != nil {
 		return err
 	}
@@ -519,6 +519,16 @@ func (c *SandboxController) Close() error {
 	}
 
 	c.running.Wait()
+
+	// Shutdown DNS and other network services
+	if c.NetServ != nil {
+		if shutdownErr := c.NetServ.ShutdownAll(); shutdownErr != nil {
+			c.Log.Error("failed to shutdown network services", "error", shutdownErr)
+			if err == nil {
+				err = shutdownErr
+			}
+		}
+	}
 
 	return err
 }
@@ -1411,6 +1421,9 @@ func (c *SandboxController) writeResolve(path string, ep *network.EndpointConfig
 	if len(ep.Bridge.Addresses) == 0 {
 		return fmt.Errorf("no nameservers available in bridge config")
 	}
+
+	// Add search domain for app.miren
+	fmt.Fprintf(f, "search app.miren\n")
 
 	for _, addr := range ep.Bridge.Addresses {
 		if !addr.Addr().IsValid() {

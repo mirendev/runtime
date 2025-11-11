@@ -29,6 +29,7 @@ func Registry(extra ...func(*asm.Registry)) (*asm.Registry, func()) {
 	var r asm.Registry
 
 	var usedClient *containerd.Client
+	var netServ *network.ServiceManager
 
 	tempDir, err := os.MkdirTemp("", "miren-reg")
 	if err != nil {
@@ -222,6 +223,14 @@ func Registry(extra ...func(*asm.Registry)) (*asm.Registry, func()) {
 
 	cleanup := func() {
 		cancel()
+
+		// Try to get ServiceManager and shut it down before cleaning up containerd
+		// This is done lazily at cleanup time rather than during setup
+		if err := r.Populate(&netServ); err == nil && netServ != nil {
+			if err := netServ.ShutdownAll(); err != nil {
+				log.Error("failed to shutdown network services during test cleanup", "error", err)
+			}
+		}
 
 		if usedClient != nil {
 			NukeNamespace(usedClient, namespace)
