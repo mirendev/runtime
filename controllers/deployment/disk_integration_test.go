@@ -59,7 +59,7 @@ func TestBuildSandboxSpecWithDisks(t *testing.T) {
 		require.Len(t, spec.Volume, 1, "should have one volume")
 		vol := spec.Volume[0]
 		assert.Equal(t, "postgres-data", vol.Name)
-		assert.Equal(t, "disk", vol.Provider)
+		assert.Equal(t, "miren", vol.Provider)
 
 		// Verify volume fields (not labels)
 		assert.Equal(t, "postgres-data", vol.DiskName)
@@ -129,12 +129,12 @@ func TestBuildSandboxSpecWithDisks(t *testing.T) {
 		// Check first volume
 		vol1 := spec.Volume[0]
 		assert.Equal(t, "db-data", vol1.Name)
-		assert.Equal(t, "disk", vol1.Provider)
+		assert.Equal(t, "miren", vol1.Provider)
 
 		// Check second volume
 		vol2 := spec.Volume[1]
 		assert.Equal(t, "db-wal", vol2.Name)
-		assert.Equal(t, "disk", vol2.Provider)
+		assert.Equal(t, "miren", vol2.Provider)
 
 		// Verify container has both mounts
 		require.Len(t, spec.Container, 1, "should have one container")
@@ -358,7 +358,7 @@ func buildSandboxSpecForTest(ctx context.Context, app *core_v1alpha.App, ver *co
 			for _, disk := range svc.Disks {
 				spec.Volume = append(spec.Volume, compute_v1alpha.SandboxSpecVolume{
 					Name:         disk.Name,
-					Provider:     "disk",
+					Provider:     "miren",
 					DiskName:     disk.Name,
 					MountPath:    disk.MountPath,
 					ReadOnly:     disk.ReadOnly,

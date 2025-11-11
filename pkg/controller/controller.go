@@ -60,6 +60,7 @@ type ReconcileController struct {
 	Log *slog.Logger
 
 	cancel func()
+	top    context.Context
 
 	esc          *entityserver_v1alpha.EntityAccessClient
 	name         string
@@ -99,6 +100,7 @@ func (c *ReconcileController) SetPeriodic(often time.Duration, fn func(ctx conte
 func (c *ReconcileController) Start(top context.Context) error {
 	ctx, cancel := context.WithCancel(top)
 	c.cancel = cancel
+	c.top = top
 
 	c.Log.Info("Starting controller", "name", c.name, "id", c.index.ID, "value", c.index.Value)
 
@@ -242,6 +244,9 @@ func (c *ReconcileController) Stop() {
 // Enqueue adds an event to the work queue for processing
 func (c *ReconcileController) Enqueue(event Event) {
 	select {
+	case <-c.top.Done():
+		// Controller is stopping, do not enqueue
+		return
 	case c.workQueue <- event:
 		// Successfully enqueued
 	default:
