@@ -97,12 +97,11 @@ func (s *Server) handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 				w.WriteMsg(response)
 				return
 			default:
-				// Return NXDOMAIN for any other query type on app.miren domains
+				// Return empty for any other query type on app.miren domains
 				response := new(dns.Msg)
 				response.SetReply(r)
 				response.RecursionAvailable = true
 				response.Authoritative = true
-				response.Rcode = dns.RcodeNameError
 				w.WriteMsg(response)
 				return
 			}
