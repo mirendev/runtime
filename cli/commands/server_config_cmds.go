@@ -11,7 +11,7 @@ import (
 // ServerConfigGenerate generates a server configuration file
 func ServerConfigGenerate(ctx *Context, opts struct {
 	Output   string `short:"o" long:"output" description:"Output file path (defaults to stdout)"`
-	Mode     string `short:"m" long:"mode" description:"Server mode (standalone or distributed)" default:"standalone"`
+	Mode     string `short:"m" long:"mode" description:"Server mode: standalone (default), distributed (experimental)" default:"standalone"`
 	Defaults bool   `short:"d" long:"defaults" description:"Generate config with default values"`
 }) error {
 	var cfg *serverconfig.Config
