@@ -864,7 +864,7 @@ func getUserHomeDir() (string, error) {
 func writeLocalClusterConfig(ctx *Context, cc *caauth.ClientCertificate, address, clusterName string) error {
 	config, err := clientconfig.LoadConfig()
 	if err != nil {
-		if errors.Is(err, clientconfig.ErrNoConfig) {
+		if !errors.Is(err, clientconfig.ErrNoConfig) {
 			return fmt.Errorf("failed to load existing client config: %w", err)
 		}
 
@@ -893,14 +893,20 @@ func writeLocalClusterConfig(ctx *Context, cc *caauth.ClientCertificate, address
 
 	spath := config.SourcePath()
 
-	// Fix directory ownership if running under sudo
-	// Fix ownership for all parent directories that we may have created
-	pathsToFix := []string{
-		filepath.Dir(filepath.Dir(spath)),
-		filepath.Dir(spath),
-		filepath.Join(filepath.Dir(spath), "clientconfig.d"),
-		filepath.Join(filepath.Dir(spath), "clientconfig.d", "50-local.yaml"),
-		spath,
+	var pathsToFix []string
+
+	if spath == "" {
+		ctx.Log.Warn("client config source path is empty, cannot fix ownership or permissions")
+	} else {
+		// Fix directory ownership if running under sudo
+		// Fix ownership for all parent directories that we may have created
+		pathsToFix = []string{
+			filepath.Dir(filepath.Dir(spath)),
+			filepath.Dir(spath),
+			filepath.Join(filepath.Dir(spath), "clientconfig.d"),
+			filepath.Join(filepath.Dir(spath), "clientconfig.d", "50-local.yaml"),
+			spath,
+		}
 	}
 
 	for _, entry := range pathsToFix {
@@ -918,7 +924,7 @@ func writeLocalClusterConfig(ctx *Context, cc *caauth.ClientCertificate, address
 			continue
 		}
 
-		if err := os.Chmod(spath, 0600); err != nil {
+		if err := os.Chmod(entry, 0600); err != nil {
 			ctx.Log.Warn("failed to set main config file permissions", "error", err)
 		}
 	}

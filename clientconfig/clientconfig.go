@@ -107,12 +107,21 @@ func (c *Config) MarshalYAML() (interface{}, error) {
 }
 
 func NewConfig() *Config {
-	return &Config{
+	cfg := &Config{
 		clusters:           make(map[string]*ClusterConfig),
 		identities:         make(map[string]*IdentityConfig),
 		keys:               make(map[string]*KeyConfig),
 		unsavedLeafConfigs: make(map[string]*ConfigData),
 	}
+
+	// When creating a new config, assume it's going to be saved to the default path
+	configPath, loadConfigD, err := getConfigPath()
+	if err == nil {
+		cfg.sourcePath = configPath
+		cfg.loadConfigD = loadConfigD
+	}
+
+	return cfg
 }
 
 // IsEmpty checks if the configuration has no clusters defined
@@ -392,8 +401,6 @@ func LoadConfig() (*Config, error) {
 	if err != nil {
 		// If main config doesn't exist, try loading from config.d directory
 		config := NewConfig()
-		config.sourcePath = configPath
-		config.loadConfigD = loadConfigD
 
 		if loadConfigD {
 			if err := loadConfigDir(config); err != nil {
