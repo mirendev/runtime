@@ -59,7 +59,7 @@ func New(addr string, entityClient *entityserver_v1alpha.EntityAccessClient, log
 		client:          &dns.Client{},
 		upstreams:       upstreams,
 		entityClient:    entityClient,
-		log:             log,
+		log:             log.With("module", "dns"),
 		ipToApp:         make(map[string]string),
 		ipToService:     make(map[string]string),
 		appServiceToIPs: make(map[string]map[string][]string),
@@ -463,16 +463,24 @@ func (s *Server) watchSandboxes(ctx context.Context) {
 }
 
 func (s *Server) handleSandboxUpdate(ctx context.Context, sb *compute_v1alpha.Sandbox, en *entity.Entity) {
-	// Only track RUNNING sandboxes
-	if sb.Status != compute_v1alpha.RUNNING {
-		// If it was previously tracked and is no longer RUNNING, remove it
-		s.handleSandboxDelete(sb)
+	s.mu.Lock()
+	_, tracked := s.entityToIP[sb.ID.String()]
+	s.mu.Unlock()
+
+	if tracked {
+		// Already tracked, skip
 		return
 	}
 
-	// Skip sandboxes without a version (e.g., buildkit)
-	if sb.Spec.Version == "" {
+	// Get sandbox IP
+	if len(sb.Network) == 0 {
 		return
+	}
+
+	// Extract IP from address (may be in CIDR format like "10.0.0.5/24")
+	ipAddr := sb.Network[0].Address
+	if strings.Contains(ipAddr, "/") {
+		ipAddr = strings.Split(ipAddr, "/")[0]
 	}
 
 	// Get service label from metadata
@@ -482,18 +490,6 @@ func (s *Server) handleSandboxUpdate(ctx context.Context, sb *compute_v1alpha.Sa
 	service, _ := md.Labels.Get("service")
 	if service == "" {
 		return // Skip sandboxes without service label
-	}
-
-	// Get sandbox IP
-	if len(sb.Network) == 0 {
-		s.log.Warn("sandbox has no network addresses", "sandbox", sb.ID)
-		return
-	}
-
-	// Extract IP from address (may be in CIDR format like "10.0.0.5/24")
-	ipAddr := sb.Network[0].Address
-	if strings.Contains(ipAddr, "/") {
-		ipAddr = strings.Split(ipAddr, "/")[0]
 	}
 
 	// Get app version to determine app name
@@ -517,6 +513,14 @@ func (s *Server) handleSandboxUpdate(ctx context.Context, sb *compute_v1alpha.Sa
 	appMD.Decode(appResp.Entity().Entity())
 
 	appName := appMD.Name
+
+	s.log.Info("derived sandbox app and service for DNS mapping",
+		"sandbox", sb.ID,
+		"app", appName,
+		"service", service,
+		"ver", sb.Spec.Version.String(),
+		"app-id", appVer.App.String(),
+	)
 
 	// Update in-memory mappings
 	s.mu.Lock()
@@ -628,60 +632,6 @@ func (s *Server) recoverSandboxes(ctx context.Context) error {
 
 	s.log.Info("sandbox recovery complete", "recovered_count", recoveredCount)
 	return nil
-}
-
-func (s *Server) handleSandboxDelete(sb *compute_v1alpha.Sandbox) {
-	// Get sandbox IP to remove from mappings
-	if len(sb.Network) == 0 {
-		return
-	}
-
-	ipAddr := sb.Network[0].Address
-	if strings.Contains(ipAddr, "/") {
-		ipAddr = strings.Split(ipAddr, "/")[0]
-	}
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	// Remove from entityToIP map
-	delete(s.entityToIP, sb.ID.String())
-
-	// Get app name from ipToApp mapping
-	appName, found := s.ipToApp[ipAddr]
-	if !found {
-		return // Not tracked
-	}
-
-	// Remove from ipToApp
-	delete(s.ipToApp, ipAddr)
-
-	// Remove from ipToService
-	delete(s.ipToService, ipAddr)
-
-	// Remove from appServiceToIPs - need to find and remove IP from all services
-	if serviceMap, ok := s.appServiceToIPs[appName]; ok {
-		for service, ips := range serviceMap {
-			for i, ip := range ips {
-				if ip == ipAddr {
-					// Remove this IP from the slice
-					s.appServiceToIPs[appName][service] = append(ips[:i], ips[i+1:]...)
-					s.log.Info("removed sandbox from DNS mapping", "sandbox", sb.ID, "app", appName, "service", service, "ip", ipAddr)
-					break
-				}
-			}
-
-			// Clean up empty service entries
-			if len(s.appServiceToIPs[appName][service]) == 0 {
-				delete(s.appServiceToIPs[appName], service)
-			}
-		}
-
-		// Clean up empty app entries
-		if len(s.appServiceToIPs[appName]) == 0 {
-			delete(s.appServiceToIPs, appName)
-		}
-	}
 }
 
 // ListenAndServe starts the DNS server
