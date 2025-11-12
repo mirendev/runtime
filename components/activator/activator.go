@@ -931,15 +931,16 @@ func (a *localActivator) watchSandboxes(ctx context.Context) {
 					}
 				}
 
-				// Keep DEAD sandboxes in tracking so fail-fast logic can see them
+				// Keep STOPPED and DEAD sandboxes in tracking so fail-fast logic can see them
 				// They will be cleaned up later by periodic reconciliation or when
 				// new RUNNING sandboxes are discovered
 
-				// Notify waiters when sandbox status changes to RUNNING or DEAD
+				// Notify waiters when sandbox status changes to RUNNING, STOPPED, or DEAD
 				// RUNNING: sandbox is ready to serve traffic
-				// DEAD: sandbox failed, waiters should check if they need to fail fast
+				// STOPPED: sandbox process exited, will be cleaned up by reconciliation
+				// DEAD: sandbox cleaned up, only entity remains
 				// Notify ALL versions that reference this pool
-				if oldStatus != sb.Status && (sb.Status == compute_v1alpha.RUNNING || sb.Status == compute_v1alpha.DEAD) {
+				if oldStatus != sb.Status && (sb.Status == compute_v1alpha.RUNNING || sb.Status == compute_v1alpha.STOPPED || sb.Status == compute_v1alpha.DEAD) {
 					// Notify all versions that reference this pool
 					// Find all version->service mappings that use this pool
 					for key, versionRef := range a.versions {

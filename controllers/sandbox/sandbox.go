@@ -1722,26 +1722,30 @@ func (c *SandboxController) monitorTaskExit(
 			"exit_time", exitStatus.ExitTime(),
 		)
 
-		// Update sandbox status to DEAD using Patch (only updating Status field)
+		// Update sandbox status to STOPPED using Patch (only updating Status field)
 		// We use Patch instead of Put since we're only changing one field
+		// STOPPED status triggers cleanup in reconciliation (stopSandbox), which:
+		// - Releases IPs immediately
+		// - Cleans up containers
+		// - Marks as DEAD afterward
 		patchAttrs := entity.New(
 			entity.Keyword(entity.Ident, sb.ID.String()),
 			(&compute.Sandbox{
-				Status: compute.DEAD,
+				Status: compute.STOPPED,
 			}).Encode,
 		)
 
 		ctx := context.Background()
 		_, err := c.EAC.Patch(ctx, patchAttrs.Attrs(), 0)
 		if err != nil {
-			c.Log.Error("failed to update sandbox status to DEAD",
+			c.Log.Error("failed to update sandbox status to STOPPED",
 				"sandbox", sb.ID,
 				"error", err,
 			)
 			return
 		}
 
-		c.Log.Info("marked sandbox as DEAD due to process exit", "sandbox", sb.ID)
+		c.Log.Info("marked sandbox as STOPPED due to process exit, cleanup will be triggered by reconciliation", "sandbox", sb.ID)
 
 	case <-c.topCtx.Done():
 		c.Log.Debug("task monitoring cancelled", "sandbox", sb.ID, "container", containerID)
