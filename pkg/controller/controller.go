@@ -55,6 +55,12 @@ func WorkerId(ctx context.Context) string {
 // HandlerFunc is a function that processes an entity
 type HandlerFunc func(ctx context.Context, event Event) ([]entity.Attr, error)
 
+// inFlightEntry tracks an entity being processed and queues additional events
+type inFlightEntry struct {
+	revision      int64
+	pendingEvents []Event
+}
+
 // ReconcileController implements the Controller interface
 type ReconcileController struct {
 	Log *slog.Logger
@@ -70,6 +76,11 @@ type ReconcileController struct {
 	workers      int
 	workQueue    chan Event
 	wg           sync.WaitGroup
+
+	// In-flight tracking to prevent concurrent processing of the same entity
+	// Maps entity ID to an entry containing the revision being processed and pending events
+	inFlight   map[entity.Id]*inFlightEntry
+	inFlightMu sync.Mutex
 
 	// periodic is an optional periodic callback
 	periodic     func(ctx context.Context) error
@@ -87,6 +98,7 @@ func NewReconcileController(name string, log *slog.Logger, index entity.Attr, es
 		resyncPeriod: resyncPeriod,
 		workers:      workers,
 		workQueue:    make(chan Event, 1000),
+		inFlight:     make(map[entity.Id]*inFlightEntry),
 	}
 }
 
@@ -172,6 +184,7 @@ func (c *ReconcileController) Start(top context.Context) error {
 					ev.Entity.SetCreatedAt(createdAt)
 					ev.Entity.SetUpdatedAt(updatedAt)
 					ev.Entity.SetRevision(aen.Revision())
+					ev.Rev = aen.Revision()
 				}
 
 				select {
@@ -276,7 +289,29 @@ func (c *ReconcileController) runWorker(ctx context.Context) {
 				return
 			}
 
-			c.Log.Info("Processing event", "entity", event.Id, "worker", WorkerId(ctx))
+			// Check if this entity is already being processed
+			c.inFlightMu.Lock()
+			if entry, inFlight := c.inFlight[event.Id]; inFlight {
+				// Entity is already in-flight, queue event to the in-flight entry
+				entry.pendingEvents = append(entry.pendingEvents, event)
+				c.inFlightMu.Unlock()
+				c.Log.Debug("Entity already in-flight, queuing to pending events",
+					"entity", event.Id,
+					"worker", WorkerId(ctx),
+					"inFlightRev", entry.revision,
+					"eventRev", event.Rev,
+					"pendingCount", len(entry.pendingEvents))
+				continue
+			}
+
+			// Mark entity as in-flight with a new entry
+			c.inFlight[event.Id] = &inFlightEntry{
+				revision:      event.Rev,
+				pendingEvents: nil,
+			}
+			c.inFlightMu.Unlock()
+
+			c.Log.Info("Processing event", "entity", event.Id, "worker", WorkerId(ctx), "rev", event.Rev)
 
 			// Process the event
 			updates, err := c.processItem(ctx, event)
@@ -300,6 +335,51 @@ func (c *ReconcileController) runWorker(ctx context.Context) {
 						c.Log.Error("error updating entity", "entity", event.Id, "error", err)
 					} else {
 						c.Log.Info("updated entity", "entity", event.Id)
+					}
+				}
+			}
+
+			// Process any pending events before removing from in-flight
+			for {
+				c.inFlightMu.Lock()
+				entry := c.inFlight[event.Id]
+				if entry == nil || len(entry.pendingEvents) == 0 {
+					// No pending events, remove from in-flight and break
+					delete(c.inFlight, event.Id)
+					c.inFlightMu.Unlock()
+					break
+				}
+
+				// Pop the first pending event
+				event = entry.pendingEvents[0]
+				entry.pendingEvents = entry.pendingEvents[1:]
+				entry.revision = event.Rev
+				c.inFlightMu.Unlock()
+
+				c.Log.Info("Processing pending event", "entity", event.Id, "worker", WorkerId(ctx), "rev", event.Rev, "remainingPending", len(entry.pendingEvents))
+
+				// Process the pending event
+				updates, err := c.processItem(ctx, event)
+				if err != nil {
+					c.Log.Error("error processing pending item", "event", event, "error", err)
+				}
+
+				if len(updates) > 0 {
+					if event.Id == "" {
+						c.Log.Error("entity id is empty update there are updates", "event", event)
+					} else {
+						c.Log.Info("updating entity with updates produced by controller", "event", event, "updates", len(updates))
+
+						var rpcE entityserver_v1alpha.Entity
+						rpcE.SetId(string(event.Id))
+						rpcE.SetAttrs(updates)
+
+						_, err := c.esc.Put(ctx, &rpcE)
+						if err != nil {
+							c.Log.Error("error updating entity", "entity", event.Id, "error", err)
+						} else {
+							c.Log.Info("updated entity", "entity", event.Id)
+						}
 					}
 				}
 			}
@@ -356,6 +436,7 @@ func (c *ReconcileController) periodicResync(ctx context.Context) {
 				Type:   EventUpdated,
 				Id:     entity.Id(aen.Id()),
 				Entity: en,
+				Rev:    aen.Revision(),
 			}
 
 			select {
