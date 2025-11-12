@@ -110,7 +110,7 @@ func TestActivatorConcurrentSafety(t *testing.T) {
 	activator := &localActivator{
 		log:           log,
 		versions:      make(map[verKey]*versionPoolRef),
-		poolSandboxes:   make(map[entity.Id]*poolSandboxes),
+		poolSandboxes: make(map[entity.Id]*poolSandboxes),
 	}
 
 	// Run multiple goroutines accessing the versions map
@@ -242,7 +242,7 @@ func TestActivatorRecoverSandboxesWithEntityServer(t *testing.T) {
 		log:           log,
 		eac:           server.EAC,
 		versions:      make(map[verKey]*versionPoolRef),
-		poolSandboxes:   make(map[entity.Id]*poolSandboxes),
+		poolSandboxes: make(map[entity.Id]*poolSandboxes),
 		pools:         make(map[verKey]*poolState),
 	}
 
@@ -1571,11 +1571,11 @@ func TestConcurrentPoolIncrement(t *testing.T) {
 	// Create activator and pre-populate cache
 	log := testutils.TestDebugLogger(t)
 	activator := &localActivator{
-		log:      log,
-		eac:      server.EAC,
-		versions: make(map[verKey]*versionPoolRef),
-		poolSandboxes:   make(map[entity.Id]*poolSandboxes),
-		pools:    make(map[verKey]*poolState),
+		log:           log,
+		eac:           server.EAC,
+		versions:      make(map[verKey]*versionPoolRef),
+		poolSandboxes: make(map[entity.Id]*poolSandboxes),
+		pools:         make(map[verKey]*poolState),
 	}
 
 	key := verKey{testVer.ID.String(), "web"}

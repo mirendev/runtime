@@ -96,13 +96,6 @@ type sandbox struct {
 	tracker     *concurrency.ConcurrencyTracker
 }
 
-type verSandboxes struct {
-	ver       *core_v1alpha.AppVersion
-	sandboxes []*sandbox
-
-	strategy concurrency.ConcurrencyStrategy
-}
-
 type verKey struct {
 	ver, service string
 }
