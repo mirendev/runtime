@@ -151,8 +151,10 @@ func AppHistory(ctx *Context, opts struct {
 		if user == "" || user == "unknown@example.com" || user == "user@example.com" {
 			if dep.HasDeployedByUserName() && dep.DeployedByUserName() != "" {
 				user = dep.DeployedByUserName()
-			} else {
+			} else if dep.DeployedByUserId() != "" {
 				user = dep.DeployedByUserId()
+			} else {
+				user = "-"
 			}
 		}
 		if len(user) > 20 {
