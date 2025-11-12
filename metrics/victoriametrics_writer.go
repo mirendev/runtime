@@ -161,8 +161,6 @@ func (w *VictoriaMetricsWriter) flush() {
 		w.buffer = append(toFlush, w.buffer...)
 
 		w.Log.Error("failed to send metrics to victoriametrics", "error", err, "count", len(toFlush))
-	} else {
-		w.Log.Debug("flushed metrics to victoriametrics", "count", len(toFlush))
 	}
 }
 

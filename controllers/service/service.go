@@ -400,7 +400,7 @@ func (s *ServiceController) apply(ctx context.Context, cmd *nftCommands) error {
 		buf.WriteString("\n")
 	}
 
-	s.Log.Info("Applying nftables commands", "commands", buf.String())
+	s.Log.Info("Applying nftables commands", "commands", len(cmd.commands))
 
 	ecmd := exec.CommandContext(ctx, "nft", "-f", "-")
 	ecmd.Stdin = &buf
