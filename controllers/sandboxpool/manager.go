@@ -310,9 +310,7 @@ func (m *Manager) createSandbox(ctx context.Context, pool *compute_v1alpha.Sandb
 	)
 
 	// Merge in labels from pool.SandboxLabels
-	for _, label := range pool.SandboxLabels {
-		sandboxLabels = append(sandboxLabels, label)
-	}
+	sandboxLabels = append(sandboxLabels, pool.SandboxLabels...)
 
 	// Create entity with metadata (Put without ID creates new entity)
 	var rpcE entityserver_v1alpha.Entity
