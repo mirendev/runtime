@@ -191,7 +191,7 @@ func (a *localActivator) AcquireLease(ctx context.Context, ver *core_v1alpha.App
 			start := rand.Int() % len(ps.sandboxes)
 			for i := 0; i < len(ps.sandboxes); i++ {
 				s := ps.sandboxes[(start+i)%len(ps.sandboxes)]
-				if s.sandbox.Status == compute_v1alpha.RUNNING && s.tracker.HasCapacity() {
+				if s.sandbox.Status == compute_v1alpha.RUNNING && s.tracker.HasCapacity() && s.url != "" {
 					candidateSandbox = s
 					break
 				}
@@ -209,7 +209,8 @@ func (a *localActivator) AcquireLease(ctx context.Context, ver *core_v1alpha.App
 		a.mu.Lock()
 		// Double-check status and capacity (may have changed between locks)
 		if candidateSandbox.sandbox.Status == compute_v1alpha.RUNNING &&
-			candidateSandbox.tracker.HasCapacity() {
+			candidateSandbox.tracker.HasCapacity() &&
+			candidateSandbox.url != "" {
 			leaseSize := candidateSandbox.tracker.AcquireLease()
 			candidateSandbox.lastRenewal = time.Now()
 
@@ -907,6 +908,28 @@ func (a *localActivator) watchSandboxes(ctx context.Context) {
 				a.mu.Lock()
 				oldStatus := trackedSandbox.sandbox.Status
 				trackedSandbox.sandbox.Status = sb.Status
+
+				// Update URL if sandbox now has a network address (e.g., PENDING -> RUNNING transition)
+				if len(sb.Network) > 0 && trackedSandbox.url == "" {
+					// Need to fetch version to get the port configuration
+					sbVersion := sb.Spec.Version
+					if sbVersion != "" {
+						verResp, err := a.eac.Get(ctx, sbVersion.String())
+						if err == nil {
+							var appVer core_v1alpha.AppVersion
+							appVer.Decode(verResp.Entity().Entity())
+
+							port := int64(3000)
+							if appVer.Config.Port > 0 {
+								port = appVer.Config.Port
+							}
+							if addr, err := netutil.BuildHTTPURL(sb.Network[0].Address, port); err == nil {
+								trackedSandbox.url = addr
+								a.log.Debug("updated sandbox URL after network assignment", "sandbox", sb.ID, "url", addr)
+							}
+						}
+					}
+				}
 
 				// Keep DEAD sandboxes in tracking so fail-fast logic can see them
 				// They will be cleaned up later by periodic reconciliation or when
