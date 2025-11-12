@@ -175,8 +175,6 @@ func (e *EntityServer) Put(ctx context.Context, req *entityserver_v1alpha.Entity
 
 	rpcE := args.Entity()
 
-	e.Log.Debug("starting put for entity", "id", rpcE.Id(), "revision", rpcE.Revision())
-
 	attrs := rpcE.Attrs()
 	if len(attrs) == 0 {
 		return fmt.Errorf("missing required field: attrs")
@@ -187,8 +185,6 @@ func (e *EntityServer) Put(ctx context.Context, req *entityserver_v1alpha.Entity
 	var opts []entity.EntityOption
 
 	if rpcE.HasId() {
-		e.Log.Debug("updating entity", "id", rpcE.Id(), "revision", rpcE.Revision())
-
 		// If the entity has a revision, then make sure that we're updating that specific entity.
 		if rev := rpcE.Revision(); rev > 0 {
 			opts = append(opts, entity.WithFromRevision(rev))
@@ -549,7 +545,10 @@ func (e *EntityServer) List(ctx context.Context, req *entityserver_v1alpha.Entit
 	var ret []*entityserver_v1alpha.Entity
 	for i, entity := range entities {
 		if entity == nil {
-			return fmt.Errorf("entity not found: %s", ids[i])
+			e.Log.Error("entity in index but not in store, skipping",
+				"id", ids[i],
+				"index", index)
+			continue
 		}
 
 		var rpcEntity entityserver_v1alpha.Entity

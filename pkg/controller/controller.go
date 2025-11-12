@@ -102,7 +102,7 @@ func (c *ReconcileController) Start(top context.Context) error {
 	c.cancel = cancel
 	c.top = top
 
-	c.Log.Info("Starting controller", "name", c.name, "id", c.index.ID, "value", c.index.Value)
+	c.Log.Info("Starting controller", "name", c.name)
 
 	// Start workers
 	for i := 0; i < c.workers; i++ {

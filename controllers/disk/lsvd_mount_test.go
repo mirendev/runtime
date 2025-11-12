@@ -1,5 +1,4 @@
 //go:build linux && integration
-// +build linux,integration
 
 package disk
 

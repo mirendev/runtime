@@ -189,8 +189,6 @@ func (c *NetworkClient) sendIdentity(ctx context.Context) error {
 
 	defer resp.Body.Close()
 
-	c.State.log.Debug("rpc.identify", "status", resp.StatusCode)
-
 	if resp.StatusCode != http.StatusOK {
 		return errors.Errorf("unexpected status code: %d", resp.StatusCode)
 	}
@@ -217,7 +215,6 @@ func (c *NetworkClient) sendIdentity(ctx context.Context) error {
 
 func (c *NetworkClient) resolveCapability(name string) error {
 	url := "https://" + c.remote + "/_rpc/lookup/" + url.PathEscape(name)
-	c.State.log.Debug("rpc.resolve", "name", name, "url", url)
 	req, err := http.NewRequest(http.MethodPost, url, nil)
 	if err != nil {
 		return NewResolveHTTPError(err, "error creating new http request: %v", err)

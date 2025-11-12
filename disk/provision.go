@@ -45,7 +45,7 @@ func (p *Provisioner) Init(ctx context.Context) error {
 		Addresses: []netip.Prefix{p.Subnet.Router()},
 	}
 
-	err := p.NetServ.SetupDNS(bc)
+	err := p.NetServ.SetupDNS(ctx, bc)
 	if err != nil {
 		return err
 	}

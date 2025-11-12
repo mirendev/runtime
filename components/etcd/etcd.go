@@ -10,6 +10,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"sync"
 	"time"
 
@@ -393,7 +394,7 @@ func (e *EtcdComponent) createContainer(ctx context.Context, image containerd.Im
 }
 
 func (e *EtcdComponent) waitForReady(ctx context.Context, host string, port int) {
-	endpoint := fmt.Sprintf("%s:%d", host, port)
+	endpoint := net.JoinHostPort(host, strconv.Itoa(port))
 
 	for i := 0; i < 30; i++ {
 		conn, err := net.DialTimeout("tcp", endpoint, 1*time.Second)

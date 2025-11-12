@@ -1,5 +1,4 @@
 //go:build linux
-// +build linux
 
 package commands
 
@@ -933,7 +932,7 @@ func writeLocalClusterConfig(ctx *Context, cc *caauth.ClientCertificate, address
 	}
 
 	for _, entry := range pathsToFix {
-		if err := fixOwnershipIfSudo(ctx, entry); err != nil {
+		if err := fixOwnershipIfSudo(entry); err != nil {
 			ctx.Log.Warn("failed to fix directory ownership", "dir", entry, "error", err)
 		}
 
@@ -957,7 +956,7 @@ func writeLocalClusterConfig(ctx *Context, cc *caauth.ClientCertificate, address
 }
 
 // fixOwnershipIfSudo fixes file/directory ownership when running under sudo
-func fixOwnershipIfSudo(ctx *Context, path string) error {
+func fixOwnershipIfSudo(path string) error {
 	if os.Geteuid() != 0 {
 		// Not running as root, nothing to do
 		return nil
@@ -987,8 +986,6 @@ func fixOwnershipIfSudo(ctx *Context, path string) error {
 	if err := os.Chown(path, uid, gid); err != nil {
 		return fmt.Errorf("failed to chown %s to %d:%d: %w", path, uid, gid, err)
 	}
-
-	ctx.Log.Debug("fixed ownership for", "path", path, "uid", uid, "gid", gid)
 
 	return nil
 }

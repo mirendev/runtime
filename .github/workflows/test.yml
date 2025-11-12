@@ -44,6 +44,12 @@ jobs:
         sudo DEBIAN_FRONTEND=noninteractive apt-get update
         sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends clang llvm
 
+    - name: Clean up apt lock files
+      run: |
+        # Remove lock files and partial directories to prevent cache save errors
+        sudo rm -f /var/cache/apt/archives/lock /var/lib/apt/lists/lock
+        sudo rm -rf /var/cache/apt/archives/partial /var/lib/apt/lists/partial
+
     - name: Cache Go tools
       id: cache-go-tools
       uses: actions/cache@v4
@@ -62,7 +68,7 @@ jobs:
     - name: golangci-lint
       uses: golangci/golangci-lint-action@v8
       with:
-        version: v2.5.0
+        version: v2.6.1
 
     - name: Check go.mod tidiness
       run: |
