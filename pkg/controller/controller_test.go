@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -713,5 +714,425 @@ func TestReconcileController_QueueOverflow(t *testing.T) {
 	if processed > 10 {
 		// If too many were processed, the blocking isn't working
 		t.Errorf("Too many events processed (%d), handler should have blocked", processed)
+	}
+}
+
+func TestReconcileController_InFlightQueueing(t *testing.T) {
+	log := slog.New(slogfmt.NewTestHandler(t, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+	store := entity.NewMockStore()
+	server := &entityserver.EntityServer{
+		Log:   log,
+		Store: store,
+	}
+
+	sc := &entityserver_v1alpha.EntityAccessClient{
+		Client: rpc.LocalClient(entityserver_v1alpha.AdaptEntityAccess(server)),
+	}
+
+	testIndex := entity.Any(entity.Type, "test/type")
+
+	// Add test entity to store
+	store.AddEntity(entity.Id("test/entity1"), entity.New(
+		entity.Ident, "test/entity1",
+		entity.Type, "test/type",
+	))
+
+	// Track processing with detailed information
+	type processRecord struct {
+		entityId entity.Id
+		rev      int64
+		workerId string
+		started  time.Time
+		finished time.Time
+	}
+
+	var recordsMu sync.Mutex
+	records := []processRecord{}
+
+	// Channel to control when handler completes
+	blockChan := make(chan struct{})
+	// Track how many events are currently being processed concurrently
+	var concurrentCount atomic.Int32
+	var maxConcurrent atomic.Int32
+
+	handler := func(ctx context.Context, event Event) ([]entity.Attr, error) {
+		workerId := WorkerId(ctx)
+		started := time.Now()
+
+		// Track concurrent processing
+		current := concurrentCount.Add(1)
+		// Update max if this is higher
+		for {
+			max := maxConcurrent.Load()
+			if current <= max || maxConcurrent.CompareAndSwap(max, current) {
+				break
+			}
+		}
+
+		// Wait for signal to proceed
+		<-blockChan
+
+		finished := time.Now()
+		concurrentCount.Add(-1)
+
+		recordsMu.Lock()
+		records = append(records, processRecord{
+			entityId: event.Id,
+			rev:      event.Rev,
+			workerId: workerId,
+			started:  started,
+			finished: finished,
+		})
+		recordsMu.Unlock()
+
+		return nil, nil
+	}
+
+	controller := NewReconcileController(
+		"test-controller",
+		log,
+		testIndex,
+		sc,
+		handler,
+		0, // disable resync
+		2, // use 2 workers to test concurrent scenarios
+	)
+
+	// Setup mock watch that sends multiple events for the same entity
+	eventsSent := make(chan int64, 10)
+	store.OnWatchIndex = func(ctx context.Context, attr entity.Attr) (clientv3.WatchChan, error) {
+		ch := make(chan clientv3.WatchResponse)
+
+		go func() {
+			// Send 5 rapid-fire events for the same entity with different revisions
+			for rev := int64(1); rev <= 5; rev++ {
+				select {
+				case ch <- clientv3.WatchResponse{
+					Events: []*clientv3.Event{
+						{
+							Type: clientv3.EventTypePut,
+							Kv: &mvccpb.KeyValue{
+								Key:            []byte("test-key"),
+								Value:          []byte("test/entity1"),
+								ModRevision:    rev,
+								CreateRevision: 1,
+							},
+						},
+					},
+				}:
+					eventsSent <- rev
+				case <-ctx.Done():
+					close(ch)
+					return
+				}
+			}
+
+			// Keep channel open
+			<-ctx.Done()
+			close(ch)
+		}()
+
+		return ch, nil
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	err := controller.Start(ctx)
+	require.NoError(t, err)
+
+	// Wait for all 5 events to be sent
+	for i := 0; i < 5; i++ {
+		select {
+		case <-eventsSent:
+		case <-time.After(1 * time.Second):
+			t.Fatal("Timeout waiting for events to be sent")
+		}
+	}
+
+	// Give a bit of time for events to be queued
+	time.Sleep(50 * time.Millisecond)
+
+	// Now unblock the handler one at a time
+	// Since all events are for the same entity, they should be processed sequentially
+	// by the same worker, not concurrently
+	for i := 0; i < 5; i++ {
+		blockChan <- struct{}{}
+		time.Sleep(10 * time.Millisecond) // Small delay between unblocks
+	}
+
+	// Wait for all processing to complete
+	time.Sleep(100 * time.Millisecond)
+
+	controller.Stop()
+	close(blockChan)
+
+	// Verify results
+	recordsMu.Lock()
+	defer recordsMu.Unlock()
+
+	require.Equal(t, 5, len(records), "Should have processed all 5 events")
+
+	// Verify all events were for the same entity
+	for _, record := range records {
+		assert.Equal(t, entity.Id("test/entity1"), record.entityId)
+	}
+
+	t.Logf("Processed %d events for entity %s", len(records), "test/entity1")
+
+	// CRITICAL: Verify that the same worker processed all events for this entity
+	// This proves the in-flight queueing is working
+	firstWorker := records[0].workerId
+	t.Logf("All events processed by worker: %s", firstWorker)
+	for i, record := range records {
+		assert.Equal(t, firstWorker, record.workerId,
+			"Event %d should be processed by same worker %s, got %s",
+			i, firstWorker, record.workerId)
+	}
+
+	// Verify no concurrent processing occurred for the same entity
+	maxConcurrentVal := maxConcurrent.Load()
+	assert.Equal(t, int32(1), maxConcurrentVal,
+		"Should never have more than 1 concurrent processing of same entity, got %d", maxConcurrentVal)
+
+	// Verify events were processed sequentially (no overlap in time)
+	for i := 1; i < len(records); i++ {
+		prev := records[i-1]
+		curr := records[i]
+		assert.True(t, curr.started.After(prev.finished) || curr.started.Equal(prev.finished),
+			"Event %d should start after event %d finishes. "+
+				"Event %d finished at %v, Event %d started at %v",
+			i, i-1,
+			i-1, prev.finished, i, curr.started)
+	}
+
+	t.Logf("✓ Verified in-flight queueing: all %d events for same entity processed sequentially by worker %s",
+		len(records), firstWorker)
+}
+
+func TestReconcileController_InFlightWithMultipleEntities(t *testing.T) {
+	log := slog.New(slogfmt.NewTestHandler(t, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+	store := entity.NewMockStore()
+	server := &entityserver.EntityServer{
+		Log:   log,
+		Store: store,
+	}
+
+	sc := &entityserver_v1alpha.EntityAccessClient{
+		Client: rpc.LocalClient(entityserver_v1alpha.AdaptEntityAccess(server)),
+	}
+
+	testIndex := entity.Any(entity.Type, "test/type")
+
+	// Add test entities to store
+	store.AddEntity(entity.Id("test/entity1"), entity.New(
+		entity.Ident, "test/entity1",
+		entity.Type, "test/type",
+	))
+	store.AddEntity(entity.Id("test/entity2"), entity.New(
+		entity.Ident, "test/entity2",
+		entity.Type, "test/type",
+	))
+
+	// Track processing with detailed information
+	type processRecord struct {
+		entityId entity.Id
+		rev      int64
+		workerId string
+		started  time.Time
+		finished time.Time
+	}
+
+	var recordsMu sync.Mutex
+	records := []processRecord{}
+
+	// Channel to control when handler completes
+	blockChan := make(chan struct{})
+
+	handler := func(ctx context.Context, event Event) ([]entity.Attr, error) {
+		workerId := WorkerId(ctx)
+		started := time.Now()
+
+		// Wait for signal to proceed
+		<-blockChan
+
+		finished := time.Now()
+
+		recordsMu.Lock()
+		records = append(records, processRecord{
+			entityId: event.Id,
+			rev:      event.Rev,
+			workerId: workerId,
+			started:  started,
+			finished: finished,
+		})
+		recordsMu.Unlock()
+
+		return nil, nil
+	}
+
+	controller := NewReconcileController(
+		"test-controller",
+		log,
+		testIndex,
+		sc,
+		handler,
+		0, // disable resync
+		2, // use 2 workers
+	)
+
+	// Setup mock watch that sends events for TWO different entities
+	eventsSent := make(chan string, 10)
+	store.OnWatchIndex = func(ctx context.Context, attr entity.Attr) (clientv3.WatchChan, error) {
+		ch := make(chan clientv3.WatchResponse)
+
+		go func() {
+			// Send 3 events for entity1
+			for rev := int64(1); rev <= 3; rev++ {
+				select {
+				case ch <- clientv3.WatchResponse{
+					Events: []*clientv3.Event{
+						{
+							Type: clientv3.EventTypePut,
+							Kv: &mvccpb.KeyValue{
+								Key:            []byte("test-key-1"),
+								Value:          []byte("test/entity1"),
+								ModRevision:    rev,
+								CreateRevision: 1,
+							},
+						},
+					},
+				}:
+					eventsSent <- fmt.Sprintf("entity1-rev%d", rev)
+				case <-ctx.Done():
+					close(ch)
+					return
+				}
+			}
+
+			// Send 3 events for entity2
+			for rev := int64(1); rev <= 3; rev++ {
+				select {
+				case ch <- clientv3.WatchResponse{
+					Events: []*clientv3.Event{
+						{
+							Type: clientv3.EventTypePut,
+							Kv: &mvccpb.KeyValue{
+								Key:            []byte("test-key-2"),
+								Value:          []byte("test/entity2"),
+								ModRevision:    rev,
+								CreateRevision: 1,
+							},
+						},
+					},
+				}:
+					eventsSent <- fmt.Sprintf("entity2-rev%d", rev)
+				case <-ctx.Done():
+					close(ch)
+					return
+				}
+			}
+
+			// Keep channel open
+			<-ctx.Done()
+			close(ch)
+		}()
+
+		return ch, nil
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	err := controller.Start(ctx)
+	require.NoError(t, err)
+
+	// Wait for all 6 events to be sent (3 per entity)
+	for i := 0; i < 6; i++ {
+		select {
+		case <-eventsSent:
+		case <-time.After(1 * time.Second):
+			t.Fatal("Timeout waiting for events to be sent")
+		}
+	}
+
+	// Give a bit of time for events to be queued
+	time.Sleep(50 * time.Millisecond)
+
+	// Unblock all handlers
+	for i := 0; i < 6; i++ {
+		blockChan <- struct{}{}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	// Wait for all processing to complete
+	time.Sleep(100 * time.Millisecond)
+
+	controller.Stop()
+	close(blockChan)
+
+	// Verify results
+	recordsMu.Lock()
+	defer recordsMu.Unlock()
+
+	require.Equal(t, 6, len(records), "Should have processed all 6 events")
+
+	// Group records by entity
+	entity1Records := []processRecord{}
+	entity2Records := []processRecord{}
+	for _, record := range records {
+		switch record.entityId {
+		case "test/entity1":
+			entity1Records = append(entity1Records, record)
+		case "test/entity2":
+			entity2Records = append(entity2Records, record)
+		}
+	}
+
+	require.Equal(t, 3, len(entity1Records), "Should have 3 records for entity1")
+	require.Equal(t, 3, len(entity2Records), "Should have 3 records for entity2")
+
+	// CRITICAL: Verify each entity's events were processed by the same worker
+	entity1Worker := entity1Records[0].workerId
+	t.Logf("Entity1 events processed by worker: %s", entity1Worker)
+	for i, record := range entity1Records {
+		assert.Equal(t, entity1Worker, record.workerId,
+			"Entity1 event %d should be processed by same worker", i)
+	}
+
+	entity2Worker := entity2Records[0].workerId
+	t.Logf("Entity2 events processed by worker: %s", entity2Worker)
+	for i, record := range entity2Records {
+		assert.Equal(t, entity2Worker, record.workerId,
+			"Entity2 event %d should be processed by same worker", i)
+	}
+
+	// Verify each entity's events were processed sequentially
+	for i := 1; i < len(entity1Records); i++ {
+		prev := entity1Records[i-1]
+		curr := entity1Records[i]
+		assert.True(t, curr.started.After(prev.finished) || curr.started.Equal(prev.finished),
+			"Entity1: event %d should start after event %d finishes", i, i-1)
+	}
+
+	for i := 1; i < len(entity2Records); i++ {
+		prev := entity2Records[i-1]
+		curr := entity2Records[i]
+		assert.True(t, curr.started.After(prev.finished) || curr.started.Equal(prev.finished),
+			"Entity2: event %d should start after event %d finishes", i, i-1)
+	}
+
+	// With 2 workers and 2 entities, we should see different workers handling different entities
+	// (though this isn't strictly guaranteed due to scheduling, it's likely)
+	t.Logf("✓ Verified in-flight queueing with multiple entities:")
+	t.Logf("  - Entity1: %d events by worker %s", len(entity1Records), entity1Worker)
+	t.Logf("  - Entity2: %d events by worker %s", len(entity2Records), entity2Worker)
+
+	if entity1Worker != entity2Worker {
+		t.Logf("  - ✓ Different workers handled different entities (concurrent processing of different entities)")
+	} else {
+		t.Logf("  - Note: Same worker handled both entities (still correct, just less concurrent)")
 	}
 }
