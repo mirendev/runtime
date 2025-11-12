@@ -37,7 +37,7 @@ func NewManager(
 	eac *entityserver_v1alpha.EntityAccessClient,
 ) *Manager {
 	return &Manager{
-		log: log.With("component", "sandboxpool-manager"),
+		log: log.With("module", "sandboxpool"),
 		eac: eac,
 	}
 }
@@ -289,8 +289,12 @@ func (m *Manager) listSandboxes(ctx context.Context, pool *compute_v1alpha.Sandb
 
 // createSandbox creates a new sandbox from the pool's SandboxSpec template
 func (m *Manager) createSandbox(ctx context.Context, pool *compute_v1alpha.SandboxPool, instanceNum int) error {
-	// Generate sandbox name
-	sbName := idgen.GenNS("sb")
+	// Generate sandbox name using pool's prefix, fallback to "sb" if not set
+	prefix := pool.SandboxPrefix
+	if prefix == "" {
+		prefix = "sb"
+	}
+	sbName := idgen.GenNS(prefix)
 
 	// Clone the SandboxSpec into a Sandbox entity
 	sb := compute_v1alpha.Sandbox{
@@ -298,16 +302,24 @@ func (m *Manager) createSandbox(ctx context.Context, pool *compute_v1alpha.Sandb
 		Spec:   pool.SandboxSpec,
 	}
 
+	// Build sandbox labels: merge pool.SandboxLabels with required labels
+	sandboxLabels := types.LabelSet(
+		"service", pool.Service,
+		"pool", pool.ID.String(),
+		"instance", fmt.Sprintf("%d", instanceNum),
+	)
+
+	// Merge in labels from pool.SandboxLabels
+	for _, label := range pool.SandboxLabels {
+		sandboxLabels = append(sandboxLabels, label)
+	}
+
 	// Create entity with metadata (Put without ID creates new entity)
 	var rpcE entityserver_v1alpha.Entity
 	rpcE.SetAttrs(entity.New(
 		(&core_v1alpha.Metadata{
-			Name: sbName,
-			Labels: types.LabelSet(
-				"service", pool.Service,
-				"pool", pool.ID.String(),
-				"instance", fmt.Sprintf("%d", instanceNum),
-			),
+			Name:   sbName,
+			Labels: sandboxLabels,
 		}).Encode,
 		entity.Ident, entity.MustKeyword("sandbox/"+sbName),
 		sb.Encode,

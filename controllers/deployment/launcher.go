@@ -30,7 +30,7 @@ type PoolWithEntity struct {
 
 func NewLauncher(log *slog.Logger, eac *entityserver_v1alpha.EntityAccessClient) *Launcher {
 	return &Launcher{
-		Log: log.With("controller", "deploymentlauncher"),
+		Log: log.With("module", "deployment"),
 		EAC: eac,
 	}
 }
@@ -111,6 +111,15 @@ func (l *Launcher) ensurePoolForService(ctx context.Context, app *core_v1alpha.A
 		}
 	}
 
+	// Get app metadata for label
+	appResp, err := l.EAC.Get(ctx, app.ID.String())
+	if err != nil {
+		return fmt.Errorf("failed to get app metadata: %w", err)
+	}
+
+	var appMD core_v1alpha.Metadata
+	appMD.Decode(appResp.Entity().Entity())
+
 	// Build the desired sandbox spec
 	spec, err := l.buildSandboxSpec(ctx, app, ver, serviceName, image)
 	if err != nil {
@@ -178,11 +187,16 @@ func (l *Launcher) ensurePoolForService(ctx context.Context, app *core_v1alpha.A
 			"desired_instances", desiredInstances)
 	}
 
+	// Use app metadata (already fetched earlier) for sandbox labels
 	pool := &compute_v1alpha.SandboxPool{
 		Service:              serviceName,
 		SandboxSpec:          *spec,
 		DesiredInstances:     desiredInstances,
 		ReferencedByVersions: []entity.Id{ver.ID},
+		SandboxLabels: types.LabelSet(
+			"app", appMD.Name,
+		),
+		SandboxPrefix: fmt.Sprintf("%s-%s", appMD.Name, serviceName),
 	}
 
 	name := idgen.GenNS("pool")
@@ -216,7 +230,16 @@ func (l *Launcher) ensurePoolForService(ctx context.Context, app *core_v1alpha.A
 }
 
 // buildSandboxSpec creates a SandboxSpec for the given service
-func (l *Launcher) buildSandboxSpec(ctx context.Context, app *core_v1alpha.App, ver *core_v1alpha.AppVersion, serviceName string, image string) (*compute_v1alpha.SandboxSpec, error) {
+func (l *Launcher) buildSandboxSpec(
+	ctx context.Context,
+	app *core_v1alpha.App,
+	ver *core_v1alpha.AppVersion,
+	serviceName string,
+	image string,
+) (
+	*compute_v1alpha.SandboxSpec,
+	error,
+) {
 	// Get app metadata
 	appResp, err := l.EAC.Get(ctx, app.ID.String())
 	if err != nil {
