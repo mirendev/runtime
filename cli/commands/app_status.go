@@ -57,6 +57,7 @@ func AppStatus(ctx *Context, opts struct {
 	headerStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("12"))
 	labelStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("8"))
 	greenStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("10"))
+	blueStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("12"))
 	yellowStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("11"))
 	redStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("9"))
 
@@ -112,6 +113,8 @@ func AppStatus(ctx *Context, opts struct {
 		switch status {
 		case "active":
 			styledStatus = greenStyle.Render(status)
+		case "succeeded":
+			styledStatus = blueStyle.Render(status)
 		case "failed":
 			styledStatus = redStyle.Render(status)
 		default:
@@ -125,13 +128,19 @@ func AppStatus(ctx *Context, opts struct {
 		}
 
 		// Deployed info
-		if deployment.HasDeployedByUserEmail() {
-			email := deployment.DeployedByUserEmail()
-			// Replace placeholder emails with dash
-			if email == "" || email == "unknown@example.com" || email == "user@example.com" {
-				email = "-"
+		user := deployment.DeployedByUserEmail()
+		// Replace placeholder emails with username or user ID as fallback
+		if user == "" || user == "unknown@example.com" || user == "user@example.com" {
+			if deployment.HasDeployedByUserName() && deployment.DeployedByUserName() != "" {
+				user = deployment.DeployedByUserName()
+			} else if deployment.HasDeployedByUserId() && deployment.DeployedByUserId() != "" {
+				user = deployment.DeployedByUserId()
+			} else {
+				user = "-"
 			}
-			ctx.Printf("  Deployed By: %s\n", email)
+		}
+		if user != "-" {
+			ctx.Printf("  Deployed By: %s\n", user)
 		}
 
 		if deployment.HasDeployedAt() && deployment.DeployedAt() != nil {
@@ -218,6 +227,8 @@ func AppStatus(ctx *Context, opts struct {
 			switch status {
 			case "active":
 				statusIcon = greenStyle.Render("✓")
+			case "succeeded":
+				statusIcon = blueStyle.Render("✓")
 			case "failed":
 				statusIcon = redStyle.Render("✗")
 			default:

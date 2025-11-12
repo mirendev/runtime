@@ -140,6 +140,7 @@ func (d *DeploymentServer) CreateDeployment(ctx context.Context, req *deployment
 	// Get user info from context (will be implemented with auth integration)
 	// For now, use placeholder values
 	userId := "user-" + uuid.New().String()
+	userName := "testuser"
 	userEmail := ""
 
 	// Create deployment entity
@@ -153,6 +154,7 @@ func (d *DeploymentServer) CreateDeployment(ctx context.Context, req *deployment
 		Phase:      "preparing",
 		DeployedBy: core_v1alpha.DeployedBy{
 			UserId:    userId,
+			UserName:  userName,
 			UserEmail: userEmail,
 			Timestamp: now.Format(time.RFC3339),
 		},
@@ -225,12 +227,13 @@ func (d *DeploymentServer) UpdateDeploymentStatus(ctx context.Context, req *depl
 	validStatuses := map[string]bool{
 		"in_progress": true,
 		"active":      true,
+		"succeeded":   true,
 		"failed":      true,
 		"rolled_back": true,
 	}
 	if !validStatuses[newStatus] {
 		return cond.ValidationFailure("invalid-status",
-			"status must be one of: in_progress, active, failed, rolled_back")
+			"status must be one of: in_progress, active, succeeded, failed, rolled_back")
 	}
 
 	// Get existing deployment
@@ -261,6 +264,15 @@ func (d *DeploymentServer) UpdateDeploymentStatus(ctx context.Context, req *depl
 	// Update error message if failed
 	if newStatus == "failed" && args.HasErrorMessage() {
 		deployment.ErrorMessage = args.ErrorMessage()
+	}
+
+	// If marking as active, mark all other active deployments for this app/cluster as succeeded
+	if newStatus == "active" {
+		err = d.markPreviousActiveAsSucceeded(ctx, deployment.AppName, deployment.ClusterId, deploymentId)
+		if err != nil {
+			d.Log.Error("Failed to mark previous active deployments as succeeded", "error", err)
+			// Don't fail the whole operation, just log the error
+		}
 	}
 
 	// Update entity
@@ -631,6 +643,7 @@ func (d *DeploymentServer) toDeploymentInfo(deployment *core_v1alpha.Deployment)
 	info.SetStatus(deployment.Status)
 	info.SetPhase(deployment.Phase)
 	info.SetDeployedByUserId(deployment.DeployedBy.UserId)
+	info.SetDeployedByUserName(deployment.DeployedBy.UserName)
 	info.SetDeployedByUserEmail(deployment.DeployedBy.UserEmail)
 
 	// Parse timestamps
@@ -674,6 +687,56 @@ func (d *DeploymentServer) toDeploymentInfo(deployment *core_v1alpha.Deployment)
 	}
 
 	return info
+}
+
+// markPreviousActiveAsSucceeded marks all active deployments for the given app/cluster as succeeded,
+// except for the specified currentDeploymentId
+func (d *DeploymentServer) markPreviousActiveAsSucceeded(ctx context.Context, appName, clusterId, currentDeploymentId string) error {
+	// List all active deployments for this app/cluster
+	deployments, err := d.listDeploymentsInternal(ctx, appName, clusterId, "active", 100)
+	if err != nil {
+		return err
+	}
+
+	// Update each active deployment (except the current one) to succeeded
+	for _, dep := range deployments {
+		if string(dep.ID) == currentDeploymentId {
+			continue
+		}
+
+		// Update status to succeeded
+		dep.Status = "succeeded"
+		if dep.CompletedAt == "" {
+			dep.CompletedAt = time.Now().Format(time.RFC3339)
+		}
+
+		// Update entity
+		updateAttrs := dep.Encode()
+		updateEntity := &entityserver_v1alpha.Entity{}
+		updateEntity.SetId(string(dep.ID))
+		updateEntity.SetAttrs(updateAttrs)
+
+		// Get current entity to get revision
+		currentResp, err := d.EAC.Get(ctx, string(dep.ID))
+		if err != nil {
+			d.Log.Error("Failed to get deployment for update", "deployment_id", dep.ID, "error", err)
+			continue
+		}
+		updateEntity.SetRevision(currentResp.Entity().Revision())
+
+		_, err = d.EAC.Put(ctx, updateEntity)
+		if err != nil {
+			d.Log.Error("Failed to mark deployment as succeeded", "deployment_id", dep.ID, "error", err)
+			continue
+		}
+
+		d.Log.Info("Marked previous active deployment as succeeded",
+			"deployment_id", dep.ID,
+			"app", appName,
+			"cluster", clusterId)
+	}
+
+	return nil
 }
 
 // decodeEntity is a helper to decode RPC entity to struct

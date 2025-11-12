@@ -24,6 +24,7 @@ type deploymentInfoData struct {
 	ErrorMessage        *string             `cbor:"10,keyasint,omitempty" json:"error_message,omitempty"`
 	BuildLogs           *string             `cbor:"11,keyasint,omitempty" json:"build_logs,omitempty"`
 	GitInfo             *GitInfo            `cbor:"12,keyasint,omitempty" json:"git_info,omitempty"`
+	DeployedByUserName  *string             `cbor:"21,keyasint,omitempty" json:"deployed_by_user_name,omitempty"`
 }
 
 type DeploymentInfo struct {
@@ -214,6 +215,21 @@ func (v *DeploymentInfo) GitInfo() *GitInfo {
 
 func (v *DeploymentInfo) SetGitInfo(git_info *GitInfo) {
 	v.data.GitInfo = git_info
+}
+
+func (v *DeploymentInfo) HasDeployedByUserName() bool {
+	return v.data.DeployedByUserName != nil
+}
+
+func (v *DeploymentInfo) DeployedByUserName() string {
+	if v.data.DeployedByUserName == nil {
+		return ""
+	}
+	return *v.data.DeployedByUserName
+}
+
+func (v *DeploymentInfo) SetDeployedByUserName(deployed_by_user_name string) {
+	v.data.DeployedByUserName = &deployed_by_user_name
 }
 
 func (v *DeploymentInfo) MarshalCBOR() ([]byte, error) {

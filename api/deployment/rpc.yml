@@ -189,6 +189,10 @@ types:
         type: string
         index: 7
         doc: Email of the user who deployed
+      - name: deployed_by_user_name
+        type: string
+        index: 21
+        doc: Username of the user who deployed
       - name: deployed_at
         type: standard.Timestamp
         index: 8
