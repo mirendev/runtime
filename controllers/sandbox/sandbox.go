@@ -904,6 +904,22 @@ func (c *SandboxController) createSandbox(ctx context.Context, co *compute.Sandb
 		return fmt.Errorf("failed to allocate network: %w", err)
 	}
 
+	// Patch entity with network address before starting sandbox
+	networkAttrs := []any{
+		entity.Ref(entity.DBId, co.ID),
+	}
+
+	for _, v := range co.Network {
+		networkAttrs = append(networkAttrs, entity.Component(compute.SandboxNetworkId, v.Encode()))
+	}
+
+	patchAttrs := entity.New(networkAttrs...)
+
+	_, err = c.EAC.Patch(ctx, patchAttrs.Attrs(), meta.Revision)
+	if err != nil {
+		return fmt.Errorf("failed to patch sandbox with network address: %w", err)
+	}
+
 	opts, err := c.buildSpec(ctx, co, ep, meta)
 	if err != nil {
 		c.deallocateNetwork(ctx, ep)
