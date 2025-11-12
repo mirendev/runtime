@@ -915,7 +915,9 @@ func (c *SandboxController) createSandbox(ctx context.Context, co *compute.Sandb
 
 	patchAttrs := entity.New(networkAttrs...)
 
-	res, err := c.EAC.Patch(ctx, patchAttrs.Attrs(), meta.Revision)
+	// Use 0 as the revision in the case that the sandbox has been updated before we got
+	// here. This update must go through.
+	res, err := c.EAC.Patch(ctx, patchAttrs.Attrs(), 0)
 	if err != nil {
 		return fmt.Errorf("failed to patch sandbox with network address: %w", err)
 	}
