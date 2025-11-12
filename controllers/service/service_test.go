@@ -173,9 +173,14 @@ func TestServiceController(t *testing.T) {
 
 		sbEntity.SetID(sbID)
 
+		// Store the sandbox in entity store
+		rpcE.SetAttrs(sbEntity.Attrs())
+		res, err := eac.Put(ctx, &rpcE)
+		r.NoError(err)
+
 		sbMeta := &entity.Meta{
 			Entity:   sbEntity,
-			Revision: 1,
+			Revision: res.Revision(),
 		}
 
 		err = sbC.Create(ctx, sb, sbMeta)
@@ -303,9 +308,14 @@ func TestServiceController(t *testing.T) {
 
 		sbEntity.SetID(sbID)
 
+		// Store the sandbox in entity store
+		rpcE.SetAttrs(sbEntity.Attrs())
+		res, err := eac.Put(ctx, &rpcE)
+		r.NoError(err)
+
 		sbMeta := &entity.Meta{
 			Entity:   sbEntity,
-			Revision: 1,
+			Revision: res.Revision(),
 		}
 
 		err = sbC.Create(ctx, sb, sbMeta)
@@ -514,12 +524,18 @@ func TestServiceController(t *testing.T) {
 
 		sbEntity1 := entity.New(attrs1)
 
+		sbEntity1.SetID(sbID1)
+
+		// Store the sandbox in entity store
+		var rpcE1 entityserver_v1alpha.Entity
+		rpcE1.SetAttrs(sbEntity1.Attrs())
+		res, err := eac.Put(ctx, &rpcE1)
+		r.NoError(err)
+
 		sbMeta1 := &entity.Meta{
 			Entity:   sbEntity1,
-			Revision: 1,
+			Revision: res.Revision(),
 		}
-
-		sbEntity1.SetID(sbID1)
 
 		err = sbC.Create(ctx, sb1, sbMeta1)
 		r.NoError(err)
@@ -551,9 +567,15 @@ func TestServiceController(t *testing.T) {
 
 		sbEntity2.SetID(sbID2)
 
+		// Store the sandbox in entity store
+		var rpcE2 entityserver_v1alpha.Entity
+		rpcE2.SetAttrs(sbEntity2.Attrs())
+		res, err = eac.Put(ctx, &rpcE2)
+		r.NoError(err)
+
 		sbMeta2 := &entity.Meta{
 			Entity:   sbEntity2,
-			Revision: 1,
+			Revision: res.Revision(),
 		}
 
 		err = sbC.Create(ctx, sb2, sbMeta2)
