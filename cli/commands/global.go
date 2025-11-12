@@ -95,7 +95,7 @@ func setup(ctx context.Context, flags *GlobalFlags, opts any) *Context {
 		Level: slog.LevelDebug,
 	})).With("module", "user")
 
-	ctx = slogrus.WithLogger(ctx, s.Log)
+	ctx = slogrus.WithLogger(ctx, s.Log.With("module", "slogrus"))
 	slogrus.OverrideGlobal(s.Log)
 
 	s.Server.Log = s.Log

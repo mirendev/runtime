@@ -17,6 +17,8 @@ func ServeTLS(ctx context.Context, log *slog.Logger, dataPath string, h http.Han
 		// TODO set HostPolicy to only allow certain domains
 	}
 
+	log = log.With("module", "autotls")
+
 	log.Info("serving TLS with autocert")
 
 	server := &http.Server{

@@ -239,17 +239,14 @@ func NewState(ctx context.Context, opts ...StateOption) (*State, error) {
 		InsecureSkipVerify: so.skipVerify,
 		NextProtos:         []string{http3.NextProtoH3},
 		VerifyConnection: func(cs tls.ConnectionState) error {
-			so.log.Debug("connected to unverified peer", "name", cs.ServerName)
 			return nil
 		},
 	}
 
 	if so.caCert != nil {
-		so.log.Info("adding CA cert to client TLS config")
 		tlsCfg.RootCAs = x509.NewCertPool()
 		tlsCfg.RootCAs.AppendCertsFromPEM(so.caCert)
 		tlsCfg.VerifyConnection = func(cs tls.ConnectionState) error {
-			so.log.Debug("connected to verified peer", "name", cs.ServerName)
 			return nil
 		}
 	}
@@ -377,10 +374,12 @@ func (s *State) setupServerTls(so *stateOptions) error {
 		tlsCfg.VerifyConnection = func(cs tls.ConnectionState) error {
 			// Standard certificate validation only
 			// The authenticator can use r.TLS to access certificates later in ServeHTTP
+			/* Too noisy, disabled for now.
 			if len(cs.PeerCertificates) != 0 {
 				cert := cs.PeerCertificates[0]
 				s.log.Info("verified client connection", "subject", cert.Subject)
 			}
+			*/
 			return nil
 		}
 	}
@@ -431,7 +430,8 @@ func (s *State) startListener(ctx context.Context, so *stateOptions) error {
 	s.ws = &webtransport.Server{
 		H3: http3.Server{
 			Handler: s.server,
-			Logger:  s.log.With("module", "http3"),
+			// This is pretty noisy, as we run on DEBUG a lot, so disable for now.
+			// Logger:  s.log.With("module", "http3"),
 		},
 		CheckOrigin: func(r *http.Request) bool {
 			return true
