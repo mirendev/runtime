@@ -491,8 +491,8 @@ func (r *Runner) SetupControllers(
 			entity.Ref(entity.EntityKind, storage_v1alpha.KindDisk),
 			eas,
 			controller.AdaptController(diskWatchController),
-			time.Minute, // No periodic resync needed
-			1,           // Single worker sufficient
+			time.Minute,
+			1, // Single worker sufficient
 		),
 	)
 
