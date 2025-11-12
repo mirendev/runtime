@@ -1,19 +1,26 @@
 name = "db-app"
 
-# POSTGRES_HOST_AUTH_METHOD is required for the postgres container to work without password
 [[env]]
-key = "POSTGRES_HOST_AUTH_METHOD"
-value = "trust"
+key = "DATABASE_URL"
+value = "postgresql://go:hunter2@db.app.miren/postgres?sslmode=disable"
 
-[services.postgres]
+[[services.db.env]]
+key = "POSTGRES_USER"
+value = "go"
+
+[[services.db.env]]
+key = "POSTGRES_PASSWORD"
+value = "hunter2"
+
+[services.db]
 image = "postgres:15"
 
-[services.postgres.concurrency]
+[services.db.concurrency]
 mode = "fixed"
 num_instances = 1
 
 # Persistent disk for PostgreSQL data
-[[services.postgres.disks]]
+[[services.db.disks]]
 name = "postgres-data"
 mount_path = "/var/lib/postgresql"
 size_gb = 10
