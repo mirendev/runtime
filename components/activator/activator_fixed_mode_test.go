@@ -93,12 +93,21 @@ func TestActivatorFixedModeRoundRobin(t *testing.T) {
 	tracker2 := strategy.InitializeTracker()
 
 	// Create activator with pre-existing sandboxes
+	poolID := entity.Id("pool-1")
 	activator := &localActivator{
 		log: log.With("module", "activator"),
 		eac: server.EAC,
-		versions: map[verKey]*verSandboxes{
+		versions: map[verKey]*versionPoolRef{
 			{appVer.ID.String(), "web"}: {
-				ver: appVer,
+				ver:      appVer,
+				poolID:   poolID,
+				service:  "web",
+				strategy: strategy,
+			},
+		},
+		poolSandboxes: map[entity.Id]*poolSandboxes{
+			poolID: {
+				pool: &compute_v1alpha.SandboxPool{ID: poolID},
 				sandboxes: []*sandbox{
 					{
 						sandbox:     sb1,
@@ -115,6 +124,7 @@ func TestActivatorFixedModeRoundRobin(t *testing.T) {
 						tracker:     tracker2,
 					},
 				},
+				service:  "web",
 				strategy: strategy,
 			},
 		},
@@ -156,8 +166,8 @@ func TestActivatorFixedModeRoundRobin(t *testing.T) {
 	// Verify fixed mode tracker behavior (ReleaseLease is a no-op)
 	// Fixed mode trackers increment on acquire but don't decrement on release
 	// Since leases are acquired and released, trackers accumulate
-	vs := activator.versions[verKey{ver: appVer.ID.String(), service: "web"}]
-	for _, s := range vs.sandboxes {
+	ps := activator.poolSandboxes[poolID]
+	for _, s := range ps.sandboxes {
 		// Each sandbox had 5 leases acquired (10 total / 2 sandboxes)
 		// Since release is a no-op, used count keeps incrementing
 		assert.Greater(t, s.tracker.Used(), 0, "fixed mode tracker should show leases acquired")
@@ -213,12 +223,21 @@ func TestActivatorFixedModeNoSlotExhaustion(t *testing.T) {
 	tracker := strategy.InitializeTracker()
 
 	// Create activator with one sandbox
+	poolID := entity.Id("pool-1")
 	activator := &localActivator{
 		log: log.With("module", "activator"),
 		eac: server.EAC,
-		versions: map[verKey]*verSandboxes{
+		versions: map[verKey]*versionPoolRef{
 			{appVer.ID.String(), "web"}: {
-				ver: appVer,
+				ver:      appVer,
+				poolID:   poolID,
+				service:  "web",
+				strategy: strategy,
+			},
+		},
+		poolSandboxes: map[entity.Id]*poolSandboxes{
+			poolID: {
+				pool: &compute_v1alpha.SandboxPool{ID: poolID},
 				sandboxes: []*sandbox{
 					{
 						sandbox: &compute_v1alpha.Sandbox{
@@ -231,6 +250,7 @@ func TestActivatorFixedModeNoSlotExhaustion(t *testing.T) {
 						tracker:     tracker,
 					},
 				},
+				service:  "web",
 				strategy: strategy,
 			},
 		},
@@ -248,8 +268,8 @@ func TestActivatorFixedModeNoSlotExhaustion(t *testing.T) {
 	}
 
 	// Verify still only one sandbox exists
-	vs := activator.versions[verKey{ver: appVer.ID.String(), service: "web"}]
-	assert.Equal(t, 1, len(vs.sandboxes), "should not create new sandboxes for fixed mode")
+	ps := activator.poolSandboxes[poolID]
+	assert.Equal(t, 1, len(ps.sandboxes), "should not create new sandboxes for fixed mode")
 
 	// Release all leases
 	for _, lease := range leases {
