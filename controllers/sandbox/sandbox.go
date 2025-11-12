@@ -753,6 +753,17 @@ func (c *SandboxController) reattachLogs(ctx context.Context, sb *compute.Sandbo
 		"container_id", containerID,
 		"container_name", containerName)
 
+	// Re-establish task exit monitoring for this container
+	// This ensures we have consistent crash detection even after server restarts
+	exitCh, err := task.Wait(ctx)
+	if err != nil {
+		c.Log.Warn("failed to set up task wait during reattach", "id", containerID, "error", err)
+	} else {
+		// Launch goroutine to monitor process exit
+		go c.monitorTaskExit(sb, containerID, exitCh)
+		c.Log.Debug("re-established task exit monitoring", "sandbox", sb.ID, "container", containerID)
+	}
+
 	return nil
 }
 
@@ -876,14 +887,33 @@ func (c *SandboxController) Create(ctx context.Context, co *compute.Sandbox, met
 			case differentVersion:
 				return c.updateSandbox(ctx, co, meta)
 			case unhealthy:
-				c.Log.Info("sandbox container exists but is unhealthy, cleaning up and recreating", "id", co.ID)
+				c.Log.Info("sandbox container exists but is unhealthy", "id", co.ID)
+
+				// Mark sandbox as DEAD first if it was RUNNING
+				// This prevents infinite recreation loops
+				if co.Status == compute.RUNNING {
+					c.Log.Info("marking unhealthy sandbox as DEAD", "id", co.ID)
+					patchAttrs := entity.New(
+						entity.Keyword(entity.Ident, co.ID.String()),
+						(&compute.Sandbox{
+							Status: compute.DEAD,
+						}).Encode,
+					)
+					_, err := c.EAC.Patch(ctx, patchAttrs.Attrs(), 0)
+					if err != nil {
+						c.Log.Error("failed to mark sandbox as DEAD", "id", co.ID, "error", err)
+						return fmt.Errorf("failed to mark sandbox as DEAD: %w", err)
+					}
+				}
+
 				// Clean up the unhealthy sandbox
 				err := c.Delete(ctx, co.ID)
 				if err != nil {
 					c.Log.Error("failed to cleanup unhealthy sandbox", "id", co.ID, "err", err)
 					return fmt.Errorf("failed to cleanup unhealthy sandbox: %w", err)
 				}
-				// Fall through to create a new sandbox
+				// Don't fall through - we've marked it DEAD, let the next reconciliation handle recreation
+				return nil
 			}
 		}
 
@@ -1002,7 +1032,23 @@ func (c *SandboxController) createSandbox(ctx context.Context, co *compute.Sandb
 		}
 	}
 
-	co.Status = compute.RUNNING
+	// Only set status to RUNNING if it hasn't already been marked DEAD
+	// (The monitoring goroutine may have already detected a crash)
+	// Fetch current status to avoid race condition
+	resp, err := c.EAC.Get(ctx, co.ID.String())
+	if err != nil {
+		c.Log.Warn("failed to fetch current sandbox status before update", "id", co.ID, "error", err)
+		// Fallthrough to set RUNNING anyway
+		co.Status = compute.RUNNING
+	} else {
+		var currentSandbox compute.Sandbox
+		currentSandbox.Decode(resp.Entity().Entity())
+		if currentSandbox.Status == compute.DEAD {
+			c.Log.Info("sandbox already marked as DEAD, not overwriting to RUNNING", "id", co.ID)
+			return nil
+		}
+		co.Status = compute.RUNNING
+	}
 
 	// The controller will detect the updates and sync them back
 	if err := meta.Update(co.Encode()); err != nil {
@@ -1641,6 +1687,15 @@ func (c *SandboxController) bootContainers(
 
 		c.Log.Info("container started", "id", cc.ID())
 
+		// Monitor task for process exit to update sandbox status
+		exitCh, err := task.Wait(ctx)
+		if err != nil {
+			c.Log.Warn("failed to set up task wait", "id", cc.ID(), "error", err)
+		} else {
+			// Launch goroutine to monitor process exit
+			go c.monitorTaskExit(sb, cc.ID(), exitCh)
+		}
+
 		// Start port monitoring for this container if it has ports
 		if len(ports) > 0 && len(ep.Addresses) > 0 {
 			ip := ep.Addresses[0].Addr().String()
@@ -1649,6 +1704,48 @@ func (c *SandboxController) bootContainers(
 	}
 
 	return ret, nil
+}
+
+func (c *SandboxController) monitorTaskExit(
+	sb *compute.Sandbox,
+	containerID string,
+	exitCh <-chan containerd.ExitStatus,
+) {
+	c.Log.Debug("monitoring task for exit", "sandbox", sb.ID, "container", containerID)
+
+	select {
+	case exitStatus := <-exitCh:
+		c.Log.Info("container process exited",
+			"sandbox", sb.ID,
+			"container", containerID,
+			"exit_code", exitStatus.ExitCode(),
+			"exit_time", exitStatus.ExitTime(),
+		)
+
+		// Update sandbox status to DEAD using Patch (only updating Status field)
+		// We use Patch instead of Put since we're only changing one field
+		patchAttrs := entity.New(
+			entity.Keyword(entity.Ident, sb.ID.String()),
+			(&compute.Sandbox{
+				Status: compute.DEAD,
+			}).Encode,
+		)
+
+		ctx := context.Background()
+		_, err := c.EAC.Patch(ctx, patchAttrs.Attrs(), 0)
+		if err != nil {
+			c.Log.Error("failed to update sandbox status to DEAD",
+				"sandbox", sb.ID,
+				"error", err,
+			)
+			return
+		}
+
+		c.Log.Info("marked sandbox as DEAD due to process exit", "sandbox", sb.ID)
+
+	case <-c.topCtx.Done():
+		c.Log.Debug("task monitoring cancelled", "sandbox", sb.ID, "container", containerID)
+	}
 }
 
 func (c *SandboxController) sandboxPath(sb *compute.Sandbox, sub ...string) string {
