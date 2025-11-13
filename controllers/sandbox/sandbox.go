@@ -32,7 +32,6 @@ import (
 	"miren.dev/runtime/observability"
 	"miren.dev/runtime/pkg/containerdx"
 	"miren.dev/runtime/pkg/entity"
-	"miren.dev/runtime/pkg/entity/types"
 	"miren.dev/runtime/pkg/imagerefs"
 	"miren.dev/runtime/pkg/netdb"
 	"miren.dev/runtime/pkg/netutil"
@@ -201,61 +200,6 @@ func (c *SandboxController) reconcileSandboxesOnBoot(ctx context.Context) error 
 	if err != nil {
 		return fmt.Errorf("failed to list sandboxes: %w", err)
 	}
-
-	// Migrate sandbox indexes: touch each sandbox to ensure nested component field indexes are created.
-	// This is needed because we changed from top-level sandbox.version to nested sandbox.spec.version indexing.
-	// We mark migrated sandboxes with a label to avoid re-running the migration.
-	// We can remove this migration code after all environments have been updated.
-	const migrationLabel = "index-migration-v1"
-	migratedCount := 0
-	skippedCount := 0
-
-	for _, e := range resp.Values() {
-		var sb compute.Sandbox
-		sb.Decode(e.Entity())
-
-		// Get metadata to check/update labels
-		var md core_v1alpha.Metadata
-		md.Decode(e.Entity())
-
-		// Skip if already migrated
-		if migrated, _ := md.Labels.Get(migrationLabel); migrated != "" {
-			skippedCount++
-			continue
-		}
-
-		// Skip DEAD sandboxes - no need to rebuild their indexes
-		if sb.Status == compute.DEAD {
-			skippedCount++
-			continue
-		}
-
-		// Add migration label to mark this sandbox as migrated
-		// This triggers index recreation without corrupting data
-		newLabels := types.LabelSet(migrationLabel, "true")
-		md.Labels = append(md.Labels, newLabels...)
-
-		patchAttrs := entity.New(
-			entity.Ref(entity.DBId, sb.ID),
-			md.Encode,
-		)
-
-		_, err := c.EAC.Patch(ctx, patchAttrs.Attrs(), e.Revision())
-		if err != nil {
-			c.Log.Warn("failed to migrate sandbox indexes",
-				"sandbox_id", sb.ID,
-				"migration_label", migrationLabel,
-				"error", err)
-			// Continue with other sandboxes even if one fails
-			continue
-		}
-		migratedCount++
-	}
-
-	c.Log.Info("migrated sandbox indexes",
-		"migrated_count", migratedCount,
-		"skipped_count", skippedCount,
-		"total_count", len(resp.Values()))
 
 	var unhealthySandboxes []entity.Id
 	runningCount := 0
