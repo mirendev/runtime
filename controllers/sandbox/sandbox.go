@@ -1032,7 +1032,7 @@ func (c *SandboxController) createSandbox(ctx context.Context, co *compute.Sandb
 		}
 	}
 
-	// Only set status to RUNNING if it hasn't already been marked DEAD
+	// Only set status to RUNNING if it hasn't already been marked STOPPED or DEAD
 	// (The monitoring goroutine may have already detected a crash)
 	// Fetch current status to avoid race condition
 	resp, err := c.EAC.Get(ctx, co.ID.String())
@@ -1043,8 +1043,9 @@ func (c *SandboxController) createSandbox(ctx context.Context, co *compute.Sandb
 	} else {
 		var currentSandbox compute.Sandbox
 		currentSandbox.Decode(resp.Entity().Entity())
-		if currentSandbox.Status == compute.DEAD {
-			c.Log.Info("sandbox already marked as DEAD, not overwriting to RUNNING", "id", co.ID)
+		if currentSandbox.Status == compute.DEAD || currentSandbox.Status == compute.STOPPED {
+			c.Log.Info("sandbox already in terminal state, not overwriting to RUNNING",
+				"id", co.ID, "current_status", currentSandbox.Status)
 			return nil
 		}
 		co.Status = compute.RUNNING
