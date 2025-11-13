@@ -820,7 +820,7 @@ func (c *SandboxController) createSandbox(ctx context.Context, co *compute.Sandb
 			c.deallocateNetwork(ctx, ep)
 
 			// Clean up any subcontainers that might have been created
-			c.destroySubContainers(ctx, co)
+			c.destroySubContainers(ctx, co.ID)
 
 			// Clean up the pause container using the common cleanup function
 			c.cleanupContainer(ctx, container)
@@ -1002,10 +1002,10 @@ func (c *SandboxController) addEndpoint(
 	return nil
 }
 
-func (c *SandboxController) deleteEndpoints(ctx context.Context, sb *compute.Sandbox, sandboxIPs map[string]bool) error {
+func (c *SandboxController) deleteEndpoints(ctx context.Context, id entity.Id, sandboxIPs map[string]bool) error {
 	// If no IPs found, nothing to delete
 	if len(sandboxIPs) == 0 {
-		c.Log.Debug("no sandbox IPs found, skipping endpoint deletion", "sandbox_id", sb.ID)
+		c.Log.Debug("no sandbox IPs found, skipping endpoint deletion", "sandbox_id", id)
 		return nil
 	}
 
@@ -1015,7 +1015,7 @@ func (c *SandboxController) deleteEndpoints(ctx context.Context, sb *compute.San
 		return fmt.Errorf("failed to list endpoints: %w", err)
 	}
 
-	c.Log.Debug("considering endpoints for deletion", "sandbox_id", sb.ID, "endpoints_count", len(endpoints.Values()), "sandbox_ips", sandboxIPs)
+	c.Log.Debug("considering endpoints for deletion", "sandbox_id", id, "endpoints_count", len(endpoints.Values()), "sandbox_ips", sandboxIPs)
 
 	// Delete any endpoints that contain our sandbox's IPs
 	for _, epEntity := range endpoints.Values() {
@@ -1032,7 +1032,7 @@ func (c *SandboxController) deleteEndpoints(ctx context.Context, sb *compute.San
 		}
 
 		if shouldDelete {
-			c.Log.Info("deleting endpoints for sandbox", "sandbox_id", sb.ID, "endpoint_id", ep.ID)
+			c.Log.Info("deleting endpoints for sandbox", "sandbox_id", id, "endpoint_id", ep.ID)
 			_, err = c.EAC.Delete(ctx, ep.ID.String())
 			if err != nil {
 				c.Log.Error("failed to delete endpoint", "id", ep.ID, "error", err)
@@ -1880,28 +1880,40 @@ func (c *SandboxController) buildSubContainerSpec(
 	return opts, nil
 }
 
-func (c *SandboxController) destroySubContainers(ctx context.Context, sb *compute.Sandbox) error {
-	if len(sb.Spec.Container) == 0 {
-		return nil
+func (c *SandboxController) destroySubContainers(ctx context.Context, id entity.Id) error {
+	ctx = namespaces.WithNamespace(ctx, c.Namespace)
+
+	// Discover subcontainers from containerd
+	containerList, err := c.CC.Containers(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to list containers: %w", err)
 	}
 
-	ctx = namespaces.WithNamespace(ctx, c.Namespace)
+	prefix := c.containerPrefix(id)
+	var containerIds []string
+	for _, cont := range containerList {
+		containerID := cont.ID()
+		if strings.HasPrefix(containerID, prefix+"-") {
+			containerIds = append(containerIds, containerID)
+		}
+	}
+
+	if len(containerIds) == 0 {
+		c.Log.Debug("no subcontainers found to destroy", "id", id)
+		return nil
+	}
 
 	// Set up timeout for the entire operation (1 minute max)
 	timeout := 60 * time.Second
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	c.Log.Info("starting subcontainer destruction", "id", sb.ID, "containers", len(sb.Spec.Container), "timeout", timeout)
+	c.Log.Info("starting subcontainer destruction", "id", id, "containers", len(containerIds), "timeout", timeout)
 
-	// Track containers that need to be destroyed
-	containerIds := make([]string, 0, len(sb.Spec.Container))
-	for _, container := range sb.Spec.Container {
-		id := fmt.Sprintf("%s-%s", c.containerPrefix(sb.ID), container.Name)
-		containerIds = append(containerIds, id)
-		// Stop port monitoring for this container
+	// Stop port monitoring for all containers
+	for _, containerID := range containerIds {
 		if c.portMonitor != nil {
-			c.portMonitor.StopMonitoring(id)
+			c.portMonitor.StopMonitoring(containerID)
 		}
 	}
 
@@ -1970,13 +1982,13 @@ func (c *SandboxController) destroySubContainers(ctx context.Context, sb *comput
 
 		// If no containers remain, we're done
 		if len(remainingContainers) == 0 {
-			c.Log.Info("all subcontainers destroyed successfully", "id", sb.ID)
+			c.Log.Info("all subcontainers destroyed successfully", "id", id)
 			return nil
 		}
 
 		// Update the list of containers to check in the next iteration
 		containerIds = remainingContainers
-		c.Log.Debug("waiting for containers to be destroyed", "id", sb.ID, "remaining", len(containerIds), "retry_in", retryInterval)
+		c.Log.Debug("waiting for containers to be destroyed", "id", id, "remaining", len(containerIds), "retry_in", retryInterval)
 
 		// Wait before retrying
 		select {
@@ -2010,7 +2022,6 @@ func (c *SandboxController) stopSandbox(ctx context.Context, id entity.Id) error
 	// Get LogEntity from pause container labels for metrics cleanup
 	var le string
 	var sandboxIPs map[string]bool
-	var subcontainers []compute.SandboxSpecContainer
 
 	pauseID := c.pauseContainerId(id)
 	container, err := c.CC.LoadContainer(ctx, pauseID)
@@ -2048,33 +2059,9 @@ func (c *SandboxController) stopSandbox(ctx context.Context, id entity.Id) error
 		c.Log.Error("failed to remove monitoring metrics", "id", id, "error", err)
 	}
 
-	// Discover subcontainers from containerd
-	containerList, err := c.CC.Containers(ctx)
-	if err != nil {
-		c.Log.Warn("failed to list containers for subcontainer discovery", "id", id, "err", err)
-	} else {
-		prefix := c.containerPrefix(id)
-		for _, cont := range containerList {
-			containerID := cont.ID()
-			if strings.HasPrefix(containerID, prefix+"-") {
-				name := strings.TrimPrefix(containerID, prefix+"-")
-				subcontainers = append(subcontainers, compute.SandboxSpecContainer{
-					Name: name,
-				})
-			}
-		}
-	}
-
-	// Build minimal sandbox struct for destroySubContainers
-	sb := &compute.Sandbox{
-		ID: id,
-		Spec: compute.SandboxSpec{
-			Container: subcontainers,
-		},
-	}
-
-	c.Log.Debug("destroying subcontainers", "id", id, "count", len(subcontainers))
-	err = c.destroySubContainers(ctx, sb)
+	// Destroy subcontainers - this will discover them from containerd
+	c.Log.Debug("destroying subcontainers", "id", id)
+	err = c.destroySubContainers(ctx, id)
 	if err != nil {
 		c.Log.Error("failed to destroy subcontainers", "id", id, "err", err)
 		// Continue with cleanup even if this fails
@@ -2141,7 +2128,7 @@ func (c *SandboxController) stopSandbox(ctx context.Context, id entity.Id) error
 	c.Log.Info("sandbox retired", "id", id, "status", compute.DEAD)
 
 	// Clean up endpoints associated with this sandbox
-	err = c.deleteEndpoints(ctx, sb, sandboxIPs)
+	err = c.deleteEndpoints(ctx, id, sandboxIPs)
 	if err != nil {
 		c.Log.Error("failed to delete endpoints for sandbox", "id", id, "error", err)
 	}
