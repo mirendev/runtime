@@ -62,12 +62,22 @@ func TestActivatorLeaseOperations(t *testing.T) {
 		tracker:     tracker,
 	}
 
+	poolID := entity.Id("pool-1")
 	activator := &localActivator{
 		log: log,
-		versions: map[verKey]*verSandboxes{
+		versions: map[verKey]*versionPoolRef{
 			{"ver-1", "web"}: {
-				ver:       testVer,
+				ver:      testVer,
+				poolID:   poolID,
+				service:  "web",
+				strategy: strategy,
+			},
+		},
+		poolSandboxes: map[entity.Id]*poolSandboxes{
+			poolID: {
+				pool:      &compute_v1alpha.SandboxPool{ID: poolID},
 				sandboxes: []*sandbox{testSandbox},
+				service:   "web",
 				strategy:  strategy,
 			},
 		},
@@ -98,19 +108,23 @@ func TestActivatorConcurrentSafety(t *testing.T) {
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 
 	activator := &localActivator{
-		log:      log,
-		versions: make(map[verKey]*verSandboxes),
+		log:           log,
+		versions:      make(map[verKey]*versionPoolRef),
+		poolSandboxes: make(map[entity.Id]*poolSandboxes),
 	}
 
 	// Run multiple goroutines accessing the versions map
 	done := make(chan bool, 3)
 
+	poolID := entity.Id("pool-1")
+
 	// Goroutine 1: Add versions
 	go func() {
 		for i := 0; i < 100; i++ {
 			activator.mu.Lock()
-			activator.versions[verKey{ver: "ver-1", service: "web"}] = &verSandboxes{
-				sandboxes: []*sandbox{},
+			activator.versions[verKey{ver: "ver-1", service: "web"}] = &versionPoolRef{
+				poolID:  poolID,
+				service: "web",
 			}
 			activator.mu.Unlock()
 		}
@@ -192,11 +206,27 @@ func TestActivatorRecoverSandboxesWithEntityServer(t *testing.T) {
 		},
 	}
 
+	// Create a pool entity first
+	pool := compute_v1alpha.SandboxPool{
+		Service:              "web",
+		DesiredInstances:     1,
+		ReferencedByVersions: []entity.Id{appVer.ID},
+		SandboxSpec: compute_v1alpha.SandboxSpec{
+			Version: appVer.ID,
+		},
+	}
+
+	poolID, err := server.Client.Create(ctx, "test-pool", &pool)
+	require.NoError(t, err)
+	pool.ID = poolID
+
 	var rpcE entityserver_v1alpha.Entity
+
+	// Now create sandbox with pool label
 	rpcE.SetAttrs(entity.New(
 		(&core_v1alpha.Metadata{
 			Name:   "test-sandbox",
-			Labels: types.LabelSet("service", "web"),
+			Labels: types.LabelSet("service", "web", "pool", poolID.String()),
 		}).Encode,
 		entity.Ident, entity.MustKeyword("sandbox/test-sb"),
 		sb.Encode,
@@ -209,23 +239,27 @@ func TestActivatorRecoverSandboxesWithEntityServer(t *testing.T) {
 	// Create activator and trigger recovery
 	log := testutils.TestLogger(t)
 	activator := &localActivator{
-		log:      log,
-		eac:      server.EAC,
-		versions: make(map[verKey]*verSandboxes),
-		pools:    make(map[verKey]*poolState),
+		log:           log,
+		eac:           server.EAC,
+		versions:      make(map[verKey]*versionPoolRef),
+		poolSandboxes: make(map[entity.Id]*poolSandboxes),
+		pools:         make(map[verKey]*poolState),
 	}
+
+	// Recover pools first, then sandboxes
+	err = activator.recoverPools(ctx)
+	require.NoError(t, err)
 
 	err = activator.recoverSandboxes(ctx)
 	require.NoError(t, err)
 
 	// Verify sandbox was recovered
-	key := verKey{appVer.ID.String(), "web"}
-	vs, ok := activator.versions[key]
-	require.True(t, ok, "version should be in map")
-	require.Len(t, vs.sandboxes, 1, "should have recovered 1 running sandbox")
+	ps, ok := activator.poolSandboxes[poolID]
+	require.True(t, ok, "pool should be in map")
+	require.Len(t, ps.sandboxes, 1, "should have recovered 1 running sandbox")
 
 	// Verify sandbox details
-	recoveredSb := vs.sandboxes[0]
+	recoveredSb := ps.sandboxes[0]
 	assert.Equal(t, sb.ID, recoveredSb.sandbox.ID)
 	assert.Equal(t, compute_v1alpha.RUNNING, recoveredSb.sandbox.Status)
 	assert.Equal(t, "http://10.0.0.100:8080", recoveredSb.url)
@@ -270,6 +304,19 @@ func TestActivatorRecoveryIntegration(t *testing.T) {
 	require.NoError(t, err)
 	appVer.ID = verID
 
+	// Create a pool for the sandboxes
+	pool := compute_v1alpha.SandboxPool{
+		Service:              "api",
+		DesiredInstances:     3,
+		ReferencedByVersions: []entity.Id{appVer.ID},
+		SandboxSpec: compute_v1alpha.SandboxSpec{
+			Version: appVer.ID,
+		},
+	}
+	poolID, err := client.Create(ctx, "integration-pool", &pool)
+	require.NoError(t, err)
+	pool.ID = poolID
+
 	// Create multiple running sandboxes
 	for i := 0; i < 3; i++ {
 		sb := compute_v1alpha.Sandbox{
@@ -286,7 +333,7 @@ func TestActivatorRecoveryIntegration(t *testing.T) {
 		rpcE.SetAttrs(entity.New(
 			(&core_v1alpha.Metadata{
 				Name:   "sandbox-" + string(rune('a'+i)),
-				Labels: types.LabelSet("service", "api"),
+				Labels: types.LabelSet("service", "api", "pool", poolID.String()),
 			}).Encode,
 			entity.Ident, entity.MustKeyword("sandbox/sb-"+string(rune('a'+i))),
 			sb.Encode,
@@ -305,12 +352,16 @@ func TestActivatorRecoveryIntegration(t *testing.T) {
 
 	// Verify recovery
 	key := verKey{appVer.ID.String(), "api"}
-	vs, ok := activator.versions[key]
+	versionRef, ok := activator.versions[key]
 	require.True(t, ok, "version should be tracked")
-	assert.Len(t, vs.sandboxes, 3, "should recover all 3 sandboxes")
+
+	// Get the pool sandboxes
+	ps, ok := activator.poolSandboxes[versionRef.poolID]
+	require.True(t, ok, "pool should be tracked")
+	assert.Len(t, ps.sandboxes, 3, "should recover all 3 sandboxes")
 
 	// Verify strategy configuration
-	assert.Equal(t, 0, vs.strategy.DesiredInstances()) // Auto mode scales to zero
+	assert.Equal(t, 0, ps.strategy.DesiredInstances()) // Auto mode scales to zero
 }
 
 // TestActivatorAcquireLeaseFromDeadSandbox verifies that DEAD sandboxes
@@ -372,13 +423,23 @@ func TestActivatorAcquireLeaseFromDeadSandbox(t *testing.T) {
 	}
 
 	log := testutils.TestLogger(t)
+	poolID := entity.Id("pool-1")
 	activator := &localActivator{
 		log: log,
 		eac: server.EAC,
-		versions: map[verKey]*verSandboxes{
+		versions: map[verKey]*versionPoolRef{
 			{testVer.ID.String(), "web"}: {
-				ver:       testVer,
+				ver:      testVer,
+				poolID:   poolID,
+				service:  "web",
+				strategy: strategy,
+			},
+		},
+		poolSandboxes: map[entity.Id]*poolSandboxes{
+			poolID: {
+				pool:      &compute_v1alpha.SandboxPool{ID: poolID},
 				sandboxes: []*sandbox{testSandbox},
+				service:   "web",
 				strategy:  strategy,
 			},
 		},
@@ -453,12 +514,22 @@ func TestActivatorRemovesDeadSandbox(t *testing.T) {
 		tracker:     tracker,
 	}
 
+	poolID := entity.Id("pool-1")
 	activator := &localActivator{
 		log: log,
-		versions: map[verKey]*verSandboxes{
+		versions: map[verKey]*versionPoolRef{
 			{"ver-1", "web"}: {
-				ver:       testVer,
+				ver:      testVer,
+				poolID:   poolID,
+				service:  "web",
+				strategy: strategy,
+			},
+		},
+		poolSandboxes: map[entity.Id]*poolSandboxes{
+			poolID: {
+				pool:      &compute_v1alpha.SandboxPool{ID: poolID},
 				sandboxes: []*sandbox{testSandbox},
+				service:   "web",
 				strategy:  strategy,
 			},
 		},
@@ -467,20 +538,19 @@ func TestActivatorRemovesDeadSandbox(t *testing.T) {
 	}
 
 	// Verify sandbox is initially tracked
-	key := verKey{"ver-1", "web"}
-	require.Len(t, activator.versions[key].sandboxes, 1, "Should have 1 sandbox initially")
+	require.Len(t, activator.poolSandboxes[poolID].sandboxes, 1, "Should have 1 sandbox initially")
 
 	// Simulate the sandbox transitioning to DEAD status (as watchSandboxes would do)
 	activator.mu.Lock()
 
-	// Find the tracked sandbox and key
+	// Find the tracked sandbox and pool
 	var trackedSandbox *sandbox
-	var trackedKey verKey
-	for k, vs := range activator.versions {
-		for _, s := range vs.sandboxes {
+	var trackedPoolID entity.Id
+	for pid, ps := range activator.poolSandboxes {
+		for _, s := range ps.sandboxes {
 			if s.sandbox.ID == "sb-1" {
 				trackedSandbox = s
-				trackedKey = k
+				trackedPoolID = pid
 				break
 			}
 		}
@@ -495,17 +565,17 @@ func TestActivatorRemovesDeadSandbox(t *testing.T) {
 	trackedSandbox.sandbox.Status = compute_v1alpha.DEAD
 
 	// Remove the sandbox from tracking (simulating watchSandboxes behavior)
-	if vs, ok := activator.versions[trackedKey]; ok {
-		for i, s := range vs.sandboxes {
+	if ps, ok := activator.poolSandboxes[trackedPoolID]; ok {
+		for i, s := range ps.sandboxes {
 			if s.sandbox.ID == "sb-1" {
-				vs.sandboxes[i] = vs.sandboxes[len(vs.sandboxes)-1]
-				vs.sandboxes = vs.sandboxes[:len(vs.sandboxes)-1]
+				ps.sandboxes[i] = ps.sandboxes[len(ps.sandboxes)-1]
+				ps.sandboxes = ps.sandboxes[:len(ps.sandboxes)-1]
 				break
 			}
 		}
 
-		if len(vs.sandboxes) == 0 {
-			delete(activator.versions, trackedKey)
+		if len(ps.sandboxes) == 0 {
+			delete(activator.poolSandboxes, trackedPoolID)
 		}
 	}
 
@@ -515,8 +585,8 @@ func TestActivatorRemovesDeadSandbox(t *testing.T) {
 	activator.mu.RLock()
 	defer activator.mu.RUnlock()
 
-	if vs, exists := activator.versions[key]; exists {
-		assert.Len(t, vs.sandboxes, 0, "DEAD sandbox should be removed from sandboxes slice")
+	if ps, exists := activator.poolSandboxes[poolID]; exists {
+		assert.Len(t, ps.sandboxes, 0, "DEAD sandbox should be removed from sandboxes slice")
 	}
 
 	// Optionally, the entire verKey might be removed if it was the only sandbox
@@ -592,7 +662,8 @@ func TestActivatorPendingSandboxAwareness(t *testing.T) {
 	activator := &localActivator{
 		log:             log,
 		eac:             server.EAC,
-		versions:        make(map[verKey]*verSandboxes),
+		versions:        make(map[verKey]*versionPoolRef),
+		poolSandboxes:   make(map[entity.Id]*poolSandboxes),
 		pools:           make(map[verKey]*poolState),
 		newSandboxChans: make(map[verKey][]chan struct{}),
 	}
@@ -613,11 +684,19 @@ func TestActivatorPendingSandboxAwareness(t *testing.T) {
 		tracker:     tracker,
 	}
 
+	poolID := entity.Id("pool-1")
 	key := verKey{testVer.ID.String(), "web"}
 	activator.mu.Lock()
-	activator.versions[key] = &verSandboxes{
-		ver:       testVer,
+	activator.versions[key] = &versionPoolRef{
+		ver:      testVer,
+		poolID:   poolID,
+		service:  "web",
+		strategy: strategy,
+	}
+	activator.poolSandboxes[poolID] = &poolSandboxes{
+		pool:      &compute_v1alpha.SandboxPool{ID: poolID},
 		sandboxes: []*sandbox{pendingSb},
+		service:   "web",
 		strategy:  strategy,
 	}
 	activator.mu.Unlock()
@@ -735,7 +814,8 @@ func TestActivatorNoPendingCreatesPool(t *testing.T) {
 	activator := &localActivator{
 		log:             log,
 		eac:             server.EAC,
-		versions:        make(map[verKey]*verSandboxes),
+		versions:        make(map[verKey]*versionPoolRef),
+		poolSandboxes:   make(map[entity.Id]*poolSandboxes),
 		pools:           make(map[verKey]*poolState),
 		newSandboxChans: make(map[verKey][]chan struct{}),
 	}
@@ -766,16 +846,25 @@ func TestActivatorNoPendingCreatesPool(t *testing.T) {
 		}
 
 		activator.mu.Lock()
-		vs, ok := activator.versions[key]
+		versionRef, ok := activator.versions[key]
 		if !ok {
-			vs = &verSandboxes{
-				ver:       testVer,
+			poolID := entity.Id("pool-1")
+			versionRef = &versionPoolRef{
+				ver:      testVer,
+				poolID:   poolID,
+				service:  "web",
+				strategy: strategy,
+			}
+			activator.versions[key] = versionRef
+			activator.poolSandboxes[poolID] = &poolSandboxes{
+				pool:      &compute_v1alpha.SandboxPool{ID: poolID},
 				sandboxes: []*sandbox{},
+				service:   "web",
 				strategy:  strategy,
 			}
-			activator.versions[key] = vs
 		}
-		vs.sandboxes = append(vs.sandboxes, newSandbox)
+		ps := activator.poolSandboxes[versionRef.poolID]
+		ps.sandboxes = append(ps.sandboxes, newSandbox)
 
 		// Notify any waiters
 		if chans, ok := activator.newSandboxChans[key]; ok {
@@ -997,7 +1086,8 @@ func TestActivatorFindsLauncherCreatedPool(t *testing.T) {
 	activator := &localActivator{
 		log:             log,
 		eac:             server.EAC,
-		versions:        make(map[verKey]*verSandboxes),
+		versions:        make(map[verKey]*versionPoolRef),
+		poolSandboxes:   make(map[entity.Id]*poolSandboxes),
 		pools:           make(map[verKey]*poolState),
 		newSandboxChans: make(map[verKey][]chan struct{}),
 	}
@@ -1027,16 +1117,25 @@ func TestActivatorFindsLauncherCreatedPool(t *testing.T) {
 		}
 
 		activator.mu.Lock()
-		vs, ok := activator.versions[key]
+		versionRef, ok := activator.versions[key]
 		if !ok {
-			vs = &verSandboxes{
-				ver:       testVer,
+			poolID := entity.Id("pool-1")
+			versionRef = &versionPoolRef{
+				ver:      testVer,
+				poolID:   poolID,
+				service:  "web",
+				strategy: strategy,
+			}
+			activator.versions[key] = versionRef
+			activator.poolSandboxes[poolID] = &poolSandboxes{
+				pool:      &compute_v1alpha.SandboxPool{ID: poolID},
 				sandboxes: []*sandbox{},
+				service:   "web",
 				strategy:  strategy,
 			}
-			activator.versions[key] = vs
 		}
-		vs.sandboxes = append(vs.sandboxes, newSandbox)
+		ps := activator.poolSandboxes[versionRef.poolID]
+		ps.sandboxes = append(ps.sandboxes, newSandbox)
 
 		// Notify any waiters
 		if chans, ok := activator.newSandboxChans[key]; ok {
@@ -1225,7 +1324,8 @@ func TestFindPoolByReferencedByVersions(t *testing.T) {
 	activator := &localActivator{
 		log:             log,
 		eac:             server.EAC,
-		versions:        make(map[verKey]*verSandboxes),
+		versions:        make(map[verKey]*versionPoolRef),
+		poolSandboxes:   make(map[entity.Id]*poolSandboxes),
 		pools:           make(map[verKey]*poolState),
 		newSandboxChans: make(map[verKey][]chan struct{}),
 	}
@@ -1310,7 +1410,8 @@ func TestPoolIncrementWithOCC(t *testing.T) {
 	activator := &localActivator{
 		log:             log,
 		eac:             server.EAC,
-		versions:        make(map[verKey]*verSandboxes),
+		versions:        make(map[verKey]*versionPoolRef),
+		poolSandboxes:   make(map[entity.Id]*poolSandboxes),
 		pools:           make(map[verKey]*poolState),
 		newSandboxChans: make(map[verKey][]chan struct{}),
 	}
@@ -1470,10 +1571,11 @@ func TestConcurrentPoolIncrement(t *testing.T) {
 	// Create activator and pre-populate cache
 	log := testutils.TestDebugLogger(t)
 	activator := &localActivator{
-		log:      log,
-		eac:      server.EAC,
-		versions: make(map[verKey]*verSandboxes),
-		pools:    make(map[verKey]*poolState),
+		log:           log,
+		eac:           server.EAC,
+		versions:      make(map[verKey]*versionPoolRef),
+		poolSandboxes: make(map[entity.Id]*poolSandboxes),
+		pools:         make(map[verKey]*poolState),
 	}
 
 	key := verKey{testVer.ID.String(), "web"}
