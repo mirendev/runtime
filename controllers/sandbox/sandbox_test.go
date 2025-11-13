@@ -502,7 +502,7 @@ func TestSandbox(t *testing.T) {
 			cpu, err = co.Metrics.CPUUsage.CurrentCPUUsage(id.String())
 			r.NoError(err)
 
-			if cpu > 0 {
+			if cpu > 0.5 {
 				break
 			}
 		}
