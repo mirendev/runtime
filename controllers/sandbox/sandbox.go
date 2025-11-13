@@ -863,7 +863,7 @@ func (c *SandboxController) updateSandbox(ctx context.Context, sb *compute.Sandb
 		return fmt.Errorf("failed to delete existing sandbox: %w", err)
 	}
 
-	return c.createSandbox(ctx, sb, meta)
+	return c.createSandbox(ctx, sb, meta, true)
 }
 
 func (c *SandboxController) Create(ctx context.Context, co *compute.Sandbox, meta *entity.Meta) error {
@@ -917,14 +917,14 @@ func (c *SandboxController) Create(ctx context.Context, co *compute.Sandbox, met
 			}
 		}
 
-		return c.createSandbox(ctx, co, meta)
+		return c.createSandbox(ctx, co, meta, false)
 	default:
 		c.Log.Warn("ignoring sandbox status", "status", co.Status)
 		return nil
 	}
 }
 
-func (c *SandboxController) createSandbox(ctx context.Context, co *compute.Sandbox, meta *entity.Meta) error {
+func (c *SandboxController) createSandbox(ctx context.Context, co *compute.Sandbox, meta *entity.Meta, recreate bool) error {
 	c.Log.Debug("creating sandbox", "id", co.ID)
 
 	ctx = namespaces.WithNamespace(ctx, c.Namespace)
@@ -1052,23 +1052,28 @@ func (c *SandboxController) createSandbox(ctx context.Context, co *compute.Sandb
 		}
 	}
 
-	// Only set status to RUNNING if it hasn't already been marked STOPPED or DEAD
-	// (The monitoring goroutine may have already detected a crash)
-	// Fetch current status to avoid race condition
-	resp, err := c.EAC.Get(ctx, co.ID.String())
-	if err != nil {
-		c.Log.Warn("failed to fetch current sandbox status before update", "id", co.ID, "error", err)
-		// Fallthrough to set RUNNING anyway
+	// If we're doing a recreate, then we know it's safe to set it to running.
+	if recreate {
 		co.Status = compute.RUNNING
 	} else {
-		var currentSandbox compute.Sandbox
-		currentSandbox.Decode(resp.Entity().Entity())
-		if currentSandbox.Status == compute.DEAD || currentSandbox.Status == compute.STOPPED {
-			c.Log.Info("sandbox already in terminal state, not overwriting to RUNNING",
-				"id", co.ID, "current_status", currentSandbox.Status)
-			return nil
+		// Only set status to RUNNING if it hasn't already been marked STOPPED or DEAD
+		// (The monitoring goroutine may have already detected a crash)
+		// Fetch current status to avoid race condition
+		resp, err := c.EAC.Get(ctx, co.ID.String())
+		if err != nil {
+			c.Log.Warn("failed to fetch current sandbox status before update", "id", co.ID, "error", err)
+			// Fallthrough to set RUNNING anyway
+			co.Status = compute.RUNNING
+		} else {
+			var currentSandbox compute.Sandbox
+			currentSandbox.Decode(resp.Entity().Entity())
+			if currentSandbox.Status == compute.DEAD || currentSandbox.Status == compute.STOPPED {
+				c.Log.Info("sandbox already in terminal state, not overwriting to RUNNING",
+					"id", co.ID, "current_status", currentSandbox.Status)
+				return nil
+			}
+			co.Status = compute.RUNNING
 		}
-		co.Status = compute.RUNNING
 	}
 
 	// The controller will detect the updates and sync them back
