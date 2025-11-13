@@ -346,6 +346,17 @@ kinds:
       type: sandbox_spec
       doc: Complete sandbox specification template (includes version ref to AppVersion)
 
+    # Labels to apply to sandboxes created from this pool
+    sandbox_labels:
+      type: label
+      doc: Labels that will be added to the metadata of sandboxes created from this pool
+      many: true
+
+    # Prefix for sandbox entity names created from this pool
+    sandbox_prefix:
+      type: string
+      doc: Prefix used when generating sandbox entity names (e.g., "myapp-web" produces "myapp-web-abc123")
+
     # Desired state (managed by Activator based on traffic demand)
     desired_instances:
       type: int
