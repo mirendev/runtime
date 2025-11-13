@@ -74,7 +74,6 @@ func (l *Launcher) reconcileAppVersion(ctx context.Context, app *core_v1alpha.Ap
 				"service", svc.Name,
 				"error", err)
 			// Continue with other services even if one fails
-			continue
 		}
 	}
 
@@ -255,12 +254,6 @@ func (l *Launcher) buildSandboxSpec(
 		LogAttribute: types.LabelSet("stage", "app-run", "service", serviceName),
 	}
 
-	// Determine port from config or default to 3000
-	port := int64(3000)
-	if ver.Config.Port > 0 {
-		port = ver.Config.Port
-	}
-
 	appCont := compute_v1alpha.SandboxSpecContainer{
 		Name:  "app",
 		Image: image,
@@ -269,13 +262,25 @@ func (l *Launcher) buildSandboxSpec(
 			"MIREN_VERSION=" + ver.Version,
 		},
 		Directory: "/app",
-		Port: []compute_v1alpha.SandboxSpecContainerPort{
+	}
+
+	// TODO per-service port config? we only have global port now so we
+	// assume it only applies to our "web" service (the default service)
+	if serviceName == "web" {
+		// Determine port from config or default to 3000
+		port := int64(3000)
+
+		if ver.Config.Port > 0 {
+			port = ver.Config.Port
+		}
+
+		appCont.Port = []compute_v1alpha.SandboxSpecContainerPort{
 			{
 				Port: port,
 				Name: "http",
 				Type: "http",
 			},
-		},
+		}
 	}
 
 	// Add global config env vars
