@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -123,6 +124,20 @@ func (s *MetaStack) hasDir(path string) bool {
 
 func (s *MetaStack) readFile(path string) ([]byte, error) {
 	return os.ReadFile(filepath.Join(s.dir, path))
+}
+
+func (s *MetaStack) detectInFile(path, re string) bool {
+	content, err := s.readFile(path)
+	if err != nil {
+		return false
+	}
+
+	r, err := regexp.Compile(re)
+	if err != nil {
+		return false
+	}
+
+	return r.Match(content)
 }
 
 func (s *MetaStack) applyOnBuild(cur llb.State, opts BuildOptions) llb.State {
@@ -509,7 +524,8 @@ func (s *NodeStack) Name() string {
 }
 
 func (s *NodeStack) Detect() bool {
-	return s.hasFile("package.json") && !s.hasFile("bun.lock")
+	return s.hasFile("package.json") &&
+		(s.hasFile("package-lock.json") || s.hasFile("yarn.lock") || s.detectInFile("Procfile", `web:\s+(node|npm|yarn)`))
 }
 
 func (s *NodeStack) GenerateLLB(dir string, opts BuildOptions) (*llb.State, error) {
@@ -581,7 +597,8 @@ func (s *BunStack) Name() string {
 }
 
 func (s *BunStack) Detect() bool {
-	return s.hasFile("package.json") && s.hasFile("bun.lock")
+	return s.hasFile("package.json") &&
+		(s.hasFile("bun.lock") || s.detectInFile("Procfile", `web:\s+bun`))
 }
 
 func (s *BunStack) GenerateLLB(dir string, opts BuildOptions) (*llb.State, error) {
