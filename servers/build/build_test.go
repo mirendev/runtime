@@ -445,6 +445,95 @@ func TestBuildServicesConfig(t *testing.T) {
 			},
 		},
 		{
+			name: "service with environment variables",
+			appConfig: &appconfig.AppConfig{
+				Services: map[string]*appconfig.ServiceConfig{
+					"web": {
+						Command: "npm start",
+						Concurrency: &appconfig.ServiceConcurrencyConfig{
+							Mode:                "auto",
+							RequestsPerInstance: 10,
+						},
+						EnvVars: []appconfig.AppEnvVar{
+							{Name: "NODE_ENV", Value: "production"},
+							{Name: "PORT", Value: "3000"},
+						},
+					},
+				},
+			},
+			procfileServices: nil,
+			validateServices: func(t *testing.T, services []core_v1alpha.Services) {
+				require.Len(t, services, 1)
+				svc := services[0]
+				assert.Equal(t, "web", svc.Name)
+
+				require.Len(t, svc.Env, 2, "should have two environment variables")
+				assert.Equal(t, "NODE_ENV", svc.Env[0].Key)
+				assert.Equal(t, "production", svc.Env[0].Value)
+				assert.Equal(t, "PORT", svc.Env[1].Key)
+				assert.Equal(t, "3000", svc.Env[1].Value)
+			},
+		},
+		{
+			name: "multiple services with different environment variables",
+			appConfig: &appconfig.AppConfig{
+				Services: map[string]*appconfig.ServiceConfig{
+					"web": {
+						Concurrency: &appconfig.ServiceConcurrencyConfig{
+							Mode:                "auto",
+							RequestsPerInstance: 10,
+						},
+						EnvVars: []appconfig.AppEnvVar{
+							{Name: "NODE_ENV", Value: "production"},
+						},
+					},
+					"worker": {
+						Concurrency: &appconfig.ServiceConcurrencyConfig{
+							Mode:         "fixed",
+							NumInstances: 2,
+						},
+						EnvVars: []appconfig.AppEnvVar{
+							{Name: "WORKER_THREADS", Value: "4"},
+							{Name: "QUEUE_NAME", Value: "default"},
+						},
+					},
+					"scheduler": {
+						Concurrency: &appconfig.ServiceConcurrencyConfig{
+							Mode:         "fixed",
+							NumInstances: 1,
+						},
+					},
+				},
+			},
+			procfileServices: nil,
+			validateServices: func(t *testing.T, services []core_v1alpha.Services) {
+				require.Len(t, services, 3)
+
+				serviceMap := make(map[string]core_v1alpha.Services)
+				for _, svc := range services {
+					serviceMap[svc.Name] = svc
+				}
+
+				require.Contains(t, serviceMap, "web")
+				webSvc := serviceMap["web"]
+				require.Len(t, webSvc.Env, 1)
+				assert.Equal(t, "NODE_ENV", webSvc.Env[0].Key)
+				assert.Equal(t, "production", webSvc.Env[0].Value)
+
+				require.Contains(t, serviceMap, "worker")
+				workerSvc := serviceMap["worker"]
+				require.Len(t, workerSvc.Env, 2)
+				assert.Equal(t, "WORKER_THREADS", workerSvc.Env[0].Key)
+				assert.Equal(t, "4", workerSvc.Env[0].Value)
+				assert.Equal(t, "QUEUE_NAME", workerSvc.Env[1].Key)
+				assert.Equal(t, "default", workerSvc.Env[1].Value)
+
+				require.Contains(t, serviceMap, "scheduler")
+				schedulerSvc := serviceMap["scheduler"]
+				assert.Len(t, schedulerSvc.Env, 0, "scheduler should have no env vars")
+			},
+		},
+		{
 			name:             "no config no procfile",
 			appConfig:        nil,
 			procfileServices: nil,

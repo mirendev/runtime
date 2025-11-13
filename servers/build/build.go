@@ -140,6 +140,17 @@ func buildServicesConfig(appConfig *appconfig.AppConfig, procfileServices map[st
 					})
 				}
 			}
+
+			// Convert service-specific environment variables
+			if len(serviceConfig.EnvVars) > 0 {
+				svc.Env = make([]core_v1alpha.Env, 0, len(serviceConfig.EnvVars))
+				for _, envVar := range serviceConfig.EnvVars {
+					svc.Env = append(svc.Env, core_v1alpha.Env{
+						Key:   envVar.Name,
+						Value: envVar.Value,
+					})
+				}
+			}
 		}
 
 		services = append(services, svc)
