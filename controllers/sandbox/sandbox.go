@@ -894,7 +894,7 @@ func (c *SandboxController) Create(ctx context.Context, co *compute.Sandbox, met
 				if co.Status == compute.RUNNING {
 					c.Log.Info("marking unhealthy sandbox as DEAD", "id", co.ID)
 					patchAttrs := entity.New(
-						entity.Keyword(entity.DBId, co.ID.String()),
+						entity.Ref(entity.DBId, co.ID),
 						(&compute.Sandbox{
 							Status: compute.DEAD,
 						}).Encode,
@@ -1755,7 +1755,7 @@ func (c *SandboxController) monitorTaskExit(
 		// - Cleans up containers
 		// - Marks as DEAD afterward
 		patchAttrs := entity.New(
-			entity.Keyword(entity.DBId, sb.ID.String()),
+			entity.Ref(entity.DBId, sb.ID),
 			(&compute.Sandbox{
 				Status: compute.STOPPED,
 			}).Encode,
