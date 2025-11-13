@@ -294,13 +294,13 @@ func (c *ReconcileController) runWorker(ctx context.Context) {
 			if entry, inFlight := c.inFlight[event.Id]; inFlight {
 				// Entity is already in-flight, queue event to the in-flight entry
 				entry.pendingEvents = append(entry.pendingEvents, event)
-				c.inFlightMu.Unlock()
 				c.Log.Debug("Entity already in-flight, queuing to pending events",
 					"entity", event.Id,
 					"worker", WorkerId(ctx),
 					"inFlightRev", entry.revision,
 					"eventRev", event.Rev,
 					"pendingCount", len(entry.pendingEvents))
+				c.inFlightMu.Unlock()
 				continue
 			}
 
