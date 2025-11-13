@@ -903,14 +903,13 @@ func (a *localActivator) watchSandboxes(ctx context.Context) {
 			}
 			a.mu.RUnlock()
 
-			// If already tracked, acquire write lock to update status
+			// If already tracked, first check if we need to build URL (without holding lock)
 			if trackedSandbox != nil {
-				a.mu.Lock()
-				oldStatus := trackedSandbox.sandbox.Status
-				trackedSandbox.sandbox.Status = sb.Status
+				var newURL string
 
+				// Do expensive RPC/decode work without holding the lock
 				// Update URL if sandbox now has a network address (e.g., PENDING -> RUNNING transition)
-				if len(sb.Network) > 0 && trackedSandbox.url == "" {
+				if len(sb.Network) > 0 {
 					// Need to fetch version to get the port configuration
 					sbVersion := sb.Spec.Version
 					if sbVersion != "" {
@@ -924,11 +923,21 @@ func (a *localActivator) watchSandboxes(ctx context.Context) {
 								port = appVer.Config.Port
 							}
 							if addr, err := netutil.BuildHTTPURL(sb.Network[0].Address, port); err == nil {
-								trackedSandbox.url = addr
-								a.log.Debug("updated sandbox URL after network assignment", "sandbox", sb.ID, "url", addr)
+								newURL = addr
 							}
 						}
 					}
+				}
+
+				// Now acquire write lock to update shared state
+				a.mu.Lock()
+				oldStatus := trackedSandbox.sandbox.Status
+				trackedSandbox.sandbox.Status = sb.Status
+
+				// Re-check conditions under lock and update URL if still needed
+				if newURL != "" && trackedSandbox.url == "" && len(sb.Network) > 0 {
+					trackedSandbox.url = newURL
+					a.log.Debug("updated sandbox URL after network assignment", "sandbox", sb.ID, "url", newURL)
 				}
 
 				// Keep STOPPED and DEAD sandboxes in tracking so fail-fast logic can see them
