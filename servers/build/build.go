@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 
 	"github.com/moby/buildkit/client"
 	"github.com/tonistiigi/fsutil"
@@ -21,6 +22,7 @@ import (
 	"miren.dev/runtime/appconfig"
 	"miren.dev/runtime/components/netresolve"
 	"miren.dev/runtime/pkg/cond"
+	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/idgen"
 	"miren.dev/runtime/pkg/procfile"
 	"miren.dev/runtime/pkg/rpc/stream"
@@ -410,7 +412,7 @@ func (b *Builder) BuildFromTar(ctx context.Context, state *build_v1alpha.Builder
 		//LogWriter: b.LogWriter,
 	}
 
-	_, mrv, artName, err := b.nextVersion(ctx, name)
+	_, mrv, _, err := b.nextVersion(ctx, name)
 	if err != nil {
 		b.Log.Error("error getting next version", "error", err)
 		b.sendErrorStatus(ctx, status, "Error getting next version: %v", err)
@@ -466,19 +468,29 @@ func (b *Builder) BuildFromTar(ctx context.Context, state *build_v1alpha.Builder
 		return err
 	}
 
-	var artifact core_v1alpha.Artifact
-
-	err = b.ec.Get(ctx, artName, &artifact)
-	if err != nil {
-		b.Log.Error("error creating artifact entity", "error", err)
-		return fmt.Errorf("error creating artifact entity: %w", err)
+	if res.ManifestDigest == "" {
+		b.Log.Error("build did not return manifest digest")
+		b.sendErrorStatus(ctx, status, "Build did not return manifest digest")
+		return fmt.Errorf("build did not return manifest digest")
 	}
 
-	b.Log.Debug("located stored artifact", "artifact", artifact.ID)
+	var artifact core_v1alpha.Artifact
+
+	err = b.ec.OneAtIndex(ctx, entity.String(core_v1alpha.ArtifactManifestDigestId, res.ManifestDigest), &artifact)
+	if err != nil {
+		b.Log.Error("error locating artifact by digest", "digest", res.ManifestDigest, "error", err)
+		return fmt.Errorf("error locating artifact by digest %s: %w", res.ManifestDigest, err)
+	}
+
+	b.Log.Debug("located stored artifact", "artifact", artifact.ID, "digest", res.ManifestDigest)
 
 	mrv.Artifact = artifact.ID
 
-	b.Log.Debug("build complete", "image", imgName)
+	// Update ImageUrl to match the artifact we found (which may be reused due to deduplication)
+	artifactName := strings.TrimPrefix(string(artifact.ID), "artifact/")
+	mrv.ImageUrl = "cluster.local:5000/" + name + ":" + artifactName
+
+	b.Log.Debug("build complete", "image", mrv.ImageUrl)
 
 	if res.Entrypoint != "" {
 		mrv.Config.Entrypoint = res.Entrypoint

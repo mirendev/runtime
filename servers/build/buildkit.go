@@ -274,7 +274,8 @@ type ImageConfig struct {
 }
 
 type BuildResult struct {
-	Entrypoint string
+	Entrypoint     string
+	ManifestDigest string
 }
 
 func (b *Buildkit) BuildImage(
@@ -447,14 +448,19 @@ func (b *Buildkit) BuildImage(
 		if opts.phaseUpdates != nil {
 			opts.phaseUpdates("solving")
 		}
-		_, err := b.Client.Solve(ctx, def, solveOpt, ssProgress)
+		solveResp, err := b.Client.Solve(ctx, def, solveOpt, ssProgress)
 		if opts.phaseUpdates != nil {
 			opts.phaseUpdates("solved")
+		}
+		if err == nil && solveResp != nil && solveResp.ExporterResponse != nil {
+			if digest, ok := solveResp.ExporterResponse["containerimage.digest"]; ok {
+				res.ManifestDigest = digest
+			}
 		}
 		return &res, err
 	}
 
-	_, err := b.Client.Build(ctx, solveOpt, "runtime", func(ctx context.Context, c gateway.Client) (*gateway.Result, error) {
+	buildResp, err := b.Client.Build(ctx, solveOpt, "runtime", func(ctx context.Context, c gateway.Client) (*gateway.Result, error) {
 		if opts.phaseUpdates != nil {
 			opts.phaseUpdates("solving")
 		}
@@ -474,6 +480,12 @@ func (b *Buildkit) BuildImage(
 
 		return res, nil
 	}, ssProgress)
+
+	if err == nil && buildResp != nil && buildResp.ExporterResponse != nil {
+		if digest, ok := buildResp.ExporterResponse["containerimage.digest"]; ok {
+			res.ManifestDigest = digest
+		}
+	}
 
 	return &res, err
 }
