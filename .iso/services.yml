@@ -1,11 +1,4 @@
 services:
-  clickhouse:
-    image: oci.miren.cloud/clickhouse:v2
-    port: 9000
-    environment:
-      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
-      CLICKHOUSE_PASSWORD: default
-
   etcd:
     image: oci.miren.cloud/etcd:v1
     port: 2379

@@ -30,8 +30,7 @@ type Provisioner struct {
 	//Image   string `asm:"lsvd-image"`
 	Tempdir string `asm:"tempdir"`
 
-	Clickhouse string `asm:"clickhouse-address,optional"`
-	Namespace  string `asm:"namespace"`
+	Namespace string `asm:"namespace"`
 	Bridge     string `asm:"bridge-iface"`
 	Subnet     *netdb.Subnet
 	Port       int `asm:"server_port"`
@@ -253,7 +252,6 @@ func (c *Provisioner) bootInitialTask(
 		}
 
 		io = cio.BinaryIO(exe, map[string]string{
-			"-d": c.Clickhouse,
 			"-e": id,
 			"-l": pc.AccessDir,
 		})
