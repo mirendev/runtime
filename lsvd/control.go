@@ -141,7 +141,7 @@ func (c *Controller) improveDensity(ctx *Context) error {
 	}
 
 	if !ok {
-		c.log.Warn("GC was requested, but no least dense segment available")
+		c.log.Info("GC was requested, but no least dense segment available")
 		return nil
 	}
 
@@ -337,7 +337,7 @@ func (c *Controller) startGC(ctx *Context, ev Event) error {
 
 	toGC, _, ok, err := d.s.LeastDenseSegment(d.log)
 	if !ok {
-		d.log.Warn("GC was requested, but no least dense segment available")
+		d.log.Info("GC was requested, but no least dense segment available")
 		return nil
 	}
 
