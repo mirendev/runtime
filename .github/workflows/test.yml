@@ -4,6 +4,7 @@ on:
   push:
     branches: [ "main" ]
   pull_request:
+  merge_group:
 
 permissions:
   # Used by golangci-lint to emit annotations that are picked up by github
