@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/lab47/mode"
@@ -58,7 +59,7 @@ type Disk struct {
 
 	controller *Controller
 	wg         sync.WaitGroup
-	closed     bool
+	closed     *atomic.Int32
 
 	cpsScratch     []CachePosition
 	readReqScratch []readRequest
@@ -145,6 +146,7 @@ func NewDisk(ctx context.Context, log *slog.Logger, path string, options ...Opti
 		readReqScratch: make([]readRequest, 0, 10),
 		extentsScratch: make([]Extent, 0, 10),
 		peScratch:      make([]PartialExtent, 0, 10),
+		closed:         new(atomic.Int32),
 	}
 
 	d.readDisks = append(d.readDisks, d)
@@ -668,6 +670,10 @@ func (d *Disk) ZeroBlocks(ctx context.Context, rng Extent) error {
 }
 
 func (d *Disk) checkFlush(ctx context.Context) error {
+	if d.closed.Load() != 0 {
+		return fmt.Errorf("disk is closed")
+	}
+
 	reason := d.curOC.ShouldFlush(FlushThreshHold)
 	if reason == FlushNo {
 		return nil
@@ -801,7 +807,7 @@ func (d *Disk) SyncWriteCache() error {
 }
 
 func (d *Disk) Close(ctx context.Context) error {
-	if d.closed {
+	if d.closed.CompareAndSwap(0, 1) == false {
 		return nil
 	}
 
@@ -830,8 +836,6 @@ func (d *Disk) Close(ctx context.Context) error {
 	}
 
 	d.er.Close()
-
-	d.closed = true
 
 	return err
 }
