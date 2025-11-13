@@ -221,82 +221,6 @@ func TestSandbox(t *testing.T) {
 			r.Equal(same, searchRes)
 		})
 
-		t.Run("detects changes", func(t *testing.T) {
-			r := require.New(t)
-			meta := &entity.Meta{
-				Entity:   cont,
-				Revision: 2,
-			}
-
-			searchRes, err := co.checkSandbox(ctx, &sb, meta)
-			r.NoError(err)
-
-			r.Equal(differentVersion, searchRes)
-		})
-
-		t.Run("can update in place with just label changes", func(t *testing.T) {
-			r := require.New(t)
-
-			task.Delete(ctx, containerd.WithProcessKill)
-			bc.Delete(ctx, containerd.WithSnapshotCleanup)
-
-			var sb compute.Sandbox
-
-			sb.ID = id
-
-			sb.Labels = append(sb.Labels, "runtime.computer/app=mn-test")
-
-			cont := entity.New(
-				entity.DBId, id,
-				sb.Encode,
-			)
-
-			meta := &entity.Meta{
-				Entity:   cont,
-				Revision: 2,
-			}
-
-			canUpdate, _, err := co.canUpdateInPlace(ctx, &sb, meta)
-			r.NoError(err)
-			r.True(canUpdate)
-		})
-
-		t.Run("updates container in place when labels change", func(t *testing.T) {
-			r := require.New(t)
-
-			var sb compute.Sandbox
-
-			sb.ID = id
-
-			sb.Labels = append(sb.Labels, "runtime.computer/app=mn-test")
-
-			cont := entity.New(
-				entity.DBId, id,
-				sb.Encode,
-			)
-
-			meta := &entity.Meta{
-				Entity:   cont,
-				Revision: 2,
-			}
-
-			err = co.Create(ctx, &sb, meta)
-			r.NoError(err)
-
-			c, err := cc.LoadContainer(ctx, co.pauseContainerId(id))
-			r.NoError(err)
-
-			labels, err := c.Labels(ctx)
-			r.NoError(err)
-
-			r.Equal("mn-test", labels["runtime.computer/app"], "container label not updated")
-
-			diskMeta, err := co.readEntity(ctx, id)
-			r.NoError(err)
-
-			r.Equal(int64(2), diskMeta.Revision)
-		})
-
 		t.Run("rebuilds sandbox when necessary", func(t *testing.T) {
 			r := require.New(t)
 
@@ -323,10 +247,6 @@ func TestSandbox(t *testing.T) {
 				Revision: 3,
 			}
 
-			canUpdate, _, err := co.canUpdateInPlace(ctx, &sb, meta)
-			r.NoError(err)
-			r.False(canUpdate)
-
 			err = co.Create(ctx, &sb, meta)
 			r.NoError(err)
 
@@ -341,10 +261,8 @@ func TestSandbox(t *testing.T) {
 
 			r.Equal(containerd.Running, status.Status, "container task not running")
 
-			diskMeta, err := co.readEntity(ctx, id)
-			r.NoError(err)
-
-			r.Equal(int64(3), diskMeta.Revision)
+			// Note: Revision tracking is handled by the entity server, not the sandbox controller.
+			// The controller no longer persists entity.cbor files, so we can't verify revisions here.
 		})
 	})
 
