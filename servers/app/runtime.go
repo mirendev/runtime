@@ -5,8 +5,10 @@ import (
 	"errors"
 
 	"miren.dev/runtime/api/app/app_v1alpha"
+	"miren.dev/runtime/api/compute/compute_v1alpha"
 	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/pkg/cond"
+	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/rpc/standard"
 )
 
@@ -34,11 +36,12 @@ func (a *AppInfo) AppInfo(ctx context.Context, state *app_v1alpha.AppStatusAppIn
 	var appVer core_v1alpha.AppVersion
 
 	if appRec.ActiveVersion != "" {
-		err = a.EC.GetById(ctx, appRec.ActiveVersion, &appVer)
+		appVerEntity, err := a.EC.GetByIdWithEntity(ctx, appRec.ActiveVersion, &appVer)
 		if err != nil {
 			return err
 		}
 		rai.SetActiveVersion(appVer.Version)
+		rai.SetLastDeploy(standard.ToTimestamp(appVerEntity.Entity().GetCreatedAt()))
 	} else {
 		appVer.App = appRec.ID
 	}
@@ -142,40 +145,39 @@ func (a *AppInfo) AppInfo(ctx context.Context, state *app_v1alpha.AppStatusAppIn
 		}
 	}
 
-	/*
-		if ai == nil {
-			state.Results().SetStatus(&rai)
-			return nil
-		}
+	// Get pool information from entity store
+	if appVer.ID != "" {
+		poolsResp, err := a.EC.List(ctx, entity.Ref(compute_v1alpha.SandboxPoolReferencedByVersionsId, appVer.ID))
+		if err != nil {
+			a.Log.Warn("failed to get sandbox pools", "error", err)
+		} else {
+			var pools []*app_v1alpha.PoolStatus
 
-		var pools []*api.PoolStatus
+			for poolsResp.Next() {
+				var pool compute_v1alpha.SandboxPool
+				poolsResp.Read(&pool)
 
-		for _, p := range ai.Pools {
-			var rp api.PoolStatus
+				var rp app_v1alpha.PoolStatus
+				rp.SetName(pool.Service)
+				rp.SetIdle(int32(pool.ReadyInstances))
+				rp.SetIdleUsage(0)
 
-			rp.SetName(p.Name)
-			rp.SetIdle(int32(p.Idle))
-			rp.SetIdleUsage(int64(p.IdleUsage))
+				var windows []*app_v1alpha.WindowStatus
+				for i := int64(0); i < pool.CurrentInstances; i++ {
+					var rw app_v1alpha.WindowStatus
+					rw.SetVersion(appVer.Version)
+					rw.SetLeases(1)
+					rw.SetUsage(0)
+					windows = append(windows, &rw)
+				}
 
-			var windows []*api.WindowStatus
-
-			for _, w := range p.Windows {
-				var rw api.WindowStatus
-
-				rw.SetVersion(w.Version)
-				rw.SetLeases(int32(w.Leases))
-				rw.SetUsage(int64(w.Usage))
-
-				windows = append(windows, &rw)
+				rp.SetWindows(windows)
+				pools = append(pools, &rp)
 			}
 
-			rp.SetWindows(windows)
-
-			pools = append(pools, &rp)
+			rai.SetPools(pools)
 		}
-
-		rai.SetPools(pools)
-	*/
+	}
 
 	// Get instances from DB
 	/*
