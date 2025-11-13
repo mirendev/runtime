@@ -237,7 +237,7 @@ func (h *highlevelBuilder) copyApp(cur, mnt llb.State) llb.State {
 func (m *MetaStack) addAppUser(cur llb.State) llb.State {
 	m.result.Config.User = "2010"
 
-	bb := llb.Image("busybox:1.37-musl")
+	bb := llb.Image(imagerefs.BusyboxDefault)
 
 	return cur.Run(
 		llb.Args([]string{"/bin/sh", "-c",
@@ -525,7 +525,7 @@ func (s *NodeStack) GenerateLLB(dir string, opts BuildOptions) (*llb.State, erro
 	if opts.Version != "" {
 		version = opts.Version
 	}
-	base := llb.Image(fmt.Sprintf("node:%s-slim", version))
+	base := llb.Image(imagerefs.GetNodeImage(version))
 
 	base = s.addAppUser(base)
 

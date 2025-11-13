@@ -375,7 +375,7 @@ key = "DATABASE_URL"
 value = "postgres://localhost/db"
 
 [services.postgres]
-image = "postgres:15"
+image = "oci.miren.cloud/postgres:15"
 
 [services.postgres.concurrency]
 mode = "fixed"

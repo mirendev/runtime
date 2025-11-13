@@ -247,7 +247,7 @@ func TestBuildServicesConfig(t *testing.T) {
 			appConfig: &appconfig.AppConfig{
 				Services: map[string]*appconfig.ServiceConfig{
 					"postgres": {
-						Image: "postgres:15",
+						Image: "oci.miren.cloud/postgres:15",
 						Concurrency: &appconfig.ServiceConcurrencyConfig{
 							Mode:         "fixed",
 							NumInstances: 1,
@@ -259,7 +259,7 @@ func TestBuildServicesConfig(t *testing.T) {
 			validateServices: func(t *testing.T, services []core_v1alpha.Services) {
 				require.Len(t, services, 1)
 				assert.Equal(t, "postgres", services[0].Name)
-				assert.Equal(t, "postgres:15", services[0].Image)
+				assert.Equal(t, "oci.miren.cloud/postgres:15", services[0].Image)
 			},
 		},
 		{
@@ -286,14 +286,14 @@ func TestBuildServicesConfig(t *testing.T) {
 			appConfig: &appconfig.AppConfig{
 				Services: map[string]*appconfig.ServiceConfig{
 					"postgres": {
-						Image: "postgres:15",
+						Image: "oci.miren.cloud/postgres:15",
 						Concurrency: &appconfig.ServiceConcurrencyConfig{
 							Mode:         "fixed",
 							NumInstances: 1,
 						},
 					},
 					"redis": {
-						Image: "redis:7-alpine",
+						Image: "oci.miren.cloud/redis:7",
 						Concurrency: &appconfig.ServiceConcurrencyConfig{
 							Mode:         "fixed",
 							NumInstances: 1,
@@ -317,10 +317,10 @@ func TestBuildServicesConfig(t *testing.T) {
 				}
 
 				require.Contains(t, serviceMap, "postgres")
-				assert.Equal(t, "postgres:15", serviceMap["postgres"].Image)
+				assert.Equal(t, "oci.miren.cloud/postgres:15", serviceMap["postgres"].Image)
 
 				require.Contains(t, serviceMap, "redis")
-				assert.Equal(t, "redis:7-alpine", serviceMap["redis"].Image)
+				assert.Equal(t, "oci.miren.cloud/redis:7", serviceMap["redis"].Image)
 
 				require.Contains(t, serviceMap, "web")
 				assert.Equal(t, "", serviceMap["web"].Image, "web service should not have custom image")
@@ -331,7 +331,7 @@ func TestBuildServicesConfig(t *testing.T) {
 			appConfig: &appconfig.AppConfig{
 				Services: map[string]*appconfig.ServiceConfig{
 					"postgres": {
-						Image: "postgres:15",
+						Image: "oci.miren.cloud/postgres:15",
 						Concurrency: &appconfig.ServiceConcurrencyConfig{
 							Mode:         "fixed",
 							NumInstances: 1,
@@ -353,7 +353,7 @@ func TestBuildServicesConfig(t *testing.T) {
 				require.Len(t, services, 1)
 				svc := services[0]
 				assert.Equal(t, "postgres", svc.Name)
-				assert.Equal(t, "postgres:15", svc.Image)
+				assert.Equal(t, "oci.miren.cloud/postgres:15", svc.Image)
 
 				require.Len(t, svc.Disks, 1, "should have one disk")
 				disk := svc.Disks[0]
