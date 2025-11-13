@@ -37,9 +37,12 @@ normalize_args() {
       # If it starts with the module path, convert to relative
       if [[ "$arg" =~ ^miren\.dev/runtime/ ]]; then
         arg="./${arg#miren.dev/runtime/}"
-      # If it doesn't start with ./ add it
+      # If it doesn't start with ./ and is an actual directory path (or pattern), add ./
       elif [[ ! "$arg" =~ ^\. ]]; then
-        arg="./$arg"
+        # Only add ./ if it's a real directory or a go package pattern
+        if [[ -d "$arg" ]] || [[ "$arg" =~ \.\.\. ]]; then
+          arg="./$arg"
+        fi
       fi
     fi
     args+=("$arg")
