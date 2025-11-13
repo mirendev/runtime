@@ -12,9 +12,7 @@ import (
 	"miren.dev/runtime/api/entityserver"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/api/storage/storage_v1alpha"
-	"miren.dev/runtime/pkg/controller"
 	"miren.dev/runtime/pkg/entity"
-	"miren.dev/runtime/pkg/rpc/stream"
 )
 
 // leaseInfo tracks active lease details
@@ -763,85 +761,3 @@ func (d *DiskLeaseController) CleanupOldReleasedLeases(ctx context.Context) erro
 	return nil
 }
 
-// Start starts the disk lease controller
-func (d *DiskLeaseController) Start(ctx context.Context) error {
-	// Create reconcile controller for lease entities using AdaptController
-	// Use a 10-second resync period to check pending leases waiting for disk provisioning
-	rc := controller.NewReconcileController(
-		"disk-lease",
-		d.Log,
-		entity.Ref(entity.EntityKind, storage_v1alpha.KindDiskLease),
-		d.EAC,
-		controller.AdaptController(d),
-		10*time.Second, // Resync period for pending leases waiting for disk provisioning
-		1,              // Single worker
-	)
-
-	// Set up periodic cleanup of old released leases (every 5 minutes)
-	rc.SetPeriodic(5*time.Minute, func(ctx context.Context) error {
-		return d.CleanupOldReleasedLeases(ctx)
-	})
-
-	// Start a separate watcher for disk entities to reconcile dependent leases
-	go d.watchDiskChanges(ctx, rc)
-
-	return rc.Start(ctx)
-}
-
-// watchDiskChanges watches for disk state changes and triggers reconciliation of dependent leases
-func (d *DiskLeaseController) watchDiskChanges(ctx context.Context, rc *controller.ReconcileController) {
-	d.Log.Info("Starting disk change watcher")
-	defer d.Log.Info("Disk change watcher stopped")
-
-	// Watch disk entities
-	_, err := d.EAC.WatchIndex(ctx, entity.Ref(entity.EntityKind, storage_v1alpha.KindDisk), stream.Callback(func(op *entityserver_v1alpha.EntityOp) error {
-		// Only care about updates (state changes)
-		if op.OperationType() != entityserver_v1alpha.EntityOperationUpdate {
-			return nil
-		}
-
-		diskId := entity.Id(op.EntityId())
-		d.Log.Debug("Disk state changed, finding dependent leases", "disk", diskId)
-
-		// Find all leases that reference this disk using the DiskId index
-		listResp, err := d.EAC.List(ctx, entity.Ref(storage_v1alpha.DiskLeaseDiskIdId, diskId))
-		if err != nil {
-			d.Log.Error("failed to list disk leases for disk change", "disk", diskId, "error", err)
-			return nil
-		}
-
-		// Reconcile each lease that references this disk
-		reconciledCount := 0
-		for _, e := range listResp.Values() {
-			var lease storage_v1alpha.DiskLease
-			lease.Decode(e.Entity())
-
-			d.Log.Debug("Reconciling lease due to disk state change",
-				"disk", diskId,
-				"lease", lease.ID,
-				"leaseStatus", lease.Status)
-
-			// Trigger reconciliation by creating an event
-			ev := controller.Event{
-				Type: controller.EventUpdated,
-				Id:   lease.ID,
-			}
-
-			// Add to the reconcile controller's work queue
-			rc.Enqueue(ev)
-			reconciledCount++
-		}
-
-		if reconciledCount > 0 {
-			d.Log.Info("Triggered reconciliation of leases due to disk state change",
-				"disk", diskId,
-				"leaseCount", reconciledCount)
-		}
-
-		return nil
-	}))
-
-	if err != nil {
-		d.Log.Error("Failed to watch disk changes", "error", err)
-	}
-}

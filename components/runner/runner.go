@@ -482,5 +482,19 @@ func (r *Runner) SetupControllers(
 
 	cm.AddController(diskLeaseRC)
 
+	// Add disk watch controller to trigger lease reconciliation on disk changes
+	diskWatchController := disk.NewDiskWatchController(log, eas, diskLeaseRC)
+	cm.AddController(
+		controller.NewReconcileController(
+			"disk-watch",
+			log,
+			entity.Ref(entity.EntityKind, storage_v1alpha.KindDisk),
+			eas,
+			controller.AdaptController(diskWatchController),
+			time.Minute,
+			1, // Single worker sufficient
+		),
+	)
+
 	return cm, nil
 }
