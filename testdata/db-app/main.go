@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"time"
 
 	_ "github.com/lib/pq"
 )
@@ -22,6 +23,9 @@ func initDB(db *sql.DB) error {
 }
 
 func main() {
+	fmt.Println("Sleeping to let DB warm up also...")
+	time.Sleep(5 * time.Second)
+
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "3000"
