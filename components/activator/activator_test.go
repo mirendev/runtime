@@ -470,7 +470,7 @@ func TestActivatorAcquireLeaseFromDeadSandbox(t *testing.T) {
 
 // TestActivatorRemovesDeadSandbox verifies that DEAD sandboxes are removed
 // from the tracking structures (not just skipped)
-func TestActivatorRemovesDeadSandbox(t *testing.T) {
+func TestActivatorKeepsDeadSandbox(t *testing.T) {
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 
 	testVer := &core_v1alpha.AppVersion{
@@ -545,12 +545,10 @@ func TestActivatorRemovesDeadSandbox(t *testing.T) {
 
 	// Find the tracked sandbox and pool
 	var trackedSandbox *sandbox
-	var trackedPoolID entity.Id
-	for pid, ps := range activator.poolSandboxes {
+	for _, ps := range activator.poolSandboxes {
 		for _, s := range ps.sandboxes {
 			if s.sandbox.ID == "sb-1" {
 				trackedSandbox = s
-				trackedPoolID = pid
 				break
 			}
 		}
@@ -561,36 +559,106 @@ func TestActivatorRemovesDeadSandbox(t *testing.T) {
 
 	require.NotNil(t, trackedSandbox, "Should find the tracked sandbox")
 
-	// Update status to DEAD
+	// Update status to DEAD (but don't remove it - this is the new behavior)
 	trackedSandbox.sandbox.Status = compute_v1alpha.DEAD
-
-	// Remove the sandbox from tracking (simulating watchSandboxes behavior)
-	if ps, ok := activator.poolSandboxes[trackedPoolID]; ok {
-		for i, s := range ps.sandboxes {
-			if s.sandbox.ID == "sb-1" {
-				ps.sandboxes[i] = ps.sandboxes[len(ps.sandboxes)-1]
-				ps.sandboxes = ps.sandboxes[:len(ps.sandboxes)-1]
-				break
-			}
-		}
-
-		if len(ps.sandboxes) == 0 {
-			delete(activator.poolSandboxes, trackedPoolID)
-		}
-	}
 
 	activator.mu.Unlock()
 
-	// Verify sandbox was removed from tracking
+	// Verify sandbox is still tracked but marked as DEAD
+	// This allows fail-fast logic to detect that all sandboxes have failed
 	activator.mu.RLock()
 	defer activator.mu.RUnlock()
 
-	if ps, exists := activator.poolSandboxes[poolID]; exists {
-		assert.Len(t, ps.sandboxes, 0, "DEAD sandbox should be removed from sandboxes slice")
+	ps, exists := activator.poolSandboxes[poolID]
+	require.True(t, exists, "Pool should still exist")
+	require.Len(t, ps.sandboxes, 1, "DEAD sandbox should remain in tracking")
+	assert.Equal(t, compute_v1alpha.DEAD, ps.sandboxes[0].sandbox.Status, "Sandbox should be marked as DEAD")
+}
+
+// TestActivatorFailsFastWhenAllSandboxesDead verifies that waitForSandbox fails fast
+// when all sandboxes transition to DEAD status, instead of waiting for the full timeout
+func TestActivatorFailsFastWhenAllSandboxesDead(t *testing.T) {
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	testVer := &core_v1alpha.AppVersion{
+		ID:       entity.Id("ver-1"),
+		App:      entity.Id("app-1"),
+		Version:  "v1",
+		ImageUrl: "test:latest",
+		Config: core_v1alpha.Config{
+			Services: []core_v1alpha.Services{
+				{
+					Name: "web",
+					ServiceConcurrency: core_v1alpha.ServiceConcurrency{
+						Mode:                "auto",
+						RequestsPerInstance: 10,
+						ScaleDownDelay:      "15m",
+					},
+				},
+			},
+		},
 	}
 
-	// Optionally, the entire verKey might be removed if it was the only sandbox
-	// Either way is correct - having an empty slice or no entry at all
+	ent := entity.Blank()
+	ent.SetID("sb-1")
+
+	strategy := concurrency.NewStrategy(&core_v1alpha.ServiceConcurrency{
+		Mode:                "auto",
+		RequestsPerInstance: 10,
+		ScaleDownDelay:      "15m",
+	})
+	tracker := strategy.InitializeTracker()
+
+	// Create a DEAD sandbox (simulating a sandbox that crashed during boot)
+	deadSandbox := &sandbox{
+		sandbox: &compute_v1alpha.Sandbox{
+			ID:     entity.Id("sb-1"),
+			Status: compute_v1alpha.DEAD,
+		},
+		ent:         ent,
+		lastRenewal: time.Now(),
+		url:         "http://localhost:3000",
+		tracker:     tracker,
+	}
+
+	poolID := entity.Id("pool-1")
+	activator := &localActivator{
+		log: log,
+		versions: map[verKey]*versionPoolRef{
+			{"ver-1", "web"}: {
+				ver:      testVer,
+				poolID:   poolID,
+				service:  "web",
+				strategy: strategy,
+			},
+		},
+		poolSandboxes: map[entity.Id]*poolSandboxes{
+			poolID: {
+				pool:      &compute_v1alpha.SandboxPool{ID: poolID},
+				sandboxes: []*sandbox{deadSandbox},
+				service:   "web",
+				strategy:  strategy,
+			},
+		},
+		pools:           make(map[verKey]*poolState),
+		newSandboxChans: make(map[verKey][]chan struct{}),
+	}
+
+	// Create a context with timeout - the fail-fast should return before this timeout
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// Attempt to wait for a sandbox - should fail fast immediately
+	start := time.Now()
+	_, err := activator.waitForSandbox(ctx, testVer, "web", false)
+	elapsed := time.Since(start)
+
+	// Should error with ErrSandboxDiedEarly
+	require.Error(t, err, "Should fail when all sandboxes are DEAD")
+	assert.ErrorIs(t, err, ErrSandboxDiedEarly, "Should return ErrSandboxDiedEarly")
+
+	// Should fail fast (< 1 second) not wait for the full 5 second timeout
+	assert.Less(t, elapsed, 1*time.Second, "Should fail fast, not wait for timeout")
 }
 
 // TestActivatorPendingSandboxAwareness verifies that AcquireLease waits for PENDING

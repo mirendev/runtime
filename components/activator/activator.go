@@ -191,7 +191,7 @@ func (a *localActivator) AcquireLease(ctx context.Context, ver *core_v1alpha.App
 			start := rand.Int() % len(ps.sandboxes)
 			for i := 0; i < len(ps.sandboxes); i++ {
 				s := ps.sandboxes[(start+i)%len(ps.sandboxes)]
-				if s.sandbox.Status == compute_v1alpha.RUNNING && s.tracker.HasCapacity() {
+				if s.sandbox.Status == compute_v1alpha.RUNNING && s.tracker.HasCapacity() && s.url != "" {
 					candidateSandbox = s
 					break
 				}
@@ -209,7 +209,8 @@ func (a *localActivator) AcquireLease(ctx context.Context, ver *core_v1alpha.App
 		a.mu.Lock()
 		// Double-check status and capacity (may have changed between locks)
 		if candidateSandbox.sandbox.Status == compute_v1alpha.RUNNING &&
-			candidateSandbox.tracker.HasCapacity() {
+			candidateSandbox.tracker.HasCapacity() &&
+			candidateSandbox.url != "" {
 			leaseSize := candidateSandbox.tracker.AcquireLease()
 			candidateSandbox.lastRenewal = time.Now()
 
@@ -367,6 +368,50 @@ func (a *localActivator) waitForSandbox(ctx context.Context, ver *core_v1alpha.A
 		// Check for available sandbox immediately
 		if lease, found := checkForSandbox(); found {
 			return lease, nil
+		}
+
+		// Check if all sandboxes have failed (no RUNNING, no PENDING)
+		// If so, fail fast instead of waiting for timeout
+		a.mu.RLock()
+		versionRef, ok := a.versions[key]
+		hasPendingOrRunning := false
+		var sandboxStatuses []string
+		var hasSandboxes bool
+		if ok {
+			// Look up the pool's sandboxes
+			ps, poolOk := a.poolSandboxes[versionRef.poolID]
+			if poolOk && len(ps.sandboxes) > 0 {
+				hasSandboxes = true
+				for _, s := range ps.sandboxes {
+					sandboxStatuses = append(sandboxStatuses, fmt.Sprintf("%s:%s", s.sandbox.ID, s.sandbox.Status))
+					if s.sandbox.Status == compute_v1alpha.RUNNING || s.sandbox.Status == compute_v1alpha.PENDING {
+						hasPendingOrRunning = true
+						break
+					}
+				}
+			}
+		}
+		a.mu.RUnlock()
+
+		// Log current state for debugging
+		a.log.Debug("fail-fast check",
+			"app", ver.App,
+			"version", ver.Version,
+			"service", service,
+			"tracked", ok,
+			"count", len(sandboxStatuses),
+			"sandboxes", sandboxStatuses,
+			"has_pending_or_running", hasPendingOrRunning)
+
+		if !hasPendingOrRunning && hasSandboxes {
+			// We have sandboxes tracked but none are RUNNING or PENDING
+			// This means they all failed - fail fast
+			a.log.Error("all sandboxes failed while waiting",
+				"app", ver.App,
+				"version", ver.Version,
+				"service", service,
+				"sandboxes", sandboxStatuses)
+			return nil, fmt.Errorf("%w: all sandboxes died during boot", ErrSandboxDiedEarly)
 		}
 
 		select {
@@ -858,36 +903,53 @@ func (a *localActivator) watchSandboxes(ctx context.Context) {
 			}
 			a.mu.RUnlock()
 
-			// If already tracked, acquire write lock to update status
+			// If already tracked, first check if we need to build URL (without holding lock)
 			if trackedSandbox != nil {
-				a.mu.Lock()
-				oldStatus := trackedSandbox.sandbox.Status
-				trackedSandbox.sandbox.Status = sb.Status
+				var newURL string
 
-				// If sandbox transitioned to DEAD, remove it from tracking
-				if sb.Status == compute_v1alpha.DEAD {
-					if ps, ok := a.poolSandboxes[trackedPoolID]; ok {
-						// Find and remove the sandbox from the slice
-						for i, s := range ps.sandboxes {
-							if s.sandbox.ID == sb.ID {
-								// Remove by replacing with last element and truncating
-								ps.sandboxes[i] = ps.sandboxes[len(ps.sandboxes)-1]
-								ps.sandboxes = ps.sandboxes[:len(ps.sandboxes)-1]
-								break
+				// Do expensive RPC/decode work without holding the lock
+				// Update URL if sandbox now has a network address (e.g., PENDING -> RUNNING transition)
+				if len(sb.Network) > 0 {
+					// Need to fetch version to get the port configuration
+					sbVersion := sb.Spec.Version
+					if sbVersion != "" {
+						verResp, err := a.eac.Get(ctx, sbVersion.String())
+						if err == nil {
+							var appVer core_v1alpha.AppVersion
+							appVer.Decode(verResp.Entity().Entity())
+
+							port := int64(3000)
+							if appVer.Config.Port > 0 {
+								port = appVer.Config.Port
 							}
-						}
-
-						// If no sandboxes remain in this pool, we can remove the poolSandboxes entry
-						// Note: We keep the version->pool references since the pool entity still exists
-						if len(ps.sandboxes) == 0 {
-							delete(a.poolSandboxes, trackedPoolID)
+							if addr, err := netutil.BuildHTTPURL(sb.Network[0].Address, port); err == nil {
+								newURL = addr
+							}
 						}
 					}
 				}
 
-				// Notify waiters when sandbox becomes RUNNING (ready to serve traffic)
+				// Now acquire write lock to update shared state
+				a.mu.Lock()
+				oldStatus := trackedSandbox.sandbox.Status
+				trackedSandbox.sandbox.Status = sb.Status
+
+				// Re-check conditions under lock and update URL if still needed
+				if newURL != "" && trackedSandbox.url == "" && len(sb.Network) > 0 {
+					trackedSandbox.url = newURL
+					a.log.Debug("updated sandbox URL after network assignment", "sandbox", sb.ID, "url", newURL)
+				}
+
+				// Keep STOPPED and DEAD sandboxes in tracking so fail-fast logic can see them
+				// They will be cleaned up later by periodic reconciliation or when
+				// new RUNNING sandboxes are discovered
+
+				// Notify waiters when sandbox status changes to RUNNING, STOPPED, or DEAD
+				// RUNNING: sandbox is ready to serve traffic
+				// STOPPED: sandbox process exited, will be cleaned up by reconciliation
+				// DEAD: sandbox cleaned up, only entity remains
 				// Notify ALL versions that reference this pool
-				if oldStatus != sb.Status && sb.Status == compute_v1alpha.RUNNING {
+				if oldStatus != sb.Status && (sb.Status == compute_v1alpha.RUNNING || sb.Status == compute_v1alpha.STOPPED || sb.Status == compute_v1alpha.DEAD) {
 					// Notify all versions that reference this pool
 					// Find all version->service mappings that use this pool
 					for key, versionRef := range a.versions {
@@ -908,9 +970,6 @@ func (a *localActivator) watchSandboxes(ctx context.Context) {
 
 				if oldStatus != sb.Status {
 					a.log.Info("sandbox status changed", "sandbox", sb.ID, "old_status", oldStatus, "new_status", sb.Status)
-					if sb.Status == compute_v1alpha.DEAD {
-						a.log.Info("removed DEAD sandbox from tracking", "sandbox", sb.ID)
-					}
 				}
 				return nil
 			}
@@ -961,20 +1020,32 @@ func (a *localActivator) watchSandboxes(ctx context.Context) {
 			appVer.Decode(verResp.Entity().Entity())
 
 			// Build HTTP URL
+			// For PENDING sandboxes, we track them even without network addresses
+			// so we can notify waiters if they crash during boot
+			var addr string
 			if len(sb.Network) == 0 {
-				a.log.Warn("sandbox has no network addresses", "sandbox", sb.ID)
-				return nil
-			}
+				if sb.Status == compute_v1alpha.PENDING {
+					// PENDING sandbox without network yet - use placeholder URL
+					// We're only tracking it to detect if it dies, not to route to it
+					addr = ""
+					a.log.Debug("tracking PENDING sandbox without network address", "sandbox", sb.ID)
+				} else {
+					// RUNNING sandbox without network is unexpected, skip it
+					a.log.Warn("sandbox has no network addresses", "sandbox", sb.ID, "status", sb.Status)
+					return nil
+				}
+			} else {
+				port := int64(3000)
+				if appVer.Config.Port > 0 {
+					port = appVer.Config.Port
+				}
 
-			port := int64(3000)
-			if appVer.Config.Port > 0 {
-				port = appVer.Config.Port
-			}
-
-			addr, err := netutil.BuildHTTPURL(sb.Network[0].Address, port)
-			if err != nil {
-				a.log.Error("failed to build HTTP URL", "error", err, "sandbox", sb.ID)
-				return nil
+				var err error
+				addr, err = netutil.BuildHTTPURL(sb.Network[0].Address, port)
+				if err != nil {
+					a.log.Error("failed to build HTTP URL", "error", err, "sandbox", sb.ID)
+					return nil
+				}
 			}
 
 			// Get service concurrency and create strategy/tracker
