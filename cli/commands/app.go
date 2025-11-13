@@ -307,44 +307,14 @@ func (m Model) View() string {
 
 	sort.Strings(envvars)
 
-	var concurrency string
-
-	if m.cfg != nil {
-		if m.cfg.HasAutoConcurrency() {
-			if m.cfg.AutoConcurrency().HasFactor() {
-				concurrency = fmt.Sprintf("auto (factor of %d)",
-					m.cfg.AutoConcurrency().Factor(),
-				)
-			} else {
-				concurrency = "auto"
-			}
-		} else if m.cfg.HasConcurrency() {
-			concurrency = fmt.Sprintf("%d", m.cfg.Concurrency())
-		} else {
-			// Really shouldn't happen
-			concurrency = "unknown"
-		}
-	} else {
-		concurrency = "unknown"
-	}
-
-	var addons []string
-
-	for _, a := range m.status.Addons() {
-		addons = append(addons, a.Name())
-	}
-
-	hdr := fmt.Sprintf("       name: %s\nlast update: %s %s\nconcurrency: %s\n   env vars: %s\n    addons: %s\n",
+	hdr := fmt.Sprintf("       name: %s\nlast update: %s %s\n",
 		bold.Render(m.status.Name()),
 		bold.Render(lastUpdate),
 		laExtra,
-		bold.Render(concurrency),
-		bold.Render(strings.Join(envvars, ", ")),
-		bold.Render(strings.Join(addons, ", ")),
 	)
 
 	for _, ps := range m.status.Pools() {
-		hdr += fmt.Sprintf("       pool: %s instances=%d idle=%d\n", bold.Render(ps.Name()), len(ps.Windows()), ps.Idle())
+		hdr += fmt.Sprintf("       pool: %s instances=%d\n", bold.Render(ps.Name()), len(ps.Windows()))
 	}
 
 	var (

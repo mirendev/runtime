@@ -61,6 +61,16 @@ func (c *Client) GetById(ctx context.Context, id entity.Id, sc SchemaEncoder) er
 	return nil
 }
 
+func (c *Client) GetByIdWithEntity(ctx context.Context, id entity.Id, sc SchemaEncoder) (*entityserver_v1alpha.Entity, error) {
+	ret, err := c.eac.Get(ctx, id.String())
+	if err != nil {
+		return nil, err
+	}
+
+	sc.Decode(ret.Entity().Entity())
+	return ret.Entity(), nil
+}
+
 type ListResults struct {
 	values []*entity.Entity
 	cur    *entity.Entity
