@@ -47,6 +47,9 @@ func TestProfile(t *testing.T) {
 
 		defer cmd.Process.Kill()
 
+		// Give process time to start executing before we start profiling
+		time.Sleep(500 * time.Millisecond)
+
 		symzer, err := NewSymbolizer(path)
 		r.NoError(err)
 
@@ -55,13 +58,11 @@ func TestProfile(t *testing.T) {
 
 		defer profiler.Stop()
 
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-
-		err = profiler.Start(ctx)
+		// Use background context for profiler - don't tie it to test timeout
+		err = profiler.Start(context.Background())
 		r.NoError(err)
 
-		// Poll for samples instead of just sleeping to avoid race conditions
+		// Poll for samples with a separate timeout
 		var stacks []Stack
 		deadline := time.Now().Add(10 * time.Second)
 		for time.Now().Before(deadline) {
