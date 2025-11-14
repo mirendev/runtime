@@ -77,7 +77,10 @@ func (m *MockStore) GetEntities(ctx context.Context, ids []Id) ([]*Entity, error
 }
 
 func (m *MockStore) CreateEntity(ctx context.Context, entity *Entity, opts ...EntityOption) (*Entity, error) {
-	entity.SetCreatedAt(m.Now())
+	// Set CreatedAt if not already set (store manages this timestamp)
+	if entity.GetCreatedAt().IsZero() {
+		entity.SetCreatedAt(m.Now())
+	}
 	entity.SetUpdatedAt(m.Now())
 	entity.SetRevision(1)
 
@@ -118,6 +121,10 @@ func (m *MockStore) UpdateEntity(ctx context.Context, id Id, entity *Entity, opt
 
 	updated.SetRevision(e.GetRevision() + 1)
 	updated.SetUpdatedAt(m.Now())
+	// Preserve CreatedAt from existing entity
+	if !e.GetCreatedAt().IsZero() {
+		updated.SetCreatedAt(e.GetCreatedAt())
+	}
 
 	// Update the entity in the store
 	m.Entities[id] = updated
@@ -141,6 +148,10 @@ func (m *MockStore) ReplaceEntity(ctx context.Context, entity *Entity, opts ...E
 	// Update revision and timestamp
 	entity.SetRevision(existing.GetRevision() + 1)
 	entity.SetUpdatedAt(m.Now())
+	// Preserve CreatedAt from existing entity
+	if !existing.GetCreatedAt().IsZero() {
+		entity.SetCreatedAt(existing.GetCreatedAt())
+	}
 
 	m.Entities[id] = entity
 	return entity, nil
