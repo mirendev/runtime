@@ -41,6 +41,7 @@ type Store interface {
 	DeleteEntity(ctx context.Context, id Id) error
 	WatchIndex(ctx context.Context, attr Attr) (clientv3.WatchChan, error)
 	ListIndex(ctx context.Context, attr Attr) ([]Id, error)
+	ListCollection(ctx context.Context, collection string) ([]Id, error)
 
 	CreateSession(ctx context.Context, ttl int64) ([]byte, error)
 	RevokeSession(ctx context.Context, session []byte) error
@@ -89,18 +90,26 @@ func (s *EtcdStore) basicSave(ctx context.Context, entity *Entity) error {
 
 	key := s.buildKey(entity.Id())
 
-	// Use Txn to check that the key doesn't exist yet
-	txnResp, err := s.client.Txn(ctx).
-		If(clientv3.Compare(clientv3.CreateRevision(key), "=", 0)).
-		Then(clientv3.OpPut(key, string(data))).
-		Commit()
-
+	// First, try to get the existing entity
+	getResp, err := s.client.Get(ctx, key)
 	if err != nil {
-		return fmt.Errorf("failed to create entity in etcd: %w", err)
+		return fmt.Errorf("failed to get entity from etcd: %w", err)
 	}
 
-	if !txnResp.Succeeded {
-		return fmt.Errorf("creating %s: %w", entity.Id(), ErrEntityAlreadyExists)
+	// If entity exists, compare with new data
+	if len(getResp.Kvs) > 0 {
+		existingData := getResp.Kvs[0].Value
+
+		// If data is identical, no need to update
+		if string(existingData) == string(data) {
+			return nil
+		}
+	}
+
+	// Entity doesn't exist or data is different - create/update it
+	_, err = s.client.Put(ctx, key, string(data))
+	if err != nil {
+		return fmt.Errorf("failed to create entity in etcd: %w", err)
 	}
 
 	return nil
@@ -1092,6 +1101,7 @@ func (s *EtcdStore) GetAttributeSchema(ctx context.Context, id Id) (*AttributeSc
 		}
 		return schema, nil
 	}
+
 	entity, err := s.GetEntity(ctx, id)
 	if err != nil {
 		return nil, err

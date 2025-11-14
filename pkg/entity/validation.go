@@ -181,6 +181,10 @@ func (v *Validator) ValidateAttribute(ctx context.Context, attr *Attr) error {
 	name := attr.ID
 
 	if name == DBId {
+		if attr.Value.Kind() != KindId {
+			return fmt.Errorf("attribute %s must be an ID, was %s", DBId, attr.Value.Kind())
+		}
+
 		return nil
 	}
 

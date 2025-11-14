@@ -30,6 +30,7 @@ import (
 	"miren.dev/runtime/components/netresolve"
 	"miren.dev/runtime/network"
 	"miren.dev/runtime/observability"
+	"miren.dev/runtime/pkg/cond"
 	"miren.dev/runtime/pkg/containerdx"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/imagerefs"
@@ -934,7 +935,10 @@ func (c *SandboxController) addEndpoint(
 			var rpcE entityserver_v1alpha.Entity
 			rpcE.SetAttrs(eps.Encode())
 
-			pr, err := c.EAC.Put(ctx, &rpcE)
+			// TODO add metadata and probably use higher level entityclient
+			pr, err := c.EAC.Create(ctx, entity.New(
+				eps.Encode(),
+			).Attrs())
 			if err != nil {
 				return fmt.Errorf("failed to update service: %w", err)
 			}
@@ -1550,10 +1554,12 @@ func (c *SandboxController) monitorTaskExit(
 		ctx := context.Background()
 		_, err := c.EAC.Patch(ctx, patchAttrs.Attrs(), 0)
 		if err != nil {
-			c.Log.Error("failed to update sandbox status to STOPPED",
-				"sandbox", sb.ID,
-				"error", err,
-			)
+			if !errors.Is(err, cond.ErrNotFound{}) {
+				c.Log.Error("failed to update sandbox status to STOPPED",
+					"sandbox", sb.ID,
+					"error", err,
+				)
+			}
 			return
 		}
 
@@ -2056,17 +2062,18 @@ func (c *SandboxController) stopSandbox(ctx context.Context, id entity.Id) error
 	_ = os.RemoveAll(tmpDir)
 
 	// Mark sandbox as DEAD in entity store
-	var rpcE entityserver_v1alpha.Entity
-	rpcE.SetId(id.String())
-	rpcE.SetAttrs(entity.New(
+	_, err = c.EAC.Patch(ctx, entity.New(
+		entity.Ref(entity.DBId, id),
 		(&compute.Sandbox{
 			Status: compute.DEAD,
 		}).Encode,
-	).Attrs())
-
-	_, err = c.EAC.Put(context.Background(), &rpcE)
+	).Attrs(), 0)
 	if err != nil {
-		c.Log.Error("failed to retire sandbox", "id", id, "error", err)
+		// We ignore if the entity is not found as we run this code path when detecting
+		// the sandbox entity has already been deleted.
+		if !errors.Is(err, cond.ErrNotFound{}) {
+			c.Log.Error("failed to mark sandbox as DEAD", "id", id, "error", err)
+		}
 	}
 
 	c.Log.Info("sandbox retired", "id", id, "status", compute.DEAD)

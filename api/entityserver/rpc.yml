@@ -20,6 +20,31 @@ types:
         type: int64
         index: 1
 
+  - type: AttributeSchema
+    fields:
+      - name: id
+        type: string
+        index: 0
+      - name: doc
+        type: string
+        index: 1
+      - name: attrType
+        type: string
+        index: 2
+      - name: allowMany
+        type: bool
+        index: 3
+      - name: indexed
+        type: bool
+        index: 4
+      - name: session
+        type: bool
+        index: 5
+      - name: tags
+        type: list
+        element: string
+        index: 6
+
   - type: Entity
     fields:
       - name: id
@@ -252,3 +277,12 @@ interfaces:
           - name: stats
             type: list
             element: ReindexStat
+
+      - name: get_attributes_by_tag
+        parameters:
+          - name: tag
+            type: string
+        results:
+          - name: schemas
+            type: list
+            element: AttributeSchema

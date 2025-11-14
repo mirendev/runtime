@@ -79,6 +79,10 @@ func AllCommands() map[string]cli.CommandFactory {
 			return Infer("app list", "List all applications", AppList), nil
 		},
 
+		"app delete": func() (cli.Command, error) {
+			return Infer("app delete", "Delete an application and all its resources", AppDelete), nil
+		},
+
 		"apps": func() (cli.Command, error) {
 			return Infer("apps", "List all applications (alias for 'app list')", AppList), nil
 		},

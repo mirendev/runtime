@@ -151,7 +151,7 @@ func (o *Disk) Empty() bool {
 }
 
 func (o *Disk) InitSchema(sb *schema.SchemaBuilder) {
-	sb.Ref("created_by", "dev.miren.storage/disk.created_by", schema.Doc("Application that created this disk (for tracking purposes)"), schema.Indexed)
+	sb.Ref("created_by", "dev.miren.storage/disk.created_by", schema.Doc("Application that created this disk (for tracking purposes)"), schema.Indexed, schema.Tags("dev.miren.app_ref"))
 	sb.Singleton("dev.miren.storage/filesystem.ext4")
 	sb.Singleton("dev.miren.storage/filesystem.xfs")
 	sb.Singleton("dev.miren.storage/filesystem.btrfs")
@@ -311,7 +311,7 @@ func (o *DiskLease) Empty() bool {
 
 func (o *DiskLease) InitSchema(sb *schema.SchemaBuilder) {
 	sb.Time("acquired_at", "dev.miren.storage/disk_lease.acquired_at", schema.Doc("When the lease was acquired"))
-	sb.Ref("app_id", "dev.miren.storage/disk_lease.app_id", schema.Doc("Reference to the application (for debugging)"), schema.Indexed)
+	sb.Ref("app_id", "dev.miren.storage/disk_lease.app_id", schema.Doc("Reference to the application (for debugging)"), schema.Indexed, schema.Tags("dev.miren.app_ref"))
 	sb.Ref("disk_id", "dev.miren.storage/disk_lease.disk_id", schema.Doc("Reference to the leased disk"), schema.Required, schema.Indexed)
 	sb.String("error_message", "dev.miren.storage/disk_lease.error_message", schema.Doc("Error details if lease binding failed"))
 	sb.Component("mount", "dev.miren.storage/disk_lease.mount", schema.Doc("Mount configuration for the disk"))

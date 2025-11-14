@@ -26,11 +26,14 @@ kinds:
     active_version:
       type: ref
       doc: The version of the project that should be used
+      tags: [dev.miren.app_version_ref]
 
   artifact:
     app:
       type: ref
       doc: The application the artifact is for
+      indexed: true
+      tags: [dev.miren.app_ref]
 
     manifest:
       type: string
@@ -45,6 +48,9 @@ kinds:
     app:
       type: ref
       doc: The application the version is for
+      indexed: true
+      tags: [dev.miren.app_ref]
+
     version:
       type: string
       doc: The version of this app

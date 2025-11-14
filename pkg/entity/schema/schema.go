@@ -139,6 +139,7 @@ type attrBuilder struct {
 	required bool
 	indexed  bool
 	session  bool
+	tags     []string
 
 	choises []entity.Id
 
@@ -167,6 +168,12 @@ func Indexed(b *attrBuilder) {
 
 func Session(b *attrBuilder) {
 	b.session = true
+}
+
+func Tags(tags ...string) AttrOption {
+	return func(b *attrBuilder) {
+		b.tags = append(b.tags, tags...)
+	}
 }
 
 func Choices(choices ...entity.Id) AttrOption {
@@ -208,6 +215,10 @@ func (s *SchemaBuilder) Attr(name, id string, typ entity.Id, opts ...AttrOption)
 
 	if ab.session {
 		attrs = append(attrs, entity.Session, true)
+	}
+
+	for _, tag := range ab.tags {
+		attrs = append(attrs, entity.Tag, tag)
 	}
 
 	ent := entity.New(attrs...)

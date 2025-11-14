@@ -65,7 +65,7 @@ func (o *App) Empty() bool {
 }
 
 func (o *App) InitSchema(sb *schema.SchemaBuilder) {
-	sb.Ref("active_version", "dev.miren.core/app.active_version", schema.Doc("The version of the project that should be used"))
+	sb.Ref("active_version", "dev.miren.core/app.active_version", schema.Doc("The version of the project that should be used"), schema.Tags("dev.miren.app_version_ref"))
 	sb.Ref("project", "dev.miren.core/app.project", schema.Doc("The project that the app belongs to"))
 }
 
@@ -183,7 +183,7 @@ func (o *AppVersion) Empty() bool {
 }
 
 func (o *AppVersion) InitSchema(sb *schema.SchemaBuilder) {
-	sb.Ref("app", "dev.miren.core/app_version.app", schema.Doc("The application the version is for"))
+	sb.Ref("app", "dev.miren.core/app_version.app", schema.Doc("The application the version is for"), schema.Indexed, schema.Tags("dev.miren.app_ref"))
 	sb.Ref("artifact", "dev.miren.core/app_version.artifact", schema.Doc("The artifact to deploy for the version"))
 	sb.Component("config", "dev.miren.core/app_version.config", schema.Doc("The configuration of the version"))
 	(&Config{}).InitSchema(sb.Builder("app_version.config"))
@@ -759,7 +759,7 @@ func (o *Artifact) Empty() bool {
 }
 
 func (o *Artifact) InitSchema(sb *schema.SchemaBuilder) {
-	sb.Ref("app", "dev.miren.core/artifact.app", schema.Doc("The application the artifact is for"))
+	sb.Ref("app", "dev.miren.core/artifact.app", schema.Doc("The application the artifact is for"), schema.Indexed, schema.Tags("dev.miren.app_ref"))
 	sb.String("manifest", "dev.miren.core/artifact.manifest", schema.Doc("The OCI image manifest for the version"))
 	sb.String("manifest_digest", "dev.miren.core/artifact.manifest_digest", schema.Doc("The digest of the manifest"), schema.Indexed)
 }

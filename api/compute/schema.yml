@@ -9,6 +9,7 @@ components:
       type: ref
       doc: Application version reference
       indexed: true
+      tags: [dev.miren.app_version_ref]
 
     logEntity:
       type: string
@@ -336,6 +337,12 @@ kinds:
       doc: Immutable sandbox configuration
 
   sandbox_pool:
+    app:
+      type: ref
+      doc: Reference to the app this pool belongs to
+      indexed: true
+      tags: [dev.miren.app_ref]
+
     service:
       type: string
       doc: Service name (e.g., web, worker) - pool identifier
@@ -376,6 +383,7 @@ kinds:
       type: ref
       doc: AppVersions that reference this pool (enables reuse when specs match)
       many: true
+      tags: [dev.miren.app_version_ref]
       indexed: true
 
   node:

@@ -38,6 +38,7 @@ type schemaAttr struct {
 	Indexed  bool     `yaml:"indexed,omitempty"`  // for indexed attributes
 	Session  bool     `yaml:"session,omitempty"`  // for session attributes
 	BindTo   string   `yaml:"bind_to,omitempty"`  // for binding to other attributes
+	Tags     []string `yaml:"tags,omitempty"`     // for attribute tags
 
 	Attrs map[string]*schemaAttr `yaml:"attrs,omitempty"` // for nested attributes
 }
@@ -386,6 +387,14 @@ func (g *gen) attr(name string, attr *schemaAttr) {
 			call = append(call, j.Qual(sch, "Indexed"))
 		}
 
+		if len(attr.Tags) > 0 {
+			var tagArgs []j.Code
+			for _, tag := range attr.Tags {
+				tagArgs = append(tagArgs, j.Lit(tag))
+			}
+			call = append(call, j.Qual(sch, "Tags").Call(tagArgs...))
+		}
+
 		if len(attr.Choices) > 0 {
 			var args []j.Code
 
@@ -702,6 +711,14 @@ func (g *gen) attr(name string, attr *schemaAttr) {
 
 		if attr.Session {
 			call = append(call, j.Qual(sch, "Session"))
+		}
+
+		if len(attr.Tags) > 0 {
+			var tagArgs []j.Code
+			for _, tag := range attr.Tags {
+				tagArgs = append(tagArgs, j.Lit(tag))
+			}
+			call = append(call, j.Qual(sch, "Tags").Call(tagArgs...))
 		}
 
 		var args []j.Code
