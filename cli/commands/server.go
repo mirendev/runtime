@@ -909,6 +909,11 @@ func writeLocalClusterConfig(ctx *Context, cc *caauth.ClientCertificate, address
 	// Add as a leaf config (this will be saved to clientconfig.d/50-local.yaml)
 	config.SetLeafConfig("50-local", leafConfigData)
 
+	if config.ActiveCluster() == "" {
+		// Set the active cluster to the local one if none is set
+		config.SetActiveCluster(clusterName)
+	}
+
 	if err := config.Save(); err != nil {
 		return fmt.Errorf("failed to save local cluster leaf config: %w", err)
 	}
