@@ -260,3 +260,95 @@ clusters:
 	assert.True(t, sharedClusterSaved.Insecure, "Should save current in-memory value")
 	assert.True(t, sharedClusterSaved.CloudAuth, "Should save current in-memory value")
 }
+
+func TestRemoveClusterHandlesLeafConfigs(t *testing.T) {
+	// Test that RemoveCluster properly handles clusters in both main and leaf configs
+
+	tmpDir := t.TempDir()
+
+	// Create main config with a cluster
+	mainConfigPath := filepath.Join(tmpDir, "clientconfig.yaml")
+	mainConfig := `
+active_cluster: main-cluster
+clusters:
+  main-cluster:
+    hostname: main.example.com
+  other-main:
+    hostname: other.example.com
+`
+	err := os.WriteFile(mainConfigPath, []byte(mainConfig), 0644)
+	require.NoError(t, err)
+
+	// Create config.d with leaf clusters
+	configDirPath := filepath.Join(tmpDir, "clientconfig.d")
+	err = os.MkdirAll(configDirPath, 0755)
+	require.NoError(t, err)
+
+	leafConfig := `
+clusters:
+  leaf-cluster:
+    hostname: leaf.example.com
+  another-leaf:
+    hostname: another-leaf.example.com
+`
+	err = os.WriteFile(filepath.Join(configDirPath, "leaf.yaml"), []byte(leafConfig), 0644)
+	require.NoError(t, err)
+
+	// Set environment variable
+	oldEnv := os.Getenv(EnvConfigPath)
+	os.Setenv(EnvConfigPath, tmpDir)
+	defer os.Setenv(EnvConfigPath, oldEnv)
+
+	// Load the config
+	config, err := LoadConfig()
+	require.NoError(t, err)
+
+	// Verify initial state
+	assert.True(t, config.HasCluster("main-cluster"))
+	assert.True(t, config.HasCluster("other-main"))
+	assert.True(t, config.HasCluster("leaf-cluster"))
+	assert.True(t, config.HasCluster("another-leaf"))
+	assert.Equal(t, 4, config.GetClusterCount())
+
+	// Test 1: Remove a cluster from main config (should succeed)
+	err = config.RemoveCluster("other-main")
+	assert.NoError(t, err, "Should successfully remove cluster from main config")
+	assert.False(t, config.HasCluster("other-main"))
+	assert.Equal(t, 3, config.GetClusterCount())
+
+	// Test 2: Remove a cluster from leaf config (should succeed)
+	err = config.RemoveCluster("leaf-cluster")
+	assert.NoError(t, err, "Should successfully remove cluster from leaf config")
+	assert.False(t, config.HasCluster("leaf-cluster"), "Cluster should be removed")
+	assert.Equal(t, 2, config.GetClusterCount())
+
+	// Test 3: Try to remove the active cluster (should fail)
+	err = config.RemoveCluster("main-cluster")
+	assert.Error(t, err, "Should fail to remove active cluster")
+	assert.Contains(t, err.Error(), "active cluster", "Error should mention active cluster")
+	assert.True(t, config.HasCluster("main-cluster"), "Active cluster should still exist")
+
+	// Test 4: Try to remove non-existent cluster (should fail)
+	err = config.RemoveCluster("does-not-exist")
+	assert.Error(t, err, "Should fail to remove non-existent cluster")
+	assert.Contains(t, err.Error(), "not found", "Error should mention not found")
+
+	// Test 5: Make inactive and then remove
+	config.SetActiveCluster("another-leaf") // Set active to a different cluster
+	err = config.RemoveCluster("main-cluster")
+	assert.NoError(t, err, "Should successfully remove cluster after it's no longer active")
+	assert.False(t, config.HasCluster("main-cluster"))
+	assert.Equal(t, 1, config.GetClusterCount())
+
+	// Test 6: Verify the leaf config removal persists after save
+	err = config.Save()
+	require.NoError(t, err, "Should save successfully")
+
+	// Reload and verify the leaf cluster is still gone
+	config2, err := LoadConfig()
+	require.NoError(t, err)
+	assert.False(t, config2.HasCluster("leaf-cluster"), "Removed leaf cluster should not reappear")
+	assert.True(t, config2.HasCluster("another-leaf"), "Other leaf cluster should still exist")
+	assert.False(t, config2.HasCluster("main-cluster"), "Removed main cluster should not reappear")
+	assert.False(t, config2.HasCluster("other-main"), "Removed main cluster should not reappear")
+}
