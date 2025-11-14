@@ -15,11 +15,24 @@ import (
 
 type HTTPEndpoint struct {
 	Host string
+	// OnProxyError is called when the reverse proxy encounters an error
+	// This allows callers to track connection failures and mark backends unhealthy
+	OnProxyError func(target string, err error)
 }
 
 func (h *HTTPEndpoint) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	var rp httputil.ReverseProxy
 	rp.Director = h.redirect
+
+	// Set up error handler if callback is provided
+	if h.OnProxyError != nil {
+		rp.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
+			h.OnProxyError(h.Host, err)
+			// Write the default error response
+			w.WriteHeader(http.StatusBadGateway)
+		}
+	}
+
 	rp.ServeHTTP(w, req)
 }
 

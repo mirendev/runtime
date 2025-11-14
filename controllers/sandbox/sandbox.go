@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/netip"
 	"os"
@@ -440,6 +441,9 @@ func (c *SandboxController) Init(ctx context.Context) error {
 
 	go c.Metrics.Monitor(c.topCtx)
 
+	// Start periodic health checking of running sandboxes
+	go c.periodicHealthCheck(c.topCtx)
+
 	return nil
 }
 
@@ -600,6 +604,168 @@ func (c *SandboxController) isContainerHealthy(ctx context.Context, containerID 
 		c.Log.Debug("task in unknown/unhealthy state", "id", containerID, "status", status.Status)
 		return false
 	}
+}
+
+// checkPortHealth verifies that a TCP port is accepting connections
+// Returns true if a connection can be established, false otherwise
+func (c *SandboxController) checkPortHealth(ctx context.Context, address string, port int64) bool {
+	// Create a dialer with timeout from context
+	dialer := &net.Dialer{
+		Timeout: 2 * time.Second,
+	}
+
+	conn, err := dialer.DialContext(ctx, "tcp", fmt.Sprintf("%s:%d", address, port))
+	if err != nil {
+		c.Log.Debug("port health check failed", "address", address, "port", port, "error", err)
+		return false
+	}
+	conn.Close()
+	return true
+}
+
+// periodicHealthCheck runs continuously to check the health of running sandboxes
+// It marks unhealthy sandboxes as DEAD so they can be cleaned up and replaced
+func (c *SandboxController) periodicHealthCheck(ctx context.Context) {
+	ticker := time.NewTicker(60 * time.Second)
+	defer ticker.Stop()
+
+	c.Log.Info("starting periodic sandbox health checks", "interval", "60s")
+
+	for {
+		select {
+		case <-ctx.Done():
+			c.Log.Info("stopping periodic health checks")
+			return
+		case <-ticker.C:
+			c.checkRunningSandboxes(ctx)
+		}
+	}
+}
+
+// checkRunningSandboxes queries all RUNNING sandboxes and verifies their health
+func (c *SandboxController) checkRunningSandboxes(ctx context.Context) {
+	// Create a context with timeout for the entire check cycle
+	checkCtx, cancel := context.WithTimeout(ctx, 45*time.Second)
+	defer cancel()
+
+	// Query all sandboxes and filter by status
+	resp, err := c.EAC.List(checkCtx, entity.Ref(entity.EntityKind, compute.KindSandbox))
+	if err != nil {
+		c.Log.Error("failed to list sandboxes for health check", "error", err)
+		return
+	}
+
+	runningCount := 0
+	unhealthyCount := 0
+	for _, e := range resp.Values() {
+		var sb compute.Sandbox
+		sb.Decode(e.Entity())
+
+		// Only check sandboxes that are RUNNING
+		if sb.Status != compute.RUNNING {
+			continue
+		}
+		runningCount++
+
+		// Check pause container health
+		pauseID := c.pauseContainerId(sb.ID)
+		if !c.isContainerHealthy(checkCtx, pauseID) {
+			c.Log.Warn("periodic health check: pause container unhealthy",
+				"sandbox_id", sb.ID,
+				"pause_container_id", pauseID)
+			c.markSandboxUnhealthy(checkCtx, &sb, "pause container task unhealthy")
+			unhealthyCount++
+			continue
+		}
+
+		// Check all subcontainers
+		allHealthy := true
+		for _, container := range sb.Spec.Container {
+			containerID := fmt.Sprintf("%s-%s", c.containerPrefix(sb.ID), container.Name)
+
+			// Check container task health
+			if !c.isContainerHealthy(checkCtx, containerID) {
+				c.Log.Warn("periodic health check: subcontainer unhealthy",
+					"sandbox_id", sb.ID,
+					"container_name", container.Name,
+					"container_id", containerID)
+				allHealthy = false
+				break
+			}
+
+			// For sandboxes with network addresses, check port connectivity
+			// This catches cases where the task is running but the app is unreachable
+			if len(sb.Network) > 0 && len(container.Port) > 0 {
+				// Extract IP address from CIDR notation
+				addr := sb.Network[0].Address
+				ip, _, err := net.ParseCIDR(addr)
+				if err != nil {
+					c.Log.Debug("failed to parse sandbox address", "sandbox_id", sb.ID, "address", addr, "error", err)
+					continue
+				}
+
+				// Check the first exposed port
+				port := container.Port[0].Port
+				if !c.checkPortHealth(checkCtx, ip.String(), port) {
+					c.Log.Warn("periodic health check: port unreachable",
+						"sandbox_id", sb.ID,
+						"container_name", container.Name,
+						"address", ip.String(),
+						"port", port)
+					allHealthy = false
+					break
+				}
+			}
+		}
+
+		if !allHealthy {
+			c.markSandboxUnhealthy(checkCtx, &sb, "container or port health check failed")
+			unhealthyCount++
+		}
+	}
+
+	if unhealthyCount > 0 {
+		c.Log.Info("periodic health check completed",
+			"total_running", runningCount,
+			"unhealthy", unhealthyCount)
+	}
+}
+
+// markSandboxUnhealthy marks a sandbox as DEAD in the entity store
+func (c *SandboxController) markSandboxUnhealthy(ctx context.Context, sb *compute.Sandbox, reason string) {
+	c.Log.Info("marking sandbox as DEAD due to health check failure",
+		"sandbox_id", sb.ID,
+		"reason", reason)
+
+	patchAttrs := entity.New(
+		entity.Ref(entity.DBId, sb.ID),
+		(&compute.Sandbox{
+			Status: compute.DEAD,
+		}).Encode,
+	).Attrs()
+
+	var rpcE entityserver_v1alpha.Entity
+	rpcE.SetId(sb.ID.String())
+	rpcE.SetAttrs(patchAttrs)
+
+	_, err := c.EAC.Put(ctx, &rpcE)
+	if err != nil {
+		c.Log.Error("failed to mark sandbox as DEAD", "sandbox_id", sb.ID, "error", err)
+		return
+	}
+
+	c.Log.Info("successfully marked sandbox as DEAD", "sandbox_id", sb.ID)
+
+	// Try to clean up the sandbox resources
+	// Don't block on this - the reconciliation loop will retry if it fails
+	go func() {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+
+		if err := c.stopSandbox(cleanupCtx, sb.ID); err != nil {
+			c.Log.Error("failed to cleanup unhealthy sandbox", "sandbox_id", sb.ID, "error", err)
+		}
+	}()
 }
 
 // reattachLogs reattaches log consumers to a container's task after controller restart.

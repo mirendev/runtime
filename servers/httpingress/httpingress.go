@@ -49,12 +49,19 @@ type Server struct {
 
 	httpMetrics *metrics.HTTPMetrics
 
-	mu   sync.Mutex
-	apps map[string]*appUsage
+	mu          sync.Mutex
+	apps        map[string]*appUsage
+	proxyErrors map[string]*proxyErrorTracker // Maps sandbox URL to error tracker
 }
 
 type appUsage struct {
 	leases []*lease
+}
+
+type proxyErrorTracker struct {
+	consecutiveErrors int
+	lastError         time.Time
+	sandboxID         string
 }
 
 func NewServer(
@@ -84,6 +91,7 @@ func NewServer(
 		aa:            aa,
 		httpMetrics:   httpMetrics,
 		apps:          make(map[string]*appUsage),
+		proxyErrors:   make(map[string]*proxyErrorTracker),
 	}
 
 	// Build the timeout handler once at initialization
@@ -414,9 +422,20 @@ func (h *Server) serveHTTPWithMetrics(w http.ResponseWriter, req *http.Request, 
 
 	defer h.releaseLease(ctx, localLease)
 
+	sandboxID := actLease.Sandbox().ID.String()
 	he := &discovery.HTTPEndpoint{
 		Host: actLease.URL,
+		OnProxyError: func(target string, err error) {
+			h.trackProxyError(target, sandboxID, err)
+		},
 	}
+
+	// Track successful requests to reset error counters
+	defer func() {
+		if rec := recover(); rec == nil {
+			h.resetProxyErrors(actLease.URL)
+		}
+	}()
 
 	he.ServeHTTP(w, req)
 }
@@ -424,9 +443,20 @@ func (h *Server) serveHTTPWithMetrics(w http.ResponseWriter, req *http.Request, 
 func (h *Server) forwardToLease(ctx context.Context, w http.ResponseWriter, req *http.Request, lease *lease) {
 	defer h.releaseLease(ctx, lease)
 
+	sandboxID := lease.Lease.Sandbox().ID.String()
 	he := &discovery.HTTPEndpoint{
 		Host: lease.Lease.URL,
+		OnProxyError: func(target string, err error) {
+			h.trackProxyError(target, sandboxID, err)
+		},
 	}
+
+	// Track successful requests to reset error counters
+	defer func() {
+		if rec := recover(); rec == nil {
+			h.resetProxyErrors(lease.Lease.URL)
+		}
+	}()
 
 	he.ServeHTTP(w, req)
 }
@@ -536,4 +566,90 @@ func (h *Server) handleHealth(w http.ResponseWriter, req *http.Request) {
 
 	// Encode response as JSON
 	json.NewEncoder(w).Encode(response)
+}
+
+// trackProxyError records a proxy error for a given sandbox URL
+// After 3 consecutive errors, the sandbox is considered unhealthy
+func (h *Server) trackProxyError(sandboxURL string, sandboxID string, err error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	tracker, exists := h.proxyErrors[sandboxURL]
+	if !exists {
+		tracker = &proxyErrorTracker{
+			sandboxID: sandboxID,
+		}
+		h.proxyErrors[sandboxURL] = tracker
+	}
+
+	tracker.consecutiveErrors++
+	tracker.lastError = time.Now()
+
+	h.Log.Warn("proxy error to sandbox",
+		"sandbox_url", sandboxURL,
+		"sandbox_id", sandboxID,
+		"consecutive_errors", tracker.consecutiveErrors,
+		"error", err)
+
+	// After 3 consecutive errors, mark the sandbox as unhealthy
+	// This prevents repeatedly sending traffic to a broken sandbox
+	if tracker.consecutiveErrors >= 3 {
+		h.Log.Error("sandbox exceeded error threshold, marking unhealthy",
+			"sandbox_url", sandboxURL,
+			"sandbox_id", sandboxID,
+			"consecutive_errors", tracker.consecutiveErrors)
+
+		// Mark the sandbox as DEAD in the background
+		go h.markSandboxDead(sandboxID)
+	}
+}
+
+// resetProxyErrors clears error tracking for a sandbox URL when a request succeeds
+func (h *Server) resetProxyErrors(sandboxURL string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	if tracker, exists := h.proxyErrors[sandboxURL]; exists {
+		if tracker.consecutiveErrors > 0 {
+			h.Log.Debug("resetting error count for sandbox",
+				"sandbox_url", sandboxURL,
+				"previous_errors", tracker.consecutiveErrors)
+		}
+		delete(h.proxyErrors, sandboxURL)
+	}
+}
+
+// markSandboxDead marks a sandbox as DEAD in the entity store
+func (h *Server) markSandboxDead(sandboxID string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	h.Log.Info("marking sandbox as DEAD due to proxy errors", "sandbox_id", sandboxID)
+
+	// Use compute package to properly encode the DEAD status
+	sbID := entity.Id(sandboxID)
+	patchAttrs := entity.New(
+		entity.Ref(entity.DBId, sbID),
+		func(e *entity.Entity) {
+			// We can't import compute here due to circular dependencies
+			// So we construct the attribute manually using the correct ID
+			statusAttr := entity.Attr{
+				ID:    entity.Id("dev.miren.compute/sandbox.status"),
+				Value: entity.AnyValue("dev.miren.compute/status.dead"),
+			}
+			e.Set(statusAttr)
+		},
+	).Attrs()
+
+	var rpcE entityserver_v1alpha.Entity
+	rpcE.SetId(sandboxID)
+	rpcE.SetAttrs(patchAttrs)
+
+	_, err := h.eac.Put(ctx, &rpcE)
+	if err != nil {
+		h.Log.Error("failed to mark sandbox as DEAD", "sandbox_id", sandboxID, "error", err)
+		return
+	}
+
+	h.Log.Info("successfully marked sandbox as DEAD", "sandbox_id", sandboxID)
 }
