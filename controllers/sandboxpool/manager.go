@@ -727,8 +727,8 @@ func (m *Manager) cleanupEmptyPools(ctx context.Context) error {
 
 // countQuickCrashes counts sandboxes that died within 60 seconds of creation
 // and occurred after lastCrashTime
-func (m *Manager) countQuickCrashes(sandboxes []*sandboxWithMeta, lastCrashTime time.Time) int32 {
-	count := int32(0)
+func (m *Manager) countQuickCrashes(sandboxes []*sandboxWithMeta, lastCrashTime time.Time) int64 {
+	count := int64(0)
 	crashThreshold := 60 * time.Second
 
 	for _, sbm := range sandboxes {
@@ -760,6 +760,12 @@ func (m *Manager) countQuickCrashes(sandboxes []*sandboxWithMeta, lastCrashTime 
 func (m *Manager) calculateBackoff(crashCount int64) time.Time {
 	if crashCount <= 0 {
 		return time.Time{}
+	}
+
+	// Cap crash count to prevent bit-shift overflow (2^63 would overflow)
+	// At crashCount=10: 2^9 * 10s = 5120s, already well over 15min cap
+	if crashCount > 20 {
+		crashCount = 20
 	}
 
 	// 2^(n-1) * 10 seconds
