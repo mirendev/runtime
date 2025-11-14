@@ -782,7 +782,7 @@ func (m *Manager) hasHealthySandbox(sandboxes []*sandboxWithMeta, crashCount int
 	if crashCount > 0 {
 		backoffTime := m.calculateBackoff(crashCount)
 		if !backoffTime.IsZero() {
-			requiredUptime = backoffTime.Sub(time.Now())
+			requiredUptime = time.Until(backoffTime)
 		}
 	}
 
