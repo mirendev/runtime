@@ -652,7 +652,7 @@ func (c *Coordinator) ReportStatus(ctx context.Context) error {
 	}
 
 	// Collect resource usage metrics
-	resourceUsage := c.collectResourceUsage(ctx)
+	resourceUsage := c.collectResourceUsage()
 
 	// Build status report
 	status := &cloudauth.StatusReport{
@@ -668,7 +668,7 @@ func (c *Coordinator) ReportStatus(ctx context.Context) error {
 }
 
 // collectResourceUsage gathers basic host system resource usage metrics
-func (c *Coordinator) collectResourceUsage(ctx context.Context) cloudauth.ResourceUsage {
+func (c *Coordinator) collectResourceUsage() cloudauth.ResourceUsage {
 	stats := sysstats.CollectSystemStats(c.DataPath)
 
 	return cloudauth.ResourceUsage{
