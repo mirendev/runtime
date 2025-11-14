@@ -3,6 +3,7 @@ package commands
 import (
 	"fmt"
 
+	"miren.dev/runtime/clientconfig"
 	"miren.dev/runtime/pkg/ui"
 )
 
@@ -74,6 +75,11 @@ func ClusterSwitch(ctx *Context, opts struct {
 		return fmt.Errorf("cluster %q not found. Available clusters: %v", clusterName, availableClusters)
 	}
 
+	// Check if the user has permission to access this cluster
+	if err := checkClusterAccess(ctx, cfg, clusterName); err != nil {
+		return fmt.Errorf("access denied to cluster %q: %w", clusterName, err)
+	}
+
 	// Set the active cluster
 	err = cfg.SetActiveCluster(clusterName)
 	if err != nil {
@@ -88,4 +94,40 @@ func ClusterSwitch(ctx *Context, opts struct {
 
 	ctx.Printf("Switched to cluster: %s\n", clusterName)
 	return nil
+}
+
+// checkClusterAccess verifies that the user has permission to access the specified cluster
+func checkClusterAccess(ctx *Context, cfg *clientconfig.Config, clusterName string) error {
+	// Get the cluster configuration
+	cluster, err := cfg.GetCluster(clusterName)
+	if err != nil {
+		return fmt.Errorf("failed to get cluster config: %w", err)
+	}
+
+	// Get the identity for this cluster
+	identity, err := cfg.GetIdentity(cluster.Identity)
+	if err != nil {
+		return fmt.Errorf("identity %q not found: %w", cluster.Identity, err)
+	}
+
+	// Fetch accessible clusters from the cloud API
+	accessibleClusters, err := fetchAvailableClusters(ctx, identity)
+	if err != nil {
+		// If we can't reach the cloud API, we'll allow the switch
+		// The user will get an access denied error when they try to perform actions
+		ctx.Warn("Could not verify cluster access: %v", err)
+		ctx.Warn("Proceeding with switch. You may encounter permission errors if you don't have access.")
+		return nil
+	}
+
+	// Check if the target cluster is in the accessible list
+	for _, accessibleCluster := range accessibleClusters {
+		// Match by either name or XID (cluster name in local config may match either)
+		if accessibleCluster.Name == clusterName || accessibleCluster.XID == clusterName {
+			return nil // Access granted
+		}
+	}
+
+	// Cluster not found in accessible list
+	return fmt.Errorf("you do not have permission to access this cluster")
 }
