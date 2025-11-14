@@ -712,18 +712,43 @@ func (c *Config) SetCluster(name string, cluster *ClusterConfig) {
 
 // RemoveCluster removes a cluster from the configuration
 func (c *Config) RemoveCluster(name string) error {
-	if !c.HasCluster(name) {
-		return fmt.Errorf("cluster %q not found in configuration", name)
-	}
-
 	// Don't allow removing the active cluster
 	if c.active == name {
 		return fmt.Errorf("cannot remove active cluster %q", name)
 	}
 
-	delete(c.clusters, name)
+	// Check if cluster exists in main config
+	if _, existsInMain := c.clusters[name]; existsInMain {
+		delete(c.clusters, name)
+		return nil
+	}
 
-	return nil
+	// Check if it exists in a leaf config
+	for _, leafConfig := range c.leafConfigs {
+		if _, exists := leafConfig.clusters[name]; exists {
+			// Remove from leaf config's clusters map
+			delete(leafConfig.clusters, name)
+
+			// Mark the leaf config as needing to be saved
+			// by adding it to unsavedLeafConfigs
+			leafName := leafConfig.sourcePath
+			if leafName != "" {
+				if c.unsavedLeafConfigs == nil {
+					c.unsavedLeafConfigs = make(map[string]*ConfigData)
+				}
+				configData := &ConfigData{
+					Active:     leafConfig.active,
+					Clusters:   leafConfig.clusters,
+					Identities: leafConfig.identities,
+					Keys:       leafConfig.keys,
+				}
+				c.unsavedLeafConfigs[leafName] = configData
+			}
+			return nil
+		}
+	}
+
+	return fmt.Errorf("cluster %q not found in configuration", name)
 }
 
 // GetClusterNames returns a sorted list of all cluster names
