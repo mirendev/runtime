@@ -30,9 +30,13 @@ build_date="${BUILD_DATE:-$(date -u +"%Y-%m-%dT%H:%M:%SZ")}"
 # Extract short commit hash (first 7 characters)
 commit_short="${commit:0:7}"
 
-# If it's a release branch, extract the version, otherwise use branch name
-if [[ $current_branch =~ ^release/(.*) ]]; then
+# Check if it's a tag (starts with 'v' and looks like semver)
+if [[ $current_branch =~ ^v[0-9]+\.[0-9]+\.[0-9]+ ]]; then
+  version="$current_branch"
+# Check if it's a release branch
+elif [[ $current_branch =~ ^release/(.*) ]]; then
   version="${BASH_REMATCH[1]}"
+# Fall back to branch:commit
 else
   version="$current_branch:$commit_short"
 fi
