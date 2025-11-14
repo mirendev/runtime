@@ -351,8 +351,10 @@ func (m *Manager) listSandboxes(ctx context.Context, pool *compute_v1alpha.Sandb
 			continue
 		}
 
+		// Copy into a new variable so each entry gets a distinct pointer
+		sbCopy := sb
 		sandboxes = append(sandboxes, &sandboxWithMeta{
-			sandbox:   &sb,
+			sandbox:   &sbCopy,
 			createdAt: time.UnixMilli(ent.CreatedAt()),
 			updatedAt: time.UnixMilli(ent.UpdatedAt()),
 		})
@@ -754,12 +756,12 @@ func (m *Manager) countQuickCrashes(sandboxes []*sandboxWithMeta, lastCrashTime 
 	return count
 }
 
-// calculateBackoff returns the cooldown duration based on consecutive crash count
+// backoffDuration calculates the exponential backoff duration based on consecutive crash count
 // Uses exponential backoff: 10s, 20s, 40s, 80s, 160s, 320s, 640s, ...
 // Capped at 15 minutes
-func (m *Manager) calculateBackoff(crashCount int64) time.Time {
+func backoffDuration(crashCount int64) time.Duration {
 	if crashCount <= 0 {
-		return time.Time{}
+		return 0
 	}
 
 	// Cap crash count to prevent bit-shift overflow (2^63 would overflow)
@@ -777,20 +779,23 @@ func (m *Manager) calculateBackoff(crashCount int64) time.Time {
 		backoff = maxBackoff
 	}
 
-	return time.Now().Add(backoff)
+	return backoff
+}
+
+// calculateBackoff returns the absolute time when cooldown ends based on consecutive crash count
+func (m *Manager) calculateBackoff(crashCount int64) time.Time {
+	d := backoffDuration(crashCount)
+	if d == 0 {
+		return time.Time{}
+	}
+	return time.Now().Add(d)
 }
 
 // hasHealthySandbox checks if there's a sandbox that has been running long enough
 // to prove stability. The required uptime scales with the crash count.
 func (m *Manager) hasHealthySandbox(sandboxes []*sandboxWithMeta, crashCount int64) bool {
 	// Calculate required uptime based on current backoff
-	var requiredUptime time.Duration
-	if crashCount > 0 {
-		backoffTime := m.calculateBackoff(crashCount)
-		if !backoffTime.IsZero() {
-			requiredUptime = time.Until(backoffTime)
-		}
-	}
+	requiredUptime := backoffDuration(crashCount)
 
 	// Minimum 2 minutes required uptime
 	if requiredUptime < 2*time.Minute {
@@ -815,14 +820,8 @@ func (m *Manager) updatePoolCrashState(ctx context.Context, pool *compute_v1alph
 	attrs := []entity.Attr{
 		entity.Ref(entity.DBId, pool.ID),
 		entity.Int64(compute_v1alpha.SandboxPoolConsecutiveCrashCountId, pool.ConsecutiveCrashCount),
-	}
-
-	if !pool.LastCrashTime.IsZero() {
-		attrs = append(attrs, entity.Time(compute_v1alpha.SandboxPoolLastCrashTimeId, pool.LastCrashTime))
-	}
-
-	if !pool.CooldownUntil.IsZero() {
-		attrs = append(attrs, entity.Time(compute_v1alpha.SandboxPoolCooldownUntilId, pool.CooldownUntil))
+		entity.Time(compute_v1alpha.SandboxPoolLastCrashTimeId, pool.LastCrashTime),
+		entity.Time(compute_v1alpha.SandboxPoolCooldownUntilId, pool.CooldownUntil),
 	}
 
 	_, err := m.eac.Patch(ctx, attrs, 0)
