@@ -523,8 +523,8 @@ func (c *Coordinator) Start(ctx context.Context) error {
 		entity.Ref(entity.EntityKind, compute_v1alpha.KindSandboxPool),
 		eac,
 		controller.AdaptReconcileController[compute_v1alpha.SandboxPool](spm),
-		time.Minute, // Resync every minute to ensure pools are reconciled
-		1,           // Single worker to prevent duplicate sandbox creation races
+		10*time.Second, // Resync every 10 seconds for fast crash detection
+		1,              // Single worker to prevent duplicate sandbox creation races
 	)
 	c.cm.AddController(poolController)
 

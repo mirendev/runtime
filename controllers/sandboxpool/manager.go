@@ -68,17 +68,81 @@ func (m *Manager) Reconcile(ctx context.Context, pool *compute_v1alpha.SandboxPo
 	// Count RUNNING and PENDING as "actual" (prevents duplicates while sandboxes boot)
 	// Count only RUNNING as "ready" (sandboxes serving traffic)
 	// We exclude STOPPED (being retired), DEAD (failed), and "" (uninitialized)
+	// This must happen BEFORE cooldown check so current/ready counts are always up-to-date
 	actual := int64(0)
 	ready := int64(0)
-	for _, sb := range sandboxes {
-		if sb.Status == compute_v1alpha.RUNNING || sb.Status == compute_v1alpha.PENDING {
+	for _, sbm := range sandboxes {
+		if sbm.sandbox.Status == compute_v1alpha.RUNNING || sbm.sandbox.Status == compute_v1alpha.PENDING {
 			actual++
 		}
-		if sb.Status == compute_v1alpha.RUNNING {
+		if sbm.sandbox.Status == compute_v1alpha.RUNNING {
 			ready++
 		}
 	}
 
+	// Detect recent crashes (sandboxes that died within 60s of creation)
+	newCrashes := m.countQuickCrashes(sandboxes, pool.LastCrashTime)
+	if newCrashes > 0 {
+		pool.ConsecutiveCrashCount += int64(newCrashes)
+		pool.LastCrashTime = time.Now()
+		pool.CooldownUntil = m.calculateBackoff(pool.ConsecutiveCrashCount)
+
+		m.log.Warn("crash detected, entering cooldown",
+			"pool", pool.ID,
+			"new_crashes", newCrashes,
+			"consecutive_crashes", pool.ConsecutiveCrashCount,
+			"cooldown_until", pool.CooldownUntil)
+
+		// Update pool entity with new crash state
+		if err := m.updatePoolCrashState(ctx, pool); err != nil {
+			m.log.Error("failed to update pool crash state", "pool", pool.ID, "error", err)
+		}
+	}
+
+	// Check if pool is in cooldown
+	if !pool.CooldownUntil.IsZero() && time.Now().Before(pool.CooldownUntil) {
+		// Check if pool is unreferenced (no versions reference it)
+		// Unreferenced pools should be allowed to scale to 0 even during cooldown
+		isUnreferenced := len(pool.ReferencedByVersions) == 0
+
+		// Reset DesiredInstances to prevent activator-driven accumulation
+		// Allow desired: 0 for unreferenced pools (deployment cleanup)
+		targetDesired := int64(1)
+		if isUnreferenced {
+			targetDesired = 0
+		}
+
+		if pool.DesiredInstances != targetDesired {
+			m.log.Info("resetting DesiredInstances during cooldown",
+				"pool", pool.ID,
+				"old", pool.DesiredInstances,
+				"new", targetDesired,
+				"unreferenced", isUnreferenced,
+				"cooldown_until", pool.CooldownUntil)
+			pool.DesiredInstances = targetDesired
+			if err := m.updatePoolDesiredInstances(ctx, pool); err != nil {
+				m.log.Error("failed to update pool DesiredInstances", "pool", pool.ID, "error", err)
+			}
+		}
+
+		// Update current/ready counts even during cooldown, then skip scaling logic
+		return m.updatePoolStatus(ctx, pool, actual, ready)
+	}
+
+	// Check for healthy sandbox to reset crash counter
+	if pool.ConsecutiveCrashCount > 0 && m.hasHealthySandbox(sandboxes, pool.ConsecutiveCrashCount) {
+		m.log.Info("healthy sandbox detected, resetting crash counter",
+			"pool", pool.ID,
+			"previous_crash_count", pool.ConsecutiveCrashCount)
+		pool.ConsecutiveCrashCount = 0
+		pool.LastCrashTime = time.Time{}
+		pool.CooldownUntil = time.Time{}
+		if err := m.updatePoolCrashState(ctx, pool); err != nil {
+			m.log.Error("failed to reset pool crash state", "pool", pool.ID, "error", err)
+		}
+	}
+
+	// actual and ready were already counted at the top of Reconcile
 	desired := pool.DesiredInstances
 
 	// Cap desired at MaxPoolSize as a defensive measure
@@ -109,11 +173,11 @@ func (m *Manager) Reconcile(ctx context.Context, pool *compute_v1alpha.SandboxPo
 		// Determine which instance numbers to create
 		// Collect existing instance numbers
 		existingInstances := make(map[int]bool)
-		for _, sb := range sandboxes {
+		for _, sbm := range sandboxes {
 			// Get instance number from sandbox metadata
-			resp, err := m.eac.Get(ctx, sb.ID.String())
+			resp, err := m.eac.Get(ctx, sbm.sandbox.ID.String())
 			if err != nil {
-				m.log.Warn("failed to get sandbox metadata", "sandbox", sb.ID, "error", err)
+				m.log.Warn("failed to get sandbox metadata", "sandbox", sbm.sandbox.ID, "error", err)
 				continue
 			}
 
@@ -153,11 +217,11 @@ func (m *Manager) Reconcile(ctx context.Context, pool *compute_v1alpha.SandboxPo
 		}
 		actual = 0
 		ready = 0
-		for _, sb := range sandboxes {
-			if sb.Status == compute_v1alpha.RUNNING || sb.Status == compute_v1alpha.PENDING {
+		for _, sbm := range sandboxes {
+			if sbm.sandbox.Status == compute_v1alpha.RUNNING || sbm.sandbox.Status == compute_v1alpha.PENDING {
 				actual++
 			}
-			if sb.Status == compute_v1alpha.RUNNING {
+			if sbm.sandbox.Status == compute_v1alpha.RUNNING {
 				ready++
 			}
 		}
@@ -187,11 +251,11 @@ func (m *Manager) Reconcile(ctx context.Context, pool *compute_v1alpha.SandboxPo
 		}
 		actual = 0
 		ready = 0
-		for _, sb := range sandboxes {
-			if sb.Status == compute_v1alpha.RUNNING || sb.Status == compute_v1alpha.PENDING {
+		for _, sbm := range sandboxes {
+			if sbm.sandbox.Status == compute_v1alpha.RUNNING || sbm.sandbox.Status == compute_v1alpha.PENDING {
 				actual++
 			}
-			if sb.Status == compute_v1alpha.RUNNING {
+			if sbm.sandbox.Status == compute_v1alpha.RUNNING {
 				ready++
 			}
 		}
@@ -252,8 +316,14 @@ func (m *Manager) Delete(ctx context.Context, poolID entity.Id) error {
 	return nil
 }
 
-// listSandboxes returns all sandboxes for a pool
-func (m *Manager) listSandboxes(ctx context.Context, pool *compute_v1alpha.SandboxPool) ([]*compute_v1alpha.Sandbox, error) {
+type sandboxWithMeta struct {
+	sandbox   *compute_v1alpha.Sandbox
+	createdAt time.Time
+	updatedAt time.Time
+}
+
+// listSandboxes returns all sandboxes for a pool with their metadata
+func (m *Manager) listSandboxes(ctx context.Context, pool *compute_v1alpha.SandboxPool) ([]*sandboxWithMeta, error) {
 	// Query sandboxes by version index (reduces O(N) to O(N_version))
 	// We can now query by the nested sandbox.spec.version field directly!
 	resp, err := m.eac.List(ctx, entity.Ref(compute_v1alpha.SandboxSpecVersionId, pool.SandboxSpec.Version))
@@ -261,7 +331,7 @@ func (m *Manager) listSandboxes(ctx context.Context, pool *compute_v1alpha.Sandb
 		return nil, fmt.Errorf("failed to list sandboxes: %w", err)
 	}
 
-	var sandboxes []*compute_v1alpha.Sandbox
+	var sandboxes []*sandboxWithMeta
 
 	for _, ent := range resp.Values() {
 		var sb compute_v1alpha.Sandbox
@@ -281,7 +351,11 @@ func (m *Manager) listSandboxes(ctx context.Context, pool *compute_v1alpha.Sandb
 			continue
 		}
 
-		sandboxes = append(sandboxes, &sb)
+		sandboxes = append(sandboxes, &sandboxWithMeta{
+			sandbox:   &sb,
+			createdAt: time.UnixMilli(ent.CreatedAt()),
+			updatedAt: time.UnixMilli(ent.UpdatedAt()),
+		})
 	}
 
 	return sandboxes, nil
@@ -340,7 +414,7 @@ func (m *Manager) createSandbox(ctx context.Context, pool *compute_v1alpha.Sandb
 // scaleDown stops excess sandboxes to bring actual count down to desired count.
 // This is called when actual > desired (proactive scale-down).
 // Sandboxes are retired in priority order: oldest LastActivity first.
-func (m *Manager) scaleDown(ctx context.Context, pool *compute_v1alpha.SandboxPool, sandboxes []*compute_v1alpha.Sandbox, count int64) error {
+func (m *Manager) scaleDown(ctx context.Context, pool *compute_v1alpha.SandboxPool, sandboxes []*sandboxWithMeta, count int64) error {
 	now := time.Now()
 
 	// Collect all RUNNING sandboxes as candidates
@@ -350,20 +424,20 @@ func (m *Manager) scaleDown(ctx context.Context, pool *compute_v1alpha.SandboxPo
 	}
 
 	var candidates []candidate
-	for _, sb := range sandboxes {
+	for _, sbm := range sandboxes {
 		// Only consider RUNNING sandboxes
-		if sb.Status != compute_v1alpha.RUNNING {
+		if sbm.sandbox.Status != compute_v1alpha.RUNNING {
 			continue
 		}
 
-		lastActivity := sb.LastActivity
+		lastActivity := sbm.sandbox.LastActivity
 		// If LastActivity is not set, treat as current time (most recently active)
 		if lastActivity.IsZero() {
 			lastActivity = now
 		}
 
 		candidates = append(candidates, candidate{
-			sb:           sb,
+			sb:           sbm.sandbox,
 			lastActivity: lastActivity,
 		})
 	}
@@ -550,12 +624,12 @@ func (m *Manager) checkPoolForScaleDown(ctx context.Context, pool *compute_v1alp
 	idleCount := int64(0)
 
 	// Count RUNNING sandboxes that are idle beyond ScaleDownDelay
-	for _, sb := range sandboxes {
-		if sb.Status != compute_v1alpha.RUNNING {
+	for _, sbm := range sandboxes {
+		if sbm.sandbox.Status != compute_v1alpha.RUNNING {
 			continue
 		}
 
-		lastActivity := sb.LastActivity
+		lastActivity := sbm.sandbox.LastActivity
 		if lastActivity.IsZero() {
 			// No activity recorded yet - treat as recently active
 			continue
@@ -649,4 +723,113 @@ func (m *Manager) cleanupEmptyPools(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+// countQuickCrashes counts sandboxes that died within 60 seconds of creation
+// and occurred after lastCrashTime
+func (m *Manager) countQuickCrashes(sandboxes []*sandboxWithMeta, lastCrashTime time.Time) int32 {
+	count := int32(0)
+	crashThreshold := 60 * time.Second
+
+	for _, sbm := range sandboxes {
+		if sbm.sandbox.Status != compute_v1alpha.DEAD {
+			continue
+		}
+
+		// Check if this is a quick crash (died within 60s of creation)
+		lifetime := sbm.updatedAt.Sub(sbm.createdAt)
+
+		if lifetime >= crashThreshold {
+			continue // Lived long enough, not a quick crash
+		}
+
+		// Check if this crash is new (after lastCrashTime)
+		if !lastCrashTime.IsZero() && !sbm.updatedAt.After(lastCrashTime) {
+			continue // Already counted this crash
+		}
+
+		count++
+	}
+
+	return count
+}
+
+// calculateBackoff returns the cooldown duration based on consecutive crash count
+// Uses exponential backoff: 10s, 20s, 40s, 80s, 160s, 320s, 640s, ...
+// Capped at 15 minutes
+func (m *Manager) calculateBackoff(crashCount int64) time.Time {
+	if crashCount <= 0 {
+		return time.Time{}
+	}
+
+	// 2^(n-1) * 10 seconds
+	backoffSeconds := (1 << uint(crashCount-1)) * 10
+	backoff := time.Duration(backoffSeconds) * time.Second
+
+	maxBackoff := 15 * time.Minute
+	if backoff > maxBackoff {
+		backoff = maxBackoff
+	}
+
+	return time.Now().Add(backoff)
+}
+
+// hasHealthySandbox checks if there's a sandbox that has been running long enough
+// to prove stability. The required uptime scales with the crash count.
+func (m *Manager) hasHealthySandbox(sandboxes []*sandboxWithMeta, crashCount int64) bool {
+	// Calculate required uptime based on current backoff
+	var requiredUptime time.Duration
+	if crashCount > 0 {
+		backoffTime := m.calculateBackoff(crashCount)
+		if !backoffTime.IsZero() {
+			requiredUptime = backoffTime.Sub(time.Now())
+		}
+	}
+
+	// Minimum 2 minutes required uptime
+	if requiredUptime < 2*time.Minute {
+		requiredUptime = 2 * time.Minute
+	}
+
+	now := time.Now()
+	for _, sbm := range sandboxes {
+		if sbm.sandbox.Status == compute_v1alpha.RUNNING {
+			uptime := now.Sub(sbm.createdAt)
+			if uptime >= requiredUptime {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
+// updatePoolCrashState updates the crash-related fields in the pool entity
+func (m *Manager) updatePoolCrashState(ctx context.Context, pool *compute_v1alpha.SandboxPool) error {
+	attrs := []entity.Attr{
+		entity.Ref(entity.DBId, pool.ID),
+		entity.Int64(compute_v1alpha.SandboxPoolConsecutiveCrashCountId, pool.ConsecutiveCrashCount),
+	}
+
+	if !pool.LastCrashTime.IsZero() {
+		attrs = append(attrs, entity.Time(compute_v1alpha.SandboxPoolLastCrashTimeId, pool.LastCrashTime))
+	}
+
+	if !pool.CooldownUntil.IsZero() {
+		attrs = append(attrs, entity.Time(compute_v1alpha.SandboxPoolCooldownUntilId, pool.CooldownUntil))
+	}
+
+	_, err := m.eac.Patch(ctx, attrs, 0)
+	return err
+}
+
+// updatePoolDesiredInstances updates only the DesiredInstances field in the pool entity
+func (m *Manager) updatePoolDesiredInstances(ctx context.Context, pool *compute_v1alpha.SandboxPool) error {
+	attrs := []entity.Attr{
+		entity.Ref(entity.DBId, pool.ID),
+		entity.Int64(compute_v1alpha.SandboxPoolDesiredInstancesId, pool.DesiredInstances),
+	}
+
+	_, err := m.eac.Patch(ctx, attrs, 0)
+	return err
 }
