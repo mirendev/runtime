@@ -1,3 +1,3 @@
 module heavy-logger
 
-go 1.21
+go 1.25

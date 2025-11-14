@@ -371,6 +371,19 @@ kinds:
       type: int
       doc: Number of RUNNING sandboxes
 
+    # Crash loop detection and cooldown (managed by SandboxPoolManager)
+    consecutive_crash_count:
+      type: int
+      doc: Number of consecutive quick crashes (sandboxes that died within 60s of creation)
+
+    last_crash_time:
+      type: time
+      doc: Timestamp of the most recent quick crash
+
+    cooldown_until:
+      type: time
+      doc: Timestamp until which new sandbox creation is paused due to crash loop
+
     # Version references for pool reuse across deployments
     referenced_by_versions:
       type: ref
