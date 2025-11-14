@@ -157,7 +157,7 @@ func TestPoolReuseOnConfigChange(t *testing.T) {
 	v1 := &core_v1alpha.AppVersion{
 		App:      app.ID,
 		Version:  "v1",
-		ImageUrl: "postgres:16",
+		ImageUrl: "oci.miren.cloud/postgres:16",
 		Config: core_v1alpha.Config{
 			Port: 5432,
 			Variable: []core_v1alpha.Variable{
@@ -197,7 +197,7 @@ func TestPoolReuseOnConfigChange(t *testing.T) {
 	v2 := &core_v1alpha.AppVersion{
 		App:      app.ID,
 		Version:  "v2",
-		ImageUrl: "postgres:16", // Same image
+		ImageUrl: "oci.miren.cloud/postgres:16", // Same image
 		Config: core_v1alpha.Config{
 			Port: 5432,
 			Variable: []core_v1alpha.Variable{
@@ -261,7 +261,7 @@ func TestNewPoolOnImageChange(t *testing.T) {
 	v1 := &core_v1alpha.AppVersion{
 		App:      app.ID,
 		Version:  "v1",
-		ImageUrl: "postgres:16",
+		ImageUrl: "oci.miren.cloud/postgres:16",
 		Config: core_v1alpha.Config{
 			Port: 5432,
 			Services: []core_v1alpha.Services{
@@ -297,7 +297,7 @@ func TestNewPoolOnImageChange(t *testing.T) {
 	v2 := &core_v1alpha.AppVersion{
 		App:      app.ID,
 		Version:  "v2",
-		ImageUrl: "postgres:17", // Image changed
+		ImageUrl: "oci.miren.cloud/postgres:17", // Image changed
 		Config: core_v1alpha.Config{
 			Port: 5432,
 			Services: []core_v1alpha.Services{

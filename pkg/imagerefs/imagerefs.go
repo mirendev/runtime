@@ -29,30 +29,33 @@ const (
 // Base images for language stacks
 const (
 	// Default Alpine Linux base image
-	AlpineDefault = "alpine:3.21"
+	AlpineDefault = "oci.miren.cloud/alpine:3.21"
+
+	// Default Busybox image
+	BusyboxDefault = "oci.miren.cloud/busybox:1.37-musl"
 )
 
 // GetPythonImage returns a Python image reference with the specified version
 func GetPythonImage(version string) string {
-	return "python:" + version + "-slim"
+	return "oci.miren.cloud/python:" + version + "-slim"
 }
 
 // GetRubyImage returns a Ruby image reference with the specified version
 func GetRubyImage(version string) string {
-	return "ruby:" + version + "-slim"
+	return "oci.miren.cloud/ruby:" + version + "-slim"
 }
 
 // GetGolangImage returns a Golang image reference with the specified version
 func GetGolangImage(version string) string {
-	return "golang:" + version + "-alpine"
+	return "oci.miren.cloud/golang:" + version + "-alpine"
 }
 
 // GetBunImage returns a Bun runtime image reference with the specified version
 func GetBunImage(version string) string {
-	return "oven/bun:" + version
+	return "oci.miren.cloud/bun:" + version
 }
 
 // GetNodeImage returns a Node.js image reference with the specified version
 func GetNodeImage(version string) string {
-	return "node:" + version + "-alpine"
+	return "oci.miren.cloud/node:" + version + "-slim"
 }

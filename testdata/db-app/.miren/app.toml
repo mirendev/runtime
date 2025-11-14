@@ -13,7 +13,7 @@ key = "POSTGRES_PASSWORD"
 value = "hunter2"
 
 [services.db]
-image = "postgres:15"
+image = "oci.miren.cloud/postgres:15"
 
 [services.db.concurrency]
 mode = "fixed"
