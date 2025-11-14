@@ -193,42 +193,18 @@ func humanFriendlyTimestamp(t time.Time) string {
 	}
 
 	if since < time.Minute {
-		return fmt.Sprintf("%d seconds ago", int(since.Seconds()))
+		return fmt.Sprintf("%ds ago", int(since.Seconds()))
 	} else if since < time.Hour {
-		mins := int(since.Minutes())
-		if mins == 1 {
-			return "1 minute ago"
-		}
-		return fmt.Sprintf("%d minutes ago", mins)
+		return fmt.Sprintf("%dm ago", int(since.Minutes()))
 	} else if since < 24*time.Hour {
-		hours := int(since.Hours())
-		if hours == 1 {
-			return "1 hour ago"
-		}
-		return fmt.Sprintf("%d hours ago", hours)
+		return fmt.Sprintf("%dh ago", int(since.Hours()))
 	} else if since < 7*24*time.Hour {
-		days := int(since.Hours() / 24)
-		if days == 1 {
-			return "1 day ago"
-		}
-		return fmt.Sprintf("%d days ago", days)
+		return fmt.Sprintf("%dd ago", int(since.Hours()/24))
 	} else if since < 30*24*time.Hour {
-		weeks := int(since.Hours() / (24 * 7))
-		if weeks == 1 {
-			return "1 week ago"
-		}
-		return fmt.Sprintf("%d weeks ago", weeks)
+		return fmt.Sprintf("%dw ago", int(since.Hours()/(24*7)))
 	} else if since < 365*24*time.Hour {
-		months := int(since.Hours() / (24 * 30))
-		if months == 1 {
-			return "1 month ago"
-		}
-		return fmt.Sprintf("%d months ago", months)
+		return fmt.Sprintf("%dmo ago", int(since.Hours()/(24*30)))
 	} else {
-		years := int(since.Hours() / (24 * 365))
-		if years == 1 {
-			return "1 year ago"
-		}
-		return fmt.Sprintf("%d years ago", years)
+		return fmt.Sprintf("%dy ago", int(since.Hours()/(24*365)))
 	}
 }
