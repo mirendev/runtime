@@ -53,6 +53,11 @@ func NewFileStore(basePath string) (*FileStore, error) {
 
 // CreateEntity creates a new entity with the given type and attributes
 func (s *FileStore) CreateEntity(ctx context.Context, entity *Entity, opts ...EntityOption) (*Entity, error) {
+	// Set CreatedAt if not already set (store manages this timestamp)
+	if entity.GetCreatedAt().IsZero() {
+		entity.SetCreatedAt(time.Now())
+	}
+
 	// Validate attributes against schemas
 	err := s.validator.ValidateEntity(ctx, entity)
 	if err != nil {
@@ -213,6 +218,9 @@ func (s *FileStore) GetAttributeSchema(ctx context.Context, id Id) (*AttributeSc
 // saveEntity saves an entity to disk
 func (s *FileStore) saveEntity(entity *Entity) error {
 	entity.Fixup()
+
+	// Store manages UpdatedAt - set it on every save
+	entity.SetUpdatedAt(time.Now())
 
 	data, err := encoder.Marshal(entity)
 	if err != nil {
