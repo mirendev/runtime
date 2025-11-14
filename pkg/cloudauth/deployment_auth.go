@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/google/uuid"
 	"miren.dev/runtime/pkg/auth"
 	"miren.dev/runtime/pkg/rbac"
 )
@@ -53,16 +52,4 @@ func (a *DeploymentAuthorizer) AuthorizeDeployment(ctx context.Context, appName 
 	}
 
 	return nil
-}
-
-// GetDeploymentUserInfo extracts user info from context for deployment records
-func GetDeploymentUserInfo(ctx context.Context) (userID, userEmail string) {
-	claims := auth.ClaimsFromContext(ctx)
-	if claims == nil {
-		// Return placeholder values if no claims
-		return "user-" + uuid.New().String(), "user@example.com"
-	}
-	
-	// Subject is the user ID, and in Miren it's typically the email
-	return claims.Subject, claims.Subject
 }
