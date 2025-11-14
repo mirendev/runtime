@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 
 	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/api/entityserver"
@@ -97,7 +98,7 @@ func (c *Client) SetHost(ctx context.Context, appName, host string) error {
 
 	// Create the http_route entity
 	route := &ingress_v1alpha.HttpRoute{
-		Host: host,
+		Host: strings.ToLower(host),
 		App:  app.ID,
 	}
 

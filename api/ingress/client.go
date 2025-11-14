@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 
 	"miren.dev/runtime/api/entityserver"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
@@ -35,7 +36,7 @@ func NewClient(log *slog.Logger, client rpc.Client) *Client {
 
 // Lookup finds an http_route by hostname, returns nil if not found
 func (c *Client) Lookup(ctx context.Context, host string) (*ingress_v1alpha.HttpRoute, error) {
-	ia := entity.String(ingress_v1alpha.HttpRouteHostId, host)
+	ia := entity.String(ingress_v1alpha.HttpRouteHostId, strings.ToLower(host))
 
 	var route ingress_v1alpha.HttpRoute
 	err := c.ec.OneAtIndex(ctx, ia, &route)
@@ -163,7 +164,7 @@ func (c *Client) List(ctx context.Context) ([]*RouteWithMeta, error) {
 // SetRoute creates or updates an http_route for the given host and app
 func (c *Client) SetRoute(ctx context.Context, host string, appId entity.Id) (*ingress_v1alpha.HttpRoute, error) {
 	route := &ingress_v1alpha.HttpRoute{
-		Host: host,
+		Host: strings.ToLower(host),
 		App:  appId,
 	}
 
