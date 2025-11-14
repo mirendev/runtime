@@ -38,12 +38,14 @@ import (
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/schema"
 	"miren.dev/runtime/pkg/rpc"
+	"miren.dev/runtime/pkg/sysstats"
 	"miren.dev/runtime/servers/app"
 	"miren.dev/runtime/servers/build"
 	"miren.dev/runtime/servers/deployment"
 	"miren.dev/runtime/servers/entityserver"
 	execproxy "miren.dev/runtime/servers/exec_proxy"
 	"miren.dev/runtime/servers/logs"
+	"miren.dev/runtime/version"
 )
 
 type CoordinatorConfig struct {
@@ -92,6 +94,7 @@ type Coordinator struct {
 	Log *slog.Logger
 
 	state *rpc.State
+	eac   *esv1.EntityAccessClient // Entity access client for querying entities
 
 	aa  activator.AppActivator
 	spm *sandboxpool.Manager
@@ -461,6 +464,7 @@ func (c *Coordinator) Start(ctx context.Context) error {
 	}
 
 	eac := esv1.NewEntityAccessClient(loopback)
+	c.eac = eac // Store for use in status reporting and other methods
 	ec := aes.NewClient(c.Log, eac)
 
 	defaultProject := &core_v1alpha.Project{
@@ -635,21 +639,46 @@ func (c *Coordinator) ReportStatus(ctx context.Context) error {
 		return fmt.Errorf("cluster ID not configured")
 	}
 
+	// Get version information
+	versionInfo := version.GetInfo()
+
+	// Count apps (workloads) from entity store
+	var workloadCount int
+	appList, err := c.eac.List(ctx, entity.Ref(entity.EntityKind, core_v1alpha.KindApp))
+	if err != nil {
+		c.Log.Warn("failed to count apps for status report", "error", err)
+	} else {
+		workloadCount = len(appList.Values())
+	}
+
+	// Collect resource usage metrics
+	resourceUsage := c.collectResourceUsage(ctx)
+
 	// Build status report
 	status := &cloudauth.StatusReport{
-		ClusterID: c.CloudAuth.ClusterID,
-		State:     "active", // TODO: Determine actual state based on health checks
-		// TODO: Add more fields as they become available:
-		// - Version (from build info)
-		// - NodeCount (from entity store)
-		// - WorkloadCount (from entity store)
-		// - ResourceUsage (from metrics)
-		// - HealthChecks (from component health)
-		// - RBACRulesVersion (from RBAC system)
-		// - LastRBACSync (from RBAC system)
+		ClusterID:     c.CloudAuth.ClusterID,
+		State:         "active",
+		Version:       versionInfo.Version,
+		NodeCount:     1, // Static value for now
+		WorkloadCount: workloadCount,
+		ResourceUsage: resourceUsage,
 	}
 
 	return c.authClient.ReportClusterStatus(ctx, status)
+}
+
+// collectResourceUsage gathers basic host system resource usage metrics
+func (c *Coordinator) collectResourceUsage(ctx context.Context) cloudauth.ResourceUsage {
+	stats := sysstats.CollectSystemStats(c.DataPath)
+
+	return cloudauth.ResourceUsage{
+		CPUCores:       stats.CPUCores,
+		CPUPercent:     stats.CPUPercent,
+		MemoryBytes:    stats.MemoryBytes,
+		MemoryPercent:  stats.MemoryPercent,
+		StorageBytes:   stats.StorageBytes,
+		StoragePercent: stats.StoragePercent,
+	}
 }
 
 // reportStatusPeriodically reports cluster status at regular intervals
