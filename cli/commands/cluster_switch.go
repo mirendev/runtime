@@ -104,6 +104,11 @@ func checkClusterAccess(ctx *Context, cfg *clientconfig.Config, clusterName stri
 		return fmt.Errorf("failed to get cluster config: %w", err)
 	}
 
+	// Skip permission check if no identity is configured (e.g., local dev clusters)
+	if cluster.Identity == "" {
+		return nil
+	}
+
 	// Get the identity for this cluster
 	identity, err := cfg.GetIdentity(cluster.Identity)
 	if err != nil {
