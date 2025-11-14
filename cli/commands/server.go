@@ -51,6 +51,7 @@ import (
 	"miren.dev/runtime/pkg/rpc"
 	"miren.dev/runtime/pkg/serverconfig"
 	"miren.dev/runtime/servers/httpingress"
+	"miren.dev/runtime/version"
 )
 
 func Server(ctx *Context, opts serverconfig.CLIFlags) error {
@@ -66,6 +67,10 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 	if err != nil {
 		return fmt.Errorf("failed to load configuration: %w", err)
 	}
+
+	versionInfo := version.GetInfo()
+	ctx.UILog.Info("starting miren server", "version", versionInfo.Version, "commit", versionInfo.Commit)
+
 	switch cfg.GetMode() {
 	case "standalone":
 		// Mode defaults are already applied by serverconfig.Load
