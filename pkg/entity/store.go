@@ -170,6 +170,11 @@ func (s *EtcdStore) CreateEntity(
 	// when retrieving an entity, before stamping it with the current etcd revision.
 	entity.Remove(Revision)
 
+	// Set CreatedAt if not already set (store manages this timestamp)
+	if entity.GetCreatedAt().IsZero() {
+		entity.SetCreatedAt(time.Now())
+	}
+
 	// Validate attributes
 	if err := s.validator.ValidateEntity(ctx, entity); err != nil {
 		return nil, err
@@ -749,6 +754,7 @@ func (s *EtcdStore) buildEntitySaveOps(entity *Entity, key string, primary, sess
 	var ops []clientv3.Op
 
 	entity.attrs = primary
+	// Store manages UpdatedAt - set it on every save
 	entity.SetUpdatedAt(time.Now())
 
 	data, err := encoder.Marshal(entity)

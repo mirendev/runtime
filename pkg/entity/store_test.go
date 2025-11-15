@@ -1743,6 +1743,12 @@ func TestEtcdStore_NestedComponentFieldIndexing(t *testing.T) {
 //   - When fixed, only 1 key remains (the non-deleted entity)
 func TestEtcdStore_DeleteEntity_IndexCleanup_DirectQuery(t *testing.T) {
 	client := setupTestEtcd(t)
+
+	// Clean up test data from previous runs
+	ctx := context.Background()
+	_, err := client.Delete(ctx, "/test-entities-debug/", clientv3.WithPrefix())
+	require.NoError(t, err)
+
 	store, err := NewEtcdStore(t.Context(), slog.Default(), client, "/test-entities-debug")
 	require.NoError(t, err)
 

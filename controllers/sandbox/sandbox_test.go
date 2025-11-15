@@ -133,7 +133,7 @@ func TestSandbox(t *testing.T) {
 		ca, err := netip.ParsePrefix(tco.Network[0].Address)
 		r.NoError(err)
 
-		c, err := cc.LoadContainer(ctx, co.pauseContainerId(id))
+		c, err := cc.LoadContainer(ctx, pauseContainerId(id))
 		r.NoError(err)
 
 		r.NotNil(c)
@@ -324,7 +324,7 @@ func TestSandbox(t *testing.T) {
 		err = co.Create(ctx, &tco, meta)
 		r.NoError(err)
 
-		c, err := cc.LoadContainer(ctx, co.pauseContainerId(id))
+		c, err := cc.LoadContainer(ctx, pauseContainerId(id))
 		r.NoError(err)
 
 		r.NotNil(c)
@@ -465,7 +465,7 @@ func TestSandbox(t *testing.T) {
 		ca, err := netip.ParsePrefix(tco.Network[0].Address)
 		r.NoError(err)
 
-		c, err := cc.LoadContainer(ctx, co.pauseContainerId(id))
+		c, err := cc.LoadContainer(ctx, pauseContainerId(id))
 		r.NoError(err)
 
 		r.NotNil(c)
@@ -613,7 +613,7 @@ func TestSandbox(t *testing.T) {
 		ca, err := netip.ParsePrefix(tco.Network[0].Address)
 		r.NoError(err)
 
-		c, err := cc.LoadContainer(ctx, co.pauseContainerId(id))
+		c, err := cc.LoadContainer(ctx, pauseContainerId(id))
 		r.NoError(err)
 
 		r.NotNil(c)
@@ -753,7 +753,7 @@ func TestSandbox(t *testing.T) {
 		ca, err := netip.ParsePrefix(tco.Network[0].Address)
 		r.NoError(err)
 
-		c, err := cc.LoadContainer(ctx, co.pauseContainerId(id))
+		c, err := cc.LoadContainer(ctx, pauseContainerId(id))
 		r.NoError(err)
 
 		r.NotNil(c)
@@ -993,7 +993,7 @@ func TestSandbox(t *testing.T) {
 		ipAddr := ca.Addr().String()
 
 		// Get the container ID for port checking
-		containerID := fmt.Sprintf("%s-%s", co.containerPrefix(id), "http-server")
+		containerID := fmt.Sprintf("%s-%s", containerPrefix(id), "http-server")
 
 		// Wait for the port to be detected as bound (with timeout)
 		portBound := false
@@ -1117,7 +1117,7 @@ func TestSandbox(t *testing.T) {
 		r.NoError(err)
 
 		// Get the container ID
-		containerID := fmt.Sprintf("%s-%s", co.containerPrefix(id), "multi-port")
+		containerID := fmt.Sprintf("%s-%s", containerPrefix(id), "multi-port")
 
 		// Wait for all ports to be detected as bound
 		expectedPorts := map[int]bool{8080: false, 8081: false, 8082: false}
@@ -1301,7 +1301,7 @@ func TestSandbox(t *testing.T) {
 		time.Sleep(3 * time.Second)
 
 		// Get the container and task
-		containerID := fmt.Sprintf("%s-%s", co1.containerPrefix(id), "logger")
+		containerID := fmt.Sprintf("%s-%s", containerPrefix(id), "logger")
 		subC, err := cc.LoadContainer(ctx, containerID)
 		r.NoError(err)
 		r.NotNil(subC)

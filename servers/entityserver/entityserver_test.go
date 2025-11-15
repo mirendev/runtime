@@ -239,9 +239,11 @@ func TestEntityServer_WatchIndex(t *testing.T) {
 
 		ae := op.Entity()
 
-		r.Len(ae.Attrs(), 4)
+		// Entity has 2 attributes: db/id and db/ident (timestamps managed by store, not present here)
+		r.Len(ae.Attrs(), 2)
 
-		r.Equal(entity.Ref(entity.DBId, "mock/entity"), ae.Attrs()[2])
+		// Verify the entity has the expected db/id attribute
+		r.Contains(ae.Attrs(), entity.Ref(entity.DBId, "mock/entity"))
 
 		return nil
 	}))

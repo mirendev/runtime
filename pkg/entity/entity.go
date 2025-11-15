@@ -83,20 +83,11 @@ func New(vals ...any) *Entity {
 		}
 	}
 
-	ts := time.Now()
 	e := &Entity{
 		attrs: SortedAttrs(attrs),
 	}
 
 	e.removeIdent()
-
-	// Only set timestamps if they don't already exist
-	if e.GetCreatedAt().IsZero() {
-		e.SetCreatedAt(ts)
-	}
-	if e.GetUpdatedAt().IsZero() {
-		e.SetUpdatedAt(ts)
-	}
 
 	return e
 }

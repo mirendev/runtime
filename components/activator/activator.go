@@ -460,6 +460,14 @@ func (a *localActivator) requestPoolCapacity(ctx context.Context, ver *core_v1al
 				continue
 			}
 
+			// Check if pool is in crash cooldown before attempting to increment
+			if !state.pool.CooldownUntil.IsZero() && time.Now().Before(state.pool.CooldownUntil) {
+				return state.pool, fmt.Errorf("%w: application in crash cooldown until %s (consecutive crashes: %d)",
+					ErrSandboxDiedEarly,
+					state.pool.CooldownUntil.Format(time.RFC3339),
+					state.pool.ConsecutiveCrashCount)
+			}
+
 			// Update existing pool - increment DesiredInstances with optimistic concurrency control
 			// Calculate target ONCE based on the state captured at the start of this iteration
 			// This ensures concurrent goroutines that all saw the same initial value

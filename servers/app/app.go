@@ -367,7 +367,7 @@ func (r *AppInfo) SetHost(ctx context.Context, state *app_v1alpha.CrudSetHost) e
 
 	var routeRec ingress_v1alpha.HttpRoute
 
-	routeRec.Host = state.Args().Host()
+	routeRec.Host = strings.ToLower(state.Args().Host())
 	routeRec.App = appRec.ID
 
 	_, err = r.EC.CreateOrUpdate(ctx, routeRec.Host, &routeRec)

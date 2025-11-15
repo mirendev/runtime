@@ -92,6 +92,8 @@ type SandboxController struct {
 	portCond    *sync.Cond
 	portMap     map[string]*containerPorts
 	portMonitor *PortMonitor
+
+	watchdog *ContainerWatchdog
 }
 
 func (c *SandboxController) Populated() error {
@@ -217,7 +219,7 @@ func (c *SandboxController) reconcileSandboxesOnBoot(ctx context.Context) error 
 		runningCount++
 
 		// Reattach logs to pause container
-		pauseID := c.pauseContainerId(sb.ID)
+		pauseID := pauseContainerId(sb.ID)
 		if err := c.reattachLogs(ctx, &sb, pauseID, ""); err != nil {
 			c.Log.Warn("failed to reattach logs to pause container",
 				"sandbox_id", sb.ID,
@@ -239,7 +241,7 @@ func (c *SandboxController) reconcileSandboxesOnBoot(ctx context.Context) error 
 		// Reattach logs and check subcontainers health
 		allHealthy := true
 		for _, container := range sb.Spec.Container {
-			containerID := fmt.Sprintf("%s-%s", c.containerPrefix(sb.ID), container.Name)
+			containerID := fmt.Sprintf("%s-%s", containerPrefix(sb.ID), container.Name)
 
 			// Reattach logs for this subcontainer
 			if err := c.reattachLogs(ctx, &sb, containerID, container.Name); err != nil {
@@ -285,95 +287,6 @@ func (c *SandboxController) reconcileSandboxesOnBoot(ctx context.Context) error 
 		"total_running_sandboxes", runningCount,
 		"reattached_sandboxes", reattachedCount,
 		"unhealthy_sandboxes", len(unhealthySandboxes))
-
-	return nil
-}
-
-// cleanupOrphanedContainers removes containers not associated with Running sandboxes
-func (c *SandboxController) cleanupOrphanedContainers(ctx context.Context) error {
-	c.Log.Info("cleaning up orphaned containers")
-
-	// Create a context with timeout for the entire cleanup
-	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
-	defer cancel()
-
-	ctx = namespaces.WithNamespace(ctx, c.Namespace)
-
-	// List all containers in the namespace
-	containerList, err := c.CC.Containers(ctx)
-	if err != nil {
-		return fmt.Errorf("failed to list containers: %w", err)
-	}
-
-	// Build a set of valid container IDs from Running sandboxes
-	validContainers := make(map[string]bool)
-
-	resp, err := c.EAC.List(ctx, entity.Ref(entity.EntityKind, compute.KindSandbox))
-	if err != nil {
-		return fmt.Errorf("failed to list sandboxes for orphan check: %w", err)
-	}
-
-	for _, e := range resp.Values() {
-		var sb compute.Sandbox
-		sb.Decode(e.Entity())
-
-		// Only track containers for Running sandboxes
-		if sb.Status == compute.RUNNING {
-			// Add pause container
-			validContainers[c.pauseContainerId(sb.ID)] = true
-
-			// Add subcontainers
-			for _, container := range sb.Spec.Container {
-				validContainers[fmt.Sprintf("%s-%s", c.containerPrefix(sb.ID), container.Name)] = true
-			}
-		}
-	}
-
-	// Clean up orphaned containers
-	orphanCount := 0
-	for _, container := range containerList {
-		containerID := container.ID()
-
-		// Skip if this is a valid container
-		if validContainers[containerID] {
-			continue
-		}
-
-		// Check labels to see if this might be a special container we shouldn't touch
-		labels, err := container.Labels(ctx)
-		if err != nil {
-			c.Log.Error("failed to get container labels", "id", containerID, "err", err)
-			continue
-		}
-
-		// Skip if not a sandbox container (check for our labels)
-		if _, ok := labels[sandboxEntityLabel]; !ok {
-			c.Log.Debug("skipping non-sandbox container", "id", containerID)
-			continue
-		}
-
-		c.Log.Info("found orphaned container, cleaning up", "id", containerID)
-		orphanCount++
-
-		// Try to delete any task first
-		task, err := container.Task(ctx, nil)
-		if err == nil && task != nil {
-			_, err = task.Delete(ctx, containerd.WithProcessKill)
-			if err != nil {
-				c.Log.Error("failed to delete orphaned task", "id", containerID, "err", err)
-			}
-		}
-
-		// Delete the container
-		err = container.Delete(ctx, containerd.WithSnapshotCleanup)
-		if err != nil {
-			c.Log.Error("failed to delete orphaned container", "id", containerID, "err", err)
-		}
-	}
-
-	c.Log.Info("orphaned container cleanup complete",
-		"total_containers", len(containerList),
-		"orphaned_containers", orphanCount)
 
 	return nil
 }
@@ -432,14 +345,17 @@ func (c *SandboxController) Init(ctx context.Context) error {
 		c.Log.Error("failed to reconcile sandboxes on boot", "err", err)
 	}
 
-	// Clean up any orphaned containers
-	err = c.cleanupOrphanedContainers(ctx)
-	if err != nil {
-		// Log error but don't fail Init
-		c.Log.Error("failed to cleanup orphaned containers on boot", "err", err)
-	}
-
 	go c.Metrics.Monitor(c.topCtx)
+
+	// Initialize and start the container watchdog
+	c.watchdog = &ContainerWatchdog{
+		Log:           c.Log.With("module", "watchdog"),
+		CC:            c.CC,
+		EAC:           c.EAC,
+		Namespace:     c.Namespace,
+		CheckInterval: 5 * time.Minute,
+	}
+	c.watchdog.Start(c.topCtx)
 
 	return nil
 }
@@ -461,6 +377,10 @@ func (c *SandboxController) Close() error {
 
 	if c.portMonitor != nil {
 		err = c.portMonitor.Close()
+	}
+
+	if c.watchdog != nil {
+		c.watchdog.Stop()
 	}
 
 	c.running.Wait()
@@ -491,14 +411,14 @@ const (
 	unhealthy // container exists but task is missing or dead
 )
 
-func (c *SandboxController) containerPrefix(id entity.Id) string {
+func containerPrefix(id entity.Id) string {
 	cid := id.String()
 	cid = strings.TrimPrefix(cid, "sandbox/")
 	return "sandbox." + cid
 }
 
-func (c *SandboxController) pauseContainerId(id entity.Id) string {
-	return c.containerPrefix(id) + "_pause"
+func pauseContainerId(id entity.Id) string {
+	return containerPrefix(id) + "_pause"
 }
 
 func (c *SandboxController) checkSandbox(ctx context.Context, co *compute.Sandbox, meta *entity.Meta) (int, error) {
@@ -506,7 +426,7 @@ func (c *SandboxController) checkSandbox(ctx context.Context, co *compute.Sandbo
 
 	ctx = namespaces.WithNamespace(ctx, c.Namespace)
 
-	_, err := c.CC.LoadContainer(ctx, c.pauseContainerId(co.ID))
+	_, err := c.CC.LoadContainer(ctx, pauseContainerId(co.ID))
 	if err != nil {
 		if errdefs.IsNotFound(err) {
 			return notFound, nil
@@ -520,7 +440,7 @@ func (c *SandboxController) checkSandbox(ctx context.Context, co *compute.Sandbo
 	// by creating new sandboxes with new IDs via sandboxpools.
 
 	// Check if the pause container has a healthy task
-	pauseID := c.pauseContainerId(co.ID)
+	pauseID := pauseContainerId(co.ID)
 	if !c.isContainerHealthy(ctx, pauseID) {
 		c.Log.Warn("sandbox container exists but task is unhealthy", "id", co.ID, "pause_id", pauseID)
 		return unhealthy, nil
@@ -528,7 +448,7 @@ func (c *SandboxController) checkSandbox(ctx context.Context, co *compute.Sandbo
 
 	// Check subcontainers health (from Spec)
 	for _, container := range co.Spec.Container {
-		containerID := fmt.Sprintf("%s-%s", c.containerPrefix(co.ID), container.Name)
+		containerID := fmt.Sprintf("%s-%s", containerPrefix(co.ID), container.Name)
 		if !c.isContainerHealthy(ctx, containerID) {
 			c.Log.Warn("sandbox subcontainer exists but task is unhealthy",
 				"sandbox_id", co.ID,
@@ -745,7 +665,7 @@ func (c *SandboxController) createSandbox(ctx context.Context, co *compute.Sandb
 		return fmt.Errorf("failed to configure volumes: %w", err)
 	}
 
-	cid := c.pauseContainerId(co.ID)
+	cid := pauseContainerId(co.ID)
 
 	container, err := c.CC.NewContainer(ctx, cid, opts...)
 	if err != nil {
@@ -1453,7 +1373,7 @@ func (c *SandboxController) bootContainers(
 			return nil, fmt.Errorf("failed to build container spec: %w", err)
 		}
 
-		id := fmt.Sprintf("%s-%s", c.containerPrefix(sb.ID), container.Name)
+		id := fmt.Sprintf("%s-%s", containerPrefix(sb.ID), container.Name)
 
 		var ports []int
 		for _, port := range container.Port {
@@ -1836,7 +1756,7 @@ func (c *SandboxController) destroySubContainers(ctx context.Context, id entity.
 		return fmt.Errorf("failed to list containers: %w", err)
 	}
 
-	prefix := c.containerPrefix(id)
+	prefix := containerPrefix(id)
 	var containerIds []string
 	for _, cont := range containerList {
 		containerID := cont.ID()
@@ -1970,7 +1890,7 @@ func (c *SandboxController) stopSandbox(ctx context.Context, id entity.Id) error
 	var le string
 	var sandboxIPs map[string]bool
 
-	pauseID := c.pauseContainerId(id)
+	pauseID := pauseContainerId(id)
 	container, err := c.CC.LoadContainer(ctx, pauseID)
 	if err == nil {
 		labels, err := container.Labels(ctx)

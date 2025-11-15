@@ -395,9 +395,9 @@ func TestRemove(t *testing.T) {
 
 	r := require.New(t)
 
-	// New adds db/id, created_at, and updated_at automatically
-	// After removing Doc, we should have 3 attrs (db/id, created_at, updated_at)
-	r.Len(ent.Attrs(), 3)
+	// New adds db/id automatically (timestamps are added by the store)
+	// After removing Doc, we should have 1 attr (db/id)
+	r.Len(ent.Attrs(), 1)
 
 	// Verify Doc was actually removed
 	_, ok := ent.Get(Doc)
@@ -416,9 +416,9 @@ func TestEntity(t *testing.T) {
 
 		ent.Fixup()
 
-		// New adds db/id, created_at, updated_at and dedupes the duplicate Doc
-		// So we should have 4 attrs: db/id, Doc, created_at, updated_at
-		r.Len(ent.Attrs(), 4)
+		// New adds db/id and dedupes the duplicate Doc (timestamps are added by the store)
+		// So we should have 2 attrs: db/id, Doc
+		r.Len(ent.Attrs(), 2)
 
 		// Verify Doc appears only once
 		docAttrs := ent.GetAll(Doc)
