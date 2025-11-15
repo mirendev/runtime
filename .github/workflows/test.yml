@@ -138,12 +138,17 @@ jobs:
           coverage.out
         retention-days: 30
 
+    - name: Fetch base branch for diff
+      if: github.event_name == 'pull_request'
+      run: |
+        git fetch origin ${{ github.event.pull_request.base.ref }}:refs/remotes/origin/${{ github.event.pull_request.base.ref }}
+
     - name: Calculate Changed Line Coverage
       id: changed-coverage
       if: github.event_name == 'pull_request'
       run: |
         # Calculate coverage for changed lines only (full output)
-        OUTPUT=$(go run ./hack/coverage-changed-lines -coverage=coverage.out -base=origin/main 2>&1 || echo "No Go files changed")
+        OUTPUT=$(go run ./hack/coverage-changed-lines -coverage=coverage.out -base=origin/${{ github.event.pull_request.base.ref }} 2>&1 || echo "No Go files changed")
 
         # Save full output to a file for the PR comment
         echo "$OUTPUT" > /tmp/changed-coverage.txt
