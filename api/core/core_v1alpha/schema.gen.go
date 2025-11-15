@@ -65,7 +65,7 @@ func (o *App) Empty() bool {
 }
 
 func (o *App) InitSchema(sb *schema.SchemaBuilder) {
-	sb.Ref("active_version", "dev.miren.core/app.active_version", schema.Doc("The version of the project that should be used"), schema.Tags("dev.miren.app_version_ref"))
+	sb.Ref("active_version", "dev.miren.core/app.active_version", schema.Doc("The version of the project that should be used"))
 	sb.Ref("project", "dev.miren.core/app.project", schema.Doc("The project that the app belongs to"))
 }
 
