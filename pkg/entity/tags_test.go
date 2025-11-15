@@ -50,7 +50,7 @@ func TestGetAttributesByTag(t *testing.T) {
 	require.NoError(t, err)
 
 	t.Run("finds attributes with specific tag", func(t *testing.T) {
-		schemas, err := entity.GetAttributesByTag(ctx, store, "test.tag")
+		schemas, err := entity.GetAttributeSchemasByTag(ctx, store, "test.tag")
 		require.NoError(t, err)
 
 		// Should find exactly 2 attributes with "test.tag"
@@ -69,7 +69,7 @@ func TestGetAttributesByTag(t *testing.T) {
 	})
 
 	t.Run("finds attributes with different tag", func(t *testing.T) {
-		schemas, err := entity.GetAttributesByTag(ctx, store, "other.tag")
+		schemas, err := entity.GetAttributeSchemasByTag(ctx, store, "other.tag")
 		require.NoError(t, err)
 
 		require.Len(t, schemas, 1, "expected 1 attribute with other.tag")
@@ -78,13 +78,13 @@ func TestGetAttributesByTag(t *testing.T) {
 	})
 
 	t.Run("returns empty for non-existent tag", func(t *testing.T) {
-		schemas, err := entity.GetAttributesByTag(ctx, store, "nonexistent.tag")
+		schemas, err := entity.GetAttributeSchemasByTag(ctx, store, "nonexistent.tag")
 		require.NoError(t, err)
 		require.Len(t, schemas, 0, "should return empty slice for non-existent tag")
 	})
 
 	t.Run("returns full attribute schema info", func(t *testing.T) {
-		schemas, err := entity.GetAttributesByTag(ctx, store, "test.tag")
+		schemas, err := entity.GetAttributeSchemasByTag(ctx, store, "test.tag")
 		require.NoError(t, err)
 		require.NotEmpty(t, schemas)
 
