@@ -79,7 +79,42 @@ test-shell: ## Run tests with interactive shell
 test-e2e: ## Run end-to-end tests
 	iso run bash hack/test.sh ./e2e --tags=e2e
 
-.PHONY: test test-shell test-e2e
+test-coverage: ## Run tests with coverage
+	iso run bash hack/test-coverage.sh ./...
+
+test-coverage-ci: ## Run tests with coverage for CI
+	iso run DISABLE_NBD_TEST=1 bash hack/test-coverage.sh ./...
+
+coverage-report: ## Generate HTML coverage report
+	@if [ ! -f coverage.out ]; then \
+		echo "Error: coverage.out not found. Run 'make test-coverage' first."; \
+		exit 1; \
+	fi
+	go tool cover -html=coverage.out -o coverage.html
+	@echo "Coverage report generated: coverage.html"
+
+coverage-percent: ## Display coverage percentage
+	@if [ ! -f coverage.out ]; then \
+		echo "Error: coverage.out not found. Run 'make test-coverage' first."; \
+		exit 1; \
+	fi
+	@go tool cover -func=coverage.out | grep total | awk '{print "Total Coverage: " $$3}'
+
+coverage-by-package: ## Display coverage percentage by package
+	@if [ ! -f coverage.out ]; then \
+		echo "Error: coverage.out not found. Run 'make test-coverage' first."; \
+		exit 1; \
+	fi
+	@go run ./hack/coverage-by-package -coverage=coverage.out $(ARGS)
+
+coverage-pr: ## Display coverage for lines changed in current branch
+	@if [ ! -f coverage.out ]; then \
+		echo "Error: coverage.out not found. Run 'make test-coverage' first."; \
+		exit 1; \
+	fi
+	@go run ./hack/coverage-changed-lines -coverage=coverage.out $(ARGS)
+
+.PHONY: test test-shell test-e2e test-coverage test-coverage-ci coverage-report coverage-percent coverage-by-package coverage-pr
 
 #
 # Building

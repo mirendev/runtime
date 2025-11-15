@@ -6,3 +6,8 @@ dist/
 .aider*
 .idea/
 .claude
+
+# Coverage files
+coverage.out
+coverage.html
+*.coverprofile
