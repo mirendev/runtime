@@ -9,20 +9,21 @@ import (
 	"miren.dev/runtime/pkg/entity"
 )
 
+const AppRefTag = "dev.miren.app_ref"
+
 // DeleteAppTransitive deletes an app and all entities that directly reference it.
 // This includes app_versions and sandbox_pools (both tagged with dev.miren.app_ref).
 // Other transitive resources (sandboxes referencing app_versions) are cleaned up by their controllers.
 func DeleteAppTransitive(ctx context.Context, client *entityserver.Client, log *slog.Logger, appId entity.Id) error {
 	log.Info("starting app deletion", "appId", appId)
 
-	// Find all entities that reference this app (tagged with dev.miren.app_ref)
-	appRefResult, err := client.GetAttributesByTag(ctx, "dev.miren.app_ref")
+	// Find all the attributes that reference apps by id
+	appRefResult, err := client.GetAttributesByTag(ctx, AppRefTag)
 	if err != nil {
 		return fmt.Errorf("failed to get app references: %w", err)
 	}
 
 	var referencingEntities []entity.Id
-	var appVersionIds []entity.Id
 
 	for _, schema := range appRefResult.Schemas() {
 		if !schema.Indexed() {
@@ -41,19 +42,13 @@ func DeleteAppTransitive(ctx context.Context, client *entityserver.Client, log *
 			if ent := list.Entity(); ent != nil {
 				if id := ent.Id(); id != "" {
 					referencingEntities = append(referencingEntities, id)
-
-					// Track app_versions separately for logging
-					if attrId == "dev.miren.core/app_version.app" {
-						appVersionIds = append(appVersionIds, id)
-					}
 				}
 			}
 		}
 	}
 
 	log.Info("found entities referencing app",
-		"total", len(referencingEntities),
-		"appVersions", len(appVersionIds))
+		"total", len(referencingEntities))
 
 	// Delete all referencing entities (app_versions, pools, etc.)
 	for _, id := range referencingEntities {

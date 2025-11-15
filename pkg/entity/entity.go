@@ -505,8 +505,8 @@ func convertEntityToSchema(ctx context.Context, s EntityStore, entity *Entity) (
 	return &schema, nil
 }
 
-// GetAttributesByTag queries all attributes that have the specified tag and returns their schemas
-func GetAttributesByTag(ctx context.Context, store Store, tag string) ([]AttributeSchema, error) {
+// GetAttributeSchemasByTag queries all attributes that have the specified tag and returns their schemas
+func GetAttributeSchemasByTag(ctx context.Context, store Store, tag string) ([]AttributeSchema, error) {
 	// Query for all attribute entities that have this tag
 	ids, err := store.ListIndex(ctx, String(Tag, tag))
 	if err != nil {

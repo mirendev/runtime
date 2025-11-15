@@ -932,9 +932,6 @@ func (c *SandboxController) addEndpoint(
 				Port: p.Port,
 			})
 
-			var rpcE entityserver_v1alpha.Entity
-			rpcE.SetAttrs(eps.Encode())
-
 			// TODO add metadata and probably use higher level entityclient
 			pr, err := c.EAC.Create(ctx, entity.New(
 				eps.Encode(),

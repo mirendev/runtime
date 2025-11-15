@@ -26,7 +26,6 @@ kinds:
     active_version:
       type: ref
       doc: The version of the project that should be used
-      tags: [dev.miren.app_version_ref]
 
   artifact:
     app:

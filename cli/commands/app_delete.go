@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"miren.dev/runtime/api/app/app_v1alpha"
+	"miren.dev/runtime/pkg/ui"
 )
 
 func AppDelete(ctx *Context, opts struct {
@@ -24,10 +25,14 @@ func AppDelete(ctx *Context, opts struct {
 
 	// Confirm deletion unless forced
 	if !opts.Force {
-		ctx.Printf("Are you sure you want to delete app %s and all its versions? (y/N): ", appName)
-		var response string
-		_, _ = fmt.Scanln(&response)
-		if response != "y" && response != "Y" {
+		confirmed, err := ui.Confirm(
+			ui.WithMessage(fmt.Sprintf("Delete app '%s' and all its versions, artifacts, pools, and routes?", appName)),
+			ui.WithDefault(false),
+		)
+		if err != nil {
+			return err
+		}
+		if !confirmed {
 			ctx.Printf("Deletion cancelled\n")
 			return nil
 		}

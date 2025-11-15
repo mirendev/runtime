@@ -240,6 +240,12 @@ func Wrap(err error) error {
 		return nil
 	}
 
+	// Return existing cond errors unchanged
+	switch err.(type) {
+	case ErrNotFound, ErrConflict, ErrCorruption, ErrGeneric, ErrRemote, ErrPanic, ErrClosed, ErrValidationFailure:
+		return err
+	}
+
 	switch {
 	case errors.Is(err, io.EOF):
 		return ErrClosed{Message: err.Error()}

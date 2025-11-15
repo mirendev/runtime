@@ -9,7 +9,6 @@ components:
       type: ref
       doc: Application version reference
       indexed: true
-      tags: [dev.miren.app_version_ref]
 
     logEntity:
       type: string
@@ -383,7 +382,6 @@ kinds:
       type: ref
       doc: AppVersions that reference this pool (enables reuse when specs match)
       many: true
-      tags: [dev.miren.app_version_ref]
       indexed: true
 
   node:

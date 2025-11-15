@@ -1080,15 +1080,11 @@ func (e *EntityServer) GetAttributesByTag(ctx context.Context, req *entityserver
 	args := req.Args()
 	tag := args.Tag()
 
-	e.Log.Info("getting attributes by tag", "tag", tag)
-
 	// Call the entity package function to get attributes by tag
-	schemas, err := entity.GetAttributesByTag(ctx, e.Store, tag)
+	schemas, err := entity.GetAttributeSchemasByTag(ctx, e.Store, tag)
 	if err != nil {
 		return fmt.Errorf("failed to get attributes by tag: %w", err)
 	}
-
-	e.Log.Info("found attributes", "tag", tag, "count", len(schemas))
 
 	// Convert entity.AttributeSchema to RPC AttributeSchema
 	var rpcSchemas []*entityserver_v1alpha.AttributeSchema
