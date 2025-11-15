@@ -66,6 +66,142 @@ func (v *ReindexStat) UnmarshalJSON(data []byte) error {
 	return json.Unmarshal(data, &v.data)
 }
 
+type attributeSchemaData struct {
+	Id        *string   `cbor:"0,keyasint,omitempty" json:"id,omitempty"`
+	Doc       *string   `cbor:"1,keyasint,omitempty" json:"doc,omitempty"`
+	AttrType  *string   `cbor:"2,keyasint,omitempty" json:"attr_type,omitempty"`
+	AllowMany *bool     `cbor:"3,keyasint,omitempty" json:"allow_many,omitempty"`
+	Indexed   *bool     `cbor:"4,keyasint,omitempty" json:"indexed,omitempty"`
+	Session   *bool     `cbor:"5,keyasint,omitempty" json:"session,omitempty"`
+	Tags      *[]string `cbor:"6,keyasint,omitempty" json:"tags,omitempty"`
+}
+
+type AttributeSchema struct {
+	data attributeSchemaData
+}
+
+func (v *AttributeSchema) HasId() bool {
+	return v.data.Id != nil
+}
+
+func (v *AttributeSchema) Id() string {
+	if v.data.Id == nil {
+		return ""
+	}
+	return *v.data.Id
+}
+
+func (v *AttributeSchema) SetId(id string) {
+	v.data.Id = &id
+}
+
+func (v *AttributeSchema) HasDoc() bool {
+	return v.data.Doc != nil
+}
+
+func (v *AttributeSchema) Doc() string {
+	if v.data.Doc == nil {
+		return ""
+	}
+	return *v.data.Doc
+}
+
+func (v *AttributeSchema) SetDoc(doc string) {
+	v.data.Doc = &doc
+}
+
+func (v *AttributeSchema) HasAttrType() bool {
+	return v.data.AttrType != nil
+}
+
+func (v *AttributeSchema) AttrType() string {
+	if v.data.AttrType == nil {
+		return ""
+	}
+	return *v.data.AttrType
+}
+
+func (v *AttributeSchema) SetAttrType(attrType string) {
+	v.data.AttrType = &attrType
+}
+
+func (v *AttributeSchema) HasAllowMany() bool {
+	return v.data.AllowMany != nil
+}
+
+func (v *AttributeSchema) AllowMany() bool {
+	if v.data.AllowMany == nil {
+		return false
+	}
+	return *v.data.AllowMany
+}
+
+func (v *AttributeSchema) SetAllowMany(allowMany bool) {
+	v.data.AllowMany = &allowMany
+}
+
+func (v *AttributeSchema) HasIndexed() bool {
+	return v.data.Indexed != nil
+}
+
+func (v *AttributeSchema) Indexed() bool {
+	if v.data.Indexed == nil {
+		return false
+	}
+	return *v.data.Indexed
+}
+
+func (v *AttributeSchema) SetIndexed(indexed bool) {
+	v.data.Indexed = &indexed
+}
+
+func (v *AttributeSchema) HasSession() bool {
+	return v.data.Session != nil
+}
+
+func (v *AttributeSchema) Session() bool {
+	if v.data.Session == nil {
+		return false
+	}
+	return *v.data.Session
+}
+
+func (v *AttributeSchema) SetSession(session bool) {
+	v.data.Session = &session
+}
+
+func (v *AttributeSchema) HasTags() bool {
+	return v.data.Tags != nil
+}
+
+func (v *AttributeSchema) Tags() []string {
+	if v.data.Tags == nil {
+		return nil
+	}
+	return *v.data.Tags
+}
+
+func (v *AttributeSchema) SetTags(tags []string) {
+	x := slices.Clone(tags)
+	v.data.Tags = &x
+}
+
+func (v *AttributeSchema) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *AttributeSchema) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *AttributeSchema) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *AttributeSchema) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
 type entityData struct {
 	Id        *string        `cbor:"0,keyasint,omitempty" json:"id,omitempty"`
 	Revision  *int64         `cbor:"1,keyasint,omitempty" json:"revision,omitempty"`
@@ -1793,6 +1929,72 @@ func (v *EntityAccessReindexResults) UnmarshalJSON(data []byte) error {
 	return json.Unmarshal(data, &v.data)
 }
 
+type entityAccessGetAttributesByTagArgsData struct {
+	Tag *string `cbor:"0,keyasint,omitempty" json:"tag,omitempty"`
+}
+
+type EntityAccessGetAttributesByTagArgs struct {
+	call rpc.Call
+	data entityAccessGetAttributesByTagArgsData
+}
+
+func (v *EntityAccessGetAttributesByTagArgs) HasTag() bool {
+	return v.data.Tag != nil
+}
+
+func (v *EntityAccessGetAttributesByTagArgs) Tag() string {
+	if v.data.Tag == nil {
+		return ""
+	}
+	return *v.data.Tag
+}
+
+func (v *EntityAccessGetAttributesByTagArgs) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *EntityAccessGetAttributesByTagArgs) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *EntityAccessGetAttributesByTagArgs) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *EntityAccessGetAttributesByTagArgs) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type entityAccessGetAttributesByTagResultsData struct {
+	Schemas *[]*AttributeSchema `cbor:"0,keyasint,omitempty" json:"schemas,omitempty"`
+}
+
+type EntityAccessGetAttributesByTagResults struct {
+	call rpc.Call
+	data entityAccessGetAttributesByTagResultsData
+}
+
+func (v *EntityAccessGetAttributesByTagResults) SetSchemas(schemas []*AttributeSchema) {
+	x := slices.Clone(schemas)
+	v.data.Schemas = &x
+}
+
+func (v *EntityAccessGetAttributesByTagResults) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *EntityAccessGetAttributesByTagResults) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *EntityAccessGetAttributesByTagResults) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *EntityAccessGetAttributesByTagResults) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
 type EntityAccessGet struct {
 	rpc.Call
 	args    EntityAccessGetArgs
@@ -2287,6 +2489,32 @@ func (t *EntityAccessReindex) Results() *EntityAccessReindexResults {
 	return results
 }
 
+type EntityAccessGetAttributesByTag struct {
+	rpc.Call
+	args    EntityAccessGetAttributesByTagArgs
+	results EntityAccessGetAttributesByTagResults
+}
+
+func (t *EntityAccessGetAttributesByTag) Args() *EntityAccessGetAttributesByTagArgs {
+	args := &t.args
+	if args.call != nil {
+		return args
+	}
+	args.call = t.Call
+	t.Call.Args(args)
+	return args
+}
+
+func (t *EntityAccessGetAttributesByTag) Results() *EntityAccessGetAttributesByTagResults {
+	results := &t.results
+	if results.call != nil {
+		return results
+	}
+	results.call = t.Call
+	t.Call.Results(results)
+	return results
+}
+
 type EntityAccess interface {
 	Get(ctx context.Context, state *EntityAccessGet) error
 	Put(ctx context.Context, state *EntityAccessPut) error
@@ -2307,6 +2535,7 @@ type EntityAccess interface {
 	RevokeSession(ctx context.Context, state *EntityAccessRevokeSession) error
 	PingSession(ctx context.Context, state *EntityAccessPingSession) error
 	Reindex(ctx context.Context, state *EntityAccessReindex) error
+	GetAttributesByTag(ctx context.Context, state *EntityAccessGetAttributesByTag) error
 }
 
 type reexportEntityAccess struct {
@@ -2386,6 +2615,10 @@ func (reexportEntityAccess) PingSession(ctx context.Context, state *EntityAccess
 }
 
 func (reexportEntityAccess) Reindex(ctx context.Context, state *EntityAccessReindex) error {
+	panic("not implemented")
+}
+
+func (reexportEntityAccess) GetAttributesByTag(ctx context.Context, state *EntityAccessGetAttributesByTag) error {
 	panic("not implemented")
 }
 
@@ -2545,6 +2778,14 @@ func AdaptEntityAccess(t EntityAccess) *rpc.Interface {
 			Index:         0,
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.Reindex(ctx, &EntityAccessReindex{Call: call})
+			},
+		},
+		{
+			Name:          "get_attributes_by_tag",
+			InterfaceName: "EntityAccess",
+			Index:         0,
+			Handler: func(ctx context.Context, call rpc.Call) error {
+				return t.GetAttributesByTag(ctx, &EntityAccessGetAttributesByTag{Call: call})
 			},
 		},
 	}
@@ -3174,4 +3415,34 @@ func (v EntityAccessClient) Reindex(ctx context.Context, dry_run bool) (*EntityA
 	}
 
 	return &EntityAccessClientReindexResults{client: v.Client, data: ret}, nil
+}
+
+type EntityAccessClientGetAttributesByTagResults struct {
+	client rpc.Client
+	data   entityAccessGetAttributesByTagResultsData
+}
+
+func (v *EntityAccessClientGetAttributesByTagResults) HasSchemas() bool {
+	return v.data.Schemas != nil
+}
+
+func (v *EntityAccessClientGetAttributesByTagResults) Schemas() []*AttributeSchema {
+	if v.data.Schemas == nil {
+		return nil
+	}
+	return *v.data.Schemas
+}
+
+func (v EntityAccessClient) GetAttributesByTag(ctx context.Context, tag string) (*EntityAccessClientGetAttributesByTagResults, error) {
+	args := EntityAccessGetAttributesByTagArgs{}
+	args.data.Tag = &tag
+
+	var ret entityAccessGetAttributesByTagResultsData
+
+	err := v.Call(ctx, "get_attributes_by_tag", &args, &ret)
+	if err != nil {
+		return nil, err
+	}
+
+	return &EntityAccessClientGetAttributesByTagResults{client: v.Client, data: ret}, nil
 }

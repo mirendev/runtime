@@ -85,22 +85,7 @@ func (r *AppInfo) Destroy(ctx context.Context, state *app_v1alpha.CrudDestroy) e
 		return err
 	}
 
-	/*
-		ver := &AppVersion{
-			App:   ac,
-			AppId: ac.Id,
-
-			// This is a special version that will be used to clear all versions
-			Version: "final-for-destroy",
-		}
-
-		err = r.CV.ClearOldVersions(ctx, ver)
-		if err != nil {
-			return err
-		}
-	*/
-
-	return r.EC.Delete(ctx, appRec.ID)
+	return DeleteAppTransitive(ctx, r.EC, r.Log, appRec.ID)
 }
 
 func (r *AppInfo) List(ctx context.Context, state *app_v1alpha.CrudList) error {

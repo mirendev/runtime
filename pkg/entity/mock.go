@@ -266,6 +266,29 @@ func (m *MockStore) ListIndex(ctx context.Context, attr Attr) ([]Id, error) {
 	return ids, nil
 }
 
+func (m *MockStore) ListCollection(ctx context.Context, collection string) ([]Id, error) {
+	// For the mock store, we use the same logic as ListIndex
+	// since we don't have a separate collection index structure.
+	// In practice, ListCollection is used by ListIndex in real stores.
+	// For testing purposes, we'll just iterate through all entities
+	// and check if any attribute CAS matches the collection string.
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	var ids []Id
+	for id, entity := range m.Entities {
+		allAttrs := enumerateAllAttrs(entity.attrs)
+		for _, a := range allAttrs {
+			if a.CAS() == collection {
+				ids = append(ids, id)
+				break
+			}
+		}
+	}
+
+	return ids, nil
+}
+
 func (m *MockStore) CreateSession(ctx context.Context, id int64) ([]byte, error) {
 	return []byte("mock-session-id"), nil
 }

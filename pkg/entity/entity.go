@@ -48,6 +48,7 @@ type AttributeSchema struct {
 	Session    bool
 	Predicate  []*Entity
 	CheckProgs []string
+	Tags       []string
 }
 
 // Entity represents an entity with a set of attributes
@@ -402,6 +403,15 @@ func convertEntityToSchema(ctx context.Context, s EntityStore, entity *Entity) (
 			default:
 				return nil, fmt.Errorf("invalid entity ident (expected EntityId): %v (%T)", id, attr.Value)
 			}
+		case DBId:
+			switch id := attr.Value.Any().(type) {
+			case Id:
+				schema.ID = id
+			case types.Keyword:
+				schema.ID = Id(id)
+			default:
+				return nil, fmt.Errorf("invalid entity db/id (expected Id): %v (%T)", id, attr.Value)
+			}
 		case Doc:
 			if doc, ok := attr.Value.Any().(string); ok {
 				schema.Doc = doc
@@ -456,6 +466,12 @@ func convertEntityToSchema(ctx context.Context, s EntityStore, entity *Entity) (
 			} else {
 				return nil, fmt.Errorf("invalid index: %v", attr.Value.Any())
 			}
+		case Tag:
+			if val, ok := attr.Value.Any().(string); ok {
+				schema.Tags = append(schema.Tags, val)
+			} else {
+				return nil, fmt.Errorf("invalid tag: %v", attr.Value.Any())
+			}
 		case AttrPred:
 			if pred, ok := attr.Value.Any().(Id); ok {
 				e, err := s.GetEntity(ctx, pred)
@@ -478,6 +494,32 @@ func convertEntityToSchema(ctx context.Context, s EntityStore, entity *Entity) (
 	}
 
 	return &schema, nil
+}
+
+// GetAttributeSchemasByTag queries all attributes that have the specified tag and returns their schemas
+func GetAttributeSchemasByTag(ctx context.Context, store Store, tag string) ([]AttributeSchema, error) {
+	// Query for all attribute entities that have this tag
+	ids, err := store.ListIndex(ctx, String(Tag, tag))
+	if err != nil {
+		return nil, fmt.Errorf("failed to list attributes by tag: %w", err)
+	}
+
+	var schemas []AttributeSchema
+	for _, id := range ids {
+		entity, err := store.GetEntity(ctx, id)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get entity %s: %w", id, err)
+		}
+
+		schema, err := convertEntityToSchema(ctx, store, entity)
+		if err != nil {
+			return nil, fmt.Errorf("failed to convert entity %s to schema: %w", id, err)
+		}
+
+		schemas = append(schemas, *schema)
+	}
+
+	return schemas, nil
 }
 
 func (e *Entity) removeIdent() {

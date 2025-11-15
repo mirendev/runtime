@@ -188,6 +188,7 @@ func (l *Launcher) ensurePoolForService(ctx context.Context, app *core_v1alpha.A
 
 	// Use app metadata (already fetched earlier) for sandbox labels
 	pool := &compute_v1alpha.SandboxPool{
+		App:                  app.ID,
 		Service:              serviceName,
 		SandboxSpec:          *spec,
 		DesiredInstances:     desiredInstances,
@@ -199,9 +200,9 @@ func (l *Launcher) ensurePoolForService(ctx context.Context, app *core_v1alpha.A
 	}
 
 	name := idgen.GenNS("pool")
+	id := entity.Id("pool/" + name)
 
-	var rpcE entityserver_v1alpha.Entity
-	rpcE.SetAttrs(entity.New(
+	pr, err := l.EAC.Create(ctx, entity.New(
 		(&core_v1alpha.Metadata{
 			Name: name,
 			Labels: types.LabelSet(
@@ -210,18 +211,17 @@ func (l *Launcher) ensurePoolForService(ctx context.Context, app *core_v1alpha.A
 				"service", serviceName,
 			),
 		}).Encode,
-		entity.Ident, "pool/"+name,
+		entity.DBId, entity.Id("pool/"+name),
 		pool.Encode,
 	).Attrs())
-
-	pr, err := l.EAC.Put(ctx, &rpcE)
 	if err != nil {
 		return fmt.Errorf("failed to create pool entity: %w", err)
 	}
 
-	pool.ID = entity.Id(pr.Id())
+	pool.ID = id
 	l.Log.Info("created new pool",
 		"pool", pool.ID,
+		"pr-id", pr.Id(),
 		"service", serviceName,
 		"desired_instances", desiredInstances)
 

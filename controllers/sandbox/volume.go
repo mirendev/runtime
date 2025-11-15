@@ -10,7 +10,6 @@ import (
 
 	compute "miren.dev/runtime/api/compute/compute_v1alpha"
 	"miren.dev/runtime/api/core/core_v1alpha"
-	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	storage "miren.dev/runtime/api/storage/storage_v1alpha"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/idgen"
@@ -205,13 +204,11 @@ func (c *SandboxController) ensureDisk(ctx context.Context, diskName string, siz
 	}
 
 	name := idgen.GenNS("disk")
-	var rpcE entityserver_v1alpha.Entity
-	rpcE.SetAttrs(entity.New(
+
+	putResp, err := c.EAC.Create(ctx, entity.New(
 		entity.DBId, "disk/"+name,
 		disk.Encode,
 	).Attrs())
-
-	putResp, err := c.EAC.Put(ctx, &rpcE)
 	if err != nil {
 		return entity.Id(""), fmt.Errorf("failed to create disk entity: %w", err)
 	}
@@ -276,13 +273,11 @@ func (c *SandboxController) createDiskLease(ctx context.Context, diskID entity.I
 	}
 
 	name := idgen.GenNS("disk-lease")
-	var rpcE entityserver_v1alpha.Entity
-	rpcE.SetAttrs(entity.New(
+
+	putResp, err := c.EAC.Create(ctx, entity.New(
 		entity.DBId, "disk-lease/"+name,
 		lease.Encode,
 	).Attrs())
-
-	putResp, err := c.EAC.Put(ctx, &rpcE)
 	if err != nil {
 		return entity.Id(""), fmt.Errorf("failed to create disk lease entity: %w", err)
 	}

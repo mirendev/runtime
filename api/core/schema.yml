@@ -31,6 +31,8 @@ kinds:
     app:
       type: ref
       doc: The application the artifact is for
+      indexed: true
+      tags: [dev.miren.app_ref]
 
     manifest:
       type: string
@@ -45,6 +47,9 @@ kinds:
     app:
       type: ref
       doc: The application the version is for
+      indexed: true
+      tags: [dev.miren.app_ref]
+
     version:
       type: string
       doc: The version of this app

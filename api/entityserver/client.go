@@ -304,6 +304,10 @@ func (c *Client) Delete(ctx context.Context, id entity.Id) error {
 	return nil
 }
 
+func (c *Client) GetAttributesByTag(ctx context.Context, tag string) (*entityserver_v1alpha.EntityAccessClientGetAttributesByTagResults, error) {
+	return c.eac.GetAttributesByTag(ctx, tag)
+}
+
 func (c *Client) WatchEntity(ctx context.Context, id entity.Id) chan *entity.Entity {
 	ch := make(chan *entity.Entity, 1)
 

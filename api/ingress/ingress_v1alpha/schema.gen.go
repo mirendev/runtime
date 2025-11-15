@@ -73,7 +73,7 @@ func (o *HttpRoute) Empty() bool {
 }
 
 func (o *HttpRoute) InitSchema(sb *schema.SchemaBuilder) {
-	sb.Ref("app", "dev.miren.ingress/http_route.app", schema.Doc("The application to route to"))
+	sb.Ref("app", "dev.miren.ingress/http_route.app", schema.Doc("The application to route to"), schema.Indexed, schema.Tags("dev.miren.app_ref"))
 	sb.Bool("default", "dev.miren.ingress/http_route.default", schema.Doc("Whether this is the default route for routing"), schema.Indexed)
 	sb.String("host", "dev.miren.ingress/http_route.host", schema.Doc("The hostname to match on for the application"), schema.Indexed)
 }

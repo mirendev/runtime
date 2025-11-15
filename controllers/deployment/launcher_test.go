@@ -2,6 +2,7 @@ package deployment
 
 import (
 	"context"
+	"log/slog"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -140,7 +141,7 @@ func TestPoolCreationAutoMode(t *testing.T) {
 // pools when SandboxSpec matches (e.g., only concurrency settings changed)
 func TestPoolReuseOnConfigChange(t *testing.T) {
 	ctx := context.Background()
-	log := testutils.TestLogger(t)
+	log := slog.Default() // testutils.TestLogger(t)
 
 	server, cleanup := testutils.NewInMemEntityServer(t)
 	defer cleanup()

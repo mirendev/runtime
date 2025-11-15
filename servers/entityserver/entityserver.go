@@ -1076,6 +1076,38 @@ func (e *EntityServer) Reindex(ctx context.Context, req *entityserver_v1alpha.En
 	return nil
 }
 
+func (e *EntityServer) GetAttributesByTag(ctx context.Context, req *entityserver_v1alpha.EntityAccessGetAttributesByTag) error {
+	args := req.Args()
+	tag := args.Tag()
+
+	// Call the entity package function to get attributes by tag
+	schemas, err := entity.GetAttributeSchemasByTag(ctx, e.Store, tag)
+	if err != nil {
+		return fmt.Errorf("failed to get attributes by tag: %w", err)
+	}
+
+	// Convert entity.AttributeSchema to RPC AttributeSchema
+	var rpcSchemas []*entityserver_v1alpha.AttributeSchema
+	for _, schema := range schemas {
+		rpcSchema := &entityserver_v1alpha.AttributeSchema{}
+		rpcSchema.SetId(string(schema.ID))
+		rpcSchema.SetDoc(schema.Doc)
+		rpcSchema.SetAttrType(string(schema.Type))
+		rpcSchema.SetAllowMany(schema.AllowMany)
+		rpcSchema.SetIndexed(schema.Index)
+		rpcSchema.SetSession(schema.Session)
+		if len(schema.Tags) > 0 {
+			rpcSchema.SetTags(schema.Tags)
+		}
+		rpcSchemas = append(rpcSchemas, rpcSchema)
+	}
+
+	results := req.Results()
+	results.SetSchemas(rpcSchemas)
+
+	return nil
+}
+
 func collectIndexedAttributes(ctx context.Context, store entity.Store, attrs []entity.Attr) (map[entity.Id][]entity.Attr, error) {
 	indexedAttrs := make(map[entity.Id][]entity.Attr)
 	allAttrs := enumerateAllAttrs(attrs)

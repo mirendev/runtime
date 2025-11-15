@@ -9,6 +9,8 @@ kinds:
     app:
       type: ref
       doc: The application to route to
+      indexed: true
+      tags: [dev.miren.app_ref]
     default:
       type: bool
       indexed: true

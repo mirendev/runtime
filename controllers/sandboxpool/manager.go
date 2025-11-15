@@ -2,6 +2,7 @@ package sandboxpool
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -10,6 +11,7 @@ import (
 	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/pkg/concurrency"
+	"miren.dev/runtime/pkg/cond"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/types"
 	"miren.dev/runtime/pkg/idgen"
@@ -279,6 +281,7 @@ func (m *Manager) Delete(ctx context.Context, poolID entity.Id) error {
 	}
 
 	stoppedCount := 0
+	deletedCount := 0
 	for _, ent := range resp.Values() {
 		var sb compute_v1alpha.Sandbox
 		sb.Decode(ent.Entity())
@@ -291,28 +294,20 @@ func (m *Manager) Delete(ctx context.Context, poolID entity.Id) error {
 			continue // Not our pool's sandbox
 		}
 
-		// Mark sandbox as STOPPED
-		m.log.Info("stopping sandbox from deleted pool", "sandbox", sb.ID, "pool", poolID)
-		var rpcE entityserver_v1alpha.Entity
-		rpcE.SetId(sb.ID.String())
-		rpcE.SetAttrs(entity.New(
-			(&compute_v1alpha.Sandbox{
-				Status: compute_v1alpha.STOPPED,
-			}).Encode,
-		).Attrs())
-
-		if _, err := m.eac.Put(ctx, &rpcE); err != nil {
-			m.log.Error("failed to stop sandbox from deleted pool",
+		// Delete the sandbox entity
+		m.log.Info("deleting sandbox from deleted pool", "sandbox", sb.ID, "pool", poolID)
+		if _, err := m.eac.Delete(ctx, sb.ID.String()); err != nil {
+			m.log.Error("failed to delete sandbox from deleted pool",
 				"sandbox", sb.ID,
 				"pool", poolID,
 				"error", err)
 			continue
 		}
 
-		stoppedCount++
+		deletedCount++
 	}
 
-	m.log.Info("stopped all sandboxes from deleted pool", "pool", poolID, "stopped", stoppedCount)
+	m.log.Info("cleaned up sandboxes from deleted pool", "pool", poolID, "stopped", stoppedCount, "deleted", deletedCount)
 	return nil
 }
 
@@ -388,18 +383,15 @@ func (m *Manager) createSandbox(ctx context.Context, pool *compute_v1alpha.Sandb
 	// Merge in labels from pool.SandboxLabels
 	sandboxLabels = append(sandboxLabels, pool.SandboxLabels...)
 
-	// Create entity with metadata (Put without ID creates new entity)
-	var rpcE entityserver_v1alpha.Entity
-	rpcE.SetAttrs(entity.New(
+	// Create entity with metadata
+	resp, err := m.eac.Create(ctx, entity.New(
 		(&core_v1alpha.Metadata{
 			Name:   sbName,
 			Labels: sandboxLabels,
 		}).Encode,
-		entity.Ident, entity.MustKeyword("sandbox/"+sbName),
+		entity.DBId, entity.Id("sandbox/"+sbName),
 		sb.Encode,
 	).Attrs())
-
-	resp, err := m.eac.Put(ctx, &rpcE)
 	if err != nil {
 		return fmt.Errorf("failed to create sandbox entity: %w", err)
 	}
@@ -479,19 +471,22 @@ func (m *Manager) scaleDown(ctx context.Context, pool *compute_v1alpha.SandboxPo
 			"last_activity", candidates[i].lastActivity)
 
 		// Mark sandbox as STOPPED
-		var rpcE entityserver_v1alpha.Entity
-		rpcE.SetId(sb.ID.String())
-		rpcE.SetAttrs(entity.New(
+		if _, err := m.eac.Patch(ctx, entity.New(
+			entity.DBId, sb.ID,
 			(&compute_v1alpha.Sandbox{
 				Status: compute_v1alpha.STOPPED,
 			}).Encode,
-		).Attrs())
-
-		if _, err := m.eac.Put(ctx, &rpcE); err != nil {
-			m.log.Error("failed to stop sandbox",
-				"pool", pool.ID,
-				"sandbox", sb.ID,
-				"error", err)
+		).Attrs(), 0); err != nil {
+			if errors.Is(err, cond.ErrNotFound{}) {
+				m.log.Warn("sandbox already deleted during scale-down",
+					"pool", pool.ID,
+					"sandbox", sb.ID)
+			} else {
+				m.log.Error("failed to stop sandbox",
+					"pool", pool.ID,
+					"sandbox", sb.ID,
+					"error", err)
+			}
 			continue
 		}
 

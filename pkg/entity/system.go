@@ -39,6 +39,7 @@ const (
 
 	Index   Id = "db/index"
 	Session Id = "db/session"
+	Tag     Id = "db/tag"
 
 	AttrSession Id = "db/attr.session"
 
@@ -149,6 +150,14 @@ func InitSystemEntities(save func(*Entity) error) error {
 		Doc, "Values of this attribute are stored in a session",
 		Cardinality, CardinalityOne,
 		Type, TypeBool,
+	)
+
+	tag := New(
+		Ident, types.Keyword(Tag),
+		Doc, "Tags for categorizing attributes",
+		Cardinality, CardinalityMany,
+		Type, TypeStr,
+		Index, true,
 	)
 
 	attrSession := New(
@@ -298,7 +307,7 @@ func InitSystemEntities(save func(*Entity) error) error {
 		ident, doc, uniq, card, typ, enumValues, enumType,
 		uniqueIdentity, uniqueValue, cardOne, cardMany,
 		typeAny, typeRef, typeStr, typeKW, typeInt, typeFloat, typeBool, typeTime, typeEnum,
-		typeArray, typeDuration, typeComponent, typeLabel, typeBytes, index, session, ttl,
+		typeArray, typeDuration, typeComponent, typeLabel, typeBytes, index, session, tag, ttl,
 		revision, createdAt, updatedAt,
 		attrSession,
 		attrPred, program, predIP, predCidr, entityAttrs, entityPreds, entityEnsure,

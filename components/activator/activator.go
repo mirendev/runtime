@@ -1425,13 +1425,10 @@ func (a *localActivator) migrateOrphanedSandboxes(ctx context.Context, pool *com
 		newLabels := types.LabelSet("pool", pool.ID.String())
 		md.Labels = append(md.Labels, newLabels...)
 
-		var rpcE entityserver_v1alpha.Entity
-		rpcE.SetId(sb.ID.String())
-		rpcE.SetAttrs(entity.New(
+		if _, err := a.eac.Patch(ctx, entity.New(
+			entity.DBId, sb.ID,
 			md.Encode,
-		).Attrs())
-
-		if _, err := a.eac.Put(ctx, &rpcE); err != nil {
+		).Attrs(), 0); err != nil {
 			a.log.Error("failed to label orphaned sandbox",
 				"sandbox", sb.ID,
 				"pool", pool.ID,
@@ -1510,18 +1507,23 @@ func (a *localActivator) syncLastActivityOnce(ctx context.Context) {
 	for _, u := range updates {
 		updateCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 
-		var rpcE entityserver_v1alpha.Entity
-		rpcE.SetId(u.sandboxID.String())
-		rpcE.SetAttrs(entity.New(
+		_, err := a.eac.Patch(updateCtx, entity.New(
+			entity.DBId, u.sandboxID,
 			(&compute_v1alpha.Sandbox{
 				LastActivity: u.lastRenewal,
 			}).Encode,
-		).Attrs())
-
-		if _, err := a.eac.Put(updateCtx, &rpcE); err != nil {
-			a.log.Error("failed to sync sandbox last_activity",
-				"sandbox", u.sandboxID,
-				"error", err)
+		).Attrs(), 0)
+		if err != nil {
+			if errors.Is(err, cond.ErrConflict{}) {
+				// Conflict - another updater modified LastActivity, skip
+				a.log.Debug("skipping last_activity sync due to conflict",
+					"sandbox", u.sandboxID)
+			} else if errors.Is(err, cond.ErrNotFound{}) {
+				// Sandbox deleted, skip
+				a.log.Debug("skipping last_activity sync, sandbox not found",
+					"sandbox", u.sandboxID)
+				// TODO remove sandbox from in-memory tracking?
+			}
 		} else {
 			// Update our in-memory copy to reflect the sync
 			a.mu.Lock()

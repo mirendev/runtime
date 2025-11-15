@@ -336,6 +336,12 @@ kinds:
       doc: Immutable sandbox configuration
 
   sandbox_pool:
+    app:
+      type: ref
+      doc: Reference to the app this pool belongs to
+      indexed: true
+      tags: [dev.miren.app_ref]
+
     service:
       type: string
       doc: Service name (e.g., web, worker) - pool identifier
