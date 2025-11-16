@@ -1,11 +1,10 @@
-# Multi-stage Dockerfile for Miren Runtime OCI image
 # This image contains all executables needed to run the miren server
 
-# Final stage
-FROM ubuntu:22.04
+FROM ubuntu:24.04
 
 # Install miren dependencies
 RUN apt-get update && apt-get install -y \
+    bash \
     ca-certificates \
     curl \
     iptables \
@@ -23,24 +22,25 @@ RUN echo "Building for architecture: $TARGETARCH"
 # These are extracted in the GitHub Actions workflow before the Docker build
 COPY docker/artifacts/${TARGETARCH}/ /usr/local/bin/
 
-# Copy configuration files
-COPY hack/containerd-config.toml /etc/containerd/config.toml
-
 # Create necessary directories
-RUN mkdir -p /var/lib/miren/containerd /var/lib/miren/containerd/state /var/log /root/.config/miren
+RUN mkdir -p /var/lib/miren
 
-# Create entrypoint script
-# Copy and setup entrypoint script
-COPY docker/entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh
+# Download the components to run the server
+# TODO this should be given the specific version to download
+# Right now we're not using the miren binary in the release, just
+# the components like containerd, so it's less of a big deal.
+RUN miren download release -g
 
-# Set working directory
-WORKDIR /workspace
+# Declare volume for data persistence
+VOLUME /var/lib/miren
 
-# Expose common ports
-# 8080 - Default HTTP ingress
-# 8443 - Miren server (HTTP/3 QUIC)
-# 2379 - etcd client port (for debugging)
-EXPOSE 8080 8443
+# Expose ports
+# 80 - HTTP
+# 8443 - QUIC (UDP)
+# 443 - HTTPS (TCP)
+EXPOSE 80/tcp 8443/udp 443/tcp
 
 ENTRYPOINT ["/entrypoint.sh"]
+
+# Run miren server
+CMD ["server", "-v"]
