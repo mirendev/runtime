@@ -730,20 +730,17 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 		return sch.Watch(sub, eac)
 	})
 
-	// SandboxPool manager is now managed by the controller framework in coordinator.Start()
-	// No need to run it separately here
-
-	go func() {
-		err := http.ListenAndServe(":8989", hs)
-		if err != nil {
-			ctx.Log.Error("failed to start HTTP server", "error", err)
-		}
-	}()
-
 	if cfg.TLS.GetStandardTLS() {
 		if err := autotls.ServeTLS(sub, ctx.Log, cfg.Server.GetDataPath(), hs); err != nil {
 			ctx.Log.Error("failed to enable standard TLS", "error", err)
 		}
+	} else {
+		go func() {
+			err := http.ListenAndServe(":80", hs)
+			if err != nil {
+				ctx.Log.Error("failed to start HTTP server", "error", err)
+			}
+		}()
 	}
 
 	var registry ocireg.Registry

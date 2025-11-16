@@ -213,6 +213,22 @@ func AllCommands() map[string]cli.CommandFactory {
 			return Infer("server upgrade rollback", "Rollback server to previous version", ServerUpgradeRollback), nil
 		},
 
+		"server docker": func() (cli.Command, error) {
+			return Section("server docker", "Docker-based server management commands"), nil
+		},
+
+		"server docker install": func() (cli.Command, error) {
+			return Infer("server docker install", "Install miren server using Docker", ServerInstallDocker), nil
+		},
+
+		"server docker uninstall": func() (cli.Command, error) {
+			return Infer("server docker uninstall", "Uninstall miren server Docker container", ServerUninstallDocker), nil
+		},
+
+		"server docker status": func() (cli.Command, error) {
+			return Infer("server docker status", "Show status of miren server Docker container", ServerStatusDocker), nil
+		},
+
 		"auth generate": func() (cli.Command, error) {
 			return Infer("auth generate", "Generate authentication config file", AuthGenerate), nil
 		},

@@ -3,6 +3,7 @@ package autotls
 import (
 	"context"
 	"log/slog"
+	"net"
 	"net/http"
 	"path/filepath"
 	"time"
@@ -32,10 +33,38 @@ func ServeTLS(ctx context.Context, log *slog.Logger, dataPath string, h http.Han
 		}
 	}()
 
+	// Create a handler that redirects to HTTPS unless the host is localhost or an IP address
+	redirectHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		host := r.Host
+		// Strip port if present
+		if hostWithoutPort, _, err := net.SplitHostPort(host); err == nil {
+			host = hostWithoutPort
+		}
+
+		// Check if host is localhost or an IP address
+		isLocalhost := host == "localhost" || host == "127.0.0.1" || host == "::1"
+		isIPAddress := net.ParseIP(host) != nil
+
+		if isLocalhost || isIPAddress {
+			// Serve the request directly without redirecting
+			h.ServeHTTP(w, r)
+			return
+		}
+
+		// Redirect to HTTPS
+		if r.Method != "GET" && r.Method != "HEAD" {
+			http.Error(w, "Use HTTPS", http.StatusBadRequest)
+			return
+		}
+
+		target := "https://" + host + r.URL.RequestURI()
+		http.Redirect(w, r, target, http.StatusFound)
+	})
+
 	// Start HTTP server on port 80 for ACME challenges and HTTP to HTTPS redirect
 	httpServer := &http.Server{
 		Addr:              ":80",
-		Handler:           mgr.HTTPHandler(nil),
+		Handler:           mgr.HTTPHandler(redirectHandler),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
 		WriteTimeout:      10 * time.Second,
