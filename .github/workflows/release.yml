@@ -7,6 +7,10 @@ on:
     # Note: No branches filter - triggers for both main branch and tags
     # This ensures all releases (main builds and tagged releases) wait for tests to pass
 
+concurrency:
+  group: release-${{ github.event.workflow_run.head_branch }}
+  cancel-in-progress: true
+
 jobs:
   check-test-success:
     runs-on: ubuntu-latest
