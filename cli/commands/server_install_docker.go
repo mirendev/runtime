@@ -225,7 +225,7 @@ func ServerStatusDocker(ctx *Context, opts struct {
 
 	if !containerExists {
 		ctx.Warn("Container '%s' does not exist", opts.Name)
-		ctx.Info("Run 'miren server install-docker' to create it")
+		ctx.Info("Run 'miren server docker install' to create it")
 		return nil
 	}
 
@@ -374,24 +374,6 @@ func dockerExec(containerName string, command []string) (string, error) {
 		return "", err
 	}
 	return string(output), nil
-}
-
-func dockerGetContainerIP(containerName string) (string, error) {
-	cmd := exec.Command("docker", "inspect", "-f", "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}", containerName)
-	output, err := cmd.Output()
-	if err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			return "", fmt.Errorf("%w: %s", err, exitErr.Stderr)
-		}
-		return "", err
-	}
-
-	ip := strings.TrimSpace(string(output))
-	if ip == "" {
-		return "", fmt.Errorf("container has no IP address")
-	}
-
-	return ip, nil
 }
 
 func waitForServerReady(ctx *Context) error {
