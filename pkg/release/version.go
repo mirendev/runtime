@@ -83,6 +83,17 @@ func parseVersionText(output string) VersionInfo {
 
 // IsNewer returns true if this version is newer than the other
 func (v VersionInfo) IsNewer(other VersionInfo) bool {
+	// Try to parse both as semver
+	thisSemver, thisErr := ParseSemVer(v.Version)
+	otherSemver, otherErr := ParseSemVer(other.Version)
+
+	// If both are valid semver, use semver comparison
+	if thisErr == nil && otherErr == nil {
+		return thisSemver.IsNewer(otherSemver)
+	}
+
+	// Fall back to existing logic for non-semver versions
+
 	// If both have commits, compare commits first
 	// Same commit means identical code regardless of build time
 	if v.Commit != "" && v.Commit != "unknown" &&

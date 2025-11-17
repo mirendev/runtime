@@ -10,7 +10,8 @@ import (
 
 // ServerUpgrade upgrades the miren server to the latest or specified version
 func ServerUpgrade(ctx *Context, opts struct {
-	Version        string `short:"v" long:"version" description:"Specific version to upgrade to (default: main)"`
+	Version        string `short:"v" long:"version" description:"Specific version to upgrade to (e.g., v0.2.0)"`
+	Channel        string `long:"channel" description:"Channel to use: 'latest' (stable releases, default) or 'main' (bleeding edge)"`
 	Check          bool   `short:"c" long:"check" description:"Check for available updates only"`
 	Force          bool   `short:"f" long:"force" description:"Force upgrade even if already up to date"`
 	Release        bool   `short:"r" long:"release" description:"Upgrade full release package (not just base)"`
@@ -28,10 +29,18 @@ func ServerUpgrade(ctx *Context, opts struct {
 		return fmt.Errorf("miren server is not running. Use 'miren upgrade' to upgrade the CLI binary instead")
 	}
 
-	// Determine target version
+	// Determine version/channel
 	version := opts.Version
-	if version == "" {
-		version = "main" // Default to main branch
+	channel := opts.Channel
+
+	// If neither specified, default to latest channel
+	if version == "" && channel == "" {
+		channel = "latest"
+	}
+
+	// If channel specified, use it as version
+	if channel != "" {
+		version = channel
 	}
 
 	// Create manager with server configuration
