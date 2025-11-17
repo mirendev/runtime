@@ -589,3 +589,80 @@ jobs:
               "unfurl_media": false
             }
 
+      - name: Send Slack notification on upload success
+        if: success()
+        run: |
+          # Determine what was uploaded
+          REF_NAME="${{ github.ref_name }}"
+          IS_TAG=false
+          IS_TEST_RELEASE=false
+          RELEASE_TYPE="Branch build"
+
+          if [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            IS_TAG=true
+            if [[ "$REF_NAME" =~ ^v0\.0\.0- ]]; then
+              IS_TEST_RELEASE=true
+              RELEASE_TYPE="Test release"
+              PATHS_MSG="Uploaded to: \`$REF_NAME\` only (test releases don't update \`latest\`)"
+            else
+              RELEASE_TYPE="Stable release"
+              PATHS_MSG="Uploaded to: \`$REF_NAME\` and \`latest\`"
+            fi
+          else
+            PATHS_MSG="Uploaded to: \`$REF_NAME\`"
+          fi
+
+          # Get version from version.json
+          VERSION=$(jq -r '.version' version.json)
+          COMMIT_SHORT=$(echo "${{ github.event.workflow_run.head_sha }}" | cut -c1-7)
+
+          # Build the Slack message
+          curl -X POST -H 'Content-type: application/json' \
+            -H "Authorization: Bearer ${{ secrets.SLACK_BOT_TOKEN }}" \
+            --data @- https://slack.com/api/chat.postMessage <<EOF
+          {
+            "channel": "${{ vars.SLACK_CHANNEL_ID }}",
+            "text": "✅ Miren $RELEASE_TYPE: $VERSION",
+            "blocks": [
+              {
+                "type": "section",
+                "text": {
+                  "type": "mrkdwn",
+                  "text": "✅ *Miren $RELEASE_TYPE deployed*\nVersion \`$VERSION\` built and uploaded successfully."
+                }
+              },
+              {
+                "type": "section",
+                "fields": [
+                  {
+                    "type": "mrkdwn",
+                    "text": "*Version:*\n\`$VERSION\`"
+                  },
+                  {
+                    "type": "mrkdwn",
+                    "text": "*Type:*\n$RELEASE_TYPE"
+                  }
+                ]
+              },
+              {
+                "type": "section",
+                "text": {
+                  "type": "mrkdwn",
+                  "text": "*Channels:*\n$PATHS_MSG"
+                }
+              },
+              {
+                "type": "context",
+                "elements": [
+                  {
+                    "type": "mrkdwn",
+                    "text": "<${{ github.event.workflow_run.repository.html_url }}/commit/${{ github.event.workflow_run.head_sha }}|View commit ($COMMIT_SHORT)> • <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View workflow run>"
+                  }
+                ]
+              }
+            ],
+            "unfurl_links": false,
+            "unfurl_media": false
+          }
+          EOF
+
