@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-if [ "$1" = "server" ]; then
+setupCgroup() {
     if [ -d /sys/fs/cgroup/inner ]; then
         # Already set up
         return
@@ -15,7 +15,11 @@ if [ "$1" = "server" ]; then
         echo "$pid" >/sys/fs/cgroup/inner/cgroup.procs 2>/dev/null || true
     done
 
-    sed -e 's/ / +/g' -e 's/^/+/' </sys/fs/cgroup/cgroup.controllers >/sys/fs/cgroup/cgroup.subtree_control
+sed -e 's/ / +/g' -e 's/^/+/' </sys/fs/cgroup/cgroup.controllers >/sys/fs/cgroup/cgroup.subtree_control
+}
+
+if [ "$1" = "server" ]; then
+    setupCgroup
 fi
 
 exec /usr/local/bin/miren "$@"
