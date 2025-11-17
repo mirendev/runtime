@@ -16,11 +16,11 @@ const DefaultCloudURL = "https://api.miren.cloud"
 
 // RPCAuthenticator adapts cloud authentication for RPC usage
 type RPCAuthenticator struct {
-	jwtValidator    *auth.JWTValidator
-	tokenCache      *auth.TokenCache
-	rbacEval        *rbac.Evaluator
-	policyFetcher   *PolicyFetcher
-	logger          *slog.Logger
+	jwtValidator  *auth.JWTValidator
+	tokenCache    *auth.TokenCache
+	rbacEval      *rbac.Evaluator
+	policyFetcher *PolicyFetcher
+	logger        *slog.Logger
 
 	// Tags to use for RBAC evaluation
 	tags map[string]any
@@ -75,8 +75,8 @@ func NewRPCAuthenticator(ctx context.Context, config Config) (*RPCAuthenticator,
 	}
 
 	a := &RPCAuthenticator{
-		logger:        config.Logger.With("module", "cloud-auth"),
-		tags:          config.Tags,
+		logger: config.Logger.With("module", "cloud-auth"),
+		tags:   config.Tags,
 	}
 
 	// Set default tags if not provided
