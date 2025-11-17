@@ -12,14 +12,21 @@ on:
 jobs:
   check-test-success:
     runs-on: ubuntu-latest
-    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    if: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' }}
     steps:
       - name: Check test workflow status
         run: echo "Tests passed successfully, proceeding with release"
 
+  check-tag-push:
+    runs-on: ubuntu-latest
+    if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}
+    steps:
+      - name: Tag push detected
+        run: echo "Building release for tag ${{ github.ref_name }}"
+
   tests-failed:
     runs-on: ubuntu-latest
-    if: ${{ github.event.workflow_run.conclusion != 'success' }}
+    if: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.conclusion != 'success' }}
     steps:
       - name: Tests failed - blocking release
         run: |
@@ -84,7 +91,8 @@ jobs:
               "unfurl_media": false
             }
   package:
-    needs: check-test-success
+    needs: [check-test-success, check-tag-push]
+    if: ${{ !cancelled() && (needs.check-test-success.result == 'success' || needs.check-tag-push.result == 'success') }}
     strategy:
       matrix:
         include:
@@ -203,7 +211,8 @@ jobs:
           }
 
   build-binaries:
-    needs: check-test-success
+    needs: [check-test-success, check-tag-push]
+    if: ${{ !cancelled() && (needs.check-test-success.result == 'success' || needs.check-tag-push.result == 'success') }}
     strategy:
       matrix:
         include:
@@ -243,7 +252,8 @@ jobs:
         retention-days: 1
 
   build-and-push-docker:
-    needs: [package]
+    needs: [check-test-success, check-tag-push, package]
+    if: ${{ !cancelled() && (needs.check-test-success.result == 'success' || needs.check-tag-push.result == 'success') }}
     runs-on: depot-ubuntu-latest
     permissions:
       contents: read
@@ -291,7 +301,7 @@ jobs:
           push: true
           tags: |
             us-central1-docker.pkg.dev/miren-cloud/miren-oci/miren:${{ github.ref_name }}
-            ${{ startsWith(github.ref, 'refs/tags/v') && 'us-central1-docker.pkg.dev/miren-cloud/miren-oci/miren:latest' || '' }}
+            ${{ startsWith(github.ref, 'refs/tags/v') && !startsWith(github.ref_name, 'v0.0.0-') && 'us-central1-docker.pkg.dev/miren-cloud/miren-oci/miren:latest' || '' }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -344,7 +354,8 @@ jobs:
             }
 
   upload-to-miren:
-    needs: [package, build-binaries]
+    needs: [check-test-success, check-tag-push, package, build-binaries]
+    if: ${{ !cancelled() && (needs.check-test-success.result == 'success' || needs.check-tag-push.result == 'success') }}
     runs-on: depot-ubuntu-latest
     concurrency:
       group: upload-to-miren-${{ github.ref_name }}
@@ -375,10 +386,18 @@ jobs:
 
           # Determine if this is a tag build
           IS_TAG_BUILD=false
+          IS_TEST_RELEASE=false
           if [[ "${{ github.ref }}" == refs/tags/* ]]; then
             IS_TAG_BUILD=true
             TAG_NAME="${{ github.ref_name }}"
             echo "Building for tag: $TAG_NAME"
+
+            # Check if this is a test release (v0.0.0-test.X or similar v0.0.0-* prerelease)
+            # Test releases should NOT update the latest channel
+            if [[ "$TAG_NAME" =~ ^v0\.0\.0- ]]; then
+              IS_TEST_RELEASE=true
+              echo "Detected test release - will NOT update latest channel"
+            fi
           fi
 
           # Create a manifest to track uploaded artifacts and their checksums
@@ -403,8 +422,12 @@ jobs:
             # Determine upload paths
             local paths=()
             if [ "$IS_TAG_BUILD" = true ]; then
-              # For tags, upload to both tag path and latest
-              paths+=("$TAG_NAME" "latest")
+              # Always upload to the tag path
+              paths+=("$TAG_NAME")
+              # Only upload to latest for non-test releases
+              if [ "$IS_TEST_RELEASE" = false ]; then
+                paths+=("latest")
+              fi
             else
               # For branches, upload to branch path only
               paths+=("${{ github.ref_name }}")

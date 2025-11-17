@@ -66,6 +66,20 @@ func TestSemVerIsNewer(t *testing.T) {
 		{"prerelease newer", "v1.0.0", "v1.0.0-rc.1", true},
 		{"preview progression", "v0.2.0", "v0.1.0", true},
 		{"test versions", "v0.0.0-test.2", "v0.0.0-test.1", true},
+		// Numeric prerelease comparison (SemVer 2.0.0 spec compliance)
+		{"numeric prerelease 10 > 2", "v0.0.0-test.10", "v0.0.0-test.2", true},
+		{"numeric prerelease 2 < 10", "v0.0.0-test.2", "v0.0.0-test.10", false},
+		{"numeric prerelease 100 > 99", "v1.0.0-rc.100", "v1.0.0-rc.99", true},
+		// Alphanumeric vs numeric (numeric has lower precedence per spec)
+		{"alphanumeric > numeric", "v1.0.0-alpha.1", "v1.0.0-1", true},
+		{"numeric < alphanumeric", "v1.0.0-1", "v1.0.0-alpha.1", false},
+		// Length differences (shorter has lower precedence)
+		{"longer prerelease newer", "v1.0.0-rc.1.1", "v1.0.0-rc.1", true},
+		{"shorter prerelease older", "v1.0.0-rc.1", "v1.0.0-rc.1.1", false},
+		// Complex mixed cases
+		{"rc.2 > rc.1", "v1.0.0-rc.2", "v1.0.0-rc.1", true},
+		{"beta > alpha", "v1.0.0-beta.1", "v1.0.0-alpha.1", true},
+		{"same prerelease", "v1.0.0-rc.1", "v1.0.0-rc.1", false},
 	}
 
 	for _, tt := range tests {

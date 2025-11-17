@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"regexp"
 	"strconv"
+	"strings"
 )
 
 // SemVer represents a semantic version
@@ -65,13 +66,58 @@ func (s *SemVer) IsNewer(other *SemVer) bool {
 		return false
 	}
 
-	// Both have prereleases - compare lexicographically
+	// Both have prereleases - compare per SemVer 2.0.0 spec
 	if s.Prerelease != other.Prerelease {
-		return s.Prerelease > other.Prerelease
+		return comparePrereleaseSegments(s.Prerelease, other.Prerelease) > 0
 	}
 
 	// Versions are identical
 	return false
+}
+
+// comparePrereleaseSegments compares prerelease versions per SemVer 2.0.0 spec
+// Returns: 1 if a > b, -1 if a < b, 0 if equal
+func comparePrereleaseSegments(a, b string) int {
+	aParts := strings.Split(a, ".")
+	bParts := strings.Split(b, ".")
+
+	// Compare each segment pair
+	for i := 0; i < len(aParts) && i < len(bParts); i++ {
+		aNum, aErr := strconv.Atoi(aParts[i])
+		bNum, bErr := strconv.Atoi(bParts[i])
+
+		if aErr == nil && bErr == nil {
+			// Both numeric - compare as integers
+			if aNum != bNum {
+				if aNum > bNum {
+					return 1
+				}
+				return -1
+			}
+		} else if aErr == nil {
+			// a is numeric, b is not - numeric has lower precedence
+			return -1
+		} else if bErr == nil {
+			// b is numeric, a is not - numeric has lower precedence
+			return 1
+		} else {
+			// Both alphanumeric - compare lexicographically
+			if aParts[i] != bParts[i] {
+				if aParts[i] > bParts[i] {
+					return 1
+				}
+				return -1
+			}
+		}
+	}
+
+	// All compared segments are equal - shorter prerelease has lower precedence
+	if len(aParts) > len(bParts) {
+		return 1
+	} else if len(aParts) < len(bParts) {
+		return -1
+	}
+	return 0
 }
 
 // IsPrerelease returns true if this is a prerelease version
