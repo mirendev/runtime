@@ -99,6 +99,8 @@ jobs:
       contents: write
     steps:
     - uses: actions/checkout@v5
+      with:
+        ref: ${{ github.event.workflow_run.head_branch }}
 
     - name: Set up Go
       uses: actions/setup-go@v6
@@ -228,6 +230,8 @@ jobs:
       contents: read
     steps:
     - uses: actions/checkout@v5
+      with:
+        ref: ${{ github.event.workflow_run.head_branch }}
     - name: Set up Go
       uses: actions/setup-go@v6
       with:
@@ -253,6 +257,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.workflow_run.head_branch }}
 
       - name: Download amd64 package
         uses: actions/download-artifact@v4
@@ -372,6 +378,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.workflow_run.head_branch }}
 
       - name: Download all artifacts
         uses: actions/download-artifact@v4
