@@ -402,6 +402,22 @@ jobs:
             fi
           fi
 
+          # Determine upload paths (used by both artifact uploads and version.json)
+          paths=()
+          if [ "$IS_TAG_BUILD" = true ]; then
+            # Always upload to the tag path
+            paths+=("$TAG_NAME")
+            # Only upload to latest for non-test releases
+            if [ "$IS_TEST_RELEASE" = false ]; then
+              paths+=("latest")
+            fi
+          else
+            # For branches, upload to branch path only
+            paths+=("${{ github.ref_name }}")
+          fi
+
+          echo "Upload paths: ${paths[*]}"
+
           # Create a manifest to track uploaded artifacts and their checksums
           echo '[]' > artifact-manifest.json
 
@@ -421,21 +437,7 @@ jobs:
             # Get file size
             local size=$(stat -c%s "${file_path}" 2>/dev/null || stat -f%z "${file_path}" 2>/dev/null || echo 0)
 
-            # Determine upload paths
-            local paths=()
-            if [ "$IS_TAG_BUILD" = true ]; then
-              # Always upload to the tag path
-              paths+=("$TAG_NAME")
-              # Only upload to latest for non-test releases
-              if [ "$IS_TEST_RELEASE" = false ]; then
-                paths+=("latest")
-              fi
-            else
-              # For branches, upload to branch path only
-              paths+=("${{ github.ref_name }}")
-            fi
-
-            # Upload to all paths
+            # Upload to all paths (paths array is set in outer scope)
             for path in "${paths[@]}"; do
               echo "Uploading to path: $path"
 
