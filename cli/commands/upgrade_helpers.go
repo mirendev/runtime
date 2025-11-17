@@ -19,7 +19,7 @@ func CheckVersionStatus(ctx context.Context, targetVersion string, mgrOpts *rele
 	current, _ = mgr.GetCurrentVersion(ctx)
 
 	if targetVersion == "" {
-		targetVersion = "main"
+		targetVersion = "latest"
 	}
 
 	downloader := release.NewDownloader()
@@ -32,6 +32,11 @@ func CheckVersionStatus(ctx context.Context, targetVersion string, mgrOpts *rele
 		Version:   metadata.Version,
 		Commit:    metadata.Commit,
 		BuildDate: metadata.BuildDate,
+	}
+
+	// If version is a semver prerelease, warn user
+	if semver, err := release.ParseSemVer(latest.Version); err == nil && semver.IsPrerelease() {
+		fmt.Printf("⚠️  Warning: %s is a prerelease version\n", latest.Version)
 	}
 
 	return current, latest, nil

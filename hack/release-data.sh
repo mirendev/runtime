@@ -12,7 +12,12 @@
 set -euo pipefail
 
 # Use env vars if set (for CI), otherwise extract from git (for local dev)
-GIT_BRANCH=${GIT_BRANCH:-$(git rev-parse --abbrev-ref HEAD)}
+# Check if current commit has a tag first
+if [ -z "${GIT_BRANCH:-}" ] && git describe --exact-match --tags HEAD 2>/dev/null; then
+  GIT_BRANCH=$(git describe --exact-match --tags HEAD)
+else
+  GIT_BRANCH=${GIT_BRANCH:-$(git rev-parse --abbrev-ref HEAD)}
+fi
 GIT_COMMIT=${GIT_COMMIT:-$(git rev-parse HEAD)}
 BUILD_DATE=${BUILD_DATE:-$(date -u +"%Y-%m-%dT%H:%M:%SZ")}
 

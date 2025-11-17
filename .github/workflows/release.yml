@@ -4,7 +4,8 @@ on:
   workflow_run:
     workflows: ["Test"]
     types: [completed]
-    branches: [main]
+    # Note: No branches filter - triggers for both main branch and tags
+    # This ensures all releases (main builds and tagged releases) wait for tests to pass
 
 jobs:
   check-test-success:
@@ -16,18 +17,21 @@ jobs:
 
   tests-failed:
     runs-on: ubuntu-latest
-    if: ${{ github.event.workflow_run.conclusion != 'success' }}
+    # Only notify for main branch or version tags, not for every PR
+    if: ${{ github.event.workflow_run.conclusion != 'success' && (github.event.workflow_run.head_branch == 'main' || startsWith(github.event.workflow_run.head_branch, 'v')) }}
     steps:
       - name: Tests failed - blocking release
         run: |
+          REF_NAME="${{ github.event.workflow_run.head_branch }}"
           echo "
           ╔═══════════════════════════════════════════════════════════════════════════╗
           ║                                                                           ║
-          ║   ❌ ❌ ❌  TESTS FAILED ON MAIN - RELEASE BLOCKED  ❌ ❌ ❌              ║
+          ║   ❌ ❌ ❌  TESTS FAILED - RELEASE BLOCKED  ❌ ❌ ❌                       ║
           ║                                                                           ║
           ║   The test workflow did not pass successfully.                           ║
           ║   Release artifacts will NOT be built or pushed.                         ║
           ║                                                                           ║
+          ║   Ref: $REF_NAME                                                         ║
           ║   Test workflow conclusion: ${{ github.event.workflow_run.conclusion }}  ║
           ║   Test workflow run: ${{ github.event.workflow_run.html_url }}           ║
           ║                                                                           ║
@@ -44,13 +48,13 @@ jobs:
           payload: |
             {
               "channel": "${{ vars.SLACK_CHANNEL_ID }}",
-              "text": "❌ Tests failed on main branch - Release blocked",
+              "text": "❌ Tests failed for ${{ github.event.workflow_run.head_branch }} - Release blocked",
               "blocks": [
                 {
                   "type": "section",
                   "text": {
                     "type": "mrkdwn",
-                    "text": "❌ *Tests failed on main branch*\nRelease artifacts will not be built or pushed."
+                    "text": "❌ *Tests failed for `${{ github.event.workflow_run.head_branch }}`*\nRelease artifacts will not be built or pushed."
                   }
                 },
                 {
@@ -82,6 +86,8 @@ jobs:
             }
   package:
     needs: check-test-success
+    # Only build releases for main branch or version tags
+    if: ${{ github.event.workflow_run.head_branch == 'main' || startsWith(github.event.workflow_run.head_branch, 'v') }}
     strategy:
       matrix:
         include:
@@ -94,6 +100,8 @@ jobs:
       contents: write
     steps:
     - uses: actions/checkout@v5
+      with:
+        ref: ${{ github.event.workflow_run.head_branch }}
 
     - name: Set up Go
       uses: actions/setup-go@v6
@@ -126,8 +134,8 @@ jobs:
 
     - name: Build and package for ${{ matrix.arch }}
       env:
-        GIT_BRANCH: ${{ github.ref_name }}
-        GIT_COMMIT: ${{ github.sha }}
+        GIT_BRANCH: ${{ github.event.workflow_run.head_branch }}
+        GIT_COMMIT: ${{ github.event.workflow_run.head_sha }}
       run: |
         # Pass git info from GitHub Actions context to avoid git commands in iso
         export BUILD_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
@@ -163,7 +171,7 @@ jobs:
                 "fields": [
                   {
                     "type": "mrkdwn",
-                    "text": "*Branch:*\n`${{ github.ref_name }}`"
+                    "text": "*Branch:*\n`${{ github.event.workflow_run.head_branch }}`"
                   },
                   {
                     "type": "mrkdwn",
@@ -223,6 +231,8 @@ jobs:
       contents: read
     steps:
     - uses: actions/checkout@v5
+      with:
+        ref: ${{ github.event.workflow_run.head_branch }}
     - name: Set up Go
       uses: actions/setup-go@v6
       with:
@@ -248,6 +258,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.workflow_run.head_branch }}
 
       - name: Download amd64 package
         uses: actions/download-artifact@v4
@@ -279,6 +291,23 @@ jobs:
       - name: Configure Docker for Artifact Registry
         run: gcloud auth configure-docker us-central1-docker.pkg.dev
 
+      - name: Determine Docker tags
+        id: docker-tags
+        run: |
+          HEAD_BRANCH="${{ github.event.workflow_run.head_branch }}"
+          TAGS="us-central1-docker.pkg.dev/miren-cloud/miren-oci/miren:$HEAD_BRANCH"
+
+          # Add latest tag for stable releases only (exclude all prereleases)
+          # Prereleases have a hyphen: v0.0.0-test.1, v0.1.0-rc.1, v1.0.0-beta.1, etc.
+          if [[ "$HEAD_BRANCH" == v* ]] && [[ ! "$HEAD_BRANCH" =~ ^v[0-9]+\.[0-9]+\.[0-9]+- ]]; then
+            TAGS="$TAGS
+          us-central1-docker.pkg.dev/miren-cloud/miren-oci/miren:latest"
+          fi
+
+          echo "tags<<EOF" >> $GITHUB_OUTPUT
+          echo "$TAGS" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
       - name: Build and push miren Docker image
         uses: docker/build-push-action@v5
         with:
@@ -286,9 +315,7 @@ jobs:
           file: ./docker/Dockerfile.miren
           platforms: linux/amd64,linux/arm64
           push: true
-          tags: |
-            us-central1-docker.pkg.dev/miren-cloud/miren-oci/miren:latest
-            us-central1-docker.pkg.dev/miren-cloud/miren-oci/miren:${{ github.ref_name }}
+          tags: ${{ steps.docker-tags.outputs.tags }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -315,7 +342,7 @@ jobs:
                   "fields": [
                     {
                       "type": "mrkdwn",
-                      "text": "*Branch:*\n`${{ github.ref_name }}`"
+                      "text": "*Branch:*\n`${{ github.event.workflow_run.head_branch }}`"
                     }
                   ]
                 },
@@ -344,7 +371,7 @@ jobs:
     needs: [package, build-binaries]
     runs-on: depot-ubuntu-latest
     concurrency:
-      group: upload-to-miren-${{ github.ref_name }}
+      group: upload-to-miren-${{ github.event.workflow_run.head_branch }}
       cancel-in-progress: false
     permissions:
       id-token: write
@@ -352,6 +379,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.workflow_run.head_branch }}
 
       - name: Download all artifacts
         uses: actions/download-artifact@v4
@@ -369,6 +398,40 @@ jobs:
       - name: Upload to Miren API
         run: |
           set -eo pipefail
+
+          HEAD_BRANCH="${{ github.event.workflow_run.head_branch }}"
+
+          # Determine if this is a tag build
+          IS_TAG_BUILD=false
+          IS_PRERELEASE=false
+          if [[ "$HEAD_BRANCH" == v* ]]; then
+            IS_TAG_BUILD=true
+            TAG_NAME="$HEAD_BRANCH"
+            echo "Building for tag: $TAG_NAME"
+
+            # Check if this is a prerelease (has hyphen: v0.0.0-test.1, v0.1.0-rc.1, etc.)
+            # Prereleases should NOT update the latest channel
+            if [[ "$TAG_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+- ]]; then
+              IS_PRERELEASE=true
+              echo "Detected prerelease - will NOT update latest channel"
+            fi
+          fi
+
+          # Determine upload paths (used by both artifact uploads and version.json)
+          paths=()
+          if [ "$IS_TAG_BUILD" = true ]; then
+            # Always upload to the tag path
+            paths+=("$TAG_NAME")
+            # Only upload to latest for stable releases (not prereleases)
+            if [ "$IS_PRERELEASE" = false ]; then
+              paths+=("latest")
+            fi
+          else
+            # For branches, upload to branch path only
+            paths+=("$HEAD_BRANCH")
+          fi
+
+          echo "Upload paths: ${paths[*]}"
 
           # Create a manifest to track uploaded artifacts and their checksums
           echo '[]' > artifact-manifest.json
@@ -389,17 +452,22 @@ jobs:
             # Get file size
             local size=$(stat -c%s "${file_path}" 2>/dev/null || stat -f%z "${file_path}" 2>/dev/null || echo 0)
 
-            # Upload main file
-            curl --fail-with-body --retry 3 -X PUT \
-              -H "Authorization: Bearer ${{ steps.get-oidc-token.outputs.token }}" \
-              -F "file=@${file_path}" \
-              "https://api.miren.cloud/assets/release/miren/${{ github.ref_name }}/${artifact_name}"
+            # Upload to all paths (paths array is set in outer scope)
+            for path in "${paths[@]}"; do
+              echo "Uploading to path: $path"
 
-            # Upload checksum file
-            curl --fail-with-body --retry 3 -X PUT \
-              -H "Authorization: Bearer ${{ steps.get-oidc-token.outputs.token }}" \
-              -F "file=@${artifact_name}.sha256" \
-              "https://api.miren.cloud/assets/release/miren/${{ github.ref_name }}/${artifact_name}.sha256"
+              # Upload main file
+              curl --fail-with-body --retry 3 -X PUT \
+                -H "Authorization: Bearer ${{ steps.get-oidc-token.outputs.token }}" \
+                -F "file=@${file_path}" \
+                "https://api.miren.cloud/assets/release/miren/${path}/${artifact_name}"
+
+              # Upload checksum file
+              curl --fail-with-body --retry 3 -X PUT \
+                -H "Authorization: Bearer ${{ steps.get-oidc-token.outputs.token }}" \
+                -F "file=@${artifact_name}.sha256" \
+                "https://api.miren.cloud/assets/release/miren/${path}/${artifact_name}.sha256"
+            done
 
             # Build artifact info object
             local artifact_obj=$(jq -n \
@@ -447,11 +515,15 @@ jobs:
           # Get git information
           COMMIT=$(git rev-parse HEAD)
           COMMIT_SHORT=$(git rev-parse --short HEAD)
-          BRANCH="${{ github.ref_name }}"
+          BRANCH="${{ github.event.workflow_run.head_branch }}"
           BUILD_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
-          # Determine version string (same logic as build.sh)
-          if [[ $BRANCH =~ ^release/(.*) ]]; then
+          # Determine version string
+          # Note: Uses workflow_run head_branch pattern matching rather than
+          # git describe (used in build scripts). Produces equivalent results for tagged releases.
+          if [[ $BRANCH =~ ^v[0-9]+\.[0-9]+\.[0-9]+ ]]; then
+            VERSION="$BRANCH"
+          elif [[ $BRANCH =~ ^release/(.*) ]]; then
             VERSION="${BASH_REMATCH[1]}"
           else
             VERSION="$BRANCH:$COMMIT_SHORT"
@@ -475,12 +547,14 @@ jobs:
           echo "Generated version.json:"
           cat version.json
 
-          # Upload version metadata last
-          echo "Uploading version.json..."
-          curl --fail-with-body --retry 3 -X PUT \
-            -H "Authorization: Bearer ${{ steps.get-oidc-token.outputs.token }}" \
-            -F "file=@version.json" \
-            "https://api.miren.cloud/assets/release/miren/${{ github.ref_name }}/version.json"
+          # Upload version metadata to all paths
+          for path in "${paths[@]}"; do
+            echo "Uploading version.json to $path..."
+            curl --fail-with-body --retry 3 -X PUT \
+              -H "Authorization: Bearer ${{ steps.get-oidc-token.outputs.token }}" \
+              -F "file=@version.json" \
+              "https://api.miren.cloud/assets/release/miren/${path}/version.json"
+          done
 
       - name: Send Slack notification on upload failure
         if: failure()
@@ -505,7 +579,7 @@ jobs:
                   "fields": [
                     {
                       "type": "mrkdwn",
-                      "text": "*Branch:*\n`${{ github.ref_name }}`"
+                      "text": "*Branch:*\n`${{ github.event.workflow_run.head_branch }}`"
                     }
                   ]
                 },
@@ -529,4 +603,82 @@ jobs:
               "unfurl_links": false,
               "unfurl_media": false
             }
+
+      - name: Send Slack notification on upload success
+        if: success()
+        run: |
+          # Determine what was uploaded
+          HEAD_BRANCH="${{ github.event.workflow_run.head_branch }}"
+          IS_TAG=false
+          IS_PRERELEASE=false
+          RELEASE_TYPE="Branch build"
+
+          if [[ "$HEAD_BRANCH" == v* ]]; then
+            IS_TAG=true
+            # Check if it's a prerelease (has hyphen)
+            if [[ "$HEAD_BRANCH" =~ ^v[0-9]+\.[0-9]+\.[0-9]+- ]]; then
+              IS_PRERELEASE=true
+              RELEASE_TYPE="Prerelease"
+              PATHS_MSG="Uploaded to: \`$HEAD_BRANCH\` only (prereleases don't update \`latest\`)"
+            else
+              RELEASE_TYPE="Stable release"
+              PATHS_MSG="Uploaded to: \`$HEAD_BRANCH\` and \`latest\`"
+            fi
+          else
+            PATHS_MSG="Uploaded to: \`$HEAD_BRANCH\`"
+          fi
+
+          # Get version from version.json
+          VERSION=$(jq -r '.version' version.json)
+          COMMIT_SHORT=$(echo "${{ github.event.workflow_run.head_sha }}" | cut -c1-7)
+
+          # Build the Slack message
+          curl -X POST -H 'Content-type: application/json' \
+            -H "Authorization: Bearer ${{ secrets.SLACK_BOT_TOKEN }}" \
+            --data @- https://slack.com/api/chat.postMessage <<EOF
+          {
+            "channel": "${{ vars.SLACK_CHANNEL_ID }}",
+            "text": "✅ Miren $RELEASE_TYPE: $VERSION",
+            "blocks": [
+              {
+                "type": "section",
+                "text": {
+                  "type": "mrkdwn",
+                  "text": "✅ *Miren $RELEASE_TYPE deployed*\nVersion \`$VERSION\` built and uploaded successfully."
+                }
+              },
+              {
+                "type": "section",
+                "fields": [
+                  {
+                    "type": "mrkdwn",
+                    "text": "*Version:*\n\`$VERSION\`"
+                  },
+                  {
+                    "type": "mrkdwn",
+                    "text": "*Type:*\n$RELEASE_TYPE"
+                  }
+                ]
+              },
+              {
+                "type": "section",
+                "text": {
+                  "type": "mrkdwn",
+                  "text": "*Channels:*\n$PATHS_MSG"
+                }
+              },
+              {
+                "type": "context",
+                "elements": [
+                  {
+                    "type": "mrkdwn",
+                    "text": "<${{ github.event.workflow_run.repository.html_url }}/commit/${{ github.event.workflow_run.head_sha }}|View commit ($COMMIT_SHORT)> • <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View workflow run>"
+                  }
+                ]
+              }
+            ],
+            "unfurl_links": false,
+            "unfurl_media": false
+          }
+          EOF
 

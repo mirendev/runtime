@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
@@ -12,6 +14,26 @@ import (
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/idgen"
 )
+
+// isNBDAvailable checks if NBD is available (either as a module or built into the kernel)
+func isNBDAvailable() bool {
+	if os.Getenv("MIREN_DISABLE_NBD") != "" {
+		return false
+	}
+
+	// Check if NBD module is loaded
+	if _, err := os.Stat("/sys/module/nbd"); err == nil {
+		return true
+	}
+
+	// Check if NBD devices exist (NBD might be compiled into the kernel)
+	matches, err := filepath.Glob("/sys/devices/virtual/block/nbd*")
+	if err == nil && len(matches) > 0 {
+		return true
+	}
+
+	return false
+}
 
 // DiskController manages disk entities and their lifecycle
 type DiskController struct {
@@ -27,6 +49,9 @@ type DiskController struct {
 
 	// Base path for disk mounts (e.g., /var/lib/miren/disks)
 	mountBasePath string
+
+	// directoryMode is enabled when NBD is unavailable - disks are simple directories
+	directoryMode bool
 }
 
 // NewDiskController creates a new disk controller
@@ -63,7 +88,13 @@ func NewDiskControllerWithMountPath(log *slog.Logger, eac *entityserver_v1alpha.
 
 // Init initializes the disk controller
 func (d *DiskController) Init(ctx context.Context) error {
-	// No special initialization needed
+	// Check if NBD is available
+	if !isNBDAvailable() {
+		d.directoryMode = true
+		d.Log.Warn("NBD kernel module not available - using directory-only mode for disks")
+	} else {
+		d.Log.Info("NBD kernel module available - using full LSVD mode")
+	}
 	return nil
 }
 
@@ -181,6 +212,29 @@ func (d *DiskController) attachToExistingVolume(ctx context.Context, disk *stora
 		"disk", disk.ID,
 		"volume", volumeId)
 
+	// In directory mode, verify directory exists
+	if d.directoryMode {
+		diskDataPath := filepath.Join(d.mountBasePath, "disk-data", volumeId)
+		if _, err := os.Stat(diskDataPath); err != nil {
+			if os.IsNotExist(err) {
+				d.Log.Error("Failed to attach to volume - directory not found",
+					"disk", disk.ID,
+					"volume", volumeId,
+					"path", diskDataPath)
+				return fmt.Errorf("directory %s does not exist: %w", diskDataPath, err)
+			}
+			return fmt.Errorf("failed to check directory: %w", err)
+		}
+
+		d.Log.Info("Verified existing directory",
+			"disk", disk.ID,
+			"volume", volumeId,
+			"path", diskDataPath)
+
+		disk.Status = storage_v1alpha.PROVISIONED
+		return nil
+	}
+
 	// Get the appropriate client for this disk
 	client := d.getClientForDisk(disk)
 	if client == nil {
@@ -219,6 +273,29 @@ func (d *DiskController) handleProvisioned(ctx context.Context, disk *storage_v1
 		d.Log.Warn("Provisioned disk has no volume ID, re-provisioning", "disk", disk.ID)
 		// Re-provision the disk
 		return d.handleProvisioning(ctx, disk)
+	}
+
+	// In directory mode, verify directory exists
+	if d.directoryMode {
+		diskDataPath := filepath.Join(d.mountBasePath, "disk-data", disk.LsvdVolumeId)
+		if _, err := os.Stat(diskDataPath); err != nil {
+			if os.IsNotExist(err) {
+				d.Log.Warn("Directory not found for provisioned disk, re-provisioning",
+					"disk", disk.ID,
+					"volume", disk.LsvdVolumeId,
+					"path", diskDataPath)
+				disk.LsvdVolumeId = ""
+				return d.handleProvisioning(ctx, disk)
+			}
+			return fmt.Errorf("failed to check directory: %w", err)
+		}
+
+		d.Log.Debug("Provisioned disk directory exists",
+			"disk", disk.ID,
+			"volume", disk.LsvdVolumeId,
+			"path", diskDataPath)
+
+		return nil
 	}
 
 	// Get the appropriate client for this disk
@@ -283,6 +360,22 @@ func (d *DiskController) provisionVolume(ctx context.Context, disk *storage_v1al
 
 	// Generate volume ID
 	volumeId := idgen.Gen("lsvd-vol-")
+
+	// In directory mode, just create a directory
+	if d.directoryMode {
+		diskDataPath := filepath.Join(d.mountBasePath, "disk-data", volumeId)
+		d.Log.Info("Creating directory-only disk (NBD unavailable)",
+			"volume", volumeId,
+			"path", diskDataPath,
+			"size_gb", disk.SizeGb,
+			"filesystem", disk.Filesystem)
+
+		if err := os.MkdirAll(diskDataPath, 0755); err != nil {
+			return "", fmt.Errorf("failed to create directory for disk: %w", err)
+		}
+
+		return volumeId, nil
+	}
 
 	// Get the appropriate client for this disk
 	client := d.getClientForDisk(disk)

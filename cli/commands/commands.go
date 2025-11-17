@@ -181,10 +181,6 @@ func AllCommands() map[string]cli.CommandFactory {
 			return Infer("cluster remove", "Remove a cluster from the configuration", ClusterRemove), nil
 		},
 
-		"disk create": func() (cli.Command, error) {
-			return Infer("disk create", "Create a new disk", DiskCreate), nil
-		},
-
 		"server": func() (cli.Command, error) {
 			return Infer("server", "Start the miren server", Server), nil
 		},

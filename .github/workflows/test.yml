@@ -3,14 +3,16 @@ name: Test
 on:
   push:
     branches: [ "main" ]
+    tags:
+      - 'v*'
   pull_request:
   merge_group:
 
 permissions:
   # Used by golangci-lint to emit annotations that are picked up by github
   contents: read
-  # Used by golangci-lint for only-new-issues
-  pull-requests: read
+  # Used by golangci-lint for only-new-issues and for coverage PR comments
+  pull-requests: write
 
 jobs:
   lint:
@@ -121,8 +123,103 @@ jobs:
         go install miren.dev/iso/cmd/iso@latest
         echo "$(go env GOPATH)/bin" >> $GITHUB_PATH
 
-    - name: Test
-      run: make test-ci
+    - name: Test with Coverage
+      id: coverage
+      run: |
+        make test-coverage-ci
+        # Extract coverage percentage
+        COVERAGE=$(go tool cover -func=coverage.out | grep total | awk '{print $3}' | sed 's/%//')
+        echo "coverage=$COVERAGE" >> $GITHUB_OUTPUT
+        echo "Coverage: $COVERAGE%"
+
+    - name: Upload Coverage Report
+      uses: actions/upload-artifact@v4
+      with:
+        name: coverage-report
+        path: |
+          coverage.out
+        retention-days: 30
+
+    - name: Fetch base branch for diff
+      if: github.event_name == 'pull_request'
+      run: |
+        git fetch origin ${{ github.event.pull_request.base.ref }}:refs/remotes/origin/${{ github.event.pull_request.base.ref }}
+
+    - name: Calculate Changed Line Coverage
+      id: changed-coverage
+      if: github.event_name == 'pull_request'
+      run: |
+        # Calculate coverage for changed lines only (full output)
+        OUTPUT=$(go run ./hack/coverage-changed-lines -coverage=coverage.out -base=origin/${{ github.event.pull_request.base.ref }} 2>&1 || echo "No Go files changed")
+
+        # Save full output to a file for the PR comment
+        echo "$OUTPUT" > /tmp/changed-coverage.txt
+
+        # Also extract just the percentage for the output
+        CHANGED_COV=$(echo "$OUTPUT" | grep "Changed line coverage:" | awk '{print $4}' | sed 's/%//' || echo "N/A")
+        echo "changed_coverage=$CHANGED_COV" >> $GITHUB_OUTPUT
+        echo "Changed line coverage: $CHANGED_COV%"
+
+    - name: Comment PR with Coverage
+      uses: actions/github-script@v7
+      if: github.event_name == 'pull_request'
+      with:
+        script: |
+          const fs = require('fs');
+          const coverage = '${{ steps.coverage.outputs.coverage }}';
+          const threshold = 50;
+
+          // Read the changed line coverage output
+          let changedCovOutput = '';
+          try {
+            changedCovOutput = fs.readFileSync('/tmp/changed-coverage.txt', 'utf8');
+          } catch (err) {
+            changedCovOutput = 'No coverage data for changed lines';
+          }
+
+          const body = `## 📊 Code Coverage Report
+
+          **Total Coverage:** \`${coverage}%\`
+          **Threshold:** \`${threshold}%\`
+          **Status:** ${parseFloat(coverage) >= threshold ? '✅ Passing' : '❌ Below threshold'}
+
+          ### Coverage for Changed Lines
+
+          \`\`\`
+          ${changedCovOutput}
+          \`\`\`
+
+          `;
+
+          // Find existing coverage comment
+          const { data: comments } = await github.rest.issues.listComments({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            issue_number: context.issue.number,
+          });
+
+          const coverageComment = comments.find(comment =>
+            comment.user.type === 'Bot' &&
+            comment.body.includes('📊 Code Coverage Report')
+          );
+
+          if (coverageComment) {
+            // Update existing comment
+            await github.rest.issues.updateComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              comment_id: coverageComment.id,
+              body: body
+            });
+          } else {
+            // Create new comment
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: body
+            });
+          }
 
   test-e2e:
     needs: lint

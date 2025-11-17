@@ -221,3 +221,8 @@ func (a *RPCAuthenticator) GetEvaluator() *rbac.Evaluator {
 func (a *RPCAuthenticator) GetPolicyFetcher() *PolicyFetcher {
 	return a.policyFetcher
 }
+
+// GetTags returns the configured tags
+func (a *RPCAuthenticator) GetTags() map[string]any {
+	return a.tags
+}

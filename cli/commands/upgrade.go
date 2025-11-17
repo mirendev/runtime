@@ -10,7 +10,8 @@ import (
 
 // Upgrade upgrades the miren CLI to the latest or specified version
 func Upgrade(ctx *Context, opts struct {
-	Version string `short:"v" long:"version" description:"Specific version to upgrade to (default: main)"`
+	Version string `short:"v" long:"version" description:"Specific version to upgrade to (e.g., v0.2.0)"`
+	Channel string `long:"channel" description:"Channel to use: 'latest' (stable releases, default) or 'main' (bleeding edge)"`
 	Check   bool   `short:"c" long:"check" description:"Check for available updates only"`
 	Force   bool   `short:"f" long:"force" description:"Force upgrade even if already up to date or server running"`
 }) error {
@@ -55,10 +56,18 @@ func Upgrade(ctx *Context, opts struct {
 		return nil
 	}
 
-	// Check if upgrade is needed (unless forced)
+	// Determine version/channel
 	version := opts.Version
-	if version == "" {
-		version = "main" // Default to main branch
+	channel := opts.Channel
+
+	// If neither specified, default to latest channel
+	if version == "" && channel == "" {
+		channel = "latest"
+	}
+
+	// If channel specified, use it as version
+	if channel != "" {
+		version = channel
 	}
 
 	needsUpgrade, err := CheckIfUpgradeNeeded(ctx, version, opts.Force, &mgrOpts)
