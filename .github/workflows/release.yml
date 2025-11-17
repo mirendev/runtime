@@ -85,6 +85,8 @@ jobs:
             }
   package:
     needs: check-test-success
+    # Only build releases for main branch or version tags
+    if: ${{ github.event.workflow_run.head_branch == 'main' || startsWith(github.event.workflow_run.head_branch, 'v') }}
     strategy:
       matrix:
         include:
@@ -129,8 +131,8 @@ jobs:
 
     - name: Build and package for ${{ matrix.arch }}
       env:
-        GIT_BRANCH: ${{ github.ref_name }}
-        GIT_COMMIT: ${{ github.sha }}
+        GIT_BRANCH: ${{ github.event.workflow_run.head_branch }}
+        GIT_COMMIT: ${{ github.event.workflow_run.head_sha }}
       run: |
         # Pass git info from GitHub Actions context to avoid git commands in iso
         export BUILD_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
@@ -166,7 +168,7 @@ jobs:
                 "fields": [
                   {
                     "type": "mrkdwn",
-                    "text": "*Branch:*\n`${{ github.ref_name }}`"
+                    "text": "*Branch:*\n`${{ github.event.workflow_run.head_branch }}`"
                   },
                   {
                     "type": "mrkdwn",
@@ -285,11 +287,12 @@ jobs:
       - name: Determine Docker tags
         id: docker-tags
         run: |
-          TAGS="us-central1-docker.pkg.dev/miren-cloud/miren-oci/miren:${{ github.ref_name }}"
+          HEAD_BRANCH="${{ github.event.workflow_run.head_branch }}"
+          TAGS="us-central1-docker.pkg.dev/miren-cloud/miren-oci/miren:$HEAD_BRANCH"
 
           # Add latest tag for stable releases only (exclude all prereleases)
           # Prereleases have a hyphen: v0.0.0-test.1, v0.1.0-rc.1, v1.0.0-beta.1, etc.
-          if [[ "${{ github.ref }}" == refs/tags/v* ]] && [[ ! "${{ github.ref_name }}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+- ]]; then
+          if [[ "$HEAD_BRANCH" == v* ]] && [[ ! "$HEAD_BRANCH" =~ ^v[0-9]+\.[0-9]+\.[0-9]+- ]]; then
             TAGS="$TAGS
           us-central1-docker.pkg.dev/miren-cloud/miren-oci/miren:latest"
           fi
@@ -332,7 +335,7 @@ jobs:
                   "fields": [
                     {
                       "type": "mrkdwn",
-                      "text": "*Branch:*\n`${{ github.ref_name }}`"
+                      "text": "*Branch:*\n`${{ github.event.workflow_run.head_branch }}`"
                     }
                   ]
                 },
@@ -361,7 +364,7 @@ jobs:
     needs: [package, build-binaries]
     runs-on: depot-ubuntu-latest
     concurrency:
-      group: upload-to-miren-${{ github.ref_name }}
+      group: upload-to-miren-${{ github.event.workflow_run.head_branch }}
       cancel-in-progress: false
     permissions:
       id-token: write
@@ -387,12 +390,14 @@ jobs:
         run: |
           set -eo pipefail
 
+          HEAD_BRANCH="${{ github.event.workflow_run.head_branch }}"
+
           # Determine if this is a tag build
           IS_TAG_BUILD=false
           IS_PRERELEASE=false
-          if [[ "${{ github.ref }}" == refs/tags/* ]]; then
+          if [[ "$HEAD_BRANCH" == v* ]]; then
             IS_TAG_BUILD=true
-            TAG_NAME="${{ github.ref_name }}"
+            TAG_NAME="$HEAD_BRANCH"
             echo "Building for tag: $TAG_NAME"
 
             # Check if this is a prerelease (has hyphen: v0.0.0-test.1, v0.1.0-rc.1, etc.)
@@ -414,7 +419,7 @@ jobs:
             fi
           else
             # For branches, upload to branch path only
-            paths+=("${{ github.ref_name }}")
+            paths+=("$HEAD_BRANCH")
           fi
 
           echo "Upload paths: ${paths[*]}"
@@ -501,11 +506,11 @@ jobs:
           # Get git information
           COMMIT=$(git rev-parse HEAD)
           COMMIT_SHORT=$(git rev-parse --short HEAD)
-          BRANCH="${{ github.ref_name }}"
+          BRANCH="${{ github.event.workflow_run.head_branch }}"
           BUILD_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
           # Determine version string
-          # Note: Uses github.ref_name pattern matching (workflow context) rather than
+          # Note: Uses workflow_run head_branch pattern matching rather than
           # git describe (used in build scripts). Produces equivalent results for tagged releases.
           if [[ $BRANCH =~ ^v[0-9]+\.[0-9]+\.[0-9]+ ]]; then
             VERSION="$BRANCH"
@@ -565,7 +570,7 @@ jobs:
                   "fields": [
                     {
                       "type": "mrkdwn",
-                      "text": "*Branch:*\n`${{ github.ref_name }}`"
+                      "text": "*Branch:*\n`${{ github.event.workflow_run.head_branch }}`"
                     }
                   ]
                 },
@@ -594,24 +599,24 @@ jobs:
         if: success()
         run: |
           # Determine what was uploaded
-          REF_NAME="${{ github.ref_name }}"
+          HEAD_BRANCH="${{ github.event.workflow_run.head_branch }}"
           IS_TAG=false
           IS_PRERELEASE=false
           RELEASE_TYPE="Branch build"
 
-          if [[ "${{ github.ref }}" == refs/tags/* ]]; then
+          if [[ "$HEAD_BRANCH" == v* ]]; then
             IS_TAG=true
             # Check if it's a prerelease (has hyphen)
-            if [[ "$REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+- ]]; then
+            if [[ "$HEAD_BRANCH" =~ ^v[0-9]+\.[0-9]+\.[0-9]+- ]]; then
               IS_PRERELEASE=true
               RELEASE_TYPE="Prerelease"
-              PATHS_MSG="Uploaded to: \`$REF_NAME\` only (prereleases don't update \`latest\`)"
+              PATHS_MSG="Uploaded to: \`$HEAD_BRANCH\` only (prereleases don't update \`latest\`)"
             else
               RELEASE_TYPE="Stable release"
-              PATHS_MSG="Uploaded to: \`$REF_NAME\` and \`latest\`"
+              PATHS_MSG="Uploaded to: \`$HEAD_BRANCH\` and \`latest\`"
             fi
           else
-            PATHS_MSG="Uploaded to: \`$REF_NAME\`"
+            PATHS_MSG="Uploaded to: \`$HEAD_BRANCH\`"
           fi
 
           # Get version from version.json
