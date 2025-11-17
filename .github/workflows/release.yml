@@ -287,8 +287,9 @@ jobs:
         run: |
           TAGS="us-central1-docker.pkg.dev/miren-cloud/miren-oci/miren:${{ github.ref_name }}"
 
-          # Add latest tag for stable releases (not test releases)
-          if [[ "${{ github.ref }}" == refs/tags/v* ]] && [[ ! "${{ github.ref_name }}" =~ ^v0\.0\.0- ]]; then
+          # Add latest tag for stable releases only (exclude all prereleases)
+          # Prereleases have a hyphen: v0.0.0-test.1, v0.1.0-rc.1, v1.0.0-beta.1, etc.
+          if [[ "${{ github.ref }}" == refs/tags/v* ]] && [[ ! "${{ github.ref_name }}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+- ]]; then
             TAGS="$TAGS
           us-central1-docker.pkg.dev/miren-cloud/miren-oci/miren:latest"
           fi
@@ -388,17 +389,17 @@ jobs:
 
           # Determine if this is a tag build
           IS_TAG_BUILD=false
-          IS_TEST_RELEASE=false
+          IS_PRERELEASE=false
           if [[ "${{ github.ref }}" == refs/tags/* ]]; then
             IS_TAG_BUILD=true
             TAG_NAME="${{ github.ref_name }}"
             echo "Building for tag: $TAG_NAME"
 
-            # Check if this is a test release (v0.0.0-test.X or similar v0.0.0-* prerelease)
-            # Test releases should NOT update the latest channel
-            if [[ "$TAG_NAME" =~ ^v0\.0\.0- ]]; then
-              IS_TEST_RELEASE=true
-              echo "Detected test release - will NOT update latest channel"
+            # Check if this is a prerelease (has hyphen: v0.0.0-test.1, v0.1.0-rc.1, etc.)
+            # Prereleases should NOT update the latest channel
+            if [[ "$TAG_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+- ]]; then
+              IS_PRERELEASE=true
+              echo "Detected prerelease - will NOT update latest channel"
             fi
           fi
 
@@ -407,8 +408,8 @@ jobs:
           if [ "$IS_TAG_BUILD" = true ]; then
             # Always upload to the tag path
             paths+=("$TAG_NAME")
-            # Only upload to latest for non-test releases
-            if [ "$IS_TEST_RELEASE" = false ]; then
+            # Only upload to latest for stable releases (not prereleases)
+            if [ "$IS_PRERELEASE" = false ]; then
               paths+=("latest")
             fi
           else
@@ -595,15 +596,16 @@ jobs:
           # Determine what was uploaded
           REF_NAME="${{ github.ref_name }}"
           IS_TAG=false
-          IS_TEST_RELEASE=false
+          IS_PRERELEASE=false
           RELEASE_TYPE="Branch build"
 
           if [[ "${{ github.ref }}" == refs/tags/* ]]; then
             IS_TAG=true
-            if [[ "$REF_NAME" =~ ^v0\.0\.0- ]]; then
-              IS_TEST_RELEASE=true
-              RELEASE_TYPE="Test release"
-              PATHS_MSG="Uploaded to: \`$REF_NAME\` only (test releases don't update \`latest\`)"
+            # Check if it's a prerelease (has hyphen)
+            if [[ "$REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+- ]]; then
+              IS_PRERELEASE=true
+              RELEASE_TYPE="Prerelease"
+              PATHS_MSG="Uploaded to: \`$REF_NAME\` only (prereleases don't update \`latest\`)"
             else
               RELEASE_TYPE="Stable release"
               PATHS_MSG="Uploaded to: \`$REF_NAME\` and \`latest\`"
