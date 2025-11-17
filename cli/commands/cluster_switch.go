@@ -1,9 +1,15 @@
 package commands
 
 import (
+	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
+	"net/url"
+	"time"
 
 	"miren.dev/runtime/clientconfig"
+	"miren.dev/runtime/pkg/cloudauth"
 	"miren.dev/runtime/pkg/ui"
 )
 
@@ -96,7 +102,7 @@ func ClusterSwitch(ctx *Context, opts struct {
 	return nil
 }
 
-// checkClusterAccess verifies that the user has permission to access the specified cluster
+// checkClusterAccess verifies that the user has RBAC permission to access the specified cluster
 func checkClusterAccess(ctx *Context, cfg *clientconfig.Config, clusterName string) error {
 	// Get the cluster configuration
 	cluster, err := cfg.GetCluster(clusterName)
@@ -115,8 +121,8 @@ func checkClusterAccess(ctx *Context, cfg *clientconfig.Config, clusterName stri
 		return fmt.Errorf("identity %q not found: %w", cluster.Identity, err)
 	}
 
-	// Fetch accessible clusters from the cloud API
-	accessibleClusters, err := fetchAvailableClusters(ctx, identity)
+	// First, get the cluster's XID by fetching all clusters and finding a match
+	clusters, err := fetchAvailableClusters(ctx, cfg, identity)
 	if err != nil {
 		// If we can't reach the cloud API, we'll allow the switch
 		// The user will get an access denied error when they try to perform actions
@@ -125,14 +131,97 @@ func checkClusterAccess(ctx *Context, cfg *clientconfig.Config, clusterName stri
 		return nil
 	}
 
-	// Check if the target cluster is in the accessible list
-	for _, accessibleCluster := range accessibleClusters {
-		// Match by either name or XID (cluster name in local config may match either)
-		if accessibleCluster.Name == clusterName || accessibleCluster.XID == clusterName {
-			return nil // Access granted
+	// Find the cluster XID
+	var clusterXID string
+	for _, c := range clusters {
+		if c.Name == clusterName || c.XID == clusterName {
+			clusterXID = c.XID
+			break
 		}
 	}
 
-	// Cluster not found in accessible list
-	return fmt.Errorf("you do not have permission to access this cluster")
+	if clusterXID == "" {
+		return fmt.Errorf("cluster %q not found in organization", clusterName)
+	}
+
+	// Check RBAC permission via the check-access endpoint
+	hasAccess, reason, err := checkClusterAccessRBAC(ctx, identity, clusterXID)
+	if err != nil {
+		// If we can't reach the cloud API, we'll allow the switch
+		ctx.Warn("Could not verify cluster access: %v", err)
+		ctx.Warn("Proceeding with switch. You may encounter permission errors if you don't have access.")
+		return nil
+	}
+
+	if !hasAccess {
+		if reason != "" {
+			return fmt.Errorf("access denied to cluster %q: %s", clusterName, reason)
+		}
+		return fmt.Errorf("access denied to cluster %q: you do not have RBAC permission to access this cluster", clusterName)
+	}
+
+	return nil
+}
+
+// checkClusterAccessRBAC calls the cloud API to check if the user has RBAC permission to access a cluster
+func checkClusterAccessRBAC(ctx *Context, identity *clientconfig.IdentityConfig, clusterXID string) (bool, string, error) {
+	if identity.Type != "keypair" {
+		return false, "", fmt.Errorf("RBAC check is only supported for keypair identities")
+	}
+
+	// Get the issuer URL
+	issuerURL := identity.Issuer
+	if issuerURL == "" {
+		return false, "", fmt.Errorf("identity has no issuer configured")
+	}
+
+	// Load the private key
+	keyPair, err := cloudauth.LoadKeyPairFromPEM(identity.PrivateKey)
+	if err != nil {
+		return false, "", fmt.Errorf("failed to load private key: %w", err)
+	}
+
+	// Get JWT token
+	token, err := clientconfig.AuthenticateWithKey(ctx, issuerURL, keyPair)
+	if err != nil {
+		return false, "", fmt.Errorf("failed to authenticate: %w", err)
+	}
+
+	// Make request to check cluster access
+	checkURL, err := url.JoinPath(issuerURL, "/api/v1/clusters/", clusterXID, "/check-access")
+	if err != nil {
+		return false, "", err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "GET", checkURL, nil)
+	if err != nil {
+		return false, "", fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Accept", "application/json")
+
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return false, "", fmt.Errorf("failed to check cluster access: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return false, "", fmt.Errorf("server returned status %d: %s", resp.StatusCode, string(body))
+	}
+
+	// Parse the response
+	var response struct {
+		HasAccess          bool   `json:"has_access"`
+		RequiredPermission string `json:"required_permission"`
+		Reason             string `json:"reason"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
+		return false, "", fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	return response.HasAccess, response.Reason, nil
 }

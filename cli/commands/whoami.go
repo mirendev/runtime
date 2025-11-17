@@ -30,7 +30,7 @@ func Whoami(ctx *Context, opts struct {
 	token := ""
 	authMethod := "none"
 	var identity *clientconfig.IdentityConfig
-	
+
 	if ctx.ClusterConfig.Identity != "" && ctx.ClientConfig != nil {
 		var err error
 		identity, err = ctx.ClientConfig.GetIdentity(ctx.ClusterConfig.Identity)
@@ -44,7 +44,7 @@ func Whoami(ctx *Context, opts struct {
 				if authServer == "" {
 					authServer = hostname
 				}
-				
+
 				// For local development, use HTTP
 				if !strings.HasPrefix(authServer, "http://") && !strings.HasPrefix(authServer, "https://") {
 					if strings.Contains(authServer, "localhost") || strings.Contains(authServer, "127.0.0.1") {
@@ -53,7 +53,7 @@ func Whoami(ctx *Context, opts struct {
 						authServer = "https://" + authServer
 					}
 				}
-				
+
 				// Get JWT token
 				token, err = clientconfig.AuthenticateWithKey(ctx, authServer, keyPair)
 				if err != nil {
@@ -89,7 +89,7 @@ func Whoami(ctx *Context, opts struct {
 		ServerURL:  hostname,
 		AuthMethod: authMethod,
 	}
-	
+
 	if identity != nil {
 		output.Identity = ctx.ClusterConfig.Identity
 	}
@@ -113,11 +113,11 @@ func Whoami(ctx *Context, opts struct {
 	ctx.Info("Cluster:       %s", ctx.ClusterName)
 	ctx.Info("Server:        %s", hostname)
 	ctx.Info("Auth Method:   %s", authMethod)
-	
+
 	if identity != nil {
 		ctx.Info("Identity:      %s", ctx.ClusterConfig.Identity)
 	}
-	
+
 	if claims != nil {
 		ctx.Info("")
 		ctx.Info("User:          %s", claims.Subject)

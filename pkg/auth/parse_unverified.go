@@ -34,7 +34,7 @@ func ParseUnverifiedClaims(token string) (*ExtendedClaims, error) {
 	if err := json.Unmarshal(claimsData, &claims); err != nil {
 		return nil, fmt.Errorf("failed to parse claims: %w", err)
 	}
-	
+
 	// The subject field is the user ID in miren JWTs
 	if claims.Subject != "" && claims.UserID == "" {
 		claims.UserID = claims.Subject
