@@ -15,6 +15,7 @@ import (
 	"github.com/quic-go/quic-go/http3"
 	"gopkg.in/yaml.v3"
 	"miren.dev/runtime/clientconfig"
+	"miren.dev/runtime/pkg/ui"
 )
 
 // ServerInstallDocker sets up a Docker container to run the miren server
@@ -97,16 +98,9 @@ func ServerInstallDocker(ctx *Context, opts struct {
 	}
 	ctx.Completed("Container started")
 
-	// Get the container's IP address
-	containerIP, err := dockerGetContainerIP(opts.Name)
-	if err != nil {
-		return fmt.Errorf("failed to get container IP: %w", err)
-	}
-	ctx.Log.Debug("container IP address", "ip", containerIP)
-
 	// Wait for server to be ready
 	ctx.Info("Waiting for miren server to initialize...")
-	if err := waitForServerReady(ctx, containerIP); err != nil {
+	if err := waitForServerReady(ctx); err != nil {
 		ctx.Warn("Failed to confirm server is ready: %v", err)
 		ctx.Info("The server may still be starting. Check logs with: docker logs %s", opts.Name)
 	} else {
@@ -115,7 +109,7 @@ func ServerInstallDocker(ctx *Context, opts struct {
 
 	// Copy client configuration from container
 	ctx.Info("Configuring miren client...")
-	if err := copyClientConfig(ctx, opts.Name, containerIP); err != nil {
+	if err := copyClientConfig(ctx, opts.Name); err != nil {
 		ctx.Warn("Failed to copy client configuration: %v", err)
 		ctx.Info("You may need to configure the client manually")
 	} else {
@@ -163,6 +157,27 @@ func ServerUninstallDocker(ctx *Context, opts struct {
 			return nil
 		}
 	} else {
+		// Check if container is running
+		isRunning, err := dockerContainerIsRunning(opts.Name)
+		if err != nil {
+			return fmt.Errorf("failed to check container status: %w", err)
+		}
+
+		// If container is running and not forcing, ask for confirmation
+		if isRunning && !opts.Force {
+			confirmed, err := ui.Confirm(
+				ui.WithMessage(fmt.Sprintf("Container '%s' is currently running. Stop and remove it?", opts.Name)),
+				ui.WithDefault(false),
+			)
+			if err != nil {
+				return fmt.Errorf("confirmation failed: %w", err)
+			}
+			if !confirmed {
+				ctx.Info("Uninstall cancelled")
+				return nil
+			}
+		}
+
 		// Stop and remove container
 		ctx.Info("Removing container '%s'...", opts.Name)
 		if err := dockerRemoveContainer(opts.Name, opts.Force); err != nil {
@@ -272,6 +287,15 @@ func dockerContainerExists(name string) (bool, error) {
 	return len(strings.TrimSpace(string(output))) > 0, nil
 }
 
+func dockerContainerIsRunning(name string) (bool, error) {
+	cmd := exec.Command("docker", "inspect", "-f", "{{.State.Running}}", name)
+	output, err := cmd.Output()
+	if err != nil {
+		return false, err
+	}
+	return strings.TrimSpace(string(output)) == "true", nil
+}
+
 func dockerCreateContainer(name, image string, config dockerContainerConfig) (string, error) {
 	args := []string{
 		"run", "-d",
@@ -370,11 +394,11 @@ func dockerGetContainerIP(containerName string) (string, error) {
 	return ip, nil
 }
 
-func waitForServerReady(ctx *Context, containerIP string) error {
+func waitForServerReady(ctx *Context) error {
 	maxRetries := 30
 	retryDelay := 2 * time.Second
 
-	ctx.Log.Debug("checking server health", "container_ip", containerIP, "max_retries", maxRetries)
+	ctx.Log.Debug("checking server health", "host", "localhost", "max_retries", maxRetries)
 
 	// Create HTTP3 client with InsecureSkipVerify since we're using self-signed certs
 	client := &http.Client{
@@ -387,7 +411,7 @@ func waitForServerReady(ctx *Context, containerIP string) error {
 	}
 	defer client.CloseIdleConnections()
 
-	healthURL := fmt.Sprintf("https://%s:8443/healthz", containerIP)
+	healthURL := fmt.Sprintf("https://%s:8443/healthz", "localhost")
 	ctx.Log.Debug("health check endpoint", "url", healthURL)
 
 	for i := range maxRetries {
@@ -430,11 +454,11 @@ func waitForServerReady(ctx *Context, containerIP string) error {
 	return fmt.Errorf("timeout waiting for server to start")
 }
 
-func copyClientConfig(ctx *Context, containerName, containerIP string) error {
-	ctx.Log.Debug("generating client config", "container_ip", containerIP)
+func copyClientConfig(ctx *Context, containerName string) error {
+	ctx.Log.Debug("generating client config", "host", "localhost")
 
 	// Generate client config by running miren auth generate
-	target := fmt.Sprintf("%s:8443", containerIP)
+	target := "localhost:8443"
 	ctx.Log.Debug("running auth generate", "target", target, "cluster", "docker")
 	output, err := dockerExec(containerName, []string{"miren", "auth", "generate", "-C", "docker", "-t", target, "-c", "-"})
 	if err != nil {
@@ -575,16 +599,19 @@ func performDockerRegistrationPreStart(ctx *Context, image, volumeName string, o
 
 	// Create a temporary container to copy files
 	tempContainerName := fmt.Sprintf("miren-reg-copy-%d", time.Now().Unix())
-	createArgs := []string{
-		"create", "--name", tempContainerName,
+
+	// Run container to create the directory structure (override entrypoint)
+	runArgs := []string{
+		"run", "--name", tempContainerName,
+		"--entrypoint", "mkdir",
 		"-v", fmt.Sprintf("%s:/var/lib/miren", volumeName),
 		image,
-		"/bin/true",
+		"-p", "/var/lib/miren/server",
 	}
 
-	cmd := exec.Command("docker", createArgs...)
+	cmd := exec.Command("docker", runArgs...)
 	if output, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("failed to create temp container: %w: %s", err, output)
+		return fmt.Errorf("failed to create directory in volume: %w: %s", err, output)
 	}
 
 	// Ensure temp container is always cleaned up
