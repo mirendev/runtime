@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -51,6 +52,9 @@ type DiskLeaseController struct {
 
 	// Test-only cache for disk entities (when EAC is not available)
 	testDiskCache map[string]*storage_v1alpha.Disk
+
+	// directoryMode is enabled when NBD is unavailable - leases bind to simple directories
+	directoryMode bool
 }
 
 // NewDiskLeaseController creates a new disk lease controller
@@ -109,7 +113,13 @@ func (d *DiskLeaseController) GetTestDisk(diskId entity.Id) *storage_v1alpha.Dis
 
 // Init initializes the disk lease controller
 func (d *DiskLeaseController) Init(ctx context.Context) error {
-	// No special initialization needed
+	// Check if NBD is available
+	if !isNBDAvailable() {
+		d.directoryMode = true
+		d.Log.Warn("NBD kernel module not available - using directory-only mode for disk leases")
+	} else {
+		d.Log.Info("NBD kernel module available - using full LSVD mounting mode")
+	}
 	return nil
 }
 
@@ -373,40 +383,59 @@ func (d *DiskLeaseController) handlePendingLease(ctx context.Context, lease *sto
 		return nil
 	}
 
-	// Get the appropriate client for this disk
-	client := d.getClientForDisk(disk)
-
-	// Initialize disk and mount if we have an LSVD client
-	if client != nil {
-		// Initialize disk (calls lsvd.NewDisk)
-		filesystem := strings.TrimPrefix(string(disk.Filesystem), "filesystem.")
-		if err := client.InitializeDisk(ctx, volumeId, filesystem); err != nil {
-			d.Log.Error("Failed to initialize disk", "volume", volumeId, "error", err)
+	// In directory mode, just verify the directory exists
+	if d.directoryMode {
+		diskDataPath := filepath.Join(d.mountBasePath, "disk-data", volumeId)
+		if _, err := os.Stat(diskDataPath); err != nil {
+			d.Log.Error("Failed to find directory for disk", "volume", volumeId, "path", diskDataPath, "error", err)
 			d.cleanupLeaseReservation(diskId)
 
 			lease.Status = storage_v1alpha.FAILED
-			lease.ErrorMessage = fmt.Sprintf("Failed to initialize disk: %v", err)
+			lease.ErrorMessage = fmt.Sprintf("Directory not found: %v", err)
 
 			return nil
 		}
 
-		// Mount the volume
-		mountPath := d.getDiskMountPath(volumeId)
-		readOnly := lease.Mount.ReadOnly
-		if err := client.MountVolume(ctx, volumeId, mountPath, readOnly); err != nil {
-			d.Log.Error("Failed to mount volume", "volume", volumeId, "error", err)
-			d.cleanupLeaseReservation(diskId)
-			lease.Status = storage_v1alpha.FAILED
-			lease.ErrorMessage = fmt.Sprintf("Failed to mount volume: %v", err)
-
-			return nil
-		}
-
-		d.Log.Info("Successfully mounted disk volume",
+		d.Log.Info("Successfully bound lease to directory (NBD unavailable)",
 			"disk", diskId,
 			"volume", volumeId,
-			"mount_path", mountPath,
-			"read_only", readOnly)
+			"path", diskDataPath)
+	} else {
+		// Get the appropriate client for this disk
+		client := d.getClientForDisk(disk)
+
+		// Initialize disk and mount if we have an LSVD client
+		if client != nil {
+			// Initialize disk (calls lsvd.NewDisk)
+			filesystem := strings.TrimPrefix(string(disk.Filesystem), "filesystem.")
+			if err := client.InitializeDisk(ctx, volumeId, filesystem); err != nil {
+				d.Log.Error("Failed to initialize disk", "volume", volumeId, "error", err)
+				d.cleanupLeaseReservation(diskId)
+
+				lease.Status = storage_v1alpha.FAILED
+				lease.ErrorMessage = fmt.Sprintf("Failed to initialize disk: %v", err)
+
+				return nil
+			}
+
+			// Mount the volume
+			mountPath := d.getDiskMountPath(volumeId)
+			readOnly := lease.Mount.ReadOnly
+			if err := client.MountVolume(ctx, volumeId, mountPath, readOnly); err != nil {
+				d.Log.Error("Failed to mount volume", "volume", volumeId, "error", err)
+				d.cleanupLeaseReservation(diskId)
+				lease.Status = storage_v1alpha.FAILED
+				lease.ErrorMessage = fmt.Sprintf("Failed to mount volume: %v", err)
+
+				return nil
+			}
+
+			d.Log.Info("Successfully mounted disk volume",
+				"disk", diskId,
+				"volume", volumeId,
+				"mount_path", mountPath,
+				"read_only", readOnly)
+		}
 	}
 
 	// Bind the lease (with lock)
@@ -415,9 +444,12 @@ func (d *DiskLeaseController) handlePendingLease(ctx context.Context, lease *sto
 	if existingLease, exists := d.activeLeases[diskId]; exists && existingLease != leaseId {
 		d.mu.Unlock()
 		// Someone else bound it (shouldn't happen with our reservation), need to clean up
-		if client != nil && volumeId != "" {
-			if err := client.UnmountVolume(ctx, volumeId); err != nil {
-				d.Log.Warn("Failed to unmount volume after lease conflict", "volume", volumeId, "error", err)
+		if !d.directoryMode {
+			client := d.getClientForDisk(disk)
+			if client != nil && volumeId != "" {
+				if err := client.UnmountVolume(ctx, volumeId); err != nil {
+					d.Log.Warn("Failed to unmount volume after lease conflict", "volume", volumeId, "error", err)
+				}
 			}
 		}
 
@@ -499,6 +531,24 @@ func (d *DiskLeaseController) handleBoundLease(ctx context.Context, lease *stora
 		}
 	}
 	d.mu.Unlock()
+
+	// In directory mode, just verify directory exists
+	if d.directoryMode {
+		// If lease was already tracked and we have a volume ID, verify directory exists
+		if !needsSetup && existingVolumeId != "" {
+			diskDataPath := filepath.Join(d.mountBasePath, "disk-data", existingVolumeId)
+			if _, err := os.Stat(diskDataPath); err == nil {
+				d.Log.Debug("Bound lease already properly set up (directory mode)",
+					"lease", leaseId,
+					"disk", diskId,
+					"volume", existingVolumeId,
+					"path", diskDataPath)
+				return nil
+			}
+		}
+		// Directory mode doesn't need further verification
+		return nil
+	}
 
 	// If lease was already tracked and we have a volume ID, check if it's mounted
 	// This makes the function idempotent - if everything is already set up, we do nothing
@@ -657,8 +707,8 @@ func (d *DiskLeaseController) handleReleasedLease(ctx context.Context, lease *st
 		}
 	}
 
-	// Unmount the volume if we have one
-	if volumeId != "" && d.lsvdClient != nil {
+	// Unmount the volume if we have one (skip in directory mode)
+	if !d.directoryMode && volumeId != "" && d.lsvdClient != nil {
 		// Check if volume is actually mounted before trying to unmount
 		mounted, err := d.lsvdClient.IsVolumeMounted(ctx, volumeId)
 		if err != nil {
@@ -670,6 +720,8 @@ func (d *DiskLeaseController) handleReleasedLease(ctx context.Context, lease *st
 				d.Log.Warn("Failed to unmount volume on lease release", "volume", volumeId, "error", err)
 			}
 		}
+	} else if d.directoryMode && volumeId != "" {
+		d.Log.Info("Releasing directory lease (NBD unavailable)", "volume", volumeId, "lease", leaseId)
 	}
 
 	// Release the lease
