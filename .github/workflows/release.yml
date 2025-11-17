@@ -4,29 +4,20 @@ on:
   workflow_run:
     workflows: ["Test"]
     types: [completed]
-    branches: [main]
-  push:
-    tags:
-      - 'v*'
+    # Note: No branches filter - triggers for both main branch and tags
+    # This ensures all releases (main builds and tagged releases) wait for tests to pass
 
 jobs:
   check-test-success:
     runs-on: ubuntu-latest
-    if: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' }}
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
     steps:
       - name: Check test workflow status
         run: echo "Tests passed successfully, proceeding with release"
 
-  check-tag-push:
-    runs-on: ubuntu-latest
-    if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}
-    steps:
-      - name: Tag push detected
-        run: echo "Building release for tag ${{ github.ref_name }}"
-
   tests-failed:
     runs-on: ubuntu-latest
-    if: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.conclusion != 'success' }}
+    if: ${{ github.event.workflow_run.conclusion != 'success' }}
     steps:
       - name: Tests failed - blocking release
         run: |
@@ -91,8 +82,7 @@ jobs:
               "unfurl_media": false
             }
   package:
-    needs: [check-test-success, check-tag-push]
-    if: ${{ !cancelled() && (needs.check-test-success.result == 'success' || needs.check-tag-push.result == 'success') }}
+    needs: check-test-success
     strategy:
       matrix:
         include:
@@ -211,8 +201,7 @@ jobs:
           }
 
   build-binaries:
-    needs: [check-test-success, check-tag-push]
-    if: ${{ !cancelled() && (needs.check-test-success.result == 'success' || needs.check-tag-push.result == 'success') }}
+    needs: check-test-success
     strategy:
       matrix:
         include:
@@ -252,8 +241,7 @@ jobs:
         retention-days: 1
 
   build-and-push-docker:
-    needs: [check-test-success, check-tag-push, package]
-    if: ${{ !cancelled() && (needs.check-test-success.result == 'success' || needs.check-tag-push.result == 'success') }}
+    needs: [package]
     runs-on: depot-ubuntu-latest
     permissions:
       contents: read
@@ -367,8 +355,7 @@ jobs:
             }
 
   upload-to-miren:
-    needs: [check-test-success, check-tag-push, package, build-binaries]
-    if: ${{ !cancelled() && (needs.check-test-success.result == 'success' || needs.check-tag-push.result == 'success') }}
+    needs: [package, build-binaries]
     runs-on: depot-ubuntu-latest
     concurrency:
       group: upload-to-miren-${{ github.ref_name }}
