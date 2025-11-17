@@ -1,5 +1,7 @@
 # Miren Runtime
 
+[![Test](https://github.com/mirendev/runtime/workflows/Test/badge.svg)](https://github.com/mirendev/runtime/actions/workflows/test.yml)
+
 A container orchestration system built on containerd for running secure, isolated applications with etcd-backed state management.
 
 ## Overview
