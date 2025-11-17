@@ -16,7 +16,7 @@ type SemVer struct {
 	Original   string // Original version string
 }
 
-var semverRegex = regexp.MustCompile(`^v?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z\-\.]+))?$`)
+var semverRegex = regexp.MustCompile(`^v?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$`)
 
 // ParseSemVer parses a semantic version string
 // Examples: "v1.2.3", "v0.1.0-test.1", "1.0.0-rc.1"

@@ -24,12 +24,34 @@ func TestParseSemVer(t *testing.T) {
 			input: "v1.0.0-rc.1",
 			want:  &SemVer{Major: 1, Minor: 0, Patch: 0, Prerelease: "rc.1", Original: "v1.0.0-rc.1"},
 		},
+		// Without 'v' prefix (also valid per regex)
+		{
+			input: "1.2.3",
+			want:  &SemVer{Major: 1, Minor: 2, Patch: 3, Original: "1.2.3"},
+		},
+		{
+			input: "0.1.0-alpha.1",
+			want:  &SemVer{Major: 0, Minor: 1, Patch: 0, Prerelease: "alpha.1", Original: "0.1.0-alpha.1"},
+		},
 		{
 			input:   "main:abc123",
 			wantErr: true,
 		},
 		{
 			input:   "invalid",
+			wantErr: true,
+		},
+		// Invalid prerelease formats (should be rejected)
+		{
+			input:   "v1.0.0-test..1",
+			wantErr: true,
+		},
+		{
+			input:   "v1.0.0-.test",
+			wantErr: true,
+		},
+		{
+			input:   "v1.0.0-test.",
 			wantErr: true,
 		},
 	}
