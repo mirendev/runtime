@@ -21,14 +21,16 @@ jobs:
     steps:
       - name: Tests failed - blocking release
         run: |
+          REF_NAME="${{ github.event.workflow_run.head_branch }}"
           echo "
           ╔═══════════════════════════════════════════════════════════════════════════╗
           ║                                                                           ║
-          ║   ❌ ❌ ❌  TESTS FAILED ON MAIN - RELEASE BLOCKED  ❌ ❌ ❌              ║
+          ║   ❌ ❌ ❌  TESTS FAILED - RELEASE BLOCKED  ❌ ❌ ❌                       ║
           ║                                                                           ║
           ║   The test workflow did not pass successfully.                           ║
           ║   Release artifacts will NOT be built or pushed.                         ║
           ║                                                                           ║
+          ║   Ref: $REF_NAME                                                         ║
           ║   Test workflow conclusion: ${{ github.event.workflow_run.conclusion }}  ║
           ║   Test workflow run: ${{ github.event.workflow_run.html_url }}           ║
           ║                                                                           ║
@@ -45,13 +47,13 @@ jobs:
           payload: |
             {
               "channel": "${{ vars.SLACK_CHANNEL_ID }}",
-              "text": "❌ Tests failed on main branch - Release blocked",
+              "text": "❌ Tests failed for ${{ github.event.workflow_run.head_branch }} - Release blocked",
               "blocks": [
                 {
                   "type": "section",
                   "text": {
                     "type": "mrkdwn",
-                    "text": "❌ *Tests failed on main branch*\nRelease artifacts will not be built or pushed."
+                    "text": "❌ *Tests failed for `${{ github.event.workflow_run.head_branch }}`*\nRelease artifacts will not be built or pushed."
                   }
                 },
                 {
