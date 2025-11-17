@@ -22,6 +22,10 @@ RUN echo "Building for architecture: $TARGETARCH"
 # These are extracted in the GitHub Actions workflow before the Docker build
 COPY docker/artifacts/${TARGETARCH}/ /usr/local/bin/
 
+# Copy entrypoint script
+COPY docker/entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
 # Create necessary directories
 RUN mkdir -p /var/lib/miren
 
