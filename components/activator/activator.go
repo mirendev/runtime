@@ -918,22 +918,26 @@ func (a *localActivator) watchSandboxes(ctx context.Context) {
 				// Do expensive RPC/decode work without holding the lock
 				// Update URL if sandbox now has a network address (e.g., PENDING -> RUNNING transition)
 				if len(sb.Network) > 0 {
-					// Need to fetch version to get the port configuration
-					sbVersion := sb.Spec.Version
-					if sbVersion != "" {
-						verResp, err := a.eac.Get(ctx, sbVersion.String())
-						if err == nil {
-							var appVer core_v1alpha.AppVersion
-							appVer.Decode(verResp.Entity().Entity())
+					// Extract port from sandbox spec's container port configuration
+					port := int64(3000) // Default fallback
 
-							port := int64(3000)
-							if appVer.Config.Port > 0 {
-								port = appVer.Config.Port
+					// Look for HTTP port in sandbox spec
+					if len(sb.Spec.Container) > 0 {
+						for _, cont := range sb.Spec.Container {
+							for _, p := range cont.Port {
+								if p.Type == "http" {
+									port = p.Port
+									break
+								}
 							}
-							if addr, err := netutil.BuildHTTPURL(sb.Network[0].Address, port); err == nil {
-								newURL = addr
+							if port != 3000 {
+								break // Found a non-default port
 							}
 						}
+					}
+
+					if addr, err := netutil.BuildHTTPURL(sb.Network[0].Address, port); err == nil {
+						newURL = addr
 					}
 				}
 

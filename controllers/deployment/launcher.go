@@ -264,16 +264,30 @@ func (l *Launcher) buildSandboxSpec(
 		Directory: "/app",
 	}
 
-	// TODO per-service port config? we only have global port now so we
-	// assume it only applies to our "web" service (the default service)
-	if serviceName == "web" {
-		// Determine port from config or default to 3000
-		port := int64(3000)
+	// Determine port from service config, falling back to global config, then default
+	port := int64(0)
 
-		if ver.Config.Port > 0 {
-			port = ver.Config.Port
+	// Check for per-service port configuration
+	for _, svc := range ver.Config.Services {
+		if svc.Name == serviceName && svc.Port > 0 {
+			port = svc.Port
+			break
 		}
+	}
 
+	// Fall back to global port config (for web service only)
+	// Background services (worker, etc) don't get the global port automatically
+	if port == 0 && serviceName == "web" && ver.Config.Port > 0 {
+		port = ver.Config.Port
+	}
+
+	// Default to 3000 for web service if still no port configured
+	if port == 0 && serviceName == "web" {
+		port = 3000
+	}
+
+	// Add port configuration if a port was determined
+	if port > 0 {
 		appCont.Port = []compute_v1alpha.SandboxSpecContainerPort{
 			{
 				Port: port,

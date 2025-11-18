@@ -44,6 +44,7 @@ type DiskConfig struct {
 // ServiceConfig represents configuration for a specific service
 type ServiceConfig struct {
 	Command     string                    `toml:"command"`
+	Port        int                       `toml:"port"`
 	Image       string                    `toml:"image"`
 	EnvVars     []AppEnvVar               `toml:"env"`
 	Concurrency *ServiceConcurrencyConfig `toml:"concurrency"`

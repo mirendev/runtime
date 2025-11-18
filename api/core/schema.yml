@@ -77,7 +77,7 @@ kinds:
       attrs:
         port:
           type: int
-          doc: The TCP port to access, default to 3000
+          doc: "[DEPRECATED] The TCP port to access, default to 3000. Use per-service port configuration instead."
         services:
           type: component
           doc: Per-service configuration including concurrency controls
@@ -86,6 +86,9 @@ kinds:
             name:
               type: string
               doc: The service name (e.g. web, worker)
+            port:
+              type: int
+              doc: The TCP port the service listens on. If not specified, defaults to the top-level port or 3000.
             image:
               type: string
               doc: Optional container image for this service (e.g. postgres:16). If not specified, uses the app-level built image.

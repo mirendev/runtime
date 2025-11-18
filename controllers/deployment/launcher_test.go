@@ -980,3 +980,175 @@ func TestPerServiceEnvVarsDoNotRestartOtherServices(t *testing.T) {
 	}
 	assert.False(t, foundAPIKeyInPostgres, "postgres pool should NOT have API_KEY env var")
 }
+
+// TestPerServicePortConfiguration tests that launcher correctly configures ports
+// based on per-service configuration, with fallback to global port and defaults
+func TestPerServicePortConfiguration(t *testing.T) {
+	ctx := context.Background()
+	log := testutils.TestLogger(t)
+
+	server, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	// Create app
+	app := &core_v1alpha.App{
+		Project: entity.Id("project-1"),
+	}
+	appID, err := server.Client.Create(ctx, "test-app", app)
+	require.NoError(t, err)
+	app.ID = appID
+
+	// Create version with multiple services having different port configurations
+	version := &core_v1alpha.AppVersion{
+		App:      app.ID,
+		Version:  "v1",
+		ImageUrl: "test:latest",
+		Config: core_v1alpha.Config{
+			Port: 4000, // Global port
+			Services: []core_v1alpha.Services{
+				{
+					Name: "web",
+					Port: 8080, // Per-service port (should override global)
+					ServiceConcurrency: core_v1alpha.ServiceConcurrency{
+						Mode:                "auto",
+						RequestsPerInstance: 10,
+					},
+				},
+				{
+					Name: "api",
+					Port: 3001, // Per-service port
+					ServiceConcurrency: core_v1alpha.ServiceConcurrency{
+						Mode:         "fixed",
+						NumInstances: 1,
+					},
+				},
+				{
+					Name: "admin",
+					// No per-service port - should use global port 4000
+					ServiceConcurrency: core_v1alpha.ServiceConcurrency{
+						Mode:         "fixed",
+						NumInstances: 1,
+					},
+				},
+				{
+					Name: "worker",
+					// No per-service port, and it's not "web" - should not get any port
+					ServiceConcurrency: core_v1alpha.ServiceConcurrency{
+						Mode:         "fixed",
+						NumInstances: 1,
+					},
+				},
+			},
+		},
+	}
+	verID, err := server.Client.Create(ctx, "test-ver", version)
+	require.NoError(t, err)
+	version.ID = verID
+
+	// Set as active version
+	app.ActiveVersion = version.ID
+	err = server.Client.Update(ctx, app)
+	require.NoError(t, err)
+
+	// Create launcher and reconcile
+	launcher := NewLauncher(log, server.EAC)
+	err = launcher.Reconcile(ctx, app, nil)
+	require.NoError(t, err)
+
+	// Get all pools
+	pools := listAllPools(t, ctx, server)
+	require.Len(t, pools, 4, "Expected four pools")
+
+	// Build map of pools by service
+	poolsByService := make(map[string]*compute_v1alpha.SandboxPool)
+	for i := range pools {
+		poolsByService[pools[i].Service] = &pools[i]
+	}
+
+	// Test web service - should use per-service port 8080
+	webPool := poolsByService["web"]
+	require.NotNil(t, webPool, "web pool should exist")
+	require.Len(t, webPool.SandboxSpec.Container, 1, "web pool should have one container")
+	require.Len(t, webPool.SandboxSpec.Container[0].Port, 1, "web container should have one port")
+	assert.Equal(t, int64(8080), webPool.SandboxSpec.Container[0].Port[0].Port, "web should use per-service port 8080")
+	assert.Equal(t, "http", webPool.SandboxSpec.Container[0].Port[0].Name)
+	assert.Equal(t, "http", webPool.SandboxSpec.Container[0].Port[0].Type)
+
+	// Test api service - should use per-service port 3001
+	apiPool := poolsByService["api"]
+	require.NotNil(t, apiPool, "api pool should exist")
+	require.Len(t, apiPool.SandboxSpec.Container, 1, "api pool should have one container")
+	require.Len(t, apiPool.SandboxSpec.Container[0].Port, 1, "api container should have one port")
+	assert.Equal(t, int64(3001), apiPool.SandboxSpec.Container[0].Port[0].Port, "api should use per-service port 3001")
+
+	// Test admin service - global port only applies to "web", so admin gets no port
+	adminPool := poolsByService["admin"]
+	require.NotNil(t, adminPool, "admin pool should exist")
+	require.Len(t, adminPool.SandboxSpec.Container, 1, "admin pool should have one container")
+	assert.Empty(t, adminPool.SandboxSpec.Container[0].Port, "admin should not have any port (global port only applies to web)")
+
+	// Test worker service - should not have any port configured (non-web service with no port config)
+	workerPool := poolsByService["worker"]
+	require.NotNil(t, workerPool, "worker pool should exist")
+	require.Len(t, workerPool.SandboxSpec.Container, 1, "worker pool should have one container")
+	assert.Empty(t, workerPool.SandboxSpec.Container[0].Port, "worker should not have any port configured")
+}
+
+// TestWebServiceDefaultPort tests that "web" service gets default port 3000 when no port is configured
+func TestWebServiceDefaultPort(t *testing.T) {
+	ctx := context.Background()
+	log := testutils.TestLogger(t)
+
+	server, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	// Create app
+	app := &core_v1alpha.App{
+		Project: entity.Id("project-1"),
+	}
+	appID, err := server.Client.Create(ctx, "test-app", app)
+	require.NoError(t, err)
+	app.ID = appID
+
+	// Create version with web service but no port configuration at all
+	version := &core_v1alpha.AppVersion{
+		App:      app.ID,
+		Version:  "v1",
+		ImageUrl: "test:latest",
+		Config: core_v1alpha.Config{
+			// No Port field - defaults to 0
+			Services: []core_v1alpha.Services{
+				{
+					Name: "web",
+					// No Port field
+					ServiceConcurrency: core_v1alpha.ServiceConcurrency{
+						Mode:                "auto",
+						RequestsPerInstance: 10,
+					},
+				},
+			},
+		},
+	}
+	verID, err := server.Client.Create(ctx, "test-ver", version)
+	require.NoError(t, err)
+	version.ID = verID
+
+	// Set as active version
+	app.ActiveVersion = version.ID
+	err = server.Client.Update(ctx, app)
+	require.NoError(t, err)
+
+	// Create launcher and reconcile
+	launcher := NewLauncher(log, server.EAC)
+	err = launcher.Reconcile(ctx, app, nil)
+	require.NoError(t, err)
+
+	// Get pool
+	pools := listAllPools(t, ctx, server)
+	require.Len(t, pools, 1, "Expected one pool")
+
+	pool := pools[0]
+	require.Len(t, pool.SandboxSpec.Container, 1, "pool should have one container")
+	require.Len(t, pool.SandboxSpec.Container[0].Port, 1, "web container should have one port")
+	assert.Equal(t, int64(3000), pool.SandboxSpec.Container[0].Port[0].Port, "web service should default to port 3000")
+}
