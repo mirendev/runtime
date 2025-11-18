@@ -291,6 +291,7 @@ func (s *Server) setupMux() {
 	mux.HandleFunc("POST /_rpc/deref/{oid}", s.derefCapa)
 	mux.HandleFunc("POST /_rpc/identify", s.clientIdentify)
 	mux.HandleFunc("GET /api/v1/debug-auth", s.handleDebugAuth)
+	mux.HandleFunc("GET /healthz", s.handleHealthz)
 
 	s.mux = mux
 }
@@ -426,6 +427,13 @@ type DebugAuthResponse struct {
 	Identity      string            `json:"identity,omitempty"`
 	UserInfo      map[string]string `json:"user_info,omitempty"`
 	Message       string            `json:"message,omitempty"`
+}
+
+func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{
+		"status": "ok",
+	})
 }
 
 func (s *Server) handleDebugAuth(w http.ResponseWriter, r *http.Request) {

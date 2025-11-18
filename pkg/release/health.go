@@ -31,7 +31,7 @@ type HealthCheckOptions struct {
 func DefaultHealthCheckOptions() HealthCheckOptions {
 	return HealthCheckOptions{
 		ServiceName: "miren",
-		// Health endpoint available at :8989/.well-known/miren/health (returns JSON with component checks)
+		// Health endpoint available at :80/.well-known/miren/health (returns JSON with component checks)
 		// Set this to check server health during upgrades
 		HealthEndpoint: "",
 		MaxRetries:     30,

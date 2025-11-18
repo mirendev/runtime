@@ -1,12 +1,29 @@
-# This image contains all executables needed to run the miren server
+# Build stage
+FROM golang:1.25 AS builder
 
+# Install build dependencies
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    git \
+    make \
+    && rm -rf /var/lib/apt/lists/*
+
+# Set working directory
+WORKDIR /build
+
+# Copy source code
+COPY . .
+
+# Build miren
+RUN make bin/miren
+
+# Runtime stage
 FROM ubuntu:24.04
 
-# Install miren dependencies
+# Install runtime dependencies
 RUN apt-get update && apt-get install -y \
     bash \
     ca-certificates \
-    curl \
     iptables \
     iproute2 \
     netcat-openbsd \
@@ -14,13 +31,8 @@ RUN apt-get update && apt-get install -y \
     util-linux \
     && rm -rf /var/lib/apt/lists/*
 
-# Set architecture-specific variables
-ARG TARGETARCH
-RUN echo "Building for architecture: $TARGETARCH"
-
-# Copy pre-built artifacts from extracted tarballs
-# These are extracted in the GitHub Actions workflow before the Docker build
-COPY docker/artifacts/${TARGETARCH}/ /usr/local/bin/
+# Copy miren binary from builder
+COPY --from=builder /build/bin/miren /usr/local/bin/miren
 
 # Copy entrypoint script
 COPY docker/entrypoint.sh /entrypoint.sh
@@ -30,9 +42,6 @@ RUN chmod +x /entrypoint.sh
 RUN mkdir -p /var/lib/miren
 
 # Download the components to run the server
-# TODO this should be given the specific version to download
-# Right now we're not using the miren binary in the release, just
-# the components like containerd, so it's less of a big deal.
 RUN miren download release -g
 
 # Declare volume for data persistence

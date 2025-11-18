@@ -41,7 +41,7 @@ func TestSandboxLifecycleEndToEnd(t *testing.T) {
 
 	// Ensure we can route to nginx container
 	t.Log("running HTTP GET")
-	resp, err := http.Get("http://localhost:8989")
+	resp, err := http.Get("http://localhost")
 	r.NoError(err)
 	defer resp.Body.Close()
 

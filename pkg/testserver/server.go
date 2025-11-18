@@ -249,10 +249,8 @@ func TestServer(t *testing.T) error {
 		return sch.Watch(ctx, eac)
 	})
 
-	// Note: sandboxpool-manager is now managed by the controller framework in coordinate
-
 	httpServer := &http.Server{
-		Addr:    ":8989",
+		Addr:    ":80",
 		Handler: hs,
 	}
 
