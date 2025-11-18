@@ -6,6 +6,10 @@ set -e
 PIDFILE="/tmp/miren-server.pid"
 LOGFILE="/tmp/miren-server.log"
 
+# Optional env file and extra flags
+ENV_FILE="${DEV_ENV_FILE:-}"
+EXTRA_FLAGS="${DEV_SERVER_FLAGS:-}"
+
 case "${1:-}" in
   start)
     if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
@@ -13,10 +17,23 @@ case "${1:-}" in
       exit 0
     fi
 
+    # Source env file if provided
+    if [ -n "$ENV_FILE" ]; then
+      if [ -f "$ENV_FILE" ]; then
+        echo "Sourcing environment from $ENV_FILE"
+        set -a
+        source "$ENV_FILE"
+        set +a
+      else
+        echo "Warning: ENV_FILE set to '$ENV_FILE' but file not found"
+        exit 1
+      fi
+    fi
+
     echo "Starting miren server in standalone mode..."
     # Use nohup and disown to fully detach from the shell
     # (Script runs as root for process management privileges)
-    nohup ./bin/miren server -vv --mode standalone >"$LOGFILE" 2>&1 </dev/null &
+    nohup ./bin/miren server -vv --mode standalone $EXTRA_FLAGS >"$LOGFILE" 2>&1 </dev/null &
     pid=$!
     disown
     echo $pid > "$PIDFILE"
