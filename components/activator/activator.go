@@ -55,6 +55,25 @@ const (
 	MaxPoolSize = 20
 )
 
+// extractHTTPPort extracts the HTTP port from a sandbox spec's container ports.
+// Returns the port number and true if found, or 0 and false if no HTTP port exists.
+func extractHTTPPort(spec *compute_v1alpha.SandboxSpec) (int64, bool) {
+	if spec == nil || len(spec.Container) == 0 {
+		return 0, false
+	}
+
+	// Look for HTTP port in container spec
+	for _, cont := range spec.Container {
+		for _, p := range cont.Port {
+			if p.Type == "http" {
+				return p.Port, true
+			}
+		}
+	}
+
+	return 0, false
+}
+
 type Lease struct {
 	ver     *core_v1alpha.AppVersion
 	sandbox *compute_v1alpha.Sandbox
@@ -918,22 +937,10 @@ func (a *localActivator) watchSandboxes(ctx context.Context) {
 				// Do expensive RPC/decode work without holding the lock
 				// Update URL if sandbox now has a network address (e.g., PENDING -> RUNNING transition)
 				if len(sb.Network) > 0 {
-					// Extract port from sandbox spec's container port configuration
-					port := int64(3000) // Default fallback
-
-					// Look for HTTP port in sandbox spec
-					if len(sb.Spec.Container) > 0 {
-						for _, cont := range sb.Spec.Container {
-							for _, p := range cont.Port {
-								if p.Type == "http" {
-									port = p.Port
-									break
-								}
-							}
-							if port != 3000 {
-								break // Found a non-default port
-							}
-						}
+					// Extract HTTP port from sandbox spec (canonical source of truth)
+					port, found := extractHTTPPort(&sb.Spec)
+					if !found {
+						port = 3000 // Default fallback
 					}
 
 					if addr, err := netutil.BuildHTTPURL(sb.Network[0].Address, port); err == nil {
@@ -947,9 +954,9 @@ func (a *localActivator) watchSandboxes(ctx context.Context) {
 				trackedSandbox.sandbox.Status = sb.Status
 
 				// Re-check conditions under lock and update URL if still needed
-				if newURL != "" && trackedSandbox.url == "" && len(sb.Network) > 0 {
+				if newURL != "" && trackedSandbox.url != newURL && len(sb.Network) > 0 {
 					trackedSandbox.url = newURL
-					a.log.Debug("updated sandbox URL after network assignment", "sandbox", sb.ID, "url", newURL)
+					a.log.Debug("updated sandbox URL when address changes", "sandbox", sb.ID, "url", newURL)
 				}
 
 				// Keep STOPPED and DEAD sandboxes in tracking so fail-fast logic can see them
@@ -1203,7 +1210,7 @@ func (a *localActivator) recoverSandboxes(ctx context.Context) error {
 			continue
 		}
 
-		// Get app version for port config
+		// Get app version for concurrency config
 		verResp, err := a.eac.Get(ctx, sbVersion.String())
 		if err != nil {
 			a.log.Error("failed to get version for sandbox", "sandbox", sb.ID, "version", sbVersion, "error", err)
@@ -1213,10 +1220,10 @@ func (a *localActivator) recoverSandboxes(ctx context.Context) error {
 		var appVer core_v1alpha.AppVersion
 		appVer.Decode(verResp.Entity().Entity())
 
-		// Determine port from version config or default to 3000
-		port := int64(3000)
-		if appVer.Config.Port > 0 {
-			port = appVer.Config.Port
+		// Extract HTTP port from sandbox spec (canonical source of truth)
+		port, found := extractHTTPPort(&sb.Spec)
+		if !found {
+			port = 3000 // Default fallback
 		}
 
 		// Build HTTP URL from address and port
