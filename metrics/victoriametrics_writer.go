@@ -235,6 +235,14 @@ func (w *VictoriaMetricsWriter) formatMetricLine(point MetricPoint) string {
 	return sb.String()
 }
 
+// Flush manually triggers a flush of buffered metrics
+func (w *VictoriaMetricsWriter) Flush() {
+	if w == nil {
+		return
+	}
+	w.flush()
+}
+
 // Close stops the background flush routine and flushes remaining data
 func (w *VictoriaMetricsWriter) Close() error {
 	if w.cancel != nil {

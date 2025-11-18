@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -340,26 +341,61 @@ func TestSandbox(t *testing.T) {
 
 		defer testutils.ClearContainer(ctx, c)
 
-		var cpu float64
+		// Give container time to start and accumulate CPU time
+		time.Sleep(2 * time.Second)
 
-		// We need to wait a bit for metrics to start being recorded.
-		for range 5 {
-			// Let sort ... sort.
-			time.Sleep(3 * time.Second)
+		// Explicitly trigger metric collection to establish baseline
+		err = co.Metrics.writeStatsToStorage(ctx)
+		r.NoError(err)
 
-			cpu, err = co.Metrics.CPUUsage.CurrentCPUUsage(id.String())
+		// Let sort container accumulate more CPU time and collect metrics
+		time.Sleep(1 * time.Second)
+		err = co.Metrics.writeStatsToStorage(ctx)
+		r.NoError(err)
+
+		// Collect one more time to ensure we have multiple data points
+		time.Sleep(1 * time.Second)
+		err = co.Metrics.writeStatsToStorage(ctx)
+		r.NoError(err)
+
+		// Manually flush metrics to VictoriaMetrics instead of waiting for 5s background timer
+		co.Metrics.CPUUsage.Writer.Flush()
+
+		// Wait for VictoriaMetrics to index the flushed data with retry
+		// VictoriaMetrics has a 2s latencyOffset, so we need to wait at least that long
+		time.Sleep(2500 * time.Millisecond)
+
+		var queryResult *metrics.QueryResult
+		maxRetries := 5
+		for i := 0; i < maxRetries; i++ {
+			if i > 0 {
+				time.Sleep(500 * time.Millisecond)
+			}
+
+			queryResult, err = co.Metrics.CPUUsage.Reader.InstantQuery(ctx,
+				fmt.Sprintf(`cpu_usage_seconds_total{entity="%s"}`, id.String()),
+				time.Time{})
 			r.NoError(err)
 
-			if cpu > 0.5 {
+			if len(queryResult.Data.Result) > 0 {
 				break
 			}
+
+			if i == maxRetries-1 {
+				t.Fatalf("no CPU metrics found after %d retries", maxRetries)
+			}
+			t.Logf("retry %d: waiting for metrics to be indexed...", i+1)
 		}
 
-		t.Logf("last delta: %f", cpu)
+		cpuSecondsStr, ok := queryResult.Data.Result[0].Value[1].(string)
+		r.True(ok, "expected string value for CPU counter")
+		cpuSeconds, err := strconv.ParseFloat(cpuSecondsStr, 64)
+		r.NoError(err)
 
-		// This fails because of how Github Actions works when it's higher, so
-		// we're just going to test that it's just being measured for now.
-		r.Greater(float64(cpu), float64(0.5))
+		t.Logf("total CPU seconds recorded: %f", cpuSeconds)
+
+		// Verify we've recorded at least some CPU usage (the sort container should be CPU-intensive)
+		r.Greater(cpuSeconds, 0.5, "should have recorded at least 0.5 CPU seconds")
 	})
 
 	t.Run("configures networking", func(t *testing.T) {
