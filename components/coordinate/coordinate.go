@@ -25,9 +25,12 @@ import (
 	aes "miren.dev/runtime/api/entityserver"
 	esv1 "miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/api/exec/exec_v1alpha"
+	"miren.dev/runtime/api/ingress/ingress_v1alpha"
 	"miren.dev/runtime/clientconfig"
 	"miren.dev/runtime/components/activator"
+	"miren.dev/runtime/components/autotls"
 	"miren.dev/runtime/components/netresolve"
+	certctrl "miren.dev/runtime/controllers/certificate"
 	deploymentctrl "miren.dev/runtime/controllers/deployment"
 	"miren.dev/runtime/controllers/sandboxpool"
 	"miren.dev/runtime/metrics"
@@ -57,6 +60,10 @@ type CoordinatorConfig struct {
 	DataPath        string              `json:"data_path" yaml:"data_path"`
 	AdditionalNames []string            `json:"additional_names" yaml:"additional_names"`
 	AdditionalIPs   []net.IP            `json:"additional_ips" yaml:"additional_ips"`
+
+	// ACME certificate configuration
+	AcmeEmail       string `json:"acme_email" yaml:"acme_email"`
+	AcmeDNSProvider string `json:"acme_dns_provider" yaml:"acme_dns_provider"`
 
 	// Cloud authentication configuration
 	CloudAuth CloudAuthConfig `json:"cloud_auth" yaml:"cloud_auth"`
@@ -96,9 +103,10 @@ type Coordinator struct {
 	state *rpc.State
 	eac   *esv1.EntityAccessClient // Entity access client for querying entities
 
-	aa  activator.AppActivator
-	spm *sandboxpool.Manager
-	cm  *controller.ControllerManager
+	aa             activator.AppActivator
+	spm            *sandboxpool.Manager
+	cm             *controller.ControllerManager
+	certController *certctrl.Controller
 
 	authority *caauth.Authority
 
@@ -532,6 +540,28 @@ func (c *Coordinator) Start(ctx context.Context) error {
 	)
 	c.cm.AddController(poolController)
 
+	// Add certificate controller if DNS provider is configured
+	if c.AcmeDNSProvider != "" {
+		c.Log.Info("enabling ACME DNS challenge certificate controller", "provider", c.AcmeDNSProvider)
+		certController := certctrl.NewController(c.Log, c.DataPath, c.AcmeEmail, c.AcmeDNSProvider)
+		if err := certController.Init(ctx); err != nil {
+			c.Log.Error("failed to initialize certificate controller", "error", err)
+			return err
+		}
+		c.certController = certController
+
+		certCtrl := controller.NewReconcileController(
+			"certificate",
+			c.Log,
+			entity.Ref(entity.EntityKind, ingress_v1alpha.KindHttpRoute),
+			eac,
+			controller.AdaptReconcileController[ingress_v1alpha.HttpRoute](certController),
+			time.Hour, // Resync hourly to handle dropped watches and check renewals
+			1,         // Single worker to avoid duplicate cert requests
+		)
+		c.cm.AddController(certCtrl)
+	}
+
 	// Start the controller manager
 	if err := c.cm.Start(ctx); err != nil {
 		c.Log.Error("failed to start controller manager", "error", err)
@@ -712,4 +742,13 @@ func (c *Coordinator) reportStatusPeriodically(ctx context.Context) {
 
 func (c *Coordinator) Server() *rpc.Server {
 	return c.state.Server()
+}
+
+// CertificateProvider returns the certificate controller for use by autotls.
+// Returns nil if DNS provider is not configured.
+func (c *Coordinator) CertificateProvider() autotls.CertificateProvider {
+	if c.certController == nil {
+		return nil
+	}
+	return c.certController
 }

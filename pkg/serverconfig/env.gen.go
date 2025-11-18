@@ -211,6 +211,22 @@ func applyEnvironmentVariables(cfg *Config, log *slog.Logger) error {
 
 	}
 
+	// Apply MIREN_TLS_ACME_DNS_PROVIDER
+	if val := os.Getenv("MIREN_TLS_ACME_DNS_PROVIDER"); val != "" {
+
+		cfg.TLS.AcmeDNSProvider = &val
+		log.Debug("applied env var", "key", "MIREN_TLS_ACME_DNS_PROVIDER")
+
+	}
+
+	// Apply MIREN_TLS_ACME_EMAIL
+	if val := os.Getenv("MIREN_TLS_ACME_EMAIL"); val != "" {
+
+		cfg.TLS.AcmeEmail = &val
+		log.Debug("applied env var", "key", "MIREN_TLS_ACME_EMAIL")
+
+	}
+
 	// Apply MIREN_TLS_ADDITIONAL_IPS
 	if val := os.Getenv("MIREN_TLS_ADDITIONAL_IPS"); val != "" {
 

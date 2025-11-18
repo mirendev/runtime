@@ -8,6 +8,19 @@ export DO_NOT_TRACK=1
 # Generate a unique session name based on the project directory
 ISO_SESSION ?= dev-$(shell basename "$$(pwd)")
 
+# Convert DEV_ENV_FILE relative paths to container paths (/src is the workdir)
+# If path starts with /, use as-is (absolute)
+# If path starts with ./ or is relative, prepend /src/
+ifneq ($(DEV_ENV_FILE),)
+  ifeq ($(shell echo "$(DEV_ENV_FILE)" | cut -c1),/)
+    DEV_ENV_FILE_CONTAINER := $(DEV_ENV_FILE)
+  else
+    DEV_ENV_FILE_CONTAINER := /src/$(patsubst ./%,%,$(DEV_ENV_FILE))
+  endif
+else
+  DEV_ENV_FILE_CONTAINER :=
+endif
+
 .PHONY: help
 help: ## Show this help message
 	@echo "Miren Runtime"
@@ -24,20 +37,20 @@ dev: dev-start dev-server-start dev-shell ## Start dev environment, server, and 
 dev-shell: ## Open interactive shell in dev environment
 	@./hack/dev-exec bash
 
-dev-server-start: ## Start the miren server
-	./hack/dev-exec bash hack/dev-server start
+dev-server-start: ## Start the miren server (supports DEV_ENV_FILE and DEV_SERVER_FLAGS)
+	./hack/dev-exec --root env DEV_ENV_FILE="$(DEV_ENV_FILE_CONTAINER)" DEV_SERVER_FLAGS="$(DEV_SERVER_FLAGS)" bash hack/dev-server start
 
 dev-server-stop: ## Stop the miren server
-	./hack/dev-exec bash hack/dev-server stop
+	./hack/dev-exec --root bash hack/dev-server stop
 
-dev-server-restart: ## Restart the miren server
-	./hack/dev-exec bash hack/dev-server restart
+dev-server-restart: ## Restart the miren server (supports DEV_ENV_FILE and DEV_SERVER_FLAGS)
+	./hack/dev-exec --root env DEV_ENV_FILE="$(DEV_ENV_FILE_CONTAINER)" DEV_SERVER_FLAGS="$(DEV_SERVER_FLAGS)" bash hack/dev-server restart
 
 dev-server-status: ## Check miren server status
-	./hack/dev-exec bash hack/dev-server status
+	./hack/dev-exec --root bash hack/dev-server status
 
 dev-server-logs: ## View miren server logs
-	./hack/dev-exec bash hack/dev-server logs
+	./hack/dev-exec --root bash hack/dev-server logs
 
 dev-start: ## Start dev environment (internal - use 'dev' instead)
 	@if ! ISO_SESSION=$(ISO_SESSION) iso status 2>&1 | grep -q "Container is running"; then \
