@@ -206,12 +206,6 @@ func (a *RPCAuthenticator) Stop() {
 	a.rbacEval.Stop()
 }
 
-// GetLastClaims is deprecated and returns nil
-// Claims should be retrieved from context using auth.ClaimsFromContext
-func (a *RPCAuthenticator) GetLastClaims() *auth.Claims {
-	return nil
-}
-
 // GetEvaluator returns the RBAC evaluator
 func (a *RPCAuthenticator) GetEvaluator() *rbac.Evaluator {
 	return a.rbacEval
@@ -220,9 +214,4 @@ func (a *RPCAuthenticator) GetEvaluator() *rbac.Evaluator {
 // GetPolicyFetcher returns the policy fetcher
 func (a *RPCAuthenticator) GetPolicyFetcher() *PolicyFetcher {
 	return a.policyFetcher
-}
-
-// GetTags returns the configured tags
-func (a *RPCAuthenticator) GetTags() map[string]any {
-	return a.tags
 }

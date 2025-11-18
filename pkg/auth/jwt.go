@@ -288,11 +288,6 @@ type contextKey string
 
 const claimsContextKey contextKey = "jwt-claims"
 
-// WithClaims adds JWT claims to the context
-func WithClaims(ctx context.Context, claims *Claims) context.Context {
-	return context.WithValue(ctx, claimsContextKey, claims)
-}
-
 // ClaimsFromContext retrieves JWT claims from the context
 func ClaimsFromContext(ctx context.Context) *Claims {
 	if claims, ok := ctx.Value(claimsContextKey).(*Claims); ok {
