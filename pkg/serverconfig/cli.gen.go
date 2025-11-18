@@ -25,6 +25,8 @@ type CLIFlags struct {
 	ServerConfigRunnerID                 *string  `long:"runner-id" short:"r" description:"Runner ID"`
 	ServerConfigSkipClientConfig         *bool    `long:"skip-client-config" description:"Skip writing client config file to clientconfig.d"`
 	ServerConfigStopSandboxesOnShutdown  *bool    `long:"stop-sandboxes-on-shutdown" description:"Stop all sandboxes when server shuts down (useful in development)"`
+	TLSConfigAcmeDNSProvider             *string  `long:"acme-dns-provider" description:"DNS provider for ACME DNS-01 challenges (e.g., cloudflare, route53, exec). When set, uses DNS challenge instead of HTTP challenge. See https://go-acme.github.io/lego/dns/ for available providers."`
+	TLSConfigAcmeEmail                   *string  `long:"acme-email" description:"Email address for ACME account registration (recommended for account recovery and notifications)"`
 	TLSConfigAdditionalIPs               []string `long:"ips" description:"Additional IPs assigned to the server cert"`
 	TLSConfigAdditionalNames             []string `long:"dns-names" description:"Additional DNS names assigned to the server cert"`
 	TLSConfigStandardTLS                 *bool    `long:"serve-tls" description:"Expose the http ingress on standard TLS ports"`

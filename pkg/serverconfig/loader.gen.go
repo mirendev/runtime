@@ -214,6 +214,14 @@ func applyCLIFlags(cfg *Config, flags *CLIFlags) {
 		cfg.Server.StopSandboxesOnShutdown = flags.ServerConfigStopSandboxesOnShutdown
 	}
 
+	if flags.TLSConfigAcmeDNSProvider != nil && *flags.TLSConfigAcmeDNSProvider != "" {
+		cfg.TLS.AcmeDNSProvider = flags.TLSConfigAcmeDNSProvider
+	}
+
+	if flags.TLSConfigAcmeEmail != nil && *flags.TLSConfigAcmeEmail != "" {
+		cfg.TLS.AcmeEmail = flags.TLSConfigAcmeEmail
+	}
+
 	if len(flags.TLSConfigAdditionalIPs) > 0 {
 		cfg.TLS.AdditionalIPs = flags.TLSConfigAdditionalIPs
 	}

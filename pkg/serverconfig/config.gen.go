@@ -283,9 +283,37 @@ func (c *ServerConfig) SetStopSandboxesOnShutdown(v bool) {
 
 // TLSConfig TLS/certificate settings
 type TLSConfig struct {
+	AcmeDNSProvider *string  `toml:"acme_dns_provider" env:"MIREN_TLS_ACME_DNS_PROVIDER"`
+	AcmeEmail       *string  `toml:"acme_email" env:"MIREN_TLS_ACME_EMAIL"`
 	AdditionalIPs   []string `toml:"additional_ips" env:"MIREN_TLS_ADDITIONAL_IPS"`
 	AdditionalNames []string `toml:"additional_names" env:"MIREN_TLS_ADDITIONAL_NAMES"`
 	StandardTLS     *bool    `toml:"standard_tls" env:"MIREN_TLS_STANDARD_TLS"`
+}
+
+// GetAcmeDNSProvider returns the value of AcmeDNSProvider or its zero value if nil
+func (c *TLSConfig) GetAcmeDNSProvider() string {
+	if c.AcmeDNSProvider != nil {
+		return *c.AcmeDNSProvider
+	}
+	return ""
+}
+
+// SetAcmeDNSProvider sets the value of AcmeDNSProvider
+func (c *TLSConfig) SetAcmeDNSProvider(v string) {
+	c.AcmeDNSProvider = &v
+}
+
+// GetAcmeEmail returns the value of AcmeEmail or its zero value if nil
+func (c *TLSConfig) GetAcmeEmail() string {
+	if c.AcmeEmail != nil {
+		return *c.AcmeEmail
+	}
+	return ""
+}
+
+// SetAcmeEmail sets the value of AcmeEmail
+func (c *TLSConfig) SetAcmeEmail(v string) {
+	c.AcmeEmail = &v
 }
 
 // GetStandardTLS returns the value of StandardTLS or its zero value if nil

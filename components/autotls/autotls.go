@@ -2,6 +2,7 @@ package autotls
 
 import (
 	"context"
+	"crypto/tls"
 	"log/slog"
 	"net/http"
 	"path/filepath"
@@ -10,10 +11,11 @@ import (
 	"golang.org/x/crypto/acme/autocert"
 )
 
-func ServeTLS(ctx context.Context, log *slog.Logger, dataPath string, h http.Handler) error {
+func ServeTLS(ctx context.Context, log *slog.Logger, dataPath string, email string, h http.Handler) error {
 	mgr := &autocert.Manager{
 		Prompt: autocert.AcceptTOS,
 		Cache:  autocert.DirCache(filepath.Join(dataPath, "certs")),
+		Email:  email,
 		// TODO set HostPolicy to only allow certain domains
 	}
 
@@ -70,3 +72,50 @@ func ServeTLS(ctx context.Context, log *slog.Logger, dataPath string, h http.Han
 
 	return nil
 }
+
+// CertificateProvider provides certificates via GetCertificate callback
+type CertificateProvider interface {
+	GetCertificate(hello *tls.ClientHelloInfo) (*tls.Certificate, error)
+}
+
+// ServeTLSWithController serves HTTPS using certificates provided by a controller
+func ServeTLSWithController(ctx context.Context, log *slog.Logger, certProvider CertificateProvider, h http.Handler) error {
+	log = log.With("module", "autotls", "mode", "controller")
+	log.Info("serving TLS with certificate controller")
+
+	tlsConfig := &tls.Config{
+		GetCertificate: certProvider.GetCertificate,
+		MinVersion:     tls.VersionTLS12,
+	}
+
+	server := &http.Server{
+		Addr:      ":443",
+		Handler:   h,
+		TLSConfig: tlsConfig,
+	}
+
+	go func() {
+		log.Info("starting HTTPS server", "addr", ":443")
+		err := server.ListenAndServeTLS("", "")
+		if err != nil && err != http.ErrServerClosed {
+			log.Error("error serving HTTPS", "error", err)
+		}
+	}()
+
+	// Monitor for context cancellation
+	go func() {
+		<-ctx.Done()
+		log.Info("shutting down HTTPS server")
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+
+		if err := server.Shutdown(shutdownCtx); err != nil {
+			log.Error("HTTPS server shutdown error", "error", err)
+		}
+		log.Info("HTTPS server shutdown complete")
+	}()
+
+	return nil
+}
+
+// Removed old ServeTLSWithDNS and lego-specific code - now handled by certificate controller

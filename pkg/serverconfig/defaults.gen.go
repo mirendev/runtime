@@ -59,6 +59,8 @@ func DefaultServerConfig() ServerConfig {
 // DefaultTLSConfig returns default TLSConfig
 func DefaultTLSConfig() TLSConfig {
 	return TLSConfig{
+		AcmeDNSProvider: strPtr(""),
+		AcmeEmail:       strPtr(""),
 		AdditionalIPs:   []string{},
 		AdditionalNames: []string{},
 		StandardTLS:     boolPtr(true),

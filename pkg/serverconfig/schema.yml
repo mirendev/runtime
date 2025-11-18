@@ -179,6 +179,24 @@ configs:
         env: MIREN_TLS_STANDARD_TLS
         toml: standard_tls
 
+      acme_dns_provider:
+        type: string
+        default: ""
+        cli:
+          long: acme-dns-provider
+          description: DNS provider for ACME DNS-01 challenges (e.g., cloudflare, route53, exec). When set, uses DNS challenge instead of HTTP challenge. See https://go-acme.github.io/lego/dns/ for available providers.
+        env: MIREN_TLS_ACME_DNS_PROVIDER
+        toml: acme_dns_provider
+
+      acme_email:
+        type: string
+        default: ""
+        cli:
+          long: acme-email
+          description: Email address for ACME account registration (recommended for account recovery and notifications)
+        env: MIREN_TLS_ACME_EMAIL
+        toml: acme_email
+
   EtcdConfig:
     description: Etcd configuration
     fields:
