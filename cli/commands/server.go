@@ -749,11 +749,10 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 			// Use DNS challenge via certificate controller
 			certProvider := co.CertificateProvider()
 			if certProvider == nil {
-				ctx.Log.Error("DNS provider configured but certificate controller not initialized")
-			} else {
-				if err := autotls.ServeTLSWithController(sub, ctx.Log, certProvider, hs); err != nil {
-					ctx.Log.Error("failed to enable standard TLS with DNS challenge", "error", err)
-				}
+				return fmt.Errorf("DNS provider configured (%s) but certificate controller failed to initialize", dnsProvider)
+			}
+			if err := autotls.ServeTLSWithController(sub, ctx.Log, certProvider, hs); err != nil {
+				ctx.Log.Error("failed to enable standard TLS with DNS challenge", "error", err)
 			}
 		} else {
 			// Use HTTP challenge (default - autocert)

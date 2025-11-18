@@ -204,7 +204,11 @@ func (c *Controller) loadExistingCerts(certsDir string) error {
 
 // Reconcile implements ReconcileControllerI - called for each http_route add/update and periodic resyncs
 func (c *Controller) Reconcile(ctx context.Context, route *ingress_v1alpha.HttpRoute, meta *entity.Meta) error {
-	domain := route.Host
+	domain := strings.TrimSpace(route.Host)
+	if domain == "" {
+		c.Log.Warn("http_route has empty host, skipping certificate provisioning", "route", meta.Id)
+		return nil
+	}
 	log := c.Log.With("domain", domain, "route", route.ID)
 
 	// Check if cert exists in cache and is valid

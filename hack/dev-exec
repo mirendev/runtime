@@ -58,15 +58,16 @@ if [ "$#" -eq 0 ] || [[ "$#" -eq 1 && "$1" == "bash" ]]; then
   exit
 fi
 
+# Build a properly quoted command string to preserve arguments with spaces/special chars
+# Use -s /bin/bash to ensure ANSI-C quoting ($'...' from printf %q) is supported
+CMD="cd /src && "
+for arg in "$@"; do
+  CMD+="$(printf '%q ' "$arg")"
+done
+
 # Run as root if --root flag was provided
 if [ "$RUN_AS_ROOT" = true ]; then
-  ISO_SESSION="$SESSION" iso run -- bash -c "cd /src && $*"
+  ISO_SESSION="$SESSION" iso run -- bash -c "$CMD"
 else
-  # Build a properly quoted command string to preserve arguments with spaces/special chars
-  # Use -s /bin/bash to ensure ANSI-C quoting ($'...' from printf %q) is supported
-  CMD="cd /src && "
-  for arg in "$@"; do
-    CMD+="$(printf '%q ' "$arg")"
-  done
   ISO_SESSION="$SESSION" iso run -- su -s /bin/bash dev -c "$CMD"
 fi
