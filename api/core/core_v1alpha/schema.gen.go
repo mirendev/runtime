@@ -281,7 +281,7 @@ func (o *Config) InitSchema(sb *schema.SchemaBuilder) {
 	sb.Component("commands", "dev.miren.core/config.commands", schema.Doc("The command to run for a specific service type"), schema.Many)
 	(&Commands{}).InitSchema(sb.Builder("config.commands"))
 	sb.String("entrypoint", "dev.miren.core/config.entrypoint", schema.Doc("The container entrypoint command"))
-	sb.Int64("port", "dev.miren.core/config.port", schema.Doc("[DEPRECATED] The TCP port to access, default to 3000. Use per-service port configuration instead."))
+	sb.Int64("port", "dev.miren.core/config.port", schema.Doc("[DEPRECATED] Port used for the web service; defaults to 3000. Prefer per-service ports."))
 	sb.Component("services", "dev.miren.core/config.services", schema.Doc("Per-service configuration including concurrency controls"), schema.Many)
 	(&Services{}).InitSchema(sb.Builder("config.services"))
 	sb.Component("variable", "dev.miren.core/config.variable", schema.Doc("A variable to be exposed to the app"), schema.Many)
@@ -430,7 +430,7 @@ func (o *Services) InitSchema(sb *schema.SchemaBuilder) {
 	(&Env{}).InitSchema(sb.Builder("services.env"))
 	sb.String("image", "dev.miren.core/services.image", schema.Doc("Optional container image for this service (e.g. postgres:16). If not specified, uses the app-level built image."))
 	sb.String("name", "dev.miren.core/services.name", schema.Doc("The service name (e.g. web, worker)"))
-	sb.Int64("port", "dev.miren.core/services.port", schema.Doc("The TCP port the service listens on. If not specified, defaults to the top-level port or 3000."))
+	sb.Int64("port", "dev.miren.core/services.port", schema.Doc("The TCP port the service listens on. For the web service, if not specified it falls back to the deprecated top-level port (if set) or 3000. Other services must specify services.port explicitly and do not inherit the top-level port."))
 	sb.Component("service_concurrency", "dev.miren.core/services.service_concurrency", schema.Doc("Concurrency configuration for this service"))
 	(&ServiceConcurrency{}).InitSchema(sb.Builder("services.service_concurrency"))
 }
