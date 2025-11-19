@@ -21,6 +21,7 @@
             pkgs.go_1_25
             pkgs.golangci-lint
             pkgs.gotools
+            pkgs.bun
           ];
 
           # Allow gopls to work in e2e tests
