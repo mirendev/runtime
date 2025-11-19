@@ -283,19 +283,6 @@ func (tc *TokenCache) Set(token string, claims *Claims) {
 	}
 }
 
-// Context key for storing claims
-type contextKey string
-
-const claimsContextKey contextKey = "jwt-claims"
-
-// ClaimsFromContext retrieves JWT claims from the context
-func ClaimsFromContext(ctx context.Context) *Claims {
-	if claims, ok := ctx.Value(claimsContextKey).(*Claims); ok {
-		return claims
-	}
-	return nil
-}
-
 // cleanup periodically removes expired entries
 func (tc *TokenCache) cleanup(ctx context.Context) {
 	ticker := time.NewTicker(5 * time.Minute)
