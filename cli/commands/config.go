@@ -66,7 +66,7 @@ func (c *ConfigCentric) LoadCluster() (*clientconfig.ClusterConfig, string, erro
 	if c.Cluster == "" {
 		name = cfg.ActiveCluster()
 		if name == "" {
-			return nil, "", fmt.Errorf("no cluster specified and no active cluster set")
+			return nil, "", nil
 		}
 	} else {
 		name = c.Cluster

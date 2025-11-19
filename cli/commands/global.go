@@ -112,9 +112,9 @@ func setup(ctx context.Context, flags *GlobalFlags, opts any) *Context {
 		LoadConfig() (*clientconfig.Config, error)
 	}); ok {
 		cfg, err := lc.LoadConfig()
-		if err == nil {
+		if cfg != nil {
 			s.ClientConfig = cfg
-		} else {
+		} else if err != nil && !errors.Is(err, clientconfig.ErrNoConfig) {
 			s.Log.Warn("Failed to load client config", "error", err)
 		}
 	}
@@ -123,10 +123,10 @@ func setup(ctx context.Context, flags *GlobalFlags, opts any) *Context {
 		LoadCluster() (*clientconfig.ClusterConfig, string, error)
 	}); ok {
 		cfg, name, err := lc.LoadCluster()
-		if err == nil {
+		if cfg != nil {
 			s.ClusterConfig = cfg
 			s.ClusterName = name
-		} else {
+		} else if err != nil && !errors.Is(err, clientconfig.ErrNoConfig) {
 			s.Log.Warn("Failed to load cluster config", "error", err)
 		}
 	}
