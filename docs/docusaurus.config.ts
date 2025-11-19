@@ -25,6 +25,9 @@ const config: Config = {
   organizationName: 'mirendev',
   projectName: 'runtime',
 
+  // Prevent GitHub Pages from adding trailing slashes via redirects
+  trailingSlash: false,
+
   onBrokenLinks: 'throw',
 
   // Even if you don't use internationalization, you can use this field to set

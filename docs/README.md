@@ -22,7 +22,7 @@ bun install
 bun start
 ```
 
-The development server will be available at http://localhost:3000.
+The development server will be available at http://localhost:3333.
 
 ### For Non-Nix Users
 
@@ -59,7 +59,7 @@ All commands should be run from the `docs/` directory:
 
 ### `bun start`
 
-Starts the development server with hot-reloading at http://localhost:3000.
+Starts the development server with hot-reloading at http://localhost:3333.
 
 ### `bun run build`
 
@@ -148,10 +148,10 @@ bun run build
 
 ### Port Already in Use
 
-If port 3000 is already in use, start the server on a different port:
+If port 3333 is already in use, start the server on a different port:
 
 ```bash
-bun start --port 3001
+bun start --port 3334
 ```
 
 ### Cache Issues
