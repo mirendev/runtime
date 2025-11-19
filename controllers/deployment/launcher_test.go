@@ -1227,7 +1227,7 @@ func TestPortNameAndType(t *testing.T) {
 	require.True(t, ok, "grpc-service pool should exist")
 	require.Len(t, grpcPool.SandboxSpec.Container, 1, "pool should have one container")
 	require.Len(t, grpcPool.SandboxSpec.Container[0].Port, 1, "grpc container should have one port")
-	
+
 	grpcPort := grpcPool.SandboxSpec.Container[0].Port[0]
 	assert.Equal(t, int64(9090), grpcPort.Port, "grpc service should use port 9090")
 	assert.Equal(t, "grpc", grpcPort.Name, "grpc service should have port name grpc")
@@ -1238,7 +1238,7 @@ func TestPortNameAndType(t *testing.T) {
 	require.True(t, ok, "web pool should exist")
 	require.Len(t, webPool.SandboxSpec.Container, 1, "pool should have one container")
 	require.Len(t, webPool.SandboxSpec.Container[0].Port, 1, "web container should have one port")
-	
+
 	webPort := webPool.SandboxSpec.Container[0].Port[0]
 	assert.Equal(t, int64(8080), webPort.Port, "web service should use port 8080")
 	assert.Equal(t, "http", webPort.Name, "web service should default to port name http")
