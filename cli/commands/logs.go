@@ -108,9 +108,19 @@ func Logs(ctx *Context, opts struct {
 		logs := res.Logs()
 
 		for _, l := range logs {
-			ctx.Printf("%s %s: %s\n",
+			prefix := ""
+			if l.HasSource() && l.Source() != "" {
+				source := l.Source()
+				if len(source) > 12 {
+					// Truncate: first 3 chars + ellipsis + last 8 chars
+					source = source[:3] + "…" + source[len(source)-8:]
+				}
+				prefix = "[" + source + "] "
+			}
+			ctx.Printf("%s %s: %s%s\n",
 				typ[l.Stream()],
 				standard.FromTimestamp(l.Timestamp()).Format("2006-01-02 15:04:05"),
+				prefix,
 				l.Line())
 		}
 

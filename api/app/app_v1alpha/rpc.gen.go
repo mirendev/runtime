@@ -1259,6 +1259,7 @@ type logEntryData struct {
 	Timestamp *standard.Timestamp `cbor:"0,keyasint,omitempty" json:"timestamp,omitempty"`
 	Line      *string             `cbor:"1,keyasint,omitempty" json:"line,omitempty"`
 	Stream    *string             `cbor:"2,keyasint,omitempty" json:"stream,omitempty"`
+	Source    *string             `cbor:"3,keyasint,omitempty" json:"source,omitempty"`
 }
 
 type LogEntry struct {
@@ -1305,6 +1306,21 @@ func (v *LogEntry) Stream() string {
 
 func (v *LogEntry) SetStream(stream string) {
 	v.data.Stream = &stream
+}
+
+func (v *LogEntry) HasSource() bool {
+	return v.data.Source != nil
+}
+
+func (v *LogEntry) Source() string {
+	if v.data.Source == nil {
+		return ""
+	}
+	return *v.data.Source
+}
+
+func (v *LogEntry) SetSource(source string) {
+	v.data.Source = &source
 }
 
 func (v *LogEntry) MarshalCBOR() ([]byte, error) {

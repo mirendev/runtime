@@ -422,9 +422,10 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 	res, hm := netresolve.NewLocalResolver()
 
 	var (
-		cpu  metrics.CPUUsage
-		mem  metrics.MemoryUsage
-		logs *observability.LogReader
+		cpu       metrics.CPUUsage
+		mem       metrics.MemoryUsage
+		logs      *observability.LogReader
+		logWriter *observability.PersistentLogWriter
 	)
 
 	err = ctx.Server.Populate(&mem)
@@ -442,6 +443,12 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 	err = ctx.Server.Resolve(&logs)
 	if err != nil {
 		ctx.Log.Error("failed to resolve log reader", "error", err)
+		return err
+	}
+
+	err = ctx.Server.Resolve(&logWriter)
+	if err != nil {
+		ctx.Log.Error("failed to resolve log writer", "error", err)
 		return err
 	}
 
@@ -554,6 +561,7 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 		Cpu:             &cpu,
 		HTTP:            &httpMetrics,
 		Logs:            logs,
+		LogWriter:       logWriter,
 	})
 
 	err = co.Start(sub)
@@ -673,7 +681,7 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 	ingressConfig := httpingress.IngressConfig{
 		RequestTimeout: cfg.Server.HTTPRequestTimeoutDuration(),
 	}
-	hs := httpingress.NewServer(ctx, ctx.Log, ingressConfig, client, aa, &httpMetrics)
+	hs := httpingress.NewServer(ctx, ctx.Log, ingressConfig, client, aa, &httpMetrics, logWriter)
 
 	reg.Register("app-activator", aa)
 	reg.Register("sandbox-pool-manager", spm)

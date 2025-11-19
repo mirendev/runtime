@@ -1294,6 +1294,7 @@ func (c *SandboxController) logConsumer(sb *compute.Sandbox, container string) *
 
 	attrs := map[string]string{
 		"sandbox": sb.ID.String(),
+		"source":  strings.TrimPrefix(sb.ID.String(), "sandbox/"),
 	}
 
 	if container != "" {

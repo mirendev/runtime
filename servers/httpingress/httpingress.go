@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -18,9 +19,10 @@ import (
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/api/ingress"
 	"miren.dev/runtime/components/activator"
-	"miren.dev/runtime/discovery"
 	"miren.dev/runtime/metrics"
+	"miren.dev/runtime/observability"
 	"miren.dev/runtime/pkg/entity"
+	"miren.dev/runtime/pkg/httputil"
 	"miren.dev/runtime/pkg/rpc"
 )
 
@@ -48,6 +50,7 @@ type Server struct {
 	aa activator.AppActivator
 
 	httpMetrics *metrics.HTTPMetrics
+	logWriter   observability.LogWriter
 
 	mu   sync.Mutex
 	apps map[string]*appUsage
@@ -64,6 +67,7 @@ func NewServer(
 	rpcClient rpc.Client,
 	aa activator.AppActivator,
 	httpMetrics *metrics.HTTPMetrics,
+	logWriter observability.LogWriter,
 ) *Server {
 	eac := entityserver_v1alpha.NewEntityAccessClient(rpcClient)
 
@@ -83,6 +87,7 @@ func NewServer(
 		appClient:     app.NewClient(log, rpcClient),
 		aa:            aa,
 		httpMetrics:   httpMetrics,
+		logWriter:     logWriter,
 		apps:          make(map[string]*appUsage),
 	}
 
@@ -366,7 +371,7 @@ func (h *Server) serveHTTPWithMetrics(w http.ResponseWriter, req *http.Request, 
 
 	if curLease != nil {
 		h.Log.Info("using existing lease", "app", targetAppId, "url", curLease.Lease.URL)
-		h.forwardToLease(ctx, w, req, curLease)
+		h.forwardToLease(ctx, w, req, curLease, targetAppId.String(), *appName)
 		return
 	}
 
@@ -414,21 +419,74 @@ func (h *Server) serveHTTPWithMetrics(w http.ResponseWriter, req *http.Request, 
 
 	defer h.releaseLease(ctx, localLease)
 
-	he := &discovery.HTTPEndpoint{
-		Host: actLease.URL,
-	}
-
-	he.ServeHTTP(w, req)
+	h.proxyToLease(w, req, actLease.URL, targetAppId.String(), *appName)
 }
 
-func (h *Server) forwardToLease(ctx context.Context, w http.ResponseWriter, req *http.Request, lease *lease) {
-	defer h.releaseLease(ctx, lease)
-
-	he := &discovery.HTTPEndpoint{
-		Host: lease.Lease.URL,
+func (h *Server) logRequestFromStats(appEntityID, appName string, stats httputil.ProxyStats) {
+	if h.logWriter == nil {
+		return
 	}
 
-	he.ServeHTTP(w, req)
+	// Build full path with query string
+	path := stats.RequestPath
+	if stats.RequestQuery != "" {
+		path = path + "?" + stats.RequestQuery
+	}
+
+	// Format in Heroku logfmt style with response data
+	logMsg := fmt.Sprintf("method=%s path=\"%s\" host=%s source_ip=%s body=%d status=%d response=%d duration_ms=%d",
+		stats.RequestMethod, path, stats.RequestHost, stats.RemoteAddr, stats.ContentLength,
+		stats.StatusCode, stats.ResponseBytes, stats.Duration.Milliseconds())
+
+	err := h.logWriter.WriteEntry(appEntityID, observability.LogEntry{
+		Timestamp: stats.StartTime,
+		Stream:    observability.UserOOB,
+		Body:      logMsg,
+		Attributes: map[string]string{
+			"source": "router",
+			"method": stats.RequestMethod,
+			"path":   stats.RequestPath,
+			"host":   stats.RequestHost,
+		},
+	})
+	if err != nil {
+		h.Log.Error("failed to write request log entry", "error", err, "app", appName)
+	}
+}
+
+func (h *Server) proxyToLease(w http.ResponseWriter, req *http.Request, targetURL, appEntityID, appName string) {
+	targetParsed, err := url.Parse(targetURL)
+	if err != nil {
+		h.Log.Error("failed to parse target URL", "error", err, "url", targetURL)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	proxy := &httputil.ReverseProxy{
+		Director: func(outReq *http.Request) {
+			outReq.URL.Scheme = targetParsed.Scheme
+			outReq.URL.Host = targetParsed.Host
+
+			// Set X-Forwarded-Proto to indicate the original protocol
+			if req.TLS == nil {
+				outReq.Header.Set("X-Forwarded-Proto", "http")
+			} else {
+				outReq.Header.Set("X-Forwarded-Proto", "https")
+			}
+
+			outReq.Header.Set("X-Forwarded-Host", req.Host)
+		},
+		Callback: func(stats httputil.ProxyStats) {
+			h.logRequestFromStats(appEntityID, appName, stats)
+		},
+	}
+
+	proxy.ServeHTTP(w, req)
+}
+
+func (h *Server) forwardToLease(ctx context.Context, w http.ResponseWriter, req *http.Request, lease *lease, appEntityID, appName string) {
+	defer h.releaseLease(ctx, lease)
+	h.proxyToLease(w, req, lease.Lease.URL, appEntityID, appName)
 }
 
 /*

@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/moby/buildkit/client"
 	"github.com/tonistiigi/fsutil"
@@ -21,6 +22,7 @@ import (
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/appconfig"
 	"miren.dev/runtime/components/netresolve"
+	"miren.dev/runtime/observability"
 	"miren.dev/runtime/pkg/cond"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/idgen"
@@ -38,10 +40,11 @@ type Builder struct {
 	TempDir   string
 	Registry  string
 
-	Resolver netresolve.Resolver
+	Resolver  netresolve.Resolver
+	LogWriter observability.LogWriter
 }
 
-func NewBuilder(log *slog.Logger, eas *entityserver_v1alpha.EntityAccessClient, appClient *app.Client, res netresolve.Resolver, tmpdir string) *Builder {
+func NewBuilder(log *slog.Logger, eas *entityserver_v1alpha.EntityAccessClient, appClient *app.Client, res netresolve.Resolver, tmpdir string, logWriter observability.LogWriter) *Builder {
 	return &Builder{
 		Log:       log.With("module", "builder"),
 		EAS:       eas,
@@ -49,6 +52,7 @@ func NewBuilder(log *slog.Logger, eas *entityserver_v1alpha.EntityAccessClient, 
 		Resolver:  res,
 		TempDir:   tmpdir,
 		ec:        entityserver.NewClient(log, eas),
+		LogWriter: logWriter,
 	}
 }
 
@@ -582,6 +586,9 @@ func (b *Builder) BuildFromTar(ctx context.Context, state *build_v1alpha.Builder
 
 	b.Log.Info("app version updated", "app", name, "version", mrv.Version)
 
+	// Log the deployment to the app's logs
+	b.logDeployment(ctx, name, mrv.Version, artifactName)
+
 	// Note: Old version pool cleanup is now handled by the DeploymentLauncher controller
 	// via the referenced_by_versions field. The launcher removes version references and
 	// scales down pools when they're no longer in use.
@@ -589,6 +596,37 @@ func (b *Builder) BuildFromTar(ctx context.Context, state *build_v1alpha.Builder
 	state.Results().SetVersion(mrv.Version)
 
 	return nil
+}
+
+func (b *Builder) logDeployment(ctx context.Context, appName, version, artifact string) {
+	if b.LogWriter == nil {
+		return
+	}
+
+	// Get app entity ID
+	var appRec core_v1alpha.App
+	err := b.ec.Get(ctx, appName, &appRec)
+	if err != nil {
+		b.Log.Warn("failed to get app for deployment logging", "app", appName, "error", err)
+		return
+	}
+
+	// Format in Heroku logfmt style
+	logMsg := fmt.Sprintf("version=%s artifact=%s status=deployed", version, artifact)
+
+	err = b.LogWriter.WriteEntry(appRec.ID.String(), observability.LogEntry{
+		Timestamp: time.Now(),
+		Stream:    observability.UserOOB,
+		Body:      logMsg,
+		Attributes: map[string]string{
+			"source":   "builder",
+			"version":  version,
+			"artifact": artifact,
+		},
+	})
+	if err != nil {
+		b.Log.Error("failed to write deployment log entry", "error", err, "app", appName)
+	}
 }
 
 func (b *Builder) readProcFile(dfs fsutil.FS) (map[string]string, error) {
