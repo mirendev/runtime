@@ -200,6 +200,17 @@ func TestActivatorRecoverSandboxesWithEntityServer(t *testing.T) {
 		Status: compute_v1alpha.RUNNING,
 		Spec: compute_v1alpha.SandboxSpec{
 			Version: appVer.ID,
+			Container: []compute_v1alpha.SandboxSpecContainer{
+				{
+					Port: []compute_v1alpha.SandboxSpecContainerPort{
+						{
+							Port: 8080,
+							Name: "http",
+							Type: "http",
+						},
+					},
+				},
+			},
 		},
 		Network: []compute_v1alpha.Network{
 			{Address: "10.0.0.100"},
