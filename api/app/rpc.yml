@@ -261,6 +261,9 @@ types:
       - name: stream
         type: string
         index: 2
+      - name: source
+        type: string
+        index: 3
 
   - type: UserInfo
     fields:

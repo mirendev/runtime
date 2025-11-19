@@ -220,7 +220,7 @@ func (l *LogReader) Read(ctx context.Context, id string, opts ...LogReaderOption
 
 	limit := o.Limit
 	if limit == 0 {
-		limit = 100
+		limit = 1000
 	}
 
 	// Build LogsQL query - use simple field matching

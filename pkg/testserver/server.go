@@ -207,7 +207,7 @@ func TestServer(t *testing.T) error {
 	ingressConfig := httpingress.IngressConfig{
 		RequestTimeout: 60 * time.Second, // Default timeout for tests
 	}
-	hs := httpingress.NewServer(ctx, log, ingressConfig, client, aa, nil)
+	hs := httpingress.NewServer(ctx, log, ingressConfig, client, aa, nil, nil)
 
 	reg.Register("app-activator", aa)
 	reg.Register("sandbox-pool-manager", spm)

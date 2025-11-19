@@ -60,6 +60,9 @@ func (s *Server) AppLogs(ctx context.Context, state *app_v1alpha.LogsAppLogs) er
 		le.SetTimestamp(standard.ToTimestamp(entry.Timestamp))
 		le.SetLine(entry.Body)
 		le.SetStream(string(entry.Stream))
+		if source, ok := entry.Attributes["source"]; ok {
+			le.SetSource(source)
+		}
 
 		ret = append(ret, le)
 	}
@@ -96,6 +99,9 @@ func (s *Server) SandboxLogs(ctx context.Context, state *app_v1alpha.LogsSandbox
 		le.SetTimestamp(standard.ToTimestamp(entry.Timestamp))
 		le.SetLine(entry.Body)
 		le.SetStream(string(entry.Stream))
+		if source, ok := entry.Attributes["source"]; ok {
+			le.SetSource(source)
+		}
 
 		ret = append(ret, le)
 	}
