@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/netip"
 	"os"
@@ -458,6 +459,15 @@ func (c *SandboxController) checkSandbox(ctx context.Context, co *compute.Sandbo
 		}
 	}
 
+	// Check network connectivity for RUNNING sandboxes
+	// This catches cases where the task is running but the network has failed
+	if co.Status == compute.RUNNING {
+		if !c.checkNetworkHealth(ctx, co) {
+			c.Log.Warn("sandbox network health check failed", "sandbox_id", co.ID)
+			return unhealthy, nil
+		}
+	}
+
 	return same, nil
 }
 
@@ -521,6 +531,66 @@ func (c *SandboxController) isContainerHealthy(ctx context.Context, containerID 
 		c.Log.Debug("task in unknown/unhealthy state", "id", containerID, "status", status.Status)
 		return false
 	}
+}
+
+// checkNetworkHealth verifies that a sandbox is reachable on its network address
+// Returns true if the sandbox has no ports (background workers) or if at least one port is reachable
+// Returns false if the sandbox has ports but none are reachable
+func (c *SandboxController) checkNetworkHealth(ctx context.Context, sb *compute.Sandbox) bool {
+	// Skip if sandbox has no network allocated
+	if len(sb.Network) == 0 {
+		c.Log.Debug("sandbox has no network, skipping network health check", "sandbox_id", sb.ID)
+		return true
+	}
+
+	// Parse network address to get IP
+	addr := sb.Network[0].Address
+	ip, err := netutil.ParseNetworkAddress(addr)
+	if err != nil {
+		c.Log.Debug("failed to parse sandbox address", "sandbox_id", sb.ID, "address", addr, "error", err)
+		return false
+	}
+
+	// Iterate over containers, trying each container's first port until one succeeds
+	checkedCount := 0
+	dialer := &net.Dialer{
+		Timeout: 2 * time.Second,
+	}
+
+	for _, container := range sb.Spec.Container {
+		if len(container.Port) == 0 {
+			continue
+		}
+
+		// Check first port for this container
+		port := container.Port[0].Port
+		address := net.JoinHostPort(ip, fmt.Sprintf("%d", port))
+		checkedCount++
+
+		conn, err := dialer.DialContext(ctx, "tcp", address)
+		if err != nil {
+			c.Log.Debug("network health check failed for port",
+				"sandbox_id", sb.ID,
+				"container_name", container.Name,
+				"address", address,
+				"error", err)
+			continue
+		}
+		conn.Close()
+
+		// At least one port is reachable, network is healthy
+		c.Log.Debug("network health check passed", "sandbox_id", sb.ID, "address", address)
+		return true
+	}
+
+	// If no ports were checked (background worker), consider it healthy
+	if checkedCount == 0 {
+		c.Log.Debug("sandbox has no exposed ports, skipping network health check", "sandbox_id", sb.ID)
+		return true
+	}
+
+	// All checked ports failed
+	return false
 }
 
 // reattachLogs reattaches log consumers to a container's task after controller restart.
@@ -740,14 +810,16 @@ func (c *SandboxController) createSandbox(ctx context.Context, co *compute.Sandb
 
 	c.Log.Info("sandbox started", "id", co.ID, "namespace", c.Namespace)
 
-	// Wait for ports with a shorter timeout (5 seconds per port)
-	// Many sandboxes don't actually bind their declared ports immediately
-	portTimeout := 5 * time.Second
+	// Wait for ports to verify network connectivity before marking RUNNING
+	// Fast-path: most healthy apps bind within 1-2 seconds
+	// Slow-path: allow up to 10 seconds for slow-starting apps
+	// Fail-hard: if ports never bind, fail the sandbox so pool can retry
+	portTimeout := 10 * time.Second
 	for _, wp := range waitPorts {
 		c.Log.Info("waiting for ports to be bound", "id", cid, "port", wp.port, "timeout", portTimeout)
 		if err := c.waitForPort(ctx, wp.id, wp.port, portTimeout); err != nil {
-			c.Log.Warn("failed to wait for port binding", "id", cid, "port", wp.port, "error", err)
-			// Continue anyway - the port might bind later or might not be critical
+			return fmt.Errorf("sandbox failed network health check: port %d not reachable after %v: %w",
+				wp.port, portTimeout, err)
 		}
 	}
 

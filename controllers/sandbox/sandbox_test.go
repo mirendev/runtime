@@ -1411,4 +1411,93 @@ func TestSandbox(t *testing.T) {
 		r.Equal("component.sandbox_spec.container.port.protocol.udp", string(mapLegacyProtocol(compute.UDP)))
 	})
 
+	t.Run("checkNetworkHealth returns true for sandboxes without ports", func(t *testing.T) {
+		r := require.New(t)
+
+		c := &SandboxController{
+			Log: slog.Default(),
+		}
+
+		ctx := context.Background()
+
+		// Sandbox with network but no exposed ports (background worker)
+		sb := &compute.Sandbox{
+			ID: entity.Id("test-sb"),
+			Network: []compute.Network{
+				{Address: "10.8.0.1/32"},
+			},
+			Spec: compute.SandboxSpec{
+				Container: []compute.SandboxSpecContainer{
+					{
+						Name: "worker",
+						Port: []compute.SandboxSpecContainerPort{}, // No ports
+					},
+				},
+			},
+		}
+
+		healthy := c.checkNetworkHealth(ctx, sb)
+		r.True(healthy, "sandbox without ports should be considered healthy")
+	})
+
+	t.Run("checkNetworkHealth returns true for sandboxes without network", func(t *testing.T) {
+		r := require.New(t)
+
+		c := &SandboxController{
+			Log: slog.Default(),
+		}
+
+		ctx := context.Background()
+
+		// Sandbox with no network allocated
+		sb := &compute.Sandbox{
+			ID:      entity.Id("test-sb"),
+			Network: []compute.Network{},
+			Spec: compute.SandboxSpec{
+				Container: []compute.SandboxSpecContainer{
+					{
+						Name: "app",
+						Port: []compute.SandboxSpecContainerPort{
+							{Port: 8080},
+						},
+					},
+				},
+			},
+		}
+
+		healthy := c.checkNetworkHealth(ctx, sb)
+		r.True(healthy, "sandbox without network should be considered healthy")
+	})
+
+	t.Run("checkNetworkHealth returns false for unreachable ports", func(t *testing.T) {
+		r := require.New(t)
+
+		c := &SandboxController{
+			Log: slog.Default(),
+		}
+
+		ctx := context.Background()
+
+		// Sandbox with network and ports, but ports are unreachable
+		sb := &compute.Sandbox{
+			ID: entity.Id("test-sb"),
+			Network: []compute.Network{
+				{Address: "192.0.2.1/32"}, // TEST-NET-1, should be unreachable
+			},
+			Spec: compute.SandboxSpec{
+				Container: []compute.SandboxSpecContainer{
+					{
+						Name: "app",
+						Port: []compute.SandboxSpecContainerPort{
+							{Port: 9999}, // Unreachable port
+						},
+					},
+				},
+			},
+		}
+
+		healthy := c.checkNetworkHealth(ctx, sb)
+		r.False(healthy, "sandbox with unreachable ports should be considered unhealthy")
+	})
+
 }
