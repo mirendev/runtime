@@ -89,6 +89,12 @@ kinds:
             port:
               type: int
               doc: The TCP port the service listens on. For the web service, if not specified it falls back to the deprecated top-level port (if set) or 3000. Other services must specify services.port explicitly and do not inherit the top-level port.
+            port_name:
+              type: string
+              doc: The name of the port (e.g. http, grpc). Defaults to "http" if not specified.
+            port_type:
+              type: string
+              doc: The type of the port (e.g. http, tcp). Defaults to "http" if not specified.
             image:
               type: string
               doc: Optional container image for this service (e.g. postgres:16). If not specified, uses the app-level built image.

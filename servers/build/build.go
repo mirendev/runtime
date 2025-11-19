@@ -122,6 +122,16 @@ func buildServicesConfig(appConfig *appconfig.AppConfig, procfileServices map[st
 				svc.Port = int64(serviceConfig.Port)
 			}
 
+			// Copy port name if specified
+			if serviceConfig.PortName != "" {
+				svc.PortName = serviceConfig.PortName
+			}
+
+			// Copy port type if specified
+			if serviceConfig.PortType != "" {
+				svc.PortType = serviceConfig.PortType
+			}
+
 			if serviceConfig.Concurrency != nil {
 				svc.ServiceConcurrency = core_v1alpha.ServiceConcurrency{
 					Mode:                serviceConfig.Concurrency.Mode,

@@ -45,6 +45,8 @@ type DiskConfig struct {
 type ServiceConfig struct {
 	Command     string                    `toml:"command"`
 	Port        int                       `toml:"port"`
+	PortName    string                    `toml:"port_name"`
+	PortType    string                    `toml:"port_type"`
 	Image       string                    `toml:"image"`
 	EnvVars     []AppEnvVar               `toml:"env"`
 	Concurrency *ServiceConcurrencyConfig `toml:"concurrency"`

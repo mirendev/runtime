@@ -264,13 +264,23 @@ func (l *Launcher) buildSandboxSpec(
 		Directory: "/app",
 	}
 
-	// Determine port from service config, falling back to global config, then default
+	// Determine port configuration from service config, falling back to global config, then defaults
 	port := int64(0)
+	portName := ""
+	portType := ""
 
 	// Check for per-service port configuration
 	for _, svc := range ver.Config.Services {
-		if svc.Name == serviceName && svc.Port > 0 {
-			port = svc.Port
+		if svc.Name == serviceName {
+			if svc.Port > 0 {
+				port = svc.Port
+			}
+			if svc.PortName != "" {
+				portName = svc.PortName
+			}
+			if svc.PortType != "" {
+				portType = svc.PortType
+			}
 			break
 		}
 	}
@@ -288,11 +298,19 @@ func (l *Launcher) buildSandboxSpec(
 
 	// Add port configuration if a port was determined
 	if port > 0 {
+		// Default port name and type to "http" if not specified
+		if portName == "" {
+			portName = "http"
+		}
+		if portType == "" {
+			portType = "http"
+		}
+
 		appCont.Port = []compute_v1alpha.SandboxSpecContainerPort{
 			{
 				Port: port,
-				Name: "http",
-				Type: "http",
+				Name: portName,
+				Type: portType,
 			},
 		}
 	}

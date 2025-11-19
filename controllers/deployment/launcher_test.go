@@ -1152,3 +1152,95 @@ func TestWebServiceDefaultPort(t *testing.T) {
 	require.Len(t, pool.SandboxSpec.Container[0].Port, 1, "web container should have one port")
 	assert.Equal(t, int64(3000), pool.SandboxSpec.Container[0].Port[0].Port, "web service should default to port 3000")
 }
+
+// TestPortNameAndType tests that launcher correctly wires port_name and port_type
+func TestPortNameAndType(t *testing.T) {
+	ctx := context.Background()
+	log := testutils.TestLogger(t)
+
+	server, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	// Create app
+	app := &core_v1alpha.App{
+		Project: entity.Id("project-1"),
+	}
+	appID, err := server.Client.Create(ctx, "test-app", app)
+	require.NoError(t, err)
+	app.ID = appID
+
+	// Create version with custom port_name and port_type
+	version := &core_v1alpha.AppVersion{
+		App:      app.ID,
+		Version:  "v1",
+		ImageUrl: "test:latest",
+		Config: core_v1alpha.Config{
+			Services: []core_v1alpha.Services{
+				{
+					Name:     "grpc-service",
+					Port:     9090,
+					PortName: "grpc",
+					PortType: "grpc",
+					ServiceConcurrency: core_v1alpha.ServiceConcurrency{
+						Mode:         "fixed",
+						NumInstances: 1,
+					},
+				},
+				{
+					Name: "web",
+					Port: 8080,
+					// No port_name or port_type - should default to "http" and "http"
+					ServiceConcurrency: core_v1alpha.ServiceConcurrency{
+						Mode:                "auto",
+						RequestsPerInstance: 10,
+					},
+				},
+			},
+		},
+	}
+	verID, err := server.Client.Create(ctx, "test-ver", version)
+	require.NoError(t, err)
+	version.ID = verID
+
+	// Set as active version
+	app.ActiveVersion = version.ID
+	err = server.Client.Update(ctx, app)
+	require.NoError(t, err)
+
+	// Create launcher and reconcile
+	launcher := NewLauncher(log, server.EAC)
+	err = launcher.Reconcile(ctx, app, nil)
+	require.NoError(t, err)
+
+	// Get all pools
+	pools := listAllPools(t, ctx, server)
+	require.Len(t, pools, 2, "Expected two pools")
+
+	// Build map of pools by service
+	poolsByService := make(map[string]*compute_v1alpha.SandboxPool)
+	for i := range pools {
+		poolsByService[pools[i].Service] = &pools[i]
+	}
+
+	// Verify grpc-service has custom port_name and port_type
+	grpcPool, ok := poolsByService["grpc-service"]
+	require.True(t, ok, "grpc-service pool should exist")
+	require.Len(t, grpcPool.SandboxSpec.Container, 1, "pool should have one container")
+	require.Len(t, grpcPool.SandboxSpec.Container[0].Port, 1, "grpc container should have one port")
+	
+	grpcPort := grpcPool.SandboxSpec.Container[0].Port[0]
+	assert.Equal(t, int64(9090), grpcPort.Port, "grpc service should use port 9090")
+	assert.Equal(t, "grpc", grpcPort.Name, "grpc service should have port name grpc")
+	assert.Equal(t, "grpc", grpcPort.Type, "grpc service should have port type grpc")
+
+	// Verify web service has default port_name and port_type
+	webPool, ok := poolsByService["web"]
+	require.True(t, ok, "web pool should exist")
+	require.Len(t, webPool.SandboxSpec.Container, 1, "pool should have one container")
+	require.Len(t, webPool.SandboxSpec.Container[0].Port, 1, "web container should have one port")
+	
+	webPort := webPool.SandboxSpec.Container[0].Port[0]
+	assert.Equal(t, int64(8080), webPort.Port, "web service should use port 8080")
+	assert.Equal(t, "http", webPort.Name, "web service should default to port name http")
+	assert.Equal(t, "http", webPort.Type, "web service should default to port type http")
+}
