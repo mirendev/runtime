@@ -886,7 +886,7 @@ func (a *localActivator) watchSandboxes(ctx context.Context) {
 		a.log.Info("starting sandbox discovery watch")
 
 		_, err := a.eac.WatchIndex(ctx, entity.Ref(entity.EntityKind, compute_v1alpha.KindSandbox), stream.Callback(func(op *entityserver_v1alpha.EntityOp) error {
-			if !op.HasEntity() {
+			if op.IsDelete() {
 				// Entity was deleted - clean up from tracking
 				// The ID should still be available in the operation even without the entity
 				if op.HasEntityId() {
