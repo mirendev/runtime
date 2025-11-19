@@ -35,6 +35,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math/rand/v2"
+	"slices"
 	"sync"
 	"time"
 
@@ -886,6 +887,11 @@ func (a *localActivator) watchSandboxes(ctx context.Context) {
 
 		_, err := a.eac.WatchIndex(ctx, entity.Ref(entity.EntityKind, compute_v1alpha.KindSandbox), stream.Callback(func(op *entityserver_v1alpha.EntityOp) error {
 			if !op.HasEntity() {
+				// Entity was deleted - clean up from tracking
+				// The ID should still be available in the operation even without the entity
+				if op.HasEntityId() {
+					a.removeSandboxFromTracking(entity.Id(op.EntityId()))
+				}
 				return nil
 			}
 
@@ -1519,10 +1525,10 @@ func (a *localActivator) syncLastActivityOnce(ctx context.Context) {
 				a.log.Debug("skipping last_activity sync due to conflict",
 					"sandbox", u.sandboxID)
 			} else if errors.Is(err, cond.ErrNotFound{}) {
-				// Sandbox deleted, skip
-				a.log.Debug("skipping last_activity sync, sandbox not found",
+				// Sandbox deleted - remove from tracking
+				a.log.Info("sandbox not found during last_activity sync, removing from tracking",
 					"sandbox", u.sandboxID)
-				// TODO remove sandbox from in-memory tracking?
+				a.removeSandboxFromTracking(u.sandboxID)
 			}
 		} else {
 			// Update our in-memory copy to reflect the sync
@@ -1539,5 +1545,27 @@ func (a *localActivator) syncLastActivityOnce(ctx context.Context) {
 		}
 
 		cancel()
+	}
+}
+
+// removeSandboxFromTracking removes a sandbox from all internal tracking maps.
+// This should be called when a sandbox entity is deleted from the store or becomes permanently unavailable.
+func (a *localActivator) removeSandboxFromTracking(sandboxID entity.Id) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	// Find and remove the sandbox from poolSandboxes
+	for poolID, ps := range a.poolSandboxes {
+		for i, s := range ps.sandboxes {
+			if s.sandbox.ID == sandboxID {
+				// Remove sandbox from slice
+				ps.sandboxes = slices.Delete(ps.sandboxes, i, i+1)
+				a.log.Info("removed sandbox from tracking",
+					"sandbox", sandboxID,
+					"pool", poolID,
+					"remaining_sandboxes", len(ps.sandboxes))
+				return
+			}
+		}
 	}
 }
