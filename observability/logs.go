@@ -211,6 +211,8 @@ func logsQLQuote(s string) string {
 	return `"` + s + `"`
 }
 
+const DefaultLogReadLimit = 1000
+
 func (l *LogReader) Read(ctx context.Context, id string, opts ...LogReaderOption) ([]LogEntry, error) {
 	var o logReadOpts
 
@@ -220,7 +222,7 @@ func (l *LogReader) Read(ctx context.Context, id string, opts ...LogReaderOption
 
 	limit := o.Limit
 	if limit == 0 {
-		limit = 1000
+		limit = DefaultLogReadLimit
 	}
 
 	// Build LogsQL query - use simple field matching
@@ -245,7 +247,7 @@ func (l *LogReader) ReadBySandbox(ctx context.Context, sandboxID string, opts ..
 
 	limit := o.Limit
 	if limit == 0 {
-		limit = 100
+		limit = DefaultLogReadLimit
 	}
 
 	// Build LogsQL query filtering by sandbox attribute
