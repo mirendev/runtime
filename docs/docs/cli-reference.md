@@ -49,10 +49,10 @@ The Miren CLI (`miren`) provides commands for managing applications and deployme
 - `miren sandbox stop` - Stop a sandbox
 - `miren sandbox delete` - Delete a dead sandbox
 - `miren sandbox metrics` - Get metrics from a sandbox
-- `miren entity list` - List entities
-- `miren entity get` - Get an entity
-- `miren entity delete` - Delete an entity
-- `miren entity put` - Put an entity
+- `miren debug entity list` - List entities
+- `miren debug entity get` - Get an entity
+- `miren debug entity delete` - Delete an entity
+- `miren debug entity put` - Put an entity
 
 ### Utility Commands
 
