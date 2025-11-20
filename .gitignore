@@ -11,3 +11,6 @@ dist/
 coverage.out
 coverage.html
 *.coverprofile
+
+# ISO extracted binaries
+.iso/iso-linux-*
