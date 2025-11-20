@@ -36,12 +36,12 @@ RUN if [ "$(uname -m)" = "aarch64" ]; then \
         echo "https://github.com/containerd/nerdctl/releases/download/v2.0.5/nerdctl-2.0.5-linux-amd64.tar.gz" > /tmp/nerdctl_url; \
     fi && \
     mkdir -p /upstream && \
-    curl -L -o /upstream/containerd.tar.gz "$(cat /tmp/containerd_url)" && \
-    curl -L -o /upstream/buildkit.tar.gz "$(cat /tmp/buildkit_url)" && \
-    curl -L -o /upstream/nerdctl.tar.gz "$(cat /tmp/nerdctl_url)" && \
-    curl -L -o /upstream/runc "$(cat /tmp/runc_url)" && \
-    curl -L -o /upstream/runsc "$(cat /tmp/runsc_url)" && \
-    curl -L -o /upstream/containerd-shim-runsc-v1 "$(cat /tmp/runscshim_url)" && \
+    curl -fL -o /upstream/containerd.tar.gz "$(cat /tmp/containerd_url)" && \
+    curl -fL -o /upstream/buildkit.tar.gz "$(cat /tmp/buildkit_url)" && \
+    curl -fL -o /upstream/nerdctl.tar.gz "$(cat /tmp/nerdctl_url)" && \
+    curl -fL -o /upstream/runc "$(cat /tmp/runc_url)" && \
+    curl -fL -o /upstream/runsc "$(cat /tmp/runsc_url)" && \
+    curl -fL -o /upstream/containerd-shim-runsc-v1 "$(cat /tmp/runscshim_url)" && \
     chmod +x /upstream/runc /upstream/runsc /upstream/containerd-shim-runsc-v1 && \
     tar -C /usr/local -xvf /upstream/containerd.tar.gz && \
     tar -C /usr/local -xvf /upstream/buildkit.tar.gz && \
