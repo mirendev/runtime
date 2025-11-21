@@ -225,7 +225,7 @@ Warning: These commands are intended for advanced users and developers. They may
 		},
 
 		"debug test load": func() (cli.Command, error) {
-			return Infer("test load", "Loadtest a URL", TestLoad), nil
+			return Infer("debug test load", "Loadtest a URL", TestLoad), nil
 		},
 
 		"debug ctr nuke": func() (cli.Command, error) {
@@ -245,19 +245,19 @@ Warning: These commands are intended for advanced users and developers. They may
 		},
 
 		"debug entity get": func() (cli.Command, error) {
-			return Infer("entity get", "Get an entity", EntityGet), nil
+			return Infer("debug entity get", "Get an entity", EntityGet), nil
 		},
 
 		"debug entity put": func() (cli.Command, error) {
-			return Infer("entity put", "Put an entity", EntityPut), nil
+			return Infer("debug entity put", "Put an entity", EntityPut), nil
 		},
 
 		"debug entity delete": func() (cli.Command, error) {
-			return Infer("entity delete", "Delete an entity", EntityDelete), nil
+			return Infer("debug entity delete", "Delete an entity", EntityDelete), nil
 		},
 
 		"debug entity list": func() (cli.Command, error) {
-			return Infer("entity list", "List entities", EntityList), nil
+			return Infer("debug entity list", "List entities", EntityList), nil
 		},
 
 		"debug entity create": func() (cli.Command, error) {
