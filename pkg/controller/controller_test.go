@@ -1136,3 +1136,554 @@ func TestReconcileController_InFlightWithMultipleEntities(t *testing.T) {
 		t.Logf("  - Note: Same worker handled both entities (still correct, just less concurrent)")
 	}
 }
+
+func TestReconcileController_SkipsSelfGeneratedWatchEvents(t *testing.T) {
+	log := slog.New(slogfmt.NewTestHandler(t, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+	store := entity.NewMockStore()
+	server := &entityserver.EntityServer{
+		Log:   log,
+		Store: store,
+	}
+
+	sc := &entityserver_v1alpha.EntityAccessClient{
+		Client: rpc.LocalClient(entityserver_v1alpha.AdaptEntityAccess(server)),
+	}
+
+	testIndex := entity.Any(entity.Type, "test/type")
+
+	// Add entity to store - must set revisions manually for watch event simulation
+	// We'll create entities with different revisions that watch events will reference
+	entity1Rev1 := entity.New(
+		entity.Ident, "test/entity1",
+		entity.Type, "test/type",
+	)
+	entity1Rev1.SetRevision(1)
+	store.AddEntity(entity.Id("test/entity1"), entity1Rev1)
+
+	processedEvents := make(chan Event, 10)
+
+	handler := func(ctx context.Context, event Event) ([]entity.Attr, error) {
+		processedEvents <- event
+		// Don't return any updates - we're just testing the skip logic
+		return nil, nil
+	}
+
+	controller := NewReconcileController(
+		"test-controller",
+		log,
+		testIndex,
+		sc,
+		handler,
+		0, // no resync
+		1, // single worker
+	)
+
+	// Pre-record revision 2 as if controller wrote it
+	controller.RecordWrite(2)
+
+	// Setup watch to send multiple events
+	store.OnWatchIndex = func(ctx context.Context, attr entity.Attr) (clientv3.WatchChan, error) {
+		ch := make(chan clientv3.WatchResponse)
+
+		go func() {
+			// Send event for external write (revision 1 - already in store - should be processed)
+			// This is a MODIFY event (CreateRevision < ModRevision)
+			ch <- clientv3.WatchResponse{
+				Events: []*clientv3.Event{
+					{
+						Type: clientv3.EventTypePut,
+						Kv: &mvccpb.KeyValue{
+							Key:            []byte("index/key"),
+							Value:          []byte("test/entity1"),
+							CreateRevision: 100,
+							ModRevision:    101,
+						},
+						PrevKv: &mvccpb.KeyValue{
+							Value:       []byte("test/entity1"),
+							ModRevision: 100,
+						},
+					},
+				},
+			}
+
+			time.Sleep(50 * time.Millisecond)
+
+			// Update entity to revision 2 in store
+			entity1Rev2 := entity.New(
+				entity.Ident, "test/entity1",
+				entity.Type, "test/type",
+			)
+			entity1Rev2.SetRevision(2)
+			store.AddEntity(entity.Id("test/entity1"), entity1Rev2)
+
+			// Send event for controller's own write (revision 2 - should be skipped)
+			ch <- clientv3.WatchResponse{
+				Events: []*clientv3.Event{
+					{
+						Type: clientv3.EventTypePut,
+						Kv: &mvccpb.KeyValue{
+							Key:            []byte("index/key"),
+							Value:          []byte("test/entity1"),
+							CreateRevision: 100,
+							ModRevision:    102,
+						},
+						PrevKv: &mvccpb.KeyValue{
+							Value:       []byte("test/entity1"),
+							ModRevision: 101,
+						},
+					},
+				},
+			}
+
+			time.Sleep(50 * time.Millisecond)
+
+			// Update entity to revision 3 in store
+			entity1Rev3 := entity.New(
+				entity.Ident, "test/entity1",
+				entity.Type, "test/type",
+			)
+			entity1Rev3.SetRevision(3)
+			store.AddEntity(entity.Id("test/entity1"), entity1Rev3)
+
+			// Send event for another external write (revision 3 - should be processed)
+			ch <- clientv3.WatchResponse{
+				Events: []*clientv3.Event{
+					{
+						Type: clientv3.EventTypePut,
+						Kv: &mvccpb.KeyValue{
+							Key:            []byte("index/key"),
+							Value:          []byte("test/entity1"),
+							CreateRevision: 100,
+							ModRevision:    103,
+						},
+						PrevKv: &mvccpb.KeyValue{
+							Value:       []byte("test/entity1"),
+							ModRevision: 102,
+						},
+					},
+				},
+			}
+		}()
+
+		return ch, nil
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	defer cancel()
+
+	err := controller.Start(ctx)
+	require.NoError(t, err)
+
+	// Verify: We should see events for revisions 1 and 3, but NOT 2
+	// (Also will see initial ADDED event with rev 0, which we ignore)
+	receivedRevisions := []int64{}
+
+	// Collect events until we have 2 watch events (ignoring ADDED)
+	timeout := time.After(500 * time.Millisecond)
+	for len(receivedRevisions) < 2 {
+		select {
+		case event := <-processedEvents:
+			// Only count watch events (UPDATED), not initial ADDED
+			if event.Type != EventAdded {
+				receivedRevisions = append(receivedRevisions, event.Rev)
+			}
+		case <-timeout:
+			t.Fatalf("timeout waiting for events, got: %v", receivedRevisions)
+		}
+	}
+
+	controller.Stop()
+
+	// Verify we got revisions 1 and 3, but not 2
+	assert.Equal(t, []int64{1, 3}, receivedRevisions, "Should skip self-generated revision 2")
+}
+
+func TestReconcileController_RingWraparound(t *testing.T) {
+	log := slog.New(slogfmt.NewTestHandler(t, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+	store := entity.NewMockStore()
+	server := &entityserver.EntityServer{
+		Log:   log,
+		Store: store,
+	}
+
+	sc := &entityserver_v1alpha.EntityAccessClient{
+		Client: rpc.LocalClient(entityserver_v1alpha.AdaptEntityAccess(server)),
+	}
+
+	testIndex := entity.Any(entity.Type, "test/type")
+
+	// Add entity to store with revision 1 (for first watch event)
+	entity1Rev1 := entity.New(
+		entity.Ident, "test/entity1",
+		entity.Type, "test/type",
+	)
+	entity1Rev1.SetRevision(1)
+	store.AddEntity(entity.Id("test/entity1"), entity1Rev1)
+
+	processedEvents := make(chan Event, 10)
+	handler := func(ctx context.Context, event Event) ([]entity.Attr, error) {
+		processedEvents <- event
+		return nil, nil
+	}
+
+	controller := NewReconcileController(
+		"test-controller",
+		log,
+		testIndex,
+		sc,
+		handler,
+		0, // no resync
+		1, // single worker
+	)
+
+	// Replace the ring with a small one for testing wraparound
+	controller.recentWrites = NewRingSet(3)
+	// Record revisions 1, 2, 3
+	controller.RecordWrite(1)
+	controller.RecordWrite(2)
+	controller.RecordWrite(3)
+	// Verify all are in the ring
+	assert.True(t, controller.recentWrites.Contains(1))
+	assert.True(t, controller.recentWrites.Contains(2))
+	assert.True(t, controller.recentWrites.Contains(3))
+	// Add revision 4 - should evict revision 1
+	controller.RecordWrite(4)
+	// Verify wraparound
+	assert.False(t, controller.recentWrites.Contains(1), "Revision 1 should be evicted")
+	assert.True(t, controller.recentWrites.Contains(2))
+	assert.True(t, controller.recentWrites.Contains(3))
+	assert.True(t, controller.recentWrites.Contains(4))
+
+	// Setup watch BEFORE starting controller
+	store.OnWatchIndex = func(ctx context.Context, attr entity.Attr) (clientv3.WatchChan, error) {
+		ch := make(chan clientv3.WatchResponse)
+
+		go func() {
+			// Wait for watch to be fully established
+			time.Sleep(20 * time.Millisecond)
+
+			// Event for evicted revision 1 (should be processed)
+			// Entity already has revision 1 in store
+			ch <- clientv3.WatchResponse{
+				Events: []*clientv3.Event{
+					{
+						Type: clientv3.EventTypePut,
+						Kv: &mvccpb.KeyValue{
+							Key:            []byte("index/key"),
+							Value:          []byte("test/entity1"),
+							CreateRevision: 100,
+							ModRevision:    101,
+						},
+						PrevKv: &mvccpb.KeyValue{
+							Value:       []byte("test/entity1"),
+							ModRevision: 100,
+						},
+					},
+				},
+			}
+
+			time.Sleep(50 * time.Millisecond)
+
+			// Update entity to revision 4 in store
+			entity1Rev4 := entity.New(
+				entity.Ident, "test/entity1",
+				entity.Type, "test/type",
+			)
+			entity1Rev4.SetRevision(4)
+			store.AddEntity(entity.Id("test/entity1"), entity1Rev4)
+
+			// Event for revision 4 still in ring (should be skipped)
+			ch <- clientv3.WatchResponse{
+				Events: []*clientv3.Event{
+					{
+						Type: clientv3.EventTypePut,
+						Kv: &mvccpb.KeyValue{
+							Key:            []byte("index/key"),
+							Value:          []byte("test/entity1"),
+							CreateRevision: 100,
+							ModRevision:    104,
+						},
+						PrevKv: &mvccpb.KeyValue{
+							Value:       []byte("test/entity1"),
+							ModRevision: 101,
+						},
+					},
+				},
+			}
+		}()
+
+		return ch, nil
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	defer cancel()
+
+	err := controller.Start(ctx)
+	require.NoError(t, err)
+
+	// Collect all events to debug
+	var allEvents []Event
+	timeout := time.After(300 * time.Millisecond)
+collectLoop:
+	for {
+		select {
+		case event := <-processedEvents:
+			allEvents = append(allEvents, event)
+			t.Logf("Collected event: Type=%s, Rev=%d", event.Type, event.Rev)
+		case <-timeout:
+			break collectLoop
+		}
+	}
+
+	controller.Stop()
+	time.Sleep(50 * time.Millisecond) // Allow goroutines to fully clean up
+
+	// Filter to just watch events (UPDATED)
+	var watchEvents []Event
+	for _, ev := range allEvents {
+		if ev.Type != EventAdded {
+			watchEvents = append(watchEvents, ev)
+		}
+	}
+
+	// Should only receive event for revision 1 (evicted), not 4 (still in ring)
+	require.Len(t, watchEvents, 1, "Should receive exactly one watch event (revision 1), got: %v", watchEvents)
+	assert.Equal(t, int64(1), watchEvents[0].Rev, "Should process evicted revision 1")
+}
+
+func TestReconcileController_PutRecordsRevision(t *testing.T) {
+	log := slog.New(slogfmt.NewTestHandler(t, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+	store := entity.NewMockStore()
+	server := &entityserver.EntityServer{
+		Log:   log,
+		Store: store,
+	}
+
+	sc := &entityserver_v1alpha.EntityAccessClient{
+		Client: rpc.LocalClient(entityserver_v1alpha.AdaptEntityAccess(server)),
+	}
+
+	testIndex := entity.Any(entity.Type, "test/type")
+
+	// Add entity to store
+	store.AddEntity(entity.Id("test/entity1"), entity.New(
+		entity.Ident, "test/entity1",
+		entity.Type, "test/type",
+	))
+
+	handler := func(ctx context.Context, event Event) ([]entity.Attr, error) {
+		// Controller returns updates, which triggers a Put
+		return []entity.Attr{
+			entity.Any("updated", "true"),
+		}, nil
+	}
+
+	controller := NewReconcileController(
+		"test-controller",
+		log,
+		testIndex,
+		sc,
+		handler,
+		0, // no resync
+		1, // single worker
+	)
+
+	store.OnWatchIndex = func(ctx context.Context, attr entity.Attr) (clientv3.WatchChan, error) {
+		ch := make(chan clientv3.WatchResponse)
+
+		go func() {
+			// Send watch event - controller will process and make update
+			ch <- clientv3.WatchResponse{
+				Events: []*clientv3.Event{
+					{
+						Type: clientv3.EventTypePut,
+						Kv: &mvccpb.KeyValue{
+							Key:            []byte("test/entity1"),
+							Value:          []byte("test/entity1"),
+							ModRevision:    100,
+							CreateRevision: 1,
+						},
+					},
+				},
+			}
+		}()
+
+		return ch, nil
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	defer cancel()
+
+	err := controller.Start(ctx)
+	require.NoError(t, err)
+
+	// Wait for processing
+	time.Sleep(200 * time.Millisecond)
+
+	controller.Stop()
+
+	// Verify that the controller recorded a revision from its Put
+	// We can't easily intercept RecordWrite, but we can check the ring
+	// The MockStore increments revisions starting from 1, so after one Put,
+	// we should have revision 2 in the ring
+	hasRecordedRevision := false
+	for rev := int64(1); rev <= 10; rev++ {
+		if controller.recentWrites.Contains(rev) {
+			hasRecordedRevision = true
+			t.Logf("Found recorded revision: %d", rev)
+		}
+	}
+
+	assert.True(t, hasRecordedRevision, "Controller should have recorded at least one revision from its Put calls")
+}
+
+func TestReconcileController_FailedWriteDoesNotRecordRevision(t *testing.T) {
+	log := slog.New(slogfmt.NewTestHandler(t, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+	store := entity.NewMockStore()
+	server := &entityserver.EntityServer{
+		Log:   log,
+		Store: store,
+	}
+
+	sc := &entityserver_v1alpha.EntityAccessClient{
+		Client: rpc.LocalClient(entityserver_v1alpha.AdaptEntityAccess(server)),
+	}
+
+	testIndex := entity.Any(entity.Type, "test/type")
+
+	// Add entity to store with revision 1
+	entity1Rev1 := entity.New(
+		entity.Ident, "test/entity1",
+		entity.Type, "test/type",
+	)
+	entity1Rev1.SetRevision(1)
+	store.AddEntity(entity.Id("test/entity1"), entity1Rev1)
+
+	processedEvents := make(chan Event, 10)
+	callCount := 0
+
+	handler := func(ctx context.Context, event Event) ([]entity.Attr, error) {
+		processedEvents <- event
+		callCount++
+
+		// First call: return updates that will fail to write
+		// We'll simulate failure by removing the entity from the store
+		if callCount == 1 {
+			store.RemoveEntity(entity.Id("test/entity1"))
+			return []entity.Attr{
+				entity.Any("updated", "true"),
+			}, nil
+		}
+
+		// Second call: no updates
+		return nil, nil
+	}
+
+	controller := NewReconcileController(
+		"test-controller",
+		log,
+		testIndex,
+		sc,
+		handler,
+		0, // no resync
+		1, // single worker
+	)
+
+	store.OnWatchIndex = func(ctx context.Context, attr entity.Attr) (clientv3.WatchChan, error) {
+		ch := make(chan clientv3.WatchResponse)
+
+		go func() {
+			time.Sleep(20 * time.Millisecond)
+
+			// First watch event - handler will try to update but it will fail
+			ch <- clientv3.WatchResponse{
+				Events: []*clientv3.Event{
+					{
+						Type: clientv3.EventTypePut,
+						Kv: &mvccpb.KeyValue{
+							Key:            []byte("index/key"),
+							Value:          []byte("test/entity1"),
+							CreateRevision: 100,
+							ModRevision:    101,
+						},
+						PrevKv: &mvccpb.KeyValue{
+							Value:       []byte("test/entity1"),
+							ModRevision: 100,
+						},
+					},
+				},
+			}
+
+			time.Sleep(50 * time.Millisecond)
+
+			// Re-add entity with revision 1 for second event
+			entity1Rev1Again := entity.New(
+				entity.Ident, "test/entity1",
+				entity.Type, "test/type",
+			)
+			entity1Rev1Again.SetRevision(1)
+			store.AddEntity(entity.Id("test/entity1"), entity1Rev1Again)
+
+			// Second watch event - should be processed since failed write wasn't recorded
+			ch <- clientv3.WatchResponse{
+				Events: []*clientv3.Event{
+					{
+						Type: clientv3.EventTypePut,
+						Kv: &mvccpb.KeyValue{
+							Key:            []byte("index/key"),
+							Value:          []byte("test/entity1"),
+							CreateRevision: 100,
+							ModRevision:    101,
+						},
+						PrevKv: &mvccpb.KeyValue{
+							Value:       []byte("test/entity1"),
+							ModRevision: 100,
+						},
+					},
+				},
+			}
+		}()
+
+		return ch, nil
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	defer cancel()
+
+	err := controller.Start(ctx)
+	require.NoError(t, err)
+
+	// Collect events
+	var allEvents []Event
+	timeout := time.After(200 * time.Millisecond)
+collectLoop:
+	for {
+		select {
+		case event := <-processedEvents:
+			allEvents = append(allEvents, event)
+		case <-timeout:
+			break collectLoop
+		}
+	}
+
+	controller.Stop()
+	time.Sleep(50 * time.Millisecond)
+
+	// Filter to watch events (UPDATED)
+	var watchEvents []Event
+	for _, ev := range allEvents {
+		if ev.Type != EventAdded {
+			watchEvents = append(watchEvents, ev)
+		}
+	}
+
+	// Should have processed both watch events since the failed write didn't record a revision
+	assert.GreaterOrEqual(t, len(watchEvents), 2, "Should process both watch events since failed write didn't record revision")
+
+	// Verify the ring doesn't contain revision 1 (the "failed" write)
+	assert.False(t, controller.recentWrites.Contains(1), "Failed write should not be recorded in ring")
+}
