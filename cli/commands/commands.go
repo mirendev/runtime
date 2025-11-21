@@ -18,18 +18,6 @@ func AllCommands() map[string]cli.CommandFactory {
 			return Infer("whoami", "Display information about the current authenticated user", Whoami), nil
 		},
 
-		"debug": func() (cli.Command, error) {
-			return Section("debug", "Debug and troubleshooting commands"), nil
-		},
-
-		"debug connection": func() (cli.Command, error) {
-			return Infer("debug connection", "Test connectivity and authentication with a server", DebugConnection), nil
-		},
-
-		"debug reindex": func() (cli.Command, error) {
-			return Infer("debug reindex", "Rebuild all entity indexes from scratch", DebugReindex), nil
-		},
-
 		"init": func() (cli.Command, error) {
 			return Infer("init", "Initialize a new application", Init), nil
 		},
@@ -38,15 +26,6 @@ func AllCommands() map[string]cli.CommandFactory {
 			return Infer("Deploy", "Deploy an application", Deploy), nil
 		},
 
-		// TODO: This hangs when pointed at a deployed hw-bun but works w/ combo.yaml
-		"console": func() (cli.Command, error) {
-			return Infer("console", "Start a console", Console), nil
-		},
-
-		// TODO: This hangs when pointed at a deployed hw-bun but works w/ combo.yaml
-		"sandbox exec": func() (cli.Command, error) {
-			return Infer("sandbox exec", "Execute a command in a sandbox", SandboxExec), nil
-		},
 		"sandbox list": func() (cli.Command, error) {
 			return Infer("sandbox list", "List all sandboxes", SandboxList), nil
 		},
@@ -55,9 +34,6 @@ func AllCommands() map[string]cli.CommandFactory {
 		},
 		"sandbox delete": func() (cli.Command, error) {
 			return Infer("sandbox delete", "Delete a dead sandbox", SandboxDelete), nil
-		},
-		"sandbox metrics": func() (cli.Command, error) {
-			return Infer("sandbox metrics", "Get metrics from a sandbox", SandboxMetrics), nil
 		},
 
 		"sandbox-pool list": func() (cli.Command, error) {
@@ -92,7 +68,7 @@ func AllCommands() map[string]cli.CommandFactory {
 		},
 
 		"env": func() (cli.Command, error) {
-			return Section("env", "Environment variable management commands"), nil
+			return Section("env", "Environment variable management commands", ""), nil
 		},
 
 		"env set": func() (cli.Command, error) {
@@ -109,10 +85,6 @@ func AllCommands() map[string]cli.CommandFactory {
 
 		"env delete": func() (cli.Command, error) {
 			return Infer("env delete", "Delete environment variables", EnvDelete), nil
-		},
-
-		"set": func() (cli.Command, error) {
-			return Infer("set", "Set concurrency for an application", Set), nil
 		},
 
 		"route": func() (cli.Command, error) {
@@ -149,7 +121,7 @@ func AllCommands() map[string]cli.CommandFactory {
 
 		// Config commands - for config file management
 		"config": func() (cli.Command, error) {
-			return Section("config", "Configuration file management"), nil
+			return Section("config", "Configuration file management", ""), nil
 		},
 
 		"config info": func() (cli.Command, error) {
@@ -186,7 +158,7 @@ func AllCommands() map[string]cli.CommandFactory {
 		},
 
 		"server config": func() (cli.Command, error) {
-			return Section("server config", "Server configuration management commands"), nil
+			return Section("server config", "Server configuration management commands", ""), nil
 		},
 
 		"server config generate": func() (cli.Command, error) {
@@ -214,7 +186,7 @@ func AllCommands() map[string]cli.CommandFactory {
 		},
 
 		"server docker": func() (cli.Command, error) {
-			return Section("server docker", "Docker-based server management commands"), nil
+			return Section("server docker", "Docker-based server management commands", ""), nil
 		},
 
 		"server docker install": func() (cli.Command, error) {
@@ -233,29 +205,27 @@ func AllCommands() map[string]cli.CommandFactory {
 			return Infer("auth generate", "Generate authentication config file", AuthGenerate), nil
 		},
 
-		"entity get": func() (cli.Command, error) {
-			return Infer("entity get", "Get an entity", EntityGet), nil
+		// Debug Commands. These have no guarantees of stability and may change or be removed without notice.
+
+		"debug": func() (cli.Command, error) {
+			return Section("debug", "Debug and troubleshooting commands", `
+Use these commands to help diagnose issues with the miren runtime.
+
+Warning: These commands are intended for advanced users and developers. They may change or be removed without notice.
+
+`), nil
 		},
 
-		"entity put": func() (cli.Command, error) {
-			return Infer("entity put", "Put an entity", EntityPut), nil
+		"debug connection": func() (cli.Command, error) {
+			return Infer("debug connection", "Test connectivity and authentication with a server", DebugConnection), nil
 		},
 
-		"entity delete": func() (cli.Command, error) {
-			return Infer("entity delete", "Delete an entity", EntityDelete), nil
+		"debug reindex": func() (cli.Command, error) {
+			return Infer("debug reindex", "Rebuild all entity indexes from scratch", DebugReindex), nil
 		},
 
-		"entity list": func() (cli.Command, error) {
-			return Infer("entity list", "List entities", EntityList), nil
-		},
-
-		// TODO: Unclear if this is still useful; leaving it in for now
-		"internal dial-stdio": func() (cli.Command, error) {
-			return Infer("internal dial-stdio", "Dial a stdio connection", DialStdio), nil
-		},
-
-		"test load": func() (cli.Command, error) {
-			return Infer("test load", "Loadtest a URL", TestLoad), nil
+		"debug test load": func() (cli.Command, error) {
+			return Infer("debug test load", "Loadtest a URL", TestLoad), nil
 		},
 
 		"debug ctr nuke": func() (cli.Command, error) {
@@ -272,6 +242,22 @@ func AllCommands() map[string]cli.CommandFactory {
 
 		"debug rbac test": func() (cli.Command, error) {
 			return Infer("debug rbac test", "Test RBAC evaluation with fetched rules", DebugRBACTest), nil
+		},
+
+		"debug entity get": func() (cli.Command, error) {
+			return Infer("debug entity get", "Get an entity", EntityGet), nil
+		},
+
+		"debug entity put": func() (cli.Command, error) {
+			return Infer("debug entity put", "Put an entity", EntityPut), nil
+		},
+
+		"debug entity delete": func() (cli.Command, error) {
+			return Infer("debug entity delete", "Delete an entity", EntityDelete), nil
+		},
+
+		"debug entity list": func() (cli.Command, error) {
+			return Infer("debug entity list", "List entities", EntityList), nil
 		},
 
 		"debug entity create": func() (cli.Command, error) {
@@ -291,7 +277,7 @@ func AllCommands() map[string]cli.CommandFactory {
 		},
 
 		"debug disk": func() (cli.Command, error) {
-			return Section("debug disk", "Disk entity debug commands"), nil
+			return Section("debug disk", "Disk entity debug commands", ""), nil
 		},
 
 		"debug disk create": func() (cli.Command, error) {

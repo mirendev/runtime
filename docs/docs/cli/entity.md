@@ -20,71 +20,71 @@ Entities are flexible metadata objects stored in Miren's etcd-backed entity stor
 - **Clusters** - Cluster registrations
 - **Users** - User accounts
 
-## miren entity list
+## miren debug entity list
 
 List entities of a specific type.
 
 ### Usage
 
 ```bash
-miren entity list <type> [flags]
+miren debug entity list <type> [flags]
 ```
 
 ### Examples
 
 ```bash
 # List all apps
-miren entity list app
+miren debug entity list app
 
 # List all sandboxes
-miren entity list sandbox
+miren debug entity list sandbox
 ```
 
-## miren entity get
+## miren debug entity get
 
 Get a specific entity by type and name.
 
 ### Usage
 
 ```bash
-miren entity get <type> <name> [flags]
+miren debug entity get <type> <name> [flags]
 ```
 
 ### Examples
 
 ```bash
 # Get an app entity
-miren entity get app myapp
+miren debug entity get app myapp
 
 # Get a sandbox entity
-miren entity get sandbox sb-abc123
+miren debug entity get sandbox sb-abc123
 ```
 
-## miren entity delete
+## miren debug entity delete
 
 Delete an entity.
 
 ### Usage
 
 ```bash
-miren entity delete <type> <name> [flags]
+miren debug entity delete <type> <name> [flags]
 ```
 
 ### Examples
 
 ```bash
 # Delete an entity
-miren entity delete app myapp
+miren debug entity delete app myapp
 ```
 
-## miren entity put
+## miren debug entity put
 
 Put (create or update) an entity.
 
 ### Usage
 
 ```bash
-miren entity put <type> <name> [flags]
+miren debug entity put <type> <name> [flags]
 ```
 
 :::warning

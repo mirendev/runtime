@@ -36,7 +36,7 @@ func TestSandboxLifecycleEndToEnd(t *testing.T) {
 
 	t.Log("putting entities")
 	// Spin up combo
-	putCode := cli.Run([]string{"miren", "entity", "put", "-v", "--config", cfgPath, "-p", filePath})
+	putCode := cli.Run([]string{"miren", "debug", "entity", "put", "-v", "--config", cfgPath, "-p", filePath})
 	r.Equal(0, putCode)
 
 	// Ensure we can route to nginx container

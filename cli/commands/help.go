@@ -1,20 +1,35 @@
 package commands
 
-import "github.com/mitchellh/cli"
+import (
+	"strings"
+
+	"github.com/mitchellh/cli"
+)
 
 type section struct {
 	name string
+	help string
 	desc string
 }
 
 var _ cli.Command = &section{}
 
-func Section(name, desc string) cli.Command {
+func Section(name, desc, help string) cli.Command {
+	help = strings.TrimSpace(help)
+
+	if help == "" {
+		help = desc
+	}
+
+	if desc == "" {
+		desc = help
+	}
+
 	return &section{name: name, desc: desc}
 }
 
 func (s *section) Help() string {
-	return s.desc
+	return s.help
 }
 
 func (s *section) Synopsis() string {
