@@ -95,10 +95,7 @@ func (m *Manager) Reconcile(ctx context.Context, pool *compute_v1alpha.SandboxPo
 			"consecutive_crashes", pool.ConsecutiveCrashCount,
 			"cooldown_until", pool.CooldownUntil)
 
-		// Update pool entity with new crash state
-		if err := m.updatePoolCrashState(ctx, pool); err != nil {
-			m.log.Error("failed to update pool crash state", "pool", pool.ID, "error", err)
-		}
+		// Pool crash state fields are already updated, framework will apply via entity.Diff
 	}
 
 	// Check if pool is in cooldown
@@ -122,9 +119,7 @@ func (m *Manager) Reconcile(ctx context.Context, pool *compute_v1alpha.SandboxPo
 				"unreferenced", isUnreferenced,
 				"cooldown_until", pool.CooldownUntil)
 			pool.DesiredInstances = targetDesired
-			if err := m.updatePoolDesiredInstances(ctx, pool); err != nil {
-				m.log.Error("failed to update pool DesiredInstances", "pool", pool.ID, "error", err)
-			}
+			// DesiredInstances updated, framework will apply via entity.Diff
 		}
 
 		// Update current/ready counts even during cooldown, then skip scaling logic
@@ -139,9 +134,7 @@ func (m *Manager) Reconcile(ctx context.Context, pool *compute_v1alpha.SandboxPo
 		pool.ConsecutiveCrashCount = 0
 		pool.LastCrashTime = time.Time{}
 		pool.CooldownUntil = time.Time{}
-		if err := m.updatePoolCrashState(ctx, pool); err != nil {
-			m.log.Error("failed to reset pool crash state", "pool", pool.ID, "error", err)
-		}
+		// Pool crash state fields reset, framework will apply via entity.Diff
 	}
 
 	// actual and ready were already counted at the top of Reconcile
@@ -501,7 +494,8 @@ func (m *Manager) scaleDown(ctx context.Context, pool *compute_v1alpha.SandboxPo
 	return nil
 }
 
-// updatePoolStatus updates the pool's CurrentInstances and ReadyInstances fields
+// updatePoolStatus updates the pool's CurrentInstances and ReadyInstances fields.
+// The framework will automatically apply these changes via entity.Diff.
 func (m *Manager) updatePoolStatus(ctx context.Context, pool *compute_v1alpha.SandboxPool, current, ready int64) error {
 	// Only update if values changed
 	if pool.CurrentInstances == current && pool.ReadyInstances == ready {
@@ -510,18 +504,6 @@ func (m *Manager) updatePoolStatus(ctx context.Context, pool *compute_v1alpha.Sa
 
 	pool.CurrentInstances = current
 	pool.ReadyInstances = ready
-
-	// Use Patch to update just the status counter fields
-	// This explicitly sets the values, even when they are 0 (empty pool)
-	attrs := []entity.Attr{
-		entity.Ref(entity.DBId, pool.ID),
-		entity.Int64(compute_v1alpha.SandboxPoolCurrentInstancesId, current),
-		entity.Int64(compute_v1alpha.SandboxPoolReadyInstancesId, ready),
-	}
-
-	if _, err := m.eac.Patch(ctx, attrs, 0); err != nil {
-		return fmt.Errorf("failed to update pool status: %w", err)
-	}
 
 	m.log.Debug("updated pool status",
 		"pool", pool.ID,
@@ -808,28 +790,4 @@ func (m *Manager) hasHealthySandbox(sandboxes []*sandboxWithMeta, crashCount int
 	}
 
 	return false
-}
-
-// updatePoolCrashState updates the crash-related fields in the pool entity
-func (m *Manager) updatePoolCrashState(ctx context.Context, pool *compute_v1alpha.SandboxPool) error {
-	attrs := []entity.Attr{
-		entity.Ref(entity.DBId, pool.ID),
-		entity.Int64(compute_v1alpha.SandboxPoolConsecutiveCrashCountId, pool.ConsecutiveCrashCount),
-		entity.Time(compute_v1alpha.SandboxPoolLastCrashTimeId, pool.LastCrashTime),
-		entity.Time(compute_v1alpha.SandboxPoolCooldownUntilId, pool.CooldownUntil),
-	}
-
-	_, err := m.eac.Patch(ctx, attrs, 0)
-	return err
-}
-
-// updatePoolDesiredInstances updates only the DesiredInstances field in the pool entity
-func (m *Manager) updatePoolDesiredInstances(ctx context.Context, pool *compute_v1alpha.SandboxPool) error {
-	attrs := []entity.Attr{
-		entity.Ref(entity.DBId, pool.ID),
-		entity.Int64(compute_v1alpha.SandboxPoolDesiredInstancesId, pool.DesiredInstances),
-	}
-
-	_, err := m.eac.Patch(ctx, attrs, 0)
-	return err
 }
