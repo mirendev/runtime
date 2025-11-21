@@ -14,6 +14,10 @@ func AllCommands() map[string]cli.CommandFactory {
 			return Infer("login", "Authenticate with miren.cloud", Login), nil
 		},
 
+		"logout": func() (cli.Command, error) {
+			return Infer("logout", "Remove local authentication credentials", Logout), nil
+		},
+
 		"whoami": func() (cli.Command, error) {
 			return Infer("whoami", "Display information about the current authenticated user", Whoami), nil
 		},
