@@ -66,6 +66,9 @@ types:
       - name: sensitive
         type: bool
         index: 2
+      - name: source
+        type: string
+        index: 3
 
   - type: VersionInfo
     fields:

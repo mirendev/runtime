@@ -283,6 +283,7 @@ type namedValueData struct {
 	Key       *string `cbor:"0,keyasint,omitempty" json:"key,omitempty"`
 	Value     *string `cbor:"1,keyasint,omitempty" json:"value,omitempty"`
 	Sensitive *bool   `cbor:"2,keyasint,omitempty" json:"sensitive,omitempty"`
+	Source    *string `cbor:"3,keyasint,omitempty" json:"source,omitempty"`
 }
 
 type NamedValue struct {
@@ -332,6 +333,21 @@ func (v *NamedValue) Sensitive() bool {
 
 func (v *NamedValue) SetSensitive(sensitive bool) {
 	v.data.Sensitive = &sensitive
+}
+
+func (v *NamedValue) HasSource() bool {
+	return v.data.Source != nil
+}
+
+func (v *NamedValue) Source() string {
+	if v.data.Source == nil {
+		return ""
+	}
+	return *v.data.Source
+}
+
+func (v *NamedValue) SetSource(source string) {
+	v.data.Source = &source
 }
 
 func (v *NamedValue) MarshalCBOR() ([]byte, error) {

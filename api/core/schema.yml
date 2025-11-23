@@ -112,6 +112,9 @@ kinds:
                 sensitive:
                   type: bool
                   doc: Whether or not the value is sensitive
+                source:
+                  type: string
+                  doc: The source of the variable (config or manual). Defaults to config for backward compatibility.
             service_concurrency:
               type: component
               doc: Concurrency configuration for this service
@@ -179,6 +182,9 @@ kinds:
             sensitive:
               type: bool
               doc: Whether or not the value is sensitive
+            source:
+              type: string
+              doc: The source of the variable (config or manual). Defaults to config for backward compatibility.
 
   deployment:
     app_name:
