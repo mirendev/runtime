@@ -495,15 +495,23 @@ func printEnvTable(ctx *Context, envvars []*app_v1alpha.NamedValue) {
 			value = nv.Value()
 		}
 
-		rows = append(rows, ui.Row{nv.Key(), value})
+		// Get source with backward compatibility
+		source := nv.Source()
+		if source == "" {
+			source = "config"
+		}
+
+		rows = append(rows, ui.Row{nv.Key(), value, "(all)", source})
 	}
 
 	// Auto-size columns with reasonable maximums
 	columns := ui.AutoSizeColumns(
-		[]string{"NAME", "VALUE"},
+		[]string{"NAME", "VALUE", "SERVICE", "SOURCE"},
 		rows,
-		40, // max width for NAME column
-		60, // max width for VALUE column
+		30, // max width for NAME column
+		40, // max width for VALUE column
+		15, // max width for SERVICE column
+		12, // max width for SOURCE column
 	)
 
 	// Create and render the table
