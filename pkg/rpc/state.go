@@ -430,8 +430,11 @@ func (s *State) startListener(ctx context.Context, so *stateOptions) error {
 	s.ws = &webtransport.Server{
 		H3: http3.Server{
 			Handler: s.server,
-			// This is pretty noisy, as we run on DEBUG a lot, so disable for now.
-			// Logger:  s.log.With("module", "http3"),
+			// Use a logger with LevelWarn to suppress noisy debug messages from quic-go
+			// while preventing nil pointer panics
+			Logger: slog.New(slogfmt.NewTextHandler(os.Stderr, &slog.HandlerOptions{
+				Level: slog.LevelWarn,
+			})).With("module", "http3"),
 		},
 		CheckOrigin: func(r *http.Request) bool {
 			return true
