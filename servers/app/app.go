@@ -176,15 +176,19 @@ func (r *AppInfo) SetConfiguration(ctx context.Context, state *app_v1alpha.CrudS
 
 	// Replace the entire env var list with the new one from the client
 	// The client is responsible for sending the complete desired state
-	// Mark all variables as "manual" since they're being set via the API
+	// Use the source field from the client, or default to "manual" for backward compatibility
 	if cfg.HasEnvVars() {
 		appVer.Config.Variable = nil
 		for _, ev := range cfg.EnvVars() {
+			source := ev.Source()
+			if source == "" {
+				source = "manual"
+			}
 			nv := core_v1alpha.Variable{
 				Key:       ev.Key(),
 				Value:     ev.Value(),
 				Sensitive: ev.Sensitive(),
-				Source:    "manual",
+				Source:    source,
 			}
 			appVer.Config.Variable = append(appVer.Config.Variable, nv)
 		}
@@ -207,15 +211,19 @@ func (r *AppInfo) SetConfiguration(ctx context.Context, state *app_v1alpha.CrudS
 			for i := range appVer.Config.Services {
 				if appVer.Config.Services[i].Name == svcCfg.Service() {
 					// Update existing service's env vars
-					// Mark all variables as "manual" since they're being set via the API
+					// Use the source field from the client, or default to "manual" for backward compatibility
 					appVer.Config.Services[i].Env = nil
 					if svcCfg.HasServiceEnv() {
 						for _, ev := range svcCfg.ServiceEnv() {
+							source := ev.Source()
+							if source == "" {
+								source = "manual"
+							}
 							nv := core_v1alpha.Env{
 								Key:       ev.Key(),
 								Value:     ev.Value(),
 								Sensitive: ev.Sensitive(),
-								Source:    "manual",
+								Source:    source,
 							}
 							appVer.Config.Services[i].Env = append(appVer.Config.Services[i].Env, nv)
 						}
@@ -226,17 +234,21 @@ func (r *AppInfo) SetConfiguration(ctx context.Context, state *app_v1alpha.CrudS
 			}
 
 			// If service doesn't exist yet, create it
-			// Mark all variables as "manual" since they're being set via the API
+			// Use the source field from the client, or default to "manual" for backward compatibility
 			if !found && svcCfg.HasServiceEnv() {
 				svc := core_v1alpha.Services{
 					Name: svcCfg.Service(),
 				}
 				for _, ev := range svcCfg.ServiceEnv() {
+					source := ev.Source()
+					if source == "" {
+						source = "manual"
+					}
 					nv := core_v1alpha.Env{
 						Key:       ev.Key(),
 						Value:     ev.Value(),
 						Sensitive: ev.Sensitive(),
-						Source:    "manual",
+						Source:    source,
 					}
 					svc.Env = append(svc.Env, nv)
 				}
