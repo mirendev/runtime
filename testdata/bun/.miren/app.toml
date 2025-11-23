@@ -1,1 +1,5 @@
 name = "hw-bun"
+
+[[env]]
+key = "FROM_CONFIG_2"
+value = "config_value_2_UPDATED"

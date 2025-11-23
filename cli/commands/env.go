@@ -188,8 +188,18 @@ func EnvSet(ctx *Context, opts struct {
 		existingVar, exists := envMap[key]
 		isUpdate := exists
 
-		// Only mark as changed if value or sensitivity actually changed
-		if !exists || existingVar.Value() != value || existingVar.Sensitive() != ev.sensitive {
+		// Get source with backward compatibility
+		existingSource := ""
+		if exists {
+			existingSource = existingVar.Source()
+			if existingSource == "" {
+				existingSource = "config"
+			}
+		}
+
+		// Only mark as changed if value, sensitivity, or source actually changed
+		// Taking manual ownership of a config var is always a change
+		if !exists || existingVar.Value() != value || existingVar.Sensitive() != ev.sensitive || existingSource == "config" {
 			changes = true
 
 			// Log the action
@@ -219,6 +229,8 @@ func EnvSet(ctx *Context, opts struct {
 			nv.SetKey(key)
 			nv.SetValue(value)
 			nv.SetSensitive(ev.sensitive)
+			// Mark as manual since the user is explicitly setting this variable
+			nv.SetSource("manual")
 
 			if exists {
 				// Update existing entry in place
