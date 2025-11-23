@@ -1,6 +1,7 @@
 package build
 
 import (
+	"sort"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -571,31 +572,32 @@ func TestMergeVariablesFromAppConfig(t *testing.T) {
 		{
 			name: "preserve existing vars when app.toml has no env section",
 			existingVars: []core_v1alpha.Variable{
-				{Key: "API_KEY", Value: "secret123"},
-				{Key: "DATABASE_URL", Value: "postgres://localhost/db"},
+				{Key: "API_KEY", Value: "secret123", Source: "manual"},
+				{Key: "DATABASE_URL", Value: "postgres://localhost/db", Source: "config"},
 			},
 			appConfig: nil,
 			wantVars: []core_v1alpha.Variable{
-				{Key: "API_KEY", Value: "secret123"},
-				{Key: "DATABASE_URL", Value: "postgres://localhost/db"},
+				{Key: "API_KEY", Value: "secret123", Source: "manual"},
+				{Key: "DATABASE_URL", Value: "postgres://localhost/db", Source: "config"},
 			},
 		},
 		{
 			name: "preserve existing vars when app.toml has empty env section",
 			existingVars: []core_v1alpha.Variable{
-				{Key: "API_KEY", Value: "secret123"},
+				{Key: "API_KEY", Value: "secret123", Source: "manual"},
 			},
 			appConfig: &appconfig.AppConfig{
 				EnvVars: []appconfig.AppEnvVar{},
 			},
 			wantVars: []core_v1alpha.Variable{
-				{Key: "API_KEY", Value: "secret123"},
+				{Key: "API_KEY", Value: "secret123", Source: "manual"},
 			},
 		},
 		{
-			name: "replace vars when app.toml has new env vars",
+			name: "manual vars persist when removed from app.toml",
 			existingVars: []core_v1alpha.Variable{
-				{Key: "OLD_VAR", Value: "old_value"},
+				{Key: "MANUAL_VAR", Value: "manual_value", Source: "manual"},
+				{Key: "CONFIG_VAR", Value: "config_value", Source: "config"},
 			},
 			appConfig: &appconfig.AppConfig{
 				EnvVars: []appconfig.AppEnvVar{
@@ -603,7 +605,88 @@ func TestMergeVariablesFromAppConfig(t *testing.T) {
 				},
 			},
 			wantVars: []core_v1alpha.Variable{
-				{Key: "NEW_VAR", Value: "new_value"},
+				{Key: "MANUAL_VAR", Value: "manual_value", Source: "manual"},
+				{Key: "NEW_VAR", Value: "new_value", Source: "config"},
+			},
+		},
+		{
+			name: "config vars removed when removed from app.toml",
+			existingVars: []core_v1alpha.Variable{
+				{Key: "CONFIG_VAR_1", Value: "value1", Source: "config"},
+				{Key: "CONFIG_VAR_2", Value: "value2", Source: "config"},
+			},
+			appConfig: &appconfig.AppConfig{
+				EnvVars: []appconfig.AppEnvVar{
+					{Name: "CONFIG_VAR_1", Value: "value1"},
+				},
+			},
+			wantVars: []core_v1alpha.Variable{
+				{Key: "CONFIG_VAR_1", Value: "value1", Source: "config"},
+			},
+		},
+		{
+			name: "app.toml vars override config vars per-key",
+			existingVars: []core_v1alpha.Variable{
+				{Key: "VAR1", Value: "old_value", Source: "config"},
+				{Key: "VAR2", Value: "keep_value", Source: "manual"},
+			},
+			appConfig: &appconfig.AppConfig{
+				EnvVars: []appconfig.AppEnvVar{
+					{Name: "VAR1", Value: "new_value"},
+				},
+			},
+			wantVars: []core_v1alpha.Variable{
+				{Key: "VAR1", Value: "new_value", Source: "config"},
+				{Key: "VAR2", Value: "keep_value", Source: "manual"},
+			},
+		},
+		{
+			name: "backward compatibility - empty source treated as config",
+			existingVars: []core_v1alpha.Variable{
+				{Key: "OLD_VAR", Value: "old_value", Source: ""},
+			},
+			appConfig: &appconfig.AppConfig{
+				EnvVars: []appconfig.AppEnvVar{
+					{Name: "NEW_VAR", Value: "new_value"},
+				},
+			},
+			wantVars: []core_v1alpha.Variable{
+				{Key: "NEW_VAR", Value: "new_value", Source: "config"},
+			},
+		},
+		{
+			name: "manual var overrides config var with same key",
+			existingVars: []core_v1alpha.Variable{
+				{Key: "DATABASE_URL", Value: "manually_set", Source: "manual"},
+			},
+			appConfig: &appconfig.AppConfig{
+				EnvVars: []appconfig.AppEnvVar{
+					{Name: "DATABASE_URL", Value: "from_config"},
+				},
+			},
+			wantVars: []core_v1alpha.Variable{
+				{Key: "DATABASE_URL", Value: "from_config", Source: "config"},
+			},
+		},
+		{
+			name: "complex mix of manual and config vars",
+			existingVars: []core_v1alpha.Variable{
+				{Key: "MANUAL_1", Value: "m1", Source: "manual"},
+				{Key: "CONFIG_1", Value: "c1", Source: "config"},
+				{Key: "MANUAL_2", Value: "m2", Source: "manual"},
+				{Key: "CONFIG_2", Value: "c2", Source: "config"},
+			},
+			appConfig: &appconfig.AppConfig{
+				EnvVars: []appconfig.AppEnvVar{
+					{Name: "CONFIG_1", Value: "c1_updated"},
+					{Name: "CONFIG_3", Value: "c3"},
+				},
+			},
+			wantVars: []core_v1alpha.Variable{
+				{Key: "MANUAL_1", Value: "m1", Source: "manual"},
+				{Key: "MANUAL_2", Value: "m2", Source: "manual"},
+				{Key: "CONFIG_1", Value: "c1_updated", Source: "config"},
+				{Key: "CONFIG_3", Value: "c3", Source: "config"},
 			},
 		},
 		{
@@ -627,7 +710,7 @@ func TestMergeVariablesFromAppConfig(t *testing.T) {
 				},
 			},
 			wantVars: []core_v1alpha.Variable{
-				{Key: "NEW_VAR", Value: "new_value"},
+				{Key: "NEW_VAR", Value: "new_value", Source: "config"},
 			},
 		},
 	}
@@ -638,11 +721,147 @@ func TestMergeVariablesFromAppConfig(t *testing.T) {
 			if tt.wantVars == nil {
 				assert.Nil(t, result)
 			} else {
-				require.Equal(t, len(tt.wantVars), len(result))
-				for i, want := range tt.wantVars {
+				// Sort both slices by key for consistent comparison
+				sortVarsByKey := func(vars []core_v1alpha.Variable) {
+					sort.Slice(vars, func(i, j int) bool {
+						return vars[i].Key < vars[j].Key
+					})
+				}
+				sortVarsByKey(result)
+				wantSorted := make([]core_v1alpha.Variable, len(tt.wantVars))
+				copy(wantSorted, tt.wantVars)
+				sortVarsByKey(wantSorted)
+
+				require.Equal(t, len(wantSorted), len(result), "variable count mismatch")
+				for i, want := range wantSorted {
 					assert.Equal(t, want.Key, result[i].Key, "variable %d key mismatch", i)
 					assert.Equal(t, want.Value, result[i].Value, "variable %d value mismatch", i)
+					assert.Equal(t, want.Source, result[i].Source, "variable %d source mismatch", i)
 				}
+			}
+		})
+	}
+}
+
+func TestMergeServiceEnvVars(t *testing.T) {
+	tests := []struct {
+		name         string
+		existingEnvs []core_v1alpha.Env
+		newEnvs      []core_v1alpha.Env
+		wantEnvs     []core_v1alpha.Env
+	}{
+		{
+			name: "manual vars persist when removed from app.toml",
+			existingEnvs: []core_v1alpha.Env{
+				{Key: "MANUAL_VAR", Value: "manual_value", Source: "manual"},
+				{Key: "CONFIG_VAR", Value: "config_value", Source: "config"},
+			},
+			newEnvs: []core_v1alpha.Env{
+				{Key: "NEW_VAR", Value: "new_value", Source: "config"},
+			},
+			wantEnvs: []core_v1alpha.Env{
+				{Key: "MANUAL_VAR", Value: "manual_value", Source: "manual"},
+				{Key: "NEW_VAR", Value: "new_value", Source: "config"},
+			},
+		},
+		{
+			name: "config vars removed when removed from app.toml",
+			existingEnvs: []core_v1alpha.Env{
+				{Key: "CONFIG_VAR_1", Value: "value1", Source: "config"},
+				{Key: "CONFIG_VAR_2", Value: "value2", Source: "config"},
+			},
+			newEnvs: []core_v1alpha.Env{
+				{Key: "CONFIG_VAR_1", Value: "value1", Source: "config"},
+			},
+			wantEnvs: []core_v1alpha.Env{
+				{Key: "CONFIG_VAR_1", Value: "value1", Source: "config"},
+			},
+		},
+		{
+			name: "backward compatibility - empty source treated as config",
+			existingEnvs: []core_v1alpha.Env{
+				{Key: "OLD_VAR", Value: "old_value", Source: ""},
+			},
+			newEnvs: []core_v1alpha.Env{
+				{Key: "NEW_VAR", Value: "new_value", Source: "config"},
+			},
+			wantEnvs: []core_v1alpha.Env{
+				{Key: "NEW_VAR", Value: "new_value", Source: "config"},
+			},
+		},
+		{
+			name: "app.toml vars override manual vars with same key",
+			existingEnvs: []core_v1alpha.Env{
+				{Key: "DATABASE_URL", Value: "manually_set", Source: "manual"},
+			},
+			newEnvs: []core_v1alpha.Env{
+				{Key: "DATABASE_URL", Value: "from_config", Source: "config"},
+			},
+			wantEnvs: []core_v1alpha.Env{
+				{Key: "DATABASE_URL", Value: "from_config", Source: "config"},
+			},
+		},
+		{
+			name: "complex mix of manual and config vars",
+			existingEnvs: []core_v1alpha.Env{
+				{Key: "MANUAL_1", Value: "m1", Source: "manual"},
+				{Key: "CONFIG_1", Value: "c1", Source: "config"},
+				{Key: "MANUAL_2", Value: "m2", Source: "manual"},
+				{Key: "CONFIG_2", Value: "c2", Source: "config"},
+			},
+			newEnvs: []core_v1alpha.Env{
+				{Key: "CONFIG_1", Value: "c1_updated", Source: "config"},
+				{Key: "CONFIG_3", Value: "c3", Source: "config"},
+			},
+			wantEnvs: []core_v1alpha.Env{
+				{Key: "MANUAL_1", Value: "m1", Source: "manual"},
+				{Key: "MANUAL_2", Value: "m2", Source: "manual"},
+				{Key: "CONFIG_1", Value: "c1_updated", Source: "config"},
+				{Key: "CONFIG_3", Value: "c3", Source: "config"},
+			},
+		},
+		{
+			name:         "nil existing envs",
+			existingEnvs: nil,
+			newEnvs: []core_v1alpha.Env{
+				{Key: "NEW_VAR", Value: "new_value", Source: "config"},
+			},
+			wantEnvs: []core_v1alpha.Env{
+				{Key: "NEW_VAR", Value: "new_value", Source: "config"},
+			},
+		},
+		{
+			name: "nil new envs preserves manual vars",
+			existingEnvs: []core_v1alpha.Env{
+				{Key: "MANUAL_VAR", Value: "manual_value", Source: "manual"},
+			},
+			newEnvs:  nil,
+			wantEnvs: []core_v1alpha.Env{
+				{Key: "MANUAL_VAR", Value: "manual_value", Source: "manual"},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := mergeServiceEnvVars(tt.existingEnvs, tt.newEnvs)
+
+			// Sort both slices by key for consistent comparison
+			sortEnvsByKey := func(envs []core_v1alpha.Env) {
+				sort.Slice(envs, func(i, j int) bool {
+					return envs[i].Key < envs[j].Key
+				})
+			}
+			sortEnvsByKey(result)
+			wantSorted := make([]core_v1alpha.Env, len(tt.wantEnvs))
+			copy(wantSorted, tt.wantEnvs)
+			sortEnvsByKey(wantSorted)
+
+			require.Equal(t, len(wantSorted), len(result), "env var count mismatch")
+			for i, want := range wantSorted {
+				assert.Equal(t, want.Key, result[i].Key, "env var %d key mismatch", i)
+				assert.Equal(t, want.Value, result[i].Value, "env var %d value mismatch", i)
+				assert.Equal(t, want.Source, result[i].Source, "env var %d source mismatch", i)
 			}
 		})
 	}
