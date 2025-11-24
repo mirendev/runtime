@@ -82,6 +82,10 @@ type ReconcileController struct {
 	inFlight   map[entity.Id]*inFlightEntry
 	inFlightMu sync.Mutex
 
+	// Recent writes tracking to skip self-generated watch events
+	// Controllers record revisions from their writes to reduce reconciliation noise
+	recentWrites *RingSet
+
 	// periodic is an optional periodic callback
 	periodic     func(ctx context.Context) error
 	periodicTime time.Duration
@@ -99,6 +103,7 @@ func NewReconcileController(name string, log *slog.Logger, index entity.Attr, es
 		workers:      workers,
 		workQueue:    make(chan Event, 1000),
 		inFlight:     make(map[entity.Id]*inFlightEntry),
+		recentWrites: NewRingSet(1000), // Track last 1000 revisions written by this controller
 	}
 }
 
@@ -118,14 +123,13 @@ func (c *ReconcileController) Start(top context.Context) error {
 
 	// Start workers
 	for i := 0; i < c.workers; i++ {
-		c.wg.Add(1)
-		go c.runWorker(ctx)
+		c.wg.Go(func() {
+			c.runWorker(ctx)
+		})
 	}
 
 	// Start event processor
-	c.wg.Add(1)
-	go func() {
-		defer c.wg.Done()
+	c.wg.Go(func() {
 		c.Log.Info("Starting index watch")
 		defer c.Log.Info("Index watch stopped")
 
@@ -187,6 +191,11 @@ func (c *ReconcileController) Start(top context.Context) error {
 					ev.Rev = aen.Revision()
 				}
 
+				// Skip watch events for revisions we recently wrote to reduce reconciliation noise
+				if ev.Rev > 0 && c.recentWrites.Contains(ev.Rev) {
+					return nil
+				}
+
 				select {
 				case <-ctx.Done():
 					return nil
@@ -227,18 +236,20 @@ func (c *ReconcileController) Start(top context.Context) error {
 				return
 			}
 		}
-	}()
+	})
 
 	// Start periodic resync
 	if c.resyncPeriod > 0 {
-		c.wg.Add(1)
-		go c.periodicResync(ctx)
+		c.wg.Go(func() {
+			c.periodicResync(ctx)
+		})
 	}
 
 	// Start periodic callback if set
 	if c.periodic != nil {
-		c.wg.Add(1)
-		go c.runPeriodic(ctx)
+		c.wg.Go(func() {
+			c.runPeriodic(ctx)
+		})
 	}
 
 	return nil
@@ -252,6 +263,15 @@ func (c *ReconcileController) Stop() {
 	}
 	c.wg.Wait()
 	close(c.workQueue)
+}
+
+// RecordWrite records a revision that was written by this controller.
+// Subsequent watch events for this revision will be skipped to reduce
+// unnecessary reconciliation noise from self-generated updates.
+func (c *ReconcileController) RecordWrite(revision int64) {
+	if revision > 0 {
+		c.recentWrites.Add(revision)
+	}
 }
 
 // Enqueue adds an event to the work queue for processing
@@ -273,8 +293,6 @@ func (c *ReconcileController) runWorker(ctx context.Context) {
 	id := idgen.Gen("worker")
 
 	c.Log.Info("Starting worker", "id", id)
-
-	defer c.wg.Done()
 
 	ctx = withWorkerId(ctx, id)
 
@@ -330,11 +348,15 @@ func (c *ReconcileController) runWorker(ctx context.Context) {
 					rpcE.SetId(string(event.Id))
 					rpcE.SetAttrs(updates)
 
-					_, err := c.esc.Put(ctx, &rpcE)
+					result, err := c.esc.Put(ctx, &rpcE)
 					if err != nil {
 						c.Log.Error("error updating entity", "entity", event.Id, "error", err)
 					} else {
 						c.Log.Info("updated entity", "entity", event.Id)
+						// Record the revision we just wrote so we can skip the watch event
+						if result.HasRevision() {
+							c.RecordWrite(result.Revision())
+						}
 					}
 				}
 			}
@@ -374,11 +396,15 @@ func (c *ReconcileController) runWorker(ctx context.Context) {
 						rpcE.SetId(string(event.Id))
 						rpcE.SetAttrs(updates)
 
-						_, err := c.esc.Put(ctx, &rpcE)
+						result, err := c.esc.Put(ctx, &rpcE)
 						if err != nil {
 							c.Log.Error("error updating entity", "entity", event.Id, "error", err)
 						} else {
 							c.Log.Info("updated entity", "entity", event.Id)
+							// Record the revision we just wrote so we can skip the watch event
+							if result.HasRevision() {
+								c.RecordWrite(result.Revision())
+							}
 						}
 					}
 				}
@@ -402,8 +428,6 @@ func (c *ReconcileController) processItem(ctx context.Context, event Event) ([]e
 func (c *ReconcileController) periodicResync(ctx context.Context) {
 	c.Log.Info("Starting resync")
 	defer c.Log.Info("Stopping resync")
-
-	defer c.wg.Done()
 
 	ticker := time.NewTicker(c.resyncPeriod)
 	defer ticker.Stop()
@@ -463,8 +487,6 @@ func (c *ReconcileController) periodicResync(ctx context.Context) {
 func (c *ReconcileController) runPeriodic(ctx context.Context) {
 	c.Log.Info("Starting periodic callback")
 	defer c.Log.Info("Stopping periodic callback")
-
-	defer c.wg.Done()
 
 	dur := c.periodicTime
 	if dur == 0 {
