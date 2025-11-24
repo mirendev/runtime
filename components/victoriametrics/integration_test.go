@@ -87,21 +87,25 @@ func TestVictoriaMetricsComponentIntegration(t *testing.T) {
 	expectedHTTPEndpoint := fmt.Sprintf("localhost:%d", httpPort)
 	assert.Equal(t, expectedHTTPEndpoint, httpEndpoint, "HTTP endpoint should match expected")
 
-	// Wait for VictoriaMetrics to be fully ready
+	// Wait for VictoriaMetrics to be fully ready by polling health endpoint
 	t.Log("Waiting for VictoriaMetrics to be ready...")
-	time.Sleep(10 * time.Second)
+	client := &http.Client{Timeout: 5 * time.Second}
+	require.Eventually(t, func() bool {
+		resp, err := client.Get("http://" + httpEndpoint + "/health")
+		if err != nil {
+			return false
+		}
+		resp.Body.Close()
+		return resp.StatusCode == http.StatusOK
+	}, 30*time.Second, 500*time.Millisecond, "VictoriaMetrics failed to become ready")
 
 	// Test HTTP endpoint availability
 	t.Log("Testing HTTP endpoint...")
-	client := &http.Client{Timeout: 10 * time.Second}
 	resp, err := client.Get("http://" + httpEndpoint + "/metrics")
-	if err == nil {
-		defer resp.Body.Close()
-		assert.Equal(t, http.StatusOK, resp.StatusCode, "metrics endpoint should return 200")
-		t.Log("HTTP endpoint is responding")
-	} else {
-		t.Logf("HTTP endpoint test failed (may be normal during startup): %v", err)
-	}
+	require.NoError(t, err, "metrics endpoint should be reachable")
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusOK, resp.StatusCode, "metrics endpoint should return 200")
+	t.Log("HTTP endpoint is responding")
 
 	// Test basic VictoriaMetrics functionality
 	t.Log("Testing VictoriaMetrics import functionality...")
@@ -117,15 +121,17 @@ func TestVictoriaMetricsComponentIntegration(t *testing.T) {
 			if importResp.StatusCode == http.StatusNoContent || importResp.StatusCode == http.StatusOK {
 				t.Log("Successfully imported test metric")
 
-				// Try to query it back
-				time.Sleep(2 * time.Second) // Give VM time to ingest
+				// Poll until metric is queryable (instead of fixed sleep)
 				queryURL := "http://" + httpEndpoint + "/api/v1/query?query=test_metric"
-				queryResp, err := client.Get(queryURL)
-				if err == nil {
+				assert.Eventually(t, func() bool {
+					queryResp, err := client.Get(queryURL)
+					if err != nil {
+						return false
+					}
 					defer queryResp.Body.Close()
-					assert.Equal(t, http.StatusOK, queryResp.StatusCode, "query should succeed")
-					t.Log("Successfully queried test metric")
-				}
+					return queryResp.StatusCode == http.StatusOK
+				}, 10*time.Second, 200*time.Millisecond, "metric query should eventually succeed")
+				t.Log("Successfully queried test metric")
 			} else {
 				t.Logf("Import returned status %d", importResp.StatusCode)
 			}
@@ -148,18 +154,22 @@ func TestVictoriaMetricsComponentIntegration(t *testing.T) {
 
 	assert.True(t, component.IsRunning(), "component should report as running after restart")
 
-	// Wait for restart to complete
-	time.Sleep(10 * time.Second)
+	// Wait for VictoriaMetrics to be ready after restart by polling
+	require.Eventually(t, func() bool {
+		resp, err := client.Get("http://" + component.HTTPEndpoint() + "/health")
+		if err != nil {
+			return false
+		}
+		resp.Body.Close()
+		return resp.StatusCode == http.StatusOK
+	}, 30*time.Second, 500*time.Millisecond, "VictoriaMetrics failed to become ready after restart")
 
 	// Test connectivity after restart
 	resp2, err := client.Get("http://" + component.HTTPEndpoint() + "/metrics")
-	if err == nil {
-		defer resp2.Body.Close()
-		assert.Equal(t, http.StatusOK, resp2.StatusCode)
-		t.Log("HTTP endpoint responding after restart")
-	} else {
-		t.Logf("Failed to connect after restart: %v", err)
-	}
+	require.NoError(t, err, "metrics endpoint should be reachable after restart")
+	defer resp2.Body.Close()
+	assert.Equal(t, http.StatusOK, resp2.StatusCode)
+	t.Log("HTTP endpoint responding after restart")
 
 	t.Log("Restart test completed successfully!")
 }
@@ -301,7 +311,16 @@ func TestVictoriaMetricsComponent_GracefulShutdown(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	time.Sleep(5 * time.Second) // Let it fully start
+	// Wait for VictoriaMetrics to be fully ready by polling
+	client := &http.Client{Timeout: 5 * time.Second}
+	require.Eventually(t, func() bool {
+		resp, err := client.Get(fmt.Sprintf("http://localhost:%d/health", config.HTTPPort))
+		if err != nil {
+			return false
+		}
+		resp.Body.Close()
+		return resp.StatusCode == http.StatusOK
+	}, 30*time.Second, 500*time.Millisecond, "VictoriaMetrics failed to become ready")
 
 	// Stop should complete within reasonable time
 	stopStart := time.Now()
@@ -338,6 +357,7 @@ func TestVictoriaMetricsComponent_MultipleStarts(t *testing.T) {
 	config := vm.VictoriaMetricsConfig{HTTPPort: 28431}
 
 	// Start, stop, start, stop multiple times
+	client := &http.Client{Timeout: 5 * time.Second}
 	for i := 0; i < 3; i++ {
 		t.Logf("Cycle %d: Starting...", i+1)
 		err = component.Start(ctx, config)
@@ -349,7 +369,16 @@ func TestVictoriaMetricsComponent_MultipleStarts(t *testing.T) {
 		}
 
 		assert.True(t, component.IsRunning(), "should be running after start on cycle %d", i+1)
-		time.Sleep(3 * time.Second)
+
+		// Wait for VictoriaMetrics to be ready by polling
+		require.Eventually(t, func() bool {
+			resp, err := client.Get(fmt.Sprintf("http://localhost:%d/health", config.HTTPPort))
+			if err != nil {
+				return false
+			}
+			resp.Body.Close()
+			return resp.StatusCode == http.StatusOK
+		}, 30*time.Second, 500*time.Millisecond, "VictoriaMetrics failed to become ready on cycle %d", i+1)
 
 		t.Logf("Cycle %d: Stopping...", i+1)
 		err = component.Stop(ctx)
