@@ -121,8 +121,9 @@ func EnvSet(ctx *Context, opts struct {
 
 func EnvGet(ctx *Context, opts struct {
 	AppCentric
-	Unmask bool `short:"u" long:"unmask" description:"Show actual value of sensitive variables instead of masking them"`
-	Args   struct {
+	Service string `short:"S" long:"service" description:"Get env var for specific service (if not specified, gets global env var)"`
+	Unmask  bool   `short:"u" long:"unmask" description:"Show actual value of sensitive variables instead of masking them"`
+	Args    struct {
 		Key string `positional-arg-name:"KEY" description:"Environment variable key to get" required:"1"`
 	} `positional-args:"yes" required:"true"`
 }) error {
@@ -140,28 +141,57 @@ func EnvGet(ctx *Context, opts struct {
 
 	cfg := res.Configuration()
 
-	if !cfg.HasEnvVars() {
-		return fmt.Errorf("environment variable %s not found", opts.Args.Key)
-	}
+	var found *app_v1alpha.NamedValue
 
-	// Find the variable with the specified key
-	envvars := cfg.EnvVars()
-	for _, nv := range envvars {
-		if nv.Key() == opts.Args.Key {
-			if nv.Sensitive() {
-				if opts.Unmask {
-					ctx.Printf("%s\n", nv.Value())
-				} else {
-					ctx.Printf("••••••••••\n")
+	if opts.Service != "" {
+		// Look in service-specific env vars
+		if cfg.HasServices() {
+			for _, svc := range cfg.Services() {
+				if svc.Service() == opts.Service && svc.HasServiceEnv() {
+					for _, nv := range svc.ServiceEnv() {
+						if nv.Key() == opts.Args.Key {
+							found = nv
+							break
+						}
+					}
+					break
 				}
-			} else {
-				ctx.Printf("%s\n", nv.Value())
 			}
-			return nil
+		}
+		if found == nil {
+			return fmt.Errorf("environment variable %s not found for service %s", opts.Args.Key, opts.Service)
+		}
+	} else {
+		// Look in global env vars
+		if cfg.HasEnvVars() {
+			for _, nv := range cfg.EnvVars() {
+				if nv.Key() == opts.Args.Key {
+					found = nv
+					break
+				}
+			}
+		}
+		if found == nil {
+			return fmt.Errorf("environment variable %s not found", opts.Args.Key)
 		}
 	}
 
-	return fmt.Errorf("environment variable %s not found", opts.Args.Key)
+	if found.Sensitive() {
+		if opts.Unmask {
+			ctx.Printf("%s\n", found.Value())
+		} else {
+			ctx.Printf("••••••••••\n")
+		}
+	} else {
+		ctx.Printf("%s\n", found.Value())
+	}
+	return nil
+}
+
+// envVarEntry combines a NamedValue with its service scope
+type envVarEntry struct {
+	nv      *app_v1alpha.NamedValue
+	service string // empty string means global (all services)
 }
 
 func EnvList(ctx *Context, opts struct {
@@ -182,7 +212,28 @@ func EnvList(ctx *Context, opts struct {
 
 	cfg := res.Configuration()
 
-	if !cfg.HasEnvVars() {
+	// Collect all env vars: global + per-service
+	var entries []envVarEntry
+
+	// Add global env vars
+	if cfg.HasEnvVars() {
+		for _, nv := range cfg.EnvVars() {
+			entries = append(entries, envVarEntry{nv: nv, service: ""})
+		}
+	}
+
+	// Add per-service env vars
+	if cfg.HasServices() {
+		for _, svc := range cfg.Services() {
+			if svc.HasServiceEnv() {
+				for _, nv := range svc.ServiceEnv() {
+					entries = append(entries, envVarEntry{nv: nv, service: svc.Service()})
+				}
+			}
+		}
+	}
+
+	if len(entries) == 0 {
 		if opts.IsJSON() {
 			return PrintJSON([]any{})
 		}
@@ -190,12 +241,19 @@ func EnvList(ctx *Context, opts struct {
 		return nil
 	}
 
-	// Get all environment variables
-	envvars := cfg.EnvVars()
-
-	// Sort by key for consistent output
-	sort.Slice(envvars, func(i, j int) bool {
-		return envvars[i].Key() < envvars[j].Key()
+	// Sort by key, then by service for consistent output
+	sort.Slice(entries, func(i, j int) bool {
+		if entries[i].nv.Key() != entries[j].nv.Key() {
+			return entries[i].nv.Key() < entries[j].nv.Key()
+		}
+		// Global (empty service) comes before specific services
+		if entries[i].service == "" && entries[j].service != "" {
+			return true
+		}
+		if entries[i].service != "" && entries[j].service == "" {
+			return false
+		}
+		return entries[i].service < entries[j].service
 	})
 
 	// For JSON output
@@ -204,17 +262,21 @@ func EnvList(ctx *Context, opts struct {
 			Name      string `json:"name"`
 			Value     string `json:"value,omitempty"`
 			Sensitive bool   `json:"sensitive"`
+			Service   string `json:"service,omitempty"`
+			Source    string `json:"source,omitempty"`
 		}
 
 		var vars []EnvVar
-		for _, nv := range envvars {
+		for _, entry := range entries {
 			ev := EnvVar{
-				Name:      nv.Key(),
-				Sensitive: nv.Sensitive(),
+				Name:      entry.nv.Key(),
+				Sensitive: entry.nv.Sensitive(),
+				Service:   entry.service,
+				Source:    entry.nv.Source(),
 			}
 			// Only include value for non-sensitive variables in JSON
-			if !nv.Sensitive() {
-				ev.Value = nv.Value()
+			if !entry.nv.Sensitive() {
+				ev.Value = entry.nv.Value()
 			}
 			vars = append(vars, ev)
 		}
@@ -222,7 +284,7 @@ func EnvList(ctx *Context, opts struct {
 	}
 
 	// Create and print the table
-	printEnvTable(ctx, envvars)
+	printEnvTable(ctx, entries)
 
 	return nil
 }
@@ -304,28 +366,34 @@ func EnvDelete(ctx *Context, opts struct {
 }
 
 // printEnvTable prints a formatted table of environment variables
-func printEnvTable(ctx *Context, envvars []*app_v1alpha.NamedValue) {
+func printEnvTable(ctx *Context, entries []envVarEntry) {
 	// Create a gray style for sensitive values
 	grayStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
 
 	// Build rows
 	var rows []ui.Row
-	for _, nv := range envvars {
+	for _, entry := range entries {
 		var value string
 
-		if nv.Sensitive() {
+		if entry.nv.Sensitive() {
 			value = grayStyle.Render("••••••••••")
 		} else {
-			value = nv.Value()
+			value = entry.nv.Value()
 		}
 
 		// Get source with backward compatibility
-		source := nv.Source()
+		source := entry.nv.Source()
 		if source == "" {
 			source = "config"
 		}
 
-		rows = append(rows, ui.Row{nv.Key(), value, "(all)", source})
+		// Display service scope
+		service := "(all)"
+		if entry.service != "" {
+			service = entry.service
+		}
+
+		rows = append(rows, ui.Row{entry.nv.Key(), value, service, source})
 	}
 
 	// Auto-size columns with reasonable maximums
