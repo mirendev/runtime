@@ -33,6 +33,7 @@ import (
 	"miren.dev/runtime/observability"
 	"miren.dev/runtime/pkg/cond"
 	"miren.dev/runtime/pkg/containerdx"
+	"miren.dev/runtime/pkg/controller"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/imagerefs"
 	"miren.dev/runtime/pkg/netdb"
@@ -95,11 +96,19 @@ type SandboxController struct {
 	portMonitor *PortMonitor
 
 	watchdog *ContainerWatchdog
+
+	// writeTracker tracks entity write revisions to skip self-generated watch events
+	writeTracker controller.WriteTracker
 }
 
 func (c *SandboxController) Populated() error {
 	c.Log = c.Log.With("module", "sandbox")
 	return nil
+}
+
+// SetWriteTracker sets the write tracker for recording manual entity writes
+func (c *SandboxController) SetWriteTracker(wt controller.WriteTracker) {
+	c.writeTracker = wt
 }
 
 func (c *SandboxController) SetPortStatus(id string, port observability.BoundPort, status observability.PortStatus) {
@@ -703,10 +712,13 @@ func (c *SandboxController) Create(ctx context.Context, co *compute.Sandbox, met
 							Status: compute.DEAD,
 						}).Encode,
 					)
-					_, err := c.EAC.Patch(ctx, patchAttrs.Attrs(), 0)
+					result, err := c.EAC.Patch(ctx, patchAttrs.Attrs(), 0)
 					if err != nil {
 						c.Log.Error("failed to mark sandbox as DEAD", "id", co.ID, "error", err)
 						return fmt.Errorf("failed to mark sandbox as DEAD: %w", err)
+					}
+					if c.writeTracker != nil && result.HasRevision() {
+						c.writeTracker.RecordWrite(result.Revision())
 					}
 				}
 
@@ -757,6 +769,9 @@ func (c *SandboxController) createSandbox(ctx context.Context, co *compute.Sandb
 	}
 
 	meta.Revision = res.Revision()
+	if c.writeTracker != nil && res.HasRevision() {
+		c.writeTracker.RecordWrite(res.Revision())
+	}
 
 	opts, err := c.buildSpec(ctx, co, ep, meta)
 	if err != nil {
@@ -1577,7 +1592,7 @@ func (c *SandboxController) monitorTaskExit(
 		)
 
 		ctx := context.Background()
-		_, err := c.EAC.Patch(ctx, patchAttrs.Attrs(), 0)
+		result, err := c.EAC.Patch(ctx, patchAttrs.Attrs(), 0)
 		if err != nil {
 			if !errors.Is(err, cond.ErrNotFound{}) {
 				c.Log.Error("failed to update sandbox status to STOPPED",
@@ -1586,6 +1601,9 @@ func (c *SandboxController) monitorTaskExit(
 				)
 			}
 			return
+		}
+		if c.writeTracker != nil && result.HasRevision() {
+			c.writeTracker.RecordWrite(result.Revision())
 		}
 
 		c.Log.Info("marked sandbox as STOPPED due to process exit, cleanup will be triggered by reconciliation", "sandbox", sb.ID)
@@ -2087,7 +2105,7 @@ func (c *SandboxController) stopSandbox(ctx context.Context, id entity.Id) error
 	_ = os.RemoveAll(tmpDir)
 
 	// Mark sandbox as DEAD in entity store
-	_, err = c.EAC.Patch(ctx, entity.New(
+	result, err := c.EAC.Patch(ctx, entity.New(
 		entity.Ref(entity.DBId, id),
 		(&compute.Sandbox{
 			Status: compute.DEAD,
@@ -2099,6 +2117,8 @@ func (c *SandboxController) stopSandbox(ctx context.Context, id entity.Id) error
 		if !errors.Is(err, cond.ErrNotFound{}) {
 			c.Log.Error("failed to mark sandbox as DEAD", "id", id, "error", err)
 		}
+	} else if c.writeTracker != nil && result.HasRevision() {
+		c.writeTracker.RecordWrite(result.Revision())
 	}
 
 	c.Log.Info("sandbox retired", "id", id, "status", compute.DEAD)

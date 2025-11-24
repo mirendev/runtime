@@ -40,6 +40,13 @@ type Controller interface {
 	Stop()
 }
 
+// WriteTracker provides a way to track entity write revisions to skip self-generated watch events.
+// Controllers that make manual entity writes outside the reconciliation framework can use this
+// to record their writes and avoid unnecessary re-reconciliation.
+type WriteTracker interface {
+	RecordWrite(revision int64)
+}
+
 type workerIdKey struct{}
 
 func withWorkerId(ctx context.Context, id string) context.Context {
@@ -275,6 +282,12 @@ func (c *ReconcileController) RecordWrite(revision int64) {
 	}
 }
 
+// WriteTracker returns a WriteTracker interface that can be used by controllers
+// to record manual entity writes outside the reconciliation framework.
+func (c *ReconcileController) WriteTracker() WriteTracker {
+	return c
+}
+
 // Enqueue adds an event to the work queue for processing
 func (c *ReconcileController) Enqueue(event Event) {
 	select {
@@ -381,6 +394,14 @@ func (c *ReconcileController) processItem(ctx context.Context, event Event) ([]e
 	default:
 		return nil, fmt.Errorf("unknown event type: %s", event.Type)
 	}
+}
+
+// ProcessEventForTest processes a single event and applies any updates.
+// This is exposed for testing controllers without starting the full controller loop.
+func (c *ReconcileController) ProcessEventForTest(ctx context.Context, event Event) error {
+	updates, err := c.processItem(ctx, event)
+	c.applyUpdates(ctx, event, updates)
+	return err
 }
 
 // applyUpdates applies the given updates to an entity using Patch

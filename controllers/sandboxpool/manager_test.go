@@ -11,6 +11,7 @@ import (
 	"miren.dev/runtime/api/compute/compute_v1alpha"
 	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/api/entityserver"
+	"miren.dev/runtime/pkg/controller"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/testutils"
 	"miren.dev/runtime/pkg/entity/types"
@@ -48,8 +49,7 @@ func TestManagerScaleUpFromZero(t *testing.T) {
 
 	// Create manager and run reconciliation
 	manager := NewManager(log, server.EAC)
-	err = manager.Reconcile(ctx, pool, nil)
-	require.NoError(t, err)
+	reconcilePool(t, ctx, server, manager, pool)
 
 	// Verify 3 sandboxes were created
 	sandboxes := listSandboxesForPool(t, ctx, server, pool)
@@ -114,8 +114,7 @@ func TestManagerScaleUpPartial(t *testing.T) {
 
 	// Run reconciliation
 	manager := NewManager(log, server.EAC)
-	err = manager.Reconcile(ctx, pool, nil)
-	require.NoError(t, err)
+	reconcilePool(t, ctx, server, manager, pool)
 
 	// Verify total is now 5 (2 existing + 3 new)
 	sandboxes := listSandboxesForPool(t, ctx, server, pool)
@@ -248,8 +247,7 @@ func TestManagerVersionFiltering(t *testing.T) {
 
 	// Run reconciliation
 	manager := NewManager(log, server.EAC)
-	err = manager.Reconcile(ctx, pool, nil)
-	require.NoError(t, err)
+	reconcilePool(t, ctx, server, manager, pool)
 
 	// Should create 3 new sandboxes (old version doesn't count)
 	sandboxes := listSandboxesForPool(t, ctx, server, pool)
@@ -312,8 +310,7 @@ func TestManagerStatusOnlyUpdate(t *testing.T) {
 
 	// Run reconciliation
 	manager := NewManager(log, server.EAC)
-	err = manager.Reconcile(ctx, pool, nil)
-	require.NoError(t, err)
+	reconcilePool(t, ctx, server, manager, pool)
 
 	// Should not create new sandboxes
 	sandboxes := listSandboxesForPool(t, ctx, server, pool)
@@ -362,8 +359,7 @@ func TestManagerNoUpdateWhenStatusUnchanged(t *testing.T) {
 
 	// Run reconciliation
 	manager := NewManager(log, server.EAC)
-	err = manager.Reconcile(ctx, pool, nil)
-	require.NoError(t, err)
+	reconcilePool(t, ctx, server, manager, pool)
 
 	// Get pool again and verify status is correct
 	finalPool := getPool(t, ctx, server, poolID)
@@ -465,8 +461,7 @@ func TestManagerScaleDownIdle(t *testing.T) {
 
 	// Create manager and run reconciliation
 	manager := NewManager(log, server.EAC)
-	err = manager.Reconcile(ctx, pool, nil)
-	require.NoError(t, err)
+	reconcilePool(t, ctx, server, manager, pool)
 
 	// Verify pool status was updated
 	finalPool := getPool(t, ctx, server, pool.ID)
@@ -544,8 +539,7 @@ func TestManagerScaleDownFixedModeProactive(t *testing.T) {
 
 	// Run reconciliation
 	manager := NewManager(log, server.EAC)
-	err = manager.Reconcile(ctx, pool, nil)
-	require.NoError(t, err)
+	reconcilePool(t, ctx, server, manager, pool)
 
 	// Verify 2 sandboxes were stopped (scale down from 3 to 1)
 	sandboxes := listSandboxesForPool(t, ctx, server, pool)
@@ -632,9 +626,27 @@ func TestManagerZeroValuePersistence(t *testing.T) {
 	updatedPool = getPool(t, ctx, server, poolID)
 	assert.Equal(t, int64(0), updatedPool.DesiredInstances, "DesiredInstances=0 should persist")
 
-	// Test 2: Update CurrentInstances and ReadyInstances to 0 via updatePoolStatus
-	err = manager.updatePoolStatus(ctx, updatedPool, 0, 0)
+	// Test 2: Update CurrentInstances and ReadyInstances to 0 via Reconcile
+	// Mark all sandboxes as DEAD so they're not counted
+	results, err := server.EAC.List(ctx, entity.Ref(entity.EntityKind, compute_v1alpha.KindSandbox))
 	require.NoError(t, err)
+	for _, ent := range results.Values() {
+		_, err := server.EAC.Patch(ctx, []entity.Attr{
+			entity.Ref(entity.DBId, ent.Entity().Id()),
+			entity.String(compute_v1alpha.SandboxStatusId, string(compute_v1alpha.DEAD)),
+		}, 0)
+		require.NoError(t, err)
+	}
+
+	// Set DesiredInstances to 0 to prevent creating new sandboxes
+	_, err = server.EAC.Patch(ctx, []entity.Attr{
+		entity.Ref(entity.DBId, poolID),
+		entity.Int64(compute_v1alpha.SandboxPoolDesiredInstancesId, 0),
+	}, 0)
+	require.NoError(t, err)
+
+	// Reconcile will update CurrentInstances and ReadyInstances to 0
+	reconcilePool(t, ctx, server, manager, pool)
 
 	updatedPool = getPool(t, ctx, server, poolID)
 	assert.Equal(t, int64(0), updatedPool.CurrentInstances, "CurrentInstances=0 should persist")
@@ -705,6 +717,39 @@ func getEntityLabels(t *testing.T, ctx context.Context, server *testutils.InMemE
 func getLabel(labels types.Labels, key string) string {
 	val, _ := labels.Get(key)
 	return val
+}
+
+// reconcilePool is a test helper that processes a pool through the real controller framework.
+// It creates a ReconcileController and calls ProcessEvent, which runs the exact same code
+// path as production: handler invocation, diff calculation, and Patch application.
+func reconcilePool(t *testing.T, ctx context.Context, server *testutils.InMemEntityServer, manager *Manager, pool *compute_v1alpha.SandboxPool) {
+	t.Helper()
+
+	// Create a real ReconcileController - this gives us the exact production code path
+	rc := controller.NewReconcileController(
+		"test-sandboxpool",
+		testutils.TestLogger(t),
+		entity.Ref(entity.EntityKind, compute_v1alpha.KindSandboxPool),
+		server.EAC,
+		controller.AdaptReconcileController[compute_v1alpha.SandboxPool](manager),
+		0, // resync period (not used for ProcessEvent)
+		1, // workers (not used for ProcessEvent)
+	)
+
+	// Fetch current entity state
+	resp, err := server.EAC.Get(ctx, pool.ID.String())
+	require.NoError(t, err)
+
+	// Create an event like the controller framework would
+	event := controller.Event{
+		Type:   controller.EventUpdated,
+		Id:     pool.ID,
+		Entity: resp.Entity().Entity(),
+	}
+
+	// ProcessEventForTest runs processItem + applyUpdates - the exact production code path
+	err = rc.ProcessEventForTest(ctx, event)
+	require.NoError(t, err)
 }
 
 // TestCleanupEmptyPools tests that pools with desired_instances=0,

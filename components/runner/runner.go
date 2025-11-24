@@ -397,6 +397,9 @@ func (r *Runner) SetupControllers(
 		workers,
 	)
 
+	// Wire up write tracker so manual Patch calls can skip self-generated watch events
+	sbc.SetWriteTracker(sbController.WriteTracker())
+
 	sbController.SetPeriodic(5*time.Minute, func(ctx context.Context) error {
 		return sbc.Periodic(ctx, time.Hour)
 	})
