@@ -193,7 +193,6 @@ func (c *ReconcileController) Start(top context.Context) error {
 
 				// Skip watch events for revisions we recently wrote to reduce reconciliation noise
 				if ev.Rev > 0 && c.recentWrites.Contains(ev.Rev) {
-					c.Log.Debug("Skipping watch event for self-generated revision", "entity", ev.Id, "rev", ev.Rev, "eventType", ev.Type)
 					return nil
 				}
 
