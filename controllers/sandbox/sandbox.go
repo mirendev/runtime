@@ -2117,8 +2117,7 @@ func (c *SandboxController) stopSandbox(ctx context.Context, id entity.Id) error
 		if !errors.Is(err, cond.ErrNotFound{}) {
 			c.Log.Error("failed to mark sandbox as DEAD", "id", id, "error", err)
 		}
-	}
-	if c.writeTracker != nil && result.HasRevision() {
+	} else if c.writeTracker != nil && result.HasRevision() {
 		c.writeTracker.RecordWrite(result.Revision())
 	}
 

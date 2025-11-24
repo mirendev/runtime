@@ -123,7 +123,7 @@ func (m *Manager) Reconcile(ctx context.Context, pool *compute_v1alpha.SandboxPo
 		}
 
 		// Update current/ready counts even during cooldown, then skip scaling logic
-		return m.updatePoolStatus(ctx, pool, actual, ready)
+		return m.updatePoolStatus(ctx, pool, actual, ready, meta)
 	}
 
 	// Check for healthy sandbox to reset crash counter
@@ -256,8 +256,8 @@ func (m *Manager) Reconcile(ctx context.Context, pool *compute_v1alpha.SandboxPo
 		}
 	}
 
-	// Update pool status
-	return m.updatePoolStatus(ctx, pool, actual, ready)
+	// Update pool status and propagate changes to entity for framework to persist
+	return m.updatePoolStatus(ctx, pool, actual, ready, meta)
 }
 
 // Delete handles pool deletion by stopping all sandboxes in the pool.
@@ -494,21 +494,38 @@ func (m *Manager) scaleDown(ctx context.Context, pool *compute_v1alpha.SandboxPo
 	return nil
 }
 
-// updatePoolStatus updates the pool's CurrentInstances and ReadyInstances fields.
-// The framework will automatically apply these changes via entity.Diff.
-func (m *Manager) updatePoolStatus(ctx context.Context, pool *compute_v1alpha.SandboxPool, current, ready int64) error {
-	// Only update if values changed
-	if pool.CurrentInstances == current && pool.ReadyInstances == ready {
+// updatePoolStatus updates the pool's CurrentInstances and ReadyInstances fields,
+// then propagates all pool changes back to meta.Entity for the framework to diff and persist.
+// When called with a nil meta (e.g., during testing), it falls back to direct persistence.
+func (m *Manager) updatePoolStatus(ctx context.Context, pool *compute_v1alpha.SandboxPool, current, ready int64, meta *entity.Meta) error {
+	// Update status counters
+	if pool.CurrentInstances != current || pool.ReadyInstances != ready {
+		pool.CurrentInstances = current
+		pool.ReadyInstances = ready
+
+		m.log.Debug("updated pool status",
+			"pool", pool.ID,
+			"current", current,
+			"ready", ready)
+	}
+
+	// Propagate all pool changes back to the entity for the framework to diff and persist.
+	// We must explicitly set CurrentInstances and ReadyInstances even when they are 0,
+	// since Encode() skips "empty" values which includes 0.
+	if meta == nil {
 		return nil
 	}
 
-	pool.CurrentInstances = current
-	pool.ReadyInstances = ready
-
-	m.log.Debug("updated pool status",
-		"pool", pool.ID,
-		"current", current,
-		"ready", ready)
+	if meta.Entity == nil {
+		meta.Entity = entity.New(pool.Encode())
+	} else {
+		meta.Update(pool.Encode())
+	}
+	// Explicitly set status fields to ensure 0 values are persisted
+	meta.Update([]entity.Attr{
+		entity.Int64(compute_v1alpha.SandboxPoolCurrentInstancesId, current),
+		entity.Int64(compute_v1alpha.SandboxPoolReadyInstancesId, ready),
+	})
 
 	return nil
 }

@@ -396,6 +396,14 @@ func (c *ReconcileController) processItem(ctx context.Context, event Event) ([]e
 	}
 }
 
+// ProcessEventForTest processes a single event and applies any updates.
+// This is exposed for testing controllers without starting the full controller loop.
+func (c *ReconcileController) ProcessEventForTest(ctx context.Context, event Event) error {
+	updates, err := c.processItem(ctx, event)
+	c.applyUpdates(ctx, event, updates)
+	return err
+}
+
 // applyUpdates applies the given updates to an entity using Patch
 func (c *ReconcileController) applyUpdates(ctx context.Context, event Event, updates []entity.Attr) {
 	if len(updates) == 0 {
