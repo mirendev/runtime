@@ -38,6 +38,46 @@ Miren inserts rules at position 1 (the beginning of each chain) to ensure they t
 
 For example, Oracle Cloud Ubuntu images have a REJECT rule at the start of the FORWARD chain by default. If Miren appended its ACCEPT rules to the end, they would never be evaluated.
 
+## Required External Ports
+
+If you're running Miren on a cloud provider, you'll need to configure security groups or network ACLs to allow external traffic to reach the Miren server.
+
+### Inbound Ports
+
+| Port | Protocol | Purpose | Required |
+|------|----------|---------|----------|
+| 8443 | UDP | Miren API (QUIC) - CLI and client connections | Yes |
+| 80 | TCP | HTTP traffic to your applications (redirects to HTTPS) | Yes |
+| 443 | TCP | HTTPS traffic to your applications | Yes |
+
+**Miren API (UDP 8443):** The Miren API uses QUIC (HTTP/3) over UDP. This is how the CLI communicates with the server and how remote clients connect to your cluster.
+
+**HTTP Ingress (TCP 80/443):** Application traffic uses standard HTTP/HTTPS. Port 80 handles ACME certificate challenges and redirects to HTTPS. Port 443 serves your applications over TLS.
+
+### Outbound Connectivity
+
+Miren requires outbound internet access for several operations. Most cloud providers allow all outbound traffic by default, but if you have restrictive egress rules, ensure the following destinations are reachable:
+
+| Destination | Port | Purpose |
+|-------------|------|---------|
+| oci.miren.cloud | 443 | Miren's container registry (base images for builds) |
+| api.miren.cloud | 443 | Miren Cloud API (authentication, cluster registration) |
+| registry-1.docker.io | 443 | Docker Hub (if your app references Docker Hub images) |
+| Package registries | 443 | Language-specific package managers (see below) |
+| Let's Encrypt | 80/443 | ACME certificate issuance |
+
+**During builds**, Miren pulls base images from `oci.miren.cloud` for supported language stacks (Python, Ruby, Node.js, Go, Bun). If your application references other container images, those registries must also be reachable.
+
+**Package managers** used during builds need access to their respective registries:
+
+- **Ruby**: rubygems.org
+- **Python**: pypi.org
+- **Node.js/Bun**: registry.npmjs.org
+- **Go**: proxy.golang.org (and any private module sources)
+- **System packages**: debian/ubuntu apt repositories, Alpine apk repositories
+
+**Miren Cloud** connectivity is required for authentication (`miren login`) and cluster registration (`miren register`). If you're running Miren in standalone mode without cloud features, this isn't required.
+
 ## Cloud Provider Considerations
 
 ### Oracle Cloud
@@ -46,14 +86,18 @@ Oracle Cloud instances come with restrictive default iptables rules. Miren handl
 
 - The default FORWARD chain has a REJECT rule that blocks all forwarding
 - The default INPUT chain may not allow traffic from container networks
+- You must also configure the VCN Security List to allow inbound traffic (see above)
 
 ### AWS
 
-AWS security groups operate at the network layer outside the instance. Miren's iptables rules handle traffic inside the instance, but you still need to configure security groups to allow external traffic to reach your services.
+AWS security groups operate at the network layer outside the instance. Miren's iptables rules handle traffic inside the instance, but you still need to configure security groups to allow external traffic to reach your services (see above).
 
 ### Other Providers
 
-Most cloud providers have some form of default firewall. Miren's rule insertion strategy should work out of the box, but if you encounter networking issues, check for conflicting rules.
+Most cloud providers have some form of default firewall. Miren's rule insertion strategy should work out of the box, but if you encounter networking issues, check for conflicting rules. Remember to configure both:
+
+1. **Cloud-level firewalls** (security groups, network ACLs) - allow external traffic to reach the instance
+2. **Host-level firewalls** (iptables) - Miren handles this automatically
 
 ## Troubleshooting
 
