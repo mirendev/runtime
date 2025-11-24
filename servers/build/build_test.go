@@ -835,7 +835,7 @@ func TestMergeServiceEnvVars(t *testing.T) {
 			existingEnvs: []core_v1alpha.Env{
 				{Key: "MANUAL_VAR", Value: "manual_value", Source: "manual"},
 			},
-			newEnvs:  nil,
+			newEnvs: nil,
 			wantEnvs: []core_v1alpha.Env{
 				{Key: "MANUAL_VAR", Value: "manual_value", Source: "manual"},
 			},
