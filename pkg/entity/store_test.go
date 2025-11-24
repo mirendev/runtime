@@ -1939,3 +1939,52 @@ func TestEntity_Fixup_DbId(t *testing.T) {
 		assert.True(t, strings.HasPrefix(string(entity.Id()), "e-"), "ID %s should start with e-", entity.Id())
 	})
 }
+
+func TestExtractEntityId(t *testing.T) {
+	t.Run("handles types.Id", func(t *testing.T) {
+		attrs := []Attr{
+			Ref(DBId, Id("test/id1")),
+		}
+		id, err := extractEntityId(attrs)
+		require.NoError(t, err)
+		assert.Equal(t, Id("test/id1"), id)
+	})
+
+	t.Run("handles types.Keyword", func(t *testing.T) {
+		// This test verifies the fix for production issue where db/id
+		// values were being unmarshaled as types.Keyword instead of types.Id
+		attrs := []Attr{
+			Keyword(DBId, "test/id2"),
+		}
+		id, err := extractEntityId(attrs)
+		require.NoError(t, err)
+		assert.Equal(t, Id("test/id2"), id)
+	})
+
+	t.Run("handles string", func(t *testing.T) {
+		attrs := []Attr{
+			String(DBId, "test/id3"),
+		}
+		id, err := extractEntityId(attrs)
+		require.NoError(t, err)
+		assert.Equal(t, Id("test/id3"), id)
+	})
+
+	t.Run("returns error when db/id missing", func(t *testing.T) {
+		attrs := []Attr{
+			String(Doc, "some doc"),
+		}
+		_, err := extractEntityId(attrs)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "db/id attribute is required")
+	})
+
+	t.Run("returns error for invalid type", func(t *testing.T) {
+		attrs := []Attr{
+			Int64(DBId, 123),
+		}
+		_, err := extractEntityId(attrs)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "invalid db/id attribute type")
+	})
+}

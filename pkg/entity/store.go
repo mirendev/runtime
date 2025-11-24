@@ -15,6 +15,7 @@ import (
 	"go.etcd.io/etcd/api/v3/mvccpb"
 	clientv3 "go.etcd.io/etcd/client/v3"
 	"miren.dev/runtime/pkg/cond"
+	"miren.dev/runtime/pkg/entity/types"
 )
 
 // EtcdStore implements Store using etcd
@@ -653,6 +654,8 @@ func extractEntityId(attributes []Attr) (Id, error) {
 			case Id:
 				return v, nil
 			case string:
+				return Id(v), nil
+			case types.Keyword:
 				return Id(v), nil
 			default:
 				return "", fmt.Errorf("invalid db/id attribute type: %T", attr.Value.Any())
