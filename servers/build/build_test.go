@@ -655,7 +655,7 @@ func TestMergeVariablesFromAppConfig(t *testing.T) {
 			},
 		},
 		{
-			name: "manual var overrides config var with same key",
+			name: "manual var shadows config var with same key",
 			existingVars: []core_v1alpha.Variable{
 				{Key: "DATABASE_URL", Value: "manually_set", Source: "manual"},
 			},
@@ -665,7 +665,25 @@ func TestMergeVariablesFromAppConfig(t *testing.T) {
 				},
 			},
 			wantVars: []core_v1alpha.Variable{
-				{Key: "DATABASE_URL", Value: "from_config", Source: "config"},
+				// Manual wins - user intent takes precedence over config
+				{Key: "DATABASE_URL", Value: "manually_set", Source: "manual"},
+			},
+		},
+		{
+			name: "config cannot override existing manual var",
+			existingVars: []core_v1alpha.Variable{
+				{Key: "SECRET", Value: "user_secret", Source: "manual"},
+				{Key: "LOG_LEVEL", Value: "debug", Source: "config"},
+			},
+			appConfig: &appconfig.AppConfig{
+				EnvVars: []appconfig.AppEnvVar{
+					{Name: "SECRET", Value: "default_secret"}, // Should NOT override manual
+					{Name: "LOG_LEVEL", Value: "info"},        // Should override config
+				},
+			},
+			wantVars: []core_v1alpha.Variable{
+				{Key: "SECRET", Value: "user_secret", Source: "manual"}, // Manual preserved
+				{Key: "LOG_LEVEL", Value: "info", Source: "config"},     // Config updated
 			},
 		},
 		{
@@ -790,7 +808,7 @@ func TestMergeServiceEnvVars(t *testing.T) {
 			},
 		},
 		{
-			name: "app.toml vars override manual vars with same key",
+			name: "manual var shadows config var with same key",
 			existingEnvs: []core_v1alpha.Env{
 				{Key: "DATABASE_URL", Value: "manually_set", Source: "manual"},
 			},
@@ -798,7 +816,23 @@ func TestMergeServiceEnvVars(t *testing.T) {
 				{Key: "DATABASE_URL", Value: "from_config", Source: "config"},
 			},
 			wantEnvs: []core_v1alpha.Env{
-				{Key: "DATABASE_URL", Value: "from_config", Source: "config"},
+				// Manual wins - user intent takes precedence over config
+				{Key: "DATABASE_URL", Value: "manually_set", Source: "manual"},
+			},
+		},
+		{
+			name: "config cannot override existing manual var",
+			existingEnvs: []core_v1alpha.Env{
+				{Key: "SECRET", Value: "user_secret", Source: "manual"},
+				{Key: "LOG_LEVEL", Value: "debug", Source: "config"},
+			},
+			newEnvs: []core_v1alpha.Env{
+				{Key: "SECRET", Value: "default_secret", Source: "config"}, // Should NOT override manual
+				{Key: "LOG_LEVEL", Value: "info", Source: "config"},        // Should override config
+			},
+			wantEnvs: []core_v1alpha.Env{
+				{Key: "SECRET", Value: "user_secret", Source: "manual"}, // Manual preserved
+				{Key: "LOG_LEVEL", Value: "info", Source: "config"},     // Config updated
 			},
 		},
 		{

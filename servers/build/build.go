@@ -58,8 +58,8 @@ func NewBuilder(log *slog.Logger, eas *entityserver_v1alpha.EntityAccessClient, 
 
 // mergeServiceEnvVars merges per-service environment variables from app.toml into existing service env vars.
 // Uses the same source-tracking logic as global variables:
-// - app.toml vars (source="config") override existing config vars
-// - Manual vars (source="manual") persist unless overridden by app.toml
+// - Manual vars (source="manual") always persist and shadow config vars with the same key
+// - app.toml vars (source="config") override existing config vars but never manual vars
 // - Removing a var from app.toml only deletes it if source="config"
 func mergeServiceEnvVars(existingEnvs []core_v1alpha.Env, newEnvs []core_v1alpha.Env) []core_v1alpha.Env {
 	// If no new env vars from app.toml, preserve all existing
@@ -76,7 +76,7 @@ func mergeServiceEnvVars(existingEnvs []core_v1alpha.Env, newEnvs []core_v1alpha
 	// Build result by merging
 	envMap := make(map[string]core_v1alpha.Env)
 
-	// Keep manual vars
+	// Keep manual vars - they shadow config vars with the same key
 	for _, e := range existingEnvs {
 		source := e.Source
 		if source == "" {
@@ -89,9 +89,11 @@ func mergeServiceEnvVars(existingEnvs []core_v1alpha.Env, newEnvs []core_v1alpha
 		// config vars only kept if still in app.toml (checked below)
 	}
 
-	// Add/override with app.toml vars
+	// Add app.toml vars, but never override manual vars
 	for key, e := range newEnvMap {
-		envMap[key] = e
+		if _, hasManual := envMap[key]; !hasManual {
+			envMap[key] = e
+		}
 	}
 
 	// Convert back to slice
@@ -244,8 +246,8 @@ func buildVariablesFromAppConfig(appConfig *appconfig.AppConfig) []core_v1alpha.
 
 // mergeVariablesFromAppConfig merges environment variables from app.toml into existing variables.
 // The merge strategy respects variable sources:
-// - Variables from app.toml (source="config") override existing config vars
-// - Manual variables (source="manual") are preserved unless overridden by app.toml
+// - Manual vars (source="manual") always persist and shadow config vars with the same key
+// - Variables from app.toml (source="config") override existing config vars but never manual vars
 // - If a variable is removed from app.toml, it's only deleted if it was originally from config
 // - If appConfig is nil or has no env vars, all existing variables are preserved.
 func mergeVariablesFromAppConfig(existingVars []core_v1alpha.Variable, appConfig *appconfig.AppConfig) []core_v1alpha.Variable {
@@ -265,7 +267,7 @@ func mergeVariablesFromAppConfig(existingVars []core_v1alpha.Variable, appConfig
 	// Build result by merging
 	varMap := make(map[string]core_v1alpha.Variable)
 
-	// First, add all existing manual variables (unless overridden by app.toml)
+	// First, add all existing manual variables - these always persist
 	for _, v := range existingVars {
 		// Backward compatibility: empty source is treated as "config"
 		source := v.Source
@@ -273,16 +275,18 @@ func mergeVariablesFromAppConfig(existingVars []core_v1alpha.Variable, appConfig
 			source = "config"
 		}
 
-		// Keep manual vars, they persist unless overridden
+		// Keep manual vars - they shadow config vars with the same key
 		if source == "manual" {
 			varMap[v.Key] = v
 		}
 		// config vars are only kept if still in app.toml (checked below)
 	}
 
-	// Now add/override with app.toml variables
+	// Now add app.toml variables, but never override manual vars
 	for key, v := range appConfigMap {
-		varMap[key] = v
+		if _, hasManual := varMap[key]; !hasManual {
+			varMap[key] = v
+		}
 	}
 
 	// Convert map back to slice
