@@ -87,25 +87,31 @@ func TestEtcdComponentIntegration(t *testing.T) {
 	expectedEndpoint := fmt.Sprintf("http://localhost:%d", clientPort)
 	assert.Equal(t, expectedEndpoint, endpoint, "client endpoint should match expected")
 
-	// Wait for etcd to be fully ready
+	// Wait for etcd to be fully ready by polling
 	t.Log("Waiting for etcd to be ready...")
-	time.Sleep(10 * time.Second)
-
-	// Test etcd functionality using etcd Go SDK
-	t.Log("Testing etcd functionality...")
-	etcdClient, err := clientv3.New(clientv3.Config{
-		Endpoints:   []string{endpoint},
-		DialTimeout: 5 * time.Second,
-	})
-	require.NoError(t, err, "failed to create etcd client")
+	var etcdClient *clientv3.Client
+	require.Eventually(t, func() bool {
+		var err error
+		etcdClient, err = clientv3.New(clientv3.Config{
+			Endpoints:   []string{endpoint},
+			DialTimeout: 1 * time.Second,
+		})
+		if err != nil {
+			return false
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+		defer cancel()
+		_, err = etcdClient.Get(ctx, "health-check")
+		if err != nil {
+			etcdClient.Close()
+			etcdClient = nil
+			return false
+		}
+		return true
+	}, 30*time.Second, 500*time.Millisecond, "etcd failed to become ready")
 	defer etcdClient.Close()
 
-	// Test cluster health
-	ctx2, cancel2 := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel2()
-
-	_, err = etcdClient.Get(ctx2, "health-check")
-	require.NoError(t, err, "failed to check etcd health")
+	t.Log("Testing etcd functionality...")
 
 	// Test basic key-value operations
 	testKey := "test-key"
@@ -188,22 +194,28 @@ func TestEtcdComponentIntegration(t *testing.T) {
 
 	assert.True(t, component.IsRunning(), "component should report as running after restart")
 
-	// Wait for restart to complete
-	time.Sleep(5 * time.Second)
-
-	// Test that data persisted (though we cleaned it, just test connectivity)
-	etcdClient2, err := clientv3.New(clientv3.Config{
-		Endpoints:   []string{component.ClientEndpoint()},
-		DialTimeout: 5 * time.Second,
-	})
-	require.NoError(t, err, "failed to create etcd client after restart")
+	// Wait for etcd to be ready after restart by polling
+	var etcdClient2 *clientv3.Client
+	require.Eventually(t, func() bool {
+		var err error
+		etcdClient2, err = clientv3.New(clientv3.Config{
+			Endpoints:   []string{component.ClientEndpoint()},
+			DialTimeout: 1 * time.Second,
+		})
+		if err != nil {
+			return false
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+		defer cancel()
+		_, err = etcdClient2.Get(ctx, "restart-test")
+		if err != nil {
+			etcdClient2.Close()
+			etcdClient2 = nil
+			return false
+		}
+		return true
+	}, 30*time.Second, 500*time.Millisecond, "etcd failed to become ready after restart")
 	defer etcdClient2.Close()
-
-	ctx9, cancel9 := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel9()
-
-	_, err = etcdClient2.Get(ctx9, "restart-test")
-	require.NoError(t, err, "failed to connect to etcd after restart")
 
 	t.Log("Restart test completed successfully!")
 }
