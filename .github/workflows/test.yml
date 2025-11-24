@@ -26,32 +26,13 @@ jobs:
         go-version-file: 'go.mod'
         cache: true
 
-    - name: Cache apt packages
-      uses: actions/cache@v4
-      id: cache-apt
-      with:
-        path: |
-          /var/cache/apt/archives
-          /var/lib/apt/lists
-        key: ${{ runner.os }}-apt-${{ hashFiles('.github/workflows/test.yml') }}-clang-llvm
-        restore-keys: |
-          ${{ runner.os }}-apt-${{ hashFiles('.github/workflows/test.yml') }}-
-          ${{ runner.os }}-apt-
-
     - name: Install system dependencies
-      if: steps.cache-apt.outputs.cache-hit != 'true'
       run: |
         # Disable expensive operations on throwaway CI runners
         sudo sed -i 's/^DPkg::Post-Invoke.*//' /etc/apt/apt.conf.d/90_man-db || true
-        # Install packages
+        # Install packages (depot runners have persistent images, so this is usually cached)
         sudo DEBIAN_FRONTEND=noninteractive apt-get update
         sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends clang llvm
-
-    - name: Clean up apt lock files
-      run: |
-        # Remove lock files and partial directories to prevent cache save errors
-        sudo rm -f /var/cache/apt/archives/lock /var/lib/apt/lists/lock
-        sudo rm -rf /var/cache/apt/archives/partial /var/lib/apt/lists/partial
 
     - name: Cache Go tools
       id: cache-go-tools
