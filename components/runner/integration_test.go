@@ -205,6 +205,32 @@ waitForCreate:
 
 	r.NotNil(c)
 
+	// Wait for sandbox entity to reach RUNNING status before deleting.
+	// This ensures the controller has finished all its updates and the entity
+	// is in a stable state, avoiding OCC conflicts during delete.
+	timeout = time.After(10 * time.Second)
+	ticker = time.NewTicker(100 * time.Millisecond)
+waitForRunning:
+	for {
+		select {
+		case <-timeout:
+			r.Fail("Timeout waiting for sandbox to reach RUNNING status")
+		case <-ticker.C:
+			res, err := eac.Get(ctx, id)
+			if err != nil {
+				continue
+			}
+			if res.HasEntity() {
+				var sb compute.Sandbox
+				sb.Decode(res.Entity().Entity())
+				if sb.Status == compute.RUNNING {
+					break waitForRunning
+				}
+			}
+		}
+	}
+	ticker.Stop()
+
 	// Test deleting the sandbox entity
 
 	_, err = eac.Delete(ctx, id)
