@@ -653,6 +653,41 @@ func (c *SandboxController) Create(ctx context.Context, co *compute.Sandbox, met
 		} else {
 			switch searchRes {
 			case same:
+				// If sandbox exists and is healthy but status is PENDING,
+				// update it to RUNNING. This is a fallback to recover from failed
+				// status updates (e.g. due to OCC conflicts during creation).
+				// Only do this if entity is stale (created > 2 minutes ago)
+				// to avoid conflicting with active goroutines working on booting.
+				if co.Status == compute.PENDING {
+					createdAt := meta.GetCreatedAt()
+					age := time.Since(createdAt)
+					const staleThreshold = 2 * time.Minute
+
+					if age > staleThreshold {
+						c.Log.Info("sandbox exists and is healthy but status is PENDING (stale), updating to RUNNING",
+							"id", co.ID,
+							"createdAt", createdAt,
+							"age", age)
+						patchAttrs := entity.New(
+							entity.Ref(entity.DBId, co.ID),
+							(&compute.Sandbox{
+								Status: compute.RUNNING,
+							}).Encode,
+						)
+						_, err := c.EAC.Patch(ctx, patchAttrs.Attrs(), meta.Revision)
+						if err != nil {
+							c.Log.Error("failed to update sandbox status to RUNNING", "id", co.ID, "error", err)
+							return fmt.Errorf("failed to update sandbox status to RUNNING: %w", err)
+						}
+						return nil
+					} else {
+						c.Log.Debug("sandbox is PENDING but was recently created, skipping status correction",
+							"id", co.ID,
+							"age", age,
+							"threshold", staleThreshold)
+						return nil
+					}
+				}
 				c.Log.Debug("sandbox already exists, skipping create")
 				return nil
 			case unhealthy:
@@ -812,9 +847,9 @@ func (c *SandboxController) createSandbox(ctx context.Context, co *compute.Sandb
 
 	// Wait for ports to verify network connectivity before marking RUNNING
 	// Fast-path: most healthy apps bind within 1-2 seconds
-	// Slow-path: allow up to 10 seconds for slow-starting apps
+	// Slow-path: allow up to 15 seconds for slow-starting apps
 	// Fail-hard: if ports never bind, fail the sandbox so pool can retry
-	portTimeout := 10 * time.Second
+	portTimeout := 15 * time.Second
 	for _, wp := range waitPorts {
 		c.Log.Info("waiting for ports to be bound", "id", cid, "port", wp.port, "timeout", portTimeout)
 		if err := c.waitForPort(ctx, wp.id, wp.port, portTimeout); err != nil {
