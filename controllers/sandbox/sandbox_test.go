@@ -1500,4 +1500,149 @@ func TestSandbox(t *testing.T) {
 		r.False(healthy, "sandbox with unreachable ports should be considered unhealthy")
 	})
 
+	t.Run("PENDING sandbox with running containers should transition to RUNNING", func(t *testing.T) {
+		r := require.New(t)
+
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cancel()
+
+		reg, cleanup := testutils.Registry(observability.TestInject, build.TestInject)
+		defer cleanup()
+
+		var (
+			cc  *containerd.Client
+			bkl *build.Buildkit
+		)
+
+		err := reg.Init(&cc, &bkl)
+		r.NoError(err)
+
+		dfr, err := tarx.MakeTar("testdata/nginx", nil)
+		r.NoError(err)
+
+		datafs, err := tarx.TarFS(dfr, t.TempDir())
+		r.NoError(err)
+
+		o, _, err := bkl.Transform(ctx, datafs)
+		r.NoError(err)
+
+		var ii image.ImageImporter
+
+		err = reg.Populate(&ii)
+		r.NoError(err)
+
+		err = ii.ImportImage(ctx, o, "mn-nginx:latest")
+		r.NoError(err)
+
+		ctx = namespaces.WithNamespace(ctx, ii.Namespace)
+
+		_, err = cc.GetImage(ctx, "mn-nginx:latest")
+		r.NoError(err)
+
+		var co SandboxController
+
+		err = reg.Populate(&co)
+		r.NoError(err)
+
+		defer co.Close()
+
+		r.NoError(co.Init(ctx))
+
+		id := entity.Id(sbName())
+
+		var sb compute.Sandbox
+		sb.ID = id
+		sb.Status = compute.PENDING
+		sb.Labels = append(sb.Labels, "runtime.computer/app=mn-nginx")
+
+		cont := entity.New(
+			entity.DBId, id,
+			sb.Encode(),
+		)
+
+		// Store sandbox in entity store with PENDING status
+		var rpcE entityserver_v1alpha.Entity
+		rpcE.SetId(id.String())
+		rpcE.SetAttrs(entity.New(
+			entity.DBId, id,
+			sb.Encode).Attrs())
+		_, err = co.EAC.Put(ctx, &rpcE)
+		r.NoError(err)
+
+		// Retrieve it to get the entity with proper metadata
+		result, err := co.EAC.Get(ctx, id.String())
+		r.NoError(err)
+
+		meta := &entity.Meta{
+			Entity:   result.Entity().Entity(),
+			Revision: result.Entity().Revision(),
+		}
+
+		var tco compute.Sandbox
+		tco.Decode(cont)
+
+		// First call to Create - this will start the sandbox
+		err = co.Create(ctx, &tco, meta)
+		r.NoError(err)
+
+		// Verify sandbox was created and is running
+		c, err := cc.LoadContainer(ctx, pauseContainerId(id))
+		r.NoError(err)
+		r.NotNil(c)
+		defer testutils.ClearContainer(ctx, c)
+
+		// Verify task is running
+		pt, err := c.Task(ctx, nil)
+		r.NoError(err)
+		status, err := pt.Status(ctx)
+		r.NoError(err)
+		r.Equal(containerd.Running, status.Status)
+
+		// Simulate the bug scenario: entity status update failed due to conflict
+		// So entity is still PENDING even though container is running
+		result, err = co.EAC.Get(ctx, id.String())
+		r.NoError(err)
+
+		var currentSb compute.Sandbox
+		currentSb.Decode(result.Entity().Entity())
+
+		// Manually set it back to PENDING to simulate the conflict scenario
+		// Also set CreatedAt to be stale (> 2 minutes old) so it passes the staleness check
+		// CreatedAt is honored by the entity store (unlike UpdatedAt which is always set to now)
+		currentSb.Status = compute.PENDING
+		staleTime := time.Now().Add(-3 * time.Minute)
+		staleEntity := entity.New(currentSb.Encode())
+		staleEntity.SetCreatedAt(staleTime)
+		rpcE.SetId(id.String())
+		rpcE.SetAttrs(staleEntity.Attrs())
+		_, err = co.EAC.Put(ctx, &rpcE)
+		r.NoError(err)
+
+		// Now fetch it again for the second reconciliation
+		result, err = co.EAC.Get(ctx, id.String())
+		r.NoError(err)
+
+		meta = &entity.Meta{
+			Entity:   result.Entity().Entity(),
+			Revision: result.Entity().Revision(),
+		}
+
+		var pendingSb compute.Sandbox
+		pendingSb.Decode(result.Entity().Entity())
+		r.Equal(compute.PENDING, pendingSb.Status, "sandbox should be PENDING before second reconciliation")
+
+		// Second call to Create - this should update status to RUNNING
+		// because the sandbox containers are already running
+		err = co.Create(ctx, &pendingSb, meta)
+		r.NoError(err)
+
+		// Verify status was updated to RUNNING in the entity
+		result, err = co.EAC.Get(ctx, id.String())
+		r.NoError(err)
+
+		var finalSb compute.Sandbox
+		finalSb.Decode(result.Entity().Entity())
+		r.Equal(compute.RUNNING, finalSb.Status, "sandbox should transition from PENDING to RUNNING when containers are healthy")
+	})
+
 }

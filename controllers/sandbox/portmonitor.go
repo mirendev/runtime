@@ -119,7 +119,7 @@ func (pm *PortMonitor) monitorPorts(ctx context.Context, task *monitorTask) {
 	// was running, but it's way too much traffic for that. So we modified this to only
 	// run until all ports are bound.
 
-	ticker := time.NewTicker(500 * time.Millisecond)
+	ticker := time.NewTicker(250 * time.Millisecond)
 	defer ticker.Stop()
 
 	// Run this until we observe all the ports bound.
