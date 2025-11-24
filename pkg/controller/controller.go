@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
+	"miren.dev/runtime/pkg/cond"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/idgen"
 	"miren.dev/runtime/pkg/rpc/stream"
@@ -338,28 +339,7 @@ func (c *ReconcileController) runWorker(ctx context.Context) {
 				// we still try to process updates even if there is an error.
 			}
 
-			if len(updates) > 0 {
-				if event.Id == "" {
-					c.Log.Error("entity id is empty update there are updates", "event", event)
-				} else {
-					c.Log.Info("updating entity with updates produced by controller", "event", event, "updates", len(updates))
-
-					var rpcE entityserver_v1alpha.Entity
-					rpcE.SetId(string(event.Id))
-					rpcE.SetAttrs(updates)
-
-					result, err := c.esc.Put(ctx, &rpcE)
-					if err != nil {
-						c.Log.Error("error updating entity", "entity", event.Id, "error", err)
-					} else {
-						c.Log.Info("updated entity", "entity", event.Id)
-						// Record the revision we just wrote so we can skip the watch event
-						if result.HasRevision() {
-							c.RecordWrite(result.Revision())
-						}
-					}
-				}
-			}
+			c.applyUpdates(ctx, event, updates)
 
 			// Process any pending events before removing from in-flight
 			for {
@@ -386,28 +366,7 @@ func (c *ReconcileController) runWorker(ctx context.Context) {
 					c.Log.Error("error processing pending item", "event", event, "error", err)
 				}
 
-				if len(updates) > 0 {
-					if event.Id == "" {
-						c.Log.Error("entity id is empty update there are updates", "event", event)
-					} else {
-						c.Log.Info("updating entity with updates produced by controller", "event", event, "updates", len(updates))
-
-						var rpcE entityserver_v1alpha.Entity
-						rpcE.SetId(string(event.Id))
-						rpcE.SetAttrs(updates)
-
-						result, err := c.esc.Put(ctx, &rpcE)
-						if err != nil {
-							c.Log.Error("error updating entity", "entity", event.Id, "error", err)
-						} else {
-							c.Log.Info("updated entity", "entity", event.Id)
-							// Record the revision we just wrote so we can skip the watch event
-							if result.HasRevision() {
-								c.RecordWrite(result.Revision())
-							}
-						}
-					}
-				}
+				c.applyUpdates(ctx, event, updates)
 			}
 		}
 	}
@@ -421,6 +380,40 @@ func (c *ReconcileController) processItem(ctx context.Context, event Event) ([]e
 		return c.handler(ctx, event)
 	default:
 		return nil, fmt.Errorf("unknown event type: %s", event.Type)
+	}
+}
+
+// applyUpdates applies the given updates to an entity using Patch
+func (c *ReconcileController) applyUpdates(ctx context.Context, event Event, updates []entity.Attr) {
+	if len(updates) == 0 {
+		return
+	}
+
+	if event.Id == "" {
+		c.Log.Error("entity id is empty but there are updates", "event", event)
+		return
+	}
+
+	c.Log.Info("updating entity with updates produced by controller", "event", event, "updates", len(updates))
+
+	// Add entity ID to attrs for Patch
+	attrs := append([]entity.Attr{entity.Ref(entity.DBId, event.Id)}, updates...)
+
+	// Use Patch without OCC (revision 0) to avoid breaking unforeseen code that may depend
+	// on this working without conflict detection. Can revisit with more holistic pass.
+	result, err := c.esc.Patch(ctx, attrs, 0)
+	if err != nil {
+		if errors.Is(err, cond.ErrNotFound{}) {
+			c.Log.Warn("entity not found during update", "entity", event.Id)
+			return
+		}
+		c.Log.Error("error updating entity", "entity", event.Id, "error", err)
+	} else {
+		c.Log.Info("updated entity", "entity", event.Id)
+		// Record the revision we just wrote so we can skip the watch event
+		if result.HasRevision() {
+			c.RecordWrite(result.Revision())
+		}
 	}
 }
 
