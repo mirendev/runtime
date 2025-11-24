@@ -34,34 +34,41 @@ func Whoami(ctx *Context, opts struct {
 	if ctx.ClusterConfig.Identity != "" && ctx.ClientConfig != nil {
 		var err error
 		identity, err = ctx.ClientConfig.GetIdentity(ctx.ClusterConfig.Identity)
-		if err == nil && identity != nil && identity.Type == "keypair" && identity.PrivateKey != "" {
-			keyPair, err := cloudauth.LoadKeyPairFromPEM(identity.PrivateKey)
+		if err == nil && identity != nil && identity.Type == "keypair" {
+			// Get the private key (handles both direct PrivateKey and KeyRef)
+			privateKeyPEM, err := ctx.ClientConfig.GetPrivateKeyPEM(identity)
 			if err != nil {
-				ctx.Warn("Failed to load keypair: %v", err)
+				ctx.Warn("Failed to get private key: %v", err)
 			} else {
-				// Get the auth server URL
-				authServer := identity.Issuer
-				if authServer == "" {
-					authServer = hostname
-				}
-
-				// For local development, use HTTP
-				if !strings.HasPrefix(authServer, "http://") && !strings.HasPrefix(authServer, "https://") {
-					if strings.Contains(authServer, "localhost") || strings.Contains(authServer, "127.0.0.1") {
-						authServer = "http://" + authServer
-					} else {
-						authServer = "https://" + authServer
-					}
-				}
-
-				// Get JWT token
-				token, err = clientconfig.AuthenticateWithKey(ctx, authServer, keyPair)
+				keyPair, err := cloudauth.LoadKeyPairFromPEM(privateKeyPEM)
 				if err != nil {
-					return fmt.Errorf("failed to authenticate with keypair: %w", err)
+					ctx.Warn("Failed to load keypair: %v", err)
+				} else {
+					// Get the auth server URL
+					authServer := identity.Issuer
+					if authServer == "" {
+						authServer = hostname
+					}
+
+					// For local development, use HTTP
+					if !strings.HasPrefix(authServer, "http://") && !strings.HasPrefix(authServer, "https://") {
+						if strings.Contains(authServer, "localhost") || strings.Contains(authServer, "127.0.0.1") {
+							authServer = "http://" + authServer
+						} else {
+							authServer = "https://" + authServer
+						}
+					}
+
+					// Get JWT token
+					token, err = clientconfig.AuthenticateWithKey(ctx, authServer, keyPair)
+					if err != nil {
+						return fmt.Errorf("failed to authenticate with keypair: %w", err)
+					}
+					authMethod = "keypair"
 				}
-				authMethod = "keypair"
 			}
-		} else if identity != nil && identity.Type == "certificate" {
+		}
+		if identity != nil && identity.Type == "certificate" {
 			authMethod = "certificate"
 		}
 	}

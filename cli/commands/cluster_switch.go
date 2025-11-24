@@ -145,7 +145,7 @@ func checkClusterAccess(ctx *Context, cfg *clientconfig.Config, clusterName stri
 	}
 
 	// Check RBAC permission via the check-access endpoint
-	hasAccess, reason, err := checkClusterAccessRBAC(ctx, identity, clusterXID)
+	hasAccess, reason, err := checkClusterAccessRBAC(ctx, cfg, identity, clusterXID)
 	if err != nil {
 		// If we can't reach the cloud API, we'll allow the switch
 		ctx.Warn("Could not verify cluster access: %v", err)
@@ -164,7 +164,7 @@ func checkClusterAccess(ctx *Context, cfg *clientconfig.Config, clusterName stri
 }
 
 // checkClusterAccessRBAC calls the cloud API to check if the user has RBAC permission to access a cluster
-func checkClusterAccessRBAC(ctx *Context, identity *clientconfig.IdentityConfig, clusterXID string) (bool, string, error) {
+func checkClusterAccessRBAC(ctx *Context, config *clientconfig.Config, identity *clientconfig.IdentityConfig, clusterXID string) (bool, string, error) {
 	if identity.Type != "keypair" {
 		return false, "", fmt.Errorf("RBAC check is only supported for keypair identities")
 	}
@@ -175,8 +175,14 @@ func checkClusterAccessRBAC(ctx *Context, identity *clientconfig.IdentityConfig,
 		return false, "", fmt.Errorf("identity has no issuer configured")
 	}
 
+	// Get the private key (handles both direct PrivateKey and KeyRef)
+	privateKeyPEM, err := config.GetPrivateKeyPEM(identity)
+	if err != nil {
+		return false, "", fmt.Errorf("failed to get private key: %w", err)
+	}
+
 	// Load the private key
-	keyPair, err := cloudauth.LoadKeyPairFromPEM(identity.PrivateKey)
+	keyPair, err := cloudauth.LoadKeyPairFromPEM(privateKeyPEM)
 	if err != nil {
 		return false, "", fmt.Errorf("failed to load private key: %w", err)
 	}
