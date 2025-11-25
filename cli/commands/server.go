@@ -36,7 +36,6 @@ import (
 	"miren.dev/runtime/components/netresolve"
 	"miren.dev/runtime/components/ocireg"
 	"miren.dev/runtime/components/runner"
-	"miren.dev/runtime/components/scheduler"
 	"miren.dev/runtime/components/victorialogs"
 	"miren.dev/runtime/components/victoriametrics"
 	"miren.dev/runtime/metrics"
@@ -729,16 +728,6 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 			ctx.Log.Error("failed to close runner", "error", err)
 		}
 	}()
-
-	sch, err := scheduler.NewScheduler(sub, ctx.Log, eac)
-	if err != nil {
-		ctx.Log.Error("failed to create scheduler", "error", err)
-		return err
-	}
-
-	eg.Go(func() error {
-		return sch.Watch(sub, eac)
-	})
 
 	if cfg.TLS.GetStandardTLS() {
 		email := cfg.TLS.GetAcmeEmail()
