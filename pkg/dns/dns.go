@@ -522,12 +522,20 @@ func (s *Server) handleSandboxUpdate(ctx context.Context, sb *compute_v1alpha.Sa
 		"app-id", appVer.App.String(),
 	)
 
-	// Update in-memory mappings
+	s.addSandboxMapping(sb.ID.String(), ipAddr, appName, service)
+}
+
+// addSandboxMapping registers a sandbox's IP address for DNS resolution.
+// This is the core mapping logic, separated for testability.
+func (s *Server) addSandboxMapping(sandboxID, ipAddr, appName, service string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.addSandboxMappingLocked(sandboxID, ipAddr, appName, service)
+}
 
+func (s *Server) addSandboxMappingLocked(sandboxID, ipAddr, appName, service string) {
 	// Track entity ID -> IP mapping for DELETE operations
-	s.entityToIP[sb.ID.String()] = ipAddr
+	s.entityToIP[sandboxID] = ipAddr
 
 	// Update ipToApp mapping
 	s.ipToApp[ipAddr] = appName
@@ -552,8 +560,16 @@ func (s *Server) handleSandboxUpdate(ctx context.Context, sb *compute_v1alpha.Sa
 
 	if !found {
 		s.appServiceToIPs[appName][service] = append(existingIPs, ipAddr)
-		s.log.Info("added sandbox to DNS mapping", "sandbox", sb.ID, "app", appName, "service", service, "ip", ipAddr)
+		s.log.Info("added sandbox to DNS mapping", "sandbox", sandboxID, "app", appName, "service", service, "ip", ipAddr)
 	}
+}
+
+// lookupAppForIP returns the app name associated with the given IP address.
+// Returns empty string if the IP is not registered.
+func (s *Server) lookupAppForIP(ip string) string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.ipToApp[ip]
 }
 
 func (s *Server) handleSandboxDeleteByID(entityID string) {
@@ -569,6 +585,23 @@ func (s *Server) handleSandboxDeleteByID(entityID string) {
 
 	// Remove from entityToIP map
 	delete(s.entityToIP, entityID)
+
+	// Check if any other entity is still using this IP address.
+	// This can happen when IPs are reused: a new sandbox gets the same IP
+	// before the old sandbox's entity is cleaned up.
+	ipStillInUse := false
+	for _, ip := range s.entityToIP {
+		if ip == ipAddr {
+			ipStillInUse = true
+			break
+		}
+	}
+
+	if ipStillInUse {
+		s.log.Debug("IP still in use by another entity, keeping DNS mappings",
+			"entity_id", entityID, "ip", ipAddr)
+		return
+	}
 
 	// Get app name from ipToApp mapping
 	appName, found := s.ipToApp[ipAddr]
