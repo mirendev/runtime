@@ -7,6 +7,10 @@ import (
 
 const BufferSliceSize = 1024 * 1024
 
+// MaxPoolBufferSize is the maximum size of a buffer that will be returned to the pool.
+// Buffers larger than this are discarded to prevent memory bloat.
+const MaxPoolBufferSize = 8 * 1024 * 1024
+
 type Buffers struct {
 	slice []byte
 
@@ -27,7 +31,10 @@ func NewBuffers() *Buffers {
 
 func ReturnBuffers(buf *Buffers) {
 	buf.next = 0
-	buffersPool.Put(buf)
+	// Don't return oversized buffers to the pool - let them be GC'd
+	if len(buf.slice) <= MaxPoolBufferSize {
+		buffersPool.Put(buf)
+	}
 }
 
 type buffersKey struct{}
@@ -46,6 +53,7 @@ func (b *Buffers) Inject(ctx context.Context) context.Context {
 }
 
 func (b *Buffers) Reset() {
+	clear(b.slice[:b.next])
 	b.next = 0
 }
 
