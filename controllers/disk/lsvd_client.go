@@ -385,6 +385,16 @@ func (c *lsvdClientImpl) InitializeDisk(ctx context.Context, volumeId string, fi
 		"filesystem", filesystem,
 		"remote_only", c.remoteOnly)
 
+	// Test backend I/O before proceeding to NBD attachment.
+	// This catches storage/replication/connectivity issues in userspace
+	// before the kernel gets involved, avoiding unkillable D-state processes.
+	if err := c.testBackendIO(ctx, disk, volumeId); err != nil {
+		disk.Close(ctx)
+		delete(c.disks, volumeId)
+		delete(c.volumes, volumeId)
+		return fmt.Errorf("backend I/O test failed: %w", err)
+	}
+
 	// Start background reconciliation if using replica (not for remoteOnly mode)
 	if !c.remoteOnly && c.enableReplica && replicaSA != nil {
 		// Extract localSA from the ReplicaWriter wrapper
@@ -393,6 +403,43 @@ func (c *lsvdClientImpl) InitializeDisk(ctx context.Context, volumeId string, fi
 		go c.reconcileVolume(context.Background(), volumeId, sa, replicaSA)
 	}
 
+	return nil
+}
+
+// testBackendIO performs a direct I/O test on the LSVD disk before NBD attachment.
+// This catches storage, replication, and connectivity issues early, in userspace,
+// before the kernel gets involved in managing block devices.
+func (c *lsvdClientImpl) testBackendIO(ctx context.Context, disk *lsvd.Disk, volumeId string) error {
+	testCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	c.log.Debug("Testing backend I/O", "volume", volumeId)
+
+	errCh := make(chan error, 1)
+	go func() {
+		lsvdCtx := lsvd.NewContext(testCtx)
+		defer lsvdCtx.Close()
+
+		// Read first block to verify backend connectivity
+		// We only read (not write) to avoid corrupting existing formatted volumes
+		if _, err := disk.ReadExtent(lsvdCtx, lsvd.Extent{LBA: 0, Blocks: 1}); err != nil {
+			errCh <- fmt.Errorf("test read failed: %w", err)
+			return
+		}
+
+		errCh <- nil
+	}()
+
+	select {
+	case <-testCtx.Done():
+		return fmt.Errorf("backend I/O test timed out after 10 seconds - storage or replication may be slow/unavailable")
+	case err := <-errCh:
+		if err != nil {
+			return err
+		}
+	}
+
+	c.log.Debug("Backend I/O test passed", "volume", volumeId)
 	return nil
 }
 
@@ -566,10 +613,18 @@ func (c *lsvdClientImpl) MountVolume(ctx context.Context, volumeId string, mount
 	}
 
 	// Format if needed
-	if err := c.formatDevice(devicePath, state.info.Filesystem); err != nil {
+	if err := c.formatDevice(ctx, devicePath, state.info.Filesystem); err != nil {
 		if state.nbdCleanup != nil {
 			state.nbdCleanup()
+			state.nbdCleanup = nil
 		}
+		if state.nbdCancel != nil {
+			state.nbdCancel()
+			state.nbdCancel = nil
+		}
+		state.devicePath = ""
+		state.nbdIndex = 0
+		state.nbdConn = nil
 		return fmt.Errorf("failed to format device: %w", err)
 	}
 
@@ -1155,7 +1210,7 @@ func (c *lsvdClientImpl) attachNBDDevice(ctx context.Context, state *volumeState
 }
 
 // formatDevice formats a device with the specified filesystem if needed
-func (c *lsvdClientImpl) formatDevice(devicePath string, filesystem string) error {
+func (c *lsvdClientImpl) formatDevice(ctx context.Context, devicePath string, filesystem string) error {
 	// Default to ext4 if not specified
 	if filesystem == "" {
 		filesystem = "ext4"
@@ -1168,9 +1223,16 @@ func (c *lsvdClientImpl) formatDevice(devicePath string, filesystem string) erro
 	case "ext4":
 		if _, err := ext4.ReadExt4SuperBlock(devicePath); err == nil {
 			formatted = true
-			// Run fsck to ensure filesystem is clean
-			cmd := exec.Command("e2fsck", "-f", "-y", devicePath)
-			if output, err := cmd.CombinedOutput(); err != nil {
+			// Run fsck to ensure filesystem is clean with timeout to prevent indefinite hangs
+			fsckCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+			defer cancel()
+
+			cmd := exec.CommandContext(fsckCtx, "e2fsck", "-f", "-y", devicePath)
+			output, err := cmd.CombinedOutput()
+			if err != nil {
+				if fsckCtx.Err() == context.DeadlineExceeded {
+					return fmt.Errorf("e2fsck timed out after 2 minutes on %s - NBD device may be unresponsive", devicePath)
+				}
 				if ee, ok := err.(*exec.ExitError); ok {
 					switch ee.ExitCode() {
 					case 1, 2:
@@ -1228,19 +1290,27 @@ func (c *lsvdClientImpl) formatDevice(devicePath string, filesystem string) erro
 	if !formatted {
 		c.log.Info("Formatting device", "device", devicePath, "filesystem", filesystem)
 
+		// Use timeout to prevent indefinite hangs if NBD device becomes unresponsive
+		mkfsCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+		defer cancel()
+
 		var cmd *exec.Cmd
 		switch filesystem {
 		case "ext4":
-			cmd = exec.Command("mkfs.ext4", "-F", devicePath)
+			cmd = exec.CommandContext(mkfsCtx, "mkfs.ext4", "-F", devicePath)
 		case "xfs":
-			cmd = exec.Command("mkfs.xfs", "-f", devicePath)
+			cmd = exec.CommandContext(mkfsCtx, "mkfs.xfs", "-f", devicePath)
 		case "btrfs":
-			cmd = exec.Command("mkfs.btrfs", "-f", devicePath)
+			cmd = exec.CommandContext(mkfsCtx, "mkfs.btrfs", "-f", devicePath)
 		default:
 			return fmt.Errorf("unsupported filesystem: %s", filesystem)
 		}
 
-		if output, err := cmd.CombinedOutput(); err != nil {
+		output, err := cmd.CombinedOutput()
+		if err != nil {
+			if mkfsCtx.Err() == context.DeadlineExceeded {
+				return fmt.Errorf("mkfs.%s timed out after 2 minutes on %s - NBD device may be unresponsive", filesystem, devicePath)
+			}
 			return fmt.Errorf("failed to format %s: %w (output: %s)", filesystem, err, string(output))
 		}
 
