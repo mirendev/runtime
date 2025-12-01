@@ -22,7 +22,7 @@ func TestTortureQuick(t *testing.T) {
 		Level: slog.LevelError,
 	}))
 
-	runner, err := NewTortureRunner(context.Background(), log, "", cfg)
+	runner, err := NewTortureRunner(context.Background(), log, t.TempDir(), cfg)
 	if err != nil {
 		t.Fatalf("Failed to create runner: %v", err)
 	}

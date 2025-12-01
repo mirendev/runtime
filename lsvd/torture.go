@@ -404,14 +404,6 @@ type TortureResult struct {
 
 // NewTortureRunner creates a new torture test runner
 func NewTortureRunner(gctx context.Context, log *slog.Logger, tmpDir string, cfg TortureConfig) (*TortureRunner, error) {
-	if tmpDir == "" {
-		var err error
-		tmpDir, err = os.MkdirTemp("", "lsvd-torture-*")
-		if err != nil {
-			return nil, fmt.Errorf("failed to create temp dir: %w", err)
-		}
-	}
-
 	ctx := NewContext(gctx)
 
 	disk, err := NewDisk(ctx, log, tmpDir)
@@ -572,11 +564,6 @@ func (r *TortureRunner) execRead(op TortureOperation) error {
 		expectedHash, modelHas := r.model.ExpectedHash(lba)
 		if !modelHas {
 			expectedHash = zeroHash
-		}
-
-		if lba == 14654 {
-			fmt.Printf("Debug LBA 14654: expected %s, got %s, modelHas=%v\n",
-				hex.EncodeToString(expectedHash[:]), hex.EncodeToString(actualHash[:]), modelHas)
 		}
 
 		if actualHash != expectedHash {

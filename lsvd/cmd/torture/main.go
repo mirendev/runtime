@@ -106,15 +106,27 @@ func main() {
 		}
 	}
 
+	// Ensure we have a directory for test data
+	dir := *flagDir
+	if dir == "" {
+		var err error
+		dir, err = os.MkdirTemp("", "lsvd-torture-*")
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Failed to create temp dir: %v\n", err)
+			os.Exit(1)
+		}
+		defer os.RemoveAll(dir)
+	}
+
 	var err error
 	if *flagDuration > 0 {
-		err = runTortureTimed(ctx, log, *flagDir, cfg, *flagDuration, *flagLoop, *flagQuiet)
+		err = runTortureTimed(ctx, log, dir, cfg, *flagDuration, *flagLoop, *flagQuiet)
 	} else if *flagHammer {
-		err = runTortureHammer(ctx, log, *flagDir, cfg, *flagQuiet)
+		err = runTortureHammer(ctx, log, dir, cfg, *flagQuiet)
 	} else if *flagLoop {
-		err = runTortureLoop(ctx, log, *flagDir, cfg, *flagQuiet)
+		err = runTortureLoop(ctx, log, dir, cfg, *flagQuiet)
 	} else {
-		err = runTortureSingle(ctx, log, *flagDir, cfg, *flagQuiet)
+		err = runTortureSingle(ctx, log, dir, cfg, *flagQuiet)
 	}
 
 	if *flagMemProfile != "" {
