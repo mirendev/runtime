@@ -13,8 +13,9 @@ import (
 	compute "miren.dev/runtime/api/compute/compute_v1alpha"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/components/coordinate"
-	"miren.dev/runtime/components/scheduler"
+	schedulerctrl "miren.dev/runtime/controllers/scheduler"
 	"miren.dev/runtime/observability"
+	"miren.dev/runtime/pkg/controller"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/testutils"
 )
@@ -137,15 +138,22 @@ nodeReady:
 
 	r.Equal(compute.NodeStatusReadyId, status.Value.Id())
 
-	tmpSch, err := scheduler.NewScheduler(ctx, log, &eac)
-	r.NoError(err)
+	// Create and start the scheduler controller
+	scheduler := schedulerctrl.NewController(log, &eac)
+	r.NoError(scheduler.Init(ctx))
 
-	schNode, err := tmpSch.FindNodeById(entity.Id(nodeId))
-	r.NoError(err)
+	schedulerController := controller.NewReconcileController(
+		"scheduler",
+		log,
+		entity.Ref(entity.EntityKind, compute.KindSandbox),
+		&eac,
+		controller.AdaptReconcileController[compute.Sandbox](scheduler),
+		time.Minute,
+		1,
+	)
+	r.NoError(schedulerController.Start(ctx))
+	defer schedulerController.Stop()
 
-	r.NotNil(schNode)
-
-	go tmpSch.Watch(ctx, &eac)
 	time.Sleep(1 * time.Second)
 
 	id := fmt.Sprintf("sandbox/test-%d", time.Now().Unix())

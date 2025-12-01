@@ -19,7 +19,6 @@ import (
 	"miren.dev/runtime/components/netresolve"
 	"miren.dev/runtime/components/ocireg"
 	"miren.dev/runtime/components/runner"
-	"miren.dev/runtime/components/scheduler"
 	"miren.dev/runtime/metrics"
 	"miren.dev/runtime/observability"
 	"miren.dev/runtime/pkg/netdb"
@@ -236,18 +235,6 @@ func TestServer(t *testing.T) error {
 		ctxCancel()
 		return err
 	}
-
-	sch, err := scheduler.NewScheduler(sub, log, eac)
-	if err != nil {
-		log.Error("failed to create scheduler", "error", err)
-		ctxCancel()
-		return err
-	}
-
-	eg.Go(func() error {
-		defer t.Log("scheduled watch complete")
-		return sch.Watch(ctx, eac)
-	})
 
 	httpServer := &http.Server{
 		Addr:    ":80",

@@ -33,6 +33,7 @@ import (
 	certctrl "miren.dev/runtime/controllers/certificate"
 	deploymentctrl "miren.dev/runtime/controllers/deployment"
 	"miren.dev/runtime/controllers/sandboxpool"
+	schedulerctrl "miren.dev/runtime/controllers/scheduler"
 	"miren.dev/runtime/metrics"
 	"miren.dev/runtime/observability"
 	"miren.dev/runtime/pkg/caauth"
@@ -540,6 +541,24 @@ func (c *Coordinator) Start(ctx context.Context) error {
 		1,              // Single worker to prevent duplicate sandbox creation races
 	)
 	c.cm.AddController(poolController)
+
+	// Add scheduler controller (assigns sandboxes to nodes)
+	scheduler := schedulerctrl.NewController(c.Log, eac)
+	if err := scheduler.Init(ctx); err != nil {
+		c.Log.Error("failed to initialize scheduler controller", "error", err)
+		return err
+	}
+
+	schedulerController := controller.NewReconcileController(
+		"scheduler",
+		c.Log,
+		entity.Ref(entity.EntityKind, compute_v1alpha.KindSandbox),
+		eac,
+		controller.AdaptReconcileController[compute_v1alpha.Sandbox](scheduler),
+		time.Minute, // Resync every minute to catch any missed sandboxes
+		1,           // Single worker
+	)
+	c.cm.AddController(schedulerController)
 
 	// Add certificate controller if DNS provider is configured
 	if c.AcmeDNSProvider != "" {
