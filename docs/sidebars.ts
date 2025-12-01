@@ -29,6 +29,7 @@ const sidebars: SidebarsConfig = {
         'cli/entity',
       ],
     },
+    'firewall',
   ],
 };
 

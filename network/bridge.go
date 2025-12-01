@@ -152,6 +152,11 @@ func SetupBridge(n *BridgeConfig) (*netlink.Bridge, error) {
 		return nil, fmt.Errorf("failed to enable forwarding on bridge %q: %w", n.Name, err)
 	}
 
+	err = enableBridgeInputRules(br)
+	if err != nil {
+		return nil, fmt.Errorf("failed to enable input rules for bridge %q: %w", n.Name, err)
+	}
+
 	return br, nil
 }
 
@@ -300,12 +305,14 @@ func enableForwarding(br netlink.Link) error {
 		return err
 	}
 
-	err = ipt4.AppendUnique("filter", "FORWARD", "-i", br.Attrs().Name, "-j", "ACCEPT")
+	// Insert at position 1 (beginning) to ensure rules take precedence over
+	// restrictive REJECT rules that may exist (e.g., Oracle Cloud default firewall)
+	err = ipt4.InsertUnique("filter", "FORWARD", 1, "-i", br.Attrs().Name, "-j", "ACCEPT")
 	if err != nil {
 		return err
 	}
 
-	err = ipt4.AppendUnique("filter", "FORWARD", "-o", br.Attrs().Name, "-j", "ACCEPT")
+	err = ipt4.InsertUnique("filter", "FORWARD", 1, "-o", br.Attrs().Name, "-j", "ACCEPT")
 	if err != nil {
 		return err
 	}
@@ -315,12 +322,60 @@ func enableForwarding(br netlink.Link) error {
 		return err
 	}
 
-	err = ipt6.AppendUnique("filter", "FORWARD", "-i", br.Attrs().Name, "-j", "ACCEPT")
+	err = ipt6.InsertUnique("filter", "FORWARD", 1, "-i", br.Attrs().Name, "-j", "ACCEPT")
 	if err != nil {
 		return err
 	}
 
-	err = ipt6.AppendUnique("filter", "FORWARD", "-o", br.Attrs().Name, "-j", "ACCEPT")
+	err = ipt6.InsertUnique("filter", "FORWARD", 1, "-o", br.Attrs().Name, "-j", "ACCEPT")
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// enableBridgeInputRules adds INPUT rules to allow traffic from bridge to host services
+func enableBridgeInputRules(br netlink.Link) error {
+	ipt4, err := iptables.NewWithProtocol(iptables.ProtocolIPv4)
+	if err != nil {
+		return err
+	}
+
+	// Allow DNS traffic from bridge (required for container DNS resolution)
+	err = ipt4.InsertUnique("filter", "INPUT", 1, "-i", br.Attrs().Name, "-p", "udp", "--dport", "53", "-j", "ACCEPT")
+	if err != nil {
+		return err
+	}
+
+	err = ipt4.InsertUnique("filter", "INPUT", 1, "-i", br.Attrs().Name, "-p", "tcp", "--dport", "53", "-j", "ACCEPT")
+	if err != nil {
+		return err
+	}
+
+	// Allow registry traffic from bridge (required for buildkit to push images)
+	err = ipt4.InsertUnique("filter", "INPUT", 1, "-i", br.Attrs().Name, "-p", "tcp", "--dport", "5000", "-j", "ACCEPT")
+	if err != nil {
+		return err
+	}
+
+	// IPv6 rules
+	ipt6, err := iptables.NewWithProtocol(iptables.ProtocolIPv6)
+	if err != nil {
+		return err
+	}
+
+	err = ipt6.InsertUnique("filter", "INPUT", 1, "-i", br.Attrs().Name, "-p", "udp", "--dport", "53", "-j", "ACCEPT")
+	if err != nil {
+		return err
+	}
+
+	err = ipt6.InsertUnique("filter", "INPUT", 1, "-i", br.Attrs().Name, "-p", "tcp", "--dport", "53", "-j", "ACCEPT")
+	if err != nil {
+		return err
+	}
+
+	err = ipt6.InsertUnique("filter", "INPUT", 1, "-i", br.Attrs().Name, "-p", "tcp", "--dport", "5000", "-j", "ACCEPT")
 	if err != nil {
 		return err
 	}
