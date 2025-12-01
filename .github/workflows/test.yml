@@ -8,6 +8,12 @@ on:
   pull_request:
   merge_group:
 
+# Cancel in-progress runs when a new run is triggered on the same branch/PR.
+# This also means if lint fails, running test jobs will be cancelled.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   # Used by golangci-lint to emit annotations that are picked up by github
   contents: read
@@ -70,7 +76,6 @@ jobs:
       run: make generate-check
 
   test:
-    needs: lint
     runs-on: depot-ubuntu-latest
     steps:
     - uses: actions/checkout@v5
@@ -203,7 +208,6 @@ jobs:
           }
 
   test-e2e:
-    needs: lint
     runs-on: depot-ubuntu-latest
     steps:
     - uses: actions/checkout@v5
@@ -241,7 +245,6 @@ jobs:
       run: make test-e2e
 
   build-binaries:
-    needs: lint
     strategy:
       matrix:
         include:
@@ -275,7 +278,6 @@ jobs:
           zip -j miren-${{ matrix.os }}-${{ matrix.arch }}.zip bin/miren
 
   build:
-    needs: lint
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v5
