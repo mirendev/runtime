@@ -24,6 +24,7 @@ import (
 	"miren.dev/runtime/pkg/rpc/standard"
 	"miren.dev/runtime/pkg/rpc/stream"
 	"miren.dev/runtime/pkg/tarx"
+	"miren.dev/runtime/pkg/ui"
 )
 
 func Deploy(ctx *Context, opts struct {
@@ -31,7 +32,28 @@ func Deploy(ctx *Context, opts struct {
 
 	Explain       bool   `short:"x" long:"explain" description:"Explain the build process"`
 	ExplainFormat string `long:"explain-format" description:"Explain format" choice:"auto" choice:"plain" choice:"tty" choice:"rawjson" default:"auto"`
+	Force         bool   `short:"f" long:"force" description:"Skip confirmation prompt"`
 }) error {
+	name := opts.App
+	dir := opts.Dir
+
+	// Confirm deployment unless --force is used or stdin is not a TTY
+	isInteractive := term.IsTerminal(int(os.Stdin.Fd()))
+	if !opts.Force && isInteractive {
+		message := fmt.Sprintf("Deploy app '%s' to cluster '%s'?", name, ctx.ClusterName)
+		confirmed, err := ui.Confirm(
+			ui.WithMessage(message),
+			ui.WithDefault(true),
+		)
+		if err != nil {
+			return fmt.Errorf("confirmation cancelled: %w", err)
+		}
+		if !confirmed {
+			ctx.Printf("deployment cancelled\n")
+			return nil
+		}
+	}
+
 	greenStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("10"))
 	ctx.Printf("  ✓ %s: %s\n", greenStyle.Render("Deploying to cluster"), ctx.ClusterName)
 
@@ -41,9 +63,6 @@ func Deploy(ctx *Context, opts struct {
 	}
 
 	bc := build_v1alpha.NewBuilderClient(cl)
-
-	name := opts.App
-	dir := opts.Dir
 
 	// Check if deployment is allowed before proceeding
 	remedy, err := deploygating.CheckDeployAllowed(dir)
