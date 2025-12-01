@@ -247,6 +247,8 @@ func (c *Controller) closeSegment(ctx *Context, ev Event) error {
 	err = d.lba2pba.UpdateBatch(c.log, entries, segId, d.s)
 	if err != nil {
 		c.log.Error("error updating lba map", "error", err)
+		// Don't clear prevCache if UpdateBatch failed - data would be lost!
+		return err
 	}
 
 	extents.Set(float64(d.lba2pba.m.Len()))
