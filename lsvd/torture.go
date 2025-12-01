@@ -53,11 +53,9 @@ func (m *TortureDiskModel) ZeroBlocks(lba LBA, blocks uint32) {
 	}
 }
 
-func (m *TortureDiskModel) ExpectedHash(lba LBA) TortureBlockHash {
-	if h, ok := m.blocks[lba]; ok {
-		return h
-	}
-	return HashBlock(make([]byte, BlockSize))
+func (m *TortureDiskModel) ExpectedHash(lba LBA) (TortureBlockHash, bool) {
+	h, ok := m.blocks[lba]
+	return h, ok
 }
 
 func (m *TortureDiskModel) WrittenLBAs() []LBA {
@@ -565,15 +563,23 @@ func (r *TortureRunner) execRead(op TortureOperation) error {
 	}
 
 	actualData := actual.ReadData()
+	zeroHash := HashBlock(make([]byte, BlockSize))
+
 	for i := uint32(0); i < op.Extent.Blocks; i++ {
 		lba := op.Extent.LBA + LBA(i)
 		blockData := actualData[i*BlockSize : (i+1)*BlockSize]
 		actualHash := HashBlock(blockData)
-		expectedHash := r.model.ExpectedHash(lba)
+		expectedHash, modelHas := r.model.ExpectedHash(lba)
+		if !modelHas {
+			expectedHash = zeroHash
+		}
+
+		if lba == 14654 {
+			fmt.Printf("Debug LBA 14654: expected %s, got %s, modelHas=%v\n",
+				hex.EncodeToString(expectedHash[:]), hex.EncodeToString(actualHash[:]), modelHas)
+		}
 
 		if actualHash != expectedHash {
-			modelHas := r.model.HasBlock(lba)
-			zeroHash := HashBlock(make([]byte, BlockSize))
 			isExpectedZero := expectedHash == zeroHash
 			isActualZero := tortureIsEmpty(blockData)
 
@@ -596,9 +602,25 @@ func (r *TortureRunner) execRead(op TortureOperation) error {
 				}
 			}
 
-			return fmt.Errorf("data mismatch at LBA %d: expected %s, got %s (modelHas=%v, expectZero=%v, actualZero=%v, firstNonZero=%d, relevantWrites=%v)",
+			// Debug: retry reads to detect timing issues
+			retryHash1 := "read-failed"
+			retryHash2 := "read-failed"
+			r.ctx.Reset()
+			if singleBlock, err := r.disk.ReadExtent(r.ctx, Extent{LBA: lba, Blocks: 1}); err == nil {
+				h := HashBlock(singleBlock.ReadData())
+				retryHash1 = hex.EncodeToString(h[:])
+			}
+			r.ctx.Reset()
+			if retryExtent, err := r.disk.ReadExtent(r.ctx, op.Extent); err == nil {
+				retryData := retryExtent.ReadData()
+				retryBlockData := retryData[i*BlockSize : (i+1)*BlockSize]
+				h := HashBlock(retryBlockData)
+				retryHash2 = hex.EncodeToString(h[:])
+			}
+
+			return fmt.Errorf("data mismatch at LBA %d: expected %s, got %s (modelHas=%v, expectZero=%v, actualZero=%v, firstNonZero=%d, retrySingle=%s, retryExtent=%s, relevantWrites=%v)",
 				lba, hex.EncodeToString(expectedHash[:]), hex.EncodeToString(actualHash[:]),
-				modelHas, isExpectedZero, isActualZero, firstNonZero, relevantWrites)
+				modelHas, isExpectedZero, isActualZero, firstNonZero, retryHash1, retryHash2, relevantWrites)
 		}
 	}
 
@@ -643,7 +665,7 @@ func (r *TortureRunner) verifyAll() error {
 		}
 
 		actualHash := HashBlock(actual.ReadData())
-		expectedHash := r.model.ExpectedHash(lba)
+		expectedHash, _ := r.model.ExpectedHash(lba)
 
 		if actualHash != expectedHash {
 			return fmt.Errorf("verification failed at LBA %d: expected %s, got %s",
@@ -680,7 +702,7 @@ func (r *TortureRunner) verifySample(count int) error {
 		}
 
 		actualHash := HashBlock(actual.ReadData())
-		expectedHash := r.model.ExpectedHash(lba)
+		expectedHash, _ := r.model.ExpectedHash(lba)
 
 		if actualHash != expectedHash {
 			return fmt.Errorf("sample verification failed at LBA %d: expected %s, got %s",
@@ -704,6 +726,24 @@ func (r *TortureRunner) DumpHistory(last int) {
 			marker = "→ "
 		}
 		fmt.Fprintf(r.output, "%s[%5d] %s\n", marker, i, r.history[i])
+	}
+}
+
+// DumpHistoryRange prints operations in the range [start, end)
+func (r *TortureRunner) DumpHistoryRange(start, end int) {
+	if start < 0 {
+		start = 0
+	}
+	if end > len(r.history) {
+		end = len(r.history)
+	}
+	if start >= end {
+		fmt.Fprintf(r.output, "--- No operations in range [%d, %d) ---\n", start, end)
+		return
+	}
+	fmt.Fprintf(r.output, "--- Operation History [%d, %d) ---\n", start, end)
+	for i := start; i < end; i++ {
+		fmt.Fprintf(r.output, "  [%5d] %s\n", i, r.history[i])
 	}
 }
 

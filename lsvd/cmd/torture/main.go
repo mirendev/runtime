@@ -26,7 +26,8 @@ var (
 	flagMaxLBA     = flag.Int64("max-lba", 100000, "Maximum LBA to use")
 	flagMaxBlocks  = flag.Int("max-blocks", 64, "Maximum blocks per operation")
 	flagDir        = flag.String("dir", "", "Directory for test data (default: temp dir)")
-	flagLoop       = flag.Bool("loop", false, "Run continuously until failure")
+	flagLoop       = flag.Bool("loop", false, "Run continuously until failure (cycles through variations)")
+	flagHammer     = flag.Bool("hammer", false, "Run exact same config repeatedly until stopped")
 	flagQuiet      = flag.Bool("quiet", false, "Reduce output verbosity")
 	flagDebug      = flag.Bool("debug", false, "Enable debug logging")
 	flagMemProfile = flag.String("memprofile", "", "Write memory profile to file")
@@ -108,6 +109,8 @@ func main() {
 	var err error
 	if *flagDuration > 0 {
 		err = runTortureTimed(ctx, log, *flagDir, cfg, *flagDuration, *flagLoop, *flagQuiet)
+	} else if *flagHammer {
+		err = runTortureHammer(ctx, log, *flagDir, cfg, *flagQuiet)
 	} else if *flagLoop {
 		err = runTortureLoop(ctx, log, *flagDir, cfg, *flagQuiet)
 	} else {
@@ -172,6 +175,9 @@ func runTortureLoop(ctx context.Context, log *slog.Logger, dir string, cfg lsvd.
 		fmt.Fprintf(os.Stderr, "\nStopping torture test after current iteration...\n")
 	}()
 
+	defer os.RemoveAll(dir)
+	os.Mkdir(dir, 0755)
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -181,7 +187,6 @@ func runTortureLoop(ctx context.Context, log *slog.Logger, dir string, cfg lsvd.
 		}
 
 		variation := variations[iteration%len(variations)]
-		cfg.Seed = rand.Int63()
 		cfg.Weights = variation.Weights
 		cfg.OverlapProbability = variation.Overlap
 		if variation.MaxLBA != 0 {
@@ -194,7 +199,10 @@ func runTortureLoop(ctx context.Context, log *slog.Logger, dir string, cfg lsvd.
 		fmt.Fprintf(os.Stderr, "[%d] Running variation '%s' with seed %d\n",
 			iteration+1, variation.Name, cfg.Seed)
 
-		runner, err := lsvd.NewTortureRunner(ctx, log, "", cfg)
+		os.RemoveAll(dir)
+		os.Mkdir(dir, 0755)
+
+		runner, err := lsvd.NewTortureRunner(ctx, log, dir, cfg)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Failed to create runner: %v\n", err)
 			return err
@@ -213,6 +221,45 @@ func runTortureLoop(ctx context.Context, log *slog.Logger, dir string, cfg lsvd.
 		}
 
 		fmt.Fprintf(os.Stderr, "[%d] Passed: %d operations\n", iteration+1, result.Operations)
+		iteration++
+	}
+}
+
+func runTortureHammer(ctx context.Context, log *slog.Logger, dir string, cfg lsvd.TortureConfig, quiet bool) error {
+	iteration := 0
+
+	fmt.Fprintf(os.Stderr, "Starting hammer mode with seed=%d ops=%d maxLBA=%d maxBlocks=%d weights=%+v (Ctrl+C to stop)\n",
+		cfg.Seed, cfg.Operations, cfg.MaxLBA, cfg.MaxBlocks, cfg.Weights)
+	fmt.Fprintf(os.Stderr, "Reproduce with: torture -config %s\n", lsvd.EncodeTortureConfig(cfg))
+
+	for {
+		select {
+		case <-ctx.Done():
+			fmt.Fprintf(os.Stderr, "\nStopped after %d successful iterations\n", iteration)
+			return nil
+		default:
+		}
+
+		fmt.Fprintf(os.Stderr, "[%d] Running...\n", iteration+1)
+
+		runner, err := lsvd.NewTortureRunner(ctx, log, dir, cfg)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Failed to create runner: %v\n", err)
+			return err
+		}
+
+		result := runner.Run()
+		runner.Cleanup()
+
+		if !result.Success {
+			runner.DumpHistory(50)
+			fmt.Fprintf(os.Stderr, "\nTorture test FAILED on iteration %d\n", iteration+1)
+			fmt.Fprintf(os.Stderr, "Error: %v\n", result.Error)
+			fmt.Fprintf(os.Stderr, "Reproduce with: torture -config %s\n", lsvd.EncodeTortureConfig(cfg))
+			return result.Error
+		}
+
+		fmt.Fprintf(os.Stderr, "[%d] Passed: %d operations, %d LBAs\n", iteration+1, result.Operations, result.LBAsUsed)
 		iteration++
 	}
 }
@@ -265,7 +312,7 @@ func runTortureTimed(ctx context.Context, log *slog.Logger, dir string, cfg lsvd
 		}
 		fmt.Fprintln(os.Stderr)
 
-		runner, err := lsvd.NewTortureRunner(ctx, log, "", cfg)
+		runner, err := lsvd.NewTortureRunner(ctx, log, dir, cfg)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Failed to create runner: %v\n", err)
 			return err
