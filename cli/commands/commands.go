@@ -232,6 +232,10 @@ Warning: These commands are intended for advanced users and developers. They may
 			return Infer("debug test load", "Loadtest a URL", TestLoad), nil
 		},
 
+		"debug ctr": func() (cli.Command, error) {
+			return Infer("debug ctr", "Run ctr with miren defaults", DebugCtr), nil
+		},
+
 		"debug ctr nuke": func() (cli.Command, error) {
 			return Infer("debug ctr nuke", "Nuke a containerd namespace", CtrNuke), nil
 		},
