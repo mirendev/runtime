@@ -342,7 +342,9 @@ func (d *Disk) ReadExtentInto(ctx *Context, data RangeData) (CachePosition, erro
 			// don't need to clear anything here.
 		} else {
 			// Pure read from one extent, optimize!
-			if len(remaining) == 1 && remaining[0] == rng && len(pes) == 1 && pes[0].Flags() == Uncompressed {
+			// Only use fast path if the partial extent fully covers the request
+			if len(remaining) == 1 && remaining[0] == rng && len(pes) == 1 &&
+				pes[0].Flags() == Uncompressed && pes[0].Live.Cover(rng) != CoverPartly {
 				//log.Trace("reading single, uncompressed extent via fast path")
 				// Invariants: remaining[0] == rng == data.Extent
 				// Invariants: pes[0].Live fully covers remaining[0]
@@ -358,12 +360,14 @@ func (d *Disk) ReadExtentInto(ctx *Context, data RangeData) (CachePosition, erro
 
 			for _, pe := range pes {
 				if pe.Size == 0 {
-					if v, ok := data.SubRange(pe.Live); ok {
-						clear(v.WriteData())
+					// Only clear the portion of the hole that's covered by this zero entry.
+					// pe.Live may extend beyond h, so we must clamp to avoid clearing
+					// data that was already filled from curOC.
+					if clearRange, ok := h.Clamp(pe.Live); ok {
+						if v, ok := data.SubRange(clearRange); ok {
+							clear(v.WriteData())
+						}
 					}
-					// it's empty! cool cool, we don't need to fill the hole
-					// since the slice we're filling inside data has already been
-					// cleared when it's created.
 					continue
 				}
 

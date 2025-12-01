@@ -75,6 +75,10 @@ type SegmentBuilder struct {
 
 const DefaultExtentsSize = 20000
 
+// MaxSegBuilderBufSize is the maximum buffer size for a SegmentBuilder to be
+// returned to the pool. Builders with larger buffers are discarded.
+const MaxSegBuilderBufSize = 16 * 1024 * 1024
+
 var segBuilderPool = sync.Pool{
 	New: func() any {
 		return &SegmentBuilder{
@@ -92,7 +96,10 @@ func NewSegmentBuilder() *SegmentBuilder {
 }
 
 func ReturnSegmentBuilder(seg *SegmentBuilder) {
-	segBuilderPool.Put(seg)
+	// Don't return builders with oversized buffers to prevent memory bloat
+	if len(seg.buf) <= MaxSegBuilderBufSize {
+		segBuilderPool.Put(seg)
+	}
 }
 
 func (s *SegmentBuilder) Reset() {
@@ -393,8 +400,9 @@ func (o *SegmentCreator) FillExtent(ctx *Context, data RangeDataView) ([]Extent,
 
 		ret = append(ret, subDest.Extent)
 
-		// It's a empty range
+		// It's a empty range (from ZeroBlocks), clear the destination
 		if srcRng.Size == 0 {
+			clear(subDest.WriteData())
 			continue
 		}
 

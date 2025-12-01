@@ -66,15 +66,18 @@ func (d *Disk) closeSegmentAsync(gctx context.Context) (chan EventResult, error)
 	//s := time.Now()
 	oc := d.curOC
 
+	d.log.Info("flushing segment to storage in background", "segment", segId)
+
+	// CRITICAL: Set prevCache BEFORE creating new curOC to avoid race condition.
+	// If we create new curOC first, there's a window where data from `oc` is
+	// not accessible (curOC is new/empty, prevCache doesn't have `oc` yet).
+	d.prevCache.SetWhenClear(oc)
+
 	var err error
 	d.curOC, err = d.newSegmentCreator()
 	if err != nil {
 		return nil, err
 	}
-
-	d.log.Info("flushing segment to storage in background", "segment", segId)
-
-	d.prevCache.SetWhenClear(oc)
 
 	done := make(chan EventResult, 1)
 

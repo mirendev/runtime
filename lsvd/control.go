@@ -91,6 +91,23 @@ func (c *Controller) handleControl(gctx context.Context) {
 				return
 			}
 
+			/*
+				switch ev.Kind {
+				case CloseSegment:
+					fmt.Printf("controller got event: CloseSegment SegmentId=%+v\n", ev.SegmentId)
+				case CleanupSegments:
+					// fmt.Printf("controller got event: CleanupSegments\n")
+				case StartGC:
+					fmt.Printf("controller got event: StartGC\n")
+				case SweepSmallSegments:
+					fmt.Printf("controller got event: SweepSmallSegments\n")
+				case ImproveDensity:
+					fmt.Printf("controller got event: ImproveDensity\n")
+				default:
+					fmt.Printf("controller got event: Unknown %d\n", ev.Kind)
+				}
+			*/
+
 			err := c.handleEvent(ctx, ev)
 			if err != nil {
 				c.log.Error("error handling event", "error", err, "event-kind", ev.Kind)
@@ -247,6 +264,8 @@ func (c *Controller) closeSegment(ctx *Context, ev Event) error {
 	err = d.lba2pba.UpdateBatch(c.log, entries, segId, d.s)
 	if err != nil {
 		c.log.Error("error updating lba map", "error", err)
+		// Don't clear prevCache if UpdateBatch failed - data would be lost!
+		return err
 	}
 
 	extents.Set(float64(d.lba2pba.m.Len()))
