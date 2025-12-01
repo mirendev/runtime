@@ -3,7 +3,6 @@ package commands
 import (
 	"fmt"
 	"os"
-	"slices"
 	"sort"
 	"strings"
 
@@ -25,131 +24,39 @@ func EnvSet(ctx *Context, opts struct {
 
 	ac := app_v1alpha.NewCrudClient(cl)
 
-	res, err := ac.GetConfiguration(ctx, opts.App)
-	if err != nil {
-		return err
-	}
-
-	cfg := res.Configuration()
-
-	var changes bool
-
-	// Determine if we're setting global or per-service env vars
-	isServiceSpecific := opts.Service != ""
-
-	// Create a map to track existing env vars for efficient lookup
-	envMap := make(map[string]*app_v1alpha.NamedValue)
-	var envvars []*app_v1alpha.NamedValue
-
-	if isServiceSpecific {
-		// Validate that the service exists by checking the actual deployed services
-		// This includes both statically defined and dynamically detected services (like "web" from Procfile)
-		if cfg.HasServices() || cfg.HasCommands() {
-			serviceExists := false
-
-			// Check services list
-			for _, svc := range cfg.Services() {
-				if svc.Service() == opts.Service {
-					serviceExists = true
-					break
-				}
-			}
-
-			// Check commands list (services with commands are valid services)
-			if !serviceExists {
-				for _, cmd := range cfg.Commands() {
-					if cmd.Service() == opts.Service {
-						serviceExists = true
-						break
-					}
-				}
-			}
-
-			if !serviceExists {
-				// Build a helpful error message with available services
-				var availableServices []string
-				seenServices := make(map[string]bool)
-
-				for _, svc := range cfg.Services() {
-					if !seenServices[svc.Service()] {
-						availableServices = append(availableServices, svc.Service())
-						seenServices[svc.Service()] = true
-					}
-				}
-				for _, cmd := range cfg.Commands() {
-					if !seenServices[cmd.Service()] {
-						availableServices = append(availableServices, cmd.Service())
-						seenServices[cmd.Service()] = true
-					}
-				}
-
-				if len(availableServices) > 0 {
-					return fmt.Errorf("service %q not found. Available services: %s", opts.Service, strings.Join(availableServices, ", "))
-				} else {
-					return fmt.Errorf("service %q not found (no services detected in app)", opts.Service)
-				}
-			}
-		}
-
-		// Find the service and get its existing env vars
-		for _, svc := range cfg.Services() {
-			if svc.Service() == opts.Service {
-				if svc.HasServiceEnv() {
-					for _, ev := range svc.ServiceEnv() {
-						envMap[ev.Key()] = ev
-						envvars = append(envvars, ev)
-					}
-				}
-				break
-			}
-		}
-	} else {
-		// Global env vars
-		if cfg.HasEnvVars() {
-			// Build map from existing env vars
-			for _, ev := range cfg.EnvVars() {
-				envMap[ev.Key()] = ev
-				envvars = append(envvars, ev)
-			}
-		}
-	}
-
-	// Process all environment variables
-	// Note: go-flags doesn't preserve the exact order of mixed flags,
-	// so we process regular env vars first, then sensitive ones.
-	// Within each group, the order is preserved.
+	// Collect all env vars to set
 	type envVar struct {
 		spec      string
 		sensitive bool
 	}
 
 	var allVars []envVar
-
-	// Process regular env vars first
 	for _, v := range opts.Env {
 		allVars = append(allVars, envVar{spec: v, sensitive: false})
 	}
-	// Then process sensitive env vars
 	for _, v := range opts.Sensitive {
 		allVars = append(allVars, envVar{spec: v, sensitive: true})
 	}
 
-	// Process all variables
+	if len(allVars) == 0 {
+		return fmt.Errorf("no environment variables specified")
+	}
+
+	var lastVersionId string
+
 	for _, ev := range allVars {
 		var key, value string
 		var wasFile, wasPrompt bool
 
-		// Check if it's just a key (for prompting) or key=value
 		parts := strings.SplitN(ev.spec, "=", 2)
 		key = parts[0]
 
-		// Validate that the key is not empty
 		if key == "" {
 			return fmt.Errorf("invalid environment variable: key cannot be empty")
 		}
 
 		if len(parts) == 1 {
-			// No value provided, prompt for it
+			// Prompt for value
 			var label string
 			if ev.sensitive {
 				label = fmt.Sprintf("Enter value for sensitive variable '%s'", key)
@@ -167,7 +74,6 @@ func EnvSet(ctx *Context, opts struct {
 			value = promptedValue
 			wasPrompt = true
 		} else {
-			// Value was provided
 			value = parts[1]
 
 			if strings.HasPrefix(value, "@") {
@@ -184,104 +90,40 @@ func EnvSet(ctx *Context, opts struct {
 			}
 		}
 
-		// Check if this key already exists
-		existingVar, exists := envMap[key]
-		isUpdate := exists
-
-		// Only mark as changed if value or sensitivity actually changed
-		if !exists || existingVar.Value() != value || existingVar.Sensitive() != ev.sensitive {
-			changes = true
-
-			// Log the action
-			action := "setting"
-			if isUpdate {
-				action = "updating"
-			}
-
-			if wasFile {
-				ctx.Printf("%s %s from file %s...\n", action, key, parts[1][1:])
-			} else if wasPrompt {
-				if ev.sensitive {
-					ctx.Printf("%s %s (sensitive, from prompt)...\n", action, key)
-				} else {
-					ctx.Printf("%s %s (from prompt)...\n", action, key)
-				}
+		// Log what we're doing
+		if wasFile {
+			ctx.Printf("setting %s from file %s...\n", key, parts[1][1:])
+		} else if wasPrompt {
+			if ev.sensitive {
+				ctx.Printf("setting %s (sensitive, from prompt)...\n", key)
 			} else {
-				if ev.sensitive {
-					ctx.Printf("%s %s (sensitive)...\n", action, key)
-				} else {
-					ctx.Printf("%s %s...\n", action, key)
-				}
+				ctx.Printf("setting %s (from prompt)...\n", key)
 			}
-
-			// Create or update the variable
-			var nv app_v1alpha.NamedValue
-			nv.SetKey(key)
-			nv.SetValue(value)
-			nv.SetSensitive(ev.sensitive)
-
-			if exists {
-				// Update existing entry in place
-				for i, v := range envvars {
-					if v.Key() == key {
-						envvars[i] = &nv
-						break
-					}
-				}
+		} else {
+			if ev.sensitive {
+				ctx.Printf("setting %s (sensitive)...\n", key)
 			} else {
-				// Add new entry
-				envvars = append(envvars, &nv)
-			}
-
-			// Update the map for future lookups
-			envMap[key] = &nv
-		}
-	}
-
-	if !changes {
-		ctx.Printf("no changes to configuration\n")
-		return nil
-	}
-
-	// Update configuration based on whether it's global or per-service
-	if isServiceSpecific {
-		// Update the service's env vars
-		services := cfg.Services()
-		found := false
-		for i, svc := range services {
-			if svc.Service() == opts.Service {
-				svc.SetServiceEnv(envvars)
-				services[i] = svc
-				found = true
-				break
+				ctx.Printf("setting %s...\n", key)
 			}
 		}
-		if !found {
-			newSvc := &app_v1alpha.ServiceConfig{}
-			newSvc.SetService(opts.Service)
-			newSvc.SetServiceEnv(envvars)
-			services = append(services, newSvc)
+
+		// Use the targeted SetEnvVar RPC - server handles source tracking
+		res, err := ac.SetEnvVar(ctx, opts.App, key, value, ev.sensitive, opts.Service)
+		if err != nil {
+			return err
 		}
-		cfg.SetServices(services)
-	} else {
-		// Update global env vars
-		cfg.SetEnvVars(envvars)
+		lastVersionId = res.VersionId()
 	}
 
-	setres, err := ac.SetConfiguration(ctx, opts.App, cfg)
-	if err != nil {
-		return err
-	}
-
-	ctx.Printf("new version id: %s\n", setres.VersionId())
-
+	ctx.Printf("new version id: %s\n", lastVersionId)
 	return nil
 }
 
 func EnvGet(ctx *Context, opts struct {
 	AppCentric
-	Unmask bool `short:"u" long:"unmask" description:"Show actual value of sensitive variables instead of masking them"`
-	Args   struct {
+	Service string `short:"S" long:"service" description:"Get env var for specific service (if not specified, gets global env var)"`
+	Unmask  bool   `short:"u" long:"unmask" description:"Show actual value of sensitive variables instead of masking them"`
+	Args    struct {
 		Key string `positional-arg-name:"KEY" description:"Environment variable key to get" required:"1"`
 	} `positional-args:"yes" required:"true"`
 }) error {
@@ -299,28 +141,57 @@ func EnvGet(ctx *Context, opts struct {
 
 	cfg := res.Configuration()
 
-	if !cfg.HasEnvVars() {
-		return fmt.Errorf("environment variable %s not found", opts.Args.Key)
-	}
+	var found *app_v1alpha.NamedValue
 
-	// Find the variable with the specified key
-	envvars := cfg.EnvVars()
-	for _, nv := range envvars {
-		if nv.Key() == opts.Args.Key {
-			if nv.Sensitive() {
-				if opts.Unmask {
-					ctx.Printf("%s\n", nv.Value())
-				} else {
-					ctx.Printf("••••••••••\n")
+	if opts.Service != "" {
+		// Look in service-specific env vars
+		if cfg.HasServices() {
+			for _, svc := range cfg.Services() {
+				if svc.Service() == opts.Service && svc.HasServiceEnv() {
+					for _, nv := range svc.ServiceEnv() {
+						if nv.Key() == opts.Args.Key {
+							found = nv
+							break
+						}
+					}
+					break
 				}
-			} else {
-				ctx.Printf("%s\n", nv.Value())
 			}
-			return nil
+		}
+		if found == nil {
+			return fmt.Errorf("environment variable %s not found for service %s", opts.Args.Key, opts.Service)
+		}
+	} else {
+		// Look in global env vars
+		if cfg.HasEnvVars() {
+			for _, nv := range cfg.EnvVars() {
+				if nv.Key() == opts.Args.Key {
+					found = nv
+					break
+				}
+			}
+		}
+		if found == nil {
+			return fmt.Errorf("environment variable %s not found", opts.Args.Key)
 		}
 	}
 
-	return fmt.Errorf("environment variable %s not found", opts.Args.Key)
+	if found.Sensitive() {
+		if opts.Unmask {
+			ctx.Printf("%s\n", found.Value())
+		} else {
+			ctx.Printf("••••••••••\n")
+		}
+	} else {
+		ctx.Printf("%s\n", found.Value())
+	}
+	return nil
+}
+
+// envVarEntry combines a NamedValue with its service scope
+type envVarEntry struct {
+	nv      *app_v1alpha.NamedValue
+	service string // empty string means global (all services)
 }
 
 func EnvList(ctx *Context, opts struct {
@@ -341,7 +212,28 @@ func EnvList(ctx *Context, opts struct {
 
 	cfg := res.Configuration()
 
-	if !cfg.HasEnvVars() {
+	// Collect all env vars: global + per-service
+	var entries []envVarEntry
+
+	// Add global env vars
+	if cfg.HasEnvVars() {
+		for _, nv := range cfg.EnvVars() {
+			entries = append(entries, envVarEntry{nv: nv, service: ""})
+		}
+	}
+
+	// Add per-service env vars
+	if cfg.HasServices() {
+		for _, svc := range cfg.Services() {
+			if svc.HasServiceEnv() {
+				for _, nv := range svc.ServiceEnv() {
+					entries = append(entries, envVarEntry{nv: nv, service: svc.Service()})
+				}
+			}
+		}
+	}
+
+	if len(entries) == 0 {
 		if opts.IsJSON() {
 			return PrintJSON([]any{})
 		}
@@ -349,12 +241,19 @@ func EnvList(ctx *Context, opts struct {
 		return nil
 	}
 
-	// Get all environment variables
-	envvars := cfg.EnvVars()
-
-	// Sort by key for consistent output
-	sort.Slice(envvars, func(i, j int) bool {
-		return envvars[i].Key() < envvars[j].Key()
+	// Sort by key, then by service for consistent output
+	sort.Slice(entries, func(i, j int) bool {
+		if entries[i].nv.Key() != entries[j].nv.Key() {
+			return entries[i].nv.Key() < entries[j].nv.Key()
+		}
+		// Global (empty service) comes before specific services
+		if entries[i].service == "" && entries[j].service != "" {
+			return true
+		}
+		if entries[i].service != "" && entries[j].service == "" {
+			return false
+		}
+		return entries[i].service < entries[j].service
 	})
 
 	// For JSON output
@@ -363,17 +262,21 @@ func EnvList(ctx *Context, opts struct {
 			Name      string `json:"name"`
 			Value     string `json:"value,omitempty"`
 			Sensitive bool   `json:"sensitive"`
+			Service   string `json:"service,omitempty"`
+			Source    string `json:"source,omitempty"`
 		}
 
 		var vars []EnvVar
-		for _, nv := range envvars {
+		for _, entry := range entries {
 			ev := EnvVar{
-				Name:      nv.Key(),
-				Sensitive: nv.Sensitive(),
+				Name:      entry.nv.Key(),
+				Sensitive: entry.nv.Sensitive(),
+				Service:   entry.service,
+				Source:    entry.nv.Source(),
 			}
 			// Only include value for non-sensitive variables in JSON
-			if !nv.Sensitive() {
-				ev.Value = nv.Value()
+			if !entry.nv.Sensitive() {
+				ev.Value = entry.nv.Value()
 			}
 			vars = append(vars, ev)
 		}
@@ -381,18 +284,23 @@ func EnvList(ctx *Context, opts struct {
 	}
 
 	// Create and print the table
-	printEnvTable(ctx, envvars)
+	printEnvTable(ctx, entries)
 
 	return nil
 }
 
 func EnvDelete(ctx *Context, opts struct {
 	AppCentric
-	Force bool `short:"f" long:"force" description:"Skip confirmation prompt"`
-	Args  struct {
+	Service string `short:"S" long:"service" description:"Delete env var from specific service only (if not specified, deletes global env var)"`
+	Force   bool   `short:"f" long:"force" description:"Skip confirmation prompt"`
+	Args    struct {
 		Keys []string `positional-arg-name:"KEY" description:"Environment variable key to delete" required:"1"`
 	} `positional-args:"yes"`
 }) error {
+	if len(opts.Args.Keys) == 0 {
+		return fmt.Errorf("no environment variables specified")
+	}
+
 	cl, err := ctx.RPCClient("dev.miren.runtime/app")
 	if err != nil {
 		return err
@@ -400,47 +308,14 @@ func EnvDelete(ctx *Context, opts struct {
 
 	ac := app_v1alpha.NewCrudClient(cl)
 
-	res, err := ac.GetConfiguration(ctx, opts.App)
-	if err != nil {
-		return err
-	}
-
-	cfg := res.Configuration()
-
-	if !cfg.HasEnvVars() {
-		ctx.Printf("No environment variables to delete\n")
-		return nil
-	}
-
-	envvars := cfg.EnvVars()
-
-	// First, verify ALL variables exist before we delete anything
-	var toDelete []string
-
-	for _, key := range opts.Args.Keys {
-		found := false
-		// Check if the key exists
-		for _, nv := range envvars {
-			if nv.Key() == key {
-				found = true
-				toDelete = append(toDelete, key)
-				break
-			}
-		}
-		if !found {
-			// Bail immediately if any variable is not found
-			return fmt.Errorf("environment variable '%s' not found", key)
-		}
-	}
-
 	// Ask for confirmation unless --force is used
 	if !opts.Force {
 		var message string
-		if len(toDelete) == 1 {
-			message = fmt.Sprintf("Delete environment variable '%s'?", toDelete[0])
+		if len(opts.Args.Keys) == 1 {
+			message = fmt.Sprintf("Delete environment variable '%s'?", opts.Args.Keys[0])
 		} else {
 			message = fmt.Sprintf("Delete %d environment variables: %s?",
-				len(toDelete), strings.Join(toDelete, ", "))
+				len(opts.Args.Keys), strings.Join(opts.Args.Keys, ", "))
 		}
 
 		confirmed, err := ui.Confirm(
@@ -456,54 +331,79 @@ func EnvDelete(ctx *Context, opts struct {
 		}
 	}
 
-	// Now perform the actual deletion
-	for _, key := range toDelete {
-		envvars = slices.DeleteFunc(envvars, func(nv *app_v1alpha.NamedValue) bool {
-			if nv.Key() == key {
-				ctx.Printf("deleting %s...\n", key)
-				return true
-			}
-			return false
-		})
+	var lastVersionId string
+	var configVarsDeleted []string
+
+	// Delete each variable using the targeted RPC
+	for _, key := range opts.Args.Keys {
+		ctx.Printf("deleting %s...\n", key)
+		res, err := ac.DeleteEnvVar(ctx, opts.App, key, opts.Service)
+		if err != nil {
+			return err
+		}
+		lastVersionId = res.VersionId()
+
+		// Track config-sourced vars for warning
+		if res.DeletedSource() == "config" {
+			configVarsDeleted = append(configVarsDeleted, key)
+		}
 	}
 
-	cfg.SetEnvVars(envvars)
+	ctx.Printf("new version id: %s\n", lastVersionId)
 
-	setres, err := ac.SetConfiguration(ctx, opts.App, cfg)
-	if err != nil {
-		return err
+	// Warn about config vars that will reappear on next deploy
+	if len(configVarsDeleted) > 0 {
+		if len(configVarsDeleted) == 1 {
+			ctx.Printf("\nWarning: %s was defined in app.toml and will reappear on next deploy.\n", configVarsDeleted[0])
+			ctx.Printf("To permanently remove it, delete it from .miren/app.toml.\n")
+		} else {
+			ctx.Printf("\nWarning: %s were defined in app.toml and will reappear on next deploy.\n", strings.Join(configVarsDeleted, ", "))
+			ctx.Printf("To permanently remove them, delete them from .miren/app.toml.\n")
+		}
 	}
-
-	ctx.Printf("new version id: %s\n", setres.VersionId())
 
 	return nil
 }
 
 // printEnvTable prints a formatted table of environment variables
-func printEnvTable(ctx *Context, envvars []*app_v1alpha.NamedValue) {
+func printEnvTable(ctx *Context, entries []envVarEntry) {
 	// Create a gray style for sensitive values
 	grayStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
 
 	// Build rows
 	var rows []ui.Row
-	for _, nv := range envvars {
+	for _, entry := range entries {
 		var value string
 
-		if nv.Sensitive() {
+		if entry.nv.Sensitive() {
 			value = grayStyle.Render("••••••••••")
 		} else {
-			value = nv.Value()
+			value = entry.nv.Value()
 		}
 
-		rows = append(rows, ui.Row{nv.Key(), value})
+		// Get source with backward compatibility
+		source := entry.nv.Source()
+		if source == "" {
+			source = "config"
+		}
+
+		// Display service scope
+		service := "(all)"
+		if entry.service != "" {
+			service = entry.service
+		}
+
+		rows = append(rows, ui.Row{entry.nv.Key(), value, service, source})
 	}
 
 	// Auto-size columns with reasonable maximums
 	columns := ui.AutoSizeColumns(
-		[]string{"NAME", "VALUE"},
+		[]string{"NAME", "VALUE", "SERVICE", "SOURCE"},
 		rows,
-		40, // max width for NAME column
-		60, // max width for VALUE column
+		30, // max width for NAME column
+		40, // max width for VALUE column
+		15, // max width for SERVICE column
+		12, // max width for SOURCE column
 	)
 
 	// Create and render the table

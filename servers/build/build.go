@@ -56,6 +56,55 @@ func NewBuilder(log *slog.Logger, eas *entityserver_v1alpha.EntityAccessClient, 
 	}
 }
 
+// mergeServiceEnvVars merges per-service environment variables from app.toml into existing service env vars.
+// Uses the same source-tracking logic as global variables:
+// - Manual vars (source="manual") always persist and shadow config vars with the same key
+// - app.toml vars (source="config") override existing config vars but never manual vars
+// - Removing a var from app.toml only deletes it if source="config"
+func mergeServiceEnvVars(existingEnvs []core_v1alpha.Env, newEnvs []core_v1alpha.Env) []core_v1alpha.Env {
+	// If no new env vars from app.toml, preserve all existing
+	if len(newEnvs) == 0 {
+		return existingEnvs
+	}
+
+	// Build map of app.toml env vars
+	newEnvMap := make(map[string]core_v1alpha.Env)
+	for _, e := range newEnvs {
+		newEnvMap[e.Key] = e
+	}
+
+	// Build result by merging
+	envMap := make(map[string]core_v1alpha.Env)
+
+	// Keep manual vars - they shadow config vars with the same key
+	for _, e := range existingEnvs {
+		source := e.Source
+		if source == "" {
+			source = "config" // backward compatibility
+		}
+
+		if source == "manual" {
+			envMap[e.Key] = e
+		}
+		// config vars only kept if still in app.toml (checked below)
+	}
+
+	// Add app.toml vars, but never override manual vars
+	for key, e := range newEnvMap {
+		if _, hasManual := envMap[key]; !hasManual {
+			envMap[key] = e
+		}
+	}
+
+	// Convert back to slice
+	result := make([]core_v1alpha.Env, 0, len(envMap))
+	for _, e := range envMap {
+		result = append(result, e)
+	}
+
+	return result
+}
+
 // buildServicesConfig collects services from app config and procfile,
 // resolves defaults, and returns the final service configurations.
 // This is the core logic for determining which services exist in an app_version
@@ -165,8 +214,9 @@ func buildServicesConfig(appConfig *appconfig.AppConfig, procfileServices map[st
 				svc.Env = make([]core_v1alpha.Env, 0, len(serviceConfig.EnvVars))
 				for _, envVar := range serviceConfig.EnvVars {
 					svc.Env = append(svc.Env, core_v1alpha.Env{
-						Key:   envVar.Name,
-						Value: envVar.Value,
+						Key:    envVar.Name,
+						Value:  envVar.Value,
+						Source: "config",
 					})
 				}
 			}
@@ -186,22 +236,66 @@ func buildVariablesFromAppConfig(appConfig *appconfig.AppConfig) []core_v1alpha.
 	variables := make([]core_v1alpha.Variable, 0, len(appConfig.EnvVars))
 	for _, envVar := range appConfig.EnvVars {
 		variables = append(variables, core_v1alpha.Variable{
-			Key:   envVar.Name,
-			Value: envVar.Value,
+			Key:    envVar.Name,
+			Value:  envVar.Value,
+			Source: "config",
 		})
 	}
 	return variables
 }
 
 // mergeVariablesFromAppConfig merges environment variables from app.toml into existing variables.
-// If appConfig has env vars, they replace the existing variables.
-// If appConfig is nil or has no env vars, the existing variables are preserved.
+// The merge strategy respects variable sources:
+// - Manual vars (source="manual") always persist and shadow config vars with the same key
+// - Variables from app.toml (source="config") override existing config vars but never manual vars
+// - If a variable is removed from app.toml, it's only deleted if it was originally from config
+// - If appConfig is nil or has no env vars, all existing variables are preserved.
 func mergeVariablesFromAppConfig(existingVars []core_v1alpha.Variable, appConfig *appconfig.AppConfig) []core_v1alpha.Variable {
-	newVars := buildVariablesFromAppConfig(appConfig)
-	if newVars != nil {
-		return newVars
+	appConfigVars := buildVariablesFromAppConfig(appConfig)
+
+	// If no app.toml vars, preserve all existing vars
+	if appConfigVars == nil {
+		return existingVars
 	}
-	return existingVars
+
+	// Build a map of app.toml variables for quick lookup
+	appConfigMap := make(map[string]core_v1alpha.Variable)
+	for _, v := range appConfigVars {
+		appConfigMap[v.Key] = v
+	}
+
+	// Build result by merging
+	varMap := make(map[string]core_v1alpha.Variable)
+
+	// First, add all existing manual variables - these always persist
+	for _, v := range existingVars {
+		// Backward compatibility: empty source is treated as "config"
+		source := v.Source
+		if source == "" {
+			source = "config"
+		}
+
+		// Keep manual vars - they shadow config vars with the same key
+		if source == "manual" {
+			varMap[v.Key] = v
+		}
+		// config vars are only kept if still in app.toml (checked below)
+	}
+
+	// Now add app.toml variables, but never override manual vars
+	for key, v := range appConfigMap {
+		if _, hasManual := varMap[key]; !hasManual {
+			varMap[key] = v
+		}
+	}
+
+	// Convert map back to slice
+	result := make([]core_v1alpha.Variable, 0, len(varMap))
+	for _, v := range varMap {
+		result = append(result, v)
+	}
+
+	return result
 }
 
 func (b *Builder) nextVersion(ctx context.Context, name string) (
@@ -535,8 +629,25 @@ func (b *Builder) BuildFromTar(ctx context.Context, state *build_v1alpha.Builder
 		b.Log.Debug("using procfile", "services", maps.Keys(procfileServices))
 	}
 
-	// Build service configurations with concurrency settings
+	// Save existing services to preserve manual env vars
+	existingServices := mrv.Config.Services
+
+	// Build service configurations with concurrency settings from app.toml/Procfile
 	mrv.Config.Services = buildServicesConfig(ac, procfileServices)
+
+	// Merge env vars: preserve manual vars from existing services
+	for i := range mrv.Config.Services {
+		serviceName := mrv.Config.Services[i].Name
+
+		// Find matching service in existing config
+		for _, existingSvc := range existingServices {
+			if existingSvc.Name == serviceName {
+				// Merge env vars: app.toml vars override, but manual vars persist
+				mrv.Config.Services[i].Env = mergeServiceEnvVars(existingSvc.Env, mrv.Config.Services[i].Env)
+				break
+			}
+		}
+	}
 
 	// Build commands list for services that have explicit commands
 	var serviceCmds []core_v1alpha.Commands

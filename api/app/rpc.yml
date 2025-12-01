@@ -66,6 +66,9 @@ types:
       - name: sensitive
         type: bool
         index: 2
+      - name: source
+        type: string
+        index: 3
 
   - type: VersionInfo
     fields:
@@ -340,6 +343,37 @@ interfaces:
         parameters:
           - name: name
             type: string
+      - name: setEnvVar
+        parameters:
+          - name: app
+            type: string
+          - name: key
+            type: string
+          - name: value
+            type: string
+          - name: sensitive
+            type: bool
+          - name: service
+            type: string
+            doc: "Optional service name for per-service env vars. Empty means global."
+        results:
+          - name: versionId
+            type: string
+      - name: deleteEnvVar
+        parameters:
+          - name: app
+            type: string
+          - name: key
+            type: string
+          - name: service
+            type: string
+            doc: "Optional service name for per-service env vars. Empty means global."
+        results:
+          - name: versionId
+            type: string
+          - name: deletedSource
+            type: string
+            doc: "The source of the deleted variable (config or manual)"
 
   - name: UserQuery
     methods:
