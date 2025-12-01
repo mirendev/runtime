@@ -36,20 +36,13 @@ func DebugCtr(ctx *Context, opts struct {
 	return syscall.Exec(ctrPath, args, env)
 }
 
-// findCtr looks for ctr in the miren release directories and falls back to PATH.
-// TODO: consolidate release path discovery with server.go into a shared helper
+// findCtr looks for ctr in the miren release directory and falls back to PATH.
 func findCtr() (string, error) {
-	// Check system release path first
-	systemPath := "/var/lib/miren/release/ctr"
-	if _, err := os.Stat(systemPath); err == nil {
-		return systemPath, nil
-	}
-
-	// Check user release path
-	if homeDir, err := os.UserHomeDir(); err == nil {
-		userPath := filepath.Join(homeDir, ".miren", "release", "ctr")
-		if _, err := os.Stat(userPath); err == nil {
-			return userPath, nil
+	// Check release directory first
+	if releasePath := FindReleasePath(); releasePath != "" {
+		ctrPath := filepath.Join(releasePath, "ctr")
+		if _, err := os.Stat(ctrPath); err == nil {
+			return ctrPath, nil
 		}
 	}
 
@@ -58,5 +51,5 @@ func findCtr() (string, error) {
 		return path, nil
 	}
 
-	return "", fmt.Errorf("ctr not found in release directories or PATH")
+	return "", fmt.Errorf("ctr not found in release directory or PATH")
 }

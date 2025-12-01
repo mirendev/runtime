@@ -13,7 +13,6 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
-	"os/user"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -78,78 +77,62 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 
 		// Determine release path
 		if cfg.Server.GetReleasePath() == "" {
-			// Check for user's home directory first, respecting SUDO_USER
-			homeDir, err := getUserHomeDir()
-			if err != nil {
-				ctx.Log.Warn("failed to determine home directory", "error", err)
-				homeDir = ""
-			}
+			if releasePath := FindReleasePath(); releasePath != "" {
+				cfg.Server.SetReleasePath(releasePath)
+				ctx.Log.Info("using release path", "path", releasePath)
+			} else {
+				// No release directory found, try to download one
+				ctx.Log.Info("no release directory found, downloading release")
 
-			// Try ~/.miren/release if home dir is available
-			var userReleasePath string
-			if homeDir != "" {
-				userReleasePath = filepath.Join(homeDir, ".miren", "release")
-				if _, err := os.Stat(userReleasePath); err == nil {
-					cfg.Server.SetReleasePath(userReleasePath)
-					ctx.Log.Info("using user release path", "path", userReleasePath)
+				// Determine where to download based on permissions
+				downloadGlobal := false
+				downloadPath := ""
+
+				// Get user release path for potential fallback
+				var userReleasePath string
+				if homeDir, err := getUserHomeDir(); err == nil {
+					userReleasePath = filepath.Join(homeDir, ".miren", "release")
 				}
-			}
 
-			if cfg.Server.GetReleasePath() == "" {
-				ctx.Log.Info("user release path not found, trying system path")
-				// Try /var/lib/miren/release
-				systemReleasePath := "/var/lib/miren/release"
-				if _, err := os.Stat(systemReleasePath); err == nil {
-					cfg.Server.SetReleasePath(systemReleasePath)
-					ctx.Log.Info("using system release path", "path", systemReleasePath)
-				} else {
-					// No release directory found, try to download one
-					ctx.Log.Info("no release directory found, downloading release")
-
-					// Determine where to download based on permissions
-					downloadGlobal := false
-					downloadPath := ""
-
-					// Check if we can write to /var/lib/miren
-					// First ensure the directory exists
-					if err := os.MkdirAll("/var/lib/miren", 0755); err == nil {
-						// Test actual writability by creating a temp file
-						tempFile := fmt.Sprintf("/var/lib/miren/.test_%d_%d", os.Getpid(), time.Now().UnixNano())
-						f, err := os.OpenFile(tempFile, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0644)
-						if err == nil {
-							// Successfully created temp file, clean it up
-							f.Close()
-							os.Remove(tempFile)
-							// We have write permission to system path
-							downloadGlobal = true
-							downloadPath = systemReleasePath
-						} else if userReleasePath != "" {
-							// Can't write to system path, fall back to user path
-							downloadPath = userReleasePath
-						} else {
-							return fmt.Errorf("unable to write to /var/lib/miren and no user path available: %w", err)
-						}
+				// Check if we can write to /var/lib/miren
+				// First ensure the directory exists
+				if err := os.MkdirAll("/var/lib/miren", 0755); err == nil {
+					// Test actual writability by creating a temp file
+					tempFile := fmt.Sprintf("/var/lib/miren/.test_%d_%d", os.Getpid(), time.Now().UnixNano())
+					f, err := os.OpenFile(tempFile, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0644)
+					if err == nil {
+						// Successfully created temp file, clean it up
+						f.Close()
+						os.Remove(tempFile)
+						// We have write permission to system path
+						downloadGlobal = true
+						downloadPath = systemReleasePath
 					} else if userReleasePath != "" {
-						// Can't create system directory, use user's home directory
+						// Can't write to system path, fall back to user path
 						downloadPath = userReleasePath
 					} else {
-						return fmt.Errorf("unable to create /var/lib/miren and no user path available: %w", err)
+						return fmt.Errorf("unable to write to /var/lib/miren and no user path available: %w", err)
 					}
-
-					// Download the release
-					if err := PerformDownloadRelease(ctx, DownloadReleaseOptions{
-						Branch: "main",
-						Global: downloadGlobal,
-						Force:  false,
-						Output: downloadPath,
-					}); err != nil {
-						return fmt.Errorf("failed to download release: %w", err)
-					}
-
-					// Set the release path to the downloaded location
-					cfg.Server.SetReleasePath(downloadPath)
-					ctx.Log.Info("using downloaded release", "path", downloadPath)
+				} else if userReleasePath != "" {
+					// Can't create system directory, use user's home directory
+					downloadPath = userReleasePath
+				} else {
+					return fmt.Errorf("unable to create /var/lib/miren and no user path available: %w", err)
 				}
+
+				// Download the release
+				if err := PerformDownloadRelease(ctx, DownloadReleaseOptions{
+					Branch: "main",
+					Global: downloadGlobal,
+					Force:  false,
+					Output: downloadPath,
+				}); err != nil {
+					return fmt.Errorf("failed to download release: %w", err)
+				}
+
+				// Set the release path to the downloaded location
+				cfg.Server.SetReleasePath(downloadPath)
+				ctx.Log.Info("using downloaded release", "path", downloadPath)
 			}
 
 			// In standalone mode, automatically start all components
@@ -880,32 +863,6 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 
 	co.Stop()
 	return err
-}
-
-// getUserHomeDir returns the user's home directory, respecting SUDO_USER if running under sudo
-func getUserHomeDir() (string, error) {
-	if sudoUser := os.Getenv("SUDO_USER"); sudoUser != "" {
-		// Running under sudo, get the original user's home
-		u, err := user.Lookup(sudoUser)
-		if err == nil {
-			return u.HomeDir, nil
-		}
-		// Fallback to HOME env var
-		if homeDir := os.Getenv("HOME"); homeDir != "" {
-			return homeDir, nil
-		}
-	} else {
-		// Not running under sudo
-		if homeDir := os.Getenv("HOME"); homeDir != "" {
-			return homeDir, nil
-		}
-		u, err := user.Current()
-		if err != nil {
-			return "", fmt.Errorf("failed to get user home directory: %w", err)
-		}
-		return u.HomeDir, nil
-	}
-	return "", fmt.Errorf("could not determine home directory")
 }
 
 // writeLocalClusterConfig writes a client config file for the local cluster
