@@ -461,7 +461,10 @@ loop2:
 
 	if false { // mode.Debug() {
 		log.Debug("validating map post update")
-		return nil, e.Validate(log)
+		err := e.Validate(log)
+		if err != nil {
+			return affected, err
+		}
 	}
 
 	return affected, nil
