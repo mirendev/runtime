@@ -16,9 +16,8 @@ import (
 //
 // Implements controller.ReconcileControllerI[*compute_v1alpha.Sandbox]
 type Controller struct {
-	log   *slog.Logger
-	eac   *entityserver_v1alpha.EntityAccessClient
-	nodes map[entity.Id]*compute_v1alpha.Node
+	log *slog.Logger
+	eac *entityserver_v1alpha.EntityAccessClient
 }
 
 // NewController creates a new scheduler controller
@@ -27,27 +26,15 @@ func NewController(
 	eac *entityserver_v1alpha.EntityAccessClient,
 ) *Controller {
 	return &Controller{
-		log:   log.With("module", "scheduler"),
-		eac:   eac,
-		nodes: make(map[entity.Id]*compute_v1alpha.Node),
+		log: log.With("module", "scheduler"),
+		eac: eac,
 	}
 }
 
-// Init initializes the controller by gathering available nodes.
+// Init initializes the controller.
 // Required by ReconcileControllerI.
 func (c *Controller) Init(ctx context.Context) error {
 	c.log.Info("initializing scheduler controller")
-
-	nodes, err := c.gatherNodes(ctx)
-	if err != nil {
-		return err
-	}
-
-	for _, node := range nodes {
-		c.nodes[node.ID] = node
-	}
-
-	c.log.Info("scheduler controller initialized", "nodes", len(c.nodes))
 	return nil
 }
 
@@ -61,9 +48,16 @@ func (c *Controller) Reconcile(ctx context.Context, sandbox *compute_v1alpha.San
 
 	c.log.Debug("scheduling sandbox", "id", sandbox.ID)
 
-	// Find available nodes
+	// Fetch fresh node data
+	allNodes, err := c.gatherNodes(ctx)
+	if err != nil {
+		c.log.Error("failed to gather nodes", "error", err)
+		return err
+	}
+
+	// Find available READY nodes
 	var nodes []*compute_v1alpha.Node
-	for _, node := range c.nodes {
+	for _, node := range allNodes {
 		if node.Status == compute_v1alpha.READY {
 			nodes = append(nodes, node)
 		}

@@ -237,36 +237,3 @@ func TestSchedulerMultipleNodes(t *testing.T) {
 		assert.True(t, nodeIDs[schedule.Key.Node], "sandbox should be assigned to one of our nodes")
 	}
 }
-
-// TestSchedulerInitGathersNodes tests that Init properly gathers
-// all existing nodes from the entity store
-func TestSchedulerInitGathersNodes(t *testing.T) {
-	ctx := context.Background()
-	log := testutils.TestLogger(t)
-
-	server, cleanup := testutils.NewInMemEntityServer(t)
-	defer cleanup()
-
-	// Create nodes before initializing scheduler
-	readyNode := &compute_v1alpha.Node{Status: compute_v1alpha.READY}
-	readyID, err := server.Client.Create(ctx, "ready-node", readyNode)
-	require.NoError(t, err)
-
-	disabledNode := &compute_v1alpha.Node{Status: compute_v1alpha.DISABLED}
-	disabledID, err := server.Client.Create(ctx, "disabled-node", disabledNode)
-	require.NoError(t, err)
-
-	// Create scheduler and initialize
-	scheduler := NewController(log, server.EAC)
-	err = scheduler.Init(ctx)
-	require.NoError(t, err)
-
-	// Verify both nodes were gathered
-	assert.Len(t, scheduler.nodes, 2, "scheduler should have gathered 2 nodes")
-	assert.Contains(t, scheduler.nodes, readyID, "scheduler should have ready node")
-	assert.Contains(t, scheduler.nodes, disabledID, "scheduler should have disabled node")
-
-	// Verify node status is preserved
-	assert.Equal(t, compute_v1alpha.READY, scheduler.nodes[readyID].Status)
-	assert.Equal(t, compute_v1alpha.DISABLED, scheduler.nodes[disabledID].Status)
-}
