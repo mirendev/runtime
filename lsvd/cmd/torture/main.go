@@ -8,6 +8,8 @@ import (
 	"math/rand"
 	"os"
 	"os/signal"
+	"runtime"
+	"runtime/pprof"
 	"syscall"
 	"time"
 
@@ -27,6 +29,7 @@ var (
 	flagLoop       = flag.Bool("loop", false, "Run continuously until failure")
 	flagQuiet      = flag.Bool("quiet", false, "Reduce output verbosity")
 	flagDebug      = flag.Bool("debug", false, "Enable debug logging")
+	flagMemProfile = flag.String("memprofile", "", "Write memory profile to file")
 )
 
 func main() {
@@ -109,6 +112,22 @@ func main() {
 		err = runTortureLoop(ctx, log, *flagDir, cfg, *flagQuiet)
 	} else {
 		err = runTortureSingle(ctx, log, *flagDir, cfg, *flagQuiet)
+	}
+
+	if *flagMemProfile != "" {
+		f, err := os.Create(*flagMemProfile)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Failed to create memory profile: %v\n", err)
+			os.Exit(1)
+		}
+		runtime.GC()
+		if err := pprof.WriteHeapProfile(f); err != nil {
+			fmt.Fprintf(os.Stderr, "Failed to write memory profile: %v\n", err)
+			f.Close()
+			os.Exit(1)
+		}
+		f.Close()
+		fmt.Fprintf(os.Stderr, "Memory profile written to %s\n", *flagMemProfile)
 	}
 
 	if err != nil {

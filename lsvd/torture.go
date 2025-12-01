@@ -503,7 +503,7 @@ func (r *TortureRunner) Run() TortureResult {
 					History:    r.history,
 				}
 			default:
-				fmt.Fprintf(r.output, "Progress X: %d/%d operations (%.1f%%)\n",
+				fmt.Fprintf(r.output, "Progress: %d/%d operations (%.1f%%)\n",
 					i+1, r.cfg.Operations, float64(i+1)/float64(r.cfg.Operations)*100)
 				r.lastProgress = time.Now()
 			}
@@ -635,6 +635,8 @@ func (r *TortureRunner) verifyAll() error {
 	}
 
 	for _, lba := range lbas {
+		r.ctx.Reset()
+
 		actual, err := r.disk.ReadExtent(r.ctx, Extent{LBA: lba, Blocks: 1})
 		if err != nil {
 			return fmt.Errorf("read error at LBA %d: %w", lba, err)
@@ -669,6 +671,8 @@ func (r *TortureRunner) verifySample(count int) error {
 	}
 
 	for idx := range sampled {
+		r.ctx.Reset()
+
 		lba := lbas[idx]
 		actual, err := r.disk.ReadExtent(r.ctx, Extent{LBA: lba, Blocks: 1})
 		if err != nil {
