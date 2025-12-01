@@ -66,7 +66,7 @@ func (e RawBlocks) BlockView(cnt int) []byte {
 func NewRangeData(ctx *Context, ext Extent) RangeData {
 	return RangeData{
 		Extent: ext,
-		data:   ctx.Allocate(ext.ByteSize()),
+		data:   ctx.AllocateZero(ext.ByteSize()),
 	}
 }
 
