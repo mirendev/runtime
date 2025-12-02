@@ -23,7 +23,7 @@ Get started with Miren in seconds:
 
 ```bash
 # Install Miren
-curl https://miren.cloud/install | sudo sh
+curl https://miren.cloud/install | sudo bash
 
 # Deploy your first app
 miren deploy
