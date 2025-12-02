@@ -6,8 +6,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"syscall"
-
-	"miren.dev/runtime/pkg/containerdx"
 )
 
 func DebugCtr(ctx *Context, opts struct {
@@ -20,7 +18,7 @@ func DebugCtr(ctx *Context, opts struct {
 }) error {
 	socket := opts.Socket
 	if socket == "" {
-		socket = containerdx.DefaultSocket
+		socket = defaultContainerdSocket()
 	}
 
 	ctrPath, err := findCtr()
@@ -52,4 +50,18 @@ func findCtr() (string, error) {
 	}
 
 	return "", fmt.Errorf("ctr not found in release directory or PATH")
+}
+
+// defaultContainerdSocket returns the path to the miren containerd socket.
+// It checks for the socket in the default data path, falling back to the
+// standard system containerd socket if not found.
+func defaultContainerdSocket() string {
+	// Check miren's containerd socket (in default data path)
+	mirenSocket := "/var/lib/miren/containerd/containerd.sock"
+	if _, err := os.Stat(mirenSocket); err == nil {
+		return mirenSocket
+	}
+
+	// Fall back to system containerd socket
+	return "/run/containerd/containerd.sock"
 }
