@@ -7,7 +7,9 @@ import (
 	"miren.dev/runtime/api/app/app_v1alpha"
 	"miren.dev/runtime/api/compute"
 	"miren.dev/runtime/appconfig"
+	"miren.dev/runtime/pkg/rpc"
 	"miren.dev/runtime/pkg/rpc/standard"
+	"miren.dev/runtime/pkg/rpc/stream"
 )
 
 func Logs(ctx *Context, opts struct {
@@ -17,6 +19,7 @@ func Logs(ctx *Context, opts struct {
 	Dir     string         `short:"d" long:"dir" description:"Directory to run from" default:"."`
 	Last    *time.Duration `short:"l" long:"last" description:"Show logs from the last duration"`
 	Sandbox string         `short:"s" long:"sandbox" description:"Show logs for a specific sandbox ID"`
+	Follow  bool           `short:"f" long:"follow" description:"Follow log output (live tail)"`
 }) error {
 	// Check for conflicting options
 	if opts.App != "" && opts.Sandbox != "" {
@@ -46,10 +49,7 @@ func Logs(ctx *Context, opts struct {
 		return err
 	}
 
-	ac := app_v1alpha.LogsClient{Client: cl}
-
 	// If sandbox ID is provided, resolve it to the full entity ID
-	// (logs are stored with the full entity ID, not the prefixed name)
 	if opts.Sandbox != "" {
 		entityClient, err := ctx.RPCClient("entities")
 		if err != nil {
@@ -58,16 +58,82 @@ func Logs(ctx *Context, opts struct {
 
 		computeClient := compute.NewClient(ctx.Log, entityClient)
 
-		// Get the sandbox to retrieve its full entity ID
-		// This will try both Get (name-based) and GetById (ID-based) lookups
 		sandbox, err := computeClient.GetSandbox(ctx, opts.Sandbox)
 		if err != nil {
 			return fmt.Errorf("failed to find sandbox %s: %w", opts.Sandbox, err)
 		}
 
-		// Use the full entity ID for log queries
 		opts.Sandbox = sandbox.ID.String()
 	}
+
+	// Check if server supports streaming
+	if cl.HasMethod(ctx, "streamLogs") {
+		return streamLogs(ctx, cl, opts.App, opts.Sandbox, opts.Last, opts.Follow)
+	}
+
+	// Warn if --follow requested but not supported
+	if opts.Follow {
+		ctx.Printf("Warning: server does not support --follow, showing recent logs only\n")
+	}
+
+	// Fall back to legacy pagination
+	return legacyLogs(ctx, cl, opts.App, opts.Sandbox, opts.Last)
+}
+
+func streamLogs(ctx *Context, cl *rpc.NetworkClient, app, sandbox string, last *time.Duration, follow bool) error {
+	ac := app_v1alpha.LogsClient{Client: cl}
+
+	typ := map[string]string{
+		"stdout":   "S",
+		"stderr":   "E",
+		"error":    "ERR",
+		"user-oob": "U",
+	}
+
+	// Build target
+	target := &app_v1alpha.LogTarget{}
+	if sandbox != "" {
+		target.SetSandbox(sandbox)
+	} else {
+		target.SetApp(app)
+	}
+
+	// Determine start time
+	var ts *standard.Timestamp
+	if last != nil {
+		ts = standard.ToTimestamp(time.Now().Add(-*last))
+	} else if !follow {
+		// For non-follow mode without explicit --last, default to today
+		start := time.Now()
+		start = time.Date(start.Year(), start.Month(), start.Day(), 0, 0, 0, 0, start.Location())
+		ts = standard.ToTimestamp(start)
+	}
+	// For follow mode without --last, ts is nil which means start from now
+
+	// Create callback to print logs as they arrive
+	callback := stream.Callback(func(l *app_v1alpha.LogEntry) error {
+		prefix := ""
+		if l.HasSource() && l.Source() != "" {
+			source := l.Source()
+			if len(source) > 12 {
+				source = source[:3] + "…" + source[len(source)-8:]
+			}
+			prefix = "[" + source + "] "
+		}
+		ctx.Printf("%s %s: %s%s\n",
+			typ[l.Stream()],
+			standard.FromTimestamp(l.Timestamp()).Format("2006-01-02 15:04:05"),
+			prefix,
+			l.Line())
+		return nil
+	})
+
+	_, err := ac.StreamLogs(ctx, target, ts, follow, callback)
+	return err
+}
+
+func legacyLogs(ctx *Context, cl *rpc.NetworkClient, app, sandbox string, last *time.Duration) error {
+	ac := app_v1alpha.LogsClient{Client: cl}
 
 	typ := map[string]string{
 		"stdout":   "S",
@@ -78,8 +144,8 @@ func Logs(ctx *Context, opts struct {
 
 	var ts *standard.Timestamp
 
-	if opts.Last != nil {
-		ts = standard.ToTimestamp(time.Now().Add(-*opts.Last))
+	if last != nil {
+		ts = standard.ToTimestamp(time.Now().Add(-*last))
 	} else {
 		start := time.Now()
 		start = time.Date(start.Year(), start.Month(), start.Day(), 0, 0, 0, 0, start.Location())
@@ -94,11 +160,10 @@ func Logs(ctx *Context, opts struct {
 			err error
 		)
 
-		if opts.Sandbox != "" {
-			// opts.Sandbox has already been resolved to the full entity ID above
-			res, err = ac.SandboxLogs(ctx, opts.Sandbox, ts, false)
+		if sandbox != "" {
+			res, err = ac.SandboxLogs(ctx, sandbox, ts, false)
 		} else {
-			res, err = ac.AppLogs(ctx, opts.App, ts, false)
+			res, err = ac.AppLogs(ctx, app, ts, false)
 		}
 
 		if err != nil {
@@ -112,7 +177,6 @@ func Logs(ctx *Context, opts struct {
 			if l.HasSource() && l.Source() != "" {
 				source := l.Source()
 				if len(source) > 12 {
-					// Truncate: first 3 chars + ellipsis + last 8 chars
 					source = source[:3] + "…" + source[len(source)-8:]
 				}
 				prefix = "[" + source + "] "
@@ -130,7 +194,6 @@ func Logs(ctx *Context, opts struct {
 
 		// For pagination, use the last log's timestamp + 1 microsecond to avoid duplicates
 		lastTime := standard.FromTimestamp(logs[len(logs)-1].Timestamp())
-		// Add 1 microsecond to exclude the last log from the next query
 		nextTime := lastTime.Add(time.Microsecond)
 		ts = standard.ToTimestamp(nextTime)
 	}

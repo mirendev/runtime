@@ -305,6 +305,54 @@ func (c *NetworkClient) reresolveCapability(rs *InterfaceState) error {
 	return nil
 }
 
+// ListMethods returns the list of methods available on this capability.
+// Returns an error if the server doesn't support method introspection (old servers).
+func (c *NetworkClient) ListMethods(ctx context.Context) ([]string, error) {
+	url := "https://" + c.remote + "/_rpc/methods/" + string(c.oid)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	c.addBearerToken(req)
+
+	resp, err := c.roundTrip(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
+	}
+
+	var result methodsResponse
+	if err := cbor.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, err
+	}
+
+	if result.Error != "" {
+		return nil, errors.New(result.Error)
+	}
+
+	return result.Methods, nil
+}
+
+// HasMethod checks if the remote interface supports a given method.
+// Returns false if the method doesn't exist or if the server doesn't support introspection.
+func (c *NetworkClient) HasMethod(ctx context.Context, method string) bool {
+	methods, err := c.ListMethods(ctx)
+	if err != nil {
+		return false
+	}
+	for _, m := range methods {
+		if m == method {
+			return true
+		}
+	}
+	return false
+}
+
 func (c *NetworkClient) requestReexportCapability(ctx context.Context, capa *Capability, target ed25519.PublicKey) (*Capability, error) {
 	url := "https://" + c.remote + "/_rpc/reexport/" + string(capa.OID)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, nil)

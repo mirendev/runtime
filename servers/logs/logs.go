@@ -2,6 +2,7 @@ package logs
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 
 	"miren.dev/runtime/api/app/app_v1alpha"
@@ -111,4 +112,78 @@ func (s *Server) SandboxLogs(ctx context.Context, state *app_v1alpha.LogsSandbox
 	state.Results().SetLogs(ret)
 
 	return nil
+}
+
+func (s *Server) StreamLogs(ctx context.Context, state *app_v1alpha.LogsStreamLogs) error {
+	args := state.Args()
+	send := args.Logs()
+	target := args.Target()
+
+	var opts []observability.LogReaderOption
+	if args.HasFrom() {
+		fromTime := standard.FromTimestamp(args.From())
+		opts = append(opts, observability.WithFromTime(fromTime))
+	}
+
+	// Build log target from RPC target
+	var logTarget observability.LogTarget
+
+	if target.HasSandbox() && target.Sandbox() != "" {
+		logTarget.SandboxID = target.Sandbox()
+		s.Log.Debug("streaming logs by sandbox", "sandbox", logTarget.SandboxID, "follow", args.Follow())
+	} else if target.HasApp() && target.App() != "" {
+		// Resolve app to entity ID
+		var appRec core_v1alpha.App
+		err := s.EC.Get(ctx, target.App(), &appRec)
+		if err != nil {
+			s.Log.Error("failed to get app", "app", target.App(), "err", err)
+			return err
+		}
+		logTarget.EntityID = appRec.EntityId().String()
+		s.Log.Debug("streaming logs by app", "app", target.App(), "entityID", logTarget.EntityID, "follow", args.Follow())
+	} else {
+		return fmt.Errorf("target must specify either app or sandbox")
+	}
+
+	// Create channel for log entries
+	logCh := make(chan observability.LogEntry, 100)
+	errCh := make(chan error, 1)
+
+	// Start reader goroutine
+	go func() {
+		defer close(logCh)
+		var err error
+		if args.Follow() {
+			err = s.LogReader.TailStream(ctx, logTarget, logCh, opts...)
+		} else {
+			err = s.LogReader.ReadStream(ctx, logTarget, logCh, opts...)
+		}
+		if err != nil && err != context.Canceled {
+			errCh <- err
+		}
+	}()
+
+	// Stream logs to client
+	for entry := range logCh {
+		le := &app_v1alpha.LogEntry{}
+		le.SetTimestamp(standard.ToTimestamp(entry.Timestamp))
+		le.SetLine(entry.Body)
+		le.SetStream(string(entry.Stream))
+		if source, ok := entry.Attributes["source"]; ok {
+			le.SetSource(source)
+		}
+
+		if _, err := send.Send(ctx, le); err != nil {
+			s.Log.Debug("client disconnected", "err", err)
+			return err
+		}
+	}
+
+	// Check for reader errors
+	select {
+	case err := <-errCh:
+		return err
+	default:
+		return nil
+	}
 }
