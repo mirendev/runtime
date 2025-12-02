@@ -20,6 +20,17 @@ type Server struct {
 
 var _ app_v1alpha.Logs = &Server{}
 
+func toLogEntry(entry observability.LogEntry) *app_v1alpha.LogEntry {
+	le := &app_v1alpha.LogEntry{}
+	le.SetTimestamp(standard.ToTimestamp(entry.Timestamp))
+	le.SetLine(entry.Body)
+	le.SetStream(string(entry.Stream))
+	if source, ok := entry.Attributes["source"]; ok {
+		le.SetSource(source)
+	}
+	return le
+}
+
 func NewServer(log *slog.Logger, ec *entityserver.Client, lr *observability.LogReader) *Server {
 	return &Server{
 		Log:       log.With("module", "logserver"),
@@ -55,17 +66,8 @@ func (s *Server) AppLogs(ctx context.Context, state *app_v1alpha.LogsAppLogs) er
 	}
 
 	var ret []*app_v1alpha.LogEntry
-
 	for _, entry := range entries {
-		le := &app_v1alpha.LogEntry{}
-		le.SetTimestamp(standard.ToTimestamp(entry.Timestamp))
-		le.SetLine(entry.Body)
-		le.SetStream(string(entry.Stream))
-		if source, ok := entry.Attributes["source"]; ok {
-			le.SetSource(source)
-		}
-
-		ret = append(ret, le)
+		ret = append(ret, toLogEntry(entry))
 	}
 
 	s.Log.Debug("returning logs", "lineCount", len(entries))
@@ -94,17 +96,8 @@ func (s *Server) SandboxLogs(ctx context.Context, state *app_v1alpha.LogsSandbox
 	}
 
 	var ret []*app_v1alpha.LogEntry
-
 	for _, entry := range entries {
-		le := &app_v1alpha.LogEntry{}
-		le.SetTimestamp(standard.ToTimestamp(entry.Timestamp))
-		le.SetLine(entry.Body)
-		le.SetStream(string(entry.Stream))
-		if source, ok := entry.Attributes["source"]; ok {
-			le.SetSource(source)
-		}
-
-		ret = append(ret, le)
+		ret = append(ret, toLogEntry(entry))
 	}
 
 	s.Log.Debug("returning logs", "lineCount", len(entries))
@@ -165,15 +158,7 @@ func (s *Server) StreamLogs(ctx context.Context, state *app_v1alpha.LogsStreamLo
 
 	// Stream logs to client
 	for entry := range logCh {
-		le := &app_v1alpha.LogEntry{}
-		le.SetTimestamp(standard.ToTimestamp(entry.Timestamp))
-		le.SetLine(entry.Body)
-		le.SetStream(string(entry.Stream))
-		if source, ok := entry.Attributes["source"]; ok {
-			le.SetSource(source)
-		}
-
-		if _, err := send.Send(ctx, le); err != nil {
+		if _, err := send.Send(ctx, toLogEntry(entry)); err != nil {
 			s.Log.Debug("client disconnected", "err", err)
 			return err
 		}

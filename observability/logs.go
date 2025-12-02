@@ -427,7 +427,7 @@ func (l *LogReader) parseLogLine(line []byte) (LogEntry, error) {
 
 	// Add all other fields as attributes
 	for k, v := range logData {
-		if k == "_msg" || k == "_time" || k == "stream" || k == "trace_id" || k == "entity" {
+		if k == "_msg" || k == "_time" || k == "stream" || k == "trace_id" || k == "entity" || k == "sandbox" {
 			continue
 		}
 		if strVal, ok := v.(string); ok {
@@ -488,43 +488,10 @@ func (l *LogReader) executeQuery(ctx context.Context, query string, limit int, s
 			continue
 		}
 
-		var logData map[string]interface{}
-		if err := json.Unmarshal(line, &logData); err != nil {
-			// Log the error but continue - might be partial data
+		entry, err := l.parseLogLine(line)
+		if err != nil {
+			// Skip malformed lines
 			continue
-		}
-
-		entry := LogEntry{
-			Attributes: make(map[string]string),
-		}
-
-		// Parse standard fields
-		if msg, ok := logData["_msg"].(string); ok {
-			entry.Body = msg
-		}
-
-		if timeStr, ok := logData["_time"].(string); ok {
-			if t, err := time.Parse(time.RFC3339Nano, timeStr); err == nil {
-				entry.Timestamp = t
-			}
-		}
-
-		if stream, ok := logData["stream"].(string); ok {
-			entry.Stream = LogStream(stream)
-		}
-
-		if traceID, ok := logData["trace_id"].(string); ok {
-			entry.TraceID = traceID
-		}
-
-		// Add all other fields as attributes
-		for k, v := range logData {
-			if k == "_msg" || k == "_time" || k == "stream" || k == "trace_id" || k == "entity" {
-				continue
-			}
-			if strVal, ok := v.(string); ok {
-				entry.Attributes[k] = strVal
-			}
 		}
 
 		entries = append(entries, entry)

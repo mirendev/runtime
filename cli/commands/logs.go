@@ -80,15 +80,15 @@ func Logs(ctx *Context, opts struct {
 	return legacyLogs(ctx, cl, opts.App, opts.Sandbox, opts.Last)
 }
 
+var streamTypePrefixes = map[string]string{
+	"stdout":   "S",
+	"stderr":   "E",
+	"error":    "ERR",
+	"user-oob": "U",
+}
+
 func streamLogs(ctx *Context, cl *rpc.NetworkClient, app, sandbox string, last *time.Duration, follow bool) error {
 	ac := app_v1alpha.LogsClient{Client: cl}
-
-	typ := map[string]string{
-		"stdout":   "S",
-		"stderr":   "E",
-		"error":    "ERR",
-		"user-oob": "U",
-	}
 
 	// Build target
 	target := &app_v1alpha.LogTarget{}
@@ -121,7 +121,7 @@ func streamLogs(ctx *Context, cl *rpc.NetworkClient, app, sandbox string, last *
 			prefix = "[" + source + "] "
 		}
 		ctx.Printf("%s %s: %s%s\n",
-			typ[l.Stream()],
+			streamTypePrefixes[l.Stream()],
 			standard.FromTimestamp(l.Timestamp()).Format("2006-01-02 15:04:05"),
 			prefix,
 			l.Line())
@@ -134,13 +134,6 @@ func streamLogs(ctx *Context, cl *rpc.NetworkClient, app, sandbox string, last *
 
 func legacyLogs(ctx *Context, cl *rpc.NetworkClient, app, sandbox string, last *time.Duration) error {
 	ac := app_v1alpha.LogsClient{Client: cl}
-
-	typ := map[string]string{
-		"stdout":   "S",
-		"stderr":   "E",
-		"error":    "ERR",
-		"user-oob": "U",
-	}
 
 	var ts *standard.Timestamp
 
@@ -182,7 +175,7 @@ func legacyLogs(ctx *Context, cl *rpc.NetworkClient, app, sandbox string, last *
 				prefix = "[" + source + "] "
 			}
 			ctx.Printf("%s %s: %s%s\n",
-				typ[l.Stream()],
+				streamTypePrefixes[l.Stream()],
 				standard.FromTimestamp(l.Timestamp()).Format("2006-01-02 15:04:05"),
 				prefix,
 				l.Line())
