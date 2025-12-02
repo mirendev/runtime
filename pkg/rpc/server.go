@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -285,6 +286,7 @@ func (s *Server) setupMux() {
 	mux.HandleFunc("POST /_rpc/call/{oid}/{method}", s.handleCalls)
 	mux.HandleFunc("CONNECT /_rpc/callstream/{oid}/{method}", s.startCallStream)
 	mux.HandleFunc("POST /_rpc/lookup/{name}", s.lookup)
+	mux.HandleFunc("GET /_rpc/methods/{oid}", s.listMethods)
 	mux.HandleFunc("POST /_rpc/reresolve", s.reresolve)
 	mux.HandleFunc("POST /_rpc/reexport/{oid}", s.reexport)
 	mux.HandleFunc("POST /_rpc/ref/{oid}", s.refCapa)
@@ -560,6 +562,37 @@ func (s *Server) reexport(w http.ResponseWriter, r *http.Request) {
 type lookupResponse struct {
 	Capability *Capability `json:"capability,omitempty"`
 	Error      string      `json:"error,omitempty"`
+}
+
+type methodsResponse struct {
+	Methods []string `json:"methods,omitempty" cbor:"methods,omitempty"`
+	Error   string   `json:"error,omitempty" cbor:"error,omitempty"`
+}
+
+func (s *Server) listMethods(w http.ResponseWriter, r *http.Request) {
+	oid := OID(r.PathValue("oid"))
+
+	s.mu.Lock()
+	hc, ok := s.objects[oid]
+	s.mu.Unlock()
+
+	w.Header().Set("Content-Type", "application/cbor")
+	w.WriteHeader(http.StatusOK)
+
+	if !ok {
+		cbor.NewEncoder(w).Encode(methodsResponse{
+			Error: "unknown capability: " + string(oid),
+		})
+		return
+	}
+
+	methods := make([]string, 0, len(hc.methods))
+	for name := range hc.methods {
+		methods = append(methods, name)
+	}
+	sort.Strings(methods)
+
+	cbor.NewEncoder(w).Encode(methodsResponse{Methods: methods})
 }
 
 func (s *Server) lookup(w http.ResponseWriter, r *http.Request) {

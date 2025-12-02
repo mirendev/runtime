@@ -1,6 +1,7 @@
 package observability
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -262,6 +263,181 @@ func (l *LogReader) ReadBySandbox(ctx context.Context, sandboxID string, opts ..
 	return l.executeQuery(ctx, query, limit, startTime, time.Now())
 }
 
+// LogTarget specifies what logs to query - either by entity ID or sandbox ID.
+type LogTarget struct {
+	EntityID  string
+	SandboxID string
+}
+
+func (t LogTarget) query() string {
+	if t.SandboxID != "" {
+		return `sandbox:` + logsQLQuote(t.SandboxID)
+	}
+	return `entity:` + logsQLQuote(t.EntityID)
+}
+
+// ReadStream queries historical logs and sends them to a channel as they're parsed.
+// Unlike Read(), this has no limit and streams results incrementally.
+func (l *LogReader) ReadStream(ctx context.Context, target LogTarget, logCh chan<- LogEntry, opts ...LogReaderOption) error {
+	return l.executeStreamQuery(ctx, target.query(), logCh, opts...)
+}
+
+// TailStream connects to VictoriaLogs tail endpoint for live tailing.
+// Blocks until context is cancelled.
+func (l *LogReader) TailStream(ctx context.Context, target LogTarget, logCh chan<- LogEntry, opts ...LogReaderOption) error {
+	return l.executeTailQuery(ctx, target.query(), logCh, opts...)
+}
+
+func (l *LogReader) executeStreamQuery(ctx context.Context, query string, logCh chan<- LogEntry, opts ...LogReaderOption) error {
+	var o logReadOpts
+	for _, opt := range opts {
+		opt(&o)
+	}
+
+	baseURL := normalizeBaseURL(l.Address)
+	queryURL := baseURL + "/select/logsql/query"
+
+	params := url.Values{}
+	params.Set("query", query)
+	// No limit - stream all results
+
+	startTime := o.From
+	if startTime.IsZero() {
+		startTime = time.Now().Add(-24 * time.Hour)
+	}
+	params.Set("start", startTime.Format(time.RFC3339Nano))
+	params.Set("end", time.Now().Format(time.RFC3339Nano))
+
+	fullURL := fmt.Sprintf("%s?%s", queryURL, params.Encode())
+
+	req, err := http.NewRequestWithContext(ctx, "GET", fullURL, nil)
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+
+	// Use a client without timeout for streaming
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to query victorialogs: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("victorialogs returned status %d: %s", resp.StatusCode, string(body))
+	}
+
+	return l.parseLogStream(ctx, resp.Body, logCh)
+}
+
+func (l *LogReader) executeTailQuery(ctx context.Context, query string, logCh chan<- LogEntry, opts ...LogReaderOption) error {
+	var o logReadOpts
+	for _, opt := range opts {
+		opt(&o)
+	}
+
+	baseURL := normalizeBaseURL(l.Address)
+	tailURL := baseURL + "/select/logsql/tail"
+
+	params := url.Values{}
+	params.Set("query", query)
+
+	// Include historical logs if From time specified
+	if !o.From.IsZero() {
+		offset := time.Since(o.From)
+		params.Set("start_offset", offset.String())
+	}
+
+	fullURL := fmt.Sprintf("%s?%s", tailURL, params.Encode())
+
+	req, err := http.NewRequestWithContext(ctx, "GET", fullURL, nil)
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+
+	// Use a client without timeout for streaming
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to connect to victorialogs tail: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("victorialogs returned status %d: %s", resp.StatusCode, string(body))
+	}
+
+	return l.parseLogStream(ctx, resp.Body, logCh)
+}
+
+func (l *LogReader) parseLogStream(ctx context.Context, body io.Reader, logCh chan<- LogEntry) error {
+	scanner := bufio.NewScanner(body)
+	for scanner.Scan() {
+		line := scanner.Bytes()
+		if len(bytes.TrimSpace(line)) == 0 {
+			continue
+		}
+
+		entry, err := l.parseLogLine(line)
+		if err != nil {
+			// Skip malformed lines
+			continue
+		}
+
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case logCh <- entry:
+		}
+	}
+
+	return scanner.Err()
+}
+
+func (l *LogReader) parseLogLine(line []byte) (LogEntry, error) {
+	var logData map[string]interface{}
+	if err := json.Unmarshal(line, &logData); err != nil {
+		return LogEntry{}, err
+	}
+
+	entry := LogEntry{
+		Attributes: make(map[string]string),
+	}
+
+	// Parse standard fields
+	if msg, ok := logData["_msg"].(string); ok {
+		entry.Body = msg
+	}
+
+	if timeStr, ok := logData["_time"].(string); ok {
+		if t, err := time.Parse(time.RFC3339Nano, timeStr); err == nil {
+			entry.Timestamp = t
+		}
+	}
+
+	if stream, ok := logData["stream"].(string); ok {
+		entry.Stream = LogStream(stream)
+	}
+
+	if traceID, ok := logData["trace_id"].(string); ok {
+		entry.TraceID = traceID
+	}
+
+	// Add all other fields as attributes
+	for k, v := range logData {
+		if k == "_msg" || k == "_time" || k == "stream" || k == "trace_id" || k == "entity" {
+			continue
+		}
+		if strVal, ok := v.(string); ok {
+			entry.Attributes[k] = strVal
+		}
+	}
+
+	return entry, nil
+}
+
 func (l *LogReader) executeQuery(ctx context.Context, query string, limit int, start, end time.Time) ([]LogEntry, error) {
 	// VictoriaLogs uses /select/logsql/query for queries
 	baseURL := normalizeBaseURL(l.Address)
@@ -312,43 +488,10 @@ func (l *LogReader) executeQuery(ctx context.Context, query string, limit int, s
 			continue
 		}
 
-		var logData map[string]interface{}
-		if err := json.Unmarshal(line, &logData); err != nil {
-			// Log the error but continue - might be partial data
+		entry, err := l.parseLogLine(line)
+		if err != nil {
+			// Skip malformed lines
 			continue
-		}
-
-		entry := LogEntry{
-			Attributes: make(map[string]string),
-		}
-
-		// Parse standard fields
-		if msg, ok := logData["_msg"].(string); ok {
-			entry.Body = msg
-		}
-
-		if timeStr, ok := logData["_time"].(string); ok {
-			if t, err := time.Parse(time.RFC3339Nano, timeStr); err == nil {
-				entry.Timestamp = t
-			}
-		}
-
-		if stream, ok := logData["stream"].(string); ok {
-			entry.Stream = LogStream(stream)
-		}
-
-		if traceID, ok := logData["trace_id"].(string); ok {
-			entry.TraceID = traceID
-		}
-
-		// Add all other fields as attributes
-		for k, v := range logData {
-			if k == "_msg" || k == "_time" || k == "stream" || k == "trace_id" || k == "entity" {
-				continue
-			}
-			if strVal, ok := v.(string); ok {
-				entry.Attributes[k] = strVal
-			}
 		}
 
 		entries = append(entries, entry)

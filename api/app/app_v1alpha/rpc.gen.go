@@ -8,7 +8,63 @@ import (
 	"github.com/fxamacker/cbor/v2"
 	rpc "miren.dev/runtime/pkg/rpc"
 	"miren.dev/runtime/pkg/rpc/standard"
+	"miren.dev/runtime/pkg/rpc/stream"
 )
+
+type logTargetData struct {
+	App     *string `cbor:"0,keyasint,omitempty" json:"app,omitempty"`
+	Sandbox *string `cbor:"1,keyasint,omitempty" json:"sandbox,omitempty"`
+}
+
+type LogTarget struct {
+	data logTargetData
+}
+
+func (v *LogTarget) HasApp() bool {
+	return v.data.App != nil
+}
+
+func (v *LogTarget) App() string {
+	if v.data.App == nil {
+		return ""
+	}
+	return *v.data.App
+}
+
+func (v *LogTarget) SetApp(app string) {
+	v.data.App = &app
+}
+
+func (v *LogTarget) HasSandbox() bool {
+	return v.data.Sandbox != nil
+}
+
+func (v *LogTarget) Sandbox() string {
+	if v.data.Sandbox == nil {
+		return ""
+	}
+	return *v.data.Sandbox
+}
+
+func (v *LogTarget) SetSandbox(sandbox string) {
+	v.data.Sandbox = &sandbox
+}
+
+func (v *LogTarget) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *LogTarget) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *LogTarget) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *LogTarget) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
 
 type autoConcurrencyData struct {
 	Factor *int32 `cbor:"1,keyasint,omitempty" json:"factor,omitempty"`
@@ -3219,6 +3275,95 @@ func (v *LogsSandboxLogsResults) UnmarshalJSON(data []byte) error {
 	return json.Unmarshal(data, &v.data)
 }
 
+type logsStreamLogsArgsData struct {
+	Target *LogTarget          `cbor:"0,keyasint,omitempty" json:"target,omitempty"`
+	From   *standard.Timestamp `cbor:"1,keyasint,omitempty" json:"from,omitempty"`
+	Follow *bool               `cbor:"2,keyasint,omitempty" json:"follow,omitempty"`
+	Logs   *rpc.Capability     `cbor:"3,keyasint,omitempty" json:"logs,omitempty"`
+}
+
+type LogsStreamLogsArgs struct {
+	call rpc.Call
+	data logsStreamLogsArgsData
+}
+
+func (v *LogsStreamLogsArgs) HasTarget() bool {
+	return v.data.Target != nil
+}
+
+func (v *LogsStreamLogsArgs) Target() *LogTarget {
+	return v.data.Target
+}
+
+func (v *LogsStreamLogsArgs) HasFrom() bool {
+	return v.data.From != nil
+}
+
+func (v *LogsStreamLogsArgs) From() *standard.Timestamp {
+	return v.data.From
+}
+
+func (v *LogsStreamLogsArgs) HasFollow() bool {
+	return v.data.Follow != nil
+}
+
+func (v *LogsStreamLogsArgs) Follow() bool {
+	if v.data.Follow == nil {
+		return false
+	}
+	return *v.data.Follow
+}
+
+func (v *LogsStreamLogsArgs) HasLogs() bool {
+	return v.data.Logs != nil
+}
+
+func (v *LogsStreamLogsArgs) Logs() *stream.SendStreamClient[*LogEntry] {
+	if v.data.Logs == nil {
+		return nil
+	}
+	return &stream.SendStreamClient[*LogEntry]{Client: v.call.NewClient(v.data.Logs)}
+}
+
+func (v *LogsStreamLogsArgs) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *LogsStreamLogsArgs) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *LogsStreamLogsArgs) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *LogsStreamLogsArgs) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type logsStreamLogsResultsData struct{}
+
+type LogsStreamLogsResults struct {
+	call rpc.Call
+	data logsStreamLogsResultsData
+}
+
+func (v *LogsStreamLogsResults) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *LogsStreamLogsResults) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *LogsStreamLogsResults) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *LogsStreamLogsResults) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
 type LogsAppLogs struct {
 	rpc.Call
 	args    LogsAppLogsArgs
@@ -3271,9 +3416,36 @@ func (t *LogsSandboxLogs) Results() *LogsSandboxLogsResults {
 	return results
 }
 
+type LogsStreamLogs struct {
+	rpc.Call
+	args    LogsStreamLogsArgs
+	results LogsStreamLogsResults
+}
+
+func (t *LogsStreamLogs) Args() *LogsStreamLogsArgs {
+	args := &t.args
+	if args.call != nil {
+		return args
+	}
+	args.call = t.Call
+	t.Call.Args(args)
+	return args
+}
+
+func (t *LogsStreamLogs) Results() *LogsStreamLogsResults {
+	results := &t.results
+	if results.call != nil {
+		return results
+	}
+	results.call = t.Call
+	t.Call.Results(results)
+	return results
+}
+
 type Logs interface {
 	AppLogs(ctx context.Context, state *LogsAppLogs) error
 	SandboxLogs(ctx context.Context, state *LogsSandboxLogs) error
+	StreamLogs(ctx context.Context, state *LogsStreamLogs) error
 }
 
 type reexportLogs struct {
@@ -3285,6 +3457,10 @@ func (reexportLogs) AppLogs(ctx context.Context, state *LogsAppLogs) error {
 }
 
 func (reexportLogs) SandboxLogs(ctx context.Context, state *LogsSandboxLogs) error {
+	panic("not implemented")
+}
+
+func (reexportLogs) StreamLogs(ctx context.Context, state *LogsStreamLogs) error {
 	panic("not implemented")
 }
 
@@ -3308,6 +3484,14 @@ func AdaptLogs(t Logs) *rpc.Interface {
 			Index:         0,
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.SandboxLogs(ctx, &LogsSandboxLogs{Call: call})
+			},
+		},
+		{
+			Name:          "streamLogs",
+			InterfaceName: "Logs",
+			Index:         0,
+			Handler: func(ctx context.Context, call rpc.Call) error {
+				return t.StreamLogs(ctx, &LogsStreamLogs{Call: call})
 			},
 		},
 	}
@@ -3389,6 +3573,33 @@ func (v LogsClient) SandboxLogs(ctx context.Context, sandbox string, from *stand
 	}
 
 	return &LogsClientSandboxLogsResults{client: v.Client, data: ret}, nil
+}
+
+type LogsClientStreamLogsResults struct {
+	client rpc.Client
+	data   logsStreamLogsResultsData
+}
+
+func (v LogsClient) StreamLogs(ctx context.Context, target *LogTarget, from *standard.Timestamp, follow bool, logs stream.SendStream[*LogEntry]) (*LogsClientStreamLogsResults, error) {
+	args := LogsStreamLogsArgs{}
+	caps := map[rpc.OID]*rpc.InlineCapability{}
+	args.data.Target = target
+	args.data.From = from
+	args.data.Follow = &follow
+	{
+		ic, oid, c := v.NewInlineCapability(stream.AdaptSendStream[*LogEntry](logs), logs)
+		args.data.Logs = c
+		caps[oid] = ic
+	}
+
+	var ret logsStreamLogsResultsData
+
+	err := v.CallWithCaps(ctx, "streamLogs", &args, &ret, caps)
+	if err != nil {
+		return nil, err
+	}
+
+	return &LogsClientStreamLogsResults{client: v.Client, data: ret}, nil
 }
 
 type disksNewArgsData struct {
