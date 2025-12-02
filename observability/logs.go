@@ -427,7 +427,7 @@ func (l *LogReader) parseLogLine(line []byte) (LogEntry, error) {
 
 	// Add all other fields as attributes
 	for k, v := range logData {
-		if k == "_msg" || k == "_time" || k == "stream" || k == "trace_id" || k == "entity" || k == "sandbox" {
+		if k == "_msg" || k == "_time" || k == "stream" || k == "trace_id" || k == "entity" {
 			continue
 		}
 		if strVal, ok := v.(string); ok {
