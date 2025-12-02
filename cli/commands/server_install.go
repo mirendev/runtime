@@ -69,6 +69,8 @@ func fixSELinuxContext(ctx *Context, binaryPath string) {
 		if output, err := chconCmd.CombinedOutput(); err != nil {
 			ctx.Warn("Failed to set SELinux context: %v\nOutput: %s", err, output)
 			ctx.Warn("The service may fail to start. Try running: sudo chcon -t bin_t %s", binaryPath)
+		} else {
+			ctx.Completed("SELinux context set (temporary)")
 		}
 	} else {
 		ctx.Completed("SELinux context configured (persistent)")
