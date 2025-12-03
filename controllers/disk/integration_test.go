@@ -15,7 +15,7 @@ import (
 func TestDiskAndLeaseIntegration(t *testing.T) {
 	t.Run("complete disk lifecycle with lease", func(t *testing.T) {
 		log := slog.Default()
-		diskController := NewDiskController(log, nil, nil)
+		diskController := NewDiskController(log, nil, nil, "")
 		leaseController := NewDiskLeaseController(log, nil, nil)
 		ctx := context.Background()
 

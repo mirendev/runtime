@@ -16,8 +16,8 @@ import (
 
 // mockLsvdClient is a mock implementation of LsvdClient for testing
 type mockLsvdClient struct {
-	createFunc                func(ctx context.Context, volumeId string, sizeGb int64, filesystem string) error
-	createInSegmentAccessFunc func(ctx context.Context, volumeId string, sizeGb int64, filesystem string) error
+	createFunc                func(ctx context.Context, sizeGb int64, filesystem string) (string, error)
+	createInSegmentAccessFunc func(ctx context.Context, diskName string, sizeGb int64, filesystem string) (string, error)
 	initializeDiskFunc        func(ctx context.Context, volumeId string, filesystem string) error
 	mountFunc                 func(ctx context.Context, volumeId string, mountPath string, readOnly bool) error
 	unmountFunc               func(ctx context.Context, volumeId string) error
@@ -25,24 +25,27 @@ type mockLsvdClient struct {
 	getInfoFunc               func(ctx context.Context, volumeId string) (*VolumeInfo, error)
 	listFunc                  func(ctx context.Context) ([]VolumeInfo, error)
 	isMountedFunc             func(ctx context.Context, volumeId string) (bool, error)
+	acquireLeaseFunc          func(ctx context.Context, volumeId, nodeId, appId string) (string, error)
+	releaseLeaseFunc          func(ctx context.Context, volumeId string, nonce string) error
+	generatedVolumeId         string // For tracking generated volume IDs
 }
 
-func (m *mockLsvdClient) CreateVolume(ctx context.Context, volumeId string, sizeGb int64, filesystem string) error {
+func (m *mockLsvdClient) CreateVolume(ctx context.Context, sizeGb int64, filesystem string) (string, error) {
 	if m.createFunc != nil {
-		return m.createFunc(ctx, volumeId, sizeGb, filesystem)
+		return m.createFunc(ctx, sizeGb, filesystem)
 	}
-	return nil
+	return "mock-vol-id", nil
 }
 
-func (m *mockLsvdClient) CreateVolumeInSegmentAccess(ctx context.Context, volumeId string, sizeGb int64, filesystem string) error {
+func (m *mockLsvdClient) CreateVolumeInSegmentAccess(ctx context.Context, diskName string, sizeGb int64, filesystem string) (string, error) {
 	if m.createInSegmentAccessFunc != nil {
-		return m.createInSegmentAccessFunc(ctx, volumeId, sizeGb, filesystem)
+		return m.createInSegmentAccessFunc(ctx, diskName, sizeGb, filesystem)
 	}
-	// Default behavior - same as CreateVolume for backward compatibility
-	if m.createFunc != nil {
-		return m.createFunc(ctx, volumeId, sizeGb, filesystem)
+	// Default behavior: generate a mock volume ID
+	if m.generatedVolumeId != "" {
+		return m.generatedVolumeId, nil
 	}
-	return nil
+	return "mock-generated-vol", nil
 }
 
 func (m *mockLsvdClient) InitializeDisk(ctx context.Context, volumeId string, filesystem string) error {
@@ -107,6 +110,21 @@ func (m *mockLsvdClient) IsVolumeMounted(ctx context.Context, volumeId string) (
 	return false, nil
 }
 
+func (m *mockLsvdClient) AcquireVolumeLease(ctx context.Context, volumeId, nodeId, appId string) (string, error) {
+	if m.acquireLeaseFunc != nil {
+		return m.acquireLeaseFunc(ctx, volumeId, nodeId, appId)
+	}
+	// Return a mock nonce for testing
+	return "mock-nonce-" + volumeId, nil
+}
+
+func (m *mockLsvdClient) ReleaseVolumeLease(ctx context.Context, volumeId string, nonce string) error {
+	if m.releaseLeaseFunc != nil {
+		return m.releaseLeaseFunc(ctx, volumeId, nonce)
+	}
+	return nil
+}
+
 func TestDiskController_HandleProvisioned(t *testing.T) {
 	tests := []struct {
 		name           string
@@ -129,8 +147,8 @@ func TestDiskController_HandleProvisioned(t *testing.T) {
 			},
 			setupClient: func(t *testing.T, tempDir string) LsvdClient {
 				return &mockLsvdClient{
-					createFunc: func(ctx context.Context, volumeId string, sizeGb int64, filesystem string) error {
-						return nil
+					createFunc: func(ctx context.Context, sizeGb int64, filesystem string) (string, error) {
+						return "mock-vol-id", nil
 					},
 					mountFunc: func(ctx context.Context, volumeId string, mountPath string, readOnly bool) error {
 						return nil
@@ -234,8 +252,8 @@ func TestDiskController_HandleProvisioned(t *testing.T) {
 					getInfoFunc: func(ctx context.Context, volumeId string) (*VolumeInfo, error) {
 						return nil, os.ErrNotExist
 					},
-					createFunc: func(ctx context.Context, volumeId string, sizeGb int64, filesystem string) error {
-						return nil
+					createFunc: func(ctx context.Context, sizeGb int64, filesystem string) (string, error) {
+						return "mock-vol-id", nil
 					},
 					mountFunc: func(ctx context.Context, volumeId string, mountPath string, readOnly bool) error {
 						return nil
@@ -321,9 +339,9 @@ func TestDiskController_MountExistingVolumeAfterRestart(t *testing.T) {
 
 		// Step 1: Create a volume with first client
 		client1 := NewLsvdClient(log, tempDir)
-		volumeId := "restart-test-vol"
-		err := client1.CreateVolume(ctx, volumeId, 10, "ext4")
+		volumeId, err := client1.CreateVolume(ctx, 10, "ext4")
 		require.NoError(t, err)
+		require.NotEmpty(t, volumeId)
 
 		// Verify volume exists
 		info1, err := client1.GetVolumeInfo(ctx, volumeId)
@@ -336,8 +354,9 @@ func TestDiskController_MountExistingVolumeAfterRestart(t *testing.T) {
 		// Step 3: Try to mount the existing volume with new client
 		mountPath := filepath.Join(tempDir, "mounts", volumeId)
 
-		// First, load the volume into the new client's cache
-		err = client2.CreateVolume(ctx, volumeId, 10, "ext4")
+		// First, load the volume into the new client's cache using CreateVolumeInSegmentAccess
+		// (idempotent - will find existing volume)
+		_, err = client2.CreateVolume(ctx, 10, "ext4")
 		require.NoError(t, err) // Should be idempotent and load from disk
 
 		defer client2.UnmountVolume(ctx, volumeId)
@@ -367,9 +386,9 @@ func TestDiskController_MountExistingVolumeAfterRestart(t *testing.T) {
 
 		// Step 1: Create and provision a disk with mock client that won't fail on mount
 		mockClient1 := &mockLsvdClient{
-			createFunc: func(ctx context.Context, volumeId string, sizeGb int64, filesystem string) error {
+			createFunc: func(ctx context.Context, sizeGb int64, filesystem string) (string, error) {
 				// Simulate creating the volume
-				return nil
+				return "mock-vol-1", nil
 			},
 			mountFunc: func(ctx context.Context, volumeId string, mountPath string, readOnly bool) error {
 				// Simulate successful mount
@@ -385,7 +404,7 @@ func TestDiskController_MountExistingVolumeAfterRestart(t *testing.T) {
 			},
 		}
 
-		controller1 := NewDiskControllerWithMountPath(log, nil, mockClient1, tempDir)
+		controller1 := NewDiskControllerWithMountPath(log, nil, mockClient1, tempDir, "")
 
 		disk := &storage_v1alpha.Disk{
 			ID:         entity.Id("disk/restart-test"),
@@ -410,12 +429,9 @@ func TestDiskController_MountExistingVolumeAfterRestart(t *testing.T) {
 		// Step 2: Simulate restart with new controller and mock client
 		mountCalled := false
 		mockClient2 := &mockLsvdClient{
-			createFunc: func(ctx context.Context, vid string, sizeGb int64, filesystem string) error {
-				// Simulate loading existing volume from disk
-				if vid == volumeId {
-					return nil // Success - volume already exists
-				}
-				return fmt.Errorf("volume not found")
+			createFunc: func(ctx context.Context, sizeGb int64, filesystem string) (string, error) {
+				// Simulate creating a new volume
+				return "mock-vol-2", nil
 			},
 			getInfoFunc: func(ctx context.Context, vid string) (*VolumeInfo, error) {
 				if vid == volumeId {
@@ -437,7 +453,7 @@ func TestDiskController_MountExistingVolumeAfterRestart(t *testing.T) {
 			},
 		}
 
-		controller2 := NewDiskControllerWithMountPath(log, nil, mockClient2, tempDir)
+		controller2 := NewDiskControllerWithMountPath(log, nil, mockClient2, tempDir, "")
 
 		// Step 3: Handle the provisioned disk with new controller
 		// This should detect the existing volume and attempt to mount it

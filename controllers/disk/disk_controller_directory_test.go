@@ -16,7 +16,7 @@ import (
 func TestDiskController_DirectoryMode_Init(t *testing.T) {
 	t.Run("enables directory mode when NBD unavailable", func(t *testing.T) {
 		log := slog.Default()
-		controller := NewDiskController(log, nil, nil)
+		controller := NewDiskController(log, nil, nil, "")
 
 		// Set environment to disable NBD
 		t.Setenv("MIREN_DISABLE_NBD", "1")
@@ -29,7 +29,7 @@ func TestDiskController_DirectoryMode_Init(t *testing.T) {
 
 	t.Run("disables directory mode when NBD available", func(t *testing.T) {
 		log := slog.Default()
-		controller := NewDiskController(log, nil, nil)
+		controller := NewDiskController(log, nil, nil, "")
 
 		// Don't set MIREN_DISABLE_NBD - NBD availability depends on system
 		// This test may pass or fail depending on whether NBD is actually available
@@ -48,7 +48,7 @@ func TestDiskController_DirectoryMode_ProvisionVolume(t *testing.T) {
 		tempDir := t.TempDir()
 		log := slog.Default()
 
-		controller := NewDiskControllerWithMountPath(log, nil, nil, tempDir)
+		controller := NewDiskControllerWithMountPath(log, nil, nil, tempDir, "")
 		controller.directoryMode = true
 
 		disk := &storage_v1alpha.Disk{
@@ -75,7 +75,7 @@ func TestDiskController_DirectoryMode_ProvisionVolume(t *testing.T) {
 		tempDir := t.TempDir()
 		log := slog.Default()
 
-		controller := NewDiskControllerWithMountPath(log, nil, nil, tempDir)
+		controller := NewDiskControllerWithMountPath(log, nil, nil, tempDir, "")
 		controller.directoryMode = true
 
 		disk := &storage_v1alpha.Disk{
@@ -96,7 +96,7 @@ func TestDiskController_DirectoryMode_ProvisionVolume(t *testing.T) {
 		log := slog.Default()
 
 		// Use an invalid path to cause directory creation to fail
-		controller := NewDiskControllerWithMountPath(log, nil, nil, "/dev/null/invalid")
+		controller := NewDiskControllerWithMountPath(log, nil, nil, "/dev/null/invalid", "")
 		controller.directoryMode = true
 
 		disk := &storage_v1alpha.Disk{
@@ -119,7 +119,7 @@ func TestDiskController_DirectoryMode_AttachToExistingVolume(t *testing.T) {
 		tempDir := t.TempDir()
 		log := slog.Default()
 
-		controller := NewDiskControllerWithMountPath(log, nil, nil, tempDir)
+		controller := NewDiskControllerWithMountPath(log, nil, nil, tempDir, "")
 		controller.directoryMode = true
 
 		// Pre-create the directory
@@ -147,7 +147,7 @@ func TestDiskController_DirectoryMode_AttachToExistingVolume(t *testing.T) {
 		tempDir := t.TempDir()
 		log := slog.Default()
 
-		controller := NewDiskControllerWithMountPath(log, nil, nil, tempDir)
+		controller := NewDiskControllerWithMountPath(log, nil, nil, tempDir, "")
 		controller.directoryMode = true
 
 		volumeId := "nonexistent-vol-456"
@@ -174,7 +174,7 @@ func TestDiskController_DirectoryMode_AttachToExistingVolume(t *testing.T) {
 		tempDir := t.TempDir()
 		log := slog.Default()
 
-		controller := NewDiskControllerWithMountPath(log, nil, nil, tempDir)
+		controller := NewDiskControllerWithMountPath(log, nil, nil, tempDir, "")
 		controller.directoryMode = true
 
 		// Create directory with no permissions
@@ -208,7 +208,7 @@ func TestDiskController_DirectoryMode_HandleProvisioned(t *testing.T) {
 		tempDir := t.TempDir()
 		log := slog.Default()
 
-		controller := NewDiskControllerWithMountPath(log, nil, nil, tempDir)
+		controller := NewDiskControllerWithMountPath(log, nil, nil, tempDir, "")
 		controller.directoryMode = true
 
 		// Pre-create the directory
@@ -236,7 +236,7 @@ func TestDiskController_DirectoryMode_HandleProvisioned(t *testing.T) {
 		tempDir := t.TempDir()
 		log := slog.Default()
 
-		controller := NewDiskControllerWithMountPath(log, nil, nil, tempDir)
+		controller := NewDiskControllerWithMountPath(log, nil, nil, tempDir, "")
 		controller.directoryMode = true
 
 		volumeId := "missing-vol-101"
@@ -268,7 +268,7 @@ func TestDiskController_DirectoryMode_HandleProvisioned(t *testing.T) {
 		tempDir := t.TempDir()
 		log := slog.Default()
 
-		controller := NewDiskControllerWithMountPath(log, nil, nil, tempDir)
+		controller := NewDiskControllerWithMountPath(log, nil, nil, tempDir, "")
 		controller.directoryMode = true
 
 		disk := &storage_v1alpha.Disk{
@@ -301,7 +301,7 @@ func TestDiskController_DirectoryMode_HandleProvisioning(t *testing.T) {
 		tempDir := t.TempDir()
 		log := slog.Default()
 
-		controller := NewDiskControllerWithMountPath(log, nil, nil, tempDir)
+		controller := NewDiskControllerWithMountPath(log, nil, nil, tempDir, "")
 		controller.directoryMode = true
 
 		disk := &storage_v1alpha.Disk{
@@ -334,7 +334,7 @@ func TestDiskController_DirectoryMode_HandleProvisioning(t *testing.T) {
 		tempDir := t.TempDir()
 		log := slog.Default()
 
-		controller := NewDiskControllerWithMountPath(log, nil, nil, tempDir)
+		controller := NewDiskControllerWithMountPath(log, nil, nil, tempDir, "")
 		controller.directoryMode = true
 
 		// Pre-create existing directory
@@ -376,7 +376,7 @@ func TestDiskController_DirectoryMode_ReconcileDisk(t *testing.T) {
 		tempDir := t.TempDir()
 		log := slog.Default()
 
-		controller := NewDiskControllerWithMountPath(log, nil, nil, tempDir)
+		controller := NewDiskControllerWithMountPath(log, nil, nil, tempDir, "")
 		controller.directoryMode = true
 
 		disk := &storage_v1alpha.Disk{
@@ -404,7 +404,7 @@ func TestDiskController_DirectoryMode_ReconcileDisk(t *testing.T) {
 		tempDir := t.TempDir()
 		log := slog.Default()
 
-		controller := NewDiskControllerWithMountPath(log, nil, nil, tempDir)
+		controller := NewDiskControllerWithMountPath(log, nil, nil, tempDir, "")
 		controller.directoryMode = true
 
 		volumeId := "attached-vol-303"
@@ -429,7 +429,7 @@ func TestDiskController_DirectoryMode_ReconcileDisk(t *testing.T) {
 		tempDir := t.TempDir()
 		log := slog.Default()
 
-		controller := NewDiskControllerWithMountPath(log, nil, nil, tempDir)
+		controller := NewDiskControllerWithMountPath(log, nil, nil, tempDir, "")
 		controller.directoryMode = true
 
 		disk := &storage_v1alpha.Disk{
@@ -454,7 +454,7 @@ func TestDiskController_DirectoryMode_Integration(t *testing.T) {
 		tempDir := t.TempDir()
 		log := slog.Default()
 
-		controller := NewDiskControllerWithMountPath(log, nil, nil, tempDir)
+		controller := NewDiskControllerWithMountPath(log, nil, nil, tempDir, "")
 		controller.directoryMode = true
 
 		// Step 1: Create disk
@@ -505,7 +505,7 @@ func TestDiskController_DirectoryMode_Integration(t *testing.T) {
 		tempDir := t.TempDir()
 		log := slog.Default()
 
-		controller := NewDiskControllerWithMountPath(log, nil, nil, tempDir)
+		controller := NewDiskControllerWithMountPath(log, nil, nil, tempDir, "")
 		controller.directoryMode = true
 
 		// Create multiple disks
@@ -552,13 +552,14 @@ func TestDiskController_DirectoryMode_WithNormalMode(t *testing.T) {
 		tempDir := t.TempDir()
 		log := slog.Default()
 
+		generatedVolId := "generated-vol-123"
 		mockClient := &mockLsvdClient{
-			createInSegmentAccessFunc: func(ctx context.Context, volumeId string, sizeGb int64, filesystem string) error {
-				return nil
+			createInSegmentAccessFunc: func(ctx context.Context, diskName string, sizeGb int64, filesystem string) (string, error) {
+				return generatedVolId, nil
 			},
 		}
 
-		controller := NewDiskControllerWithMountPath(log, nil, mockClient, tempDir)
+		controller := NewDiskControllerWithMountPath(log, nil, mockClient, tempDir, "")
 		controller.directoryMode = false // Normal mode
 
 		disk := &storage_v1alpha.Disk{
@@ -572,6 +573,7 @@ func TestDiskController_DirectoryMode_WithNormalMode(t *testing.T) {
 		volumeId, err := controller.provisionVolume(ctx, disk)
 		require.NoError(t, err)
 		assert.NotEmpty(t, volumeId)
+		assert.Equal(t, generatedVolId, volumeId)
 
 		// In normal mode, should NOT create a directory
 		diskDataPath := filepath.Join(tempDir, "disk-data", volumeId)

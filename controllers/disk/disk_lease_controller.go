@@ -18,10 +18,11 @@ import (
 
 // leaseInfo tracks active lease details
 type leaseInfo struct {
-	leaseId   string
-	diskId    string
-	sandboxId string
-	volumeId  string // Store volume ID to avoid lookups during delete
+	leaseId    string
+	diskId     string
+	sandboxId  string
+	volumeId   string // Store volume ID to avoid lookups during delete
+	leaseNonce string // Volume lease nonce from remote Disk API
 }
 
 // DiskLeaseController manages disk lease entities and exclusive access
@@ -221,6 +222,21 @@ func (d *DiskLeaseController) Delete(ctx context.Context, id entity.Id) error {
 						"volume", volumeId)
 				}
 			}
+
+			// Release the volume lease from remote Disk API
+			if details.leaseNonce != "" {
+				if err := d.lsvdClient.ReleaseVolumeLease(ctx, volumeId, details.leaseNonce); err != nil {
+					d.Log.Error("Failed to release volume lease",
+						"lease", id,
+						"volume", volumeId,
+						"error", err)
+					// Continue with cleanup even if release fails
+				} else {
+					d.Log.Info("Released volume lease",
+						"lease", id,
+						"volume", volumeId)
+				}
+			}
 		}
 	}
 
@@ -406,11 +422,46 @@ func (d *DiskLeaseController) handlePendingLease(ctx context.Context, lease *sto
 
 		// Initialize disk and mount if we have an LSVD client
 		if client != nil {
+			// Acquire volume lease from remote Disk API before initializing disk
+			leaseNonce, err := client.AcquireVolumeLease(ctx, volumeId, lease.NodeId.String(), lease.AppId.String())
+			if err != nil {
+				d.Log.Error("Failed to acquire volume lease", "volume", volumeId, "error", err)
+				d.cleanupLeaseReservation(diskId)
+
+				lease.Status = storage_v1alpha.FAILED
+				lease.ErrorMessage = fmt.Sprintf("Failed to acquire volume lease: %v", err)
+
+				return nil
+			}
+
+			// Store the nonce for later use
+			d.mu.Lock()
+			if info, exists := d.leaseDetails[leaseId]; exists {
+				info.leaseNonce = leaseNonce
+			} else {
+				// Pre-populate leaseDetails with the nonce
+				d.leaseDetails[leaseId] = &leaseInfo{
+					leaseId:    leaseId,
+					diskId:     diskId,
+					sandboxId:  lease.SandboxId.String(),
+					volumeId:   volumeId,
+					leaseNonce: leaseNonce,
+				}
+			}
+			d.mu.Unlock()
+
 			// Initialize disk (calls lsvd.NewDisk)
 			filesystem := strings.TrimPrefix(string(disk.Filesystem), "filesystem.")
 			if err := client.InitializeDisk(ctx, volumeId, filesystem); err != nil {
 				d.Log.Error("Failed to initialize disk", "volume", volumeId, "error", err)
 				d.cleanupLeaseReservation(diskId)
+
+				// Release the volume lease on failure
+				if leaseNonce != "" {
+					if releaseErr := client.ReleaseVolumeLease(ctx, volumeId, leaseNonce); releaseErr != nil {
+						d.Log.Warn("Failed to release volume lease after init failure", "volume", volumeId, "error", releaseErr)
+					}
+				}
 
 				lease.Status = storage_v1alpha.FAILED
 				lease.ErrorMessage = fmt.Sprintf("Failed to initialize disk: %v", err)
@@ -424,6 +475,14 @@ func (d *DiskLeaseController) handlePendingLease(ctx context.Context, lease *sto
 			if err := client.MountVolume(ctx, volumeId, mountPath, readOnly); err != nil {
 				d.Log.Error("Failed to mount volume", "volume", volumeId, "error", err)
 				d.cleanupLeaseReservation(diskId)
+
+				// Release the volume lease on failure
+				if leaseNonce != "" {
+					if releaseErr := client.ReleaseVolumeLease(ctx, volumeId, leaseNonce); releaseErr != nil {
+						d.Log.Warn("Failed to release volume lease after mount failure", "volume", volumeId, "error", releaseErr)
+					}
+				}
+
 				lease.Status = storage_v1alpha.FAILED
 				lease.ErrorMessage = fmt.Sprintf("Failed to mount volume: %v", err)
 
@@ -442,6 +501,12 @@ func (d *DiskLeaseController) handlePendingLease(ctx context.Context, lease *sto
 	d.mu.Lock()
 	// Double-check that our reservation is still valid
 	if existingLease, exists := d.activeLeases[diskId]; exists && existingLease != leaseId {
+		// Get the lease nonce before unlocking
+		var conflictNonce string
+		if info, ok := d.leaseDetails[leaseId]; ok {
+			conflictNonce = info.leaseNonce
+		}
+
 		d.mu.Unlock()
 		// Someone else bound it (shouldn't happen with our reservation), need to clean up
 		if !d.directoryMode {
@@ -449,6 +514,12 @@ func (d *DiskLeaseController) handlePendingLease(ctx context.Context, lease *sto
 			if client != nil && volumeId != "" {
 				if err := client.UnmountVolume(ctx, volumeId); err != nil {
 					d.Log.Warn("Failed to unmount volume after lease conflict", "volume", volumeId, "error", err)
+				}
+				// Release the volume lease if we acquired one
+				if conflictNonce != "" {
+					if err := client.ReleaseVolumeLease(ctx, volumeId, conflictNonce); err != nil {
+						d.Log.Warn("Failed to release volume lease after conflict", "volume", volumeId, "error", err)
+					}
 				}
 			}
 		}
@@ -459,12 +530,21 @@ func (d *DiskLeaseController) handlePendingLease(ctx context.Context, lease *sto
 		return nil
 	}
 
-	// We already reserved the lease earlier, just add the details
-	d.leaseDetails[leaseId] = &leaseInfo{
-		leaseId:   leaseId,
-		diskId:    diskId,
-		sandboxId: lease.SandboxId.String(),
-		volumeId:  volumeId,
+	// Update or create lease details, preserving the nonce if already set
+	if existing, ok := d.leaseDetails[leaseId]; ok {
+		// Update existing entry, preserving the nonce
+		existing.leaseId = leaseId
+		existing.diskId = diskId
+		existing.sandboxId = lease.SandboxId.String()
+		existing.volumeId = volumeId
+	} else {
+		// Create new entry (for directory mode or when nonce wasn't set)
+		d.leaseDetails[leaseId] = &leaseInfo{
+			leaseId:   leaseId,
+			diskId:    diskId,
+			sandboxId: lease.SandboxId.String(),
+			volumeId:  volumeId,
+		}
 	}
 	d.mu.Unlock()
 
@@ -641,6 +721,26 @@ func (d *DiskLeaseController) handleBoundLease(ctx context.Context, lease *stora
 			"disk", diskId,
 			"volume", volumeId)
 
+		// Acquire volume lease from remote Disk API before initializing disk
+		leaseNonce, err := client.AcquireVolumeLease(ctx, volumeId, lease.NodeId.String(), lease.AppId.String())
+		if err != nil {
+			d.Log.Error("Failed to acquire volume lease for bound lease", "volume", volumeId, "error", err)
+
+			lease.Status = storage_v1alpha.FAILED
+			lease.ErrorMessage = fmt.Sprintf("Failed to acquire volume lease: %v", err)
+
+			return nil
+		}
+
+		// Store the nonce for later use
+		if leaseNonce != "" {
+			d.mu.Lock()
+			if details, exists := d.leaseDetails[leaseId]; exists {
+				details.leaseNonce = leaseNonce
+			}
+			d.mu.Unlock()
+		}
+
 		// Initialize disk (calls lsvd.NewDisk) if needed
 		filesystem := strings.TrimPrefix(string(disk.Filesystem), "filesystem.")
 		if err := client.InitializeDisk(ctx, volumeId, filesystem); err != nil {
@@ -683,10 +783,12 @@ func (d *DiskLeaseController) handleReleasedLease(ctx context.Context, lease *st
 	currentLease, exists := d.activeLeases[diskId]
 	isActiveForThisLease := exists && currentLease == leaseId
 
-	// Get volumeId from leaseDetails if available
+	// Get volumeId and leaseNonce from leaseDetails if available
 	var volumeId string
+	var leaseNonce string
 	if details, hasDetails := d.leaseDetails[leaseId]; hasDetails {
 		volumeId = details.volumeId
+		leaseNonce = details.leaseNonce
 	}
 	d.mu.Unlock()
 
@@ -718,6 +820,15 @@ func (d *DiskLeaseController) handleReleasedLease(ctx context.Context, lease *st
 			if err := d.lsvdClient.UnmountVolume(ctx, volumeId); err != nil {
 				// Log but don't fail - best effort unmount
 				d.Log.Warn("Failed to unmount volume on lease release", "volume", volumeId, "error", err)
+			}
+		}
+
+		// Release the volume lease from remote Disk API if we have one
+		if leaseNonce != "" {
+			d.Log.Info("Releasing volume lease from Disk API", "volume", volumeId, "lease", leaseId)
+			if err := d.lsvdClient.ReleaseVolumeLease(ctx, volumeId, leaseNonce); err != nil {
+				// Log but don't fail - best effort lease release
+				d.Log.Warn("Failed to release volume lease on lease release", "volume", volumeId, "error", err)
 			}
 		}
 	} else if d.directoryMode && volumeId != "" {
@@ -812,4 +923,3 @@ func (d *DiskLeaseController) CleanupOldReleasedLeases(ctx context.Context) erro
 
 	return nil
 }
-

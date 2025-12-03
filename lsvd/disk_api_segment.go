@@ -25,6 +25,7 @@ type DiskAPISegmentAccess struct {
 	baseURL    string
 	authClient *cloudauth.AuthClient
 	client     *http.Client
+	leaseNonce string // Volume lease nonce acquired from the Disk API
 }
 
 func NewDiskAPISegmentAccess(log *slog.Logger, baseURL string, authClient *cloudauth.AuthClient) *DiskAPISegmentAccess {
@@ -55,6 +56,7 @@ type CompleteUploadRequest struct {
 	Size        int64  `json:"size"`
 	BlockLayout string `json:"block_layout,omitempty"`
 	VolumeID    string `json:"volume_id,omitempty"`
+	LeaseNonce  string `json:"lease_nonce,omitempty"`
 }
 
 type CompleteSegmentUploadResponse struct {
@@ -111,6 +113,25 @@ type DeleteSegmentResponse struct {
 	Status string `json:"status"`
 }
 
+// Lease API types
+type AcquireLeaseRequest struct {
+	Metadata  map[string]any `json:"metadata,omitempty"`
+	ExpiresIn string         `json:"expires_in,omitempty"`
+}
+
+type LeaseResponse struct {
+	LeaseID   string         `json:"lease_id"`
+	VolumeID  string         `json:"volume_id"`
+	Nonce     string         `json:"nonce"`
+	Metadata  map[string]any `json:"metadata,omitempty"`
+	CreatedAt time.Time      `json:"created_at"`
+	ExpiresAt *time.Time     `json:"expires_at,omitempty"`
+}
+
+type ReleaseLeaseRequest struct {
+	Nonce string `json:"nonce,omitempty"`
+}
+
 func (d *DiskAPISegmentAccess) InitContainer(ctx context.Context) error {
 	// The disk API manages storage container initialization on the server side,
 	// so no client-side initialization is needed
@@ -118,29 +139,37 @@ func (d *DiskAPISegmentAccess) InitContainer(ctx context.Context) error {
 }
 
 func (d *DiskAPISegmentAccess) InitVolume(ctx context.Context, vol *VolumeInfo) error {
+	_, err := d.InitVolumeWithID(ctx, vol)
+	return err
+}
+
+// InitVolumeWithID creates a volume and returns the server-generated volume ID.
+// If vol.Name is empty, the server generates the volume ID.
+func (d *DiskAPISegmentAccess) InitVolumeWithID(ctx context.Context, vol *VolumeInfo) (string, error) {
 	if err := vol.Normalize(); err != nil {
-		return fmt.Errorf("failed to normalize volume info: %w", err)
+		return "", fmt.Errorf("failed to normalize volume info: %w", err)
 	}
 
 	req := CreateVolumeRequest{
 		Name:         vol.Name,
 		UUID:         vol.UUID,
 		DeclaredSize: int64(vol.Size),
+		Metadata:     vol.Metadata,
 	}
 
 	reqBody, err := json.Marshal(req)
 	if err != nil {
-		return fmt.Errorf("failed to marshal create volume request: %w", err)
+		return "", fmt.Errorf("failed to marshal create volume request: %w", err)
 	}
 
 	apiURL, err := url.JoinPath(d.baseURL, "api/v1/disk/volumes")
 	if err != nil {
-		return fmt.Errorf("failed to construct volume URL: %w", err)
+		return "", fmt.Errorf("failed to construct volume URL: %w", err)
 	}
 
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", apiURL, bytes.NewReader(reqBody))
 	if err != nil {
-		return fmt.Errorf("failed to create volume request: %w", err)
+		return "", fmt.Errorf("failed to create volume request: %w", err)
 	}
 
 	httpReq.Header.Set("Content-Type", "application/json")
@@ -148,28 +177,33 @@ func (d *DiskAPISegmentAccess) InitVolume(ctx context.Context, vol *VolumeInfo) 
 	// Get fresh auth token
 	token, err := d.authClient.Authenticate(ctx)
 	if err != nil {
-		return fmt.Errorf("failed to authenticate: %w", err)
+		return "", fmt.Errorf("failed to authenticate: %w", err)
 	}
 	httpReq.Header.Set("Authorization", "Bearer "+token)
 
 	resp, err := d.client.Do(httpReq)
 	if err != nil {
-		return fmt.Errorf("failed to create volume: %w", err)
+		return "", fmt.Errorf("failed to create volume: %w", err)
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
+	// 409 Conflict means volume already exists - treat as success
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusConflict {
 		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("create volume failed with status %d: %s", resp.StatusCode, string(body))
+		return "", fmt.Errorf("create volume failed with status %d: %s", resp.StatusCode, string(body))
 	}
 
 	var volumeResp VolumeResponse
 	if err := json.NewDecoder(resp.Body).Decode(&volumeResp); err != nil {
-		return fmt.Errorf("failed to decode volume response: %w", err)
+		return "", fmt.Errorf("failed to decode volume response: %w", err)
 	}
 
-	d.log.Info("volume created", "volume_id", volumeResp.VolumeID, "version_id", volumeResp.VersionID)
-	return nil
+	if resp.StatusCode == http.StatusConflict {
+		d.log.Info("volume already exists", "volume_id", volumeResp.VolumeID)
+	} else {
+		d.log.Info("volume created", "volume_id", volumeResp.VolumeID, "version_id", volumeResp.VersionID)
+	}
+	return volumeResp.VolumeID, nil
 }
 
 func (d *DiskAPISegmentAccess) ListVolumes(ctx context.Context) ([]string, error) {
@@ -252,10 +286,110 @@ func (d *DiskAPISegmentAccess) RemoveSegment(ctx context.Context, seg SegmentId)
 	return nil
 }
 
+// AcquireLease acquires an exclusive lease on a volume.
+// Returns the lease nonce if successful.
+func (d *DiskAPISegmentAccess) AcquireLease(ctx context.Context, volumeId string, metadata map[string]any) (string, error) {
+	apiURL, err := url.JoinPath(d.baseURL, "api/v1/disk/volumes", volumeId, "lease")
+	if err != nil {
+		return "", fmt.Errorf("failed to construct lease URL: %w", err)
+	}
+
+	reqBody, err := json.Marshal(AcquireLeaseRequest{Metadata: metadata})
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal lease request: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "POST", apiURL, bytes.NewReader(reqBody))
+	if err != nil {
+		return "", fmt.Errorf("failed to create lease request: %w", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+
+	// Get fresh auth token
+	token, err := d.authClient.Authenticate(ctx)
+	if err != nil {
+		return "", fmt.Errorf("failed to authenticate: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+
+	resp, err := d.client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("failed to acquire lease: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+
+	if resp.StatusCode == http.StatusConflict {
+		return "", fmt.Errorf("volume %s already has an active lease", volumeId)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("acquire lease failed with status %d: %s", resp.StatusCode, string(body))
+	}
+
+	var leaseResp LeaseResponse
+	if err := json.Unmarshal(body, &leaseResp); err != nil {
+		return "", fmt.Errorf("failed to decode lease response: %w", err)
+	}
+
+	d.log.Info("acquired volume lease", "volume_id", volumeId, "lease_id", leaseResp.LeaseID)
+	return leaseResp.Nonce, nil
+}
+
+// ReleaseLease releases an active lease on a volume.
+func (d *DiskAPISegmentAccess) ReleaseLease(ctx context.Context, volumeId string, nonce string) error {
+	apiURL, err := url.JoinPath(d.baseURL, "api/v1/disk/volumes", volumeId, "lease")
+	if err != nil {
+		return fmt.Errorf("failed to construct lease URL: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "DELETE", apiURL, nil)
+	if err != nil {
+		return fmt.Errorf("failed to create release lease request: %w", err)
+	}
+
+	// Set the nonce in the header
+	req.Header.Set("X-Lease-Nonce", nonce)
+
+	// Get fresh auth token
+	token, err := d.authClient.Authenticate(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to authenticate: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+
+	resp, err := d.client.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to release lease: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusForbidden {
+		return fmt.Errorf("invalid lease nonce for volume %s", volumeId)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("release lease failed with status %d: %s", resp.StatusCode, string(body))
+	}
+
+	d.log.Info("released volume lease", "volume_id", volumeId)
+	return nil
+}
+
+// SetLeaseNonce sets the lease nonce for this segment access.
+// The nonce will be passed to any volumes opened from this access.
+func (d *DiskAPISegmentAccess) SetLeaseNonce(nonce string) {
+	d.leaseNonce = nonce
+}
+
 func (d *DiskAPISegmentAccess) OpenVolume(ctx context.Context, vol string) (Volume, error) {
 	return &DiskAPIVolume{
-		access: d,
-		name:   vol,
+		access:     d,
+		name:       vol,
+		leaseNonce: d.leaseNonce, // Pass the nonce to the volume
 	}, nil
 }
 
@@ -312,8 +446,15 @@ func (d *DiskAPISegmentAccess) GetVolumeInfo(ctx context.Context, vol string) (*
 var _ SegmentAccess = (*DiskAPISegmentAccess)(nil)
 
 type DiskAPIVolume struct {
-	access *DiskAPISegmentAccess
-	name   string
+	access     *DiskAPISegmentAccess
+	name       string
+	leaseNonce string
+}
+
+// SetLeaseNonce sets the lease nonce for this volume.
+// The nonce will be included in requests that update the volume.
+func (v *DiskAPIVolume) SetLeaseNonce(nonce string) {
+	v.leaseNonce = nonce
 }
 
 func (v *DiskAPIVolume) Info(ctx context.Context) (*VolumeInfo, error) {
@@ -555,10 +696,11 @@ func (v *DiskAPIVolume) NewSegment(ctx context.Context, seg SegmentId, layout *S
 
 	// Step 3: Complete the upload
 	completeReq := CompleteUploadRequest{
-		MD5:      md5Hash,
-		CRC32C:   crc32cHash,
-		Size:     size,
-		VolumeID: v.name,
+		MD5:        md5Hash,
+		CRC32C:     crc32cHash,
+		Size:       size,
+		VolumeID:   v.name,
+		LeaseNonce: v.leaseNonce,
 	}
 
 	completeBody, err := json.Marshal(completeReq)
