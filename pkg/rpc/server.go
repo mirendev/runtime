@@ -338,7 +338,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		// Request is allowed without auth header (e.g., using client certs)
 		if identity != "" && identity != "anonymous" {
-			s.state.log.Debug("request allowed without auth header", "identity", identity, "path", r.URL.Path)
+			// s.state.log.Debug("request allowed without auth header", "identity", identity, "path", r.URL.Path)
 		}
 	}
 
