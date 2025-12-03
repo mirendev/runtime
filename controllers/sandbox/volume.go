@@ -96,17 +96,23 @@ func (c *SandboxController) configureMirenVolume(ctx context.Context, sb *comput
 
 	// Append instance number to disk name to ensure each instance gets its own disk
 	actualDiskName := volume.DiskName
-	var md core_v1alpha.Metadata
-	md.Decode(meta)
 
-	if instanceStr, ok := md.Labels.Get("instance"); ok {
-		actualDiskName = fmt.Sprintf("%s-%s", volume.DiskName, instanceStr)
-		c.Log.Info("appended instance number to disk name",
-			"sandbox_id", sb.ID,
-			"original_disk_name", volume.DiskName,
-			"actual_disk_name", actualDiskName,
-			"instance", instanceStr)
-	}
+	// TODO: the mechanism here is to try to allocate a unique disk by using the instance
+	// number. But we're too loosey-goosey with how the instance numbers are setup!
+	// So instead, for now, just use the disk name as-is.
+	/*
+		var md core_v1alpha.Metadata
+		md.Decode(meta)
+
+		if instanceStr, ok := md.Labels.Get("instance"); ok {
+			actualDiskName = fmt.Sprintf("%s-%s", volume.DiskName, instanceStr)
+			c.Log.Info("appended instance number to disk name",
+				"sandbox_id", sb.ID,
+				"original_disk_name", volume.DiskName,
+				"actual_disk_name", actualDiskName,
+				"instance", instanceStr)
+		}
+	*/
 
 	// Use configuration from volume fields
 	readOnly := volume.ReadOnly

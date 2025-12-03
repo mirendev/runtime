@@ -190,6 +190,11 @@ func (ac *AppConfig) Validate() error {
 				return fmt.Errorf("service %s: disks can only be attached to services with fixed concurrency mode", serviceName)
 			}
 
+			// TODO: It's too unpredictable to allow multiple instances with disks for now
+			if svcConfig.Concurrency.NumInstances != 1 {
+				return fmt.Errorf("service %s: disks can only be attached to services with fixed concurrency mode and num_instances=1", serviceName)
+			}
+
 			for i, disk := range svcConfig.Disks {
 				if disk.Name == "" {
 					return fmt.Errorf("service %s: disk[%d] must have a name", serviceName, i)
