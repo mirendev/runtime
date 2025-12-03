@@ -16,6 +16,67 @@ import (
 	"miren.dev/runtime/pkg/registration"
 )
 
+// fixSELinuxContext sets the proper SELinux context on the miren binary
+// so systemd can execute it. This is needed on systems like RHEL/Oracle Linux
+// where SELinux is enforcing and /var/lib files get var_lib_t context by default.
+func fixSELinuxContext(ctx *Context, binaryPath string) {
+	// Check if SELinux is enforcing by running getenforce
+	cmd := exec.Command("getenforce")
+	output, err := cmd.Output()
+	if err != nil {
+		// getenforce not found or failed - SELinux probably not installed
+		ctx.Log.Debug("getenforce failed, assuming SELinux not active", "error", err)
+		return
+	}
+
+	status := strings.TrimSpace(string(output))
+	if status != "Enforcing" {
+		ctx.Log.Debug("SELinux not enforcing", "status", status)
+		return
+	}
+
+	ctx.Info("SELinux is enforcing, configuring executable context for binary...")
+
+	// Try to add a permanent file context rule using semanage
+	// This requires policycoreutils-python-utils on RHEL/Oracle Linux
+	semanageCmd := exec.Command("semanage", "fcontext", "-a", "-t", "bin_t", binaryPath)
+	if output, err := semanageCmd.CombinedOutput(); err != nil {
+		// semanage might not be installed, or rule might already exist
+		outputStr := string(output)
+		if strings.Contains(outputStr, "already defined") || strings.Contains(outputStr, "already exists") {
+			ctx.Log.Debug("SELinux file context rule already exists")
+		} else {
+			ctx.Log.Debug("semanage fcontext failed", "error", err, "output", outputStr)
+			// Fall back to chcon if semanage isn't available
+			ctx.Info("semanage not available, using chcon (context may not persist across relabels)")
+			chconCmd := exec.Command("chcon", "-t", "bin_t", binaryPath)
+			if output, err := chconCmd.CombinedOutput(); err != nil {
+				ctx.Warn("Failed to set SELinux context: %v\nOutput: %s", err, output)
+				ctx.Warn("The service may fail to start. Try running: sudo chcon -t bin_t %s", binaryPath)
+				return
+			}
+			ctx.Completed("SELinux context set (temporary)")
+			return
+		}
+	}
+
+	// Apply the context with restorecon
+	restoreconCmd := exec.Command("restorecon", "-v", binaryPath)
+	if output, err := restoreconCmd.CombinedOutput(); err != nil {
+		ctx.Warn("Failed to apply SELinux context with restorecon: %v\nOutput: %s", err, output)
+		// Try chcon as fallback
+		chconCmd := exec.Command("chcon", "-t", "bin_t", binaryPath)
+		if output, err := chconCmd.CombinedOutput(); err != nil {
+			ctx.Warn("Failed to set SELinux context: %v\nOutput: %s", err, output)
+			ctx.Warn("The service may fail to start. Try running: sudo chcon -t bin_t %s", binaryPath)
+		} else {
+			ctx.Completed("SELinux context set (temporary)")
+		}
+	} else {
+		ctx.Completed("SELinux context configured (persistent)")
+	}
+}
+
 // ServerInstall sets up systemd units to run the miren server
 func ServerInstall(ctx *Context, opts struct {
 	Address      string            `short:"a" long:"address" description:"Server address to bind to" default:"0.0.0.0:8443"`
@@ -49,6 +110,9 @@ func ServerInstall(ctx *Context, opts struct {
 		}
 
 		ctx.Completed("Release downloaded successfully")
+
+		// Fix SELinux context if needed (RHEL/Oracle Linux with SELinux enforcing)
+		fixSELinuxContext(ctx, mirenPath)
 	}
 
 	// Register with cloud unless --without-cloud is specified
