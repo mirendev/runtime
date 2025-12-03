@@ -9,10 +9,13 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"os/user"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
+	"miren.dev/runtime/clientconfig"
 	"miren.dev/runtime/pkg/registration"
 )
 
@@ -51,12 +54,16 @@ func ServerInstall(ctx *Context, opts struct {
 		ctx.Completed("Release downloaded successfully")
 	}
 
+	// Track cluster name for later adding to client config
+	var registeredClusterName string
+
 	// Register with cloud unless --without-cloud is specified
 	if !opts.WithoutCloud {
 		// Check if already registered
 		existing, err := registration.LoadRegistration("/var/lib/miren/server")
 		if err == nil && existing != nil && existing.Status == "approved" {
 			ctx.Info("Cluster already registered as '%s' (ID: %s)", existing.ClusterName, existing.ClusterID)
+			registeredClusterName = existing.ClusterName
 		} else if err == nil && existing != nil && existing.Status == "pending" {
 			ctx.Info("Found pending registration for cluster '%s', attempting to complete...", existing.ClusterName)
 
@@ -79,6 +86,7 @@ func ServerInstall(ctx *Context, opts struct {
 				ctx.Info("You can register later with: miren register")
 			} else {
 				ctx.Completed("Cloud registration complete")
+				registeredClusterName = clusterName
 			}
 		} else {
 			ctx.Info("Setting up cloud registration...")
@@ -106,6 +114,7 @@ func ServerInstall(ctx *Context, opts struct {
 				ctx.Info("You can register later with: miren register")
 			} else {
 				ctx.Completed("Cloud registration complete")
+				registeredClusterName = clusterName
 			}
 		}
 	} else {
@@ -205,6 +214,14 @@ WantedBy=multi-user.target
 		statusCmd := exec.Command("systemctl", "is-active", "miren.service")
 		if output, err := statusCmd.CombinedOutput(); err == nil && strings.TrimSpace(string(output)) == "active" {
 			ctx.Completed("Service is running")
+
+			// Add cluster to client config and switch to it
+			if registeredClusterName != "" {
+				if err := configureClientForCluster(ctx, registeredClusterName, opts.Address); err != nil {
+					ctx.Warn("Failed to configure client: %v", err)
+					ctx.Info("You can manually add the cluster with: miren cluster add -c %s", registeredClusterName)
+				}
+			}
 		} else {
 			ctx.Warn("Service may not be running, check status with: systemctl status miren")
 		}
@@ -220,6 +237,106 @@ WantedBy=multi-user.target
 	ctx.Info("To view logs:")
 	fmt.Println("  journalctl -u miren -f")
 
+	return nil
+}
+
+// configureClientForCluster adds the cluster to the client config and sets it as active.
+// This allows the user to immediately use `miren` commands against the local cluster.
+func configureClientForCluster(ctx *Context, clusterName, serverAddress string) error {
+	// Determine the local address to connect to
+	// The serverAddress is the bind address (e.g., "0.0.0.0:8443"), we need to connect to localhost
+	port := "8443"
+	if parts := strings.Split(serverAddress, ":"); len(parts) == 2 {
+		port = parts[1]
+	}
+	localAddress := "localhost:" + port
+
+	// Wait for the server to be fully ready and extract TLS certificate
+	ctx.Info("Waiting for server to be ready...")
+	var caCert, fingerprint string
+	var err error
+	for i := 0; i < 5; i++ {
+		time.Sleep(2 * time.Second)
+		caCert, fingerprint, err = extractTLSCertificateFromAddress(ctx, localAddress)
+		if err == nil {
+			break
+		}
+		if i < 4 {
+			ctx.Info("Server not ready yet, retrying...")
+		}
+	}
+	if err != nil {
+		return fmt.Errorf("failed to extract TLS certificate: %w", err)
+	}
+	ctx.Info("Certificate fingerprint: %s", fingerprint)
+
+	// Load or create client config
+	mainConfig, err := clientconfig.LoadConfig()
+	if err != nil {
+		if err == clientconfig.ErrNoConfig {
+			mainConfig = clientconfig.NewConfig()
+		} else {
+			return fmt.Errorf("failed to load client config: %w", err)
+		}
+	}
+
+	// Get the identity to use (if any configured)
+	var identity string
+	if mainConfig != nil && mainConfig.HasIdentities() {
+		identities := mainConfig.GetIdentityNames()
+		if len(identities) == 1 {
+			identity = identities[0]
+		} else if len(identities) > 1 {
+			// Use the first identity, user can change later
+			identity = identities[0]
+			ctx.Info("Using identity '%s' (multiple available)", identity)
+		}
+	}
+
+	// Create cluster config
+	clusterConfig := &clientconfig.ClusterConfig{
+		Hostname: localAddress,
+		Identity: identity,
+		CACert:   caCert,
+	}
+
+	// Create leaf config data
+	leafConfigData := &clientconfig.ConfigData{
+		Clusters: map[string]*clientconfig.ClusterConfig{
+			clusterName: clusterConfig,
+		},
+	}
+
+	// Add as leaf config
+	mainConfig.SetLeafConfig(clusterName, leafConfigData)
+
+	// Set as active cluster
+	if err := mainConfig.SetActiveCluster(clusterName); err != nil {
+		return fmt.Errorf("failed to set active cluster: %w", err)
+	}
+
+	// Save config
+	if err := mainConfig.Save(); err != nil {
+		return fmt.Errorf("failed to save client config: %w", err)
+	}
+
+	// If running as root via sudo, chown the config files to the invoking user
+	if sudoUser := os.Getenv("SUDO_USER"); sudoUser != "" {
+		if u, err := user.Lookup(sudoUser); err == nil {
+			uid, _ := strconv.Atoi(u.Uid)
+			gid, _ := strconv.Atoi(u.Gid)
+			configDir := filepath.Join(u.HomeDir, ".config", "miren")
+			// Chown the main config directory and its contents
+			_ = filepath.Walk(configDir, func(path string, info os.FileInfo, err error) error {
+				if err == nil {
+					_ = os.Chown(path, uid, gid)
+				}
+				return nil
+			})
+		}
+	}
+
+	ctx.Completed("Added cluster '%s' and set as active", clusterName)
 	return nil
 }
 
