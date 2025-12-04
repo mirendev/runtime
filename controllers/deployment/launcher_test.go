@@ -3,6 +3,7 @@ package deployment
 import (
 	"context"
 	"log/slog"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -1073,6 +1074,7 @@ func TestPerServicePortConfiguration(t *testing.T) {
 	assert.Equal(t, int64(8080), webPool.SandboxSpec.Container[0].Port[0].Port, "web should use per-service port 8080")
 	assert.Equal(t, "http", webPool.SandboxSpec.Container[0].Port[0].Name)
 	assert.Equal(t, "http", webPool.SandboxSpec.Container[0].Port[0].Type)
+	assert.Contains(t, webPool.SandboxSpec.Container[0].Env, "PORT=8080", "PORT env var should be set for web service")
 
 	// Test api service - should use per-service port 3001
 	apiPool := poolsByService["api"]
@@ -1080,18 +1082,25 @@ func TestPerServicePortConfiguration(t *testing.T) {
 	require.Len(t, apiPool.SandboxSpec.Container, 1, "api pool should have one container")
 	require.Len(t, apiPool.SandboxSpec.Container[0].Port, 1, "api container should have one port")
 	assert.Equal(t, int64(3001), apiPool.SandboxSpec.Container[0].Port[0].Port, "api should use per-service port 3001")
+	assert.Contains(t, apiPool.SandboxSpec.Container[0].Env, "PORT=3001", "PORT env var should be set for api service")
 
 	// Test admin service - global port only applies to "web", so admin gets no port
 	adminPool := poolsByService["admin"]
 	require.NotNil(t, adminPool, "admin pool should exist")
 	require.Len(t, adminPool.SandboxSpec.Container, 1, "admin pool should have one container")
 	assert.Empty(t, adminPool.SandboxSpec.Container[0].Port, "admin should not have any port (global port only applies to web)")
+	for _, env := range adminPool.SandboxSpec.Container[0].Env {
+		assert.False(t, strings.HasPrefix(env, "PORT="), "PORT env var should NOT be set for admin service without port")
+	}
 
 	// Test worker service - should not have any port configured (non-web service with no port config)
 	workerPool := poolsByService["worker"]
 	require.NotNil(t, workerPool, "worker pool should exist")
 	require.Len(t, workerPool.SandboxSpec.Container, 1, "worker pool should have one container")
 	assert.Empty(t, workerPool.SandboxSpec.Container[0].Port, "worker should not have any port configured")
+	for _, env := range workerPool.SandboxSpec.Container[0].Env {
+		assert.False(t, strings.HasPrefix(env, "PORT="), "PORT env var should NOT be set for worker service without port")
+	}
 }
 
 // TestWebServiceDefaultPort tests that "web" service gets default port 3000 when no port is configured
@@ -1151,6 +1160,9 @@ func TestWebServiceDefaultPort(t *testing.T) {
 	require.Len(t, pool.SandboxSpec.Container, 1, "pool should have one container")
 	require.Len(t, pool.SandboxSpec.Container[0].Port, 1, "web container should have one port")
 	assert.Equal(t, int64(3000), pool.SandboxSpec.Container[0].Port[0].Port, "web service should default to port 3000")
+
+	// Verify PORT env var is set
+	assert.Contains(t, pool.SandboxSpec.Container[0].Env, "PORT=3000", "PORT env var should be set to default port")
 }
 
 // TestPortNameAndType tests that launcher correctly wires port_name and port_type
