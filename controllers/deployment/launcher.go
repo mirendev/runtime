@@ -313,6 +313,9 @@ func (l *Launcher) buildSandboxSpec(
 				Type: portType,
 			},
 		}
+
+		// Set PORT env var so apps can listen on $PORT
+		appCont.Env = append(appCont.Env, fmt.Sprintf("PORT=%d", port))
 	}
 
 	// Add global config env vars
@@ -507,7 +510,7 @@ func envVarsEqual(env1, env2 []string) bool {
 func filterSystemEnvVars(envVars []string) []string {
 	filtered := []string{}
 	for _, e := range envVars {
-		// Skip MIREN_VERSION, MIREN_APP, and MIREN_INSTANCE_NUM - these are set automatically
+		// Skip MIREN_VERSION, MIREN_APP, MIREN_INSTANCE_NUM, and PORT - these are set automatically
 		if strings.HasPrefix(e, "MIREN_VERSION=") {
 			continue
 		}
@@ -515,6 +518,9 @@ func filterSystemEnvVars(envVars []string) []string {
 			continue
 		}
 		if strings.HasPrefix(e, "MIREN_INSTANCE_NUM=") {
+			continue
+		}
+		if strings.HasPrefix(e, "PORT=") {
 			continue
 		}
 		filtered = append(filtered, e)

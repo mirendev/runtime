@@ -318,7 +318,7 @@ key = "DATABASE_URL"
 value = "postgres://localhost/db"
 `,
 			wantVars: []AppEnvVar{
-				{Name: "DATABASE_URL", Value: "postgres://localhost/db"},
+				{Key: "DATABASE_URL", Value: "postgres://localhost/db"},
 			},
 		},
 		{
@@ -339,23 +339,9 @@ key = "PORT"
 value = "8080"
 `,
 			wantVars: []AppEnvVar{
-				{Name: "DATABASE_URL", Value: "postgres://localhost/db"},
-				{Name: "API_KEY", Value: "secret123"},
-				{Name: "PORT", Value: "8080"},
-			},
-		},
-		{
-			name: "env var with generator",
-			config: `
-name = "test-app"
-
-[[env]]
-key = "SECRET_KEY"
-value = "default-value"
-generator = "random"
-`,
-			wantVars: []AppEnvVar{
-				{Name: "SECRET_KEY", Value: "default-value", Generator: "random"},
+				{Key: "DATABASE_URL", Value: "postgres://localhost/db"},
+				{Key: "API_KEY", Value: "secret123"},
+				{Key: "PORT", Value: "8080"},
 			},
 		},
 		{
@@ -382,7 +368,7 @@ mode = "fixed"
 num_instances = 1
 `,
 			wantVars: []AppEnvVar{
-				{Name: "DATABASE_URL", Value: "postgres://localhost/db"},
+				{Key: "DATABASE_URL", Value: "postgres://localhost/db"},
 			},
 		},
 	}
@@ -398,9 +384,8 @@ num_instances = 1
 			} else {
 				require.Len(t, ac.EnvVars, len(tt.wantVars))
 				for i, want := range tt.wantVars {
-					assert.Equal(t, want.Name, ac.EnvVars[i].Name, "env var %d name mismatch", i)
+					assert.Equal(t, want.Key, ac.EnvVars[i].Key, "env var %d key mismatch", i)
 					assert.Equal(t, want.Value, ac.EnvVars[i].Value, "env var %d value mismatch", i)
-					assert.Equal(t, want.Generator, ac.EnvVars[i].Generator, "env var %d generator mismatch", i)
 				}
 			}
 		})
@@ -482,6 +467,66 @@ func TestGetDefaultsForServices(t *testing.T) {
 			tt.validate(t, ac)
 		})
 	}
+}
+
+func TestValidateEnvVarKey(t *testing.T) {
+	t.Run("env var with key succeeds", func(t *testing.T) {
+		config := `
+name = "test-app"
+
+[[env]]
+key = "DATABASE_URL"
+value = "postgres://localhost/db"
+`
+		ac, err := Parse([]byte(config))
+		require.NoError(t, err)
+		assert.NotNil(t, ac)
+		require.Len(t, ac.EnvVars, 1)
+		assert.Equal(t, "DATABASE_URL", ac.EnvVars[0].Key)
+	})
+
+	t.Run("env var with empty key fails", func(t *testing.T) {
+		config := `
+name = "test-app"
+
+[[env]]
+value = "postgres://localhost/db"
+`
+		_, err := Parse([]byte(config))
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "env[0]: key is required")
+	})
+
+	t.Run("service env var with key succeeds", func(t *testing.T) {
+		config := `
+name = "test-app"
+
+[services.web]
+command = "server"
+
+[[services.web.env]]
+key = "PORT"
+value = "8080"
+`
+		ac, err := Parse([]byte(config))
+		require.NoError(t, err)
+		assert.NotNil(t, ac)
+	})
+
+	t.Run("service env var with empty key fails", func(t *testing.T) {
+		config := `
+name = "test-app"
+
+[services.web]
+command = "server"
+
+[[services.web.env]]
+value = "8080"
+`
+		_, err := Parse([]byte(config))
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "service web: env[0] key is required")
+	})
 }
 
 func TestValidateDiskConcurrencyRequirement(t *testing.T) {
