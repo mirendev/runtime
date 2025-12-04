@@ -210,8 +210,8 @@ miren route
 ### Need Help?
 
 - Check the [CLI Reference](/cli-reference) for command details
-- Join our [Discord community](https://discord.gg/miren)
 - View the [FAQ](https://miren.dev/developer-preview#faq-1)
+- See [Support](/support) for bug reports, feature requests, and community help
 
 ## Next Steps
 
