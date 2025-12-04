@@ -56,6 +56,39 @@ func WithAppName(appName string) LaunchOption {
 	}
 }
 
+// sanitizeNameForID cleans a name for use in entity identifiers.
+// Only lowercase ASCII letters, numbers, and hyphens are allowed.
+func sanitizeNameForID(name string) string {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return ""
+	}
+
+	var cleaned strings.Builder
+	lastWasHyphen := false
+
+	for _, r := range name {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			cleaned.WriteRune(r)
+			lastWasHyphen = false
+		} else if r >= 'A' && r <= 'Z' {
+			// Convert uppercase to lowercase
+			cleaned.WriteRune(r + 32)
+			lastWasHyphen = false
+		} else if r == ' ' || r == '-' || r == '_' || r == '/' || r == ':' {
+			// Convert separators to a single hyphen, avoiding consecutive hyphens
+			if !lastWasHyphen && cleaned.Len() > 0 {
+				cleaned.WriteRune('-')
+				lastWasHyphen = true
+			}
+		}
+		// Skip all other characters
+	}
+
+	result := cleaned.String()
+	return strings.Trim(result, "-")
+}
+
 func (l *LaunchBuildkit) generateConfig() string {
 	str := `
 # debug enables additional debug logging
@@ -156,8 +189,8 @@ func (l *LaunchBuildkit) Launch(ctx context.Context, addr string, lo ...LaunchOp
 
 	// Generate sandbox name with format build-{app}-{id} for easy identification
 	prefix := "build"
-	if opts.appName != "" {
-		prefix = "build-" + opts.appName
+	if sanitized := sanitizeNameForID(opts.appName); sanitized != "" {
+		prefix = "build-" + sanitized
 	}
 	sbName := idgen.GenNS(prefix)
 	l.log.Info("creating buildkit sandbox entity", "name", sbName)

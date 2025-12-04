@@ -10,6 +10,37 @@ import (
 	"miren.dev/runtime/appconfig"
 )
 
+func TestSanitizeNameForID(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{"simple lowercase", "myapp", "myapp"},
+		{"uppercase converted", "MyApp", "myapp"},
+		{"spaces to hyphens", "my app", "my-app"},
+		{"underscores to hyphens", "my_app", "my-app"},
+		{"slashes to hyphens", "my/app", "my-app"},
+		{"colons to hyphens", "my:app", "my-app"},
+		{"multiple separators collapsed", "my--app", "my-app"},
+		{"mixed separators", "My App_Name/Test:123", "my-app-name-test-123"},
+		{"leading separator stripped", "/myapp", "myapp"},
+		{"trailing separator stripped", "myapp/", "myapp"},
+		{"numbers preserved", "app123", "app123"},
+		{"special chars removed", "my@app#name!", "myappname"},
+		{"empty string", "", ""},
+		{"only spaces", "   ", ""},
+		{"only special chars", "@#$%", ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := sanitizeNameForID(tt.input)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
 func TestBuildVariablesFromAppConfig(t *testing.T) {
 	tests := []struct {
 		name          string
