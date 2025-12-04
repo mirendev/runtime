@@ -11,7 +11,7 @@ Get up and running with Miren in minutes.
 Install Miren with a single command:
 
 ```bash
-curl https://miren.cloud/install | sudo bash
+curl -fsSL https://miren.cloud/install | sudo bash
 ```
 
 This script will:
