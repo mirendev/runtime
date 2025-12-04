@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -282,7 +283,7 @@ WantedBy=multi-user.target
 
 		// Wait for server to be ready
 		ctx.Info("Waiting for miren server to initialize...")
-		if err := waitForSystemdServerReady(ctx); err != nil {
+		if err := waitForSystemdServerReady(ctx, opts.Address); err != nil {
 			ctx.Warn("Failed to confirm server is ready: %v", err)
 			ctx.Info("The server may still be starting. Check logs with: journalctl -u miren -f")
 		} else {
@@ -536,11 +537,27 @@ func createTarGzBackup(sourceDir, targetPath string) error {
 
 // waitForSystemdServerReady waits for the miren server to be ready, checking both
 // the health endpoint and the systemd service status
-func waitForSystemdServerReady(ctx *Context) error {
+func waitForSystemdServerReady(ctx *Context, serverAddress string) error {
 	maxRetries := 30
 	retryDelay := 2 * time.Second
 
-	ctx.Log.Debug("checking server health", "host", "localhost", "max_retries", maxRetries)
+	// Parse the server address to build the health URL
+	// Server install always uses --serve-tls so it's always HTTPS
+	host, port, err := net.SplitHostPort(serverAddress)
+	if err != nil {
+		// No port specified, use default
+		host = serverAddress
+		port = "8443"
+	}
+
+	// Replace 0.0.0.0 or empty host with localhost for health checks
+	if host == "0.0.0.0" || host == "" {
+		host = "localhost"
+	}
+
+	healthURL := fmt.Sprintf("https://%s/healthz", net.JoinHostPort(host, port))
+
+	ctx.Log.Debug("checking server health", "host", host, "port", port, "max_retries", maxRetries)
 
 	// Create HTTP3 client with InsecureSkipVerify since we're using self-signed certs
 	client := &http.Client{
@@ -553,7 +570,6 @@ func waitForSystemdServerReady(ctx *Context) error {
 	}
 	defer client.CloseIdleConnections()
 
-	healthURL := "https://localhost:8443/healthz"
 	ctx.Log.Debug("health check endpoint", "url", healthURL)
 
 	for i := range maxRetries {
@@ -582,13 +598,6 @@ func waitForSystemdServerReady(ctx *Context) error {
 		if err == nil {
 			resp.Body.Close()
 			ctx.Log.Info("server health check successful", "attempt", i+1)
-			return nil
-		}
-
-		// Check if it's a connection error vs server responding with error
-		if resp != nil {
-			resp.Body.Close()
-			ctx.Log.Info("server responded with error but is running", "attempt", i+1)
 			return nil
 		}
 
