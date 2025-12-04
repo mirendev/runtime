@@ -11,7 +11,7 @@ Get up and running with Miren in minutes.
 Install Miren with a single command:
 
 ```bash
-curl https://miren.cloud/install | sudo sh
+curl https://miren.cloud/install | sudo bash
 ```
 
 This script will:
@@ -35,12 +35,41 @@ Check that Miren is installed correctly:
 miren version
 ```
 
+### Start the Miren Server
+
+Set up and start the Miren server:
+
+```bash
+sudo miren server install
+```
+
+This will:
+- Download required components
+- Register your cluster with [miren.cloud](/working-with-miren-cloud) (follow the prompts)
+- Install and start the Miren systemd service
+- Configure your CLI to use the local cluster
+
+To skip cloud registration and run standalone:
+
+```bash
+sudo miren server install --without-cloud
+```
+
 ## Deploy Your First App
 
-Miren includes smart defaults for common languages and frameworks. Just run:
+Miren automatically detects and builds your app. Supported languages include:
+- **Python**: Detects `requirements.txt`, `Pipfile`, `pyproject.toml`
+- **JavaScript/Node**: Detects `package.json`
+- **Go**: Detects `go.mod`
+- **Ruby**: Detects `Gemfile`
+
+Don't see your language? You can always provide a `Dockerfile`.
+
+Just run:
 
 ```bash
 cd your-project
+miren init
 miren deploy
 ```
 
@@ -49,6 +78,8 @@ That's it! Miren will:
 - Build a container image
 - Deploy your app
 - Show you the URL to access it
+
+Note: Your first app gets a default route automatically. For subsequent apps, you'll need to configure routes manually. See [Working with Routes](#working-with-routes).
 
 ## Check Your Application
 
@@ -132,39 +163,24 @@ miren env set KEY=value
 
 ## Working with Routes
 
+When you deploy your first application, Miren automatically creates a default route for it.
+
+For additional apps, you'll need to either create a custom route:
+
+```bash
+miren route set myapp.example.com myapp
+```
+
+Or set the app as the new default:
+
+```bash
+miren route set-default myapp
+```
+
 View HTTP routes for your applications:
 
 ```bash
 miren route
-```
-
-## Language Support
-
-Miren has built-in support for common languages:
-
-- **Python**: Detects `requirements.txt`, `Pipfile`, `pyproject.toml`
-- **JavaScript/Node**: Detects `package.json`
-- **Go**: Detects `go.mod`
-- **Ruby**: Detects `Gemfile`
-- **And more...**
-
-Don't see your language? You can always provide a `Dockerfile`.
-
-## Connecting to miren.cloud (Optional)
-
-Miren works standalone, but connecting to miren.cloud gives you:
-- Team management and access control
-- Automatic data backup and sync
-- Multi-environment workflows
-
-To connect:
-
-```bash
-# Login to miren.cloud
-miren login
-
-# Register your cluster
-miren register -n my-cluster
 ```
 
 ## Troubleshooting
