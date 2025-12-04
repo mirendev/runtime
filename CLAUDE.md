@@ -209,10 +209,6 @@ To get started with iso:
 - RPC interfaces → implementations: `pkg/rpc/cmd/rpcgen`
 - Generated files have `.gen.go` suffix
 
-### Git Commits
-
-- **Never add attribution to commit messages** - Do not include "Generated with Claude Code", "Co-Authored-By: Claude", or similar attribution lines in commits or PRs
-
 ### Code Style & Formatting
 
 - **ALWAYS run `make lint` before committing** - This runs golangci-lint on the entire codebase
