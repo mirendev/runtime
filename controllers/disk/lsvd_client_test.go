@@ -22,9 +22,9 @@ func TestLsvdClient_GetVolumeInfo_LiveMountStatus(t *testing.T) {
 		ctx := context.Background()
 
 		// Create a volume
-		volumeId := "mount-status-test"
-		err := client.CreateVolume(ctx, volumeId, 1, "ext4")
+		volumeId, err := client.CreateVolume(ctx, 1, "ext4")
 		require.NoError(t, err)
+		require.NotEmpty(t, volumeId)
 
 		// Initially not mounted
 		info1, err := client.GetVolumeInfo(ctx, volumeId)
@@ -67,17 +67,19 @@ func TestLsvdClient_IdempotentCreateAndMount(t *testing.T) {
 		ctx := context.Background()
 
 		// First create
-		err := client.CreateVolume(ctx, "idempotent-vol", 5, "ext4")
+		volumeId, err := client.CreateVolume(ctx, 5, "ext4")
 		require.NoError(t, err)
+		require.NotEmpty(t, volumeId)
 
-		// Second create should succeed (idempotent)
-		err = client.CreateVolume(ctx, "idempotent-vol", 5, "ext4")
-		require.NoError(t, err, "CreateVolume should be idempotent")
-
-		// Verify volume exists
-		info, err := client.GetVolumeInfo(ctx, "idempotent-vol")
+		// Second create should succeed (creates new volume)
+		volumeId2, err := client.CreateVolume(ctx, 5, "ext4")
 		require.NoError(t, err)
-		assert.Equal(t, "idempotent-vol", info.ID)
+		require.NotEmpty(t, volumeId2)
+
+		// Verify first volume exists
+		info, err := client.GetVolumeInfo(ctx, volumeId)
+		require.NoError(t, err)
+		assert.Equal(t, volumeId, info.ID)
 		assert.Equal(t, int64(5*1024*1024*1024), info.SizeBytes)
 	})
 
@@ -100,13 +102,14 @@ func TestLsvdClient_IdempotentCreateAndMount(t *testing.T) {
 		assert.Contains(t, err.Error(), "CreateVolume first")
 
 		// Now create the volume
-		err = client.CreateVolume(ctx, "mount-test-vol", 1, "ext4")
+		volumeId, err := client.CreateVolume(ctx, 1, "ext4")
 		require.NoError(t, err)
+		require.NotEmpty(t, volumeId)
 
 		// Mount should work now (though will fail on NBD in test env)
-		mountPath = filepath.Join(tempDir, "mount", "mount-test-vol")
-		defer client.UnmountVolume(ctx, "mount-test-vol")
-		err = client.MountVolume(ctx, "mount-test-vol", mountPath, false)
+		mountPath = filepath.Join(tempDir, "mount", volumeId)
+		defer client.UnmountVolume(ctx, volumeId)
+		err = client.MountVolume(ctx, volumeId, mountPath, false)
 		// Will fail on NBD operations in test
 		if err != nil {
 			assert.Contains(t, err.Error(), "NBD")
@@ -124,26 +127,28 @@ func TestLsvdClient_IdempotentCreateAndMount(t *testing.T) {
 		// Create a volume with first client
 		client1 := NewLsvdClient(log, tempDir)
 		ctx := context.Background()
-		err := client1.CreateVolume(ctx, "persist-vol", 3, "ext4")
+		volumeId, err := client1.CreateVolume(ctx, 3, "ext4")
 		require.NoError(t, err)
+		require.NotEmpty(t, volumeId)
 
 		// Create new client (simulating restart)
 		client2 := NewLsvdClient(log, tempDir)
 
-		// CreateVolume should load the existing volume
-		err = client2.CreateVolume(ctx, "persist-vol", 3, "ext4")
-		require.NoError(t, err, "Should load existing volume")
+		// Creating a new volume in the new client (new volume ID will be generated)
+		volumeId2, err := client2.CreateVolume(ctx, 3, "ext4")
+		require.NoError(t, err)
+		require.NotEmpty(t, volumeId2)
 
 		// Verify it's in the cache
-		info, err := client2.GetVolumeInfo(ctx, "persist-vol")
+		info, err := client2.GetVolumeInfo(ctx, volumeId2)
 		require.NoError(t, err)
-		assert.Equal(t, "persist-vol", info.ID)
+		assert.Equal(t, volumeId2, info.ID)
 		assert.Equal(t, int64(3*1024*1024*1024), info.SizeBytes)
 
 		// Should be able to mount it now
-		mountPath := filepath.Join(tempDir, "mount", "persist-vol")
-		defer client2.UnmountVolume(ctx, "persist-vol")
-		err = client2.MountVolume(ctx, "persist-vol", mountPath, false)
+		mountPath := filepath.Join(tempDir, "mount", volumeId2)
+		defer client2.UnmountVolume(ctx, volumeId2)
+		err = client2.MountVolume(ctx, volumeId2, mountPath, false)
 		// Will fail on NBD in test env
 		if err != nil {
 			assert.Contains(t, err.Error(), "NBD")
@@ -158,38 +163,38 @@ func TestLsvdClient_CreateVolume(t *testing.T) {
 		client := NewLsvdClient(log, tempDir)
 
 		ctx := context.Background()
-		err := client.CreateVolume(ctx, "test-vol-1", 100, "ext4")
+		volumeId, err := client.CreateVolume(ctx, 100, "ext4")
 		require.NoError(t, err)
+		require.NotEmpty(t, volumeId)
 
 		// Verify volume exists
-		info, err := client.GetVolumeInfo(ctx, "test-vol-1")
+		info, err := client.GetVolumeInfo(ctx, volumeId)
 		require.NoError(t, err)
-		assert.Equal(t, "test-vol-1", info.ID)
+		assert.Equal(t, volumeId, info.ID)
 		assert.Equal(t, int64(100*1024*1024*1024), info.SizeBytes) // 100 GB in bytes
 		assert.Equal(t, "ext4", info.Filesystem)
 		assert.Equal(t, VolumeStatusLoaded, info.Status)
 		assert.NotEmpty(t, info.UUID, "Volume should have a UUID")
 	})
 
-	t.Run("CreateVolume is idempotent with same parameters", func(t *testing.T) {
+	t.Run("CreateVolume returns different IDs for each call", func(t *testing.T) {
 		tempDir := t.TempDir()
 		log := slog.Default()
 		client := NewLsvdClient(log, tempDir)
 
 		ctx := context.Background()
-		err := client.CreateVolume(ctx, "test-vol-2", 50, "ext4")
+		volumeId1, err := client.CreateVolume(ctx, 50, "ext4")
 		require.NoError(t, err)
+		require.NotEmpty(t, volumeId1)
 
-		// Try to create same volume again - should succeed (idempotent)
-		err = client.CreateVolume(ctx, "test-vol-2", 50, "ext4")
-		assert.NoError(t, err, "CreateVolume should be idempotent with same params")
-
-		// With different size - should succeed but log warning
-		err = client.CreateVolume(ctx, "test-vol-2", 100, "ext4")
-		assert.NoError(t, err, "CreateVolume should be idempotent even with different size")
+		// Create another volume - should get different ID
+		volumeId2, err := client.CreateVolume(ctx, 50, "ext4")
+		require.NoError(t, err)
+		require.NotEmpty(t, volumeId2)
+		assert.NotEqual(t, volumeId1, volumeId2, "Should get different volume IDs")
 	})
 
-	t.Run("reuses existing volume in storage", func(t *testing.T) {
+	t.Run("CreateVolumeInSegmentAccess generates unique volume IDs", func(t *testing.T) {
 		tempDir := t.TempDir()
 		log := slog.Default()
 
@@ -197,27 +202,25 @@ func TestLsvdClient_CreateVolume(t *testing.T) {
 		client1 := NewLsvdClient(log, tempDir)
 		ctx := context.Background()
 
-		err := client1.CreateVolume(ctx, "reuse-vol", 25, "ext4")
+		volumeId1, err := client1.CreateVolumeInSegmentAccess(ctx, "test-disk-1", 25, "ext4")
 		require.NoError(t, err)
+		assert.NotEmpty(t, volumeId1)
 
 		// Get the UUID from the first creation
-		info1, err := client1.GetVolumeInfo(ctx, "reuse-vol")
+		info1, err := client1.GetVolumeInfo(ctx, volumeId1)
 		require.NoError(t, err)
-		originalUUID := info1.UUID
-		assert.NotEmpty(t, originalUUID)
+		assert.NotEmpty(t, info1.UUID)
 
-		// Create a new client pointing to the same data path
-		// This simulates a restart where the volume already exists
-		client2 := NewLsvdClient(log, tempDir)
-
-		// Try to create the volume again (should reuse existing)
-		err = client2.CreateVolume(ctx, "reuse-vol", 25, "ext4")
+		// Create another volume - should get different ID
+		volumeId2, err := client1.CreateVolumeInSegmentAccess(ctx, "test-disk-2", 25, "ext4")
 		require.NoError(t, err)
+		assert.NotEmpty(t, volumeId2)
+		assert.NotEqual(t, volumeId1, volumeId2, "Should generate unique volume IDs")
 
-		// Verify it has the same UUID (was reused)
-		info2, err := client2.GetVolumeInfo(ctx, "reuse-vol")
+		// Verify both volumes have different UUIDs
+		info2, err := client1.GetVolumeInfo(ctx, volumeId2)
 		require.NoError(t, err)
-		assert.Equal(t, originalUUID, info2.UUID, "Should reuse the same UUID")
+		assert.NotEqual(t, info1.UUID, info2.UUID, "Should have different UUIDs")
 	})
 }
 
@@ -230,20 +233,21 @@ func TestLsvdClient_UnprovisionVolume(t *testing.T) {
 		ctx := context.Background()
 
 		// Create volume
-		err := client.CreateVolume(ctx, "delete-vol", 25, "btrfs")
+		volumeId, err := client.CreateVolume(ctx, 25, "btrfs")
 		require.NoError(t, err)
+		require.NotEmpty(t, volumeId)
 
 		// Verify it exists
-		info, err := client.GetVolumeInfo(ctx, "delete-vol")
+		info, err := client.GetVolumeInfo(ctx, volumeId)
 		require.NoError(t, err)
-		assert.Equal(t, "delete-vol", info.ID)
+		assert.Equal(t, volumeId, info.ID)
 
 		// Unprovision volume
-		err = client.UnprovisionVolume(ctx, "delete-vol")
+		err = client.UnprovisionVolume(ctx, volumeId)
 		require.NoError(t, err)
 
 		// Verify it's unprovisioned (removed from memory but still on disk)
-		info, err = client.GetVolumeInfo(ctx, "delete-vol")
+		info, err = client.GetVolumeInfo(ctx, volumeId)
 		require.NoError(t, err) // Should still find it on disk
 		assert.Equal(t, VolumeStatusOnDisk, info.Status, "Volume should be on disk but not loaded")
 	})
@@ -276,9 +280,9 @@ func TestLsvdClient_ReuseNBDDevice(t *testing.T) {
 		ctx := context.Background()
 
 		// Create a volume
-		volumeId := "nbd-reuse-test"
-		err := client.CreateVolume(ctx, volumeId, 1, "ext4")
+		volumeId, err := client.CreateVolume(ctx, 1, "ext4")
 		require.NoError(t, err)
+		require.NotEmpty(t, volumeId)
 
 		// Simulate that an NBD device is already attached
 		// by setting the devicePath, cleanup function, and index
@@ -334,9 +338,9 @@ func TestLsvdClient_ReuseNBDDevice(t *testing.T) {
 		ctx := context.Background()
 
 		// Create a volume
-		volumeId := "nbd-disconnect-test"
-		err := client.CreateVolume(ctx, volumeId, 1, "ext4")
+		volumeId, err := client.CreateVolume(ctx, 1, "ext4")
 		require.NoError(t, err)
+		require.NotEmpty(t, volumeId)
 
 		// Simulate that an NBD device was attached but is now disconnected
 		client.mu.Lock()
@@ -387,32 +391,33 @@ func TestLsvdClient_MountUnmount(t *testing.T) {
 		ctx := context.Background()
 
 		// Create volume
-		err := client.CreateVolume(ctx, "mount-vol", 10, "ext4")
+		volumeId, err := client.CreateVolume(ctx, 10, "ext4")
 		require.NoError(t, err)
+		require.NotEmpty(t, volumeId)
 
 		// Mount volume
 		mountPath := filepath.Join(tempDir, "mounts", "test-mount")
-		defer client.UnmountVolume(ctx, "mount-vol")
-		err = client.MountVolume(ctx, "mount-vol", mountPath, false)
+		defer client.UnmountVolume(ctx, volumeId)
+		err = client.MountVolume(ctx, volumeId, mountPath, false)
 		require.NoError(t, err)
 
 		// Verify mounted state
-		info, err := client.GetVolumeInfo(ctx, "mount-vol")
+		info, err := client.GetVolumeInfo(ctx, volumeId)
 		require.NoError(t, err)
 		assert.Equal(t, VolumeStatusMounted, info.Status)
 		assert.Equal(t, mountPath, info.MountPath)
 
 		// Try to mount again (should fail)
-		err = client.MountVolume(ctx, "mount-vol", "/another/path", false)
+		err = client.MountVolume(ctx, volumeId, "/another/path", false)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "already mounted")
 
 		// Unmount volume
-		err = client.UnmountVolume(ctx, "mount-vol")
+		err = client.UnmountVolume(ctx, volumeId)
 		require.NoError(t, err)
 
 		// Verify unmounted state
-		info, err = client.GetVolumeInfo(ctx, "mount-vol")
+		info, err = client.GetVolumeInfo(ctx, volumeId)
 		require.NoError(t, err)
 		assert.Equal(t, VolumeStatusLoaded, info.Status)
 		assert.Empty(t, info.MountPath)
@@ -426,11 +431,12 @@ func TestLsvdClient_MountUnmount(t *testing.T) {
 		ctx := context.Background()
 
 		// Create volume
-		err := client.CreateVolume(ctx, "unmount-test", 5, "ext4")
+		volumeId, err := client.CreateVolume(ctx, 5, "ext4")
 		require.NoError(t, err)
+		require.NotEmpty(t, volumeId)
 
 		// Try to unmount non-mounted volume
-		err = client.UnmountVolume(ctx, "unmount-test")
+		err = client.UnmountVolume(ctx, volumeId)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "not mounted")
 	})
@@ -450,10 +456,11 @@ func TestLsvdClient_ListVolumes(t *testing.T) {
 		assert.Empty(t, volumes)
 
 		// Create multiple volumes
-		volumeIds := []string{"vol-1", "vol-2", "vol-3"}
-		for _, id := range volumeIds {
-			err := client.CreateVolume(ctx, id, 10, "ext4")
+		var createdIds []string
+		for i := 0; i < 3; i++ {
+			volumeId, err := client.CreateVolume(ctx, 10, "ext4")
 			require.NoError(t, err)
+			createdIds = append(createdIds, volumeId)
 		}
 
 		// List volumes
@@ -462,7 +469,7 @@ func TestLsvdClient_ListVolumes(t *testing.T) {
 		assert.Len(t, volumes, 3)
 
 		// Verify all volumes are listed
-		for _, id := range volumeIds {
+		for _, id := range createdIds {
 			assert.Contains(t, volumes, id)
 		}
 	})
@@ -480,10 +487,9 @@ func TestLsvdClient_ReplicaWriter(t *testing.T) {
 		client := NewLsvdClientWithReplica(log, tempDir, nil, cloudURL)
 
 		ctx := context.Background()
-		volumeId := "replica-test-vol"
 
 		// Create volume - this will use ReplicaWriter internally
-		err := client.CreateVolume(ctx, volumeId, 10, "ext4")
+		_, err := client.CreateVolume(ctx, 10, "ext4")
 		// This will likely fail without a real DiskAPI endpoint, but that's expected in tests
 		// The important thing is that the code path is exercised
 		if err != nil {
@@ -501,11 +507,11 @@ func TestLsvdClient_ReplicaWriter(t *testing.T) {
 		client := NewLsvdClient(log, tempDir)
 
 		ctx := context.Background()
-		volumeId := "local-only-vol"
 
 		// This should succeed with local storage only
-		err := client.CreateVolume(ctx, volumeId, 10, "ext4")
+		volumeId, err := client.CreateVolume(ctx, 10, "ext4")
 		require.NoError(t, err)
+		require.NotEmpty(t, volumeId)
 
 		// Verify volume exists
 		info, err := client.GetVolumeInfo(ctx, volumeId)
@@ -526,11 +532,11 @@ func TestLsvdClient_VolumeLifecycle(t *testing.T) {
 		client := NewLsvdClient(log, tempDir)
 
 		ctx := context.Background()
-		volumeId := "lifecycle-vol"
 
 		// 1. Create volume
-		err := client.CreateVolume(ctx, volumeId, 50, "ext4")
+		volumeId, err := client.CreateVolume(ctx, 50, "ext4")
 		require.NoError(t, err)
+		require.NotEmpty(t, volumeId)
 
 		// 2. Verify creation
 		info, err := client.GetVolumeInfo(ctx, volumeId)
@@ -586,34 +592,36 @@ func NewMockLsvdClient() *MockLsvdClient {
 	}
 }
 
-func (m *MockLsvdClient) CreateVolume(ctx context.Context, volumeId string, sizeGb int64, filesystem string) error {
+func (m *MockLsvdClient) CreateVolume(ctx context.Context, sizeGb int64, filesystem string) (string, error) {
 	// Implement as combination of CreateVolumeInSegmentAccess and InitializeDisk
-	if err := m.CreateVolumeInSegmentAccess(ctx, volumeId, sizeGb, filesystem); err != nil {
-		return err
+	actualVolumeId, err := m.CreateVolumeInSegmentAccess(ctx, "", sizeGb, filesystem)
+	if err != nil {
+		return "", err
 	}
-	return m.InitializeDisk(ctx, volumeId, filesystem)
+	if err := m.InitializeDisk(ctx, actualVolumeId, filesystem); err != nil {
+		return "", err
+	}
+	return actualVolumeId, nil
 }
 
-func (m *MockLsvdClient) CreateVolumeInSegmentAccess(ctx context.Context, volumeId string, sizeGb int64, filesystem string) error {
-	// Just check if volume already exists
-	if _, exists := m.volumes[volumeId]; exists {
-		return nil // Idempotent
-	}
+func (m *MockLsvdClient) CreateVolumeInSegmentAccess(ctx context.Context, diskName string, sizeGb int64, filesystem string) (string, error) {
+	// Generate a mock volume ID (simulating server-generated ID based on disk name)
+	actualVolumeId := fmt.Sprintf("mock-generated-vol-%d", len(m.volumes))
 
 	// Generate a mock UUID for testing
-	mockUUID := fmt.Sprintf("mock-uuid-%s", volumeId)
+	mockUUID := fmt.Sprintf("mock-uuid-%s", actualVolumeId)
 
 	// Create volume in "OnDisk" status (not loaded yet)
-	m.volumes[volumeId] = VolumeInfo{
-		ID:         volumeId,
-		Name:       volumeId,
+	m.volumes[actualVolumeId] = VolumeInfo{
+		ID:         actualVolumeId,
+		Name:       actualVolumeId,
 		SizeBytes:  sizeGb * 1024 * 1024 * 1024,
 		Filesystem: filesystem,
 		MountPath:  "",
 		UUID:       mockUUID,
 		Status:     VolumeStatusOnDisk,
 	}
-	return nil
+	return actualVolumeId, nil
 }
 
 func (m *MockLsvdClient) InitializeDisk(ctx context.Context, volumeId string, filesystem string) error {
@@ -695,6 +703,15 @@ func (m *MockLsvdClient) ListVolumes(ctx context.Context) ([]string, error) {
 	return ids, nil
 }
 
+func (m *MockLsvdClient) AcquireVolumeLease(ctx context.Context, volumeId, nodeId, appId string) (string, error) {
+	// Return a mock nonce for testing
+	return "mock-nonce-" + volumeId, nil
+}
+
+func (m *MockLsvdClient) ReleaseVolumeLease(ctx context.Context, volumeId string, nonce string) error {
+	return nil
+}
+
 func TestLsvdClient_CreateVolumeStatus(t *testing.T) {
 	t.Run("new volume has VolumeStatusLoaded", func(t *testing.T) {
 		ctx := context.Background()
@@ -702,128 +719,101 @@ func TestLsvdClient_CreateVolumeStatus(t *testing.T) {
 		log := slog.Default()
 		client := NewLsvdClient(log, tempDir)
 
-		volumeId := "new-status-test"
-		err := client.CreateVolume(ctx, volumeId, 1, "ext4")
+		volumeId, err := client.CreateVolume(ctx, 1, "ext4")
 		require.NoError(t, err)
+		require.NotEmpty(t, volumeId)
 
 		info, err := client.GetVolumeInfo(ctx, volumeId)
 		require.NoError(t, err)
 		assert.Equal(t, VolumeStatusLoaded, info.Status)
 	})
 
-	t.Run("idempotent CreateVolume preserves loaded status", func(t *testing.T) {
+	t.Run("CreateVolume returns unique IDs", func(t *testing.T) {
 		ctx := context.Background()
 		tempDir := t.TempDir()
 		log := slog.Default()
 		client := NewLsvdClient(log, tempDir).(*lsvdClientImpl)
 
-		volumeId := "idempotent-status"
-
 		// First create
-		err := client.CreateVolume(ctx, volumeId, 2, "xfs")
+		volumeId1, err := client.CreateVolume(ctx, 2, "xfs")
 		require.NoError(t, err)
+		require.NotEmpty(t, volumeId1)
 
 		// Verify initial status
-		info1, err := client.GetVolumeInfo(ctx, volumeId)
+		info1, err := client.GetVolumeInfo(ctx, volumeId1)
 		require.NoError(t, err)
 		assert.Equal(t, VolumeStatusLoaded, info1.Status)
 
-		// Second create (idempotent)
-		err = client.CreateVolume(ctx, volumeId, 2, "xfs")
+		// Second create (should be a new volume)
+		volumeId2, err := client.CreateVolume(ctx, 2, "xfs")
 		require.NoError(t, err)
+		require.NotEmpty(t, volumeId2)
+		assert.NotEqual(t, volumeId1, volumeId2, "CreateVolume should return unique IDs")
 
-		// Verify status is still loaded
-		info2, err := client.GetVolumeInfo(ctx, volumeId)
+		// Verify second volume status
+		info2, err := client.GetVolumeInfo(ctx, volumeId2)
 		require.NoError(t, err)
 		assert.Equal(t, VolumeStatusLoaded, info2.Status)
 	})
 
-	t.Run("CreateVolume corrects mounted status", func(t *testing.T) {
+	t.Run("CreateVolumeInSegmentAccess generates new volume each time", func(t *testing.T) {
 		ctx := context.Background()
 		tempDir := t.TempDir()
 		log := slog.Default()
 		client := NewLsvdClient(log, tempDir).(*lsvdClientImpl)
 
-		volumeId := "mounted-correct"
-
-		// Create volume
-		err := client.CreateVolume(ctx, volumeId, 1, "ext4")
+		// First create
+		volumeId1, err := client.CreateVolumeInSegmentAccess(ctx, "disk-1", 1, "ext4")
 		require.NoError(t, err)
+		assert.NotEmpty(t, volumeId1)
 
-		// Manually set to mounted (simulating state corruption)
-		client.mu.Lock()
-		if state, exists := client.volumes[volumeId]; exists {
-			state.mounted = true
-			state.info.MountPath = "/fake/path"
-			state.info.Status = VolumeStatusMounted
-			state.info.MountPath = "/fake/path"
-		}
-		client.mu.Unlock()
-
-		// Call CreateVolume again - should correct the status
-		err = client.CreateVolume(ctx, volumeId, 1, "ext4")
+		// Second create (gets new volume with new ID)
+		volumeId2, err := client.CreateVolumeInSegmentAccess(ctx, "disk-2", 1, "ext4")
 		require.NoError(t, err)
+		assert.NotEmpty(t, volumeId2)
+		assert.NotEqual(t, volumeId1, volumeId2, "Should generate unique volume IDs")
 
-		// Verify status was corrected
-		info, err := client.GetVolumeInfo(ctx, volumeId)
+		// Verify both volumes exist
+		volumes, err := client.ListVolumes(ctx)
 		require.NoError(t, err)
-		assert.Equal(t, VolumeStatusLoaded, info.Status, "Status should be corrected to loaded")
-		assert.False(t, client.volumes[volumeId].mounted, "Mounted flag should be false")
+		assert.Contains(t, volumes, volumeId1)
+		assert.Contains(t, volumes, volumeId2)
 	})
 
-	t.Run("CreateVolume sets status when initializing missing disk", func(t *testing.T) {
+	t.Run("CreateVolume initializes disk properly", func(t *testing.T) {
 		ctx := context.Background()
 		tempDir := t.TempDir()
 		log := slog.Default()
 		client := NewLsvdClient(log, tempDir).(*lsvdClientImpl)
 
-		volumeId := "missing-disk"
-
 		// Create volume
-		err := client.CreateVolume(ctx, volumeId, 1, "ext4")
+		volumeId, err := client.CreateVolume(ctx, 1, "ext4")
 		require.NoError(t, err)
+		require.NotEmpty(t, volumeId)
 
-		// Clear the disk but set wrong status
-		client.mu.Lock()
-		if state, exists := client.volumes[volumeId]; exists {
-			state.disk = nil
-			state.info.Status = VolumeStatusOnDisk // Wrong status
-			delete(client.disks, volumeId)
-		}
-		client.mu.Unlock()
-
-		// Call CreateVolume again - should fix disk and status
-		err = client.CreateVolume(ctx, volumeId, 1, "ext4")
-		require.NoError(t, err)
-
-		// Verify disk was reinitialized and status corrected
+		// Verify disk was initialized and status is correct
 		client.mu.RLock()
 		state, exists := client.volumes[volumeId]
 		client.mu.RUnlock()
 
 		require.True(t, exists)
-		assert.NotNil(t, state.disk, "Disk should be reinitialized")
+		assert.NotNil(t, state.disk, "Disk should be initialized")
 		assert.Equal(t, VolumeStatusLoaded, state.info.Status, "Status should be loaded")
 	})
 
-	t.Run("CreateVolume loads from disk with correct status", func(t *testing.T) {
+	t.Run("new volumes have correct initial status", func(t *testing.T) {
 		ctx := context.Background()
 		tempDir := t.TempDir()
 		log := slog.Default()
 
 		// Create with first client
 		client1 := NewLsvdClient(log, tempDir)
-		volumeId := "persist-status"
-		err := client1.CreateVolume(ctx, volumeId, 2, "btrfs")
+		volumeId, err := client1.CreateVolume(ctx, 2, "btrfs")
 		require.NoError(t, err)
-
-		// New client loads from disk
-		client2 := NewLsvdClient(log, tempDir)
-		err = client2.CreateVolume(ctx, volumeId, 2, "btrfs")
-		require.NoError(t, err)
+		require.NotEmpty(t, volumeId)
 
 		// Verify status is loaded
-		info, err := client2.GetVolumeInfo(ctx, volumeId)
+		info, err := client1.GetVolumeInfo(ctx, volumeId)
 		require.NoError(t, err)
 		assert.Equal(t, VolumeStatusLoaded, info.Status)
 	})
@@ -838,11 +828,10 @@ func TestLsvdClient_CreateVolumeStatus(t *testing.T) {
 		log := slog.Default()
 		client := NewLsvdClient(log, tempDir).(*lsvdClientImpl)
 
-		volumeId := "mount-unmount-status"
-
 		// Create volume
-		err := client.CreateVolume(ctx, volumeId, 1, "ext4")
+		volumeId, err := client.CreateVolume(ctx, 1, "ext4")
 		require.NoError(t, err)
+		require.NotEmpty(t, volumeId)
 
 		// Initial status should be loaded
 		info1, err := client.GetVolumeInfo(ctx, volumeId)
@@ -904,9 +893,9 @@ func TestLsvdClient_MountStateVerification(t *testing.T) {
 		client := NewLsvdClient(log, tempDir).(*lsvdClientImpl)
 
 		// Create a volume
-		volumeId := "state-test-vol"
-		err := client.CreateVolume(ctx, volumeId, 1, "ext4")
+		volumeId, err := client.CreateVolume(ctx, 1, "ext4")
 		require.NoError(t, err)
+		require.NotEmpty(t, volumeId)
 
 		// Manually set mounted state to true (simulating state corruption)
 		client.mu.Lock()
@@ -953,9 +942,9 @@ func TestLsvdClient_MountStateVerification(t *testing.T) {
 		client := NewLsvdClient(log, tempDir).(*lsvdClientImpl)
 
 		// Create a volume
-		volumeId := "unmount-state-test"
-		err := client.CreateVolume(ctx, volumeId, 1, "ext4")
+		volumeId, err := client.CreateVolume(ctx, 1, "ext4")
 		require.NoError(t, err)
+		require.NotEmpty(t, volumeId)
 
 		// Manually set mounted state to true (simulating state corruption)
 		client.mu.Lock()
@@ -989,9 +978,9 @@ func TestLsvdClient_MountStateVerification(t *testing.T) {
 		client := NewLsvdClient(log, tempDir).(*lsvdClientImpl)
 
 		// Create a volume
-		volumeId := "unprovision-state-test"
-		err := client.CreateVolume(ctx, volumeId, 1, "ext4")
+		volumeId, err := client.CreateVolume(ctx, 1, "ext4")
 		require.NoError(t, err)
+		require.NotEmpty(t, volumeId)
 
 		// Manually set mounted state to true (simulating state corruption)
 		client.mu.Lock()
@@ -1022,9 +1011,9 @@ func TestLsvdClient_DiskInitialization(t *testing.T) {
 		log := slog.Default()
 		client := NewLsvdClient(log, tempDir).(*lsvdClientImpl)
 
-		volumeId := "new-vol"
-		err := client.CreateVolume(ctx, volumeId, 1, "ext4")
+		volumeId, err := client.CreateVolume(ctx, 1, "ext4")
 		require.NoError(t, err)
+		require.NotEmpty(t, volumeId)
 
 		// Verify disk is initialized
 		client.mu.RLock()
@@ -1037,38 +1026,31 @@ func TestLsvdClient_DiskInitialization(t *testing.T) {
 		assert.Equal(t, VolumeStatusLoaded, state.info.Status)
 	})
 
-	t.Run("CreateVolume initializes disk for cached volume without disk", func(t *testing.T) {
+	t.Run("CreateVolume creates unique volumes each time", func(t *testing.T) {
 		ctx := context.Background()
 		tempDir := t.TempDir()
 		log := slog.Default()
 		client := NewLsvdClient(log, tempDir).(*lsvdClientImpl)
 
-		volumeId := "cached-vol"
-
-		// First create the volume normally
-		err := client.CreateVolume(ctx, volumeId, 2, "xfs")
+		// First create a volume
+		volumeId1, err := client.CreateVolume(ctx, 2, "xfs")
 		require.NoError(t, err)
+		require.NotEmpty(t, volumeId1)
 
-		// Manually clear the disk (simulating a partially initialized state)
-		client.mu.Lock()
-		if state, exists := client.volumes[volumeId]; exists {
-			state.disk = nil
-			delete(client.disks, volumeId)
-		}
-		client.mu.Unlock()
-
-		// Call CreateVolume again - should reinitialize the disk
-		err = client.CreateVolume(ctx, volumeId, 2, "xfs")
+		// Second create gets a new volume
+		volumeId2, err := client.CreateVolume(ctx, 2, "xfs")
 		require.NoError(t, err)
+		require.NotEmpty(t, volumeId2)
+		assert.NotEqual(t, volumeId1, volumeId2, "Should get unique volume IDs")
 
-		// Verify disk was reinitialized
+		// Verify both volumes exist
 		client.mu.RLock()
-		state, exists := client.volumes[volumeId]
+		_, exists1 := client.volumes[volumeId1]
+		_, exists2 := client.volumes[volumeId2]
 		client.mu.RUnlock()
 
-		require.True(t, exists)
-		assert.NotNil(t, state.disk, "Disk should be reinitialized")
-		assert.NotNil(t, client.disks[volumeId], "Disk should be in disks map")
+		require.True(t, exists1)
+		require.True(t, exists2)
 	})
 
 	t.Run("MountVolume fails if disk not initialized", func(t *testing.T) {
@@ -1106,40 +1088,26 @@ func TestLsvdClient_DiskInitialization(t *testing.T) {
 		assert.Contains(t, err.Error(), "call CreateVolume first")
 	})
 
-	t.Run("CreateVolume loads existing volume from disk with disk initialized", func(t *testing.T) {
+	t.Run("CreateVolume initializes disk properly", func(t *testing.T) {
 		ctx := context.Background()
 		tempDir := t.TempDir()
 		log := slog.Default()
 
-		// Create volume with first client
-		client1 := NewLsvdClient(log, tempDir).(*lsvdClientImpl)
-		volumeId := "persist-vol"
-		err := client1.CreateVolume(ctx, volumeId, 3, "ext4")
+		// Create volume with client
+		client := NewLsvdClient(log, tempDir).(*lsvdClientImpl)
+		volumeId, err := client.CreateVolume(ctx, 3, "ext4")
 		require.NoError(t, err)
+		require.NotEmpty(t, volumeId)
 
-		// Verify disk is initialized in first client
-		client1.mu.RLock()
-		state1, exists1 := client1.volumes[volumeId]
-		client1.mu.RUnlock()
-		require.True(t, exists1)
-		assert.NotNil(t, state1.disk)
+		// Verify disk is initialized
+		client.mu.RLock()
+		state, exists := client.volumes[volumeId]
+		client.mu.RUnlock()
 
-		// Create new client (simulating restart)
-		client2 := NewLsvdClient(log, tempDir).(*lsvdClientImpl)
-
-		// Load the existing volume
-		err = client2.CreateVolume(ctx, volumeId, 3, "ext4")
-		require.NoError(t, err)
-
-		// Verify disk is initialized in second client
-		client2.mu.RLock()
-		state2, exists2 := client2.volumes[volumeId]
-		client2.mu.RUnlock()
-
-		require.True(t, exists2)
-		assert.NotNil(t, state2.disk, "Disk should be initialized when loading from disk")
-		assert.NotNil(t, state2.sa, "Segment access should be initialized")
-		assert.Equal(t, VolumeStatusLoaded, state2.info.Status)
+		require.True(t, exists)
+		assert.NotNil(t, state.disk, "Disk should be initialized")
+		assert.NotNil(t, state.sa, "Segment access should be initialized")
+		assert.Equal(t, VolumeStatusLoaded, state.info.Status)
 	})
 }
 
@@ -1174,9 +1142,9 @@ func TestLsvdClient_PathHelpers(t *testing.T) {
 		log := slog.Default()
 		client := NewLsvdClient(log, tempDir).(*lsvdClientImpl)
 
-		volumeId := "path-test-vol"
-		err := client.CreateVolume(ctx, volumeId, 1, "ext4")
+		volumeId, err := client.CreateVolume(ctx, 1, "ext4")
 		require.NoError(t, err)
+		require.NotEmpty(t, volumeId)
 
 		// Verify the volume state has the correct paths
 		state, exists := client.volumes[volumeId]
@@ -1195,29 +1163,22 @@ func TestLsvdClient_PathHelpers(t *testing.T) {
 		log := slog.Default()
 
 		// Create volume with first client
-		client1 := NewLsvdClient(log, tempDir)
-		volumeId := "info-path-test"
-		err := client1.CreateVolume(ctx, volumeId, 1, "ext4")
+		client := NewLsvdClient(log, tempDir).(*lsvdClientImpl)
+		volumeId, err := client.CreateVolume(ctx, 1, "ext4")
 		require.NoError(t, err)
-
-		// Create new client to test loading from disk
-		client2 := NewLsvdClient(log, tempDir).(*lsvdClientImpl)
+		require.NotEmpty(t, volumeId)
 
 		// GetVolumeInfo should use helper methods for paths
-		info, err := client2.GetVolumeInfo(ctx, volumeId)
+		info, err := client.GetVolumeInfo(ctx, volumeId)
 		require.NoError(t, err)
 		assert.Equal(t, volumeId, info.ID)
 
-		// If volume gets loaded later, it should use the same paths
-		err = client2.CreateVolume(ctx, volumeId, 1, "ext4")
-		require.NoError(t, err)
-
-		state, exists := client2.volumes[volumeId]
+		state, exists := client.volumes[volumeId]
 		require.True(t, exists)
 
-		expectedPath := client2.getVolumePath(volumeId)
+		expectedPath := client.getVolumePath(volumeId)
 		if localSA, ok := state.sa.(*lsvd.LocalFileAccess); ok {
-			assert.Equal(t, expectedPath, localSA.Dir, "Loaded volume should use same path")
+			assert.Equal(t, expectedPath, localSA.Dir, "Volume should use expected path")
 		}
 	})
 
@@ -1228,17 +1189,17 @@ func TestLsvdClient_PathHelpers(t *testing.T) {
 		client := NewLsvdClient(log, tempDir)
 
 		// Create a few volumes
-		err := client.CreateVolume(ctx, "list-vol-1", 1, "ext4")
+		volumeId1, err := client.CreateVolume(ctx, 1, "ext4")
 		require.NoError(t, err)
-		err = client.CreateVolume(ctx, "list-vol-2", 1, "xfs")
+		volumeId2, err := client.CreateVolume(ctx, 1, "xfs")
 		require.NoError(t, err)
 
 		// List should find them
 		volumes, err := client.ListVolumes(ctx)
 		require.NoError(t, err)
 		assert.Len(t, volumes, 2)
-		assert.Contains(t, volumes, "list-vol-1")
-		assert.Contains(t, volumes, "list-vol-2")
+		assert.Contains(t, volumes, volumeId1)
+		assert.Contains(t, volumes, volumeId2)
 	})
 
 }

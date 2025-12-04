@@ -41,9 +41,9 @@ func TestLsvdClientMountIntegration(t *testing.T) {
 		ctx := context.Background()
 
 		// Create a small volume for testing (1GB)
-		volumeId := "test-mount-ext4"
-		err := client.CreateVolume(ctx, volumeId, 1, "ext4")
+		volumeId, err := client.CreateVolume(ctx, 1, "ext4")
 		require.NoError(t, err)
+		require.NotEmpty(t, volumeId)
 
 		// Mount the volume
 		mountPath := filepath.Join(tempDir, "mounts", volumeId)
@@ -105,9 +105,9 @@ func TestLsvdClientMountIntegration(t *testing.T) {
 		ctx := context.Background()
 
 		// Create XFS volume
-		volumeId := "test-mount-xfs"
-		err := client.CreateVolume(ctx, volumeId, 1, "xfs")
+		volumeId, err := client.CreateVolume(ctx, 1, "xfs")
 		require.NoError(t, err)
+		require.NotEmpty(t, volumeId)
 
 		// Mount the volume
 		mountPath := filepath.Join(tempDir, "mounts", volumeId)
@@ -140,9 +140,9 @@ func TestLsvdClientMountIntegration(t *testing.T) {
 		ctx := context.Background()
 
 		// Create volume
-		volumeId := "test-mount-ro"
-		err := client.CreateVolume(ctx, volumeId, 1, "ext4")
+		volumeId, err := client.CreateVolume(ctx, 1, "ext4")
 		require.NoError(t, err)
+		require.NotEmpty(t, volumeId)
 
 		// Mount as read-write first
 		mountPath := filepath.Join(tempDir, "mounts", volumeId)
@@ -187,9 +187,9 @@ func TestLsvdClientMountIntegration(t *testing.T) {
 		ctx := context.Background()
 
 		// Create volume
-		volumeId := "test-concurrent"
-		err := client.CreateVolume(ctx, volumeId, 1, "ext4")
+		volumeId, err := client.CreateVolume(ctx, 1, "ext4")
 		require.NoError(t, err)
+		require.NotEmpty(t, volumeId)
 
 		// First mount should succeed
 		mountPath1 := filepath.Join(tempDir, "mounts", "mount1")
@@ -252,8 +252,7 @@ func BenchmarkVolumeMount(b *testing.B) {
 	ctx := context.Background()
 
 	// Create volume once
-	volumeId := "bench-mount"
-	err := client.CreateVolume(ctx, volumeId, 1, "ext4")
+	volumeId, err := client.CreateVolume(ctx, 1, "ext4")
 	require.NoError(b, err)
 
 	mountPath := filepath.Join(tempDir, "mounts", volumeId)

@@ -187,11 +187,6 @@ func (a *RPCAuthenticator) NoAuthorization(ctx context.Context, r *http.Request)
 	// Check if we have client certificates (already validated by TLS layer)
 	if r.TLS != nil && len(r.TLS.PeerCertificates) > 0 {
 		cert := r.TLS.PeerCertificates[0]
-
-		// Extract the identity from the certificate
-		a.logger.Debug("request allowed via client certificate",
-			"subject", cert.Subject.String(),
-			"path", r.URL.Path)
 		return true, cert.Subject.CommonName, nil
 	}
 

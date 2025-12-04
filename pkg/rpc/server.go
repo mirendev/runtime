@@ -322,7 +322,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.state.log.Debug("request authenticated", "identity", identity, "path", r.URL.Path)
 	} else {
 		// No Authorization header - let authenticator decide if this is allowed
-		allowed, identity, err := s.state.authenticator.NoAuthorization(r.Context(), r)
+		allowed, _, err := s.state.authenticator.NoAuthorization(r.Context(), r)
 		if err != nil {
 			s.state.log.Warn("authentication check failed", "error", err, "path", r.URL.Path)
 			http.Error(w, "authentication failed", http.StatusUnauthorized)
@@ -335,10 +335,6 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			s.state.log.Warn("request requires authentication", "path", r.URL.Path)
 			http.Error(w, "authentication required", http.StatusUnauthorized)
 			return
-		}
-		// Request is allowed without auth header (e.g., using client certs)
-		if identity != "" && identity != "anonymous" {
-			s.state.log.Debug("request allowed without auth header", "identity", identity, "path", r.URL.Path)
 		}
 	}
 

@@ -96,17 +96,23 @@ func (c *SandboxController) configureMirenVolume(ctx context.Context, sb *comput
 
 	// Append instance number to disk name to ensure each instance gets its own disk
 	actualDiskName := volume.DiskName
-	var md core_v1alpha.Metadata
-	md.Decode(meta)
 
-	if instanceStr, ok := md.Labels.Get("instance"); ok {
-		actualDiskName = fmt.Sprintf("%s-%s", volume.DiskName, instanceStr)
-		c.Log.Info("appended instance number to disk name",
-			"sandbox_id", sb.ID,
-			"original_disk_name", volume.DiskName,
-			"actual_disk_name", actualDiskName,
-			"instance", instanceStr)
-	}
+	// TODO: the mechanism here is to try to allocate a unique disk by using the instance
+	// number. But we're too loosey-goosey with how the instance numbers are setup!
+	// So instead, for now, just use the disk name as-is.
+	/*
+		var md core_v1alpha.Metadata
+		md.Decode(meta)
+
+		if instanceStr, ok := md.Labels.Get("instance"); ok {
+			actualDiskName = fmt.Sprintf("%s-%s", volume.DiskName, instanceStr)
+			c.Log.Info("appended instance number to disk name",
+				"sandbox_id", sb.ID,
+				"original_disk_name", volume.DiskName,
+				"actual_disk_name", actualDiskName,
+				"instance", instanceStr)
+		}
+	*/
 
 	// Use configuration from volume fields
 	readOnly := volume.ReadOnly
@@ -132,9 +138,24 @@ func (c *SandboxController) configureMirenVolume(ctx context.Context, sb *comput
 		return "", fmt.Errorf("failed to ensure disk exists: %w", err)
 	}
 
+	// Resolve version to app ID if set
+	var appID entity.Id
+	if sb.Spec.Version != "" {
+		versionResp, err := c.EAC.Get(ctx, sb.Spec.Version.String())
+		if err != nil {
+			c.Log.Warn("failed to get app version for disk lease",
+				"version", sb.Spec.Version,
+				"error", err)
+		} else {
+			var version core_v1alpha.AppVersion
+			version.Decode(versionResp.Entity().Entity())
+			appID = version.App
+		}
+	}
+
 	// Check if there's already a lease for this disk on this node
 	nodeID := entity.Id("node/" + c.NodeId)
-	leaseID, err := c.findOrCreateDiskLease(ctx, diskID, nodeID, sb.ID, volume.MountPath, readOnly)
+	leaseID, err := c.findOrCreateDiskLease(ctx, diskID, nodeID, sb.ID, appID, volume.MountPath, readOnly)
 	if err != nil {
 		return "", fmt.Errorf("failed to get or create disk lease: %w", err)
 	}
@@ -221,7 +242,7 @@ func (c *SandboxController) ensureDisk(ctx context.Context, diskName string, siz
 	return diskID, nil
 }
 
-func (c *SandboxController) findOrCreateDiskLease(ctx context.Context, diskID entity.Id, nodeID entity.Id, sandboxID entity.Id, mountPath string, readOnly bool) (entity.Id, error) {
+func (c *SandboxController) findOrCreateDiskLease(ctx context.Context, diskID entity.Id, nodeID entity.Id, sandboxID entity.Id, appID entity.Id, mountPath string, readOnly bool) (entity.Id, error) {
 	// Check if there's already a lease for this disk on this node
 	listResp, err := c.EAC.List(ctx, entity.Ref(entity.EntityKind, storage.KindDiskLease))
 	if err != nil {
@@ -244,13 +265,14 @@ func (c *SandboxController) findOrCreateDiskLease(ctx context.Context, diskID en
 	}
 
 	// No existing lease found, create a new one
-	return c.createDiskLease(ctx, diskID, sandboxID, mountPath, readOnly)
+	return c.createDiskLease(ctx, diskID, sandboxID, appID, mountPath, readOnly)
 }
 
-func (c *SandboxController) createDiskLease(ctx context.Context, diskID entity.Id, sandboxID entity.Id, mountPath string, readOnly bool) (entity.Id, error) {
+func (c *SandboxController) createDiskLease(ctx context.Context, diskID entity.Id, sandboxID entity.Id, appID entity.Id, mountPath string, readOnly bool) (entity.Id, error) {
 	c.Log.Info("creating disk lease",
 		"disk", diskID,
 		"sandbox", sandboxID,
+		"app", appID,
 		"mount_path", mountPath,
 		"node_id", c.NodeId)
 
@@ -259,6 +281,7 @@ func (c *SandboxController) createDiskLease(ctx context.Context, diskID entity.I
 	lease := &storage.DiskLease{
 		DiskId:    diskID,
 		SandboxId: sandboxID,
+		AppId:     appID,
 		Status:    storage.PENDING,
 		Mount: storage.Mount{
 			Path:     mountPath,
