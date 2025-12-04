@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 )
 
 // Installer manages the installation and rollback of artifacts
@@ -122,6 +124,9 @@ func (i *binaryInstaller) Install(ctx context.Context, downloaded *DownloadedArt
 		fmt.Fprintf(os.Stderr, "Warning: failed to write checksum file: %v\n", err)
 	}
 
+	// Fix SELinux context if needed (RHEL/Oracle Linux)
+	fixSELinuxContext(i.opts.InstallPath)
+
 	return nil
 }
 
@@ -187,6 +192,50 @@ func (i *binaryInstaller) HasBackup() bool {
 	backupPath := i.opts.InstallPath + i.opts.BackupSuffix
 	_, err := os.Stat(backupPath)
 	return err == nil
+}
+
+// fixSELinuxContext ensures the binary has the correct SELinux context for execution.
+// This is needed on RHEL/Oracle Linux where SELinux is enforcing and files in /var/lib
+// get var_lib_t context by default, which prevents systemd from executing them.
+func fixSELinuxContext(binaryPath string) {
+	// Check if SELinux is enforcing
+	cmd := exec.Command("getenforce")
+	output, err := cmd.Output()
+	if err != nil {
+		// getenforce not found or failed - SELinux probably not installed
+		return
+	}
+
+	status := strings.TrimSpace(string(output))
+	if status != "Enforcing" {
+		return
+	}
+
+	// SELinux is enforcing - run restorecon to apply the correct context.
+	// If semanage fcontext was used during install, this will apply that rule.
+	// If not, restorecon will apply the default context for the path.
+	restoreconCmd := exec.Command("restorecon", "-v", binaryPath)
+	if output, err := restoreconCmd.CombinedOutput(); err != nil {
+		// restorecon failed - try chcon as fallback
+		chconCmd := exec.Command("chcon", "-t", "bin_t", binaryPath)
+		if output, err := chconCmd.CombinedOutput(); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: failed to set SELinux context: %v\nOutput: %s\n", err, output)
+		}
+	} else {
+		// Check if context was actually set to something executable
+		// If restorecon set it back to var_lib_t, we need to use chcon
+		lsCmd := exec.Command("ls", "-Z", binaryPath)
+		if lsOutput, err := lsCmd.Output(); err == nil {
+			if strings.Contains(string(lsOutput), "var_lib_t") {
+				// restorecon set wrong context, override with chcon
+				chconCmd := exec.Command("chcon", "-t", "bin_t", binaryPath)
+				if output, err := chconCmd.CombinedOutput(); err != nil {
+					fmt.Fprintf(os.Stderr, "Warning: failed to set SELinux context: %v\nOutput: %s\n", err, output)
+				}
+			}
+		}
+		_ = output // silence unused warning
+	}
 }
 
 // copyFile copies a file from src to dst

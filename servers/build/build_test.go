@@ -10,6 +10,37 @@ import (
 	"miren.dev/runtime/appconfig"
 )
 
+func TestSanitizeNameForID(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{"simple lowercase", "myapp", "myapp"},
+		{"uppercase converted", "MyApp", "myapp"},
+		{"spaces to hyphens", "my app", "my-app"},
+		{"underscores to hyphens", "my_app", "my-app"},
+		{"slashes to hyphens", "my/app", "my-app"},
+		{"colons to hyphens", "my:app", "my-app"},
+		{"multiple separators collapsed", "my--app", "my-app"},
+		{"mixed separators", "My App_Name/Test:123", "my-app-name-test-123"},
+		{"leading separator stripped", "/myapp", "myapp"},
+		{"trailing separator stripped", "myapp/", "myapp"},
+		{"numbers preserved", "app123", "app123"},
+		{"special chars removed", "my@app#name!", "myappname"},
+		{"empty string", "", ""},
+		{"only spaces", "   ", ""},
+		{"only special chars", "@#$%", ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := sanitizeNameForID(tt.input)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
 func TestBuildVariablesFromAppConfig(t *testing.T) {
 	tests := []struct {
 		name          string
@@ -32,7 +63,7 @@ func TestBuildVariablesFromAppConfig(t *testing.T) {
 			name: "single env var",
 			appConfig: &appconfig.AppConfig{
 				EnvVars: []appconfig.AppEnvVar{
-					{Name: "DATABASE_URL", Value: "postgres://localhost/db"},
+					{Key: "DATABASE_URL", Value: "postgres://localhost/db"},
 				},
 			},
 			wantVariables: []core_v1alpha.Variable{
@@ -43,26 +74,15 @@ func TestBuildVariablesFromAppConfig(t *testing.T) {
 			name: "multiple env vars",
 			appConfig: &appconfig.AppConfig{
 				EnvVars: []appconfig.AppEnvVar{
-					{Name: "DATABASE_URL", Value: "postgres://localhost/db"},
-					{Name: "API_KEY", Value: "secret123"},
-					{Name: "PORT", Value: "8080"},
+					{Key: "DATABASE_URL", Value: "postgres://localhost/db"},
+					{Key: "API_KEY", Value: "secret123"},
+					{Key: "PORT", Value: "8080"},
 				},
 			},
 			wantVariables: []core_v1alpha.Variable{
 				{Key: "DATABASE_URL", Value: "postgres://localhost/db"},
 				{Key: "API_KEY", Value: "secret123"},
 				{Key: "PORT", Value: "8080"},
-			},
-		},
-		{
-			name: "env var with generator field (ignored)",
-			appConfig: &appconfig.AppConfig{
-				EnvVars: []appconfig.AppEnvVar{
-					{Name: "SECRET_KEY", Value: "default", Generator: "random"},
-				},
-			},
-			wantVariables: []core_v1alpha.Variable{
-				{Key: "SECRET_KEY", Value: "default"},
 			},
 		},
 	}
@@ -456,8 +476,8 @@ func TestBuildServicesConfig(t *testing.T) {
 							RequestsPerInstance: 10,
 						},
 						EnvVars: []appconfig.AppEnvVar{
-							{Name: "NODE_ENV", Value: "production"},
-							{Name: "PORT", Value: "3000"},
+							{Key: "NODE_ENV", Value: "production"},
+							{Key: "PORT", Value: "3000"},
 						},
 					},
 				},
@@ -485,7 +505,7 @@ func TestBuildServicesConfig(t *testing.T) {
 							RequestsPerInstance: 10,
 						},
 						EnvVars: []appconfig.AppEnvVar{
-							{Name: "NODE_ENV", Value: "production"},
+							{Key: "NODE_ENV", Value: "production"},
 						},
 					},
 					"worker": {
@@ -494,8 +514,8 @@ func TestBuildServicesConfig(t *testing.T) {
 							NumInstances: 2,
 						},
 						EnvVars: []appconfig.AppEnvVar{
-							{Name: "WORKER_THREADS", Value: "4"},
-							{Name: "QUEUE_NAME", Value: "default"},
+							{Key: "WORKER_THREADS", Value: "4"},
+							{Key: "QUEUE_NAME", Value: "default"},
 						},
 					},
 					"scheduler": {
@@ -601,7 +621,7 @@ func TestMergeVariablesFromAppConfig(t *testing.T) {
 			},
 			appConfig: &appconfig.AppConfig{
 				EnvVars: []appconfig.AppEnvVar{
-					{Name: "NEW_VAR", Value: "new_value"},
+					{Key: "NEW_VAR", Value: "new_value"},
 				},
 			},
 			wantVars: []core_v1alpha.Variable{
@@ -617,7 +637,7 @@ func TestMergeVariablesFromAppConfig(t *testing.T) {
 			},
 			appConfig: &appconfig.AppConfig{
 				EnvVars: []appconfig.AppEnvVar{
-					{Name: "CONFIG_VAR_1", Value: "value1"},
+					{Key: "CONFIG_VAR_1", Value: "value1"},
 				},
 			},
 			wantVars: []core_v1alpha.Variable{
@@ -632,7 +652,7 @@ func TestMergeVariablesFromAppConfig(t *testing.T) {
 			},
 			appConfig: &appconfig.AppConfig{
 				EnvVars: []appconfig.AppEnvVar{
-					{Name: "VAR1", Value: "new_value"},
+					{Key: "VAR1", Value: "new_value"},
 				},
 			},
 			wantVars: []core_v1alpha.Variable{
@@ -647,7 +667,7 @@ func TestMergeVariablesFromAppConfig(t *testing.T) {
 			},
 			appConfig: &appconfig.AppConfig{
 				EnvVars: []appconfig.AppEnvVar{
-					{Name: "NEW_VAR", Value: "new_value"},
+					{Key: "NEW_VAR", Value: "new_value"},
 				},
 			},
 			wantVars: []core_v1alpha.Variable{
@@ -661,7 +681,7 @@ func TestMergeVariablesFromAppConfig(t *testing.T) {
 			},
 			appConfig: &appconfig.AppConfig{
 				EnvVars: []appconfig.AppEnvVar{
-					{Name: "DATABASE_URL", Value: "from_config"},
+					{Key: "DATABASE_URL", Value: "from_config"},
 				},
 			},
 			wantVars: []core_v1alpha.Variable{
@@ -677,8 +697,8 @@ func TestMergeVariablesFromAppConfig(t *testing.T) {
 			},
 			appConfig: &appconfig.AppConfig{
 				EnvVars: []appconfig.AppEnvVar{
-					{Name: "SECRET", Value: "default_secret"}, // Should NOT override manual
-					{Name: "LOG_LEVEL", Value: "info"},        // Should override config
+					{Key: "SECRET", Value: "default_secret"}, // Should NOT override manual
+					{Key: "LOG_LEVEL", Value: "info"},        // Should override config
 				},
 			},
 			wantVars: []core_v1alpha.Variable{
@@ -696,8 +716,8 @@ func TestMergeVariablesFromAppConfig(t *testing.T) {
 			},
 			appConfig: &appconfig.AppConfig{
 				EnvVars: []appconfig.AppEnvVar{
-					{Name: "CONFIG_1", Value: "c1_updated"},
-					{Name: "CONFIG_3", Value: "c3"},
+					{Key: "CONFIG_1", Value: "c1_updated"},
+					{Key: "CONFIG_3", Value: "c3"},
 				},
 			},
 			wantVars: []core_v1alpha.Variable{
@@ -724,7 +744,7 @@ func TestMergeVariablesFromAppConfig(t *testing.T) {
 			existingVars: nil,
 			appConfig: &appconfig.AppConfig{
 				EnvVars: []appconfig.AppEnvVar{
-					{Name: "NEW_VAR", Value: "new_value"},
+					{Key: "NEW_VAR", Value: "new_value"},
 				},
 			},
 			wantVars: []core_v1alpha.Variable{

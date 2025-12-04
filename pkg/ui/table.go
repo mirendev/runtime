@@ -12,8 +12,60 @@ import (
 
 // Column defines a table column with title and width
 type Column struct {
-	Title string
-	Width int
+	Title      string
+	Width      int
+	NoTruncate bool // If true, this column won't be truncated when scaling
+}
+
+// ColumnHint provides configuration hints for a specific column
+type ColumnHint struct {
+	MaxWidth   int  // Maximum width (0 = no limit)
+	NoTruncate bool // If true, this column won't be scaled down
+	MinWidth   int  // Minimum width when scaling (0 = use default)
+}
+
+// ColumnBuilder helps configure column options using a fluent API
+type ColumnBuilder struct {
+	hints map[int]ColumnHint
+}
+
+// Columns creates a new ColumnBuilder for configuring column options
+func Columns() *ColumnBuilder {
+	return &ColumnBuilder{hints: make(map[int]ColumnHint)}
+}
+
+// NoTruncate marks the specified column indices as non-truncatable
+func (b *ColumnBuilder) NoTruncate(indices ...int) *ColumnBuilder {
+	for _, i := range indices {
+		h := b.hints[i]
+		h.NoTruncate = true
+		b.hints[i] = h
+	}
+	return b
+}
+
+// MaxWidth sets the maximum width for a specific column
+func (b *ColumnBuilder) MaxWidth(index, width int) *ColumnBuilder {
+	h := b.hints[index]
+	h.MaxWidth = width
+	b.hints[index] = h
+	return b
+}
+
+// MinWidth sets the minimum width for a specific column when scaling
+func (b *ColumnBuilder) MinWidth(index, width int) *ColumnBuilder {
+	h := b.hints[index]
+	h.MinWidth = width
+	b.hints[index] = h
+	return b
+}
+
+// getHint returns the hint for a column index, or an empty hint if none exists
+func (b *ColumnBuilder) getHint(index int) ColumnHint {
+	if b == nil {
+		return ColumnHint{}
+	}
+	return b.hints[index]
 }
 
 // Row represents a single row of data in the table
@@ -81,9 +133,10 @@ func NewTable(opts ...TableOption) *Table {
 	return t
 }
 
-// AutoSizeColumns calculates optimal column widths based on content
-// with optional maximum widths per column, respecting terminal width
-func AutoSizeColumns(headers []string, rows []Row, maxWidths ...int) []Column {
+// AutoSizeColumns calculates optimal column widths based on content,
+// respecting terminal width and column configuration hints.
+// Pass nil for builder to use default behavior.
+func AutoSizeColumns(headers []string, rows []Row, builder *ColumnBuilder) []Column {
 	if len(headers) == 0 {
 		return nil
 	}
@@ -120,10 +173,20 @@ func AutoSizeColumns(headers []string, rows []Row, maxWidths ...int) []Column {
 		}
 	}
 
-	// Apply max widths if provided
+	// Track which columns are protected from truncation
+	noTruncate := make([]bool, len(headers))
+	for i := range headers {
+		noTruncate[i] = builder.getHint(i).NoTruncate
+	}
+
+	// Apply max widths from hints (skip NoTruncate columns)
 	for i := range widths {
-		if i < len(maxWidths) && maxWidths[i] > 0 {
-			widths[i] = min(widths[i], maxWidths[i])
+		if noTruncate[i] {
+			continue // NoTruncate columns ignore MaxWidth
+		}
+		hint := builder.getHint(i)
+		if hint.MaxWidth > 0 {
+			widths[i] = min(widths[i], hint.MaxWidth)
 		}
 	}
 
@@ -134,22 +197,46 @@ func AutoSizeColumns(headers []string, rows []Row, maxWidths ...int) []Column {
 		for _, w := range widths {
 			totalWidth += w
 		}
-		totalWidth += (len(headers) - 1) * 2 // 2 spaces between each column
+		spacing := (len(headers) - 1) * 2 // 2 spaces between each column
+		totalWidth += spacing
 
-		// If total width exceeds terminal width, scale down proportionally
+		// If total width exceeds terminal width, scale down non-protected columns
 		if totalWidth > termWidth {
-			availableWidth := termWidth - (len(headers)-1)*2 // subtract space for margins
-
-			// Calculate scaling factor
-			scaleFactor := float64(availableWidth) / float64(totalWidth-(len(headers)-1)*2)
-
-			// Scale each column width
-			for i := range widths {
-				newWidth := int(float64(widths[i]) * scaleFactor)
-				if newWidth < 10 { // Minimum column width
-					newWidth = 10
+			// Calculate protected width (columns that can't be truncated)
+			protectedWidth := 0
+			scalableWidth := 0
+			for i, w := range widths {
+				if noTruncate[i] {
+					protectedWidth += w
+				} else {
+					scalableWidth += w
 				}
-				widths[i] = newWidth
+			}
+
+			// Available width for scalable columns
+			availableForScalable := termWidth - spacing - protectedWidth
+
+			// Only scale if there's something to scale and room to do it
+			if scalableWidth > 0 && availableForScalable > 0 {
+				scaleFactor := float64(availableForScalable) / float64(scalableWidth)
+
+				for i := range widths {
+					if noTruncate[i] {
+						continue // Don't scale protected columns
+					}
+
+					hint := builder.getHint(i)
+					minWidth := hint.MinWidth
+					if minWidth <= 0 {
+						minWidth = 10 // Default minimum
+					}
+
+					newWidth := int(float64(widths[i]) * scaleFactor)
+					if newWidth < minWidth {
+						newWidth = minWidth
+					}
+					widths[i] = newWidth
+				}
 			}
 		}
 	}
@@ -158,8 +245,9 @@ func AutoSizeColumns(headers []string, rows []Row, maxWidths ...int) []Column {
 	columns := make([]Column, len(headers))
 	for i, header := range headers {
 		columns[i] = Column{
-			Title: header,
-			Width: widths[i],
+			Title:      header,
+			Width:      widths[i],
+			NoTruncate: noTruncate[i],
 		}
 	}
 
@@ -213,9 +301,15 @@ func (t *Table) renderHeader() string {
 			MaxWidth(col.Width).
 			Inline(true)
 
-		// Truncate with ellipsis and render
-		truncated := runewidth.Truncate(col.Title, col.Width, "…")
-		renderedCell := cellStyle.Render(truncated)
+		var renderedCell string
+		if col.NoTruncate {
+			// Don't truncate protected columns
+			renderedCell = cellStyle.Render(col.Title)
+		} else {
+			// Truncate with ellipsis and render
+			truncated := runewidth.Truncate(col.Title, col.Width, "…")
+			renderedCell = cellStyle.Render(truncated)
+		}
 
 		// Apply header styling
 		cells = append(cells, t.styles.Header.Render(renderedCell))
@@ -250,13 +344,14 @@ func (t *Table) renderRow(row Row) string {
 			MaxWidth(col.Width).
 			Inline(true)
 
-		// For already-styled content (like gray sensitive values), we can't easily truncate
-		// because runewidth.Truncate doesn't handle ANSI codes well.
-		// So we only truncate plain text values.
-		// We can detect styled content by checking if it contains ANSI escape sequences.
+		// Determine whether to truncate this cell
 		var renderedCell string
-		if strings.Contains(value, "\x1b[") {
+		if col.NoTruncate {
+			// Don't truncate protected columns
+			renderedCell = cellStyle.Render(value)
+		} else if strings.Contains(value, "\x1b[") {
 			// Already styled - let lipgloss handle width constraints
+			// (runewidth.Truncate doesn't handle ANSI codes well)
 			renderedCell = cellStyle.Render(value)
 		} else {
 			// Plain text - truncate with ellipsis

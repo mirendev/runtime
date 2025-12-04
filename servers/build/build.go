@@ -214,7 +214,7 @@ func buildServicesConfig(appConfig *appconfig.AppConfig, procfileServices map[st
 				svc.Env = make([]core_v1alpha.Env, 0, len(serviceConfig.EnvVars))
 				for _, envVar := range serviceConfig.EnvVars {
 					svc.Env = append(svc.Env, core_v1alpha.Env{
-						Key:    envVar.Name,
+						Key:    envVar.Key,
 						Value:  envVar.Value,
 						Source: "config",
 					})
@@ -236,7 +236,7 @@ func buildVariablesFromAppConfig(appConfig *appconfig.AppConfig) []core_v1alpha.
 	variables := make([]core_v1alpha.Variable, 0, len(appConfig.EnvVars))
 	for _, envVar := range appConfig.EnvVars {
 		variables = append(variables, core_v1alpha.Variable{
-			Key:    envVar.Name,
+			Key:    envVar.Key,
 			Value:  envVar.Value,
 			Source: "config",
 		})
@@ -495,7 +495,7 @@ func (b *Builder) BuildFromTar(ctx context.Context, state *build_v1alpha.Builder
 	b.Log.Debug("resolved cluster.local", "ip", ip.String())
 
 	b.Log.Info("starting buildkit launch", "clusterIP", ip.String(), "logEntity", name)
-	rbk, err := lbk.Launch(ctx, ip.String(), WithLogEntity(name), WithLogAttrs(map[string]string{
+	rbk, err := lbk.Launch(ctx, ip.String(), WithLogEntity(name), WithAppName(name), WithLogAttrs(map[string]string{
 		"version": "build",
 	}))
 	if err != nil {

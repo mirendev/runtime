@@ -2,15 +2,24 @@ package commands
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"miren.dev/runtime/api/app/app_v1alpha"
-	"miren.dev/runtime/api/compute"
 	"miren.dev/runtime/appconfig"
 	"miren.dev/runtime/pkg/rpc"
 	"miren.dev/runtime/pkg/rpc/standard"
 	"miren.dev/runtime/pkg/rpc/stream"
 )
+
+// normalizeSandboxID ensures the sandbox ID has the "sandbox/" prefix
+// required for log queries. Logs are stored with the full entity ID.
+func normalizeSandboxID(sandboxID string) string {
+	if strings.HasPrefix(sandboxID, "sandbox/") {
+		return sandboxID
+	}
+	return "sandbox/" + sandboxID
+}
 
 func Logs(ctx *Context, opts struct {
 	ConfigCentric
@@ -49,21 +58,9 @@ func Logs(ctx *Context, opts struct {
 		return err
 	}
 
-	// If sandbox ID is provided, resolve it to the full entity ID
+	// Normalize sandbox ID to include the "sandbox/" prefix for log queries
 	if opts.Sandbox != "" {
-		entityClient, err := ctx.RPCClient("entities")
-		if err != nil {
-			return err
-		}
-
-		computeClient := compute.NewClient(ctx.Log, entityClient)
-
-		sandbox, err := computeClient.GetSandbox(ctx, opts.Sandbox)
-		if err != nil {
-			return fmt.Errorf("failed to find sandbox %s: %w", opts.Sandbox, err)
-		}
-
-		opts.Sandbox = sandbox.ID.String()
+		opts.Sandbox = normalizeSandboxID(opts.Sandbox)
 	}
 
 	// Check if server supports streaming

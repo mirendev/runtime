@@ -10,9 +10,8 @@ import (
 )
 
 type AppEnvVar struct {
-	Name      string `json:"name" toml:"key"`
-	Value     string `json:"value" toml:"value"`
-	Generator string `json:"generator" toml:"generator"`
+	Key   string `json:"key" toml:"key"`
+	Value string `json:"value" toml:"value"`
 }
 
 type BuildConfig struct {
@@ -139,6 +138,13 @@ func Parse(data []byte) (*AppConfig, error) {
 
 // Validate checks that the AppConfig has valid values
 func (ac *AppConfig) Validate() error {
+	// Validate global environment variables
+	for i, ev := range ac.EnvVars {
+		if ev.Key == "" {
+			return fmt.Errorf("env[%d]: key is required", i)
+		}
+	}
+
 	// Validate service configurations
 	for serviceName, svcConfig := range ac.Services {
 		if svcConfig == nil {
@@ -180,6 +186,13 @@ func (ac *AppConfig) Validate() error {
 				if concurrency.ScaleDownDelay != "" {
 					return fmt.Errorf("service %s: scale_down_delay cannot be set in fixed mode", serviceName)
 				}
+			}
+		}
+
+		// Validate service environment variables
+		for i, ev := range svcConfig.EnvVars {
+			if ev.Key == "" {
+				return fmt.Errorf("service %s: env[%d] key is required", serviceName, i)
 			}
 		}
 

@@ -149,7 +149,7 @@ func (m *PickerModel) View() string {
 	}
 
 	// Auto-size columns
-	columns := AutoSizeColumns(headers, rows)
+	columns := AutoSizeColumns(headers, rows, nil)
 
 	// Style for selected row
 	selectedStyle := lipgloss.NewStyle().

@@ -33,6 +33,7 @@ type RunningBuildkit struct {
 type launchOptions struct {
 	logEntity string
 	attrs     map[string]string
+	appName   string
 }
 
 type LaunchOption func(*launchOptions)
@@ -47,6 +48,45 @@ func WithLogAttrs(attrs map[string]string) LaunchOption {
 	return func(lo *launchOptions) {
 		lo.attrs = maps.Clone(attrs)
 	}
+}
+
+func WithAppName(appName string) LaunchOption {
+	return func(lo *launchOptions) {
+		lo.appName = appName
+	}
+}
+
+// sanitizeNameForID cleans a name for use in entity identifiers.
+// Only lowercase ASCII letters, numbers, and hyphens are allowed.
+func sanitizeNameForID(name string) string {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return ""
+	}
+
+	var cleaned strings.Builder
+	lastWasHyphen := false
+
+	for _, r := range name {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			cleaned.WriteRune(r)
+			lastWasHyphen = false
+		} else if r >= 'A' && r <= 'Z' {
+			// Convert uppercase to lowercase
+			cleaned.WriteRune(r + 32)
+			lastWasHyphen = false
+		} else if r == ' ' || r == '-' || r == '_' || r == '/' || r == ':' {
+			// Convert separators to a single hyphen, avoiding consecutive hyphens
+			if !lastWasHyphen && cleaned.Len() > 0 {
+				cleaned.WriteRune('-')
+				lastWasHyphen = true
+			}
+		}
+		// Skip all other characters
+	}
+
+	result := cleaned.String()
+	return strings.Trim(result, "-")
 }
 
 func (l *LaunchBuildkit) generateConfig() string {
@@ -147,15 +187,20 @@ func (l *LaunchBuildkit) Launch(ctx context.Context, addr string, lo ...LaunchOp
 		},
 	})
 
-	ver := idgen.GenNS("sb")
-	l.log.Info("creating buildkit sandbox entity", "name", ver)
+	// Generate sandbox name with format build-{app}-{id} for easy identification
+	prefix := "build"
+	if sanitized := sanitizeNameForID(opts.appName); sanitized != "" {
+		prefix = "build-" + sanitized
+	}
+	sbName := idgen.GenNS(prefix)
+	l.log.Info("creating buildkit sandbox entity", "name", sbName)
 
 	var rpcE entityserver_v1alpha.Entity
 	rpcE.SetAttrs(entity.New(
 		(&core_v1alpha.Metadata{
-			Name: ver,
+			Name: sbName,
 		}).Encode,
-		entity.Ident, "sandbox/"+ver,
+		entity.Ident, "sandbox/"+sbName,
 		sb.Encode,
 	).Attrs())
 
@@ -242,6 +287,20 @@ func (l *RunningBuildkit) Client(ctx context.Context) (*buildkit.Client, error) 
 }
 
 func (l *RunningBuildkit) Close(ctx context.Context) error {
-	_, err := l.eac.Delete(ctx, l.id)
-	return err
+	// Stop the sandbox instead of deleting it so build logs remain accessible.
+	// The sandbox will be cleaned up naturally by the sandbox controller.
+	patchAttrs := entity.New(
+		entity.Ref(entity.DBId, entity.Id(l.id)),
+		(&compute_v1alpha.Sandbox{
+			Status: compute_v1alpha.STOPPED,
+		}).Encode,
+	)
+
+	_, err := l.eac.Patch(ctx, patchAttrs.Attrs(), 0)
+	if err != nil {
+		l.log.Error("failed to stop buildkit sandbox", "error", err, "id", l.id)
+		return err
+	}
+	l.log.Info("stopped buildkit sandbox", "id", l.id)
+	return nil
 }

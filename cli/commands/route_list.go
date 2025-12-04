@@ -88,7 +88,7 @@ func RouteList(ctx *Context, opts struct {
 		return nil
 	}
 
-	columns := ui.AutoSizeColumns(headers, rows)
+	columns := ui.AutoSizeColumns(headers, rows, ui.Columns().NoTruncate(0))
 	table := ui.NewTable(
 		ui.WithColumns(columns),
 		ui.WithRows(rows),
