@@ -404,7 +404,7 @@ func TestDiskController_MountExistingVolumeAfterRestart(t *testing.T) {
 			},
 		}
 
-		controller1 := NewDiskControllerWithMountPath(log, nil, mockClient1, tempDir, "")
+		controller1 := NewDiskControllerWithMountPath(log, nil, mockClient1, tempDir)
 
 		disk := &storage_v1alpha.Disk{
 			ID:         entity.Id("disk/restart-test"),
@@ -453,7 +453,7 @@ func TestDiskController_MountExistingVolumeAfterRestart(t *testing.T) {
 			},
 		}
 
-		controller2 := NewDiskControllerWithMountPath(log, nil, mockClient2, tempDir, "")
+		controller2 := NewDiskControllerWithMountPath(log, nil, mockClient2, tempDir)
 
 		// Step 3: Handle the provisioned disk with new controller
 		// This should detect the existing volume and attempt to mount it

@@ -25,7 +25,7 @@ func TestDiskControllersCanBeCreated(t *testing.T) {
 		r.NotNil(lsvdClient)
 
 		// Create disk controller
-		diskController := disk.NewDiskController(log, nil, lsvdClient, "")
+		diskController := disk.NewDiskController(log, nil, lsvdClient)
 		r.NotNil(diskController)
 
 		// Create disk lease controller
@@ -47,7 +47,7 @@ func TestDiskControllersCanBeCreated(t *testing.T) {
 		// Create controllers
 		dataPath := "/tmp/test-disks"
 		lsvdClient := disk.NewLsvdClient(log, dataPath)
-		diskController := disk.NewDiskController(log, nil, lsvdClient, "")
+		diskController := disk.NewDiskController(log, nil, lsvdClient)
 		diskLeaseController := disk.NewDiskLeaseController(log, nil, nil)
 
 		// Verify they can be adapted for the controller manager

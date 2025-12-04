@@ -52,24 +52,20 @@ type DiskController struct {
 
 	// directoryMode is enabled when NBD is unavailable - disks are simple directories
 	directoryMode bool
-
-	// organizationID is used for generating org-scoped deterministic volume IDs
-	organizationID string
 }
 
 // NewDiskController creates a new disk controller
-func NewDiskController(log *slog.Logger, eac *entityserver_v1alpha.EntityAccessClient, lsvdClient LsvdClient, orgID string) *DiskController {
+func NewDiskController(log *slog.Logger, eac *entityserver_v1alpha.EntityAccessClient, lsvdClient LsvdClient) *DiskController {
 	return &DiskController{
-		Log:            log.With("module", "disk"),
-		EAC:            eac,
-		lsvdClient:     lsvdClient,
-		mountBasePath:  "/var/lib/miren/disks", // Default mount base path
-		organizationID: orgID,
+		Log:           log.With("module", "disk"),
+		EAC:           eac,
+		lsvdClient:    lsvdClient,
+		mountBasePath: "/var/lib/miren/disks", // Default mount base path
 	}
 }
 
 // NewDiskControllerWithClients creates a new disk controller with separate clients for local and remote-only modes
-func NewDiskControllerWithClients(log *slog.Logger, eac *entityserver_v1alpha.EntityAccessClient, defaultClient, localReplicaClient, remoteOnlyClient LsvdClient, orgID string) *DiskController {
+func NewDiskControllerWithClients(log *slog.Logger, eac *entityserver_v1alpha.EntityAccessClient, defaultClient, localReplicaClient, remoteOnlyClient LsvdClient) *DiskController {
 	return &DiskController{
 		Log:                log.With("module", "disk"),
 		EAC:                eac,
@@ -77,18 +73,16 @@ func NewDiskControllerWithClients(log *slog.Logger, eac *entityserver_v1alpha.En
 		localReplicaClient: localReplicaClient,
 		remoteOnlyClient:   remoteOnlyClient,
 		mountBasePath:      "/var/lib/miren/disks", // Default mount base path
-		organizationID:     orgID,
 	}
 }
 
 // NewDiskControllerWithMountPath creates a new disk controller with custom mount path
-func NewDiskControllerWithMountPath(log *slog.Logger, eac *entityserver_v1alpha.EntityAccessClient, lsvdClient LsvdClient, mountPath string, orgID string) *DiskController {
+func NewDiskControllerWithMountPath(log *slog.Logger, eac *entityserver_v1alpha.EntityAccessClient, lsvdClient LsvdClient, mountPath string) *DiskController {
 	return &DiskController{
-		Log:            log.With("module", "disk"),
-		EAC:            eac,
-		lsvdClient:     lsvdClient,
-		mountBasePath:  mountPath,
-		organizationID: orgID,
+		Log:           log.With("module", "disk"),
+		EAC:           eac,
+		lsvdClient:    lsvdClient,
+		mountBasePath: mountPath,
 	}
 }
 

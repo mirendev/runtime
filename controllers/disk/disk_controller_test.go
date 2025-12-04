@@ -12,7 +12,7 @@ import (
 
 func TestDiskController_New(t *testing.T) {
 	log := slog.Default()
-	controller := NewDiskController(log, nil, nil, "")
+	controller := NewDiskController(log, nil, nil)
 
 	assert.NotNil(t, controller)
 	assert.NotNil(t, controller.Log)
@@ -22,7 +22,7 @@ func TestDiskController_New(t *testing.T) {
 func TestDiskController_NewWithMountPath(t *testing.T) {
 	log := slog.Default()
 	customPath := "/custom/mount/path"
-	controller := NewDiskControllerWithMountPath(log, nil, nil, customPath, "")
+	controller := NewDiskControllerWithMountPath(log, nil, nil, customPath)
 
 	assert.NotNil(t, controller)
 	assert.Equal(t, customPath, controller.mountBasePath)
@@ -31,7 +31,7 @@ func TestDiskController_NewWithMountPath(t *testing.T) {
 func TestDiskController_ProvisionDisk(t *testing.T) {
 	t.Run("provisions new disk", func(t *testing.T) {
 		log := slog.Default()
-		controller := NewDiskController(log, nil, nil, "")
+		controller := NewDiskController(log, nil, nil)
 
 		// Create a disk entity
 		disk := &storage_v1alpha.Disk{
@@ -49,7 +49,7 @@ func TestDiskController_ProvisionDisk(t *testing.T) {
 
 	t.Run("unprovisions disk volume", func(t *testing.T) {
 		log := slog.Default()
-		controller := NewDiskController(log, nil, nil, "")
+		controller := NewDiskController(log, nil, nil)
 
 		// Create a disk marked for deletion
 		disk := &storage_v1alpha.Disk{
@@ -66,7 +66,7 @@ func TestDiskController_ProvisionDisk(t *testing.T) {
 
 	t.Run("handles invalid disk size", func(t *testing.T) {
 		log := slog.Default()
-		controller := NewDiskController(log, nil, nil, "")
+		controller := NewDiskController(log, nil, nil)
 
 		// Create a disk with invalid size
 		disk := &storage_v1alpha.Disk{
@@ -89,7 +89,7 @@ func TestDiskController_Provisioning(t *testing.T) {
 			volumes: make(map[string]VolumeInfo),
 		}
 
-		controller := NewDiskController(log, nil, mockClient, "")
+		controller := NewDiskController(log, nil, mockClient)
 
 		disk := &storage_v1alpha.Disk{
 			Name:       "provision-test-disk",
@@ -119,7 +119,7 @@ func TestDiskController_Provisioning(t *testing.T) {
 			volumes: make(map[string]VolumeInfo),
 		}
 
-		controller := NewDiskController(log, nil, mockClient, "")
+		controller := NewDiskController(log, nil, mockClient)
 
 		// Create a volume in SegmentAccess
 		volumeId := "delete-test-vol"

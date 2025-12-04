@@ -164,6 +164,9 @@ func (t *replicaWriter) OpenVolume(ctx context.Context, vol string) (Volume, err
 }
 
 func (t *replicaWriter) GetVolumeInfo(ctx context.Context, vol string) (*VolumeInfo, error) {
+	// NOTE we used to verify that both voluses returned the same info.
+	// But the user has already bound these volumes together at this point,
+	// so we can just return the primary's info and fall back to replica if needed.
 	wInfo, err := t.primary.GetVolumeInfo(ctx, vol)
 	if err == nil {
 		return wInfo, nil

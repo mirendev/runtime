@@ -346,15 +346,12 @@ func (r *Runner) SetupControllers(
 		localReplicaClient := disk.NewLsvdClient(log, dataPath, disk.WithReplica(authClient, r.CloudAuth.CloudURL))
 		remoteOnlyClient := disk.NewLsvdClient(log, dataPath, disk.WithRemoteOnly(authClient, r.CloudAuth.CloudURL))
 
-		// Get organization ID for deterministic volume ID generation
-		orgID := r.CloudAuth.Tags["organization_id"]
-
 		lsvdClient = localReplicaClient
-		diskController = disk.NewDiskControllerWithClients(log, eas, lsvdClient, localReplicaClient, remoteOnlyClient, orgID)
+		diskController = disk.NewDiskControllerWithClients(log, eas, lsvdClient, localReplicaClient, remoteOnlyClient)
 		diskLeaseController = disk.NewDiskLeaseControllerWithClients(log, eas, lsvdClient, localReplicaClient, remoteOnlyClient)
 	} else {
 		lsvdClient = disk.NewLsvdClient(log, dataPath)
-		diskController = disk.NewDiskController(log, eas, lsvdClient, "") // Empty org ID for local-only mode
+		diskController = disk.NewDiskController(log, eas, lsvdClient)
 		diskLeaseController = disk.NewDiskLeaseController(log, eas, lsvdClient)
 	}
 

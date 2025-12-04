@@ -21,7 +21,7 @@ func TestSandboxDiskIntegration(t *testing.T) {
 		log := slog.Default()
 
 		// Create controllers
-		diskController := NewDiskController(log, nil, nil, "")
+		diskController := NewDiskController(log, nil, nil)
 		leaseController := NewDiskLeaseController(log, nil, nil)
 
 		// Step 1: Create and provision a disk
@@ -192,7 +192,7 @@ func TestSandboxDiskIntegration(t *testing.T) {
 		ctx := context.Background()
 		log := slog.Default()
 
-		diskController := NewDiskController(log, nil, nil, "")
+		diskController := NewDiskController(log, nil, nil)
 		leaseController := NewDiskLeaseController(log, nil, nil)
 
 		// Create multiple disks
