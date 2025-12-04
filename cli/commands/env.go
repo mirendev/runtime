@@ -400,10 +400,11 @@ func printEnvTable(ctx *Context, entries []envVarEntry) {
 	columns := ui.AutoSizeColumns(
 		[]string{"NAME", "VALUE", "SERVICE", "SOURCE"},
 		rows,
-		30, // max width for NAME column
-		40, // max width for VALUE column
-		15, // max width for SERVICE column
-		12, // max width for SOURCE column
+		ui.Columns().
+			MaxWidth(0, 30). // NAME
+			MaxWidth(1, 40). // VALUE
+			MaxWidth(2, 15). // SERVICE
+			MaxWidth(3, 12), // SOURCE
 	)
 
 	// Create and render the table

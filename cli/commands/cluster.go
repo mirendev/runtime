@@ -112,7 +112,7 @@ func ClusterList(ctx *Context, opts struct {
 	}
 
 	// Create and render the table
-	columns := ui.AutoSizeColumns(headers, rows)
+	columns := ui.AutoSizeColumns(headers, rows, nil)
 	table := ui.NewTable(
 		ui.WithColumns(columns),
 		ui.WithRows(rows),
