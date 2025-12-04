@@ -99,7 +99,7 @@ miren login
 ### Install a Server on Linux
 
 ```bash
-miren server install -n my-cluster
+sudo miren server install -n my-cluster
 ```
 
 ### Install a Server inside Docker
@@ -107,6 +107,7 @@ miren server install -n my-cluster
 ```bash
 miren server docker install -n my-cluster
 ```
+
 ## Output Formats
 
 Many commands support different output formats:
