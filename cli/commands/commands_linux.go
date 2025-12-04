@@ -22,12 +22,12 @@ func addCommands(cmds map[string]cli.CommandFactory) {
 	// Server command is now defined in commands.go (renamed from dev)
 
 	// Cloud registration commands
-	cmds["register"] = func() (cli.Command, error) {
-		return Infer("register", "Register this cluster with miren.cloud", Register), nil
+	cmds["server register"] = func() (cli.Command, error) {
+		return Infer("server register", "Register this cluster with miren.cloud", Register), nil
 	}
 
-	cmds["register status"] = func() (cli.Command, error) {
-		return Infer("register status", "Show cluster registration status", RegisterStatus), nil
+	cmds["server register status"] = func() (cli.Command, error) {
+		return Infer("server register status", "Show cluster registration status", RegisterStatus), nil
 	}
 
 	// Server management commands

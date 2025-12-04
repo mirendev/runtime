@@ -13,6 +13,13 @@ The Miren CLI (`miren`) provides commands for managing applications and deployme
 - `miren deploy` - Deploy the current project
 - `miren init` - Initialize a new application
 
+### Server Install
+
+- `miren server install` - Usually run via sudo, setup the server with systemd
+- `miren server uninstall` - Run as root, remove the global server install
+- `miren server docker install` - Setup a server in the local docker
+- `miren server docker uninstall` - Remove the server running within docker
+
 ### Application Management
 
 - `miren app` - Get information about an application
@@ -39,7 +46,7 @@ The Miren CLI (`miren`) provides commands for managing applications and deployme
 - `miren cluster remove` - Remove a cluster from the configuration
 - `miren cluster switch` - Switch to a different cluster
 - `miren login` - Authenticate with miren.cloud
-- `miren register` - Register this cluster with miren.cloud
+- `miren server register` - Register this cluster with miren.cloud
 - `miren whoami` - Display information about the current authenticated user
 
 ### Advanced Commands
@@ -89,12 +96,17 @@ auth:
 miren login
 ```
 
-### Register a Cluster
+### Install a Server on Linux
 
 ```bash
-miren register -n my-cluster
+miren server install -n my-cluster
 ```
 
+### Install a Server inside Docker
+
+```bash
+miren server docker install -n my-cluster
+```
 ## Output Formats
 
 Many commands support different output formats:

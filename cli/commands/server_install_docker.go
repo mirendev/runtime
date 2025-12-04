@@ -62,6 +62,10 @@ func ServerInstallDocker(ctx *Context, opts struct {
 		return fmt.Errorf("failed to ensure volume exists: %w", err)
 	}
 
+	if opts.ClusterName != "" {
+		opts.ClusterName = opts.Name
+	}
+
 	// Register with cloud unless --without-cloud is specified
 	if !opts.WithoutCloud {
 		if err := performDockerRegistrationPreStart(ctx, opts.Image, volumeName, dockerRegistrationOptions{
@@ -71,7 +75,7 @@ func ServerInstallDocker(ctx *Context, opts struct {
 		}); err != nil {
 			ctx.Warn("Cloud registration failed: %v", err)
 			ctx.Info("Continuing with installation without cloud registration")
-			ctx.Info("You can register later by running: docker exec %s miren register", opts.Name)
+			ctx.Info("You can register later by running: docker exec %s miren server register", opts.Name)
 		} else {
 			ctx.Completed("Cloud registration complete")
 		}
