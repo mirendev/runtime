@@ -37,25 +37,28 @@ func Deploy(ctx *Context, opts struct {
 	name := opts.App
 	dir := opts.Dir
 
-	// Confirm deployment unless --force is used or stdin is not a TTY
+	// Confirm deployment unless --force is used, stdin is not a TTY, or only one cluster is configured
 	isInteractive := term.IsTerminal(int(os.Stdin.Fd()))
-	if !opts.Force && isInteractive {
+	hasSingleCluster := ctx.ClientConfig != nil && ctx.ClientConfig.GetClusterCount() == 1
+	if !opts.Force && isInteractive && !hasSingleCluster {
 		message := fmt.Sprintf("Deploy app '%s' to cluster '%s'?", name, ctx.ClusterName)
 		confirmed, err := ui.Confirm(
 			ui.WithMessage(message),
 			ui.WithDefault(true),
+			ui.WithIndent("  "),
 		)
 		if err != nil {
 			return fmt.Errorf("confirmation cancelled: %w", err)
 		}
 		if !confirmed {
-			ctx.Printf("deployment cancelled\n")
+			ctx.Printf("  deployment cancelled\n")
 			return nil
 		}
 	}
 
 	greenStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("10"))
-	ctx.Printf("  ✓ %s: %s\n", greenStyle.Render("Deploying to cluster"), ctx.ClusterName)
+	faintStyle := lipgloss.NewStyle().Faint(true)
+	ctx.Printf("  ✓ %s: %s %s %s\n", greenStyle.Render("Deploying"), name, faintStyle.Render("→"), ctx.ClusterName)
 
 	cl, err := ctx.RPCClient("dev.miren.runtime/build")
 	if err != nil {

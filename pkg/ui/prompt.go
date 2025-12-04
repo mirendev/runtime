@@ -163,6 +163,7 @@ type confirmConfig struct {
 	affirmative string
 	negative    string
 	defaultYes  bool
+	indent      string
 }
 
 // WithMessage sets the confirmation message
@@ -193,6 +194,13 @@ func WithDefault(defaultYes bool) ConfirmOption {
 	}
 }
 
+// WithIndent sets the indentation prefix for the prompt
+func WithIndent(indent string) ConfirmOption {
+	return func(c *confirmConfig) {
+		c.indent = indent
+	}
+}
+
 // Confirm displays a yes/no confirmation prompt
 func Confirm(opts ...ConfirmOption) (bool, error) {
 	// Apply default configuration
@@ -201,6 +209,7 @@ func Confirm(opts ...ConfirmOption) (bool, error) {
 		affirmative: "yes",
 		negative:    "no",
 		defaultYes:  false,
+		indent:      "",
 	}
 
 	// Apply options
@@ -214,6 +223,7 @@ func Confirm(opts ...ConfirmOption) (bool, error) {
 		affirmative: config.affirmative,
 		negative:    config.negative,
 		defaultYes:  config.defaultYes,
+		indent:      config.indent,
 	}
 
 	p := tea.NewProgram(model)
@@ -236,6 +246,7 @@ type confirmModel struct {
 	affirmative string
 	negative    string
 	defaultYes  bool
+	indent      string
 	confirmed   bool
 	err         error
 }
@@ -267,7 +278,6 @@ func (m confirmModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m confirmModel) View() string {
-	promptStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
 	highlightStyle := lipgloss.NewStyle().Bold(true)
 
 	var prompt string
@@ -277,10 +287,5 @@ func (m confirmModel) View() string {
 		prompt = fmt.Sprintf("(y/%s)", highlightStyle.Render("N"))
 	}
 
-	return fmt.Sprintf(
-		"%s %s\n\n%s",
-		m.message,
-		prompt,
-		promptStyle.Render("Press y/n or enter for default, esc to cancel"),
-	)
+	return fmt.Sprintf("%s%s %s", m.indent, m.message, prompt)
 }
