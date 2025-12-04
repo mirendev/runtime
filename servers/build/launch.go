@@ -33,6 +33,7 @@ type RunningBuildkit struct {
 type launchOptions struct {
 	logEntity string
 	attrs     map[string]string
+	appName   string
 }
 
 type LaunchOption func(*launchOptions)
@@ -46,6 +47,12 @@ func WithLogEntity(logEntity string) LaunchOption {
 func WithLogAttrs(attrs map[string]string) LaunchOption {
 	return func(lo *launchOptions) {
 		lo.attrs = maps.Clone(attrs)
+	}
+}
+
+func WithAppName(appName string) LaunchOption {
+	return func(lo *launchOptions) {
+		lo.appName = appName
 	}
 }
 
@@ -147,15 +154,20 @@ func (l *LaunchBuildkit) Launch(ctx context.Context, addr string, lo ...LaunchOp
 		},
 	})
 
-	ver := idgen.GenNS("sb")
-	l.log.Info("creating buildkit sandbox entity", "name", ver)
+	// Generate sandbox name with format build-{app}-{id} for easy identification
+	prefix := "build"
+	if opts.appName != "" {
+		prefix = "build-" + opts.appName
+	}
+	sbName := idgen.GenNS(prefix)
+	l.log.Info("creating buildkit sandbox entity", "name", sbName)
 
 	var rpcE entityserver_v1alpha.Entity
 	rpcE.SetAttrs(entity.New(
 		(&core_v1alpha.Metadata{
-			Name: ver,
+			Name: sbName,
 		}).Encode,
-		entity.Ident, "sandbox/"+ver,
+		entity.Ident, "sandbox/"+sbName,
 		sb.Encode,
 	).Attrs())
 
@@ -242,6 +254,20 @@ func (l *RunningBuildkit) Client(ctx context.Context) (*buildkit.Client, error) 
 }
 
 func (l *RunningBuildkit) Close(ctx context.Context) error {
-	_, err := l.eac.Delete(ctx, l.id)
-	return err
+	// Stop the sandbox instead of deleting it so build logs remain accessible.
+	// The sandbox will be cleaned up naturally by the sandbox controller.
+	patchAttrs := entity.New(
+		entity.Ref(entity.DBId, entity.Id(l.id)),
+		(&compute_v1alpha.Sandbox{
+			Status: compute_v1alpha.STOPPED,
+		}).Encode,
+	)
+
+	_, err := l.eac.Patch(ctx, patchAttrs.Attrs(), 0)
+	if err != nil {
+		l.log.Error("failed to stop buildkit sandbox", "error", err, "id", l.id)
+		return err
+	}
+	l.log.Info("stopped buildkit sandbox", "id", l.id)
+	return nil
 }
