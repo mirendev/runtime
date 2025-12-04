@@ -196,7 +196,7 @@ func AppList(ctx *Context, opts struct {
 		return nil
 	}
 
-	columns := ui.AutoSizeColumns(headers, rows)
+	columns := ui.AutoSizeColumns(headers, rows, nil)
 	table := ui.NewTable(
 		ui.WithColumns(columns),
 		ui.WithRows(rows),
