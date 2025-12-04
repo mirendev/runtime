@@ -214,7 +214,7 @@ func buildServicesConfig(appConfig *appconfig.AppConfig, procfileServices map[st
 				svc.Env = make([]core_v1alpha.Env, 0, len(serviceConfig.EnvVars))
 				for _, envVar := range serviceConfig.EnvVars {
 					svc.Env = append(svc.Env, core_v1alpha.Env{
-						Key:    envVar.Name,
+						Key:    envVar.Key,
 						Value:  envVar.Value,
 						Source: "config",
 					})
@@ -236,7 +236,7 @@ func buildVariablesFromAppConfig(appConfig *appconfig.AppConfig) []core_v1alpha.
 	variables := make([]core_v1alpha.Variable, 0, len(appConfig.EnvVars))
 	for _, envVar := range appConfig.EnvVars {
 		variables = append(variables, core_v1alpha.Variable{
-			Key:    envVar.Name,
+			Key:    envVar.Key,
 			Value:  envVar.Value,
 			Source: "config",
 		})
