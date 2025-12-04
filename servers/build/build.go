@@ -495,7 +495,7 @@ func (b *Builder) BuildFromTar(ctx context.Context, state *build_v1alpha.Builder
 	b.Log.Debug("resolved cluster.local", "ip", ip.String())
 
 	b.Log.Info("starting buildkit launch", "clusterIP", ip.String(), "logEntity", name)
-	rbk, err := lbk.Launch(ctx, ip.String(), WithLogEntity(name), WithLogAttrs(map[string]string{
+	rbk, err := lbk.Launch(ctx, ip.String(), WithLogEntity(name), WithAppName(name), WithLogAttrs(map[string]string{
 		"version": "build",
 	}))
 	if err != nil {
