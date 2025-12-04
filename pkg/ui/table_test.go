@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -115,6 +116,16 @@ func TestAutoSizeColumns(t *testing.T) {
 		}
 	})
 
+	t.Run("NoTruncate columns ignore MaxWidth", func(t *testing.T) {
+		// If both NoTruncate and MaxWidth are set, NoTruncate takes precedence
+		cols := AutoSizeColumns(headers, rows, Columns().NoTruncate(1).MaxWidth(1, 5))
+
+		// "another-app" is 11 chars; NoTruncate should preserve full width
+		if cols[1].Width < 11 {
+			t.Errorf("expected NoTruncate column to ignore MaxWidth, got width %d", cols[1].Width)
+		}
+	})
+
 	t.Run("empty headers returns nil", func(t *testing.T) {
 		cols := AutoSizeColumns([]string{}, rows, nil)
 		if cols != nil {
@@ -177,18 +188,6 @@ func TestTableRender(t *testing.T) {
 	})
 }
 
-// containsText checks if a string contains text, ignoring ANSI escape codes
 func containsText(s, text string) bool {
-	// Simple check - in real output the text might be wrapped in ANSI codes
-	// but the raw text should still be present
-	return len(s) > 0 && len(text) > 0 && findInString(s, text)
-}
-
-func findInString(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
+	return text != "" && strings.Contains(s, text)
 }

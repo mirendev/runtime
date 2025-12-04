@@ -173,18 +173,21 @@ func AutoSizeColumns(headers []string, rows []Row, builder *ColumnBuilder) []Col
 		}
 	}
 
-	// Apply max widths from hints
-	for i := range widths {
-		hint := builder.getHint(i)
-		if hint.MaxWidth > 0 {
-			widths[i] = min(widths[i], hint.MaxWidth)
-		}
-	}
-
 	// Track which columns are protected from truncation
 	noTruncate := make([]bool, len(headers))
 	for i := range headers {
 		noTruncate[i] = builder.getHint(i).NoTruncate
+	}
+
+	// Apply max widths from hints (skip NoTruncate columns)
+	for i := range widths {
+		if noTruncate[i] {
+			continue // NoTruncate columns ignore MaxWidth
+		}
+		hint := builder.getHint(i)
+		if hint.MaxWidth > 0 {
+			widths[i] = min(widths[i], hint.MaxWidth)
+		}
 	}
 
 	// Only apply terminal width constraints if stdout is a TTY
