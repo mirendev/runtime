@@ -145,17 +145,16 @@ func AppHistory(ctx *Context, opts struct {
 			version = version[:22] + "..."
 		}
 
-		// Format user (prefer email, fallback to username, then user ID)
-		user := dep.DeployedByUserEmail()
-		// Replace placeholder emails with username or user ID as fallback
-		if user == "" || user == "unknown@example.com" || user == "user@example.com" {
-			if dep.HasDeployedByUserName() && dep.DeployedByUserName() != "" {
-				user = dep.DeployedByUserName()
-			} else if dep.DeployedByUserId() != "" {
-				user = dep.DeployedByUserId()
-			} else {
-				user = "-"
-			}
+		// Format user (prefer name, fallback to email, then user ID)
+		user := ""
+		if dep.HasDeployedByUserName() && dep.DeployedByUserName() != "" {
+			user = dep.DeployedByUserName()
+		} else if dep.DeployedByUserEmail() != "" && dep.DeployedByUserEmail() != "unknown@example.com" && dep.DeployedByUserEmail() != "user@example.com" {
+			user = dep.DeployedByUserEmail()
+		} else if dep.DeployedByUserId() != "" {
+			user = dep.DeployedByUserId()
+		} else {
+			user = "-"
 		}
 		if len(user) > 20 {
 			user = user[:17] + "..."
