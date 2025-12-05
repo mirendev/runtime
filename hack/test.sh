@@ -12,7 +12,6 @@ export CONTAINERD_ADDRESS="/run/containerd/containerd.sock"
 
 # Generate configs
 generate_containerd_config
-setup_runsc_config
 
 # Start services
 start_containerd "$CONTAINERD_ADDRESS" "/dev/null"

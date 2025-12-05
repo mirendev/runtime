@@ -59,8 +59,8 @@ func NewHealthVerifier(opts HealthCheckOptions) HealthVerifier {
 func (v *systemdHealthVerifier) VerifyHealth(ctx context.Context, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 
-	// First, check systemd service status
-	if err := v.checkSystemdStatus(ctx); err != nil {
+	// Check systemd service status with retries (service may take a moment to become active after restart)
+	if err := v.checkSystemdStatus(ctx, deadline); err != nil {
 		return fmt.Errorf("systemd service check failed: %w", err)
 	}
 
@@ -74,30 +74,53 @@ func (v *systemdHealthVerifier) VerifyHealth(ctx context.Context, timeout time.D
 	return nil
 }
 
-// checkSystemdStatus checks if the systemd service is active
-func (v *systemdHealthVerifier) checkSystemdStatus(ctx context.Context) error {
-	// Require root for systemd service management
+// checkSystemdStatus checks if the systemd service is active, with retries
+func (v *systemdHealthVerifier) checkSystemdStatus(ctx context.Context, deadline time.Time) error {
 	if os.Geteuid() != 0 {
 		return fmt.Errorf("systemd service management requires root privileges (running as uid %d)", os.Geteuid())
 	}
 
-	cmd := exec.CommandContext(ctx, "systemctl", "is-active", v.opts.ServiceName)
-	output, err := cmd.Output()
-	if err != nil {
-		// Check if service exists
-		checkCmd := exec.CommandContext(ctx, "systemctl", "status", v.opts.ServiceName)
-		if checkErr := checkCmd.Run(); checkErr != nil {
-			return fmt.Errorf("service %s not found", v.opts.ServiceName)
+	// Check if service exists first (only once, not on every retry)
+	// Note: systemctl status returns non-zero when service is stopped, so use list-unit-files
+	checkCmd := exec.CommandContext(ctx, "systemctl", "list-unit-files", v.opts.ServiceName+".service")
+	checkOutput, err := checkCmd.Output()
+	if err != nil || !strings.Contains(string(checkOutput), v.opts.ServiceName) {
+		return fmt.Errorf("service %s not found", v.opts.ServiceName)
+	}
+
+	// Retry until service is active
+	var lastErr error
+	retries := 0
+
+	for time.Now().Before(deadline) && retries < v.opts.MaxRetries {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
 		}
-		return fmt.Errorf("service %s is not active", v.opts.ServiceName)
+
+		cmd := exec.CommandContext(ctx, "systemctl", "is-active", v.opts.ServiceName)
+		output, err := cmd.Output()
+		status := strings.TrimSpace(string(output))
+		if err == nil && status == "active" {
+			return nil
+		}
+		lastErr = fmt.Errorf("service %s is %s, expected active", v.opts.ServiceName, status)
+
+		retries++
+		if retries < v.opts.MaxRetries && time.Now().Before(deadline) {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(v.opts.RetryDelay):
+			}
+		}
 	}
 
-	status := strings.TrimSpace(string(output))
-	if status != "active" {
-		return fmt.Errorf("service %s is %s, expected active", v.opts.ServiceName, status)
+	if lastErr != nil {
+		return fmt.Errorf("%w (after %d retries)", lastErr, retries)
 	}
-
-	return nil
+	return fmt.Errorf("service did not become active after %d retries", retries)
 }
 
 // checkHealthEndpoint checks if the health endpoint is responding

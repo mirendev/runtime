@@ -1,15 +1,14 @@
 #!/bin/bash
 # Common setup functions for test.sh and dev.sh
 
-# Setup cgroups for runsc
+# Setup cgroups for container runtimes
 setup_cgroups() {
     if [ -d /sys/fs/cgroup/inner ]; then
         # Already set up
         return
     fi
 
-    # Solve the issue of runsc not being able to manipulate subtree_control
-    # by moving everything here into a new cgroup so the root can be changed.
+    # Move processes to an inner cgroup so subtree_control can be modified.
     mkdir /sys/fs/cgroup/inner
 
     cat /sys/fs/cgroup/cgroup.procs | while read -r pid; do
@@ -36,10 +35,6 @@ version = 2
   shim_debug = true
 [plugins."io.containerd.grpc.v1.cri".containerd.runtimes.runc]
   runtime_type = "io.containerd.runc.v2"
-[plugins."io.containerd.grpc.v1.cri".containerd.runtimes.runsc]
-  runtime_type = "io.containerd.runsc.v1"
-[plugins."io.containerd.grpc.v1.cri".containerd.runtimes.miren]
-  runtime_type = "io.containerd.runsc.v1"
 EOF
 
     # Add metrics config if address provided
@@ -50,18 +45,6 @@ EOF
   address = "$metrics_address"
 EOF
     fi
-}
-
-# Setup runsc config
-setup_runsc_config() {
-    cat <<EOF >/etc/containerd/runsc.toml
-log_path = "/var/log/runsc/%ID%/shim.log"
-log_level = "debug"
-binary_name = "/src/hack/runsc-ignore"
-[runsc_config]
-  debug = "true"
-  debug-log = "/var/log/runsc/%ID%/gvisor.%COMMAND%.log"
-EOF
 }
 
 # Setup kernel mounts

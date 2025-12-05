@@ -7,7 +7,6 @@ import (
 	"sort"
 	"time"
 
-	"github.com/google/uuid"
 	"miren.dev/runtime/api/core/core_v1alpha"
 	deployment_v1alpha "miren.dev/runtime/api/deployment/deployment_v1alpha"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
@@ -138,9 +137,9 @@ func (d *DeploymentServer) CreateDeployment(ctx context.Context, req *deployment
 	}
 
 	// Get user info from context (will be implemented with auth integration)
-	// For now, use placeholder values
-	userId := "user-" + uuid.New().String()
-	userName := "testuser"
+	// For now, leave empty - the CLI display will show "-" for unknown users
+	userId := ""
+	userName := ""
 	userEmail := ""
 
 	// Create deployment entity

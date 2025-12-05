@@ -28,7 +28,6 @@ The dev environment uses **standalone mode** where miren manages its own contain
 - `make dev-start` - Start environment only (no server, no shell)
 
 The dev environment automatically:
-- Sets up gvisor (runsc) and kernel mounts
 - Builds the miren binary and creates `/bin/m` symlink
 - Generates auth config in `~/.config/miren/clientconfig.yaml`
 - Prepares release directory with required binaries
@@ -141,7 +140,7 @@ m app list
 
 ### ISO Environment
 The project uses **iso** for containerized development with all dependencies provided:
-- `.iso/Dockerfile` - Defines the build environment (Go 1.25, containerd, buildkit, gvisor, etc.)
+- `.iso/Dockerfile` - Defines the build environment (Go 1.25, containerd, buildkit, etc.)
 - `.iso/services.yml` - Defines external service containers (MinIO for object storage)
 - All default `make` targets and `hack/` scripts run inside the isolated container
 - Services are automatically started and ready before commands run
@@ -149,7 +148,7 @@ The project uses **iso** for containerized development with all dependencies pro
 
 ## Architecture Overview
 
-This is the **Miren Runtime** - a container orchestration system built on containerd and gvisor with a custom entity system for managing applications and infrastructure.
+This is the **Miren Runtime** - a container orchestration system built on containerd with a custom entity system for managing applications and infrastructure.
 
 ### Core Components
 
@@ -165,8 +164,8 @@ This is the **Miren Runtime** - a container orchestration system built on contai
 - Default app controller handles app lifecycle
 
 **Sandbox Management** (`controllers/sandbox/`):
-- Sandboxes are isolated execution environments using gvisor
-- Each sandbox runs in a separate containerd container with runsc runtime
+- Sandboxes are isolated execution environments
+- Each sandbox runs in a separate containerd container
 - Network isolation with custom CNI setup
 
 **RPC System** (`pkg/rpc/`):
@@ -190,7 +189,7 @@ This is the **Miren Runtime** - a container orchestration system built on contai
 
 ### Development Environment Setup
 
-The system uses **iso** (isolated Docker environment) for containerized development with all dependencies (containerd, buildkit, gvisor, etcd) provided as services. The development container includes proper cgroup setup for gvisor compatibility.
+The system uses **iso** (isolated Docker environment) for containerized development with all dependencies (containerd, buildkit, etcd) provided as services.
 
 To get started with iso:
 1. Ensure `iso` is installed and available in your PATH
@@ -201,7 +200,6 @@ To get started with iso:
 - Tests must run without any parallelism (`-p 1`) due to shared containerd/buildkit instances
 - Integration tests in `e2e/` directory
 - Test data in various `testdata/` directories
-- Some tests require specific container runtime setup (runsc/gvisor)
 
 ### Code Generation
 
