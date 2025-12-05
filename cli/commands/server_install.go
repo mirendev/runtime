@@ -24,6 +24,74 @@ import (
 	"miren.dev/runtime/pkg/registration"
 )
 
+// installPrerequisites holds information about the system's readiness for installation
+type installPrerequisites struct {
+	hasRoot    bool
+	hasSystemd bool
+	hasDocker  bool
+}
+
+// checkInstallPrerequisites checks all prerequisites and returns their status
+func checkInstallPrerequisites() installPrerequisites {
+	return installPrerequisites{
+		hasRoot:    os.Geteuid() == 0,
+		hasSystemd: checkSystemdAvailable(),
+		hasDocker:  checkDockerAvailable() == nil,
+	}
+}
+
+// checkSystemdAvailable checks if systemd is available on the system
+func checkSystemdAvailable() bool {
+	// Check if systemctl exists and is functional
+	if _, err := exec.LookPath("systemctl"); err != nil {
+		return false
+	}
+
+	// Verify systemd is actually running by checking if we can communicate with it
+	cmd := exec.Command("systemctl", "--version")
+	if err := cmd.Run(); err != nil {
+		return false
+	}
+
+	return true
+}
+
+// printInstallPrerequisiteGuidance prints helpful guidance based on what's available
+func printInstallPrerequisiteGuidance(ctx *Context, prereqs installPrerequisites) {
+	fmt.Println()
+	ctx.Warn("Cannot proceed with systemd installation.")
+	fmt.Println()
+
+	if !prereqs.hasRoot {
+		ctx.Info("Root privileges are required for systemd installation.")
+		fmt.Println("  Run with sudo: sudo miren server install")
+		fmt.Println()
+	}
+
+	if !prereqs.hasSystemd {
+		ctx.Info("systemd is not available on this system.")
+		fmt.Println()
+
+		if prereqs.hasDocker {
+			ctx.Info("Docker is available! You can install using Docker instead:")
+			fmt.Println("  miren server docker install")
+			fmt.Println()
+			ctx.Info("This will run the miren server in a Docker container with automatic restarts.")
+		} else {
+			ctx.Info("Alternative installation options:")
+			fmt.Println()
+			fmt.Println("  1. Install using Docker (recommended for non-systemd systems):")
+			fmt.Println("     First install Docker: https://docs.docker.com/get-docker/")
+			fmt.Println("     Then run: miren server docker install")
+			fmt.Println()
+			fmt.Println("  2. Run the server directly (for testing or development):")
+			fmt.Println("     miren server")
+			fmt.Println()
+			fmt.Println("  3. Use your system's init system to manage the miren server process")
+		}
+	}
+}
+
 // fixSELinuxContext sets the proper SELinux context on the miren binary
 // so systemd can execute it. This is needed on systems like RHEL/Oracle Linux
 // where SELinux is enforcing and /var/lib files get var_lib_t context by default.
@@ -97,10 +165,18 @@ func ServerInstall(ctx *Context, opts struct {
 	CloudURL     string            `short:"u" long:"url" description:"Cloud URL for registration" default:"https://miren.cloud"`
 	Tags         map[string]string `short:"t" long:"tag" description:"Tags for the cluster (key:value)"`
 }) error {
-	// Check if running with sufficient privileges
-	if os.Geteuid() != 0 {
-		return fmt.Errorf("server install requires root privileges (use sudo)")
+	// Check all prerequisites upfront
+	prereqs := checkInstallPrerequisites()
+
+	if !prereqs.hasRoot || !prereqs.hasSystemd {
+		printInstallPrerequisiteGuidance(ctx, prereqs)
+		if !prereqs.hasRoot {
+			return fmt.Errorf("root privileges required")
+		}
+		return fmt.Errorf("systemd not available")
 	}
+
+	ctx.Completed("Prerequisites verified (root, systemd)")
 
 	// Check if miren binary exists, download if not
 	mirenPath := "/var/lib/miren/release/miren"
