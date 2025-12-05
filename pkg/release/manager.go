@@ -52,10 +52,8 @@ func NewManager(opts ManagerOptions) *Manager {
 		BackupSuffix: ".old",
 	}
 
-	healthOpts := HealthCheckOptions{
-		ServiceName: opts.ServiceName,
-		// Health endpoint can be configured later
-	}
+	healthOpts := DefaultHealthCheckOptions()
+	healthOpts.ServiceName = opts.ServiceName
 
 	return &Manager{
 		downloader: NewDownloader(),
