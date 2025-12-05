@@ -81,14 +81,15 @@ func Whoami(ctx *Context, opts struct {
 
 	// Prepare output
 	type WhoamiOutput struct {
-		Cluster    string   `json:"cluster"`
-		ServerURL  string   `json:"server_url"`
-		AuthMethod string   `json:"auth_method"`
-		Identity   string   `json:"identity,omitempty"`
-		UserID     string   `json:"user_id,omitempty"`
-		UserEmail  string   `json:"user_email,omitempty"`
-		Groups     []string `json:"groups,omitempty"`
-		GroupIDs   []string `json:"group_ids,omitempty"`
+		Cluster        string   `json:"cluster"`
+		ServerURL      string   `json:"server_url"`
+		AuthMethod     string   `json:"auth_method"`
+		Identity       string   `json:"identity,omitempty"`
+		UserID         string   `json:"user_id,omitempty"`
+		UserEmail      string   `json:"user_email,omitempty"`
+		OrganizationID string   `json:"organization_id,omitempty"`
+		Groups         []string `json:"groups,omitempty"`
+		GroupIDs       []string `json:"group_ids,omitempty"`
 	}
 
 	output := WhoamiOutput{
@@ -105,6 +106,7 @@ func Whoami(ctx *Context, opts struct {
 	if claims != nil {
 		output.UserEmail = claims.Subject
 		output.UserID = claims.UserID
+		output.OrganizationID = claims.OrganizationID
 		output.Groups = claims.Groups
 		output.GroupIDs = claims.GroupIDs
 	}
@@ -129,6 +131,9 @@ func Whoami(ctx *Context, opts struct {
 		ctx.Info("")
 		ctx.Info("User:          %s", claims.Subject)
 		ctx.Info("User ID:       %s", claims.UserID)
+		if claims.OrganizationID != "" {
+			ctx.Info("Organization:  %s", claims.OrganizationID)
+		}
 		if len(claims.Groups) > 0 {
 			ctx.Info("Groups:        %v", claims.Groups)
 		}
