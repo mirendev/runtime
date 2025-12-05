@@ -8,13 +8,14 @@ on:
     # This ensures all releases (main builds and tagged releases) wait for tests to pass
 
 concurrency:
-  group: release-${{ github.event.workflow_run.head_branch }}
+  group: release-${{ github.event.workflow_run.head_branch || github.ref_name }}
   cancel-in-progress: true
 
 jobs:
   check-test-success:
     runs-on: ubuntu-latest
-    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    # Skip check for manual/push triggers (for testing), require success for workflow_run
+    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
     steps:
       - name: Check test workflow status
         run: echo "Tests passed successfully, proceeding with release"
@@ -90,8 +91,8 @@ jobs:
             }
   package:
     needs: check-test-success
-    # Only build releases for main branch or version tags
-    if: ${{ github.event.workflow_run.head_branch == 'main' || startsWith(github.event.workflow_run.head_branch, 'v') }}
+    # Only build releases for main branch or version tags (or any branch for manual/push triggers during testing)
+    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.head_branch == 'main' || startsWith(github.event.workflow_run.head_branch, 'v') }}
     strategy:
       matrix:
         include:
@@ -105,7 +106,7 @@ jobs:
     steps:
     - uses: actions/checkout@v5
       with:
-        ref: ${{ github.event.workflow_run.head_branch }}
+        ref: ${{ github.event.workflow_run.head_branch || github.ref }}
 
     - name: Set up Go
       uses: actions/setup-go@v6
@@ -138,8 +139,8 @@ jobs:
 
     - name: Build and package for ${{ matrix.arch }}
       env:
-        GIT_BRANCH: ${{ github.event.workflow_run.head_branch }}
-        GIT_COMMIT: ${{ github.event.workflow_run.head_sha }}
+        GIT_BRANCH: ${{ github.event.workflow_run.head_branch || github.ref_name }}
+        GIT_COMMIT: ${{ github.event.workflow_run.head_sha || github.sha }}
       run: |
         # Pass git info from GitHub Actions context to avoid git commands in iso
         export BUILD_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
@@ -236,7 +237,7 @@ jobs:
     steps:
     - uses: actions/checkout@v5
       with:
-        ref: ${{ github.event.workflow_run.head_branch }}
+        ref: ${{ github.event.workflow_run.head_branch || github.ref }}
     - name: Set up Go
       uses: actions/setup-go@v6
       with:
@@ -244,6 +245,77 @@ jobs:
     - name: Build binary for ${{ matrix.os }}-${{ matrix.arch }}
       run: |
         GOOS=${{ matrix.os }} GOARCH=${{ matrix.arch }} make bin/miren
+
+    - name: Import certificate and sign macOS binary
+      if: matrix.os == 'darwin'
+      env:
+        APPLE_CERTIFICATE_BASE64: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
+        APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+      run: |
+        set -x  # Enable command tracing
+
+        # Decode the certificate
+        echo "$APPLE_CERTIFICATE_BASE64" | base64 --decode > certificate.p12
+
+        # Create keychain
+        KEYCHAIN_PWD="ci-keychain-password"
+        security create-keychain -p "$KEYCHAIN_PWD" build.keychain
+        security default-keychain -s build.keychain
+        security unlock-keychain -p "$KEYCHAIN_PWD" build.keychain
+
+        # Import certificate
+        security import certificate.p12 -k build.keychain -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+
+        # Allow codesign to access the keychain without prompting
+        security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PWD" build.keychain
+
+        # Get the signing identity from the keychain
+        IDENTITY=$(security find-identity -v -p codesigning build.keychain | grep "Developer ID Application" | head -1 | sed 's/.*"\(.*\)".*/\1/')
+        echo "Using signing identity: $IDENTITY"
+
+        if [ -z "$IDENTITY" ]; then
+          echo "ERROR: No Developer ID Application identity found"
+          security find-identity -v -p codesigning build.keychain
+          exit 1
+        fi
+
+        # Sign the binary with hardened runtime
+        codesign --force --options runtime \
+          --sign "$IDENTITY" \
+          --timestamp \
+          bin/miren
+
+        # Verify the signature
+        codesign --verify --verbose=2 bin/miren
+
+        # Clean up
+        rm certificate.p12
+
+    - name: Notarize macOS binary
+      if: matrix.os == 'darwin'
+      env:
+        APPLE_ID: ${{ secrets.APPLE_ID }}
+        APPLE_ID_PASSWORD: ${{ secrets.APPLE_ID_PASSWORD }}
+        APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      run: |
+        # Create a zip for notarization
+        zip -j miren-notarize.zip bin/miren
+
+        # Submit for notarization
+        xcrun notarytool submit miren-notarize.zip \
+          --apple-id "$APPLE_ID" \
+          --password "$APPLE_ID_PASSWORD" \
+          --team-id "$APPLE_TEAM_ID" \
+          --wait
+
+        # Clean up notarization zip
+        rm miren-notarize.zip
+
+        # Note: Can't staple bare binaries (only .app/.pkg/.dmg)
+        # The binary is still notarized - Gatekeeper checks online on first run
+
+    - name: Package binary
+      run: |
         # Create a zip file with the binary
         zip -j miren-${{ matrix.os }}-${{ matrix.arch }}.zip bin/miren
     - name: Upload build artifact
@@ -263,7 +335,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v5
         with:
-          ref: ${{ github.event.workflow_run.head_branch }}
+          ref: ${{ github.event.workflow_run.head_branch || github.ref }}
 
       - name: Download amd64 package
         uses: actions/download-artifact@v4
@@ -298,7 +370,7 @@ jobs:
       - name: Determine Docker tags
         id: docker-tags
         run: |
-          HEAD_BRANCH="${{ github.event.workflow_run.head_branch }}"
+          HEAD_BRANCH="${{ github.event.workflow_run.head_branch || github.ref_name }}"
           TAGS="us-central1-docker.pkg.dev/miren-cloud/miren-oci/miren:$HEAD_BRANCH"
 
           # Add latest tag for stable releases only (exclude all prereleases)
@@ -375,7 +447,7 @@ jobs:
     needs: [package, build-binaries]
     runs-on: depot-ubuntu-latest
     concurrency:
-      group: upload-to-miren-${{ github.event.workflow_run.head_branch }}
+      group: upload-to-miren-${{ github.event.workflow_run.head_branch || github.ref_name }}
       cancel-in-progress: false
     permissions:
       id-token: write
@@ -384,7 +456,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v5
         with:
-          ref: ${{ github.event.workflow_run.head_branch }}
+          ref: ${{ github.event.workflow_run.head_branch || github.ref }}
 
       - name: Download all artifacts
         uses: actions/download-artifact@v4
@@ -403,7 +475,7 @@ jobs:
         run: |
           set -eo pipefail
 
-          HEAD_BRANCH="${{ github.event.workflow_run.head_branch }}"
+          HEAD_BRANCH="${{ github.event.workflow_run.head_branch || github.ref_name }}"
 
           # Determine if this is a tag build
           IS_TAG_BUILD=false
@@ -519,7 +591,7 @@ jobs:
           # Get git information
           COMMIT=$(git rev-parse HEAD)
           COMMIT_SHORT=$(git rev-parse --short HEAD)
-          BRANCH="${{ github.event.workflow_run.head_branch }}"
+          BRANCH="${{ github.event.workflow_run.head_branch || github.ref_name }}"
           BUILD_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
           # Determine version string
@@ -612,7 +684,7 @@ jobs:
         if: success()
         run: |
           # Determine what was uploaded
-          HEAD_BRANCH="${{ github.event.workflow_run.head_branch }}"
+          HEAD_BRANCH="${{ github.event.workflow_run.head_branch || github.ref_name }}"
           IS_TAG=false
           IS_PRERELEASE=false
           RELEASE_TYPE="Branch build"
@@ -634,7 +706,7 @@ jobs:
 
           # Get version from version.json
           VERSION=$(jq -r '.version' version.json)
-          COMMIT_SHORT=$(echo "${{ github.event.workflow_run.head_sha }}" | cut -c1-7)
+          COMMIT_SHORT=$(echo "${{ github.event.workflow_run.head_sha || github.sha }}" | cut -c1-7)
 
           # Build the Slack message
           curl -X POST -H 'Content-type: application/json' \
