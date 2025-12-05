@@ -28,7 +28,6 @@ echo "Setting up release directory for standalone mode..."
 mkdir -p /var/lib/miren/release
 cp bin/miren /var/lib/miren/release/
 cp /usr/local/bin/runc /var/lib/miren/release/
-cp /usr/local/bin/containerd-shim-runsc-v1 /var/lib/miren/release/
 cp /usr/local/bin/containerd-shim-runc-v2 /var/lib/miren/release/
 cp /usr/local/bin/containerd /var/lib/miren/release/
 cp /usr/local/bin/nerdctl /var/lib/miren/release/

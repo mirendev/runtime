@@ -17,7 +17,6 @@ mkdir -p /tmp/package
 echo "Copying binaries to package..."
 cp bin/miren /tmp/package
 cp /usr/local/bin/runc /tmp/package
-cp /usr/local/bin/containerd-shim-runsc-v1 /tmp/package
 cp /usr/local/bin/containerd-shim-runc-v2 /tmp/package
 cp /usr/local/bin/containerd /tmp/package
 cp /usr/local/bin/nerdctl /tmp/package

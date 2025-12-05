@@ -23,7 +23,7 @@ type Config struct {
 	// Base directory for containerd data and configuration
 	BaseDir string
 
-	// Directory containing shim binaries (e.g. containerd-shim-runsc-v1)
+	// Directory containing shim binaries (e.g. containerd-shim-runc-v2)
 	BinDir string
 
 	// Optional: custom config file path. If empty, generates default config

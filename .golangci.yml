@@ -27,10 +27,6 @@ linters:
         linters:
           - govet
         text: "unreachable code"
-      - path: pkg/runsc/monitor
-        linters:
-          - govet
-        text: "unreachable code"
 
       # Ignore error handling issues in pkg/model (complex error handling that needs refactoring)
       - path: "pkg/model/"

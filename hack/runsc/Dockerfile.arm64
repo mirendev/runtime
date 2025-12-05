@@ -1,6 +1,0 @@
-# syntax=docker/dockerfile:1
-
-FROM alpine:latest
-
-ADD https://storage.googleapis.com/gvisor/releases/release/latest/aarch64/runsc /
-ADD https://storage.googleapis.com/gvisor/releases/release/latest/aarch64/containerd-shim-runsc-v1 /
