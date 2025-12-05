@@ -281,17 +281,15 @@ Disks require fixed mode with exactly 1 instance because only one process can mo
 
 ## Viewing Services
 
-See your running services and their instances:
-
 ```bash
-# Show app status with services
+# Show deployment status and app configuration
 miren app
 
-# List all sandboxes (instances)
+# List running instances (sandboxes)
 miren sandbox list
 
-# View logs for a specific service
-miren logs --service worker
+# View logs for a specific sandbox
+miren logs -s worker
 ```
 
 ## Complete Examples
