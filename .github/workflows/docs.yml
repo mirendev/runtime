@@ -54,6 +54,125 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
 
     steps:
+      - name: Record start time
+        id: start
+        run: echo "time=$(date +%s)" >> $GITHUB_OUTPUT
+
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
+
+      - name: Format Slack success message
+        id: slack-message
+        run: |
+          DOCS_URL="https://miren.md"
+
+          TEXT="✅ Docs deployed: $DOCS_URL"
+          echo "text=$TEXT" >> $GITHUB_OUTPUT
+
+          # Calculate deployment duration
+          START_TIME="${{ steps.start.outputs.time }}"
+          END_TIME=$(date +%s)
+          DURATION_SECONDS=$((END_TIME - START_TIME))
+          if [ $DURATION_SECONDS -ge 60 ]; then
+            MINUTES=$((DURATION_SECONDS / 60))
+            SECONDS=$((DURATION_SECONDS % 60))
+            DURATION_TEXT="${MINUTES}m ${SECONDS}s"
+          else
+            DURATION_TEXT="${DURATION_SECONDS}s"
+          fi
+
+          # Get short commit SHA
+          SHORT_SHA="${{ github.sha }}"
+          SHORT_SHA="${SHORT_SHA:0:7}"
+
+          BLOCKS=$(cat <<EOF
+          [
+            {
+              "type": "section",
+              "text": {
+                "type": "mrkdwn",
+                "text": "✅ *Docs deployed* • <https://miren.md|View site>"
+              }
+            },
+            {
+              "type": "context",
+              "elements": [
+                {
+                  "type": "mrkdwn",
+                  "text": "${DURATION_TEXT} • <${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}|${SHORT_SHA}>"
+                }
+              ]
+            }
+          ]
+          EOF
+          )
+
+          echo "blocks<<SLACK_EOF" >> $GITHUB_OUTPUT
+          echo "$BLOCKS" >> $GITHUB_OUTPUT
+          echo "SLACK_EOF" >> $GITHUB_OUTPUT
+
+      - name: Send Slack success notification
+        uses: slackapi/slack-github-action@v2.1.1
+        with:
+          method: chat.postMessage
+          token: ${{ secrets.SLACK_BOT_TOKEN }}
+          payload: |
+            {
+              "channel": "${{ vars.SLACK_CHANNEL_ID }}",
+              "text": "${{ steps.slack-message.outputs.text }}",
+              "blocks": ${{ steps.slack-message.outputs.blocks }},
+              "unfurl_links": false,
+              "unfurl_media": false
+            }
+
+      - name: Format Slack failure message
+        id: slack-failure
+        if: failure()
+        run: |
+          TEXT="❌ Docs deploy failed"
+          echo "text=$TEXT" >> $GITHUB_OUTPUT
+
+          SHORT_SHA="${{ github.sha }}"
+          SHORT_SHA="${SHORT_SHA:0:7}"
+
+          BLOCKS=$(cat <<EOF
+          [
+            {
+              "type": "section",
+              "text": {
+                "type": "mrkdwn",
+                "text": "❌ *Docs deploy failed* • <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View logs>"
+              }
+            },
+            {
+              "type": "context",
+              "elements": [
+                {
+                  "type": "mrkdwn",
+                  "text": "<${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}|${SHORT_SHA}>"
+                }
+              ]
+            }
+          ]
+          EOF
+          )
+
+          echo "blocks<<SLACK_EOF" >> $GITHUB_OUTPUT
+          echo "$BLOCKS" >> $GITHUB_OUTPUT
+          echo "SLACK_EOF" >> $GITHUB_OUTPUT
+
+      - name: Send Slack failure notification
+        if: failure()
+        uses: slackapi/slack-github-action@v2.1.1
+        with:
+          method: chat.postMessage
+          token: ${{ secrets.SLACK_BOT_TOKEN }}
+          payload: |
+            {
+              "channel": "${{ vars.SLACK_CHANNEL_ID }}",
+              "text": "${{ steps.slack-failure.outputs.text }}",
+              "blocks": ${{ steps.slack-failure.outputs.blocks }},
+              "unfurl_links": false,
+              "unfurl_media": false
+            }
