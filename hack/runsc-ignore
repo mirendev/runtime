@@ -1,7 +1,0 @@
-#!/bin/bash
-
-if test -e "/run/runsc-init.json"; then
-  exec runsc -pod-init-config /run/runsc-init.json "$@"
-fi
-
-exec runsc "$@"

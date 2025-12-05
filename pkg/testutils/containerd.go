@@ -3,8 +3,6 @@ package testutils
 import (
 	"context"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -164,28 +162,6 @@ func WaitForContainerReady(ctx context.Context, cl *containerd.Client, ns, id st
 		err = fmt.Errorf("timed out waiting for container %s", id)
 	}
 	return err
-}
-
-func SetupRunsc(dir string) (string, string) {
-	path := filepath.Join(dir, "runsc-entry")
-	pic := filepath.Join(dir, "pod-init-config.json")
-
-	f, err := os.Create(path)
-	if err != nil {
-		panic(err)
-	}
-
-	fmt.Fprintf(f,
-		"#!/bin/bash\nexec runsc -pod-init-config \"%s\" \"$@\"\n", pic)
-
-	defer f.Close()
-
-	err = os.Chmod(path, 0755)
-	if err != nil {
-		panic(err)
-	}
-
-	return path, pic
 }
 
 func NukeBridges() {

@@ -19,6 +19,10 @@ type BoundPort struct {
 	Port int
 }
 
+type PortTracker interface {
+	SetPortStatus(containerID string, bp BoundPort, status PortStatus)
+}
+
 type EntityStatus struct {
 	id         string
 	mu         sync.Mutex
