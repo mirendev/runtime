@@ -279,17 +279,57 @@ size_gb = 20
 
 Disks require fixed mode with exactly 1 instance because only one process can mount a disk at a time.
 
-## Viewing Services
+## Sandbox Pools
+
+When you deploy an app, Miren creates a **sandbox pool** for each service. The pool manages the desired number of instances (sandboxes) for that service.
+
+The hierarchy is:
+- **App** → has one active deployment (version)
+- **Sandbox Pool** → one per service, manages instance count
+- **Sandbox** → individual running container
+
+### Inspecting What's Running
+
+Use these commands to drill down from apps to running instances:
 
 ```bash
-# Show deployment status and app configuration
-miren app
+# List all apps and their current versions
+miren app list
+```
 
-# List running instances (sandboxes)
+```
+NAME          VERSION                              DEPLOYED  COMMIT
+demo          demo-vCVkjR6u7744AsMebwMjGU          1d ago    5f4dd55
+conference    conference-vCVkjJSe4fydvxEHfhsKfA    1d ago    5f4dd55
+```
+
+```bash
+# List sandbox pools (one per service per version)
+miren sandbox-pool list
+```
+
+```
+ID                          VERSION                              SERVICE  DESIRED  CURRENT  READY
+pool-CVkjTGJhRddyZDVq9CmnN  demo-vCVkjR6u7744AsMebwMjGU          web      1        1        1
+pool-CVkjMv2R2VwcLdHJUoGKD  conference-vCVkjJSe4fydvxEHfhsKfA    web      3        3        3
+pool-CVmuoeQCzjoNN9hGsu14c  conference-vCVkjJSe4fydvxEHfhsKfA    worker   2        2        2
+```
+
+```bash
+# List individual sandboxes (instances)
 miren sandbox list
+```
 
+```
+ID                                SERVICE  POOL                        ADDRESS        STATUS
+demo-web-CVok1wptmHEsJ6DmTRy7g    web      pool-CVkjTGJhRddyZDVq9CmnN  10.8.32.9/24   running
+conference-web-CVnbNhSjUbGEAC5L   web      pool-CVkjMv2R2VwcLdHJUoGKD  10.8.32.12/24  running
+conference-web-CVnbNhVDNcqapDcX   web      pool-CVkjMv2R2VwcLdHJUoGKD  10.8.32.19/24  running
+```
+
+```bash
 # View logs for a specific sandbox
-miren logs -s worker
+miren logs -s demo-web-CVok1wptmHEsJ6DmTRy7g
 ```
 
 ## Complete Examples
