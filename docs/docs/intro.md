@@ -39,12 +39,14 @@ miren logs
 
 - **Apps**: Your services and applications
 - **Deploy**: Push code to any environment with a single command
+- **Scaling**: Automatic instance scaling based on traffic, or fixed instance counts
 - **Environments**: Local, staging, production — all work the same way
 - **Teams**: Manage who can access what, all through miren.cloud
 
 ## Next Steps
 
 - [Getting Started](/getting-started) - Install Miren and deploy your first app
+- [Scaling](/scaling) - Configure how your app scales
 - [CLI Reference](/cli-reference) - Learn about all available commands
 
 ---

@@ -81,6 +81,21 @@ That's it! Miren will:
 
 Note: Your first app gets a default route automatically. For subsequent apps, you'll need to configure routes manually. See [Working with Routes](#working-with-routes).
 
+### "Why didn't I have to configure how many copies of my application to run?"
+
+A core philosophy of Miren is that guessing replica/instance/copy counts is the wrong way to manage
+application scaling by default. For that reason, from day 1, Miren has built around autoscaling application
+instances. It does this using the same technique that Google Cloud Run uses, namely that as
+the amount of traffic to the application increases, additional instances are automatically launched.
+
+And as the traffic reduces, the instance counts are automatically reduced.
+
+If an application isn't stateless and needs to only run a certain number of copies, the application
+can be switched to fixed mode where you set the number of instances. This is commonly used for services
+that your application also needs, like databases, background workers, etc.
+
+See [Application Scaling](/scaling) for full documentation on configuring scaling behavior.
+
 ## Check Your Application
 
 ### View All Applications
@@ -215,5 +230,6 @@ miren route
 
 ## Next Steps
 
+- [Application Scaling](/scaling) - Configure how your app scales
 - [CLI Reference](/cli-reference) - Learn about all available commands
 - [App Commands](/cli/app) - Detailed application command reference
