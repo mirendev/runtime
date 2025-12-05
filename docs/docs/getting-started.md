@@ -81,7 +81,9 @@ That's it! Miren will:
 
 Note: Your first app gets a default route automatically. For subsequent apps, you'll need to configure routes manually. See [Working with Routes](#working-with-routes).
 
-### "Why didn't I have to configure how many copies of my application to run?"
+### "How do I configure multiple instances of my application?"
+
+By default, you don't!
 
 A core philosophy of Miren is that guessing replica/instance/copy counts is the wrong way to manage
 application scaling by default. For that reason, from day 1, Miren has built around autoscaling application
