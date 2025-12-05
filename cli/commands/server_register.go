@@ -77,6 +77,7 @@ func Register(ctx *Context, opts RegisterOptions) error {
 			existing.ClusterID = status.ClusterID
 			existing.OrganizationID = status.OrganizationID
 			existing.ServiceAccountID = status.ServiceAccountID
+			existing.DNSHostname = status.DNSHostname
 			existing.RegisteredAt = time.Now()
 
 			if err := registration.SaveRegistration(opts.OutputDir, existing); err != nil {
@@ -87,6 +88,9 @@ func Register(ctx *Context, opts RegisterOptions) error {
 			ctx.Info("Cluster ID: %s", status.ClusterID)
 			ctx.Info("Organization ID: %s", status.OrganizationID)
 			ctx.Info("Service Account ID: %s", status.ServiceAccountID)
+			if status.DNSHostname != "" {
+				ctx.Info("DNS Hostname: %s", status.DNSHostname)
+			}
 			ctx.Info("Configuration saved to: %s", opts.OutputDir)
 
 			return nil
@@ -176,6 +180,7 @@ func Register(ctx *Context, opts RegisterOptions) error {
 		ClusterName:      opts.ClusterName,
 		OrganizationID:   status.OrganizationID,
 		ServiceAccountID: status.ServiceAccountID,
+		DNSHostname:      status.DNSHostname,
 		PrivateKey:       privateKey,
 		CloudURL:         opts.CloudURL,
 		RegisteredAt:     time.Now(),
@@ -191,6 +196,9 @@ func Register(ctx *Context, opts RegisterOptions) error {
 	ctx.Info("Cluster ID: %s", status.ClusterID)
 	ctx.Info("Organization ID: %s", status.OrganizationID)
 	ctx.Info("Service Account ID: %s", status.ServiceAccountID)
+	if status.DNSHostname != "" {
+		ctx.Info("DNS Hostname: %s", status.DNSHostname)
+	}
 	ctx.Info("Configuration saved to: %s", opts.OutputDir)
 
 	ctx.Warn("If you're already running the miren server, you must now restart it to apply the new registration.")

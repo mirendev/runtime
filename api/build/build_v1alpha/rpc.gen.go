@@ -122,6 +122,74 @@ func (v *Status) UnmarshalJSON(data []byte) error {
 	return json.Unmarshal(data, &v.data)
 }
 
+type accessInfoData struct {
+	Hostnames       *[]string `cbor:"0,keyasint,omitempty" json:"hostnames,omitempty"`
+	DefaultRoute    *bool     `cbor:"1,keyasint,omitempty" json:"default_route,omitempty"`
+	ClusterHostname *string   `cbor:"2,keyasint,omitempty" json:"cluster_hostname,omitempty"`
+}
+
+type AccessInfo struct {
+	data accessInfoData
+}
+
+func (v *AccessInfo) HasHostnames() bool {
+	return v.data.Hostnames != nil
+}
+
+func (v *AccessInfo) Hostnames() *[]string {
+	return v.data.Hostnames
+}
+
+func (v *AccessInfo) SetHostnames(hostnames *[]string) {
+	v.data.Hostnames = hostnames
+}
+
+func (v *AccessInfo) HasDefaultRoute() bool {
+	return v.data.DefaultRoute != nil
+}
+
+func (v *AccessInfo) DefaultRoute() bool {
+	if v.data.DefaultRoute == nil {
+		return false
+	}
+	return *v.data.DefaultRoute
+}
+
+func (v *AccessInfo) SetDefaultRoute(default_route bool) {
+	v.data.DefaultRoute = &default_route
+}
+
+func (v *AccessInfo) HasClusterHostname() bool {
+	return v.data.ClusterHostname != nil
+}
+
+func (v *AccessInfo) ClusterHostname() string {
+	if v.data.ClusterHostname == nil {
+		return ""
+	}
+	return *v.data.ClusterHostname
+}
+
+func (v *AccessInfo) SetClusterHostname(cluster_hostname string) {
+	v.data.ClusterHostname = &cluster_hostname
+}
+
+func (v *AccessInfo) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *AccessInfo) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *AccessInfo) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *AccessInfo) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
 type streamRecvArgsData struct {
 	Count *int32 `cbor:"0,keyasint,omitempty" json:"count,omitempty"`
 }
@@ -348,7 +416,8 @@ func (v *BuilderBuildFromTarArgs) UnmarshalJSON(data []byte) error {
 }
 
 type builderBuildFromTarResultsData struct {
-	Version *string `cbor:"0,keyasint,omitempty" json:"version,omitempty"`
+	Version    *string      `cbor:"0,keyasint,omitempty" json:"version,omitempty"`
+	AccessInfo **AccessInfo `cbor:"1,keyasint,omitempty" json:"access_info,omitempty"`
 }
 
 type BuilderBuildFromTarResults struct {
@@ -358,6 +427,10 @@ type BuilderBuildFromTarResults struct {
 
 func (v *BuilderBuildFromTarResults) SetVersion(version string) {
 	v.data.Version = &version
+}
+
+func (v *BuilderBuildFromTarResults) SetAccessInfo(access_info **AccessInfo) {
+	v.data.AccessInfo = access_info
 }
 
 func (v *BuilderBuildFromTarResults) MarshalCBOR() ([]byte, error) {
@@ -459,6 +532,14 @@ func (v *BuilderClientBuildFromTarResults) Version() string {
 		return ""
 	}
 	return *v.data.Version
+}
+
+func (v *BuilderClientBuildFromTarResults) HasAccessInfo() bool {
+	return v.data.AccessInfo != nil
+}
+
+func (v *BuilderClientBuildFromTarResults) AccessInfo() *AccessInfo {
+	return *v.data.AccessInfo
 }
 
 func (v BuilderClient) BuildFromTar(ctx context.Context, application string, tardata stream.RecvStream[[]byte], status stream.SendStream[*Status]) (*BuilderClientBuildFromTarResults, error) {

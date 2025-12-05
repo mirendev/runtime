@@ -508,6 +508,7 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 		cloudAuthConfig.PrivateKey = reg.PrivateKey // Use the actual private key content from registration
 		cloudAuthConfig.Tags = reg.Tags
 		cloudAuthConfig.ClusterID = reg.ClusterID
+		cloudAuthConfig.DNSHostname = reg.DNSHostname
 	} else if reg != nil && reg.Status == "pending" {
 		ctx.Log.Info("found pending cluster registration",
 			"cluster-name", reg.ClusterName,

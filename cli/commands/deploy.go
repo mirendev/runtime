@@ -450,6 +450,9 @@ func Deploy(ctx *Context, opts struct {
 
 	ctx.Printf("\n\nUpdated version %s deployed. All traffic moved to new version.\n", results.Version())
 
+	// Show route/access information using server-provided data
+	displayAccessInfo(ctx, name, results)
+
 	return nil
 }
 
@@ -562,4 +565,106 @@ func createBuildStatusCallback(
 
 		return nil
 	})
+}
+
+// displayAccessInfo shows how to access the deployed app using server-provided access info
+func displayAccessInfo(ctx *Context, appName string, results *build_v1alpha.BuilderClientBuildFromTarResults) {
+	// Check if we have access info from the server
+	if !results.HasAccessInfo() {
+		ctx.Log.Debug("No access info returned from server")
+		return
+	}
+
+	accessInfo := results.AccessInfo()
+
+	// Get hostnames and default route status from server
+	var hostnames []string
+	if accessInfo.HasHostnames() && accessInfo.Hostnames() != nil {
+		hostnames = *accessInfo.Hostnames()
+	}
+	hasDefaultRoute := accessInfo.DefaultRoute()
+
+	// Get cluster address for default route display
+	// Prefer the cloud-provisioned DNS hostname from the server if available
+	var clusterAddr string
+	if accessInfo.ClusterHostname() != "" {
+		// Use the cloud-provisioned DNS hostname (e.g., cluster-abc.org-123.miren.systems)
+		clusterAddr = accessInfo.ClusterHostname()
+	} else if ctx.ClusterConfig != nil && ctx.ClusterConfig.Hostname != "" {
+		// Fall back to the client's cluster address
+		// Strip any API port (e.g. :8443) since HTTP ingress is on 443
+		clusterAddr = stripPort(ctx.ClusterConfig.Hostname)
+	}
+
+	// Display access information
+	if len(hostnames) > 0 {
+		ctx.Printf("\nYour app is available at:\n")
+		for _, host := range hostnames {
+			ctx.Printf("  https://%s\n", host)
+		}
+		if hasDefaultRoute {
+			ctx.Printf("  (also the default route)\n")
+		}
+	} else if hasDefaultRoute {
+		if clusterAddr != "" {
+			ctx.Printf("\nYour app is the default route, available at:\n")
+			ctx.Printf("  https://%s\n", clusterAddr)
+		} else {
+			ctx.Printf("\nYour app is the default route and will receive all unmatched traffic.\n")
+		}
+		suggestRoute(ctx, appName, accessInfo.ClusterHostname())
+	} else {
+		ctx.Printf("\nNo routes configured for this app.\n")
+		suggestRoute(ctx, appName, accessInfo.ClusterHostname())
+		ctx.Printf("To make it the default route: miren route set-default %s\n", appName)
+	}
+}
+
+// suggestRoute suggests a route command, using the cloud DNS hostname if available
+func suggestRoute(ctx *Context, appName string, clusterHostname string) {
+	if clusterHostname != "" {
+		// Suggest a specific subdomain using the app name
+		subdomain := sanitizeForSubdomain(appName)
+		suggestedHost := subdomain + "." + clusterHostname
+		ctx.Printf("To set a hostname, try: miren route set %s %s\n", suggestedHost, appName)
+	} else {
+		ctx.Printf("To set a hostname, try: miren route set <hostname> %s\n", appName)
+	}
+}
+
+// sanitizeForSubdomain converts an app name to a valid subdomain label
+func sanitizeForSubdomain(name string) string {
+	// Convert to lowercase
+	result := strings.ToLower(name)
+	// Replace underscores with hyphens
+	result = strings.ReplaceAll(result, "_", "-")
+	// Replace any other non-alphanumeric chars with hyphens
+	var sanitized strings.Builder
+	for _, r := range result {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' {
+			sanitized.WriteRune(r)
+		} else {
+			sanitized.WriteRune('-')
+		}
+	}
+	result = sanitized.String()
+	// Remove leading/trailing hyphens
+	result = strings.Trim(result, "-")
+	// Collapse multiple hyphens
+	for strings.Contains(result, "--") {
+		result = strings.ReplaceAll(result, "--", "-")
+	}
+	// Ensure it's not empty
+	if result == "" {
+		result = "app"
+	}
+	return result
+}
+
+// stripPort removes any port suffix from a host string
+func stripPort(host string) string {
+	if idx := strings.LastIndex(host, ":"); idx != -1 {
+		return host[:idx]
+	}
+	return host
 }

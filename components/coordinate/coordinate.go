@@ -78,11 +78,12 @@ type CoordinatorConfig struct {
 
 // CloudAuthConfig contains cloud authentication settings
 type CloudAuthConfig struct {
-	Enabled    bool              `json:"enabled" yaml:"enabled"`
-	CloudURL   string            `json:"cloud_url" yaml:"cloud_url"`     // URL of miren.cloud (default: https://api.miren.cloud)
-	PrivateKey string            `json:"private_key" yaml:"private_key"` // Required: Path to service account private key when enabled
-	Tags       map[string]string `json:"tags" yaml:"tags"`               // Tags from registration for RBAC evaluation
-	ClusterID  string            `json:"cluster_id" yaml:"cluster_id"`   // Cluster ID for status reporting
+	Enabled     bool              `json:"enabled" yaml:"enabled"`
+	CloudURL    string            `json:"cloud_url" yaml:"cloud_url"`       // URL of miren.cloud (default: https://api.miren.cloud)
+	PrivateKey  string            `json:"private_key" yaml:"private_key"`   // Required: Path to service account private key when enabled
+	Tags        map[string]string `json:"tags" yaml:"tags"`                 // Tags from registration for RBAC evaluation
+	ClusterID   string            `json:"cluster_id" yaml:"cluster_id"`     // Cluster ID for status reporting
+	DNSHostname string            `json:"dns_hostname" yaml:"dns_hostname"` // Cloud-provisioned DNS hostname for the cluster
 }
 
 const (
@@ -594,7 +595,7 @@ func (c *Coordinator) Start(ctx context.Context) error {
 	// Create app client for the builder
 	appClient := appclient.NewClient(c.Log, loopback)
 
-	bs := build.NewBuilder(c.Log, eac, appClient, c.Resolver, c.TempDir, c.LogWriter)
+	bs := build.NewBuilder(c.Log, eac, appClient, c.Resolver, c.TempDir, c.LogWriter, c.CloudAuth.DNSHostname)
 	server.ExposeValue("dev.miren.runtime/build", build_v1alpha.AdaptBuilder(bs))
 
 	ai := app.NewAppInfo(c.Log, ec, c.Cpu, c.Mem, c.HTTP)
