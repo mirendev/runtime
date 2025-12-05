@@ -297,7 +297,7 @@ Use these commands to drill down from apps to running instances:
 miren app list
 ```
 
-```
+```text
 NAME          VERSION                              DEPLOYED  COMMIT
 demo          demo-vCVkjR6u7744AsMebwMjGU          1d ago    5f4dd55
 conference    conference-vCVkjJSe4fydvxEHfhsKfA    1d ago    5f4dd55
@@ -308,7 +308,7 @@ conference    conference-vCVkjJSe4fydvxEHfhsKfA    1d ago    5f4dd55
 miren sandbox-pool list
 ```
 
-```
+```text
 ID                          VERSION                              SERVICE  DESIRED  CURRENT  READY
 pool-CVkjTGJhRddyZDVq9CmnN  demo-vCVkjR6u7744AsMebwMjGU          web      1        1        1
 pool-CVkjMv2R2VwcLdHJUoGKD  conference-vCVkjJSe4fydvxEHfhsKfA    web      3        3        3
@@ -320,7 +320,7 @@ pool-CVmuoeQCzjoNN9hGsu14c  conference-vCVkjJSe4fydvxEHfhsKfA    worker   2     
 miren sandbox list
 ```
 
-```
+```text
 ID                                SERVICE  POOL                        ADDRESS        STATUS
 demo-web-CVok1wptmHEsJ6DmTRy7g    web      pool-CVkjTGJhRddyZDVq9CmnN  10.8.32.9/24   running
 conference-web-CVnbNhSjUbGEAC5L   web      pool-CVkjMv2R2VwcLdHJUoGKD  10.8.32.12/24  running
