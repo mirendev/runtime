@@ -37,15 +37,17 @@ miren logs
 
 ## Key Concepts
 
-- **Apps**: Your services and applications
-- **Deploy**: Push code to any environment with a single command
+- **Apps**: Your applications, each containing one or more services
+- **Services**: Processes within an app — web servers, workers, databases
 - **Scaling**: Automatic instance scaling based on traffic, or fixed instance counts
+- **Deploy**: Push code to any environment with a single command
 - **Environments**: Local, staging, production — all work the same way
 - **Teams**: Manage who can access what, all through miren.cloud
 
 ## Next Steps
 
 - [Getting Started](/getting-started) - Install Miren and deploy your first app
+- [Services](/services) - Run multiple processes in your app
 - [Scaling](/scaling) - Configure how your app scales
 - [CLI Reference](/cli-reference) - Learn about all available commands
 

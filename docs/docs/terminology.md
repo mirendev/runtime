@@ -46,6 +46,10 @@ Maps a hostname to an application. Routes determine how HTTP traffic reaches you
 
 An isolated execution environment where your app runs. Sandboxes use gvisor for security isolation and have their own network namespace.
 
+## Service
+
+A named process within an app. An app can have multiple services, each with its own command, image, port, and scaling configuration. Common services include `web` (HTTP server), `worker` (background jobs), and database services like `postgres`. See [Services](/services).
+
 ## Client Config
 
 The configuration file (`~/.config/miren/clientconfig.yaml`) that stores your CLI settings, including cluster connections and the active cluster. Managed automatically by commands like `miren server install` and `miren cluster add`.
