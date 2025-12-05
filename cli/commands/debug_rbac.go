@@ -24,7 +24,7 @@ func DebugRBAC(ctx *Context, opts struct {
 		return fmt.Errorf("failed to load registration: %w", err)
 	}
 	if reg == nil {
-		return fmt.Errorf("no cluster registration found - run 'miren register' first")
+		return fmt.Errorf("no cluster registration found - run 'miren server register' first")
 	}
 	if reg.Status != "approved" {
 		return fmt.Errorf("registration is not approved (status: %s)", reg.Status)
@@ -151,7 +151,7 @@ func DebugRBACTest(ctx *Context, opts struct {
 		return fmt.Errorf("failed to load registration: %w", err)
 	}
 	if reg == nil {
-		return fmt.Errorf("no cluster registration found - run 'miren register' first")
+		return fmt.Errorf("no cluster registration found - run 'miren server register' first")
 	}
 	if reg.Status != "approved" {
 		return fmt.Errorf("registration is not approved (status: %s)", reg.Status)

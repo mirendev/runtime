@@ -148,7 +148,7 @@ func ServerInstall(ctx *Context, opts struct {
 			if err := Register(ctx, registerOpts); err != nil {
 				ctx.Warn("Cloud registration failed: %v", err)
 				ctx.Info("Continuing with installation without cloud registration")
-				ctx.Info("You can register later with: miren register")
+				ctx.Info("You can register later with: miren server register")
 			} else {
 				ctx.Completed("Cloud registration complete")
 			}
@@ -175,7 +175,7 @@ func ServerInstall(ctx *Context, opts struct {
 			if err := Register(ctx, registerOpts); err != nil {
 				ctx.Warn("Cloud registration failed: %v", err)
 				ctx.Info("Continuing with installation without cloud registration")
-				ctx.Info("You can register later with: miren register")
+				ctx.Info("You can register later with: miren server register")
 			} else {
 				ctx.Completed("Cloud registration complete")
 			}

@@ -193,6 +193,8 @@ func Register(ctx *Context, opts RegisterOptions) error {
 	ctx.Info("Service Account ID: %s", status.ServiceAccountID)
 	ctx.Info("Configuration saved to: %s", opts.OutputDir)
 
+	ctx.Warn("If you're already running the miren server, you must now restart it to apply the new registration.")
+
 	return nil
 }
 
@@ -208,7 +210,7 @@ func RegisterStatus(ctx *Context, opts struct {
 
 	if reg == nil {
 		fmt.Println("No cluster registration found")
-		ctx.Printf("Run 'miren register' to register this cluster with miren.cloud\n")
+		ctx.Printf("Run 'miren server register' to register this cluster with miren.cloud\n")
 		return nil
 	}
 
@@ -220,9 +222,9 @@ func RegisterStatus(ctx *Context, opts struct {
 		ctx.Printf("  Registration ID: %s\n", reg.RegistrationID)
 		ctx.Printf("  Expires At: %s\n", reg.ExpiresAt.Format(time.RFC3339))
 		if time.Now().After(reg.ExpiresAt) {
-			ctx.Printf("\n⚠️  This registration has expired. Run 'miren register' to start a new registration.\n")
+			ctx.Printf("\n⚠️  This registration has expired. Run 'miren server register' to start a new registration.\n")
 		} else {
-			ctx.Printf("\n✓ Registration is pending approval. Run 'miren register' to continue polling.\n")
+			ctx.Printf("\n✓ Registration is pending approval. Run 'miren server register' to continue polling.\n")
 		}
 	} else {
 		ctx.Printf("  Cluster ID: %s\n", reg.ClusterID)
