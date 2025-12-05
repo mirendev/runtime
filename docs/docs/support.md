@@ -20,4 +20,4 @@ Have an idea for a new feature? Submit a feature request:
 
 Join our Discord community for help, questions, and discussions:
 
-- [Miren Discord](https://discord.gg/miren)
+- [Miren Discord](https://miren.dev/discord)
