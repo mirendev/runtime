@@ -20,7 +20,7 @@ A central control plane that connects and manages your Miren clusters. Provides 
 
 ## Miren Runtime
 
-The core container orchestration system that powers Miren. Built on containerd and gvisor, it handles building, deploying, and running your applications in isolated sandboxes.
+The core container orchestration system that powers Miren. Built on containerd, it handles building, deploying, and running your applications in isolated sandboxes.
 
 ## Miren Runtime Client
 
