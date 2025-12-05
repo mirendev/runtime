@@ -13,11 +13,24 @@ Miren Cloud is a central control plane that connects and manages your Miren clus
 
 When you run `miren server install`, it will automatically register a new cluster to Miren Cloud and redirect you to create your miren.cloud organization and account:
 
+**NOTE:** The install requires systemd at present.
+
 ```bash
 sudo miren server install
 ```
 
 By default, you will have full access to your new cluster. Permissions can be tweaked using RBAC rules if needed.
+
+### Miren Server Installation within Docker
+
+If you're on a platform other than Linux (or a Linux platform without systemd available), you can install
+the server into a docker container:
+
+```bash
+miren server docker install
+```
+
+### Install Standalone
 
 To skip cloud registration and run standalone:
 
@@ -48,10 +61,12 @@ miren whoami
 Connect your local cluster to miren.cloud:
 
 ```bash
-miren register -n my-cluster
+miren server register -n my-cluster
 ```
 
 This registers your cluster and enables cloud features.
+
+**NOTE**: By default, servers are already registered when doing `miren server install`.
 
 ## View Your Clusters
 

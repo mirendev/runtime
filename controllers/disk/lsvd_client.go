@@ -20,6 +20,7 @@ import (
 	"miren.dev/runtime/lsvd/pkg/nbd"
 	"miren.dev/runtime/lsvd/pkg/nbdnl"
 	"miren.dev/runtime/pkg/cloudauth"
+	"miren.dev/runtime/pkg/idgen"
 	"miren.dev/runtime/pkg/units"
 )
 
@@ -39,11 +40,13 @@ const (
 
 // LsvdClient provides an interface for LSVD volume operations
 type LsvdClient interface {
-	// CreateVolume creates a new LSVD volume (backwards compatibility - calls both CreateVolumeInSegmentAccess and InitializeDisk)
-	CreateVolume(ctx context.Context, volumeId string, sizeGb int64, filesystem string) error
+	// CreateVolume creates a new LSVD volume (calls both CreateVolumeInSegmentAccess and InitializeDisk)
+	// Returns the volume ID that was actually created.
+	CreateVolume(ctx context.Context, sizeGb int64, filesystem string) (string, error)
 
-	// CreateVolumeInSegmentAccess creates a volume only in SegmentAccess (no disk initialization)
-	CreateVolumeInSegmentAccess(ctx context.Context, volumeId string, sizeGb int64, filesystem string) error
+	// CreateVolumeInSegmentAccess creates a volume only in SegmentAccess (no disk initialization).
+	// Returns the volume ID that was created (server-generated for remote, locally-generated for local-only).
+	CreateVolumeInSegmentAccess(ctx context.Context, diskName string, sizeGb int64, filesystem string) (string, error)
 
 	// InitializeDisk initializes lsvd.NewDisk for an existing volume in SegmentAccess
 	InitializeDisk(ctx context.Context, volumeId string, filesystem string) error
@@ -65,6 +68,14 @@ type LsvdClient interface {
 
 	// ListVolumes lists all volumes
 	ListVolumes(ctx context.Context) ([]string, error)
+
+	// AcquireVolumeLease acquires a volume lease from the remote Disk API.
+	// Returns the lease nonce if successful, empty string if not using remote storage.
+	// nodeId and appId are included as metadata for the lease.
+	AcquireVolumeLease(ctx context.Context, volumeId, nodeId, appId string) (string, error)
+
+	// ReleaseVolumeLease releases a volume lease from the remote Disk API.
+	ReleaseVolumeLease(ctx context.Context, volumeId string, nonce string) error
 }
 
 // VolumeInfo contains information about an LSVD volume
@@ -83,9 +94,10 @@ type lsvdClientImpl struct {
 	log      *slog.Logger
 	dataPath string
 
-	mu      sync.RWMutex
-	volumes map[string]*volumeState
-	disks   map[string]*lsvd.Disk
+	mu                 sync.RWMutex
+	volumes            map[string]*volumeState
+	disks              map[string]*lsvd.Disk
+	pendingLeaseNonces map[string]string // volumeId -> nonce, for nonces acquired before disk init
 
 	// Optional auth client and cloud URL for replication
 	authClient    *cloudauth.AuthClient
@@ -126,15 +138,17 @@ type volumeState struct {
 	nbdCleanup func() error
 	nbdCancel  context.CancelFunc
 	devicePath string
+	leaseNonce string // Volume lease nonce from remote Disk API
 }
 
 // NewLsvdClient creates a new LSVD client
 func NewLsvdClient(log *slog.Logger, dataPath string, opts ...LsvdClientOption) LsvdClient {
 	client := &lsvdClientImpl{
-		log:      log.With("module", "lsvd"),
-		dataPath: dataPath,
-		volumes:  make(map[string]*volumeState),
-		disks:    make(map[string]*lsvd.Disk),
+		log:                log.With("module", "lsvd"),
+		dataPath:           dataPath,
+		volumes:            make(map[string]*volumeState),
+		disks:              make(map[string]*lsvd.Disk),
+		pendingLeaseNonces: make(map[string]string),
 	}
 
 	// Apply options
@@ -151,125 +165,174 @@ func NewLsvdClientWithReplica(log *slog.Logger, dataPath string, authClient *clo
 	return NewLsvdClient(log, dataPath, WithReplica(authClient, cloudURL))
 }
 
-// CreateVolume creates a new LSVD volume (backwards compatibility)
-// This method calls both CreateVolumeInSegmentAccess and InitializeDisk
-func (c *lsvdClientImpl) CreateVolume(ctx context.Context, volumeId string, sizeGb int64, filesystem string) error {
+// CreateVolume creates a new LSVD volume (calls both CreateVolumeInSegmentAccess and InitializeDisk)
+// Returns the volume ID that was actually created.
+func (c *lsvdClientImpl) CreateVolume(ctx context.Context, sizeGb int64, filesystem string) (string, error) {
 	// First create the volume in SegmentAccess (without locking since the called methods handle it)
-	if err := c.CreateVolumeInSegmentAccess(ctx, volumeId, sizeGb, filesystem); err != nil {
-		return err
+	// For CreateVolume, we use an empty disk name (test/local-only use case)
+	actualVolumeId, err := c.CreateVolumeInSegmentAccess(ctx, "", sizeGb, filesystem)
+	if err != nil {
+		return "", err
 	}
 
-	// Then initialize the disk
-	if err := c.InitializeDisk(ctx, volumeId, filesystem); err != nil {
-		return err
+	// Then initialize the disk using the actual volume ID
+	if err := c.InitializeDisk(ctx, actualVolumeId, filesystem); err != nil {
+		return "", err
 	}
 
-	return nil
+	return actualVolumeId, nil
 }
 
-// CreateVolumeInSegmentAccess creates a volume only in SegmentAccess without initializing the disk
-func (c *lsvdClientImpl) CreateVolumeInSegmentAccess(ctx context.Context, volumeId string, sizeGb int64, filesystem string) error {
+// CreateVolumeInSegmentAccess creates a volume only in SegmentAccess without initializing the disk.
+// Returns the volume ID that was created (server-generated for remote, locally-generated for local-only).
+func (c *lsvdClientImpl) CreateVolumeInSegmentAccess(ctx context.Context, diskName string, sizeGb int64, filesystem string) (string, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	// Generate a UUID for the volume
+	u, err := uuid.NewV7()
+	if err != nil {
+		return "", fmt.Errorf("failed to generate volume UUID: %w", err)
+	}
+
+	volumeInfo := &lsvd.VolumeInfo{
+		Name: diskName,
+		Size: units.GigaBytes(sizeGb).Bytes(),
+		UUID: u.String(),
+		Metadata: map[string]any{
+			"filesystem": filesystem,
+		},
+	}
+
 	var sa lsvd.SegmentAccess
+	var volumeId string
 
 	// If remoteOnly mode, use only DiskAPI without local storage
 	if c.remoteOnly {
 		if c.authClient == nil {
-			return fmt.Errorf("remoteOnly mode requires auth client")
+			return "", fmt.Errorf("remoteOnly mode requires auth client")
 		}
 
 		c.log.Info("Creating volume in remote-only mode",
-			"volume", volumeId,
 			"cloud_url", c.cloudURL)
 
-		sa = lsvd.NewDiskAPISegmentAccess(c.log, c.cloudURL, c.authClient)
-	} else {
-		// Create volume directory
-		volumePath := c.getVolumePath(volumeId)
-		if err := os.MkdirAll(volumePath, 0755); err != nil {
-			return fmt.Errorf("failed to create volume directory: %w", err)
+		remoteSA := lsvd.NewDiskAPISegmentAccess(c.log, c.cloudURL, c.authClient)
+
+		if err := remoteSA.InitContainer(ctx); err != nil {
+			return "", fmt.Errorf("failed to init remote container: %w", err)
 		}
 
-		// Create primary local segment access
+		// Get server-generated volume ID directly from remote
+		volumeId, err = remoteSA.InitVolumeWithID(ctx, volumeInfo)
+		if err != nil {
+			return "", fmt.Errorf("failed to init remote volume: %w", err)
+		}
+
+		sa = remoteSA
+
+		c.log.Info("Created LSVD volume in SegmentAccess (remote-only)",
+			"volume", volumeId,
+			"uuid", u.String(),
+			"size", volumeInfo.Size)
+
+	} else if c.enableReplica && c.authClient != nil {
+		// Replication enabled - call remote first to get server-generated ID,
+		// then create local storage with that ID
+		c.log.Info("Creating volume with DiskAPI replication",
+			"cloud_url", c.cloudURL)
+
+		remoteSA := lsvd.NewDiskAPISegmentAccess(c.log, c.cloudURL, c.authClient)
+
+		if err := remoteSA.InitContainer(ctx); err != nil {
+			return "", fmt.Errorf("failed to init remote container: %w", err)
+		}
+
+		// Get server-generated volume ID directly from remote
+		volumeId, err = remoteSA.InitVolumeWithID(ctx, volumeInfo)
+		if err != nil {
+			return "", fmt.Errorf("failed to init remote volume: %w", err)
+		}
+
+		// Now create local storage with the server-generated ID
+		volumePath := c.getVolumePath(volumeId)
+		if err := os.MkdirAll(volumePath, 0755); err != nil {
+			return "", fmt.Errorf("failed to create volume directory: %w", err)
+		}
+
 		localSA := &lsvd.LocalFileAccess{
 			Dir: volumePath,
 			Log: c.log,
 		}
 
-		sa = localSA
-
-		// If replication is enabled, wrap with ReplicaWriter
-		if c.enableReplica && c.authClient != nil {
-			c.log.Info("Creating volume with DiskAPI replication",
-				"volume", volumeId,
-				"cloud_url", c.cloudURL)
-
-			// Create replica using DiskAPI with auth client
-			replicaSA := lsvd.NewDiskAPISegmentAccess(c.log, c.cloudURL, c.authClient)
-
-			// Wrap with ReplicaWriter
-			sa = lsvd.ReplicaWriter(c.log, localSA, replicaSA)
+		if err := localSA.InitContainer(ctx); err != nil {
+			return "", fmt.Errorf("failed to init local container: %w", err)
 		}
-	}
 
-	// Initialize container
-	if err := sa.InitContainer(ctx); err != nil {
-		return fmt.Errorf("failed to init container: %w", err)
-	}
-
-	// Check if volume already exists in segment access
-	existingInfo, err := sa.GetVolumeInfo(ctx, volumeId)
-	if err == nil && existingInfo != nil {
-		// Volume already exists in storage, reuse it
-		c.log.Info("Volume already exists in storage, reusing",
-			"volume", volumeId,
-			"uuid", existingInfo.UUID,
-			"size", existingInfo.Size)
-
-		// Update size if requested size is different
-		if existingInfo.Size != units.GigaBytes(sizeGb).Bytes() {
-			c.log.Warn("Requested size differs from existing volume",
-				"requested", units.GigaBytes(sizeGb).Bytes(),
-				"existing", existingInfo.Size)
+		// Init local volume with the server-generated ID
+		localVolInfo := &lsvd.VolumeInfo{
+			Name: volumeId,
+			Size: volumeInfo.Size,
+			UUID: u.String(),
 		}
-		return nil // Success - volume exists
-	}
+		if err := localSA.InitVolume(ctx, localVolInfo); err != nil {
+			return "", fmt.Errorf("failed to init local volume: %w", err)
+		}
 
-	// Volume doesn't exist, create it with a new UUID
-	u, err := uuid.NewV7()
-	if err != nil {
-		return fmt.Errorf("failed to generate volume UUID: %w", err)
-	}
+		// Create ReplicaWriter for ongoing operations (don't call InitVolume on it)
+		sa = lsvd.ReplicaWriter(c.log, localSA, remoteSA)
 
-	// Create volume info with UUID
-	volumeInfo := &lsvd.VolumeInfo{
-		Name: volumeId,
-		Size: units.GigaBytes(sizeGb).Bytes(),
-		UUID: u.String(),
-	}
-
-	// Initialize volume
-	if err := sa.InitVolume(ctx, volumeInfo); err != nil {
-		return fmt.Errorf("failed to init volume: %w", err)
-	}
-
-	if c.remoteOnly {
-		c.log.Info("Created LSVD volume in SegmentAccess (remote-only)",
+		c.log.Info("Created LSVD volume in SegmentAccess (replicated)",
 			"volume", volumeId,
 			"uuid", u.String(),
-			"size", volumeInfo.Size)
+			"size", volumeInfo.Size,
+			"path", volumePath)
+
 	} else {
+		// Local-only mode - generate a local volume ID
+		volumeId = idgen.Gen("vol-")
+
 		volumePath := c.getVolumePath(volumeId)
-		c.log.Info("Created LSVD volume in SegmentAccess",
+		if err := os.MkdirAll(volumePath, 0755); err != nil {
+			return "", fmt.Errorf("failed to create volume directory: %w", err)
+		}
+
+		localSA := &lsvd.LocalFileAccess{
+			Dir: volumePath,
+			Log: c.log,
+		}
+
+		if err := localSA.InitContainer(ctx); err != nil {
+			return "", fmt.Errorf("failed to init container: %w", err)
+		}
+
+		volumeInfo.Name = volumeId
+		if err := localSA.InitVolume(ctx, volumeInfo); err != nil {
+			return "", fmt.Errorf("failed to init volume: %w", err)
+		}
+
+		sa = localSA
+
+		c.log.Info("Created LSVD volume in SegmentAccess (local-only)",
 			"volume", volumeId,
 			"uuid", u.String(),
 			"size", volumeInfo.Size,
 			"path", volumePath)
 	}
 
-	return nil
+	// Store the segment access for later use by InitializeDisk
+	c.volumes[volumeId] = &volumeState{
+		info: VolumeInfo{
+			ID:         volumeId,
+			Name:       diskName,
+			SizeBytes:  int64(volumeInfo.Size),
+			Filesystem: filesystem,
+			UUID:       u.String(),
+			Status:     VolumeStatusOnDisk,
+		},
+		sa: sa,
+	}
+
+	return volumeId, nil
 }
 
 // InitializeDisk initializes lsvd.NewDisk for an existing volume in SegmentAccess
@@ -290,6 +353,9 @@ func (c *lsvdClientImpl) InitializeDisk(ctx context.Context, volumeId string, fi
 	var replicaSA lsvd.SegmentAccess
 	var volumePath string
 
+	// Check if we have a pending lease nonce for this volume
+	leaseNonce := c.pendingLeaseNonces[volumeId]
+
 	// If remoteOnly mode, use only DiskAPI without local storage
 	if c.remoteOnly {
 		if c.authClient == nil {
@@ -300,7 +366,12 @@ func (c *lsvdClientImpl) InitializeDisk(ctx context.Context, volumeId string, fi
 			"volume", volumeId,
 			"cloud_url", c.cloudURL)
 
-		sa = lsvd.NewDiskAPISegmentAccess(c.log, c.cloudURL, c.authClient)
+		diskAPISA := lsvd.NewDiskAPISegmentAccess(c.log, c.cloudURL, c.authClient)
+		// Set the lease nonce if we have one
+		if leaseNonce != "" {
+			diskAPISA.SetLeaseNonce(leaseNonce)
+		}
+		sa = diskAPISA
 		// Use a temporary path for remote-only volumes (no actual local storage)
 		volumePath = filepath.Join(c.dataPath, "lsvd-cache", volumeId)
 		if err := os.MkdirAll(volumePath, 0755); err != nil {
@@ -321,7 +392,13 @@ func (c *lsvdClientImpl) InitializeDisk(ctx context.Context, volumeId string, fi
 		// If replication is enabled, wrap with ReplicaWriter
 		if c.enableReplica && c.authClient != nil {
 			// Create replica using DiskAPI with auth client
-			replicaSA = lsvd.NewDiskAPISegmentAccess(c.log, c.cloudURL, c.authClient)
+			diskAPISA := lsvd.NewDiskAPISegmentAccess(c.log, c.cloudURL, c.authClient)
+			// Set the lease nonce if we have one
+			if leaseNonce != "" {
+				diskAPISA.SetLeaseNonce(leaseNonce)
+			}
+
+			replicaSA = diskAPISA
 			sa = lsvd.ReplicaWriter(c.log, localSA, replicaSA)
 		}
 	}
@@ -356,6 +433,7 @@ func (c *lsvdClientImpl) InitializeDisk(ctx context.Context, volumeId string, fi
 		state.info.SizeBytes = sizeBytes
 		state.info.UUID = volumeInfo.UUID
 		state.info.Status = VolumeStatusLoaded // Update status to loaded
+		state.leaseNonce = leaseNonce
 		if filesystem != "" {
 			state.info.Filesystem = filesystem
 		}
@@ -370,10 +448,14 @@ func (c *lsvdClientImpl) InitializeDisk(ctx context.Context, volumeId string, fi
 				UUID:       volumeInfo.UUID,
 				Status:     VolumeStatusLoaded,
 			},
-			disk: disk,
-			sa:   sa,
+			disk:       disk,
+			sa:         sa,
+			leaseNonce: leaseNonce,
 		}
 	}
+
+	// Clear the pending lease nonce now that it's been used
+	delete(c.pendingLeaseNonces, volumeId)
 
 	// Add to disks map
 	c.disks[volumeId] = disk
@@ -724,6 +806,14 @@ func (c *lsvdClientImpl) UnmountVolume(ctx context.Context, volumeId string) err
 		state.nbdCancel = nil
 	}
 
+	// Close the LSVD disk
+	if state.disk != nil {
+		if err := state.disk.Close(ctx); err != nil {
+			c.log.Error("Failed to close LSVD disk", "error", err, "volume_id", volumeId)
+		}
+		state.disk = nil
+	}
+
 	state.mounted = false
 	state.info.MountPath = ""
 	state.devicePath = ""
@@ -881,6 +971,86 @@ func (c *lsvdClientImpl) ListVolumes(ctx context.Context) ([]string, error) {
 	}
 
 	return volumes, nil
+}
+
+// AcquireVolumeLease acquires a volume lease from the remote Disk API.
+// Returns the lease nonce if successful, empty string if not using remote storage.
+func (c *lsvdClientImpl) AcquireVolumeLease(ctx context.Context, volumeId, nodeId, appId string) (string, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	// Only acquire lease if using remote storage
+	if !c.remoteOnly && !c.enableReplica {
+		// No remote storage, no lease needed
+		return "", nil
+	}
+
+	if c.authClient == nil {
+		return "", fmt.Errorf("remote storage configured but auth client is nil")
+	}
+
+	// Create a DiskAPISegmentAccess to acquire the lease
+	sa := lsvd.NewDiskAPISegmentAccess(c.log, c.cloudURL, c.authClient)
+
+	metadata := map[string]any{
+		"node": nodeId,
+		"app":  appId,
+	}
+
+	nonce, err := sa.AcquireLease(ctx, volumeId, metadata)
+	if err != nil {
+		return "", fmt.Errorf("failed to acquire volume lease: %w", err)
+	}
+
+	// Store the nonce for later use by InitializeDisk
+	c.pendingLeaseNonces[volumeId] = nonce
+
+	// Also store in volume state if it exists
+	if state, exists := c.volumes[volumeId]; exists {
+		state.leaseNonce = nonce
+	}
+
+	c.log.Info("Acquired volume lease", "volume", volumeId)
+	return nonce, nil
+}
+
+// ReleaseVolumeLease releases a volume lease from the remote Disk API.
+func (c *lsvdClientImpl) ReleaseVolumeLease(ctx context.Context, volumeId string, nonce string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	// Only release lease if using remote storage
+	if !c.remoteOnly && !c.enableReplica {
+		// No remote storage, no lease to release
+		return nil
+	}
+
+	if c.authClient == nil {
+		return fmt.Errorf("remote storage configured but auth client is nil")
+	}
+
+	if nonce == "" {
+		// No nonce provided, nothing to release
+		return nil
+	}
+
+	// Create a DiskAPISegmentAccess to release the lease
+	sa := lsvd.NewDiskAPISegmentAccess(c.log, c.cloudURL, c.authClient)
+
+	if err := sa.ReleaseLease(ctx, volumeId, nonce); err != nil {
+		return fmt.Errorf("failed to release volume lease: %w", err)
+	}
+
+	// Clear the nonce in volume state if it exists
+	if state, exists := c.volumes[volumeId]; exists {
+		state.leaseNonce = ""
+	}
+
+	// Also clear any pending lease nonce
+	delete(c.pendingLeaseNonces, volumeId)
+
+	c.log.Info("Released volume lease", "volume", volumeId)
+	return nil
 }
 
 // Helper functions for NBD operations
@@ -1428,6 +1598,17 @@ func (c *lsvdClientImpl) Close() error {
 			if err := state.disk.Close(context.Background()); err != nil {
 				c.log.Error("Failed to close disk", "volume_id", volumeId, "error", err)
 				errors = append(errors, fmt.Errorf("close disk %s: %w", volumeId, err))
+			}
+		}
+
+		// Release volume lease if we have a nonce
+		if state.leaseNonce != "" && (c.remoteOnly || c.enableReplica) && c.authClient != nil {
+			sa := lsvd.NewDiskAPISegmentAccess(c.log, c.cloudURL, c.authClient)
+			if err := sa.ReleaseLease(context.Background(), volumeId, state.leaseNonce); err != nil {
+				c.log.Error("Failed to release volume lease", "volume_id", volumeId, "error", err)
+				errors = append(errors, fmt.Errorf("release lease %s: %w", volumeId, err))
+			} else {
+				c.log.Info("Released volume lease on shutdown", "volume_id", volumeId)
 			}
 		}
 	}

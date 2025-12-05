@@ -21,10 +21,11 @@ type SegmentReader interface {
 }
 
 type VolumeInfo struct {
-	Name   string      `json:"name"`
-	Size   units.Bytes `json:"size"`
-	Parent string      `json:"parent"`
-	UUID   string      `json:"uuid"`
+	Name     string         `json:"name"`
+	Size     units.Bytes    `json:"size"`
+	Parent   string         `json:"parent"`
+	UUID     string         `json:"uuid"`
+	Metadata map[string]any `json:"metadata,omitempty"`
 }
 
 func (vol *VolumeInfo) Normalize() error {
@@ -64,6 +65,13 @@ type SegmentAccess interface {
 	GetVolumeInfo(ctx context.Context, vol string) (*VolumeInfo, error)
 }
 
+// SegmentAccessWithID extends SegmentAccess with InitVolumeWithID for implementations
+// that can return server-generated volume IDs.
+type SegmentAccessWithID interface {
+	SegmentAccess
+	InitVolumeWithID(ctx context.Context, vol *VolumeInfo) (string, error)
+}
+
 func ReplicaWriter(log *slog.Logger, primary, replica SegmentAccess) SegmentAccess {
 	return &replicaWriter{
 		log:     log.With("module", "lsvd-access"),
@@ -86,15 +94,44 @@ func (t *replicaWriter) InitContainer(ctx context.Context) error {
 }
 
 func (t *replicaWriter) InitVolume(ctx context.Context, vol *VolumeInfo) error {
+	_, err := t.InitVolumeWithID(ctx, vol)
+	return err
+}
+
+// InitVolumeWithID creates a volume and returns the server-generated volume ID.
+// This implements SegmentAccessWithID for replicaWriter.
+func (t *replicaWriter) InitVolumeWithID(ctx context.Context, vol *VolumeInfo) (string, error) {
 	err := vol.Normalize()
 	if err != nil {
-		return err
+		return "", err
 	}
 
-	if err := t.primary.InitVolume(ctx, vol); err != nil {
-		return err
+	// If replica supports returning volume ID, use server-generated ID
+	if saWithID, ok := t.replica.(SegmentAccessWithID); ok {
+		volumeID, err := saWithID.InitVolumeWithID(ctx, vol)
+		if err != nil {
+			return "", err
+		}
+
+		// Use the server-generated ID for the local volume
+		localVol := *vol
+		localVol.Name = volumeID
+
+		if err := t.primary.InitVolume(ctx, &localVol); err != nil {
+			return "", err
+		}
+
+		return volumeID, nil
 	}
-	return t.replica.InitVolume(ctx, vol)
+
+	// Fallback: original behavior for non-ID-returning implementations
+	if err := t.primary.InitVolume(ctx, vol); err != nil {
+		return "", err
+	}
+	if err := t.replica.InitVolume(ctx, vol); err != nil {
+		return "", err
+	}
+	return vol.Name, nil
 }
 
 func (t *replicaWriter) ListVolumes(ctx context.Context) ([]string, error) {
@@ -127,21 +164,15 @@ func (t *replicaWriter) OpenVolume(ctx context.Context, vol string) (Volume, err
 }
 
 func (t *replicaWriter) GetVolumeInfo(ctx context.Context, vol string) (*VolumeInfo, error) {
+	// NOTE we used to verify that both voluses returned the same info.
+	// But the user has already bound these volumes together at this point,
+	// so we can just return the primary's info and fall back to replica if needed.
 	wInfo, err := t.primary.GetVolumeInfo(ctx, vol)
-	if err != nil {
-		return nil, err
+	if err == nil {
+		return wInfo, nil
 	}
 
-	rInfo, err := t.replica.GetVolumeInfo(ctx, vol)
-	if err != nil {
-		return nil, err
-	}
-
-	if wInfo.Name != rInfo.Name || wInfo.Size != rInfo.Size || wInfo.Parent != rInfo.Parent || wInfo.UUID != rInfo.UUID {
-		return nil, os.ErrInvalid
-	}
-
-	return wInfo, nil
+	return t.replica.GetVolumeInfo(ctx, vol)
 }
 
 type teeVolume struct {

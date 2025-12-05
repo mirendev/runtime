@@ -5,16 +5,92 @@ package commands
 import (
 	"archive/tar"
 	"compress/gzip"
+	"context"
+	"crypto/tls"
+	"errors"
 	"fmt"
 	"io"
+	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/quic-go/quic-go/http3"
+	"gopkg.in/yaml.v3"
+	"miren.dev/runtime/clientconfig"
 	"miren.dev/runtime/pkg/registration"
 )
+
+// installPrerequisites holds information about the system's readiness for installation
+type installPrerequisites struct {
+	hasRoot    bool
+	hasSystemd bool
+	hasDocker  bool
+}
+
+// checkInstallPrerequisites checks all prerequisites and returns their status
+func checkInstallPrerequisites() installPrerequisites {
+	return installPrerequisites{
+		hasRoot:    os.Geteuid() == 0,
+		hasSystemd: checkSystemdAvailable(),
+		hasDocker:  checkDockerAvailable() == nil,
+	}
+}
+
+// checkSystemdAvailable checks if systemd is available on the system
+func checkSystemdAvailable() bool {
+	// Check if systemctl exists and is functional
+	if _, err := exec.LookPath("systemctl"); err != nil {
+		return false
+	}
+
+	// Verify systemd is actually running by checking if we can communicate with it
+	cmd := exec.Command("systemctl", "--version")
+	if err := cmd.Run(); err != nil {
+		return false
+	}
+
+	return true
+}
+
+// printInstallPrerequisiteGuidance prints helpful guidance based on what's available
+func printInstallPrerequisiteGuidance(ctx *Context, prereqs installPrerequisites) {
+	fmt.Println()
+	ctx.Warn("Cannot proceed with systemd installation.")
+	fmt.Println()
+
+	if !prereqs.hasRoot {
+		ctx.Info("Root privileges are required for systemd installation.")
+		fmt.Println("  Run with sudo: sudo miren server install")
+		fmt.Println()
+	}
+
+	if !prereqs.hasSystemd {
+		ctx.Info("systemd is not available on this system.")
+		fmt.Println()
+
+		if prereqs.hasDocker {
+			ctx.Info("Docker is available! You can install using Docker instead:")
+			fmt.Println("  miren server docker install")
+			fmt.Println()
+			ctx.Info("This will run the miren server in a Docker container with automatic restarts.")
+		} else {
+			ctx.Info("Alternative installation options:")
+			fmt.Println()
+			fmt.Println("  1. Install using Docker (recommended for non-systemd systems):")
+			fmt.Println("     First install Docker: https://docs.docker.com/get-docker/")
+			fmt.Println("     Then run: miren server docker install")
+			fmt.Println()
+			fmt.Println("  2. Run the server directly (for testing or development):")
+			fmt.Println("     miren server")
+			fmt.Println()
+			fmt.Println("  3. Use your system's init system to manage the miren server process")
+		}
+	}
+}
 
 // fixSELinuxContext sets the proper SELinux context on the miren binary
 // so systemd can execute it. This is needed on systems like RHEL/Oracle Linux
@@ -89,10 +165,18 @@ func ServerInstall(ctx *Context, opts struct {
 	CloudURL     string            `short:"u" long:"url" description:"Cloud URL for registration" default:"https://miren.cloud"`
 	Tags         map[string]string `short:"t" long:"tag" description:"Tags for the cluster (key:value)"`
 }) error {
-	// Check if running with sufficient privileges
-	if os.Geteuid() != 0 {
-		return fmt.Errorf("server install requires root privileges (use sudo)")
+	// Check all prerequisites upfront
+	prereqs := checkInstallPrerequisites()
+
+	if !prereqs.hasRoot || !prereqs.hasSystemd {
+		printInstallPrerequisiteGuidance(ctx, prereqs)
+		if !prereqs.hasRoot {
+			return fmt.Errorf("root privileges required")
+		}
+		return fmt.Errorf("systemd not available")
 	}
+
+	ctx.Completed("Prerequisites verified (root, systemd)")
 
 	// Check if miren binary exists, download if not
 	mirenPath := "/var/lib/miren/release/miren"
@@ -140,7 +224,7 @@ func ServerInstall(ctx *Context, opts struct {
 			if err := Register(ctx, registerOpts); err != nil {
 				ctx.Warn("Cloud registration failed: %v", err)
 				ctx.Info("Continuing with installation without cloud registration")
-				ctx.Info("You can register later with: miren register")
+				ctx.Info("You can register later with: miren server register")
 			} else {
 				ctx.Completed("Cloud registration complete")
 			}
@@ -167,7 +251,7 @@ func ServerInstall(ctx *Context, opts struct {
 			if err := Register(ctx, registerOpts); err != nil {
 				ctx.Warn("Cloud registration failed: %v", err)
 				ctx.Info("Continuing with installation without cloud registration")
-				ctx.Info("You can register later with: miren register")
+				ctx.Info("You can register later with: miren server register")
 			} else {
 				ctx.Completed("Cloud registration complete")
 			}
@@ -271,6 +355,24 @@ WantedBy=multi-user.target
 			ctx.Completed("Service is running")
 		} else {
 			ctx.Warn("Service may not be running, check status with: systemctl status miren")
+		}
+
+		// Wait for server to be ready
+		ctx.Info("Waiting for miren server to initialize...")
+		if err := waitForSystemdServerReady(ctx, opts.Address); err != nil {
+			ctx.Warn("Failed to confirm server is ready: %v", err)
+			ctx.Info("The server may still be starting. Check logs with: journalctl -u miren -f")
+		} else {
+			ctx.Completed("Server is ready")
+		}
+
+		// Configure client to connect to local server
+		ctx.Info("Configuring miren client...")
+		if err := configureLocalClient(ctx, opts.Address); err != nil {
+			ctx.Warn("Failed to configure client: %v", err)
+			ctx.Info("You may need to configure the client manually")
+		} else {
+			ctx.Completed("Client configuration saved")
 		}
 	}
 
@@ -507,4 +609,206 @@ func createTarGzBackup(sourceDir, targetPath string) error {
 
 		return nil
 	})
+}
+
+// waitForSystemdServerReady waits for the miren server to be ready, checking both
+// the health endpoint and the systemd service status
+func waitForSystemdServerReady(ctx *Context, serverAddress string) error {
+	maxRetries := 30
+	retryDelay := 2 * time.Second
+
+	// Parse the server address to build the health URL
+	// Server install always uses --serve-tls so it's always HTTPS
+	host, port, err := net.SplitHostPort(serverAddress)
+	if err != nil {
+		// No port specified, use default
+		host = serverAddress
+		port = "8443"
+	}
+
+	// Replace 0.0.0.0 or empty host with localhost for health checks
+	if host == "0.0.0.0" || host == "" {
+		host = "localhost"
+	}
+
+	healthURL := fmt.Sprintf("https://%s/healthz", net.JoinHostPort(host, port))
+
+	ctx.Log.Debug("checking server health", "host", host, "port", port, "max_retries", maxRetries)
+
+	// Create HTTP3 client with InsecureSkipVerify since we're using self-signed certs
+	client := &http.Client{
+		Transport: &http3.Transport{
+			TLSClientConfig: &tls.Config{
+				InsecureSkipVerify: true,
+			},
+		},
+		Timeout: 5 * time.Second,
+	}
+	defer client.CloseIdleConnections()
+
+	ctx.Log.Debug("health check endpoint", "url", healthURL)
+
+	for i := range maxRetries {
+		// First check if the systemd service is still running
+		statusCmd := exec.Command("systemctl", "is-active", "miren.service")
+		output, err := statusCmd.Output()
+		status := strings.TrimSpace(string(output))
+
+		if err != nil || (status != "active" && status != "activating") {
+			ctx.Log.Error("systemd service is not running", "status", status)
+			return fmt.Errorf("miren service stopped unexpectedly (status: %s)", status)
+		}
+
+		// Try to connect to the server's health endpoint via HTTP3
+		reqCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		req, err := http.NewRequestWithContext(reqCtx, "GET", healthURL, nil)
+		if err != nil {
+			cancel()
+			return fmt.Errorf("failed to create request: %w", err)
+		}
+
+		ctx.Log.Debug("attempting health check", "attempt", i+1, "max_retries", maxRetries)
+		resp, err := client.Do(req)
+		cancel()
+
+		if err == nil {
+			resp.Body.Close()
+			ctx.Log.Info("server health check successful", "attempt", i+1)
+			return nil
+		}
+
+		ctx.Log.Debug("health check failed", "attempt", i+1, "error", err)
+
+		if i < maxRetries-1 {
+			ctx.Info("Waiting for server... (attempts remaining: %d)", maxRetries-i-1)
+			time.Sleep(retryDelay)
+		}
+	}
+
+	ctx.Log.Error("server failed to become ready", "max_retries", maxRetries, "url", healthURL)
+	return fmt.Errorf("timeout waiting for server to start")
+}
+
+// configureLocalClient generates and saves client configuration for the local server
+func configureLocalClient(ctx *Context, serverAddress string) error {
+	mirenPath := "/var/lib/miren/release/miren"
+
+	// Extract port from server address (format: host:port)
+	port := "8443"
+	if idx := strings.LastIndex(serverAddress, ":"); idx != -1 {
+		port = serverAddress[idx+1:]
+	}
+	target := "localhost:" + port
+
+	ctx.Log.Debug("generating client config", "target", target)
+
+	// Generate client config by running miren auth generate
+	cmd := exec.Command(mirenPath, "auth", "generate", "-C", "local", "-t", target, "-c", "-")
+	output, err := cmd.Output()
+	if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			ctx.Log.Error("failed to generate client config", "error", err, "stderr", string(exitErr.Stderr))
+			return fmt.Errorf("failed to generate client config: %w: %s", err, exitErr.Stderr)
+		}
+		ctx.Log.Error("failed to generate client config", "error", err)
+		return fmt.Errorf("failed to generate client config: %w", err)
+	}
+
+	ctx.Log.Debug("auth generate output received", "output_length", len(output))
+
+	if len(strings.TrimSpace(string(output))) == 0 {
+		ctx.Log.Error("generated client config is empty")
+		return fmt.Errorf("generated client config is empty")
+	}
+
+	// Parse the generated config to extract cluster information
+	var generatedConfig clientconfig.ConfigData
+	if err := yaml.Unmarshal(output, &generatedConfig); err != nil {
+		ctx.Log.Error("failed to parse generated config", "error", err)
+		return fmt.Errorf("failed to parse generated config: %w", err)
+	}
+
+	ctx.Log.Debug("parsed generated config", "clusters", len(generatedConfig.Clusters))
+
+	// Verify the local cluster exists in the generated config
+	localCluster, ok := generatedConfig.Clusters["local"]
+	if !ok {
+		ctx.Log.Error("local cluster not found in generated config", "available_clusters", generatedConfig.Clusters)
+		return fmt.Errorf("local cluster not found in generated config")
+	}
+
+	ctx.Log.Debug("found local cluster in config", "hostname", localCluster.Hostname)
+
+	// Load existing user config
+	config, err := clientconfig.LoadConfig()
+	if err != nil {
+		if !errors.Is(err, clientconfig.ErrNoConfig) {
+			ctx.Log.Error("failed to load existing client config", "error", err)
+			return fmt.Errorf("failed to load existing client config: %w", err)
+		}
+		config = clientconfig.NewConfig()
+	} else {
+		ctx.Log.Debug("loaded existing client config", "active_cluster", config.ActiveCluster())
+	}
+
+	// Create leaf config data with the local cluster
+	leafConfigData := &clientconfig.ConfigData{
+		Clusters: map[string]*clientconfig.ClusterConfig{
+			"local": localCluster,
+		},
+	}
+
+	// Add as a leaf config (this will be saved to clientconfig.d/50-local.yaml)
+	ctx.Log.Debug("setting leaf config", "name", "50-local")
+	config.SetLeafConfig("50-local", leafConfigData)
+
+	// Set the active cluster to local if none is set
+	if config.ActiveCluster() == "" {
+		ctx.Log.Debug("setting active cluster to local")
+		config.SetActiveCluster("local")
+	}
+
+	// Save the config
+	ctx.Log.Debug("saving client config")
+	if err := config.Save(); err != nil {
+		ctx.Log.Error("failed to save local cluster leaf config", "error", err)
+		return fmt.Errorf("failed to save local cluster leaf config: %w", err)
+	}
+
+	// Fix ownership and permissions if running under sudo
+	spath := config.SourcePath()
+	if spath != "" {
+		// Fix ownership for all parent directories that we may have created
+		pathsToFix := []string{
+			filepath.Dir(filepath.Dir(spath)),
+			filepath.Dir(spath),
+			filepath.Join(filepath.Dir(spath), "clientconfig.d"),
+			filepath.Join(filepath.Dir(spath), "clientconfig.d", "50-local.yaml"),
+			spath,
+		}
+
+		for _, entry := range pathsToFix {
+			if err := fixOwnershipIfSudo(entry); err != nil {
+				ctx.Log.Warn("failed to fix directory ownership", "dir", entry, "error", err)
+			}
+
+			fi, err := os.Stat(entry)
+			if err != nil {
+				ctx.Log.Warn("failed to stat path for permission fix", "path", entry, "error", err)
+				continue
+			}
+
+			// Only fix permissions on files, not directories
+			if fi.IsDir() {
+				continue
+			}
+
+			if err := os.Chmod(entry, 0600); err != nil {
+				ctx.Log.Warn("failed to set config file permissions", "path", entry, "error", err)
+			}
+		}
+	}
+
+	ctx.Log.Info("wrote local cluster config", "cluster", "local", "address", localCluster.Hostname)
+	return nil
 }

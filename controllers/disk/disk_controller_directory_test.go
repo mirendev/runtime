@@ -6,9 +6,10 @@ import (
 	"path/filepath"
 	"testing"
 
+	"log/slog"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"log/slog"
 	"miren.dev/runtime/api/storage/storage_v1alpha"
 	"miren.dev/runtime/pkg/entity"
 )
@@ -552,9 +553,10 @@ func TestDiskController_DirectoryMode_WithNormalMode(t *testing.T) {
 		tempDir := t.TempDir()
 		log := slog.Default()
 
+		generatedVolId := "generated-vol-123"
 		mockClient := &mockLsvdClient{
-			createInSegmentAccessFunc: func(ctx context.Context, volumeId string, sizeGb int64, filesystem string) error {
-				return nil
+			createInSegmentAccessFunc: func(ctx context.Context, diskName string, sizeGb int64, filesystem string) (string, error) {
+				return generatedVolId, nil
 			},
 		}
 
@@ -572,6 +574,7 @@ func TestDiskController_DirectoryMode_WithNormalMode(t *testing.T) {
 		volumeId, err := controller.provisionVolume(ctx, disk)
 		require.NoError(t, err)
 		assert.NotEmpty(t, volumeId)
+		assert.Equal(t, generatedVolId, volumeId)
 
 		// In normal mode, should NOT create a directory
 		diskDataPath := filepath.Join(tempDir, "disk-data", volumeId)
