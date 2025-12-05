@@ -25,6 +25,22 @@ types:
             type: string
             index: 3
 
+  - type: AccessInfo
+    doc: Information about how to access the deployed application
+    fields:
+      - name: hostnames
+        type: '[]string'
+        index: 0
+        doc: Hostnames where the app is accessible (from configured routes)
+      - name: default_route
+        type: bool
+        index: 1
+        doc: Whether this app is the default route
+      - name: cluster_hostname
+        type: string
+        index: 2
+        doc: Cloud-provisioned DNS hostname for the cluster (if registered with Miren Cloud)
+
 interfaces:
   - name: Stream
     methods:
@@ -49,4 +65,7 @@ interfaces:
         results:
           - name: version
             type: string
+          - name: access_info
+            type: '*AccessInfo'
+            doc: Information about how to access the deployed app
 

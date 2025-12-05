@@ -20,6 +20,7 @@ import (
 	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/api/entityserver"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
+	"miren.dev/runtime/api/ingress"
 	"miren.dev/runtime/appconfig"
 	"miren.dev/runtime/components/netresolve"
 	"miren.dev/runtime/observability"
@@ -33,26 +34,30 @@ import (
 )
 
 type Builder struct {
-	Log       *slog.Logger
-	EAS       *entityserver_v1alpha.EntityAccessClient
-	ec        *entityserver.Client
-	appClient *app.Client
-	TempDir   string
-	Registry  string
+	Log           *slog.Logger
+	EAS           *entityserver_v1alpha.EntityAccessClient
+	ec            *entityserver.Client
+	appClient     *app.Client
+	ingressClient *ingress.Client
+	TempDir       string
+	Registry      string
+	DNSHostname   string // Cloud-provisioned DNS hostname for default route display
 
 	Resolver  netresolve.Resolver
 	LogWriter observability.LogWriter
 }
 
-func NewBuilder(log *slog.Logger, eas *entityserver_v1alpha.EntityAccessClient, appClient *app.Client, res netresolve.Resolver, tmpdir string, logWriter observability.LogWriter) *Builder {
+func NewBuilder(log *slog.Logger, eas *entityserver_v1alpha.EntityAccessClient, appClient *app.Client, res netresolve.Resolver, tmpdir string, logWriter observability.LogWriter, dnsHostname string) *Builder {
 	return &Builder{
-		Log:       log.With("module", "builder"),
-		EAS:       eas,
-		appClient: appClient,
-		Resolver:  res,
-		TempDir:   tmpdir,
-		ec:        entityserver.NewClient(log, eas),
-		LogWriter: logWriter,
+		Log:           log.With("module", "builder"),
+		EAS:           eas,
+		appClient:     appClient,
+		ingressClient: ingress.NewClient(log, eas),
+		Resolver:      res,
+		TempDir:       tmpdir,
+		ec:            entityserver.NewClient(log, eas),
+		LogWriter:     logWriter,
+		DNSHostname:   dnsHostname,
 	}
 }
 
@@ -706,7 +711,56 @@ func (b *Builder) BuildFromTar(ctx context.Context, state *build_v1alpha.Builder
 
 	state.Results().SetVersion(mrv.Version)
 
+	// Get access info for the deployed app
+	accessInfo := b.getAccessInfo(ctx, name)
+	state.Results().SetAccessInfo(&accessInfo)
+
 	return nil
+}
+
+// getAccessInfo queries routes to determine how the app can be accessed
+func (b *Builder) getAccessInfo(ctx context.Context, appName string) *build_v1alpha.AccessInfo {
+	info := &build_v1alpha.AccessInfo{}
+
+	// Get the app entity to find its ID
+	appEntity, err := b.appClient.GetByName(ctx, appName)
+	if err != nil {
+		b.Log.Debug("could not get app for access info", "app", appName, "error", err)
+		return info
+	}
+
+	// Get all routes
+	routes, err := b.ingressClient.List(ctx)
+	if err != nil {
+		b.Log.Debug("could not list routes for access info", "error", err)
+		return info
+	}
+
+	// Filter routes for this app
+	var hostnames []string
+	var hasDefaultRoute bool
+
+	for _, r := range routes {
+		if r.Route.App != appEntity.ID {
+			continue
+		}
+		if r.Route.Default {
+			hasDefaultRoute = true
+		}
+		if r.Route.Host != "" {
+			hostnames = append(hostnames, r.Route.Host)
+		}
+	}
+
+	info.SetHostnames(&hostnames)
+	info.SetDefaultRoute(hasDefaultRoute)
+
+	// Include the cloud DNS hostname if available
+	if b.DNSHostname != "" {
+		info.SetClusterHostname(b.DNSHostname)
+	}
+
+	return info
 }
 
 func (b *Builder) logDeployment(ctx context.Context, appName, version, artifact string) {

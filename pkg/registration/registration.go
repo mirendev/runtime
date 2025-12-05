@@ -73,6 +73,7 @@ type Status struct {
 	ClusterID        string `json:"cluster_id,omitempty"`
 	OrganizationID   string `json:"organization_id,omitempty"`
 	ServiceAccountID string `json:"service_account_id,omitempty"`
+	DNSHostname      string `json:"dns_hostname,omitempty"`
 }
 
 // StoredRegistration contains the registration data stored on disk
@@ -81,7 +82,8 @@ type StoredRegistration struct {
 	ClusterName      string            `json:"cluster_name"`
 	OrganizationID   string            `json:"organization_id"`
 	ServiceAccountID string            `json:"service_account_id"`
-	PrivateKey       string            `json:"private_key"` // PEM encoded private key
+	DNSHostname      string            `json:"dns_hostname,omitempty"` // Auto-provisioned DNS hostname from cloud
+	PrivateKey       string            `json:"private_key"`            // PEM encoded private key
 	CloudURL         string            `json:"cloud_url"`
 	RegisteredAt     time.Time         `json:"registered_at"`
 	Tags             map[string]string `json:"tags,omitempty"`
