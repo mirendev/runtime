@@ -27,6 +27,14 @@ When your app stops or restarts:
 - Data remains on the disk
 - Your next instance can acquire the lease and continue where it left off
 
+## How Much Storage Does Miren Provide?
+
+During the Developer Preview, we're providing unmetered storage. The intention is to implement a free tier
+and usage based pricing on the storage. We'll be sure to communicate often and clearly how we intend
+to proceed.
+
+The feature is designed to keep our costs low, and our intention is to pass that low cost on to our users.
+
 ## Configuring Disks
 
 Add a disk to your application by including a `disks` section in your service configuration in `.miren/app.toml`:
