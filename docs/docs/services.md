@@ -18,10 +18,35 @@ Services share the same deployment lifecycle—when you deploy your app, all ser
 
 ## Defining Services
 
-Services are configured in your `.miren/app.toml` file. There are two main approaches:
+Services can be defined in two ways:
 
-1. **Same image, different commands** — Run different entrypoints from your built container
-2. **Different images** — Pull separate container images for each service
+1. **Procfile** — Simple format for defining commands per service
+2. **`.miren/app.toml`** — Full configuration with scaling, env vars, and images
+
+### Using a Procfile
+
+If your app has a `Procfile`, Miren automatically infers services from it:
+
+```text
+web: npm start
+worker: npm run worker
+```
+
+Each line defines a service: the name before the colon, and the command after. This is compatible with Heroku's Procfile format.
+
+For more control (scaling, environment variables, different images), use `.miren/app.toml`:
+
+```toml
+[services.web]
+command = "npm start"
+
+[services.worker]
+command = "npm run worker"
+
+[services.worker.concurrency]
+mode = "fixed"
+num_instances = 2
+```
 
 ### Same Image, Different Commands
 
