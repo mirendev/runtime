@@ -161,6 +161,22 @@ miren env
 miren env set KEY=value
 ```
 
+## Persistent Storage with Disks
+
+Need to store data that survives restarts? Add a disk to your service in `.miren/app.toml`:
+
+```toml
+[[services.db.disks]]
+name = "myapp-data"
+mount_path = "/data"
+size_gb = 10
+```
+
+**NOTE:** Disks can only be used with fixed instance scheduled services, which the default
+web service is not.
+
+Your data is automatically backed up to Miren Cloud. See [Disks](/disks) for full documentation.
+
 ## Working with Routes
 
 When you deploy your first application, Miren automatically creates a default route for it.
@@ -217,3 +233,4 @@ miren route
 
 - [CLI Reference](/cli-reference) - Learn about all available commands
 - [App Commands](/cli/app) - Detailed application command reference
+- [Disks](/disks) - Persistent storage for your applications

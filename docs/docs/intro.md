@@ -39,12 +39,14 @@ miren logs
 
 - **Apps**: Your services and applications
 - **Deploy**: Push code to any environment with a single command
+- **Disks**: Persistent storage that survives restarts and follows your services anywhere
 - **Environments**: Local, staging, production — all work the same way
 - **Teams**: Manage who can access what, all through miren.cloud
 
 ## Next Steps
 
 - [Getting Started](/getting-started) - Install Miren and deploy your first app
+- [Disks](/disks) - Add persistent storage to your apps
 - [CLI Reference](/cli-reference) - Learn about all available commands
 
 ---
