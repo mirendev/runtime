@@ -22,6 +22,17 @@ func ClusterAdd(ctx *Context, opts struct {
 	Address  string `short:"a" long:"address" description:"Address/hostname of the cluster (optional - will use from selected cluster)"`
 	Force    bool   `short:"f" long:"force" description:"Overwrite existing cluster configuration"`
 }) error {
+	return addCluster(ctx, opts.Identity, opts.Cluster, opts.Address, opts.Force)
+}
+
+// AddClusterInteractive prompts the user to select and add a cluster interactively.
+// It auto-selects the identity if only one is available.
+// Returns nil if a cluster was successfully added.
+func AddClusterInteractive(ctx *Context) error {
+	return addCluster(ctx, "", "", "", false)
+}
+
+func addCluster(ctx *Context, identityName, clusterName, address string, force bool) error {
 	// Load the main config to check if the identity exists
 	mainConfig, err := clientconfig.LoadConfig()
 	if err != nil && err != clientconfig.ErrNoConfig {
@@ -34,12 +45,12 @@ func ClusterAdd(ctx *Context, opts struct {
 	}
 
 	// If no identity specified, check if we can auto-select
-	if opts.Identity == "" {
+	if identityName == "" {
 		availableIdentities := mainConfig.GetIdentityNames()
 		if len(availableIdentities) == 1 {
 			// Auto-select the only identity
-			opts.Identity = availableIdentities[0]
-			ctx.Info("Using identity '%s' (only one available)", opts.Identity)
+			identityName = availableIdentities[0]
+			ctx.Info("Using identity '%s' (only one available)", identityName)
 		} else if len(availableIdentities) > 1 {
 			// Multiple identities available, user must specify
 			return fmt.Errorf("multiple identities available, please specify one with --identity: %s", strings.Join(availableIdentities, ", "))
@@ -48,21 +59,21 @@ func ClusterAdd(ctx *Context, opts struct {
 		}
 	}
 
-	identity, err := mainConfig.GetIdentity(opts.Identity)
+	identity, err := mainConfig.GetIdentity(identityName)
 	if err != nil {
 		// List available identities to help the user
 		availableIdentities := mainConfig.GetIdentityNames()
 		if len(availableIdentities) > 0 {
-			return fmt.Errorf("identity %q not found. Available identities: %v", opts.Identity, availableIdentities)
+			return fmt.Errorf("identity %q not found. Available identities: %v", identityName, availableIdentities)
 		}
-		return fmt.Errorf("identity %q not found in configuration", opts.Identity)
+		return fmt.Errorf("identity %q not found in configuration", identityName)
 	}
 
 	// If no cluster name or address provided, query the identity server for available clusters
 	var caCert string
 	var allAddresses []string
 
-	if opts.Cluster == "" && opts.Address == "" {
+	if clusterName == "" && address == "" {
 		ctx.Info("Fetching available clusters from identity server...")
 
 		clusters, err := fetchAvailableClusters(ctx, mainConfig, identity)
@@ -80,7 +91,7 @@ func ClusterAdd(ctx *Context, opts struct {
 			return err
 		}
 
-		opts.Cluster = localName
+		clusterName = localName
 
 		// Store all available addresses
 		allAddresses = selectedCluster.APIAddresses
@@ -92,21 +103,21 @@ func ClusterAdd(ctx *Context, opts struct {
 		}
 
 		caCert = cert
-		opts.Address = workingAddress
+		address = workingAddress
 
 		if localName != selectedCluster.Name {
 			ctx.Info("Adding cluster '%s' as '%s' (connected to %s)", selectedCluster.Name, localName, workingAddress)
 		} else {
 			ctx.Info("Adding cluster '%s' (connected to %s)", selectedCluster.Name, workingAddress)
 		}
-	} else if opts.Cluster == "" || opts.Address == "" {
+	} else if clusterName == "" || address == "" {
 		return fmt.Errorf("both --cluster and --address must be specified, or neither (to list available clusters)")
 	} else {
 		// Manual mode - address was specified directly
-		ctx.Info("Connecting to %s to extract TLS certificate...", opts.Address)
+		ctx.Info("Connecting to %s to extract TLS certificate...", address)
 
 		// Extract the TLS certificate from the server
-		cert, fingerprint, err := extractTLSCertificateFromAddress(ctx, opts.Address)
+		cert, fingerprint, err := extractTLSCertificateFromAddress(ctx, address)
 		if err != nil {
 			return fmt.Errorf("failed to extract TLS certificate: %w", err)
 		}
@@ -116,9 +127,9 @@ func ClusterAdd(ctx *Context, opts struct {
 
 	// Create the cluster configuration
 	clusterConfig := &clientconfig.ClusterConfig{
-		Hostname:     opts.Address,
+		Hostname:     address,
 		AllAddresses: allAddresses,
-		Identity:     opts.Identity,
+		Identity:     identityName,
 		CACert:       caCert,
 	}
 
@@ -134,33 +145,39 @@ func ClusterAdd(ctx *Context, opts struct {
 	}
 
 	// Check if the leaf config already exists (by trying to get the cluster)
-	if mainConfig.HasCluster(opts.Cluster) && !opts.Force {
-		return fmt.Errorf("cluster configuration %q already exists. Use --force to overwrite", opts.Cluster)
+	if mainConfig.HasCluster(clusterName) && !force {
+		return fmt.Errorf("cluster configuration %q already exists. Use --force to overwrite", clusterName)
 	}
 
 	// Create the cluster config data
 	leafConfigData := &clientconfig.ConfigData{
 		Clusters: map[string]*clientconfig.ClusterConfig{
-			opts.Cluster: clusterConfig,
+			clusterName: clusterConfig,
 		},
 	}
 
 	// Add as a leaf config (this will be saved to clientconfig.d/{cluster}.yaml)
-	mainConfig.SetLeafConfig(opts.Cluster, leafConfigData)
+	mainConfig.SetLeafConfig(clusterName, leafConfigData)
+
+	if mainConfig.GetClusterCount() == 1 {
+		// If this is the first cluster, set it as active
+		mainConfig.SetActiveCluster(clusterName)
+		ctx.Info("Setting %q as the active cluster", clusterName)
+	}
 
 	// Save the main config (which will also save the leaf config)
 	if err := mainConfig.Save(); err != nil {
 		return fmt.Errorf("failed to save cluster configuration: %w", err)
 	}
 
-	ctx.Completed("Successfully added cluster %q with identity %q at %s", opts.Cluster, opts.Identity, opts.Address)
-	ctx.Info("Configuration saved to clientconfig.d/%s.yaml", opts.Cluster)
+	ctx.Completed("Successfully added cluster %q with identity %q at %s", clusterName, identityName, address)
+	ctx.Info("Configuration saved to clientconfig.d/%s.yaml", clusterName)
 
 	// If there's no active cluster set, suggest setting this one
 	if mainConfig != nil && mainConfig.ActiveCluster() == "" {
 		ctx.Info("")
 		ctx.Info("Tip: Set this as your active cluster with:")
-		ctx.Info("  miren cluster switch %s", opts.Cluster)
+		ctx.Info("  miren cluster switch %s", clusterName)
 	}
 
 	return nil

@@ -18,6 +18,7 @@ import (
 	"miren.dev/runtime/api/build/build_v1alpha"
 	"miren.dev/runtime/api/deployment/deployment_v1alpha"
 	"miren.dev/runtime/appconfig"
+	"miren.dev/runtime/clientconfig"
 	"miren.dev/runtime/pkg/deploygating"
 	"miren.dev/runtime/pkg/git"
 	"miren.dev/runtime/pkg/progress/upload"
@@ -37,8 +38,58 @@ func Deploy(ctx *Context, opts struct {
 	name := opts.App
 	dir := opts.Dir
 
-	// Confirm deployment unless --force is used, stdin is not a TTY, or only one cluster is configured
+	if ctx.ClientConfig == nil {
+		return fmt.Errorf("no client configuration available; run `miren login` to authenticate or install a server locally")
+	}
+
 	isInteractive := term.IsTerminal(int(os.Stdin.Fd()))
+
+	// Check that we have at least one cluster configured
+	// Check if we have an identity - if so, offer to add a cluster
+	if isInteractive &&
+		ctx.ClientConfig.GetClusterCount() == 0 &&
+		ctx.ClientConfig.HasIdentities() {
+		confirmed, err := ui.Confirm(
+			ui.WithMessage("No clusters configured. Would you like to add one now?"),
+			ui.WithDefault(true),
+			ui.WithIndent("  "),
+		)
+		if err != nil || !confirmed {
+			return fmt.Errorf("no clusters configured; run 'miren login' to authenticate and 'miren cluster add' to configure a cluster, or install a server locally")
+		}
+
+		if err := AddClusterInteractive(ctx); err != nil {
+			return fmt.Errorf("failed to add cluster: %w", err)
+		}
+
+		// Reload the client config
+		cfg, err := clientconfig.LoadConfig()
+		if err != nil {
+			return fmt.Errorf("failed to reload config after adding cluster: %w", err)
+		}
+		ctx.ClientConfig = cfg
+
+		// Get the active cluster (the one we just added)
+		clusterName := cfg.ActiveCluster()
+		if clusterName == "" {
+			return fmt.Errorf("no active cluster set after adding cluster")
+		}
+
+		clusterCfg, err := cfg.GetCluster(clusterName)
+		if err == nil && clusterCfg != nil {
+			ctx.ClusterConfig = clusterCfg
+			ctx.ClusterName = clusterName
+		}
+
+		ctx.Info("")
+	}
+
+	// Re-check after potential cluster add
+	if ctx.ClientConfig.GetClusterCount() == 0 {
+		return fmt.Errorf("no clusters configured; run 'miren login' to authenticate and configure a cluster, or install a server locally")
+	}
+
+	// Confirm deployment unless --force is used, stdin is not a TTY, or only one cluster is configured
 	hasSingleCluster := ctx.ClientConfig != nil && ctx.ClientConfig.GetClusterCount() == 1
 	if !opts.Force && isInteractive && !hasSingleCluster {
 		message := fmt.Sprintf("Deploy app '%s' to cluster '%s'?", name, ctx.ClusterName)
