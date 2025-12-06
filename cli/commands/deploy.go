@@ -55,7 +55,7 @@ func Deploy(ctx *Context, opts struct {
 			ui.WithIndent("  "),
 		)
 		if err != nil || !confirmed {
-			return fmt.Errorf("no clusters configured; run 'miren login' to authenticate and configure a cluster, or install a server locally")
+			return fmt.Errorf("no clusters configured; run 'miren login' to authenticate and 'miren cluster add' to configure a cluster, or install a server locally")
 		}
 
 		if err := AddClusterInteractive(ctx); err != nil {
