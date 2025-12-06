@@ -61,6 +61,17 @@ The Miren CLI (`miren`) provides commands for managing applications and deployme
 - `miren debug entity delete` - Delete an entity
 - `miren debug entity put` - Put an entity
 
+### Disk Commands
+
+- `miren debug disk list` - List all disk entities
+- `miren debug disk status` - Show status of a disk entity
+- `miren debug disk create` - Create a disk entity
+- `miren debug disk delete` - Delete a disk entity
+- `miren debug disk lease-list` - List all disk leases
+- `miren debug disk lease-status` - Show status of a disk lease
+- `miren debug disk lease-release` - Release a disk lease
+- `miren debug disk mounts` - List mounted disks
+
 ### Utility Commands
 
 - `miren version` - Print the version
@@ -124,3 +135,5 @@ miren app list --format json
 
 - [Getting Started](/getting-started) - Learn by deploying
 - [App Commands](/cli/app) - Manage your applications
+- [Disk Commands](/cli/disk) - Manage persistent storage
+- [Disks Overview](/disks) - Learn about persistent storage
