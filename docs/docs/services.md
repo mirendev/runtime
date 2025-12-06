@@ -241,7 +241,7 @@ mode = "fixed"
 num_instances = 1
 ```
 
-Your web service connects to postgres at `postgres.app.miren:5432` and redis at `redis.app.miren:6379`. Database images listen on their standard ports automatically—you don't need to configure ports for them in Miren.
+Connect to other services using their DNS name and standard port—`postgres.app.miren:5432` for PostgreSQL, `redis.app.miren:6379` for Redis. The container images listen on their standard ports by default; Miren doesn't manage these ports.
 
 ## HTTP Routing
 
