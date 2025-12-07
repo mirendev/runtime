@@ -465,12 +465,15 @@ func (d *Disk) fillFromWriteCache(ctx *Context, log *slog.Logger, data RangeData
 }
 
 func (d *Disk) fillingFromPrevWriteCache(ctx *Context, log *slog.Logger, data RangeData, holes []Extent) ([]Extent, error) {
-	oc := d.prevCache.Load()
+	oc := d.prevCache.Acquire()
 
 	// If there is no previous cache, bail.
 	if oc == nil {
 		return holes, nil
 	}
+
+	// Ensure we release the reference when done, regardless of success or failure
+	defer d.prevCache.Release()
 
 	var remaining []Extent
 
