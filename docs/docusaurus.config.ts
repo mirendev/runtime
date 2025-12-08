@@ -96,8 +96,12 @@ const config: Config = {
           ],
         },
         {
-          title: 'More',
+          title: 'Community',
           items: [
+            {
+              label: 'Code of Conduct',
+              to: '/conduct',
+            },
             {
               label: 'GitHub',
               href: 'https://github.com/mirendev/runtime',
