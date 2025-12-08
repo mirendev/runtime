@@ -10,8 +10,10 @@ import (
 	"net/http"
 	"net/netip"
 	"net/url"
+	"os"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"miren.dev/runtime/api/app"
@@ -229,6 +231,34 @@ func (h *Server) releaseLease(ctx context.Context, lease *lease) {
 	lease.Uses--
 }
 
+// invalidateLease removes a lease from the cache entirely.
+// This is called when a proxy error indicates the sandbox is dead.
+// The lease is removed immediately rather than waiting for expireLeases.
+func (h *Server) invalidateLease(ctx context.Context, app string, lease *lease) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	ar, ok := h.apps[app]
+	if !ok {
+		return
+	}
+
+	for i, l := range ar.leases {
+		if l == lease {
+			h.Log.Info("invalidating stale lease due to proxy error", "app", app, "url", lease.Lease.URL)
+			// Release the lease back to the activator
+			h.aa.ReleaseLease(ctx, l.Lease)
+			// Remove from our cache
+			ar.leases = append(ar.leases[:i], ar.leases[i+1:]...)
+			break
+		}
+	}
+
+	if len(ar.leases) == 0 {
+		delete(h.apps, app)
+	}
+}
+
 func (h *Server) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	h.handler.ServeHTTP(w, req)
 }
@@ -417,9 +447,14 @@ func (h *Server) serveHTTPWithMetrics(w http.ResponseWriter, req *http.Request, 
 
 	localLease := h.retainLease(ctx, targetAppId.String(), actLease)
 
-	defer h.releaseLease(ctx, localLease)
-
-	h.proxyToLease(w, req, actLease.URL, targetAppId.String(), *appName)
+	err = h.proxyToLease(w, req, actLease.URL, targetAppId.String(), *appName)
+	if err != nil {
+		// Connection error on a fresh lease - the sandbox may have died
+		// between lease acquisition and proxy. Invalidate immediately.
+		h.invalidateLease(context.Background(), targetAppId.String(), localLease)
+	} else {
+		h.releaseLease(ctx, localLease)
+	}
 }
 
 func (h *Server) logRequestFromStats(appEntityID, appName string, stats httputil.ProxyStats) {
@@ -454,13 +489,19 @@ func (h *Server) logRequestFromStats(appEntityID, appName string, stats httputil
 	}
 }
 
-func (h *Server) proxyToLease(w http.ResponseWriter, req *http.Request, targetURL, appEntityID, appName string) {
+// proxyToLease proxies the request to the target URL and returns any connection error.
+// If the proxy fails with a connection error (connection refused, no route to host, etc.),
+// it returns the error so the caller can invalidate the lease.
+func (h *Server) proxyToLease(w http.ResponseWriter, req *http.Request, targetURL, appEntityID, appName string) error {
 	targetParsed, err := url.Parse(targetURL)
 	if err != nil {
 		h.Log.Error("failed to parse target URL", "error", err, "url", targetURL)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
-		return
+		return nil // Not a connection error, don't invalidate
 	}
+
+	// Capture any proxy error for the caller
+	var proxyErr error
 
 	proxy := &httputil.ReverseProxy{
 		Director: func(outReq *http.Request) {
@@ -476,17 +517,41 @@ func (h *Server) proxyToLease(w http.ResponseWriter, req *http.Request, targetUR
 
 			outReq.Header.Set("X-Forwarded-Host", req.Host)
 		},
+		ErrorHandler: func(rw http.ResponseWriter, r *http.Request, err error) {
+			proxyErr = err
+			if isProxyConnectionError(err) {
+				h.Log.Warn("proxy connection error to sandbox", "error", err, "url", targetURL, "app", appName)
+			} else {
+				h.Log.Error("proxy error", "error", err, "url", targetURL, "app", appName)
+			}
+			rw.WriteHeader(http.StatusBadGateway)
+		},
 		Callback: func(stats httputil.ProxyStats) {
 			h.logRequestFromStats(appEntityID, appName, stats)
 		},
 	}
 
 	proxy.ServeHTTP(w, req)
+
+	// Return connection errors so the caller can invalidate the lease
+	if proxyErr != nil && isProxyConnectionError(proxyErr) {
+		return proxyErr
+	}
+	return nil
 }
 
 func (h *Server) forwardToLease(ctx context.Context, w http.ResponseWriter, req *http.Request, lease *lease, appEntityID, appName string) {
-	defer h.releaseLease(ctx, lease)
-	h.proxyToLease(w, req, lease.Lease.URL, appEntityID, appName)
+	err := h.proxyToLease(w, req, lease.Lease.URL, appEntityID, appName)
+	if err != nil {
+		// Connection error indicates the sandbox is dead - invalidate the lease
+		// so subsequent requests will acquire a fresh lease to a healthy sandbox.
+		// Use background context since request context may be cancelled.
+		h.invalidateLease(context.Background(), appEntityID, lease)
+	} else {
+		// Only release (decrement use count) if the proxy succeeded.
+		// If we invalidated, the lease is already removed from cache.
+		h.releaseLease(ctx, lease)
+	}
 }
 
 /*
@@ -544,6 +609,40 @@ func (rw *responseWriter) Write(b []byte) (int, error) {
 // Unwrap returns the underlying ResponseWriter for middleware compatibility
 func (rw *responseWriter) Unwrap() http.ResponseWriter {
 	return rw.ResponseWriter
+}
+
+// isProxyConnectionError checks if an error indicates the backend is unreachable.
+// This includes connection refused, no route to host, and similar network failures
+// that indicate the sandbox is dead or gone.
+func isProxyConnectionError(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	// Check for net.OpError which wraps most connection failures
+	var opErr *net.OpError
+	if errors.As(err, &opErr) {
+		// Check for syscall errors (connection refused, no route to host, etc.)
+		var syscallErr *os.SyscallError
+		if errors.As(opErr.Err, &syscallErr) {
+			if errno, ok := syscallErr.Err.(syscall.Errno); ok {
+				switch errno {
+				case syscall.ECONNREFUSED: // connection refused
+					return true
+				case syscall.EHOSTUNREACH: // no route to host
+					return true
+				case syscall.ENETUNREACH: // network unreachable
+					return true
+				case syscall.ECONNRESET: // connection reset by peer
+					return true
+				case syscall.ECONNABORTED: // connection aborted
+					return true
+				}
+			}
+		}
+	}
+
+	return false
 }
 
 // HealthResponse represents the JSON response for /health endpoint
