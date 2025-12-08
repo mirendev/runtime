@@ -2,9 +2,13 @@ package httpingress
 
 import (
 	"encoding/json"
+	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -151,5 +155,114 @@ func TestHealthEndpoint(t *testing.T) {
 
 	if response.Checks == nil {
 		t.Error("Expected checks field in response")
+	}
+}
+
+func TestIsProxyConnectionError(t *testing.T) {
+	tests := []struct {
+		name     string
+		err      error
+		expected bool
+	}{
+		{
+			name:     "nil error",
+			err:      nil,
+			expected: false,
+		},
+		{
+			name:     "generic error",
+			err:      errors.New("some error"),
+			expected: false,
+		},
+		{
+			name: "connection refused",
+			err: &net.OpError{
+				Op:  "dial",
+				Net: "tcp",
+				Err: &os.SyscallError{
+					Syscall: "connect",
+					Err:     syscall.ECONNREFUSED,
+				},
+			},
+			expected: true,
+		},
+		{
+			name: "no route to host",
+			err: &net.OpError{
+				Op:  "dial",
+				Net: "tcp",
+				Err: &os.SyscallError{
+					Syscall: "connect",
+					Err:     syscall.EHOSTUNREACH,
+				},
+			},
+			expected: true,
+		},
+		{
+			name: "network unreachable",
+			err: &net.OpError{
+				Op:  "dial",
+				Net: "tcp",
+				Err: &os.SyscallError{
+					Syscall: "connect",
+					Err:     syscall.ENETUNREACH,
+				},
+			},
+			expected: true,
+		},
+		{
+			name: "connection reset",
+			err: &net.OpError{
+				Op:  "read",
+				Net: "tcp",
+				Err: &os.SyscallError{
+					Syscall: "read",
+					Err:     syscall.ECONNRESET,
+				},
+			},
+			expected: true,
+		},
+		{
+			name: "connection aborted",
+			err: &net.OpError{
+				Op:  "read",
+				Net: "tcp",
+				Err: &os.SyscallError{
+					Syscall: "read",
+					Err:     syscall.ECONNABORTED,
+				},
+			},
+			expected: true,
+		},
+		{
+			name: "net.OpError without syscall error",
+			err: &net.OpError{
+				Op:  "dial",
+				Net: "tcp",
+				Err: errors.New("some other error"),
+			},
+			expected: false,
+		},
+		{
+			name: "timeout error (not a connection error)",
+			err: &net.OpError{
+				Op:  "dial",
+				Net: "tcp",
+				Err: &os.SyscallError{
+					Syscall: "connect",
+					Err:     syscall.ETIMEDOUT,
+				},
+			},
+			expected: false, // We don't treat timeout as a connection error for invalidation
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := isProxyConnectionError(tt.err)
+			if result != tt.expected {
+				t.Errorf("isProxyConnectionError(%v) = %v, want %v", tt.err, result, tt.expected)
+			}
+		})
 	}
 }
