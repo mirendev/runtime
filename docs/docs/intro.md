@@ -48,6 +48,7 @@ miren logs
 ## Next Steps
 
 - [Getting Started](/getting-started) - Install Miren and deploy your first app
+- [Supported Languages](/languages) - Ruby, Python, Node.js, Go, Bun, and custom Dockerfiles
 - [Services](/services) - Run multiple processes in your app
 - [Scaling](/scaling) - Configure how your app scales
 - [Disks](/disks) - Add persistent storage to your apps
