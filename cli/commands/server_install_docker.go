@@ -104,6 +104,14 @@ func ServerInstallDocker(ctx *Context, opts struct {
 
 	// Wait for server to be ready
 	ctx.Info("Waiting for miren server to initialize...")
+
+	// NOTE: We've found that, on docker desktop, if we make a http3 UDP request
+	// to the port BEFORE the container has booted enough, docker desktop seems to
+	// stop listening on that port entirely until the container is restarted.
+	// Only a 1 second delay was required to fix the issue in testing, but
+	// I'm making it 3 seconds here to be safe.
+	time.Sleep(3 * time.Second)
+
 	if err := waitForServerReady(ctx); err != nil {
 		ctx.Warn("Failed to confirm server is ready: %v", err)
 		ctx.Info("The server may still be starting. Check logs with: docker logs %s", opts.Name)
