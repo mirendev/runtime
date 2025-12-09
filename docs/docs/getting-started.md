@@ -37,6 +37,8 @@ miren version
 
 ### Start the Miren Server
 
+(Skip this step if you are using our [demo cluster](#using-our-demo-cluster))
+
 Set up and start the Miren server:
 
 ```bash
@@ -53,6 +55,20 @@ To skip cloud registration and run standalone:
 
 ```bash
 sudo miren server install --without-cloud
+```
+
+### Using Our Demo Cluster
+
+Ask for access to our demo cluster in #miren-club on [Discord](https://miren.dev/discord).
+
+```bash
+# Once you have access, connect to the demo cluster
+$ miren login
+$ miren cluster add
+
+Select a cluster to bind:
+   NAME                ORGANIZATION   ADDRESS
+▸  miren-demo          mirendev       1.2.3.4:8443 (+7)
 ```
 
 ## Deploy Your First App
