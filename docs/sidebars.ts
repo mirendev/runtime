@@ -30,6 +30,11 @@ const sidebars: SidebarsConfig = {
       ],
     },
     'firewall',
+    {
+      type: 'link',
+      label: 'How Miren Compares',
+      href: 'https://miren.dev/compare',
+    },
   ],
 };
 
