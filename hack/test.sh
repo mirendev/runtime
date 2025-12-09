@@ -52,13 +52,12 @@ normalize_args() {
 if test "$USESHELL" != ""; then
   setup_bash_environment
   bash
-# Because all the tests use the same containerd, buildkit, and cgroups, we need to
-# make sure that they don't interfere with each other. For now, we do that by passing
-# -p 1, but in the future we should run each test in a separate namespace.
+# Tests use unique containerd namespaces and dynamic ports, so they should be
+# safe to run in parallel. Remove -p 1 to enable parallel package execution.
 elif test "$VERBOSE" != ""; then
   normalized_args=($(normalize_args "$@"))
-  go test -p 1 -v "${normalized_args[@]}"
+  go test -v "${normalized_args[@]}"
 else
   normalized_args=($(normalize_args "$@"))
-  gotestsum --format testname -- -p 1 "${normalized_args[@]}"
+  gotestsum --format testname -- "${normalized_args[@]}"
 fi
