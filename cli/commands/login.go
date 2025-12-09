@@ -620,6 +620,7 @@ func autoConfigureCluster(ctx *Context, identityName, cloudURL string, keyPair *
 
 	if len(validClusters) == 0 {
 		ctx.Info("No clusters available for your account")
+		ctx.Printf("No clusters configured. Is your miren server running? Check server status with `miren server status`\n")
 		return ErrNoAutoConfigNeeded
 	}
 
