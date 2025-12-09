@@ -21,7 +21,7 @@ import (
 // ServerInstallDocker sets up a Docker container to run the miren server
 func ServerInstallDocker(ctx *Context, opts struct {
 	Image        string            `short:"i" long:"image" description:"Docker image to use" default:"oci.miren.cloud/miren:latest"`
-	Name         string            `short:"n" long:"name" description:"Container name" default:"miren"`
+	Name         string            `short:"n" long:"name" description:"Container name"`
 	Force        bool              `short:"f" long:"force" description:"Remove existing container if present"`
 	HTTPPort     int               `long:"http-port" description:"HTTP port mapping" default:"80"`
 	HostNetwork  bool              `long:"host-network" description:"Use host networking (ignores port mappings)"`
@@ -30,6 +30,16 @@ func ServerInstallDocker(ctx *Context, opts struct {
 	CloudURL     string            `short:"u" long:"url" description:"Cloud URL for registration" default:"https://miren.cloud"`
 	Tags         map[string]string `short:"t" long:"tag" description:"Tags for the cluster (key:value)"`
 }) error {
+	if opts.ClusterName == "" {
+		opts.ClusterName = opts.Name
+	} else if opts.Name == "" {
+		opts.Name = opts.ClusterName
+	}
+
+	if opts.Name == "" {
+		opts.Name = "miren"
+	}
+
 	// Derive volume name from container name
 	volumeName := opts.Name + "-data"
 	// Check if Docker is installed and running
@@ -60,10 +70,6 @@ func ServerInstallDocker(ctx *Context, opts struct {
 	// Create volume if it doesn't exist
 	if err := dockerEnsureVolume(volumeName); err != nil {
 		return fmt.Errorf("failed to ensure volume exists: %w", err)
-	}
-
-	if opts.ClusterName != "" {
-		opts.ClusterName = opts.Name
 	}
 
 	// Register with cloud unless --without-cloud is specified
