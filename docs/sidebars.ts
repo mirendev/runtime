@@ -18,6 +18,19 @@ const sidebars: SidebarsConfig = {
     'getting-started',
     {
       type: 'category',
+      label: 'Core Concepts',
+      items: [
+        'terminology',
+        'languages',
+        'services',
+        'scaling',
+        'disks',
+        'firewall',
+      ],
+    },
+    'working-with-miren-cloud',
+    {
+      type: 'category',
       label: 'CLI Reference',
       link: {
         type: 'doc',
@@ -26,14 +39,22 @@ const sidebars: SidebarsConfig = {
       items: [
         'cli/app',
         'cli/sandbox',
+        'cli/disk',
         'cli/entity',
       ],
     },
-    'firewall',
     {
-      type: 'link',
-      label: 'How Miren Compares',
-      href: 'https://miren.dev/compare',
+      type: 'category',
+      label: 'Resources',
+      items: [
+        'support',
+        'conduct',
+        {
+          type: 'link',
+          label: 'How Miren Compares',
+          href: 'https://miren.dev/compare',
+        },
+      ],
     },
   ],
 };
