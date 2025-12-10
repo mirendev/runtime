@@ -69,6 +69,9 @@ type CoordinatorConfig struct {
 	// Cloud authentication configuration
 	CloudAuth CloudAuthConfig `json:"cloud_auth" yaml:"cloud_auth"`
 
+	// NoAuth disables authentication entirely (for testing only)
+	NoAuth bool `json:"no_auth" yaml:"no_auth"`
+
 	Mem       *metrics.MemoryUsage
 	Cpu       *metrics.CPUUsage
 	HTTP      *metrics.HTTPMetrics
@@ -417,6 +420,10 @@ func (c *Coordinator) Start(ctx context.Context) error {
 		rpcOpts = append(rpcOpts, rpc.WithAuthenticator(authenticator))
 		c.Log.Info("cloud authentication enabled",
 			"cloud_url", authCloudURL)
+	} else if c.NoAuth {
+		// Use NoOpAuthenticator when explicitly disabled (for testing)
+		rpcOpts = append(rpcOpts, rpc.WithAuthenticator(&rpc.NoOpAuthenticator{}))
+		c.Log.Warn("authentication disabled (NoOpAuthenticator)")
 	} else {
 		// Use LocalOnlyAuthenticator when cloud auth is not enabled
 		// This requires valid client certificates for all requests
