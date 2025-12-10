@@ -458,6 +458,9 @@ interfaces:
             type: standard.Timestamp
           - name: follow
             type: bool
+          - name: filter
+            type: string
+            doc: "Optional regex pattern to filter log lines"
           - name: chunks
             type: stream.SendStream[*LogChunk]
 

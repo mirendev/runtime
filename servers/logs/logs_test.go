@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -47,6 +48,48 @@ func createMockVictoriaLogs(t *testing.T, entries []mockLogEntry, delay time.Dur
 			if f, ok := w.(http.Flusher); ok {
 				f.Flush()
 			}
+		}
+	}))
+}
+
+// createFilteringMockVictoriaLogs creates a mock server that filters entries based on query
+func createFilteringMockVictoriaLogs(t *testing.T, entries []mockLogEntry) *httptest.Server {
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		query := r.URL.Query().Get("query")
+		t.Logf("Received query: %s", query)
+
+		// Strip pipe operators (like "| sort by (_time)")
+		if pipeIdx := strings.Index(query, " |"); pipeIdx != -1 {
+			query = query[:pipeIdx]
+		}
+
+		w.Header().Set("Content-Type", "application/x-ndjson")
+		w.WriteHeader(http.StatusOK)
+
+		for _, entry := range entries {
+			// Simple filter simulation: if query contains a word filter, check if msg contains it
+			// This simulates VictoriaLogs LogsQL word filtering
+			parts := strings.Split(query, " ")
+			shouldInclude := true
+			for _, part := range parts[1:] { // Skip the entity/sandbox part
+				if part != "" && !strings.Contains(entry.Msg, part) {
+					shouldInclude = false
+					break
+				}
+			}
+
+			if shouldInclude {
+				data, err := json.Marshal(entry)
+				if err != nil {
+					t.Errorf("failed to marshal entry: %v", err)
+					return
+				}
+				w.Write(data)
+				w.Write([]byte("\n"))
+			}
+		}
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
 		}
 	}))
 }
@@ -110,7 +153,7 @@ func TestStreamLogChunks_Basic(t *testing.T) {
 	target := &app_v1alpha.LogTarget{}
 	target.SetApp("test-app")
 
-	_, err = client.StreamLogChunks(ctx, target, nil, false, callback)
+	_, err = client.StreamLogChunks(ctx, target, nil, false, "", callback)
 	r.NoError(err)
 
 	mu.Lock()
@@ -175,7 +218,7 @@ func TestStreamLogChunks_Chunking(t *testing.T) {
 	target := &app_v1alpha.LogTarget{}
 	target.SetApp("test-app")
 
-	_, err = client.StreamLogChunks(ctx, target, nil, false, callback)
+	_, err = client.StreamLogChunks(ctx, target, nil, false, "", callback)
 	r.NoError(err)
 
 	mu.Lock()
@@ -231,7 +274,7 @@ func TestStreamLogChunks_BySandbox(t *testing.T) {
 	target := &app_v1alpha.LogTarget{}
 	target.SetSandbox("sandbox/test-sandbox-123")
 
-	_, err := client.StreamLogChunks(ctx, target, nil, false, callback)
+	_, err := client.StreamLogChunks(ctx, target, nil, false, "", callback)
 	r.NoError(err)
 
 	mu.Lock()
@@ -279,7 +322,7 @@ func TestStreamLogChunks_WithFromTime(t *testing.T) {
 
 	fromTime := standard.ToTimestamp(now.Add(-1 * time.Hour))
 
-	_, err = client.StreamLogChunks(ctx, target, fromTime, false, callback)
+	_, err = client.StreamLogChunks(ctx, target, fromTime, false, "", callback)
 	r.NoError(err)
 
 	mu.Lock()
@@ -347,7 +390,7 @@ func TestStreamLogChunks_FollowModePeriodicFlush(t *testing.T) {
 	target := &app_v1alpha.LogTarget{}
 	target.SetApp("test-app")
 
-	_, err = client.StreamLogChunks(ctx, target, nil, true, callback)
+	_, err = client.StreamLogChunks(ctx, target, nil, true, "", callback)
 	r.NoError(err)
 
 	mu.Lock()
@@ -385,7 +428,7 @@ func TestStreamLogChunks_ErrorNoTarget(t *testing.T) {
 	// Empty target - should error
 	target := &app_v1alpha.LogTarget{}
 
-	_, err := client.StreamLogChunks(ctx, target, nil, false, callback)
+	_, err := client.StreamLogChunks(ctx, target, nil, false, "", callback)
 	r.Error(err)
 	r.Contains(err.Error(), "target must specify either app or sandbox")
 }
@@ -411,7 +454,7 @@ func TestStreamLogChunks_AppNotFound(t *testing.T) {
 	target := &app_v1alpha.LogTarget{}
 	target.SetApp("nonexistent-app")
 
-	_, err := client.StreamLogChunks(ctx, target, nil, false, callback)
+	_, err := client.StreamLogChunks(ctx, target, nil, false, "", callback)
 	r.Error(err)
 }
 
@@ -458,7 +501,7 @@ func TestStreamLogChunks_LogEntryFields(t *testing.T) {
 	target := &app_v1alpha.LogTarget{}
 	target.SetApp("test-app")
 
-	_, err = client.StreamLogChunks(ctx, target, nil, false, callback)
+	_, err = client.StreamLogChunks(ctx, target, nil, false, "", callback)
 	r.NoError(err)
 
 	mu.Lock()
@@ -469,4 +512,358 @@ func TestStreamLogChunks_LogEntryFields(t *testing.T) {
 	r.Equal("stderr", receivedEntry.Stream())
 	r.Equal("my-source", receivedEntry.Source())
 	r.True(receivedEntry.HasTimestamp())
+}
+
+func TestStreamLogChunks_FilterPassedToVictoriaLogs(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	r := require.New(t)
+
+	now := time.Now()
+	entries := []mockLogEntry{
+		{Time: now.Add(-3 * time.Second).Format(time.RFC3339Nano), Msg: "INFO starting server", Stream: "stdout"},
+		{Time: now.Add(-2 * time.Second).Format(time.RFC3339Nano), Msg: "ERROR connection failed", Stream: "stderr"},
+		{Time: now.Add(-1 * time.Second).Format(time.RFC3339Nano), Msg: "INFO retrying connection", Stream: "stdout"},
+		{Time: now.Format(time.RFC3339Nano), Msg: "ERROR timeout exceeded", Stream: "stderr"},
+	}
+
+	// Use filtering mock that simulates VictoriaLogs LogsQL filtering
+	mockServer := createFilteringMockVictoriaLogs(t, entries)
+	server, ec, cleanup := setupTestServer(t, mockServer)
+	defer cleanup()
+
+	app := &core_v1alpha.App{}
+	_, err := ec.Create(ctx, "test-app", app)
+	r.NoError(err)
+
+	client := &app_v1alpha.LogsClient{
+		Client: rpc.LocalClient(app_v1alpha.AdaptLogs(server)),
+	}
+
+	var receivedEntries []*app_v1alpha.LogEntry
+	var mu sync.Mutex
+
+	callback := stream.Callback(func(chunk *app_v1alpha.LogChunk) error {
+		mu.Lock()
+		defer mu.Unlock()
+		receivedEntries = append(receivedEntries, chunk.Entries()...)
+		return nil
+	})
+
+	target := &app_v1alpha.LogTarget{}
+	target.SetApp("test-app")
+
+	// Filter for ERROR logs - this should be passed to VictoriaLogs
+	_, err = client.StreamLogChunks(ctx, target, nil, false, "ERROR", callback)
+	r.NoError(err)
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	// Mock server simulates filtering, should only return ERROR entries
+	r.Len(receivedEntries, 2)
+	r.Contains(receivedEntries[0].Line(), "ERROR")
+	r.Contains(receivedEntries[1].Line(), "ERROR")
+}
+
+func TestStreamLogChunks_FilterNoMatches(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	r := require.New(t)
+
+	now := time.Now()
+	entries := []mockLogEntry{
+		{Time: now.Add(-2 * time.Second).Format(time.RFC3339Nano), Msg: "INFO normal operation", Stream: "stdout"},
+		{Time: now.Add(-1 * time.Second).Format(time.RFC3339Nano), Msg: "DEBUG checking status", Stream: "stdout"},
+	}
+
+	mockServer := createFilteringMockVictoriaLogs(t, entries)
+	server, ec, cleanup := setupTestServer(t, mockServer)
+	defer cleanup()
+
+	app := &core_v1alpha.App{}
+	_, err := ec.Create(ctx, "test-app", app)
+	r.NoError(err)
+
+	client := &app_v1alpha.LogsClient{
+		Client: rpc.LocalClient(app_v1alpha.AdaptLogs(server)),
+	}
+
+	var receivedEntries []*app_v1alpha.LogEntry
+	var mu sync.Mutex
+
+	callback := stream.Callback(func(chunk *app_v1alpha.LogChunk) error {
+		mu.Lock()
+		defer mu.Unlock()
+		receivedEntries = append(receivedEntries, chunk.Entries()...)
+		return nil
+	})
+
+	target := &app_v1alpha.LogTarget{}
+	target.SetApp("test-app")
+
+	// Filter for something that doesn't exist
+	_, err = client.StreamLogChunks(ctx, target, nil, false, "CRITICAL", callback)
+	r.NoError(err)
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	// Should have no entries
+	r.Empty(receivedEntries)
+}
+
+func TestStreamLogChunks_FilterWithFollow(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	r := require.New(t)
+
+	now := time.Now()
+	entries := []mockLogEntry{
+		{Time: now.Format(time.RFC3339Nano), Msg: "INFO normal log", Stream: "stdout"},
+		{Time: now.Add(100 * time.Millisecond).Format(time.RFC3339Nano), Msg: "ERROR problem found", Stream: "stderr"},
+		{Time: now.Add(200 * time.Millisecond).Format(time.RFC3339Nano), Msg: "INFO continuing", Stream: "stdout"},
+	}
+
+	// Create a mock server that filters and streams entries slowly
+	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		query := r.URL.Query().Get("query")
+		t.Logf("Received query: %s", query)
+
+		// Strip pipe operators (like "| sort by (_time)")
+		if pipeIdx := strings.Index(query, " |"); pipeIdx != -1 {
+			query = query[:pipeIdx]
+		}
+
+		w.Header().Set("Content-Type", "application/x-ndjson")
+		w.WriteHeader(http.StatusOK)
+
+		for i, entry := range entries {
+			if i > 0 {
+				time.Sleep(100 * time.Millisecond)
+			}
+
+			// Simple filter simulation
+			parts := strings.Split(query, " ")
+			shouldInclude := true
+			for _, part := range parts[1:] {
+				if part != "" && !strings.Contains(entry.Msg, part) {
+					shouldInclude = false
+					break
+				}
+			}
+
+			if shouldInclude {
+				data, _ := json.Marshal(entry)
+				w.Write(data)
+				w.Write([]byte("\n"))
+				if f, ok := w.(http.Flusher); ok {
+					f.Flush()
+				}
+			}
+		}
+	}))
+	defer mockServer.Close()
+
+	server, ec, cleanup := setupTestServer(t, mockServer)
+	defer cleanup()
+
+	app := &core_v1alpha.App{}
+	_, err := ec.Create(ctx, "test-app", app)
+	r.NoError(err)
+
+	client := &app_v1alpha.LogsClient{
+		Client: rpc.LocalClient(app_v1alpha.AdaptLogs(server)),
+	}
+
+	var receivedEntries []*app_v1alpha.LogEntry
+	var mu sync.Mutex
+
+	callback := stream.Callback(func(chunk *app_v1alpha.LogChunk) error {
+		mu.Lock()
+		defer mu.Unlock()
+		receivedEntries = append(receivedEntries, chunk.Entries()...)
+		return nil
+	})
+
+	target := &app_v1alpha.LogTarget{}
+	target.SetApp("test-app")
+
+	// Filter for ERROR in follow mode
+	_, err = client.StreamLogChunks(ctx, target, nil, true, "ERROR", callback)
+	r.NoError(err)
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	// Should only have the ERROR entry
+	r.Len(receivedEntries, 1)
+	r.Contains(receivedEntries[0].Line(), "ERROR")
+}
+
+func TestLogTarget_QueryWithFilter(t *testing.T) {
+	// Test that LogTarget.query() correctly appends the filter
+	target := observability.LogTarget{
+		EntityID: "app/test-app",
+		Filter:   "ERROR",
+	}
+
+	query := target.Query()
+	require.Contains(t, query, "entity:")
+	require.Contains(t, query, "ERROR")
+}
+
+func TestLogTarget_QueryWithoutFilter(t *testing.T) {
+	// Test that LogTarget.query() works without filter
+	target := observability.LogTarget{
+		SandboxID: "sandbox/test",
+	}
+
+	query := target.Query()
+	require.Contains(t, query, "sandbox:")
+	require.NotContains(t, query, " ") // No filter appended
+}
+
+func TestStreamLogChunks_InvalidFilterRegex(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	r := require.New(t)
+
+	mockServer := createMockVictoriaLogs(t, nil, 0)
+	server, ec, cleanup := setupTestServer(t, mockServer)
+	defer cleanup()
+
+	app := &core_v1alpha.App{}
+	_, err := ec.Create(ctx, "test-app", app)
+	r.NoError(err)
+
+	client := &app_v1alpha.LogsClient{
+		Client: rpc.LocalClient(app_v1alpha.AdaptLogs(server)),
+	}
+
+	callback := stream.Callback(func(chunk *app_v1alpha.LogChunk) error {
+		return nil
+	})
+
+	target := &app_v1alpha.LogTarget{}
+	target.SetApp("test-app")
+
+	// Invalid regex should return error
+	_, err = client.StreamLogChunks(ctx, target, nil, false, "/[invalid/", callback)
+	r.Error(err)
+	r.Contains(err.Error(), "invalid filter")
+}
+
+func TestStreamLogChunks_FilterWithRegex(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	r := require.New(t)
+
+	now := time.Now()
+	entries := []mockLogEntry{
+		{Time: now.Add(-3 * time.Second).Format(time.RFC3339Nano), Msg: "INFO starting server", Stream: "stdout"},
+		{Time: now.Add(-2 * time.Second).Format(time.RFC3339Nano), Msg: "ERROR connection failed", Stream: "stderr"},
+		{Time: now.Add(-1 * time.Second).Format(time.RFC3339Nano), Msg: "WARN timeout approaching", Stream: "stdout"},
+	}
+
+	// Verify that regex filter gets compiled to LogsQL format
+	var capturedQuery string
+	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedQuery = r.URL.Query().Get("query")
+		t.Logf("Captured query: %s", capturedQuery)
+
+		w.Header().Set("Content-Type", "application/x-ndjson")
+		w.WriteHeader(http.StatusOK)
+
+		for _, entry := range entries {
+			data, _ := json.Marshal(entry)
+			w.Write(data)
+			w.Write([]byte("\n"))
+		}
+	}))
+	defer mockServer.Close()
+
+	server, ec, cleanup := setupTestServer(t, mockServer)
+	defer cleanup()
+
+	app := &core_v1alpha.App{}
+	_, err := ec.Create(ctx, "test-app", app)
+	r.NoError(err)
+
+	client := &app_v1alpha.LogsClient{
+		Client: rpc.LocalClient(app_v1alpha.AdaptLogs(server)),
+	}
+
+	callback := stream.Callback(func(chunk *app_v1alpha.LogChunk) error {
+		return nil
+	})
+
+	target := &app_v1alpha.LogTarget{}
+	target.SetApp("test-app")
+
+	// Use regex filter syntax /pattern/
+	_, err = client.StreamLogChunks(ctx, target, nil, false, "/ERR(OR)?/", callback)
+	r.NoError(err)
+
+	// Verify the query contains the compiled LogsQL regex format
+	r.Contains(capturedQuery, `~"ERR(OR)?"`)
+}
+
+func TestStreamLogChunks_FilterWithNegation(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	r := require.New(t)
+
+	entries := []mockLogEntry{
+		{Time: time.Now().Format(time.RFC3339Nano), Msg: "test log", Stream: "stdout"},
+	}
+
+	// Verify that negation filter gets compiled correctly
+	var capturedQuery string
+	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedQuery = r.URL.Query().Get("query")
+		t.Logf("Captured query: %s", capturedQuery)
+
+		w.Header().Set("Content-Type", "application/x-ndjson")
+		w.WriteHeader(http.StatusOK)
+
+		for _, entry := range entries {
+			data, _ := json.Marshal(entry)
+			w.Write(data)
+			w.Write([]byte("\n"))
+		}
+	}))
+	defer mockServer.Close()
+
+	server, ec, cleanup := setupTestServer(t, mockServer)
+	defer cleanup()
+
+	app := &core_v1alpha.App{}
+	_, err := ec.Create(ctx, "test-app", app)
+	r.NoError(err)
+
+	client := &app_v1alpha.LogsClient{
+		Client: rpc.LocalClient(app_v1alpha.AdaptLogs(server)),
+	}
+
+	callback := stream.Callback(func(chunk *app_v1alpha.LogChunk) error {
+		return nil
+	})
+
+	target := &app_v1alpha.LogTarget{}
+	target.SetApp("test-app")
+
+	// Use negation filter syntax: show errors but not debug
+	_, err = client.StreamLogChunks(ctx, target, nil, false, "error -debug", callback)
+	r.NoError(err)
+
+	// Verify the query contains negation
+	r.Contains(capturedQuery, "error")
+	r.Contains(capturedQuery, "-debug")
 }

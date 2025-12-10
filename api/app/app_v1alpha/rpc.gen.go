@@ -3408,7 +3408,8 @@ type logsStreamLogChunksArgsData struct {
 	Target *LogTarget          `cbor:"0,keyasint,omitempty" json:"target,omitempty"`
 	From   *standard.Timestamp `cbor:"1,keyasint,omitempty" json:"from,omitempty"`
 	Follow *bool               `cbor:"2,keyasint,omitempty" json:"follow,omitempty"`
-	Chunks *rpc.Capability     `cbor:"3,keyasint,omitempty" json:"chunks,omitempty"`
+	Filter *string             `cbor:"3,keyasint,omitempty" json:"filter,omitempty"`
+	Chunks *rpc.Capability     `cbor:"4,keyasint,omitempty" json:"chunks,omitempty"`
 }
 
 type LogsStreamLogChunksArgs struct {
@@ -3441,6 +3442,17 @@ func (v *LogsStreamLogChunksArgs) Follow() bool {
 		return false
 	}
 	return *v.data.Follow
+}
+
+func (v *LogsStreamLogChunksArgs) HasFilter() bool {
+	return v.data.Filter != nil
+}
+
+func (v *LogsStreamLogChunksArgs) Filter() string {
+	if v.data.Filter == nil {
+		return ""
+	}
+	return *v.data.Filter
 }
 
 func (v *LogsStreamLogChunksArgs) HasChunks() bool {
@@ -3775,12 +3787,13 @@ type LogsClientStreamLogChunksResults struct {
 	data   logsStreamLogChunksResultsData
 }
 
-func (v LogsClient) StreamLogChunks(ctx context.Context, target *LogTarget, from *standard.Timestamp, follow bool, chunks stream.SendStream[*LogChunk]) (*LogsClientStreamLogChunksResults, error) {
+func (v LogsClient) StreamLogChunks(ctx context.Context, target *LogTarget, from *standard.Timestamp, follow bool, filter string, chunks stream.SendStream[*LogChunk]) (*LogsClientStreamLogChunksResults, error) {
 	args := LogsStreamLogChunksArgs{}
 	caps := map[rpc.OID]*rpc.InlineCapability{}
 	args.data.Target = target
 	args.data.From = from
 	args.data.Follow = &follow
+	args.data.Filter = &filter
 	{
 		ic, oid, c := v.NewInlineCapability(stream.AdaptSendStream[*LogChunk](chunks), chunks)
 		args.data.Chunks = c

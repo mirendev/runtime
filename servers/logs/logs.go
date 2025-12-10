@@ -10,6 +10,7 @@ import (
 	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/api/entityserver"
 	"miren.dev/runtime/observability"
+	"miren.dev/runtime/pkg/logfilter"
 	"miren.dev/runtime/pkg/rpc/standard"
 )
 
@@ -205,6 +206,18 @@ func (s *Server) StreamLogChunks(ctx context.Context, state *app_v1alpha.LogsStr
 		s.Log.Debug("streaming log chunks by app", "app", target.App(), "entityID", logTarget.EntityID, "follow", args.Follow())
 	} else {
 		return fmt.Errorf("target must specify either app or sandbox")
+	}
+
+	// Parse and compile filter to LogsQL for VictoriaLogs
+	if args.HasFilter() && args.Filter() != "" {
+		filter, err := logfilter.Parse(args.Filter())
+		if err != nil {
+			return fmt.Errorf("invalid filter: %w", err)
+		}
+		if filter != nil {
+			logTarget.Filter = filter.ToLogsQL()
+			s.Log.Debug("applying filter", "input", args.Filter(), "logsql", logTarget.Filter)
+		}
 	}
 
 	// Create channel for log entries
