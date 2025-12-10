@@ -17,8 +17,8 @@ concurrency:
 permissions:
   # Used by golangci-lint to emit annotations that are picked up by github
   contents: read
-  # Used by golangci-lint for only-new-issues and for coverage PR comments
-  pull-requests: write
+  # Used by golangci-lint for only-new-issues
+  pull-requests: read
 
 jobs:
   lint:
@@ -128,66 +128,31 @@ jobs:
         echo "changed_coverage=$CHANGED_COV" >> $GITHUB_OUTPUT
         echo "Changed line coverage: $CHANGED_COV%"
 
-    - name: Comment PR with Coverage
-      uses: actions/github-script@v7
+    - name: Write Coverage Summary
       if: github.event_name == 'pull_request'
-      with:
-        script: |
-          const fs = require('fs');
-          const coverage = '${{ steps.coverage.outputs.coverage }}';
-          const threshold = 50;
+      run: |
+        COVERAGE="${{ steps.coverage.outputs.coverage }}"
+        THRESHOLD=50
 
-          // Read the changed line coverage output
-          let changedCovOutput = '';
-          try {
-            changedCovOutput = fs.readFileSync('/tmp/changed-coverage.txt', 'utf8');
-          } catch (err) {
-            changedCovOutput = 'No coverage data for changed lines';
-          }
+        if (( $(echo "$COVERAGE >= $THRESHOLD" | bc -l) )); then
+          STATUS="✅ Passing"
+        else
+          STATUS="❌ Below threshold"
+        fi
 
-          const body = `## 📊 Code Coverage Report
+        cat >> $GITHUB_STEP_SUMMARY << EOF
+        ## 📊 Code Coverage Report
 
-          **Total Coverage:** \`${coverage}%\`
-          **Threshold:** \`${threshold}%\`
-          **Status:** ${parseFloat(coverage) >= threshold ? '✅ Passing' : '❌ Below threshold'}
+        **Total Coverage:** \`${COVERAGE}%\`
+        **Threshold:** \`${THRESHOLD}%\`
+        **Status:** ${STATUS}
 
-          ### Coverage for Changed Lines
+        ### Coverage for Changed Lines
 
-          \`\`\`
-          ${changedCovOutput}
-          \`\`\`
-
-          `;
-
-          // Find existing coverage comment
-          const { data: comments } = await github.rest.issues.listComments({
-            owner: context.repo.owner,
-            repo: context.repo.repo,
-            issue_number: context.issue.number,
-          });
-
-          const coverageComment = comments.find(comment =>
-            comment.user.type === 'Bot' &&
-            comment.body.includes('📊 Code Coverage Report')
-          );
-
-          if (coverageComment) {
-            // Update existing comment
-            await github.rest.issues.updateComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              comment_id: coverageComment.id,
-              body: body
-            });
-          } else {
-            // Create new comment
-            await github.rest.issues.createComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.issue.number,
-              body: body
-            });
-          }
+        \`\`\`
+        $(cat /tmp/changed-coverage.txt)
+        \`\`\`
+        EOF
 
   test-e2e:
     runs-on: depot-ubuntu-latest
