@@ -116,7 +116,7 @@ func (a *RPCAuthenticator) AuthenticateRequest(ctx context.Context, r *http.Requ
 	if authHeader == "" {
 		// No auth header - shouldn't happen because rpc server only calls
 		// this method if an auth header is present
-		return false, "", nil
+		return false, "", fmt.Errorf("missing authorization header")
 	}
 
 	if !strings.HasPrefix(authHeader, "Bearer ") {
