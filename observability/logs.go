@@ -297,8 +297,11 @@ func (l *LogReader) executeStreamQuery(ctx context.Context, query string, logCh 
 	baseURL := normalizeBaseURL(l.Address)
 	queryURL := baseURL + "/select/logsql/query"
 
+	// Sort by time ascending so older logs appear first
+	sortedQuery := query + " | sort by (_time) asc"
+
 	params := url.Values{}
-	params.Set("query", query)
+	params.Set("query", sortedQuery)
 	// No limit - stream all results
 
 	startTime := o.From
@@ -443,8 +446,11 @@ func (l *LogReader) executeQuery(ctx context.Context, query string, limit int, s
 	baseURL := normalizeBaseURL(l.Address)
 	queryURL := baseURL + "/select/logsql/query"
 
+	// Sort by time ascending so older logs appear first
+	sortedQuery := query + " | sort by (_time) asc"
+
 	params := url.Values{}
-	params.Set("query", query)
+	params.Set("query", sortedQuery)
 	params.Set("limit", fmt.Sprintf("%d", limit))
 	// Add time range - VictoriaLogs uses RFC3339 timestamps
 	params.Set("start", start.Format(time.RFC3339Nano))
