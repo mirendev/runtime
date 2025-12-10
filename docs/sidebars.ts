@@ -38,6 +38,7 @@ const sidebars: SidebarsConfig = {
       },
       items: [
         'cli/app',
+        'cli/logs',
         'cli/sandbox',
         'cli/disk',
         'cli/entity',

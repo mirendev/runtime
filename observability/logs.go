@@ -267,25 +267,36 @@ func (l *LogReader) ReadBySandbox(ctx context.Context, sandboxID string, opts ..
 type LogTarget struct {
 	EntityID  string
 	SandboxID string
+	Filter    string // Optional LogsQL filter expression (e.g., "error" or ~"regex")
 }
 
-func (t LogTarget) query() string {
+// Query returns the LogsQL query string for this target.
+func (t LogTarget) Query() string {
+	var base string
 	if t.SandboxID != "" {
-		return `sandbox:` + logsQLQuote(t.SandboxID)
+		base = `sandbox:` + logsQLQuote(t.SandboxID)
+	} else {
+		base = `entity:` + logsQLQuote(t.EntityID)
 	}
-	return `entity:` + logsQLQuote(t.EntityID)
+
+	if t.Filter != "" {
+		// Append filter to query - VictoriaLogs LogsQL syntax
+		// User can specify word filters, phrase filters ("phrase"), or regex (~"pattern")
+		return base + " " + t.Filter
+	}
+	return base
 }
 
 // ReadStream queries historical logs and sends them to a channel as they're parsed.
 // Unlike Read(), this has no limit and streams results incrementally.
 func (l *LogReader) ReadStream(ctx context.Context, target LogTarget, logCh chan<- LogEntry, opts ...LogReaderOption) error {
-	return l.executeStreamQuery(ctx, target.query(), logCh, opts...)
+	return l.executeStreamQuery(ctx, target.Query(), logCh, opts...)
 }
 
 // TailStream connects to VictoriaLogs tail endpoint for live tailing.
 // Blocks until context is cancelled.
 func (l *LogReader) TailStream(ctx context.Context, target LogTarget, logCh chan<- LogEntry, opts ...LogReaderOption) error {
-	return l.executeTailQuery(ctx, target.query(), logCh, opts...)
+	return l.executeTailQuery(ctx, target.Query(), logCh, opts...)
 }
 
 func (l *LogReader) executeStreamQuery(ctx context.Context, query string, logCh chan<- LogEntry, opts ...LogReaderOption) error {
@@ -297,8 +308,11 @@ func (l *LogReader) executeStreamQuery(ctx context.Context, query string, logCh 
 	baseURL := normalizeBaseURL(l.Address)
 	queryURL := baseURL + "/select/logsql/query"
 
+	// Sort by time ascending so older logs appear first
+	sortedQuery := query + " | sort by (_time) asc"
+
 	params := url.Values{}
-	params.Set("query", query)
+	params.Set("query", sortedQuery)
 	// No limit - stream all results
 
 	startTime := o.From
@@ -443,8 +457,11 @@ func (l *LogReader) executeQuery(ctx context.Context, query string, limit int, s
 	baseURL := normalizeBaseURL(l.Address)
 	queryURL := baseURL + "/select/logsql/query"
 
+	// Sort by time ascending so older logs appear first
+	sortedQuery := query + " | sort by (_time) asc"
+
 	params := url.Values{}
-	params.Set("query", query)
+	params.Set("query", sortedQuery)
 	params.Set("limit", fmt.Sprintf("%d", limit))
 	// Add time range - VictoriaLogs uses RFC3339 timestamps
 	params.Set("start", start.Format(time.RFC3339Nano))

@@ -7,6 +7,7 @@ import (
 
 	"miren.dev/runtime/api/app/app_v1alpha"
 	"miren.dev/runtime/appconfig"
+	"miren.dev/runtime/pkg/logfilter"
 	"miren.dev/runtime/pkg/rpc"
 	"miren.dev/runtime/pkg/rpc/standard"
 	"miren.dev/runtime/pkg/rpc/stream"
@@ -29,6 +30,7 @@ func Logs(ctx *Context, opts struct {
 	Last    *time.Duration `short:"l" long:"last" description:"Show logs from the last duration"`
 	Sandbox string         `short:"s" long:"sandbox" description:"Show logs for a specific sandbox ID"`
 	Follow  bool           `short:"f" long:"follow" description:"Follow log output (live tail)"`
+	Filter  string         `short:"g" long:"grep" description:"Filter logs (e.g., 'error', '\"exact phrase\"', 'error -debug', '/regex/')"`
 }) error {
 	// Check for conflicting options
 	if opts.App != "" && opts.Sandbox != "" {
@@ -63,9 +65,22 @@ func Logs(ctx *Context, opts struct {
 		opts.Sandbox = normalizeSandboxID(opts.Sandbox)
 	}
 
-	// Check if server supports streaming
+	// Parse filter early to validate syntax
+	var filter *logfilter.Filter
+	if opts.Filter != "" {
+		var err error
+		filter, err = logfilter.Parse(opts.Filter)
+		if err != nil {
+			return fmt.Errorf("invalid filter: %w", err)
+		}
+	}
+
+	// Check if server supports streaming (prefer chunked for efficiency)
+	if cl.HasMethod(ctx, "streamLogChunks") {
+		return streamLogChunks(ctx, cl, opts.App, opts.Sandbox, opts.Last, opts.Follow, opts.Filter)
+	}
 	if cl.HasMethod(ctx, "streamLogs") {
-		return streamLogs(ctx, cl, opts.App, opts.Sandbox, opts.Last, opts.Follow)
+		return streamLogs(ctx, cl, opts.App, opts.Sandbox, opts.Last, opts.Follow, filter)
 	}
 
 	// Warn if --follow requested but not supported
@@ -74,7 +89,7 @@ func Logs(ctx *Context, opts struct {
 	}
 
 	// Fall back to legacy pagination
-	return legacyLogs(ctx, cl, opts.App, opts.Sandbox, opts.Last)
+	return legacyLogs(ctx, cl, opts.App, opts.Sandbox, opts.Last, filter)
 }
 
 var streamTypePrefixes = map[string]string{
@@ -84,7 +99,7 @@ var streamTypePrefixes = map[string]string{
 	"user-oob": "U",
 }
 
-func streamLogs(ctx *Context, cl *rpc.NetworkClient, app, sandbox string, last *time.Duration, follow bool) error {
+func streamLogs(ctx *Context, cl *rpc.NetworkClient, app, sandbox string, last *time.Duration, follow bool, filter *logfilter.Filter) error {
 	ac := app_v1alpha.LogsClient{Client: cl}
 
 	// Build target
@@ -109,6 +124,11 @@ func streamLogs(ctx *Context, cl *rpc.NetworkClient, app, sandbox string, last *
 
 	// Create callback to print logs as they arrive
 	callback := stream.Callback(func(l *app_v1alpha.LogEntry) error {
+		// Apply local filter if provided
+		if filter != nil && !filter.Match(l.Line()) {
+			return nil
+		}
+
 		prefix := ""
 		if l.HasSource() && l.Source() != "" {
 			source := l.Source()
@@ -129,7 +149,54 @@ func streamLogs(ctx *Context, cl *rpc.NetworkClient, app, sandbox string, last *
 	return err
 }
 
-func legacyLogs(ctx *Context, cl *rpc.NetworkClient, app, sandbox string, last *time.Duration) error {
+func streamLogChunks(ctx *Context, cl *rpc.NetworkClient, app, sandbox string, last *time.Duration, follow bool, filter string) error {
+	ac := app_v1alpha.LogsClient{Client: cl}
+
+	// Build target
+	target := &app_v1alpha.LogTarget{}
+	if sandbox != "" {
+		target.SetSandbox(sandbox)
+	} else {
+		target.SetApp(app)
+	}
+
+	// Determine start time
+	var ts *standard.Timestamp
+	if last != nil {
+		ts = standard.ToTimestamp(time.Now().Add(-*last))
+	} else if !follow {
+		// For non-follow mode without explicit --last, default to today
+		start := time.Now()
+		start = time.Date(start.Year(), start.Month(), start.Day(), 0, 0, 0, 0, start.Location())
+		ts = standard.ToTimestamp(start)
+	}
+	// For follow mode without --last, ts is nil which means start from now
+
+	// Create callback to print logs as they arrive in chunks
+	callback := stream.Callback(func(chunk *app_v1alpha.LogChunk) error {
+		for _, l := range chunk.Entries() {
+			prefix := ""
+			if l.HasSource() && l.Source() != "" {
+				source := l.Source()
+				if len(source) > 12 {
+					source = source[:3] + "…" + source[len(source)-8:]
+				}
+				prefix = "[" + source + "] "
+			}
+			ctx.Printf("%s %s: %s%s\n",
+				streamTypePrefixes[l.Stream()],
+				standard.FromTimestamp(l.Timestamp()).Format("2006-01-02 15:04:05"),
+				prefix,
+				l.Line())
+		}
+		return nil
+	})
+
+	_, err := ac.StreamLogChunks(ctx, target, ts, follow, filter, callback)
+	return err
+}
+
+func legacyLogs(ctx *Context, cl *rpc.NetworkClient, app, sandbox string, last *time.Duration, filter *logfilter.Filter) error {
 	ac := app_v1alpha.LogsClient{Client: cl}
 
 	var ts *standard.Timestamp
@@ -163,6 +230,11 @@ func legacyLogs(ctx *Context, cl *rpc.NetworkClient, app, sandbox string, last *
 		logs := res.Logs()
 
 		for _, l := range logs {
+			// Apply local filter if provided
+			if filter != nil && !filter.Match(l.Line()) {
+				continue
+			}
+
 			prefix := ""
 			if l.HasSource() && l.Source() != "" {
 				source := l.Source()

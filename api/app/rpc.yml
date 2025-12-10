@@ -283,6 +283,13 @@ types:
         type: string
         index: 3
 
+  - type: LogChunk
+    fields:
+      - name: entries
+        type: list
+        element: "*LogEntry"
+        index: 0
+
   - type: UserInfo
     fields:
       - name: subject
@@ -443,6 +450,19 @@ interfaces:
             type: bool
           - name: logs
             type: stream.SendStream[*LogEntry]
+      - name: streamLogChunks
+        parameters:
+          - name: target
+            type: LogTarget
+          - name: from
+            type: standard.Timestamp
+          - name: follow
+            type: bool
+          - name: filter
+            type: string
+            doc: "Optional regex pattern to filter log lines"
+          - name: chunks
+            type: stream.SendStream[*LogChunk]
 
   - name: Disks
     methods:

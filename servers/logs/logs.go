@@ -4,11 +4,13 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"miren.dev/runtime/api/app/app_v1alpha"
 	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/api/entityserver"
 	"miren.dev/runtime/observability"
+	"miren.dev/runtime/pkg/logfilter"
 	"miren.dev/runtime/pkg/rpc/standard"
 )
 
@@ -163,6 +165,146 @@ func (s *Server) StreamLogs(ctx context.Context, state *app_v1alpha.LogsStreamLo
 			return err
 		}
 	}
+
+	// Check for reader errors
+	select {
+	case err := <-errCh:
+		return err
+	default:
+		return nil
+	}
+}
+
+const defaultChunkSize = 100
+
+func (s *Server) StreamLogChunks(ctx context.Context, state *app_v1alpha.LogsStreamLogChunks) error {
+	args := state.Args()
+	send := args.Chunks()
+	target := args.Target()
+
+	var opts []observability.LogReaderOption
+	if args.HasFrom() {
+		fromTime := standard.FromTimestamp(args.From())
+		opts = append(opts, observability.WithFromTime(fromTime))
+	}
+
+	// Build log target from RPC target
+	var logTarget observability.LogTarget
+
+	if target.HasSandbox() && target.Sandbox() != "" {
+		logTarget.SandboxID = target.Sandbox()
+		s.Log.Debug("streaming log chunks by sandbox", "sandbox", logTarget.SandboxID, "follow", args.Follow())
+	} else if target.HasApp() && target.App() != "" {
+		// Resolve app to entity ID
+		var appRec core_v1alpha.App
+		err := s.EC.Get(ctx, target.App(), &appRec)
+		if err != nil {
+			s.Log.Error("failed to get app", "app", target.App(), "err", err)
+			return err
+		}
+		logTarget.EntityID = appRec.EntityId().String()
+		s.Log.Debug("streaming log chunks by app", "app", target.App(), "entityID", logTarget.EntityID, "follow", args.Follow())
+	} else {
+		return fmt.Errorf("target must specify either app or sandbox")
+	}
+
+	// Parse and compile filter to LogsQL for VictoriaLogs
+	if args.HasFilter() && args.Filter() != "" {
+		filter, err := logfilter.Parse(args.Filter())
+		if err != nil {
+			return fmt.Errorf("invalid filter: %w", err)
+		}
+		if filter != nil {
+			logTarget.Filter = filter.ToLogsQL()
+			s.Log.Debug("applying filter", "input", args.Filter(), "logsql", logTarget.Filter)
+		}
+	}
+
+	// Create channel for log entries
+	logCh := make(chan observability.LogEntry, 100)
+	errCh := make(chan error, 1)
+
+	// Start reader goroutine
+	go func() {
+		defer close(logCh)
+		var err error
+		if args.Follow() {
+			err = s.LogReader.TailStream(ctx, logTarget, logCh, opts...)
+		} else {
+			err = s.LogReader.ReadStream(ctx, logTarget, logCh, opts...)
+		}
+		if err != nil && err != context.Canceled {
+			errCh <- err
+		}
+	}()
+
+	// Buffer entries into chunks
+	chunk := &app_v1alpha.LogChunk{}
+	entries := make([]*app_v1alpha.LogEntry, 0, defaultChunkSize)
+
+	sendChunk := func() error {
+		if len(entries) == 0 {
+			return nil
+		}
+		chunk.SetEntries(entries)
+		if _, err := send.Send(ctx, chunk); err != nil {
+			s.Log.Debug("client disconnected", "err", err)
+			return err
+		}
+		// Reset for next chunk
+		chunk = &app_v1alpha.LogChunk{}
+		entries = make([]*app_v1alpha.LogEntry, 0, defaultChunkSize)
+		return nil
+	}
+
+	// In follow mode, use a ticker to flush chunks periodically
+	if args.Follow() {
+		ticker := time.NewTicker(time.Second)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case entry, ok := <-logCh:
+				if !ok {
+					// Channel closed, send remaining entries
+					if err := sendChunk(); err != nil {
+						return err
+					}
+					goto done
+				}
+				entries = append(entries, toLogEntry(entry))
+				if len(entries) >= defaultChunkSize {
+					if err := sendChunk(); err != nil {
+						return err
+					}
+				}
+			case <-ticker.C:
+				// Periodic flush for timely delivery in tail mode
+				if err := sendChunk(); err != nil {
+					return err
+				}
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
+	} else {
+		// Non-follow mode: batch efficiently without time constraints
+		for entry := range logCh {
+			entries = append(entries, toLogEntry(entry))
+			if len(entries) >= defaultChunkSize {
+				if err := sendChunk(); err != nil {
+					return err
+				}
+			}
+		}
+
+		// Send remaining entries
+		if err := sendChunk(); err != nil {
+			return err
+		}
+	}
+
+done:
 
 	// Check for reader errors
 	select {
