@@ -84,18 +84,21 @@ func TestLocalOnlyAuthenticator(t *testing.T) {
 		hasCert        bool
 		expectAllowed  bool
 		expectIdentity string
+		expectError    bool
 	}{
 		{
 			name:          "rejects request without certificate",
 			authHeader:    "",
 			hasCert:       false,
 			expectAllowed: false,
+			expectError:   true,
 		},
 		{
 			name:          "rejects request with auth header but no certificate",
 			authHeader:    "Bearer token123",
 			hasCert:       false,
 			expectAllowed: false,
+			expectError:   true,
 		},
 		{
 			name:           "allows request with certificate",
@@ -142,7 +145,9 @@ func TestLocalOnlyAuthenticator(t *testing.T) {
 			}
 
 			if err != nil {
-				t.Errorf("unexpected error: %v", err)
+				if !tt.expectError {
+					t.Errorf("unexpected error: %v", err)
+				}
 			}
 			if allowed != tt.expectAllowed {
 				t.Errorf("expected allowed=%v, got %v", tt.expectAllowed, allowed)
