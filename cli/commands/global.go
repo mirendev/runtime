@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"os"
 	"os/signal"
 	"reflect"
@@ -421,18 +422,36 @@ func (c *Context) RPCClient(name string) (*rpc.NetworkClient, error) {
 }
 
 var ErrAccessDenied = errors.New("access denied")
+var ErrServerNotResponding = errors.New("server not responding")
 
 // wrapRPCError wraps RPC errors with user-friendly messages
 func (c *Context) wrapRPCError(err error) error {
 	var resolveErr *rpc.ResolveError
-	if errors.As(err, &resolveErr) && resolveErr.StatusCode == 401 {
-		clusterName := c.ClusterName
-		if clusterName == "" {
-			clusterName = "the cluster"
+	if errors.As(err, &resolveErr) {
+		// Check for connection/network errors
+		if resolveErr.Kind == rpc.ResolveHTTPError {
+			var netErr net.Error
+			if errors.As(resolveErr.Err, &netErr) {
+				c.Warn("server not responding at %s", c.Config.ServerAddress)
+				c.Info("")
+				c.Info("To fix:")
+				c.Info("  - Check if miren is running: sudo systemctl status miren")
+				c.Info("  - Start it: sudo systemctl start miren")
+				c.Info("  - Or use our demo cluster: https://miren.dev/docs/getting-started#using-our-demo-cluster")
+				return ErrServerNotResponding
+			}
 		}
 
-		c.Warn("access denied: you don't have permission to access %s\nPlease check your credentials or request access from the cluster administrator", clusterName)
-		return ErrAccessDenied
+		// Check for 401 unauthorized
+		if resolveErr.StatusCode == 401 {
+			clusterName := c.ClusterName
+			if clusterName == "" {
+				clusterName = "the cluster"
+			}
+
+			c.Warn("access denied: you don't have permission to access %s\nPlease check your credentials or request access from the cluster administrator", clusterName)
+			return ErrAccessDenied
+		}
 	}
 	return err
 }
