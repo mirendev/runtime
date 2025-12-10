@@ -626,11 +626,20 @@ func (s *EtcdStore) UpdateEntity(
 
 	txopt = append(txopt, coltxopt...)
 
-	// Use Txn to check that the key exists before updating
-	txnResp, err := s.client.Txn(ctx).
-		If(clientv3.Compare(clientv3.ModRevision(key), "=", rev)).
-		Then(txopt...).
-		Commit()
+	var txnResp *clientv3.TxnResponse
+
+	// When using 0 as the from rev, we skip the revision check
+	if o.fromRevision == 0 {
+		txnResp, err = s.client.Txn(ctx).
+			Then(txopt...).
+			Commit()
+	} else {
+		// Use Txn to check that the key exists before updating
+		txnResp, err = s.client.Txn(ctx).
+			If(clientv3.Compare(clientv3.ModRevision(key), "=", rev)).
+			Then(txopt...).
+			Commit()
+	}
 
 	if err != nil {
 		return nil, fmt.Errorf("failed to update entity in etcd: %w", err)
@@ -873,11 +882,20 @@ func (s *EtcdStore) ReplaceEntity(
 
 	txopt = append(txopt, coltxopt...)
 
-	// Use Txn to check that the entity hasn't changed
-	txnResp, err := s.client.Txn(ctx).
-		If(clientv3.Compare(clientv3.ModRevision(key), "=", rev)).
-		Then(txopt...).
-		Commit()
+	var txnResp *clientv3.TxnResponse
+
+	// When using 0 as the from rev, we skip the revision check
+	if o.fromRevision == 0 {
+		txnResp, err = s.client.Txn(ctx).
+			Then(txopt...).
+			Commit()
+	} else {
+		// Use Txn to check that the entity hasn't changed
+		txnResp, err = s.client.Txn(ctx).
+			If(clientv3.Compare(clientv3.ModRevision(key), "=", rev)).
+			Then(txopt...).
+			Commit()
+	}
 
 	if err != nil {
 		return nil, fmt.Errorf("failed to replace entity in etcd: %w", err)
@@ -989,11 +1007,20 @@ func (s *EtcdStore) PatchEntity(
 
 	txopt = append(txopt, coltxopt...)
 
-	// Use Txn to check that the key exists before updating
-	txnResp, err := s.client.Txn(ctx).
-		If(clientv3.Compare(clientv3.ModRevision(key), "=", rev)).
-		Then(txopt...).
-		Commit()
+	var txnResp *clientv3.TxnResponse
+
+	// When using 0 as the from rev, we skip the revision check
+	if o.fromRevision == 0 {
+		txnResp, err = s.client.Txn(ctx).
+			Then(txopt...).
+			Commit()
+	} else {
+		// Use Txn to check that the key exists before updating
+		txnResp, err = s.client.Txn(ctx).
+			If(clientv3.Compare(clientv3.ModRevision(key), "=", rev)).
+			Then(txopt...).
+			Commit()
+	}
 
 	if err != nil {
 		return nil, fmt.Errorf("failed to patch entity in etcd: %w", err)
