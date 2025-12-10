@@ -160,6 +160,7 @@ func Registry(extra ...func(*asm.Registry)) (*asm.Registry, func()) {
 			DataPath:      filepath.Join(tempDir, "coordinator"),
 			Mem:           opts.Mem,
 			Cpu:           opts.CPU,
+			NoAuth:        true, // Disable authentication for tests
 		})
 
 		err = co.Start(ctx)

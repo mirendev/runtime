@@ -124,6 +124,7 @@ func TestServer(t *testing.T) error {
 		Mem:           &mem,
 		Cpu:           &cpu,
 		Logs:          &logs,
+		NoAuth:        true,
 	})
 
 	t.Log("Starting coordinator")
