@@ -114,7 +114,8 @@ func (a *RPCAuthenticator) AuthenticateRequest(ctx context.Context, r *http.Requ
 	// Extract token from Authorization header
 	authHeader := r.Header.Get("Authorization")
 	if authHeader == "" {
-		// No auth header - could be certificate-based auth
+		// No auth header - shouldn't happen because rpc server only calls
+		// this method if an auth header is present
 		return false, "", nil
 	}
 

@@ -417,6 +417,11 @@ func (c *Coordinator) Start(ctx context.Context) error {
 		rpcOpts = append(rpcOpts, rpc.WithAuthenticator(authenticator))
 		c.Log.Info("cloud authentication enabled",
 			"cloud_url", authCloudURL)
+	} else {
+		// Use LocalOnlyAuthenticator when cloud auth is not enabled
+		// This requires valid client certificates for all requests
+		rpcOpts = append(rpcOpts, rpc.WithAuthenticator(&rpc.LocalOnlyAuthenticator{}))
+		c.Log.Info("local-only authentication enabled (client certificates required)")
 	}
 
 	rs, err := rpc.NewState(ctx, rpcOpts...)
