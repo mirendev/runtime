@@ -41,6 +41,7 @@ func TestCoordinatorParse(t *testing.T) {
 		EtcdEndpoints: []string{"etcd:2379"},     // Default etcd port
 		Prefix:        "/test/miren/" + t.Name(), // Unique prefix for this test
 		DataPath:      tempDir,                   // Use temp directory to prevent file leaks
+		NoAuth:        true,
 	}
 
 	// Create contexts
