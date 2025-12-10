@@ -179,7 +179,7 @@ This creates the necessary configuration for your project.
 Remove an application and all its resources:
 
 ```bash
-miren app delete --app myapp
+miren app delete myapp
 ```
 
 ## Environment Variables
@@ -188,10 +188,10 @@ Manage environment variables for your application:
 
 ```bash
 # View environment variables
-miren env
+miren env list
 
 # Set an environment variable (then redeploy)
-miren env set KEY=value
+miren env set --env KEY=value
 ```
 
 ## Persistent Storage with Disks
