@@ -25,6 +25,7 @@ const sidebars: SidebarsConfig = {
       },
       items: [
         'cli/app',
+        'cli/logs',
         'cli/sandbox',
         'cli/entity',
       ],

@@ -22,7 +22,7 @@ The Miren CLI (`miren`) provides commands for managing applications and deployme
 
 ### Application Management
 
-- `miren app` - Get information about an application
+- `miren app` - Get information and metrics about an application ([details](/cli/app))
 - `miren app list` (or `miren apps`) - List all applications
 - `miren app delete` - Delete an application and all its resources
 - `miren app history` - Show deployment history for an application
@@ -30,7 +30,7 @@ The Miren CLI (`miren`) provides commands for managing applications and deployme
 
 ### Logs & Monitoring
 
-- `miren logs` - Get logs for an application
+- `miren logs` - Get logs for an application ([details](/cli/logs))
 - `miren route` - List all HTTP routes
 
 ### Environment & Configuration
@@ -135,5 +135,6 @@ miren app list --format json
 
 - [Getting Started](/getting-started) - Learn by deploying
 - [App Commands](/cli/app) - Manage your applications
+- [Logs Command](/cli/logs) - View application logs
 - [Disk Commands](/cli/disk) - Manage persistent storage
 - [Disks Overview](/disks) - Learn about persistent storage
