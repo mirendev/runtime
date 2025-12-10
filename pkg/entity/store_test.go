@@ -469,6 +469,46 @@ func TestEtcdStore_UpdateEntity(t *testing.T) {
 
 		r.Equal("updated document from rev", a.Value.String())
 	})
+
+	t.Run("fromRevision 0 skips revision check", func(t *testing.T) {
+		r := require.New(t)
+
+		// Create a fresh entity for this test
+		testEntity, err := store.CreateEntity(t.Context(), New(
+			Any(Ident, "test-update-rev0"),
+			Any(Doc, "initial doc"),
+		))
+		r.NoError(err)
+
+		initialRev := testEntity.GetRevision()
+
+		// Update the entity to change its revision
+		_, err = store.UpdateEntity(t.Context(), testEntity.Id(), New(
+			Any(Doc, "first update"),
+		))
+		r.NoError(err)
+
+		// Verify revision changed
+		e2, err := store.GetEntity(t.Context(), testEntity.Id())
+		r.NoError(err)
+		r.Greater(e2.GetRevision(), initialRev)
+
+		// Now update WITHOUT WithFromRevision (defaults to 0)
+		// This should succeed because fromRevision=0 skips the revision check
+		updated, err := store.UpdateEntity(t.Context(), testEntity.Id(), New(
+			Any(Doc, "second update without rev check"),
+		))
+		r.NoError(err)
+		r.Greater(updated.GetRevision(), e2.GetRevision())
+
+		// Verify the update took effect
+		e3, err := store.GetEntity(t.Context(), testEntity.Id())
+		r.NoError(err)
+
+		doc, ok := e3.Get(Doc)
+		r.True(ok)
+		r.Equal("second update without rev check", doc.Value.String())
+	})
 }
 
 func TestEtcdStore_GetEntities_Batching(t *testing.T) {
@@ -1292,6 +1332,47 @@ func TestEtcdStore_ReplaceEntity(t *testing.T) {
 		), WithFromRevision(9999))
 		assert.Error(t, err)
 	})
+
+	t.Run("fromRevision 0 skips revision check", func(t *testing.T) {
+		r := require.New(t)
+
+		// Create a fresh entity for this test
+		testEntity, err := store.CreateEntity(t.Context(), New(
+			Any(Ident, "test-replace-rev0"),
+			Any(Doc, "initial doc"),
+		))
+		r.NoError(err)
+
+		initialRev := testEntity.GetRevision()
+
+		// Update the entity to change its revision
+		_, err = store.UpdateEntity(t.Context(), testEntity.Id(), New(
+			Any(Doc, "first update"),
+		))
+		r.NoError(err)
+
+		// Verify revision changed
+		e2, err := store.GetEntity(t.Context(), testEntity.Id())
+		r.NoError(err)
+		r.Greater(e2.GetRevision(), initialRev)
+
+		// Now replace WITHOUT WithFromRevision (defaults to 0)
+		// This should succeed because fromRevision=0 skips the revision check
+		replaced, err := store.ReplaceEntity(t.Context(), New(
+			Any(DBId, testEntity.Id()),
+			Any(Doc, "replaced without rev check"),
+		))
+		r.NoError(err)
+		r.Greater(replaced.GetRevision(), e2.GetRevision())
+
+		// Verify the replace took effect
+		e3, err := store.GetEntity(t.Context(), testEntity.Id())
+		r.NoError(err)
+
+		doc, ok := e3.Get(Doc)
+		r.True(ok)
+		r.Equal("replaced without rev check", doc.Value.String())
+	})
 }
 
 func TestEtcdStore_PatchEntity(t *testing.T) {
@@ -1400,6 +1481,47 @@ func TestEtcdStore_PatchEntity(t *testing.T) {
 			Any(Doc, "Will fail"),
 		), WithFromRevision(9999))
 		assert.Error(t, err)
+	})
+
+	t.Run("fromRevision 0 skips revision check", func(t *testing.T) {
+		r := require.New(t)
+
+		// Create a fresh entity for this test
+		testEntity, err := store.CreateEntity(t.Context(), New(
+			Any(Ident, "test-patch-rev0"),
+			Any(Doc, "initial doc"),
+		))
+		r.NoError(err)
+
+		initialRev := testEntity.GetRevision()
+
+		// Update the entity to change its revision
+		_, err = store.UpdateEntity(t.Context(), testEntity.Id(), New(
+			Any(Doc, "first update"),
+		))
+		r.NoError(err)
+
+		// Verify revision changed
+		e2, err := store.GetEntity(t.Context(), testEntity.Id())
+		r.NoError(err)
+		r.Greater(e2.GetRevision(), initialRev)
+
+		// Now patch WITHOUT WithFromRevision (defaults to 0)
+		// This should succeed because fromRevision=0 skips the revision check
+		patched, err := store.PatchEntity(t.Context(), New(
+			Any(DBId, testEntity.Id()),
+			Any(Doc, "patched without rev check"),
+		))
+		r.NoError(err)
+		r.Greater(patched.GetRevision(), e2.GetRevision())
+
+		// Verify the patch took effect
+		e3, err := store.GetEntity(t.Context(), testEntity.Id())
+		r.NoError(err)
+
+		doc, ok := e3.Get(Doc)
+		r.True(ok)
+		r.Equal("patched without rev check", doc.Value.String())
 	})
 }
 
