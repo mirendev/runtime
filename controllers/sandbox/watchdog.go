@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net/netip"
+	"strings"
 	"time"
 
 	"github.com/containerd/containerd/namespaces"
@@ -13,6 +15,7 @@ import (
 	compute "miren.dev/runtime/api/compute/compute_v1alpha"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/pkg/entity"
+	"miren.dev/runtime/pkg/netdb"
 )
 
 // CleanupResult contains information about containers cleaned up during orphan removal
@@ -36,6 +39,8 @@ type ContainerWatchdog struct {
 	CheckInterval time.Duration
 	// GraceWindow is how long to wait before removing containers from non-running sandboxes
 	GraceWindow time.Duration
+	// Subnet is used to release IP addresses when removing orphaned containers
+	Subnet *netdb.Subnet
 
 	cancel context.CancelFunc
 }
@@ -168,8 +173,12 @@ func (w *ContainerWatchdog) cleanupOrphanedContainers(ctx context.Context) (*Cle
 		}
 	}
 
-	// Identify orphaned containers
-	var orphanedContainers []containerd.Container
+	// Identify orphaned containers and store their labels for IP cleanup
+	type orphanedContainer struct {
+		container containerd.Container
+		labels    map[string]string
+	}
+	var orphanedContainers []orphanedContainer
 	for _, container := range containerList {
 		containerID := container.ID()
 
@@ -191,7 +200,7 @@ func (w *ContainerWatchdog) cleanupOrphanedContainers(ctx context.Context) (*Cle
 		}
 
 		w.Log.Info("watchdog found orphaned container", "id", containerID, "labels", labels)
-		orphanedContainers = append(orphanedContainers, container)
+		orphanedContainers = append(orphanedContainers, orphanedContainer{container: container, labels: labels})
 	}
 
 	if len(orphanedContainers) == 0 {
@@ -200,9 +209,9 @@ func (w *ContainerWatchdog) cleanupOrphanedContainers(ctx context.Context) (*Cle
 
 	// Phase 1: Send SIGQUIT to all orphaned containers to give them a chance to shutdown gracefully
 	w.Log.Info("sending SIGQUIT to orphaned containers", "count", len(orphanedContainers))
-	for _, container := range orphanedContainers {
-		containerID := container.ID()
-		task, err := container.Task(cleanupCtx, nil)
+	for _, oc := range orphanedContainers {
+		containerID := oc.container.ID()
+		task, err := oc.container.Task(cleanupCtx, nil)
 		if err == nil && task != nil {
 			if killErr := task.Kill(cleanupCtx, 3); killErr != nil { // SIGQUIT = 3
 				w.Log.Debug("failed to send SIGQUIT to task", "id", containerID, "error", killErr)
@@ -217,10 +226,10 @@ func (w *ContainerWatchdog) cleanupOrphanedContainers(ctx context.Context) (*Cle
 	time.Sleep(5 * time.Second)
 
 	// Phase 3: Check which containers are still alive and force kill them
-	for _, container := range orphanedContainers {
-		containerID := container.ID()
+	for _, oc := range orphanedContainers {
+		containerID := oc.container.ID()
 
-		task, err := container.Task(cleanupCtx, nil)
+		task, err := oc.container.Task(cleanupCtx, nil)
 		stillAlive := err == nil && task != nil
 
 		if stillAlive {
@@ -231,8 +240,26 @@ func (w *ContainerWatchdog) cleanupOrphanedContainers(ctx context.Context) (*Cle
 			}
 		}
 
+		// Release IPs from container labels before removing the container
+		if w.Subnet != nil {
+			for label, value := range oc.labels {
+				if strings.HasPrefix(label, "runtime.computer/ip") {
+					addr, err := netip.ParseAddr(value)
+					if err != nil {
+						w.Log.Warn("watchdog failed to parse IP from label", "id", containerID, "label", label, "value", value, "error", err)
+						continue
+					}
+					if err := w.Subnet.ReleaseAddr(addr); err != nil {
+						w.Log.Error("watchdog failed to release IP", "id", containerID, "addr", addr, "error", err)
+					} else {
+						w.Log.Debug("watchdog released IP", "id", containerID, "addr", addr)
+					}
+				}
+			}
+		}
+
 		// Aggressively remove the container
-		if err := w.removeContainer(cleanupCtx, container); err != nil {
+		if err := w.removeContainer(cleanupCtx, oc.container); err != nil {
 			w.Log.Error("watchdog failed to remove orphaned container", "id", containerID, "error", err)
 			result.FailedContainers[containerID] = err
 		} else {

@@ -364,6 +364,7 @@ func (c *SandboxController) Init(ctx context.Context) error {
 		EAC:           c.EAC,
 		Namespace:     c.Namespace,
 		CheckInterval: 5 * time.Minute,
+		Subnet:        c.Subnet,
 	}
 	c.watchdog.Start(c.topCtx)
 
@@ -765,6 +766,7 @@ func (c *SandboxController) createSandbox(ctx context.Context, co *compute.Sandb
 	// here. This update must go through.
 	res, err := c.EAC.Patch(ctx, patchAttrs.Attrs(), 0)
 	if err != nil {
+		c.deallocateNetwork(ctx, ep)
 		return fmt.Errorf("failed to patch sandbox with network address: %w", err)
 	}
 
@@ -2039,6 +2041,34 @@ func (c *SandboxController) stopSandbox(ctx context.Context, id entity.Id) error
 		}
 	} else if !errdefs.IsNotFound(err) {
 		c.Log.Warn("failed to load pause container", "id", id, "err", err)
+	}
+
+	// Fallback: if we couldn't get IPs from container labels, try the entity store
+	if len(sandboxIPs) == 0 {
+		resp, err := c.EAC.Get(ctx, id.String())
+		if err == nil {
+			var sb compute.Sandbox
+			sb.Decode(resp.Entity().Entity())
+
+			sandboxIPs = make(map[string]bool)
+			for _, net := range sb.Network {
+				addr := net.Address
+				if strings.Contains(addr, "/") {
+					if prefix, err := netip.ParsePrefix(addr); err == nil {
+						addr = prefix.Addr().String()
+					}
+				}
+				if addr != "" {
+					sandboxIPs[addr] = true
+				}
+			}
+
+			if len(sandboxIPs) > 0 {
+				c.Log.Debug("retrieved IPs from entity store for cleanup", "id", id, "ips", sandboxIPs)
+			}
+		} else if !errors.Is(err, cond.ErrNotFound{}) {
+			c.Log.Warn("failed to get sandbox entity for IP cleanup", "id", id, "err", err)
+		}
 	}
 
 	// Fallback if we couldn't get LogEntity from labels
