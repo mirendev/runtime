@@ -491,6 +491,10 @@ func (n *NetDB) ListLeases(filter LeaseFilter) ([]IPLease, error) {
 		leases = append(leases, lease)
 	}
 
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to iterate leases: %w", err)
+	}
+
 	return leases, nil
 }
 
@@ -525,6 +529,10 @@ func (n *NetDB) GetSubnetStatus() ([]SubnetStatus, error) {
 		statuses = append(statuses, status)
 	}
 
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to iterate subnet statuses: %w", err)
+	}
+
 	return statuses, nil
 }
 
@@ -550,6 +558,10 @@ func (n *NetDB) GetReservedIPs(subnet string) ([]string, error) {
 			return nil, fmt.Errorf("failed to scan IP: %w", err)
 		}
 		ips = append(ips, ip)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to iterate reserved IPs: %w", err)
 	}
 
 	return ips, nil
