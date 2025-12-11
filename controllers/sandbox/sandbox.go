@@ -364,6 +364,7 @@ func (c *SandboxController) Init(ctx context.Context) error {
 		EAC:           c.EAC,
 		Namespace:     c.Namespace,
 		CheckInterval: 5 * time.Minute,
+		Subnet:        c.Subnet,
 	}
 	c.watchdog.Start(c.topCtx)
 
