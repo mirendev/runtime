@@ -2,8 +2,10 @@ package testutils
 
 import (
 	"context"
+	"crypto/rand"
 	"fmt"
 	"log/slog"
+	"math/big"
 	"net/netip"
 	"os"
 	"path/filepath"
@@ -46,7 +48,16 @@ func Registry(extra ...func(*asm.Registry)) (*asm.Registry, func()) {
 		panic(err)
 	}
 
-	mega, err := ndb.Subnet("10.8.0.0/16")
+	// Use a random /16 within 10.0.0.0/8 to avoid conflicts with parallel tests.
+	// Each test gets its own netdb, so we need different base subnets to prevent
+	// IP address collisions when multiple tests run concurrently.
+	secondOctet, err := rand.Int(rand.Reader, big.NewInt(256))
+	if err != nil {
+		panic(err)
+	}
+	megaSubnet := fmt.Sprintf("10.%d.0.0/16", secondOctet.Int64())
+
+	mega, err := ndb.Subnet(megaSubnet)
 	if err != nil {
 		panic(err)
 	}
