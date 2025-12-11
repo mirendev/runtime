@@ -153,8 +153,6 @@ func (n *nbdWrapper) ReadIntoConn(b []byte, off int64, output *os.File) (bool, e
 		return false, err
 	}
 
-	wfd := output.Fd()
-
 	var written int
 
 	left := len(b)
@@ -164,9 +162,9 @@ func (n *nbdWrapper) ReadIntoConn(b []byte, off int64, output *os.File) (bool, e
 
 		off := 0
 		for left > 0 {
-			written, err = unix.Write(int(wfd), b[off:])
+			written, err = output.Write(b[off:])
 			if err != nil {
-				n.log.Error("error sending data via write(2)", "error", err)
+				n.log.Error("error sending data via Write", "error", err)
 				return true, nil
 			}
 
@@ -184,6 +182,7 @@ func (n *nbdWrapper) ReadIntoConn(b []byte, off int64, output *os.File) (bool, e
 		return true, nil
 	}
 
+	wfd := output.Fd()
 	rfd := cps.fd.Fd()
 	sendfileResponses.Inc()
 
