@@ -1,0 +1,133 @@
+imports:
+  standard:
+    path: ../../pkg/rpc/standard/standard.yml
+    import: miren.dev/runtime/pkg/rpc/standard
+
+types:
+  - type: IPLease
+    doc: An IP lease from the network database
+    fields:
+      - name: ip
+        type: string
+        index: 0
+        doc: The IP address
+      - name: subnet
+        type: string
+        index: 1
+        doc: The subnet CIDR
+      - name: reserved
+        type: bool
+        index: 2
+        doc: Whether the IP is currently reserved
+      - name: released_at
+        type: standard.Timestamp
+        index: 3
+        doc: When the IP was released (if released)
+
+  - type: SubnetStatus
+    doc: Utilization stats for a subnet
+    fields:
+      - name: subnet
+        type: string
+        index: 0
+        doc: The subnet CIDR
+      - name: total
+        type: int32
+        index: 1
+        doc: Total IPs in database for this subnet
+      - name: reserved
+        type: int32
+        index: 2
+        doc: Number of reserved IPs
+      - name: released
+        type: int32
+        index: 3
+        doc: Number of released IPs
+      - name: stuck
+        type: int32
+        index: 4
+        doc: Number of stuck IPs (reserved but no released_at)
+      - name: capacity
+        type: int32
+        index: 5
+        doc: Total capacity of subnet
+
+interfaces:
+  - name: IPAlloc
+    doc: Debug interface for IP allocation management
+    methods:
+      - name: listLeases
+        doc: List IP leases with optional filters
+        parameters:
+          - name: subnet
+            type: string
+            doc: Filter by subnet CIDR (optional)
+          - name: reserved_only
+            type: bool
+            doc: Show only reserved IPs
+          - name: released_only
+            type: bool
+            doc: Show only released IPs
+          - name: stuck_only
+            type: bool
+            doc: Show only stuck IPs (reserved=1, no released_at)
+        results:
+          - name: leases
+            type: list
+            element: IPLease
+            doc: List of IP leases
+
+      - name: status
+        doc: Get subnet utilization statistics
+        results:
+          - name: subnets
+            type: list
+            element: SubnetStatus
+            doc: Status for each subnet
+
+      - name: releaseIP
+        doc: Manually release a specific IP
+        parameters:
+          - name: ip
+            type: string
+            doc: The IP address to release
+        results:
+          - name: released
+            type: bool
+            doc: Whether the IP was released
+
+      - name: releaseSubnet
+        doc: Release all stuck IPs in a subnet
+        parameters:
+          - name: subnet
+            type: string
+            doc: The subnet CIDR
+        results:
+          - name: count
+            type: int32
+            doc: Number of IPs released
+
+      - name: releaseAll
+        doc: Release all stuck IPs across all subnets
+        results:
+          - name: count
+            type: int32
+            doc: Number of IPs released
+
+      - name: gc
+        doc: Garbage collect orphaned IPs (reserved but no matching sandbox)
+        parameters:
+          - name: subnet
+            type: string
+            doc: Filter by subnet (optional)
+          - name: dry_run
+            type: bool
+            doc: If true, only report what would be released
+        results:
+          - name: orphaned_ips
+            type: list
+            element: string
+            doc: List of orphaned IP addresses
+          - name: released_count
+            type: int32
+            doc: Number of IPs released (0 if dry_run)

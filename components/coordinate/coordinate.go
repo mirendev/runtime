@@ -21,6 +21,7 @@ import (
 	"miren.dev/runtime/api/build/build_v1alpha"
 	"miren.dev/runtime/api/compute/compute_v1alpha"
 	"miren.dev/runtime/api/core/core_v1alpha"
+	"miren.dev/runtime/api/debug/debug_v1alpha"
 	deployment_v1alpha "miren.dev/runtime/api/deployment/deployment_v1alpha"
 	aes "miren.dev/runtime/api/entityserver"
 	esv1 "miren.dev/runtime/api/entityserver/entityserver_v1alpha"
@@ -45,6 +46,7 @@ import (
 	"miren.dev/runtime/pkg/sysstats"
 	"miren.dev/runtime/servers/app"
 	"miren.dev/runtime/servers/build"
+	debugsrv "miren.dev/runtime/servers/debug"
 	"miren.dev/runtime/servers/deployment"
 	"miren.dev/runtime/servers/entityserver"
 	execproxy "miren.dev/runtime/servers/exec_proxy"
@@ -623,6 +625,9 @@ func (c *Coordinator) Start(ctx context.Context) error {
 		return err
 	}
 	server.ExposeValue("dev.miren.runtime/deployment", deployment_v1alpha.AdaptDeployment(ds))
+
+	debugServer := debugsrv.NewServer(c.Log, c.DataPath, eac)
+	server.ExposeValue("dev.miren.runtime/debug-ipalloc", debug_v1alpha.AdaptIPAlloc(debugServer))
 
 	c.Log.Info("started RPC server")
 
