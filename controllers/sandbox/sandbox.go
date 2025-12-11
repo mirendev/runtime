@@ -765,6 +765,7 @@ func (c *SandboxController) createSandbox(ctx context.Context, co *compute.Sandb
 	// here. This update must go through.
 	res, err := c.EAC.Patch(ctx, patchAttrs.Attrs(), 0)
 	if err != nil {
+		c.deallocateNetwork(ctx, ep)
 		return fmt.Errorf("failed to patch sandbox with network address: %w", err)
 	}
 
