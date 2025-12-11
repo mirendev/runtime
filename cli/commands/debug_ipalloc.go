@@ -15,7 +15,6 @@ func DebugIPAllocList(ctx *Context, opts struct {
 	Subnet   string `short:"s" long:"subnet" description:"Filter by subnet CIDR"`
 	Reserved bool   `short:"r" long:"reserved" description:"Show only reserved (in-use) IPs"`
 	Released bool   `short:"R" long:"released" description:"Show only released IPs"`
-	Stuck    bool   `short:"S" long:"stuck" description:"Show only stuck IPs (reserved=1, no released_at)"`
 }) error {
 	client, err := ctx.RPCClient("dev.miren.runtime/debug-ipalloc")
 	if err != nil {
@@ -24,7 +23,7 @@ func DebugIPAllocList(ctx *Context, opts struct {
 
 	ipalloc := debug_v1alpha.NewIPAllocClient(client)
 
-	results, err := ipalloc.ListLeases(ctx, opts.Subnet, opts.Reserved, opts.Released, opts.Stuck)
+	results, err := ipalloc.ListLeases(ctx, opts.Subnet, opts.Reserved, opts.Released)
 	if err != nil {
 		return fmt.Errorf("failed to list leases: %w", err)
 	}
@@ -73,8 +72,8 @@ func DebugIPAllocStatus(ctx *Context, opts struct {
 
 	ctx.Info("IP Allocation Status:")
 	ctx.Info("")
-	ctx.Info("%-20s %8s %10s %10s %8s %8s", "SUBNET", "CAPACITY", "RESERVED", "RELEASED", "STUCK", "USAGE")
-	ctx.Info("%-20s %8s %10s %10s %8s %8s", strings.Repeat("-", 20), strings.Repeat("-", 8), strings.Repeat("-", 10), strings.Repeat("-", 10), strings.Repeat("-", 8), strings.Repeat("-", 8))
+	ctx.Info("%-20s %8s %10s %10s %8s", "SUBNET", "CAPACITY", "RESERVED", "RELEASED", "USAGE")
+	ctx.Info("%-20s %8s %10s %10s %8s", strings.Repeat("-", 20), strings.Repeat("-", 8), strings.Repeat("-", 10), strings.Repeat("-", 10), strings.Repeat("-", 8))
 
 	for _, subnet := range results.Subnets() {
 		capacity := subnet.Capacity()
@@ -89,7 +88,7 @@ func DebugIPAllocStatus(ctx *Context, opts struct {
 			usageStr += " ⚠️"
 		}
 
-		ctx.Info("%-20s %8d %10d %10d %8d %8s", subnet.Subnet(), capacity, reserved, subnet.Released(), subnet.Stuck(), usageStr)
+		ctx.Info("%-20s %8d %10d %10d %8s", subnet.Subnet(), capacity, reserved, subnet.Released(), usageStr)
 	}
 
 	return nil
@@ -99,8 +98,8 @@ func DebugIPAllocStatus(ctx *Context, opts struct {
 func DebugIPAllocRelease(ctx *Context, opts struct {
 	ConfigCentric
 	IP     string `short:"i" long:"ip" description:"Specific IP to release"`
-	Subnet string `short:"s" long:"subnet" description:"Release all stuck IPs in subnet"`
-	All    bool   `short:"a" long:"all" description:"Release all stuck IPs (use with caution)"`
+	Subnet string `short:"s" long:"subnet" description:"Release all reserved IPs in subnet"`
+	All    bool   `short:"a" long:"all" description:"Release all reserved IPs (use with caution)"`
 	Force  bool   `short:"f" long:"force" description:"Skip confirmation prompt"`
 }) error {
 	if opts.IP == "" && opts.Subnet == "" && !opts.All {
@@ -137,7 +136,7 @@ func DebugIPAllocRelease(ctx *Context, opts struct {
 
 	if opts.Subnet != "" {
 		if !opts.Force {
-			ctx.Warn("About to release all stuck IPs in subnet %s", opts.Subnet)
+			ctx.Warn("About to release all reserved IPs in subnet %s", opts.Subnet)
 			ctx.Warn("This will make these IPs available for reallocation.")
 			ctx.Warn("Use --force to skip this confirmation.")
 			return nil
@@ -154,7 +153,7 @@ func DebugIPAllocRelease(ctx *Context, opts struct {
 
 	if opts.All {
 		if !opts.Force {
-			ctx.Warn("About to release ALL stuck IPs across all subnets")
+			ctx.Warn("About to release ALL reserved IPs across all subnets")
 			ctx.Warn("This will make these IPs available for reallocation.")
 			ctx.Warn("Use --force to skip this confirmation.")
 			return nil

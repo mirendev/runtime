@@ -43,13 +43,9 @@ types:
         type: int32
         index: 3
         doc: Number of released IPs
-      - name: stuck
-        type: int32
-        index: 4
-        doc: Number of stuck IPs (reserved but no released_at)
       - name: capacity
         type: int32
-        index: 5
+        index: 4
         doc: Total capacity of subnet
 
 interfaces:
@@ -68,9 +64,6 @@ interfaces:
           - name: released_only
             type: bool
             doc: Show only released IPs
-          - name: stuck_only
-            type: bool
-            doc: Show only stuck IPs (reserved=1, no released_at)
         results:
           - name: leases
             type: list
@@ -97,7 +90,7 @@ interfaces:
             doc: Whether the IP was released
 
       - name: releaseSubnet
-        doc: Release all stuck IPs in a subnet
+        doc: Release all reserved IPs in a subnet
         parameters:
           - name: subnet
             type: string
@@ -108,7 +101,7 @@ interfaces:
             doc: Number of IPs released
 
       - name: releaseAll
-        doc: Release all stuck IPs across all subnets
+        doc: Release all reserved IPs across all subnets
         results:
           - name: count
             type: int32

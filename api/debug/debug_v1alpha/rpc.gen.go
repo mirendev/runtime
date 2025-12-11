@@ -99,8 +99,7 @@ type subnetStatusData struct {
 	Total    *int32  `cbor:"1,keyasint,omitempty" json:"total,omitempty"`
 	Reserved *int32  `cbor:"2,keyasint,omitempty" json:"reserved,omitempty"`
 	Released *int32  `cbor:"3,keyasint,omitempty" json:"released,omitempty"`
-	Stuck    *int32  `cbor:"4,keyasint,omitempty" json:"stuck,omitempty"`
-	Capacity *int32  `cbor:"5,keyasint,omitempty" json:"capacity,omitempty"`
+	Capacity *int32  `cbor:"4,keyasint,omitempty" json:"capacity,omitempty"`
 }
 
 type SubnetStatus struct {
@@ -167,21 +166,6 @@ func (v *SubnetStatus) SetReleased(released int32) {
 	v.data.Released = &released
 }
 
-func (v *SubnetStatus) HasStuck() bool {
-	return v.data.Stuck != nil
-}
-
-func (v *SubnetStatus) Stuck() int32 {
-	if v.data.Stuck == nil {
-		return 0
-	}
-	return *v.data.Stuck
-}
-
-func (v *SubnetStatus) SetStuck(stuck int32) {
-	v.data.Stuck = &stuck
-}
-
 func (v *SubnetStatus) HasCapacity() bool {
 	return v.data.Capacity != nil
 }
@@ -217,7 +201,6 @@ type iPAllocListLeasesArgsData struct {
 	Subnet       *string `cbor:"0,keyasint,omitempty" json:"subnet,omitempty"`
 	ReservedOnly *bool   `cbor:"1,keyasint,omitempty" json:"reserved_only,omitempty"`
 	ReleasedOnly *bool   `cbor:"2,keyasint,omitempty" json:"released_only,omitempty"`
-	StuckOnly    *bool   `cbor:"3,keyasint,omitempty" json:"stuck_only,omitempty"`
 }
 
 type IPAllocListLeasesArgs struct {
@@ -256,17 +239,6 @@ func (v *IPAllocListLeasesArgs) ReleasedOnly() bool {
 		return false
 	}
 	return *v.data.ReleasedOnly
-}
-
-func (v *IPAllocListLeasesArgs) HasStuckOnly() bool {
-	return v.data.StuckOnly != nil
-}
-
-func (v *IPAllocListLeasesArgs) StuckOnly() bool {
-	if v.data.StuckOnly == nil {
-		return false
-	}
-	return *v.data.StuckOnly
 }
 
 func (v *IPAllocListLeasesArgs) MarshalCBOR() ([]byte, error) {
@@ -913,12 +885,11 @@ func (v *IPAllocClientListLeasesResults) Leases() []*IPLease {
 	return *v.data.Leases
 }
 
-func (v IPAllocClient) ListLeases(ctx context.Context, subnet string, reserved_only bool, released_only bool, stuck_only bool) (*IPAllocClientListLeasesResults, error) {
+func (v IPAllocClient) ListLeases(ctx context.Context, subnet string, reserved_only bool, released_only bool) (*IPAllocClientListLeasesResults, error) {
 	args := IPAllocListLeasesArgs{}
 	args.data.Subnet = &subnet
 	args.data.ReservedOnly = &reserved_only
 	args.data.ReleasedOnly = &released_only
-	args.data.StuckOnly = &stuck_only
 
 	var ret iPAllocListLeasesResultsData
 

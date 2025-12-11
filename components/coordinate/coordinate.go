@@ -42,6 +42,7 @@ import (
 	"miren.dev/runtime/pkg/controller"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/schema"
+	"miren.dev/runtime/pkg/netdb"
 	"miren.dev/runtime/pkg/rpc"
 	"miren.dev/runtime/pkg/sysstats"
 	"miren.dev/runtime/servers/app"
@@ -626,7 +627,12 @@ func (c *Coordinator) Start(ctx context.Context) error {
 	}
 	server.ExposeValue("dev.miren.runtime/deployment", deployment_v1alpha.AdaptDeployment(ds))
 
-	debugServer := debugsrv.NewServer(c.Log, c.DataPath, eac)
+	ndb, err := netdb.New(filepath.Join(c.DataPath, "net.db"))
+	if err != nil {
+		c.Log.Error("failed to open netdb for debug server", "error", err)
+		return err
+	}
+	debugServer := debugsrv.NewServer(c.Log, ndb, eac)
 	server.ExposeValue("dev.miren.runtime/debug-ipalloc", debug_v1alpha.AdaptIPAlloc(debugServer))
 
 	c.Log.Info("started RPC server")
