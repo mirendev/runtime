@@ -2042,6 +2042,34 @@ func (c *SandboxController) stopSandbox(ctx context.Context, id entity.Id) error
 		c.Log.Warn("failed to load pause container", "id", id, "err", err)
 	}
 
+	// Fallback: if we couldn't get IPs from container labels, try the entity store
+	if len(sandboxIPs) == 0 {
+		resp, err := c.EAC.Get(ctx, id.String())
+		if err == nil {
+			var sb compute.Sandbox
+			sb.Decode(resp.Entity().Entity())
+
+			sandboxIPs = make(map[string]bool)
+			for _, net := range sb.Network {
+				addr := net.Address
+				if strings.Contains(addr, "/") {
+					if prefix, err := netip.ParsePrefix(addr); err == nil {
+						addr = prefix.Addr().String()
+					}
+				}
+				if addr != "" {
+					sandboxIPs[addr] = true
+				}
+			}
+
+			if len(sandboxIPs) > 0 {
+				c.Log.Debug("retrieved IPs from entity store for cleanup", "id", id, "ips", sandboxIPs)
+			}
+		} else if !errors.Is(err, cond.ErrNotFound{}) {
+			c.Log.Warn("failed to get sandbox entity for IP cleanup", "id", id, "err", err)
+		}
+	}
+
 	// Fallback if we couldn't get LogEntity from labels
 	if le == "" {
 		le = id.String()
