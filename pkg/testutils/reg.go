@@ -43,7 +43,17 @@ func Registry(extra ...func(*asm.Registry)) (*asm.Registry, func()) {
 		panic(err)
 	}
 
-	iface, err := ndb.ReserveInterface("mt")
+	// Generate a unique interface prefix to avoid conflicts with parallel tests.
+	// Each test has its own netdb, so without unique prefixes, multiple tests
+	// could all get "mt1" and conflict when creating the actual Linux bridge.
+	// Use a short random suffix to keep interface name within Linux's 15-char limit.
+	ifaceSuffix, err := rand.Int(rand.Reader, big.NewInt(10000))
+	if err != nil {
+		panic(err)
+	}
+	ifacePrefix := fmt.Sprintf("mt%d", ifaceSuffix.Int64())
+
+	iface, err := ndb.ReserveInterface(ifacePrefix)
 	if err != nil {
 		panic(err)
 	}
