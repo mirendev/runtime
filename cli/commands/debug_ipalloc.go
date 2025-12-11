@@ -2,11 +2,11 @@ package commands
 
 import (
 	"fmt"
-	"strings"
 	"time"
 
 	"miren.dev/runtime/api/debug/debug_v1alpha"
 	"miren.dev/runtime/pkg/rpc/standard"
+	"miren.dev/runtime/pkg/ui"
 )
 
 // DebugIPAllocList lists all IP leases from the netdb
@@ -28,13 +28,16 @@ func DebugIPAllocList(ctx *Context, opts struct {
 		return fmt.Errorf("failed to list leases: %w", err)
 	}
 
-	ctx.Info("IP Leases:")
-	ctx.Info("")
-	ctx.Info("%-18s %-18s %-10s %s", "IP", "SUBNET", "STATUS", "RELEASED_AT")
-	ctx.Info("%-18s %-18s %-10s %s", strings.Repeat("-", 18), strings.Repeat("-", 18), strings.Repeat("-", 10), strings.Repeat("-", 20))
-
 	leases := results.Leases()
-	for _, lease := range leases {
+	if len(leases) == 0 {
+		ctx.Info("No IP leases found")
+		return nil
+	}
+
+	headers := []string{"IP", "SUBNET", "STATUS", "RELEASED_AT"}
+	rows := make([]ui.Row, len(leases))
+
+	for i, lease := range leases {
 		status := "released"
 		if lease.Reserved() {
 			status = "reserved"
@@ -45,10 +48,16 @@ func DebugIPAllocList(ctx *Context, opts struct {
 			releasedStr = standard.FromTimestamp(lease.ReleasedAt()).Format(time.RFC3339)
 		}
 
-		ctx.Info("%-18s %-18s %-10s %s", lease.Ip(), lease.Subnet(), status, releasedStr)
+		rows[i] = ui.Row{lease.Ip(), lease.Subnet(), status, releasedStr}
 	}
 
-	ctx.Info("")
+	columns := ui.AutoSizeColumns(headers, rows, ui.Columns().NoTruncate(0, 1))
+	table := ui.NewTable(
+		ui.WithColumns(columns),
+		ui.WithRows(rows),
+	)
+
+	ctx.Printf("%s\n", table.Render())
 	ctx.Info("Total: %d leases", len(leases))
 
 	return nil
@@ -70,12 +79,16 @@ func DebugIPAllocStatus(ctx *Context, opts struct {
 		return fmt.Errorf("failed to get status: %w", err)
 	}
 
-	ctx.Info("IP Allocation Status:")
-	ctx.Info("")
-	ctx.Info("%-20s %8s %10s %10s %8s", "SUBNET", "CAPACITY", "RESERVED", "RELEASED", "USAGE")
-	ctx.Info("%-20s %8s %10s %10s %8s", strings.Repeat("-", 20), strings.Repeat("-", 8), strings.Repeat("-", 10), strings.Repeat("-", 10), strings.Repeat("-", 8))
+	subnets := results.Subnets()
+	if len(subnets) == 0 {
+		ctx.Info("No subnets found")
+		return nil
+	}
 
-	for _, subnet := range results.Subnets() {
+	headers := []string{"SUBNET", "CAPACITY", "RESERVED", "RELEASED", "USAGE"}
+	rows := make([]ui.Row, len(subnets))
+
+	for i, subnet := range subnets {
 		capacity := subnet.Capacity()
 		reserved := subnet.Reserved()
 
@@ -88,9 +101,22 @@ func DebugIPAllocStatus(ctx *Context, opts struct {
 			usageStr += " ⚠️"
 		}
 
-		ctx.Info("%-20s %8d %10d %10d %8s", subnet.Subnet(), capacity, reserved, subnet.Released(), usageStr)
+		rows[i] = ui.Row{
+			subnet.Subnet(),
+			fmt.Sprintf("%d", capacity),
+			fmt.Sprintf("%d", reserved),
+			fmt.Sprintf("%d", subnet.Released()),
+			usageStr,
+		}
 	}
 
+	columns := ui.AutoSizeColumns(headers, rows, ui.Columns().NoTruncate(0))
+	table := ui.NewTable(
+		ui.WithColumns(columns),
+		ui.WithRows(rows),
+	)
+
+	ctx.Printf("%s\n", table.Render())
 	return nil
 }
 
@@ -115,10 +141,17 @@ func DebugIPAllocRelease(ctx *Context, opts struct {
 
 	if opts.IP != "" {
 		if !opts.Force {
-			ctx.Warn("About to release IP %s", opts.IP)
-			ctx.Warn("This will make this IP available for reallocation.")
-			ctx.Warn("Use --force to skip this confirmation.")
-			return nil
+			confirmed, err := ui.Confirm(
+				ui.WithMessage(fmt.Sprintf("Release IP %s? This will make it available for reallocation.", opts.IP)),
+				ui.WithDefault(false),
+			)
+			if err != nil {
+				return fmt.Errorf("confirmation failed: %w", err)
+			}
+			if !confirmed {
+				ctx.Info("Release cancelled")
+				return nil
+			}
 		}
 
 		result, err := ipalloc.ReleaseIP(ctx, opts.IP)
@@ -136,10 +169,17 @@ func DebugIPAllocRelease(ctx *Context, opts struct {
 
 	if opts.Subnet != "" {
 		if !opts.Force {
-			ctx.Warn("About to release all reserved IPs in subnet %s", opts.Subnet)
-			ctx.Warn("This will make these IPs available for reallocation.")
-			ctx.Warn("Use --force to skip this confirmation.")
-			return nil
+			confirmed, err := ui.Confirm(
+				ui.WithMessage(fmt.Sprintf("Release all reserved IPs in subnet %s?", opts.Subnet)),
+				ui.WithDefault(false),
+			)
+			if err != nil {
+				return fmt.Errorf("confirmation failed: %w", err)
+			}
+			if !confirmed {
+				ctx.Info("Release cancelled")
+				return nil
+			}
 		}
 
 		result, err := ipalloc.ReleaseSubnet(ctx, opts.Subnet)
@@ -153,10 +193,17 @@ func DebugIPAllocRelease(ctx *Context, opts struct {
 
 	if opts.All {
 		if !opts.Force {
-			ctx.Warn("About to release ALL reserved IPs across all subnets")
-			ctx.Warn("This will make these IPs available for reallocation.")
-			ctx.Warn("Use --force to skip this confirmation.")
-			return nil
+			confirmed, err := ui.Confirm(
+				ui.WithMessage("Release ALL reserved IPs across all subnets?"),
+				ui.WithDefault(false),
+			)
+			if err != nil {
+				return fmt.Errorf("confirmation failed: %w", err)
+			}
+			if !confirmed {
+				ctx.Info("Release cancelled")
+				return nil
+			}
 		}
 
 		result, err := ipalloc.ReleaseAll(ctx)
