@@ -244,12 +244,15 @@ func (w *ContainerWatchdog) cleanupOrphanedContainers(ctx context.Context) (*Cle
 		if w.Subnet != nil {
 			for label, value := range oc.labels {
 				if strings.HasPrefix(label, "runtime.computer/ip") {
-					if addr, err := netip.ParseAddr(value); err == nil {
-						if err := w.Subnet.ReleaseAddr(addr); err != nil {
-							w.Log.Error("watchdog failed to release IP", "id", containerID, "addr", addr, "error", err)
-						} else {
-							w.Log.Debug("watchdog released IP", "id", containerID, "addr", addr)
-						}
+					addr, err := netip.ParseAddr(value)
+					if err != nil {
+						w.Log.Warn("watchdog failed to parse IP from label", "id", containerID, "label", label, "value", value, "error", err)
+						continue
+					}
+					if err := w.Subnet.ReleaseAddr(addr); err != nil {
+						w.Log.Error("watchdog failed to release IP", "id", containerID, "addr", addr, "error", err)
+					} else {
+						w.Log.Debug("watchdog released IP", "id", containerID, "addr", addr)
 					}
 				}
 			}
