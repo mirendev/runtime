@@ -22,6 +22,30 @@ func AllCommands() map[string]cli.CommandFactory {
 			return Infer("whoami", "Display information about the current authenticated user", Whoami), nil
 		},
 
+		"info": func() (cli.Command, error) {
+			return Infer("info", "Show information about miren environment", Info), nil
+		},
+
+		"info config": func() (cli.Command, error) {
+			return Infer("info config", "Show configuration file information", InfoConfig), nil
+		},
+
+		"info server": func() (cli.Command, error) {
+			return Infer("info server", "Show server health and connectivity", InfoServer), nil
+		},
+
+		"info apps": func() (cli.Command, error) {
+			return Infer("info apps", "Show apps and their routes", InfoApps), nil
+		},
+
+		"info auth": func() (cli.Command, error) {
+			return Infer("info auth", "Show authentication and user information", InfoAuth), nil
+		},
+
+		"info all": func() (cli.Command, error) {
+			return Infer("info all", "Show all information", InfoAll), nil
+		},
+
 		"init": func() (cli.Command, error) {
 			return Infer("init", "Initialize a new application", Init), nil
 		},
