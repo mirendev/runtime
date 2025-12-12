@@ -1,13 +1,56 @@
 package commands
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/url"
 	"strings"
+	"time"
 
 	"miren.dev/runtime/clientconfig"
 	"miren.dev/runtime/pkg/auth"
 	"miren.dev/runtime/pkg/cloudauth"
 )
+
+type cloudUserInfo struct {
+	User struct {
+		ID    string `json:"id"`
+		Email string `json:"email"`
+		Name  string `json:"name"`
+	} `json:"user"`
+}
+
+func fetchCloudUserInfo(ctx context.Context, cloudURL, token string) (*cloudUserInfo, error) {
+	meURL, err := url.JoinPath(cloudURL, "/api/v1/me")
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "GET", meURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("status %d", resp.StatusCode)
+	}
+
+	var info cloudUserInfo
+	if err := json.NewDecoder(resp.Body).Decode(&info); err != nil {
+		return nil, err
+	}
+	return &info, nil
+}
 
 // InfoAuth shows authentication and user information
 func InfoAuth(ctx *Context, opts struct {
@@ -27,6 +70,7 @@ func InfoAuth(ctx *Context, opts struct {
 	authMethod := "none"
 	var claims *auth.ExtendedClaims
 	var identityName string
+	var userInfo *cloudUserInfo
 
 	if ctx.ClusterConfig.Identity != "" && ctx.ClientConfig != nil {
 		identity, err := ctx.ClientConfig.GetIdentity(ctx.ClusterConfig.Identity)
@@ -56,6 +100,9 @@ func InfoAuth(ctx *Context, opts struct {
 						if err == nil {
 							claims, _ = auth.ParseUnverifiedClaims(token)
 							authMethod = "keypair"
+
+							// Fetch user info from cloud
+							userInfo, _ = fetchCloudUserInfo(ctx, authServer, token)
 						}
 					}
 				}
@@ -75,17 +122,26 @@ func InfoAuth(ctx *Context, opts struct {
 		ctx.Printf("%s    %s\n", infoLabel.Render("Identity:"), identityName)
 	}
 
-	if claims != nil {
+	if claims != nil || userInfo != nil {
 		ctx.Printf("\n")
-		ctx.Printf("%s       %s\n", infoLabel.Render("Email:"), claims.Subject)
-		if claims.UserID != "" {
-			ctx.Printf("%s     %s\n", infoLabel.Render("User ID:"), claims.UserID)
+		// Show email from cloud user info if available
+		if userInfo != nil && userInfo.User.Email != "" {
+			ctx.Printf("%s       %s\n", infoLabel.Render("Email:"), userInfo.User.Email)
 		}
-		if claims.OrganizationID != "" {
-			ctx.Printf("%s %s\n", infoLabel.Render("Organization:"), claims.OrganizationID)
+		// Show name from cloud user info if available
+		if userInfo != nil && userInfo.User.Name != "" {
+			ctx.Printf("%s        %s\n", infoLabel.Render("Name:"), userInfo.User.Name)
 		}
-		if len(claims.Groups) > 0 {
-			ctx.Printf("%s      %s\n", infoLabel.Render("Groups:"), strings.Join(claims.Groups, ", "))
+		if claims != nil {
+			if claims.UserID != "" {
+				ctx.Printf("%s     %s\n", infoLabel.Render("User ID:"), claims.UserID)
+			}
+			if claims.OrganizationID != "" {
+				ctx.Printf("%s %s\n", infoLabel.Render("Organization:"), claims.OrganizationID)
+			}
+			if len(claims.Groups) > 0 {
+				ctx.Printf("%s      %s\n", infoLabel.Render("Groups:"), strings.Join(claims.Groups, ", "))
+			}
 		}
 	} else if authMethod == "none" {
 		ctx.Printf("\n%s\n", infoGray.Render("No authentication configured for this cluster"))
