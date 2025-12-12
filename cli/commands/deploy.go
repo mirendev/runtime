@@ -346,6 +346,12 @@ func Deploy(ctx *Context, opts struct {
 
 		results, err = bc.BuildFromTar(ctx, name, stream.ServeReader(ctx, r), cb)
 		if err != nil {
+			// Check if this was a context cancellation (user pressed CTRL-C)
+			if ctx.Err() != nil {
+				ctx.Printf("\n\n❌ Deploy cancelled.\n")
+				updateDeploymentOnError("Deploy cancelled by user")
+				return ctx.Err()
+			}
 			ctx.Printf("\n\nBuild failed with the following errors:\n")
 			printBuildErrors(ctx, buildErrors, nil)
 			updateDeploymentOnError(fmt.Sprintf("Build failed: %v", err))
@@ -437,15 +443,19 @@ func Deploy(ctx *Context, opts struct {
 		}
 
 		if err != nil {
-			// Check if this was a user interruption
-			if dm, ok := finalModel.(*deployInfo); ok && dm.interrupted {
+			// Check if this was a user interruption (via UI flag or context cancellation)
+			dm, isDeploy := finalModel.(*deployInfo)
+			if (isDeploy && dm.interrupted) || ctx.Err() != nil {
 				ctx.Printf("\n\n❌ Deploy cancelled.\n")
 				updateDeploymentOnError("Deploy cancelled by user")
-				return deployCtx.Err()
+				if deployCtx.Err() != nil {
+					return deployCtx.Err()
+				}
+				return ctx.Err()
 			}
 
 			// Check if this was a buildkit startup timeout (handled by UI)
-			if dm, ok := finalModel.(*deployInfo); ok && dm.currentPhase == "timeout" {
+			if isDeploy && dm.currentPhase == "timeout" {
 				// The UI already printed the timeout message
 				updateDeploymentOnError("Buildkit startup timeout")
 				return fmt.Errorf("buildkit startup timeout")
