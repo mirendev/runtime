@@ -302,6 +302,7 @@ func (c *VictoriaLogsComponent) createContainer(ctx context.Context, image conta
 			"-storageDataPath=/victoria-logs-data",
 			"-retentionPeriod="+config.RetentionPeriod,
 			"-httpListenAddr="+listenAddr,
+			"-enableTCP6",
 		),
 		oci.WithHostHostsFile,
 		oci.WithHostResolvconf,
