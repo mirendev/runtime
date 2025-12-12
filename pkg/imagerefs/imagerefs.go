@@ -59,3 +59,8 @@ func GetBunImage(version string) string {
 func GetNodeImage(version string) string {
 	return "oci.miren.cloud/node:" + version + "-slim"
 }
+
+// GetRustImage returns a Rust image reference with the specified version
+func GetRustImage(version string) string {
+	return "oci.miren.cloud/rust:" + version + "-slim"
+}

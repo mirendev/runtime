@@ -570,3 +570,137 @@ func TestGoVersionDetection(t *testing.T) {
 		})
 	}
 }
+
+func TestRust(t *testing.T) {
+	if !checkDocker() {
+		t.Skip("Docker not available")
+	}
+
+	root := t.TempDir()
+	dir := setupTestDir(root, t)
+
+	// Create Rust project structure
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "src"), 0755))
+
+	files := map[string]string{
+		"Cargo.toml":  readFile(t, "rust/Cargo.toml"),
+		"src/main.rs": readFile(t, "rust/src/main.rs"),
+	}
+
+	for name, content := range files {
+		require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(content), 0644))
+	}
+
+	stack := &RustStack{
+		MetaStack: MetaStack{
+			dir: dir,
+		},
+	}
+
+	require.True(t, stack.Detect())
+
+	state, err := stack.GenerateLLB(dir, BuildOptions{Version: "1.83", Name: "test-app"})
+	require.NoError(t, err)
+
+	buildLLB(t, dir, state, func(r io.Reader) {
+		m, err := tarx.TarToMap(r)
+		require.NoError(t, err)
+		data, ok := m["bin/app"]
+		require.True(t, ok)
+		require.NotEmpty(t, data)
+	})
+}
+
+func TestRustVersionDetection(t *testing.T) {
+	testCases := []struct {
+		name            string
+		files           map[string]string
+		expectedVersion string
+	}{
+		{
+			name:            "no toolchain file",
+			files:           map[string]string{"Cargo.toml": "[package]\nname = \"test\""},
+			expectedVersion: "",
+		},
+		{
+			name:            "rust-toolchain plain",
+			files:           map[string]string{"Cargo.toml": "[package]\nname = \"test\"", "rust-toolchain": "1.75.0"},
+			expectedVersion: "1.75.0",
+		},
+		{
+			name:            "rust-toolchain stable",
+			files:           map[string]string{"Cargo.toml": "[package]\nname = \"test\"", "rust-toolchain": "stable"},
+			expectedVersion: "",
+		},
+		{
+			name:            "rust-toolchain.toml",
+			files:           map[string]string{"Cargo.toml": "[package]\nname = \"test\"", "rust-toolchain.toml": "[toolchain]\nchannel = \"1.80\""},
+			expectedVersion: "1.80",
+		},
+		{
+			name:            "rust-toolchain.toml nightly",
+			files:           map[string]string{"Cargo.toml": "[package]\nname = \"test\"", "rust-toolchain.toml": "[toolchain]\nchannel = \"nightly\""},
+			expectedVersion: "",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			for name, content := range tc.files {
+				require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(content), 0644))
+			}
+
+			stack := &RustStack{
+				MetaStack: MetaStack{
+					dir: dir,
+				},
+			}
+
+			version := stack.parseRustToolchainVersion()
+			require.Equal(t, tc.expectedVersion, version)
+		})
+	}
+}
+
+func TestRustBinaryNameDetection(t *testing.T) {
+	testCases := []struct {
+		name         string
+		cargoToml    string
+		expectedName string
+	}{
+		{
+			name:         "package name",
+			cargoToml:    "[package]\nname = \"my-app\"\nversion = \"0.1.0\"",
+			expectedName: "my-app",
+		},
+		{
+			name:         "bin name",
+			cargoToml:    "[package]\nname = \"my-lib\"\nversion = \"0.1.0\"\n\n[[bin]]\nname = \"my-binary\"",
+			expectedName: "my-binary",
+		},
+		{
+			name:         "fallback to opts.Name",
+			cargoToml:    "",
+			expectedName: "fallback-name",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			if tc.cargoToml != "" {
+				require.NoError(t, os.WriteFile(filepath.Join(dir, "Cargo.toml"), []byte(tc.cargoToml), 0644))
+			}
+
+			stack := &RustStack{
+				MetaStack: MetaStack{
+					dir: dir,
+				},
+			}
+
+			name := stack.getBinaryName(BuildOptions{Name: "fallback-name"})
+			require.Equal(t, tc.expectedName, name)
+		})
+	}
+}

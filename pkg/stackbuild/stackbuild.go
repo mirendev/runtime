@@ -61,6 +61,7 @@ func DetectStack(dir string) (Stack, error) {
 		&NodeStack{MetaStack: ms},
 		&BunStack{MetaStack: ms},
 		&GoStack{MetaStack: ms},
+		&RustStack{MetaStack: ms},
 	}
 	for _, stack := range stacks {
 		if stack.Detect() {
@@ -766,6 +767,160 @@ func (s *GoStack) GenerateLLB(dir string, opts BuildOptions) (*llb.State, error)
 	}
 
 	state = s.addAppUser(state)
+	state = s.applyOnBuild(state, opts)
+	state = s.chownApp(state)
+
+	return &state, nil
+}
+
+// RustStack implements Stack for Rust
+type RustStack struct {
+	MetaStack
+}
+
+func (s *RustStack) Name() string {
+	return "rust"
+}
+
+func (s *RustStack) Detect() bool {
+	return s.hasFile("Cargo.toml")
+}
+
+func (s *RustStack) parseRustToolchainVersion() string {
+	// Check rust-toolchain.toml first (TOML format)
+	if content, err := s.readFile("rust-toolchain.toml"); err == nil {
+		lines := strings.SplitSeq(string(content), "\n")
+		for line := range lines {
+			line = strings.TrimSpace(line)
+			if strings.HasPrefix(line, "channel") {
+				// Parse: channel = "1.75" or channel = "stable"
+				parts := strings.SplitN(line, "=", 2)
+				if len(parts) == 2 {
+					channel := strings.Trim(strings.TrimSpace(parts[1]), "\"'")
+					if channel != "stable" && channel != "nightly" && channel != "beta" {
+						return channel
+					}
+				}
+			}
+		}
+	}
+
+	// Check rust-toolchain (plain text format)
+	if content, err := s.readFile("rust-toolchain"); err == nil {
+		line := strings.TrimSpace(string(content))
+		if line != "" && line != "stable" && line != "nightly" && line != "beta" {
+			return line
+		}
+	}
+
+	return ""
+}
+
+func (s *RustStack) getBinaryName(opts BuildOptions) string {
+	// Try to extract binary name from Cargo.toml
+	content, err := s.readFile("Cargo.toml")
+	if err != nil {
+		return opts.Name
+	}
+
+	lines := strings.SplitSeq(string(content), "\n")
+	inPackage := false
+	inBin := false
+
+	for line := range lines {
+		trimmed := strings.TrimSpace(line)
+
+		if trimmed == "[package]" {
+			inPackage = true
+			inBin = false
+			continue
+		}
+		if trimmed == "[[bin]]" {
+			inBin = true
+			inPackage = false
+			continue
+		}
+		if strings.HasPrefix(trimmed, "[") {
+			inPackage = false
+			inBin = false
+			continue
+		}
+
+		// Look for name in [[bin]] section first, then [package]
+		if (inBin || inPackage) && strings.HasPrefix(trimmed, "name") {
+			parts := strings.SplitN(trimmed, "=", 2)
+			if len(parts) == 2 {
+				name := strings.Trim(strings.TrimSpace(parts[1]), "\"'")
+				if inBin {
+					return name
+				}
+				if inPackage && !s.hasDir("src/lib.rs") {
+					return name
+				}
+			}
+		}
+	}
+
+	return opts.Name
+}
+
+func (s *RustStack) GenerateLLB(dir string, opts BuildOptions) (*llb.State, error) {
+	// Set up local context with the directory
+	localCtx := llb.Local("context",
+		llb.SharedKeyHint(dir),
+		llb.ExcludePatterns([]string{".git", "target"}),
+		llb.FollowPaths([]string{"."}),
+		llb.WithCustomName("application code"),
+	)
+
+	mr := imagemetaresolver.Default()
+
+	version := "1.83"
+	if opts.Version != "" {
+		version = opts.Version
+	} else if toolchainVersion := s.parseRustToolchainVersion(); toolchainVersion != "" {
+		version = toolchainVersion
+	}
+
+	base := llb.Image(imagerefs.GetRustImage(version), llb.WithMetaResolver(mr))
+
+	base = s.addAppUser(base)
+
+	h := &highlevelBuilder{opts}
+
+	// Copy Cargo.toml and Cargo.lock first for dependency caching
+	cargoFiles := []string{"Cargo.toml", "Cargo.lock"}
+	depState := base.File(llb.Copy(localCtx, "/", "/app", &llb.CopyInfo{
+		IncludePatterns: cargoFiles,
+	}), llb.WithCustomName("copy Cargo files"))
+
+	// Create a dummy main.rs to allow cargo to fetch dependencies
+	depState = depState.Run(
+		llb.Args([]string{"/bin/sh", "-c", "mkdir -p /app/src && echo 'fn main() {}' > /app/src/main.rs"}),
+		llb.WithCustomName("[phase] Creating dummy src for dependency fetch"),
+	).Root()
+
+	// Fetch dependencies with cache
+	depState = depState.Dir("/app").Run(
+		llb.Shlex("cargo fetch"),
+		h.CacheMount("/usr/local/cargo/registry"),
+		llb.WithCustomName("[phase] Fetching Rust dependencies"),
+	).Root()
+
+	// Copy the rest of the application code
+	state := h.copyApp(depState, localCtx)
+
+	// Build the application
+	binaryName := s.getBinaryName(opts)
+	buildCmd := fmt.Sprintf("cargo build --release && cp /app/target/release/%s /bin/app", binaryName)
+
+	state = state.Dir("/app").Run(
+		llb.Args([]string{"/bin/sh", "-c", buildCmd}),
+		h.CacheMount("/usr/local/cargo/registry"),
+		h.CacheMount("/app/target"),
+		llb.WithCustomName("[phase] Building Rust application"),
+	).Root()
+
 	state = s.applyOnBuild(state, opts)
 	state = s.chownApp(state)
 
