@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
+	"strings"
 	"sync"
 	"time"
 
@@ -18,6 +19,30 @@ type NetDB struct {
 	mu   sync.Mutex
 
 	cooldownDur time.Duration
+}
+
+// IPLease represents an IP lease record from the database.
+type IPLease struct {
+	IP         string
+	Subnet     string
+	Reserved   bool
+	ReleasedAt *time.Time
+}
+
+// SubnetStatus contains utilization statistics for a subnet.
+type SubnetStatus struct {
+	Subnet   string
+	Total    int
+	Reserved int
+	Released int
+	Capacity int
+}
+
+// LeaseFilter specifies filters for listing IP leases.
+type LeaseFilter struct {
+	Subnet       string
+	ReservedOnly bool
+	ReleasedOnly bool
 }
 
 type Subnet struct {
@@ -414,4 +439,218 @@ func (n *NetDB) ReleaseInterface(name string) error {
 
 	_, err := n.db.Exec("DELETE FROM interfaces WHERE name = ?", name)
 	return err
+}
+
+// ListLeases returns IP leases matching the given filter.
+func (n *NetDB) ListLeases(filter LeaseFilter) ([]IPLease, error) {
+	query := "SELECT ip, subnet, reserved, released_at FROM ips"
+	var conditions []string
+	var args []any
+
+	if filter.Subnet != "" {
+		conditions = append(conditions, "subnet = ?")
+		args = append(args, filter.Subnet)
+	}
+	if filter.ReservedOnly {
+		conditions = append(conditions, "reserved = 1")
+	}
+	if filter.ReleasedOnly {
+		conditions = append(conditions, "reserved = 0")
+	}
+
+	if len(conditions) > 0 {
+		query += " WHERE " + strings.Join(conditions, " AND ")
+	}
+	query += " ORDER BY subnet, ip"
+
+	rows, err := n.db.Query(query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query leases: %w", err)
+	}
+	defer rows.Close()
+
+	var leases []IPLease
+	for rows.Next() {
+		var ip, subnet string
+		var reserved int
+		var releasedAt sql.NullInt64
+
+		if err := rows.Scan(&ip, &subnet, &reserved, &releasedAt); err != nil {
+			return nil, fmt.Errorf("failed to scan lease: %w", err)
+		}
+
+		lease := IPLease{
+			IP:       ip,
+			Subnet:   subnet,
+			Reserved: reserved == 1,
+		}
+		if releasedAt.Valid {
+			t := time.Unix(releasedAt.Int64, 0)
+			lease.ReleasedAt = &t
+		}
+		leases = append(leases, lease)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to iterate leases: %w", err)
+	}
+
+	return leases, nil
+}
+
+// GetSubnetStatus returns utilization statistics for all subnets.
+func (n *NetDB) GetSubnetStatus() ([]SubnetStatus, error) {
+	rows, err := n.db.Query(`
+		SELECT
+			subnet,
+			COUNT(*) as total,
+			SUM(CASE WHEN reserved = 1 THEN 1 ELSE 0 END) as reserved,
+			SUM(CASE WHEN reserved = 0 THEN 1 ELSE 0 END) as released
+		FROM ips
+		GROUP BY subnet
+		ORDER BY subnet
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query subnet status: %w", err)
+	}
+	defer rows.Close()
+
+	var statuses []SubnetStatus
+	for rows.Next() {
+		var status SubnetStatus
+		if err := rows.Scan(&status.Subnet, &status.Total, &status.Reserved, &status.Released); err != nil {
+			return nil, fmt.Errorf("failed to scan subnet status: %w", err)
+		}
+
+		if prefix, err := netip.ParsePrefix(status.Subnet); err == nil {
+			status.Capacity = calculateCapacity(prefix)
+		}
+
+		statuses = append(statuses, status)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to iterate subnet statuses: %w", err)
+	}
+
+	return statuses, nil
+}
+
+// GetReservedIPs returns all reserved IP addresses, optionally filtered by subnet.
+func (n *NetDB) GetReservedIPs(subnet string) ([]string, error) {
+	query := "SELECT ip FROM ips WHERE reserved = 1"
+	var args []any
+	if subnet != "" {
+		query += " AND subnet = ?"
+		args = append(args, subnet)
+	}
+
+	rows, err := n.db.Query(query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query reserved IPs: %w", err)
+	}
+	defer rows.Close()
+
+	var ips []string
+	for rows.Next() {
+		var ip string
+		if err := rows.Scan(&ip); err != nil {
+			return nil, fmt.Errorf("failed to scan IP: %w", err)
+		}
+		ips = append(ips, ip)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to iterate reserved IPs: %w", err)
+	}
+
+	return ips, nil
+}
+
+// ForceReleaseIP releases a specific IP address regardless of its current state.
+func (n *NetDB) ForceReleaseIP(ip string) (bool, error) {
+	result, err := n.db.Exec(
+		"UPDATE ips SET reserved = 0, released_at = ? WHERE ip = ? AND reserved = 1",
+		time.Now().Unix(), ip)
+	if err != nil {
+		return false, fmt.Errorf("failed to release IP: %w", err)
+	}
+
+	affected, _ := result.RowsAffected()
+	return affected > 0, nil
+}
+
+// ForceReleaseSubnet releases all reserved IPs in a subnet.
+func (n *NetDB) ForceReleaseSubnet(subnet string) (int, error) {
+	result, err := n.db.Exec(
+		"UPDATE ips SET reserved = 0, released_at = ? WHERE subnet = ? AND reserved = 1",
+		time.Now().Unix(), subnet)
+	if err != nil {
+		return 0, fmt.Errorf("failed to release subnet IPs: %w", err)
+	}
+
+	affected, _ := result.RowsAffected()
+	return int(affected), nil
+}
+
+// ForceReleaseAll releases all reserved IPs.
+func (n *NetDB) ForceReleaseAll() (int, error) {
+	result, err := n.db.Exec(
+		"UPDATE ips SET reserved = 0, released_at = ? WHERE reserved = 1",
+		time.Now().Unix())
+	if err != nil {
+		return 0, fmt.Errorf("failed to release all IPs: %w", err)
+	}
+
+	affected, _ := result.RowsAffected()
+	return int(affected), nil
+}
+
+// ForceReleaseIPs releases a specific set of IPs in a single transaction.
+func (n *NetDB) ForceReleaseIPs(ips []string) error {
+	if len(ips) == 0 {
+		return nil
+	}
+
+	tx, err := n.db.Begin()
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	stmt, err := tx.Prepare("UPDATE ips SET reserved = 0, released_at = ? WHERE ip = ?")
+	if err != nil {
+		return fmt.Errorf("failed to prepare statement: %w", err)
+	}
+	defer stmt.Close()
+
+	now := time.Now().Unix()
+	for _, ip := range ips {
+		if _, err := stmt.Exec(now, ip); err != nil {
+			return fmt.Errorf("failed to release IP %s: %w", ip, err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit transaction: %w", err)
+	}
+
+	return nil
+}
+
+func calculateCapacity(prefix netip.Prefix) int {
+	bits := prefix.Bits()
+	if prefix.Addr().Is4() {
+		hostBits := 32 - bits
+		if hostBits <= 0 {
+			return 0
+		}
+		total := 1 << hostBits
+		return total - 3 // subtract network, broadcast, gateway
+	}
+	hostBits := 128 - bits
+	if hostBits > 16 {
+		hostBits = 16
+	}
+	return (1 << hostBits) - 1
 }
