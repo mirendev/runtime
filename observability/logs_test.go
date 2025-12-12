@@ -48,10 +48,13 @@ func TestLogs(t *testing.T) {
 		})
 		r.NoError(err)
 
-		entries, err := pr.Read(ctx, id)
-		r.NoError(err)
-
-		r.Len(entries, 1)
+		// VictoriaLogs may not immediately index the entry, especially under load.
+		// Poll until the entry is readable.
+		var entries []observability.LogEntry
+		r.Eventually(func() bool {
+			entries, err = pr.Read(ctx, id)
+			return err == nil && len(entries) == 1
+		}, 10*time.Second, 100*time.Millisecond, "log entry should be readable")
 
 		r.Equal("this is a log line", entries[0].Body)
 	})
