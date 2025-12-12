@@ -80,22 +80,20 @@ func InfoApps(ctx *Context, opts struct {
 		versionMap[version.ID.String()] = &version
 	}
 
-	// Build deployment map (most recent active deployment per app)
+	// Build deployment map (most recent deployment per app)
 	deploymentMap := make(map[string]*core_v1alpha.Deployment)
 	for _, e := range deploymentsRes.Values() {
 		var deployment core_v1alpha.Deployment
 		deployment.Decode(e.Entity())
 
-		if deployment.Status == "active" {
-			if existing, ok := deploymentMap[deployment.AppName]; ok {
-				existingTime, _ := time.Parse(time.RFC3339, existing.CompletedAt)
-				newTime, _ := time.Parse(time.RFC3339, deployment.CompletedAt)
-				if newTime.After(existingTime) {
-					deploymentMap[deployment.AppName] = &deployment
-				}
-			} else {
+		if existing, ok := deploymentMap[deployment.AppName]; ok {
+			existingTime, _ := time.Parse(time.RFC3339, existing.CompletedAt)
+			newTime, _ := time.Parse(time.RFC3339, deployment.CompletedAt)
+			if newTime.After(existingTime) {
 				deploymentMap[deployment.AppName] = &deployment
 			}
+		} else {
+			deploymentMap[deployment.AppName] = &deployment
 		}
 	}
 
@@ -118,7 +116,7 @@ func InfoApps(ctx *Context, opts struct {
 
 	// Build table
 	var rows []ui.Row
-	headers := []string{"NAME", "VERSION", "DEPLOYED", "ROUTES"}
+	headers := []string{"NAME", "VERSION", "COMMIT", "STATUS", "DEPLOYED", "ROUTES"}
 
 	for _, e := range appsRes.Values() {
 		var app core_v1alpha.App
@@ -129,6 +127,8 @@ func InfoApps(ctx *Context, opts struct {
 
 		name := md.Name
 		version := "-"
+		commit := "-"
+		status := "-"
 		deployed := "-"
 		routesDisplay := "-"
 
@@ -139,6 +139,29 @@ func InfoApps(ctx *Context, opts struct {
 		}
 
 		if deployment, ok := deploymentMap[md.Name]; ok {
+			// Get commit SHA (short form)
+			if deployment.GitInfo.Sha != "" {
+				sha := deployment.GitInfo.Sha
+				if len(sha) > 7 {
+					sha = sha[:7]
+				}
+				commit = sha
+			}
+
+			// Get deployment status with color
+			if deployment.Status != "" {
+				switch deployment.Status {
+				case "active":
+					status = infoGreen.Render(deployment.Status)
+				case "failed":
+					status = infoRed.Render(deployment.Status)
+				case "in_progress":
+					status = infoLabel.Render(deployment.Status)
+				default:
+					status = deployment.Status
+				}
+			}
+
 			var deployedParts []string
 
 			if deployment.CompletedAt != "" {
@@ -164,7 +187,7 @@ func InfoApps(ctx *Context, opts struct {
 			routesDisplay = strings.Join(appRoutes, ", ")
 		}
 
-		rows = append(rows, ui.Row{name, version, deployed, routesDisplay})
+		rows = append(rows, ui.Row{name, version, commit, status, deployed, routesDisplay})
 	}
 
 	sort.Slice(rows, func(i, j int) bool {
