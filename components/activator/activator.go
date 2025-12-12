@@ -548,7 +548,7 @@ func (a *localActivator) requestPoolCapacity(ctx context.Context, ver *core_v1al
 						// Fetch fresh pool state
 						freshPoolEnt, getErr := a.eac.Get(ctx, poolID.String())
 						if getErr != nil {
-							if errors.Is(getErr, entity.ErrNotFound) {
+							if errors.Is(getErr, cond.ErrNotFound{}) {
 								// Pool was deleted, clear cache and break out to outer loop
 								a.log.Info("pool was deleted during update, clearing stale reference",
 									"pool", poolID,
@@ -578,7 +578,7 @@ func (a *localActivator) requestPoolCapacity(ctx context.Context, ver *core_v1al
 					}
 
 					// If pool was deleted, clear stale reference and break to re-query
-					if errors.Is(err, entity.ErrNotFound) {
+					if errors.Is(err, cond.ErrNotFound{}) {
 						a.log.Info("pool was deleted, clearing stale reference",
 							"pool", poolID,
 							"service", service)
@@ -753,7 +753,7 @@ func (a *localActivator) requestPoolCapacity(ctx context.Context, ver *core_v1al
 					continue // Retry from the beginning
 				}
 				// If pool was deleted, clear cache and retry
-				if errors.Is(err, entity.ErrNotFound) {
+				if errors.Is(err, cond.ErrNotFound{}) {
 					a.log.Info("launcher-created pool was deleted, clearing cache",
 						"pool", poolID)
 					a.mu.Lock()

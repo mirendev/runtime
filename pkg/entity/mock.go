@@ -7,6 +7,7 @@ import (
 
 	"go.etcd.io/etcd/api/v3/mvccpb"
 	clientv3 "go.etcd.io/etcd/client/v3"
+	"miren.dev/runtime/pkg/cond"
 )
 
 type MockStore struct {
@@ -40,7 +41,7 @@ func (m *MockStore) GetEntity(ctx context.Context, id Id) (*Entity, error) {
 	if e, ok := m.Entities[id]; ok {
 		return e, nil
 	}
-	return nil, ErrNotFound
+	return nil, cond.NotFound("entity", id)
 }
 
 // AddEntity is a thread-safe helper to directly add an entity to the mock store
@@ -95,7 +96,7 @@ func (m *MockStore) UpdateEntity(ctx context.Context, id Id, entity *Entity, opt
 	defer m.mu.Unlock()
 	e, ok := m.Entities[id]
 	if !ok {
-		return nil, ErrNotFound
+		return nil, cond.NotFound("entity", id)
 	}
 
 	// Build combined attribute list
@@ -135,14 +136,14 @@ func (m *MockStore) UpdateEntity(ctx context.Context, id Id, entity *Entity, opt
 func (m *MockStore) ReplaceEntity(ctx context.Context, entity *Entity, opts ...EntityOption) (*Entity, error) {
 	id := entity.Id()
 	if id == "" {
-		return nil, ErrNotFound
+		return nil, cond.NotFound("entity", "empty id")
 	}
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	existing, ok := m.Entities[id]
 	if !ok {
-		return nil, ErrNotFound
+		return nil, cond.NotFound("entity", id)
 	}
 
 	// Update revision and timestamp
@@ -160,7 +161,7 @@ func (m *MockStore) ReplaceEntity(ctx context.Context, entity *Entity, opts ...E
 func (m *MockStore) PatchEntity(ctx context.Context, entity *Entity, opts ...EntityOption) (*Entity, error) {
 	id := entity.Id()
 	if id == "" {
-		return nil, ErrNotFound
+		return nil, cond.NotFound("entity", "empty id")
 	}
 
 	// Use UpdateEntity logic
@@ -170,7 +171,7 @@ func (m *MockStore) PatchEntity(ctx context.Context, entity *Entity, opts ...Ent
 func (m *MockStore) EnsureEntity(ctx context.Context, entity *Entity, opts ...EntityOption) (*Entity, bool, error) {
 	id := entity.Id()
 	if id == "" {
-		return nil, false, ErrNotFound
+		return nil, false, cond.NotFound("entity", "empty id")
 	}
 
 	m.mu.Lock()
