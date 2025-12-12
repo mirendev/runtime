@@ -1,9 +1,14 @@
 package commands
 
 import (
+	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/url"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/lipgloss"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
@@ -21,6 +26,44 @@ var (
 	infoBold  = lipgloss.NewStyle().Bold(true)
 )
 
+type cloudUserInfo struct {
+	User struct {
+		ID    string `json:"id"`
+		Email string `json:"email"`
+		Name  string `json:"name"`
+	} `json:"user"`
+}
+
+func fetchCloudUserInfo(ctx context.Context, cloudURL, token string) (*cloudUserInfo, error) {
+	meURL, err := url.JoinPath(cloudURL, "/api/v1/me")
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "GET", meURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("status %d", resp.StatusCode)
+	}
+
+	var info cloudUserInfo
+	if err := json.NewDecoder(resp.Body).Decode(&info); err != nil {
+		return nil, err
+	}
+	return &info, nil
+}
+
 func normalizeAuthServerURL(authServer string) string {
 	if !strings.HasPrefix(authServer, "http://") && !strings.HasPrefix(authServer, "https://") {
 		if strings.Contains(authServer, "localhost") || strings.Contains(authServer, "127.0.0.1") {
@@ -29,6 +72,65 @@ func normalizeAuthServerURL(authServer string) string {
 		return "https://" + authServer
 	}
 	return authServer
+}
+
+type authResult struct {
+	Method       string
+	IdentityName string
+	Claims       *auth.ExtendedClaims
+	UserInfo     *cloudUserInfo
+}
+
+// tryAuthenticate attempts to authenticate with the cluster using the configured identity.
+// It returns auth details without printing anything - callers handle display.
+func tryAuthenticate(ctx *Context, cfg *clientconfig.Config, cluster *clientconfig.ClusterConfig) authResult {
+	result := authResult{Method: "none"}
+
+	if cluster.Identity == "" {
+		return result
+	}
+
+	identity, err := cfg.GetIdentity(cluster.Identity)
+	if err != nil || identity == nil {
+		return result
+	}
+
+	result.IdentityName = cluster.Identity
+
+	switch identity.Type {
+	case "keypair":
+		privateKeyPEM, err := cfg.GetPrivateKeyPEM(identity)
+		if err != nil {
+			return result
+		}
+
+		keyPair, err := cloudauth.LoadKeyPairFromPEM(privateKeyPEM)
+		if err != nil {
+			return result
+		}
+
+		authServer := identity.Issuer
+		if authServer == "" {
+			authServer = cluster.Hostname
+		}
+		authServer = normalizeAuthServerURL(authServer)
+
+		token, err := clientconfig.AuthenticateWithKey(ctx, authServer, keyPair)
+		if err != nil {
+			return result
+		}
+
+		result.Claims, _ = auth.ParseUnverifiedClaims(token)
+		result.Method = "keypair"
+
+		// Fetch user info from cloud
+		result.UserInfo, _ = fetchCloudUserInfo(ctx, authServer, token)
+
+	case "certificate":
+		result.Method = "certificate"
+	}
+
+	return result
 }
 
 // Doctor shows a quick overview of the miren environment
@@ -92,29 +194,12 @@ func Doctor(ctx *Context, opts struct {
 				if cluster.Identity == "" {
 					authentication.message = "(no identity)"
 				} else {
-					identity, err := cfg.GetIdentity(cluster.Identity)
-					if err == nil && identity != nil && identity.Type == "keypair" {
-						privateKeyPEM, err := cfg.GetPrivateKeyPEM(identity)
-						if err == nil {
-							keyPair, err := cloudauth.LoadKeyPairFromPEM(privateKeyPEM)
-							if err == nil {
-								authServer := identity.Issuer
-								if authServer == "" {
-									authServer = cluster.Hostname
-								}
-								authServer = normalizeAuthServerURL(authServer)
-								token, err := clientconfig.AuthenticateWithKey(ctx, authServer, keyPair)
-								if err == nil {
-									claims, _ := auth.ParseUnverifiedClaims(token)
-									if claims != nil {
-										authentication.ok = true
-										authentication.message = claims.Subject
-										authUser = claims.Subject
-										authOrg = claims.OrganizationID
-									}
-								}
-							}
-						}
+					authRes := tryAuthenticate(ctx, cfg, cluster)
+					if authRes.Claims != nil {
+						authentication.ok = true
+						authentication.message = authRes.Claims.Subject
+						authUser = authRes.Claims.Subject
+						authOrg = authRes.Claims.OrganizationID
 					}
 				}
 
