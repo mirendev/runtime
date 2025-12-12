@@ -3,6 +3,7 @@ package commands
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -56,15 +57,29 @@ func fetchCloudUserDoctor(ctx context.Context, cloudURL, token string) (*cloudUs
 func DoctorAuth(ctx *Context, opts struct {
 	ConfigCentric
 }) error {
-	if ctx.ClusterConfig == nil {
-		ctx.Printf("No cluster configured\n")
-		ctx.Printf("\nUse 'miren cluster add' to add a cluster\n")
-		return nil
+	cfg, err := opts.LoadConfig()
+	if err != nil {
+		if errors.Is(err, clientconfig.ErrNoConfig) {
+			ctx.Printf("No cluster configured\n")
+			ctx.Printf("\nUse 'miren cluster add' to add a cluster\n")
+			return nil
+		}
+		return err
 	}
 
-	hostname := ctx.ClusterConfig.Hostname
+	clusterName := cfg.ActiveCluster()
+	if opts.Cluster != "" {
+		clusterName = opts.Cluster
+	}
+
+	cluster, err := cfg.GetCluster(clusterName)
+	if err != nil {
+		return err
+	}
+
+	hostname := cluster.Hostname
 	if hostname == "" {
-		return fmt.Errorf("no hostname configured for cluster %s", ctx.ClusterName)
+		return fmt.Errorf("no hostname configured for cluster %s", clusterName)
 	}
 
 	authMethod := "none"
@@ -72,14 +87,14 @@ func DoctorAuth(ctx *Context, opts struct {
 	var identityName string
 	var userInfo *cloudUserInfo
 
-	if ctx.ClusterConfig.Identity != "" && ctx.ClientConfig != nil {
-		identity, err := ctx.ClientConfig.GetIdentity(ctx.ClusterConfig.Identity)
+	if cluster.Identity != "" {
+		identity, err := cfg.GetIdentity(cluster.Identity)
 		if err == nil && identity != nil {
-			identityName = ctx.ClusterConfig.Identity
+			identityName = cluster.Identity
 
 			switch identity.Type {
 			case "keypair":
-				privateKeyPEM, err := ctx.ClientConfig.GetPrivateKeyPEM(identity)
+				privateKeyPEM, err := cfg.GetPrivateKeyPEM(identity)
 				if err == nil {
 					keyPair, err := cloudauth.LoadKeyPairFromPEM(privateKeyPEM)
 					if err == nil {
@@ -87,14 +102,7 @@ func DoctorAuth(ctx *Context, opts struct {
 						if authServer == "" {
 							authServer = hostname
 						}
-
-						if !strings.HasPrefix(authServer, "http://") && !strings.HasPrefix(authServer, "https://") {
-							if strings.Contains(authServer, "localhost") || strings.Contains(authServer, "127.0.0.1") {
-								authServer = "http://" + authServer
-							} else {
-								authServer = "https://" + authServer
-							}
-						}
+						authServer = normalizeAuthServerURL(authServer)
 
 						token, err := clientconfig.AuthenticateWithKey(ctx, authServer, keyPair)
 						if err == nil {
@@ -114,7 +122,7 @@ func DoctorAuth(ctx *Context, opts struct {
 
 	ctx.Printf("%s\n", infoBold.Render("Authentication"))
 	ctx.Printf("%s\n", infoGray.Render("=============="))
-	ctx.Printf("%s     %s\n", infoLabel.Render("Cluster:"), ctx.ClusterName)
+	ctx.Printf("%s     %s\n", infoLabel.Render("Cluster:"), clusterName)
 	ctx.Printf("%s      %s\n", infoLabel.Render("Server:"), hostname)
 	ctx.Printf("%s %s\n", infoLabel.Render("Auth Method:"), authMethod)
 

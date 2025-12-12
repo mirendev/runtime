@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
@@ -16,7 +17,7 @@ func DoctorConfig(ctx *Context, opts struct {
 	configDir := clientconfig.GetConfigDirPath()
 
 	cfg, err := opts.LoadConfig()
-	if err != nil && err != clientconfig.ErrNoConfig {
+	if err != nil && !errors.Is(err, clientconfig.ErrNoConfig) {
 		return err
 	}
 

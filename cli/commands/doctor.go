@@ -21,6 +21,16 @@ var (
 	infoBold  = lipgloss.NewStyle().Bold(true)
 )
 
+func normalizeAuthServerURL(authServer string) string {
+	if !strings.HasPrefix(authServer, "http://") && !strings.HasPrefix(authServer, "https://") {
+		if strings.Contains(authServer, "localhost") || strings.Contains(authServer, "127.0.0.1") {
+			return "http://" + authServer
+		}
+		return "https://" + authServer
+	}
+	return authServer
+}
+
 // Doctor shows a quick overview of the miren environment
 func Doctor(ctx *Context, opts struct {
 	ConfigCentric
@@ -74,6 +84,7 @@ func Doctor(ctx *Context, opts struct {
 			// Try to connect
 			client, err := ctx.RPCClient("entities")
 			if err == nil {
+				defer client.Close()
 				server.ok = true
 				server.message = "connected"
 
@@ -91,13 +102,7 @@ func Doctor(ctx *Context, opts struct {
 								if authServer == "" {
 									authServer = cluster.Hostname
 								}
-								if !strings.HasPrefix(authServer, "http://") && !strings.HasPrefix(authServer, "https://") {
-									if strings.Contains(authServer, "localhost") || strings.Contains(authServer, "127.0.0.1") {
-										authServer = "http://" + authServer
-									} else {
-										authServer = "https://" + authServer
-									}
-								}
+								authServer = normalizeAuthServerURL(authServer)
 								token, err := clientconfig.AuthenticateWithKey(ctx, authServer, keyPair)
 								if err == nil {
 									claims, _ := auth.ParseUnverifiedClaims(token)

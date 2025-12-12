@@ -1,6 +1,8 @@
 package commands
 
 import (
+	"errors"
+	"net"
 	"sort"
 	"strings"
 	"time"
@@ -8,6 +10,7 @@ import (
 	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/api/ingress"
+	"miren.dev/runtime/clientconfig"
 	"miren.dev/runtime/pkg/ui"
 )
 
@@ -15,18 +18,39 @@ import (
 func DoctorApps(ctx *Context, opts struct {
 	ConfigCentric
 }) error {
-	client, err := ctx.RPCClient("entities")
+	cfg, err := opts.LoadConfig()
+	if err != nil {
+		if errors.Is(err, clientconfig.ErrNoConfig) {
+			ctx.Printf("No cluster configured\n")
+			ctx.Printf("\nUse 'miren cluster add' to add a cluster\n")
+			return nil
+		}
+		return err
+	}
+
+	clusterName := cfg.ActiveCluster()
+	if opts.Cluster != "" {
+		clusterName = opts.Cluster
+	}
+
+	cluster, err := cfg.GetCluster(clusterName)
 	if err != nil {
 		return err
 	}
 
+	client, err := ctx.RPCClient("entities")
+	if err != nil {
+		return err
+	}
+	defer client.Close()
+
 	// Get default hostname for display
 	defaultHost := ""
-	if ctx.ClusterConfig != nil && ctx.ClusterConfig.Hostname != "" {
-		defaultHost = ctx.ClusterConfig.Hostname
-		// Strip port if present
-		if idx := strings.Index(defaultHost, ":"); idx > 0 {
-			defaultHost = defaultHost[:idx]
+	if cluster.Hostname != "" {
+		defaultHost = cluster.Hostname
+		// Strip port if present (handles IPv6)
+		if h, _, err := net.SplitHostPort(defaultHost); err == nil {
+			defaultHost = h
 		}
 	}
 
@@ -75,25 +99,27 @@ func DoctorApps(ctx *Context, opts struct {
 	// Build version map
 	versionMap := make(map[string]*core_v1alpha.AppVersion)
 	for _, e := range versionsRes.Values() {
-		var version core_v1alpha.AppVersion
-		version.Decode(e.Entity())
-		versionMap[version.ID.String()] = &version
+		v := new(core_v1alpha.AppVersion)
+		v.Decode(e.Entity())
+		versionMap[v.ID.String()] = v
 	}
 
 	// Build deployment map (most recent deployment per app)
 	deploymentMap := make(map[string]*core_v1alpha.Deployment)
 	for _, e := range deploymentsRes.Values() {
-		var deployment core_v1alpha.Deployment
-		deployment.Decode(e.Entity())
+		d := new(core_v1alpha.Deployment)
+		d.Decode(e.Entity())
 
-		if existing, ok := deploymentMap[deployment.AppName]; ok {
-			existingTime, _ := time.Parse(time.RFC3339, existing.CompletedAt)
-			newTime, _ := time.Parse(time.RFC3339, deployment.CompletedAt)
-			if newTime.After(existingTime) {
-				deploymentMap[deployment.AppName] = &deployment
+		if existing, ok := deploymentMap[d.AppName]; ok {
+			existingTime, existingErr := time.Parse(time.RFC3339, existing.CompletedAt)
+			newTime, newErr := time.Parse(time.RFC3339, d.CompletedAt)
+
+			// Replace if: new has valid time and (existing invalid OR new is later)
+			if newErr == nil && (existingErr != nil || newTime.After(existingTime)) {
+				deploymentMap[d.AppName] = d
 			}
 		} else {
-			deploymentMap[deployment.AppName] = &deployment
+			deploymentMap[d.AppName] = d
 		}
 	}
 

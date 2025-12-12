@@ -37,6 +37,7 @@ func DoctorServer(ctx *Context, opts struct {
 	connected := false
 	client, err := ctx.RPCClient("entities")
 	if err == nil && client != nil {
+		defer client.Close()
 		connected = true
 	}
 
@@ -87,6 +88,9 @@ func DoctorServer(ctx *Context, opts struct {
 	return nil
 }
 
+// checkPortProto checks if a port is reachable.
+// Note: UDP checks only verify local socket creation since UDP is connectionless.
+// The actual UDP/QUIC connectivity is validated by the RPC connection status above.
 func checkPortProto(host string, port int, proto string) bool {
 	address := net.JoinHostPort(host, fmt.Sprintf("%d", port))
 	conn, err := net.DialTimeout(proto, address, 2*time.Second)
