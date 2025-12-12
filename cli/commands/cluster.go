@@ -28,7 +28,7 @@ func ClusterList(ctx *Context, opts struct {
 				}
 				return PrintJSON([]ClusterInfo{})
 			}
-			ctx.Printf("No clusters configured\n")
+			ctx.Printf("No clusters configured. Is your miren server running? Check server status with `miren server status`\n")
 			ctx.Printf("\nUse 'miren cluster add' to add a cluster\n")
 			return nil
 		}

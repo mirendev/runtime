@@ -520,7 +520,9 @@ func ServerStatus(ctx *Context, opts struct {
 	// Check if service file exists
 	if _, err := os.Stat(servicePath); os.IsNotExist(err) {
 		ctx.Warn("Service file not found at %s", servicePath)
-		ctx.Info("The miren service is not installed. Run 'sudo miren server install' to set it up.")
+		ctx.Info("The miren service is not installed. Run 'sudo miren server install' to set up a local server")
+		ctx.Info("or use Miren's hosted demo server: https://miren.dev/docs/getting-started#using-our-demo-cluster")
+
 		return nil
 	}
 

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"os"
 	"os/signal"
 	"reflect"
@@ -421,18 +422,56 @@ func (c *Context) RPCClient(name string) (*rpc.NetworkClient, error) {
 }
 
 var ErrAccessDenied = errors.New("access denied")
+var ErrServerNotResponding = errors.New("server not responding")
+var ErrServerError = errors.New("server error")
 
 // wrapRPCError wraps RPC errors with user-friendly messages
 func (c *Context) wrapRPCError(err error) error {
 	var resolveErr *rpc.ResolveError
-	if errors.As(err, &resolveErr) && resolveErr.StatusCode == 401 {
-		clusterName := c.ClusterName
-		if clusterName == "" {
-			clusterName = "the cluster"
+	if errors.As(err, &resolveErr) {
+		// Check for connection/network errors (server not responding)
+		if resolveErr.Kind == rpc.ResolveHTTPError {
+			var netErr net.Error
+			if errors.As(resolveErr.Err, &netErr) {
+				c.Warn("Server not responding at %s", c.Config.ServerAddress)
+				c.Info("  → Check if miren is running: sudo systemctl status miren")
+				c.Info("  → Start it: sudo systemctl start miren")
+				return ErrServerNotResponding
+			}
+			// Check for TLS/certificate errors
+			errStr := resolveErr.Err.Error()
+			if strings.Contains(errStr, "certificate") || strings.Contains(errStr, "x509") || strings.Contains(errStr, "tls") {
+				c.Warn("TLS/certificate error connecting to %s", c.Config.ServerAddress)
+				c.Info("  → The server's certificate may have changed")
+				c.Info("  → Re-add the cluster: miren cluster add")
+				return ErrServerNotResponding
+			}
 		}
 
-		c.Warn("access denied: you don't have permission to access %s\nPlease check your credentials or request access from the cluster administrator", clusterName)
-		return ErrAccessDenied
+		// Check for HTTP status code errors
+		if resolveErr.StatusCode != 0 {
+			switch resolveErr.StatusCode {
+			case 401:
+				clusterName := c.ClusterName
+				if clusterName == "" {
+					clusterName = "the cluster"
+				}
+				c.Warn("Access denied to cluster '%s'", clusterName)
+				c.Info("  → Check your auth: miren whoami")
+				c.Info("  → Try logging out and back in: miren logout && miren login")
+				return ErrAccessDenied
+			case 403:
+				c.Warn("Permission denied")
+				c.Info("  → You're authenticated but don't have permission for this action")
+				c.Info("  → Contact your cluster administrator")
+				return ErrAccessDenied
+			case 500, 502, 503, 504:
+				c.Warn("Server error (%d)", resolveErr.StatusCode)
+				c.Info("  → The server is having issues")
+				c.Info("  → Check server logs: sudo journalctl -u miren -n 50")
+				return ErrServerError
+			}
+		}
 	}
 	return err
 }
