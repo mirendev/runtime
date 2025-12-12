@@ -2,6 +2,8 @@ package commands
 
 import (
 	"fmt"
+	"net/netip"
+	"slices"
 
 	"miren.dev/runtime/api/debug/debug_v1alpha"
 	"miren.dev/runtime/pkg/rpc/standard"
@@ -32,6 +34,13 @@ func DebugNetDBList(ctx *Context, opts struct {
 		ctx.Info("No IP leases found")
 		return nil
 	}
+
+	// Sort by IP address numerically
+	slices.SortFunc(leases, func(a, b *debug_v1alpha.IPLease) int {
+		addrA, _ := netip.ParseAddr(a.Ip())
+		addrB, _ := netip.ParseAddr(b.Ip())
+		return addrA.Compare(addrB)
+	})
 
 	headers := []string{"IP", "SUBNET", "STATUS", "SANDBOX", "RELEASED"}
 	rows := make([]ui.Row, len(leases))
