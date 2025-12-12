@@ -227,13 +227,8 @@ func DebugNetDBGC(ctx *Context, opts struct {
 	ConfigCentric
 	Subnet string `short:"s" long:"subnet" description:"Only GC IPs in this subnet"`
 	DryRun bool   `short:"n" long:"dry-run" description:"Show what would be released without making changes"`
-	Force  bool   `short:"f" long:"force" description:"Actually perform the GC (required unless --dry-run)"`
+	Force  bool   `short:"f" long:"force" description:"Skip confirmation prompt"`
 }) error {
-	if !opts.DryRun && !opts.Force {
-		ctx.Warn("Dry run mode (use --force to actually release IPs)")
-		opts.DryRun = true
-	}
-
 	client, err := ctx.RPCClient("dev.miren.runtime/debug-netdb")
 	if err != nil {
 		return err
@@ -241,7 +236,8 @@ func DebugNetDBGC(ctx *Context, opts struct {
 
 	netdb := debug_v1alpha.NewNetDBClient(client)
 
-	results, err := netdb.Gc(ctx, opts.Subnet, opts.DryRun)
+	// First, do a dry run to find orphaned IPs
+	results, err := netdb.Gc(ctx, opts.Subnet, true)
 	if err != nil {
 		return fmt.Errorf("failed to run GC: %w", err)
 	}
@@ -258,11 +254,30 @@ func DebugNetDBGC(ctx *Context, opts struct {
 	}
 
 	if opts.DryRun {
-		ctx.Info("")
-		ctx.Info("Dry run - no changes made. Use --force to release these IPs.")
-	} else {
-		ctx.Completed("Released %d orphaned IP leases", results.ReleasedCount())
+		return nil
 	}
 
+	// Confirm before releasing
+	if !opts.Force {
+		confirmed, err := ui.Confirm(
+			ui.WithMessage(fmt.Sprintf("Release %d orphaned IP lease(s)?", len(orphanedIPs))),
+			ui.WithDefault(false),
+		)
+		if err != nil {
+			return fmt.Errorf("confirmation failed: %w", err)
+		}
+		if !confirmed {
+			ctx.Info("GC cancelled")
+			return nil
+		}
+	}
+
+	// Actually release the IPs
+	results, err = netdb.Gc(ctx, opts.Subnet, false)
+	if err != nil {
+		return fmt.Errorf("failed to release orphaned IPs: %w", err)
+	}
+
+	ctx.Completed("Released %d orphaned IP leases", results.ReleasedCount())
 	return nil
 }
