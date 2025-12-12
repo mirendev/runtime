@@ -23,6 +23,10 @@ types:
         type: standard.Timestamp
         index: 3
         doc: When the IP was released (if released)
+      - name: sandbox_id
+        type: string
+        index: 4
+        doc: ID of the sandbox using this IP (if any)
 
   - type: SubnetStatus
     doc: Utilization stats for a subnet

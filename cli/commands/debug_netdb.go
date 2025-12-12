@@ -2,7 +2,6 @@ package commands
 
 import (
 	"fmt"
-	"time"
 
 	"miren.dev/runtime/api/debug/debug_v1alpha"
 	"miren.dev/runtime/pkg/rpc/standard"
@@ -34,7 +33,7 @@ func DebugNetDBList(ctx *Context, opts struct {
 		return nil
 	}
 
-	headers := []string{"IP", "SUBNET", "STATUS", "RELEASED_AT"}
+	headers := []string{"IP", "SUBNET", "STATUS", "SANDBOX", "RELEASED"}
 	rows := make([]ui.Row, len(leases))
 
 	for i, lease := range leases {
@@ -43,15 +42,20 @@ func DebugNetDBList(ctx *Context, opts struct {
 			status = "reserved"
 		}
 
-		releasedStr := "-"
-		if lease.HasReleasedAt() {
-			releasedStr = standard.FromTimestamp(lease.ReleasedAt()).Format(time.RFC3339)
+		sandboxID := "-"
+		if lease.HasSandboxId() {
+			sandboxID = lease.SandboxId()
 		}
 
-		rows[i] = ui.Row{lease.Ip(), lease.Subnet(), status, releasedStr}
+		releasedStr := "-"
+		if lease.HasReleasedAt() {
+			releasedStr = humanFriendlyTimestamp(standard.FromTimestamp(lease.ReleasedAt()))
+		}
+
+		rows[i] = ui.Row{lease.Ip(), lease.Subnet(), status, sandboxID, releasedStr}
 	}
 
-	columns := ui.AutoSizeColumns(headers, rows, ui.Columns().NoTruncate(0, 1))
+	columns := ui.AutoSizeColumns(headers, rows, ui.Columns().NoTruncate(0, 1, 3))
 	table := ui.NewTable(
 		ui.WithColumns(columns),
 		ui.WithRows(rows),

@@ -59,6 +59,28 @@ func (s *Server) ListLeases(ctx context.Context, state *debug_v1alpha.NetDBListL
 		return err
 	}
 
+	// Build IP -> sandbox ID map from entity store
+	ipToSandbox := make(map[string]string)
+	sandboxRef := entity.Ref(entity.EntityKind, compute_v1alpha.KindSandbox)
+	sandboxes, err := s.EAC.List(ctx, sandboxRef)
+	if err != nil {
+		return fmt.Errorf("failed to list sandboxes: %w", err)
+	}
+	for _, sbEnt := range sandboxes.Values() {
+		var sb compute_v1alpha.Sandbox
+		sb.Decode(sbEnt.Entity())
+
+		for _, net := range sb.Network {
+			addr := net.Address
+			if strings.Contains(addr, "/") {
+				if prefix, err := netip.ParsePrefix(addr); err == nil {
+					addr = prefix.Addr().String()
+				}
+			}
+			ipToSandbox[addr] = string(sb.ID)
+		}
+	}
+
 	rpcLeases := make([]*debug_v1alpha.IPLease, len(leases))
 	for i, lease := range leases {
 		rpcLease := &debug_v1alpha.IPLease{}
@@ -67,6 +89,9 @@ func (s *Server) ListLeases(ctx context.Context, state *debug_v1alpha.NetDBListL
 		rpcLease.SetReserved(lease.Reserved)
 		if lease.ReleasedAt != nil {
 			rpcLease.SetReleasedAt(standard.ToTimestamp(*lease.ReleasedAt))
+		}
+		if sandboxID, ok := ipToSandbox[lease.IP]; ok {
+			rpcLease.SetSandboxId(sandboxID)
 		}
 		rpcLeases[i] = rpcLease
 	}

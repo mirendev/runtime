@@ -15,6 +15,7 @@ type iPLeaseData struct {
 	Subnet     *string             `cbor:"1,keyasint,omitempty" json:"subnet,omitempty"`
 	Reserved   *bool               `cbor:"2,keyasint,omitempty" json:"reserved,omitempty"`
 	ReleasedAt *standard.Timestamp `cbor:"3,keyasint,omitempty" json:"released_at,omitempty"`
+	SandboxId  *string             `cbor:"4,keyasint,omitempty" json:"sandbox_id,omitempty"`
 }
 
 type IPLease struct {
@@ -76,6 +77,21 @@ func (v *IPLease) ReleasedAt() *standard.Timestamp {
 
 func (v *IPLease) SetReleasedAt(released_at *standard.Timestamp) {
 	v.data.ReleasedAt = released_at
+}
+
+func (v *IPLease) HasSandboxId() bool {
+	return v.data.SandboxId != nil
+}
+
+func (v *IPLease) SandboxId() string {
+	if v.data.SandboxId == nil {
+		return ""
+	}
+	return *v.data.SandboxId
+}
+
+func (v *IPLease) SetSandboxId(sandbox_id string) {
+	v.data.SandboxId = &sandbox_id
 }
 
 func (v *IPLease) MarshalCBOR() ([]byte, error) {
