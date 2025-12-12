@@ -740,3 +740,63 @@ jobs:
           }
           EOF
 
+  update-homebrew-tap:
+    needs: [upload-to-miren]
+    runs-on: ubuntu-latest
+    # Only update homebrew tap for stable version tags (not prereleases, not branch builds)
+    if: ${{ startsWith(github.event.workflow_run.head_branch, 'v') && !contains(github.event.workflow_run.head_branch, '-') }}
+    steps:
+      - name: Trigger homebrew-tap update
+        env:
+          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          VERSION="${{ github.event.workflow_run.head_branch }}"
+          echo "Triggering homebrew-tap update for $VERSION..."
+
+          gh workflow run update-cask.yml \
+            --repo mirendev/homebrew-tap \
+            -f version="$VERSION"
+
+          echo "Homebrew tap update triggered for $VERSION"
+
+      - name: Send Slack notification on homebrew update failure
+        if: failure()
+        uses: slackapi/slack-github-action@v2.1.1
+        with:
+          method: chat.postMessage
+          token: ${{ secrets.SLACK_BOT_TOKEN }}
+          payload: |
+            {
+              "channel": "${{ vars.SLACK_CHANNEL_ID }}",
+              "text": "⚠️ Homebrew tap update failed for ${{ github.event.workflow_run.head_branch }}",
+              "blocks": [
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "⚠️ *Homebrew tap update failed*\nRelease artifacts were uploaded successfully, but the homebrew tap update failed."
+                  }
+                },
+                {
+                  "type": "section",
+                  "fields": [
+                    {
+                      "type": "mrkdwn",
+                      "text": "*Version:*\n`${{ github.event.workflow_run.head_branch }}`"
+                    }
+                  ]
+                },
+                {
+                  "type": "context",
+                  "elements": [
+                    {
+                      "type": "mrkdwn",
+                      "text": "You can manually update the tap by running: `gh workflow run update-formula.yml -R mirendev/homebrew-tap -f version=${{ github.event.workflow_run.head_branch }}`"
+                    }
+                  ]
+                }
+              ],
+              "unfurl_links": false,
+              "unfurl_media": false
+            }
+
