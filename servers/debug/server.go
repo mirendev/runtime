@@ -23,12 +23,23 @@ type Server struct {
 
 var _ debug_v1alpha.NetDB = &Server{}
 
-func NewServer(log *slog.Logger, ndb *netdb.NetDB, eac *entityserver_v1alpha.EntityAccessClient) *Server {
+func NewServer(log *slog.Logger, netdbPath string, eac *entityserver_v1alpha.EntityAccessClient) (*Server, error) {
+	ndb, err := netdb.New(netdbPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open netdb: %w", err)
+	}
 	return &Server{
 		Log:   log.With("module", "debug"),
 		NetDB: ndb,
 		EAC:   eac,
+	}, nil
+}
+
+func (s *Server) Close() error {
+	if s.NetDB != nil {
+		return s.NetDB.Close()
 	}
+	return nil
 }
 
 func (s *Server) ListLeases(ctx context.Context, state *debug_v1alpha.NetDBListLeases) error {

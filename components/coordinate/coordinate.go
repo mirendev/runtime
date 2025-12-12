@@ -42,7 +42,6 @@ import (
 	"miren.dev/runtime/pkg/controller"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/schema"
-	"miren.dev/runtime/pkg/netdb"
 	"miren.dev/runtime/pkg/rpc"
 	"miren.dev/runtime/pkg/sysstats"
 	"miren.dev/runtime/servers/app"
@@ -123,6 +122,8 @@ type Coordinator struct {
 	apiKey  []byte
 
 	authClient *cloudauth.AuthClient // For status reporting to cloud
+
+	debugServer *debugsrv.Server
 }
 
 func (c *Coordinator) Activator() activator.AppActivator {
@@ -137,6 +138,11 @@ func (c *Coordinator) SandboxPoolManager() *sandboxpool.Manager {
 func (c *Coordinator) Stop() {
 	if c.cm != nil {
 		c.cm.Stop()
+	}
+	if c.debugServer != nil {
+		if err := c.debugServer.Close(); err != nil {
+			c.Log.Error("failed to close debug server", "error", err)
+		}
 	}
 }
 
@@ -627,13 +633,12 @@ func (c *Coordinator) Start(ctx context.Context) error {
 	}
 	server.ExposeValue("dev.miren.runtime/deployment", deployment_v1alpha.AdaptDeployment(ds))
 
-	ndb, err := netdb.New(filepath.Join(c.DataPath, "net.db"))
+	c.debugServer, err = debugsrv.NewServer(c.Log, filepath.Join(c.DataPath, "net.db"), eac)
 	if err != nil {
-		c.Log.Error("failed to open netdb for debug server", "error", err)
+		c.Log.Error("failed to create debug server", "error", err)
 		return err
 	}
-	debugServer := debugsrv.NewServer(c.Log, ndb, eac)
-	server.ExposeValue("dev.miren.runtime/debug-netdb", debug_v1alpha.AdaptNetDB(debugServer))
+	server.ExposeValue("dev.miren.runtime/debug-netdb", debug_v1alpha.AdaptNetDB(c.debugServer))
 
 	c.Log.Info("started RPC server")
 
