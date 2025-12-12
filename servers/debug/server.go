@@ -21,7 +21,7 @@ type Server struct {
 	EAC   *entityserver_v1alpha.EntityAccessClient
 }
 
-var _ debug_v1alpha.IPAlloc = &Server{}
+var _ debug_v1alpha.NetDB = &Server{}
 
 func NewServer(log *slog.Logger, ndb *netdb.NetDB, eac *entityserver_v1alpha.EntityAccessClient) *Server {
 	return &Server{
@@ -31,7 +31,7 @@ func NewServer(log *slog.Logger, ndb *netdb.NetDB, eac *entityserver_v1alpha.Ent
 	}
 }
 
-func (s *Server) ListLeases(ctx context.Context, state *debug_v1alpha.IPAllocListLeases) error {
+func (s *Server) ListLeases(ctx context.Context, state *debug_v1alpha.NetDBListLeases) error {
 	args := state.Args()
 	results := state.Results()
 
@@ -64,7 +64,7 @@ func (s *Server) ListLeases(ctx context.Context, state *debug_v1alpha.IPAllocLis
 	return nil
 }
 
-func (s *Server) Status(ctx context.Context, state *debug_v1alpha.IPAllocStatus) error {
+func (s *Server) Status(ctx context.Context, state *debug_v1alpha.NetDBStatus) error {
 	results := state.Results()
 
 	statuses, err := s.NetDB.GetSubnetStatus()
@@ -87,7 +87,7 @@ func (s *Server) Status(ctx context.Context, state *debug_v1alpha.IPAllocStatus)
 	return nil
 }
 
-func (s *Server) ReleaseIP(ctx context.Context, state *debug_v1alpha.IPAllocReleaseIP) error {
+func (s *Server) ReleaseIP(ctx context.Context, state *debug_v1alpha.NetDBReleaseIP) error {
 	args := state.Args()
 	results := state.Results()
 
@@ -100,7 +100,7 @@ func (s *Server) ReleaseIP(ctx context.Context, state *debug_v1alpha.IPAllocRele
 	return nil
 }
 
-func (s *Server) ReleaseSubnet(ctx context.Context, state *debug_v1alpha.IPAllocReleaseSubnet) error {
+func (s *Server) ReleaseSubnet(ctx context.Context, state *debug_v1alpha.NetDBReleaseSubnet) error {
 	args := state.Args()
 	results := state.Results()
 
@@ -113,7 +113,7 @@ func (s *Server) ReleaseSubnet(ctx context.Context, state *debug_v1alpha.IPAlloc
 	return nil
 }
 
-func (s *Server) ReleaseAll(ctx context.Context, state *debug_v1alpha.IPAllocReleaseAll) error {
+func (s *Server) ReleaseAll(ctx context.Context, state *debug_v1alpha.NetDBReleaseAll) error {
 	results := state.Results()
 
 	count, err := s.NetDB.ForceReleaseAll()
@@ -125,7 +125,7 @@ func (s *Server) ReleaseAll(ctx context.Context, state *debug_v1alpha.IPAllocRel
 	return nil
 }
 
-func (s *Server) Gc(ctx context.Context, state *debug_v1alpha.IPAllocGc) error {
+func (s *Server) Gc(ctx context.Context, state *debug_v1alpha.NetDBGc) error {
 	args := state.Args()
 	results := state.Results()
 

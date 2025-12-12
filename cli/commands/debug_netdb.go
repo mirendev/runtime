@@ -9,21 +9,21 @@ import (
 	"miren.dev/runtime/pkg/ui"
 )
 
-// DebugIPAllocList lists all IP leases from the netdb
-func DebugIPAllocList(ctx *Context, opts struct {
+// DebugNetDBList lists all IP leases from the netdb
+func DebugNetDBList(ctx *Context, opts struct {
 	ConfigCentric
 	Subnet   string `short:"s" long:"subnet" description:"Filter by subnet CIDR"`
 	Reserved bool   `short:"r" long:"reserved" description:"Show only reserved (in-use) IPs"`
 	Released bool   `short:"R" long:"released" description:"Show only released IPs"`
 }) error {
-	client, err := ctx.RPCClient("dev.miren.runtime/debug-ipalloc")
+	client, err := ctx.RPCClient("dev.miren.runtime/debug-netdb")
 	if err != nil {
 		return err
 	}
 
-	ipalloc := debug_v1alpha.NewIPAllocClient(client)
+	netdb := debug_v1alpha.NewNetDBClient(client)
 
-	results, err := ipalloc.ListLeases(ctx, opts.Subnet, opts.Reserved, opts.Released)
+	results, err := netdb.ListLeases(ctx, opts.Subnet, opts.Reserved, opts.Released)
 	if err != nil {
 		return fmt.Errorf("failed to list leases: %w", err)
 	}
@@ -63,18 +63,18 @@ func DebugIPAllocList(ctx *Context, opts struct {
 	return nil
 }
 
-// DebugIPAllocStatus shows subnet utilization stats
-func DebugIPAllocStatus(ctx *Context, opts struct {
+// DebugNetDBStatus shows subnet utilization stats
+func DebugNetDBStatus(ctx *Context, opts struct {
 	ConfigCentric
 }) error {
-	client, err := ctx.RPCClient("dev.miren.runtime/debug-ipalloc")
+	client, err := ctx.RPCClient("dev.miren.runtime/debug-netdb")
 	if err != nil {
 		return err
 	}
 
-	ipalloc := debug_v1alpha.NewIPAllocClient(client)
+	netdb := debug_v1alpha.NewNetDBClient(client)
 
-	results, err := ipalloc.Status(ctx)
+	results, err := netdb.Status(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to get status: %w", err)
 	}
@@ -120,8 +120,8 @@ func DebugIPAllocStatus(ctx *Context, opts struct {
 	return nil
 }
 
-// DebugIPAllocRelease manually releases IP leases
-func DebugIPAllocRelease(ctx *Context, opts struct {
+// DebugNetDBRelease manually releases IP leases
+func DebugNetDBRelease(ctx *Context, opts struct {
 	ConfigCentric
 	IP     string `short:"i" long:"ip" description:"Specific IP to release"`
 	Subnet string `short:"s" long:"subnet" description:"Release all reserved IPs in subnet"`
@@ -132,12 +132,12 @@ func DebugIPAllocRelease(ctx *Context, opts struct {
 		return fmt.Errorf("must specify --ip, --subnet, or --all")
 	}
 
-	client, err := ctx.RPCClient("dev.miren.runtime/debug-ipalloc")
+	client, err := ctx.RPCClient("dev.miren.runtime/debug-netdb")
 	if err != nil {
 		return err
 	}
 
-	ipalloc := debug_v1alpha.NewIPAllocClient(client)
+	netdb := debug_v1alpha.NewNetDBClient(client)
 
 	if opts.IP != "" {
 		if !opts.Force {
@@ -154,7 +154,7 @@ func DebugIPAllocRelease(ctx *Context, opts struct {
 			}
 		}
 
-		result, err := ipalloc.ReleaseIP(ctx, opts.IP)
+		result, err := netdb.ReleaseIP(ctx, opts.IP)
 		if err != nil {
 			return fmt.Errorf("failed to release IP: %w", err)
 		}
@@ -182,7 +182,7 @@ func DebugIPAllocRelease(ctx *Context, opts struct {
 			}
 		}
 
-		result, err := ipalloc.ReleaseSubnet(ctx, opts.Subnet)
+		result, err := netdb.ReleaseSubnet(ctx, opts.Subnet)
 		if err != nil {
 			return fmt.Errorf("failed to release subnet IPs: %w", err)
 		}
@@ -206,7 +206,7 @@ func DebugIPAllocRelease(ctx *Context, opts struct {
 			}
 		}
 
-		result, err := ipalloc.ReleaseAll(ctx)
+		result, err := netdb.ReleaseAll(ctx)
 		if err != nil {
 			return fmt.Errorf("failed to release all IPs: %w", err)
 		}
@@ -218,8 +218,8 @@ func DebugIPAllocRelease(ctx *Context, opts struct {
 	return nil
 }
 
-// DebugIPAllocGC garbage collects IPs not associated with live sandboxes
-func DebugIPAllocGC(ctx *Context, opts struct {
+// DebugNetDBGC garbage collects IPs not associated with live sandboxes
+func DebugNetDBGC(ctx *Context, opts struct {
 	ConfigCentric
 	Subnet string `short:"s" long:"subnet" description:"Only GC IPs in this subnet"`
 	DryRun bool   `short:"n" long:"dry-run" description:"Show what would be released without making changes"`
@@ -230,14 +230,14 @@ func DebugIPAllocGC(ctx *Context, opts struct {
 		opts.DryRun = true
 	}
 
-	client, err := ctx.RPCClient("dev.miren.runtime/debug-ipalloc")
+	client, err := ctx.RPCClient("dev.miren.runtime/debug-netdb")
 	if err != nil {
 		return err
 	}
 
-	ipalloc := debug_v1alpha.NewIPAllocClient(client)
+	netdb := debug_v1alpha.NewNetDBClient(client)
 
-	results, err := ipalloc.Gc(ctx, opts.Subnet, opts.DryRun)
+	results, err := netdb.Gc(ctx, opts.Subnet, opts.DryRun)
 	if err != nil {
 		return fmt.Errorf("failed to run GC: %w", err)
 	}

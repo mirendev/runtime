@@ -633,7 +633,7 @@ func (c *Coordinator) Start(ctx context.Context) error {
 		return err
 	}
 	debugServer := debugsrv.NewServer(c.Log, ndb, eac)
-	server.ExposeValue("dev.miren.runtime/debug-ipalloc", debug_v1alpha.AdaptIPAlloc(debugServer))
+	server.ExposeValue("dev.miren.runtime/debug-netdb", debug_v1alpha.AdaptNetDB(debugServer))
 
 	c.Log.Info("started RPC server")
 

@@ -328,20 +328,20 @@ Warning: These commands are intended for advanced users and developers. They may
 			return Infer("debug disk mounts", "List all mounted disks from /proc/mounts", DebugDiskMounts), nil
 		},
 
-		"debug ipalloc list": func() (cli.Command, error) {
-			return Infer("debug ipalloc list", "List all IP leases from netdb", DebugIPAllocList), nil
+		"debug netdb list": func() (cli.Command, error) {
+			return Infer("debug netdb list", "List all IP leases from netdb", DebugNetDBList), nil
 		},
 
-		"debug ipalloc status": func() (cli.Command, error) {
-			return Infer("debug ipalloc status", "Show IP allocation status by subnet", DebugIPAllocStatus), nil
+		"debug netdb status": func() (cli.Command, error) {
+			return Infer("debug netdb status", "Show IP allocation status by subnet", DebugNetDBStatus), nil
 		},
 
-		"debug ipalloc release": func() (cli.Command, error) {
-			return Infer("debug ipalloc release", "Manually release IP leases", DebugIPAllocRelease), nil
+		"debug netdb release": func() (cli.Command, error) {
+			return Infer("debug netdb release", "Manually release IP leases", DebugNetDBRelease), nil
 		},
 
-		"debug ipalloc gc": func() (cli.Command, error) {
-			return Infer("debug ipalloc gc", "Find and release orphaned IP leases", DebugIPAllocGC), nil
+		"debug netdb gc": func() (cli.Command, error) {
+			return Infer("debug netdb gc", "Find and release orphaned IP leases", DebugNetDBGC), nil
 		},
 	}
 

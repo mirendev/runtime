@@ -49,8 +49,8 @@ types:
         doc: Total capacity of subnet
 
 interfaces:
-  - name: IPAlloc
-    doc: Debug interface for IP allocation management
+  - name: NetDB
+    doc: Debug interface for network database inspection and management
     methods:
       - name: listLeases
         doc: List IP leases with optional filters

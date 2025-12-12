@@ -197,421 +197,421 @@ func (v *SubnetStatus) UnmarshalJSON(data []byte) error {
 	return json.Unmarshal(data, &v.data)
 }
 
-type iPAllocListLeasesArgsData struct {
+type netDBListLeasesArgsData struct {
 	Subnet       *string `cbor:"0,keyasint,omitempty" json:"subnet,omitempty"`
 	ReservedOnly *bool   `cbor:"1,keyasint,omitempty" json:"reserved_only,omitempty"`
 	ReleasedOnly *bool   `cbor:"2,keyasint,omitempty" json:"released_only,omitempty"`
 }
 
-type IPAllocListLeasesArgs struct {
+type NetDBListLeasesArgs struct {
 	call rpc.Call
-	data iPAllocListLeasesArgsData
+	data netDBListLeasesArgsData
 }
 
-func (v *IPAllocListLeasesArgs) HasSubnet() bool {
+func (v *NetDBListLeasesArgs) HasSubnet() bool {
 	return v.data.Subnet != nil
 }
 
-func (v *IPAllocListLeasesArgs) Subnet() string {
+func (v *NetDBListLeasesArgs) Subnet() string {
 	if v.data.Subnet == nil {
 		return ""
 	}
 	return *v.data.Subnet
 }
 
-func (v *IPAllocListLeasesArgs) HasReservedOnly() bool {
+func (v *NetDBListLeasesArgs) HasReservedOnly() bool {
 	return v.data.ReservedOnly != nil
 }
 
-func (v *IPAllocListLeasesArgs) ReservedOnly() bool {
+func (v *NetDBListLeasesArgs) ReservedOnly() bool {
 	if v.data.ReservedOnly == nil {
 		return false
 	}
 	return *v.data.ReservedOnly
 }
 
-func (v *IPAllocListLeasesArgs) HasReleasedOnly() bool {
+func (v *NetDBListLeasesArgs) HasReleasedOnly() bool {
 	return v.data.ReleasedOnly != nil
 }
 
-func (v *IPAllocListLeasesArgs) ReleasedOnly() bool {
+func (v *NetDBListLeasesArgs) ReleasedOnly() bool {
 	if v.data.ReleasedOnly == nil {
 		return false
 	}
 	return *v.data.ReleasedOnly
 }
 
-func (v *IPAllocListLeasesArgs) MarshalCBOR() ([]byte, error) {
+func (v *NetDBListLeasesArgs) MarshalCBOR() ([]byte, error) {
 	return cbor.Marshal(v.data)
 }
 
-func (v *IPAllocListLeasesArgs) UnmarshalCBOR(data []byte) error {
+func (v *NetDBListLeasesArgs) UnmarshalCBOR(data []byte) error {
 	return cbor.Unmarshal(data, &v.data)
 }
 
-func (v *IPAllocListLeasesArgs) MarshalJSON() ([]byte, error) {
+func (v *NetDBListLeasesArgs) MarshalJSON() ([]byte, error) {
 	return json.Marshal(v.data)
 }
 
-func (v *IPAllocListLeasesArgs) UnmarshalJSON(data []byte) error {
+func (v *NetDBListLeasesArgs) UnmarshalJSON(data []byte) error {
 	return json.Unmarshal(data, &v.data)
 }
 
-type iPAllocListLeasesResultsData struct {
+type netDBListLeasesResultsData struct {
 	Leases *[]*IPLease `cbor:"0,keyasint,omitempty" json:"leases,omitempty"`
 }
 
-type IPAllocListLeasesResults struct {
+type NetDBListLeasesResults struct {
 	call rpc.Call
-	data iPAllocListLeasesResultsData
+	data netDBListLeasesResultsData
 }
 
-func (v *IPAllocListLeasesResults) SetLeases(leases []*IPLease) {
+func (v *NetDBListLeasesResults) SetLeases(leases []*IPLease) {
 	x := slices.Clone(leases)
 	v.data.Leases = &x
 }
 
-func (v *IPAllocListLeasesResults) MarshalCBOR() ([]byte, error) {
+func (v *NetDBListLeasesResults) MarshalCBOR() ([]byte, error) {
 	return cbor.Marshal(v.data)
 }
 
-func (v *IPAllocListLeasesResults) UnmarshalCBOR(data []byte) error {
+func (v *NetDBListLeasesResults) UnmarshalCBOR(data []byte) error {
 	return cbor.Unmarshal(data, &v.data)
 }
 
-func (v *IPAllocListLeasesResults) MarshalJSON() ([]byte, error) {
+func (v *NetDBListLeasesResults) MarshalJSON() ([]byte, error) {
 	return json.Marshal(v.data)
 }
 
-func (v *IPAllocListLeasesResults) UnmarshalJSON(data []byte) error {
+func (v *NetDBListLeasesResults) UnmarshalJSON(data []byte) error {
 	return json.Unmarshal(data, &v.data)
 }
 
-type iPAllocStatusArgsData struct{}
+type netDBStatusArgsData struct{}
 
-type IPAllocStatusArgs struct {
+type NetDBStatusArgs struct {
 	call rpc.Call
-	data iPAllocStatusArgsData
+	data netDBStatusArgsData
 }
 
-func (v *IPAllocStatusArgs) MarshalCBOR() ([]byte, error) {
+func (v *NetDBStatusArgs) MarshalCBOR() ([]byte, error) {
 	return cbor.Marshal(v.data)
 }
 
-func (v *IPAllocStatusArgs) UnmarshalCBOR(data []byte) error {
+func (v *NetDBStatusArgs) UnmarshalCBOR(data []byte) error {
 	return cbor.Unmarshal(data, &v.data)
 }
 
-func (v *IPAllocStatusArgs) MarshalJSON() ([]byte, error) {
+func (v *NetDBStatusArgs) MarshalJSON() ([]byte, error) {
 	return json.Marshal(v.data)
 }
 
-func (v *IPAllocStatusArgs) UnmarshalJSON(data []byte) error {
+func (v *NetDBStatusArgs) UnmarshalJSON(data []byte) error {
 	return json.Unmarshal(data, &v.data)
 }
 
-type iPAllocStatusResultsData struct {
+type netDBStatusResultsData struct {
 	Subnets *[]*SubnetStatus `cbor:"0,keyasint,omitempty" json:"subnets,omitempty"`
 }
 
-type IPAllocStatusResults struct {
+type NetDBStatusResults struct {
 	call rpc.Call
-	data iPAllocStatusResultsData
+	data netDBStatusResultsData
 }
 
-func (v *IPAllocStatusResults) SetSubnets(subnets []*SubnetStatus) {
+func (v *NetDBStatusResults) SetSubnets(subnets []*SubnetStatus) {
 	x := slices.Clone(subnets)
 	v.data.Subnets = &x
 }
 
-func (v *IPAllocStatusResults) MarshalCBOR() ([]byte, error) {
+func (v *NetDBStatusResults) MarshalCBOR() ([]byte, error) {
 	return cbor.Marshal(v.data)
 }
 
-func (v *IPAllocStatusResults) UnmarshalCBOR(data []byte) error {
+func (v *NetDBStatusResults) UnmarshalCBOR(data []byte) error {
 	return cbor.Unmarshal(data, &v.data)
 }
 
-func (v *IPAllocStatusResults) MarshalJSON() ([]byte, error) {
+func (v *NetDBStatusResults) MarshalJSON() ([]byte, error) {
 	return json.Marshal(v.data)
 }
 
-func (v *IPAllocStatusResults) UnmarshalJSON(data []byte) error {
+func (v *NetDBStatusResults) UnmarshalJSON(data []byte) error {
 	return json.Unmarshal(data, &v.data)
 }
 
-type iPAllocReleaseIPArgsData struct {
+type netDBReleaseIPArgsData struct {
 	Ip *string `cbor:"0,keyasint,omitempty" json:"ip,omitempty"`
 }
 
-type IPAllocReleaseIPArgs struct {
+type NetDBReleaseIPArgs struct {
 	call rpc.Call
-	data iPAllocReleaseIPArgsData
+	data netDBReleaseIPArgsData
 }
 
-func (v *IPAllocReleaseIPArgs) HasIp() bool {
+func (v *NetDBReleaseIPArgs) HasIp() bool {
 	return v.data.Ip != nil
 }
 
-func (v *IPAllocReleaseIPArgs) Ip() string {
+func (v *NetDBReleaseIPArgs) Ip() string {
 	if v.data.Ip == nil {
 		return ""
 	}
 	return *v.data.Ip
 }
 
-func (v *IPAllocReleaseIPArgs) MarshalCBOR() ([]byte, error) {
+func (v *NetDBReleaseIPArgs) MarshalCBOR() ([]byte, error) {
 	return cbor.Marshal(v.data)
 }
 
-func (v *IPAllocReleaseIPArgs) UnmarshalCBOR(data []byte) error {
+func (v *NetDBReleaseIPArgs) UnmarshalCBOR(data []byte) error {
 	return cbor.Unmarshal(data, &v.data)
 }
 
-func (v *IPAllocReleaseIPArgs) MarshalJSON() ([]byte, error) {
+func (v *NetDBReleaseIPArgs) MarshalJSON() ([]byte, error) {
 	return json.Marshal(v.data)
 }
 
-func (v *IPAllocReleaseIPArgs) UnmarshalJSON(data []byte) error {
+func (v *NetDBReleaseIPArgs) UnmarshalJSON(data []byte) error {
 	return json.Unmarshal(data, &v.data)
 }
 
-type iPAllocReleaseIPResultsData struct {
+type netDBReleaseIPResultsData struct {
 	Released *bool `cbor:"0,keyasint,omitempty" json:"released,omitempty"`
 }
 
-type IPAllocReleaseIPResults struct {
+type NetDBReleaseIPResults struct {
 	call rpc.Call
-	data iPAllocReleaseIPResultsData
+	data netDBReleaseIPResultsData
 }
 
-func (v *IPAllocReleaseIPResults) SetReleased(released bool) {
+func (v *NetDBReleaseIPResults) SetReleased(released bool) {
 	v.data.Released = &released
 }
 
-func (v *IPAllocReleaseIPResults) MarshalCBOR() ([]byte, error) {
+func (v *NetDBReleaseIPResults) MarshalCBOR() ([]byte, error) {
 	return cbor.Marshal(v.data)
 }
 
-func (v *IPAllocReleaseIPResults) UnmarshalCBOR(data []byte) error {
+func (v *NetDBReleaseIPResults) UnmarshalCBOR(data []byte) error {
 	return cbor.Unmarshal(data, &v.data)
 }
 
-func (v *IPAllocReleaseIPResults) MarshalJSON() ([]byte, error) {
+func (v *NetDBReleaseIPResults) MarshalJSON() ([]byte, error) {
 	return json.Marshal(v.data)
 }
 
-func (v *IPAllocReleaseIPResults) UnmarshalJSON(data []byte) error {
+func (v *NetDBReleaseIPResults) UnmarshalJSON(data []byte) error {
 	return json.Unmarshal(data, &v.data)
 }
 
-type iPAllocReleaseSubnetArgsData struct {
+type netDBReleaseSubnetArgsData struct {
 	Subnet *string `cbor:"0,keyasint,omitempty" json:"subnet,omitempty"`
 }
 
-type IPAllocReleaseSubnetArgs struct {
+type NetDBReleaseSubnetArgs struct {
 	call rpc.Call
-	data iPAllocReleaseSubnetArgsData
+	data netDBReleaseSubnetArgsData
 }
 
-func (v *IPAllocReleaseSubnetArgs) HasSubnet() bool {
+func (v *NetDBReleaseSubnetArgs) HasSubnet() bool {
 	return v.data.Subnet != nil
 }
 
-func (v *IPAllocReleaseSubnetArgs) Subnet() string {
+func (v *NetDBReleaseSubnetArgs) Subnet() string {
 	if v.data.Subnet == nil {
 		return ""
 	}
 	return *v.data.Subnet
 }
 
-func (v *IPAllocReleaseSubnetArgs) MarshalCBOR() ([]byte, error) {
+func (v *NetDBReleaseSubnetArgs) MarshalCBOR() ([]byte, error) {
 	return cbor.Marshal(v.data)
 }
 
-func (v *IPAllocReleaseSubnetArgs) UnmarshalCBOR(data []byte) error {
+func (v *NetDBReleaseSubnetArgs) UnmarshalCBOR(data []byte) error {
 	return cbor.Unmarshal(data, &v.data)
 }
 
-func (v *IPAllocReleaseSubnetArgs) MarshalJSON() ([]byte, error) {
+func (v *NetDBReleaseSubnetArgs) MarshalJSON() ([]byte, error) {
 	return json.Marshal(v.data)
 }
 
-func (v *IPAllocReleaseSubnetArgs) UnmarshalJSON(data []byte) error {
+func (v *NetDBReleaseSubnetArgs) UnmarshalJSON(data []byte) error {
 	return json.Unmarshal(data, &v.data)
 }
 
-type iPAllocReleaseSubnetResultsData struct {
+type netDBReleaseSubnetResultsData struct {
 	Count *int32 `cbor:"0,keyasint,omitempty" json:"count,omitempty"`
 }
 
-type IPAllocReleaseSubnetResults struct {
+type NetDBReleaseSubnetResults struct {
 	call rpc.Call
-	data iPAllocReleaseSubnetResultsData
+	data netDBReleaseSubnetResultsData
 }
 
-func (v *IPAllocReleaseSubnetResults) SetCount(count int32) {
+func (v *NetDBReleaseSubnetResults) SetCount(count int32) {
 	v.data.Count = &count
 }
 
-func (v *IPAllocReleaseSubnetResults) MarshalCBOR() ([]byte, error) {
+func (v *NetDBReleaseSubnetResults) MarshalCBOR() ([]byte, error) {
 	return cbor.Marshal(v.data)
 }
 
-func (v *IPAllocReleaseSubnetResults) UnmarshalCBOR(data []byte) error {
+func (v *NetDBReleaseSubnetResults) UnmarshalCBOR(data []byte) error {
 	return cbor.Unmarshal(data, &v.data)
 }
 
-func (v *IPAllocReleaseSubnetResults) MarshalJSON() ([]byte, error) {
+func (v *NetDBReleaseSubnetResults) MarshalJSON() ([]byte, error) {
 	return json.Marshal(v.data)
 }
 
-func (v *IPAllocReleaseSubnetResults) UnmarshalJSON(data []byte) error {
+func (v *NetDBReleaseSubnetResults) UnmarshalJSON(data []byte) error {
 	return json.Unmarshal(data, &v.data)
 }
 
-type iPAllocReleaseAllArgsData struct{}
+type netDBReleaseAllArgsData struct{}
 
-type IPAllocReleaseAllArgs struct {
+type NetDBReleaseAllArgs struct {
 	call rpc.Call
-	data iPAllocReleaseAllArgsData
+	data netDBReleaseAllArgsData
 }
 
-func (v *IPAllocReleaseAllArgs) MarshalCBOR() ([]byte, error) {
+func (v *NetDBReleaseAllArgs) MarshalCBOR() ([]byte, error) {
 	return cbor.Marshal(v.data)
 }
 
-func (v *IPAllocReleaseAllArgs) UnmarshalCBOR(data []byte) error {
+func (v *NetDBReleaseAllArgs) UnmarshalCBOR(data []byte) error {
 	return cbor.Unmarshal(data, &v.data)
 }
 
-func (v *IPAllocReleaseAllArgs) MarshalJSON() ([]byte, error) {
+func (v *NetDBReleaseAllArgs) MarshalJSON() ([]byte, error) {
 	return json.Marshal(v.data)
 }
 
-func (v *IPAllocReleaseAllArgs) UnmarshalJSON(data []byte) error {
+func (v *NetDBReleaseAllArgs) UnmarshalJSON(data []byte) error {
 	return json.Unmarshal(data, &v.data)
 }
 
-type iPAllocReleaseAllResultsData struct {
+type netDBReleaseAllResultsData struct {
 	Count *int32 `cbor:"0,keyasint,omitempty" json:"count,omitempty"`
 }
 
-type IPAllocReleaseAllResults struct {
+type NetDBReleaseAllResults struct {
 	call rpc.Call
-	data iPAllocReleaseAllResultsData
+	data netDBReleaseAllResultsData
 }
 
-func (v *IPAllocReleaseAllResults) SetCount(count int32) {
+func (v *NetDBReleaseAllResults) SetCount(count int32) {
 	v.data.Count = &count
 }
 
-func (v *IPAllocReleaseAllResults) MarshalCBOR() ([]byte, error) {
+func (v *NetDBReleaseAllResults) MarshalCBOR() ([]byte, error) {
 	return cbor.Marshal(v.data)
 }
 
-func (v *IPAllocReleaseAllResults) UnmarshalCBOR(data []byte) error {
+func (v *NetDBReleaseAllResults) UnmarshalCBOR(data []byte) error {
 	return cbor.Unmarshal(data, &v.data)
 }
 
-func (v *IPAllocReleaseAllResults) MarshalJSON() ([]byte, error) {
+func (v *NetDBReleaseAllResults) MarshalJSON() ([]byte, error) {
 	return json.Marshal(v.data)
 }
 
-func (v *IPAllocReleaseAllResults) UnmarshalJSON(data []byte) error {
+func (v *NetDBReleaseAllResults) UnmarshalJSON(data []byte) error {
 	return json.Unmarshal(data, &v.data)
 }
 
-type iPAllocGcArgsData struct {
+type netDBGcArgsData struct {
 	Subnet *string `cbor:"0,keyasint,omitempty" json:"subnet,omitempty"`
 	DryRun *bool   `cbor:"1,keyasint,omitempty" json:"dry_run,omitempty"`
 }
 
-type IPAllocGcArgs struct {
+type NetDBGcArgs struct {
 	call rpc.Call
-	data iPAllocGcArgsData
+	data netDBGcArgsData
 }
 
-func (v *IPAllocGcArgs) HasSubnet() bool {
+func (v *NetDBGcArgs) HasSubnet() bool {
 	return v.data.Subnet != nil
 }
 
-func (v *IPAllocGcArgs) Subnet() string {
+func (v *NetDBGcArgs) Subnet() string {
 	if v.data.Subnet == nil {
 		return ""
 	}
 	return *v.data.Subnet
 }
 
-func (v *IPAllocGcArgs) HasDryRun() bool {
+func (v *NetDBGcArgs) HasDryRun() bool {
 	return v.data.DryRun != nil
 }
 
-func (v *IPAllocGcArgs) DryRun() bool {
+func (v *NetDBGcArgs) DryRun() bool {
 	if v.data.DryRun == nil {
 		return false
 	}
 	return *v.data.DryRun
 }
 
-func (v *IPAllocGcArgs) MarshalCBOR() ([]byte, error) {
+func (v *NetDBGcArgs) MarshalCBOR() ([]byte, error) {
 	return cbor.Marshal(v.data)
 }
 
-func (v *IPAllocGcArgs) UnmarshalCBOR(data []byte) error {
+func (v *NetDBGcArgs) UnmarshalCBOR(data []byte) error {
 	return cbor.Unmarshal(data, &v.data)
 }
 
-func (v *IPAllocGcArgs) MarshalJSON() ([]byte, error) {
+func (v *NetDBGcArgs) MarshalJSON() ([]byte, error) {
 	return json.Marshal(v.data)
 }
 
-func (v *IPAllocGcArgs) UnmarshalJSON(data []byte) error {
+func (v *NetDBGcArgs) UnmarshalJSON(data []byte) error {
 	return json.Unmarshal(data, &v.data)
 }
 
-type iPAllocGcResultsData struct {
+type netDBGcResultsData struct {
 	OrphanedIps   *[]string `cbor:"0,keyasint,omitempty" json:"orphaned_ips,omitempty"`
 	ReleasedCount *int32    `cbor:"1,keyasint,omitempty" json:"released_count,omitempty"`
 }
 
-type IPAllocGcResults struct {
+type NetDBGcResults struct {
 	call rpc.Call
-	data iPAllocGcResultsData
+	data netDBGcResultsData
 }
 
-func (v *IPAllocGcResults) SetOrphanedIps(orphaned_ips []string) {
+func (v *NetDBGcResults) SetOrphanedIps(orphaned_ips []string) {
 	x := slices.Clone(orphaned_ips)
 	v.data.OrphanedIps = &x
 }
 
-func (v *IPAllocGcResults) SetReleasedCount(released_count int32) {
+func (v *NetDBGcResults) SetReleasedCount(released_count int32) {
 	v.data.ReleasedCount = &released_count
 }
 
-func (v *IPAllocGcResults) MarshalCBOR() ([]byte, error) {
+func (v *NetDBGcResults) MarshalCBOR() ([]byte, error) {
 	return cbor.Marshal(v.data)
 }
 
-func (v *IPAllocGcResults) UnmarshalCBOR(data []byte) error {
+func (v *NetDBGcResults) UnmarshalCBOR(data []byte) error {
 	return cbor.Unmarshal(data, &v.data)
 }
 
-func (v *IPAllocGcResults) MarshalJSON() ([]byte, error) {
+func (v *NetDBGcResults) MarshalJSON() ([]byte, error) {
 	return json.Marshal(v.data)
 }
 
-func (v *IPAllocGcResults) UnmarshalJSON(data []byte) error {
+func (v *NetDBGcResults) UnmarshalJSON(data []byte) error {
 	return json.Unmarshal(data, &v.data)
 }
 
-type IPAllocListLeases struct {
+type NetDBListLeases struct {
 	rpc.Call
-	args    IPAllocListLeasesArgs
-	results IPAllocListLeasesResults
+	args    NetDBListLeasesArgs
+	results NetDBListLeasesResults
 }
 
-func (t *IPAllocListLeases) Args() *IPAllocListLeasesArgs {
+func (t *NetDBListLeases) Args() *NetDBListLeasesArgs {
 	args := &t.args
 	if args.call != nil {
 		return args
@@ -621,7 +621,7 @@ func (t *IPAllocListLeases) Args() *IPAllocListLeasesArgs {
 	return args
 }
 
-func (t *IPAllocListLeases) Results() *IPAllocListLeasesResults {
+func (t *NetDBListLeases) Results() *NetDBListLeasesResults {
 	results := &t.results
 	if results.call != nil {
 		return results
@@ -631,13 +631,13 @@ func (t *IPAllocListLeases) Results() *IPAllocListLeasesResults {
 	return results
 }
 
-type IPAllocStatus struct {
+type NetDBStatus struct {
 	rpc.Call
-	args    IPAllocStatusArgs
-	results IPAllocStatusResults
+	args    NetDBStatusArgs
+	results NetDBStatusResults
 }
 
-func (t *IPAllocStatus) Args() *IPAllocStatusArgs {
+func (t *NetDBStatus) Args() *NetDBStatusArgs {
 	args := &t.args
 	if args.call != nil {
 		return args
@@ -647,7 +647,7 @@ func (t *IPAllocStatus) Args() *IPAllocStatusArgs {
 	return args
 }
 
-func (t *IPAllocStatus) Results() *IPAllocStatusResults {
+func (t *NetDBStatus) Results() *NetDBStatusResults {
 	results := &t.results
 	if results.call != nil {
 		return results
@@ -657,13 +657,13 @@ func (t *IPAllocStatus) Results() *IPAllocStatusResults {
 	return results
 }
 
-type IPAllocReleaseIP struct {
+type NetDBReleaseIP struct {
 	rpc.Call
-	args    IPAllocReleaseIPArgs
-	results IPAllocReleaseIPResults
+	args    NetDBReleaseIPArgs
+	results NetDBReleaseIPResults
 }
 
-func (t *IPAllocReleaseIP) Args() *IPAllocReleaseIPArgs {
+func (t *NetDBReleaseIP) Args() *NetDBReleaseIPArgs {
 	args := &t.args
 	if args.call != nil {
 		return args
@@ -673,7 +673,7 @@ func (t *IPAllocReleaseIP) Args() *IPAllocReleaseIPArgs {
 	return args
 }
 
-func (t *IPAllocReleaseIP) Results() *IPAllocReleaseIPResults {
+func (t *NetDBReleaseIP) Results() *NetDBReleaseIPResults {
 	results := &t.results
 	if results.call != nil {
 		return results
@@ -683,13 +683,13 @@ func (t *IPAllocReleaseIP) Results() *IPAllocReleaseIPResults {
 	return results
 }
 
-type IPAllocReleaseSubnet struct {
+type NetDBReleaseSubnet struct {
 	rpc.Call
-	args    IPAllocReleaseSubnetArgs
-	results IPAllocReleaseSubnetResults
+	args    NetDBReleaseSubnetArgs
+	results NetDBReleaseSubnetResults
 }
 
-func (t *IPAllocReleaseSubnet) Args() *IPAllocReleaseSubnetArgs {
+func (t *NetDBReleaseSubnet) Args() *NetDBReleaseSubnetArgs {
 	args := &t.args
 	if args.call != nil {
 		return args
@@ -699,7 +699,7 @@ func (t *IPAllocReleaseSubnet) Args() *IPAllocReleaseSubnetArgs {
 	return args
 }
 
-func (t *IPAllocReleaseSubnet) Results() *IPAllocReleaseSubnetResults {
+func (t *NetDBReleaseSubnet) Results() *NetDBReleaseSubnetResults {
 	results := &t.results
 	if results.call != nil {
 		return results
@@ -709,13 +709,13 @@ func (t *IPAllocReleaseSubnet) Results() *IPAllocReleaseSubnetResults {
 	return results
 }
 
-type IPAllocReleaseAll struct {
+type NetDBReleaseAll struct {
 	rpc.Call
-	args    IPAllocReleaseAllArgs
-	results IPAllocReleaseAllResults
+	args    NetDBReleaseAllArgs
+	results NetDBReleaseAllResults
 }
 
-func (t *IPAllocReleaseAll) Args() *IPAllocReleaseAllArgs {
+func (t *NetDBReleaseAll) Args() *NetDBReleaseAllArgs {
 	args := &t.args
 	if args.call != nil {
 		return args
@@ -725,7 +725,7 @@ func (t *IPAllocReleaseAll) Args() *IPAllocReleaseAllArgs {
 	return args
 }
 
-func (t *IPAllocReleaseAll) Results() *IPAllocReleaseAllResults {
+func (t *NetDBReleaseAll) Results() *NetDBReleaseAllResults {
 	results := &t.results
 	if results.call != nil {
 		return results
@@ -735,13 +735,13 @@ func (t *IPAllocReleaseAll) Results() *IPAllocReleaseAllResults {
 	return results
 }
 
-type IPAllocGc struct {
+type NetDBGc struct {
 	rpc.Call
-	args    IPAllocGcArgs
-	results IPAllocGcResults
+	args    NetDBGcArgs
+	results NetDBGcResults
 }
 
-func (t *IPAllocGc) Args() *IPAllocGcArgs {
+func (t *NetDBGc) Args() *NetDBGcArgs {
 	args := &t.args
 	if args.call != nil {
 		return args
@@ -751,7 +751,7 @@ func (t *IPAllocGc) Args() *IPAllocGcArgs {
 	return args
 }
 
-func (t *IPAllocGc) Results() *IPAllocGcResults {
+func (t *NetDBGc) Results() *NetDBGcResults {
 	results := &t.results
 	if results.call != nil {
 		return results
@@ -761,95 +761,95 @@ func (t *IPAllocGc) Results() *IPAllocGcResults {
 	return results
 }
 
-type IPAlloc interface {
-	ListLeases(ctx context.Context, state *IPAllocListLeases) error
-	Status(ctx context.Context, state *IPAllocStatus) error
-	ReleaseIP(ctx context.Context, state *IPAllocReleaseIP) error
-	ReleaseSubnet(ctx context.Context, state *IPAllocReleaseSubnet) error
-	ReleaseAll(ctx context.Context, state *IPAllocReleaseAll) error
-	Gc(ctx context.Context, state *IPAllocGc) error
+type NetDB interface {
+	ListLeases(ctx context.Context, state *NetDBListLeases) error
+	Status(ctx context.Context, state *NetDBStatus) error
+	ReleaseIP(ctx context.Context, state *NetDBReleaseIP) error
+	ReleaseSubnet(ctx context.Context, state *NetDBReleaseSubnet) error
+	ReleaseAll(ctx context.Context, state *NetDBReleaseAll) error
+	Gc(ctx context.Context, state *NetDBGc) error
 }
 
-type reexportIPAlloc struct {
+type reexportNetDB struct {
 	client rpc.Client
 }
 
-func (reexportIPAlloc) ListLeases(ctx context.Context, state *IPAllocListLeases) error {
+func (reexportNetDB) ListLeases(ctx context.Context, state *NetDBListLeases) error {
 	panic("not implemented")
 }
 
-func (reexportIPAlloc) Status(ctx context.Context, state *IPAllocStatus) error {
+func (reexportNetDB) Status(ctx context.Context, state *NetDBStatus) error {
 	panic("not implemented")
 }
 
-func (reexportIPAlloc) ReleaseIP(ctx context.Context, state *IPAllocReleaseIP) error {
+func (reexportNetDB) ReleaseIP(ctx context.Context, state *NetDBReleaseIP) error {
 	panic("not implemented")
 }
 
-func (reexportIPAlloc) ReleaseSubnet(ctx context.Context, state *IPAllocReleaseSubnet) error {
+func (reexportNetDB) ReleaseSubnet(ctx context.Context, state *NetDBReleaseSubnet) error {
 	panic("not implemented")
 }
 
-func (reexportIPAlloc) ReleaseAll(ctx context.Context, state *IPAllocReleaseAll) error {
+func (reexportNetDB) ReleaseAll(ctx context.Context, state *NetDBReleaseAll) error {
 	panic("not implemented")
 }
 
-func (reexportIPAlloc) Gc(ctx context.Context, state *IPAllocGc) error {
+func (reexportNetDB) Gc(ctx context.Context, state *NetDBGc) error {
 	panic("not implemented")
 }
 
-func (t reexportIPAlloc) CapabilityClient() rpc.Client {
+func (t reexportNetDB) CapabilityClient() rpc.Client {
 	return t.client
 }
 
-func AdaptIPAlloc(t IPAlloc) *rpc.Interface {
+func AdaptNetDB(t NetDB) *rpc.Interface {
 	methods := []rpc.Method{
 		{
 			Name:          "listLeases",
-			InterfaceName: "IPAlloc",
+			InterfaceName: "NetDB",
 			Index:         0,
 			Handler: func(ctx context.Context, call rpc.Call) error {
-				return t.ListLeases(ctx, &IPAllocListLeases{Call: call})
+				return t.ListLeases(ctx, &NetDBListLeases{Call: call})
 			},
 		},
 		{
 			Name:          "status",
-			InterfaceName: "IPAlloc",
+			InterfaceName: "NetDB",
 			Index:         0,
 			Handler: func(ctx context.Context, call rpc.Call) error {
-				return t.Status(ctx, &IPAllocStatus{Call: call})
+				return t.Status(ctx, &NetDBStatus{Call: call})
 			},
 		},
 		{
 			Name:          "releaseIP",
-			InterfaceName: "IPAlloc",
+			InterfaceName: "NetDB",
 			Index:         0,
 			Handler: func(ctx context.Context, call rpc.Call) error {
-				return t.ReleaseIP(ctx, &IPAllocReleaseIP{Call: call})
+				return t.ReleaseIP(ctx, &NetDBReleaseIP{Call: call})
 			},
 		},
 		{
 			Name:          "releaseSubnet",
-			InterfaceName: "IPAlloc",
+			InterfaceName: "NetDB",
 			Index:         0,
 			Handler: func(ctx context.Context, call rpc.Call) error {
-				return t.ReleaseSubnet(ctx, &IPAllocReleaseSubnet{Call: call})
+				return t.ReleaseSubnet(ctx, &NetDBReleaseSubnet{Call: call})
 			},
 		},
 		{
 			Name:          "releaseAll",
-			InterfaceName: "IPAlloc",
+			InterfaceName: "NetDB",
 			Index:         0,
 			Handler: func(ctx context.Context, call rpc.Call) error {
-				return t.ReleaseAll(ctx, &IPAllocReleaseAll{Call: call})
+				return t.ReleaseAll(ctx, &NetDBReleaseAll{Call: call})
 			},
 		},
 		{
 			Name:          "gc",
-			InterfaceName: "IPAlloc",
+			InterfaceName: "NetDB",
 			Index:         0,
 			Handler: func(ctx context.Context, call rpc.Call) error {
-				return t.Gc(ctx, &IPAllocGc{Call: call})
+				return t.Gc(ctx, &NetDBGc{Call: call})
 			},
 		},
 	}
@@ -857,206 +857,206 @@ func AdaptIPAlloc(t IPAlloc) *rpc.Interface {
 	return rpc.NewInterface(methods, t)
 }
 
-type IPAllocClient struct {
+type NetDBClient struct {
 	rpc.Client
 }
 
-func NewIPAllocClient(client rpc.Client) *IPAllocClient {
-	return &IPAllocClient{Client: client}
+func NewNetDBClient(client rpc.Client) *NetDBClient {
+	return &NetDBClient{Client: client}
 }
 
-func (c IPAllocClient) Export() IPAlloc {
-	return reexportIPAlloc{client: c.Client}
+func (c NetDBClient) Export() NetDB {
+	return reexportNetDB{client: c.Client}
 }
 
-type IPAllocClientListLeasesResults struct {
+type NetDBClientListLeasesResults struct {
 	client rpc.Client
-	data   iPAllocListLeasesResultsData
+	data   netDBListLeasesResultsData
 }
 
-func (v *IPAllocClientListLeasesResults) HasLeases() bool {
+func (v *NetDBClientListLeasesResults) HasLeases() bool {
 	return v.data.Leases != nil
 }
 
-func (v *IPAllocClientListLeasesResults) Leases() []*IPLease {
+func (v *NetDBClientListLeasesResults) Leases() []*IPLease {
 	if v.data.Leases == nil {
 		return nil
 	}
 	return *v.data.Leases
 }
 
-func (v IPAllocClient) ListLeases(ctx context.Context, subnet string, reserved_only bool, released_only bool) (*IPAllocClientListLeasesResults, error) {
-	args := IPAllocListLeasesArgs{}
+func (v NetDBClient) ListLeases(ctx context.Context, subnet string, reserved_only bool, released_only bool) (*NetDBClientListLeasesResults, error) {
+	args := NetDBListLeasesArgs{}
 	args.data.Subnet = &subnet
 	args.data.ReservedOnly = &reserved_only
 	args.data.ReleasedOnly = &released_only
 
-	var ret iPAllocListLeasesResultsData
+	var ret netDBListLeasesResultsData
 
 	err := v.Call(ctx, "listLeases", &args, &ret)
 	if err != nil {
 		return nil, err
 	}
 
-	return &IPAllocClientListLeasesResults{client: v.Client, data: ret}, nil
+	return &NetDBClientListLeasesResults{client: v.Client, data: ret}, nil
 }
 
-type IPAllocClientStatusResults struct {
+type NetDBClientStatusResults struct {
 	client rpc.Client
-	data   iPAllocStatusResultsData
+	data   netDBStatusResultsData
 }
 
-func (v *IPAllocClientStatusResults) HasSubnets() bool {
+func (v *NetDBClientStatusResults) HasSubnets() bool {
 	return v.data.Subnets != nil
 }
 
-func (v *IPAllocClientStatusResults) Subnets() []*SubnetStatus {
+func (v *NetDBClientStatusResults) Subnets() []*SubnetStatus {
 	if v.data.Subnets == nil {
 		return nil
 	}
 	return *v.data.Subnets
 }
 
-func (v IPAllocClient) Status(ctx context.Context) (*IPAllocClientStatusResults, error) {
-	args := IPAllocStatusArgs{}
+func (v NetDBClient) Status(ctx context.Context) (*NetDBClientStatusResults, error) {
+	args := NetDBStatusArgs{}
 
-	var ret iPAllocStatusResultsData
+	var ret netDBStatusResultsData
 
 	err := v.Call(ctx, "status", &args, &ret)
 	if err != nil {
 		return nil, err
 	}
 
-	return &IPAllocClientStatusResults{client: v.Client, data: ret}, nil
+	return &NetDBClientStatusResults{client: v.Client, data: ret}, nil
 }
 
-type IPAllocClientReleaseIPResults struct {
+type NetDBClientReleaseIPResults struct {
 	client rpc.Client
-	data   iPAllocReleaseIPResultsData
+	data   netDBReleaseIPResultsData
 }
 
-func (v *IPAllocClientReleaseIPResults) HasReleased() bool {
+func (v *NetDBClientReleaseIPResults) HasReleased() bool {
 	return v.data.Released != nil
 }
 
-func (v *IPAllocClientReleaseIPResults) Released() bool {
+func (v *NetDBClientReleaseIPResults) Released() bool {
 	if v.data.Released == nil {
 		return false
 	}
 	return *v.data.Released
 }
 
-func (v IPAllocClient) ReleaseIP(ctx context.Context, ip string) (*IPAllocClientReleaseIPResults, error) {
-	args := IPAllocReleaseIPArgs{}
+func (v NetDBClient) ReleaseIP(ctx context.Context, ip string) (*NetDBClientReleaseIPResults, error) {
+	args := NetDBReleaseIPArgs{}
 	args.data.Ip = &ip
 
-	var ret iPAllocReleaseIPResultsData
+	var ret netDBReleaseIPResultsData
 
 	err := v.Call(ctx, "releaseIP", &args, &ret)
 	if err != nil {
 		return nil, err
 	}
 
-	return &IPAllocClientReleaseIPResults{client: v.Client, data: ret}, nil
+	return &NetDBClientReleaseIPResults{client: v.Client, data: ret}, nil
 }
 
-type IPAllocClientReleaseSubnetResults struct {
+type NetDBClientReleaseSubnetResults struct {
 	client rpc.Client
-	data   iPAllocReleaseSubnetResultsData
+	data   netDBReleaseSubnetResultsData
 }
 
-func (v *IPAllocClientReleaseSubnetResults) HasCount() bool {
+func (v *NetDBClientReleaseSubnetResults) HasCount() bool {
 	return v.data.Count != nil
 }
 
-func (v *IPAllocClientReleaseSubnetResults) Count() int32 {
+func (v *NetDBClientReleaseSubnetResults) Count() int32 {
 	if v.data.Count == nil {
 		return 0
 	}
 	return *v.data.Count
 }
 
-func (v IPAllocClient) ReleaseSubnet(ctx context.Context, subnet string) (*IPAllocClientReleaseSubnetResults, error) {
-	args := IPAllocReleaseSubnetArgs{}
+func (v NetDBClient) ReleaseSubnet(ctx context.Context, subnet string) (*NetDBClientReleaseSubnetResults, error) {
+	args := NetDBReleaseSubnetArgs{}
 	args.data.Subnet = &subnet
 
-	var ret iPAllocReleaseSubnetResultsData
+	var ret netDBReleaseSubnetResultsData
 
 	err := v.Call(ctx, "releaseSubnet", &args, &ret)
 	if err != nil {
 		return nil, err
 	}
 
-	return &IPAllocClientReleaseSubnetResults{client: v.Client, data: ret}, nil
+	return &NetDBClientReleaseSubnetResults{client: v.Client, data: ret}, nil
 }
 
-type IPAllocClientReleaseAllResults struct {
+type NetDBClientReleaseAllResults struct {
 	client rpc.Client
-	data   iPAllocReleaseAllResultsData
+	data   netDBReleaseAllResultsData
 }
 
-func (v *IPAllocClientReleaseAllResults) HasCount() bool {
+func (v *NetDBClientReleaseAllResults) HasCount() bool {
 	return v.data.Count != nil
 }
 
-func (v *IPAllocClientReleaseAllResults) Count() int32 {
+func (v *NetDBClientReleaseAllResults) Count() int32 {
 	if v.data.Count == nil {
 		return 0
 	}
 	return *v.data.Count
 }
 
-func (v IPAllocClient) ReleaseAll(ctx context.Context) (*IPAllocClientReleaseAllResults, error) {
-	args := IPAllocReleaseAllArgs{}
+func (v NetDBClient) ReleaseAll(ctx context.Context) (*NetDBClientReleaseAllResults, error) {
+	args := NetDBReleaseAllArgs{}
 
-	var ret iPAllocReleaseAllResultsData
+	var ret netDBReleaseAllResultsData
 
 	err := v.Call(ctx, "releaseAll", &args, &ret)
 	if err != nil {
 		return nil, err
 	}
 
-	return &IPAllocClientReleaseAllResults{client: v.Client, data: ret}, nil
+	return &NetDBClientReleaseAllResults{client: v.Client, data: ret}, nil
 }
 
-type IPAllocClientGcResults struct {
+type NetDBClientGcResults struct {
 	client rpc.Client
-	data   iPAllocGcResultsData
+	data   netDBGcResultsData
 }
 
-func (v *IPAllocClientGcResults) HasOrphanedIps() bool {
+func (v *NetDBClientGcResults) HasOrphanedIps() bool {
 	return v.data.OrphanedIps != nil
 }
 
-func (v *IPAllocClientGcResults) OrphanedIps() []string {
+func (v *NetDBClientGcResults) OrphanedIps() []string {
 	if v.data.OrphanedIps == nil {
 		return nil
 	}
 	return *v.data.OrphanedIps
 }
 
-func (v *IPAllocClientGcResults) HasReleasedCount() bool {
+func (v *NetDBClientGcResults) HasReleasedCount() bool {
 	return v.data.ReleasedCount != nil
 }
 
-func (v *IPAllocClientGcResults) ReleasedCount() int32 {
+func (v *NetDBClientGcResults) ReleasedCount() int32 {
 	if v.data.ReleasedCount == nil {
 		return 0
 	}
 	return *v.data.ReleasedCount
 }
 
-func (v IPAllocClient) Gc(ctx context.Context, subnet string, dry_run bool) (*IPAllocClientGcResults, error) {
-	args := IPAllocGcArgs{}
+func (v NetDBClient) Gc(ctx context.Context, subnet string, dry_run bool) (*NetDBClientGcResults, error) {
+	args := NetDBGcArgs{}
 	args.data.Subnet = &subnet
 	args.data.DryRun = &dry_run
 
-	var ret iPAllocGcResultsData
+	var ret netDBGcResultsData
 
 	err := v.Call(ctx, "gc", &args, &ret)
 	if err != nil {
 		return nil, err
 	}
 
-	return &IPAllocClientGcResults{client: v.Client, data: ret}, nil
+	return &NetDBClientGcResults{client: v.Client, data: ret}, nil
 }
