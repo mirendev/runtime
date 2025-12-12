@@ -9,8 +9,8 @@ import (
 	"miren.dev/runtime/clientconfig"
 )
 
-// InfoServer shows server health and connectivity details
-func InfoServer(ctx *Context, opts struct {
+// DoctorServer shows server health and connectivity details
+func DoctorServer(ctx *Context, opts struct {
 	ConfigCentric
 }) error {
 	cfg, err := opts.LoadConfig()

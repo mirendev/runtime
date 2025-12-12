@@ -22,7 +22,7 @@ type cloudUserInfo struct {
 	} `json:"user"`
 }
 
-func fetchCloudUserInfo(ctx context.Context, cloudURL, token string) (*cloudUserInfo, error) {
+func fetchCloudUserDoctor(ctx context.Context, cloudURL, token string) (*cloudUserInfo, error) {
 	meURL, err := url.JoinPath(cloudURL, "/api/v1/me")
 	if err != nil {
 		return nil, err
@@ -52,8 +52,8 @@ func fetchCloudUserInfo(ctx context.Context, cloudURL, token string) (*cloudUser
 	return &info, nil
 }
 
-// InfoAuth shows authentication and user information
-func InfoAuth(ctx *Context, opts struct {
+// DoctorAuth shows authentication and user information
+func DoctorAuth(ctx *Context, opts struct {
 	ConfigCentric
 }) error {
 	if ctx.ClusterConfig == nil {
@@ -102,7 +102,7 @@ func InfoAuth(ctx *Context, opts struct {
 							authMethod = "keypair"
 
 							// Fetch user info from cloud
-							userInfo, _ = fetchCloudUserInfo(ctx, authServer, token)
+							userInfo, _ = fetchCloudUserDoctor(ctx, authServer, token)
 						}
 					}
 				}

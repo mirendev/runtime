@@ -8,8 +8,8 @@ import (
 	"miren.dev/runtime/clientconfig"
 )
 
-// InfoConfig shows configuration file information
-func InfoConfig(ctx *Context, opts struct {
+// DoctorConfig shows configuration file information
+func DoctorConfig(ctx *Context, opts struct {
 	ConfigCentric
 }) error {
 	configPath := clientconfig.GetActiveConfigPath()

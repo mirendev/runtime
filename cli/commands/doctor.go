@@ -21,8 +21,8 @@ var (
 	infoBold  = lipgloss.NewStyle().Bold(true)
 )
 
-// Info shows a quick overview of the miren environment
-func Info(ctx *Context, opts struct {
+// Doctor shows a quick overview of the miren environment
+func Doctor(ctx *Context, opts struct {
 	ConfigCentric
 }) error {
 	type infoSection struct {
@@ -141,8 +141,8 @@ func Info(ctx *Context, opts struct {
 	}
 
 	// Text output
-	ctx.Printf("%s\n", infoBold.Render("Miren Info"))
-	ctx.Printf("%s\n", infoGray.Render("=========="))
+	ctx.Printf("%s\n", infoBold.Render("Miren Doctor"))
+	ctx.Printf("%s\n", infoGray.Render("============"))
 
 	// Configuration
 	printInfoLine(ctx, "Configuration", configuration.ok, configuration.message, false)
@@ -176,7 +176,7 @@ func Info(ctx *Context, opts struct {
 		ctx.Printf("  %s        %s\n", infoBold.Render("miren login"), infoGray.Render("# Authenticate with miren.cloud"))
 		ctx.Printf("  %s  %s\n", infoBold.Render("miren cluster add"), infoGray.Render("# Add a cluster manually"))
 	} else {
-		ctx.Printf("%s\n", infoGray.Render("Use 'miren info <topic>' for details: config, server, auth, apps"))
+		ctx.Printf("%s\n", infoGray.Render("Use 'miren doctor <topic>' for details: config, server, auth, apps"))
 	}
 
 	return nil

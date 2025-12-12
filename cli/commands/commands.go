@@ -22,28 +22,28 @@ func AllCommands() map[string]cli.CommandFactory {
 			return Infer("whoami", "Display information about the current authenticated user", Whoami), nil
 		},
 
-		"info": func() (cli.Command, error) {
-			return Infer("info", "Show information about miren environment", Info), nil
+		"doctor": func() (cli.Command, error) {
+			return Infer("doctor", "Diagnose miren environment and connectivity", Doctor), nil
 		},
 
-		"info config": func() (cli.Command, error) {
-			return Infer("info config", "Show configuration file information", InfoConfig), nil
+		"doctor config": func() (cli.Command, error) {
+			return Infer("doctor config", "Check configuration files", DoctorConfig), nil
 		},
 
-		"info server": func() (cli.Command, error) {
-			return Infer("info server", "Show server health and connectivity", InfoServer), nil
+		"doctor server": func() (cli.Command, error) {
+			return Infer("doctor server", "Check server health and connectivity", DoctorServer), nil
 		},
 
-		"info apps": func() (cli.Command, error) {
-			return Infer("info apps", "Show apps and their routes", InfoApps), nil
+		"doctor apps": func() (cli.Command, error) {
+			return Infer("doctor apps", "Check apps and their routes", DoctorApps), nil
 		},
 
-		"info auth": func() (cli.Command, error) {
-			return Infer("info auth", "Show authentication and user information", InfoAuth), nil
+		"doctor auth": func() (cli.Command, error) {
+			return Infer("doctor auth", "Check authentication and user information", DoctorAuth), nil
 		},
 
-		"info all": func() (cli.Command, error) {
-			return Infer("info all", "Show all information", InfoAll), nil
+		"doctor all": func() (cli.Command, error) {
+			return Infer("doctor all", "Run all diagnostic checks", DoctorAll), nil
 		},
 
 		"init": func() (cli.Command, error) {

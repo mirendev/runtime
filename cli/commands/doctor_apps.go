@@ -11,8 +11,8 @@ import (
 	"miren.dev/runtime/pkg/ui"
 )
 
-// InfoApps shows apps and their routes
-func InfoApps(ctx *Context, opts struct {
+// DoctorApps shows apps and their routes
+func DoctorApps(ctx *Context, opts struct {
 	ConfigCentric
 }) error {
 	client, err := ctx.RPCClient("entities")
