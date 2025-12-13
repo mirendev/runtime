@@ -190,6 +190,290 @@ func (v *AccessInfo) UnmarshalJSON(data []byte) error {
 	return json.Unmarshal(data, &v.data)
 }
 
+type serviceInfoData struct {
+	Name    *string `cbor:"0,keyasint,omitempty" json:"name,omitempty"`
+	Command *string `cbor:"1,keyasint,omitempty" json:"command,omitempty"`
+	Source  *string `cbor:"2,keyasint,omitempty" json:"source,omitempty"`
+}
+
+type ServiceInfo struct {
+	data serviceInfoData
+}
+
+func (v *ServiceInfo) HasName() bool {
+	return v.data.Name != nil
+}
+
+func (v *ServiceInfo) Name() string {
+	if v.data.Name == nil {
+		return ""
+	}
+	return *v.data.Name
+}
+
+func (v *ServiceInfo) SetName(name string) {
+	v.data.Name = &name
+}
+
+func (v *ServiceInfo) HasCommand() bool {
+	return v.data.Command != nil
+}
+
+func (v *ServiceInfo) Command() string {
+	if v.data.Command == nil {
+		return ""
+	}
+	return *v.data.Command
+}
+
+func (v *ServiceInfo) SetCommand(command string) {
+	v.data.Command = &command
+}
+
+func (v *ServiceInfo) HasSource() bool {
+	return v.data.Source != nil
+}
+
+func (v *ServiceInfo) Source() string {
+	if v.data.Source == nil {
+		return ""
+	}
+	return *v.data.Source
+}
+
+func (v *ServiceInfo) SetSource(source string) {
+	v.data.Source = &source
+}
+
+func (v *ServiceInfo) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *ServiceInfo) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *ServiceInfo) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *ServiceInfo) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type detectionEventData struct {
+	Kind    *string `cbor:"0,keyasint,omitempty" json:"kind,omitempty"`
+	Name    *string `cbor:"1,keyasint,omitempty" json:"name,omitempty"`
+	Message *string `cbor:"2,keyasint,omitempty" json:"message,omitempty"`
+}
+
+type DetectionEvent struct {
+	data detectionEventData
+}
+
+func (v *DetectionEvent) HasKind() bool {
+	return v.data.Kind != nil
+}
+
+func (v *DetectionEvent) Kind() string {
+	if v.data.Kind == nil {
+		return ""
+	}
+	return *v.data.Kind
+}
+
+func (v *DetectionEvent) SetKind(kind string) {
+	v.data.Kind = &kind
+}
+
+func (v *DetectionEvent) HasName() bool {
+	return v.data.Name != nil
+}
+
+func (v *DetectionEvent) Name() string {
+	if v.data.Name == nil {
+		return ""
+	}
+	return *v.data.Name
+}
+
+func (v *DetectionEvent) SetName(name string) {
+	v.data.Name = &name
+}
+
+func (v *DetectionEvent) HasMessage() bool {
+	return v.data.Message != nil
+}
+
+func (v *DetectionEvent) Message() string {
+	if v.data.Message == nil {
+		return ""
+	}
+	return *v.data.Message
+}
+
+func (v *DetectionEvent) SetMessage(message string) {
+	v.data.Message = &message
+}
+
+func (v *DetectionEvent) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *DetectionEvent) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *DetectionEvent) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *DetectionEvent) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type analysisResultData struct {
+	Stack           *string           `cbor:"0,keyasint,omitempty" json:"stack,omitempty"`
+	Services        *[]ServiceInfo    `cbor:"1,keyasint,omitempty" json:"services,omitempty"`
+	WorkingDir      *string           `cbor:"2,keyasint,omitempty" json:"working_dir,omitempty"`
+	Entrypoint      *string           `cbor:"3,keyasint,omitempty" json:"entrypoint,omitempty"`
+	AppName         *string           `cbor:"4,keyasint,omitempty" json:"app_name,omitempty"`
+	BuildDockerfile *string           `cbor:"5,keyasint,omitempty" json:"build_dockerfile,omitempty"`
+	EnvVars         *[]string         `cbor:"6,keyasint,omitempty" json:"env_vars,omitempty"`
+	Events          *[]DetectionEvent `cbor:"7,keyasint,omitempty" json:"events,omitempty"`
+}
+
+type AnalysisResult struct {
+	data analysisResultData
+}
+
+func (v *AnalysisResult) HasStack() bool {
+	return v.data.Stack != nil
+}
+
+func (v *AnalysisResult) Stack() string {
+	if v.data.Stack == nil {
+		return ""
+	}
+	return *v.data.Stack
+}
+
+func (v *AnalysisResult) SetStack(stack string) {
+	v.data.Stack = &stack
+}
+
+func (v *AnalysisResult) HasServices() bool {
+	return v.data.Services != nil
+}
+
+func (v *AnalysisResult) Services() *[]ServiceInfo {
+	return v.data.Services
+}
+
+func (v *AnalysisResult) SetServices(services *[]ServiceInfo) {
+	v.data.Services = services
+}
+
+func (v *AnalysisResult) HasWorkingDir() bool {
+	return v.data.WorkingDir != nil
+}
+
+func (v *AnalysisResult) WorkingDir() string {
+	if v.data.WorkingDir == nil {
+		return ""
+	}
+	return *v.data.WorkingDir
+}
+
+func (v *AnalysisResult) SetWorkingDir(working_dir string) {
+	v.data.WorkingDir = &working_dir
+}
+
+func (v *AnalysisResult) HasEntrypoint() bool {
+	return v.data.Entrypoint != nil
+}
+
+func (v *AnalysisResult) Entrypoint() string {
+	if v.data.Entrypoint == nil {
+		return ""
+	}
+	return *v.data.Entrypoint
+}
+
+func (v *AnalysisResult) SetEntrypoint(entrypoint string) {
+	v.data.Entrypoint = &entrypoint
+}
+
+func (v *AnalysisResult) HasAppName() bool {
+	return v.data.AppName != nil
+}
+
+func (v *AnalysisResult) AppName() string {
+	if v.data.AppName == nil {
+		return ""
+	}
+	return *v.data.AppName
+}
+
+func (v *AnalysisResult) SetAppName(app_name string) {
+	v.data.AppName = &app_name
+}
+
+func (v *AnalysisResult) HasBuildDockerfile() bool {
+	return v.data.BuildDockerfile != nil
+}
+
+func (v *AnalysisResult) BuildDockerfile() string {
+	if v.data.BuildDockerfile == nil {
+		return ""
+	}
+	return *v.data.BuildDockerfile
+}
+
+func (v *AnalysisResult) SetBuildDockerfile(build_dockerfile string) {
+	v.data.BuildDockerfile = &build_dockerfile
+}
+
+func (v *AnalysisResult) HasEnvVars() bool {
+	return v.data.EnvVars != nil
+}
+
+func (v *AnalysisResult) EnvVars() *[]string {
+	return v.data.EnvVars
+}
+
+func (v *AnalysisResult) SetEnvVars(env_vars *[]string) {
+	v.data.EnvVars = env_vars
+}
+
+func (v *AnalysisResult) HasEvents() bool {
+	return v.data.Events != nil
+}
+
+func (v *AnalysisResult) Events() *[]DetectionEvent {
+	return v.data.Events
+}
+
+func (v *AnalysisResult) SetEvents(events *[]DetectionEvent) {
+	v.data.Events = events
+}
+
+func (v *AnalysisResult) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *AnalysisResult) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *AnalysisResult) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *AnalysisResult) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
 type streamRecvArgsData struct {
 	Count *int32 `cbor:"0,keyasint,omitempty" json:"count,omitempty"`
 }
@@ -449,6 +733,71 @@ func (v *BuilderBuildFromTarResults) UnmarshalJSON(data []byte) error {
 	return json.Unmarshal(data, &v.data)
 }
 
+type builderAnalyzeAppArgsData struct {
+	Tardata *rpc.Capability `cbor:"0,keyasint,omitempty" json:"tardata,omitempty"`
+}
+
+type BuilderAnalyzeAppArgs struct {
+	call rpc.Call
+	data builderAnalyzeAppArgsData
+}
+
+func (v *BuilderAnalyzeAppArgs) HasTardata() bool {
+	return v.data.Tardata != nil
+}
+
+func (v *BuilderAnalyzeAppArgs) Tardata() *stream.RecvStreamClient[[]byte] {
+	if v.data.Tardata == nil {
+		return nil
+	}
+	return &stream.RecvStreamClient[[]byte]{Client: v.call.NewClient(v.data.Tardata)}
+}
+
+func (v *BuilderAnalyzeAppArgs) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *BuilderAnalyzeAppArgs) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *BuilderAnalyzeAppArgs) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *BuilderAnalyzeAppArgs) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type builderAnalyzeAppResultsData struct {
+	Result **AnalysisResult `cbor:"0,keyasint,omitempty" json:"result,omitempty"`
+}
+
+type BuilderAnalyzeAppResults struct {
+	call rpc.Call
+	data builderAnalyzeAppResultsData
+}
+
+func (v *BuilderAnalyzeAppResults) SetResult(result **AnalysisResult) {
+	v.data.Result = result
+}
+
+func (v *BuilderAnalyzeAppResults) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *BuilderAnalyzeAppResults) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *BuilderAnalyzeAppResults) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *BuilderAnalyzeAppResults) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
 type BuilderBuildFromTar struct {
 	rpc.Call
 	args    BuilderBuildFromTarArgs
@@ -475,8 +824,35 @@ func (t *BuilderBuildFromTar) Results() *BuilderBuildFromTarResults {
 	return results
 }
 
+type BuilderAnalyzeApp struct {
+	rpc.Call
+	args    BuilderAnalyzeAppArgs
+	results BuilderAnalyzeAppResults
+}
+
+func (t *BuilderAnalyzeApp) Args() *BuilderAnalyzeAppArgs {
+	args := &t.args
+	if args.call != nil {
+		return args
+	}
+	args.call = t.Call
+	t.Call.Args(args)
+	return args
+}
+
+func (t *BuilderAnalyzeApp) Results() *BuilderAnalyzeAppResults {
+	results := &t.results
+	if results.call != nil {
+		return results
+	}
+	results.call = t.Call
+	t.Call.Results(results)
+	return results
+}
+
 type Builder interface {
 	BuildFromTar(ctx context.Context, state *BuilderBuildFromTar) error
+	AnalyzeApp(ctx context.Context, state *BuilderAnalyzeApp) error
 }
 
 type reexportBuilder struct {
@@ -484,6 +860,10 @@ type reexportBuilder struct {
 }
 
 func (reexportBuilder) BuildFromTar(ctx context.Context, state *BuilderBuildFromTar) error {
+	panic("not implemented")
+}
+
+func (reexportBuilder) AnalyzeApp(ctx context.Context, state *BuilderAnalyzeApp) error {
 	panic("not implemented")
 }
 
@@ -499,6 +879,14 @@ func AdaptBuilder(t Builder) *rpc.Interface {
 			Index:         0,
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.BuildFromTar(ctx, &BuilderBuildFromTar{Call: call})
+			},
+		},
+		{
+			Name:          "analyzeApp",
+			InterfaceName: "Builder",
+			Index:         0,
+			Handler: func(ctx context.Context, call rpc.Call) error {
+				return t.AnalyzeApp(ctx, &BuilderAnalyzeApp{Call: call})
 			},
 		},
 	}
@@ -565,4 +953,36 @@ func (v BuilderClient) BuildFromTar(ctx context.Context, application string, tar
 	}
 
 	return &BuilderClientBuildFromTarResults{client: v.Client, data: ret}, nil
+}
+
+type BuilderClientAnalyzeAppResults struct {
+	client rpc.Client
+	data   builderAnalyzeAppResultsData
+}
+
+func (v *BuilderClientAnalyzeAppResults) HasResult() bool {
+	return v.data.Result != nil
+}
+
+func (v *BuilderClientAnalyzeAppResults) Result() *AnalysisResult {
+	return *v.data.Result
+}
+
+func (v BuilderClient) AnalyzeApp(ctx context.Context, tardata stream.RecvStream[[]byte]) (*BuilderClientAnalyzeAppResults, error) {
+	args := BuilderAnalyzeAppArgs{}
+	caps := map[rpc.OID]*rpc.InlineCapability{}
+	{
+		ic, oid, c := v.NewInlineCapability(stream.AdaptRecvStream[[]byte](tardata), tardata)
+		args.data.Tardata = c
+		caps[oid] = ic
+	}
+
+	var ret builderAnalyzeAppResultsData
+
+	err := v.CallWithCaps(ctx, "analyzeApp", &args, &ret, caps)
+	if err != nil {
+		return nil, err
+	}
+
+	return &BuilderClientAnalyzeAppResults{client: v.Client, data: ret}, nil
 }
