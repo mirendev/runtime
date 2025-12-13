@@ -20,9 +20,9 @@ import (
 	"github.com/quic-go/quic-go"
 	"github.com/quic-go/quic-go/http3"
 	"github.com/quic-go/quic-go/qlog"
+	"github.com/quic-go/webtransport-go"
 	"miren.dev/runtime/pkg/packet"
 	"miren.dev/runtime/pkg/slogfmt"
-	"miren.dev/runtime/pkg/webtransport"
 )
 
 var (
@@ -55,6 +55,18 @@ func init() {
 
 	DefaultTransport.QUICConfig = &DefaultQUICConfig
 }
+
+// closedPacketConn is a stub net.PacketConn that returns net.ErrClosed on all operations.
+// Used to trigger webtransport.Server initialization without actually serving connections.
+type closedPacketConn struct{}
+
+func (closedPacketConn) ReadFrom([]byte) (int, net.Addr, error) { return 0, nil, net.ErrClosed }
+func (closedPacketConn) WriteTo([]byte, net.Addr) (int, error)  { return 0, net.ErrClosed }
+func (closedPacketConn) Close() error                           { return nil }
+func (closedPacketConn) LocalAddr() net.Addr                    { return &net.UDPAddr{} }
+func (closedPacketConn) SetDeadline(time.Time) error            { return nil }
+func (closedPacketConn) SetReadDeadline(time.Time) error        { return nil }
+func (closedPacketConn) SetWriteDeadline(time.Time) error       { return nil }
 
 type StateCommon struct {
 	top context.Context
@@ -429,7 +441,10 @@ func (s *State) startListener(ctx context.Context, so *stateOptions) error {
 
 	s.ws = &webtransport.Server{
 		H3: http3.Server{
-			Handler: s.server,
+			Handler:         s.server,
+			EnableDatagrams: true,
+			QUICConfig:      &s.qc,
+			TLSConfig:       s.serverTlsCfg,
 			// Use a logger with LevelWarn to suppress noisy debug messages from quic-go
 			// while preventing nil pointer panics
 			Logger: slog.New(slogfmt.NewTextHandler(os.Stderr, &slog.HandlerOptions{
@@ -449,10 +464,10 @@ func (s *State) startListener(ctx context.Context, so *stateOptions) error {
 		s.hs.Shutdown(context.Background())
 	}()
 
-	err = s.ws.Init()
-	if err != nil {
-		return err
-	}
+	// Trigger webtransport server initialization by calling Serve with a stub PacketConn.
+	// This sets up the stream hijackers on H3 without actually serving connections.
+	// The stub returns net.ErrClosed immediately, causing Serve to return after init.
+	_ = s.ws.Serve(closedPacketConn{})
 
 	go s.hs.ServeListener(s.li)
 

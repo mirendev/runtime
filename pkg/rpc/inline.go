@@ -7,14 +7,14 @@ import (
 	"sync"
 
 	"github.com/fxamacker/cbor/v2"
+	"github.com/quic-go/webtransport-go"
 	"miren.dev/runtime/pkg/cond"
-	"miren.dev/runtime/pkg/webtransport"
 )
 
 const inlineStreamPoolSize = 10
 
 type streamConn struct {
-	stream webtransport.Stream
+	stream *webtransport.Stream
 	enc    *cbor.Encoder
 	dec    *cbor.Decoder
 }
