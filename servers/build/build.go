@@ -464,7 +464,14 @@ func (b *Builder) BuildFromTar(ctx context.Context, state *build_v1alpha.Builder
 
 	// Check if stack is supported before launching buildkit
 	if buildStack.Stack == "auto" {
-		_, err := stackbuild.DetectStack(buildStack.CodeDir)
+		detectOpts := stackbuild.BuildOptions{
+			Log:         b.Log,
+			Name:        name,
+			OnBuild:     buildStack.OnBuild,
+			Version:     buildStack.Version,
+			AlpineImage: buildStack.AlpineImage,
+		}
+		_, err := stackbuild.DetectStack(buildStack.CodeDir, detectOpts)
 		if err != nil {
 			b.Log.Error("stack detection failed", "error", err, "app", name, "codeDir", buildStack.CodeDir)
 			b.sendErrorStatus(ctx, status, "No supported stack detected for app %s: %v", name, err)
