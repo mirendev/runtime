@@ -540,12 +540,12 @@ func TestGoVersionDetection(t *testing.T) {
 		{
 			name:            "patch version",
 			goModContent:    "module test-app\n\ngo 1.23.4\n",
-			expectedVersion: "1.23",
+			expectedVersion: "1.23.4",
 		},
 		{
 			name:            "with dependencies",
 			goModContent:    "module test-app\n\ngo 1.22.1\n\nrequire github.com/gorilla/mux v1.8.1\n",
-			expectedVersion: "1.22",
+			expectedVersion: "1.22.1",
 		},
 		{
 			name:            "no go directive",

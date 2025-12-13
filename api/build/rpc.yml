@@ -41,6 +41,74 @@ types:
         index: 2
         doc: Cloud-provisioned DNS hostname for the cluster (if registered with Miren Cloud)
 
+  - type: ServiceInfo
+    doc: Information about a service detected in the app
+    fields:
+      - name: name
+        type: string
+        index: 0
+        doc: Service name (e.g., web, worker)
+      - name: command
+        type: string
+        index: 1
+        doc: Command to run for this service
+      - name: source
+        type: string
+        index: 2
+        doc: Where the command came from (procfile, app_config, image)
+
+  - type: DetectionEvent
+    doc: An event detected during app analysis
+    fields:
+      - name: kind
+        type: string
+        index: 0
+        doc: Event kind (file, package, framework, config, script, dir)
+      - name: name
+        type: string
+        index: 1
+        doc: Name of the detected item (e.g., Gemfile, rails, puma)
+      - name: message
+        type: string
+        index: 2
+        doc: Human-readable description of what was detected
+
+  - type: AnalysisResult
+    doc: Result of analyzing an app without building it
+    fields:
+      - name: stack
+        type: string
+        index: 0
+        doc: Detected stack name (e.g., go, node, python, dockerfile)
+      - name: services
+        type: '[]ServiceInfo'
+        index: 1
+        doc: Services detected from Procfile, app.toml, or image
+      - name: working_dir
+        type: string
+        index: 2
+        doc: Working directory (from Dockerfile WORKDIR or stack default)
+      - name: entrypoint
+        type: string
+        index: 3
+        doc: Entrypoint command (from stack or image ENTRYPOINT)
+      - name: app_name
+        type: string
+        index: 4
+        doc: App name from app.toml if present
+      - name: build_dockerfile
+        type: string
+        index: 5
+        doc: Dockerfile path if using dockerfile build
+      - name: env_vars
+        type: '[]string'
+        index: 6
+        doc: Environment variable keys defined in app.toml (values not included for security)
+      - name: events
+        type: '[]DetectionEvent'
+        index: 7
+        doc: Detection events from stack analysis
+
 interfaces:
   - name: Stream
     methods:
@@ -68,4 +136,13 @@ interfaces:
           - name: access_info
             type: '*AccessInfo'
             doc: Information about how to access the deployed app
+
+      - name: analyzeApp
+        doc: Analyze an app without building it, returning detected stack, services, and configuration
+        parameters:
+          - name: tardata
+            type: stream.RecvStream[[]byte]
+        results:
+          - name: result
+            type: '*AnalysisResult'
 

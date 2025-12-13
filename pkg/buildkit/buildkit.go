@@ -333,16 +333,18 @@ func (b *Buildkit) BuildImage(
 		solveOpt.FrontendAttrs = opts.frontendAttrs
 		solveOpt.FrontendAttrs["filename"] = bs.Input
 	} else {
-		stack, err := stackbuild.DetectStack(bs.CodeDir)
+		buildOpts := stackbuild.BuildOptions{
+			OnBuild:     bs.OnBuild,
+			Version:     bs.Version,
+			AlpineImage: bs.AlpineImage,
+		}
+
+		stack, err := stackbuild.DetectStack(bs.CodeDir, buildOpts)
 		if err != nil {
 			return nil, err
 		}
 
-		state, err := stack.GenerateLLB(bs.CodeDir, stackbuild.BuildOptions{
-			OnBuild:     bs.OnBuild,
-			Version:     bs.Version,
-			AlpineImage: bs.AlpineImage,
-		})
+		state, err := stack.GenerateLLB(bs.CodeDir, buildOpts)
 		if err != nil {
 			return nil, err
 		}

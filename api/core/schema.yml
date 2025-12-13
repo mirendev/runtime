@@ -157,6 +157,9 @@ kinds:
         entrypoint:
           type: string
           doc: The container entrypoint command
+        start_directory:
+          type: string
+          doc: Directory to start the process in (defaults to /app)
         commands:
           type: component
           doc: The command to run for a specific service type

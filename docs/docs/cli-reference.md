@@ -11,7 +11,16 @@ The Miren CLI (`miren`) provides commands for managing applications and deployme
 ### Deployment
 
 - `miren deploy` - Deploy the current project
+- `miren deploy --analyze` - Analyze the project without deploying (dry-run)
 - `miren init` - Initialize a new application
+
+#### Deploy Options
+
+| Flag | Description |
+|------|-------------|
+| `--analyze` | Analyze the app without building or deploying. Shows detected stack, services, and configuration. |
+| `--force` | Force deployment even if no changes detected |
+| `--wait` | Wait for deployment to complete |
 
 ### Server Install
 

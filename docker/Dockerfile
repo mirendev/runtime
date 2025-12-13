@@ -11,11 +11,20 @@ RUN apt-get update && apt-get install -y \
 # Set working directory
 WORKDIR /build
 
+# Copy go.mod and go.sum first for better layer caching
+COPY go.mod go.sum ./
+
+# Download dependencies with cache mount
+RUN --mount=type=cache,target=/go/pkg/mod \
+    go mod download
+
 # Copy source code
 COPY . .
 
-# Build miren
-RUN make bin/miren
+# Build miren with cache mounts for modules and build artifacts
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    make bin/miren
 
 # Runtime stage
 FROM ubuntu:24.04

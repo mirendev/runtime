@@ -3,8 +3,10 @@ package build
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
+	"net/http"
 	"os"
 	"strings"
 	"sync"
@@ -23,6 +25,11 @@ type Buildkit struct {
 	Client *client.Client
 
 	Log *slog.Logger
+
+	// RegistryURLOverride is used for fetching image configs when the push URL
+	// is not accessible from the current host (e.g., in tests where push goes to
+	// a docker network address but fetch needs localhost:port)
+	RegistryURLOverride string
 }
 
 type tarOutput struct {
@@ -274,8 +281,47 @@ type ImageConfig struct {
 }
 
 type BuildResult struct {
-	Entrypoint     string
+	Entrypoint     string // The entrypoint (from stack or image ENTRYPOINT)
+	Command        string // The command (from image CMD)
 	ManifestDigest string
+	WorkingDir     string
+}
+
+// fetchImageConfigFromRegistry fetches the image config JSON from a registry using the config digest.
+// imageURL is like "registry:5000/repo:tag" and configDigest is like "sha256:abc123..."
+func fetchImageConfigFromRegistry(imageURL, configDigest string) ([]byte, error) {
+	// Parse the image URL to extract registry and repository
+	// Format: [registry/]repository[:tag]
+	parts := strings.SplitN(imageURL, "/", 2)
+	if len(parts) < 2 {
+		return nil, fmt.Errorf("invalid image URL format: %s", imageURL)
+	}
+
+	registry := parts[0]
+	repoWithTag := parts[1]
+
+	// Remove tag from repository
+	repo := strings.Split(repoWithTag, ":")[0]
+
+	// Fetch the config blob from the registry
+	// Try HTTP first (for insecure registries), fall back to HTTPS
+	url := fmt.Sprintf("http://%s/v2/%s/blobs/%s", registry, repo, configDigest)
+	resp, err := http.Get(url)
+	if err != nil {
+		// Try HTTPS
+		url = fmt.Sprintf("https://%s/v2/%s/blobs/%s", registry, repo, configDigest)
+		resp, err = http.Get(url)
+		if err != nil {
+			return nil, fmt.Errorf("failed to fetch config from registry: %w", err)
+		}
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("registry returned status %d for config fetch", resp.StatusCode)
+	}
+
+	return io.ReadAll(resp.Body)
 }
 
 func (b *Buildkit) BuildImage(
@@ -323,22 +369,30 @@ func (b *Buildkit) BuildImage(
 		solveOpt.FrontendAttrs = opts.frontendAttrs
 		solveOpt.FrontendAttrs["filename"] = bs.Input
 	} else {
-		stack, err := stackbuild.DetectStack(bs.CodeDir)
-		if err != nil {
-			return nil, err
-		}
-
-		state, err := stack.GenerateLLB(bs.CodeDir, stackbuild.BuildOptions{
+		buildOpts := stackbuild.BuildOptions{
 			Name:        app,
 			OnBuild:     bs.OnBuild,
 			Version:     bs.Version,
 			AlpineImage: bs.AlpineImage,
-		})
+		}
+
+		stack, err := stackbuild.DetectStack(bs.CodeDir, buildOpts)
+		if err != nil {
+			return nil, err
+		}
+
+		state, err := stack.GenerateLLB(bs.CodeDir, buildOpts)
 		if err != nil {
 			return nil, err
 		}
 
 		res.Entrypoint = stack.Entrypoint()
+
+		if wc := stack.WebCommand(); wc != "" {
+			res.Command = wc
+		}
+
+		res.WorkingDir = stack.Image().Config.WorkingDir
 
 		def, err = state.Marshal(ctx)
 		if err != nil {
@@ -393,16 +447,6 @@ func (b *Buildkit) BuildImage(
 			Attrs: e.Attrs,
 		}
 	}
-
-	// not using shared context to not disrupt display but let is finish reporting errors
-	//pw, err := progresswriter.NewPrinter(ctx, os.Stderr, "rawjson")
-	//if err != nil {
-	//return nil, err
-	//}
-
-	//mw := progresswriter.NewMultiWriter(pw)
-
-	//mw.Status()
 
 	b.Log.Info("building from fs walker", "ref", ref)
 
@@ -484,6 +528,53 @@ func (b *Buildkit) BuildImage(
 	if err == nil && buildResp != nil && buildResp.ExporterResponse != nil {
 		if digest, ok := buildResp.ExporterResponse["containerimage.digest"]; ok {
 			res.ManifestDigest = digest
+		}
+
+		// Extract working directory from image config for Dockerfile builds
+		var configJSON string
+		if cfg, ok := buildResp.ExporterResponse["containerimage.config"]; ok {
+			// Config is directly available in response
+			configJSON = cfg
+		} else if configDigest, ok := buildResp.ExporterResponse["containerimage.config.digest"]; ok {
+			// Config needs to be fetched from registry
+			fetchURL := imageURL
+			if b.RegistryURLOverride != "" {
+				// Use override URL for fetching (e.g., localhost:port in tests)
+				// Extract the repository path from imageURL and combine with override registry
+				parts := strings.SplitN(imageURL, "/", 2)
+				if len(parts) == 2 {
+					fetchURL = b.RegistryURLOverride + "/" + parts[1]
+				}
+			}
+			b.Log.Debug("fetching config from registry", "digest", configDigest, "fetchURL", fetchURL)
+			configBytes, fetchErr := fetchImageConfigFromRegistry(fetchURL, configDigest)
+			if fetchErr != nil {
+				b.Log.Warn("failed to fetch config from registry", "error", fetchErr)
+			} else {
+				configJSON = string(configBytes)
+			}
+		}
+
+		if configJSON != "" {
+			var imgConfig struct {
+				Config struct {
+					WorkingDir string   `json:"WorkingDir"`
+					Entrypoint []string `json:"Entrypoint"`
+					Cmd        []string `json:"Cmd"`
+				} `json:"config"`
+			}
+			if err := json.Unmarshal([]byte(configJSON), &imgConfig); err == nil {
+				res.WorkingDir = imgConfig.Config.WorkingDir
+				if res.Entrypoint == "" {
+					res.Entrypoint = buildImageCommand(imgConfig.Config.Entrypoint, nil)
+				}
+
+				if res.Command == "" {
+					res.Command = buildImageCommand(imgConfig.Config.Cmd, nil)
+				}
+			} else {
+				b.Log.Warn("failed to parse image config", "error", err)
+			}
 		}
 	}
 

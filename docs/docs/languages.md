@@ -58,19 +58,32 @@ worker: bundle exec sidekiq
 
 ## Python
 
-**Detection:** Presence of `requirements.txt`, `Pipfile`, or `pyproject.toml`
+**Detection:** Presence of `requirements.txt`, `Pipfile`, `pyproject.toml`, or `uv.lock`
 
 **Default Version:** 3.11
 
-Miren supports three Python dependency management systems, detected in priority order.
+Miren supports four Python dependency management systems, detected in priority order.
 
 ### Dependency Management
 
 | File | Package Manager | Install Command |
 |------|-----------------|-----------------|
-| `requirements.txt` | pip | `pip install -r requirements.txt` |
 | `Pipfile` | pipenv | `pipenv install --deploy` |
+| `uv.lock` | uv | `uv sync --frozen` |
 | `pyproject.toml` | poetry | `poetry install --no-root` |
+| `requirements.txt` | pip | `pip install -r requirements.txt` |
+
+### Framework Detection
+
+Miren automatically detects popular Python web frameworks and configures the start command:
+
+| Framework | Detection | Start Command |
+|-----------|-----------|---------------|
+| FastAPI | `fastapi` in dependencies | `fastapi run` |
+| Django | `django` in dependencies | `gunicorn` or `uvicorn` |
+| Flask | `flask` in dependencies | `gunicorn` |
+| Gunicorn | `gunicorn` in dependencies | `gunicorn` |
+| Uvicorn | `uvicorn` in dependencies | `uvicorn` |
 
 ### Example Procfile
 
@@ -80,6 +93,12 @@ web: gunicorn app:app --bind 0.0.0.0:$PORT
 
 # pip with uvicorn (FastAPI/Starlette)
 web: uvicorn main:app --host 0.0.0.0 --port $PORT
+
+# FastAPI (auto-detected)
+web: fastapi run
+
+# uv
+web: uv run gunicorn app:app --bind 0.0.0.0:$PORT
 
 # Pipenv
 web: pipenv run gunicorn app:app --bind 0.0.0.0:$PORT
@@ -201,6 +220,55 @@ worker: /bin/app -mode=worker
 
 # Scheduler
 scheduler: /bin/app -mode=scheduler
+```
+
+---
+
+## Rust
+
+**Detection:** Presence of `Cargo.toml`
+
+**Default Version:** 1.83
+
+Miren builds Rust applications using Cargo and produces a single binary at `/bin/app`.
+
+### Build Process
+
+1. Uses the official Rust base image
+2. Runs `cargo build --release`
+3. Copies the binary to `/bin/app`
+
+### Binary Name Detection
+
+Miren reads your `Cargo.toml` to determine the binary name:
+
+1. Uses the `[[bin]]` name if specified
+2. Falls back to the package name from `[package]`
+
+### Example Procfile
+
+```
+# Run the compiled binary
+web: /bin/app
+
+# With environment-based port
+web: /bin/app
+
+# Background worker
+worker: /bin/app --mode worker
+```
+
+### Example Cargo.toml
+
+```toml
+[package]
+name = "myapp"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+axum = "0.7"
+tokio = { version = "1", features = ["full"] }
 ```
 
 ---

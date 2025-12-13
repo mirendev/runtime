@@ -254,6 +254,12 @@ func (l *Launcher) buildSandboxSpec(
 		LogAttribute: types.LabelSet("stage", "app-run", "service", serviceName),
 	}
 
+	// Determine start directory, defaulting to /app
+	startDir := ver.Config.StartDirectory
+	if startDir == "" {
+		startDir = "/app"
+	}
+
 	appCont := compute_v1alpha.SandboxSpecContainer{
 		Name:  "app",
 		Image: image,
@@ -261,7 +267,7 @@ func (l *Launcher) buildSandboxSpec(
 			"MIREN_APP=" + appMD.Name,
 			"MIREN_VERSION=" + ver.Version,
 		},
-		Directory: "/app",
+		Directory: startDir,
 	}
 
 	// Determine port configuration from service config, falling back to global config, then defaults
