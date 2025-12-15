@@ -827,7 +827,8 @@ func (t *trace) update(s *client.SolveStatus, termWidth int) {
 
 func (t *trace) printErrorLogs(f io.Writer) {
 	for _, v := range t.vertexes {
-		if v.Error != "" && !strings.HasSuffix(v.Error, context.Canceled.Error()) {
+		if v.Error != "" && !strings.HasSuffix(v.Error, context.Canceled.Error()) &&
+			!isCacheImportError(v.Name, v.Error) {
 			fmt.Fprintln(f, "------")
 			fmt.Fprintf(f, " > %s:\n", v.Name)
 			// tty keeps original logs
@@ -891,6 +892,9 @@ func (t *trace) displayInfo() (d displayInfo) {
 			if strings.HasSuffix(v.Error, context.Canceled.Error()) {
 				j.isCanceled = true
 				j.name = "CANCELED " + j.name
+			} else if isCacheImportError(v.Name, v.Error) {
+				// Cache import failures are expected when no cached image exists yet
+				// Don't mark these as errors in the UI
 			} else {
 				j.hasError = true
 				j.name = "ERROR " + j.name

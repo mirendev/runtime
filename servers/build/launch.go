@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"maps"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -19,8 +20,9 @@ import (
 )
 
 type LaunchBuildkit struct {
-	log *slog.Logger
-	eac *entityserver_v1alpha.EntityAccessClient
+	log      *slog.Logger
+	eac      *entityserver_v1alpha.EntityAccessClient
+	dataPath string
 }
 
 type RunningBuildkit struct {
@@ -164,6 +166,20 @@ func (l *LaunchBuildkit) Launch(ctx context.Context, addr string, lo ...LaunchOp
 		Host: "cluster.local",
 		Ip:   addr,
 	})
+
+	// Add a persistent host volume for BuildKit state
+	// This allows BuildKit's internal layer cache to persist across builds
+	// Using explicit path under {dataPath}/buildkit to match other system services
+	buildkitDataPath := filepath.Join(l.dataPath, "buildkit")
+	sb.Spec.Volume = append(sb.Spec.Volume, compute_v1alpha.SandboxSpecVolume{
+		Name:     "buildkit-data",
+		Provider: "host",
+		Labels: types.Labels{
+			{Key: "path", Value: buildkitDataPath},
+			{Key: "create", Value: "true"},
+		},
+	})
+
 	l.log.Debug("configuring buildkit container", "image", imagerefs.BuildKit)
 	config := l.generateConfig()
 	l.log.Debug("generated buildkit config", "configSize", len(config))
@@ -176,6 +192,13 @@ func (l *LaunchBuildkit) Launch(ctx context.Context, addr string, lo ...LaunchOp
 				Port: 3000,
 				Name: "http",
 				Type: "http",
+			},
+		},
+		// Mount the persistent volume for BuildKit's internal state
+		Mount: []compute_v1alpha.SandboxSpecContainerMount{
+			{
+				Source:      "buildkit-data",
+				Destination: "/var/lib/buildkit",
 			},
 		},
 		ConfigFile: []compute_v1alpha.SandboxSpecContainerConfigFile{

@@ -21,6 +21,20 @@ const minProgressDelta = 0.05 // %
 
 const logsBufferSize = 10
 
+// isCacheImportError checks if a vertex error is a cache import failure.
+// Cache import failures are expected when no cached image exists yet and should
+// not be displayed as errors. We check both the vertex name (which describes
+// the operation) and the error message for robustness.
+func isCacheImportError(name, errMsg string) bool {
+	// Check if this is a cache import operation
+	if !strings.HasPrefix(name, "importing cache manifest from") {
+		return false
+	}
+	// Verify the error indicates a missing cache (not some other failure)
+	return strings.Contains(errMsg, "not found") ||
+		strings.Contains(errMsg, "does not exist")
+}
+
 type lastStatus struct {
 	Current   int64
 	Timestamp time.Time
@@ -183,6 +197,10 @@ func (p *textMux) printVtx(t *trace, dgst digest.Digest) {
 		if v.Error != "" {
 			if strings.HasSuffix(v.Error, context.Canceled.Error()) {
 				fmt.Fprintf(p.w, "#%d CANCELED\n", v.index)
+			} else if isCacheImportError(v.Name, v.Error) {
+				// Cache import failures are expected when no cached image exists yet
+				// Show as skipped rather than error
+				fmt.Fprintf(p.w, "#%d DONE (cache not found)\n", v.index)
 			} else {
 				fmt.Fprintf(p.w, "#%d ERROR: %s\n", v.index, v.Error)
 			}

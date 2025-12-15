@@ -12,8 +12,9 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/moby/buildkit/client"
-	"github.com/moby/buildkit/util/progress/progresswriter"
 	"golang.org/x/term"
+
+	"miren.dev/runtime/pkg/progress/progresswriter"
 
 	"miren.dev/runtime/api/build/build_v1alpha"
 	"miren.dev/runtime/api/deployment/deployment_v1alpha"
@@ -578,6 +579,10 @@ func createBuildStatusCallback(
 			// Extract error messages from status
 			for _, vertex := range status.Vertexes {
 				if vertex.Error != "" {
+					// Skip cache import errors - these are expected when no cached image exists
+					if isCacheImportError(vertex.Name, vertex.Error) {
+						continue
+					}
 					*buildErrors = append(*buildErrors, vertex.Error)
 				}
 			}
@@ -616,6 +621,17 @@ func createBuildStatusCallback(
 
 		return nil
 	})
+}
+
+// isCacheImportError checks if a vertex error is a cache import failure.
+// Cache import failures are expected when no cached image exists yet and should
+// not be treated as build errors.
+func isCacheImportError(name, errMsg string) bool {
+	if !strings.HasPrefix(name, "importing cache manifest from") {
+		return false
+	}
+	return strings.Contains(errMsg, "not found") ||
+		strings.Contains(errMsg, "does not exist")
 }
 
 // displayAccessInfo shows how to access the deployed app using server-provided access info

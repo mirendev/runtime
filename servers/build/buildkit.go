@@ -362,23 +362,16 @@ func (b *Buildkit) BuildImage(
 
 	solveOpt.Exports = []client.ExportEntry{output}
 
-	if opts.cacheDir != "" {
-		solveOpt.CacheImports = []client.CacheOptionsEntry{
-			{
-				Type: "local",
-				Attrs: map[string]string{
-					"src": opts.cacheDir,
-				},
+	// Use registry-based inline caching: import cache from the image we're building
+	// (if it exists from a previous build). The BUILDKIT_INLINE_CACHE=1 build arg
+	// ensures cache metadata is embedded in the exported image.
+	solveOpt.CacheImports = []client.CacheOptionsEntry{
+		{
+			Type: "registry",
+			Attrs: map[string]string{
+				"ref": imageURL,
 			},
-		}
-		solveOpt.CacheExports = []client.CacheOptionsEntry{
-			{
-				Type: "local",
-				Attrs: map[string]string{
-					"dest": opts.cacheDir,
-				},
-			},
-		}
+		},
 	}
 
 	sreq := gateway.SolveRequest{

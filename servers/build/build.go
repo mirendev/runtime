@@ -8,7 +8,6 @@ import (
 	"log/slog"
 	"maps"
 	"os"
-	"path/filepath"
 	"slices"
 	"strings"
 	"time"
@@ -42,12 +41,13 @@ type Builder struct {
 	TempDir       string
 	Registry      string
 	DNSHostname   string // Cloud-provisioned DNS hostname for default route display
+	DataPath      string // Base data path for persistent storage
 
 	Resolver  netresolve.Resolver
 	LogWriter observability.LogWriter
 }
 
-func NewBuilder(log *slog.Logger, eas *entityserver_v1alpha.EntityAccessClient, appClient *app.Client, res netresolve.Resolver, tmpdir string, logWriter observability.LogWriter, dnsHostname string) *Builder {
+func NewBuilder(log *slog.Logger, eas *entityserver_v1alpha.EntityAccessClient, appClient *app.Client, res netresolve.Resolver, tmpdir string, logWriter observability.LogWriter, dnsHostname string, dataPath string) *Builder {
 	return &Builder{
 		Log:           log.With("module", "builder"),
 		EAS:           eas,
@@ -58,6 +58,7 @@ func NewBuilder(log *slog.Logger, eas *entityserver_v1alpha.EntityAccessClient, 
 		ec:            entityserver.NewClient(log, eas),
 		LogWriter:     logWriter,
 		DNSHostname:   dnsHostname,
+		DataPath:      dataPath,
 	}
 }
 
@@ -476,17 +477,10 @@ func (b *Builder) BuildFromTar(ctx context.Context, state *build_v1alpha.Builder
 	// Now we know the stack is valid, proceed with buildkit setup
 	b.Log.Debug("setting up buildkit")
 
-	cacheDir := filepath.Join(b.TempDir, "buildkit-cache")
-	b.Log.Debug("creating buildkit cache directory", "path", cacheDir)
-	if err := os.MkdirAll(cacheDir, 0755); err != nil {
-		b.Log.Error("failed to create buildkit cache directory", "error", err, "path", cacheDir)
-		b.sendErrorStatus(ctx, status, "Failed to create buildkit cache directory: %v", err)
-		return fmt.Errorf("failed to create buildkit cache directory: %w", err)
-	}
-
 	lbk := &LaunchBuildkit{
-		log: b.Log.With("module", "launchbuildkit"),
-		eac: b.EAS,
+		log:      b.Log.With("module", "launchbuildkit"),
+		eac:      b.EAS,
+		dataPath: b.DataPath,
 	}
 	b.Log.Debug("created LaunchBuildkit instance")
 
@@ -551,7 +545,6 @@ func (b *Builder) BuildFromTar(ctx context.Context, state *build_v1alpha.Builder
 	var tos []TransformOptions
 
 	tos = append(tos,
-		WithCacheDir(cacheDir),
 		WithBuildArg("MIREN_VERSION", mrv.Version),
 	)
 

@@ -607,7 +607,7 @@ func (c *Coordinator) Start(ctx context.Context) error {
 	// Create app client for the builder
 	appClient := appclient.NewClient(c.Log, loopback)
 
-	bs := build.NewBuilder(c.Log, eac, appClient, c.Resolver, c.TempDir, c.LogWriter, c.CloudAuth.DNSHostname)
+	bs := build.NewBuilder(c.Log, eac, appClient, c.Resolver, c.TempDir, c.LogWriter, c.CloudAuth.DNSHostname, c.DataPath)
 	server.ExposeValue("dev.miren.runtime/build", build_v1alpha.AdaptBuilder(bs))
 
 	ai := app.NewAppInfo(c.Log, ec, c.Cpu, c.Mem, c.HTTP)
