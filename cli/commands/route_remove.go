@@ -6,10 +6,8 @@ import (
 )
 
 func RouteRemove(ctx *Context, opts struct {
+	Host string `position:"0" usage:"Hostname of the route to remove"`
 	ConfigCentric
-	Args struct {
-		Host string `positional-arg-name:"host" description:"Hostname of the route to remove"`
-	} `positional-args:"yes"`
 }) error {
 	client, err := ctx.RPCClient("entities")
 	if err != nil {
@@ -18,7 +16,7 @@ func RouteRemove(ctx *Context, opts struct {
 
 	ic := ingress.NewClient(ctx.Log, client)
 
-	host := opts.Args.Host
+	host := opts.Host
 
 	// If no host provided, show interactive picker
 	if host == "" {

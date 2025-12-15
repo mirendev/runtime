@@ -9,12 +9,9 @@ import (
 )
 
 func DebugCtr(ctx *Context, opts struct {
-	Namespace string `short:"n" long:"namespace" description:"containerd namespace" default:"miren"`
-	Socket    string `long:"socket" description:"path to containerd socket"`
-
-	Rest struct {
-		Args []string
-	} `positional-args:"yes"`
+	Namespace string   `short:"n" long:"namespace" description:"containerd namespace" default:"miren"`
+	Socket    string   `long:"socket" description:"path to containerd socket"`
+	Args      []string `rest:"true"`
 }) error {
 	socket := opts.Socket
 	if socket == "" {
@@ -27,7 +24,7 @@ func DebugCtr(ctx *Context, opts struct {
 	}
 
 	args := []string{"ctr", "-a", socket, "-n", opts.Namespace}
-	args = append(args, opts.Rest.Args...)
+	args = append(args, opts.Args...)
 
 	env := os.Environ()
 

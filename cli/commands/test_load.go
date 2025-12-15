@@ -57,9 +57,7 @@ func TestLoad(ctx *Context, opts struct {
 	DisableKeepAlives  bool `long:"disable-keepalives" description:"Disable keep-alives"`
 	DisableRedirects   bool `long:"disable-redirects" description:"Disable redirects"`
 
-	Rest struct {
-		URL string `positional-arg-name:"URL" required:"yes"`
-	} `positional-args:"yes"`
+	URL string `position:"0" usage:"URL to load test" required:"true"`
 }) error {
 	if opts.CPUS != nil {
 		runtime.GOMAXPROCS(*opts.CPUS)
@@ -131,7 +129,7 @@ func TestLoad(ctx *Context, opts struct {
 		}
 	}
 
-	req, err := http.NewRequest(opts.Method, opts.Rest.URL, nil)
+	req, err := http.NewRequest(opts.Method, opts.URL, nil)
 	if err != nil {
 		return fmt.Errorf("could not create the request: %w", err)
 	}

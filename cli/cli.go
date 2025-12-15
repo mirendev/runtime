@@ -4,25 +4,37 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 
-	"github.com/mitchellh/cli"
+	"miren.dev/mflags"
 	"miren.dev/runtime/cli/commands"
 	"miren.dev/runtime/version"
 )
 
 func Run(args []string) int {
-	c := cli.NewCLI("miren", version.Version)
-	c.Commands = commands.AllCommands()
-	c.HiddenCommands = commands.HiddenCommands()
-	c.Args = args[1:]
+	d := mflags.NewDispatcher("miren")
 
-	exitStatus, err := c.Run()
+	commands.RegisterAll(d)
+
+	err := d.Execute(args[1:])
 	if err != nil {
-		if !errors.Is(err, context.Canceled) {
-			fmt.Printf("ERROR: %s\n", err)
-			return 1
+		if errors.Is(err, context.Canceled) {
+			return 0
 		}
+
+		// Check for ErrExitCode
+		if exitErr, ok := err.(commands.ErrExitCode); ok {
+			return int(exitErr)
+		}
+
+		fmt.Fprintf(os.Stderr, "ERROR: %s\n", err)
+		return 1
 	}
 
-	return exitStatus
+	return 0
+}
+
+// Version returns the version string
+func Version() string {
+	return version.Version
 }

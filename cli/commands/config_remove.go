@@ -5,11 +5,9 @@ import (
 )
 
 func ConfigRemove(ctx *Context, opts struct {
+	Cluster string `position:"0" usage:"Name of the cluster to remove"`
+	Force   bool   `short:"f" long:"force" description:"Force removal without confirmation"`
 	ConfigCentric
-	Force bool `short:"f" long:"force" description:"Force removal without confirmation"`
-	Args  struct {
-		Cluster string `positional-arg-name:"cluster" description:"Name of the cluster to remove"`
-	} `positional-args:"yes"`
 }) error {
 	cfg, err := opts.LoadConfig()
 	if err != nil {
@@ -21,7 +19,7 @@ func ConfigRemove(ctx *Context, opts struct {
 		return fmt.Errorf("cannot remove the last cluster")
 	}
 
-	clusterName := opts.Args.Cluster
+	clusterName := opts.Cluster
 
 	// If no cluster name provided, show interactive menu
 	if clusterName == "" {

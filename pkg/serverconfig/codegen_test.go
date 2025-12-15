@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/jessevdk/go-flags"
+	"miren.dev/mflags"
 )
 
 func TestGeneratedCode(t *testing.T) {
@@ -48,9 +48,13 @@ func TestCLIFlagsStructure(t *testing.T) {
 }
 
 func TestCLIFlagsParsing(t *testing.T) {
-	// Test that go-flags can parse our CLI structure
+	// Test that mflags can parse our CLI structure
 	var opts CLIFlags
-	parser := flags.NewParser(&opts, flags.Default)
+	fs := mflags.NewFlagSet("serverconfig")
+	err := fs.FromStruct(&opts)
+	if err != nil {
+		t.Fatalf("failed to create flagset from struct: %v", err)
+	}
 
 	args := []string{
 		"--mode=distributed",
@@ -59,7 +63,7 @@ func TestCLIFlagsParsing(t *testing.T) {
 		"--etcd-client-port=2379",
 	}
 
-	_, err := parser.ParseArgs(args)
+	err = fs.Parse(args)
 	if err != nil {
 		t.Fatalf("failed to parse flags: %v", err)
 	}

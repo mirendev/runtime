@@ -8,11 +8,9 @@ import (
 )
 
 func RouteSet(ctx *Context, opts struct {
+	Host string `position:"0" usage:"Hostname for the route (e.g., example.com)" required:"true"`
+	App  string `position:"1" usage:"Application name to route to" required:"true"`
 	ConfigCentric
-	Args struct {
-		Host string `positional-arg-name:"host" description:"Hostname for the route (e.g., example.com)" required:"true"`
-		App  string `positional-arg-name:"app" description:"Application name to route to" required:"true"`
-	} `positional-args:"yes"`
 }) error {
 	client, err := ctx.RPCClient("entities")
 	if err != nil {
@@ -21,18 +19,18 @@ func RouteSet(ctx *Context, opts struct {
 
 	// Look up the app by name
 	appClient := app.NewClient(ctx.Log, client)
-	appEntity, err := appClient.GetByName(ctx, opts.Args.App)
+	appEntity, err := appClient.GetByName(ctx, opts.App)
 	if err != nil {
-		return fmt.Errorf("failed to find app %q: %w", opts.Args.App, err)
+		return fmt.Errorf("failed to find app %q: %w", opts.App, err)
 	}
 
 	// Create/update the route
 	ic := ingress.NewClient(ctx.Log, client)
-	_, err = ic.SetRoute(ctx, opts.Args.Host, appEntity.ID)
+	_, err = ic.SetRoute(ctx, opts.Host, appEntity.ID)
 	if err != nil {
 		return err
 	}
 
-	ctx.Printf("Route set: %s → %s\n", opts.Args.Host, opts.Args.App)
+	ctx.Printf("Route set: %s → %s\n", opts.Host, opts.App)
 	return nil
 }

@@ -8,10 +8,8 @@ import (
 )
 
 func RouteSetDefault(ctx *Context, opts struct {
+	App string `position:"0" usage:"Application name to set as default route" required:"true"`
 	ConfigCentric
-	Args struct {
-		App string `positional-arg-name:"app" description:"Application name to set as default route" required:"true"`
-	} `positional-args:"yes"`
 }) error {
 	cl, err := ctx.RPCClient("entities")
 	if err != nil {
@@ -21,9 +19,9 @@ func RouteSetDefault(ctx *Context, opts struct {
 	ingressClient := ingress.NewClient(ctx.Log, cl)
 
 	// Get the app to ensure it exists
-	app, err := appClient.GetByName(ctx, opts.Args.App)
+	app, err := appClient.GetByName(ctx, opts.App)
 	if err != nil {
-		return fmt.Errorf("failed to get app %s: %w", opts.Args.App, err)
+		return fmt.Errorf("failed to get app %s: %w", opts.App, err)
 	}
 
 	ctx.Log.Info("setting default route", "app", app.ID)
@@ -33,6 +31,6 @@ func RouteSetDefault(ctx *Context, opts struct {
 		return fmt.Errorf("failed to set default route: %w", err)
 	}
 
-	ctx.Printf("Set default route to: %s\n", opts.Args.App)
+	ctx.Printf("Set default route to: %s\n", opts.App)
 	return nil
 }

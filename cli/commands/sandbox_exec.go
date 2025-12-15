@@ -16,9 +16,7 @@ func SandboxExec(ctx *Context, opts struct {
 	ConfigCentric
 	Id string `short:"i" long:"id" description:"Sandbox ID" default:"miren-sandbox"`
 
-	Rest struct {
-		Args []string
-	} `positional-args:"yes"`
+	Args []string `rest:"true"`
 }) error {
 	cl, err := ctx.RPCClient("dev.miren.runtime/exec")
 	if err != nil {
@@ -37,7 +35,7 @@ func SandboxExec(ctx *Context, opts struct {
 		out io.Writer
 	)
 
-	opt.SetCommand(opts.Rest.Args)
+	opt.SetCommand(opts.Args)
 
 	if con := console.Current(); con != nil {
 		in = con
@@ -88,7 +86,7 @@ func SandboxExec(ctx *Context, opts struct {
 	res, err := sec.Exec(
 		ctx,
 		"id", opts.Id,
-		strings.Join(opts.Rest.Args, " "),
+		strings.Join(opts.Args, " "),
 		opt,
 		input, output,
 		winUS,
