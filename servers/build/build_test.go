@@ -1217,7 +1217,7 @@ func TestBuildVersionConfig(t *testing.T) {
 			},
 		},
 		{
-			name: "entrypoint and command are combined for web service",
+			name: "command takes precedence over entrypoint for web service",
 			inputs: ConfigInputs{
 				BuildResult: &BuildResult{
 					Entrypoint: "node",
@@ -1232,7 +1232,7 @@ func TestBuildVersionConfig(t *testing.T) {
 				require.Len(t, cfg.Services, 1, "should have one service")
 				assert.Equal(t, "web", cfg.Services[0].Name)
 				require.Len(t, cfg.Commands, 1, "should have one command")
-				assert.Equal(t, "node server.js", cfg.Commands[0].Command)
+				assert.Equal(t, "server.js", cfg.Commands[0].Command)
 			},
 		},
 	}

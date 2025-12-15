@@ -272,12 +272,16 @@ func buildVersionConfig(inputs ConfigInputs) core_v1alpha.Config {
 		cfg.StartDirectory = "/app"
 	}
 
-	// If no web service defined in app config or Procfile, but we have an entrypoint or command,
+	// If no web service defined in app config or Procfile, but we have a command or entrypoint,
 	// create a synthetic Procfile entry for web service
 	hasWebInAppConfig := ac != nil && ac.Services["web"] != nil && ac.Services["web"].Command != ""
 	hasWebInProcfile := procfileServices != nil && procfileServices["web"] != ""
 	if !hasWebInAppConfig && !hasWebInProcfile && res != nil {
+		// Use Command if available, otherwise fall back to Entrypoint
 		webCmd := res.Command
+		if webCmd == "" {
+			webCmd = res.Entrypoint
+		}
 		if webCmd != "" {
 			if procfileServices == nil {
 				procfileServices = make(map[string]string)
