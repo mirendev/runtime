@@ -413,7 +413,7 @@ func (s *RubyStack) GenerateLLB(dir string, opts BuildOptions) (*llb.State, erro
 	h := &highlevelBuilder{opts}
 
 	// My kingdom for a pipe operator.
-	base = h.aptInstall(base, "build-essential", "libpq-dev", "nodejs", "libyaml-dev", "postgresql-client")
+	base = h.aptInstall(base, "build-essential", "libpq-dev", "nodejs", "libyaml-dev", "postgresql-client", "git", "curl", "ssh")
 
 	base = base.
 		AddEnv("SECRET_KEY_BASE_DUMMY", "1").
@@ -679,6 +679,8 @@ func (s *PythonStack) GenerateLLB(dir string, opts BuildOptions) (*llb.State, er
 			llb.AddMount("/root/.cache/pip", pipCache, llb.AsPersistentCacheDir("pip", llb.CacheMountShared)),
 			llb.WithCustomName("[phase] Installing Python pipenv"),
 		).Root()
+
+		state = state.File(llb.Mkdir("/home/app/.cache", 0777, llb.WithParents(true)))
 
 		// Install pipenv and dependencies with cache
 		state = state.Dir("/app").Run(

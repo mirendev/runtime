@@ -420,7 +420,7 @@ func TestBun(t *testing.T) {
 				"express": "^4.18.2"
 			}
 		}`,
-		"bun.lockb": "", // Binary file, empty is fine for test
+		"bun.lock": "", // Binary file, empty is fine for test
 	}
 
 	for name, content := range files {
@@ -569,4 +569,418 @@ func TestGoVersionDetection(t *testing.T) {
 			require.Equal(t, tc.expectedVersion, version)
 		})
 	}
+}
+
+func TestRust(t *testing.T) {
+	if !checkDocker() {
+		t.Skip("Docker not available")
+	}
+
+	root := t.TempDir()
+	dir := setupTestDir(root, t)
+
+	files := map[string]string{
+		"Cargo.toml":  readFile(t, "rust/Cargo.toml"),
+		"Cargo.lock":  readFile(t, "rust/Cargo.lock"),
+		"src/main.rs": readFile(t, "rust/main.rs"),
+	}
+
+	// Create src directory
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "src"), 0755))
+
+	for name, content := range files {
+		require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(content), 0644))
+	}
+
+	stack := &RustStack{
+		MetaStack: MetaStack{
+			dir: dir,
+		},
+	}
+	state, err := stack.GenerateLLB(dir, BuildOptions{Version: "1"})
+	require.NoError(t, err)
+
+	buildLLB(t, dir, state, func(r io.Reader) {
+		m, err := tarx.TarToMap(r)
+		require.NoError(t, err)
+		data, ok := m["bin/app"]
+		require.True(t, ok)
+		require.NotEmpty(t, data)
+	})
+}
+
+func TestPythonUv(t *testing.T) {
+	if !checkDocker() {
+		t.Skip("Docker not available")
+	}
+
+	root := t.TempDir()
+	dir := setupTestDir(root, t)
+
+	files := map[string]string{
+		"pyproject.toml": readFile(t, "python-uv/pyproject.toml"),
+		"uv.lock":        readFile(t, "python-uv/uv.lock"),
+	}
+
+	for name, content := range files {
+		require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(content), 0644))
+	}
+
+	stack := &PythonStack{
+		MetaStack: MetaStack{
+			dir: dir,
+		},
+	}
+
+	// Verify uv is detected
+	require.True(t, stack.Detect())
+
+	state, err := stack.GenerateLLB(dir, BuildOptions{Version: "3.11"})
+	require.NoError(t, err)
+
+	buildLLB(t, dir, state)
+}
+
+func TestRubyWebCommand(t *testing.T) {
+	testCases := []struct {
+		name     string
+		files    map[string]string
+		expected string
+	}{
+		{
+			name: "rails app",
+			files: map[string]string{
+				"Gemfile":          "gem 'rails'\n",
+				"Gemfile.lock":     "rails (7.0.0)\n",
+				"config/routes.rb": "",
+			},
+			expected: "rails server -b 0.0.0.0 -p $PORT",
+		},
+		{
+			name: "puma with config",
+			files: map[string]string{
+				"Gemfile":        "gem 'puma'\n",
+				"Gemfile.lock":   "puma (6.0.0)\n",
+				"config/puma.rb": "# puma config",
+			},
+			expected: "puma -C config/puma.rb",
+		},
+		{
+			name: "puma without config",
+			files: map[string]string{
+				"Gemfile":      "gem 'puma'\n",
+				"Gemfile.lock": "puma (6.0.0)\n",
+			},
+			expected: "puma -b tcp://0.0.0.0 -p $PORT",
+		},
+		{
+			name: "unicorn",
+			files: map[string]string{
+				"Gemfile":      "gem 'unicorn'\n",
+				"Gemfile.lock": "unicorn (6.0.0)\n",
+			},
+			expected: "unicorn -p $PORT",
+		},
+		{
+			name: "rack app with config.ru",
+			files: map[string]string{
+				"Gemfile":      "gem 'sinatra'\n",
+				"Gemfile.lock": "sinatra (3.0.0)\n",
+				"config.ru":    "run Sinatra::Application",
+			},
+			expected: "rackup -p $PORT",
+		},
+		{
+			name: "no web server",
+			files: map[string]string{
+				"Gemfile":      "gem 'nokogiri'\n",
+				"Gemfile.lock": "nokogiri (1.0.0)\n",
+			},
+			expected: "",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+
+			// Create config directory if needed
+			for name := range tc.files {
+				if filepath.Dir(name) != "." {
+					require.NoError(t, os.MkdirAll(filepath.Join(dir, filepath.Dir(name)), 0755))
+				}
+			}
+
+			for name, content := range tc.files {
+				require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(content), 0644))
+			}
+
+			stack := &RubyStack{
+				MetaStack: MetaStack{
+					dir: dir,
+				},
+			}
+			require.True(t, stack.Detect())
+			stack.Init(BuildOptions{})
+
+			require.Equal(t, tc.expected, stack.WebCommand())
+		})
+	}
+}
+
+func TestPythonWebCommand(t *testing.T) {
+	testCases := []struct {
+		name     string
+		files    map[string]string
+		expected string
+	}{
+		{
+			name: "fastapi with main.py",
+			files: map[string]string{
+				"requirements.txt": "fastapi\nuvicorn\n",
+				"main.py":          "from fastapi import FastAPI\napp = FastAPI()",
+			},
+			expected: "fastapi run main.py --host 0.0.0.0 --port $PORT",
+		},
+		{
+			name: "fastapi with app.py",
+			files: map[string]string{
+				"requirements.txt": "fastapi\nuvicorn\n",
+				"app.py":           "from fastapi import FastAPI\napp = FastAPI()",
+			},
+			expected: "fastapi run app.py --host 0.0.0.0 --port $PORT",
+		},
+		{
+			name: "gunicorn with wsgi module",
+			files: map[string]string{
+				"requirements.txt":  "gunicorn\ndjango\n",
+				"manage.py":         "",
+				"myapp/wsgi.py":     "application = get_wsgi_application()",
+				"myapp/__init__.py": "",
+			},
+			expected: "gunicorn myapp.wsgi:application -b 0.0.0.0:$PORT",
+		},
+		{
+			name: "uvicorn with main.py",
+			files: map[string]string{
+				"requirements.txt": "uvicorn\nstarlette\n",
+				"main.py":          "from starlette.applications import Starlette\napp = Starlette()",
+			},
+			expected: "uvicorn main:app --host 0.0.0.0 --port $PORT",
+		},
+		{
+			name: "flask",
+			files: map[string]string{
+				"requirements.txt": "flask\n",
+				"app.py":           "from flask import Flask\napp = Flask(__name__)",
+			},
+			expected: "flask run --host=0.0.0.0 --port=$PORT",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+
+			// Create subdirectories if needed
+			for name := range tc.files {
+				if filepath.Dir(name) != "." {
+					require.NoError(t, os.MkdirAll(filepath.Join(dir, filepath.Dir(name)), 0755))
+				}
+			}
+
+			for name, content := range tc.files {
+				require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(content), 0644))
+			}
+
+			stack := &PythonStack{
+				MetaStack: MetaStack{
+					dir: dir,
+				},
+			}
+			require.True(t, stack.Detect())
+			stack.Init(BuildOptions{})
+
+			require.Equal(t, tc.expected, stack.WebCommand())
+		})
+	}
+}
+
+func TestNodeWebCommand(t *testing.T) {
+	testCases := []struct {
+		name     string
+		files    map[string]string
+		expected string
+	}{
+		{
+			name: "npm with start script",
+			files: map[string]string{
+				"package.json":      `{"name": "app", "scripts": {"start": "node index.js"}}`,
+				"package-lock.json": "{}",
+			},
+			expected: "npm run start",
+		},
+		{
+			name: "yarn with start script",
+			files: map[string]string{
+				"package.json": `{"name": "app", "scripts": {"start": "node index.js"}}`,
+				"yarn.lock":    "",
+			},
+			expected: "yarn start",
+		},
+		{
+			name: "npm with serve script",
+			files: map[string]string{
+				"package.json":      `{"name": "app", "scripts": {"serve": "node server.js"}}`,
+				"package-lock.json": "{}",
+			},
+			expected: "npm run serve",
+		},
+		{
+			name: "npm with server script",
+			files: map[string]string{
+				"package.json":      `{"name": "app", "scripts": {"server": "node server.js"}}`,
+				"package-lock.json": "{}",
+			},
+			expected: "npm run server",
+		},
+		{
+			name: "npm with main entry point",
+			files: map[string]string{
+				"package.json":      `{"name": "app", "main": "index.js"}`,
+				"package-lock.json": "{}",
+				"index.js":          "",
+			},
+			expected: "node index.js",
+		},
+		{
+			name: "npm with typescript entry point",
+			files: map[string]string{
+				"package.json":      `{"name": "app", "main": "index.ts"}`,
+				"package-lock.json": "{}",
+				"index.ts":          "",
+			},
+			expected: "npx tsx index.ts",
+		},
+		{
+			name: "no scripts or entry point",
+			files: map[string]string{
+				"package.json":      `{"name": "app"}`,
+				"package-lock.json": "{}",
+			},
+			expected: "",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+
+			for name, content := range tc.files {
+				require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(content), 0644))
+			}
+
+			stack := &NodeStack{
+				MetaStack: MetaStack{
+					dir: dir,
+				},
+			}
+			require.True(t, stack.Detect())
+			stack.Init(BuildOptions{})
+
+			require.Equal(t, tc.expected, stack.WebCommand())
+		})
+	}
+}
+
+func TestBunWebCommand(t *testing.T) {
+	testCases := []struct {
+		name     string
+		files    map[string]string
+		expected string
+	}{
+		{
+			name: "bun with start script",
+			files: map[string]string{
+				"package.json": `{"name": "app", "scripts": {"start": "bun index.ts"}}`,
+				"bun.lock":     "",
+			},
+			expected: "bun run start",
+		},
+		{
+			name: "bun with serve script",
+			files: map[string]string{
+				"package.json": `{"name": "app", "scripts": {"serve": "bun server.ts"}}`,
+				"bun.lock":     "",
+			},
+			expected: "bun run serve",
+		},
+		{
+			name: "bun with main entry point",
+			files: map[string]string{
+				"package.json": `{"name": "app", "main": "index.ts"}`,
+				"bun.lock":     "",
+				"index.ts":     "",
+			},
+			expected: "bun index.ts",
+		},
+		{
+			name: "bun no scripts or entry point",
+			files: map[string]string{
+				"package.json": `{"name": "app"}`,
+				"bun.lock":     "",
+			},
+			expected: "",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+
+			for name, content := range tc.files {
+				require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(content), 0644))
+			}
+
+			stack := &BunStack{
+				MetaStack: MetaStack{
+					dir: dir,
+				},
+			}
+			require.True(t, stack.Detect())
+			stack.Init(BuildOptions{})
+
+			require.Equal(t, tc.expected, stack.WebCommand())
+		})
+	}
+}
+
+func TestGoWebCommand(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module test-app\n\ngo 1.23\n"), 0644))
+
+	stack := &GoStack{
+		MetaStack: MetaStack{
+			dir: dir,
+		},
+	}
+	require.True(t, stack.Detect())
+	stack.Init(BuildOptions{})
+
+	require.Equal(t, "/bin/app", stack.WebCommand())
+}
+
+func TestRustWebCommand(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "Cargo.toml"), []byte("[package]\nname = \"test-app\"\nversion = \"0.1.0\"\n"), 0644))
+
+	stack := &RustStack{
+		MetaStack: MetaStack{
+			dir: dir,
+		},
+	}
+	require.True(t, stack.Detect())
+	stack.Init(BuildOptions{})
+
+	require.Equal(t, "/bin/app", stack.WebCommand())
 }

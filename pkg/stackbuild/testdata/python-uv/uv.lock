@@ -1,0 +1,26 @@
+version = 1
+requires-python = ">=3.11"
+
+[[package]]
+name = "certifi"
+version = "2024.2.2"
+
+[[package]]
+name = "charset-normalizer"
+version = "3.3.2"
+
+[[package]]
+name = "idna"
+version = "3.6"
+
+[[package]]
+name = "requests"
+version = "2.31.0"
+
+[[package]]
+name = "test-app"
+version = "0.1.0"
+
+[[package]]
+name = "urllib3"
+version = "2.2.0"
