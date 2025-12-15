@@ -10,6 +10,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/moby/buildkit/client"
 	"github.com/moby/buildkit/client/llb"
@@ -289,7 +290,8 @@ type BuildResult struct {
 
 // fetchImageConfigFromRegistry fetches the image config JSON from a registry using the config digest.
 // imageURL is like "registry:5000/repo:tag" and configDigest is like "sha256:abc123..."
-func fetchImageConfigFromRegistry(imageURL, configDigest string) ([]byte, error) {
+// If insecure is true, falls back to HTTP if HTTPS fails (for local/test registries).
+func fetchImageConfigFromRegistry(ctx context.Context, imageURL, configDigest string, insecure bool) ([]byte, error) {
 	// Parse the image URL to extract registry and repository
 	// Format: [registry/]repository[:tag]
 	parts := strings.SplitN(imageURL, "/", 2)
@@ -303,22 +305,46 @@ func fetchImageConfigFromRegistry(imageURL, configDigest string) ([]byte, error)
 	// Remove tag from repository
 	repo := strings.Split(repoWithTag, ":")[0]
 
-	// Fetch the config blob from the registry
-	// Try HTTP first (for insecure registries), fall back to HTTPS
-	url := fmt.Sprintf("http://%s/v2/%s/blobs/%s", registry, repo, configDigest)
-	resp, err := http.Get(url)
-	if err != nil {
-		// Try HTTPS
-		url = fmt.Sprintf("https://%s/v2/%s/blobs/%s", registry, repo, configDigest)
-		resp, err = http.Get(url)
-		if err != nil {
-			return nil, fmt.Errorf("failed to fetch config from registry: %w", err)
+	httpClient := &http.Client{
+		Timeout: 10 * time.Second,
+	}
+
+	// Try HTTPS first
+	url := fmt.Sprintf("https://%s/v2/%s/blobs/%s", registry, repo, configDigest)
+	body, err := doRegistryFetch(ctx, httpClient, url)
+	if err == nil {
+		return body, nil
+	}
+
+	// Fall back to HTTP only if insecure flag is explicitly set
+	if insecure {
+		url = fmt.Sprintf("http://%s/v2/%s/blobs/%s", registry, repo, configDigest)
+		body, err = doRegistryFetch(ctx, httpClient, url)
+		if err == nil {
+			return body, nil
 		}
 	}
-	defer resp.Body.Close()
+
+	return nil, fmt.Errorf("failed to fetch config from registry: %w", err)
+}
+
+// doRegistryFetch performs an HTTP GET request with the given context and client.
+func doRegistryFetch(ctx context.Context, client *http.Client, url string) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	if resp.Body != nil {
+		defer resp.Body.Close()
+	}
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("registry returned status %d for config fetch", resp.StatusCode)
+		return nil, fmt.Errorf("registry returned status %d", resp.StatusCode)
 	}
 
 	return io.ReadAll(resp.Body)
@@ -547,7 +573,9 @@ func (b *Buildkit) BuildImage(
 				}
 			}
 			b.Log.Debug("fetching config from registry", "digest", configDigest, "fetchURL", fetchURL)
-			configBytes, fetchErr := fetchImageConfigFromRegistry(fetchURL, configDigest)
+			// Use insecure (HTTP fallback) when RegistryURLOverride is set (test/local registries)
+			insecure := b.RegistryURLOverride != ""
+			configBytes, fetchErr := fetchImageConfigFromRegistry(ctx, fetchURL, configDigest, insecure)
 			if fetchErr != nil {
 				b.Log.Warn("failed to fetch config from registry", "error", fetchErr)
 			} else {

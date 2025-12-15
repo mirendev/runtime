@@ -974,7 +974,8 @@ func (b *Builder) AnalyzeApp(ctx context.Context, state *build_v1alpha.BuilderAn
 	var detectedStack stackbuild.Stack
 
 	// Check for Dockerfile.miren first
-	if _, err := tr.Open("Dockerfile.miren"); err == nil {
+	if f, err := tr.Open("Dockerfile.miren"); err == nil {
+		f.Close()
 		stackName = "dockerfile"
 		result.SetBuildDockerfile("Dockerfile.miren")
 	} else if ac != nil && ac.Build != nil && ac.Build.Dockerfile != "" {
@@ -1108,7 +1109,7 @@ func determineServiceSource(serviceName, command string, ac *appconfig.AppConfig
 	if buildResult != nil {
 		webCmd := buildResult.Command
 		if serviceName == "web" && command == webCmd {
-			return "infer"
+			return "stack"
 		}
 	}
 

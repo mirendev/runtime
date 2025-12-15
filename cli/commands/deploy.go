@@ -298,6 +298,8 @@ func Deploy(ctx *Context, opts struct {
 		return err
 	}
 
+	defer r.Close()
+
 	var (
 		cb      stream.SendStream[*build_v1alpha.Status]
 		results *build_v1alpha.BuilderClientBuildFromTarResults
@@ -818,6 +820,8 @@ func analyzeApp(ctx *Context, bc *build_v1alpha.BuilderClient, dir string) error
 	if err != nil {
 		return fmt.Errorf("failed to create tar: %w", err)
 	}
+
+	defer r.Close()
 
 	result, err := bc.AnalyzeApp(ctx, stream.ServeReader(ctx, r))
 	if err != nil {

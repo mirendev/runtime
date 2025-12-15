@@ -23,7 +23,7 @@ func ValidatePattern(pattern string) error {
 	return nil
 }
 
-func MakeTar(dir string, includePatterns []string) (io.Reader, error) {
+func MakeTar(dir string, includePatterns []string) (io.ReadCloser, error) {
 	r, w, err := os.Pipe()
 	if err != nil {
 		return nil, err
