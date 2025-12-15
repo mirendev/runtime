@@ -1488,10 +1488,21 @@ func (s *RustStack) GenerateLLB(dir string, opts BuildOptions) (*llb.State, erro
 		binaryName = "app"
 	}
 
+	// Cargo converts hyphens to underscores in binary names (e.g. my-app -> my_app)
+	normalizedName := strings.ReplaceAll(binaryName, "-", "_")
+
 	// Build the application and copy it out of the cache dir.
+	// Try the normalized name first (with underscores), then fall back to the original name.
+	var cpCmd string
+	if normalizedName != binaryName {
+		cpCmd = fmt.Sprintf("cp target/release/%s /bin/app 2>/dev/null || cp target/release/%s /bin/app", normalizedName, binaryName)
+	} else {
+		cpCmd = fmt.Sprintf("cp target/release/%s /bin/app", binaryName)
+	}
+
 	state = state.Dir("/app").Run(
 		llb.Args([]string{"/bin/sh", "-c",
-			fmt.Sprintf("cargo build --release && cp target/release/%s /bin/app", binaryName)}),
+			fmt.Sprintf("cargo build --release && %s", cpCmd)}),
 		h.CacheMount("/usr/local/cargo/registry"),
 		h.CacheMount("/app/target"),
 		llb.WithCustomName("[phase] Building Rust application"),
