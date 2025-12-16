@@ -1528,8 +1528,14 @@ func (c *SandboxController) bootContainers(
 
 		sl := c.logConsumer(sb, container.Name)
 
-		task, err := cc.NewTask(ctx, cio.NewCreator(
-			cio.WithStreams(nil, sl, sl.Stderr())))
+		// Build cio options based on container spec
+		var cioOpts []cio.Opt
+		if container.Tty {
+			cioOpts = append(cioOpts, cio.WithTerminal)
+		}
+		cioOpts = append(cioOpts, cio.WithStreams(nil, sl, sl.Stderr()))
+
+		task, err := cc.NewTask(ctx, cio.NewCreator(cioOpts...))
 		if err != nil {
 			c.cleanupContainers(ctx, createdContainers)
 			return nil, err
@@ -1856,6 +1862,10 @@ func (c *SandboxController) buildSubContainerSpec(
 			oci.WithWriteableCgroupfs,
 			oci.WithAddedCapabilities([]string{"CAP_SYS_ADMIN"}),
 		)
+	}
+
+	if co.Tty {
+		specOpts = append(specOpts, oci.WithTTY)
 	}
 
 	lbls := map[string]string{}

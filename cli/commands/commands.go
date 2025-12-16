@@ -39,6 +39,9 @@ func AllCommands() map[string]cli.CommandFactory {
 		"sandbox delete": func() (cli.Command, error) {
 			return Infer("sandbox delete", "Delete a dead sandbox", SandboxDelete), nil
 		},
+		"sandbox exec": func() (cli.Command, error) {
+			return Infer("sandbox exec", "Open interactive shell in an existing sandbox", SandboxExec), nil
+		},
 
 		"sandbox-pool list": func() (cli.Command, error) {
 			return Infer("sandbox-pool list", "List all sandbox pools", SandboxPoolList), nil
@@ -65,6 +68,10 @@ func AllCommands() map[string]cli.CommandFactory {
 
 		"app delete": func() (cli.Command, error) {
 			return Infer("app delete", "Delete an application and all its resources", AppDelete), nil
+		},
+
+		"app exec": func() (cli.Command, error) {
+			return Infer("app exec", "Open interactive shell in a new sandbox", AppExec), nil
 		},
 
 		"apps": func() (cli.Command, error) {

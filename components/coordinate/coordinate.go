@@ -313,6 +313,56 @@ func (c *Coordinator) NamedConfig(name string) (*clientconfig.Config, error) {
 	return clientconfig.Local(cc, c.Address), nil
 }
 
+// RunnerConfig returns a client config for a runner service with proper TLS certificate SANs.
+// The certificate will be valid for localhost and the runner's listen address.
+func (c *Coordinator) RunnerConfig(listenAddress string) (*clientconfig.Config, error) {
+	// Build list of IPs and DNS names for the certificate
+	ips := []net.IP{
+		net.ParseIP("127.0.0.1"),
+		net.ParseIP("::1"),
+	}
+	names := []string{"localhost"}
+
+	// Parse the listen address to extract host/IP
+	if listenAddress != "" {
+		host, _, err := net.SplitHostPort(listenAddress)
+		if err == nil && host != "" {
+			// Check if host is an IP address
+			if ip := net.ParseIP(host); ip != nil {
+				// Add to IPs if not already present
+				found := false
+				for _, existing := range ips {
+					if existing.Equal(ip) {
+						found = true
+						break
+					}
+				}
+				if !found {
+					ips = append(ips, ip)
+				}
+			} else {
+				// It's a hostname, add to DNS names if not already present
+				if host != "localhost" {
+					names = append(names, host)
+				}
+			}
+		}
+	}
+
+	cc, err := c.authority.IssueCertificate(caauth.Options{
+		CommonName:   "miren-runner",
+		Organization: "miren",
+		ValidFor:     1 * year,
+		IPs:          ips,
+		DNSNames:     names,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return clientconfig.Local(cc, c.Address), nil
+}
+
 func (c *Coordinator) IssueCertificate(name string) (*caauth.ClientCertificate, error) {
 	if c.authority == nil {
 		return nil, fmt.Errorf("CA authority not initialized")
@@ -601,7 +651,7 @@ func (c *Coordinator) Start(ctx context.Context) error {
 		return err
 	}
 
-	eps := execproxy.NewServer(c.Log, eac, rs, aa)
+	eps := execproxy.NewServer(c.Log, eac, rs)
 	server.ExposeValue("dev.miren.runtime/exec", exec_v1alpha.AdaptSandboxExec(eps))
 
 	// Create app client for the builder

@@ -87,7 +87,7 @@ func SandboxExec(ctx *Context, opts struct {
 
 	res, err := sec.Exec(
 		ctx,
-		"app", opts.Id,
+		"id", opts.Id,
 		strings.Join(opts.Rest.Args, " "),
 		opt,
 		input, output,

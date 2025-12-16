@@ -670,16 +670,17 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 	reg.Register("sandbox-pool-manager", spm)
 	reg.Register("resolver", res)
 
-	rcfg, err := co.NamedConfig("runner")
-	if err != nil {
-		return err
-	}
-
 	var rc runner.RunnerConfig
 
 	rc.Id = cfg.Server.GetRunnerID()
 	rc.ListenAddress = cfg.Server.GetRunnerAddress()
 	rc.Workers = runner.DefaulWorkers
+
+	// Use RunnerConfig to get a certificate with proper SANs for the runner's listen address
+	rcfg, err := co.RunnerConfig(rc.ListenAddress)
+	if err != nil {
+		return err
+	}
 	rc.Config = rcfg
 
 	// Pass cloud authentication config if available
