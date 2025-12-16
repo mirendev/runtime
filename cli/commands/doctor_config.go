@@ -3,9 +3,7 @@ package commands
 import (
 	"errors"
 	"fmt"
-	"strings"
 
-	"github.com/charmbracelet/lipgloss"
 	"miren.dev/runtime/clientconfig"
 )
 
@@ -28,12 +26,25 @@ func DoctorConfig(ctx *Context, opts struct {
 	ctx.Printf("%s  %s\n", infoLabel.Render("Format:"), "YAML")
 
 	if cfg != nil {
-		if leafConfigs := cfg.GetLeafConfigNames(); len(leafConfigs) > 0 {
-			formatted := make([]string, len(leafConfigs))
-			for i, name := range leafConfigs {
-				formatted[i] = lipgloss.NewStyle().Foreground(lipgloss.Color("6")).Render(fmt.Sprintf("clientconfig.d/%s.yaml", name))
+		// Show all configured clusters
+		activeCluster := cfg.ActiveCluster()
+		ctx.Printf("\n%s\n", infoLabel.Render("Clusters:"))
+		cfg.IterateClusters(func(name string, cluster *clientconfig.ClusterConfig) error {
+			if name == activeCluster {
+				ctx.Printf("  %s %s\n", infoGreen.Render(name), infoGray.Render("(active)"))
+			} else {
+				ctx.Printf("  %s\n", name)
 			}
-			ctx.Printf("%s  %s\n", infoLabel.Render("Leaf configs:"), strings.Join(formatted, ", "))
+			ctx.Printf("    %s %s\n", infoGray.Render("Address:"), cluster.Hostname)
+			return nil
+		})
+
+		if leafConfigs := cfg.GetLeafConfigNames(); len(leafConfigs) > 0 {
+			ctx.Printf("\n%s\n", infoLabel.Render("Leaf configs:"))
+			for _, name := range leafConfigs {
+				filename := fmt.Sprintf("clientconfig.d/%s.yaml", name)
+				ctx.Printf("  %s\n", infoGray.Render(filename))
+			}
 		}
 	}
 

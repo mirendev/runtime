@@ -4,6 +4,11 @@ package commands
 func DoctorAll(ctx *Context, opts struct {
 	ConfigCentric
 }) error {
+	if err := Doctor(ctx, opts); err != nil {
+		return err
+	}
+	ctx.Printf("\n")
+
 	if err := DoctorConfig(ctx, opts); err != nil {
 		return err
 	}

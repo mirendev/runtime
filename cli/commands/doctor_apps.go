@@ -2,19 +2,18 @@ package commands
 
 import (
 	"errors"
-	"net"
+	"fmt"
 	"sort"
-	"strings"
 	"time"
 
+	"miren.dev/runtime/api/compute/compute_v1alpha"
 	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
-	"miren.dev/runtime/api/ingress"
 	"miren.dev/runtime/clientconfig"
 	"miren.dev/runtime/pkg/ui"
 )
 
-// DoctorApps shows apps and their routes
+// DoctorApps shows diagnostic information about apps
 func DoctorApps(ctx *Context, opts struct {
 	ConfigCentric
 }) error {
@@ -33,7 +32,7 @@ func DoctorApps(ctx *Context, opts struct {
 		clusterName = opts.Cluster
 	}
 
-	cluster, err := cfg.GetCluster(clusterName)
+	_, err = cfg.GetCluster(clusterName)
 	if err != nil {
 		return err
 	}
@@ -43,16 +42,6 @@ func DoctorApps(ctx *Context, opts struct {
 		return err
 	}
 	defer client.Close()
-
-	// Get default hostname for display
-	defaultHost := ""
-	if cluster.Hostname != "" {
-		defaultHost = cluster.Hostname
-		// Strip port if present (handles IPv6)
-		if h, _, err := net.SplitHostPort(defaultHost); err == nil {
-			defaultHost = h
-		}
-	}
 
 	eac := entityserver_v1alpha.NewEntityAccessClient(client)
 
@@ -89,19 +78,27 @@ func DoctorApps(ctx *Context, opts struct {
 		return err
 	}
 
-	// Get routes
-	ic := ingress.NewClient(ctx.Log, client)
-	routes, err := ic.List(ctx)
+	// Get sandboxes for instance count
+	sandboxKindRes, err := eac.LookupKind(ctx, "sandbox")
 	if err != nil {
 		return err
 	}
 
-	// Build version map
+	sandboxesRes, err := eac.List(ctx, sandboxKindRes.Attr())
+	if err != nil {
+		return err
+	}
+
+	// Build version map (version ID -> app version, and version ID -> app name)
 	versionMap := make(map[string]*core_v1alpha.AppVersion)
+	versionToApp := make(map[string]string) // version ID -> app name
 	for _, e := range versionsRes.Values() {
 		v := new(core_v1alpha.AppVersion)
 		v.Decode(e.Entity())
 		versionMap[v.ID.String()] = v
+		// Extract app name from the app ref
+		appName := ui.CleanEntityID(v.App.String())
+		versionToApp[v.ID.String()] = appName
 	}
 
 	// Build deployment map (most recent deployment per app)
@@ -123,26 +120,27 @@ func DoctorApps(ctx *Context, opts struct {
 		}
 	}
 
-	// Build routes map (app name -> routes)
-	routeMap := make(map[string][]string)
-	for _, r := range routes {
-		appName := ui.CleanEntityID(string(r.Route.App))
-		host := r.Route.Host
-		if host == "" && r.Route.Default {
-			if defaultHost != "" {
-				host = defaultHost + " (default)"
-			} else {
-				host = "(default)"
-			}
+	// Build instance count map (app name -> running instance count)
+	instanceCount := make(map[string]int)
+	for _, e := range sandboxesRes.Values() {
+		var sandbox compute_v1alpha.Sandbox
+		sandbox.Decode(e.Entity())
+
+		// Only count running sandboxes
+		if sandbox.Status != compute_v1alpha.RUNNING {
+			continue
 		}
-		if host != "" {
-			routeMap[appName] = append(routeMap[appName], host)
+
+		// Get app name from version
+		versionID := sandbox.Spec.Version.String()
+		if appName, ok := versionToApp[versionID]; ok {
+			instanceCount[appName]++
 		}
 	}
 
 	// Build table
 	var rows []ui.Row
-	headers := []string{"NAME", "VERSION", "COMMIT", "STATUS", "DEPLOYED", "ROUTES"}
+	headers := []string{"NAME", "VERSION", "STATUS", "INSTANCES", "BRANCH", "ERROR"}
 
 	for _, e := range appsRes.Values() {
 		var app core_v1alpha.App
@@ -153,10 +151,18 @@ func DoctorApps(ctx *Context, opts struct {
 
 		name := md.Name
 		version := "-"
-		commit := "-"
 		status := "-"
-		deployed := "-"
-		routesDisplay := "-"
+		instances := "0"
+		branch := "-"
+		errorMsg := "-"
+
+		// Get instance count
+		if count, ok := instanceCount[md.Name]; ok {
+			instances = fmt.Sprintf("%d", count)
+			if count > 0 {
+				instances = infoGreen.Render(instances)
+			}
+		}
 
 		if app.ActiveVersion.String() != "" {
 			if appVersion, ok := versionMap[app.ActiveVersion.String()]; ok {
@@ -165,15 +171,6 @@ func DoctorApps(ctx *Context, opts struct {
 		}
 
 		if deployment, ok := deploymentMap[md.Name]; ok {
-			// Get commit SHA (short form)
-			if deployment.GitInfo.Sha != "" {
-				sha := deployment.GitInfo.Sha
-				if len(sha) > 7 {
-					sha = sha[:7]
-				}
-				commit = sha
-			}
-
 			// Get deployment status with color
 			if deployment.Status != "" {
 				switch deployment.Status {
@@ -188,32 +185,18 @@ func DoctorApps(ctx *Context, opts struct {
 				}
 			}
 
-			var deployedParts []string
-
-			if deployment.CompletedAt != "" {
-				if t, err := time.Parse(time.RFC3339, deployment.CompletedAt); err == nil {
-					deployedParts = append(deployedParts, humanFriendlyTimestamp(t))
-				}
+			// Get git branch
+			if deployment.GitInfo.Branch != "" {
+				branch = deployment.GitInfo.Branch
 			}
 
-			if deployment.DeployedBy.UserEmail != "" && deployment.DeployedBy.UserEmail != "user@example.com" {
-				email := deployment.DeployedBy.UserEmail
-				if atIdx := strings.Index(email, "@"); atIdx > 0 {
-					email = email[:atIdx]
-				}
-				deployedParts = append(deployedParts, "by "+email)
-			}
-
-			if len(deployedParts) > 0 {
-				deployed = strings.Join(deployedParts, " ")
+			// Get error message for failed deployments
+			if deployment.Status == "failed" && deployment.ErrorMessage != "" {
+				errorMsg = infoRed.Render(deployment.ErrorMessage)
 			}
 		}
 
-		if appRoutes, ok := routeMap[md.Name]; ok && len(appRoutes) > 0 {
-			routesDisplay = strings.Join(appRoutes, ", ")
-		}
-
-		rows = append(rows, ui.Row{name, version, commit, status, deployed, routesDisplay})
+		rows = append(rows, ui.Row{name, version, status, instances, branch, errorMsg})
 	}
 
 	sort.Slice(rows, func(i, j int) bool {
