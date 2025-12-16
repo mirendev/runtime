@@ -138,6 +138,22 @@ func loadConfigFile(path string, cfg *Config) error {
 
 func applyCLIFlags(cfg *Config, flags *CLIFlags) {
 
+	if flags.BuildkitConfigGcKeepDuration != nil && *flags.BuildkitConfigGcKeepDuration != "" {
+		cfg.Buildkit.GcKeepDuration = flags.BuildkitConfigGcKeepDuration
+	}
+
+	if flags.BuildkitConfigGcKeepStorage != nil && *flags.BuildkitConfigGcKeepStorage != "" {
+		cfg.Buildkit.GcKeepStorage = flags.BuildkitConfigGcKeepStorage
+	}
+
+	if flags.BuildkitConfigSocketDir != nil && *flags.BuildkitConfigSocketDir != "" {
+		cfg.Buildkit.SocketDir = flags.BuildkitConfigSocketDir
+	}
+
+	if flags.BuildkitConfigStartEmbedded != nil {
+		cfg.Buildkit.StartEmbedded = flags.BuildkitConfigStartEmbedded
+	}
+
 	if flags.Mode != nil && *flags.Mode != "" {
 		cfg.Mode = flags.Mode
 	}

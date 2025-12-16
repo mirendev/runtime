@@ -28,6 +28,7 @@ import (
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/clientconfig"
 	"miren.dev/runtime/components/autotls"
+	"miren.dev/runtime/components/buildkit"
 	containerdcomp "miren.dev/runtime/components/containerd"
 	"miren.dev/runtime/components/coordinate"
 	"miren.dev/runtime/components/etcd"
@@ -399,6 +400,56 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 		ctx.Server.Override("victoriametrics-timeout", 30*time.Second)
 	}
 
+	// BuildKit component (nil if not started)
+	var buildkitComponent *buildkit.Component
+
+	// Start embedded BuildKit daemon if requested
+	if cfg.Buildkit.GetStartEmbedded() {
+		ctx.Log.Info("starting embedded buildkit daemon", "socket-dir", cfg.Buildkit.GetSocketDir())
+
+		// Get containerd client from registry
+		var cc *containerd.Client
+		err := ctx.Server.Resolve(&cc)
+		if err != nil {
+			ctx.Log.Error("failed to get containerd client for buildkit", "error", err)
+			return err
+		}
+
+		buildkitComponent = buildkit.NewComponent(ctx.Log, cc, "miren", cfg.Server.GetDataPath())
+
+		// Parse GC storage size (e.g., "10GB" -> bytes)
+		gcKeepStorage := parseStorageSize(cfg.Buildkit.GetGcKeepStorage())
+		gcKeepDuration := parseDuration(cfg.Buildkit.GetGcKeepDuration())
+
+		buildkitConfig := buildkit.Config{
+			SocketDir:      cfg.Buildkit.GetSocketDir(),
+			GCKeepStorage:  gcKeepStorage,
+			GCKeepDuration: gcKeepDuration,
+			RegistryHost:   "cluster.local:5000",
+		}
+
+		err = buildkitComponent.Start(sub, buildkitConfig)
+		if err != nil {
+			ctx.Log.Error("failed to start buildkit component", "error", err)
+			return err
+		}
+
+		ctx.Log.Info("embedded buildkit started", "socket-path", buildkitComponent.SocketPath())
+
+		// Register BuildKit component in the registry for the Builder to use
+		ctx.Server.Register("buildkit-component", buildkitComponent)
+
+		// Ensure cleanup on exit
+		defer func() {
+			ctx.Log.Info("stopping embedded buildkit")
+			stopCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			if err := buildkitComponent.Stop(stopCtx); err != nil {
+				ctx.Log.Error("failed to stop buildkit component", "error", err)
+			}
+		}()
+	}
+
 	klog.SetLogger(logr.FromSlogHandler(ctx.Log.With("module", "global").Handler()))
 
 	res, hm := netresolve.NewLocalResolver()
@@ -545,6 +596,7 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 		HTTP:            &httpMetrics,
 		Logs:            logs,
 		LogWriter:       logWriter,
+		BuildKit:        buildkitComponent,
 	})
 
 	err = co.Start(sub)
@@ -1019,4 +1071,79 @@ func stopAllSandboxContainers(ctx context.Context, log *slog.Logger, cc *contain
 
 	log.Info("stopped sandbox containers", "count", stoppedCount)
 	return nil
+}
+
+// parseStorageSize parses a human-readable storage size (e.g., "10GB") to bytes
+func parseStorageSize(s string) int64 {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return 0
+	}
+
+	// Parse the numeric part and unit
+	var value float64
+	var unit string
+	_, err := fmt.Sscanf(s, "%f%s", &value, &unit)
+	if err != nil {
+		// Try parsing as just a number (bytes)
+		v, err := strconv.ParseInt(s, 10, 64)
+		if err == nil {
+			return v
+		}
+		return 0
+	}
+
+	multiplier := int64(1)
+	switch strings.ToUpper(unit) {
+	case "KB", "K":
+		multiplier = 1024
+	case "MB", "M":
+		multiplier = 1024 * 1024
+	case "GB", "G":
+		multiplier = 1024 * 1024 * 1024
+	case "TB", "T":
+		multiplier = 1024 * 1024 * 1024 * 1024
+	}
+
+	return int64(value * float64(multiplier))
+}
+
+// parseDuration parses a human-readable duration (e.g., "7d") to seconds
+func parseDuration(s string) int64 {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return 0
+	}
+
+	// Try standard Go duration first (e.g., "24h")
+	d, err := time.ParseDuration(s)
+	if err == nil {
+		return int64(d.Seconds())
+	}
+
+	// Parse custom format (e.g., "7d")
+	var value float64
+	var unit string
+	_, err = fmt.Sscanf(s, "%f%s", &value, &unit)
+	if err != nil {
+		return 0
+	}
+
+	var seconds int64
+	switch strings.ToLower(unit) {
+	case "s":
+		seconds = int64(value)
+	case "m":
+		seconds = int64(value * 60)
+	case "h":
+		seconds = int64(value * 3600)
+	case "d":
+		seconds = int64(value * 86400)
+	case "w":
+		seconds = int64(value * 604800)
+	default:
+		return 0
+	}
+
+	return seconds
 }

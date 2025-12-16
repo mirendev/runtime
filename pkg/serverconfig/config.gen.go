@@ -6,8 +6,69 @@ import (
 	"time"
 )
 
+// BuildkitConfig BuildKit daemon configuration
+type BuildkitConfig struct {
+	GcKeepDuration *string `toml:"gc_keep_duration" env:"MIREN_BUILDKIT_GC_KEEP_DURATION"`
+	GcKeepStorage  *string `toml:"gc_keep_storage" env:"MIREN_BUILDKIT_GC_KEEP_STORAGE"`
+	SocketDir      *string `toml:"socket_dir" env:"MIREN_BUILDKIT_SOCKET_DIR"`
+	StartEmbedded  *bool   `toml:"start_embedded" env:"MIREN_BUILDKIT_START_EMBEDDED"`
+}
+
+// GetGcKeepDuration returns the value of GcKeepDuration or its zero value if nil
+func (c *BuildkitConfig) GetGcKeepDuration() string {
+	if c.GcKeepDuration != nil {
+		return *c.GcKeepDuration
+	}
+	return ""
+}
+
+// SetGcKeepDuration sets the value of GcKeepDuration
+func (c *BuildkitConfig) SetGcKeepDuration(v string) {
+	c.GcKeepDuration = &v
+}
+
+// GetGcKeepStorage returns the value of GcKeepStorage or its zero value if nil
+func (c *BuildkitConfig) GetGcKeepStorage() string {
+	if c.GcKeepStorage != nil {
+		return *c.GcKeepStorage
+	}
+	return ""
+}
+
+// SetGcKeepStorage sets the value of GcKeepStorage
+func (c *BuildkitConfig) SetGcKeepStorage(v string) {
+	c.GcKeepStorage = &v
+}
+
+// GetSocketDir returns the value of SocketDir or its zero value if nil
+func (c *BuildkitConfig) GetSocketDir() string {
+	if c.SocketDir != nil {
+		return *c.SocketDir
+	}
+	return ""
+}
+
+// SetSocketDir sets the value of SocketDir
+func (c *BuildkitConfig) SetSocketDir(v string) {
+	c.SocketDir = &v
+}
+
+// GetStartEmbedded returns the value of StartEmbedded or its zero value if nil
+func (c *BuildkitConfig) GetStartEmbedded() bool {
+	if c.StartEmbedded != nil {
+		return *c.StartEmbedded
+	}
+	return false
+}
+
+// SetStartEmbedded sets the value of StartEmbedded
+func (c *BuildkitConfig) SetStartEmbedded(v bool) {
+	c.StartEmbedded = &v
+}
+
 // Config Complete server configuration from all sources
 type Config struct {
+	Buildkit        BuildkitConfig        `toml:"buildkit"`
 	Containerd      ContainerdConfig      `toml:"containerd"`
 	Etcd            EtcdConfig            `toml:"etcd"`
 	Mode            *string               `toml:"mode" env:"MIREN_MODE"`
