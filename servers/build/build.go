@@ -596,66 +596,20 @@ func (b *Builder) BuildFromTar(ctx context.Context, state *build_v1alpha.Builder
 	// Now we know the stack is valid, proceed with buildkit setup
 	b.Log.Debug("setting up buildkit")
 
-	var bkc *client.Client
-
-	// Use persistent BuildKit component if available, otherwise fall back to ephemeral sandbox
-	if b.BuildKit != nil {
-		b.Log.Info("using persistent buildkit daemon")
-		var err error
-		bkc, err = b.BuildKit.Client(ctx)
-		if err != nil {
-			b.Log.Error("failed to get buildkit client from component", "error", err)
-			b.sendErrorStatus(ctx, status, "Failed to get buildkit client: %v", err)
-			return err
-		}
-		defer bkc.Close()
-	} else {
-		// Fall back to ephemeral sandbox (legacy behavior)
-		b.Log.Info("using ephemeral buildkit sandbox (no persistent component available)")
-
-		lbk := &LaunchBuildkit{
-			log: b.Log.With("module", "launchbuildkit"),
-			eac: b.EAS,
-		}
-		b.Log.Debug("created LaunchBuildkit instance")
-
-		b.Log.Debug("resolving cluster.local for buildkit")
-		ip, err := b.Resolver.LookupHost("cluster.local")
-		if err != nil {
-			b.Log.Error("failed to resolve cluster.local", "error", err)
-			b.sendErrorStatus(ctx, status, "Error resolving cluster.local: %v", err)
-			return fmt.Errorf("error resolving cluster.local: %w", err)
-		}
-		b.Log.Debug("resolved cluster.local", "ip", ip.String())
-
-		b.Log.Info("starting buildkit launch", "clusterIP", ip.String(), "logEntity", name)
-		rbk, err := lbk.Launch(ctx, ip.String(), WithLogEntity(name), WithAppName(name), WithLogAttrs(map[string]string{
-			"version": "build",
-		}))
-		if err != nil {
-			b.Log.Error("failed to launch buildkit", "error", err)
-			b.sendErrorStatus(ctx, status, "Failed to launch buildkit: %v", err)
-			return err
-		}
-		b.Log.Info("buildkit launch completed successfully")
-
-		defer func() {
-			if err := rbk.Close(ctx); err != nil {
-				b.Log.Error("failed to close buildkit", "error", err)
-			}
-		}()
-
-		b.Log.Debug("attempting to get buildkit client")
-		bkc, err = rbk.Client(ctx)
-		if err != nil {
-			b.Log.Error("failed to get buildkit client", "error", err)
-			b.sendErrorStatus(ctx, status, "Failed to get buildkit client: %v", err)
-			return err
-		}
-		b.Log.Debug("successfully obtained buildkit client")
-
-		defer bkc.Close()
+	if b.BuildKit == nil {
+		b.Log.Error("buildkit component not configured")
+		b.sendErrorStatus(ctx, status, "BuildKit not configured - ensure server is running with BuildKit enabled")
+		return fmt.Errorf("buildkit component not configured")
 	}
+
+	b.Log.Info("connecting to buildkit daemon")
+	bkc, err := b.BuildKit.Client(ctx)
+	if err != nil {
+		b.Log.Error("failed to get buildkit client", "error", err)
+		b.sendErrorStatus(ctx, status, "Failed to connect to BuildKit: %v", err)
+		return err
+	}
+	defer bkc.Close()
 
 	b.Log.Debug("getting buildkit daemon info")
 	ci, err := bkc.Info(ctx)

@@ -36,6 +36,14 @@ func applyEnvironmentVariables(cfg *Config, log *slog.Logger) error {
 
 	}
 
+	// Apply MIREN_BUILDKIT_SOCKET_PATH
+	if val := os.Getenv("MIREN_BUILDKIT_SOCKET_PATH"); val != "" {
+
+		cfg.Buildkit.SocketPath = &val
+		log.Debug("applied env var", "key", "MIREN_BUILDKIT_SOCKET_PATH")
+
+	}
+
 	// Apply MIREN_BUILDKIT_START_EMBEDDED
 	if val := os.Getenv("MIREN_BUILDKIT_START_EMBEDDED"); val != "" {
 

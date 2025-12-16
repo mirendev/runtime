@@ -11,6 +11,7 @@ type BuildkitConfig struct {
 	GcKeepDuration *string `toml:"gc_keep_duration" env:"MIREN_BUILDKIT_GC_KEEP_DURATION"`
 	GcKeepStorage  *string `toml:"gc_keep_storage" env:"MIREN_BUILDKIT_GC_KEEP_STORAGE"`
 	SocketDir      *string `toml:"socket_dir" env:"MIREN_BUILDKIT_SOCKET_DIR"`
+	SocketPath     *string `toml:"socket_path" env:"MIREN_BUILDKIT_SOCKET_PATH"`
 	StartEmbedded  *bool   `toml:"start_embedded" env:"MIREN_BUILDKIT_START_EMBEDDED"`
 }
 
@@ -51,6 +52,19 @@ func (c *BuildkitConfig) GetSocketDir() string {
 // SetSocketDir sets the value of SocketDir
 func (c *BuildkitConfig) SetSocketDir(v string) {
 	c.SocketDir = &v
+}
+
+// GetSocketPath returns the value of SocketPath or its zero value if nil
+func (c *BuildkitConfig) GetSocketPath() string {
+	if c.SocketPath != nil {
+		return *c.SocketPath
+	}
+	return ""
+}
+
+// SetSocketPath sets the value of SocketPath
+func (c *BuildkitConfig) SetSocketPath(v string) {
+	c.SocketPath = &v
 }
 
 // GetStartEmbedded returns the value of StartEmbedded or its zero value if nil

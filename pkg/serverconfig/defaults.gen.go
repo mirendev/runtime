@@ -27,6 +27,7 @@ func DefaultBuildkitConfig() BuildkitConfig {
 		GcKeepDuration: strPtr("7d"),
 		GcKeepStorage:  strPtr("10GB"),
 		SocketDir:      strPtr("/run/miren/buildkit"),
+		SocketPath:     strPtr(""),
 		StartEmbedded:  nil,
 	}
 }

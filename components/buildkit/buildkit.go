@@ -33,9 +33,6 @@ var buildkitImage = imagerefs.BuildKit
 
 // Config contains configuration for the BuildKit component.
 type Config struct {
-	// DataPath is the directory for BuildKit's persistent layer cache (e.g., /data/buildkit)
-	DataPath string
-
 	// SocketDir is the directory where the Unix socket will be created (e.g., /run/miren/buildkit)
 	SocketDir string
 
@@ -49,7 +46,8 @@ type Config struct {
 	RegistryHost string
 }
 
-// Component manages a persistent BuildKit daemon as a containerd container.
+// Component manages a persistent BuildKit daemon as a containerd container,
+// or connects to an external BuildKit daemon via Unix socket.
 type Component struct {
 	Log       *slog.Logger
 	CC        *containerd.Client
@@ -61,25 +59,49 @@ type Component struct {
 	running    bool
 	socketPath string
 	socketDir  string
+	external   bool // true if connecting to external daemon (no container management)
 }
 
-// NewComponent creates a new BuildKit component.
+// NewComponent creates a new BuildKit component that manages an embedded daemon.
 func NewComponent(log *slog.Logger, cc *containerd.Client, namespace, dataPath string) *Component {
 	return &Component{
 		Log:       log,
 		CC:        cc,
 		Namespace: namespace,
 		DataPath:  dataPath,
+		external:  false,
+	}
+}
+
+// NewExternalComponent creates a BuildKit component that connects to an external daemon.
+// No container lifecycle management is performed - it only provides client access.
+func NewExternalComponent(log *slog.Logger, socketPath string) *Component {
+	return &Component{
+		Log:        log,
+		socketPath: socketPath,
+		running:    true, // External daemon is assumed to be running
+		external:   true,
 	}
 }
 
 // Start starts the BuildKit daemon container.
+// For external components, this verifies the socket is accessible.
 func (c *Component) Start(ctx context.Context, config Config) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	if c.running {
 		return fmt.Errorf("buildkit component already running")
+	}
+
+	// External mode: just verify the socket is accessible
+	if c.external {
+		c.Log.Info("using external buildkit daemon", "socket", c.socketPath)
+		if err := c.waitForReady(ctx); err != nil {
+			return fmt.Errorf("external buildkit daemon not accessible at %s: %w", c.socketPath, err)
+		}
+		c.running = true
+		return nil
 	}
 
 	ctx = namespaces.WithNamespace(ctx, c.Namespace)
@@ -168,11 +190,19 @@ func (c *Component) Start(ctx context.Context, config Config) error {
 }
 
 // Stop stops the BuildKit daemon container.
+// For external components, this is a no-op.
 func (c *Component) Stop(ctx context.Context) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	if !c.running {
+		return nil
+	}
+
+	// External mode: nothing to stop
+	if c.external {
+		c.running = false
+		c.Log.Info("disconnected from external buildkit daemon")
 		return nil
 	}
 

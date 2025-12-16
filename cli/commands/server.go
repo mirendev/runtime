@@ -400,7 +400,7 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 		ctx.Server.Override("victoriametrics-timeout", 30*time.Second)
 	}
 
-	// BuildKit component (nil if not started)
+	// BuildKit component (nil if not configured)
 	var buildkitComponent *buildkit.Component
 
 	// Start embedded BuildKit daemon if requested
@@ -436,9 +436,6 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 
 		ctx.Log.Info("embedded buildkit started", "socket-path", buildkitComponent.SocketPath())
 
-		// Register BuildKit component in the registry for the Builder to use
-		ctx.Server.Register("buildkit-component", buildkitComponent)
-
 		// Ensure cleanup on exit
 		defer func() {
 			ctx.Log.Info("stopping embedded buildkit")
@@ -448,6 +445,19 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 				ctx.Log.Error("failed to stop buildkit component", "error", err)
 			}
 		}()
+	} else if cfg.Buildkit.GetSocketPath() != "" {
+		// Use external BuildKit daemon
+		ctx.Log.Info("using external buildkit daemon", "socket", cfg.Buildkit.GetSocketPath())
+
+		buildkitComponent = buildkit.NewExternalComponent(ctx.Log, cfg.Buildkit.GetSocketPath())
+
+		err := buildkitComponent.Start(sub, buildkit.Config{})
+		if err != nil {
+			ctx.Log.Error("failed to connect to external buildkit", "error", err)
+			return err
+		}
+
+		ctx.Log.Info("connected to external buildkit", "socket-path", buildkitComponent.SocketPath())
 	}
 
 	klog.SetLogger(logr.FromSlogHandler(ctx.Log.With("module", "global").Handler()))

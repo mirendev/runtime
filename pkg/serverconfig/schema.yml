@@ -404,12 +404,21 @@ configs:
         mode_default:
           standalone: true
 
+      socket_path:
+        type: string
+        default: ""
+        cli:
+          long: buildkit-socket
+          description: Path to external BuildKit Unix socket (for distributed mode)
+        env: MIREN_BUILDKIT_SOCKET_PATH
+        toml: socket_path
+
       socket_dir:
         type: string
         default: "/run/miren/buildkit"
         cli:
           long: buildkit-socket-dir
-          description: Directory for BuildKit Unix socket
+          description: Directory for embedded BuildKit Unix socket
         env: MIREN_BUILDKIT_SOCKET_DIR
         toml: socket_dir
 

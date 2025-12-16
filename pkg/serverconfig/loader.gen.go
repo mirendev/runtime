@@ -150,6 +150,10 @@ func applyCLIFlags(cfg *Config, flags *CLIFlags) {
 		cfg.Buildkit.SocketDir = flags.BuildkitConfigSocketDir
 	}
 
+	if flags.BuildkitConfigSocketPath != nil && *flags.BuildkitConfigSocketPath != "" {
+		cfg.Buildkit.SocketPath = flags.BuildkitConfigSocketPath
+	}
+
 	if flags.BuildkitConfigStartEmbedded != nil {
 		cfg.Buildkit.StartEmbedded = flags.BuildkitConfigStartEmbedded
 	}
