@@ -13,8 +13,8 @@ import (
 )
 
 func SandboxExec(ctx *Context, opts struct {
-	Id     string `long:"id" description:"Sandbox ID" default:"miren-sandbox"`
-	Server string `long:"server" description:"Server address to connect to" default:"localhost:8444"`
+	ConfigCentric
+	Id string `short:"i" long:"id" description:"Sandbox ID" default:"miren-sandbox"`
 
 	Rest struct {
 		Args []string

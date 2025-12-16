@@ -2,6 +2,7 @@ package execproxy
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -10,6 +11,7 @@ import (
 	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/api/exec/exec_v1alpha"
+	"miren.dev/runtime/pkg/cond"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/types"
 	"miren.dev/runtime/pkg/idgen"
@@ -51,7 +53,14 @@ func (s *Server) Exec(ctx context.Context, req *exec_v1alpha.SandboxExecExec) er
 		id = args.Value()
 		ret, err := s.EAC.Get(ctx, id)
 		if err != nil {
-			return fmt.Errorf("failed to get entity %s: %w", id, err)
+			if errors.Is(err, cond.ErrNotFound{}) {
+				id = "sandbox/" + id
+				ret, err = s.EAC.Get(ctx, id)
+			}
+
+			if err != nil {
+				return fmt.Errorf("failed to get entity %s: %w", id, err)
+			}
 		}
 
 		found = ret.Entity().Entity()
@@ -226,7 +235,8 @@ func (s *Server) waitForSandboxRunning(ctx context.Context, sbID entity.Id) (*en
 		err error
 	}
 
-	resultCh := make(chan result, 1)
+	// Buffer of 2 to handle race between watch callback and get check
+	resultCh := make(chan result, 2)
 
 	// Helper to check sandbox status and send result if terminal
 	checkStatus := func(ent *entity.Entity) bool {
@@ -268,11 +278,7 @@ func (s *Server) waitForSandboxRunning(ctx context.Context, sbID entity.Id) (*en
 	// Check current status in case sandbox became RUNNING while watch was being set up
 	resp, err := s.EAC.Get(ctx, sbID.String())
 	if err == nil {
-		if checkStatus(resp.Entity().Entity()) {
-			// Already in terminal state, return immediately
-			res := <-resultCh
-			return res.ent, res.err
-		}
+		checkStatus(resp.Entity().Entity())
 	}
 
 	select {
