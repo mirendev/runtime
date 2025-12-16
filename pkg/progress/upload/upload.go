@@ -9,7 +9,7 @@ import (
 
 // ProgressReader wraps an io.Reader and periodically reports upload progress.
 type ProgressReader struct {
-	reader     io.Reader
+	reader     io.ReadCloser
 	readBytes  int64
 	mu         sync.RWMutex
 	startTime  time.Time
@@ -25,13 +25,17 @@ type Progress struct {
 }
 
 // NewProgressReader creates a new progress tracking reader that wraps the given io.Reader.
-func NewProgressReader(r io.Reader, onProgress func(Progress)) *ProgressReader {
+func NewProgressReader(r io.ReadCloser, onProgress func(Progress)) *ProgressReader {
 	return &ProgressReader{
 		reader:     r,
 		startTime:  time.Now(),
 		lastUpdate: time.Now(),
 		onProgress: onProgress,
 	}
+}
+
+func (pr *ProgressReader) Close() error {
+	return pr.reader.Close()
 }
 
 func (pr *ProgressReader) Read(p []byte) (int, error) {

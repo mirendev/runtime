@@ -76,12 +76,24 @@ Select a cluster to bind:
 ## Deploy Your First App
 
 Miren automatically detects and builds your app. Supported languages include:
-- **Python**: Detects `requirements.txt`, `Pipfile`, `pyproject.toml`
-- **JavaScript/Node**: Detects `package.json`
+- **Python**: Detects `requirements.txt`, `Pipfile`, `pyproject.toml`, `uv.lock`
+- **JavaScript/Node**: Detects `package.json` (npm, yarn)
+- **Bun**: Detects `bun.lockb`
 - **Go**: Detects `go.mod`
 - **Ruby**: Detects `Gemfile`
+- **Rust**: Detects `Cargo.toml`
 
 Don't see your language? You can always provide a `Dockerfile`.
+
+:::tip Preview before deploying
+Use `miren deploy --analyze` to see what Miren detects without actually building or deploying:
+
+```bash
+miren deploy --analyze
+```
+
+This shows the detected stack, services, environment variables, and how each service will be started.
+:::
 
 Just run:
 

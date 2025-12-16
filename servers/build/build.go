@@ -233,6 +233,114 @@ func buildServicesConfig(appConfig *appconfig.AppConfig, procfileServices map[st
 	return services
 }
 
+// ConfigInputs holds all the inputs needed to build an app version config.
+type ConfigInputs struct {
+	// BuildResult contains entrypoint, working dir, and image entrypoint/cmd from the build
+	BuildResult *BuildResult
+
+	// AppConfig is the parsed app.toml configuration (may be nil)
+	AppConfig *appconfig.AppConfig
+
+	// ProcfileServices maps service names to commands from the Procfile (may be nil)
+	ProcfileServices map[string]string
+
+	// ExistingConfig is the current config to preserve manual env vars from
+	ExistingConfig core_v1alpha.Config
+}
+
+// buildVersionConfig builds the app version config from all inputs.
+// This is a pure function that can be easily tested.
+func buildVersionConfig(inputs ConfigInputs) core_v1alpha.Config {
+	var cfg core_v1alpha.Config
+
+	res := inputs.BuildResult
+	ac := inputs.AppConfig
+	procfileServices := inputs.ProcfileServices
+
+	// Preserve existing variables for merging later
+	cfg.Variable = inputs.ExistingConfig.Variable
+
+	// Set entrypoint from stack build result
+	if res != nil && res.Entrypoint != "" {
+		cfg.Entrypoint = res.Entrypoint
+	}
+
+	// Set start directory from build result, defaulting to /app
+	if res != nil && res.WorkingDir != "" {
+		cfg.StartDirectory = res.WorkingDir
+	} else {
+		cfg.StartDirectory = "/app"
+	}
+
+	// If no web service defined in app config or Procfile, but we have a command or entrypoint,
+	// create a synthetic Procfile entry for web service
+	hasWebInAppConfig := ac != nil && ac.Services["web"] != nil && ac.Services["web"].Command != ""
+	hasWebInProcfile := procfileServices != nil && procfileServices["web"] != ""
+	if !hasWebInAppConfig && !hasWebInProcfile && res != nil {
+		// Use Command if available, otherwise fall back to Entrypoint
+		webCmd := res.Command
+		if webCmd == "" {
+			webCmd = res.Entrypoint
+		}
+		if webCmd != "" {
+			if procfileServices == nil {
+				procfileServices = make(map[string]string)
+			}
+			procfileServices["web"] = webCmd
+		}
+	}
+
+	// Build service configurations with concurrency settings from app.toml/Procfile
+	cfg.Services = buildServicesConfig(ac, procfileServices)
+
+	// Merge env vars: preserve manual vars from existing services
+	existingServices := inputs.ExistingConfig.Services
+	for i := range cfg.Services {
+		serviceName := cfg.Services[i].Name
+
+		// Find matching service in existing config
+		for _, existingSvc := range existingServices {
+			if existingSvc.Name == serviceName {
+				// Merge env vars: app.toml vars override, but manual vars persist
+				cfg.Services[i].Env = mergeServiceEnvVars(existingSvc.Env, cfg.Services[i].Env)
+				break
+			}
+		}
+	}
+
+	// Build commands list for services that have explicit commands
+	var serviceCmds []core_v1alpha.Commands
+	for _, svc := range cfg.Services {
+		// Check if this service has a command from app config or procfile
+		var cmd string
+		if ac != nil {
+			if svcConfig, ok := ac.Services[svc.Name]; ok && svcConfig != nil && svcConfig.Command != "" {
+				cmd = svcConfig.Command
+			}
+		}
+		if cmd == "" {
+			if procCmd, ok := procfileServices[svc.Name]; ok {
+				cmd = procCmd
+			}
+		}
+
+		if cmd != "" {
+			serviceCmds = append(serviceCmds, core_v1alpha.Commands{
+				Service: svc.Name,
+				Command: cmd,
+			})
+		}
+	}
+
+	cfg.Commands = serviceCmds
+
+	// Merge environment variables from app config
+	// Preserves existing variables when app.toml has no [[env]] section
+	cfg.Variable = mergeVariablesFromAppConfig(cfg.Variable, ac)
+
+	return cfg
+}
+
 func buildVariablesFromAppConfig(appConfig *appconfig.AppConfig) []core_v1alpha.Variable {
 	if appConfig == nil || len(appConfig.EnvVars) == 0 {
 		return nil
@@ -464,7 +572,14 @@ func (b *Builder) BuildFromTar(ctx context.Context, state *build_v1alpha.Builder
 
 	// Check if stack is supported before launching buildkit
 	if buildStack.Stack == "auto" {
-		_, err := stackbuild.DetectStack(buildStack.CodeDir)
+		detectOpts := stackbuild.BuildOptions{
+			Log:         b.Log,
+			Name:        name,
+			OnBuild:     buildStack.OnBuild,
+			Version:     buildStack.Version,
+			AlpineImage: buildStack.AlpineImage,
+		}
+		_, err := stackbuild.DetectStack(buildStack.CodeDir, detectOpts)
 		if err != nil {
 			b.Log.Error("stack detection failed", "error", err, "app", name, "codeDir", buildStack.CodeDir)
 			b.sendErrorStatus(ctx, status, "No supported stack detected for app %s: %v", name, err)
@@ -621,10 +736,6 @@ func (b *Builder) BuildFromTar(ctx context.Context, state *build_v1alpha.Builder
 
 	b.Log.Debug("build complete", "image", mrv.ImageUrl)
 
-	if res.Entrypoint != "" {
-		mrv.Config.Entrypoint = res.Entrypoint
-	}
-
 	procfileServices, err := b.readProcFile(tr)
 	if err != nil {
 		return fmt.Errorf("error reading procfile: %w", err)
@@ -634,59 +745,18 @@ func (b *Builder) BuildFromTar(ctx context.Context, state *build_v1alpha.Builder
 		b.Log.Debug("using procfile", "services", maps.Keys(procfileServices))
 	}
 
-	// Save existing services to preserve manual env vars
-	existingServices := mrv.Config.Services
+	// Build the version config from all inputs
+	mrv.Config = buildVersionConfig(ConfigInputs{
+		BuildResult:      res,
+		AppConfig:        ac,
+		ProcfileServices: procfileServices,
+		ExistingConfig:   mrv.Config,
+	})
 
-	// Build service configurations with concurrency settings from app.toml/Procfile
-	mrv.Config.Services = buildServicesConfig(ac, procfileServices)
-
-	// Merge env vars: preserve manual vars from existing services
-	for i := range mrv.Config.Services {
-		serviceName := mrv.Config.Services[i].Name
-
-		// Find matching service in existing config
-		for _, existingSvc := range existingServices {
-			if existingSvc.Name == serviceName {
-				// Merge env vars: app.toml vars override, but manual vars persist
-				mrv.Config.Services[i].Env = mergeServiceEnvVars(existingSvc.Env, mrv.Config.Services[i].Env)
-				break
-			}
-		}
-	}
-
-	// Build commands list for services that have explicit commands
-	var serviceCmds []core_v1alpha.Commands
-	for _, svc := range mrv.Config.Services {
-		// Check if this service has a command from app config or procfile
-		var cmd string
-		if ac != nil {
-			if svcConfig, ok := ac.Services[svc.Name]; ok && svcConfig != nil && svcConfig.Command != "" {
-				cmd = svcConfig.Command
-			}
-		}
-		if cmd == "" {
-			if procCmd, ok := procfileServices[svc.Name]; ok {
-				cmd = procCmd
-			}
-		}
-
-		if cmd != "" {
-			serviceCmds = append(serviceCmds, core_v1alpha.Commands{
-				Service: svc.Name,
-				Command: cmd,
-			})
-		}
-	}
-
-	mrv.Config.Commands = serviceCmds
-
-	// Merge environment variables from app config
-	// Preserves existing variables when app.toml has no [[env]] section
-	mrv.Config.Variable = mergeVariablesFromAppConfig(mrv.Config.Variable, ac)
 	if ac != nil && len(ac.EnvVars) > 0 {
 		b.Log.Info("merged env vars from app config", "count", len(ac.EnvVars))
 	} else {
-		b.Log.Info("no new env vars from app config, preserving existing variables")
+		b.Log.Debug("no new env vars from app config, preserving existing variables")
 	}
 
 	id, err := b.ec.Create(ctx, mrv.Version, mrv)
@@ -794,6 +864,39 @@ func (b *Builder) logDeployment(ctx context.Context, appName, version, artifact 
 	}
 }
 
+// buildImageCommand combines the OCI image entrypoint and cmd into a single shell command string.
+// This is used when no Procfile or app config command is specified for a service.
+func buildImageCommand(entrypoint, cmd []string) string {
+	// Combine entrypoint and cmd
+	var parts []string
+	parts = append(parts, entrypoint...)
+	parts = append(parts, cmd...)
+
+	if len(parts) == 0 {
+		return ""
+	}
+
+	// If there's only one part and it looks like a shell command, return it directly
+	if len(parts) == 1 {
+		return parts[0]
+	}
+
+	// For multiple parts, we need to properly quote them for shell execution
+	// This handles cases like: ENTRYPOINT ["node"] CMD ["server.js"]
+	// Which should become: node server.js
+	var quotedParts []string
+	for _, p := range parts {
+		// If the part contains spaces or special characters, quote it
+		if strings.ContainsAny(p, " \t\n\"'$`\\") {
+			quotedParts = append(quotedParts, fmt.Sprintf("%q", p))
+		} else {
+			quotedParts = append(quotedParts, p)
+		}
+	}
+
+	return strings.Join(quotedParts, " ")
+}
+
 func (b *Builder) readProcFile(dfs fsutil.FS) (map[string]string, error) {
 	r, err := dfs.Open("Procfile")
 	if err != nil {
@@ -811,4 +914,208 @@ func (b *Builder) readProcFile(dfs fsutil.FS) (map[string]string, error) {
 	}
 
 	return procfile.Parser(data)
+}
+
+// AnalyzeApp analyzes an app without building it, returning detected stack, services, and configuration.
+func (b *Builder) AnalyzeApp(ctx context.Context, state *build_v1alpha.BuilderAnalyzeApp) error {
+	args := state.Args()
+	td := args.Tardata()
+
+	path, err := os.MkdirTemp(b.TempDir, "analyze-")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(path)
+
+	b.Log.Debug("receiving tar data for analysis", "tempdir", path)
+
+	r := stream.ToReader(ctx, td)
+
+	tr, err := tarx.TarFS(r, path)
+	if err != nil {
+		return fmt.Errorf("error untaring data: %w", err)
+	}
+
+	result := &build_v1alpha.AnalysisResult{}
+
+	// Collect detection events from multiple sources
+	var events []build_v1alpha.DetectionEvent
+
+	// Load app config
+	ac, err := b.loadAppConfig(tr)
+	if err != nil {
+		b.Log.Warn("error loading app config, ignoring", "error", err)
+	}
+	if ac != nil {
+		var event build_v1alpha.DetectionEvent
+		event.SetKind("config")
+		event.SetName("app.toml")
+		event.SetMessage("Found app.toml configuration file")
+		events = append(events, event)
+
+		if ac.Name != "" {
+			result.SetAppName(ac.Name)
+		}
+
+		// Extract env var keys (not values for security)
+		var envKeys []string
+		for _, ev := range ac.EnvVars {
+			envKeys = append(envKeys, ev.Key)
+		}
+		if len(envKeys) > 0 {
+			result.SetEnvVars(&envKeys)
+		}
+
+		// Check for explicit dockerfile in build config
+		if ac.Build != nil && ac.Build.Dockerfile != "" {
+			result.SetBuildDockerfile(ac.Build.Dockerfile)
+		}
+	}
+
+	// Detect stack and build a BuildResult to use with buildVersionConfig
+	var stackName string
+	var buildResult BuildResult
+	var detectedStack stackbuild.Stack
+
+	// Check for Dockerfile.miren first
+	if f, err := tr.Open("Dockerfile.miren"); err == nil {
+		f.Close()
+		stackName = "dockerfile"
+		result.SetBuildDockerfile("Dockerfile.miren")
+	} else if ac != nil && ac.Build != nil && ac.Build.Dockerfile != "" {
+		stackName = "dockerfile"
+	} else {
+		// Try to detect stack
+		var detectOpts stackbuild.BuildOptions
+		detectOpts.Log = b.Log
+		if ac != nil {
+			detectOpts.Name = ac.Name
+		}
+		stack, err := stackbuild.DetectStack(path, detectOpts)
+		if err != nil {
+			b.Log.Debug("no stack detected", "error", err)
+			stackName = "unknown"
+		} else {
+			detectedStack = stack
+			stackName = stack.Name()
+			buildResult.Entrypoint = stack.Entrypoint()
+			buildResult.Command = stack.WebCommand()
+			buildResult.WorkingDir = stack.Image().Config.WorkingDir
+		}
+	}
+
+	result.SetStack(stackName)
+	if buildResult.Entrypoint != "" {
+		result.SetEntrypoint(buildResult.Entrypoint)
+	}
+
+	// Add detection events from the stack
+	if detectedStack != nil {
+		stackEvents := detectedStack.Events()
+		for _, e := range stackEvents {
+			var event build_v1alpha.DetectionEvent
+			event.SetKind(e.Kind)
+			event.SetName(e.Name)
+			event.SetMessage(e.Message)
+			events = append(events, event)
+		}
+	}
+
+	// Read Procfile
+	procfileServices, err := b.readProcFile(tr)
+	if err != nil {
+		return fmt.Errorf("error reading procfile: %w", err)
+	}
+	if len(procfileServices) > 0 {
+		var event build_v1alpha.DetectionEvent
+		event.SetKind("config")
+		event.SetName("Procfile")
+		event.SetMessage(fmt.Sprintf("Found Procfile with %d service(s)", len(procfileServices)))
+		events = append(events, event)
+	}
+
+	// Use buildVersionConfig to compute services - same logic as BuildFromTar
+	cfg := buildVersionConfig(ConfigInputs{
+		BuildResult:      &buildResult,
+		AppConfig:        ac,
+		ProcfileServices: procfileServices,
+	})
+
+	result.SetWorkingDir(cfg.StartDirectory)
+
+	// Build a map of commands for quick lookup
+	commandMap := make(map[string]string)
+	for _, cmd := range cfg.Commands {
+		commandMap[cmd.Service] = cmd.Command
+	}
+
+	// Convert cfg.Services to ServiceInfo with source tracking
+	// This includes ALL services, even those without explicit commands (they use image default)
+	var services []build_v1alpha.ServiceInfo
+	for _, svc := range cfg.Services {
+		var svcInfo build_v1alpha.ServiceInfo
+		svcInfo.SetName(svc.Name)
+
+		if cmd, hasCommand := commandMap[svc.Name]; hasCommand {
+			svcInfo.SetCommand(cmd)
+			// Determine source for this service
+			source := determineServiceSource(svc.Name, cmd, ac, procfileServices, &buildResult)
+			svcInfo.SetSource(source)
+
+			// Add event when we inject a synthetic web service from stack detection
+			if svc.Name == "web" && source == "stack" {
+				var event build_v1alpha.DetectionEvent
+				event.SetKind("service")
+				event.SetName("web")
+				event.SetMessage("Injected web service from stack detection")
+				events = append(events, event)
+			}
+		} else {
+			// Service has no explicit command - uses Dockerfile CMD (image default)
+			svcInfo.SetSource("image")
+		}
+
+		services = append(services, svcInfo)
+	}
+
+	if len(services) > 0 {
+		result.SetServices(&services)
+	}
+
+	// Set all collected events
+	if len(events) > 0 {
+		result.SetEvents(&events)
+	}
+
+	state.Results().SetResult(&result)
+	return nil
+}
+
+// determineServiceSource identifies where a service command came from
+func determineServiceSource(serviceName, command string, ac *appconfig.AppConfig, procfileServices map[string]string, buildResult *BuildResult) string {
+	// Check app config first
+	if ac != nil {
+		if svcConfig, ok := ac.Services[serviceName]; ok && svcConfig != nil && svcConfig.Command != "" {
+			if svcConfig.Command == command {
+				return "app_config"
+			}
+		}
+	}
+
+	// Check Procfile
+	if procfileServices != nil {
+		if procCmd, ok := procfileServices[serviceName]; ok && procCmd == command {
+			return "procfile"
+		}
+	}
+
+	// Must be from stack detection
+	if buildResult != nil {
+		webCmd := buildResult.Command
+		if serviceName == "web" && command == webCmd {
+			return "stack"
+		}
+	}
+
+	return "unknown"
 }

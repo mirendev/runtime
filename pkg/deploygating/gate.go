@@ -1,6 +1,7 @@
 package deploygating
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -34,56 +35,23 @@ func CheckDeployAllowed(dir string) (string, error) {
 			fmt.Errorf("deployment path is not a directory: %s", absDir)
 	}
 
-	// Check for web service definition
-	hasWebService := false
-
-	// First check .miren/app.toml for services
-	ac, err := appconfig.LoadAppConfigUnder(absDir)
+	// Validate appconfig syntax if present
+	_, err = appconfig.LoadAppConfigUnder(absDir)
 	if err != nil {
-		return "", fmt.Errorf("failed to load app config: %w", err)
+		return fmt.Sprintf("Fix the configuration error in %s.", appconfig.AppConfigPath),
+			fmt.Errorf("invalid app configuration: %w", err)
 	}
 
-	if ac != nil && ac.Services != nil {
-		if _, ok := ac.Services["web"]; ok {
-			hasWebService = true
-		}
+	// Validate Procfile syntax if present
+	procfilePath := filepath.Join(absDir, "Procfile")
+	_, err = tasks.ParseFile(procfilePath)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return "Fix the syntax error in Procfile.",
+			fmt.Errorf("failed to parse Procfile: %w", err)
 	}
 
-	// If not found in app.toml, check Procfile
-	if !hasWebService {
-		procfilePath := filepath.Join(absDir, "Procfile")
-		if _, err := os.Stat(procfilePath); err == nil {
-			pf, err := tasks.ParseFile(procfilePath)
-			if err != nil {
-				return "", fmt.Errorf("failed to parse Procfile: %w", err)
-			}
+	// Stackbuild can now infer a reasonable default web service if none is defined
+	// so we no longer block deployments without a web service.
 
-			for _, proc := range pf.Proceses {
-				if proc.Name == "web" {
-					hasWebService = true
-					break
-				}
-			}
-		}
-	}
-
-	// Return error if no web service is defined
-	if !hasWebService {
-		remedy := `To fix this, define a 'web' service in one of these ways:
-
-Option 1: Add to .miren/app.toml:
-  [services.web]
-  command = "your-web-server-command"
-
-Option 2: Add to Procfile:
-  web: your-web-server-command
-
-In both cases, your app should respect the env var PORT to bind to the correct port.
-`
-
-		return remedy, fmt.Errorf("no 'web' service defined in .miren/app.toml or Procfile")
-	}
-
-	// All checks passed
 	return "", nil
 }

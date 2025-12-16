@@ -31,6 +31,7 @@ import (
 func Deploy(ctx *Context, opts struct {
 	AppCentric
 
+	Analyze       bool   `long:"analyze" description:"Analyze the app without building (show detected stack, services, etc.)"`
 	Explain       bool   `short:"x" long:"explain" description:"Explain the build process"`
 	ExplainFormat string `long:"explain-format" description:"Explain format" choice:"auto" choice:"plain" choice:"tty" choice:"rawjson" default:"auto"`
 	Force         bool   `short:"f" long:"force" description:"Skip confirmation prompt"`
@@ -87,6 +88,17 @@ func Deploy(ctx *Context, opts struct {
 	// Re-check after potential cluster add
 	if ctx.ClientConfig.GetClusterCount() == 0 {
 		return fmt.Errorf("no clusters configured; run 'miren login' to authenticate and configure a cluster, or install a server locally")
+	}
+
+	// Handle --analyze flag: analyze the app without building
+	if opts.Analyze {
+		cl, err := ctx.RPCClient("dev.miren.runtime/build")
+		if err != nil {
+			return err
+		}
+
+		bc := build_v1alpha.NewBuilderClient(cl)
+		return analyzeApp(ctx, bc, dir)
 	}
 
 	// Confirm deployment unless --force is used, stdin is not a TTY, or only one cluster is configured
@@ -285,6 +297,8 @@ func Deploy(ctx *Context, opts struct {
 		updateDeploymentOnError(fmt.Sprintf("Failed to create tar: %v", err))
 		return err
 	}
+
+	defer r.Close()
 
 	var (
 		cb      stream.SendStream[*build_v1alpha.Status]
@@ -728,4 +742,192 @@ func stripPort(host string) string {
 		return host[:idx]
 	}
 	return host
+}
+
+// Styles for analyze output
+var (
+	analyzeTitleStyle = lipgloss.NewStyle().
+				Bold(true).
+				Foreground(lipgloss.Color("3")) // yellow
+
+	analyzeLabelStyle = lipgloss.NewStyle().
+				Faint(true).
+				Width(10).
+				Align(lipgloss.Right)
+
+	analyzeValueStyle = lipgloss.NewStyle().
+				Bold(true)
+
+	// Badge styles for different event kinds
+	badgeFile = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("12")). // blue
+			Bold(true)
+	badgePackage = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("10")). // green
+			Bold(true)
+	badgeFramework = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("13")). // magenta
+			Bold(true)
+	badgeConfig = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("11")). // yellow
+			Bold(true)
+	badgeDir = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("14")). // cyan
+			Bold(true)
+	badgeScript = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("208")). // orange
+			Bold(true)
+)
+
+func eventKindBadge(kind string) string {
+	badge := fmt.Sprintf("[%s]", kind)
+	switch kind {
+	case "file":
+		return badgeFile.Render(badge)
+	case "package":
+		return badgePackage.Render(badge)
+	case "framework":
+		return badgeFramework.Render(badge)
+	case "config":
+		return badgeConfig.Render(badge)
+	case "dir":
+		return badgeDir.Render(badge)
+	case "script":
+		return badgeScript.Render(badge)
+	default:
+		return lipgloss.NewStyle().Faint(true).Render(badge)
+	}
+}
+
+// analyzeApp calls the AnalyzeApp API and displays the results
+func analyzeApp(ctx *Context, bc *build_v1alpha.BuilderClient, dir string) error {
+	if dir == "" || dir == "." {
+		var err error
+		dir, err = os.Getwd()
+		if err != nil {
+			return fmt.Errorf("failed to get current directory: %w", err)
+		}
+	}
+
+	ctx.Printf("Analyzing app in %s...\n\n", dir)
+
+	// Load AppConfig to get include patterns
+	var includePatterns []string
+	ac, err := appconfig.LoadAppConfigUnder(dir)
+	if err != nil {
+		return fmt.Errorf("failed to load app config: %w", err)
+	}
+	if ac != nil && ac.Include != nil {
+		for _, pattern := range ac.Include {
+			if err := tarx.ValidatePattern(pattern); err != nil {
+				return fmt.Errorf("invalid include pattern %q: %w", pattern, err)
+			}
+		}
+		includePatterns = ac.Include
+	}
+
+	r, err := tarx.MakeTar(dir, includePatterns)
+	if err != nil {
+		return fmt.Errorf("failed to create tar: %w", err)
+	}
+
+	defer r.Close()
+
+	result, err := bc.AnalyzeApp(ctx, stream.ServeReader(ctx, r))
+	if err != nil {
+		return fmt.Errorf("analysis failed: %w", err)
+	}
+
+	analysisResult := result.Result()
+	if analysisResult == nil {
+		return fmt.Errorf("no analysis result returned")
+	}
+
+	// Stack
+	ctx.Printf("%s %s\n",
+		analyzeLabelStyle.Render("Stack:"),
+		analyzeValueStyle.Render(analysisResult.Stack()))
+
+	// App name (if from app.toml)
+	if analysisResult.AppName() != "" {
+		ctx.Printf("%s %s\n",
+			analyzeLabelStyle.Render("App Name:"),
+			analyzeValueStyle.Render(analysisResult.AppName()))
+	}
+
+	// Working directory
+	ctx.Printf("%s %s\n",
+		analyzeLabelStyle.Render("Directory:"),
+		analysisResult.WorkingDir())
+
+	// Entrypoint
+	if analysisResult.Entrypoint() != "" {
+		ctx.Printf("%s %s\n",
+			analyzeLabelStyle.Render("Entrypoint:"),
+			analyzeValueStyle.Render(analysisResult.Entrypoint()))
+	}
+
+	// Dockerfile (if using dockerfile stack)
+	if analysisResult.BuildDockerfile() != "" {
+		ctx.Printf("%s %s\n",
+			analyzeLabelStyle.Render("Dockerfile:"),
+			analysisResult.BuildDockerfile())
+	}
+
+	// Services
+	if analysisResult.HasServices() && analysisResult.Services() != nil {
+		services := *analysisResult.Services()
+		if len(services) > 0 {
+			ctx.Printf("\n%s\n", analyzeTitleStyle.Render("Services"))
+			for _, svc := range services {
+				sourceInfo := ""
+				if svc.Source() != "" {
+					sourceInfo = lipgloss.NewStyle().Faint(true).Render(fmt.Sprintf(" (%s)", svc.Source()))
+				}
+
+				command := svc.Command()
+				if command == "" {
+					// Service uses Dockerfile CMD (image default)
+					command = lipgloss.NewStyle().Faint(true).Italic(true).Render("image default")
+				}
+
+				ctx.Printf("  %s: %s%s\n",
+					analyzeValueStyle.Render(svc.Name()),
+					command,
+					sourceInfo)
+			}
+		}
+	}
+
+	// Environment variables (keys only)
+	if analysisResult.HasEnvVars() && analysisResult.EnvVars() != nil {
+		envVars := *analysisResult.EnvVars()
+		if len(envVars) > 0 {
+			ctx.Printf("\n%s\n", analyzeTitleStyle.Render("Environment Variables"))
+			for _, key := range envVars {
+				ctx.Printf("  • %s\n", key)
+			}
+		}
+	}
+
+	// Detection events
+	if analysisResult.HasEvents() && analysisResult.Events() != nil {
+		events := *analysisResult.Events()
+		if len(events) > 0 {
+			ctx.Printf("\n%s\n", analyzeTitleStyle.Render("Detection"))
+			for _, event := range events {
+				badge := eventKindBadge(event.Kind())
+				if event.Name() != "" {
+					ctx.Printf("  %s %s: %s\n",
+						badge,
+						analyzeValueStyle.Render(event.Name()),
+						event.Message())
+				} else {
+					ctx.Printf("  %s %s\n", badge, event.Message())
+				}
+			}
+		}
+	}
+
+	return nil
 }

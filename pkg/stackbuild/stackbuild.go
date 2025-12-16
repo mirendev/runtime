@@ -1,6 +1,7 @@
 package stackbuild
 
 import (
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
@@ -14,6 +15,7 @@ import (
 	"github.com/moby/buildkit/client/llb/imagemetaresolver"
 	"github.com/moby/buildkit/util/system"
 	ocispecs "github.com/opencontainers/image-spec/specs-go/v1"
+	"github.com/pelletier/go-toml/v2"
 	"miren.dev/runtime/pkg/imagerefs"
 )
 
@@ -37,21 +39,36 @@ type BuildOptions struct {
 	OnBuild []string
 }
 
+// DetectionEvent represents something detected during stack analysis
+type DetectionEvent struct {
+	Kind    string // e.g., "file", "package", "framework", "config"
+	Name    string // e.g., "Gemfile", "rails", "puma"
+	Message string // Human-readable description
+}
+
 // Stack represents a programming language/framework stack
 type Stack interface {
 	Name() string
 	// Detect returns true if the given directory contains code for this stack
 	Detect() bool
+	// Init is called after detection to perform common initialization
+	Init(opts BuildOptions)
 	// GenerateLLB creates the BuildKit LLB for building this stack
 	GenerateLLB(dir string, opts BuildOptions) (*llb.State, error)
 
 	Image() ocispecs.Image
 
 	Entrypoint() string
+
+	// WebCommand returns the default command for the web service in a Procfile
+	WebCommand() string
+
+	// Events returns detection events collected during Detect() and Init()
+	Events() []DetectionEvent
 }
 
 // DetectStack identifies the programming stack in the given directory
-func DetectStack(dir string) (Stack, error) {
+func DetectStack(dir string, opts BuildOptions) (Stack, error) {
 	ms := MetaStack{dir: dir}
 	ms.setupResult()
 
@@ -61,9 +78,11 @@ func DetectStack(dir string) (Stack, error) {
 		&NodeStack{MetaStack: ms},
 		&BunStack{MetaStack: ms},
 		&GoStack{MetaStack: ms},
+		&RustStack{MetaStack: ms},
 	}
 	for _, stack := range stacks {
 		if stack.Detect() {
+			stack.Init(opts)
 			return stack, nil
 		}
 	}
@@ -74,10 +93,29 @@ func DetectStack(dir string) (Stack, error) {
 type MetaStack struct {
 	dir    string
 	result ocispecs.Image
+	events []DetectionEvent
+}
+
+func (s *MetaStack) Init(opts BuildOptions) {
+	// Base implementation does nothing; stacks can override for specific initialization
 }
 
 func (s *MetaStack) Entrypoint() string {
 	return ""
+}
+
+// Event adds a detection event
+func (s *MetaStack) Event(kind, name, message string) {
+	s.events = append(s.events, DetectionEvent{
+		Kind:    kind,
+		Name:    name,
+		Message: message,
+	})
+}
+
+// Events returns all detection events
+func (s *MetaStack) Events() []DetectionEvent {
+	return s.events
 }
 
 func (s *MetaStack) setupResult() {
@@ -88,7 +126,7 @@ func (s *MetaStack) setupResult() {
 	s.result.OSFeatures = pl.OSFeatures
 	s.result.Variant = pl.Variant
 	s.result.RootFS.Type = "layers"
-	s.result.Config.WorkingDir = "/"
+	s.result.Config.WorkingDir = "/app"
 	s.result.Config.Env = []string{"PATH=" + system.DefaultPathEnv(pl.OS)}
 }
 
@@ -156,6 +194,15 @@ type RubyStack struct {
 	MetaStack
 	gemfile     []byte
 	gemfileLock []byte
+
+	// Detection state set in Init()
+	hasRails      bool
+	hasPuma       bool
+	hasUnicorn    bool
+	hasBootsnap   bool
+	hasConfigRu   bool
+	hasPumaConfig bool
+	hasRakefile   bool
 }
 
 func (s *RubyStack) Name() string {
@@ -163,7 +210,48 @@ func (s *RubyStack) Name() string {
 }
 
 func (s *RubyStack) Detect() bool {
-	return s.hasFile("Gemfile")
+	if !s.hasFile("Gemfile") {
+		return false
+	}
+	s.Event("file", "Gemfile", "Found Gemfile")
+	return true
+}
+
+func (s *RubyStack) Init(opts BuildOptions) {
+	s.SetCwd("/app")
+
+	// Detect framework and libraries, store state for later use
+	s.hasRails = s.detectGem("rails")
+	if s.hasRails {
+		s.Event("framework", "rails", "Rails framework detected")
+	}
+
+	s.hasPuma = s.detectGem("puma")
+	if s.hasPuma {
+		s.Event("package", "puma", "Puma web server detected")
+	}
+
+	s.hasUnicorn = s.detectGem("unicorn")
+	if s.hasUnicorn {
+		s.Event("package", "unicorn", "Unicorn web server detected")
+	}
+
+	s.hasBootsnap = s.detectGem("bootsnap")
+	if s.hasBootsnap {
+		s.Event("package", "bootsnap", "Bootsnap detected (will precompile)")
+	}
+
+	s.hasConfigRu = s.hasFile("config.ru")
+	if s.hasConfigRu {
+		s.Event("file", "config.ru", "Rack config file detected")
+	}
+
+	s.hasPumaConfig = s.hasFile("config/puma.rb")
+	if s.hasPumaConfig {
+		s.Event("config", "puma.rb", "Puma configuration file detected")
+	}
+
+	s.hasRakefile = s.hasFile("Rakefile")
 }
 
 type highlevelBuilder struct {
@@ -220,10 +308,6 @@ func (h *highlevelBuilder) bundleInstall(cur, mnt llb.State) llb.State {
 		llb.Shlex("bundle install"),
 		llb.AddEnv("BUNDLE_SILENCE_ROOT_WARNING", "true"),
 		llb.WithCustomName("[phase] Installing Ruby Gem dependencies"),
-		//h.Access(mnt, "Gemfile", "/app/Gemfile"),
-		//h.Access(mnt, "Gemfile.lock", "/app/Gemfile.lock"),
-		//llb.AddMount("/app/Gemfile", mnt, llb.SourcePath("/app/Gemfile"), llb.Readonly),
-		//llb.AddMount("/app/Gemfile.lock", mnt, llb.SourcePath("/app/Gemfile.lock"), llb.Readonly),
 	).State
 }
 
@@ -266,7 +350,7 @@ func (m *MetaStack) addAppUser(cur llb.State) llb.State {
 func (m *MetaStack) chownApp(cur llb.State) llb.State {
 	return cur.Run(
 		llb.Shlex("chown -R app:app /app"),
-		llb.WithCustomName("[phase] Chowning application code"),
+		llb.WithCustomName("[phase] Fixing application code permissions"),
 	).Root()
 }
 
@@ -308,8 +392,6 @@ func (s *RubyStack) detectGem(gem string) bool {
 }
 
 func (s *RubyStack) GenerateLLB(dir string, opts BuildOptions) (*llb.State, error) {
-	s.dir = dir
-
 	// Set up local context with the directory
 	localCtx := llb.Local("context",
 		llb.SharedKeyHint(dir),
@@ -331,7 +413,7 @@ func (s *RubyStack) GenerateLLB(dir string, opts BuildOptions) (*llb.State, erro
 	h := &highlevelBuilder{opts}
 
 	// My kingdom for a pipe operator.
-	base = h.aptInstall(base, "build-essential", "libpq-dev", "nodejs", "libyaml-dev", "postgresql-client")
+	base = h.aptInstall(base, "build-essential", "libpq-dev", "nodejs", "libyaml-dev", "postgresql-client", "git", "curl", "ssh")
 
 	base = base.
 		AddEnv("SECRET_KEY_BASE_DUMMY", "1").
@@ -341,52 +423,32 @@ func (s *RubyStack) GenerateLLB(dir string, opts BuildOptions) (*llb.State, erro
 	base = h.bundleInstall(base, localCtx)
 	base = h.copyApp(base, localCtx)
 
-	if s.detectGem("bootsnap") {
+	if s.hasBootsnap {
 		base = h.bootsnap(base, "--gemfile")
 		base = h.bootsnap(base, "app/", "lib/")
 	}
 
-	if s.hasFile("Rakefile") {
-		base = base.Dir("/app").Run(
-			llb.Shlex(`sh -c 'bundle exec rake -T | grep -q "rake assets:precompile" && bundle exec rake assets:precompile || echo "no assets:precompile"'`),
-			llb.AddEnv("SECRET_KEY_BASE_DUMMY", "1"),
-			llb.WithCustomName("[phase] Precompiling assets"),
-		).State
+	if s.hasRakefile {
+		base = base.Dir("/app").
+			AddEnv("RAILS_ENV", "production").
+			AddEnv("RACK_ENV", "production").
+			Run(
+				llb.Shlex(`sh -c 'bundle exec rake -T | grep -q "rake assets:precompile" && bundle exec rake assets:precompile || echo "no assets:precompile"'`),
+				llb.AddEnv("SECRET_KEY_BASE_DUMMY", "1"),
+				llb.WithCustomName("[phase] Precompiling assets"),
+			).State
 	}
 
 	base = s.applyOnBuild(base, opts)
 
 	base = s.chownApp(base)
 
-	var ep string
-
-	switch {
-	case s.detectGem("rails"):
-		ep = "bundle exec rails server -b 0.0.0.0 -p $PORT"
-	case s.detectGem("puma"):
-		if s.hasFile("config/puma.rb") {
-			ep = "bundle exec puma -C config/puma.rb"
-		} else {
-			// Not great startup options but the user needs to use a puma.rb to have
-			// better control anyway.
-			ep = "bundle exec puma -b tcp://0.0.0.0 -p $PORT"
-		}
-	case s.hasFile("config.ru"):
-		ep = "bundle exec rackup -p $PORT"
-	}
-
 	s.AddEnv("BUNDLE_PATH", "/usr/local/bundle")
 	s.AddEnv("BUNDLE_WITHOUT", "development")
 	s.AddEnv("RACK_ENV", "production")
 
-	if s.detectGem("rails") {
+	if s.hasRails {
 		s.AddEnv("RAILS_ENV", "production")
-	}
-
-	s.SetCwd("/app")
-
-	if ep != "" {
-		s.SetEntrypoint([]string{"/bin/sh", "-c", "exec " + ep})
 	}
 
 	return &base, nil
@@ -396,9 +458,52 @@ func (s *RubyStack) Entrypoint() string {
 	return "bundle exec"
 }
 
+func (s *RubyStack) WebCommand() string {
+	switch {
+	case s.hasRails:
+		return "rails server -b 0.0.0.0 -p $PORT"
+	case s.hasPuma:
+		if s.hasPumaConfig {
+			return "puma -C config/puma.rb"
+		}
+		return "puma -b tcp://0.0.0.0 -p $PORT"
+	case s.hasUnicorn:
+		return "unicorn -p $PORT"
+	case s.hasConfigRu:
+		// Covers Sinatra and other Rack apps
+		return "rackup -p $PORT"
+	}
+	return ""
+}
+
+// pythonPackageManager represents the detected package manager
+type pythonPackageManager string
+
+const (
+	pythonPkgPip    pythonPackageManager = "pip"
+	pythonPkgPipenv pythonPackageManager = "pipenv"
+	pythonPkgPoetry pythonPackageManager = "poetry"
+	pythonPkgUv     pythonPackageManager = "uv"
+)
+
 // PythonStack implements Stack for Python
 type PythonStack struct {
 	MetaStack
+
+	// Detection state set in Init()
+	packageManager    pythonPackageManager
+	hasDjango         bool
+	hasFlask          bool
+	hasFastAPI        bool
+	hasGunicorn       bool
+	hasUvicorn        bool
+	hasManagePy       bool
+	wsgiModule        string
+	asgiModule        string
+	fastapiEntrypoint string // from [tool.fastapi] entrypoint in pyproject.toml
+
+	// Cached uv.lock packages for accurate detection
+	uvPackages map[string]bool
 }
 
 func (s *PythonStack) Name() string {
@@ -406,7 +511,117 @@ func (s *PythonStack) Name() string {
 }
 
 func (s *PythonStack) Detect() bool {
-	return s.hasFile("requirements.txt") || s.hasFile("Pipfile") || s.hasFile("pyproject.toml")
+	if s.hasFile("Pipfile") {
+		s.packageManager = pythonPkgPipenv
+		s.Event("file", "Pipfile", "Found Pipfile (pipenv)")
+		return true
+	}
+
+	// Check for uv.lock before pyproject.toml since uv also uses pyproject.toml
+	if s.hasFile("uv.lock") {
+		s.packageManager = pythonPkgUv
+		s.Event("file", "uv.lock", "Found uv.lock (uv)")
+		return true
+	}
+
+	if s.hasFile("pyproject.toml") {
+		s.packageManager = pythonPkgPoetry
+		s.Event("file", "pyproject.toml", "Found pyproject.toml (poetry)")
+		return true
+	}
+
+	if s.hasFile("requirements.txt") {
+		s.packageManager = pythonPkgPip
+		s.Event("file", "requirements.txt", "Found requirements.txt (pip)")
+		return true
+	}
+
+	return false
+}
+
+func (s *PythonStack) Init(opts BuildOptions) {
+	s.SetCwd("/app")
+
+	// Detect frameworks and libraries, store state for later use
+	s.hasDjango = s.detectPackage("django")
+	if s.hasDjango {
+		s.Event("framework", "django", "Django framework detected")
+	}
+
+	s.hasFlask = s.detectPackage("flask")
+	if s.hasFlask {
+		s.Event("framework", "flask", "Flask framework detected")
+	}
+
+	s.hasFastAPI = s.detectPackage("fastapi")
+	if s.hasFastAPI {
+		s.Event("framework", "fastapi", "FastAPI framework detected")
+	}
+
+	s.hasGunicorn = s.detectPackage("gunicorn")
+	if s.hasGunicorn {
+		s.Event("package", "gunicorn", "Gunicorn WSGI server detected")
+	}
+
+	s.hasUvicorn = s.detectPackage("uvicorn")
+	if s.hasUvicorn {
+		s.Event("package", "uvicorn", "Uvicorn ASGI server detected")
+	}
+
+	s.hasManagePy = s.hasFile("manage.py")
+	if s.hasManagePy {
+		s.Event("file", "manage.py", "Django manage.py detected")
+	}
+
+	// Pre-compute WSGI/ASGI modules
+	s.wsgiModule = s.findWSGIModule()
+	s.asgiModule = s.findASGIModule()
+
+	// Check for FastAPI entrypoint in pyproject.toml [tool.fastapi]
+	s.fastapiEntrypoint = s.findFastAPIEntrypoint()
+	if s.fastapiEntrypoint != "" {
+		s.Event("config", "fastapi", "FastAPI entrypoint: "+s.fastapiEntrypoint)
+	}
+}
+
+func (s *PythonStack) detectPackage(pkg string) bool {
+	// Normalize package name for comparison
+	pkgLower := strings.ToLower(pkg)
+
+	// Check uv.lock first using parsed TOML for accurate detection
+	if uvPkgs := s.parseUvLock(); uvPkgs != nil {
+		if uvPkgs[pkgLower] {
+			return true
+		}
+	}
+
+	// Check requirements.txt
+	if data, err := s.readFile("requirements.txt"); err == nil {
+		if strings.Contains(strings.ToLower(string(data)), pkgLower) {
+			return true
+		}
+	}
+
+	// Check Pipfile and Pipfile.lock
+	if data, err := s.readFile("Pipfile"); err == nil {
+		if strings.Contains(strings.ToLower(string(data)), pkgLower) {
+			return true
+		}
+	}
+	if data, err := s.readFile("Pipfile.lock"); err == nil {
+		if strings.Contains(strings.ToLower(string(data)), pkgLower) {
+			return true
+		}
+	}
+
+	// Check pyproject.toml
+	if data, err := s.readFile("pyproject.toml"); err == nil {
+		if strings.Contains(strings.ToLower(string(data)), pkgLower) {
+			return true
+		}
+	}
+
+	return false
 }
 
 func (s *PythonStack) GenerateLLB(dir string, opts BuildOptions) (*llb.State, error) {
@@ -431,12 +646,16 @@ func (s *PythonStack) GenerateLLB(dir string, opts BuildOptions) (*llb.State, er
 	pipCache := llb.Scratch().File(
 		llb.Mkdir("/pip-cache", 0777, llb.WithParents(true)),
 	)
+	userPipCache := llb.Scratch().File(
+		llb.Mkdir("/pip-cache", 0777, llb.WithParents(true)),
+	)
 
 	var state llb.State
 	state = base
 
 	// Handle different dependency management systems
-	if s.hasFile("requirements.txt") {
+	switch s.packageManager {
+	case pythonPkgPip:
 		// Copy only requirements.txt first
 		pipState := state.File(llb.Copy(localCtx, "/", "/app", &llb.CopyInfo{
 			IncludePatterns: []string{"requirements.txt"},
@@ -448,7 +667,8 @@ func (s *PythonStack) GenerateLLB(dir string, opts BuildOptions) (*llb.State, er
 			llb.AddMount("/root/.cache/pip", pipCache, llb.AsPersistentCacheDir("pip", llb.CacheMountShared)),
 			llb.WithCustomName("[phase] Installing Python dependencies with pip"),
 		).Root()
-	} else if s.hasFile("Pipfile") {
+
+	case pythonPkgPipenv:
 		// Copy only Pipfile and Pipfile.lock first
 		pipState := state.File(llb.Copy(localCtx, "/", "/app", &llb.CopyInfo{
 			IncludePatterns: []string{"Pipfile", "Pipfile.lock"},
@@ -460,14 +680,17 @@ func (s *PythonStack) GenerateLLB(dir string, opts BuildOptions) (*llb.State, er
 			llb.WithCustomName("[phase] Installing Python pipenv"),
 		).Root()
 
+		state = state.File(llb.Mkdir("/home/app/.cache", 0777, llb.WithParents(true)))
+
 		// Install pipenv and dependencies with cache
 		state = state.Dir("/app").Run(
 			llb.Shlex("pipenv install --deploy"),
-			llb.AddMount("/home/app/.cache/pip", pipCache, llb.AsPersistentCacheDir("pip", llb.CacheMountShared)),
+			llb.AddMount("/home/app/.cache/pip", userPipCache, llb.AsPersistentCacheDir("user-pip", llb.CacheMountShared)),
 			llb.User("app"),
 			llb.WithCustomName("[phase] Installing Python dependencies with pipenv"),
 		).Root()
-	} else if s.hasFile("pyproject.toml") {
+
+	case pythonPkgPoetry:
 		// Copy only pyproject.toml and poetry.lock first
 		poetryState := state.File(llb.Copy(localCtx, "/", "/app", &llb.CopyInfo{
 			IncludePatterns: []string{"pyproject.toml", "poetry.lock", "README.md"},
@@ -484,9 +707,32 @@ func (s *PythonStack) GenerateLLB(dir string, opts BuildOptions) (*llb.State, er
 		// Install poetry and dependencies with cache
 		state = state.Dir("/app").Run(
 			llb.Shlex("poetry install --no-root"),
-			llb.AddMount("/home/app/.cache/pip", pipCache, llb.AsPersistentCacheDir("pip", llb.CacheMountShared)),
+			llb.AddMount("/home/app/.cache/pip", userPipCache, llb.AsPersistentCacheDir("user-pip", llb.CacheMountShared)),
 			llb.User("app"),
 			llb.WithCustomName("[phase] Installing Python dependencies with poetry"),
+		).Root()
+
+	case pythonPkgUv:
+		// Copy pyproject.toml and uv.lock first
+		uvState := state.File(llb.Copy(localCtx, "/", "/app", &llb.CopyInfo{
+			IncludePatterns: []string{"pyproject.toml", "uv.lock", "README.md"},
+		}), llb.WithCustomName("copy pyproject.toml and uv.lock"))
+
+		// Install uv
+		state = uvState.Run(
+			llb.Shlex("pip install uv"),
+			llb.AddMount("/root/.cache/pip", pipCache, llb.AsPersistentCacheDir("pip", llb.CacheMountShared)),
+			llb.WithCustomName("[phase] Installing uv"),
+		).Root()
+
+		// Install dependencies with uv sync
+		state = s.chownApp(state).Dir("/app").Run(
+			llb.Shlex("uv sync --no-dev"),
+			llb.AddMount("/home/app/.cache", llb.Scratch().File(
+				llb.Mkdir("/uv", 0777, llb.WithParents(true)),
+			), llb.AsPersistentCacheDir("user-uv", llb.CacheMountShared)),
+			llb.User("app"),
+			llb.WithCustomName("[phase] Installing Python dependencies with uv"),
 		).Root()
 	}
 
@@ -503,20 +749,193 @@ func (s *PythonStack) GenerateLLB(dir string, opts BuildOptions) (*llb.State, er
 }
 
 func (s *PythonStack) Entrypoint() string {
-	if s.hasFile("pyproject.toml") {
+	switch s.packageManager {
+	case pythonPkgPoetry:
 		return "poetry run"
+	case pythonPkgPipenv:
+		return "pipenv run"
+	case pythonPkgUv:
+		return "uv run"
+	default:
+		return ""
+	}
+}
+
+func (s *PythonStack) findWSGIModule() string {
+	// Look for wsgi.py in subdirectories (Django convention)
+	entries, err := os.ReadDir(s.dir)
+	if err != nil {
+		return ""
+	}
+	for _, entry := range entries {
+		if entry.IsDir() {
+			wsgiPath := filepath.Join(entry.Name(), "wsgi.py")
+			if s.hasFile(wsgiPath) {
+				return entry.Name() + ".wsgi:application"
+			}
+		}
+	}
+	// Check for wsgi.py in root
+	if s.hasFile("wsgi.py") {
+		return "wsgi:app"
+	}
+	return ""
+}
+
+func (s *PythonStack) findASGIModule() string {
+	// Look for asgi.py in subdirectories (Django ASGI convention)
+	entries, err := os.ReadDir(s.dir)
+	if err != nil {
+		return ""
+	}
+	for _, entry := range entries {
+		if entry.IsDir() {
+			asgiPath := filepath.Join(entry.Name(), "asgi.py")
+			if s.hasFile(asgiPath) {
+				return entry.Name() + ".asgi:application"
+			}
+		}
+	}
+	// Check for asgi.py in root
+	if s.hasFile("asgi.py") {
+		return "asgi:app"
+	}
+	return ""
+}
+
+// pyprojectToml represents the structure of a pyproject.toml file for FastAPI config
+type pyprojectToml struct {
+	Tool struct {
+		FastAPI struct {
+			Entrypoint string `toml:"entrypoint"`
+		} `toml:"fastapi"`
+	} `toml:"tool"`
+}
+
+func (s *PythonStack) findFastAPIEntrypoint() string {
+	content, err := s.readFile("pyproject.toml")
+	if err != nil {
+		return ""
 	}
 
-	if s.hasFile("Pipfile") {
-		return "pipenv run"
+	var pyproject pyprojectToml
+	if err := toml.Unmarshal(content, &pyproject); err != nil {
+		return ""
+	}
+
+	return pyproject.Tool.FastAPI.Entrypoint
+}
+
+// uvLock represents the structure of a uv.lock file
+type uvLock struct {
+	Package []struct {
+		Name    string `toml:"name"`
+		Version string `toml:"version"`
+	} `toml:"package"`
+}
+
+func (s *PythonStack) parseUvLock() map[string]bool {
+	if s.uvPackages != nil {
+		return s.uvPackages
+	}
+
+	content, err := s.readFile("uv.lock")
+	if err != nil {
+		return nil
+	}
+
+	var lock uvLock
+	if err := toml.Unmarshal(content, &lock); err != nil {
+		return nil
+	}
+
+	s.uvPackages = make(map[string]bool)
+	for _, pkg := range lock.Package {
+		// Normalize package name (replace - with _ for consistent matching)
+		name := strings.ToLower(pkg.Name)
+		s.uvPackages[name] = true
+		// Also store with underscores replaced by hyphens and vice versa
+		s.uvPackages[strings.ReplaceAll(name, "-", "_")] = true
+		s.uvPackages[strings.ReplaceAll(name, "_", "-")] = true
+	}
+
+	return s.uvPackages
+}
+
+func (s *PythonStack) WebCommand() string {
+	// Check for gunicorn with Django WSGI
+	if s.hasGunicorn && !s.hasFastAPI {
+		if s.wsgiModule != "" {
+			return "gunicorn " + s.wsgiModule + " -b 0.0.0.0:$PORT"
+		}
+		// Fallback: check common entry points
+		if s.hasFile("app.py") {
+			return "gunicorn app:app -b 0.0.0.0:$PORT"
+		}
+		return "gunicorn app:app -b 0.0.0.0:$PORT"
+	}
+
+	// FastAPI - use fastapi run command (FastAPI CLI)
+	// This takes precedence over uvicorn since fastapi run is the recommended way
+	if s.hasFastAPI {
+		// Use configured entrypoint from [tool.fastapi] if available
+		if s.fastapiEntrypoint != "" {
+			return "fastapi run " + s.fastapiEntrypoint + " --host 0.0.0.0 --port $PORT"
+		}
+		// Fallback: check common entry points
+		if s.hasFile("main.py") {
+			return "fastapi run main.py --host 0.0.0.0 --port $PORT"
+		}
+		if s.hasFile("app.py") {
+			return "fastapi run app.py --host 0.0.0.0 --port $PORT"
+		}
+		return "fastapi run main.py --host 0.0.0.0 --port $PORT"
+	}
+
+	// Check for uvicorn (ASGI - Starlette, other ASGI apps)
+	if s.hasUvicorn {
+		if s.asgiModule != "" {
+			return "uvicorn " + s.asgiModule + " --host 0.0.0.0 --port $PORT"
+		}
+		// Fallback: check common entry points
+		if s.hasFile("main.py") {
+			return "uvicorn main:app --host 0.0.0.0 --port $PORT"
+		}
+		if s.hasFile("app.py") {
+			return "uvicorn app:app --host 0.0.0.0 --port $PORT"
+		}
+		return "uvicorn main:app --host 0.0.0.0 --port $PORT"
+	}
+
+	// Flask without gunicorn (dev server)
+	if s.hasFlask {
+		return "flask run --host=0.0.0.0 --port=$PORT"
+	}
+
+	// Django without gunicorn (dev server - not recommended for production)
+	if s.hasDjango && s.hasManagePy {
+		return "python manage.py runserver 0.0.0.0:$PORT"
 	}
 
 	return ""
 }
 
+// nodePackageManager represents the detected package manager
+type nodePackageManager string
+
+const (
+	nodePkgNpm  nodePackageManager = "npm"
+	nodePkgYarn nodePackageManager = "yarn"
+)
+
 // NodeStack implements Stack for Node.js
 type NodeStack struct {
 	MetaStack
+
+	// Detection state set in Init()
+	packageManager nodePackageManager
+	scripts        map[string]string
+	entryPoint     string
 }
 
 func (s *NodeStack) Name() string {
@@ -524,8 +943,51 @@ func (s *NodeStack) Name() string {
 }
 
 func (s *NodeStack) Detect() bool {
-	return s.hasFile("package.json") &&
-		(s.hasFile("package-lock.json") || s.hasFile("yarn.lock") || s.detectInFile("Procfile", `web:\s+(node|npm|yarn)`))
+	if !s.hasFile("package.json") {
+		return false
+	}
+	s.Event("file", "package.json", "Found package.json")
+
+	if s.hasFile("yarn.lock") {
+		s.packageManager = nodePkgYarn
+		s.Event("file", "yarn.lock", "Found yarn.lock (yarn)")
+		return true
+	}
+	if s.hasFile("package-lock.json") {
+		s.packageManager = nodePkgNpm
+		s.Event("file", "package-lock.json", "Found package-lock.json (npm)")
+		return true
+	}
+	if s.detectInFile("Procfile", `web:\s+(node|npm|yarn)`) {
+		s.packageManager = nodePkgNpm // default to npm
+		s.Event("file", "Procfile", "Procfile references node/npm/yarn")
+		return true
+	}
+	return false
+}
+
+func (s *NodeStack) Init(opts BuildOptions) {
+	s.SetCwd("/app")
+
+	// Store scripts for later use
+	s.scripts = s.getPackageScripts()
+	if s.scripts != nil {
+		if _, ok := s.scripts["start"]; ok {
+			s.Event("script", "start", "npm start script detected")
+		}
+		if _, ok := s.scripts["build"]; ok {
+			s.Event("script", "build", "npm build script detected")
+		}
+	}
+
+	// Check for common entry points and store the first one found
+	for _, entry := range []string{"index.ts", "index.js", "server.ts", "server.js", "app.ts", "app.js", "main.ts", "main.js"} {
+		if s.hasFile(entry) {
+			s.entryPoint = entry
+			s.Event("file", entry, "Entry point file detected")
+			break
+		}
+	}
 }
 
 func (s *NodeStack) GenerateLLB(dir string, opts BuildOptions) (*llb.State, error) {
@@ -553,9 +1015,10 @@ func (s *NodeStack) GenerateLLB(dir string, opts BuildOptions) (*llb.State, erro
 		IncludePatterns: pkgFiles,
 	}), llb.WithCustomName("copy package files"))
 
-	// Use yarn if yarn.lock exists, otherwise npm
+	// Use the detected package manager
 	var state llb.State
-	if s.hasFile("yarn.lock") {
+	switch s.packageManager {
+	case nodePkgYarn:
 		yarnCache := llb.Scratch().File(
 			llb.Mkdir("/yarn-cache", 0755, llb.WithParents(true)),
 		)
@@ -565,7 +1028,7 @@ func (s *NodeStack) GenerateLLB(dir string, opts BuildOptions) (*llb.State, erro
 			llb.AddMount("/usr/local/share/.cache/yarn", yarnCache, llb.AsPersistentCacheDir("yarn", llb.CacheMountShared)),
 			llb.WithCustomName("[phase] Installing Node.js dependencies with yarn"),
 		).Root()
-	} else {
+	default:
 		// Create cache mounts
 		npmCache := llb.Scratch().File(
 			llb.Mkdir("/npm-cache", 0755, llb.WithParents(true)),
@@ -587,9 +1050,57 @@ func (s *NodeStack) GenerateLLB(dir string, opts BuildOptions) (*llb.State, erro
 	return &state, nil
 }
 
+func (s *NodeStack) getPackageScripts() map[string]string {
+	data, err := s.readFile("package.json")
+	if err != nil {
+		return nil
+	}
+
+	var pkg struct {
+		Scripts map[string]string `json:"scripts"`
+	}
+	if err := json.Unmarshal(data, &pkg); err != nil {
+		return nil
+	}
+	return pkg.Scripts
+}
+
+func (s *NodeStack) WebCommand() string {
+	// Determine the runner based on detected package manager
+	var runner string
+	if s.packageManager == nodePkgYarn {
+		runner = "yarn"
+	} else {
+		runner = "npm run"
+	}
+
+	// Check for common web server scripts in order of preference
+	if s.scripts != nil {
+		for _, script := range []string{"start", "serve", "server"} {
+			if _, ok := s.scripts[script]; ok {
+				return runner + " " + script
+			}
+		}
+	}
+
+	// Fallback: use detected entry point
+	if s.entryPoint != "" {
+		if strings.HasSuffix(s.entryPoint, ".ts") {
+			return "npx tsx " + s.entryPoint
+		}
+		return "node " + s.entryPoint
+	}
+
+	return ""
+}
+
 // BunStack implements Stack for Bun
 type BunStack struct {
 	MetaStack
+
+	// Detection state set in Init()
+	scripts    map[string]string
+	entryPoint string
 }
 
 func (s *BunStack) Name() string {
@@ -597,8 +1108,41 @@ func (s *BunStack) Name() string {
 }
 
 func (s *BunStack) Detect() bool {
-	return s.hasFile("package.json") &&
-		(s.hasFile("bun.lock") || s.detectInFile("Procfile", `web:\s+bun`))
+	if !s.hasFile("package.json") {
+		return false
+	}
+	s.Event("file", "package.json", "Found package.json")
+
+	if s.hasFile("bun.lock") {
+		s.Event("file", "bun.lock", "Found bun.lock (Bun runtime)")
+		return true
+	}
+	if s.detectInFile("Procfile", `web:\s+bun`) {
+		s.Event("file", "Procfile", "Procfile references bun")
+		return true
+	}
+	return false
+}
+
+func (s *BunStack) Init(opts BuildOptions) {
+	s.SetCwd("/app")
+
+	// Store scripts for later use
+	s.scripts = s.getPackageScripts()
+	if s.scripts != nil {
+		if _, ok := s.scripts["start"]; ok {
+			s.Event("script", "start", "bun start script detected")
+		}
+	}
+
+	// Check for common entry points and store the first one found
+	for _, entry := range []string{"index.ts", "index.js", "server.ts", "server.js", "app.ts", "app.js", "main.ts", "main.js"} {
+		if s.hasFile(entry) {
+			s.entryPoint = entry
+			s.Event("file", entry, "Entry point file detected")
+			break
+		}
+	}
 }
 
 func (s *BunStack) GenerateLLB(dir string, opts BuildOptions) (*llb.State, error) {
@@ -648,9 +1192,48 @@ func (s *BunStack) GenerateLLB(dir string, opts BuildOptions) (*llb.State, error
 	return &state, nil
 }
 
+func (s *BunStack) getPackageScripts() map[string]string {
+	data, err := s.readFile("package.json")
+	if err != nil {
+		return nil
+	}
+
+	var pkg struct {
+		Scripts map[string]string `json:"scripts"`
+	}
+	if err := json.Unmarshal(data, &pkg); err != nil {
+		return nil
+	}
+	return pkg.Scripts
+}
+
+func (s *BunStack) WebCommand() string {
+	// Check for common web server scripts in order of preference
+	if s.scripts != nil {
+		for _, script := range []string{"start", "serve", "server"} {
+			if _, ok := s.scripts[script]; ok {
+				return "bun run " + script
+			}
+		}
+	}
+
+	// Fallback: use detected entry point
+	if s.entryPoint != "" {
+		return "bun " + s.entryPoint
+	}
+
+	return ""
+}
+
 // GoStack implements Stack for Go
 type GoStack struct {
 	MetaStack
+
+	// Detection state set in Init()
+	hasVendor    bool
+	hasCmdDir    bool
+	cmdDir       string
+	goModVersion string
 }
 
 func (s *GoStack) Name() string {
@@ -658,11 +1241,43 @@ func (s *GoStack) Name() string {
 }
 
 func (s *GoStack) Detect() bool {
-	return s.hasFile("go.mod")
+	if !s.hasFile("go.mod") {
+		return false
+	}
+	s.Event("file", "go.mod", "Found go.mod")
+	return true
+}
+
+func (s *GoStack) Init(opts BuildOptions) {
+	s.SetCwd("/app")
+
+	// Store detection state for later use
+	s.hasVendor = s.hasDir("vendor")
+	if s.hasVendor {
+		s.Event("dir", "vendor", "Vendor directory detected (will use -mod=vendor)")
+	}
+
+	s.hasCmdDir = s.hasDir("cmd")
+	if s.hasCmdDir {
+		s.Event("dir", "cmd", "cmd directory detected")
+	}
+
+	// Pre-compute the command directory
+	s.cmdDir = s.commandDir(opts)
+	if s.cmdDir != "" {
+		s.Event("dir", s.cmdDir, "Build target directory detected")
+	} else {
+		s.Event("dir", ".", "No specific command directory detected, using root")
+	}
+
+	s.goModVersion = s.parseGoModVersion()
+	if s.goModVersion != "" {
+		s.Event("config", "go-version", "Go version "+s.goModVersion+" specified in go.mod")
+	}
 }
 
 func (s *GoStack) commandDir(opts BuildOptions) string {
-	if !s.hasDir("cmd") {
+	if !s.hasCmdDir {
 		return ""
 	}
 
@@ -684,10 +1299,6 @@ func (s *GoStack) commandDir(opts BuildOptions) string {
 	return ""
 }
 
-func (s *GoStack) hasVendor() bool {
-	return s.hasDir("vendor")
-}
-
 func (s *GoStack) parseGoModVersion() string {
 	content, err := s.readFile("go.mod")
 	if err != nil {
@@ -700,11 +1311,7 @@ func (s *GoStack) parseGoModVersion() string {
 		if strings.HasPrefix(line, "go ") {
 			parts := strings.Fields(line)
 			if len(parts) >= 2 {
-				version := parts[1]
-				versionParts := strings.Split(version, ".")
-				if len(versionParts) >= 2 {
-					return versionParts[0] + "." + versionParts[1]
-				}
+				return parts[1]
 			}
 		}
 	}
@@ -724,8 +1331,8 @@ func (s *GoStack) GenerateLLB(dir string, opts BuildOptions) (*llb.State, error)
 	version := "1.23"
 	if opts.Version != "" {
 		version = opts.Version
-	} else if goModVersion := s.parseGoModVersion(); goModVersion != "" {
-		version = goModVersion
+	} else if s.goModVersion != "" {
+		version = s.goModVersion
 	}
 	base := llb.Image(imagerefs.GetGolangImage(version), llb.WithMetaResolver(mr))
 
@@ -741,11 +1348,12 @@ func (s *GoStack) GenerateLLB(dir string, opts BuildOptions) (*llb.State, error)
 	// Copy the rest of the application code
 	appState := h.copyApp(state, localCtx)
 
-	buildDir := s.commandDir(opts)
+	// Use the pre-computed cmdDir from Init()
+	buildDir := s.cmdDir
 
 	// Build command - skip go mod download if vendor directory exists
 	var buildCmd string
-	if s.hasVendor() {
+	if s.hasVendor {
 		buildCmd = fmt.Sprintf("go build -mod=vendor -o /bin/app ./%s", buildDir)
 	} else {
 		buildCmd = fmt.Sprintf("sh -c 'go mod download -json && go build -o /bin/app ./%s'", buildDir)
@@ -765,9 +1373,149 @@ func (s *GoStack) GenerateLLB(dir string, opts BuildOptions) (*llb.State, error)
 		opts.AlpineImage = imagerefs.AlpineDefault
 	}
 
+	state = state.AddEnv("APP", "/bin/app")
+
 	state = s.addAppUser(state)
 	state = s.applyOnBuild(state, opts)
 	state = s.chownApp(state)
 
 	return &state, nil
+}
+
+func (s *GoStack) WebCommand() string {
+	return "/bin/app"
+}
+
+// RustStack implements Stack for Rust
+type RustStack struct {
+	MetaStack
+
+	// Detection state set in Init()
+	packageName string
+	edition     string
+}
+
+func (s *RustStack) Name() string {
+	return "rust"
+}
+
+func (s *RustStack) Detect() bool {
+	if !s.hasFile("Cargo.toml") {
+		return false
+	}
+	s.Event("file", "Cargo.toml", "Found Cargo.toml")
+	return true
+}
+
+func (s *RustStack) Init(opts BuildOptions) {
+	s.SetCwd("/app")
+
+	// Parse Cargo.toml once and extract all info
+	cargo := s.parseCargoToml()
+	if cargo != nil {
+		s.packageName = cargo.Package.Name
+		if s.packageName != "" {
+			s.Event("config", "package", "Package name: "+s.packageName)
+		}
+
+		s.edition = cargo.Package.Edition
+		if s.edition != "" {
+			s.Event("config", "edition", "Rust edition "+s.edition)
+		}
+	}
+
+	// Check for Cargo.lock
+	if s.hasFile("Cargo.lock") {
+		s.Event("file", "Cargo.lock", "Found Cargo.lock")
+	}
+}
+
+// cargoToml represents the structure of a Cargo.toml file
+type cargoToml struct {
+	Package struct {
+		Name    string `toml:"name"`
+		Edition string `toml:"edition"`
+	} `toml:"package"`
+}
+
+func (s *RustStack) parseCargoToml() *cargoToml {
+	content, err := s.readFile("Cargo.toml")
+	if err != nil {
+		return nil
+	}
+
+	var cargo cargoToml
+	if err := toml.Unmarshal(content, &cargo); err != nil {
+		return nil
+	}
+	return &cargo
+}
+
+func (s *RustStack) GenerateLLB(dir string, opts BuildOptions) (*llb.State, error) {
+	// Set up local context with the directory
+	localCtx := llb.Local("context",
+		llb.SharedKeyHint(dir),
+		llb.ExcludePatterns([]string{".git", "target"}),
+		llb.FollowPaths([]string{"."}),
+		llb.WithCustomName("application code"),
+	)
+
+	version := "1"
+	if opts.Version != "" {
+		version = opts.Version
+	}
+
+	// NOTE: If we don't pass this in with WithMetaResolver, then
+	// buildkit doesn't add the info from the image, info like
+	// the PATH env var.
+	mr := imagemetaresolver.Default()
+
+	base := llb.Image(imagerefs.GetRustImage(version), llb.WithMetaResolver(mr))
+
+	base = s.addAppUser(base)
+
+	h := &highlevelBuilder{opts}
+
+	// Copy the application code
+	state := h.copyApp(base, localCtx)
+
+	// Determine the binary name
+	binaryName := s.packageName
+	if binaryName == "" {
+		binaryName = opts.Name
+	}
+	if binaryName == "" {
+		binaryName = "app"
+	}
+
+	// Cargo converts hyphens to underscores in binary names (e.g. my-app -> my_app)
+	normalizedName := strings.ReplaceAll(binaryName, "-", "_")
+
+	// Build the application and copy it out of the cache dir.
+	// Try the normalized name first (with underscores), then fall back to the original name.
+	var cpCmd string
+	if normalizedName != binaryName {
+		cpCmd = fmt.Sprintf("cp target/release/%s /bin/app 2>/dev/null || cp target/release/%s /bin/app", normalizedName, binaryName)
+	} else {
+		cpCmd = fmt.Sprintf("cp target/release/%s /bin/app", binaryName)
+	}
+
+	state = state.Dir("/app").Run(
+		llb.Args([]string{"/bin/sh", "-c",
+			fmt.Sprintf("cargo build --release && %s", cpCmd)}),
+		h.CacheMount("/usr/local/cargo/registry"),
+		h.CacheMount("/app/target"),
+		llb.WithCustomName("[phase] Building Rust application"),
+	).Root()
+
+	state = state.AddEnv("APP", "/bin/app")
+
+	state = s.applyOnBuild(state, opts)
+	state = s.chownApp(state)
+
+	return &state, nil
+}
+
+func (s *RustStack) WebCommand() string {
+	return "/bin/app"
 }
