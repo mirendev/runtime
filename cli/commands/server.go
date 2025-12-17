@@ -418,9 +418,9 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 
 		buildkitComponent = buildkit.NewComponent(ctx.Log, cc, "miren", cfg.Server.GetDataPath())
 
-		// Parse GC storage size (e.g., "10GB" -> bytes)
-		gcKeepStorage := parseStorageSize(cfg.Buildkit.GetGcKeepStorage())
-		gcKeepDuration := parseDuration(cfg.Buildkit.GetGcKeepDuration())
+		// Parse GC settings
+		gcStorage, _ := units.ParseData(cfg.Buildkit.GetGcKeepStorage())
+		gcDuration, _ := units.ParseDuration(cfg.Buildkit.GetGcKeepDuration())
 
 		// Default socket directory to data_path/buildkit/socket if not set
 		socketDir := cfg.Buildkit.GetSocketDir()
@@ -430,8 +430,8 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 
 		buildkitConfig := buildkit.Config{
 			SocketDir:      socketDir,
-			GCKeepStorage:  gcKeepStorage,
-			GCKeepDuration: gcKeepDuration,
+			GCKeepStorage:  int64(gcStorage.Bytes()),
+			GCKeepDuration: int64(gcDuration.Seconds()),
 			RegistryHost:   "cluster.local:5000",
 		}
 
@@ -1095,58 +1095,4 @@ func stopAllSandboxContainers(ctx context.Context, log *slog.Logger, cc *contain
 
 	log.Info("stopped sandbox containers", "count", stoppedCount)
 	return nil
-}
-
-// parseStorageSize parses a human-readable storage size (e.g., "10GB") to bytes
-func parseStorageSize(s string) int64 {
-	s = strings.TrimSpace(s)
-	if s == "" {
-		return 0
-	}
-
-	data, err := units.ParseData(s)
-	if err != nil {
-		return 0
-	}
-	return int64(data.Bytes())
-}
-
-// parseDuration parses a human-readable duration (e.g., "7d") to seconds
-func parseDuration(s string) int64 {
-	s = strings.TrimSpace(s)
-	if s == "" {
-		return 0
-	}
-
-	// Try standard Go duration first (e.g., "24h")
-	d, err := time.ParseDuration(s)
-	if err == nil {
-		return int64(d.Seconds())
-	}
-
-	// Parse custom format (e.g., "7d")
-	var value float64
-	var unit string
-	_, err = fmt.Sscanf(s, "%f%s", &value, &unit)
-	if err != nil {
-		return 0
-	}
-
-	var seconds int64
-	switch strings.ToLower(unit) {
-	case "s":
-		seconds = int64(value)
-	case "m":
-		seconds = int64(value * 60)
-	case "h":
-		seconds = int64(value * 3600)
-	case "d":
-		seconds = int64(value * 86400)
-	case "w":
-		seconds = int64(value * 604800)
-	default:
-		return 0
-	}
-
-	return seconds
 }

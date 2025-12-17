@@ -436,6 +436,6 @@ configs:
         default: "7d"
         cli:
           long: buildkit-gc-duration
-          description: How long to keep BuildKit cache entries (e.g., 7d, 14d)
+          description: How long to keep BuildKit cache entries (e.g., 7d, 24h)
         env: MIREN_BUILDKIT_GC_KEEP_DURATION
         toml: gc_keep_duration
