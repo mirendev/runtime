@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"miren.dev/runtime/clientconfig"
+	"miren.dev/runtime/pkg/ui"
 )
 
 // DoctorAuth shows authentication and user information
@@ -72,6 +73,42 @@ func DoctorAuth(ctx *Context, opts struct {
 		}
 	} else if authRes.Method == "none" {
 		ctx.Printf("\n%s\n", infoGray.Render("No authentication configured for this cluster"))
+	}
+
+	// Interactive prompts
+	if !ui.IsInteractive() {
+		return nil
+	}
+
+	if cluster.Identity == "" {
+		// No identity configured - offer to set up miren.cloud auth
+		ctx.Printf("\n")
+		ctx.Printf("Set up authentication with miren.cloud? [Y/n] ")
+		var response string
+		fmt.Scanln(&response)
+		response = strings.TrimSpace(strings.ToLower(response))
+		if response == "" || response == "y" || response == "yes" {
+			ctx.Printf("\n")
+			if err := LoginWithDefaults(ctx); err != nil {
+				return err
+			}
+			ctx.Printf("\n%s\n", infoGreen.Render("✓ Login successful"))
+		}
+	} else if authRes.Method == "none" && cluster.Identity != "" {
+		// Identity is configured but auth failed - offer to refresh
+		ctx.Printf("\n")
+		ctx.Printf("Identity not working. Refresh your login? [Y/n] ")
+		var response string
+		fmt.Scanln(&response)
+		response = strings.TrimSpace(strings.ToLower(response))
+		if response == "" || response == "y" || response == "yes" {
+			ctx.Printf("\n%s\n", infoGray.Render("Refreshing login..."))
+			ctx.Printf("\n")
+			if err := LoginWithDefaults(ctx); err != nil {
+				return err
+			}
+			ctx.Printf("\n%s\n", infoGreen.Render("✓ Login refreshed"))
+		}
 	}
 
 	return nil
