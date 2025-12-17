@@ -22,6 +22,19 @@ func normalizeSandboxID(sandboxID string) string {
 	return "sandbox/" + sandboxID
 }
 
+// buildFilterWithService combines a user filter with a service filter for LogsQL.
+// Service filter is added as a field match: service:"value"
+func buildFilterWithService(userFilter, service string) string {
+	if service == "" {
+		return userFilter
+	}
+	serviceFilter := fmt.Sprintf("service:%q", service)
+	if userFilter == "" {
+		return serviceFilter
+	}
+	return serviceFilter + " " + userFilter
+}
+
 func Logs(ctx *Context, opts struct {
 	ConfigCentric
 
@@ -31,6 +44,7 @@ func Logs(ctx *Context, opts struct {
 	Sandbox string         `short:"s" long:"sandbox" description:"Show logs for a specific sandbox ID"`
 	Follow  bool           `short:"f" long:"follow" description:"Follow log output (live tail)"`
 	Filter  string         `short:"g" long:"grep" description:"Filter logs (e.g., 'error', '\"exact phrase\"', 'error -debug', '/regex/')"`
+	Service string         `long:"service" description:"Filter logs by service name (e.g., 'web', 'worker')"`
 }) error {
 	// Check for conflicting options
 	if opts.App != "" && opts.Sandbox != "" {
@@ -75,10 +89,20 @@ func Logs(ctx *Context, opts struct {
 		}
 	}
 
+	// Build combined filter with service filter for server-side filtering
+	combinedFilter := buildFilterWithService(opts.Filter, opts.Service)
+
 	// Check if server supports streaming (prefer chunked for efficiency)
 	if cl.HasMethod(ctx, "streamLogChunks") {
-		return streamLogChunks(ctx, cl, opts.App, opts.Sandbox, opts.Last, opts.Follow, opts.Filter)
+		return streamLogChunks(ctx, cl, opts.App, opts.Sandbox, opts.Last, opts.Follow, combinedFilter)
 	}
+
+	// Older server - warn about upgrade and limited functionality
+	ctx.Printf("Warning: server does not support optimized log streaming. Upgrade your server for better performance and --service filtering.\n")
+	if opts.Service != "" {
+		return fmt.Errorf("--service filtering requires a newer server version")
+	}
+
 	if cl.HasMethod(ctx, "streamLogs") {
 		return streamLogs(ctx, cl, opts.App, opts.Sandbox, opts.Last, opts.Follow, filter)
 	}
