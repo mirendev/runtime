@@ -202,6 +202,10 @@ type chanReader[T any] struct {
 }
 
 func (c *chanReader[T]) Recv(ctx context.Context, state *RecvStreamRecv[T]) error {
+	// Consume args from decoder to prevent leftover data from being
+	// interpreted as the next stream request
+	_ = state.Args()
+
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
