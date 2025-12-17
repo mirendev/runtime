@@ -53,6 +53,11 @@ configs:
         toml: containerd
         nested: true
 
+      buildkit:
+        type: BuildkitConfig
+        toml: buildkit
+        nested: true
+
   ServerConfig:
     description: Core server settings
     fields:
@@ -385,3 +390,52 @@ configs:
           description: Path to containerd socket
         env: MIREN_CONTAINERD_SOCKET_PATH
         toml: socket_path
+
+  BuildkitConfig:
+    description: BuildKit daemon configuration
+    fields:
+      start_embedded:
+        type: bool
+        cli:
+          long: start-buildkit
+          description: Start embedded BuildKit daemon for container image builds
+        env: MIREN_BUILDKIT_START_EMBEDDED
+        toml: start_embedded
+        mode_default:
+          standalone: true
+
+      socket_path:
+        type: string
+        default: ""
+        cli:
+          long: buildkit-socket
+          description: Path to external BuildKit Unix socket (for distributed mode)
+        env: MIREN_BUILDKIT_SOCKET_PATH
+        toml: socket_path
+
+      socket_dir:
+        type: string
+        default: ""
+        cli:
+          long: buildkit-socket-dir
+          description: Directory for embedded BuildKit Unix socket (defaults to data_path/buildkit/socket)
+        env: MIREN_BUILDKIT_SOCKET_DIR
+        toml: socket_dir
+
+      gc_keep_storage:
+        type: string
+        default: "10GB"
+        cli:
+          long: buildkit-gc-storage
+          description: Maximum BuildKit layer cache size (e.g., 10GB, 50GB)
+        env: MIREN_BUILDKIT_GC_KEEP_STORAGE
+        toml: gc_keep_storage
+
+      gc_keep_duration:
+        type: string
+        default: "7d"
+        cli:
+          long: buildkit-gc-duration
+          description: How long to keep BuildKit cache entries (e.g., 7d, 24h)
+        env: MIREN_BUILDKIT_GC_KEEP_DURATION
+        toml: gc_keep_duration

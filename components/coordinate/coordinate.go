@@ -30,6 +30,7 @@ import (
 	"miren.dev/runtime/clientconfig"
 	"miren.dev/runtime/components/activator"
 	"miren.dev/runtime/components/autotls"
+	"miren.dev/runtime/components/buildkit"
 	"miren.dev/runtime/components/netresolve"
 	certctrl "miren.dev/runtime/controllers/certificate"
 	deploymentctrl "miren.dev/runtime/controllers/deployment"
@@ -79,6 +80,9 @@ type CoordinatorConfig struct {
 	HTTP      *metrics.HTTPMetrics
 	Logs      *observability.LogReader
 	LogWriter *observability.PersistentLogWriter
+
+	// BuildKit is the persistent BuildKit component for container image builds
+	BuildKit *buildkit.Component
 }
 
 // CloudAuthConfig contains cloud authentication settings
@@ -666,7 +670,7 @@ func (c *Coordinator) Start(ctx context.Context) error {
 	// Create app client for the builder
 	appClient := appclient.NewClient(c.Log, loopback)
 
-	bs := build.NewBuilder(c.Log, eac, appClient, c.Resolver, c.TempDir, c.LogWriter, c.CloudAuth.DNSHostname)
+	bs := build.NewBuilder(c.Log, eac, appClient, c.Resolver, c.TempDir, c.LogWriter, c.CloudAuth.DNSHostname, c.BuildKit)
 	server.ExposeValue("dev.miren.runtime/build", build_v1alpha.AdaptBuilder(bs))
 
 	ai := app.NewAppInfo(c.Log, ec, c.Cpu, c.Mem, c.HTTP)

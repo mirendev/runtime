@@ -28,6 +28,7 @@ import (
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/clientconfig"
 	"miren.dev/runtime/components/autotls"
+	"miren.dev/runtime/components/buildkit"
 	containerdcomp "miren.dev/runtime/components/containerd"
 	"miren.dev/runtime/components/coordinate"
 	"miren.dev/runtime/components/etcd"
@@ -48,6 +49,7 @@ import (
 	"miren.dev/runtime/pkg/registration"
 	"miren.dev/runtime/pkg/rpc"
 	"miren.dev/runtime/pkg/serverconfig"
+	"miren.dev/runtime/pkg/units"
 	"miren.dev/runtime/servers/httpingress"
 	"miren.dev/runtime/version"
 )
@@ -399,6 +401,72 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 		ctx.Server.Override("victoriametrics-timeout", 30*time.Second)
 	}
 
+	// BuildKit component (nil if not configured)
+	var buildkitComponent *buildkit.Component
+
+	// Start embedded BuildKit daemon if requested
+	if cfg.Buildkit.GetStartEmbedded() {
+		ctx.Log.Info("starting embedded buildkit daemon", "socket-dir", cfg.Buildkit.GetSocketDir())
+
+		// Get containerd client from registry
+		var cc *containerd.Client
+		err := ctx.Server.Resolve(&cc)
+		if err != nil {
+			ctx.Log.Error("failed to get containerd client for buildkit", "error", err)
+			return err
+		}
+
+		buildkitComponent = buildkit.NewComponent(ctx.Log, cc, "miren", cfg.Server.GetDataPath())
+
+		// Parse GC settings
+		gcStorage, _ := units.ParseData(cfg.Buildkit.GetGcKeepStorage())
+		gcDuration, _ := units.ParseDuration(cfg.Buildkit.GetGcKeepDuration())
+
+		// Default socket directory to data_path/buildkit/socket if not set
+		socketDir := cfg.Buildkit.GetSocketDir()
+		if socketDir == "" {
+			socketDir = filepath.Join(cfg.Server.GetDataPath(), "buildkit", "socket")
+		}
+
+		buildkitConfig := buildkit.Config{
+			SocketDir:      socketDir,
+			GCKeepStorage:  int64(gcStorage.Bytes()),
+			GCKeepDuration: int64(gcDuration.Seconds()),
+			RegistryHost:   "cluster.local:5000",
+		}
+
+		err = buildkitComponent.Start(sub, buildkitConfig)
+		if err != nil {
+			ctx.Log.Error("failed to start buildkit component", "error", err)
+			return err
+		}
+
+		ctx.Log.Info("embedded buildkit started", "socket-path", buildkitComponent.SocketPath())
+
+		// Ensure cleanup on exit
+		defer func() {
+			ctx.Log.Info("stopping embedded buildkit")
+			stopCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			if err := buildkitComponent.Stop(stopCtx); err != nil {
+				ctx.Log.Error("failed to stop buildkit component", "error", err)
+			}
+		}()
+	} else if cfg.Buildkit.GetSocketPath() != "" {
+		// Use external BuildKit daemon
+		ctx.Log.Info("using external buildkit daemon", "socket", cfg.Buildkit.GetSocketPath())
+
+		buildkitComponent = buildkit.NewExternalComponent(ctx.Log, cfg.Buildkit.GetSocketPath())
+
+		err := buildkitComponent.Start(sub, buildkit.Config{})
+		if err != nil {
+			ctx.Log.Error("failed to connect to external buildkit", "error", err)
+			return err
+		}
+
+		ctx.Log.Info("connected to external buildkit", "socket-path", buildkitComponent.SocketPath())
+	}
+
 	klog.SetLogger(logr.FromSlogHandler(ctx.Log.With("module", "global").Handler()))
 
 	res, hm := netresolve.NewLocalResolver()
@@ -545,6 +613,7 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 		HTTP:            &httpMetrics,
 		Logs:            logs,
 		LogWriter:       logWriter,
+		BuildKit:        buildkitComponent,
 	})
 
 	err = co.Start(sub)
@@ -766,6 +835,13 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 	if err := hm.SetHost("cluster.local", regAddr); err != nil {
 		ctx.Log.Error("failed to set host", "error", err)
 		return err
+	}
+
+	// Update BuildKit's hosts file with the registry IP
+	if buildkitComponent != nil {
+		if err := buildkitComponent.SetRegistryIP(regAddr.String()); err != nil {
+			ctx.Log.Warn("failed to update buildkit hosts file", "error", err)
+		}
 	}
 
 	cert, err := co.IssueCertificate("miren-server")

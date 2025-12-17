@@ -10,6 +10,7 @@ func strPtr(s string) *string { return &s }
 // DefaultConfig returns the default configuration
 func DefaultConfig() *Config {
 	return &Config{
+		Buildkit:        DefaultBuildkitConfig(),
 		Containerd:      DefaultContainerdConfig(),
 		Etcd:            DefaultEtcdConfig(),
 		Mode:            strPtr("standalone"),
@@ -17,6 +18,17 @@ func DefaultConfig() *Config {
 		TLS:             DefaultTLSConfig(),
 		Victorialogs:    DefaultVictoriaLogsConfig(),
 		Victoriametrics: DefaultVictoriaMetricsConfig(),
+	}
+}
+
+// DefaultBuildkitConfig returns default BuildkitConfig
+func DefaultBuildkitConfig() BuildkitConfig {
+	return BuildkitConfig{
+		GcKeepDuration: strPtr("7d"),
+		GcKeepStorage:  strPtr("10GB"),
+		SocketDir:      strPtr(""),
+		SocketPath:     strPtr(""),
+		StartEmbedded:  nil,
 	}
 }
 
