@@ -6,9 +6,12 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"os/exec"
+	"strings"
 	"time"
 
 	"miren.dev/runtime/clientconfig"
+	"miren.dev/runtime/pkg/ui"
 )
 
 // DoctorServer shows server health and connectivity details
@@ -37,8 +40,9 @@ func DoctorServer(ctx *Context, opts struct {
 
 	// Check connectivity
 	connected := false
-	client, err := ctx.RPCClient("entities")
-	if err == nil && client != nil {
+	var connErr error
+	client, connErr := ctx.RPCClient("entities")
+	if connErr == nil && client != nil {
 		defer client.Close()
 		connected = true
 	}
@@ -72,6 +76,110 @@ func DoctorServer(ctx *Context, opts struct {
 	// Check HTTP (port 80)
 	httpStatus, httpDetail := checkHTTP(host)
 	printEndpointStatus(ctx, "HTTP", httpStatus, httpDetail)
+
+	// Interactive prompts when not connected
+	if !connected && ui.IsInteractive() {
+		isLocal := isLocalCluster(cluster.Hostname)
+		// Check for various connection failure messages
+		connErrStr := ""
+		if connErr != nil {
+			connErrStr = connErr.Error()
+		}
+		isConnectionFailed := connErr != nil && (strings.Contains(connErrStr, "connection refused") ||
+			strings.Contains(connErrStr, "timeout") ||
+			strings.Contains(connErrStr, "no recent network activity"))
+
+		ctx.Printf("\n")
+
+		if isLocal && isConnectionFailed {
+			// Local server not running - offer to start it
+			ctx.Printf("Server isn't running. Start it? [Y/n] ")
+			var response string
+			fmt.Scanln(&response)
+			response = strings.TrimSpace(strings.ToLower(response))
+			if response == "" || response == "y" || response == "yes" {
+				ctx.Printf("\n%s", infoGray.Render("Starting miren server..."))
+
+				// Try systemctl first
+				cmd := exec.Command("sudo", "systemctl", "start", "miren")
+				if err := cmd.Run(); err != nil {
+					// Systemd not available, try starting manually
+					ctx.Printf("\n%s", infoGray.Render("systemctl not available, starting manually..."))
+					cmd = exec.Command("sudo", "/var/lib/miren/release/miren", "server", "-vv", "--address=0.0.0.0:8443", "--serve-tls")
+					cmd.Start()
+				}
+
+				// Wait for server to start
+				ctx.Printf(" waiting for server")
+				for i := 0; i < 10; i++ {
+					time.Sleep(1 * time.Second)
+					fmt.Print(".")
+				}
+
+				// Verify it started
+				verifyClient, verifyErr := ctx.RPCClient("entities")
+				if verifyErr == nil && verifyClient != nil {
+					verifyClient.Close()
+					ctx.Printf("\n%s\n", infoGreen.Render("✓ Server started"))
+					ctx.Printf("%s    %s\n", infoLabel.Render("Status:"), infoGreen.Render("connected"))
+				} else {
+					ctx.Printf("\n%s\n", infoRed.Render("✗ Server failed to start"))
+					ctx.Printf("%s\n", infoGray.Render("Check logs with: journalctl -u miren -f"))
+				}
+			}
+		} else if !isLocal {
+			// Remote server - offer to retry
+			ctx.Printf("Cannot reach server. Retry connection? [Y/n] ")
+			var response string
+			fmt.Scanln(&response)
+			response = strings.TrimSpace(strings.ToLower(response))
+			if response == "" || response == "y" || response == "yes" {
+				ctx.Printf("\n%s\n", infoGray.Render("Retrying..."))
+				retryClient, retryErr := ctx.RPCClient("entities")
+				if retryErr == nil && retryClient != nil {
+					retryClient.Close()
+					ctx.Printf("%s\n", infoGreen.Render("✓ Connected"))
+					ctx.Printf("%s    %s\n", infoLabel.Render("Status:"), infoGreen.Render("connected"))
+				} else {
+					ctx.Printf("%s\n\n", infoRed.Render("✗ Still cannot connect"))
+
+					// Offer to try a different server
+					ctx.Printf("Try a different server? [Y/n] ")
+					fmt.Scanln(&response)
+					response = strings.TrimSpace(strings.ToLower(response))
+					if response == "" || response == "y" || response == "yes" {
+						// Build picker items from configured clusters
+						var items []ui.PickerItem
+						cfg.IterateClusters(func(name string, c *clientconfig.ClusterConfig) error {
+							if name != clusterName { // Skip the current failing one
+								items = append(items, ui.SimplePickerItem{
+									Text: fmt.Sprintf("%-15s %s", name, c.Hostname),
+								})
+							}
+							return nil
+						})
+						items = append(items, ui.SimplePickerItem{Text: "[back]"})
+
+						if len(items) > 1 { // More than just [back]
+							ctx.Printf("\n")
+							selected, pickerErr := ui.RunPicker(items, ui.WithTitle("Select a server:"))
+							if pickerErr == nil && selected != nil && selected.ID() != "[back]" {
+								// Extract cluster name from selection
+								parts := strings.Fields(selected.ID())
+								if len(parts) > 0 {
+									newClusterName := parts[0]
+									ctx.Printf("\n%s\n", infoGray.Render("To connect to "+newClusterName+", run:"))
+									ctx.Printf("  miren doctor server -C %s\n", newClusterName)
+								}
+							}
+						} else {
+							ctx.Printf("%s\n", infoGray.Render("No other clusters configured"))
+						}
+					}
+				}
+			}
+		}
+	}
 
 	return nil
 }
