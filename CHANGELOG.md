@@ -39,7 +39,9 @@ All notable changes to Miren Runtime will be documented in this file.
 ### Documentation
 
 - Updated system requirements to 4GB RAM and 20GB disk ([#480](https://github.com/mirendev/runtime/pull/480))
+
 - Improved getting started documentation ([#471](https://github.com/mirendev/runtime/pull/471))
+
 - Fixed missing pages in docs sidebar navigation ([#467](https://github.com/mirendev/runtime/pull/467))
 
 ---
