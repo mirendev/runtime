@@ -3,6 +3,7 @@ package commands
 import (
 	"errors"
 	"fmt"
+	"os/exec"
 	"sort"
 	"time"
 
@@ -140,7 +141,8 @@ func DoctorApps(ctx *Context, opts struct {
 
 	// Build table
 	var rows []ui.Row
-	headers := []string{"NAME", "VERSION", "STATUS", "INSTANCES", "BRANCH", "ERROR"}
+	var appNames []string // Store actual app names for interactive picker
+	headers := []string{"NAME", "VERSION", "STATUS", "INSTANCES", "BRANCH"}
 
 	for _, e := range appsRes.Values() {
 		var app core_v1alpha.App
@@ -150,11 +152,11 @@ func DoctorApps(ctx *Context, opts struct {
 		md.Decode(e.Entity())
 
 		name := md.Name
+		appNames = append(appNames, name) // Store actual name before any formatting
 		version := "-"
 		status := "-"
 		instances := "0"
 		branch := "-"
-		errorMsg := "-"
 
 		// Get instance count
 		if count, ok := instanceCount[md.Name]; ok {
@@ -190,18 +192,15 @@ func DoctorApps(ctx *Context, opts struct {
 				branch = deployment.GitInfo.Branch
 			}
 
-			// Get error message for failed deployments
-			if deployment.Status == "failed" && deployment.ErrorMessage != "" {
-				errorMsg = infoRed.Render(deployment.ErrorMessage)
-			}
 		}
 
-		rows = append(rows, ui.Row{name, version, status, instances, branch, errorMsg})
+		rows = append(rows, ui.Row{name, version, status, instances, branch})
 	}
 
 	sort.Slice(rows, func(i, j int) bool {
 		return rows[i][0] < rows[j][0]
 	})
+	sort.Strings(appNames)
 
 	ctx.Printf("%s\n", infoBold.Render("Apps"))
 	ctx.Printf("%s\n", infoGray.Render("===="))
@@ -220,5 +219,63 @@ func DoctorApps(ctx *Context, opts struct {
 	)
 
 	ctx.Printf("%s\n", table.Render())
-	return nil
+
+	// Interactive mode
+	if !ui.IsInteractive() {
+		return nil
+	}
+
+	ctx.Printf("\n")
+
+	for {
+		// Build picker items from app names
+		var items []ui.PickerItem
+		for _, name := range appNames {
+			items = append(items, ui.SimplePickerItem{Text: name})
+		}
+		items = append(items, ui.SimplePickerItem{Text: "[done]"})
+
+		selected, err := ui.RunPicker(items, ui.WithTitle("Select an app:"))
+		if err != nil || selected == nil || selected.ID() == "[done]" {
+			return nil
+		}
+
+		appName := selected.ID()
+
+		// Action picker for selected app
+		actionItems := []ui.PickerItem{
+			ui.SimplePickerItem{Text: "View logs"},
+			ui.SimplePickerItem{Text: "Redeploy"},
+			ui.SimplePickerItem{Text: "[back]"},
+		}
+
+		action, err := ui.RunPicker(actionItems, ui.WithTitle(fmt.Sprintf("Action for %s:", appName)))
+		if err != nil || action == nil || action.ID() == "[back]" {
+			continue
+		}
+
+		switch action.ID() {
+		case "View logs":
+			ctx.Printf("\n%s\n\n", infoGray.Render("Logs for "+appName+":"))
+			cmd := exec.Command("miren", "logs", "-a", appName)
+			cmd.Stdout = ctx.Stdout
+			cmd.Stderr = ctx.Stderr
+			cmd.Run()
+			ctx.Printf("\n%s", infoGray.Render("Press Enter to continue..."))
+			fmt.Scanln()
+			ctx.Printf("\n")
+
+		case "Redeploy":
+			ctx.Printf("\n%s\n", infoGray.Render("Redeploying "+appName+"..."))
+			cmd := exec.Command("miren", "deploy", "-a", appName)
+			cmd.Stdout = ctx.Stdout
+			cmd.Stderr = ctx.Stderr
+			if err := cmd.Run(); err != nil {
+				ctx.Printf("%s\n", infoRed.Render("Redeploy failed: "+err.Error()))
+			} else {
+				ctx.Printf("%s\n", infoGreen.Render("✓ Redeploy initiated"))
+			}
+			ctx.Printf("\n")
+		}
+	}
 }
