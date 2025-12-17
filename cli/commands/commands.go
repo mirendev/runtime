@@ -70,8 +70,8 @@ func AllCommands() map[string]cli.CommandFactory {
 			return Infer("app delete", "Delete an application and all its resources", AppDelete), nil
 		},
 
-		"app exec": func() (cli.Command, error) {
-			return Infer("app exec", "Open interactive shell in a new sandbox", AppExec), nil
+		"app run": func() (cli.Command, error) {
+			return Infer("app run", "Open interactive shell in a new sandbox", AppRun), nil
 		},
 
 		"apps": func() (cli.Command, error) {

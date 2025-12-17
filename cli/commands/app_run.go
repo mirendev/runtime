@@ -12,7 +12,7 @@ import (
 	"miren.dev/runtime/pkg/rpc/stream"
 )
 
-func AppExec(ctx *Context, opts struct {
+func AppRun(ctx *Context, opts struct {
 	AppCentric
 	Rest struct {
 		Args []string
