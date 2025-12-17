@@ -42,10 +42,6 @@ func AllCommands() map[string]cli.CommandFactory {
 			return Infer("doctor auth", "Check authentication and user information", DoctorAuth), nil
 		},
 
-		"doctor all": func() (cli.Command, error) {
-			return Infer("doctor all", "Run all diagnostic checks", DoctorAll), nil
-		},
-
 		"init": func() (cli.Command, error) {
 			return Infer("init", "Initialize a new application", Init), nil
 		},
