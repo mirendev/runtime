@@ -347,6 +347,7 @@ func (c *Component) createContainer(ctx context.Context, image containerd.Image,
 	opts := []oci.SpecOpts{
 		oci.WithImageConfig(image),
 		oci.WithHostNamespace(specs.NetworkNamespace), // Required for DNS resolution
+		oci.WithHostNamespace(specs.CgroupNamespace),  // Required for runc to access cgroups
 		oci.WithPrivileged,                            // Required for BuildKit
 		oci.WithProcessArgs(
 			"/usr/bin/buildkitd",
@@ -377,6 +378,13 @@ func (c *Component) createContainer(ctx context.Context, image containerd.Image,
 				Type:        "bind",
 				Source:      hostsPath,
 				Options:     []string{"rbind", "ro"},
+			},
+			{
+				// Mount cgroups for runc to work properly
+				Destination: "/sys/fs/cgroup",
+				Type:        "bind",
+				Source:      "/sys/fs/cgroup",
+				Options:     []string{"rbind", "rw"},
 			},
 		}),
 	}
