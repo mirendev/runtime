@@ -21,6 +21,7 @@ import (
 	"miren.dev/runtime/api/build/build_v1alpha"
 	"miren.dev/runtime/api/compute/compute_v1alpha"
 	"miren.dev/runtime/api/core/core_v1alpha"
+	"miren.dev/runtime/api/debug/debug_v1alpha"
 	deployment_v1alpha "miren.dev/runtime/api/deployment/deployment_v1alpha"
 	aes "miren.dev/runtime/api/entityserver"
 	esv1 "miren.dev/runtime/api/entityserver/entityserver_v1alpha"
@@ -45,6 +46,7 @@ import (
 	"miren.dev/runtime/pkg/sysstats"
 	"miren.dev/runtime/servers/app"
 	"miren.dev/runtime/servers/build"
+	debugsrv "miren.dev/runtime/servers/debug"
 	"miren.dev/runtime/servers/deployment"
 	"miren.dev/runtime/servers/entityserver"
 	execproxy "miren.dev/runtime/servers/exec_proxy"
@@ -120,6 +122,8 @@ type Coordinator struct {
 	apiKey  []byte
 
 	authClient *cloudauth.AuthClient // For status reporting to cloud
+
+	debugServer *debugsrv.Server
 }
 
 func (c *Coordinator) Activator() activator.AppActivator {
@@ -134,6 +138,11 @@ func (c *Coordinator) SandboxPoolManager() *sandboxpool.Manager {
 func (c *Coordinator) Stop() {
 	if c.cm != nil {
 		c.cm.Stop()
+	}
+	if c.debugServer != nil {
+		if err := c.debugServer.Close(); err != nil {
+			c.Log.Error("failed to close debug server", "error", err)
+		}
 	}
 }
 
@@ -623,6 +632,13 @@ func (c *Coordinator) Start(ctx context.Context) error {
 		return err
 	}
 	server.ExposeValue("dev.miren.runtime/deployment", deployment_v1alpha.AdaptDeployment(ds))
+
+	c.debugServer, err = debugsrv.NewServer(c.Log, filepath.Join(c.DataPath, "net.db"), eac)
+	if err != nil {
+		c.Log.Error("failed to create debug server", "error", err)
+		return err
+	}
+	server.ExposeValue("dev.miren.runtime/debug-netdb", debug_v1alpha.AdaptNetDB(c.debugServer))
 
 	c.Log.Info("started RPC server")
 
