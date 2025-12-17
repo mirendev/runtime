@@ -34,9 +34,10 @@ All notable changes to Miren Runtime will be documented in this file.
 
 - **Fixed entity revision check** - Entity patches no longer incorrectly enforce revision checks when `fromRevision` is 0. ([#470](https://github.com/mirendev/runtime/pull/470))
 
-### Other Improvements
+- **Fixed IPv6 environments** - VictoriaMetrics and VictoriaLogs now listen on IPv6, fixing issues in environments with IPv6 enabled. ([#481](https://github.com/mirendev/runtime/pull/481))
 
-- Enabled IPv6 listening for VictoriaMetrics and VictoriaLogs ([#481](https://github.com/mirendev/runtime/pull/481))
+### Documentation
+
 - Updated system requirements to 4GB RAM and 20GB disk ([#480](https://github.com/mirendev/runtime/pull/480))
 - Improved getting started documentation ([#471](https://github.com/mirendev/runtime/pull/471))
 - Fixed missing pages in docs sidebar navigation ([#467](https://github.com/mirendev/runtime/pull/467))
