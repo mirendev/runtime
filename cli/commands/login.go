@@ -109,6 +109,11 @@ func getOrCreateKey(ctx *Context, keyName string) (*cloudauth.KeyPair, error) {
 	return keyPair, nil
 }
 
+// LoginWithDefaults runs the login flow with default settings
+func LoginWithDefaults(ctx *Context) error {
+	return login(ctx, "https://miren.cloud", "cloud", "miren-cli", false)
+}
+
 // Login authenticates with miren.cloud using device flow
 func Login(ctx *Context, opts struct {
 	CloudURL     string `short:"u" long:"url" description:"Cloud URL" default:"https://miren.cloud"`
@@ -116,9 +121,13 @@ func Login(ctx *Context, opts struct {
 	KeyName      string `short:"k" long:"key-name" description:"Name for the authentication key" default:"miren-cli"`
 	NoSave       bool   `long:"no-save" description:"Don't save credentials to config file"`
 }) error {
+	return login(ctx, opts.CloudURL, opts.IdentityName, opts.KeyName, opts.NoSave)
+}
+
+func login(ctx *Context, cloudURL, identityName, keyName string, noSave bool) error {
 	// Initialize device flow
 	ctx.Info("Initiating device flow authentication...")
-	initResp, err := initiateDeviceFlow(opts.CloudURL)
+	initResp, err := initiateDeviceFlow(cloudURL)
 	if err != nil {
 		return fmt.Errorf("failed to initiate device flow: %w", err)
 	}
@@ -157,7 +166,7 @@ func Login(ctx *Context, opts struct {
 		pollInterval = time.Duration(initResp.PollingInterval) * time.Second
 	}
 
-	token, err := pollForToken(ctx, opts.CloudURL, initResp.DeviceCode, pollInterval, timeout, func(status string) {
+	token, err := pollForToken(ctx, cloudURL, initResp.DeviceCode, pollInterval, timeout, func(status string) {
 		if status == "pending" {
 			fmt.Print(".")
 		}
@@ -171,7 +180,7 @@ func Login(ctx *Context, opts struct {
 	ctx.Completed("Authentication successful!")
 
 	// Get or create a keypair for future authentication
-	keyPair, err := getOrCreateKey(ctx, opts.KeyName)
+	keyPair, err := getOrCreateKey(ctx, keyName)
 	if err != nil {
 		ctx.Warn("Failed to get or create keypair: %v", err)
 		ctx.Info("You can still use token authentication")
@@ -179,7 +188,7 @@ func Login(ctx *Context, opts struct {
 	} else {
 		// Register the public key with the server (only if it's a new key)
 		ctx.Info("Registering public key with server...")
-		if err := registerPublicKey(opts.CloudURL, token, keyPair, opts.KeyName); err != nil {
+		if err := registerPublicKey(cloudURL, token, keyPair, keyName); err != nil {
 			ctx.Warn("Failed to register public key: %v", err)
 			ctx.Info("You can still use token authentication")
 			keyPair = nil // Don't save the key if registration failed
@@ -189,18 +198,18 @@ func Login(ctx *Context, opts struct {
 	}
 
 	// Save to config unless --no-save is specified
-	if !opts.NoSave {
+	if !noSave {
 		if keyPair != nil {
 			// Save identity with keypair for future authentication
-			if err := saveKeyPairToConfig(opts.IdentityName, opts.CloudURL, keyPair, opts.KeyName); err != nil {
+			if err := saveKeyPairToConfig(identityName, cloudURL, keyPair, keyName); err != nil {
 				ctx.Warn("Failed to save identity to config: %v", err)
 			} else {
-				ctx.Info("Identity '%s' saved to config", opts.IdentityName)
+				ctx.Info("Identity '%s' saved to config", identityName)
 				ctx.Info("Future authentication will use the keypair (no login required)")
 				ctx.Info("")
 
 				// Check if we should auto-configure a cluster
-				if err := autoConfigureCluster(ctx, opts.IdentityName, opts.CloudURL, keyPair); err != nil {
+				if err := autoConfigureCluster(ctx, identityName, cloudURL, keyPair); err != nil {
 					// Don't fail the login, just log if there's a real error
 					if !errors.Is(err, ErrNoAutoConfigNeeded) && !errors.Is(err, ErrAutoConfigFailed) {
 						// Only log unexpected errors, not expected ones

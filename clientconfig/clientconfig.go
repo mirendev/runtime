@@ -683,6 +683,30 @@ func (c *Config) HasCluster(name string) bool {
 	return false
 }
 
+// GetClusterSource returns the source file path for a cluster.
+// For clusters in the main config, returns the main config path.
+// For clusters in leaf configs, returns the leaf config path.
+func (c *Config) GetClusterSource(name string) string {
+	// Check leaf configs first (they override main config)
+	for _, leafConfig := range c.leafConfigs {
+		if _, exists := leafConfig.clusters[name]; exists {
+			// Construct the leaf config path
+			if c.sourcePath != "" {
+				configDir := filepath.Dir(c.sourcePath)
+				return filepath.Join(configDir, "clientconfig.d", leafConfig.sourcePath+".yaml")
+			}
+			return leafConfig.sourcePath
+		}
+	}
+
+	// Check main config
+	if _, exists := c.clusters[name]; exists {
+		return c.sourcePath
+	}
+
+	return ""
+}
+
 // HasAnyClusters checks if any clusters are configured
 func (c *Config) HasAnyClusters() bool {
 	// Check main config
