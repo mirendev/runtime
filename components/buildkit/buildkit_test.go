@@ -95,7 +95,7 @@ func TestBuildkitComponent(t *testing.T) {
 
 		err = component.Start(ctx, config)
 		r.NoError(err)
-		defer component.Stop(ctx)
+		defer component.Stop(context.Background())
 
 		// Try to start again
 		err = component.Start(ctx, config)
@@ -166,7 +166,7 @@ func TestBuildkitComponent(t *testing.T) {
 
 		err = component.Start(ctx, config)
 		r.NoError(err)
-		defer component.Stop(ctx)
+		defer component.Stop(context.Background())
 
 		r.True(component.IsRunning())
 	})

@@ -58,16 +58,28 @@ func Load(configPath string, flags *CLIFlags, log *slog.Logger) (*Config, error)
 
 	// Apply mode defaults based on the resolved mode
 	// Only set if not already set (nil check)
+
+	if effectiveMode == "standalone" {
+		if cfg.Buildkit.StartEmbedded == nil {
+			cfg.Buildkit.StartEmbedded = boolPtr(true)
+		}
+	}
+	if effectiveMode == "standalone" {
+		if cfg.Containerd.StartEmbedded == nil {
+			cfg.Containerd.StartEmbedded = boolPtr(true)
+		}
+	}
 	if effectiveMode == "standalone" {
 		if cfg.Etcd.StartEmbedded == nil {
 			cfg.Etcd.StartEmbedded = boolPtr(true)
 		}
-		if cfg.Containerd.StartEmbedded == nil {
-			cfg.Containerd.StartEmbedded = boolPtr(true)
-		}
+	}
+	if effectiveMode == "standalone" {
 		if cfg.Victorialogs.StartEmbedded == nil {
 			cfg.Victorialogs.StartEmbedded = boolPtr(true)
 		}
+	}
+	if effectiveMode == "standalone" {
 		if cfg.Victoriametrics.StartEmbedded == nil {
 			cfg.Victoriametrics.StartEmbedded = boolPtr(true)
 		}

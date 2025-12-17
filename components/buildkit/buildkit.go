@@ -417,8 +417,8 @@ func (c *Component) waitForReady(ctx context.Context) error {
 		}
 	}
 
-	c.Log.Warn("buildkit daemon readiness check timed out", "socket_path", c.socketPath)
-	return nil
+	c.Log.Error("buildkit daemon readiness check timed out", "socket_path", c.socketPath)
+	return fmt.Errorf("buildkit daemon failed to become ready within 60s (socket: %s)", c.socketPath)
 }
 
 func (c *Component) stopTask(ctx context.Context, task containerd.Task) {
