@@ -181,7 +181,7 @@ func (s *Server) createEphemeralSandbox(
 	appMD.Decode(appResp.Entity().Entity())
 
 	// Create sandbox entity
-	sbName := idgen.GenNS(fmt.Sprintf("%s-web", appMD.Name))
+	sbName := idgen.GenNS(fmt.Sprintf("%s-exec", appMD.Name))
 	sbID := entity.Id("sandbox/" + sbName)
 
 	sb := &compute_v1alpha.Sandbox{
