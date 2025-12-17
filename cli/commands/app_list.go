@@ -2,17 +2,24 @@ package commands
 
 import (
 	"errors"
+	"fmt"
 	"net"
 	"sort"
 	"strings"
 	"time"
 
+	"miren.dev/runtime/api/compute/compute_v1alpha"
 	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/api/ingress"
 	"miren.dev/runtime/clientconfig"
 	"miren.dev/runtime/pkg/ui"
 )
+
+// hyperlink creates a clickable terminal hyperlink using OSC 8 escape sequence
+func hyperlink(url, text string) string {
+	return fmt.Sprintf("\x1b]8;;%s\x1b\\%s\x1b]8;;\x1b\\", url, text)
+}
 
 func AppList(ctx *Context, opts struct {
 	FormatOptions
@@ -93,6 +100,17 @@ func AppList(ctx *Context, opts struct {
 		return err
 	}
 
+	// Get sandbox pools for runtime state
+	poolKindRes, err := eac.LookupKind(ctx, "sandbox_pool")
+	if err != nil {
+		return err
+	}
+
+	poolsRes, err := eac.List(ctx, poolKindRes.Attr())
+	if err != nil {
+		return err
+	}
+
 	// Build version map
 	versionMap := make(map[string]*core_v1alpha.AppVersion)
 	for _, e := range versionsRes.Values() {
@@ -127,9 +145,7 @@ func AppList(ctx *Context, opts struct {
 		host := r.Route.Host
 		if host == "" && r.Route.Default {
 			if defaultHost != "" {
-				host = defaultHost + " (default)"
-			} else {
-				host = "(default)"
+				host = defaultHost
 			}
 		}
 		if host != "" {
@@ -137,15 +153,42 @@ func AppList(ctx *Context, opts struct {
 		}
 	}
 
+	// Aggregate pool state per app (sum across all services)
+	type appPoolState struct {
+		ready        int
+		desired      int
+		inCooldown   bool
+		crashCount   int64
+		cooldownLeft time.Duration
+	}
+	poolStateMap := make(map[string]*appPoolState)
+	now := time.Now()
+	for _, e := range poolsRes.Values() {
+		var pool compute_v1alpha.SandboxPool
+		pool.Decode(e.Entity())
+
+		appName := ui.CleanEntityID(pool.App.String())
+		if poolStateMap[appName] == nil {
+			poolStateMap[appName] = &appPoolState{}
+		}
+		state := poolStateMap[appName]
+		state.ready += int(pool.ReadyInstances)
+		state.desired += int(pool.DesiredInstances)
+		if !pool.CooldownUntil.IsZero() && pool.CooldownUntil.After(now) {
+			state.inCooldown = true
+			state.crashCount = pool.ConsecutiveCrashCount
+			state.cooldownLeft = pool.CooldownUntil.Sub(now)
+		}
+	}
+
 	if opts.IsJSON() {
 		var apps []struct {
-			Name       string   `json:"name"`
-			Version    string   `json:"version,omitempty"`
-			Status     string   `json:"status,omitempty"`
-			DeployedBy string   `json:"deployed_by,omitempty"`
-			DeployedAt string   `json:"deployed_at,omitempty"`
-			GitCommit  string   `json:"git_commit,omitempty"`
-			Routes     []string `json:"routes,omitempty"`
+			Name             string   `json:"name"`
+			Version          string   `json:"version,omitempty"`
+			ReadyInstances   int      `json:"ready_instances"`
+			DesiredInstances int      `json:"desired_instances"`
+			Health           string   `json:"health"`
+			Routes           []string `json:"routes,omitempty"`
 		}
 
 		for _, e := range res.Values() {
@@ -156,15 +199,15 @@ func AppList(ctx *Context, opts struct {
 			md.Decode(e.Entity())
 
 			appData := struct {
-				Name       string   `json:"name"`
-				Version    string   `json:"version,omitempty"`
-				Status     string   `json:"status,omitempty"`
-				DeployedBy string   `json:"deployed_by,omitempty"`
-				DeployedAt string   `json:"deployed_at,omitempty"`
-				GitCommit  string   `json:"git_commit,omitempty"`
-				Routes     []string `json:"routes,omitempty"`
+				Name             string   `json:"name"`
+				Version          string   `json:"version,omitempty"`
+				ReadyInstances   int      `json:"ready_instances"`
+				DesiredInstances int      `json:"desired_instances"`
+				Health           string   `json:"health"`
+				Routes           []string `json:"routes,omitempty"`
 			}{
-				Name: md.Name,
+				Name:   md.Name,
+				Health: "unknown",
 			}
 
 			if app.ActiveVersion.String() != "" {
@@ -173,15 +216,20 @@ func AppList(ctx *Context, opts struct {
 				}
 			}
 
-			if deployment, ok := deploymentMap[md.Name]; ok {
-				appData.Status = deployment.Status
-				appData.DeployedBy = deployment.DeployedBy.UserEmail
-				appData.DeployedAt = deployment.CompletedAt
-				if deployment.GitInfo.Sha != "" {
-					appData.GitCommit = deployment.GitInfo.Sha
-					if len(appData.GitCommit) > 7 {
-						appData.GitCommit = appData.GitCommit[:7]
-					}
+			if state, ok := poolStateMap[md.Name]; ok {
+				appData.ReadyInstances = state.ready
+				appData.DesiredInstances = state.desired
+
+				if state.inCooldown {
+					appData.Health = "crashed"
+				} else if state.desired == 0 {
+					appData.Health = "idle"
+				} else if state.ready == state.desired {
+					appData.Health = "healthy"
+				} else if state.ready > 0 {
+					appData.Health = "degraded"
+				} else {
+					appData.Health = "starting"
 				}
 			}
 
@@ -200,7 +248,7 @@ func AppList(ctx *Context, opts struct {
 	}
 
 	var rows []ui.Row
-	headers := []string{"NAME", "VERSION", "COMMIT", "STATUS", "DEPLOYED", "ROUTES"}
+	headers := []string{"NAME", "VERSION", "STATUS", "ROUTE"}
 
 	for _, e := range res.Values() {
 		var app core_v1alpha.App
@@ -211,10 +259,8 @@ func AppList(ctx *Context, opts struct {
 
 		name := md.Name
 		version := "-"
-		commit := "-"
 		status := "-"
-		deployed := "-"
-		routesDisplay := "-"
+		routeDisplay := "-"
 
 		if app.ActiveVersion.String() != "" {
 			if appVersion, ok := versionMap[app.ActiveVersion.String()]; ok {
@@ -222,61 +268,37 @@ func AppList(ctx *Context, opts struct {
 			}
 		}
 
-		if deployment, ok := deploymentMap[md.Name]; ok {
-			// Get commit SHA (short form)
-			if deployment.GitInfo.Sha != "" {
-				commit = deployment.GitInfo.Sha
-				if len(commit) > 7 {
-					commit = commit[:7]
-				}
-			}
-
-			// Get deployment status with color
-			if deployment.Status != "" {
-				switch deployment.Status {
-				case "active":
-					status = infoGreen.Render(deployment.Status)
-				case "failed":
-					status = infoRed.Render(deployment.Status)
-				case "in_progress":
-					status = infoLabel.Render(deployment.Status)
-				default:
-					status = deployment.Status
-				}
-			}
-
-			var deployedParts []string
-
-			if deployment.CompletedAt != "" {
-				if t, err := time.Parse(time.RFC3339, deployment.CompletedAt); err == nil {
-					deployedParts = append(deployedParts, humanFriendlyTimestamp(t))
-				}
-			}
-
-			if deployment.DeployedBy.UserEmail != "" && deployment.DeployedBy.UserEmail != "user@example.com" {
-				email := deployment.DeployedBy.UserEmail
-				if atIdx := strings.Index(email, "@"); atIdx > 0 {
-					email = email[:atIdx]
-				}
-				deployedParts = append(deployedParts, "by "+email)
-			}
-
-			if len(deployedParts) > 0 {
-				deployed = strings.Join(deployedParts, " ")
+		// Runtime status from pool state
+		if state, ok := poolStateMap[md.Name]; ok {
+			if state.inCooldown {
+				retryIn := formatDuration(state.cooldownLeft)
+				status = infoRed.Render(fmt.Sprintf("crashed (%dx, retry %s)", state.crashCount, retryIn))
+			} else if state.desired == 0 {
+				status = infoGray.Render("💤 idle")
+			} else if state.ready == state.desired {
+				status = infoGreen.Render(fmt.Sprintf("%d", state.ready))
+			} else {
+				status = infoLabel.Render(fmt.Sprintf("%d/%d", state.ready, state.desired))
 			}
 		}
 
+		// Build clickable route
 		if appRoutes, ok := routeMap[md.Name]; ok && len(appRoutes) > 0 {
-			routesDisplay = strings.Join(appRoutes, ", ")
+			host := appRoutes[0]
+			displayHost := strings.ReplaceAll(host, "127.0.0.1", "localhost")
+			// Use http for localhost/local domains, https for others
+			scheme := "https://"
+			if strings.Contains(host, "localhost") || strings.HasPrefix(host, "127.") {
+				scheme = "http://"
+			}
+			routeDisplay = hyperlink(scheme+host, displayHost)
 		}
 
 		rows = append(rows, ui.Row{
 			name,
 			version,
-			commit,
 			status,
-			deployed,
-			routesDisplay,
+			routeDisplay,
 		})
 	}
 
