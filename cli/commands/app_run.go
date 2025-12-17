@@ -12,9 +12,8 @@ import (
 	"miren.dev/runtime/pkg/rpc/stream"
 )
 
-func Console(ctx *Context, opts struct {
+func AppRun(ctx *Context, opts struct {
 	AppCentric
-	Pool string `long:"pool" default:"shell" description:"Pool to use"`
 	Rest struct {
 		Args []string
 	} `positional-args:"yes"`
@@ -23,10 +22,6 @@ func Console(ctx *Context, opts struct {
 
 	if len(opts.Rest.Args) > 0 {
 		opt.SetCommand(opts.Rest.Args)
-	}
-
-	if opts.Pool != "" {
-		opt.SetPool(opts.Pool)
 	}
 
 	winCh := make(chan os.Signal, 1)

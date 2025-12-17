@@ -213,7 +213,7 @@ func TestServer(t *testing.T) error {
 	reg.Register("sandbox-pool-manager", spm)
 	reg.Register("resolver", res)
 
-	rcfg, err := co.NamedConfig("runner")
+	rcfg, err := co.RunnerConfig(optsRunnerAddress)
 	if err != nil {
 		ctxCancel()
 		return err

@@ -13,8 +13,8 @@ import (
 )
 
 func SandboxExec(ctx *Context, opts struct {
-	Id     string `long:"id" description:"Sandbox ID" default:"miren-sandbox"`
-	Server string `long:"server" description:"Server address to connect to" default:"localhost:8444"`
+	ConfigCentric
+	Id string `short:"i" long:"id" description:"Sandbox ID" default:"miren-sandbox"`
 
 	Rest struct {
 		Args []string
@@ -87,7 +87,7 @@ func SandboxExec(ctx *Context, opts struct {
 
 	res, err := sec.Exec(
 		ctx,
-		"app", opts.Id,
+		"id", opts.Id,
 		strings.Join(opts.Rest.Args, " "),
 		opt,
 		input, output,

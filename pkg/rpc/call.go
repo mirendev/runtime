@@ -38,6 +38,8 @@ type NetworkCall struct {
 
 	ctrl      *controlStream
 	wsSession *webtransport.Session
+
+	argsConsumed bool
 }
 
 func (c *NetworkCall) String() string {
@@ -45,12 +47,26 @@ func (c *NetworkCall) String() string {
 }
 
 func (c *NetworkCall) Args(v any) {
+	c.argsConsumed = true
 	if c.argData != nil {
 		cbor.Unmarshal(c.argData, v)
 	} else if c.dec != nil {
 		c.dec.Decode(v)
 	} else {
 		cbor.NewDecoder(c.r.Body).Decode(v)
+	}
+}
+
+// SkipArgs consumes and discards args if they haven't been consumed yet.
+// This prevents leftover args data from being misinterpreted as the next request.
+func (c *NetworkCall) SkipArgs() {
+	if c.argsConsumed {
+		return
+	}
+	c.argsConsumed = true
+	if c.dec != nil {
+		var dummy any
+		c.dec.Decode(&dummy)
 	}
 }
 
