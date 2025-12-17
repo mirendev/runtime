@@ -14,7 +14,7 @@ All notable changes to Miren Runtime will be documented in this file.
 
 - **`miren deploy --analyze`** - Preview what Miren will detect about your app before actually building it. Great for understanding how your project will be configured. ([#485](https://github.com/mirendev/runtime/pull/485))
 
-- **Rust language support** - Miren now auto-detects Rust projects and builds them appropriately. ([#485](https://github.com/mirendev/runtime/pull/485))
+- **Rust and uv support** - Miren now auto-detects Rust projects and Python projects using uv, and builds them appropriately. ([#485](https://github.com/mirendev/runtime/pull/485))
 
 - **Log filtering** - Filter logs by service name with `miren logs --service <name>` and by content with `miren logs -g <pattern>`. Also includes a faster chunked log streaming API under the hood. ([#487](https://github.com/mirendev/runtime/pull/487), [#466](https://github.com/mirendev/runtime/pull/466))
 
