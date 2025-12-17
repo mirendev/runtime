@@ -29,28 +29,57 @@ miren sandbox list
 
 ## miren sandbox exec
 
-Execute a command inside a running sandbox.
+Execute a command or open an interactive shell inside a running sandbox.
+
+This command connects to an existing sandbox and runs a command inside it. Unlike `miren app run` which creates a new ephemeral sandbox, this connects to a sandbox that's already running (typically one serving production traffic).
 
 ### Usage
 
 ```bash
-miren sandbox exec <id> -- <command> [args...]
+miren sandbox exec --id <sandbox-id> [-- command [args...]]
 ```
 
-The `--` separator is required to separate Miren flags from the command to execute.
+### Flags
+
+- `--id` - Sandbox ID (required). Find sandbox IDs with `miren sandbox list`
 
 ### Examples
 
 ```bash
-# Run a simple command
-miren sandbox exec sb-abc123 -- ls -la
+# Open an interactive shell in a sandbox
+miren sandbox exec --id sandbox/myapp-web-abc123
 
-# Start an interactive shell
-miren sandbox exec sb-abc123 -- /bin/bash
+# Run a simple command
+miren sandbox exec --id sandbox/myapp-web-abc123 -- ls -la
 
 # Check running processes
-miren sandbox exec sb-abc123 -- ps aux
+miren sandbox exec --id sandbox/myapp-web-abc123 -- ps aux
+
+# View environment variables
+miren sandbox exec --id sandbox/myapp-web-abc123 -- env
+
+# Tail application logs
+miren sandbox exec --id sandbox/myapp-web-abc123 -- tail -f /var/log/app.log
 ```
+
+### Finding Sandbox IDs
+
+Use `miren sandbox list` to find the ID of a running sandbox:
+
+```bash
+$ miren sandbox list
+ID                          APP       SERVICE   STATUS    NODE
+sandbox/myapp-web-abc123    myapp     web       RUNNING   node-1
+sandbox/myapp-web-def456    myapp     web       RUNNING   node-2
+```
+
+:::warning
+When you exec into a production sandbox, you're connecting to a live instance that may be serving traffic. Be careful with commands that could affect the running application.
+:::
+
+:::tip
+For debugging or one-off tasks without affecting production, use `miren app run` to create an isolated ephemeral sandbox instead.
+:::
 
 ## miren sandbox stop
 
