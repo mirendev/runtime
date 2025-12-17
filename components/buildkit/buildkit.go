@@ -36,6 +36,9 @@ type Config struct {
 	// SocketDir is the directory where the Unix socket will be created (e.g., /run/miren/buildkit)
 	SocketDir string
 
+	// RegistryIP is the IP address for cluster.local registry (optional, can be set later via SetRegistryIP)
+	RegistryIP string
+
 	// GCKeepStorage is the maximum bytes of cache to keep (default: 10GB)
 	GCKeepStorage int64
 
@@ -59,7 +62,8 @@ type Component struct {
 	running    bool
 	socketPath string
 	socketDir  string
-	external   bool // true if connecting to external daemon (no container management)
+	hostsPath  string // path to custom /etc/hosts file for the container
+	external   bool   // true if connecting to external daemon (no container management)
 }
 
 // NewComponent creates a new BuildKit component that manages an embedded daemon.
@@ -146,6 +150,13 @@ func (c *Component) Start(ctx context.Context, config Config) error {
 		return fmt.Errorf("failed to write buildkit config: %w", err)
 	}
 
+	// Generate custom /etc/hosts file for the container
+	hostsPath := filepath.Join(dataPath, "hosts")
+	c.hostsPath = hostsPath
+	if err := c.writeHostsFile(config.RegistryIP); err != nil {
+		return fmt.Errorf("failed to write hosts file: %w", err)
+	}
+
 	// Check if container already exists
 	existingContainer, err := c.CC.LoadContainer(ctx, buildkitContainerName)
 	if err == nil {
@@ -156,7 +167,7 @@ func (c *Component) Start(ctx context.Context, config Config) error {
 	c.Log.Info("starting buildkit daemon", "data_path", dataPath, "socket_path", c.socketPath)
 
 	// Create container
-	container, err := c.createContainer(ctx, image, dataPath, configPath)
+	container, err := c.createContainer(ctx, image, dataPath, configPath, hostsPath)
 	if err != nil {
 		return fmt.Errorf("failed to create buildkit container: %w", err)
 	}
@@ -299,18 +310,48 @@ insecure-entitlements = [ "network.host", "security.insecure" ]
 `, gcKeepStorage, gcKeepStorage, gcKeepDuration, registryHost)
 }
 
-func (c *Component) createContainer(ctx context.Context, image containerd.Image, dataPath, configPath string) (containerd.Container, error) {
+// writeHostsFile creates or updates the custom /etc/hosts file for the BuildKit container.
+// This includes standard localhost entries plus an optional cluster.local entry.
+func (c *Component) writeHostsFile(registryIP string) error {
+	content := `# BuildKit hosts file
+127.0.0.1	localhost
+::1	localhost ip6-localhost ip6-loopback
+`
+	if registryIP != "" {
+		content += fmt.Sprintf("%s\tcluster.local\n", registryIP)
+		c.Log.Debug("added cluster.local to hosts file", "ip", registryIP)
+	}
+
+	return os.WriteFile(c.hostsPath, []byte(content), 0644)
+}
+
+// SetRegistryIP updates the hosts file with the registry IP address for cluster.local.
+// This can be called after Start() once the registry IP is known.
+func (c *Component) SetRegistryIP(ip string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if c.hostsPath == "" {
+		return nil // External daemon or not yet started
+	}
+
+	if err := c.writeHostsFile(ip); err != nil {
+		return fmt.Errorf("failed to update hosts file: %w", err)
+	}
+
+	c.Log.Info("updated buildkit hosts file with registry IP", "ip", ip)
+	return nil
+}
+
+func (c *Component) createContainer(ctx context.Context, image containerd.Image, dataPath, configPath, hostsPath string) (containerd.Container, error) {
 	opts := []oci.SpecOpts{
 		oci.WithImageConfig(image),
-		// No host networking - BuildKit uses its own network namespace
-		// This is more secure than host networking since BuildKit doesn't need
-		// to accept external TCP connections (we use Unix sockets)
-		oci.WithPrivileged, // Required for BuildKit
+		oci.WithHostNamespace(specs.NetworkNamespace), // Required for DNS resolution
+		oci.WithPrivileged,                            // Required for BuildKit
 		oci.WithProcessArgs(
 			"/usr/bin/buildkitd",
 			"--config=/etc/buildkit/buildkitd.toml",
 		),
-		oci.WithHostHostsFile,
 		oci.WithHostResolvconf,
 		oci.WithMounts([]specs.Mount{
 			{
@@ -329,6 +370,12 @@ func (c *Component) createContainer(ctx context.Context, image containerd.Image,
 				Destination: "/etc/buildkit/buildkitd.toml",
 				Type:        "bind",
 				Source:      configPath,
+				Options:     []string{"rbind", "ro"},
+			},
+			{
+				Destination: "/etc/hosts",
+				Type:        "bind",
+				Source:      hostsPath,
 				Options:     []string{"rbind", "ro"},
 			},
 		}),

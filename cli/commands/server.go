@@ -49,6 +49,7 @@ import (
 	"miren.dev/runtime/pkg/registration"
 	"miren.dev/runtime/pkg/rpc"
 	"miren.dev/runtime/pkg/serverconfig"
+	"miren.dev/runtime/pkg/units"
 	"miren.dev/runtime/servers/httpingress"
 	"miren.dev/runtime/version"
 )
@@ -421,8 +422,14 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 		gcKeepStorage := parseStorageSize(cfg.Buildkit.GetGcKeepStorage())
 		gcKeepDuration := parseDuration(cfg.Buildkit.GetGcKeepDuration())
 
+		// Default socket directory to data_path/buildkit/socket if not set
+		socketDir := cfg.Buildkit.GetSocketDir()
+		if socketDir == "" {
+			socketDir = filepath.Join(cfg.Server.GetDataPath(), "buildkit", "socket")
+		}
+
 		buildkitConfig := buildkit.Config{
-			SocketDir:      cfg.Buildkit.GetSocketDir(),
+			SocketDir:      socketDir,
 			GCKeepStorage:  gcKeepStorage,
 			GCKeepDuration: gcKeepDuration,
 			RegistryHost:   "cluster.local:5000",
@@ -829,6 +836,13 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 		return err
 	}
 
+	// Update BuildKit's hosts file with the registry IP
+	if buildkitComponent != nil {
+		if err := buildkitComponent.SetRegistryIP(regAddr.String()); err != nil {
+			ctx.Log.Warn("failed to update buildkit hosts file", "error", err)
+		}
+	}
+
 	cert, err := co.IssueCertificate("miren-server")
 	if err != nil {
 		ctx.Log.Error("failed to issue server certificate", "error", err)
@@ -1090,32 +1104,11 @@ func parseStorageSize(s string) int64 {
 		return 0
 	}
 
-	// Parse the numeric part and unit
-	var value float64
-	var unit string
-	_, err := fmt.Sscanf(s, "%f%s", &value, &unit)
+	data, err := units.ParseData(s)
 	if err != nil {
-		// Try parsing as just a number (bytes)
-		v, err := strconv.ParseInt(s, 10, 64)
-		if err == nil {
-			return v
-		}
 		return 0
 	}
-
-	multiplier := int64(1)
-	switch strings.ToUpper(unit) {
-	case "KB", "K":
-		multiplier = 1024
-	case "MB", "M":
-		multiplier = 1024 * 1024
-	case "GB", "G":
-		multiplier = 1024 * 1024 * 1024
-	case "TB", "T":
-		multiplier = 1024 * 1024 * 1024 * 1024
-	}
-
-	return int64(value * float64(multiplier))
+	return int64(data.Bytes())
 }
 
 // parseDuration parses a human-readable duration (e.g., "7d") to seconds

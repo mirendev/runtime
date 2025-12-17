@@ -415,10 +415,10 @@ configs:
 
       socket_dir:
         type: string
-        default: "/run/miren/buildkit"
+        default: ""
         cli:
           long: buildkit-socket-dir
-          description: Directory for embedded BuildKit Unix socket
+          description: Directory for embedded BuildKit Unix socket (defaults to data_path/buildkit/socket)
         env: MIREN_BUILDKIT_SOCKET_DIR
         toml: socket_dir
 
