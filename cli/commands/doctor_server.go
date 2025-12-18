@@ -136,8 +136,13 @@ func DoctorServer(ctx *Context, opts struct {
 	}
 
 	// Interactive mode - offer help options
-	if ui.IsInteractive() {
-		ctx.Printf("\n")
+	if !ui.IsInteractive() {
+		return nil
+	}
+
+	ctx.Printf("\n")
+
+	for {
 		items := []ui.PickerItem{
 			ui.SimplePickerItem{Text: "How do I start a local server?"},
 			ui.SimplePickerItem{Text: "How do I connect to a known remote server?"},
@@ -159,8 +164,6 @@ func DoctorServer(ctx *Context, opts struct {
 			showFixConnectivityHelp(ctx)
 		}
 	}
-
-	return nil
 }
 
 func showStartLocalServerHelp(ctx *Context) {
