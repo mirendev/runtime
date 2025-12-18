@@ -94,7 +94,7 @@ func DoctorServer(ctx *Context, opts struct {
 				ctx.Printf("\n%s\n", infoLabel.Render("To start the server:"))
 				ctx.Printf("  %s\n", infoGray.Render("sudo systemctl start miren"))
 				ctx.Printf("\n%s\n", infoLabel.Render("To check server logs:"))
-				ctx.Printf("  %s\n", infoGray.Render("journalctl -u miren -f"))
+				ctx.Printf("  %s\n", infoGray.Render("sudo journalctl -u miren -f"))
 			} else if strings.Contains(connErrStr, "timeout") || strings.Contains(connErrStr, "no recent network activity") {
 				ctx.Printf("%s\n", infoLabel.Render("Connection timed out. The server may be starting up."))
 				ctx.Printf("\n%s\n", infoLabel.Render("To check server status:"))
@@ -167,17 +167,17 @@ func showStartLocalServerHelp(ctx *Context) {
 	ctx.Printf("\n%s\n", infoLabel.Render("Starting a local miren server"))
 	ctx.Printf("%s\n\n", infoGray.Render("─────────────────────────────"))
 
-	ctx.Printf("%s\n", infoLabel.Render("If installed as a systemd service:"))
-	ctx.Printf("  %s\n\n", infoGray.Render("sudo systemctl start miren"))
-
 	ctx.Printf("%s\n", infoLabel.Render("To install as a systemd service:"))
 	ctx.Printf("  %s\n\n", infoGray.Render("sudo miren server install"))
+
+	ctx.Printf("%s\n", infoLabel.Render("If already installed as a systemd service:"))
+	ctx.Printf("  %s\n\n", infoGray.Render("sudo systemctl start miren"))
 
 	ctx.Printf("%s\n", infoLabel.Render("To run manually (foreground):"))
 	ctx.Printf("  %s\n\n", infoGray.Render("sudo miren server"))
 
 	ctx.Printf("%s\n", infoLabel.Render("To check server logs:"))
-	ctx.Printf("  %s\n", infoGray.Render("journalctl -u miren -f"))
+	ctx.Printf("  %s\n", infoGray.Render("sudo journalctl -u miren -f"))
 
 	ctx.Printf("\n%s", infoGray.Render("Press Enter to continue..."))
 	fmt.Scanln()
