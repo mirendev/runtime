@@ -707,7 +707,19 @@ func (m *Manager) cleanupEmptyPools(ctx context.Context) error {
 			continue
 		}
 
-		// Pool is empty, scaled to zero, and idle for over an hour - delete it
+		// Check if the pool is still referenced by a current app version.
+		// Even if the pool is empty and scaled to zero, we should keep it
+		// if it's the active pool for an app (waiting for the next request).
+		if m.isPoolReferencedByCurrentVersion(ctx, &pool) {
+			m.log.Debug("skipping cleanup of empty pool still referenced by current version",
+				"pool", pool.ID,
+				"service", pool.Service,
+				"referenced_versions", pool.ReferencedByVersions)
+			continue
+		}
+
+		// Pool is empty, scaled to zero, idle for over an hour, and not referenced
+		// by any current app version - safe to delete
 		m.log.Info("cleaning up empty pool", "pool", pool.ID, "service", pool.Service, "age", now.Sub(updatedAt))
 
 		if _, err := m.eac.Delete(ctx, pool.ID.String()); err != nil {
@@ -803,6 +815,53 @@ func (m *Manager) hasHealthySandbox(sandboxes []*sandboxWithMeta, crashCount int
 			if uptime >= requiredUptime {
 				return true
 			}
+		}
+	}
+
+	return false
+}
+
+// isPoolReferencedByCurrentVersion checks if any of the pool's referenced versions
+// is still the current version for its app. This prevents deleting pools that are
+// legitimately at scale-to-zero but should spin up on the next request.
+func (m *Manager) isPoolReferencedByCurrentVersion(ctx context.Context, pool *compute_v1alpha.SandboxPool) bool {
+	for _, versionID := range pool.ReferencedByVersions {
+		// Fetch the app version to get its app reference
+		versionResp, err := m.eac.Get(ctx, versionID.String())
+		if err != nil {
+			// Version might have been deleted - that's fine, it's not current
+			if errors.Is(err, cond.ErrNotFound{}) {
+				continue
+			}
+			m.log.Warn("failed to get version when checking pool references",
+				"version", versionID,
+				"pool", pool.ID,
+				"error", err)
+			continue
+		}
+
+		var version core_v1alpha.AppVersion
+		version.Decode(versionResp.Entity().Entity())
+
+		// Fetch the app to check its current version
+		appResp, err := m.eac.Get(ctx, version.App.String())
+		if err != nil {
+			if errors.Is(err, cond.ErrNotFound{}) {
+				continue
+			}
+			m.log.Warn("failed to get app when checking pool references",
+				"app", version.App,
+				"pool", pool.ID,
+				"error", err)
+			continue
+		}
+
+		var app core_v1alpha.App
+		app.Decode(appResp.Entity().Entity())
+
+		// Check if this version is the app's active version
+		if app.ActiveVersion == versionID {
+			return true
 		}
 	}
 
