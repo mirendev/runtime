@@ -136,6 +136,8 @@ Warning: These commands are intended for advanced users and developers. They may
 	d.Dispatch("debug netdb status", Infer("debug netdb status", "Show IP allocation status by subnet", DebugNetDBStatus))
 	d.Dispatch("debug netdb release", Infer("debug netdb release", "Manually release IP leases", DebugNetDBRelease))
 	d.Dispatch("debug netdb gc", Infer("debug netdb gc", "Find and release orphaned IP leases", DebugNetDBGC))
+
+	addCommands(d)
 }
 
 func HiddenCommands() []string {
