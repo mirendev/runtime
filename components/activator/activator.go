@@ -1641,14 +1641,16 @@ func (a *localActivator) watchPools(ctx context.Context) {
 			return nil
 		}))
 
+		if ctx.Err() != nil {
+			a.log.Info("pool watch stopped due to context cancellation")
+			return
+		}
 		if err != nil {
-			if ctx.Err() != nil {
-				a.log.Info("pool watch stopped due to context cancellation")
-				return
-			}
 			a.log.Error("pool watch ended with error, will restart", "error", err)
 			time.Sleep(5 * time.Second)
 			continue
 		}
+		a.log.Warn("pool watch ended without error, will restart")
+		time.Sleep(5 * time.Second)
 	}
 }
