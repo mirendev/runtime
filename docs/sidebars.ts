@@ -48,6 +48,7 @@ const sidebars: SidebarsConfig = {
       type: 'category',
       label: 'Resources',
       items: [
+        'changelog',
         'support',
         'conduct',
         {
