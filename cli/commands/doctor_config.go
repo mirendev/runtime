@@ -2,7 +2,6 @@ package commands
 
 import (
 	"errors"
-	"fmt"
 	"net"
 	"os"
 	"strings"
@@ -74,12 +73,15 @@ func DoctorConfig(ctx *Context, opts struct {
 		return path
 	}
 
-	// Display local clusters table
-	if len(localClusters) > 0 {
-		ctx.Printf("\n%s\n", infoLabel.Render("Local:"))
+	// Helper to render cluster table
+	renderClusterTable := func(label string, clusters []clusterInfo) {
+		if len(clusters) == 0 {
+			return
+		}
+		ctx.Printf("\n%s\n", infoLabel.Render(label))
 		headers := []string{"CLUSTER", "ADDRESS", "SOURCE FILE"}
 		var rows []ui.Row
-		for _, c := range localClusters {
+		for _, c := range clusters {
 			name := c.name
 			if c.name == activeCluster {
 				name = infoGreen.Render(c.name + "*")
@@ -91,34 +93,20 @@ func DoctorConfig(ctx *Context, opts struct {
 		ctx.Printf("%s\n", table.Render())
 	}
 
-	// Display remote clusters table
-	if len(remoteClusters) > 0 {
-		ctx.Printf("\n%s\n", infoLabel.Render("Remote:"))
-		headers := []string{"CLUSTER", "ADDRESS", "SOURCE FILE"}
-		var rows []ui.Row
-		for _, c := range remoteClusters {
-			name := c.name
-			if c.name == activeCluster {
-				name = infoGreen.Render(c.name + "*")
-			}
-			rows = append(rows, ui.Row{name, c.cluster.Hostname, shortenPath(c.source)})
-		}
-		columns := ui.AutoSizeColumns(headers, rows, nil)
-		table := ui.NewTable(ui.WithColumns(columns), ui.WithRows(rows))
-		ctx.Printf("%s\n", table.Render())
-	}
+	renderClusterTable("Local:", localClusters)
+	renderClusterTable("Remote:", remoteClusters)
 
 	if len(localClusters) > 0 || len(remoteClusters) > 0 {
 		ctx.Printf("%s\n", infoGray.Render("* = active cluster"))
 	}
 
-	// Check for local server registration
-	existing, _ := registration.LoadRegistration("/var/lib/miren/server")
-
 	// Interactive mode
 	if !ui.IsInteractive() {
 		return nil
 	}
+
+	// Load registration only when needed for interactive help
+	existing, _ := registration.LoadRegistration("/var/lib/miren/server")
 
 	ctx.Printf("\n")
 
@@ -131,52 +119,36 @@ func DoctorConfig(ctx *Context, opts struct {
 		}
 
 		selected, err := ui.RunPicker(items, ui.WithTitle("Need help?"))
-		if err != nil || selected == nil {
+		if err != nil || selected == nil || selected.ID() == "[done]" {
 			return nil
 		}
 
 		switch selected.ID() {
 		case "How do I add an existing cluster?":
 			showAddClusterHelp(ctx, cfg)
-
 		case "How do I register a new cluster?":
 			showRegisterClusterHelp(ctx, existing)
-
-		case "[done]":
-			return nil
 		}
 	}
 }
 
 func showAddClusterHelp(ctx *Context, cfg *clientconfig.Config) {
-	ctx.Printf("\n%s\n", infoLabel.Render("Adding an existing cluster to your config"))
-	ctx.Printf("%s\n\n", infoGray.Render("──────────────────────────────────────────"))
+	printHelpHeader(ctx, "Adding an existing cluster to your config")
 
 	// Check if logged in
-	hasIdentity := cfg != nil && cfg.HasIdentities()
-
-	if !hasIdentity {
-		ctx.Printf("%s\n", infoLabel.Render("Step 1: Login to miren.cloud"))
-		ctx.Printf("  %s\n\n", infoBold.Render("miren login"))
+	if cfg == nil || !cfg.HasIdentities() {
+		printCommand(ctx, "Step 1: Login to miren.cloud", "miren login")
 	}
 
-	ctx.Printf("%s\n", infoLabel.Render("Add a cluster from miren.cloud:"))
-	ctx.Printf("  %s\n\n", infoBold.Render("miren cluster add"))
-
-	ctx.Printf("%s\n", infoLabel.Render("Or add a cluster manually by address:"))
-	ctx.Printf("  %s\n\n", infoBold.Render("miren cluster add -a <hostname:port>"))
-
+	printCommand(ctx, "Add a cluster from miren.cloud:", "miren cluster add")
+	printCommand(ctx, "Or add a cluster manually by address:", "miren cluster add -a <hostname:port>")
 	ctx.Printf("%s\n", infoLabel.Render("Switch between clusters:"))
-	ctx.Printf("  %s\n", infoBold.Render("miren cluster switch <name>"))
-
-	ctx.Printf("\n%s", infoGray.Render("Press Enter to continue..."))
-	fmt.Scanln()
-	ctx.Printf("\n")
+	ctx.Printf("  %s\n", infoGray.Render("miren cluster switch <name>"))
+	waitForEnter(ctx)
 }
 
 func showRegisterClusterHelp(ctx *Context, existing *registration.StoredRegistration) {
-	ctx.Printf("\n%s\n", infoLabel.Render("Registering a new cluster with miren.cloud"))
-	ctx.Printf("%s\n\n", infoGray.Render("──────────────────────────────────────────"))
+	printHelpHeader(ctx, "Registering a new cluster with miren.cloud")
 
 	// Show current registration status
 	if existing != nil && existing.Status == "approved" {
@@ -186,26 +158,18 @@ func showRegisterClusterHelp(ctx *Context, existing *registration.StoredRegistra
 		ctx.Printf("  Org: %s\n\n", existing.OrganizationID)
 
 		ctx.Printf("%s\n", infoLabel.Render("To register as a different cluster:"))
-		ctx.Printf("  %s  %s\n", infoBold.Render("1."), "Stop the miren server")
-		ctx.Printf("     %s\n\n", infoGray.Render("sudo systemctl stop miren"))
-		ctx.Printf("  %s  %s\n", infoBold.Render("2."), "Delete the existing registration")
-		ctx.Printf("     %s\n\n", infoGray.Render("sudo rm /var/lib/miren/server/registration.json"))
-		ctx.Printf("  %s  %s\n", infoBold.Render("3."), "Register with a new name")
-		ctx.Printf("     %s\n\n", infoGray.Render("sudo miren server register -n <cluster-name>"))
-		ctx.Printf("  %s  %s\n", infoBold.Render("4."), "Approve in browser when prompted")
-		ctx.Printf("\n")
-		ctx.Printf("  %s  %s\n", infoBold.Render("5."), "Restart the server")
-		ctx.Printf("     %s\n\n", infoGray.Render("sudo systemctl start miren"))
+		printNumberedStep(ctx, "1", "Stop the miren server", "sudo systemctl stop miren")
+		printNumberedStep(ctx, "2", "Delete the existing registration", "sudo rm /var/lib/miren/server/registration.json")
+		printNumberedStep(ctx, "3", "Register with a new name", "sudo miren server register -n <cluster-name>")
+		ctx.Printf("  %s  %s\n\n", infoBold.Render("4."), "Approve in browser when prompted")
+		printNumberedStep(ctx, "5", "Restart the server", "sudo systemctl start miren")
 		ctx.Printf("  %s  %s\n", infoBold.Render("6."), "Add the cluster to your config")
 		ctx.Printf("     %s\n", infoGray.Render("miren cluster add"))
 	} else {
 		ctx.Printf("%s\n", infoLabel.Render("To register this server as a cluster:"))
-		ctx.Printf("  %s  %s\n", infoBold.Render("1."), "Register with miren.cloud")
-		ctx.Printf("     %s\n\n", infoGray.Render("sudo miren server register -n <cluster-name>"))
-		ctx.Printf("  %s  %s\n", infoBold.Render("2."), "Approve in browser when prompted")
-		ctx.Printf("\n")
-		ctx.Printf("  %s  %s\n", infoBold.Render("3."), "Restart the server to apply registration")
-		ctx.Printf("     %s\n\n", infoGray.Render("sudo systemctl restart miren"))
+		printNumberedStep(ctx, "1", "Register with miren.cloud", "sudo miren server register -n <cluster-name>")
+		ctx.Printf("  %s  %s\n\n", infoBold.Render("2."), "Approve in browser when prompted")
+		printNumberedStep(ctx, "3", "Restart the server to apply registration", "sudo systemctl restart miren")
 		ctx.Printf("  %s  %s\n", infoBold.Render("4."), "Add the cluster to your config")
 		ctx.Printf("     %s\n\n", infoGray.Render("miren cluster add"))
 
@@ -213,7 +177,5 @@ func showRegisterClusterHelp(ctx *Context, existing *registration.StoredRegistra
 		ctx.Printf("  %s\n", infoGray.Render("/var/lib/miren/server/registration.json"))
 	}
 
-	ctx.Printf("\n%s", infoGray.Render("Press Enter to continue..."))
-	fmt.Scanln()
-	ctx.Printf("\n")
+	waitForEnter(ctx)
 }

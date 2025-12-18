@@ -105,36 +105,19 @@ func DoctorAuth(ctx *Context, opts struct {
 }
 
 func showLoginDifferentAccountHelp(ctx *Context) {
-	ctx.Printf("\n%s\n", infoLabel.Render("Logging in with a different account"))
-	ctx.Printf("%s\n\n", infoGray.Render("───────────────────────────────────"))
-
-	ctx.Printf("%s\n", infoLabel.Render("Log out of your current account first:"))
-	ctx.Printf("  %s\n\n", infoGray.Render("miren logout"))
-
+	printHelpHeader(ctx, "Logging in with a different account")
+	printCommand(ctx, "Log out of your current account first:", "miren logout")
 	ctx.Printf("%s\n", infoLabel.Render("Then log in with a different account:"))
 	ctx.Printf("  %s\n", infoGray.Render("miren login"))
-
-	ctx.Printf("\n%s", infoGray.Render("Press Enter to continue..."))
-	fmt.Scanln()
-	ctx.Printf("\n")
+	waitForEnter(ctx)
 }
 
 func showAddAuthToServerHelp(ctx *Context) {
-	ctx.Printf("\n%s\n", infoLabel.Render("Adding authentication to a server"))
-	ctx.Printf("%s\n\n", infoGray.Render("─────────────────────────────────"))
-
-	ctx.Printf("%s\n", infoLabel.Render("First, login to miren.cloud:"))
-	ctx.Printf("  %s\n\n", infoGray.Render("miren login"))
-
-	ctx.Printf("%s\n", infoLabel.Render("Then register your server with miren.cloud:"))
-	ctx.Printf("  %s\n\n", infoGray.Render("sudo miren server register -n <cluster-name>"))
-
-	ctx.Printf("%s\n", infoLabel.Render("Approve the registration in the browser when prompted."))
-	ctx.Printf("\n")
+	printHelpHeader(ctx, "Adding authentication to a server")
+	printCommand(ctx, "First, login to miren.cloud:", "miren login")
+	printCommand(ctx, "Then register your server with miren.cloud:", "sudo miren server register -n <cluster-name>")
+	ctx.Printf("%s\n\n", infoLabel.Render("Approve the registration in the browser when prompted."))
 	ctx.Printf("%s\n", infoLabel.Render("Finally, restart the server:"))
 	ctx.Printf("  %s\n", infoGray.Render("sudo systemctl restart miren"))
-
-	ctx.Printf("\n%s", infoGray.Render("Press Enter to continue..."))
-	fmt.Scanln()
-	ctx.Printf("\n")
+	waitForEnter(ctx)
 }
