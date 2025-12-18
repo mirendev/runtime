@@ -240,7 +240,8 @@ func checkHTTPS(host string) (bool, string) {
 		Timeout: 5 * time.Second,
 		Transport: &http.Transport{
 			TLSClientConfig: &tls.Config{
-				InsecureSkipVerify: true, // Accept self-signed certs for diagnostics
+				InsecureSkipVerify: true,             // Accept self-signed certs for diagnostics
+				MinVersion:         tls.VersionTLS12, // Enforce minimum TLS version
 			},
 		},
 	}
@@ -256,14 +257,12 @@ func checkHTTPS(host string) (bool, string) {
 }
 
 func describeHTTPError(err error) string {
-	if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
 		return "timeout"
 	}
-	// Check for connection refused
-	if opErr, ok := err.(*net.OpError); ok {
-		if sysErr, ok := opErr.Err.(*net.OpError); ok {
-			return sysErr.Err.Error()
-		}
+	var opErr *net.OpError
+	if errors.As(err, &opErr) {
 		return opErr.Err.Error()
 	}
 	return err.Error()
