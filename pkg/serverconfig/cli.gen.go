@@ -5,6 +5,11 @@ package serverconfig
 // CLIFlags represents command-line flags for server configuration
 // All fields are pointers to distinguish between set and unset values
 type CLIFlags struct {
+	BuildkitConfigGcKeepDuration         *string  `long:"buildkit-gc-duration" description:"How long to keep BuildKit cache entries (e.g., 7d, 24h)"`
+	BuildkitConfigGcKeepStorage          *string  `long:"buildkit-gc-storage" description:"Maximum BuildKit layer cache size (e.g., 10GB, 50GB)"`
+	BuildkitConfigSocketDir              *string  `long:"buildkit-socket-dir" description:"Directory for embedded BuildKit Unix socket (defaults to data_path/buildkit/socket)"`
+	BuildkitConfigSocketPath             *string  `long:"buildkit-socket" description:"Path to external BuildKit Unix socket (for distributed mode)"`
+	BuildkitConfigStartEmbedded          *bool    `long:"start-buildkit" description:"Start embedded BuildKit daemon for container image builds"`
 	ConfigFile                           *string  `long:"config" description:"Path to configuration file"`
 	Mode                                 *string  `long:"mode" short:"m" description:"Server mode: standalone (default), distributed (experimental)"`
 	ContainerdConfigBinaryPath           *string  `long:"containerd-binary" description:"Path to containerd binary"`

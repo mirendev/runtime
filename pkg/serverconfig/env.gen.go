@@ -12,6 +12,50 @@ import (
 // applyEnvironmentVariables applies environment variables to the configuration
 func applyEnvironmentVariables(cfg *Config, log *slog.Logger) error {
 
+	// Apply MIREN_BUILDKIT_GC_KEEP_DURATION
+	if val := os.Getenv("MIREN_BUILDKIT_GC_KEEP_DURATION"); val != "" {
+
+		cfg.Buildkit.GcKeepDuration = &val
+		log.Debug("applied env var", "key", "MIREN_BUILDKIT_GC_KEEP_DURATION")
+
+	}
+
+	// Apply MIREN_BUILDKIT_GC_KEEP_STORAGE
+	if val := os.Getenv("MIREN_BUILDKIT_GC_KEEP_STORAGE"); val != "" {
+
+		cfg.Buildkit.GcKeepStorage = &val
+		log.Debug("applied env var", "key", "MIREN_BUILDKIT_GC_KEEP_STORAGE")
+
+	}
+
+	// Apply MIREN_BUILDKIT_SOCKET_DIR
+	if val := os.Getenv("MIREN_BUILDKIT_SOCKET_DIR"); val != "" {
+
+		cfg.Buildkit.SocketDir = &val
+		log.Debug("applied env var", "key", "MIREN_BUILDKIT_SOCKET_DIR")
+
+	}
+
+	// Apply MIREN_BUILDKIT_SOCKET_PATH
+	if val := os.Getenv("MIREN_BUILDKIT_SOCKET_PATH"); val != "" {
+
+		cfg.Buildkit.SocketPath = &val
+		log.Debug("applied env var", "key", "MIREN_BUILDKIT_SOCKET_PATH")
+
+	}
+
+	// Apply MIREN_BUILDKIT_START_EMBEDDED
+	if val := os.Getenv("MIREN_BUILDKIT_START_EMBEDDED"); val != "" {
+
+		if b, err := strconv.ParseBool(val); err == nil {
+			cfg.Buildkit.StartEmbedded = &b
+			log.Debug("applied env var", "key", "MIREN_BUILDKIT_START_EMBEDDED")
+		} else {
+			log.Warn("invalid MIREN_BUILDKIT_START_EMBEDDED value", "value", val, "error", err)
+		}
+
+	}
+
 	// Apply MIREN_MODE
 	if val := os.Getenv("MIREN_MODE"); val != "" {
 

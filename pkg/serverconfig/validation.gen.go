@@ -11,6 +11,10 @@ import (
 // Validate validates the configuration
 func (c *Config) Validate() error {
 
+	if err := c.Buildkit.Validate(); err != nil {
+		return fmt.Errorf("buildkit: %w", err)
+	}
+
 	if err := c.Containerd.Validate(); err != nil {
 		return fmt.Errorf("containerd: %w", err)
 	}
@@ -44,6 +48,14 @@ func (c *Config) Validate() error {
 	if err := c.Victoriametrics.Validate(); err != nil {
 		return fmt.Errorf("victoriametrics: %w", err)
 	}
+	return nil
+}
+
+// Validate validates BuildkitConfig
+func (c *BuildkitConfig) Validate() error {
+
+	// Check for port conflicts in BuildkitConfig
+
 	return nil
 }
 

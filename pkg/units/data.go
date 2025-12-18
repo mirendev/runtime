@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/pkg/errors"
 )
@@ -191,4 +192,36 @@ func ParseData(str string) (Data, error) {
 	}
 
 	return nil, errors.New("unable to parse data size: unknown format")
+}
+
+// ParseDuration parses a duration string with support for days (d) and weeks (w)
+// in addition to Go's standard duration units (ns, us, ms, s, m, h).
+// Examples: "7d", "2w", "24h", "168h", "30m"
+func ParseDuration(s string) (time.Duration, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return 0, errors.New("empty duration string")
+	}
+
+	// Try standard Go duration first (e.g., "24h", "30m")
+	if d, err := time.ParseDuration(s); err == nil {
+		return d, nil
+	}
+
+	// Parse extended format with days/weeks (e.g., "7d", "2w")
+	var value float64
+	var unit string
+	_, err := fmt.Sscanf(s, "%f%s", &value, &unit)
+	if err != nil {
+		return 0, errors.Wrapf(err, "parsing duration %q", s)
+	}
+
+	switch strings.ToLower(unit) {
+	case "d":
+		return time.Duration(value * float64(24*time.Hour)), nil
+	case "w":
+		return time.Duration(value * float64(7*24*time.Hour)), nil
+	default:
+		return 0, errors.Errorf("unknown duration unit %q in %q", unit, s)
+	}
 }

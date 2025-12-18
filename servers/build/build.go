@@ -8,7 +8,6 @@ import (
 	"log/slog"
 	"maps"
 	"os"
-	"path/filepath"
 	"slices"
 	"strings"
 	"time"
@@ -22,6 +21,7 @@ import (
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/api/ingress"
 	"miren.dev/runtime/appconfig"
+	"miren.dev/runtime/components/buildkit"
 	"miren.dev/runtime/components/netresolve"
 	"miren.dev/runtime/observability"
 	"miren.dev/runtime/pkg/cond"
@@ -45,9 +45,13 @@ type Builder struct {
 
 	Resolver  netresolve.Resolver
 	LogWriter observability.LogWriter
+
+	// BuildKit is the persistent BuildKit component for container image builds.
+	// When set, uses the shared daemon instead of launching ephemeral sandboxes.
+	BuildKit *buildkit.Component
 }
 
-func NewBuilder(log *slog.Logger, eas *entityserver_v1alpha.EntityAccessClient, appClient *app.Client, res netresolve.Resolver, tmpdir string, logWriter observability.LogWriter, dnsHostname string) *Builder {
+func NewBuilder(log *slog.Logger, eas *entityserver_v1alpha.EntityAccessClient, appClient *app.Client, res netresolve.Resolver, tmpdir string, logWriter observability.LogWriter, dnsHostname string, bk *buildkit.Component) *Builder {
 	return &Builder{
 		Log:           log.With("module", "builder"),
 		EAS:           eas,
@@ -58,6 +62,7 @@ func NewBuilder(log *slog.Logger, eas *entityserver_v1alpha.EntityAccessClient, 
 		ec:            entityserver.NewClient(log, eas),
 		LogWriter:     logWriter,
 		DNSHostname:   dnsHostname,
+		BuildKit:      bk,
 	}
 }
 
@@ -591,61 +596,25 @@ func (b *Builder) BuildFromTar(ctx context.Context, state *build_v1alpha.Builder
 	// Now we know the stack is valid, proceed with buildkit setup
 	b.Log.Debug("setting up buildkit")
 
-	cacheDir := filepath.Join(b.TempDir, "buildkit-cache")
-	b.Log.Debug("creating buildkit cache directory", "path", cacheDir)
-	if err := os.MkdirAll(cacheDir, 0755); err != nil {
-		b.Log.Error("failed to create buildkit cache directory", "error", err, "path", cacheDir)
-		b.sendErrorStatus(ctx, status, "Failed to create buildkit cache directory: %v", err)
-		return fmt.Errorf("failed to create buildkit cache directory: %w", err)
+	if b.BuildKit == nil {
+		b.Log.Error("buildkit component not configured")
+		b.sendErrorStatus(ctx, status, "BuildKit not configured - ensure server is running with BuildKit enabled")
+		return fmt.Errorf("buildkit component not configured")
 	}
 
-	lbk := &LaunchBuildkit{
-		log: b.Log.With("module", "launchbuildkit"),
-		eac: b.EAS,
-	}
-	b.Log.Debug("created LaunchBuildkit instance")
-
-	b.Log.Debug("resolving cluster.local for buildkit")
-	ip, err := b.Resolver.LookupHost("cluster.local")
-	if err != nil {
-		b.Log.Error("failed to resolve cluster.local", "error", err)
-		b.sendErrorStatus(ctx, status, "Error resolving cluster.local: %v", err)
-		return fmt.Errorf("error resolving cluster.local: %w", err)
-	}
-	b.Log.Debug("resolved cluster.local", "ip", ip.String())
-
-	b.Log.Info("starting buildkit launch", "clusterIP", ip.String(), "logEntity", name)
-	rbk, err := lbk.Launch(ctx, ip.String(), WithLogEntity(name), WithAppName(name), WithLogAttrs(map[string]string{
-		"version": "build",
-	}))
-	if err != nil {
-		b.Log.Error("failed to launch buildkit", "error", err)
-		b.sendErrorStatus(ctx, status, "Failed to launch buildkit: %v", err)
-		return err
-	}
-	b.Log.Info("buildkit launch completed successfully")
-
-	defer func() {
-		if err := rbk.Close(ctx); err != nil {
-			b.Log.Error("failed to close buildkit", "error", err)
-		}
-	}()
-
-	b.Log.Debug("attempting to get buildkit client")
-	bkc, err := rbk.Client(ctx)
+	b.Log.Info("connecting to buildkit daemon")
+	bkc, err := b.BuildKit.Client(ctx)
 	if err != nil {
 		b.Log.Error("failed to get buildkit client", "error", err)
-		b.sendErrorStatus(ctx, status, "Failed to get buildkit client: %v", err)
+		b.sendErrorStatus(ctx, status, "Failed to connect to BuildKit: %v", err)
 		return err
 	}
-	b.Log.Debug("successfully obtained buildkit client")
-
 	defer bkc.Close()
 
 	b.Log.Debug("getting buildkit daemon info")
 	ci, err := bkc.Info(ctx)
 	if err != nil {
-		b.Log.Error("error getting buildkid info", "error", err)
+		b.Log.Error("error getting buildkitd info", "error", err)
 	} else {
 		b.Log.Debug("buildkitd info", "version", ci.BuildkitVersion.Version, "rev", ci.BuildkitVersion.Revision)
 	}
@@ -653,7 +622,6 @@ func (b *Builder) BuildFromTar(ctx context.Context, state *build_v1alpha.Builder
 	bk := &Buildkit{
 		Client: bkc,
 		Log:    b.Log,
-		//LogWriter: b.LogWriter,
 	}
 
 	_, mrv, _, err := b.nextVersion(ctx, name)
@@ -666,7 +634,6 @@ func (b *Builder) BuildFromTar(ctx context.Context, state *build_v1alpha.Builder
 	var tos []TransformOptions
 
 	tos = append(tos,
-		WithCacheDir(cacheDir),
 		WithBuildArg("MIREN_VERSION", mrv.Version),
 	)
 

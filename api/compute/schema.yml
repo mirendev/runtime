@@ -98,6 +98,12 @@ components:
         privileged:
           type: bool
           doc: Whether container runs in privileged mode
+        tty:
+          type: bool
+          doc: Allocate a TTY for the container
+        stdin:
+          type: bool
+          doc: Keep stdin open for the container
         command:
           type: string
           doc: Command to run
@@ -263,6 +269,12 @@ kinds:
         privileged:
           type: bool
           doc: Whether or not the container runs in privileged mode
+        tty:
+          type: bool
+          doc: Allocate a TTY for the container
+        stdin:
+          type: bool
+          doc: Keep stdin open for the container
         command:
           type: string
           doc: Command to run in the container

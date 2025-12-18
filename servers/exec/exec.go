@@ -89,11 +89,6 @@ func (s *Server) Exec(ctx context.Context, req *exec_v1alpha.SandboxExecExec) er
 	defer input.Close()
 	defer output.Close()
 
-	if args.HasWindowUpdates() {
-		ch := make(chan *exec_v1alpha.WindowSize)
-		stream.ChanWriter(ctx, args.WindowUpdates(), ch)
-	}
-
 	spec, err := firstContainer.Spec(ctx)
 	if err != nil {
 		return err
@@ -140,6 +135,28 @@ func (s *Server) Exec(ctx context.Context, req *exec_v1alpha.SandboxExecExec) er
 	err = proc.Start(ctx)
 	if err != nil {
 		return err
+	}
+
+	// Handle window resize events
+	if args.HasWindowUpdates() {
+		winCh := make(chan *exec_v1alpha.WindowSize)
+		stream.ChanWriter(ctx, args.WindowUpdates(), winCh)
+
+		go func() {
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case ws, ok := <-winCh:
+					if !ok {
+						return
+					}
+					if err := proc.Resize(ctx, uint32(ws.Width()), uint32(ws.Height())); err != nil {
+						s.Log.Debug("failed to resize terminal", "error", err)
+					}
+				}
+			}
+		}()
 	}
 
 	es, err := proc.Wait(ctx)

@@ -21,6 +21,7 @@ import (
 	"miren.dev/runtime/api/build/build_v1alpha"
 	"miren.dev/runtime/api/compute/compute_v1alpha"
 	"miren.dev/runtime/api/core/core_v1alpha"
+	"miren.dev/runtime/api/debug/debug_v1alpha"
 	deployment_v1alpha "miren.dev/runtime/api/deployment/deployment_v1alpha"
 	aes "miren.dev/runtime/api/entityserver"
 	esv1 "miren.dev/runtime/api/entityserver/entityserver_v1alpha"
@@ -29,6 +30,7 @@ import (
 	"miren.dev/runtime/clientconfig"
 	"miren.dev/runtime/components/activator"
 	"miren.dev/runtime/components/autotls"
+	"miren.dev/runtime/components/buildkit"
 	"miren.dev/runtime/components/netresolve"
 	certctrl "miren.dev/runtime/controllers/certificate"
 	deploymentctrl "miren.dev/runtime/controllers/deployment"
@@ -45,6 +47,7 @@ import (
 	"miren.dev/runtime/pkg/sysstats"
 	"miren.dev/runtime/servers/app"
 	"miren.dev/runtime/servers/build"
+	debugsrv "miren.dev/runtime/servers/debug"
 	"miren.dev/runtime/servers/deployment"
 	"miren.dev/runtime/servers/entityserver"
 	execproxy "miren.dev/runtime/servers/exec_proxy"
@@ -77,6 +80,9 @@ type CoordinatorConfig struct {
 	HTTP      *metrics.HTTPMetrics
 	Logs      *observability.LogReader
 	LogWriter *observability.PersistentLogWriter
+
+	// BuildKit is the persistent BuildKit component for container image builds
+	BuildKit *buildkit.Component
 }
 
 // CloudAuthConfig contains cloud authentication settings
@@ -120,6 +126,8 @@ type Coordinator struct {
 	apiKey  []byte
 
 	authClient *cloudauth.AuthClient // For status reporting to cloud
+
+	debugServer *debugsrv.Server
 }
 
 func (c *Coordinator) Activator() activator.AppActivator {
@@ -134,6 +142,11 @@ func (c *Coordinator) SandboxPoolManager() *sandboxpool.Manager {
 func (c *Coordinator) Stop() {
 	if c.cm != nil {
 		c.cm.Stop()
+	}
+	if c.debugServer != nil {
+		if err := c.debugServer.Close(); err != nil {
+			c.Log.Error("failed to close debug server", "error", err)
+		}
 	}
 }
 
@@ -306,6 +319,56 @@ func (c *Coordinator) NamedConfig(name string) (*clientconfig.Config, error) {
 		ValidFor:     1 * year,
 	})
 
+	if err != nil {
+		return nil, err
+	}
+
+	return clientconfig.Local(cc, c.Address), nil
+}
+
+// RunnerConfig returns a client config for a runner service with proper TLS certificate SANs.
+// The certificate will be valid for localhost and the runner's listen address.
+func (c *Coordinator) RunnerConfig(listenAddress string) (*clientconfig.Config, error) {
+	// Build list of IPs and DNS names for the certificate
+	ips := []net.IP{
+		net.ParseIP("127.0.0.1"),
+		net.ParseIP("::1"),
+	}
+	names := []string{"localhost"}
+
+	// Parse the listen address to extract host/IP
+	if listenAddress != "" {
+		host, _, err := net.SplitHostPort(listenAddress)
+		if err == nil && host != "" {
+			// Check if host is an IP address
+			if ip := net.ParseIP(host); ip != nil {
+				// Add to IPs if not already present
+				found := false
+				for _, existing := range ips {
+					if existing.Equal(ip) {
+						found = true
+						break
+					}
+				}
+				if !found {
+					ips = append(ips, ip)
+				}
+			} else {
+				// It's a hostname, add to DNS names if not already present
+				if host != "localhost" {
+					names = append(names, host)
+				}
+			}
+		}
+	}
+
+	cc, err := c.authority.IssueCertificate(caauth.Options{
+		CommonName:   "miren-runner",
+		Organization: "miren",
+		ValidFor:     1 * year,
+		IPs:          ips,
+		DNSNames:     names,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -601,13 +664,13 @@ func (c *Coordinator) Start(ctx context.Context) error {
 		return err
 	}
 
-	eps := execproxy.NewServer(c.Log, eac, rs, aa)
+	eps := execproxy.NewServer(c.Log, eac, rs)
 	server.ExposeValue("dev.miren.runtime/exec", exec_v1alpha.AdaptSandboxExec(eps))
 
 	// Create app client for the builder
 	appClient := appclient.NewClient(c.Log, loopback)
 
-	bs := build.NewBuilder(c.Log, eac, appClient, c.Resolver, c.TempDir, c.LogWriter, c.CloudAuth.DNSHostname)
+	bs := build.NewBuilder(c.Log, eac, appClient, c.Resolver, c.TempDir, c.LogWriter, c.CloudAuth.DNSHostname, c.BuildKit)
 	server.ExposeValue("dev.miren.runtime/build", build_v1alpha.AdaptBuilder(bs))
 
 	ai := app.NewAppInfo(c.Log, ec, c.Cpu, c.Mem, c.HTTP)
@@ -623,6 +686,13 @@ func (c *Coordinator) Start(ctx context.Context) error {
 		return err
 	}
 	server.ExposeValue("dev.miren.runtime/deployment", deployment_v1alpha.AdaptDeployment(ds))
+
+	c.debugServer, err = debugsrv.NewServer(c.Log, filepath.Join(c.DataPath, "net.db"), eac)
+	if err != nil {
+		c.Log.Error("failed to create debug server", "error", err)
+		return err
+	}
+	server.ExposeValue("dev.miren.runtime/debug-netdb", debug_v1alpha.AdaptNetDB(c.debugServer))
 
 	c.Log.Info("started RPC server")
 

@@ -58,16 +58,28 @@ func Load(configPath string, flags *CLIFlags, log *slog.Logger) (*Config, error)
 
 	// Apply mode defaults based on the resolved mode
 	// Only set if not already set (nil check)
+
+	if effectiveMode == "standalone" {
+		if cfg.Buildkit.StartEmbedded == nil {
+			cfg.Buildkit.StartEmbedded = boolPtr(true)
+		}
+	}
+	if effectiveMode == "standalone" {
+		if cfg.Containerd.StartEmbedded == nil {
+			cfg.Containerd.StartEmbedded = boolPtr(true)
+		}
+	}
 	if effectiveMode == "standalone" {
 		if cfg.Etcd.StartEmbedded == nil {
 			cfg.Etcd.StartEmbedded = boolPtr(true)
 		}
-		if cfg.Containerd.StartEmbedded == nil {
-			cfg.Containerd.StartEmbedded = boolPtr(true)
-		}
+	}
+	if effectiveMode == "standalone" {
 		if cfg.Victorialogs.StartEmbedded == nil {
 			cfg.Victorialogs.StartEmbedded = boolPtr(true)
 		}
+	}
+	if effectiveMode == "standalone" {
 		if cfg.Victoriametrics.StartEmbedded == nil {
 			cfg.Victoriametrics.StartEmbedded = boolPtr(true)
 		}
@@ -137,6 +149,26 @@ func loadConfigFile(path string, cfg *Config) error {
 }
 
 func applyCLIFlags(cfg *Config, flags *CLIFlags) {
+
+	if flags.BuildkitConfigGcKeepDuration != nil && *flags.BuildkitConfigGcKeepDuration != "" {
+		cfg.Buildkit.GcKeepDuration = flags.BuildkitConfigGcKeepDuration
+	}
+
+	if flags.BuildkitConfigGcKeepStorage != nil && *flags.BuildkitConfigGcKeepStorage != "" {
+		cfg.Buildkit.GcKeepStorage = flags.BuildkitConfigGcKeepStorage
+	}
+
+	if flags.BuildkitConfigSocketDir != nil && *flags.BuildkitConfigSocketDir != "" {
+		cfg.Buildkit.SocketDir = flags.BuildkitConfigSocketDir
+	}
+
+	if flags.BuildkitConfigSocketPath != nil && *flags.BuildkitConfigSocketPath != "" {
+		cfg.Buildkit.SocketPath = flags.BuildkitConfigSocketPath
+	}
+
+	if flags.BuildkitConfigStartEmbedded != nil {
+		cfg.Buildkit.StartEmbedded = flags.BuildkitConfigStartEmbedded
+	}
 
 	if flags.Mode != nil && *flags.Mode != "" {
 		cfg.Mode = flags.Mode

@@ -36,6 +36,7 @@ The Miren CLI (`miren`) provides commands for managing applications and deployme
 - `miren app delete` - Delete an application and all its resources
 - `miren app history` - Show deployment history for an application
 - `miren app status` - Show current status of an application
+- `miren app run` - Open interactive shell in a new ephemeral sandbox ([details](/cli/app#miren-app-run))
 
 ### Logs & Monitoring
 
@@ -60,8 +61,8 @@ The Miren CLI (`miren`) provides commands for managing applications and deployme
 
 ### Advanced Commands
 
-- `miren sandbox list` - List all sandboxes
-- `miren sandbox exec` - Execute a command in a sandbox
+- `miren sandbox list` - List all sandboxes ([details](/cli/sandbox))
+- `miren sandbox exec` - Execute a command in an existing sandbox ([details](/cli/sandbox#miren-sandbox-exec))
 - `miren sandbox stop` - Stop a sandbox
 - `miren sandbox delete` - Delete a dead sandbox
 - `miren sandbox metrics` - Get metrics from a sandbox
@@ -144,6 +145,7 @@ miren app list --format json
 
 - [Getting Started](/getting-started) - Learn by deploying
 - [App Commands](/cli/app) - Manage your applications
+- [Sandbox Commands](/cli/sandbox) - Work with sandboxes directly
 - [Logs Command](/cli/logs) - View application logs
 - [Disk Commands](/cli/disk) - Manage persistent storage
 - [Disks Overview](/disks) - Learn about persistent storage

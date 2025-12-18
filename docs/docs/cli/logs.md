@@ -24,6 +24,7 @@ miren logs [flags]
 - `--sandbox, -s` - Show logs for a specific sandbox ID
 - `--follow, -f` - Follow log output (live tail)
 - `--grep, -g` - Filter logs using the filter syntax
+- `--service` - Filter logs by service name (e.g., web, worker)
 
 ### Examples
 
@@ -48,6 +49,12 @@ miren logs --follow
 
 # Filter logs containing "error"
 miren logs -g error
+
+# Filter logs by service
+miren logs --service web
+
+# Combine service filter with text filter
+miren logs --service worker -g error
 ```
 
 ## Time Range
@@ -75,6 +82,21 @@ miren logs --follow
 
 # Follow logs for a specific app
 miren logs --app myapp -f
+```
+
+## Filtering by Service
+
+Use `--service` to filter logs by service name. This is useful for applications with multiple services (e.g., web, worker):
+
+```bash
+# Show only logs from the web service
+miren logs --service web
+
+# Show worker service logs containing "error"
+miren logs --service worker -g error
+
+# Follow web service logs
+miren logs --service web -f
 ```
 
 ## Filtering Logs

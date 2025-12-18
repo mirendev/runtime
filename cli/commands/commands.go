@@ -55,6 +55,9 @@ func AllCommands() map[string]cli.CommandFactory {
 		"sandbox delete": func() (cli.Command, error) {
 			return Infer("sandbox delete", "Delete a dead sandbox", SandboxDelete), nil
 		},
+		"sandbox exec": func() (cli.Command, error) {
+			return Infer("sandbox exec", "Open interactive shell in an existing sandbox", SandboxExec), nil
+		},
 
 		"sandbox-pool list": func() (cli.Command, error) {
 			return Infer("sandbox-pool list", "List all sandbox pools", SandboxPoolList), nil
@@ -81,6 +84,10 @@ func AllCommands() map[string]cli.CommandFactory {
 
 		"app delete": func() (cli.Command, error) {
 			return Infer("app delete", "Delete an application and all its resources", AppDelete), nil
+		},
+
+		"app run": func() (cli.Command, error) {
+			return Infer("app run", "Open interactive shell in a new sandbox", AppRun), nil
 		},
 
 		"apps": func() (cli.Command, error) {
@@ -342,6 +349,22 @@ Warning: These commands are intended for advanced users and developers. They may
 
 		"debug disk mounts": func() (cli.Command, error) {
 			return Infer("debug disk mounts", "List all mounted disks from /proc/mounts", DebugDiskMounts), nil
+		},
+
+		"debug netdb list": func() (cli.Command, error) {
+			return Infer("debug netdb list", "List all IP leases from netdb", DebugNetDBList), nil
+		},
+
+		"debug netdb status": func() (cli.Command, error) {
+			return Infer("debug netdb status", "Show IP allocation status by subnet", DebugNetDBStatus), nil
+		},
+
+		"debug netdb release": func() (cli.Command, error) {
+			return Infer("debug netdb release", "Manually release IP leases", DebugNetDBRelease), nil
+		},
+
+		"debug netdb gc": func() (cli.Command, error) {
+			return Infer("debug netdb gc", "Find and release orphaned IP leases", DebugNetDBGC), nil
 		},
 	}
 

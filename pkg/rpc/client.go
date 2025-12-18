@@ -814,6 +814,11 @@ func (c *NetworkClient) callInline(
 	}
 
 	err := cond.Wrap(mm.Handler(ctx, call))
+
+	// Defensively consume args if the handler didn't read them.
+	// This prevents leftover args from being interpreted as the next stream request.
+	call.SkipArgs()
+
 	if err != nil {
 		var msg, category, code string
 

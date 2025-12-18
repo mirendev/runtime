@@ -517,20 +517,20 @@ func Load(configPath string, flags *CLIFlags, log *slog.Logger) (*Config, error)
 
 	// Apply mode defaults based on the resolved mode
 	// Only set if not already set (nil check)
-	if effectiveMode == "standalone" {
-		if cfg.Etcd.StartEmbedded == nil {
-			cfg.Etcd.StartEmbedded = boolPtr(true)
-		}
-		if cfg.Containerd.StartEmbedded == nil {
-			cfg.Containerd.StartEmbedded = boolPtr(true)
-		}
-		if cfg.Victorialogs.StartEmbedded == nil {
-			cfg.Victorialogs.StartEmbedded = boolPtr(true)
-		}
-		if cfg.Victoriametrics.StartEmbedded == nil {
-			cfg.Victoriametrics.StartEmbedded = boolPtr(true)
+	{{range $cname, $config := .Configs}}
+	{{- $structField := ""}}{{range $k, $v := (index $.Configs "Config").Fields}}{{if eq $v.Type $cname}}{{$structField = ($k | title)}}{{end}}{{end}}
+	{{- range $fname, $field := $config.Fields}}
+	{{- if $field.ModeDefault}}
+	{{- range $mode, $val := $field.ModeDefault}}
+	if effectiveMode == "{{$mode}}" {
+		if cfg.{{if $structField}}{{$structField}}.{{end}}{{$fname | title}} == nil {
+			cfg.{{if $structField}}{{$structField}}.{{end}}{{$fname | title}} = boolPtr({{$val}})
 		}
 	}
+	{{- end}}
+	{{- end}}
+	{{- end}}
+	{{- end}}
 
 	// Apply environment variables (can override mode defaults)
 	if err := applyEnvironmentVariables(cfg, log); err != nil {

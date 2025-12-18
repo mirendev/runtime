@@ -18,6 +18,10 @@ type MockStore struct {
 	OnListIndex     func(ctx context.Context, attr Attr) ([]Id, error) // Hook to track ListIndex calls
 
 	NowFunc func() time.Time // Optional function to override current time
+
+	// Entity watchers - maps entity ID to list of channels to notify
+	watchersMu sync.RWMutex
+	watchers   map[Id][]chan EntityOp
 }
 
 var _ Store = &MockStore{}
@@ -25,6 +29,7 @@ var _ Store = &MockStore{}
 func NewMockStore() *MockStore {
 	return &MockStore{
 		Entities: make(map[Id]*Entity),
+		watchers: make(map[Id][]chan EntityOp),
 	}
 }
 
@@ -130,6 +135,9 @@ func (m *MockStore) UpdateEntity(ctx context.Context, id Id, entity *Entity, opt
 	// Update the entity in the store
 	m.Entities[id] = updated
 
+	// Notify watchers
+	go m.notifyWatchers(id, EntityOp{Type: EntityOpUpdate, Entity: updated})
+
 	return updated, nil
 }
 
@@ -155,6 +163,10 @@ func (m *MockStore) ReplaceEntity(ctx context.Context, entity *Entity, opts ...E
 	}
 
 	m.Entities[id] = entity
+
+	// Notify watchers
+	go m.notifyWatchers(id, EntityOp{Type: EntityOpUpdate, Entity: entity})
+
 	return entity, nil
 }
 
@@ -238,9 +250,43 @@ func (m *MockStore) WatchIndex(ctx context.Context, attr Attr) (clientv3.WatchCh
 	return ch, nil
 }
 
-// WatchEntity
+// WatchEntity registers a watcher for an entity and returns a channel that receives updates
 func (m *MockStore) WatchEntity(ctx context.Context, id Id) (chan EntityOp, error) {
-	return nil, nil
+	ch := make(chan EntityOp, 10)
+
+	m.watchersMu.Lock()
+	m.watchers[id] = append(m.watchers[id], ch)
+	m.watchersMu.Unlock()
+
+	// Clean up watcher when context is cancelled
+	go func() {
+		<-ctx.Done()
+		m.watchersMu.Lock()
+		defer m.watchersMu.Unlock()
+		watchers := m.watchers[id]
+		for i, w := range watchers {
+			if w == ch {
+				m.watchers[id] = append(watchers[:i], watchers[i+1:]...)
+				break
+			}
+		}
+		close(ch)
+	}()
+
+	return ch, nil
+}
+
+// notifyWatchers sends an entity operation to all watchers of the given entity ID
+func (m *MockStore) notifyWatchers(id Id, op EntityOp) {
+	m.watchersMu.RLock()
+	defer m.watchersMu.RUnlock()
+	for _, ch := range m.watchers[id] {
+		select {
+		case ch <- op:
+		default:
+			// Channel full, skip
+		}
+	}
 }
 
 func (m *MockStore) ListIndex(ctx context.Context, attr Attr) ([]Id, error) {
