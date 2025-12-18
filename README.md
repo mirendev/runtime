@@ -2,6 +2,7 @@
 
 [![Test](https://github.com/mirendev/runtime/actions/workflows/test.yml/badge.svg?branch=main)](https://github.com/mirendev/runtime/actions/workflows/test.yml?query=branch%3Amain)
 [![Release](https://img.shields.io/github/v/tag/mirendev/runtime?sort=semver)](https://github.com/mirendev/runtime/releases/latest)
+[![Changelog](https://img.shields.io/badge/changelog-miren.md-blue)](https://miren.md/changelog)
 [![License](https://img.shields.io/github/license/mirendev/runtime)](LICENSE)
 
 A container orchestration system built on containerd for running secure, isolated applications with etcd-backed state management.
