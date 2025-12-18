@@ -80,36 +80,61 @@ func DoctorAuth(ctx *Context, opts struct {
 		return nil
 	}
 
-	if cluster.Identity == "" {
-		// No identity configured - offer to set up miren.cloud auth
-		ctx.Printf("\n")
-		ctx.Printf("Set up authentication with miren.cloud? [Y/n] ")
-		var response string
-		fmt.Scanln(&response)
-		response = strings.TrimSpace(strings.ToLower(response))
-		if response == "" || response == "y" || response == "yes" {
-			ctx.Printf("\n")
-			if err := LoginWithDefaults(ctx); err != nil {
-				return err
-			}
-			ctx.Printf("\n%s\n", infoGreen.Render("✓ Login successful"))
+	ctx.Printf("\n")
+
+	// Help picker
+	for {
+		items := []ui.PickerItem{
+			ui.SimplePickerItem{Text: "How do I login with a different account?"},
+			ui.SimplePickerItem{Text: "How do I add authentication to this server?"},
+			ui.SimplePickerItem{Text: "[done]"},
 		}
-	} else if authRes.Method == "none" && cluster.Identity != "" {
-		// Identity is configured but auth failed - offer to refresh
-		ctx.Printf("\n")
-		ctx.Printf("Identity not working. Refresh your login? [Y/n] ")
-		var response string
-		fmt.Scanln(&response)
-		response = strings.TrimSpace(strings.ToLower(response))
-		if response == "" || response == "y" || response == "yes" {
-			ctx.Printf("\n%s\n", infoGray.Render("Refreshing login..."))
-			ctx.Printf("\n")
-			if err := LoginWithDefaults(ctx); err != nil {
-				return err
-			}
-			ctx.Printf("\n%s\n", infoGreen.Render("✓ Login refreshed"))
+
+		selected, err := ui.RunPicker(items, ui.WithTitle("Need help?"))
+		if err != nil || selected == nil || selected.ID() == "[done]" {
+			return nil
+		}
+
+		switch selected.ID() {
+		case "How do I login with a different account?":
+			showLoginDifferentAccountHelp(ctx)
+		case "How do I add authentication to this server?":
+			showAddAuthToServerHelp(ctx)
 		}
 	}
+}
 
-	return nil
+func showLoginDifferentAccountHelp(ctx *Context) {
+	ctx.Printf("\n%s\n", infoLabel.Render("Logging in with a different account"))
+	ctx.Printf("%s\n\n", infoGray.Render("───────────────────────────────────"))
+
+	ctx.Printf("%s\n", infoLabel.Render("Log out of your current account first:"))
+	ctx.Printf("  %s\n\n", infoGray.Render("miren logout"))
+
+	ctx.Printf("%s\n", infoLabel.Render("Then log in with a different account:"))
+	ctx.Printf("  %s\n", infoGray.Render("miren login"))
+
+	ctx.Printf("\n%s", infoGray.Render("Press Enter to continue..."))
+	fmt.Scanln()
+	ctx.Printf("\n")
+}
+
+func showAddAuthToServerHelp(ctx *Context) {
+	ctx.Printf("\n%s\n", infoLabel.Render("Adding authentication to a server"))
+	ctx.Printf("%s\n\n", infoGray.Render("─────────────────────────────────"))
+
+	ctx.Printf("%s\n", infoLabel.Render("First, login to miren.cloud:"))
+	ctx.Printf("  %s\n\n", infoGray.Render("miren login"))
+
+	ctx.Printf("%s\n", infoLabel.Render("Then register your server with miren.cloud:"))
+	ctx.Printf("  %s\n\n", infoGray.Render("sudo miren server register -n <cluster-name>"))
+
+	ctx.Printf("%s\n", infoLabel.Render("Approve the registration in the browser when prompted."))
+	ctx.Printf("\n")
+	ctx.Printf("%s\n", infoLabel.Render("Finally, restart the server:"))
+	ctx.Printf("  %s\n", infoGray.Render("sudo systemctl restart miren"))
+
+	ctx.Printf("\n%s", infoGray.Render("Press Enter to continue..."))
+	fmt.Scanln()
+	ctx.Printf("\n")
 }

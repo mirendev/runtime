@@ -11,9 +11,6 @@ import (
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
-	"miren.dev/runtime/api/core/core_v1alpha"
-	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
-	"miren.dev/runtime/api/ingress"
 	"miren.dev/runtime/clientconfig"
 	"miren.dev/runtime/pkg/auth"
 	"miren.dev/runtime/pkg/cloudauth"
@@ -147,10 +144,6 @@ func Doctor(ctx *Context, opts struct {
 		configuration  infoSection
 		server         infoSection
 		authentication infoSection
-		apps           infoSection
-		authUser       string
-		authOrg        string
-		routeCount     int
 	)
 
 	// Load configuration
@@ -198,42 +191,24 @@ func Doctor(ctx *Context, opts struct {
 					authRes := tryAuthenticate(ctx, cfg, cluster)
 					if authRes.Claims != nil {
 						authentication.ok = true
-						authentication.message = authRes.Claims.Subject
-						authUser = authRes.Claims.Subject
-						authOrg = authRes.Claims.OrganizationID
+						// Prefer email from user info if available
+						if authRes.UserInfo != nil && authRes.UserInfo.User.Email != "" {
+							authentication.message = authRes.UserInfo.User.Email
+						} else {
+							authentication.message = authRes.Claims.Subject
+						}
 					}
 				}
 
-				// Count apps and check health
-				eac := entityserver_v1alpha.NewEntityAccessClient(client)
-				appCount, unhealthyCount := countAppsHealth(ctx, eac)
-				if appCount == 0 {
-					apps.message = "none"
-				} else if unhealthyCount > 0 {
-					apps.ok = false
-					apps.message = fmt.Sprintf("%d/%d unhealthy", unhealthyCount, appCount)
-				} else {
-					apps.ok = true
-					apps.message = fmt.Sprintf("%d deployed", appCount)
-				}
-
-				// Count routes
-				ic := ingress.NewClient(ctx.Log, client)
-				routes, err := ic.List(ctx)
-				if err == nil {
-					routeCount = len(routes)
-				}
 			} else {
 				server.ok = false
 				server.message = "not connected"
 				authentication.message = "(skipped)"
-				apps.message = "(skipped)"
 			}
 		}
 	} else {
 		server.message = "(skipped)"
 		authentication.message = "(skipped)"
-		apps.message = "(skipped)"
 	}
 
 	// Text output
@@ -251,27 +226,6 @@ func Doctor(ctx *Context, opts struct {
 	skipped = authentication.message == "(skipped)" || authentication.message == "(no identity)"
 	printInfoLine(ctx, "Authentication", authentication.ok, authentication.message, skipped)
 
-	// Apps
-	skipped = apps.message == "(skipped)"
-	appsNeutral := apps.message == "none"
-	if appsNeutral {
-		skipped = true
-	}
-	printInfoLine(ctx, "Apps", apps.ok, apps.message, skipped)
-
-	// User info and counts
-	if configuration.ok && server.ok {
-		ctx.Printf("\n")
-		if authUser != "" {
-			userLine := fmt.Sprintf("%s %s", infoLabel.Render("User:"), authUser)
-			if authOrg != "" {
-				userLine += infoGray.Render(fmt.Sprintf(" (org: %s)", authOrg))
-			}
-			ctx.Printf("%s\n", userLine)
-		}
-		ctx.Printf("%s %d configured\n", infoLabel.Render("Routes:"), routeCount)
-	}
-
 	// Help text
 	ctx.Printf("\n")
 	if !configuration.ok {
@@ -279,7 +233,7 @@ func Doctor(ctx *Context, opts struct {
 		ctx.Printf("  %s        %s\n", infoBold.Render("miren login"), infoGray.Render("# Authenticate with miren.cloud"))
 		ctx.Printf("  %s  %s\n", infoBold.Render("miren cluster add"), infoGray.Render("# Add a cluster manually"))
 	} else {
-		ctx.Printf("%s\n", infoGray.Render("Use 'miren doctor <topic>' for details: config, server, auth, apps"))
+		ctx.Printf("%s\n", infoGray.Render("Use 'miren doctor <topic>' for details: config, server, auth"))
 	}
 
 	return nil
@@ -299,71 +253,4 @@ func printInfoLine(ctx *Context, label string, ok bool, message string, skipped 
 	// Pad label to 14 chars for alignment
 	paddedLabel := fmt.Sprintf("%-14s", label)
 	ctx.Printf("  %s %s %s\n", indicator, paddedLabel, message)
-}
-
-// countAppsHealth returns total app count and unhealthy app count.
-// An app is considered unhealthy if its deployment status is "failed".
-func countAppsHealth(ctx context.Context, eac *entityserver_v1alpha.EntityAccessClient) (total int, unhealthy int) {
-	// Get apps
-	kindRes, err := eac.LookupKind(ctx, "app")
-	if err != nil {
-		return 0, 0
-	}
-	appsRes, err := eac.List(ctx, kindRes.Attr())
-	if err != nil {
-		return 0, 0
-	}
-
-	total = len(appsRes.Values())
-	if total == 0 {
-		return 0, 0
-	}
-
-	// Build app name set
-	appNames := make(map[string]bool)
-	for _, e := range appsRes.Values() {
-		var md core_v1alpha.Metadata
-		md.Decode(e.Entity())
-		appNames[md.Name] = true
-	}
-
-	// Get deployments to check for failed status
-	deploymentKindRes, err := eac.LookupKind(ctx, "deployment")
-	if err != nil {
-		return total, 0
-	}
-	deploymentsRes, err := eac.List(ctx, deploymentKindRes.Attr())
-	if err != nil {
-		return total, 0
-	}
-
-	// Build map of most recent deployment per app
-	type deploymentInfo struct {
-		status      string
-		completedAt string
-	}
-	deploymentMap := make(map[string]deploymentInfo)
-	for _, e := range deploymentsRes.Values() {
-		var d core_v1alpha.Deployment
-		d.Decode(e.Entity())
-
-		existing, ok := deploymentMap[d.AppName]
-		if !ok || d.CompletedAt > existing.completedAt {
-			deploymentMap[d.AppName] = deploymentInfo{
-				status:      d.Status,
-				completedAt: d.CompletedAt,
-			}
-		}
-	}
-
-	// Count unhealthy apps (only failed deployments count as unhealthy)
-	for appName := range appNames {
-		if dep, ok := deploymentMap[appName]; ok {
-			if dep.status == "failed" {
-				unhealthy++
-			}
-		}
-	}
-
-	return total, unhealthy
 }
