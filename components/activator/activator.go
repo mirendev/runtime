@@ -188,6 +188,7 @@ func NewLocalActivator(ctx context.Context, log *slog.Logger, eac *entityserver_
 	}
 
 	go la.watchSandboxes(ctx)
+	go la.watchPools(ctx)
 	go la.syncLastActivity(ctx)
 
 	return la
@@ -1577,6 +1578,77 @@ func (a *localActivator) removeSandboxFromTracking(sandboxID entity.Id) {
 					"remaining_sandboxes", len(ps.sandboxes))
 				return
 			}
+		}
+	}
+}
+
+// removePoolFromTracking removes a pool and all related cache entries.
+// This should be called when a pool entity is deleted from the store.
+func (a *localActivator) removePoolFromTracking(poolID entity.Id) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	// Remove poolSandboxes entry
+	if _, ok := a.poolSandboxes[poolID]; ok {
+		delete(a.poolSandboxes, poolID)
+		a.log.Info("removed poolSandboxes entry for deleted pool", "pool", poolID)
+	}
+
+	// Remove all versions entries that point to this pool
+	for key, versionRef := range a.versions {
+		if versionRef.poolID == poolID {
+			delete(a.versions, key)
+			a.log.Info("removed stale version->pool mapping for deleted pool",
+				"version", key.ver,
+				"service", key.service,
+				"pool", poolID)
+		}
+	}
+
+	// Remove all pools entries that reference this pool
+	for key, state := range a.pools {
+		if state.pool != nil && state.pool.ID == poolID {
+			delete(a.pools, key)
+			a.log.Info("removed stale pool state for deleted pool",
+				"version", key.ver,
+				"service", key.service,
+				"pool", poolID)
+		}
+	}
+}
+
+// watchPools watches for pool entity deletions and cleans up stale cache entries.
+func (a *localActivator) watchPools(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			a.log.Info("pool watch context cancelled")
+			return
+		default:
+		}
+
+		a.log.Info("starting pool deletion watch")
+
+		_, err := a.eac.WatchIndex(ctx, entity.Ref(entity.EntityKind, compute_v1alpha.KindSandboxPool), stream.Callback(func(op *entityserver_v1alpha.EntityOp) error {
+			if op.IsDelete() {
+				// Pool was deleted - clean up all related cache entries
+				if op.HasEntityId() {
+					poolID := entity.Id(op.EntityId())
+					a.log.Info("pool deleted, cleaning up cache", "pool", poolID)
+					a.removePoolFromTracking(poolID)
+				}
+			}
+			return nil
+		}))
+
+		if err != nil {
+			if ctx.Err() != nil {
+				a.log.Info("pool watch stopped due to context cancellation")
+				return
+			}
+			a.log.Error("pool watch ended with error, will restart", "error", err)
+			time.Sleep(5 * time.Second)
+			continue
 		}
 	}
 }

@@ -1726,3 +1726,179 @@ func TestConcurrentPoolIncrement(t *testing.T) {
 	assert.Equal(t, int64(2), finalPool.DesiredInstances,
 		"With OCC enforcement, should get exactly one increment despite %d concurrent calls", numGoroutines)
 }
+
+// TestWatchPoolsCleansUpCacheOnDeletion verifies that the watchPools background goroutine
+// automatically cleans up all activator caches when a pool entity is deleted.
+// This prevents stale pool references from causing "pool has reached maximum size" errors.
+// Run with: ./hack/dev-exec go test -v -run TestWatchPoolsCleansUpCacheOnDeletion ./components/activator
+func TestWatchPoolsCleansUpCacheOnDeletion(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Use etcd-backed server because watch notifications require real etcd
+	server, cleanup := testutils.NewEtcdEntityServer(t)
+	defer cleanup()
+
+	// Create app entity (Project is optional)
+	app := &core_v1alpha.App{}
+	appID, err := server.Client.Create(ctx, "test-app-watch", app)
+	require.NoError(t, err)
+	app.ID = appID
+
+	// Create app version
+	testVer := &core_v1alpha.AppVersion{
+		App:      app.ID,
+		Version:  "v1",
+		ImageUrl: "test:latest",
+		Config: core_v1alpha.Config{
+			Port: 3000,
+			Services: []core_v1alpha.Services{
+				{
+					Name: "web",
+					ServiceConcurrency: core_v1alpha.ServiceConcurrency{
+						Mode:                "auto",
+						RequestsPerInstance: 10,
+						ScaleDownDelay:      "15m",
+					},
+				},
+			},
+		},
+	}
+	verID, err := server.Client.Create(ctx, "test-ver", testVer)
+	require.NoError(t, err)
+	testVer.ID = verID
+
+	// Pre-create a pool in the entity store
+	pool := &compute_v1alpha.SandboxPool{
+		Service: "web",
+		SandboxSpec: compute_v1alpha.SandboxSpec{
+			Version: testVer.ID,
+			Container: []compute_v1alpha.SandboxSpecContainer{
+				{
+					Name:  "app",
+					Image: "test:latest",
+					Port: []compute_v1alpha.SandboxSpecContainerPort{
+						{Port: 3000, Name: "http", Type: "http"},
+					},
+				},
+			},
+		},
+		ReferencedByVersions: []entity.Id{testVer.ID},
+		DesiredInstances:     5,
+	}
+	poolID, err := server.Client.Create(ctx, "test-pool", pool)
+	require.NoError(t, err)
+	pool.ID = poolID
+
+	// Create activator - this will start watchPools in background
+	activator := NewLocalActivator(ctx, testutils.TestLogger(t), server.EAC).(*localActivator)
+
+	// Verify pool was recovered and cached
+	key := verKey{testVer.ID.String(), "web"}
+	activator.mu.RLock()
+	_, poolsExists := activator.pools[key]
+	_, versionsExists := activator.versions[key]
+	_, poolSandboxesExists := activator.poolSandboxes[pool.ID]
+	activator.mu.RUnlock()
+
+	require.True(t, poolsExists, "Pool should be cached in pools map after recovery")
+	require.True(t, versionsExists, "Version->pool mapping should exist after recovery")
+	require.True(t, poolSandboxesExists, "poolSandboxes entry should exist after recovery")
+
+	// Delete the pool from entity store
+	_, err = server.EAC.Delete(ctx, pool.ID.String())
+	require.NoError(t, err)
+
+	// Wait for watchPools to process the deletion
+	// The watch should detect the deletion and clean up all caches
+	require.Eventually(t, func() bool {
+		activator.mu.RLock()
+		defer activator.mu.RUnlock()
+		_, poolsExists := activator.pools[key]
+		_, versionsExists := activator.versions[key]
+		_, poolSandboxesExists := activator.poolSandboxes[pool.ID]
+		return !poolsExists && !versionsExists && !poolSandboxesExists
+	}, 5*time.Second, 50*time.Millisecond, "watchPools should clean up all caches after pool deletion")
+
+	// Verify all caches are cleaned up
+	activator.mu.RLock()
+	_, poolsStillExists := activator.pools[key]
+	_, versionsStillExists := activator.versions[key]
+	_, poolSandboxesStillExists := activator.poolSandboxes[pool.ID]
+	activator.mu.RUnlock()
+
+	assert.False(t, poolsStillExists, "pools cache should be cleaned up")
+	assert.False(t, versionsStillExists, "versions cache should be cleaned up")
+	assert.False(t, poolSandboxesStillExists, "poolSandboxes cache should be cleaned up")
+}
+
+// TestRemovePoolFromTrackingCleansAllCaches verifies that removePoolFromTracking
+// correctly removes entries from all three cache maps.
+func TestRemovePoolFromTrackingCleansAllCaches(t *testing.T) {
+	log := testutils.TestLogger(t)
+
+	poolID := entity.Id("pool-1")
+	poolID2 := entity.Id("pool-2")
+
+	strategy := concurrency.NewStrategy(&core_v1alpha.ServiceConcurrency{
+		Mode:                "auto",
+		RequestsPerInstance: 10,
+		ScaleDownDelay:      "15m",
+	})
+
+	testVer := &core_v1alpha.AppVersion{
+		ID:       entity.Id("ver-1"),
+		App:      entity.Id("app-1"),
+		Version:  "v1",
+		ImageUrl: "test:latest",
+	}
+
+	testVer2 := &core_v1alpha.AppVersion{
+		ID:       entity.Id("ver-2"),
+		App:      entity.Id("app-1"),
+		Version:  "v2",
+		ImageUrl: "test:latest",
+	}
+
+	pool := &compute_v1alpha.SandboxPool{ID: poolID, Service: "web"}
+	pool2 := &compute_v1alpha.SandboxPool{ID: poolID2, Service: "web"}
+
+	activator := &localActivator{
+		log: log,
+		versions: map[verKey]*versionPoolRef{
+			{"ver-1", "web"}: {ver: testVer, poolID: poolID, service: "web", strategy: strategy},
+			{"ver-2", "web"}: {ver: testVer2, poolID: poolID2, service: "web", strategy: strategy},
+		},
+		pools: map[verKey]*poolState{
+			{"ver-1", "web"}: {pool: pool, revision: 1},
+			{"ver-2", "web"}: {pool: pool2, revision: 2},
+		},
+		poolSandboxes: map[entity.Id]*poolSandboxes{
+			poolID:  {pool: pool, sandboxes: []*sandbox{}, service: "web", strategy: strategy},
+			poolID2: {pool: pool2, sandboxes: []*sandbox{}, service: "web", strategy: strategy},
+		},
+	}
+
+	// Remove pool-1 from tracking
+	activator.removePoolFromTracking(poolID)
+
+	// Verify pool-1 entries are gone
+	activator.mu.RLock()
+	_, versionsExists := activator.versions[verKey{"ver-1", "web"}]
+	_, poolsExists := activator.pools[verKey{"ver-1", "web"}]
+	_, poolSandboxesExists := activator.poolSandboxes[poolID]
+
+	// Verify pool-2 entries are still there
+	_, versions2Exists := activator.versions[verKey{"ver-2", "web"}]
+	_, pools2Exists := activator.pools[verKey{"ver-2", "web"}]
+	_, poolSandboxes2Exists := activator.poolSandboxes[poolID2]
+	activator.mu.RUnlock()
+
+	assert.False(t, versionsExists, "pool-1 should be removed from versions")
+	assert.False(t, poolsExists, "pool-1 should be removed from pools")
+	assert.False(t, poolSandboxesExists, "pool-1 should be removed from poolSandboxes")
+
+	assert.True(t, versions2Exists, "pool-2 should still be in versions")
+	assert.True(t, pools2Exists, "pool-2 should still be in pools")
+	assert.True(t, poolSandboxes2Exists, "pool-2 should still be in poolSandboxes")
+}
