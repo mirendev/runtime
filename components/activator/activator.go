@@ -501,9 +501,28 @@ func (a *localActivator) requestPoolCapacity(ctx context.Context, ver *core_v1al
 			for attempt := 0; attempt < maxRetries; attempt++ {
 				a.mu.Lock()
 				if state.pool.DesiredInstances >= MaxPoolSize {
+					poolID := state.pool.ID
 					a.mu.Unlock()
+
+					// Before returning max size error, verify the pool still exists.
+					// The cached state may be stale if the pool was deleted and recreated.
+					_, getErr := a.eac.Get(ctx, poolID.String())
+					if getErr != nil {
+						if errors.Is(getErr, cond.ErrNotFound{}) {
+							a.log.Info("pool at max size was deleted, clearing stale reference",
+								"pool", poolID,
+								"service", service)
+							a.mu.Lock()
+							delete(a.pools, key)
+							a.mu.Unlock()
+							poolDeleted = true
+							break // Break out of OCC retry loop to re-query for pools
+						}
+						return nil, fmt.Errorf("failed to verify pool exists: %w", getErr)
+					}
+
 					a.log.Warn("pool at maximum size, cannot increment further",
-						"pool", state.pool.ID,
+						"pool", poolID,
 						"max_size", MaxPoolSize,
 						"current", state.pool.DesiredInstances)
 					return state.pool, fmt.Errorf("pool has reached maximum size of %d", MaxPoolSize)

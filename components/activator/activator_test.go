@@ -1726,3 +1726,117 @@ func TestConcurrentPoolIncrement(t *testing.T) {
 	assert.Equal(t, int64(2), finalPool.DesiredInstances,
 		"With OCC enforcement, should get exactly one increment despite %d concurrent calls", numGoroutines)
 }
+
+// TestActivatorDeletedPoolAtMaxSize verifies that when the activator has a cached pool
+// at max size (DesiredInstances >= 20) and that pool has been deleted, it correctly
+// detects the stale reference and clears the cache instead of returning a max size error.
+// This is a regression test for a bug where the max size check short-circuited before
+// attempting any operation that would detect the deleted pool.
+func TestActivatorDeletedPoolAtMaxSize(t *testing.T) {
+	ctx := context.Background()
+	log := testutils.TestLogger(t)
+
+	server, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	// Create app entity
+	app := &core_v1alpha.App{
+		Project: entity.Id("project-1"),
+	}
+	appID, err := server.Client.Create(ctx, "test-app", app)
+	require.NoError(t, err)
+	app.ID = appID
+
+	// Create app version
+	testVer := &core_v1alpha.AppVersion{
+		App:      app.ID,
+		Version:  "v1",
+		ImageUrl: "test:latest",
+		Config: core_v1alpha.Config{
+			Port: 3000,
+			Services: []core_v1alpha.Services{
+				{
+					Name: "web",
+					ServiceConcurrency: core_v1alpha.ServiceConcurrency{
+						Mode:                "auto",
+						RequestsPerInstance: 10,
+						ScaleDownDelay:      "15m",
+					},
+				},
+			},
+		},
+	}
+	verID, err := server.Client.Create(ctx, "test-ver", testVer)
+	require.NoError(t, err)
+	testVer.ID = verID
+
+	// Pre-create a pool at MAX size (simulating a pool that scaled up to max)
+	pool := &compute_v1alpha.SandboxPool{
+		Service: "web",
+		SandboxSpec: compute_v1alpha.SandboxSpec{
+			Version: testVer.ID,
+			Container: []compute_v1alpha.SandboxSpecContainer{
+				{
+					Name:  "app",
+					Image: "test:latest",
+					Port: []compute_v1alpha.SandboxSpecContainerPort{
+						{Port: 3000, Name: "http", Type: "http"},
+					},
+				},
+			},
+		},
+		ReferencedByVersions: []entity.Id{testVer.ID},
+		DesiredInstances:     MaxPoolSize, // Pool is at max size!
+	}
+	poolID, err := server.Client.Create(ctx, "maxed-pool", pool)
+	require.NoError(t, err)
+	pool.ID = poolID
+
+	activator := NewLocalActivator(ctx, log, server.EAC).(*localActivator)
+
+	// Manually prime the cache with the maxed-out pool
+	// (simulating what happens after recovery or previous use)
+	key := verKey{testVer.ID.String(), "web"}
+	poolEnt, err := server.EAC.Get(ctx, poolID.String())
+	require.NoError(t, err)
+
+	activator.mu.Lock()
+	activator.pools[key] = &poolState{
+		pool:       pool,
+		revision:   poolEnt.Entity().Revision(),
+		inProgress: false,
+	}
+	activator.mu.Unlock()
+
+	// Delete the pool from entity store (simulating cleanup after scale-to-zero)
+	_, err = server.EAC.Delete(ctx, poolID.String())
+	require.NoError(t, err)
+
+	// Verify cache still has the stale pool at max size
+	activator.mu.RLock()
+	cachedState, exists := activator.pools[key]
+	activator.mu.RUnlock()
+	require.True(t, exists, "Pool should still be in cache")
+	require.Equal(t, int64(MaxPoolSize), cachedState.pool.DesiredInstances, "Cached pool should be at max size")
+
+	// Now try to acquire a lease - this SHOULD detect the deleted pool
+	// rather than immediately returning "pool has reached maximum size"
+	timeoutCtx, cancel := context.WithTimeout(ctx, 1*time.Second)
+	defer cancel()
+
+	_, err = activator.AcquireLease(timeoutCtx, testVer, "web")
+	require.Error(t, err, "Should error since pool was deleted")
+
+	// The key assertion: error should NOT be about max pool size
+	// It should be about pool not found (since we detected deletion and cleared cache)
+	require.NotContains(t, err.Error(), "maximum size",
+		"Should NOT return max size error for deleted pool - should detect deletion instead")
+	require.Contains(t, err.Error(), "pool not found",
+		"Should return pool not found error after detecting deleted pool")
+
+	// Verify the stale cache was cleared
+	activator.mu.RLock()
+	_, stillCached := activator.pools[key]
+	activator.mu.RUnlock()
+	require.False(t, stillCached, "Stale pool should have been removed from cache")
+}
