@@ -167,7 +167,7 @@ func ServerInstall(ctx *Context, opts struct {
 	Tags         map[string]string `short:"t" long:"tag" description:"Tags for the cluster (key:value)"`
 }) error {
 	if opts.Branch == "" {
-		if br := version.Branch(); br != "unknown" {
+		if br := version.Branch(); br != "" {
 			opts.Branch = br
 		} else {
 			opts.Branch = "latest"

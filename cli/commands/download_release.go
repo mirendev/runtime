@@ -150,7 +150,7 @@ func DownloadRelease(ctx *Context, opts struct {
 	Output string `short:"o" long:"output" description:"Custom output directory"`
 }) error {
 	if opts.Branch == "" {
-		if br := version.Branch(); br != "unknown" {
+		if br := version.Branch(); br != "" {
 			opts.Branch = br
 		} else {
 			opts.Branch = "latest"

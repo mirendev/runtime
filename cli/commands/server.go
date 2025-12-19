@@ -122,7 +122,7 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 				}
 
 				branch := "latest"
-				if br := version.Branch(); br != "unknown" {
+				if br := version.Branch(); br != "" {
 					branch = br
 				}
 
