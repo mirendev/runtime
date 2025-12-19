@@ -54,11 +54,12 @@ PACKAGES="${1:-./...}"
 normalized_args=($(normalize_args "$PACKAGES"))
 
 # Run tests with coverage
-# -p 1: no parallelism (required for shared containerd/buildkit)
+# Tests use unique containerd namespaces and dynamic ports, so they should be
+# safe to run in parallel. Default parallelism is GOMAXPROCS (typically 2 on CI).
 # -coverprofile: output coverage data
 # -covermode=atomic: precise coverage with race condition handling
 echo "Running tests with coverage for ${normalized_args[@]}..."
-gotestsum --format testname -- -p 1 -coverprofile=coverage.out -covermode=atomic "${normalized_args[@]}"
+gotestsum --format testname -- -coverprofile=coverage.out -covermode=atomic "${normalized_args[@]}"
 
 # Calculate coverage percentage
 if [ -f coverage.out ]; then
