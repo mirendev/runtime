@@ -19,6 +19,7 @@ const sidebars: SidebarsConfig = {
     {
       type: 'category',
       label: 'Core Concepts',
+      collapsed: false,
       items: [
         'terminology',
         'languages',
@@ -32,6 +33,7 @@ const sidebars: SidebarsConfig = {
     {
       type: 'category',
       label: 'CLI Reference',
+      collapsed: false,
       link: {
         type: 'doc',
         id: 'cli-reference',
@@ -47,6 +49,7 @@ const sidebars: SidebarsConfig = {
     {
       type: 'category',
       label: 'Resources',
+      collapsed: false,
       items: [
         'changelog',
         'support',
