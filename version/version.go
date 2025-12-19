@@ -39,10 +39,13 @@ func GetInfo() Info {
 }
 
 // Branch returns the branch name if the binary was built from a branch (e.g. "main:abc123").
-// Returns empty string for tagged releases (e.g. "v0.2.0") or unknown versions.
+// Returns the tag name for tagged releases (e.g. "v0.2.0"), and empty for unknown versions.
 func Branch() string {
 	if branch, _, ok := strings.Cut(Version, ":"); ok {
 		return branch
+	}
+	if Version != "unknown" {
+		return Version
 	}
 	return ""
 }
