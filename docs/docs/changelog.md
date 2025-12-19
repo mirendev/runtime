@@ -2,6 +2,22 @@
 
 All notable changes to Miren Runtime will be documented in this file.
 
+## v0.2.1
+*2025-12-19*
+
+**Improvements**
+
+- **Improved `miren doctor`** - The diagnostic command now suggests commands for you to run instead of running them automatically. Includes better guidance for config, auth, and server issues, plus clickable routes in app listings. ([#491](https://github.com/mirendev/runtime/pull/491))
+- **Smarter install defaults** - `miren server install` and `miren download` now default to the version matching your binary instead of always using `main`. ([#500](https://github.com/mirendev/runtime/pull/500), [#502](https://github.com/mirendev/runtime/pull/502))
+
+**Bug Fixes**
+
+- **Fixed scale-to-zero pool deletion** - Pools for apps at scale-to-zero are no longer prematurely deleted after being idle for an hour, which was causing "pool has reached maximum size" errors when traffic resumed. ([#497](https://github.com/mirendev/runtime/pull/497))
+- **Fixed activator cache cleanup** - The activator now proactively cleans up cached pool references when pools are deleted, preventing stale cache errors. ([#498](https://github.com/mirendev/runtime/pull/498))
+- **Fixed disk debug commands** - `miren debug disk status` and related commands now correctly parse disk IDs. ([#499](https://github.com/mirendev/runtime/pull/499))
+
+---
+
 ## v0.2.0
 *2025-12-17*
 
