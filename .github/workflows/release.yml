@@ -746,9 +746,18 @@ jobs:
     # Only update homebrew tap for stable version tags (not prereleases, not branch builds)
     if: ${{ startsWith(github.event.workflow_run.head_branch, 'v') && !contains(github.event.workflow_run.head_branch, '-') }}
     steps:
+      - name: Generate GitHub App token
+        id: generate-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ vars.HOMEBREW_TAP_APP_ID }}
+          private-key: ${{ secrets.HOMEBREW_TAP_APP_KEY }}
+          owner: mirendev
+          repositories: homebrew-tap
+
       - name: Trigger homebrew-tap update
         env:
-          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          GH_TOKEN: ${{ steps.generate-token.outputs.token }}
         run: |
           VERSION="${{ github.event.workflow_run.head_branch }}"
           echo "Triggering homebrew-tap update for $VERSION..."
@@ -791,7 +800,7 @@ jobs:
                   "elements": [
                     {
                       "type": "mrkdwn",
-                      "text": "You can manually update the tap by running: `gh workflow run update-formula.yml -R mirendev/homebrew-tap -f version=${{ github.event.workflow_run.head_branch }}`"
+                      "text": "You can manually update the tap by running: `gh workflow run update-cask.yml -R mirendev/homebrew-tap -f version=${{ github.event.workflow_run.head_branch }}`"
                     }
                   ]
                 }
