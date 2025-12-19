@@ -11,8 +11,6 @@ import (
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
-	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
-	"miren.dev/runtime/api/ingress"
 	"miren.dev/runtime/clientconfig"
 	"miren.dev/runtime/pkg/auth"
 	"miren.dev/runtime/pkg/cloudauth"
@@ -146,10 +144,6 @@ func Doctor(ctx *Context, opts struct {
 		configuration  infoSection
 		server         infoSection
 		authentication infoSection
-		authUser       string
-		authOrg        string
-		appCount       int
-		routeCount     int
 	)
 
 	// Load configuration
@@ -197,28 +191,15 @@ func Doctor(ctx *Context, opts struct {
 					authRes := tryAuthenticate(ctx, cfg, cluster)
 					if authRes.Claims != nil {
 						authentication.ok = true
-						authentication.message = authRes.Claims.Subject
-						authUser = authRes.Claims.Subject
-						authOrg = authRes.Claims.OrganizationID
+						// Prefer email from user info if available
+						if authRes.UserInfo != nil && authRes.UserInfo.User.Email != "" {
+							authentication.message = authRes.UserInfo.User.Email
+						} else {
+							authentication.message = authRes.Claims.Subject
+						}
 					}
 				}
 
-				// Count apps
-				eac := entityserver_v1alpha.NewEntityAccessClient(client)
-				kindRes, err := eac.LookupKind(ctx, "app")
-				if err == nil {
-					res, err := eac.List(ctx, kindRes.Attr())
-					if err == nil {
-						appCount = len(res.Values())
-					}
-				}
-
-				// Count routes
-				ic := ingress.NewClient(ctx.Log, client)
-				routes, err := ic.List(ctx)
-				if err == nil {
-					routeCount = len(routes)
-				}
 			} else {
 				server.ok = false
 				server.message = "not connected"
@@ -245,20 +226,6 @@ func Doctor(ctx *Context, opts struct {
 	skipped = authentication.message == "(skipped)" || authentication.message == "(no identity)"
 	printInfoLine(ctx, "Authentication", authentication.ok, authentication.message, skipped)
 
-	// User info and counts
-	if configuration.ok && server.ok {
-		ctx.Printf("\n")
-		if authUser != "" {
-			userLine := fmt.Sprintf("%s %s", infoLabel.Render("User:"), authUser)
-			if authOrg != "" {
-				userLine += infoGray.Render(fmt.Sprintf(" (org: %s)", authOrg))
-			}
-			ctx.Printf("%s\n", userLine)
-		}
-		ctx.Printf("%s %d deployed\n", infoLabel.Render("Apps:"), appCount)
-		ctx.Printf("%s %d configured\n", infoLabel.Render("Routes:"), routeCount)
-	}
-
 	// Help text
 	ctx.Printf("\n")
 	if !configuration.ok {
@@ -266,7 +233,7 @@ func Doctor(ctx *Context, opts struct {
 		ctx.Printf("  %s        %s\n", infoBold.Render("miren login"), infoGray.Render("# Authenticate with miren.cloud"))
 		ctx.Printf("  %s  %s\n", infoBold.Render("miren cluster add"), infoGray.Render("# Add a cluster manually"))
 	} else {
-		ctx.Printf("%s\n", infoGray.Render("Use 'miren doctor <topic>' for details: config, server, auth, apps"))
+		ctx.Printf("%s\n", infoGray.Render("Use 'miren doctor <topic>' for details: config, server, auth"))
 	}
 
 	return nil

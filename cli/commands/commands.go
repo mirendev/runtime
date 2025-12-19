@@ -34,16 +34,8 @@ func AllCommands() map[string]cli.CommandFactory {
 			return Infer("doctor server", "Check server health and connectivity", DoctorServer), nil
 		},
 
-		"doctor apps": func() (cli.Command, error) {
-			return Infer("doctor apps", "Check apps and their routes", DoctorApps), nil
-		},
-
 		"doctor auth": func() (cli.Command, error) {
 			return Infer("doctor auth", "Check authentication and user information", DoctorAuth), nil
-		},
-
-		"doctor all": func() (cli.Command, error) {
-			return Infer("doctor all", "Run all diagnostic checks", DoctorAll), nil
 		},
 
 		"init": func() (cli.Command, error) {

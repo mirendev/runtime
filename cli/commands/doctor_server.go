@@ -1,12 +1,16 @@
 package commands
 
 import (
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"net"
+	"net/http"
+	"strings"
 	"time"
 
 	"miren.dev/runtime/clientconfig"
+	"miren.dev/runtime/pkg/ui"
 )
 
 // DoctorServer shows server health and connectivity details
@@ -17,7 +21,8 @@ func DoctorServer(ctx *Context, opts struct {
 	if err != nil {
 		if errors.Is(err, clientconfig.ErrNoConfig) {
 			ctx.Printf("No clusters configured\n")
-			ctx.Printf("\nUse 'miren cluster add' to add a cluster\n")
+			ctx.Printf("\n%s\n", infoLabel.Render("To add a cluster:"))
+			ctx.Printf("  %s\n", infoGray.Render("miren cluster add"))
 			return nil
 		}
 		return err
@@ -35,8 +40,9 @@ func DoctorServer(ctx *Context, opts struct {
 
 	// Check connectivity
 	connected := false
-	client, err := ctx.RPCClient("entities")
-	if err == nil && client != nil {
+	var connErr error
+	client, connErr := ctx.RPCClient("entities")
+	if connErr == nil && client != nil {
 		defer client.Close()
 		connected = true
 	}
@@ -48,20 +54,10 @@ func DoctorServer(ctx *Context, opts struct {
 		statusStyle = infoGreen
 	}
 
-	// Check port availability
+	// Get host for HTTP checks
 	host := cluster.Hostname
 	if h, _, err := net.SplitHostPort(host); err == nil {
 		host = h
-	}
-
-	ports := []struct {
-		port  int
-		proto string
-		desc  string
-	}{
-		{8443, "udp", "API - CLI and RPC"},
-		{443, "tcp", "HTTPS - application traffic"},
-		{80, "tcp", "HTTP - redirects and ACME"},
 	}
 
 	ctx.Printf("%s\n", infoBold.Render("Server"))
@@ -70,33 +66,171 @@ func DoctorServer(ctx *Context, opts struct {
 	ctx.Printf("%s   %s\n", infoLabel.Render("Address:"), cluster.Hostname)
 	ctx.Printf("%s    %s\n", infoLabel.Render("Status:"), statusStyle.Render(status))
 
-	ctx.Printf("\n%s\n", infoLabel.Render("Ports:"))
-	for _, p := range ports {
-		open := checkPortProto(host, p.port, p.proto)
-		var indicator, portStatus string
-		if open {
-			indicator = infoGreen.Render("[✓]")
-			portStatus = "open"
-		} else {
-			indicator = infoRed.Render("[✗]")
-			portStatus = "closed"
+	// Check HTTP endpoints
+	ctx.Printf("\n%s\n", infoLabel.Render("Endpoints:"))
+
+	// Check HTTPS (port 443)
+	httpsStatus, httpsDetail := checkHTTPS(host)
+	printEndpointStatus(ctx, "HTTPS", httpsStatus, httpsDetail)
+
+	// Check HTTP (port 80)
+	httpStatus, httpDetail := checkHTTP(host)
+	printEndpointStatus(ctx, "HTTP", httpStatus, httpDetail)
+
+	// Show suggestions when not connected
+	if !connected {
+		isLocal := isLocalCluster(cluster.Hostname)
+		connErrStr := ""
+		if connErr != nil {
+			connErrStr = connErr.Error()
 		}
-		protoLabel := infoGray.Render(fmt.Sprintf("/%s", p.proto))
-		ctx.Printf("  %s %d%s  %-6s %s\n", indicator, p.port, protoLabel, portStatus, infoGray.Render(p.desc))
+
+		ctx.Printf("\n")
+
+		if isLocal {
+			// Local server suggestions
+			if strings.Contains(connErrStr, "connection refused") {
+				ctx.Printf("%s\n", infoLabel.Render("The local server doesn't appear to be running."))
+				ctx.Printf("\n%s\n", infoLabel.Render("To start the server:"))
+				ctx.Printf("  %s\n", infoGray.Render("sudo systemctl start miren"))
+				ctx.Printf("\n%s\n", infoLabel.Render("To check server logs:"))
+				ctx.Printf("  %s\n", infoGray.Render("sudo journalctl -u miren -f"))
+			} else if strings.Contains(connErrStr, "timeout") || strings.Contains(connErrStr, "no recent network activity") {
+				ctx.Printf("%s\n", infoLabel.Render("Connection timed out. The server may be starting up."))
+				ctx.Printf("\n%s\n", infoLabel.Render("To check server status:"))
+				ctx.Printf("  %s\n", infoGray.Render("sudo systemctl status miren"))
+			} else {
+				ctx.Printf("%s %s\n", infoLabel.Render("Connection error:"), connErrStr)
+				ctx.Printf("\n%s\n", infoLabel.Render("To check server status:"))
+				ctx.Printf("  %s\n", infoGray.Render("sudo systemctl status miren"))
+			}
+		} else {
+			// Remote server suggestions
+			ctx.Printf("%s\n", infoLabel.Render("Cannot reach the remote server."))
+			if connErr != nil {
+				ctx.Printf("%s %s\n", infoGray.Render("Error:"), connErrStr)
+			}
+			ctx.Printf("\n%s\n", infoLabel.Render("Suggestions:"))
+			ctx.Printf("  • Check if the server is running on the remote host\n")
+			ctx.Printf("  • Verify network connectivity to %s\n", cluster.Hostname)
+			ctx.Printf("  • Check firewall rules allow traffic on port 8443\n")
+
+			// Show other available clusters
+			var otherClusters []string
+			cfg.IterateClusters(func(name string, _ *clientconfig.ClusterConfig) error {
+				if name != clusterName {
+					otherClusters = append(otherClusters, name)
+				}
+				return nil
+			})
+
+			if len(otherClusters) > 0 {
+				ctx.Printf("\n%s\n", infoLabel.Render("To try a different cluster:"))
+				ctx.Printf("  %s\n", infoGray.Render("miren cluster switch <name>"))
+				ctx.Printf("\n%s\n", infoLabel.Render("Available clusters:"))
+				for _, name := range otherClusters {
+					ctx.Printf("  • %s\n", name)
+				}
+			}
+		}
 	}
+
+	// Show help content in interactive mode
+	if !ui.IsInteractive() {
+		return nil
+	}
+
+	ctx.Printf("\n")
+	showStartLocalServerHelp(ctx)
+	showConnectRemoteServerHelp(ctx)
+	showFixConnectivityHelp(ctx)
 
 	return nil
 }
 
-// checkPortProto checks if a port is reachable.
-// Note: UDP checks only verify local socket creation since UDP is connectionless.
-// The actual UDP/QUIC connectivity is validated by the RPC connection status above.
-func checkPortProto(host string, port int, proto string) bool {
-	address := net.JoinHostPort(host, fmt.Sprintf("%d", port))
-	conn, err := net.DialTimeout(proto, address, 2*time.Second)
-	if err != nil {
-		return false
+func showStartLocalServerHelp(ctx *Context) {
+	ctx.Printf("%s\n", infoBold.Render("How do I start a local server?"))
+	ctx.Printf("  %s\n", infoGray.Render("sudo miren server install"))
+	ctx.Printf("  %s\n", infoGray.Render("sudo systemctl start miren"))
+	ctx.Printf("  %s\n\n", infoGray.Render("sudo journalctl -u miren -f"))
+}
+
+func showConnectRemoteServerHelp(ctx *Context) {
+	ctx.Printf("%s\n", infoBold.Render("How do I connect to a known remote server?"))
+	ctx.Printf("  %s\n", infoGray.Render("miren cluster add"))
+	ctx.Printf("  %s\n\n", infoGray.Render("miren cluster switch <name>"))
+}
+
+func showFixConnectivityHelp(ctx *Context) {
+	ctx.Printf("%s\n", infoBold.Render("How do I fix https/http connectivity?"))
+	ctx.Printf("  %s\n", infoGray.Render("sudo systemctl status miren"))
+	ctx.Printf("  %s\n", infoGray.Render("sudo ufw status"))
+	ctx.Printf("  %s\n", infoGray.Render("sudo lsof -i :443"))
+	ctx.Printf("  %s\n", infoGray.Render("curl -k https://<hostname>/"))
+}
+
+func printEndpointStatus(ctx *Context, name string, ok bool, detail string) {
+	var indicator string
+	if ok {
+		indicator = infoGreen.Render("[✓]")
+	} else {
+		indicator = infoRed.Render("[✗]")
 	}
-	conn.Close()
-	return true
+	ctx.Printf("  %s %-6s %s\n", indicator, name, infoGray.Render(detail))
+}
+
+// checkHTTPS verifies HTTPS connectivity to the server
+func checkHTTPS(host string) (bool, string) {
+	client := &http.Client{
+		Timeout: 5 * time.Second,
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{
+				InsecureSkipVerify: true,             // Accept self-signed certs for diagnostics
+				MinVersion:         tls.VersionTLS12, // Enforce minimum TLS version
+			},
+		},
+	}
+
+	url := fmt.Sprintf("https://%s/", host)
+	resp, err := client.Get(url)
+	if err != nil {
+		return false, describeHTTPError(err)
+	}
+	defer resp.Body.Close()
+
+	return true, fmt.Sprintf("responding (%d)", resp.StatusCode)
+}
+
+func describeHTTPError(err error) string {
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return "timeout"
+	}
+	var opErr *net.OpError
+	if errors.As(err, &opErr) {
+		return opErr.Err.Error()
+	}
+	return err.Error()
+}
+
+// checkHTTP verifies HTTP connectivity (typically redirects to HTTPS)
+func checkHTTP(host string) (bool, string) {
+	client := &http.Client{
+		Timeout: 5 * time.Second,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse // Don't follow redirects
+		},
+	}
+
+	url := fmt.Sprintf("http://%s/", host)
+	resp, err := client.Get(url)
+	if err != nil {
+		return false, describeHTTPError(err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 300 && resp.StatusCode < 400 {
+		return true, fmt.Sprintf("redirecting (%d)", resp.StatusCode)
+	}
+	return true, fmt.Sprintf("responding (%d)", resp.StatusCode)
 }

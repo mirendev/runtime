@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"miren.dev/runtime/clientconfig"
+	"miren.dev/runtime/pkg/ui"
 )
 
 // DoctorAuth shows authentication and user information
@@ -74,5 +75,28 @@ func DoctorAuth(ctx *Context, opts struct {
 		ctx.Printf("\n%s\n", infoGray.Render("No authentication configured for this cluster"))
 	}
 
+	// Show help content in interactive mode
+	if !ui.IsInteractive() {
+		return nil
+	}
+
+	ctx.Printf("\n")
+	showLoginDifferentAccountHelp(ctx)
+	showAddAuthToServerHelp(ctx)
+
 	return nil
+}
+
+func showLoginDifferentAccountHelp(ctx *Context) {
+	ctx.Printf("%s\n", infoBold.Render("How do I login with a different account?"))
+	ctx.Printf("  %s\n", infoGray.Render("miren logout"))
+	ctx.Printf("  %s\n\n", infoGray.Render("miren login"))
+}
+
+func showAddAuthToServerHelp(ctx *Context) {
+	ctx.Printf("%s\n", infoBold.Render("How do I add authentication to this server?"))
+	ctx.Printf("  %s\n", infoGray.Render("miren login"))
+	ctx.Printf("  %s\n", infoGray.Render("sudo miren server register -n <cluster-name>"))
+	ctx.Printf("  %s\n", infoGray.Render("# Approve in browser when prompted"))
+	ctx.Printf("  %s\n", infoGray.Render("sudo systemctl restart miren"))
 }

@@ -3,12 +3,16 @@ package ui
 
 import (
 	"os"
+	"regexp"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/mattn/go-runewidth"
 	"golang.org/x/term"
 )
+
+// oscPattern matches OSC 8 hyperlink sequences: ESC ] 8 ; ; URL ST TEXT ESC ] 8 ; ; ST
+var oscPattern = regexp.MustCompile(`\x1b\]8;;[^\x1b]*\x1b\\`)
 
 // Column defines a table column with title and width
 type Column struct {
@@ -255,10 +259,11 @@ func AutoSizeColumns(headers []string, rows []Row, builder *ColumnBuilder) []Col
 }
 
 // measureDisplayWidth measures the display width of a string,
-// accounting for ANSI escape sequences
+// accounting for ANSI escape sequences and OSC 8 hyperlinks
 func measureDisplayWidth(s string) int {
-	// Strip ANSI escape sequences to get the actual display width
-	// lipgloss.Width handles this correctly
+	// Strip OSC 8 hyperlink sequences first (lipgloss doesn't handle these)
+	s = oscPattern.ReplaceAllString(s, "")
+	// lipgloss.Width handles ANSI color sequences correctly
 	return lipgloss.Width(s)
 }
 
@@ -349,9 +354,9 @@ func (t *Table) renderRow(row Row) string {
 		if col.NoTruncate {
 			// Don't truncate protected columns
 			renderedCell = cellStyle.Render(value)
-		} else if strings.Contains(value, "\x1b[") {
-			// Already styled - let lipgloss handle width constraints
-			// (runewidth.Truncate doesn't handle ANSI codes well)
+		} else if strings.Contains(value, "\x1b[") || strings.Contains(value, "\x1b]") {
+			// Already styled or contains hyperlinks - let lipgloss handle width constraints
+			// (runewidth.Truncate doesn't handle ANSI codes or OSC sequences well)
 			renderedCell = cellStyle.Render(value)
 		} else {
 			// Plain text - truncate with ellipsis
