@@ -5,23 +5,17 @@ package commands
 import (
 	"context"
 
-	"github.com/mitchellh/cli"
+	"miren.dev/mflags"
 	"miren.dev/runtime/pkg/asm"
 )
 
-func addCommands(cmds map[string]cli.CommandFactory) {
+func addCommands(d *mflags.Dispatcher) {
 	// Server management commands - provide helpful errors directing to Docker
-	cmds["server install"] = func() (cli.Command, error) {
-		return Infer("server install", "Install miren server (Linux only)", ServerInstall), nil
-	}
+	d.Dispatch("server install", Infer("server install", "Install miren server (Linux only)", ServerInstall))
 
-	cmds["server uninstall"] = func() (cli.Command, error) {
-		return Infer("server uninstall", "Uninstall miren server (Linux only)", ServerUninstall), nil
-	}
+	d.Dispatch("server uninstall", Infer("server uninstall", "Uninstall miren server (Linux only)", ServerUninstall))
 
-	cmds["server status"] = func() (cli.Command, error) {
-		return Infer("server status", "Show miren service status (Linux only)", ServerStatus), nil
-	}
+	d.Dispatch("server status", Infer("server status", "Show miren service status (Linux only)", ServerStatus))
 }
 
 func (c *Context) setupServerComponents(_ context.Context, _ *asm.Registry) {}

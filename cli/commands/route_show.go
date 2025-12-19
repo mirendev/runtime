@@ -8,11 +8,9 @@ import (
 )
 
 func RouteShow(ctx *Context, opts struct {
+	Host string `position:"0" usage:"Hostname of the route to show" required:"true"`
 	FormatOptions
 	ConfigCentric
-	Args struct {
-		Host string `positional-arg-name:"host" description:"Hostname of the route to show" required:"true"`
-	} `positional-args:"yes"`
 }) error {
 	client, err := ctx.RPCClient("entities")
 	if err != nil {
@@ -21,13 +19,13 @@ func RouteShow(ctx *Context, opts struct {
 
 	ic := ingress.NewClient(ctx.Log, client)
 
-	route, err := ic.Lookup(ctx, opts.Args.Host)
+	route, err := ic.Lookup(ctx, opts.Host)
 	if err != nil {
 		return err
 	}
 
 	if route == nil {
-		return fmt.Errorf("route not found: %s", opts.Args.Host)
+		return fmt.Errorf("route not found: %s", opts.Host)
 	}
 
 	if opts.IsJSON() {
@@ -35,7 +33,7 @@ func RouteShow(ctx *Context, opts struct {
 	}
 
 	// Display route information
-	ctx.Printf("Route: %s\n", opts.Args.Host)
+	ctx.Printf("Route: %s\n", opts.Host)
 	ctx.Printf("  App:     %s\n", ui.CleanEntityID(string(route.App)))
 	ctx.Printf("  Default: %v\n", route.Default)
 

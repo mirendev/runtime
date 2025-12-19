@@ -120,12 +120,10 @@ func EnvSet(ctx *Context, opts struct {
 }
 
 func EnvGet(ctx *Context, opts struct {
-	AppCentric
+	Key     string `position:"0" usage:"Environment variable key to get" required:"true"`
 	Service string `short:"S" long:"service" description:"Get env var for specific service (if not specified, gets global env var)"`
 	Unmask  bool   `short:"u" long:"unmask" description:"Show actual value of sensitive variables instead of masking them"`
-	Args    struct {
-		Key string `positional-arg-name:"KEY" description:"Environment variable key to get" required:"1"`
-	} `positional-args:"yes" required:"true"`
+	AppCentric
 }) error {
 	cl, err := ctx.RPCClient("dev.miren.runtime/app")
 	if err != nil {
@@ -149,7 +147,7 @@ func EnvGet(ctx *Context, opts struct {
 			for _, svc := range cfg.Services() {
 				if svc.Service() == opts.Service && svc.HasServiceEnv() {
 					for _, nv := range svc.ServiceEnv() {
-						if nv.Key() == opts.Args.Key {
+						if nv.Key() == opts.Key {
 							found = nv
 							break
 						}
@@ -159,20 +157,20 @@ func EnvGet(ctx *Context, opts struct {
 			}
 		}
 		if found == nil {
-			return fmt.Errorf("environment variable %s not found for service %s", opts.Args.Key, opts.Service)
+			return fmt.Errorf("environment variable %s not found for service %s", opts.Key, opts.Service)
 		}
 	} else {
 		// Look in global env vars
 		if cfg.HasEnvVars() {
 			for _, nv := range cfg.EnvVars() {
-				if nv.Key() == opts.Args.Key {
+				if nv.Key() == opts.Key {
 					found = nv
 					break
 				}
 			}
 		}
 		if found == nil {
-			return fmt.Errorf("environment variable %s not found", opts.Args.Key)
+			return fmt.Errorf("environment variable %s not found", opts.Key)
 		}
 	}
 
@@ -290,14 +288,12 @@ func EnvList(ctx *Context, opts struct {
 }
 
 func EnvDelete(ctx *Context, opts struct {
+	Keys    []string `rest:"true" usage:"Environment variable keys to delete" required:"true"`
+	Service string   `short:"S" long:"service" description:"Delete env var from specific service only (if not specified, deletes global env var)"`
+	Force   bool     `short:"f" long:"force" description:"Skip confirmation prompt"`
 	AppCentric
-	Service string `short:"S" long:"service" description:"Delete env var from specific service only (if not specified, deletes global env var)"`
-	Force   bool   `short:"f" long:"force" description:"Skip confirmation prompt"`
-	Args    struct {
-		Keys []string `positional-arg-name:"KEY" description:"Environment variable key to delete" required:"1"`
-	} `positional-args:"yes"`
 }) error {
-	if len(opts.Args.Keys) == 0 {
+	if len(opts.Keys) == 0 {
 		return fmt.Errorf("no environment variables specified")
 	}
 
@@ -311,11 +307,11 @@ func EnvDelete(ctx *Context, opts struct {
 	// Ask for confirmation unless --force is used
 	if !opts.Force {
 		var message string
-		if len(opts.Args.Keys) == 1 {
-			message = fmt.Sprintf("Delete environment variable '%s'?", opts.Args.Keys[0])
+		if len(opts.Keys) == 1 {
+			message = fmt.Sprintf("Delete environment variable '%s'?", opts.Keys[0])
 		} else {
 			message = fmt.Sprintf("Delete %d environment variables: %s?",
-				len(opts.Args.Keys), strings.Join(opts.Args.Keys, ", "))
+				len(opts.Keys), strings.Join(opts.Keys, ", "))
 		}
 
 		confirmed, err := ui.Confirm(
@@ -335,7 +331,7 @@ func EnvDelete(ctx *Context, opts struct {
 	var configVarsDeleted []string
 
 	// Delete each variable using the targeted RPC
-	for _, key := range opts.Args.Keys {
+	for _, key := range opts.Keys {
 		ctx.Printf("deleting %s...\n", key)
 		res, err := ac.DeleteEnvVar(ctx, opts.App, key, opts.Service)
 		if err != nil {

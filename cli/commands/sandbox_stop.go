@@ -5,12 +5,10 @@ import (
 )
 
 func SandboxStop(ctx *Context, opts struct {
+	SandboxID string `position:"0" usage:"ID of the sandbox to stop" required:"true"`
 	ConfigCentric
-	Args struct {
-		SandboxID string `positional-arg-name:"sandbox-id" description:"ID of the sandbox to stop"`
-	} `positional-args:"yes" required:"yes"`
 }) error {
-	sandboxID := opts.Args.SandboxID
+	sandboxID := opts.SandboxID
 
 	client, err := ctx.RPCClient("entities")
 	if err != nil {

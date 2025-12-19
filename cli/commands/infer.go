@@ -10,19 +10,22 @@ import (
 	"reflect"
 	"strings"
 
-	"github.com/jessevdk/go-flags"
 	toml "github.com/pelletier/go-toml/v2"
+	"miren.dev/mflags"
 )
 
+// Cmd wraps a command function with mflags parsing
 type Cmd struct {
 	syn, name string
 	f         reflect.Value
 
 	opts   reflect.Value
 	global *GlobalFlags
-	parser *flags.Parser
+	fs     *mflags.FlagSet
 }
 
+// Infer creates a command from a function with the signature:
+// func(ctx *Context, opts StructType) error
 func Infer(name, syn string, f interface{}) *Cmd {
 	rv := reflect.ValueOf(f)
 
@@ -52,19 +55,20 @@ func Infer(name, syn string, f interface{}) *Cmd {
 
 	sv := reflect.New(in)
 
-	parser := flags.NewNamedParser(name, flags.HelpFlag|flags.PassDoubleDash)
-	parser.ShortDescription = syn
-	parser.LongDescription = syn
+	fs := mflags.NewFlagSet(name)
 
 	var globalFlags GlobalFlags
-	_, err := parser.AddGroup("Global Options", "", &globalFlags)
+
+	// Parse global flags from struct
+	err := fs.FromStruct(&globalFlags)
 	if err != nil {
-		panic(err)
+		panic(fmt.Sprintf("error parsing global flags: %v", err))
 	}
 
-	_, err = parser.AddGroup("Command Options", "", sv.Interface())
+	// Parse command options from struct
+	err = fs.FromStruct(sv.Interface())
 	if err != nil {
-		panic(err)
+		panic(fmt.Sprintf("error parsing command options: %v", err))
 	}
 
 	return &Cmd{
@@ -73,8 +77,18 @@ func Infer(name, syn string, f interface{}) *Cmd {
 		f:      rv,
 		global: &globalFlags,
 		opts:   sv,
-		parser: parser,
+		fs:     fs,
 	}
+}
+
+// FlagSet implements mflags.Command
+func (w *Cmd) FlagSet() *mflags.FlagSet {
+	return w.fs
+}
+
+// Usage implements mflags.Command
+func (w *Cmd) Usage() string {
+	return w.syn
 }
 
 func (w *Cmd) ReadOptions(path string) error {
@@ -183,12 +197,28 @@ func (w *Cmd) clean(rv reflect.Value) error {
 	return nil
 }
 
+// Help returns help text for the command
 func (w *Cmd) Help() string {
 	var buf bytes.Buffer
-	w.parser.WriteHelp(&buf)
+	fmt.Fprintf(&buf, "Usage: %s [options]\n\n", w.name)
+	fmt.Fprintf(&buf, "%s\n\n", w.syn)
+	fmt.Fprintf(&buf, "Options:\n")
+	w.fs.VisitAll(func(f *mflags.Flag) {
+		if f.Short != 0 {
+			fmt.Fprintf(&buf, "  -%c, --%s\n", f.Short, f.Name)
+		} else {
+			fmt.Fprintf(&buf, "      --%s\n", f.Name)
+		}
+		fmt.Fprintf(&buf, "        %s", f.Usage)
+		if f.DefValue != "" {
+			fmt.Fprintf(&buf, " (default: %s)", f.DefValue)
+		}
+		fmt.Fprintf(&buf, "\n")
+	})
 	return buf.String()
 }
 
+// Synopsis returns a short description
 func (w *Cmd) Synopsis() string {
 	return w.syn
 }
@@ -214,25 +244,9 @@ type OptsValidate interface {
 	Validate(glbl *GlobalFlags) error
 }
 
-func (w *Cmd) Run(args []string) int {
-	err := w.Invoke(args...)
-	if err != nil {
-		if err, ok := err.(ErrExitCode); ok {
-			return int(err)
-		}
-
-		flagsErr, ok := err.(*flags.Error)
-
-		if ok && flagsErr.Type == flags.ErrHelp {
-			fmt.Fprintln(os.Stdout, err)
-		} else {
-			fmt.Fprintf(os.Stderr, "An error occurred:\n%s\n", err)
-		}
-
-		return 1
-	}
-
-	return 0
+// Run implements mflags.Command
+func (w *Cmd) Run(fs *mflags.FlagSet, args []string) error {
+	return w.Invoke(args...)
 }
 
 func (w *Cmd) Invoke(args ...string) error {
@@ -240,12 +254,7 @@ func (w *Cmd) Invoke(args ...string) error {
 		return fmt.Errorf("error loading options: %w", err)
 	}
 
-	_, err := w.parser.ParseArgs(args)
-	if err != nil {
-		return err
-	}
-
-	err = w.clean(reflect.ValueOf(w.global).Elem())
+	err := w.clean(reflect.ValueOf(w.global).Elem())
 	if err != nil {
 		return fmt.Errorf("error cleaning global options: %w", err)
 	}
@@ -302,7 +311,7 @@ func RunCommand(f any, args ...string) (*CommandOutput, error) {
 
 	var out CommandOutput
 
-	_, err := cmd.parser.ParseArgs(args)
+	err := cmd.fs.Parse(args)
 	if err != nil {
 		out.Stderr.WriteString(err.Error())
 		return &out, err

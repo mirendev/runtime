@@ -5,17 +5,15 @@ import (
 )
 
 func ConfigSetActive(ctx *Context, opts struct {
+	Cluster string `position:"0" usage:"Name of the cluster to set as active"`
 	ConfigCentric
-	Args struct {
-		Cluster string `positional-arg-name:"cluster" description:"Name of the cluster to set as active"`
-	} `positional-args:"yes"`
 }) error {
 	cfg, err := opts.LoadConfig()
 	if err != nil {
 		return err
 	}
 
-	clusterName := opts.Args.Cluster
+	clusterName := opts.Cluster
 
 	// If no cluster name provided, show interactive menu
 	if clusterName == "" {

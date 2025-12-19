@@ -8,13 +8,11 @@ import (
 )
 
 func AppDelete(ctx *Context, opts struct {
-	Force bool `short:"f" long:"force" description:"Force delete without confirmation"`
+	Force   bool   `short:"f" long:"force" description:"Force delete without confirmation"`
+	AppName string `position:"0" usage:"Name of the app to delete" required:"true"`
 	ConfigCentric
-	Args struct {
-		AppName string `positional-arg-name:"app-name" description:"Name of the app to delete"`
-	} `positional-args:"yes" required:"yes"`
 }) error {
-	appName := opts.Args.AppName
+	appName := opts.AppName
 
 	crudcl, err := ctx.RPCClient("dev.miren.runtime/app")
 	if err != nil {

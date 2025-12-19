@@ -14,14 +14,13 @@ import (
 
 func AppRun(ctx *Context, opts struct {
 	AppCentric
-	Rest struct {
-		Args []string
-	} `positional-args:"yes"`
+
+	Args []string `rest:"true"`
 }) error {
 	opt := new(exec_v1alpha.ShellOptions)
 
-	if len(opts.Rest.Args) > 0 {
-		opt.SetCommand(opts.Rest.Args)
+	if len(opts.Args) > 0 {
+		opt.SetCommand(opts.Args)
 	}
 
 	winCh := make(chan os.Signal, 1)
@@ -89,7 +88,7 @@ func AppRun(ctx *Context, opts struct {
 	results, err := sec.Exec(
 		ctx,
 		"app", opts.App,
-		strings.Join(opts.Rest.Args, " "),
+		strings.Join(opts.Args, " "),
 		opt,
 		input, output,
 		winUS,

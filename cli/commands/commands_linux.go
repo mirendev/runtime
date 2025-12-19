@@ -7,7 +7,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/mitchellh/cli"
+	"miren.dev/mflags"
 
 	containerd "github.com/containerd/containerd/v2/client"
 	buildkit "github.com/moby/buildkit/client"
@@ -18,30 +18,20 @@ import (
 	"miren.dev/runtime/pkg/containerdx"
 )
 
-func addCommands(cmds map[string]cli.CommandFactory) {
+func addCommands(d *mflags.Dispatcher) {
 	// Server command is now defined in commands.go (renamed from dev)
 
 	// Cloud registration commands
-	cmds["server register"] = func() (cli.Command, error) {
-		return Infer("server register", "Register this cluster with miren.cloud", Register), nil
-	}
+	d.Dispatch("server register", Infer("server register", "Register this cluster with miren.cloud", Register))
 
-	cmds["server register status"] = func() (cli.Command, error) {
-		return Infer("server register status", "Show cluster registration status", RegisterStatus), nil
-	}
+	d.Dispatch("server register status", Infer("server register status", "Show cluster registration status", RegisterStatus))
 
 	// Server management commands
-	cmds["server install"] = func() (cli.Command, error) {
-		return Infer("server install", "Install systemd service for miren server", ServerInstall), nil
-	}
+	d.Dispatch("server install", Infer("server install", "Install systemd service for miren server", ServerInstall))
 
-	cmds["server uninstall"] = func() (cli.Command, error) {
-		return Infer("server uninstall", "Remove systemd service for miren server", ServerUninstall), nil
-	}
+	d.Dispatch("server uninstall", Infer("server uninstall", "Remove systemd service for miren server", ServerUninstall))
 
-	cmds["server status"] = func() (cli.Command, error) {
-		return Infer("server status", "Show miren service status", ServerStatus), nil
-	}
+	d.Dispatch("server status", Infer("server status", "Show miren service status", ServerStatus))
 }
 
 func (c *Context) setupServerComponents(ctx context.Context, reg *asm.Registry) {
