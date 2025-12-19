@@ -7,7 +7,6 @@ import (
 	"strings"
 
 	"miren.dev/runtime/clientconfig"
-	"miren.dev/runtime/pkg/registration"
 	"miren.dev/runtime/pkg/ui"
 )
 
@@ -100,82 +99,31 @@ func DoctorConfig(ctx *Context, opts struct {
 		ctx.Printf("%s\n", infoGray.Render("* = active cluster"))
 	}
 
-	// Interactive mode
+	// Show help content in interactive mode
 	if !ui.IsInteractive() {
 		return nil
 	}
 
-	// Load registration only when needed for interactive help
-	existing, _ := registration.LoadRegistration("/var/lib/miren/server")
-
 	ctx.Printf("\n")
+	showAddClusterHelp(ctx, cfg)
+	showRegisterClusterHelp(ctx)
 
-	// Help picker
-	for {
-		items := []ui.PickerItem{
-			ui.SimplePickerItem{Text: "How do I add an existing cluster?"},
-			ui.SimplePickerItem{Text: "How do I register a new cluster?"},
-			ui.SimplePickerItem{Text: "[done]"},
-		}
-
-		selected, err := ui.RunPicker(items, ui.WithTitle("Need help?"))
-		if err != nil || selected == nil || selected.ID() == "[done]" {
-			return nil
-		}
-
-		switch selected.ID() {
-		case "How do I add an existing cluster?":
-			showAddClusterHelp(ctx, cfg)
-		case "How do I register a new cluster?":
-			showRegisterClusterHelp(ctx, existing)
-		}
-	}
+	return nil
 }
 
 func showAddClusterHelp(ctx *Context, cfg *clientconfig.Config) {
-	printHelpHeader(ctx, "Adding an existing cluster to your config")
-
-	// Check if logged in
+	ctx.Printf("%s\n", infoBold.Render("How do I add an existing cluster?"))
 	if cfg == nil || !cfg.HasIdentities() {
-		printCommand(ctx, "Step 1: Login to miren.cloud", "miren login")
+		ctx.Printf("  %s\n", infoGray.Render("miren login"))
 	}
-
-	printCommand(ctx, "Add a cluster from miren.cloud:", "miren cluster add")
-	printCommand(ctx, "Or add a cluster manually by address:", "miren cluster add -a <hostname:port>")
-	ctx.Printf("%s\n", infoLabel.Render("Switch between clusters:"))
-	ctx.Printf("  %s\n", infoGray.Render("miren cluster switch <name>"))
-	waitForEnter(ctx)
+	ctx.Printf("  %s\n", infoGray.Render("miren cluster add"))
+	ctx.Printf("  %s\n\n", infoGray.Render("miren cluster switch <name>"))
 }
 
-func showRegisterClusterHelp(ctx *Context, existing *registration.StoredRegistration) {
-	printHelpHeader(ctx, "Registering a new cluster with miren.cloud")
-
-	// Show current registration status
-	if existing != nil && existing.Status == "approved" {
-		ctx.Printf("%s\n", infoLabel.Render("Current registration:"))
-		ctx.Printf("  Cluster: %s\n", existing.ClusterName)
-		ctx.Printf("  ID: %s\n", existing.ClusterID)
-		ctx.Printf("  Org: %s\n\n", existing.OrganizationID)
-
-		ctx.Printf("%s\n", infoLabel.Render("To register as a different cluster:"))
-		printNumberedStep(ctx, "1", "Stop the miren server", "sudo systemctl stop miren")
-		printNumberedStep(ctx, "2", "Delete the existing registration", "sudo rm /var/lib/miren/server/registration.json")
-		printNumberedStep(ctx, "3", "Register with a new name", "sudo miren server register -n <cluster-name>")
-		ctx.Printf("  %s  %s\n\n", infoBold.Render("4."), "Approve in browser when prompted")
-		printNumberedStep(ctx, "5", "Restart the server", "sudo systemctl start miren")
-		ctx.Printf("  %s  %s\n", infoBold.Render("6."), "Add the cluster to your config")
-		ctx.Printf("     %s\n", infoGray.Render("miren cluster add"))
-	} else {
-		ctx.Printf("%s\n", infoLabel.Render("To register this server as a cluster:"))
-		printNumberedStep(ctx, "1", "Register with miren.cloud", "sudo miren server register -n <cluster-name>")
-		ctx.Printf("  %s  %s\n\n", infoBold.Render("2."), "Approve in browser when prompted")
-		printNumberedStep(ctx, "3", "Restart the server to apply registration", "sudo systemctl restart miren")
-		ctx.Printf("  %s  %s\n", infoBold.Render("4."), "Add the cluster to your config")
-		ctx.Printf("     %s\n\n", infoGray.Render("miren cluster add"))
-
-		ctx.Printf("%s\n", infoGray.Render("If registration fails, you may have to delete the registration file at:"))
-		ctx.Printf("  %s\n", infoGray.Render("/var/lib/miren/server/registration.json"))
-	}
-
-	waitForEnter(ctx)
+func showRegisterClusterHelp(ctx *Context) {
+	ctx.Printf("%s\n", infoBold.Render("How do I register a new cluster?"))
+	ctx.Printf("  %s\n", infoGray.Render("sudo miren server register -n <cluster-name>"))
+	ctx.Printf("  %s\n", infoGray.Render("# Approve in browser when prompted"))
+	ctx.Printf("  %s\n", infoGray.Render("sudo systemctl restart miren"))
+	ctx.Printf("  %s\n", infoGray.Render("miren cluster add"))
 }

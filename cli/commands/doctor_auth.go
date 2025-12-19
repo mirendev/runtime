@@ -75,49 +75,28 @@ func DoctorAuth(ctx *Context, opts struct {
 		ctx.Printf("\n%s\n", infoGray.Render("No authentication configured for this cluster"))
 	}
 
-	// Interactive prompts
+	// Show help content in interactive mode
 	if !ui.IsInteractive() {
 		return nil
 	}
 
 	ctx.Printf("\n")
+	showLoginDifferentAccountHelp(ctx)
+	showAddAuthToServerHelp(ctx)
 
-	// Help picker
-	for {
-		items := []ui.PickerItem{
-			ui.SimplePickerItem{Text: "How do I login with a different account?"},
-			ui.SimplePickerItem{Text: "How do I add authentication to this server?"},
-			ui.SimplePickerItem{Text: "[done]"},
-		}
-
-		selected, err := ui.RunPicker(items, ui.WithTitle("Need help?"))
-		if err != nil || selected == nil || selected.ID() == "[done]" {
-			return nil
-		}
-
-		switch selected.ID() {
-		case "How do I login with a different account?":
-			showLoginDifferentAccountHelp(ctx)
-		case "How do I add authentication to this server?":
-			showAddAuthToServerHelp(ctx)
-		}
-	}
+	return nil
 }
 
 func showLoginDifferentAccountHelp(ctx *Context) {
-	printHelpHeader(ctx, "Logging in with a different account")
-	printCommand(ctx, "Log out of your current account first:", "miren logout")
-	ctx.Printf("%s\n", infoLabel.Render("Then log in with a different account:"))
-	ctx.Printf("  %s\n", infoGray.Render("miren login"))
-	waitForEnter(ctx)
+	ctx.Printf("%s\n", infoBold.Render("How do I login with a different account?"))
+	ctx.Printf("  %s\n", infoGray.Render("miren logout"))
+	ctx.Printf("  %s\n\n", infoGray.Render("miren login"))
 }
 
 func showAddAuthToServerHelp(ctx *Context) {
-	printHelpHeader(ctx, "Adding authentication to a server")
-	printCommand(ctx, "First, login to miren.cloud:", "miren login")
-	printCommand(ctx, "Then register your server with miren.cloud:", "sudo miren server register -n <cluster-name>")
-	ctx.Printf("%s\n\n", infoLabel.Render("Approve the registration in the browser when prompted."))
-	ctx.Printf("%s\n", infoLabel.Render("Finally, restart the server:"))
+	ctx.Printf("%s\n", infoBold.Render("How do I add authentication to this server?"))
+	ctx.Printf("  %s\n", infoGray.Render("miren login"))
+	ctx.Printf("  %s\n", infoGray.Render("sudo miren server register -n <cluster-name>"))
+	ctx.Printf("  %s\n", infoGray.Render("# Approve in browser when prompted"))
 	ctx.Printf("  %s\n", infoGray.Render("sudo systemctl restart miren"))
-	waitForEnter(ctx)
 }

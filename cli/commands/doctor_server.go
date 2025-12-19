@@ -135,66 +135,38 @@ func DoctorServer(ctx *Context, opts struct {
 		}
 	}
 
-	// Interactive mode - offer help options
+	// Show help content in interactive mode
 	if !ui.IsInteractive() {
 		return nil
 	}
 
 	ctx.Printf("\n")
+	showStartLocalServerHelp(ctx)
+	showConnectRemoteServerHelp(ctx)
+	showFixConnectivityHelp(ctx)
 
-	for {
-		items := []ui.PickerItem{
-			ui.SimplePickerItem{Text: "How do I start a local server?"},
-			ui.SimplePickerItem{Text: "How do I connect to a known remote server?"},
-			ui.SimplePickerItem{Text: "How do I fix https/http connectivity?"},
-			ui.SimplePickerItem{Text: "[done]"},
-		}
-
-		selected, err := ui.RunPicker(items, ui.WithTitle("Need help?"))
-		if err != nil || selected == nil || selected.ID() == "[done]" {
-			return nil
-		}
-
-		switch selected.ID() {
-		case "How do I start a local server?":
-			showStartLocalServerHelp(ctx)
-		case "How do I connect to a known remote server?":
-			showConnectRemoteServerHelp(ctx)
-		case "How do I fix https/http connectivity?":
-			showFixConnectivityHelp(ctx)
-		}
-	}
+	return nil
 }
 
 func showStartLocalServerHelp(ctx *Context) {
-	printHelpHeader(ctx, "Starting a local miren server")
-	printCommand(ctx, "To install as a systemd service:", "sudo miren server install")
-	printCommand(ctx, "If already installed as a systemd service:", "sudo systemctl start miren")
-	printCommand(ctx, "To run manually (foreground):", "sudo miren server")
-	ctx.Printf("%s\n", infoLabel.Render("To check server logs:"))
-	ctx.Printf("  %s\n", infoGray.Render("sudo journalctl -u miren -f"))
-	waitForEnter(ctx)
+	ctx.Printf("%s\n", infoBold.Render("How do I start a local server?"))
+	ctx.Printf("  %s\n", infoGray.Render("sudo miren server install"))
+	ctx.Printf("  %s\n", infoGray.Render("sudo systemctl start miren"))
+	ctx.Printf("  %s\n\n", infoGray.Render("sudo journalctl -u miren -f"))
 }
 
 func showConnectRemoteServerHelp(ctx *Context) {
-	printHelpHeader(ctx, "Connecting to a known remote server")
-	printCommand(ctx, "Add a cluster from miren.cloud:", "miren cluster add")
-	printCommand(ctx, "Add a cluster manually by address:", "miren cluster add -a <hostname:port>")
-	ctx.Printf("%s\n", infoLabel.Render("Switch to a different cluster:"))
-	ctx.Printf("  %s\n", infoGray.Render("miren cluster switch <name>"))
-	waitForEnter(ctx)
+	ctx.Printf("%s\n", infoBold.Render("How do I connect to a known remote server?"))
+	ctx.Printf("  %s\n", infoGray.Render("miren cluster add"))
+	ctx.Printf("  %s\n\n", infoGray.Render("miren cluster switch <name>"))
 }
 
 func showFixConnectivityHelp(ctx *Context) {
-	printHelpHeader(ctx, "Fixing https/http connectivity")
-	printCommand(ctx, "Check if the server is running:", "sudo systemctl status miren")
-	ctx.Printf("%s\n", infoLabel.Render("Check firewall rules:"))
+	ctx.Printf("%s\n", infoBold.Render("How do I fix https/http connectivity?"))
+	ctx.Printf("  %s\n", infoGray.Render("sudo systemctl status miren"))
 	ctx.Printf("  %s\n", infoGray.Render("sudo ufw status"))
-	ctx.Printf("  %s\n\n", infoGray.Render("sudo ufw allow 443/tcp"))
-	printCommand(ctx, "Check if ports are listening:", "sudo lsof -i :443")
-	ctx.Printf("%s\n", infoLabel.Render("Test connectivity:"))
+	ctx.Printf("  %s\n", infoGray.Render("sudo lsof -i :443"))
 	ctx.Printf("  %s\n", infoGray.Render("curl -k https://<hostname>/"))
-	waitForEnter(ctx)
 }
 
 func printEndpointStatus(ctx *Context, name string, ok bool, detail string) {

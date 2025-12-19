@@ -24,31 +24,6 @@ var (
 	infoBold  = lipgloss.NewStyle().Bold(true)
 )
 
-// waitForEnter prints "Press Enter to continue..." and waits for input
-func waitForEnter(ctx *Context) {
-	ctx.Printf("\n%s", infoGray.Render("Press Enter to continue..."))
-	fmt.Scanln()
-	ctx.Printf("\n")
-}
-
-// printHelpHeader prints a styled help section header with underline
-func printHelpHeader(ctx *Context, title string) {
-	ctx.Printf("\n%s\n", infoLabel.Render(title))
-	ctx.Printf("%s\n\n", infoGray.Render(strings.Repeat("─", len(title))))
-}
-
-// printCommand prints a labeled command suggestion
-func printCommand(ctx *Context, label, command string) {
-	ctx.Printf("%s\n", infoLabel.Render(label))
-	ctx.Printf("  %s\n\n", infoGray.Render(command))
-}
-
-// printNumberedStep prints a numbered step with description and command
-func printNumberedStep(ctx *Context, num, description, command string) {
-	ctx.Printf("  %s  %s\n", infoBold.Render(num+"."), description)
-	ctx.Printf("     %s\n\n", infoGray.Render(command))
-}
-
 type cloudUserInfo struct {
 	User struct {
 		ID    string `json:"id"`
