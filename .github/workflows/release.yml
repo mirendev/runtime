@@ -144,7 +144,7 @@ jobs:
         payload: |
           {
             "channel": "${{ vars.SLACK_CHANNEL_ID }}",
-            "text": "❌ Miren release packaging failed on main branch",
+            "text": "❌ Miren release packaging failed for ${{ github.event.workflow_run.head_branch }}",
             "blocks": [
               {
                 "type": "section",
@@ -308,7 +308,7 @@ jobs:
         retention-days: 1
 
   build-and-push-docker:
-    needs: [package]
+    needs: [package, upload-to-miren]
     runs-on: depot-ubuntu-latest
     permissions:
       contents: read
@@ -386,7 +386,7 @@ jobs:
           payload: |
             {
               "channel": "${{ vars.SLACK_CHANNEL_ID }}",
-              "text": "❌ Miren Docker build/push failed on main branch",
+              "text": "❌ Miren Docker build/push failed for ${{ github.event.workflow_run.head_branch }}",
               "blocks": [
                 {
                   "type": "section",
@@ -623,7 +623,7 @@ jobs:
           payload: |
             {
               "channel": "${{ vars.SLACK_CHANNEL_ID }}",
-              "text": "❌ Miren release upload failed on main branch",
+              "text": "❌ Miren release upload failed for ${{ github.event.workflow_run.head_branch }}",
               "blocks": [
                 {
                   "type": "section",
