@@ -260,7 +260,29 @@ func (h *Server) invalidateLease(ctx context.Context, app string, lease *lease) 
 }
 
 func (h *Server) ServeHTTP(w http.ResponseWriter, req *http.Request) {
+	// WebSocket upgrade requests require connection hijacking, which is not
+	// supported by http.TimeoutHandler's wrapped ResponseWriter. Bypass the
+	// timeout handler for upgrade requests so the proxy can hijack the connection.
+	if isUpgradeRequest(req) {
+		h.handleRequest(w, req)
+		return
+	}
 	h.handler.ServeHTTP(w, req)
+}
+
+// isUpgradeRequest checks if the request is a protocol upgrade (e.g., WebSocket).
+// These requests need to bypass http.TimeoutHandler because they require
+// hijacking the connection, which TimeoutHandler's ResponseWriter doesn't support.
+func isUpgradeRequest(req *http.Request) bool {
+	// Check for Connection: Upgrade header (case-insensitive per HTTP spec)
+	for _, v := range req.Header["Connection"] {
+		for _, token := range strings.Split(v, ",") {
+			if strings.EqualFold(strings.TrimSpace(token), "upgrade") {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // handleRequest is the inner handler wrapped by TimeoutHandler
