@@ -282,6 +282,21 @@ var ErrPoolTimeout = fmt.Errorf("timeout waiting for sandbox from pool")
 func (a *localActivator) waitForSandbox(ctx context.Context, ver *core_v1alpha.AppVersion, service string, incrementPool bool) (*Lease, error) {
 	key := verKey{ver.ID.String(), service}
 
+	// Track the count of sandboxes we knew about BEFORE requesting new capacity.
+	// This lets us distinguish between:
+	// 1. Old DEAD sandboxes from previous scale-down cycles (should be ignored)
+	// 2. New sandboxes created for THIS request that died (real boot failure)
+	var sandboxCountBeforeIncrement int
+	if incrementPool {
+		a.mu.RLock()
+		if versionRef, ok := a.versions[key]; ok {
+			if ps, poolOk := a.poolSandboxes[versionRef.poolID]; poolOk {
+				sandboxCountBeforeIncrement = len(ps.sandboxes)
+			}
+		}
+		a.mu.RUnlock()
+	}
+
 	var pool *compute_v1alpha.SandboxPool
 	if incrementPool {
 		// Request additional capacity from pool
@@ -397,12 +412,12 @@ func (a *localActivator) waitForSandbox(ctx context.Context, ver *core_v1alpha.A
 		versionRef, ok := a.versions[key]
 		hasPendingOrRunning := false
 		var sandboxStatuses []string
-		var hasSandboxes bool
+		var currentSandboxCount int
 		if ok {
 			// Look up the pool's sandboxes
 			ps, poolOk := a.poolSandboxes[versionRef.poolID]
-			if poolOk && len(ps.sandboxes) > 0 {
-				hasSandboxes = true
+			if poolOk {
+				currentSandboxCount = len(ps.sandboxes)
 				for _, s := range ps.sandboxes {
 					sandboxStatuses = append(sandboxStatuses, fmt.Sprintf("%s:%s", s.sandbox.ID, s.sandbox.Status))
 					if s.sandbox.Status == compute_v1alpha.RUNNING || s.sandbox.Status == compute_v1alpha.PENDING {
@@ -422,16 +437,31 @@ func (a *localActivator) waitForSandbox(ctx context.Context, ver *core_v1alpha.A
 			"tracked", ok,
 			"count", len(sandboxStatuses),
 			"sandboxes", sandboxStatuses,
-			"has_pending_or_running", hasPendingOrRunning)
+			"has_pending_or_running", hasPendingOrRunning,
+			"increment_pool", incrementPool,
+			"sandbox_count_before", sandboxCountBeforeIncrement)
 
-		if !hasPendingOrRunning && hasSandboxes {
+		// Only fail fast if:
+		// 1. We have sandboxes tracked but none are RUNNING or PENDING, AND
+		// 2. Either we didn't just request new capacity (incrementPool=false), OR
+		//    we DID request capacity AND a new sandbox was created and then died
+		//
+		// This prevents false "died during boot" errors when:
+		// - We just incremented the pool and are waiting for the reconciler to create a sandbox
+		// - Old DEAD sandboxes from previous scale-down cycles are still in tracking
+		hasNewSandboxesSinceIncrement := currentSandboxCount > sandboxCountBeforeIncrement
+		shouldFailFast := !hasPendingOrRunning && currentSandboxCount > 0 &&
+			(!incrementPool || hasNewSandboxesSinceIncrement)
+
+		if shouldFailFast {
 			// We have sandboxes tracked but none are RUNNING or PENDING
-			// This means they all failed - fail fast
+			// AND either we weren't scaling up, or a new sandbox was created and died
 			a.log.Error("all sandboxes failed while waiting",
 				"app", ver.App,
 				"version", ver.Version,
 				"service", service,
-				"sandboxes", sandboxStatuses)
+				"sandboxes", sandboxStatuses,
+				"new_sandboxes_created", hasNewSandboxesSinceIncrement)
 			return nil, fmt.Errorf("%w: all sandboxes died during boot", ErrSandboxDiedEarly)
 		}
 
