@@ -58,14 +58,25 @@ func TestReconcileController_Lifecycle(t *testing.T) {
 	err := controller.Start(ctx)
 	require.NoError(t, err)
 
-	// Give a few millis for the test event to come through
-	time.Sleep(10 * time.Millisecond)
+	// Wait for watch to be established
+	err = store.WaitForIndexWatcher(ctx, testIndex)
+	require.NoError(t, err)
+
+	// Create an entity that matches the watch index
+	testEntity := entity.New(
+		entity.Ref(entity.DBId, "test/entity1"),
+		entity.String(entity.Type, "test/type"),
+	)
+	_, err = store.CreateEntity(ctx, testEntity)
+	require.NoError(t, err)
+
+	// Wait for the event to be processed
+	require.Eventually(t, func() bool {
+		return handlerCalls.Load() >= 1
+	}, 5*time.Second, 10*time.Millisecond, "handler should be called at least once")
 
 	// Test Stop
 	controller.Stop()
-
-	// MockStore sends a fake Put event to /mock/entity, ensure it came through
-	require.Equal(t, handlerCalls.Load(), uint64(1))
 }
 
 func TestReconcileController_EventProcessing(t *testing.T) {

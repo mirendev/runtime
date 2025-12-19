@@ -226,29 +226,60 @@ func TestEntityServer_WatchIndex(t *testing.T) {
 		Client: rpc.LocalClient(v1alpha.AdaptEntityAccess(server)),
 	}
 
-	ctx := context.TODO()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
 	index := entity.Keyword(entity.Ident, "test/index")
 
-	_, err := sc.WatchIndex(ctx, index, stream.Callback(func(op *v1alpha.EntityOp) error {
-		r.NotNil(op)
+	// Track received events
+	eventReceived := make(chan struct{})
+	watchDone := make(chan error, 1)
 
-		r.Equal(int64(v1alpha.EntityOperationCreate), op.Operation())
+	// Start watch in background
+	go func() {
+		_, err := sc.WatchIndex(ctx, index, stream.Callback(func(op *v1alpha.EntityOp) error {
+			r.NotNil(op)
+			r.Equal(int64(v1alpha.EntityOperationCreate), op.Operation())
+			r.True(op.HasEntity())
 
-		r.True(op.HasEntity())
+			ae := op.Entity()
+			// Entity should have the ident attribute we're watching
+			r.Contains(ae.Attrs(), index)
 
-		ae := op.Entity()
+			close(eventReceived)
+			return nil
+		}))
+		watchDone <- err
+	}()
 
-		// Entity has 2 attributes: db/id and db/ident (timestamps managed by store, not present here)
-		r.Len(ae.Attrs(), 2)
+	// Wait for watch to be established
+	err := store.WaitForIndexWatcher(ctx, index)
+	r.NoError(err)
 
-		// Verify the entity has the expected db/id attribute
-		r.Contains(ae.Attrs(), entity.Ref(entity.DBId, "mock/entity"))
+	// Create an entity that matches the watch index
+	testEntity := entity.New(
+		entity.Ref(entity.DBId, "test/entity-1"),
+		index, // This makes the entity match the watch
+	)
+	_, err = store.CreateEntity(ctx, testEntity)
+	r.NoError(err)
 
-		return nil
-	}))
-	require.NoError(t, err)
+	// Wait for event to be received
+	select {
+	case <-eventReceived:
+		// Success - cancel context to stop watch
+		cancel()
+	case <-time.After(5 * time.Second):
+		t.Fatal("Timed out waiting for watch event")
+	}
 
+	// Wait for watch goroutine to finish
+	select {
+	case <-watchDone:
+		// Watch finished (error is expected due to context cancellation)
+	case <-time.After(5 * time.Second):
+		t.Fatal("Timed out waiting for watch to finish")
+	}
 }
 
 func TestEntityServer_List(t *testing.T) {

@@ -22,14 +22,19 @@ type MockStore struct {
 	// Entity watchers - maps entity ID to list of channels to notify
 	watchersMu sync.RWMutex
 	watchers   map[Id][]chan EntityOp
+
+	// Index watchers - maps index key (attr.CAS()) to list of channels to notify
+	indexWatchersMu sync.RWMutex
+	indexWatchers   map[string][]chan clientv3.WatchResponse
 }
 
 var _ Store = &MockStore{}
 
 func NewMockStore() *MockStore {
 	return &MockStore{
-		Entities: make(map[Id]*Entity),
-		watchers: make(map[Id][]chan EntityOp),
+		Entities:      make(map[Id]*Entity),
+		watchers:      make(map[Id][]chan EntityOp),
+		indexWatchers: make(map[string][]chan clientv3.WatchResponse),
 	}
 }
 
@@ -93,14 +98,18 @@ func (m *MockStore) CreateEntity(ctx context.Context, entity *Entity, opts ...En
 	m.mu.Lock()
 	m.Entities[entity.Id()] = entity
 	m.mu.Unlock()
+
+	// Notify index watchers of the new entity
+	go m.notifyIndexWatchers(entity, clientv3.EventTypePut, nil)
+
 	return entity, nil
 }
 
 func (m *MockStore) UpdateEntity(ctx context.Context, id Id, entity *Entity, opts ...EntityOption) (*Entity, error) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	e, ok := m.Entities[id]
 	if !ok {
+		m.mu.Unlock()
 		return nil, cond.NotFound("entity", id)
 	}
 
@@ -133,10 +142,13 @@ func (m *MockStore) UpdateEntity(ctx context.Context, id Id, entity *Entity, opt
 	}
 
 	// Update the entity in the store
+	prevEntity := e
 	m.Entities[id] = updated
+	m.mu.Unlock()
 
 	// Notify watchers
 	go m.notifyWatchers(id, EntityOp{Type: EntityOpUpdate, Entity: updated})
+	go m.notifyIndexWatchers(updated, clientv3.EventTypePut, prevEntity)
 
 	return updated, nil
 }
@@ -148,9 +160,9 @@ func (m *MockStore) ReplaceEntity(ctx context.Context, entity *Entity, opts ...E
 	}
 
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	existing, ok := m.Entities[id]
 	if !ok {
+		m.mu.Unlock()
 		return nil, cond.NotFound("entity", id)
 	}
 
@@ -162,10 +174,13 @@ func (m *MockStore) ReplaceEntity(ctx context.Context, entity *Entity, opts ...E
 		entity.SetCreatedAt(existing.GetCreatedAt())
 	}
 
+	prevEntity := existing
 	m.Entities[id] = entity
+	m.mu.Unlock()
 
 	// Notify watchers
 	go m.notifyWatchers(id, EntityOp{Type: EntityOpUpdate, Entity: entity})
+	go m.notifyIndexWatchers(entity, clientv3.EventTypePut, prevEntity)
 
 	return entity, nil
 }
@@ -204,8 +219,15 @@ func (m *MockStore) EnsureEntity(ctx context.Context, entity *Entity, opts ...En
 
 func (m *MockStore) DeleteEntity(ctx context.Context, id Id) error {
 	m.mu.Lock()
-	defer m.mu.Unlock()
+	entity, existed := m.Entities[id]
 	delete(m.Entities, id)
+	m.mu.Unlock()
+
+	// Notify index watchers of the deletion
+	if existed {
+		go m.notifyIndexWatchers(entity, clientv3.EventTypeDelete, entity)
+	}
+
 	return nil
 }
 
@@ -214,40 +236,52 @@ func (m *MockStore) WatchIndex(ctx context.Context, attr Attr) (clientv3.WatchCh
 		return m.OnWatchIndex(ctx, attr)
 	}
 
-	ch := make(chan clientv3.WatchResponse)
+	ch := make(chan clientv3.WatchResponse, 10)
+	indexKey := attr.CAS()
 
-	m.mu.Lock()
-	mockEntity := New(
-		Ref(DBId, "mock/entity"),
-		Keyword(Ident, "mock/entity"),
-	)
-	m.Entities[Id("/mock/entity")] = mockEntity
-	m.mu.Unlock()
+	m.indexWatchersMu.Lock()
+	m.indexWatchers[indexKey] = append(m.indexWatchers[indexKey], ch)
+	m.indexWatchersMu.Unlock()
 
+	// Clean up watcher when context is cancelled
 	go func() {
-		// Simulate a watch event after some time
-		// In a real implementation, this would listen to etcd events
-		// and send them to the channel
-		select {
-		case <-ctx.Done():
-			return
-		default:
-			// Send a mock event (this is just for demonstration)
-			ch <- clientv3.WatchResponse{
-				Events: []*clientv3.Event{
-					{
-						Type: clientv3.EventTypePut,
-						Kv:   &mvccpb.KeyValue{Key: []byte("abcdef"), Value: []byte("/mock/entity")},
-					},
-				},
+		<-ctx.Done()
+		m.indexWatchersMu.Lock()
+		defer m.indexWatchersMu.Unlock()
+		watchers := m.indexWatchers[indexKey]
+		for i, w := range watchers {
+			if w == ch {
+				m.indexWatchers[indexKey] = append(watchers[:i], watchers[i+1:]...)
+				break
 			}
-
-			close(ch) // Close the channel after sending the event
 		}
+		close(ch)
 	}()
 
-	// This is a mock, so we won't implement actual watch functionality
 	return ch, nil
+}
+
+// WaitForIndexWatcher blocks until at least one watcher is registered for the given attribute,
+// or the context is cancelled. This is useful in tests to ensure a watch is established
+// before performing operations that should trigger watch notifications.
+func (m *MockStore) WaitForIndexWatcher(ctx context.Context, attr Attr) error {
+	indexKey := attr.CAS()
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+			m.indexWatchersMu.RLock()
+			hasWatcher := len(m.indexWatchers[indexKey]) > 0
+			m.indexWatchersMu.RUnlock()
+			if hasWatcher {
+				return nil
+			}
+		}
+	}
 }
 
 // WatchEntity registers a watcher for an entity and returns a channel that receives updates
@@ -285,6 +319,53 @@ func (m *MockStore) notifyWatchers(id Id, op EntityOp) {
 		case ch <- op:
 		default:
 			// Channel full, skip
+		}
+	}
+}
+
+// notifyIndexWatchers sends a watch response to all index watchers that match the entity's attributes.
+// eventType should be clientv3.EventTypePut for create/update or clientv3.EventTypeDelete for delete.
+// For delete events, prevEntity should be the entity before deletion (to get its ID).
+func (m *MockStore) notifyIndexWatchers(entity *Entity, eventType mvccpb.Event_EventType, prevEntity *Entity) {
+	m.indexWatchersMu.RLock()
+	defer m.indexWatchersMu.RUnlock()
+
+	// Check each registered index watcher to see if this entity matches
+	allAttrs := enumerateAllAttrs(entity.attrs)
+
+	for indexKey, watchers := range m.indexWatchers {
+		// Check if any of the entity's attributes produce this index key
+		for _, attr := range allAttrs {
+			if attr.CAS() == indexKey {
+				// Entity matches this index - notify all watchers
+				event := &clientv3.Event{
+					Type: eventType,
+					Kv: &mvccpb.KeyValue{
+						Key:   []byte(indexKey),
+						Value: []byte(entity.Id()),
+					},
+				}
+				if prevEntity != nil {
+					event.PrevKv = &mvccpb.KeyValue{
+						Key:         []byte(indexKey),
+						Value:       []byte(prevEntity.Id()),
+						ModRevision: prevEntity.GetRevision(),
+					}
+				}
+
+				resp := clientv3.WatchResponse{
+					Events: []*clientv3.Event{event},
+				}
+
+				for _, ch := range watchers {
+					select {
+					case ch <- resp:
+					default:
+						// Channel full, skip
+					}
+				}
+				break // Only notify once per index key
+			}
 		}
 	}
 }

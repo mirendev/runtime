@@ -1735,8 +1735,8 @@ func TestWatchPoolsCleansUpCacheOnDeletion(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Use etcd-backed server because watch notifications require real etcd
-	server, cleanup := testutils.NewEtcdEntityServer(t)
+	// Use in-memory server with realistic WatchIndex implementation
+	server, cleanup := testutils.NewInMemEntityServer(t)
 	defer cleanup()
 
 	// Create app entity (Project is optional)
@@ -1804,6 +1804,13 @@ func TestWatchPoolsCleansUpCacheOnDeletion(t *testing.T) {
 	require.True(t, poolsExists, "Pool should be cached in pools map after recovery")
 	require.True(t, versionsExists, "Version->pool mapping should exist after recovery")
 	require.True(t, poolSandboxesExists, "poolSandboxes entry should exist after recovery")
+
+	// Wait for the pool watch to be established before deleting
+	// This ensures the watch will see the delete event
+	watchCtx, watchCancel := context.WithTimeout(ctx, 5*time.Second)
+	defer watchCancel()
+	err = server.Store.WaitForIndexWatcher(watchCtx, entity.Ref(entity.EntityKind, compute_v1alpha.KindSandboxPool))
+	require.NoError(t, err, "pool watch should be established")
 
 	// Delete the pool from entity store
 	_, err = server.EAC.Delete(ctx, pool.ID.String())
