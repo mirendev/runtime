@@ -15,6 +15,8 @@ import (
 	"runtime"
 	"strings"
 	"time"
+
+	"miren.dev/runtime/version"
 )
 
 // DownloadReleaseOptions contains options for downloading a release
@@ -142,11 +144,19 @@ func PerformDownloadRelease(ctx *Context, opts DownloadReleaseOptions) error {
 
 // DownloadRelease is the CLI command handler for downloading a release
 func DownloadRelease(ctx *Context, opts struct {
-	Branch string `short:"b" long:"branch" description:"Branch name to download" default:"main"`
+	Branch string `short:"b" long:"branch" description:"Branch name to download"`
 	Global bool   `short:"g" long:"global" description:"Install globally to /var/lib/miren/release"`
 	Force  bool   `short:"f" long:"force" description:"Force download even if release directory exists"`
 	Output string `short:"o" long:"output" description:"Custom output directory"`
 }) error {
+	if opts.Branch == "" {
+		if br := version.Branch(); br != "unknown" {
+			opts.Branch = br
+		} else {
+			opts.Branch = "latest"
+		}
+	}
+
 	return PerformDownloadRelease(ctx, DownloadReleaseOptions{
 		Branch: opts.Branch,
 		Global: opts.Global,

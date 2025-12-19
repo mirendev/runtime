@@ -3,6 +3,7 @@ package version
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -35,6 +36,23 @@ func GetInfo() Info {
 	}
 
 	return info
+}
+
+// Returns the branch that the version was built from
+func Branch() string {
+	if Version == "unknown" {
+		return "unknown"
+	}
+
+	if branch, _, ok := strings.Cut(Version, ":"); ok {
+		return branch
+	}
+
+	if strings.HasPrefix(Version, "v") {
+		return Version
+	}
+
+	return "unknown"
 }
 
 // String returns the version info as a formatted string
