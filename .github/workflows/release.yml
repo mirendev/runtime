@@ -667,23 +667,19 @@ jobs:
         run: |
           # Determine what was uploaded
           HEAD_BRANCH="${{ github.event.workflow_run.head_branch || github.ref_name }}"
-          IS_TAG=false
-          IS_PRERELEASE=false
-          RELEASE_TYPE="Branch build"
+          RELEASE_TYPE="branch"
 
           if [[ "$HEAD_BRANCH" == v* ]]; then
-            IS_TAG=true
             # Check if it's a prerelease (has hyphen)
             if [[ "$HEAD_BRANCH" =~ ^v[0-9]+\.[0-9]+\.[0-9]+- ]]; then
-              IS_PRERELEASE=true
-              RELEASE_TYPE="Prerelease"
-              PATHS_MSG="Uploaded to: \`$HEAD_BRANCH\` only (prereleases don't update \`latest\`)"
+              RELEASE_TYPE="prerelease"
+              CHANNELS="$HEAD_BRANCH"
             else
-              RELEASE_TYPE="Stable release"
-              PATHS_MSG="Uploaded to: \`$HEAD_BRANCH\` and \`latest\`"
+              RELEASE_TYPE="release"
+              CHANNELS="$HEAD_BRANCH, latest"
             fi
           else
-            PATHS_MSG="Uploaded to: \`$HEAD_BRANCH\`"
+            CHANNELS="$HEAD_BRANCH"
           fi
 
           # Get version from version.json
@@ -696,33 +692,13 @@ jobs:
             --data @- https://slack.com/api/chat.postMessage <<EOF
           {
             "channel": "${{ vars.SLACK_CHANNEL_ID }}",
-            "text": "✅ Miren $RELEASE_TYPE: $VERSION",
+            "text": "✅ Miren $RELEASE_TYPE $VERSION deployed",
             "blocks": [
               {
                 "type": "section",
                 "text": {
                   "type": "mrkdwn",
-                  "text": "✅ *Miren $RELEASE_TYPE deployed*\nVersion \`$VERSION\` built and uploaded successfully."
-                }
-              },
-              {
-                "type": "section",
-                "fields": [
-                  {
-                    "type": "mrkdwn",
-                    "text": "*Version:*\n\`$VERSION\`"
-                  },
-                  {
-                    "type": "mrkdwn",
-                    "text": "*Type:*\n$RELEASE_TYPE"
-                  }
-                ]
-              },
-              {
-                "type": "section",
-                "text": {
-                  "type": "mrkdwn",
-                  "text": "*Channels:*\n$PATHS_MSG"
+                  "text": "✅ Miren $RELEASE_TYPE \`$VERSION\` deployed to $CHANNELS"
                 }
               },
               {
@@ -730,7 +706,7 @@ jobs:
                 "elements": [
                   {
                     "type": "mrkdwn",
-                    "text": "<${{ github.event.workflow_run.repository.html_url }}/commit/${{ github.event.workflow_run.head_sha }}|View commit ($COMMIT_SHORT)> • <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View workflow run>"
+                    "text": "<${{ github.event.workflow_run.repository.html_url }}/commit/${{ github.event.workflow_run.head_sha }}|$COMMIT_SHORT> • <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|workflow>"
                   }
                 ]
               }
