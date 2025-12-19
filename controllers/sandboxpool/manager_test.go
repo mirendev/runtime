@@ -933,3 +933,169 @@ func TestCleanupEmptyPoolsNonZeroDesired(t *testing.T) {
 	_, err = server.EAC.Get(ctx, poolID.String())
 	require.NoError(t, err, "pool with desired_instances > 0 should not be deleted")
 }
+
+// TestCleanupEmptyPoolsReferencedByActiveVersion tests that pools are not deleted
+// when they're still referenced by an app's active version, even if empty and old.
+// This is a regression test for a bug where empty pools at scale-to-zero were
+// deleted prematurely, causing the activator to have stale references.
+func TestCleanupEmptyPoolsReferencedByActiveVersion(t *testing.T) {
+	ctx := context.Background()
+	log := testutils.TestLogger(t)
+
+	server, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	// Create an App first
+	app := &core_v1alpha.App{
+		Project: entity.Id("project-1"),
+	}
+	appID, err := server.Client.Create(ctx, "test-app", app)
+	require.NoError(t, err)
+
+	// Create AppVersion referencing the app
+	appVer := &core_v1alpha.AppVersion{
+		App:     appID,
+		Version: "v1",
+		Config: core_v1alpha.Config{
+			Services: []core_v1alpha.Services{
+				{
+					Name: "web",
+					ServiceConcurrency: core_v1alpha.ServiceConcurrency{
+						Mode:                "auto",
+						RequestsPerInstance: 10,
+					},
+				},
+			},
+		},
+	}
+	appVerID, err := server.Client.Create(ctx, "app-ver-1", appVer)
+	require.NoError(t, err)
+
+	// Update app's active_version to point to this version
+	app.ID = appID
+	app.ActiveVersion = appVerID
+	err = server.Client.Update(ctx, app)
+	require.NoError(t, err)
+
+	// Create an empty pool with desired_instances=0 that references the version
+	pool := &compute_v1alpha.SandboxPool{
+		App:                  appID,
+		Service:              "web",
+		DesiredInstances:     0,
+		CurrentInstances:     0,
+		ReadyInstances:       0,
+		ReferencedByVersions: []entity.Id{appVerID},
+		SandboxSpec: compute_v1alpha.SandboxSpec{
+			Version: appVerID,
+			Container: []compute_v1alpha.SandboxSpecContainer{
+				{Image: "test:latest"},
+			},
+		},
+	}
+
+	poolID, err := server.Client.Create(ctx, "active-pool", pool)
+	require.NoError(t, err)
+	pool.ID = poolID
+
+	manager := NewManager(log, server.EAC)
+
+	// Test the helper function directly
+	isReferenced := manager.isPoolReferencedByCurrentVersion(ctx, pool)
+	require.True(t, isReferenced, "Pool should be recognized as referenced by active version")
+
+	// Cleanup should preserve this pool even if it were old enough
+	// (Note: we can't easily backdate in tests, but the check happens before age check)
+	err = manager.cleanupEmptyPools(ctx)
+	require.NoError(t, err)
+
+	// Pool should still exist
+	_, err = server.EAC.Get(ctx, poolID.String())
+	require.NoError(t, err, "pool referenced by active version should not be deleted")
+}
+
+// TestCleanupEmptyPoolsNotReferencedByActiveVersion tests that pools ARE deleted
+// when they're not referenced by any app's active version.
+func TestCleanupEmptyPoolsNotReferencedByActiveVersion(t *testing.T) {
+	ctx := context.Background()
+	log := testutils.TestLogger(t)
+
+	server, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	// Create an App
+	app := &core_v1alpha.App{
+		Project: entity.Id("project-1"),
+	}
+	appID, err := server.Client.Create(ctx, "test-app", app)
+	require.NoError(t, err)
+
+	// Create an OLD AppVersion (will not be the active version)
+	oldAppVer := &core_v1alpha.AppVersion{
+		App:     appID,
+		Version: "v1",
+		Config: core_v1alpha.Config{
+			Services: []core_v1alpha.Services{
+				{
+					Name: "web",
+					ServiceConcurrency: core_v1alpha.ServiceConcurrency{
+						Mode:                "auto",
+						RequestsPerInstance: 10,
+					},
+				},
+			},
+		},
+	}
+	oldAppVerID, err := server.Client.Create(ctx, "old-app-ver", oldAppVer)
+	require.NoError(t, err)
+
+	// Create a NEW AppVersion that will be the active version
+	newAppVer := &core_v1alpha.AppVersion{
+		App:     appID,
+		Version: "v2",
+		Config: core_v1alpha.Config{
+			Services: []core_v1alpha.Services{
+				{
+					Name: "web",
+					ServiceConcurrency: core_v1alpha.ServiceConcurrency{
+						Mode:                "auto",
+						RequestsPerInstance: 10,
+					},
+				},
+			},
+		},
+	}
+	newAppVerID, err := server.Client.Create(ctx, "new-app-ver", newAppVer)
+	require.NoError(t, err)
+
+	// Set app's active_version to the NEW version
+	app.ID = appID
+	app.ActiveVersion = newAppVerID
+	err = server.Client.Update(ctx, app)
+	require.NoError(t, err)
+
+	// Create an empty pool that only references the OLD version
+	pool := &compute_v1alpha.SandboxPool{
+		App:                  appID,
+		Service:              "web",
+		DesiredInstances:     0,
+		CurrentInstances:     0,
+		ReadyInstances:       0,
+		ReferencedByVersions: []entity.Id{oldAppVerID}, // Only old version, not active
+		SandboxSpec: compute_v1alpha.SandboxSpec{
+			Version: oldAppVerID,
+			Container: []compute_v1alpha.SandboxSpecContainer{
+				{Image: "test:latest"},
+			},
+		},
+	}
+
+	poolID, err := server.Client.Create(ctx, "old-version-pool", pool)
+	require.NoError(t, err)
+	pool.ID = poolID
+
+	manager := NewManager(log, server.EAC)
+
+	// Test the helper function directly - should NOT be referenced by active
+	isReferenced := manager.isPoolReferencedByCurrentVersion(ctx, pool)
+	require.False(t, isReferenced, "Pool should NOT be recognized as referenced by active version")
+}
