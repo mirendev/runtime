@@ -121,9 +121,14 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 					return fmt.Errorf("unable to create /var/lib/miren and no user path available: %w", err)
 				}
 
+				branch := "latest"
+				if br := version.Branch(); br != "" {
+					branch = br
+				}
+
 				// Download the release
 				if err := PerformDownloadRelease(ctx, DownloadReleaseOptions{
-					Branch: "main",
+					Branch: branch,
 					Global: downloadGlobal,
 					Force:  false,
 					Output: downloadPath,

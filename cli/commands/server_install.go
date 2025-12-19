@@ -22,6 +22,7 @@ import (
 	"gopkg.in/yaml.v3"
 	"miren.dev/runtime/clientconfig"
 	"miren.dev/runtime/pkg/registration"
+	"miren.dev/runtime/version"
 )
 
 // installPrerequisites holds information about the system's readiness for installation
@@ -157,7 +158,7 @@ func fixSELinuxContext(ctx *Context, binaryPath string) {
 func ServerInstall(ctx *Context, opts struct {
 	Address      string            `short:"a" long:"address" description:"Server address to bind to" default:"0.0.0.0:8443"`
 	Verbosity    string            `short:"v" long:"verbosity" description:"Verbosity level" default:"-vv"`
-	Branch       string            `short:"b" long:"branch" description:"Branch to download if release not found" default:"main"`
+	Branch       string            `short:"b" long:"branch" description:"Branch to download if release not found"`
 	Force        bool              `short:"f" long:"force" description:"Overwrite existing service file"`
 	NoStart      bool              `long:"no-start" description:"Do not start the service after installation"`
 	WithoutCloud bool              `long:"without-cloud" description:"Skip cloud registration setup"`
@@ -165,6 +166,14 @@ func ServerInstall(ctx *Context, opts struct {
 	CloudURL     string            `short:"u" long:"url" description:"Cloud URL for registration" default:"https://miren.cloud"`
 	Tags         map[string]string `short:"t" long:"tag" description:"Tags for the cluster (key:value)"`
 }) error {
+	if opts.Branch == "" {
+		if br := version.Branch(); br != "" {
+			opts.Branch = br
+		} else {
+			opts.Branch = "latest"
+		}
+	}
+
 	// Check all prerequisites upfront
 	prereqs := checkInstallPrerequisites()
 
