@@ -35,8 +35,8 @@ func DebugDiskLease(ctx *Context, opts struct {
 	// Validate disk ID format
 	diskId := entity.Id(opts.DiskID)
 
-	// Generate lease ID
-	leaseId := idgen.Gen("disk-lease")
+	// Generate lease ID (format: disk-lease-<base58>)
+	leaseId := idgen.GenNS("disk-lease")
 
 	// Create disk lease entity
 	lease := &storage_v1alpha.DiskLease{
@@ -112,21 +112,13 @@ func DebugDiskLeaseList(ctx *Context, opts struct {
 
 			// Apply filters
 			if opts.DiskID != "" {
-				diskId := entity.Id(opts.DiskID)
-				if len(opts.DiskID) < 5 || string(diskId)[:5] != "disk/" {
-					diskId = entity.Id("disk/" + opts.DiskID)
-				}
-				if lease.DiskId != diskId {
+				if lease.DiskId != entity.Id(opts.DiskID) {
 					continue
 				}
 			}
 
 			if opts.SandboxID != "" {
-				sandboxId := entity.Id(opts.SandboxID)
-				if len(opts.SandboxID) < 8 || string(sandboxId)[:8] != "sandbox/" {
-					sandboxId = entity.Id("sandbox/" + opts.SandboxID)
-				}
-				if lease.SandboxId != sandboxId {
+				if lease.SandboxId != entity.Id(opts.SandboxID) {
 					continue
 				}
 			}
@@ -279,11 +271,7 @@ func DebugDiskLeaseStatus(ctx *Context, opts struct {
 	// Create entity access client
 	eac := entityserver_v1alpha.NewEntityAccessClient(client)
 
-	// Validate lease ID format
 	leaseId := entity.Id(opts.ID)
-	if len(opts.ID) < 11 || string(leaseId)[:11] != "disk-lease/" {
-		leaseId = entity.Id("disk-lease/" + opts.ID)
-	}
 
 	// Get the lease entity
 	result, err := eac.Get(context.Background(), string(leaseId))

@@ -35,8 +35,8 @@ func DebugDiskCreate(ctx *Context, opts struct {
 	eac := entityserver_v1alpha.NewEntityAccessClient(client)
 	ec := entityserver.NewClient(ctx.Log, eac)
 
-	// Generate disk ID
-	diskId := idgen.Gen("disk")
+	// Generate disk ID (format: disk-<base58>)
+	diskId := idgen.GenNS("disk")
 
 	// Determine filesystem type
 	var fs storage_v1alpha.DiskFilesystem
@@ -164,11 +164,7 @@ func DebugDiskDelete(ctx *Context, opts struct {
 	eac := entityserver_v1alpha.NewEntityAccessClient(client)
 	ec := entityserver.NewClient(slog.Default(), eac)
 
-	// Validate disk ID format
 	diskId := entity.Id(opts.ID)
-	if len(opts.ID) < 5 || string(diskId)[:5] != "disk/" {
-		diskId = entity.Id("disk/" + opts.ID)
-	}
 
 	// First, update the disk status to DELETING
 	ctx.Info("Marking disk for deletion...")
@@ -206,13 +202,8 @@ func DebugDiskStatus(ctx *Context, opts struct {
 	// Create entity access client
 	eac := entityserver_v1alpha.NewEntityAccessClient(client)
 
-	// Validate disk ID format
-	diskId := entity.Id(opts.ID)
-	if len(opts.ID) < 5 || string(diskId)[:5] != "disk/" {
-		diskId = entity.Id("disk/" + opts.ID)
-	}
-
 	// Get the disk entity
+	diskId := entity.Id(opts.ID)
 	result, err := eac.Get(context.Background(), string(diskId))
 	if err != nil {
 		return fmt.Errorf("failed to get disk entity: %w", err)
