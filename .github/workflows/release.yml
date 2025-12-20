@@ -106,7 +106,7 @@ jobs:
     steps:
     - uses: actions/checkout@v5
       with:
-        ref: ${{ github.event.workflow_run.head_branch || github.ref }}
+        ref: ${{ github.event.workflow_run.head_sha || github.sha }}
 
     - name: Set up Go
       uses: actions/setup-go@v6
@@ -219,7 +219,7 @@ jobs:
     steps:
     - uses: actions/checkout@v5
       with:
-        ref: ${{ github.event.workflow_run.head_branch || github.ref }}
+        ref: ${{ github.event.workflow_run.head_sha || github.sha }}
     - name: Set up Go
       uses: actions/setup-go@v6
       with:
@@ -317,7 +317,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v5
         with:
-          ref: ${{ github.event.workflow_run.head_branch || github.ref }}
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
 
       - name: Download amd64 package
         uses: actions/download-artifact@v4
@@ -438,7 +438,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v5
         with:
-          ref: ${{ github.event.workflow_run.head_branch || github.ref }}
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
 
       - name: Download all artifacts
         uses: actions/download-artifact@v4
