@@ -25,7 +25,7 @@ This script will:
 - **Operating System**: Linux (kernel 5.10+)
 - **Architecture**: x86_64 or arm64
 - **Memory**: 4GB minimum, 8GB recommended
-- **Storage**: 20GB minimum, 50GB recommended
+- **Storage**: 50GB minimum, 100GB recommended
 
 [Why these requirements?](#a-note-on-system-requirements)
 
@@ -280,7 +280,7 @@ miren route
 
 Miren runs several components—containerd, etcd, buildkit, metrics, and logging—that together use around 600MB of memory at idle. During builds, memory usage spikes as buildkit compiles your application. A single Rails app with Postgres can push total usage past 1.3GB during deployment, which is why we recommend 4GB minimum.
 
-For storage, container images and build caches add up quickly. Base images for languages like Ruby or Python are 50-80MB compressed but expand on disk, and buildkit caches intermediate build layers aggressively. A Rails deployment can easily use 15-20GB between base images, build cache, and the container registry. If you're tight on space, you'll see "no space left on device" errors during builds.
+For storage, container images and build caches add up quickly. Base images for languages like Ruby or Python are 50-80MB compressed but expand on disk, and BuildKit caches intermediate build layers aggressively—keeping up to 10GB by default. A single Rails deployment can use 15-20GB between base images, build cache, and the container registry. With multiple apps and their version history, usage grows from there. Starting with 50GB gives you comfortable headroom; if you're tight on space, you'll see "no space left on device" errors during builds.
 
 We're still learning about system requirements as more users deploy Miren in different contexts. If you have an interesting deployment scenario or resource constraints you'd like to discuss, come chat with us on [Discord](https://miren.dev/discord)!
 
