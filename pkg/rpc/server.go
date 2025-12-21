@@ -17,10 +17,10 @@ import (
 
 	"github.com/fxamacker/cbor/v2"
 	"github.com/mr-tron/base58"
+	"github.com/quic-go/webtransport-go"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/propagation"
 	"miren.dev/runtime/pkg/cond"
-	"miren.dev/runtime/pkg/webtransport"
 )
 
 func init() {

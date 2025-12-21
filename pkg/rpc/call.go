@@ -7,7 +7,7 @@ import (
 	"net/http"
 
 	"github.com/fxamacker/cbor/v2"
-	"miren.dev/runtime/pkg/webtransport"
+	"github.com/quic-go/webtransport-go"
 )
 
 type Call interface {

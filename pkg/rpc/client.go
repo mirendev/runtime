@@ -20,10 +20,10 @@ import (
 	"github.com/pkg/errors"
 	"github.com/quic-go/quic-go"
 	"github.com/quic-go/quic-go/http3"
+	"github.com/quic-go/webtransport-go"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/propagation"
 	"miren.dev/runtime/pkg/cond"
-	"miren.dev/runtime/pkg/webtransport"
 )
 
 type Client interface {
@@ -81,7 +81,7 @@ func (c *NetworkClient) setupTransport() {
 	c.htr.Logger = c.State.log.With("module", "rpc-call")
 	c.htr.TLSClientConfig = c.tlsCfg
 	c.htr.QUICConfig = &DefaultQUICConfig
-	c.htr.Dial = func(ctx context.Context, addr string, tlsCfg *tls.Config, cfg *quic.Config) (quic.EarlyConnection, error) {
+	c.htr.Dial = func(ctx context.Context, addr string, tlsCfg *tls.Config, cfg *quic.Config) (*quic.Conn, error) {
 		uaddr, err := resolveUDPAddr(ctx, "udp", addr)
 		if err != nil {
 			return nil, err
