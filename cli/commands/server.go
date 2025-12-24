@@ -55,6 +55,14 @@ import (
 )
 
 func Server(ctx *Context, opts serverconfig.CLIFlags) error {
+	// Disable HTTP/2 extended CONNECT protocol (RFC 8441) to ensure WebSocket
+	// connections work correctly. When extended CONNECT is enabled, browsers
+	// attempt WebSocket-over-HTTP/2, but Go's reverse proxy doesn't support
+	// this yet. With it disabled, browsers fall back to HTTP/1.1 for WebSocket
+	// while still using HTTP/2 for regular traffic.
+	// See: https://github.com/golang/go/issues/71128
+	os.Setenv("GODEBUG", appendGodebug(os.Getenv("GODEBUG"), "http2xconnect=0"))
+
 	eg, sub := errgroup.WithContext(ctx)
 
 	// Load configuration from all sources with precedence:
@@ -1101,4 +1109,13 @@ func stopAllSandboxContainers(ctx context.Context, log *slog.Logger, cc *contain
 
 	log.Info("stopped sandbox containers", "count", stoppedCount)
 	return nil
+}
+
+// appendGodebug appends a setting to an existing GODEBUG value.
+// GODEBUG values are comma-separated key=value pairs.
+func appendGodebug(existing, setting string) string {
+	if existing == "" {
+		return setting
+	}
+	return existing + "," + setting
 }
