@@ -47,11 +47,12 @@ WORKDIR /build
 # Copy go mod files first for better caching
 COPY go.mod go.sum ./
 
-# Copy source code
-COPY . .
+# Download dependencies BEFORE copying source code
+# This layer is cached until go.mod/go.sum change
+RUN go mod download
 
-# Download dependencies if vendor directory doesn't exist
-RUN if [ ! -d vendor ]; then go mod download; fi
+# Copy source code (this invalidates cache, but deps are already downloaded)
+COPY . .
 
 # Build a binary
 # We need CGO enabled for flannel dependencies
