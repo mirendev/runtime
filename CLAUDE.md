@@ -206,8 +206,8 @@ To get started with iso:
 
 ### Testing Notes
 
-- Tests must run without any parallelism (`-p 1`) due to shared containerd/buildkit instances
-- Blackbox CLI tests in `blackbox/` directory (run via `make test-blackbox`)
+- **Unit tests** run with `-p 1` (one package at a time) because runners within an iso container share containerd/buildkit instances
+- **Blackbox CLI tests** in `blackbox/` use `t.Parallel()` — each test uses unique app names and talks to the miren server via CLI, so they are safe to run concurrently
 - Test data in various `testdata/` directories
 
 ### Saga Framework (`pkg/saga/`)

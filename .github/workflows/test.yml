@@ -245,7 +245,7 @@ jobs:
       run: make dev-server-start
 
     - name: Run blackbox tests
-      run: go test -tags blackbox -timeout 10m -v -count=1 -p 1 ./blackbox/...
+      run: go test -tags blackbox -timeout 15m -v -count=1 -p 1 ./blackbox/...
 
     - name: Server logs on failure
       if: failure()

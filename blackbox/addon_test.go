@@ -55,7 +55,7 @@ func TestAddonCreateListDestroy(t *testing.T) {
 	// The addon shows up in "addon list" immediately (status=pending), but env
 	// vars aren't injected until the provisioning saga finishes.
 	harness.WaitForAddonReady(t, m, name, "miren-postgresql", 30*time.Second)
-	harness.WaitForEnvVar(t, m, name, "DATABASE_URL", 5*time.Minute)
+	harness.WaitForEnvVar(t, m, name, "DATABASE_URL", 8*time.Minute)
 
 	// Destroy the addon. The CLI sets the association status to "deprovisioning"
 	// and the addon controller asynchronously tears down infrastructure and
@@ -91,7 +91,7 @@ func TestAddonDeployWithAppToml(t *testing.T) {
 	// full provisioning saga finishes (which may include creating the shared
 	// PG server from scratch if a previous run's cleanup is still settling).
 	harness.WaitForAddonReady(t, m, name, "miren-postgresql", 30*time.Second)
-	harness.WaitForEnvVar(t, m, name, "DATABASE_URL", 5*time.Minute)
+	harness.WaitForEnvVar(t, m, name, "DATABASE_URL", 8*time.Minute)
 
 	// Now wait for the app to become healthy
 	harness.WaitForAppReady(t, m, name, 3*time.Minute)
@@ -146,7 +146,7 @@ func TestMysqlAddonDeployWithAppToml(t *testing.T) {
 
 	// Wait for addon provisioning to complete.
 	harness.WaitForAddonReady(t, m, name, "miren-mysql", 30*time.Second)
-	harness.WaitForEnvVar(t, m, name, "DATABASE_URL", 5*time.Minute)
+	harness.WaitForEnvVar(t, m, name, "DATABASE_URL", 8*time.Minute)
 
 	// Now wait for the app to become healthy
 	harness.WaitForAppReady(t, m, name, 3*time.Minute)
@@ -194,7 +194,7 @@ func TestMysqlAddonCreateListDestroy(t *testing.T) {
 
 	// Wait for addon to appear and provisioning to complete.
 	harness.WaitForAddonReady(t, m, name, "miren-mysql", 30*time.Second)
-	harness.WaitForEnvVar(t, m, name, "DATABASE_URL", 5*time.Minute)
+	harness.WaitForEnvVar(t, m, name, "DATABASE_URL", 8*time.Minute)
 
 	// Verify MySQL-specific env vars are injected
 	harness.WaitForEnvVar(t, m, name, "MYSQL_HOST", 30*time.Second)
@@ -218,7 +218,7 @@ func TestValkeyAddonCreateListDestroy(t *testing.T) {
 
 	// Wait for addon to appear and provisioning to complete.
 	harness.WaitForAddonReady(t, m, name, "miren-valkey", 30*time.Second)
-	harness.WaitForEnvVar(t, m, name, "VALKEY_URL", 5*time.Minute)
+	harness.WaitForEnvVar(t, m, name, "VALKEY_URL", 8*time.Minute)
 
 	// Verify Valkey-specific env vars are injected
 	harness.WaitForEnvVar(t, m, name, "VALKEY_HOST", 30*time.Second)
