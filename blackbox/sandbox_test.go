@@ -9,6 +9,7 @@ import (
 )
 
 func TestSandboxList(t *testing.T) {
+	t.Parallel()
 	c := harness.NewCluster(t)
 	m := harness.NewMiren(t, c)
 
@@ -22,6 +23,7 @@ func TestSandboxList(t *testing.T) {
 }
 
 func TestSandboxExec(t *testing.T) {
+	t.Parallel()
 	c := harness.NewCluster(t)
 	m := harness.NewMiren(t, c)
 

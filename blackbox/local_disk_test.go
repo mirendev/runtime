@@ -12,6 +12,7 @@ import (
 )
 
 func TestLocalDiskPersistence(t *testing.T) {
+	t.Parallel()
 	c := harness.NewCluster(t)
 	m := harness.NewMiren(t, c)
 

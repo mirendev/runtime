@@ -17,6 +17,7 @@ import (
 // sandboxes go STOPPED, httpingress should evict their cached leases before
 // any request hits a dead IP.
 func TestZeroDowntimeDeploy(t *testing.T) {
+	t.Parallel()
 	c := harness.NewCluster(t)
 	m := harness.NewMiren(t, c)
 

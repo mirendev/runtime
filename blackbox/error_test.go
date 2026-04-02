@@ -12,6 +12,7 @@ import (
 )
 
 func TestCrashLoop(t *testing.T) {
+	t.Parallel()
 	c := harness.NewCluster(t)
 	m := harness.NewMiren(t, c)
 
@@ -26,6 +27,7 @@ func TestCrashLoop(t *testing.T) {
 }
 
 func TestBadCommand(t *testing.T) {
+	t.Parallel()
 	c := harness.NewCluster(t)
 	m := harness.NewMiren(t, c)
 

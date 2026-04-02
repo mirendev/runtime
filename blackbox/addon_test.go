@@ -11,6 +11,7 @@ import (
 )
 
 func TestAddonListAvailable(t *testing.T) {
+	t.Parallel()
 	c := harness.NewCluster(t)
 	m := harness.NewMiren(t, c)
 
@@ -21,6 +22,7 @@ func TestAddonListAvailable(t *testing.T) {
 }
 
 func TestAddonVariants(t *testing.T) {
+	t.Parallel()
 	c := harness.NewCluster(t)
 	m := harness.NewMiren(t, c)
 
@@ -37,6 +39,7 @@ func TestAddonVariants(t *testing.T) {
 }
 
 func TestAddonCreateListDestroy(t *testing.T) {
+	t.Parallel()
 	c := harness.NewCluster(t)
 	m := harness.NewMiren(t, c)
 
@@ -63,6 +66,7 @@ func TestAddonCreateListDestroy(t *testing.T) {
 }
 
 func TestAddonDeployWithAppToml(t *testing.T) {
+	t.Parallel()
 	c := harness.NewCluster(t)
 	m := harness.NewMiren(t, c)
 
@@ -122,6 +126,7 @@ func TestAddonDeployWithAppToml(t *testing.T) {
 }
 
 func TestMysqlAddonDeployWithAppToml(t *testing.T) {
+	t.Parallel()
 	c := harness.NewCluster(t)
 	m := harness.NewMiren(t, c)
 
@@ -176,6 +181,7 @@ func TestMysqlAddonDeployWithAppToml(t *testing.T) {
 }
 
 func TestMysqlAddonCreateListDestroy(t *testing.T) {
+	t.Parallel()
 	c := harness.NewCluster(t)
 	m := harness.NewMiren(t, c)
 
@@ -199,6 +205,7 @@ func TestMysqlAddonCreateListDestroy(t *testing.T) {
 }
 
 func TestValkeyAddonCreateListDestroy(t *testing.T) {
+	t.Parallel()
 	c := harness.NewCluster(t)
 	m := harness.NewMiren(t, c)
 
@@ -225,6 +232,7 @@ func TestValkeyAddonCreateListDestroy(t *testing.T) {
 }
 
 func TestAddonUnknownAddon(t *testing.T) {
+	t.Parallel()
 	c := harness.NewCluster(t)
 	m := harness.NewMiren(t, c)
 
