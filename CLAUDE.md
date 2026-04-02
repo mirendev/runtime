@@ -206,7 +206,7 @@ To get started with iso:
 
 ### Testing Notes
 
-- **Unit tests** run with `-p 1` (one package at a time) because runners within an iso container share containerd/buildkit instances
+- **Unit tests** run in parallel across packages — each test uses unique containerd namespaces and dynamic ports for isolation
 - **Blackbox CLI tests** in `blackbox/` use `t.Parallel()` — each test uses unique app names and talks to the miren server via CLI, so they are safe to run concurrently
 - Test data in various `testdata/` directories
 
