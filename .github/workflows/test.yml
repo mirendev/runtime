@@ -187,8 +187,48 @@ jobs:
       if: steps.docker-image-cache.outputs.cache-hit != 'true'
       run: docker save runtime-shell -o /tmp/iso-image.tar
 
+  blackbox-tests:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+    steps:
+    - uses: actions/checkout@v5
+      with:
+        ref: ${{ inputs.ref }}
+
+    - name: Set up Go
+      uses: actions/setup-go@v6
+      with:
+        go-version-file: 'go.mod'
+        cache: true
+
+    - name: List and split blackbox tests
+      id: set-matrix
+      run: |
+        TESTS=$(go test -tags blackbox -list '.*' ./blackbox/... 2>/dev/null \
+          | grep -E '^Test' | sort)
+        if [ -z "$TESTS" ]; then
+          echo "No blackbox tests found" >&2
+          exit 1
+        fi
+        TOTAL=$(echo "$TESTS" | wc -l)
+        HALF=$(( (TOTAL + 1) / 2 ))
+        SHARD1=$(echo "$TESTS" | head -n "$HALF" | paste -sd'|' -)
+        SHARD2=$(echo "$TESTS" | tail -n +$((HALF + 1)) | paste -sd'|' -)
+        MATRIX=$(jq -nc --arg s1 "^(${SHARD1})\$" --arg s2 "^(${SHARD2})\$" \
+          '[{shard: 1, run: $s1}, {shard: 2, run: $s2}]')
+        echo "matrix=$MATRIX" >> $GITHUB_OUTPUT
+        echo "Shard 1: $SHARD1"
+        echo "Shard 2: $SHARD2"
+
   test-blackbox:
+    name: test-blackbox (shard ${{ matrix.group.shard }})
+    needs: blackbox-tests
     runs-on: depot-ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        group: ${{ fromJson(needs.blackbox-tests.outputs.matrix) }}
     steps:
     - uses: actions/checkout@v5
       with:
@@ -245,7 +285,7 @@ jobs:
       run: make dev-server-start
 
     - name: Run blackbox tests
-      run: go test -tags blackbox -timeout 10m -v -count=1 -p 1 ./blackbox/...
+      run: go test -tags blackbox -timeout 10m -v -count=1 -p 1 -run '${{ matrix.group.run }}' ./blackbox/...
 
     - name: Server logs on failure
       if: failure()
