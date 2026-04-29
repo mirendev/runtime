@@ -11,20 +11,20 @@ func TestDisableFeatureWithPrefix(t *testing.T) {
 	Reset()
 
 	// Enable first, then disable
-	Init(nil, []string{"globalrouter", "-globalrouter"})
+	Init(nil, []string{"sagas", "-sagas"})
 
-	if GlobalRouter() {
-		t.Error("GlobalRouter should be disabled after '-globalrouter'")
+	if Sagas() {
+		t.Error("Sagas should be disabled after '-sagas'")
 	}
 }
 
 func TestCaseInsensitiveFeatureNames(t *testing.T) {
 	Reset()
 
-	Init(nil, []string{"GlobalRouter", "DISTRIBUTEDRUNNERS"})
+	Init(nil, []string{"Sagas", "DISTRIBUTEDRUNNERS"})
 
-	if !GlobalRouter() {
-		t.Error("GlobalRouter should be enabled (case-insensitive)")
+	if !Sagas() {
+		t.Error("Sagas should be enabled (case-insensitive)")
 	}
 	if !DistributedRunners() {
 		t.Error("DistributedRunners should be enabled (case-insensitive)")
@@ -51,10 +51,10 @@ func TestUnknownFeatureLogsWarning(t *testing.T) {
 func TestEmptyAndWhitespaceFlags(t *testing.T) {
 	Reset()
 
-	Init(nil, []string{"", "  ", "globalrouter", "  ", ""})
+	Init(nil, []string{"", "  ", "sagas", "  ", ""})
 
-	if !GlobalRouter() {
-		t.Error("GlobalRouter should be enabled despite empty/whitespace flags")
+	if !Sagas() {
+		t.Error("Sagas should be enabled despite empty/whitespace flags")
 	}
 }
 
@@ -91,7 +91,7 @@ func TestAllKeywordWithExclusion(t *testing.T) {
 func TestNegativeAllDisablesAll(t *testing.T) {
 	Reset()
 
-	Init(nil, []string{"globalrouter", "distributedrunners", "-all"})
+	Init(nil, []string{"sagas", "distributedrunners", "-all"})
 
 	for _, name := range AllFeatures() {
 		if IsEnabled(name) {
