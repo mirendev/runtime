@@ -825,7 +825,35 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 		}
 	}()
 
-	if cfg.TLS.GetStandardTLS() {
+	if ingressAddr := cfg.Ingress.GetHTTPAddress(); ingressAddr != "" {
+		warnIngressTLSOverride(ctx.Log, &cfg.TLS)
+		// Bind synchronously so a port conflict surfaces as a startup error
+		// instead of an orphaned goroutine after the supervisor thinks we're up.
+		ln, err := net.Listen("tcp", ingressAddr)
+		if err != nil {
+			return fmt.Errorf("listen %s: %w", ingressAddr, err)
+		}
+		ctx.Log.Info("serving plain HTTP ingress", "addr", ln.Addr().String())
+		ingressServer := &http.Server{
+			Handler:           hs,
+			ReadHeaderTimeout: 5 * time.Second,
+		}
+		eg.Go(func() error {
+			if err := ingressServer.Serve(ln); err != nil && err != http.ErrServerClosed {
+				return fmt.Errorf("HTTP ingress on %s: %w", ingressAddr, err)
+			}
+			return nil
+		})
+		eg.Go(func() error {
+			<-sub.Done()
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			if err := ingressServer.Shutdown(shutdownCtx); err != nil {
+				return fmt.Errorf("HTTP ingress shutdown on %s: %w", ingressAddr, err)
+			}
+			return nil
+		})
+	} else if cfg.TLS.GetStandardTLS() {
 		if cfg.TLS.GetSelfSigned() {
 			// Use self-signed certificate (for development/testing)
 			if err := autotls.ServeTLSSelfSigned(sub, ctx.Log, hs); err != nil {
@@ -968,6 +996,29 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 
 	co.Stop()
 	return err
+}
+
+// warnIngressTLSOverride logs a warning for each tls.* setting that is
+// non-default but has no effect because ingress.http_address is set.
+// standard_tls is intentionally skipped: it defaults to true, so an
+// unmodified config would always trigger a misleading warning.
+func warnIngressTLSOverride(log *slog.Logger, tls *serverconfig.TLSConfig) {
+	const suffix = "ignored because ingress.http_address is set; the ingress serves plain HTTP"
+	if tls.GetSelfSigned() {
+		log.Warn("tls.self_signed " + suffix)
+	}
+	if tls.GetAcmeEmail() != "" {
+		log.Warn("tls.acme_email " + suffix)
+	}
+	if tls.GetAcmeDNSProvider() != "" {
+		log.Warn("tls.acme_dns_provider " + suffix)
+	}
+	if len(tls.AdditionalIPs) > 0 {
+		log.Warn("tls.additional_ips " + suffix + "; no certificate is issued")
+	}
+	if len(tls.AdditionalNames) > 0 {
+		log.Warn("tls.additional_names " + suffix + "; no certificate is issued")
+	}
 }
 
 // writeLocalClusterConfig writes a client config file for the local cluster
