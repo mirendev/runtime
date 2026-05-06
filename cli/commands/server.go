@@ -68,6 +68,15 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 		return fmt.Errorf("failed to load configuration: %w", err)
 	}
 
+	// Validate ingress.https_address preconditions before any I/O so a bad
+	// config fails fast instead of waiting for component startup to surface
+	// an unrelated-looking error.
+	if cfg.Ingress.GetHTTPSAddress() != "" {
+		if err := validateIngressHTTPSAddressConfig(&cfg.TLS); err != nil {
+			return err
+		}
+	}
+
 	// Initialize Miren Labs feature flags
 	labs.Init(ctx.Log, cfg.Labs)
 
@@ -825,7 +834,22 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 		}
 	}()
 
-	if cfg.TLS.GetStandardTLS() {
+	if httpsAddr := cfg.Ingress.GetHTTPSAddress(); httpsAddr != "" {
+		// Cert-source preconditions were already enforced at config-load time.
+		if cfg.TLS.GetSelfSigned() {
+			if err := autotls.ServeTLSSelfSignedOnAddr(sub, ctx.Log, hs, httpsAddr); err != nil {
+				return err
+			}
+		} else {
+			certProvider := co.CertificateProvider()
+			if certProvider == nil {
+				return fmt.Errorf("no certificate provider available")
+			}
+			if err := autotls.ServeTLSWithControllerOnAddr(sub, ctx.Log, certProvider, hs, httpsAddr); err != nil {
+				return err
+			}
+		}
+	} else if cfg.TLS.GetStandardTLS() {
 		if cfg.TLS.GetSelfSigned() {
 			// Use self-signed certificate (for development/testing)
 			if err := autotls.ServeTLSSelfSigned(sub, ctx.Log, hs); err != nil {
@@ -968,6 +992,21 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 
 	co.Stop()
 	return err
+}
+
+// validateIngressHTTPSAddressConfig enforces the cert-source preconditions for
+// binding the HTTPS ingress to a non-default address. Port 80 is not bound in
+// this mode, so HTTP-01 ACME challenges cannot complete; the operator must
+// supply a cert via DNS-01 ACME or self-signed (the latter is appropriate for
+// dev or upstream-of-a-TLS-terminating-proxy deployments).
+func validateIngressHTTPSAddressConfig(tls *serverconfig.TLSConfig) error {
+	if tls.GetSelfSigned() {
+		return nil
+	}
+	if tls.GetAcmeDNSProvider() == "" {
+		return fmt.Errorf("ingress.https_address requires either tls.self_signed or DNS-01 ACME (set tls.acme_dns_provider); HTTP-01 cannot be used because port 80 is not bound in this mode")
+	}
+	return nil
 }
 
 // writeLocalClusterConfig writes a client config file for the local cluster
