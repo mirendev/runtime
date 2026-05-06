@@ -99,11 +99,25 @@ Controls TLS certificates for the server and HTTP ingress. See [TLS](/tls) for s
 
 ## `[ingress]` — HTTP Ingress Settings {#ingress}
 
-Controls where the HTTP ingress listens. Leave empty for the default behavior driven by `[tls]`. Set `http_address` to run a plain-HTTP ingress behind a TLS-terminating proxy (nginx, Caddy, an ALB, etc.).
+Controls where the HTTP ingress listens. Leave empty for the default behavior driven by `[tls]`. The `[ingress]` fields are **mutually exclusive** — set at most one.
 
 | Field | Type | Default | Description | Env Var | CLI Flag |
 |-------|------|---------|-------------|---------|----------|
 | `http_address` | string | — | `host:port` to bind a plain-HTTP ingress on instead of starting TLS. When set, no TLS is performed and ports 80 and 443 are not bound; `tls.*` settings have no effect. | `MIREN_INGRESS_HTTP_ADDRESS` | `--ingress-http-address` |
+| `https_address` | string | — | `host:port` to bind the HTTPS ingress on instead of `0.0.0.0:443`. When set, port 80 is not bound and `tls.standard_tls` has no effect; cert issuance must use DNS-01 (`tls.acme_dns_provider`) or `tls.self_signed`, since HTTP-01 cannot complete without port 80. | `MIREN_INGRESS_HTTPS_ADDRESS` | `--ingress-https-address` |
+
+### Ingress precedence
+
+Miren picks at most one ingress mode at startup, in this order:
+
+1. `ingress.http_address` set → bind plain HTTP on that address; no TLS, no port-80 fallback, `tls.*` ignored (with warnings for non-default fields).
+2. else `ingress.https_address` set → bind HTTPS on that address; no port-80 fallback, cert sourced from DNS-01 ACME or `tls.self_signed`.
+3. else `tls.standard_tls = true` (the default) → bind HTTPS on `:443` and an HTTP→HTTPS redirect on `:80`.
+4. else (`tls.standard_tls = false` and no `ingress.*` set) → bind plain HTTP on `:80`. This is the legacy fallback; new deployments behind a proxy should prefer `ingress.http_address`.
+
+Setting both `ingress.http_address` and `ingress.https_address` is rejected at config load.
+
+### Plain HTTP behind a TLS-terminating proxy
 
 ```toml
 [ingress]
@@ -112,13 +126,24 @@ http_address = "127.0.0.1:8080"
 
 The upstream proxy is responsible for TLS termination, certificate management, and any HTTP→HTTPS redirects. Miren only sees plain HTTP from that proxy.
 
-### Ingress precedence
+### HTTPS on a non-default address
 
-Miren picks at most one ingress mode at startup, in this order:
+```toml
+[ingress]
+https_address = "127.0.0.1:8444"
 
-1. `ingress.http_address` set → bind plain HTTP on that address; no TLS, no port-80 fallback, `tls.*` ignored (with warnings for non-default fields).
-2. else `tls.standard_tls = true` (the default) → bind HTTPS on `:443` and an HTTP→HTTPS redirect on `:80`.
-3. else (`tls.standard_tls = false` and no `ingress.http_address`) → bind plain HTTP on `:80`. This is the legacy fallback; new deployments behind a proxy should prefer `ingress.http_address`.
+[tls]
+acme_email = "you@example.com"
+acme_dns_provider = "cloudflare"
+```
+
+When `ingress.https_address` is set:
+
+- Miren binds **only** to that address. Ports 80 and 443 are not bound.
+- `tls.standard_tls` has no effect.
+- ACME HTTP-01 challenges are not possible (they require port 80). Use DNS-01 (`tls.acme_dns_provider`) or `tls.self_signed` as the cert source. Miren refuses to start if neither is configured.
+- Self-signed mode is appropriate for development and for deployments behind a TLS-terminating proxy that uses `proxy_ssl_verify off` (or equivalent), where the upstream certificate identity does not need to be trusted by clients.
+- `tls.additional_ips` and `tls.additional_names` continue to add SAN entries to the issued certificate; they do not bind additional listeners and are unaffected.
 
 ## `[etcd]` — Etcd Settings {#etcd}
 
