@@ -97,6 +97,31 @@ Controls TLS certificates for the server and HTTP ingress. See [TLS](/tls) for s
 | `acme_email` | string | — | Email for ACME account registration | `MIREN_TLS_ACME_EMAIL` | `--acme-email` |
 | `self_signed` | bool | `false` | Use self-signed certificates (development only) | `MIREN_TLS_SELF_SIGNED` | `--self-signed-tls` |
 
+## `[ingress]` — HTTP Ingress Settings {#ingress}
+
+Controls where the HTTP ingress listens. Leave empty for the default behavior driven by `[tls]`. Set `https_address` to bind the HTTPS ingress to a non-default `host:port` — useful when another service on the host already owns port 443.
+
+| Field | Type | Default | Description | Env Var | CLI Flag |
+|-------|------|---------|-------------|---------|----------|
+| `https_address` | string | — | `host:port` to bind the HTTPS ingress to instead of `0.0.0.0:443`. When set, port 80 is not bound and `tls.standard_tls` has no effect; cert issuance must use DNS-01 (`tls.acme_dns_provider`) or `tls.self_signed`, since HTTP-01 cannot complete without port 80. | `MIREN_INGRESS_HTTPS_ADDRESS` | `--ingress-https-address` |
+
+```toml
+[ingress]
+https_address = "127.0.0.1:8444"
+
+[tls]
+acme_email = "you@example.com"
+acme_dns_provider = "cloudflare"
+```
+
+When `ingress.https_address` is set:
+
+- Miren binds **only** to that address. Ports 80 and 443 are not bound.
+- `tls.standard_tls` has no effect.
+- ACME HTTP-01 challenges are not possible (they require port 80). Use DNS-01 (`tls.acme_dns_provider`) or `tls.self_signed` as the cert source. Miren refuses to start if neither is configured.
+- Self-signed mode is appropriate for development and for deployments behind a TLS-terminating proxy that uses `proxy_ssl_verify off` (or equivalent), where the upstream certificate identity does not need to be trusted by clients.
+- `tls.additional_ips` and `tls.additional_names` continue to add SAN entries to the issued certificate; they do not bind additional listeners and are unaffected.
+
 ## `[etcd]` — Etcd Settings {#etcd}
 
 Miren uses etcd as its entity store. In standalone mode, an embedded etcd server starts automatically.

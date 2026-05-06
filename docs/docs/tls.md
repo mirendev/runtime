@@ -119,6 +119,8 @@ All TLS settings live under the `[tls]` section of the server config file (typic
 | `acme_dns_provider` | `--acme-dns-provider` | DNS provider name for DNS-01 challenges (e.g., `cloudflare`, `route53`, `dnsimple`) |
 | `standard_tls` | `--serve-tls` | Enable TLS on ports 443/80 (default: `true`) |
 
+To bind the HTTPS ingress to a non-default address, see [`ingress.https_address`](/server-config#ingress).
+
 ## Troubleshooting
 
 ### Certificate Not Provisioning
