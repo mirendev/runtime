@@ -1029,6 +1029,9 @@ func selectIngressMode(cfg *serverconfig.Config) (ingressMode, string, error) {
 	httpAddr := cfg.Ingress.GetHTTPAddress()
 	httpsAddr := cfg.Ingress.GetHTTPSAddress()
 
+	if httpAddr != "" && httpsAddr != "" {
+		return 0, "", fmt.Errorf("ingress.http_address and ingress.https_address are mutually exclusive; set at most one")
+	}
 	if httpAddr != "" {
 		return ingressModeCustomHTTP, httpAddr, nil
 	}

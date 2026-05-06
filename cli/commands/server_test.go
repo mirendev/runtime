@@ -107,6 +107,102 @@ func TestWarnIngressTLSOverride(t *testing.T) {
 	}
 }
 
+func TestSelectIngressMode(t *testing.T) {
+	cases := []struct {
+		name         string
+		httpAddr     string
+		httpsAddr    string
+		standardTLS  bool
+		selfSigned   bool
+		dnsProvider  string
+		wantMode     ingressMode
+		wantAddr     string
+		wantErr      bool
+		wantContains string
+	}{
+		{
+			name:        "default config picks standard TLS",
+			standardTLS: true,
+			wantMode:    ingressModeStandardTLS,
+		},
+		{
+			name:     "standard_tls=false with no ingress falls back to plain :80",
+			wantMode: ingressModeStandardHTTP,
+		},
+		{
+			name:     "ingress.http_address picks custom HTTP",
+			httpAddr: "127.0.0.1:8080",
+			wantMode: ingressModeCustomHTTP,
+			wantAddr: "127.0.0.1:8080",
+		},
+		{
+			name:        "ingress.https_address with dns provider picks custom HTTPS",
+			httpsAddr:   "127.0.0.1:8444",
+			dnsProvider: "cloudflare",
+			wantMode:    ingressModeCustomHTTPS,
+			wantAddr:    "127.0.0.1:8444",
+		},
+		{
+			name:       "ingress.https_address with self_signed picks custom HTTPS",
+			httpsAddr:  "127.0.0.1:8444",
+			selfSigned: true,
+			wantMode:   ingressModeCustomHTTPS,
+			wantAddr:   "127.0.0.1:8444",
+		},
+		{
+			name:         "both ingress addresses set is rejected",
+			httpAddr:     "127.0.0.1:8080",
+			httpsAddr:    "127.0.0.1:8444",
+			wantErr:      true,
+			wantContains: "mutually exclusive",
+		},
+		{
+			name:         "ingress.https_address without cert source is rejected",
+			httpsAddr:    "127.0.0.1:8444",
+			wantErr:      true,
+			wantContains: "self_signed",
+		},
+		{
+			name:        "ingress.http_address wins over standard_tls",
+			httpAddr:    "127.0.0.1:8080",
+			standardTLS: true,
+			wantMode:    ingressModeCustomHTTP,
+			wantAddr:    "127.0.0.1:8080",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := &serverconfig.Config{}
+			cfg.Ingress.SetHTTPAddress(tc.httpAddr)
+			cfg.Ingress.SetHTTPSAddress(tc.httpsAddr)
+			cfg.TLS.SetStandardTLS(tc.standardTLS)
+			cfg.TLS.SetSelfSigned(tc.selfSigned)
+			cfg.TLS.SetAcmeDNSProvider(tc.dnsProvider)
+
+			mode, addr, err := selectIngressMode(cfg)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("expected error, got nil")
+				}
+				if !strings.Contains(err.Error(), tc.wantContains) {
+					t.Fatalf("error %q does not contain %q", err.Error(), tc.wantContains)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if mode != tc.wantMode {
+				t.Errorf("mode: got %d, want %d", mode, tc.wantMode)
+			}
+			if addr != tc.wantAddr {
+				t.Errorf("addr: got %q, want %q", addr, tc.wantAddr)
+			}
+		})
+	}
+}
+
 func TestValidateIngressHTTPSAddressConfig(t *testing.T) {
 	cases := []struct {
 		name         string
