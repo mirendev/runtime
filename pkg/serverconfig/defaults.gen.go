@@ -58,7 +58,8 @@ func DefaultEtcdConfig() EtcdConfig {
 // DefaultIngressConfig returns default IngressConfig
 func DefaultIngressConfig() IngressConfig {
 	return IngressConfig{
-		HTTPAddress: strPtr(""),
+		HTTPAddress:  strPtr(""),
+		HTTPSAddress: strPtr(""),
 	}
 }
 

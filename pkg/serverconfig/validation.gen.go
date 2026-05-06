@@ -128,6 +128,13 @@ func (c *IngressConfig) Validate() error {
 		}
 	}
 
+	// Validate https_address
+	if c.HTTPSAddress != nil && *c.HTTPSAddress != "" {
+		if _, _, err := net.SplitHostPort(*c.HTTPSAddress); err != nil {
+			return fmt.Errorf("invalid https_address %q: %w", *c.HTTPSAddress, err)
+		}
+	}
+
 	// Check for port conflicts in IngressConfig
 
 	return nil

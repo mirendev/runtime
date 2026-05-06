@@ -230,7 +230,8 @@ func (c *EtcdConfig) SetStartEmbedded(v bool) {
 
 // IngressConfig HTTP ingress listener settings. Fields under [ingress] override the default listener selection driven by [tls]; setting any address field here disables the standard 80/443 binding.
 type IngressConfig struct {
-	HTTPAddress *string `toml:"http_address" env:"MIREN_INGRESS_HTTP_ADDRESS"`
+	HTTPAddress  *string `toml:"http_address" env:"MIREN_INGRESS_HTTP_ADDRESS"`
+	HTTPSAddress *string `toml:"https_address" env:"MIREN_INGRESS_HTTPS_ADDRESS"`
 }
 
 // GetHTTPAddress returns the value of HTTPAddress or its zero value if nil
@@ -244,6 +245,19 @@ func (c *IngressConfig) GetHTTPAddress() string {
 // SetHTTPAddress sets the value of HTTPAddress
 func (c *IngressConfig) SetHTTPAddress(v string) {
 	c.HTTPAddress = &v
+}
+
+// GetHTTPSAddress returns the value of HTTPSAddress or its zero value if nil
+func (c *IngressConfig) GetHTTPSAddress() string {
+	if c.HTTPSAddress != nil {
+		return *c.HTTPSAddress
+	}
+	return ""
+}
+
+// SetHTTPSAddress sets the value of HTTPSAddress
+func (c *IngressConfig) SetHTTPSAddress(v string) {
+	c.HTTPSAddress = &v
 }
 
 // ServerConfig Core server settings

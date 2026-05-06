@@ -255,9 +255,20 @@ configs:
         default: ""
         cli:
           long: ingress-http-address
-          description: "host:port to bind a plain-HTTP ingress on instead of starting TLS. Intended for deployments behind a TLS-terminating proxy (nginx, Caddy, an ALB, etc.). When set, no TLS is performed and ports 80 and 443 are not bound; tls.* settings have no effect."
+          description: "host:port to bind a plain-HTTP ingress on instead of starting TLS. Intended for deployments behind a TLS-terminating proxy (nginx, Caddy, an ALB, etc.). When set, no TLS is performed and ports 80 and 443 are not bound; tls.* settings have no effect. Mutually exclusive with https_address."
         env: MIREN_INGRESS_HTTP_ADDRESS
         toml: http_address
+        validation:
+          format: host:port
+
+      https_address:
+        type: string
+        default: ""
+        cli:
+          long: ingress-https-address
+          description: "host:port to bind the HTTPS ingress to instead of 0.0.0.0:443. When set, port 80 is not bound and standard_tls has no effect; cert issuance must use DNS-01 (set tls.acme_dns_provider) or tls.self_signed since HTTP-01 challenges require port 80. Mutually exclusive with http_address."
+        env: MIREN_INGRESS_HTTPS_ADDRESS
+        toml: https_address
         validation:
           format: host:port
 

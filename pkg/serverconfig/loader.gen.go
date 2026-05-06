@@ -218,6 +218,10 @@ func applyCLIFlags(cfg *Config, flags *CLIFlags) {
 		cfg.Ingress.HTTPAddress = flags.IngressConfigHTTPAddress
 	}
 
+	if flags.IngressConfigHTTPSAddress != nil && *flags.IngressConfigHTTPSAddress != "" {
+		cfg.Ingress.HTTPSAddress = flags.IngressConfigHTTPSAddress
+	}
+
 	if flags.ServerConfigAddress != nil && *flags.ServerConfigAddress != "" {
 		cfg.Server.Address = flags.ServerConfigAddress
 	}
