@@ -68,13 +68,12 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 		return fmt.Errorf("failed to load configuration: %w", err)
 	}
 
-	// Validate ingress.https_address preconditions before any I/O so a bad
-	// config fails fast instead of waiting for component startup to surface
-	// an unrelated-looking error.
-	if cfg.Ingress.GetHTTPSAddress() != "" {
-		if err := validateIngressHTTPSAddressConfig(&cfg.TLS); err != nil {
-			return err
-		}
+	// Resolve the ingress mode at config-load time so config-only errors
+	// (mutual exclusion, missing cert source) fail fast instead of waiting
+	// for component startup to surface unrelated-looking failures.
+	mode, ingressAddr, err := selectIngressMode(cfg)
+	if err != nil {
+		return err
 	}
 
 	// Initialize Miren Labs feature flags
@@ -834,15 +833,15 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 		}
 	}()
 
-	if ingressAddr := cfg.Ingress.GetHTTPAddress(); ingressAddr != "" {
+	switch mode {
+	case ingressModeCustomHTTP:
 		warnIngressTLSOverride(ctx.Log, &cfg.TLS)
 		if err := serveCustomHTTPIngress(sub, eg, ctx.Log, hs, ingressAddr); err != nil {
 			return err
 		}
-	} else if httpsAddr := cfg.Ingress.GetHTTPSAddress(); httpsAddr != "" {
-		// Cert-source preconditions were already enforced at config-load time.
+	case ingressModeCustomHTTPS:
 		if cfg.TLS.GetSelfSigned() {
-			if err := autotls.ServeTLSSelfSignedOnAddr(sub, ctx.Log, hs, httpsAddr); err != nil {
+			if err := autotls.ServeTLSSelfSignedOnAddr(sub, ctx.Log, hs, ingressAddr); err != nil {
 				return err
 			}
 		} else {
@@ -850,11 +849,11 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 			if certProvider == nil {
 				return fmt.Errorf("no certificate provider available")
 			}
-			if err := autotls.ServeTLSWithControllerOnAddr(sub, ctx.Log, certProvider, hs, httpsAddr); err != nil {
+			if err := autotls.ServeTLSWithControllerOnAddr(sub, ctx.Log, certProvider, hs, ingressAddr); err != nil {
 				return err
 			}
 		}
-	} else if cfg.TLS.GetStandardTLS() {
+	case ingressModeStandardTLS:
 		if cfg.TLS.GetSelfSigned() {
 			// Use self-signed certificate (for development/testing)
 			if err := autotls.ServeTLSSelfSigned(sub, ctx.Log, hs); err != nil {
@@ -874,7 +873,7 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 				readyFn()
 			}
 		}
-	} else {
+	case ingressModeStandardHTTP:
 		go func() {
 			err := http.ListenAndServe(":80", hs)
 			if err != nil {
@@ -997,6 +996,52 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 
 	co.Stop()
 	return err
+}
+
+// ingressMode names the four ways Miren can expose its HTTP ingress. The
+// selection order is encoded in selectIngressMode; see Server() for how each
+// mode is wired up.
+type ingressMode int
+
+const (
+	// ingressModeStandardTLS — bind 0.0.0.0:443 with TLS plus 0.0.0.0:80 for
+	// HTTP-01 ACME challenges and HTTPS redirects. The default.
+	ingressModeStandardTLS ingressMode = iota
+
+	// ingressModeStandardHTTP — bind 0.0.0.0:80 plain HTTP, no TLS. The
+	// legacy fallback when standard_tls is explicitly disabled and no
+	// [ingress] address is set.
+	ingressModeStandardHTTP
+
+	// ingressModeCustomHTTP — bind plain HTTP on ingress.http_address,
+	// typically behind a TLS-terminating proxy.
+	ingressModeCustomHTTP
+
+	// ingressModeCustomHTTPS — bind HTTPS on ingress.https_address,
+	// typically when another service on the host owns 443.
+	ingressModeCustomHTTPS
+)
+
+// selectIngressMode resolves the operator's configuration into a single
+// ingress mode + bind address, applying the precedence rules and rejecting
+// configurations that conflict.
+func selectIngressMode(cfg *serverconfig.Config) (ingressMode, string, error) {
+	httpAddr := cfg.Ingress.GetHTTPAddress()
+	httpsAddr := cfg.Ingress.GetHTTPSAddress()
+
+	if httpAddr != "" {
+		return ingressModeCustomHTTP, httpAddr, nil
+	}
+	if httpsAddr != "" {
+		if err := validateIngressHTTPSAddressConfig(&cfg.TLS); err != nil {
+			return 0, "", err
+		}
+		return ingressModeCustomHTTPS, httpsAddr, nil
+	}
+	if cfg.TLS.GetStandardTLS() {
+		return ingressModeStandardTLS, "", nil
+	}
+	return ingressModeStandardHTTP, "", nil
 }
 
 // serveCustomHTTPIngress binds plain HTTP on addr without TLS, intended for
