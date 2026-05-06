@@ -99,6 +99,55 @@ func ServeTLSSelfSigned(ctx context.Context, log *slog.Logger, h http.Handler) e
 	return nil
 }
 
+// ServeTLSSelfSignedOnAddr serves HTTPS on addr using a self-signed certificate.
+// Unlike ServeTLSSelfSigned, it does not also start a port-80 redirect server,
+// so it can bind to a non-standard address (for example, behind a TLS-terminating
+// proxy that already owns 80/443 on the host).
+func ServeTLSSelfSignedOnAddr(ctx context.Context, log *slog.Logger, h http.Handler, addr string) error {
+	log = log.With("module", "autotls", "mode", "self-signed", "addr", addr)
+	log.Info("serving TLS with self-signed certificate on custom address (dev / behind-proxy mode)")
+
+	cert, err := generateSelfSignedCert()
+	if err != nil {
+		return fmt.Errorf("failed to generate self-signed certificate: %w", err)
+	}
+
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		return fmt.Errorf("listen %s: %w", addr, err)
+	}
+
+	tlsConfig := &tls.Config{
+		Certificates: []tls.Certificate{cert},
+		MinVersion:   tls.VersionTLS12,
+	}
+
+	server := &http.Server{
+		Handler:           h,
+		TLSConfig:         tlsConfig,
+		ReadHeaderTimeout: 5 * time.Second,
+	}
+
+	go func() {
+		err := server.ServeTLS(ln, "", "")
+		if err != nil && err != http.ErrServerClosed {
+			log.Error("error serving HTTPS", "error", err)
+		}
+	}()
+
+	go func() {
+		<-ctx.Done()
+		log.Info("shutting down HTTPS server")
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if err := server.Shutdown(shutdownCtx); err != nil {
+			log.Error("HTTPS server shutdown error", "error", err)
+		}
+	}()
+
+	return nil
+}
+
 // generateSelfSignedCert creates an in-memory self-signed certificate
 func generateSelfSignedCert() (tls.Certificate, error) {
 	cert, _, _, err := generateSelfSignedCertWithPEM()
