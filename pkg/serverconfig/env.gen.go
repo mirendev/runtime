@@ -194,6 +194,14 @@ func applyEnvironmentVariables(cfg *Config, log *slog.Logger) error {
 
 	}
 
+	// Apply MIREN_INGRESS_HTTPS_ADDRESS
+	if val := os.Getenv("MIREN_INGRESS_HTTPS_ADDRESS"); val != "" {
+
+		cfg.Ingress.HTTPSAddress = &val
+		log.Debug("applied env var", "key", "MIREN_INGRESS_HTTPS_ADDRESS")
+
+	}
+
 	// Apply MIREN_SERVER_ADDRESS
 	if val := os.Getenv("MIREN_SERVER_ADDRESS"); val != "" {
 

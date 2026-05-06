@@ -214,6 +214,10 @@ func applyCLIFlags(cfg *Config, flags *CLIFlags) {
 		cfg.Etcd.StartEmbedded = flags.EtcdConfigStartEmbedded
 	}
 
+	if flags.IngressConfigHTTPSAddress != nil && *flags.IngressConfigHTTPSAddress != "" {
+		cfg.Ingress.HTTPSAddress = flags.IngressConfigHTTPSAddress
+	}
+
 	if flags.ServerConfigAddress != nil && *flags.ServerConfigAddress != "" {
 		cfg.Server.Address = flags.ServerConfigAddress
 	}

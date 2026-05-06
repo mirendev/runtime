@@ -22,6 +22,7 @@ type CLIFlags struct {
 	EtcdConfigPeerPort                   *int     `long:"etcd-peer-port" description:"Etcd peer port"`
 	EtcdConfigPrefix                     *string  `long:"etcd-prefix" short:"p" description:"Etcd prefix"`
 	EtcdConfigStartEmbedded              *bool    `long:"start-etcd" description:"Start embedded etcd server"`
+	IngressConfigHTTPSAddress            *string  `long:"ingress-https-address" description:"host:port to bind the HTTPS ingress to instead of 0.0.0.0:443. When set, port 80 is not bound and standard_tls has no effect; cert issuance must use DNS-01 (set tls.acme_dns_provider) since HTTP-01 challenges require port 80."`
 	ServerConfigAddress                  *string  `long:"address" short:"a" description:"Address to listen on (host:port). For IPv6 use brackets, e.g. \"[::1]:8443\"."`
 	ServerConfigConfigClusterName        *string  `long:"config-cluster-name" short:"C" description:"Name of the cluster in client config"`
 	ServerConfigDataPath                 *string  `long:"data-path" short:"d" description:"Data path"`
