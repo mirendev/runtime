@@ -85,6 +85,7 @@ type Config struct {
 	Buildkit        BuildkitConfig        `toml:"buildkit"`
 	Containerd      ContainerdConfig      `toml:"containerd"`
 	Etcd            EtcdConfig            `toml:"etcd"`
+	Ingress         IngressConfig         `toml:"ingress"`
 	Labs            []string              `toml:"labs" env:"MIREN_LABS"`
 	Mode            *string               `toml:"mode" env:"MIREN_MODE"`
 	Server          ServerConfig          `toml:"server"`
@@ -225,6 +226,24 @@ func (c *EtcdConfig) GetStartEmbedded() bool {
 // SetStartEmbedded sets the value of StartEmbedded
 func (c *EtcdConfig) SetStartEmbedded(v bool) {
 	c.StartEmbedded = &v
+}
+
+// IngressConfig HTTP ingress listener settings. Fields under [ingress] override the default listener selection driven by [tls]; setting any address field here disables the standard 80/443 binding.
+type IngressConfig struct {
+	HTTPAddress *string `toml:"http_address" env:"MIREN_INGRESS_HTTP_ADDRESS"`
+}
+
+// GetHTTPAddress returns the value of HTTPAddress or its zero value if nil
+func (c *IngressConfig) GetHTTPAddress() string {
+	if c.HTTPAddress != nil {
+		return *c.HTTPAddress
+	}
+	return ""
+}
+
+// SetHTTPAddress sets the value of HTTPAddress
+func (c *IngressConfig) SetHTTPAddress(v string) {
+	c.HTTPAddress = &v
 }
 
 // ServerConfig Core server settings

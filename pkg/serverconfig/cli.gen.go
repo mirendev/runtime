@@ -22,6 +22,7 @@ type CLIFlags struct {
 	EtcdConfigPeerPort                   *int     `long:"etcd-peer-port" description:"Etcd peer port"`
 	EtcdConfigPrefix                     *string  `long:"etcd-prefix" short:"p" description:"Etcd prefix"`
 	EtcdConfigStartEmbedded              *bool    `long:"start-etcd" description:"Start embedded etcd server"`
+	IngressConfigHTTPAddress             *string  `long:"ingress-http-address" description:"host:port to bind a plain-HTTP ingress on instead of starting TLS. Intended for deployments behind a TLS-terminating proxy (nginx, Caddy, an ALB, etc.). When set, no TLS is performed and ports 80 and 443 are not bound; tls.* settings have no effect."`
 	ServerConfigAddress                  *string  `long:"address" short:"a" description:"Address to listen on (host:port). For IPv6 use brackets, e.g. \"[::1]:8443\"."`
 	ServerConfigConfigClusterName        *string  `long:"config-cluster-name" short:"C" description:"Name of the cluster in client config"`
 	ServerConfigDataPath                 *string  `long:"data-path" short:"d" description:"Data path"`

@@ -42,6 +42,11 @@ configs:
         toml: tls
         nested: true
 
+      ingress:
+        type: IngressConfig
+        toml: ingress
+        nested: true
+
       etcd:
         type: EtcdConfig
         toml: etcd
@@ -241,6 +246,20 @@ configs:
           description: Use self-signed certificates for TLS (for development/testing only)
         env: MIREN_TLS_SELF_SIGNED
         toml: self_signed
+
+  IngressConfig:
+    description: "HTTP ingress listener settings. Fields under [ingress] override the default listener selection driven by [tls]; setting any address field here disables the standard 80/443 binding."
+    fields:
+      http_address:
+        type: string
+        default: ""
+        cli:
+          long: ingress-http-address
+          description: "host:port to bind a plain-HTTP ingress on instead of starting TLS. Intended for deployments behind a TLS-terminating proxy (nginx, Caddy, an ALB, etc.). When set, no TLS is performed and ports 80 and 443 are not bound; tls.* settings have no effect."
+        env: MIREN_INGRESS_HTTP_ADDRESS
+        toml: http_address
+        validation:
+          format: host:port
 
   EtcdConfig:
     description: Etcd configuration

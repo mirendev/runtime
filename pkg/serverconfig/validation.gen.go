@@ -22,6 +22,10 @@ func (c *Config) Validate() error {
 	if err := c.Etcd.Validate(); err != nil {
 		return fmt.Errorf("etcd: %w", err)
 	}
+
+	if err := c.Ingress.Validate(); err != nil {
+		return fmt.Errorf("ingress: %w", err)
+	}
 	// Validate mode
 	if c.Mode != nil {
 		validModes := map[string]bool{
@@ -110,6 +114,21 @@ func (c *EtcdConfig) Validate() error {
 	if c.StartEmbedded != nil && !*c.StartEmbedded && len(c.Endpoints) == 0 {
 		return fmt.Errorf("etcd endpoints must be set when start_embedded=false")
 	}
+
+	return nil
+}
+
+// Validate validates IngressConfig
+func (c *IngressConfig) Validate() error {
+
+	// Validate http_address
+	if c.HTTPAddress != nil && *c.HTTPAddress != "" {
+		if _, _, err := net.SplitHostPort(*c.HTTPAddress); err != nil {
+			return fmt.Errorf("invalid http_address %q: %w", *c.HTTPAddress, err)
+		}
+	}
+
+	// Check for port conflicts in IngressConfig
 
 	return nil
 }

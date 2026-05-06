@@ -13,6 +13,7 @@ func DefaultConfig() *Config {
 		Buildkit:        DefaultBuildkitConfig(),
 		Containerd:      DefaultContainerdConfig(),
 		Etcd:            DefaultEtcdConfig(),
+		Ingress:         DefaultIngressConfig(),
 		Labs:            []string{},
 		Mode:            strPtr("standalone"),
 		Server:          DefaultServerConfig(),
@@ -51,6 +52,13 @@ func DefaultEtcdConfig() EtcdConfig {
 		PeerPort:       intPtr(12380),
 		Prefix:         strPtr("/miren"),
 		StartEmbedded:  nil,
+	}
+}
+
+// DefaultIngressConfig returns default IngressConfig
+func DefaultIngressConfig() IngressConfig {
+	return IngressConfig{
+		HTTPAddress: strPtr(""),
 	}
 }
 
