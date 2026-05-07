@@ -836,32 +836,9 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 
 	if ingressAddr := cfg.Ingress.GetHTTPAddress(); ingressAddr != "" {
 		warnIngressTLSOverride(ctx.Log, &cfg.TLS)
-		// Bind synchronously so a port conflict surfaces as a startup error
-		// instead of an orphaned goroutine after the supervisor thinks we're up.
-		ln, err := net.Listen("tcp", ingressAddr)
-		if err != nil {
-			return fmt.Errorf("listen %s: %w", ingressAddr, err)
+		if err := serveCustomHTTPIngress(sub, eg, ctx.Log, hs, ingressAddr); err != nil {
+			return err
 		}
-		ctx.Log.Info("serving plain HTTP ingress", "addr", ln.Addr().String())
-		ingressServer := &http.Server{
-			Handler:           hs,
-			ReadHeaderTimeout: 5 * time.Second,
-		}
-		eg.Go(func() error {
-			if err := ingressServer.Serve(ln); err != nil && err != http.ErrServerClosed {
-				return fmt.Errorf("HTTP ingress on %s: %w", ingressAddr, err)
-			}
-			return nil
-		})
-		eg.Go(func() error {
-			<-sub.Done()
-			shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-			defer cancel()
-			if err := ingressServer.Shutdown(shutdownCtx); err != nil {
-				return fmt.Errorf("HTTP ingress shutdown on %s: %w", ingressAddr, err)
-			}
-			return nil
-		})
 	} else if httpsAddr := cfg.Ingress.GetHTTPSAddress(); httpsAddr != "" {
 		// Cert-source preconditions were already enforced at config-load time.
 		if cfg.TLS.GetSelfSigned() {
@@ -1022,7 +999,39 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 	return err
 }
 
-<<<<<<< HEAD
+// serveCustomHTTPIngress binds plain HTTP on addr without TLS, intended for
+// deployments where Miren runs behind a TLS-terminating proxy. Listens
+// synchronously so a port conflict surfaces as a startup error rather than
+// an orphaned goroutine; the accept loop and graceful shutdown run in
+// errgroup-managed goroutines so a fatal Serve error terminates the process.
+func serveCustomHTTPIngress(ctx context.Context, eg *errgroup.Group, log *slog.Logger, h http.Handler, addr string) error {
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		return fmt.Errorf("listen %s: %w", addr, err)
+	}
+	log.Info("serving plain HTTP ingress", "addr", ln.Addr().String())
+	server := &http.Server{
+		Handler:           h,
+		ReadHeaderTimeout: 5 * time.Second,
+	}
+	eg.Go(func() error {
+		if err := server.Serve(ln); err != nil && err != http.ErrServerClosed {
+			return fmt.Errorf("HTTP ingress on %s: %w", addr, err)
+		}
+		return nil
+	})
+	eg.Go(func() error {
+		<-ctx.Done()
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if err := server.Shutdown(shutdownCtx); err != nil {
+			return fmt.Errorf("HTTP ingress shutdown on %s: %w", addr, err)
+		}
+		return nil
+	})
+	return nil
+}
+
 // warnIngressTLSOverride logs a warning for each tls.* setting that is
 // non-default but has no effect because ingress.http_address is set.
 // standard_tls is intentionally skipped: it defaults to true, so an
@@ -1044,7 +1053,8 @@ func warnIngressTLSOverride(log *slog.Logger, tls *serverconfig.TLSConfig) {
 	if len(tls.AdditionalNames) > 0 {
 		log.Warn("tls.additional_names " + suffix + "; no certificate is issued")
 	}
-=======
+}
+
 // validateIngressHTTPSAddressConfig enforces the cert-source preconditions for
 // binding the HTTPS ingress to a non-default address. Port 80 is not bound in
 // this mode, so HTTP-01 ACME challenges cannot complete; the operator must
@@ -1058,7 +1068,6 @@ func validateIngressHTTPSAddressConfig(tls *serverconfig.TLSConfig) error {
 		return fmt.Errorf("ingress.https_address requires either tls.self_signed or DNS-01 ACME (set tls.acme_dns_provider); HTTP-01 cannot be used because port 80 is not bound in this mode")
 	}
 	return nil
->>>>>>> 68cd0e19 (Bind HTTPS to ingress.https_address when configured)
 }
 
 // writeLocalClusterConfig writes a client config file for the local cluster
