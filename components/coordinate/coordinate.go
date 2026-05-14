@@ -1369,10 +1369,11 @@ func (c *Coordinator) PublicIPs() []net.IP {
 }
 
 // apiAddresses builds the list of API addresses for status reports.
-// User-provided AdditionalIPs are always included. For auto-discovered IPs,
-// netcheck results replace discovered public IPs when reachable addresses
-// are found. If netcheck ran but found nothing reachable, discovered public
-// IPs are kept as a fallback.
+// User-provided AdditionalIPs are always included. Public discovered IPs
+// are never advertised on their own — only the coordinator's port-probing
+// netcheck can confirm a public address is actually reachable, so its
+// results are the sole authority for public addresses. Private, loopback,
+// and link-local DiscoveredIPs flow through for in-LAN clients.
 func (c *Coordinator) apiAddresses() []string {
 	var addrs []string
 
@@ -1389,18 +1390,18 @@ func (c *Coordinator) apiAddresses() []string {
 		addrs = append(addrs, net.JoinHostPort(ip.String(), "8443"))
 	}
 
-	// For discovered IPs, netcheck results replace discovered public IPs
-	// when netcheck found reachable addresses. If netcheck ran but found
-	// nothing reachable (e.g., firewalled), keep discovered public IPs
-	// as a fallback.
-	pubAddrs := c.publicAddresses()
+	// Public DiscoveredIPs are never advertised: an interface IP or the WAN
+	// echo from ipdiscovery's startup netcheck doesn't prove port 8443 is
+	// reachable from outside. publicAddresses() below is the only signal
+	// that does. Private/loopback/link-local IPs still flow through for
+	// in-LAN clients.
 	for _, ip := range c.DiscoveredIPs {
-		if len(pubAddrs) > 0 && !ip.IsLoopback() && !ip.IsPrivate() && !ip.IsLinkLocalUnicast() {
+		if !ip.IsLoopback() && !ip.IsPrivate() && !ip.IsLinkLocalUnicast() {
 			continue
 		}
 		addrs = append(addrs, net.JoinHostPort(ip.String(), "8443"))
 	}
-	addrs = append(addrs, pubAddrs...)
+	addrs = append(addrs, c.publicAddresses()...)
 
 	c.logAddressesOnce.Do(func() {
 		additional := []string{}

@@ -27,12 +27,20 @@ func TestApiAddresses(t *testing.T) {
 		wantExcludes   []string
 	}{
 		{
-			name:          "no netcheck with discovered public IPs",
+			// Public discovered IPs are never advertised: an interface IP or
+			// startup-netcheck WAN echo doesn't prove port 8443 is reachable
+			// from outside. Only the coordinator's port-probing netcheck can.
+			name:          "no netcheck: public DiscoveredIPs are not advertised, private flows through",
 			discoveredIPs: []net.IP{publicIPv4, privateIP},
-			wantContains:  append(localhost, "203.0.113.10:8443", "10.0.0.5:8443"),
+			wantContains:  append(localhost, "10.0.0.5:8443"),
+			wantExcludes:  []string{"203.0.113.10:8443"},
 		},
 		{
-			name:          "netcheck ran but found nothing reachable",
+			// MIR-1139 repro: cluster is firewalled (port 8443 closed from outside).
+			// Netcheck ran, got the WAN source, but every probe failed. Today's bug:
+			// apiAddresses() falls back to DiscoveredIPs and advertises the unreachable
+			// WAN IP. After fix: public DiscoveredIPs stay suppressed.
+			name:          "netcheck ran, zero reachable: public DiscoveredIP not advertised (MIR-1139)",
 			discoveredIPs: []net.IP{publicIPv4, privateIP},
 			netcheckResult: &cloudauth.NetcheckDualStackResult{
 				IPv4: &cloudauth.NetcheckResponse{
@@ -42,7 +50,8 @@ func TestApiAddresses(t *testing.T) {
 					},
 				},
 			},
-			wantContains: append(localhost, "203.0.113.10:8443", "10.0.0.5:8443"),
+			wantContains: append(localhost, "10.0.0.5:8443"),
+			wantExcludes: []string{"203.0.113.10:8443"},
 		},
 		{
 			name:          "netcheck ran and found reachable addresses",
