@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	_ "net/http/pprof" // registers /debug/pprof handlers on http.DefaultServeMux
 	"net/netip"
 	"os"
 	"os/exec"
@@ -513,6 +514,22 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 	ctx.ServerState.CPU = cpu
 	mem := metrics.NewMemoryUsage(ctx.Log, ctx.ServerState.Writer, ctx.ServerState.Reader)
 	ctx.ServerState.Mem = mem
+
+	// Control-process runtime memory metrics. The coordinator process is not
+	// covered by any per-sandbox cgroup, so this is the only visibility into
+	// its own heap/RSS growth. Pushes go_mem_* + process_resident_memory_bytes
+	// (entity="miren/control") through the same writer as the sandbox metrics.
+	runtimeMem := metrics.NewRuntimeMemory(ctx.Log, ctx.ServerState.Writer)
+	go runtimeMem.Monitor(sub)
+
+	// Diagnostic pprof endpoint, bound to localhost only so it is reachable
+	// on-box / via SSH tunnel but never publicly. Lets us pull a heap profile
+	// during a memory balloon to attribute Go-heap growth to an allocation site.
+	go func() {
+		if err := http.ListenAndServe("127.0.0.1:6060", nil); err != nil {
+			ctx.Log.Warn("pprof debug server exited", "err", err)
+		}
+	}()
 
 	// Create log writer and reader
 	logWriter := observability.NewPersistentLogWriter(ctx.ServerState.VictorialogsAddress, ctx.ServerState.VictorialogsTimeout)
