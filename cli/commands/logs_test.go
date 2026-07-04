@@ -122,6 +122,17 @@ func TestBuildBuildFilter(t *testing.T) {
 			userFilter: "error",
 			want:       `source:build version:"v3" error`,
 		},
+		{
+			name:    "realistic version string from currentDeployedVersion",
+			version: "myapp-vabc123",
+			want:    `source:build version:"myapp-vabc123"`,
+		},
+		{
+			name:       "realistic version string with filter",
+			version:    "myapp-vabc123",
+			userFilter: "error",
+			want:       `source:build version:"myapp-vabc123" error`,
+		},
 	}
 
 	for _, tt := range tests {

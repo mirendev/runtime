@@ -218,13 +218,22 @@ func LogsBuild(ctx *Context, opts struct {
 	AppCentric
 	FormatOptions
 
-	Version string         `position:"0" usage:"Build version (e.g., v3)" required:"true"`
+	Version string         `position:"0" usage:"Build version to view logs for; defaults to the currently deployed version"`
 	Last    *time.Duration `short:"l" long:"last" description:"Show logs from the last duration"`
 	Since   string         `long:"since" description:"Show logs since a time (RFC3339, '2006-01-02 15:04', or a duration like '2h' ago)"`
 	Until   string         `long:"until" description:"Show logs until a time (RFC3339, '2006-01-02 15:04', or a duration like '30m' ago); not valid with --follow"`
 	Follow  bool           `short:"f" long:"follow" description:"Follow log output (live tail)"`
 	Filter  string         `short:"g" long:"grep" description:"Filter logs (e.g., 'error', '\"exact phrase\"', 'error -debug', '/regex/')"`
 }) error {
+	version := opts.Version
+	if version == "" {
+		resolved, err := currentDeployedVersion(ctx, opts.App)
+		if err != nil {
+			return err
+		}
+		version = resolved
+	}
+
 	cl, err := ctx.RPCClient("dev.miren.runtime/logs")
 	if err != nil {
 		return err
@@ -235,7 +244,7 @@ func LogsBuild(ctx *Context, opts struct {
 		return err
 	}
 
-	combinedFilter := buildBuildFilter(opts.Version, opts.Filter)
+	combinedFilter := buildBuildFilter(version, opts.Filter)
 	return dispatchLogs(ctx, cl, logDispatchArgs{
 		app:            opts.App,
 		from:           from,
@@ -245,6 +254,26 @@ func LogsBuild(ctx *Context, opts struct {
 		combinedFilter: combinedFilter,
 		json:           opts.IsJSON(),
 	})
+}
+
+// currentDeployedVersion returns the version string of the app's currently
+// active deployment. It calls GetConfiguration on the app service, which
+// reads the app entity's active_version ref and returns the version field
+// of that AppVersion entity — the same value stored as the "version"
+// attribute on every build log line for that build.
+func currentDeployedVersion(ctx *Context, app string) (string, error) {
+	appCl, err := ctx.RPCClient("dev.miren.runtime/app")
+	if err != nil {
+		return "", fmt.Errorf("connecting to app service: %w", err)
+	}
+	res, err := app_v1alpha.NewCrudClient(appCl).GetConfiguration(ctx, app)
+	if err != nil {
+		return "", fmt.Errorf("getting current version for app %q: %w", app, err)
+	}
+	if !res.HasVersionId() || res.VersionId() == "" {
+		return "", fmt.Errorf("app %q has no deployed version; run 'miren deploy' first", app)
+	}
+	return res.VersionId(), nil
 }
 
 // LogsSystem shows system/server logs, optionally filtered by component.

@@ -174,12 +174,16 @@ miren deploy --analyze
 	))
 	d.Dispatch("logs build", Infer("logs build", "View build logs", LogsBuild,
 		WithExample(mflags.Example{
-			Name: "View build logs for a version",
-			Body: "miren logs build v3",
+			Name: "View build logs for the currently deployed version",
+			Body: "miren logs build",
 		}),
 		WithExample(mflags.Example{
-			Name: "View build logs for a specific app",
-			Body: "miren logs build v3 -a myapp",
+			Name: "View build logs for a specific version",
+			Body: "miren logs build myapp-v1a2b3c4",
+		}),
+		WithExample(mflags.Example{
+			Name: "Follow build logs in real time during a deploy",
+			Body: "miren logs build -f",
 		}),
 	))
 	d.Dispatch("logs system", Infer("logs system", "View system logs", LogsSystem,
