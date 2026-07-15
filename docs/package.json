@@ -27,6 +27,7 @@
   },
   "devDependencies": {
     "@docusaurus/module-type-aliases": "3.9.2",
+    "@docusaurus/plugin-client-redirects": "3.9.2",
     "@docusaurus/tsconfig": "3.9.2",
     "@docusaurus/types": "3.9.2",
     "docusaurus-plugin-llms": "^0.4.0",

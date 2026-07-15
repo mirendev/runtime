@@ -24,7 +24,7 @@ page as its reference.
 Yes. Miren's JavaScript detection covers Node and Bun (see
 [JavaScript on Miren](/guides/javascript)); Deno needs a `Dockerfile.miren`. Miren builds
 from it instead of guessing the stack — see
-[Using Dockerfile.miren](/languages#using-dockerfilemiren).
+[Using Dockerfile.miren](/guides#using-dockerfilemiren).
 
 :::tip[Want native support?]
 Miren auto-detects and builds common stacks (Python, Node, Bun, Go, Ruby, Rust)
@@ -141,6 +141,6 @@ See [App Configuration — Environment Variables](/app-configuration#environment
 ## Next steps
 
 - [JavaScript on Miren](/guides/javascript) — Node and Bun (auto-detected)
-- [Using Dockerfile.miren](/languages#using-dockerfilemiren) — how custom builds work
+- [Using Dockerfile.miren](/guides#using-dockerfilemiren) — how custom builds work
 - [App Configuration](/app-configuration) — customize `.miren/app.toml`
 - [Deployment](/deployment) — how deploys build and activate

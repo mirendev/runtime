@@ -24,7 +24,7 @@ reference.
 
 Yes. Miren doesn't auto-detect PHP, so add a `Dockerfile.miren` to your project root.
 Miren builds from it instead of guessing the stack — see
-[Using Dockerfile.miren](/languages#using-dockerfilemiren).
+[Using Dockerfile.miren](/guides#using-dockerfilemiren).
 
 :::tip[Want native support?]
 Miren auto-detects and builds common stacks (Python, Node, Bun, Go, Ruby, Rust)
@@ -144,7 +144,7 @@ injects `DATABASE_URL` for you. See
 
 ## Next steps
 
-- [Using Dockerfile.miren](/languages#using-dockerfilemiren) — how custom builds work
+- [Using Dockerfile.miren](/guides#using-dockerfilemiren) — how custom builds work
 - [Addons](/addons) — managed Postgres and other backing services
 - [App Configuration](/app-configuration) — customize `.miren/app.toml`
 - [Deployment](/deployment) — how deploys build and activate

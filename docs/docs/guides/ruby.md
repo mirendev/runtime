@@ -24,7 +24,7 @@ using this page as its reference.
 No. Miren detects Ruby from your `Gemfile` and builds the image automatically. The
 default Ruby version is **3.2**; override it in [`.miren/app.toml`](/app-configuration)
 if you need another. Provide a `Dockerfile.miren` only for custom build steps — see
-[Using Dockerfile.miren](/languages#using-dockerfilemiren).
+[Using Dockerfile.miren](/guides#using-dockerfilemiren).
 
 ## Set up the app
 
@@ -47,10 +47,10 @@ miren deploy --analyze
 
 ### Build process
 
-Miren installs system dependencies (build tools, `libpq-dev`, `nodejs`, `libyaml-dev`,
-`postgresql-client`), then runs `bundle install` with `BUNDLE_WITHOUT=development`. If
-Bootsnap is present, it precompiles the cache; if a `Rakefile` defines
-`assets:precompile`, it runs that too.
+Miren installs system dependencies (`build-essential`, `libpq-dev`, `nodejs`,
+`libyaml-dev`, `postgresql-client`), then runs `bundle install` with
+`BUNDLE_WITHOUT=development`. If Bootsnap is present, it precompiles the cache; if a
+`Rakefile` exists, it runs `rake assets:precompile` when that task is available.
 
 These environment variables are set for you automatically:
 
@@ -134,7 +134,6 @@ See [App Configuration — Environment Variables](/app-configuration#environment
 
 ## Next steps
 
-- [Supported Languages — Ruby](/languages#ruby) — full build detail
 - [App Configuration](/app-configuration) — customize `.miren/app.toml`
 - [Services](/services) — web + Sidekiq workers
 - [Deployment](/deployment) — how deploys build and activate

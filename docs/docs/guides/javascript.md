@@ -23,7 +23,7 @@ wires up environment variables, and deploys — using this page as its reference
 
 No. Miren detects your project and builds the image automatically. Provide a
 `Dockerfile.miren` only for custom build steps — see
-[Using Dockerfile.miren](/languages#using-dockerfilemiren).
+[Using Dockerfile.miren](/guides#using-dockerfilemiren).
 
 ## Node.js
 
@@ -71,8 +71,14 @@ script by default; a `Procfile` makes the command explicit:
 # Node — direct
 web: node server.js
 
-# Node — npm/yarn script
+# Node — npm script
 web: npm start
+
+# Node — yarn script
+web: yarn start
+
+# Express — compiled output
+web: node dist/index.js
 
 # Next.js
 web: npm run start
@@ -80,11 +86,20 @@ web: npm run start
 # Bun — run TypeScript directly
 web: bun run src/index.ts
 
+# Bun — run JavaScript
+web: bun run src/index.js
+
+# Bun — package.json script
+web: bun run start
+
 # Bun — Elysia
 web: bun run src/server.ts
 
-# Background worker
+# Background worker (Node)
 worker: node worker.js
+
+# Background worker (Bun)
+worker: bun run worker.ts
 ```
 
 An Express server, for example, must bind the injected port:
@@ -138,7 +153,7 @@ See [App Configuration — Environment Variables](/app-configuration#environment
 
 ## Agent quick reference
 
-- **Detection:** `package.json` + lockfile — `bun.lock` → Bun, `yarn.lock`/`package-lock.json` → Node
+- **Detection:** `package.json` + lockfile — `bun.lock` → Bun, `yarn.lock`/`package-lock.json` → Node. A `Procfile` with a `web: bun` or `web: node|npm|yarn` command also works in place of a lockfile
 - **Default versions:** Node 20, Bun 1 (override via `[build] version` in `.miren/app.toml`)
 - **Install:** `yarn install` / `npm install` / `bun install` by lockfile
 - **Start command:** listen on `0.0.0.0:$PORT` via `process.env.PORT`; runs `package.json` start by default, or set a `Procfile`
@@ -148,7 +163,6 @@ See [App Configuration — Environment Variables](/app-configuration#environment
 
 ## Next steps
 
-- [Supported Languages — Node.js](/languages#nodejs) and [Bun](/languages#bun) — full build detail
 - [App Configuration](/app-configuration) — customize `.miren/app.toml`
 - [Services](/services) — web + workers
 - [Deployment](/deployment) — how deploys build and activate

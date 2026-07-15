@@ -21,7 +21,7 @@ server binds `0.0.0.0:$PORT`, and deploys — using this page as its reference.
 
 Yes. Miren doesn't auto-detect Zig, so add a `Dockerfile.miren` to your project root.
 Miren builds from it instead of guessing the stack — see
-[Using Dockerfile.miren](/languages#using-dockerfilemiren).
+[Using Dockerfile.miren](/guides#using-dockerfilemiren).
 
 :::info[Zig's standard library moves fast]
 The example below is validated against **Zig 0.14**. The `std.net` and `std.http` APIs
@@ -186,6 +186,6 @@ See [App Configuration — Environment Variables](/app-configuration#environment
 
 ## Next steps
 
-- [Using Dockerfile.miren](/languages#using-dockerfilemiren) — how custom builds work
+- [Using Dockerfile.miren](/guides#using-dockerfilemiren) — how custom builds work
 - [App Configuration](/app-configuration) — customize `.miren/app.toml`
 - [Deployment](/deployment) — how deploys build and activate

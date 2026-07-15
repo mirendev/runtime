@@ -15,7 +15,7 @@ Deployment is the core workflow of Miren — it takes your application code, bui
 When you run `miren deploy`, Miren:
 
 1. **Uploads your files** — sends your source code to the server (after your first deploy, only changed files are transferred)
-2. **Detects and builds on the server** — the server inspects your source code to detect the [language, framework](/languages), and [services](/services), then builds a container image using the detected stack (or your Dockerfile)
+2. **Detects and builds on the server** — the server inspects your source code to detect the [language, framework](/guides), and [services](/services), then builds a container image using the detected stack (or your Dockerfile)
 3. **Activates the new version** — rolls out the new version, replacing the previous one
 
 Every deployment is tracked with a unique version ID, its current status, and the git commit it came from. You can inspect, roll back, or redeploy any previous version at any time.
@@ -55,7 +55,7 @@ The prompt is also skipped automatically when only one cluster is configured or 
 
 ## Build Detection
 
-Miren automatically detects how to build your application. It inspects your project files and identifies the language, framework, package manager, and entry points. See [Languages](/languages) for details on supported stacks.
+Miren automatically detects how to build your application. It inspects your project files and identifies the language, framework, package manager, and entry points. See [Language Guides](/guides) for details on supported stacks.
 
 Use `--analyze` to see what Miren detects without actually building or deploying:
 
@@ -180,7 +180,7 @@ Miren automatically captures git metadata (commit, branch, author, dirty state) 
 
 ## Next Steps
 
-- [Build & Language Detection](/languages) — How Miren detects and builds different languages and frameworks
+- [Language Guides](/guides) — How Miren detects and builds different languages and frameworks
 - [App Configuration](/app-configuration) — Configure your app with `.miren/app.toml`
 - [Services](/services) — Define multiple processes in your app
 - [CI/CD Deployment](/ci-deploy) — Deploy from CI pipelines with OIDC authentication

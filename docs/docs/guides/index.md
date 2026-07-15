@@ -1,7 +1,7 @@
 ---
 title: Language Guides
 description: Step-by-step deployment guides for a wide range of languages — Python, JavaScript, Go, Ruby, Rust, Elixir, Gleam, Swift, Kotlin, COBOL, and many more — on Miren.
-keywords: [guides, languages, python, javascript, node, bun, go, ruby, elixir, gleam, deploy]
+keywords: [guides, languages, python, javascript, node, bun, go, ruby, rust, elixir, gleam, dockerfile, build, deploy]
 ---
 
 # Language Guides
@@ -63,22 +63,77 @@ agent works from. See [Agent Skills](/agent-skills) for setup.
 
 ## Auto-detected vs. Dockerfile
 
-For most languages, Miren detects your stack from your project files and builds a
-container image for you — **no Dockerfile required**. You run `miren init` once and
-`miren deploy`, and Miren figures out the rest. See [Supported Languages](/languages)
-for exactly what's detected and how.
+Six stacks are auto-detected. Miren reads your project files, picks the build stack, and
+builds a container image for you — **no Dockerfile required**. You run `miren init` once
+and `miren deploy`, and Miren figures out the rest.
+
+| Stack | Detected from | Default version |
+|-------|---------------|-----------------|
+| [Ruby](/guides/ruby) | `Gemfile` | 3.2 |
+| [Python](/guides/python) | `requirements.txt`, `Pipfile`, `pyproject.toml`, or `uv.lock` | 3.11 |
+| [Node.js](/guides/javascript) | `package.json` + `package-lock.json`/`yarn.lock` | 20 |
+| [Bun](/guides/javascript) | `package.json` + `bun.lock` | 1 |
+| [Go](/guides/go) | `go.mod` | Parsed from `go.mod`, else 1.23 |
+| [Rust](/guides/rust) | `Cargo.toml` | 1.83 |
+
+Each guide covers that stack's detection rules, build process, and start command in
+full. Override any default version with `[build] version` in
+[`.miren/app.toml`](/app-toml#build).
 
 Every other language here — from Elixir and Gleam to Kotlin, Swift, Julia, and even
 COBOL — isn't auto-detected, so its guide shows you a `Dockerfile.miren` you
 can drop into your project. Miren builds from that Dockerfile instead of guessing. This
 is the same escape hatch available to every language when you need full control over the
-build — see [Using Dockerfile.miren](/languages#using-dockerfilemiren).
+build.
 
 :::tip[Want native support?]
 Native builds cover the common stacks today (Python, Node, Bun, Go, Ruby, Rust). If you'd
 like Miren to detect and build another language first-class — no Dockerfile needed —
 [tell us what to build next](https://linear.miren.garden/suggest).
 :::
+
+## Using Dockerfile.miren {#using-dockerfilemiren}
+
+For applications that require custom build steps or don't fit the automatic detection,
+provide a `Dockerfile.miren` in your project root. Miren builds from it instead of
+guessing your stack.
+
+### When to use Dockerfile.miren
+
+- Your application requires custom system dependencies
+- You need a multi-stage build
+- You're using a language that isn't auto-detected
+- You need specific build-time configurations
+
+### Example
+
+```dockerfile
+FROM node:20-alpine AS builder
+WORKDIR /app
+COPY package*.json ./
+RUN npm ci
+COPY . .
+RUN npm run build
+
+FROM node:20-alpine
+WORKDIR /app
+COPY --from=builder /app/dist ./dist
+COPY --from=builder /app/node_modules ./node_modules
+EXPOSE 3000
+CMD ["node", "dist/index.js"]
+```
+
+### Build priority
+
+1. `build.dockerfile` setting in `app.toml` (if specified)
+2. `Dockerfile.miren` in project root
+3. Automatic language detection
+
+### Build arguments
+
+The following build arguments are available in your `Dockerfile.miren`:
+
+- `MIREN_VERSION` — the version identifier for this build
 
 :::info[Custom Dockerfiles need an explicit service]
 Even with a `Dockerfile.miren`, you must define at least one service — a `Procfile` or a
@@ -99,6 +154,7 @@ Miren injects `PORT` at runtime and routes traffic to it — an app that hardcod
 
 ## Next steps
 
+- [app.toml Reference — Build](/app-toml#build) — `version`, `dockerfile`, and `onbuild` settings
 - [Deployment](/deployment) — how `miren deploy` builds and activates versions
 - [App Configuration](/app-configuration) — customize with `.miren/app.toml`
 - [Services](/services) — run workers and multiple processes

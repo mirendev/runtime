@@ -22,7 +22,7 @@ reference.
 
 No. Miren detects Rust from `Cargo.toml` and runs `cargo build --release` for you. The
 default Rust version is **1.83**. Provide a `Dockerfile.miren` only for custom build
-steps — see [Using Dockerfile.miren](/languages#using-dockerfilemiren).
+steps — see [Using Dockerfile.miren](/guides#using-dockerfilemiren).
 
 ## Set up the app
 
@@ -42,6 +42,11 @@ Preview what Miren detects — binary name, version, entrypoint — without buil
 miren deploy --analyze
 ```
 </CliCommand>
+
+### Build process
+
+Miren builds on the official Rust base image, runs `cargo build --release`, and copies
+the resulting binary to `/bin/app`.
 
 ### Binary name
 
@@ -133,7 +138,6 @@ See [App Configuration — Environment Variables](/app-configuration#environment
 
 ## Next steps
 
-- [Supported Languages — Rust](/languages#rust) — full build detail
 - [App Configuration](/app-configuration) — customize `.miren/app.toml`
 - [Services](/services) — web + workers
 - [Deployment](/deployment) — how deploys build and activate

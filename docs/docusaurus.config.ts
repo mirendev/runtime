@@ -72,6 +72,16 @@ const config: Config = {
   plugins: [
     filterAncestorWatchesPlugin,
     [
+      '@docusaurus/plugin-client-redirects',
+      {
+        redirects: [
+          // /languages was merged into the Language Guides index. Keep the old
+          // URL alive for external links and search results.
+          {from: '/languages', to: '/guides'},
+        ],
+      },
+    ],
+    [
       'docusaurus-plugin-llms',
       {
         generateLLMsTxt: true,

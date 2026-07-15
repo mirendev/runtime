@@ -22,7 +22,7 @@ command, wires up environment variables, and deploys — using this page as its 
 No. Miren detects Go from `go.mod` and compiles the binary for you. The Go version
 comes from the `go` directive in your `go.mod` (falling back to 1.23). Provide a
 `Dockerfile.miren` only for custom build steps — see
-[Using Dockerfile.miren](/languages#using-dockerfilemiren).
+[Using Dockerfile.miren](/guides#using-dockerfilemiren).
 
 ## Set up the app
 
@@ -42,6 +42,12 @@ Preview what Miren detects — main package, version, entrypoint — without bui
 miren deploy --analyze
 ```
 </CliCommand>
+
+### Build process
+
+Miren installs git and ca-certificates so private module dependencies resolve,
+downloads your modules (or uses the vendor directory if present), and builds the
+binary to `/bin/app`.
 
 ### Which package gets built
 
@@ -78,16 +84,19 @@ web: /bin/app -addr=0.0.0.0:$PORT
 
 # Background worker
 worker: /bin/app -mode=worker
+
+# Scheduler
+scheduler: /bin/app -mode=scheduler
 ```
 
 See [Services](/services) for running multiple processes.
 
 ### Runtime files
 
-The runtime image is minimal but carries your non-Go files (templates, migrations,
-static assets, data directories) alongside the binary so the app can read them at
-runtime relative to `/app`. Go source, `go.mod`, `go.sum`, and `vendor/` are excluded —
-the compiled binary needs none of them.
+The runtime image is minimal but carries your non-Go files (READMEs, templates,
+migrations, static assets, data directories, and other assets) alongside the binary so
+the app can read them at runtime relative to `/app`. Go source (`*.go`) along with
+`go.mod`, `go.sum`, and `vendor/` are excluded — the compiled binary needs none of them.
 
 :::tip[Prefer go:embed for required assets]
 If your app depends on files it must have at runtime, embed them with
@@ -135,7 +144,6 @@ See [App Configuration — Environment Variables](/app-configuration#environment
 
 ## Next steps
 
-- [Supported Languages — Go](/languages#go) — full build detail
 - [App Configuration](/app-configuration) — customize `.miren/app.toml`
 - [Services](/services) — web + workers
 - [Deployment](/deployment) — how deploys build and activate

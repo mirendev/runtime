@@ -26,7 +26,7 @@ No. Miren detects Python from a `requirements.txt`, `Pipfile`, `pyproject.toml`,
 override it in [`.miren/app.toml`](/app-configuration) if you need another.
 
 Provide a `Dockerfile.miren` only if your build needs custom system packages or steps
-that don't fit detection — see [Using Dockerfile.miren](/languages#using-dockerfilemiren).
+that don't fit detection — see [Using Dockerfile.miren](/guides#using-dockerfilemiren).
 
 ## Set up the app
 
@@ -52,7 +52,9 @@ miren deploy --analyze
 
 ### Package managers
 
-Miren picks the install command from the files in your repo:
+Miren supports four Python dependency management systems and picks the install command
+from the files in your repo. The table is a **priority order**: if your project has
+more than one of these files, the first match wins.
 
 | File | Package manager | Install command |
 |------|-----------------|-----------------|
@@ -61,17 +63,20 @@ Miren picks the install command from the files in your repo:
 | `pyproject.toml` | poetry | `poetry install --no-root` |
 | `requirements.txt` | pip | `pip install -r requirements.txt` |
 
+So a project with both a `Pipfile` and a `requirements.txt` builds with pipenv, not pip.
+
 ### Start command
 
 Miren detects your web framework and configures a start command. You can always
 override it with a `Procfile` or the `command` field in `.miren/app.toml`.
 
-| Framework | Detected start |
-|-----------|----------------|
-| FastAPI | `fastapi run` |
-| Django | `gunicorn` or `uvicorn` |
-| Flask | `gunicorn` |
-| Gunicorn / Uvicorn | `gunicorn` / `uvicorn` |
+| Framework | Detection | Detected start |
+|-----------|-----------|----------------|
+| FastAPI | `fastapi` in dependencies | `fastapi run` |
+| Django | `django` in dependencies | `gunicorn` or `uvicorn` |
+| Flask | `flask` in dependencies | `gunicorn` |
+| Gunicorn | `gunicorn` in dependencies | `gunicorn` |
+| Uvicorn | `uvicorn` in dependencies | `uvicorn` |
 
 Your server must bind to `0.0.0.0` on `$PORT` — Miren injects `PORT` and routes
 traffic to it. A `Procfile` makes this explicit:
@@ -90,10 +95,23 @@ Pick a single `web:` line for your app. For an ASGI app, use uvicorn instead:
 web: uvicorn main:app --host 0.0.0.0 --port $PORT
 ```
 
-With uv, prefix the command:
+With uv, pipenv, or poetry, prefix the command with the package manager:
 
 ```procfile
+# uv
 web: uv run gunicorn app:app --bind 0.0.0.0:$PORT
+
+# Pipenv
+web: pipenv run gunicorn app:app --bind 0.0.0.0:$PORT
+
+# Poetry
+web: poetry run gunicorn app:app --bind 0.0.0.0:$PORT
+```
+
+FastAPI is auto-detected, so a `Procfile` is optional — but you can be explicit:
+
+```procfile
+web: fastapi run
 ```
 
 See [Services](/services) for running a worker alongside your web process.
@@ -129,14 +147,13 @@ See [App Configuration — Environment Variables](/app-configuration#environment
 
 - **Detection:** `requirements.txt`, `Pipfile`, `pyproject.toml`, or `uv.lock`
 - **Default version:** Python 3.11 (override via `[build] version` in `.miren/app.toml`)
-- **Install:** pipenv / uv / poetry / pip, chosen by manifest (see table above)
+- **Install:** pipenv / uv / poetry / pip, chosen by manifest in that priority order (see table above)
 - **Start command:** bind `0.0.0.0:$PORT`; FastAPI/Django/Flask auto-detected, else set a `Procfile`
 - **Env vars:** `miren env set -e KEY=VALUE`, `-s` for secrets, or `[[env]]` in `app.toml`
 - **Dockerfile:** not needed; add `Dockerfile.miren` only for custom builds
 
 ## Next steps
 
-- [Supported Languages — Python](/languages#python) — full build detail
 - [App Configuration](/app-configuration) — customize `.miren/app.toml`
 - [Services](/services) — web + workers
 - [Deployment](/deployment) — how deploys build and activate
