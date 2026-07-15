@@ -103,7 +103,11 @@ miren deploy -a myapp-staging --ephemeral pr-123 --ttl 48h
 
 The preview is reachable at `pr-123.staging.myapp.example.com`, isolated from production data. Redeploy the staging app's active version periodically (or on every push to `main`) to keep its baseline fresh — ephemeral previews inherit the staging app's current config and addons, not production's.
 
-In CI, set `MIREN_APP=myapp-staging` (or pass `app: myapp-staging` to the deploy action) so PR workflows always target staging.
+In CI, pass `-a myapp-staging` (or `app: myapp-staging` to the deploy action) so PR workflows always target staging.
+
+:::warning[Use -a, not MIREN_APP, to target staging]
+Setting `MIREN_APP=myapp-staging` will not redirect a deploy if your repository has a `.miren/app.toml` — the config file's `name` takes precedence, and previews would go to the app it names. Pass `-a` explicitly instead.
+:::
 
 ### Using a Staging Cluster
 

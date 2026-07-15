@@ -25,9 +25,15 @@ import (
 type AppCentric struct {
 	ConfigCentric `group:"Config Options"`
 
-	_   struct{} `group:"App Options"`
-	App string   `short:"a" long:"app" env:"MIREN_APP" description:"Application name"`
-	Dir string   `short:"d" long:"dir" description:"Directory to run from" default:"."`
+	_ struct{} `group:"App Options"`
+
+	// App carries only the -a/--app flag. MIREN_APP is deliberately not an
+	// env tag here: mflags applies env tags in FromStruct, before Validate
+	// runs, which would leave Validate unable to tell an explicit flag from
+	// the environment. Validate reads MIREN_APP itself instead, below the
+	// config file. See Validate for the resolution order.
+	App string `short:"a" long:"app" description:"Application name (defaults to .miren/app.toml, then $MIREN_APP)"`
+	Dir string `short:"d" long:"dir" description:"Directory to run from" default:"."`
 
 	config        *appconfig.AppConfig
 	resolvedDir   string // absolute path to the directory containing .miren/app.toml
@@ -44,6 +50,18 @@ func (a *AppCentric) ResolvedDir() string {
 	return a.Dir
 }
 
+// Validate loads .miren/app.toml and resolves the target app name. Resolution
+// priority:
+//  1. -a/--app flag (explicit override)
+//  2. name in .miren/app.toml
+//  3. MIREN_APP env var
+//  4. inferred from the directory name, via a 'miren init' prompt
+//
+// The config file outranks MIREN_APP because every app sandbox exports
+// MIREN_APP=<its own app>; without this ordering, deploying from inside a
+// sandbox would silently target the sandbox's app rather than the app.toml in
+// the working directory. Note this differs from LoadCluster below, where
+// MIREN_CLUSTER still outranks stored per-app state.
 func (a *AppCentric) Validate(glbl *GlobalFlags) error {
 	a.config = nil
 	a.resolvedDir = ""
@@ -76,8 +94,10 @@ func (a *AppCentric) Validate(glbl *GlobalFlags) error {
 	if a.App == "" {
 		if a.config != nil && a.config.Name != "" {
 			a.App = a.config.Name
+		} else if envApp := os.Getenv("MIREN_APP"); envApp != "" {
+			a.App = envApp
 		} else {
-			// No app name from flag or config — try to help the user.
+			// No app name from flag, config, or env — try to help the user.
 			workDir := a.Dir
 			if workDir == "." || workDir == "" {
 				wd, err := os.Getwd()

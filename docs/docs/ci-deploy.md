@@ -187,7 +187,8 @@ set -euo pipefail
 
 # --- Configuration (set these in your CI environment) ---
 # MIREN_CLUSTER: cluster address with TLS fingerprint (from `miren cluster export-address`)
-# MIREN_APP:     application name to deploy
+# MIREN_APP:     application name to deploy, when the checkout has no .miren/app.toml
+#                (a checked-in app.toml wins — pass `-a <name>` to override it)
 
 : "${MIREN_CLUSTER:?MIREN_CLUSTER must be set}"
 : "${MIREN_APP:?MIREN_APP must be set}"
@@ -214,6 +215,7 @@ miren version
 
 # 2. Deploy
 # MIREN_CLUSTER and MIREN_APP are read from the environment automatically.
+# MIREN_APP applies only if the checkout has no .miren/app.toml; that file wins.
 # In GitHub Actions, the CLI auto-detects the OIDC token. For other CI systems,
 # you'll need to acquire an OIDC token from your provider and set
 # ACTIONS_ID_TOKEN_REQUEST_URL and ACTIONS_ID_TOKEN_REQUEST_TOKEN, or
@@ -306,8 +308,16 @@ Output format: `address:port;sha1:fingerprint`
 | Variable | Description |
 |----------|-------------|
 | `MIREN_CLUSTER` | Cluster address with optional TLS fingerprint (`address:port;sha1:fingerprint`). The CLI connects directly — no config file needed. Can also be a cluster name from an existing config. |
-| `MIREN_APP` | Target application name. Equivalent to `-a myapp` on commands. |
+| `MIREN_APP` | Target application name, used when the working directory has no `.miren/app.toml`. A config file takes precedence — use `-a myapp` to override one. |
 | `MIREN_CONFIG` | Path to a `clientconfig.yaml` file. Alternative to `MIREN_CLUSTER` when you need a config file. |
+
+The app name resolves in this order: the `-a`/`--app` flag, then `name` in `.miren/app.toml`, then `MIREN_APP`.
+
+:::warning[MIREN_APP does not override a checked-in app.toml]
+If your repository has a `.miren/app.toml`, its `name` wins over `MIREN_APP`. To target a different app from CI — a staging app, for instance — pass `-a <name>` explicitly rather than setting the environment variable.
+
+The config file takes precedence because every app sandbox exports `MIREN_APP` naming its own app. Without this ordering, running `miren deploy` from inside a sandbox would silently target the sandbox's app instead of the checkout you are standing in.
+:::
 
 ## Troubleshooting
 

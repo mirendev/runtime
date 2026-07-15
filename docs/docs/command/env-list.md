@@ -26,7 +26,7 @@ miren env list [flags]
 
 ## App Options
 
-- `--app, -a` — Application name
+- `--app, -a` — Application name (defaults to .miren/app.toml, then $MIREN_APP)
 - `--dir, -d` — Directory to run from (default: `.`)
 
 ## Global Options
