@@ -33,7 +33,9 @@ const sidebars: SidebarsConfig = {
     {
       type: 'category',
       label: 'Language Guides',
-      collapsed: false,
+      // Nearly 40 guides; unfurled they dominate the sidebar. The theme still
+      // auto-expands this category when the reader is on a guide page.
+      collapsed: true,
       link: {
         type: 'doc',
         id: 'guides/index',
