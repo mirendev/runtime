@@ -10,7 +10,6 @@ import (
 
 // Feature name constants
 const (
-	FeatureGlobalRouter       = "globalrouter"
 	FeatureDistributedRunners = "distributedrunners"
 	FeatureSagas              = "sagas"
 )
@@ -18,7 +17,6 @@ const (
 // AllFeatures returns a list of all known feature names
 func AllFeatures() []string {
 	return []string{
-		FeatureGlobalRouter,
 		FeatureDistributedRunners,
 		FeatureSagas,
 	}
@@ -27,7 +25,6 @@ func AllFeatures() []string {
 // FeatureDescriptions returns a map of feature names to their descriptions
 func FeatureDescriptions() map[string]string {
 	return map[string]string{
-		FeatureGlobalRouter:       "Use global NAT traversal router for connectivity",
 		FeatureDistributedRunners: "Schedule jobs across multiple runner nodes",
 		FeatureSagas:              "Use saga-based crash-recoverable workflows",
 	}
@@ -40,7 +37,6 @@ var (
 
 // featureDefaults holds the default state for each feature
 var featureDefaults = map[string]bool{
-	FeatureGlobalRouter:       false,
 	FeatureDistributedRunners: false,
 	FeatureSagas:              false,
 }
@@ -129,12 +125,6 @@ func IsEnabled(name string) bool {
 }
 
 // Feature predicate functions
-
-// GlobalRouter returns whether the globalrouter feature is enabled.
-// Use global NAT traversal router for connectivity
-func GlobalRouter() bool {
-	return IsEnabled(FeatureGlobalRouter)
-}
 
 // DistributedRunners returns whether the distributedrunners feature is enabled.
 // Schedule jobs across multiple runner nodes

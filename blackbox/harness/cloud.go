@@ -53,8 +53,8 @@ type CloudEnv struct {
 
 // NewCloudEnv builds a full cloud+POP environment for testing the global router.
 // It builds cloud/POP binaries, starts cloud, registers a POP and cluster,
-// starts POP, and restarts the miren server with --labs globalrouter.
-// The environment is torn down via t.Cleanup.
+// starts POP, and restarts the miren server so it picks up the new
+// registration.json. The environment is torn down via t.Cleanup.
 func NewCloudEnv(t *testing.T, m *Miren) *CloudEnv {
 	t.Helper()
 
@@ -99,8 +99,8 @@ func NewCloudEnv(t *testing.T, m *Miren) *CloudEnv {
 	// Start POP
 	env.startPOP(t)
 
-	// Restart miren server with globalrouter enabled
-	env.restartServerWithGlobalRouter(t)
+	// Restart miren server so it picks up the registration
+	env.restartServerWithRegistration(t)
 
 	// Wait for global router to connect
 	env.waitForConnection(t)
@@ -451,9 +451,9 @@ func (env *CloudEnv) startPOP(t *testing.T) {
 	t.Log("POP server ready")
 }
 
-func (env *CloudEnv) restartServerWithGlobalRouter(t *testing.T) {
+func (env *CloudEnv) restartServerWithRegistration(t *testing.T) {
 	t.Helper()
-	t.Log("restarting miren server with --labs globalrouter...")
+	t.Log("restarting miren server to pick up registration...")
 
 	// Stop current server
 	env.m.RunCmdAsRoot("bash", "-c", "hack/dev-server stop")
@@ -462,13 +462,12 @@ func (env *CloudEnv) restartServerWithGlobalRouter(t *testing.T) {
 	// old "Miren server started" line from the previous startup.
 	env.m.RunCmdAsRoot("bash", "-c", ": > /tmp/miren-server.log")
 
-	// Start with globalrouter lab flag
-	env.m.RunCmdAsRoot("bash", "-c", "DEV_SERVER_FLAGS='--labs globalrouter' hack/dev-server start")
+	env.m.RunCmdAsRoot("bash", "-c", "hack/dev-server start")
 
 	// Wait for server to be ready
 	r := env.m.RunCmdAsRoot("hack/dev-server", "wait-ready", "60")
 	if !r.Success() {
-		t.Fatalf("server failed to start with globalrouter: %s", r.Stderr)
+		t.Fatalf("server failed to start: %s", r.Stderr)
 	}
 
 	// Also wait for buildkit's hosts file to be updated with the registry IP,
@@ -483,14 +482,14 @@ func (env *CloudEnv) restartServerWithGlobalRouter(t *testing.T) {
 	})
 
 	t.Cleanup(func() {
-		// Restart server without globalrouter to restore original state
+		// Restart server after registration files are removed to restore original state
 		env.m.RunCmdAsRoot("bash", "-c", "hack/dev-server stop")
 		env.m.RunCmdAsRoot("bash", "-c", ": > /tmp/miren-server.log")
 		env.m.RunCmdAsRoot("bash", "-c", "hack/dev-server start")
 		env.m.RunCmdAsRoot("hack/dev-server", "wait-ready", "30")
 	})
 
-	t.Log("miren server restarted with globalrouter enabled")
+	t.Log("miren server restarted with registration loaded")
 }
 
 func (env *CloudEnv) waitForConnection(t *testing.T) {

@@ -1,9 +1,4 @@
 features:
-  - name: globalrouter
-    predicate: GlobalRouter
-    description: Use global NAT traversal router for connectivity
-    default: false
-
   - name: distributedrunners
     predicate: DistributedRunners
     description: Schedule jobs across multiple runner nodes

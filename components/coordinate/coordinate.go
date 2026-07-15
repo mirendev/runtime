@@ -1269,8 +1269,8 @@ func (c *Coordinator) Start(ctx context.Context) error {
 		go c.reportStatusPeriodically(ctx)
 	}
 
-	// Start global router for NAT traversal when enabled
-	if labs.GlobalRouter() && c.CloudAuth.Enabled && c.authClient != nil {
+	// Start global router for NAT traversal when cloud auth is configured
+	if c.CloudAuth.Enabled && c.authClient != nil {
 		cloudURL := c.CloudAuth.CloudURL
 		if cloudURL == "" {
 			cloudURL = DefaultCloudURL
