@@ -120,6 +120,14 @@ const config: Config = {
   ],
 
   themeConfig: {
+    // The theme always emits twitter:card=summary_large_image, so without an
+    // image every shared link renders as a broken large-image card. Shared with
+    // the marketing site (mirendev/public/miren-og-card.png); keep them in sync.
+    image: 'img/miren-og-card.png',
+    metadata: [
+      {property: 'og:type', content: 'website'},
+      {property: 'og:site_name', content: 'Miren Docs'},
+    ],
     colorMode: {
       respectPrefersColorScheme: true,
     },
