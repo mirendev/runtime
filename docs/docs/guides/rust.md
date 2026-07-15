@@ -21,7 +21,7 @@ reference.
 ## Do you need a Dockerfile?
 
 No. Miren detects Rust from `Cargo.toml` and runs `cargo build --release` for you. The
-default Rust version is **1.83**. Provide a `Dockerfile.miren` only for custom build
+default is the **latest Rust 1.x**. Provide a `Dockerfile.miren` only for custom build
 steps — see [Using Dockerfile.miren](/languages#using-dockerfilemiren).
 
 ## Set up the app
@@ -124,7 +124,7 @@ See [App Configuration — Environment Variables](/app-configuration#environment
 ## Agent quick reference
 
 - **Detection:** `Cargo.toml` in the project
-- **Default version:** Rust 1.83 (override via `[build] version` in `.miren/app.toml`)
+- **Default version:** latest Rust 1.x (override via `[build] version` in `.miren/app.toml`)
 - **Build:** `cargo build --release`; binary copied to `/bin/app`
 - **Binary name:** `[[bin]]` name if set, else the `[package]` name
 - **Start command:** `web: /bin/app` (default); bind `0.0.0.0:$PORT` via `std::env::var("PORT")`

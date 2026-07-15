@@ -22,7 +22,7 @@ using this page as its reference.
 ## Do you need a Dockerfile?
 
 No. Miren detects Ruby from your `Gemfile` and builds the image automatically. The
-default Ruby version is **3.2**; override it in [`.miren/app.toml`](/app-configuration)
+default Ruby version is **3.4**; override it in [`.miren/app.toml`](/app-configuration)
 if you need another. Provide a `Dockerfile.miren` only for custom build steps — see
 [Using Dockerfile.miren](/languages#using-dockerfilemiren).
 
@@ -124,7 +124,7 @@ See [App Configuration — Environment Variables](/app-configuration#environment
 ## Agent quick reference
 
 - **Detection:** `Gemfile` in the project
-- **Default version:** Ruby 3.2 (override via `[build] version` in `.miren/app.toml`)
+- **Default version:** Ruby 3.4 (override via `[build] version` in `.miren/app.toml`)
 - **Install:** `bundle install` with `BUNDLE_WITHOUT=development`
 - **Auto env:** `RACK_ENV=production`, `RAILS_ENV=production`, `BUNDLE_PATH`, `BUNDLE_WITHOUT`
 - **Staged by `miren init`:** generates `SECRET_KEY_BASE`, reads `RAILS_MASTER_KEY` from `config/master.key`

@@ -18,7 +18,7 @@ getting a specific language onto Miren — including Elixir and Gleam, which use
 
 **Detection:** Presence of `Gemfile`
 
-**Default Version:** 3.2
+**Default Version:** 3.4
 
 Miren detects Ruby applications by looking for a `Gemfile`. Dependencies are installed using Bundler with production settings.
 
@@ -245,7 +245,7 @@ scheduler: /bin/app -mode=scheduler
 
 **Detection:** Presence of `Cargo.toml`
 
-**Default Version:** 1.83
+**Default Version:** the latest Rust 1.x
 
 Miren builds Rust applications using Cargo and produces a single binary at `/bin/app`.
 
