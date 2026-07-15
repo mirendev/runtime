@@ -29,13 +29,13 @@ Labs features are controlled via the `--labs` flag or `MIREN_LABS` environment v
 miren server --labs distributedrunners
 
 # Enable multiple features
-miren server --labs distributedrunners --labs globalrouter
+miren server --labs distributedrunners --labs sagas
 
 # Via environment variable
 MIREN_LABS=distributedrunners miren server
 
 # Multiple features via environment variable (comma-separated)
-MIREN_LABS=distributedrunners,globalrouter miren server
+MIREN_LABS=distributedrunners,sagas miren server
 ```
 </CliCommand>
 

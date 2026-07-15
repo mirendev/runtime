@@ -11,7 +11,7 @@ import (
 	"miren.dev/runtime/blackbox/harness"
 )
 
-// TestPOP exercises the global router end-to-end. The expensive cloud+POP
+// TestPOP exercises Miren Anywhere end-to-end. The expensive cloud+POP
 // setup (binary builds, migrations, server restart) happens once in the
 // parent test; each subtest only deploys its own app, binds a hostname, and
 // sends traffic.
