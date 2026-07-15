@@ -24,7 +24,6 @@ const sidebars: SidebarsConfig = {
       items: [
         'deployment',
         'app-configuration',
-        'languages',
         'services',
         'ci-deploy',
         'pr-environments',

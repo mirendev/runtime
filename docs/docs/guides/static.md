@@ -22,7 +22,7 @@ configures the SPA fallback, and deploys — using this page as its reference.
 ## Do you need a Dockerfile?
 
 Yes. Add a `Dockerfile.miren` to your project root. Miren builds from it instead of
-guessing the stack — see [Using Dockerfile.miren](/languages#using-dockerfilemiren).
+guessing the stack — see [Using Dockerfile.miren](/guides#using-dockerfilemiren).
 
 :::tip[Want native support?]
 Miren auto-detects and builds common stacks (Python, Node, Bun, Go, Ruby, Rust)
@@ -138,7 +138,7 @@ configuration.
 
 ## Next steps
 
-- [Using Dockerfile.miren](/languages#using-dockerfilemiren) — how custom builds work
+- [Using Dockerfile.miren](/guides#using-dockerfilemiren) — how custom builds work
 - [App Configuration](/app-configuration) — customize `.miren/app.toml`
 - [Deployment](/deployment) — how deploys build and activate
 - [JavaScript on Miren](/guides/javascript) — if you also run a Node/Bun backend

@@ -22,7 +22,7 @@ Ask your AI coding agent to "set up this Vapor app on Miren" after installing th
 
 Yes. Miren doesn't auto-detect Swift, so add a `Dockerfile.miren` to your project root.
 Miren builds from it instead of guessing the stack — see
-[Using Dockerfile.miren](/languages#using-dockerfilemiren).
+[Using Dockerfile.miren](/guides#using-dockerfilemiren).
 
 :::tip[Want native support?]
 Miren auto-detects and builds common stacks (Python, Node, Bun, Go, Ruby, Rust)
@@ -168,6 +168,6 @@ See [App Configuration — Environment Variables](/app-configuration#environment
 
 ## Next steps
 
-- [Using Dockerfile.miren](/languages#using-dockerfilemiren) — how custom builds work
+- [Using Dockerfile.miren](/guides#using-dockerfilemiren) — how custom builds work
 - [App Configuration](/app-configuration) — customize `.miren/app.toml`
 - [Deployment](/deployment) — how deploys build and activate

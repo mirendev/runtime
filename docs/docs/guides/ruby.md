@@ -22,9 +22,9 @@ using this page as its reference.
 ## Do you need a Dockerfile?
 
 No. Miren detects Ruby from your `Gemfile` and builds the image automatically. The
-default Ruby version is **3.2**; override it in [`.miren/app.toml`](/app-configuration)
+default Ruby version is **3.4**; override it in [`.miren/app.toml`](/app-configuration)
 if you need another. Provide a `Dockerfile.miren` only for custom build steps — see
-[Using Dockerfile.miren](/languages#using-dockerfilemiren).
+[Using Dockerfile.miren](/guides#using-dockerfilemiren).
 
 ## Set up the app
 
@@ -47,10 +47,10 @@ miren deploy --analyze
 
 ### Build process
 
-Miren installs system dependencies (build tools, `libpq-dev`, `nodejs`, `libyaml-dev`,
-`postgresql-client`), then runs `bundle install` with `BUNDLE_WITHOUT=development`. If
-Bootsnap is present, it precompiles the cache; if a `Rakefile` defines
-`assets:precompile`, it runs that too.
+Miren installs system dependencies (`build-essential`, `libpq-dev`, `nodejs`,
+`libyaml-dev`, `postgresql-client`), then runs `bundle install` with
+`BUNDLE_WITHOUT=development`. If Bootsnap is present, it precompiles the cache; if a
+`Rakefile` exists, it runs `rake assets:precompile` when that task is available.
 
 These environment variables are set for you automatically:
 
@@ -124,7 +124,7 @@ See [App Configuration — Environment Variables](/app-configuration#environment
 ## Agent quick reference
 
 - **Detection:** `Gemfile` in the project
-- **Default version:** Ruby 3.2 (override via `[build] version` in `.miren/app.toml`)
+- **Default version:** Ruby 3.4 (override via `[build] version` in `.miren/app.toml`)
 - **Install:** `bundle install` with `BUNDLE_WITHOUT=development`
 - **Auto env:** `RACK_ENV=production`, `RAILS_ENV=production`, `BUNDLE_PATH`, `BUNDLE_WITHOUT`
 - **Staged by `miren init`:** generates `SECRET_KEY_BASE`, reads `RAILS_MASTER_KEY` from `config/master.key`
@@ -134,7 +134,6 @@ See [App Configuration — Environment Variables](/app-configuration#environment
 
 ## Next steps
 
-- [Supported Languages — Ruby](/languages#ruby) — full build detail
 - [App Configuration](/app-configuration) — customize `.miren/app.toml`
 - [Services](/services) — web + Sidekiq workers
 - [Deployment](/deployment) — how deploys build and activate

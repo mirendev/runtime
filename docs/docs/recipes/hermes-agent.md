@@ -257,4 +257,4 @@ Healthy signs in the logs: `s6-rc: service main-hermes successfully started`,
 - [App Configuration](/app-configuration) — the full `app.toml` reference in context
 - [Persistent Storage](/disks) — Miren disks vs. local disks
 - [Traffic Routing](/traffic-routing) — how the `web` service and routes fit together
-- [Using Dockerfile.miren](/languages#using-dockerfilemiren) — building from your own Dockerfile
+- [Using Dockerfile.miren](/guides#using-dockerfilemiren) — building from your own Dockerfile

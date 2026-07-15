@@ -14,7 +14,7 @@ Miren uses a **convention over configuration** approach. Most apps deploy with z
 
 If your app is a single web service with a standard language stack, Miren handles everything:
 
-- **Language and build**: Detected from your project files (`package.json`, `go.mod`, `Gemfile`, etc.) — see [Supported Languages](/languages)
+- **Language and build**: Detected from your project files (`package.json`, `go.mod`, `Gemfile`, etc.) — see [Language Guides](/guides)
 - **Start command**: Detected from your framework or `Procfile`
 - **Scaling**: Web services autoscale based on traffic by default
 
@@ -82,7 +82,7 @@ version = "3.12"
 onbuild = ["npm run build"]
 ```
 
-See [Supported Languages](/languages) for build details per language.
+See [Language Guides](/guides) for build details per language.
 
 ### Services
 
