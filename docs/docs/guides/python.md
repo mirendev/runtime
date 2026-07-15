@@ -67,16 +67,36 @@ So a project with both a `Pipfile` and a `requirements.txt` builds with pipenv, 
 
 ### Start command
 
-Miren detects your web framework and configures a start command. You can always
+Miren picks the start command from the **server package** in your dependencies rather
+than from the web framework itself. The first rule that matches wins. You can always
 override it with a `Procfile` or the `command` field in `.miren/app.toml`.
 
-| Framework | Detection | Detected start |
-|-----------|-----------|----------------|
-| FastAPI | `fastapi` in dependencies | `fastapi run` |
-| Django | `django` in dependencies | `gunicorn` or `uvicorn` |
-| Flask | `flask` in dependencies | `gunicorn` |
-| Gunicorn | `gunicorn` in dependencies | `gunicorn` |
-| Uvicorn | `uvicorn` in dependencies | `uvicorn` |
+| Rule | Condition | Start command |
+|------|-----------|---------------|
+| 1 | `gunicorn` present, and no `fastapi` | `gunicorn <wsgi-module> -b 0.0.0.0:$PORT` |
+| 2 | `fastapi` present | `fastapi run <entrypoint> --host 0.0.0.0 --port $PORT` |
+| 3 | `uvicorn` present | `uvicorn <asgi-module> --host 0.0.0.0 --port $PORT` |
+| 4 | `flask` present, no `gunicorn` | `flask run --host=0.0.0.0 --port=$PORT` |
+| 5 | `django` and `manage.py` present, no `gunicorn` | `python manage.py runserver 0.0.0.0:$PORT` |
+
+So a Django app is served by gunicorn when gunicorn is in its dependencies — Django
+itself isn't what decides. FastAPI takes precedence over gunicorn, because `fastapi run`
+is the framework's recommended entrypoint.
+
+Miren fills in the module path from your project layout:
+
+- **WSGI:** a `wsgi.py` in a subdirectory gives `<package>.wsgi:application` (the Django
+  layout); a `wsgi.py` at the root gives `wsgi:app`; otherwise it falls back to `app:app`.
+- **ASGI:** the same search over `asgi.py` gives `<package>.asgi:application` or
+  `asgi:app`, falling back to `main:app`.
+- **FastAPI:** the entrypoint from `[tool.fastapi]` in `pyproject.toml`, else `main.py`
+  or `app.py`.
+
+:::warning[Add a production server]
+Rules 4 and 5 fall back to the Flask and Django development servers. Those are meant for
+local use, not production traffic. Add `gunicorn` (or `uvicorn` for an ASGI app) to your
+dependencies, or set an explicit `web:` line in a `Procfile`.
+:::
 
 Your server must bind to `0.0.0.0` on `$PORT` — Miren injects `PORT` and routes
 traffic to it. A `Procfile` makes this explicit:
@@ -148,7 +168,8 @@ See [App Configuration — Environment Variables](/app-configuration#environment
 - **Detection:** `requirements.txt`, `Pipfile`, `pyproject.toml`, or `uv.lock`
 - **Default version:** Python 3.11 (override via `[build] version` in `.miren/app.toml`)
 - **Install:** pipenv / uv / poetry / pip, chosen by manifest in that priority order (see table above)
-- **Start command:** bind `0.0.0.0:$PORT`; FastAPI/Django/Flask auto-detected, else set a `Procfile`
+- **Start command:** chosen by server package, first match wins — gunicorn (unless FastAPI) → `fastapi run` → uvicorn → `flask run` → `manage.py runserver`; bind `0.0.0.0:$PORT`, or set a `Procfile`
+- **Production server:** without gunicorn/uvicorn, Flask and Django fall back to their dev servers
 - **Env vars:** `miren env set -e KEY=VALUE`, `-s` for secrets, or `[[env]]` in `app.toml`
 - **Dockerfile:** not needed; add `Dockerfile.miren` only for custom builds
 

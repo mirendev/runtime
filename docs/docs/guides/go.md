@@ -45,9 +45,18 @@ miren deploy --analyze
 
 ### Build process
 
-Miren installs git and ca-certificates so private module dependencies resolve,
-downloads your modules (or uses the vendor directory if present), and builds the
-binary to `/bin/app`.
+Miren builds on the official Go image, runs `go mod download` (skipped when a `vendor/`
+directory is present), and compiles the binary to `/bin/app`. The builder already ships
+`git` and `ca-certificates`, so public modules resolve with no extra setup.
+
+:::warning[Private modules need vendoring or a Dockerfile]
+The automatic Go build can't authenticate to a private module host. It doesn't read
+`GOPRIVATE`, a `.netrc`, or git credentials, and variables you set with `miren env set`
+are not injected into the module download step. If your project depends on private
+modules, either commit a `vendor/` directory — Miren then builds with `-mod=vendor` and
+skips the download entirely — or use a [`Dockerfile.miren`](/guides#using-dockerfilemiren)
+where you control how modules are fetched.
+:::
 
 ### Which package gets built
 

@@ -131,9 +131,22 @@ CMD ["node", "dist/index.js"]
 
 ### Build arguments
 
-The following build arguments are available in your `Dockerfile.miren`:
+Miren passes the following build arguments to your `Dockerfile.miren`:
 
-- `MIREN_VERSION` — the version identifier for this build
+- `MIREN_VERSION` — the app version this build is producing, the same identifier
+  [`miren app versions`](/command/app-versions) lists and the same value injected as the
+  `MIREN_VERSION` environment variable at runtime
+
+As with any Docker build argument, declare it with `ARG` in the stage that uses it:
+
+```dockerfile
+FROM alpine:3.19
+ARG MIREN_VERSION
+RUN echo "building $MIREN_VERSION"
+```
+
+Build arguments apply to `Dockerfile.miren` builds only — auto-detected stacks don't run
+a Dockerfile.
 
 :::info[Custom Dockerfiles need an explicit service]
 Even with a `Dockerfile.miren`, you must define at least one service — a `Procfile` or a
