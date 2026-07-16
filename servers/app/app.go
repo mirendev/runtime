@@ -732,10 +732,13 @@ func (r *AppInfo) Restart(ctx context.Context, state *app_v1alpha.CrudRestart) e
 			}
 
 			if err := r.EC.Patch(ctx, sb.ID, 0,
-				entity.Ref(compute_v1alpha.SandboxStatusId, entity.Id(compute_v1alpha.STOPPED)),
+				entity.Ref(compute_v1alpha.SandboxStatusId, compute_v1alpha.SandboxStatusStoppedId),
 			); err != nil {
-				r.Log.Warn("failed to stop sandbox", "sandbox", sb.ID, "error", err)
-				continue
+				// Surface stop failures loudly instead of swallowing them.
+				// The original bug reported "0 sandboxes" success while
+				// silently failing to stop anything; a restart that can't
+				// stop a sandbox it found must not look like it worked.
+				return fmt.Errorf("stopping sandbox %s: %w", sb.ID, err)
 			}
 			stoppedSandboxes++
 		}
