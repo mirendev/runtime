@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"time"
 
+	appclient "miren.dev/runtime/api/app"
 	"miren.dev/runtime/api/compute/compute_v1alpha"
 	coreutil "miren.dev/runtime/api/core"
 	"miren.dev/runtime/api/core/core_v1alpha"
@@ -345,8 +346,8 @@ func (s *Server) buildSandboxSpec(
 		Name:  "app",
 		Image: image,
 		Env: []string{
-			"MIREN_APP=" + appMD.Name,
-			"MIREN_VERSION=" + ver.Version,
+			appclient.EnvRuntimeApp + "=" + appMD.Name,
+			appclient.EnvRuntimeVersion + "=" + ver.Version,
 		},
 		Directory: startDir,
 	}

@@ -27,6 +27,7 @@ import (
 	"github.com/pkg/errors"
 	"golang.org/x/crypto/blake2b"
 	"golang.org/x/sys/unix"
+	appclient "miren.dev/runtime/api/app"
 	"miren.dev/runtime/components/netresolve"
 	"miren.dev/runtime/network"
 	"miren.dev/runtime/observability"
@@ -2276,13 +2277,13 @@ func (c *SandboxController) buildSubContainerSpec(
 		}
 	}
 
-	// Extract instance number from metadata labels and inject MIREN_INSTANCE_NUM
+	// Extract instance number from metadata labels and inject the instance env var
 	envVars := co.Env
 	var md core_v1alpha.Metadata
 	md.Decode(meta)
 
 	if instanceStr, ok := md.Labels.Get("instance"); ok {
-		envVars = append([]string{fmt.Sprintf("MIREN_INSTANCE_NUM=%s", instanceStr)}, envVars...)
+		envVars = append([]string{fmt.Sprintf("%s=%s", appclient.EnvRuntimeInstanceNum, instanceStr)}, envVars...)
 		c.Log.Debug("injected instance number into container env", "sandbox_id", sb.ID, "container", co.Name, "instance", instanceStr)
 	}
 

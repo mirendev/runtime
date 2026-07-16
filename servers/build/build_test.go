@@ -8,6 +8,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	appclient "miren.dev/runtime/api/app"
 	"miren.dev/runtime/api/build/build_v1alpha"
 	"miren.dev/runtime/api/compute/compute_v1alpha"
 	"miren.dev/runtime/api/core/core_v1alpha"
@@ -1700,10 +1701,13 @@ func TestIsSystemEnvVar(t *testing.T) {
 		key      string
 		isSystem bool
 	}{
-		{"MIREN_VERSION", true},
-		{"MIREN_APP", true},
-		{"MIREN_INSTANCE_NUM", true},
+		// The entire MIREN_ namespace is reserved, whoever set it.
+		{appclient.EnvRuntimeApp, true},
+		{appclient.EnvRuntimeVersion, true},
+		{appclient.EnvRuntimeInstanceNum, true},
 		{"MIREN_CUSTOM", true},
+		{"MIREN_", true},
+		// Unprefixed system vars, named explicitly.
 		{"PORT", true},
 		{"ADMIN_TOKEN", true},
 		{"DATABASE_URL", false},
@@ -1712,6 +1716,7 @@ func TestIsSystemEnvVar(t *testing.T) {
 		{"SECRET_KEY_BASE", false},
 		{"MY_PORT", false},
 		{"PORTNAME", false},
+		{"MIRENISH", false},
 	}
 
 	for _, tt := range tests {
@@ -1784,8 +1789,8 @@ func TestComputeBuildEnvVars(t *testing.T) {
 			name: "system vars are filtered out",
 			existingVars: []core_v1alpha.ConfigSpecVariables{
 				{Key: "DATABASE_URL", Value: "postgres://localhost/db", Source: "manual"},
-				{Key: "MIREN_VERSION", Value: "v1", Source: "config"},
-				{Key: "MIREN_APP", Value: "myapp", Source: "config"},
+				{Key: appclient.EnvRuntimeVersion, Value: "v1", Source: "config"},
+				{Key: appclient.EnvRuntimeApp, Value: "myapp", Source: "config"},
 				{Key: "PORT", Value: "8080", Source: "manual"},
 				{Key: "ADMIN_TOKEN", Value: "token123", Source: "manual"},
 				{Key: "MIREN_CUSTOM", Value: "custom", Source: "config"},

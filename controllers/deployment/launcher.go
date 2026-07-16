@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -17,6 +18,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 
 	"miren.dev/runtime/api/addon/addon_v1alpha"
+	appclient "miren.dev/runtime/api/app"
 	"miren.dev/runtime/api/compute/compute_v1alpha"
 	coreutil "miren.dev/runtime/api/core"
 	"miren.dev/runtime/api/core/core_v1alpha"
@@ -570,8 +572,8 @@ func (l *Launcher) buildSandboxSpec(
 		Name:  "app",
 		Image: image,
 		Env: []string{
-			"MIREN_APP=" + appMD.Name,
-			"MIREN_VERSION=" + ver.Version,
+			appclient.EnvRuntimeApp + "=" + appMD.Name,
+			appclient.EnvRuntimeVersion + "=" + ver.Version,
 		},
 		Directory: startDir,
 	}
@@ -1017,7 +1019,7 @@ func mountsEqual(mounts1, mounts2 []compute_v1alpha.SandboxSpecContainerMount) b
 }
 
 // envVarsEqual compares two env var slices in an order-independent way,
-// ignoring version-specific system env vars (MIREN_VERSION, MIREN_APP)
+// ignoring the system env vars Miren injects per version — see filterSystemEnvVars.
 func envVarsEqual(env1, env2 []string) bool {
 	// Filter out system env vars
 	filtered1 := filterSystemEnvVars(env1)
@@ -1043,33 +1045,28 @@ func envVarsEqual(env1, env2 []string) bool {
 }
 
 // isSystemEnvVar returns true if the given key is a system-managed env var
-// that user config must not override.
+// that user config must not override. The whole MIREN_ namespace is reserved,
+// so only the unprefixed names need naming here.
 func isSystemEnvVar(key string) bool {
 	switch key {
-	case "MIREN_VERSION", "MIREN_APP", "MIREN_INSTANCE_NUM", "PORT", "ADMIN_TOKEN":
+	case "PORT", "ADMIN_TOKEN":
 		return true
 	}
 	return strings.HasPrefix(key, "MIREN_")
 }
 
-// filterSystemEnvVars filters out system-managed env vars that shouldn't affect pool reuse
+// filterSystemEnvVars filters out system-managed env vars that shouldn't affect pool reuse.
+// Unlike isSystemEnvVar this matches exact names rather than the MIREN_ prefix: a user's
+// own MIREN_-prefixed var could never be set anyway, but a pool must still be reused across
+// versions that differ only in the values Miren injects.
 func filterSystemEnvVars(envVars []string) []string {
+	skip := append([]string{"PORT", "ADMIN_TOKEN"}, appclient.RuntimeEnvNames...)
+
 	filtered := []string{}
 	for _, e := range envVars {
-		// Skip MIREN_VERSION, MIREN_APP, MIREN_INSTANCE_NUM, PORT, and ADMIN_TOKEN - these are set automatically
-		if strings.HasPrefix(e, "MIREN_VERSION=") {
-			continue
-		}
-		if strings.HasPrefix(e, "MIREN_APP=") {
-			continue
-		}
-		if strings.HasPrefix(e, "MIREN_INSTANCE_NUM=") {
-			continue
-		}
-		if strings.HasPrefix(e, "PORT=") {
-			continue
-		}
-		if strings.HasPrefix(e, "ADMIN_TOKEN=") {
+		if slices.ContainsFunc(skip, func(name string) bool {
+			return strings.HasPrefix(e, name+"=")
+		}) {
 			continue
 		}
 		filtered = append(filtered, e)
