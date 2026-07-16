@@ -100,6 +100,11 @@ func (e *EtcdComponent) maintenanceLoop(ctx context.Context) {
 		select {
 		case <-ticker.C:
 			e.runMaintenanceCheck(ctx, client, endpoint)
+		case <-e.metricsKick:
+			// The metrics writer was just attached (see SetMetricsWriter); run a check
+			// now so the first health sample lands promptly rather than up to a full
+			// interval later. The immediate check above ran before the writer existed.
+			e.runMaintenanceCheck(ctx, client, endpoint)
 		case <-ctx.Done():
 			return
 		}
