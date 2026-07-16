@@ -1053,7 +1053,7 @@ func isSystemEnvVar(key string) bool {
 	case "PORT", "ADMIN_TOKEN":
 		return true
 	}
-	return strings.HasPrefix(key, "MIREN_")
+	return appclient.IsReservedEnvVar(key)
 }
 
 // filterSystemEnvVars filters out system-managed env vars that shouldn't affect pool reuse.

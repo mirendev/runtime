@@ -875,7 +875,7 @@ func isSystemEnvVar(key string) bool {
 	case "PORT", "ADMIN_TOKEN":
 		return true
 	}
-	return strings.HasPrefix(key, "MIREN_")
+	return app.IsReservedEnvVar(key)
 }
 
 // computeBuildEnvVars computes the merged set of environment variables to inject

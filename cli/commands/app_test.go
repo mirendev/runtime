@@ -3,10 +3,12 @@ package commands
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
 	"miren.dev/mflags"
+	appclient "miren.dev/runtime/api/app"
 )
 
 func writeAppToml(t *testing.T, dir, content string) {
@@ -256,4 +258,57 @@ func TestAppCentric_MIREN_APP_EnvTag(t *testing.T) {
 			t.Errorf("App = %q, want from-cli (CLI should beat env)", a.App)
 		}
 	})
+}
+
+// TestCLIEnvTagsDoNotReadInjectedVars closes the MIR-1406 collision from the CLI
+// side. It derives the MIREN_* vars the CLI reads from the actual mflags `env:`
+// struct tags on AppCentric (which embeds ConfigCentric) — no hand-maintained
+// list to drift out of sync — and asserts none of them names a var Miren injects
+// into sandboxes. The deployment side guarantees the other half: every injected
+// var stays under the reserved MIREN_RUNTIME_ prefix (see
+// TestRuntimeEnvNamesDoNotCollideWithClientEnv).
+//
+// These are the app/cluster targeting flags whose env tags caused MIR-1406. Vars
+// the CLI reads via os.Getenv elsewhere aren't reflected here, but they're safe
+// as long as none of them lives under MIREN_RUNTIME_, which is reserved.
+func TestCLIEnvTagsDoNotReadInjectedVars(t *testing.T) {
+	injected := make(map[string]bool, len(appclient.RuntimeEnvNames))
+	for _, n := range appclient.RuntimeEnvNames {
+		injected[n] = true
+	}
+
+	tags := collectEnvTags(reflect.TypeOf(AppCentric{}))
+	if len(tags) == 0 {
+		t.Fatal("no env tags found — the reflection walk is not seeing the CLI flags")
+	}
+
+	for _, env := range tags {
+		if injected[env] {
+			t.Errorf("CLI flag reads env %q, which Miren injects into sandboxes — "+
+				"running the CLI inside a sandbox would target the wrong app (MIR-1406)", env)
+		}
+	}
+}
+
+// collectEnvTags returns the `env:` struct tags on t and, recursively, on its
+// embedded (anonymous) structs — mirroring how mflags composes flags.
+func collectEnvTags(t reflect.Type) []string {
+	if t.Kind() == reflect.Pointer {
+		t = t.Elem()
+	}
+	if t.Kind() != reflect.Struct {
+		return nil
+	}
+
+	var out []string
+	for i := 0; i < t.NumField(); i++ {
+		f := t.Field(i)
+		if env := f.Tag.Get("env"); env != "" {
+			out = append(out, env)
+		}
+		if f.Anonymous {
+			out = append(out, collectEnvTags(f.Type)...)
+		}
+	}
+	return out
 }

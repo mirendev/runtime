@@ -355,9 +355,14 @@ func (s *Server) buildSandboxSpec(
 		Directory: startDir,
 	}
 
-	// Add global config env vars
+	// Add global config env vars, stripping any reserved MIREN_ keys so user
+	// config can't shadow the injected sandbox metadata above (mirrors the
+	// filter in controllers/deployment/launcher.go).
 	envMap := make(map[string]string)
 	for _, x := range cfgSpec.Variables {
+		if appclient.IsReservedEnvVar(x.Key) {
+			continue
+		}
 		envMap[x.Key] = x.Value
 	}
 

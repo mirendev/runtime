@@ -1,5 +1,7 @@
 package app
 
+import "strings"
+
 // Environment variables Miren injects into every sandbox, describing the
 // workload to itself.
 //
@@ -25,4 +27,13 @@ var RuntimeEnvNames = []string{
 	EnvRuntimeApp,
 	EnvRuntimeVersion,
 	EnvRuntimeInstanceNum,
+}
+
+// IsReservedEnvVar reports whether key belongs to the reserved MIREN_ namespace
+// that user config must not set or override. Miren owns the whole prefix so it
+// can inject MIREN_RUNTIME_* (and other MIREN_*) vars without a user's config
+// shadowing them. This is the single source of truth for the prefix check that
+// the env-var guards and system-var filters all apply.
+func IsReservedEnvVar(key string) bool {
+	return strings.HasPrefix(key, "MIREN_")
 }
