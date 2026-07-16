@@ -80,7 +80,7 @@
         "miren.dev/runtime/discovery",
         "miren.dev/runtime/cli/commands",
         "miren.dev/runtime/controllers/certificate",
-        "miren.dev/runtime/pkg/globalrouter",
+        "miren.dev/runtime/pkg/anywhere",
         "miren.dev/runtime/pkg/hey/requester",
         "miren.dev/runtime/pkg/buildkit",
         "miren.dev/runtime/pkg/dns",

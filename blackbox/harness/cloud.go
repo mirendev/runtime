@@ -29,7 +29,7 @@ const (
 	metricsPassword      = "test-metrics-password"
 )
 
-// CloudEnv manages a cloud+POP test environment for global router blackbox tests.
+// CloudEnv manages a cloud+POP test environment for Miren Anywhere blackbox tests.
 type CloudEnv struct {
 	CloudURL      string // e.g. http://localhost:18080
 	PopListenPort string
@@ -51,7 +51,7 @@ type CloudEnv struct {
 	m *Miren
 }
 
-// NewCloudEnv builds a full cloud+POP environment for testing the global router.
+// NewCloudEnv builds a full cloud+POP environment for testing Miren Anywhere.
 // It builds cloud/POP binaries, starts cloud, registers a POP and cluster,
 // starts POP, and restarts the miren server so it picks up the new
 // registration.json. The environment is torn down via t.Cleanup.
@@ -102,7 +102,7 @@ func NewCloudEnv(t *testing.T, m *Miren) *CloudEnv {
 	// Restart miren server so it picks up the registration
 	env.restartServerWithRegistration(t)
 
-	// Wait for global router to connect
+	// Wait for Miren Anywhere to connect
 	env.waitForConnection(t)
 
 	return env
@@ -494,27 +494,27 @@ func (env *CloudEnv) restartServerWithRegistration(t *testing.T) {
 
 func (env *CloudEnv) waitForConnection(t *testing.T) {
 	t.Helper()
-	t.Log("waiting for global router to connect to cloud...")
+	t.Log("waiting for Miren Anywhere to connect to cloud...")
 
 	// Look for the definitive "connected to cloud" log line emitted by
-	// pkg/globalrouter/client.go:163 after the WebSocket dial succeeds.
+	// pkg/anywhere/client.go:163 after the WebSocket dial succeeds.
 	const readyMarker = "connected to cloud"
 
-	Poll(t, "global router connected", 60*time.Second, 2*time.Second, func() (bool, string) {
+	Poll(t, "Miren Anywhere connected", 60*time.Second, 2*time.Second, func() (bool, string) {
 		r := env.m.RunCmdAsRoot("bash", "-c",
 			fmt.Sprintf("grep -F %q /tmp/miren-server.log 2>/dev/null | head -1", readyMarker))
 		if strings.Contains(r.Stdout, readyMarker) {
 			return true, ""
 		}
 
-		// Surface recent log lines mentioning the router for faster diagnosis
-		// when the marker is missing.
+		// Surface recent log lines mentioning Miren Anywhere for faster
+		// diagnosis when the marker is missing.
 		tail := env.m.RunCmdAsRoot("bash", "-c",
-			"grep -i 'global.router\\|cluster.channel\\|cloud' /tmp/miren-server.log 2>/dev/null | tail -5")
-		return false, fmt.Sprintf("no %q marker yet; recent router logs:\n%s", readyMarker, tail.Stdout)
+			"grep -i 'anywhere\\|cluster.channel\\|cloud' /tmp/miren-server.log 2>/dev/null | tail -5")
+		return false, fmt.Sprintf("no %q marker yet; recent Miren Anywhere logs:\n%s", readyMarker, tail.Stdout)
 	})
 
-	t.Log("global router connected")
+	t.Log("Miren Anywhere connected")
 }
 
 // adminCall makes a JSON-RPC call to the cloud admin API.

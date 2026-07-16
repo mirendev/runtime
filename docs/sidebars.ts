@@ -135,8 +135,8 @@ const sidebars: SidebarsConfig = {
         'miren-cloud/connectivity',
         {
           type: 'doc',
-          id: 'miren-cloud/global-router',
-          label: 'Global Router',
+          id: 'miren-cloud/miren-anywhere',
+          label: 'Miren Anywhere',
         },
         {
           type: 'doc',

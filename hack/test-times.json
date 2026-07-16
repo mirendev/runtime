@@ -164,7 +164,7 @@
       "returncode": 0
     },
     {
-      "package": "miren.dev/runtime/pkg/globalrouter",
+      "package": "miren.dev/runtime/pkg/anywhere",
       "elapsed_s": 4.79,
       "status": "pass",
       "returncode": 0
