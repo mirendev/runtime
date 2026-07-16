@@ -868,7 +868,8 @@ func (b *Builder) checkLocalStorageMigration(ctx context.Context, appID entity.I
 
 // isSystemEnvVar returns true if the given key is a system-managed env var
 // that should not be injected as a build arg. The whole MIREN_ namespace is
-// reserved, so only the unprefixed names need naming here.
+// reserved (the injected MIREN_RUNTIME_* vars are enumerated in
+// api/app/runtimeenv.go), so only the unprefixed names need explicit cases here.
 func isSystemEnvVar(key string) bool {
 	switch key {
 	case "PORT", "ADMIN_TOKEN":

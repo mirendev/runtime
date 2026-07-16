@@ -172,18 +172,18 @@ The `required` flag is useful for variables whose values differ per environment�
 
 #### Variables Miren Injects
 
-Every sandbox receives these automatically. You don't declare them, and your app can read them to find out what it is:
+Miren injects these automatically. You don't declare them, and your app can read them to find out what it is:
 
-| Variable | Value |
-|----------|-------|
-| `MIREN_RUNTIME_APP` | The app name |
-| `MIREN_RUNTIME_VERSION` | The deployed version, e.g. `v1` |
-| `MIREN_RUNTIME_INSTANCE_NUM` | This instance's number, starting at `0`. See [Scaling](/scaling). |
+| Variable | Value | Injected |
+|----------|-------|----------|
+| `MIREN_RUNTIME_APP` | The app name | Every sandbox |
+| `MIREN_RUNTIME_VERSION` | The deployed version, e.g. `v1` | Every sandbox |
+| `MIREN_RUNTIME_INSTANCE_NUM` | This instance's number, starting at `0`. See [Scaling](/scaling). | Instance-backed sandboxes only |
 
 Sandboxes also get `PORT` (the port your web service should listen on) and the [workload identity](/workload-identity) variables.
 
 :::info[Injected vs. CLI variables]
-`MIREN_RUNTIME_*` is the namespace Miren injects **into** your app. Every other `MIREN_*` variable — `MIREN_APP`, `MIREN_CLUSTER`, `MIREN_CONFIG` — is input **to** the `miren` CLI, used to pick what a command acts on (see [CI/CD Deployment](/ci-deploy)). Keeping them separate means running `miren` inside a sandbox still resolves the app from your `.miren/app.toml`.
+`MIREN_RUNTIME_*` is the namespace Miren injects **into** your app; the `MIREN_IDENTITY_*` [workload identity](/workload-identity) variables are injected too. The other `MIREN_*` variables — such as `MIREN_APP`, `MIREN_CLUSTER`, and `MIREN_CONFIG` — are input **to** the `miren` CLI, used to pick what a command acts on (see [CI/CD Deployment](/ci-deploy)). Keeping the injected and input variables separate means running `miren` inside a sandbox still resolves the app from your `.miren/app.toml`.
 :::
 
 :::warning[The MIREN_ prefix is reserved]

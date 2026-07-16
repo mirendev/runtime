@@ -16,6 +16,11 @@ const (
 // RuntimeEnvNames lists every var Miren injects under MIREN_RUNTIME_. User
 // config must not override these, and none of them may match a var the client
 // reads from its own environment.
+//
+// EnvRuntimeApp and EnvRuntimeVersion are injected into every app sandbox.
+// EnvRuntimeInstanceNum is injected only for instance-backed sandboxes — those
+// carrying an "instance" metadata label; it is set at sandbox-boot time in
+// controllers/sandbox rather than by the deployment launcher.
 var RuntimeEnvNames = []string{
 	EnvRuntimeApp,
 	EnvRuntimeVersion,

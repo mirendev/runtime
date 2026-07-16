@@ -3420,24 +3420,41 @@ func TestRuntimeEnvVarsInjectedIntoSandboxSpec(t *testing.T) {
 // nothing Miren injects into a sandbox may share a name with a var the client reads
 // from its own environment, or the CLI misbehaves when run inside a sandbox.
 func TestRuntimeEnvNamesDoNotCollideWithClientEnv(t *testing.T) {
-	// Vars the client reads as input. Keep in sync with the env:"..." struct tags in
-	// cli/commands (app.go, config.go) and the os.Getenv calls in cli/ and clientconfig/.
-	clientEnv := []string{
-		"MIREN_APP",
-		"MIREN_CLUSTER",
-		"MIREN_CONFIG",
-		"MIREN_THEME",
-		"MIREN_LABS",
-		"MIREN_CONTAINER_RUNTIME",
-		"MIREN_DISK_MODE",
-		"MIREN_HELP_JSON",
-		"MIREN_DIAL_PROGRAM",
-	}
+	// The structural guarantee: injected vars live under the reserved MIREN_RUNTIME_
+	// sub-namespace, and the CLI reads no var under that prefix. This is what makes
+	// collisions impossible for *future* CLI vars too — a new MIREN_FOO the CLI adds
+	// cannot match a MIREN_RUNTIME_* injected name. The allowlist below can't catch
+	// that on its own, since it only knows today's CLI vars.
+	t.Run("all injected names use the reserved prefix", func(t *testing.T) {
+		for _, injected := range appclient.RuntimeEnvNames {
+			assert.True(t, strings.HasPrefix(injected, "MIREN_RUNTIME_"),
+				"%s is injected but not under MIREN_RUNTIME_ — it could collide with a CLI var", injected)
+		}
+	})
 
-	for _, injected := range appclient.RuntimeEnvNames {
-		assert.NotContains(t, clientEnv, injected,
-			"%s is injected into sandboxes AND read by the client — that is the MIR-1406 collision", injected)
-	}
+	// A concrete regression check for the specific MIR-1406 collision. This list is
+	// hand-maintained; keep it in sync with the env:"..." struct tags in cli/commands
+	// (app.go, config.go) and the os.Getenv calls in cli/ and clientconfig/. It's a
+	// backstop for the prefix rule above, not the primary guarantee — a CLI var added
+	// without updating this list is still covered as long as it isn't MIREN_RUNTIME_*.
+	t.Run("no injected name matches a known CLI var", func(t *testing.T) {
+		clientEnv := []string{
+			"MIREN_APP",
+			"MIREN_CLUSTER",
+			"MIREN_CONFIG",
+			"MIREN_THEME",
+			"MIREN_LABS",
+			"MIREN_CONTAINER_RUNTIME",
+			"MIREN_DISK_MODE",
+			"MIREN_HELP_JSON",
+			"MIREN_DIAL_PROGRAM",
+		}
+
+		for _, injected := range appclient.RuntimeEnvNames {
+			assert.NotContains(t, clientEnv, injected,
+				"%s is injected into sandboxes AND read by the client — that is the MIR-1406 collision", injected)
+		}
+	})
 }
 
 // TestCreatePoolForVersionEphemeral verifies that the web pool of an ephemeral

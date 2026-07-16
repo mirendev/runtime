@@ -1045,8 +1045,9 @@ func envVarsEqual(env1, env2 []string) bool {
 }
 
 // isSystemEnvVar returns true if the given key is a system-managed env var
-// that user config must not override. The whole MIREN_ namespace is reserved,
-// so only the unprefixed names need naming here.
+// that user config must not override. The whole MIREN_ namespace is reserved
+// (the injected MIREN_RUNTIME_* vars are enumerated in api/app/runtimeenv.go),
+// so only the unprefixed names need explicit cases here.
 func isSystemEnvVar(key string) bool {
 	switch key {
 	case "PORT", "ADMIN_TOKEN":

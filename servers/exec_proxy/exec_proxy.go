@@ -346,6 +346,9 @@ func (s *Server) buildSandboxSpec(
 		Name:  "app",
 		Image: image,
 		Env: []string{
+			// EnvRuntimeInstanceNum is deliberately omitted here: the sandbox
+			// controller injects it at boot from the instance metadata label
+			// (see controllers/sandbox), and exec sandboxes aren't instance-backed.
 			appclient.EnvRuntimeApp + "=" + appMD.Name,
 			appclient.EnvRuntimeVersion + "=" + ver.Version,
 		},
