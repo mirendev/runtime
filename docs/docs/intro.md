@@ -19,6 +19,8 @@ Miren has two sides. The **server** runs on your Linux machine and manages conta
 
 You deploy apps by running `miren deploy` from your project directory. Miren detects your language (Python, Node, Bun, Go, Ruby, Rust, or a Dockerfile), builds a container image, and runs it. Your first app gets a route automatically. Scaling is automatic by default, adjusting instance counts based on traffic.
 
+If your server is on a home network or behind a firewall, [Miren Anywhere](/miren-cloud/miren-anywhere) still puts your apps on the internet, routing their traffic through Miren Cloud so you don't need port forwarding or a public IP of your own.
+
 Configuration lives in `.miren/app.toml` in your project. Environment variables, secrets, services, scaling behavior, and persistent disks are all managed through the CLI and this config file.
 
 ## Get started
@@ -33,6 +35,6 @@ Configuration lives in `.miren/app.toml` in your project. Environment variables,
 - [Services](/services) - Run multiple processes (web, workers, databases) in one app
 - [Scaling](/scaling) - Autoscaling and fixed instance modes
 - [Traffic Routing](/traffic-routing) - Custom domains, TLS, and path-based routing
-- [Disks](/disks) - Persistent storage with automatic cloud backup
+- [Disks](/disks) - Persistent storage with backup and restore
 - [Logs](/logs) - Application, build, and system logs
 - [CLI Reference](/commands) - Every command and flag
