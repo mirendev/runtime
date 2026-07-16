@@ -296,6 +296,102 @@ func TestValidateToType(t *testing.T) {
 	}
 }
 
+// TestValidateRefChoices guards MIR-1425: a ref-typed attribute that declares a
+// choice set (schema.Choices, surfaced as EnumValues) must reject any value
+// outside that set, even a value that points at a real entity — the case bare
+// existence checking can't catch.
+func TestValidateRefChoices(t *testing.T) {
+	store, cleanup := setupTestStore(t)
+	defer cleanup()
+
+	r := require.New(t)
+	ctx := t.Context()
+
+	// A ref attribute that declares a choice set, mirroring what the schema
+	// builder now emits for schema.Choices(...).
+	_, err := store.CreateEntity(ctx, New(
+		Ident, "test/status",
+		Doc, "status",
+		Cardinality, CardinalityOne,
+		Type, TypeRef,
+		EnumValues, ArrayValue(Id("test/status.a"), Id("test/status.b")),
+	))
+	r.NoError(err)
+
+	// A plain ref attribute with no choices, to prove behavior is unchanged.
+	_, err = store.CreateEntity(ctx, New(
+		Ident, "test/target",
+		Doc, "target",
+		Cardinality, CardinalityOne,
+		Type, TypeRef,
+	))
+	r.NoError(err)
+
+	// All three referents exist in the store. status.c exists but is NOT a
+	// declared choice — the nastier case existence alone can't reject.
+	for _, id := range []string{"test/status.a", "test/status.b", "test/status.c"} {
+		_, err := store.CreateEntity(ctx, New(Ident, id))
+		r.NoError(err)
+	}
+
+	validator := NewValidator(store)
+
+	// A declared choice passes.
+	a := Ref("test/status", "test/status.a")
+	r.NoError(validator.ValidateAttribute(ctx, &a))
+
+	// An existing-but-unlisted value is rejected on membership, not existence.
+	c := Ref("test/status", "test/status.c")
+	err = validator.ValidateAttribute(ctx, &c)
+	r.Error(err)
+	r.Contains(err.Error(), "must be one of")
+
+	// Clearing to empty stays allowed.
+	empty := Ref("test/status", "")
+	r.NoError(validator.ValidateAttribute(ctx, &empty))
+
+	// A choices-less ref still only checks existence: existing ok, missing not.
+	ok := Ref("test/target", "test/status.a")
+	r.NoError(validator.ValidateAttribute(ctx, &ok))
+
+	missing := Ref("test/target", "test/does_not_exist")
+	err = validator.ValidateAttribute(ctx, &missing)
+	r.Error(err)
+	r.Contains(err.Error(), "non-existent")
+}
+
+// TestValidateUpdateRefChoicesExempt guards that an unchanged choice ref is not
+// re-validated on an unrelated patch (the MIR-1320 concern): a value that
+// predates enforcement must not block a status-only update elsewhere.
+func TestValidateUpdateRefChoicesExempt(t *testing.T) {
+	store, cleanup := setupTestStore(t)
+	defer cleanup()
+
+	r := require.New(t)
+	ctx := t.Context()
+
+	_, err := store.CreateEntity(ctx, New(
+		Ident, "test/status",
+		Doc, "status",
+		Cardinality, CardinalityOne,
+		Type, TypeRef,
+		EnumValues, ArrayValue(Id("test/status.a"), Id("test/status.b")),
+	))
+	r.NoError(err)
+	_, err = store.CreateEntity(ctx, New(Ident, "test/status.legacy"))
+	r.NoError(err)
+
+	validator := NewValidator(store)
+
+	// A pre-existing out-of-set value carried unchanged through an update is
+	// exempt and does not block the write.
+	legacy := Ref("test/status", "test/status.legacy")
+	r.NoError(validator.ValidateUpdate(ctx, []Attr{legacy}, []Attr{legacy}))
+
+	// But changing that attribute to a still-invalid value is rejected.
+	r.Error(validator.ValidateUpdate(ctx, []Attr{legacy}, nil))
+}
+
 func TestValidate_EntityAttrs(t *testing.T) {
 	store, cleanup := setupTestStore(t)
 	defer cleanup()
