@@ -8,6 +8,8 @@ description: "Remove an addon from an application"
 
 Remove an addon from an application
 
+Removing an addon deprovisions the backing resource and strips its injected environment variables from your app. Miren creates a new app version without those variables and rolls it out automatically — you do not need to run `miren deploy` or `miren app restart`.
+
 ## Usage
 
 ```bash

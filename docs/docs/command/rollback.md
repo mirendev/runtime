@@ -8,6 +8,10 @@ description: "Roll back to a previous version"
 
 Roll back to a previous version
 
+Rollback re-activates a previous version by reusing its already-built image — no rebuild happens. It presents a picker of recent successful deployments and rolls out the one you choose immediately. The currently active version is excluded since rolling back to it would be a no-op.
+
+Rollback creates a new deployment record; it does not erase history.
+
 ## Usage
 
 ```bash

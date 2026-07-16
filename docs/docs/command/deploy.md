@@ -8,6 +8,18 @@ description: "Deploy an application"
 
 Deploy an application
 
+Deploy uploads your source, builds a new container image on the server, and activates the resulting version — replacing the previously running one. This is the only command that rebuilds your image.
+
+To activate a previously built version without rebuilding, pass `--version`:
+```bash
+miren deploy --version myapp-vCVkjR6u7744AsMebwMjGU
+```
+This reuses the existing image and rolls it out immediately — useful for rolling forward to a known-good version without waiting for a build. Find version IDs with `miren app history`.
+
+:::note[Config changes deploy on their own]
+Changing environment variables (`miren env set` / `miren env delete`) or addons (`miren addon create` / `miren addon destroy`) already creates and rolls out a new version. You only need `miren deploy` when your code or `app.toml` has changed.
+:::
+
 ## Usage
 
 ```bash

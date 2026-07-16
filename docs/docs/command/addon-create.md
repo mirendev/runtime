@@ -8,6 +8,8 @@ description: "Attach an addon to an application"
 
 Attach an addon to an application
 
+Attaching an addon provisions the backing resource and injects its connection details as environment variables into your app. Once provisioning completes, Miren creates a new app version with those variables and rolls it out automatically — you do not need to run `miren deploy` or `miren app restart`. The rollout is deferred until the addon finishes provisioning, so it may not be immediate.
+
 ## Usage
 
 ```bash
