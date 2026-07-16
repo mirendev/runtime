@@ -49,6 +49,12 @@ mount_path = "/var/lib/postgresql/data"
 - **Host-local**: Data lives on the server's filesystem
 - **Node-pinned**: Apps with local storage are scheduled to the coordinator node
 
+:::warning[Local disks share one per-app store]
+Local storage is keyed per app, not per disk. Every `provider = "local"` disk your app declares — across all its services, regardless of the disk's `name` or `mount_path` — maps to the same directory on the host. Two local disks mounted at `/cache` and `/data` are two windows onto the same files: a write to one shows up in the other.
+
+This is handy for sharing node-local state between an app's services, but if you want isolated areas, use subdirectories under a single local disk (for example `/data/cache` and `/data/uploads`) instead of declaring multiple local disks.
+:::
+
 ### When to Use Local Storage
 
 - SQLite databases

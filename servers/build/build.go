@@ -836,26 +836,41 @@ func logField(key, value string) *build_v1alpha.LogField {
 	return f
 }
 
-// checkLocalStorageMigration checks whether the app has existing data in
-// local storage but no explicit disk config, and sends a deploy warning.
-func (b *Builder) checkLocalStorageMigration(ctx context.Context, appID entity.Id, configSpec core_v1alpha.ConfigSpec, status *stream.SendStreamClient[*build_v1alpha.Status]) {
-	if b.DataPath == "" {
-		return
-	}
-
-	// Check if any service already declares a disk at /miren/data/local
-	// (any provider — local or miren). If so, the user has migrated.
+// configDeclaresLocalStorage reports whether the config already declares a disk
+// that satisfies the local-storage migration. That's true when any service
+// declares an explicit local-provider disk (regardless of its container mount
+// path — all local volumes share the same per-app host directory keyed on app
+// ID), or a disk of any provider at the legacy /miren/data/local mount path.
+func configDeclaresLocalStorage(configSpec core_v1alpha.ConfigSpec) bool {
 	for _, svc := range configSpec.Services {
 		for _, disk := range svc.Disks {
-			if disk.MountPath == "/miren/data/local" {
-				return
+			if disk.Provider == core_v1alpha.ConfigSpecServicesDisksLOCAL || disk.MountPath == "/miren/data/local" {
+				return true
 			}
 		}
 	}
+	return false
+}
 
-	localPath := filepath.Join(b.DataPath, "data", "local", appID.String())
+// shouldWarnLocalStorageMigration reports whether a deploy should warn that the
+// app has existing data in local storage but no explicit disk config.
+func shouldWarnLocalStorageMigration(dataPath string, appID entity.Id, configSpec core_v1alpha.ConfigSpec) bool {
+	if dataPath == "" {
+		return false
+	}
+	if configDeclaresLocalStorage(configSpec) {
+		return false
+	}
+
+	localPath := filepath.Join(dataPath, "data", "local", appID.String())
 	entries, err := os.ReadDir(localPath)
-	if err != nil || len(entries) == 0 {
+	return err == nil && len(entries) > 0
+}
+
+// checkLocalStorageMigration checks whether the app has existing data in
+// local storage but no explicit disk config, and sends a deploy warning.
+func (b *Builder) checkLocalStorageMigration(ctx context.Context, appID entity.Id, configSpec core_v1alpha.ConfigSpec, status *stream.SendStreamClient[*build_v1alpha.Status]) {
+	if !shouldWarnLocalStorageMigration(b.DataPath, appID, configSpec) {
 		return
 	}
 
