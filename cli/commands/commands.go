@@ -1082,9 +1082,9 @@ Warning: These commands are intended for advanced users and developers. They may
 	addCommands(d)
 }
 
-// Extended markdown descriptions for commands that create a new app version.
-// These render in the generated command docs (docs/docs/command/*.md) and
-// clarify which operations roll out automatically versus require a rebuild.
+// Extended markdown descriptions for lifecycle commands. These render in the
+// generated command docs (docs/docs/command/*.md) and clarify which operations
+// roll out automatically versus require a rebuild.
 
 const deployDescription = `Deploy uploads your source, builds a new container image on the server, and activates the resulting version — replacing the previously running one. This is the only command that rebuilds your image.
 
@@ -1124,7 +1124,7 @@ Environment variable changes take effect on their own. Running ` + "`" + `miren 
 const envDeleteDescription = `Deleting an environment variable creates a new app version and rolls it out automatically — you do not need to run ` + "`" + `miren deploy` + "`" + ` or ` + "`" + `miren app restart` + "`" + ` afterward. The new version reuses your existing container image (no rebuild), and the command waits for it to become healthy before returning.
 
 :::warning[Deploy app.toml changes first]
-` + "`" + `miren env delete` + "`" + ` builds the new version by copying the *current server-side* spec, not your local ` + "`" + `app.toml` + "`" + `. If you have pending ` + "`" + `app.toml` + "`" + ` changes, deploy them first, then delete the stale variable — otherwise the delete will roll back your unsent changes. Variables declared in ` + "`" + `app.toml` + "`" + ` drop automatically when you remove them from the file and redeploy.
+` + "`" + `miren env delete` + "`" + ` builds the new version by copying the *current server-side* spec, not your local ` + "`" + `app.toml` + "`" + `. If you have pending ` + "`" + `app.toml` + "`" + ` changes, deploy them first, then delete the stale variable — otherwise the delete rolls out the server-side spec and your local edits won't be included. Variables declared in ` + "`" + `app.toml` + "`" + ` drop automatically when you remove them from the file and redeploy.
 :::`
 
 const addonCreateDescription = `Attaching an addon provisions the backing resource and injects its connection details as environment variables into your app. Once provisioning completes, Miren creates a new app version with those variables and rolls it out automatically — you do not need to run ` + "`" + `miren deploy` + "`" + ` or ` + "`" + `miren app restart` + "`" + `. The rollout is deferred until the addon finishes provisioning, so it may not be immediate.`
