@@ -144,7 +144,7 @@ type attrBuilder struct {
 	session  bool
 	tags     []string
 
-	choises []entity.Id
+	choices []entity.Id
 
 	extra []entity.Attr
 }
@@ -181,7 +181,7 @@ func Tags(tags ...string) AttrOption {
 
 func Choices(choices ...entity.Id) AttrOption {
 	return func(b *attrBuilder) {
-		b.choises = append(b.choises, choices...)
+		b.choices = append(b.choices, choices...)
 	}
 }
 
@@ -222,6 +222,25 @@ func (s *SchemaBuilder) Attr(name, id string, typ entity.Id, opts ...AttrOption)
 
 	for _, tag := range ab.tags {
 		attrs = append(attrs, entity.Tag, tag)
+	}
+
+	// Choices declare the set of valid values for the attribute. Surface them
+	// as EnumValues so convertEntityToSchema lands them on AttributeSchema and
+	// the validator can enforce membership (see MIR-1425). This is the same
+	// attribute the Enum builder injects, so ref-typed choices and true enums
+	// share one enforcement path.
+	if len(ab.choices) > 0 {
+		choices := make([]any, len(ab.choices))
+		for i, c := range ab.choices {
+			choices[i] = c
+		}
+		attrs = append(attrs, entity.EnumValues, entity.ArrayValue(choices...))
+	}
+
+	// AdditionalAttrs carries pre-built attrs (e.g. the Enum builder's
+	// EnumValues) that would otherwise be dropped on the floor.
+	for _, extra := range ab.extra {
+		attrs = append(attrs, extra)
 	}
 
 	ent := entity.New(attrs...)

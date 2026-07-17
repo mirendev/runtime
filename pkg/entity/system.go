@@ -122,12 +122,19 @@ func InitSystemEntities(save func(*Entity) error) error {
 		Type, TypeRef,
 	)
 
+	// EnumValues holds a heterogeneous []Value bag of allowed choices, built
+	// with ArrayValue (which yields a KindArray of []Value). The TypeArray
+	// validator asserts []any and would reject that representation, so this is
+	// declared TypeAny — the ElemType was already TypeAny, i.e. never
+	// element-type-checked. This matters because domain schemas that declare
+	// schema.Choices now surface an EnumValues attr and install through the
+	// validating CreateEntity path (see MIR-1425); the base system entities
+	// bypass validation via basicSave, so they were never affected.
 	enumValues := New(
 		Ident, types.Keyword(EnumValues),
 		Doc, "Enum values",
 		Cardinality, CardinalityMany,
-		Type, TypeArray,
-		EntityElemType, TypeAny,
+		Type, TypeAny,
 	)
 
 	enumType := New(

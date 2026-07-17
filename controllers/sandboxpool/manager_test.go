@@ -642,7 +642,7 @@ func TestManagerZeroValuePersistence(t *testing.T) {
 	for _, ent := range results.Values() {
 		_, err := server.EAC.Patch(ctx, []entity.Attr{
 			entity.Ref(entity.DBId, ent.Entity().Id()),
-			entity.String(compute_v1alpha.SandboxStatusId, string(compute_v1alpha.DEAD)),
+			entity.Ref(compute_v1alpha.SandboxStatusId, compute_v1alpha.SandboxStatusDeadId),
 		}, 0)
 		require.NoError(t, err)
 	}

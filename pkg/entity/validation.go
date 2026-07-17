@@ -68,6 +68,25 @@ func asEntityId(val any) (Id, error) {
 	}
 }
 
+// matchesChoice reports whether val equals one of the declared choice values.
+// It backs both the enum check and the ref-typed schema.Choices enforcement.
+func matchesChoice(choices []Value, val Value) bool {
+	return slices.IndexFunc(choices, func(e Value) bool {
+		return e.Equal(val)
+	}) != -1
+}
+
+// choiceValues renders a choice set for error messages, unwrapping each Value
+// to its underlying Go value (e.g. the ref Id) so the message reads as a plain
+// list rather than Kind-prefixed Value strings.
+func choiceValues(choices []Value) []any {
+	out := make([]any, len(choices))
+	for i, c := range choices {
+		out[i] = c.Any()
+	}
+	return out
+}
+
 // ValidateEntity validates all attributes in an entity against their schemas
 func (v *Validator) ValidateEntity(ctx context.Context, entity *Entity) error {
 	require := map[Id]struct{}{}
@@ -292,6 +311,13 @@ func (v *Validator) validateAttribute(ctx context.Context, attr *Attr, exempt re
 			return fmt.Errorf("attribute %s must be a string representing an entity ID", name)
 		}
 		if str != "" && (exempt == nil || !exempt(*attr)) {
+			// When the attribute declares a choice set (schema.Choices),
+			// enforce membership before the existence check: it's cheaper and
+			// gives a more precise error than "references a non-existent
+			// entity" for the common status-ref case (see MIR-1425).
+			if len(schema.EnumValues) > 0 && !matchesChoice(schema.EnumValues, attr.Value) {
+				return fmt.Errorf("attribute %s must be one of %v (was %v)", name, choiceValues(schema.EnumValues), str)
+			}
 			if _, err := v.store.GetEntity(ctx, str); err != nil {
 				return fmt.Errorf("attribute %s references a non-existent entity: %w", name, err)
 			}
@@ -315,11 +341,8 @@ func (v *Validator) validateAttribute(ctx context.Context, attr *Attr, exempt re
 			return fmt.Errorf("attribute %s must be a timestamp (int64 or RFC3339 string), got %T", name, v)
 		}
 	case TypeEnum:
-		idx := slices.IndexFunc(schema.EnumValues, func(e Value) bool {
-			return e.Equal(attr.Value)
-		})
-		if idx == -1 {
-			return fmt.Errorf("attribute %s must be one of %v (was %v)", name, schema.EnumValues, attr.Value)
+		if !matchesChoice(schema.EnumValues, attr.Value) {
+			return fmt.Errorf("attribute %s must be one of %v (was %v)", name, choiceValues(schema.EnumValues), attr.Value)
 		}
 	case TypeArray:
 		tuple, ok := attr.Value.Any().([]any)

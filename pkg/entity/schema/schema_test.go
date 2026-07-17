@@ -66,6 +66,33 @@ func TestIndexedAttributeIDs(t *testing.T) {
 	assert.False(t, seen["test-index-hash/doc"], "test-index-hash/doc should not be indexed")
 }
 
+// TestRefChoicesEmitsEnumValues guards MIR-1425: declaring schema.Choices on a
+// ref attribute must surface those choices as an EnumValues attribute on the
+// built schema entity, which is where the validator reads them from.
+func TestRefChoicesEmitsEnumValues(t *testing.T) {
+	sb := &SchemaBuilder{
+		domain: "test-choices",
+		attrs:  make(map[entity.Id]*entity.Entity),
+	}
+
+	id := sb.Ref("status", "test-choices/status",
+		Doc("The status"),
+		Choices(entity.Id("test-choices/status.a"), entity.Id("test-choices/status.b")),
+	)
+
+	ent := sb.attrs[id]
+	require.NotNil(t, ent)
+
+	attr, ok := ent.Get(entity.EnumValues)
+	require.True(t, ok, "Choices should surface as an EnumValues attribute")
+
+	vals, ok := attr.Value.Any().([]entity.Value)
+	require.True(t, ok, "EnumValues should be a []Value")
+	require.Len(t, vals, 2)
+	assert.Equal(t, entity.Id("test-choices/status.a"), vals[0].Any())
+	assert.Equal(t, entity.Id("test-choices/status.b"), vals[1].Any())
+}
+
 func TestIndexHash_Deterministic(t *testing.T) {
 	hash1 := IndexHash()
 	hash2 := IndexHash()
