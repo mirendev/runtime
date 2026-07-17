@@ -74,6 +74,16 @@ func NewLauncher(log *slog.Logger, eac *entityserver_v1alpha.EntityAccessClient)
 // on demand. This implements activator.PoolCreator for ephemeral versions that
 // bypass the normal DeploymentLauncher reconciliation loop.
 func (l *Launcher) CreatePoolForVersion(ctx context.Context, ver *core_v1alpha.AppVersion, service string) (entity.Id, error) {
+	// Serialize against Reconcile (and other on-demand creates) for the same app.
+	// Both paths do a findMatchingPool → create window; without a shared lock the
+	// activator and the reconciler can each miss the other's in-flight pool and
+	// both create one, duplicating every sandbox (MIR-1432, the tempo two-web-pools
+	// finding). Keyed on app ID, identical to Reconcile.
+	val, _ := l.appMu.LoadOrStore(ver.App, &sync.Mutex{})
+	mu := val.(*sync.Mutex)
+	mu.Lock()
+	defer mu.Unlock()
+
 	// Resolve the app entity
 	var app core_v1alpha.App
 	appResp, err := l.EAC.Get(ctx, ver.App.String())
@@ -244,7 +254,12 @@ func (l *Launcher) reconcileAppVersion(ctx context.Context, app *core_v1alpha.Ap
 	l.injectAutoMountLocalDisks(spec, app)
 
 	// For each service, ensure a pool exists. Collect IDs of newly created pools.
+	// ensuredServices tracks services whose replacement pool was successfully
+	// ensured this pass; only those are eligible for stale-pool reaping below, so
+	// we never scale down a service's only running pool when its replacement
+	// failed to create.
 	var newPoolIDs []entity.Id
+	ensuredServices := make(map[string]bool)
 	for _, svc := range spec.Services {
 		// For services with disks, drain old pools before creating new ones.
 		// Disks require exclusive access (local disks use flock, miren disks
@@ -269,6 +284,7 @@ func (l *Launcher) reconcileAppVersion(ctx context.Context, app *core_v1alpha.Ap
 			// Continue with other services even if one fails
 			continue
 		}
+		ensuredServices[svc.Name] = true
 		if poolID != "" {
 			newPoolIDs = append(newPoolIDs, poolID)
 		}
@@ -321,6 +337,25 @@ func (l *Launcher) reconcileAppVersion(ctx context.Context, app *core_v1alpha.Ap
 		}
 	}
 
+	// Reap stateless pools whose baked spec no longer matches the desired spec.
+	// cleanupOldVersionPools below keys on version references, so it never reaps
+	// a superseded pool that still references the current version — which is
+	// exactly what happens when a binary change (not a new AppVersion) alters the
+	// baked spec, e.g. a runtime-injected env var rename. Those husks kept running
+	// alongside their replacements indefinitely (MIR-1432). Disk services already
+	// get spec-based reaping via drainStaleDiskPools before create; this covers
+	// the stateless services after their replacements are ready. Only reap for
+	// services whose replacement was successfully ensured, so a failed create
+	// never leaves a service with its old pool scaled down and no replacement.
+	reaped, err := l.reapStaleStatelessPools(ctx, app, &ver, spec, ensuredServices)
+	if err != nil {
+		l.Log.Error("failed to reap stale stateless pools",
+			"app", app.ID,
+			"version", ver.ID,
+			"error", err)
+		// Don't fail the entire reconciliation if reaping fails
+	}
+
 	// Clean up old version pools (pools not referenced by current version)
 	cleaned, err := l.cleanupOldVersionPools(ctx, app, ver.ID)
 	if err != nil {
@@ -330,6 +365,8 @@ func (l *Launcher) reconcileAppVersion(ctx context.Context, app *core_v1alpha.Ap
 			"error", err)
 		// Don't fail the entire reconciliation if cleanup fails
 	}
+
+	cleaned += reaped
 
 	// Summarize only when this reconcile actually did something. The loop runs
 	// constantly; a steady-state pass that created and cleaned up nothing stays
@@ -1646,6 +1683,81 @@ func (l *Launcher) drainStaleDiskPools(
 	}
 
 	return nil
+}
+
+// reapStaleStatelessPools scales to 0 any pool for a stateless service whose
+// baked spec no longer matches the desired spec. It is the stateless twin of
+// drainStaleDiskPools, but runs *after* the new pool is ready rather than before
+// create: stateless pools hold no exclusive lease, so we want create → wait →
+// reap to avoid a serving gap, and there's no drain to block on.
+//
+// Disk services are skipped here — they already went through drainStaleDiskPools
+// before create. Only services present in ensuredServices are reaped: if a
+// service's replacement pool failed to be ensured this pass, we leave its old
+// pool running rather than scale down the only instance with no replacement.
+// Returns the number of pools it scaled down.
+func (l *Launcher) reapStaleStatelessPools(
+	ctx context.Context,
+	app *core_v1alpha.App,
+	ver *core_v1alpha.AppVersion,
+	cfgSpec *core_v1alpha.ConfigSpec,
+	ensuredServices map[string]bool,
+) (int, error) {
+	reaped := 0
+	for _, svc := range cfgSpec.Services {
+		if serviceHasDisks(cfgSpec, svc.Name) {
+			continue
+		}
+		if !ensuredServices[svc.Name] {
+			continue
+		}
+
+		// Determine which image to use (same logic as ensurePoolForService)
+		image := ver.ImageUrl
+		if svc.Image != "" {
+			image = containerdx.NormalizeImageReference(svc.Image)
+		}
+
+		desiredSpec, err := l.buildSandboxSpec(ctx, app, ver, cfgSpec, svc.Name, image)
+		if err != nil {
+			return reaped, fmt.Errorf("build sandbox spec for service %s: %w", svc.Name, err)
+		}
+
+		stalePools, err := l.findStalePoolsForService(ctx, app.ID, svc.Name, desiredSpec)
+		if err != nil {
+			return reaped, fmt.Errorf("find stale pools for service %s: %w", svc.Name, err)
+		}
+
+		for _, pwe := range stalePools {
+			pool := pwe.Pool
+
+			// findStalePoolsForService keeps returning a pool while its sandboxes
+			// drain (the disk path re-waits on it). We don't wait, so a pool that's
+			// already at the target state needs no further action — skipping it
+			// avoids re-logging and re-writing the same husk every tick until its
+			// sandboxes finish stopping.
+			if pool.DesiredInstances == 0 && len(pool.ReferencedByVersions) == 0 {
+				continue
+			}
+
+			// Remove version references and scale to 0. Clearing refs also keeps
+			// cleanupOldVersionPools from redundantly touching the same pool.
+			pool.ReferencedByVersions = nil
+			pool.DesiredInstances = 0
+
+			l.Log.Info("reaping stale stateless pool",
+				"pool", pool.ID,
+				"service", pool.Service,
+				"app", app.ID)
+
+			if err := l.updatePool(ctx, pwe); err != nil {
+				return reaped, fmt.Errorf("update pool %s: %w", pool.ID, err)
+			}
+			reaped++
+		}
+	}
+
+	return reaped, nil
 }
 
 // findStalePoolsForService returns pools for the given app+service whose spec

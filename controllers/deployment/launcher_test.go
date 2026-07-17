@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -14,6 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 	appclient "miren.dev/runtime/api/app"
 	"miren.dev/runtime/api/compute/compute_v1alpha"
+	coreutil "miren.dev/runtime/api/core"
 	"miren.dev/runtime/api/core/core_v1alpha"
 	apiserver "miren.dev/runtime/api/entityserver"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
@@ -3779,4 +3781,374 @@ func TestEphemeralVersionDoesNotReuseExistingPool(t *testing.T) {
 	}
 	require.NotNil(t, ephPool, "ephemeral version should have its own pool")
 	require.NotNil(t, normalPool, "normal version's pool should remain unshared")
+}
+
+// TestStaleStatelessPoolReapedOnSameVersionSpecChange reproduces MIR-1432: a
+// binary change (not a new AppVersion) alters the baked sandbox spec, so the old
+// pool fails specsMatch and a replacement is created — but the old pool still
+// references the *current* version, so cleanupOldVersionPools (which keys on
+// version references) never reaps it. On garden this stranded a running duplicate
+// of every stateless app for ~15 hours. reapStaleStatelessPools must scale the
+// husk to zero.
+//
+// We simulate the binary-driven spec change by mutating the active version's
+// image in place (a scalar field, so the store Put replaces it cleanly) and
+// re-reconciling the same version. What matters is the invariant the incident
+// exercised: spec mismatch while the pool still references the current version.
+func TestStaleStatelessPoolReapedOnSameVersionSpecChange(t *testing.T) {
+	ctx := context.Background()
+	log := testutils.TestLogger(t)
+
+	server, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	app := &core_v1alpha.App{Project: entity.Id("project-1")}
+	appID, err := server.Client.Create(ctx, "test-app", app)
+	require.NoError(t, err)
+	app.ID = appID
+
+	ver := &core_v1alpha.AppVersion{
+		App:      app.ID,
+		Version:  "v1",
+		ImageUrl: "oci.miren.cloud/web:1",
+		Config: core_v1alpha.Config{
+			Port: 3000,
+			Services: []core_v1alpha.Services{
+				{
+					Name: "web",
+					ServiceConcurrency: core_v1alpha.ServiceConcurrency{
+						Mode:         "fixed",
+						NumInstances: 1,
+					},
+				},
+			},
+		},
+	}
+	verID, err := server.Client.Create(ctx, "test-v1", ver)
+	require.NoError(t, err)
+	ver.ID = verID
+
+	app.ActiveVersion = ver.ID
+	require.NoError(t, server.Client.Update(ctx, app))
+
+	launcher := newTestLauncher(log, server.EAC)
+	require.NoError(t, launcher.Reconcile(ctx, app, nil))
+
+	pools := listAllPools(t, ctx, server)
+	require.Len(t, pools, 1, "one pool for the initial deploy")
+	oldPoolID := pools[0].ID
+	require.Contains(t, pools[0].ReferencedByVersions, ver.ID)
+
+	// Binary-driven spec change on the SAME version: the baked image differs, so
+	// the existing pool no longer matches, but the version ID is unchanged.
+	ver.ImageUrl = "oci.miren.cloud/web:2"
+	require.NoError(t, server.Client.Update(ctx, ver))
+
+	require.NoError(t, launcher.Reconcile(ctx, app, nil))
+
+	pools = listAllPools(t, ctx, server)
+	require.Len(t, pools, 2, "replacement pool created alongside the old one")
+
+	var oldPool, newPool *compute_v1alpha.SandboxPool
+	for i := range pools {
+		if pools[i].ID == oldPoolID {
+			oldPool = &pools[i]
+		} else {
+			newPool = &pools[i]
+		}
+	}
+	require.NotNil(t, oldPool, "old pool should still exist")
+	require.NotNil(t, newPool, "new pool should have been created")
+
+	// The core assertion: the stranded husk is reaped, not left running.
+	assert.Equal(t, int64(0), oldPool.DesiredInstances,
+		"stale same-version pool must be scaled to 0 (MIR-1432)")
+	assert.Empty(t, oldPool.ReferencedByVersions,
+		"reaped pool should have its version references cleared")
+
+	// And the replacement is the live one.
+	assert.Equal(t, "oci.miren.cloud/web:2", newPool.SandboxSpec.Container[0].Image)
+	assert.GreaterOrEqual(t, newPool.DesiredInstances, int64(1),
+		"replacement pool should be running")
+	assert.Contains(t, newPool.ReferencedByVersions, ver.ID)
+}
+
+// TestSteadyStateReconcileDoesNotReap guards against the reap firing on a no-op
+// pass: when nothing has changed, the single matching pool must be left exactly
+// as-is (no scale-to-zero, no churn — the reconciler runs every minute).
+func TestSteadyStateReconcileDoesNotReap(t *testing.T) {
+	ctx := context.Background()
+	log := testutils.TestLogger(t)
+
+	server, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	app := &core_v1alpha.App{Project: entity.Id("project-1")}
+	appID, err := server.Client.Create(ctx, "test-app", app)
+	require.NoError(t, err)
+	app.ID = appID
+
+	ver := &core_v1alpha.AppVersion{
+		App:      app.ID,
+		Version:  "v1",
+		ImageUrl: "oci.miren.cloud/web:1",
+		Config: core_v1alpha.Config{
+			Port: 3000,
+			Services: []core_v1alpha.Services{
+				{
+					Name: "web",
+					ServiceConcurrency: core_v1alpha.ServiceConcurrency{
+						Mode:         "fixed",
+						NumInstances: 1,
+					},
+				},
+			},
+		},
+	}
+	verID, err := server.Client.Create(ctx, "test-v1", ver)
+	require.NoError(t, err)
+	ver.ID = verID
+
+	app.ActiveVersion = ver.ID
+	require.NoError(t, server.Client.Update(ctx, app))
+
+	launcher := newTestLauncher(log, server.EAC)
+	require.NoError(t, launcher.Reconcile(ctx, app, nil))
+
+	before := listAllPools(t, ctx, server)
+	require.Len(t, before, 1)
+
+	// Reconcile again with nothing changed.
+	require.NoError(t, launcher.Reconcile(ctx, app, nil))
+
+	after := listAllPools(t, ctx, server)
+	require.Len(t, after, 1, "steady-state reconcile must not create or drop pools")
+	assert.Equal(t, before[0].ID, after[0].ID, "same pool reused")
+	assert.Equal(t, int64(1), after[0].DesiredInstances,
+		"steady-state reconcile must not scale the live pool down")
+	assert.Contains(t, after[0].ReferencedByVersions, ver.ID)
+}
+
+// TestCreatePoolForVersionSerializesWithReconcile proves Fix B: the activator's
+// on-demand CreatePoolForVersion contends on the same per-app mutex Reconcile
+// holds. Without the shared lock, an activator-create racing a reconciler-create
+// can each miss the other's in-flight pool and both create one, duplicating every
+// sandbox (the tempo two-web-pools finding). We hold the app mutex and assert
+// CreatePoolForVersion blocks until it's released.
+func TestCreatePoolForVersionSerializesWithReconcile(t *testing.T) {
+	ctx := context.Background()
+	log := testutils.TestLogger(t)
+
+	server, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	app := &core_v1alpha.App{Project: entity.Id("project-1")}
+	appID, err := server.Client.Create(ctx, "test-app", app)
+	require.NoError(t, err)
+	app.ID = appID
+
+	ver := &core_v1alpha.AppVersion{
+		App:      app.ID,
+		Version:  "v1",
+		ImageUrl: "oci.miren.cloud/web:1",
+		Config: core_v1alpha.Config{
+			Port: 3000,
+			Services: []core_v1alpha.Services{
+				{Name: "web"},
+			},
+		},
+	}
+	verID, err := server.Client.Create(ctx, "test-v1", ver)
+	require.NoError(t, err)
+	ver.ID = verID
+
+	launcher := newTestLauncher(log, server.EAC)
+
+	// Take the per-app mutex Reconcile would hold, keyed exactly as both paths key
+	// it (on the app ID). CreatePoolForVersion keys on ver.App, which is app.ID.
+	val, _ := launcher.appMu.LoadOrStore(app.ID, &sync.Mutex{})
+	mu := val.(*sync.Mutex)
+	mu.Lock()
+
+	done := make(chan error, 1)
+	go func() {
+		_, cErr := launcher.CreatePoolForVersion(ctx, ver, "web")
+		done <- cErr
+	}()
+
+	// While we hold the mutex, CreatePoolForVersion must not make progress.
+	select {
+	case <-done:
+		mu.Unlock()
+		t.Fatal("CreatePoolForVersion did not block on the per-app mutex — Fix B regressed")
+	case <-time.After(100 * time.Millisecond):
+		// Still blocked, as expected.
+	}
+
+	// Release the mutex; CreatePoolForVersion should now complete.
+	mu.Unlock()
+	select {
+	case cErr := <-done:
+		require.NoError(t, cErr)
+	case <-time.After(2 * time.Second):
+		t.Fatal("CreatePoolForVersion did not complete after mutex release")
+	}
+
+	// Exactly one pool — no duplicate creation.
+	pools := listAllPools(t, ctx, server)
+	assert.Len(t, pools, 1, "should create exactly one pool")
+}
+
+// TestReapSkipsServicesWithoutEnsuredReplacement guards the gate that keeps
+// reaping from scaling down a service's only pool when this pass failed to
+// ensure a replacement for it. A stale pool must survive when its service is
+// absent from ensuredServices, and only get reaped once the service is present.
+func TestReapSkipsServicesWithoutEnsuredReplacement(t *testing.T) {
+	ctx := context.Background()
+	log := testutils.TestLogger(t)
+
+	server, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	app := &core_v1alpha.App{Project: entity.Id("project-1")}
+	appID, err := server.Client.Create(ctx, "test-app", app)
+	require.NoError(t, err)
+	app.ID = appID
+
+	ver := &core_v1alpha.AppVersion{
+		App:      app.ID,
+		Version:  "v1",
+		ImageUrl: "oci.miren.cloud/web:1",
+		Config: core_v1alpha.Config{
+			Port: 3000,
+			Services: []core_v1alpha.Services{
+				{
+					Name: "web",
+					ServiceConcurrency: core_v1alpha.ServiceConcurrency{
+						Mode:         "fixed",
+						NumInstances: 1,
+					},
+				},
+			},
+		},
+	}
+	verID, err := server.Client.Create(ctx, "test-v1", ver)
+	require.NoError(t, err)
+	ver.ID = verID
+
+	app.ActiveVersion = ver.ID
+	require.NoError(t, server.Client.Update(ctx, app))
+
+	launcher := newTestLauncher(log, server.EAC)
+	require.NoError(t, launcher.Reconcile(ctx, app, nil))
+
+	pools := listAllPools(t, ctx, server)
+	require.Len(t, pools, 1)
+	poolID := pools[0].ID
+	require.Equal(t, int64(1), pools[0].DesiredInstances)
+
+	// Resolve the same spec reconcile used, then make the live pool stale purely
+	// via an image change on the version we pass to the reaper.
+	spec, err := coreutil.ResolveConfig(ctx, server.EAC, ver)
+	require.NoError(t, err)
+	ver.ImageUrl = "oci.miren.cloud/web:2"
+
+	// Replacement NOT ensured this pass: the stale pool must be left alone.
+	reaped, err := launcher.reapStaleStatelessPools(ctx, app, ver, spec, map[string]bool{})
+	require.NoError(t, err)
+	assert.Equal(t, 0, reaped, "no reaping when the service's replacement wasn't ensured")
+
+	got, err := server.EAC.Get(ctx, poolID.String())
+	require.NoError(t, err)
+	var pool compute_v1alpha.SandboxPool
+	pool.Decode(got.Entity().Entity())
+	assert.Equal(t, int64(1), pool.DesiredInstances,
+		"stale pool must survive while its replacement is missing")
+
+	// Replacement ensured: now the stale pool is reaped.
+	reaped, err = launcher.reapStaleStatelessPools(ctx, app, ver, spec, map[string]bool{"web": true})
+	require.NoError(t, err)
+	assert.Equal(t, 1, reaped, "stale pool reaped once its replacement is ensured")
+
+	got, err = server.EAC.Get(ctx, poolID.String())
+	require.NoError(t, err)
+	pool.Decode(got.Entity().Entity())
+	assert.Equal(t, int64(0), pool.DesiredInstances, "stale pool scaled to 0")
+}
+
+// TestConcurrentCreateAndReconcileNoDeadlock fires both lock-taking entry points
+// at the same app concurrently and asserts they both return (no deadlock under
+// contention) and converge on a single pool. The shared appMu is a single,
+// non-nested lock class, so a cycle isn't structurally possible; this is the
+// runtime backstop for that reasoning. Run under -race to catch data races too.
+func TestConcurrentCreateAndReconcileNoDeadlock(t *testing.T) {
+	ctx := context.Background()
+	log := testutils.TestLogger(t)
+
+	server, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	app := &core_v1alpha.App{Project: entity.Id("project-1")}
+	appID, err := server.Client.Create(ctx, "test-app", app)
+	require.NoError(t, err)
+	app.ID = appID
+
+	ver := &core_v1alpha.AppVersion{
+		App:      app.ID,
+		Version:  "v1",
+		ImageUrl: "oci.miren.cloud/web:1",
+		Config: core_v1alpha.Config{
+			Port: 3000,
+			Services: []core_v1alpha.Services{
+				{
+					Name: "web",
+					ServiceConcurrency: core_v1alpha.ServiceConcurrency{
+						Mode:         "fixed",
+						NumInstances: 1,
+					},
+				},
+			},
+		},
+	}
+	verID, err := server.Client.Create(ctx, "test-v1", ver)
+	require.NoError(t, err)
+	ver.ID = verID
+
+	app.ActiveVersion = ver.ID
+	require.NoError(t, server.Client.Update(ctx, app))
+
+	launcher := newTestLauncher(log, server.EAC)
+
+	var wg sync.WaitGroup
+	var createErr, reconcileErr error
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		_, createErr = launcher.CreatePoolForVersion(ctx, ver, "web")
+	}()
+	go func() {
+		defer wg.Done()
+		reconcileErr = launcher.Reconcile(ctx, app, nil)
+	}()
+
+	waited := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(waited)
+	}()
+
+	select {
+	case <-waited:
+		// Both returned — no deadlock.
+	case <-time.After(5 * time.Second):
+		t.Fatal("concurrent CreatePoolForVersion + Reconcile deadlocked")
+	}
+
+	require.NoError(t, createErr, "CreatePoolForVersion should not error under contention")
+	require.NoError(t, reconcileErr, "Reconcile should not error under contention")
+
+	// Whichever ran the findMatchingPool scan second reuses the first pool, so
+	// contention converges on exactly one pool rather than duplicating it.
+	pools := listAllPools(t, ctx, server)
+	assert.Len(t, pools, 1, "concurrent create + reconcile must converge on one pool")
 }
