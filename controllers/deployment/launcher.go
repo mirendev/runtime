@@ -830,12 +830,14 @@ func (l *Launcher) injectAutoMountLocalDisks(spec *core_v1alpha.ConfigSpec, app 
 	for i := range spec.Services {
 		svc := &spec.Services[i]
 
-		// Skip if the service already declares a disk at the auto-mount path or
-		// under the name we would inject; appending a second disk with the same
-		// name would produce a duplicate volume name in the sandbox spec.
+		// Skip if the service already declares an explicit local-provider disk
+		// (all local volumes share the same per-app host directory, so any local
+		// disk already exposes this data regardless of its mount path), a disk at
+		// the legacy auto-mount path, or a disk under the name we would inject.
+		// The last two also guard against a duplicate volume name in the spec.
 		conflicts := false
 		for _, d := range svc.Disks {
-			if d.MountPath == localDataMountPath || d.Name == localDataDiskName {
+			if d.Provider == core_v1alpha.ConfigSpecServicesDisksLOCAL || d.MountPath == localDataMountPath || d.Name == localDataDiskName {
 				conflicts = true
 				break
 			}

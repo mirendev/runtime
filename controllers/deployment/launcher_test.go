@@ -2733,6 +2733,79 @@ func TestNoAutoMountWhenExplicitDiskConfig(t *testing.T) {
 	assert.Equal(t, "local", volumes[0].Provider)
 }
 
+// TestNoAutoMountWhenExplicitLocalDiskElsewhere reproduces MIR-1423: an explicit
+// local-provider disk mounted somewhere other than the legacy /miren/data/local
+// path (and not named "local-data") must suppress the transitional auto-mount.
+// All local volumes share the same per-app host directory, so the explicit disk
+// already exposes the data; the path-only check used to miss this and inject a
+// duplicate local-data mount at /miren/data/local pointing at the same bytes.
+func TestNoAutoMountWhenExplicitLocalDiskElsewhere(t *testing.T) {
+	ctx := context.Background()
+	log := testutils.TestLogger(t)
+
+	server, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	app := &core_v1alpha.App{
+		Project: entity.Id("project-1"),
+	}
+	appID, err := server.Client.Create(ctx, "test-app", app)
+	require.NoError(t, err)
+	app.ID = appID
+
+	version := &core_v1alpha.AppVersion{
+		App:      app.ID,
+		Version:  "v1",
+		ImageUrl: "test:latest",
+		Config: core_v1alpha.Config{
+			Port: 3000,
+			Services: []core_v1alpha.Services{
+				{
+					Name: "web",
+					ServiceConcurrency: core_v1alpha.ServiceConcurrency{
+						Mode:         "fixed",
+						NumInstances: 1,
+					},
+					Disks: []core_v1alpha.Disks{
+						{
+							Name:      "chisigns-data",
+							Provider:  core_v1alpha.LOCAL,
+							MountPath: "/data",
+						},
+					},
+				},
+			},
+		},
+	}
+	verID, err := server.Client.Create(ctx, "test-ver", version)
+	require.NoError(t, err)
+	version.ID = verID
+
+	app.ActiveVersion = version.ID
+	require.NoError(t, server.Client.Update(ctx, app))
+
+	// The per-app local directory is already populated, which would otherwise
+	// self-trigger the legacy auto-mount for this explicit local disk.
+	dataPath := t.TempDir()
+	localDir := filepath.Join(dataPath, "data", "local", app.ID.String())
+	require.NoError(t, os.MkdirAll(localDir, 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(localDir, "data.db"), []byte("test"), 0644))
+
+	launcher := newTestLauncher(log, server.EAC)
+	launcher.DataPath = dataPath
+	require.NoError(t, launcher.Reconcile(ctx, app, nil))
+
+	pools := listAllPools(t, ctx, server)
+	require.Len(t, pools, 1)
+
+	// Only the declared disk should be present — no injected local-data duplicate.
+	volumes := pools[0].SandboxSpec.Volume
+	require.Len(t, volumes, 1, "explicit local disk should suppress the auto-mount")
+	assert.Equal(t, "chisigns-data", volumes[0].Name)
+	assert.Equal(t, "local", volumes[0].Provider)
+	assert.Equal(t, "/data", volumes[0].MountPath)
+}
+
 // TestNoAutoMountWhenDiskNameTaken verifies the auto-mount is skipped when the
 // service already declares a disk under the "local-data" name, even at a
 // different mount path. Injecting a second disk with that name would produce a
