@@ -87,12 +87,29 @@ type EtcdComponent struct {
 	// via SetMetricsWriter after the metrics subsystem comes up (which happens after etcd
 	// and its maintenance loop have already started), so access is atomic. Nil-safe.
 	writer atomic.Pointer[metrics.VictoriaMetricsWriter]
+
+	// metricsKick nudges the maintenance loop to run a check the moment the metrics
+	// writer is attached. The writer only exists after the embedded VictoriaMetrics
+	// address is known, which is well after the loop's immediate startup check — so
+	// without this the first health sample would be up to maintenanceInterval late
+	// (and, on a cluster that restarts more often than that, effectively never). It is
+	// buffered so SetMetricsWriter never blocks even if the loop is still connecting.
+	metricsKick chan struct{}
 }
 
 // SetMetricsWriter configures the metrics sink for the maintenance loop's health gauges.
 // Safe to call with nil or at any time (the maintenance loop reads it atomically each tick).
 func (e *EtcdComponent) SetMetricsWriter(w *metrics.VictoriaMetricsWriter) {
 	e.writer.Store(w)
+	if w == nil {
+		return
+	}
+	// Land a fresh sample now instead of waiting for the next periodic tick. Coalesces:
+	// if a kick is already pending the loop will pick up the latest writer anyway.
+	select {
+	case e.metricsKick <- struct{}{}:
+	default:
+	}
 }
 
 func NewEtcdComponent(log *slog.Logger, cc *containerd.Client, namespace, dataPath string) *EtcdComponent {
@@ -105,6 +122,7 @@ func NewEtcdComponent(log *slog.Logger, cc *containerd.Client, namespace, dataPa
 
 	e := &EtcdComponent{
 		BaseComponent: bc,
+		metricsKick:   make(chan struct{}, 1),
 	}
 
 	// Set up callbacks for the base component
