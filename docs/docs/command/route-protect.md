@@ -36,10 +36,16 @@ miren route protect <host> [flags]
 
 ## Examples
 
-**Protect a route with an identity provider:**
+**Protect a route with an OIDC provider:**
 
 ```bash
 miren route protect example.com --provider my-google-oidc --claim-header email:X-User-Email
+```
+
+**Protect a route with a password:**
+
+```bash
+miren route protect example.com --provider my-pw
 ```
 
 **Protect the default route:**
