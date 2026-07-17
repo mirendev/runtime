@@ -70,7 +70,7 @@ A DNS-compliant name assigned to an [ephemeral version](#ephemeral-version) (e.g
 
 ## Miren Cloud
 
-A central control plane that connects and manages your Miren clusters. Provides team management, access control, automatic data backup, and multi-environment workflows. See [Miren Cloud](/miren-cloud/overview).
+A central control plane that connects and manages your Miren clusters. Provides team management, access control, and multi-environment workflows. See [Miren Cloud](/miren-cloud/overview).
 
 ## Miren Runtime
 

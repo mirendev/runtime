@@ -69,6 +69,13 @@ const config: Config = {
   // Prevent GitHub Pages from adding trailing slashes via redirects
   trailingSlash: false,
 
+  // Render ```mermaid fenced blocks as diagrams (e.g. the Miren Anywhere
+  // request-flow diagram). Requires @docusaurus/theme-mermaid, registered below.
+  markdown: {
+    mermaid: true,
+  },
+  themes: ['@docusaurus/theme-mermaid'],
+
   plugins: [
     filterAncestorWatchesPlugin,
     [
