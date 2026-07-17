@@ -551,23 +551,6 @@ miren deploy --analyze
 		}),
 	))
 
-	d.Dispatch("route protect", Infer("route protect", "Protect an HTTP route with an identity provider", RouteProtect,
-		WithExample(mflags.Example{
-			Name: "Protect a route with an identity provider",
-			Body: "miren route protect example.com --provider my-google-oidc --claim-header email:X-User-Email",
-		}),
-		WithExample(mflags.Example{
-			Name: "Protect the default route",
-			Body: "miren route protect --default --provider my-google-oidc",
-		}),
-	))
-	d.Dispatch("route unprotect", Infer("route unprotect", "Remove identity-provider protection from an HTTP route", RouteUnprotect,
-		WithExample(mflags.Example{
-			Name: "Remove protection from a route",
-			Body: "miren route unprotect example.com",
-		}),
-	))
-
 	// Config commands
 	d.Dispatch("config", Section("config", "Configuration file management", "", WithSectionGroup(GroupClient)))
 	d.Dispatch("config info", Infer("config info", "Show configuration file locations and format", ConfigInfo,
