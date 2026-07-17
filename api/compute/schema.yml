@@ -78,6 +78,13 @@ components:
         lease_timeout:
           type: string
           doc: Timeout for acquiring disk lease (for disk provider)
+        owner:
+          type: string
+          doc: >-
+            Ownership policy for the mounted disk (for disk provider). Empty
+            derives the owner from the container's resolved run user; "keep"
+            leaves the raw mount ownership untouched; "uid" or "uid:gid" pins a
+            specific numeric owner.
 
     static_host:
       type: component

@@ -250,6 +250,7 @@ filesystem = "ext4"
 | `filesystem` | string | `"ext4"`, `"xfs"`, or `"btrfs"` (miren disks only) | `"ext4"` |
 | `read_only` | bool | Mount as read-only | `false` |
 | `lease_timeout` | duration | How long to wait when acquiring the exclusive disk lease (miren disks only) | — |
+| `owner` | string | Ownership for a writable miren disk: empty makes it writable by the run user, `"keep"` opts out, `"uid"`/`"uid:gid"` pins an owner | — |
 
 :::note[Validation]
 - `name` and `mount_path` are required.
@@ -257,6 +258,12 @@ filesystem = "ext4"
 - For miren disks: `filesystem` must be `ext4`, `xfs`, or `btrfs`; `size_gb` must be non-negative; services **must** use `mode = "fixed"` and `num_instances = 1`.
 - `lease_timeout` must be a valid Go duration (e.g. `"30s"`, `"2m"`).
 :::
+
+By default a writable miren disk is chowned to the user your container runs as,
+so a non-root image can write to it without a `chown` shim. Read-only mounts and
+containers that run as root are left untouched. See
+[Disks](/disks#configuring-disks) for the ownership rules and the one-time
+migration pass on large existing disks.
 
 ## `[addons.<name>]` — Addons {#addons}
 

@@ -198,6 +198,13 @@ kinds:
                 lease_timeout:
                   type: string
                   doc: Timeout for acquiring the disk lease (e.g. 5m, 10m)
+                owner:
+                  type: string
+                  doc: >-
+                    Ownership policy for the mounted disk. Empty (default) makes
+                    the disk writable by the container's run user; "keep" leaves
+                    the raw mount ownership untouched; "uid" or "uid:gid" pins a
+                    specific numeric owner.
         entrypoint:
           type: string
           doc: The container entrypoint command
@@ -544,6 +551,13 @@ components:
             lease_timeout:
               type: string
               doc: Timeout for acquiring the disk lease
+            owner:
+              type: string
+              doc: >-
+                Ownership policy for the mounted disk. Empty (default) makes the
+                disk writable by the container's run user; "keep" leaves the raw
+                mount ownership untouched; "uid" or "uid:gid" pins a specific
+                numeric owner.
     entrypoint:
       type: string
       doc: The container entrypoint command

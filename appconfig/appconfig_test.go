@@ -708,11 +708,14 @@ name = "wal"
 mount_path = "/wal"
 size_gb = 50
 filesystem = "xfs"
+owner = "keep"
 `
 		ac, err := Parse([]byte(config))
 		require.NoError(t, err)
 		assert.NotNil(t, ac)
 		require.Len(t, ac.Services["database"].Disks, 2)
+		assert.Equal(t, "", ac.Services["database"].Disks[0].Owner)
+		assert.Equal(t, "keep", ac.Services["database"].Disks[1].Owner)
 	})
 
 	t.Run("invalid filesystem type fails", func(t *testing.T) {

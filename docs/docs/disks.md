@@ -138,8 +138,32 @@ filesystem = "ext4"
 | `size_gb` | Yes* | Size in gigabytes (required for auto-creation) |
 | `filesystem` | No | Filesystem type: `ext4` (default), `xfs`, or `btrfs` |
 | `read_only` | No | Mount as read-only (default: false) |
+| `owner` | No | Ownership for a writable disk (default: the container's run user) |
 
 *`size_gb` is required when the disk doesn't already exist. If the disk exists, this field is ignored.
+
+:::tip[Disks are writable by the run user by default]
+A writable disk is owned by the user your container runs as, so an image that
+runs as a non-root user can write to its disk without a `chown` shim in the
+entrypoint. Ownership is set on the top-level directory when it doesn't already
+match, so there's no slow recursive walk on every boot.
+
+Two cases keep their existing ownership untouched: a container that runs as root
+(the disk already comes up root-owned, so there's nothing to fix) and a
+`read_only` mount (its filesystem can't be written to anyway).
+
+Set `owner` to override: `"keep"` leaves the raw mount ownership untouched, and
+a numeric `"uid"` or `"uid:gid"` pins a specific owner.
+:::
+
+:::warning[Changing ownership on a large existing disk is a one-time pass]
+Ownership is only rewritten when the disk's top-level directory doesn't already
+match, and then the whole disk is walked to update it. That pass runs once and
+scales with the number of files on the disk, so the first boot after a disk
+starts being owned by a different user (for example, an existing disk first
+mounted by a non-root image) can take a while to become ready. Later boots skip
+the walk. Set `owner = "keep"` to opt out entirely.
+:::
 
 ### Example: PostgreSQL with Persistent Storage
 

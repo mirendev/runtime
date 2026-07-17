@@ -43,7 +43,7 @@ func structFingerprint(t reflect.Type) string {
 // fails, update specsMatch to handle the new field (or explicitly skip it),
 // then update the expected hash here.
 func TestSpecsMatchCoversAllFields(t *testing.T) {
-	assert.Equal(t, "767500aab0fb8e54", structFingerprint(reflect.TypeOf(compute_v1alpha.SandboxSpec{})),
+	assert.Equal(t, "df3e94413eb036c1", structFingerprint(reflect.TypeOf(compute_v1alpha.SandboxSpec{})),
 		"SandboxSpec struct tree changed — update specsMatch and this hash")
 }
 
@@ -180,6 +180,19 @@ func TestSpecsMatch(t *testing.T) {
 				}
 				b.Volume = []compute_v1alpha.SandboxSpecVolume{
 					{Name: "data", Provider: "local", MountPath: "/data", ReadOnly: true},
+				}
+			},
+			wantMatch:  false,
+			wantReason: "volume",
+		},
+		{
+			name: "volume owner change does not match",
+			modify: func(a, b *compute_v1alpha.SandboxSpec) {
+				a.Volume = []compute_v1alpha.SandboxSpecVolume{
+					{Name: "data", Provider: "miren", MountPath: "/data"},
+				}
+				b.Volume = []compute_v1alpha.SandboxSpecVolume{
+					{Name: "data", Provider: "miren", MountPath: "/data", Owner: "keep"},
 				}
 			},
 			wantMatch:  false,

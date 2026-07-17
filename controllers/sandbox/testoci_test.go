@@ -27,7 +27,7 @@ type testImageFile struct {
 // buildGoOCIImage compiles the Go package at sourceDir into a static binary,
 // then produces an OCI image layout tar containing that binary at binaryPath.
 // extraFiles are added to the layer alongside the binary.
-func buildGoOCIImage(t *testing.T, sourceDir, binaryPath string, extraFiles []testImageFile) io.ReadCloser {
+func buildGoOCIImage(t *testing.T, sourceDir, binaryPath string, extraFiles []testImageFile, configOpts ...func(*ocispecs.Image)) io.ReadCloser {
 	t.Helper()
 	r := require.New(t)
 
@@ -70,6 +70,9 @@ func buildGoOCIImage(t *testing.T, sourceDir, binaryPath string, extraFiles []te
 			Type:    "layers",
 			DiffIDs: []digest.Digest{diffID},
 		},
+	}
+	for _, opt := range configOpts {
+		opt(&config)
 	}
 	configJSON, err := json.Marshal(config)
 	r.NoError(err)

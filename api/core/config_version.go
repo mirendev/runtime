@@ -85,6 +85,7 @@ func ConfigSpecFromConfig(cfg *core_v1alpha.Config) core_v1alpha.ConfigSpec {
 				SizeGb:       d.SizeGb,
 				Filesystem:   d.Filesystem,
 				LeaseTimeout: d.LeaseTimeout,
+				Owner:        d.Owner,
 			})
 		}
 
