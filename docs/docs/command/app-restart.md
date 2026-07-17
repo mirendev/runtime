@@ -8,6 +8,17 @@ description: "Restart an application"
 
 Restart an application
 
+Restart stops your app's running sandboxes and lets the pool manager re-create them from the *current* active version. It does not create a new version, change any configuration, or rebuild your image — the app comes back on exactly the spec it was already running.
+
+Use restart to:
+- Clear stuck or wedged process state
+- Reset the crash-loop cooldown so a crashing app is retried immediately
+- Pick up data restored out-of-band (for example, after `miren disk restore`)
+
+:::note[Config and env changes restart on their own]
+You do not need to restart after `miren env set`, `miren env delete`, `miren addon create`, or `miren addon destroy`. Each of those already creates a new version and rolls out new sandboxes automatically. A manual restart on top only adds a redundant rollout.
+:::
+
 ## Usage
 
 ```bash

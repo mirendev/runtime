@@ -8,6 +8,12 @@ description: "Delete environment variables"
 
 Delete environment variables
 
+Deleting an environment variable creates a new app version and rolls it out automatically — you do not need to run `miren deploy` or `miren app restart` afterward. The new version reuses your existing container image (no rebuild), and the command waits for it to become healthy before returning.
+
+:::warning[Deploy app.toml changes first]
+`miren env delete` builds the new version by copying the *current server-side* spec, not your local `app.toml`. If you have pending `app.toml` changes, deploy them first, then delete the stale variable — otherwise the delete rolls out the server-side spec and your local edits won't be included. Variables declared in `app.toml` drop automatically when you remove them from the file and redeploy.
+:::
+
 ## Usage
 
 ```bash
