@@ -192,6 +192,8 @@ Every deploy creates a new version of an app, and Miren keeps a bounded history 
 
 A version is retained if it is among the most recent `retention_count` **or** newer than `retention_period` — whichever rule keeps it. The two settings are a floor, not a budget: raising either one keeps more versions. The currently active version is always retained regardless of these limits, and ephemeral (preview) versions are managed separately by their own TTL.
 
+Because `retention_period` keeps every version younger than the window regardless of count, a frequently-deployed app accumulates roughly `deploys-per-day × retention_period` versions — and each pins a container image, snapshot, and registry blob. To keep that from filling the disk, the version GC becomes disk-pressure-aware: once storage usage reaches the image GC's threshold (80%), a sweep drops the `retention_period` floor and prunes each app down to its active version plus `retention_count`, so the downstream image GC can reclaim space. The active version and `retention_count` are always honored. On high-deploy clusters, set a small `retention_period` (or rely on `retention_count`) rather than waiting for pressure.
+
 | Field | Type | Default | Description | Env Var | CLI Flag |
 |-------|------|---------|-------------|---------|----------|
 | `retention_count` | int | `10` | Most-recent versions to keep per app, regardless of age | `MIREN_APP_VERSION_RETENTION_COUNT` | `--app-version-retention-count` |

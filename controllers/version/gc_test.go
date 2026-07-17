@@ -138,6 +138,56 @@ func TestGCController_RetentionPeriod(t *testing.T) {
 	require.False(t, versionExists(t, inmem.EAC, old), "version older than retention window pruned")
 }
 
+func TestGCController_DiskPressureDropsPeriodFloor(t *testing.T) {
+	ctx := context.Background()
+	inmem, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+	log := testutils.TestLogger(t)
+
+	appID, err := inmem.Client.Create(ctx, "pressureapp", &core_v1alpha.App{})
+	require.NoError(t, err)
+
+	now := time.Now()
+	// Four versions, all well within the retention period, so the age floor
+	// alone would retain every one of them.
+	ids := make([]entity.Id, 4)
+	for i := range 4 {
+		name := "v" + string(rune('1'+i))
+		ids[i] = createVersion(t, inmem.EAC, name,
+			&core_v1alpha.AppVersion{App: appID, Version: name},
+			now.Add(time.Duration(i-4)*time.Hour))
+	}
+
+	newController := func(storagePercent float64) *GCController {
+		return &GCController{
+			Log: log,
+			EAC: inmem.EAC,
+			Config: GCConfig{
+				CheckInterval:         time.Hour,
+				RetentionCount:        1,
+				RetentionPeriod:       30 * 24 * time.Hour,
+				DiskPressureThreshold: 80,
+			},
+			storagePercent: func() float64 { return storagePercent },
+		}
+	}
+
+	// Below threshold: the period floor keeps all four despite RetentionCount=1.
+	result, err := newController(50).RunGC(ctx)
+	require.NoError(t, err)
+	require.Equal(t, 0, result.DeletedVersions, "no pruning below disk pressure threshold")
+	require.Equal(t, 4, result.RetainedVersions)
+
+	// At/above threshold: the period floor is dropped, collapsing retention to
+	// the single most-recent version (RetentionCount=1).
+	result, err = newController(85).RunGC(ctx)
+	require.NoError(t, err)
+	require.Equal(t, 3, result.DeletedVersions, "period floor dropped under pressure")
+	require.Equal(t, 1, result.RetainedVersions)
+	require.True(t, versionExists(t, inmem.EAC, ids[3]), "most-recent version kept by count under pressure")
+	require.False(t, versionExists(t, inmem.EAC, ids[0]), "older recent version pruned under pressure")
+}
+
 func TestGCController_SkipsEphemeral(t *testing.T) {
 	ctx := context.Background()
 	inmem, cleanup := testutils.NewInMemEntityServer(t)
