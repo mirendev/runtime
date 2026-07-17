@@ -86,6 +86,7 @@ const sidebars: SidebarsConfig = {
       collapsed: false,
       items: [
         'recipes/hermes-agent',
+        'recipes/amp-runner',
       ],
     },
     {
