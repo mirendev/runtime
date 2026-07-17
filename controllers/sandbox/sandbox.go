@@ -2176,6 +2176,15 @@ func (c *SandboxController) buildSubContainerSpec(
 		},
 	}
 
+	// Look up volume specs by name so disk mounts can be made writable by the
+	// container's run user (MIR-1428). Only miren-provider disks participate;
+	// host/local volumes manage their own ownership.
+	volByName := make(map[string]compute.SandboxSpecVolume, len(sb.Spec.Volume))
+	for _, v := range sb.Spec.Volume {
+		volByName[v.Name] = v
+	}
+	var diskMounts []diskMount
+
 	for _, m := range co.Mount {
 		var rawPath string
 		var ok bool
@@ -2217,6 +2226,13 @@ func (c *SandboxController) buildSubContainerSpec(
 			Source:      rawPath,
 			Options:     []string{"rbind", "rw"},
 		})
+
+		// A miren-provider disk should be writable by the run user. Skip
+		// read-only mounts (chowning a read-only filesystem would fail) and
+		// non-disk providers, which manage their own ownership.
+		if v, ok := volByName[m.Source]; ok && (v.Provider == "miren" || v.Provider == "") && !v.ReadOnly {
+			diskMounts = append(diskMounts, diskMount{hostPath: rawPath, owner: v.Owner})
+		}
 	}
 
 	for _, cf := range co.ConfigFile {
@@ -2362,6 +2378,11 @@ func (c *SandboxController) buildSubContainerSpec(
 	if co.Tty {
 		specOpts = append(specOpts, oci.WithTTY)
 	}
+
+	// Make miren disk mounts writable by the run user (MIR-1428). Appended
+	// last so it observes the fully-resolved spec.Process.User from
+	// WithImageConfig above (and any future user override).
+	specOpts = append(specOpts, c.withDiskOwnership(diskMounts))
 
 	lbls := map[string]string{}
 	lbls[sandboxEntityLabel] = sb.ID.String()

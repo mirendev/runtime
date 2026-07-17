@@ -476,6 +476,7 @@ func buildServicesConfig(appConfig *appconfig.AppConfig, procfileServices map[st
 						SizeGb:       int64(disk.SizeGB),
 						Filesystem:   disk.Filesystem,
 						LeaseTimeout: disk.LeaseTimeout,
+						Owner:        disk.Owner,
 						Provider:     mapDiskProvider(disk.Provider),
 					})
 				}

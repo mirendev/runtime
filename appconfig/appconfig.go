@@ -51,6 +51,7 @@ type DiskConfig struct {
 	SizeGB       int    `toml:"size_gb"`
 	Filesystem   string `toml:"filesystem"`
 	LeaseTimeout string `toml:"lease_timeout"`
+	Owner        string `toml:"owner"`
 }
 
 // PortConfig represents a network port for a service

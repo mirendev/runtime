@@ -774,6 +774,7 @@ func (l *Launcher) buildSandboxSpec(
 					SizeGb:       disk.SizeGb,
 					Filesystem:   disk.Filesystem,
 					LeaseTimeout: disk.LeaseTimeout,
+					Owner:        disk.Owner,
 				})
 
 				appCont.Mount = append(appCont.Mount, compute_v1alpha.SandboxSpecContainerMount{
@@ -979,7 +980,8 @@ func volumesEqual(vols1, vols2 []compute_v1alpha.SandboxSpecVolume) bool {
 			v1.SizeGb != v2.SizeGb ||
 			v1.Filesystem != v2.Filesystem ||
 			v1.ReadOnly != v2.ReadOnly ||
-			v1.LeaseTimeout != v2.LeaseTimeout {
+			v1.LeaseTimeout != v2.LeaseTimeout ||
+			v1.Owner != v2.Owner {
 			return false
 		}
 
