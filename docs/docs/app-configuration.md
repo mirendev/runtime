@@ -170,6 +170,26 @@ description = "Third-party API key for payment processing"
 
 The `required` flag is useful for variables whose values differ per environment—declare them in `app.toml` with an empty value and `required = true`, then set the actual value with `miren env set` before deploying. The `sensitive` flag ensures secrets aren't accidentally exposed in terminal output.
 
+#### Variables Miren Injects
+
+Miren injects these automatically. You don't declare them, and your app can read them to find out what it is:
+
+| Variable | Value | Injected |
+|----------|-------|----------|
+| `MIREN_RUNTIME_APP` | The app name | Every sandbox |
+| `MIREN_RUNTIME_VERSION` | The deployed version, e.g. `v1` | Every sandbox |
+| `MIREN_RUNTIME_INSTANCE_NUM` | This instance's number, starting at `0`. See [Scaling](/scaling). | Instance-backed sandboxes only |
+
+Sandboxes also get `PORT` (the port your web service should listen on) and the [workload identity](/workload-identity) variables.
+
+:::info[Injected vs. CLI variables]
+`MIREN_RUNTIME_*` is the namespace Miren injects **into** your app; the `MIREN_IDENTITY_*` [workload identity](/workload-identity) variables are injected too. The other `MIREN_*` variables — such as `MIREN_APP`, `MIREN_CLUSTER`, and `MIREN_CONFIG` — are input **to** the `miren` CLI, used to pick what a command acts on (see [CI/CD Deployment](/ci-deploy)). Keeping the injected and input variables separate means running `miren` inside a sandbox still resolves the app from your `.miren/app.toml`.
+:::
+
+:::warning[The MIREN_ prefix is reserved]
+You can't set your own variables under `MIREN_` — `miren env set MIREN_FOO=bar` fails with `cannot set MIREN_ environment variables`. Miren owns the whole namespace so it can add injected variables without colliding with yours. Name your own `APP_*` or anything else.
+:::
+
 ### Traffic Routing
 
 For HTTP services, Miren handles routing automatically. For non-HTTP services (TCP/UDP), you can expose ports directly using the `ports` array:

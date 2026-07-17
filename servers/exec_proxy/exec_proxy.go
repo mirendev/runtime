@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"time"
 
+	appclient "miren.dev/runtime/api/app"
 	"miren.dev/runtime/api/compute/compute_v1alpha"
 	coreutil "miren.dev/runtime/api/core"
 	"miren.dev/runtime/api/core/core_v1alpha"
@@ -345,15 +346,23 @@ func (s *Server) buildSandboxSpec(
 		Name:  "app",
 		Image: image,
 		Env: []string{
-			"MIREN_APP=" + appMD.Name,
-			"MIREN_VERSION=" + ver.Version,
+			// EnvRuntimeInstanceNum is deliberately omitted here: the sandbox
+			// controller injects it at boot from the instance metadata label
+			// (see controllers/sandbox), and exec sandboxes aren't instance-backed.
+			appclient.EnvRuntimeApp + "=" + appMD.Name,
+			appclient.EnvRuntimeVersion + "=" + ver.Version,
 		},
 		Directory: startDir,
 	}
 
-	// Add global config env vars
+	// Add global config env vars, stripping any reserved MIREN_ keys so user
+	// config can't shadow the injected sandbox metadata above (mirrors the
+	// filter in controllers/deployment/launcher.go).
 	envMap := make(map[string]string)
 	for _, x := range cfgSpec.Variables {
+		if appclient.IsReservedEnvVar(x.Key) {
+			continue
+		}
 		envMap[x.Key] = x.Value
 	}
 

@@ -12,6 +12,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	appclient "miren.dev/runtime/api/app"
 	"miren.dev/runtime/api/compute/compute_v1alpha"
 	"miren.dev/runtime/api/core/core_v1alpha"
 	apiserver "miren.dev/runtime/api/entityserver"
@@ -3366,6 +3367,67 @@ func TestPortTimeoutPropagatesToSandboxSpec(t *testing.T) {
 	workerSpec, err := l.buildSandboxSpec(ctx, app, ver, cfgSpec, "worker", "test:latest")
 	require.NoError(t, err)
 	assert.Empty(t, workerSpec.PortWaitTimeout, "worker without timeout stays empty so default applies in resolvePortWaitTimeout")
+}
+
+// TestRuntimeEnvVarsInjectedIntoSandboxSpec pins the names Miren injects into
+// every app container. The old names (MIREN_APP, MIREN_VERSION) collided with the
+// vars the CLI reads from its own environment, so `miren` run inside a sandbox
+// targeted the sandbox's app instead of the one in .miren/app.toml (MIR-1406).
+func TestRuntimeEnvVarsInjectedIntoSandboxSpec(t *testing.T) {
+	ctx := context.Background()
+	log := testutils.TestLogger(t)
+
+	server, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	app := &core_v1alpha.App{Project: entity.Id("project-1")}
+	appID, err := server.Client.Create(ctx, "test-app", app)
+	require.NoError(t, err)
+	app.ID = appID
+
+	ver := &core_v1alpha.AppVersion{
+		App:      app.ID,
+		Version:  "v1",
+		ImageUrl: "test:latest",
+	}
+	verID, err := server.Client.Create(ctx, "test-ver", ver)
+	require.NoError(t, err)
+	ver.ID = verID
+
+	cfgSpec := &core_v1alpha.ConfigSpec{
+		Services: []core_v1alpha.ConfigSpecServices{{Name: "web", Port: 4000}},
+	}
+
+	l := newTestLauncher(log, server.EAC)
+
+	spec, err := l.buildSandboxSpec(ctx, app, ver, cfgSpec, "web", "test:latest")
+	require.NoError(t, err)
+	require.NotEmpty(t, spec.Container)
+
+	env := spec.Container[0].Env
+	assert.Contains(t, env, appclient.EnvRuntimeApp+"=test-app")
+	assert.Contains(t, env, appclient.EnvRuntimeVersion+"=v1")
+
+	for _, e := range env {
+		assert.False(t, strings.HasPrefix(e, "MIREN_APP="),
+			"MIREN_APP must not be injected — the CLI reads it as its target app (MIR-1406)")
+		assert.False(t, strings.HasPrefix(e, "MIREN_VERSION="),
+			"MIREN_VERSION was renamed to %s", appclient.EnvRuntimeVersion)
+	}
+}
+
+// TestRuntimeEnvNamesDoNotCollideWithClientEnv is the deployment half of the
+// MIR-1406 regression guard: every var Miren injects into a sandbox must live
+// under the reserved MIREN_RUNTIME_ sub-namespace. That is what makes collisions
+// impossible for any CLI var, present or future — the CLI reads no var under that
+// prefix. The CLI half, which derives the CLI's env-tag names by reflection and
+// asserts none reads an injected var, lives in cli/commands
+// (TestCLIEnvTagsDoNotReadInjectedVars) so it stays next to the flags it checks.
+func TestRuntimeEnvNamesDoNotCollideWithClientEnv(t *testing.T) {
+	for _, injected := range appclient.RuntimeEnvNames {
+		assert.True(t, strings.HasPrefix(injected, "MIREN_RUNTIME_"),
+			"%s is injected but not under MIREN_RUNTIME_ — it could collide with a CLI var", injected)
+	}
 }
 
 // TestCreatePoolForVersionEphemeral verifies that the web pool of an ephemeral
