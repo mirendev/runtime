@@ -87,6 +87,7 @@ const sidebars: SidebarsConfig = {
       items: [
         'recipes/hermes-agent',
         'recipes/amp-runner',
+        'recipes/openhands-agent-server',
       ],
     },
     {
