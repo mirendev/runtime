@@ -133,17 +133,12 @@ only via a messaging platform or `miren sandbox exec`), name the service somethi
 and omit `port`/`port_type` — then Miren does no HTTP ingress and no port health check.
 :::
 
-:::warning[Bind 0.0.0.0, not localhost]
-Miren health-checks and routes to the port from *outside* the container. Hermes components
-default to `127.0.0.1`. Set `HERMES_DASHBOARD_HOST=0.0.0.0` (and `API_SERVER_HOST=0.0.0.0`
-if you ever enable the API server) or the health check reports
-`nothing is listening on :<port>`.
-:::
-
-:::warning[First boot is slow — raise port_timeout]
-s6 init, first-boot seeding, and a config-schema migration all run before the port binds.
-Set `port_timeout = "180s"` so the health check doesn't give up at the 15-second default.
-:::
+Two details in that config bite if you skip them. Miren health-checks and routes to the
+port from *outside* the container, but Hermes components default to `127.0.0.1` — set
+`HERMES_DASHBOARD_HOST=0.0.0.0` (and `API_SERVER_HOST=0.0.0.0` if you ever enable the API
+server) or the health check reports `nothing is listening on :<port>`. And first boot is
+slow: s6 init, first-boot seeding, and a config-schema migration all run before the port
+binds, so `port_timeout = "180s"` keeps the check from giving up at the 15-second default.
 
 :::warning[A Miren disk forces single-instance, churny rollouts]
 A `provider = "miren"` (network) disk holds one exclusive lease, so it requires
