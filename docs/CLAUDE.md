@@ -37,6 +37,13 @@ Rules:
 2. One concept per admonition; keep the body concise — the type tag already
    carries the "importance" signal. Don't nest admonitions.
 3. Always close with `:::` on its own line.
+4. Don't stack them. More than two or three admonitions in a row and the
+   "this is important" signal collapses into wallpaper — the reader (and the
+   retrieval agent) can no longer tell the load-bearing gotcha from the aside.
+   Reserve callouts for what actually breaks, surprises, or bites; explanatory
+   "here's why this value" context belongs in prose or a code comment, not a
+   box. When a section genuinely has many gotchas, one scannable summary (a
+   roadblock checklist, a table) beats a column of boxes.
 
 `hack/gen-command-docs` also emits admonitions; keep it consistent with the
 above. The docs lint (`bun run lint`) enforces these rules.
