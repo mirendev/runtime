@@ -78,6 +78,8 @@ kinds:
       type: int
     superuser_password:
       type: string
+    disk_name:
+      type: string
 
   postgresql_shared_data:
     postgres_server:
