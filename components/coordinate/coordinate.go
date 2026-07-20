@@ -1154,9 +1154,10 @@ func (c *Coordinator) Start(ctx context.Context) error {
 		versionGCConfig.RetentionPeriod = c.AppVersionRetentionPeriod
 	}
 	c.versionGC = &versionctrl.GCController{
-		Log:    c.Log.With("module", "version-gc"),
-		EAC:    eac,
-		Config: versionGCConfig,
+		Log:      c.Log.With("module", "version-gc"),
+		EAC:      eac,
+		Config:   versionGCConfig,
+		DataPath: c.DataPath,
 	}
 	c.versionGC.Start(ctx)
 

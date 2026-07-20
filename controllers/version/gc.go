@@ -19,6 +19,7 @@ import (
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/pkg/appversion"
 	"miren.dev/runtime/pkg/entity"
+	"miren.dev/runtime/pkg/sysstats"
 )
 
 // GCConfig holds configuration for app version retention GC.
@@ -31,14 +32,24 @@ type GCConfig struct {
 	// RetentionCount keeps this many most-recent versions per app regardless of
 	// age (default: 10).
 	RetentionCount int
+	// DiskPressureThreshold is the storage-usage percentage at or above which a
+	// sweep drops the RetentionPeriod floor and prunes each app down to its
+	// active version plus RetentionCount most-recent versions. Without this, the
+	// period floor pins every version younger than RetentionPeriod, so on a
+	// busy cluster the downstream image GC has nothing to reclaim and the disk
+	// fills. The active version and RetentionCount are always honored, even
+	// under pressure. Matches the image GC's threshold (default: 80). Zero
+	// disables pressure-aware pruning.
+	DiskPressureThreshold float64
 }
 
 // DefaultGCConfig returns the default GC configuration.
 func DefaultGCConfig() GCConfig {
 	return GCConfig{
-		CheckInterval:   1 * time.Hour,
-		RetentionPeriod: 30 * 24 * time.Hour,
-		RetentionCount:  10,
+		CheckInterval:         1 * time.Hour,
+		RetentionPeriod:       30 * 24 * time.Hour,
+		RetentionCount:        10,
+		DiskPressureThreshold: 80.0,
 	}
 }
 
@@ -64,6 +75,14 @@ type GCController struct {
 	EAC    *entityserver_v1alpha.EntityAccessClient
 	Config GCConfig
 
+	// DataPath is the server data directory sampled for disk usage when
+	// DiskPressureThreshold is set. Empty disables pressure-aware pruning.
+	DataPath string
+
+	// storagePercent samples current storage usage (0-100). Defaults to
+	// sysstats over DataPath when nil; overridden in tests.
+	storagePercent func() float64
+
 	cancel context.CancelFunc
 }
 
@@ -72,7 +91,8 @@ func (c *GCController) Start(ctx context.Context) {
 	c.Log.Info("starting version retention GC controller",
 		"check_interval", c.Config.CheckInterval,
 		"retention_period", c.Config.RetentionPeriod,
-		"retention_count", c.Config.RetentionCount)
+		"retention_count", c.Config.RetentionCount,
+		"disk_pressure_threshold", c.Config.DiskPressureThreshold)
 
 	ctx, c.cancel = context.WithCancel(ctx)
 	go c.run(ctx)
@@ -179,6 +199,12 @@ func (c *GCController) RunGC(ctx context.Context) (*GCResult, error) {
 	now := time.Now()
 	retentionCutoff := now.Add(-c.Config.RetentionPeriod)
 
+	// Under disk pressure, drop the age-based floor so retention collapses to
+	// the active version plus RetentionCount. The period floor otherwise pins
+	// every recent version's image, leaving the downstream image GC nothing to
+	// reclaim while the disk fills.
+	underPressure := c.underDiskPressure()
+
 	for appID, versions := range versionsByApp {
 		// Sort by creation time, newest first.
 		sort.Slice(versions, func(i, j int) bool {
@@ -188,11 +214,12 @@ func (c *GCController) RunGC(ctx context.Context) (*GCResult, error) {
 		activeVersion := activeVersions[appID]
 
 		for i, info := range versions {
-			// Always keep the active version, the most-recent N, and anything
-			// younger than the retention window.
+			// Always keep the active version and the most-recent N. Also keep
+			// anything younger than the retention window, unless we're under
+			// disk pressure and shedding the age-based floor.
 			if info.version.ID == activeVersion ||
 				i < c.Config.RetentionCount ||
-				info.createdAt.After(retentionCutoff) {
+				(!underPressure && info.createdAt.After(retentionCutoff)) {
 				result.RetainedVersions++
 				continue
 			}
@@ -237,6 +264,37 @@ func (c *GCController) RunGC(ctx context.Context) (*GCResult, error) {
 	}
 
 	return result, nil
+}
+
+// underDiskPressure reports whether current storage usage is at or above the
+// configured threshold, in which case the sweep drops the RetentionPeriod floor
+// and prunes each app to its active version plus RetentionCount. Returns false
+// when pressure-aware pruning is disabled (threshold <= 0) or no usage source is
+// available.
+func (c *GCController) underDiskPressure() bool {
+	if c.Config.DiskPressureThreshold <= 0 {
+		return false
+	}
+
+	sample := c.storagePercent
+	if sample == nil {
+		if c.DataPath == "" {
+			return false
+		}
+		sample = func() float64 {
+			return sysstats.CollectSystemStats(c.DataPath).StoragePercent
+		}
+	}
+
+	pct := sample()
+	if pct >= c.Config.DiskPressureThreshold {
+		c.Log.Info("disk pressure at or above threshold; dropping retention period floor for this sweep",
+			"storage_percent", pct,
+			"threshold", c.Config.DiskPressureThreshold,
+			"retention_count", c.Config.RetentionCount)
+		return true
+	}
+	return false
 }
 
 // activeVersions returns a map of app ID to its active version ID.
