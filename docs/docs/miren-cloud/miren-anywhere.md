@@ -57,7 +57,7 @@ You don't need this section to use Miren Anywhere. It's here for the curious.
 
 When your cluster is registered with Miren Cloud, the miren server holds a long-lived WebSocket open to `miren.cloud`. That connection is how Cloud reaches back to a cluster that can't be dialed directly.
 
-When a request for one of your hostnames arrives at a POP and the cluster isn't connected to that POP yet, three things happen in quick succession. The POP asks Cloud to wake the cluster, briefly telling the visitor to retry. Cloud relays the request down the cluster's connection along with a one-time token. The cluster then dials the POP directly over QUIC (HTTP/3), presents the token, and the POP registers the link. From then on, requests for your hostnames terminate at the POP and get forwarded to your cluster over the encrypted tunnel.
+When a request for one of your hostnames arrives at a POP and the cluster isn't connected to that POP yet, the POP holds the request open while it brings the cluster online. It asks Cloud to wake the cluster, and Cloud relays that down the cluster's connection along with a one-time token. The cluster then dials the POP directly over QUIC (HTTP/3), presents the token, and the POP registers the link. The held request is forwarded down the new tunnel and the visitor gets their response a moment later, with no retry. From then on, requests for your hostnames terminate at the POP and get forwarded to your cluster over the encrypted tunnel.
 
 The token handshake is what makes this safe behind carrier-grade NAT, where many clusters can share one public IP: the POP matches the connection to the right cluster by its token rather than its address.
 
@@ -89,8 +89,8 @@ From [Miren Cloud](/miren-cloud/overview), the [Connectivity](/miren-cloud/conne
 First, check that Miren Anywhere is actually on for the cluster. A cluster set to **Never**, or a non-containerized install still on its default, never routes through the POP network, so its hostnames aren't pointed there and nothing reaches them from outside, even though the connection to Cloud is perfectly healthy. Set the mode to **Auto** or **Always** on the cluster's page in Miren Cloud. See [when Anywhere carries your traffic](#when-anywhere-carries-your-traffic).
 :::
 
-:::note[A request briefly returns "retry shortly"]
-The first request to a cluster that isn't connected to that POP yet gets a short `503 Cluster connecting, retry shortly` while the POP wakes your cluster to dial in. It clears on a retry within a few seconds. The connection also re-establishes itself automatically if it ever drops, so you don't need to restart the server to recover.
+:::note[The first request waits a beat]
+The first request to a cluster that isn't connected to that POP yet is held open while the POP wakes your cluster and it dials in, usually a second or two, and then it's served normally. The POP only returns a short `503 Cluster connecting, retry shortly` if the cluster takes more than 15 seconds to connect. The connection also re-establishes itself automatically if it ever drops, so you don't need to restart the server to recover.
 :::
 
 :::warning[The connection never forms]
