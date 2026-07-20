@@ -97,6 +97,7 @@ const sidebars: SidebarsConfig = {
       items: [
         'disks',
         'addons',
+        'managing-disk-space',
       ],
     },
     {
