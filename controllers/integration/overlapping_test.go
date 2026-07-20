@@ -144,7 +144,7 @@ func TestStopDuringMountCreation(t *testing.T) {
 	require.NoError(t, err)
 
 	// Drive disk to PROVISIONED without processing the mount
-	nodeId := entity.Id("node/" + testNodeId)
+	nodeId := compute.NewNodeId(testNodeId).Id()
 	for i := 0; i < 5; i++ {
 		h.reconcileKind(ctx, storage.KindDisk, h.DiskRC)
 		h.reconcileByIndex(ctx, entity.Ref(storage.DiskVolumeNodeIdId, nodeId), h.DiskVolRC)

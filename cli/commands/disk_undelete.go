@@ -143,7 +143,7 @@ func DiskUndelete(ctx *Context, opts struct {
 	nodeId, err := resolver.findNodeId(context.Background())
 	if err != nil {
 		ctx.Warn("Failed to find node ID, using stored value: %v", err)
-		nodeId = entity.Id(meta.NodeID)
+		nodeId = meta.NodeID.Id()
 	}
 
 	imagePath := filepath.Join(destPath, "disk.img")

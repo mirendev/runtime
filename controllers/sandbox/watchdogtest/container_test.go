@@ -43,7 +43,7 @@ func TestContainerWatchdog(t *testing.T) {
 	// Create the node entity so sandbox ScheduleKeys can reference it.
 	// Only set the kind — Status is a session attribute and can't be set via Put.
 	{
-		nodeId := entity.Id("node/" + testNodeId)
+		nodeId := compute.NewNodeId(testNodeId).Id()
 		node := &compute.Node{}
 		var nodeE entityserver_v1alpha.Entity
 		nodeE.SetId(nodeId.String())
@@ -73,7 +73,7 @@ func TestContainerWatchdog(t *testing.T) {
 		schedule := compute.Schedule{
 			Key: compute.Key{
 				Kind: compute.KindSandbox,
-				Node: entity.Id("node/" + testNodeId),
+				Node: compute.NewNodeId(testNodeId).Id(),
 			},
 		}
 
@@ -113,7 +113,7 @@ func TestContainerWatchdog(t *testing.T) {
 			CC:            cc,
 			EAC:           eac,
 			Namespace:     ns,
-			NodeId:        testNodeId,
+			NodeId:        compute.NewNodeId(testNodeId),
 			CheckInterval: 100 * time.Millisecond,
 		}
 
@@ -157,7 +157,7 @@ func TestContainerWatchdog(t *testing.T) {
 			CC:        cc,
 			EAC:       eac,
 			Namespace: ns,
-			NodeId:    testNodeId,
+			NodeId:    compute.NewNodeId(testNodeId),
 		}
 
 		// Run cleanup
@@ -190,7 +190,7 @@ func TestContainerWatchdog(t *testing.T) {
 		schedule := compute.Schedule{
 			Key: compute.Key{
 				Kind: compute.KindSandbox,
-				Node: entity.Id("node/" + testNodeId),
+				Node: compute.NewNodeId(testNodeId).Id(),
 			},
 		}
 
@@ -226,7 +226,7 @@ func TestContainerWatchdog(t *testing.T) {
 			CC:          cc,
 			EAC:         eac,
 			Namespace:   ns,
-			NodeId:      testNodeId,
+			NodeId:      compute.NewNodeId(testNodeId),
 			GraceWindow: 10 * time.Millisecond,
 		}
 
@@ -261,7 +261,7 @@ func TestContainerWatchdog(t *testing.T) {
 		schedule := compute.Schedule{
 			Key: compute.Key{
 				Kind: compute.KindSandbox,
-				Node: entity.Id("node/" + testNodeId),
+				Node: compute.NewNodeId(testNodeId).Id(),
 			},
 		}
 
@@ -295,7 +295,7 @@ func TestContainerWatchdog(t *testing.T) {
 			CC:          cc,
 			EAC:         eac,
 			Namespace:   ns,
-			NodeId:      testNodeId,
+			NodeId:      compute.NewNodeId(testNodeId),
 			GraceWindow: 10 * time.Second,
 		}
 
@@ -346,7 +346,7 @@ func TestContainerWatchdog(t *testing.T) {
 			CC:        cc,
 			EAC:       eac,
 			Namespace: ns,
-			NodeId:    testNodeId,
+			NodeId:    compute.NewNodeId(testNodeId),
 		}
 
 		result, err := watchdog.CleanupOrphanedContainers(ctx)
@@ -367,7 +367,7 @@ func TestContainerWatchdog(t *testing.T) {
 			CC:            cc,
 			EAC:           eac,
 			Namespace:     ns,
-			NodeId:        testNodeId,
+			NodeId:        compute.NewNodeId(testNodeId),
 			CheckInterval: 100 * time.Millisecond,
 		}
 

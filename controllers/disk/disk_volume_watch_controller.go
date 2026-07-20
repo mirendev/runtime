@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 
+	compute "miren.dev/runtime/api/compute/compute_v1alpha"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/api/storage/storage_v1alpha"
 	"miren.dev/runtime/pkg/controller"
@@ -17,13 +18,13 @@ import (
 type DiskVolumeWatchController struct {
 	Log    *slog.Logger
 	EAC    *entityserver_v1alpha.EntityAccessClient
-	NodeId string
+	NodeId compute.NodeId
 
 	DiskController *controller.ReconcileController
 }
 
 // NewDiskVolumeWatchController creates a new disk volume watch controller.
-func NewDiskVolumeWatchController(log *slog.Logger, eac *entityserver_v1alpha.EntityAccessClient, diskController *controller.ReconcileController, nodeId string) *DiskVolumeWatchController {
+func NewDiskVolumeWatchController(log *slog.Logger, eac *entityserver_v1alpha.EntityAccessClient, diskController *controller.ReconcileController, nodeId compute.NodeId) *DiskVolumeWatchController {
 	return &DiskVolumeWatchController{
 		Log:            log.With("module", "disk-volume-watch"),
 		EAC:            eac,
@@ -41,7 +42,7 @@ func (v *DiskVolumeWatchController) Create(ctx context.Context, vol *storage_v1a
 }
 
 func (v *DiskVolumeWatchController) Update(ctx context.Context, vol *storage_v1alpha.DiskVolume, meta *entity.Meta) error {
-	if vol.NodeId != "" && vol.NodeId != entity.Id("node/"+v.NodeId) {
+	if vol.NodeId != "" && !v.NodeId.Matches(vol.NodeId) {
 		return nil
 	}
 	if vol.DiskId == "" {

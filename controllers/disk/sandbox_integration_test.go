@@ -96,9 +96,9 @@ func TestSandboxDiskIntegration(t *testing.T) {
 		t.Cleanup(cleanup)
 
 		// Create controllers with real EAC and universal mode
-		diskController := NewDiskController(log, es.EAC, "test-node", "", true)
+		diskController := NewDiskController(log, es.EAC, compute.NewNodeId("test-node"), "", true)
 		diskController.ForceUniversalMode()
-		leaseController := NewDiskLeaseController(log, es.EAC, "test-node", "")
+		leaseController := NewDiskLeaseController(log, es.EAC, compute.NewNodeId("test-node"), "")
 		leaseController.ForceUniversalMode()
 
 		// Step 1: Create and provision a disk
@@ -167,7 +167,7 @@ func TestSandboxDiskIntegration(t *testing.T) {
 				ReadOnly: false,
 			},
 			AcquiredAt: now,
-			NodeId:     entity.Id("node/test-node"),
+			NodeId:     compute.NewNodeId("test-node").Id(),
 		}
 
 		// Process lease binding - creates disk_mount entity, stays PENDING
@@ -205,7 +205,7 @@ func TestSandboxDiskIntegration(t *testing.T) {
 				Path: "/mnt/data",
 			},
 			AcquiredAt: now,
-			NodeId:     entity.Id("node/test-node"),
+			NodeId:     compute.NewNodeId("test-node").Id(),
 		}
 
 		conflictMeta := &entity.Meta{}
@@ -232,7 +232,7 @@ func TestSandboxDiskIntegration(t *testing.T) {
 				Path: "/mnt/data",
 			},
 			AcquiredAt: time.Now(),
-			NodeId:     entity.Id("node/test-node"),
+			NodeId:     compute.NewNodeId("test-node").Id(),
 		}
 
 		newMeta := &entity.Meta{}
@@ -267,9 +267,9 @@ func TestSandboxDiskIntegration(t *testing.T) {
 		es, cleanup := testutils.NewInMemEntityServer(t)
 		t.Cleanup(cleanup)
 
-		diskController := NewDiskController(log, es.EAC, "test-node", "", true)
+		diskController := NewDiskController(log, es.EAC, compute.NewNodeId("test-node"), "", true)
 		diskController.ForceUniversalMode()
-		leaseController := NewDiskLeaseController(log, es.EAC, "test-node", "")
+		leaseController := NewDiskLeaseController(log, es.EAC, compute.NewNodeId("test-node"), "")
 		leaseController.ForceUniversalMode()
 
 		// Create multiple disks
@@ -370,7 +370,7 @@ func TestSandboxDiskIntegration(t *testing.T) {
 					ReadOnly: false,
 				},
 				AcquiredAt: now,
-				NodeId:     entity.Id("node/test-node"),
+				NodeId:     compute.NewNodeId("test-node").Id(),
 			}
 
 			meta := &entity.Meta{}

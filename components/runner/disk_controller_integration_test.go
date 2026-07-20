@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	compute "miren.dev/runtime/api/compute/compute_v1alpha"
+
 	"github.com/stretchr/testify/require"
 	"miren.dev/runtime/api/storage/storage_v1alpha"
 	"miren.dev/runtime/controllers/disk"
@@ -20,11 +22,11 @@ func TestDiskControllersCanBeCreated(t *testing.T) {
 		log := slog.Default()
 
 		// Create disk controller (entity-only mode)
-		diskController := disk.NewDiskController(log, nil, "test-node", "", true)
+		diskController := disk.NewDiskController(log, nil, compute.NewNodeId("test-node"), "", true)
 		r.NotNil(diskController)
 
 		// Create disk lease controller (entity-only mode)
-		diskLeaseController := disk.NewDiskLeaseController(log, nil, "test-node", "")
+		diskLeaseController := disk.NewDiskLeaseController(log, nil, compute.NewNodeId("test-node"), "")
 		r.NotNil(diskLeaseController)
 
 		// Verify controllers can be initialized
@@ -40,8 +42,8 @@ func TestDiskControllersCanBeCreated(t *testing.T) {
 		log := slog.Default()
 
 		// Create controllers (entity-only mode)
-		diskController := disk.NewDiskController(log, nil, "test-node", "", true)
-		diskLeaseController := disk.NewDiskLeaseController(log, nil, "test-node", "")
+		diskController := disk.NewDiskController(log, nil, compute.NewNodeId("test-node"), "", true)
+		diskLeaseController := disk.NewDiskLeaseController(log, nil, compute.NewNodeId("test-node"), "")
 
 		// Verify they can be adapted for the controller manager
 		diskAdapter := controller.AdaptController(diskController)

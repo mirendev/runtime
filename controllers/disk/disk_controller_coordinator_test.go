@@ -3,6 +3,8 @@ package disk
 import (
 	"testing"
 
+	compute "miren.dev/runtime/api/compute/compute_v1alpha"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"miren.dev/runtime/api/storage/storage_v1alpha"
@@ -21,7 +23,7 @@ func TestDiskController_NonCoordinator_NoVolumeCreated(t *testing.T) {
 	es, cleanup := testutils.NewInMemEntityServer(t)
 	defer cleanup()
 
-	dc := NewDiskController(log, es.EAC, "runner-uuid", "", false)
+	dc := NewDiskController(log, es.EAC, compute.NewNodeId("runner-uuid"), "", false)
 	dc.ForceUniversalMode()
 
 	disk := &storage_v1alpha.Disk{
@@ -60,7 +62,7 @@ func TestDiskController_PrefersOwnVolume(t *testing.T) {
 	es, cleanup := testutils.NewInMemEntityServer(t)
 	defer cleanup()
 
-	dc := NewDiskController(log, es.EAC, "miren", "", true)
+	dc := NewDiskController(log, es.EAC, compute.NewNodeId("miren"), "", true)
 	dc.ForceUniversalMode()
 
 	disk := &storage_v1alpha.Disk{
@@ -85,7 +87,7 @@ func TestDiskController_PrefersOwnVolume(t *testing.T) {
 		VolumeMode:   storage_v1alpha.VM_UNIVERSAL,
 		DesiredState: storage_v1alpha.DV_PRESENT,
 		ActualState:  storage_v1alpha.DV_PENDING,
-		NodeId:       entity.Id("node/runner-uuid"),
+		NodeId:       compute.NewNodeId("runner-uuid").Id(),
 	}
 	_, err = es.EAC.Create(ctx, entity.New(
 		entity.DBId, entity.Id("disk_volume/foreign"),
@@ -103,7 +105,7 @@ func TestDiskController_PrefersOwnVolume(t *testing.T) {
 		DesiredState: storage_v1alpha.DV_PRESENT,
 		ActualState:  storage_v1alpha.DV_READY,
 		VolumeId:     "native-vol-id",
-		NodeId:       entity.Id("node/miren"),
+		NodeId:       compute.NewNodeId("miren").Id(),
 	}
 	_, err = es.EAC.Create(ctx, entity.New(
 		entity.DBId, entity.Id("disk_volume/native"),
@@ -135,7 +137,7 @@ func TestDiskController_OnlyOrphan_StillCreatesNative(t *testing.T) {
 	es, cleanup := testutils.NewInMemEntityServer(t)
 	defer cleanup()
 
-	dc := NewDiskController(log, es.EAC, "miren", "", true)
+	dc := NewDiskController(log, es.EAC, compute.NewNodeId("miren"), "", true)
 	dc.ForceUniversalMode()
 
 	disk := &storage_v1alpha.Disk{
@@ -159,7 +161,7 @@ func TestDiskController_OnlyOrphan_StillCreatesNative(t *testing.T) {
 		VolumeMode:   storage_v1alpha.VM_UNIVERSAL,
 		DesiredState: storage_v1alpha.DV_PRESENT,
 		ActualState:  storage_v1alpha.DV_READY,
-		NodeId:       entity.Id("node/runner-uuid"),
+		NodeId:       compute.NewNodeId("runner-uuid").Id(),
 	}
 	_, err = es.EAC.Create(ctx, entity.New(
 		entity.DBId, entity.Id("disk_volume/foreign-only"),
@@ -182,7 +184,7 @@ func TestDiskController_OnlyOrphan_StillCreatesNative(t *testing.T) {
 	for _, v := range values {
 		var vol storage_v1alpha.DiskVolume
 		vol.Decode(v.Entity())
-		if vol.NodeId == entity.Id("node/miren") {
+		if vol.NodeId == compute.NewNodeId("miren").Id() {
 			sawNative = true
 		}
 	}

@@ -120,7 +120,7 @@ func TestRunnerCoordinatorIntegration(t *testing.T) {
 	eac := entityserver_v1alpha.EntityAccessClient{Client: client}
 
 	// Check the node entity for the runner
-	nodeId := "node/" + runnerCfg.Id
+	nodeId := compute.NewNodeId(runnerCfg.Id).String()
 
 	// Poll for the node entity to be ready (wait for runner startup to complete)
 	var nodeRes *entityserver_v1alpha.EntityAccessClientGetResults

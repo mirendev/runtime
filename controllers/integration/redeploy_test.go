@@ -69,7 +69,7 @@ func concurrentReconcileEntities(ctx context.Context, h *TestHarness, index enti
 // concurrentReconcileRound runs all four disk-lifecycle controller types concurrently,
 // each with multiple worker goroutines processing their entities.
 func concurrentReconcileRound(ctx context.Context, h *TestHarness, workers int) {
-	nodeId := entity.Id("node/" + testNodeId)
+	nodeId := compute.NewNodeId(testNodeId).Id()
 
 	type ctrlDef struct {
 		index entity.Attr

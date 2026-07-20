@@ -200,7 +200,7 @@ func (c *SandboxController) configureMirenVolume(ctx context.Context, sb *comput
 	}
 
 	// Acquire a lease for this disk on this node (creates new or takes over existing)
-	nodeID := entity.Id("node/" + c.NodeId)
+	nodeID := c.NodeId.Id()
 	leaseID, err := c.acquireDiskLease(ctx, diskID, nodeID, sb.ID, appID, volume.MountPath, readOnly)
 	if err != nil {
 		return "", fmt.Errorf("failed to get or create disk lease: %w", err)
@@ -349,7 +349,7 @@ func (c *SandboxController) createDiskLease(ctx context.Context, diskID entity.I
 		"mount_path", mountPath,
 		"node_id", c.NodeId)
 
-	nodeID := entity.Id("node/" + c.NodeId)
+	nodeID := c.NodeId.Id()
 
 	lease := &storage.DiskLease{
 		DiskId:    diskID,

@@ -45,7 +45,7 @@ type MockSandboxController struct {
 	AssignNetwork bool
 
 	// NodeID is the mock node ID to assign to sandboxes.
-	// Defaults to "node/mock-node".
+	// Defaults to node/mock-node.
 	NodeID entity.Id
 
 	mu        sync.Mutex
@@ -63,7 +63,7 @@ func NewMockSandboxController(log *slog.Logger, eac *entityserver_v1alpha.Entity
 		EAC:           eac,
 		PollInterval:  50 * time.Millisecond,
 		AssignNetwork: true,
-		NodeID:        entity.Id("node/mock-node"),
+		NodeID:        compute_v1alpha.NewNodeId("mock-node").Id(),
 		FailSandboxes: make(map[entity.Id]bool),
 		processed:     make(map[entity.Id]bool),
 	}

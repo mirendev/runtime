@@ -16,7 +16,6 @@ import (
 	compute "miren.dev/runtime/api/compute/compute_v1alpha"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/pkg/cond"
-	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/netdb"
 )
 
@@ -39,7 +38,7 @@ type ContainerWatchdog struct {
 	Namespace string
 	// NodeId scopes sandbox lookups to this node so we only consider
 	// sandboxes that are scheduled here when building the valid set.
-	NodeId string
+	NodeId compute.NodeId
 	// CheckInterval is how often to check for orphaned containers
 	CheckInterval time.Duration
 	// GraceWindow is how long to wait before removing containers from non-running sandboxes
@@ -137,7 +136,7 @@ func (w *ContainerWatchdog) CleanupOrphanedContainers(ctx context.Context) (*Cle
 	validContainers := make(map[string]bool)
 	indexedSandboxes := make(map[string]bool)
 
-	resp, err := w.EAC.List(cleanupCtx, compute.Index(compute.KindSandbox, entity.Id("node/"+w.NodeId)))
+	resp, err := w.EAC.List(cleanupCtx, compute.Index(compute.KindSandbox, w.NodeId.Id()))
 	if err != nil {
 		return result, fmt.Errorf("failed to list sandboxes: %w", err)
 	}

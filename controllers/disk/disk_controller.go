@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"strings"
 
+	compute "miren.dev/runtime/api/compute/compute_v1alpha"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/api/storage/storage_v1alpha"
 	"miren.dev/runtime/pkg/controller"
@@ -40,7 +41,7 @@ type DiskController struct {
 	EAC *entityserver_v1alpha.EntityAccessClient
 
 	// NodeId is the ID of this node, used for creating volume entities
-	NodeId string
+	NodeId compute.NodeId
 
 	// isCoordinator is true if this controller runs on the coordinator node.
 	// Today all disks are owned by the coordinator, so only the coordinator
@@ -64,7 +65,7 @@ type DiskController struct {
 // The diskMode parameter comes from server config (MIREN_DISK_MODE); pass ""
 // for auto-detection. isCoordinator must be true on the primary node and
 // false on distributed runners.
-func NewDiskController(log *slog.Logger, eac *entityserver_v1alpha.EntityAccessClient, nodeId string, diskMode string, isCoordinator bool) *DiskController {
+func NewDiskController(log *slog.Logger, eac *entityserver_v1alpha.EntityAccessClient, nodeId compute.NodeId, diskMode string, isCoordinator bool) *DiskController {
 	return &DiskController{
 		Log:            log.With("module", "disk"),
 		EAC:            eac,
@@ -82,13 +83,6 @@ func NewDiskController(log *slog.Logger, eac *entityserver_v1alpha.EntityAccessC
 func (d *DiskController) shouldManageDisk(disk *storage_v1alpha.Disk) bool {
 	_ = disk
 	return d.isCoordinator
-}
-
-// myNodeId returns the entity ID used for disk_volumes owned by this
-// controller's node, normalized so the "node/" prefix is always present
-// exactly once regardless of how NodeId was passed in.
-func (d *DiskController) myNodeId() entity.Id {
-	return entity.Id("node/" + strings.TrimPrefix(d.NodeId, "node/"))
 }
 
 // ForceUniversalMode forces the controller to use disk_volume entities with
@@ -185,9 +179,9 @@ func (d *DiskController) handleProvisioning(ctx context.Context, disk *storage_v
 		return fmt.Errorf("error looking up existing disk_volume for disk %s: %w", disk.ID, err)
 	}
 
-	myNodeId := d.myNodeId()
+	myNodeId := d.NodeId.Id()
 
-	if existingVolume != nil && existingVolume.NodeId != "" && existingVolume.NodeId != myNodeId {
+	if existingVolume != nil && existingVolume.NodeId != "" && !d.NodeId.Matches(existingVolume.NodeId) {
 		// Orphan from a runner that created a volume it shouldn't have. Log
 		// and fall through to create our own native volume; the orphan is
 		// harmless here and will be cleaned up via DELETING (or left to the
@@ -393,14 +387,12 @@ func (d *DiskController) getDiskVolumeForDisk(ctx context.Context, diskId entity
 		return nil, nil
 	}
 
-	myNodeId := d.myNodeId()
-
 	var chosen *storage_v1alpha.DiskVolume
 	for _, v := range values {
 		var volume storage_v1alpha.DiskVolume
 		volume.Decode(v.Entity())
 
-		if volume.NodeId == myNodeId {
+		if d.NodeId.Matches(volume.NodeId) {
 			return &volume, nil
 		}
 

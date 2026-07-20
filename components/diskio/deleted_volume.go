@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	compute "miren.dev/runtime/api/compute/compute_v1alpha"
 )
 
 const (
@@ -17,15 +19,15 @@ const (
 // DeletedVolumeMetadata stores information about a soft-deleted disk volume
 // so it can be restored via the undelete command.
 type DeletedVolumeMetadata struct {
-	DiskID     string    `json:"disk_id"`
-	DiskName   string    `json:"disk_name"`
-	SizeGb     int64     `json:"size_gb"`
-	Filesystem string    `json:"filesystem"`
-	VolumeID   string    `json:"volume_id"`
-	VolumeMode string    `json:"volume_mode"`
-	CreatedBy  string    `json:"created_by,omitempty"`
-	NodeID     string    `json:"node_id"`
-	DeletedAt  time.Time `json:"deleted_at"`
+	DiskID     string         `json:"disk_id"`
+	DiskName   string         `json:"disk_name"`
+	SizeGb     int64          `json:"size_gb"`
+	Filesystem string         `json:"filesystem"`
+	VolumeID   string         `json:"volume_id"`
+	VolumeMode string         `json:"volume_mode"`
+	CreatedBy  string         `json:"created_by,omitempty"`
+	NodeID     compute.NodeId `json:"node_id"`
+	DeletedAt  time.Time      `json:"deleted_at"`
 }
 
 // DeletedVolumesPath returns the path to the deleted-volumes directory.

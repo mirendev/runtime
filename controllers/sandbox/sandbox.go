@@ -72,7 +72,7 @@ type SandboxControllerDeps struct {
 	CC        *containerd.Client
 	EAC       *entityserver_v1alpha.EntityAccessClient
 	Namespace string
-	NodeId    string
+	NodeId    compute.NodeId
 	NetServ   *network.ServiceManager
 	Bridge    string
 	Subnet    *netdb.Subnet
@@ -94,7 +94,7 @@ type SandboxController struct {
 	EAC *entityserver_v1alpha.EntityAccessClient
 
 	Namespace string
-	NodeId    string
+	NodeId    compute.NodeId
 
 	NetServ *network.ServiceManager
 
@@ -313,7 +313,7 @@ func (c *SandboxController) reconcileSandboxesOnBoot(ctx context.Context) error 
 	// index as the controller watch (see runner.go) ensures we don't
 	// accidentally mark sandboxes on other nodes as unhealthy because their
 	// containers don't exist in our local containerd.
-	resp, err := c.EAC.List(ctx, compute.Index(compute.KindSandbox, entity.Id("node/"+c.NodeId)))
+	resp, err := c.EAC.List(ctx, compute.Index(compute.KindSandbox, c.NodeId.Id()))
 	if err != nil {
 		return fmt.Errorf("failed to list sandboxes: %w", err)
 	}
@@ -2861,7 +2861,7 @@ func (c *SandboxController) Periodic(ctx context.Context, timeHorizon time.Durat
 
 	// List sandboxes scheduled to this node only so we don't delete
 	// sandbox entities that belong to other runners.
-	resp, err := c.EAC.List(ctx, compute.Index(compute.KindSandbox, entity.Id("node/"+c.NodeId)))
+	resp, err := c.EAC.List(ctx, compute.Index(compute.KindSandbox, c.NodeId.Id()))
 	if err != nil {
 		return fmt.Errorf("failed to list sandboxes: %w", err)
 	}

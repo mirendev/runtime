@@ -45,7 +45,7 @@ func newSandboxController(d *testutils.TestDeps) (*sandbox.SandboxController, er
 		CC:             d.CC,
 		EAC:            d.EAC,
 		Namespace:      d.Namespace,
-		NodeId:         "test-node",
+		NodeId:         compute.NewNodeId("test-node"),
 		NetServ:        d.NetServ,
 		Bridge:         d.Bridge,
 		Subnet:         d.Subnet,

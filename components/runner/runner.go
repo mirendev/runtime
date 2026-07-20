@@ -217,6 +217,14 @@ func (r *Runner) entityClient() *entityserver.Client {
 	return r.ec
 }
 
+// nodeId returns this runner's own node identity in canonical node/<raw>
+// form. r.Id is the raw runner id from config; everything that references this
+// node in the entity store goes through here so the node-id prefix is applied
+// consistently in exactly one place (see compute_v1alpha.NewNodeId).
+func (r *Runner) nodeId() compute_v1alpha.NodeId {
+	return compute_v1alpha.NewNodeId(r.Id)
+}
+
 // Drain sets the runner's node status to disabled and stops all running sandboxes
 func (r *Runner) Drain(ctx context.Context) error {
 	ec := r.entityClient()
@@ -228,7 +236,7 @@ func (r *Runner) Drain(ctx context.Context) error {
 
 	// Set node status to disabled
 	r.Log.Info("setting node status to disabled", "id", r.Id)
-	err := ec.UpdateAttrs(ctx, entity.Id(r.Id), (&compute_v1alpha.Node{
+	err := ec.UpdateAttrs(ctx, r.nodeId().Id(), (&compute_v1alpha.Node{
 		Status: compute_v1alpha.DISABLED,
 	}).Encode)
 	if err != nil {
@@ -238,7 +246,7 @@ func (r *Runner) Drain(ctx context.Context) error {
 	r.Log.Info("node status set to disabled", "id", r.Id)
 
 	// List all sandboxes scheduled to this node
-	idx := compute_v1alpha.Index(compute_v1alpha.KindSandbox, entity.Id("node/"+r.Id))
+	idx := compute_v1alpha.Index(compute_v1alpha.KindSandbox, r.nodeId().Id())
 	results, err := ec.List(ctx, idx)
 	if err != nil {
 		return fmt.Errorf("failed to query sandboxes on node: %w", err)
@@ -670,7 +678,7 @@ func (r *Runner) SetupControllers(
 		CC:             r.deps.CC,
 		EAC:            eas,
 		Namespace:      r.deps.Namespace,
-		NodeId:         r.Id,
+		NodeId:         r.nodeId(),
 		NetServ:        r.deps.NetServ,
 		Bridge:         r.deps.Bridge,
 		Subnet:         r.deps.Subnet,
@@ -757,7 +765,7 @@ func (r *Runner) SetupControllers(
 	volOps := diskio.NewRealDiskVolumeOps(log)
 	mntOps := diskio.NewRealDiskMountOps(log)
 
-	r.dvc = diskio.NewDiskVolumeController(log, dataPath, r.Id, diskioState, volOps, mntOps)
+	r.dvc = diskio.NewDiskVolumeController(log, dataPath, r.nodeId(), diskioState, volOps, mntOps)
 	r.dvc.SetEAC(eas)
 
 	if err := r.dvc.Init(ctx); err != nil {
@@ -770,7 +778,7 @@ func (r *Runner) SetupControllers(
 		log.Warn("failed to reconcile disk volumes on startup", "error", err)
 	}
 
-	r.dmc = diskio.NewDiskMountController(log, dataPath, r.Id, diskioState, mntOps)
+	r.dmc = diskio.NewDiskMountController(log, dataPath, r.nodeId(), diskioState, mntOps)
 	r.dmc.SetEAC(eas)
 
 	// Reconcile mounts with entity server on startup to re-mount any
@@ -866,8 +874,8 @@ func (r *Runner) SetupControllers(
 	cm.AddController(mntController)
 
 	// Use entity mode controllers
-	diskController := disk.NewDiskController(log, eas, r.Id, r.DiskMode, r.deps.IsCoordinator)
-	diskLeaseController := disk.NewDiskLeaseController(log, eas, r.Id, r.DiskMode)
+	diskController := disk.NewDiskController(log, eas, r.nodeId(), r.DiskMode, r.deps.IsCoordinator)
+	diskLeaseController := disk.NewDiskLeaseController(log, eas, r.nodeId(), r.DiskMode)
 
 	// Add disk controller to closers list so it gets cleaned up on shutdown
 	r.closers = append(r.closers, diskController)
@@ -903,7 +911,7 @@ func (r *Runner) SetupControllers(
 	sbController := controller.NewReconcileController(
 		"sandbox",
 		log,
-		compute_v1alpha.Index(compute_v1alpha.KindSandbox, entity.Id("node/"+r.Id)),
+		compute_v1alpha.Index(compute_v1alpha.KindSandbox, r.nodeId().Id()),
 		eas,
 		sbcHandler,
 		time.Minute,
@@ -1020,7 +1028,7 @@ func (r *Runner) SetupControllers(
 
 	// Add disk_volume watch controller to trigger disk re-reconciliation when
 	// disk_volume entities change (e.g. volume becomes DV_READY after provisioning)
-	diskVolumeWatchController := disk.NewDiskVolumeWatchController(log, eas, diskRC, r.Id)
+	diskVolumeWatchController := disk.NewDiskVolumeWatchController(log, eas, diskRC, r.nodeId())
 	cm.AddController(
 		controller.NewReconcileController(
 			"disk-volume-watch",
@@ -1035,7 +1043,7 @@ func (r *Runner) SetupControllers(
 
 	// Add disk_mount watch controller to trigger disk lease re-reconciliation when
 	// disk_mount entities change (e.g. mount becomes DM_MOUNTED after mounting)
-	diskMountWatchController := disk.NewDiskMountWatchController(log, eas, diskLeaseRC, r.Id)
+	diskMountWatchController := disk.NewDiskMountWatchController(log, eas, diskLeaseRC, r.nodeId())
 	cm.AddController(
 		controller.NewReconcileController(
 			"disk-mount-watch",

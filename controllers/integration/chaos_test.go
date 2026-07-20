@@ -400,7 +400,7 @@ func faultDuplicateLease(t *testing.T, ctx context.Context, h *TestHarness, rng 
 			Path:    "/data",
 			Options: "rw",
 		},
-		NodeId: entity.Id("node/" + testNodeId),
+		NodeId: compute.NewNodeId(testNodeId).Id(),
 	}
 
 	conflictLeaseID := entity.Id("disk-lease/" + idgen.GenNS("disk-lease"))
@@ -418,7 +418,7 @@ func faultDuplicateLease(t *testing.T, ctx context.Context, h *TestHarness, rng 
 
 // chaosReconcileRound runs each controller 1-3 times in random order.
 func chaosReconcileRound(ctx context.Context, h *TestHarness, rng *rand.Rand) {
-	nodeId := entity.Id("node/" + testNodeId)
+	nodeId := compute.NewNodeId(testNodeId).Id()
 
 	type ctrlDef struct {
 		index entity.Attr

@@ -43,7 +43,7 @@ type DiskLeaseController struct {
 	EAC *entityserver_v1alpha.EntityAccessClient
 
 	// NodeId is the ID of this node, used for creating disk_mount entities
-	NodeId string
+	NodeId compute.NodeId
 
 	// Base path for disk mounts (e.g., /var/lib/miren/disks)
 	mountBasePath string
@@ -62,7 +62,7 @@ type DiskLeaseController struct {
 
 // NewDiskLeaseController creates a disk lease controller that uses disk_mount entities.
 // The diskMode parameter comes from server config (MIREN_DISK_MODE); pass "" for auto-detection.
-func NewDiskLeaseController(log *slog.Logger, eac *entityserver_v1alpha.EntityAccessClient, nodeId string, diskMode string) *DiskLeaseController {
+func NewDiskLeaseController(log *slog.Logger, eac *entityserver_v1alpha.EntityAccessClient, nodeId compute.NodeId, diskMode string) *DiskLeaseController {
 	return &DiskLeaseController{
 		Log:            log.With("module", "disk-lease"),
 		EAC:            eac,
@@ -274,8 +274,7 @@ func (d *DiskLeaseController) cleanupDiskMountForLease(ctx context.Context, leas
 // reconcileLease reconciles the lease state
 func (d *DiskLeaseController) reconcileLease(ctx context.Context, lease *storage_v1alpha.DiskLease, meta *entity.Meta) error {
 	// Only reconcile leases assigned to this node
-	myNodeId := entity.Id("node/" + d.NodeId)
-	if lease.NodeId != "" && lease.NodeId != myNodeId {
+	if lease.NodeId != "" && !d.NodeId.Matches(lease.NodeId) {
 		return nil
 	}
 
@@ -497,7 +496,7 @@ func (d *DiskLeaseController) handlePendingLease(ctx context.Context, lease *sto
 		ReadOnly:     lease.Mount.ReadOnly,
 		DesiredState: storage_v1alpha.DM_WANT_MOUNTED,
 		ActualState:  storage_v1alpha.DM_PENDING,
-		NodeId:       entity.Id("node/" + d.NodeId),
+		NodeId:       d.NodeId.Id(),
 	}
 
 	d.Log.Info("Creating disk_mount entity",

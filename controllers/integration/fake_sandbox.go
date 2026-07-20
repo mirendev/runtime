@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 
+	compute "miren.dev/runtime/api/compute/compute_v1alpha"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	storage "miren.dev/runtime/api/storage/storage_v1alpha"
 	"miren.dev/runtime/pkg/entity"
@@ -18,11 +19,11 @@ import (
 type FakeSandboxController struct {
 	Log    *slog.Logger
 	EAC    *entityserver_v1alpha.EntityAccessClient
-	NodeId string
+	NodeId compute.NodeId
 }
 
 // NewFakeSandboxController creates a new fake sandbox controller.
-func NewFakeSandboxController(log *slog.Logger, eac *entityserver_v1alpha.EntityAccessClient, nodeId string) *FakeSandboxController {
+func NewFakeSandboxController(log *slog.Logger, eac *entityserver_v1alpha.EntityAccessClient, nodeId compute.NodeId) *FakeSandboxController {
 	return &FakeSandboxController{
 		Log:    log.With("module", "fake-sandbox"),
 		EAC:    eac,
@@ -91,13 +92,13 @@ func (f *FakeSandboxController) AcquireDiskLease(ctx context.Context, diskID, sa
 		return "", fmt.Errorf("failed to list disk leases: %w", err)
 	}
 
-	nodeID := entity.Id("node/" + f.NodeId)
+	nodeID := f.NodeId.Id()
 
 	for _, e := range listResp.Values() {
 		var lease storage.DiskLease
 		lease.Decode(e.Entity())
 
-		if lease.DiskId == diskID && lease.NodeId == nodeID {
+		if lease.DiskId == diskID && f.NodeId.Matches(lease.NodeId) {
 			if lease.SandboxId == sandboxID {
 				f.Log.Info("found existing lease", "lease", lease.ID)
 				return lease.ID, nil

@@ -36,7 +36,7 @@ func newOwnershipTestServer(t *testing.T) (*RegistrationServer, func()) {
 	})
 
 	ctx := context.Background()
-	nodeID := entity.Id("node/" + authzRunnerID)
+	nodeID := compute_v1alpha.NewNodeId(authzRunnerID).Id()
 
 	_, err = es.EAC.Create(ctx, entity.New(
 		entity.DBId, nodeID,

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	compute "miren.dev/runtime/api/compute/compute_v1alpha"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/api/storage/storage_v1alpha"
 	"miren.dev/runtime/pkg/entity"
@@ -26,7 +27,7 @@ func alwaysMount(mode storage_v1alpha.DiskVolumeVolumeMode) bool {
 type DiskVolumeController struct {
 	log      *slog.Logger
 	dataPath string
-	nodeId   string
+	nodeId   compute.NodeId
 	eac      *entityserver_v1alpha.EntityAccessClient
 	state    *State
 	ops      DiskVolumeOps
@@ -41,7 +42,7 @@ type DiskVolumeController struct {
 	orphanSweepDone bool
 }
 
-func NewDiskVolumeController(log *slog.Logger, dataPath, nodeId string, state *State, ops DiskVolumeOps, mntOps DiskMountOps) *DiskVolumeController {
+func NewDiskVolumeController(log *slog.Logger, dataPath string, nodeId compute.NodeId, state *State, ops DiskVolumeOps, mntOps DiskMountOps) *DiskVolumeController {
 	return &DiskVolumeController{
 		log:      log.With("module", "disk-volume"),
 		dataPath: dataPath,
@@ -71,8 +72,7 @@ func (c *DiskVolumeController) Reconcile(ctx context.Context, volume *storage_v1
 }
 
 func (c *DiskVolumeController) Index() entity.Attr {
-	fullNodeId := "node/" + c.nodeId
-	return entity.Ref(storage_v1alpha.DiskVolumeNodeIdId, entity.Id(fullNodeId))
+	return entity.Ref(storage_v1alpha.DiskVolumeNodeIdId, c.nodeId.Id())
 }
 
 func (c *DiskVolumeController) reconcileVolume(ctx context.Context, volume *storage_v1alpha.DiskVolume) error {
@@ -385,7 +385,7 @@ func (c *DiskVolumeController) softDeleteVolume(ctx context.Context, volume *sto
 		Filesystem: volume.Filesystem,
 		VolumeID:   volState.VolumeId,
 		VolumeMode: string(volume.VolumeMode),
-		NodeID:     string(volume.NodeId),
+		NodeID:     compute.NewNodeId(string(volume.NodeId)),
 		DeletedAt:  time.Now(),
 	}
 
@@ -787,8 +787,7 @@ func (c *DiskVolumeController) ReconcileWithEntities(ctx context.Context) error 
 		return fmt.Errorf("entity access client not set; call SetEAC before reconciling")
 	}
 
-	fullNodeId := "node/" + c.nodeId
-	nodeIdRef := entity.Id(fullNodeId)
+	nodeIdRef := c.nodeId.Id()
 	indexAttr := entity.Ref(storage_v1alpha.DiskVolumeNodeIdId, nodeIdRef)
 
 	resp, err := c.eac.List(ctx, indexAttr)
@@ -806,7 +805,7 @@ func (c *DiskVolumeController) ReconcileWithEntities(ctx context.Context) error 
 
 		entityIds[string(volume.ID)] = struct{}{}
 
-		if string(volume.NodeId) != fullNodeId {
+		if !c.nodeId.Matches(volume.NodeId) {
 			continue
 		}
 

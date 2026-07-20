@@ -20,6 +20,8 @@ import (
 	"testing"
 	"time"
 
+	compute "miren.dev/runtime/api/compute/compute_v1alpha"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"miren.dev/lbd"
@@ -475,7 +477,7 @@ func TestCloudIntegrationFullRoundTrip(t *testing.T) {
 	// Replay using the real cloudDiskClient → mock server
 	cloudClient := NewCloudDiskClient(slog.Default(), mock.URL(), authClient)
 	state := NewState()
-	mc := NewDiskMountController(slog.Default(), tmpDir, "node-1", state, newMockDiskMountOps())
+	mc := NewDiskMountController(slog.Default(), tmpDir, compute.NewNodeId("node-1"), state, newMockDiskMountOps())
 	mc.SetCloudClient(cloudClient)
 
 	err = mc.replayMissingSegments(context.Background(), &VolumeState{
@@ -641,7 +643,7 @@ func TestCloudIntegrationIncrementalReplay(t *testing.T) {
 	// Replay
 	cloudClient := NewCloudDiskClient(slog.Default(), mock.URL(), authClient)
 	state := NewState()
-	mc := NewDiskMountController(slog.Default(), tmpDir, "node-1", state, newMockDiskMountOps())
+	mc := NewDiskMountController(slog.Default(), tmpDir, compute.NewNodeId("node-1"), state, newMockDiskMountOps())
 	mc.SetCloudClient(cloudClient)
 
 	err = mc.replayMissingSegments(context.Background(), &VolumeState{
@@ -709,7 +711,7 @@ func TestCloudIntegrationOverwriteSemantics(t *testing.T) {
 
 	cloudClient := NewCloudDiskClient(slog.Default(), mock.URL(), authClient)
 	state := NewState()
-	mc := NewDiskMountController(slog.Default(), tmpDir, "node-1", state, newMockDiskMountOps())
+	mc := NewDiskMountController(slog.Default(), tmpDir, compute.NewNodeId("node-1"), state, newMockDiskMountOps())
 	mc.SetCloudClient(cloudClient)
 
 	err = mc.replayMissingSegments(context.Background(), &VolumeState{
