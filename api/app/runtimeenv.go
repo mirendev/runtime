@@ -29,6 +29,56 @@ var RuntimeEnvNames = []string{
 	EnvRuntimeInstanceNum,
 }
 
+// The pre-rename names Miren used to inject before MIR-1406 moved these vars
+// under MIREN_RUNTIME_. We inject them alongside the canonical names for a
+// deprecation window so apps still reading the old names keep working.
+const (
+	legacyEnvApp         = "MIREN_APP"
+	legacyEnvVersion     = "MIREN_VERSION"
+	legacyEnvInstanceNum = "MIREN_INSTANCE_NUM"
+)
+
+// RuntimeEnvAliases maps each canonical MIREN_RUNTIME_ name to its deprecated
+// pre-rename alias. Both are injected with the same value during the deprecation
+// window; the aliases will be removed in a future release.
+var RuntimeEnvAliases = map[string]string{
+	EnvRuntimeApp:         legacyEnvApp,
+	EnvRuntimeVersion:     legacyEnvVersion,
+	EnvRuntimeInstanceNum: legacyEnvInstanceNum,
+}
+
+// LegacyRuntimeEnvNames lists the deprecated pre-rename names that are still
+// injected as aliases. Kept as its own list — deliberately NOT folded into
+// RuntimeEnvNames, which callers assume is entirely under the MIREN_RUNTIME_
+// prefix — so it can seed the pool-reuse skip-list (see filterSystemEnvVars in
+// controllers/deployment) without those names being treated as canonical.
+var LegacyRuntimeEnvNames = []string{
+	legacyEnvApp,
+	legacyEnvVersion,
+	legacyEnvInstanceNum,
+}
+
+// RuntimeEnvWithAlias returns the canonical MIREN_RUNTIME_ assignment for
+// canonical=value, plus its deprecated pre-rename alias set to the same value.
+// The alias exists only for a deprecation window so apps still reading the old
+// name keep working; it will be removed in a future release. If canonical has no
+// registered alias, only the canonical assignment is returned.
+//
+// Deprecation policy for injected/ambient interface surface: renames of vars
+// Miren injects into sandboxes (or any other ambient interface an app observes)
+// default to alias-and-deprecate, not a hard cut. Inject both the old and new
+// names for a release window, document the deprecation, and only then drop the
+// old name in a later release. MIR-1406 shipped as a hard cut and silently broke
+// apps reading the old names on their next recycle; this helper is where the
+// next such rename should hang its alias.
+func RuntimeEnvWithAlias(canonical, value string) []string {
+	out := []string{canonical + "=" + value}
+	if alias, ok := RuntimeEnvAliases[canonical]; ok {
+		out = append(out, alias+"="+value)
+	}
+	return out
+}
+
 // IsReservedEnvVar reports whether key belongs to the reserved MIREN_ namespace
 // that user config must not set or override. Miren owns the whole prefix so it
 // can inject MIREN_RUNTIME_* (and other MIREN_*) vars without a user's config

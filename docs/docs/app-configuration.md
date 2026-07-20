@@ -190,6 +190,10 @@ Sandboxes also get `PORT` (the port your web service should listen on) and the [
 You can't set your own variables under `MIREN_` — `miren env set MIREN_FOO=bar` fails with `cannot set MIREN_ environment variables`. Miren owns the whole namespace so it can add injected variables without colliding with yours. Name your own `APP_*` or anything else.
 :::
 
+:::info[Deprecated aliases: MIREN_APP, MIREN_VERSION, MIREN_INSTANCE_NUM]
+These vars were previously injected under the un-prefixed names `MIREN_APP`, `MIREN_VERSION`, and `MIREN_INSTANCE_NUM`. Those names are still injected as deprecated aliases alongside the `MIREN_RUNTIME_*` names above, so apps reading the old names keep working. They will be removed in a future release — read the `MIREN_RUNTIME_*` names instead.
+:::
+
 ### Traffic Routing
 
 For HTTP services, Miren handles routing automatically. For non-HTTP services (TCP/UDP), you can expose ports directly using the `ports` array:

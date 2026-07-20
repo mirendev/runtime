@@ -13,6 +13,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"golang.org/x/term"
 
+	appclient "miren.dev/runtime/api/app"
 	"miren.dev/runtime/api/app/app_v1alpha"
 	"miren.dev/runtime/appconfig"
 	"miren.dev/runtime/clientconfig"
@@ -72,6 +73,21 @@ func (a *AppCentric) Validate(glbl *GlobalFlags) error {
 	}
 
 	a.config = ac
+
+	// When running inside a sandbox, MIREN_APP is injected as a deprecated alias
+	// of MIREN_RUNTIME_APP (the app's own name), and mflags will have populated
+	// a.App from it via the env: tag. That is the collision MIR-1406 fixed: the
+	// CLI would target the sandbox's app instead of the .miren/app.toml in front
+	// of it. Detect that case — MIREN_RUNTIME_APP present and a.App matching the
+	// injected MIREN_APP — and clear a.App so the config fallback below wins. CI,
+	// which sets MIREN_APP but has no MIREN_RUNTIME_APP, is unaffected. The only
+	// false positive is an explicit -a equal to the sandbox's own app, where
+	// clearing is harmless since config resolves the same app.
+	runtimeApp := os.Getenv(appclient.EnvRuntimeApp)
+	legacyApp := os.Getenv(appclient.RuntimeEnvAliases[appclient.EnvRuntimeApp])
+	if runtimeApp != "" && a.App != "" && a.App == legacyApp && legacyApp == runtimeApp {
+		a.App = ""
+	}
 
 	if a.App == "" {
 		if a.config != nil && a.config.Name != "" {

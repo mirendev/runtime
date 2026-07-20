@@ -154,6 +154,56 @@ command = ["foo", "bar"]
 		}
 	})
 
+	// MIR-1435 guard: inside a sandbox, MIREN_APP is injected as a deprecated alias
+	// of the sandbox's own app (MIREN_RUNTIME_APP). mflags populates a.App from the
+	// MIREN_APP env tag, but Validate must ignore that injected value and resolve
+	// the app from .miren/app.toml, preserving the MIR-1406 fix during the alias
+	// window.
+	t.Run("injected MIREN_APP alias is ignored inside a sandbox", func(t *testing.T) {
+		dir := t.TempDir()
+		writeAppToml(t, dir, `name = "realapp"`)
+		t.Setenv(appclient.EnvRuntimeApp, "sandboxapp")
+		t.Setenv("MIREN_APP", "sandboxapp")
+
+		a := AppCentric{Dir: dir, App: "sandboxapp"}
+		if err := a.Validate(&GlobalFlags{}); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if a.App != "realapp" {
+			t.Errorf("App = %q, want realapp — injected MIREN_APP alias should be ignored", a.App)
+		}
+	})
+
+	t.Run("explicit -a differing from the sandbox app is preserved", func(t *testing.T) {
+		dir := t.TempDir()
+		writeAppToml(t, dir, `name = "realapp"`)
+		t.Setenv(appclient.EnvRuntimeApp, "sandboxapp")
+		t.Setenv("MIREN_APP", "sandboxapp")
+
+		// mflags: an explicit --app beats the env, so a.App differs from MIREN_APP.
+		a := AppCentric{Dir: dir, App: "otherapp"}
+		if err := a.Validate(&GlobalFlags{}); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if a.App != "otherapp" {
+			t.Errorf("App = %q, want otherapp — an explicit target must not be cleared", a.App)
+		}
+	})
+
+	t.Run("MIREN_APP as CLI input is preserved outside a sandbox", func(t *testing.T) {
+		dir := t.TempDir()
+		// No MIREN_RUNTIME_APP: this is the CI case, MIREN_APP is a real target.
+		t.Setenv("MIREN_APP", "ciapp")
+
+		a := AppCentric{Dir: dir, App: "ciapp"}
+		if err := a.Validate(&GlobalFlags{}); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if a.App != "ciapp" {
+			t.Errorf("App = %q, want ciapp — MIREN_APP CLI input must survive outside a sandbox", a.App)
+		}
+	})
+
 	t.Run("config in parent directory sets foundInParent", func(t *testing.T) {
 		parent := t.TempDir()
 		writeAppToml(t, parent, `name = "myapp"`)
