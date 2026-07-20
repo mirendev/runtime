@@ -605,13 +605,13 @@ func (l *Launcher) buildSandboxSpec(
 		startDir = "/app"
 	}
 
+	appEnv := appclient.RuntimeEnvWithAlias(appclient.EnvRuntimeApp, appMD.Name)
+	appEnv = append(appEnv, appclient.RuntimeEnvWithAlias(appclient.EnvRuntimeVersion, ver.Version)...)
+
 	appCont := compute_v1alpha.SandboxSpecContainer{
-		Name:  "app",
-		Image: image,
-		Env: []string{
-			appclient.EnvRuntimeApp + "=" + appMD.Name,
-			appclient.EnvRuntimeVersion + "=" + ver.Version,
-		},
+		Name:      "app",
+		Image:     image,
+		Env:       appEnv,
 		Directory: startDir,
 	}
 
@@ -1103,6 +1103,10 @@ func isSystemEnvVar(key string) bool {
 // versions that differ only in the values Miren injects.
 func filterSystemEnvVars(envVars []string) []string {
 	skip := append([]string{"PORT", "ADMIN_TOKEN"}, appclient.RuntimeEnvNames...)
+	// The deprecated pre-rename aliases are injected alongside the canonical names
+	// (see api/app.RuntimeEnvWithAlias); skip them too so adding the aliases doesn't
+	// invalidate every existing pool at once and trigger a mass recreation.
+	skip = append(skip, appclient.LegacyRuntimeEnvNames...)
 
 	filtered := []string{}
 	for _, e := range envVars {

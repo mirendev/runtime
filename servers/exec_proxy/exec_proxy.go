@@ -342,16 +342,18 @@ func (s *Server) buildSandboxSpec(
 
 	image := ver.ImageUrl
 
+	// EnvRuntimeInstanceNum is deliberately omitted here: the sandbox controller
+	// injects it at boot from the instance metadata label (see
+	// controllers/sandbox), and exec sandboxes aren't instance-backed. Each name
+	// is injected alongside its deprecated pre-rename alias for the deprecation
+	// window (see api/app.RuntimeEnvWithAlias).
+	execEnv := appclient.RuntimeEnvWithAlias(appclient.EnvRuntimeApp, appMD.Name)
+	execEnv = append(execEnv, appclient.RuntimeEnvWithAlias(appclient.EnvRuntimeVersion, ver.Version)...)
+
 	appCont := compute_v1alpha.SandboxSpecContainer{
-		Name:  "app",
-		Image: image,
-		Env: []string{
-			// EnvRuntimeInstanceNum is deliberately omitted here: the sandbox
-			// controller injects it at boot from the instance metadata label
-			// (see controllers/sandbox), and exec sandboxes aren't instance-backed.
-			appclient.EnvRuntimeApp + "=" + appMD.Name,
-			appclient.EnvRuntimeVersion + "=" + ver.Version,
-		},
+		Name:      "app",
+		Image:     image,
+		Env:       execEnv,
 		Directory: startDir,
 	}
 

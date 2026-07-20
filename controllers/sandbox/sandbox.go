@@ -2299,7 +2299,8 @@ func (c *SandboxController) buildSubContainerSpec(
 	md.Decode(meta)
 
 	if instanceStr, ok := md.Labels.Get("instance"); ok {
-		envVars = append([]string{fmt.Sprintf("%s=%s", appclient.EnvRuntimeInstanceNum, instanceStr)}, envVars...)
+		instanceEnv := appclient.RuntimeEnvWithAlias(appclient.EnvRuntimeInstanceNum, instanceStr)
+		envVars = append(instanceEnv, envVars...)
 		c.Log.Debug("injected instance number into container env", "sandbox_id", sb.ID, "container", co.Name, "instance", instanceStr)
 	}
 

@@ -24,12 +24,13 @@ import (
 //	sha256sum controllers/sandbox/sandbox.go controllers/sandbox/volume.go controllers/sandbox/firewall.go
 func TestSandboxControllerFrozen(t *testing.T) {
 	frozen := map[string]string{
-		// Updated for MIR-1428 (mounted disks writable by the run user). The
-		// change lives in buildSubContainerSpec, which the saga path also
-		// reaches via deps.runtime.BootContainers, so both controllers already
-		// share the new behavior and there was nothing to mirror in
-		// create_saga.go.
-		"sandbox.go":  "7d075a63109571eddbf2d0675b522013c0d6c545fba3a0a7347b112e125e2e6b",
+		// Updated for MIR-1428 (mounted disks writable by the run user) and
+		// MIR-1435 (inject MIREN_INSTANCE_NUM alongside MIREN_RUNTIME_INSTANCE_NUM
+		// as a deprecated alias). Both changes live in buildSubContainerSpec, which
+		// the saga path also reaches via deps.runtime.BootContainers, so both
+		// controllers already share the new behavior and there was nothing to
+		// mirror in create_saga.go.
+		"sandbox.go":  "16e150f5ecae1f26ae4d3ac07a10b281a55c7fd220e8a9f58a6774e3e73cbcde",
 		"volume.go":   "b4697764d48a90adc04ce47968ccef11ceba50da8d19c889906c5c3a539065b3",
 		"firewall.go": "648cb5d91091d5eb7400152b19695a8045585feae59c5dd36c12d663a27bb91f",
 	}

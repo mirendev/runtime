@@ -183,7 +183,9 @@ Miren injects these automatically. You don't declare them, and your app can read
 Sandboxes also get `PORT` (the port your web service should listen on) and the [workload identity](/workload-identity) variables.
 
 :::info[Injected vs. CLI variables]
-`MIREN_RUNTIME_*` is the namespace Miren injects **into** your app; the `MIREN_IDENTITY_*` [workload identity](/workload-identity) variables are injected too. The other `MIREN_*` variables — such as `MIREN_APP`, `MIREN_CLUSTER`, and `MIREN_CONFIG` — are input **to** the `miren` CLI, used to pick what a command acts on (see [CI/CD Deployment](/ci-deploy)). Keeping the injected and input variables separate means running `miren` inside a sandbox still resolves the app from your `.miren/app.toml`.
+`MIREN_RUNTIME_*` is the namespace Miren injects **into** your app; the `MIREN_IDENTITY_*` [workload identity](/workload-identity) variables are injected too. Most other `MIREN_*` variables — such as `MIREN_CLUSTER` and `MIREN_CONFIG` — are input **to** the `miren` CLI, used to pick what a command acts on (see [CI/CD Deployment](/ci-deploy)).
+
+`MIREN_APP` is both: an input to the CLI, and — for a transition window — a **deprecated injected alias** of `MIREN_RUNTIME_APP` (along with `MIREN_VERSION` and `MIREN_INSTANCE_NUM`), so apps still reading the old names keep working. The two roles no longer collide: when the CLI runs inside a sandbox and the injected `MIREN_APP` matches the sandbox's own app, it ignores that value and resolves from your `.miren/app.toml`. Read the `MIREN_RUNTIME_*` names for injected runtime values; the aliases will be removed in a future release.
 :::
 
 :::warning[The MIREN_ prefix is reserved]

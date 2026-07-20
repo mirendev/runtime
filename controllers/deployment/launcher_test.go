@@ -3483,12 +3483,40 @@ func TestRuntimeEnvVarsInjectedIntoSandboxSpec(t *testing.T) {
 	assert.Contains(t, env, appclient.EnvRuntimeApp+"=test-app")
 	assert.Contains(t, env, appclient.EnvRuntimeVersion+"=v1")
 
-	for _, e := range env {
-		assert.False(t, strings.HasPrefix(e, "MIREN_APP="),
-			"MIREN_APP must not be injected — the CLI reads it as its target app (MIR-1406)")
-		assert.False(t, strings.HasPrefix(e, "MIREN_VERSION="),
-			"MIREN_VERSION was renamed to %s", appclient.EnvRuntimeVersion)
+	// The deprecated pre-rename names are injected as aliases with the same values
+	// for the deprecation window. The CLI no longer treats the MIREN_APP alias as
+	// its target when running inside a sandbox (see AppCentric.Validate).
+	assert.Contains(t, env, "MIREN_APP=test-app")
+	assert.Contains(t, env, "MIREN_VERSION=v1")
+}
+
+// TestAliasEnvVarsDoNotBreakPoolReuse guards the MIR-1432 shape: adding the
+// deprecated pre-rename aliases to the injected env must not invalidate existing
+// pools. envVarsEqual (via filterSystemEnvVars) drives specsMatch/pool reuse, so
+// a spec carrying only the canonical MIREN_RUNTIME_* names must still compare
+// equal to one that also carries the aliases, given identical user vars.
+func TestAliasEnvVarsDoNotBreakPoolReuse(t *testing.T) {
+	canonicalOnly := []string{
+		appclient.EnvRuntimeApp + "=myapp",
+		appclient.EnvRuntimeVersion + "=v1",
+		"APP_SETTING=keep",
 	}
+	withAliases := []string{
+		appclient.EnvRuntimeApp + "=myapp",
+		appclient.EnvRuntimeVersion + "=v1",
+		"MIREN_APP=myapp",
+		"MIREN_VERSION=v1",
+		"APP_SETTING=keep",
+	}
+
+	assert.True(t, envVarsEqual(canonicalOnly, withAliases),
+		"aliases must be filtered out of pool comparison so adding them doesn't recreate every pool")
+
+	// A genuine user-var difference must still be detected. Build the longer slice
+	// from a fresh backing array so appending can't mutate withAliases in place.
+	withExtra := append(append([]string{}, withAliases...), "APP_SETTING2=new")
+	assert.False(t, envVarsEqual(withAliases, withExtra),
+		"a real user env difference must still invalidate the pool")
 }
 
 // TestRuntimeEnvNamesDoNotCollideWithClientEnv is the deployment half of the

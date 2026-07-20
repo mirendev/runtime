@@ -13,6 +13,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"golang.org/x/term"
 
+	appclient "miren.dev/runtime/api/app"
 	"miren.dev/runtime/api/app/app_v1alpha"
 	"miren.dev/runtime/appconfig"
 	"miren.dev/runtime/clientconfig"
@@ -72,6 +73,32 @@ func (a *AppCentric) Validate(glbl *GlobalFlags) error {
 	}
 
 	a.config = ac
+
+	// When running inside a sandbox, MIREN_APP is injected as a deprecated alias
+	// of MIREN_RUNTIME_APP (the app's own name), and mflags will have populated
+	// a.App from it via the env: tag. That is the collision MIR-1406 fixed: the
+	// CLI would target the sandbox's app instead of the .miren/app.toml in front
+	// of it. When we detect that case — MIREN_RUNTIME_APP present, a.App equal to
+	// both the injected MIREN_APP and MIREN_RUNTIME_APP, and a local config to
+	// defer to — resolve from that config instead. CI, which sets MIREN_APP but
+	// has no MIREN_RUNTIME_APP, is unaffected.
+	//
+	// Caveat: mflags collapses the -a flag and the MIREN_APP env into a.App with
+	// no surviving provenance, and Validate has no access to the FlagSet, so we
+	// cannot tell an injected value from an explicit `-a` that happens to equal
+	// it. The residual failure mode is narrow but real: running `-a <thisApp>`
+	// explicitly from a directory whose .miren/app.toml names a *different* app,
+	// inside <thisApp>'s own sandbox, targets the config's app rather than the
+	// flag's. That requires contradictory intent (an explicit flag naming the
+	// sandbox you're already in while standing in another app's tree); the far
+	// more common no-flag case is what this guards, and requiring a config here
+	// keeps us from stranding a configless sandbox shell with no target.
+	runtimeApp := os.Getenv(appclient.EnvRuntimeApp)
+	legacyApp := os.Getenv(appclient.RuntimeEnvAliases[appclient.EnvRuntimeApp])
+	if runtimeApp != "" && a.App == legacyApp && legacyApp == runtimeApp &&
+		a.config != nil && a.config.Name != "" {
+		a.App = a.config.Name
+	}
 
 	if a.App == "" {
 		if a.config != nil && a.config.Name != "" {
