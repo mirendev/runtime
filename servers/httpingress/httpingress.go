@@ -813,10 +813,11 @@ func (h *Server) logRequestFromStats(appEntityID, appName string, stats httputil
 		path = path + "?" + stats.RequestQuery
 	}
 
-	// Format in Heroku logfmt style with response data
-	logMsg := fmt.Sprintf("method=%s path=\"%s\" host=%s source_ip=%s body=%d status=%d response=%d duration_ms=%d",
-		stats.RequestMethod, path, stats.RequestHost, stats.RemoteAddr, stats.ContentLength,
-		stats.StatusCode, stats.ResponseBytes, stats.Duration.Milliseconds())
+	// logfmt, ordered for reading: lead with what you triage on (status, method,
+	// path, latency), then the sizes and edge details.
+	logMsg := fmt.Sprintf("status=%d method=%s path=\"%s\" duration_ms=%d response=%d body=%d host=%s source_ip=%s",
+		stats.StatusCode, stats.RequestMethod, path, stats.Duration.Milliseconds(),
+		stats.ResponseBytes, stats.ContentLength, stats.RequestHost, stats.RemoteAddr)
 
 	err := h.logWriter.WriteEntry(appEntityID, observability.LogEntry{
 		Timestamp: time.Now(),
@@ -1349,9 +1350,9 @@ func (h *Server) logInternalRequest(appEntityID, method, path string, statusCode
 
 	duration := time.Since(startTime)
 
-	// Format in Heroku logfmt style, indicating this is an internal request
-	logMsg := fmt.Sprintf("method=%s path=\"%s\" access=internal status=%d response=%d duration_ms=%d",
-		method, path, statusCode, responseBytes, duration.Milliseconds())
+	// logfmt, same reader-first order as public requests, tagged access=internal.
+	logMsg := fmt.Sprintf("status=%d method=%s path=\"%s\" access=internal duration_ms=%d response=%d",
+		statusCode, method, path, duration.Milliseconds(), responseBytes)
 
 	err := h.logWriter.WriteEntry(appEntityID, observability.LogEntry{
 		Timestamp: time.Now(),
