@@ -204,6 +204,22 @@ command = ["foo", "bar"]
 		}
 	})
 
+	t.Run("configless sandbox keeps the injected app rather than being stranded", func(t *testing.T) {
+		dir := t.TempDir() // no .miren/app.toml
+		t.Setenv(appclient.EnvRuntimeApp, "sandboxapp")
+		t.Setenv("MIREN_APP", "sandboxapp")
+
+		// With no config to defer to, the guard must leave the injected value in
+		// place; clearing it would strand the command with no target.
+		a := AppCentric{Dir: dir, App: "sandboxapp"}
+		if err := a.Validate(&GlobalFlags{}); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if a.App != "sandboxapp" {
+			t.Errorf("App = %q, want sandboxapp — nothing to defer to without a config", a.App)
+		}
+	})
+
 	t.Run("config in parent directory sets foundInParent", func(t *testing.T) {
 		parent := t.TempDir()
 		writeAppToml(t, parent, `name = "myapp"`)

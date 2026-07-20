@@ -28,4 +28,13 @@ func TestIsReservedEnvVar(t *testing.T) {
 			t.Errorf("injected var %q is not reserved", name)
 		}
 	}
+
+	// The deprecated aliases are injected too, so they must be reserved as well.
+	// They are covered today by the MIREN_ prefix, but assert it explicitly so a
+	// future alias that escapes the prefix can't slip through unshadowed.
+	for _, name := range LegacyRuntimeEnvNames {
+		if !IsReservedEnvVar(name) {
+			t.Errorf("legacy injected alias %q is not reserved", name)
+		}
+	}
 }

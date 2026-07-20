@@ -3512,8 +3512,10 @@ func TestAliasEnvVarsDoNotBreakPoolReuse(t *testing.T) {
 	assert.True(t, envVarsEqual(canonicalOnly, withAliases),
 		"aliases must be filtered out of pool comparison so adding them doesn't recreate every pool")
 
-	// A genuine user-var difference must still be detected.
-	assert.False(t, envVarsEqual(withAliases, append(withAliases, "APP_SETTING2=new")),
+	// A genuine user-var difference must still be detected. Build the longer slice
+	// from a fresh backing array so appending can't mutate withAliases in place.
+	withExtra := append(append([]string{}, withAliases...), "APP_SETTING2=new")
+	assert.False(t, envVarsEqual(withAliases, withExtra),
 		"a real user env difference must still invalidate the pool")
 }
 
