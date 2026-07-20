@@ -145,11 +145,9 @@ a dedicated, revocable session key, treat the workspace as untrusted, and keep t
 reachable only over its authenticated API.
 :::
 
-:::info[The client supplies the LLM]
-Unlike a typical app, the agent server does not take `LLM_API_KEY` itself — the client passes
-the model and key when it creates a conversation. `OH_SECRET_KEY` encrypts those secrets where
+Unlike a typical app, the agent server takes no `LLM_API_KEY` of its own — the client passes the
+model and key when it creates a conversation, and `OH_SECRET_KEY` encrypts those secrets where
 the server persists them.
-:::
 
 Add a `.dockerignore` so local secrets stay out of the build context:
 

@@ -46,8 +46,11 @@ workspace (cloned repos, build caches) stable across redeploys.
 - `miren` CLI installed and authenticated (`miren whoami`).
 - Access to the target cluster and its org.
 - An **Amp API key** from [ampcode.com/settings](https://ampcode.com/settings).
-- Outbound HTTPS to ampcode.com allowed from the cluster (see [Firewall](/firewall) if you
-  restrict egress).
+- Outbound HTTPS from the cluster to Amp's domains (see [Firewall](/firewall) if you restrict
+  egress): `ampcode.com` (service + installer), `auth.ampcode.com` (authentication),
+  `production.ampworkers.com` (the runner's WebSocket connection), and `static.ampcode.com`
+  (binary downloads for install and `amp update`). A narrower allowlist can let the build or
+  runner start while authentication or registration silently fails.
 
 ## Select the target cluster
 
@@ -103,26 +106,29 @@ doesn't need an `ENTRYPOINT` or `CMD` — `runner.sh` is invoked directly (see b
 
 ## The runner entrypoint
 
-`runner.sh` prepares a writable home and settings on the disk, enables remote thread
-creation, clears any stale runner lock left on the disk by a prior deploy, then hands off to
-the runner with `exec` so signals reach Amp and Miren can stop it cleanly:
+`runner.sh` writes Amp's settings on the disk (enabling remote thread creation so ampcode.com
+can dispatch threads to it — without this the runner connects but silently accepts nothing),
+clears any stale runner lock left on the disk by a prior deploy, then hands off to the runner
+with `exec` so signals reach Amp and Miren can stop it cleanly:
 
 ```bash
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Working directory for the runner. Override with AMP_WORKSPACE (in app.toml [[env]]) if you
+# change the disk mount_path.
 WORKSPACE="${AMP_WORKSPACE:-/workspace}"
 mkdir -p "$HOME" "$WORKSPACE" "$(dirname "$AMP_SETTINGS_FILE")"
 
-# Enable remote thread creation so ampcode.com can dispatch threads to this runner.
-if [ ! -f "$AMP_SETTINGS_FILE" ]; then
-  cat > "$AMP_SETTINGS_FILE" <<'JSON'
+# Enable remote thread creation so ampcode.com can dispatch threads to this runner. Rewritten
+# on every boot (not just when absent) so a stale settings file left on the persistent disk
+# can't silently keep the setting off after you change this recipe. Edit the keys to reconfigure.
+cat > "$AMP_SETTINGS_FILE" <<'JSON'
 {
   "amp.remoteThreadCreation.enabled": true,
   "amp.notifications.enabled": false
 }
 JSON
-fi
 
 # Amp records a per-directory runner lock (a pidfile under its cache). With HOME on a
 # persistent disk that survives redeploys, a stale pidfile makes the new runner refuse to
@@ -166,9 +172,13 @@ mount_path = "/workspace"
 size_gb = 20
 filesystem = "ext4"
 
+# A stable, valid hostname, shown as the Machine name on ampcode.com. A runner is identified
+# by host + working directory, so keep this fixed to make it easy to pick in the web app.
 [[env]]
 key = "AMP_RUNNER_ID"
-value = "miren-amp"  # a valid hostname; shown as the Machine name on ampcode.com
+value = "miren-amp"
+# Keep Amp's settings, cache, and logs on the writable disk. Amp otherwise reads/writes
+# ~/.config/amp, which lands on a read-only image path.
 [[env]]
 key = "AMP_SETTINGS_FILE"
 value = "/workspace/amp/settings.json"
@@ -185,30 +195,15 @@ required = true
 sensitive = true
 ```
 
-:::warning[Enable remote thread creation or nothing runs]
-A runner with `amp.remoteThreadCreation.enabled` unset connects to ampcode.com but silently
-accepts no threads. `runner.sh` writes it into the settings file pointed at by
-`AMP_SETTINGS_FILE` — keep that in place.
-:::
+`amp --no-tui` is a long-lived daemon (unlike `amp -x`, which runs one prompt and exits): Miren
+restarts it if it exits, and the runner re-registers with ampcode.com after a bounce (it may
+briefly show as a new Machine connection before the old one drops).
 
 :::warning[Portless service — name it `runner`, not `web`]
 This service has no `port`/`port_type`, so Miren does no HTTP ingress and no port health
 check. Do **not** name it `web`: Miren's ingress routes an app's hostname to the `web`
 service, and a portless `web` service returns `error acquiring lease: app/amp-runner`
 (HTTP 500) for every request. Any other name (like `runner`) is fine.
-:::
-
-:::warning[Keep the process alive — it self-reconnects]
-`amp --no-tui` is a long-lived daemon (unlike `amp -x`, which runs one prompt and exits).
-Miren restarts the service if the process exits, and the runner re-registers with ampcode.com
-after a bounce. On redeploy it may briefly appear as a new Machine connection before the old
-one drops.
-:::
-
-:::warning[Stable runner id and working directory]
-A runner is identified by host **and** working directory. Set a stable `AMP_RUNNER_ID` (a
-valid hostname) so the Machine is easy to pick in the web app, and keep the working directory
-fixed at `/workspace`. The directory does not have to be a git repo.
 :::
 
 :::danger[Constrain the agent — it runs arbitrary shell]
@@ -226,12 +221,6 @@ mount `/workspace` until the old one releases the lease, so `miren deploy` may p
 `miren app status` / `miren sandbox list` before assuming failure. If you'd rather have snappy
 rollouts and don't need node-independent storage, use `provider = "local"` (no lease, no
 fixed-instance requirement; workspace is node-local).
-:::
-
-:::note[Point HOME and settings at the disk]
-Amp reads `~/.config/amp` and may write cache and logs. Setting `HOME=/workspace/home` and
-`AMP_SETTINGS_FILE=/workspace/amp/settings.json` keeps that state on the writable mounted
-disk instead of a read-only image path.
 :::
 
 :::warning[Redeploys leave a stale runner lock on the disk]
