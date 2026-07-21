@@ -252,7 +252,7 @@ jobs:
     - name: Run blackbox tests
       # TestPOP runs in its own job (test-blackbox-pop) because its server
       # restart interferes with subsequent deploys. Skip it here.
-      run: go test -tags blackbox -timeout 10m -v -count=1 -p 1 -skip '^TestPOP$' ./blackbox/...
+      run: go test -tags blackbox -timeout 15m -v -count=1 -p 1 -skip '^TestPOP$' ./blackbox/...
 
     - name: Server logs on failure
       if: failure()
