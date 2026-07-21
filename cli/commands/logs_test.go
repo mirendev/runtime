@@ -221,7 +221,29 @@ func TestPrintLogEntryJSON(t *testing.T) {
 func TestPrintLogEntry(t *testing.T) {
 	ts := time.Date(2026, 3, 13, 16, 30, 0, 0, time.UTC)
 
-	t.Run("uses short_id for bracket display", func(t *testing.T) {
+	t.Run("uses service.id as prefix", func(t *testing.T) {
+		var buf bytes.Buffer
+		ctx := &Context{Context: context.Background(), Stdout: &buf}
+
+		entry := &app_v1alpha.LogEntry{}
+		entry.SetTimestamp(standard.ToTimestamp(ts))
+		entry.SetStream("stdout")
+		entry.SetSource("clusteragent-web-CbZwTC2ATZnrWjt1uPwog")
+		entry.SetLine("hello world")
+		entry.SetAttributes(map[string]string{"miren.service": "web", "miren.short_id": "wog"})
+
+		printLogEntry(ctx, entry)
+
+		got := buf.String()
+		if !strings.Contains(got, "web.wog") {
+			t.Errorf("expected service.id prefix web.wog in output, got: %s", got)
+		}
+		if strings.Contains(got, "miren.short_id=") || strings.Contains(got, "miren.service=") {
+			t.Errorf("miren.* should be hidden from attributes, got: %s", got)
+		}
+	})
+
+	t.Run("uses short_id alone when no service", func(t *testing.T) {
 		var buf bytes.Buffer
 		ctx := &Context{Context: context.Background(), Stdout: &buf}
 
@@ -235,15 +257,12 @@ func TestPrintLogEntry(t *testing.T) {
 		printLogEntry(ctx, entry)
 
 		got := buf.String()
-		if !strings.Contains(got, "[wog]") {
-			t.Errorf("expected [wog] in output, got: %s", got)
-		}
-		if strings.Contains(got, "miren.short_id=") {
-			t.Errorf("miren.short_id should be hidden from attributes, got: %s", got)
+		if !strings.Contains(got, "wog") || strings.Contains(got, "[wog]") {
+			t.Errorf("expected bare short_id prefix (no brackets), got: %s", got)
 		}
 	})
 
-	t.Run("falls back to abbreviated source without short_id", func(t *testing.T) {
+	t.Run("falls back to full source without short_id", func(t *testing.T) {
 		var buf bytes.Buffer
 		ctx := &Context{Context: context.Background(), Stdout: &buf}
 
@@ -256,8 +275,9 @@ func TestPrintLogEntry(t *testing.T) {
 		printLogEntry(ctx, entry)
 
 		got := buf.String()
-		if !strings.Contains(got, "[clu…jt1uPwog]") {
-			t.Errorf("expected abbreviated source in output, got: %s", got)
+		// The full source is shown, not clipped: the readable part is at the front.
+		if !strings.Contains(got, "clusteragent-web-CbZwTC2ATZnrWjt1uPwog") {
+			t.Errorf("expected full source in output, got: %s", got)
 		}
 	})
 
@@ -304,6 +324,91 @@ func TestPrintLogEntry(t *testing.T) {
 		got := buf.String()
 		if !strings.Contains(got, "plain text log message") {
 			t.Errorf("expected plain text preserved, got: %s", got)
+		}
+	})
+}
+
+func TestRouterLineRendering(t *testing.T) {
+	ts := time.Date(2026, 3, 13, 16, 30, 0, 0, time.UTC)
+
+	mkRouter := func(attrs map[string]string) *app_v1alpha.LogEntry {
+		e := &app_v1alpha.LogEntry{}
+		e.SetTimestamp(standard.ToTimestamp(ts))
+		e.SetStream("user-oob")
+		e.SetSource("router")
+		e.SetLine(`status=200 method=GET path="/api/v1/self" duration_ms=36 response=392 host=miren.cloud`)
+		e.SetAttributes(attrs)
+		return e
+	}
+
+	t.Run("does not double-print body fields from attributes", func(t *testing.T) {
+		var buf bytes.Buffer
+		ctx := &Context{Context: context.Background(), Stdout: &buf}
+		// These attributes duplicate what the logfmt body already carries.
+		printLogEntry(ctx, mkRouter(map[string]string{
+			"source": "router", "method": "GET", "path": "/api/v1/self", "host": "miren.cloud",
+		}))
+		got := buf.String()
+		if n := strings.Count(got, "method=GET"); n != 1 {
+			t.Errorf("method=GET should appear exactly once (body only), got %d in: %s", n, got)
+		}
+		if n := strings.Count(got, "host=miren.cloud"); n != 1 {
+			t.Errorf("host=miren.cloud should appear exactly once, got %d in: %s", n, got)
+		}
+		if !strings.Contains(got, "router") {
+			t.Errorf("expected router prefix, got: %s", got)
+		}
+	})
+
+	t.Run("router body is byte-identical with color off (peek==pipe)", func(t *testing.T) {
+		// A quoted value containing a space exercises the tokenizer's quote
+		// handling; with color off the styled form must equal the input exactly.
+		body := `status=404 method=GET path="/a b/c" duration_ms=3 response=12 host=x.example app.user=usr-1`
+		if got := colorizeRouterBody(body); got != body {
+			t.Errorf("colorizeRouterBody altered bytes with color off:\n in: %q\nout: %q", body, got)
+		}
+	})
+
+	t.Run("unterminated quote preserves bytes", func(t *testing.T) {
+		// A malformed/truncated body with an unclosed quote must not drop bytes:
+		// the value consumes to the end of the string.
+		body := `status=200 method=GET path="/truncated`
+		if got := colorizeRouterBody(body); got != body {
+			t.Errorf("colorizeRouterBody dropped bytes on unterminated quote:\n in: %q\nout: %q", body, got)
+		}
+	})
+
+	t.Run("internal router access field is not double-printed", func(t *testing.T) {
+		var buf bytes.Buffer
+		ctx := &Context{Context: context.Background(), Stdout: &buf}
+		e := &app_v1alpha.LogEntry{}
+		e.SetTimestamp(standard.ToTimestamp(ts))
+		e.SetStream("user-oob")
+		e.SetSource("router")
+		e.SetLine(`status=200 method=GET path="/internal" access=internal duration_ms=2 response=10`)
+		// The router emits access in both the body and attributes.
+		e.SetAttributes(map[string]string{
+			"source": "router", "access": "internal", "method": "GET", "path": "/internal",
+		})
+		printLogEntry(ctx, e)
+		if n := strings.Count(buf.String(), "access=internal"); n != 1 {
+			t.Errorf("access=internal should appear once (body only), got %d in: %s", n, buf.String())
+		}
+	})
+
+	t.Run("promoted app.* fields still render", func(t *testing.T) {
+		var buf bytes.Buffer
+		ctx := &Context{Context: context.Background(), Stdout: &buf}
+		printLogEntry(ctx, mkRouter(map[string]string{
+			"source": "router", "method": "GET", "path": "/api/v1/self", "host": "miren.cloud",
+			"app.user": "usr-123", "app.outcome": "ok",
+		}))
+		got := buf.String()
+		if !strings.Contains(got, "app.user=usr-123") {
+			t.Errorf("promoted app.user should render, got: %s", got)
+		}
+		if !strings.Contains(got, "app.outcome=ok") {
+			t.Errorf("promoted app.outcome should render, got: %s", got)
 		}
 	})
 }

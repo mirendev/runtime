@@ -15,7 +15,9 @@
 package theme
 
 import (
+	"hash/fnv"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 
@@ -107,6 +109,71 @@ var (
 		Light: lipgloss.CompleteColor{TrueColor: "#7C3AED", ANSI256: "91", ANSI: "5"},
 	}
 )
+
+// laneColors form a categorical *identity* palette: they give each service a
+// stable color so interleaved log lines can be followed by eye. They are
+// deliberately disjoint from the semantic roles above, because identity answers
+// "who is this?" not "how is it going?". Two rules shape the set:
+//
+//   - Cool/neutral hues only. Warm hues (orange, red) read as "alert" wherever
+//     they land, so they stay reserved for status; a service should never look
+//     alarmed just because of its name's hash.
+//   - CVD-safe and bounded. Hues are drawn from the colorblind-safe qualitative
+//     range (Okabe-Ito / Paul Tol) and capped at a handful; past that, two
+//     services share a color and the printed name disambiguates them.
+//
+// Each lane pins a distinct xterm-256 anchor, but all lanes share one ANSI-16
+// value, so on 16-color terminals identity color collapses to a single accent
+// (identity is then carried by the service-name text instead).
+var laneColors = []lipgloss.CompleteAdaptiveColor{
+	{ // cyan
+		Dark:  lipgloss.CompleteColor{TrueColor: "#56CFE1", ANSI256: "80", ANSI: "14"},
+		Light: lipgloss.CompleteColor{TrueColor: "#0E7490", ANSI256: "30", ANSI: "6"},
+	},
+	{ // periwinkle
+		Dark:  lipgloss.CompleteColor{TrueColor: "#8AA0F5", ANSI256: "105", ANSI: "14"},
+		Light: lipgloss.CompleteColor{TrueColor: "#4F46E5", ANSI256: "62", ANSI: "6"},
+	},
+	{ // mint
+		Dark:  lipgloss.CompleteColor{TrueColor: "#5FD0A8", ANSI256: "79", ANSI: "14"},
+		Light: lipgloss.CompleteColor{TrueColor: "#0F766E", ANSI256: "29", ANSI: "6"},
+	},
+	{ // lavender
+		Dark:  lipgloss.CompleteColor{TrueColor: "#B99BF0", ANSI256: "141", ANSI: "14"},
+		Light: lipgloss.CompleteColor{TrueColor: "#7C3AED", ANSI256: "91", ANSI: "6"},
+	},
+	{ // magenta
+		Dark:  lipgloss.CompleteColor{TrueColor: "#E879C7", ANSI256: "176", ANSI: "14"},
+		Light: lipgloss.CompleteColor{TrueColor: "#BE185D", ANSI256: "125", ANSI: "6"},
+	},
+}
+
+// Router is the reserved lane for router/access-log lines: a cool slate that is
+// distinct from the rotating identity hues, so router traffic reads as its own
+// lane without being dimmed into noise.
+var Router = lipgloss.CompleteAdaptiveColor{
+	Dark:  lipgloss.CompleteColor{TrueColor: "#7C8AA8", ANSI256: "103", ANSI: "8"},
+	Light: lipgloss.CompleteColor{TrueColor: "#64748B", ANSI256: "60", ANSI: "8"},
+}
+
+// Lane returns a stable identity color for seed (typically a service name) by
+// hashing it into the lane palette. The same seed always maps to the same color
+// within a build, so a service keeps its color across restarts and throughout a
+// session. An empty seed returns Muted.
+func Lane(seed string) lipgloss.CompleteAdaptiveColor {
+	if seed == "" {
+		return Muted
+	}
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(seed))
+	return laneColors[h.Sum32()%uint32(len(laneColors))]
+}
+
+// Lanes returns the identity lane palette in order, for the `miren colors` debug
+// command. It does not include the reserved Router lane.
+func Lanes() []lipgloss.CompleteAdaptiveColor {
+	return slices.Clone(laneColors)
+}
 
 // Role pairs a human name with its color, for the `miren colors` debug command.
 type Role struct {

@@ -5,13 +5,17 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"sync"
 	"time"
+
+	"github.com/charmbracelet/lipgloss"
 
 	"miren.dev/runtime/api/app/app_v1alpha"
 	"miren.dev/runtime/pkg/logfilter"
 	"miren.dev/runtime/pkg/rpc"
 	"miren.dev/runtime/pkg/rpc/standard"
 	"miren.dev/runtime/pkg/rpc/stream"
+	"miren.dev/runtime/pkg/theme"
 	"miren.dev/runtime/pkg/ui"
 )
 
@@ -390,11 +394,206 @@ func dispatchLogs(ctx *Context, cl *rpc.NetworkClient, args logDispatchArgs) err
 	return legacyLogs(ctx, cl, args.app, args.sandbox, args.from, filter, printer)
 }
 
-var streamTypePrefixes = map[string]string{
-	"stdout":   "S",
-	"stderr":   "E",
-	"error":    "ERR",
-	"user-oob": "U",
+// Log line styling (MIR-772). Every text log line is composed as a styled
+// display string plus an unstyled signature (used to collapse repeated lines in
+// follow mode). Styling is applied with lipgloss, which degrades to plain text
+// when color is off (NO_COLOR, piped, non-TTY), so peek and pipe render the same
+// content and only color adapts. Alignment padding is applied unconditionally so
+// columns line up in either mode.
+const logPrefixWidth = 14 // fixed cap for the aligned service.id / router column
+
+var (
+	// The timestamp is chrome: the whole thing is muted, and the date is dimmed
+	// one notch further than the time so HH:MM:SS leads the eye. These log-local
+	// shades exist because the theme has no "dimmer/brighter than Muted" role;
+	// like the theme roles they pin explicit 256/16 anchors so they degrade
+	// deliberately instead of quantizing into a muddy bucket. The date keeps a
+	// distinct dim step at 256; the value shade collapses onto Muted below
+	// truecolor, so 256-color terminals get a clean two-level (message vs muted
+	// metadata) hierarchy instead of two indistinguishable grays.
+	logTimeStyle = lipgloss.NewStyle().Foreground(theme.Muted)
+	logDateStyle = lipgloss.NewStyle().Foreground(lipgloss.CompleteAdaptiveColor{
+		Light: lipgloss.CompleteColor{TrueColor: "#AEB4BB", ANSI256: "250", ANSI: "8"},
+		Dark:  lipgloss.CompleteColor{TrueColor: "#6A7079", ANSI256: "240", ANSI: "8"},
+	})
+
+	logIDStyle  = lipgloss.NewStyle().Foreground(theme.Muted) // instance id after service.
+	logKeyStyle = lipgloss.NewStyle().Foreground(theme.Muted) // attribute key= names
+	logValStyle = lipgloss.NewStyle().Foreground(lipgloss.CompleteAdaptiveColor{
+		Light: lipgloss.CompleteColor{TrueColor: "#4B5563", ANSI256: "243", ANSI: "8"},
+		Dark:  lipgloss.CompleteColor{TrueColor: "#C3C9D2", ANSI256: "246", ANSI: "8"},
+	})
+
+	logRouterTag = lipgloss.NewStyle().Foreground(theme.Router).Bold(true)
+	logMethod    = lipgloss.NewStyle().Bold(true) // HTTP method, bright default weight
+
+	// Status codes get semantic color, but 2xx stays quiet: healthy is the
+	// default, the number itself carries the meaning, and reserving color for
+	// anomalies sidesteps the red/green colorblindness trap.
+	logStatus2xx = lipgloss.NewStyle().Foreground(theme.Muted)
+	logStatus3xx = lipgloss.NewStyle().Foreground(theme.Info)
+	logStatus4xx = lipgloss.NewStyle().Foreground(theme.Warning)
+	logStatus5xx = lipgloss.NewStyle().Foreground(theme.Error)
+
+	// app.* fields promoted onto the router line (RFD-92) read as the app's own
+	// contribution, so they take the Highlight role.
+	logAppKeyStyle = lipgloss.NewStyle().Foreground(theme.Highlight).Bold(true)
+	logAppValStyle = lipgloss.NewStyle().Foreground(theme.Highlight)
+)
+
+// routerBodyHidden are the fields the router already prints in its logfmt body,
+// so re-surfacing them from attributes would double-print. Suppressed only for
+// router lines; other attributes (e.g. future app.* promoted fields) still show.
+var routerBodyHidden = map[string]bool{"method": true, "path": true, "host": true, "access": true}
+
+// logStatusStyle picks a status color by class. Unrecognized codes render quiet.
+func logStatusStyle(code string) lipgloss.Style {
+	if code == "" {
+		return logStatus2xx
+	}
+	switch code[0] {
+	case '3':
+		return logStatus3xx
+	case '4':
+		return logStatus4xx
+	case '5':
+		return logStatus5xx
+	default:
+		return logStatus2xx
+	}
+}
+
+// colorizeRouterBody styles a router logfmt body the same way app-line
+// attributes are styled: keys muted, values a touch brighter, with status
+// colored by class and the method bolded (app.* promoted fields take Highlight).
+// It tokenizes the body but only wraps spans in styles, never rewriting bytes, so
+// stripping the ANSI yields the original body verbatim (peek == pipe).
+func colorizeRouterBody(body string) string {
+	var b strings.Builder
+	i, n := 0, len(body)
+	for i < n {
+		if body[i] == ' ' { // whitespace between tokens is preserved verbatim
+			b.WriteByte(' ')
+			i++
+			continue
+		}
+		// Read the key: up to '=' or a space.
+		ks := i
+		for i < n && body[i] != '=' && body[i] != ' ' {
+			i++
+		}
+		key := body[ks:i]
+		if i >= n || body[i] != '=' {
+			b.WriteString(key) // bare token (no value): emit verbatim
+			continue
+		}
+		i++ // consume '='
+
+		// Read the value: a quoted string (honoring \" escapes) or a bare run. An
+		// unterminated quote (malformed/truncated body) just consumes to the end
+		// of the string as the value, so no bytes are dropped.
+		vs := i
+		if i < n && body[i] == '"' {
+			i++
+			for i < n {
+				if body[i] == '\\' && i+1 < n {
+					i += 2
+					continue
+				}
+				if body[i] == '"' {
+					i++
+					break
+				}
+				i++
+			}
+		} else {
+			for i < n && body[i] != ' ' {
+				i++
+			}
+		}
+		value := body[vs:i]
+
+		isApp := strings.HasPrefix(key, "app.")
+		if isApp {
+			b.WriteString(logAppKeyStyle.Render(key + "="))
+		} else {
+			b.WriteString(logKeyStyle.Render(key + "="))
+		}
+		switch {
+		case key == "status":
+			b.WriteString(logStatusStyle(value).Render(value))
+		case key == "method":
+			b.WriteString(logMethod.Render(value))
+		case isApp:
+			b.WriteString(logAppValStyle.Render(value))
+		default:
+			b.WriteString(logValStyle.Render(value))
+		}
+	}
+	return b.String()
+}
+
+// laneStyleCache memoizes the bold lane style per color so the hot render path
+// (a line for every log entry, worse under --follow) doesn't rebuild an
+// identical lipgloss.Style each time. theme.Lane is a pure hash, so a given
+// service always maps to the same color and thus the same cached style.
+var laneStyleCache sync.Map // lipgloss.CompleteAdaptiveColor -> lipgloss.Style
+
+func laneStyle(c lipgloss.CompleteAdaptiveColor) lipgloss.Style {
+	if s, ok := laneStyleCache.Load(c); ok {
+		return s.(lipgloss.Style)
+	}
+	s := lipgloss.NewStyle().Foreground(c).Bold(true)
+	laneStyleCache.Store(c, s)
+	return s
+}
+
+// padColumn right-pads a styled string to logPrefixWidth visible columns. plainW
+// is the visible width of the unstyled text (ANSI is invisible to width). A
+// prefix already at or over the cap is returned unpadded.
+func padColumn(styled string, plainW int) string {
+	if plainW >= logPrefixWidth {
+		return styled
+	}
+	return styled + strings.Repeat(" ", logPrefixWidth-plainW)
+}
+
+// logPrefix returns the unstyled and styled forms of a line's lane prefix: the
+// slate "router" tag for router lines, else "service.id" (service hued by a
+// stable hash, instance id muted), falling back to the raw source when a line
+// carries no service metadata.
+func logPrefix(l *app_v1alpha.LogEntry) (plain, styled string) {
+	if l.HasSource() && l.Source() == "router" {
+		return "router", logRouterTag.Render("router")
+	}
+
+	var service, shortID string
+	if l.HasAttributes() {
+		a := l.Attributes()
+		service = a["miren.service"]
+		shortID = a["miren.short_id"]
+	}
+
+	switch {
+	case service != "":
+		hue := laneStyle(theme.Lane(service))
+		if shortID != "" {
+			return service + "." + shortID, hue.Render(service) + logIDStyle.Render("."+shortID)
+		}
+		return service, hue.Render(service)
+	case shortID != "":
+		hue := laneStyle(theme.Lane(shortID))
+		return shortID, hue.Render(shortID)
+	case l.HasSource() && l.Source() != "":
+		// No service metadata, so fall back to the raw source (a sandbox entity
+		// id). We never clip it: the readable part is at the front, so truncating
+		// would drop the useful bit and keep the random suffix. A long id just
+		// overflows its column, like an outlier service name does.
+		source := l.Source()
+		hue := laneStyle(theme.Lane(source))
+		return source, hue.Render(source)
+	}
+	return "", ""
 }
 
 // logPrinter returns a function that prints a log entry (text or JSON) and a
@@ -455,36 +654,57 @@ func printLogEntryJSON(ctx *Context, l *app_v1alpha.LogEntry) {
 // a signature that is identical for entries that differ only by their timestamp.
 // The signature lets callers collapse runs of repeated lines (see logCoalescer).
 func renderLogEntry(l *app_v1alpha.LogEntry) (display, signature string) {
-	prefix := ""
-	if l.HasAttributes() {
-		if shortID, ok := l.Attributes()["miren.short_id"]; ok && shortID != "" {
-			prefix = "[" + shortID + "] "
-		}
-	}
-	if prefix == "" && l.HasSource() && l.Source() != "" {
-		source := l.Source()
-		if len(source) > 12 {
-			source = source[:3] + "…" + source[len(source)-8:]
-		}
-		prefix = "[" + source + "] "
+	isRouter := l.HasSource() && l.Source() == "router"
+
+	prefixPlain, prefixStyled := logPrefix(l)
+
+	// Body: router lines colorize status/method in place; app lines print the
+	// message at full brightness (it's the content that should read first).
+	bodyPlain := l.Line()
+	bodyStyled := bodyPlain
+	if isRouter {
+		bodyStyled = colorizeRouterBody(bodyPlain)
 	}
 
-	attrs := ""
-	if l.HasAttributes() {
-		attrs = formatAttributes(l.Attributes())
+	// Attributes: for router lines, suppress the fields already in the body so we
+	// don't double-print them; other attributes (future app.* promoted fields)
+	// still render.
+	var hide map[string]bool
+	if isRouter {
+		hide = routerBodyHidden
 	}
+	attrsPlain, attrsStyled := renderAttrs(attrsOf(l), hide)
 
-	stream := streamTypePrefixes[l.Stream()]
-	display = fmt.Sprintf("%s %s: %s%s%s",
-		stream,
-		standard.FromTimestamp(l.Timestamp()).Format("2006-01-02 15:04:05"),
-		prefix,
-		l.Line(),
-		attrs)
-	// Everything except the timestamp. The NUL separator keeps field boundaries
-	// unambiguous so distinct entries can't collide on a shared signature.
-	signature = stream + "\x00" + prefix + l.Line() + attrs
+	// Timestamp is chrome: full date+time always (so peek matches pipe and day
+	// boundaries stay visible), with the date dimmed so the time leads.
+	ts := standard.FromTimestamp(l.Timestamp()).Format("2006-01-02 15:04:05")
+	tsStyled := logDateStyle.Render(ts[:10]) + " " + logTimeStyle.Render(ts[11:])
+
+	var b strings.Builder
+	b.WriteString(tsStyled)
+	if prefixStyled != "" {
+		b.WriteByte(' ')
+		// lipgloss.Width counts terminal display cells (wide runes as 2), so the
+		// column aligns even for a service name with CJK or other wide characters.
+		b.WriteString(padColumn(prefixStyled, lipgloss.Width(prefixPlain)))
+	}
+	b.WriteByte(' ')
+	b.WriteString(bodyStyled)
+	b.WriteString(attrsStyled)
+	display = b.String()
+
+	// Signature ignores the timestamp and all styling, so runs that differ only by
+	// time collapse. The NUL separators keep field boundaries unambiguous.
+	signature = l.Stream() + "\x00" + prefixPlain + "\x00" + bodyPlain + "\x00" + attrsPlain
 	return display, signature
+}
+
+// attrsOf returns an entry's attributes, or nil when it has none.
+func attrsOf(l *app_v1alpha.LogEntry) map[string]string {
+	if l.HasAttributes() {
+		return l.Attributes()
+	}
+	return nil
 }
 
 func printLogEntry(ctx *Context, l *app_v1alpha.LogEntry) {
@@ -582,35 +802,58 @@ var hiddenAttributes = map[string]bool{
 	"source": true,
 }
 
+// formatAttributes renders attributes as an unstyled " key=val" logfmt tail,
+// skipping hidden and miren.* keys. It is the plain form used in signatures.
 func formatAttributes(m map[string]string) string {
+	plain, _ := renderAttrs(m, nil)
+	return plain
+}
+
+// renderAttrs renders attributes as a " key=val" tail in both plain and styled
+// forms. Keys are muted and values a touch brighter; app.* promoted fields take
+// the Highlight role. Hidden and miren.* keys are always skipped, plus any key in
+// extraHidden (used to drop router body duplicates). The styled form degrades to
+// exactly the plain form when color is off, so the two never diverge.
+func renderAttrs(m map[string]string, extraHidden map[string]bool) (plain, styled string) {
 	if len(m) == 0 {
-		return ""
+		return "", ""
 	}
 	keys := make([]string, 0, len(m))
 	for k := range m {
 		if hiddenAttributes[k] || strings.HasPrefix(k, "miren.") {
 			continue
 		}
+		if extraHidden[k] {
+			continue
+		}
 		keys = append(keys, k)
 	}
 	if len(keys) == 0 {
-		return ""
+		return "", ""
 	}
 	slices.Sort(keys)
 
-	var b strings.Builder
+	var pb, sb strings.Builder
 	for _, k := range keys {
-		b.WriteByte(' ')
-		b.WriteString(k)
-		b.WriteByte('=')
 		v := m[k]
 		if strings.ContainsAny(v, " \t\"\n\r") {
-			fmt.Fprintf(&b, "%q", v)
+			v = fmt.Sprintf("%q", v)
+		}
+		pb.WriteByte(' ')
+		pb.WriteString(k)
+		pb.WriteByte('=')
+		pb.WriteString(v)
+
+		sb.WriteByte(' ')
+		if strings.HasPrefix(k, "app.") {
+			sb.WriteString(logAppKeyStyle.Render(k + "="))
+			sb.WriteString(logAppValStyle.Render(v))
 		} else {
-			b.WriteString(v)
+			sb.WriteString(logKeyStyle.Render(k + "="))
+			sb.WriteString(logValStyle.Render(v))
 		}
 	}
-	return b.String()
+	return pb.String(), sb.String()
 }
 
 func streamLogs(ctx *Context, cl *rpc.NetworkClient, app, sandbox string, from *standard.Timestamp, follow bool, filter *logfilter.Filter, printer func(*app_v1alpha.LogEntry)) error {

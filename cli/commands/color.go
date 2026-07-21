@@ -33,6 +33,14 @@ func Colors(ctx *Context, opts struct {
 		ctx.Printf("  %s  %s\n", swatch, r.Name)
 	}
 
+	ctx.Printf("\nLane palette (per-service identity):\n")
+	for i, c := range theme.Lanes() {
+		swatch := lipgloss.NewStyle().Foreground(c).Render("████")
+		ctx.Printf("  %s  lane %d\n", swatch, i+1)
+	}
+	routerSwatch := lipgloss.NewStyle().Foreground(theme.Router).Render("████")
+	ctx.Printf("  %s  router (reserved)\n", routerSwatch)
+
 	return nil
 }
 
