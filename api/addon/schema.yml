@@ -60,6 +60,24 @@ kinds:
         sensitive:
           type: bool
 
+  # rotation_request drives a one-shot credential rotation for the addon server
+  # backing an association. The RPC creates one with status "pending"; the
+  # rotation controller reconciles it: apply a new secret to the live engine,
+  # update the stored value, and redeploy affected consumers.
+  rotation_request:
+    association:
+      type: ref
+      indexed: true
+    addon:
+      type: ref
+    credential:
+      type: string
+    status:
+      type: string
+      indexed: true
+    error_message:
+      type: string
+
   postgres_server:
     addon_name:
       type: string

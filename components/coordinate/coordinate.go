@@ -1123,6 +1123,25 @@ func (c *Coordinator) Start(ctx context.Context) error {
 	)
 	c.cm.AddController(addonReconciler)
 
+	// Add addon rotation controller (reconciles rotation requests: apply a new
+	// secret to the live engine, update the stored value, redeploy consumers).
+	rotationController := addonctrl.NewRotationController(c.Log, ec, eac, addonRegistry)
+	if err := rotationController.Init(ctx); err != nil {
+		c.Log.Error("failed to initialize addon rotation controller", "error", err)
+		return err
+	}
+
+	rotationReconciler := controller.NewReconcileController(
+		"addon-rotation",
+		c.Log,
+		entity.Ref(entity.EntityKind, addon_v1alpha.KindRotationRequest),
+		eac,
+		controller.AdaptReconcileController[addon_v1alpha.RotationRequest](rotationController),
+		time.Minute,
+		4,
+	)
+	c.cm.AddController(rotationReconciler)
+
 	// Start the controller manager
 	if err := c.cm.Start(ctx); err != nil {
 		c.Log.Error("failed to start controller manager", "error", err)

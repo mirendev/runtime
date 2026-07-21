@@ -669,6 +669,18 @@ interfaces:
             type: list
             element: AddonInstance
 
+      - name: rotateCredential
+        parameters:
+          - name: app
+            type: string
+          - name: name
+            type: string
+          - name: credential
+            type: string
+        results:
+          - name: id
+            type: string
+
       - name: deleteInstance
         parameters:
           - name: app

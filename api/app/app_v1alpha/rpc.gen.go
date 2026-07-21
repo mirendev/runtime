@@ -5680,6 +5680,95 @@ func (v *AddonsListInstancesResults) UnmarshalJSON(data []byte) error {
 	return json.Unmarshal(data, &v.data)
 }
 
+type addonsRotateCredentialArgsData struct {
+	App        *string `cbor:"0,keyasint,omitempty" json:"app,omitempty"`
+	Name       *string `cbor:"1,keyasint,omitempty" json:"name,omitempty"`
+	Credential *string `cbor:"2,keyasint,omitempty" json:"credential,omitempty"`
+}
+
+type AddonsRotateCredentialArgs struct {
+	call rpc.Call
+	data addonsRotateCredentialArgsData
+}
+
+func (v *AddonsRotateCredentialArgs) HasApp() bool {
+	return v.data.App != nil
+}
+
+func (v *AddonsRotateCredentialArgs) App() string {
+	if v.data.App == nil {
+		return ""
+	}
+	return *v.data.App
+}
+
+func (v *AddonsRotateCredentialArgs) HasName() bool {
+	return v.data.Name != nil
+}
+
+func (v *AddonsRotateCredentialArgs) Name() string {
+	if v.data.Name == nil {
+		return ""
+	}
+	return *v.data.Name
+}
+
+func (v *AddonsRotateCredentialArgs) HasCredential() bool {
+	return v.data.Credential != nil
+}
+
+func (v *AddonsRotateCredentialArgs) Credential() string {
+	if v.data.Credential == nil {
+		return ""
+	}
+	return *v.data.Credential
+}
+
+func (v *AddonsRotateCredentialArgs) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *AddonsRotateCredentialArgs) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *AddonsRotateCredentialArgs) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *AddonsRotateCredentialArgs) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type addonsRotateCredentialResultsData struct {
+	Id *string `cbor:"0,keyasint,omitempty" json:"id,omitempty"`
+}
+
+type AddonsRotateCredentialResults struct {
+	call rpc.Call
+	data addonsRotateCredentialResultsData
+}
+
+func (v *AddonsRotateCredentialResults) SetId(id string) {
+	v.data.Id = &id
+}
+
+func (v *AddonsRotateCredentialResults) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *AddonsRotateCredentialResults) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *AddonsRotateCredentialResults) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *AddonsRotateCredentialResults) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
 type addonsDeleteInstanceArgsData struct {
 	App  *string `cbor:"0,keyasint,omitempty" json:"app,omitempty"`
 	Name *string `cbor:"1,keyasint,omitempty" json:"name,omitempty"`
@@ -5803,6 +5892,32 @@ func (t *AddonsListInstances) Results() *AddonsListInstancesResults {
 	return results
 }
 
+type AddonsRotateCredential struct {
+	rpc.Call
+	args    AddonsRotateCredentialArgs
+	results AddonsRotateCredentialResults
+}
+
+func (t *AddonsRotateCredential) Args() *AddonsRotateCredentialArgs {
+	args := &t.args
+	if args.call != nil {
+		return args
+	}
+	args.call = t.Call
+	t.Call.Args(args)
+	return args
+}
+
+func (t *AddonsRotateCredential) Results() *AddonsRotateCredentialResults {
+	results := &t.results
+	if results.call != nil {
+		return results
+	}
+	results.call = t.Call
+	t.Call.Results(results)
+	return results
+}
+
 type AddonsDeleteInstance struct {
 	rpc.Call
 	args    AddonsDeleteInstanceArgs
@@ -5832,6 +5947,7 @@ func (t *AddonsDeleteInstance) Results() *AddonsDeleteInstanceResults {
 type Addons interface {
 	CreateInstance(ctx context.Context, state *AddonsCreateInstance) error
 	ListInstances(ctx context.Context, state *AddonsListInstances) error
+	RotateCredential(ctx context.Context, state *AddonsRotateCredential) error
 	DeleteInstance(ctx context.Context, state *AddonsDeleteInstance) error
 }
 
@@ -5844,6 +5960,10 @@ func (reexportAddons) CreateInstance(ctx context.Context, state *AddonsCreateIns
 }
 
 func (reexportAddons) ListInstances(ctx context.Context, state *AddonsListInstances) error {
+	panic("not implemented")
+}
+
+func (reexportAddons) RotateCredential(ctx context.Context, state *AddonsRotateCredential) error {
 	panic("not implemented")
 }
 
@@ -5875,6 +5995,16 @@ func AdaptAddons(t Addons) *rpc.Interface {
 			Params:        []string{"app"},
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.ListInstances(ctx, &AddonsListInstances{Call: call})
+			},
+		},
+		{
+			Name:          "rotateCredential",
+			InterfaceName: "Addons",
+			Index:         0,
+			Public:        false,
+			Params:        []string{"app", "name", "credential"},
+			Handler: func(ctx context.Context, call rpc.Call) error {
+				return t.RotateCredential(ctx, &AddonsRotateCredential{Call: call})
 			},
 		},
 		{
@@ -5966,6 +6096,38 @@ func (v AddonsClient) ListInstances(ctx context.Context, app string) (*AddonsCli
 	}
 
 	return &AddonsClientListInstancesResults{client: v.Client, data: ret}, nil
+}
+
+type AddonsClientRotateCredentialResults struct {
+	client rpc.Client
+	data   addonsRotateCredentialResultsData
+}
+
+func (v *AddonsClientRotateCredentialResults) HasId() bool {
+	return v.data.Id != nil
+}
+
+func (v *AddonsClientRotateCredentialResults) Id() string {
+	if v.data.Id == nil {
+		return ""
+	}
+	return *v.data.Id
+}
+
+func (v AddonsClient) RotateCredential(ctx context.Context, app string, name string, credential string) (*AddonsClientRotateCredentialResults, error) {
+	args := AddonsRotateCredentialArgs{}
+	args.data.App = &app
+	args.data.Name = &name
+	args.data.Credential = &credential
+
+	var ret addonsRotateCredentialResultsData
+
+	err := v.Call(ctx, "rotateCredential", &args, &ret)
+	if err != nil {
+		return nil, err
+	}
+
+	return &AddonsClientRotateCredentialResults{client: v.Client, data: ret}, nil
 }
 
 type AddonsClientDeleteInstanceResults struct {

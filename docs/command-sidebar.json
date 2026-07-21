@@ -12,6 +12,7 @@
       "command/addon-destroy",
       "command/addon-list",
       "command/addon-list-available",
+      "command/addon-rotate",
       "command/addon-variants"
     ]
   },
