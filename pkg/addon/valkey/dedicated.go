@@ -125,7 +125,7 @@ func CreateDedicatedPool(ctx context.Context, in CreateDedicatedPoolIn) (CreateD
 	poolID, err := fw.CreateSandboxPool(ctx, addon.CreateSandboxPoolSpec{
 		Name:             in.ServerName,
 		Image:            image,
-		Command:          fmt.Sprintf("valkey-server --save 60 1 --requirepass %s", in.Password),
+		Command:          valkeyCommand(in.Password),
 		Ports:            valkeyContainerPorts(),
 		DesiredInstances: 1,
 		Labels:           labels,
