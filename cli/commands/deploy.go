@@ -1419,53 +1419,20 @@ func displayAccessInfo(ctx *Context, appName string, results deployAccessInfo) {
 		} else {
 			ctx.Printf("\nYour app is the default route and will receive all unmatched traffic.\n")
 		}
-		suggestRoute(ctx, appName, accessInfo.ClusterHostname())
+		suggestRoute(ctx, appName)
 	} else {
 		ctx.Printf("\nNo routes configured for this app.\n")
-		suggestRoute(ctx, appName, accessInfo.ClusterHostname())
+		suggestRoute(ctx, appName)
 		ctx.Printf("To make it the default route: miren route set-default %s\n", appName)
 	}
 }
 
-// suggestRoute suggests a route command, using the cloud DNS hostname if available
-func suggestRoute(ctx *Context, appName string, clusterHostname string) {
-	if clusterHostname != "" {
-		// Suggest a specific subdomain using the app name
-		subdomain := sanitizeForSubdomain(appName)
-		suggestedHost := subdomain + "." + clusterHostname
-		ctx.Printf("To set a hostname, try: miren route set %s %s\n", suggestedHost, appName)
-	} else {
-		ctx.Printf("To set a hostname, try: miren route set <hostname> %s\n", appName)
-	}
-}
-
-// sanitizeForSubdomain converts an app name to a valid subdomain label
-func sanitizeForSubdomain(name string) string {
-	// Convert to lowercase
-	result := strings.ToLower(name)
-	// Replace underscores with hyphens
-	result = strings.ReplaceAll(result, "_", "-")
-	// Replace any other non-alphanumeric chars with hyphens
-	var sanitized strings.Builder
-	for _, r := range result {
-		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' {
-			sanitized.WriteRune(r)
-		} else {
-			sanitized.WriteRune('-')
-		}
-	}
-	result = sanitized.String()
-	// Remove leading/trailing hyphens
-	result = strings.Trim(result, "-")
-	// Collapse multiple hyphens
-	for strings.Contains(result, "--") {
-		result = strings.ReplaceAll(result, "--", "-")
-	}
-	// Ensure it's not empty
-	if result == "" {
-		result = "app"
-	}
-	return result
+// suggestRoute prints a hint for giving the app a hostname. It intentionally
+// does not synthesize a subdomain of the cluster's own hostname (e.g.
+// app.cluster-x.miren.systems): Miren Anywhere serves the cluster apex but not
+// subdomains beneath it, so such a hostname would not route today. See MIR-1450.
+func suggestRoute(ctx *Context, appName string) {
+	ctx.Printf("To set a hostname, try: miren route set <hostname> %s\n", appName)
 }
 
 // stripPort removes any port suffix from a host string

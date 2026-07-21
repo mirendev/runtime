@@ -53,10 +53,10 @@ func displayDeployVersionAccessInfo(ctx *Context, appName string, accessInfo *de
 		} else {
 			ctx.Printf("\nYour app is the default route and will receive all unmatched traffic.\n")
 		}
-		suggestRoute(ctx, appName, clusterAddr)
+		suggestRoute(ctx, appName)
 	} else {
 		ctx.Printf("\nNo routes configured for this app.\n")
-		suggestRoute(ctx, appName, clusterAddr)
+		suggestRoute(ctx, appName)
 		ctx.Printf("To make it the default route: miren route set-default %s\n", appName)
 	}
 }
