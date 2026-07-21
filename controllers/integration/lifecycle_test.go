@@ -699,7 +699,7 @@ func TestDiskDeletionLifecycle(t *testing.T) {
 	assert.Equal(t, storage.DV_ABSENT, vols[0].DesiredState, "volume desired_state should be DV_ABSENT")
 
 	// Reconcile disk-volume — volume controller processes deletion
-	nodeId := entity.Id("node/" + testNodeId)
+	nodeId := compute.NewNodeId(testNodeId).Id()
 	h.reconcileByIndex(ctx, entity.Ref(storage.DiskVolumeNodeIdId, nodeId), h.DiskVolRC)
 
 	// Volume should now be VOL_DELETED
@@ -774,7 +774,7 @@ func TestLeaseConflictDetection(t *testing.T) {
 			Path:    "/data",
 			Options: "rw",
 		},
-		NodeId: entity.Id("node/" + testNodeId),
+		NodeId: compute.NewNodeId(testNodeId).Id(),
 	}
 
 	conflictLeaseID := entity.Id("disk-lease/" + idgen.GenNS("disk-lease"))

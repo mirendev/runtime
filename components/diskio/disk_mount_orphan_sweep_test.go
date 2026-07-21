@@ -4,10 +4,11 @@ import (
 	"testing"
 	"time"
 
+	compute "miren.dev/runtime/api/compute/compute_v1alpha"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"miren.dev/runtime/api/storage/storage_v1alpha"
-	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/testutils"
 )
 
@@ -44,7 +45,7 @@ func TestDiskMountControllerRecordsSelfWrites(t *testing.T) {
 	// error path), which is exactly the write we need to record.
 	mount := &storage_v1alpha.DiskMount{
 		ID:           "disk_mount/mnt-selfwrite",
-		NodeId:       entity.Id("node/" + nodeId),
+		NodeId:       compute.NewNodeId(nodeId).Id(),
 		VolumeId:     "disk_volume/vol-missing",
 		MountPath:    "/mnt/selfwrite",
 		DesiredState: storage_v1alpha.DM_WANT_MOUNTED,
@@ -75,7 +76,7 @@ func TestDiskMountControllerSelfWritesNilTrackerSafe(t *testing.T) {
 
 	mount := &storage_v1alpha.DiskMount{
 		ID:           "disk_mount/mnt-nil-tracker",
-		NodeId:       entity.Id("node/test-node-1"),
+		NodeId:       compute.NewNodeId("test-node-1").Id(),
 		VolumeId:     "disk_volume/vol-missing",
 		MountPath:    "/mnt/nil",
 		DesiredState: storage_v1alpha.DM_WANT_MOUNTED,
@@ -105,7 +106,7 @@ func TestReconcileOrphanMountsDeletesMissingVolume(t *testing.T) {
 
 	mount := &storage_v1alpha.DiskMount{
 		ID:           "disk_mount/mnt-orphan",
-		NodeId:       entity.Id("node/" + nodeId),
+		NodeId:       compute.NewNodeId(nodeId).Id(),
 		VolumeId:     "disk_volume/vol-gone",
 		MountPath:    "/mnt/orphan",
 		DesiredState: storage_v1alpha.DM_WANT_MOUNTED,
@@ -151,14 +152,14 @@ func TestReconcileOrphanMountsKeepsMountWithExistingVolume(t *testing.T) {
 
 	createDiskVolumeEntity(ctx, t, es, &storage_v1alpha.DiskVolume{
 		ID:     "disk_volume/vol-live",
-		NodeId: entity.Id("node/" + nodeId),
+		NodeId: compute.NewNodeId(nodeId).Id(),
 		DiskId: "disk/disk-live",
 		SizeGb: 10,
 	})
 
 	mount := &storage_v1alpha.DiskMount{
 		ID:           "disk_mount/mnt-live",
-		NodeId:       entity.Id("node/" + nodeId),
+		NodeId:       compute.NewNodeId(nodeId).Id(),
 		VolumeId:     "disk_volume/vol-live",
 		MountPath:    "/mnt/live",
 		DesiredState: storage_v1alpha.DM_WANT_MOUNTED,
@@ -190,7 +191,7 @@ func TestReconcileOrphanMountsRespectsGracePeriod(t *testing.T) {
 
 	mount := &storage_v1alpha.DiskMount{
 		ID:           "disk_mount/mnt-young",
-		NodeId:       entity.Id("node/" + nodeId),
+		NodeId:       compute.NewNodeId(nodeId).Id(),
 		VolumeId:     "disk_volume/vol-gone",
 		MountPath:    "/mnt/young",
 		DesiredState: storage_v1alpha.DM_WANT_MOUNTED,

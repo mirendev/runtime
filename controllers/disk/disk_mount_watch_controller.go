@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 
+	compute "miren.dev/runtime/api/compute/compute_v1alpha"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/api/storage/storage_v1alpha"
 	"miren.dev/runtime/pkg/controller"
@@ -17,13 +18,13 @@ import (
 type DiskMountWatchController struct {
 	Log    *slog.Logger
 	EAC    *entityserver_v1alpha.EntityAccessClient
-	NodeId string
+	NodeId compute.NodeId
 
 	LeaseController *controller.ReconcileController
 }
 
 // NewDiskMountWatchController creates a new disk mount watch controller.
-func NewDiskMountWatchController(log *slog.Logger, eac *entityserver_v1alpha.EntityAccessClient, leaseController *controller.ReconcileController, nodeId string) *DiskMountWatchController {
+func NewDiskMountWatchController(log *slog.Logger, eac *entityserver_v1alpha.EntityAccessClient, leaseController *controller.ReconcileController, nodeId compute.NodeId) *DiskMountWatchController {
 	return &DiskMountWatchController{
 		Log:             log.With("module", "disk-mount-watch"),
 		EAC:             eac,
@@ -42,7 +43,7 @@ func (m *DiskMountWatchController) Create(ctx context.Context, mount *storage_v1
 
 func (m *DiskMountWatchController) Update(ctx context.Context, mount *storage_v1alpha.DiskMount, meta *entity.Meta) error {
 	// Only process mounts assigned to this node
-	if mount.NodeId != "" && mount.NodeId != entity.Id("node/"+m.NodeId) {
+	if mount.NodeId != "" && !m.NodeId.Matches(mount.NodeId) {
 		return nil
 	}
 	if mount.DiskLeaseId == "" {

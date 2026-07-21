@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	compute "miren.dev/runtime/api/compute/compute_v1alpha"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"miren.dev/lbd"
@@ -104,7 +106,7 @@ func TestReplayOneSegmentWriteEntries(t *testing.T) {
 		downloadData: map[string][]byte{"seg-1": segData},
 	}
 
-	mc := NewDiskMountController(slog.Default(), tmpDir, "node-1", NewState(), newMockDiskMountOps())
+	mc := NewDiskMountController(slog.Default(), tmpDir, compute.NewNodeId("node-1"), NewState(), newMockDiskMountOps())
 	mc.SetCloudClient(cloud)
 
 	img, err := openDiskImage(diskPath)
@@ -163,7 +165,7 @@ func TestReplayMissingSegmentsFiltersbyHorizon(t *testing.T) {
 		DiskPath: volDir,
 	})
 
-	mc := NewDiskMountController(slog.Default(), tmpDir, "node-1", state, newMockDiskMountOps())
+	mc := NewDiskMountController(slog.Default(), tmpDir, compute.NewNodeId("node-1"), state, newMockDiskMountOps())
 	mc.SetCloudClient(cloud)
 
 	volState := state.GetVolume("disk_volume/vol1")
@@ -191,7 +193,7 @@ func TestReplayMissingSegmentsNoRemoteSegments(t *testing.T) {
 	}
 
 	state := NewState()
-	mc := NewDiskMountController(slog.Default(), tmpDir, "node-1", state, newMockDiskMountOps())
+	mc := NewDiskMountController(slog.Default(), tmpDir, compute.NewNodeId("node-1"), state, newMockDiskMountOps())
 	mc.SetCloudClient(cloud)
 
 	err := mc.replayMissingSegments(context.Background(), &VolumeState{
@@ -217,7 +219,7 @@ func TestReplayMissingSegmentsAllAlreadyApplied(t *testing.T) {
 	}
 
 	state := NewState()
-	mc := NewDiskMountController(slog.Default(), tmpDir, "node-1", state, newMockDiskMountOps())
+	mc := NewDiskMountController(slog.Default(), tmpDir, compute.NewNodeId("node-1"), state, newMockDiskMountOps())
 	mc.SetCloudClient(cloud)
 
 	err := mc.replayMissingSegments(context.Background(), &VolumeState{
@@ -268,7 +270,7 @@ func TestReplayMissingSegmentsMultiple(t *testing.T) {
 	}
 
 	state := NewState()
-	mc := NewDiskMountController(slog.Default(), tmpDir, "node-1", state, newMockDiskMountOps())
+	mc := NewDiskMountController(slog.Default(), tmpDir, compute.NewNodeId("node-1"), state, newMockDiskMountOps())
 	mc.SetCloudClient(cloud)
 
 	err = mc.replayMissingSegments(context.Background(), &VolumeState{
@@ -306,7 +308,7 @@ func TestReplayMissingSegmentsDownloadError(t *testing.T) {
 	}
 
 	state := NewState()
-	mc := NewDiskMountController(slog.Default(), tmpDir, "node-1", state, newMockDiskMountOps())
+	mc := NewDiskMountController(slog.Default(), tmpDir, compute.NewNodeId("node-1"), state, newMockDiskMountOps())
 	mc.SetCloudClient(cloud)
 
 	err = mc.replayMissingSegments(context.Background(), &VolumeState{
@@ -456,7 +458,7 @@ func TestReplayToQCow2Image(t *testing.T) {
 	}
 
 	state := NewState()
-	mc := NewDiskMountController(slog.Default(), tmpDir, "node-1", state, newMockDiskMountOps())
+	mc := NewDiskMountController(slog.Default(), tmpDir, compute.NewNodeId("node-1"), state, newMockDiskMountOps())
 	mc.SetCloudClient(cloud)
 
 	err = mc.replayMissingSegments(context.Background(), &VolumeState{
@@ -501,7 +503,7 @@ func TestLeaseAcquiredBeforeReplay(t *testing.T) {
 	})
 
 	ops := newMockDiskMountOps()
-	mc := NewDiskMountController(slog.Default(), tmpDir, "node-1", state, ops)
+	mc := NewDiskMountController(slog.Default(), tmpDir, compute.NewNodeId("node-1"), state, ops)
 	mc.SetCloudClient(cloud)
 
 	// The lease is acquired in attachAndMount, which requires an EAC.
@@ -523,7 +525,7 @@ func TestLeaseReleasedOnUnmount(t *testing.T) {
 		LeaseNonce: "nonce-abc",
 	})
 
-	mc := NewDiskMountController(slog.Default(), tmpDir, "node-1", state, newMockDiskMountOps())
+	mc := NewDiskMountController(slog.Default(), tmpDir, compute.NewNodeId("node-1"), state, newMockDiskMountOps())
 	mc.SetCloudClient(cloud)
 
 	// Shutdown should release leases
@@ -545,7 +547,7 @@ func TestLeaseNotReleasedWithoutNonce(t *testing.T) {
 		LeaseNonce: "", // no lease
 	})
 
-	mc := NewDiskMountController(slog.Default(), tmpDir, "node-1", state, newMockDiskMountOps())
+	mc := NewDiskMountController(slog.Default(), tmpDir, compute.NewNodeId("node-1"), state, newMockDiskMountOps())
 	mc.SetCloudClient(cloud)
 
 	mc.Shutdown()
@@ -562,7 +564,7 @@ func TestLeaseNotReleasedWithoutCloudClient(t *testing.T) {
 		LeaseNonce: "some-nonce",
 	})
 
-	mc := NewDiskMountController(slog.Default(), tmpDir, "node-1", state, newMockDiskMountOps())
+	mc := NewDiskMountController(slog.Default(), tmpDir, compute.NewNodeId("node-1"), state, newMockDiskMountOps())
 	// No cloud client set
 
 	// Should not panic
@@ -607,7 +609,7 @@ func TestReplayOverwriteAtSameBlock(t *testing.T) {
 	}
 
 	state := NewState()
-	mc := NewDiskMountController(slog.Default(), tmpDir, "node-1", state, newMockDiskMountOps())
+	mc := NewDiskMountController(slog.Default(), tmpDir, compute.NewNodeId("node-1"), state, newMockDiskMountOps())
 	mc.SetCloudClient(cloud)
 
 	err = mc.replayMissingSegments(context.Background(), &VolumeState{

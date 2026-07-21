@@ -30,8 +30,14 @@ func TestSandboxControllerFrozen(t *testing.T) {
 		// the saga path also reaches via deps.runtime.BootContainers, so both
 		// controllers already share the new behavior and there was nothing to
 		// mirror in create_saga.go.
-		"sandbox.go":  "16e150f5ecae1f26ae4d3ac07a10b281a55c7fd220e8a9f58a6774e3e73cbcde",
-		"volume.go":   "b4697764d48a90adc04ce47968ccef11ceba50da8d19c889906c5c3a539065b3",
+		//
+		// Also updated for MIR-1072 (typed node-id boundary): the NodeId fields
+		// became compute_v1alpha.NodeId and the inline entity.Id("node/"+c.NodeId)
+		// constructions became c.NodeId.Id(). This is a mechanical retype that
+		// produces byte-identical entity ids at runtime, and the saga path does no
+		// node-id construction, so there was nothing to mirror there either.
+		"sandbox.go":  "08abc0b3e6c57e4e2c4018d9b252d1de98768e8559e5eda8606fdb0c77347408",
+		"volume.go":   "580062fb8a34f3f7f965689467a4b0f2ed403bc63c1ecdeb44949a7ba7e08dff",
 		"firewall.go": "648cb5d91091d5eb7400152b19695a8045585feae59c5dd36c12d663a27bb91f",
 	}
 

@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	compute "miren.dev/runtime/api/compute/compute_v1alpha"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
@@ -18,7 +20,7 @@ import (
 
 func newTestDiskVolumeController(log *slog.Logger, dataPath, nodeId string, eac *entityserver_v1alpha.EntityAccessClient, state *State, ops DiskVolumeOps) *DiskVolumeController {
 	mntOps := newMockDiskMountOps()
-	vc := NewDiskVolumeController(log, dataPath, nodeId, state, ops, mntOps)
+	vc := NewDiskVolumeController(log, dataPath, compute.NewNodeId(nodeId), state, ops, mntOps)
 	vc.SetEAC(eac)
 	return vc
 }
@@ -47,7 +49,7 @@ func TestDiskVolumeControllerReconcileVolumePresent(t *testing.T) {
 
 	vol := &storage_v1alpha.DiskVolume{
 		ID:           "disk_volume/vol-123",
-		NodeId:       entity.Id("node/" + nodeId),
+		NodeId:       compute.NewNodeId(nodeId).Id(),
 		SizeGb:       10,
 		Filesystem:   "ext4",
 		DesiredState: storage_v1alpha.DV_PRESENT,
@@ -116,7 +118,7 @@ func TestDiskVolumeControllerReconcileVolumeAbsent(t *testing.T) {
 
 	vol := &storage_v1alpha.DiskVolume{
 		ID:           "disk_volume/vol-456",
-		NodeId:       entity.Id("node/" + nodeId),
+		NodeId:       compute.NewNodeId(nodeId).Id(),
 		SizeGb:       5,
 		Filesystem:   "xfs",
 		DesiredState: storage_v1alpha.DV_ABSENT,
@@ -159,7 +161,7 @@ func TestDiskVolumeControllerReconcileSkipsOtherNodes(t *testing.T) {
 
 	vol := &storage_v1alpha.DiskVolume{
 		ID:           "disk_volume/vol-other",
-		NodeId:       entity.Id("node/other-node"),
+		NodeId:       compute.NewNodeId("other-node").Id(),
 		SizeGb:       10,
 		DesiredState: storage_v1alpha.DV_PRESENT,
 		ActualState:  storage_v1alpha.DV_PENDING,
@@ -199,7 +201,7 @@ func TestDiskVolumeControllerReconcileVolumeAlreadyReady(t *testing.T) {
 
 	vol := &storage_v1alpha.DiskVolume{
 		ID:           "disk_volume/vol-ready",
-		NodeId:       entity.Id("node/" + nodeId),
+		NodeId:       compute.NewNodeId(nodeId).Id(),
 		SizeGb:       10,
 		Filesystem:   "ext4",
 		DesiredState: storage_v1alpha.DV_PRESENT,
@@ -241,7 +243,7 @@ func TestDiskVolumeControllerReconcileVolumeReadyButMissing(t *testing.T) {
 
 	vol := &storage_v1alpha.DiskVolume{
 		ID:           "disk_volume/vol-missing",
-		NodeId:       entity.Id("node/" + nodeId),
+		NodeId:       compute.NewNodeId(nodeId).Id(),
 		SizeGb:       10,
 		Filesystem:   "ext4",
 		DesiredState: storage_v1alpha.DV_PRESENT,
@@ -279,7 +281,7 @@ func TestDiskVolumeControllerReconcileVolumeErrorRetry(t *testing.T) {
 
 	vol := &storage_v1alpha.DiskVolume{
 		ID:           "disk_volume/vol-err",
-		NodeId:       entity.Id("node/" + nodeId),
+		NodeId:       compute.NewNodeId(nodeId).Id(),
 		SizeGb:       10,
 		Filesystem:   "ext4",
 		DesiredState: storage_v1alpha.DV_PRESENT,
@@ -365,7 +367,7 @@ func TestDiskVolumeControllerReconcileKeepsNonOrphanedVolumes(t *testing.T) {
 
 	vol := &storage_v1alpha.DiskVolume{
 		ID:           "disk_volume/vol-keep",
-		NodeId:       entity.Id("node/" + nodeId),
+		NodeId:       compute.NewNodeId(nodeId).Id(),
 		SizeGb:       10,
 		Filesystem:   "ext4",
 		DesiredState: storage_v1alpha.DV_PRESENT,
@@ -400,7 +402,7 @@ func TestDiskVolumeControllerMultipleVolumes(t *testing.T) {
 	for i := 1; i <= 3; i++ {
 		vol := &storage_v1alpha.DiskVolume{
 			ID:           entity.Id("disk_volume/vol-" + string(rune('0'+i))),
-			NodeId:       entity.Id("node/" + nodeId),
+			NodeId:       compute.NewNodeId(nodeId).Id(),
 			SizeGb:       int64(i * 10),
 			Filesystem:   "ext4",
 			DesiredState: storage_v1alpha.DV_PRESENT,
@@ -445,7 +447,7 @@ func TestDiskVolumeControllerReconcilePersistedVolumeOnDisk(t *testing.T) {
 	// Entity is in PENDING state but local state has the volume on disk
 	vol := &storage_v1alpha.DiskVolume{
 		ID:           "disk_volume/vol-persist",
-		NodeId:       entity.Id("node/" + nodeId),
+		NodeId:       compute.NewNodeId(nodeId).Id(),
 		SizeGb:       10,
 		Filesystem:   "ext4",
 		DesiredState: storage_v1alpha.DV_PRESENT,
@@ -485,7 +487,7 @@ func TestDiskVolumeControllerDeleteNotInState(t *testing.T) {
 	// Volume not in local state but entity requests deletion
 	vol := &storage_v1alpha.DiskVolume{
 		ID:           "disk_volume/vol-gone",
-		NodeId:       entity.Id("node/" + nodeId),
+		NodeId:       compute.NewNodeId(nodeId).Id(),
 		SizeGb:       10,
 		DesiredState: storage_v1alpha.DV_ABSENT,
 		ActualState:  storage_v1alpha.DV_READY,
@@ -516,12 +518,12 @@ func TestDiskVolumeControllerUniversalMountAtCreation(t *testing.T) {
 	volOps := newMockDiskVolumeOps()
 	mntOps := newMockDiskMountOps()
 
-	vc := NewDiskVolumeController(log, dataPath, nodeId, state, volOps, mntOps)
+	vc := NewDiskVolumeController(log, dataPath, compute.NewNodeId(nodeId), state, volOps, mntOps)
 	vc.SetEAC(es.EAC)
 
 	vol := &storage_v1alpha.DiskVolume{
 		ID:           "disk_volume/vol-uni",
-		NodeId:       entity.Id("node/" + nodeId),
+		NodeId:       compute.NewNodeId(nodeId).Id(),
 		SizeGb:       10,
 		Filesystem:   "ext4",
 		VolumeMode:   storage_v1alpha.VM_UNIVERSAL,
@@ -585,12 +587,12 @@ func TestDiskVolumeControllerUniversalRemountOnReconcile(t *testing.T) {
 	})
 	volOps.existingPaths[volPath] = true
 
-	vc := NewDiskVolumeController(log, dataPath, nodeId, state, volOps, mntOps)
+	vc := NewDiskVolumeController(log, dataPath, compute.NewNodeId(nodeId), state, volOps, mntOps)
 	vc.SetEAC(es.EAC)
 
 	vol := &storage_v1alpha.DiskVolume{
 		ID:           "disk_volume/vol-remount",
-		NodeId:       entity.Id("node/" + nodeId),
+		NodeId:       compute.NewNodeId(nodeId).Id(),
 		SizeGb:       10,
 		Filesystem:   "ext4",
 		VolumeMode:   storage_v1alpha.VM_UNIVERSAL,
@@ -657,12 +659,12 @@ func TestDiskVolumeControllerUniversalAdoptsExistingLoopDevice(t *testing.T) {
 	mntOps.loopBacking = map[string]string{imagePath: staleLoopDev}
 	mntOps.formattedDevs[staleLoopDev] = "ext4"
 
-	vc := NewDiskVolumeController(log, dataPath, nodeId, state, volOps, mntOps)
+	vc := NewDiskVolumeController(log, dataPath, compute.NewNodeId(nodeId), state, volOps, mntOps)
 	vc.SetEAC(es.EAC)
 
 	vol := &storage_v1alpha.DiskVolume{
 		ID:           "disk_volume/vol-972",
-		NodeId:       entity.Id("node/" + nodeId),
+		NodeId:       compute.NewNodeId(nodeId).Id(),
 		SizeGb:       10,
 		Filesystem:   "ext4",
 		VolumeMode:   storage_v1alpha.VM_UNIVERSAL,
@@ -727,12 +729,12 @@ func TestDiskVolumeControllerUniversalFailsClosedWhenFindLoopErrors(t *testing.T
 	// Simulate sysfs being unreadable.
 	mntOps.findLoopErr = errors.New("sysfs read error")
 
-	vc := NewDiskVolumeController(log, dataPath, nodeId, state, volOps, mntOps)
+	vc := NewDiskVolumeController(log, dataPath, compute.NewNodeId(nodeId), state, volOps, mntOps)
 	vc.SetEAC(es.EAC)
 
 	vol := &storage_v1alpha.DiskVolume{
 		ID:           "disk_volume/vol-fcl",
-		NodeId:       entity.Id("node/" + nodeId),
+		NodeId:       compute.NewNodeId(nodeId).Id(),
 		SizeGb:       10,
 		Filesystem:   "ext4",
 		VolumeMode:   storage_v1alpha.VM_UNIVERSAL,
@@ -786,7 +788,7 @@ func TestDiskVolumeControllerOrphanLoopSweep(t *testing.T) {
 	foreignImage := "/some/other/place/disk.img"
 	mntOps.loopBacking[foreignImage] = foreignLoopDev
 
-	vc := NewDiskVolumeController(log, dataPath, nodeId, state, volOps, mntOps)
+	vc := NewDiskVolumeController(log, dataPath, compute.NewNodeId(nodeId), state, volOps, mntOps)
 	vc.SetEAC(es.EAC)
 
 	err := vc.ReconcileWithEntities(ctx)
@@ -833,7 +835,7 @@ func TestDiskVolumeControllerOrphanSweepUnmountsBeforeDetach(t *testing.T) {
 	mntOps.mountedPaths[orphanMountPath] = true
 	mntOps.mountDevices[orphanMountPath] = orphanLoopDev
 
-	vc := NewDiskVolumeController(log, dataPath, nodeId, state, volOps, mntOps)
+	vc := NewDiskVolumeController(log, dataPath, compute.NewNodeId(nodeId), state, volOps, mntOps)
 	vc.SetEAC(es.EAC)
 
 	err := vc.ReconcileWithEntities(ctx)
@@ -892,12 +894,12 @@ func TestDiskVolumeControllerUniversalUnmountOnDelete(t *testing.T) {
 	volOps.existingPaths[volDir] = true
 	mntOps.mountedPaths[mountPath] = true
 
-	vc := NewDiskVolumeController(log, dataPath, nodeId, state, volOps, mntOps)
+	vc := NewDiskVolumeController(log, dataPath, compute.NewNodeId(nodeId), state, volOps, mntOps)
 	vc.SetEAC(es.EAC)
 
 	vol := &storage_v1alpha.DiskVolume{
 		ID:           "disk_volume/vol-del",
-		NodeId:       entity.Id("node/" + nodeId),
+		NodeId:       compute.NewNodeId(nodeId).Id(),
 		SizeGb:       10,
 		Filesystem:   "ext4",
 		VolumeMode:   storage_v1alpha.VM_UNIVERSAL,
@@ -960,7 +962,7 @@ func TestDiskVolumeControllerShutdown(t *testing.T) {
 	mntOps.mountedPaths[accMountPath] = true
 	mntOps.mountDevices[accMountPath] = "/dev/lbd0"
 
-	vc := NewDiskVolumeController(log, dataPath, nodeId, state, volOps, mntOps)
+	vc := NewDiskVolumeController(log, dataPath, compute.NewNodeId(nodeId), state, volOps, mntOps)
 
 	vc.Shutdown()
 
@@ -996,12 +998,12 @@ func TestDiskVolumeControllerAcceleratorNoMountAtCreation(t *testing.T) {
 	volOps := newMockDiskVolumeOps()
 	mntOps := newMockDiskMountOps()
 
-	vc := NewDiskVolumeController(log, dataPath, nodeId, state, volOps, mntOps)
+	vc := NewDiskVolumeController(log, dataPath, compute.NewNodeId(nodeId), state, volOps, mntOps)
 	vc.SetEAC(es.EAC)
 
 	vol := &storage_v1alpha.DiskVolume{
 		ID:           "disk_volume/vol-acc",
-		NodeId:       entity.Id("node/" + nodeId),
+		NodeId:       compute.NewNodeId(nodeId).Id(),
 		SizeGb:       10,
 		Filesystem:   "ext4",
 		VolumeMode:   storage_v1alpha.VM_ACCELERATOR,

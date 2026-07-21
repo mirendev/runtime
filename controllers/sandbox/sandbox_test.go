@@ -44,7 +44,7 @@ func newSandboxController(d *testutils.TestDeps) (*SandboxController, error) {
 		CC:             d.CC,
 		EAC:            d.EAC,
 		Namespace:      d.Namespace,
-		NodeId:         "test-node",
+		NodeId:         compute.NewNodeId("test-node"),
 		NetServ:        d.NetServ,
 		Bridge:         d.Bridge,
 		Subnet:         d.Subnet,
@@ -99,7 +99,7 @@ func TestSandbox(t *testing.T) {
 	// The test sandbox controller uses NodeId "test-node".
 	// Only set the kind — Status is a session attribute and can't be set via Put.
 	{
-		nodeId := entity.Id("node/test-node")
+		nodeId := compute.NewNodeId("test-node").Id()
 		node := &compute.Node{}
 		var nodeE entityserver_v1alpha.Entity
 		nodeE.SetId(nodeId.String())
@@ -724,7 +724,7 @@ func TestSandbox(t *testing.T) {
 		schedule := compute.Schedule{
 			Key: compute.Key{
 				Kind: compute.KindSandbox,
-				Node: entity.Id("node/test-node"),
+				Node: compute.NewNodeId("test-node").Id(),
 			},
 		}
 

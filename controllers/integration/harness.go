@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"testing"
 
+	compute "miren.dev/runtime/api/compute/compute_v1alpha"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/api/storage/storage_v1alpha"
 	"miren.dev/runtime/components/diskio"
@@ -61,6 +62,8 @@ func NewTestHarness(t *testing.T) *TestHarness {
 
 	eac := es.EAC
 
+	nodeId := compute.NewNodeId(testNodeId)
+
 	// Create diskio state backed by a temp file so Save() succeeds
 	dataPath := t.TempDir()
 	diskioState := diskio.NewState()
@@ -69,17 +72,17 @@ func NewTestHarness(t *testing.T) *TestHarness {
 	// Create mock ops
 	volOps := newMockDiskVolumeOps()
 	mntOps := newMockDiskMountOps()
-	diskVolCtrl := diskio.NewDiskVolumeController(log, dataPath, testNodeId, diskioState, volOps, mntOps)
+	diskVolCtrl := diskio.NewDiskVolumeController(log, dataPath, nodeId, diskioState, volOps, mntOps)
 	diskVolCtrl.SetEAC(eac)
 
-	diskMntCtrl := diskio.NewDiskMountController(log, dataPath, testNodeId, diskioState, mntOps)
+	diskMntCtrl := diskio.NewDiskMountController(log, dataPath, nodeId, diskioState, mntOps)
 	diskMntCtrl.SetEAC(eac)
 
 	// Create disk controllers using universal mode
-	diskCtrl := disk.NewDiskController(log, eac, testNodeId, "", true)
+	diskCtrl := disk.NewDiskController(log, eac, nodeId, "", true)
 	diskCtrl.Init(ctx) //nolint:errcheck
 	diskCtrl.ForceUniversalMode()
-	diskLeaseCtrl := disk.NewDiskLeaseController(log, eac, testNodeId, "")
+	diskLeaseCtrl := disk.NewDiskLeaseController(log, eac, nodeId, "")
 	diskLeaseCtrl.Init(ctx) //nolint:errcheck
 
 	// Create ReconcileControllers for each.
@@ -122,7 +125,7 @@ func NewTestHarness(t *testing.T) *TestHarness {
 	)
 
 	// Create fake sandbox controller
-	fakeSandbox := NewFakeSandboxController(log, eac, testNodeId)
+	fakeSandbox := NewFakeSandboxController(log, eac, nodeId)
 
 	return &TestHarness{
 		T:              t,
@@ -193,7 +196,7 @@ func (h *TestHarness) ReconcileAll(ctx context.Context, maxIterations int) {
 		maxIterations = 20
 	}
 
-	nodeId := entity.Id("node/" + testNodeId)
+	nodeId := compute.NewNodeId(testNodeId).Id()
 
 	indexes := []struct {
 		index entity.Attr

@@ -5,6 +5,8 @@ import (
 	"log/slog"
 	"testing"
 
+	compute "miren.dev/runtime/api/compute/compute_v1alpha"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
@@ -14,7 +16,7 @@ import (
 )
 
 func newTestDiskMountController(log *slog.Logger, dataPath, nodeId string, eac *entityserver_v1alpha.EntityAccessClient, state *State, ops DiskMountOps) *DiskMountController {
-	mc := NewDiskMountController(log, dataPath, nodeId, state, ops)
+	mc := NewDiskMountController(log, dataPath, compute.NewNodeId(nodeId), state, ops)
 	mc.SetEAC(eac)
 	return mc
 }
@@ -52,7 +54,7 @@ func TestDiskMountControllerReconcileMountMounted(t *testing.T) {
 
 	mount := &storage_v1alpha.DiskMount{
 		ID:           "disk_mount/mnt-123",
-		NodeId:       entity.Id("node/" + nodeId),
+		NodeId:       compute.NewNodeId(nodeId).Id(),
 		VolumeId:     "disk_volume/vol-123",
 		MountPath:    "/mnt/data",
 		ReadOnly:     false,
@@ -137,7 +139,7 @@ func TestDiskMountControllerAdoptsExistingLoopDevice(t *testing.T) {
 
 	mount := &storage_v1alpha.DiskMount{
 		ID:           "disk_mount/mnt-972",
-		NodeId:       entity.Id("node/" + nodeId),
+		NodeId:       compute.NewNodeId(nodeId).Id(),
 		VolumeId:     "disk_volume/vol-972",
 		MountPath:    "/mnt/data",
 		ReadOnly:     false,
@@ -198,7 +200,7 @@ func TestDiskMountControllerReconcileMountUnmounted(t *testing.T) {
 
 	mount := &storage_v1alpha.DiskMount{
 		ID:           "disk_mount/mnt-456",
-		NodeId:       entity.Id("node/" + nodeId),
+		NodeId:       compute.NewNodeId(nodeId).Id(),
 		VolumeId:     "disk_volume/vol-456",
 		MountPath:    "/mnt/data",
 		DesiredState: storage_v1alpha.DM_WANT_UNMOUNTED,
@@ -244,7 +246,7 @@ func TestDiskMountControllerReconcileSkipsOtherNodes(t *testing.T) {
 
 	mount := &storage_v1alpha.DiskMount{
 		ID:           "disk_mount/mnt-other",
-		NodeId:       entity.Id("node/other-node"),
+		NodeId:       compute.NewNodeId("other-node").Id(),
 		VolumeId:     "disk_volume/vol-other",
 		MountPath:    "/mnt/other",
 		DesiredState: storage_v1alpha.DM_WANT_MOUNTED,
@@ -285,7 +287,7 @@ func TestDiskMountControllerReconcileMountAlreadyMounted(t *testing.T) {
 
 	mount := &storage_v1alpha.DiskMount{
 		ID:           "disk_mount/mnt-ready",
-		NodeId:       entity.Id("node/" + nodeId),
+		NodeId:       compute.NewNodeId(nodeId).Id(),
 		VolumeId:     "disk_volume/vol-ready",
 		MountPath:    "/mnt/ready",
 		DesiredState: storage_v1alpha.DM_WANT_MOUNTED,
@@ -318,7 +320,7 @@ func TestDiskMountControllerReconcileVolumeNotFound(t *testing.T) {
 
 	mount := &storage_v1alpha.DiskMount{
 		ID:           "disk_mount/mnt-missing",
-		NodeId:       entity.Id("node/" + nodeId),
+		NodeId:       compute.NewNodeId(nodeId).Id(),
 		VolumeId:     "disk_volume/vol-missing",
 		MountPath:    "/mnt/missing",
 		DesiredState: storage_v1alpha.DM_WANT_MOUNTED,
@@ -365,7 +367,7 @@ func TestDiskMountControllerReconcileMountReadOnly(t *testing.T) {
 
 	mount := &storage_v1alpha.DiskMount{
 		ID:           "disk_mount/mnt-ro",
-		NodeId:       entity.Id("node/" + nodeId),
+		NodeId:       compute.NewNodeId(nodeId).Id(),
 		VolumeId:     "disk_volume/vol-ro",
 		MountPath:    "/mnt/readonly",
 		ReadOnly:     true,
@@ -407,7 +409,7 @@ func TestDiskMountControllerReconcileAlreadyDetached(t *testing.T) {
 
 	mount := &storage_v1alpha.DiskMount{
 		ID:           "disk_mount/mnt-detached",
-		NodeId:       entity.Id("node/" + nodeId),
+		NodeId:       compute.NewNodeId(nodeId).Id(),
 		VolumeId:     "disk_volume/vol-detached",
 		MountPath:    "/mnt/detached",
 		DesiredState: storage_v1alpha.DM_WANT_UNMOUNTED,
@@ -446,7 +448,7 @@ func TestDiskMountControllerReconcileErrorRecovery(t *testing.T) {
 
 	mount := &storage_v1alpha.DiskMount{
 		ID:           "disk_mount/mnt-err",
-		NodeId:       entity.Id("node/" + nodeId),
+		NodeId:       compute.NewNodeId(nodeId).Id(),
 		VolumeId:     "disk_volume/vol-err",
 		MountPath:    "/mnt/recover",
 		DesiredState: storage_v1alpha.DM_WANT_MOUNTED,
@@ -490,7 +492,7 @@ func TestDiskMountControllerMultipleMounts(t *testing.T) {
 	for i := 1; i <= 3; i++ {
 		mount := &storage_v1alpha.DiskMount{
 			ID:           entity.Id("disk_mount/mnt-" + string(rune('0'+i))),
-			NodeId:       entity.Id("node/" + nodeId),
+			NodeId:       compute.NewNodeId(nodeId).Id(),
 			VolumeId:     entity.Id("disk_volume/vol-" + string(rune('0'+i))),
 			MountPath:    "/mnt/data" + string(rune('0'+i)),
 			DesiredState: storage_v1alpha.DM_WANT_MOUNTED,
@@ -583,7 +585,7 @@ func TestDiskMountControllerReconcileKeepsNonOrphanedMounts(t *testing.T) {
 
 	mount := &storage_v1alpha.DiskMount{
 		ID:           "disk_mount/mnt-keep",
-		NodeId:       entity.Id("node/" + nodeId),
+		NodeId:       compute.NewNodeId(nodeId).Id(),
 		VolumeId:     "disk_volume/vol-keep",
 		MountPath:    "/mnt/keep",
 		DesiredState: storage_v1alpha.DM_WANT_MOUNTED,
@@ -608,7 +610,7 @@ func TestDiskMountControllerShutdown(t *testing.T) {
 	state := NewState()
 	ops := newMockDiskMountOps()
 
-	mc := NewDiskMountController(log, dataPath, nodeId, state, ops)
+	mc := NewDiskMountController(log, dataPath, compute.NewNodeId(nodeId), state, ops)
 
 	// Mount state with no cloud client — Shutdown should be a no-op for unmount/detach
 	// (DiskVolumeController handles that now)
@@ -643,7 +645,7 @@ func TestDiskMountControllerUnmountNotInState(t *testing.T) {
 	// Mount not in local state but entity requests unmount
 	mount := &storage_v1alpha.DiskMount{
 		ID:           "disk_mount/mnt-gone",
-		NodeId:       entity.Id("node/" + nodeId),
+		NodeId:       compute.NewNodeId(nodeId).Id(),
 		VolumeId:     "disk_volume/vol-gone",
 		MountPath:    "/mnt/gone",
 		DesiredState: storage_v1alpha.DM_WANT_UNMOUNTED,
@@ -691,7 +693,7 @@ func TestDiskMountControllerUniversalSkipsMountOnAttach(t *testing.T) {
 
 	mount := &storage_v1alpha.DiskMount{
 		ID:           "disk_mount/mnt-uni",
-		NodeId:       entity.Id("node/" + nodeId),
+		NodeId:       compute.NewNodeId(nodeId).Id(),
 		VolumeId:     "disk_volume/vol-uni",
 		MountPath:    "/mnt/vol-uni",
 		DesiredState: storage_v1alpha.DM_WANT_MOUNTED,
@@ -750,7 +752,7 @@ func TestDiskMountControllerUniversalSkipsUnmountOnDetach(t *testing.T) {
 
 	mount := &storage_v1alpha.DiskMount{
 		ID:           "disk_mount/mnt-uni-off",
-		NodeId:       entity.Id("node/" + nodeId),
+		NodeId:       compute.NewNodeId(nodeId).Id(),
 		VolumeId:     "disk_volume/vol-uni",
 		MountPath:    "/mnt/vol-uni",
 		DesiredState: storage_v1alpha.DM_WANT_UNMOUNTED,
@@ -784,7 +786,7 @@ func TestDiskMountControllerUniversalShutdownSkips(t *testing.T) {
 	state := NewState()
 	ops := newMockDiskMountOps()
 
-	mc := NewDiskMountController(log, dataPath, nodeId, state, ops)
+	mc := NewDiskMountController(log, dataPath, compute.NewNodeId(nodeId), state, ops)
 
 	ops.mountedPaths["/mnt/uni"] = true
 	ops.mountedPaths["/mnt/acc"] = true

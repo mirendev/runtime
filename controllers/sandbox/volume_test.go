@@ -25,7 +25,7 @@ func TestAcquireDiskLease(t *testing.T) {
 		controller := &SandboxController{
 			Log:    log,
 			EAC:    es.EAC,
-			NodeId: "test-node",
+			NodeId: compute.NewNodeId("test-node"),
 		}
 
 		// Setup: Create a disk entity
@@ -45,7 +45,7 @@ func TestAcquireDiskLease(t *testing.T) {
 
 		// Act: Request a lease when none exists
 		sandboxID := entity.Id("sandbox/new-sandbox")
-		nodeID := entity.Id("node/test-node")
+		nodeID := compute.NewNodeId("test-node").Id()
 		appID := entity.Id("app/test-app")
 
 		leaseID, err := controller.acquireDiskLease(ctx, diskID, nodeID, sandboxID, appID, "/data", false)
@@ -80,7 +80,7 @@ func TestAcquireDiskLease(t *testing.T) {
 		controller := &SandboxController{
 			Log:    log,
 			EAC:    es.EAC,
-			NodeId: "test-node",
+			NodeId: compute.NewNodeId("test-node"),
 		}
 
 		// Setup: Create a disk entity
@@ -100,7 +100,7 @@ func TestAcquireDiskLease(t *testing.T) {
 
 		// Setup: Create an existing lease owned by our sandbox
 		sandboxID := entity.Id("sandbox/my-sandbox")
-		nodeID := entity.Id("node/test-node")
+		nodeID := compute.NewNodeId("test-node").Id()
 		existingLeaseID := entity.Id("disk-lease/existing-lease")
 
 		existingLease := &storage.DiskLease{
@@ -143,7 +143,7 @@ func TestAcquireDiskLease(t *testing.T) {
 		controller := &SandboxController{
 			Log:    log,
 			EAC:    es.EAC,
-			NodeId: "test-node",
+			NodeId: compute.NewNodeId("test-node"),
 		}
 
 		// Setup: Create a disk entity
@@ -161,7 +161,7 @@ func TestAcquireDiskLease(t *testing.T) {
 		).Attrs())
 		r.NoError(err)
 
-		nodeID := entity.Id("node/test-node")
+		nodeID := compute.NewNodeId("test-node").Id()
 		otherSandboxID := entity.Id("sandbox/other-sandbox")
 		mySandboxID := entity.Id("sandbox/my-sandbox")
 		appID := entity.Id("app/test-app")
@@ -213,7 +213,7 @@ func TestAcquireDiskLease(t *testing.T) {
 		controller := &SandboxController{
 			Log:    log,
 			EAC:    es.EAC,
-			NodeId: "test-node",
+			NodeId: compute.NewNodeId("test-node"),
 		}
 
 		// Setup: Create a disk entity
@@ -233,7 +233,7 @@ func TestAcquireDiskLease(t *testing.T) {
 
 		// Setup: Create an existing RELEASED lease (from a dead sandbox)
 		oldSandboxID := entity.Id("sandbox/old-sandbox")
-		nodeID := entity.Id("node/test-node")
+		nodeID := compute.NewNodeId("test-node").Id()
 		releasedLeaseID := entity.Id("disk-lease/released-lease")
 
 		releasedLease := &storage.DiskLease{
@@ -284,7 +284,7 @@ func TestAcquireDiskLease(t *testing.T) {
 		controller := &SandboxController{
 			Log:    log,
 			EAC:    es.EAC,
-			NodeId: "test-node-2",
+			NodeId: compute.NewNodeId("test-node-2"),
 		}
 
 		// Setup: Create a disk entity
@@ -304,7 +304,7 @@ func TestAcquireDiskLease(t *testing.T) {
 
 		// Setup: Create an existing lease on a DIFFERENT node
 		sandbox1ID := entity.Id("sandbox/sandbox-on-node1")
-		node1ID := entity.Id("node/test-node-1")
+		node1ID := compute.NewNodeId("test-node-1").Id()
 		existingLeaseID := entity.Id("disk-lease/node1-lease")
 
 		existingLease := &storage.DiskLease{
@@ -327,7 +327,7 @@ func TestAcquireDiskLease(t *testing.T) {
 
 		// Act: Request a lease on node2 (controller.NodeId = "test-node-2")
 		sandbox2ID := entity.Id("sandbox/sandbox-on-node2")
-		node2ID := entity.Id("node/test-node-2")
+		node2ID := compute.NewNodeId("test-node-2").Id()
 		appID := entity.Id("app/test-app")
 
 		newLeaseID, err := controller.acquireDiskLease(ctx, diskID, node2ID, sandbox2ID, appID, "/data", false)
@@ -361,12 +361,12 @@ func TestReleaseDiskLeases(t *testing.T) {
 		controller := &SandboxController{
 			Log:    log,
 			EAC:    es.EAC,
-			NodeId: "test-node",
+			NodeId: compute.NewNodeId("test-node"),
 		}
 
 		// Setup: Create a sandbox and its disk lease
 		sandboxID := entity.Id("sandbox/dying-sandbox")
-		nodeID := entity.Id("node/test-node")
+		nodeID := compute.NewNodeId("test-node").Id()
 		diskID := entity.Id("disk/test-disk")
 		leaseID := entity.Id("disk-lease/to-be-released")
 
@@ -420,13 +420,13 @@ func TestReleaseDiskLeases(t *testing.T) {
 		controller := &SandboxController{
 			Log:    log,
 			EAC:    es.EAC,
-			NodeId: "test-node",
+			NodeId: compute.NewNodeId("test-node"),
 		}
 
 		// Setup: Create two sandboxes with their own leases
 		sandbox1ID := entity.Id("sandbox/sandbox-1")
 		sandbox2ID := entity.Id("sandbox/sandbox-2")
-		nodeID := entity.Id("node/test-node")
+		nodeID := compute.NewNodeId("test-node").Id()
 
 		lease1ID := entity.Id("disk-lease/lease-1")
 		lease1 := &storage.DiskLease{
@@ -483,7 +483,7 @@ func testSchedule() compute.Schedule {
 	return compute.Schedule{
 		Key: compute.Key{
 			Kind: compute.KindSandbox,
-			Node: entity.Id("node/test-node"),
+			Node: compute.NewNodeId("test-node").Id(),
 		},
 	}
 }
@@ -501,7 +501,7 @@ func TestPeriodicReleasesDiskLeases(t *testing.T) {
 		controller := &SandboxController{
 			Log:    log,
 			EAC:    es.EAC,
-			NodeId: "test-node",
+			NodeId: compute.NewNodeId("test-node"),
 		}
 
 		sandboxID := entity.Id("sandbox/dead-with-lease")
@@ -527,7 +527,7 @@ func TestPeriodicReleasesDiskLeases(t *testing.T) {
 				ID:        leaseID,
 				DiskId:    diskID,
 				SandboxId: sandboxID,
-				NodeId:    entity.Id("node/test-node"),
+				NodeId:    compute.NewNodeId("test-node").Id(),
 				Status:    storage.BOUND,
 			}).Encode,
 		).Attrs())
@@ -564,7 +564,7 @@ func TestPeriodicReleasesDiskLeases(t *testing.T) {
 		controller := &SandboxController{
 			Log:    log,
 			EAC:    es.EAC,
-			NodeId: "test-node",
+			NodeId: compute.NewNodeId("test-node"),
 		}
 
 		sandboxID := entity.Id("sandbox/dead-no-lease")
@@ -603,7 +603,7 @@ func TestPeriodicReleasesDiskLeases(t *testing.T) {
 		controller := &SandboxController{
 			Log:    log,
 			EAC:    es.EAC,
-			NodeId: "test-node",
+			NodeId: compute.NewNodeId("test-node"),
 		}
 
 		sandboxID := entity.Id("sandbox/running-with-lease")
@@ -629,7 +629,7 @@ func TestPeriodicReleasesDiskLeases(t *testing.T) {
 				ID:        leaseID,
 				DiskId:    diskID,
 				SandboxId: sandboxID,
-				NodeId:    entity.Id("node/test-node"),
+				NodeId:    compute.NewNodeId("test-node").Id(),
 				Status:    storage.BOUND,
 			}).Encode,
 		).Attrs())

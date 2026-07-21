@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	compute "miren.dev/runtime/api/compute/compute_v1alpha"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/api/storage/storage_v1alpha"
 	"miren.dev/runtime/pkg/cond"
@@ -33,7 +34,7 @@ type writeTracker interface {
 type DiskMountController struct {
 	log      *slog.Logger
 	dataPath string
-	nodeId   string
+	nodeId   compute.NodeId
 	eac      *entityserver_v1alpha.EntityAccessClient
 	state    *State
 	ops      DiskMountOps
@@ -51,7 +52,7 @@ type DiskMountController struct {
 	keepMounts bool
 }
 
-func NewDiskMountController(log *slog.Logger, dataPath, nodeId string, state *State, ops DiskMountOps) *DiskMountController {
+func NewDiskMountController(log *slog.Logger, dataPath string, nodeId compute.NodeId, state *State, ops DiskMountOps) *DiskMountController {
 	return &DiskMountController{
 		log:      log.With("module", "disk-mount"),
 		dataPath: dataPath,
@@ -92,8 +93,7 @@ func (c *DiskMountController) Reconcile(ctx context.Context, mount *storage_v1al
 }
 
 func (c *DiskMountController) Index() entity.Attr {
-	fullNodeId := "node/" + c.nodeId
-	return entity.Ref(storage_v1alpha.DiskMountNodeIdId, entity.Id(fullNodeId))
+	return entity.Ref(storage_v1alpha.DiskMountNodeIdId, c.nodeId.Id())
 }
 
 // Shutdown releases cloud leases. Mount/detach cleanup is handled by
@@ -711,8 +711,7 @@ func (c *DiskMountController) ReconcileWithEntities(ctx context.Context) error {
 		return fmt.Errorf("entity access client not set; call SetEAC before reconciling")
 	}
 
-	fullNodeId := "node/" + c.nodeId
-	nodeIdRef := entity.Id(fullNodeId)
+	nodeIdRef := c.nodeId.Id()
 	indexAttr := entity.Ref(storage_v1alpha.DiskMountNodeIdId, nodeIdRef)
 
 	resp, err := c.eac.List(ctx, indexAttr)
@@ -728,7 +727,7 @@ func (c *DiskMountController) ReconcileWithEntities(ctx context.Context) error {
 		var mount storage_v1alpha.DiskMount
 		mount.Decode(entResp.Entity())
 
-		if string(mount.NodeId) != fullNodeId {
+		if !c.nodeId.Matches(mount.NodeId) {
 			continue
 		}
 

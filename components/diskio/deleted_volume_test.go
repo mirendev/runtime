@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	compute "miren.dev/runtime/api/compute/compute_v1alpha"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -21,7 +23,7 @@ func TestSaveAndLoadDeletedVolumeMetadata(t *testing.T) {
 		VolumeID:   "disk-vol-xyz",
 		VolumeMode: "volume_mode.vm_universal",
 		CreatedBy:  "user/user-1",
-		NodeID:     "node/node-1",
+		NodeID:     compute.NewNodeId("node-1"),
 		DeletedAt:  time.Now().Truncate(time.Millisecond),
 	}
 

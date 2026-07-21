@@ -46,7 +46,7 @@ func TestReconcileOrphanLeasesReleasesDeadSandboxLease(t *testing.T) {
 			SandboxId:  deadSandboxId,
 			Status:     storage_v1alpha.BOUND,
 			AcquiredAt: time.Now(),
-			NodeId:     entity.Id("node/test-node"),
+			NodeId:     compute.NewNodeId("test-node").Id(),
 		}).Encode,
 	).Attrs())
 	require.NoError(t, err)
@@ -71,12 +71,12 @@ func TestReconcileOrphanLeasesReleasesDeadSandboxLease(t *testing.T) {
 			SandboxId:  liveSandboxId,
 			Status:     storage_v1alpha.BOUND,
 			AcquiredAt: time.Now(),
-			NodeId:     entity.Id("node/test-node"),
+			NodeId:     compute.NewNodeId("test-node").Id(),
 		}).Encode,
 	).Attrs())
 	require.NoError(t, err)
 
-	leaseController := NewDiskLeaseController(log, es.EAC, "test-node", "")
+	leaseController := NewDiskLeaseController(log, es.EAC, compute.NewNodeId("test-node"), "")
 	require.NoError(t, leaseController.Init(ctx))
 
 	// Orphan lease should now be RELEASED.
@@ -115,12 +115,12 @@ func TestReconcileOrphanLeasesReleasesLeaseForMissingSandbox(t *testing.T) {
 			SandboxId:  entity.Id("sandbox/does-not-exist"),
 			Status:     storage_v1alpha.BOUND,
 			AcquiredAt: time.Now(),
-			NodeId:     entity.Id("node/test-node"),
+			NodeId:     compute.NewNodeId("test-node").Id(),
 		}).Encode,
 	).Attrs())
 	require.NoError(t, err)
 
-	leaseController := NewDiskLeaseController(log, es.EAC, "test-node", "")
+	leaseController := NewDiskLeaseController(log, es.EAC, compute.NewNodeId("test-node"), "")
 	require.NoError(t, leaseController.Init(ctx))
 
 	resp, err := es.EAC.Get(ctx, leaseId.String())
@@ -142,7 +142,7 @@ func TestReconcileOrphanLeasesRecurring(t *testing.T) {
 	es, cleanup := testutils.NewInMemEntityServer(t)
 	t.Cleanup(cleanup)
 
-	leaseController := NewDiskLeaseController(log, es.EAC, "test-node", "")
+	leaseController := NewDiskLeaseController(log, es.EAC, compute.NewNodeId("test-node"), "")
 	require.NoError(t, leaseController.Init(ctx))
 
 	// After the controller is already up, a sandbox dies holding a BOUND lease.
@@ -165,7 +165,7 @@ func TestReconcileOrphanLeasesRecurring(t *testing.T) {
 			SandboxId:  deadSandboxId,
 			Status:     storage_v1alpha.BOUND,
 			AcquiredAt: time.Now(),
-			NodeId:     entity.Id("node/test-node"),
+			NodeId:     compute.NewNodeId("test-node").Id(),
 		}).Encode,
 	).Attrs())
 	require.NoError(t, err)
@@ -219,12 +219,12 @@ func TestReconcileOrphanLeasesGracePeriod(t *testing.T) {
 			SandboxId:  deadSandboxId,
 			Status:     storage_v1alpha.BOUND,
 			AcquiredAt: time.Now(),
-			NodeId:     entity.Id("node/test-node"),
+			NodeId:     compute.NewNodeId("test-node").Id(),
 		}).Encode,
 	).Attrs())
 	require.NoError(t, err)
 
-	leaseController := NewDiskLeaseController(log, es.EAC, "test-node", "")
+	leaseController := NewDiskLeaseController(log, es.EAC, compute.NewNodeId("test-node"), "")
 
 	// With a long grace, the just-created lease must be left BOUND even though
 	// its sandbox is DEAD.
