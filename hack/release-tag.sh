@@ -58,15 +58,52 @@ if ! [[ "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
   exit 1
 fi
 
+# Resolve the repository's git dir. In a jj workspace the current directory has
+# no .git of its own (jj drives a colocated git repo elsewhere), so plain git
+# commands fail with "not a git repository". Detect that case and point git at
+# the backing repo via `jj git root`. A normal checkout, including a colocated
+# primary jj repo, keeps git's default discovery untouched.
+JJ_MODE=false
+if git rev-parse --absolute-git-dir >/dev/null 2>&1; then
+  : # plain git checkout
+elif command -v jj >/dev/null 2>&1 && JJ_GIT_DIR=$(jj git root --ignore-working-copy 2>/dev/null); then
+  JJ_MODE=true
+  export GIT_DIR="$JJ_GIT_DIR"
+else
+  echo "Error: not a git repository or jj workspace"
+  exit 1
+fi
+
 # Check if tag already exists (always check this, even with --force)
 if git rev-parse "$VERSION" >/dev/null 2>&1; then
   echo "Error: Tag $VERSION already exists"
   exit 1
 fi
 
-if [ "$FORCE" = true ]; then
+# Determine the commit to tag and run mode-appropriate safety checks.
+if [ "$JJ_MODE" = true ]; then
+  # jj workspace: there's no checked-out branch to validate, so tag the merged
+  # commit on origin/main directly, after confirming the release PR landed there.
+  echo "Fetching from origin..."
+  git fetch origin main
+  TARGET=$(git rev-parse origin/main)
+
+  if [ "$FORCE" = true ]; then
+    echo "Warning: Skipping changelog check (--force); fetch and origin/main targeting still run"
+  else
+    if ! git show "$TARGET":docs/docs/changelog.md 2>/dev/null | grep -q "^## $VERSION"; then
+      echo "Error: origin/main changelog does not contain '## $VERSION'"
+      echo "Has the release PR been merged?"
+      echo "Or use --force to skip this check"
+      exit 1
+    fi
+  fi
+elif [ "$FORCE" = true ]; then
   echo "Warning: Skipping safety checks (--force)"
+  TARGET=$(git rev-parse HEAD)
 else
+  TARGET=$(git rev-parse HEAD)
+
   # Check we're on main branch
   CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
   if [ "$CURRENT_BRANCH" != "main" ]; then
@@ -117,7 +154,7 @@ echo ""
 echo "======================================"
 echo "Tagging release: $VERSION"
 echo "======================================"
-echo "Commit: $(git rev-parse --short HEAD)"
+echo "Commit: $(git rev-parse --short "$TARGET")"
 echo ""
 
 # Ask for confirmation
@@ -135,7 +172,7 @@ fi
 # Create and push tag
 echo ""
 echo "Creating tag $VERSION..."
-git tag -a "$VERSION" -m "Release $VERSION"
+git tag -a "$VERSION" "$TARGET" -m "Release $VERSION"
 
 echo "Pushing tag to origin..."
 git push origin "$VERSION"
