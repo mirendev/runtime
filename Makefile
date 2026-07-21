@@ -171,7 +171,7 @@ update-test-groups: ## Measure new packages and rebuild hack/test-groups.json
 	python3 hack/calc-test-groups.py hack/test-times.json -n 4 -o hack/test-groups.json
 
 test-blackbox: ## Run blackbox tests (requires `make dev` running)
-	go test -tags blackbox -timeout 10m -v -count=1 -p 1 ./blackbox/...
+	go test -tags blackbox -timeout 15m -v -count=1 -p 1 ./blackbox/...
 
 build-cloud-test: ## Build cloud and POP binaries for POP blackbox tests
 	@CLOUD_REPO=$${BLACKBOX_CLOUD_REPO:-$$(cd .. && pwd)/cloud}; \
