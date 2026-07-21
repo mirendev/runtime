@@ -1,0 +1,12 @@
+FROM alpine:3.20
+RUN apk add --no-cache python3
+COPY entrypoint.sh /entrypoint.sh
+COPY www /www
+RUN chmod +x /entrypoint.sh
+EXPOSE 3000
+# Exec-form entrypoint: with no service command, Miren must run this argv
+# directly (no /bin/sh -c), preserving arg boundaries, PID 1, and signals.
+ENTRYPOINT ["/entrypoint.sh"]
+# The $-literal arg is the tell: exec form passes it verbatim, while a
+# shell-wrapped command would let /bin/sh expand it (to empty, since unset).
+CMD ["serve", "--note=$ENTRYPOINT_IMAGE_SHOULD_NOT_EXPAND"]

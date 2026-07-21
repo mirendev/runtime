@@ -360,7 +360,11 @@ func mapDiskProvider(provider string) core_v1alpha.ConfigSpecServicesDisksProvid
 // resolves defaults, and returns the final service configurations.
 // This is the core logic for determining which services exist in an app_version
 // and what their concurrency settings should be.
-func buildServicesConfig(appConfig *appconfig.AppConfig, procfileServices map[string]string) []core_v1alpha.ConfigSpecServices {
+// ensureWeb, when true, guarantees a web service exists: if neither app.toml
+// nor the Procfile supplied a web command, webDefault becomes its command. That
+// default may be empty, which is the image/Dockerfile case where the image's
+// own ENTRYPOINT+CMD run in exec form at launch (MIR-1444).
+func buildServicesConfig(appConfig *appconfig.AppConfig, procfileServices map[string]string, ensureWeb bool, webDefault string) []core_v1alpha.ConfigSpecServices {
 	// Build command map from app config
 	srvMap := map[string]string{}
 	if appConfig != nil {
@@ -375,6 +379,15 @@ func buildServicesConfig(appConfig *appconfig.AppConfig, procfileServices map[st
 	for k, v := range procfileServices {
 		if _, ok := srvMap[k]; !ok {
 			srvMap[k] = v
+		}
+	}
+
+	// Default a web command when nothing above supplied one. srvMap["web"]
+	// existing here is exactly "app.toml or Procfile defined a web command", so
+	// this owns the whole "is there a web command yet?" decision in one place.
+	if ensureWeb {
+		if _, ok := srvMap["web"]; !ok {
+			srvMap["web"] = webDefault
 		}
 	}
 
@@ -547,27 +560,20 @@ func buildVersionConfig(inputs ConfigInputs) core_v1alpha.ConfigSpec {
 		spec.StartDirectory = "/app"
 	}
 
-	// If no web service defined in app config or Procfile, but we have a command or entrypoint,
-	// create a synthetic Procfile entry for web service
-	hasWebInAppConfig := ac != nil && ac.Services["web"] != nil && ac.Services["web"].Command != ""
-	hasWebInProcfile := procfileServices != nil && procfileServices["web"] != ""
-	if !hasWebInAppConfig && !hasWebInProcfile && res != nil {
-		// Use Command if available, otherwise fall back to Entrypoint
-		webCmd := res.Command
-		if webCmd == "" {
-			webCmd = res.Entrypoint
-		}
-		if webCmd != "" {
-			if procfileServices == nil {
-				procfileServices = make(map[string]string)
-			}
-			procfileServices["web"] = webCmd
+	// A build produces a runnable artifact, so it needs a routable web service.
+	// If nothing (app.toml or Procfile) defined a web command, fall back to the
+	// build's default: a stack build supplies one, while an image/Dockerfile
+	// build leaves it empty so the image's own ENTRYPOINT+CMD run in exec form
+	// at launch (MIR-1444). buildServicesConfig owns that defaulting, so we
+	// don't stage synthetic entries into the caller-owned Procfile map.
+	webDefault := ""
+	if res != nil {
+		webDefault = res.Command
+		if webDefault == "" {
+			webDefault = res.Entrypoint
 		}
 	}
-
-	// Build service configurations with concurrency settings from app.toml/Procfile
-	// Commands are set directly on each service (svc.Command) by buildServicesConfig
-	spec.Services = buildServicesConfig(ac, procfileServices)
+	spec.Services = buildServicesConfig(ac, procfileServices, res != nil, webDefault)
 
 	// Merge env vars: preserve manual vars from existing services
 	for i := range spec.Services {
@@ -1552,39 +1558,6 @@ func (b *Builder) logDeployment(ctx context.Context, appName, version, artifact 
 	if err != nil {
 		b.Log.Error("failed to write deployment log entry", "error", err, "app", appName)
 	}
-}
-
-// buildImageCommand combines the OCI image entrypoint and cmd into a single shell command string.
-// This is used when no Procfile or app config command is specified for a service.
-func buildImageCommand(entrypoint, cmd []string) string {
-	// Combine entrypoint and cmd
-	var parts []string
-	parts = append(parts, entrypoint...)
-	parts = append(parts, cmd...)
-
-	if len(parts) == 0 {
-		return ""
-	}
-
-	// If there's only one part and it looks like a shell command, return it directly
-	if len(parts) == 1 {
-		return parts[0]
-	}
-
-	// For multiple parts, we need to properly quote them for shell execution
-	// This handles cases like: ENTRYPOINT ["node"] CMD ["server.js"]
-	// Which should become: node server.js
-	var quotedParts []string
-	for _, p := range parts {
-		// If the part contains spaces or special characters, quote it
-		if strings.ContainsAny(p, " \t\n\"'$`\\") {
-			quotedParts = append(quotedParts, fmt.Sprintf("%q", p))
-		} else {
-			quotedParts = append(quotedParts, p)
-		}
-	}
-
-	return strings.Join(quotedParts, " ")
 }
 
 func (b *Builder) readProcFile(dfs fsutil.FS) (map[string]string, error) {
