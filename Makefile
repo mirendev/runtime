@@ -170,6 +170,12 @@ update-test-groups: ## Measure new packages and rebuild hack/test-groups.json
 	bash hack/update-test-times.sh hack/test-times.json
 	python3 hack/calc-test-groups.py hack/test-times.json -n 4 -o hack/test-groups.json
 
+blackbox-groups: ## Rebalance hack/blackbox-groups.json from measured blackbox test times
+	python3 hack/calc-blackbox-groups.py hack/blackbox-test-times.json --env standalone -n 3 -o hack/blackbox-groups.json
+
+measure-blackbox-times: ## Re-measure per-test blackbox times into hack/blackbox-test-times.json (requires `make dev` running)
+	python3 hack/measure-blackbox-times.py -o hack/blackbox-test-times.json
+
 test-blackbox: ## Run blackbox tests (requires `make dev` running)
 	go test -tags blackbox -timeout 15m -v -count=1 -p 1 ./blackbox/...
 
@@ -188,7 +194,7 @@ test-blackbox-pop: ## Run POP blackbox tests (requires `make dev` and cloud repo
 test-blackbox-distributed: ## Run blackbox tests against distributed environment (requires hack/dev-distributed up)
 	BLACKBOX_MODE=peers go test -tags blackbox -timeout 10m -v -count=1 -p 1 ./blackbox/...
 
-.PHONY: test test-shell test-blackbox test-blackbox-pop build-cloud-test test-blackbox-distributed test-coverage test-coverage-ci coverage-report coverage-percent coverage-by-package coverage-pr test-groups update-test-groups
+.PHONY: test test-shell test-blackbox test-blackbox-pop build-cloud-test test-blackbox-distributed test-coverage test-coverage-ci coverage-report coverage-percent coverage-by-package coverage-pr test-groups update-test-groups blackbox-groups measure-blackbox-times
 
 #
 # Building
