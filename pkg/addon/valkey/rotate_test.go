@@ -21,7 +21,7 @@ func TestRegisterRotateDedicatedSaga(t *testing.T) {
 	def, ok := registry.Get("rotate-dedicated-valkey")
 	require.True(t, ok)
 	assert.Equal(t, "rotate-dedicated-valkey", def.Name)
-	assert.Len(t, def.Actions, 9)
+	assert.Len(t, def.Actions, 8)
 }
 
 // TestRotateDedicatedSagaOrder pins the safety-critical ordering: the disk is

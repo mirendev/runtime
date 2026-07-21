@@ -75,6 +75,12 @@ kinds:
     status:
       type: string
       indexed: true
+    # new_secret is the target credential, generated and recorded once before any
+    # engine change so a crashed rotation is recoverable: a retry reuses it rather
+    # than minting a fresh secret it can no longer authenticate with. Cleared when
+    # the request reaches "done".
+    new_secret:
+      type: string
     error_message:
       type: string
 

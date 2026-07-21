@@ -8,7 +8,6 @@ import (
 	"miren.dev/runtime/api/compute/compute_v1alpha"
 	"miren.dev/runtime/pkg/addon"
 	"miren.dev/runtime/pkg/entity"
-	"miren.dev/runtime/pkg/idgen"
 	"miren.dev/runtime/pkg/saga"
 )
 
@@ -91,20 +90,6 @@ func LoadValkeyRotationState(ctx context.Context, in LoadValkeyRotationStateIn) 
 }
 
 func UndoLoadValkeyRotationState(ctx context.Context, in LoadValkeyRotationStateIn, out LoadValkeyRotationStateOut) error {
-	return nil
-}
-
-type GenerateNewValkeyPasswordIn struct{}
-
-type GenerateNewValkeyPasswordOut struct {
-	RotateNewPassword string `saga:"rotatenewpassword"`
-}
-
-func GenerateNewValkeyPassword(ctx context.Context, in GenerateNewValkeyPasswordIn) (GenerateNewValkeyPasswordOut, error) {
-	return GenerateNewValkeyPasswordOut{RotateNewPassword: idgen.Gen("pw")}, nil
-}
-
-func UndoGenerateNewValkeyPassword(ctx context.Context, in GenerateNewValkeyPasswordIn, out GenerateNewValkeyPasswordOut) error {
 	return nil
 }
 
@@ -218,6 +203,14 @@ func SwapValkeyPool(ctx context.Context, in SwapValkeyPoolIn) (SwapValkeyPoolOut
 	if err := fw.EC.Patch(ctx, in.RotateServerID, 0,
 		entity.Ref(addon_v1alpha.ValkeyServerSandboxPoolId, newPoolID),
 	); err != nil {
+		// This action's own Undo won't run (the framework only compensates
+		// succeeded actions), and the failed action returns no pool id — so the
+		// new pool would leak and fight the rescaled old one over the
+		// single-attach disk. Tear it down here before failing.
+		if delErr := fw.DeleteSandboxPool(ctx, newPoolID); delErr != nil {
+			fw.Log.Warn("failed to clean up new valkey pool after repoint failure; leaked",
+				"pool", newPoolID, "error", delErr)
+		}
 		return SwapValkeyPoolOut{}, fmt.Errorf("repointing valkey server to new pool: %w", err)
 	}
 
@@ -315,7 +308,6 @@ func RegisterRotateDedicatedSaga(registry *saga.Registry, fw *addon.ProviderFram
 		Using(rc).
 		Action(DecodeValkeyServerRef).Undo(UndoDecodeValkeyServerRef).
 		Action(LoadValkeyRotationState).Undo(UndoLoadValkeyRotationState).
-		Action(GenerateNewValkeyPassword).Undo(UndoGenerateNewValkeyPassword).
 		Action(SetValkeyServerPassword).Undo(UndoSetValkeyServerPassword).
 		Action(ScaleDownOldValkeyPool).Undo(UndoScaleDownOldValkeyPool).
 		Action(SwapValkeyPool).Undo(UndoSwapValkeyPool).
@@ -327,9 +319,20 @@ func RegisterRotateDedicatedSaga(registry *saga.Registry, fw *addon.ProviderFram
 
 // RotateCredential implements addon.CredentialRotator for dedicated Valkey.
 // Valkey has a single password (its requirepass, also the value consumers use),
-// so the credential selector is ignored.
-func (p *Provider) RotateCredential(ctx context.Context, assoc addon.AddonAssociation, credential string) (*addon.RotationResult, error) {
+// so the credential selector is ignored. It is safe to re-invoke with the same
+// newSecret: if the running pool already uses it, the pool re-launch is skipped.
+func (p *Provider) RotateCredential(ctx context.Context, assoc addon.AddonAssociation, credential, newSecret string) (*addon.RotationResult, error) {
 	p.Log.Info("rotating dedicated Valkey credential", "assoc", assoc.ID)
+
+	// Idempotency: if a prior attempt already re-launched the pool on newSecret,
+	// don't churn it again — just return the vars a redeploy needs. This keeps a
+	// retry (e.g. after a failed consumer rollout) from spinning up fresh pools.
+	if result, done, err := p.valkeyAlreadyRotated(ctx, assoc, newSecret); err != nil {
+		return nil, err
+	} else if done {
+		p.Log.Info("dedicated Valkey already on target secret; skipping pool re-launch", "assoc", assoc.ID)
+		return result, nil
+	}
 
 	rc := &rotateCapture{}
 	registry := saga.NewRegistry()
@@ -340,6 +343,7 @@ func (p *Provider) RotateCredential(ctx context.Context, assoc addon.AddonAssoci
 	executor := saga.NewExecutor(p.Fw.Storage, saga.WithRegistry(registry), saga.WithLogger(p.Log))
 	if err := executor.Start("rotate-dedicated-valkey").
 		Input("assocentity", assoc.Entity).
+		Input("rotatenewpassword", newSecret).
 		Execute(ctx); err != nil {
 		return nil, err
 	}
@@ -350,4 +354,46 @@ func (p *Provider) RotateCredential(ctx context.Context, assoc addon.AddonAssoci
 
 	p.Log.Info("dedicated Valkey credential rotated", "assoc", assoc.ID)
 	return rc.Result, nil
+}
+
+// valkeyAlreadyRotated reports whether the server's running pool already launches
+// with newSecret, and if so returns the env vars a consumer redeploy needs.
+func (p *Provider) valkeyAlreadyRotated(ctx context.Context, assoc addon.AddonAssociation, newSecret string) (*addon.RotationResult, bool, error) {
+	var data addon_v1alpha.ValkeyDedicatedData
+	if assoc.Entity != nil {
+		data.Decode(assoc.Entity)
+	}
+	if data.ValkeyServer == "" {
+		return nil, false, nil
+	}
+
+	var server addon_v1alpha.ValkeyServer
+	if err := p.Fw.EC.GetById(ctx, data.ValkeyServer, &server); err != nil {
+		return nil, false, fmt.Errorf("looking up valkey server: %w", err)
+	}
+	if server.SandboxPool == "" {
+		return nil, false, nil
+	}
+
+	var pool compute_v1alpha.SandboxPool
+	if err := p.Fw.EC.GetById(ctx, server.SandboxPool, &pool); err != nil {
+		return nil, false, fmt.Errorf("looking up valkey pool: %w", err)
+	}
+	target := valkeyCommand(newSecret)
+	rotated := false
+	for _, c := range pool.SandboxSpec.Container {
+		if c.Command == target {
+			rotated = true
+			break
+		}
+	}
+	if !rotated {
+		return nil, false, nil
+	}
+
+	serviceHost, err := p.Fw.GetServiceAddress(ctx, server.Service)
+	if err != nil {
+		return nil, false, fmt.Errorf("resolving valkey service address: %w", err)
+	}
+	return &addon.RotationResult{EnvVars: buildEnvVars(serviceHost, valkeyPort, newSecret)}, true, nil
 }

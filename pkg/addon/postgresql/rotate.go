@@ -5,9 +5,10 @@ import (
 	"fmt"
 
 	"miren.dev/runtime/api/addon/addon_v1alpha"
+	coreutil "miren.dev/runtime/api/core"
+	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/pkg/addon"
 	"miren.dev/runtime/pkg/entity"
-	"miren.dev/runtime/pkg/idgen"
 	"miren.dev/runtime/pkg/saga"
 )
 
@@ -30,35 +31,48 @@ type rotateCapture struct {
 //     decoupled from this password.)
 //
 // Dedicated PostgreSQL rotation is not implemented yet.
-func (p *Provider) RotateCredential(ctx context.Context, assoc addon.AddonAssociation, credential string) (*addon.RotationResult, error) {
+func (p *Provider) RotateCredential(ctx context.Context, assoc addon.AddonAssociation, credential, newSecret string) (*addon.RotationResult, error) {
 	if !IsSharedVariant(assoc.Variant) {
 		return nil, fmt.Errorf("credential rotation is not yet supported for dedicated PostgreSQL")
 	}
 
 	switch credential {
 	case "", "user":
-		return p.rotateSharedUser(ctx, assoc)
+		return p.rotateSharedUser(ctx, assoc, newSecret)
 	case "superuser":
-		return p.rotateSharedSuperuser(ctx, assoc)
+		return p.rotateSharedSuperuser(ctx, assoc, newSecret)
 	default:
 		return nil, fmt.Errorf("unknown postgresql credential %q (valid: \"user\", \"superuser\")", credential)
 	}
 }
 
-// oldVarValue reads the current value of an addon variable recorded on the
-// association, used to restore a per-app password on compensation.
-func oldVarValue(assocEntity *entity.Entity, key string) string {
-	if assocEntity == nil {
-		return ""
+// activeConfigVar reads a variable's value from an app's active ConfigVersion.
+// This is the authoritative current value — unlike association.variables, which
+// is deliberately not rewritten on rotation and can hold a stale password. The
+// per-app compensation uses it so a rollback restores the password the app is
+// actually running with, not an older one.
+func activeConfigVar(ctx context.Context, fw *addon.ProviderFramework, appID entity.Id, key string) (string, error) {
+	var app core_v1alpha.App
+	if err := fw.EC.GetById(ctx, appID, &app); err != nil {
+		return "", fmt.Errorf("getting app %s: %w", appID, err)
 	}
-	var a addon_v1alpha.AddonAssociation
-	a.Decode(assocEntity)
-	for _, v := range a.Variables {
+	if app.ActiveVersion == "" {
+		return "", nil
+	}
+	var version core_v1alpha.AppVersion
+	if err := fw.EC.GetById(ctx, app.ActiveVersion, &version); err != nil {
+		return "", fmt.Errorf("getting app version: %w", err)
+	}
+	spec, err := coreutil.ResolveConfig(ctx, fw.EAC, &version)
+	if err != nil {
+		return "", fmt.Errorf("resolving config: %w", err)
+	}
+	for _, v := range spec.Variables {
 		if v.Key == key {
-			return v.Value
+			return v.Value, nil
 		}
 	}
-	return ""
+	return "", nil
 }
 
 // --- Per-app user rotation (Class A) ---
@@ -72,24 +86,24 @@ type CaptureOldUserPasswordOut struct {
 }
 
 func CaptureOldUserPassword(ctx context.Context, in CaptureOldUserPasswordIn) (CaptureOldUserPasswordOut, error) {
-	return CaptureOldUserPasswordOut{UserOldPassword: oldVarValue(in.AssocEntity, "PGPASSWORD")}, nil
+	fw := saga.Get[*addon.ProviderFramework](ctx)
+
+	var assoc addon_v1alpha.AddonAssociation
+	if in.AssocEntity != nil {
+		assoc.Decode(in.AssocEntity)
+	}
+	if assoc.App == "" {
+		return CaptureOldUserPasswordOut{}, fmt.Errorf("association has no app ref")
+	}
+
+	old, err := activeConfigVar(ctx, fw, assoc.App, "PGPASSWORD")
+	if err != nil {
+		return CaptureOldUserPasswordOut{}, fmt.Errorf("reading current user password from active config: %w", err)
+	}
+	return CaptureOldUserPasswordOut{UserOldPassword: old}, nil
 }
 
 func UndoCaptureOldUserPassword(ctx context.Context, in CaptureOldUserPasswordIn, out CaptureOldUserPasswordOut) error {
-	return nil
-}
-
-type GenerateNewUserPasswordIn struct{}
-
-type GenerateNewUserPasswordOut struct {
-	UserNewPassword string `saga:"usernewpassword"`
-}
-
-func GenerateNewUserPassword(ctx context.Context, in GenerateNewUserPasswordIn) (GenerateNewUserPasswordOut, error) {
-	return GenerateNewUserPasswordOut{UserNewPassword: idgen.Gen("pw")}, nil
-}
-
-func UndoGenerateNewUserPassword(ctx context.Context, in GenerateNewUserPasswordIn, out GenerateNewUserPasswordOut) error {
 	return nil
 }
 
@@ -164,13 +178,12 @@ func RegisterRotateSharedUserSaga(registry *saga.Registry, fw *addon.ProviderFra
 		Action(DecodeSharedAttrs).Undo(UndoDecodeSharedAttrs).
 		Action(LookupSharedServer).Undo(UndoLookupSharedServer).
 		Action(CaptureOldUserPassword).Undo(UndoCaptureOldUserPassword).
-		Action(GenerateNewUserPassword).Undo(UndoGenerateNewUserPassword).
 		Action(AlterSharedUserPassword).Undo(UndoAlterSharedUserPassword).
 		Action(BuildUserRotationResult).Undo(UndoBuildUserRotationResult).
 		RegisterTo(registry)
 }
 
-func (p *Provider) rotateSharedUser(ctx context.Context, assoc addon.AddonAssociation) (*addon.RotationResult, error) {
+func (p *Provider) rotateSharedUser(ctx context.Context, assoc addon.AddonAssociation, newSecret string) (*addon.RotationResult, error) {
 	p.Log.Info("rotating shared PostgreSQL user credential", "assoc", assoc.ID)
 
 	rc := &rotateCapture{}
@@ -182,6 +195,7 @@ func (p *Provider) rotateSharedUser(ctx context.Context, assoc addon.AddonAssoci
 	executor := saga.NewExecutor(p.Fw.Storage, saga.WithRegistry(registry), saga.WithLogger(p.Log))
 	if err := executor.Start("rotate-shared-postgresql-user").
 		Input("assocentity", assoc.Entity).
+		Input("usernewpassword", newSecret).
 		Execute(ctx); err != nil {
 		return nil, err
 	}
@@ -225,20 +239,6 @@ func UndoBackfillSuperuserDiskName(ctx context.Context, in BackfillSuperuserDisk
 	return nil
 }
 
-type GenerateNewSuperuserPasswordIn struct{}
-
-type GenerateNewSuperuserPasswordOut struct {
-	SuperuserNewPassword string `saga:"superusernewpassword"`
-}
-
-func GenerateNewSuperuserPassword(ctx context.Context, in GenerateNewSuperuserPasswordIn) (GenerateNewSuperuserPasswordOut, error) {
-	return GenerateNewSuperuserPasswordOut{SuperuserNewPassword: idgen.Gen("su")}, nil
-}
-
-func UndoGenerateNewSuperuserPassword(ctx context.Context, in GenerateNewSuperuserPasswordIn, out GenerateNewSuperuserPasswordOut) error {
-	return nil
-}
-
 type AlterSuperuserPasswordIn struct {
 	SharedServiceHost       string `saga:"sharedservicehost"`
 	SharedSuperuserPassword string `saga:"sharedsuperuserpassword"`
@@ -253,7 +253,9 @@ type AlterSuperuserPasswordOut struct {
 }
 
 func AlterSuperuserPassword(ctx context.Context, in AlterSuperuserPasswordIn) (AlterSuperuserPasswordOut, error) {
-	conn, err := connectAsSuperuser(ctx, in.SharedServiceHost, in.SharedSuperuserPassword)
+	// Try the recorded (old) password and the target; a retry after a crash may
+	// find the engine already on the new one.
+	conn, err := connectAsSuperuserTrying(ctx, in.SharedServiceHost, in.SharedSuperuserPassword, in.SuperuserNewPassword)
 	if err != nil {
 		return AlterSuperuserPasswordOut{}, fmt.Errorf("connecting to rotate superuser password: %w", err)
 	}
@@ -269,9 +271,9 @@ func UndoAlterSuperuserPassword(ctx context.Context, in AlterSuperuserPasswordIn
 	if !out.SuperuserAltered {
 		return nil
 	}
-	// The engine now holds the new password, so reconnect with it to restore the
-	// old one.
-	conn, err := connectAsSuperuser(ctx, in.SharedServiceHost, in.SuperuserNewPassword)
+	// The engine may hold either password depending on where a crash landed, so
+	// try both to reconnect and restore the old one.
+	conn, err := connectAsSuperuserTrying(ctx, in.SharedServiceHost, in.SuperuserNewPassword, in.SharedSuperuserPassword)
 	if err != nil {
 		return fmt.Errorf("connecting to restore superuser password: %w", err)
 	}
@@ -340,14 +342,13 @@ func RegisterRotateSharedSuperuserSaga(registry *saga.Registry, fw *addon.Provid
 		Action(DecodeSharedAttrs).Undo(UndoDecodeSharedAttrs).
 		Action(LookupSharedServer).Undo(UndoLookupSharedServer).
 		Action(BackfillSuperuserDiskName).Undo(UndoBackfillSuperuserDiskName).
-		Action(GenerateNewSuperuserPassword).Undo(UndoGenerateNewSuperuserPassword).
 		Action(AlterSuperuserPassword).Undo(UndoAlterSuperuserPassword).
 		Action(UpdateSuperuserEntity).Undo(UndoUpdateSuperuserEntity).
 		Action(CaptureSuperuserResult).Undo(UndoCaptureSuperuserResult).
 		RegisterTo(registry)
 }
 
-func (p *Provider) rotateSharedSuperuser(ctx context.Context, assoc addon.AddonAssociation) (*addon.RotationResult, error) {
+func (p *Provider) rotateSharedSuperuser(ctx context.Context, assoc addon.AddonAssociation, newSecret string) (*addon.RotationResult, error) {
 	p.Log.Info("rotating shared PostgreSQL superuser credential", "assoc", assoc.ID)
 
 	rc := &rotateCapture{}
@@ -359,6 +360,7 @@ func (p *Provider) rotateSharedSuperuser(ctx context.Context, assoc addon.AddonA
 	executor := saga.NewExecutor(p.Fw.Storage, saga.WithRegistry(registry), saga.WithLogger(p.Log))
 	if err := executor.Start("rotate-shared-postgresql-superuser").
 		Input("assocentity", assoc.Entity).
+		Input("superusernewpassword", newSecret).
 		Execute(ctx); err != nil {
 		return nil, err
 	}

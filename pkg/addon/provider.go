@@ -47,10 +47,15 @@ type AddonProvider interface {
 // Not every provider implements this — the controller type-asserts for it and
 // reports "rotation not supported" when a provider does not.
 type CredentialRotator interface {
-	// RotateCredential rotates the named credential on the server backing assoc.
-	// credential selects which secret to rotate (provider-defined; empty means
-	// the provider's default/only credential).
-	RotateCredential(ctx context.Context, assoc AddonAssociation, credential string) (*RotationResult, error)
+	// RotateCredential rotates the named credential on the server backing assoc
+	// to newSecret. credential selects which secret to rotate (provider-defined;
+	// empty means the provider's default/only credential).
+	//
+	// newSecret is supplied (and durably recorded) by the controller rather than
+	// generated per call, so the operation is idempotent: re-invoking after a
+	// crash converges on the same target instead of minting a new secret. Every
+	// implementation must be safe to call repeatedly with the same newSecret.
+	RotateCredential(ctx context.Context, assoc AddonAssociation, credential, newSecret string) (*RotationResult, error)
 }
 
 // RotationResult is returned by a CredentialRotator after a successful rotation.

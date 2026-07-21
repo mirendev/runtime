@@ -49,6 +49,31 @@ func connectAsSuperuser(ctx context.Context, host string, password string) (*pgx
 	return connectPostgres(ctx, host, postgresPort, defaultPostgresUser, password, defaultPostgresDB)
 }
 
+// connectAsSuperuserTrying connects as the superuser, trying each candidate
+// password until one authenticates. During a superuser rotation the credential
+// used to connect is the very thing being changed, so a retry after a crash may
+// find the engine on either the old or the new password; supplying both lets the
+// rotation converge regardless of where the previous attempt stopped.
+func connectAsSuperuserTrying(ctx context.Context, host string, passwords ...string) (*pgx.Conn, error) {
+	var lastErr error
+	tried := false
+	for _, pw := range passwords {
+		if pw == "" {
+			continue
+		}
+		tried = true
+		conn, err := connectAsSuperuser(ctx, host, pw)
+		if err == nil {
+			return conn, nil
+		}
+		lastErr = err
+	}
+	if !tried {
+		return nil, fmt.Errorf("no superuser password candidates to try")
+	}
+	return nil, lastErr
+}
+
 func createPostgresUser(ctx context.Context, conn *pgx.Conn, username, password string) error {
 	sql := fmt.Sprintf("CREATE USER %s WITH PASSWORD %s",
 		quoteIdentifier(username), quoteLiteral(password))

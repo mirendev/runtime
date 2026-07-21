@@ -32,7 +32,7 @@ func TestRegisterRotateSharedUserSaga(t *testing.T) {
 
 	def, ok := registry.Get("rotate-shared-postgresql-user")
 	require.True(t, ok)
-	assert.Len(t, def.Actions, 6)
+	assert.Len(t, def.Actions, 5)
 
 	indexOf := orderIndexer(t, def.ExecutionOrder())
 	assert.Less(t, indexOf("decode-shared-attrs"), indexOf("lookup-shared-server"),
@@ -54,7 +54,7 @@ func TestRotateSharedSuperuserSagaOrder(t *testing.T) {
 
 	def, ok := registry.Get("rotate-shared-postgresql-superuser")
 	require.True(t, ok)
-	assert.Len(t, def.Actions, 7)
+	assert.Len(t, def.Actions, 6)
 
 	indexOf := orderIndexer(t, def.ExecutionOrder())
 	assert.Less(t, indexOf("backfill-superuser-disk-name"), indexOf("alter-superuser-password"),

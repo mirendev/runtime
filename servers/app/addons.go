@@ -246,6 +246,23 @@ func (s *AddonsServer) RotateCredential(ctx context.Context, state *app_v1alpha.
 			return fmt.Errorf("addon %q is not active (status %q); cannot rotate", addonName, assoc.Status)
 		}
 
+		// Mutex: refuse to start a rotation while another is still in flight for
+		// this association, so two rotations can't race the same backing
+		// credential (and its consumer redeploy).
+		reqs, err := s.ec.List(ctx, entity.Ref(addon_v1alpha.RotationRequestAssociationId, assoc.ID))
+		if err != nil {
+			return fmt.Errorf("listing rotation requests: %w", err)
+		}
+		for reqs.Next() {
+			var existing addon_v1alpha.RotationRequest
+			if err := reqs.Read(&existing); err != nil {
+				return fmt.Errorf("reading rotation request: %w", err)
+			}
+			if existing.Status == "pending" || existing.Status == "rotating" {
+				return fmt.Errorf("a rotation is already in progress for addon %q on app %q (request %s)", addonName, appName, existing.ID)
+			}
+		}
+
 		req := &addon_v1alpha.RotationRequest{
 			Association: assoc.ID,
 			Addon:       assoc.Addon,
