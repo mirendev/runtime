@@ -61,6 +61,22 @@ func createPostgresUser(ctx context.Context, conn *pgx.Conn, username, password 
 	return nil
 }
 
+// alterPostgresUserPassword changes a role's password. ALTER USER is an alias
+// for ALTER ROLE, so this works for both a per-app user and the superuser role.
+// Existing connections stay authenticated; only new connections need the new
+// password.
+func alterPostgresUserPassword(ctx context.Context, conn *pgx.Conn, username, password string) error {
+	sql := fmt.Sprintf("ALTER USER %s WITH PASSWORD %s",
+		quoteIdentifier(username), quoteLiteral(password))
+
+	_, err := conn.Exec(ctx, sql)
+	if err != nil {
+		return fmt.Errorf("altering password for user %s: %w", username, err)
+	}
+
+	return nil
+}
+
 func createPostgresDatabase(ctx context.Context, conn *pgx.Conn, dbname, owner string) error {
 	sql := fmt.Sprintf("CREATE DATABASE %s OWNER %s",
 		quoteIdentifier(dbname), quoteIdentifier(owner))

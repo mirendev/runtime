@@ -18,6 +18,8 @@ func valkeyCommand(password string) string {
 	return fmt.Sprintf("valkey-server --save 60 1 --requirepass %s", password)
 }
 
+var _ addon.CredentialRotator = (*Provider)(nil)
+
 // rotateCapture carries the RotationResult out of the saga (analogous to
 // resultCapture for provisioning).
 type rotateCapture struct {
