@@ -27,7 +27,7 @@ With 8 GB, you'll have comfortable headroom for running multiple apps and handli
 
 ### Storage
 
-Container images and build caches add up quickly. Base images for languages like Ruby or Python are 50-80 MB compressed but expand on disk, and BuildKit caches intermediate build layers aggressively — keeping up to 10 GB by default. A single Rails deployment can use 15-20 GB between base images, build cache, and the container registry. With multiple apps and their version history, usage grows from there.
+Container images and build caches add up quickly. Base images for languages like Ruby or Python are 50-80 MB compressed but expand on disk, and BuildKit caches intermediate build layers aggressively — keeping up to 10 GB by default. A single Rails deployment can use 15-20 GB between base images, build cache, and the container registry. With multiple apps and their version history, usage grows from there. Miren reclaims images, caches, and old versions automatically as space gets tight — see [Managing Disk Space](/managing-disk-space).
 
 Starting with 50 GB gives you enough room to get going. With 100 GB you'll have space to grow without worrying about "no space left on device" errors during builds.
 
