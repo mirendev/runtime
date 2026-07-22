@@ -116,6 +116,10 @@ kinds:
   postgresql_dedicated_data:
     postgres_server:
       type: ref
+    database_name:
+      type: string
+    username:
+      type: string
 
   mysql_server:
     addon_name:

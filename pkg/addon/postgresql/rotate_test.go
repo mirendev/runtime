@@ -62,3 +62,29 @@ func TestRotateSharedSuperuserSagaOrder(t *testing.T) {
 	assert.Less(t, indexOf("alter-superuser-password"), indexOf("update-superuser-entity"),
 		"entity must record the new password only after the engine takes it")
 }
+
+// TestRotateDedicatedSagaOrder pins the dedicated rotation ordering: resolve the
+// server ref and connection details first, ALTER the live role, and only then
+// record the new password on the server entity (gated by an edge on the ALTER).
+func TestRotateDedicatedSagaOrder(t *testing.T) {
+	registry := saga.NewRegistry()
+	fw := &addon.ProviderFramework{}
+	rc := &rotateCapture{}
+
+	err := RegisterRotateDedicatedSaga(registry, fw, rc)
+	require.NoError(t, err)
+
+	def, ok := registry.Get("rotate-dedicated-postgresql")
+	require.True(t, ok)
+	assert.Len(t, def.Actions, 6)
+
+	indexOf := orderIndexer(t, def.ExecutionOrder())
+	assert.Less(t, indexOf("decode-dedicated-attrs"), indexOf("load-dedicated-rotation-state"),
+		"must decode the server ref before looking it up")
+	assert.Less(t, indexOf("load-dedicated-rotation-state"), indexOf("alter-dedicated-user-password"),
+		"must resolve the connection before altering the role")
+	assert.Less(t, indexOf("capture-dedicated-conn-info"), indexOf("alter-dedicated-user-password"),
+		"must know the role and database before altering")
+	assert.Less(t, indexOf("alter-dedicated-user-password"), indexOf("update-dedicated-entity"),
+		"entity must record the new password only after the engine takes it")
+}

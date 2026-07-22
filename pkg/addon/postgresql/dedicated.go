@@ -233,6 +233,8 @@ func BuildDedicatedResult(ctx context.Context, in BuildDedicatedResultIn) (Build
 
 	dedicatedData := &addon_v1alpha.PostgresqlDedicatedData{
 		PostgresServer: in.ServerID,
+		DatabaseName:   in.DatabaseName,
+		Username:       in.Username,
 	}
 
 	rc.Result = &addon.ProvisionResult{
@@ -272,7 +274,7 @@ type DecodeDedicatedAttrsIn struct {
 }
 
 type DecodeDedicatedAttrsOut struct {
-	DedicatedServerID entity.Id
+	DedicatedServerID entity.Id `saga:"dedicatedserverid"`
 }
 
 func DecodeDedicatedAttrs(ctx context.Context, in DecodeDedicatedAttrsIn) (DecodeDedicatedAttrsOut, error) {
