@@ -1,0 +1,207 @@
+{
+  "summary": {
+    "total_test_time_s": 526.23,
+    "test_count": 33,
+    "source": "CI run 29856793428 job 88723011745 (green merge of PR #946)"
+  },
+  "tests": [
+    {
+      "name": "TestAddonDeployWithVersionInAppToml",
+      "environment": "standalone",
+      "elapsed_s": 38.4,
+      "status": "pass"
+    },
+    {
+      "name": "TestMemcacheAddonCreateListDestroy",
+      "environment": "standalone",
+      "elapsed_s": 36.15,
+      "status": "pass"
+    },
+    {
+      "name": "TestMysqlAddonDeployWithAppToml",
+      "environment": "standalone",
+      "elapsed_s": 32.31,
+      "status": "pass"
+    },
+    {
+      "name": "TestRabbitmqAddonCreateListDestroy",
+      "environment": "standalone",
+      "elapsed_s": 30.95,
+      "status": "pass"
+    },
+    {
+      "name": "TestEnvSetGetList",
+      "environment": "standalone",
+      "elapsed_s": 29.08,
+      "status": "pass"
+    },
+    {
+      "name": "TestZeroDowntimeDeploy",
+      "environment": "standalone",
+      "elapsed_s": 22.45,
+      "status": "pass"
+    },
+    {
+      "name": "TestValkeyAddonCreateListDestroy",
+      "environment": "standalone",
+      "elapsed_s": 21.95,
+      "status": "pass"
+    },
+    {
+      "name": "TestBadCommand",
+      "environment": "standalone",
+      "elapsed_s": 20.97,
+      "status": "pass"
+    },
+    {
+      "name": "TestLocalDiskPersistence",
+      "environment": "standalone",
+      "elapsed_s": 20.55,
+      "status": "pass"
+    },
+    {
+      "name": "TestRabbitmqAddonDeployWithAppToml",
+      "environment": "standalone",
+      "elapsed_s": 19.97,
+      "status": "pass"
+    },
+    {
+      "name": "TestValkeyAddonDeployWithAppToml",
+      "environment": "standalone",
+      "elapsed_s": 19.92,
+      "status": "pass"
+    },
+    {
+      "name": "TestAddonDeployWithAppToml",
+      "environment": "standalone",
+      "elapsed_s": 19.89,
+      "status": "pass"
+    },
+    {
+      "name": "TestMysqlAddonCreateListDestroy",
+      "environment": "standalone",
+      "elapsed_s": 18.82,
+      "status": "pass"
+    },
+    {
+      "name": "TestAddonUnknownAddon",
+      "environment": "standalone",
+      "elapsed_s": 18.66,
+      "status": "pass"
+    },
+    {
+      "name": "TestAddonCreateListDestroy",
+      "environment": "standalone",
+      "elapsed_s": 18.6,
+      "status": "pass"
+    },
+    {
+      "name": "TestCrashLoop",
+      "environment": "standalone",
+      "elapsed_s": 17.31,
+      "status": "pass"
+    },
+    {
+      "name": "TestMemcacheAddonDeployWithAppToml",
+      "environment": "standalone",
+      "elapsed_s": 17.05,
+      "status": "pass"
+    },
+    {
+      "name": "TestEphemeralDeploy",
+      "environment": "standalone",
+      "elapsed_s": 11.64,
+      "status": "pass"
+    },
+    {
+      "name": "TestRouteWafEnableDisable",
+      "environment": "standalone",
+      "elapsed_s": 11.07,
+      "status": "pass"
+    },
+    {
+      "name": "TestSandboxExec",
+      "environment": "standalone",
+      "elapsed_s": 10.85,
+      "status": "pass"
+    },
+    {
+      "name": "TestRouteWafJsonOutput",
+      "environment": "standalone",
+      "elapsed_s": 10.82,
+      "status": "pass"
+    },
+    {
+      "name": "TestRouteWafInvalidLevel",
+      "environment": "standalone",
+      "elapsed_s": 10.8,
+      "status": "pass"
+    },
+    {
+      "name": "TestDeployGoServer",
+      "environment": "standalone",
+      "elapsed_s": 10.74,
+      "status": "pass"
+    },
+    {
+      "name": "TestRoutePasswordProtection",
+      "environment": "standalone",
+      "elapsed_s": 9.59,
+      "status": "pass"
+    },
+    {
+      "name": "TestDeployAndRollback",
+      "environment": "standalone",
+      "elapsed_s": 9.47,
+      "status": "pass"
+    },
+    {
+      "name": "TestRouteWafBlocksMaliciousRequest",
+      "environment": "standalone",
+      "elapsed_s": 9.21,
+      "status": "pass"
+    },
+    {
+      "name": "TestRouteSetListRemove",
+      "environment": "standalone",
+      "elapsed_s": 8.94,
+      "status": "pass"
+    },
+    {
+      "name": "TestRouteWafDefaultRoute",
+      "environment": "standalone",
+      "elapsed_s": 8.84,
+      "status": "pass"
+    },
+    {
+      "name": "TestSandboxList",
+      "environment": "standalone",
+      "elapsed_s": 8.61,
+      "status": "pass"
+    },
+    {
+      "name": "TestDiskUndelete",
+      "environment": "standalone",
+      "elapsed_s": 1.49,
+      "status": "pass"
+    },
+    {
+      "name": "TestRoutePasswordProviderLifecycle",
+      "environment": "standalone",
+      "elapsed_s": 0.66,
+      "status": "pass"
+    },
+    {
+      "name": "TestAddonVariants",
+      "environment": "standalone",
+      "elapsed_s": 0.38,
+      "status": "pass"
+    },
+    {
+      "name": "TestAddonListAvailable",
+      "environment": "standalone",
+      "elapsed_s": 0.09,
+      "status": "pass"
+    }
+  ]
+}

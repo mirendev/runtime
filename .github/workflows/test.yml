@@ -190,9 +190,49 @@ jobs:
       if: steps.docker-image-cache.outputs.cache-hit != 'true'
       run: docker save runtime-shell -o /tmp/iso-image.tar
 
+  blackbox-groups:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+    steps:
+    - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+      with:
+        persist-credentials: false
+        ref: ${{ inputs.ref }}
+
+    - name: Set blackbox shard matrix
+      id: set-matrix
+      run: |
+        # Discover all blackbox test functions by scanning source (no compile,
+        # no cluster) so a newly added test is never silently left unrun.
+        ALL_TESTS=$(grep -rhoE '^func Test[A-Za-z0-9_]+' blackbox --include='*_test.go' \
+          | sed -E 's/^func //' | sort -u)
+
+        # Tests already assigned to a shard in the checked-in manifest.
+        GROUPED=$(jq -r '.groups[].tests[]' hack/blackbox-groups.json | sort -u)
+
+        # TestPOP runs in its own job (test-blackbox-pop); never shard it here.
+        UNGROUPED=$(comm -23 <(echo "$ALL_TESTS") <(echo "$GROUPED") | grep -vx 'TestPOP' || true)
+
+        MATRIX=$(jq -c '.groups' hack/blackbox-groups.json)
+
+        if [ -n "$UNGROUPED" ]; then
+          echo "::warning::Blackbox tests not in blackbox-groups.json (running in extra shard, regenerate with 'make blackbox-groups'): $(echo $UNGROUPED | tr '\n' ' ')"
+          EXTRA=$(echo "$UNGROUPED" | jq -R -s 'split("\n") | map(select(. != ""))')
+          MATRIX=$(echo "$MATRIX" | jq -c --argjson tests "$EXTRA" '. + [{"shard": (length + 1), "estimated_s": 0, "tests": $tests}]')
+        fi
+
+        echo "matrix=$MATRIX" >> $GITHUB_OUTPUT
+
   test-blackbox:
+    name: test-blackbox (shard ${{ matrix.group.shard }})
+    needs: blackbox-groups
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: depot-ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        group: ${{ fromJson(needs.blackbox-groups.outputs.matrix) }}
     steps:
     - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
       with:
@@ -249,10 +289,15 @@ jobs:
     - name: Start miren server
       run: make dev-server-start
 
-    - name: Run blackbox tests
-      # TestPOP runs in its own job (test-blackbox-pop) because its server
-      # restart interferes with subsequent deploys. Skip it here.
-      run: go test -tags blackbox -timeout 15m -v -count=1 -p 1 -skip '^TestPOP$' ./blackbox/...
+    - name: Run blackbox tests (shard ${{ matrix.group.shard }})
+      # Each shard runs only its assigned subset, built into a -run regex from
+      # the matrix. TestPOP runs in its own job (test-blackbox-pop) because its
+      # server restart interferes with subsequent deploys; -skip guards against
+      # it ever slipping into a shard. Per-shard runtime is ~3 min, so 10m
+      # restores fast failure on a genuine hang.
+      run: |
+        RUN=$(echo '${{ toJson(matrix.group.tests) }}' | jq -r 'join("|")')
+        go test -tags blackbox -timeout 10m -v -count=1 -p 1 -run "^(${RUN})$" -skip '^TestPOP$' ./blackbox/...
 
     - name: Server logs on failure
       if: failure()
@@ -360,19 +405,27 @@ jobs:
   # that passes only when every matrix runner and blackbox tests succeed.
   test:
     if: always()
-    needs: [test-runner, test-blackbox, test-blackbox-pop]
+    needs: [test-runner, blackbox-groups, test-blackbox, test-blackbox-pop]
     runs-on: ubuntu-latest
     steps:
     - name: Check results
       run: |
         echo "test-runner result: ${{ needs.test-runner.result }}"
+        echo "blackbox-groups result: ${{ needs.blackbox-groups.result }}"
         echo "test-blackbox result: ${{ needs.test-blackbox.result }}"
         echo "test-blackbox-pop result: ${{ needs.test-blackbox-pop.result }}"
 
         if [[ "${{ needs.test-runner.result }}" != "success" ]]; then
           exit 1
         fi
-        # Blackbox tests are skipped for external (fork) PRs
+        # blackbox-groups builds the shard matrix. If it fails, the sharded
+        # test-blackbox job is skipped, which would otherwise look benign below,
+        # so require it to succeed outright.
+        if [[ "${{ needs.blackbox-groups.result }}" != "success" ]]; then
+          exit 1
+        fi
+        # Blackbox tests are skipped for external (fork) PRs. A matrix job's
+        # aggregate result is success only when every shard passes.
         if [[ "${{ needs.test-blackbox.result }}" != "success" && "${{ needs.test-blackbox.result }}" != "skipped" ]]; then
           exit 1
         fi

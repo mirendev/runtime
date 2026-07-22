@@ -1,0 +1,64 @@
+{
+  "environment": "standalone",
+  "n_shards": 3,
+  "makespan_s": 178.04,
+  "groups": [
+    {
+      "shard": 1,
+      "estimated_s": 178.04,
+      "tests": [
+        "TestAddonDeployWithVersionInAppToml",
+        "TestZeroDowntimeDeploy",
+        "TestValkeyAddonCreateListDestroy",
+        "TestRabbitmqAddonDeployWithAppToml",
+        "TestMysqlAddonCreateListDestroy",
+        "TestCrashLoop",
+        "TestSandboxExec",
+        "TestDeployGoServer",
+        "TestRouteSetListRemove",
+        "TestSandboxList"
+      ]
+    },
+    {
+      "shard": 2,
+      "estimated_s": 176.09,
+      "tests": [
+        "TestMemcacheAddonCreateListDestroy",
+        "TestEnvSetGetList",
+        "TestLocalDiskPersistence",
+        "TestAddonDeployWithAppToml",
+        "TestAddonCreateListDestroy",
+        "TestEphemeralDeploy",
+        "TestRouteWafEnableDisable",
+        "TestRouteWafInvalidLevel",
+        "TestDeployAndRollback",
+        "TestRouteWafDefaultRoute"
+      ]
+    },
+    {
+      "shard": 3,
+      "estimated_s": 172.16,
+      "tests": [
+        "TestMysqlAddonDeployWithAppToml",
+        "TestRabbitmqAddonCreateListDestroy",
+        "TestBadCommand",
+        "TestValkeyAddonDeployWithAppToml",
+        "TestAddonUnknownAddon",
+        "TestMemcacheAddonDeployWithAppToml",
+        "TestRouteWafJsonOutput",
+        "TestRoutePasswordProtection",
+        "TestRouteWafBlocksMaliciousRequest",
+        "TestDiskUndelete",
+        "TestRoutePasswordProviderLifecycle",
+        "TestAddonVariants",
+        "TestAddonListAvailable",
+        "TestDistributedRunnerCordon",
+        "TestDistributedRunnerDrain",
+        "TestDistributedRunnerList",
+        "TestDistributedRunnerLogs",
+        "TestDistributedRunnerMetrics",
+        "TestDistributedRunnerNodePort"
+      ]
+    }
+  ]
+}
