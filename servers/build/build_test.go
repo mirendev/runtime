@@ -89,6 +89,8 @@ func TestBuildServicesConfig(t *testing.T) {
 		name             string
 		appConfig        *appconfig.AppConfig
 		procfileServices map[string]string
+		ensureWeb        bool
+		webDefault       string
 		validateServices func(t *testing.T, services []core_v1alpha.ConfigSpecServices)
 	}{
 		{
@@ -708,6 +710,30 @@ func TestBuildServicesConfig(t *testing.T) {
 			},
 		},
 		{
+			name:             "ensureWeb defaults web when nothing supplies a command",
+			appConfig:        nil,
+			procfileServices: nil,
+			ensureWeb:        true,
+			webDefault:       "",
+			validateServices: func(t *testing.T, services []core_v1alpha.ConfigSpecServices) {
+				require.Len(t, services, 1)
+				assert.Equal(t, "web", services[0].Name)
+				assert.Empty(t, services[0].Command, "empty default is the image exec-form case")
+			},
+		},
+		{
+			name:             "ensureWeb does not override a web command from the Procfile",
+			appConfig:        nil,
+			procfileServices: map[string]string{"web": "npm start"},
+			ensureWeb:        true,
+			webDefault:       "should-not-win",
+			validateServices: func(t *testing.T, services []core_v1alpha.ConfigSpecServices) {
+				require.Len(t, services, 1)
+				assert.Equal(t, "web", services[0].Name)
+				assert.Equal(t, "npm start", services[0].Command)
+			},
+		},
+		{
 			name: "service with port_timeout copies through to ConfigSpec",
 			appConfig: &appconfig.AppConfig{
 				Services: map[string]*appconfig.ServiceConfig{
@@ -738,7 +764,7 @@ func TestBuildServicesConfig(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			services := buildServicesConfig(tt.appConfig, tt.procfileServices)
+			services := buildServicesConfig(tt.appConfig, tt.procfileServices, tt.ensureWeb, tt.webDefault)
 			tt.validateServices(t, services)
 		})
 	}
@@ -1189,77 +1215,6 @@ func TestMergeServiceEnvVars(t *testing.T) {
 	}
 }
 
-func TestBuildImageCommand(t *testing.T) {
-	tests := []struct {
-		name       string
-		entrypoint []string
-		cmd        []string
-		want       string
-	}{
-		{
-			name:       "nil entrypoint and cmd",
-			entrypoint: nil,
-			cmd:        nil,
-			want:       "",
-		},
-		{
-			name:       "empty entrypoint and cmd",
-			entrypoint: []string{},
-			cmd:        []string{},
-			want:       "",
-		},
-		{
-			name:       "entrypoint only",
-			entrypoint: []string{"node", "server.js"},
-			cmd:        nil,
-			want:       "node server.js",
-		},
-		{
-			name:       "cmd only",
-			entrypoint: nil,
-			cmd:        []string{"npm", "start"},
-			want:       "npm start",
-		},
-		{
-			name:       "entrypoint and cmd combined",
-			entrypoint: []string{"node"},
-			cmd:        []string{"server.js"},
-			want:       "node server.js",
-		},
-		{
-			name:       "shell form entrypoint",
-			entrypoint: []string{"/bin/sh", "-c", "exec node server.js"},
-			cmd:        nil,
-			want:       "/bin/sh -c \"exec node server.js\"",
-		},
-		{
-			name:       "single element shell command",
-			entrypoint: []string{"npm start"},
-			cmd:        nil,
-			want:       "npm start",
-		},
-		{
-			name:       "arguments with spaces",
-			entrypoint: []string{"python"},
-			cmd:        []string{"-c", "print('hello world')"},
-			want:       "python -c \"print('hello world')\"",
-		},
-		{
-			name:       "complex command",
-			entrypoint: []string{"./start.sh"},
-			cmd:        []string{"--config", "/etc/myapp/config.yaml"},
-			want:       "./start.sh --config /etc/myapp/config.yaml",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := buildImageCommand(tt.entrypoint, tt.cmd)
-			assert.Equal(t, tt.want, got)
-		})
-	}
-}
-
 func TestBuildVersionConfig(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -1267,7 +1222,7 @@ func TestBuildVersionConfig(t *testing.T) {
 		validate func(t *testing.T, spec core_v1alpha.ConfigSpec)
 	}{
 		{
-			name: "image entrypoint creates web service when no services configured",
+			name: "build result entrypoint creates web service when no services configured",
 			inputs: ConfigInputs{
 				BuildResult: &BuildResult{
 					Entrypoint: "node server.js",
@@ -1285,7 +1240,7 @@ func TestBuildVersionConfig(t *testing.T) {
 			},
 		},
 		{
-			name: "image entrypoint creates web service when only worker in procfile",
+			name: "build result entrypoint creates web service when only worker in procfile",
 			inputs: ConfigInputs{
 				BuildResult: &BuildResult{
 					Entrypoint: "npm start",
@@ -1315,7 +1270,7 @@ func TestBuildVersionConfig(t *testing.T) {
 			},
 		},
 		{
-			name: "procfile web takes precedence over image entrypoint",
+			name: "procfile web takes precedence over build result entrypoint",
 			inputs: ConfigInputs{
 				BuildResult: &BuildResult{
 					Entrypoint: "node default.js",
@@ -1334,7 +1289,7 @@ func TestBuildVersionConfig(t *testing.T) {
 			},
 		},
 		{
-			name: "app config web command takes precedence over image entrypoint",
+			name: "app config web command takes precedence over build result entrypoint",
 			inputs: ConfigInputs{
 				BuildResult: &BuildResult{
 					Entrypoint: "node default.js",
@@ -1356,7 +1311,11 @@ func TestBuildVersionConfig(t *testing.T) {
 			},
 		},
 		{
-			name: "no image entrypoint means no web service when no config",
+			// A build that produced an image but carries no command is the
+			// image/Dockerfile case: we still materialize a web service, with an
+			// empty command, so the image's own ENTRYPOINT+CMD run in exec form
+			// at launch (MIR-1444) instead of the app silently having no service.
+			name: "image build with no command still yields an empty-command web service",
 			inputs: ConfigInputs{
 				BuildResult: &BuildResult{
 					WorkingDir: "/app",
@@ -1366,7 +1325,9 @@ func TestBuildVersionConfig(t *testing.T) {
 				ExistingConfig:   core_v1alpha.ConfigSpec{},
 			},
 			validate: func(t *testing.T, spec core_v1alpha.ConfigSpec) {
-				assert.Len(t, spec.Services, 0, "should have no services")
+				require.Len(t, spec.Services, 1, "web service should materialize so the image entrypoint runs")
+				assert.Equal(t, "web", spec.Services[0].Name)
+				assert.Empty(t, spec.Services[0].Command, "command stays empty so the image's ENTRYPOINT+CMD run in exec form")
 				assert.Equal(t, "/app", spec.StartDirectory)
 			},
 		},

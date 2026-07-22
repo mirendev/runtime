@@ -594,23 +594,18 @@ func (b *Buildkit) BuildImage(
 		if configJSON != "" {
 			var imgConfig struct {
 				Config struct {
-					WorkingDir string   `json:"WorkingDir"`
-					Entrypoint []string `json:"Entrypoint"`
-					Cmd        []string `json:"Cmd"`
+					WorkingDir string `json:"WorkingDir"`
 				} `json:"config"`
 			}
 			if err := json.Unmarshal([]byte(configJSON), &imgConfig); err == nil {
 				res.WorkingDir = imgConfig.Config.WorkingDir
-				if res.Entrypoint == "" {
-					res.Entrypoint = buildImageCommand(imgConfig.Config.Entrypoint, nil)
-				}
-
-				if res.Command == "" {
-					res.Command = buildImageCommand(imgConfig.Config.Cmd, nil)
-				}
 			} else {
 				b.Log.Warn("failed to parse image config", "error", err)
 			}
+			// We intentionally do not flatten the image's ENTRYPOINT/CMD into a
+			// command string here. When a service has no command, the image's
+			// own ENTRYPOINT+CMD run in exec form via oci.WithImageConfig at
+			// launch (MIR-1444), preserving argv boundaries, PID 1, and signals.
 		}
 	}
 
