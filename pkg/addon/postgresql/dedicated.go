@@ -233,6 +233,8 @@ func BuildDedicatedResult(ctx context.Context, in BuildDedicatedResultIn) (Build
 
 	dedicatedData := &addon_v1alpha.PostgresqlDedicatedData{
 		PostgresServer: in.ServerID,
+		DatabaseName:   in.DatabaseName,
+		Username:       in.Username,
 	}
 
 	rc.Result = &addon.ProvisionResult{
