@@ -86,6 +86,7 @@ func TestSharedPostgreSQL_Integration(t *testing.T) {
 		err = env.executor.Start("ensure-shared-server").
 			WithID(execID).
 			Input("superuserpassword", superuserPassword).
+			Input("diskname", "pg-shared-data-test").
 			Input("variantconfig", map[string]string{
 				addon.ConfigImage: postgresql.BaseImage + ":" + postgresql.DefaultVersion,
 			}).
@@ -117,6 +118,7 @@ func TestSharedPostgreSQL_Integration(t *testing.T) {
 		assert.NotEmpty(t, server.SandboxPool, "sandbox pool ref should be set")
 		assert.NotEmpty(t, server.Service, "service ref should be set")
 		assert.Equal(t, int64(0), server.AssociationCount)
+		assert.Equal(t, "pg-shared-data-test", server.DiskName, "supplied disk name should be persisted")
 
 		connStr := fmt.Sprintf("postgres://postgres:%s@%s:5432/postgres?sslmode=disable",
 			superuserPassword, serviceHost)

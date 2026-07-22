@@ -269,8 +269,12 @@ func (c *Controller) setError(meta *entity.Meta, err error) error {
 
 // resolveAppName looks up an App entity and returns its metadata name.
 func (c *Controller) resolveAppName(ctx context.Context, appID entity.Id) (string, error) {
+	return resolveAppName(ctx, c.ec, appID)
+}
+
+func resolveAppName(ctx context.Context, ec *entityserver.Client, appID entity.Id) (string, error) {
 	var meta core_v1alpha.Metadata
-	if err := c.ec.GetById(ctx, appID, &meta); err != nil {
+	if err := ec.GetById(ctx, appID, &meta); err != nil {
 		return "", fmt.Errorf("getting app entity: %w", err)
 	}
 	if meta.Name == "" {
@@ -311,12 +315,27 @@ func (c *Controller) getAppVariables(ctx context.Context, appID entity.Id) ([]co
 // into the ConfigVersion and sets it as the active version. This ensures the
 // launcher always reads a version that has all vars baked in.
 func (c *Controller) createVersionWithAddonVars(ctx context.Context, appID entity.Id, envVars []addon.Variable) error {
+	return createVersionWithVars(ctx, c.log, c.ec, c.eac, appID, envVars)
+}
+
+// createVersionWithVars merges envVars into the app's active config, mints a new
+// ConfigVersion + AppVersion, and points ActiveVersion at it — which triggers a
+// redeploy via the launcher's App watch. It is shared by the provisioning path
+// (adding addon vars) and the rotation path (replacing a rotated credential).
+func createVersionWithVars(
+	ctx context.Context,
+	log *slog.Logger,
+	ec *entityserver.Client,
+	eac *entityserver_v1alpha.EntityAccessClient,
+	appID entity.Id,
+	envVars []addon.Variable,
+) error {
 	if len(envVars) == 0 {
 		return nil
 	}
 
 	var app core_v1alpha.App
-	if err := c.ec.GetById(ctx, appID, &app); err != nil {
+	if err := ec.GetById(ctx, appID, &app); err != nil {
 		return fmt.Errorf("getting app: %w", err)
 	}
 	if app.ActiveVersion == "" {
@@ -324,12 +343,12 @@ func (c *Controller) createVersionWithAddonVars(ctx context.Context, appID entit
 	}
 
 	var version core_v1alpha.AppVersion
-	if err := c.ec.GetById(ctx, app.ActiveVersion, &version); err != nil {
+	if err := ec.GetById(ctx, app.ActiveVersion, &version); err != nil {
 		return fmt.Errorf("getting app version: %w", err)
 	}
 
 	// Resolve the current config (reads ConfigVersion if present, else inline)
-	spec, err := coreutil.ResolveConfig(ctx, c.eac, &version)
+	spec, err := coreutil.ResolveConfig(ctx, eac, &version)
 	if err != nil {
 		return fmt.Errorf("resolving config: %w", err)
 	}
@@ -350,7 +369,7 @@ func (c *Controller) createVersionWithAddonVars(ctx context.Context, appID entit
 	}
 
 	// Resolve app name for the new version name
-	appName, err := c.resolveAppName(ctx, appID)
+	appName, err := resolveAppName(ctx, ec, appID)
 	if err != nil {
 		return fmt.Errorf("resolving app name: %w", err)
 	}
@@ -363,7 +382,7 @@ func (c *Controller) createVersionWithAddonVars(ctx context.Context, appID entit
 		Spec: *spec,
 	}
 	cvName := newVersionName + "-cfg"
-	cvid, err := c.ec.Create(ctx, cvName, configVer)
+	cvid, err := ec.Create(ctx, cvName, configVer)
 	if err != nil {
 		return fmt.Errorf("creating config version: %w", err)
 	}
@@ -373,19 +392,19 @@ func (c *Controller) createVersionWithAddonVars(ctx context.Context, appID entit
 	version.ConfigVersion = cvid
 	version.Config = core_v1alpha.Config{}
 
-	newID, err := c.ec.Create(ctx, newVersionName, &version)
+	newID, err := ec.Create(ctx, newVersionName, &version)
 	if err != nil {
 		return fmt.Errorf("creating new app version: %w", err)
 	}
 
 	// Set the new version as active — triggers the deployment launcher via App watch
-	if err := c.ec.Patch(ctx, appID, 0,
+	if err := ec.Patch(ctx, appID, 0,
 		entity.Ref(core_v1alpha.AppActiveVersionId, newID),
 	); err != nil {
 		return fmt.Errorf("setting active version: %w", err)
 	}
 
-	c.log.Info("created new app version with addon vars",
+	log.Info("created new app version with addon vars",
 		"app", appID, "old_version", app.ActiveVersion, "new_version", newID)
 
 	return nil

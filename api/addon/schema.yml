@@ -60,6 +60,30 @@ kinds:
         sensitive:
           type: bool
 
+  # rotation_request drives a one-shot credential rotation for the addon server
+  # backing an association. The RPC creates one with status "pending"; the
+  # rotation controller reconciles it: apply a new secret to the live engine,
+  # update the stored value, and redeploy affected consumers.
+  rotation_request:
+    association:
+      type: ref
+      indexed: true
+    addon:
+      type: ref
+    credential:
+      type: string
+    status:
+      type: string
+      indexed: true
+    # new_secret is the target credential, generated and recorded once before any
+    # engine change so a crashed rotation is recoverable: a retry reuses it rather
+    # than minting a fresh secret it can no longer authenticate with. Cleared when
+    # the request reaches "done".
+    new_secret:
+      type: string
+    error_message:
+      type: string
+
   postgres_server:
     addon_name:
       type: string
@@ -77,6 +101,8 @@ kinds:
     association_count:
       type: int
     superuser_password:
+      type: string
+    disk_name:
       type: string
 
   postgresql_shared_data:

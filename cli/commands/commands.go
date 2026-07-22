@@ -461,6 +461,17 @@ miren deploy --analyze
 			Body: "miren addon destroy miren-postgresql --force",
 		}),
 	))
+	d.Dispatch("addon rotate", Infer("addon rotate", "Rotate an addon's backing credential", AddonRotate,
+		WithDescription(addonRotateDescription),
+		WithExample(mflags.Example{
+			Name: "Rotate a Valkey addon's password",
+			Body: "miren addon rotate miren-valkey",
+		}),
+		WithExample(mflags.Example{
+			Name: "Rotate without confirmation",
+			Body: "miren addon rotate miren-valkey --force",
+		}),
+	))
 
 	// Route commands
 	d.Dispatch("route", Infer("route", "List all HTTP routes", Route,
@@ -1113,3 +1124,5 @@ const envDeleteDescription = `Deleting an environment variable creates a new app
 const addonCreateDescription = `Attaching an addon provisions the backing resource and injects its connection details as environment variables into your app. Once provisioning completes, Miren creates a new app version with those variables and rolls it out automatically — you do not need to run ` + "`" + `miren deploy` + "`" + ` or ` + "`" + `miren app restart` + "`" + `. The rollout is deferred until the addon finishes provisioning, so it may not be immediate.`
 
 const addonDestroyDescription = `Removing an addon deprovisions the backing resource and strips its injected environment variables from your app. Miren creates a new app version without those variables and rolls it out automatically — you do not need to run ` + "`" + `miren deploy` + "`" + ` or ` + "`" + `miren app restart` + "`" + `.`
+
+const addonRotateDescription = `Rotating an addon credential generates a new secret, applies it to the running backing engine, and updates the value Miren stores. Consuming apps that embed the credential are redeployed automatically to pick up the new connection details — you do not need to run ` + "`" + `miren deploy` + "`" + ` or ` + "`" + `miren app restart` + "`" + `. Rotation runs asynchronously: the command returns a request id and the rotation controller carries it out.`

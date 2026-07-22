@@ -38,6 +38,35 @@ type AddonProvider interface {
 	Deprovision(ctx context.Context, assoc AddonAssociation) error
 }
 
+// CredentialRotator is an optional capability for providers that support
+// rotating a backing server credential in place. Rotation applies a freshly
+// generated secret to the live engine and updates the stored value; the
+// returned EnvVars are the updated variables the controller propagates to
+// consuming apps.
+//
+// Not every provider implements this — the controller type-asserts for it and
+// reports "rotation not supported" when a provider does not.
+type CredentialRotator interface {
+	// RotateCredential rotates the named credential on the server backing assoc
+	// to newSecret. credential selects which secret to rotate (provider-defined;
+	// empty means the provider's default/only credential).
+	//
+	// newSecret is supplied (and durably recorded) by the controller rather than
+	// generated per call, so the operation is idempotent: re-invoking after a
+	// crash converges on the same target instead of minting a new secret. Every
+	// implementation must be safe to call repeatedly with the same newSecret.
+	RotateCredential(ctx context.Context, assoc AddonAssociation, credential, newSecret string) (*RotationResult, error)
+}
+
+// RotationResult is returned by a CredentialRotator after a successful rotation.
+type RotationResult struct {
+	// EnvVars are the updated variables consuming apps must pick up. It is empty
+	// when consumers don't embed the rotated secret (e.g. a shared-Postgres
+	// superuser password that apps never receive), in which case no redeploy is
+	// needed.
+	EnvVars []Variable
+}
+
 // App identifies the application an addon is being attached to.
 type App struct {
 	ID   entity.Id

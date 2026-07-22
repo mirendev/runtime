@@ -208,3 +208,78 @@ func (s *AddonsServer) DeleteInstance(ctx context.Context, state *app_v1alpha.Ad
 
 	return fmt.Errorf("addon %q is not attached to app %q", addonName, appName)
 }
+
+// RotateCredential creates a pending RotationRequest for the addon attached to
+// the named app. The rotation controller reconciles it: apply a new secret to
+// the live engine, update the stored value, and redeploy affected consumers.
+func (s *AddonsServer) RotateCredential(ctx context.Context, state *app_v1alpha.AddonsRotateCredential) error {
+	appName := state.Args().App()
+	addonName := state.Args().Name()
+	credential := state.Args().Credential()
+
+	if appName == "" {
+		return fmt.Errorf("app name is required")
+	}
+	if addonName == "" {
+		return fmt.Errorf("addon name is required")
+	}
+
+	var app core_v1alpha.App
+	if err := s.ec.Get(ctx, appName, &app); err != nil {
+		return fmt.Errorf("app %q not found: %w", appName, err)
+	}
+
+	results, err := s.ec.List(ctx, entity.Ref(addon_v1alpha.AddonAssociationAppId, app.ID))
+	if err != nil {
+		return fmt.Errorf("listing addon associations: %w", err)
+	}
+
+	for results.Next() {
+		var assoc addon_v1alpha.AddonAssociation
+		if err := results.Read(&assoc); err != nil {
+			return fmt.Errorf("reading addon association: %w", err)
+		}
+		if addon.NameFromRef(assoc.Addon) != addonName {
+			continue
+		}
+		if assoc.Status != "active" {
+			return fmt.Errorf("addon %q is not active (status %q); cannot rotate", addonName, assoc.Status)
+		}
+
+		// Mutex: refuse to start a rotation while another is still in flight for
+		// this association, so two rotations can't race the same backing
+		// credential (and its consumer redeploy).
+		reqs, err := s.ec.List(ctx, entity.Ref(addon_v1alpha.RotationRequestAssociationId, assoc.ID))
+		if err != nil {
+			return fmt.Errorf("listing rotation requests: %w", err)
+		}
+		for reqs.Next() {
+			var existing addon_v1alpha.RotationRequest
+			if err := reqs.Read(&existing); err != nil {
+				return fmt.Errorf("reading rotation request: %w", err)
+			}
+			if existing.Status == "pending" || existing.Status == "rotating" {
+				return fmt.Errorf("a rotation is already in progress for addon %q on app %q (request %s)", addonName, appName, existing.ID)
+			}
+		}
+
+		req := &addon_v1alpha.RotationRequest{
+			Association: assoc.ID,
+			Addon:       assoc.Addon,
+			Credential:  credential,
+			Status:      "pending",
+		}
+		reqName := fmt.Sprintf("rotate-%s-%s", addonName, idgen.Gen("rr"))
+		id, err := s.ec.Create(ctx, reqName, req)
+		if err != nil {
+			return fmt.Errorf("creating rotation request: %w", err)
+		}
+
+		s.log.Info("addon credential rotation requested",
+			"request", id, "association", assoc.ID, "app", appName, "addon", addonName)
+		state.Results().SetId(string(id))
+		return nil
+	}
+
+	return fmt.Errorf("addon %q is not attached to app %q", addonName, appName)
+}

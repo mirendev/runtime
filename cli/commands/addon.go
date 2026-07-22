@@ -309,3 +309,39 @@ func AddonDestroy(ctx *Context, opts struct {
 	ctx.Completed("Addon %s removed from %s", opts.Name, opts.App)
 	return nil
 }
+
+func AddonRotate(ctx *Context, opts struct {
+	AppCentric
+	Name       string `position:"0" usage:"Addon name (e.g., miren-valkey)" required:"true"`
+	Credential string `long:"credential" description:"Which credential to rotate (provider-specific; defaults to the addon's primary credential)"`
+	Force      bool   `short:"f" long:"force" description:"Skip confirmation prompt"`
+}) error {
+	if !opts.Force {
+		confirmed, err := ui.Confirm(
+			ui.WithMessage(fmt.Sprintf("This will rotate the %s credential and redeploy consuming apps. Continue?", opts.Name)),
+			ui.WithDefault(false),
+		)
+		if err != nil {
+			return err
+		}
+		if !confirmed {
+			ctx.Printf("Aborted\n")
+			return nil
+		}
+	}
+
+	cl, err := ctx.RPCClient("dev.miren.runtime/addons")
+	if err != nil {
+		return err
+	}
+
+	addonsClient := app_v1alpha.NewAddonsClient(cl)
+
+	res, err := addonsClient.RotateCredential(ctx, opts.App, opts.Name, opts.Credential)
+	if err != nil {
+		return err
+	}
+
+	ctx.Completed("Rotation requested for %s on %s (request %s)", opts.Name, opts.App, res.Id())
+	return nil
+}
