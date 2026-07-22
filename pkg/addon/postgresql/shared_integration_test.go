@@ -18,6 +18,7 @@ import (
 	"miren.dev/runtime/pkg/addon/postgresql"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/testutils"
+	"miren.dev/runtime/pkg/idgen"
 	"miren.dev/runtime/pkg/rpc"
 	"miren.dev/runtime/pkg/saga"
 	"miren.dev/runtime/pkg/testserver"
@@ -32,7 +33,7 @@ type integrationEnv struct {
 	storage  *saga.MemoryStorage
 }
 
-func TestSharedPostgreSQL_Integration(t *testing.T) {
+func TestPostgreSQL_Integration(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
 	}
@@ -217,5 +218,102 @@ func TestSharedPostgreSQL_Integration(t *testing.T) {
 		}
 		assert.Contains(t, secondEnvMap, "DATABASE_URL")
 		assert.Equal(t, "second_app", secondEnvMap["PGDATABASE"], "second app should have its own database")
+	})
+
+	// Provisions a dedicated server and rotates its single role live, proving the
+	// rotation at the wire: the new password authenticates, the old one is
+	// rejected, the entity records the new secret, and the pool is never
+	// relaunched. Runs as a subtest so it shares this coordinator rather than
+	// binding a second one on the same fixed port.
+	t.Run("RotateDedicatedCredential", func(t *testing.T) {
+		provider := postgresql.NewProvider(fw)
+
+		provResult, err := provider.Provision(ctx, addon.App{Name: "dedrot-app"}, addon.Variant{Name: "small"})
+		require.NoError(t, err)
+		require.NotNil(t, provResult)
+
+		provEnv := make(map[string]string)
+		for _, v := range provResult.EnvVars {
+			provEnv[v.Key] = v.Value
+		}
+		oldPassword := provEnv["PGPASSWORD"]
+		host := provEnv["PGHOST"]
+		require.NotEmpty(t, oldPassword)
+		require.NotEmpty(t, host)
+
+		// Build the association the way production does: create it, then patch the
+		// provider's data attrs on. Reading it back gives the raw entity the
+		// rotator decodes (server ref + the newly-stored username/database).
+		assocID, err := ec.Create(ctx, idgen.GenNS("addon-assoc"), &addon_v1alpha.AddonAssociation{
+			Variant: "small",
+			Status:  "active",
+		})
+		require.NoError(t, err)
+		require.NoError(t, ec.Patch(ctx, assocID, 0, provResult.Attrs...))
+
+		resp, err := eac.Get(ctx, assocID.String())
+		require.NoError(t, err)
+		rawAssoc := resp.Entity().Entity()
+
+		var data addon_v1alpha.PostgresqlDedicatedData
+		data.Decode(rawAssoc)
+		require.NotEmpty(t, data.PostgresServer, "server ref should be stored on the association")
+		require.NotEmpty(t, data.Username, "username should be stored on the association")
+		require.NotEmpty(t, data.DatabaseName, "database name should be stored on the association")
+
+		var serverBefore addon_v1alpha.PostgresServer
+		require.NoError(t, ec.GetById(ctx, data.PostgresServer, &serverBefore))
+		require.Equal(t, oldPassword, serverBefore.SuperuserPassword)
+		poolBefore := serverBefore.SandboxPool
+
+		// The freshly-provisioned server should accept the provisioned credential.
+		oldConnStr := fmt.Sprintf("postgres://%s:%s@%s:5432/%s?sslmode=disable",
+			data.Username, oldPassword, host, data.DatabaseName)
+		require.Eventually(t, func() bool {
+			conn, err := pgx.Connect(ctx, oldConnStr)
+			if err != nil {
+				t.Logf("waiting for dedicated postgres connectivity: %v", err)
+				return false
+			}
+			conn.Close(ctx)
+			return true
+		}, 60*time.Second, 2*time.Second, "dedicated PostgreSQL should become connectable")
+
+		const newSecret = "rotated-dedicated-secret"
+		rotResult, err := provider.RotateCredential(ctx,
+			addon.AddonAssociation{ID: assocID, Variant: "small", Entity: rawAssoc},
+			"user", newSecret)
+		require.NoError(t, err)
+		require.NotNil(t, rotResult)
+
+		rotEnv := make(map[string]string)
+		for _, v := range rotResult.EnvVars {
+			rotEnv[v.Key] = v.Value
+		}
+		assert.Equal(t, newSecret, rotEnv["PGPASSWORD"], "result should carry the new password")
+		assert.Contains(t, rotEnv["DATABASE_URL"], newSecret, "connection URL should embed the new password")
+
+		// The server entity records the new password, and the pool is untouched (a
+		// live ALTER, not a relaunch).
+		var serverAfter addon_v1alpha.PostgresServer
+		require.NoError(t, ec.GetById(ctx, data.PostgresServer, &serverAfter))
+		assert.Equal(t, newSecret, serverAfter.SuperuserPassword, "entity should record the new password")
+		assert.Equal(t, poolBefore, serverAfter.SandboxPool, "dedicated rotation must not relaunch the pool")
+
+		// Wire-level proof: the new password authenticates.
+		newConnStr := fmt.Sprintf("postgres://%s:%s@%s:5432/%s?sslmode=disable",
+			data.Username, newSecret, host, data.DatabaseName)
+		conn, err := pgx.Connect(ctx, newConnStr)
+		require.NoError(t, err, "new password should authenticate")
+		var one int
+		require.NoError(t, conn.QueryRow(ctx, "SELECT 1").Scan(&one))
+		assert.Equal(t, 1, one)
+		conn.Close(ctx)
+
+		// And the old password is rejected.
+		if rejected, err := pgx.Connect(ctx, oldConnStr); err == nil {
+			rejected.Close(ctx)
+			t.Error("old password should be rejected after rotation")
+		}
 	})
 }

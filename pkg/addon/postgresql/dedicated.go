@@ -274,7 +274,7 @@ type DecodeDedicatedAttrsIn struct {
 }
 
 type DecodeDedicatedAttrsOut struct {
-	DedicatedServerID entity.Id
+	DedicatedServerID entity.Id `saga:"dedicatedserverid"`
 }
 
 func DecodeDedicatedAttrs(ctx context.Context, in DecodeDedicatedAttrsIn) (DecodeDedicatedAttrsOut, error) {
