@@ -233,7 +233,9 @@ func BuildDedicatedResult(ctx context.Context, in BuildDedicatedResultIn) (Build
 	envVars := buildEnvVars(in.ServiceHost, mysqlPort, in.Username, in.Password, in.DatabaseName)
 
 	dedicatedData := &addon_v1alpha.MysqlDedicatedData{
-		MysqlServer: in.ServerID,
+		MysqlServer:  in.ServerID,
+		DatabaseName: in.DatabaseName,
+		Username:     in.Username,
 	}
 
 	rc.Result = &addon.ProvisionResult{

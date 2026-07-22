@@ -29,6 +29,7 @@ const (
 
 type CreateSharedServerEntityIn struct {
 	RootPassword  string
+	DiskName      string
 	VariantConfig map[string]string
 }
 
@@ -46,6 +47,7 @@ func CreateSharedServerEntity(ctx context.Context, in CreateSharedServerEntityIn
 		Status:           "provisioning",
 		AssociationCount: 0,
 		RootPassword:     in.RootPassword,
+		DiskName:         in.DiskName,
 	}
 
 	serverID, err := fw.EC.Create(ctx, sharedServerName, server)
@@ -63,6 +65,7 @@ func UndoCreateSharedServerEntity(ctx context.Context, in CreateSharedServerEnti
 
 type CreateSharedPoolIn struct {
 	RootPassword  string
+	DiskName      string
 	VariantConfig map[string]string
 }
 
@@ -70,9 +73,35 @@ type CreateSharedPoolOut struct {
 	PoolID entity.Id
 }
 
+// sharedDiskNameForPassword derives the legacy disk name from the root password.
+// New servers no longer use this: they store an explicit disk_name generated
+// independently of the password (see newSharedDiskName). It survives only to
+// reproduce, and back-fill, the name of servers provisioned before disk_name was
+// tracked. Deriving the disk identity from the password is what made the root
+// password effectively immutable, since rotating it moved the disk out from
+// under the existing data.
 func sharedDiskNameForPassword(password string) string {
 	h := sha256.Sum256([]byte(password))
 	return sharedDiskName + "-" + hex.EncodeToString(h[:4])
+}
+
+// newSharedDiskName generates a fresh, unique disk name for a new shared-server
+// generation. Uniqueness now comes from a random nonce rather than the root
+// password, leaving the password free to rotate without moving the disk
+// identity.
+func newSharedDiskName() string {
+	h := sha256.Sum256([]byte(idgen.Gen("mydisk")))
+	return sharedDiskName + "-" + hex.EncodeToString(h[:4])
+}
+
+// resolveSharedDiskName returns the server's stored disk name, falling back to
+// the legacy password-derived name for servers provisioned before disk_name was
+// tracked.
+func resolveSharedDiskName(server *addon_v1alpha.MysqlServer) string {
+	if server.DiskName != "" {
+		return server.DiskName
+	}
+	return sharedDiskNameForPassword(server.RootPassword)
 }
 
 func CreateSharedPool(ctx context.Context, in CreateSharedPoolIn) (CreateSharedPoolOut, error) {
@@ -90,7 +119,7 @@ func CreateSharedPool(ctx context.Context, in CreateSharedPoolIn) (CreateSharedP
 		"MYSQL_ROOT_PASSWORD=" + in.RootPassword,
 	}
 
-	diskName := sharedDiskNameForPassword(in.RootPassword)
+	diskName := in.DiskName
 
 	image := in.VariantConfig[addon.ConfigImage]
 	if image == "" {
@@ -141,6 +170,7 @@ type ActivateSharedServerIn struct {
 	PoolID       entity.Id
 	ServiceID    entity.Id
 	RootPassword string
+	DiskName     string
 	ServiceHost  string
 }
 
@@ -157,6 +187,7 @@ func ActivateSharedServer(ctx context.Context, in ActivateSharedServerIn) (Activ
 		Status:           "active",
 		AssociationCount: 0,
 		RootPassword:     in.RootPassword,
+		DiskName:         in.DiskName,
 		SandboxPool:      in.PoolID,
 		Service:          in.ServiceID,
 	}
@@ -215,8 +246,8 @@ func cleanupStaleSharedServer(fw *addon.ProviderFramework, ctx context.Context, 
 			return fmt.Errorf("deleting stale shared pool: %w", err)
 		}
 	}
-	if server.RootPassword != "" {
-		diskName := sharedDiskNameForPassword(server.RootPassword)
+	if server.DiskName != "" || server.RootPassword != "" {
+		diskName := resolveSharedDiskName(server)
 		if err := fw.DeleteDiskByName(ctx, diskName); err != nil {
 			return fmt.Errorf("deleting stale shared data disk: %w", err)
 		}
@@ -232,6 +263,22 @@ func FindOrCreateSharedServer(ctx context.Context, in FindOrCreateSharedServerIn
 	if err == nil {
 		switch server.Status {
 		case "active":
+			// Back-fill disk_name for servers provisioned before it was tracked,
+			// recording the current (password-derived) name so the disk identity
+			// stops depending on the root password. This must land before any
+			// password rotation, or the rotation would move the disk.
+			if server.DiskName == "" {
+				legacy := sharedDiskNameForPassword(server.RootPassword)
+				if err := fw.EC.Patch(ctx, server.ID, 0,
+					entity.String(addon_v1alpha.MysqlServerDiskNameId, legacy),
+				); err != nil {
+					fw.Log.Warn("backfilling shared server disk_name failed",
+						"server", server.ID, "error", err)
+				} else {
+					server.DiskName = legacy
+				}
+			}
+
 			serviceHost, err := fw.GetServiceAddress(ctx, server.Service)
 			if err != nil {
 				if !errors.Is(err, cond.ErrNotFound{}) {
@@ -275,9 +322,11 @@ func FindOrCreateSharedServer(ctx context.Context, in FindOrCreateSharedServerIn
 	}
 
 	rootPassword := idgen.Gen("rt")
+	diskName := newSharedDiskName()
 
 	result, err := saga.RunNested(ctx, "ensure-shared-mysql-server",
 		saga.WithNestedInput("rootpassword", rootPassword),
+		saga.WithNestedInput("diskname", diskName),
 		saga.WithNestedInput("variantconfig", in.VariantConfig),
 	)
 	if err != nil {
@@ -500,6 +549,7 @@ type LookupSharedServerIn struct {
 
 type LookupSharedServerOut struct {
 	SharedRootPassword string
+	SharedDiskName     string
 	SharedServiceRef   entity.Id
 	SharedPoolRef      entity.Id
 	SharedAssocCount   int64
@@ -521,6 +571,7 @@ func LookupSharedServer(ctx context.Context, in LookupSharedServerIn) (LookupSha
 
 	return LookupSharedServerOut{
 		SharedRootPassword: server.RootPassword,
+		SharedDiskName:     resolveSharedDiskName(&server),
 		SharedServiceRef:   server.Service,
 		SharedPoolRef:      server.SandboxPool,
 		SharedAssocCount:   server.AssociationCount,
@@ -619,11 +670,11 @@ func UndoDropSharedUser(ctx context.Context, in DropSharedUserIn, out DropShared
 }
 
 type CleanupSharedServerIn struct {
-	SharedServerRef    entity.Id
-	SharedServiceRef   entity.Id
-	SharedPoolRef      entity.Id
-	SharedRootPassword string
-	RemainingCount     int64
+	SharedServerRef  entity.Id
+	SharedServiceRef entity.Id
+	SharedPoolRef    entity.Id
+	SharedDiskName   string
+	RemainingCount   int64
 }
 
 type CleanupSharedServerOut struct {
@@ -649,10 +700,9 @@ func CleanupSharedServer(ctx context.Context, in CleanupSharedServerIn) (Cleanup
 		}
 	}
 
-	if in.SharedRootPassword != "" {
-		diskName := sharedDiskNameForPassword(in.SharedRootPassword)
-		if err := fw.DeleteDiskByName(ctx, diskName); err != nil {
-			return CleanupSharedServerOut{}, fmt.Errorf("deleting shared data disk %s: %w", diskName, err)
+	if in.SharedDiskName != "" {
+		if err := fw.DeleteDiskByName(ctx, in.SharedDiskName); err != nil {
+			return CleanupSharedServerOut{}, fmt.Errorf("deleting shared data disk %s: %w", in.SharedDiskName, err)
 		}
 	}
 
