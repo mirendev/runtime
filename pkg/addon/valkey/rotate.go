@@ -2,11 +2,15 @@ package valkey
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
 	"fmt"
 
 	"miren.dev/runtime/api/addon/addon_v1alpha"
 	"miren.dev/runtime/api/compute/compute_v1alpha"
 	"miren.dev/runtime/pkg/addon"
+	"miren.dev/runtime/pkg/cond"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/saga"
 )
@@ -183,18 +187,96 @@ func rebuildPoolSpec(pool *compute_v1alpha.SandboxPool, command string) addon.Cr
 	return spec
 }
 
-func SwapValkeyPool(ctx context.Context, in SwapValkeyPoolIn) (SwapValkeyPoolOut, error) {
-	fw := saga.Get[*addon.ProviderFramework](ctx)
+// rotationPoolName derives the new pool's name deterministically from the server
+// and the pool being replaced. Because it is stable across retries, a re-run of
+// the swap rediscovers the pool a prior (possibly crashed) attempt created
+// instead of leaking it and standing up a duplicate. It is intentionally keyed
+// on non-secret ids, not the new password: the password lives in the pool's
+// launch command, and a rotation toward a different secret is told apart by
+// comparing that command when deciding whether to adopt.
+func rotationPoolName(serverID, oldPoolID entity.Id) string {
+	sum := sha256.Sum256([]byte(string(serverID) + "\x00" + string(oldPoolID)))
+	return "valkey-rot-" + hex.EncodeToString(sum[:8])
+}
 
+// poolLaunchCommand returns a pool's container launch command, or "" if it has
+// no container.
+func poolLaunchCommand(pool *compute_v1alpha.SandboxPool) string {
+	if len(pool.SandboxSpec.Container) == 0 {
+		return ""
+	}
+	return pool.SandboxSpec.Container[0].Command
+}
+
+// createRotationPool stands up the new pool at the deterministic id, cloning the
+// old pool's spec but launching with the rotated password's command. The create
+// and the preceding lookup are not atomic, so a concurrent attempt could win the
+// create; because the id is deterministic per (server, old pool) and a rotation
+// reruns with the same secret, the winner targets the same command, so a
+// conflict is treated as a successful adoption (verified defensively).
+func createRotationPool(ctx context.Context, fw *addon.ProviderFramework, oldPool *compute_v1alpha.SandboxPool, poolID entity.Id, name, command string) error {
+	spec := rebuildPoolSpec(oldPool, command)
+	spec.Name = name
+	switch _, err := fw.CreateSandboxPool(ctx, spec); {
+	case err == nil:
+		return nil
+	case errors.Is(err, cond.ErrConflict{}):
+		var raced compute_v1alpha.SandboxPool
+		if gerr := fw.EC.GetById(ctx, poolID, &raced); gerr != nil {
+			return fmt.Errorf("re-reading rotation pool after create conflict: %w", gerr)
+		}
+		if poolLaunchCommand(&raced) != command {
+			return fmt.Errorf("rotation pool %s already exists with a different launch command", poolID)
+		}
+		fw.Log.Info("adopting concurrently-created valkey pool", "pool", poolID)
+		return nil
+	default:
+		return fmt.Errorf("creating new valkey pool: %w", err)
+	}
+}
+
+func SwapValkeyPool(ctx context.Context, in SwapValkeyPoolIn) (SwapValkeyPoolOut, error) {
+	return swapValkeyPool(ctx, saga.Get[*addon.ProviderFramework](ctx), in)
+}
+
+// swapValkeyPool holds the swap logic with the framework passed explicitly, so it
+// can be driven directly in tests without a full saga executor.
+func swapValkeyPool(ctx context.Context, fw *addon.ProviderFramework, in SwapValkeyPoolIn) (SwapValkeyPoolOut, error) {
 	var oldPool compute_v1alpha.SandboxPool
 	if err := fw.EC.GetById(ctx, in.RotateOldPoolID, &oldPool); err != nil {
 		return SwapValkeyPoolOut{}, fmt.Errorf("reading old valkey pool: %w", err)
 	}
 
-	spec := rebuildPoolSpec(&oldPool, valkeyCommand(in.RotateNewPassword))
-	newPoolID, err := fw.CreateSandboxPool(ctx, spec)
-	if err != nil {
-		return SwapValkeyPoolOut{}, fmt.Errorf("creating new valkey pool: %w", err)
+	// The new pool has a deterministic id, so a swap that reruns (e.g. a crash
+	// landed between the create and the repoint) can rediscover it instead of
+	// leaking it and creating a duplicate.
+	poolName := rotationPoolName(in.RotateServerID, in.RotateOldPoolID)
+	newPoolID := entity.Id("pool/" + poolName)
+	target := valkeyCommand(in.RotateNewPassword)
+
+	var existing compute_v1alpha.SandboxPool
+	switch err := fw.EC.GetById(ctx, newPoolID, &existing); {
+	case err == nil && poolLaunchCommand(&existing) == target:
+		// A prior attempt for this same rotation already stood the pool up; adopt
+		// it rather than leaking it and creating a duplicate.
+		fw.Log.Info("adopting new valkey pool from a prior rotation attempt", "pool", newPoolID)
+	case err == nil:
+		// A pool sits at this slot but launches with a different password: an
+		// orphan from an earlier rotation that crashed and was abandoned. Tear it
+		// down and rebuild the slot for the current secret.
+		fw.Log.Info("replacing stale valkey rotation pool", "pool", newPoolID)
+		if derr := fw.DeleteSandboxPool(ctx, newPoolID); derr != nil {
+			return SwapValkeyPoolOut{}, fmt.Errorf("removing stale rotation pool: %w", derr)
+		}
+		if err := createRotationPool(ctx, fw, &oldPool, newPoolID, poolName, target); err != nil {
+			return SwapValkeyPoolOut{}, err
+		}
+	case errors.Is(err, cond.ErrNotFound{}):
+		if err := createRotationPool(ctx, fw, &oldPool, newPoolID, poolName, target); err != nil {
+			return SwapValkeyPoolOut{}, err
+		}
+	default:
+		return SwapValkeyPoolOut{}, fmt.Errorf("checking for existing rotation pool: %w", err)
 	}
 
 	// Point the server at the new pool. Consumers reach valkey through the
