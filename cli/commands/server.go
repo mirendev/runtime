@@ -364,6 +364,17 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 		if labs.DistributedRunners() {
 			ctx.Log.Info("setting up etcd mTLS for distributed runners")
 
+			// SetupEtcdTLS reads the CA from disk and requires it to already
+			// exist. On a fresh install the coordinator's own create-if-missing
+			// LoadCA doesn't run until much later (Coordinator.Start), so ensure
+			// the CA is materialized here first. Otherwise the first boot fails
+			// "CA certificate not found" and crash-loops until an out-of-band
+			// auth generate creates it.
+			if _, err := coordinate.EnsureCA(ctx.Log, cfg.Server.GetDataPath()); err != nil {
+				ctx.Log.Error("failed to ensure CA for etcd TLS", "error", err)
+				return err
+			}
+
 			var err error
 			etcdTLSSetup, err = coordinate.SetupEtcdTLS(ctx.Log, cfg.Server.GetDataPath(), cfg.TLS.AdditionalNames, ipSet.RawIPs())
 			if err != nil {
