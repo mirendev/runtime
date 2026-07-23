@@ -43,6 +43,13 @@ type DeleteResult struct {
 // write. On exhaustion the caller gets an error rather than looping forever.
 const envMutateMaxAttempts = 100
 
+// testHookAfterResolve, when non-nil, runs inside the SetEnvVars/DeleteEnvVars
+// retry loop after the base version is resolved (so the app revision is already
+// captured) but before the version is minted and the CAS runs. Tests use it to
+// deterministically inject a competing active-version swing and exercise the
+// retry-and-recover path. Always nil in production.
+var testHookAfterResolve func()
+
 // SetEnvVars resolves the config from baseVersion (or current active if nil),
 // merges env vars (with service scope), creates a new ConfigVersion + AppVersion,
 // and activates it. Returns the newly created AppVersion and its version string.
@@ -74,6 +81,10 @@ func SetEnvVars(ctx context.Context, ec *entityserver.Client, appName string,
 
 		if err := mergeIntoSpec(spec, vars, service); err != nil {
 			return nil, err
+		}
+
+		if testHookAfterResolve != nil {
+			testHookAfterResolve()
 		}
 
 		result, err := createNewVersion(ctx, ec, appName, appVer, spec, appRec, appRev)
@@ -405,14 +416,14 @@ func createNewVersion(ctx context.Context, ec *entityserver.Client, appName stri
 	); err != nil {
 		if errors.Is(err, cond.ErrConflict{}) {
 			// This attempt lost the race, so the version pair we just minted was
-			// never activated. Best-effort delete it (AppVersion first, so it
-			// never dangles past its ConfigVersion) rather than leaving one pair
-			// per retry for the version GC to reap later.
+			// never activated. Best-effort delete it, AppVersion first: only drop
+			// the ConfigVersion once its AppVersion is gone, so a failed delete
+			// leaves a coherent pair for the version GC to reap rather than an
+			// AppVersion dangling at a missing ConfigVersion.
 			if delErr := ec.Delete(ctx, avid); delErr != nil {
 				slog.Warn("failed to delete superseded app version after conflict",
 					"app", appRec.ID, "version", avid, "error", delErr)
-			}
-			if delErr := ec.Delete(ctx, cvid); delErr != nil {
+			} else if delErr := ec.Delete(ctx, cvid); delErr != nil {
 				slog.Warn("failed to delete superseded config version after conflict",
 					"app", appRec.ID, "config_version", cvid, "error", delErr)
 			}

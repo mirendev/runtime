@@ -3,10 +3,7 @@ package app
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log/slog"
-	"strconv"
-	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -15,6 +12,7 @@ import (
 	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/api/entityserver"
 	"miren.dev/runtime/pkg/cond"
+	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/testutils"
 )
 
@@ -103,40 +101,50 @@ func TestSetEnvVarsComposesSequentially(t *testing.T) {
 	require.Equal(t, "b", vars["BAR"])
 }
 
-// TestSetEnvVarsConcurrentComposeAll drives the retry loop through real mid-flight
-// conflicts: several writers set distinct keys on the same app at once. With the
-// OCC retry each loser re-reads the winner's active version and composes onto it,
-// so every key must survive. Without the CAS+retry (the old unconditional Put),
-// concurrent writers each start from the base version and the last write wins,
-// dropping the rest.
-func TestSetEnvVarsConcurrentComposeAll(t *testing.T) {
+// TestSetEnvVarsRetriesAndRecoversOnConflict deterministically drives the retry
+// loop through a mid-flight conflict: a competing writer swings active_version
+// after our base version is resolved but before our CAS, via the test hook. The
+// first Patch must lose, the loop must re-resolve the winner's version and compose
+// onto it, and both vars must survive. Without the CAS+retry the competing swing
+// would be silently clobbered.
+func TestSetEnvVarsRetriesAndRecoversOnConflict(t *testing.T) {
 	ctx, ec := newEnvTestClient(t)
 	createEnvTestApp(t, ctx, ec, "myapp", []core_v1alpha.Variable{{Key: "BASE", Value: "1", Source: "config"}})
 
-	const n = 8
-	var wg sync.WaitGroup
-	errs := make([]error, n)
-	for i := 0; i < n; i++ {
-		wg.Add(1)
-		go func(i int) {
-			defer wg.Done()
-			_, errs[i] = SetEnvVars(ctx, ec, "myapp", nil,
-				[]EnvVarInput{{Key: fmt.Sprintf("K%d", i), Value: strconv.Itoa(i)}}, "")
-		}(i)
+	testHookAfterResolve = func() {
+		// Fire exactly once: clear the hook first so the competing write below
+		// doesn't re-enter it, and so our own retry doesn't re-trigger it.
+		testHookAfterResolve = nil
+		// Competing writer wins the active-version swing while we are mid-flight,
+		// bumping the app revision under us so our Patch conflicts.
+		_, err := SetEnvVars(ctx, ec, "myapp", nil, []EnvVarInput{{Key: "COMPETITOR", Value: "c"}}, "")
+		require.NoError(t, err)
 	}
-	wg.Wait()
+	t.Cleanup(func() { testHookAfterResolve = nil })
 
-	for i, err := range errs {
-		require.NoError(t, err, "concurrent SetEnvVars %d failed", i)
-	}
+	_, err := SetEnvVars(ctx, ec, "myapp", nil, []EnvVarInput{{Key: "MINE", Value: "m"}}, "")
+	require.NoError(t, err)
 
 	vars := activeEnvVars(t, ctx, ec, "myapp")
 	require.Equal(t, "1", vars["BASE"], "base config var must survive")
-	for i := 0; i < n; i++ {
-		key := fmt.Sprintf("K%d", i)
-		require.Equal(t, strconv.Itoa(i), vars[key],
-			"concurrent writer %d's var must be present (would be clobbered without OCC retry)", i)
+	require.Equal(t, "c", vars["COMPETITOR"], "competing writer's var must survive the retry")
+	require.Equal(t, "m", vars["MINE"], "our var must be present after the retry")
+
+	// The version pair minted on the losing first attempt must have been cleaned
+	// up, not left to accumulate: base + competitor + final = 3 AppVersions.
+	require.Equal(t, 3, countAppVersions(t, ctx, ec), "the superseded version from the lost CAS race must be cleaned up")
+}
+
+// countAppVersions returns the number of AppVersion entities in the store.
+func countAppVersions(t *testing.T, ctx context.Context, ec *entityserver.Client) int {
+	t.Helper()
+	res, err := ec.List(ctx, entity.Ref(entity.EntityKind, core_v1alpha.KindAppVersion))
+	require.NoError(t, err)
+	n := 0
+	for res.Next() {
+		n++
 	}
+	return n
 }
 
 // TestDeleteEnvVarsComposesSequentially confirms the DeleteEnvVars retry-loop
