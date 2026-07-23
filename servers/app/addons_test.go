@@ -46,6 +46,15 @@ func setupAddonsTest(t *testing.T) (context.Context, *app_v1alpha.AddonsClient, 
 
 	ec := entityserver.NewClient(slog.Default(), inmem.EAC)
 
+	return ctx, newAddonsClient(t, ctx, ec), ec
+}
+
+// newAddonsClient wires an AddonsServer (with a single registered mock provider)
+// over the given entity client. Shared by the mock-backed unit tests and the
+// etcd-backed concurrency test so both exercise the same handler.
+func newAddonsClient(t *testing.T, ctx context.Context, ec *entityserver.Client) *app_v1alpha.AddonsClient {
+	t.Helper()
+
 	registry := addon.NewRegistry()
 	registry.Register("miren-postgresql", &mockProvider{}, addon.AddonDefinition{
 		Name:           "miren-postgresql",
@@ -62,11 +71,9 @@ func setupAddonsTest(t *testing.T) (context.Context, *app_v1alpha.AddonsClient, 
 
 	server := NewAddonsServer(slog.Default(), ec, registry, nil)
 
-	client := &app_v1alpha.AddonsClient{
+	return &app_v1alpha.AddonsClient{
 		Client: rpc.LocalClient(app_v1alpha.AdaptAddons(server)),
 	}
-
-	return ctx, client, ec
 }
 
 func TestAddonsCreateInstance(t *testing.T) {
@@ -184,4 +191,136 @@ func TestAddonsDeleteInstanceNotFound(t *testing.T) {
 	_, err = client.DeleteInstance(ctx, "myapp", "miren-postgresql")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "not attached")
+}
+
+// createActiveAddon attaches an addon and promotes the association to "active"
+// so RotateCredential will admit it. The provisioning controller that would
+// normally flip the status isn't running in these unit tests.
+func createActiveAddon(t *testing.T, ctx context.Context, client *app_v1alpha.AddonsClient, ec *entityserver.Client, appName string) entity.Id {
+	t.Helper()
+
+	res, err := client.CreateInstance(ctx, "test", "miren-postgresql", "small", appName, "")
+	require.NoError(t, err)
+
+	assocID := entity.Id(res.Id())
+	require.NoError(t, ec.Patch(ctx, assocID, 0,
+		entity.String(addon_v1alpha.AddonAssociationStatusId, "active")))
+	return assocID
+}
+
+// countRotationRequests returns how many rotation_request entities exist for the
+// association — the singleton gate should keep this at exactly one.
+func countRotationRequests(t *testing.T, ctx context.Context, ec *entityserver.Client, assocID entity.Id) int {
+	t.Helper()
+
+	reqs, err := ec.List(ctx, entity.Ref(addon_v1alpha.RotationRequestAssociationId, assocID))
+	require.NoError(t, err)
+
+	count := 0
+	for reqs.Next() {
+		count++
+	}
+	return count
+}
+
+func TestRotateCredentialAdmitsFirstRotation(t *testing.T) {
+	ctx, client, ec := setupAddonsTest(t)
+
+	_, err := ec.Create(ctx, "myapp", &core_v1alpha.App{})
+	require.NoError(t, err)
+	assocID := createActiveAddon(t, ctx, client, ec, "myapp")
+
+	res, err := client.RotateCredential(ctx, "myapp", "miren-postgresql", "app")
+	require.NoError(t, err)
+	require.NotEmpty(t, res.Id())
+
+	var req addon_v1alpha.RotationRequest
+	require.NoError(t, ec.GetById(ctx, entity.Id(res.Id()), &req))
+	assert.Equal(t, "pending", req.Status)
+	assert.Equal(t, "app", req.Credential)
+	assert.Equal(t, assocID, req.Association)
+	assert.Equal(t, 1, countRotationRequests(t, ctx, ec, assocID))
+}
+
+func TestRotateCredentialRejectsWhileInFlight(t *testing.T) {
+	ctx, client, ec := setupAddonsTest(t)
+
+	_, err := ec.Create(ctx, "myapp", &core_v1alpha.App{})
+	require.NoError(t, err)
+	assocID := createActiveAddon(t, ctx, client, ec, "myapp")
+
+	res, err := client.RotateCredential(ctx, "myapp", "miren-postgresql", "app")
+	require.NoError(t, err)
+	reqID := entity.Id(res.Id())
+
+	// A "pending" request already holds the association's slot.
+	_, err = client.RotateCredential(ctx, "myapp", "miren-postgresql", "app")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "already in progress")
+
+	// The controller moves it to "rotating" mid-flight; still no new admission.
+	require.NoError(t, ec.Patch(ctx, reqID, 0,
+		entity.String(addon_v1alpha.RotationRequestStatusId, "rotating")))
+	_, err = client.RotateCredential(ctx, "myapp", "miren-postgresql", "app")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "already in progress")
+
+	assert.Equal(t, 1, countRotationRequests(t, ctx, ec, assocID))
+}
+
+func TestRotateCredentialReclaimsAfterDone(t *testing.T) {
+	ctx, client, ec := setupAddonsTest(t)
+
+	_, err := ec.Create(ctx, "myapp", &core_v1alpha.App{})
+	require.NoError(t, err)
+	assocID := createActiveAddon(t, ctx, client, ec, "myapp")
+
+	res1, err := client.RotateCredential(ctx, "myapp", "miren-postgresql", "app")
+	require.NoError(t, err)
+	reqID := entity.Id(res1.Id())
+
+	// Simulate the controller finishing, leaving a stale secret behind to prove
+	// reclaim clears it.
+	require.NoError(t, ec.Patch(ctx, reqID, 0,
+		entity.String(addon_v1alpha.RotationRequestStatusId, "done"),
+		entity.String(addon_v1alpha.RotationRequestNewSecretId, "leftover")))
+
+	res2, err := client.RotateCredential(ctx, "myapp", "miren-postgresql", "root")
+	require.NoError(t, err)
+	// Singleton per association: the terminal request is reclaimed in place.
+	assert.Equal(t, reqID, entity.Id(res2.Id()))
+
+	var req addon_v1alpha.RotationRequest
+	require.NoError(t, ec.GetById(ctx, reqID, &req))
+	assert.Equal(t, "pending", req.Status)
+	assert.Equal(t, "root", req.Credential)
+	assert.Empty(t, req.NewSecret)
+	assert.Equal(t, 1, countRotationRequests(t, ctx, ec, assocID))
+}
+
+func TestRotateCredentialReclaimsAfterError(t *testing.T) {
+	ctx, client, ec := setupAddonsTest(t)
+
+	_, err := ec.Create(ctx, "myapp", &core_v1alpha.App{})
+	require.NoError(t, err)
+	assocID := createActiveAddon(t, ctx, client, ec, "myapp")
+
+	res1, err := client.RotateCredential(ctx, "myapp", "miren-postgresql", "app")
+	require.NoError(t, err)
+	reqID := entity.Id(res1.Id())
+
+	// A prior rotation failed terminally with a recorded message.
+	require.NoError(t, ec.Patch(ctx, reqID, 0,
+		entity.String(addon_v1alpha.RotationRequestStatusId, "error"),
+		entity.String(addon_v1alpha.RotationRequestErrorMessageId, "boom")))
+
+	res2, err := client.RotateCredential(ctx, "myapp", "miren-postgresql", "app")
+	require.NoError(t, err)
+	assert.Equal(t, reqID, entity.Id(res2.Id()))
+
+	var req addon_v1alpha.RotationRequest
+	require.NoError(t, ec.GetById(ctx, reqID, &req))
+	assert.Equal(t, "pending", req.Status)
+	assert.Empty(t, req.ErrorMessage)
+	assert.Equal(t, 1, countRotationRequests(t, ctx, ec, assocID))
 }

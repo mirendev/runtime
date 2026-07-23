@@ -253,11 +253,9 @@ RUN echo "test" > /custom/workdir/test.txt
 	dfs, err := fsutil.NewFS(testDir)
 	require.NoError(t, err)
 
-	// Create Buildkit instance with registry override for config fetching
 	bk := &Buildkit{
-		Client:              bkc,
-		Log:                 slog.Default(),
-		RegistryURLOverride: registry.host, // Use localhost:port for fetching config
+		Client: bkc,
+		Log:    slog.Default(),
 	}
 
 	// Build the image
@@ -301,9 +299,8 @@ WORKDIR /
 	require.NoError(t, err)
 
 	bk := &Buildkit{
-		Client:              bkc,
-		Log:                 slog.Default(),
-		RegistryURLOverride: registry.host,
+		Client: bkc,
+		Log:    slog.Default(),
 	}
 
 	bs := BuildStack{
@@ -344,9 +341,8 @@ RUN echo "no workdir"
 	require.NoError(t, err)
 
 	bk := &Buildkit{
-		Client:              bkc,
-		Log:                 slog.Default(),
-		RegistryURLOverride: registry.host,
+		Client: bkc,
+		Log:    slog.Default(),
 	}
 
 	bs := BuildStack{
@@ -392,9 +388,8 @@ CMD ["server.js"]
 	require.NoError(t, err)
 
 	bk := &Buildkit{
-		Client:              bkc,
-		Log:                 slog.Default(),
-		RegistryURLOverride: registry.host,
+		Client: bkc,
+		Log:    slog.Default(),
 	}
 
 	bs := BuildStack{
@@ -408,10 +403,12 @@ CMD ["server.js"]
 	res, err := bk.BuildImage(ctx, dfs, bs, "test-app", imageURL)
 	require.NoError(t, err)
 
-	// Verify entrypoint and cmd were extracted
-	assert.Equal(t, "node", res.Entrypoint, "Entrypoint should match ENTRYPOINT in Dockerfile")
-	assert.Equal(t, "server.js", res.Command, "Command should match CMD in Dockerfile")
+	// The image's ENTRYPOINT/CMD are intentionally not flattened into
+	// BuildResult; they run in exec form at launch via oci.WithImageConfig
+	// (MIR-1444). BuildImage only extracts WorkingDir here.
 	assert.Equal(t, "/app", res.WorkingDir, "WorkingDir should match WORKDIR in Dockerfile")
+	assert.Equal(t, "", res.Entrypoint, "Entrypoint runs in exec form at launch, not surfaced in BuildResult")
+	assert.Equal(t, "", res.Command, "Command runs in exec form at launch, not surfaced in BuildResult")
 }
 
 func TestBuildImageCmdOnly(t *testing.T) {
@@ -438,9 +435,8 @@ CMD ["npm", "start"]
 	require.NoError(t, err)
 
 	bk := &Buildkit{
-		Client:              bkc,
-		Log:                 slog.Default(),
-		RegistryURLOverride: registry.host,
+		Client: bkc,
+		Log:    slog.Default(),
 	}
 
 	bs := BuildStack{
@@ -454,8 +450,9 @@ CMD ["npm", "start"]
 	res, err := bk.BuildImage(ctx, dfs, bs, "test-app", imageURL)
 	require.NoError(t, err)
 
-	// Verify cmd was extracted (entrypoint should be empty for alpine)
-	assert.Equal(t, "npm start", res.Command, "Command should match CMD in Dockerfile")
+	// CMD runs in exec form at launch (MIR-1444), so BuildImage does not
+	// surface it as a flattened command string in BuildResult.
+	assert.Equal(t, "", res.Command, "Command runs in exec form at launch, not surfaced in BuildResult")
 	assert.Equal(t, "", res.Entrypoint, "Entrypoint should be empty when not set")
 }
 
@@ -483,9 +480,8 @@ WORKDIR /var/www/html/app/current
 	require.NoError(t, err)
 
 	bk := &Buildkit{
-		Client:              bkc,
-		Log:                 slog.Default(),
-		RegistryURLOverride: registry.host,
+		Client: bkc,
+		Log:    slog.Default(),
 	}
 
 	bs := BuildStack{

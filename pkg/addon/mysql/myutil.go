@@ -55,6 +55,44 @@ func connectAsRoot(ctx context.Context, host string, password string) (*sql.DB, 
 	return connectMysql(ctx, host, mysqlPort, defaultMysqlUser, password, defaultMysqlDB)
 }
 
+// connectAsRootTrying connects as root, trying each candidate password until one
+// authenticates. During a root rotation the credential used to connect is the
+// very thing being changed, so a retry after a crash may find the engine on
+// either the old or the new password; supplying both lets the rotation converge
+// regardless of where the previous attempt stopped.
+func connectAsRootTrying(ctx context.Context, host string, passwords ...string) (*sql.DB, error) {
+	var lastErr error
+	tried := false
+	for _, pw := range passwords {
+		if pw == "" {
+			continue
+		}
+		tried = true
+		db, err := connectAsRoot(ctx, host, pw)
+		if err == nil {
+			return db, nil
+		}
+		lastErr = err
+	}
+	if !tried {
+		return nil, fmt.Errorf("no root password candidates to try")
+	}
+	return nil, lastErr
+}
+
+// alterMysqlUserPassword changes a user's password. Works for both a per-app
+// user and root (all accounts here are addressed at the '%' host). Existing
+// connections stay authenticated; only new connections need the new password.
+func alterMysqlUserPassword(ctx context.Context, db *sql.DB, username, password string) error {
+	_, err := db.ExecContext(ctx,
+		fmt.Sprintf("ALTER USER %s@'%%' IDENTIFIED BY '%s'",
+			quoteIdentifier(username), escapeMysqlString(password)))
+	if err != nil {
+		return fmt.Errorf("altering password for user %s: %w", username, err)
+	}
+	return nil
+}
+
 // escapeMysqlString escapes a value for use in a MySQL single-quoted string
 // literal. Backslashes must be doubled first (MySQL treats \ as an escape
 // character by default), then single quotes are doubled.

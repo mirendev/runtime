@@ -3,17 +3,15 @@ package build
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"io"
 	"log/slog"
-	"net/http"
 	"os"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/moby/buildkit/client"
 	"github.com/moby/buildkit/client/llb"
+	exptypes "github.com/moby/buildkit/exporter/containerimage/exptypes"
 	"github.com/moby/buildkit/frontend"
 	gateway "github.com/moby/buildkit/frontend/gateway/client"
 	"miren.dev/runtime/pkg/idgen"
@@ -26,11 +24,6 @@ type Buildkit struct {
 	Client *client.Client
 
 	Log *slog.Logger
-
-	// RegistryURLOverride is used for fetching image configs when the push URL
-	// is not accessible from the current host (e.g., in tests where push goes to
-	// a docker network address but fetch needs localhost:port)
-	RegistryURLOverride string
 }
 
 type tarOutput struct {
@@ -294,68 +287,6 @@ type BuildResult struct {
 	DetectionEvents []stackbuild.DetectionEvent
 }
 
-// fetchImageConfigFromRegistry fetches the image config JSON from a registry using the config digest.
-// imageURL is like "registry:5000/repo:tag" and configDigest is like "sha256:abc123..."
-// If insecure is true, falls back to HTTP if HTTPS fails (for local/test registries).
-func fetchImageConfigFromRegistry(ctx context.Context, imageURL, configDigest string, insecure bool) ([]byte, error) {
-	// Parse the image URL to extract registry and repository
-	// Format: [registry/]repository[:tag]
-	parts := strings.SplitN(imageURL, "/", 2)
-	if len(parts) < 2 {
-		return nil, fmt.Errorf("invalid image URL format: %s", imageURL)
-	}
-
-	registry := parts[0]
-	repoWithTag := parts[1]
-
-	// Remove tag from repository
-	repo := strings.Split(repoWithTag, ":")[0]
-
-	httpClient := &http.Client{
-		Timeout: 10 * time.Second,
-	}
-
-	// Try HTTPS first
-	url := fmt.Sprintf("https://%s/v2/%s/blobs/%s", registry, repo, configDigest)
-	body, err := doRegistryFetch(ctx, httpClient, url)
-	if err == nil {
-		return body, nil
-	}
-
-	// Fall back to HTTP only if insecure flag is explicitly set
-	if insecure {
-		url = fmt.Sprintf("http://%s/v2/%s/blobs/%s", registry, repo, configDigest)
-		body, err = doRegistryFetch(ctx, httpClient, url)
-		if err == nil {
-			return body, nil
-		}
-	}
-
-	return nil, fmt.Errorf("failed to fetch config from registry: %w", err)
-}
-
-// doRegistryFetch performs an HTTP GET request with the given context and client.
-func doRegistryFetch(ctx context.Context, client *http.Client, url string) ([]byte, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
-	}
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	if resp.Body != nil {
-		defer resp.Body.Close()
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("registry returned status %d", resp.StatusCode)
-	}
-
-	return io.ReadAll(resp.Body)
-}
-
 func (b *Buildkit) BuildImage(
 	ctx context.Context,
 	dfs fsutil.FS,
@@ -538,6 +469,13 @@ func (b *Buildkit) BuildImage(
 		return &res, err
 	}
 
+	// inlineImageConfig captures the built image's config JSON straight from the
+	// gateway result metadata, where the frontend deposits it under
+	// exptypes.ExporterImageConfigKey. Reading it here keeps config extraction in
+	// the coordinator's own context, so we never round-trip to the registry by its
+	// in-cluster name (cluster.local), which the coordinator can't resolve.
+	var inlineImageConfig []byte
+
 	buildResp, err := b.Client.Build(ctx, solveOpt, "runtime", func(ctx context.Context, c gateway.Client) (*gateway.Result, error) {
 		if opts.phaseUpdates != nil {
 			opts.phaseUpdates("solving")
@@ -556,6 +494,10 @@ func (b *Buildkit) BuildImage(
 
 		b.Log.Info("solved", "ref", ref)
 
+		// Single-platform builds emit the config under the plain key; ParseKey
+		// with a nil platform reads exactly that.
+		inlineImageConfig = exptypes.ParseKey(res.Metadata, exptypes.ExporterImageConfigKey, nil)
+
 		return res, nil
 	}, ssProgress)
 
@@ -564,40 +506,16 @@ func (b *Buildkit) BuildImage(
 			res.ManifestDigest = digest
 		}
 
-		// Extract working directory from image config for Dockerfile builds
-		var configJSON string
-		if cfg, ok := buildResp.ExporterResponse["containerimage.config"]; ok {
-			// Config is directly available in response
-			configJSON = cfg
-		} else if configDigest, ok := buildResp.ExporterResponse["containerimage.config.digest"]; ok {
-			// Config needs to be fetched from registry
-			fetchURL := imageURL
-			if b.RegistryURLOverride != "" {
-				// Use override URL for fetching (e.g., localhost:port in tests)
-				// Extract the repository path from imageURL and combine with override registry
-				parts := strings.SplitN(imageURL, "/", 2)
-				if len(parts) == 2 {
-					fetchURL = b.RegistryURLOverride + "/" + parts[1]
-				}
-			}
-			b.Log.Debug("fetching config from registry", "digest", configDigest, "fetchURL", fetchURL)
-			// Use insecure (HTTP fallback) when RegistryURLOverride is set (test/local registries)
-			insecure := b.RegistryURLOverride != ""
-			configBytes, fetchErr := fetchImageConfigFromRegistry(ctx, fetchURL, configDigest, insecure)
-			if fetchErr != nil {
-				b.Log.Warn("failed to fetch config from registry", "error", fetchErr)
-			} else {
-				configJSON = string(configBytes)
-			}
-		}
-
-		if configJSON != "" {
+		// Extract working directory, entrypoint, and command from the image config
+		// for Dockerfile builds. The config comes from the gateway result metadata
+		// captured during the solve above.
+		if len(inlineImageConfig) > 0 {
 			var imgConfig struct {
 				Config struct {
 					WorkingDir string `json:"WorkingDir"`
 				} `json:"config"`
 			}
-			if err := json.Unmarshal([]byte(configJSON), &imgConfig); err == nil {
+			if err := json.Unmarshal(inlineImageConfig, &imgConfig); err == nil {
 				res.WorkingDir = imgConfig.Config.WorkingDir
 			} else {
 				b.Log.Warn("failed to parse image config", "error", err)

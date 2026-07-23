@@ -1142,6 +1142,29 @@ func (c *Coordinator) Start(ctx context.Context) error {
 	)
 	c.cm.AddController(rotationReconciler)
 
+	eps := execproxy.NewServer(c.Log, eac, rs)
+	server.ExposeValue("dev.miren.runtime/exec", exec_v1alpha.AdaptSandboxExec(eps))
+
+	// Give the addon framework an exec client so providers whose credential lives
+	// inside the container (RabbitMQ) can rotate it via rabbitmqctl. This must be
+	// wired before the controller manager starts, since the rotation controller
+	// can reconcile a pending request (and call fw.Exec) the moment it's running.
+	//
+	// Assumption worth pinning: this loopback binds fw.Exec to whatever THIS
+	// process exposes as the exec service. On the coordinator that's the
+	// node-routing exec proxy (the eps ExposeValue just above), so ExecInPool
+	// reaches an addon sandbox on whatever node holds it. That only holds while
+	// addon reconciliation runs on the coordinator. A runner exposes the
+	// containerd-local exec server under the same name, which sees only its own
+	// node's sandboxes, so if the addon controllers are ever distributed onto
+	// runners this must become a real RPC to a node-router rather than a loopback.
+	execLoopback, err := rs.Connect(rs.LoopbackAddr(), "dev.miren.runtime/exec")
+	if err != nil {
+		c.Log.Error("failed to connect to exec RPC service", "error", err)
+		return err
+	}
+	addonFw.Exec = exec_v1alpha.NewSandboxExecClient(execLoopback)
+
 	// Start the controller manager
 	if err := c.cm.Start(ctx); err != nil {
 		c.Log.Error("failed to start controller manager", "error", err)
@@ -1189,9 +1212,6 @@ func (c *Coordinator) Start(ctx context.Context) error {
 		Config: indexgcctrl.DefaultGCConfig(),
 	}
 	c.indexGC.Start(ctx)
-
-	eps := execproxy.NewServer(c.Log, eac, rs)
-	server.ExposeValue("dev.miren.runtime/exec", exec_v1alpha.AdaptSandboxExec(eps))
 
 	ai := app.NewAppInfo(c.Log, ec, c.Cpu, c.Mem, c.HTTP)
 	server.ExposeValue("dev.miren.runtime/app", app_v1alpha.AdaptCrud(ai))

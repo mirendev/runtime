@@ -77,6 +77,18 @@ func (c *Client) GetByIdWithEntity(ctx context.Context, id entity.Id, sc SchemaE
 	return ret.Entity(), nil
 }
 
+// GetWithEntity is like Get but also returns the raw entity so callers can read
+// its revision for a revision-guarded (optimistic-concurrency) Patch.
+func (c *Client) GetWithEntity(ctx context.Context, name string, sc SchemaEncoder) (*entityserver_v1alpha.Entity, error) {
+	ret, err := c.eac.Get(ctx, sc.ShortKind()+"/"+name)
+	if err != nil {
+		return nil, err
+	}
+
+	sc.Decode(ret.Entity().Entity())
+	return ret.Entity(), nil
+}
+
 type ListResults struct {
 	values []*entity.Entity
 	cur    *entity.Entity
