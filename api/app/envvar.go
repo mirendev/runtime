@@ -34,9 +34,21 @@ type DeleteResult struct {
 	DeletedSources []string
 }
 
+// envMutateMaxAttempts is a live-lock backstop for the optimistic-concurrency
+// retry loop shared by SetEnvVars and DeleteEnvVars — it is not an expected
+// limit. Each conflict just means another writer swung the app's active version
+// first; there are only ever a handful of concurrent env/config writers per app,
+// so it is set high enough that genuine contention never spuriously fails a
+// write. On exhaustion the caller gets an error rather than looping forever.
+const envMutateMaxAttempts = 100
+
 // SetEnvVars resolves the config from baseVersion (or current active if nil),
 // merges env vars (with service scope), creates a new ConfigVersion + AppVersion,
 // and activates it. Returns the newly created AppVersion and its version string.
+//
+// The read-merge-write is retried under optimistic concurrency control so two
+// parallel env writes (or the addon controller injecting addon vars) cannot
+// silently clobber each other's active-version swing — see createNewVersion.
 func SetEnvVars(ctx context.Context, ec *entityserver.Client, appName string,
 	baseVersion *core_v1alpha.AppVersion, vars []EnvVarInput, service string) (*MutateResult, error) {
 
@@ -46,100 +58,126 @@ func SetEnvVars(ctx context.Context, ec *entityserver.Client, appName string,
 		}
 	}
 
-	appVer, spec, appRec, err := resolveBaseVersion(ctx, ec, appName, baseVersion)
-	if err != nil {
-		return nil, err
+	for attempt := 0; attempt < envMutateMaxAttempts; attempt++ {
+		appVer, spec, appRec, appRev, err := resolveBaseVersion(ctx, ec, appName, baseVersion)
+		if err != nil {
+			return nil, err
+		}
+
+		if err := mergeIntoSpec(spec, vars, service); err != nil {
+			return nil, err
+		}
+
+		result, err := createNewVersion(ctx, ec, appName, appVer, spec, appRec, appRev)
+		if err == nil {
+			return result, nil
+		}
+		if !errors.Is(err, cond.ErrConflict{}) {
+			return nil, err
+		}
+		// Lost the CAS race with a concurrent active-version swing; re-resolve
+		// against the winner's version and retry so neither change is dropped.
 	}
 
-	if err := mergeIntoSpec(spec, vars, service); err != nil {
-		return nil, err
-	}
-
-	return createNewVersion(ctx, ec, appName, appVer, spec, appRec)
+	return nil, fmt.Errorf("failed to set env vars on app %q after %d attempts due to concurrent writes", appName, envMutateMaxAttempts)
 }
 
 // DeleteEnvVars resolves the config from baseVersion (or current active if nil),
 // removes the specified keys, creates a new ConfigVersion + AppVersion, and
 // activates it. Returns the new version plus the source of each deleted var.
+//
+// Like SetEnvVars, the read-merge-write is retried under optimistic concurrency
+// control so a concurrent active-version swing cannot silently clobber the delete.
 func DeleteEnvVars(ctx context.Context, ec *entityserver.Client, appName string,
 	baseVersion *core_v1alpha.AppVersion, keys []string, service string) (*DeleteResult, error) {
 
-	appVer, spec, appRec, err := resolveBaseVersion(ctx, ec, appName, baseVersion)
-	if err != nil {
-		return nil, err
-	}
+	for attempt := 0; attempt < envMutateMaxAttempts; attempt++ {
+		appVer, spec, appRec, appRev, err := resolveBaseVersion(ctx, ec, appName, baseVersion)
+		if err != nil {
+			return nil, err
+		}
 
-	if appRec.ActiveVersion == "" {
-		return nil, fmt.Errorf("app has no active version")
-	}
+		if appRec.ActiveVersion == "" {
+			return nil, fmt.Errorf("app has no active version")
+		}
 
-	var deletedSources []string
+		var deletedSources []string
 
-	for _, key := range keys {
-		if service == "" {
-			found := false
-			newVars := make([]core_v1alpha.ConfigSpecVariables, 0, len(spec.Variables))
-			for _, v := range spec.Variables {
-				if v.Key == key {
-					found = true
-					deletedSources = append(deletedSources, v.Source)
-					continue
+		for _, key := range keys {
+			if service == "" {
+				found := false
+				newVars := make([]core_v1alpha.ConfigSpecVariables, 0, len(spec.Variables))
+				for _, v := range spec.Variables {
+					if v.Key == key {
+						found = true
+						deletedSources = append(deletedSources, v.Source)
+						continue
+					}
+					newVars = append(newVars, v)
 				}
-				newVars = append(newVars, v)
-			}
-			if !found {
-				return nil, fmt.Errorf("environment variable %q not found", key)
-			}
-			spec.Variables = newVars
-		} else {
-			svcFound := false
-			for i := range spec.Services {
-				if spec.Services[i].Name == service {
-					svcFound = true
-					envFound := false
-					newEnvs := make([]core_v1alpha.ConfigSpecServicesEnv, 0, len(spec.Services[i].Env))
-					for _, e := range spec.Services[i].Env {
-						if e.Key == key {
-							envFound = true
-							deletedSources = append(deletedSources, e.Source)
-							continue
+				if !found {
+					return nil, fmt.Errorf("environment variable %q not found", key)
+				}
+				spec.Variables = newVars
+			} else {
+				svcFound := false
+				for i := range spec.Services {
+					if spec.Services[i].Name == service {
+						svcFound = true
+						envFound := false
+						newEnvs := make([]core_v1alpha.ConfigSpecServicesEnv, 0, len(spec.Services[i].Env))
+						for _, e := range spec.Services[i].Env {
+							if e.Key == key {
+								envFound = true
+								deletedSources = append(deletedSources, e.Source)
+								continue
+							}
+							newEnvs = append(newEnvs, e)
 						}
-						newEnvs = append(newEnvs, e)
+						if !envFound {
+							return nil, fmt.Errorf("environment variable %q not found in service %q", key, service)
+						}
+						spec.Services[i].Env = newEnvs
+						break
 					}
-					if !envFound {
-						return nil, fmt.Errorf("environment variable %q not found in service %q", key, service)
-					}
-					spec.Services[i].Env = newEnvs
-					break
 				}
-			}
-			if !svcFound {
-				return nil, fmt.Errorf("service %q not found", service)
+				if !svcFound {
+					return nil, fmt.Errorf("service %q not found", service)
+				}
 			}
 		}
+
+		result, err := createNewVersion(ctx, ec, appName, appVer, spec, appRec, appRev)
+		if err == nil {
+			return &DeleteResult{
+				MutateResult:   *result,
+				DeletedSources: deletedSources,
+			}, nil
+		}
+		if !errors.Is(err, cond.ErrConflict{}) {
+			return nil, err
+		}
+		// Lost the CAS race; re-resolve and retry.
 	}
 
-	result, err := createNewVersion(ctx, ec, appName, appVer, spec, appRec)
-	if err != nil {
-		return nil, err
-	}
-
-	return &DeleteResult{
-		MutateResult:   *result,
-		DeletedSources: deletedSources,
-	}, nil
+	return nil, fmt.Errorf("failed to delete env vars on app %q after %d attempts due to concurrent writes", appName, envMutateMaxAttempts)
 }
 
 // resolveBaseVersion loads the app, resolves the base version and config spec.
-// If baseVersion is nil, the current active version is used.
+// If baseVersion is nil, the current active version is used. It also returns the
+// app entity's revision at read time, so the caller can swing active_version
+// under optimistic concurrency control (see createNewVersion).
 func resolveBaseVersion(ctx context.Context, ec *entityserver.Client, appName string,
-	baseVersion *core_v1alpha.AppVersion) (*core_v1alpha.AppVersion, *core_v1alpha.ConfigSpec, *core_v1alpha.App, error) {
+	baseVersion *core_v1alpha.AppVersion) (*core_v1alpha.AppVersion, *core_v1alpha.ConfigSpec, *core_v1alpha.App, int64, error) {
+
+	appEnt, err := ec.EAC().Get(ctx, "app/"+appName)
+	if err != nil {
+		return nil, nil, nil, 0, err
+	}
 
 	var appRec core_v1alpha.App
-	err := ec.Get(ctx, appName, &appRec)
-	if err != nil {
-		return nil, nil, nil, err
-	}
+	appRec.Decode(appEnt.Entity().Entity())
+	appRev := appEnt.Entity().Revision()
 
 	var appVer core_v1alpha.AppVersion
 	var spec core_v1alpha.ConfigSpec
@@ -148,24 +186,24 @@ func resolveBaseVersion(ctx context.Context, ec *entityserver.Client, appName st
 		appVer = *baseVersion
 		resolvedCfg, err := coreutil.ResolveConfig(ctx, ec.EAC(), &appVer)
 		if err != nil {
-			return nil, nil, nil, fmt.Errorf("failed to resolve config: %w", err)
+			return nil, nil, nil, 0, fmt.Errorf("failed to resolve config: %w", err)
 		}
 		spec = *resolvedCfg
 	} else if appRec.ActiveVersion != "" {
 		err = ec.GetById(ctx, appRec.ActiveVersion, &appVer)
 		if err != nil {
-			return nil, nil, nil, err
+			return nil, nil, nil, 0, err
 		}
 		resolvedCfg, err := coreutil.ResolveConfig(ctx, ec.EAC(), &appVer)
 		if err != nil {
-			return nil, nil, nil, fmt.Errorf("failed to resolve config: %w", err)
+			return nil, nil, nil, 0, fmt.Errorf("failed to resolve config: %w", err)
 		}
 		spec = *resolvedCfg
 	} else {
 		appVer.App = appRec.ID
 	}
 
-	return &appVer, &spec, &appRec, nil
+	return &appVer, &spec, &appRec, appRev, nil
 }
 
 // SetInitialEnvVars stages env vars on an app's initial ConfigVersion,
@@ -323,9 +361,15 @@ func mergeIntoSpec(spec *core_v1alpha.ConfigSpec, vars []EnvVarInput, service st
 	return nil
 }
 
-// createNewVersion creates a ConfigVersion + AppVersion from the mutated spec and activates it.
+// createNewVersion creates a ConfigVersion + AppVersion from the mutated spec and
+// activates it. The active_version pointer is swung with a CAS on appRev (the app
+// revision captured when the base config was resolved), so a concurrent writer
+// that swings active_version first — another env mutation, or the addon
+// controller injecting addon vars — is detected and the caller retries against
+// the winner's version instead of silently clobbering it. Returns cond.ErrConflict
+// on a lost race.
 func createNewVersion(ctx context.Context, ec *entityserver.Client, appName string,
-	appVer *core_v1alpha.AppVersion, spec *core_v1alpha.ConfigSpec, appRec *core_v1alpha.App) (*MutateResult, error) {
+	appVer *core_v1alpha.AppVersion, spec *core_v1alpha.ConfigSpec, appRec *core_v1alpha.App, appRev int64) (*MutateResult, error) {
 
 	appVer.Version = appName + "-" + idgen.Gen("v")
 
@@ -347,9 +391,10 @@ func createNewVersion(ctx context.Context, ec *entityserver.Client, appName stri
 	}
 
 	appRec.ActiveVersion = avid
-	err = ec.Update(ctx, appRec)
-	if err != nil {
-		return nil, fmt.Errorf("error updating app entity: %w", err)
+	if err := ec.Patch(ctx, appRec.ID, appRev,
+		entity.Ref(core_v1alpha.AppActiveVersionId, avid),
+	); err != nil {
+		return nil, err
 	}
 
 	return &MutateResult{
