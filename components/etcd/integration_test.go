@@ -5,17 +5,21 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	containerd "github.com/containerd/containerd/v2/client"
+	"github.com/containerd/containerd/v2/pkg/cio"
 	"github.com/containerd/containerd/v2/pkg/namespaces"
+	"github.com/containerd/containerd/v2/pkg/oci"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	clientv3 "go.etcd.io/etcd/client/v3"
 	"golang.org/x/sys/unix"
 	"miren.dev/runtime/components/etcd"
+	"miren.dev/runtime/pkg/imagerefs"
 	"miren.dev/runtime/pkg/testutils"
 )
 
@@ -371,6 +375,157 @@ func TestEtcdComponentAutoRestart(t *testing.T) {
 	assert.Equal(t, "post-restart-value", string(resp.Kvs[0].Value), "value should match")
 
 	t.Log("Auto-restart test completed successfully!")
+}
+
+// TestEtcdRecreateAfterUncleanShutdown is the regression test for MIR-1463.
+//
+// Enabling distributed runners flips embedded etcd from plaintext to TLS, which makes
+// the component recreate its container on the next boot. If the *previous* server died
+// uncleanly, the etcd containerd task is left registered but its init process is gone.
+// The old cleanup path sent SIGTERM, got "not found", and bailed without deleting the
+// task — so the container couldn't be deleted, its snapshot leaked, and creating the new
+// container failed with "snapshot already exists", wedging the node.
+//
+// We reproduce the wedge condition directly: a leftover "miren-etcd" container that owns
+// the "miren-etcd-snapshot" snapshot, with a registered-but-dead task, plus a state file
+// from the prior boot. We force the recreate with an old config_version rather than a real
+// TLS flip — it's the same CleanupExistingContainer path (the actual site of the bug) and
+// keeps the test hermetic (no CA seeding or mTLS client needed). The assertion is that the
+// recreate succeeds and etcd comes back up serving reads and writes.
+func TestEtcdRecreateAfterUncleanShutdown(t *testing.T) {
+	testDeps, cleanup := testutils.NewTestDeps()
+	defer cleanup()
+
+	cc := testDeps.CC
+
+	tmpDir, err := os.MkdirTemp("", "etcd-recreate-test")
+	require.NoError(t, err, "failed to create temp dir")
+	defer os.RemoveAll(tmpDir)
+
+	log := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
+		Level: slog.LevelDebug,
+	}))
+
+	testNamespace := fmt.Sprintf("miren-etcd-recreate-test-%d", time.Now().UnixNano())
+	ctx := namespaces.WithNamespace(context.Background(), testNamespace)
+
+	// Backstop cleanup for both the seeded and recreated containers.
+	defer cleanupContainer(t, cc, testNamespace)
+
+	// Seed the leftover container + snapshot exactly as a real plaintext boot would.
+	t.Log("Seeding leftover etcd container from a prior boot...")
+	image, err := cc.Pull(ctx, imagerefs.Etcd, containerd.WithPullUnpack)
+	if err != nil {
+		if strings.Contains(err.Error(), "permission denied") {
+			t.Skip("permission denied error, skipping test")
+		}
+		require.NoError(t, err, "failed to pull etcd image")
+	}
+
+	container, err := cc.NewContainer(ctx, "miren-etcd",
+		containerd.WithImage(image),
+		containerd.WithNewSnapshot("miren-etcd-snapshot", image),
+		containerd.WithNewSpec(
+			oci.WithImageConfig(image),
+			oci.WithProcessArgs("/usr/local/bin/etcd", "--version"),
+		),
+	)
+	require.NoError(t, err, "failed to seed leftover etcd container")
+
+	// Start a task and let it exit on its own, but deliberately never delete it. This
+	// mimics an unclean shutdown: the containerd task record survives while its init
+	// process is gone, so a later SIGTERM comes back "not found".
+	task, err := container.NewTask(ctx, cio.NullIO)
+	require.NoError(t, err, "failed to create seed task")
+	exitCh, err := task.Wait(ctx)
+	require.NoError(t, err, "failed to wait on seed task")
+	require.NoError(t, task.Start(ctx), "failed to start seed task")
+	select {
+	case <-exitCh:
+	case <-time.After(30 * time.Second):
+		t.Fatal("seed task did not exit in time")
+	}
+
+	// Confirm we actually reproduced the wedge precondition: the task is still
+	// registered, but its process is gone so it can't be signalled.
+	leftover, err := container.Task(ctx, nil)
+	require.NoError(t, err, "leftover task should still be registered after an unclean shutdown")
+	require.Error(t, leftover.Kill(ctx, unix.SIGTERM), "leftover task process should already be gone")
+
+	// Write the state file from the prior boot so Start takes the recreate path.
+	etcdDir := filepath.Join(tmpDir, "etcd")
+	require.NoError(t, os.MkdirAll(etcdDir, 0700), "failed to create etcd data dir")
+	require.NoError(t, os.WriteFile(
+		filepath.Join(etcdDir, "etcd-state.json"),
+		[]byte(`{"tls_enabled":false,"config_version":1}`),
+		0600,
+	), "failed to write seed state file")
+
+	// Now perform the recreate that used to wedge on the leaked snapshot.
+	t.Log("Starting etcd component (should recreate cleanly, not wedge)...")
+	component := etcd.NewEtcdComponent(log, cc, testNamespace, tmpDir)
+
+	clientPort := testutils.GetFreePort(t)
+	peerPort := testutils.GetFreePort(t)
+	httpClientPort := testutils.GetFreePort(t)
+
+	config := etcd.EtcdConfig{
+		Name:           "test-etcd-recreate",
+		ClientPort:     clientPort,
+		HTTPClientPort: httpClientPort,
+		PeerPort:       peerPort,
+		InitialToken:   "recreate-test-cluster",
+		ClusterState:   "new",
+	}
+
+	defer func() {
+		if component.IsRunning() {
+			if err := component.Stop(context.Background()); err != nil {
+				t.Logf("failed to stop component: %v", err)
+			}
+		}
+	}()
+
+	err = component.Start(context.Background(), config)
+	if err != nil && strings.Contains(err.Error(), "permission denied") {
+		t.Skip("permission denied error, skipping test")
+	}
+	require.NoError(t, err, "recreate after an unclean shutdown must not wedge on a leaked snapshot")
+	require.True(t, component.IsRunning(), "component should be running after a clean recreate")
+
+	// Verify etcd actually serves after the recreate.
+	endpoint := component.ClientEndpoint()
+	var etcdClient *clientv3.Client
+	require.Eventually(t, func() bool {
+		etcdClient, err = clientv3.New(clientv3.Config{
+			Endpoints:   []string{endpoint},
+			DialTimeout: 1 * time.Second,
+		})
+		if err != nil {
+			return false
+		}
+		checkCtx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+		defer cancel()
+		_, err = etcdClient.Get(checkCtx, "health-check")
+		if err != nil {
+			etcdClient.Close()
+			etcdClient = nil
+			return false
+		}
+		return true
+	}, 30*time.Second, 500*time.Millisecond, "recreated etcd failed to become ready")
+	defer etcdClient.Close()
+
+	opCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, err = etcdClient.Put(opCtx, "recreate-key", "recreate-value")
+	require.NoError(t, err, "should be able to write after recreate")
+	resp, err := etcdClient.Get(opCtx, "recreate-key")
+	require.NoError(t, err, "should be able to read after recreate")
+	require.Len(t, resp.Kvs, 1, "expected one key after recreate")
+	assert.Equal(t, "recreate-value", string(resp.Kvs[0].Value), "value should round-trip after recreate")
+
+	t.Log("Recreate after unclean shutdown succeeded!")
 }
 
 func cleanupContainer(t *testing.T, cc *containerd.Client, namespace string) {
