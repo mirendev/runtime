@@ -27,36 +27,36 @@ agent works from. See [Agent Skills](/agent-skills) for setup.
 | [Go](/guides/go) | Yes | `go.mod` |
 | [Ruby](/guides/ruby) | Yes | `Gemfile` |
 | [Rust](/guides/rust) | Yes | `Cargo.toml` |
-| [Elixir](/guides/elixir) | No | `Dockerfile.miren` |
-| [Gleam](/guides/gleam) | No | `Dockerfile.miren` |
-| [Crystal](/guides/crystal) | No | `Dockerfile.miren` |
-| [Zig](/guides/zig) | No | `Dockerfile.miren` |
-| [Deno](/guides/deno) | No | `Dockerfile.miren` |
-| [Nim](/guides/nim) | No | `Dockerfile.miren` |
-| [C](/guides/c) | No | `Dockerfile.miren` |
-| [C++](/guides/cpp) | No | `Dockerfile.miren` |
-| [Objective-C](/guides/objc) | No | `Dockerfile.miren` |
-| [.NET / C#](/guides/dotnet) | No | `Dockerfile.miren` |
-| [F#](/guides/fsharp) | No | `Dockerfile.miren` |
 | [Java / JVM](/guides/java) | No | `Dockerfile.miren` |
+| [PHP](/guides/php) | No | `Dockerfile.miren` |
+| [.NET / C#](/guides/dotnet) | No | `Dockerfile.miren` |
+| [C++](/guides/cpp) | No | `Dockerfile.miren` |
+| [C](/guides/c) | No | `Dockerfile.miren` |
+| [Deno](/guides/deno) | No | `Dockerfile.miren` |
+| [Elixir](/guides/elixir) | No | `Dockerfile.miren` |
 | [Kotlin](/guides/kotlin) | No | `Dockerfile.miren` |
+| [Swift](/guides/swift) | No | `Dockerfile.miren` |
+| [Dart](/guides/dart) | No | `Dockerfile.miren` |
 | [Scala](/guides/scala) | No | `Dockerfile.miren` |
 | [Clojure](/guides/clojure) | No | `Dockerfile.miren` |
 | [Erlang](/guides/erlang) | No | `Dockerfile.miren` |
-| [PHP](/guides/php) | No | `Dockerfile.miren` |
-| [Perl](/guides/perl) | No | `Dockerfile.miren` |
-| [Raku](/guides/raku) | No | `Dockerfile.miren` |
-| [OCaml](/guides/ocaml) | No | `Dockerfile.miren` |
 | [Haskell](/guides/haskell) | No | `Dockerfile.miren` |
-| [Swift](/guides/swift) | No | `Dockerfile.miren` |
-| [Dart](/guides/dart) | No | `Dockerfile.miren` |
-| [JRuby](/guides/jruby) | No | `Dockerfile.miren` |
-| [TruffleRuby](/guides/truffleruby) | No | `Dockerfile.miren` |
+| [F#](/guides/fsharp) | No | `Dockerfile.miren` |
 | [Julia](/guides/julia) | No | `Dockerfile.miren` |
 | [R](/guides/r) | No | `Dockerfile.miren` |
 | [Lua](/guides/lua) | No | `Dockerfile.miren` |
-| [Klong (K)](/guides/klong) | No | `Dockerfile.miren` |
+| [Perl](/guides/perl) | No | `Dockerfile.miren` |
+| [OCaml](/guides/ocaml) | No | `Dockerfile.miren` |
+| [Crystal](/guides/crystal) | No | `Dockerfile.miren` |
+| [Nim](/guides/nim) | No | `Dockerfile.miren` |
+| [Zig](/guides/zig) | No | `Dockerfile.miren` |
+| [Gleam](/guides/gleam) | No | `Dockerfile.miren` |
+| [Objective-C](/guides/objc) | No | `Dockerfile.miren` |
+| [Raku](/guides/raku) | No | `Dockerfile.miren` |
 | [Common Lisp](/guides/commonlisp) | No | `Dockerfile.miren` |
+| [JRuby](/guides/jruby) | No | `Dockerfile.miren` |
+| [TruffleRuby](/guides/truffleruby) | No | `Dockerfile.miren` |
+| [Klong (K)](/guides/klong) | No | `Dockerfile.miren` |
 | [COBOL](/guides/cobol) | No | `Dockerfile.miren` |
 | [Bash](/guides/bash) | No | `Dockerfile.miren` |
 | [Static sites & SPAs](/guides/static) | No | `Dockerfile.miren` |
