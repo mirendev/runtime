@@ -139,6 +139,8 @@ kinds:
       type: int
     root_password:
       type: string
+    disk_name:
+      type: string
 
   mysql_shared_data:
     mysql_server:
@@ -151,6 +153,10 @@ kinds:
   mysql_dedicated_data:
     mysql_server:
       type: ref
+    database_name:
+      type: string
+    username:
+      type: string
 
   valkey_server:
     addon_name:
