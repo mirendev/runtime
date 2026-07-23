@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"miren.dev/runtime/api/addon/addon_v1alpha"
+	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/api/entityserver"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/components/diskio"
@@ -303,6 +304,133 @@ func TestPostgreSQL_Integration(t *testing.T) {
 		// Wire-level proof: the new password authenticates.
 		newConnStr := fmt.Sprintf("postgres://%s:%s@%s:5432/%s?sslmode=disable",
 			data.Username, newSecret, host, data.DatabaseName)
+		conn, err := pgx.Connect(ctx, newConnStr)
+		require.NoError(t, err, "new password should authenticate")
+		var one int
+		require.NoError(t, conn.QueryRow(ctx, "SELECT 1").Scan(&one))
+		assert.Equal(t, 1, one)
+		conn.Close(ctx)
+
+		// And the old password is rejected.
+		if rejected, err := pgx.Connect(ctx, oldConnStr); err == nil {
+			rejected.Close(ctx)
+			t.Error("old password should be rejected after rotation")
+		}
+	})
+
+	// A dedicated association provisioned before the username/database attrs
+	// existed carries only the server ref plus an app ref. CaptureDedicatedConnInfo
+	// must fall back to the app's active ConfigVersion (PGUSER/PGDATABASE) to stay
+	// rotatable. The fast-path subtest above always populates the attrs, so this
+	// branch never runs there. Here we build the legacy shape — a real app whose
+	// active config carries the connection vars, and an association with the
+	// conn-info attrs stripped off — and prove the fallback resolves and the
+	// rotation still lands at the wire.
+	t.Run("RotateDedicatedCredential_LegacyFallback", func(t *testing.T) {
+		provider := postgresql.NewProvider(fw)
+
+		provResult, err := provider.Provision(ctx, addon.App{Name: "dedlegacy-app"}, addon.Variant{Name: "small"})
+		require.NoError(t, err)
+		require.NotNil(t, provResult)
+
+		provEnv := make(map[string]string)
+		for _, v := range provResult.EnvVars {
+			provEnv[v.Key] = v.Value
+		}
+		user := provEnv["PGUSER"]
+		database := provEnv["PGDATABASE"]
+		oldPassword := provEnv["PGPASSWORD"]
+		host := provEnv["PGHOST"]
+		require.NotEmpty(t, user)
+		require.NotEmpty(t, database)
+		require.NotEmpty(t, oldPassword)
+		require.NotEmpty(t, host)
+
+		// Keep only the server ref from the provisioned attrs, dropping the
+		// username/database attrs so the rotator is forced down the legacy path.
+		var serverAttrs []entity.Attr
+		for _, a := range provResult.Attrs {
+			if a.ID == addon_v1alpha.PostgresqlDedicatedDataPostgresServerId {
+				serverAttrs = append(serverAttrs, a)
+			}
+		}
+		require.Len(t, serverAttrs, 1, "provision should record the server ref attr")
+
+		// Stand up the app whose active config carries the connection vars. The
+		// fallback reads user/database from here; PGPASSWORD rides along as the
+		// value a per-app rollback would restore.
+		cvID, err := ec.Create(ctx, idgen.GenNS("config-version"), &core_v1alpha.ConfigVersion{
+			Spec: core_v1alpha.ConfigSpec{
+				Variables: []core_v1alpha.ConfigSpecVariables{
+					{Key: "PGUSER", Value: user},
+					{Key: "PGDATABASE", Value: database},
+					{Key: "PGPASSWORD", Value: oldPassword},
+				},
+			},
+		})
+		require.NoError(t, err)
+		avID, err := ec.Create(ctx, idgen.GenNS("app-version"), &core_v1alpha.AppVersion{
+			ConfigVersion: cvID,
+		})
+		require.NoError(t, err)
+		appID, err := ec.Create(ctx, idgen.GenNS("app"), &core_v1alpha.App{
+			ActiveVersion: avID,
+		})
+		require.NoError(t, err)
+
+		// Build the legacy-shaped association: app ref set, server ref patched on,
+		// username/database attrs absent.
+		assocID, err := ec.Create(ctx, idgen.GenNS("addon-assoc"), &addon_v1alpha.AddonAssociation{
+			Variant: "small",
+			Status:  "active",
+			App:     appID,
+		})
+		require.NoError(t, err)
+		require.NoError(t, ec.Patch(ctx, assocID, 0, serverAttrs...))
+
+		resp, err := eac.Get(ctx, assocID.String())
+		require.NoError(t, err)
+		rawAssoc := resp.Entity().Entity()
+
+		// Confirm the shape we intend to exercise: server ref present, conn info absent.
+		var data addon_v1alpha.PostgresqlDedicatedData
+		data.Decode(rawAssoc)
+		require.NotEmpty(t, data.PostgresServer, "server ref should be stored on the association")
+		require.Empty(t, data.Username, "username attr should be absent (legacy shape)")
+		require.Empty(t, data.DatabaseName, "database attr should be absent (legacy shape)")
+
+		oldConnStr := fmt.Sprintf("postgres://%s:%s@%s:5432/%s?sslmode=disable",
+			user, oldPassword, host, database)
+		require.Eventually(t, func() bool {
+			conn, err := pgx.Connect(ctx, oldConnStr)
+			if err != nil {
+				t.Logf("waiting for dedicated postgres connectivity: %v", err)
+				return false
+			}
+			conn.Close(ctx)
+			return true
+		}, 60*time.Second, 2*time.Second, "dedicated PostgreSQL should become connectable")
+
+		const newSecret = "rotated-legacy-secret"
+		rotResult, err := provider.RotateCredential(ctx,
+			addon.AddonAssociation{ID: assocID, Variant: "small", Entity: rawAssoc},
+			"user", newSecret)
+		require.NoError(t, err)
+		require.NotNil(t, rotResult)
+
+		rotEnv := make(map[string]string)
+		for _, v := range rotResult.EnvVars {
+			rotEnv[v.Key] = v.Value
+		}
+		// (a) The fallback resolved user/database from active config: with the attrs
+		// absent, a correct result env can only have come from the ConfigVersion.
+		assert.Equal(t, user, rotEnv["PGUSER"], "user should resolve from active config")
+		assert.Equal(t, database, rotEnv["PGDATABASE"], "database should resolve from active config")
+		assert.Equal(t, newSecret, rotEnv["PGPASSWORD"], "result should carry the new password")
+
+		// (b) Wire-level proof: the new password authenticates.
+		newConnStr := fmt.Sprintf("postgres://%s:%s@%s:5432/%s?sslmode=disable",
+			user, newSecret, host, database)
 		conn, err := pgx.Connect(ctx, newConnStr)
 		require.NoError(t, err, "new password should authenticate")
 		var one int
