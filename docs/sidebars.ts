@@ -119,6 +119,7 @@ const sidebars: SidebarsConfig = {
       collapsed: false,
       items: [
         'scaling',
+        'distributed-runners',
         'admin-interface',
         'observability',
         'logs',

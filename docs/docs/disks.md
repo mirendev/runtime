@@ -68,7 +68,7 @@ This is handy for sharing node-local state between an app's services, but if you
 - **Host-local**: Data is tied to the server. If you move your app to a different server, you'll need to migrate the data manually.
 - **No managed backups**: Back up your data by copying the host directory, or use your own backup tooling.
 - **Shared access**: All containers in your app can read/write simultaneously—your application needs to handle concurrent access (SQLite handles this well when configured with `PRAGMA journal_mode=WAL`).
-- **Node affinity**: Apps with any disk (local or miren) are pinned to the coordinator and won't be scheduled to distributed runners.
+- **Node affinity**: Apps with any disk (local or miren) are pinned to the coordinator and won't be scheduled to [distributed runners](/distributed-runners).
 
 ### Migrating from Automatic Local Storage
 

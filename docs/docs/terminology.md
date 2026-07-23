@@ -40,6 +40,10 @@ The additional latency on the first request to an app that has been [scaled to z
 
 The scaling configuration for a [service](#service). Miren supports two modes: **auto** (scales instances up and down based on traffic) and **fixed** (runs a constant number of instances). Auto mode is configured with `requests_per_instance` and `scale_down_delay`; fixed mode uses `num_instances`. See [Application Scaling](/scaling).
 
+## Coordinator
+
+The primary node in a distributed cluster — the machine running `miren server`. The coordinator holds the cluster's state (entity store and etcd), image registry, and workload-identity signing, and schedules sandboxes across the cluster. It also runs workloads itself. Every [distributed runner](#distributed-runner) depends on the coordinator being reachable. See [Distributed Runners](/distributed-runners).
+
 ## Default Route
 
 The [route](#route) automatically assigned to an app when it is first deployed. Points to the cluster's hostname (e.g., `myapp.cluster-abc123.miren.systems`), giving the app a URL without any DNS configuration.
@@ -51,6 +55,10 @@ A specific version of your app that has been built and deployed. Each deployment
 ## Disk
 
 Persistent storage attached to your application. Miren disks survive restarts and redeployments, making them suitable for databases and stateful workloads. See [Persistent Storage](/disks).
+
+## Distributed Runner
+
+An additional machine that joins a cluster to host [sandboxes](#sandbox), expanding capacity beyond the [coordinator](#coordinator). A runner joins with `miren runner join`, runs stateless workloads scheduled to it, and reports health back to the coordinator, but holds no cluster state of its own. See [Distributed Runners](/distributed-runners).
 
 ## Ephemeral Version
 

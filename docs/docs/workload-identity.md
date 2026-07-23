@@ -215,11 +215,7 @@ The token file is refreshed roughly every 45 minutes, in place. This interval is
 
 ### Distributed runners issue tokens via the coordinator
 
-:::warning[Labs feature]
-[Distributed runners](/labs) are still a Labs feature. The workload-identity behavior described in this section applies once they're enabled, but the feature itself is experimental and may change.
-:::
-
-Only the coordinator holds the signing key. On a distributed runner, token issuance is proxied back to the coordinator over RPC. Two consequences worth knowing:
+In a cluster with [distributed runners](/distributed-runners), only the coordinator holds the signing key. On a distributed runner, token issuance is proxied back to the coordinator over RPC. Two consequences worth knowing:
 
 - There's a small amount of extra latency, and issuance depends on the coordinator being reachable.
 - If the coordinator itself has no issuer configured, runners **silently disable** token issuance — sandboxes on those runners simply won't get the `MIREN_IDENTITY_*` variables.
