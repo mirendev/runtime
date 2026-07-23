@@ -418,14 +418,14 @@ func updateAppActiveVersion(
 
 		if errors.Is(err, cond.ErrConflict{}) {
 			// This attempt lost the race, so the version pair we just minted was
-			// never activated. Best-effort delete it (AppVersion first, so it
-			// never dangles past its ConfigVersion) rather than leaving one pair
-			// per retry for the version GC to reap later.
+			// never activated. Best-effort delete it, AppVersion first: only drop
+			// the ConfigVersion once its AppVersion is gone, so a failed delete
+			// leaves a coherent pair for the version GC to reap rather than an
+			// AppVersion dangling at a missing ConfigVersion.
 			if delErr := ec.Delete(ctx, newID); delErr != nil {
 				log.Warn("failed to delete superseded app version after conflict",
 					"app", appID, "version", newID, "error", delErr)
-			}
-			if delErr := ec.Delete(ctx, cvid); delErr != nil {
+			} else if delErr := ec.Delete(ctx, cvid); delErr != nil {
 				log.Warn("failed to delete superseded config version after conflict",
 					"app", appID, "config_version", cvid, "error", delErr)
 			}
