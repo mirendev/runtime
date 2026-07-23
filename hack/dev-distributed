@@ -29,6 +29,12 @@ bootstrap_peer() {
   echo "    Bootstrapping $peer..."
   # Run the common setup (cgroups, kernel mounts, dirs, host user, etc.)
   peer_exec "$peer" bash -c "source hack/common-setup.sh && setup_cgroups && setup_environment && setup_host_user && setup_kernel_mounts"
+  # The build runs as root in the peer, but /src is owned by the host user,
+  # so git's dubious-ownership check aborts `git status` (exit 128) and Go's
+  # build VCS stamping fails the build. Unlike the standalone dev flow
+  # (hack/dev.sh), which builds as the host user, this path builds as root, so
+  # mark /src safe. Mirrors hack/package-release.sh.
+  peer_exec "$peer" git config --global --add safe.directory /src
   # Build binary
   peer_exec "$peer" make bin/miren
   # Symlinks
