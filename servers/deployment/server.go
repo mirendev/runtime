@@ -70,8 +70,8 @@ func (d *DeploymentServer) CreateDeployment(ctx context.Context, req *deployment
 		return rpc.AppAccessError(ctx, appName)
 	}
 
-	// Check for existing in_progress deployments for this app+cluster
-	existingDeployments, err := d.listDeploymentsInternal(ctx, appName, clusterId, "in_progress", 1)
+	// Check for existing in_progress deployments for this app
+	existingDeployments, err := d.listDeploymentsInternal(ctx, appName, "in_progress", 1)
 	if err != nil {
 		d.Log.Error("Failed to check for existing deployments", "error", err)
 		return cond.Error("failed to check deployment lock")
@@ -482,15 +482,14 @@ func (d *DeploymentServer) ListDeployments(ctx context.Context, req *deployment_
 	args := req.Args()
 	results := req.Results()
 
-	// Extract filters
-	var appName, clusterId, status string
+	// Extract filters. cluster_id is accepted for wire compatibility but no
+	// longer used to filter: this cluster's store only holds its own
+	// deployments (see listDeploymentsInternal / MIR-1465).
+	var appName, status string
 	var limit int32 = 100 // default limit
 
 	if args.HasAppName() {
 		appName = args.AppName()
-	}
-	if args.HasClusterId() {
-		clusterId = args.ClusterId()
 	}
 	if args.HasStatus() {
 		status = args.Status()
@@ -503,7 +502,7 @@ func (d *DeploymentServer) ListDeployments(ctx context.Context, req *deployment_
 		return rpc.AppAccessError(ctx, appName)
 	}
 
-	deployments, err := d.listDeploymentsInternal(ctx, appName, clusterId, status, int(limit))
+	deployments, err := d.listDeploymentsInternal(ctx, appName, status, int(limit))
 	if err != nil {
 		return err
 	}
@@ -638,7 +637,7 @@ func (d *DeploymentServer) GetActiveDeployment(ctx context.Context, req *deploym
 	}
 
 	// Find active deployment
-	deployments, err := d.listDeploymentsInternal(ctx, appName, clusterId, "active", 1)
+	deployments, err := d.listDeploymentsInternal(ctx, appName, "active", 1)
 	if err != nil {
 		return err
 	}
@@ -859,7 +858,7 @@ func (d *DeploymentServer) DeployVersion(ctx context.Context, req *deployment_v1
 	// --- Normal (non-ephemeral) deploy path below ---
 
 	// Check for existing in_progress deployments (deployment lock)
-	existingDeployments, err := d.listDeploymentsInternal(ctx, appName, clusterId, "in_progress", 1)
+	existingDeployments, err := d.listDeploymentsInternal(ctx, appName, "in_progress", 1)
 	if err != nil {
 		d.Log.Error("Failed to check for existing deployments", "error", err)
 		results.SetError("failed to check deployment lock")
@@ -922,7 +921,7 @@ func (d *DeploymentServer) DeployVersion(ctx context.Context, req *deployment_v1
 	}
 
 	// Find the source deployment — the most recent deployment with this app_version_id
-	allDeployments, err := d.listDeploymentsInternal(ctx, appName, clusterId, "", 100)
+	allDeployments, err := d.listDeploymentsInternal(ctx, appName, "", 100)
 	if err != nil {
 		d.Log.Error("Failed to list deployments for source lookup", "error", err)
 		// Continue without source info
@@ -1141,7 +1140,7 @@ func (d *DeploymentServer) createEnvVarDeployment(ctx context.Context, appName, 
 	appVersionId := mutResult.VersionID
 
 	// Check for existing in_progress deployments (deployment lock)
-	existingDeployments, err := d.listDeploymentsInternal(ctx, appName, clusterId, "in_progress", 1)
+	existingDeployments, err := d.listDeploymentsInternal(ctx, appName, "in_progress", 1)
 	if err != nil {
 		d.Log.Error("Failed to check for existing deployments", "error", err)
 		results.SetError("failed to check deployment lock")
@@ -1313,7 +1312,14 @@ func (d *DeploymentServer) getAccessInfo(ctx context.Context, appName string, ep
 
 // Internal helper methods
 
-func (d *DeploymentServer) listDeploymentsInternal(ctx context.Context, appName, clusterId, status string, limit int) ([]deploymentWithEntity, error) {
+// listDeploymentsInternal lists deployments from this cluster's entity store,
+// optionally filtered by app name and status. It does not filter by cluster:
+// the store is a loopback into this coordinator's own etcd, so every deployment
+// it holds already belongs to this cluster. The cluster_id stamped on a
+// deployment is client-supplied and inconsistent (a manual deploy sends the
+// cluster name, a CI/OIDC deploy sends the raw address), so filtering on it
+// would hide legitimate deploys — see MIR-1465.
+func (d *DeploymentServer) listDeploymentsInternal(ctx context.Context, appName, status string, limit int) ([]deploymentWithEntity, error) {
 	// List all deployments by type
 	listResp, err := d.EAC.List(ctx, entity.Ref(entity.EntityKind, core_v1alpha.KindDeployment))
 	if err != nil {
@@ -1333,9 +1339,6 @@ func (d *DeploymentServer) listDeploymentsInternal(ctx context.Context, appName,
 
 		// Apply filters
 		if appName != "" && dep.AppName != appName {
-			continue
-		}
-		if clusterId != "" && dep.ClusterId != clusterId {
 			continue
 		}
 		if status != "" && dep.Status != status {
@@ -1474,8 +1477,8 @@ type deploymentWithEntity struct {
 // markPreviousActiveAs marks all active deployments for the given app/cluster with the target status,
 // except for the specified currentDeploymentId
 func (d *DeploymentServer) markPreviousActiveAs(ctx context.Context, appName, clusterId, currentDeploymentId, targetStatus string) error {
-	// List all active deployments for this app/cluster
-	deployments, err := d.listDeploymentsInternal(ctx, appName, clusterId, "active", 100)
+	// List all active deployments for this app
+	deployments, err := d.listDeploymentsInternal(ctx, appName, "active", 100)
 	if err != nil {
 		return err
 	}

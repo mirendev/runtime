@@ -847,7 +847,13 @@ func TestUpdateDeploymentStatusToInProgress(t *testing.T) {
 	}
 }
 
-func TestListDeploymentsClusterFilter(t *testing.T) {
+// TestListDeploymentsIgnoresClusterID pins the MIR-1465 fix: the same physical
+// cluster ends up with deployments filed under two different client-supplied
+// identity strings (a manual deploy stamps the cluster name, a CI/OIDC deploy
+// stamps the raw address), and neither history nor the active-deployment lookup
+// may hide rows based on which string the query is scoped to. The store is
+// per-cluster, so every deployment it holds is ours.
+func TestListDeploymentsIgnoresClusterID(t *testing.T) {
 	ctx := context.Background()
 
 	inmem, cleanup := testutils.NewInMemEntityServer(t)
@@ -863,48 +869,44 @@ func TestListDeploymentsClusterFilter(t *testing.T) {
 		Client: rpc.LocalClient(deployment_v1alpha.AdaptDeployment(server)),
 	}
 
-	// Create deployments across different clusters
+	const clusterName = "garden"
+	const clusterAddr = "34.122.229.118:8443"
+
+	// An older manual deploy stamped with the cluster name, then a newer CI
+	// deploy stamped with the raw address. Both target the same cluster.
 	for _, d := range []*core_v1alpha.Deployment{
-		{AppName: "myapp", ClusterId: "cluster-a", AppVersion: "v1", Status: "active"},
-		{AppName: "myapp", ClusterId: "cluster-b", AppVersion: "v2", Status: "active"},
-		{AppName: "myapp", ClusterId: "cluster-a", AppVersion: "v3", Status: "succeeded"},
+		{AppName: "myapp", ClusterId: clusterName, AppVersion: "v1-manual", Status: "succeeded",
+			DeployedBy: core_v1alpha.DeployedBy{Timestamp: time.Now().Add(-1 * time.Hour).Format(time.RFC3339)}},
+		{AppName: "myapp", ClusterId: clusterAddr, AppVersion: "v2-ci", Status: "active",
+			DeployedBy: core_v1alpha.DeployedBy{Timestamp: time.Now().Format(time.RFC3339)}},
 	} {
-		name := d.AppName + "-" + d.ClusterId + "-" + d.AppVersion
+		name := d.AppName + "-" + d.AppVersion
 		if _, err := inmem.Client.Create(ctx, name, d); err != nil {
 			t.Fatalf("Failed to create deployment: %v", err)
 		}
 	}
 
-	// Without cluster filter: should return all 3
-	result, err := client.ListDeployments(ctx, "myapp", "", "", 0)
-	if err != nil {
-		t.Fatalf("ListDeployments failed: %v", err)
-	}
-	if len(result.Deployments()) != 3 {
-		t.Errorf("Expected 3 deployments without cluster filter, got %d", len(result.Deployments()))
-	}
-
-	// With cluster-a filter: should return 2
-	result, err = client.ListDeployments(ctx, "myapp", "cluster-a", "", 0)
-	if err != nil {
-		t.Fatalf("ListDeployments failed: %v", err)
-	}
-	if len(result.Deployments()) != 2 {
-		t.Errorf("Expected 2 deployments for cluster-a, got %d", len(result.Deployments()))
-	}
-	for _, dep := range result.Deployments() {
-		if dep.ClusterId() != "cluster-a" {
-			t.Errorf("Expected cluster-a, got %s", dep.ClusterId())
+	// History returns every deployment for the app regardless of the cluster_id
+	// the caller passes — name, address, or empty.
+	for _, clusterArg := range []string{clusterName, clusterAddr, ""} {
+		result, err := client.ListDeployments(ctx, "myapp", clusterArg, "", 0)
+		if err != nil {
+			t.Fatalf("ListDeployments(cluster_id=%q) failed: %v", clusterArg, err)
+		}
+		if len(result.Deployments()) != 2 {
+			t.Errorf("cluster_id=%q: expected 2 deployments, got %d", clusterArg, len(result.Deployments()))
 		}
 	}
 
-	// With cluster-b filter: should return 1
-	result, err = client.ListDeployments(ctx, "myapp", "cluster-b", "", 0)
+	// The active deployment is the CI (address-stamped) one, and it must be
+	// found even when the caller scopes the query by the cluster *name* — the
+	// exact query that MIR-1465 caused to return the stale manual deploy.
+	active, err := client.GetActiveDeployment(ctx, "myapp", clusterName)
 	if err != nil {
-		t.Fatalf("ListDeployments failed: %v", err)
+		t.Fatalf("GetActiveDeployment(cluster_id=%q) failed: %v", clusterName, err)
 	}
-	if len(result.Deployments()) != 1 {
-		t.Errorf("Expected 1 deployment for cluster-b, got %d", len(result.Deployments()))
+	if got := active.Deployment().AppVersionId(); got != "v2-ci" {
+		t.Errorf("expected active app version %q (CI deploy), got %q", "v2-ci", got)
 	}
 }
 
