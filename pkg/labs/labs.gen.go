@@ -37,7 +37,7 @@ var (
 
 // featureDefaults holds the default state for each feature
 var featureDefaults = map[string]bool{
-	FeatureDistributedRunners: false,
+	FeatureDistributedRunners: true,
 	FeatureSagas:              false,
 }
 

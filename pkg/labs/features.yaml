@@ -2,7 +2,7 @@ features:
   - name: distributedrunners
     predicate: DistributedRunners
     description: Schedule jobs across multiple runner nodes
-    default: false
+    default: true
 
   - name: sagas
     predicate: Sagas
