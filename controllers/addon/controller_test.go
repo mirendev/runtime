@@ -374,6 +374,23 @@ func TestUpdateAppActiveVersionRetriesOnConcurrentSwing(t *testing.T) {
 	assert.Equal(t, "memcache://x", vars["MEMCACHE_URL"].Value,
 		"competing addon's var must survive the retry (would be clobbered without OCC)")
 	assert.Equal(t, "postgres://y", vars["DATABASE_URL"].Value, "our addon's var must be present")
+
+	// The version pair minted on the losing first attempt must have been deleted,
+	// not left to accumulate: base + competitor + final activated = 3 AppVersions.
+	assert.Equal(t, 3, countKind(t, ctx, ec, core_v1alpha.KindAppVersion),
+		"the superseded version from the lost CAS race must be cleaned up")
+}
+
+// countKind returns the number of entities of the given kind in the store.
+func countKind(t *testing.T, ctx context.Context, ec *entityserver.Client, kind entity.Id) int {
+	t.Helper()
+	res, err := ec.List(ctx, entity.Ref(entity.EntityKind, kind))
+	require.NoError(t, err)
+	n := 0
+	for res.Next() {
+		n++
+	}
+	return n
 }
 
 // TestCreateVersionWithAddonVarsComposesSequentially verifies that attaching two

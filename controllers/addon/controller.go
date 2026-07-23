@@ -416,10 +416,25 @@ func updateAppActiveVersion(
 			return nil
 		}
 
-		if errors.Is(err, cond.ErrConflict{}) && attempt < maxAttempts {
-			log.Info("app active version changed concurrently, retrying",
-				"app", appID, "attempt", attempt)
-			continue
+		if errors.Is(err, cond.ErrConflict{}) {
+			// This attempt lost the race, so the version pair we just minted was
+			// never activated. Best-effort delete it (AppVersion first, so it
+			// never dangles past its ConfigVersion) rather than leaving one pair
+			// per retry for the version GC to reap later.
+			if delErr := ec.Delete(ctx, newID); delErr != nil {
+				log.Warn("failed to delete superseded app version after conflict",
+					"app", appID, "version", newID, "error", delErr)
+			}
+			if delErr := ec.Delete(ctx, cvid); delErr != nil {
+				log.Warn("failed to delete superseded config version after conflict",
+					"app", appID, "config_version", cvid, "error", delErr)
+			}
+
+			if attempt < maxAttempts {
+				log.Info("app active version changed concurrently, retrying",
+					"app", appID, "attempt", attempt)
+				continue
+			}
 		}
 
 		return fmt.Errorf("setting active version: %w", err)
