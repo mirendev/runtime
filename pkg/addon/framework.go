@@ -57,7 +57,13 @@ type CreateSandboxPoolSpec struct {
 
 // CreateSandboxPool creates a fixed-mode SandboxPool entity.
 func (fw *ProviderFramework) CreateSandboxPool(ctx context.Context, spec CreateSandboxPoolSpec) (entity.Id, error) {
-	name := idgen.GenNS("pool")
+	// A caller-supplied Name gives the pool a deterministic identity (so a retry
+	// can rediscover a pool a prior attempt created); otherwise generate a random
+	// one. The id derives from the name either way.
+	name := spec.Name
+	if name == "" {
+		name = idgen.GenNS("pool")
+	}
 	poolID := entity.Id("pool/" + name)
 
 	pool := &compute_v1alpha.SandboxPool{
