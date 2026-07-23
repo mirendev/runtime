@@ -271,167 +271,201 @@ func (r *AppInfo) List(ctx context.Context, state *app_v1alpha.CrudList) error {
 func (r *AppInfo) SetConfiguration(ctx context.Context, state *app_v1alpha.CrudSetConfiguration) error {
 	name := state.Args().App()
 
-	var appRec core_v1alpha.App
-
-	err := r.EC.Get(ctx, name, &appRec)
-	if err != nil {
-		if errors.Is(err, cond.ErrNotFound{}) {
-			// No app, no problem.
-			return nil
-		}
-
-		return err
-	}
-
-	var appVer core_v1alpha.AppVersion
-	var spec core_v1alpha.ConfigSpec
-
-	if appRec.ActiveVersion != "" {
-		err = r.EC.GetById(ctx, appRec.ActiveVersion, &appVer)
+	// The read-merge-write below is retried under optimistic concurrency
+	// control: the active_version swing is guarded by a CAS on the app revision,
+	// so a concurrent writer (another SetConfiguration, an env mutation, or the
+	// addon controller injecting addon vars) that swings active_version first is
+	// detected and re-merged instead of silently clobbered.
+	//
+	// maxAttempts is a live-lock backstop, not an expected limit: there are only
+	// ever a handful of concurrent config writers per app, so it is set high
+	// enough that genuine contention never spuriously fails, while still
+	// guaranteeing termination rather than looping forever.
+	const maxAttempts = 100
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		appEnt, err := r.EC.EAC().Get(ctx, "app/"+name)
 		if err != nil {
+			if errors.Is(err, cond.ErrNotFound{}) {
+				// No app, no problem.
+				return nil
+			}
+
 			return err
 		}
-		resolvedCfg, err := coreutil.ResolveConfig(ctx, r.EC.EAC(), &appVer)
-		if err != nil {
-			return fmt.Errorf("failed to resolve config: %w", err)
-		}
-		spec = *resolvedCfg
-	} else {
-		appVer.App = appRec.ID
-	}
 
-	cfg := state.Args().Configuration()
+		var appRec core_v1alpha.App
+		appRec.Decode(appEnt.Entity().Entity())
+		appRev := appEnt.Entity().Revision()
 
-	if cfg.HasEnvVars() {
-		for _, nv := range cfg.EnvVars() {
-			if strings.HasPrefix(nv.Key(), "MIREN_") {
-				return fmt.Errorf("cannot set MIREN_ environment variables")
+		var appVer core_v1alpha.AppVersion
+		var spec core_v1alpha.ConfigSpec
+
+		if appRec.ActiveVersion != "" {
+			if err := r.EC.GetById(ctx, appRec.ActiveVersion, &appVer); err != nil {
+				return err
 			}
-		}
-	}
-
-	// Set commands directly on services
-	for _, s := range cfg.Commands() {
-		found := false
-		for i := range spec.Services {
-			if spec.Services[i].Name == s.Service() {
-				spec.Services[i].Command = s.Command()
-				found = true
-				break
+			resolvedCfg, err := coreutil.ResolveConfig(ctx, r.EC.EAC(), &appVer)
+			if err != nil {
+				return fmt.Errorf("failed to resolve config: %w", err)
 			}
+			spec = *resolvedCfg
+		} else {
+			appVer.App = appRec.ID
 		}
-		if !found {
-			spec.Services = append(spec.Services, core_v1alpha.ConfigSpecServices{
-				Name:    s.Service(),
-				Command: s.Command(),
-			})
-		}
-	}
 
-	// Replace the entire env var list with the new one from the client
-	// The client is responsible for sending the complete desired state
-	if cfg.HasEnvVars() {
-		spec.Variables = nil
-		for _, ev := range cfg.EnvVars() {
-			source := ev.Source()
-			nv := core_v1alpha.ConfigSpecVariables{
-				Key:         ev.Key(),
-				Value:       ev.Value(),
-				Sensitive:   ev.Sensitive(),
-				Source:      source,
-				Required:    ev.Required(),
-				Description: ev.Description(),
-			}
-			spec.Variables = append(spec.Variables, nv)
-		}
-	}
+		cfg := state.Args().Configuration()
 
-	// Handle per-service env vars
-	if cfg.HasServices() {
-		for _, svcCfg := range cfg.Services() {
-			// Validate per-service env vars
-			if svcCfg.HasServiceEnv() {
-				for _, nv := range svcCfg.ServiceEnv() {
-					if strings.HasPrefix(nv.Key(), "MIREN_") {
-						return fmt.Errorf("cannot set MIREN_ environment variables")
-					}
+		if cfg.HasEnvVars() {
+			for _, nv := range cfg.EnvVars() {
+				if strings.HasPrefix(nv.Key(), "MIREN_") {
+					return fmt.Errorf("cannot set MIREN_ environment variables")
 				}
 			}
+		}
 
-			// Find or create the service in spec.Services
-			var found bool
+		// Set commands directly on services
+		for _, s := range cfg.Commands() {
+			found := false
 			for i := range spec.Services {
-				if spec.Services[i].Name == svcCfg.Service() {
-					spec.Services[i].Env = nil
-					if svcCfg.HasServiceEnv() {
-						for _, ev := range svcCfg.ServiceEnv() {
-							source := ev.Source()
-							nv := core_v1alpha.ConfigSpecServicesEnv{
-								Key:         ev.Key(),
-								Value:       ev.Value(),
-								Sensitive:   ev.Sensitive(),
-								Source:      source,
-								Required:    ev.Required(),
-								Description: ev.Description(),
-							}
-							spec.Services[i].Env = append(spec.Services[i].Env, nv)
-						}
-					}
+				if spec.Services[i].Name == s.Service() {
+					spec.Services[i].Command = s.Command()
 					found = true
 					break
 				}
 			}
-
-			if !found && svcCfg.HasServiceEnv() {
-				svc := core_v1alpha.ConfigSpecServices{
-					Name: svcCfg.Service(),
-				}
-				for _, ev := range svcCfg.ServiceEnv() {
-					source := ev.Source()
-					nv := core_v1alpha.ConfigSpecServicesEnv{
-						Key:         ev.Key(),
-						Value:       ev.Value(),
-						Sensitive:   ev.Sensitive(),
-						Source:      source,
-						Required:    ev.Required(),
-						Description: ev.Description(),
-					}
-					svc.Env = append(svc.Env, nv)
-				}
-				spec.Services = append(spec.Services, svc)
+			if !found {
+				spec.Services = append(spec.Services, core_v1alpha.ConfigSpecServices{
+					Name:    s.Service(),
+					Command: s.Command(),
+				})
 			}
 		}
+
+		// Replace the entire env var list with the new one from the client
+		// The client is responsible for sending the complete desired state
+		if cfg.HasEnvVars() {
+			spec.Variables = nil
+			for _, ev := range cfg.EnvVars() {
+				source := ev.Source()
+				nv := core_v1alpha.ConfigSpecVariables{
+					Key:         ev.Key(),
+					Value:       ev.Value(),
+					Sensitive:   ev.Sensitive(),
+					Source:      source,
+					Required:    ev.Required(),
+					Description: ev.Description(),
+				}
+				spec.Variables = append(spec.Variables, nv)
+			}
+		}
+
+		// Handle per-service env vars
+		if cfg.HasServices() {
+			for _, svcCfg := range cfg.Services() {
+				// Validate per-service env vars
+				if svcCfg.HasServiceEnv() {
+					for _, nv := range svcCfg.ServiceEnv() {
+						if strings.HasPrefix(nv.Key(), "MIREN_") {
+							return fmt.Errorf("cannot set MIREN_ environment variables")
+						}
+					}
+				}
+
+				// Find or create the service in spec.Services
+				var found bool
+				for i := range spec.Services {
+					if spec.Services[i].Name == svcCfg.Service() {
+						spec.Services[i].Env = nil
+						if svcCfg.HasServiceEnv() {
+							for _, ev := range svcCfg.ServiceEnv() {
+								source := ev.Source()
+								nv := core_v1alpha.ConfigSpecServicesEnv{
+									Key:         ev.Key(),
+									Value:       ev.Value(),
+									Sensitive:   ev.Sensitive(),
+									Source:      source,
+									Required:    ev.Required(),
+									Description: ev.Description(),
+								}
+								spec.Services[i].Env = append(spec.Services[i].Env, nv)
+							}
+						}
+						found = true
+						break
+					}
+				}
+
+				if !found && svcCfg.HasServiceEnv() {
+					svc := core_v1alpha.ConfigSpecServices{
+						Name: svcCfg.Service(),
+					}
+					for _, ev := range svcCfg.ServiceEnv() {
+						source := ev.Source()
+						nv := core_v1alpha.ConfigSpecServicesEnv{
+							Key:         ev.Key(),
+							Value:       ev.Value(),
+							Sensitive:   ev.Sensitive(),
+							Source:      source,
+							Required:    ev.Required(),
+							Description: ev.Description(),
+						}
+						svc.Env = append(svc.Env, nv)
+					}
+					spec.Services = append(spec.Services, svc)
+				}
+			}
+		}
+
+		spec.Entrypoint = cfg.Entrypoint()
+
+		appVer.Version = name + "-" + idgen.Gen("v")
+
+		// Create ConfigVersion as the sole config store
+		cvid, err := r.createConfigVersion(ctx, &spec, appVer.App, appVer.Version)
+		if err != nil {
+			return fmt.Errorf("error creating config version: %w", err)
+		}
+		appVer.ConfigVersion = cvid
+		appVer.Config = core_v1alpha.Config{}
+
+		avid, err := r.EC.Create(ctx, appVer.Version, &appVer)
+		if err != nil {
+			return err
+		}
+
+		// Swing active_version under OCC. A conflict means another writer got
+		// there first, so re-read and re-merge on the next iteration.
+		err = r.EC.Patch(ctx, appRec.ID, appRev,
+			entity.Ref(core_v1alpha.AppActiveVersionId, avid),
+		)
+		if err != nil {
+			if errors.Is(err, cond.ErrConflict{}) {
+				// This attempt lost the race, so the version pair we just minted
+				// was never activated. Best-effort delete it, AppVersion first:
+				// only drop the ConfigVersion once its AppVersion is gone, so a
+				// failed delete leaves a coherent pair for the version GC to reap
+				// rather than an AppVersion dangling at a missing ConfigVersion.
+				if delErr := r.EC.Delete(ctx, avid); delErr != nil {
+					r.Log.Warn("failed to delete superseded app version after conflict",
+						"app", appRec.ID, "version", avid, "error", delErr)
+				} else if delErr := r.EC.Delete(ctx, cvid); delErr != nil {
+					r.Log.Warn("failed to delete superseded config version after conflict",
+						"app", appRec.ID, "config_version", cvid, "error", delErr)
+				}
+				continue
+			}
+			return fmt.Errorf("error updating app entity: %w", err)
+		}
+
+		state.Results().SetVersionId(appVer.Version)
+		if sid := r.versionShortId(ctx, string(avid)); sid != "" {
+			state.Results().SetVersionShortId(sid)
+		}
+
+		return nil
 	}
 
-	spec.Entrypoint = cfg.Entrypoint()
-
-	appVer.Version = name + "-" + idgen.Gen("v")
-
-	// Create ConfigVersion as the sole config store
-	cvid, err := r.createConfigVersion(ctx, &spec, appVer.App, appVer.Version)
-	if err != nil {
-		return fmt.Errorf("error creating config version: %w", err)
-	}
-	appVer.ConfigVersion = cvid
-	appVer.Config = core_v1alpha.Config{}
-
-	avid, err := r.EC.Create(ctx, appVer.Version, &appVer)
-	if err != nil {
-		return err
-	}
-
-	appRec.ActiveVersion = avid
-	err = r.EC.Update(ctx, &appRec)
-	if err != nil {
-		return fmt.Errorf("error updating app entity: %w", err)
-	}
-
-	state.Results().SetVersionId(appVer.Version)
-	if sid := r.versionShortId(ctx, string(avid)); sid != "" {
-		state.Results().SetVersionShortId(sid)
-	}
-
-	return nil
+	return fmt.Errorf("failed to set configuration on app %q after %d attempts due to concurrent writes", name, maxAttempts)
 }
 
 func (r *AppInfo) GetConfiguration(ctx context.Context, state *app_v1alpha.CrudGetConfiguration) error {

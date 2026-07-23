@@ -318,6 +318,129 @@ func (c *Controller) createVersionWithAddonVars(ctx context.Context, appID entit
 	return createVersionWithVars(ctx, c.log, c.ec, c.eac, appID, envVars)
 }
 
+// errNoActiveVersion signals that an app has no active version to update. It is
+// treated as a hard error on the provision path (triggering compensation) and as
+// a no-op on the deprovision path (nothing to remove).
+var errNoActiveVersion = errors.New("app has no active version")
+
+// updateAppActiveVersion atomically applies transform to the app's active config
+// spec: it resolves the current active config, lets transform mutate it in place,
+// mints a new ConfigVersion/AppVersion, and points ActiveVersion at it under
+// optimistic concurrency control — which triggers a redeploy via the launcher's
+// App watch.
+//
+// Multiple addon associations for the same app reconcile concurrently — they are
+// distinct entities handled by separate controller workers, and the in-flight
+// guard only serializes events for the same entity ID. Without OCC, two writers
+// both read the same active version and the second Patch clobbers the first,
+// dropping one addon's variables (MIR-1458). The Patch is therefore guarded by a
+// CAS on the app's revision and the whole read-modify-write is retried on
+// conflict, so the retry observes the winner's version and the transforms
+// compose. Shared by the provisioning, deprovisioning, and rotation paths.
+func updateAppActiveVersion(
+	ctx context.Context,
+	log *slog.Logger,
+	ec *entityserver.Client,
+	eac *entityserver_v1alpha.EntityAccessClient,
+	appID entity.Id,
+	transform func(spec *core_v1alpha.ConfigSpec) error,
+) error {
+	// maxAttempts is only a live-lock backstop to guarantee termination — it is
+	// not expected to be reached. Each conflict means some other writer swung the
+	// active version first; there are only ever a handful of concurrent addon
+	// operations per app, so a few retries suffice. It is set high so genuine
+	// contention never spuriously fails a caller, and on exhaustion the error is
+	// returned to the reconcile framework, which retries the whole reconcile.
+	const maxAttempts = 100
+
+	for attempt := 1; ; attempt++ {
+		var app core_v1alpha.App
+		appEnt, err := ec.GetByIdWithEntity(ctx, appID, &app)
+		if err != nil {
+			return fmt.Errorf("getting app: %w", err)
+		}
+		if app.ActiveVersion == "" {
+			return errNoActiveVersion
+		}
+		appRev := appEnt.Revision()
+
+		var version core_v1alpha.AppVersion
+		if err := ec.GetById(ctx, app.ActiveVersion, &version); err != nil {
+			return fmt.Errorf("getting app version: %w", err)
+		}
+
+		// Resolve the current config (reads ConfigVersion if present, else inline)
+		spec, err := coreutil.ResolveConfig(ctx, eac, &version)
+		if err != nil {
+			return fmt.Errorf("resolving config: %w", err)
+		}
+
+		if err := transform(spec); err != nil {
+			return err
+		}
+
+		appName, err := resolveAppName(ctx, ec, appID)
+		if err != nil {
+			return fmt.Errorf("resolving app name: %w", err)
+		}
+
+		newVersionName := appName + "-" + idgen.Gen("v")
+
+		configVer := &core_v1alpha.ConfigVersion{
+			App:  appID,
+			Spec: *spec,
+		}
+		cvid, err := ec.Create(ctx, newVersionName+"-cfg", configVer)
+		if err != nil {
+			return fmt.Errorf("creating config version: %w", err)
+		}
+
+		version.Version = newVersionName
+		version.ConfigVersion = cvid
+		version.Config = core_v1alpha.Config{}
+
+		newID, err := ec.Create(ctx, newVersionName, &version)
+		if err != nil {
+			return fmt.Errorf("creating new app version: %w", err)
+		}
+
+		// Swing the active version under OCC. A conflict means another writer
+		// updated the active version between our read and this write, so retry
+		// against the new active version.
+		err = ec.Patch(ctx, appID, appRev,
+			entity.Ref(core_v1alpha.AppActiveVersionId, newID),
+		)
+		if err == nil {
+			log.Info("updated app active version",
+				"app", appID, "old_version", app.ActiveVersion, "new_version", newID)
+			return nil
+		}
+
+		if errors.Is(err, cond.ErrConflict{}) {
+			// This attempt lost the race, so the version pair we just minted was
+			// never activated. Best-effort delete it, AppVersion first: only drop
+			// the ConfigVersion once its AppVersion is gone, so a failed delete
+			// leaves a coherent pair for the version GC to reap rather than an
+			// AppVersion dangling at a missing ConfigVersion.
+			if delErr := ec.Delete(ctx, newID); delErr != nil {
+				log.Warn("failed to delete superseded app version after conflict",
+					"app", appID, "version", newID, "error", delErr)
+			} else if delErr := ec.Delete(ctx, cvid); delErr != nil {
+				log.Warn("failed to delete superseded config version after conflict",
+					"app", appID, "config_version", cvid, "error", delErr)
+			}
+
+			if attempt < maxAttempts {
+				log.Info("app active version changed concurrently, retrying",
+					"app", appID, "attempt", attempt)
+				continue
+			}
+		}
+
+		return fmt.Errorf("setting active version: %w", err)
+	}
+}
+
 // createVersionWithVars merges envVars into the app's active config, mints a new
 // ConfigVersion + AppVersion, and points ActiveVersion at it — which triggers a
 // redeploy via the launcher's App watch. It is shared by the provisioning path
@@ -334,80 +457,22 @@ func createVersionWithVars(
 		return nil
 	}
 
-	var app core_v1alpha.App
-	if err := ec.GetById(ctx, appID, &app); err != nil {
-		return fmt.Errorf("getting app: %w", err)
-	}
-	if app.ActiveVersion == "" {
-		return fmt.Errorf("app has no active version")
-	}
+	return updateAppActiveVersion(ctx, log, ec, eac, appID, func(spec *core_v1alpha.ConfigSpec) error {
+		// Convert ConfigSpecVariables to Variable for merging
+		existingVars := make([]core_v1alpha.Variable, len(spec.Variables))
+		for i, v := range spec.Variables {
+			existingVars[i] = core_v1alpha.Variable(v)
+		}
 
-	var version core_v1alpha.AppVersion
-	if err := ec.GetById(ctx, app.ActiveVersion, &version); err != nil {
-		return fmt.Errorf("getting app version: %w", err)
-	}
+		merged := mergeAddonVars(existingVars, envVars)
 
-	// Resolve the current config (reads ConfigVersion if present, else inline)
-	spec, err := coreutil.ResolveConfig(ctx, eac, &version)
-	if err != nil {
-		return fmt.Errorf("resolving config: %w", err)
-	}
-
-	// Convert ConfigSpecVariables to Variable for merging
-	existingVars := make([]core_v1alpha.Variable, len(spec.Variables))
-	for i, v := range spec.Variables {
-		existingVars[i] = core_v1alpha.Variable(v)
-	}
-
-	// Merge addon vars into existing variables
-	merged := mergeAddonVars(existingVars, envVars)
-
-	// Write back as ConfigSpecVariables
-	spec.Variables = make([]core_v1alpha.ConfigSpecVariables, len(merged))
-	for i, v := range merged {
-		spec.Variables[i] = core_v1alpha.ConfigSpecVariables(v)
-	}
-
-	// Resolve app name for the new version name
-	appName, err := resolveAppName(ctx, ec, appID)
-	if err != nil {
-		return fmt.Errorf("resolving app name: %w", err)
-	}
-
-	newVersionName := appName + "-" + idgen.Gen("v")
-
-	// Create a new ConfigVersion entity with merged vars
-	configVer := &core_v1alpha.ConfigVersion{
-		App:  appID,
-		Spec: *spec,
-	}
-	cvName := newVersionName + "-cfg"
-	cvid, err := ec.Create(ctx, cvName, configVer)
-	if err != nil {
-		return fmt.Errorf("creating config version: %w", err)
-	}
-
-	// Create new AppVersion pointing to the new ConfigVersion
-	version.Version = newVersionName
-	version.ConfigVersion = cvid
-	version.Config = core_v1alpha.Config{}
-
-	newID, err := ec.Create(ctx, newVersionName, &version)
-	if err != nil {
-		return fmt.Errorf("creating new app version: %w", err)
-	}
-
-	// Set the new version as active — triggers the deployment launcher via App watch
-	if err := ec.Patch(ctx, appID, 0,
-		entity.Ref(core_v1alpha.AppActiveVersionId, newID),
-	); err != nil {
-		return fmt.Errorf("setting active version: %w", err)
-	}
-
-	log.Info("created new app version with addon vars",
-		"app", appID, "old_version", app.ActiveVersion, "new_version", newID)
-
-	return nil
+		// Write back as ConfigSpecVariables
+		spec.Variables = make([]core_v1alpha.ConfigSpecVariables, len(merged))
+		for i, v := range merged {
+			spec.Variables[i] = core_v1alpha.ConfigSpecVariables(v)
+		}
+		return nil
+	})
 }
 
 // removeEnvVars removes addon-sourced variables from the app's active version
@@ -418,81 +483,31 @@ func (c *Controller) removeEnvVars(ctx context.Context, appID entity.Id, variabl
 		return nil
 	}
 
-	var app core_v1alpha.App
-	if err := c.ec.GetById(ctx, appID, &app); err != nil {
-		if errors.Is(err, cond.ErrNotFound{}) {
-			c.log.Info("app already deleted, skipping env var removal", "app", appID)
-			return nil
-		}
-		return fmt.Errorf("getting app: %w", err)
-	}
-	if app.ActiveVersion == "" {
-		return nil
-	}
-
-	var version core_v1alpha.AppVersion
-	if err := c.ec.GetById(ctx, app.ActiveVersion, &version); err != nil {
-		if errors.Is(err, cond.ErrNotFound{}) {
-			c.log.Info("app version already deleted, skipping env var removal", "version", app.ActiveVersion)
-			return nil
-		}
-		return fmt.Errorf("getting app version: %w", err)
-	}
-
-	spec, err := coreutil.ResolveConfig(ctx, c.eac, &version)
-	if err != nil {
-		return fmt.Errorf("resolving config: %w", err)
-	}
-
 	// Build set of keys to remove
 	removeKeys := make(map[string]bool, len(variables))
 	for _, v := range variables {
 		removeKeys[v.Key] = true
 	}
 
-	// Filter out addon vars that match the keys
-	var filtered []core_v1alpha.ConfigSpecVariables
-	for _, v := range spec.Variables {
-		if removeKeys[v.Key] && v.Source == "addon" {
-			continue
+	err := updateAppActiveVersion(ctx, c.log, c.ec, c.eac, appID, func(spec *core_v1alpha.ConfigSpec) error {
+		var filtered []core_v1alpha.ConfigSpecVariables
+		for _, v := range spec.Variables {
+			if removeKeys[v.Key] && v.Source == "addon" {
+				continue
+			}
+			filtered = append(filtered, v)
 		}
-		filtered = append(filtered, v)
+		spec.Variables = filtered
+		return nil
+	})
+
+	// The app or its active version being gone (or having no active version)
+	// means there is nothing left to clean up — treat as a successful no-op.
+	if errors.Is(err, cond.ErrNotFound{}) || errors.Is(err, errNoActiveVersion) {
+		c.log.Info("app or active version unavailable, skipping env var removal", "app", appID)
+		return nil
 	}
-	spec.Variables = filtered
-
-	appName, err := c.resolveAppName(ctx, appID)
-	if err != nil {
-		return fmt.Errorf("resolving app name: %w", err)
-	}
-
-	newVersionName := appName + "-" + idgen.Gen("v")
-
-	configVer := &core_v1alpha.ConfigVersion{
-		App:  appID,
-		Spec: *spec,
-	}
-	cvName := newVersionName + "-cfg"
-	cvid, err := c.ec.Create(ctx, cvName, configVer)
-	if err != nil {
-		return fmt.Errorf("creating config version: %w", err)
-	}
-
-	version.Version = newVersionName
-	version.ConfigVersion = cvid
-	version.Config = core_v1alpha.Config{}
-
-	newID, err := c.ec.Create(ctx, newVersionName, &version)
-	if err != nil {
-		return fmt.Errorf("creating new app version: %w", err)
-	}
-
-	if err := c.ec.Patch(ctx, appID, 0,
-		entity.Ref(core_v1alpha.AppActiveVersionId, newID),
-	); err != nil {
-		return fmt.Errorf("setting active version: %w", err)
-	}
-
-	return nil
+	return err
 }
 
 // mergeAddonVars merges addon-contributed variables into the existing variable set.

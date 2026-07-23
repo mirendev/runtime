@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"miren.dev/runtime/api/addon/addon_v1alpha"
+	coreutil "miren.dev/runtime/api/core"
 	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/api/entityserver"
 	"miren.dev/runtime/pkg/addon"
@@ -291,6 +292,127 @@ func TestProvisionSkipsWhenAssociationNoLongerPending(t *testing.T) {
 	var current addon_v1alpha.AddonAssociation
 	require.NoError(t, ec.GetById(ctx, assocID, &current))
 	assert.Equal(t, "deprovisioning", current.Status)
+}
+
+// createAppWithVars creates an app with an active AppVersion whose inline config
+// carries the given variables, returning the app's entity ID.
+func createAppWithVars(t *testing.T, ctx context.Context, ec *entityserver.Client, name string, vars []core_v1alpha.Variable) entity.Id {
+	t.Helper()
+
+	cfgVars := make([]core_v1alpha.Variable, len(vars))
+	copy(cfgVars, vars)
+
+	verID, err := ec.Create(ctx, name+"-v0", &core_v1alpha.AppVersion{
+		Version: name + "-v0",
+		Config:  core_v1alpha.Config{Variable: cfgVars},
+	})
+	require.NoError(t, err)
+
+	appID, err := ec.Create(ctx, name, &core_v1alpha.App{ActiveVersion: verID})
+	require.NoError(t, err)
+
+	return appID
+}
+
+// activeVars resolves the variables on an app's current active version, keyed by name.
+func activeVars(t *testing.T, ctx context.Context, ctrl *Controller, appID entity.Id) map[string]core_v1alpha.ConfigSpecVariables {
+	t.Helper()
+
+	var app core_v1alpha.App
+	require.NoError(t, ctrl.ec.GetById(ctx, appID, &app))
+
+	var ver core_v1alpha.AppVersion
+	require.NoError(t, ctrl.ec.GetById(ctx, app.ActiveVersion, &ver))
+
+	spec, err := coreutil.ResolveConfig(ctx, ctrl.eac, &ver)
+	require.NoError(t, err)
+
+	out := make(map[string]core_v1alpha.ConfigSpecVariables, len(spec.Variables))
+	for _, v := range spec.Variables {
+		out[v.Key] = v
+	}
+	return out
+}
+
+// TestUpdateAppActiveVersionRetriesOnConcurrentSwing is the MIR-1458 regression
+// test. Two addon associations for the same app reconcile concurrently and each
+// swings the app's active version. Without optimistic concurrency control the
+// second write clobbers the first, silently dropping one addon's variables.
+//
+// The race is reproduced deterministically without goroutines: a competing addon
+// (memcache) swings the active version exactly once, during our transform's first
+// invocation — i.e. after we captured the app revision but before our own Patch.
+// Our Patch must then conflict, the read-modify-write must retry against the
+// competitor's version, and the final active config must carry BOTH addons' vars.
+func TestUpdateAppActiveVersionRetriesOnConcurrentSwing(t *testing.T) {
+	ctx, ctrl, ec, _ := setupControllerTest(t)
+
+	appID := createAppWithVars(t, ctx, ec, "myapp", []core_v1alpha.Variable{
+		{Key: "BASE", Value: "1", Source: "config"},
+	})
+
+	competed := false
+	err := updateAppActiveVersion(ctx, ctrl.log, ctrl.ec, ctrl.eac, appID, func(spec *core_v1alpha.ConfigSpec) error {
+		if !competed {
+			competed = true
+			// A competing addon (memcache) wins the active-version swing while
+			// we are mid-flight, bumping the app revision under us.
+			require.NoError(t, ctrl.createVersionWithAddonVars(ctx, appID, []addon.Variable{
+				{Key: "MEMCACHE_URL", Value: "memcache://x"},
+			}))
+		}
+		spec.Variables = append(spec.Variables, core_v1alpha.ConfigSpecVariables{
+			Key: "DATABASE_URL", Value: "postgres://y", Sensitive: true, Source: "addon",
+		})
+		return nil
+	})
+	require.NoError(t, err)
+	require.True(t, competed, "the competing swing must have run")
+
+	vars := activeVars(t, ctx, ctrl, appID)
+	assert.Equal(t, "1", vars["BASE"].Value, "base config var must be preserved")
+	assert.Equal(t, "memcache://x", vars["MEMCACHE_URL"].Value,
+		"competing addon's var must survive the retry (would be clobbered without OCC)")
+	assert.Equal(t, "postgres://y", vars["DATABASE_URL"].Value, "our addon's var must be present")
+
+	// The version pair minted on the losing first attempt must have been deleted,
+	// not left to accumulate: base + competitor + final activated = 3 AppVersions.
+	assert.Equal(t, 3, countKind(t, ctx, ec, core_v1alpha.KindAppVersion),
+		"the superseded version from the lost CAS race must be cleaned up")
+}
+
+// countKind returns the number of entities of the given kind in the store.
+func countKind(t *testing.T, ctx context.Context, ec *entityserver.Client, kind entity.Id) int {
+	t.Helper()
+	res, err := ec.List(ctx, entity.Ref(entity.EntityKind, kind))
+	require.NoError(t, err)
+	n := 0
+	for res.Next() {
+		n++
+	}
+	return n
+}
+
+// TestCreateVersionWithAddonVarsComposesSequentially verifies that attaching two
+// addons one after another accumulates both var sets (the non-racing baseline).
+func TestCreateVersionWithAddonVarsComposesSequentially(t *testing.T) {
+	ctx, ctrl, ec, _ := setupControllerTest(t)
+
+	appID := createAppWithVars(t, ctx, ec, "myapp", []core_v1alpha.Variable{
+		{Key: "BASE", Value: "1", Source: "config"},
+	})
+
+	require.NoError(t, ctrl.createVersionWithAddonVars(ctx, appID, []addon.Variable{
+		{Key: "DATABASE_URL", Value: "postgres://y", Sensitive: true},
+	}))
+	require.NoError(t, ctrl.createVersionWithAddonVars(ctx, appID, []addon.Variable{
+		{Key: "MEMCACHE_URL", Value: "memcache://x"},
+	}))
+
+	vars := activeVars(t, ctx, ctrl, appID)
+	assert.Equal(t, "1", vars["BASE"].Value)
+	assert.Equal(t, "postgres://y", vars["DATABASE_URL"].Value)
+	assert.Equal(t, "memcache://x", vars["MEMCACHE_URL"].Value)
 }
 
 func TestDeprovisionCompletesWhenAppDeleted(t *testing.T) {

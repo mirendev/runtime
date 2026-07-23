@@ -432,6 +432,136 @@ func TestStoreConformance_PatchEntity(t *testing.T) {
 	})
 }
 
+// TestStoreConformance_UpdateEntityRevisionConflict pins optimistic concurrency
+// control: an update pinned (via WithFromRevision) to a stale revision must be
+// rejected with cond.ErrConflict, while one pinned to the current revision
+// succeeds. Both backends must agree so mock-backed tests exercise the same CAS
+// behavior production relies on — e.g. the addon controller swings an app's
+// active version under OCC so concurrent addon provisions don't clobber each
+// other's env vars (MIR-1458).
+func TestStoreConformance_UpdateEntityRevisionConflict(t *testing.T) {
+	runStoreConformance(t, func(t *testing.T, store Store) {
+		ctx := t.Context()
+		applyConformanceSchema(t, store)
+
+		initial, err := store.CreateEntity(ctx, New(
+			Any(Ident, "conf-occ-update"),
+			String(Id("conf/note"), "one"),
+		))
+		require.NoError(t, err)
+		staleRev := initial.GetRevision()
+
+		// Bump the revision out from under the stale reader.
+		bumped, err := store.UpdateEntity(ctx, initial.Id(), New(
+			Any(DBId, initial.Id()),
+			String(Id("conf/note"), "two"),
+		))
+		require.NoError(t, err)
+		require.Greater(t, bumped.GetRevision(), staleRev)
+
+		// An update pinned to the stale revision must conflict.
+		_, err = store.UpdateEntity(ctx, initial.Id(), New(
+			Any(DBId, initial.Id()),
+			String(Id("conf/note"), "three"),
+		), WithFromRevision(staleRev))
+		require.Error(t, err)
+		assert.True(t, errors.Is(err, cond.ErrConflict{}),
+			"stale-revision update must return cond.ErrConflict, got %v", err)
+
+		// An update pinned to the current revision must succeed.
+		_, err = store.UpdateEntity(ctx, initial.Id(), New(
+			Any(DBId, initial.Id()),
+			String(Id("conf/note"), "four"),
+		), WithFromRevision(bumped.GetRevision()))
+		require.NoError(t, err)
+
+		got, err := store.GetEntity(ctx, initial.Id())
+		require.NoError(t, err)
+		note, ok := got.Get(Id("conf/note"))
+		require.True(t, ok)
+		assert.Equal(t, "four", note.Value.String(), "the winning current-revision update must be applied")
+	})
+}
+
+// TestStoreConformance_PatchEntityRevisionConflict pins the same OCC semantics
+// for PatchEntity, which is the path the entity-server Patch RPC (and therefore
+// the addon controller's active-version swing) actually takes.
+func TestStoreConformance_PatchEntityRevisionConflict(t *testing.T) {
+	runStoreConformance(t, func(t *testing.T, store Store) {
+		ctx := t.Context()
+		applyConformanceSchema(t, store)
+
+		initial, err := store.CreateEntity(ctx, New(
+			Any(Ident, "conf-occ-patch"),
+			Any(Doc, "before"),
+		))
+		require.NoError(t, err)
+		staleRev := initial.GetRevision()
+
+		bumped, err := store.PatchEntity(ctx, New(
+			Any(DBId, initial.Id()),
+			Any(Doc, "bumped"),
+		))
+		require.NoError(t, err)
+		require.Greater(t, bumped.GetRevision(), staleRev)
+
+		_, err = store.PatchEntity(ctx, New(
+			Any(DBId, initial.Id()),
+			Any(Doc, "stale"),
+		), WithFromRevision(staleRev))
+		require.Error(t, err)
+		assert.True(t, errors.Is(err, cond.ErrConflict{}),
+			"stale-revision patch must return cond.ErrConflict, got %v", err)
+
+		_, err = store.PatchEntity(ctx, New(
+			Any(DBId, initial.Id()),
+			Any(Doc, "current"),
+		), WithFromRevision(bumped.GetRevision()))
+		require.NoError(t, err)
+	})
+}
+
+// TestStoreConformance_ReplaceEntityRevisionConflict pins the same OCC semantics
+// for ReplaceEntity, the path CreateOrReplace and SetInitialEnvVars take. A stale
+// pinned revision must conflict; the current revision must succeed.
+func TestStoreConformance_ReplaceEntityRevisionConflict(t *testing.T) {
+	runStoreConformance(t, func(t *testing.T, store Store) {
+		ctx := t.Context()
+		applyConformanceSchema(t, store)
+
+		initial, err := store.CreateEntity(ctx, New(
+			Any(Ident, "conf-occ-replace"),
+			Any(Doc, "before"),
+		))
+		require.NoError(t, err)
+		staleRev := initial.GetRevision()
+
+		bumped, err := store.ReplaceEntity(ctx, New(
+			Any(DBId, initial.Id()),
+			Any(Ident, "conf-occ-replace"),
+			Any(Doc, "bumped"),
+		))
+		require.NoError(t, err)
+		require.Greater(t, bumped.GetRevision(), staleRev)
+
+		_, err = store.ReplaceEntity(ctx, New(
+			Any(DBId, initial.Id()),
+			Any(Ident, "conf-occ-replace"),
+			Any(Doc, "stale"),
+		), WithFromRevision(staleRev))
+		require.Error(t, err)
+		assert.True(t, errors.Is(err, cond.ErrConflict{}),
+			"stale-revision replace must return cond.ErrConflict, got %v", err)
+
+		_, err = store.ReplaceEntity(ctx, New(
+			Any(DBId, initial.Id()),
+			Any(Ident, "conf-occ-replace"),
+			Any(Doc, "current"),
+		), WithFromRevision(bumped.GetRevision()))
+		require.NoError(t, err)
+	})
+}
+
 // TestStoreConformance_EnsureThenReplaceUpsert exercises the exact pattern saga
 // storage uses to persist progress: Ensure to create-or-detect, then Replace
 // when it already existed. The end state must reflect the latest write.

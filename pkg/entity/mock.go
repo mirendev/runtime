@@ -216,6 +216,11 @@ func (m *MockStore) UpdateEntity(ctx context.Context, id Id, entity *Entity, opt
 		return nil, err
 	}
 
+	var o entityOpts
+	for _, opt := range opts {
+		opt(&o)
+	}
+
 	// Determine which incoming attr IDs should replace existing values
 	// (cardinality=one) vs accumulate alongside them (cardinality=many).
 	// Mirrors EtcdStore.UpdateEntity (store.go:687) so mock-backed tests
@@ -236,6 +241,14 @@ func (m *MockStore) UpdateEntity(ctx context.Context, id Id, entity *Entity, opt
 	if !ok {
 		m.mu.Unlock()
 		return nil, cond.NotFound("entity", id)
+	}
+
+	// Enforce optimistic concurrency control when the caller pins a revision.
+	// Mirrors EtcdStore.UpdateEntity (store.go:669) so mock-backed tests observe
+	// the same conflict semantics production does.
+	if o.fromRevision != 0 && e.GetRevision() != o.fromRevision {
+		m.mu.Unlock()
+		return nil, cond.Conflict("entity", id)
 	}
 
 	// Keep existing attrs except those being replaced (cardinality=one IDs
@@ -278,11 +291,26 @@ func (m *MockStore) ReplaceEntity(ctx context.Context, entity *Entity, opts ...E
 		return nil, cond.NotFound("entity", "empty id")
 	}
 
+	var o entityOpts
+	for _, opt := range opts {
+		opt(&o)
+	}
+
 	m.mu.Lock()
 	existing, ok := m.Entities[id]
 	if !ok {
 		m.mu.Unlock()
 		return nil, cond.NotFound("entity", id)
+	}
+
+	// Enforce optimistic concurrency control when the caller pins a revision, so
+	// a stale-revision Replace fails loudly with a conflict instead of silently
+	// succeeding. Mirrors EtcdStore.ReplaceEntity (store.go:1039). A pinned
+	// revision that matches the current one (the common CreateOrReplace /
+	// SetInitialEnvVars case) still succeeds.
+	if o.fromRevision != 0 && existing.GetRevision() != o.fromRevision {
+		m.mu.Unlock()
+		return nil, cond.Conflict("entity", id)
 	}
 
 	// Update revision and timestamp
