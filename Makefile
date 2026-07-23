@@ -192,7 +192,13 @@ test-blackbox-pop: ## Run POP blackbox tests (requires `make dev` and cloud repo
 	go test -tags blackbox -timeout 15m -v -count=1 -p 1 -run TestPOP ./blackbox/...
 
 test-blackbox-distributed: ## Run blackbox tests against distributed environment (requires hack/dev-distributed up)
-	BLACKBOX_MODE=peers go test -tags blackbox -timeout 10m -v -count=1 -p 1 ./blackbox/...
+	# Runs the whole blackbox suite (not just the distributed-specific tests)
+	# against the coordinator+runner topology, so a labs flag that breaks basic
+	# functionality is caught here too. Serial and unsharded, so it needs a
+	# larger timeout than the sharded plain suite. TestPOP is skipped: it's the
+	# Miren Anywhere cloud path (orthogonal to distributed runners) and restarts
+	# the server mid-run; it has its own dedicated job.
+	BLACKBOX_MODE=peers go test -tags blackbox -timeout 20m -v -count=1 -p 1 -skip '^TestPOP$$' ./blackbox/...
 
 .PHONY: test test-shell test-blackbox test-blackbox-pop build-cloud-test test-blackbox-distributed test-coverage test-coverage-ci coverage-report coverage-percent coverage-by-package coverage-pr test-groups update-test-groups blackbox-groups measure-blackbox-times
 

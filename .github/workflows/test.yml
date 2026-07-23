@@ -401,11 +401,94 @@ jobs:
       if: always()
       run: make dev-stop || true
 
+  test-blackbox-distributed:
+    # Exercises the multi-node distributed runner topology (a coordinator plus a
+    # separate runner peer) with distributedrunners enabled, running the whole
+    # blackbox suite against it. Setup is heavy (iso peers, a binary build on
+    # each peer, the join dance), so it runs on main/release builds rather than
+    # every PR push: release.yml (push to main and tags) calls this workflow via
+    # workflow_call, where github.event_name is the caller's event ('push'), so
+    # excluding 'pull_request' runs it there while skipping PRs. It would also
+    # run in a merge queue if one were enabled ('merge_group').
+    if: github.event_name != 'pull_request'
+    runs-on: depot-ubuntu-latest
+    steps:
+    - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+      with:
+        persist-credentials: false
+        ref: ${{ inputs.ref }}
+
+    - name: Set up Go
+      uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6
+      with:
+        go-version-file: 'go.mod'
+        cache: true
+
+    - name: Resolve iso version
+      id: iso-version
+      run: |
+        ISO_VERSION=$(go list -m -f '{{.Version}}' miren.dev/iso@latest)
+        echo "version=$ISO_VERSION" >> $GITHUB_OUTPUT
+
+    - name: Cache iso binary
+      id: iso-cache
+      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+      with:
+        path: ~/go/bin/iso
+        key: iso-binary-${{ steps.iso-version.outputs.version }}-${{ runner.os }}-${{ runner.arch }}
+
+    - name: Install iso
+      if: steps.iso-cache.outputs.cache-hit != 'true'
+      run: go install miren.dev/iso/cmd/iso@latest
+
+    - name: Add Go bin to PATH
+      run: echo "$(go env GOPATH)/bin" >> $GITHUB_PATH
+
+    - name: Restore iso cache
+      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+      with:
+        path: /tmp/iso-cache
+        key: iso-cache-blackbox-distributed-${{ hashFiles('go.sum') }}
+        restore-keys: iso-cache-blackbox-distributed-
+
+    - name: Restore Docker image cache
+      id: docker-image-cache
+      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+      with:
+        path: /tmp/iso-image.tar
+        key: iso-image-${{ hashFiles('.iso/Dockerfile', '.iso/.bashrc', 'hack/containerd-config.toml') }}
+
+    - name: Load cached Docker image
+      if: steps.docker-image-cache.outputs.cache-hit == 'true'
+      run: docker load < /tmp/iso-image.tar
+
+    - name: Start distributed environment
+      run: ISO_CACHE_DIR=/tmp/iso-cache make dev-distributed
+
+    - name: Run distributed blackbox tests
+      run: make test-blackbox-distributed
+
+    - name: Peer logs on failure
+      if: failure()
+      run: |
+        echo "=== Coordinator server logs ==="
+        iso peers exec coordinator -- tail -200 /tmp/miren-server.log 2>&1 || true
+        echo "=== Runner logs ==="
+        iso peers exec runner1 -- tail -200 /tmp/miren-runner.log 2>&1 || true
+
+    - name: Save Docker image to cache
+      if: steps.docker-image-cache.outputs.cache-hit != 'true'
+      run: docker save runtime-shell -o /tmp/iso-image.tar
+
+    - name: Cleanup
+      if: always()
+      run: make dev-distributed-down || true
+
   # Summary job for branch protection — provides a single "test-all" check
   # that passes only when every matrix runner and blackbox tests succeed.
   test:
     if: always()
-    needs: [test-runner, blackbox-groups, test-blackbox, test-blackbox-pop]
+    needs: [test-runner, blackbox-groups, test-blackbox, test-blackbox-pop, test-blackbox-distributed]
     runs-on: ubuntu-latest
     steps:
     - name: Check results
@@ -414,6 +497,7 @@ jobs:
         echo "blackbox-groups result: ${{ needs.blackbox-groups.result }}"
         echo "test-blackbox result: ${{ needs.test-blackbox.result }}"
         echo "test-blackbox-pop result: ${{ needs.test-blackbox-pop.result }}"
+        echo "test-blackbox-distributed result: ${{ needs.test-blackbox-distributed.result }}"
 
         if [[ "${{ needs.test-runner.result }}" != "success" ]]; then
           exit 1
@@ -430,6 +514,11 @@ jobs:
           exit 1
         fi
         if [[ "${{ needs.test-blackbox-pop.result }}" != "success" && "${{ needs.test-blackbox-pop.result }}" != "skipped" ]]; then
+          exit 1
+        fi
+        # Distributed suite is skipped on PRs (merge-queue / main only), so
+        # skipped is acceptable here; a real run must pass.
+        if [[ "${{ needs.test-blackbox-distributed.result }}" != "success" && "${{ needs.test-blackbox-distributed.result }}" != "skipped" ]]; then
           exit 1
         fi
 
