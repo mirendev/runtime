@@ -440,6 +440,18 @@ func (r *AppInfo) SetConfiguration(ctx context.Context, state *app_v1alpha.CrudS
 		)
 		if err != nil {
 			if errors.Is(err, cond.ErrConflict{}) {
+				// This attempt lost the race, so the version pair we just minted
+				// was never activated. Best-effort delete it (AppVersion first,
+				// so it never dangles past its ConfigVersion) rather than leaving
+				// one pair per retry for the version GC to reap later.
+				if delErr := r.EC.Delete(ctx, avid); delErr != nil {
+					r.Log.Warn("failed to delete superseded app version after conflict",
+						"app", appRec.ID, "version", avid, "error", delErr)
+				}
+				if delErr := r.EC.Delete(ctx, cvid); delErr != nil {
+					r.Log.Warn("failed to delete superseded config version after conflict",
+						"app", appRec.ID, "config_version", cvid, "error", delErr)
+				}
 				continue
 			}
 			return fmt.Errorf("error updating app entity: %w", err)

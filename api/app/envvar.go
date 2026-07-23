@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 
 	coreutil "miren.dev/runtime/api/core"
@@ -49,6 +50,13 @@ const envMutateMaxAttempts = 100
 // The read-merge-write is retried under optimistic concurrency control so two
 // parallel env writes (or the addon controller injecting addon vars) cannot
 // silently clobber each other's active-version swing — see createNewVersion.
+//
+// The retry re-reads the app each attempt, so the CAS always lands on the current
+// revision. When baseVersion is nil (every caller today) it also re-resolves the
+// current active config, so the merge composes onto a concurrent winner's version.
+// When a baseVersion is pinned, each attempt re-derives from that fixed version by
+// design — the caller asked to base off it — so the retry re-applies the same base
+// rather than composing onto the winner.
 func SetEnvVars(ctx context.Context, ec *entityserver.Client, appName string,
 	baseVersion *core_v1alpha.AppVersion, vars []EnvVarInput, service string) (*MutateResult, error) {
 
@@ -88,6 +96,8 @@ func SetEnvVars(ctx context.Context, ec *entityserver.Client, appName string,
 //
 // Like SetEnvVars, the read-merge-write is retried under optimistic concurrency
 // control so a concurrent active-version swing cannot silently clobber the delete.
+// The same baseVersion caveat applies: the retry composes onto a concurrent winner
+// only when baseVersion is nil; a pinned baseVersion is re-applied as-is.
 func DeleteEnvVars(ctx context.Context, ec *entityserver.Client, appName string,
 	baseVersion *core_v1alpha.AppVersion, keys []string, service string) (*DeleteResult, error) {
 
@@ -390,10 +400,23 @@ func createNewVersion(ctx context.Context, ec *entityserver.Client, appName stri
 		return nil, err
 	}
 
-	appRec.ActiveVersion = avid
 	if err := ec.Patch(ctx, appRec.ID, appRev,
 		entity.Ref(core_v1alpha.AppActiveVersionId, avid),
 	); err != nil {
+		if errors.Is(err, cond.ErrConflict{}) {
+			// This attempt lost the race, so the version pair we just minted was
+			// never activated. Best-effort delete it (AppVersion first, so it
+			// never dangles past its ConfigVersion) rather than leaving one pair
+			// per retry for the version GC to reap later.
+			if delErr := ec.Delete(ctx, avid); delErr != nil {
+				slog.Warn("failed to delete superseded app version after conflict",
+					"app", appRec.ID, "version", avid, "error", delErr)
+			}
+			if delErr := ec.Delete(ctx, cvid); delErr != nil {
+				slog.Warn("failed to delete superseded config version after conflict",
+					"app", appRec.ID, "config_version", cvid, "error", delErr)
+			}
+		}
 		return nil, err
 	}
 
