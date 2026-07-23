@@ -2,14 +2,17 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 
 	"miren.dev/runtime/api/addon/addon_v1alpha"
 	"miren.dev/runtime/api/app/app_v1alpha"
 	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/api/entityserver"
 	"miren.dev/runtime/pkg/addon"
+	"miren.dev/runtime/pkg/cond"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/idgen"
 )
@@ -246,33 +249,16 @@ func (s *AddonsServer) RotateCredential(ctx context.Context, state *app_v1alpha.
 			return fmt.Errorf("addon %q is not active (status %q); cannot rotate", addonName, assoc.Status)
 		}
 
-		// Mutex: refuse to start a rotation while another is still in flight for
-		// this association, so two rotations can't race the same backing
-		// credential (and its consumer redeploy).
-		reqs, err := s.ec.List(ctx, entity.Ref(addon_v1alpha.RotationRequestAssociationId, assoc.ID))
+		// Admit at most one in-flight rotation per association. The gate is a
+		// single rotation_request entity whose name is derived from the
+		// association, so the store's put-if-absent Create and revision-guarded
+		// Patch are the atomic admission primitives — no list-then-create TOCTOU
+		// where two near-simultaneous rotations both slip through. A terminal
+		// (done/error) request is reclaimed in place for the next rotation rather
+		// than left to block it.
+		id, err := s.admitRotation(ctx, assoc, appName, addonName, credential)
 		if err != nil {
-			return fmt.Errorf("listing rotation requests: %w", err)
-		}
-		for reqs.Next() {
-			var existing addon_v1alpha.RotationRequest
-			if err := reqs.Read(&existing); err != nil {
-				return fmt.Errorf("reading rotation request: %w", err)
-			}
-			if existing.Status == "pending" || existing.Status == "rotating" {
-				return fmt.Errorf("a rotation is already in progress for addon %q on app %q (request %s)", addonName, appName, existing.ID)
-			}
-		}
-
-		req := &addon_v1alpha.RotationRequest{
-			Association: assoc.ID,
-			Addon:       assoc.Addon,
-			Credential:  credential,
-			Status:      "pending",
-		}
-		reqName := fmt.Sprintf("rotate-%s-%s", addonName, idgen.Gen("rr"))
-		id, err := s.ec.Create(ctx, reqName, req)
-		if err != nil {
-			return fmt.Errorf("creating rotation request: %w", err)
+			return err
 		}
 
 		s.log.Info("addon credential rotation requested",
@@ -282,4 +268,70 @@ func (s *AddonsServer) RotateCredential(ctx context.Context, state *app_v1alpha.
 	}
 
 	return fmt.Errorf("addon %q is not attached to app %q", addonName, appName)
+}
+
+// admitRotation atomically admits a single in-flight rotation per association
+// and returns the rotation_request id for the controller to reconcile. The
+// request name is derived from the association, so the store's put-if-absent
+// Create is the admission gate: concurrent callers cannot both create it. A
+// prior terminal (done/error) request is reclaimed in place with a
+// revision-guarded Patch (compare-and-swap on the read revision), so sequential
+// rotations work without a leftover request blocking them and without a
+// delete/recreate race.
+func (s *AddonsServer) admitRotation(ctx context.Context, assoc addon_v1alpha.AddonAssociation, appName, addonName, credential string) (entity.Id, error) {
+	// The association id carries a "kind/" prefix; flatten it so the request
+	// name (and the id derived from it) stays a single clean segment. The
+	// association id alone makes the name unique per association; the addon name
+	// is included only so the request reads clearly in logs and CLI output.
+	reqName := fmt.Sprintf("rotate-%s-%s", addonName, strings.ReplaceAll(string(assoc.ID), "/", "-"))
+
+	var existing addon_v1alpha.RotationRequest
+	existingE, err := s.ec.GetWithEntity(ctx, reqName, &existing)
+	if err != nil {
+		if !errors.Is(err, cond.ErrNotFound{}) {
+			return "", fmt.Errorf("checking for in-flight rotation: %w", err)
+		}
+
+		// No request yet — create one. Create is put-if-absent on the derived
+		// name, so a racing admission fails here and is reported as in-flight
+		// after the re-read below.
+		id, cerr := s.ec.Create(ctx, reqName, &addon_v1alpha.RotationRequest{
+			Association: assoc.ID,
+			Addon:       assoc.Addon,
+			Credential:  credential,
+			Status:      "pending",
+		})
+		if cerr == nil {
+			return id, nil
+		}
+
+		// The create lost a race (or a terminal request already holds the name).
+		// Re-read and fall through to the shared handling below.
+		existingE, err = s.ec.GetWithEntity(ctx, reqName, &existing)
+		if err != nil {
+			return "", fmt.Errorf("creating rotation request: %w", cerr)
+		}
+	}
+
+	if existing.Status == "pending" || existing.Status == "rotating" {
+		return "", fmt.Errorf("a rotation is already in progress for addon %q on app %q (request %s)", addonName, appName, existing.ID)
+	}
+
+	// Terminal request holds the name: reclaim it for this rotation with a
+	// revision-guarded Patch. If another admission reclaimed it first, the CAS
+	// fails with a conflict and we surface the now-in-flight rotation.
+	if err := s.ec.Patch(ctx, existing.ID, existingE.Revision(),
+		entity.String(addon_v1alpha.RotationRequestCredentialId, credential),
+		entity.Ref(addon_v1alpha.RotationRequestAddonId, assoc.Addon),
+		entity.String(addon_v1alpha.RotationRequestStatusId, "pending"),
+		entity.String(addon_v1alpha.RotationRequestNewSecretId, ""),
+		entity.String(addon_v1alpha.RotationRequestErrorMessageId, ""),
+	); err != nil {
+		if errors.Is(err, cond.ErrConflict{}) {
+			return "", fmt.Errorf("a rotation was just started for addon %q on app %q; try again", addonName, appName)
+		}
+		return "", fmt.Errorf("reclaiming rotation request: %w", err)
+	}
+
+	return existing.ID, nil
 }
