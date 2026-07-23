@@ -8,6 +8,7 @@ import (
 
 	containerd "github.com/containerd/containerd/v2/client"
 	"github.com/containerd/containerd/v2/pkg/cio"
+	"github.com/containerd/containerd/v2/pkg/namespaces"
 	"github.com/containerd/containerd/v2/pkg/oci"
 	"github.com/opencontainers/runtime-spec/specs-go"
 	coreutil "miren.dev/runtime/api/core"
@@ -40,6 +41,13 @@ func NewServer(log *slog.Logger, cc *containerd.Client, eac *entityserver_v1alph
 var _ exec_v1alpha.SandboxExec = (*Server)(nil)
 
 func (s *Server) Exec(ctx context.Context, req *exec_v1alpha.SandboxExecExec) error {
+	// The container lives in this runner's containerd namespace, so scope the
+	// operations below to it directly rather than depending on the caller's
+	// context or the containerd client's default namespace. The CLI path only
+	// worked by accident of that default; programmatic callers (e.g. addon
+	// credential rotation) reach us with a bare context.
+	ctx = namespaces.WithNamespace(ctx, s.Namespace)
+
 	args := req.Args()
 
 	if args.Category() != "id" {
