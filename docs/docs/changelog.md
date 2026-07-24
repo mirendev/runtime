@@ -11,6 +11,23 @@ All notable changes to Miren Runtime will be documented in this file.
 ## Unreleased
 *main*
 
+**Security**
+- **Fixed an unauthenticated path traversal in the cluster-local OCI registry** ([GHSA-p37g-hvg3-r6wr](https://github.com/mirendev/runtime/security/advisories/GHSA-p37g-hvg3-r6wr)) - The registry on `:5000` accepted unauthenticated blob uploads and joined the client-supplied digest onto a filesystem path without checking it, so a traversing digest wrote attacker-controlled content anywhere on the host, as root. Paths are now validated before they reach the filesystem, and uploads are verified against the digest they claim. Port 5000 isn't among the inbound ports our firewall docs ask you to open, but it's open to every container on the node by design. Upgrade and restart the server to pick up the fix.
+
+**Improvements**
+- **Rotate an addon's credentials with `miren addon rotate`** - Changing a database password meant manual `ALTER` surgery on the running engine and remembering to redeploy everything that connected to it. `miren addon rotate <name>` changes the credential, records the new secret, and redeploys the apps that use it. Covers Valkey, PostgreSQL and MySQL (shared and dedicated), and RabbitMQ, for both the per-app user and the admin credential. Rotations are idempotent and crash-recoverable, and only one runs per addon at a time. ([#948](https://github.com/mirendev/runtime/pull/948), [#952](https://github.com/mirendev/runtime/pull/952), [#953](https://github.com/mirendev/runtime/pull/953), [#956](https://github.com/mirendev/runtime/pull/956))
+- **`miren login` stops registering a key every time** - Each login minted a fresh ed25519 keypair and registered it with the cloud, a lot of permanent server-side state for a routine sign-in. Login now keeps the tokens it already receives and renews them in the background. `--persistent-key` opts back into the old behavior, and an identity that already has a key keeps it. Logging out revokes the refresh token, so a copied config stops renewing. ([#968](https://github.com/mirendev/runtime/pull/968))
+- **The `miren` on your `$PATH` keeps up with the server** - The install docs put `miren` at `/usr/local/bin/miren`, but `miren server upgrade` only advanced the managed binary, so the CLI you were typing quietly drifted from the server it talked to. `server install` and `server upgrade` now keep that path pointed at the managed release, tracking upgrades and rollbacks on their own. Existing boxes heal on the first upgrade after this ships, and a path something else owns is left alone. ([#969](https://github.com/mirendev/runtime/pull/969))
+- **An image with no command runs its own entrypoint** - A Dockerfile build with no service command used to flatten the image's `ENTRYPOINT` and `CMD` into a shell string and run it under `/bin/sh -c`, which is where PID 1 and signal forwarding go subtly wrong. The entrypoint now runs directly in exec form, the way `docker run` behaves. Giving a `command` is unchanged. ([#951](https://github.com/mirendev/runtime/pull/951))
+
+**Bug Fixes**
+- **Two addons on the same app both get their variables** - Attach a second addon and only one reached the app. The other went `active` with its variables sitting on the association, but they never appeared in `miren env list` or the running process, so nothing looked wrong until the app 500'd. Both reconciled at once and the second write overwrote the first. Those writes are guarded now, and a losing write retries on top of the winner so the two sets compose. The same guard covers the env-var and configuration paths. ([#954](https://github.com/mirendev/runtime/pull/954), [#957](https://github.com/mirendev/runtime/pull/957))
+- **`miren app history` shows deploys from CI** - Deploys from a laptop showed up, deploys through CI didn't, and `miren app versions` told the correct story the whole time. A manual deploy and a CI deploy identify the cluster differently, by name and by address, and history filtered on an exact match. Each cluster's store only ever holds its own deployments, so the filter is gone. ([#966](https://github.com/mirendev/runtime/pull/966))
+- **Dockerfile builds pick up their image's `WORKDIR`** - Miren read a built image's config back through an in-cluster registry name the coordinator can't resolve, so the lookup failed on every Dockerfile build and `WorkingDir` silently fell back to `/app`. The config now comes straight from the build. ([#955](https://github.com/mirendev/runtime/pull/955))
+
+**Documentation**
+- Corrected the glossary's claim that sandboxes are isolated with gVisor. They run under runc, isolated by kernel namespaces and cgroups. ([#973](https://github.com/mirendev/runtime/pull/973))
+
 ---
 
 ## v0.12.0
