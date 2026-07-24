@@ -253,7 +253,7 @@ func bootTask(ctx context.Context, in bootTaskIn) (bootTaskOut, error) {
 		return bootTaskOut{}, fmt.Errorf("booting task: %w", err)
 	}
 
-	rootSpec, err := container.Spec(ctx)
+	rootSpec, err := deps.runtime.ContainerSpec(ctx, container)
 	if err != nil {
 		return bootTaskOut{}, fmt.Errorf("getting container spec: %w", err)
 	}

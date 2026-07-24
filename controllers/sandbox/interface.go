@@ -6,6 +6,7 @@ import (
 	"time"
 
 	containerd "github.com/containerd/containerd/v2/client"
+	"github.com/containerd/containerd/v2/pkg/oci"
 
 	compute "miren.dev/runtime/api/compute/compute_v1alpha"
 	"miren.dev/runtime/network"
@@ -45,6 +46,11 @@ type SandboxContainerRuntime interface {
 	BuildSpec(ctx context.Context, sb *compute.Sandbox, ep *network.EndpointConfig, meta *entity.Meta) ([]containerd.NewContainerOpts, error)
 	CreateContainer(ctx context.Context, id string, opts ...containerd.NewContainerOpts) (string, error)
 	LoadContainer(ctx context.Context, id string) (containerd.Container, error)
+	// ContainerSpec fetches a loaded container's OCI spec. Callers must go
+	// through here rather than calling cont.Spec directly: containerd resolves
+	// the container out of the namespace on the context, and only this
+	// implementation knows which namespace that is.
+	ContainerSpec(ctx context.Context, cont containerd.Container) (*oci.Spec, error)
 	CleanupContainer(ctx context.Context, cont containerd.Container)
 	BootInitialTask(ctx context.Context, sb *compute.Sandbox, ep *network.EndpointConfig, container containerd.Container, shortID string) (containerd.Task, error)
 	ConfigureVolumes(ctx context.Context, sb *compute.Sandbox, meta *entity.Meta) (map[string]string, error)

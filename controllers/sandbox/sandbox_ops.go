@@ -8,6 +8,7 @@ import (
 
 	"github.com/containerd/containerd/namespaces"
 	containerd "github.com/containerd/containerd/v2/client"
+	"github.com/containerd/containerd/v2/pkg/oci"
 	"github.com/containerd/errdefs"
 
 	compute "miren.dev/runtime/api/compute/compute_v1alpha"
@@ -105,6 +106,11 @@ func (o *sandboxOps) CreateContainer(ctx context.Context, id string, opts ...con
 func (o *sandboxOps) LoadContainer(ctx context.Context, id string) (containerd.Container, error) {
 	ctx = namespaces.WithNamespace(ctx, o.ctrl.Namespace)
 	return o.ctrl.CC.LoadContainer(ctx, id)
+}
+
+func (o *sandboxOps) ContainerSpec(ctx context.Context, cont containerd.Container) (*oci.Spec, error) {
+	ctx = namespaces.WithNamespace(ctx, o.ctrl.Namespace)
+	return cont.Spec(ctx)
 }
 
 func (o *sandboxOps) CleanupContainer(ctx context.Context, cont containerd.Container) {
