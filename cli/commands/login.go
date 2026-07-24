@@ -11,7 +11,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"strings"
 	"time"
 
 	"miren.dev/runtime/clientconfig"
@@ -43,8 +42,18 @@ type DeviceFlowExchangeResponse struct {
 	Error            string `json:"error,omitempty"`
 	ErrorDescription string `json:"error_description,omitempty"`
 	AccessToken      string `json:"access_token,omitempty"`
+	RefreshToken     string `json:"refresh_token,omitempty"`
 	TokenType        string `json:"token_type,omitempty"`
 	ExpiresIn        int    `json:"expires_in,omitempty"`
+}
+
+// deviceFlowTokens carries the credentials returned by a successful device-flow
+// exchange. The refresh token is present only when the cloud supports ephemeral
+// login; older clouds return an empty RefreshToken.
+type deviceFlowTokens struct {
+	AccessToken  string
+	RefreshToken string
+	ExpiresIn    int
 }
 
 // BeginKeyRegistrationRequest represents the request to begin key registration
@@ -113,21 +122,22 @@ func getOrCreateKey(ctx *Context, keyName string) (*cloudauth.KeyPair, error) {
 
 // LoginWithDefaults runs the login flow with default settings
 func LoginWithDefaults(ctx *Context) error {
-	return login(ctx, "https://miren.cloud", "cloud", "miren-cli", false, false)
+	return login(ctx, "https://miren.cloud", "cloud", "miren-cli", false, false, false)
 }
 
 // Login authenticates with miren.cloud using device flow
 func Login(ctx *Context, opts struct {
-	CloudURL     string `short:"u" long:"url" description:"Cloud URL" default:"https://miren.cloud"`
-	IdentityName string `short:"i" long:"identity" description:"Name for this identity in config" default:"cloud"`
-	KeyName      string `short:"k" long:"key-name" description:"Name for the authentication key" default:"miren-cli"`
-	NoSave       bool   `long:"no-save" description:"Don't save credentials to config file"`
-	Force        bool   `short:"f" long:"force" description:"Overwrite existing identity without prompting"`
+	CloudURL      string `short:"u" long:"url" description:"Cloud URL" default:"https://miren.cloud"`
+	IdentityName  string `short:"i" long:"identity" description:"Name for this identity in config" default:"cloud"`
+	KeyName       string `short:"k" long:"key-name" description:"Name for the authentication key" default:"miren-cli"`
+	NoSave        bool   `long:"no-save" description:"Don't save credentials to config file"`
+	Force         bool   `short:"f" long:"force" description:"Overwrite existing identity without prompting"`
+	PersistentKey bool   `long:"persistent-key" description:"Register a persistent key instead of the default ephemeral token login"`
 }) error {
-	return login(ctx, opts.CloudURL, opts.IdentityName, opts.KeyName, opts.NoSave, opts.Force)
+	return login(ctx, opts.CloudURL, opts.IdentityName, opts.KeyName, opts.NoSave, opts.Force, opts.PersistentKey)
 }
 
-func login(ctx *Context, cloudURL, identityName, keyName string, noSave, force bool) error {
+func login(ctx *Context, cloudURL, identityName, keyName string, noSave, force, persistentKey bool) error {
 	// Check for existing identity (unless forcing or not saving)
 	if !force && !noSave {
 		config, err := clientconfig.LoadConfig()
@@ -185,6 +195,19 @@ func login(ctx *Context, cloudURL, identityName, keyName string, noSave, force b
 		}
 	}
 
+	// Decide whether to use the persistent-key flow. Ephemeral token login is the
+	// default; --persistent-key opts back in. An existing keypair identity keeps
+	// its key on re-login so we never silently orphan a registered server-side key.
+	usePersistentKey := persistentKey
+	if !usePersistentKey {
+		if existing, err := clientconfig.LoadConfig(); err == nil && existing != nil {
+			if id, err := existing.GetIdentity(identityName); err == nil && id != nil && id.Type == "keypair" {
+				usePersistentKey = true
+				ctx.Info("Identity '%s' already uses a persistent key; keeping it.", identityName)
+			}
+		}
+	}
+
 	// Initialize device flow
 	ctx.Info("Initiating device flow authentication...")
 	initResp, err := initiateDeviceFlow(cloudURL)
@@ -226,7 +249,7 @@ func login(ctx *Context, cloudURL, identityName, keyName string, noSave, force b
 		pollInterval = time.Duration(initResp.PollingInterval) * time.Second
 	}
 
-	token, err := pollForToken(ctx, cloudURL, initResp.DeviceCode, pollInterval, timeout, func(status string) {
+	tokens, err := pollForToken(ctx, cloudURL, initResp.DeviceCode, pollInterval, timeout, func(status string) {
 		if status == "pending" {
 			fmt.Print(".")
 		}
@@ -239,64 +262,116 @@ func login(ctx *Context, cloudURL, identityName, keyName string, noSave, force b
 
 	ctx.Completed("Authentication successful!")
 
-	// Get or create a keypair for future authentication
+	// An ephemeral login needs a refresh token to renew without re-login. If the
+	// cloud is too old to return one, fall back to the persistent-key flow so
+	// login still produces durable credentials.
+	if !usePersistentKey && tokens.RefreshToken == "" {
+		ctx.Warn("Cloud did not return a refresh token; falling back to persistent key authentication.")
+		usePersistentKey = true
+	}
+
+	if noSave {
+		return printUnsavedCredentials(ctx, tokens, usePersistentKey, keyName)
+	}
+
+	if usePersistentKey {
+		return persistKeypairIdentity(ctx, identityName, cloudURL, keyName, tokens.AccessToken)
+	}
+	return persistTokenIdentity(ctx, identityName, cloudURL, tokens)
+}
+
+// persistKeypairIdentity runs the persistent-key flow: register (or reuse) an
+// ed25519 key with the cloud, store a keypair identity, and auto-configure a
+// cluster. accessToken is the device-flow JWT used only to authorize key
+// registration.
+func persistKeypairIdentity(ctx *Context, identityName, cloudURL, keyName, accessToken string) error {
 	keyPair, err := getOrCreateKey(ctx, keyName)
 	if err != nil {
-		ctx.Warn("Failed to get or create keypair: %v", err)
-		ctx.Info("You can still use token authentication")
-		keyPair = nil
-	} else {
-		// Register the public key with the server (only if it's a new key)
-		ctx.Info("Registering public key with server...")
-		if err := registerPublicKey(cloudURL, token, keyPair, keyName); err != nil {
-			ctx.Warn("Failed to register public key: %v", err)
-			ctx.Info("You can still use token authentication")
-			keyPair = nil // Don't save the key if registration failed
-		} else {
-			ctx.Info("Public key registered successfully")
-		}
+		return fmt.Errorf("failed to get or create keypair: %w", err)
 	}
 
-	// Save to config unless --no-save is specified
-	if !noSave {
-		if keyPair != nil {
-			// Save identity with keypair for future authentication
-			if err := saveKeyPairToConfig(identityName, cloudURL, keyPair, keyName); err != nil {
-				ctx.Warn("Failed to save identity to config: %v", err)
-			} else {
-				ctx.Info("Identity '%s' saved to config", identityName)
-				ctx.Info("Future authentication will use the keypair (no login required)")
+	ctx.Info("Registering public key with server...")
+	if err := registerPublicKey(cloudURL, accessToken, keyPair, keyName); err != nil {
+		return fmt.Errorf("failed to register public key: %w", err)
+	}
+	ctx.Info("Public key registered successfully")
+
+	if err := saveKeyPairToConfig(identityName, cloudURL, keyPair, keyName); err != nil {
+		return fmt.Errorf("failed to save identity to config: %w", err)
+	}
+	ctx.Info("Identity '%s' saved to config", identityName)
+	ctx.Info("Future authentication will use the keypair (no login required)")
+	ctx.Info("")
+
+	privateKeyPEM, err := keyPair.PrivateKeyPEM()
+	if err != nil {
+		return fmt.Errorf("failed to encode private key: %w", err)
+	}
+	identity := &clientconfig.IdentityConfig{
+		Type:       "keypair",
+		Issuer:     clientconfig.NormalizeIssuerURL(cloudURL),
+		PrivateKey: privateKeyPEM,
+	}
+	maybeAutoConfigureCluster(ctx, identityName, cloudURL, identity)
+	return nil
+}
+
+// persistTokenIdentity runs the ephemeral flow: store the device-flow access and
+// refresh tokens as a "token" identity and auto-configure a cluster. No key is
+// registered with the cloud, which is the whole point of ephemeral login.
+func persistTokenIdentity(ctx *Context, identityName, cloudURL string, tokens *deviceFlowTokens) error {
+	issuer := clientconfig.NormalizeIssuerURL(cloudURL)
+	identity := &clientconfig.IdentityConfig{
+		Type:         "token",
+		Issuer:       issuer,
+		Token:        tokens.AccessToken,
+		RefreshToken: tokens.RefreshToken,
+	}
+
+	if err := saveTokenIdentityToConfig(identityName, identity); err != nil {
+		return fmt.Errorf("failed to save identity to config: %w", err)
+	}
+	ctx.Info("Identity '%s' saved to config", identityName)
+	ctx.Info("Future authentication reuses the saved token (renewed automatically)")
+	ctx.Info("")
+
+	maybeAutoConfigureCluster(ctx, identityName, cloudURL, identity)
+	return nil
+}
+
+// maybeAutoConfigureCluster attempts cluster auto-configuration, logging only
+// genuinely unexpected errors (not the expected "nothing to configure" cases).
+func maybeAutoConfigureCluster(ctx *Context, identityName, cloudURL string, identity *clientconfig.IdentityConfig) {
+	if err := autoConfigureCluster(ctx, identityName, cloudURL, identity); err != nil {
+		if !errors.Is(err, ErrNoAutoConfigNeeded) && !errors.Is(err, ErrAutoConfigFailed) {
+			ctx.Info("Note: %v", err)
+		}
+	}
+}
+
+// printUnsavedCredentials handles --no-save: it prints the obtained credentials
+// instead of persisting them. For a persistent-key login it prints the freshly
+// generated key; otherwise it prints the access token (and warns about the
+// refresh token, a 7-day credential, landing in terminal scrollback).
+func printUnsavedCredentials(ctx *Context, tokens *deviceFlowTokens, usePersistentKey bool, keyName string) error {
+	if usePersistentKey {
+		keyPair, err := getOrCreateKey(ctx, keyName)
+		if err == nil {
+			if privateKeyPEM, err := keyPair.PrivateKeyPEM(); err == nil {
+				ctx.Info("Private key (not saved):")
+				ctx.Info("%s", privateKeyPEM)
 				ctx.Info("")
-
-				// Check if we should auto-configure a cluster
-				if err := autoConfigureCluster(ctx, identityName, cloudURL, keyPair); err != nil {
-					// Don't fail the login, just log if there's a real error
-					if !errors.Is(err, ErrNoAutoConfigNeeded) && !errors.Is(err, ErrAutoConfigFailed) {
-						// Only log unexpected errors, not expected ones
-						ctx.Info("Note: %v", err)
-					}
-				}
 			}
-		} else {
-			// No keypair was registered
-			ctx.Warn("Authentication successful but no persistent credentials were saved")
-			ctx.Info("You can still use the token with --token flag:")
-			ctx.Info("  export MIREN_TOKEN=%s", token)
 		}
-	} else {
-		if keyPair != nil {
-			privateKeyPEM, _ := keyPair.PrivateKeyPEM()
-			ctx.Info("Private key (not saved):")
-			ctx.Info("%s", privateKeyPEM)
-			ctx.Info("")
-		}
-		ctx.Info("Token (not saved):")
-		ctx.Info("  %s", token)
-		ctx.Info("")
-		ctx.Info("Export as environment variable:")
-		ctx.Info("  export MIREN_TOKEN=%s", token)
 	}
 
+	ctx.Info("Access token (not saved):")
+	ctx.Info("  %s", tokens.AccessToken)
+	ctx.Info("")
+	if tokens.RefreshToken != "" {
+		ctx.Warn("A refresh token was issued but not printed; it is a long-lived credential.")
+		ctx.Info("Re-run 'miren login' without --no-save to store it securely.")
+	}
 	return nil
 }
 
@@ -347,10 +422,10 @@ func initiateDeviceFlow(cloudURL string) (*DeviceFlowInitResponse, error) {
 	return &initResp, nil
 }
 
-func pollForToken(ctx context.Context, cloudURL, deviceCode string, interval, maxDuration time.Duration, progress func(string)) (string, error) {
+func pollForToken(ctx context.Context, cloudURL, deviceCode string, interval, maxDuration time.Duration, progress func(string)) (*deviceFlowTokens, error) {
 	url, err := url.JoinPath(cloudURL, "/api/v1/device/token")
 	if err != nil {
-		return "", fmt.Errorf("invalid cloud URL: %w", err)
+		return nil, fmt.Errorf("invalid cloud URL: %w", err)
 	}
 
 	reqBody := map[string]string{
@@ -361,7 +436,7 @@ func pollForToken(ctx context.Context, cloudURL, deviceCode string, interval, ma
 
 	jsonData, err := json.Marshal(reqBody)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 
 	client := &http.Client{Timeout: 30 * time.Second}
@@ -376,13 +451,15 @@ func pollForToken(ctx context.Context, cloudURL, deviceCode string, interval, ma
 		select {
 		case <-timeoutCtx.Done():
 			if errors.Is(timeoutCtx.Err(), context.DeadlineExceeded) {
-				return "", fmt.Errorf("authentication timed out after %v: %w", maxDuration, timeoutCtx.Err())
+				return nil, fmt.Errorf("authentication timed out after %v: %w", maxDuration, timeoutCtx.Err())
 			}
-			return "", timeoutCtx.Err()
+			return nil, timeoutCtx.Err()
 		case <-ticker.C:
-			req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
+			// Bind each poll request to the timeout context so a hung server
+			// cannot outlive the overall deadline.
+			req, err := http.NewRequestWithContext(timeoutCtx, "POST", url, bytes.NewBuffer(jsonData))
 			if err != nil {
-				return "", err
+				return nil, err
 			}
 
 			req.Header.Set("Content-Type", "application/json")
@@ -404,21 +481,25 @@ func pollForToken(ctx context.Context, cloudURL, deviceCode string, interval, ma
 			// Server always returns 200 with status in JSON
 			var exchangeResp DeviceFlowExchangeResponse
 			if err := json.Unmarshal(body, &exchangeResp); err != nil {
-				return "", fmt.Errorf("failed to parse response: %w", err)
+				return nil, fmt.Errorf("failed to parse response: %w", err)
 			}
 
 			switch exchangeResp.Status {
 			case "authorized":
 				if exchangeResp.AccessToken == "" {
-					return "", fmt.Errorf("server returned authorized status but no token")
+					return nil, fmt.Errorf("server returned authorized status but no token")
 				}
-				return exchangeResp.AccessToken, nil
+				return &deviceFlowTokens{
+					AccessToken:  exchangeResp.AccessToken,
+					RefreshToken: exchangeResp.RefreshToken,
+					ExpiresIn:    exchangeResp.ExpiresIn,
+				}, nil
 
 			case "denied":
-				return "", fmt.Errorf("authorization denied by user")
+				return nil, fmt.Errorf("authorization denied by user")
 
 			case "expired":
-				return "", fmt.Errorf("device code expired")
+				return nil, fmt.Errorf("device code expired")
 
 			case "pending":
 				progress("pending")
@@ -433,7 +514,7 @@ func pollForToken(ctx context.Context, cloudURL, deviceCode string, interval, ma
 				case "authorization_pending":
 					progress("pending")
 				default:
-					return "", fmt.Errorf("server error: %s - %s", exchangeResp.Error, exchangeResp.ErrorDescription)
+					return nil, fmt.Errorf("server error: %s - %s", exchangeResp.Error, exchangeResp.ErrorDescription)
 				}
 
 			default:
@@ -571,11 +652,10 @@ func saveKeyPairToConfig(identityName, cloudURL string, keyPair *cloudauth.KeyPa
 		return fmt.Errorf("failed to encode private key: %w", err)
 	}
 
-	// Parse cloud URL to get the issuer
-	issuer := strings.TrimSuffix(cloudURL, "/")
-	if !strings.HasPrefix(issuer, "http://") && !strings.HasPrefix(issuer, "https://") {
-		issuer = "https://" + issuer
-	}
+	// Parse cloud URL to get the issuer. Share one normalization rule with the
+	// token save path so a keypair and token identity for the same --url always
+	// store an identical issuer (notably http:// for loopback dev clouds).
+	issuer := clientconfig.NormalizeIssuerURL(cloudURL)
 
 	// Load or create the main client config
 	mainConfig, err := clientconfig.LoadConfig()
@@ -636,10 +716,36 @@ func saveKeyPairToConfig(identityName, cloudURL string, keyPair *cloudauth.KeyPa
 	return mainConfig.Save()
 }
 
+// saveTokenIdentityToConfig persists an ephemeral "token" identity (access +
+// refresh token) to clientconfig.d/identity-{name}.yaml. Unlike the keypair
+// flow there is no separate key file — the credentials live entirely in the
+// identity leaf.
+func saveTokenIdentityToConfig(identityName string, identity *clientconfig.IdentityConfig) error {
+	mainConfig, err := clientconfig.LoadConfig()
+	if err != nil {
+		if err == clientconfig.ErrNoConfig {
+			mainConfig = clientconfig.NewConfig()
+		} else {
+			return fmt.Errorf("failed to load config: %w", err)
+		}
+	}
+
+	leafConfigData := &clientconfig.ConfigData{
+		Identities: map[string]*clientconfig.IdentityConfig{
+			identityName: identity,
+		},
+	}
+	mainConfig.SetLeafConfig("identity-"+identityName, leafConfigData)
+
+	return mainConfig.Save()
+}
+
 // autoConfigureCluster checks if there are any local clusters configured,
 // and if not, fetches available clusters from the server and automatically
-// configures the client if there's only one cluster available
-func autoConfigureCluster(ctx *Context, identityName, cloudURL string, keyPair *cloudauth.KeyPair) error {
+// configures the client if there's only one cluster available. The identity is
+// an in-memory (unnamed) credential used to authenticate the cluster lookup; it
+// carries either a direct private key (keypair) or device-flow tokens (token).
+func autoConfigureCluster(ctx *Context, identityName, cloudURL string, identity *clientconfig.IdentityConfig) error {
 	// Load the main config to check if any clusters are configured
 	mainConfig, err := clientconfig.LoadConfig()
 	if err != nil && err != clientconfig.ErrNoConfig {
@@ -654,30 +760,13 @@ func autoConfigureCluster(ctx *Context, identityName, cloudURL string, keyPair *
 
 	ctx.Info("Checking for available clusters...")
 
-	// Create identity config for fetching clusters
-	issuer := strings.TrimSuffix(cloudURL, "/")
-	if !strings.HasPrefix(issuer, "http://") && !strings.HasPrefix(issuer, "https://") {
-		issuer = "https://" + issuer
-	}
-
-	privateKeyPEM, err := keyPair.PrivateKeyPEM()
-	if err != nil {
-		return fmt.Errorf("failed to encode private key: %w", err)
-	}
-
-	identity := &clientconfig.IdentityConfig{
-		Type:       "keypair",
-		Issuer:     issuer,
-		PrivateKey: privateKeyPEM,
-	}
-
-	// Fetch available clusters from the server
-	// Pass mainConfig even though this identity has a direct PrivateKey (not KeyRef)
-	// The helper will handle both cases
+	// Fetch available clusters from the server. The identity is anonymous
+	// (name ""), so any token refresh it triggers is used for this call only and
+	// not persisted — fine, since the tokens are fresh from the device flow.
 	if mainConfig == nil {
 		mainConfig = clientconfig.NewConfig()
 	}
-	clusters, err := fetchAvailableClusters(ctx, mainConfig, identity)
+	clusters, err := fetchAvailableClusters(ctx, mainConfig, "", identity)
 	if err != nil {
 		return fmt.Errorf("failed to fetch available clusters: %w", err)
 	}
@@ -788,18 +877,7 @@ func getIdentityUserInfo(ctx *Context, config *clientconfig.Config, identityName
 		return ""
 	}
 
-	if identity.Type != "keypair" {
-		return ""
-	}
-
-	// Get the private key
-	privateKeyPEM, err := config.GetPrivateKeyPEM(identity)
-	if err != nil {
-		return ""
-	}
-
-	keyPair, err := cloudauth.LoadKeyPairFromPEM(privateKeyPEM)
-	if err != nil {
+	if identity.Type != "keypair" && identity.Type != "token" {
 		return ""
 	}
 
@@ -810,7 +888,7 @@ func getIdentityUserInfo(ctx *Context, config *clientconfig.Config, identityName
 	}
 
 	// Authenticate and get JWT token
-	token, err := clientconfig.AuthenticateWithKey(ctx, authServer, keyPair)
+	token, err := config.TokenForIdentity(ctx, identityName, identity, authServer)
 	if err != nil {
 		return ""
 	}

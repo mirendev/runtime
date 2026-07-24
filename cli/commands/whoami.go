@@ -2,11 +2,9 @@ package commands
 
 import (
 	"fmt"
-	"strings"
 
 	"miren.dev/runtime/clientconfig"
 	"miren.dev/runtime/pkg/auth"
-	"miren.dev/runtime/pkg/cloudauth"
 )
 
 // Whoami displays information about the current authenticated user
@@ -33,42 +31,17 @@ func Whoami(ctx *Context, opts struct {
 	if ctx.ClusterConfig.Identity != "" && ctx.ClientConfig != nil {
 		var err error
 		identity, err = ctx.ClientConfig.GetIdentity(ctx.ClusterConfig.Identity)
-		if err == nil && identity != nil && identity.Type == "keypair" {
-			// Get the private key (handles both direct PrivateKey and KeyRef)
-			privateKeyPEM, err := ctx.ClientConfig.GetPrivateKeyPEM(identity)
-			if err != nil {
-				ctx.Warn("Failed to get private key: %v", err)
-			} else {
-				keyPair, err := cloudauth.LoadKeyPairFromPEM(privateKeyPEM)
+		if err == nil && identity != nil {
+			switch identity.Type {
+			case "keypair", "token":
+				token, err = ctx.ClientConfig.TokenForIdentity(ctx, ctx.ClusterConfig.Identity, identity, hostname)
 				if err != nil {
-					ctx.Warn("Failed to load keypair: %v", err)
-				} else {
-					// Get the auth server URL
-					authServer := identity.Issuer
-					if authServer == "" {
-						authServer = hostname
-					}
-
-					// For local development, use HTTP
-					if !strings.HasPrefix(authServer, "http://") && !strings.HasPrefix(authServer, "https://") {
-						if strings.Contains(authServer, "localhost") || strings.Contains(authServer, "127.0.0.1") {
-							authServer = "http://" + authServer
-						} else {
-							authServer = "https://" + authServer
-						}
-					}
-
-					// Get JWT token
-					token, err = clientconfig.AuthenticateWithKey(ctx, authServer, keyPair)
-					if err != nil {
-						return fmt.Errorf("failed to authenticate with keypair: %w", err)
-					}
-					authMethod = "keypair"
+					return fmt.Errorf("failed to authenticate: %w", err)
 				}
+				authMethod = identity.Type
+			case "certificate":
+				authMethod = "certificate"
 			}
-		}
-		if identity != nil && identity.Type == "certificate" {
-			authMethod = "certificate"
 		}
 	}
 

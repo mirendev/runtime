@@ -112,6 +112,17 @@ func Logout(ctx *Context, opts struct {
 		}
 	}
 
+	// For ephemeral token identities, best-effort revoke the refresh token so a
+	// leaked ~/.config copy can't keep renewing after logout. Never let a failed
+	// revoke block the local logout.
+	if identity.Type == "token" && identity.RefreshToken != "" {
+		if err := clientconfig.RevokeRefreshToken(ctx, identity.Issuer, identity.Token, identity.RefreshToken); err != nil {
+			ctx.Warn("Could not revoke refresh token on the server (removing local credentials anyway): %v", err)
+		} else {
+			ctx.Info("Revoked refresh token on the server")
+		}
+	}
+
 	// Delete the identity file
 	if err := os.Remove(identityFile); err != nil {
 		if !os.IsNotExist(err) {

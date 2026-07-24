@@ -446,7 +446,7 @@ func (c *Context) wrapRPCError(err error) error {
 			clusterName = "the cluster"
 		}
 
-		c.Warn("access denied: you don't have permission to access %s\nPlease check your credentials or request access from the cluster administrator", clusterName)
+		c.Warn("access denied: you don't have permission to access %s\nPlease check your credentials or request access from the cluster administrator.\nIf you were logged in previously, your session may have expired — run 'miren login'.", clusterName)
 		return ErrAccessDenied
 	}
 	return err

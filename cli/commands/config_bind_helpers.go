@@ -15,7 +15,6 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"miren.dev/runtime/clientconfig"
-	"miren.dev/runtime/pkg/cloudauth"
 	"miren.dev/runtime/pkg/theme"
 	"miren.dev/runtime/pkg/ui"
 )
@@ -195,10 +194,12 @@ func isPrivateAddress(host string) bool {
 	return ip.IsPrivate()
 }
 
-// fetchAvailableClusters queries the identity server for available clusters
-func fetchAvailableClusters(ctx *Context, config *clientconfig.Config, identity *clientconfig.IdentityConfig) ([]ClusterResponse, error) {
-	if identity.Type != "keypair" {
-		return nil, fmt.Errorf("cluster listing is only supported for keypair identities")
+// fetchAvailableClusters queries the identity server for available clusters.
+// identityName may be "" for an anonymous in-memory identity (e.g. during login
+// before it has been named), in which case token refreshes are not persisted.
+func fetchAvailableClusters(ctx *Context, config *clientconfig.Config, identityName string, identity *clientconfig.IdentityConfig) ([]ClusterResponse, error) {
+	if identity.Type != "keypair" && identity.Type != "token" {
+		return nil, fmt.Errorf("cluster listing is only supported for keypair and token identities")
 	}
 
 	// Get the issuer URL
@@ -207,20 +208,8 @@ func fetchAvailableClusters(ctx *Context, config *clientconfig.Config, identity 
 		return nil, fmt.Errorf("identity has no issuer configured")
 	}
 
-	// Get the private key (handles both direct PrivateKey and KeyRef)
-	privateKeyPEM, err := config.GetPrivateKeyPEM(identity)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get private key: %w", err)
-	}
-
-	// Load the private key
-	keyPair, err := cloudauth.LoadKeyPairFromPEM(privateKeyPEM)
-	if err != nil {
-		return nil, fmt.Errorf("failed to load private key: %w", err)
-	}
-
 	// Get JWT token
-	token, err := clientconfig.AuthenticateWithKey(ctx, issuerURL, keyPair)
+	token, err := config.TokenForIdentity(ctx, identityName, identity, issuerURL)
 	if err != nil {
 		return nil, fmt.Errorf("failed to authenticate: %w", err)
 	}
