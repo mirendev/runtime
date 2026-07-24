@@ -47,15 +47,25 @@ func (r *Registry) Start(ctx context.Context, addr string) error {
 		return err
 	}
 
-	// Create registry handler
-	registry := NewRegistryHandler(path, r.Log, r.EC)
+	r.Log.Info("Starting OCI Registry", "addr", addr, "path", path)
 
+	r.server = &http.Server{
+		Addr:    addr,
+		Handler: newMux(NewRegistryHandler(path, r.Log, r.EC)),
+		BaseContext: func(net.Listener) context.Context {
+			return ctx
+		},
+	}
+	go r.server.ListenAndServe()
+	return nil
+}
+
+// newMux wires the registry handler up alongside the health check endpoint.
+func newMux(registry *RegistryHandler) *http.ServeMux {
 	mux := http.NewServeMux()
 
-	// Set up HTTP server
 	mux.Handle("/v2/", registry)
 
-	// Add basic health check endpoint
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/" {
 			http.NotFound(w, r)
@@ -68,17 +78,7 @@ func (r *Registry) Start(ctx context.Context, addr string) error {
 		})
 	})
 
-	r.Log.Info("Starting OCI Registry", "addr", addr, "path", path)
-
-	r.server = &http.Server{
-		Addr:    addr,
-		Handler: mux,
-		BaseContext: func(net.Listener) context.Context {
-			return ctx
-		},
-	}
-	go r.server.ListenAndServe()
-	return nil
+	return mux
 }
 
 func (r *Registry) Shutdown(ctx context.Context) error {
@@ -103,74 +103,146 @@ func NewRegistryHandler(storageRoot string, log *slog.Logger, ec *entityserver.C
 	}
 }
 
-// ServeHTTP implements the http.Handler interface
+// checkName rejoins and validates the repository name segments, answering 400
+// and reporting false if they don't form a legal name.
+func (h *RegistryHandler) checkName(w http.ResponseWriter, r *http.Request, segments []string) (string, bool) {
+	name := strings.Join(segments, "/")
+	if err := validateRepositoryName(name); err != nil {
+		h.reject(w, r, err)
+		return "", false
+	}
+	return name, true
+}
+
+// reject logs a refused request and answers 400. The remote address is
+// included because a rejection here means something on the bridge sent us a
+// path it had no business sending.
+func (h *RegistryHandler) reject(w http.ResponseWriter, r *http.Request, err error) {
+	h.log.Warn("rejected registry request", "error", err, "remote", r.RemoteAddr, "path", r.URL.EscapedPath())
+	w.WriteHeader(http.StatusBadRequest)
+}
+
+// blobPath resolves the storage location of a blob. The digest must already
+// have passed validateDigest.
+func (h *RegistryHandler) blobPath(digest string) (string, error) {
+	return containedPath(h.storageRoot, "blobs", digest)
+}
+
+// uploadPath resolves the staging location of an in-flight upload. The id must
+// already have passed validateUploadID.
+func (h *RegistryHandler) uploadPath(id string) (string, error) {
+	return containedPath(h.storageRoot, "uploads", id)
+}
+
+// ServeHTTP implements the http.Handler interface.
+//
+// Every path component is validated against the OCI grammars here, before
+// dispatch, so a handler never sees a name, digest, or upload id that could
+// reach outside the storage root.
 func (h *RegistryHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	// Strip the leading /v2/ from the path
-	path := strings.TrimPrefix(r.URL.Path, "/v2/")
+	parts, ok := splitEscapedPath(r.URL.EscapedPath())
+	if !ok {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
 
 	// Basic API version check endpoint
-	if path == "" {
+	if len(parts) == 0 {
 		w.WriteHeader(http.StatusOK)
 		return
 	}
 
-	// Split the path into components
-	parts := strings.Split(path, "/")
-
-	// Handle API endpoints based on the URL pattern
+	// The upload cases come first: "/v2/<name>/blobs/uploads" also satisfies
+	// the plain blob pattern, with "uploads" standing in for the digest.
 	switch {
-	// /v2/<name>/manifests/<reference>
-	case len(parts) >= 3 && parts[len(parts)-2] == "manifests":
-		name := strings.Join(parts[:len(parts)-2], "/")
-		reference := parts[len(parts)-1]
+	// /v2/<name>/blobs/uploads/<uuid>
+	case len(parts) >= 4 && parts[len(parts)-3] == "blobs" && parts[len(parts)-2] == "uploads":
+		name, ok := h.checkName(w, r, parts[:len(parts)-3])
+		if !ok {
+			return
+		}
+		uuid := parts[len(parts)-1]
+
+		// A trailing slash leaves an empty final segment, which is the other
+		// spelling of the upload-initiation route.
+		if uuid == "" {
+			if r.Method == http.MethodPost {
+				h.initBlobUpload(w, name)
+			} else {
+				w.WriteHeader(http.StatusMethodNotAllowed)
+			}
+			return
+		}
+
+		if err := validateUploadID(uuid); err != nil {
+			h.reject(w, r, err)
+			return
+		}
 
 		switch r.Method {
-		case http.MethodGet:
-			h.getManifest(w, r, name, reference)
 		case http.MethodPut:
-			h.putManifest(w, r, name, reference)
-		case http.MethodHead:
-			h.headManifest(w, r, name, reference)
+			h.completeBlobUpload(w, r, name, uuid)
+		case http.MethodPatch:
+			h.chunkBlobUpload(w, r, name, uuid)
 		default:
+			w.WriteHeader(http.StatusMethodNotAllowed)
+		}
+
+	// /v2/<name>/blobs/uploads
+	case len(parts) >= 3 && parts[len(parts)-2] == "blobs" && parts[len(parts)-1] == "uploads":
+		name, ok := h.checkName(w, r, parts[:len(parts)-2])
+		if !ok {
+			return
+		}
+
+		if r.Method == http.MethodPost {
+			h.initBlobUpload(w, name)
+		} else {
 			w.WriteHeader(http.StatusMethodNotAllowed)
 		}
 
 	// /v2/<name>/blobs/<digest>
 	case len(parts) >= 3 && parts[len(parts)-2] == "blobs":
-		name := strings.Join(parts[:len(parts)-2], "/")
+		if _, ok := h.checkName(w, r, parts[:len(parts)-2]); !ok {
+			return
+		}
 		digest := parts[len(parts)-1]
+
+		if err := validateDigest(digest); err != nil {
+			h.reject(w, r, err)
+			return
+		}
 
 		switch r.Method {
 		case http.MethodGet:
-			h.getBlob(w, r, name, digest)
+			h.getBlob(w, digest)
 		case http.MethodHead:
-			h.headBlob(w, r, name, digest)
+			h.headBlob(w, digest)
 		default:
 			w.WriteHeader(http.StatusMethodNotAllowed)
 		}
 
-	// /v2/<name>/blobs/uploads/
-	case len(parts) >= 3 && parts[len(parts)-2] == "blobs" && parts[len(parts)-1] == "uploads":
-		name := strings.Join(parts[:len(parts)-2], "/")
+	// /v2/<name>/manifests/<reference>
+	case len(parts) >= 3 && parts[len(parts)-2] == "manifests":
+		name, ok := h.checkName(w, r, parts[:len(parts)-2])
+		if !ok {
+			return
+		}
+		reference := parts[len(parts)-1]
 
-		if r.Method == http.MethodPost {
-			h.initBlobUpload(w, r, name)
-		} else {
-			w.WriteHeader(http.StatusMethodNotAllowed)
+		if err := validateReference(reference); err != nil {
+			h.reject(w, r, err)
+			return
 		}
 
-	// /v2/<name>/blobs/uploads/<uuid>
-	case len(parts) >= 4 && parts[len(parts)-3] == "blobs" && parts[len(parts)-2] == "uploads":
-		name := strings.Join(parts[:len(parts)-3], "/")
-		uuid := parts[len(parts)-1]
-
-		if uuid == "" && r.Method == http.MethodPost {
-			h.initBlobUpload(w, r, name)
-		} else if r.Method == http.MethodPut {
-			h.completeBlobUpload(w, r, name, uuid)
-		} else if r.Method == http.MethodPatch {
-			h.chunkBlobUpload(w, r, name, uuid)
-		} else {
+		switch r.Method {
+		case http.MethodGet:
+			h.getManifest(w, r, reference)
+		case http.MethodPut:
+			h.putManifest(w, r, name, reference)
+		case http.MethodHead:
+			h.headManifest(w, r, reference)
+		default:
 			w.WriteHeader(http.StatusMethodNotAllowed)
 		}
 
@@ -180,7 +252,7 @@ func (h *RegistryHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 // getManifest handles GET requests for manifests
-func (h *RegistryHandler) getManifest(w http.ResponseWriter, r *http.Request, name, reference string) {
+func (h *RegistryHandler) getManifest(w http.ResponseWriter, r *http.Request, reference string) {
 	var artifact core_v1alpha.Artifact
 
 	if strings.HasPrefix(reference, "sha256:") {
@@ -225,7 +297,7 @@ func (h *RegistryHandler) getManifest(w http.ResponseWriter, r *http.Request, na
 }
 
 // headManifest handles HEAD requests for manifests
-func (h *RegistryHandler) headManifest(w http.ResponseWriter, r *http.Request, name, reference string) {
+func (h *RegistryHandler) headManifest(w http.ResponseWriter, r *http.Request, reference string) {
 	var appVer core_v1alpha.Artifact
 
 	err := h.ec.Get(r.Context(), reference, &appVer)
@@ -330,8 +402,13 @@ func (h *RegistryHandler) putManifest(w http.ResponseWriter, r *http.Request, na
 }
 
 // getBlob handles GET requests for blobs
-func (h *RegistryHandler) getBlob(w http.ResponseWriter, r *http.Request, name, digest string) {
-	blobPath := filepath.Join(h.storageRoot, "blobs", digest)
+func (h *RegistryHandler) getBlob(w http.ResponseWriter, digest string) {
+	blobPath, err := h.blobPath(digest)
+	if err != nil {
+		h.log.Error("Refusing blob read outside storage root", "digest", digest, "error", err)
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
 
 	data, err := os.ReadFile(blobPath)
 	if err != nil {
@@ -348,8 +425,13 @@ func (h *RegistryHandler) getBlob(w http.ResponseWriter, r *http.Request, name, 
 }
 
 // headBlob handles HEAD requests for blobs
-func (h *RegistryHandler) headBlob(w http.ResponseWriter, r *http.Request, name, digest string) {
-	blobPath := filepath.Join(h.storageRoot, "blobs", digest)
+func (h *RegistryHandler) headBlob(w http.ResponseWriter, digest string) {
+	blobPath, err := h.blobPath(digest)
+	if err != nil {
+		h.log.Error("Refusing blob stat outside storage root", "digest", digest, "error", err)
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
 
 	fileInfo, err := os.Stat(blobPath)
 	if err != nil {
@@ -364,7 +446,7 @@ func (h *RegistryHandler) headBlob(w http.ResponseWriter, r *http.Request, name,
 }
 
 // initBlobUpload handles POST requests to initialize blob uploads
-func (h *RegistryHandler) initBlobUpload(w http.ResponseWriter, r *http.Request, name string) {
+func (h *RegistryHandler) initBlobUpload(w http.ResponseWriter, name string) {
 	// Generate a unique ID for this upload
 	uploadID := idgen.Gen("b")
 
@@ -378,7 +460,13 @@ func (h *RegistryHandler) initBlobUpload(w http.ResponseWriter, r *http.Request,
 	}
 
 	// Create an empty upload file
-	uploadPath := filepath.Join(uploadDir, uploadID)
+	uploadPath, err := h.uploadPath(uploadID)
+	if err != nil {
+		h.log.Error("Error resolving upload path", "uploadID", uploadID, "error", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
 	err = os.WriteFile(uploadPath, []byte{}, 0644)
 	if err != nil {
 		h.log.Error("Error creating upload file", "uploadPath", uploadPath, "error", err)
@@ -395,10 +483,15 @@ func (h *RegistryHandler) initBlobUpload(w http.ResponseWriter, r *http.Request,
 
 // chunkBlobUpload handles PATCH requests to upload blob chunks
 func (h *RegistryHandler) chunkBlobUpload(w http.ResponseWriter, r *http.Request, name, uuid string) {
-	uploadPath := filepath.Join(h.storageRoot, "uploads", uuid)
+	uploadPath, err := h.uploadPath(uuid)
+	if err != nil {
+		h.log.Error("Refusing upload write outside storage root", "uuid", uuid, "error", err)
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
 
 	// Check if the upload exists
-	_, err := os.Stat(uploadPath)
+	_, err = os.Stat(uploadPath)
 	if err != nil {
 		h.log.Error("Error stating upload file", "uploadPath", uploadPath, "error", err)
 		w.WriteHeader(http.StatusNotFound)
@@ -440,21 +533,28 @@ func (h *RegistryHandler) chunkBlobUpload(w http.ResponseWriter, r *http.Request
 
 // completeBlobUpload handles PUT requests to complete blob uploads
 func (h *RegistryHandler) completeBlobUpload(w http.ResponseWriter, r *http.Request, name, uuid string) {
-	uploadPath := filepath.Join(h.storageRoot, "uploads", uuid)
+	uploadPath, err := h.uploadPath(uuid)
+	if err != nil {
+		h.log.Error("Refusing upload completion outside storage root", "uuid", uuid, "error", err)
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
 
 	// Check if the upload exists
-	_, err := os.Stat(uploadPath)
+	_, err = os.Stat(uploadPath)
 	if err != nil {
 		h.log.Error("Error stating upload file", "uploadPath", uploadPath, "error", err)
 		w.WriteHeader(http.StatusNotFound)
 		return
 	}
 
-	// Get the digest from the query parameters
+	// The digest arrives on the query string, so unlike the path components it
+	// gets no protection at all from the routing. It is the sink from
+	// MIR-1474: before this check, ?digest=../../../etc/cron.d/pwn made the
+	// rename below an arbitrary file write as root.
 	digest := r.URL.Query().Get("digest")
-	if digest == "" {
-		h.log.Error("Missing digest parameter", "uploadPath", uploadPath)
-		w.WriteHeader(http.StatusBadRequest)
+	if err := validateDigest(digest); err != nil {
+		h.reject(w, r, err)
 		return
 	}
 
@@ -467,8 +567,19 @@ func (h *RegistryHandler) completeBlobUpload(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	// If there's data in the request body, append it to the upload
-	if r.ContentLength > 0 {
+	finalPath, err := h.blobPath(digest)
+	if err != nil {
+		h.log.Error("Refusing blob write outside storage root", "digest", digest, "error", err)
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	// Append any final data from the request body. This copies unconditionally
+	// rather than gating on ContentLength, which is -1 for a chunked request:
+	// under the digest check below, skipping a chunked body would turn a
+	// silently truncated blob into a hard push failure. io.Copy on an empty
+	// body is a no-op, so the monolithic and chunked cases both work.
+	if r.Body != nil {
 		file, err := os.OpenFile(uploadPath, os.O_APPEND|os.O_WRONLY, 0644)
 		if err != nil {
 			h.log.Error("Error opening upload file", "uploadPath", uploadPath, "error", err)
@@ -486,8 +597,26 @@ func (h *RegistryHandler) completeBlobUpload(w http.ResponseWriter, r *http.Requ
 		file.Close()
 	}
 
+	// Confirm the content actually hashes to the digest the client claimed.
+	// Without this any sandbox can push whatever it likes under an existing
+	// blob's digest, and the rename below silently clobbers the original.
+	actual, err := digestFile(uploadPath, digest)
+	if err != nil {
+		os.Remove(uploadPath)
+		h.log.Warn("Rejecting blob upload", "uploadPath", uploadPath, "digest", digest, "error", err)
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	if actual != digest {
+		os.Remove(uploadPath)
+		h.log.Warn("Rejecting blob upload with mismatched digest",
+			"claimed", digest, "actual", actual, "remote", r.RemoteAddr)
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
 	// Move the upload to the final location
-	finalPath := filepath.Join(blobsDir, digest)
 	err = os.Rename(uploadPath, finalPath)
 	if err != nil {
 		h.log.Error("Error moving upload file", "uploadPath", uploadPath, "finalPath", finalPath, "error", err)
@@ -499,38 +628,4 @@ func (h *RegistryHandler) completeBlobUpload(w http.ResponseWriter, r *http.Requ
 	w.Header().Set("Docker-Content-Digest", digest)
 	w.Header().Set("Location", fmt.Sprintf("/v2/%s/blobs/%s", name, digest))
 	w.WriteHeader(http.StatusCreated)
-}
-
-func Listen(log *slog.Logger, ec *entityserver.Client, path, addr string) error {
-	// Create storage directory if it doesn't exist
-	err := os.MkdirAll(path, 0755)
-	if err != nil {
-		return err
-	}
-
-	// Create registry handler
-	registry := NewRegistryHandler(path, log, ec)
-
-	mux := http.NewServeMux()
-
-	// Set up HTTP server
-	mux.Handle("/v2/", registry)
-
-	// Add basic health check endpoint
-	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/" {
-			http.NotFound(w, r)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]string{
-			"status":  "OK",
-			"message": "OCI Registry is running",
-		})
-	})
-
-	port := 5000
-	log.Info("Starting OCI Registry", "port", port, "path", path)
-
-	return http.ListenAndServe(addr, mux)
 }

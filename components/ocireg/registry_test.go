@@ -187,7 +187,7 @@ func TestGetManifest_ByDigest(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/v2/test-app/manifests/%s", digest), nil)
 	rec := httptest.NewRecorder()
 
-	handler.getManifest(rec, req, "test-app", digest)
+	handler.getManifest(rec, req, digest)
 
 	assert.Equal(t, http.StatusOK, rec.Code)
 	assert.Equal(t, "application/vnd.oci.image.manifest.v1+json", rec.Header().Get("Content-Type"))
@@ -236,7 +236,7 @@ func TestGetManifest_ByReference(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/v2/test-app/manifests/my-artifact-ref", nil)
 	rec := httptest.NewRecorder()
 
-	handler.getManifest(rec, req, "test-app", "my-artifact-ref")
+	handler.getManifest(rec, req, "my-artifact-ref")
 
 	assert.Equal(t, http.StatusOK, rec.Code)
 	assert.Equal(t, digest, rec.Header().Get("Docker-Content-Digest"))
@@ -262,7 +262,7 @@ func TestGetManifest_NotFound(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/v2/test-app/manifests/does-not-exist", nil)
 	rec := httptest.NewRecorder()
 
-	handler.getManifest(rec, req, "test-app", "does-not-exist")
+	handler.getManifest(rec, req, "does-not-exist")
 
 	assert.Equal(t, http.StatusNotFound, rec.Code)
 }
