@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -61,13 +62,24 @@ func (m *mockCloud) server(t *testing.T) *httptest.Server {
 		_ = json.NewEncoder(w).Encode(resp)
 	})
 
+	// Exercise the real begin -> sign -> complete round trip rather than the 409
+	// "already registered" shortcut, so tests can prove a key was fully
+	// registered and not merely that begin was called.
 	mux.HandleFunc("/api/v1/users/keys/begin", func(w http.ResponseWriter, r *http.Request) {
 		m.keyBeginHits.Add(1)
-		// 409 is treated as "already registered" success by registerPublicKey,
-		// which keeps the persistent-key test from needing a signing round-trip.
-		w.WriteHeader(http.StatusConflict)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"envelope":  "test-envelope",
+			"challenge": base64.StdEncoding.EncodeToString([]byte("challenge-bytes")),
+		})
 	})
 	mux.HandleFunc("/api/v1/users/keys/complete", func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Envelope  string `json:"envelope"`
+			Signature string `json:"signature"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		require.Equal(t, "test-envelope", req.Envelope, "complete must echo the envelope from begin")
+		require.NotEmpty(t, req.Signature, "complete must carry a signature over the challenge")
 		m.keyCompleteHits.Add(1)
 		w.WriteHeader(http.StatusOK)
 	})
@@ -131,6 +143,7 @@ func TestLoginPersistentKeyFlag(t *testing.T) {
 	require.NoError(t, err)
 
 	require.Equal(t, int32(1), mc.keyBeginHits.Load(), "persistent-key login must register a key")
+	require.Equal(t, int32(1), mc.keyCompleteHits.Load(), "key registration must complete")
 
 	cfg, err := clientconfig.LoadConfig()
 	require.NoError(t, err)
@@ -161,6 +174,8 @@ func TestLoginNoSavePersistentKeyRegisters(t *testing.T) {
 
 	require.Equal(t, int32(1), mc.keyBeginHits.Load(),
 		"a printed key must be registered with the cloud or it cannot authenticate")
+	require.Equal(t, int32(1), mc.keyCompleteHits.Load(),
+		"registration must actually complete, not just begin")
 
 	// --no-save must still persist nothing.
 	_, err = os.Stat(filepath.Join(dir, "clientconfig.d"))
@@ -182,6 +197,7 @@ func TestLoginNoSaveEphemeralSkipsKeyRegistration(t *testing.T) {
 	require.NoError(t, err)
 
 	require.Zero(t, mc.keyBeginHits.Load(), "ephemeral --no-save must not register a key")
+	require.Zero(t, mc.keyCompleteHits.Load(), "ephemeral --no-save must not complete registration")
 	_, err = os.Stat(filepath.Join(dir, "clientconfig.d"))
 	require.True(t, os.IsNotExist(err), "--no-save must not write any config")
 }
@@ -202,6 +218,7 @@ func TestLoginFallsBackWhenNoRefreshToken(t *testing.T) {
 	require.NoError(t, err)
 
 	require.Equal(t, int32(1), mc.keyBeginHits.Load(), "should fall back to key registration")
+	require.Equal(t, int32(1), mc.keyCompleteHits.Load(), "fallback key registration must complete")
 
 	cfg, err := clientconfig.LoadConfig()
 	require.NoError(t, err)
