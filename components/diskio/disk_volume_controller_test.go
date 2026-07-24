@@ -88,6 +88,61 @@ func TestDiskVolumeControllerReconcileVolumePresent(t *testing.T) {
 	assert.Equal(t, filepath.Join(expectedVolPath, "disk.img"), updated.ImagePath)
 }
 
+// TestDiskVolumeControllerCreateSkipsExistingImage covers the restore path:
+// when a disk.img is already present (moved back into place by `disk
+// undelete`), createVolume must preserve it rather than reimaging, so the
+// recovered data survives. Reaching this branch is what lets undelete route a
+// restored volume through the normal mount-then-READY sequence (MIR-1469).
+func TestDiskVolumeControllerCreateSkipsExistingImage(t *testing.T) {
+	ctx := t.Context()
+	log := testutils.TestLogger(t)
+
+	es, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	dataPath := t.TempDir()
+	nodeId := "test-node-1"
+	state := NewState()
+	ops := newMockDiskVolumeOps()
+
+	vc := newTestDiskVolumeController(log, dataPath, nodeId, es.EAC, state, ops)
+
+	// Simulate a restored volume: the directory and its disk.img already
+	// exist on disk before reconcile runs.
+	expectedVolPath := filepath.Join(dataPath, "volumes", "vol-123")
+	imagePath := filepath.Join(expectedVolPath, "disk.img")
+	ops.existingPaths[expectedVolPath] = true
+	ops.existingPaths[imagePath] = true
+
+	vol := &storage_v1alpha.DiskVolume{
+		ID:           "disk_volume/vol-123",
+		NodeId:       compute.NewNodeId(nodeId).Id(),
+		SizeGb:       10,
+		Filesystem:   "ext4",
+		DesiredState: storage_v1alpha.DV_PRESENT,
+		ActualState:  storage_v1alpha.DV_PENDING,
+	}
+	createDiskVolumeEntity(ctx, t, es, vol)
+
+	err := vc.ReconcileWithEntities(ctx)
+	require.NoError(t, err)
+
+	// The existing image must be preserved, not reimaged.
+	assert.Empty(t, ops.createdImages, "restored disk.img should not be recreated")
+
+	// State is still registered and the entity still reaches READY, so the
+	// restored volume becomes leasable through the normal promotion path.
+	volState := state.GetVolume("disk_volume/vol-123")
+	require.NotNil(t, volState)
+	assert.Equal(t, "vol-123", volState.VolumeId)
+
+	resp, err := es.EAC.Get(ctx, "disk_volume/vol-123")
+	require.NoError(t, err)
+	var updated storage_v1alpha.DiskVolume
+	updated.Decode(resp.Entity().Entity())
+	assert.Equal(t, storage_v1alpha.DV_READY, updated.ActualState)
+}
+
 func TestDiskVolumeControllerReconcileVolumeAbsent(t *testing.T) {
 	ctx := t.Context()
 	log := testutils.TestLogger(t)
