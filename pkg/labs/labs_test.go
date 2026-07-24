@@ -7,11 +7,16 @@ import (
 	"testing"
 )
 
+// quiet is for the tests that assert on feature state rather than on log output.
+func quiet() *slog.Logger {
+	return slog.New(slog.DiscardHandler)
+}
+
 func TestDisableFeatureWithPrefix(t *testing.T) {
 	Reset()
 
 	// Enable first, then disable
-	Init(nil, []string{"sagas", "-sagas"})
+	Init(quiet(), []string{"sagas", "-sagas"})
 
 	if Sagas() {
 		t.Error("Sagas should be disabled after '-sagas'")
@@ -21,7 +26,7 @@ func TestDisableFeatureWithPrefix(t *testing.T) {
 func TestCaseInsensitiveFeatureNames(t *testing.T) {
 	Reset()
 
-	Init(nil, []string{"Sagas", "DISTRIBUTEDRUNNERS"})
+	Init(quiet(), []string{"Sagas", "DISTRIBUTEDRUNNERS"})
 
 	if !Sagas() {
 		t.Error("Sagas should be enabled (case-insensitive)")
@@ -51,7 +56,7 @@ func TestUnknownFeatureLogsWarning(t *testing.T) {
 func TestEmptyAndWhitespaceFlags(t *testing.T) {
 	Reset()
 
-	Init(nil, []string{"", "  ", "sagas", "  ", ""})
+	Init(quiet(), []string{"", "  ", "sagas", "  ", ""})
 
 	if !Sagas() {
 		t.Error("Sagas should be enabled despite empty/whitespace flags")
@@ -61,7 +66,7 @@ func TestEmptyAndWhitespaceFlags(t *testing.T) {
 func TestAllKeywordEnablesAllFeatures(t *testing.T) {
 	Reset()
 
-	Init(nil, []string{"all"})
+	Init(quiet(), []string{"all"})
 
 	for _, name := range AllFeatures() {
 		if !IsEnabled(name) {
@@ -73,7 +78,7 @@ func TestAllKeywordEnablesAllFeatures(t *testing.T) {
 func TestAllKeywordWithExclusion(t *testing.T) {
 	Reset()
 
-	Init(nil, []string{"all", "-distributedrunners"})
+	Init(quiet(), []string{"all", "-distributedrunners"})
 
 	for _, name := range AllFeatures() {
 		if name == FeatureDistributedRunners {
@@ -91,7 +96,7 @@ func TestAllKeywordWithExclusion(t *testing.T) {
 func TestNegativeAllDisablesAll(t *testing.T) {
 	Reset()
 
-	Init(nil, []string{"sagas", "distributedrunners", "-all"})
+	Init(quiet(), []string{"sagas", "distributedrunners", "-all"})
 
 	for _, name := range AllFeatures() {
 		if IsEnabled(name) {

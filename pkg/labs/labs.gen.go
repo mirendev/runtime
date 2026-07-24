@@ -4,6 +4,7 @@ package labs
 
 import (
 	"log/slog"
+	"sort"
 	"strings"
 	"sync"
 )
@@ -45,6 +46,8 @@ var featureDefaults = map[string]bool{
 // Each flag can be a feature name to enable it, or prefixed with "-" to disable it.
 // Unknown feature names are logged as warnings but do not cause an error.
 // This function should be called once at startup.
+//
+// log is required; pass slog.New(slog.DiscardHandler) to silence it.
 func Init(log *slog.Logger, flags []string) {
 	mu.Lock()
 	defer mu.Unlock()
@@ -75,25 +78,31 @@ func Init(log *slog.Logger, flags []string) {
 			for featureName := range featureDefaults {
 				enabledFeatures[featureName] = !disable
 			}
-			if log != nil {
-				log.Info("labs feature configured", "feature", "all", "enabled", !disable)
-			}
 			continue
 		}
 
 		// Check if it's a known feature
 		if _, known := featureDefaults[name]; !known {
-			if log != nil {
-				log.Warn("unknown labs feature flag", "flag", flag)
-			}
+			log.Warn("unknown labs feature flag", "flag", flag)
 			continue
 		}
 
 		enabledFeatures[name] = !disable
-		if log != nil {
-			log.Info("labs feature configured", "feature", name, "enabled", !disable)
-		}
 	}
+
+	// Report where every feature landed, not just the ones that were named.
+	// Features that default to on say nothing on their own, so without this
+	// the boot log is silent about the state an operator most wants to see.
+	names := AllFeatures()
+	sort.Strings(names)
+
+	attrs := make([]any, 0, len(names)*2)
+	for _, name := range names {
+		// Read the map directly: IsEnabled takes the read lock we already hold.
+		attrs = append(attrs, name, enabledFeatures[name])
+	}
+
+	log.Info("labs features", attrs...)
 }
 
 // Reset resets the feature flags to their default state.
