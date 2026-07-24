@@ -360,6 +360,30 @@ kinds:
           type: string
           doc: Git repository remote URL
 
+  deployment_lock:
+    app_name:
+      type: string
+      doc: >
+        The app this lock covers. The lock is app-scoped, not app+cluster: a
+        coordinator's store only holds its own cluster's deployments, and the
+        client-supplied cluster_id is unreliable (see MIR-1465).
+      indexed: true
+
+    deployment_id:
+      type: string
+      doc: The deployment currently holding the lock
+
+    acquired_at:
+      type: time
+      doc: When the lock was taken
+
+    expires_at:
+      type: time
+      doc: >
+        When the lock may be stolen by another deployment. A holder whose
+        deployment reached a terminal status is stealable before this too.
+      indexed: true
+
   config_version:
     app:
       type: ref
