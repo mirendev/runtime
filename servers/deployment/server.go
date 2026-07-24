@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"sort"
 	"strings"
 	"time"
 
@@ -16,6 +15,7 @@ import (
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/api/ingress"
 	"miren.dev/runtime/pkg/cond"
+	"miren.dev/runtime/pkg/deploylifecycle"
 	"miren.dev/runtime/pkg/entity"
 	ephemeralx "miren.dev/runtime/pkg/ephemeral"
 	"miren.dev/runtime/pkg/idgen"
@@ -30,11 +30,15 @@ type DeploymentServer struct {
 	AppClient     *appclient.Client
 	IngressClient *ingress.Client
 	DNSHostname   string
+
+	// tracker owns the deployment record state machine and the deploy lock. The
+	// build server holds its own Tracker over the same entity store, and both
+	// acquire the same app-scoped lock, so a client that drives a record through
+	// the deprecated RPCs still contends with a server-owned build.
+	tracker *deploylifecycle.Tracker
 }
 
 var _ deployment_v1alpha.Deployment = (*DeploymentServer)(nil)
-
-const deploymentLockTimeout = 30 * time.Minute
 
 func NewDeploymentServer(log *slog.Logger, eac *entityserver_v1alpha.EntityAccessClient, ec *aes.Client, appClient *appclient.Client, dnsHostname string) (*DeploymentServer, error) {
 	return &DeploymentServer{
@@ -44,7 +48,63 @@ func NewDeploymentServer(log *slog.Logger, eac *entityserver_v1alpha.EntityAcces
 		AppClient:     appClient,
 		IngressClient: ingress.NewClient(log, eac),
 		DNSHostname:   dnsHostname,
+		tracker:       deploylifecycle.NewTracker(log, eac),
 	}, nil
+}
+
+// lockBlockable is the shared result surface for the deploy paths that report a
+// held lock back to the client as a structured domain outcome.
+type lockBlockable interface {
+	SetError(string)
+	SetLockInfo(*deployment_v1alpha.DeploymentLockInfo)
+}
+
+// lockInfoFor builds the structured lock info for a held lock. The holder comes
+// from the lock; the display details (phase, who started it, short id) come from
+// the blocking record.
+func (d *DeploymentServer) lockInfoFor(ctx context.Context, holder *deploylifecycle.Holder) *deployment_v1alpha.DeploymentLockInfo {
+	info := &deployment_v1alpha.DeploymentLockInfo{}
+	info.SetAppName(holder.AppName)
+	info.SetBlockingDeploymentId(holder.DeploymentID)
+	info.SetLockExpiresAt(standard.ToTimestamp(holder.ExpiresAt))
+
+	displayEmail := "-"
+	if rec, err := d.tracker.Store().Get(ctx, holder.DeploymentID); err == nil {
+		// The lock is app-scoped, so cluster for display comes from the blocking
+		// record rather than the lock.
+		info.SetClusterId(rec.Deployment.ClusterId)
+		info.SetCurrentPhase(rec.Deployment.Phase)
+		info.SetBlockingDeploymentShortId(shortIDFromRPCEntity(rec.Entity))
+
+		if email := rec.Deployment.DeployedBy.UserEmail; email != "" &&
+			email != "unknown@example.com" && email != "user@example.com" {
+			displayEmail = email
+		}
+		if ts, err := time.Parse(time.RFC3339, rec.Deployment.DeployedBy.Timestamp); err == nil {
+			info.SetStartedAt(standard.ToTimestamp(ts))
+		}
+	}
+	info.SetStartedBy(displayEmail)
+
+	return info
+}
+
+// reportLockBlocked fills results with the structured "deployment blocked"
+// domain outcome for a held lock.
+func (d *DeploymentServer) reportLockBlocked(ctx context.Context, results lockBlockable, holder *deploylifecycle.Holder) {
+	results.SetLockInfo(d.lockInfoFor(ctx, holder))
+	results.SetError("deployment blocked by existing in-progress deployment")
+}
+
+// releaseDeployLock drops the deploy lock held by a deployment that has just
+// settled through one of the deprecated client-driven methods. A failure to
+// release is logged, not returned: the record already reached its terminal
+// state, and the lock will expire on its own.
+func (d *DeploymentServer) releaseDeployLock(ctx context.Context, appName, deploymentID string) {
+	if err := d.tracker.Locks().Release(ctx, appName, deploymentID); err != nil {
+		d.Log.Error("failed to release deploy lock",
+			"deployment_id", deploymentID, "app", appName, "error", err)
+	}
 }
 
 func (d *DeploymentServer) CreateDeployment(ctx context.Context, req *deployment_v1alpha.DeploymentCreateDeployment) error {
@@ -64,171 +124,43 @@ func (d *DeploymentServer) CreateDeployment(ctx context.Context, req *deployment
 
 	appName := args.AppName()
 	clusterId := args.ClusterId()
-	appVersionId := args.AppVersionId()
 
 	if !rpc.AllowApp(ctx, appName) {
 		return rpc.AppAccessError(ctx, appName)
 	}
 
-	// Check for existing in_progress deployments for this app
-	existingDeployments, err := d.listDeploymentsInternal(ctx, appName, "in_progress", 1)
-	if err != nil {
-		d.Log.Error("Failed to check for existing deployments", "error", err)
-		return cond.Error("failed to check deployment lock")
+	var gitInfo core_v1alpha.GitInfo
+	if args.HasGitInfo() {
+		gitInfo = gitInfoFromRPC(args.GitInfo())
 	}
 
-	if len(existingDeployments) > 0 {
-		// Found an existing in_progress deployment
-		existing := existingDeployments[0].deployment
-		existingEnt := existingDeployments[0].entity
-
-		// Parse the deployment timestamp
-		// Treat malformed/empty timestamps as expired to avoid blocking deployments
-		deploymentTime, err := time.Parse(time.RFC3339, existing.DeployedBy.Timestamp)
-		if err != nil {
-			d.Log.Warn("Deployment has malformed timestamp, treating as expired",
-				"deployment_id", string(existing.ID),
-				"timestamp", existing.DeployedBy.Timestamp,
-				"error", err)
-			// Fall through to mark as failed below
-			deploymentTime = time.Time{} // Zero time, will be treated as expired
-		}
-
-		// Check if the existing deployment is expired (older than deploymentLockTimeout)
-		isExpired := deploymentTime.IsZero() || time.Since(deploymentTime) >= deploymentLockTimeout
-		if !isExpired {
-			// Deployment is still within the lock timeout - return structured lock info
-			lockExpiresAt := deploymentTime.Add(deploymentLockTimeout)
-
-			// Format user email for display
-			displayEmail := existing.DeployedBy.UserEmail
-			if displayEmail == "" || displayEmail == "unknown@example.com" || displayEmail == "user@example.com" {
-				displayEmail = "-"
-			}
-
-			// Create structured lock info
-			lockInfo := &deployment_v1alpha.DeploymentLockInfo{}
-			lockInfo.SetAppName(appName)
-			lockInfo.SetClusterId(clusterId)
-			lockInfo.SetBlockingDeploymentId(string(existing.ID))
-			lockInfo.SetBlockingDeploymentShortId(shortIDFromRPCEntity(existingEnt))
-			lockInfo.SetStartedBy(displayEmail)
-			lockInfo.SetStartedAt(standard.ToTimestamp(deploymentTime))
-			lockInfo.SetCurrentPhase(existing.Phase)
-			lockInfo.SetLockExpiresAt(standard.ToTimestamp(lockExpiresAt))
-
-			results.SetLockInfo(lockInfo)
-
-			// Also set a simple error message for backwards compatibility
-			results.SetError("deployment blocked by existing in-progress deployment")
+	// Begin creates the record and takes the deploy lock atomically, replacing
+	// the old list-then-create-with-timeout dance. The "pending-build" sentinel
+	// the older CLI passes is normalized away — app_version is optional now.
+	rec, err := d.tracker.Begin(ctx, deploylifecycle.BeginParams{
+		AppName:    appName,
+		ClusterID:  clusterId,
+		AppVersion: normalizeAppVersion(args.AppVersionId(), ""),
+		GitInfo:    gitInfo,
+	})
+	if err != nil {
+		if holder, ok := deploylifecycle.HolderFrom(err); ok {
+			d.reportLockBlocked(ctx, results, holder)
 			return nil
 		}
-
-		// Existing deployment is expired, mark it as failed
-		d.Log.Warn("Found expired in_progress deployment, marking as failed",
-			"deployment_id", string(existing.ID),
-			"age", time.Since(deploymentTime))
-
-		// Update the expired deployment to failed status
-		// We need to call the internal method since we're in the server, not using the client
-		existing.Status = "failed"
-		existing.ErrorMessage = fmt.Sprintf("Deployment timed out after %v", deploymentLockTimeout)
-		existing.CompletedAt = time.Now().Format(time.RFC3339)
-
-		// Update entity
-		updateAttrs := existing.Encode()
-		updateEntity := &entityserver_v1alpha.Entity{}
-		updateEntity.SetId(string(existing.ID))
-		updateEntity.SetAttrs(updateAttrs)
-
-		// Get the current revision for the update
-		// Note: If another process updates this entity between our Get and Put,
-		// the Put will fail with a revision conflict. This is acceptable because
-		// it means another process already handled this expired deployment.
-		// We continue creating the new deployment either way.
-		if existingEntity, err := d.EAC.Get(ctx, string(existing.ID)); err == nil {
-			updateEntity.SetRevision(existingEntity.Entity().Revision())
-			if _, err := d.EAC.Put(ctx, updateEntity); err != nil {
-				d.Log.Error("Failed to mark expired deployment as failed", "error", err)
-				// Continue anyway - we'll create the new deployment
-			}
-		} else {
-			d.Log.Error("Failed to get expired deployment for update", "error", err)
-			// Continue anyway - we'll create the new deployment
-		}
-	}
-
-	// Get user info from context (will be implemented with auth integration)
-	// For now, leave empty - the CLI display will show "-" for unknown users
-	userId := ""
-	userName := ""
-	userEmail := ""
-
-	// Create deployment entity
-	now := time.Now()
-
-	deployment := &core_v1alpha.Deployment{
-		AppName:    appName,
-		AppVersion: appVersionId,
-		ClusterId:  clusterId,
-		Status:     "in_progress",
-		Phase:      "preparing",
-		DeployedBy: core_v1alpha.DeployedBy{
-			UserId:    userId,
-			UserName:  userName,
-			UserEmail: userEmail,
-			Timestamp: now.Format(time.RFC3339),
-		},
-	}
-
-	// Add git info if provided
-	if args.HasGitInfo() && args.GitInfo() != nil {
-		gitInfo := args.GitInfo()
-		deployment.GitInfo = core_v1alpha.GitInfo{
-			Sha:               gitInfo.Sha(),
-			Branch:            gitInfo.Branch(),
-			Message:           gitInfo.CommitMessage(),
-			Author:            gitInfo.CommitAuthorName(),
-			IsDirty:           gitInfo.IsDirty(),
-			WorkingTreeHash:   gitInfo.WorkingTreeHash(),
-			CommitAuthorEmail: gitInfo.CommitAuthorEmail(),
-			Repository:        gitInfo.Repository(),
-		}
-
-		// Handle optional timestamp
-		if gitInfo.HasCommitTimestamp() && gitInfo.CommitTimestamp() != nil {
-			deployment.GitInfo.CommitTimestamp = standard.FromTimestamp(gitInfo.CommitTimestamp()).Format(time.RFC3339)
-		}
-	}
-
-	// Create entity
-	attrs := deployment.Encode()
-	rpcEntity := &entityserver_v1alpha.Entity{}
-	rpcEntity.SetAttrs(attrs)
-
-	putResp, err := d.EAC.Put(ctx, rpcEntity)
-	if err != nil {
-		d.Log.Error("Failed to create deployment entity", "error", err)
+		d.Log.Error("Failed to create deployment", "error", err)
 		return cond.Error("failed to create deployment")
 	}
 
-	// Set the deployment ID from the entity server response
-	deployment.ID = entity.Id(putResp.Id())
-
-	// Convert to RPC response
-	deploymentInfo := d.toDeploymentInfo(deployment)
-	if depEnt, err := d.EAC.Get(ctx, putResp.Id()); err == nil {
-		versionShortIDs := d.resolveShortIDs(ctx, []string{deployment.AppVersion})
-		enrichDeploymentShortIDs(deploymentInfo, depEnt.Entity(), versionShortIDs)
-	}
+	deploymentInfo := d.toDeploymentInfo(rec.Deployment)
+	versionShortIDs := d.resolveShortIDs(ctx, []string{rec.Deployment.AppVersion})
+	enrichDeploymentShortIDs(deploymentInfo, rec.Entity, versionShortIDs)
 	results.SetDeployment(deploymentInfo)
 
 	d.Log.Info("Created deployment",
-		"deployment_id", putResp.Id(),
+		"deployment_id", rec.Deployment.ID,
 		"app", appName,
-		"cluster", clusterId,
-		"version", appVersionId,
-		"user", userEmail)
+		"cluster", clusterId)
 
 	return nil
 }
@@ -248,18 +180,10 @@ func (d *DeploymentServer) UpdateDeploymentStatus(ctx context.Context, req *depl
 	deploymentId := args.DeploymentId()
 	newStatus := args.Status()
 
-	// Validate status value
-	validStatuses := map[string]bool{
-		"in_progress": true,
-		"active":      true,
-		"succeeded":   true,
-		"failed":      true,
-		"rolled_back": true,
-		"cancelled":   true,
-	}
-	if !validStatuses[newStatus] {
-		return cond.ValidationFailure("invalid-status",
-			"status must be one of: in_progress, active, succeeded, failed, rolled_back")
+	// Validate against the single source of truth so the accepted set and the
+	// error message can never drift (the old inline message omitted "cancelled").
+	if _, err := deploylifecycle.ParseStatus(newStatus); err != nil {
+		return err
 	}
 
 	// Get existing deployment
@@ -298,7 +222,7 @@ func (d *DeploymentServer) UpdateDeploymentStatus(ctx context.Context, req *depl
 
 	// If marking as active, mark all other active deployments for this app/cluster as succeeded
 	if newStatus == "active" {
-		err = d.markPreviousActiveAs(ctx, deployment.AppName, deployment.ClusterId, deploymentId, "succeeded")
+		err = d.markPreviousActiveAs(ctx, deployment.AppName, deploymentId, "succeeded")
 		if err != nil {
 			d.Log.Error("Failed to mark previous active deployments as succeeded", "error", err)
 			// Don't fail the whole operation, just log the error
@@ -316,6 +240,13 @@ func (d *DeploymentServer) UpdateDeploymentStatus(ctx context.Context, req *depl
 	if err != nil {
 		d.Log.Error("Failed to update deployment entity", "error", err)
 		return cond.Error("failed to update deployment")
+	}
+
+	// The deployment has left in_progress, so release the deploy lock this
+	// record's Begin took. Release is a no-op if a newer deployment already
+	// holds it.
+	if newStatus != "in_progress" {
+		d.releaseDeployLock(ctx, deployment.AppName, deploymentId)
 	}
 
 	// Convert to RPC response
@@ -449,10 +380,8 @@ func (d *DeploymentServer) UpdateFailedDeployment(ctx context.Context, req *depl
 	deployment.BuildLogs = buildLogs
 	deployment.CompletedAt = time.Now().Format(time.RFC3339)
 
-	// Update app version to failed pattern if it's still pending
-	if string(deployment.AppVersion) == "pending-build" {
-		deployment.AppVersion = fmt.Sprintf("failed-%s", deploymentId)
-	}
+	// The "pending-build" placeholder is left in place and normalized away on
+	// read, rather than rewritten to a "failed-<id>" sentinel.
 
 	// Update entity
 	updateAttrs := deployment.Encode()
@@ -466,6 +395,9 @@ func (d *DeploymentServer) UpdateFailedDeployment(ctx context.Context, req *depl
 		d.Log.Error("Failed to update deployment entity", "error", err)
 		return cond.Error("failed to update deployment")
 	}
+
+	// A failed (or already-cancelled) deployment holds the lock no longer.
+	d.releaseDeployLock(ctx, deployment.AppName, deploymentId)
 
 	// Convert to RPC response
 	deploymentInfo := d.toDeploymentInfo(&deployment)
@@ -655,6 +587,42 @@ func (d *DeploymentServer) GetActiveDeployment(ctx context.Context, req *deploym
 	return nil
 }
 
+func (d *DeploymentServer) GetDeployLock(ctx context.Context, req *deployment_v1alpha.DeploymentGetDeployLock) error {
+	args := req.Args()
+	results := req.Results()
+
+	if !args.HasAppName() || args.AppName() == "" {
+		return cond.ValidationFailure("missing-field", "app_name is required")
+	}
+	if !args.HasClusterId() || args.ClusterId() == "" {
+		return cond.ValidationFailure("missing-field", "cluster_id is required")
+	}
+
+	appName := args.AppName()
+	clusterId := args.ClusterId()
+
+	if !rpc.AllowApp(ctx, appName) {
+		return rpc.AppAccessError(ctx, appName)
+	}
+
+	// Blocking folds in expiry and terminal-holder reconciliation, so a released
+	// or dead lock reports as free rather than as a phantom block.
+	holder, err := d.tracker.Locks().Blocking(ctx, appName)
+	if err != nil {
+		d.Log.Error("Failed to read deploy lock", "app", appName, "cluster", clusterId, "error", err)
+		return cond.Error("failed to read deploy lock")
+	}
+
+	if holder == nil {
+		results.SetHeld(false)
+		return nil
+	}
+
+	results.SetHeld(true)
+	results.SetLockInfo(d.lockInfoFor(ctx, holder))
+	return nil
+}
+
 func (d *DeploymentServer) CancelDeployment(ctx context.Context, req *deployment_v1alpha.DeploymentCancelDeployment) error {
 	args := req.Args()
 	results := req.Results()
@@ -670,13 +638,14 @@ func (d *DeploymentServer) CancelDeployment(ctx context.Context, req *deployment
 	// Get the deployment by ID (resolves short IDs via the entity server)
 	deploymentResp, err := d.EAC.Get(ctx, deploymentId)
 	if err != nil {
+		// "not found" is a domain outcome the client renders; a failure to reach
+		// the store is infrastructure and surfaces as an RPC error.
 		if errors.Is(err, cond.ErrNotFound{}) {
 			results.SetError("deployment not found")
-		} else {
-			d.Log.Error("Failed to get deployment", "deployment_id", deploymentId, "error", err)
-			results.SetError("failed to get deployment")
+			return nil
 		}
-		return nil
+		d.Log.Error("Failed to get deployment", "deployment_id", deploymentId, "error", err)
+		return cond.Error("failed to get deployment")
 	}
 
 	// Use the resolved entity ID for all subsequent operations
@@ -712,9 +681,11 @@ func (d *DeploymentServer) CancelDeployment(ctx context.Context, req *deployment
 	_, err = d.EAC.Put(ctx, updateEntity)
 	if err != nil {
 		d.Log.Error("Failed to cancel deployment", "deployment_id", deploymentId, "error", err)
-		results.SetError("failed to cancel deployment")
-		return nil
+		return cond.Error("failed to cancel deployment")
 	}
+
+	// A cancelled deployment holds the lock no longer.
+	d.releaseDeployLock(ctx, deployment.AppName, deploymentId)
 
 	results.SetSuccess(true)
 
@@ -857,170 +828,85 @@ func (d *DeploymentServer) DeployVersion(ctx context.Context, req *deployment_v1
 
 	// --- Normal (non-ephemeral) deploy path below ---
 
-	// Check for existing in_progress deployments (deployment lock)
-	existingDeployments, err := d.listDeploymentsInternal(ctx, appName, "in_progress", 1)
-	if err != nil {
-		d.Log.Error("Failed to check for existing deployments", "error", err)
-		results.SetError("failed to check deployment lock")
-		return nil
+	// Find the source deployment — the most recent deployment with this
+	// app_version_id — for git info and rollback provenance.
+	var gitInfo core_v1alpha.GitInfo
+	var sourceDeploymentID string
+	if allDeployments, listErr := d.listDeploymentsInternal(ctx, appName, "", 100); listErr != nil {
+		d.Log.Error("Failed to list deployments for source lookup", "error", listErr)
+	} else {
+		for _, dwe := range allDeployments {
+			if dwe.deployment.AppVersion == sourceVersionId {
+				gitInfo = dwe.deployment.GitInfo
+				sourceDeploymentID = string(dwe.deployment.ID)
+				break // listDeploymentsInternal returns newest first
+			}
+		}
 	}
 
-	if len(existingDeployments) > 0 {
-		existing := existingDeployments[0].deployment
-		existingEnt := existingDeployments[0].entity
-
-		deploymentTime, parseErr := time.Parse(time.RFC3339, existing.DeployedBy.Timestamp)
-		if parseErr != nil {
-			deploymentTime = time.Time{}
-		}
-
-		isExpired := deploymentTime.IsZero() || time.Since(deploymentTime) >= deploymentLockTimeout
-		if !isExpired {
-			lockExpiresAt := deploymentTime.Add(deploymentLockTimeout)
-
-			displayEmail := existing.DeployedBy.UserEmail
-			if displayEmail == "" || displayEmail == "unknown@example.com" || displayEmail == "user@example.com" {
-				displayEmail = "-"
-			}
-
-			lockInfo := &deployment_v1alpha.DeploymentLockInfo{}
-			lockInfo.SetAppName(appName)
-			lockInfo.SetClusterId(clusterId)
-			lockInfo.SetBlockingDeploymentId(string(existing.ID))
-			lockInfo.SetBlockingDeploymentShortId(shortIDFromRPCEntity(existingEnt))
-			lockInfo.SetStartedBy(displayEmail)
-			lockInfo.SetStartedAt(standard.ToTimestamp(deploymentTime))
-			lockInfo.SetCurrentPhase(existing.Phase)
-			lockInfo.SetLockExpiresAt(standard.ToTimestamp(lockExpiresAt))
-
-			results.SetLockInfo(lockInfo)
-			results.SetError("deployment blocked by existing in-progress deployment")
+	// Begin creates the record and takes the deploy lock atomically, contending
+	// with any server-owned build for the same app+cluster.
+	rec, err := d.tracker.Begin(ctx, deploylifecycle.BeginParams{
+		AppName:            appName,
+		ClusterID:          clusterId,
+		AppVersion:         appVersionId,
+		GitInfo:            gitInfo,
+		SourceDeploymentID: sourceDeploymentID,
+	})
+	if err != nil {
+		if holder, ok := deploylifecycle.HolderFrom(err); ok {
+			d.reportLockBlocked(ctx, results, holder)
 			return nil
 		}
-
-		// Expired lock — mark as failed and continue
-		d.Log.Warn("Found expired in_progress deployment, marking as failed",
-			"deployment_id", string(existing.ID),
-			"age", time.Since(deploymentTime))
-
-		existing.Status = "failed"
-		existing.ErrorMessage = fmt.Sprintf("Deployment timed out after %v", deploymentLockTimeout)
-		existing.CompletedAt = time.Now().Format(time.RFC3339)
-
-		updateAttrs := existing.Encode()
-		lockUpdateEntity := &entityserver_v1alpha.Entity{}
-		lockUpdateEntity.SetId(string(existing.ID))
-		lockUpdateEntity.SetAttrs(updateAttrs)
-
-		if existingEntity, getErr := d.EAC.Get(ctx, string(existing.ID)); getErr == nil {
-			lockUpdateEntity.SetRevision(existingEntity.Entity().Revision())
-			if _, putErr := d.EAC.Put(ctx, lockUpdateEntity); putErr != nil {
-				d.Log.Error("Failed to mark expired deployment as failed", "error", putErr)
-			}
-		}
-	}
-
-	// Find the source deployment — the most recent deployment with this app_version_id
-	allDeployments, err := d.listDeploymentsInternal(ctx, appName, "", 100)
-	if err != nil {
-		d.Log.Error("Failed to list deployments for source lookup", "error", err)
-		// Continue without source info
-	}
-
-	var sourceDeployment *core_v1alpha.Deployment
-	for _, dwe := range allDeployments {
-		if dwe.deployment.AppVersion == sourceVersionId {
-			sourceDeployment = dwe.deployment
-			break // listDeploymentsInternal returns newest first
-		}
-	}
-
-	// Create new deployment entity
-	now := time.Now()
-
-	deployment := &core_v1alpha.Deployment{
-		AppName:    appName,
-		AppVersion: appVersionId,
-		ClusterId:  clusterId,
-		Status:     "in_progress",
-		Phase:      "activating",
-		DeployedBy: core_v1alpha.DeployedBy{
-			Timestamp: now.Format(time.RFC3339),
-		},
-	}
-
-	// Copy git info and source ID from the source deployment
-	if sourceDeployment != nil {
-		deployment.GitInfo = sourceDeployment.GitInfo
-		deployment.SourceDeploymentId = string(sourceDeployment.ID)
-	}
-
-	// Create entity
-	attrs := deployment.Encode()
-	rpcEntity := &entityserver_v1alpha.Entity{}
-	rpcEntity.SetAttrs(attrs)
-
-	putResp, err := d.EAC.Put(ctx, rpcEntity)
-	if err != nil {
-		d.Log.Error("Failed to create deployment entity", "error", err)
+		d.Log.Error("Failed to create deployment", "error", err)
 		results.SetError("failed to create deployment")
 		return nil
 	}
 
-	deployment.ID = entity.Id(putResp.Id())
-	newDeploymentId := putResp.Id()
+	deployment := rec.Deployment
+	newDeploymentId := string(deployment.ID)
 
-	{
-		// Normal deploy: activate the version
-		if err := d.AppClient.SetActiveVersion(ctx, appName, string(appVersion.ID)); err != nil {
-			d.Log.Error("Failed to set active version", "error", err, "app", appName, "version_id", string(appVersion.ID))
+	// This path has no build; it goes straight to activation.
+	if phaseErr := d.tracker.SetPhase(ctx, newDeploymentId, deploylifecycle.PhaseActivating); phaseErr != nil {
+		d.Log.Error("Failed to set activating phase", "error", phaseErr)
+	}
 
-			deployment.Status = "failed"
-			deployment.ErrorMessage = fmt.Sprintf("failed to activate version: %v", err)
-			deployment.CompletedAt = time.Now().Format(time.RFC3339)
-			if current, getErr := d.EAC.Get(ctx, newDeploymentId); getErr == nil {
-				failEntity := &entityserver_v1alpha.Entity{}
-				failEntity.SetId(newDeploymentId)
-				failEntity.SetAttrs(deployment.Encode())
-				failEntity.SetRevision(current.Entity().Revision())
-				if _, putErr := d.EAC.Put(ctx, failEntity); putErr != nil {
-					d.Log.Error("Failed to mark deployment as failed", "error", putErr)
-				}
-			}
+	if err := d.AppClient.SetActiveVersion(ctx, appName, string(appVersion.ID)); err != nil {
+		d.Log.Error("Failed to set active version", "error", err, "app", appName, "version_id", string(appVersion.ID))
 
-			results.SetError(fmt.Sprintf("failed to activate version: %v", err))
-			return nil
+		failMsg := fmt.Sprintf("failed to activate version: %v", err)
+		if failErr := d.tracker.Fail(ctx, newDeploymentId, failMsg, ""); failErr != nil {
+			d.Log.Error("Failed to mark deployment as failed", "error", failErr)
 		}
 
-		// Activation succeeded — mark deployment active
-		deployment.Status = "active"
-		deployment.CompletedAt = time.Now().Format(time.RFC3339)
-		if current, getErr := d.EAC.Get(ctx, newDeploymentId); getErr == nil {
-			activeEntity := &entityserver_v1alpha.Entity{}
-			activeEntity.SetId(newDeploymentId)
-			activeEntity.SetAttrs(deployment.Encode())
-			activeEntity.SetRevision(current.Entity().Revision())
-			if _, putErr := d.EAC.Put(ctx, activeEntity); putErr != nil {
-				d.Log.Error("Failed to update deployment status to active", "error", putErr)
-			}
-		}
+		results.SetError(failMsg)
+		return nil
+	}
 
-		// Mark previous active deployments
-		targetStatus := "succeeded"
-		if isRollback {
-			targetStatus = "rolled_back"
-		}
-		if err := d.markPreviousActiveAs(ctx, appName, clusterId, newDeploymentId, targetStatus); err != nil {
-			d.Log.Error("Failed to mark previous active deployments", "error", err)
-			// Don't fail — the new deployment is already created and active
-		}
+	activate := d.tracker.Activate
+	if isRollback {
+		activate = d.tracker.ActivateRollback
+	}
+	// SetActiveVersion already made the version live, so settle on a detached
+	// context: a client that cancels the RPC now must not strand the record
+	// in_progress with the lock held. If the settle still fails, release the
+	// lock directly so later deploys aren't blocked for the full lock TTL.
+	settleCtx, cancelSettle := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
+	defer cancelSettle()
+	if err := activate(settleCtx, newDeploymentId); err != nil {
+		d.Log.Error("Failed to activate deployment; releasing lock", "error", err)
+		d.releaseDeployLock(settleCtx, appName, newDeploymentId)
+	}
+
+	// Re-read so the response reflects the settled state.
+	if settled, getErr := d.tracker.Store().Get(settleCtx, newDeploymentId); getErr == nil {
+		deployment = settled.Deployment
+		rec = settled
 	}
 
 	deploymentInfo := d.toDeploymentInfo(deployment)
-	if depEnt, getErr := d.EAC.Get(ctx, newDeploymentId); getErr == nil {
-		versionShortIDs := d.resolveShortIDs(ctx, []string{deployment.AppVersion})
-		enrichDeploymentShortIDs(deploymentInfo, depEnt.Entity(), versionShortIDs)
-	}
+	versionShortIDs := d.resolveShortIDs(ctx, []string{deployment.AppVersion})
+	enrichDeploymentShortIDs(deploymentInfo, rec.Entity, versionShortIDs)
 	results.SetDeployment(deploymentInfo)
 
 	accessInfo := d.getAccessInfo(ctx, appName, "")
@@ -1139,109 +1025,47 @@ func (d *DeploymentServer) createEnvVarDeployment(ctx context.Context, appName, 
 
 	appVersionId := mutResult.VersionID
 
-	// Check for existing in_progress deployments (deployment lock)
-	existingDeployments, err := d.listDeploymentsInternal(ctx, appName, "in_progress", 1)
+	// An env-var change has no build, so the record goes straight from Begin to
+	// active. Begin takes the deploy lock, contending with any server-owned
+	// build for the same app+cluster.
+	rec, err := d.tracker.Begin(ctx, deploylifecycle.BeginParams{
+		AppName:    appName,
+		ClusterID:  clusterId,
+		AppVersion: appVersionId,
+	})
 	if err != nil {
-		d.Log.Error("Failed to check for existing deployments", "error", err)
-		results.SetError("failed to check deployment lock")
-		return nil
-	}
-
-	if len(existingDeployments) > 0 {
-		existing := existingDeployments[0].deployment
-		existingEnt := existingDeployments[0].entity
-
-		deploymentTime, parseErr := time.Parse(time.RFC3339, existing.DeployedBy.Timestamp)
-		if parseErr != nil {
-			deploymentTime = time.Time{}
-		}
-
-		isExpired := deploymentTime.IsZero() || time.Since(deploymentTime) >= deploymentLockTimeout
-		if !isExpired {
-			lockExpiresAt := deploymentTime.Add(deploymentLockTimeout)
-
-			displayEmail := existing.DeployedBy.UserEmail
-			if displayEmail == "" || displayEmail == "unknown@example.com" || displayEmail == "user@example.com" {
-				displayEmail = "-"
-			}
-
-			lockInfo := &deployment_v1alpha.DeploymentLockInfo{}
-			lockInfo.SetAppName(appName)
-			lockInfo.SetClusterId(clusterId)
-			lockInfo.SetBlockingDeploymentId(string(existing.ID))
-			lockInfo.SetBlockingDeploymentShortId(shortIDFromRPCEntity(existingEnt))
-			lockInfo.SetStartedBy(displayEmail)
-			lockInfo.SetStartedAt(standard.ToTimestamp(deploymentTime))
-			lockInfo.SetCurrentPhase(existing.Phase)
-			lockInfo.SetLockExpiresAt(standard.ToTimestamp(lockExpiresAt))
-
-			results.SetLockInfo(lockInfo)
-			results.SetError("deployment blocked by existing in-progress deployment")
+		if holder, ok := deploylifecycle.HolderFrom(err); ok {
+			d.reportLockBlocked(ctx, results, holder)
 			return nil
 		}
-
-		// Expired lock — mark as failed and continue
-		d.Log.Warn("Found expired in_progress deployment, marking as failed",
-			"deployment_id", string(existing.ID),
-			"age", time.Since(deploymentTime))
-
-		existing.Status = "failed"
-		existing.ErrorMessage = fmt.Sprintf("Deployment timed out after %v", deploymentLockTimeout)
-		existing.CompletedAt = time.Now().Format(time.RFC3339)
-
-		updateAttrs := existing.Encode()
-		updateEntity := &entityserver_v1alpha.Entity{}
-		updateEntity.SetId(string(existing.ID))
-		updateEntity.SetAttrs(updateAttrs)
-
-		if existingEntity, getErr := d.EAC.Get(ctx, string(existing.ID)); getErr == nil {
-			updateEntity.SetRevision(existingEntity.Entity().Revision())
-			if _, putErr := d.EAC.Put(ctx, updateEntity); putErr != nil {
-				d.Log.Error("Failed to mark expired deployment as failed", "error", putErr)
-			}
-		}
-	}
-
-	// Create new deployment entity
-	now := time.Now()
-
-	deployment := &core_v1alpha.Deployment{
-		AppName:    appName,
-		AppVersion: appVersionId,
-		ClusterId:  clusterId,
-		Status:     "active",
-		Phase:      "activating",
-		DeployedBy: core_v1alpha.DeployedBy{
-			Timestamp: now.Format(time.RFC3339),
-		},
-		CompletedAt: now.Format(time.RFC3339),
-	}
-
-	// Create entity
-	attrs := deployment.Encode()
-	rpcEntity := &entityserver_v1alpha.Entity{}
-	rpcEntity.SetAttrs(attrs)
-
-	putResp, err := d.EAC.Put(ctx, rpcEntity)
-	if err != nil {
-		d.Log.Error("Failed to create deployment entity", "error", err)
+		d.Log.Error("Failed to create deployment", "error", err)
 		results.SetError("failed to create deployment")
 		return nil
 	}
 
-	deployment.ID = entity.Id(putResp.Id())
-	newDeploymentId := putResp.Id()
+	newDeploymentId := string(rec.Deployment.ID)
 
-	// Mark previous active deployments as succeeded
-	if err := d.markPreviousActiveAs(ctx, appName, clusterId, newDeploymentId, "succeeded"); err != nil {
-		d.Log.Error("Failed to mark previous active deployments", "error", err)
+	// The new version is already applied by the caller; settle immediately,
+	// which marks the previous active deployment succeeded and releases the lock.
+	// Settle on a detached context and release the lock as a backstop so a
+	// cancelled RPC or transient store error can't strand the record in_progress
+	// with the lock held (see DeployVersion for the same reasoning).
+	settleCtx, cancelSettle := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
+	defer cancelSettle()
+	if err := d.tracker.Activate(settleCtx, newDeploymentId); err != nil {
+		d.Log.Error("Failed to activate env var deployment; releasing lock", "error", err)
+		d.releaseDeployLock(settleCtx, appName, newDeploymentId)
+	}
+
+	deployment := rec.Deployment
+	if settled, getErr := d.tracker.Store().Get(settleCtx, newDeploymentId); getErr == nil {
+		deployment = settled.Deployment
+		rec = settled
 	}
 
 	deploymentInfo := d.toDeploymentInfo(deployment)
-	if depEnt, getErr := d.EAC.Get(ctx, newDeploymentId); getErr == nil {
-		versionShortIDs := d.resolveShortIDs(ctx, []string{deployment.AppVersion})
-		enrichDeploymentShortIDs(deploymentInfo, depEnt.Entity(), versionShortIDs)
-	}
+	versionShortIDs := d.resolveShortIDs(ctx, []string{deployment.AppVersion})
+	enrichDeploymentShortIDs(deploymentInfo, rec.Entity, versionShortIDs)
 	results.SetDeployment(deploymentInfo)
 
 	accessInfo := d.getAccessInfo(ctx, appName, "")
@@ -1312,53 +1136,66 @@ func (d *DeploymentServer) getAccessInfo(ctx context.Context, appName string, ep
 
 // Internal helper methods
 
-// listDeploymentsInternal lists deployments from this cluster's entity store,
-// optionally filtered by app name and status. It does not filter by cluster:
-// the store is a loopback into this coordinator's own etcd, so every deployment
-// it holds already belongs to this cluster. The cluster_id stamped on a
-// deployment is client-supplied and inconsistent (a manual deploy sends the
-// cluster name, a CI/OIDC deploy sends the raw address), so filtering on it
-// would hide legitimate deploys — see MIR-1465.
+// listDeploymentsInternal lists deployments from this cluster's store, filtered
+// by app and status. It does not filter by cluster: the store is a loopback into
+// this coordinator's own etcd, so every deployment it holds already belongs to
+// this cluster, and the client-supplied cluster_id is unreliable (a manual
+// deploy sends the cluster name, a CI/OIDC deploy sends the raw address), so
+// filtering on it would hide legitimate deploys. See MIR-1465.
 func (d *DeploymentServer) listDeploymentsInternal(ctx context.Context, appName, status string, limit int) ([]deploymentWithEntity, error) {
-	// List all deployments by type
-	listResp, err := d.EAC.List(ctx, entity.Ref(entity.EntityKind, core_v1alpha.KindDeployment))
+	// Backed by the shared indexed store, which selects an index from the
+	// filters instead of scanning every deployment ever created.
+	records, err := d.tracker.Store().List(ctx, deploylifecycle.Query{
+		AppName: appName,
+		Status:  deploylifecycle.Status(status),
+		Limit:   limit,
+	})
 	if err != nil {
 		d.Log.Error("Failed to list deployments", "error", err)
 		return nil, cond.Error("failed to list deployments")
 	}
 
-	// Get the entity values
-	entities := listResp.Values()
-
-	// Decode and filter deployments
-	deployments := make([]deploymentWithEntity, 0)
-	for _, e := range entities {
-		// List already returns full entity data with attributes, no need to fetch again
-		var dep core_v1alpha.Deployment
-		decodeEntity(e, &dep)
-
-		// Apply filters
-		if appName != "" && dep.AppName != appName {
-			continue
-		}
-		if status != "" && dep.Status != status {
-			continue
-		}
-
-		deployments = append(deployments, deploymentWithEntity{deployment: &dep, entity: e})
+	deployments := make([]deploymentWithEntity, 0, len(records))
+	for _, rec := range records {
+		deployments = append(deployments, deploymentWithEntity{deployment: rec.Deployment, entity: rec.Entity})
 	}
-
-	// Sort by timestamp (newest first) using efficient sort.Slice
-	sort.Slice(deployments, func(i, j int) bool {
-		return deployments[i].deployment.DeployedBy.Timestamp > deployments[j].deployment.DeployedBy.Timestamp
-	})
-
-	// Apply limit after sorting
-	if limit > 0 && len(deployments) > limit {
-		deployments = deployments[:limit]
-	}
-
 	return deployments, nil
+}
+
+// normalizeAppVersion drops the legacy placeholder values older clients wrote
+// into app_version before a build had produced one. The field is optional now,
+// so these are reported as empty rather than migrated.
+func normalizeAppVersion(version, deploymentID string) string {
+	if version == "pending-build" {
+		return ""
+	}
+	if deploymentID != "" && version == "failed-"+deploymentID {
+		return ""
+	}
+	return version
+}
+
+// gitInfoFromRPC converts the deployment-service git shape into the core entity
+// shape stored on the record.
+func gitInfoFromRPC(gi *deployment_v1alpha.GitInfo) core_v1alpha.GitInfo {
+	if gi == nil {
+		return core_v1alpha.GitInfo{}
+	}
+
+	info := core_v1alpha.GitInfo{
+		Sha:               gi.Sha(),
+		Branch:            gi.Branch(),
+		Message:           gi.CommitMessage(),
+		Author:            gi.CommitAuthorName(),
+		IsDirty:           gi.IsDirty(),
+		WorkingTreeHash:   gi.WorkingTreeHash(),
+		CommitAuthorEmail: gi.CommitAuthorEmail(),
+		Repository:        gi.Repository(),
+	}
+	if gi.HasCommitTimestamp() && gi.CommitTimestamp() != nil {
+		info.CommitTimestamp = standard.FromTimestamp(gi.CommitTimestamp()).Format(time.RFC3339)
+	}
+	return info
 }
 
 func (d *DeploymentServer) toDeploymentInfo(deployment *core_v1alpha.Deployment) *deployment_v1alpha.DeploymentInfo {
@@ -1366,7 +1203,9 @@ func (d *DeploymentServer) toDeploymentInfo(deployment *core_v1alpha.Deployment)
 
 	info.SetId(string(deployment.ID))
 	info.SetAppName(deployment.AppName)
-	info.SetAppVersionId(deployment.AppVersion)
+	// Normalize legacy placeholder versions to empty so history renders "—"
+	// rather than "pending-build" or "failed-<id>".
+	info.SetAppVersionId(normalizeAppVersion(deployment.AppVersion, string(deployment.ID)))
 	info.SetClusterId(deployment.ClusterId)
 	info.SetStatus(deployment.Status)
 	info.SetPhase(deployment.Phase)
@@ -1474,55 +1313,11 @@ type deploymentWithEntity struct {
 	entity     *entityserver_v1alpha.Entity
 }
 
-// markPreviousActiveAs marks all active deployments for the given app/cluster with the target status,
-// except for the specified currentDeploymentId
-func (d *DeploymentServer) markPreviousActiveAs(ctx context.Context, appName, clusterId, currentDeploymentId, targetStatus string) error {
-	// List all active deployments for this app
-	deployments, err := d.listDeploymentsInternal(ctx, appName, "active", 100)
-	if err != nil {
-		return err
-	}
-
-	// Update each active deployment (except the current one) to the target status
-	for _, dwe := range deployments {
-		dep := dwe.deployment
-		if string(dep.ID) == currentDeploymentId {
-			continue
-		}
-
-		dep.Status = targetStatus
-		if dep.CompletedAt == "" {
-			dep.CompletedAt = time.Now().Format(time.RFC3339)
-		}
-
-		// Update entity
-		updateAttrs := dep.Encode()
-		updateEntity := &entityserver_v1alpha.Entity{}
-		updateEntity.SetId(string(dep.ID))
-		updateEntity.SetAttrs(updateAttrs)
-
-		// Get current entity to get revision
-		currentResp, err := d.EAC.Get(ctx, string(dep.ID))
-		if err != nil {
-			d.Log.Error("Failed to get deployment for update", "deployment_id", dep.ID, "error", err)
-			continue
-		}
-		updateEntity.SetRevision(currentResp.Entity().Revision())
-
-		_, err = d.EAC.Put(ctx, updateEntity)
-		if err != nil {
-			d.Log.Error("Failed to mark deployment", "deployment_id", dep.ID, "target_status", targetStatus, "error", err)
-			continue
-		}
-
-		d.Log.Info("Marked previous active deployment",
-			"deployment_id", dep.ID,
-			"target_status", targetStatus,
-			"app", appName,
-			"cluster", clusterId)
-	}
-
-	return nil
+// markPreviousActiveAs settles the deployments that were active for this app,
+// leaving currentDeploymentId alone. Backed by the shared store's status-indexed
+// implementation.
+func (d *DeploymentServer) markPreviousActiveAs(ctx context.Context, appName, currentDeploymentId, targetStatus string) error {
+	return d.tracker.Store().MarkPreviousActiveAs(ctx, appName, currentDeploymentId, deploylifecycle.Status(targetStatus))
 }
 
 // decodeEntity is a helper to decode RPC entity to struct

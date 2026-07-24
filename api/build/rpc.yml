@@ -5,6 +5,9 @@ imports:
   stream:
     path: ../../pkg/rpc/stream/stream.yml
     import: miren.dev/runtime/pkg/rpc/stream
+  standard:
+    path: ../../pkg/rpc/standard/standard.yml
+    import: miren.dev/runtime/pkg/rpc/standard
 
 types:
   - type: Status
@@ -27,6 +30,86 @@ types:
           - name: log
             type: LogEntry
             index: 4
+          - name: deployment
+            type: DeploymentProgress
+            index: 5
+
+  - type: DeploymentProgress
+    doc: >
+      Progress of the server-managed deployment record backing this build. Sent
+      once the record exists, and again on each phase change, so the client can
+      display and cancel a deployment it did not create.
+    fields:
+      - name: deployment_id
+        type: string
+        index: 0
+        doc: The deployment record the server created for this build
+      - name: phase
+        type: string
+        index: 1
+        doc: Current phase (preparing, building, pushing, activating)
+
+  - type: DeployRequest
+    doc: >
+      Asks the server to own the deployment record for this build: create it,
+      advance it as the build progresses, and settle it at the end.
+
+      Its PRESENCE is the ownership signal. When absent — which is what an older
+      client sends, since it does not know this parameter — the server does not
+      touch deployment records at all and the client is left to drive them
+      through the deployment service as before. That is what stops a build from
+      producing two records for one deploy.
+    fields:
+      - name: cluster_id
+        type: string
+        index: 0
+        doc: >
+          The cluster being deployed to. Client-side configuration the server
+          cannot infer, so it has to be passed.
+      - name: git_info
+        type: GitInfo
+        index: 1
+        doc: Git state of the working tree being deployed (optional)
+
+  - type: GitInfo
+    doc: Git repository information recorded on the deployment
+    fields:
+      - name: sha
+        type: string
+        index: 0
+        doc: Git commit SHA
+      - name: branch
+        type: string
+        index: 1
+        doc: Git branch name
+      - name: repository
+        type: string
+        index: 2
+        doc: Git repository URL
+      - name: is_dirty
+        type: bool
+        index: 3
+        doc: Whether working tree had uncommitted changes
+      - name: working_tree_hash
+        type: string
+        index: 4
+        doc: Hash of working tree if dirty
+      - name: commit_message
+        type: string
+        index: 5
+        doc: Git commit message
+      - name: commit_author_name
+        type: string
+        index: 6
+        doc: Name of commit author
+      - name: commit_author_email
+        type: string
+        index: 7
+        doc: Email of commit author
+      - name: commit_timestamp
+        type: standard.Timestamp
+        index: 8
+        doc: When the commit was made
 
   - type: LogEntry
     doc: A structured log message with severity level and extensible fields
@@ -221,6 +304,11 @@ interfaces:
           - name: ephemeral_ttl
             type: string
             doc: TTL for ephemeral version (e.g., "48h"), defaults to "24h" when ephemeral_label is set
+          - name: deployment
+            type: '*DeployRequest'
+            doc: >
+              When set, the server owns the deployment record for this build.
+              When absent, it creates none — see DeployRequest.
         results:
           - name: version
             type: string
@@ -268,6 +356,11 @@ interfaces:
           - name: ephemeral_ttl
             type: string
             doc: TTL for ephemeral version (e.g., "48h"), defaults to "24h" when ephemeral_label is set
+          - name: deployment
+            type: '*DeployRequest'
+            doc: >
+              When set, the server owns the deployment record for this build.
+              When absent, it creates none — see DeployRequest.
         results:
           - name: version
             type: string

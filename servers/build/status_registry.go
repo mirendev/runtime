@@ -41,6 +41,11 @@ type StatusSender interface {
 	// SendLog emits a structured log entry. Currently only the
 	// pre-saga "warn" path for local storage migration uses this.
 	SendLog(level, text string, fields ...*build_v1alpha.LogField)
+
+	// SendDeployment emits the server-owned deployment record's ID and
+	// current phase, so the client can display and cancel a deployment it
+	// did not create.
+	SendDeployment(deploymentID, phase string)
 }
 
 // noopStatusSender is the zero-cost StatusSender used during recovery
@@ -52,6 +57,7 @@ func (noopStatusSender) SendPhase(string)                                   {}
 func (noopStatusSender) SendBuildkit([]byte)                                {}
 func (noopStatusSender) SendError(string, ...any)                           {}
 func (noopStatusSender) SendLog(string, string, ...*build_v1alpha.LogField) {}
+func (noopStatusSender) SendDeployment(string, string)                      {}
 
 // rpcStatusSender adapts the existing per-request SendStreamClient into
 // the StatusSender interface so saga actions don't have to know about
@@ -113,6 +119,16 @@ func (r *rpcStatusSender) SendBuildkit(payload []byte) {
 func (r *rpcStatusSender) SendError(format string, args ...any) {
 	so := new(build_v1alpha.Status)
 	so.Update().SetError(fmt.Sprintf(format, args...))
+	r.send(so)
+}
+
+func (r *rpcStatusSender) SendDeployment(deploymentID, phase string) {
+	progress := &build_v1alpha.DeploymentProgress{}
+	progress.SetDeploymentId(deploymentID)
+	progress.SetPhase(phase)
+
+	so := new(build_v1alpha.Status)
+	so.Update().SetDeployment(progress)
 	r.send(so)
 }
 

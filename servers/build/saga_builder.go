@@ -131,8 +131,13 @@ func (s *SagaBuilder) BuildFromTar(ctx context.Context, state *build_v1alpha.Bui
 		}
 	}()
 
+	var deployReq *build_v1alpha.DeployRequest
+	if args.HasDeployment() {
+		deployReq = args.Deployment()
+	}
+
 	executionID := "build-from-tar-" + streamID
-	if err := s.startBuild(ctx, executionID, name, streamID, args.EnvVars(), ephemeralFromArgs(args)); err != nil {
+	if err := s.startBuild(ctx, executionID, name, streamID, args.EnvVars(), ephemeralFromArgs(args), deployReq); err != nil {
 		return err
 	}
 
@@ -191,8 +196,13 @@ func (s *SagaBuilder) BuildFromPrepared(ctx context.Context, state *build_v1alph
 		}
 	}()
 
+	var deployReq *build_v1alpha.DeployRequest
+	if args.HasDeployment() {
+		deployReq = args.Deployment()
+	}
+
 	executionID := "build-from-prepared-" + sessionID
-	if err := s.startBuild(ctx, executionID, name, sessionID, args.EnvVars(), ephemeralFromArgs(args)); err != nil {
+	if err := s.startBuild(ctx, executionID, name, sessionID, args.EnvVars(), ephemeralFromArgs(args), deployReq); err != nil {
 		return err
 	}
 
@@ -216,6 +226,7 @@ func (s *SagaBuilder) startBuild(
 	executionID, appName, streamID string,
 	cliEnvVars []*build_v1alpha.EnvironmentVariable,
 	eph *ephemeralOpts,
+	deployReq *build_v1alpha.DeployRequest,
 ) error {
 	sb := s.executor.Start(sagaBuildFromTar).
 		Input("app_name", appName).
@@ -229,6 +240,16 @@ func (s *SagaBuilder) startBuild(
 		sb = sb.Input("ephemeral_label", eph.label)
 		if eph.ttl != "" {
 			sb = sb.Input("ephemeral_ttl", eph.ttl)
+		}
+	}
+
+	// Seeding deploy_cluster_id is what turns on the server-owned deployment
+	// record: the begin-deployment action skips without it. Absent for older
+	// clients (no DeployRequest) and for ephemeral builds.
+	if deployReq != nil && eph == nil {
+		sb = sb.Input("deploy_cluster_id", deployReq.ClusterId())
+		if gitJSON := marshalDeployGitInfo(deployReq); gitJSON != "" {
+			sb = sb.Input("deploy_git_info_json", gitJSON)
 		}
 	}
 

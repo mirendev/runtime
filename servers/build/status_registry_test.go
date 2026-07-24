@@ -11,12 +11,18 @@ import (
 // sequence of progress messages a saga action emitted. Thread-safe so
 // it works regardless of which goroutine the action runs on.
 type recordingSender struct {
-	mu       sync.Mutex
-	Messages []string
-	Phases   []string
-	Buildkit [][]byte
-	Errors   []string
-	Logs     []recordedLog
+	mu          sync.Mutex
+	Messages    []string
+	Phases      []string
+	Buildkit    [][]byte
+	Errors      []string
+	Logs        []recordedLog
+	Deployments []recordedDeployment
+}
+
+type recordedDeployment struct {
+	DeploymentID string
+	Phase        string
 }
 
 type recordedLog struct {
@@ -53,6 +59,12 @@ func (r *recordingSender) SendLog(level, text string, fields ...*build_v1alpha.L
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.Logs = append(r.Logs, recordedLog{Level: level, Text: text, Fields: fields})
+}
+
+func (r *recordingSender) SendDeployment(deploymentID, phase string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.Deployments = append(r.Deployments, recordedDeployment{DeploymentID: deploymentID, Phase: phase})
 }
 
 func TestStatusRegistry_UnregisteredIDReturnsNoop(t *testing.T) {

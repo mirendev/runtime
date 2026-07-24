@@ -302,6 +302,16 @@ func Deploy(ctx *Context, opts struct {
 
 	bc := build_v1alpha.NewBuilderClient(cl)
 
+	// Decide who owns the deployment record. A server that advertises the
+	// "deployment" parameter on buildFromTar owns the record itself: it creates
+	// it, advances it, and settles it as the build runs. Against an older server
+	// that lacks the parameter, the CLI falls back to driving the record through
+	// the deprecated deployment RPCs, exactly as before. The probe runs before
+	// any upload, so an old server costs nothing.
+	//
+	// Ephemeral deploys never own a record on either path.
+	serverOwnsDeployment := ephemeralLabel == "" && cl.HasMethodParam(ctx.Context, "buildFromTar", "deployment")
+
 	// Check if deployment is allowed before proceeding
 	remedy, err := deploygating.CheckDeployAllowed(dir)
 	if err != nil {
@@ -349,10 +359,31 @@ func Deploy(ctx *Context, opts struct {
 		}
 	}
 
-	// Create deployment record for non-ephemeral deploys only.
-	// Ephemeral deploys don't participate in deployment tracking or locking.
+	// deployReq is sent on the build call when the server owns the record; its
+	// presence is what tells the server to take ownership.
+	var deployReq *build_v1alpha.DeployRequest
+	if serverOwnsDeployment {
+		deployReq = &build_v1alpha.DeployRequest{}
+		deployReq.SetClusterId(ctx.ClusterName)
+		if gi := buildGitInfoFromGit(gitInfo); gi != nil {
+			deployReq.SetGitInfo(gi)
+		}
+
+		// Advisory pre-flight: surface the rich "deployment blocked" message
+		// without wasting an upload. The authoritative acquisition still happens
+		// server-side inside the build; this only spares the common case.
+		if lockRes, lockErr := depClient.GetDeployLock(ctx, name, ctx.ClusterName); lockErr == nil &&
+			lockRes.Held() && lockRes.HasLockInfo() && lockRes.LockInfo() != nil {
+			printDeploymentBlocked(ctx, lockRes.LockInfo())
+			return fmt.Errorf("deployment blocked by lock")
+		}
+	}
+
+	// Create deployment record for non-ephemeral deploys only, and only when the
+	// server does not own the record. Ephemeral deploys don't participate in
+	// deployment tracking or locking.
 	var deploymentId string
-	if ephemeralLabel == "" {
+	if ephemeralLabel == "" && !serverOwnsDeployment {
 		createDepCtx, createDepSpan := deployTracer.Start(ctx.Context, "deploy.create_deployment")
 		createResult, err := depClient.CreateDeployment(createDepCtx, name, ctx.ClusterName, "pending-build", deploymentGitInfo)
 		if err != nil {
@@ -364,40 +395,8 @@ func Deploy(ctx *Context, opts struct {
 		createDepSpan.End()
 
 		if createResult.HasError() && createResult.Error() != "" {
-			// Check if we have structured lock info
 			if createResult.HasLockInfo() && createResult.LockInfo() != nil {
-				lockInfo := createResult.LockInfo()
-
-				// Format the deployment lock message
-				ctx.Printf("\n❌ Deployment blocked:\n\n")
-				ctx.Printf("Another deployment is already in progress for app '%s' on cluster '%s'.\n\n",
-					lockInfo.AppName(), lockInfo.ClusterId())
-
-				ctx.Printf("Existing deployment details:\n")
-				ctx.Printf("  • Deployment ID: %s\n", ui.DisplayShortID(lockInfo.BlockingDeploymentShortId(), lockInfo.BlockingDeploymentId()))
-				ctx.Printf("  • Started by: %s\n", lockInfo.StartedBy())
-
-				if lockInfo.HasStartedAt() && lockInfo.StartedAt() != nil {
-					startedAt := time.Unix(lockInfo.StartedAt().Seconds(), 0)
-					ctx.Printf("  • Started at: %s (%s ago)\n",
-						startedAt.Format("2006-01-02 15:04:05 MST"),
-						time.Since(startedAt).Round(time.Second))
-				}
-
-				ctx.Printf("  • Current phase: %s\n", lockInfo.CurrentPhase())
-
-				if lockInfo.HasLockExpiresAt() && lockInfo.LockExpiresAt() != nil {
-					expiresAt := time.Unix(lockInfo.LockExpiresAt().Seconds(), 0)
-					timeRemaining := time.Until(expiresAt).Round(time.Second)
-					ctx.Printf("  • Lock expires in: %s\n\n", timeRemaining)
-				}
-
-				// Build contact message
-				if lockInfo.StartedBy() != "-" {
-					ctx.Printf("Please wait for it to complete or contact %s to coordinate.\n", lockInfo.StartedBy())
-				} else {
-					ctx.Printf("Please wait for it to complete.\n")
-				}
+				printDeploymentBlocked(ctx, createResult.LockInfo())
 			} else {
 				// Fall back to plain error message
 				ctx.Printf("\n❌ Deployment blocked:\n\n%s\n", createResult.Error())
@@ -417,18 +416,70 @@ func Deploy(ctx *Context, opts struct {
 	buildCtx, cancelBuild := context.WithCancel(ctx.Context)
 	defer cancelBuild()
 
-	// Start goroutine to poll for external cancellation using the cancellationPoller
-	statusGetter := newDepClientStatusGetter(depClient, ctx.Log)
-	poller := newCancellationPoller(deploymentId, statusGetter, 2*time.Second)
-	go func() {
-		poller.Start(buildCtx, func() {
-			ctx.Log.Info("Deployment cancelled externally, stopping build")
-			cancelBuild()
+	// deploymentId is set up front on the legacy path (from CreateDeployment) and
+	// arrives mid-stream on the server-owned path (from the build's deployment
+	// status arm). A mutex guards it because that arm is handled in a stream
+	// goroutine while the main goroutine reads it for the summary.
+	var deploymentMu sync.Mutex
+	setDeploymentID := func(id string) {
+		deploymentMu.Lock()
+		deploymentId = id
+		deploymentMu.Unlock()
+	}
+	getDeploymentID := func() string {
+		deploymentMu.Lock()
+		defer deploymentMu.Unlock()
+		return deploymentId
+	}
+
+	// The cancellation poller starts once we know the deployment id, which is
+	// immediately on the legacy path and on the first deployment status arm on
+	// the server-owned path.
+	var (
+		pollerOnce          sync.Once
+		externallyCancelled atomic.Bool
+	)
+	startPoller := func(id string) {
+		if id == "" {
+			return
+		}
+		pollerOnce.Do(func() {
+			statusGetter := newDepClientStatusGetter(depClient, ctx.Log)
+			poller := newCancellationPoller(id, statusGetter, 2*time.Second)
+			go poller.Start(buildCtx, func() {
+				ctx.Log.Info("Deployment cancelled externally, stopping build")
+				externallyCancelled.Store(true)
+				cancelBuild()
+			})
 		})
-	}()
+	}
+	if !serverOwnsDeployment {
+		startPoller(deploymentId)
+	}
 
 	// Helper to check if we were externally cancelled
-	wasExternallyCancelled := poller.WasExternallyCancelled
+	wasExternallyCancelled := externallyCancelled.Load
+
+	// onDeployment records the server-created deployment on the server-owned
+	// path: it captures the id and starts the cancellation poller the first time
+	// the build reports it.
+	//
+	// Degradation note: on the server-owned path this is the ONLY thing that
+	// starts the poller and sets deploymentId. The server emits the deployment
+	// arm at the very start of the build (right after it takes the lock), so in
+	// practice it always arrives. But if it never does — a dropped arm, or a
+	// server that advertises the param yet never emits it — external
+	// `miren deploy cancel` cannot interrupt this CLI build and --summary-json's
+	// deploy_id is empty. The deploy itself is unaffected: the server still owns
+	// and settles the record. This is an accepted degradation, not a failure.
+	onDeployment := func(id, phase string) {
+		if id == "" {
+			return
+		}
+		setDeploymentID(id)
+		startPoller(id)
+		ctx.Log.Info("Server-owned deployment", "deployment_id", id, "phase", phase)
+	}
 
 	// Parse environment variables to pass to build server
 	var envVars []*build_v1alpha.EnvironmentVariable
@@ -459,10 +510,14 @@ func Deploy(ctx *Context, opts struct {
 	var buildLogs []string
 	var deployWarnings []*build_v1alpha.LogEntry
 
-	// Helper function to update deployment phase
+	// Helper function to update deployment phase. No-op when the server owns the
+	// record — it advances the phase itself as the build progresses.
 	updateDeploymentPhase := func(phase string) {
-		if deploymentId != "" {
-			_, updateErr := depClient.UpdateDeploymentPhase(ctx, deploymentId, phase)
+		if serverOwnsDeployment {
+			return
+		}
+		if id := getDeploymentID(); id != "" {
+			_, updateErr := depClient.UpdateDeploymentPhase(ctx, id, phase)
 			if updateErr != nil {
 				ctx.Log.Error("Failed to update deployment phase", "error", updateErr, "phase", phase)
 			}
@@ -478,9 +533,13 @@ func Deploy(ctx *Context, opts struct {
 		return slices.Clone(buildErrors), slices.Clone(buildLogs), slices.Clone(deployWarnings)
 	}
 
-	// Helper function to update deployment status on failure
+	// Helper function to update deployment status on failure. No-op when the
+	// server owns the record — it settles the deployment as failed itself.
 	updateDeploymentOnError := func(errMsg string) {
-		if deploymentId != "" {
+		if serverOwnsDeployment {
+			return
+		}
+		if id := getDeploymentID(); id != "" {
 			// Use a separate context with timeout for status updates to ensure they complete
 			// even if the main context is canceled
 			statusCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -492,10 +551,10 @@ func Deploy(ctx *Context, opts struct {
 				logs = strings.Join(errsSnap, "\n")
 			}
 
-			_, updateErr := depClient.UpdateFailedDeployment(statusCtx, deploymentId, errMsg, logs)
+			_, updateErr := depClient.UpdateFailedDeployment(statusCtx, id, errMsg, logs)
 			if updateErr != nil {
 				// Fallback to simple status update
-				_, updateErr = depClient.UpdateDeploymentStatus(statusCtx, deploymentId, "failed", errMsg)
+				_, updateErr = depClient.UpdateDeploymentStatus(statusCtx, id, "failed", errMsg)
 				if updateErr != nil {
 					ctx.Log.Error("Failed to update deployment status to failed", "error", updateErr)
 				}
@@ -634,11 +693,13 @@ func Deploy(ctx *Context, opts struct {
 		AccessInfo() *build_v1alpha.AccessInfo
 	}
 	buildCall := func(callCtx context.Context, tarReader io.ReadCloser, cb stream.SendStream[*build_v1alpha.Status]) (buildResults, error) {
+		// deployReq is non-nil only when the server owns the deployment record;
+		// its presence is the signal that hands ownership to the server.
 		if useOptimized {
 			tarStream := stream.ServeReader(callCtx, tarReader, stream.WithBulkBatching())
-			return bc.BuildFromPrepared(callCtx, sessionID, tarStream, cb, envVars, ephemeralLabel, ephemeralTTL)
+			return bc.BuildFromPrepared(callCtx, sessionID, tarStream, cb, envVars, ephemeralLabel, ephemeralTTL, deployReq)
 		}
-		return bc.BuildFromTar(callCtx, name, stream.ServeReader(callCtx, tarReader, stream.WithBulkBatching()), cb, envVars, ephemeralLabel, ephemeralTTL)
+		return bc.BuildFromTar(callCtx, name, stream.ServeReader(callCtx, tarReader, stream.WithBulkBatching()), cb, envVars, ephemeralLabel, ephemeralTTL, deployReq)
 	}
 
 	var (
@@ -733,7 +794,7 @@ func Deploy(ctx *Context, opts struct {
 			return safeStatus.Send(buildCtx, status)
 		}
 
-		cb = createBuildStatusCallback(buildCtx, nil, nil, &buildStateMu, &buildErrors, nil, &deployWarnings, progressHandler)
+		cb = createBuildStatusCallback(buildCtx, nil, nil, &buildStateMu, &buildErrors, nil, &deployWarnings, progressHandler, onDeployment)
 
 		results, err = buildCall(buildCtx, r, cb)
 		if err != nil {
@@ -758,6 +819,13 @@ func Deploy(ctx *Context, opts struct {
 				ctx.Printf("The server encountered a panic: %s\n", panicErr.Message)
 				ctx.Printf("Check the server logs for more details.\n")
 				updateDeploymentOnError(fmt.Sprintf("Server panic: %s", panicErr.Message))
+				return err
+			}
+
+			// A server-owned build can fail because another deploy took the lock
+			// after our advisory pre-flight passed; render the rich blocked
+			// message rather than a generic build error.
+			if maybeReportBlocked(ctx, depClient, serverOwnsDeployment, name) {
 				return err
 			}
 
@@ -821,7 +889,7 @@ func Deploy(ctx *Context, opts struct {
 			return nil
 		}
 
-		cb = createBuildStatusCallback(deployCtx, updateCh, buildCh, &buildStateMu, &buildErrors, &buildLogs, &deployWarnings, progressHandler)
+		cb = createBuildStatusCallback(deployCtx, updateCh, buildCh, &buildStateMu, &buildErrors, &buildLogs, &deployWarnings, progressHandler, onDeployment)
 
 		results, err = buildCall(deployCtx, r, cb)
 
@@ -857,6 +925,12 @@ func Deploy(ctx *Context, opts struct {
 				ctx.Printf("The server encountered a panic: %s\n", panicErr.Message)
 				ctx.Printf("Check the server logs for more details.\n")
 				updateDeploymentOnError(fmt.Sprintf("Server panic: %s", panicErr.Message))
+				return err
+			}
+
+			// See the explain-mode branch: a server-owned build can lose the lock
+			// race after the pre-flight; show the blocked message if so.
+			if maybeReportBlocked(ctx, depClient, serverOwnsDeployment, name) {
 				return err
 			}
 
@@ -922,13 +996,19 @@ func Deploy(ctx *Context, opts struct {
 				ctx.Printf("  URL:   https://%s.%s\n", ephemeralLabel, info.ClusterHostname())
 			}
 		}
+	} else if serverOwnsDeployment {
+		// The server already advanced and settled the deployment record as the
+		// build ran; the CLI is just a viewer. Nothing to finalize.
+		deploymentFinalized = true
 	} else {
 		// Normal deploy: update deployment tracking
 		// Update phase to pushing (build completed, now pushing)
 		updateDeploymentPhase("pushing")
 
+		legacyDeploymentID := getDeploymentID()
+
 		// Update deployment with actual app version ID
-		_, err = depClient.UpdateDeploymentAppVersion(ctx, deploymentId, appVersionId)
+		_, err = depClient.UpdateDeploymentAppVersion(ctx, legacyDeploymentID, appVersionId)
 		if err != nil {
 			ctx.Log.Error("Failed to update deployment app version", "error", err)
 			// Continue anyway - the deployment is proceeding
@@ -941,7 +1021,7 @@ func Deploy(ctx *Context, opts struct {
 		finalizeCtx, finalizeSpan := deployTracer.Start(ctx.Context, "deploy.finalize")
 
 		// Mark deployment as active
-		_, err = depClient.UpdateDeploymentStatus(finalizeCtx, deploymentId, "active", "")
+		_, err = depClient.UpdateDeploymentStatus(finalizeCtx, legacyDeploymentID, "active", "")
 		if err != nil {
 			// Log error but don't fail - deployment is already done
 			ctx.Log.Error("Failed to update deployment status", "error", err)
@@ -1007,7 +1087,7 @@ func Deploy(ctx *Context, opts struct {
 	if results.HasAccessInfo() && results.AccessInfo() != nil {
 		summaryURLs = deployURLs(ctx, results.AccessInfo(), ephemeralLabel)
 	}
-	writeDeploySummary(ctx, opts.SummaryJSON, deploymentId, appVersionId, summaryURLs)
+	writeDeploySummary(ctx, opts.SummaryJSON, getDeploymentID(), appVersionId, summaryURLs)
 
 	return nil
 }
@@ -1107,6 +1187,87 @@ func (s *safeStatusCh) Close() {
 	close(s.ch)
 }
 
+// maybeReportBlocked renders the rich "deployment blocked" message when a
+// server-owned build failed because another deployment holds the lock — the
+// pre-flight-passed-then-lost-the-race case, where the build returns a lock
+// conflict instead of a build error. It reuses GetDeployLock rather than trying
+// to parse lock info out of the build error. Returns true if it handled the
+// failure as a block, so the caller can skip the generic "build failed" output.
+//
+// This is a best-effort heuristic: a server-owned build that fails for any other
+// reason releases its own lock, so a Held result here means a *different* deploy
+// is in the way — which is exactly when the blocked message is the right thing
+// to show.
+func maybeReportBlocked(ctx *Context, depClient *deployment_v1alpha.DeploymentClient, serverOwnsDeployment bool, name string) bool {
+	if !serverOwnsDeployment {
+		return false
+	}
+	lockRes, err := depClient.GetDeployLock(ctx, name, ctx.ClusterName)
+	if err != nil || !lockRes.Held() || !lockRes.HasLockInfo() || lockRes.LockInfo() == nil {
+		return false
+	}
+	printDeploymentBlocked(ctx, lockRes.LockInfo())
+	return true
+}
+
+// printDeploymentBlocked renders the rich "deployment blocked" message shared by
+// the server-owned pre-flight and the legacy CreateDeployment path.
+func printDeploymentBlocked(ctx *Context, lockInfo *deployment_v1alpha.DeploymentLockInfo) {
+	ctx.Printf("\n❌ Deployment blocked:\n\n")
+	ctx.Printf("Another deployment is already in progress for app '%s' on cluster '%s'.\n\n",
+		lockInfo.AppName(), lockInfo.ClusterId())
+
+	ctx.Printf("Existing deployment details:\n")
+	ctx.Printf("  • Deployment ID: %s\n", ui.DisplayShortID(lockInfo.BlockingDeploymentShortId(), lockInfo.BlockingDeploymentId()))
+	ctx.Printf("  • Started by: %s\n", lockInfo.StartedBy())
+
+	if lockInfo.HasStartedAt() && lockInfo.StartedAt() != nil {
+		startedAt := time.Unix(lockInfo.StartedAt().Seconds(), 0)
+		ctx.Printf("  • Started at: %s (%s ago)\n",
+			startedAt.Format("2006-01-02 15:04:05 MST"),
+			time.Since(startedAt).Round(time.Second))
+	}
+
+	ctx.Printf("  • Current phase: %s\n", lockInfo.CurrentPhase())
+
+	if lockInfo.HasLockExpiresAt() && lockInfo.LockExpiresAt() != nil {
+		expiresAt := time.Unix(lockInfo.LockExpiresAt().Seconds(), 0)
+		timeRemaining := time.Until(expiresAt).Round(time.Second)
+		ctx.Printf("  • Lock expires in: %s\n\n", timeRemaining)
+	}
+
+	if lockInfo.StartedBy() != "-" {
+		ctx.Printf("Please wait for it to complete or contact %s to coordinate.\n", lockInfo.StartedBy())
+	} else {
+		ctx.Printf("Please wait for it to complete.\n")
+	}
+}
+
+// buildGitInfoFromGit converts the local git.Info into the build-service GitInfo
+// carried on a DeployRequest. Returns nil when no git info is available.
+func buildGitInfoFromGit(gitInfo *git.Info) *build_v1alpha.GitInfo {
+	if gitInfo == nil {
+		return nil
+	}
+
+	gi := &build_v1alpha.GitInfo{}
+	gi.SetSha(gitInfo.SHA)
+	gi.SetBranch(gitInfo.Branch)
+	gi.SetIsDirty(gitInfo.IsDirty)
+	gi.SetWorkingTreeHash(gitInfo.WorkingTreeHash)
+	gi.SetCommitMessage(gitInfo.CommitMessage)
+	gi.SetCommitAuthorName(gitInfo.CommitAuthor)
+	gi.SetCommitAuthorEmail(gitInfo.CommitEmail)
+	gi.SetRepository(gitInfo.RemoteURL)
+
+	if gitInfo.CommitTimestamp != "" {
+		if ts, err := time.Parse(time.RFC3339, gitInfo.CommitTimestamp); err == nil {
+			gi.SetCommitTimestamp(standard.ToTimestamp(ts))
+		}
+	}
+	return gi
+}
+
 // createBuildStatusCallback creates a callback for handling build status updates.
 // stateMu must be non-nil and guards buildErrors, buildLogs, and deployWarnings
 // — the callback runs from RPC stream-handler goroutines that race with
@@ -1120,12 +1281,24 @@ func createBuildStatusCallback(
 	buildLogs *[]string,
 	deployWarnings *[]*build_v1alpha.LogEntry,
 	progressHandler func(*client.SolveStatus) error,
+	onDeployment func(deploymentID, phase string),
 ) stream.SendStream[*build_v1alpha.Status] {
 	vertices := map[string]bool{} // digest → completed
 	return stream.Callback(func(su *build_v1alpha.Status) error {
 		update := su.Update()
 
 		switch update.Which() {
+		case "deployment":
+			// The server-owned deployment record announced itself. This arm only
+			// ever arrives when the server was handed a DeployRequest (an older
+			// server never sends it, and a newer one only emits it for a build it
+			// owns), so on the legacy path it is simply never received. onDeployment
+			// is non-nil on every path — the guard is defensive only.
+			if onDeployment != nil {
+				if dp := update.Deployment(); dp != nil {
+					onDeployment(dp.DeploymentId(), dp.Phase())
+				}
+			}
 		case "buildkit":
 			sj := update.Buildkit()
 

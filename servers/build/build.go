@@ -35,6 +35,7 @@ import (
 	"miren.dev/runtime/components/netresolve"
 	"miren.dev/runtime/observability"
 	"miren.dev/runtime/pkg/cond"
+	"miren.dev/runtime/pkg/deploylifecycle"
 	"miren.dev/runtime/pkg/entity"
 	ephemeralx "miren.dev/runtime/pkg/ephemeral"
 	"miren.dev/runtime/pkg/idgen"
@@ -110,6 +111,12 @@ type Builder struct {
 
 	WorkloadIssuer *workloadidentity.Issuer
 
+	// deploy owns the server-side deployment record lifecycle for builds whose
+	// client asked the server to manage it. It is an in-process wrapper over the
+	// same entity access client the builder already holds, so tracking a
+	// deployment costs no extra RPC hop.
+	deploy *deploylifecycle.Tracker
+
 	sessions   sync.Map // sessionID → *buildSession
 	cacheLocks *appLocks
 }
@@ -128,6 +135,7 @@ func NewBuilder(log *slog.Logger, eas *entityserver_v1alpha.EntityAccessClient, 
 		DNSHostname:   dnsHostname,
 		DataPath:      dataPath,
 		cacheLocks:    newAppLocks(),
+		deploy:        deploylifecycle.NewTracker(log, eas),
 	}
 	// Only assign when non-nil: storing a typed-nil *buildkit.Component into the
 	// BuildKitProvider interface would make the field non-nil and defeat the
@@ -924,7 +932,7 @@ func computeBuildEnvVars(
 	return result
 }
 
-func (b *Builder) BuildFromTar(ctx context.Context, state *build_v1alpha.BuilderBuildFromTar) error {
+func (b *Builder) BuildFromTar(ctx context.Context, state *build_v1alpha.BuilderBuildFromTar) (retErr error) {
 	args := state.Args()
 
 	name := args.Application()
@@ -932,6 +940,24 @@ func (b *Builder) BuildFromTar(ctx context.Context, state *build_v1alpha.Builder
 	if !rpc.AllowApp(ctx, name) {
 		return rpc.AppAccessError(ctx, name)
 	}
+
+	status := args.Status()
+
+	eph := ephemeralOptsFromArgs(args.HasEphemeralLabel(), args.EphemeralLabel(),
+		args.HasEphemeralTtl(), args.EphemeralTtl())
+
+	// Take the deployment record and its lock before receiving the tar, so a
+	// build that is blocked by another in-flight deploy fails fast instead of
+	// after a full upload.
+	var deployReq *build_v1alpha.DeployRequest
+	if args.HasDeployment() {
+		deployReq = args.Deployment()
+	}
+	deploy, err := b.beginDeploy(ctx, name, deployReq, eph, status)
+	if err != nil {
+		return err
+	}
+	defer func() { deploy.failOnError(ctx, retErr) }()
 
 	td := args.Tardata()
 
@@ -941,8 +967,6 @@ func (b *Builder) BuildFromTar(ctx context.Context, state *build_v1alpha.Builder
 	}
 
 	defer os.RemoveAll(path)
-
-	status := args.Status()
 
 	so := new(build_v1alpha.Status)
 
@@ -981,16 +1005,7 @@ func (b *Builder) BuildFromTar(ctx context.Context, state *build_v1alpha.Builder
 		_, _ = status.Send(ctx, so)
 	}
 
-	var eph *ephemeralOpts
-	if args.HasEphemeralLabel() && args.EphemeralLabel() != "" {
-		ttl := "24h"
-		if args.HasEphemeralTtl() && args.EphemeralTtl() != "" {
-			ttl = args.EphemeralTtl()
-		}
-		eph = &ephemeralOpts{label: args.EphemeralLabel(), ttl: ttl}
-	}
-
-	result, err := b.buildFromDir(ctx, name, path, status, args.EnvVars(), eph)
+	result, err := b.buildFromDir(ctx, name, path, status, args.EnvVars(), eph, deploy)
 	if err != nil {
 		return err
 	}
@@ -1075,7 +1090,7 @@ func (b *Builder) PrepareUpload(ctx context.Context, state *build_v1alpha.Builde
 	return nil
 }
 
-func (b *Builder) BuildFromPrepared(ctx context.Context, state *build_v1alpha.BuilderBuildFromPrepared) error {
+func (b *Builder) BuildFromPrepared(ctx context.Context, state *build_v1alpha.BuilderBuildFromPrepared) (retErr error) {
 	args := state.Args()
 	sessionID := args.SessionId()
 
@@ -1095,6 +1110,21 @@ func (b *Builder) BuildFromPrepared(ctx context.Context, state *build_v1alpha.Bu
 	}
 
 	status := args.Status()
+
+	eph := ephemeralOptsFromArgs(args.HasEphemeralLabel(), args.EphemeralLabel(),
+		args.HasEphemeralTtl(), args.EphemeralTtl())
+
+	// Take the deployment record and its lock before extracting the delta, so a
+	// blocked build fails fast (see BuildFromTar).
+	var deployReq *build_v1alpha.DeployRequest
+	if args.HasDeployment() {
+		deployReq = args.Deployment()
+	}
+	deploy, err := b.beginDeploy(ctx, name, deployReq, eph, status)
+	if err != nil {
+		return err
+	}
+	defer func() { deploy.failOnError(ctx, retErr) }()
 
 	// Extract partial tar into the session directory if provided
 	td := args.Tardata()
@@ -1127,16 +1157,7 @@ func (b *Builder) BuildFromPrepared(ctx context.Context, state *build_v1alpha.Bu
 		_, _ = status.Send(ctx, so)
 	}
 
-	var eph *ephemeralOpts
-	if args.HasEphemeralLabel() && args.EphemeralLabel() != "" {
-		ttl := "24h"
-		if args.HasEphemeralTtl() && args.EphemeralTtl() != "" {
-			ttl = args.EphemeralTtl()
-		}
-		eph = &ephemeralOpts{label: args.EphemeralLabel(), ttl: ttl}
-	}
-
-	result, err := b.buildFromDir(ctx, name, sess.dir, status, args.EnvVars(), eph)
+	result, err := b.buildFromDir(ctx, name, sess.dir, status, args.EnvVars(), eph, deploy)
 	if err != nil {
 		return err
 	}
@@ -1161,10 +1182,22 @@ type ephemeralOpts struct {
 	ttl   string
 }
 
+// ephemeralOptsFromArgs builds ephemeral options from the label/ttl parameters
+// shared by both build entry points, returning nil for a non-ephemeral build.
+func ephemeralOptsFromArgs(hasLabel bool, label string, hasTTL bool, ttl string) *ephemeralOpts {
+	if !hasLabel || label == "" {
+		return nil
+	}
+	if !hasTTL || ttl == "" {
+		ttl = "24h"
+	}
+	return &ephemeralOpts{label: label, ttl: ttl}
+}
+
 func (b *Builder) buildFromDir(ctx context.Context, name string, path string,
 	status *stream.SendStreamClient[*build_v1alpha.Status],
 	envVars []*build_v1alpha.EnvironmentVariable,
-	ephemeral *ephemeralOpts) (*buildResult, error) {
+	ephemeral *ephemeralOpts, deploy *deployTracking) (*buildResult, error) {
 
 	// -- build.setup span: app config, stack detection, buildkit connect
 	ctx, setupSpan := buildTracer.Start(ctx, "build.setup")
@@ -1215,6 +1248,8 @@ func (b *Builder) buildFromDir(ctx context.Context, name string, path string,
 		version:  mrv.Version,
 	}
 
+	deploy.setPhase(ctx, deploylifecycle.PhaseBuilding)
+
 	// runBuildkitBuild is also the saga action's implementation, so the
 	// span structure (buildkit + locate_artifact bundled together) is
 	// slightly coarser than the pre-saga code's two separate spans.
@@ -1239,6 +1274,8 @@ func (b *Builder) buildFromDir(ctx context.Context, name string, path string,
 		return nil, err
 	}
 	bkSpan.End()
+
+	deploy.setPhase(ctx, deploylifecycle.PhasePushing)
 
 	mrv.Artifact = entity.Id(artifactID)
 	mrv.ImageUrl = finalURL
@@ -1366,6 +1403,10 @@ func (b *Builder) buildFromDir(ctx context.Context, name string, path string,
 	}
 	createVerSpan.End()
 
+	// The record now names a real version, replacing the placeholder it
+	// carried while the build ran.
+	deploy.setAppVersion(ctx, string(id))
+
 	if isEphemeral {
 		b.Log.Info("created ephemeral app version",
 			"app", name, "version", mrv.Version, "label", ephemeral.label,
@@ -1373,6 +1414,8 @@ func (b *Builder) buildFromDir(ctx context.Context, name string, path string,
 	} else {
 		// -- build.activate span (only for non-ephemeral versions)
 		activateCtx, activateSpan := buildTracer.Start(ctx, "build.activate")
+
+		deploy.setPhase(ctx, deploylifecycle.PhaseActivating)
 
 		// Provision addons before activating the version so that AddonAssociation
 		// entities exist when the launcher runs. The addon controller will create
@@ -1392,6 +1435,9 @@ func (b *Builder) buildFromDir(ctx context.Context, name string, path string,
 			return nil, fmt.Errorf("error updating app entity: %w", err)
 		}
 		activateSpan.End()
+
+		// The new version is running: settle the record and release the lock.
+		deploy.activate(ctx)
 
 		b.Log.Info("app version updated", "app", name, "version", mrv.Version)
 
