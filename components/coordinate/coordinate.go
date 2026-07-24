@@ -455,59 +455,81 @@ func validateAPICertificate(cert *x509.Certificate, expectedNames []string, expe
 	return nil
 }
 
-func (c *Coordinator) LoadCA(ctx context.Context) error {
-	cert := filepath.Join(c.DataPath, "server", "ca.crt")
-	keyPath := filepath.Join(c.DataPath, "server", "ca.key")
+// EnsureCA makes sure the server CA certificate and key exist on disk under
+// <dataPath>/server, creating them if they're missing, and returns the loaded
+// authority. It's safe to call before the coordinator starts.
+//
+// This is what lets the server bootstrap its own etcd mTLS: SetupEtcdTLS reads
+// the CA from disk and requires it to already exist, so the CA must be
+// materialized before that runs. Historically the only create-if-missing path
+// was Coordinator.LoadCA, which doesn't run until Coordinator.Start, well after
+// the etcd TLS block, so a fresh install with distributed runners enabled had
+// no CA yet. Calling EnsureCA early closes that gap.
+func EnsureCA(log *slog.Logger, dataPath string) (*caauth.Authority, error) {
+	cert := filepath.Join(dataPath, "server", "ca.crt")
+	keyPath := filepath.Join(dataPath, "server", "ca.key")
 
-	if data, err := os.ReadFile(cert); err == nil {
-		c.Log.Info("loading existing CA", "path", cert)
+	data, err := os.ReadFile(cert)
+	switch {
+	case err == nil:
+		log.Info("loading existing CA", "path", cert)
 
 		key, err := os.ReadFile(keyPath)
 		if err != nil {
-			return fmt.Errorf("missing key for CA: %w", err)
+			return nil, fmt.Errorf("missing key for CA: %w", err)
 		}
 
 		ca, err := caauth.LoadFromPEM(data, key)
 		if err != nil {
-			return fmt.Errorf("failed to load CA: %w", err)
+			return nil, fmt.Errorf("failed to load CA: %w", err)
 		}
 
-		c.authority = ca
-	} else {
-		c.Log.Info("generating new CA", "path", cert)
-
-		ca, err := caauth.New(caauth.Options{
-			CommonName:   "miren-server",
-			Organization: "miren",
-			ValidFor:     10 * year,
-		})
-		if err != nil {
-			return fmt.Errorf("failed to generate CA: %w", err)
-		}
-
-		err = os.MkdirAll(filepath.Dir(cert), 0755)
-		if err != nil {
-			return fmt.Errorf("failed to create CA directory: %w", err)
-		}
-
-		cd, kd, err := ca.ExportPEM()
-		if err != nil {
-			return fmt.Errorf("failed to export CA: %w", err)
-		}
-
-		err = os.WriteFile(cert, cd, 0644)
-		if err != nil {
-			return fmt.Errorf("failed to write CA cert: %w", err)
-		}
-
-		err = os.WriteFile(keyPath, kd, 0600)
-		if err != nil {
-			return fmt.Errorf("failed to write CA key: %w", err)
-		}
-
-		c.authority = ca
+		return ca, nil
+	case !errors.Is(err, os.ErrNotExist):
+		// The CA cert exists but couldn't be read (permissions, transient IO,
+		// etc). Bail rather than fall through and regenerate, which would
+		// overwrite a valid CA and invalidate every cert it ever issued.
+		return nil, fmt.Errorf("failed to read CA cert at %s: %w", cert, err)
 	}
 
+	log.Info("generating new CA", "path", cert)
+
+	ca, err := caauth.New(caauth.Options{
+		CommonName:   "miren-server",
+		Organization: "miren",
+		ValidFor:     10 * year,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate CA: %w", err)
+	}
+
+	if err := os.MkdirAll(filepath.Dir(cert), 0755); err != nil {
+		return nil, fmt.Errorf("failed to create CA directory: %w", err)
+	}
+
+	cd, kd, err := ca.ExportPEM()
+	if err != nil {
+		return nil, fmt.Errorf("failed to export CA: %w", err)
+	}
+
+	if err := os.WriteFile(cert, cd, 0644); err != nil {
+		return nil, fmt.Errorf("failed to write CA cert: %w", err)
+	}
+
+	if err := os.WriteFile(keyPath, kd, 0600); err != nil {
+		return nil, fmt.Errorf("failed to write CA key: %w", err)
+	}
+
+	return ca, nil
+}
+
+func (c *Coordinator) LoadCA(ctx context.Context) error {
+	ca, err := EnsureCA(c.Log, c.DataPath)
+	if err != nil {
+		return err
+	}
+
+	c.authority = ca
 	return nil
 }
 
