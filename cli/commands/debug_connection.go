@@ -12,7 +12,6 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/quic-go/quic-go/http3"
 	"miren.dev/runtime/clientconfig"
-	"miren.dev/runtime/pkg/cloudauth"
 )
 
 // DebugAuthResponse represents the response from the debug-auth endpoint
@@ -78,6 +77,7 @@ func DebugConnection(ctx *Context, opts struct {
 	ctx.Info("Step 2: Preparing authentication...")
 
 	var identity *clientconfig.IdentityConfig
+	var identityName string
 
 	// Determine which identity to use
 	if opts.Identity != "" {
@@ -88,6 +88,7 @@ func DebugConnection(ctx *Context, opts struct {
 				ctx.Warn("Failed to get identity '%s': %v", opts.Identity, err)
 				return err
 			}
+			identityName = opts.Identity
 			ctx.Info("Using identity: %s", opts.Identity)
 		} else {
 			ctx.Warn("No configuration found. Please run 'miren login' first.")
@@ -108,18 +109,19 @@ func DebugConnection(ctx *Context, opts struct {
 					ctx.Warn("Failed to get identity '%s' for cluster '%s': %v", cluster.Identity, opts.Cluster, err)
 					return err
 				}
+				identityName = cluster.Identity
 				ctx.Info("Using identity '%s' from cluster '%s'", cluster.Identity, opts.Cluster)
 			} else if cluster.CloudAuth && cluster.ClientKey != "" {
 				// Backward compatibility: create identity from cluster
 				identity = &clientconfig.IdentityConfig{
-					Type:       "keypair",
+					Type:       clientconfig.IdentityKeypair,
 					PrivateKey: cluster.ClientKey,
 				}
 				ctx.Info("Using legacy CloudAuth from cluster '%s'", opts.Cluster)
 			} else if cluster.ClientCert != "" && cluster.ClientKey != "" {
 				// Backward compatibility: certificate auth
 				identity = &clientconfig.IdentityConfig{
-					Type:       "certificate",
+					Type:       clientconfig.IdentityCertificate,
 					ClientCert: cluster.ClientCert,
 					ClientKey:  cluster.ClientKey,
 				}
@@ -142,30 +144,14 @@ func DebugConnection(ctx *Context, opts struct {
 
 	if identity != nil {
 		switch identity.Type {
-		case "keypair":
-			// For keypair auth, we need to get a JWT token
-			// The server we're testing should be the cluster, not the auth server
-
-			// Get the private key (handles both direct PrivateKey and KeyRef)
-			var privateKeyPEM string
-			if config != nil {
-				privateKeyPEM, err = config.GetPrivateKeyPEM(identity)
-				if err != nil {
-					ctx.Warn("Failed to get private key: %v", err)
-					return err
-				}
-			} else if identity.PrivateKey != "" {
-				// Fallback for backward compatibility (when identity is created on-the-fly)
-				privateKeyPEM = identity.PrivateKey
-			} else {
-				ctx.Warn("Identity has no private key or key reference")
-				return fmt.Errorf("no private key available")
-			}
-
-			keyPair, err := cloudauth.LoadKeyPairFromPEM(privateKeyPEM)
-			if err != nil {
-				ctx.Warn("Failed to load private key: %v", err)
-				return err
+		case clientconfig.IdentityKeypair, clientconfig.IdentityToken:
+			// Both keypair and ephemeral token identities resolve to a JWT bearer
+			// token. The server we're testing is the cluster, not the auth server.
+			if config == nil {
+				// On-the-fly identities (legacy CloudAuth) require a config to
+				// resolve keys; without one there is nothing to authenticate with.
+				ctx.Warn("No configuration found. Please run 'miren login' first.")
+				return fmt.Errorf("no configuration found")
 			}
 
 			// Use the issuer from the identity
@@ -176,17 +162,17 @@ func DebugConnection(ctx *Context, opts struct {
 				ctx.Warn("Identity has no issuer configured, using test server as auth server")
 			}
 
-			ctx.Info("Requesting JWT token using keypair from %s...", authServerURL)
+			ctx.Info("Requesting JWT token for %s identity from %s...", identity.Type, authServerURL)
 			// Note: This will use the cached token if available
-			token, err := clientconfig.AuthenticateWithKey(ctx, authServerURL, keyPair)
+			token, err := config.TokenForIdentity(ctx, identityName, identity, authServerURL)
 			if err != nil {
-				ctx.Warn("Failed to authenticate with keypair: %v", err)
+				ctx.Warn("Failed to authenticate: %v", err)
 				ctx.Info("Note: Ensure the auth server is reachable at %s", authServerURL)
 				return err
 			}
 
 			authHeader = "Bearer " + token
-			authMethod = "keypair/jwt"
+			authMethod = string(identity.Type) + "/jwt"
 			ctx.Completed("JWT token obtained")
 
 			// Decode and print JWT claims for debugging
@@ -200,7 +186,7 @@ func DebugConnection(ctx *Context, opts struct {
 				}
 			}
 
-		case "certificate":
+		case clientconfig.IdentityCertificate:
 			// Certificate auth is handled at TLS level
 			authMethod = "certificate"
 			ctx.Info("Using client certificate authentication")
@@ -230,7 +216,7 @@ func DebugConnection(ctx *Context, opts struct {
 		InsecureSkipVerify: opts.Insecure,
 	}
 
-	if identity != nil && identity.Type == "certificate" {
+	if identity != nil && identity.Type == clientconfig.IdentityCertificate {
 		// Add client certificate
 		cert, err := tls.X509KeyPair([]byte(identity.ClientCert), []byte(identity.ClientKey))
 		if err != nil {

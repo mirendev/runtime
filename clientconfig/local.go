@@ -16,7 +16,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/golang-jwt/jwt/v5"
 	"github.com/quic-go/quic-go"
 	"miren.dev/runtime/pkg/caauth"
 	"miren.dev/runtime/pkg/cloudauth"
@@ -110,27 +109,12 @@ foundAddress:
 
 		// Handle different identity types
 		switch identity.Type {
-		case "keypair":
-			// Get the private key (handles both direct PrivateKey and KeyRef)
-			privateKeyPEM, err := config.GetPrivateKeyPEM(identity)
-			if err != nil {
-				return nil, fmt.Errorf("failed to get private key: %w", err)
-			}
-
-			// Load the private key
-			keyPair, err := cloudauth.LoadKeyPairFromPEM(privateKeyPEM)
-			if err != nil {
-				return nil, fmt.Errorf("failed to load private key: %w", err)
-			}
-
-			// Use the issuer from the identity, or fall back to cluster hostname
-			authServer := identity.Issuer
-			if authServer == "" {
-				authServer = hostname
-			}
-
-			// Get JWT token using the challenge-response flow
-			token, err := AuthenticateWithKey(ctx, authServer, keyPair)
+		case IdentityKeypair, IdentityToken:
+			// Both keypair and ephemeral token identities resolve to a bearer
+			// token; TokenForIdentity dispatches on the identity type (re-minting
+			// via challenge-response for keypair, or refreshing the cached token
+			// for a token identity).
+			token, err := config.TokenForIdentity(ctx, c.Identity, identity, hostname)
 			if err != nil {
 				return nil, fmt.Errorf("failed to authenticate with cloud: %w", err)
 			}
@@ -148,7 +132,7 @@ foundAddress:
 
 			return base, nil
 
-		case "certificate":
+		case IdentityCertificate:
 			// Handle certificate-based authentication from identity
 			return []rpc.StateOption{
 				rpc.WithCertPEMs(
@@ -291,29 +275,8 @@ func getCachedToken(fingerprint string) (string, error) {
 
 	tokenString := string(tokenData)
 
-	// Parse the JWT without verification to check expiry
-	parser := jwt.NewParser()
-	token, _, err := parser.ParseUnverified(tokenString, jwt.MapClaims{})
-	if err != nil {
-		return "", nil // Invalid token, need new one
-	}
-
-	claims, ok := token.Claims.(jwt.MapClaims)
-	if !ok {
-		return "", nil // Invalid claims, need new one
-	}
-
-	// Check if token is expired
-	if exp, ok := claims["exp"].(float64); ok {
-		if time.Now().Unix() >= int64(exp) {
-			return "", nil // Token expired
-		}
-		// Add a buffer of 5 minutes to avoid edge cases
-		if time.Now().Unix() >= int64(exp)-300 {
-			return "", nil // Token expiring soon
-		}
-	} else {
-		return "", nil // No expiry claim, need new one
+	if !tokenFresh(tokenString, tokenExpiryBuffer) {
+		return "", nil // Missing, expired, or expiring soon — need a new one.
 	}
 
 	return tokenString, nil

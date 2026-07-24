@@ -103,7 +103,7 @@ func addCluster(ctx *Context, identityName, clusterName, address string, force b
 	if clusterName == "" && address == "" {
 		ctx.Info("Fetching available clusters from identity server...")
 
-		clusters, err := fetchAvailableClusters(ctx, mainConfig, identity)
+		clusters, err := fetchAvailableClusters(ctx, mainConfig, identityName, identity)
 		if err != nil {
 			return fmt.Errorf("failed to fetch available clusters: %w", err)
 		}

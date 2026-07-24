@@ -13,7 +13,6 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"miren.dev/runtime/clientconfig"
 	"miren.dev/runtime/pkg/auth"
-	"miren.dev/runtime/pkg/cloudauth"
 	"miren.dev/runtime/pkg/theme"
 )
 
@@ -98,35 +97,25 @@ func tryAuthenticate(ctx *Context, cfg *clientconfig.Config, cluster *clientconf
 	result.IdentityName = cluster.Identity
 
 	switch identity.Type {
-	case "keypair":
-		privateKeyPEM, err := cfg.GetPrivateKeyPEM(identity)
-		if err != nil {
-			return result
-		}
-
-		keyPair, err := cloudauth.LoadKeyPairFromPEM(privateKeyPEM)
-		if err != nil {
-			return result
-		}
-
+	case clientconfig.IdentityKeypair, clientconfig.IdentityToken:
 		authServer := identity.Issuer
 		if authServer == "" {
 			authServer = cluster.Hostname
 		}
 		authServer = normalizeAuthServerURL(authServer)
 
-		token, err := clientconfig.AuthenticateWithKey(ctx, authServer, keyPair)
+		token, err := cfg.TokenForIdentity(ctx, cluster.Identity, identity, authServer)
 		if err != nil {
 			return result
 		}
 
 		result.Claims, _ = auth.ParseUnverifiedClaims(token)
-		result.Method = "keypair"
+		result.Method = string(identity.Type)
 
 		// Fetch user info from cloud
 		result.UserInfo, _ = fetchCloudUserInfo(ctx, authServer, token)
 
-	case "certificate":
+	case clientconfig.IdentityCertificate:
 		result.Method = "certificate"
 	}
 
