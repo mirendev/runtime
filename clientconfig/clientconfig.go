@@ -22,12 +22,14 @@ const (
 
 // IdentityConfig holds authentication credentials that can be used across clusters
 type IdentityConfig struct {
-	Type       string `yaml:"type"`                  // Type of identity: "keypair", "certificate", etc.
-	Issuer     string `yaml:"issuer,omitempty"`      // The auth server that issued this identity (e.g., "https://miren.cloud")
-	KeyRef     string `yaml:"key_ref,omitempty"`     // Reference to a key in the Keys section (for keypair auth)
-	PrivateKey string `yaml:"private_key,omitempty"` // PEM encoded private key (for keypair auth, deprecated - use KeyRef)
-	ClientCert string `yaml:"client_cert,omitempty"` // PEM encoded client certificate (for cert auth)
-	ClientKey  string `yaml:"client_key,omitempty"`  // PEM encoded client key (for cert auth)
+	Type         string `yaml:"type"`                    // Type of identity: "keypair", "token", "certificate", etc.
+	Issuer       string `yaml:"issuer,omitempty"`        // The auth server that issued this identity (e.g., "https://miren.cloud")
+	KeyRef       string `yaml:"key_ref,omitempty"`       // Reference to a key in the Keys section (for keypair auth)
+	PrivateKey   string `yaml:"private_key,omitempty"`   // PEM encoded private key (for keypair auth, deprecated - use KeyRef)
+	ClientCert   string `yaml:"client_cert,omitempty"`   // PEM encoded client certificate (for cert auth)
+	ClientKey    string `yaml:"client_key,omitempty"`    // PEM encoded client key (for cert auth)
+	Token        string `yaml:"token,omitempty"`         // JWT access token (for ephemeral "token" auth)
+	RefreshToken string `yaml:"refresh_token,omitempty"` // Refresh token used to renew the access token (for "token" auth)
 }
 
 // KeyConfig holds a reusable cryptographic key
@@ -257,6 +259,7 @@ func (c *Config) SetLeafConfig(name string, configData *ConfigData) {
 		active:     configData.Active,
 		clusters:   configData.Clusters,
 		identities: configData.Identities,
+		keys:       configData.Keys,
 		sourcePath: name, // Store the name so we can identify this leaf config later
 	}
 
@@ -637,6 +640,34 @@ func isEmptyConfigData(d *ConfigData) bool {
 		len(d.Keys) == 0)
 }
 
+// atomicWriteFile writes data to path via a temp file in the same directory
+// followed by a rename, so a concurrent reader never observes a partially
+// written file. Leaf configs are now rewritten on a hot path (token refresh),
+// so a torn read here would fail the whole LoadConfig.
+func atomicWriteFile(path string, data []byte, perm os.FileMode) error {
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, "."+filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	// Best-effort cleanup if we bail out before the rename.
+	defer func() { _ = os.Remove(tmpPath) }()
+
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Chmod(perm); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpPath, path)
+}
+
 // saveLeafConfigs saves all unsaved leaf configs to clientconfig.d/ directory
 func (c *Config) saveLeafConfigs(mainConfigPath string) error {
 	// Determine the config.d directory path based on the main config path
@@ -666,7 +697,7 @@ func (c *Config) saveLeafConfigs(mainConfigPath string) error {
 			return fmt.Errorf("failed to marshal leaf config %s: %w", name, err)
 		}
 
-		if err := os.WriteFile(leafPath, data, 0600); err != nil {
+		if err := atomicWriteFile(leafPath, data, 0600); err != nil {
 			return fmt.Errorf("failed to write leaf config %s: %w", name, err)
 		}
 	}
@@ -745,6 +776,30 @@ func (c *Config) GetClusterSource(name string) string {
 
 	// Check main config
 	if _, exists := c.clusters[name]; exists {
+		return c.sourcePath
+	}
+
+	return ""
+}
+
+// GetIdentitySource returns the source file path for an identity.
+// For identities in the main config, returns the main config path.
+// For identities in leaf configs, returns the leaf config path.
+// Returns "" if the identity is not found.
+func (c *Config) GetIdentitySource(name string) string {
+	// Check leaf configs first (they override main config)
+	for _, leafConfig := range c.leafConfigs {
+		if _, exists := leafConfig.identities[name]; exists {
+			if c.sourcePath != "" {
+				configDir := filepath.Dir(c.sourcePath)
+				return filepath.Join(configDir, "clientconfig.d", leafConfig.sourcePath+".yaml")
+			}
+			return leafConfig.sourcePath
+		}
+	}
+
+	// Check main config
+	if _, exists := c.identities[name]; exists {
 		return c.sourcePath
 	}
 
