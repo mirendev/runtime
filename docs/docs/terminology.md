@@ -118,7 +118,7 @@ Authentication at the routing layer using an [identity provider](#identity-provi
 
 ## Sandbox
 
-An isolated execution environment where your app runs. Sandboxes use gvisor for security isolation and have their own network namespace.
+An isolated execution environment where your app runs. Sandboxes are Linux containers managed by containerd, isolated using kernel namespaces and cgroups, and each has its own network namespace by default.
 
 ## Sandbox Pool
 
