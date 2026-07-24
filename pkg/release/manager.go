@@ -2,6 +2,7 @@ package release
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -30,6 +31,11 @@ type ManagerOptions struct {
 	SkipHealthCheck bool
 	// AutoRollback enables automatic rollback on health check failure
 	AutoRollback bool
+	// PathSymlink, when non-empty, is a location on $PATH that is kept as a
+	// symlink to InstallPath after a successful server/runner upgrade so the
+	// documented CLI stays in sync with the managed binary. Empty disables it
+	// (e.g. for user/CLI-only upgrades).
+	PathSymlink string
 }
 
 // DefaultManagerOptions returns default manager options
@@ -42,6 +48,7 @@ func DefaultManagerOptions() ManagerOptions {
 		HealthTimeout:   60 * time.Second,
 		SkipHealthCheck: false,
 		AutoRollback:    true,
+		PathSymlink:     SystemCLIPath,
 	}
 }
 
@@ -152,8 +159,31 @@ func (m *Manager) UpgradeServer(ctx context.Context, artifact Artifact) error {
 		fmt.Printf("Service is healthy\n")
 	}
 
+	// Keep the documented on-$PATH CLI pointed at the binary we just installed
+	// and verified. Best-effort: the upgrade itself already succeeded, so a
+	// symlink failure is a warning rather than a hard error (and never triggers
+	// a rollback of a healthy server).
+	m.ensurePathSymlink()
+
 	fmt.Printf("Upgrade successful!\n")
 	return nil
+}
+
+// ensurePathSymlink points m.opts.PathSymlink at the managed InstallPath when a
+// PathSymlink is configured. Failures are logged, not returned, so they don't
+// undo an otherwise-successful upgrade.
+func (m *Manager) ensurePathSymlink() {
+	if m.opts.PathSymlink == "" {
+		return
+	}
+	switch err := EnsurePathSymlink(m.opts.InstallPath, m.opts.PathSymlink); {
+	case errors.Is(err, ErrPathManagedElsewhere):
+		fmt.Fprintf(os.Stderr, "Note: leaving %s alone, it looks managed by another tool (e.g. Homebrew); the CLI on your $PATH may not track the server.\n", m.opts.PathSymlink)
+	case err != nil:
+		fmt.Fprintf(os.Stderr, "Warning: failed to update %s symlink: %v\n", m.opts.PathSymlink, err)
+	default:
+		fmt.Printf("Updated %s -> %s\n", m.opts.PathSymlink, m.opts.InstallPath)
+	}
 }
 
 // RestartAndVerify restarts the systemd service and verifies its health

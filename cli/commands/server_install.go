@@ -24,6 +24,7 @@ import (
 	"gopkg.in/yaml.v3"
 	"miren.dev/runtime/clientconfig"
 	"miren.dev/runtime/pkg/registration"
+	"miren.dev/runtime/pkg/release"
 	"miren.dev/runtime/version"
 )
 
@@ -527,6 +528,18 @@ WantedBy=multi-user.target
 		} else {
 			ctx.Completed("Client configuration saved")
 		}
+	}
+
+	// Point the documented on-$PATH CLI at the managed release binary so it
+	// stays in sync with the server through future upgrades. Best-effort: the
+	// install already succeeded, so a symlink failure is a warning.
+	switch err := release.EnsurePathSymlink(releaseBinPath, release.SystemCLIPath); {
+	case errors.Is(err, release.ErrPathManagedElsewhere):
+		ctx.Warn("Left %s alone, it looks managed by another tool (e.g. Homebrew); it may not track the server", release.SystemCLIPath)
+	case err != nil:
+		ctx.Warn("Failed to link %s to %s: %v", release.SystemCLIPath, releaseBinPath, err)
+	default:
+		ctx.Completed("Linked %s -> %s", release.SystemCLIPath, releaseBinPath)
 	}
 
 	// Print helpful next steps
