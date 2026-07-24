@@ -14,6 +14,7 @@ import (
 
 	containerd "github.com/containerd/containerd/v2/client"
 	"github.com/containerd/containerd/v2/pkg/namespaces"
+	"github.com/containerd/errdefs"
 	"golang.org/x/sys/unix"
 )
 
@@ -249,33 +250,38 @@ func (b *BaseComponent) stopTask(ctx context.Context, task containerd.Task) {
 	defer cancel()
 
 	if err := task.Kill(shutdownCtx, unix.SIGTERM); err != nil {
-		b.Log.Error("failed to send SIGTERM to "+b.ComponentName+" task", "error", err)
-		return
-	}
+		// The init process may already be gone — e.g. the previous server died
+		// uncleanly, leaving the task registered but its process dead, so SIGTERM
+		// comes back "not found". Do NOT bail here: we still have to delete the
+		// task record below, otherwise the container (and its snapshot) can't be
+		// removed and the next plain→TLS recreate wedges on "snapshot already
+		// exists". See MIR-1463.
+		b.Log.Warn("failed to send SIGTERM to "+b.ComponentName+" task, proceeding to delete", "error", err)
+	} else {
+		status, err := task.Wait(shutdownCtx)
+		if err == nil {
+			select {
+			case es := <-status:
+				b.Log.Info(b.ComponentName+" task exited", "code", es.ExitCode())
 
-	status, err := task.Wait(shutdownCtx)
-	if err == nil {
-		select {
-		case es := <-status:
-			b.Log.Info(b.ComponentName+" task exited", "code", es.ExitCode())
+			case <-shutdownCtx.Done():
+				b.Log.Warn(b.ComponentName + " task did not exit gracefully, sending SIGKILL")
+				killCtx, killCancel := context.WithTimeout(namespaces.WithNamespace(context.Background(), b.Namespace), 10*time.Second)
+				defer killCancel()
 
-		case <-shutdownCtx.Done():
-			b.Log.Warn(b.ComponentName + " task did not exit gracefully, sending SIGKILL")
-			killCtx, killCancel := context.WithTimeout(namespaces.WithNamespace(context.Background(), b.Namespace), 10*time.Second)
-			defer killCancel()
-
-			if err := task.Kill(killCtx, unix.SIGKILL); err != nil {
-				b.Log.Error("failed to send SIGKILL to "+b.ComponentName+" task", "error", err)
-			} else {
-				statusCh, waitErr := task.Wait(killCtx)
-				if waitErr != nil {
-					b.Log.Error(b.ComponentName+" task wait channel after SIGKILL failed", "error", waitErr)
+				if err := task.Kill(killCtx, unix.SIGKILL); err != nil {
+					b.Log.Error("failed to send SIGKILL to "+b.ComponentName+" task", "error", err)
 				} else {
-					select {
-					case <-statusCh:
-						// Task exited
-					case <-killCtx.Done():
-						b.Log.Warn(b.ComponentName + " task did not exit after SIGKILL within timeout")
+					statusCh, waitErr := task.Wait(killCtx)
+					if waitErr != nil {
+						b.Log.Error(b.ComponentName+" task wait channel after SIGKILL failed", "error", waitErr)
+					} else {
+						select {
+						case <-statusCh:
+							// Task exited
+						case <-killCtx.Done():
+							b.Log.Warn(b.ComponentName + " task did not exit after SIGKILL within timeout")
+						}
 					}
 				}
 			}
@@ -285,7 +291,10 @@ func (b *BaseComponent) stopTask(ctx context.Context, task containerd.Task) {
 	deleteCtx, deleteCancel := context.WithTimeout(namespaces.WithNamespace(context.Background(), b.Namespace), 10*time.Second)
 	defer deleteCancel()
 
-	if _, err := task.Delete(deleteCtx); err != nil {
+	// WithProcessKill force-kills any lingering process before removing the task
+	// record, so a task whose SIGTERM failed above is still cleaned up in one shot.
+	// A not-found task is already gone — treat that as success.
+	if _, err := task.Delete(deleteCtx, containerd.WithProcessKill); err != nil && !errdefs.IsNotFound(err) {
 		b.Log.Error("failed to delete "+b.ComponentName+" task", "error", err)
 	}
 }
@@ -295,25 +304,68 @@ func (b *BaseComponent) StopTask(ctx context.Context, task containerd.Task) {
 	b.stopTask(ctx, task)
 }
 
-// deleteContainerWithRetry deletes the container with retry logic.
+// deleteContainerAndSnapshot deletes the container and makes sure its snapshot is
+// gone. It reads the snapshotter + snapshot key first, deletes the container with
+// WithSnapshotCleanup, then explicitly removes the snapshot as a fallback so a failed
+// or partial container delete can't strand it — a stranded snapshot wedges the next
+// recreate on "snapshot already exists" (MIR-1463). A not-found container or snapshot
+// is treated as success.
+//
+// It runs on a detached, namespaced context with its own deadline (like stopTask's
+// final delete) so a cancelled caller — e.g. a shutdown — can't abort the delete or
+// the snapshot removal partway and leak the very snapshot this path exists to reclaim.
+func (b *BaseComponent) deleteContainerAndSnapshot(container containerd.Container) error {
+	ctx, cancel := context.WithTimeout(namespaces.WithNamespace(context.Background(), b.Namespace), 30*time.Second)
+	defer cancel()
+
+	var snapshotterName, snapshotKey string
+	if info, err := container.Info(ctx); err == nil {
+		snapshotterName = info.Snapshotter
+		snapshotKey = info.SnapshotKey
+	}
+
+	delErr := container.Delete(ctx, containerd.WithSnapshotCleanup)
+	if errdefs.IsNotFound(delErr) {
+		delErr = nil
+	}
+
+	// Fallback: ensure the snapshot is gone regardless of how the container delete
+	// fared. Harmless if WithSnapshotCleanup already removed it (Remove tolerates a
+	// missing key), and it's the backstop that keeps a failed delete from leaking.
+	if snapshotterName != "" && snapshotKey != "" {
+		if snapshotter := b.CC.SnapshotService(snapshotterName); snapshotter != nil {
+			if err := snapshotter.Remove(ctx, snapshotKey); err != nil && !errdefs.IsNotFound(err) {
+				b.Log.Warn("failed to explicitly remove "+b.ComponentName+" snapshot", "error", err, "snapshot_key", snapshotKey)
+			}
+		}
+	}
+
+	return delErr
+}
+
+// deleteContainerWithRetry deletes the container (and its snapshot) with retry logic.
 func (b *BaseComponent) deleteContainerWithRetry(ctx context.Context, container containerd.Container) {
 	const maxRetries = 3
 	const retryDelay = 2 * time.Second
 
 	for attempt := 1; attempt <= maxRetries; attempt++ {
-		deleteCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-		err := container.Delete(deleteCtx, containerd.WithSnapshotCleanup)
-		cancel()
-
+		// The delete itself runs on a detached context so it always finishes; ctx
+		// only governs whether we keep retrying, so a shutdown stops the backoff
+		// loop promptly instead of blocking on it.
+		err := b.deleteContainerAndSnapshot(container)
 		if err == nil {
 			b.Log.Info(b.ComponentName + " container deleted successfully")
 			return
 		}
-
 		b.Log.Error("failed to delete "+b.ComponentName+" container", "error", err, "attempt", attempt, "max_retries", maxRetries)
 
 		if attempt < maxRetries {
-			time.Sleep(retryDelay)
+			select {
+			case <-time.After(retryDelay):
+			case <-ctx.Done():
+				b.Log.Warn(b.ComponentName+" container delete retries cancelled", "error", ctx.Err())
+				return
+			}
 		}
 	}
 
@@ -331,17 +383,16 @@ func (b *BaseComponent) DeleteContainerWithRetry(ctx context.Context) {
 }
 
 // CleanupExistingContainer stops the task and deletes a container during restart scenarios.
+// It shares the same task-delete and snapshot-cleanup path as the graceful Stop flow, so
+// a task left registered by an unclean shutdown still gets force-deleted and its snapshot
+// removed rather than stranding both and wedging the recreate (MIR-1463).
 func (b *BaseComponent) CleanupExistingContainer(ctx context.Context, container containerd.Container) {
 	task, err := container.Task(ctx, nil)
 	if err == nil {
 		b.stopTask(ctx, task)
 	}
 
-	deleteCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
-	if err := container.Delete(deleteCtx, containerd.WithSnapshotCleanup); err != nil {
-		b.Log.Warn("failed to delete existing container during cleanup", "error", err)
-	}
+	b.deleteContainerWithRetry(ctx, container)
 }
 
 // WaitForReady waits until the component is ready by checking TCP connectivity.
