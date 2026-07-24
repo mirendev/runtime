@@ -26,19 +26,12 @@ import (
 )
 
 var (
-	DefaultTransport  http3.Transport
 	DefaultQUICConfig quic.Config
 
 	DefaultLogLevel = slog.LevelInfo
 )
 
 func init() {
-	DefaultTransport.EnableDatagrams = true
-	DefaultTransport.Logger = slog.Default()
-	DefaultTransport.TLSClientConfig = &tls.Config{
-		InsecureSkipVerify: true,
-	}
-
 	DefaultQUICConfig = quic.Config{
 		// Pin the QUIC Initial at the 1200-byte spec minimum so the handshake
 		// fits a 1280-MTU path (Tailscale/WireGuard tunnels, the IPv6 minimum).
@@ -60,8 +53,6 @@ func init() {
 		InitialConnectionReceiveWindow: 10 * 1024 * 1024, // 10MB total
 		MaxConnectionReceiveWindow:     20 * 1024 * 1024, // 20MB total max
 	}
-
-	DefaultTransport.QUICConfig = &DefaultQUICConfig
 }
 
 // closedPacketConn is a stub net.PacketConn that returns net.ErrClosed on all operations.
