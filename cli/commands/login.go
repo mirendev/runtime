@@ -132,7 +132,7 @@ func Login(ctx *Context, opts struct {
 	KeyName       string `short:"k" long:"key-name" description:"Name for the authentication key" default:"miren-cli"`
 	NoSave        bool   `long:"no-save" description:"Don't save credentials to config file"`
 	Force         bool   `short:"f" long:"force" description:"Overwrite existing identity without prompting"`
-	PersistentKey bool   `long:"persistent-key" description:"Register a persistent key instead of the default ephemeral token login"`
+	PersistentKey bool   `long:"persistent-key" description:"Register a persistent key instead of the default renewable token login"`
 }) error {
 	return login(ctx, opts.CloudURL, opts.IdentityName, opts.KeyName, opts.NoSave, opts.Force, opts.PersistentKey)
 }
@@ -201,7 +201,7 @@ func login(ctx *Context, cloudURL, identityName, keyName string, noSave, force, 
 	usePersistentKey := persistentKey
 	if !usePersistentKey {
 		if existing, err := clientconfig.LoadConfig(); err == nil && existing != nil {
-			if id, err := existing.GetIdentity(identityName); err == nil && id != nil && id.Type == "keypair" {
+			if id, err := existing.GetIdentity(identityName); err == nil && id != nil && id.Type == clientconfig.IdentityKeypair {
 				usePersistentKey = true
 				ctx.Info("Identity '%s' already uses a persistent key; keeping it.", identityName)
 			}
@@ -308,7 +308,7 @@ func persistKeypairIdentity(ctx *Context, identityName, cloudURL, keyName, acces
 		return fmt.Errorf("failed to encode private key: %w", err)
 	}
 	identity := &clientconfig.IdentityConfig{
-		Type:       "keypair",
+		Type:       clientconfig.IdentityKeypair,
 		Issuer:     clientconfig.NormalizeIssuerURL(cloudURL),
 		PrivateKey: privateKeyPEM,
 	}
@@ -322,7 +322,7 @@ func persistKeypairIdentity(ctx *Context, identityName, cloudURL, keyName, acces
 func persistTokenIdentity(ctx *Context, identityName, cloudURL string, tokens *deviceFlowTokens) error {
 	issuer := clientconfig.NormalizeIssuerURL(cloudURL)
 	identity := &clientconfig.IdentityConfig{
-		Type:         "token",
+		Type:         clientconfig.IdentityToken,
 		Issuer:       issuer,
 		Token:        tokens.AccessToken,
 		RefreshToken: tokens.RefreshToken,
@@ -714,7 +714,7 @@ func saveKeyPairToConfig(identityName, cloudURL string, keyPair *cloudauth.KeyPa
 	leafConfigData := &clientconfig.ConfigData{
 		Identities: map[string]*clientconfig.IdentityConfig{
 			identityName: {
-				Type:   "keypair",
+				Type:   clientconfig.IdentityKeypair,
 				Issuer: issuer,
 				KeyRef: keyName,
 			},
@@ -889,7 +889,7 @@ func getIdentityUserInfo(ctx *Context, config *clientconfig.Config, identityName
 		return ""
 	}
 
-	if identity.Type != "keypair" && identity.Type != "token" {
+	if identity.Type != clientconfig.IdentityKeypair && identity.Type != clientconfig.IdentityToken {
 		return ""
 	}
 

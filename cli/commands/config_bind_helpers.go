@@ -198,7 +198,7 @@ func isPrivateAddress(host string) bool {
 // identityName may be "" for an anonymous in-memory identity (e.g. during login
 // before it has been named), in which case token refreshes are not persisted.
 func fetchAvailableClusters(ctx *Context, config *clientconfig.Config, identityName string, identity *clientconfig.IdentityConfig) ([]ClusterResponse, error) {
-	if identity.Type != "keypair" && identity.Type != "token" {
+	if identity.Type != clientconfig.IdentityKeypair && identity.Type != clientconfig.IdentityToken {
 		return nil, fmt.Errorf("cluster listing is only supported for keypair and token identities")
 	}
 

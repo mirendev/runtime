@@ -287,7 +287,7 @@ func TestSetLeafConfigAndSaving(t *testing.T) {
 
 	devIdentity, err := config.GetIdentity("dev-identity")
 	require.NoError(t, err)
-	assert.Equal(t, "keypair", devIdentity.Type)
+	assert.Equal(t, IdentityKeypair, devIdentity.Type)
 
 	// Verify counts include both main and leaf configs
 	assert.Equal(t, 2, config.GetClusterCount())  // main-cluster + dev-cluster
@@ -336,7 +336,7 @@ func TestSetLeafConfigAndSaving(t *testing.T) {
 	assert.Equal(t, 1, len(leafConfigFromFile.Identities))
 	devIdentityFromFile, exists := leafConfigFromFile.Identities["dev-identity"]
 	require.True(t, exists)
-	assert.Equal(t, "keypair", devIdentityFromFile.Type)
+	assert.Equal(t, IdentityKeypair, devIdentityFromFile.Type)
 }
 
 func TestSetLeafConfigUpdatesExisting(t *testing.T) {

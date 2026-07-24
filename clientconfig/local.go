@@ -109,7 +109,7 @@ foundAddress:
 
 		// Handle different identity types
 		switch identity.Type {
-		case "keypair", "token":
+		case IdentityKeypair, IdentityToken:
 			// Both keypair and ephemeral token identities resolve to a bearer
 			// token; TokenForIdentity dispatches on the identity type (re-minting
 			// via challenge-response for keypair, or refreshing the cached token
@@ -132,7 +132,7 @@ foundAddress:
 
 			return base, nil
 
-		case "certificate":
+		case IdentityCertificate:
 			// Handle certificate-based authentication from identity
 			return []rpc.StateOption{
 				rpc.WithCertPEMs(

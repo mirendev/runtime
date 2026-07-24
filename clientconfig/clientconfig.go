@@ -20,16 +20,30 @@ const (
 	EnvConfigPath = "MIREN_CONFIG"
 )
 
+// IdentityType names how an identity authenticates. Naming the set (rather than
+// using a bare string) lets the exhaustive linter flag any switch that forgets
+// an arm when a new type is added.
+type IdentityType string
+
+const (
+	// IdentityKeypair authenticates with an ed25519 key via challenge-response.
+	IdentityKeypair IdentityType = "keypair"
+	// IdentityToken authenticates with a stored JWT that is refreshed as needed.
+	IdentityToken IdentityType = "token"
+	// IdentityCertificate authenticates with a client TLS certificate.
+	IdentityCertificate IdentityType = "certificate"
+)
+
 // IdentityConfig holds authentication credentials that can be used across clusters
 type IdentityConfig struct {
-	Type         string `yaml:"type"`                    // Type of identity: "keypair", "token", "certificate", etc.
-	Issuer       string `yaml:"issuer,omitempty"`        // The auth server that issued this identity (e.g., "https://miren.cloud")
-	KeyRef       string `yaml:"key_ref,omitempty"`       // Reference to a key in the Keys section (for keypair auth)
-	PrivateKey   string `yaml:"private_key,omitempty"`   // PEM encoded private key (for keypair auth, deprecated - use KeyRef)
-	ClientCert   string `yaml:"client_cert,omitempty"`   // PEM encoded client certificate (for cert auth)
-	ClientKey    string `yaml:"client_key,omitempty"`    // PEM encoded client key (for cert auth)
-	Token        string `yaml:"token,omitempty"`         // JWT access token (for ephemeral "token" auth)
-	RefreshToken string `yaml:"refresh_token,omitempty"` // Refresh token used to renew the access token (for "token" auth)
+	Type         IdentityType `yaml:"type"`                    // How this identity authenticates
+	Issuer       string       `yaml:"issuer,omitempty"`        // The auth server that issued this identity (e.g., "https://miren.cloud")
+	KeyRef       string       `yaml:"key_ref,omitempty"`       // Reference to a key in the Keys section (for keypair auth)
+	PrivateKey   string       `yaml:"private_key,omitempty"`   // PEM encoded private key (for keypair auth, deprecated - use KeyRef)
+	ClientCert   string       `yaml:"client_cert,omitempty"`   // PEM encoded client certificate (for cert auth)
+	ClientKey    string       `yaml:"client_key,omitempty"`    // PEM encoded client key (for cert auth)
+	Token        string       `yaml:"token,omitempty"`         // JWT access token (for token auth)
+	RefreshToken string       `yaml:"refresh_token,omitempty"` // Refresh token used to renew the access token (for token auth)
 }
 
 // KeyConfig holds a reusable cryptographic key

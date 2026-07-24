@@ -33,13 +33,13 @@ func Whoami(ctx *Context, opts struct {
 		identity, err = ctx.ClientConfig.GetIdentity(ctx.ClusterConfig.Identity)
 		if err == nil && identity != nil {
 			switch identity.Type {
-			case "keypair", "token":
+			case clientconfig.IdentityKeypair, clientconfig.IdentityToken:
 				token, err = ctx.ClientConfig.TokenForIdentity(ctx, ctx.ClusterConfig.Identity, identity, hostname)
 				if err != nil {
 					return fmt.Errorf("failed to authenticate: %w", err)
 				}
-				authMethod = identity.Type
-			case "certificate":
+				authMethod = string(identity.Type)
+			case clientconfig.IdentityCertificate:
 				authMethod = "certificate"
 			}
 		}

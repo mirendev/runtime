@@ -114,14 +114,14 @@ func DebugConnection(ctx *Context, opts struct {
 			} else if cluster.CloudAuth && cluster.ClientKey != "" {
 				// Backward compatibility: create identity from cluster
 				identity = &clientconfig.IdentityConfig{
-					Type:       "keypair",
+					Type:       clientconfig.IdentityKeypair,
 					PrivateKey: cluster.ClientKey,
 				}
 				ctx.Info("Using legacy CloudAuth from cluster '%s'", opts.Cluster)
 			} else if cluster.ClientCert != "" && cluster.ClientKey != "" {
 				// Backward compatibility: certificate auth
 				identity = &clientconfig.IdentityConfig{
-					Type:       "certificate",
+					Type:       clientconfig.IdentityCertificate,
 					ClientCert: cluster.ClientCert,
 					ClientKey:  cluster.ClientKey,
 				}
@@ -144,7 +144,7 @@ func DebugConnection(ctx *Context, opts struct {
 
 	if identity != nil {
 		switch identity.Type {
-		case "keypair", "token":
+		case clientconfig.IdentityKeypair, clientconfig.IdentityToken:
 			// Both keypair and ephemeral token identities resolve to a JWT bearer
 			// token. The server we're testing is the cluster, not the auth server.
 			if config == nil {
@@ -172,7 +172,7 @@ func DebugConnection(ctx *Context, opts struct {
 			}
 
 			authHeader = "Bearer " + token
-			authMethod = identity.Type + "/jwt"
+			authMethod = string(identity.Type) + "/jwt"
 			ctx.Completed("JWT token obtained")
 
 			// Decode and print JWT claims for debugging
@@ -186,7 +186,7 @@ func DebugConnection(ctx *Context, opts struct {
 				}
 			}
 
-		case "certificate":
+		case clientconfig.IdentityCertificate:
 			// Certificate auth is handled at TLS level
 			authMethod = "certificate"
 			ctx.Info("Using client certificate authentication")
@@ -216,7 +216,7 @@ func DebugConnection(ctx *Context, opts struct {
 		InsecureSkipVerify: opts.Insecure,
 	}
 
-	if identity != nil && identity.Type == "certificate" {
+	if identity != nil && identity.Type == clientconfig.IdentityCertificate {
 		// Add client certificate
 		cert, err := tls.X509KeyPair([]byte(identity.ClientCert), []byte(identity.ClientKey))
 		if err != nil {

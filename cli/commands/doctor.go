@@ -97,7 +97,7 @@ func tryAuthenticate(ctx *Context, cfg *clientconfig.Config, cluster *clientconf
 	result.IdentityName = cluster.Identity
 
 	switch identity.Type {
-	case "keypair", "token":
+	case clientconfig.IdentityKeypair, clientconfig.IdentityToken:
 		authServer := identity.Issuer
 		if authServer == "" {
 			authServer = cluster.Hostname
@@ -110,12 +110,12 @@ func tryAuthenticate(ctx *Context, cfg *clientconfig.Config, cluster *clientconf
 		}
 
 		result.Claims, _ = auth.ParseUnverifiedClaims(token)
-		result.Method = identity.Type
+		result.Method = string(identity.Type)
 
 		// Fetch user info from cloud
 		result.UserInfo, _ = fetchCloudUserInfo(ctx, authServer, token)
 
-	case "certificate":
+	case clientconfig.IdentityCertificate:
 		result.Method = "certificate"
 	}
 

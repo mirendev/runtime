@@ -164,7 +164,7 @@ func tokenFresh(tokenString string, buffer time.Duration) bool {
 // fallbackHost is used as the issuer when the identity carries no Issuer.
 func (c *Config) TokenForIdentity(ctx context.Context, name string, identity *IdentityConfig, fallbackHost string) (string, error) {
 	switch identity.Type {
-	case "keypair":
+	case IdentityKeypair:
 		privateKeyPEM, err := c.GetPrivateKeyPEM(identity)
 		if err != nil {
 			return "", fmt.Errorf("failed to get private key: %w", err)
@@ -179,10 +179,10 @@ func (c *Config) TokenForIdentity(ctx context.Context, name string, identity *Id
 		}
 		return AuthenticateWithKey(ctx, authServer, keyPair)
 
-	case "token":
+	case IdentityToken:
 		return c.tokenForTokenIdentity(ctx, name, identity, fallbackHost)
 
-	case "certificate":
+	case IdentityCertificate:
 		return "", ErrNoBearerToken
 
 	default:

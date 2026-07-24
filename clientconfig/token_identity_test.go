@@ -37,7 +37,7 @@ func TestTokenIdentityRoundTrip(t *testing.T) {
 
 	id, err := reloaded.GetIdentity("cloud")
 	require.NoError(t, err)
-	require.Equal(t, "token", id.Type)
+	require.Equal(t, IdentityToken, id.Type)
 	require.Equal(t, "https://miren.cloud", id.Issuer)
 	require.Equal(t, "access.jwt.value", id.Token)
 	require.Equal(t, "refresh.jwt.value", id.RefreshToken)

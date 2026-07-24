@@ -20,7 +20,7 @@ miren login [flags]
 - `--identity, -i` — Name for this identity in config (default: `cloud`)
 - `--key-name, -k` — Name for the authentication key (default: `miren-cli`)
 - `--no-save` — Don't save credentials to config file
-- `--persistent-key` — Register a persistent key instead of the default ephemeral token login
+- `--persistent-key` — Register a persistent key instead of the default renewable token login
 - `--url, -u` — Cloud URL (default: `https://miren.cloud`)
 
 ## Global Options

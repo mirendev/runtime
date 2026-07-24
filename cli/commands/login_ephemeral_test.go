@@ -119,7 +119,7 @@ func TestLoginEphemeralDefault(t *testing.T) {
 	require.NoError(t, err)
 	id, err := cfg.GetIdentity("cloud")
 	require.NoError(t, err)
-	require.Equal(t, "token", id.Type)
+	require.Equal(t, clientconfig.IdentityToken, id.Type)
 	require.NotEmpty(t, id.Token)
 	require.NotEmpty(t, id.RefreshToken)
 
@@ -149,7 +149,7 @@ func TestLoginPersistentKeyFlag(t *testing.T) {
 	require.NoError(t, err)
 	id, err := cfg.GetIdentity("cloud")
 	require.NoError(t, err)
-	require.Equal(t, "keypair", id.Type)
+	require.Equal(t, clientconfig.IdentityKeypair, id.Type)
 	require.Empty(t, id.Token)
 
 	_, err = os.Stat(filepath.Join(dir, "clientconfig.d", "key-miren-cli.yaml"))
@@ -224,5 +224,5 @@ func TestLoginFallsBackWhenNoRefreshToken(t *testing.T) {
 	require.NoError(t, err)
 	id, err := cfg.GetIdentity("cloud")
 	require.NoError(t, err)
-	require.Equal(t, "keypair", id.Type)
+	require.Equal(t, clientconfig.IdentityKeypair, id.Type)
 }

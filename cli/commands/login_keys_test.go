@@ -143,7 +143,7 @@ func TestSaveKeyPairToConfig(t *testing.T) {
 		assert.True(t, config.HasIdentity(identityName), "Identity should be saved")
 		identity, err := config.GetIdentity(identityName)
 		require.NoError(t, err)
-		assert.Equal(t, "keypair", identity.Type)
+		assert.Equal(t, clientconfig.IdentityKeypair, identity.Type)
 		assert.Equal(t, "https://test.miren.cloud", identity.Issuer)
 		assert.Equal(t, keyName, identity.KeyRef, "Identity should reference the key")
 		assert.Empty(t, identity.PrivateKey, "Identity should not have direct PrivateKey")

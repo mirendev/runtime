@@ -175,7 +175,7 @@ func checkClusterAccess(ctx *Context, cfg *clientconfig.Config, clusterName stri
 
 // checkClusterAccessRBAC calls the cloud API to check if the user has RBAC permission to access a cluster
 func checkClusterAccessRBAC(ctx *Context, config *clientconfig.Config, identityName string, identity *clientconfig.IdentityConfig, clusterXID string) (bool, string, error) {
-	if identity.Type != "keypair" && identity.Type != "token" {
+	if identity.Type != clientconfig.IdentityKeypair && identity.Type != clientconfig.IdentityToken {
 		return false, "", fmt.Errorf("RBAC check is only supported for keypair and token identities")
 	}
 

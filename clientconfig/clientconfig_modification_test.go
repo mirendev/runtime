@@ -107,7 +107,7 @@ clusters:
 	require.NoError(t, err)
 	assert.Equal(t, "new-issuer", prodIdentitySaved.Issuer, "Should save modified issuer")
 	assert.Equal(t, "new-key", prodIdentitySaved.PrivateKey, "Should save modified key")
-	assert.Equal(t, "keypair", prodIdentitySaved.Type, "Should preserve unmodified type")
+	assert.Equal(t, IdentityKeypair, prodIdentitySaved.Type, "Should preserve unmodified type")
 
 	// Verify dev cluster (from config.d) was NOT saved
 	_, err = savedConfig.GetCluster("dev")
