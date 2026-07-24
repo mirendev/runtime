@@ -143,6 +143,49 @@ func TestLoginPersistentKeyFlag(t *testing.T) {
 	require.NoError(t, err, "persistent-key login must write a key file")
 }
 
+// TestLoginNoSavePersistentKeyRegisters guards a regression: --no-save with
+// --persistent-key printed a freshly generated private key without ever
+// registering the public half, so the key it handed the user could not
+// authenticate anything.
+func TestLoginNoSavePersistentKeyRegisters(t *testing.T) {
+	mc := &mockCloud{withRefresh: true}
+	srv := mc.server(t)
+	defer srv.Close()
+
+	dir := t.TempDir()
+	t.Setenv("MIREN_CONFIG", dir)
+
+	ctx := newTestContext()
+	err := login(ctx, srv.URL, "cloud", "miren-cli", true /* noSave */, false, true /* persistentKey */)
+	require.NoError(t, err)
+
+	require.Equal(t, int32(1), mc.keyBeginHits.Load(),
+		"a printed key must be registered with the cloud or it cannot authenticate")
+
+	// --no-save must still persist nothing.
+	_, err = os.Stat(filepath.Join(dir, "clientconfig.d"))
+	require.True(t, os.IsNotExist(err), "--no-save must not write any config")
+}
+
+// TestLoginNoSaveEphemeralSkipsKeyRegistration verifies the token path stays
+// registration-free under --no-save.
+func TestLoginNoSaveEphemeralSkipsKeyRegistration(t *testing.T) {
+	mc := &mockCloud{withRefresh: true}
+	srv := mc.server(t)
+	defer srv.Close()
+
+	dir := t.TempDir()
+	t.Setenv("MIREN_CONFIG", dir)
+
+	ctx := newTestContext()
+	err := login(ctx, srv.URL, "cloud", "miren-cli", true /* noSave */, false, false)
+	require.NoError(t, err)
+
+	require.Zero(t, mc.keyBeginHits.Load(), "ephemeral --no-save must not register a key")
+	_, err = os.Stat(filepath.Join(dir, "clientconfig.d"))
+	require.True(t, os.IsNotExist(err), "--no-save must not write any config")
+}
+
 // TestLoginFallsBackWhenNoRefreshToken verifies that if the cloud returns no
 // refresh token, a default login falls back to the persistent-key flow rather
 // than storing an unusable token identity.

@@ -192,8 +192,16 @@ func TestRevokeRefreshToken(t *testing.T) {
 		require.Equal(t, "logout", gotReason)
 	})
 
-	t.Run("empty tokens are a no-op", func(t *testing.T) {
-		require.NoError(t, RevokeRefreshToken(context.Background(), "https://x", "", ""))
+	t.Run("no refresh token is a no-op", func(t *testing.T) {
+		require.NoError(t, RevokeRefreshToken(context.Background(), "https://x", "access", ""))
+	})
+
+	t.Run("missing access token reports failure rather than silent success", func(t *testing.T) {
+		// Returning nil here would let the caller claim it revoked a token when
+		// no request was ever made.
+		err := RevokeRefreshToken(context.Background(), "https://x", "", "refresh-y")
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "no access token")
 	})
 
 	t.Run("non-2xx is an error", func(t *testing.T) {

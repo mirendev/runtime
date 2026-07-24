@@ -213,9 +213,11 @@ func (c *Config) tokenForTokenIdentity(ctx context.Context, name string, identit
 		return pair.AccessToken, nil
 	}
 
+	// Refreshing rotates the pair, so we need a file to write the new one back to.
+	// An identity that was never loaded from disk (an in-memory config) has none.
 	source := c.GetIdentitySource(name)
 	if source == "" {
-		return "", fmt.Errorf("cannot locate config file for identity %q", name)
+		return "", fmt.Errorf("identity %q has no config file on disk to store refreshed tokens in; run 'miren login' to save it", name)
 	}
 
 	// Serialize refreshes across processes. The refresh endpoint consumes the
@@ -228,8 +230,14 @@ func (c *Config) tokenForTokenIdentity(ctx context.Context, name string, identit
 	// removed on unlock: unlinking a flock target lets a concurrent waiter and a
 	// new process end up locking two different inodes, defeating the mutex.
 	lock := flock.New(lockPathFor(source))
-	if err := lock.Lock(); err != nil {
+	// TryLockContext rather than Lock so a cancelled command or an expiring
+	// deadline stops waiting promptly instead of blocking on a peer's refresh.
+	locked, err := lock.TryLockContext(ctx, 50*time.Millisecond)
+	if err != nil {
 		return "", fmt.Errorf("failed to acquire token refresh lock: %w", err)
+	}
+	if !locked {
+		return "", fmt.Errorf("failed to acquire token refresh lock for identity %q", name)
 	}
 	defer func() { _ = lock.Unlock() }()
 
@@ -316,8 +324,14 @@ func persistIdentityTokens(path, name, accessToken, refreshToken string) error {
 // bearer credential. Any error is returned to the caller, which should treat
 // revocation as advisory — a failed revoke must never block logout.
 func RevokeRefreshToken(ctx context.Context, issuer, accessToken, refreshToken string) error {
-	if refreshToken == "" || accessToken == "" {
-		return nil
+	if refreshToken == "" {
+		return nil // Nothing to revoke.
+	}
+	if accessToken == "" {
+		// The endpoint authenticates with the access token, so without one we
+		// cannot revoke. Report it rather than returning nil, which would let the
+		// caller claim a revocation that never happened.
+		return errors.New("no access token available to authorize revocation")
 	}
 
 	revokeURL, err := url.JoinPath(NormalizeIssuerURL(issuer), "/auth/revoke/refresh")

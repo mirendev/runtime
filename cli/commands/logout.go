@@ -116,11 +116,7 @@ func Logout(ctx *Context, opts struct {
 	// leaked ~/.config copy can't keep renewing after logout. Never let a failed
 	// revoke block the local logout.
 	if identity.Type == "token" && identity.RefreshToken != "" {
-		if err := clientconfig.RevokeRefreshToken(ctx, identity.Issuer, identity.Token, identity.RefreshToken); err != nil {
-			ctx.Warn("Could not revoke refresh token on the server (removing local credentials anyway): %v", err)
-		} else {
-			ctx.Info("Revoked refresh token on the server")
-		}
+		revokeIdentitySession(ctx, cfg, identityName, identity)
 	}
 
 	// Delete the identity file
@@ -147,6 +143,35 @@ func Logout(ctx *Context, opts struct {
 
 	ctx.Completed("Logged out of identity %q", identityName)
 	return nil
+}
+
+// revokeIdentitySession best-effort revokes a token identity's refresh token so
+// a copied config can't keep renewing after logout.
+//
+// The stored access token has a one hour life and is usually already expired by
+// the time someone logs out, and the revoke endpoint needs a valid bearer. So we
+// ask for a live token first, which may rotate the pair on disk; we then re-read
+// the identity so we revoke the refresh token that is actually current rather
+// than the one we just spent.
+func revokeIdentitySession(ctx *Context, cfg *clientconfig.Config, identityName string, identity *clientconfig.IdentityConfig) {
+	accessToken, err := cfg.TokenForIdentity(ctx, identityName, identity, identity.Issuer)
+	if err != nil {
+		ctx.Warn("Could not obtain a valid token to revoke the session (removing local credentials anyway): %v", err)
+		return
+	}
+
+	refreshToken := identity.RefreshToken
+	if reloaded, err := clientconfig.LoadConfig(); err == nil {
+		if current, err := reloaded.GetIdentity(identityName); err == nil && current.RefreshToken != "" {
+			refreshToken = current.RefreshToken
+		}
+	}
+
+	if err := clientconfig.RevokeRefreshToken(ctx, identity.Issuer, accessToken, refreshToken); err != nil {
+		ctx.Warn("Could not revoke refresh token on the server (removing local credentials anyway): %v", err)
+		return
+	}
+	ctx.Info("Revoked refresh token on the server")
 }
 
 // getConfigDirPath returns the path to the clientconfig.d directory

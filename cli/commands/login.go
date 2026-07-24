@@ -271,7 +271,7 @@ func login(ctx *Context, cloudURL, identityName, keyName string, noSave, force, 
 	}
 
 	if noSave {
-		return printUnsavedCredentials(ctx, tokens, usePersistentKey, keyName)
+		return printUnsavedCredentials(ctx, cloudURL, tokens, usePersistentKey, keyName)
 	}
 
 	if usePersistentKey {
@@ -353,16 +353,28 @@ func maybeAutoConfigureCluster(ctx *Context, identityName, cloudURL string, iden
 // instead of persisting them. For a persistent-key login it prints the freshly
 // generated key; otherwise it prints the access token (and warns about the
 // refresh token, a 7-day credential, landing in terminal scrollback).
-func printUnsavedCredentials(ctx *Context, tokens *deviceFlowTokens, usePersistentKey bool, keyName string) error {
+func printUnsavedCredentials(ctx *Context, cloudURL string, tokens *deviceFlowTokens, usePersistentKey bool, keyName string) error {
 	if usePersistentKey {
 		keyPair, err := getOrCreateKey(ctx, keyName)
-		if err == nil {
-			if privateKeyPEM, err := keyPair.PrivateKeyPEM(); err == nil {
-				ctx.Info("Private key (not saved):")
-				ctx.Info("%s", privateKeyPEM)
-				ctx.Info("")
-			}
+		if err != nil {
+			return fmt.Errorf("failed to get or create keypair: %w", err)
 		}
+
+		// Register even though we aren't saving: a private key the cloud has
+		// never seen cannot authenticate, so printing it unregistered would hand
+		// the user a credential that silently fails later.
+		ctx.Info("Registering public key with server...")
+		if err := registerPublicKey(cloudURL, tokens.AccessToken, keyPair, keyName); err != nil {
+			return fmt.Errorf("failed to register public key: %w", err)
+		}
+
+		privateKeyPEM, err := keyPair.PrivateKeyPEM()
+		if err != nil {
+			return fmt.Errorf("failed to encode private key: %w", err)
+		}
+		ctx.Info("Private key (not saved):")
+		ctx.Info("%s", privateKeyPEM)
+		ctx.Info("")
 	}
 
 	ctx.Info("Access token (not saved):")
