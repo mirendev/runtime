@@ -11,6 +11,11 @@ All notable changes to Miren Runtime will be documented in this file.
 ## Unreleased
 *main*
 
+---
+
+## v0.12.1
+*2026-07-24*
+
 **Security**
 - **Fixed an unauthenticated path traversal in the cluster-local OCI registry** ([GHSA-p37g-hvg3-r6wr](https://github.com/mirendev/runtime/security/advisories/GHSA-p37g-hvg3-r6wr)) - The registry on `:5000` accepted unauthenticated blob uploads and joined the client-supplied digest onto a filesystem path without checking it, so a traversing digest wrote attacker-controlled content anywhere on the host, as root. Paths are now validated before they reach the filesystem, and uploads are verified against the digest they claim. Port 5000 isn't among the inbound ports our firewall docs ask you to open, but it's open to every container on the node by design. Upgrade and restart the server to pick up the fix.
 
