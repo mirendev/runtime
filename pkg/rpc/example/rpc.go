@@ -366,6 +366,12 @@ func AdaptMeter(t Meter) *rpc.Interface {
 			Index:         0,
 			Public:        false,
 			Params:        []string{"name"},
+			HTTP: &rpc.HTTPBinding{
+				Verb:       "GET",
+				Path:       "/api/v1/meters/{name}/temperature",
+				Body:       "",
+				PathParams: []string{"name"},
+			},
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.ReadTemperature(ctx, &MeterReadTemperature{Call: call})
 			},

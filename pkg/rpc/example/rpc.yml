@@ -31,9 +31,13 @@ types:
 
 interfaces:
   - name: Meter
+    http:
+      prefix: /api/v1
     methods:
       - name: readTemperature
         index: 0
+        http:
+          get: /meters/{name}/temperature
         parameters:
           - name: name
             type: string

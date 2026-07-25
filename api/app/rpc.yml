@@ -410,8 +410,13 @@ types:
 
 interfaces:
   - name: Crud
+    http:
+      prefix: /api/v1
     methods:
       - name: new
+        http:
+          post: /apps
+          body: "*"
         parameters:
           - name: name
             type: string
@@ -419,6 +424,9 @@ interfaces:
           - name: id
             type: string
       - name: setConfiguration
+        http:
+          put: /apps/{app}/config
+          body: "*"
         parameters:
           - name: app
             type: string
@@ -430,6 +438,8 @@ interfaces:
           - name: versionShortId
             type: string
       - name: getConfiguration
+        http:
+          get: /apps/{app}/config
         parameters:
           - name: app
             type: string
@@ -441,21 +451,31 @@ interfaces:
           - name: versionShortId
             type: string
       - name: setHost
+        http:
+          put: /apps/{app}/host
+          body: "*"
         parameters:
           - name: app
             type: string
           - name: host
             type: string
       - name: list
+        http:
+          get: /apps
         results:
           - name: apps
             type: list
             element: AppInfo
       - name: destroy
+        http:
+          delete: /apps/{name}
         parameters:
           - name: name
             type: string
       - name: setEnvVar
+        http:
+          put: /apps/{app}/env/{key}
+          body: "*"
         parameters:
           - name: app
             type: string
@@ -474,6 +494,9 @@ interfaces:
           - name: versionShortId
             type: string
       - name: setEnvVars
+        http:
+          put: /apps/{app}/env
+          body: "*"
         parameters:
           - name: app
             type: string
@@ -504,10 +527,15 @@ interfaces:
           - name: service
             type: string
             doc: "Optional service name for per-service env vars. Empty means global."
+        http:
+          post: /apps/{app}/initial-env
+          body: "*"
         results:
           - name: configVersionId
             type: string
       - name: deleteEnvVar
+        http:
+          delete: /apps/{app}/env/{key}
         parameters:
           - name: app
             type: string
@@ -525,6 +553,9 @@ interfaces:
             type: string
             doc: "The source of the deleted variable (config or manual)"
       - name: restart
+        http:
+          post: /apps/{app}/restart
+          body: "*"
         parameters:
           - name: app
             type: string
@@ -545,8 +576,12 @@ interfaces:
             type: UserInfo
 
   - name: AppStatus
+    http:
+      prefix: /api/v1
     methods:
       - name: appInfo
+        http:
+          get: /apps/{application}/status
         parameters:
           - name: application
             type: string
@@ -555,8 +590,12 @@ interfaces:
             type: ApplicationStatus
 
   - name: Logs
+    http:
+      prefix: /api/v1
     methods:
       - name: appLogs
+        http:
+          get: /apps/{application}/logs
         parameters:
           - name: application
             type: string
@@ -569,6 +608,8 @@ interfaces:
             type: list
             element: LogEntry
       - name: sandboxLogs
+        http:
+          get: /sandboxes/{sandbox}/logs
         parameters:
           - name: sandbox
             type: string
@@ -608,8 +649,13 @@ interfaces:
             doc: "Optional upper time bound; when unset, reads up to now"
 
   - name: Disks
+    http:
+      prefix: /api/v1
     methods:
       - name: new
+        http:
+          post: /disks
+          body: "*"
         parameters:
           - name: name
             type: string
@@ -619,6 +665,8 @@ interfaces:
           - name: id
             type: string
       - name: getById
+        http:
+          get: /disks/{id}
         parameters:
           - name: id
             type: string
@@ -626,6 +674,8 @@ interfaces:
           - name: config
             type: DiskConfig
       - name: getByName
+        http:
+          get: /disks/by-name/{name}
         parameters:
           - name: name
             type: string
@@ -633,18 +683,27 @@ interfaces:
           - name: config
             type: DiskConfig
       - name: list
+        http:
+          get: /disks
         results:
           - name: disks
             type: list
             element: DiskConfig
       - name: delete
+        http:
+          delete: /disks/{id}
         parameters:
           - name: id
             type: string
 
   - name: Addons
+    http:
+      prefix: /api/v1
     methods:
       - name: createInstance
+        http:
+          post: /apps/{app}/addons
+          body: "*"
         parameters:
           - name: name
             type: string
@@ -661,6 +720,8 @@ interfaces:
             type: string
 
       - name: listInstances
+        http:
+          get: /apps/{app}/addons
         parameters:
           - name: app
             type: string
@@ -670,6 +731,9 @@ interfaces:
             element: AddonInstance
 
       - name: rotateCredential
+        http:
+          post: /apps/{app}/addons/{name}/rotate
+          body: "*"
         parameters:
           - name: app
             type: string
@@ -682,6 +746,8 @@ interfaces:
             type: string
 
       - name: deleteInstance
+        http:
+          delete: /apps/{app}/addons/{name}
         parameters:
           - name: app
             type: string

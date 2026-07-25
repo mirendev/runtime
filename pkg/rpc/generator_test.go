@@ -133,4 +133,22 @@ func TestGenerator(t *testing.T) {
 
 		r.Equal(string(data), output)
 	})
+
+	t.Run("can generate code for an interface with http annotations", func(t *testing.T) {
+		r := require.New(t)
+
+		g, err := NewGenerator()
+		r.NoError(err)
+
+		err = g.Read("testdata/rest.yml")
+		r.NoError(err)
+
+		output, err := g.Generate("rest")
+		r.NoError(err)
+
+		data, err := os.ReadFile("testdata/rest.go")
+		r.NoError(err)
+
+		r.Equal(string(data), output)
+	})
 }

@@ -123,6 +123,39 @@ type Method struct {
 	// understands a specific parameter (e.g. one added after the method first
 	// shipped) instead of only whether the method exists. See HasMethodParam.
 	Params []string
+	// HTTP describes how to expose this method over a plain HTTP/JSON REST API.
+	// It is nil unless the method carries an http: annotation in the IDL. The
+	// REST gateway (RegisterREST) only mounts routes for methods with a binding.
+	HTTP *HTTPBinding
+}
+
+// HTTPBinding maps an RPC method onto an HTTP route for the REST gateway. It is
+// populated by generated AdaptXxx code from the method's IDL http: annotation.
+type HTTPBinding struct {
+	// Verb is the HTTP method (GET, POST, PUT, DELETE, PATCH).
+	Verb string
+	// Path is the fully-resolved route template, including any interface
+	// prefix, using Go 1.22 ServeMux wildcards (e.g. /api/v1/apps/{app}/config).
+	Path string
+	// Body designates where the request body maps: "*" binds the whole JSON
+	// body onto the args, "" means no body (params come from path/query).
+	Body string
+	// PathParams lists the wildcard names embedded in Path, in order.
+	PathParams []string
+	// Query lists the parameters bound from the URL query string, with the type
+	// info needed to coerce their string values into typed JSON. It is only
+	// populated for bodyless bindings (Body == ""); when a body is present the
+	// non-path params ride in the JSON body instead.
+	Query []HTTPParam
+}
+
+// HTTPParam describes a single query-bound parameter for the REST gateway.
+type HTTPParam struct {
+	// Name is the parameter (and query key) name.
+	Name string
+	// Kind selects how the raw string value is coerced into JSON: one of
+	// "string", "bool", "int", "uint", "float", or "timestamp".
+	Kind string
 }
 
 type HasRestoreState interface {
@@ -144,6 +177,22 @@ type Interface struct {
 
 func (i *Interface) Value() any {
 	return i.value
+}
+
+// Name returns the schema name of the interface (e.g. "Crud").
+func (i *Interface) Name() string {
+	return i.name
+}
+
+// Methods returns the interface's methods. The order is unspecified. It exists
+// so external packages (notably the REST gateway) can enumerate methods without
+// access to the private method map.
+func (i *Interface) Methods() []Method {
+	methods := make([]Method, 0, len(i.methods))
+	for _, m := range i.methods {
+		methods = append(methods, m)
+	}
+	return methods
 }
 
 func (i *Interface) SetAroundContext(fn func(ctx context.Context, call Call) (context.Context, func())) {

@@ -2018,6 +2018,32 @@ func (g *Generator) generateInterfaces(f *j.File) error {
 								g.Lit(p.Name)
 							}
 						})
+						if verb, bare, ok := httpBinding(i, m); ok {
+							params := httpPathParams(bare)
+							query := httpQueryParams(m, params)
+							g.Line().Id("HTTP").Op(":").Op("&").Qual(rpc, "HTTPBinding").ValuesFunc(func(g *j.Group) {
+								g.Line().Id("Verb").Op(":").Lit(verb)
+								g.Line().Id("Path").Op(":").Lit(bare)
+								g.Line().Id("Body").Op(":").Lit(m.HTTP.effectiveBody())
+								g.Line().Id("PathParams").Op(":").Index().String().ValuesFunc(func(g *j.Group) {
+									for _, p := range params {
+										g.Lit(p)
+									}
+								})
+								if len(query) > 0 {
+									g.Line().Id("Query").Op(":").Index().Qual(rpc, "HTTPParam").ValuesFunc(func(g *j.Group) {
+										for _, q := range query {
+											g.Line().Values(
+												j.Id("Name").Op(":").Lit(q.Name),
+												j.Id("Kind").Op(":").Lit(q.Kind),
+											)
+										}
+										g.Line()
+									})
+								}
+								g.Line()
+							})
+						}
 						g.Line().Id("Handler").Op(":").Func().Params(
 							j.Id("ctx").Qual("context", "Context"),
 							j.Id("call").Qual(rpc, "Call"),
@@ -2321,6 +2347,13 @@ type DescInterface struct {
 	Method      []*DescMethods `yaml:"methods"`
 	Generic     []string       `yaml:"generic,omitempty"`
 	Constraints []string       `yaml:"constraints,omitempty"`
+	HTTP        *DescHTTPIface `yaml:"http,omitempty"`
+}
+
+// DescHTTPIface holds interface-level REST configuration from the IDL http: block.
+type DescHTTPIface struct {
+	// Prefix is prepended to every method's path template (e.g. /api/v1).
+	Prefix string `yaml:"prefix,omitempty"`
 }
 
 type DescMethods struct {
@@ -2331,7 +2364,187 @@ type DescMethods struct {
 	// Public marks this method as accessible without TLS client certificate authentication.
 	// Public methods still require capability-level auth (Ed25519 signatures) but allow
 	// unauthenticated callers (e.g., for registration flows where the client doesn't have certs yet).
-	Public bool `yaml:"public,omitempty"`
+	Public bool            `yaml:"public,omitempty"`
+	HTTP   *DescHTTPMethod `yaml:"http,omitempty"`
+}
+
+// DescHTTPMethod holds method-level REST configuration from the IDL http: block.
+// It accepts two YAML shapes (see UnmarshalYAML): a compact scalar
+// "VERB /path/template" for the common case, or a mapping with an explicit verb
+// key plus an optional body: override. Exactly one verb field ends up set.
+type DescHTTPMethod struct {
+	Get    string `yaml:"get,omitempty"`
+	Post   string `yaml:"post,omitempty"`
+	Put    string `yaml:"put,omitempty"`
+	Delete string `yaml:"delete,omitempty"`
+	Patch  string `yaml:"patch,omitempty"`
+	// Body designates request-body binding: "*" binds the whole JSON body onto
+	// the method args; "" means no body and params come from the path and query
+	// string. When unset, effectiveBody defaults it from the verb.
+	Body string `yaml:"body,omitempty"`
+}
+
+// UnmarshalYAML accepts either the compact scalar form ("POST /apps") or the
+// mapping form ({post: /apps, body: "*"}). The compact form keeps the common
+// case terse and is backward compatible with the pre-existing http: convention
+// in the IDL.
+func (m *DescHTTPMethod) UnmarshalYAML(value *yaml.Node) error {
+	if value.Kind == yaml.ScalarNode {
+		parts := strings.Fields(value.Value)
+		if len(parts) != 2 {
+			return fmt.Errorf("http: expected \"VERB /path\", got %q", value.Value)
+		}
+		verb, path := strings.ToUpper(parts[0]), parts[1]
+		switch verb {
+		case "GET":
+			m.Get = path
+		case "POST":
+			m.Post = path
+		case "PUT":
+			m.Put = path
+		case "DELETE":
+			m.Delete = path
+		case "PATCH":
+			m.Patch = path
+		default:
+			return fmt.Errorf("http: unknown verb %q", verb)
+		}
+		return nil
+	}
+
+	// Mapping form. Alias the type to avoid recursing into this method.
+	type raw DescHTTPMethod
+	var r raw
+	if err := value.Decode(&r); err != nil {
+		return err
+	}
+	*m = DescHTTPMethod(r)
+	return nil
+}
+
+// verbPath returns the HTTP verb and the bare path template (without any
+// interface prefix) for this method's binding, or ok=false when unset.
+func (m *DescHTTPMethod) verbPath() (verb, path string, ok bool) {
+	switch {
+	case m.Get != "":
+		return "GET", m.Get, true
+	case m.Post != "":
+		return "POST", m.Post, true
+	case m.Put != "":
+		return "PUT", m.Put, true
+	case m.Delete != "":
+		return "DELETE", m.Delete, true
+	case m.Patch != "":
+		return "PATCH", m.Patch, true
+	default:
+		return "", "", false
+	}
+}
+
+// effectiveBody resolves the request-body binding, defaulting from the verb when
+// unset: body-carrying verbs (POST/PUT/PATCH) bind the whole JSON body, while
+// GET/DELETE carry inputs in the path and query string. An explicit body: in
+// the IDL always wins.
+func (m *DescHTTPMethod) effectiveBody() string {
+	if m.Body != "" {
+		return m.Body
+	}
+	switch verb, _, _ := m.verbPath(); verb {
+	case "POST", "PUT", "PATCH":
+		return "*"
+	default:
+		return ""
+	}
+}
+
+// httpBinding resolves a method's REST binding, returning the HTTP verb and the
+// full path template with the interface prefix applied. ok is false when the
+// method carries no http: annotation.
+func httpBinding(i *DescInterface, m *DescMethods) (verb, path string, ok bool) {
+	if m.HTTP == nil {
+		return "", "", false
+	}
+
+	verb, bare, ok := m.HTTP.verbPath()
+	if !ok {
+		return "", "", false
+	}
+
+	if i.HTTP != nil && i.HTTP.Prefix != "" {
+		bare = strings.TrimRight(i.HTTP.Prefix, "/") + "/" + strings.TrimLeft(bare, "/")
+	}
+
+	return verb, bare, true
+}
+
+// httpQueryParam pairs a parameter name with the REST coercion kind of its type.
+type httpQueryParam struct {
+	Name string
+	Kind string
+}
+
+// httpQueryParams returns the parameters bound from the query string: every
+// parameter that is not a path wildcard, but only for bodyless bindings. When a
+// method carries a request body, its non-path params ride in the JSON body, so
+// there is nothing to bind from the query.
+func httpQueryParams(m *DescMethods, pathParams []string) []httpQueryParam {
+	if m.HTTP == nil || m.HTTP.effectiveBody() != "" {
+		return nil
+	}
+
+	inPath := make(map[string]struct{}, len(pathParams))
+	for _, p := range pathParams {
+		inPath[p] = struct{}{}
+	}
+
+	var query []httpQueryParam
+	for _, p := range m.Parameters {
+		if _, ok := inPath[p.Name]; ok {
+			continue
+		}
+		query = append(query, httpQueryParam{Name: p.Name, Kind: httpParamKind(p.Type)})
+	}
+	return query
+}
+
+// httpParamKind maps an IDL scalar type name onto the coercion kind the REST
+// gateway uses to turn a raw query string into typed JSON. Non-scalar types
+// (messages, lists, maps, interfaces) fall back to "string", which for query
+// binding means the raw value is passed through as a JSON string.
+func httpParamKind(typeName string) string {
+	switch typeName {
+	case "bool":
+		return "bool"
+	case "int", "int8", "int16", "int32", "int64":
+		return "int"
+	case "uint", "uint8", "uint16", "uint32", "uint64", "byte":
+		return "uint"
+	case "float32", "float64":
+		return "float"
+	case "standard.Timestamp":
+		return "timestamp"
+	default:
+		return "string"
+	}
+}
+
+// httpPathParams extracts the wildcard names ({name}) from a path template, in
+// order of appearance.
+func httpPathParams(path string) []string {
+	var params []string
+	for {
+		open := strings.IndexByte(path, '{')
+		if open == -1 {
+			break
+		}
+		close := strings.IndexByte(path[open:], '}')
+		if close == -1 {
+			break
+		}
+		params = append(params, path[open+1:open+close])
+		path = path[open+close+1:]
+	}
+	return params
 }
 
 type DescParamater struct {

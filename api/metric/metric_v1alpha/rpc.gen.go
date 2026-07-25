@@ -315,6 +315,12 @@ func AdaptSandboxMetrics(t SandboxMetrics) *rpc.Interface {
 			Index:         0,
 			Public:        false,
 			Params:        []string{"sandbox"},
+			HTTP: &rpc.HTTPBinding{
+				Verb:       "GET",
+				Path:       "/snapshot/{sandbox}",
+				Body:       "",
+				PathParams: []string{"sandbox"},
+			},
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.Snapshot(ctx, &SandboxMetricsSnapshot{Call: call})
 			},

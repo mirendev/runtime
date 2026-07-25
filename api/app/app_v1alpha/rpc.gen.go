@@ -3287,6 +3287,12 @@ func AdaptCrud(t Crud) *rpc.Interface {
 			Index:         0,
 			Public:        false,
 			Params:        []string{"name"},
+			HTTP: &rpc.HTTPBinding{
+				Verb:       "POST",
+				Path:       "/api/v1/apps",
+				Body:       "*",
+				PathParams: []string{},
+			},
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.New(ctx, &CrudNew{Call: call})
 			},
@@ -3297,6 +3303,12 @@ func AdaptCrud(t Crud) *rpc.Interface {
 			Index:         0,
 			Public:        false,
 			Params:        []string{"app", "configuration"},
+			HTTP: &rpc.HTTPBinding{
+				Verb:       "PUT",
+				Path:       "/api/v1/apps/{app}/config",
+				Body:       "*",
+				PathParams: []string{"app"},
+			},
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.SetConfiguration(ctx, &CrudSetConfiguration{Call: call})
 			},
@@ -3307,6 +3319,12 @@ func AdaptCrud(t Crud) *rpc.Interface {
 			Index:         0,
 			Public:        false,
 			Params:        []string{"app"},
+			HTTP: &rpc.HTTPBinding{
+				Verb:       "GET",
+				Path:       "/api/v1/apps/{app}/config",
+				Body:       "",
+				PathParams: []string{"app"},
+			},
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.GetConfiguration(ctx, &CrudGetConfiguration{Call: call})
 			},
@@ -3317,6 +3335,12 @@ func AdaptCrud(t Crud) *rpc.Interface {
 			Index:         0,
 			Public:        false,
 			Params:        []string{"app", "host"},
+			HTTP: &rpc.HTTPBinding{
+				Verb:       "PUT",
+				Path:       "/api/v1/apps/{app}/host",
+				Body:       "*",
+				PathParams: []string{"app"},
+			},
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.SetHost(ctx, &CrudSetHost{Call: call})
 			},
@@ -3327,6 +3351,12 @@ func AdaptCrud(t Crud) *rpc.Interface {
 			Index:         0,
 			Public:        false,
 			Params:        []string{},
+			HTTP: &rpc.HTTPBinding{
+				Verb:       "GET",
+				Path:       "/api/v1/apps",
+				Body:       "",
+				PathParams: []string{},
+			},
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.List(ctx, &CrudList{Call: call})
 			},
@@ -3337,6 +3367,12 @@ func AdaptCrud(t Crud) *rpc.Interface {
 			Index:         0,
 			Public:        false,
 			Params:        []string{"name"},
+			HTTP: &rpc.HTTPBinding{
+				Verb:       "DELETE",
+				Path:       "/api/v1/apps/{name}",
+				Body:       "",
+				PathParams: []string{"name"},
+			},
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.Destroy(ctx, &CrudDestroy{Call: call})
 			},
@@ -3347,6 +3383,12 @@ func AdaptCrud(t Crud) *rpc.Interface {
 			Index:         0,
 			Public:        false,
 			Params:        []string{"app", "key", "value", "sensitive", "service"},
+			HTTP: &rpc.HTTPBinding{
+				Verb:       "PUT",
+				Path:       "/api/v1/apps/{app}/env/{key}",
+				Body:       "*",
+				PathParams: []string{"app", "key"},
+			},
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.SetEnvVar(ctx, &CrudSetEnvVar{Call: call})
 			},
@@ -3357,6 +3399,12 @@ func AdaptCrud(t Crud) *rpc.Interface {
 			Index:         0,
 			Public:        false,
 			Params:        []string{"app", "vars", "service"},
+			HTTP: &rpc.HTTPBinding{
+				Verb:       "PUT",
+				Path:       "/api/v1/apps/{app}/env",
+				Body:       "*",
+				PathParams: []string{"app"},
+			},
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.SetEnvVars(ctx, &CrudSetEnvVars{Call: call})
 			},
@@ -3367,6 +3415,12 @@ func AdaptCrud(t Crud) *rpc.Interface {
 			Index:         0,
 			Public:        false,
 			Params:        []string{"app", "vars", "service"},
+			HTTP: &rpc.HTTPBinding{
+				Verb:       "POST",
+				Path:       "/api/v1/apps/{app}/initial-env",
+				Body:       "*",
+				PathParams: []string{"app"},
+			},
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.SetInitialEnvVars(ctx, &CrudSetInitialEnvVars{Call: call})
 			},
@@ -3377,6 +3431,15 @@ func AdaptCrud(t Crud) *rpc.Interface {
 			Index:         0,
 			Public:        false,
 			Params:        []string{"app", "key", "service"},
+			HTTP: &rpc.HTTPBinding{
+				Verb:       "DELETE",
+				Path:       "/api/v1/apps/{app}/env/{key}",
+				Body:       "",
+				PathParams: []string{"app", "key"},
+				Query: []rpc.HTTPParam{
+					{Name: "service", Kind: "string"},
+				},
+			},
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.DeleteEnvVar(ctx, &CrudDeleteEnvVar{Call: call})
 			},
@@ -3387,6 +3450,12 @@ func AdaptCrud(t Crud) *rpc.Interface {
 			Index:         0,
 			Public:        false,
 			Params:        []string{"app", "service"},
+			HTTP: &rpc.HTTPBinding{
+				Verb:       "POST",
+				Path:       "/api/v1/apps/{app}/restart",
+				Body:       "*",
+				PathParams: []string{"app"},
+			},
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.Restart(ctx, &CrudRestart{Call: call})
 			},
@@ -4079,6 +4148,12 @@ func AdaptAppStatus(t AppStatus) *rpc.Interface {
 			Index:         0,
 			Public:        false,
 			Params:        []string{"application"},
+			HTTP: &rpc.HTTPBinding{
+				Verb:       "GET",
+				Path:       "/api/v1/apps/{application}/status",
+				Body:       "",
+				PathParams: []string{"application"},
+			},
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.AppInfo(ctx, &AppStatusAppInfo{Call: call})
 			},
@@ -4643,6 +4718,16 @@ func AdaptLogs(t Logs) *rpc.Interface {
 			Index:         0,
 			Public:        false,
 			Params:        []string{"application", "from", "follow"},
+			HTTP: &rpc.HTTPBinding{
+				Verb:       "GET",
+				Path:       "/api/v1/apps/{application}/logs",
+				Body:       "",
+				PathParams: []string{"application"},
+				Query: []rpc.HTTPParam{
+					{Name: "from", Kind: "timestamp"},
+					{Name: "follow", Kind: "bool"},
+				},
+			},
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.AppLogs(ctx, &LogsAppLogs{Call: call})
 			},
@@ -4653,6 +4738,16 @@ func AdaptLogs(t Logs) *rpc.Interface {
 			Index:         0,
 			Public:        false,
 			Params:        []string{"sandbox", "from", "follow"},
+			HTTP: &rpc.HTTPBinding{
+				Verb:       "GET",
+				Path:       "/api/v1/sandboxes/{sandbox}/logs",
+				Body:       "",
+				PathParams: []string{"sandbox"},
+				Query: []rpc.HTTPParam{
+					{Name: "from", Kind: "timestamp"},
+					{Name: "follow", Kind: "bool"},
+				},
+			},
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.SandboxLogs(ctx, &LogsSandboxLogs{Call: call})
 			},
@@ -5307,6 +5402,12 @@ func AdaptDisks(t Disks) *rpc.Interface {
 			Index:         0,
 			Public:        false,
 			Params:        []string{"name", "capacity"},
+			HTTP: &rpc.HTTPBinding{
+				Verb:       "POST",
+				Path:       "/api/v1/disks",
+				Body:       "*",
+				PathParams: []string{},
+			},
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.New(ctx, &DisksNew{Call: call})
 			},
@@ -5317,6 +5418,12 @@ func AdaptDisks(t Disks) *rpc.Interface {
 			Index:         0,
 			Public:        false,
 			Params:        []string{"id"},
+			HTTP: &rpc.HTTPBinding{
+				Verb:       "GET",
+				Path:       "/api/v1/disks/{id}",
+				Body:       "",
+				PathParams: []string{"id"},
+			},
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.GetById(ctx, &DisksGetById{Call: call})
 			},
@@ -5327,6 +5434,12 @@ func AdaptDisks(t Disks) *rpc.Interface {
 			Index:         0,
 			Public:        false,
 			Params:        []string{"name"},
+			HTTP: &rpc.HTTPBinding{
+				Verb:       "GET",
+				Path:       "/api/v1/disks/by-name/{name}",
+				Body:       "",
+				PathParams: []string{"name"},
+			},
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.GetByName(ctx, &DisksGetByName{Call: call})
 			},
@@ -5337,6 +5450,12 @@ func AdaptDisks(t Disks) *rpc.Interface {
 			Index:         0,
 			Public:        false,
 			Params:        []string{},
+			HTTP: &rpc.HTTPBinding{
+				Verb:       "GET",
+				Path:       "/api/v1/disks",
+				Body:       "",
+				PathParams: []string{},
+			},
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.List(ctx, &DisksList{Call: call})
 			},
@@ -5347,6 +5466,12 @@ func AdaptDisks(t Disks) *rpc.Interface {
 			Index:         0,
 			Public:        false,
 			Params:        []string{"id"},
+			HTTP: &rpc.HTTPBinding{
+				Verb:       "DELETE",
+				Path:       "/api/v1/disks/{id}",
+				Body:       "",
+				PathParams: []string{"id"},
+			},
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.Delete(ctx, &DisksDelete{Call: call})
 			},
@@ -5983,6 +6108,12 @@ func AdaptAddons(t Addons) *rpc.Interface {
 			Index:         0,
 			Public:        false,
 			Params:        []string{"name", "addon", "variant", "app", "version"},
+			HTTP: &rpc.HTTPBinding{
+				Verb:       "POST",
+				Path:       "/api/v1/apps/{app}/addons",
+				Body:       "*",
+				PathParams: []string{"app"},
+			},
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.CreateInstance(ctx, &AddonsCreateInstance{Call: call})
 			},
@@ -5993,6 +6124,12 @@ func AdaptAddons(t Addons) *rpc.Interface {
 			Index:         0,
 			Public:        false,
 			Params:        []string{"app"},
+			HTTP: &rpc.HTTPBinding{
+				Verb:       "GET",
+				Path:       "/api/v1/apps/{app}/addons",
+				Body:       "",
+				PathParams: []string{"app"},
+			},
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.ListInstances(ctx, &AddonsListInstances{Call: call})
 			},
@@ -6003,6 +6140,12 @@ func AdaptAddons(t Addons) *rpc.Interface {
 			Index:         0,
 			Public:        false,
 			Params:        []string{"app", "name", "credential"},
+			HTTP: &rpc.HTTPBinding{
+				Verb:       "POST",
+				Path:       "/api/v1/apps/{app}/addons/{name}/rotate",
+				Body:       "*",
+				PathParams: []string{"app", "name"},
+			},
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.RotateCredential(ctx, &AddonsRotateCredential{Call: call})
 			},
@@ -6013,6 +6156,12 @@ func AdaptAddons(t Addons) *rpc.Interface {
 			Index:         0,
 			Public:        false,
 			Params:        []string{"app", "name"},
+			HTTP: &rpc.HTTPBinding{
+				Verb:       "DELETE",
+				Path:       "/api/v1/apps/{app}/addons/{name}",
+				Body:       "",
+				PathParams: []string{"app", "name"},
+			},
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.DeleteInstance(ctx, &AddonsDeleteInstance{Call: call})
 			},
