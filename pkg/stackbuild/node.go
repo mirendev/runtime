@@ -75,6 +75,7 @@ type NodeStack struct {
 	packageManager nodePackageManager
 	scripts        map[string]string
 	entryPoint     string
+	hasNext        bool
 
 	// Parsed dependencies from package.json
 	dependencies    map[string]string
@@ -129,6 +130,13 @@ func (s *NodeStack) Init(opts BuildOptions) {
 		if _, ok := s.scripts["build"]; ok {
 			s.Event("script", "build", "npm build script detected")
 		}
+	}
+
+	// Detect Next.js so we can run its production build and serve it with
+	// `next start`, mirroring how the Ruby stack special-cases Rails.
+	if s.hasDependency("next") {
+		s.hasNext = true
+		s.Event("framework", "nextjs", "Next.js framework detected")
 	}
 
 	// Check for common entry points and store the first one found
@@ -203,9 +211,47 @@ func (s *NodeStack) GenerateLLB(dir string, opts BuildOptions) (*llb.State, erro
 
 	state = h.copyApp(state, localCtx)
 
+	// Run the framework build (e.g. `next build`) after the app is copied.
+	// Inject user env vars so build-time values (e.g. NEXT_PUBLIC_* that Next
+	// inlines at build time) are available, mirroring how the Ruby stack
+	// injects env vars for asset precompilation.
+	if buildCmd := s.frameworkBuildCommand(); buildCmd != "" {
+		build := state.Dir("/app")
+		for k, v := range opts.EnvVars {
+			build = build.AddEnv(k, v)
+		}
+		state = build.Run(
+			llb.Shlex(buildCmd),
+			llb.WithCustomName("[phase] Building Next.js application"),
+		).Root()
+	}
+
 	state = s.applyOnBuild(state, opts)
 
 	return &state, nil
+}
+
+// hasDependency reports whether the package.json lists the given package in
+// either dependencies or devDependencies.
+func (s *NodeStack) hasDependency(name string) bool {
+	if _, ok := s.dependencies[name]; ok {
+		return true
+	}
+	_, ok := s.devDependencies[name]
+	return ok
+}
+
+// frameworkBuildCommand returns the in-image build command for a detected
+// framework, or "" when no build step is needed. Next.js must be compiled with
+// `next build` before it can be served; a plain Node app is copied as-is.
+func (s *NodeStack) frameworkBuildCommand() string {
+	if !s.hasNext {
+		return ""
+	}
+	if s.packageManager == nodePkgYarn {
+		return "yarn build"
+	}
+	return "npm run build"
 }
 
 func (s *NodeStack) parsePackageJSON() {
@@ -229,6 +275,11 @@ func (s *NodeStack) parsePackageJSON() {
 }
 
 func (s *NodeStack) WebCommand() string {
+	// Next.js is served with `next start`; bind to the platform-provided port.
+	if s.hasNext {
+		return "npx next start -p $PORT"
+	}
+
 	// Determine the runner based on detected package manager
 	var runner string
 	if s.packageManager == nodePkgYarn {

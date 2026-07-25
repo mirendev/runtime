@@ -405,6 +405,74 @@ func TestNode(t *testing.T) {
 	})
 }
 
+func TestNodeNextjs(t *testing.T) {
+	testCases := []struct {
+		name      string
+		files     map[string]string
+		wantNext  bool
+		wantBuild string
+		wantWeb   string
+	}{
+		{
+			name: "next in dependencies with npm",
+			files: map[string]string{
+				"package.json":      `{"name":"app","dependencies":{"next":"14.0.0","react":"^18.0.0"},"scripts":{"build":"next build","start":"next start"}}`,
+				"package-lock.json": "{}",
+			},
+			wantNext:  true,
+			wantBuild: "npm run build",
+			wantWeb:   "npx next start -p $PORT",
+		},
+		{
+			name: "next with yarn",
+			files: map[string]string{
+				"package.json": `{"name":"app","dependencies":{"next":"14.0.0"},"scripts":{"build":"next build","start":"next start"}}`,
+				"yarn.lock":    "{}",
+			},
+			wantNext:  true,
+			wantBuild: "yarn build",
+			wantWeb:   "npx next start -p $PORT",
+		},
+		{
+			name: "next listed under devDependencies",
+			files: map[string]string{
+				"package.json":      `{"name":"app","devDependencies":{"next":"14.0.0"},"scripts":{"build":"next build"}}`,
+				"package-lock.json": "{}",
+			},
+			wantNext:  true,
+			wantBuild: "npm run build",
+			wantWeb:   "npx next start -p $PORT",
+		},
+		{
+			name: "plain express app is not next",
+			files: map[string]string{
+				"package.json":      `{"name":"app","dependencies":{"express":"^4.18.2"},"scripts":{"start":"node index.js"}}`,
+				"package-lock.json": "{}",
+			},
+			wantNext:  false,
+			wantBuild: "",
+			wantWeb:   "npm run start",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			for name, content := range tc.files {
+				require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(content), 0644))
+			}
+
+			stack := &NodeStack{MetaStack: MetaStack{dir: dir}}
+			require.True(t, stack.Detect())
+			stack.Init(BuildOptions{})
+
+			require.Equal(t, tc.wantNext, stack.hasNext)
+			require.Equal(t, tc.wantBuild, stack.frameworkBuildCommand())
+			require.Equal(t, tc.wantWeb, stack.WebCommand())
+		})
+	}
+}
+
 func TestBun(t *testing.T) {
 	if !checkDocker() {
 		t.Skip("Docker not available")
