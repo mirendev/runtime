@@ -469,6 +469,14 @@ func TestNodeNextjs(t *testing.T) {
 			require.Equal(t, tc.wantNext, stack.hasNext)
 			require.Equal(t, tc.wantBuild, stack.frameworkBuildCommand())
 			require.Equal(t, tc.wantWeb, stack.WebCommand())
+
+			// The build graph must construct and marshal cleanly, including the
+			// Next.js build step (the AddEnv loop + build.Run) for the Next
+			// cases. This covers the GenerateLLB wiring without needing Docker.
+			state, err := stack.GenerateLLB(dir, BuildOptions{EnvVars: map[string]string{"NEXT_PUBLIC_FOO": "bar"}})
+			require.NoError(t, err)
+			_, err = state.Marshal(context.Background())
+			require.NoError(t, err)
 		})
 	}
 }
