@@ -3,7 +3,6 @@ package outboard
 import (
 	"context"
 	"crypto/subtle"
-	"net/http"
 	"strings"
 
 	"miren.dev/runtime/pkg/rpc"
@@ -20,8 +19,8 @@ func NewTokenAuthenticator(token string) *TokenAuthenticator {
 	return &TokenAuthenticator{token: token}
 }
 
-func (t *TokenAuthenticator) Authenticate(ctx context.Context, r *http.Request) (*rpc.Identity, error) {
-	auth := r.Header.Get("Authorization")
+func (t *TokenAuthenticator) Authenticate(ctx context.Context, creds *rpc.Credentials) (*rpc.Identity, error) {
+	auth := creds.Authorization
 	if auth == "" {
 		return nil, nil // No credentials
 	}

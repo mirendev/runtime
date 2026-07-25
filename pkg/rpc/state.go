@@ -125,7 +125,33 @@ type State struct {
 	ws     *webtransport.Server
 	li     *quic.EarlyListener
 
+	httpSrv *http.Server
+	tcpLn   net.Listener
+	msgLn   net.Listener
+
+	// msgContact is the address peers use to reach this State over a message
+	// transport, e.g. "mem://name" for an in-process server. It is empty when
+	// the State only serves connections supplied by callers, which have no
+	// address of their own.
+	msgContact string
+
 	localMP *packet.PacketConnMultiplex
+}
+
+// contactAddr returns the address embedded in capabilities this server mints,
+// so a holder can later reach the issuer.
+//
+// It is empty when there is nothing to dial — a connection owned by the caller
+// is reachable only as itself. Capabilities minted with an empty address are
+// therefore scoped to the session they were minted on.
+func (s *State) contactAddr() string {
+	if s.msgContact != "" {
+		return s.msgContact
+	}
+	if s.transport == nil || s.transport.Conn == nil {
+		return ""
+	}
+	return s.transport.Conn.LocalAddr().String()
 }
 
 func (s *State) ListenAddr() string {
@@ -148,7 +174,11 @@ type stateOptions struct {
 	certData []byte
 	keyData  []byte
 
-	bindAddr string
+	bindAddr    string
+	wsBindAddr  string
+	tcpBindAddr string
+
+	memServerName string
 
 	endpoint string
 
@@ -195,6 +225,35 @@ func WithCertPEMs(certData, keyData []byte) StateOption {
 func WithBindAddr(addr string) StateOption {
 	return func(o *stateOptions) {
 		o.bindAddr = addr
+	}
+}
+
+// WithWSBindAddr enables an additional TCP listener serving the RPC protocol
+// over TLS as a WebSocket message session, bound to addr. Use "host:0" to bind
+// an ephemeral port; the chosen address is available via State.WSListenAddr
+// after NewState returns. Clients reach it with State.Connect("ws://host:port").
+func WithWSBindAddr(addr string) StateOption {
+	return func(o *stateOptions) {
+		o.wsBindAddr = addr
+	}
+}
+
+// WithTCPBindAddr enables a raw TLS-over-TCP listener serving the RPC protocol
+// as a message session, bound to addr. It carries no HTTP layer at all, which
+// makes it the leanest option where a WebSocket handshake buys nothing. Clients
+// reach it with State.Connect("tcp://host:port").
+func WithTCPBindAddr(addr string) StateOption {
+	return func(o *stateOptions) {
+		o.tcpBindAddr = addr
+	}
+}
+
+// WithMemServer registers this State as an in-process message server under the
+// given name. Peers connect with State.Connect("mem://name", ...). Used for
+// testing and for bridging RPC onto message-oriented systems.
+func WithMemServer(name string) StateOption {
+	return func(o *stateOptions) {
+		o.memServerName = name
 	}
 }
 
@@ -406,6 +465,25 @@ func NewState(ctx context.Context, opts ...StateOption) (*State, error) {
 		}
 	}
 
+	if so.wsBindAddr != "" {
+		err := s.startWSListener(ctx, so.wsBindAddr)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	if so.tcpBindAddr != "" {
+		err := s.startTCPListener(ctx, so.tcpBindAddr)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	if so.memServerName != "" {
+		s.msgContact = "mem://" + so.memServerName
+		defaultMemRegistry.register(ctx, so.memServerName, s)
+	}
+
 	return s, nil
 }
 
@@ -556,6 +634,18 @@ func (s *State) Close() error {
 		s.hs.Close()
 	}
 
+	if s.httpSrv != nil {
+		s.httpSrv.Close()
+	}
+
+	if s.tcpLn != nil {
+		s.tcpLn.Close()
+	}
+
+	if s.msgLn != nil {
+		s.msgLn.Close()
+	}
+
 	return s.transport.Conn.Close()
 }
 
@@ -577,6 +667,17 @@ func (s *State) Connect(remote string, name string) (*NetworkClient, error) {
 		if err != nil {
 			return nil, err
 		}
+	} else if isMessageRemote(remote) {
+		// mem://, ws://, wss:// and tcp:// all multiplex every operation over one
+		// message session; setupMsgTransport picks the connection factory.
+		client = &NetworkClient{
+			State:         s,
+			transportKind: transportMsg,
+			tlsCfg:        s.clientTlsCfg,
+			remote:        remote,
+		}
+
+		client.setupTransport()
 	} else if remote == "dial-stdio" {
 		shstr := os.Getenv("MIREN_DIAL_PROGRAM")
 		if shstr == "" {
@@ -627,34 +728,57 @@ func (c *NetworkClient) newClientUnder(capa *Capability) *NetworkClient {
 
 	addr := capa.Address
 	transport := c.State.transport
+	tk := c.transportKind
 
 	if strings.HasPrefix(addr, "unix:") {
 		transport = c.State.localTransport
 	}
 
+	// An empty address means "wherever this capability came from", which for a
+	// message transport is the session it arrived on.
+	sameSession := addr == "" && c.transportKind == transportMsg
+
 	if addr == "" {
 		addr = c.remote
 	}
 
-	newClient := &NetworkClient{
-		State:     c.State,
-		transport: transport,
-		tlsCfg:    c.State.clientTlsCfg.Clone(),
-		capa:      capa,
-		oid:       capa.OID,
-		remote:    addr,
+	if isMessageRemote(addr) {
+		tk = transportMsg
 	}
 
-	newClient.setupTransport()
+	newClient := &NetworkClient{
+		State:         c.State,
+		transportKind: tk,
+		transport:     transport,
+		tlsCfg:        c.State.clientTlsCfg.Clone(),
+		capa:          capa,
+		oid:           capa.OID,
+		remote:        addr,
+	}
+
+	if sameSession {
+		// Share the parent's session rather than dialing again. On a connection
+		// supplied by the caller there is nothing to dial, and even where there
+		// is, a capability reachable through this session should not open a
+		// second one.
+		newClient.ops = c.ops
+	} else {
+		newClient.setupTransport()
+	}
 
 	return newClient
 }
 
 func (s *State) newClientFrom(capa *Capability, peer *x509.Certificate) *NetworkClient {
 	transport := s.transport
+	tk := transportH3
 
 	if strings.HasPrefix(capa.Address, "unix:") {
 		transport = s.localTransport
+	}
+
+	if isMessageRemote(capa.Address) {
+		tk = transportMsg
 	}
 
 	cfg := s.clientTlsCfg.Clone()
@@ -671,12 +795,13 @@ func (s *State) newClientFrom(capa *Capability, peer *x509.Certificate) *Network
 	}
 
 	c := &NetworkClient{
-		State:     s,
-		transport: transport,
-		tlsCfg:    cfg,
-		capa:      capa,
-		oid:       capa.OID,
-		remote:    capa.Address,
+		State:         s,
+		transportKind: tk,
+		transport:     transport,
+		tlsCfg:        cfg,
+		capa:          capa,
+		oid:           capa.OID,
+		remote:        capa.Address,
 	}
 
 	c.setupTransport()

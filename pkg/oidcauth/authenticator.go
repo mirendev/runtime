@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"net/http"
 	"strings"
 	"sync/atomic"
 
@@ -41,14 +40,11 @@ func (a *OIDCAuthenticator) SetEAC(eac *entityserver_v1alpha.EntityAccessClient)
 
 // Authenticate checks if the request carries a valid OIDC bearer token that
 // matches a configured oidc_binding entity.
-func (a *OIDCAuthenticator) Authenticate(ctx context.Context, r *http.Request) (*rpc.Identity, error) {
-	authHeader := r.Header.Get("Authorization")
-	if !strings.HasPrefix(authHeader, "Bearer ") {
+func (a *OIDCAuthenticator) Authenticate(ctx context.Context, creds *rpc.Credentials) (*rpc.Identity, error) {
+	tokenString := creds.BearerToken()
+	if tokenString == "" {
 		return nil, nil
 	}
-
-	tokenString := strings.TrimPrefix(authHeader, "Bearer ")
-	tokenString = strings.TrimSpace(tokenString)
 
 	eac := a.eac.Load()
 	if eac == nil {
@@ -72,11 +68,12 @@ func (a *OIDCAuthenticator) Authenticate(ctx context.Context, r *http.Request) (
 		return nil, nil // No bindings for this issuer
 	}
 
-	// Determine the audience to validate against.
-	// Use the hostname from the request.
-	audience := r.Host
-	if audience == "" && r.TLS != nil {
-		audience = r.TLS.ServerName
+	// Determine the audience to validate against: the address the caller
+	// addressed. A message transport is not addressed by name and so carries
+	// neither, in which case there is nothing to validate against.
+	audience := creds.Host
+	if audience == "" && creds.TLS != nil {
+		audience = creds.TLS.ServerName
 	}
 	if audience == "" {
 		return nil, nil

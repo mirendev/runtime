@@ -1,7 +1,6 @@
 package rpc
 
 import (
-	"bytes"
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
@@ -71,13 +70,19 @@ type heldCapability struct {
 
 	category string
 
-	lastContact time.Time
+	// lastContact is unix nanos, held atomically: concurrent calls against the
+	// same capability all touch it, and they are not otherwise serialized.
+	lastContact atomic.Int64
 
 	pub ed25519.PublicKey
 }
 
 func (h *heldCapability) touch() {
-	h.lastContact = time.Now()
+	h.lastContact.Store(time.Now().UnixNano())
+}
+
+func (h *heldCapability) LastContact() time.Time {
+	return time.Unix(0, h.lastContact.Load())
 }
 
 func (h *heldCapability) Close() error {
@@ -224,10 +229,10 @@ func (s *Server) assignCapability(i *Interface, pub ed25519.PublicKey, contactAd
 		heldInterface: &heldInterface{
 			Interface: i,
 		},
-		category:    category,
-		lastContact: time.Now(),
-		pub:         pub,
+		category: category,
+		pub:      pub,
 	}
+	hc.touch()
 
 	if i.restoreState != nil {
 		if rs, err := i.restoreState.RestoreState(i); err == nil {
@@ -265,7 +270,7 @@ func (s *Server) reexportCapability(target OID, cur *heldCapability, pub ed25519
 	oid := OID(base58.Encode(buf))
 
 	if contactAddr == "" {
-		contactAddr = s.state.transport.Conn.LocalAddr().String()
+		contactAddr = s.state.contactAddr()
 	}
 
 	capa := &Capability{
@@ -277,9 +282,9 @@ func (s *Server) reexportCapability(target OID, cur *heldCapability, pub ed25519
 
 	hc := &heldCapability{
 		heldInterface: cur.heldInterface,
-		lastContact:   time.Now(),
 		pub:           pub,
 	}
+	hc.touch()
 
 	hc.refs.Add(1)
 
@@ -295,6 +300,9 @@ func (s *Server) setupMux() {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("POST /_rpc/call/{oid}/{method}", s.handleCalls)
+	// CONNECT upgrades to WebTransport over HTTP/3. TCP clients use the message
+	// transport, which multiplexes every operation over one session and never
+	// reaches this mux.
 	mux.HandleFunc("CONNECT /_rpc/callstream/{oid}/{method}", s.startCallStream)
 	mux.HandleFunc("POST /_rpc/lookup/{name}", s.lookup)
 	mux.HandleFunc("GET /_rpc/methods/{oid}", s.listMethods)
@@ -337,7 +345,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Try to authenticate the request
-	identity, err := s.state.authenticator.Authenticate(ctx, r)
+	identity, err := s.state.authenticator.Authenticate(ctx, CredentialsFromRequest(r))
 	if err != nil {
 		s.state.log.Warn("authentication failed", "error", err, "path", r.URL.Path)
 		writeAuthFailure(w, err)
@@ -393,19 +401,19 @@ type identifyResponse struct {
 	Error    string `json:"error,omitempty"`
 	Address  string `json:"address,omitempty"`
 	Identity string `json:"identity,omitempty"`
+
+	// MinVersion and MaxVersion advertise the protocol versions this peer
+	// accepts, so a client can adapt instead of discovering the mismatch one
+	// rejected stream at a time. Set only on message transports. See PROTOCOL.md.
+	MinVersion uint `json:"min_version,omitempty"`
+	MaxVersion uint `json:"max_version,omitempty"`
 }
 
 func (s *Server) checkIdentity(r *http.Request) (string, bool) {
 	ts := r.Header.Get("rpc-timestamp")
 
-	t, err := time.Parse(time.RFC3339Nano, ts)
-	if err != nil {
-		s.state.log.Warn("Failed to parse timestamp", "error", err)
-		return "", false
-	}
-
-	if time.Since(t) > 10*time.Minute {
-		s.state.log.Warn("Timestamp too old", "timestamp", t)
+	if err := freshTimestamp(ts); err != nil {
+		s.state.log.Warn("identity timestamp rejected", "error", err)
 		return "", false
 	}
 
@@ -415,32 +423,15 @@ func (s *Server) checkIdentity(r *http.Request) (string, bool) {
 		return "", false
 	}
 
-	var buf bytes.Buffer
-
-	fmt.Fprintf(&buf, "%s %s %s", r.Method, r.URL.Path, ts)
-
-	bsign, err := base58.Decode(sign)
-	if err != nil {
-		s.state.log.Warn("Failed to decode signature", "error", err)
-		return "", false
-	}
-
-	spkey := r.Header.Get("rpc-public-key")
-
-	key, err := base58.Decode(spkey)
+	key, err := base58.Decode(r.Header.Get("rpc-public-key"))
 	if err != nil {
 		return "", false
 	}
 
 	pub := ed25519.PublicKey(key)
 
-	if len(pub) != ed25519.PublicKeySize {
-		s.state.log.Warn("Invalid public key size", "size", len(pub))
-		return "", false
-	}
-
-	if !ed25519.Verify(pub, buf.Bytes(), bsign) {
-		s.state.log.Warn("Failed to verify signature")
+	if err := verifyString(pub, httpCanonical(r.Method, r.URL.Path, ts), sign); err != nil {
+		s.state.log.Warn("Failed to verify identity signature", "error", err)
 		return "", false
 	}
 
@@ -490,7 +481,7 @@ func (s *Server) handleDebugAuth(w http.ResponseWriter, r *http.Request) {
 
 	// Check authentication using the new Authenticate interface
 	if s.state.authenticator != nil {
-		identity, err := s.state.authenticator.Authenticate(r.Context(), r)
+		identity, err := s.state.authenticator.Authenticate(r.Context(), CredentialsFromRequest(r))
 		if err != nil {
 			resp.Success = false
 			resp.Message = fmt.Sprintf("Authentication failed: %v", err)
@@ -546,7 +537,7 @@ func (s *Server) reexport(w http.ResponseWriter, r *http.Request) {
 	// abilities.
 	ca := r.Header.Get("rpc-contact-addr")
 	if ca != "" {
-		ca = s.state.transport.Conn.LocalAddr().String()
+		ca = s.state.contactAddr()
 	}
 
 	w.WriteHeader(http.StatusOK)
@@ -644,7 +635,7 @@ func (s *Server) lookup(w http.ResponseWriter, r *http.Request) {
 	// abilities.
 	ca := r.Header.Get("rpc-contact-addr")
 	if ca != "" {
-		ca = s.state.transport.Conn.LocalAddr().String()
+		ca = s.state.contactAddr()
 	}
 
 	//s.state.log.Info("Lookup", "name", name)
@@ -741,7 +732,7 @@ func (s *Server) reresolve(w http.ResponseWriter, r *http.Request) {
 	// abilities.
 	ca := r.Header.Get("rpc-contact-addr")
 	if ca != "" {
-		ca = s.state.transport.Conn.LocalAddr().String()
+		ca = s.state.contactAddr()
 	}
 
 	// TODO: add condition codes to the error response rather than just a string
@@ -830,16 +821,9 @@ func (s *Server) authRequest(r *http.Request, w http.ResponseWriter, oid OID) (e
 		return nil, false
 	}
 
-	t, err := time.Parse(time.RFC3339Nano, ts)
-	if err != nil {
-		logAuthReject(s.state.audit(), r, oid, "malformed timestamp")
-		http.Error(w, "failed to parse timestamp", http.StatusForbidden)
-		return nil, false
-	}
-
-	if time.Since(t) > 10*time.Minute {
-		logAuthReject(s.state.audit(), r, oid, "timestamp too old")
-		http.Error(w, "timestamp too old", http.StatusForbidden)
+	if err := freshTimestamp(ts); err != nil {
+		logAuthReject(s.state.audit(), r, oid, err.Error())
+		http.Error(w, err.Error(), http.StatusForbidden)
 		return nil, false
 	}
 
@@ -861,25 +845,8 @@ func (s *Server) authRequest(r *http.Request, w http.ResponseWriter, oid OID) (e
 		return nil, false
 	}
 
-	var buf bytes.Buffer
-
-	fmt.Fprintf(&buf, "%s %s %s", r.Method, r.URL.Path, ts)
-
-	bsign, err := base58.Decode(sign)
-	if err != nil {
-		logAuthReject(s.state.audit(), r, oid, "malformed signature")
-		http.Error(w, "failed to decode signature", http.StatusForbidden)
-		return nil, false
-	}
-
-	if len(capa.pub) != ed25519.PublicKeySize {
-		logAuthReject(s.state.audit(), r, oid, "invalid capability public key")
-		http.Error(w, "invalid public key size", http.StatusForbidden)
-		return nil, false
-	}
-
-	if !ed25519.Verify(capa.pub, buf.Bytes(), bsign) {
-		logAuthReject(s.state.audit(), r, oid, "signature verification failed")
+	if err := verifyString(capa.pub, httpCanonical(r.Method, r.URL.Path, ts), sign); err != nil {
+		logAuthReject(s.state.audit(), r, oid, err.Error())
 		http.Error(w, "failed to verify signature", http.StatusForbidden)
 		return nil, false
 	}
@@ -918,6 +885,23 @@ func (cs *controlStream) NoReply(rs streamRequest, arg any) error {
 	}
 
 	return nil
+}
+
+// acceptSession upgrades an incoming callstream request to a multiplexed
+// session. The HTTP mux is served only over HTTP/3, where WebTransport provides
+// QUIC sub-streams natively; TCP clients use the message transport instead,
+// which multiplexes every operation over one session and never reaches here.
+func (s *Server) acceptSession(w http.ResponseWriter, r *http.Request) (rpcSession, error) {
+	if r.ProtoMajor != 3 {
+		return nil, fmt.Errorf("callstream requires HTTP/3; use the message transport over TCP")
+	}
+
+	// webtransport.Upgrade writes the 200 status itself.
+	sess, err := s.ws.Upgrade(w, r)
+	if err != nil {
+		return nil, err
+	}
+	return &wtSession{sess: sess}, nil
 }
 
 func (s *Server) startCallStream(w http.ResponseWriter, r *http.Request) {
@@ -981,8 +965,6 @@ func (s *Server) startCallStream(w http.ResponseWriter, r *http.Request) {
 		logAccess(ctx, s.state.audit(), r, mm, "ok")
 	}
 
-	w.WriteHeader(http.StatusOK)
-
 	ctx = Propagator().Extract(ctx, propagation.HeaderCarrier(r.Header))
 
 	tracer := Tracer()
@@ -993,7 +975,7 @@ func (s *Server) startCallStream(w http.ResponseWriter, r *http.Request) {
 
 	span.SetAttributes(attribute.String("oid", string(oid)))
 
-	sess, err := s.ws.Upgrade(w, r)
+	sess, err := s.acceptSession(w, r)
 	if err != nil {
 		s.state.log.Error("failed to upgrade connection", "error", err)
 		http.Error(w, "failed to upgrade connection", http.StatusInternalServerError)
@@ -1034,6 +1016,13 @@ func (s *Server) startCallStream(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
+	s.runCallStream(ctx, &cs, mm, call)
+}
+
+// runCallStream invokes a streaming handler and emits its result, error, or
+// panic over the control stream. It is transport-neutral: both the HTTP
+// callstream handler and the message-transport router use it.
+func (s *Server) runCallStream(ctx context.Context, cs *controlStream, mm Method, call *NetworkCall) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -1041,45 +1030,41 @@ func (s *Server) startCallStream(w http.ResponseWriter, r *http.Request) {
 		if r := recover(); r != nil {
 			s.state.log.Error("panic in streaming RPC handler",
 				"panic", r,
-				"method", method,
+				"method", call.method,
 				"stack", string(debug.Stack()))
-			var sr streamRequest
-			sr.Kind = "panic"
-			sr.Error = fmt.Sprint(r)
-			cs.NoReply(sr, nil)
+			cs.NoReply(streamRequest{Kind: "panic", Error: fmt.Sprint(r)}, nil)
 		}
 	}()
 
-	err = cond.Wrap(mm.Handler(ctx, call))
-
+	err := cond.Wrap(mm.Handler(ctx, call))
 	if err != nil {
-		var sr streamRequest
-		sr.Kind = "error"
-
-		if emsg, ok := err.(ErrorMessage); ok {
-			sr.Error = emsg.ErrorMessage()
-		} else {
-			sr.Error = err.Error()
-		}
-
-		if ecat, ok := err.(ErrorCategory); ok {
-			sr.Category = ecat.ErrorCategory()
-		}
-
-		if ecode, ok := err.(ErrorCode); ok {
-			sr.Code = ecode.ErrorCode()
-		}
-
-		cs.NoReply(sr, nil)
-	} else {
-		res := call.results
-		if res == nil {
-			res = struct{}{}
-		}
-		cs.NoReply(streamRequest{
-			Kind: "result",
-		}, res)
+		msg, category, code := errorFields(err)
+		cs.NoReply(streamRequest{Kind: "error", Error: msg, Category: category, Code: code}, nil)
+		return
 	}
+
+	res := call.results
+	if res == nil {
+		res = struct{}{}
+	}
+	cs.NoReply(streamRequest{Kind: "result"}, res)
+}
+
+// errorFields extracts the wire error fields from a handler error, honoring the
+// optional ErrorMessage/ErrorCategory/ErrorCode interfaces.
+func errorFields(err error) (msg, category, code string) {
+	if emsg, ok := err.(ErrorMessage); ok {
+		msg = emsg.ErrorMessage()
+	} else {
+		msg = err.Error()
+	}
+	if ecat, ok := err.(ErrorCategory); ok {
+		category = ecat.ErrorCategory()
+	}
+	if ecode, ok := err.(ErrorCode); ok {
+		code = ecode.ErrorCode()
+	}
+	return
 }
 
 func (s *Server) handleCalls(w http.ResponseWriter, r *http.Request) {

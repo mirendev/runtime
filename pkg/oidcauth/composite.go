@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/http"
 
 	"miren.dev/runtime/pkg/rpc"
 )
@@ -56,9 +55,9 @@ func NewCompositeAuthenticator(primary rpc.Authenticator, oidc *OIDCAuthenticato
 	return &CompositeAuthenticator{primary: primary, oidc: oidc}
 }
 
-func (c *CompositeAuthenticator) Authenticate(ctx context.Context, r *http.Request) (*rpc.Identity, error) {
+func (c *CompositeAuthenticator) Authenticate(ctx context.Context, creds *rpc.Credentials) (*rpc.Identity, error) {
 	// Try primary authenticator first
-	identity, err := c.primary.Authenticate(ctx, r)
+	identity, err := c.primary.Authenticate(ctx, creds)
 	if identity != nil {
 		return identity, nil
 	}
@@ -69,7 +68,7 @@ func (c *CompositeAuthenticator) Authenticate(ctx context.Context, r *http.Reque
 	var oidcIdentity *rpc.Identity
 	var oidcErr error
 	if c.oidc != nil {
-		oidcIdentity, oidcErr = c.oidc.Authenticate(ctx, r)
+		oidcIdentity, oidcErr = c.oidc.Authenticate(ctx, creds)
 		if oidcIdentity != nil {
 			return oidcIdentity, nil
 		}
@@ -127,8 +126,9 @@ func (c *CompositeAuthorizer) Authorize(ctx context.Context, identity *rpc.Ident
 		// subject, and this arm should go away rather than grow a list.
 		return fmt.Errorf("access denied: system workload identities may not call RPC methods")
 
-	case rpc.AuthMethodJWT, rpc.AuthMethodAnonymous, rpc.AuthMethodToken:
-		// Delegate to primary (cloud RBAC).
+	case rpc.AuthMethodJWT, rpc.AuthMethodAnonymous, rpc.AuthMethodToken, rpc.AuthMethodSigned:
+		// Delegate to primary (cloud RBAC). A signed identity names the key a
+		// capability was issued to, which carries no privilege of its own.
 		fallthrough
 	default:
 		if c.primary != nil {

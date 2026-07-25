@@ -5,7 +5,6 @@ import (
 	"crypto/rand"
 	"io"
 	"sync"
-	"time"
 
 	"github.com/fxamacker/cbor/v2"
 	"github.com/mr-tron/base58"
@@ -89,8 +88,8 @@ func (a *LocalActorRegistry) newCapability(i *Interface) *Capability {
 		heldInterface: &heldInterface{
 			Interface: i,
 		},
-		lastContact: time.Now(),
 	}
+	hc.touch()
 
 	if i.restoreState != nil {
 		if rs, err := i.restoreState.RestoreState(i); err == nil {

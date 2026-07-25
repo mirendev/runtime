@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"net/http"
 	"strings"
 
 	"miren.dev/runtime/pkg/auth"
@@ -110,10 +109,10 @@ func NewRPCAuthenticator(ctx context.Context, config Config) (*RPCAuthenticator,
 // Authenticate implements rpc.Authenticator.
 // It tries JWT authentication first, then falls back to TLS client certificate.
 // Authorization (RBAC) is handled separately via the Authorize method.
-func (a *RPCAuthenticator) Authenticate(ctx context.Context, r *http.Request) (*rpc.Identity, error) {
+func (a *RPCAuthenticator) Authenticate(ctx context.Context, creds *rpc.Credentials) (*rpc.Identity, error) {
 	// Try JWT authentication first if Authorization header is present
-	if authHeader := r.Header.Get("Authorization"); authHeader != "" {
-		identity, err := a.authenticateJWT(ctx, authHeader)
+	if creds.Authorization != "" {
+		identity, err := a.authenticateJWT(ctx, creds.Authorization)
 		if err != nil {
 			return nil, err
 		}
@@ -123,12 +122,9 @@ func (a *RPCAuthenticator) Authenticate(ctx context.Context, r *http.Request) (*
 		// Invalid JWT format, fall through to cert check
 	}
 
-	// Fall back to TLS client certificate. Only trust a cert that the TLS
-	// layer verified against the cluster CA (VerifiedChains non-empty); a
-	// presented-but-unverified cert must never yield a cert identity, which
-	// grants RBAC-bypassing privileges in Authorize.
-	if r.TLS != nil && len(r.TLS.VerifiedChains) > 0 && len(r.TLS.PeerCertificates) > 0 {
-		cert := r.TLS.PeerCertificates[0]
+	// Fall back to a TLS client certificate the TLS layer verified against the
+	// cluster CA.
+	if cert := creds.VerifiedPeerCertificate(); cert != nil {
 		return &rpc.Identity{
 			Subject: cert.Subject.CommonName,
 			Method:  rpc.AuthMethodCert,

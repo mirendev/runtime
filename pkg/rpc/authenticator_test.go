@@ -42,7 +42,7 @@ func TestNoOpAuthenticator(t *testing.T) {
 				req.Header.Set("Authorization", tt.authHeader)
 			}
 
-			identity, err := auth.Authenticate(context.Background(), req)
+			identity, err := auth.Authenticate(context.Background(), CredentialsFromRequest(req))
 			if err != nil {
 				t.Errorf("unexpected error: %v", err)
 			}
@@ -127,7 +127,7 @@ func TestLocalOnlyAuthenticator(t *testing.T) {
 				req.TLS = &tls.ConnectionState{}
 			}
 
-			identity, err := auth.Authenticate(context.Background(), req)
+			identity, err := auth.Authenticate(context.Background(), CredentialsFromRequest(req))
 			if err != nil {
 				t.Errorf("unexpected error: %v", err)
 			}

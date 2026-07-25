@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/http"
 	"net/http/httptest"
 	"testing"
 
@@ -18,7 +17,7 @@ type mockAuthenticator struct {
 	err      error
 }
 
-func (m *mockAuthenticator) Authenticate(ctx context.Context, r *http.Request) (*rpc.Identity, error) {
+func (m *mockAuthenticator) Authenticate(ctx context.Context, creds *rpc.Credentials) (*rpc.Identity, error) {
 	return m.identity, m.err
 }
 
@@ -42,7 +41,7 @@ func TestCompositeAuthenticator_PrimarySucceeds(t *testing.T) {
 	comp := NewCompositeAuthenticator(primary, oidcAuth)
 
 	req := httptest.NewRequest("GET", "/", nil)
-	identity, err := comp.Authenticate(context.Background(), req)
+	identity, err := comp.Authenticate(context.Background(), rpc.CredentialsFromRequest(req))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -64,7 +63,7 @@ func TestCompositeAuthenticator_PrimaryErrorOIDCNil(t *testing.T) {
 	comp := NewCompositeAuthenticator(primary, oidcAuth)
 
 	req := httptest.NewRequest("GET", "/", nil)
-	_, err := comp.Authenticate(context.Background(), req)
+	_, err := comp.Authenticate(context.Background(), rpc.CredentialsFromRequest(req))
 	if err == nil {
 		t.Fatal("expected error to propagate from primary")
 	}
@@ -88,7 +87,7 @@ func TestCompositeAuthenticator_BindingMismatchBeatsPrimaryError(t *testing.T) {
 	comp := &CompositeAuthenticator{primary: primary, oidc: oidcStub}
 
 	req := httptest.NewRequest("GET", "/", nil)
-	identity, err := comp.Authenticate(context.Background(), req)
+	identity, err := comp.Authenticate(context.Background(), rpc.CredentialsFromRequest(req))
 	if identity != nil {
 		t.Error("expected nil identity when neither authenticator succeeds")
 	}
@@ -118,7 +117,7 @@ func TestCompositeAuthenticator_PrimaryErrorOIDCSucceeds(t *testing.T) {
 	comp := &CompositeAuthenticator{primary: primary, oidc: oidcStub}
 
 	req := httptest.NewRequest("GET", "/", nil)
-	identity, err := comp.Authenticate(context.Background(), req)
+	identity, err := comp.Authenticate(context.Background(), rpc.CredentialsFromRequest(req))
 	if err != nil {
 		t.Fatalf("expected no error when OIDC succeeds, got: %v", err)
 	}
@@ -143,7 +142,7 @@ func TestCompositeAuthenticator_FallbackToOIDC(t *testing.T) {
 	req := httptest.NewRequest("GET", "/", nil)
 	req.Header.Set("Authorization", "Bearer some-token")
 
-	identity, err := comp.Authenticate(context.Background(), req)
+	identity, err := comp.Authenticate(context.Background(), rpc.CredentialsFromRequest(req))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

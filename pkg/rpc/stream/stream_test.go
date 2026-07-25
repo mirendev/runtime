@@ -27,9 +27,17 @@ func TestStream(t *testing.T) {
 
 		serv := ss.Server()
 
-		var vals []int
+		// The handler runs on the server's goroutine while the assertion below
+		// reads from the test's, so the accumulator needs a lock.
+		var (
+			mu   sync.Mutex
+			vals []int
+		)
 
 		serv.ExposeValue("stream", ReadStream(func(val int) error {
+			mu.Lock()
+			defer mu.Unlock()
+
 			vals = append(vals, val)
 			return nil
 		}))
@@ -47,6 +55,9 @@ func TestStream(t *testing.T) {
 		r.NoError(css.Send(ctx, 100))
 		r.NoError(css.Send(ctx, 111))
 
+		mu.Lock()
+		defer mu.Unlock()
+
 		r.Equal([]int{42, 100, 111}, vals)
 	})
 
@@ -61,9 +72,17 @@ func TestStream(t *testing.T) {
 
 		serv := ss.Server()
 
-		var vals []*Thing
+		// The handler runs on the server's goroutine while the assertion below
+		// reads from the test's, so the accumulator needs a lock.
+		var (
+			mu   sync.Mutex
+			vals []*Thing
+		)
 
 		serv.ExposeValue("stream", ReadStream(func(val *Thing) error {
+			mu.Lock()
+			defer mu.Unlock()
+
 			vals = append(vals, val)
 			return nil
 		}))
@@ -78,6 +97,9 @@ func TestStream(t *testing.T) {
 		r.NoError(err)
 
 		r.NoError(css.Send(ctx, &Thing{Name: "foo"}))
+
+		mu.Lock()
+		defer mu.Unlock()
 
 		r.Equal([]*Thing{
 			{Name: "foo"},
