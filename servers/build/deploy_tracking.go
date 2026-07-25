@@ -46,6 +46,13 @@ func (b *Builder) beginDeploy(
 	}
 
 	clusterID := req.ClusterId()
+	// An empty cluster_id means "not tracked", matching the saga path's
+	// begin-deployment action (which skips on the same condition). Without this
+	// the two paths would disagree: the plain path would create a lock-holding
+	// record for an empty cluster_id while the saga path created none.
+	if clusterID == "" {
+		return nil, nil
+	}
 
 	rec, err := b.deploy.Begin(ctx, deploylifecycle.BeginParams{
 		AppName:   appName,

@@ -53,6 +53,22 @@ func TestBeginDeployWithoutRequestTracksNothing(t *testing.T) {
 	assert.Empty(t, all, "the server must not have created a record")
 }
 
+// A DeployRequest with an empty cluster_id means "not tracked", so the plain
+// path agrees with the saga path (whose begin-deployment action skips on the
+// same condition) instead of creating a lock-holding record.
+func TestBeginDeploySkipsEmptyClusterID(t *testing.T) {
+	ctx := context.Background()
+	b := newDeployTestBuilder(t)
+
+	dt, err := b.beginDeploy(ctx, "web", deployRequest(""), nil, nil)
+	require.NoError(t, err)
+	assert.Nil(t, dt, "an empty cluster_id must not create a server-owned record")
+
+	all, err := b.deploy.Store().List(ctx, deploylifecycle.Query{AppName: "web"})
+	require.NoError(t, err)
+	assert.Empty(t, all)
+}
+
 // Ephemeral builds have no deployment record by design, even when a request is
 // present.
 func TestBeginDeploySkipsEphemeral(t *testing.T) {

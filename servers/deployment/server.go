@@ -276,16 +276,10 @@ func (d *DeploymentServer) UpdateDeploymentPhase(ctx context.Context, req *deplo
 	deploymentId := args.DeploymentId()
 	newPhase := args.Phase()
 
-	// Validate phase value
-	validPhases := map[string]bool{
-		"preparing":  true,
-		"building":   true,
-		"pushing":    true,
-		"activating": true,
-	}
-	if !validPhases[newPhase] {
-		return cond.ValidationFailure("invalid-phase",
-			"phase must be one of: preparing, building, pushing, activating")
+	// Validate against the single source of truth so the accepted set and the
+	// message can never drift from lifecycle.go's phase list.
+	if _, err := deploylifecycle.ParsePhase(newPhase); err != nil {
+		return err
 	}
 
 	// Get existing deployment
@@ -866,6 +860,13 @@ func (d *DeploymentServer) DeployVersion(ctx context.Context, req *deployment_v1
 	deployment := rec.Deployment
 	newDeploymentId := string(deployment.ID)
 
+	// Every terminal settle below runs on a detached context: once we start
+	// settling, a client that cancels the RPC must not strand the record
+	// in_progress with the lock held until its TTL. The most likely moment for
+	// that cancellation is right here, in the failure path.
+	settleCtx, cancelSettle := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
+	defer cancelSettle()
+
 	// This path has no build; it goes straight to activation.
 	if phaseErr := d.tracker.SetPhase(ctx, newDeploymentId, deploylifecycle.PhaseActivating); phaseErr != nil {
 		d.Log.Error("Failed to set activating phase", "error", phaseErr)
@@ -875,8 +876,9 @@ func (d *DeploymentServer) DeployVersion(ctx context.Context, req *deployment_v1
 		d.Log.Error("Failed to set active version", "error", err, "app", appName, "version_id", string(appVersion.ID))
 
 		failMsg := fmt.Sprintf("failed to activate version: %v", err)
-		if failErr := d.tracker.Fail(ctx, newDeploymentId, failMsg, ""); failErr != nil {
-			d.Log.Error("Failed to mark deployment as failed", "error", failErr)
+		if failErr := d.tracker.Fail(settleCtx, newDeploymentId, failMsg, ""); failErr != nil {
+			d.Log.Error("Failed to mark deployment as failed; releasing lock", "error", failErr)
+			d.releaseDeployLock(settleCtx, appName, newDeploymentId)
 		}
 
 		results.SetError(failMsg)
@@ -887,12 +889,8 @@ func (d *DeploymentServer) DeployVersion(ctx context.Context, req *deployment_v1
 	if isRollback {
 		activate = d.tracker.ActivateRollback
 	}
-	// SetActiveVersion already made the version live, so settle on a detached
-	// context: a client that cancels the RPC now must not strand the record
-	// in_progress with the lock held. If the settle still fails, release the
-	// lock directly so later deploys aren't blocked for the full lock TTL.
-	settleCtx, cancelSettle := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
-	defer cancelSettle()
+	// SetActiveVersion already made the version live. If the settle still fails,
+	// release the lock directly so later deploys aren't blocked for the full TTL.
 	if err := activate(settleCtx, newDeploymentId); err != nil {
 		d.Log.Error("Failed to activate deployment; releasing lock", "error", err)
 		d.releaseDeployLock(settleCtx, appName, newDeploymentId)

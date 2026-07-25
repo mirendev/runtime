@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"strings"
 	"time"
 
 	"miren.dev/runtime/api/core/core_v1alpha"
@@ -169,14 +168,13 @@ func (l *Locks) WithTTL(d time.Duration) *Locks {
 // LockID is the deterministic entity id for an app's deploy lock. Determinism is
 // what makes create-if-absent a mutual exclusion primitive: every contender
 // computes the same key.
+//
+// The app name is the sole variable component, so it is used raw. It must not be
+// rewritten (e.g. slashes to underscores): that would let two distinct names
+// collide on one lock. As the last path segment the name is unambiguous even
+// when it contains a slash.
 func LockID(appName string) entity.Id {
-	return entity.Id(fmt.Sprintf("deploy-lock/%s", sanitizeKeyPart(appName)))
-}
-
-// sanitizeKeyPart keeps a slash in a name from splitting the key into a
-// different shape.
-func sanitizeKeyPart(s string) string {
-	return strings.ReplaceAll(s, "/", "_")
+	return entity.Id("deploy-lock/" + appName)
 }
 
 // Acquire takes the deploy lock for deploymentID, returning the holder it

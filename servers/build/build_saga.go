@@ -662,10 +662,17 @@ func undoBeginDeployment(ctx context.Context, in beginDeploymentIn, out beginDep
 		return nil
 	}
 	deps := saga.Get[*buildSagaDeps](ctx)
+
+	// Settle on a detached context: compensation often runs because the client
+	// disconnected, and that must not leave the record in_progress with the lock
+	// held until its TTL.
+	settleCtx, cancel := settleContext(ctx)
+	defer cancel()
+
 	// FailIfUnsettled: if a later action already activated the record, leave it
 	// active — the version is live, and undoSetActiveVersion handles reverting
 	// that separately.
-	if err := deps.builder.deploy.FailIfUnsettled(ctx, out.DeploymentID, "build rolled back", ""); err != nil {
+	if err := deps.builder.deploy.FailIfUnsettled(settleCtx, out.DeploymentID, "build rolled back", ""); err != nil {
 		return fmt.Errorf("failing rolled-back deployment %s: %w", out.DeploymentID, err)
 	}
 	return nil

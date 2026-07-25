@@ -155,11 +155,10 @@ func TestGetDeployLockValidatesArgs(t *testing.T) {
 	require.Error(t, err)
 }
 
-// DeployVersion must not strand the lock if its activation settle fails: a
-// second deploy started while the first's record holds the lock must be blocked,
-// but once the first settles the lock frees. This exercises the backstop path by
-// racing the deprecated CreateDeployment lock against a rollback deploy.
-func TestDeployVersionActivationDoesNotStrandLock(t *testing.T) {
+// A completed DeployVersion must release the deploy lock it took, so the app is
+// not left blocked. Runs two DeployVersions in sequence and checks the lock is
+// free between them and that the second is not blocked.
+func TestDeployVersionReleasesLockWhenDone(t *testing.T) {
 	ctx := context.Background()
 	client, inmem := newLockTestClient(t)
 
@@ -182,6 +181,27 @@ func TestDeployVersionActivationDoesNotStrandLock(t *testing.T) {
 	res2, err := client.DeployVersion(ctx, "web", "prod", "web-v1", false, nil, "", "")
 	require.NoError(t, err)
 	assert.False(t, res2.HasError() && res2.Error() != "", "the next deploy must not be blocked")
+}
+
+// A DeployVersion whose activation fails must still release the lock, so the
+// failure does not block the app's next deploy. SetActiveVersion is made to fail
+// by pointing at a version whose app entity does not exist.
+func TestDeployVersionFailureReleasesLock(t *testing.T) {
+	ctx := context.Background()
+	client, inmem := newLockTestClient(t)
+
+	// A version with no corresponding app entity: activation will fail.
+	_, err := inmem.Client.Create(ctx, "ghost-v1", &core_v1alpha.AppVersion{Version: "ghost-v1"})
+	require.NoError(t, err)
+
+	res, err := client.DeployVersion(ctx, "ghost", "prod", "ghost-v1", false, nil, "", "")
+	require.NoError(t, err)
+	require.True(t, res.HasError() && res.Error() != "", "deploy should have failed to activate")
+
+	// The failure must not have stranded the lock.
+	lock, err := client.GetDeployLock(ctx, "ghost", "prod")
+	require.NoError(t, err)
+	assert.False(t, lock.Held(), "a failed DeployVersion must release the lock")
 }
 
 // The "pending-build" placeholder an older client writes must render as empty

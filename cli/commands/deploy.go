@@ -822,12 +822,10 @@ func Deploy(ctx *Context, opts struct {
 				return err
 			}
 
-			// A server-owned build can fail because another deploy took the lock
-			// after our advisory pre-flight passed; render the rich blocked
-			// message rather than a generic build error.
-			if maybeReportBlocked(ctx, depClient, serverOwnsDeployment, name) {
-				return err
-			}
+			// If the build never got its own record because another deploy held
+			// the lock, add the rich blocked banner — but still show any build
+			// errors below rather than instead of them.
+			maybeReportBlocked(ctx, depClient, serverOwnsDeployment, getDeploymentID(), name)
 
 			ctx.Printf("\n\nBuild failed with the following errors:\n")
 			errsSnap, _, _ := snapshotBuildState()
@@ -928,11 +926,9 @@ func Deploy(ctx *Context, opts struct {
 				return err
 			}
 
-			// See the explain-mode branch: a server-owned build can lose the lock
-			// race after the pre-flight; show the blocked message if so.
-			if maybeReportBlocked(ctx, depClient, serverOwnsDeployment, name) {
-				return err
-			}
+			// See the explain-mode branch: only add the blocked banner when we
+			// never got our own record, and still print build errors below.
+			maybeReportBlocked(ctx, depClient, serverOwnsDeployment, getDeploymentID(), name)
 
 			ctx.Printf("\n\nBuild failed.\n")
 			errsSnap, logsSnap, _ := snapshotBuildState()
@@ -1187,27 +1183,27 @@ func (s *safeStatusCh) Close() {
 	close(s.ch)
 }
 
-// maybeReportBlocked renders the rich "deployment blocked" message when a
-// server-owned build failed because another deployment holds the lock — the
-// pre-flight-passed-then-lost-the-race case, where the build returns a lock
-// conflict instead of a build error. It reuses GetDeployLock rather than trying
-// to parse lock info out of the build error. Returns true if it handled the
-// failure as a block, so the caller can skip the generic "build failed" output.
+// maybeReportBlocked prints the rich "deployment blocked" banner when a
+// server-owned build failed because it never got its own record — another
+// deployment held the lock the whole time (the pre-flight-passed-then-lost-the-
+// race case, where the build returns a lock conflict instead of a build error).
 //
-// This is a best-effort heuristic: a server-owned build that fails for any other
-// reason releases its own lock, so a Held result here means a *different* deploy
-// is in the way — which is exactly when the blocked message is the right thing
-// to show.
-func maybeReportBlocked(ctx *Context, depClient *deployment_v1alpha.DeploymentClient, serverOwnsDeployment bool, name string) bool {
-	if !serverOwnsDeployment {
-		return false
+// It is deliberately gated on ownDeploymentID being empty. Once our build has a
+// record, the failure is ours: the server releases our lock on failure, so a
+// held lock afterward just means an unrelated deploy started in that window, and
+// reporting "blocked" would wrongly hide the compiler/build errors that actually
+// failed this deploy. It never suppresses those errors either way — the caller
+// prints them regardless; this only adds context when the real cause was
+// contention.
+func maybeReportBlocked(ctx *Context, depClient *deployment_v1alpha.DeploymentClient, serverOwnsDeployment bool, ownDeploymentID, name string) {
+	if !serverOwnsDeployment || ownDeploymentID != "" {
+		return
 	}
 	lockRes, err := depClient.GetDeployLock(ctx, name, ctx.ClusterName)
 	if err != nil || !lockRes.Held() || !lockRes.HasLockInfo() || lockRes.LockInfo() == nil {
-		return false
+		return
 	}
 	printDeploymentBlocked(ctx, lockRes.LockInfo())
-	return true
 }
 
 // printDeploymentBlocked renders the rich "deployment blocked" message shared by
