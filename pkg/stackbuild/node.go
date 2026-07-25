@@ -276,7 +276,12 @@ func (s *NodeStack) parsePackageJSON() {
 
 func (s *NodeStack) WebCommand() string {
 	// Next.js is served with `next start`; bind to the platform-provided port.
+	// Resolve the local `next` binary through the detected package manager so a
+	// yarn project doesn't shell out to npm's npx (matches frameworkBuildCommand).
 	if s.hasNext {
+		if s.packageManager == nodePkgYarn {
+			return "yarn next start -p $PORT"
+		}
 		return "npx next start -p $PORT"
 	}
 

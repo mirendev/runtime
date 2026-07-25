@@ -431,7 +431,7 @@ func TestNodeNextjs(t *testing.T) {
 			},
 			wantNext:  true,
 			wantBuild: "yarn build",
-			wantWeb:   "npx next start -p $PORT",
+			wantWeb:   "yarn next start -p $PORT",
 		},
 		{
 			name: "next listed under devDependencies",
