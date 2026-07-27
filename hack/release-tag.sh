@@ -91,7 +91,12 @@ if [ "$JJ_MODE" = true ]; then
   if [ "$FORCE" = true ]; then
     echo "Warning: Skipping changelog check (--force); fetch and origin/main targeting still run"
   else
-    if ! git show "$TARGET":docs/docs/changelog.md 2>/dev/null | grep -q "^## $VERSION"; then
+    # Read the changelog into a variable rather than piping it. `grep -q` exits
+    # on its first match, which SIGPIPEs `git show` into exit 141, and pipefail
+    # turns that into a failed check even when the version is present.
+    REMOTE_CHANGELOG=$(git show "$TARGET":docs/docs/changelog.md 2>/dev/null || true)
+
+    if ! grep -q "^## $VERSION" <<<"$REMOTE_CHANGELOG"; then
       echo "Error: origin/main changelog does not contain '## $VERSION'"
       echo "Has the release PR been merged?"
       echo "Or use --force to skip this check"
