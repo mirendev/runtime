@@ -677,12 +677,14 @@ func (e *EntityServer) MakeAttr(ctx context.Context, req *entityserver_v1alpha.E
 		value = entity.StringValue(args.Value())
 
 	case entity.TypeInt:
-		i, err := strconv.ParseInt(args.Value(), 10, 64)
+		// Atoi parses at the platform's int width, so out-of-range values are
+		// rejected rather than silently truncated on 32-bit builds.
+		i, err := strconv.Atoi(args.Value())
 		if err != nil {
 			return fmt.Errorf("invalid integer value: %w", err)
 		}
 
-		value = entity.IntValue(int(i))
+		value = entity.IntValue(i)
 
 	case entity.TypeFloat:
 		f, err := strconv.ParseFloat(args.Value(), 64)
