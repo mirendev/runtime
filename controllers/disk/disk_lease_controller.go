@@ -187,22 +187,12 @@ func (d *DiskLeaseController) ReconcileOrphanLeases(ctx context.Context, minLeas
 
 // Create handles creation of a new disk lease entity
 func (d *DiskLeaseController) Create(ctx context.Context, lease *storage_v1alpha.DiskLease, meta *entity.Meta) error {
-	d.Log.Info("Processing lease creation",
-		"lease", lease.ID,
-		"disk", lease.DiskId,
-		"status", lease.Status)
-
-	return d.reconcileLease(ctx, lease, meta)
+	return d.reconcileLease(ctx, "Processing lease creation", lease, meta)
 }
 
 // Update handles updates to an existing disk lease entity
 func (d *DiskLeaseController) Update(ctx context.Context, lease *storage_v1alpha.DiskLease, meta *entity.Meta) error {
-	d.Log.Info("Processing lease update",
-		"lease", lease.ID,
-		"disk", lease.DiskId,
-		"status", lease.Status)
-
-	return d.reconcileLease(ctx, lease, meta)
+	return d.reconcileLease(ctx, "Processing lease update", lease, meta)
 }
 
 // Delete handles deletion of a disk lease entity
@@ -233,7 +223,7 @@ func (d *DiskLeaseController) Delete(ctx context.Context, id entity.Id, obj *sto
 }
 
 func (d *DiskLeaseController) cleanupDiskMountForLease(ctx context.Context, leaseId entity.Id, leaseIdStr string) {
-	mount, err := d.getDiskMountForLease(ctx, leaseId)
+	mount, _, err := d.getDiskMountForLease(ctx, leaseId)
 	if err != nil {
 		d.Log.Warn("error looking up disk_mount for deleted lease", "lease", leaseIdStr, "error", err)
 		return
@@ -271,12 +261,20 @@ func (d *DiskLeaseController) cleanupDiskMountForLease(ctx context.Context, leas
 	}
 }
 
-// reconcileLease reconciles the lease state
-func (d *DiskLeaseController) reconcileLease(ctx context.Context, lease *storage_v1alpha.DiskLease, meta *entity.Meta) error {
+// reconcileLease reconciles the lease state. event names the entity change for
+// logging, which happens after the node filter: the controller resyncs every
+// lease every minute on every node, so logging before the filter meant each
+// node narrating leases it was about to drop, once a minute, forever.
+func (d *DiskLeaseController) reconcileLease(ctx context.Context, event string, lease *storage_v1alpha.DiskLease, meta *entity.Meta) error {
 	// Only reconcile leases assigned to this node
 	if lease.NodeId != "" && !d.NodeId.Matches(lease.NodeId) {
 		return nil
 	}
+
+	d.Log.Info(event,
+		"lease", lease.ID,
+		"disk", lease.DiskId,
+		"status", lease.Status)
 
 	var err error
 
@@ -389,8 +387,86 @@ func (d *DiskLeaseController) handlePendingLease(ctx context.Context, lease *sto
 		return nil
 	}
 
+	// Resolve the volume before touching mount state. A lease with no NodeId
+	// (the `debug disk lease` path, and anything created before leases were
+	// pinned) is reconciled by every node, and only the node holding the volume
+	// can mount it. Deciding ownership up front keeps a non-owner from reading
+	// its own stale mount below and driving the shared lease to a terminal
+	// FAILED it can never recover from (MIR-1469).
+	diskVolume, err := d.getDiskVolumeForDisk(ctx, disk.ID)
+	if err != nil {
+		d.Log.Error("Failed to look up disk_volume", "disk", diskId, "error", err)
+		d.cleanupLeaseReservation(diskId)
+
+		lease.Status = storage_v1alpha.FAILED
+		lease.ErrorMessage = fmt.Sprintf("Failed to look up disk_volume: %v", err)
+		return nil
+	}
+
+	if diskVolume == nil {
+		// Recoverable, not terminal: DiskController recreates a missing volume
+		// for a PROVISIONED disk on its next pass, so this is a window to wait
+		// out rather than a reason to burn the lease.
+		d.cleanupLeaseReservation(diskId)
+		d.Log.Info("no disk_volume for disk yet, lease will retry",
+			"disk", diskId,
+			"lease", leaseId)
+		return nil
+	}
+
+	// A volume with no node_id predates the stamp (node_id is required by the
+	// schema but unenforced, same as on the lease). We can't name its owner,
+	// so fall back to the lease's own pin: reaching here means the lease is
+	// either pinned to us or pinned to nobody. Pinned to us, we're the
+	// designated node and proceed. Pinned to nobody either, and there is no
+	// information anywhere about who should mount this, so guessing is how
+	// two nodes end up fighting over it. Wait instead; a resync retries.
+	if diskVolume.NodeId == "" {
+		if lease.NodeId == "" {
+			d.cleanupLeaseReservation(diskId)
+			d.Log.Warn("neither lease nor disk_volume names a node, cannot determine owner",
+				"disk", diskId,
+				"lease", leaseId,
+				"disk_volume", diskVolume.ID)
+			return nil
+		}
+	} else if !d.NodeId.Matches(diskVolume.NodeId) {
+		d.cleanupLeaseReservation(diskId)
+
+		// An unpinned lease reaches every node, and the volume's owner is
+		// among them, so stepping aside is the whole job. Quiet by design:
+		// this is the common, healthy outcome on every non-owner.
+		if lease.NodeId == "" {
+			d.Log.Debug("disk_volume belongs to another node, leaving lease to its owner",
+				"disk", diskId,
+				"lease", leaseId,
+				"disk_volume", diskVolume.ID,
+				"volume_node", diskVolume.NodeId,
+				"my_node", d.NodeId.Id())
+			return nil
+		}
+
+		// Pinned to us, but the volume lives elsewhere. No other node will
+		// pick this up — they all bail at the NodeId filter — so staying quiet
+		// would strand the lease in PENDING forever. Fail it with an error
+		// that names the split, rather than the "volume not found in state"
+		// mount failure this used to surface as.
+		d.Log.Error("lease pinned to this node but its volume lives on another",
+			"disk", diskId,
+			"lease", leaseId,
+			"disk_volume", diskVolume.ID,
+			"volume_node", diskVolume.NodeId,
+			"my_node", d.NodeId.Id())
+
+		lease.Status = storage_v1alpha.FAILED
+		lease.ErrorMessage = fmt.Sprintf(
+			"lease is assigned to node %s but disk_volume %s lives on node %s",
+			d.NodeId.Id(), diskVolume.ID, diskVolume.NodeId)
+		return nil
+	}
+
 	// Check if a disk_mount entity already exists for this lease
-	existingMount, err := d.getDiskMountForLease(ctx, lease.ID)
+	existingMount, _, err := d.getDiskMountForLease(ctx, lease.ID)
 	if err != nil {
 		d.Log.Warn("Error looking up existing disk_mount", "lease", leaseId, "error", err)
 	}
@@ -455,26 +531,6 @@ func (d *DiskLeaseController) handlePendingLease(ctx context.Context, lease *sto
 				"actual_state", existingMount.ActualState)
 			return nil
 		}
-	}
-
-	// Find the disk_volume entity for this disk
-	diskVolume, err := d.getDiskVolumeForDisk(ctx, disk.ID)
-	if err != nil {
-		d.Log.Error("Failed to look up disk_volume", "disk", diskId, "error", err)
-		d.cleanupLeaseReservation(diskId)
-
-		lease.Status = storage_v1alpha.FAILED
-		lease.ErrorMessage = fmt.Sprintf("Failed to look up disk_volume: %v", err)
-		return nil
-	}
-
-	if diskVolume == nil {
-		d.Log.Error("No disk_volume found for disk", "disk", diskId)
-		d.cleanupLeaseReservation(diskId)
-
-		lease.Status = storage_v1alpha.FAILED
-		lease.ErrorMessage = "No disk_volume entity found for disk"
-		return nil
 	}
 
 	if diskVolume.ActualState != storage_v1alpha.DV_READY {
@@ -562,13 +618,23 @@ func (d *DiskLeaseController) handleBoundLease(ctx context.Context, lease *stora
 	}
 	d.mu.Unlock()
 
-	diskMount, err := d.getDiskMountForLease(ctx, lease.ID)
+	diskMount, foreign, err := d.getDiskMountForLease(ctx, lease.ID)
 	if err != nil {
 		d.Log.Warn("Error looking up disk_mount for bound lease", "lease", leaseId, "error", err)
 		return nil
 	}
 
 	if diskMount == nil {
+		// An unpinned lease is reconciled here by every node. If another node
+		// holds the mount, this lease is bound and healthy from its owner's
+		// point of view, and knocking it back to PENDING would just start a
+		// BOUND/PENDING flap between the two nodes.
+		if foreign {
+			d.Log.Debug("Bound lease is mounted by another node, leaving it alone",
+				"lease", leaseId)
+			return nil
+		}
+
 		d.Log.Warn("Bound lease has no disk_mount entity, reverting to pending",
 			"lease", leaseId)
 		lease.Status = storage_v1alpha.PENDING
@@ -620,7 +686,7 @@ func (d *DiskLeaseController) handleReleasedLease(ctx context.Context, lease *st
 		return nil
 	}
 
-	diskMount, err := d.getDiskMountForLease(ctx, lease.ID)
+	diskMount, _, err := d.getDiskMountForLease(ctx, lease.ID)
 	if err != nil {
 		d.Log.Warn("Error looking up disk_mount for released lease", "lease", leaseId, "error", err)
 		return nil
@@ -677,7 +743,7 @@ func (d *DiskLeaseController) handleFailedLease(ctx context.Context, lease *stor
 	}
 	d.mu.Unlock()
 
-	diskMount, err := d.getDiskMountForLease(ctx, lease.ID)
+	diskMount, _, err := d.getDiskMountForLease(ctx, lease.ID)
 	if err != nil {
 		d.Log.Warn("Error looking up disk_mount for failed lease", "lease", leaseId, "error", err)
 		return nil
@@ -731,27 +797,56 @@ func (d *DiskLeaseController) getDiskMountPath(volumeId string) string {
 }
 
 // getDiskMountForLease finds the disk_mount entity for a lease
-func (d *DiskLeaseController) getDiskMountForLease(ctx context.Context, leaseId entity.Id) (*storage_v1alpha.DiskMount, error) {
+func (d *DiskLeaseController) getDiskMountForLease(ctx context.Context, leaseId entity.Id) (*storage_v1alpha.DiskMount, bool, error) {
 	if d.EAC == nil {
-		return nil, nil
+		return nil, false, nil
 	}
 
 	indexAttr := entity.Ref(storage_v1alpha.DiskMountDiskLeaseIdId, leaseId)
 
 	resp, err := d.EAC.List(ctx, indexAttr)
 	if err != nil {
-		return nil, fmt.Errorf("failed to list disk_mount entities: %w", err)
+		return nil, false, fmt.Errorf("failed to list disk_mount entities: %w", err)
 	}
 
 	values := resp.Values()
 	if len(values) == 0 {
-		return nil, nil
+		return nil, false, nil
 	}
 
-	var mount storage_v1alpha.DiskMount
-	mount.Decode(values[0].Entity())
+	// A lease can carry more than one disk_mount when several nodes reconciled
+	// it, which is what an unpinned lease invites. Only this node's mount
+	// describes state this controller can act on, so match on NodeId rather
+	// than trusting index order; picking blind was what let another node's
+	// failed mount drive a lease to terminal FAILED (MIR-1469). Mounts
+	// predating the NodeId stamp have none, so fall back to those.
+	//
+	// foreign reports that some other node holds a mount for this lease. A
+	// caller that finds nothing of its own needs that to tell "this lease has
+	// no mount" apart from "its mount isn't mine", since only the former means
+	// the lease has genuinely lost its mount.
+	var (
+		unowned *storage_v1alpha.DiskMount
+		foreign bool
+	)
 
-	return &mount, nil
+	for _, value := range values {
+		var mount storage_v1alpha.DiskMount
+		mount.Decode(value.Entity())
+
+		switch {
+		case d.NodeId.Matches(mount.NodeId):
+			return &mount, false, nil
+		case mount.NodeId == "":
+			if unowned == nil {
+				unowned = &mount
+			}
+		default:
+			foreign = true
+		}
+	}
+
+	return unowned, unowned == nil && foreign, nil
 }
 
 // getDiskVolumeForDisk finds the disk_volume entity for a disk

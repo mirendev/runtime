@@ -2,6 +2,10 @@ name: Test
 
 on:
   pull_request:
+    # Explicit list because naming `types` replaces the default set. `labeled`
+    # is what lets the ci:distributed opt-in below take effect on an open PR;
+    # the other three are the defaults we'd otherwise lose.
+    types: [opened, synchronize, reopened, labeled]
   merge_group:
   workflow_call:
     # Called by release.yml for main/tag builds
@@ -410,7 +414,14 @@ jobs:
     # workflow_call, where github.event_name is the caller's event ('push'), so
     # excluding 'pull_request' runs it there while skipping PRs. It would also
     # run in a merge queue if one were enabled ('merge_group').
-    if: github.event_name != 'pull_request'
+    #
+    # Label a PR `ci:distributed` to opt into it before merging. Worth doing for
+    # anything touching disks, leases, or the runner: this job is the only place
+    # a second node exists, so a multi-node bug is invisible until it is already
+    # on main and blocking the release (MIR-1469).
+    if: >-
+      github.event_name != 'pull_request' ||
+      contains(github.event.pull_request.labels.*.name, 'ci:distributed')
     runs-on: depot-ubuntu-latest
     steps:
     - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
@@ -471,10 +482,14 @@ jobs:
     - name: Peer logs on failure
       if: failure()
       run: |
+        # The whole suite runs serially against one cluster, so a failure early
+        # on is thousands of lines from the end by the time we get here. A tail
+        # window reliably misses it (MIR-1469 was diagnosed twice from logs that
+        # started five minutes after the failure), so dump the logs whole.
         echo "=== Coordinator server logs ==="
-        iso peers exec coordinator -- tail -200 /tmp/miren-server.log 2>&1 || true
+        iso peers exec coordinator -- cat /tmp/miren-server.log 2>&1 || true
         echo "=== Runner logs ==="
-        iso peers exec runner1 -- tail -200 /tmp/miren-runner.log 2>&1 || true
+        iso peers exec runner1 -- cat /tmp/miren-runner.log 2>&1 || true
 
     - name: Save Docker image to cache
       if: steps.docker-image-cache.outputs.cache-hit != 'true'
