@@ -105,7 +105,11 @@ func TestDiskUndelete(t *testing.T) {
 	leaseID := extractLeaseID(t, r)
 	t.Logf("Lease ID: %s", leaseID)
 
-	// Wait for lease to become bound
+	// Wait for lease to become bound. A lease that lands in "failed" is
+	// terminal (the controller never re-drives it), so treat it as fatal and
+	// fail fast with the status output rather than spinning until timeout —
+	// otherwise a regression reads as an opaque 60s hang instead of a lease
+	// that failed to bind (MIR-1469).
 	t.Log("Waiting for lease to bind...")
 	harness.Poll(t, "lease bound", 60*time.Second, 2*time.Second,
 		func() (bool, string) {
@@ -117,7 +121,7 @@ func TestDiskUndelete(t *testing.T) {
 				return true, ""
 			}
 			if r.OutputContains("failed") {
-				return false, "lease failed"
+				t.Fatalf("lease %s went to failed instead of binding:\n%s", leaseID, r.Stdout+r.Stderr)
 			}
 			return false, "lease not yet bound"
 		},

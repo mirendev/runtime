@@ -240,11 +240,20 @@ func (c *DiskVolumeController) createVolume(ctx context.Context, volume *storage
 		return fmt.Errorf("failed to create volume directory: %w", err)
 	}
 
-	// Create sparse disk image
+	// Create sparse disk image. Skip when one is already present: a restored
+	// volume (moved back into place by `disk undelete`) already carries its
+	// disk.img, and reimaging it here would truncate away the recovered data.
+	// Volume entity IDs are unique, so a genuine fresh create never collides
+	// with an existing image — only the restore path lands here idempotently.
 	imagePath := filepath.Join(volumePath, "disk.img")
 	sizeBytes := units.GigaBytes(volume.SizeGb).Bytes().Int64()
 
-	if err := c.ops.CreateDiskImage(imagePath, sizeBytes); err != nil {
+	if c.ops.VolumePathExists(imagePath) {
+		c.log.Info("disk image already present, preserving it (restore/recovery)",
+			"entity_id", entityId,
+			"image_path", imagePath,
+		)
+	} else if err := c.ops.CreateDiskImage(imagePath, sizeBytes); err != nil {
 		c.setVolumeError(ctx, volume.ID, fmt.Sprintf("failed to create disk image: %v", err))
 		return fmt.Errorf("failed to create disk image: %w", err)
 	}

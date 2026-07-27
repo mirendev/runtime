@@ -163,9 +163,15 @@ func DiskUndelete(ctx *Context, opts struct {
 		Filesystem:   filesystem,
 		VolumeMode:   storage_v1alpha.DiskVolumeVolumeMode(meta.VolumeMode),
 		DesiredState: storage_v1alpha.DV_PRESENT,
-		ActualState:  storage_v1alpha.DV_READY,
-		ImagePath:    imagePath,
-		NodeId:       nodeId,
+		// Start PENDING, not READY. The runner's DiskVolumeController drives
+		// the restored volume through the same mount-then-READY ordering as a
+		// fresh create (skipping the reimage, since disk.img is already in
+		// place). Advertising DV_READY here would let a lease bind against a
+		// volume that isn't registered in the runner's in-memory state yet,
+		// which lands the lease in a terminal FAILED (MIR-1469).
+		ActualState: storage_v1alpha.DV_PENDING,
+		ImagePath:   imagePath,
+		NodeId:      nodeId,
 	}
 
 	_, err = eac.Create(context.Background(), entity.New(
@@ -176,10 +182,14 @@ func DiskUndelete(ctx *Context, opts struct {
 		return fmt.Errorf("creating disk_volume entity: %w", err)
 	}
 
-	// Transition disk to PROVISIONED
+	// Transition disk to PROVISIONING (not PROVISIONED). The DiskController
+	// promotes it to PROVISIONED only once the disk_volume actually reaches
+	// DV_READY — i.e. after the volume is registered and mounted on the node —
+	// so the disk never reports "provisioned" (and thus leasable) ahead of a
+	// real mount.
 	_, err = eac.Patch(context.Background(), []entity.Attr{
 		entity.Ref(entity.DBId, diskEntityId),
-		entity.Ref(storage_v1alpha.DiskStatusId, storage_v1alpha.DiskStatusProvisionedId),
+		entity.Ref(storage_v1alpha.DiskStatusId, storage_v1alpha.DiskStatusProvisioningId),
 		entity.String(storage_v1alpha.DiskVolumeIdId, volId),
 	}, 0)
 	if err != nil {
