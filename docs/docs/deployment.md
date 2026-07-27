@@ -18,7 +18,7 @@ When you run `miren deploy`, Miren:
 2. **Detects and builds on the server** — the server inspects your source code to detect the [language, framework](/guides), and [services](/services), then builds a container image using the detected stack (or your Dockerfile)
 3. **Activates the new version** — rolls out the new version, replacing the previous one
 
-Every deployment is tracked with a unique version ID, its current status, and the git commit it came from. You can inspect, roll back, or redeploy any previous version at any time.
+Each deployment is a tracked object with its own ID, a status, and the git commit it came from. A successful deployment produces a new version (identified by a version ID); a failed one produces no version but stays in history as a record of the attempt. You can inspect, roll back, or redeploy any previous version at any time.
 
 ## Deploying from a Project Directory
 

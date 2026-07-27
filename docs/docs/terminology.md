@@ -50,7 +50,9 @@ The [route](#route) automatically assigned to an app when it is first deployed. 
 
 ## Deployment
 
-A specific version of your app that has been built and deployed. Each deployment creates a new container image and can be rolled back if needed.
+An attempt to build and release a specific [version](#version) of your app. Running `miren deploy` starts a deployment, which gets its own ID. A successful deployment produces a new [version](#version); a failed deployment produces no version but remains as a record of what was attempted and why it failed. A [rollback](#rollback) is a deployment that re-releases an existing version without building a new one.
+
+A deployment and the version it produces are distinct objects: the deployment is the action, and the version is the resulting artifact.
 
 ## Disk
 
@@ -112,6 +114,10 @@ A simple file format for defining [services](#service) in your app. Each line ma
 
 Maps a hostname to an application. Routes determine how HTTP traffic reaches your apps. Your first app gets a [default route](#default-route) automatically. See [Traffic Routing](/traffic-routing).
 
+## Rollback
+
+A type of [deployment](#deployment) that re-releases a previously built [version](#version) instead of building a new one. Because the container image already exists, a rollback skips the [build](#build) step and re-releases the target version as-is.
+
 ## Route Protection
 
 Authentication at the routing layer using an [identity provider](#identity-provider). Unauthenticated requests are redirected to an OIDC provider for login. After authentication, JWT claims are injected as HTTP headers (e.g., `X-User-Email`) before the request reaches your app — no in-app auth code required. See [Protecting Routes](/route-protect).
@@ -142,7 +148,7 @@ Time to live — the expiration timer for an [ephemeral version](#ephemeral-vers
 
 ## Version
 
-A unique identifier for a specific build of your app (e.g., `myapp-vCVkjR6u7744AsMebwMjGU`). Each [deployment](#deployment) creates a new version, which tracks the container image, git commit, and configuration. Previous versions can be rolled back to without rebuilding.
+A unique identifier for a specific build of your app (e.g., `myapp-vCVkjR6u7744AsMebwMjGU`). Each successful [deployment](#deployment) creates a new version, which tracks the container image, git commit, and configuration. Previous versions can be rolled back to without rebuilding — see [rollback](#rollback).
 
 ## WAF
 
