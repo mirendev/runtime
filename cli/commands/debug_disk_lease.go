@@ -38,6 +38,14 @@ func DebugDiskLease(ctx *Context, opts struct {
 	// Generate lease ID (format: disk-lease-<base58>)
 	leaseId := idgen.GenNS("disk-lease")
 
+	// Pin the lease to whichever node holds the disk's volume, the way the
+	// sandbox path does. An unpinned lease is reconciled by every node in a
+	// multi-node cluster, and only the volume's owner can actually mount it.
+	nodeId, err := diskVolumeNodeId(ctx, eac, diskId)
+	if err != nil {
+		return err
+	}
+
 	// Create disk lease entity
 	lease := &storage_v1alpha.DiskLease{
 		DiskId: diskId,
@@ -46,6 +54,7 @@ func DebugDiskLease(ctx *Context, opts struct {
 			Path:     opts.Path,
 			ReadOnly: opts.ReadOnly,
 		},
+		NodeId: nodeId,
 	}
 
 	// Set app ID if provided
@@ -71,6 +80,25 @@ func DebugDiskLease(ctx *Context, opts struct {
 	ctx.Info("Read-Only: %v", opts.ReadOnly)
 
 	return nil
+}
+
+// diskVolumeNodeId returns the node holding the disk's volume, or "" when the
+// volume can't be found or isn't stamped with a node.
+func diskVolumeNodeId(ctx context.Context, eac *entityserver_v1alpha.EntityAccessClient, diskId entity.Id) (entity.Id, error) {
+	resp, err := eac.List(ctx, entity.Ref(storage_v1alpha.DiskVolumeDiskIdId, diskId))
+	if err != nil {
+		return "", fmt.Errorf("failed to look up disk_volume for %s: %w", diskId, err)
+	}
+
+	values := resp.Values()
+	if len(values) == 0 {
+		return "", nil
+	}
+
+	var volume storage_v1alpha.DiskVolume
+	volume.Decode(values[0].Entity())
+
+	return volume.NodeId, nil
 }
 
 // DebugDiskLeaseList lists all disk lease entities
@@ -312,11 +340,13 @@ func DebugDiskLeaseStatus(ctx *Context, opts struct {
 		ctx.Info("Node: %s", lease.NodeId)
 	}
 
-	// Check error message if failed
 	if lease.Status == storage_v1alpha.FAILED {
-		// Note: Error message would be in attributes - this would need entity attribute access
 		ctx.Info("")
-		ctx.Info("Status: FAILED - Check entity attributes for error details")
+		if lease.ErrorMessage != "" {
+			ctx.Info("Status: FAILED - %s", lease.ErrorMessage)
+		} else {
+			ctx.Info("Status: FAILED - no error message recorded")
+		}
 	}
 
 	return nil
