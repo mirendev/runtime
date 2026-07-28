@@ -3,6 +3,8 @@
 package blackbox
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -282,5 +284,168 @@ func TestDistributedRunnerNodePort(t *testing.T) {
 				return true, ""
 			},
 		)
+	}
+}
+
+// peerIP returns a single IP from a peer, failing the test if the lookup
+// produces nothing usable.
+func peerIP(t *testing.T, m *harness.Miren, peer, cmd string) string {
+	t.Helper()
+
+	r := m.PeerExec(peer, "bash", "-c", cmd)
+	if !r.Success() {
+		t.Fatalf("failed to read IP on %s (exit %d): %s", peer, r.ExitCode, strings.TrimSpace(r.Stderr))
+	}
+
+	ip := strings.TrimSpace(r.Stdout)
+	if ip == "" {
+		t.Fatalf("got an empty IP from %s running %q", peer, cmd)
+	}
+	return ip
+}
+
+// startCapture runs tcpdump on an interface and blocks until it has attached,
+// so a probe sent immediately afterwards cannot slip past an unarmed capture.
+func startCapture(t *testing.T, m *harness.Miren, peer, iface, filter, outFile, pidFile string) {
+	t.Helper()
+
+	start := fmt.Sprintf(
+		"nohup tcpdump -i %s -A -s0 %s >%s 2>&1 </dev/null & echo $! >%s; disown",
+		iface, filter, outFile, pidFile)
+
+	r := m.PeerExec(peer, "bash", "-c", start)
+	if !r.Success() {
+		t.Fatalf("failed to start tcpdump on %s/%s: %s", peer, iface, strings.TrimSpace(r.Stderr))
+	}
+
+	t.Cleanup(func() {
+		m.PeerExec(peer, "bash", "-c",
+			fmt.Sprintf("kill $(cat %s) 2>/dev/null; rm -f %s %s", pidFile, pidFile, outFile))
+	})
+
+	harness.Poll(t, fmt.Sprintf("tcpdump listening on %s/%s", peer, iface), 30*time.Second, time.Second,
+		func() (bool, string) {
+			r := m.PeerExec(peer, "grep", "-q", "listening on", outFile)
+			if !r.Success() {
+				return false, "tcpdump has not attached yet"
+			}
+			return true, ""
+		},
+	)
+}
+
+// stopCapture terminates tcpdump and waits for it to exit. tcpdump block-buffers
+// its text output, so a capture file cannot be read meaningfully until the
+// process has flushed on the way out. Stopping first also sidesteps the ordering
+// between the two capture points: a packet reaches the overlay device before its
+// encrypted form leaves the physical one, so reading a live capture could check
+// the underlay before the frames we care about had been written.
+func stopCapture(t *testing.T, m *harness.Miren, peer, pidFile string) {
+	t.Helper()
+
+	m.PeerExec(peer, "bash", "-c", fmt.Sprintf("kill $(cat %s) 2>/dev/null", pidFile))
+
+	harness.Poll(t, fmt.Sprintf("tcpdump on %s exits", peer), 30*time.Second, time.Second,
+		func() (bool, string) {
+			r := m.PeerExec(peer, "bash", "-c",
+				fmt.Sprintf("kill -0 $(cat %s) 2>/dev/null && echo running || echo stopped", pidFile))
+			if strings.TrimSpace(r.Stdout) != "stopped" {
+				return false, "tcpdump is still running"
+			}
+			return true, ""
+		},
+	)
+}
+
+// TestDistributedOverlayEncryption sends a known marker between two nodes over
+// the sandbox overlay and asserts it cannot be read off the underlay.
+//
+// The marker is captured twice: on the overlay device, where it must appear,
+// and on the physical interface, where it must not. Requiring the overlay
+// capture to see it is what keeps this honest. Without that, a probe that
+// never left the host, a mistyped filter, or a capture that failed to attach
+// would all produce a clean underlay capture and a passing test.
+//
+// RFD-51 chose WireGuard precisely so that app-to-database traffic crossing
+// between hosts is not visible to anyone on the network. This test fails if a
+// cluster is running the plaintext VXLAN backend instead.
+func TestDistributedOverlayEncryption(t *testing.T) {
+	c := harness.NewCluster(t)
+	skipIfNotDistributed(t, c)
+	m := harness.NewMiren(t, c)
+
+	// Deliberately a failure rather than a skip. A cluster running the plaintext
+	// backend is the condition this test exists to catch, and a security check
+	// that goes quiet in exactly the case it was written for is worth less than
+	// no check at all.
+	if r := m.PeerExec("coordinator", "ip", "link", "show", "flannel-wg"); !r.Success() {
+		t.Fatal("coordinator has no wireguard device: the overlay is unencrypted")
+	}
+
+	const probePort = "39999"
+
+	var nonce [8]byte
+	if _, err := rand.Read(nonce[:]); err != nil {
+		t.Fatalf("failed to generate probe marker: %v", err)
+	}
+	// Distinctive and unlikely to collide with anything else on the wire, so a
+	// hit in either capture is unambiguously our probe.
+	marker := "MIRENOVERLAYPROBE" + hex.EncodeToString(nonce[:])
+
+	runnerUnderlay := peerIP(t, m, "runner1", "hostname -I | awk '{print $1}'")
+	runnerOverlay := peerIP(t, m, "runner1", "ip -4 -o addr show flannel-wg | awk '{print $4}' | cut -d/ -f1")
+	t.Logf("runner underlay=%s overlay=%s", runnerUnderlay, runnerOverlay)
+
+	listener := fmt.Sprintf(
+		"nohup nc -l -p %s >/tmp/overlay-probe-in.txt 2>&1 </dev/null & echo $! >/tmp/overlay-probe.pid; disown",
+		probePort)
+	if r := m.PeerExec("runner1", "bash", "-c", listener); !r.Success() {
+		t.Fatalf("failed to start probe listener on runner1: %s", strings.TrimSpace(r.Stderr))
+	}
+	t.Cleanup(func() {
+		m.PeerExec("runner1", "bash", "-c",
+			"kill $(cat /tmp/overlay-probe.pid) 2>/dev/null; rm -f /tmp/overlay-probe.pid /tmp/overlay-probe-in.txt")
+	})
+
+	// Scope the underlay capture to the runner's real address so unrelated
+	// chatter on the peers network cannot muddy the result.
+	startCapture(t, m, "coordinator", "eth0", "host "+runnerUnderlay,
+		"/tmp/overlay-cap-underlay.txt", "/tmp/overlay-cap-underlay.pid")
+	startCapture(t, m, "coordinator", "flannel-wg", "",
+		"/tmp/overlay-cap-overlay.txt", "/tmp/overlay-cap-overlay.pid")
+
+	send := fmt.Sprintf("echo %s | nc -w 5 %s %s", marker, runnerOverlay, probePort)
+	if r := m.PeerExec("coordinator", "bash", "-c", send); !r.Success() {
+		t.Fatalf("failed to send probe across the overlay: %s", strings.TrimSpace(r.Stderr))
+	}
+
+	harness.Poll(t, "probe arrives on runner1", 30*time.Second, time.Second,
+		func() (bool, string) {
+			r := m.PeerExec("runner1", "grep", "-q", marker, "/tmp/overlay-probe-in.txt")
+			if !r.Success() {
+				return false, "runner has not received the probe yet"
+			}
+			return true, ""
+		},
+	)
+
+	stopCapture(t, m, "coordinator", "/tmp/overlay-cap-overlay.pid")
+	stopCapture(t, m, "coordinator", "/tmp/overlay-cap-underlay.pid")
+
+	// The control: the same marker must be readable where it is supposed to be
+	// readable. If this fails the probe never traversed the overlay, and the
+	// underlay assertion below would pass for the wrong reason.
+	if r := m.PeerExec("coordinator", "grep", "-q", marker, "/tmp/overlay-cap-overlay.txt"); !r.Success() {
+		t.Fatalf("marker %q never appeared on the overlay device, so this test cannot tell whether the underlay is encrypted", marker)
+	}
+
+	// A capture that saw nothing at all would also report zero matches.
+	size := m.PeerExec("coordinator", "bash", "-c", "wc -c < /tmp/overlay-cap-underlay.txt")
+	if strings.TrimSpace(size.Stdout) == "0" {
+		t.Fatal("underlay capture is empty, so the absence of the marker proves nothing")
+	}
+
+	if r := m.PeerExec("coordinator", "grep", "-q", marker, "/tmp/overlay-cap-underlay.txt"); r.Success() {
+		t.Fatalf("overlay traffic is readable on the underlay: found marker %q in the eth0 capture", marker)
 	}
 }

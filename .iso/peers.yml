@@ -13,6 +13,12 @@ peers:
     environment:
       ROLE: coordinator
       MIREN_LABS: distributedrunners
+      # Dev runs WireGuard ahead of the shipped default (still vxlan) so the
+      # overlay-encryption blackbox test has something to assert against, and
+      # so the backend the clusters are migrating to is the one exercised
+      # every time anyone brings this environment up. Runners inherit it from
+      # the coordinator at join time.
+      MIREN_SERVER_NETWORK_BACKEND: wireguard
     ports:
       - "8443:8443"
 
