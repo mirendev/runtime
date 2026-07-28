@@ -5,6 +5,16 @@ on:
     # Explicit list because naming `types` replaces the default set. `labeled`
     # is what lets the ci:distributed opt-in below take effect on an open PR;
     # the other three are the defaults we'd otherwise lose.
+    #
+    # A label change restarts the whole workflow, which looks wasteful enough
+    # to want gating the other jobs on `github.event.action != 'labeled'`.
+    # Don't. The concurrency group above cancels the run in flight, and a
+    # required status check resolves to the newest run of that name. A run
+    # that skipped lint/build/test would therefore replace real results with
+    # skipped ones, and a skipped check is generally treated as satisfying a
+    # required check. That trades one spare CI run for a PR that can merge
+    # without having been tested. Labels land on roughly 1 PR in 60 here, so
+    # the waste is theoretical and the hazard is not.
     types: [opened, synchronize, reopened, labeled]
   merge_group:
   workflow_call:
@@ -90,6 +100,51 @@ jobs:
 
     - name: Check go generate
       run: make generate-check
+
+  # Which parts of the tree a PR touches, for jobs that are too expensive to
+  # run on every PR but too important to leave to someone remembering a label.
+  # Only consulted for pull_request; other events don't gate on it at all.
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      distributed: ${{ steps.filter.outputs.distributed }}
+    steps:
+    - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+      with:
+        persist-credentials: false
+        ref: ${{ inputs.ref }}
+        # Full history only when we actually diff against a base. Quoted so the
+        # false branch survives: 0 is falsy in a GitHub expression, so an
+        # unquoted `&& 0 ||` would always fall through to the other side.
+        fetch-depth: ${{ github.event_name == 'pull_request' && '0' || '1' }}
+
+    - name: Detect distributed-relevant changes
+      id: filter
+      env:
+        BASE_SHA: ${{ github.event.pull_request.base.sha }}
+      run: |
+        set -euo pipefail
+
+        # Non-PR events don't consult this output, so don't spend a diff on them.
+        if [ "${{ github.event_name }}" != "pull_request" ]; then
+          echo "distributed=true" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+
+        changed=$(git diff --name-only "$BASE_SHA" HEAD)
+        echo "Changed files:"
+        echo "$changed"
+
+        # The code paths that can break the multi-node topology, plus this
+        # workflow itself so a change to the gating is exercised by the PR
+        # that makes it.
+        if echo "$changed" | grep -qE '^(controllers/disk/|components/diskio/|components/runner/|blackbox/|hack/dev-distributed|\.iso/peers\.yml|\.github/workflows/test\.yml)'; then
+          echo "distributed-relevant changes found"
+          echo "distributed=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "no distributed-relevant changes"
+          echo "distributed=false" >> "$GITHUB_OUTPUT"
+        fi
 
   test-groups:
     runs-on: ubuntu-latest
@@ -415,13 +470,22 @@ jobs:
     # excluding 'pull_request' runs it there while skipping PRs. It would also
     # run in a merge queue if one were enabled ('merge_group').
     #
-    # Label a PR `ci:distributed` to opt into it before merging. Worth doing for
-    # anything touching disks, leases, or the runner: this job is the only place
-    # a second node exists, so a multi-node bug is invisible until it is already
-    # on main and blocking the release (MIR-1469).
+    # On a PR it runs when the diff touches code that can break the multi-node
+    # topology, or when someone labels the PR `ci:distributed` to ask for it
+    # explicitly. This job is the only place a second node exists, so a bug
+    # there is invisible until it is already on main blocking a release, which
+    # is exactly how MIR-1469 got in.
+    #
+    # `!cancelled()` rather than a plain condition: it keeps the non-PR clause
+    # authoritative even if the `changes` job fails. A failed dependency would
+    # otherwise skip this job on main and tags, quietly dropping the release
+    # coverage this whole gate exists to protect.
+    needs: [changes]
     if: >-
+      !cancelled() && (
       github.event_name != 'pull_request' ||
-      contains(github.event.pull_request.labels.*.name, 'ci:distributed')
+      needs.changes.outputs.distributed == 'true' ||
+      contains(github.event.pull_request.labels.*.name, 'ci:distributed') )
     runs-on: depot-ubuntu-latest
     steps:
     - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
@@ -503,7 +567,7 @@ jobs:
   # that passes only when every matrix runner and blackbox tests succeed.
   test:
     if: always()
-    needs: [test-runner, blackbox-groups, test-blackbox, test-blackbox-pop, test-blackbox-distributed]
+    needs: [changes, test-runner, blackbox-groups, test-blackbox, test-blackbox-pop, test-blackbox-distributed]
     runs-on: ubuntu-latest
     steps:
     - name: Check results
@@ -513,8 +577,16 @@ jobs:
         echo "test-blackbox result: ${{ needs.test-blackbox.result }}"
         echo "test-blackbox-pop result: ${{ needs.test-blackbox-pop.result }}"
         echo "test-blackbox-distributed result: ${{ needs.test-blackbox-distributed.result }}"
+        echo "changes result: ${{ needs.changes.result }}"
 
         if [[ "${{ needs.test-runner.result }}" != "success" ]]; then
+          exit 1
+        fi
+        # changes decides whether the distributed job runs on a PR. If it
+        # fails, that job skips, and "skipped" is accepted below — so without
+        # this the gate could silently stop covering the very changes it
+        # exists to catch.
+        if [[ "${{ needs.changes.result }}" != "success" ]]; then
           exit 1
         fi
         # blackbox-groups builds the shard matrix. If it fails, the sharded
