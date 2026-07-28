@@ -9,6 +9,7 @@ RUN apt-get update && apt-get install -y \
     inetutils-ping \
     iproute2 \
     iptables \
+    tcpdump \
     tmux \
     vim \
     netcat-openbsd \

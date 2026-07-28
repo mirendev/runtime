@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/netip"
@@ -12,7 +13,6 @@ import (
 	"path"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/flannel-io/flannel/pkg/backend"
 	"github.com/flannel-io/flannel/pkg/ip"
@@ -21,8 +21,7 @@ import (
 	"github.com/flannel-io/flannel/pkg/subnet"
 	fetcd "github.com/flannel-io/flannel/pkg/subnet/etcd"
 	"github.com/flannel-io/flannel/pkg/trafficmngr/nftables"
-	mvccpb "go.etcd.io/etcd/api/v3/mvccpb"
-	"go.etcd.io/etcd/api/v3/v3rpc/rpctypes"
+	"github.com/vishvananda/netlink"
 	clientv3 "go.etcd.io/etcd/client/v3"
 	"go4.org/netipx"
 	"golang.org/x/sync/errgroup"
@@ -36,6 +35,28 @@ import (
 	_ "github.com/flannel-io/flannel/pkg/backend/vxlan"
 	_ "github.com/flannel-io/flannel/pkg/backend/wireguard"
 )
+
+// errNoBackend is returned rather than silently falling back to a default.
+// The backend decides whether sandbox traffic between hosts is encrypted, so
+// guessing here can hand an operator plaintext VXLAN on a cluster whose config
+// asked for WireGuard, with nothing in the logs to say so. Runners carry the
+// backend in the config written at join time; one that predates the field has
+// to re-join to pick it up.
+var errNoBackend = fmt.Errorf(
+	"no network backend configured: set server.network_backend on the coordinator, " +
+		"and re-join any runner whose config predates the setting")
+
+// staleBackendDevices lists, per backend, the interfaces left behind by the
+// other backends we support. Switching backends does not remove the previous
+// backend's device, and its per-lease routes (one /24 per peer) are more
+// specific than the new backend's route for the whole /16, so the kernel keeps
+// steering remote sandbox traffic into the old device. Leftover VXLAN is the
+// dangerous direction: the node reports WireGuard, logs that it is ignoring
+// non-WireGuard leases, and still ships that peer's traffic in the clear.
+var staleBackendDevices = map[string][]string{
+	"vxlan":     {"flannel-wg", "flannel-wg-v6"},
+	"wireguard": {"flannel.1"},
+}
 
 type Network struct {
 	NetworkOptions
@@ -112,16 +133,14 @@ func buildTLSConfigFromFiles(certFile, keyFile, caFile string) (*tls.Config, err
 }
 
 func (n *Network) SetupConfig(ctx context.Context, v4, v6 netip.Prefix) error {
+	if n.BackendType == "" {
+		return errNoBackend
+	}
+
 	var backend struct {
 		Type string
 	}
-
-	// Use configured backend type, defaulting to vxlan for backward compatibility
-	backendType := n.BackendType
-	if backendType == "" {
-		backendType = "vxlan"
-	}
-	backend.Type = backendType
+	backend.Type = n.BackendType
 
 	var config subnet.Config
 	config.EnableIPv4 = true
@@ -186,63 +205,44 @@ func (n *Network) Lease() *Lease {
 	return &Lease{n.lease}
 }
 
-func kvToIPLease(kv *mvccpb.KeyValue, ttl int64) (*lease.Lease, error) {
-	sn, tsn6 := subnet.ParseSubnetKey(string(kv.Key))
-	if sn == nil {
-		return nil, fmt.Errorf("failed to parse subnet key %s", kv.Key)
+// removeStaleBackendDevices deletes interfaces belonging to a backend other
+// than the one about to register. Deleting a link takes its routes with it.
+// A device we cannot remove is fatal rather than logged: continuing would mean
+// running as if encrypted while a stale VXLAN path is still winning the route
+// lookup, which is precisely the failure this is here to prevent.
+func (n *Network) removeStaleBackendDevices(backendType string) error {
+	for _, name := range staleBackendDevices[backendType] {
+		if err := n.removeDeviceIfPresent(name, backendType); err != nil {
+			return err
+		}
 	}
 
-	var sn6 ip.IP6Net
-	if tsn6 != nil {
-		sn6 = *tsn6
-	}
-
-	attrs := &lease.LeaseAttrs{}
-	if err := json.Unmarshal([]byte(kv.Value), attrs); err != nil {
-		return nil, err
-	}
-
-	exp := time.Now().Add(time.Duration(ttl) * time.Second)
-
-	lease := lease.Lease{
-		EnableIPv4: true,
-		EnableIPv6: !sn6.Empty(),
-		Subnet:     *sn,
-		IPv6Subnet: sn6,
-		Attrs:      *attrs,
-		Expiration: exp,
-		Asof:       kv.ModRevision,
-	}
-
-	return &lease, nil
+	return nil
 }
 
-func (n *Network) AllLeases(ctx context.Context) ([]lease.Lease, error) {
-	key := path.Join(n.EtcdPrefix, "subnets")
-	resp, err := n.ec.Get(ctx, key, clientv3.WithPrefix())
+// removeDeviceIfPresent deletes one interface, treating absence as success.
+func (n *Network) removeDeviceIfPresent(name, backendType string) error {
+	link, err := netlink.LinkByName(name)
 	if err != nil {
-		if err == rpctypes.ErrGRPCKeyNotFound {
-			// key not found: treat it as empty set
-			return []lease.Lease{}, nil
+		// Absent is the expected case and the whole point. Any other lookup
+		// failure means we cannot tell whether a stale device is there, which
+		// is not a question to answer optimistically.
+		var notFound netlink.LinkNotFoundError
+		if errors.As(err, &notFound) {
+			return nil
 		}
-		return nil, err
+
+		return fmt.Errorf("failed to look up %s while cleaning up after a previous backend: %w", name, err)
 	}
 
-	leases := []lease.Lease{}
-	for _, kv := range resp.Kvs {
-		ttlresp, err := n.ec.TimeToLive(ctx, clientv3.LeaseID(kv.Lease))
-		if err != nil {
-			continue
-		}
-		l, err := kvToIPLease(kv, ttlresp.TTL)
-		if err != nil {
-			continue
-		}
-
-		leases = append(leases, *l)
+	if err := netlink.LinkDel(link); err != nil {
+		return fmt.Errorf("failed to remove stale %s device left by a previous backend: %w", name, err)
 	}
 
-	return leases, nil
+	n.log.Info("removed stale network device from a previous backend",
+		"device", name, "backend", backendType)
+
+	return nil
 }
 
 func (n *Network) Start(ctx context.Context, eg *errgroup.Group) error {
@@ -293,10 +293,13 @@ func (n *Network) Start(ctx context.Context, eg *errgroup.Group) error {
 
 	bm := backend.NewManager(ctx, sm, extIface)
 
-	// Use configured backend type, defaulting to vxlan for backward compatibility
+	if n.BackendType == "" {
+		return errNoBackend
+	}
 	backendType := n.BackendType
-	if backendType == "" {
-		backendType = "vxlan"
+
+	if err := n.removeStaleBackendDevices(backendType); err != nil {
+		return err
 	}
 
 	be, err := bm.GetBackend(backendType)
