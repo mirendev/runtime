@@ -30,7 +30,17 @@ const (
 	defaultEtcdHTTPPort = 12381             // Non-default port to avoid conflicts
 	defaultPeerPort     = 12380             // Non-default port to avoid conflicts
 	etcdStateFile       = "etcd-state.json" // Tracks container config state
+
+	// Bind addresses for etcd's listeners. Spelled out so that which listeners
+	// are reachable off the host is legible at a glance; see etcdArgs.
+	loopbackHost  = "127.0.0.1"
+	allInterfaces = "0.0.0.0"
 )
+
+// etcdURL formats one of etcd's listen or advertise URLs.
+func etcdURL(scheme, host string, port int) string {
+	return fmt.Sprintf("%s://%s:%d", scheme, host, port)
+}
 
 var (
 	etcdImage = imagerefs.Etcd
@@ -48,7 +58,9 @@ type etcdState struct {
 // (new env vars, different args, etc.) so that upgrades recreate the container.
 //
 // v2: memory auto-tuning — etcd flags/env are now scaled to system RAM.
-const currentConfigVersion = 2
+// v3: the JSON gateway and raft peer listeners moved to loopback. Without this
+// bump an upgraded cluster keeps its old container and stays bound to 0.0.0.0.
+const currentConfigVersion = 3
 
 // TLSConfig holds TLS certificate paths for etcd mTLS.
 // When configured, etcd will require client certificate authentication.
@@ -416,38 +428,61 @@ func (e *EtcdComponent) restartExistingContainer(ctx context.Context, container 
 	return nil
 }
 
-func (e *EtcdComponent) createContainer(ctx context.Context, image containerd.Image, config EtcdConfig, tuning etcdTuning) (containerd.Container, error) {
-	dataPath := filepath.Join(e.DataPath, "etcd")
-
-	// Determine URL scheme based on TLS config
-	scheme := "http"
+// etcdArgs builds the etcd command line. It's split out from createContainer so
+// the listener bindings can be asserted in a test without standing up a container.
+//
+// The rule is that nothing off the host may talk to etcd unless mTLS is
+// covering the conversation, which in practice means the gRPC client port
+// with distributed runners enabled. Everything else binds loopback:
+//
+//   - The gRPC client port opens up only when TLS is configured, since that's
+//     when runners dial it over the network and when --client-cert-auth is
+//     there to police it. Without TLS the server itself is the only caller
+//     and it connects to 127.0.0.1, so there's nothing to expose.
+//   - The HTTP client port. --client-cert-auth does not apply to it, so
+//     binding it off-box would hand out unauthenticated access to the whole
+//     keyspace, bypassing the mTLS set up for distributed runners. The flag
+//     is still set, because setting it is what makes --listen-client-urls
+//     serve gRPC alone and avoids the single-port multiplexing etcd warns
+//     about; it just isn't reachable off the host anymore.
+//   - The peer port carries plaintext raft. etcd's own default for it is
+//     loopback, we advertise localhost, and there is exactly one member. If
+//     etcd ever grows to multiple members this needs peer TLS (peer certs,
+//     which SetupEtcdTLS does not currently mint), not a wider bind.
+//
+// The JSON gateway is disabled outright on top of that. Nothing in Miren
+// speaks it, every internal caller goes through the etcd client on the gRPC
+// port, and etcdctl inside the etcd container covers ad hoc debugging. Health
+// and metrics are registered separately and are unaffected.
+func etcdArgs(config EtcdConfig, tuning etcdTuning) []string {
+	// Client traffic is TLS and reachable off-host only when mTLS is set up;
+	// everything else is plaintext and stays on loopback.
+	clientScheme, clientBind := "http", loopbackHost
 	if config.TLS != nil {
-		scheme = "https"
+		clientScheme, clientBind = "https", allInterfaces
 	}
 
-	e.Log.Info("etcd memory auto-tuning",
-		"system_ram_bytes", tuning.SystemRAMBytes,
-		"budget_bytes", tuning.BudgetBytes,
-		"quota_backend_bytes", tuning.QuotaBackendBytes,
-		"gomemlimit_bytes", tuning.GoMemLimitBytes,
-		"gogc", tuning.GOGC,
-		"auto_compaction_retention", tuning.AutoCompactionReten,
-		"snapshot_count", tuning.SnapshotCount,
-		"snapshot_catchup_entries", tuning.SnapshotCatchupEntries,
-		"max_concurrent_streams", tuning.MaxConcurrentStreams,
-		"compaction_batch_limit", tuning.CompactionBatchLimit)
+	clientURL := etcdURL(clientScheme, clientBind, config.ClientPort)
+	gatewayURL := etcdURL("http", loopbackHost, config.HTTPClientPort)
+	peerURL := etcdURL("http", loopbackHost, config.PeerPort)
+
+	// Advertised URLs name how to reach this member rather than what to bind,
+	// so they use localhost regardless of the bind address above.
+	advertiseClientURL := etcdURL(clientScheme, "localhost", config.ClientPort)
+	advertisePeerURL := etcdURL("http", "localhost", config.PeerPort)
 
 	args := []string{
 		"/usr/local/bin/etcd",
 		"--name", config.Name,
 		"--data-dir", config.DataDir,
-		"--listen-client-urls", fmt.Sprintf("%s://0.0.0.0:%d", scheme, config.ClientPort),
-		"--listen-client-http-urls", fmt.Sprintf("http://0.0.0.0:%d", config.HTTPClientPort),
-		"--advertise-client-urls", fmt.Sprintf("%s://localhost:%d", scheme, config.ClientPort),
-		"--listen-peer-urls", fmt.Sprintf("http://0.0.0.0:%d", config.PeerPort),
-		"--initial-advertise-peer-urls", fmt.Sprintf("http://localhost:%d", config.PeerPort),
-		"--initial-cluster", fmt.Sprintf("%s=http://localhost:%d", config.Name, config.PeerPort),
+		"--listen-client-urls", clientURL,
+		"--listen-client-http-urls", gatewayURL,
+		"--advertise-client-urls", advertiseClientURL,
+		"--listen-peer-urls", peerURL,
+		"--initial-advertise-peer-urls", advertisePeerURL,
+		"--initial-cluster", config.Name + "=" + advertisePeerURL,
 		"--initial-cluster-state", config.ClusterState,
+		"--enable-grpc-gateway=false",
 	}
 
 	args = append(args, tuning.args()...)
@@ -465,6 +500,26 @@ func (e *EtcdComponent) createContainer(ctx context.Context, image containerd.Im
 			"--trusted-ca-file", "/certs/ca.crt",
 		)
 	}
+
+	return args
+}
+
+func (e *EtcdComponent) createContainer(ctx context.Context, image containerd.Image, config EtcdConfig, tuning etcdTuning) (containerd.Container, error) {
+	dataPath := filepath.Join(e.DataPath, "etcd")
+
+	e.Log.Info("etcd memory auto-tuning",
+		"system_ram_bytes", tuning.SystemRAMBytes,
+		"budget_bytes", tuning.BudgetBytes,
+		"quota_backend_bytes", tuning.QuotaBackendBytes,
+		"gomemlimit_bytes", tuning.GoMemLimitBytes,
+		"gogc", tuning.GOGC,
+		"auto_compaction_retention", tuning.AutoCompactionReten,
+		"snapshot_count", tuning.SnapshotCount,
+		"snapshot_catchup_entries", tuning.SnapshotCatchupEntries,
+		"max_concurrent_streams", tuning.MaxConcurrentStreams,
+		"compaction_batch_limit", tuning.CompactionBatchLimit)
+
+	args := etcdArgs(config, tuning)
 
 	// Build mounts list
 	mounts := []specs.Mount{
