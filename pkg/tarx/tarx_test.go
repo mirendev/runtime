@@ -617,6 +617,108 @@ func TestTarFS_PreExistingDirectory(t *testing.T) {
 	require.Equal(t, string(content), string(got))
 }
 
+func TestTarFSRejectsEscapingPaths(t *testing.T) {
+	tests := []struct {
+		name        string
+		headerName  func(parent string) string
+		outsidePath func(parent string) string
+	}{
+		{
+			name: "parent traversal",
+			headerName: func(string) string {
+				return "../outside"
+			},
+			outsidePath: func(parent string) string {
+				return filepath.Join(parent, "outside")
+			},
+		},
+		{
+			name: "embedded traversal",
+			headerName: func(string) string {
+				return "nested/../../outside"
+			},
+			outsidePath: func(parent string) string {
+				return filepath.Join(parent, "outside")
+			},
+		},
+		{
+			name: "sibling prefix",
+			headerName: func(string) string {
+				return "../dest-evil/outside"
+			},
+			outsidePath: func(parent string) string {
+				return filepath.Join(parent, "dest-evil", "outside")
+			},
+		},
+		{
+			name: "absolute path",
+			headerName: func(parent string) string {
+				return filepath.Join(parent, "outside")
+			},
+			outsidePath: func(parent string) string {
+				return filepath.Join(parent, "outside")
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			parent := t.TempDir()
+			dest := filepath.Join(parent, "dest")
+			require.NoError(t, os.Mkdir(dest, 0755))
+
+			content := []byte("escaped")
+			var buf bytes.Buffer
+			gw := gzip.NewWriter(&buf)
+			tw := tar.NewWriter(gw)
+			require.NoError(t, tw.WriteHeader(&tar.Header{
+				Name:     tt.headerName(parent),
+				Typeflag: tar.TypeReg,
+				Mode:     0644,
+				Size:     int64(len(content)),
+			}))
+			_, err := tw.Write(content)
+			require.NoError(t, err)
+			require.NoError(t, tw.Close())
+			require.NoError(t, gw.Close())
+
+			_, err = TarFS(&buf, dest)
+			require.ErrorContains(t, err, "archive path")
+			_, err = os.Stat(tt.outsidePath(parent))
+			require.ErrorIs(t, err, os.ErrNotExist)
+		})
+	}
+}
+
+func TestTarFSRejectsPreExistingSymlinkTraversal(t *testing.T) {
+	parent := t.TempDir()
+	dest := filepath.Join(parent, "dest")
+	outside := filepath.Join(parent, "outside")
+	require.NoError(t, os.Mkdir(dest, 0755))
+	require.NoError(t, os.Mkdir(outside, 0755))
+	require.NoError(t, os.Symlink(outside, filepath.Join(dest, "escape")))
+
+	content := []byte("escaped")
+	var buf bytes.Buffer
+	gw := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gw)
+	require.NoError(t, tw.WriteHeader(&tar.Header{
+		Name:     "escape/file",
+		Typeflag: tar.TypeReg,
+		Mode:     0644,
+		Size:     int64(len(content)),
+	}))
+	_, err := tw.Write(content)
+	require.NoError(t, err)
+	require.NoError(t, tw.Close())
+	require.NoError(t, gw.Close())
+
+	_, err = TarFS(&buf, dest)
+	require.ErrorContains(t, err, "traverses symlink")
+	_, err = os.Stat(filepath.Join(outside, "file"))
+	require.ErrorIs(t, err, os.ErrNotExist)
+}
+
 func TestMakeTarWithIncludePatterns(t *testing.T) {
 	// Create temporary directory
 	tmpDir, err := os.MkdirTemp("", "tarx-test-include-")

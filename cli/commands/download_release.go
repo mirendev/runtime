@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"miren.dev/runtime/pkg/tarx"
 	"miren.dev/runtime/version"
 )
 
@@ -243,12 +244,9 @@ func extractTarGz(src, dest string) error {
 			return err
 		}
 
-		// Construct the file path
-		target := filepath.Join(dest, header.Name)
-
-		// Check for directory traversal
-		if !strings.HasPrefix(filepath.Clean(target), filepath.Clean(dest)) {
-			return fmt.Errorf("tar entry %s tries to escape destination directory", header.Name)
+		target, err := tarx.SafeWritePath(dest, header.Name)
+		if err != nil {
+			return fmt.Errorf("invalid tar entry %q: %w", header.Name, err)
 		}
 
 		switch header.Typeflag {
@@ -275,11 +273,8 @@ func extractTarGz(src, dest string) error {
 				return err
 			}
 			outFile.Close()
-		case tar.TypeSymlink:
-			// Create symlink
-			if err := os.Symlink(header.Linkname, target); err != nil {
-				return err
-			}
+		case tar.TypeSymlink, tar.TypeLink:
+			return fmt.Errorf("tar entry %q uses an unsupported link type", header.Name)
 		}
 	}
 
