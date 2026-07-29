@@ -46,13 +46,28 @@ bootstrap_peer() {
 setup_release_dir() {
   local peer="$1"
   echo "    Setting up release directory on $peer..."
-  peer_exec "$peer" bash -c "mkdir -p /var/lib/miren/release && \
-    cp bin/miren /var/lib/miren/release/ && \
-    cp /usr/local/bin/runc /var/lib/miren/release/ && \
-    cp /usr/local/bin/containerd-shim-runc-v2 /var/lib/miren/release/ && \
-    cp /usr/local/bin/containerd /var/lib/miren/release/ && \
-    cp /usr/local/bin/nerdctl /var/lib/miren/release/ && \
-    cp /usr/local/bin/ctr /var/lib/miren/release/"
+  # Install by rename rather than writing in place. On `rebuild` the peer is
+  # already up: containerd and its shim keep running across a coordinator
+  # restart, and copying onto a live executable fails with ETXTBSY ("Text file
+  # busy"), which used to make rebuild unusable and force a full down/up.
+  # Renaming over the path swaps the directory entry and leaves any running
+  # process on its old inode.
+  peer_exec "$peer" bash -c '
+    set -euo pipefail
+    dest=/var/lib/miren/release
+    mkdir -p "$dest"
+    install_bin() {
+      local src="$1" name
+      name=$(basename "$src")
+      cp -f "$src" "$dest/.$name.tmp"
+      chmod 0755 "$dest/.$name.tmp"
+      mv -f "$dest/.$name.tmp" "$dest/$name"
+    }
+    install_bin bin/miren
+    for b in runc containerd-shim-runc-v2 containerd nerdctl ctr; do
+      install_bin "/usr/local/bin/$b"
+    done
+  '
 }
 
 start_coordinator() {
