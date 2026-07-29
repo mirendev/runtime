@@ -3,9 +3,11 @@ package commands
 import (
 	"archive/tar"
 	"compress/gzip"
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -151,4 +153,106 @@ func TestExtractTarGzRejectsSiblingPrefixTraversal(t *testing.T) {
 	require.ErrorContains(t, err, "invalid tar entry")
 	_, err = os.Stat(filepath.Join(parent, "dest-evil", "outside"))
 	require.ErrorIs(t, err, os.ErrNotExist)
+}
+
+func TestReleaseBinaryVersion(t *testing.T) {
+	writeBinary := func(t *testing.T, content string) string {
+		t.Helper()
+
+		releaseDir := t.TempDir()
+		require.NoError(t, os.WriteFile(filepath.Join(releaseDir, "miren"), []byte(content), 0755))
+		return releaseDir
+	}
+
+	t.Run("returns version output", func(t *testing.T) {
+		releaseDir := writeBinary(t, "#!/bin/sh\necho v1.2.3\n")
+
+		out, err := releaseBinaryVersion(context.Background(), releaseDir)
+		require.NoError(t, err)
+		require.Equal(t, "v1.2.3\n", string(out))
+	})
+
+	t.Run("includes stderr on failure", func(t *testing.T) {
+		releaseDir := writeBinary(t, "#!/bin/sh\necho broken release >&2\nexit 1\n")
+
+		_, err := releaseBinaryVersion(context.Background(), releaseDir)
+		require.ErrorContains(t, err, "broken release")
+	})
+
+	t.Run("honors context deadline", func(t *testing.T) {
+		releaseDir := writeBinary(t, "#!/bin/sh\nexec sleep 5\n")
+		ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+		defer cancel()
+
+		_, err := releaseBinaryVersion(ctx, releaseDir)
+		require.ErrorIs(t, err, context.DeadlineExceeded)
+	})
+}
+
+func TestPromoteReleaseDir(t *testing.T) {
+	writeMarker := func(t *testing.T, dir, content string) {
+		t.Helper()
+		require.NoError(t, os.Mkdir(dir, 0755))
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "marker"), []byte(content), 0644))
+	}
+
+	t.Run("installs a new release", func(t *testing.T) {
+		parent := t.TempDir()
+		staging := filepath.Join(parent, "staging")
+		release := filepath.Join(parent, "release")
+		writeMarker(t, staging, "new")
+
+		backup, err := promoteReleaseDir(staging, release, false)
+		require.NoError(t, err)
+		require.Empty(t, backup)
+		content, err := os.ReadFile(filepath.Join(release, "marker"))
+		require.NoError(t, err)
+		require.Equal(t, []byte("new"), content)
+	})
+
+	t.Run("replaces an existing release and keeps a backup", func(t *testing.T) {
+		parent := t.TempDir()
+		staging := filepath.Join(parent, "staging")
+		release := filepath.Join(parent, "release")
+		writeMarker(t, staging, "new")
+		writeMarker(t, release, "old")
+
+		backup, err := promoteReleaseDir(staging, release, true)
+		require.NoError(t, err)
+		require.NotEmpty(t, backup)
+		content, err := os.ReadFile(filepath.Join(release, "marker"))
+		require.NoError(t, err)
+		require.Equal(t, []byte("new"), content)
+		content, err = os.ReadFile(filepath.Join(backup, "marker"))
+		require.NoError(t, err)
+		require.Equal(t, []byte("old"), content)
+	})
+
+	t.Run("does not replace without force", func(t *testing.T) {
+		parent := t.TempDir()
+		staging := filepath.Join(parent, "staging")
+		release := filepath.Join(parent, "release")
+		writeMarker(t, staging, "new")
+		writeMarker(t, release, "old")
+
+		_, err := promoteReleaseDir(staging, release, false)
+		require.ErrorContains(t, err, "already exists")
+		content, err := os.ReadFile(filepath.Join(release, "marker"))
+		require.NoError(t, err)
+		require.Equal(t, []byte("old"), content)
+	})
+
+	t.Run("restores the previous release when promotion fails", func(t *testing.T) {
+		parent := t.TempDir()
+		staging := filepath.Join(parent, "missing-staging")
+		release := filepath.Join(parent, "release")
+		writeMarker(t, release, "old")
+
+		backup, err := promoteReleaseDir(staging, release, true)
+		require.ErrorContains(t, err, "promoting staged release")
+		require.Empty(t, backup)
+		content, err := os.ReadFile(filepath.Join(release, "marker"))
+		require.NoError(t, err)
+		require.Equal(t, []byte("old"), content)
+	})
 }

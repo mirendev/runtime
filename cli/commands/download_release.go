@@ -3,6 +3,7 @@ package commands
 import (
 	"archive/tar"
 	"compress/gzip"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -68,13 +69,17 @@ func PerformDownloadRelease(ctx *Context, opts DownloadReleaseOptions) error {
 	}
 
 	// Check if release directory exists
-	if _, err := os.Stat(releaseDir); err == nil && !opts.Force {
-		return fmt.Errorf("release directory already exists at %s (use -f to force)", releaseDir)
+	if _, err := os.Lstat(releaseDir); err == nil {
+		if !opts.Force {
+			return fmt.Errorf("release directory already exists at %s (use -f to force)", releaseDir)
+		}
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("failed to inspect release directory: %w", err)
 	}
 
-	// Create release directory
-	if err := os.MkdirAll(releaseDir, 0755); err != nil {
-		return fmt.Errorf("failed to create release directory: %w", err)
+	releaseParent := filepath.Dir(filepath.Clean(releaseDir))
+	if err := os.MkdirAll(releaseParent, 0755); err != nil {
+		return fmt.Errorf("failed to create release parent directory: %w", err)
 	}
 
 	ctx.Log.Info("downloading release", "branch", opts.Branch, "arch", arch, "url", baseURL)
@@ -90,14 +95,12 @@ func PerformDownloadRelease(ctx *Context, opts DownloadReleaseOptions) error {
 	ctx.Log.Info("downloading checksum", "url", shaURL)
 	shaPath := filepath.Join(tempDir, "release.tar.gz.sha256")
 	if err := downloadFile(shaPath, shaURL); err != nil {
-		os.RemoveAll(releaseDir)
 		return fmt.Errorf("failed to download checksum from %s: %w", shaURL, err)
 	}
 
 	// Read expected checksum
 	shaData, err := os.ReadFile(shaPath)
 	if err != nil {
-		os.RemoveAll(releaseDir)
 		return fmt.Errorf("failed to read checksum file: %w", err)
 	}
 	expectedSum := strings.TrimSpace(strings.Split(string(shaData), " ")[0])
@@ -107,7 +110,6 @@ func PerformDownloadRelease(ctx *Context, opts DownloadReleaseOptions) error {
 	tarPath := filepath.Join(tempDir, "release.tar.gz")
 	fmt.Printf("Downloading from %s\n", baseURL)
 	if err := downloadFile(tarPath, baseURL); err != nil {
-		os.RemoveAll(releaseDir)
 		return fmt.Errorf("failed to download release: %w", err)
 	}
 
@@ -115,32 +117,94 @@ func PerformDownloadRelease(ctx *Context, opts DownloadReleaseOptions) error {
 	ctx.Log.Info("verifying checksum")
 	actualSum, err := calculateSHA256(tarPath)
 	if err != nil {
-		os.RemoveAll(releaseDir)
 		return fmt.Errorf("failed to calculate checksum: %w", err)
 	}
 
 	if actualSum != expectedSum {
-		os.RemoveAll(releaseDir)
 		return fmt.Errorf("checksum mismatch: expected %s, got %s", expectedSum, actualSum)
 	}
 
-	// Extract tarball
-	ctx.Log.Info("extracting release", "destination", releaseDir)
-	if err := extractTarGz(tarPath, releaseDir); err != nil {
-		os.RemoveAll(releaseDir)
+	stagingDir, err := os.MkdirTemp(releaseParent, "."+filepath.Base(releaseDir)+"-staging-*")
+	if err != nil {
+		return fmt.Errorf("failed to create release staging directory: %w", err)
+	}
+	defer os.RemoveAll(stagingDir)
+	if err := os.Chmod(stagingDir, 0755); err != nil {
+		return fmt.Errorf("failed to set release staging permissions: %w", err)
+	}
+
+	ctx.Log.Info("extracting release", "destination", stagingDir)
+	if err := extractTarGz(tarPath, stagingDir); err != nil {
 		return fmt.Errorf("failed to extract release: %w", err)
 	}
 
-	cmd := exec.Command(filepath.Join(releaseDir, "miren"), "version")
-	out, err := cmd.Output()
+	versionCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	out, err := releaseBinaryVersion(versionCtx, stagingDir)
+	cancel()
 	if err != nil {
-		return fmt.Errorf("failed to run release binary: %w", err)
+		return err
+	}
+
+	backupDir, err := promoteReleaseDir(stagingDir, releaseDir, opts.Force)
+	if err != nil {
+		if backupDir != "" {
+			return fmt.Errorf("failed to install release; previous release preserved at %s: %w", backupDir, err)
+		}
+		return fmt.Errorf("failed to install release: %w", err)
+	}
+	if backupDir != "" {
+		if err := os.RemoveAll(backupDir); err != nil {
+			ctx.Log.Warn("failed to remove previous release backup", "path", backupDir, "error", err)
+		}
 	}
 
 	ctx.Log.Info("release binary version", "version", strings.TrimSpace(string(out)))
 
 	ctx.Log.Info("release downloaded successfully", "path", releaseDir)
 	return nil
+}
+
+func releaseBinaryVersion(ctx context.Context, releaseDir string) ([]byte, error) {
+	cmd := exec.CommandContext(ctx, filepath.Join(releaseDir, "miren"), "version")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, fmt.Errorf("failed to run release binary: %w (output: %s)", ctxErr, strings.TrimSpace(string(out)))
+		}
+		return nil, fmt.Errorf("failed to run release binary: %w (output: %s)", err, strings.TrimSpace(string(out)))
+	}
+	return out, nil
+}
+
+func promoteReleaseDir(stagingDir, releaseDir string, replaceExisting bool) (string, error) {
+	if _, err := os.Lstat(releaseDir); os.IsNotExist(err) {
+		return "", os.Rename(stagingDir, releaseDir)
+	} else if err != nil {
+		return "", err
+	}
+	if !replaceExisting {
+		return "", fmt.Errorf("release directory already exists at %s", releaseDir)
+	}
+
+	backupDir, err := os.MkdirTemp(filepath.Dir(filepath.Clean(releaseDir)), "."+filepath.Base(releaseDir)+"-previous-*")
+	if err != nil {
+		return "", err
+	}
+	if err := os.Remove(backupDir); err != nil {
+		return "", err
+	}
+
+	if err := os.Rename(releaseDir, backupDir); err != nil {
+		return "", err
+	}
+	if err := os.Rename(stagingDir, releaseDir); err != nil {
+		if rollbackErr := os.Rename(backupDir, releaseDir); rollbackErr != nil {
+			return backupDir, fmt.Errorf("promoting staged release: %v (rollback failed: %w)", err, rollbackErr)
+		}
+		return "", fmt.Errorf("promoting staged release: %w", err)
+	}
+
+	return backupDir, nil
 }
 
 // DownloadRelease is the CLI command handler for downloading a release
