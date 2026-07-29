@@ -108,6 +108,7 @@ Each token is a JWT carrying the standard registered claims plus a few Miren-spe
 | `cluster_id` | The cluster that issued the token |
 | `app` | The application name |
 | `sandbox_id` | The sandbox instance |
+| `identity_type` | The kind of principal the token represents (always `sandbox` for the tokens your app receives) |
 
 The `sub` (subject) encodes the workload's identity as a path-like string, omitting any empty parts:
 
@@ -129,9 +130,17 @@ A decoded token payload looks like:
   "organization_id": "org-demo-xyz",
   "cluster_id": "cluster-aabbcc",
   "app": "demo",
-  "sandbox_id": "sandbox/demo-web-xxyyzz"
+  "sandbox_id": "sandbox/demo-web-xxyyzz",
+  "identity_type": "sandbox"
 }
 ```
+
+:::note[System workload tokens]
+Tokens issued to your sandboxes always carry `identity_type: "sandbox"`. Miren
+issues tokens to its own system workloads as well, with a different value and a
+different subject shape, but those are never handed to an app and aren't
+something you request.
+:::
 
 External systems use these claims to decide what a token is allowed to do — for example, an AWS role trust policy can require a specific `sub` or `aud` before handing back credentials.
 

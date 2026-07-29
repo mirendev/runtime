@@ -102,6 +102,22 @@ func (c *CompositeAuthorizer) Authorize(ctx context.Context, identity *rpc.Ident
 		// OIDC callers are restricted to the oidc-deploy role
 		return authorizeOIDC(resource, action)
 
+	case rpc.AuthMethodSystem:
+		// System workload identities exist to reach specific cluster-internal
+		// services (the registry, telemetry), each of which verifies the token
+		// itself against its own audience. They carry no RPC privileges at all:
+		// falling through to the default would hand blanket access to any
+		// caller holding one, which is the opposite of why the identity is
+		// scoped.
+		//
+		// Deny-by-default is a starting point, not the intended end state.
+		// System workload tokens carry a real subject
+		// (org:X:cluster:Y:system:name), so once authorization is driven by
+		// policy rather than by the identity method, a workload that needs a
+		// particular method should be granted it by rule like any other
+		// subject, and this arm should go away rather than grow a list.
+		return fmt.Errorf("access denied: system workload identities may not call RPC methods")
+
 	case rpc.AuthMethodJWT, rpc.AuthMethodAnonymous, rpc.AuthMethodToken:
 		// Delegate to primary (cloud RBAC).
 		fallthrough

@@ -75,17 +75,44 @@ type Issuer struct {
 type TokenIssuer interface {
 	IssueToken(app, sandboxID string) (string, error)
 	IssueTokenWithOptions(app, sandboxID string, opts TokenOptions) (string, error)
+	IssueSystemWorkloadToken(workload SystemWorkload, opts TokenOptions) (string, error)
 	IssuerURL() string
 }
 
 var _ TokenIssuer = (*Issuer)(nil)
+
+// IdentityType names the kind of principal a token represents.
+//
+// The value travels as its own claim rather than being inferred from the
+// subject: buildSubject interpolates a user-controlled app name, so
+// prefix-matching a subject string is a forgery vector. Tokens issued before
+// this claim existed carry no identity_type, which reads as "not a system
+// workload" and so fails closed for system-only resources.
+//
+// It is a defined type so that switches over it are exhaustiveness-checked,
+// the way rpc.AuthMethod already is. Note that this buys nothing at the trust
+// boundary itself: a token arriving from a caller decodes into whatever string
+// it contained, so verification still has to compare the value rather than
+// assume it is one of the constants below.
+type IdentityType string
+
+const (
+	IdentityTypeSandbox IdentityType = "sandbox"
+	IdentityTypeSystem  IdentityType = "system"
+)
 
 type WorkloadClaims struct {
 	jwt.RegisteredClaims
 	OrganizationID string `json:"organization_id,omitempty"`
 	ClusterID      string `json:"cluster_id,omitempty"`
 	App            string `json:"app,omitempty"`
-	SandboxID      string `json:"sandbox_id"`
+	// SandboxID deliberately keeps its unconditional encoding: it predates
+	// system workload tokens and external verifiers may already federate on its
+	// presence. System workload tokens therefore carry an empty sandbox_id
+	// rather than omitting it.
+	SandboxID      string         `json:"sandbox_id"`
+	IdentityType   IdentityType   `json:"identity_type,omitempty"`
+	SystemWorkload SystemWorkload `json:"system_workload,omitempty"`
 }
 
 func NewIssuer(cfg IssuerConfig) (*Issuer, error) {
@@ -191,6 +218,12 @@ const (
 	DefaultTTL = 1 * time.Hour
 	MaxTTL     = 24 * time.Hour
 	MinTTL     = 60 * time.Second
+
+	// DefaultAudience is the audience stamped on a token whose caller did not
+	// ask for a specific one. Callers guarding a particular service should
+	// always request their own audience and verify it, so that a token minted
+	// for one service cannot be replayed against another.
+	DefaultAudience = "miren"
 )
 
 type TokenOptions struct {
@@ -203,11 +236,23 @@ func (iss *Issuer) IssueToken(app, sandboxID string) (string, error) {
 }
 
 func (iss *Issuer) IssueTokenWithOptions(app, sandboxID string, opts TokenOptions) (string, error) {
+	claims := iss.baseClaims(buildSubject(iss.organizationID, app, sandboxID), opts)
+	claims.App = app
+	claims.SandboxID = sandboxID
+	claims.IdentityType = IdentityTypeSandbox
+
+	return iss.sign(claims)
+}
+
+// baseClaims fills in everything common to every token the cluster issues:
+// registered claims, the cluster metadata external verifiers federate on, and
+// the normalized audience and lifetime.
+func (iss *Issuer) baseClaims(subject string, opts TokenOptions) WorkloadClaims {
 	now := time.Now()
 
 	aud := opts.Audience
 	if len(aud) == 0 {
-		aud = []string{"miren"}
+		aud = []string{DefaultAudience}
 	}
 
 	ttl := opts.TTL
@@ -221,12 +266,10 @@ func (iss *Issuer) IssueTokenWithOptions(app, sandboxID string, opts TokenOption
 		ttl = MinTTL
 	}
 
-	sub := buildSubject(iss.organizationID, app, sandboxID)
-
-	claims := WorkloadClaims{
+	return WorkloadClaims{
 		RegisteredClaims: jwt.RegisteredClaims{
 			Issuer:    iss.issuerURL,
-			Subject:   sub,
+			Subject:   subject,
 			Audience:  jwt.ClaimStrings(aud),
 			IssuedAt:  jwt.NewNumericDate(now),
 			NotBefore: jwt.NewNumericDate(now),
@@ -235,10 +278,12 @@ func (iss *Issuer) IssueTokenWithOptions(app, sandboxID string, opts TokenOption
 		},
 		OrganizationID: iss.organizationID,
 		ClusterID:      iss.clusterID,
-		App:            app,
-		SandboxID:      sandboxID,
 	}
+}
 
+// sign signs claims with the primary key, stamping its kid so verifiers can
+// select the right key during rotation.
+func (iss *Issuer) sign(claims WorkloadClaims) (string, error) {
 	token := jwt.NewWithClaims(iss.primary.method, claims)
 	token.Header["kid"] = iss.primary.kid
 

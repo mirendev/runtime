@@ -16,6 +16,7 @@ import (
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/testutils"
 	"miren.dev/runtime/pkg/rpc"
+	"miren.dev/runtime/pkg/workloadidentity"
 )
 
 type testEnv struct {
@@ -990,4 +991,112 @@ func containsStr(ss []string, want string) bool {
 		}
 	}
 	return false
+}
+
+// TestAuthorizeSystemWorkloadRequest covers the authorization guarding system
+// workload identity minting. The caller must be a runner that is still
+// registered, and it may only ask for a workload it actually runs.
+func TestAuthorizeSystemWorkloadRequest(t *testing.T) {
+	ctx := context.Background()
+	env, cleanup := newTestServer(t)
+	defer cleanup()
+
+	secret := env.createInviteAndDecode(t, ctx)
+	joinResult, err := env.client.Join(ctx, secret, "", "10.0.0.1:8443", "test-version", nil, "test-runner")
+	if err != nil {
+		t.Fatalf("Join RPC failed: %v", err)
+	}
+	if joinResult.HasError() {
+		t.Fatalf("Join returned error: %s", joinResult.Error())
+	}
+	runnerID := joinResult.RunnerId()
+
+	certIdentity := func(cn string) *rpc.Identity {
+		return &rpc.Identity{Subject: cn, Method: rpc.AuthMethodCert}
+	}
+
+	tests := []struct {
+		name     string
+		identity *rpc.Identity
+		workload workloadidentity.SystemWorkload
+		wantErr  bool
+	}{
+		{
+			name:     "registered runner requesting an allowed system workload",
+			identity: certIdentity(runnerCertName(runnerID)),
+			workload: workloadidentity.SystemWorkloadSandboxController,
+		},
+		{
+			name:     "unknown system workload",
+			identity: certIdentity(runnerCertName(runnerID)),
+			workload: workloadidentity.SystemWorkload("notathing"),
+			wantErr:  true,
+		},
+		{
+			// caauth has no revocation, so a removed runner keeps a valid
+			// certificate. The registration check is what cuts its access.
+			name:     "certificate for a runner that is not registered",
+			identity: certIdentity(runnerCertName("00000000-0000-0000-0000-000000000000")),
+			workload: workloadidentity.SystemWorkloadSandboxController,
+			wantErr:  true,
+		},
+		{
+			name:     "certificate that is not a runner certificate",
+			identity: certIdentity("miren-server"),
+			workload: workloadidentity.SystemWorkloadSandboxController,
+			wantErr:  true,
+		},
+		{
+			name:     "non-certificate authentication",
+			identity: &rpc.Identity{Subject: "user@example.com", Method: rpc.AuthMethodJWT},
+			workload: workloadidentity.SystemWorkloadSandboxController,
+			wantErr:  true,
+		},
+		{
+			name:     "no caller identity",
+			identity: nil,
+			workload: workloadidentity.SystemWorkloadSandboxController,
+			wantErr:  true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			callCtx := ctx
+			if tt.identity != nil {
+				callCtx = rpc.ContextWithIdentity(ctx, tt.identity)
+			}
+
+			err := env.server.authorizeSystemWorkloadRequest(callCtx, tt.workload)
+			if tt.wantErr && err == nil {
+				t.Errorf("expected authorization to fail, got nil")
+			}
+			if !tt.wantErr && err != nil {
+				t.Errorf("expected authorization to succeed, got %v", err)
+			}
+		})
+	}
+}
+
+// TestAuthorizeSystemWorkloadRequestAnonymousKeepsAllowlist pins the shape of the
+// no-authentication path. Issuance is allowed because there is no identity to
+// check against (NoAuth is test-only), but the allowlist still applies, so even
+// an unauthenticated coordinator cannot mint an arbitrary system identity.
+func TestAuthorizeSystemWorkloadRequestAnonymousKeepsAllowlist(t *testing.T) {
+	ctx := context.Background()
+	env, cleanup := newTestServer(t)
+	defer cleanup()
+
+	anon := rpc.ContextWithIdentity(ctx, &rpc.Identity{
+		Subject: "anonymous",
+		Method:  rpc.AuthMethodAnonymous,
+	})
+
+	if err := env.server.authorizeSystemWorkloadRequest(anon, workloadidentity.SystemWorkloadSandboxController); err != nil {
+		t.Errorf("expected allowlisted system workload to be permitted, got %v", err)
+	}
+
+	if err := env.server.authorizeSystemWorkloadRequest(anon, workloadidentity.SystemWorkload("coordinator")); err == nil {
+		t.Error("expected a system workload off the allowlist to be refused")
+	}
 }

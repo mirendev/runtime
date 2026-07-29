@@ -1029,6 +1029,111 @@ func (s *RegistrationServer) IssueWorkloadToken(ctx context.Context, req *runner
 	return nil
 }
 
+// runnerSystemWorkloads are the identities a distributed runner is allowed to
+// request. A runner cannot mint an identity for a workload it does not run,
+// notably one belonging only to the coordinator, whose identity opens strictly
+// more than a runner's does.
+//
+// Adding an entry is the intended way to onboard a new runner-side workload.
+var runnerSystemWorkloads = []workloadidentity.SystemWorkload{
+	// The sandbox controller pulls images from the cluster-local registry.
+	workloadidentity.SystemWorkloadSandboxController,
+
+	// The telemetry writers ship metrics and logs off the runner. Metrics and
+	// logs share one identity deliberately: both writers are constructed by the
+	// same process from the same certificate at the same moment, so splitting
+	// them would add an allowlist entry without adding a boundary.
+	workloadidentity.SystemWorkloadTelemetryWriter,
+}
+
+// IssueSystemWorkloadToken mints a system workload identity token on behalf of a
+// distributed runner, which does not hold the cluster signing key. The caller is
+// an mTLS-authenticated runner, and the workload it may request is
+// constrained by runnerSystemWorkloads.
+func (s *RegistrationServer) IssueSystemWorkloadToken(ctx context.Context, req *runner_v1alpha.RunnerRegistrationIssueSystemWorkloadToken) error {
+	args := req.Args()
+	results := req.Results()
+
+	if s.WorkloadIssuer == nil {
+		results.SetError("workload identity issuer is not configured")
+		return nil
+	}
+
+	if !args.HasSystemWorkload() || args.SystemWorkload() == "" {
+		results.SetError("system workload is required")
+		return nil
+	}
+	workload, err := workloadidentity.ParseSystemWorkload(args.SystemWorkload())
+	if err != nil {
+		s.Log.Warn("system workload token request denied", "system_workload", args.SystemWorkload(), "error", err)
+		results.SetError("not authorized to issue a token for this system workload")
+		return nil
+	}
+
+	if err := s.authorizeSystemWorkloadRequest(ctx, workload); err != nil {
+		s.Log.Warn("system workload token request denied", "system_workload", workload, "error", err)
+		results.SetError("not authorized to issue a token for this system workload")
+		return nil
+	}
+
+	// The audience names the service this workload intends to call, so it is
+	// caller-selected rather than coupled to the workload here. The receiving
+	// service verifies both the audience and expected workload before granting
+	// access.
+	opts := workloadidentity.TokenOptions{}
+	if args.HasAudience() {
+		opts.Audience = args.Audience()
+	}
+	if args.HasTtlSeconds() && args.TtlSeconds() > 0 {
+		opts.TTL = time.Duration(args.TtlSeconds()) * time.Second
+	}
+
+	token, err := s.WorkloadIssuer.IssueSystemWorkloadToken(workload, opts)
+	if err != nil {
+		s.Log.Error("failed to issue system workload identity token",
+			"system_workload", workload, "error", err)
+		results.SetError("failed to issue token")
+		return nil
+	}
+
+	results.SetToken(token)
+	return nil
+}
+
+// authorizeSystemWorkloadRequest verifies that the named workload is available
+// on runners and that the caller presents a certificate for a runner that is
+// still registered. The registration check bounds a decommissioned runner's
+// access, since caauth has no revocation and its certificate stays valid until
+// it expires.
+func (s *RegistrationServer) authorizeSystemWorkloadRequest(ctx context.Context, workload workloadidentity.SystemWorkload) error {
+	if !slices.Contains(runnerSystemWorkloads, workload) {
+		return fmt.Errorf("system workload %q is not one a runner may request", workload)
+	}
+
+	identity, err := requireRunnerCertIdentity(ctx)
+	if err != nil {
+		return err
+	}
+	if identity == nil {
+		return nil
+	}
+
+	runnerID, ok := strings.CutPrefix(identity.Subject, "runner-")
+	if !ok || runnerID == "" {
+		return fmt.Errorf("caller %q is not a runner certificate", identity.Subject)
+	}
+
+	registered, err := s.runnerIDRegistered(ctx, runnerID)
+	if err != nil {
+		return fmt.Errorf("verifying registration of runner %s: %w", runnerID, err)
+	}
+	if !registered {
+		return fmt.Errorf("runner %s is not registered", runnerID)
+	}
+
+	return nil
+}
+
 // runnerCertName is the client-certificate CommonName issued to a runner during
 // Join. It embeds the full runner ID so the coordinator can attribute an mTLS
 // connection back to a specific runner and authorize per-runner actions.
@@ -1048,17 +1153,12 @@ func runnerCertName(runnerID string) string {
 // runnerCertName. When authentication is disabled (anonymous), there is nothing
 // to verify against and the check is skipped.
 func (s *RegistrationServer) authorizeSandboxOwnership(ctx context.Context, sandboxID string) error {
-	identity := rpc.IdentityFromContext(ctx)
+	identity, err := requireRunnerCertIdentity(ctx)
+	if err != nil {
+		return err
+	}
 	if identity == nil {
-		return fmt.Errorf("no caller identity")
-	}
-	if identity.Method == rpc.AuthMethodAnonymous {
-		// Authentication is disabled on this coordinator; ownership cannot be
-		// established, so don't block issuance.
 		return nil
-	}
-	if identity.Method != rpc.AuthMethodCert {
-		return fmt.Errorf("caller must authenticate with a runner certificate, got %q", identity.Method)
 	}
 
 	sbResp, err := s.EAC.Get(ctx, sandboxID)
@@ -1089,6 +1189,25 @@ func (s *RegistrationServer) authorizeSandboxOwnership(ctx context.Context, sand
 	}
 
 	return nil
+}
+
+// requireRunnerCertIdentity validates the common authentication boundary for
+// runner token issuance. An anonymous identity means authentication is disabled
+// on this coordinator, so there is no certificate identity to authorize against.
+// NoAuth is only used by in-process test helpers and is not configurable in a
+// real deployment.
+func requireRunnerCertIdentity(ctx context.Context) (*rpc.Identity, error) {
+	identity := rpc.IdentityFromContext(ctx)
+	if identity == nil {
+		return nil, fmt.Errorf("no caller identity")
+	}
+	if identity.Method == rpc.AuthMethodAnonymous {
+		return nil, nil
+	}
+	if identity.Method != rpc.AuthMethodCert {
+		return nil, fmt.Errorf("caller must authenticate with a runner certificate, got %q", identity.Method)
+	}
+	return identity, nil
 }
 
 // resolveSandboxApp derives the application name for a sandbox from the entity

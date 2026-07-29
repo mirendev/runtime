@@ -1448,6 +1448,100 @@ func (v *RunnerRegistrationDrainRunnerResults) UnmarshalJSON(data []byte) error 
 	return json.Unmarshal(data, &v.data)
 }
 
+type runnerRegistrationIssueSystemWorkloadTokenArgsData struct {
+	SystemWorkload *string   `cbor:"0,keyasint,omitempty" json:"system_workload,omitempty"`
+	Audience       *[]string `cbor:"1,keyasint,omitempty" json:"audience,omitempty"`
+	TtlSeconds     *int64    `cbor:"2,keyasint,omitempty" json:"ttl_seconds,omitempty"`
+}
+
+type RunnerRegistrationIssueSystemWorkloadTokenArgs struct {
+	call rpc.Call
+	data runnerRegistrationIssueSystemWorkloadTokenArgsData
+}
+
+func (v *RunnerRegistrationIssueSystemWorkloadTokenArgs) HasSystemWorkload() bool {
+	return v.data.SystemWorkload != nil
+}
+
+func (v *RunnerRegistrationIssueSystemWorkloadTokenArgs) SystemWorkload() string {
+	if v.data.SystemWorkload == nil {
+		return ""
+	}
+	return *v.data.SystemWorkload
+}
+
+func (v *RunnerRegistrationIssueSystemWorkloadTokenArgs) HasAudience() bool {
+	return v.data.Audience != nil
+}
+
+func (v *RunnerRegistrationIssueSystemWorkloadTokenArgs) Audience() []string {
+	if v.data.Audience == nil {
+		return nil
+	}
+	return *v.data.Audience
+}
+
+func (v *RunnerRegistrationIssueSystemWorkloadTokenArgs) HasTtlSeconds() bool {
+	return v.data.TtlSeconds != nil
+}
+
+func (v *RunnerRegistrationIssueSystemWorkloadTokenArgs) TtlSeconds() int64 {
+	if v.data.TtlSeconds == nil {
+		return 0
+	}
+	return *v.data.TtlSeconds
+}
+
+func (v *RunnerRegistrationIssueSystemWorkloadTokenArgs) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *RunnerRegistrationIssueSystemWorkloadTokenArgs) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *RunnerRegistrationIssueSystemWorkloadTokenArgs) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *RunnerRegistrationIssueSystemWorkloadTokenArgs) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type runnerRegistrationIssueSystemWorkloadTokenResultsData struct {
+	Token *string `cbor:"0,keyasint,omitempty" json:"token,omitempty"`
+	Error *string `cbor:"1,keyasint,omitempty" json:"error,omitempty"`
+}
+
+type RunnerRegistrationIssueSystemWorkloadTokenResults struct {
+	call rpc.Call
+	data runnerRegistrationIssueSystemWorkloadTokenResultsData
+}
+
+func (v *RunnerRegistrationIssueSystemWorkloadTokenResults) SetToken(token string) {
+	v.data.Token = &token
+}
+
+func (v *RunnerRegistrationIssueSystemWorkloadTokenResults) SetError(error string) {
+	v.data.Error = &error
+}
+
+func (v *RunnerRegistrationIssueSystemWorkloadTokenResults) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *RunnerRegistrationIssueSystemWorkloadTokenResults) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *RunnerRegistrationIssueSystemWorkloadTokenResults) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *RunnerRegistrationIssueSystemWorkloadTokenResults) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
 type RunnerRegistrationCreateInvite struct {
 	rpc.Call
 	args    RunnerRegistrationCreateInviteArgs
@@ -1760,6 +1854,32 @@ func (t *RunnerRegistrationDrainRunner) Results() *RunnerRegistrationDrainRunner
 	return results
 }
 
+type RunnerRegistrationIssueSystemWorkloadToken struct {
+	rpc.Call
+	args    RunnerRegistrationIssueSystemWorkloadTokenArgs
+	results RunnerRegistrationIssueSystemWorkloadTokenResults
+}
+
+func (t *RunnerRegistrationIssueSystemWorkloadToken) Args() *RunnerRegistrationIssueSystemWorkloadTokenArgs {
+	args := &t.args
+	if args.call != nil {
+		return args
+	}
+	args.call = t.Call
+	t.Call.Args(args)
+	return args
+}
+
+func (t *RunnerRegistrationIssueSystemWorkloadToken) Results() *RunnerRegistrationIssueSystemWorkloadTokenResults {
+	results := &t.results
+	if results.call != nil {
+		return results
+	}
+	results.call = t.Call
+	t.Call.Results(results)
+	return results
+}
+
 type RunnerRegistration interface {
 	CreateInvite(ctx context.Context, state *RunnerRegistrationCreateInvite) error
 	Join(ctx context.Context, state *RunnerRegistrationJoin) error
@@ -1773,6 +1893,7 @@ type RunnerRegistration interface {
 	CordonRunner(ctx context.Context, state *RunnerRegistrationCordonRunner) error
 	UncordonRunner(ctx context.Context, state *RunnerRegistrationUncordonRunner) error
 	DrainRunner(ctx context.Context, state *RunnerRegistrationDrainRunner) error
+	IssueSystemWorkloadToken(ctx context.Context, state *RunnerRegistrationIssueSystemWorkloadToken) error
 }
 
 type reexportRunnerRegistration struct {
@@ -1824,6 +1945,10 @@ func (reexportRunnerRegistration) UncordonRunner(ctx context.Context, state *Run
 }
 
 func (reexportRunnerRegistration) DrainRunner(ctx context.Context, state *RunnerRegistrationDrainRunner) error {
+	panic("not implemented")
+}
+
+func (reexportRunnerRegistration) IssueSystemWorkloadToken(ctx context.Context, state *RunnerRegistrationIssueSystemWorkloadToken) error {
 	panic("not implemented")
 }
 
@@ -1951,6 +2076,16 @@ func AdaptRunnerRegistration(t RunnerRegistration) *rpc.Interface {
 			Params:        []string{"query", "reason", "timeout_seconds"},
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.DrainRunner(ctx, &RunnerRegistrationDrainRunner{Call: call})
+			},
+		},
+		{
+			Name:          "IssueSystemWorkloadToken",
+			InterfaceName: "RunnerRegistration",
+			Index:         12,
+			Public:        false,
+			Params:        []string{"system_workload", "audience", "ttl_seconds"},
+			Handler: func(ctx context.Context, call rpc.Call) error {
+				return t.IssueSystemWorkloadToken(ctx, &RunnerRegistrationIssueSystemWorkloadToken{Call: call})
 			},
 		},
 	}
@@ -2649,4 +2784,48 @@ func (v RunnerRegistrationClient) DrainRunner(ctx context.Context, query string,
 	}
 
 	return &RunnerRegistrationClientDrainRunnerResults{client: v.Client, data: ret}, nil
+}
+
+type RunnerRegistrationClientIssueSystemWorkloadTokenResults struct {
+	client rpc.Client
+	data   runnerRegistrationIssueSystemWorkloadTokenResultsData
+}
+
+func (v *RunnerRegistrationClientIssueSystemWorkloadTokenResults) HasToken() bool {
+	return v.data.Token != nil
+}
+
+func (v *RunnerRegistrationClientIssueSystemWorkloadTokenResults) Token() string {
+	if v.data.Token == nil {
+		return ""
+	}
+	return *v.data.Token
+}
+
+func (v *RunnerRegistrationClientIssueSystemWorkloadTokenResults) HasError() bool {
+	return v.data.Error != nil
+}
+
+func (v *RunnerRegistrationClientIssueSystemWorkloadTokenResults) Error() string {
+	if v.data.Error == nil {
+		return ""
+	}
+	return *v.data.Error
+}
+
+func (v RunnerRegistrationClient) IssueSystemWorkloadToken(ctx context.Context, system_workload string, audience []string, ttl_seconds int64) (*RunnerRegistrationClientIssueSystemWorkloadTokenResults, error) {
+	args := RunnerRegistrationIssueSystemWorkloadTokenArgs{}
+	args.data.SystemWorkload = &system_workload
+	x := slices.Clone(audience)
+	args.data.Audience = &x
+	args.data.TtlSeconds = &ttl_seconds
+
+	var ret runnerRegistrationIssueSystemWorkloadTokenResultsData
+
+	err := v.Call(ctx, "IssueSystemWorkloadToken", &args, &ret)
+	if err != nil {
+		return nil, err
+	}
+
+	return &RunnerRegistrationClientIssueSystemWorkloadTokenResults{client: v.Client, data: ret}, nil
 }

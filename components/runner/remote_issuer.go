@@ -67,3 +67,24 @@ func (r *remoteIssuer) IssueTokenWithOptions(_, sandboxID string, opts workloadi
 	}
 	return res.Token(), nil
 }
+
+// IssueSystemWorkloadToken mints an identity for a system workload running on
+// this runner. The coordinator constrains which workloads a runner may ask for.
+func (r *remoteIssuer) IssueSystemWorkloadToken(workload workloadidentity.SystemWorkload, opts workloadidentity.TokenOptions) (string, error) {
+	ctx, cancel := context.WithTimeout(r.ctx, remoteTokenTimeout)
+	defer cancel()
+
+	var ttlSeconds int64
+	if opts.TTL > 0 {
+		ttlSeconds = int64(opts.TTL / time.Second)
+	}
+
+	res, err := r.client.IssueSystemWorkloadToken(ctx, string(workload), opts.Audience, ttlSeconds)
+	if err != nil {
+		return "", fmt.Errorf("requesting system workload token from coordinator: %w", err)
+	}
+	if res.Error() != "" {
+		return "", fmt.Errorf("coordinator refused system workload token: %s", res.Error())
+	}
+	return res.Token(), nil
+}
