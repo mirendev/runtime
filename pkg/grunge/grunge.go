@@ -26,37 +26,13 @@ import (
 	"go4.org/netipx"
 	"golang.org/x/sync/errgroup"
 
-	_ "github.com/flannel-io/flannel/pkg/backend/alloc"
-	_ "github.com/flannel-io/flannel/pkg/backend/extension"
-	_ "github.com/flannel-io/flannel/pkg/backend/hostgw"
-	_ "github.com/flannel-io/flannel/pkg/backend/ipip"
-	_ "github.com/flannel-io/flannel/pkg/backend/ipsec"
-	_ "github.com/flannel-io/flannel/pkg/backend/udp"
-	_ "github.com/flannel-io/flannel/pkg/backend/vxlan"
 	_ "github.com/flannel-io/flannel/pkg/backend/wireguard"
 )
 
-// errNoBackend is returned rather than silently falling back to a default.
-// The backend decides whether sandbox traffic between hosts is encrypted, so
-// guessing here can hand an operator plaintext VXLAN on a cluster whose config
-// asked for WireGuard, with nothing in the logs to say so. Runners carry the
-// backend in the config written at join time; one that predates the field has
-// to re-join to pick it up.
-var errNoBackend = fmt.Errorf(
-	"no network backend configured: set server.network_backend on the coordinator, " +
-		"and re-join any runner whose config predates the setting")
-
-// staleBackendDevices lists, per backend, the interfaces left behind by the
-// other backends we support. Switching backends does not remove the previous
-// backend's device, and its per-lease routes (one /24 per peer) are more
-// specific than the new backend's route for the whole /16, so the kernel keeps
-// steering remote sandbox traffic into the old device. Leftover VXLAN is the
-// dangerous direction: the node reports WireGuard, logs that it is ignoring
-// non-WireGuard leases, and still ships that peer's traffic in the clear.
-var staleBackendDevices = map[string][]string{
-	"vxlan":     {"flannel-wg", "flannel-wg-v6"},
-	"wireguard": {"flannel.1"},
-}
+const (
+	networkBackend   = "wireguard"
+	staleVXLANDevice = "flannel.1"
+)
 
 type Network struct {
 	NetworkOptions
@@ -71,7 +47,6 @@ type NetworkOptions struct {
 	EtcdEndpoints []string
 	EtcdPrefix    string
 	Interface     string
-	BackendType   string
 
 	PrevIPv4 netip.Prefix
 	PrevIPv6 netip.Prefix
@@ -133,14 +108,10 @@ func buildTLSConfigFromFiles(certFile, keyFile, caFile string) (*tls.Config, err
 }
 
 func (n *Network) SetupConfig(ctx context.Context, v4, v6 netip.Prefix) error {
-	if n.BackendType == "" {
-		return errNoBackend
-	}
-
 	var backend struct {
 		Type string
 	}
-	backend.Type = n.BackendType
+	backend.Type = networkBackend
 
 	var config subnet.Config
 	config.EnableIPv4 = true
@@ -205,23 +176,8 @@ func (n *Network) Lease() *Lease {
 	return &Lease{n.lease}
 }
 
-// removeStaleBackendDevices deletes interfaces belonging to a backend other
-// than the one about to register. Deleting a link takes its routes with it.
-// A device we cannot remove is fatal rather than logged: continuing would mean
-// running as if encrypted while a stale VXLAN path is still winning the route
-// lookup, which is precisely the failure this is here to prevent.
-func (n *Network) removeStaleBackendDevices(backendType string) error {
-	for _, name := range staleBackendDevices[backendType] {
-		if err := n.removeDeviceIfPresent(name, backendType); err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
 // removeDeviceIfPresent deletes one interface, treating absence as success.
-func (n *Network) removeDeviceIfPresent(name, backendType string) error {
+func (n *Network) removeDeviceIfPresent(name string) error {
 	link, err := netlink.LinkByName(name)
 	if err != nil {
 		// Absent is the expected case and the whole point. Any other lookup
@@ -240,7 +196,7 @@ func (n *Network) removeDeviceIfPresent(name, backendType string) error {
 	}
 
 	n.log.Info("removed stale network device from a previous backend",
-		"device", name, "backend", backendType)
+		"device", name, "backend", networkBackend)
 
 	return nil
 }
@@ -293,18 +249,15 @@ func (n *Network) Start(ctx context.Context, eg *errgroup.Group) error {
 
 	bm := backend.NewManager(ctx, sm, extIface)
 
-	if n.BackendType == "" {
-		return errNoBackend
-	}
-	backendType := n.BackendType
-
-	if err := n.removeStaleBackendDevices(backendType); err != nil {
+	// Deleting the old link takes its routes with it. Failure is fatal:
+	// otherwise a stale plaintext route could keep winning after the upgrade.
+	if err := n.removeDeviceIfPresent(staleVXLANDevice); err != nil {
 		return err
 	}
 
-	be, err := bm.GetBackend(backendType)
+	be, err := bm.GetBackend(networkBackend)
 	if err != nil {
-		n.log.Error("Failed to get backend", "backend", backendType, "error", err)
+		n.log.Error("Failed to get backend", "backend", networkBackend, "error", err)
 		return err
 	}
 

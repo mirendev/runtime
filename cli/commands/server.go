@@ -731,7 +731,6 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 		Address:                   srvaddr,
 		EtcdEndpoints:             cfg.Etcd.Endpoints,
 		Prefix:                    cfg.Etcd.GetPrefix(),
-		NetworkBackend:            cfg.Server.GetNetworkBackend(),
 		DataPath:                  cfg.Server.GetDataPath(),
 		AdditionalNames:           cfg.TLS.AdditionalNames,
 		IPs:                       ipSet,
@@ -795,7 +794,6 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 	grungeOpts := grunge.NetworkOptions{
 		EtcdEndpoints: cfg.Etcd.Endpoints,
 		EtcdPrefix:    cfg.Etcd.GetPrefix() + "/sub/flannel",
-		BackendType:   cfg.Server.GetNetworkBackend(),
 		PrevIPv4:      prevSubnet,
 	}
 

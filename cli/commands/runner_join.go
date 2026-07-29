@@ -122,7 +122,6 @@ func performRunnerJoin(ctx *Context, opts runnerJoinOpts) error {
 		Labels:                 labels,
 		EtcdEndpoints:          etcdEndpoints,
 		EtcdPrefix:             res.EtcdPrefix(),
-		NetworkBackend:         res.NetworkBackend(),
 		VictoriametricsAddress: vmAddress,
 		VictorialogsAddress:    vlAddress,
 	}

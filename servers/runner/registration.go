@@ -32,6 +32,7 @@ const (
 	MaxInviteExpiryHours     = 168 // 7 days
 
 	enrollmentCountRetries = 3
+	networkBackend         = "wireguard"
 )
 
 type RegistrationServerConfig struct {
@@ -41,7 +42,6 @@ type RegistrationServerConfig struct {
 	CoordinatorAddr string
 	EtcdEndpoints   []string
 	EtcdPrefix      string
-	NetworkBackend  string
 
 	// Observability endpoints provided to runners at join time
 	VictoriametricsAddress string
@@ -361,9 +361,9 @@ func (s *RegistrationServer) Join(ctx context.Context, req *runner_v1alpha.Runne
 	if s.EtcdPrefix != "" {
 		results.SetEtcdPrefix(s.EtcdPrefix + "/sub/flannel")
 	}
-	if s.NetworkBackend != "" {
-		results.SetNetworkBackend(s.NetworkBackend)
-	}
+	// Keep sending this field for older runner binaries, which persist the
+	// backend selected by the coordinator at join time.
+	results.SetNetworkBackend(networkBackend)
 	if s.VictoriametricsAddress != "" {
 		results.SetVictoriametricsAddress(s.VictoriametricsAddress)
 	}

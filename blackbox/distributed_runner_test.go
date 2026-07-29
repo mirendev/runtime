@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -367,8 +368,8 @@ func stopCapture(t *testing.T, m *harness.Miren, peer, pidFile string) {
 // would all produce a clean underlay capture and a passing test.
 //
 // RFD-51 chose WireGuard precisely so that app-to-database traffic crossing
-// between hosts is not visible to anyone on the network. This test fails if a
-// cluster is running the plaintext VXLAN backend instead.
+// between hosts is not visible to anyone on the network. This also catches a
+// stale VXLAN route that survived an upgrade and kept carrying traffic.
 func TestDistributedOverlayEncryption(t *testing.T) {
 	c := harness.NewCluster(t)
 	skipIfNotDistributed(t, c)
@@ -390,29 +391,40 @@ func TestDistributedOverlayEncryption(t *testing.T) {
 	}
 	// Distinctive and unlikely to collide with anything else on the wire, so a
 	// hit in either capture is unambiguously our probe.
-	marker := "MIRENOVERLAYPROBE" + hex.EncodeToString(nonce[:])
+	suffix := hex.EncodeToString(nonce[:])
+	marker := "MIRENOVERLAYPROBE" + suffix
+
+	// These live on the peers rather than the machine running the test, so
+	// t.TempDir cannot isolate them. Give every run its own names instead:
+	// two test processes may legitimately share a persistent dev cluster.
+	probeInput := fmt.Sprintf("/tmp/overlay-probe-%s-in.txt", suffix)
+	probePID := fmt.Sprintf("/tmp/overlay-probe-%s.pid", suffix)
+	underlayCapture := fmt.Sprintf("/tmp/overlay-cap-underlay-%s.txt", suffix)
+	underlayPID := fmt.Sprintf("/tmp/overlay-cap-underlay-%s.pid", suffix)
+	overlayCapture := fmt.Sprintf("/tmp/overlay-cap-overlay-%s.txt", suffix)
+	overlayPID := fmt.Sprintf("/tmp/overlay-cap-overlay-%s.pid", suffix)
 
 	runnerUnderlay := peerIP(t, m, "runner1", "hostname -I | awk '{print $1}'")
 	runnerOverlay := peerIP(t, m, "runner1", "ip -4 -o addr show flannel-wg | awk '{print $4}' | cut -d/ -f1")
 	t.Logf("runner underlay=%s overlay=%s", runnerUnderlay, runnerOverlay)
 
 	listener := fmt.Sprintf(
-		"nohup nc -l -p %s >/tmp/overlay-probe-in.txt 2>&1 </dev/null & echo $! >/tmp/overlay-probe.pid; disown",
-		probePort)
+		"nohup nc -l -p %s >%s 2>&1 </dev/null & echo $! >%s; disown",
+		probePort, probeInput, probePID)
 	if r := m.PeerExec("runner1", "bash", "-c", listener); !r.Success() {
 		t.Fatalf("failed to start probe listener on runner1: %s", strings.TrimSpace(r.Stderr))
 	}
 	t.Cleanup(func() {
 		m.PeerExec("runner1", "bash", "-c",
-			"kill $(cat /tmp/overlay-probe.pid) 2>/dev/null; rm -f /tmp/overlay-probe.pid /tmp/overlay-probe-in.txt")
+			fmt.Sprintf("kill $(cat %s) 2>/dev/null; rm -f %s %s", probePID, probePID, probeInput))
 	})
 
 	// Scope the underlay capture to the runner's real address so unrelated
 	// chatter on the peers network cannot muddy the result.
 	startCapture(t, m, "coordinator", "eth0", "host "+runnerUnderlay,
-		"/tmp/overlay-cap-underlay.txt", "/tmp/overlay-cap-underlay.pid")
+		underlayCapture, underlayPID)
 	startCapture(t, m, "coordinator", "flannel-wg", "",
-		"/tmp/overlay-cap-overlay.txt", "/tmp/overlay-cap-overlay.pid")
+		overlayCapture, overlayPID)
 
 	send := fmt.Sprintf("echo %s | nc -w 5 %s %s", marker, runnerOverlay, probePort)
 	if r := m.PeerExec("coordinator", "bash", "-c", send); !r.Success() {
@@ -421,7 +433,7 @@ func TestDistributedOverlayEncryption(t *testing.T) {
 
 	harness.Poll(t, "probe arrives on runner1", 30*time.Second, time.Second,
 		func() (bool, string) {
-			r := m.PeerExec("runner1", "grep", "-q", marker, "/tmp/overlay-probe-in.txt")
+			r := m.PeerExec("runner1", "grep", "-q", marker, probeInput)
 			if !r.Success() {
 				return false, "runner has not received the probe yet"
 			}
@@ -429,23 +441,32 @@ func TestDistributedOverlayEncryption(t *testing.T) {
 		},
 	)
 
-	stopCapture(t, m, "coordinator", "/tmp/overlay-cap-overlay.pid")
-	stopCapture(t, m, "coordinator", "/tmp/overlay-cap-underlay.pid")
+	stopCapture(t, m, "coordinator", overlayPID)
+	stopCapture(t, m, "coordinator", underlayPID)
 
 	// The control: the same marker must be readable where it is supposed to be
 	// readable. If this fails the probe never traversed the overlay, and the
 	// underlay assertion below would pass for the wrong reason.
-	if r := m.PeerExec("coordinator", "grep", "-q", marker, "/tmp/overlay-cap-overlay.txt"); !r.Success() {
+	if r := m.PeerExec("coordinator", "grep", "-q", marker, overlayCapture); !r.Success() {
 		t.Fatalf("marker %q never appeared on the overlay device, so this test cannot tell whether the underlay is encrypted", marker)
 	}
 
-	// A capture that saw nothing at all would also report zero matches.
-	size := m.PeerExec("coordinator", "bash", "-c", "wc -c < /tmp/overlay-cap-underlay.txt")
-	if strings.TrimSpace(size.Stdout) == "0" {
-		t.Fatal("underlay capture is empty, so the absence of the marker proves nothing")
+	// A capture that saw no packets would also report zero marker matches. Read
+	// tcpdump's final count rather than the file size, since the listening
+	// banner makes even an empty capture file nonempty.
+	count := m.PeerExec("coordinator", "awk",
+		`/^[0-9]+ packets? captured$/ { captured=$1 } END { if (captured != "") print captured }`,
+		underlayCapture)
+	captured, err := strconv.Atoi(strings.TrimSpace(count.Stdout))
+	if !count.Success() || err != nil {
+		t.Fatalf("could not read tcpdump packet count from underlay capture: stdout=%q stderr=%q",
+			strings.TrimSpace(count.Stdout), strings.TrimSpace(count.Stderr))
+	}
+	if captured == 0 {
+		t.Fatal("underlay capture saw no packets, so the absence of the marker proves nothing")
 	}
 
-	if r := m.PeerExec("coordinator", "grep", "-q", marker, "/tmp/overlay-cap-underlay.txt"); r.Success() {
+	if r := m.PeerExec("coordinator", "grep", "-q", marker, underlayCapture); r.Success() {
 		t.Fatalf("overlay traffic is readable on the underlay: found marker %q in the eth0 capture", marker)
 	}
 }

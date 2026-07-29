@@ -171,17 +171,6 @@ configs:
         env: MIREN_SERVER_STOP_SANDBOXES_ON_SHUTDOWN
         toml: stop_sandboxes_on_shutdown
 
-      network_backend:
-        type: string
-        default: vxlan
-        cli:
-          long: network-backend
-          description: "Network backend for sandbox connectivity: vxlan (default) or wireguard"
-        env: MIREN_SERVER_NETWORK_BACKEND
-        toml: network_backend
-        validation:
-          enum: [vxlan, wireguard]
-
       disk_mode:
         type: string
         default: ""

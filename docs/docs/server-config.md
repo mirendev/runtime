@@ -36,7 +36,6 @@ mode = "standalone"
 [server]
 address = ":8443"
 data_path = "/var/lib/miren"
-network_backend = "vxlan"
 http_request_timeout = 60
 
 [ingress]
@@ -84,8 +83,6 @@ In standalone mode, embedded services start automatically unless explicitly disa
 | `skip_client_config` | bool | `false` | Skip writing client config to `clientconfig.d` | `MIREN_SERVER_SKIP_CLIENT_CONFIG` | `--skip-client-config` |
 | `http_request_timeout` | int | `60` | HTTP request timeout in seconds (minimum: 1) | `MIREN_SERVER_HTTP_REQUEST_TIMEOUT` | `--http-request-timeout` |
 | `stop_sandboxes_on_shutdown` | bool | `false` | Stop all sandboxes when server shuts down (useful in development) | `MIREN_SERVER_STOP_SANDBOXES_ON_SHUTDOWN` | `--stop-sandboxes-on-shutdown` |
-| `network_backend` | string | `vxlan` | Network backend: `vxlan` or `wireguard` | `MIREN_SERVER_NETWORK_BACKEND` | `--network-backend` |
-
 ## `[ingress]` — Ingress Settings {#ingress}
 
 Selects the deployment shape for Miren's HTTP/HTTPS ingress. The mode determines where Miren listens and whether it terminates TLS. See [TLS](/tls) for cert sourcing under each mode.

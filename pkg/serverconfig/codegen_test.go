@@ -15,7 +15,6 @@ func TestGeneratedCode(t *testing.T) {
 	if cfg.Mode == nil || *cfg.Mode != "standalone" {
 		t.Errorf("expected default mode to be 'standalone', got %v", cfg.Mode)
 	}
-
 	// Test validation
 	if err := cfg.Validate(); err != nil {
 		t.Errorf("default config should be valid, got error: %v", err)

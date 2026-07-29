@@ -44,7 +44,6 @@ miren server [flags]
 - `--ips` — Additional IPs assigned to the server cert
 - `--labs` — Comma-separated list of Miren Labs features to enable/disable. Prefix with - to disable.
 - `--mode, -m` — Server mode: standalone (default), distributed (experimental)
-- `--network-backend` — Network backend for sandbox connectivity: vxlan (default) or wireguard
 - `--release-path` — Path to release directory containing binaries
 - `--runner-address` — Runner address (host:port). For IPv6 use brackets, e.g. "[::1]:8444".
 - `--runner-id, -r` — Runner ID

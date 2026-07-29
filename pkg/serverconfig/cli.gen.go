@@ -32,7 +32,6 @@ type CLIFlags struct {
 	ServerConfigDataPath                 *string  `long:"data-path" short:"d" description:"Data path" env:"MIREN_SERVER_DATA_PATH"`
 	ServerConfigDiskMode                 *string  `long:"disk-mode" description:"Disk I/O mode: auto (default, detect from hardware), universal (loop devices), or accelerator (lbd devices)" env:"MIREN_DISK_MODE"`
 	ServerConfigHTTPRequestTimeout       *int     `long:"http-request-timeout" description:"HTTP request timeout in seconds" env:"MIREN_SERVER_HTTP_REQUEST_TIMEOUT"`
-	ServerConfigNetworkBackend           *string  `long:"network-backend" description:"Network backend for sandbox connectivity: vxlan (default) or wireguard" env:"MIREN_SERVER_NETWORK_BACKEND"`
 	ServerConfigReleasePath              *string  `long:"release-path" description:"Path to release directory containing binaries" env:"MIREN_SERVER_RELEASE_PATH"`
 	ServerConfigRunnerAddress            *string  `long:"runner-address" description:"Runner address (host:port). For IPv6 use brackets, e.g. \"[::1]:8444\"." env:"MIREN_SERVER_RUNNER_ADDRESS"`
 	ServerConfigRunnerID                 *string  `long:"runner-id" short:"r" description:"Runner ID" env:"MIREN_SERVER_RUNNER_ID"`

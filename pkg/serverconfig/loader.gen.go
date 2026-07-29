@@ -258,10 +258,6 @@ func applyCLIFlags(cfg *Config, flags *CLIFlags) {
 		cfg.Server.HTTPRequestTimeout = flags.ServerConfigHTTPRequestTimeout
 	}
 
-	if flags.ServerConfigNetworkBackend != nil && *flags.ServerConfigNetworkBackend != "" {
-		cfg.Server.NetworkBackend = flags.ServerConfigNetworkBackend
-	}
-
 	if flags.ServerConfigReleasePath != nil && *flags.ServerConfigReleasePath != "" {
 		cfg.Server.ReleasePath = flags.ServerConfigReleasePath
 	}
