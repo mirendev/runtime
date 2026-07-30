@@ -102,9 +102,8 @@ type RunnerDeps struct {
 
 	// Flannel network configuration (for distributed runners)
 	// If EtcdEndpoints is non-empty, the runner will join the Flannel network
-	EtcdEndpoints  []string
-	EtcdPrefix     string
-	NetworkBackend string
+	EtcdEndpoints []string
+	EtcdPrefix    string
 
 	// TLS configuration for etcd mTLS (for distributed runners, file paths)
 	EtcdTLSCertFile string // Client certificate file path
@@ -450,13 +449,11 @@ func queryWorkloadIssuerInfo(ctx context.Context, regClient *runner_v1alpha.Runn
 func (r *Runner) initializeNetwork(ctx context.Context, eg ...*errgroup.Group) error {
 	r.Log.Info("Initializing distributed runner network",
 		"etcd_endpoints", r.deps.EtcdEndpoints,
-		"etcd_prefix", r.deps.EtcdPrefix,
-		"backend", r.deps.NetworkBackend)
+		"etcd_prefix", r.deps.EtcdPrefix)
 
 	grungeOpts := grunge.NetworkOptions{
 		EtcdEndpoints: r.deps.EtcdEndpoints,
 		EtcdPrefix:    r.deps.EtcdPrefix,
-		BackendType:   r.deps.NetworkBackend,
 		PrevIPv4:      r.deps.IPv4Routable,
 	}
 

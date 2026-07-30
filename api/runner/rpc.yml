@@ -91,7 +91,7 @@ interfaces:
             doc: etcd prefix for Flannel network
           - name: network_backend
             type: string
-            doc: Network backend type (vxlan or wireguard)
+            doc: Network backend type, retained for compatibility with older runners
           - name: victoriametrics_address
             type: string
             doc: Address of the VictoriaMetrics instance for metrics ingestion

@@ -97,7 +97,6 @@ type CoordinatorConfig struct {
 	Address         string              `json:"address" yaml:"address"`
 	EtcdEndpoints   []string            `json:"etcd_endpoints" yaml:"etcd_endpoints"`
 	Prefix          string              `json:"prefix" yaml:"prefix"`
-	NetworkBackend  string              `json:"network_backend" yaml:"network_backend"`
 	Resolver        netresolve.Resolver `json:"resolver" yaml:"resolver"`
 	TempDir         string              `json:"temp_dir" yaml:"temp_dir"`
 	DataPath        string              `json:"data_path" yaml:"data_path"`
@@ -1309,7 +1308,6 @@ func (c *Coordinator) Start(ctx context.Context) error {
 		CoordinatorAddr:        c.Address,
 		EtcdEndpoints:          c.EtcdEndpoints,
 		EtcdPrefix:             c.Prefix,
-		NetworkBackend:         c.NetworkBackend,
 		VictoriametricsAddress: c.VictoriametricsAddress,
 		VictorialogsAddress:    c.VictorialogsAddress,
 		WorkloadIssuer:         c.WorkloadIssuer,

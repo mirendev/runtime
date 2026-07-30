@@ -45,8 +45,7 @@ func RunnerStart(ctx *Context, opts struct {
 	ctx.Log.Info("starting distributed runner",
 		"runner_id", cfg.RunnerID,
 		"coordinator", cfg.CoordinatorAddress,
-		"etcd_endpoints", cfg.EtcdEndpoints,
-		"network_backend", cfg.NetworkBackend)
+		"etcd_endpoints", cfg.EtcdEndpoints)
 
 	// Determine listen address. If no explicit address is given, discover the
 	// machine's outbound IP (the one that would route to the coordinator) and
@@ -222,9 +221,8 @@ func RunnerStart(ctx *Context, opts struct {
 		},
 
 		// Flannel network configuration
-		EtcdEndpoints:  cfg.EtcdEndpoints,
-		EtcdPrefix:     cfg.EtcdPrefix,
-		NetworkBackend: cfg.NetworkBackend,
+		EtcdEndpoints: cfg.EtcdEndpoints,
+		EtcdPrefix:    cfg.EtcdPrefix,
 	}
 
 	// Write etcd TLS certs to disk for flannel (which requires file paths)

@@ -81,7 +81,6 @@ func DefaultServerConfig() ServerConfig {
 		DataPath:                strPtr("/var/lib/miren"),
 		DiskMode:                strPtr(""),
 		HTTPRequestTimeout:      intPtr(60),
-		NetworkBackend:          strPtr("vxlan"),
 		ReleasePath:             strPtr(""),
 		RunnerAddress:           strPtr("localhost:8444"),
 		RunnerID:                strPtr("miren"),

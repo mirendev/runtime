@@ -22,7 +22,7 @@ A **runner** is any other machine that has joined the cluster with `miren runner
 
 ### Networking
 
-Sandboxes across every node share a single flat overlay network. A sandbox on one runner can reach a sandbox on another by IP as if they were on the same host, so your services keep talking to each other the same way they did on a single machine. Miren handles the overlay for you; there's nothing to configure per node.
+Sandboxes across every node share a single flat overlay network. A sandbox on one runner can reach a sandbox on another by IP as if they were on the same host, so your services keep talking to each other the same way they did on a single machine. Miren handles the addressing, routes, and WireGuard peers, but your firewall must allow `51820/udp` between every pair of nodes.
 
 :::info[Overlay address ranges]
 Sandbox IPs are allocated from `10.8.0.0/16`, with each node leasing its own `/24` out of that range. Internal service addresses use `10.10.0.0/16`. Keep these ranges clear of your host and datacenter networks to avoid routing conflicts.
@@ -78,25 +78,22 @@ talks to the coordinator's etcd, metrics, and log endpoints directly, so if
 there's a firewall between your machines it needs to allow rather more than
 8443. These are the defaults:
 
-| Port | Protocol | What it carries | Authentication |
-|------|----------|-----------------|----------------|
-| 8443 | TCP | Coordinator API, including join | Join token while enrolling, mTLS after |
+| Port | Protocol | What it carries | Protection |
+|------|----------|-----------------|------------|
+| 8443 | TCP | Coordinator API, including join | Join token while enrolling, mTLS afterward |
 | 12379 | TCP | etcd, for Flannel subnet coordination | mTLS |
 | 8428 | TCP | VictoriaMetrics, for metrics the runner reports | none |
 | 9428 | TCP | VictoriaLogs, for logs the runner ships | none |
-| 8472 | UDP | Flannel overlay, with the default `vxlan` backend | none |
+| 51820 | UDP | WireGuard overlay | WireGuard encryption |
 
 :::warning[Observability ports are unauthenticated]
-VictoriaMetrics and VictoriaLogs have no authentication of their own, and
-neither does the default VXLAN overlay. Keep them on a private network between
-your nodes rather than exposing them broadly.
+VictoriaMetrics and VictoriaLogs have no authentication of their own. Keep
+them on a private network between your nodes rather than exposing them broadly.
 :::
 
-The overlay carries sandbox traffic in the clear today, so treat the network
-between your nodes as part of your trust boundary. Its port also needs to be
-open between runners, not just from each runner to the coordinator, since
-sandboxes on different machines send traffic to each other node-to-node. The
-coordinator's ports are configurable; see the
+The overlay port needs to be open between runners, not just from each runner
+to the coordinator, since sandboxes on different machines send traffic to each
+other node-to-node. The coordinator's ports are configurable; see the
 [server configuration reference](/server-config).
 
 ### 3. Start the runner

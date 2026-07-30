@@ -203,6 +203,10 @@ func TestJoinCreatesNodeEntity(t *testing.T) {
 		t.Errorf("Join returned coordinator addr %q, want %q", joinResult.CoordinatorAddr(), "127.0.0.1:8443")
 	}
 
+	if joinResult.NetworkBackend() != "wireguard" {
+		t.Errorf("Join returned network backend %q, want wireguard", joinResult.NetworkBackend())
+	}
+
 	// Verify the issued certificate includes proper IP SANs
 	block, _ := pem.Decode(joinResult.CertPem())
 	if block == nil {

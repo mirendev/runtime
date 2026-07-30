@@ -183,17 +183,6 @@ func (c *ServerConfig) Validate() error {
 		return fmt.Errorf("http_request_timeout must be at least 1, got %d", *c.HTTPRequestTimeout)
 	}
 
-	// Validate network_backend enum
-	if c.NetworkBackend != nil {
-		validNetworkBackend := map[string]bool{
-			"vxlan":     true,
-			"wireguard": true,
-		}
-		if !validNetworkBackend[*c.NetworkBackend] {
-			return fmt.Errorf("invalid network_backend %q: must be one of [vxlan wireguard]", *c.NetworkBackend)
-		}
-	}
-
 	// Validate runner_address
 	if c.RunnerAddress != nil && *c.RunnerAddress != "" {
 		if _, _, err := net.SplitHostPort(*c.RunnerAddress); err != nil {
