@@ -571,3 +571,57 @@ func TestNewIssuer_FailsOnBrokenPrev(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "previous signing key")
 }
+
+// A cluster with no hostname to advertise still gets a working issuer. This is
+// the --without-cloud install with no --dns-names: it has no way to be
+// federated against from outside, but its own services still have to
+// authenticate to each other, and they verify in-process against these keys.
+func TestNewIssuer_AnchorsLocallyWithoutAHostname(t *testing.T) {
+	dir := t.TempDir()
+
+	iss, err := NewIssuer(IssuerConfig{
+		DataPath:  dir,
+		ClusterID: "cluster-456",
+	})
+	require.NoError(t, err)
+
+	assert.Equal(t, LocalIssuerURL, iss.IssuerURL())
+	assert.Equal(t, "cluster.local", iss.Hostname())
+}
+
+// The whole point of issuing on a hostname-less cluster is that the tokens are
+// usable, so mint and verify a real one end to end.
+func TestLocalAnchoredIssuerRoundTrips(t *testing.T) {
+	dir := t.TempDir()
+
+	iss, err := NewIssuer(IssuerConfig{
+		DataPath:  dir,
+		ClusterID: "cluster-456",
+	})
+	require.NoError(t, err)
+
+	token, err := iss.IssueSystemWorkloadToken(
+		SystemWorkloadTelemetryWriter,
+		TokenOptions{Audience: []string{"miren-telemetry"}},
+	)
+	require.NoError(t, err)
+
+	claims, err := iss.VerifySystemWorkloadToken(token, "miren-telemetry", SystemWorkloadTelemetryWriter)
+	require.NoError(t, err)
+	assert.Equal(t, LocalIssuerURL, claims.Issuer)
+	assert.Equal(t, IdentityTypeSystem, claims.IdentityType)
+	assert.Equal(t, "cluster:cluster-456:system:telemetrywriter", claims.Subject)
+}
+
+// An explicit hostname still wins; the local anchor is only a floor.
+func TestNewIssuer_PrefersAnExplicitHostname(t *testing.T) {
+	dir := t.TempDir()
+
+	iss, err := NewIssuer(IssuerConfig{
+		DataPath:  dir,
+		IssuerURL: "https://cluster-abc.miren.systems",
+	})
+	require.NoError(t, err)
+
+	assert.Equal(t, "https://cluster-abc.miren.systems", iss.IssuerURL())
+}
