@@ -386,6 +386,67 @@ func (cr *countingReader) Read(p []byte) (int, error) {
 	return n, err
 }
 
+// SafePath joins an untrusted archive path to root after verifying that the
+// result remains within root.
+func SafePath(root, name string) (string, error) {
+	if filepath.IsAbs(name) {
+		return "", fmt.Errorf("archive path is absolute: %q", name)
+	}
+
+	target := filepath.Join(root, filepath.FromSlash(name))
+	rel, err := filepath.Rel(root, target)
+	if err != nil {
+		return "", fmt.Errorf("resolving archive path %q: %w", name, err)
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
+		return "", fmt.Errorf("archive path escapes destination directory: %q", name)
+	}
+
+	return target, nil
+}
+
+// SafeWritePath validates an archive path and rejects existing symlinks in the
+// destination path so extraction cannot write through them.
+func SafeWritePath(root, name string) (string, error) {
+	rootInfo, err := os.Lstat(filepath.Clean(root))
+	if err != nil {
+		return "", fmt.Errorf("inspecting archive root: %w", err)
+	}
+	if rootInfo.Mode()&os.ModeSymlink != 0 {
+		return "", fmt.Errorf("archive root is a symlink: %q", root)
+	}
+
+	target, err := SafePath(root, name)
+	if err != nil {
+		return "", err
+	}
+
+	rel, err := filepath.Rel(root, target)
+	if err != nil {
+		return "", fmt.Errorf("resolving archive path %q: %w", name, err)
+	}
+
+	current := root
+	for _, part := range strings.Split(rel, string(filepath.Separator)) {
+		if part == "." || part == "" {
+			continue
+		}
+		current = filepath.Join(current, part)
+		info, err := os.Lstat(current)
+		if os.IsNotExist(err) {
+			break
+		}
+		if err != nil {
+			return "", fmt.Errorf("inspecting archive path %q: %w", name, err)
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return "", fmt.Errorf("archive path traverses symlink: %q", name)
+		}
+	}
+
+	return target, nil
+}
+
 func TarFS(r io.Reader, dir string) (fsutil.FS, error) {
 	gzr, err := gzip.NewReader(r)
 	if err != nil {
@@ -403,7 +464,10 @@ func TarFS(r io.Reader, dir string) (fsutil.FS, error) {
 			return nil, err
 		}
 
-		path := filepath.Join(dir, th.Name)
+		path, err := SafeWritePath(dir, th.Name)
+		if err != nil {
+			return nil, err
+		}
 		if th.Typeflag == tar.TypeDir {
 			if err := os.Mkdir(path, 0755); err != nil && !os.IsExist(err) {
 				return nil, err
