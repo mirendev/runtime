@@ -154,6 +154,14 @@ type stateOptions struct {
 	authenticator Authenticator
 	authorizer    Authorizer
 	bearerToken   string // JWT or other bearer token for authentication
+
+	httpHandlers []httpHandlerMount
+}
+
+// httpHandlerMount is an additional handler to mount alongside the RPC surface.
+type httpHandlerMount struct {
+	pattern string
+	handler http.Handler
 }
 
 type StateOption func(*stateOptions)
@@ -234,6 +242,26 @@ func WithAuthenticator(auth Authenticator) StateOption {
 func WithAuthorizer(authz Authorizer) StateOption {
 	return func(o *stateOptions) {
 		o.authorizer = authz
+	}
+}
+
+// WithHTTPHandler mounts an additional handler beside the RPC surface, so a
+// cluster-internal service can be reached over the listener that already
+// authenticates callers instead of opening a port of its own.
+//
+// Pattern uses http.ServeMux syntax. Registration happens before the listener
+// starts serving, so a mounted route is live for the first request.
+//
+// Two things about what a handler mounted here does and does not inherit.
+// It does inherit authentication: a non-RPC path is refused outright unless the
+// authenticator produced an identity, so an anonymous caller never reaches the
+// handler. It does not inherit authorization, because the authorizer runs only
+// on RPC method dispatch. A handler is responsible for deciding what its caller
+// may do, and should not read an identity off the context and assume the
+// answer, since a cluster certificate authenticates as a superuser.
+func WithHTTPHandler(pattern string, handler http.Handler) StateOption {
+	return func(o *stateOptions) {
+		o.httpHandlers = append(o.httpHandlers, httpHandlerMount{pattern: pattern, handler: handler})
 	}
 }
 
@@ -323,6 +351,11 @@ func NewState(ctx context.Context, opts ...StateOption) (*State, error) {
 		authenticator = &NoOpAuthenticator{}
 	}
 
+	server := newServer()
+	if err := server.mountHTTPHandlers(so.httpHandlers); err != nil {
+		return nil, err
+	}
+
 	s := &State{
 		StateCommon: &StateCommon{
 			top:           ctx,
@@ -337,7 +370,7 @@ func NewState(ctx context.Context, opts ...StateOption) (*State, error) {
 		},
 
 		defaultEndpoint: so.endpoint,
-		server:          newServer(),
+		server:          server,
 		transport:       &quic.Transport{Conn: udpConn},
 	}
 
