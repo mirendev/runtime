@@ -62,7 +62,7 @@ func (r *VictoriaMetricsReader) InstantQuery(ctx context.Context, query string, 
 		params.Set("time", strconv.FormatInt(ts.Unix(), 10))
 	}
 
-	queryURL := fmt.Sprintf("http://%s/api/v1/query?%s", r.Address, params.Encode())
+	queryURL := fmt.Sprintf("%s/api/v1/query?%s", normalizeBaseURL(r.Address), params.Encode())
 
 	req, err := http.NewRequestWithContext(ctx, "GET", queryURL, nil)
 	if err != nil {
@@ -103,7 +103,7 @@ func (r *VictoriaMetricsReader) RangeQuery(ctx context.Context, query string, st
 		params.Set("step", step)
 	}
 
-	queryURL := fmt.Sprintf("http://%s/api/v1/query_range?%s", r.Address, params.Encode())
+	queryURL := fmt.Sprintf("%s/api/v1/query_range?%s", normalizeBaseURL(r.Address), params.Encode())
 
 	req, err := http.NewRequestWithContext(ctx, "GET", queryURL, nil)
 	if err != nil {
