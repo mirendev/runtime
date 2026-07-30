@@ -58,18 +58,41 @@ type PersistentLogWriter struct {
 	client *http.Client
 }
 
+// LogWriterOption customizes a PersistentLogWriter at construction.
+type LogWriterOption func(*PersistentLogWriter)
+
+// WithHTTPClient replaces the writer's default HTTP client.
+//
+// Callers that cannot reach VictoriaLogs with a plain client supply their own.
+// A distributed runner ships logs through the coordinator rather than dialing
+// VictoriaLogs directly, which means an HTTP/3 transport carrying a credential.
+// Putting that in the client's RoundTripper keeps this writer unaware of how it
+// is authenticated. BatchLogWriter borrows this client, so wrapping a writer in
+// batching preserves the transport.
+func WithHTTPClient(client *http.Client) LogWriterOption {
+	return func(l *PersistentLogWriter) {
+		l.client = client
+	}
+}
+
 // NewPersistentLogWriter creates a new PersistentLogWriter.
-func NewPersistentLogWriter(address string, timeout time.Duration) *PersistentLogWriter {
+func NewPersistentLogWriter(address string, timeout time.Duration, opts ...LogWriterOption) *PersistentLogWriter {
 	if timeout == 0 {
 		timeout = 30 * time.Second
 	}
-	return &PersistentLogWriter{
+	l := &PersistentLogWriter{
 		Address: address,
 		Timeout: timeout,
 		client: &http.Client{
 			Timeout: timeout,
 		},
 	}
+
+	for _, opt := range opts {
+		opt(l)
+	}
+
+	return l
 }
 
 func (l *PersistentLogWriter) Client() *http.Client {

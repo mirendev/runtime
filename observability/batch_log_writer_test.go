@@ -276,3 +276,86 @@ func TestBatchLogWriter_CloseFlushesRemaining(t *testing.T) {
 		t.Fatalf("expected 3 entries flushed on close, got %d", total)
 	}
 }
+
+// recordingTransport captures the request it is handed and answers 200, so
+// transport wiring can be asserted without a live listener.
+type recordingTransport struct {
+	mu   sync.Mutex
+	reqs []*http.Request
+}
+
+func (t *recordingTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	t.mu.Lock()
+	t.reqs = append(t.reqs, r)
+	t.mu.Unlock()
+	return &http.Response{StatusCode: http.StatusOK, Body: http.NoBody, Request: r}, nil
+}
+
+func (t *recordingTransport) urls() []string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	var out []string
+	for _, r := range t.reqs {
+		out = append(out, r.URL.String())
+	}
+	return out
+}
+
+func TestPersistentLogWriter_WithHTTPClient(t *testing.T) {
+	rt := &recordingTransport{}
+	plw := NewPersistentLogWriter("https://coordinator.invalid:8443/_telemetry/logs", 5*time.Second,
+		WithHTTPClient(&http.Client{Transport: rt}))
+
+	err := plw.WriteEntry("test-entity", LogEntry{
+		Timestamp: time.Now(),
+		Stream:    Stdout,
+		Body:      "direct write",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	urls := rt.urls()
+	if len(urls) != 1 {
+		t.Fatalf("expected the supplied client to be used once, got %d requests", len(urls))
+	}
+	want := "https://coordinator.invalid:8443/_telemetry/logs/insert/jsonline"
+	if urls[0] != want {
+		t.Fatalf("got %q, want %q", urls[0], want)
+	}
+}
+
+// BatchLogWriter borrows the wrapped writer's client, so batching a writer must
+// not quietly drop back to a default transport (which for a runner shipping
+// through the coordinator would mean losing its credential).
+func TestBatchLogWriter_InheritsHTTPClient(t *testing.T) {
+	rt := &recordingTransport{}
+	plw := NewPersistentLogWriter("https://coordinator.invalid:8443/_telemetry/logs", 5*time.Second,
+		WithHTTPClient(&http.Client{Transport: rt}))
+	bw := NewBatchLogWriter(plw)
+	defer bw.Close()
+
+	if err := bw.WriteEntry("test-entity", LogEntry{
+		Timestamp: time.Now(),
+		Stream:    Stdout,
+		Body:      "batched write",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	deadline := time.After(2 * time.Second)
+	for {
+		if urls := rt.urls(); len(urls) > 0 {
+			want := "https://coordinator.invalid:8443/_telemetry/logs/insert/jsonline"
+			if urls[0] != want {
+				t.Fatalf("got %q, want %q", urls[0], want)
+			}
+			return
+		}
+		select {
+		case <-deadline:
+			t.Fatal("batch writer never flushed through the supplied client")
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+}
