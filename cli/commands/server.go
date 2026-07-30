@@ -528,7 +528,7 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 			SocketDir:      socketDir,
 			GCKeepStorage:  int64(gcStorage.Bytes()),
 			GCKeepDuration: int64(gcDuration.Seconds()),
-			RegistryHost:   "cluster.local:5000",
+			RegistryHost:   ocireg.Host,
 		}
 
 		err = buildkitComponent.Start(sub, buildkitConfig)
@@ -1013,7 +1013,7 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 		return fmt.Errorf("unrecognized ingress.mode %q (should have been caught by config validation)", mode)
 	}
 
-	registry := ocireg.NewRegistry(cfg.Server.GetDataPath(), ctx.Log, ec)
+	registry := ocireg.NewRegistry(cfg.Server.GetDataPath(), ctx.Log, ec, workloadIssuer)
 
 	if err := registry.Start(ctx, ":5000"); err != nil {
 		ctx.Log.Error("failed to start registry", "error", err)

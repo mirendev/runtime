@@ -1252,6 +1252,7 @@ func (c *Coordinator) Start(ctx context.Context) error {
 	appClient := appclient.NewClient(c.Log, loopback)
 
 	bs := build.NewBuilder(c.Log, eac, appClient, addonsClient, c.Resolver, c.TempDir, c.LogWriter, c.CloudAuth.DNSHostname, c.BuildKit, c.DataPath)
+	bs.WorkloadIssuer = c.WorkloadIssuer
 
 	var buildHandler build_v1alpha.Builder = bs
 	if labs.Sagas() {

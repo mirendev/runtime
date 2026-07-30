@@ -160,7 +160,7 @@ func (b *Builder) runBuildkitBuild(
 	}
 	b.Log.Debug("buildkitd info", "version", ci.BuildkitVersion.Version, "rev", ci.BuildkitVersion.Revision)
 
-	bk := &Buildkit{Client: bkc, Log: b.Log}
+	bk := &Buildkit{Client: bkc, Log: b.Log, WorkloadIssuer: b.WorkloadIssuer}
 
 	buildEnvVars := computeBuildEnvVars(in.ExistingConfig.Variables, in.AppConfig, in.CLIEnvVars)
 	if len(buildEnvVars) > 0 {

@@ -3,19 +3,25 @@ package build
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
 	"strings"
 	"sync"
 
+	"github.com/docker/cli/cli/config/configfile"
+	"github.com/docker/cli/cli/config/types"
 	"github.com/moby/buildkit/client"
 	"github.com/moby/buildkit/client/llb"
 	exptypes "github.com/moby/buildkit/exporter/containerimage/exptypes"
 	"github.com/moby/buildkit/frontend"
 	gateway "github.com/moby/buildkit/frontend/gateway/client"
+	"github.com/moby/buildkit/session/auth/authprovider"
+	"miren.dev/runtime/components/ocireg"
 	"miren.dev/runtime/pkg/idgen"
 	"miren.dev/runtime/pkg/stackbuild"
+	"miren.dev/runtime/pkg/workloadidentity"
 
 	"github.com/tonistiigi/fsutil"
 )
@@ -23,7 +29,8 @@ import (
 type Buildkit struct {
 	Client *client.Client
 
-	Log *slog.Logger
+	Log            *slog.Logger
+	WorkloadIssuer *workloadidentity.Issuer
 }
 
 type tarOutput struct {
@@ -126,16 +133,11 @@ func (b *Buildkit) Transform(ctx context.Context, dfs fsutil.FS, tos ...Transfor
 		"context":    dfs,
 	}
 
-	r, w, err := os.Pipe()
-	if err != nil {
-		return nil, nil, err
-	}
-
 	output := client.ExportEntry{
 		Type: "image",
 		Attrs: map[string]string{
 			"push": "true",
-			"name": "registry.cluster:5000/",
+			"name": ocireg.Host + "/",
 		},
 	}
 
@@ -147,6 +149,14 @@ func (b *Buildkit) Transform(ctx context.Context, dfs fsutil.FS, tos ...Transfor
 		Frontend:      "dockerfile.v0",
 		FrontendAttrs: opts.frontendAttrs,
 		Ref:           ref,
+	}
+	if err := b.addRegistryAuth(&solveOpt, ocireg.Host); err != nil {
+		return nil, nil, err
+	}
+
+	r, w, err := os.Pipe()
+	if err != nil {
+		return nil, nil, err
 	}
 
 	if opts.cacheDir != "" {
@@ -380,6 +390,10 @@ func (b *Buildkit) BuildImage(
 	}
 
 	solveOpt.Exports = []client.ExportEntry{output}
+	registryHost, _, _ := strings.Cut(imageURL, "/")
+	if err := b.addRegistryAuth(&solveOpt, registryHost); err != nil {
+		return nil, err
+	}
 
 	if opts.cacheDir != "" {
 		solveOpt.CacheImports = []client.CacheOptionsEntry{
@@ -528,4 +542,26 @@ func (b *Buildkit) BuildImage(
 	}
 
 	return &res, err
+}
+
+func (b *Buildkit) addRegistryAuth(solveOpt *client.SolveOpt, registryHost string) error {
+	if b.WorkloadIssuer == nil || registryHost != ocireg.Host {
+		return nil
+	}
+
+	token, err := b.WorkloadIssuer.IssueSystemWorkloadToken(
+		workloadidentity.SystemWorkloadBuildKit,
+		workloadidentity.TokenOptions{Audience: []string{ocireg.Audience}},
+	)
+	if err != nil {
+		return fmt.Errorf("issuing registry token: %w", err)
+	}
+
+	cfg := &configfile.ConfigFile{
+		AuthConfigs: map[string]types.AuthConfig{
+			registryHost: {RegistryToken: token},
+		},
+	}
+	solveOpt.Session = append(solveOpt.Session, authprovider.NewDockerAuthProvider(cfg, nil))
+	return nil
 }

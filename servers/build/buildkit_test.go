@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"log/slog"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -16,11 +17,17 @@ import (
 	"github.com/docker/docker/client"
 	"github.com/docker/go-connections/nat"
 	buildkit "github.com/moby/buildkit/client"
+	"github.com/moby/buildkit/session/auth"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tonistiigi/fsutil"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/test/bufconn"
 
+	"miren.dev/runtime/components/ocireg"
 	"miren.dev/runtime/pkg/imagerefs"
+	"miren.dev/runtime/pkg/workloadidentity"
 
 	_ "github.com/moby/buildkit/client/connhelper/dockercontainer"
 )
@@ -35,6 +42,72 @@ const (
 func checkDocker() bool {
 	_, err := os.Stat("/var/run/docker.sock")
 	return err == nil
+}
+
+func TestAddRegistryAuthProvidesBuildKitToken(t *testing.T) {
+	issuer, err := workloadidentity.NewIssuer(workloadidentity.IssuerConfig{
+		DataPath:  t.TempDir(),
+		IssuerURL: "https://cluster.example.com",
+	})
+	require.NoError(t, err)
+
+	bk := &Buildkit{WorkloadIssuer: issuer}
+	var solveOpt buildkit.SolveOpt
+	require.NoError(t, bk.addRegistryAuth(&solveOpt, "cluster.local:5000"))
+	require.Len(t, solveOpt.Session, 1)
+
+	listener := bufconn.Listen(1024 * 1024)
+	server := grpc.NewServer()
+	solveOpt.Session[0].Register(server)
+	go server.Serve(listener)
+	t.Cleanup(func() {
+		server.Stop()
+		listener.Close()
+	})
+
+	conn, err := grpc.NewClient(
+		"passthrough:///bufnet",
+		grpc.WithContextDialer(func(context.Context, string) (net.Conn, error) {
+			return listener.Dial()
+		}),
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() { conn.Close() })
+
+	response, err := auth.NewAuthClient(conn).FetchToken(context.Background(), &auth.FetchTokenRequest{
+		Host: "cluster.local:5000",
+	})
+	require.NoError(t, err)
+
+	_, err = issuer.VerifySystemWorkloadToken(
+		response.Token,
+		ocireg.Audience,
+		workloadidentity.SystemWorkloadBuildKit,
+	)
+	require.NoError(t, err)
+}
+
+func TestAddRegistryAuthWithoutIssuer(t *testing.T) {
+	bk := &Buildkit{}
+	var solveOpt buildkit.SolveOpt
+
+	require.NoError(t, bk.addRegistryAuth(&solveOpt, "cluster.local:5000"))
+	assert.Empty(t, solveOpt.Session)
+}
+
+func TestAddRegistryAuthIgnoresExternalRegistry(t *testing.T) {
+	issuer, err := workloadidentity.NewIssuer(workloadidentity.IssuerConfig{
+		DataPath:  t.TempDir(),
+		IssuerURL: "https://cluster.example.com",
+	})
+	require.NoError(t, err)
+
+	bk := &Buildkit{WorkloadIssuer: issuer}
+	var solveOpt buildkit.SolveOpt
+
+	require.NoError(t, bk.addRegistryAuth(&solveOpt, "registry.example.com"))
+	assert.Empty(t, solveOpt.Session)
 }
 
 type testInfra struct {

@@ -39,7 +39,7 @@ func newTestRegistry(t *testing.T) (*httptest.Server, string) {
 
 	handler := NewRegistryHandler(storageRoot, testutils.TestLogger(t), entServer.Client)
 
-	srv := httptest.NewServer(newMux(handler))
+	srv := httptest.NewServer(newMux(handler, nil))
 	t.Cleanup(srv.Close)
 
 	return srv, base

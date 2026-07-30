@@ -18,6 +18,12 @@ import (
 	"miren.dev/runtime/api/entityserver"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/idgen"
+	"miren.dev/runtime/pkg/workloadidentity"
+)
+
+const (
+	Host     = "cluster.local:5000"
+	Audience = "miren-registry"
 )
 
 // RegistryHandler processes all OCI registry requests
@@ -25,16 +31,18 @@ type Registry struct {
 	RootDir string
 	Log     *slog.Logger
 	EC      *entityserver.Client
+	Issuer  *workloadidentity.Issuer
 
 	server *http.Server
 }
 
 // NewRegistry creates a new Registry.
-func NewRegistry(rootDir string, log *slog.Logger, ec *entityserver.Client) *Registry {
+func NewRegistry(rootDir string, log *slog.Logger, ec *entityserver.Client, issuer *workloadidentity.Issuer) *Registry {
 	return &Registry{
 		RootDir: rootDir,
 		Log:     log,
 		EC:      ec,
+		Issuer:  issuer,
 	}
 }
 
@@ -51,7 +59,7 @@ func (r *Registry) Start(ctx context.Context, addr string) error {
 
 	r.server = &http.Server{
 		Addr:    addr,
-		Handler: newMux(NewRegistryHandler(path, r.Log, r.EC)),
+		Handler: newMux(NewRegistryHandler(path, r.Log, r.EC), r.Issuer),
 		BaseContext: func(net.Listener) context.Context {
 			return ctx
 		},
@@ -61,10 +69,10 @@ func (r *Registry) Start(ctx context.Context, addr string) error {
 }
 
 // newMux wires the registry handler up alongside the health check endpoint.
-func newMux(registry *RegistryHandler) *http.ServeMux {
+func newMux(registry *RegistryHandler, issuer *workloadidentity.Issuer) *http.ServeMux {
 	mux := http.NewServeMux()
 
-	mux.Handle("/v2/", registry)
+	mux.Handle("/v2/", authorizeRegistry(registry, issuer, registry.log))
 
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/" {
@@ -79,6 +87,59 @@ func newMux(registry *RegistryHandler) *http.ServeMux {
 	})
 
 	return mux
+}
+
+func authorizeRegistry(next http.Handler, issuer *workloadidentity.Issuer, log *slog.Logger) http.Handler {
+	if issuer == nil {
+		return next
+	}
+
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		scheme, token, ok := strings.Cut(r.Header.Get("Authorization"), " ")
+		if !ok || !strings.EqualFold(scheme, "Bearer") || token == "" {
+			registryUnauthorized(w, r)
+			return
+		}
+
+		claims, err := issuer.VerifyToken(token, Audience)
+		if err != nil {
+			log.Warn("rejected unauthenticated registry request", "error", err, "remote", r.RemoteAddr)
+			registryUnauthorized(w, r)
+			return
+		}
+
+		switch claims.SystemWorkload {
+		case workloadidentity.SystemWorkloadBuildKit:
+			if claims.IdentityType == workloadidentity.IdentityTypeSystem {
+				next.ServeHTTP(w, r)
+				return
+			}
+		case workloadidentity.SystemWorkloadSandboxController:
+			if claims.IdentityType == workloadidentity.IdentityTypeSystem &&
+				(r.Method == http.MethodGet || r.Method == http.MethodHead) {
+				next.ServeHTTP(w, r)
+				return
+			}
+		case workloadidentity.SystemWorkloadTelemetryWriter:
+		}
+
+		log.Warn("rejected unauthorized registry request",
+			"identity_type", claims.IdentityType,
+			"system_workload", claims.SystemWorkload,
+			"method", r.Method,
+			"remote", r.RemoteAddr)
+		w.WriteHeader(http.StatusForbidden)
+	})
+}
+
+func registryUnauthorized(w http.ResponseWriter, r *http.Request) {
+	scheme := "http"
+	if r.TLS != nil {
+		scheme = "https"
+	}
+	w.Header().Set("WWW-Authenticate",
+		fmt.Sprintf(`Bearer realm="%s://%s/v2/token",service="%s"`, scheme, r.Host, Audience))
+	w.WriteHeader(http.StatusUnauthorized)
 }
 
 func (r *Registry) Shutdown(ctx context.Context) error {

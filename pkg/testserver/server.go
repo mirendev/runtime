@@ -216,7 +216,7 @@ func TestServer(t *testing.T) error {
 	})
 
 	// Create OCI registry
-	ociRegistry := ocireg.NewRegistry(filepath.Join(tempDir, "oci"), log, ec)
+	ociRegistry := ocireg.NewRegistry(filepath.Join(tempDir, "oci"), log, ec, nil)
 
 	// Start the OCI Registry
 	err = ociRegistry.Start(ctx, ":5000")

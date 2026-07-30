@@ -67,7 +67,11 @@ func TestIssueSystemWorkloadToken_SubjectOmitsUnsetClusterMetadata(t *testing.T)
 }
 
 func TestParseSystemWorkload(t *testing.T) {
-	for _, workload := range []SystemWorkload{SystemWorkloadSandboxController, SystemWorkloadTelemetryWriter} {
+	for _, workload := range []SystemWorkload{
+		SystemWorkloadSandboxController,
+		SystemWorkloadTelemetryWriter,
+		SystemWorkloadBuildKit,
+	} {
 		parsed, err := ParseSystemWorkload(string(workload))
 		require.NoError(t, err)
 		assert.Equal(t, workload, parsed)

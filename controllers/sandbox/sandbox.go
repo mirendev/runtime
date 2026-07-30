@@ -45,6 +45,7 @@ import (
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/api/network/network_v1alpha"
 	storage "miren.dev/runtime/api/storage/storage_v1alpha"
+	"miren.dev/runtime/components/ocireg"
 )
 
 const (
@@ -1530,20 +1531,11 @@ func (c *SandboxController) resolver() remotes.Resolver {
 	return docker.NewResolver(docker.ResolverOptions{
 		Hosts: func(host string) ([]docker.RegistryHost, error) {
 			switch host {
-			case "cluster.local", "cluster.local:5000":
-				addr, err := c.Resolver.LookupHost("cluster.local")
+			case "cluster.local", ocireg.Host:
+				config, err := c.localRegistryHost()
 				if err != nil {
-					return nil, fmt.Errorf("failed to resolve cluster.local: %w", err)
+					return nil, err
 				}
-
-				config := docker.RegistryHost{
-					Client:       http.DefaultClient,
-					Host:         addr.String() + ":5000",
-					Scheme:       "http",
-					Path:         "/v2",
-					Capabilities: docker.HostCapabilityPull | docker.HostCapabilityResolve | docker.HostCapabilityPush,
-				}
-
 				return []docker.RegistryHost{config}, nil
 			default:
 				config := containerdx.DefaultRegistryHost(host)
@@ -1551,6 +1543,33 @@ func (c *SandboxController) resolver() remotes.Resolver {
 			}
 		},
 	})
+}
+
+func (c *SandboxController) localRegistryHost() (docker.RegistryHost, error) {
+	addr, err := c.Resolver.LookupHost("cluster.local")
+	if err != nil {
+		return docker.RegistryHost{}, fmt.Errorf("failed to resolve cluster.local: %w", err)
+	}
+
+	config := docker.RegistryHost{
+		Client:       http.DefaultClient,
+		Host:         addr.String() + ":5000",
+		Scheme:       "http",
+		Path:         "/v2",
+		Capabilities: docker.HostCapabilityPull | docker.HostCapabilityResolve,
+	}
+	if c.WorkloadIssuer != nil {
+		token, err := c.WorkloadIssuer.IssueSystemWorkloadToken(
+			workloadidentity.SystemWorkloadSandboxController,
+			workloadidentity.TokenOptions{Audience: []string{ocireg.Audience}},
+		)
+		if err != nil {
+			return docker.RegistryHost{}, fmt.Errorf("issuing registry token: %w", err)
+		}
+		config.Header = http.Header{"Authorization": []string{"Bearer " + token}}
+	}
+
+	return config, nil
 }
 
 func (c *SandboxController) BuildSpec(
