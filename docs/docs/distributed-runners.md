@@ -74,22 +74,20 @@ miren runner join mren_...
 Joining registers the machine as a runner, exchanges the token for a client certificate, and writes a config file to `/var/lib/miren/runner/config.yaml`. Each runner gets a stable identity; if you ever need to re-add a machine, remove the old entry first (see [caveats](#things-to-know) below). Reach for [`runner join`](/command/runner-join) for flags like `--name` and `--labels`.
 
 Joining is only the first connection a runner makes. Once it's running it also
-talks to the coordinator's etcd, metrics, and log endpoints directly, so if
-there's a firewall between your machines it needs to allow rather more than
-8443. These are the defaults:
+talks to the coordinator's etcd endpoint, so if there's a firewall between your
+machines it needs to allow rather more than 8443. These are the defaults:
 
 | Port | Protocol | What it carries | Protection |
 |------|----------|-----------------|------------|
-| 8443 | TCP | Coordinator API, including join | Join token while enrolling, mTLS afterward |
+| 8443 | TCP | Coordinator API, including join and the metrics and logs a runner ships | Join token while enrolling, mTLS afterward |
 | 12379 | TCP | etcd, for Flannel subnet coordination | mTLS |
-| 8428 | TCP | VictoriaMetrics, for metrics the runner reports | none |
-| 9428 | TCP | VictoriaLogs, for logs the runner ships | none |
 | 51820 | UDP | WireGuard overlay | WireGuard encryption |
 
-:::warning[Observability ports are unauthenticated]
-VictoriaMetrics and VictoriaLogs have no authentication of their own. Keep
-them on a private network between your nodes rather than exposing them broadly.
-:::
+Metrics and logs travel over 8443 alongside everything else a runner sends the
+coordinator. VictoriaMetrics and VictoriaLogs themselves stay bound to loopback
+on the coordinator and never need to be reachable from a runner, which is why
+they aren't in that table. A runner authenticates each batch with a short-lived
+identity token scoped to telemetry, on top of the certificate it got at join.
 
 The overlay port needs to be open between runners, not just from each runner
 to the coordinator, since sandboxes on different machines send traffic to each
