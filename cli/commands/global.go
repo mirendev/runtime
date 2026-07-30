@@ -49,6 +49,11 @@ type Context struct {
 	ClusterConfig *clientconfig.ClusterConfig
 	ClusterName   string
 
+	// CommandName is the full command path the user invoked, e.g. "route
+	// list". Error messages use it to describe failures in terms of what was
+	// typed rather than the internal capability name behind it.
+	CommandName string
+
 	Config struct {
 		ServerAddress string
 	}
@@ -65,12 +70,13 @@ func (c *Context) Verbose() bool {
 	return c.verbose > 0
 }
 
-func setup(ctx context.Context, flags *GlobalFlags, opts any) *Context {
+func setup(ctx context.Context, flags *GlobalFlags, opts any, commandName string) *Context {
 	s := &Context{
 		verbose:     len(flags.Verbose),
 		Stdout:      os.Stdout,
 		Stderr:      os.Stderr,
 		ServerState: NewServerState(),
+		CommandName: commandName,
 	}
 
 	// Initialize config from flags
@@ -238,13 +244,24 @@ func (c *Context) Warn(format string, args ...interface{}) {
 
 // printConfigWarning renders a config error to stderr. Uses TerminalError
 // for rich output when available, otherwise falls back to a plain warning.
+//
+// errors.As rather than a type assertion: a rich error that has been wrapped on
+// its way up would otherwise silently fall back to the plain path.
 func printConfigWarning(err error) {
-	if te, ok := err.(ui.TerminalError); ok {
+	var se ui.SeverityTerminalError
+	if errors.As(err, &se) {
+		se.WriteWithSeverity(os.Stderr, ui.SeverityWarning)
+		return
+	}
+
+	var te ui.TerminalError
+	if errors.As(err, &te) {
 		fmt.Fprint(os.Stderr, "warning: ")
 		te.WriteForTerminal(os.Stderr)
-	} else {
-		fmt.Fprintf(os.Stderr, "warning: %v\n", err)
+		return
 	}
+
+	fmt.Fprintf(os.Stderr, "warning: %v\n", err)
 }
 
 func (c *Context) Begin(format string, args ...interface{}) {
@@ -390,6 +407,9 @@ func (c *Context) DisplayTable(headers []string, rows [][]string) {
 }
 
 func (c *Context) RPCClient(name string) (*rpc.NetworkClient, error) {
+	// Nothing is printed unless this takes long enough to look like a hang.
+	defer c.startConnectNotice().Stop()
+
 	var opts []rpc.StateOption
 
 	opts = append(opts, rpc.WithLogger(c.Log))
@@ -436,18 +456,3 @@ func (c *Context) RPCClient(name string) (*rpc.NetworkClient, error) {
 }
 
 var ErrAccessDenied = errors.New("access denied")
-
-// wrapRPCError wraps RPC errors with user-friendly messages
-func (c *Context) wrapRPCError(err error) error {
-	var resolveErr *rpc.ResolveError
-	if errors.As(err, &resolveErr) && resolveErr.StatusCode == 401 {
-		clusterName := c.ClusterName
-		if clusterName == "" {
-			clusterName = "the cluster"
-		}
-
-		c.Warn("access denied: you don't have permission to access %s\nPlease check your credentials or request access from the cluster administrator.\nIf you were logged in previously, your session may have expired — run 'miren login'.", clusterName)
-		return ErrAccessDenied
-	}
-	return err
-}

@@ -1,0 +1,113 @@
+# server isn't running, or the address is wrong, or traffic is blocked
+
+ERROR: couldn't reach cluster "local" at localhost:8443
+
+  Nothing answered after 5s. The address resolved, so either the server isn't
+  running or something between here and there is dropping the connection.
+
+  Possible causes
+    • the server isn't running
+    • a firewall is blocking UDP port 8443
+    • the cluster's address has changed
+
+  Try
+    miren doctor          check what's reachable
+    miren cluster list    confirm the address
+
+# connection established, then the server went quiet mid-request
+
+ERROR: lost the connection to cluster "local" at localhost:8443
+
+  Connected successfully, then it went quiet for 30s partway through the
+  request. The server was reachable a moment earlier.
+
+  Possible causes
+    • the server crashed or restarted mid-request
+    • the server is overloaded and stopped responding
+    • the network path dropped
+
+  Try
+    miren doctor    check whether it's back
+
+# request accepted, no reply before our deadline
+
+ERROR: cluster "local" never answered
+
+  Waited 8s after localhost:8443 accepted the request and nothing came back. The
+  connection was still open when we gave up, so the request reached the server,
+  but no reply followed.
+
+  Possible causes
+    • the server is still starting up
+    • the server is wedged or overloaded
+    • the server stopped responding after accepting the connection
+
+  Try
+    miren doctor     check whether it's still responding
+    miren version    compare CLI and cluster versions
+
+# cluster is healthy but doesn't offer the capability
+
+ERROR: cluster "local" doesn't provide what "miren route list" needs
+
+  The cluster answered, but it isn't currently offering "entities", which this
+  command needs.
+
+  Possible causes
+    • the server is still starting up and hasn't registered it yet
+    • the cluster is running an older miren than your CLI
+
+  Try
+    miren doctor     check whether the server is ready
+    miren version    compare CLI and cluster versions
+
+# not authorized
+
+ERROR: access denied on cluster "local"
+
+  You don't have permission to access this cluster. If you were signed in
+  previously, your session may have expired.
+
+  Try
+    miren login     sign in again
+    miren whoami    check your current identity
+
+# unexpected HTTP status
+
+ERROR: cluster "local" returned an unexpected response (HTTP 404)
+
+  Asked localhost:8443 for "entities" and got HTTP 404 instead of a capability.
+  That usually means the address points at something that isn't a miren server,
+  or at a version that doesn't serve this endpoint.
+
+  Try
+    miren cluster list    confirm the address
+    miren version         compare CLI and cluster versions
+
+# response body wasn't what we expected
+
+ERROR: couldn't understand the response from cluster "local"
+
+  localhost:8443 answered the request but the response wasn't in the expected
+  format. The address may point at something that isn't a miren server.
+
+  Try
+    miren cluster list    confirm the address
+
+# with -v (underlying error preserved)
+
+ERROR: couldn't reach cluster "local" at localhost:8443
+
+  Nothing answered after 5s. The address resolved, so either the server isn't
+  running or something between here and there is dropping the connection.
+
+  Possible causes
+    • the server isn't running
+    • a firewall is blocking UDP port 8443
+    • the cluster's address has changed
+
+  Try
+    miren doctor          check what's reachable
+    miren cluster list    confirm the address
+
+  Cause: no response from localhost:8443 after 5s while looking up "entities": timeout: no recent network activity

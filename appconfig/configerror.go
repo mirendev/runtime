@@ -5,10 +5,11 @@ import (
 	"io"
 	"strings"
 
+	"github.com/charmbracelet/lipgloss"
 	toml "github.com/pelletier/go-toml/v2"
 	tomlast "github.com/pelletier/go-toml/v2/unstable"
 
-	"miren.dev/runtime/pkg/color"
+	"miren.dev/runtime/pkg/theme"
 )
 
 // ConfigError is returned from config loading when the TOML file has problems.
@@ -54,31 +55,37 @@ func (e *ConfigError) Error() string {
 
 // WriteForTerminal renders a colorized, multi-line diagnostic to w.
 // Implements ui.TerminalError.
+//
+// Styling goes through pkg/theme rather than raw ANSI attributes so the output
+// stays readable on light backgrounds. The source context in particular used to
+// use the terminal's dim attribute, which disappears entirely on some light
+// themes — exactly the failure theme's Muted role exists to avoid.
 func (e *ConfigError) WriteForTerminal(w io.Writer) {
-	red := color.New(color.FgRed, color.Bold)
-	yellow := color.New(color.FgYellow)
-	faint := color.New(color.Faint)
+	var (
+		header  = lipgloss.NewStyle().Foreground(theme.Error).Bold(true)
+		hint    = lipgloss.NewStyle().Foreground(theme.Warning)
+		context = lipgloss.NewStyle().Foreground(theme.Muted)
+	)
 
 	for i, d := range e.Diagnostics {
 		if i > 0 {
 			fmt.Fprintln(w)
 		}
-		// file:line: message — header in red
+		// file:line: message
 		if d.Line > 0 {
-			red.Fprintf(w, "%s:%d: ", e.FilePath, d.Line)
+			fmt.Fprint(w, header.Render(fmt.Sprintf("%s:%d: ", e.FilePath, d.Line)))
 		} else {
-			red.Fprintf(w, "%s: ", e.FilePath)
+			fmt.Fprint(w, header.Render(fmt.Sprintf("%s: ", e.FilePath)))
 		}
 		fmt.Fprintln(w, d.Message)
 
-		// Visual context from go-toml (line numbers + tildes) — dimmed
+		// Visual context from go-toml (line numbers + tildes)
 		if d.Context != "" {
-			faint.Fprintln(w, d.Context)
+			fmt.Fprintln(w, context.Render(d.Context))
 		}
 
-		// Hint — yellow
 		if d.Hint != "" {
-			yellow.Fprintf(w, "  hint: %s\n", d.Hint)
+			fmt.Fprintln(w, hint.Render(fmt.Sprintf("  hint: %s", d.Hint)))
 		}
 	}
 }

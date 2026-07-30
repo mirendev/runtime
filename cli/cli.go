@@ -91,13 +91,22 @@ func shouldShowTopLevelHelp(args []string) bool {
 // ui.TerminalError, it gets colorized multi-line output; otherwise
 // it falls back to a plain "ERROR: ..." line.
 func printError(err error) {
+	// Errors that render their own severity label own the whole line, prefix
+	// included, so that the label can be colored to match the block.
+	var se ui.SeverityTerminalError
+	if errors.As(err, &se) {
+		se.WriteWithSeverity(os.Stderr, ui.SeverityError)
+		return
+	}
+
 	var te ui.TerminalError
 	if errors.As(err, &te) {
 		fmt.Fprintf(os.Stderr, "ERROR: ")
 		te.WriteForTerminal(os.Stderr)
-	} else {
-		fmt.Fprintf(os.Stderr, "ERROR: %s\n", err)
+		return
 	}
+
+	fmt.Fprintf(os.Stderr, "ERROR: %s\n", err)
 }
 
 // Version returns the version string
