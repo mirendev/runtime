@@ -82,6 +82,7 @@ import (
 	"miren.dev/runtime/servers/logs"
 	oidcbindingsrv "miren.dev/runtime/servers/oidcbinding"
 	runnerserver "miren.dev/runtime/servers/runner"
+	"miren.dev/runtime/servers/runnertelemetry"
 	telemetrysrv "miren.dev/runtime/servers/telemetry"
 	"miren.dev/runtime/version"
 )
@@ -606,6 +607,39 @@ regen:
 	return nil
 }
 
+// runnerTelemetryOptions mounts the ingest endpoints distributed runners ship
+// their metrics and logs to, so VictoriaMetrics and VictoriaLogs never need to
+// listen anywhere a runner can reach.
+//
+// Nothing is mounted without a workload issuer, since the issuer is what
+// verifies the runner's token; a route that could not check its caller would be
+// exactly the unauthenticated opening this replaces. The same goes for a
+// backend whose address we do not know.
+func (c *Coordinator) runnerTelemetryOptions() []rpc.StateOption {
+	if c.WorkloadIssuer == nil {
+		c.Log.Warn("no workload identity issuer; runner telemetry ingest disabled")
+		return nil
+	}
+
+	var opts []rpc.StateOption
+
+	if c.VictoriametricsAddress != "" {
+		opts = append(opts, rpc.WithHTTPHandler(runnertelemetry.MetricsPattern,
+			runnertelemetry.NewMetricsHandler(c.Log, c.WorkloadIssuer, c.VictoriametricsAddress)))
+	} else {
+		c.Log.Warn("no victoriametrics address; runner metrics ingest disabled")
+	}
+
+	if c.VictorialogsAddress != "" {
+		opts = append(opts, rpc.WithHTTPHandler(runnertelemetry.LogsPattern,
+			runnertelemetry.NewLogsHandler(c.Log, c.WorkloadIssuer, c.VictorialogsAddress)))
+	} else {
+		c.Log.Warn("no victorialogs address; runner log ingest disabled")
+	}
+
+	return opts
+}
+
 // buildEtcdTLSConfig creates a tls.Config from the EtcdTLS configuration.
 func (c *Coordinator) buildEtcdTLSConfig() (*tls.Config, error) {
 	if c.EtcdTLS == nil {
@@ -827,6 +861,8 @@ func (c *Coordinator) Start(ctx context.Context) error {
 		rpcOpts = append(rpcOpts, rpc.WithAuthenticator(compositeAuth), rpc.WithAuthorizer(compositeAuthz))
 		c.Log.Info("local-only authentication enabled with OIDC support")
 	}
+
+	rpcOpts = append(rpcOpts, c.runnerTelemetryOptions()...)
 
 	rs, err := rpc.NewState(ctx, rpcOpts...)
 	if err != nil {
