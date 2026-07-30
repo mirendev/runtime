@@ -3,7 +3,6 @@ package commands
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -11,9 +10,11 @@ import (
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
+
 	"miren.dev/runtime/clientconfig"
 	"miren.dev/runtime/pkg/auth"
 	"miren.dev/runtime/pkg/theme"
+	"miren.dev/runtime/pkg/ui"
 )
 
 var (
@@ -78,6 +79,10 @@ type authResult struct {
 	IdentityName string
 	Claims       *auth.ExtendedClaims
 	UserInfo     *cloudUserInfo
+	// Err is why authentication didn't work. Kept rather than discarded so the
+	// auth check can say "your token expired" instead of the useless "couldn't
+	// authenticate".
+	Err error
 }
 
 // tryAuthenticate attempts to authenticate with the cluster using the configured identity.
@@ -85,12 +90,17 @@ type authResult struct {
 func tryAuthenticate(ctx *Context, cfg *clientconfig.Config, cluster *clientconfig.ClusterConfig) authResult {
 	result := authResult{Method: "none"}
 
-	if cluster.Identity == "" {
+	if cluster.Identity == "" || cfg == nil {
 		return result
 	}
 
 	identity, err := cfg.GetIdentity(cluster.Identity)
-	if err != nil || identity == nil {
+	if err != nil {
+		result.Err = err
+		return result
+	}
+	if identity == nil {
+		result.Err = fmt.Errorf("identity %q is not configured", cluster.Identity)
 		return result
 	}
 
@@ -106,13 +116,13 @@ func tryAuthenticate(ctx *Context, cfg *clientconfig.Config, cluster *clientconf
 
 		token, err := cfg.TokenForIdentity(ctx, cluster.Identity, identity, authServer)
 		if err != nil {
+			result.Err = err
 			return result
 		}
 
 		result.Claims, _ = auth.ParseUnverifiedClaims(token)
 		result.Method = string(identity.Type)
 
-		// Fetch user info from cloud
 		result.UserInfo, _ = fetchCloudUserInfo(ctx, authServer, token)
 
 	case clientconfig.IdentityCertificate:
@@ -122,128 +132,194 @@ func tryAuthenticate(ctx *Context, cfg *clientconfig.Config, cluster *clientconf
 	return result
 }
 
-// Doctor shows a quick overview of the miren environment
+// Doctor runs the full diagnostic sweep.
+//
+// It is deliberately a single command. The previous version printed a
+// three-line summary and then told you to go read three other commands, which
+// made the summary a menu rather than a diagnosis. Everything runs here, and
+// the subcommands are filters over the same registry rather than separate
+// implementations.
 func Doctor(ctx *Context, opts struct {
+	FormatOptions
 	ConfigCentric
 }) error {
-	type infoSection struct {
-		ok      bool
-		message string
+	return runDoctor(ctx, opts.ConfigCentric, opts.FormatOptions, "")
+}
+
+// DoctorConfig, DoctorServer and DoctorAuth run one group of the sweep. They
+// exist so existing muscle memory and docs keep working.
+func DoctorConfig(ctx *Context, opts struct {
+	FormatOptions
+	ConfigCentric
+}) error {
+	return runDoctor(ctx, opts.ConfigCentric, opts.FormatOptions, groupConfig)
+}
+
+func DoctorServer(ctx *Context, opts struct {
+	FormatOptions
+	ConfigCentric
+}) error {
+	return runDoctor(ctx, opts.ConfigCentric, opts.FormatOptions, groupServer)
+}
+
+func DoctorAuth(ctx *Context, opts struct {
+	FormatOptions
+	ConfigCentric
+}) error {
+	return runDoctor(ctx, opts.ConfigCentric, opts.FormatOptions, groupAuth)
+}
+
+func runDoctor(ctx *Context, cc ConfigCentric, format FormatOptions, group string) error {
+	env := gatherDoctorEnv(ctx, cc)
+
+	checks := checksForGroup(group)
+	results := make([]checkResult, len(checks))
+	for i, c := range checks {
+		results[i] = c.Run(env)
 	}
 
-	var (
-		configuration  infoSection
-		server         infoSection
-		authentication infoSection
-	)
-
-	// Load configuration
-	cfg, err := opts.LoadConfig()
-	if err != nil && !errors.Is(err, clientconfig.ErrNoConfig) {
-		return err
-	}
-
-	// Configuration info
-	clusterCount := 0
-	if cfg == nil || errors.Is(err, clientconfig.ErrNoConfig) {
-		configuration.ok = false
-		configuration.message = "no clusters configured"
-	} else {
-		cfg.IterateClusters(func(_ string, _ *clientconfig.ClusterConfig) error {
-			clusterCount++
-			return nil
-		})
-
-		if clusterCount == 0 {
-			configuration.ok = false
-			configuration.message = "no clusters configured"
-		} else {
-			configuration.ok = true
-			configuration.message = fmt.Sprintf("%d clusters configured", clusterCount)
+	// Set before rendering, so it applies to every output format. JSON is the
+	// form a script is most likely to consume, and scripted health gates are
+	// the whole reason the exit code exists — having it apply only to the
+	// human-readable output would defeat the point.
+	//
+	// A non-zero exit counts outright failures only: warnings are advisory by
+	// definition, and exiting non-zero for them would make the signal useless.
+	for _, r := range results {
+		if r.Status == checkFail {
+			ctx.SetExitCode(1)
+			break
 		}
 	}
 
-	// Server and auth info (only if configured)
-	if configuration.ok && cfg != nil {
-		cluster, clusterName, _ := opts.LoadCluster()
-		if clusterName != "" {
-			configuration.message = fmt.Sprintf("%s (%d clusters)", clusterName, clusterCount)
-		}
-		if cluster != nil {
-			// Try to connect
-			client, err := ctx.RPCClient("entities")
-			if err == nil {
-				defer client.Close()
-				server.ok = true
-				server.message = "connected"
-
-				// Get user info
-				if cluster.Identity == "" {
-					authentication.message = "(no identity)"
-				} else {
-					authRes := tryAuthenticate(ctx, cfg, cluster)
-					if authRes.Claims != nil {
-						authentication.ok = true
-						// Prefer email from user info if available
-						if authRes.UserInfo != nil && authRes.UserInfo.User.Email != "" {
-							authentication.message = authRes.UserInfo.User.Email
-						} else {
-							authentication.message = authRes.Claims.Subject
-						}
-					}
-				}
-
-			} else {
-				server.ok = false
-				server.message = "not connected"
-				authentication.message = "(skipped)"
-			}
-		}
-	} else {
-		server.message = "(skipped)"
-		authentication.message = "(skipped)"
+	if format.IsJSON() {
+		return printDoctorJSON(checks, results)
 	}
 
-	// Text output
-	ctx.Printf("%s\n", infoBold.Render("Miren Doctor"))
-	ctx.Printf("%s\n", infoGray.Render("============"))
-
-	// Configuration
-	printInfoLine(ctx, "Configuration", configuration.ok, configuration.message, false)
-
-	// Server
-	skipped := server.message == "(skipped)"
-	printInfoLine(ctx, "Server", server.ok, server.message, skipped)
-
-	// Authentication
-	skipped = authentication.message == "(skipped)" || authentication.message == "(no identity)"
-	printInfoLine(ctx, "Authentication", authentication.ok, authentication.message, skipped)
-
-	// Help text
-	ctx.Printf("\n")
-	if !configuration.ok {
-		ctx.Printf("Get started:\n")
-		ctx.Printf("  %s        %s\n", infoBold.Render("miren login"), infoGray.Render("# Authenticate with miren.cloud"))
-		ctx.Printf("  %s  %s\n", infoBold.Render("miren cluster add"), infoGray.Render("# Add a cluster manually"))
-	} else {
-		ctx.Printf("%s\n", infoGray.Render("Use 'miren doctor <topic>' for details: config, server, auth"))
-	}
+	renderDoctor(ctx, checks, results)
 
 	return nil
 }
 
-func printInfoLine(ctx *Context, label string, ok bool, message string, skipped bool) {
-	var indicator string
-	if ok {
-		indicator = infoGreen.Render("[✓]")
-	} else if skipped {
-		indicator = infoGray.Render("[-]")
-		message = infoGray.Render(message)
-	} else {
-		indicator = infoRed.Render("[✗]")
+func renderDoctor(ctx *Context, checks []check, results []checkResult) {
+	ctx.Printf("%s\n\n", infoBold.Render("Miren Doctor"))
+
+	width := 0
+	for _, c := range checks {
+		width = max(width, len(c.Name))
 	}
 
-	// Pad label to 14 chars for alignment
-	paddedLabel := fmt.Sprintf("%-14s", label)
-	ctx.Printf("  %s %s %s\n", indicator, paddedLabel, message)
+	for i, c := range checks {
+		ctx.Printf("  %s %s  %s\n",
+			statusMark(results[i].Status),
+			fmt.Sprintf("%-*s", width, c.Name),
+			statusText(results[i]))
+	}
+
+	fails, warns := 0, 0
+	for _, r := range results {
+		switch r.Status {
+		case checkFail:
+			fails++
+		case checkWarn:
+			warns++
+		case checkOK, checkSkip:
+		}
+	}
+
+	if fails == 0 && warns == 0 {
+		ctx.Printf("\n%s\n", "Everything looks good.")
+		return
+	}
+
+	// Only failing checks explain themselves. Everything that's fine already
+	// said so in one line above.
+	for _, r := range results {
+		if r.Problem == nil {
+			continue
+		}
+		ctx.Printf("\n")
+		severity := ui.SeverityError
+		if r.Status == checkWarn {
+			severity = ui.SeverityWarning
+		}
+		r.Problem.ShowCause = ctx.Verbose()
+		r.Problem.WriteWithSeverity(ctx.Stdout, severity)
+	}
+
+	ctx.Printf("\n%s\n", doctorFooter(fails, warns))
+}
+
+// doctorFooter keeps the wording honest about severity. Counting a warning as a
+// "problem" while exiting zero tells the reader two different things at once.
+func doctorFooter(fails, warns int) string {
+	switch {
+	case fails == 0 && warns == 0:
+		return "Everything looks good."
+	case fails == 0:
+		return fmt.Sprintf("%s, nothing broken.", countOf(warns, "warning"))
+	case warns == 0:
+		return fmt.Sprintf("%s found.", countOf(fails, "problem"))
+	default:
+		return fmt.Sprintf("%s found, %s.", countOf(fails, "problem"), countOf(warns, "warning"))
+	}
+}
+
+func countOf(n int, noun string) string {
+	if n == 1 {
+		return "1 " + noun
+	}
+	return fmt.Sprintf("%d %ss", n, noun)
+}
+
+func statusMark(s checkStatus) string {
+	switch s {
+	case checkOK:
+		return infoGreen.Render("[" + ui.Checkmark + "]")
+	case checkWarn:
+		return infoYellow.Render("[!]")
+	case checkFail:
+		return infoRed.Render("[✗]")
+	case checkSkip:
+		return infoGray.Render("[-]")
+	default:
+		return infoGray.Render("[-]")
+	}
+}
+
+func statusText(r checkResult) string {
+	if r.Status == checkSkip {
+		return infoGray.Render(r.Summary)
+	}
+	return r.Summary
+}
+
+func printDoctorJSON(checks []check, results []checkResult) error {
+	type checkJSON struct {
+		Name    string   `json:"name"`
+		Group   string   `json:"group"`
+		Status  string   `json:"status"`
+		Summary string   `json:"summary"`
+		Problem string   `json:"problem,omitempty"`
+		Actions []string `json:"actions,omitempty"`
+	}
+
+	items := make([]checkJSON, len(checks))
+	for i, c := range checks {
+		item := checkJSON{
+			Name:    c.Name,
+			Group:   c.Group,
+			Status:  results[i].Status.String(),
+			Summary: results[i].Summary,
+		}
+		if p := results[i].Problem; p != nil {
+			item.Problem = p.Summary
+			for _, a := range p.Actions {
+				item.Actions = append(item.Actions, a.Command)
+			}
+		}
+		items[i] = item
+	}
+
+	return PrintJSON(items)
 }
