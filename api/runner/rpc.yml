@@ -303,6 +303,33 @@ interfaces:
             type: string
             doc: Error message if the drain failed
 
+      - name: IssueSystemWorkloadToken
+        index: 12
+        doc: |
+          Mint an identity token for a Miren system workload running on a
+          distributed runner, which does not hold the cluster signing key. The
+          caller is an mTLS-authenticated runner, and the coordinator restricts
+          which system workloads a runner may request; a runner cannot obtain an
+          identity for a workload it does not run.
+        parameters:
+          - name: system_workload
+            type: string
+            doc: System workload identity to mint (e.g. sandboxcontroller)
+          - name: audience
+            type: list
+            element: string
+            doc: Optional token audiences (defaults to "miren" when empty)
+          - name: ttl_seconds
+            type: int64
+            doc: Optional token TTL in seconds (0 uses the issuer default)
+        results:
+          - name: token
+            type: string
+            doc: The signed system workload identity token (JWT)
+          - name: error
+            type: string
+            doc: Error message if issuance failed
+
 types:
   - type: InviteInfo
     doc: Information about a runner invite

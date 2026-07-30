@@ -37,6 +37,7 @@ const (
 	AuthMethodAnonymous AuthMethod = "anonymous" // No authentication (public methods)
 	AuthMethodToken     AuthMethod = "token"     // Bearer token (e.g., outboard)
 	AuthMethodOIDC      AuthMethod = "oidc"      // External OIDC token (e.g., GitHub Actions)
+	AuthMethodSystem    AuthMethod = "system"    // Cluster-issued system workload identity
 )
 
 // Identity represents an authenticated caller
