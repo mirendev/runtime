@@ -27,16 +27,19 @@ type TestState struct {
 	Package string
 	Output  []string
 	Failed  bool
+	Started bool
+	Done    bool
 }
 
 type PackageState struct {
-	Name    string
-	Tests   map[string]*TestState
-	Output  []string
-	Failed  bool
-	Elapsed float64
-	Started bool
-	Done    bool
+	Name      string
+	Tests     map[string]*TestState
+	TestOrder []string
+	Output    []string
+	Failed    bool
+	Elapsed   float64
+	Started   bool
+	Done      bool
 }
 
 type Formatter struct {
@@ -118,6 +121,7 @@ func (f *Formatter) getTest(pkg *PackageState, name string) *TestState {
 			Package: pkg.Name,
 		}
 		pkg.Tests[name] = ts
+		pkg.TestOrder = append(pkg.TestOrder, name)
 	}
 	return ts
 }
@@ -178,23 +182,27 @@ func (f *Formatter) processTestEvent(pkg *PackageState, ev *TestEvent) {
 
 	switch ev.Action {
 	case "run":
+		ts.Started = true
 		if isTopLevel {
 			fmt.Printf("    --- START  %s  %s\n", pkg.Name, ev.Test)
 		}
 	case "output":
 		ts.Output = append(ts.Output, ev.Output)
 	case "pass":
+		ts.Done = true
 		if isTopLevel {
 			fmt.Printf("    --- PASS   %s  %s (%.1fs)\n", pkg.Name, ev.Test, ev.Elapsed)
 		}
 	case "fail":
 		ts.Failed = true
+		ts.Done = true
 		f.HasFailure = true
 		f.FailedTests = append(f.FailedTests, ts)
 		if isTopLevel {
 			fmt.Printf("    --- FAIL   %s  %s (%.1fs)\n", pkg.Name, ev.Test, ev.Elapsed)
 		}
 	case "skip":
+		ts.Done = true
 		if isTopLevel {
 			fmt.Printf("    --- SKIP   %s  %s (%.1fs)\n", pkg.Name, ev.Test, ev.Elapsed)
 		}
@@ -245,6 +253,53 @@ func (f *Formatter) PrintSummary() {
 					fmt.Printf("::error file=%s,line=%s,title=FAIL %s::%s\n", file, line, ts.Name, ts.Package)
 				} else {
 					fmt.Printf("::error title=FAIL %s::%s\n", ts.Name, ts.Package)
+				}
+			}
+		}
+	}
+
+	// Tests that started but never produced a terminal event. That is the
+	// signature of a panic, an os.Exit, or the process being killed: go test
+	// emits no pass/fail for the test, so it never lands in FailedTests and its
+	// buffered output would otherwise be discarded — precisely the case where
+	// that output is the only evidence of what went wrong.
+	var incomplete []*TestState
+	for _, name := range f.PackageOrder {
+		pkg := f.Packages[name]
+		for _, testName := range pkg.TestOrder {
+			if ts := pkg.Tests[testName]; ts.Started && !ts.Done {
+				incomplete = append(incomplete, ts)
+			}
+		}
+	}
+	if len(incomplete) > 0 {
+		fmt.Println()
+		if f.githubActions {
+			fmt.Println("::group::Incomplete test output")
+		}
+		fmt.Println("=== INCOMPLETE TEST OUTPUT (no pass/fail received) ===")
+		for _, ts := range incomplete {
+			fmt.Printf("\n--- INCOMPLETE %s (in %s)\n", ts.Name, ts.Package)
+			for _, line := range ts.Output {
+				fmt.Print("    ", line)
+			}
+		}
+		if f.githubActions {
+			fmt.Println("::endgroup::")
+			// Annotate after the group so these surface as PR annotations. The
+			// package result still owns the exit code; a package that passed
+			// with an incomplete test is odd but not itself a failure.
+			for _, ts := range incomplete {
+				level := "warning"
+				if pkg := f.Packages[ts.Package]; pkg != nil && pkg.Failed {
+					level = "error"
+				}
+				const msg = "test did not report a result (possible panic or crash)"
+				file, line := f.findTestLocation(ts.Package, ts.Output)
+				if file != "" {
+					fmt.Printf("::%s file=%s,line=%s,title=INCOMPLETE %s::%s\n", level, file, line, ts.Name, msg)
+				} else {
+					fmt.Printf("::%s title=INCOMPLETE %s::%s\n", level, ts.Name, msg)
 				}
 			}
 		}
