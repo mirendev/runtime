@@ -203,6 +203,30 @@ func (c *Context) diagnoseResolve(re *rpc.ResolveError) *ui.Diagnostic {
 		}
 
 	case rpc.ResolveStatusError:
+		// A CI token that verified but matched no binding is not an expired
+		// session. Sending someone to 'miren login' when their credentials are
+		// fine is the single most expensive wrong turn this error can cause,
+		// which is why the server goes out of its way to name this case.
+		if re.StatusCode == 401 && re.Code == rpc.AuthErrorOIDCBindingMismatch {
+			return &ui.Diagnostic{
+				Summary: fmt.Sprintf("no CI binding on %s accepts this token", cluster),
+				Detail: "The token is valid and correctly signed, it just doesn't match any " +
+					"binding configured on this cluster. Signing in again won't help, " +
+					"because the credentials aren't the problem.",
+				Facts: []ui.Fact{{Label: "Cluster reported", Value: re.Detail}},
+				Causes: []string{
+					"the binding names a different repository",
+					"the repository was created, renamed, or transferred after 2026-07-15, and the binding still matches on the old subject format",
+					"the workflow's event or ref isn't allowed by the binding",
+				},
+				Actions: []ui.Action{
+					{Command: "miren auth ci list -a <app>", Note: "see the configured bindings"},
+					{Command: "miren auth ci add --github OWNER/REPO -a <app>", Note: "replace a stale one"},
+				},
+				Cause: fmt.Errorf("%w: %w", ErrAccessDenied, re),
+			}
+		}
+
 		if re.StatusCode == 401 {
 			return &ui.Diagnostic{
 				Summary: fmt.Sprintf("access denied on %s", cluster),

@@ -5,6 +5,22 @@ import (
 	"time"
 )
 
+// DisclosableAuthError is an authentication failure whose reason is safe to
+// hand back to the caller that triggered it. Authenticators opt in by
+// implementing it; anything else surfaces as a bare 401, because auth failures
+// otherwise make a convenient oracle for probing a cluster's configuration.
+type DisclosableAuthError interface {
+	error
+
+	// AuthErrorCode returns a short machine-readable code, sent as rpc-status
+	// so clients can recognize the failure without parsing the message.
+	AuthErrorCode() string
+}
+
+// AuthErrorOIDCBindingMismatch marks a CI token that verified against a
+// configured issuer but matched none of that issuer's bindings.
+const AuthErrorOIDCBindingMismatch = "oidc-binding-mismatch"
+
 type ErrorCategory interface {
 	ErrorCategory() string
 }
@@ -82,6 +98,13 @@ type ResolveError struct {
 	Msg        string
 	StatusCode int // HTTP status code for ResolveStatusError
 
+	// Code is the server's rpc-status header, when it sent one. It names the
+	// failure so the CLI can recognize it without parsing prose.
+	Code string
+	// Detail is the server's rpc-error header: an explanation the server judged
+	// safe to return to this caller. Empty for most failures.
+	Detail string
+
 	// Name is the capability being resolved, e.g. "entities".
 	Name string
 	// Remote is the address we were talking to, e.g. "localhost:8443".
@@ -145,12 +168,31 @@ func NewResolveHTTPError(err error, format string, args ...interface{}) error {
 
 // NewResolveStatusError creates a status code error
 func NewResolveStatusError(name, remote string, statusCode int) error {
+	return newResolveStatusError(name, remote, statusCode, "", "")
+}
+
+// NewResolveStatusErrorWithReason creates a status code error carrying the
+// server's rpc-status and rpc-error headers: a rejection the server chose to
+// name and explain rather than leave opaque. Both may be empty, which is the
+// normal case, since most failures disclose nothing to an unauthenticated
+// caller.
+func NewResolveStatusErrorWithReason(name, remote string, statusCode int, code, detail string) error {
+	return newResolveStatusError(name, remote, statusCode, code, detail)
+}
+
+func newResolveStatusError(name, remote string, statusCode int, code, detail string) error {
+	msg := fmt.Sprintf("unexpected status code %d from %s while looking up %q", statusCode, remote, name)
+	if detail != "" {
+		msg += ": " + detail
+	}
 	return &ResolveError{
 		Kind:       ResolveStatusError,
 		StatusCode: statusCode,
 		Name:       name,
 		Remote:     remote,
-		Msg:        fmt.Sprintf("unexpected status code %d from %s while looking up %q", statusCode, remote, name),
+		Code:       code,
+		Detail:     detail,
+		Msg:        msg,
 	}
 }
 

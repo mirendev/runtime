@@ -124,11 +124,46 @@ func (a *OIDCAuthenticator) Authenticate(ctx context.Context, r *http.Request) (
 		}, nil
 	}
 
-	a.logger.Debug("OIDC token did not match any binding",
+	repository, _ := claims.getClaimString("repository")
+
+	a.logger.Info("OIDC token did not match any binding",
 		"issuer", issuer,
 		"subject", claims.Subject,
+		"repository", repository,
 	)
-	return nil, nil
+	return nil, &BindingMismatchError{
+		Issuer:     issuer,
+		Subject:    claims.Subject,
+		Repository: repository,
+	}
+}
+
+// BindingMismatchError reports a token that verified against a configured issuer
+// but matched none of that issuer's bindings. It carries claims from the token
+// the caller presented, so echoing it back tells them nothing they didn't
+// already hold. It deliberately says nothing about the bindings themselves.
+// Those are cluster configuration, and this error is rendered for a caller who
+// is by definition unauthenticated.
+type BindingMismatchError struct {
+	Issuer     string
+	Subject    string
+	Repository string
+}
+
+var _ rpc.DisclosableAuthError = (*BindingMismatchError)(nil)
+
+// AuthErrorCode implements rpc.DisclosableAuthError, opting this error into
+// being returned to the caller rather than collapsing into a bare 401.
+func (e *BindingMismatchError) AuthErrorCode() string {
+	return rpc.AuthErrorOIDCBindingMismatch
+}
+
+func (e *BindingMismatchError) Error() string {
+	msg := fmt.Sprintf("OIDC token did not match any CI binding (issuer=%s subject=%s", e.Issuer, e.Subject)
+	if e.Repository != "" {
+		msg += " repository=" + e.Repository
+	}
+	return msg + ")"
 }
 
 // peekIssuer extracts the issuer claim from a JWT without verifying the signature.

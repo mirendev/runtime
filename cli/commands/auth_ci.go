@@ -11,7 +11,7 @@ import (
 const gitHubActionsIssuer = "https://token.actions.githubusercontent.com"
 
 func AuthCIAdd(ctx *Context, opts struct {
-	GitHub        string `long:"github" description:"GitHub owner/repo shorthand (sets issuer, subject, provider)"`
+	GitHub        string `long:"github" description:"GitHub owner/repo shorthand (sets issuer, provider, and repository claim conditions)"`
 	Issuer        string `long:"issuer" description:"OIDC issuer URL"`
 	Subject       string `long:"subject" description:"Glob pattern for the token subject"`
 	AllowedEvents string `long:"allowed-events" description:"Comma-separated event names to allow (default: push,workflow_dispatch)"`
@@ -30,25 +30,13 @@ func AuthCIAdd(ctx *Context, opts struct {
 	var claimConditions []*oidcbinding_v1alpha.ClaimCondition
 
 	if opts.GitHub != "" {
-		if !strings.Contains(opts.GitHub, "/") {
-			return fmt.Errorf("--github must be in owner/repo format (e.g. acme/web-app)")
+		conditions, err := gitHubClaimConditions(opts.GitHub, opts.AllowedEvents, opts.AllowedRefs)
+		if err != nil {
+			return err
 		}
 		provider = "github"
 		issuer = gitHubActionsIssuer
-		if subject == "" {
-			subject = "repo:" + opts.GitHub + ":*"
-		}
-
-		// Default allowed events
-		events := "push,workflow_dispatch"
-		if opts.AllowedEvents != "" {
-			events = opts.AllowedEvents
-		}
-		claimConditions = append(claimConditions, newClaimCondition("event_name", events))
-
-		if opts.AllowedRefs != "" {
-			claimConditions = append(claimConditions, newClaimCondition("ref", opts.AllowedRefs))
-		}
+		claimConditions = conditions
 	} else {
 		// Generic OIDC provider
 		if opts.AllowedEvents != "" {
@@ -189,6 +177,39 @@ func AuthCIRemove(ctx *Context, opts struct {
 
 	ctx.Printf("Removed CI authentication binding %s\n", opts.ID)
 	return nil
+}
+
+// gitHubClaimConditions builds the claim conditions for a GitHub Actions
+// binding from the owner/repo shorthand.
+//
+// These deliberately carry the repo's identity instead of a subject pattern. As
+// of GitHub's immutable subject claims change (July 15, 2026), the sub claim
+// embeds numeric IDs (repo:OWNER@1234/REPO@5678:ref:refs/heads/main) for any
+// repo created, renamed, or transferred after the cutover, so a pattern built by
+// concatenating owner/repo names silently never matches. The repository and
+// repository_owner claims were left alone by that change and identify the caller
+// under either subject format.
+func gitHubClaimConditions(githubRepo, allowedEvents, allowedRefs string) ([]*oidcbinding_v1alpha.ClaimCondition, error) {
+	owner, repo, found := strings.Cut(githubRepo, "/")
+	if !found || owner == "" || repo == "" || strings.Contains(repo, "/") {
+		return nil, fmt.Errorf("--github must be in owner/repo format (e.g. acme/web-app)")
+	}
+
+	events := "push,workflow_dispatch"
+	if allowedEvents != "" {
+		events = allowedEvents
+	}
+
+	conditions := []*oidcbinding_v1alpha.ClaimCondition{
+		newClaimCondition("repository", githubRepo),
+		newClaimCondition("repository_owner", owner),
+		newClaimCondition("event_name", events),
+	}
+	if allowedRefs != "" {
+		conditions = append(conditions, newClaimCondition("ref", allowedRefs))
+	}
+
+	return conditions, nil
 }
 
 func newClaimCondition(key, pattern string) *oidcbinding_v1alpha.ClaimCondition {

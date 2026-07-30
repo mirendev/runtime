@@ -19,7 +19,7 @@ miren auth ci add [flags]
 - `--allowed-events` — Comma-separated event names to allow (default: push,workflow_dispatch)
 - `--allowed-refs` — Glob pattern for allowed git refs
 - `--description` — Human-readable description of this binding
-- `--github` — GitHub owner/repo shorthand (sets issuer, subject, provider)
+- `--github` — GitHub owner/repo shorthand (sets issuer, provider, and repository claim conditions)
 - `--issuer` — OIDC issuer URL
 - `--subject` — Glob pattern for the token subject
 

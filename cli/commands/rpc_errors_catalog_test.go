@@ -51,6 +51,12 @@ func TestRPCErrorMessageCatalog(t *testing.T) {
 			err:      rpc.NewResolveStatusError("entities", "localhost:8443", 401),
 		},
 		{
+			scenario: "CI token verified but matched no binding",
+			err: rpc.NewResolveStatusErrorWithReason("entities", "localhost:8443", 401,
+				rpc.AuthErrorOIDCBindingMismatch,
+				"OIDC token did not match any CI binding (issuer=https://token.actions.githubusercontent.com subject=repo:acme@1234567/web-app@7654321:ref:refs/heads/main repository=acme/web-app)"),
+		},
+		{
 			scenario: "unexpected HTTP status",
 			err:      rpc.NewResolveStatusError("entities", "localhost:8443", 404),
 		},

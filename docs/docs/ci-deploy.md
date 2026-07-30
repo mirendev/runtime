@@ -18,7 +18,7 @@ This page covers OIDC for **CI/CD deployment authentication** — letting pipeli
 
 ## How It Works
 
-1. **Create an OIDC binding** on your Miren cluster that links an app to an identity provider and subject pattern.
+1. **Create an OIDC binding** on your Miren cluster that links an app to an identity provider and the claims that identify your repository.
 2. **Your CI job runs** and the Miren CLI auto-detects the CI environment (e.g., GitHub Actions sets `ACTIONS_ID_TOKEN_REQUEST_URL`).
 3. **The CLI requests a short-lived token** from the CI provider's OIDC endpoint, with the cluster hostname as the audience.
 4. **Miren validates the token** by fetching the provider's OIDC discovery document and JWKS keys, then checks that the token's subject and claims match a configured binding.
@@ -61,7 +61,7 @@ miren auth ci myapp --github acme/web-app
 
 This creates a binding with:
 - **Issuer:** `https://token.actions.githubusercontent.com`
-- **Subject pattern:** `repo:acme/web-app:*` (matches all branches and events)
+- **Repository:** `acme/web-app`, owned by `acme` (matches all branches and events)
 - **Allowed events:** `push,workflow_dispatch` (by default)
 
 You can restrict further — see [Restricting Access](#restricting-access) below.
@@ -114,20 +114,30 @@ Commit this to your repository (e.g., as `.miren/clientconfig.yaml`) and set `MI
 
 The `--github` shorthand provides sensible defaults, but you can tighten access further.
 
-### Subject Patterns
+### Restricting to a Branch
 
-The subject pattern controls which GitHub Actions runs can authenticate. GitHub sets the token subject to a string like `repo:acme/web-app:ref:refs/heads/main`.
-
-The default pattern `repo:acme/web-app:*` matches all refs and event types. To restrict to a specific branch:
+The `--github` shorthand accepts any branch or event from the repository. To narrow it to a single branch, use `--allowed-refs`:
 
 <CliCommand context="client">
 ```miren
 miren auth ci myapp --github acme/web-app \
-  --subject "repo:acme/web-app:ref:refs/heads/main"
+  --allowed-refs "refs/heads/main"
 ```
 </CliCommand>
 
 Glob patterns are supported. `*` matches any characters **including** `/`, unlike standard path matching. `?` matches a single character.
+
+### A Note on Subject Patterns
+
+Bindings created with `--github` match on the token's `repository` and `repository_owner` claims rather than on its subject. This is deliberate. As of [GitHub's immutable subject claims change](https://github.blog/changelog/2026-04-23-immutable-subject-claims-for-github-actions-oidc-tokens/), any repository created, renamed, or transferred after July 15, 2026 sends a subject with numeric IDs embedded in it:
+
+```
+repo:acme@277133432/web-app@1316584243:ref:refs/heads/main
+```
+
+A pattern written against the older `repo:acme/web-app:*` format can never match that, and GitHub recommends binding policies to repository metadata instead of parsing the subject. The `repository` claims are unaffected by the change and work under either format.
+
+You can still set `--subject` explicitly for a provider that needs it, and it will be used as-is. If you have a binding created before this change that stopped working, re-run `miren auth ci add --github OWNER/REPO` to replace it.
 
 ### Allowed Events
 
@@ -237,7 +247,7 @@ Example output:
 
 ```
 ID         PROVIDER   ISSUER                                        SUBJECT                   CONDITIONS
-abc123     github     https://token.actions.githubusercontent.com   repo:acme/web-app:*       event_name=push,workflow_dispatch
+abc123     github     https://token.actions.githubusercontent.com                             repository=acme/web-app; repository_owner=acme; event_name=push,workflow_dispatch
 def456     generic    https://gitlab.com                            project_path:acme/web-*
 ```
 
@@ -258,7 +268,7 @@ Create an OIDC binding for an application.
 | Flag | Description |
 |------|-------------|
 | `-a, --app` | Application name (required) |
-| `--github OWNER/REPO` | GitHub shorthand — sets issuer, subject pattern, and provider automatically |
+| `--github OWNER/REPO` | GitHub shorthand — sets issuer, provider, and repository claim conditions automatically |
 | `--issuer URL` | OIDC issuer URL (required if `--github` is not used) |
 | `--subject PATTERN` | Glob pattern for the token subject claim |
 | `--allowed-events EVENTS` | Comma-separated event names to allow (default with `--github`: `push,workflow_dispatch`) |
@@ -323,10 +333,12 @@ permissions:
 
 ### "OIDC access denied" or token not matching any binding
 
-Check that:
-- The subject pattern on the binding matches the token's subject. Use `miren auth ci list` to see the configured pattern.
-- GitHub's token subject format is `repo:OWNER/REPO:ref:refs/heads/BRANCH` for push events and `repo:OWNER/REPO:environment:ENVIRONMENT` for environment-triggered runs. Make sure your pattern accounts for this.
+The CLI reports the rejected token's subject and repository as part of the error, so start by comparing those against `miren auth ci list -a myapp`. Then check that:
+
+- The binding's `repository` condition names the repo the workflow is running in. A binding created for a different repo, or one left over from before a rename, won't match.
+- If the binding has a subject pattern rather than repository conditions, it predates [GitHub's immutable subject claims change](https://github.blog/changelog/2026-04-23-immutable-subject-claims-for-github-actions-oidc-tokens/) and will not match a repo created, renamed, or transferred after July 15, 2026. Re-run `miren auth ci add --github OWNER/REPO` to replace it.
 - The allowed events include the event type that triggered the workflow (e.g., `push`, `pull_request`).
+- The allowed refs, if set, cover the branch or tag being deployed.
 
 ### CLI not using OIDC (falling back to other auth)
 

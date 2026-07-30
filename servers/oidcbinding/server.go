@@ -76,10 +76,6 @@ func (s *Server) Add(ctx context.Context, state *oidcbinding_v1alpha.OidcBinding
 
 	provider := args.Provider()
 	subjectPattern := args.SubjectPattern()
-	if subjectPattern == "" {
-		results.SetError("subject_pattern is required")
-		return nil
-	}
 	description := args.Description()
 
 	// Build claim conditions
@@ -99,6 +95,11 @@ func (s *Server) Add(ctx context.Context, state *oidcbinding_v1alpha.OidcBinding
 			Key:     "event_name",
 			Pattern: "push,workflow_dispatch",
 		})
+	}
+
+	if !identifiesCaller(subjectPattern, claimConditions) {
+		results.SetError("binding must identify the caller: set a subject pattern or a claim condition (e.g. repository) that is not a bare wildcard")
+		return nil
 	}
 
 	binding := &core_v1alpha.OidcBinding{
@@ -209,6 +210,32 @@ func (s *Server) Remove(ctx context.Context, state *oidcbinding_v1alpha.OidcBind
 	s.Log.Info("removed OIDC binding", "id", id)
 	results.SetSuccess(true)
 	return nil
+}
+
+// identifiesCaller reports whether a binding narrows the tokens it accepts down
+// to a particular caller. Without this, a binding constrained only by event_name
+// (or by nothing at all) would accept a token from any repository the issuer
+// serves, which for GitHub Actions means every repository on github.com.
+func identifiesCaller(subjectPattern string, conditions []core_v1alpha.ClaimConditions) bool {
+	if !isWildcardPattern(subjectPattern) {
+		return true
+	}
+	for _, cc := range conditions {
+		// event_name says what triggered the workflow, never who ran it.
+		if cc.Key == "event_name" {
+			continue
+		}
+		if !isWildcardPattern(cc.Pattern) {
+			return true
+		}
+	}
+	return false
+}
+
+// isWildcardPattern reports whether a pattern constrains nothing: either empty
+// or made up entirely of '*', both of which match any value.
+func isWildcardPattern(pattern string) bool {
+	return strings.Trim(pattern, "*") == ""
 }
 
 func toBindingInfo(id, appName string, b *core_v1alpha.OidcBinding) *oidcbinding_v1alpha.BindingInfo {

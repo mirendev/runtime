@@ -72,6 +72,26 @@ ERROR: access denied on cluster "local"
     miren login     sign in again
     miren whoami    check your current identity
 
+# CI token verified but matched no binding
+
+ERROR: no CI binding on cluster "local" accepts this token
+
+  The token is valid and correctly signed, it just doesn't match any binding
+  configured on this cluster. Signing in again won't help, because the
+  credentials aren't the problem.
+
+  Cluster reported  OIDC token did not match any CI binding (issuer=https://token.actions.githubusercontent.com subject=repo:acme@1234567/web-app@7654321:ref:refs/heads/main repository=acme/web-app)
+
+  Possible causes
+    • the binding names a different repository
+    • the repository was created, renamed, or transferred after 2026-07-15, and
+      the binding still matches on the old subject format
+    • the workflow's event or ref isn't allowed by the binding
+
+  Try
+    miren auth ci list -a <app>                       see the configured bindings
+    miren auth ci add --github OWNER/REPO -a <app>    replace a stale one
+
 # unexpected HTTP status
 
 ERROR: cluster "local" returned an unexpected response (HTTP 404)
