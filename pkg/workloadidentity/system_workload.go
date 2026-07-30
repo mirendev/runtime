@@ -13,6 +13,7 @@ type SystemWorkload string
 const (
 	SystemWorkloadSandboxController SystemWorkload = "sandboxcontroller"
 	SystemWorkloadTelemetryWriter   SystemWorkload = "telemetrywriter"
+	SystemWorkloadBuildKit          SystemWorkload = "buildkit"
 )
 
 // ParseSystemWorkload converts the string representation used on the wire into a
@@ -27,7 +28,7 @@ func ParseSystemWorkload(value string) (SystemWorkload, error) {
 
 func (w SystemWorkload) valid() bool {
 	switch w {
-	case SystemWorkloadSandboxController, SystemWorkloadTelemetryWriter:
+	case SystemWorkloadSandboxController, SystemWorkloadTelemetryWriter, SystemWorkloadBuildKit:
 		return true
 	default:
 		return false

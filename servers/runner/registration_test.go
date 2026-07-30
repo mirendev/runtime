@@ -1027,6 +1027,12 @@ func TestAuthorizeSystemWorkloadRequest(t *testing.T) {
 			workload: workloadidentity.SystemWorkloadSandboxController,
 		},
 		{
+			name:     "registered runner requesting coordinator-only buildkit workload",
+			identity: certIdentity(runnerCertName(runnerID)),
+			workload: workloadidentity.SystemWorkloadBuildKit,
+			wantErr:  true,
+		},
+		{
 			name:     "unknown system workload",
 			identity: certIdentity(runnerCertName(runnerID)),
 			workload: workloadidentity.SystemWorkload("notathing"),

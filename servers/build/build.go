@@ -43,6 +43,7 @@ import (
 	"miren.dev/runtime/pkg/rpc/stream"
 	"miren.dev/runtime/pkg/stackbuild"
 	"miren.dev/runtime/pkg/tarx"
+	"miren.dev/runtime/pkg/workloadidentity"
 )
 
 var buildTracer = otel.Tracer("miren.dev/runtime/build")
@@ -106,6 +107,8 @@ type Builder struct {
 	// BuildKit is the persistent BuildKit component for container image builds.
 	// When set, uses the shared daemon instead of launching ephemeral sandboxes.
 	BuildKit BuildKitProvider
+
+	WorkloadIssuer *workloadidentity.Issuer
 
 	sessions   sync.Map // sessionID → *buildSession
 	cacheLocks *appLocks

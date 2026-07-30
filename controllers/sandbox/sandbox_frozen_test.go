@@ -36,7 +36,10 @@ func TestSandboxControllerFrozen(t *testing.T) {
 		// constructions became c.NodeId.Id(). This is a mechanical retype that
 		// produces byte-identical entity ids at runtime, and the saga path does no
 		// node-id construction, so there was nothing to mirror there either.
-		"sandbox.go":  "08abc0b3e6c57e4e2c4018d9b252d1de98768e8559e5eda8606fdb0c77347408",
+		//
+		// Registry authentication is shared by both controllers because the saga
+		// controller delegates image pulls to this inner controller.
+		"sandbox.go":  "82a1667dae3227bc67d533b14487187d8a71968c9678f45373996305e2b49897",
 		"volume.go":   "580062fb8a34f3f7f965689467a4b0f2ed403bc63c1ecdeb44949a7ba7e08dff",
 		"firewall.go": "648cb5d91091d5eb7400152b19695a8045585feae59c5dd36c12d663a27bb91f",
 	}
