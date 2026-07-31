@@ -342,7 +342,7 @@ permissions:
 The CLI reports the rejected token's subject and repository as part of the error, so start by comparing those against `miren auth ci list -a myapp`. Then check that:
 
 - The binding's `repository` condition names the repo the workflow is running in. A binding created for a different repo, or one left over from before a rename, won't match.
-- If the binding has a subject pattern rather than repository conditions, it predates [GitHub's immutable subject claims change](https://github.blog/changelog/2026-04-23-immutable-subject-claims-for-github-actions-oidc-tokens/) and will not match a repo created, renamed, or transferred after July 15, 2026. Re-run `miren auth ci add --github OWNER/REPO` to replace it.
+- If the binding has a subject pattern instead of repository conditions, check that the pattern matches the subject in the error. A name-based pattern like `repo:OWNER/REPO:*` can't match a repo created, renamed, or transferred after July 15, 2026, since those send numeric IDs in the subject (see [GitHub's immutable subject claims change](https://github.blog/changelog/2026-04-23-immutable-subject-claims-for-github-actions-oidc-tokens/)). Re-run `miren auth ci add --github OWNER/REPO` to replace it with one that doesn't depend on the subject format.
 - The allowed events include the event type that triggered the workflow (e.g., `push`, `pull_request`).
 - The allowed refs, if set, cover the branch or tag being deployed.
 
