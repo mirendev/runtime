@@ -339,7 +339,7 @@ permissions:
 
 ### "OIDC access denied" or token not matching any binding
 
-The CLI reports the rejected token's subject and repository as part of the error, so start by comparing those against `miren auth ci list -a myapp`. Then check that:
+When a token is rejected because it didn't match a binding, the CLI reports the subject and repository it saw, so start by comparing those against `miren auth ci list -a myapp`. Other authentication failures stay generic. Then check that:
 
 - The binding's `repository` condition names the repo the workflow is running in. A binding created for a different repo, or one left over from before a rename, won't match.
 - If the binding has a subject pattern instead of repository conditions, check that the pattern matches the subject in the error. A name-based pattern like `repo:OWNER/REPO:*` can't match a repo created, renamed, or transferred after July 15, 2026, since those send numeric IDs in the subject (see [GitHub's immutable subject claims change](https://github.blog/changelog/2026-04-23-immutable-subject-claims-for-github-actions-oidc-tokens/)). Re-run `miren auth ci add --github OWNER/REPO` to replace it with one that doesn't depend on the subject format.
