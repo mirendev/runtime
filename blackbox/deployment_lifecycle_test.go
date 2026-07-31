@@ -110,6 +110,13 @@ func TestConcurrentDeployBlockedByLock(t *testing.T) {
 	c := harness.NewCluster(t)
 	m := harness.NewMiren(t, c)
 
+	// Racing a second deploy against the first needs the first one backgrounded,
+	// and the harness only supports that in dev mode. The lock itself is not
+	// topology-specific, so covering it in dev mode is enough.
+	if c.IsPeers() {
+		t.Skip("skipping: RunCmdBackground requires dev mode")
+	}
+
 	name := harness.UniqueAppName(t, "slow-build")
 	t.Cleanup(func() { m.Run("app", "delete", name, "-f") })
 
