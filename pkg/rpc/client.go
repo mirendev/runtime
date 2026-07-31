@@ -13,6 +13,8 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"slices"
+	"sync"
 	"time"
 
 	"github.com/fxamacker/cbor/v2"
@@ -40,6 +42,7 @@ type NetworkClient struct {
 	transport  *quic.Transport
 	htr        http3.Transport
 	ws         webtransport.Dialer
+	qc         quic.Config
 	capa       *Capability
 	remote     string
 	remoteAddr net.Addr
@@ -53,6 +56,16 @@ type NetworkClient struct {
 	serverObservedAddress string
 
 	//cachedConn *cachedConn
+
+	// conns records every QUIC connection this client has dialed, so a failed
+	// request can be classified by whether a handshake ever completed. That
+	// distinction is not recoverable from the error value: quic-go raises the
+	// same IdleTimeoutError ("timeout: no recent network activity") both for a
+	// connection that never got a packet back and for one that completed its
+	// handshake and later went quiet. Those are different problems with
+	// different fixes, and we own the Dial hook, so we track it ourselves.
+	connMu sync.Mutex
+	conns  []*quic.Conn
 
 	inlineClient *inlineClient
 	localClient  *localClient
@@ -80,7 +93,13 @@ func setTLSConfigServerName(tlsConf *tls.Config, addr net.Addr, host string) {
 func (c *NetworkClient) setupTransport() {
 	c.htr.Logger = c.State.log.With("module", "rpc-call")
 	c.htr.TLSClientConfig = c.tlsCfg
-	c.htr.QUICConfig = &DefaultQUICConfig
+
+	// A per-client copy rather than the shared default: how long to wait for a
+	// handshake depends on where we're pointed, and DefaultQUICConfig is shared
+	// with the server listener.
+	c.qc = DefaultQUICConfig
+	c.qc.HandshakeIdleTimeout = handshakeTimeoutFor(c.remote)
+	c.htr.QUICConfig = &c.qc
 	c.htr.Dial = func(ctx context.Context, addr string, tlsCfg *tls.Config, cfg *quic.Config) (*quic.Conn, error) {
 		uaddr, err := resolveUDPAddr(ctx, "udp", addr)
 		if err != nil {
@@ -89,12 +108,83 @@ func (c *NetworkClient) setupTransport() {
 
 		setTLSConfigServerName(tlsCfg, uaddr, addr)
 
-		return c.transport.DialEarly(ctx, uaddr, tlsCfg, cfg)
+		conn, err := c.transport.DialEarly(ctx, uaddr, tlsCfg, cfg)
+		if err != nil {
+			return nil, err
+		}
+		c.trackConn(conn)
+		return conn, nil
 	}
 
 	c.ws.TLSClientConfig = c.tlsCfg
-	c.ws.QUICConfig = &DefaultQUICConfig
+	c.ws.QUICConfig = &c.qc
 	c.ws.DialAddr = c.htr.Dial
+}
+
+func (c *NetworkClient) trackConn(conn *quic.Conn) {
+	c.connMu.Lock()
+	c.conns = append(c.conns, conn)
+	c.connMu.Unlock()
+}
+
+// reachedServer reports whether any connection this client dialed finished its
+// QUIC handshake, which is the difference between "nothing ever answered" and
+// "we were talking to it and then it stopped".
+//
+// Dial success alone is not the answer: DialEarly returns as soon as the
+// connection object exists so 0-RTT data can flow, well before the handshake
+// completes. HandshakeComplete's channel is only closed on success, so a
+// non-blocking receive is an accurate "did we ever get this far" test.
+func (c *NetworkClient) reachedServer() bool {
+	c.connMu.Lock()
+	conns := slices.Clone(c.conns)
+	c.connMu.Unlock()
+
+	for _, conn := range conns {
+		select {
+		case <-conn.HandshakeComplete():
+			return true
+		default:
+		}
+	}
+	return false
+}
+
+// classifyTransportError turns a transport failure during capability
+// resolution into a ResolveError whose kind reflects what actually happened.
+//
+// Timeouts are the interesting case. quic-go reports a pre-handshake silence
+// and a post-handshake silence with the identical IdleTimeoutError, so we
+// separate them using our own record of whether a handshake ever completed.
+// Non-timeout failures keep the generic kind; they already carry a useful
+// message of their own.
+func (c *NetworkClient) classifyTransportError(name string, elapsed time.Duration, err error) error {
+	return classifyTransportError(name, c.remote, elapsed, err, c.reachedServer())
+}
+
+// classifyTransportError is the decision itself, split out from the client so
+// it can be tested directly: reached is whether a QUIC handshake ever completed.
+func classifyTransportError(name, remote string, elapsed time.Duration, err error, reached bool) error {
+	var netErr net.Error
+	if !errors.As(err, &netErr) || !netErr.Timeout() {
+		return NewResolveHTTPError(err, "error performing http request to %s for %q: %v", remote, name, err)
+	}
+
+	// Nothing ever answered, so we never got far enough to say anything about
+	// the server itself. This is the common case: it isn't running, the
+	// address is wrong, or the traffic is being dropped.
+	if !reached {
+		return NewResolveUnreachableError(name, remote, elapsed, err)
+	}
+
+	// Our own lookup deadline fired while the connection was still healthy:
+	// the server is up and the transport is fine, it just never replied.
+	if errors.Is(err, context.DeadlineExceeded) {
+		return NewResolveNoAnswerError(name, remote, elapsed, err)
+	}
+
+	// We had a working connection and it stopped responding partway through.
+	return NewResolveWentSilentError(name, remote, elapsed, err)
 }
 
 func (c *NetworkClient) NewClient(capa *Capability) Client {
@@ -213,11 +303,22 @@ func (c *NetworkClient) sendIdentity(ctx context.Context) error {
 	return nil
 }
 
+// resolveCapability looks up a named capability on the remote.
+//
+// The deadline matters as much as the request: without one, a server that
+// accepts the connection and then never answers hangs the CLI forever with no
+// output at all, because the transport's keepalives keep proving the connection
+// is alive so no idle timeout ever fires. Verified against a server whose
+// lookup handler blocked for two minutes — the client waited the entire time
+// and printed nothing. See lookupTimeoutFor for how the budget is chosen.
 func (c *NetworkClient) resolveCapability(name string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), lookupTimeoutFor(c.remote))
+	defer cancel()
+
 	url := "https://" + c.remote + "/_rpc/lookup/" + url.PathEscape(name)
-	req, err := http.NewRequest(http.MethodPost, url, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, nil)
 	if err != nil {
-		return NewResolveHTTPError(err, "error creating new http request: %v", err)
+		return NewResolveHTTPError(err, "error creating http request for %q at %s: %v", name, c.remote, err)
 	}
 
 	req.Header.Set("rpc-public-key", base58.Encode(c.State.pubkey))
@@ -226,26 +327,27 @@ func (c *NetworkClient) resolveCapability(name string) error {
 	c.addBearerToken(req)
 	req.Header.Set("rpc-contact-addr", c.remote)
 
+	started := time.Now()
 	resp, err := c.roundTrip(req)
 	if err != nil {
-		return NewResolveHTTPError(err, "error performing http request: %v", err)
+		return c.classifyTransportError(name, time.Since(started), err)
 	}
 
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return NewResolveStatusError(resp.StatusCode)
+		return NewResolveStatusError(name, c.remote, resp.StatusCode)
 	}
 
 	var lr lookupResponse
 
 	err = cbor.NewDecoder(resp.Body).Decode(&lr)
 	if err != nil {
-		return NewResolveDecodeError(err)
+		return NewResolveDecodeError(name, c.remote, err)
 	}
 
 	if lr.Error != "" {
-		return NewResolveLookupError(lr.Error)
+		return NewResolveLookupError(name, c.remote, lr.Error)
 	}
 
 	c.capa = lr.Capability
@@ -256,7 +358,22 @@ func (c *NetworkClient) resolveCapability(name string) error {
 	return nil
 }
 
+// reresolveName describes what we're re-resolving, for error messages. The
+// interface name is the closest thing to the capability name the user would
+// recognize; without it the message would name nothing at all.
+func reresolveName(rs *InterfaceState) string {
+	if rs != nil && rs.Interface != "" {
+		return rs.Interface
+	}
+	return "reresolve"
+}
+
 func (c *NetworkClient) reresolveCapability(rs *InterfaceState) error {
+	// Same unbounded-wait hazard as resolveCapability: a server that holds the
+	// connection open without answering would hang here forever.
+	ctx, cancel := context.WithTimeout(context.Background(), lookupTimeoutFor(c.remote))
+	defer cancel()
+
 	url := "https://" + c.remote + "/_rpc/reresolve"
 	c.State.log.Debug("reresolving capability from state", "url", url)
 
@@ -266,7 +383,7 @@ func (c *NetworkClient) reresolveCapability(rs *InterfaceState) error {
 		return err
 	}
 
-	req, err := http.NewRequest(http.MethodPost, url, &buf)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, &buf)
 	if err != nil {
 		return fmt.Errorf("error creating new http request: %w", err)
 	}
@@ -277,15 +394,20 @@ func (c *NetworkClient) reresolveCapability(rs *InterfaceState) error {
 	// Add bearer token if configured
 	c.addBearerToken(req)
 
+	// Reconnecting deserves the same diagnosis as connecting. Returning the
+	// raw transport error here would put the original "timeout: no recent
+	// network activity" back in front of anyone whose session had to
+	// re-resolve, which is the failure this change exists to remove.
+	started := time.Now()
 	resp, err := c.roundTrip(req)
 	if err != nil {
-		return err
+		return c.classifyTransportError(reresolveName(rs), time.Since(started), err)
 	}
 
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return errors.Errorf("unexpected status code: %d", resp.StatusCode)
+		return NewResolveStatusError(reresolveName(rs), c.remote, resp.StatusCode)
 	}
 
 	var lr lookupResponse

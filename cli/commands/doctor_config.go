@@ -2,9 +2,8 @@ package commands
 
 import (
 	"errors"
+	"fmt"
 	"net"
-	"os"
-	"strings"
 
 	"miren.dev/runtime/clientconfig"
 	"miren.dev/runtime/pkg/ui"
@@ -19,135 +18,91 @@ func isLocalCluster(hostname string) bool {
 	return isLocalAddress(host)
 }
 
-type clusterInfo struct {
-	name    string
-	cluster *clientconfig.ClusterConfig
-	source  string
-}
-
-// DoctorConfig shows configuration file information
-func DoctorConfig(ctx *Context, opts struct {
-	FormatOptions
-	ConfigCentric
-}) error {
-	cfg, err := opts.LoadConfig()
-	if err != nil && !errors.Is(err, clientconfig.ErrNoConfig) {
-		return err
-	}
-
-	ctx.Printf("%s\n", infoBold.Render("Configuration"))
-	ctx.Printf("%s\n", infoGray.Render("============="))
-
-	if cfg == nil || errors.Is(err, clientconfig.ErrNoConfig) {
-		ctx.Printf("\n%s\n", infoGray.Render("No configuration found"))
-		ctx.Printf("\n%s\n", infoLabel.Render("To get started:"))
-		ctx.Printf("  %s        %s\n", infoBold.Render("miren login"), infoGray.Render("# Authenticate with miren.cloud"))
-		ctx.Printf("  %s  %s\n", infoBold.Render("miren cluster add"), infoGray.Render("# Add a cluster to your config"))
-		return nil
-	}
-
-	activeCluster := cfg.ActiveCluster()
-
-	// Separate clusters into local and remote
-	var localClusters, remoteClusters []clusterInfo
-	cfg.IterateClusters(func(name string, cluster *clientconfig.ClusterConfig) error {
-		info := clusterInfo{
-			name:    name,
-			cluster: cluster,
-			source:  cfg.GetClusterSource(name),
+// checkConfiguration reports whether we know which cluster to talk to.
+//
+// It deliberately doesn't render the cluster inventory: `miren cluster list`
+// already does that, and doctor's job is to answer "is anything wrong", not to
+// be a second, slightly different table.
+func checkConfiguration(env *doctorEnv) checkResult {
+	if env.configErr != nil && !errors.Is(env.configErr, clientconfig.ErrNoConfig) {
+		return checkResult{
+			Status:  checkFail,
+			Summary: "unreadable",
+			Problem: &ui.Diagnostic{
+				Summary: "couldn't read your miren configuration",
+				Detail:  env.configErr.Error(),
+				Actions: []ui.Action{
+					{Command: "miren cluster list", Note: "see what's configured"},
+				},
+				Cause: env.configErr,
+			},
 		}
-		if isLocalCluster(cluster.Hostname) {
-			localClusters = append(localClusters, info)
+	}
+
+	if env.cfg == nil || env.clusterCount == 0 {
+		return checkResult{
+			Status:  checkFail,
+			Summary: "no clusters configured",
+			Problem: &ui.Diagnostic{
+				Summary: "no clusters are configured",
+				Detail:  "miren doesn't know which cluster to talk to yet.",
+				Actions: []ui.Action{
+					{Command: "miren login", Note: "authenticate with miren.cloud"},
+					{Command: "miren cluster add", Note: "add a cluster manually"},
+				},
+			},
+		}
+	}
+
+	// A cluster that was named but wouldn't load is a different problem from
+	// not having picked one, and saying the latter would bury the reason.
+	if env.cluster == nil && env.clusterErr != nil {
+		named := env.requestedCluster
+		if named == "" {
+			named = "the active cluster"
 		} else {
-			remoteClusters = append(remoteClusters, info)
-		}
-		return nil
-	})
-
-	if opts.IsJSON() {
-		type ClusterJSON struct {
-			Name    string `json:"name"`
-			Address string `json:"address"`
-			Source  string `json:"source"`
-			Active  bool   `json:"active"`
-			Local   bool   `json:"local"`
+			named = fmt.Sprintf("%q", named)
 		}
 
-		allClusters := append(localClusters, remoteClusters...)
-		items := make([]ClusterJSON, len(allClusters))
-		for i, c := range allClusters {
-			items[i] = ClusterJSON{
-				Name:    c.name,
-				Address: c.cluster.Hostname,
-				Source:  c.source,
-				Active:  c.name == activeCluster,
-				Local:   isLocalCluster(c.cluster.Hostname),
-			}
+		return checkResult{
+			Status:  checkFail,
+			Summary: "selected cluster couldn't be loaded",
+			Problem: &ui.Diagnostic{
+				Summary: fmt.Sprintf("couldn't load %s", named),
+				Detail: "The cluster is named but can't be resolved, so nothing else could " +
+					"be checked against it.",
+				Actions: []ui.Action{
+					{Command: "miren cluster list", Note: "see configured clusters"},
+					{Command: "miren cluster switch <name>", Note: "pick a different one"},
+				},
+				Cause:     env.clusterErr,
+				ShowCause: true,
+			},
 		}
-		return PrintJSON(items)
 	}
 
-	// Shorten paths for display
-	homeDir, _ := os.UserHomeDir()
-	shortenPath := func(path string) string {
-		if homeDir != "" && strings.HasPrefix(path, homeDir) {
-			return "~" + path[len(homeDir):]
+	if env.cluster == nil {
+		return checkResult{
+			Status:  checkFail,
+			Summary: fmt.Sprintf("%s configured, none selected", pluralClusters(env.clusterCount)),
+			Problem: &ui.Diagnostic{
+				Summary: "no cluster is selected",
+				Detail:  "Clusters are configured, but none of them is active.",
+				Actions: []ui.Action{
+					{Command: "miren cluster switch <name>", Note: "pick one"},
+					{Command: "miren cluster list", Note: "see what's available"},
+				},
+			},
 		}
-		return path
 	}
 
-	// Helper to render cluster table
-	renderClusterTable := func(label string, clusters []clusterInfo) {
-		if len(clusters) == 0 {
-			return
-		}
-		ctx.Printf("\n%s\n", infoLabel.Render(label))
-		headers := []string{"CLUSTER", "ADDRESS", "SOURCE FILE"}
-		var rows []ui.Row
-		for _, c := range clusters {
-			name := c.name
-			if c.name == activeCluster {
-				name = infoGreen.Render(c.name + "*")
-			}
-			rows = append(rows, ui.Row{name, c.cluster.Hostname, shortenPath(c.source)})
-		}
-		columns := ui.AutoSizeColumns(headers, rows, nil)
-		table := ui.NewTable(ui.WithColumns(columns), ui.WithRows(rows))
-		ctx.Printf("%s\n", table.Render())
-	}
-
-	renderClusterTable("Local:", localClusters)
-	renderClusterTable("Remote:", remoteClusters)
-
-	if len(localClusters) > 0 || len(remoteClusters) > 0 {
-		ctx.Printf("%s\n", infoGray.Render("* = active cluster"))
-	}
-
-	// Show help content in interactive mode
-	if !ui.IsInteractive() {
-		return nil
-	}
-
-	ctx.Printf("\n")
-	showAddClusterHelp(ctx, cfg)
-	showRegisterClusterHelp(ctx)
-
-	return nil
+	summary := fmt.Sprintf("%s, active: %s", pluralClusters(env.clusterCount), env.clusterName)
+	return checkResult{Status: checkOK, Summary: summary}
 }
 
-func showAddClusterHelp(ctx *Context, cfg *clientconfig.Config) {
-	ctx.Printf("%s\n", infoBold.Render("How do I add an existing cluster?"))
-	if cfg == nil || !cfg.HasIdentities() {
-		ctx.Printf("  %s\n", infoGray.Render("miren login"))
+func pluralClusters(n int) string {
+	if n == 1 {
+		return "1 cluster"
 	}
-	ctx.Printf("  %s\n", infoGray.Render("miren cluster add"))
-	ctx.Printf("  %s\n\n", infoGray.Render("miren cluster switch <name>"))
-}
-
-func showRegisterClusterHelp(ctx *Context) {
-	ctx.Printf("%s\n", infoBold.Render("How do I register a new cluster?"))
-	ctx.Printf("  %s\n", infoGray.Render("sudo miren server register -n <cluster-name>"))
-	ctx.Printf("  %s\n", infoGray.Render("# Approve in browser when prompted"))
-	ctx.Printf("  %s\n", infoGray.Render("sudo systemctl restart miren"))
-	ctx.Printf("  %s\n", infoGray.Render("miren cluster add"))
+	return fmt.Sprintf("%d clusters", n)
 }

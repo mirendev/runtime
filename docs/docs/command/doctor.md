@@ -18,6 +18,8 @@ miren doctor [flags]
 
 - `--cluster, -C` — Cluster name
 - `--config` — Path to the config file
+- `--format` — Output format (text, json) (default: `text`)
+- `--json` — Shorthand for --format json
 
 ## Global Options
 

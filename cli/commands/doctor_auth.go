@@ -1,101 +1,65 @@
 package commands
 
 import (
-	"errors"
 	"fmt"
-	"strings"
 
-	"miren.dev/runtime/clientconfig"
 	"miren.dev/runtime/pkg/ui"
 )
 
-// DoctorAuth shows authentication and user information
-func DoctorAuth(ctx *Context, opts struct {
-	ConfigCentric
-}) error {
-	cfg, err := opts.LoadConfig()
-	if err != nil {
-		if errors.Is(err, clientconfig.ErrNoConfig) {
-			ctx.Printf("No cluster configured\n")
-			ctx.Printf("\nUse 'miren cluster add' to add a cluster\n")
-			return nil
+// checkAuthentication reports who we're signed in as.
+//
+// It stays a one-line roll-up on purpose. `miren whoami` already prints the
+// full identity, with --format json, and doctor's job is to answer whether
+// anything is wrong rather than to be a second rendering of the same fields.
+func checkAuthentication(env *doctorEnv) checkResult {
+	if !env.configured() {
+		return checkResult{Status: checkSkip, Summary: "(no cluster configured)"}
+	}
+
+	if env.cluster.Identity == "" {
+		// Not a problem on its own: a local development cluster with no cloud
+		// registration is a perfectly normal setup, and warning about it would
+		// train people to ignore doctor.
+		return checkResult{Status: checkSkip, Summary: "(no identity configured)"}
+	}
+
+	if env.connErr != nil {
+		return checkResult{Status: checkSkip, Summary: "(server unreachable)"}
+	}
+
+	res := tryAuthenticate(env.ctx, env.cfg, env.cluster)
+
+	if res.Claims == nil && res.UserInfo == nil {
+		return checkResult{
+			Status:  checkWarn,
+			Summary: fmt.Sprintf("identity %q isn't usable", env.cluster.Identity),
+			Problem: &ui.Diagnostic{
+				Summary: "couldn't authenticate with the configured identity",
+				Detail: "The cluster is configured to use an identity, but no valid token " +
+					"could be obtained for it. Commands that need authentication will " +
+					"fail even though the server is reachable.",
+				Actions: []ui.Action{
+					{Command: "miren login", Note: "sign in again"},
+					{Command: "miren whoami", Note: "inspect the current identity"},
+				},
+				// Shown by default: "your token expired" and "that identity
+				// doesn't exist" need different fixes, and only the underlying
+				// error distinguishes them.
+				Cause:     res.Err,
+				ShowCause: res.Err != nil,
+			},
 		}
-		return err
 	}
 
-	cluster, clusterName, err := opts.LoadCluster()
-	if err != nil {
-		return err
-	}
-	if cluster == nil {
-		ctx.Printf("No cluster configured\n")
-		return nil
-	}
-
-	hostname := cluster.Hostname
-	if hostname == "" {
-		return fmt.Errorf("no hostname configured for cluster %s", clusterName)
-	}
-
-	authRes := tryAuthenticate(ctx, cfg, cluster)
-
-	ctx.Printf("%s\n", infoBold.Render("Authentication"))
-	ctx.Printf("%s\n", infoGray.Render("=============="))
-	ctx.Printf("%s     %s\n", infoLabel.Render("Cluster:"), clusterName)
-	ctx.Printf("%s      %s\n", infoLabel.Render("Server:"), hostname)
-	ctx.Printf("%s %s\n", infoLabel.Render("Auth Method:"), authRes.Method)
-
-	if authRes.IdentityName != "" {
-		ctx.Printf("%s    %s\n", infoLabel.Render("Identity:"), authRes.IdentityName)
-	}
-
-	if authRes.Claims != nil || authRes.UserInfo != nil {
-		ctx.Printf("\n")
-		// Show email from cloud user info if available
-		if authRes.UserInfo != nil && authRes.UserInfo.User.Email != "" {
-			ctx.Printf("%s       %s\n", infoLabel.Render("Email:"), authRes.UserInfo.User.Email)
-		}
-		// Show name from cloud user info if available
-		if authRes.UserInfo != nil && authRes.UserInfo.User.Name != "" {
-			ctx.Printf("%s        %s\n", infoLabel.Render("Name:"), authRes.UserInfo.User.Name)
-		}
-		if authRes.Claims != nil {
-			if authRes.Claims.UserID != "" {
-				ctx.Printf("%s     %s\n", infoLabel.Render("User ID:"), authRes.Claims.UserID)
-			}
-			if authRes.Claims.OrganizationID != "" {
-				ctx.Printf("%s %s\n", infoLabel.Render("Organization:"), authRes.Claims.OrganizationID)
-			}
-			if len(authRes.Claims.Groups) > 0 {
-				ctx.Printf("%s      %s\n", infoLabel.Render("Groups:"), strings.Join(authRes.Claims.Groups, ", "))
-			}
-		}
-	} else if authRes.Method == "none" {
-		ctx.Printf("\n%s\n", infoGray.Render("No authentication configured for this cluster"))
-	}
-
-	// Show help content in interactive mode
-	if !ui.IsInteractive() {
-		return nil
-	}
-
-	ctx.Printf("\n")
-	showLoginDifferentAccountHelp(ctx)
-	showAddAuthToServerHelp(ctx)
-
-	return nil
+	return checkResult{Status: checkOK, Summary: authSummary(res)}
 }
 
-func showLoginDifferentAccountHelp(ctx *Context) {
-	ctx.Printf("%s\n", infoBold.Render("How do I login with a different account?"))
-	ctx.Printf("  %s\n", infoGray.Render("miren logout"))
-	ctx.Printf("  %s\n\n", infoGray.Render("miren login"))
-}
-
-func showAddAuthToServerHelp(ctx *Context) {
-	ctx.Printf("%s\n", infoBold.Render("How do I add authentication to this server?"))
-	ctx.Printf("  %s\n", infoGray.Render("miren login"))
-	ctx.Printf("  %s\n", infoGray.Render("sudo miren server register -n <cluster-name>"))
-	ctx.Printf("  %s\n", infoGray.Render("# Approve in browser when prompted"))
-	ctx.Printf("  %s\n", infoGray.Render("sudo systemctl restart miren"))
+func authSummary(res authResult) string {
+	if res.UserInfo != nil && res.UserInfo.User.Email != "" {
+		return res.UserInfo.User.Email
+	}
+	if res.Claims != nil && res.Claims.Subject != "" {
+		return res.Claims.Subject
+	}
+	return res.Method
 }

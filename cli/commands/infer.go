@@ -336,7 +336,7 @@ func (w *Cmd) Invoke(args ...string) error {
 		w.show(w.opts.Elem())
 	}
 
-	ctx := setup(context.Background(), w.global, w.opts.Interface())
+	ctx := setup(context.Background(), w.global, w.opts.Interface(), w.name)
 	defer ctx.Close()
 
 	rets := w.f.Call([]reflect.Value{reflect.ValueOf(ctx), w.opts.Elem()})
@@ -376,7 +376,7 @@ func RunCommand(f any, args ...string) (*CommandOutput, error) {
 		return &out, err
 	}
 
-	ctx := setup(context.Background(), cmd.global, cmd.opts.Interface())
+	ctx := setup(context.Background(), cmd.global, cmd.opts.Interface(), cmd.name)
 	defer ctx.Close()
 
 	ctx.Stdout = &out.Stdout

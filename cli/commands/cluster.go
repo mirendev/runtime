@@ -3,6 +3,8 @@ package commands
 import (
 	"errors"
 	"net"
+	"os"
+	"strings"
 
 	"github.com/charmbracelet/lipgloss"
 	"miren.dev/runtime/clientconfig"
@@ -26,6 +28,7 @@ func ClusterList(ctx *Context, opts struct {
 					Address  string `json:"address"`
 					Identity string `json:"identity"`
 					Active   bool   `json:"active"`
+					Source   string `json:"source"`
 				}
 				return PrintJSON([]ClusterInfo{})
 			}
@@ -42,11 +45,15 @@ func ClusterList(ctx *Context, opts struct {
 		Address  string `json:"address"`
 		Identity string `json:"identity"`
 		Active   bool   `json:"active"`
+		// Source is the config file the cluster came from, which is the one
+		// thing `doctor config` used to show that nothing else did. It answers
+		// "why is this cluster even here?" when an unexpected one shows up.
+		Source string `json:"source"`
 	}
 
 	var clusters []ClusterInfo
 	var rows []ui.Row
-	headers := []string{"", "CLUSTER", "ADDRESS", "IDENTITY"}
+	headers := []string{"", "CLUSTER", "ADDRESS", "IDENTITY", "SOURCE"}
 
 	// Determine the effective cluster for the current context.
 	globalCluster := cfg.ActiveCluster()
@@ -73,11 +80,14 @@ func ClusterList(ctx *Context, opts struct {
 		}
 
 		// Build structured data for JSON
+		source := cfg.GetClusterSource(name)
+
 		clusterInfo := ClusterInfo{
 			Name:     name,
 			Address:  ccfg.Hostname,
 			Identity: ccfg.Identity,
 			Active:   isActive,
+			Source:   source,
 		}
 		clusters = append(clusters, clusterInfo)
 
@@ -95,6 +105,7 @@ func ClusterList(ctx *Context, opts struct {
 				name,
 				address,
 				identity,
+				shortenHomePath(source),
 			})
 		}
 		return nil
@@ -132,4 +143,25 @@ func Cluster(ctx *Context, opts struct {
 	ConfigCentric
 }) error {
 	return ClusterList(ctx, opts)
+}
+
+// shortenHomePath replaces the home directory prefix with ~ so config paths fit
+// in a table column without wrapping.
+//
+// The prefix must end at a directory boundary. A bare strings.HasPrefix turns
+// /home/alice-work/config.yaml into ~-work/config.yaml when home is
+// /home/alice, which isn't a path anyone can use.
+func shortenHomePath(path string) string {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return path
+	}
+	if path == home {
+		return "~"
+	}
+	prefix := strings.TrimSuffix(home, string(os.PathSeparator)) + string(os.PathSeparator)
+	if !strings.HasPrefix(path, prefix) {
+		return path
+	}
+	return "~" + string(os.PathSeparator) + path[len(prefix):]
 }

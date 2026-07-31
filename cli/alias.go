@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -20,7 +21,13 @@ func expandAlias(d *mflags.Dispatcher, args []string) ([]string, error) {
 
 	ac, err := appconfig.LoadAppConfig()
 	if err != nil {
-		if te, ok := err.(ui.TerminalError); ok {
+		// errors.As, not a type assertion: a wrapped rich error would
+		// otherwise silently degrade to the plain path below.
+		var se ui.SeverityTerminalError
+		var te ui.TerminalError
+		if errors.As(err, &se) {
+			se.WriteWithSeverity(os.Stderr, ui.SeverityWarning)
+		} else if errors.As(err, &te) {
 			fmt.Fprint(os.Stderr, "warning: ")
 			te.WriteForTerminal(os.Stderr)
 		} else {

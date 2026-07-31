@@ -49,6 +49,17 @@ type Context struct {
 	ClusterConfig *clientconfig.ClusterConfig
 	ClusterName   string
 
+	// CommandName is the full command path the user invoked, e.g. "route
+	// list". Error messages use it to describe failures in terms of what was
+	// typed rather than the internal capability name behind it.
+	CommandName string
+
+	// clusterErr records a cluster that was named but couldn't be loaded, and
+	// requestedCluster the name that was asked for. Held so that anything
+	// needing a connection can refuse instead of silently using another one.
+	clusterErr       error
+	requestedCluster string
+
 	Config struct {
 		ServerAddress string
 	}
@@ -65,12 +76,13 @@ func (c *Context) Verbose() bool {
 	return c.verbose > 0
 }
 
-func setup(ctx context.Context, flags *GlobalFlags, opts any) *Context {
+func setup(ctx context.Context, flags *GlobalFlags, opts any, commandName string) *Context {
 	s := &Context{
 		verbose:     len(flags.Verbose),
 		Stdout:      os.Stdout,
 		Stderr:      os.Stderr,
 		ServerState: NewServerState(),
+		CommandName: commandName,
 	}
 
 	// Initialize config from flags
@@ -131,7 +143,14 @@ func setup(ctx context.Context, flags *GlobalFlags, opts any) *Context {
 			s.ClusterConfig = cfg
 			s.ClusterName = name
 		} else if err != nil && !errors.Is(err, clientconfig.ErrNoConfig) {
-			s.Log.Warn("Failed to load cluster config", "error", err)
+			// Remembered rather than only logged. Anything that needs a
+			// connection has to refuse rather than quietly use a different
+			// cluster, and a warning scrolling past is not a refusal.
+			s.clusterErr = err
+			if rc, ok := opts.(interface{ RequestedCluster() string }); ok {
+				s.requestedCluster = rc.RequestedCluster()
+			}
+			s.Log.Debug("Failed to load cluster config", "error", err)
 		}
 	}
 
@@ -238,13 +257,24 @@ func (c *Context) Warn(format string, args ...interface{}) {
 
 // printConfigWarning renders a config error to stderr. Uses TerminalError
 // for rich output when available, otherwise falls back to a plain warning.
+//
+// errors.As rather than a type assertion: a rich error that has been wrapped on
+// its way up would otherwise silently fall back to the plain path.
 func printConfigWarning(err error) {
-	if te, ok := err.(ui.TerminalError); ok {
+	var se ui.SeverityTerminalError
+	if errors.As(err, &se) {
+		se.WriteWithSeverity(os.Stderr, ui.SeverityWarning)
+		return
+	}
+
+	var te ui.TerminalError
+	if errors.As(err, &te) {
 		fmt.Fprint(os.Stderr, "warning: ")
 		te.WriteForTerminal(os.Stderr)
-	} else {
-		fmt.Fprintf(os.Stderr, "warning: %v\n", err)
+		return
 	}
+
+	fmt.Fprintf(os.Stderr, "warning: %v\n", err)
 }
 
 func (c *Context) Begin(format string, args ...interface{}) {
@@ -390,6 +420,15 @@ func (c *Context) DisplayTable(headers []string, rows [][]string) {
 }
 
 func (c *Context) RPCClient(name string) (*rpc.NetworkClient, error) {
+	// Nothing is printed unless this takes long enough to look like a hang.
+	defer c.startConnectNotice().Stop()
+
+	// A cluster was named and we couldn't load it. Connecting to anything else
+	// now would answer a question about one cluster with another's data.
+	if c.clusterErr != nil {
+		return nil, c.unknownClusterError()
+	}
+
 	var opts []rpc.StateOption
 
 	opts = append(opts, rpc.WithLogger(c.Log))
@@ -399,15 +438,26 @@ func (c *Context) RPCClient(name string) (*rpc.NetworkClient, error) {
 		err error
 	)
 
+	// A selected cluster is authoritative. If its configuration can't produce a
+	// connection, that is the answer — we must not fall through to the branches
+	// below, because they connect somewhere else entirely.
+	//
+	// This used to fall through, and the result was genuinely dangerous:
+	// `miren -C some-broken-cluster route list` would quietly answer with the
+	// *active* cluster's routes, so you'd be reading production data while
+	// believing you were looking at something else. An error about the cluster
+	// you named beats correct-looking data about a cluster you didn't.
 	if c.ClusterConfig != nil && c.ClientConfig != nil {
 		cs, err = c.ClusterConfig.State(c, c.ClientConfig, opts...)
-		if err == nil {
-			client, err := cs.Client(name)
-			if err != nil {
-				return nil, c.wrapRPCError(err)
-			}
-			return client, nil
+		if err != nil {
+			return nil, c.unusableClusterError(err)
 		}
+
+		client, err := cs.Client(name)
+		if err != nil {
+			return nil, c.wrapRPCError(err)
+		}
+		return client, nil
 	}
 
 	if c.ClientConfig != nil {
@@ -436,18 +486,3 @@ func (c *Context) RPCClient(name string) (*rpc.NetworkClient, error) {
 }
 
 var ErrAccessDenied = errors.New("access denied")
-
-// wrapRPCError wraps RPC errors with user-friendly messages
-func (c *Context) wrapRPCError(err error) error {
-	var resolveErr *rpc.ResolveError
-	if errors.As(err, &resolveErr) && resolveErr.StatusCode == 401 {
-		clusterName := c.ClusterName
-		if clusterName == "" {
-			clusterName = "the cluster"
-		}
-
-		c.Warn("access denied: you don't have permission to access %s\nPlease check your credentials or request access from the cluster administrator.\nIf you were logged in previously, your session may have expired — run 'miren login'.", clusterName)
-		return ErrAccessDenied
-	}
-	return err
-}

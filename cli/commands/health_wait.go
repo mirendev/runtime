@@ -271,7 +271,7 @@ func pollUntilTerminal(ctx *Context, getter appInfoGetter, appName, versionID, v
 	const spinInterval = 100 * time.Millisecond
 
 	w := &waitingLine{
-		ctx:         ctx,
+		out:         ctx.Stdout,
 		label:       fmt.Sprintf("Waiting for version %s to become healthy...", versionDisplay),
 		interactive: isInteractiveOutput(ctx.Stdout),
 	}
@@ -447,8 +447,14 @@ func awaitHealthyInProgram(ctx *Context, prog *tea.Program, waitFinal func() *de
 // waitingLine renders the "waiting for health" status. On an interactive
 // terminal it animates the build's Meter spinner on a single rewritten line; on
 // a non-interactive writer it prints one static line and then stays quiet.
+// waitingLine animates a single "still working" line on an interactive
+// terminal, and degrades to one static line when output isn't a terminal.
+//
+// out is explicit rather than always ctx.Stdout because some callers must write
+// to stderr: anything that runs during an ordinary command would otherwise land
+// in piped stdout and corrupt --format json output.
 type waitingLine struct {
-	ctx         *Context
+	out         io.Writer
 	label       string
 	interactive bool
 	frame       int
@@ -458,20 +464,20 @@ type waitingLine struct {
 func (w *waitingLine) tick() {
 	if !w.interactive {
 		if !w.printed {
-			w.ctx.Printf("  %s\n", w.label)
+			fmt.Fprintf(w.out, "  %s\n", w.label)
 			w.printed = true
 		}
 		return
 	}
 	frame := Meter.Frames[w.frame%len(Meter.Frames)]
 	w.frame++
-	fmt.Fprintf(w.ctx.Stdout, "\r  %s %s", frame, w.label)
+	fmt.Fprintf(w.out, "\r  %s %s", frame, w.label)
 }
 
 // clear erases the animated waiting line so the summary can take its place.
 func (w *waitingLine) clear() {
 	if w.interactive {
-		fmt.Fprint(w.ctx.Stdout, "\r\033[K")
+		fmt.Fprint(w.out, "\r\033[K")
 	}
 }
 
