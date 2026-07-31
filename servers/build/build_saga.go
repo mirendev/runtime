@@ -615,6 +615,19 @@ func undoFinalize(_ context.Context, _ finalizeIn, _ finalizeOut) error {
 // when the client sent a DeployRequest, which seeds deploy_cluster_id; without
 // it deployment_id stays empty and every downstream action skips. Ephemeral
 // builds are never tracked.
+//
+// Only begin-deployment may fail the saga. The record describes the deploy; it
+// must never be able to undo one. Once begin has succeeded the later actions
+// log their failures and return nil, because returning an error here would
+// compensate the saga, and the compensation for set-active-version restores the
+// previous app version — so a failed bookkeeping write would roll back a deploy
+// that is already live. The plain path enforces the same rule in
+// deployTracking.activate; these match it.
+//
+// For the same reason the settles run on a context detached from the saga's:
+// the most likely cause of failure is the client disconnecting, which is
+// exactly when the record most needs to reach a terminal state and drop the
+// deploy lock.
 
 type beginDeploymentIn struct {
 	AppName   string `json:"app_name" saga:"app_name"`
@@ -692,8 +705,16 @@ func recordAppVersion(ctx context.Context, in recordAppVersionIn) (recordAppVers
 		return recordAppVersionOut{}, nil
 	}
 	deps := saga.Get[*buildSagaDeps](ctx)
-	if err := deps.builder.deploy.SetAppVersion(ctx, in.DeploymentID, in.AppVersionID); err != nil {
-		return recordAppVersionOut{}, fmt.Errorf("recording app version on deployment %s: %w", in.DeploymentID, err)
+
+	settleCtx, cancel := settleContext(ctx)
+	defer cancel()
+
+	// A failure here is not fatal to the build: activate-deployment will refuse
+	// to settle a record with no version and release the lock instead, which is
+	// the same degradation the plain path takes.
+	if err := deps.builder.deploy.SetAppVersion(settleCtx, in.DeploymentID, in.AppVersionID); err != nil {
+		deps.builder.Log.Error("failed to record deployment app version",
+			"deployment_id", in.DeploymentID, "app_version_id", in.AppVersionID, "error", err)
 	}
 	return recordAppVersionOut{}, nil
 }
@@ -719,8 +740,20 @@ func activateDeployment(ctx context.Context, in activateDeploymentIn) (activateD
 		return activateDeploymentOut{}, nil
 	}
 	deps := saga.Get[*buildSagaDeps](ctx)
-	if err := deps.builder.deploy.Activate(ctx, in.DeploymentID); err != nil {
-		return activateDeploymentOut{}, fmt.Errorf("activating deployment %s: %w", in.DeploymentID, err)
+
+	settleCtx, cancel := settleContext(ctx)
+	defer cancel()
+
+	// The version is live by the time this runs, so a settle failure is logged
+	// rather than returned, and the lock is dropped directly as a backstop. See
+	// the failure-policy note at the top of this section.
+	if err := deps.builder.deploy.Activate(settleCtx, in.DeploymentID); err != nil {
+		deps.builder.Log.Error("failed to activate deployment; releasing lock as backstop",
+			"deployment_id", in.DeploymentID, "error", err)
+		if relErr := deps.builder.deploy.ReleaseLock(settleCtx, in.DeploymentID); relErr != nil {
+			deps.builder.Log.Error("failed to release lock after activation error",
+				"deployment_id", in.DeploymentID, "error", relErr)
+		}
 	}
 	return activateDeploymentOut{}, nil
 }

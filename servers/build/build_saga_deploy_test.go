@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"miren.dev/runtime/api/app"
+	"miren.dev/runtime/api/build/build_v1alpha"
 	"miren.dev/runtime/api/entityserver"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/pkg/deploylifecycle"
@@ -21,6 +22,14 @@ import (
 // actions and a Builder wired with a tracker, so the server-owned deployment
 // record path can be exercised end to end against the in-memory store.
 func newDeploySagaHarness(t *testing.T) *sagaTestHarness {
+	t.Helper()
+	return newDeploySagaHarnessWith(t, setActiveVersion)
+}
+
+// newDeploySagaHarnessWith is newDeploySagaHarness with a substitute
+// set-active-version action, so a test can wedge behaviour into the window
+// between the version going live and the deployment record settling.
+func newDeploySagaHarnessWith(t *testing.T, setActive any) *sagaTestHarness {
 	t.Helper()
 	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 
@@ -56,7 +65,7 @@ func newDeploySagaHarness(t *testing.T) *sagaTestHarness {
 		Action(actionCreateConfigVer, createConfigVersion).Undo(undoCreateConfigVersion).
 		Action(actionCreateVersion, createVersion).Undo(undoCreateVersion).
 		Action(actionProvisionAddons, provisionAddons).Undo(undoProvisionAddons).
-		Action(actionSetActiveVer, setActiveVersion).Undo(undoSetActiveVersion).
+		Action(actionSetActiveVer, setActive).Undo(undoSetActiveVersion).
 		Action(actionFinalize, finalize).Undo(undoFinalize).
 		Action(actionBeginDeploy, beginDeployment).Undo(undoBeginDeployment).
 		Action(actionRecordVersion, recordAppVersion).Undo(undoRecordAppVersion).
@@ -64,8 +73,9 @@ func newDeploySagaHarness(t *testing.T) *sagaTestHarness {
 		RegisterTo(registry)
 	require.NoError(t, err, "registering deploy-tracking build saga")
 
+	storage := saga.NewMemoryStorage()
 	executor := saga.NewExecutor(
-		saga.NewMemoryStorage(),
+		storage,
 		saga.WithRegistry(registry),
 		saga.WithLogger(log),
 	)
@@ -74,6 +84,7 @@ func newDeploySagaHarness(t *testing.T) *sagaTestHarness {
 		t: t, inmem: inmem, builder: builder,
 		streams: streams, statuses: statuses,
 		registry: registry, executor: executor,
+		storage: storage,
 	}
 }
 
@@ -176,4 +187,109 @@ func TestBuildSaga_Tracked_SecondBuildBlockedByLock(t *testing.T) {
 		WithID("test-blocked").
 		Execute(ctx)
 	require.Error(t, err, "a build blocked by the lock must fail")
+}
+
+// setActiveVersionThenCancel activates the version and then cancels the
+// deployment record, standing in for an operator running `miren deploy cancel`
+// in the window between the new version going live and the record settling.
+// It leaves activate-deployment facing an illegal cancelled -> active
+// transition, which is the cheapest deterministic way to fail a settle.
+func setActiveVersionThenCancel(ctx context.Context, in setActiveVersionIn) (setActiveVersionOut, error) {
+	out, err := setActiveVersion(ctx, in)
+	if err != nil {
+		return out, err
+	}
+
+	deps := saga.Get[*buildSagaDeps](ctx)
+	recs, err := deps.builder.deploy.Store().List(ctx, deploylifecycle.Query{
+		AppName: in.AppName,
+		Status:  deploylifecycle.StatusInProgress,
+	})
+	if err != nil || len(recs) == 0 {
+		return out, err
+	}
+
+	return out, deps.builder.deploy.Cancel(ctx, string(recs[0].Deployment.ID), "cancelled mid-deploy")
+}
+
+// A deployment record that cannot settle must not roll back a deploy that is
+// already live. The record describes the deploy; it does not control it.
+//
+// Before this was fixed, activate-deployment returned the failed settle to the
+// executor, which compensated the saga, and undoSetActiveVersion put the app
+// back on the previous version — a bookkeeping write undoing a real deploy.
+func TestBuildSaga_Tracked_SettleFailureDoesNotRevertLiveDeploy(t *testing.T) {
+	ctx := context.Background()
+
+	h := newDeploySagaHarnessWith(t, setActiveVersionThenCancel)
+	h.streams.Register("stream-settle", makeTar(t, dockerfileTarball(t)))
+
+	err := h.executor.Start(sagaBuildFromTar).
+		Input("app_name", "demo").
+		Input("stream_id", "stream-settle").
+		Input("deploy_cluster_id", "prod").
+		WithID("test-settle").
+		Execute(ctx)
+	require.NoError(t, err, "a failed deployment settle must not fail the build saga")
+
+	appRec, err := h.builder.appClient.GetByName(ctx, "demo")
+	require.NoError(t, err)
+	assert.NotEmpty(t, appRec.ActiveVersion,
+		"the built version must stay live; compensation would have restored the previous one")
+
+	// The cancellation is the real account of what happened, so it stands.
+	records, err := h.builder.deploy.Store().List(ctx, deploylifecycle.Query{AppName: "demo"})
+	require.NoError(t, err)
+	require.Len(t, records, 1)
+	assert.Equal(t, deploylifecycle.StatusCancelled, records[0].Status())
+
+	// And nothing is left holding the deploy lock.
+	blocking, err := h.builder.deploy.Locks().Blocking(ctx, "demo")
+	require.NoError(t, err)
+	assert.Nil(t, blocking, "a failed settle must not strand the deploy lock")
+}
+
+// A client that disappears mid-build must not leave the app locked.
+//
+// A disconnect cancels the saga's context, and the executor's undo loop bails
+// on a cancelled context by design, so undoBeginDeployment never runs and the
+// deployment record would be left in_progress holding the deploy lock for its
+// full TTL. The saga entry point settles it directly for exactly this case,
+// mirroring the plain path's deferred failOnError.
+func TestBuildSaga_Tracked_ClientDisconnectDoesNotStrandLock(t *testing.T) {
+	ctx, disconnect := context.WithCancel(context.Background())
+
+	// Stand in for the client vanishing partway through: cancel the saga's
+	// context from inside an action and fail the way a cancelled call would.
+	dropped := func(ctx context.Context, in setActiveVersionIn) (setActiveVersionOut, error) {
+		disconnect()
+		return setActiveVersionOut{}, context.Canceled
+	}
+
+	h := newDeploySagaHarnessWith(t, dropped)
+	h.streams.Register("stream-drop", makeTar(t, dockerfileTarball(t)))
+
+	sb := &SagaBuilder{
+		inner:    h.builder,
+		executor: h.executor,
+		storage:  h.storage,
+		log:      slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError})),
+	}
+
+	req := &build_v1alpha.DeployRequest{}
+	req.SetClusterId("prod")
+
+	err := sb.startBuild(ctx, "test-drop", "demo", "stream-drop", nil, nil, req)
+	require.Error(t, err, "a cancelled build must still fail the RPC")
+
+	// Reads below use a live context; the saga's is deliberately dead.
+	records, err := h.builder.deploy.Store().List(context.Background(), deploylifecycle.Query{AppName: "demo"})
+	require.NoError(t, err)
+	require.Len(t, records, 1)
+	assert.Equal(t, deploylifecycle.StatusFailed, records[0].Status(),
+		"an abandoned deployment must settle rather than linger in_progress")
+
+	blocking, err := h.builder.deploy.Locks().Blocking(context.Background(), "demo")
+	require.NoError(t, err)
+	assert.Nil(t, blocking, "the next deploy of this app must not wait out the lock TTL")
 }
