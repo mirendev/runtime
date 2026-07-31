@@ -86,7 +86,7 @@ func TestVictoriaMetricsComponentIntegration(t *testing.T) {
 	httpEndpoint := component.HTTPEndpoint()
 	assert.NotEmpty(t, httpEndpoint, "HTTP endpoint should not be empty")
 
-	expectedHTTPEndpoint := fmt.Sprintf("localhost:%d", httpPort)
+	expectedHTTPEndpoint := fmt.Sprintf("127.0.0.1:%d", httpPort)
 	assert.Equal(t, expectedHTTPEndpoint, httpEndpoint, "HTTP endpoint should match expected")
 
 	// Wait for VictoriaMetrics to be fully ready by polling health endpoint
@@ -272,7 +272,7 @@ func TestVictoriaMetricsComponent_GracefulShutdown(t *testing.T) {
 	// Wait for VictoriaMetrics to be fully ready by polling
 	client := &http.Client{Timeout: 5 * time.Second}
 	require.Eventually(t, func() bool {
-		resp, err := client.Get(fmt.Sprintf("http://localhost:%d/health", config.HTTPPort))
+		resp, err := client.Get(fmt.Sprintf("http://127.0.0.1:%d/health", config.HTTPPort))
 		if err != nil {
 			return false
 		}
@@ -329,7 +329,7 @@ func TestVictoriaMetricsComponent_MultipleStarts(t *testing.T) {
 
 		// Wait for VictoriaMetrics to be ready by polling
 		require.Eventually(t, func() bool {
-			resp, err := client.Get(fmt.Sprintf("http://localhost:%d/health", config.HTTPPort))
+			resp, err := client.Get(fmt.Sprintf("http://127.0.0.1:%d/health", config.HTTPPort))
 			if err != nil {
 				return false
 			}
