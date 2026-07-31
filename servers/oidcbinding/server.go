@@ -212,17 +212,29 @@ func (s *Server) Remove(ctx context.Context, state *oidcbinding_v1alpha.OidcBind
 	return nil
 }
 
+// runScopedClaims describe the circumstances of a workflow run rather than who
+// is running it. Any repository on github.com can push to a branch called main,
+// so none of these narrows a binding to a particular caller no matter how
+// specific the pattern looks.
+var runScopedClaims = map[string]bool{
+	"event_name":            true,
+	"ref":                   true,
+	"ref_type":              true,
+	"ref_protected":         true,
+	"runner_environment":    true,
+	"repository_visibility": true,
+}
+
 // identifiesCaller reports whether a binding narrows the tokens it accepts down
-// to a particular caller. Without this, a binding constrained only by event_name
-// (or by nothing at all) would accept a token from any repository the issuer
-// serves, which for GitHub Actions means every repository on github.com.
+// to a particular caller. Without this, a binding constrained only by run-scoped
+// claims (or by nothing at all) would accept a token from any repository the
+// issuer serves, which for GitHub Actions means every repository on github.com.
 func identifiesCaller(subjectPattern string, conditions []core_v1alpha.ClaimConditions) bool {
 	if !isWildcardPattern(subjectPattern) {
 		return true
 	}
 	for _, cc := range conditions {
-		// event_name says what triggered the workflow, never who ran it.
-		if cc.Key == "event_name" {
+		if runScopedClaims[cc.Key] {
 			continue
 		}
 		if !isWildcardPattern(cc.Pattern) {

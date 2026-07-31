@@ -61,7 +61,7 @@ miren auth ci myapp --github acme/web-app
 
 This creates a binding with:
 - **Issuer:** `https://token.actions.githubusercontent.com`
-- **Repository:** `acme/web-app`, owned by `acme` (matches all branches and events)
+- **Repository:** `acme/web-app`, owned by `acme` (matches all branches)
 - **Allowed events:** `push,workflow_dispatch` (by default)
 
 You can restrict further — see [Restricting Access](#restricting-access) below.
@@ -116,7 +116,7 @@ The `--github` shorthand provides sensible defaults, but you can tighten access 
 
 ### Restricting to a Branch
 
-The `--github` shorthand accepts any branch or event from the repository. To narrow it to a single branch, use `--allowed-refs`:
+The `--github` shorthand accepts any ref from the repository, for the allowed events. To narrow it to a single branch, use `--allowed-refs`:
 
 <CliCommand context="client">
 ```miren
@@ -125,19 +125,25 @@ miren auth ci myapp --github acme/web-app \
 ```
 </CliCommand>
 
-Glob patterns are supported. `*` matches any characters **including** `/`, unlike standard path matching. `?` matches a single character.
+:::warning[Globs match across slashes]
+`*` matches any characters including `/`, unlike standard path matching. `?` matches a single character.
+:::
 
 ### A Note on Subject Patterns
 
 Bindings created with `--github` match on the token's `repository` and `repository_owner` claims rather than on its subject. This is deliberate. As of [GitHub's immutable subject claims change](https://github.blog/changelog/2026-04-23-immutable-subject-claims-for-github-actions-oidc-tokens/), any repository created, renamed, or transferred after July 15, 2026 sends a subject with numeric IDs embedded in it:
 
-```
-repo:acme@277133432/web-app@1316584243:ref:refs/heads/main
+```text
+repo:acme@1234567/web-app@7654321:ref:refs/heads/main
 ```
 
 A pattern written against the older `repo:acme/web-app:*` format can never match that, and GitHub recommends binding policies to repository metadata instead of parsing the subject. The `repository` claims are unaffected by the change and work under either format.
 
 You can still set `--subject` explicitly for a provider that needs it, and it will be used as-is. If you have a binding created before this change that stopped working, re-run `miren auth ci add --github OWNER/REPO` to replace it.
+
+:::warning[Upgrade the server first]
+Older servers require a subject pattern and will reject a binding created by a newer CLI. Upgrade the server before creating or replacing a GitHub binding. Existing bindings keep working either way.
+:::
 
 ### Allowed Events
 

@@ -42,6 +42,36 @@ func TestIdentifiesCaller(t *testing.T) {
 			want: false,
 		},
 		{
+			// Reachable from the CLI's generic path with just --issuer and
+			// --allowed-refs. A branch name says nothing about which repo the
+			// push came from, so this would accept any repo on github.com.
+			name: "ref alone",
+			conditions: []core_v1alpha.ClaimConditions{
+				{Key: "ref", Pattern: "refs/heads/main"},
+			},
+			want: false,
+		},
+		{
+			name: "run-scoped claims however specific",
+			conditions: []core_v1alpha.ClaimConditions{
+				{Key: "event_name", Pattern: "push"},
+				{Key: "ref", Pattern: "refs/heads/main"},
+				{Key: "ref_type", Pattern: "branch"},
+				{Key: "ref_protected", Pattern: "true"},
+				{Key: "runner_environment", Pattern: "github-hosted"},
+				{Key: "repository_visibility", Pattern: "private"},
+			},
+			want: false,
+		},
+		{
+			name: "one identifying claim among run-scoped ones is enough",
+			conditions: []core_v1alpha.ClaimConditions{
+				{Key: "ref", Pattern: "refs/heads/main"},
+				{Key: "repository", Pattern: "acme/app"},
+			},
+			want: true,
+		},
+		{
 			name:    "bare wildcard subject",
 			subject: "*",
 			conditions: []core_v1alpha.ClaimConditions{
