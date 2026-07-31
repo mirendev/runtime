@@ -25,6 +25,14 @@
 // intentionally simple for v1; a more deliberate selection mechanism (e.g.,
 // explicit --issuer-url flag) may be warranted if bare-metal OIDC federation
 // sees adoption.
+//
+// A cluster with no hostname at all still gets an issuer, anchored at
+// LocalIssuerURL. Identity is not conditional on being externally addressable:
+// the cluster's own services authenticate to each other with these tokens and
+// verify them in-process against the signing keys, which needs no DNS, no
+// reachability, and no publicly trusted certificate. Only federation to an
+// outside party needs those, and that is a property of the anchor rather than
+// a mode the cluster is in.
 package workloadidentity
 
 import (
@@ -115,6 +123,21 @@ type WorkloadClaims struct {
 	SystemWorkload SystemWorkload `json:"system_workload,omitempty"`
 }
 
+// LocalIssuerURL anchors a cluster that has no hostname to advertise.
+//
+// It is deliberately a name the cluster already owns rather than a synthetic
+// placeholder: cluster.local is how the cluster refers to itself internally,
+// resolved to whatever is locally appropriate (the registry router on the
+// coordinator, the coordinator's address on a runner). Nothing outside can
+// resolve it at all, which is the honest signal that such a cluster cannot
+// federate to an external party until it is given a real hostname.
+//
+// Note that this is an identity anchor, not an endpoint. It is compared as a
+// string when verifying, never fetched, so it does not matter that the
+// resolution it names is set up later in startup or means different things in
+// different processes.
+const LocalIssuerURL = "https://cluster.local"
+
 func NewIssuer(cfg IssuerConfig) (*Issuer, error) {
 	keyPath := filepath.Join(cfg.DataPath, "server", "workload-identity.key")
 
@@ -123,10 +146,15 @@ func NewIssuer(cfg IssuerConfig) (*Issuer, error) {
 		return nil, fmt.Errorf("workload identity key: %w", err)
 	}
 
+	issuerURL := cfg.IssuerURL
+	if issuerURL == "" {
+		issuerURL = LocalIssuerURL
+	}
+
 	iss := &Issuer{
 		primary:        primary,
 		keys:           []*signingKey{primary},
-		issuerURL:      cfg.IssuerURL,
+		issuerURL:      issuerURL,
 		organizationID: cfg.OrganizationID,
 		clusterID:      cfg.ClusterID,
 	}

@@ -656,27 +656,42 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 		ctx.Log.Info("no cluster registration found")
 	}
 
-	// Initialize workload identity issuer for sandbox OIDC tokens
+	// Initialize the workload identity issuer.
+	//
+	// Every cluster gets one. It used to be conditional on having a hostname to
+	// anchor it to, which quietly made internal authentication depend on
+	// external addressability: a cluster installed with --without-cloud and no
+	// --dns-names got no issuer, so its own services had no way to authenticate
+	// to each other and fell back to trusting the network. But the services that
+	// consume these tokens (the cluster-local registry, runner telemetry) all
+	// verify in-process against the signing keys, which needs no DNS and no
+	// publicly trusted certificate. Only federating to an outside party needs
+	// those, and a cluster with no hostname simply has an anchor nobody outside
+	// can resolve.
 	var workloadIssuer *workloadidentity.Issuer
 	{
-		var issuerURL string
-		if cloudAuthConfig.DNSHostname != "" {
+		issuerURL := workloadidentity.LocalIssuerURL
+		switch {
+		case cloudAuthConfig.DNSHostname != "":
 			issuerURL = "https://" + cloudAuthConfig.DNSHostname
-		} else if len(cfg.TLS.AdditionalNames) > 0 {
+		case len(cfg.TLS.AdditionalNames) > 0:
 			issuerURL = "https://" + cfg.TLS.AdditionalNames[0]
 		}
-		if issuerURL != "" {
-			workloadIssuer, err = workloadidentity.NewIssuer(workloadidentity.IssuerConfig{
-				DataPath:       cfg.Server.GetDataPath(),
-				IssuerURL:      issuerURL,
-				OrganizationID: cloudAuthConfig.Tags["organization_id"],
-				ClusterID:      cloudAuthConfig.ClusterID,
-			})
-			if err != nil {
-				ctx.Log.Warn("failed to initialize workload identity issuer", "error", err)
-			} else {
-				ctx.Log.Info("workload identity issuer initialized", "issuer", issuerURL)
-			}
+
+		workloadIssuer, err = workloadidentity.NewIssuer(workloadidentity.IssuerConfig{
+			DataPath:       cfg.Server.GetDataPath(),
+			IssuerURL:      issuerURL,
+			OrganizationID: cloudAuthConfig.Tags["organization_id"],
+			ClusterID:      cloudAuthConfig.ClusterID,
+		})
+		if err != nil {
+			ctx.Log.Warn("failed to initialize workload identity issuer", "error", err)
+		} else if issuerURL == workloadidentity.LocalIssuerURL {
+			ctx.Log.Info("workload identity issuer initialized with a cluster-local anchor; "+
+				"internal authentication is active, external federation needs a hostname",
+				"issuer", issuerURL)
+		} else {
+			ctx.Log.Info("workload identity issuer initialized", "issuer", issuerURL)
 		}
 	}
 

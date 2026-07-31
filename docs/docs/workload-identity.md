@@ -210,9 +210,15 @@ The issuer URL is your cluster's public hostname. For clusters registered with M
 
 ## Sharp Edges & Limitations
 
-### Workload identity requires an issuer URL
+### Federation needs a hostname; identity itself doesn't
 
-Workload identity turns on automatically — there's no per-app setting to enable it — **but only when the cluster has an issuer URL**. That means a Miren Cloud registration or a configured TLS name. A bare cluster with neither won't issue tokens, and the `MIREN_IDENTITY_*` environment variables won't be present in your sandboxes. If your code reads them, guard for their absence.
+Workload identity turns on automatically — there's no per-app setting to enable it — and every cluster issues tokens, including one installed with `--without-cloud` and no TLS name. Your sandboxes always get the `MIREN_IDENTITY_*` variables.
+
+What such a cluster lacks is a hostname an outside party can resolve. It anchors its tokens at `https://cluster.local`, which nothing outside the cluster can fetch a discovery document from, so **external federation won't work**: AWS, GCP, and Azure all need to reach your issuer URL to fetch its keys. Give the cluster a real name (register it with Miren Cloud, or pass `--dns-names`) and its tokens become federatable, with no other change.
+
+:::note[Why tokens exist either way]
+Miren's own services authenticate to each other with these tokens — the cluster-local registry and the telemetry that distributed runners ship both verify them against the signing key in-process, which needs no DNS and no publicly trusted certificate. Tying identity to being externally addressable would leave those services with nothing but the network to trust.
+:::
 
 ### The file refreshes on a fixed loop — read it fresh
 
@@ -227,7 +233,7 @@ The token file is refreshed roughly every 45 minutes, in place. This interval is
 In a cluster with [distributed runners](/distributed-runners), only the coordinator holds the signing key. On a distributed runner, token issuance is proxied back to the coordinator over RPC. Two consequences worth knowing:
 
 - There's a small amount of extra latency, and issuance depends on the coordinator being reachable.
-- If the coordinator itself has no issuer configured, runners **silently disable** token issuance — sandboxes on those runners simply won't get the `MIREN_IDENTITY_*` variables.
+- A runner that can't reach the coordinator's issuer at startup disables token issuance for its sandboxes, so they won't get the `MIREN_IDENTITY_*` variables. The coordinator always has an issuer, so in practice this means a connectivity problem rather than a configuration one.
 
 ### Restarts and the token-server secret
 
