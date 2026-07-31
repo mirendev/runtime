@@ -67,15 +67,6 @@ func (h *Holder) Expired(now time.Time) bool {
 	return !h.ExpiresAt.After(now)
 }
 
-// Held reports whether this holder still owns the lock: a released tombstone has
-// no owner, and an expired lock no longer protects anything.
-//
-// It deliberately says nothing about whether the holding deployment is still
-// alive — that needs the record, so use Locks.Blocking for the full answer.
-func (h *Holder) Held(now time.Time) bool {
-	return h.DeploymentID != "" && !h.Expired(now)
-}
-
 // StatusLookup reports the stored status of a deployment record. Acquire uses it
 // so a lock whose holder has already finished — the record says failed, the lock
 // says running — can be taken immediately instead of waiting out the TTL.
@@ -105,6 +96,16 @@ type Locks struct {
 
 	// sleep is a test seam for the contention backoff; nil means time.Sleep.
 	sleep func(time.Duration)
+
+	// stealRace and releaseRace are test seams for the compare-and-swap windows
+	// in Acquire and Release. When non-nil they run between reading the current
+	// holder and the guarded write, letting a test interleave a competing writer
+	// into that gap deterministically. Both are nil in production.
+	//
+	// They are fields rather than package globals so concurrent tests cannot
+	// scribble on each other's seam, matching now and sleep above.
+	stealRace   func()
+	releaseRace func()
 }
 
 // lockRetryBackoff is the base delay between contended acquire attempts. Each
@@ -156,13 +157,6 @@ func NewLocks(log *slog.Logger, eac *entityserver_v1alpha.EntityAccessClient, st
 		ttl:    DefaultLockTTL,
 		status: status,
 	}
-}
-
-// WithTTL returns a copy holding locks for d instead of DefaultLockTTL.
-func (l *Locks) WithTTL(d time.Duration) *Locks {
-	clone := *l
-	clone.ttl = d
-	return &clone
 }
 
 // LockID is the deterministic entity id for an app's deploy lock. Determinism is
@@ -233,8 +227,8 @@ func (l *Locks) Acquire(ctx context.Context, appName, deploymentID string) (*Hol
 			"to_deployment_id", deploymentID,
 			"reason", reason)
 
-		if stealRaceHook != nil {
-			stealRaceHook()
+		if l.stealRace != nil {
+			l.stealRace()
 		}
 
 		taken, err := l.replace(ctx, id, current.Revision, mine)
@@ -302,18 +296,6 @@ func (l *Locks) stealable(ctx context.Context, h *Holder) (bool, string) {
 	return false, ""
 }
 
-// stealRaceHook is a test seam. When non-nil, Acquire invokes it after deciding
-// a held lock is stealable but before the guarded replace, letting a test
-// interleave a concurrent steal so the replace loses its compare-and-swap. It is
-// always nil in production.
-var stealRaceHook func()
-
-// releaseRaceHook is a test seam. When non-nil, Release invokes it after reading
-// the holder but before writing the release, letting a white-box test
-// deterministically interleave a concurrent steal into that window. It is always
-// nil in production. Mirrors deleteEntityRaceHook in pkg/entity/store.go.
-var releaseRaceHook func()
-
 // Release drops the lock, but only if deploymentID still holds it.
 //
 // The release is a revision-guarded write rather than a delete: between reading
@@ -341,8 +323,8 @@ func (l *Locks) Release(ctx context.Context, appName, deploymentID string) error
 		return nil
 	}
 
-	if releaseRaceHook != nil {
-		releaseRaceHook()
+	if l.releaseRace != nil {
+		l.releaseRace()
 	}
 
 	// No DeploymentID: the lock is owned by nobody once released.

@@ -660,26 +660,20 @@ func (d *DeploymentServer) CancelDeployment(ctx context.Context, req *deployment
 		return nil
 	}
 
-	// Mark as cancelled
-	deployment.Status = "cancelled"
-	deployment.ErrorMessage = "Deployment cancelled by user"
-	deployment.CompletedAt = time.Now().Format(time.RFC3339)
-
-	// Update entity
-	updateAttrs := deployment.Encode()
-	updateEntity := &entityserver_v1alpha.Entity{}
-	updateEntity.SetId(deploymentId)
-	updateEntity.SetAttrs(updateAttrs)
-	updateEntity.SetRevision(deploymentResp.Entity().Revision())
-
-	_, err = d.EAC.Put(ctx, updateEntity)
-	if err != nil {
+	// The tracker owns the transition and drops the lock, so cancellation goes
+	// through the same state machine as every other settle rather than writing
+	// "cancelled" straight to the entity.
+	if err := d.tracker.Cancel(ctx, deploymentId, "Deployment cancelled by user"); err != nil {
+		// Losing a race with the deploy finishing is a domain outcome, not an
+		// infrastructure failure: by the time we wrote, it was no longer in
+		// progress.
+		if errors.Is(err, cond.ErrConflict{}) {
+			results.SetError("deployment is no longer in progress")
+			return nil
+		}
 		d.Log.Error("Failed to cancel deployment", "deployment_id", deploymentId, "error", err)
 		return cond.Error("failed to cancel deployment")
 	}
-
-	// A cancelled deployment holds the lock no longer.
-	d.releaseDeployLock(ctx, deployment.AppName, deploymentId)
 
 	results.SetSuccess(true)
 

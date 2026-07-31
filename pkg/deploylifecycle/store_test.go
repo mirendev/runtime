@@ -61,8 +61,22 @@ func TestIndexSelection(t *testing.T) {
 			want:  entity.String(core_v1alpha.DeploymentAppNameId, "web"),
 		},
 		{
-			name:  "app name wins over status",
+			// A live status is bounded by app count, so it beats the app index,
+			// which grows with that app's whole deploy history. This is the
+			// activation path's query.
+			name:  "live status wins over app name",
 			query: Query{AppName: "web", Status: StatusActive},
+			want:  entity.String(core_v1alpha.DeploymentStatusId, "active"),
+		},
+		{
+			name:  "in_progress is live too",
+			query: Query{AppName: "web", Status: StatusInProgress},
+			want:  entity.String(core_v1alpha.DeploymentStatusId, "in_progress"),
+		},
+		{
+			// Settled statuses accumulate forever, so the app index is narrower.
+			name:  "app name wins over a settled status",
+			query: Query{AppName: "web", Status: StatusFailed},
 			want:  entity.String(core_v1alpha.DeploymentAppNameId, "web"),
 		},
 		{

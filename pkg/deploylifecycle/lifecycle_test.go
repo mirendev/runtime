@@ -45,8 +45,8 @@ var allowedTransitions = map[Status]map[Status]bool{
 // TestTransitionMatrix exercises every (from, to) pair, so a new status or a
 // widened edge cannot be added without updating the expectation above.
 func TestTransitionMatrix(t *testing.T) {
-	for _, from := range Statuses() {
-		for _, to := range Statuses() {
+	for _, from := range allStatuses {
+		for _, to := range allStatuses {
 			from, to := from, to
 			t.Run(string(from)+"->"+string(to), func(t *testing.T) {
 				err := Transition(from, to)
@@ -77,7 +77,7 @@ func TestTransitionToUnknownStatusIsValidationFailure(t *testing.T) {
 // A record whose stored status we do not recognize must not become a wildcard
 // that transitions anywhere.
 func TestTransitionFromUnknownStatusIsRejected(t *testing.T) {
-	for _, to := range Statuses() {
+	for _, to := range allStatuses {
 		err := Transition(Status("banana"), to)
 		require.Error(t, err, "unknown source status must not reach %s", to)
 	}
@@ -91,7 +91,7 @@ func TestTerminal(t *testing.T) {
 		StatusCancelled:  true,
 	}
 
-	for _, s := range Statuses() {
+	for _, s := range allStatuses {
 		assert.Equal(t, terminal[s], s.Terminal(), "Terminal() for %s", s)
 	}
 
@@ -103,7 +103,7 @@ func TestTerminal(t *testing.T) {
 // This is the invariant the package init() enforces at startup; asserting it in
 // a test as well gives a clear failure rather than a panic during import.
 func TestEveryStatusIsClassifiedExactlyOnce(t *testing.T) {
-	for _, s := range Statuses() {
+	for _, s := range allStatuses {
 		_, terminal := terminalStatuses[s]
 		_, hasEdges := validTransitions[s]
 		assert.NotEqual(t, terminal, hasEdges,
@@ -111,22 +111,8 @@ func TestEveryStatusIsClassifiedExactlyOnce(t *testing.T) {
 	}
 }
 
-// Statuses() and Phases() must hand out copies, so a caller cannot corrupt the
-// package's own sets.
-func TestAccessorsReturnCopies(t *testing.T) {
-	s := Statuses()
-	require.NotEmpty(t, s)
-	s[0] = Status("corrupted")
-	assert.NotEqual(t, Status("corrupted"), Statuses()[0], "Statuses() must return a copy")
-
-	p := Phases()
-	require.NotEmpty(t, p)
-	p[0] = Phase("corrupted")
-	assert.NotEqual(t, Phase("corrupted"), Phases()[0], "Phases() must return a copy")
-}
-
 func TestParseStatus(t *testing.T) {
-	for _, s := range Statuses() {
+	for _, s := range allStatuses {
 		got, err := ParseStatus(string(s))
 		require.NoError(t, err)
 		assert.Equal(t, s, got)
@@ -143,7 +129,7 @@ func TestParseStatus(t *testing.T) {
 }
 
 func TestParsePhase(t *testing.T) {
-	for _, p := range Phases() {
+	for _, p := range allPhases {
 		got, err := ParsePhase(string(p))
 		require.NoError(t, err)
 		assert.Equal(t, p, got)
@@ -158,12 +144,12 @@ func TestParsePhase(t *testing.T) {
 }
 
 func TestCheckPhase(t *testing.T) {
-	for _, p := range Phases() {
+	for _, p := range allPhases {
 		require.NoError(t, CheckPhase(StatusInProgress, p),
 			"%s is valid while in_progress", p)
 	}
 
-	for _, s := range Statuses() {
+	for _, s := range allStatuses {
 		if s == StatusInProgress {
 			continue
 		}

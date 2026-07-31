@@ -127,14 +127,36 @@ func (s *Store) List(ctx context.Context, q Query) ([]*Record, error) {
 	return records, nil
 }
 
+// liveStatuses are the statuses whose index is bounded by how many apps exist
+// rather than by how many deploys have ever run: the deploy lock allows one
+// in-flight deployment per app, and activation settles the previous active one.
+// Every other status accumulates forever.
+var liveStatuses = map[Status]struct{}{
+	StatusInProgress: {},
+	StatusActive:     {},
+}
+
 // index picks the narrowest index the query's filters allow. Filters it does not
 // cover are still applied in memory, but over a far smaller set than a kind scan.
+//
+// A live status beats the app index because the two grow along different axes.
+// Activation asks for this app's active deployments on every single deploy: the
+// app index returns everything that app has ever deployed, while the active
+// index returns roughly one row per app no matter how long the app has been
+// around. For a settled status the comparison flips, since those do grow without
+// bound, so the app index stays the better choice there.
 func (s *Store) index(q Query) entity.Attr {
+	statusIndex := entity.String(core_v1alpha.DeploymentStatusId, string(q.Status))
+
+	if _, live := liveStatuses[q.Status]; live {
+		return statusIndex
+	}
+
 	switch {
 	case q.AppName != "":
 		return entity.String(core_v1alpha.DeploymentAppNameId, q.AppName)
 	case q.Status != "":
-		return entity.String(core_v1alpha.DeploymentStatusId, string(q.Status))
+		return statusIndex
 	default:
 		return entity.Ref(entity.EntityKind, core_v1alpha.KindDeployment)
 	}

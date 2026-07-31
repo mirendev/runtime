@@ -35,8 +35,7 @@ const (
 )
 
 // allStatuses and allPhases are ordered for stable error messages. They are
-// unexported so an importer cannot mutate the sets derived from them; use
-// Statuses() / Phases() for a copy.
+// unexported so an importer cannot mutate the sets derived from them.
 var (
 	allStatuses = []Status{
 		StatusInProgress, StatusActive, StatusSucceeded,
@@ -44,12 +43,6 @@ var (
 	}
 	allPhases = []Phase{PhasePreparing, PhaseBuilding, PhasePushing, PhaseActivating}
 )
-
-// Statuses returns a copy of every recognized status, in a stable order.
-func Statuses() []Status { return append([]Status(nil), allStatuses...) }
-
-// Phases returns a copy of every recognized phase, in a stable order.
-func Phases() []Phase { return append([]Phase(nil), allPhases...) }
 
 // terminalStatuses is the explicit set of statuses with no outbound
 // transitions. Stating it here — rather than inferring "terminal" from a

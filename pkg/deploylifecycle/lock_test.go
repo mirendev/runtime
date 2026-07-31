@@ -237,15 +237,14 @@ func TestReleaseDoesNotFreeALockStolenInTheReadWindow(t *testing.T) {
 	// Interleave dep-2's steal between dep-1's read of the holder and its write
 	// of the release — the exact window a check-then-act delete cannot guard.
 	var stole bool
-	releaseRaceHook = func() {
-		releaseRaceHook = nil // once, and not re-entrantly
+	locks.releaseRace = func() {
+		locks.releaseRace = nil // once, and not re-entrantly
 
 		status = StatusFailed // dep-1 has finished, so its lock is stealable
 		_, err := locks.Acquire(ctx, "web", "dep-2")
 		require.NoError(t, err)
 		stole = true
 	}
-	t.Cleanup(func() { releaseRaceHook = nil })
 
 	require.NoError(t, locks.Release(ctx, "web", "dep-1"))
 	require.True(t, stole, "the hook must have run, or this proves nothing")
@@ -310,17 +309,19 @@ func TestBlockingReportsOnlyRealBlockers(t *testing.T) {
 	assert.Nil(t, blocking, "an expired lock blocks nobody")
 }
 
-func TestHeld(t *testing.T) {
+func TestExpired(t *testing.T) {
 	now := time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC)
 
-	held := &Holder{DeploymentID: "dep-1", ExpiresAt: now.Add(time.Minute)}
-	assert.True(t, held.Held(now))
+	live := &Holder{DeploymentID: "dep-1", ExpiresAt: now.Add(time.Minute)}
+	assert.False(t, live.Expired(now))
 
 	expired := &Holder{DeploymentID: "dep-1", ExpiresAt: now.Add(-time.Minute)}
-	assert.False(t, expired.Held(now))
+	assert.True(t, expired.Expired(now))
 
-	tombstone := &Holder{ExpiresAt: now.Add(time.Minute)}
-	assert.False(t, tombstone.Held(now), "a lock with no owner is not held")
+	// A lock exactly at its expiry is expired: the boundary belongs to the
+	// contender, so a lock can never outlive its TTL by a tick.
+	boundary := &Holder{DeploymentID: "dep-1", ExpiresAt: now}
+	assert.True(t, boundary.Expired(now))
 }
 
 func TestReleaseUnheldLockIsNoOp(t *testing.T) {
@@ -404,12 +405,11 @@ func TestAcquireBacksOffOnStealConflict(t *testing.T) {
 
 	// Force the replace to conflict once by advancing the lock's revision out
 	// from under the next acquire: another steal lands between read and write.
-	stealRaceHook = func() {
-		stealRaceHook = nil
+	locks.stealRace = func() {
+		locks.stealRace = nil
 		_, err := locks.Acquire(ctx, "web", "dep-x")
 		require.NoError(t, err)
 	}
-	t.Cleanup(func() { stealRaceHook = nil })
 
 	_, err = locks.Acquire(ctx, "web", "dep-2")
 	require.NoError(t, err)
