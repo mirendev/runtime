@@ -131,7 +131,7 @@ func TestDeployTrackingNilIsNoOp(t *testing.T) {
 		dt.activate(ctx)
 		dt.failOnError(ctx, assert.AnError)
 		dt.failOnError(ctx, nil)
-		dt.emit(ctx, "building")
+		dt.emit("building")
 	})
 }
 

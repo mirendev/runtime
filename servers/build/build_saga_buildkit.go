@@ -11,6 +11,7 @@ import (
 	"miren.dev/runtime/api/build/build_v1alpha"
 	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/appconfig"
+	"miren.dev/runtime/pkg/deploylifecycle"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/saga"
 )
@@ -46,6 +47,10 @@ type buildImageIn struct {
 	// Empty when the user didn't pass any, so optional.
 	CLIEnvVars []*build_v1alpha.EnvironmentVariable `json:"cli_env_vars,omitempty" saga:"cli_env_vars,optional"`
 	AppID      string                               `json:"app_id" saga:"app_id"`
+	// DeploymentID is empty for an untracked build. Consuming it also anchors
+	// this action after begin-deployment, so the deploy lock is taken before
+	// any buildkit work starts.
+	DeploymentID string `json:"deployment_id,omitempty" saga:"deployment_id,optional"`
 }
 
 type buildImageOut struct {
@@ -64,6 +69,9 @@ func buildImage(ctx context.Context, in buildImageIn) (buildImageOut, error) {
 		status.SendError("BuildKit not configured - ensure server is running with BuildKit enabled")
 		return buildImageOut{}, fmt.Errorf("buildkit component not configured")
 	}
+
+	deploy := b.trackDeployment(in.DeploymentID, status)
+	deploy.setPhase(ctx, deploylifecycle.PhaseBuilding)
 
 	existing, err := unmarshalConfigSpec(in.ExistingConfig)
 	if err != nil {
@@ -90,6 +98,8 @@ func buildImage(ctx context.Context, in buildImageIn) (buildImageOut, error) {
 	if err != nil {
 		return buildImageOut{}, err
 	}
+
+	deploy.setPhase(ctx, deploylifecycle.PhasePushing)
 
 	return buildImageOut{
 		ManifestDigest: res.ManifestDigest,

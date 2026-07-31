@@ -510,9 +510,13 @@ func undoProvisionAddons(_ context.Context, _ provisionAddonsIn, _ provisionAddo
 
 type setActiveVersionIn struct {
 	AppName        string    `json:"app_name" saga:"app_name"`
+	StreamID       string    `json:"stream_id" saga:"stream_id"`
 	AppVersionID   string    `json:"app_version_id" saga:"app_version_id"`
 	EphemeralLabel string    `json:"ephemeral_label,omitempty" saga:"ephemeral_label,optional"`
 	AddonsReady    saga.Edge `saga:"addons_provisioned"`
+	// DeploymentID is empty for an untracked build. Consuming it also anchors
+	// this action after begin-deployment, which is where the record is created.
+	DeploymentID string `json:"deployment_id,omitempty" saga:"deployment_id,optional"`
 }
 
 type setActiveVersionOut struct {
@@ -527,6 +531,9 @@ func setActiveVersion(ctx context.Context, in setActiveVersionIn) (setActiveVers
 
 	deps := saga.Get[*buildSagaDeps](ctx)
 	b := deps.builder
+
+	b.trackDeployment(in.DeploymentID, deps.statuses.SenderFor(in.StreamID)).
+		setPhase(ctx, deploylifecycle.PhaseActivating)
 
 	app, err := b.appClient.GetByName(ctx, in.AppName)
 	if err != nil {
@@ -666,7 +673,8 @@ func beginDeployment(ctx context.Context, in beginDeploymentIn) (beginDeployment
 	}
 
 	id := string(rec.Deployment.ID)
-	deps.statuses.SenderFor(in.StreamID).SendDeployment(id, string(deploylifecycle.PhasePreparing))
+	b.trackDeployment(id, deps.statuses.SenderFor(in.StreamID)).
+		emit(string(deploylifecycle.PhasePreparing))
 	return beginDeploymentOut{DeploymentID: id}, nil
 }
 
@@ -706,16 +714,10 @@ func recordAppVersion(ctx context.Context, in recordAppVersionIn) (recordAppVers
 	}
 	deps := saga.Get[*buildSagaDeps](ctx)
 
-	settleCtx, cancel := settleContext(ctx)
-	defer cancel()
-
-	// A failure here is not fatal to the build: activate-deployment will refuse
-	// to settle a record with no version and release the lock instead, which is
-	// the same degradation the plain path takes.
-	if err := deps.builder.deploy.SetAppVersion(settleCtx, in.DeploymentID, in.AppVersionID); err != nil {
-		deps.builder.Log.Error("failed to record deployment app version",
-			"deployment_id", in.DeploymentID, "app_version_id", in.AppVersionID, "error", err)
-	}
+	// Delegated so the detached context and the log-rather-than-fail policy live
+	// in one place. A failure here is not fatal: activate-deployment will refuse
+	// to settle a record with no version and release the lock instead.
+	deps.builder.trackDeployment(in.DeploymentID, nil).setAppVersion(ctx, in.AppVersionID)
 	return recordAppVersionOut{}, nil
 }
 
@@ -741,20 +743,10 @@ func activateDeployment(ctx context.Context, in activateDeploymentIn) (activateD
 	}
 	deps := saga.Get[*buildSagaDeps](ctx)
 
-	settleCtx, cancel := settleContext(ctx)
-	defer cancel()
-
-	// The version is live by the time this runs, so a settle failure is logged
-	// rather than returned, and the lock is dropped directly as a backstop. See
-	// the failure-policy note at the top of this section.
-	if err := deps.builder.deploy.Activate(settleCtx, in.DeploymentID); err != nil {
-		deps.builder.Log.Error("failed to activate deployment; releasing lock as backstop",
-			"deployment_id", in.DeploymentID, "error", err)
-		if relErr := deps.builder.deploy.ReleaseLock(settleCtx, in.DeploymentID); relErr != nil {
-			deps.builder.Log.Error("failed to release lock after activation error",
-				"deployment_id", in.DeploymentID, "error", relErr)
-		}
-	}
+	// Delegated: the version is live by now, so activate detaches its context,
+	// logs rather than returns, and drops the lock as a backstop. See the
+	// failure-policy note at the top of this section.
+	deps.builder.trackDeployment(in.DeploymentID, nil).activate(ctx)
 	return activateDeploymentOut{}, nil
 }
 

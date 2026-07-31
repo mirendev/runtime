@@ -293,3 +293,44 @@ func TestBuildSaga_Tracked_ClientDisconnectDoesNotStrandLock(t *testing.T) {
 	require.NoError(t, err)
 	assert.Nil(t, blocking, "the next deploy of this app must not wait out the lock TTL")
 }
+
+// The saga path must advance the record's phase, not park it at "preparing"
+// for the whole build. Other people read that phase: it is the phase column in
+// `miren app history` and the "Current phase" line someone sees when their
+// deploy is blocked by this one.
+//
+// buildImage contributes "building" and "pushing", but it is stubbed here (the
+// real one needs buildkit, and blackbox covers it), so this asserts the two
+// phases the unstubbed actions own.
+func TestBuildSaga_Tracked_AdvancesDeploymentPhase(t *testing.T) {
+	ctx := context.Background()
+
+	h := newDeploySagaHarness(t)
+	h.streams.Register("stream-phase", makeTar(t, dockerfileTarball(t)))
+
+	sender := &recordingSender{}
+	h.statuses.Register("stream-phase", sender)
+	t.Cleanup(func() { h.statuses.Unregister("stream-phase") })
+
+	err := h.executor.Start(sagaBuildFromTar).
+		Input("app_name", "demo").
+		Input("stream_id", "stream-phase").
+		Input("deploy_cluster_id", "prod").
+		WithID("test-phase").
+		Execute(ctx)
+	require.NoError(t, err)
+
+	var phases []string
+	for _, d := range sender.Deployments {
+		phases = append(phases, d.Phase)
+	}
+	assert.Contains(t, phases, string(deploylifecycle.PhasePreparing))
+	assert.Contains(t, phases, string(deploylifecycle.PhaseActivating),
+		"the client must be told the deploy reached activation")
+
+	records, err := h.builder.deploy.Store().List(ctx, deploylifecycle.Query{AppName: "demo"})
+	require.NoError(t, err)
+	require.Len(t, records, 1)
+	assert.Equal(t, string(deploylifecycle.PhaseActivating), records[0].Deployment.Phase,
+		"a settled record must not still claim it is preparing")
+}

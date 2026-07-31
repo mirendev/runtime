@@ -23,8 +23,30 @@ import (
 type deployTracking struct {
 	tracker      *deploylifecycle.Tracker
 	deploymentID string
-	status       *stream.SendStreamClient[*build_v1alpha.Status]
+	status       StatusSender
 	log          *slog.Logger
+}
+
+// trackDeployment binds a deployment record to the build that owns it.
+//
+// An empty deploymentID yields nil, which is the "not tracked" case every
+// method treats as a no-op, so callers never branch. Both build paths build
+// their tracking through here: the plain path wraps its RPC stream, the saga
+// path looks its sender up by stream ID. That shared construction is what keeps
+// the two paths from drifting on phases, contexts, or failure policy.
+func (b *Builder) trackDeployment(deploymentID string, status StatusSender) *deployTracking {
+	if deploymentID == "" {
+		return nil
+	}
+	if status == nil {
+		status = noopStatusSender{}
+	}
+	return &deployTracking{
+		tracker:      b.deploy,
+		deploymentID: deploymentID,
+		status:       status,
+		log:          b.Log.With("deployment_id", deploymentID),
+	}
 }
 
 // beginDeploy creates and locks a deployment record when the client asked the
@@ -63,16 +85,11 @@ func (b *Builder) beginDeploy(
 		return nil, err
 	}
 
-	dt := &deployTracking{
-		tracker:      b.deploy,
-		deploymentID: string(rec.Deployment.ID),
-		status:       status,
-		log:          b.Log.With("deployment_id", rec.Deployment.ID),
-	}
+	dt := b.trackDeployment(string(rec.Deployment.ID), NewRPCStatusSender(status, b.Log))
 
 	// Announce the record and its opening phase so the client can display and
 	// cancel a deployment it did not create.
-	dt.emit(ctx, string(deploylifecycle.PhasePreparing))
+	dt.emit(string(deploylifecycle.PhasePreparing))
 	return dt, nil
 }
 
@@ -86,7 +103,7 @@ func (t *deployTracking) setPhase(ctx context.Context, phase deploylifecycle.Pha
 		t.log.Error("failed to set deployment phase", "phase", phase, "error", err)
 		return
 	}
-	t.emit(ctx, string(phase))
+	t.emit(string(phase))
 }
 
 // settleTimeout bounds the detached settle operations below.
@@ -159,22 +176,12 @@ func (t *deployTracking) failOnError(ctx context.Context, retErr error) {
 
 // emit sends the deployment progress arm on the build status stream. A send
 // failure is not fatal to the build: the record is authoritative, the stream is
-// only a view of it.
-func (t *deployTracking) emit(ctx context.Context, phase string) {
+// only a view of it, and the sender swallows its own send errors.
+func (t *deployTracking) emit(phase string) {
 	if t == nil || t.status == nil {
 		return
 	}
-
-	progress := &build_v1alpha.DeploymentProgress{}
-	progress.SetDeploymentId(t.deploymentID)
-	progress.SetPhase(phase)
-
-	so := new(build_v1alpha.Status)
-	so.Update().SetDeployment(progress)
-
-	if _, err := t.status.Send(ctx, so); err != nil {
-		t.log.Debug("failed to send deployment progress to client", "error", err)
-	}
+	t.status.SendDeployment(t.deploymentID, phase)
 }
 
 // marshalDeployGitInfo serializes the request's git info to JSON for seeding
