@@ -85,6 +85,14 @@ func (s *SagaSandboxController) Create(ctx context.Context, co *compute.Sandbox,
 		} else {
 			switch searchRes {
 			case same:
+				// Same adoption gap as the non-saga controller: healthy
+				// containers this process didn't boot need their metrics
+				// re-registered here (MIR-1013).
+				if err := s.inner.ensureMetrics(ctx, co); err != nil {
+					s.log.Warn("failed to ensure metrics for existing sandbox",
+						"id", co.ID, "error", err)
+				}
+
 				if co.Status == compute.PENDING {
 					createdAt := meta.GetCreatedAt()
 					age := time.Since(createdAt)

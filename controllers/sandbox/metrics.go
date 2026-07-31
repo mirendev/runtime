@@ -60,6 +60,30 @@ func (m *Metrics) Add(name string, pathes map[string]string, attributes map[stri
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	return m.add(name, pathes, attributes)
+}
+
+// AddIfAbsent registers cgroups for name only when it isn't already monitored,
+// reporting whether it did. The check and the insert happen under one lock, so
+// two callers racing to re-register the same sandbox can't both win and reset
+// the CPU counters Add would otherwise discard.
+func (m *Metrics) AddIfAbsent(name string, pathes map[string]string, attributes map[string]string) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if _, ok := m.namedEntries[name]; ok {
+		return false, nil
+	}
+
+	if err := m.add(name, pathes, attributes); err != nil {
+		return false, err
+	}
+
+	return true, nil
+}
+
+// add does the work of Add. Callers hold m.mu.
+func (m *Metrics) add(name string, pathes map[string]string, attributes map[string]string) error {
 	if m.namedEntries == nil {
 		m.namedEntries = make(map[string]*Cgroups)
 	}
@@ -81,6 +105,18 @@ func (m *Metrics) Add(name string, pathes map[string]string, attributes map[stri
 	m.namedEntries[name] = &cg
 
 	return nil
+}
+
+// Has reports whether a log entity is already being monitored. Re-registration
+// paths that run on every reconcile check this before doing the work of
+// collecting cgroup paths; AddIfAbsent is what actually makes the registration
+// safe against a concurrent one.
+func (m *Metrics) Has(name string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	_, ok := m.namedEntries[name]
+	return ok
 }
 
 func (m *Metrics) Remove(name string) error {

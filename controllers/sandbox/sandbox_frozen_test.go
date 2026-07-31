@@ -24,22 +24,7 @@ import (
 //	sha256sum controllers/sandbox/sandbox.go controllers/sandbox/volume.go controllers/sandbox/firewall.go
 func TestSandboxControllerFrozen(t *testing.T) {
 	frozen := map[string]string{
-		// Updated for MIR-1428 (mounted disks writable by the run user) and
-		// MIR-1435 (inject MIREN_INSTANCE_NUM alongside MIREN_RUNTIME_INSTANCE_NUM
-		// as a deprecated alias). Both changes live in buildSubContainerSpec, which
-		// the saga path also reaches via deps.runtime.BootContainers, so both
-		// controllers already share the new behavior and there was nothing to
-		// mirror in create_saga.go.
-		//
-		// Also updated for MIR-1072 (typed node-id boundary): the NodeId fields
-		// became compute_v1alpha.NodeId and the inline entity.Id("node/"+c.NodeId)
-		// constructions became c.NodeId.Id(). This is a mechanical retype that
-		// produces byte-identical entity ids at runtime, and the saga path does no
-		// node-id construction, so there was nothing to mirror there either.
-		//
-		// Registry authentication is shared by both controllers because the saga
-		// controller delegates image pulls to this inner controller.
-		"sandbox.go":  "82a1667dae3227bc67d533b14487187d8a71968c9678f45373996305e2b49897",
+		"sandbox.go":  "4734a18ab35e3f8b39edcfa0943fec640560a2426ce5682561480c662a075cf0",
 		"volume.go":   "580062fb8a34f3f7f965689467a4b0f2ed403bc63c1ecdeb44949a7ba7e08dff",
 		"firewall.go": "648cb5d91091d5eb7400152b19695a8045585feae59c5dd36c12d663a27bb91f",
 	}
