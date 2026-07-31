@@ -3,7 +3,9 @@ package oidcauth
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -260,6 +262,156 @@ func TestOIDCAuthenticator_MatchingBinding(t *testing.T) {
 	}
 }
 
+// GitHub's immutable subject claims (July 15, 2026) embed numeric IDs in sub,
+// so a binding built from owner/repo names can no longer rely on it. Bindings
+// created by `miren auth ci add --github` match on the repository claims, which
+// that change left alone. These have to accept both subject formats, since a
+// cluster will be serving repos on either side of the cutover for a long time.
+func TestOIDCAuthenticator_RepositoryClaimBinding(t *testing.T) {
+	subjects := map[string]string{
+		"legacy subject":    "repo:acme/app:ref:refs/heads/main",
+		"immutable subject": "repo:acme@277133432/app@1316584243:ref:refs/heads/main",
+	}
+
+	for name, subject := range subjects {
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			inmem, cleanup := testutils.NewInMemEntityServer(t)
+			defer cleanup()
+
+			ts := newTestOIDCServer(t)
+			defer ts.Close()
+
+			app := &core_v1alpha.App{}
+			if _, err := inmem.Client.Create(ctx, "my-app", app); err != nil {
+				t.Fatalf("failed to create app: %v", err)
+			}
+
+			var appRec core_v1alpha.App
+			if err := inmem.Client.Get(ctx, "my-app", &appRec); err != nil {
+				t.Fatalf("failed to get app: %v", err)
+			}
+
+			binding := &core_v1alpha.OidcBinding{
+				App:      appRec.EntityId(),
+				Provider: "github",
+				Issuer:   ts.URL(),
+				ClaimConditions: []core_v1alpha.ClaimConditions{
+					{Key: "repository", Pattern: "acme/app"},
+					{Key: "repository_owner", Pattern: "acme"},
+					{Key: "event_name", Pattern: "push,workflow_dispatch"},
+				},
+			}
+			if _, err := inmem.Client.Create(ctx, "oidcb-repo-claim", binding); err != nil {
+				t.Fatalf("failed to create OIDC binding: %v", err)
+			}
+
+			auth := NewOIDCAuthenticator(testutils.TestLogger(t))
+			auth.SetEAC(inmem.EAC)
+
+			token := ts.SignToken(jwt.MapClaims{
+				"iss":              ts.URL(),
+				"sub":              subject,
+				"aud":              "test-host",
+				"exp":              time.Now().Add(10 * time.Minute).Unix(),
+				"iat":              time.Now().Unix(),
+				"event_name":       "push",
+				"repository":       "acme/app",
+				"repository_owner": "acme",
+			})
+
+			req := httptest.NewRequest("GET", "https://test-host/", nil)
+			req.Host = "test-host"
+			req.Header.Set("Authorization", "Bearer "+token)
+
+			identity, err := auth.Authenticate(ctx, req)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if identity == nil {
+				t.Fatal("expected identity, got nil")
+			}
+			if identity.Subject != subject {
+				t.Errorf("subject = %q, want %q", identity.Subject, subject)
+			}
+		})
+	}
+}
+
+// The bug this all exists to fix: a binding whose subject pattern was built by
+// concatenating owner/repo never matches a token from a repo created, renamed,
+// or transferred after the cutover.
+func TestOIDCAuthenticator_LegacySubjectPatternRejectsImmutableSubject(t *testing.T) {
+	ctx := context.Background()
+	inmem, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	ts := newTestOIDCServer(t)
+	defer ts.Close()
+
+	app := &core_v1alpha.App{}
+	if _, err := inmem.Client.Create(ctx, "my-app", app); err != nil {
+		t.Fatalf("failed to create app: %v", err)
+	}
+
+	var appRec core_v1alpha.App
+	if err := inmem.Client.Get(ctx, "my-app", &appRec); err != nil {
+		t.Fatalf("failed to get app: %v", err)
+	}
+
+	binding := &core_v1alpha.OidcBinding{
+		App:            appRec.EntityId(),
+		Provider:       "github",
+		Issuer:         ts.URL(),
+		SubjectPattern: "repo:acme/app:*",
+	}
+	if _, err := inmem.Client.Create(ctx, "oidcb-legacy", binding); err != nil {
+		t.Fatalf("failed to create OIDC binding: %v", err)
+	}
+
+	auth := NewOIDCAuthenticator(testutils.TestLogger(t))
+	auth.SetEAC(inmem.EAC)
+
+	subject := "repo:acme@277133432/app@1316584243:ref:refs/heads/main"
+	token := ts.SignToken(jwt.MapClaims{
+		"iss":        ts.URL(),
+		"sub":        subject,
+		"aud":        "test-host",
+		"exp":        time.Now().Add(10 * time.Minute).Unix(),
+		"iat":        time.Now().Unix(),
+		"event_name": "push",
+		"repository": "acme/app",
+	})
+
+	req := httptest.NewRequest("GET", "https://test-host/", nil)
+	req.Host = "test-host"
+	req.Header.Set("Authorization", "Bearer "+token)
+
+	identity, err := auth.Authenticate(ctx, req)
+	if identity != nil {
+		t.Error("expected the immutable-format subject not to match a name-based pattern")
+	}
+
+	// The rejection has to explain itself: the received subject and repository
+	// are what turn this from a log-spelunking session into an obvious fix.
+	var mismatch *BindingMismatchError
+	if !errors.As(err, &mismatch) {
+		t.Fatalf("expected a BindingMismatchError, got %v", err)
+	}
+	if mismatch.Subject != subject {
+		t.Errorf("Subject = %q, want %q", mismatch.Subject, subject)
+	}
+	if mismatch.Repository != "acme/app" {
+		t.Errorf("Repository = %q, want acme/app", mismatch.Repository)
+	}
+	if mismatch.AuthErrorCode() != rpc.AuthErrorOIDCBindingMismatch {
+		t.Errorf("AuthErrorCode = %q, want %q", mismatch.AuthErrorCode(), rpc.AuthErrorOIDCBindingMismatch)
+	}
+	if !strings.Contains(mismatch.Error(), subject) {
+		t.Errorf("error message should name the rejected subject, got %q", mismatch.Error())
+	}
+}
+
 func TestOIDCAuthenticator_SubjectMismatch(t *testing.T) {
 	ctx := context.Background()
 	inmem, cleanup := testutils.NewInMemEntityServer(t)
@@ -306,11 +458,16 @@ func TestOIDCAuthenticator_SubjectMismatch(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer "+token)
 
 	identity, err := auth.Authenticate(ctx, req)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
 	if identity != nil {
 		t.Error("expected nil identity when subject doesn't match binding pattern")
+	}
+
+	var mismatch *BindingMismatchError
+	if !errors.As(err, &mismatch) {
+		t.Fatalf("expected a BindingMismatchError, got %v", err)
+	}
+	if mismatch.Subject != "repo:acme/app:ref:refs/heads/main" {
+		t.Errorf("expected the rejected subject in the error, got %q", mismatch.Subject)
 	}
 }
 
@@ -365,11 +522,13 @@ func TestOIDCAuthenticator_ClaimConditionMismatch(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer "+token)
 
 	identity, err := auth.Authenticate(ctx, req)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
 	if identity != nil {
 		t.Error("expected nil identity when claim condition doesn't match")
+	}
+
+	var mismatch *BindingMismatchError
+	if !errors.As(err, &mismatch) {
+		t.Fatalf("expected a BindingMismatchError, got %v", err)
 	}
 }
 

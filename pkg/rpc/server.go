@@ -6,6 +6,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -339,7 +340,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	identity, err := s.state.authenticator.Authenticate(ctx, r)
 	if err != nil {
 		s.state.log.Warn("authentication failed", "error", err, "path", r.URL.Path)
-		http.Error(w, "authentication failed", http.StatusUnauthorized)
+		writeAuthFailure(w, err)
 		return
 	}
 
@@ -368,6 +369,19 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 // rpcPathPrefix is the path namespace reserved for RPC dispatch.
 const rpcPathPrefix = "/_rpc/"
+
+// writeAuthFailure responds 401 to a failed authentication, explaining why only
+// when the authenticator opted in by implementing DisclosableAuthError. Every
+// other failure stays a bare 401: the caller is unauthenticated, and a chatty
+// rejection is a fine oracle for probing how a cluster is configured.
+func writeAuthFailure(w http.ResponseWriter, err error) {
+	var disclosable DisclosableAuthError
+	if errors.As(err, &disclosable) {
+		w.Header().Add("rpc-status", disclosable.AuthErrorCode())
+		w.Header().Add("rpc-error", disclosable.Error())
+	}
+	http.Error(w, "authentication failed", http.StatusUnauthorized)
+}
 
 // isRPCPath returns true if the path is an RPC endpoint
 func isRPCPath(path string) bool {

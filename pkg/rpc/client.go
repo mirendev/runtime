@@ -336,7 +336,8 @@ func (c *NetworkClient) resolveCapability(name string) error {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return NewResolveStatusError(name, c.remote, resp.StatusCode)
+		return NewResolveStatusErrorWithReason(name, c.remote, resp.StatusCode,
+			resp.Header.Get("rpc-status"), resp.Header.Get("rpc-error"))
 	}
 
 	var lr lookupResponse

@@ -2,6 +2,7 @@ package oidcauth
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 
@@ -74,8 +75,16 @@ func (c *CompositeAuthenticator) Authenticate(ctx context.Context, r *http.Reque
 		}
 	}
 
-	// Neither succeeded. Return the primary error if there was one,
-	// otherwise the OIDC error.
+	// Neither succeeded. A binding mismatch wins over the primary's error: it
+	// means OIDC got far enough to verify the token's signature and audience, so
+	// it knows exactly why the caller was rejected. The primary, by contrast,
+	// only failed to parse a token that was never meant for it.
+	var mismatch *BindingMismatchError
+	if errors.As(oidcErr, &mismatch) {
+		return nil, oidcErr
+	}
+
+	// Otherwise prefer the primary error if there was one.
 	if err != nil {
 		return nil, err
 	}

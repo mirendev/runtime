@@ -2,6 +2,7 @@ package oidcauth
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -66,6 +67,38 @@ func TestCompositeAuthenticator_PrimaryErrorOIDCNil(t *testing.T) {
 	_, err := comp.Authenticate(context.Background(), req)
 	if err == nil {
 		t.Fatal("expected error to propagate from primary")
+	}
+}
+
+func TestCompositeAuthenticator_BindingMismatchBeatsPrimaryError(t *testing.T) {
+	// A CI token makes the primary fail with something unhelpful, since the
+	// token was never meant for it. OIDC verified the token and knows exactly
+	// why it was rejected, so that's the error the caller should get.
+	primary := &mockAuthenticator{
+		err: fmt.Errorf("key with ID xyz not found"),
+	}
+	oidcStub := &mockAuthenticator{
+		err: &BindingMismatchError{
+			Issuer:     "https://token.actions.githubusercontent.com",
+			Subject:    "repo:acme@277133432/app@1316584243:ref:refs/heads/main",
+			Repository: "acme/app",
+		},
+	}
+
+	comp := &CompositeAuthenticator{primary: primary, oidc: oidcStub}
+
+	req := httptest.NewRequest("GET", "/", nil)
+	identity, err := comp.Authenticate(context.Background(), req)
+	if identity != nil {
+		t.Error("expected nil identity when neither authenticator succeeds")
+	}
+
+	var mismatch *BindingMismatchError
+	if !errors.As(err, &mismatch) {
+		t.Fatalf("expected the binding mismatch to win, got %v", err)
+	}
+	if mismatch.Repository != "acme/app" {
+		t.Errorf("Repository = %q, want acme/app", mismatch.Repository)
 	}
 }
 

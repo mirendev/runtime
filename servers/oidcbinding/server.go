@@ -76,10 +76,6 @@ func (s *Server) Add(ctx context.Context, state *oidcbinding_v1alpha.OidcBinding
 
 	provider := args.Provider()
 	subjectPattern := args.SubjectPattern()
-	if subjectPattern == "" {
-		results.SetError("subject_pattern is required")
-		return nil
-	}
 	description := args.Description()
 
 	// Build claim conditions
@@ -99,6 +95,11 @@ func (s *Server) Add(ctx context.Context, state *oidcbinding_v1alpha.OidcBinding
 			Key:     "event_name",
 			Pattern: "push,workflow_dispatch",
 		})
+	}
+
+	if !identifiesCaller(subjectPattern, claimConditions) {
+		results.SetError("binding must identify the caller: set a subject pattern or a claim condition (e.g. repository) that is not a bare wildcard")
+		return nil
 	}
 
 	binding := &core_v1alpha.OidcBinding{
@@ -209,6 +210,44 @@ func (s *Server) Remove(ctx context.Context, state *oidcbinding_v1alpha.OidcBind
 	s.Log.Info("removed OIDC binding", "id", id)
 	results.SetSuccess(true)
 	return nil
+}
+
+// runScopedClaims describe the circumstances of a workflow run rather than who
+// is running it. Any repository on github.com can push to a branch called main,
+// so none of these narrows a binding to a particular caller no matter how
+// specific the pattern looks.
+var runScopedClaims = map[string]bool{
+	"event_name":            true,
+	"ref":                   true,
+	"ref_type":              true,
+	"ref_protected":         true,
+	"runner_environment":    true,
+	"repository_visibility": true,
+}
+
+// identifiesCaller reports whether a binding narrows the tokens it accepts down
+// to a particular caller. Without this, a binding constrained only by run-scoped
+// claims (or by nothing at all) would accept a token from any repository the
+// issuer serves, which for GitHub Actions means every repository on github.com.
+func identifiesCaller(subjectPattern string, conditions []core_v1alpha.ClaimConditions) bool {
+	if !isWildcardPattern(subjectPattern) {
+		return true
+	}
+	for _, cc := range conditions {
+		if runScopedClaims[cc.Key] {
+			continue
+		}
+		if !isWildcardPattern(cc.Pattern) {
+			return true
+		}
+	}
+	return false
+}
+
+// isWildcardPattern reports whether a pattern constrains nothing: either empty
+// or made up entirely of '*', both of which match any value.
+func isWildcardPattern(pattern string) bool {
+	return strings.Trim(pattern, "*") == ""
 }
 
 func toBindingInfo(id, appName string, b *core_v1alpha.OidcBinding) *oidcbinding_v1alpha.BindingInfo {
