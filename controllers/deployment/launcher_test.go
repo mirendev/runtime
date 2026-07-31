@@ -2978,6 +2978,117 @@ func TestAutoMountDrainsSupersededPool(t *testing.T) {
 	assert.Equal(t, "/miren/data/local", referencing[0].SandboxSpec.Container[0].Mount[0].Destination)
 }
 
+// TestAutoMountSuppressedWhenSiblingDeclaresLocalDisk reproduces the miren.cloud
+// deploy blip. The auto-mount probe is app-scoped (all local volumes share one
+// per-app host directory), but the injection loop is per-service. An app with a
+// stateful sibling — here valkey, which declares a local disk and fills that
+// directory — therefore had a local disk shimmed onto its stateless services too.
+// Those services then reported serviceHasDisks true and took drainStaleDiskPools,
+// scaling the old pool to zero before creating the new one, so every deploy went
+// through a window with nothing serving. An explicit local disk anywhere in the
+// app already accounts for the data, so the shim must not fire at all.
+func TestAutoMountSuppressedWhenSiblingDeclaresLocalDisk(t *testing.T) {
+	ctx := context.Background()
+	log := testutils.TestLogger(t)
+
+	server, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	app := &core_v1alpha.App{
+		Project: entity.Id("project-1"),
+	}
+	appID, err := server.Client.Create(ctx, "test-app", app)
+	require.NoError(t, err)
+	app.ID = appID
+
+	version := &core_v1alpha.AppVersion{
+		App:      app.ID,
+		Version:  "v1",
+		ImageUrl: "test:latest",
+		Config: core_v1alpha.Config{
+			Port: 3000,
+			Services: []core_v1alpha.Services{
+				{
+					Name: "web",
+					ServiceConcurrency: core_v1alpha.ServiceConcurrency{
+						Mode:                "auto",
+						RequestsPerInstance: 10,
+					},
+				},
+				{
+					Name: "valkey",
+					ServiceConcurrency: core_v1alpha.ServiceConcurrency{
+						Mode:         "fixed",
+						NumInstances: 1,
+					},
+					Disks: []core_v1alpha.Disks{
+						{
+							Name:      "valkey-data",
+							Provider:  core_v1alpha.LOCAL,
+							MountPath: "/miren/data/local",
+						},
+					},
+				},
+			},
+		},
+	}
+	verID, err := server.Client.Create(ctx, "test-ver", version)
+	require.NoError(t, err)
+	version.ID = verID
+
+	app.ActiveVersion = version.ID
+	require.NoError(t, server.Client.Update(ctx, app))
+
+	// valkey has been running and has filled the shared per-app local directory,
+	// so the app-scoped dirHasData probe finds data.
+	dataPath := t.TempDir()
+	localDir := filepath.Join(dataPath, "data", "local", app.ID.String())
+	require.NoError(t, os.MkdirAll(localDir, 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(localDir, "appendonly.aof"), []byte("test"), 0644))
+
+	launcher := newTestLauncher(log, server.EAC)
+	launcher.DataPath = dataPath
+	require.NoError(t, launcher.Reconcile(ctx, app, nil))
+
+	poolFor := func(service string) compute_v1alpha.SandboxPool {
+		t.Helper()
+		for _, p := range listAllPools(t, ctx, server) {
+			if p.Service == service {
+				return p
+			}
+		}
+		t.Fatalf("no pool found for service %q", service)
+		return compute_v1alpha.SandboxPool{}
+	}
+
+	// The stateless service must stay diskless: it never declared a disk, and
+	// mounting one is what pushed it onto the drain-before-create path.
+	web := poolFor("web")
+	assert.Empty(t, web.SandboxSpec.Volume,
+		"web must not get an auto-mounted disk just because valkey declares one")
+	require.Len(t, web.SandboxSpec.Container, 1)
+	assert.Empty(t, web.SandboxSpec.Container[0].Mount,
+		"web must not get the /miren/data/local container mount")
+
+	// valkey's own explicit disk is untouched, so it keeps the drain path.
+	valkey := poolFor("valkey")
+	require.Len(t, valkey.SandboxSpec.Volume, 1, "valkey keeps its declared disk")
+	assert.Equal(t, "valkey-data", valkey.SandboxSpec.Volume[0].Name)
+	assert.Equal(t, "local", valkey.SandboxSpec.Volume[0].Provider)
+
+	// The payoff: web is now reachable by the stateless reaper, which runs
+	// create → wait-ready → reap. reapStaleStatelessPools skips services where
+	// serviceHasDisks reports true, so reaping web proves it is off the
+	// drain-before-create path and no longer opens a serving gap on deploy.
+	spec, err := coreutil.ResolveConfig(ctx, server.EAC, version)
+	require.NoError(t, err)
+	version.ImageUrl = "test:v2"
+
+	reaped, err := launcher.reapStaleStatelessPools(ctx, app, version, spec, map[string]bool{"web": true})
+	require.NoError(t, err)
+	assert.Equal(t, 1, reaped, "web should be reaped as a stateless pool, not drained before create")
+}
+
 // TestDiskPoolDrainedBeforeNewPoolCreated verifies that when deploying a new
 // version of an app with disks, the old pool is scaled to 0 before the new
 // pool is created. This prevents conflicts when both old and new sandboxes try
