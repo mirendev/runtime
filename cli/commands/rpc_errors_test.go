@@ -2,6 +2,7 @@ package commands
 
 import (
 	"errors"
+	"io"
 	"strings"
 	"testing"
 	"time"
@@ -166,5 +167,77 @@ func TestNonResolveErrorsPassThrough(t *testing.T) {
 
 	if got := c.wrapRPCError(original); got != original {
 		t.Errorf("wrapRPCError modified an unrelated error: %v", got)
+	}
+}
+
+// Naming a cluster we can't load has to be fatal. This used to fall through and
+// answer with the *active* cluster's data, so `miren -C typo route list`
+// happily printed production routes for a cluster that didn't exist.
+func TestRPCClientRefusesUnknownCluster(t *testing.T) {
+	c := &Context{
+		Stderr:           io.Discard,
+		clusterErr:       errors.New(`cluster "typo": failed to connect`),
+		requestedCluster: "typo",
+	}
+
+	client, err := c.RPCClient("entities")
+	if err == nil {
+		t.Fatal("expected an error, got a client for a cluster that couldn't be loaded")
+	}
+	if client != nil {
+		t.Error("no client should be returned")
+	}
+
+	var d *ui.Diagnostic
+	if !errors.As(err, &d) {
+		t.Fatalf("got %T, want *ui.Diagnostic", err)
+	}
+	if !strings.Contains(d.Summary, "typo") {
+		t.Errorf("Summary = %q, want it to name the requested cluster", d.Summary)
+	}
+	if !strings.Contains(d.Detail, "wrong cluster") {
+		t.Errorf("Detail = %q, want it to explain why we didn't fall back", d.Detail)
+	}
+}
+
+// The same protection applies when the broken name came from the config's
+// active cluster rather than from -C.
+func TestRPCClientRefusesBrokenActiveCluster(t *testing.T) {
+	c := &Context{
+		Stderr:     io.Discard,
+		clusterErr: errors.New("active cluster is broken"),
+	}
+
+	err := func() error {
+		_, err := c.RPCClient("entities")
+		return err
+	}()
+	if err == nil {
+		t.Fatal("expected an error for an unloadable active cluster")
+	}
+
+	var d *ui.Diagnostic
+	if !errors.As(err, &d) {
+		t.Fatalf("got %T, want *ui.Diagnostic", err)
+	}
+	if !strings.Contains(d.Summary, "active cluster") {
+		t.Errorf("Summary = %q, want it to blame the active cluster", d.Summary)
+	}
+}
+
+// The underlying reason is the actionable part here, so it shows without -v.
+func TestUnusableClusterErrorShowsItsCause(t *testing.T) {
+	c := &Context{ClusterName: "prod"}
+	err := c.unusableClusterError(errors.New("tls: failed to find any PEM data"))
+
+	var d *ui.Diagnostic
+	if !errors.As(err, &d) {
+		t.Fatalf("got %T, want *ui.Diagnostic", err)
+	}
+	if !d.ShowCause {
+		t.Error("the underlying reason should be visible without -v")
+	}
+	if !strings.Contains(d.Summary, "prod") {
+		t.Errorf("Summary = %q, want it to name the cluster", d.Summary)
 	}
 }

@@ -19,6 +19,12 @@ type ConfigCentric struct {
 
 var ErrNoConfig = errors.New("no cluster config")
 
+// RequestedCluster returns the cluster the user explicitly asked for with -C or
+// MIREN_CLUSTER, or "" when they didn't ask for one. Failing to honor an
+// explicit request has to be fatal; falling back to a default is only
+// acceptable when no particular cluster was named.
+func (c *ConfigCentric) RequestedCluster() string { return c.Cluster }
+
 func (c *ConfigCentric) LoadConfig() (*clientconfig.Config, error) {
 	if c.cfg != nil {
 		return c.cfg, nil

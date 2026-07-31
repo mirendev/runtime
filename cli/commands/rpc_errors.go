@@ -32,6 +32,70 @@ func (c *Context) wrapRPCError(err error) error {
 	return d
 }
 
+// unknownClusterError reports that a cluster was named but couldn't be
+// resolved at all. -C accepts either a configured cluster name or an ad-hoc
+// address, so this covers a typo in either form.
+func (c *Context) unknownClusterError() error {
+	named := c.requestedCluster
+	if named == "" {
+		// No -C, so the broken name came from the config's active cluster.
+		return &ui.Diagnostic{
+			Summary: "the active cluster couldn't be loaded",
+			Detail: "Your configuration selects a cluster that can't be resolved. Nothing " +
+				"was contacted, because connecting to a different cluster would " +
+				"answer with the wrong cluster's data.",
+			Actions: []ui.Action{
+				{Command: "miren cluster list", Note: "see configured clusters"},
+				{Command: "miren cluster switch <name>", Note: "pick a different one"},
+			},
+			Cause:     c.clusterErr,
+			ShowCause: true,
+		}
+	}
+
+	return &ui.Diagnostic{
+		Summary: fmt.Sprintf("no cluster named %q", named),
+		Detail: fmt.Sprintf("%q didn't match a configured cluster, and it isn't a reachable "+
+			"address either. Nothing was contacted, because falling back to your "+
+			"active cluster would answer with the wrong cluster's data.", named),
+		Actions: []ui.Action{
+			{Command: "miren cluster list", Note: "see configured clusters"},
+		},
+		Cause:     c.clusterErr,
+		ShowCause: true,
+	}
+}
+
+// unusableClusterError reports that the selected cluster's configuration can't
+// be turned into a connection.
+//
+// Naming the file it came from matters here: these entries are spread across
+// clientconfig.yaml and clientconfig.d/*.yaml, and "which file is this cluster
+// even defined in" is the first thing you need in order to fix it.
+func (c *Context) unusableClusterError(err error) error {
+	d := &ui.Diagnostic{
+		Summary: fmt.Sprintf("can't connect using the configuration for %s", c.clusterLabel()),
+		Detail: "The cluster is configured, but its entry couldn't be turned into a " +
+			"connection. Nothing was contacted, because falling back to a " +
+			"different cluster would answer your question with the wrong " +
+			"cluster's data.",
+		Actions: []ui.Action{
+			{Command: "miren cluster list", Note: "see how it's configured"},
+			{Command: "miren login", Note: "if its credentials have expired"},
+		},
+		Cause:     err,
+		ShowCause: true,
+	}
+
+	if c.ClientConfig != nil && c.ClusterName != "" {
+		if src := c.ClientConfig.GetClusterSource(c.ClusterName); src != "" {
+			d.Facts = []ui.Fact{{Label: "Defined in", Value: src}}
+		}
+	}
+
+	return d
+}
+
 // clusterLabel names the cluster the way the user refers to it.
 func (c *Context) clusterLabel() string {
 	if c.ClusterName == "" {

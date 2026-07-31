@@ -79,6 +79,12 @@ type doctorEnv struct {
 	clusterCount int
 	configErr    error
 
+	// clusterErr is why the selected cluster couldn't be loaded, and
+	// requestedCluster the name that was asked for. Both are needed to tell
+	// "you haven't picked a cluster" apart from "the one you picked is broken".
+	clusterErr       error
+	requestedCluster string
+
 	// connErr is the result of actually trying to use the cluster. nil means
 	// the connection worked.
 	connErr error
@@ -116,7 +122,12 @@ func gatherDoctorEnv(ctx *Context, opts ConfigCentric) *doctorEnv {
 			env.clusterCount++
 			return nil
 		})
-		env.cluster, env.clusterName, _ = opts.LoadCluster()
+		// The error matters as much as the cluster. Without it, a cluster that
+		// exists but can't be loaded looks identical to no cluster at all, and
+		// doctor reports "no cluster is selected" while hiding the actual
+		// reason — the exact failure mode this whole change is about.
+		env.cluster, env.clusterName, env.clusterErr = opts.LoadCluster()
+		env.requestedCluster = opts.RequestedCluster()
 	}
 
 	if env.cluster == nil {

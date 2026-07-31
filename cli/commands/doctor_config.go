@@ -54,6 +54,33 @@ func checkConfiguration(env *doctorEnv) checkResult {
 		}
 	}
 
+	// A cluster that was named but wouldn't load is a different problem from
+	// not having picked one, and saying the latter would bury the reason.
+	if env.cluster == nil && env.clusterErr != nil {
+		named := env.requestedCluster
+		if named == "" {
+			named = "the active cluster"
+		} else {
+			named = fmt.Sprintf("%q", named)
+		}
+
+		return checkResult{
+			Status:  checkFail,
+			Summary: "selected cluster couldn't be loaded",
+			Problem: &ui.Diagnostic{
+				Summary: fmt.Sprintf("couldn't load %s", named),
+				Detail: "The cluster is named but can't be resolved, so nothing else could " +
+					"be checked against it.",
+				Actions: []ui.Action{
+					{Command: "miren cluster list", Note: "see configured clusters"},
+					{Command: "miren cluster switch <name>", Note: "pick a different one"},
+				},
+				Cause:     env.clusterErr,
+				ShowCause: true,
+			},
+		}
+	}
+
 	if env.cluster == nil {
 		return checkResult{
 			Status:  checkFail,

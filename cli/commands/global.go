@@ -54,6 +54,12 @@ type Context struct {
 	// typed rather than the internal capability name behind it.
 	CommandName string
 
+	// clusterErr records a cluster that was named but couldn't be loaded, and
+	// requestedCluster the name that was asked for. Held so that anything
+	// needing a connection can refuse instead of silently using another one.
+	clusterErr       error
+	requestedCluster string
+
 	Config struct {
 		ServerAddress string
 	}
@@ -137,7 +143,14 @@ func setup(ctx context.Context, flags *GlobalFlags, opts any, commandName string
 			s.ClusterConfig = cfg
 			s.ClusterName = name
 		} else if err != nil && !errors.Is(err, clientconfig.ErrNoConfig) {
-			s.Log.Warn("Failed to load cluster config", "error", err)
+			// Remembered rather than only logged. Anything that needs a
+			// connection has to refuse rather than quietly use a different
+			// cluster, and a warning scrolling past is not a refusal.
+			s.clusterErr = err
+			if rc, ok := opts.(interface{ RequestedCluster() string }); ok {
+				s.requestedCluster = rc.RequestedCluster()
+			}
+			s.Log.Debug("Failed to load cluster config", "error", err)
 		}
 	}
 
@@ -410,6 +423,12 @@ func (c *Context) RPCClient(name string) (*rpc.NetworkClient, error) {
 	// Nothing is printed unless this takes long enough to look like a hang.
 	defer c.startConnectNotice().Stop()
 
+	// A cluster was named and we couldn't load it. Connecting to anything else
+	// now would answer a question about one cluster with another's data.
+	if c.clusterErr != nil {
+		return nil, c.unknownClusterError()
+	}
+
 	var opts []rpc.StateOption
 
 	opts = append(opts, rpc.WithLogger(c.Log))
@@ -419,15 +438,26 @@ func (c *Context) RPCClient(name string) (*rpc.NetworkClient, error) {
 		err error
 	)
 
+	// A selected cluster is authoritative. If its configuration can't produce a
+	// connection, that is the answer — we must not fall through to the branches
+	// below, because they connect somewhere else entirely.
+	//
+	// This used to fall through, and the result was genuinely dangerous:
+	// `miren -C some-broken-cluster route list` would quietly answer with the
+	// *active* cluster's routes, so you'd be reading production data while
+	// believing you were looking at something else. An error about the cluster
+	// you named beats correct-looking data about a cluster you didn't.
 	if c.ClusterConfig != nil && c.ClientConfig != nil {
 		cs, err = c.ClusterConfig.State(c, c.ClientConfig, opts...)
-		if err == nil {
-			client, err := cs.Client(name)
-			if err != nil {
-				return nil, c.wrapRPCError(err)
-			}
-			return client, nil
+		if err != nil {
+			return nil, c.unusableClusterError(err)
 		}
+
+		client, err := cs.Client(name)
+		if err != nil {
+			return nil, c.wrapRPCError(err)
+		}
+		return client, nil
 	}
 
 	if c.ClientConfig != nil {
