@@ -28,6 +28,7 @@ import (
 	"miren.dev/runtime/observability"
 	"miren.dev/runtime/pkg/rpc"
 	"miren.dev/runtime/pkg/runnerconfig"
+	"miren.dev/runtime/servers/runnertelemetry"
 )
 
 func RunnerStart(ctx *Context, opts struct {
@@ -248,20 +249,50 @@ func RunnerStart(ctx *Context, opts struct {
 		deps.EtcdTLSCAFile = caFile
 	}
 
-	// Initialize observability subsystems. When the coordinator provided
-	// VictoriaMetrics/VictoriaLogs addresses at join time, the runner ships
-	// metrics and logs over flannel to the coordinator's instances. Otherwise
-	// we fall back to debug logging.
+	// Initialize observability subsystems. Telemetry goes to the coordinator's
+	// ingest endpoints rather than to VictoriaMetrics and VictoriaLogs
+	// directly, so neither of those has to listen anywhere this runner can
+	// reach. The addresses the coordinator sends at Join are no longer dialed;
+	// their presence is only the signal that the cluster records telemetry at
+	// all.
+	//
+	// The token source is armed after Start, because a distributed runner mints
+	// through the coordinator and has no issuer until it has connected. Writes
+	// before then fail loudly rather than dropping on the floor; in practice
+	// the first flush is seconds away and the connection is up well before it.
+	tokenSource := runnertelemetry.NewIssuerTokenSource()
+
+	var telemetryClient *runnertelemetry.Client
+	if cfg.VictoriametricsAddress != "" || cfg.VictorialogsAddress != "" {
+		telemetryClient, err = runnertelemetry.NewClient(runnertelemetry.ClientConfig{
+			ClientCertPEM: []byte(cfg.ClientCert),
+			ClientKeyPEM:  []byte(cfg.ClientKey),
+			CACertPEM:     []byte(cfg.CACert),
+			TokenSource:   tokenSource,
+			Timeout:       30 * time.Second,
+		})
+		if err != nil {
+			return fmt.Errorf("failed to build telemetry client: %w", err)
+		}
+		defer func() {
+			if err := telemetryClient.Close(); err != nil {
+				ctx.Log.Error("failed to close telemetry client", "error", err)
+			}
+		}()
+	}
+
 	var metricsWriter *metrics.VictoriaMetricsWriter
-	if cfg.VictoriametricsAddress != "" {
-		metricsWriter = metrics.NewVictoriaMetricsWriter(ctx.Log, cfg.VictoriametricsAddress, 30*time.Second)
+	if telemetryClient != nil && cfg.VictoriametricsAddress != "" {
+		metricsURL := runnertelemetry.MetricsURL(cfg.CoordinatorAddress)
+		metricsWriter = metrics.NewVictoriaMetricsWriter(ctx.Log, metricsURL, 30*time.Second,
+			metrics.WithHTTPClient(telemetryClient.HTTP))
 		metricsWriter.Start()
 		defer func() {
 			if err := metricsWriter.Close(); err != nil {
 				ctx.Log.Error("failed to close metrics writer", "error", err)
 			}
 		}()
-		ctx.Log.Info("metrics writer started", "address", cfg.VictoriametricsAddress)
+		ctx.Log.Info("metrics writer started", "endpoint", metricsURL)
 	} else {
 		ctx.Log.Warn("no VictoriaMetrics address configured, sandbox metrics will not be recorded")
 	}
@@ -272,9 +303,24 @@ func RunnerStart(ctx *Context, opts struct {
 	sbMetrics.MemUsage = metrics.NewMemoryUsage(ctx.Log, metricsWriter, nil)
 	deps.SandboxMetrics = sbMetrics
 
-	if cfg.VictorialogsAddress != "" {
-		deps.LogWriter = observability.NewPersistentLogWriter(cfg.VictorialogsAddress, 30*time.Second)
-		ctx.Log.Info("log writer started", "address", cfg.VictorialogsAddress)
+	if telemetryClient != nil && cfg.VictorialogsAddress != "" {
+		logsURL := runnertelemetry.LogsURL(cfg.CoordinatorAddress)
+		logWriter := observability.NewPersistentLogWriter(logsURL, 30*time.Second,
+			observability.WithHTTPClient(telemetryClient.HTTP))
+
+		// Batch on this path. One HTTP/3 round trip per log line to the
+		// coordinator costs far more than the unbatched POST to a local
+		// VictoriaLogs did, and a failure here is worth hearing about: the
+		// runner's own log goes to the journal, not through this writer, so
+		// reporting it cannot feed back into the buffer it is reporting on.
+		batchWriter := observability.NewBatchLogWriter(logWriter,
+			observability.WithBatchErrorHandler(func(err error, dropped int) {
+				ctx.Log.Error("failed to ship sandbox logs", "error", err, "dropped", dropped)
+			}))
+		defer batchWriter.Close()
+
+		deps.LogWriter = batchWriter
+		ctx.Log.Info("log writer started", "endpoint", logsURL)
 	} else {
 		deps.LogWriter = observability.NewDebugLogWriter(ctx.Log)
 		ctx.Log.Warn("no VictoriaLogs address configured, sandbox logs will only be written to debug output")
@@ -289,6 +335,13 @@ func RunnerStart(ctx *Context, opts struct {
 	// Start runner with errgroup for background network tasks
 	if err := r.Start(egCtx, eg); err != nil {
 		return fmt.Errorf("failed to start runner: %w", err)
+	}
+
+	// Start acquired the coordinator-backed issuer, so telemetry can now mint.
+	if issuer := r.WorkloadIssuer(); issuer != nil {
+		tokenSource.SetIssuer(issuer)
+	} else if telemetryClient != nil {
+		ctx.Log.Error("no workload identity issuer available; telemetry cannot be shipped")
 	}
 
 	ctx.Log.Info("runner started successfully",

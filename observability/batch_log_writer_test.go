@@ -276,3 +276,212 @@ func TestBatchLogWriter_CloseFlushesRemaining(t *testing.T) {
 		t.Fatalf("expected 3 entries flushed on close, got %d", total)
 	}
 }
+
+// recordingTransport captures the request it is handed and answers 200, so
+// transport wiring can be asserted without a live listener.
+type recordingTransport struct {
+	mu   sync.Mutex
+	reqs []*http.Request
+}
+
+func (t *recordingTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	t.mu.Lock()
+	t.reqs = append(t.reqs, r)
+	t.mu.Unlock()
+	return &http.Response{StatusCode: http.StatusOK, Body: http.NoBody, Request: r}, nil
+}
+
+func (t *recordingTransport) urls() []string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	var out []string
+	for _, r := range t.reqs {
+		out = append(out, r.URL.String())
+	}
+	return out
+}
+
+func TestPersistentLogWriter_WithHTTPClient(t *testing.T) {
+	rt := &recordingTransport{}
+	plw := NewPersistentLogWriter("https://coordinator.invalid:8443/_telemetry/logs", 5*time.Second,
+		WithHTTPClient(&http.Client{Transport: rt}))
+
+	err := plw.WriteEntry("test-entity", LogEntry{
+		Timestamp: time.Now(),
+		Stream:    Stdout,
+		Body:      "direct write",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	urls := rt.urls()
+	if len(urls) != 1 {
+		t.Fatalf("expected the supplied client to be used once, got %d requests", len(urls))
+	}
+	want := "https://coordinator.invalid:8443/_telemetry/logs/insert/jsonline"
+	if urls[0] != want {
+		t.Fatalf("got %q, want %q", urls[0], want)
+	}
+}
+
+// BatchLogWriter borrows the wrapped writer's client, so batching a writer must
+// not quietly drop back to a default transport (which for a runner shipping
+// through the coordinator would mean losing its credential).
+func TestBatchLogWriter_InheritsHTTPClient(t *testing.T) {
+	rt := &recordingTransport{}
+	plw := NewPersistentLogWriter("https://coordinator.invalid:8443/_telemetry/logs", 5*time.Second,
+		WithHTTPClient(&http.Client{Transport: rt}))
+	bw := NewBatchLogWriter(plw)
+	defer bw.Close()
+
+	if err := bw.WriteEntry("test-entity", LogEntry{
+		Timestamp: time.Now(),
+		Stream:    Stdout,
+		Body:      "batched write",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	deadline := time.After(2 * time.Second)
+	for {
+		if urls := rt.urls(); len(urls) > 0 {
+			want := "https://coordinator.invalid:8443/_telemetry/logs/insert/jsonline"
+			if urls[0] != want {
+				t.Fatalf("got %q, want %q", urls[0], want)
+			}
+			return
+		}
+		select {
+		case <-deadline:
+			t.Fatal("batch writer never flushed through the supplied client")
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+}
+
+func TestBatchLogWriter_ReportsTransportFailure(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	srv.Close() // closed up front so the send fails at the transport
+
+	var mu sync.Mutex
+	var gotErr error
+	gotDropped := -1
+
+	plw := NewPersistentLogWriter(srv.URL, time.Second)
+	bw := NewBatchLogWriter(plw, WithBatchErrorHandler(func(err error, dropped int) {
+		mu.Lock()
+		gotErr, gotDropped = err, dropped
+		mu.Unlock()
+	}))
+	defer bw.Close()
+
+	for i := 0; i < 3; i++ {
+		if err := bw.WriteEntry("test-entity", LogEntry{
+			Timestamp: time.Now(),
+			Stream:    Stdout,
+			Body:      "unreachable",
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	waitFor(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return gotErr != nil
+	}, "error handler was never called for a transport failure")
+
+	mu.Lock()
+	defer mu.Unlock()
+	if gotDropped != 3 {
+		t.Fatalf("reported %d dropped entries, want 3", gotDropped)
+	}
+}
+
+// A rejected batch comes back as a status code, not a transport error. This is
+// the shape an expired or missing credential takes, and before it was checked
+// the entries vanished with no signal whatsoever.
+func TestBatchLogWriter_ReportsRejectedStatus(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte("token expired"))
+	}))
+	defer srv.Close()
+
+	var mu sync.Mutex
+	var gotErr error
+	gotDropped := -1
+
+	plw := NewPersistentLogWriter(srv.URL, time.Second)
+	bw := NewBatchLogWriter(plw, WithBatchErrorHandler(func(err error, dropped int) {
+		mu.Lock()
+		gotErr, gotDropped = err, dropped
+		mu.Unlock()
+	}))
+	defer bw.Close()
+
+	if err := bw.WriteEntry("test-entity", LogEntry{
+		Timestamp: time.Now(),
+		Stream:    Stdout,
+		Body:      "rejected",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	waitFor(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return gotErr != nil
+	}, "error handler was never called for a rejected batch")
+
+	mu.Lock()
+	defer mu.Unlock()
+	if gotDropped != 1 {
+		t.Fatalf("reported %d dropped entries, want 1", gotDropped)
+	}
+	if !strings.Contains(gotErr.Error(), "401") {
+		t.Fatalf("error %q does not mention the status code", gotErr)
+	}
+	if !strings.Contains(gotErr.Error(), "token expired") {
+		t.Fatalf("error %q does not quote the response body", gotErr)
+	}
+}
+
+// A writer with no error handler keeps its historical silence rather than
+// panicking on the nil callback.
+func TestBatchLogWriter_SilentWithoutHandler(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer srv.Close()
+
+	plw := NewPersistentLogWriter(srv.URL, time.Second)
+	bw := NewBatchLogWriter(plw)
+	defer bw.Close()
+
+	if err := bw.WriteEntry("test-entity", LogEntry{
+		Timestamp: time.Now(),
+		Stream:    Stdout,
+		Body:      "rejected",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	time.Sleep(defaultFlushInterval * 3)
+}
+
+func waitFor(t *testing.T, cond func() bool, msg string) {
+	t.Helper()
+	deadline := time.After(2 * time.Second)
+	for {
+		if cond() {
+			return
+		}
+		select {
+		case <-deadline:
+			t.Fatal(msg)
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+}

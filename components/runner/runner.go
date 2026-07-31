@@ -386,6 +386,17 @@ func (r *Runner) Start(ctx context.Context, eg ...*errgroup.Group) error {
 	return nil
 }
 
+// WorkloadIssuer returns the issuer this runner mints identity tokens through,
+// or nil if none is available.
+//
+// It is only meaningful after Start, which is where a distributed runner
+// acquires its issuer from the coordinator. Callers that build something
+// needing tokens before then should hold a source they can arm afterwards
+// rather than reading this early and caching a nil.
+func (r *Runner) WorkloadIssuer() workloadidentity.TokenIssuer {
+	return r.deps.WorkloadIssuer
+}
+
 // setupRemoteWorkloadIssuer wires a remote workload identity issuer for
 // distributed runners. Runners do not hold the cluster signing key, so they
 // mint tokens by calling the coordinator's RunnerRegistration service. When the

@@ -606,3 +606,71 @@ func TestVictoriaMetricsWriter_PrometheusFormat(t *testing.T) {
 		assert.Contains(t, line, "temperature 23.456789 1000000")
 	})
 }
+
+// recordingTransport captures the request it is handed and answers with a
+// canned status, so transport wiring can be asserted without a live listener.
+type recordingTransport struct {
+	mu     sync.Mutex
+	req    *http.Request
+	status int
+}
+
+func (t *recordingTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	t.mu.Lock()
+	t.req = r
+	t.mu.Unlock()
+
+	status := t.status
+	if status == 0 {
+		status = http.StatusNoContent
+	}
+	return &http.Response{StatusCode: status, Body: http.NoBody, Request: r}, nil
+}
+
+func (t *recordingTransport) request() *http.Request {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.req
+}
+
+func TestVictoriaMetricsWriter_Transport(t *testing.T) {
+	log := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelError}))
+
+	flushOnePoint := func(t *testing.T, writer *VictoriaMetricsWriter) {
+		t.Helper()
+		require.NoError(t, writer.WritePoint(context.Background(), MetricPoint{
+			Name:      "test_metric",
+			Value:     1,
+			Timestamp: time.Unix(1234567890, 0),
+		}))
+		writer.flush()
+	}
+
+	t.Run("sends through a supplied HTTP client", func(t *testing.T) {
+		rt := &recordingTransport{}
+		writer := NewVictoriaMetricsWriter(log, "victoriametrics.invalid:8428", 10*time.Second,
+			WithHTTPClient(&http.Client{Transport: rt}))
+
+		flushOnePoint(t, writer)
+
+		req := rt.request()
+		require.NotNil(t, req, "supplied client should have been used")
+		assert.Equal(t, "http://victoriametrics.invalid:8428/api/v1/import/prometheus", req.URL.String())
+	})
+
+	t.Run("honors an address that names its scheme and a base path", func(t *testing.T) {
+		rt := &recordingTransport{}
+		writer := NewVictoriaMetricsWriter(log, "https://coordinator.invalid:8443/_telemetry/metrics", 10*time.Second,
+			WithHTTPClient(&http.Client{Transport: rt}))
+
+		flushOnePoint(t, writer)
+
+		req := rt.request()
+		require.NotNil(t, req)
+		// A runner ships through the coordinator, so the scheme must survive and
+		// the import path must land under the base path rather than replacing it.
+		assert.Equal(t,
+			"https://coordinator.invalid:8443/_telemetry/metrics/api/v1/import/prometheus",
+			req.URL.String())
+	})
+}

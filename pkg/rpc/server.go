@@ -308,6 +308,24 @@ func (s *Server) setupMux() {
 	s.mux = mux
 }
 
+// mountHTTPHandlers adds caller-supplied routes to the mux. The RPC prefix is
+// reserved: a handler mounted under it would shadow method dispatch, and the
+// resulting failure (methods quietly answered by the wrong handler) is far
+// harder to diagnose than a refusal at startup.
+func (s *Server) mountHTTPHandlers(mounts []httpHandlerMount) error {
+	for _, m := range mounts {
+		if m.handler == nil {
+			return fmt.Errorf("http handler for %q is nil", m.pattern)
+		}
+		if strings.Contains(m.pattern, rpcPathPrefix) {
+			return fmt.Errorf("http handler pattern %q is reserved for RPC", m.pattern)
+		}
+		s.mux.Handle(m.pattern, m.handler)
+	}
+
+	return nil
+}
+
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
@@ -348,9 +366,12 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	s.mux.ServeHTTP(w, r)
 }
 
+// rpcPathPrefix is the path namespace reserved for RPC dispatch.
+const rpcPathPrefix = "/_rpc/"
+
 // isRPCPath returns true if the path is an RPC endpoint
 func isRPCPath(path string) bool {
-	return len(path) >= 6 && path[:6] == "/_rpc/"
+	return strings.HasPrefix(path, rpcPathPrefix)
 }
 
 type identifyResponse struct {

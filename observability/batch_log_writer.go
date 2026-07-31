@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/http"
+	"strings"
 	"sync"
 	"time"
 )
@@ -12,7 +14,47 @@ import (
 const (
 	defaultFlushInterval = 250 * time.Millisecond
 	defaultFlushCount    = 50
+
+	// maxErrorBodyBytes bounds how much of a failed response we quote back.
+	// Enough to carry VictoriaLogs' complaint or an auth rejection, not enough
+	// to turn one bad batch into a wall of output.
+	maxErrorBodyBytes = 512
 )
+
+// BatchErrorHandler reports a batch that never reached VictoriaLogs. dropped is
+// the number of entries lost with it; the buffer is not retried, so they are
+// gone by the time this is called.
+//
+// It runs synchronously on the flush loop, so it must return promptly. A
+// handler that blocks holds up every later flush while WriteEntry keeps
+// accepting entries with no backpressure, so the buffer grows for exactly as
+// long as the block lasts. That is worst at precisely the wrong moment, since
+// whatever is making the handler slow is likely the same outage that made the
+// flush fail. Hand slow work to something else rather than doing it here.
+//
+// Think about where this reports before setting it on a writer that receives
+// the process's own logs. The coordinator tees its slog output into a
+// BatchLogWriter (see cli/commands/server.go), so logging a flush failure
+// through that same logger feeds the failure back into the buffer and
+// re-amplifies it on every flush. Report somewhere that cannot loop back, or
+// leave it unset.
+type BatchErrorHandler func(err error, dropped int)
+
+// BatchLogWriterOption customizes a BatchLogWriter at construction.
+type BatchLogWriterOption func(*BatchLogWriter)
+
+// WithBatchErrorHandler makes flush failures observable.
+//
+// The default is to stay silent, which is what this writer has always done and
+// is survivable while it carries a copy of logs that are also going to stderr.
+// It stops being survivable once a writer is the only path for a runner's logs
+// and the send can fail for a reason nobody would guess, an expired credential
+// being the obvious one. Callers in that position should set this.
+func WithBatchErrorHandler(fn BatchErrorHandler) BatchLogWriterOption {
+	return func(b *BatchLogWriter) {
+		b.onError = fn
+	}
+}
 
 // BatchLogWriter implements LogWriter by buffering entries and flushing them
 // as a single NDJSON HTTP POST to VictoriaLogs. This reduces write pressure
@@ -28,17 +70,24 @@ type BatchLogWriter struct {
 	done      chan struct{}
 	wg        sync.WaitGroup
 	closeOnce sync.Once
+
+	onError BatchErrorHandler
 }
 
 // NewBatchLogWriter wraps a PersistentLogWriter with batching. Entries are
 // buffered and flushed either every 250ms or when 50 entries accumulate,
 // whichever comes first.
-func NewBatchLogWriter(writer *PersistentLogWriter) *BatchLogWriter {
+func NewBatchLogWriter(writer *PersistentLogWriter, opts ...BatchLogWriterOption) *BatchLogWriter {
 	b := &BatchLogWriter{
 		writer:  writer,
 		flushCh: make(chan struct{}, 1),
 		done:    make(chan struct{}),
 	}
+
+	for _, opt := range opts {
+		opt(b)
+	}
+
 	b.wg.Add(1)
 	go b.run()
 	return b
@@ -129,6 +178,7 @@ func (b *BatchLogWriter) flush() {
 	}
 	data := make([]byte, b.buf.Len())
 	copy(data, b.buf.Bytes())
+	dropped := b.count
 	b.buf.Reset()
 	b.count = 0
 	b.mu.Unlock()
@@ -138,8 +188,27 @@ func (b *BatchLogWriter) flush() {
 
 	resp, err := b.writer.Client().Post(insertURL, "application/x-ndjson", bytes.NewReader(data))
 	if err != nil {
+		b.reportError(fmt.Errorf("sending log batch to victorialogs: %w", err), dropped)
 		return
 	}
 	defer resp.Body.Close()
+
+	// A rejected batch answers with a status, not a transport error, so this is
+	// the only place an authentication or quota failure becomes visible at all.
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
+		detail, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBodyBytes))
+		_, _ = io.Copy(io.Discard, resp.Body)
+		b.reportError(fmt.Errorf("victorialogs returned status %d: %s",
+			resp.StatusCode, strings.TrimSpace(string(detail))), dropped)
+		return
+	}
+
 	_, _ = io.Copy(io.Discard, resp.Body)
+}
+
+func (b *BatchLogWriter) reportError(err error, dropped int) {
+	if b.onError == nil {
+		return
+	}
+	b.onError(err, dropped)
 }

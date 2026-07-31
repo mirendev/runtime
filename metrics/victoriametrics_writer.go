@@ -44,8 +44,25 @@ type MetricPoint struct {
 	Timestamp time.Time
 }
 
+// WriterOption customizes a VictoriaMetricsWriter at construction.
+type WriterOption func(*VictoriaMetricsWriter)
+
+// WithHTTPClient replaces the writer's default HTTP client.
+//
+// Callers that cannot reach VictoriaMetrics with a plain client supply their
+// own. A distributed runner ships metrics through the coordinator rather than
+// dialing VictoriaMetrics directly, which means an HTTP/3 transport carrying a
+// credential. Putting that in the client's RoundTripper keeps this writer
+// unaware of how it is authenticated, so the credential has one home rather
+// than being threaded through every send.
+func WithHTTPClient(client *http.Client) WriterOption {
+	return func(w *VictoriaMetricsWriter) {
+		w.client = client
+	}
+}
+
 // NewVictoriaMetricsWriter creates a new VictoriaMetrics writer
-func NewVictoriaMetricsWriter(log *slog.Logger, address string, timeout time.Duration) *VictoriaMetricsWriter {
+func NewVictoriaMetricsWriter(log *slog.Logger, address string, timeout time.Duration, opts ...WriterOption) *VictoriaMetricsWriter {
 	if timeout == 0 {
 		timeout = 30 * time.Second
 	}
@@ -61,7 +78,21 @@ func NewVictoriaMetricsWriter(log *slog.Logger, address string, timeout time.Dur
 		},
 	}
 
+	for _, opt := range opts {
+		opt(w)
+	}
+
 	return w
+}
+
+// normalizeBaseURL ensures the address has a scheme and no trailing slash.
+// A bare host:port keeps its historical meaning of plain HTTP, so existing
+// callers are unaffected, while an address that names https:// is honored.
+func normalizeBaseURL(address string) string {
+	if !strings.HasPrefix(address, "http://") && !strings.HasPrefix(address, "https://") {
+		address = "http://" + address
+	}
+	return strings.TrimRight(address, "/")
 }
 
 // Start begins the background flush routine. It is idempotent and safe to call multiple times.
@@ -182,7 +213,7 @@ func (w *VictoriaMetricsWriter) sendMetrics(points []MetricPoint) error {
 		buf.WriteByte('\n')
 	}
 
-	url := fmt.Sprintf("http://%s/api/v1/import/prometheus", w.Address)
+	url := normalizeBaseURL(w.Address) + "/api/v1/import/prometheus"
 	req, err := http.NewRequestWithContext(context.Background(), "POST", url, &buf)
 	if err != nil {
 		return fmt.Errorf("failed to create request: %w", err)
