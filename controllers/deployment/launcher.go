@@ -846,6 +846,21 @@ const (
 	localDataDiskName  = "local-data"
 )
 
+// appDeclaresLocalDisk returns true if any service in the spec declares an
+// explicit local-provider disk. All local volumes share one per-app host
+// directory, so a single explicit declaration anywhere in the app already
+// accounts for whatever that directory holds.
+func appDeclaresLocalDisk(spec *core_v1alpha.ConfigSpec) bool {
+	for _, svc := range spec.Services {
+		for _, d := range svc.Disks {
+			if d.Provider == core_v1alpha.ConfigSpecServicesDisksLOCAL {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // injectAutoMountLocalDisks registers the transitional local-storage auto-mount
 // as a real disk on the resolved config. For any service whose per-app host data
 // directory already holds data but which declares no disk at the auto-mount path,
@@ -859,6 +874,16 @@ const (
 // the disk here does not move any existing data.
 func (l *Launcher) injectAutoMountLocalDisks(spec *core_v1alpha.ConfigSpec, app *core_v1alpha.App) {
 	if l.DataPath == "" {
+		return
+	}
+	// The data check below is app-scoped, but the injection loop is not: without
+	// this guard, one service's explicit local disk makes dirHasData true for the
+	// whole app and shims a disk onto every sibling service. Those siblings then
+	// report serviceHasDisks true and take drainStaleDiskPools, which scales the
+	// old pool to zero *before* creating the new one — a full serving gap on every
+	// deploy for services that never asked for a disk (MIR-1423 suppressed this
+	// per-service; the app-scoped case was missed).
+	if appDeclaresLocalDisk(spec) {
 		return
 	}
 	if !dirHasData(filepath.Join(l.DataPath, "data", "local", app.ID.String())) {
