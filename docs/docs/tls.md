@@ -140,7 +140,14 @@ Two additional `[tls]` settings apply to the API server and etcd certs rather th
 | Setting | CLI Flag | Description |
 |---------|----------|-------------|
 | `additional_names` | `--dns-names` | Extra DNS names appended to the API server and etcd cert SANs |
-| `additional_ips` | `--ips` | Extra IPs appended to the API server and etcd cert SANs |
+| `additional_ips` | `--ips` | Extra IPs appended to the API server and etcd cert SANs, and forced into the advertised address list |
+
+:::tip[`additional_ips` also controls advertisement]
+Addresses in `additional_ips` bypass the filtering applied to auto-discovered
+addresses and are always advertised to Miren Cloud, which makes this the lever
+for a cluster behind a static NAT or on a private network. See
+[Running Miren on a Tailnet](/tailscale).
+:::
 
 ## Troubleshooting
 

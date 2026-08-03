@@ -49,7 +49,7 @@ sudo miren server restart
 If your cluster's public address isn't the one Miren discovered — for example it sits behind a load balancer or a static NAT — set the reachable address explicitly with `additional_ips` in your [server configuration](/server-config) instead of relying on discovery.
 
 :::tip[Reachable, but no public address]
-A cluster on a private network (home lab, VPC with no public IP) will read "Not reachable" here and that's expected — you deploy to it from the same LAN. Miren Anywhere carries app traffic, not the control plane, and so **won't** change this check.
+A cluster on a private network (home lab, VPC with no public IP, or a host that only answers on a tailnet) will read "Not reachable" here and that's expected — you deploy to it from the same LAN or overlay. Miren Anywhere carries app traffic, not the control plane, and so **won't** change this check. For the tailnet case end to end, see [Running Miren on a Tailnet](/tailscale).
 :::
 
 ## Can users reach your apps?
@@ -71,7 +71,9 @@ Three outcomes are possible:
 
 - **Reachable** — Cloud connected to at least one advertised port. The address is confirmed and handed to clients.
 - **Not reachable, address known** — Cloud saw a public address but couldn't connect to any port. Something in the inbound path (a firewall, a cloud security group, or a NAT) is dropping the traffic, and this is the verdict that names the specific port.
-- **No public address** — Cloud only ever saw a private or carrier-NAT source, so there's nothing to hand out. Common for home labs and locked-down VPCs; expected, not an error.
+- **No public address** — Cloud only ever saw a private or carrier-NAT source, so there's nothing to hand out. Common for home labs, locked-down VPCs, and tailnet-only hosts; expected, not an error.
+
+To see which addresses your cluster settled on and why each one was kept or dropped, run `miren debug advertise` on the host. It reproduces the server's own logic and prints a reason per candidate, which is usually faster than inferring the answer from the dashboard.
 
 :::note[The panel reflects the last check]
 Reachability is re-checked periodically (roughly hourly) and at startup, not on every status report — so after you open a port the panel can lag even though the cluster is already reachable. Restart the server to force a fresh check, or wait for the next one.
