@@ -77,7 +77,7 @@ func (s *SagaSandboxController) Create(ctx context.Context, co *compute.Sandbox,
 		return nil
 	case compute.STOPPED:
 		s.log.Debug("sandbox is stopped, verifying it is no longer running")
-		return s.inner.StopSandbox(ctx, co.ID)
+		return s.inner.StopSandbox(ctx, co.ID, co)
 	case "", compute.PENDING, compute.RUNNING:
 		searchRes, err := s.inner.CheckSandbox(ctx, co, meta)
 		if err != nil {
@@ -131,7 +131,7 @@ func (s *SagaSandboxController) Create(ctx context.Context, co *compute.Sandbox,
 					}
 				}
 
-				if err := s.inner.StopSandbox(ctx, co.ID); err != nil {
+				if err := s.inner.StopSandbox(ctx, co.ID, co); err != nil {
 					return fmt.Errorf("failed to cleanup unhealthy sandbox: %w", err)
 				}
 				return nil

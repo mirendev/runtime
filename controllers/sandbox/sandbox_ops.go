@@ -134,6 +134,10 @@ func (o *sandboxOps) ReleaseDiskLeases(ctx context.Context, sandboxID entity.Id)
 	return o.ctrl.ReleaseDiskLeases(ctx, sandboxID)
 }
 
+func (o *sandboxOps) ReleaseTokenState(id entity.Id) {
+	o.ctrl.ReleaseTokenState(id)
+}
+
 func (o *sandboxOps) UnconfigureFirewall(sb *compute.Sandbox) {
 	o.ctrl.UnconfigureFirewall(sb)
 }
