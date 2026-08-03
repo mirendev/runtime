@@ -23,7 +23,7 @@ miren server install [flags]
 - `--no-start` — Do not start the service after installation
 - `--skip-system-check` — Skip minimum system requirements check
 - `--url, -u` — Cloud URL for registration (default: `https://miren.cloud`)
-- `--verbosity` — Verbosity level (default: `-vv`)
+- `--verbosity` — Extra verbosity to bake into the unit (e.g. -v); the server defaults to Info without it
 - `--without-cloud` — Skip cloud registration setup
 
 ## Global Options

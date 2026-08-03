@@ -679,6 +679,7 @@ miren deploy --analyze
 		))
 		d.Dispatch("runner start", Infer("runner start", "Start this machine as a distributed runner", RunnerStart,
 			WithLabsFeature(labs.FeatureDistributedRunners),
+			WithDaemon(),
 			WithExample(mflags.Example{
 				Name: "Start the runner",
 				Body: "miren runner start",
@@ -812,6 +813,7 @@ miren deploy --analyze
 	// Server commands
 	d.Dispatch("server", Infer("server", "Start the miren server", Server,
 		WithGroup(GroupServer),
+		WithDaemon(),
 		WithExample(mflags.Example{
 			Name: "Start in standalone mode",
 			Body: "miren server --mode standalone",

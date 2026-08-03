@@ -10,7 +10,7 @@ import (
 // ServerInstall is not supported on non-Linux platforms
 func ServerInstall(ctx *Context, opts struct {
 	Address         string            `short:"a" long:"address" description:"Server address to bind to" default:"0.0.0.0:8443"`
-	Verbosity       string            `long:"verbosity" description:"Verbosity level" default:"-vv"`
+	Verbosity       string            `long:"verbosity" description:"Extra verbosity to bake into the unit (e.g. -v); the server defaults to Info without it"`
 	Branch          string            `short:"b" long:"branch" description:"Branch to download if release not found" default:"main"`
 	Force           bool              `short:"f" long:"force" description:"Overwrite existing service file"`
 	NoStart         bool              `long:"no-start" description:"Do not start the service after installation"`
