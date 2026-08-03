@@ -1118,19 +1118,15 @@ func TestDeployVersion(t *testing.T) {
 			t.Fatalf("Failed to create app version: %v", err)
 		}
 
-		// Create an in-progress deployment (blocking)
-		_, err = inmem.Client.Create(ctx, "blocking-dep", &core_v1alpha.Deployment{
-			AppName:    "locked-app",
-			ClusterId:  "cluster1",
-			AppVersion: "pending-build",
-			Status:     "in_progress",
-			Phase:      "building",
-			DeployedBy: core_v1alpha.DeployedBy{
-				Timestamp: time.Now().Format(time.RFC3339),
-			},
-		})
+		// Establish a blocking in-progress deployment that actually holds the
+		// deploy lock, via the same path a real deploy uses. A bare in_progress
+		// record no longer blocks — the lock does.
+		blockRes, err := client.CreateDeployment(ctx, "locked-app", "cluster1", "pending-build", nil)
 		if err != nil {
 			t.Fatalf("Failed to create blocking deployment: %v", err)
+		}
+		if blockRes.HasError() && blockRes.Error() != "" {
+			t.Fatalf("Blocking deployment unexpectedly failed: %s", blockRes.Error())
 		}
 
 		// Try to deploy — should be blocked

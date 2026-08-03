@@ -15,6 +15,7 @@ import (
 	"miren.dev/runtime/api/build/build_v1alpha"
 	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/appconfig"
+	"miren.dev/runtime/pkg/deploylifecycle"
 	"miren.dev/runtime/pkg/entity"
 	ephemeralx "miren.dev/runtime/pkg/ephemeral"
 	"miren.dev/runtime/pkg/saga"
@@ -37,6 +38,9 @@ const (
 	actionProvisionAddons = "provision-addons"
 	actionSetActiveVer    = "set-active-version"
 	actionFinalize        = "finalize"
+	actionBeginDeploy     = "begin-deployment"
+	actionRecordVersion   = "record-app-version"
+	actionActivateDeploy  = "activate-deployment"
 )
 
 // buildSagaDeps holds the collaborators injected into the saga context.
@@ -506,9 +510,13 @@ func undoProvisionAddons(_ context.Context, _ provisionAddonsIn, _ provisionAddo
 
 type setActiveVersionIn struct {
 	AppName        string    `json:"app_name" saga:"app_name"`
+	StreamID       string    `json:"stream_id" saga:"stream_id"`
 	AppVersionID   string    `json:"app_version_id" saga:"app_version_id"`
 	EphemeralLabel string    `json:"ephemeral_label,omitempty" saga:"ephemeral_label,optional"`
 	AddonsReady    saga.Edge `saga:"addons_provisioned"`
+	// DeploymentID is empty for an untracked build. Consuming it also anchors
+	// this action after begin-deployment, which is where the record is created.
+	DeploymentID string `json:"deployment_id,omitempty" saga:"deployment_id,optional"`
 }
 
 type setActiveVersionOut struct {
@@ -523,6 +531,9 @@ func setActiveVersion(ctx context.Context, in setActiveVersionIn) (setActiveVers
 
 	deps := saga.Get[*buildSagaDeps](ctx)
 	b := deps.builder
+
+	b.trackDeployment(in.DeploymentID, deps.statuses.SenderFor(in.StreamID)).
+		setPhase(ctx, deploylifecycle.PhaseActivating)
 
 	app, err := b.appClient.GetByName(ctx, in.AppName)
 	if err != nil {
@@ -594,6 +605,155 @@ func finalize(ctx context.Context, in finalizeIn) (finalizeOut, error) {
 }
 
 func undoFinalize(_ context.Context, _ finalizeIn, _ finalizeOut) error {
+	return nil
+}
+
+// --- server-owned deployment record lifecycle ---
+//
+// Three actions mirror the plain path's tracker calls, so the record is a
+// byproduct of the saga rather than something the client narrates. Ordering
+// comes from data dependencies, not registration order: begin-deployment
+// outputs deployment_id; record-app-version consumes deployment_id +
+// app_version_id (so it lands after both begin and create-version);
+// activate-deployment consumes deployment_id and the set_active_skipped edge
+// (so it lands after set-active-version).
+//
+// All three no-op when the build is not server-tracked. A build is tracked only
+// when the client sent a DeployRequest, which seeds deploy_cluster_id; without
+// it deployment_id stays empty and every downstream action skips. Ephemeral
+// builds are never tracked.
+//
+// Only begin-deployment may fail the saga. The record describes the deploy; it
+// must never be able to undo one. Once begin has succeeded the later actions
+// log their failures and return nil, because returning an error here would
+// compensate the saga, and the compensation for set-active-version restores the
+// previous app version — so a failed bookkeeping write would roll back a deploy
+// that is already live. The plain path enforces the same rule in
+// deployTracking.activate; these match it.
+//
+// For the same reason the settles run on a context detached from the saga's:
+// the most likely cause of failure is the client disconnecting, which is
+// exactly when the record most needs to reach a terminal state and drop the
+// deploy lock.
+
+type beginDeploymentIn struct {
+	AppName   string `json:"app_name" saga:"app_name"`
+	StreamID  string `json:"stream_id" saga:"stream_id"`
+	ClusterID string `json:"deploy_cluster_id,omitempty" saga:"deploy_cluster_id,optional"`
+	GitInfo   string `json:"deploy_git_info_json,omitempty" saga:"deploy_git_info_json,optional"`
+}
+
+type beginDeploymentOut struct {
+	DeploymentID string `json:"deployment_id" saga:"deployment_id"`
+}
+
+func beginDeployment(ctx context.Context, in beginDeploymentIn) (beginDeploymentOut, error) {
+	// No cluster id means the client did not ask the server to own a record.
+	if in.ClusterID == "" {
+		return beginDeploymentOut{}, nil
+	}
+
+	deps := saga.Get[*buildSagaDeps](ctx)
+	b := deps.builder
+
+	var gitInfo core_v1alpha.GitInfo
+	if in.GitInfo != "" {
+		if err := json.Unmarshal([]byte(in.GitInfo), &gitInfo); err != nil {
+			b.Log.Warn("ignoring unparseable git info on deployment", "error", err)
+		}
+	}
+
+	rec, err := b.deploy.Begin(ctx, deploylifecycle.BeginParams{
+		AppName:   in.AppName,
+		ClusterID: in.ClusterID,
+		GitInfo:   gitInfo,
+	})
+	if err != nil {
+		return beginDeploymentOut{}, fmt.Errorf("begin deployment for %s: %w", in.AppName, err)
+	}
+
+	id := string(rec.Deployment.ID)
+	b.trackDeployment(id, deps.statuses.SenderFor(in.StreamID)).
+		emit(string(deploylifecycle.PhasePreparing))
+	return beginDeploymentOut{DeploymentID: id}, nil
+}
+
+func undoBeginDeployment(ctx context.Context, in beginDeploymentIn, out beginDeploymentOut) error {
+	if out.DeploymentID == "" {
+		return nil
+	}
+	deps := saga.Get[*buildSagaDeps](ctx)
+
+	// Settle on a detached context: compensation often runs because the client
+	// disconnected, and that must not leave the record in_progress with the lock
+	// held until its TTL.
+	settleCtx, cancel := settleContext(ctx)
+	defer cancel()
+
+	// FailIfUnsettled: if a later action already activated the record, leave it
+	// active — the version is live, and undoSetActiveVersion handles reverting
+	// that separately.
+	if err := deps.builder.deploy.FailIfUnsettled(settleCtx, out.DeploymentID, "build rolled back", ""); err != nil {
+		return fmt.Errorf("failing rolled-back deployment %s: %w", out.DeploymentID, err)
+	}
+	return nil
+}
+
+type recordAppVersionIn struct {
+	DeploymentID string `json:"deployment_id,omitempty" saga:"deployment_id,optional"`
+	AppVersionID string `json:"app_version_id" saga:"app_version_id"`
+}
+
+type recordAppVersionOut struct {
+	Recorded saga.Edge `saga:"app_version_recorded"`
+}
+
+func recordAppVersion(ctx context.Context, in recordAppVersionIn) (recordAppVersionOut, error) {
+	if in.DeploymentID == "" {
+		return recordAppVersionOut{}, nil
+	}
+	deps := saga.Get[*buildSagaDeps](ctx)
+
+	// Delegated so the detached context and the log-rather-than-fail policy live
+	// in one place. A failure here is not fatal: activate-deployment will refuse
+	// to settle a record with no version and release the lock instead.
+	deps.builder.trackDeployment(in.DeploymentID, nil).setAppVersion(ctx, in.AppVersionID)
+	return recordAppVersionOut{}, nil
+}
+
+func undoRecordAppVersion(_ context.Context, _ recordAppVersionIn, _ recordAppVersionOut) error {
+	// Nothing to undo: begin's undo settles the record.
+	return nil
+}
+
+type activateDeploymentIn struct {
+	DeploymentID     string `json:"deployment_id,omitempty" saga:"deployment_id,optional"`
+	SetActiveSkipped bool   `json:"set_active_skipped" saga:"set_active_skipped"`
+	// Anchors this action after record-app-version.
+	Recorded saga.Edge `saga:"app_version_recorded"`
+}
+
+type activateDeploymentOut struct{}
+
+func activateDeployment(ctx context.Context, in activateDeploymentIn) (activateDeploymentOut, error) {
+	// Not tracked, or an ephemeral build whose activation was skipped: nothing
+	// to activate.
+	if in.DeploymentID == "" || in.SetActiveSkipped {
+		return activateDeploymentOut{}, nil
+	}
+	deps := saga.Get[*buildSagaDeps](ctx)
+
+	// Delegated: the version is live by now, so activate detaches its context,
+	// logs rather than returns, and drops the lock as a backstop. See the
+	// failure-policy note at the top of this section.
+	deps.builder.trackDeployment(in.DeploymentID, nil).activate(ctx)
+	return activateDeploymentOut{}, nil
+}
+
+func undoActivateDeployment(_ context.Context, _ activateDeploymentIn, _ activateDeploymentOut) error {
+	// The record is already active and the lock released. If a later step fails,
+	// undoSetActiveVersion reverts the running version; the record is left as the
+	// historical account of a deploy that did go live. No compensation here.
 	return nil
 }
 
@@ -678,6 +838,9 @@ func registerBuildSaga(
 		Action(actionProvisionAddons, provisionAddons).Undo(undoProvisionAddons).
 		Action(actionSetActiveVer, setActiveVersion).Undo(undoSetActiveVersion).
 		Action(actionFinalize, finalize).Undo(undoFinalize).
+		Action(actionBeginDeploy, beginDeployment).Undo(undoBeginDeployment).
+		Action(actionRecordVersion, recordAppVersion).Undo(undoRecordAppVersion).
+		Action(actionActivateDeploy, activateDeployment).Undo(undoActivateDeployment).
 		RegisterTo(registry)
 }
 

@@ -7,6 +7,7 @@ import (
 
 	"github.com/fxamacker/cbor/v2"
 	rpc "miren.dev/runtime/pkg/rpc"
+	"miren.dev/runtime/pkg/rpc/standard"
 	"miren.dev/runtime/pkg/rpc/stream"
 )
 
@@ -20,13 +21,16 @@ type StatusUpdate interface {
 	SetError(string)
 	Log() *LogEntry
 	SetLog(*LogEntry)
+	Deployment() *DeploymentProgress
+	SetDeployment(*DeploymentProgress)
 }
 
 type statusUpdate struct {
-	U_Message  *string    `cbor:"1,keyasint,omitempty" json:"message,omitempty"`
-	U_Buildkit *[]byte    `cbor:"2,keyasint,omitempty" json:"buildkit,omitempty"`
-	U_Error    *string    `cbor:"3,keyasint,omitempty" json:"error,omitempty"`
-	U_Log      **LogEntry `cbor:"4,keyasint,omitempty" json:"log,omitempty"`
+	U_Message    *string              `cbor:"1,keyasint,omitempty" json:"message,omitempty"`
+	U_Buildkit   *[]byte              `cbor:"2,keyasint,omitempty" json:"buildkit,omitempty"`
+	U_Error      *string              `cbor:"3,keyasint,omitempty" json:"error,omitempty"`
+	U_Log        **LogEntry           `cbor:"4,keyasint,omitempty" json:"log,omitempty"`
+	U_Deployment **DeploymentProgress `cbor:"5,keyasint,omitempty" json:"deployment,omitempty"`
 }
 
 func (v *statusUpdate) Which() string {
@@ -42,6 +46,9 @@ func (v *statusUpdate) Which() string {
 	if v.U_Log != nil {
 		return "log"
 	}
+	if v.U_Deployment != nil {
+		return "deployment"
+	}
 	return ""
 }
 
@@ -56,6 +63,7 @@ func (v *statusUpdate) SetMessage(val string) {
 	v.U_Buildkit = nil
 	v.U_Error = nil
 	v.U_Log = nil
+	v.U_Deployment = nil
 	v.U_Message = &val
 }
 
@@ -70,6 +78,7 @@ func (v *statusUpdate) SetBuildkit(val []byte) {
 	v.U_Message = nil
 	v.U_Error = nil
 	v.U_Log = nil
+	v.U_Deployment = nil
 	v.U_Buildkit = &val
 }
 
@@ -84,6 +93,7 @@ func (v *statusUpdate) SetError(val string) {
 	v.U_Message = nil
 	v.U_Buildkit = nil
 	v.U_Log = nil
+	v.U_Deployment = nil
 	v.U_Error = &val
 }
 
@@ -98,7 +108,23 @@ func (v *statusUpdate) SetLog(val *LogEntry) {
 	v.U_Message = nil
 	v.U_Buildkit = nil
 	v.U_Error = nil
+	v.U_Deployment = nil
 	v.U_Log = &val
+}
+
+func (v *statusUpdate) Deployment() *DeploymentProgress {
+	if v.U_Deployment == nil {
+		return nil
+	}
+	return *v.U_Deployment
+}
+
+func (v *statusUpdate) SetDeployment(val *DeploymentProgress) {
+	v.U_Message = nil
+	v.U_Buildkit = nil
+	v.U_Error = nil
+	v.U_Log = nil
+	v.U_Deployment = &val
 }
 
 type statusData struct {
@@ -142,6 +168,277 @@ func (v *Status) MarshalJSON() ([]byte, error) {
 }
 
 func (v *Status) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type deploymentProgressData struct {
+	DeploymentId *string `cbor:"0,keyasint,omitempty" json:"deployment_id,omitempty"`
+	Phase        *string `cbor:"1,keyasint,omitempty" json:"phase,omitempty"`
+}
+
+type DeploymentProgress struct {
+	data deploymentProgressData
+}
+
+func (v *DeploymentProgress) HasDeploymentId() bool {
+	return v.data.DeploymentId != nil
+}
+
+func (v *DeploymentProgress) DeploymentId() string {
+	if v.data.DeploymentId == nil {
+		return ""
+	}
+	return *v.data.DeploymentId
+}
+
+func (v *DeploymentProgress) SetDeploymentId(deployment_id string) {
+	v.data.DeploymentId = &deployment_id
+}
+
+func (v *DeploymentProgress) HasPhase() bool {
+	return v.data.Phase != nil
+}
+
+func (v *DeploymentProgress) Phase() string {
+	if v.data.Phase == nil {
+		return ""
+	}
+	return *v.data.Phase
+}
+
+func (v *DeploymentProgress) SetPhase(phase string) {
+	v.data.Phase = &phase
+}
+
+func (v *DeploymentProgress) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *DeploymentProgress) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *DeploymentProgress) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *DeploymentProgress) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type deployRequestData struct {
+	ClusterId *string  `cbor:"0,keyasint,omitempty" json:"cluster_id,omitempty"`
+	GitInfo   *GitInfo `cbor:"1,keyasint,omitempty" json:"git_info,omitempty"`
+}
+
+type DeployRequest struct {
+	data deployRequestData
+}
+
+func (v *DeployRequest) HasClusterId() bool {
+	return v.data.ClusterId != nil
+}
+
+func (v *DeployRequest) ClusterId() string {
+	if v.data.ClusterId == nil {
+		return ""
+	}
+	return *v.data.ClusterId
+}
+
+func (v *DeployRequest) SetClusterId(cluster_id string) {
+	v.data.ClusterId = &cluster_id
+}
+
+func (v *DeployRequest) HasGitInfo() bool {
+	return v.data.GitInfo != nil
+}
+
+func (v *DeployRequest) GitInfo() *GitInfo {
+	return v.data.GitInfo
+}
+
+func (v *DeployRequest) SetGitInfo(git_info *GitInfo) {
+	v.data.GitInfo = git_info
+}
+
+func (v *DeployRequest) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *DeployRequest) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *DeployRequest) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *DeployRequest) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type gitInfoData struct {
+	Sha               *string             `cbor:"0,keyasint,omitempty" json:"sha,omitempty"`
+	Branch            *string             `cbor:"1,keyasint,omitempty" json:"branch,omitempty"`
+	Repository        *string             `cbor:"2,keyasint,omitempty" json:"repository,omitempty"`
+	IsDirty           *bool               `cbor:"3,keyasint,omitempty" json:"is_dirty,omitempty"`
+	WorkingTreeHash   *string             `cbor:"4,keyasint,omitempty" json:"working_tree_hash,omitempty"`
+	CommitMessage     *string             `cbor:"5,keyasint,omitempty" json:"commit_message,omitempty"`
+	CommitAuthorName  *string             `cbor:"6,keyasint,omitempty" json:"commit_author_name,omitempty"`
+	CommitAuthorEmail *string             `cbor:"7,keyasint,omitempty" json:"commit_author_email,omitempty"`
+	CommitTimestamp   *standard.Timestamp `cbor:"8,keyasint,omitempty" json:"commit_timestamp,omitempty"`
+}
+
+type GitInfo struct {
+	data gitInfoData
+}
+
+func (v *GitInfo) HasSha() bool {
+	return v.data.Sha != nil
+}
+
+func (v *GitInfo) Sha() string {
+	if v.data.Sha == nil {
+		return ""
+	}
+	return *v.data.Sha
+}
+
+func (v *GitInfo) SetSha(sha string) {
+	v.data.Sha = &sha
+}
+
+func (v *GitInfo) HasBranch() bool {
+	return v.data.Branch != nil
+}
+
+func (v *GitInfo) Branch() string {
+	if v.data.Branch == nil {
+		return ""
+	}
+	return *v.data.Branch
+}
+
+func (v *GitInfo) SetBranch(branch string) {
+	v.data.Branch = &branch
+}
+
+func (v *GitInfo) HasRepository() bool {
+	return v.data.Repository != nil
+}
+
+func (v *GitInfo) Repository() string {
+	if v.data.Repository == nil {
+		return ""
+	}
+	return *v.data.Repository
+}
+
+func (v *GitInfo) SetRepository(repository string) {
+	v.data.Repository = &repository
+}
+
+func (v *GitInfo) HasIsDirty() bool {
+	return v.data.IsDirty != nil
+}
+
+func (v *GitInfo) IsDirty() bool {
+	if v.data.IsDirty == nil {
+		return false
+	}
+	return *v.data.IsDirty
+}
+
+func (v *GitInfo) SetIsDirty(is_dirty bool) {
+	v.data.IsDirty = &is_dirty
+}
+
+func (v *GitInfo) HasWorkingTreeHash() bool {
+	return v.data.WorkingTreeHash != nil
+}
+
+func (v *GitInfo) WorkingTreeHash() string {
+	if v.data.WorkingTreeHash == nil {
+		return ""
+	}
+	return *v.data.WorkingTreeHash
+}
+
+func (v *GitInfo) SetWorkingTreeHash(working_tree_hash string) {
+	v.data.WorkingTreeHash = &working_tree_hash
+}
+
+func (v *GitInfo) HasCommitMessage() bool {
+	return v.data.CommitMessage != nil
+}
+
+func (v *GitInfo) CommitMessage() string {
+	if v.data.CommitMessage == nil {
+		return ""
+	}
+	return *v.data.CommitMessage
+}
+
+func (v *GitInfo) SetCommitMessage(commit_message string) {
+	v.data.CommitMessage = &commit_message
+}
+
+func (v *GitInfo) HasCommitAuthorName() bool {
+	return v.data.CommitAuthorName != nil
+}
+
+func (v *GitInfo) CommitAuthorName() string {
+	if v.data.CommitAuthorName == nil {
+		return ""
+	}
+	return *v.data.CommitAuthorName
+}
+
+func (v *GitInfo) SetCommitAuthorName(commit_author_name string) {
+	v.data.CommitAuthorName = &commit_author_name
+}
+
+func (v *GitInfo) HasCommitAuthorEmail() bool {
+	return v.data.CommitAuthorEmail != nil
+}
+
+func (v *GitInfo) CommitAuthorEmail() string {
+	if v.data.CommitAuthorEmail == nil {
+		return ""
+	}
+	return *v.data.CommitAuthorEmail
+}
+
+func (v *GitInfo) SetCommitAuthorEmail(commit_author_email string) {
+	v.data.CommitAuthorEmail = &commit_author_email
+}
+
+func (v *GitInfo) HasCommitTimestamp() bool {
+	return v.data.CommitTimestamp != nil
+}
+
+func (v *GitInfo) CommitTimestamp() *standard.Timestamp {
+	return v.data.CommitTimestamp
+}
+
+func (v *GitInfo) SetCommitTimestamp(commit_timestamp *standard.Timestamp) {
+	v.data.CommitTimestamp = commit_timestamp
+}
+
+func (v *GitInfo) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *GitInfo) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *GitInfo) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *GitInfo) UnmarshalJSON(data []byte) error {
 	return json.Unmarshal(data, &v.data)
 }
 
@@ -1024,6 +1321,7 @@ type builderBuildFromTarArgsData struct {
 	EnvVars        *[]*EnvironmentVariable `cbor:"3,keyasint,omitempty" json:"envVars,omitempty"`
 	EphemeralLabel *string                 `cbor:"4,keyasint,omitempty" json:"ephemeral_label,omitempty"`
 	EphemeralTtl   *string                 `cbor:"5,keyasint,omitempty" json:"ephemeral_ttl,omitempty"`
+	Deployment     **DeployRequest         `cbor:"6,keyasint,omitempty" json:"deployment,omitempty"`
 }
 
 type BuilderBuildFromTarArgs struct {
@@ -1095,6 +1393,17 @@ func (v *BuilderBuildFromTarArgs) EphemeralTtl() string {
 		return ""
 	}
 	return *v.data.EphemeralTtl
+}
+
+func (v *BuilderBuildFromTarArgs) HasDeployment() bool {
+	return v.data.Deployment != nil
+}
+
+func (v *BuilderBuildFromTarArgs) Deployment() *DeployRequest {
+	if v.data.Deployment == nil {
+		return nil
+	}
+	return *v.data.Deployment
 }
 
 func (v *BuilderBuildFromTarArgs) MarshalCBOR() ([]byte, error) {
@@ -1301,6 +1610,7 @@ type builderBuildFromPreparedArgsData struct {
 	EnvVars        *[]*EnvironmentVariable `cbor:"3,keyasint,omitempty" json:"envVars,omitempty"`
 	EphemeralLabel *string                 `cbor:"4,keyasint,omitempty" json:"ephemeral_label,omitempty"`
 	EphemeralTtl   *string                 `cbor:"5,keyasint,omitempty" json:"ephemeral_ttl,omitempty"`
+	Deployment     **DeployRequest         `cbor:"6,keyasint,omitempty" json:"deployment,omitempty"`
 }
 
 type BuilderBuildFromPreparedArgs struct {
@@ -1372,6 +1682,17 @@ func (v *BuilderBuildFromPreparedArgs) EphemeralTtl() string {
 		return ""
 	}
 	return *v.data.EphemeralTtl
+}
+
+func (v *BuilderBuildFromPreparedArgs) HasDeployment() bool {
+	return v.data.Deployment != nil
+}
+
+func (v *BuilderBuildFromPreparedArgs) Deployment() *DeployRequest {
+	if v.data.Deployment == nil {
+		return nil
+	}
+	return *v.data.Deployment
 }
 
 func (v *BuilderBuildFromPreparedArgs) MarshalCBOR() ([]byte, error) {
@@ -1571,7 +1892,7 @@ func AdaptBuilder(t Builder) *rpc.Interface {
 			InterfaceName: "Builder",
 			Index:         0,
 			Public:        false,
-			Params:        []string{"application", "tardata", "status", "envVars", "ephemeral_label", "ephemeral_ttl"},
+			Params:        []string{"application", "tardata", "status", "envVars", "ephemeral_label", "ephemeral_ttl", "deployment"},
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.BuildFromTar(ctx, &BuilderBuildFromTar{Call: call})
 			},
@@ -1601,7 +1922,7 @@ func AdaptBuilder(t Builder) *rpc.Interface {
 			InterfaceName: "Builder",
 			Index:         0,
 			Public:        false,
-			Params:        []string{"session_id", "tardata", "status", "envVars", "ephemeral_label", "ephemeral_ttl"},
+			Params:        []string{"session_id", "tardata", "status", "envVars", "ephemeral_label", "ephemeral_ttl", "deployment"},
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.BuildFromPrepared(ctx, &BuilderBuildFromPrepared{Call: call})
 			},
@@ -1661,7 +1982,7 @@ func (v *BuilderClientBuildFromTarResults) VersionShortId() string {
 	return *v.data.VersionShortId
 }
 
-func (v BuilderClient) BuildFromTar(ctx context.Context, application string, tardata stream.RecvStream[[]byte], status stream.SendStream[*Status], envVars []*EnvironmentVariable, ephemeral_label string, ephemeral_ttl string) (*BuilderClientBuildFromTarResults, error) {
+func (v BuilderClient) BuildFromTar(ctx context.Context, application string, tardata stream.RecvStream[[]byte], status stream.SendStream[*Status], envVars []*EnvironmentVariable, ephemeral_label string, ephemeral_ttl string, deployment *DeployRequest) (*BuilderClientBuildFromTarResults, error) {
 	args := BuilderBuildFromTarArgs{}
 	caps := map[rpc.OID]*rpc.InlineCapability{}
 	args.data.Application = &application
@@ -1678,6 +1999,7 @@ func (v BuilderClient) BuildFromTar(ctx context.Context, application string, tar
 	args.data.EnvVars = &envVars
 	args.data.EphemeralLabel = &ephemeral_label
 	args.data.EphemeralTtl = &ephemeral_ttl
+	args.data.Deployment = &deployment
 
 	var ret builderBuildFromTarResultsData
 
@@ -1793,7 +2115,7 @@ func (v *BuilderClientBuildFromPreparedResults) VersionShortId() string {
 	return *v.data.VersionShortId
 }
 
-func (v BuilderClient) BuildFromPrepared(ctx context.Context, session_id string, tardata stream.RecvStream[[]byte], status stream.SendStream[*Status], envVars []*EnvironmentVariable, ephemeral_label string, ephemeral_ttl string) (*BuilderClientBuildFromPreparedResults, error) {
+func (v BuilderClient) BuildFromPrepared(ctx context.Context, session_id string, tardata stream.RecvStream[[]byte], status stream.SendStream[*Status], envVars []*EnvironmentVariable, ephemeral_label string, ephemeral_ttl string, deployment *DeployRequest) (*BuilderClientBuildFromPreparedResults, error) {
 	args := BuilderBuildFromPreparedArgs{}
 	caps := map[rpc.OID]*rpc.InlineCapability{}
 	args.data.SessionId = &session_id
@@ -1810,6 +2132,7 @@ func (v BuilderClient) BuildFromPrepared(ctx context.Context, session_id string,
 	args.data.EnvVars = &envVars
 	args.data.EphemeralLabel = &ephemeral_label
 	args.data.EphemeralTtl = &ephemeral_ttl
+	args.data.Deployment = &deployment
 
 	var ret builderBuildFromPreparedResultsData
 

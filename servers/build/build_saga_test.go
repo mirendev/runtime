@@ -31,6 +31,7 @@ type sagaTestHarness struct {
 	statuses *StatusRegistry
 	registry *saga.Registry
 	executor *saga.Executor
+	storage  saga.Storage
 }
 
 func newSagaTestHarness(t *testing.T) *sagaTestHarness {

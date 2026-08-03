@@ -1,0 +1,9 @@
+FROM alpine:3.20
+# A deliberately slow build so a deploy holds the deployment lock long enough
+# for the blackbox suite to race a second deploy against it. On a cold cache
+# (CI, first run) this sleeps; the lock is what the test is actually asserting.
+RUN sleep 25
+COPY serve.sh /serve.sh
+RUN chmod +x /serve.sh
+EXPOSE 3000
+ENTRYPOINT ["/serve.sh"]
