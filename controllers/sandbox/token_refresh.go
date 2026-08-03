@@ -109,17 +109,19 @@ func (c *SandboxController) refreshTokens() {
 		case errors.Is(err, fs.ErrNotExist):
 			// The sandbox directory is gone, so the sandbox is gone. Teardown
 			// normally unregisters the entry (see ReleaseTokenState); this keeps a
-			// path that skipped it from refreshing a dead sandbox forever.
+			// path that skipped it from refreshing a dead sandbox forever. Release
+			// through the same call teardown uses, so the backstop also clears the
+			// token secret instead of leaving it authorized.
 			c.Log.Debug("dropping token refresh entry for departed sandbox", "sandbox", e.sandboxID)
-			c.tokenRefresher.unregister(e.sandboxID)
+			c.ReleaseTokenState(entity.Id(e.sandboxID))
 			dropped++
 		default:
 			c.Log.Warn("failed to write refreshed workload identity token", "sandbox", e.sandboxID, "error", err)
 		}
 	}
 
-	if len(entries) > 0 {
-		c.Log.Debug("refreshed workload identity tokens", "count", len(entries)-dropped)
+	if refreshed := len(entries) - dropped; refreshed > 0 {
+		c.Log.Debug("refreshed workload identity tokens", "count", refreshed)
 	}
 
 	// A non-zero count means some teardown path skipped ReleaseTokenState — the

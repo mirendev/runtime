@@ -106,11 +106,21 @@ func TestRefreshTokens_DropsDepartedSandboxes(t *testing.T) {
 	c.tokenRefresher.register("sandbox/live", livePath, "myapp")
 	c.tokenRefresher.register("sandbox/gone", gonePath, "deadapp")
 
+	// Both sandboxes still hold a token-request secret. The departed one's has to
+	// go with it, or the backstop leaves a dead sandbox authorized.
+	c.tokenSecrets.register("sandbox/live", "live-secret")
+	c.tokenSecrets.register("sandbox/gone", "gone-secret")
+
 	c.refreshTokens()
 
 	entries := c.tokenRefresher.snapshot()
 	require.Len(t, entries, 1)
 	assert.Equal(t, "sandbox/live", entries[0].sandboxID)
+
+	assert.False(t, c.tokenSecrets.verify("sandbox/gone", "gone-secret"),
+		"the departed sandbox's token secret should be released with its refresh entry")
+	assert.True(t, c.tokenSecrets.verify("sandbox/live", "live-secret"),
+		"the live sandbox's token secret must survive")
 
 	data, err := os.ReadFile(livePath)
 	require.NoError(t, err)

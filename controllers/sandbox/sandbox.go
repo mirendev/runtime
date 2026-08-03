@@ -2748,6 +2748,38 @@ func (c *SandboxController) Delete(ctx context.Context, id entity.Id, sb *comput
 	return c.StopSandbox(ctx, id, sb)
 }
 
+// entityFallbackIPs returns the addresses recorded on a sandbox entity, for use
+// when the pause container's labels couldn't supply them.
+//
+// A DEAD sandbox yields nothing. DEAD is only reached by way of a teardown that
+// already released the sandbox's addresses, and nothing ever clears Network on
+// the entity, so those addresses are stale by construction. Releasing them again
+// would be a no-op at best; once the netdb cooldown has passed and another
+// sandbox has reserved one of them, ReleaseAddr updates the row by IP with no
+// ownership check and hands a live address back to the pool.
+//
+// The delete callback is the path that makes this reachable, since it carries
+// the prior entity and fires from the periodic sweep an hour after teardown.
+func entityFallbackIPs(sb *compute.Sandbox) map[string]bool {
+	ips := make(map[string]bool)
+	if sb.Status == compute.DEAD {
+		return ips
+	}
+
+	for _, net := range sb.Network {
+		addr := net.Address
+		if strings.Contains(addr, "/") {
+			if prefix, err := netip.ParsePrefix(addr); err == nil {
+				addr = prefix.Addr().String()
+			}
+		}
+		if addr != "" {
+			ips[addr] = true
+		}
+	}
+	return ips
+}
+
 // StopSandbox tears down a sandbox and releases every resource it holds. sb is
 // optional: callers that already have the entity pass it so cleanup still works
 // once the entity has been deleted from the store, and it is fetched here
@@ -2829,19 +2861,7 @@ func (c *SandboxController) StopSandbox(ctx context.Context, id entity.Id, sb *c
 
 		// Use the entity's IPs as fallback if container labels didn't have them
 		if len(sandboxIPs) == 0 {
-			sandboxIPs = make(map[string]bool)
-			for _, net := range sb.Network {
-				addr := net.Address
-				if strings.Contains(addr, "/") {
-					if prefix, err := netip.ParsePrefix(addr); err == nil {
-						addr = prefix.Addr().String()
-					}
-				}
-				if addr != "" {
-					sandboxIPs[addr] = true
-				}
-			}
-
+			sandboxIPs = entityFallbackIPs(sb)
 			if len(sandboxIPs) > 0 {
 				c.Log.Debug("retrieved IPs from entity for cleanup", "id", id, "ips", sandboxIPs)
 			}
