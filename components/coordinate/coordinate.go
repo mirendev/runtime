@@ -49,6 +49,7 @@ import (
 	nodehealthctrl "miren.dev/runtime/controllers/nodehealth"
 	"miren.dev/runtime/controllers/sandboxpool"
 	schedulerctrl "miren.dev/runtime/controllers/scheduler"
+	schemareindexctrl "miren.dev/runtime/controllers/schemareindex"
 	versionctrl "miren.dev/runtime/controllers/version"
 	"miren.dev/runtime/metrics"
 	"miren.dev/runtime/observability"
@@ -354,6 +355,7 @@ type Coordinator struct {
 	ephemeralGC   *ephemeralctrl.GCController
 	versionGC     *versionctrl.GCController
 	indexGC       *indexgcctrl.GCController
+	schemaReindex *schemareindexctrl.Controller
 	hs            *httpingress.Server
 
 	authority *caauth.Authority
@@ -423,6 +425,9 @@ func (c *Coordinator) Stop() {
 	}
 	if c.indexGC != nil {
 		c.indexGC.Stop()
+	}
+	if c.schemaReindex != nil {
+		c.schemaReindex.Stop()
 	}
 	if c.debugServer != nil {
 		if err := c.debugServer.Close(); err != nil {
@@ -908,12 +913,17 @@ func (c *Coordinator) Start(ctx context.Context) error {
 		return err
 	}
 
-	// Best-effort startup maintenance (format migration, short-id backfill, and
-	// reindex) scans the entity store. Bound it with a timeout so that a large or
+	// Best-effort startup maintenance (format migration and short-id backfill)
+	// scans the entity store. Bound it with a timeout so that a large or
 	// not-recently-compacted store fails fast and lets startup continue, rather
 	// than blocking the coordinator — and therefore the edge listener — on an
 	// unbounded read. Each step below already treats failure as non-fatal, so a
 	// timeout simply defers the work to a later startup once compaction catches up.
+	//
+	// Schema reindexing used to run here too and was the step most likely to
+	// exhaust this budget. It now runs in the background (see the schema reindex
+	// controller below), where it can checkpoint and resume instead of losing a
+	// partial pass every time the deadline expired.
 	const startupMaintenanceTimeout = 2 * time.Minute
 	maintCtx, cancelMaint := context.WithTimeout(ctx, startupMaintenanceTimeout)
 	defer cancelMaint()
@@ -938,11 +948,6 @@ func (c *Coordinator) Start(ctx context.Context) error {
 		c.Log.Warn("short-id migration completed with errors", "migrated", sidMigrated, "skipped", sidSkipped, "error", sidErr)
 	} else if sidMigrated > 0 {
 		c.Log.Info("short-id migration completed", "migrated", sidMigrated, "skipped", sidSkipped)
-	}
-
-	// Check if indexes have changed and reindex if needed
-	if err := c.checkAndReindex(maintCtx, etcdStore, client); err != nil {
-		c.Log.Error("automatic reindex failed (will retry next startup)", "error", err)
 	}
 
 	ess, err := entityserver.NewEntityServer(c.Log, etcdStore)
@@ -1269,6 +1274,20 @@ func (c *Coordinator) Start(ctx context.Context) error {
 		Config: indexgcctrl.DefaultGCConfig(),
 	}
 	c.indexGC.Start(ctx)
+
+	// Start the schema reindex controller. It backfills index entries after an
+	// index schema change, checkpointing between bounded passes so a store too
+	// large to reindex in one go still converges. This deliberately runs in the
+	// background rather than during startup: under the old startup-time reindex,
+	// a store that exceeded the maintenance deadline restarted the scan from the
+	// first entity every boot and never reached the tail.
+	c.schemaReindex = &schemareindexctrl.Controller{
+		Log:         c.Log.With("module", "schema-reindex"),
+		Store:       etcdStore,
+		CurrentHash: schema.IndexHash,
+		Config:      schemareindexctrl.DefaultConfig(),
+	}
+	c.schemaReindex.Start(ctx)
 
 	ai := app.NewAppInfo(c.Log, ec, c.Cpu, c.Mem, c.HTTP)
 	server.ExposeValue("dev.miren.runtime/app", app_v1alpha.AdaptCrud(ai))
@@ -1697,55 +1716,4 @@ func (c *Coordinator) CertificateProvider() autotls.CertificateProvider {
 // path is used (which doesn't need port 80).
 func (c *Coordinator) AutocertReadySignal() func() {
 	return c.autocertReady
-}
-
-// checkAndReindex compares the current index hash against the stored hash in etcd.
-// If they differ, it runs a reindex to rebuild missing collection entries.
-func (c *Coordinator) checkAndReindex(ctx context.Context, store *entity.EtcdStore, client *clientv3.Client) error {
-	currentHash := schema.IndexHash()
-	hashKey := c.Prefix + "/meta/index-hash"
-
-	resp, err := client.Get(ctx, hashKey)
-	if err != nil {
-		return fmt.Errorf("failed to read index hash: %w", err)
-	}
-
-	var storedHash string
-	if len(resp.Kvs) > 0 {
-		storedHash = string(resp.Kvs[0].Value)
-	}
-
-	if storedHash == currentHash {
-		c.Log.Debug("index hash unchanged, skipping reindex", "hash", currentHash)
-		return nil
-	}
-
-	c.Log.Info("index schema changed, starting automatic reindex",
-		"stored_hash", storedHash,
-		"current_hash", currentHash)
-
-	// Reindex is the heaviest maintenance step and runs last, inside the shared
-	// startup-maintenance deadline that bounds how long the coordinator blocks
-	// the edge listener. That ceiling is the single bound; don't layer a second
-	// timeout here, which would only ever clamp to whatever's left of it. A
-	// reindex that doesn't finish in time is retried on the next startup (it's
-	// gated on the index hash below).
-	stats, err := store.Reindex(ctx, c.Log, entity.ReindexOptions{
-		DryRun:       false,
-		CleanupStale: false,
-	})
-	if err != nil {
-		return fmt.Errorf("reindex failed: %w", err)
-	}
-
-	c.Log.Info("automatic reindex complete",
-		"entities_processed", stats.EntitiesProcessed,
-		"indexes_rebuilt", stats.IndexesRebuilt)
-
-	_, err = client.Put(ctx, hashKey, currentHash)
-	if err != nil {
-		return fmt.Errorf("failed to store index hash: %w", err)
-	}
-
-	return nil
 }
