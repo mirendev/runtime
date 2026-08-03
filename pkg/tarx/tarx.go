@@ -388,21 +388,19 @@ func (cr *countingReader) Read(p []byte) (int, error) {
 
 // SafePath joins an untrusted archive path to root after verifying that the
 // result remains within root.
+//
+// The containment check runs on the entry name rather than on the joined
+// result. filepath.IsLocal rejects absolute paths and anything that climbs out
+// via "..", and checking the name up front is the one shape CodeQL's zip-slip
+// sanitizer model recognizes, so callers that extract through this helper stop
+// tripping go/zipslip.
 func SafePath(root, name string) (string, error) {
-	if filepath.IsAbs(name) {
-		return "", fmt.Errorf("archive path is absolute: %q", name)
-	}
-
-	target := filepath.Join(root, filepath.FromSlash(name))
-	rel, err := filepath.Rel(root, target)
-	if err != nil {
-		return "", fmt.Errorf("resolving archive path %q: %w", name, err)
-	}
-	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
+	clean := filepath.FromSlash(name)
+	if !filepath.IsLocal(clean) {
 		return "", fmt.Errorf("archive path escapes destination directory: %q", name)
 	}
 
-	return target, nil
+	return filepath.Join(root, clean), nil
 }
 
 // SafeWritePath validates an archive path and rejects existing symlinks in the

@@ -14,6 +14,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"miren.dev/runtime/pkg/tarx"
 )
 
 // Downloader handles artifact downloads from the asset service
@@ -301,26 +303,14 @@ func (d *assetDownloader) extractTarGz(tarPath, targetDir string) (string, error
 			return "", err
 		}
 
-		// Sanitize and validate the path to prevent path traversal attacks
-		cleanName := filepath.Clean(header.Name)
-
-		// Skip entries with problematic names
-		if cleanName == "" || cleanName == "." || cleanName == ".." {
+		// Entries naming the extraction root itself carry nothing to write.
+		if header.Name == "" || filepath.Clean(filepath.FromSlash(header.Name)) == "." {
 			continue
 		}
 
-		// Reject absolute paths
-		if filepath.IsAbs(cleanName) {
-			return "", fmt.Errorf("tar contains absolute path: %s", header.Name)
-		}
-
-		// Compute destination path
-		targetPath := filepath.Join(extractDir, cleanName)
-
-		// Verify the target path is within extractDir
-		relPath, err := filepath.Rel(extractDir, targetPath)
-		if err != nil || strings.HasPrefix(relPath, "..") || filepath.IsAbs(relPath) {
-			return "", fmt.Errorf("tar contains path traversal: %s", header.Name)
+		targetPath, err := tarx.SafeWritePath(extractDir, header.Name)
+		if err != nil {
+			return "", fmt.Errorf("invalid tar entry %q: %w", header.Name, err)
 		}
 
 		switch header.Typeflag {
