@@ -14,6 +14,7 @@ const defaultScanPageSize = 500
 type scanConfig struct {
 	pageSize int64
 	keysOnly bool
+	startKey string
 }
 
 type scanOption func(*scanConfig)
@@ -28,6 +29,21 @@ func withKeysOnly() scanOption {
 // withPageSize overrides the default per-request page size.
 func withPageSize(n int64) scanOption {
 	return func(c *scanConfig) { c.pageSize = n }
+}
+
+// withStartKey begins the scan at key rather than at the head of the prefix,
+// letting a caller resume a scan it stopped partway through. Keys strictly
+// before it are skipped; the range end is still the prefix, so the scan stays
+// bounded to the same keyspace.
+//
+// Resuming this way starts a *fresh* scan at the current revision rather than
+// continuing the original one, since the revision a previous pass pinned to may
+// well be compacted away by now. That means the skipped prefix is only as
+// accurate as the moment it was scanned, so this is for callers whose skipped
+// range is known not to need revisiting. A key at or before the prefix is
+// ignored, so a zero value scans from the head.
+func withStartKey(key string) scanOption {
+	return func(c *scanConfig) { c.startKey = key }
 }
 
 // scanPaged reads every key/value under prefix in ascending key order, fetching
@@ -71,7 +87,9 @@ func scanPagedFunc(ctx context.Context, client *clientv3.Client, prefix string, 
 		getOpts = append(getOpts, clientv3.WithKeysOnly())
 	}
 
-	next := prefix
+	// A start key at or before the prefix would widen the scan; clamp it so the
+	// range stays bounded to the prefix and a zero value means "from the head".
+	next := max(prefix, cfg.startKey)
 	first := true
 	for {
 		resp, err := client.Get(ctx, next, getOpts...)
