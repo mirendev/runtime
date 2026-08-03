@@ -1,0 +1,119 @@
+name: Code Scanning Watch
+
+# GitHub Actions cannot trigger on code_scanning_alert, so there is no way to
+# react the moment an alert opens. This polls instead, and stays quiet unless
+# there is something to say: at zero open alerts it posts nothing, so silence
+# in Slack genuinely means the board is clean.
+
+on:
+  schedule:
+    # 15:00 UTC daily, which is 10am CT in summer and 9am CT in winter.
+    - cron: '0 15 * * *'
+  workflow_dispatch:
+    inputs:
+      force_post:
+        description: 'Post to Slack even when there are no open alerts, to prove the wiring still works'
+        type: boolean
+        default: false
+
+permissions:
+  security-events: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Fetch open alerts
+        id: alerts
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          gh api "repos/$REPO/code-scanning/alerts?state=open&per_page=100" \
+            --paginate --slurp | jq 'add // []' > alerts.json
+
+          COUNT=$(jq 'length' alerts.json)
+          echo "count=$COUNT" >> $GITHUB_OUTPUT
+          echo "Open code scanning alerts: $COUNT"
+
+      - name: Format Slack message
+        id: slack-message
+        if: steps.alerts.outputs.count != '0' || inputs.force_post
+        env:
+          REPO: ${{ github.repository }}
+          COUNT: ${{ steps.alerts.outputs.count }}
+          ALERTS_URL: ${{ github.server_url }}/${{ github.repository }}/security/code-scanning
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          # Emitted as a jq-built JSON string, quotes included, so the payload
+          # below can splice it in unquoted the way blocks already is. Every
+          # value in that payload then arrives as JSON that jq produced, rather
+          # than as text pasted into a string literal and hoped to be safe.
+          TEXT_JSON=$(jq -n --arg repo "$REPO" --argjson n "$COUNT" '
+            if $n == 0
+            then "✅ No open code scanning alerts in \($repo)"
+            else "🚨 \($n) open code scanning alert\(if $n == 1 then "" else "s" end) in \($repo)"
+            end')
+          echo "text_json=$TEXT_JSON" >> $GITHUB_OUTPUT
+
+          # Built entirely in jq so rule descriptions and paths are escaped
+          # rather than interpolated into a JSON string by the shell.
+          BLOCKS=$(jq -c \
+            --arg repo "$REPO" \
+            --arg alerts_url "$ALERTS_URL" \
+            --arg run_url "$RUN_URL" '
+              def sev: (.rule.security_severity_level // .rule.severity // "unknown");
+
+              length as $n
+              # Slack section text caps at 3000 chars; show a bounded list and
+              # say plainly how many were left off rather than truncating quietly.
+              | (if $n > 15 then 15 else $n end) as $shown
+              | [ .[0:$shown][]
+                  | "• *\(sev)*  `\(.rule.id)`  <\(.html_url)|\(.most_recent_instance.location.path):\(.most_recent_instance.location.start_line)>"
+                ] as $lines
+              # $n is only ever 0 here via a forced dispatch, which is someone
+              # checking the pipe still works rather than reporting a problem.
+              | (if $n == 0
+                 then "✅ *No open code scanning alerts* in `\($repo)`"
+                 else "🚨 *\($n) open code scanning alert\(if $n == 1 then "" else "s" end)* in `\($repo)`\n\n"
+                      + ($lines | join("\n"))
+                      + (if $n > $shown then "\n\n_… and \($n - $shown) more_" else "" end)
+                 end) as $body
+              | [
+                  {
+                    type: "section",
+                    text: {
+                      type: "mrkdwn",
+                      text: $body
+                    }
+                  },
+                  {
+                    type: "context",
+                    elements: [
+                      {
+                        type: "mrkdwn",
+                        text: "<\($alerts_url)|View all alerts> • <\($run_url)|workflow run>"
+                      }
+                    ]
+                  }
+                ]' alerts.json)
+
+          echo "blocks<<SLACK_EOF" >> $GITHUB_OUTPUT
+          echo "$BLOCKS" >> $GITHUB_OUTPUT
+          echo "SLACK_EOF" >> $GITHUB_OUTPUT
+
+      - name: Send Slack notification
+        if: steps.alerts.outputs.count != '0' || inputs.force_post
+        uses: slackapi/slack-github-action@45a88b9581bfab2566dc881e2cd66d334e621e2c # v3
+        with:
+          method: chat.postMessage
+          token: ${{ secrets.SLACK_BOT_TOKEN }}
+          payload: |
+            {
+              "channel": "${{ vars.SLACK_CHANNEL_ID }}",
+              "text": ${{ steps.slack-message.outputs.text_json }},
+              "blocks": ${{ steps.slack-message.outputs.blocks }},
+              "unfurl_links": false,
+              "unfurl_media": false
+            }
