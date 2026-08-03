@@ -375,6 +375,7 @@ func probeAddress(ctx context.Context, address string) error {
 	}
 
 	quicConfig := &quic.Config{
+		InitialPacketSize:    rpc.InitialPacketSize,
 		HandshakeIdleTimeout: 2 * time.Second,
 		MaxIdleTimeout:       3 * time.Second,
 	}

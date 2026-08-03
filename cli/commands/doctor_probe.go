@@ -11,6 +11,8 @@ import (
 
 	"github.com/quic-go/quic-go"
 	"github.com/quic-go/quic-go/http3"
+
+	"miren.dev/runtime/pkg/rpc"
 )
 
 // probeOutcome is what a reachability probe learned. The distinction that
@@ -126,6 +128,7 @@ func probeQUIC(addr string) probe {
 		NextProtos: []string{http3.NextProtoH3},
 		MinVersion: tls.VersionTLS13,
 	}, &quic.Config{
+		InitialPacketSize:    rpc.InitialPacketSize,
 		HandshakeIdleTimeout: probeTimeout,
 		MaxIdleTimeout:       probeTimeout,
 	})

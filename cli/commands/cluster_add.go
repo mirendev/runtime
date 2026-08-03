@@ -14,6 +14,7 @@ import (
 
 	"github.com/quic-go/quic-go"
 	"miren.dev/runtime/clientconfig"
+	"miren.dev/runtime/pkg/rpc"
 	"miren.dev/runtime/pkg/ui"
 )
 
@@ -307,6 +308,7 @@ func extractTLSCertificate(ctx context.Context, address string) (string, string,
 
 	// Create QUIC config
 	quicConfig := &quic.Config{
+		InitialPacketSize:    rpc.InitialPacketSize,
 		HandshakeIdleTimeout: 5 * time.Second,
 		MaxIdleTimeout:       10 * time.Second,
 	}
