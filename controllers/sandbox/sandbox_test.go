@@ -374,6 +374,125 @@ func TestSandbox(t *testing.T) {
 		t.Logf("total CPU seconds recorded: %f", cpuSeconds)
 	})
 
+	// A sandbox that outlives the process which booted it has to get its cgroup
+	// metrics re-registered during boot reconciliation. Logs reattach either
+	// way, so a sandbox that misses this looks perfectly healthy while its CPU
+	// and memory series stop dead at the restart (MIR-1013).
+	t.Run("re-registers metrics for sandboxes that survive a restart", func(t *testing.T) {
+		r := require.New(t)
+
+		ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+		defer cancel()
+
+		ctx = namespaces.WithNamespace(ctx, ns)
+
+		co, err := newSandboxController(testDeps)
+		r.NoError(err)
+
+		defer co.Close()
+		r.NoError(co.Init(ctx))
+
+		id := entity.Id(sbName())
+
+		var sb compute.Sandbox
+
+		sb.ID = id
+
+		sb.Labels = append(sb.Labels, "runtime.computer/app=mn-sort")
+
+		sb.Spec.Container = append(sb.Spec.Container, compute.SandboxSpecContainer{
+			Name:  "sort",
+			Image: "mn-sort:latest",
+		})
+
+		// Boot reconciliation only considers sandboxes scheduled to this node,
+		// so the entity needs the schedule key the scheduler would have set.
+		schedule := compute.Schedule{
+			Key: compute.Key{
+				Kind: compute.KindSandbox,
+				Node: compute.NewNodeId("test-node").Id(),
+			},
+		}
+
+		var rpcE entityserver_v1alpha.Entity
+		rpcE.SetId(id.String())
+		rpcE.SetAttrs(entity.New(
+			entity.DBId, id,
+			sb.Encode,
+			schedule.Encode).Attrs())
+		_, err = co.EAC.Put(ctx, &rpcE)
+		r.NoError(err)
+
+		result, err := co.EAC.Get(ctx, id.String())
+		r.NoError(err)
+
+		meta := &entity.Meta{
+			Entity:   result.Entity().Entity(),
+			Revision: result.Entity().Revision(),
+		}
+
+		var tco compute.Sandbox
+		tco.Decode(entity.New(
+			entity.DBId, id,
+			sb.Encode))
+
+		err = co.Create(ctx, &tco, meta)
+		r.NoError(err)
+
+		defer func() {
+			r.NoError(co.StopSandbox(context.WithoutCancel(ctx), id))
+		}()
+
+		// Create only updates its in-memory copy of the entity; by the time a
+		// real restart happens the store holds the sandbox as RUNNING.
+		tco.Status = compute.RUNNING
+
+		var runningE entityserver_v1alpha.Entity
+		runningE.SetId(id.String())
+		runningE.SetAttrs(entity.New(
+			entity.DBId, id,
+			tco.Encode,
+			schedule.Encode).Attrs())
+		_, err = co.EAC.Put(ctx, &runningE)
+		r.NoError(err)
+
+		le, _ := sandboxMetricsIdentity(&tco)
+
+		// The process that booted the sandbox is gone, and its cgroup
+		// monitoring went with it. The containers keep running.
+		r.NoError(co.Metrics.Remove(le))
+
+		co2, err := newSandboxController(testDeps)
+		r.NoError(err)
+
+		defer co2.Close()
+
+		r.False(co2.Metrics.Has(le), "a fresh controller starts with nothing registered")
+
+		// Init is what runs boot reconciliation in production.
+		r.NoError(co2.Init(ctx))
+
+		r.True(co2.Metrics.Has(le), "boot reconciliation should re-register metrics")
+
+		// Gather reads the cgroups we registered, so it fails loudly if the
+		// recovered paths are wrong rather than just silently reporting zeros.
+		snapshots, err := co2.Metrics.Gather(le)
+		r.NoError(err)
+		r.Len(snapshots, 2, "expected the pause container and the sort container")
+
+		usage := map[string]int64{}
+		for _, cs := range snapshots {
+			usage[cs.Name()] = cs.Metrics().MemoryUsage()
+		}
+
+		r.Contains(usage, "", "pause container cgroup should be monitored")
+		r.Contains(usage, "sort", "sort container cgroup should be monitored")
+
+		for name, mem := range usage {
+			r.Positive(mem, "container %q should report memory usage", name)
+		}
+	})
+
 	t.Run("configures networking", func(t *testing.T) {
 		r := require.New(t)
 

@@ -447,6 +447,17 @@ func (c *SandboxController) reconcileSandboxesOnBoot(ctx context.Context) error 
 						"sandbox_id", sb.ID)
 				}
 			}
+
+			// Re-register cgroup metrics. Logs are reattached above, so a
+			// surviving sandbox that skips this looks entirely healthy while
+			// its CPU and memory series stop dead at the restart and never
+			// resume (MIR-1013). Failing here must not cost us the sandbox:
+			// unhealthySandboxes gets deleted, and a metrics gap is a far
+			// better outcome than killing a running workload.
+			if err := c.ensureMetrics(ctx, &sb); err != nil {
+				c.Log.Warn("failed to re-register metrics during boot reconciliation",
+					"sandbox_id", sb.ID, "error", err)
+			}
 		}
 	}
 
@@ -894,6 +905,98 @@ func (c *SandboxController) pauseContainerPID(ctx context.Context, pauseID strin
 	return int(task.Pid()), nil
 }
 
+// sandboxMetricsIdentity returns the log entity a sandbox's cgroup metrics are
+// keyed by, plus the attributes those metrics carry. Every registration site
+// shares this so the key always matches the one StopSandbox removes, and so
+// new attributes reach all of them at once.
+func sandboxMetricsIdentity(sb *compute.Sandbox) (string, map[string]string) {
+	le := sb.Spec.LogEntity
+	if le == "" {
+		le = sb.ID.String()
+	}
+
+	attrs := map[string]string{
+		"miren.sandbox": sb.ID.String(),
+	}
+
+	if sb.Spec.Version != "" {
+		attrs["miren.version"] = sb.Spec.Version.String()
+	}
+
+	for _, lbl := range sb.Spec.LogAttribute {
+		attrs[lbl.Key] = lbl.Value
+	}
+
+	return le, attrs
+}
+
+// sandboxCgroups reads the cgroup path of each of a sandbox's live containers
+// from containerd, keyed the way createSandbox keys them: "" for the pause
+// container, the container name for each subcontainer.
+func (c *SandboxController) sandboxCgroups(ctx context.Context, sb *compute.Sandbox) (map[string]string, error) {
+	ctx = namespaces.WithNamespace(ctx, c.Namespace)
+
+	ids := map[string]string{"": pauseContainerId(sb.ID)}
+	for _, container := range sb.Spec.Container {
+		ids[container.Name] = fmt.Sprintf("%s-%s", containerPrefix(sb.ID), container.Name)
+	}
+
+	cgroups := make(map[string]string, len(ids))
+
+	for name, id := range ids {
+		container, err := c.CC.LoadContainer(ctx, id)
+		if err != nil {
+			return nil, fmt.Errorf("loading container %s: %w", id, err)
+		}
+
+		spec, err := container.Spec(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("getting spec for container %s: %w", id, err)
+		}
+
+		if spec.Linux == nil {
+			return nil, fmt.Errorf("container %s has no linux spec", id)
+		}
+
+		cgroups[name] = spec.Linux.CgroupsPath
+	}
+
+	return cgroups, nil
+}
+
+// ensureMetrics registers cgroup metrics for a sandbox this process did not
+// boot itself, so CPU and memory keep flowing for containers that outlived a
+// restart. Sandboxes already being monitored are left alone: this runs on
+// every reconcile for adopted sandboxes, and re-adding would reset the CPU
+// delta baseline each time (MIR-1013).
+func (c *SandboxController) ensureMetrics(ctx context.Context, sb *compute.Sandbox) error {
+	le, attrs := sandboxMetricsIdentity(sb)
+
+	// Cheap bail-out so the common case doesn't ask containerd for a spec per
+	// container on every reconcile. AddIfAbsent below is what actually keeps
+	// two concurrent callers from both registering.
+	if c.Metrics.Has(le) {
+		return nil
+	}
+
+	cgroups, err := c.sandboxCgroups(ctx, sb)
+	if err != nil {
+		return err
+	}
+
+	added, err := c.Metrics.AddIfAbsent(le, cgroups, attrs)
+	if err != nil {
+		return err
+	}
+
+	if added {
+		c.Log.Debug("registered metrics for surviving sandbox",
+			"sandbox_id", sb.ID, "log_entity", le)
+	}
+
+	return nil
+}
+
 // reattachLogs reattaches log consumers to a container's task after controller restart.
 // This is critical to prevent stdout/stderr buffers from filling up and blocking the process.
 // containerName should be empty string for the pause container, or the subcontainer name otherwise.
@@ -952,6 +1055,16 @@ func (c *SandboxController) Create(ctx context.Context, co *compute.Sandbox, met
 		} else {
 			switch searchRes {
 			case same:
+				// The containers are healthy but this process may not have
+				// booted them: a sandbox still PENDING at restart is skipped by
+				// boot reconciliation, so this is the only place its metrics get
+				// re-registered (MIR-1013). ensureMetrics is a no-op once the
+				// sandbox is monitored, so running it every reconcile is safe.
+				if err := c.ensureMetrics(ctx, co); err != nil {
+					c.Log.Warn("failed to ensure metrics for existing sandbox",
+						"id", co.ID, "error", err)
+				}
+
 				// If sandbox exists and is healthy but status is PENDING,
 				// update it to RUNNING. This is a fallback to recover from failed
 				// status updates (e.g. due to OCC conflicts during creation).
@@ -1154,22 +1267,7 @@ func (c *SandboxController) createSandbox(ctx context.Context, co *compute.Sandb
 		return err
 	}
 
-	le := co.Spec.LogEntity
-	if le == "" {
-		le = co.ID.String()
-	}
-
-	attrs := map[string]string{
-		"miren.sandbox": co.ID.String(),
-	}
-
-	if co.Spec.Version != "" {
-		attrs["miren.version"] = co.Spec.Version.String()
-	}
-
-	for _, lbl := range co.Spec.LogAttribute {
-		attrs[lbl.Key] = lbl.Value
-	}
+	le, attrs := sandboxMetricsIdentity(co)
 
 	err = c.Metrics.Add(le, cgroups, attrs)
 	if err != nil {

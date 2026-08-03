@@ -34,6 +34,18 @@ func (m *Metrics) Add(name string, pathes map[string]string, attributes map[stri
 	return nil
 }
 
+func (m *Metrics) AddIfAbsent(name string, pathes map[string]string, attributes map[string]string) (bool, error) {
+	return true, nil
+}
+
+func (m *Metrics) Has(name string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	_, ok := m.namedEntries[name]
+	return ok
+}
+
 func (m *Metrics) Remove(name string) error {
 	return nil
 }

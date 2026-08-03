@@ -398,18 +398,7 @@ func addMetrics(ctx context.Context, in addMetricsIn) (addMetricsOut, error) {
 		return addMetricsOut{}, fmt.Errorf("fetching sandbox: %w", err)
 	}
 
-	le := sb.Spec.LogEntity
-	if le == "" {
-		le = sb.ID.String()
-	}
-
-	attrs := map[string]string{"miren.sandbox": sb.ID.String()}
-	if sb.Spec.Version != "" {
-		attrs["miren.version"] = sb.Spec.Version.String()
-	}
-	for _, lbl := range sb.Spec.LogAttribute {
-		attrs[lbl.Key] = lbl.Value
-	}
+	le, attrs := sandboxMetricsIdentity(sb)
 
 	if err := deps.obs.AddMetrics(le, in.AllCgroups, attrs); err != nil {
 		return addMetricsOut{}, fmt.Errorf("adding metrics: %w", err)
