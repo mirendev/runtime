@@ -53,7 +53,7 @@ func TestVictoriaLogsComponent(t *testing.T) {
 		r.NoError(err)
 
 		r.True(component.IsRunning())
-		r.Equal("localhost:9428", component.HTTPEndpoint())
+		r.Equal("127.0.0.1:9428", component.HTTPEndpoint())
 
 		// Give it a moment to fully start
 		time.Sleep(2 * time.Second)
@@ -141,7 +141,7 @@ func TestVictoriaLogsComponent(t *testing.T) {
 		r.NoError(err)
 		defer component.Stop(ctx)
 
-		r.Equal("localhost:9430", component.HTTPEndpoint())
+		r.Equal("127.0.0.1:9430", component.HTTPEndpoint())
 	})
 
 	t.Run("uses custom retention period", func(t *testing.T) {
@@ -221,7 +221,7 @@ func TestVictoriaLogsComponentAutoRestart(t *testing.T) {
 	r.NoError(err)
 	r.True(component.IsRunning())
 
-	endpoint := fmt.Sprintf("http://localhost:%d", httpPort)
+	endpoint := fmt.Sprintf("http://127.0.0.1:%d", httpPort)
 
 	// Wait for victorialogs to be fully ready
 	r.Eventually(func() bool {

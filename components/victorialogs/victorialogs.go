@@ -135,7 +135,7 @@ func (c *VictoriaLogsComponent) Start(ctx context.Context, config VictoriaLogsCo
 	}
 
 	// Wait for VictoriaLogs to be ready
-	if err := c.WaitForReady(ctx, "localhost", config.HTTPPort); err != nil {
+	if err := c.WaitForReady(ctx, "127.0.0.1", config.HTTPPort); err != nil {
 		task.Delete(ctx)
 		container.Delete(ctx, containerd.WithSnapshotCleanup)
 		return err
@@ -152,7 +152,10 @@ func (c *VictoriaLogsComponent) Start(ctx context.Context, config VictoriaLogsCo
 
 func (c *VictoriaLogsComponent) HTTPEndpoint() string {
 	return c.IfRunning(func() string {
-		return fmt.Sprintf("localhost:%d", c.httpPort)
+		// Names the bind address literally rather than "localhost", which on a
+		// dual-stack host resolves to ::1 first and would spend a failed dial
+		// on every new connection to a v4-only listener.
+		return fmt.Sprintf("127.0.0.1:%d", c.httpPort)
 	})
 }
 
@@ -169,7 +172,7 @@ func (c *VictoriaLogsComponent) restartExistingContainer(ctx context.Context, co
 		} else if status.Status == containerd.Running {
 			c.Log.Info("victorialogs container is already running")
 			c.SetTask(task)
-			if err := c.WaitForReady(ctx, "localhost", config.HTTPPort); err != nil {
+			if err := c.WaitForReady(ctx, "127.0.0.1", config.HTTPPort); err != nil {
 				return err
 			}
 			c.StartExitMonitor(ctx)
@@ -181,7 +184,7 @@ func (c *VictoriaLogsComponent) restartExistingContainer(ctx context.Context, co
 		if err == nil {
 			c.SetTask(task)
 			c.Log.Info("victorialogs server restarted", "container_id", container.ID(), "http_port", config.HTTPPort)
-			if err := c.WaitForReady(ctx, "localhost", config.HTTPPort); err != nil {
+			if err := c.WaitForReady(ctx, "127.0.0.1", config.HTTPPort); err != nil {
 				return err
 			}
 			c.StartExitMonitor(ctx)
@@ -204,7 +207,7 @@ func (c *VictoriaLogsComponent) restartExistingContainer(ctx context.Context, co
 		return fmt.Errorf("failed to start new task for existing container: %w", err)
 	}
 
-	if err := c.WaitForReady(ctx, "localhost", config.HTTPPort); err != nil {
+	if err := c.WaitForReady(ctx, "127.0.0.1", config.HTTPPort); err != nil {
 		task.Delete(ctx)
 		return err
 	}
@@ -219,7 +222,18 @@ func (c *VictoriaLogsComponent) restartExistingContainer(ctx context.Context, co
 }
 
 func (c *VictoriaLogsComponent) createContainer(ctx context.Context, image containerd.Image, dataPath string, config VictoriaLogsConfig) (containerd.Container, error) {
-	listenAddr := fmt.Sprintf(":%d", config.HTTPPort)
+	// Loopback only. VictoriaLogs authenticates nobody, so whatever can reach
+	// this port can read and write the cluster's logs, which include anything
+	// an app prints. Nothing off-host needs to reach it: the coordinator's own
+	// reads and writes are local, and distributed runners ship through the
+	// coordinator's authenticated listener rather than dialing here
+	// (MIR-1483). Binding the wildcard would leave a firewall rule as the only
+	// thing standing in front of it, which is a control that can be flushed,
+	// reordered, or simply absent on a host nobody configured.
+	//
+	// -enableTCP6 below does not reopen this. It governs whether IPv6 may be
+	// used at all; the listener is whatever this address names.
+	listenAddr := fmt.Sprintf("127.0.0.1:%d", config.HTTPPort)
 
 	opts := []oci.SpecOpts{
 		oci.WithImageConfig(image),
