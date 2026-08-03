@@ -18,6 +18,7 @@ import (
 	"github.com/quic-go/quic-go"
 	"github.com/quic-go/quic-go/http3"
 
+	"miren.dev/runtime/pkg/rpc"
 	"miren.dev/runtime/servers/httpingress"
 )
 
@@ -153,7 +154,9 @@ func (m *POPManager) servePOP(ctx context.Context, pc *popConnection, cr Connect
 		ServerName:         host,
 	}
 
-	controlConn, err := quicTransport.Dial(ctx, udpAddr, controlTLS, &quic.Config{})
+	controlConn, err := quicTransport.Dial(ctx, udpAddr, controlTLS, &quic.Config{
+		InitialPacketSize: rpc.InitialPacketSize,
+	})
 	if err != nil {
 		m.log.Error("failed to dial POP control plane",
 			"pop_xid", pc.popXID, "address", addr, "error", err)
@@ -225,7 +228,8 @@ func (m *POPManager) servePOP(ctx context.Context, pc *popConnection, cr Connect
 	}
 
 	dataConn, err := quicTransport.Dial(ctx, udpAddr, dataTLS, &quic.Config{
-		KeepAlivePeriod: 15 * time.Second,
+		InitialPacketSize: rpc.InitialPacketSize,
+		KeepAlivePeriod:   15 * time.Second,
 	})
 	if err != nil {
 		controlConn.CloseWithError(0, "data plane dial failed")
