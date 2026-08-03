@@ -212,6 +212,17 @@ func TestSanitizeReturnPath(t *testing.T) {
 		{"/foo/../bar", "/bar"},
 		{"/../../../etc/passwd", "/etc/passwd"},
 		{"/valid/path", "/valid/path"},
+
+		// Browsers read a backslash in the second position as a second slash,
+		// which turns these into scheme-relative URLs pointing off-site.
+		{`/\evil.com`, "/"},
+		{`/\evil.com/path`, "/"},
+		{`\/evil.com`, "/"},
+		{`/\\evil.com`, "/"},
+		{`\\evil.com`, "/"},
+
+		// A backslash past the origin is just an odd path component.
+		{`/foo\bar`, `/foo\bar`},
 	}
 
 	for _, tt := range tests {
