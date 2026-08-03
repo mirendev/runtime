@@ -25,7 +25,7 @@ func newTestServer(t *testing.T) *Server {
 		ipToSandbox:     make(map[string]string),
 		ipToService:     make(map[string]string),
 		appServiceToIPs: make(map[string]map[string][]string),
-		entityToIP:      make(map[string]string),
+		sandboxes:       make(map[string]sandboxMapping),
 	}
 }
 
@@ -139,11 +139,11 @@ func TestSandboxStatusTransitionRemovesFromDNS(t *testing.T) {
 
 	// Verify all mappings are cleaned up
 	s.mu.RLock()
-	_, hasEntityMapping := s.entityToIP[sandboxID]
+	_, hasEntityMapping := s.sandboxes[sandboxID]
 	_, hasServiceMapping := s.ipToService[ip]
 	s.mu.RUnlock()
 
-	assert.False(t, hasEntityMapping, "entityToIP mapping should be removed")
+	assert.False(t, hasEntityMapping, "the sandbox's claim should be removed")
 	assert.False(t, hasServiceMapping, "ipToService mapping should be removed")
 }
 
@@ -238,7 +238,7 @@ func TestResolveUnknownIPFindsAndRegistersSandbox(t *testing.T) {
 		ipToSandbox:     make(map[string]string),
 		ipToService:     make(map[string]string),
 		appServiceToIPs: make(map[string]map[string][]string),
-		entityToIP:      make(map[string]string),
+		sandboxes:       make(map[string]sandboxMapping),
 	}
 
 	// IP should not be registered yet
@@ -291,7 +291,7 @@ func TestResolveUnknownIPNoMatchingIP(t *testing.T) {
 		ipToSandbox:     make(map[string]string),
 		ipToService:     make(map[string]string),
 		appServiceToIPs: make(map[string]map[string][]string),
-		entityToIP:      make(map[string]string),
+		sandboxes:       make(map[string]sandboxMapping),
 	}
 
 	assert.False(t, s.resolveUnknownIP("10.8.24.100"),

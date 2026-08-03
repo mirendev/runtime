@@ -36,7 +36,13 @@ type tokenErrorResponse struct {
 // tokenSecretRegistry maps a sandbox's identity to its token-request secret. Keying by
 // sandbox identity (rather than raw source IP) means a recycled pod IP can never match a
 // stale secret left behind by a previous sandbox: the caller's identity is resolved from
-// the IP via the authoritative netdb lookup, and the secret is checked against that.
+// its source address, and the secret is checked against that sandbox.
+//
+// The address lookup is therefore load-bearing for identity, not just for DNS. It is what
+// decides which app the issued token claims to be. That lookup used to be able to name a
+// sandbox that no longer held the address, which this registry was the only thing
+// standing between and an identity-confusion bug (MIR-1511) — so treat a verification
+// failure as evidence the mapping may be wrong, not only that the caller may be.
 type tokenSecretRegistry struct {
 	mu        sync.RWMutex
 	bySandbox map[string]string // sandboxID → secret
@@ -68,6 +74,45 @@ func (r *tokenSecretRegistry) verify(sandboxID, secret string) bool {
 		return false
 	}
 	return subtle.ConstantTimeCompare([]byte(expected), []byte(secret)) == 1
+}
+
+// refreshCooldown bounds how often one source address can force the token server to
+// re-derive its mapping from the entity store.
+const refreshCooldown = 10 * time.Second
+
+// refreshLimiterSweepAt is the size past which allow drops expired entries. Source
+// addresses come from a bridge subnet, so the map stays far below this in practice; the
+// sweep is here so a long-lived runner churning through addresses cannot grow it without
+// bound.
+const refreshLimiterSweepAt = 256
+
+// refreshLimiter rate-limits mapping re-resolution per source address. Its zero value is
+// ready to use and allows the first attempt for any address.
+type refreshLimiter struct {
+	mu   sync.Mutex
+	last map[string]time.Time
+}
+
+func (l *refreshLimiter) allow(key string) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	now := time.Now()
+	if at, seen := l.last[key]; seen && now.Sub(at) < refreshCooldown {
+		return false
+	}
+	if l.last == nil {
+		l.last = make(map[string]time.Time)
+	}
+	if len(l.last) >= refreshLimiterSweepAt {
+		for addr, at := range l.last {
+			if now.Sub(at) >= refreshCooldown {
+				delete(l.last, addr)
+			}
+		}
+	}
+	l.last[key] = now
+	return true
 }
 
 func generateTokenSecret() (string, error) {
@@ -134,6 +179,20 @@ func (c *SandboxController) startTokenServer(ctx context.Context) {
 	}
 }
 
+func (c *SandboxController) verifyTokenSecret(sandboxID, secret string) bool {
+	return c.tokenSecrets != nil && c.tokenSecrets.verify(sandboxID, secret)
+}
+
+// refreshSandboxByIP re-derives an address's owner from the entity store, subject to the
+// per-address cooldown: a container retrying a bad token request in a loop must not turn
+// every failure into an entity-store scan.
+func (c *SandboxController) refreshSandboxByIP(ip string) (sandboxID, appName string, ok bool) {
+	if c.NetServ == nil || !c.lookupRefresh.allow(ip) {
+		return "", "", false
+	}
+	return c.NetServ.RefreshSandboxByIP(ip)
+}
+
 func (c *SandboxController) handleTokenRequest(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeTokenError(w, http.StatusMethodNotAllowed, "only GET is allowed")
@@ -159,9 +218,26 @@ func (c *SandboxController) handleTokenRequest(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	if c.tokenSecrets == nil || !c.tokenSecrets.verify(sandboxID, bearerToken) {
-		writeTokenError(w, http.StatusForbidden, "invalid token")
-		return
+	if !c.verifyTokenSecret(sandboxID, bearerToken) {
+		// The caller holds a secret the sandbox we resolved does not own. Either it is
+		// an impostor, or the address mapping is stale and named the sandbox that used
+		// to hold this address — which a sandbox on a recycled IP could never recover
+		// from, because nothing else would ever correct the mapping (MIR-1511). Re-derive
+		// the owner from the entity store and try once more, so a mapping that has gone
+		// wrong costs one rejected request instead of the life of the sandbox.
+		corrected, correctedApp, refreshed := c.refreshSandboxByIP(remoteHost)
+		if !refreshed || corrected == sandboxID || !c.verifyTokenSecret(corrected, bearerToken) {
+			c.Log.Warn("workload token request failed verification",
+				"source_ip", remoteHost, "resolved_sandbox", sandboxID, "resolved_app", appName)
+			writeTokenError(w, http.StatusForbidden, "invalid token")
+			return
+		}
+
+		c.Log.Warn("corrected stale sandbox address mapping during token request",
+			"source_ip", remoteHost,
+			"stale_sandbox", sandboxID, "stale_app", appName,
+			"sandbox", corrected, "app", correctedApp)
+		sandboxID, appName = corrected, correctedApp
 	}
 
 	opts := workloadidentity.TokenOptions{}

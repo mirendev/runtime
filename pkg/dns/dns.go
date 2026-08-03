@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net"
 	"net/netip"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -21,6 +22,24 @@ import (
 	entityserver_v1alpha "miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 )
 
+// sandboxMapping is one sandbox's claim on an address: the IP it holds and what that
+// address answers as. The IP-keyed maps are a projection of these claims — every write
+// to them goes through addSandboxMappingLocked or releaseIPLocked so an address always
+// names a sandbox that still claims it.
+//
+// Recycled IPs mean two sandboxes can hold a claim on the same address at once (the
+// outgoing one's entity outlives its container by up to an hour). seq breaks that tie:
+// it increments on every registration, so the most recent claimant owns the address and
+// a delete can hand it back to whoever is left. Ownership is security-relevant — the
+// workload identity token server resolves a caller's identity from ipToSandbox — so the
+// tie-break is deterministic rather than dependent on map iteration order (MIR-1511).
+type sandboxMapping struct {
+	ip      string
+	app     string
+	service string
+	seq     uint64
+}
+
 type Server struct {
 	*dns.Server
 	client       *dns.Client
@@ -33,7 +52,8 @@ type Server struct {
 	ipToSandbox     map[string]string              // source IP → sandbox entity ID
 	ipToService     map[string]string              // IP → service name (for PTR lookups)
 	appServiceToIPs map[string]map[string][]string // app name → service name → []IPs
-	entityToIP      map[string]string              // entity ID → IP address
+	sandboxes       map[string]sandboxMapping      // sandbox entity ID → what it claims
+	seq             uint64                         // registration counter; see sandboxMapping.seq
 
 	watchCtx    context.Context
 	watchCancel context.CancelFunc
@@ -67,7 +87,7 @@ func New(addr string, entityClient *entityserver_v1alpha.EntityAccessClient, log
 		ipToSandbox:     make(map[string]string),
 		ipToService:     make(map[string]string),
 		appServiceToIPs: make(map[string]map[string][]string),
-		entityToIP:      make(map[string]string),
+		sandboxes:       make(map[string]sandboxMapping),
 	}
 
 	s.Handler = dns.HandlerFunc(s.handleRequest)
@@ -500,7 +520,7 @@ func (s *Server) reconcileSandboxes(ctx context.Context, entities []*entity.Enti
 
 	s.mu.RLock()
 	var stale []string
-	for id := range s.entityToIP {
+	for id := range s.sandboxes {
 		if _, ok := present[id]; !ok {
 			stale = append(stale, id)
 		}
@@ -522,16 +542,9 @@ func (s *Server) handleSandboxUpdate(ctx context.Context, sb *compute_v1alpha.Sa
 		return
 	}
 
-	s.mu.Lock()
-	_, tracked := s.entityToIP[sb.ID.String()]
-	s.mu.Unlock()
-
-	if tracked {
-		// Already tracked, skip
-		return
-	}
-
-	// Get sandbox IP
+	// A sandbox with no address yet is in its pre-assignment state, not one giving
+	// an address up: leave any existing claim alone and wait for the patch that
+	// fills Network in, which arrives as another update.
 	if len(sb.Network) == 0 {
 		return
 	}
@@ -540,6 +553,21 @@ func (s *Server) handleSandboxUpdate(ctx context.Context, sb *compute_v1alpha.Sa
 	ipAddr := sb.Network[0].Address
 	if strings.Contains(ipAddr, "/") {
 		ipAddr = strings.Split(ipAddr, "/")[0]
+	}
+
+	// Re-derive the mapping unless this sandbox is already the recorded owner of this
+	// exact address. Checking ownership rather than mere presence is the point: a
+	// sandbox that is tracked but whose address now names someone else has to be able
+	// to reclaim it, otherwise a stale entry survives until the process restarts
+	// (MIR-1511). The common case — an unrelated update for a sandbox that already
+	// owns its address — still returns before the two entity lookups below.
+	s.mu.RLock()
+	prev, tracked := s.sandboxes[sb.ID.String()]
+	owner := s.ipToSandbox[ipAddr]
+	s.mu.RUnlock()
+
+	if tracked && prev.ip == ipAddr && owner == sb.ID.String() {
+		return
 	}
 
 	// Get service label from metadata
@@ -592,7 +620,7 @@ func NewTestServer() *Server {
 		ipToSandbox:     make(map[string]string),
 		ipToService:     make(map[string]string),
 		appServiceToIPs: make(map[string]map[string][]string),
-		entityToIP:      make(map[string]string),
+		sandboxes:       make(map[string]sandboxMapping),
 	}
 }
 
@@ -631,42 +659,133 @@ func (s *Server) AddSandboxMapping(sandboxID, ipAddr, appName, service string) {
 }
 
 func (s *Server) addSandboxMappingLocked(sandboxID, ipAddr, appName, service string) {
-	// Track entity ID -> IP mapping for DELETE operations
-	s.entityToIP[sandboxID] = ipAddr
+	prev, tracked := s.sandboxes[sandboxID]
 
-	// Update ipToApp and ipToSandbox mappings
+	// The sandbox moved: give up its previous address before claiming this one, so
+	// the address it left behind stops resolving to it.
+	if tracked && prev.ip != ipAddr {
+		s.releaseIPLocked(prev.ip, sandboxID)
+	}
+
+	owner, owned := s.ipToSandbox[ipAddr]
+	if tracked && prev.ip == ipAddr && prev.app == appName && prev.service == service && owner == sandboxID {
+		return // already recorded exactly this way
+	}
+
+	if owned && owner != sandboxID {
+		// Two sandboxes claiming one address is either a recycled IP whose previous
+		// owner has not been cleaned up yet or a genuine duplicate assignment
+		// (MIR-1238). The newest claim wins; log it either way, because before
+		// MIR-1511 this transition was silent and left us unable to tell which of
+		// the two a stale mapping had come from.
+		s.log.Warn("sandbox IP mapping reassigned",
+			"ip", ipAddr,
+			"previous_sandbox", owner, "previous_app", s.ipToApp[ipAddr],
+			"sandbox", sandboxID, "app", appName)
+	}
+
+	// Withdraw whatever this address currently advertises as before re-advertising
+	// it: when an IP moves between apps the old app must stop handing it out.
+	s.withdrawServiceRecordLocked(ipAddr)
+
+	s.seq++
+	s.sandboxes[sandboxID] = sandboxMapping{ip: ipAddr, app: appName, service: service, seq: s.seq}
+	s.pointIPLocked(ipAddr, sandboxID, appName, service)
+
+	s.log.Info("added sandbox to DNS mapping", "sandbox", sandboxID, "app", appName, "service", service, "ip", ipAddr)
+}
+
+// pointIPLocked makes ipAddr resolve to the given sandbox and advertises it under
+// app+service. Callers are responsible for withdrawing any previous advertisement.
+func (s *Server) pointIPLocked(ipAddr, sandboxID, appName, service string) {
 	s.ipToApp[ipAddr] = appName
 	s.ipToSandbox[ipAddr] = sandboxID
-
-	// Update ipToService mapping for PTR queries
 	s.ipToService[ipAddr] = service
 
-	// Update appServiceToIPs mapping
 	if s.appServiceToIPs[appName] == nil {
 		s.appServiceToIPs[appName] = make(map[string][]string)
 	}
+	if !slices.Contains(s.appServiceToIPs[appName][service], ipAddr) {
+		s.appServiceToIPs[appName][service] = append(s.appServiceToIPs[appName][service], ipAddr)
+	}
+}
 
-	// Check if IP already exists in the list for this app+service
-	existingIPs := s.appServiceToIPs[appName][service]
-	found := false
-	for _, existingIP := range existingIPs {
-		if existingIP == ipAddr {
-			found = true
-			break
+// releaseIPLocked gives up ignoreID's claim on ipAddr. If another sandbox still claims
+// the address — the usual case for a recycled IP, where the outgoing sandbox's entity
+// is deleted well after the new sandbox has taken the address — the maps are re-pointed
+// at the newest remaining claimant instead of being left naming the sandbox that just
+// went away. Only when nothing claims the address any more is it withdrawn.
+//
+// ignoreID must be excluded rather than assumed absent: addSandboxMappingLocked calls
+// this for a sandbox that has moved, and that sandbox is still in s.sandboxes under its
+// old address at the time. handleSandboxDeleteByID has already removed it, so there the
+// exclusion is redundant.
+func (s *Server) releaseIPLocked(ipAddr, ignoreID string) {
+	var (
+		heirID string
+		heir   sandboxMapping
+	)
+	for id, m := range s.sandboxes {
+		if id == ignoreID || m.ip != ipAddr {
+			continue
+		}
+		if heirID == "" || m.seq > heir.seq {
+			heirID, heir = id, m
 		}
 	}
 
-	if !found {
-		s.appServiceToIPs[appName][service] = append(existingIPs, ipAddr)
-		s.log.Info("added sandbox to DNS mapping", "sandbox", sandboxID, "app", appName, "service", service, "ip", ipAddr)
+	if heirID == "" {
+		s.withdrawServiceRecordLocked(ipAddr)
+		delete(s.ipToApp, ipAddr)
+		delete(s.ipToSandbox, ipAddr)
+		delete(s.ipToService, ipAddr)
+		s.log.Info("removed sandbox from DNS mapping", "entity_id", ignoreID, "ip", ipAddr)
+		return
+	}
+
+	if s.ipToSandbox[ipAddr] == heirID {
+		return // the heir already owns it; nothing to re-point
+	}
+
+	s.withdrawServiceRecordLocked(ipAddr)
+	s.pointIPLocked(ipAddr, heirID, heir.app, heir.service)
+	s.log.Info("re-pointed IP to surviving sandbox",
+		"ip", ipAddr, "entity_id", ignoreID, "sandbox", heirID, "app", heir.app, "service", heir.service)
+}
+
+// withdrawServiceRecordLocked stops every app+service advertising ipAddr. It sweeps the
+// whole table rather than trusting ipToApp, so an address that ended up advertised under
+// more than one app can only be listed by its current owner afterwards.
+func (s *Server) withdrawServiceRecordLocked(ipAddr string) {
+	for appName, serviceMap := range s.appServiceToIPs {
+		for service, ips := range serviceMap {
+			filtered := slices.DeleteFunc(slices.Clone(ips), func(ip string) bool { return ip == ipAddr })
+			if len(filtered) == len(ips) {
+				continue
+			}
+			if len(filtered) == 0 {
+				delete(serviceMap, service)
+				continue
+			}
+			serviceMap[service] = filtered
+		}
+		if len(serviceMap) == 0 {
+			delete(s.appServiceToIPs, appName)
+		}
 	}
 }
 
 // resolveUnknownIP searches the entity store for a sandbox with the given IP address
 // and registers it for DNS resolution if found. This handles the race where a sandbox
 // container starts making DNS queries before the entity watcher processes the RUNNING
-// status update. The lookup registers sandboxes regardless of status since the container
-// is clearly running if it's making DNS queries.
+// status update — PENDING sandboxes count, since the container is clearly running if it
+// is making DNS queries.
+//
+// It considers only active sandboxes, and among several picks the most recently created.
+// A sandbox that has stopped can keep its entity — address and all — for up to an hour
+// after its container is gone, and taking the first address match regardless of status
+// meant a dead sandbox could be installed as the owner of an address a live one was
+// already using, which the token server then reads as the caller's identity (MIR-1511).
 func (s *Server) resolveUnknownIP(sourceIP string) bool {
 	if s.entityClient == nil {
 		return false
@@ -683,6 +802,39 @@ func (s *Server) resolveUnknownIP(sourceIP string) bool {
 		return true
 	}
 
+	return s.resolveIPFromStore(sourceIP)
+}
+
+// RefreshSandboxByIP re-derives an address's owner from the entity store and returns the
+// result, ignoring what is cached. Callers use it when they have evidence the cached
+// answer is wrong — the token server, for instance, when a caller presents a secret the
+// resolved sandbox does not own.
+//
+// It is deliberately non-destructive: if the store cannot answer, the existing mapping is
+// left in place rather than dropped, so a transient entity-store failure during a request
+// that was already going to be rejected cannot also blank out an address's DNS.
+func (s *Server) RefreshSandboxByIP(ip string) (sandboxID, appName string, ok bool) {
+	if !s.resolveIPFromStore(ip) {
+		return "", "", false
+	}
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	sandboxID, ok = s.ipToSandbox[ip]
+	if !ok {
+		return "", "", false
+	}
+	return sandboxID, s.ipToApp[ip], true
+}
+
+// resolveIPFromStore scans the sandbox index for the address's rightful owner and
+// registers it, replacing whatever was mapped before. Among several claimants it takes
+// the most recently created active one; see resolveUnknownIP for why.
+func (s *Server) resolveIPFromStore(sourceIP string) bool {
+	if s.entityClient == nil {
+		return false
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
@@ -692,11 +844,17 @@ func (s *Server) resolveUnknownIP(sourceIP string) bool {
 		return false
 	}
 
+	var (
+		best      *compute_v1alpha.Sandbox
+		bestEnt   *entity.Entity
+		bestBirth int64
+	)
+
 	for _, ent := range resp.Values() {
 		var sb compute_v1alpha.Sandbox
 		sb.Decode(ent.Entity())
 
-		if len(sb.Network) == 0 {
+		if len(sb.Network) == 0 || !compute.SandboxActive(sb.Status) {
 			continue
 		}
 
@@ -709,38 +867,45 @@ func (s *Server) resolveUnknownIP(sourceIP string) bool {
 			continue
 		}
 
-		var md core_v1alpha.Metadata
-		md.Decode(ent.Entity())
-
-		service, _ := md.Labels.Get("service")
-		if service == "" {
-			return false
+		if best == nil || ent.CreatedAt() > bestBirth {
+			candidate := sb
+			best, bestEnt, bestBirth = &candidate, ent.Entity(), ent.CreatedAt()
 		}
-
-		verResp, err := s.entityClient.Get(ctx, sb.Spec.Version.String())
-		if err != nil {
-			s.log.Debug("failed to get version for unknown IP sandbox", "ip", sourceIP, "error", err)
-			return false
-		}
-
-		var appVer core_v1alpha.AppVersion
-		appVer.Decode(verResp.Entity().Entity())
-
-		appResp, err := s.entityClient.Get(ctx, appVer.App.String())
-		if err != nil {
-			s.log.Debug("failed to get app for unknown IP sandbox", "ip", sourceIP, "error", err)
-			return false
-		}
-
-		var appMD core_v1alpha.Metadata
-		appMD.Decode(appResp.Entity().Entity())
-
-		s.AddSandboxMapping(sb.ID.String(), ipAddr, appMD.Name, service)
-		s.log.Info("resolved unknown IP to sandbox via entity lookup", "ip", sourceIP, "sandbox", sb.ID, "app", appMD.Name, "service", service)
-		return true
 	}
 
-	return false
+	if best == nil {
+		return false
+	}
+
+	var md core_v1alpha.Metadata
+	md.Decode(bestEnt)
+
+	service, _ := md.Labels.Get("service")
+	if service == "" {
+		return false
+	}
+
+	verResp, err := s.entityClient.Get(ctx, best.Spec.Version.String())
+	if err != nil {
+		s.log.Debug("failed to get version for unknown IP sandbox", "ip", sourceIP, "error", err)
+		return false
+	}
+
+	var appVer core_v1alpha.AppVersion
+	appVer.Decode(verResp.Entity().Entity())
+
+	appResp, err := s.entityClient.Get(ctx, appVer.App.String())
+	if err != nil {
+		s.log.Debug("failed to get app for unknown IP sandbox", "ip", sourceIP, "error", err)
+		return false
+	}
+
+	var appMD core_v1alpha.Metadata
+	appMD.Decode(appResp.Entity().Entity())
+
+	s.AddSandboxMapping(best.ID.String(), sourceIP, appMD.Name, service)
+	s.log.Info("resolved unknown IP to sandbox via entity lookup", "ip", sourceIP, "sandbox", best.ID, "app", appMD.Name, "service", service)
+	return true
 }
 
 // lookupAppForIP returns the app name associated with the given IP address.
@@ -755,69 +920,21 @@ func (s *Server) handleSandboxDeleteByID(entityID string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// Look up the IP address from entity ID
-	ipAddr, found := s.entityToIP[entityID]
+	m, found := s.sandboxes[entityID]
 	if !found {
 		// Not tracked, nothing to do
 		return
 	}
 
-	// Remove from entityToIP map
-	delete(s.entityToIP, entityID)
+	delete(s.sandboxes, entityID)
+	s.releaseIPLocked(m.ip, entityID)
+}
 
-	// Check if any other entity is still using this IP address.
-	// This can happen when IPs are reused: a new sandbox gets the same IP
-	// before the old sandbox's entity is cleaned up.
-	ipStillInUse := false
-	for _, ip := range s.entityToIP {
-		if ip == ipAddr {
-			ipStillInUse = true
-			break
-		}
-	}
-
-	if ipStillInUse {
-		s.log.Debug("IP still in use by another entity, keeping DNS mappings",
-			"entity_id", entityID, "ip", ipAddr)
-		return
-	}
-
-	// Get app name from ipToApp mapping
-	appName, found := s.ipToApp[ipAddr]
-	if !found {
-		return // Inconsistent state, but continue
-	}
-
-	// Remove from ipToApp, ipToSandbox
-	delete(s.ipToApp, ipAddr)
-	delete(s.ipToSandbox, ipAddr)
-
-	// Remove from ipToService
-	delete(s.ipToService, ipAddr)
-
-	// Remove from appServiceToIPs - need to find and remove IP from all services
-	if serviceMap, ok := s.appServiceToIPs[appName]; ok {
-		for service, ips := range serviceMap {
-			for i, ip := range ips {
-				if ip == ipAddr {
-					// Remove this IP from the slice
-					s.appServiceToIPs[appName][service] = append(ips[:i], ips[i+1:]...)
-					s.log.Info("removed sandbox from DNS mapping", "entity_id", entityID, "app", appName, "service", service, "ip", ipAddr)
-					break
-				}
-			}
-
-			// Clean up empty service entries
-			if len(s.appServiceToIPs[appName][service]) == 0 {
-				delete(s.appServiceToIPs[appName], service)
-			}
-		}
-
-		// Clean up empty app entries
-		if len(s.appServiceToIPs[appName]) == 0 {
-			delete(s.appServiceToIPs, appName)
-		}
-	}
+// RemoveSandboxMapping withdraws a sandbox's claim on its address. It is called by the
+// sandbox controller when a sandbox is torn down, so a local teardown takes effect
+// immediately rather than waiting on the entity watcher.
+func (s *Server) RemoveSandboxMapping(sandboxID string) {
+	s.handleSandboxDeleteByID(sandboxID)
 }
 
 // ListenAndServe starts the DNS server

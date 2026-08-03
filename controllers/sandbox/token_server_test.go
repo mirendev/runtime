@@ -2,12 +2,14 @@ package sandbox
 
 import (
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/stretchr/testify/assert"
@@ -198,6 +200,109 @@ func TestTokenSecretRegistry_KeyedBySandboxIdentity(t *testing.T) {
 
 	r.unregister("sandbox/old")
 	assert.False(t, r.verify("sandbox/old", "secret-old"))
+}
+
+// TestTokenServer_RecycledIPResolvesToCurrentSandbox reproduces MIR-1511: a sandbox that
+// lands on a recently-recycled address gets 403 "invalid token" forever, because the
+// address still resolves to the sandbox that held it before and the presented secret is
+// checked against that one. The identity the server would have issued is the *previous*
+// sandbox's app, which is why this is a security bug and not only an availability one.
+func TestTokenServer_RecycledIPResolvesToCurrentSandbox(t *testing.T) {
+	const (
+		recycledIP = "10.8.64.17"
+		newSandbox = "sandbox/reviewagent-web-NEW"
+		oldSandbox = "sandbox/db-app-web-OLD"
+		newSecret  = "the-new-sandbox-secret"
+	)
+
+	c := newTestTokenController(t)
+
+	sm := network.NewServiceManager(slog.Default(), nil)
+	sm.AddTestDNSServer(t, func(s *dns.Server) {
+		// The new sandbox takes the address, then a late event for the outgoing one
+		// re-registers it — the ordering that left the mapping naming the old sandbox.
+		s.AddSandboxMapping(newSandbox, recycledIP, "reviewagent", "web")
+		s.AddSandboxMapping(oldSandbox, recycledIP, "db-app", "web")
+		s.RemoveSandboxMapping(oldSandbox)
+	})
+	c.NetServ = sm
+	c.tokenSecrets.register(newSandbox, newSecret)
+
+	req := httptest.NewRequest("GET", "/v1/token", nil)
+	req.RemoteAddr = recycledIP + ":12345"
+	req.Header.Set("Authorization", "Bearer "+newSecret)
+	w := httptest.NewRecorder()
+
+	c.handleTokenRequest(w, req)
+	require.Equal(t, http.StatusOK, w.Code, "the sandbox currently holding the address should get a token")
+
+	var resp tokenResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+
+	token, err := jwt.ParseWithClaims(resp.Value, &workloadidentity.WorkloadClaims{}, func(tok *jwt.Token) (interface{}, error) {
+		return c.WorkloadIssuer.(*workloadidentity.Issuer).PublicKey(), nil
+	})
+	require.NoError(t, err)
+
+	claims := token.Claims.(*workloadidentity.WorkloadClaims)
+	assert.Equal(t, newSandbox, claims.SandboxID)
+	assert.Equal(t, "reviewagent", claims.App,
+		"the token must carry the current occupant's identity, never the previous one's")
+}
+
+// TestTokenServer_CorrectedMappingUnblocksSandbox covers the recovery path from the
+// handler's side: a sandbox locked out by a stale mapping starts working the moment the
+// mapping is fixed, with no restart. Re-deriving the mapping needs an entity store, so
+// the re-resolution itself is covered in pkg/dns; here the correction is applied directly.
+func TestTokenServer_CorrectedMappingUnblocksSandbox(t *testing.T) {
+	const (
+		liveSandbox = "sandbox/reviewagent-web-LIVE"
+		liveSecret  = "the-live-sandbox-secret"
+	)
+
+	c := newTestTokenController(t)
+	c.tokenSecrets.register(liveSandbox, liveSecret)
+
+	// The address resolves to a sandbox that no longer holds it, so the live sandbox's
+	// secret cannot verify against the identity the lookup returns.
+	req := httptest.NewRequest("GET", "/v1/token", nil)
+	req.RemoteAddr = testSandboxIP + ":12345"
+	req.Header.Set("Authorization", "Bearer "+liveSecret)
+	w := httptest.NewRecorder()
+
+	c.handleTokenRequest(w, req)
+	require.Equal(t, http.StatusForbidden, w.Code,
+		"with no entity store to re-derive from, a stale mapping still rejects")
+
+	// Once the mapping is corrected — by the watcher, by the controller registering the
+	// sandbox, or by a re-resolution — the same request succeeds without the sandbox
+	// having restarted.
+	c.NetServ.AddSandboxMapping(liveSandbox, testSandboxIP, "reviewagent", "web")
+
+	w = httptest.NewRecorder()
+	c.handleTokenRequest(w, req)
+	assert.Equal(t, http.StatusOK, w.Code)
+}
+
+func TestRefreshLimiter_BoundsRescansPerAddress(t *testing.T) {
+	var l refreshLimiter
+
+	assert.True(t, l.allow("10.8.64.17"), "the first attempt for an address is allowed")
+	assert.False(t, l.allow("10.8.64.17"), "a retry within the cooldown is not")
+	assert.True(t, l.allow("10.8.64.18"), "the cooldown is per address")
+}
+
+func TestRefreshLimiter_SweepsExpiredEntries(t *testing.T) {
+	l := refreshLimiter{last: make(map[string]time.Time)}
+
+	// Fill past the sweep threshold with entries old enough to be expired.
+	stale := time.Now().Add(-2 * refreshCooldown)
+	for i := range refreshLimiterSweepAt {
+		l.last[fmt.Sprintf("10.8.%d.%d", i/256, i%256)] = stale
+	}
+
+	require.True(t, l.allow("10.8.64.17"))
+	assert.Equal(t, 1, len(l.last), "expired entries should be dropped, leaving only the new one")
 }
 
 func TestWriteLoadTokenSecret_RoundTrip(t *testing.T) {
