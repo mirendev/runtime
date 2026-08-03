@@ -74,7 +74,7 @@ func DebugAdvertise(ctx *Context, opts struct {
 			continue
 		}
 		humanInfo("  %-15s %-40s (discovered)", a.Interface, a.IP)
-		ipSet.AddDiscovered(ip)
+		ipSet.AddDiscoveredFrom(ip, a.Interface)
 	}
 
 	for _, s := range opts.AdditionalIPs {
@@ -119,6 +119,7 @@ func DebugAdvertise(ctx *Context, opts struct {
 			Source         string `json:"source"`
 			HostPort       string `json:"host_port"`
 			IP             string `json:"ip,omitempty"`
+			Interface      string `json:"interface,omitempty"`
 			Classification string `json:"classification,omitempty"`
 			Included       bool   `json:"included"`
 			Reason         string `json:"reason"`
@@ -135,6 +136,7 @@ func DebugAdvertise(ctx *Context, opts struct {
 			out.Candidates[i] = candidateJSON{
 				Source:         c.Source,
 				HostPort:       c.HostPort,
+				Interface:      c.Interface,
 				Classification: c.Classification,
 				Included:       c.Included,
 				Reason:         c.Reason,
@@ -148,15 +150,19 @@ func DebugAdvertise(ctx *Context, opts struct {
 
 	ctx.Info("Step 3: per-candidate classification and inclusion decision")
 	ctx.Info("")
-	ctx.Info("  %-12s %-40s %-16s %-10s %s", "SOURCE", "IP:PORT", "CLASS", "DECISION", "REASON")
-	ctx.Info("  %s", "-------------------------------------------------------------------------------------------------------------")
+	ctx.Info("  %-12s %-40s %-12s %-16s %-10s %s", "SOURCE", "IP:PORT", "IFACE", "CLASS", "DECISION", "REASON")
+	ctx.Info("  %s", "-------------------------------------------------------------------------------------------------------------------------")
 	for _, c := range candidates {
 		decision := "SKIPPED"
 		if c.Included {
 			decision = "ADVERTISED"
 		}
-		ctx.Info("  %-12s %-40s %-16s %-10s %s",
-			c.Source, c.HostPort, c.Classification, decision, c.Reason)
+		iface := c.Interface
+		if iface == "" {
+			iface = "-"
+		}
+		ctx.Info("  %-12s %-40s %-12s %-16s %-10s %s",
+			c.Source, c.HostPort, iface, c.Classification, decision, c.Reason)
 	}
 
 	ctx.Info("")

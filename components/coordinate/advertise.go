@@ -1,8 +1,10 @@
 package coordinate
 
 import (
+	"fmt"
 	"net"
 	"strconv"
+	"strings"
 
 	"miren.dev/runtime/pkg/cloudauth"
 )
@@ -10,10 +12,16 @@ import (
 // SourcedIP is an IP address tagged with how it was obtained. Explicit IPs
 // (user-configured via AdditionalIPs or the server config) always pass
 // through to the advertised list. Discovered IPs (auto-scanned from local
-// interfaces) are subject to netcheck pruning, CGNAT filtering, etc.
+// interfaces) are subject to netcheck pruning, bridge filtering, etc.
 type SourcedIP struct {
 	IP       net.IP
 	Explicit bool // true = user-configured, false = auto-discovered
+
+	// Interface is the name of the link the IP was discovered on, when
+	// known. Empty for explicit IPs and for callers that don't track it.
+	// Used to tell a host's real NICs apart from the container bridges
+	// Miren and Docker create, which are never reachable from a client.
+	Interface string
 }
 
 // IPSet is an ordered, de-duplicated collection of SourcedIP entries.
@@ -43,6 +51,12 @@ func (s *IPSet) Add(sip SourcedIP) {
 		if sip.Explicit && !s.entries[i].Explicit {
 			s.entries[i].Explicit = true
 		}
+		// Keep whichever entry actually knows the interface: an explicit
+		// IP that duplicates a discovered one carries no interface of its
+		// own, and losing the name would hide it from bridge filtering.
+		if s.entries[i].Interface == "" && sip.Interface != "" {
+			s.entries[i].Interface = sip.Interface
+		}
 		return
 	}
 	s.index[key] = len(s.entries)
@@ -52,6 +66,12 @@ func (s *IPSet) Add(sip SourcedIP) {
 // AddDiscovered is a convenience for Add(SourcedIP{IP: ip, Explicit: false}).
 func (s *IPSet) AddDiscovered(ip net.IP) {
 	s.Add(SourcedIP{IP: ip, Explicit: false})
+}
+
+// AddDiscoveredFrom records a discovered IP along with the interface it was
+// found on, so bridge filtering can tell a real NIC from a container bridge.
+func (s *IPSet) AddDiscoveredFrom(ip net.IP, iface string) {
+	s.Add(SourcedIP{IP: ip, Explicit: false, Interface: iface})
 }
 
 // AddExplicit is a convenience for Add(SourcedIP{IP: ip, Explicit: true}).
@@ -103,7 +123,8 @@ type AdvertiseInput struct {
 	// IPs is the unified list of all candidate IP addresses, each
 	// tagged as explicit (user-configured) or discovered (interface scan).
 	// Explicit IPs bypass all filtering except loopback / unspecified.
-	// Discovered IPs are subject to CGNAT, netcheck, and other pruning.
+	// Discovered IPs are subject to container-bridge filtering, netcheck,
+	// and other pruning.
 	IPs []SourcedIP
 
 	// Netcheck is the result of the dual-stack netcheck, if one has run.
@@ -122,7 +143,8 @@ type AdvertiseCandidate struct {
 	Source         string // "listen", "explicit", "discovered", "netcheck"
 	HostPort       string
 	IP             net.IP
-	Classification string // loopback / link-local / private / global-unicast / other
+	Interface      string // discovering interface, when known
+	Classification string // tailnet / container-bridge / loopback / link-local / private / global-unicast / other
 	Included       bool
 	Reason         string
 }
@@ -149,11 +171,15 @@ type AdvertiseCandidate struct {
 //
 //  3. Discovered IPs (auto-scanned from interfaces):
 //     a. Loopback and unspecified are dropped.
-//     b. CGNAT addresses (100.64.0.0/10) are dropped.
-//     c. Public (global-unicast, non-private) IPs are dropped if netcheck
-//     ran for that address family and proved the family unreachable
-//     or found reachable addresses (replaced by netcheck-confirmed ones).
-//     d. Otherwise kept as a fallback.
+//     b. Addresses on a container bridge (docker0, flannel.1, rt0, …) are
+//     dropped — they exist only for workloads on this host.
+//     c. Addresses the internet can't route to (LAN, CGNAT, ULA, and so any
+//     overlay network) are kept, since they may be how this client
+//     reaches us.
+//     d. Internet-routable IPs are dropped if netcheck ran for that address
+//     family and proved the family unreachable or found reachable
+//     addresses (replaced by netcheck-confirmed ones).
+//     e. Otherwise kept as a fallback.
 //
 //  4. Netcheck public addresses: included when reachable on at least one port.
 func ComputeAdvertise(in AdvertiseInput) ([]AdvertiseCandidate, []string) {
@@ -242,7 +268,8 @@ func ComputeAdvertise(in AdvertiseInput) ([]AdvertiseCandidate, []string) {
 			Source:         source,
 			HostPort:       hp,
 			IP:             ip,
-			Classification: classify(ip),
+			Interface:      sip.Interface,
+			Classification: classifyOn(ip, sip.Interface),
 		}
 
 		// Loopback / unspecified always rejected regardless of source.
@@ -269,17 +296,29 @@ func ComputeAdvertise(in AdvertiseInput) ([]AdvertiseCandidate, []string) {
 
 		// --- Discovered IP filtering below ---
 
-		if isCGNAT(ip) {
+		// Container bridges (Miren's own rt0/flannel, plus docker0 and
+		// friends) carry addresses that only ever route to workloads on
+		// this host, so advertising them just buys clients a timeout.
+		if isContainerBridge(sip.Interface) {
 			cand.Included = false
-			cand.Reason = "CGNAT 100.64.0.0/10 (e.g. tailscale)"
+			cand.Reason = fmt.Sprintf("container bridge %q is local to this host", sip.Interface)
 			add(cand)
 			continue
 		}
 
-		isPublicCandidate := !ip.IsLoopback() && !ip.IsPrivate() && !ip.IsLinkLocalUnicast()
-		if !isPublicCandidate {
+		// Anything the internet can't route to is kept as a candidate. It
+		// may be exactly how this client reaches us — over the LAN, or
+		// over an overlay like Tailscale — and the client probes every
+		// advertised address in parallel and takes the first that answers,
+		// so a candidate it can't use costs it nothing.
+		//
+		// This is the one rule, applied to both families. Singling out
+		// IPv4 CGNAT while the matching IPv6 ULA sailed through as
+		// "private" is what left tailnet-only clusters advertising the
+		// half that rarely works and dropping the half that does.
+		if !isPubliclyRoutable(ip) {
 			cand.Included = true
-			cand.Reason = "private/link-local, kept for LAN clients"
+			cand.Reason = "not internet-routable, kept for LAN and overlay clients"
 			add(cand)
 			continue
 		}
@@ -400,15 +439,89 @@ func publicAddressesFromNetcheck(result *cloudauth.NetcheckDualStackResult) []st
 }
 
 // isCGNAT reports whether ip falls in the 100.64.0.0/10 Carrier-Grade NAT
-// range (RFC 6598). Tailscale tailnet addresses also live in this range,
-// so filtering CGNAT out of discovered-IP lists keeps them from being
-// advertised to clients who aren't on the tailnet.
+// range (RFC 6598).
 func isCGNAT(ip net.IP) bool {
 	ip4 := ip.To4()
 	if ip4 == nil {
 		return false
 	}
 	return ip4[0] == 100 && ip4[1]&0xc0 == 0x40
+}
+
+// isPubliclyRoutable reports whether the public internet can reach ip. It is
+// the runtime-side twin of the cloud's netaddr.IsPubliclyRoutable, and the
+// only classification the advertise rules need: overlay networks have to live
+// in non-routable space to be overlays, so Tailscale, iroh, Nebula and the
+// rest are all covered without naming any of them.
+func isPubliclyRoutable(ip net.IP) bool {
+	if ip.IsLoopback() || ip.IsUnspecified() ||
+		ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() ||
+		ip.IsInterfaceLocalMulticast() || ip.IsMulticast() ||
+		ip.IsPrivate() {
+		return false
+	}
+	return !isCGNAT(ip)
+}
+
+// looksLikeTailnet is a display-only hint for `miren debug advertise`, so an
+// operator reading the table sees why two addresses on different families got
+// the same treatment. It never gates a decision, so a guess that ages badly
+// costs nothing but a label. fd7a:115c:a1e0::/48 is Tailscale's ULA prefix.
+func looksLikeTailnet(ip net.IP, iface string) bool {
+	if strings.HasPrefix(iface, "tailscale") {
+		return true
+	}
+	if isCGNAT(ip) {
+		return true
+	}
+	b := ip.To16()
+	return ip.To4() == nil && b != nil &&
+		b[0] == 0xfd && b[1] == 0x7a && b[2] == 0x11 &&
+		b[3] == 0x5c && b[4] == 0xa1 && b[5] == 0xe0
+}
+
+// containerBridgeNames are interfaces whose addresses serve workloads on this
+// host and nothing else. rt0 and flannel.* are Miren's own; the rest come
+// from other container runtimes that may share the box.
+var containerBridgeNames = []string{
+	"rt0",      // Miren sandbox bridge
+	"flannel.", // flannel VXLAN (flannel.1)
+	"flannel-", // flannel wireguard backend
+	"cni",      // cni0, cni-podman0
+	"cbr0",
+	"docker",  // docker0, docker1
+	"br-",     // docker user-defined bridges
+	"virbr",   // libvirt
+	"podman",  // podman0
+	"kube-br", // kubelet bridge
+}
+
+// isContainerBridge reports whether an interface name is a container bridge.
+// An unknown (empty) name is never treated as one — better to advertise a
+// useless address than to silently drop the only address that works.
+func isContainerBridge(iface string) bool {
+	if iface == "" {
+		return false
+	}
+	for _, prefix := range containerBridgeNames {
+		if strings.HasPrefix(iface, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+// classifyOn is classify with the discovering interface in hand, which lets
+// it name the two cases the plain address can't reveal: an overlay address
+// (indistinguishable from CGNAT or a ULA) and a container bridge.
+func classifyOn(ip net.IP, iface string) string {
+	if looksLikeTailnet(ip, iface) {
+		return "tailnet"
+	}
+	if isContainerBridge(iface) {
+		return "container-bridge"
+	}
+	return classify(ip)
 }
 
 // classify returns a short string describing the kind of address, for

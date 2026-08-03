@@ -146,7 +146,7 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 		for _, addr := range discovery.Addresses {
 			ip := net.ParseIP(addr.IP)
 			if ip != nil && !ip.IsLinkLocalUnicast() {
-				ipSet.AddDiscovered(ip)
+				ipSet.AddDiscoveredFrom(ip, addr.Interface)
 			}
 		}
 		ctx.Log.Info("discovered IPs", "addresses", len(discovery.Addresses))

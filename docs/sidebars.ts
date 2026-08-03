@@ -47,6 +47,7 @@ const sidebars: SidebarsConfig = {
         'traffic-routing',
         'tls',
         'firewall',
+        'tailscale',
         'waf',
         'route-protect',
         'workload-identity',

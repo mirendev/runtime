@@ -12,6 +12,12 @@ import (
 func explicit(ip string) SourcedIP   { return SourcedIP{IP: net.ParseIP(ip), Explicit: true} }
 func discovered(ip string) SourcedIP { return SourcedIP{IP: net.ParseIP(ip), Explicit: false} }
 
+// onIface is discovered() with the interface the address was found on, which
+// is what bridge filtering keys off.
+func onIface(ip, iface string) SourcedIP {
+	return SourcedIP{IP: net.ParseIP(ip), Interface: iface}
+}
+
 func makeIPSet(entries ...SourcedIP) *IPSet {
 	s := NewIPSet()
 	for _, e := range entries {
@@ -81,16 +87,74 @@ func TestApiAddresses(t *testing.T) {
 			wantContains:   []string{"203.0.113.10:8443", "10.0.0.5:8443"},
 		},
 		{
-			name:         "CGNAT discovered IP is filtered",
+			// MIR-1509: CGNAT used to be dropped here, which left a
+			// tailnet-only cluster with nothing usable to advertise. The
+			// internet can't route to it, so it's kept for clients that
+			// share the overlay.
+			name:         "CGNAT discovered IP is kept for overlay clients",
 			ips:          makeIPSet(discovered("100.107.209.9"), discovered("10.0.0.5")),
-			wantContains: []string{"10.0.0.5:8443"},
-			wantExcludes: []string{"100.107.209.9:8443"},
+			wantContains: []string{"100.107.209.9:8443", "10.0.0.5:8443"},
+		},
+		{
+			// The IPv6 half of a tailnet has to get the same answer as the
+			// IPv4 half; disagreeing is what made this fail in the field.
+			name:         "tailscale ULA and CGNAT are treated alike",
+			ips:          makeIPSet(discovered("100.107.209.9"), discovered("fd7a:115c:a1e0::2801:9641")),
+			wantContains: []string{"100.107.209.9:8443", "[fd7a:115c:a1e0::2801:9641]:8443"},
+		},
+		{
+			// A negative netcheck says nothing about overlay reachability,
+			// so it must not prune the tailnet address with the public one.
+			name: "netcheck failure does not drop CGNAT",
+			ips:  makeIPSet(discovered("203.0.113.10"), discovered("100.107.209.9")),
+			netcheckResult: &cloudauth.NetcheckDualStackResult{
+				IPv4: &cloudauth.NetcheckResponse{
+					SourceAddress: "203.0.113.10",
+					Results: []cloudauth.NetcheckResult{
+						{Port: 8443, Protocol: "tcp", Reachable: false},
+					},
+				},
+			},
+			wantContains: []string{"100.107.209.9:8443"},
+			wantExcludes: []string{"203.0.113.10:8443"},
 		},
 		{
 			// Explicit CGNAT is kept — the user asked for it.
 			name:         "CGNAT explicit IP is kept",
 			ips:          makeIPSet(explicit("100.107.209.9")),
 			wantContains: []string{"100.107.209.9:8443"},
+		},
+		{
+			// Container bridges only ever route to workloads on this host,
+			// so they're noise in every cluster's advertised list.
+			name: "container bridge addresses are dropped",
+			ips: makeIPSet(
+				onIface("172.17.0.1", "docker0"),
+				onIface("10.8.45.1", "rt0"),
+				onIface("10.8.45.0", "flannel.1"),
+				onIface("10.50.1.170", "eth0"),
+			),
+			wantContains: []string{"10.50.1.170:8443"},
+			wantExcludes: []string{"172.17.0.1:8443", "10.8.45.1:8443", "10.8.45.0:8443"},
+		},
+		{
+			// An explicit IP is user intent and outranks bridge filtering.
+			name:         "explicit IP on a bridge interface is still kept",
+			ips:          makeIPSet(SourcedIP{IP: net.ParseIP("172.17.0.1"), Explicit: true, Interface: "docker0"}),
+			wantContains: []string{"172.17.0.1:8443"},
+		},
+		{
+			// Ani's cluster: the only reachable address is the tailnet one,
+			// and everything else on the box is a bridge or unroutable.
+			name: "tailnet-only host advertises its tailnet addresses",
+			ips: makeIPSet(
+				onIface("100.107.209.9", "tailscale0"),
+				onIface("fd7a:115c:a1e0::2801:9641", "tailscale0"),
+				onIface("172.17.0.1", "docker0"),
+				onIface("172.18.0.1", "br-9f2a"),
+			),
+			wantContains: []string{"100.107.209.9:8443", "[fd7a:115c:a1e0::2801:9641]:8443"},
+			wantExcludes: []string{"172.17.0.1:8443", "172.18.0.1:8443"},
 		},
 		{
 			name: "netcheck ran and found reachable addresses",
