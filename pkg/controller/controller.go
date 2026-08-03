@@ -417,7 +417,10 @@ func (c *ReconcileController) applyUpdates(ctx context.Context, event Event, upd
 		return
 	}
 
-	c.Log.Info("updating entity with updates produced by controller", "event", event, "updates", len(updates))
+	// Debug rather than Info: every controller write passes through here, so at
+	// Info this and the confirmation below reported each routine reconcile twice
+	// in the operator's stream. Failures still surface at Warn/Error.
+	c.Log.Debug("updating entity with updates produced by controller", "event", event, "updates", len(updates))
 
 	// Add entity ID to attrs for Patch
 	attrs := append([]entity.Attr{entity.Ref(entity.DBId, event.Id)}, updates...)
@@ -432,7 +435,7 @@ func (c *ReconcileController) applyUpdates(ctx context.Context, event Event, upd
 		}
 		c.Log.Error("error updating entity", "entity", event.Id, "error", err)
 	} else {
-		c.Log.Info("updated entity", "entity", event.Id)
+		c.Log.Debug("updated entity", "entity", event.Id)
 		// Record the revision we just wrote so we can skip the watch event
 		if result.HasRevision() {
 			c.RecordWrite(result.Revision())

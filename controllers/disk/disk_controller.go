@@ -109,7 +109,11 @@ func (d *DiskController) Create(ctx context.Context, disk *storage_v1alpha.Disk,
 
 // Update handles updates to an existing disk entity
 func (d *DiskController) Update(ctx context.Context, disk *storage_v1alpha.Disk, meta *entity.Meta) error {
-	d.Log.Info("Processing disk update",
+	// Debug rather than Info: this fires on every reconcile of every disk,
+	// including the periodic resync, so a steady-state cluster emits it
+	// constantly while reporting no change. The handlers below log at Info when
+	// they actually do something, which is the part worth seeing.
+	d.Log.Debug("Processing disk update",
 		"disk", disk.ID,
 		"status", disk.Status)
 

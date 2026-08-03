@@ -196,7 +196,10 @@ func (pf *PolicyFetcher) fetchPolicy(ctx context.Context) error {
 
 	// Update the stored policy
 	pf.setPolicy(&policy)
-	pf.logger.Info("policy fetched successfully", "rules", len(policy.Rules))
+	// Debug rather than Info: this is a timer-driven refresh that succeeds every
+	// time on a healthy cluster. A failure to refresh is the interesting event,
+	// and that path logs an error.
+	pf.logger.Debug("policy fetched successfully", "rules", len(policy.Rules))
 
 	// Update refresh timestamp and clear evaluator cache
 	pf.mu.Lock()

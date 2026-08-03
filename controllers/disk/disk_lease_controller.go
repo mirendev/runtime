@@ -271,7 +271,11 @@ func (d *DiskLeaseController) reconcileLease(ctx context.Context, event string, 
 		return nil
 	}
 
-	d.Log.Info(event,
+	// Debug rather than Info: this fires on entry for every lease on every
+	// reconcile, so a cluster with a handful of steady bound leases repeats it
+	// indefinitely while nothing changes. The handlers below report at Info when
+	// they mount, unmount, or fail something.
+	d.Log.Debug(event,
 		"lease", lease.ID,
 		"disk", lease.DiskId,
 		"status", lease.Status)

@@ -85,7 +85,9 @@ func (d *DiskWatchController) reconcileDependentLeases(ctx context.Context, disk
 	}
 
 	if reconciledCount > 0 {
-		d.Log.Info("Triggered reconciliation of leases due to disk state change",
+		// Enqueuing work is internal plumbing, not an event an operator acts on,
+		// and it repeats for every disk on every resync.
+		d.Log.Debug("Triggered reconciliation of leases due to disk state change",
 			"disk", diskId,
 			"leaseCount", reconciledCount)
 	}
