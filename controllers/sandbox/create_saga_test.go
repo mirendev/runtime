@@ -138,6 +138,7 @@ type mockContainerRuntime struct {
 	bootContainersCalls      int
 	destroySubCtrsCalls      int
 	releaseDiskLeasesCalls   int
+	releaseTokenStateCalls   int
 	unconfigureFirewallCalls int
 	waitForPortCalls         int
 	lastWaitForPortTimeout   time.Duration
@@ -246,6 +247,12 @@ func (m *mockContainerRuntime) ReleaseDiskLeases(ctx context.Context, sandboxID 
 	defer m.mu.Unlock()
 	m.releaseDiskLeasesCalls++
 	return m.releaseDiskLeasesErr
+}
+
+func (m *mockContainerRuntime) ReleaseTokenState(id entity.Id) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.releaseTokenStateCalls++
 }
 
 func (m *mockContainerRuntime) UnconfigureFirewall(sb *compute.Sandbox) {
@@ -662,6 +669,8 @@ func TestCreateSandboxSaga_WaitPortsFails(t *testing.T) {
 	assert.Equal(t, 1, h.obs.removeMetricsCalls)
 	assert.Equal(t, 1, h.runtime.destroySubCtrsCalls)
 	assert.Equal(t, 1, h.runtime.releaseDiskLeasesCalls)
+	assert.Equal(t, 1, h.runtime.releaseTokenStateCalls,
+		"undoing boot-containers must release the token state it registered")
 	assert.Equal(t, 1, h.runtime.unconfigureFirewallCalls)
 	assert.Equal(t, 1, h.runtime.cleanupContainerCalls)
 	assert.Equal(t, 1, h.networking.releaseCalls)

@@ -373,6 +373,11 @@ func undoBootContainers(ctx context.Context, in bootContainersIn, _ bootContaine
 	}
 	log.Debug("saga undo: destroyed subcontainers", "sandbox", in.SandboxID)
 
+	// Booting the subcontainers is what registers the sandbox for token refresh
+	// (see buildSubContainerSpec), so undoing it has to release that state. A
+	// failed saga marks the sandbox DEAD without ever reaching StopSandbox.
+	deps.runtime.ReleaseTokenState(entity.Id(in.SandboxID))
+
 	if err := deps.runtime.ReleaseDiskLeases(ctx, entity.Id(in.SandboxID)); err != nil {
 		return fmt.Errorf("saga undo: releasing disk leases for %s: %w", in.SandboxID, err)
 	}

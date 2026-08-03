@@ -2,11 +2,15 @@ package sandbox
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sync"
 	"time"
+
+	"miren.dev/runtime/pkg/entity"
 )
 
 const tokenRefreshInterval = 45 * time.Minute
@@ -54,6 +58,20 @@ func (tr *tokenRefresher) snapshot() []tokenEntry {
 	return entries
 }
 
+// ReleaseTokenState drops every in-memory workload identity record for a sandbox.
+// Called from StopSandbox so the state goes away with the sandbox itself rather
+// than with the entity, which outlives it by up to the periodic cleanup horizon,
+// and from the boot-failure cleanup paths, which never reach StopSandbox.
+func (c *SandboxController) ReleaseTokenState(id entity.Id) {
+	sandboxID := id.String()
+	if c.tokenRefresher != nil {
+		c.tokenRefresher.unregister(sandboxID)
+	}
+	if c.tokenSecrets != nil {
+		c.tokenSecrets.unregister(sandboxID)
+	}
+}
+
 func (c *SandboxController) runTokenRefresh(ctx context.Context) {
 	ticker := time.NewTicker(tokenRefreshInterval)
 	defer ticker.Stop()
@@ -74,6 +92,7 @@ func (c *SandboxController) refreshTokens() {
 	}
 
 	entries := c.tokenRefresher.snapshot()
+	var dropped int
 	for _, e := range entries {
 		token, err := c.WorkloadIssuer.IssueToken(e.appName, e.sandboxID)
 		if err != nil {
@@ -84,13 +103,31 @@ func (c *SandboxController) refreshTokens() {
 		// into containers. Rename would create a new inode and the container
 		// would keep reading the stale old token. The brief window of partial
 		// content is acceptable for a few-hundred-byte JWT.
-		if err := os.WriteFile(e.filePath, []byte(token), 0644); err != nil {
+		err = os.WriteFile(e.filePath, []byte(token), 0644)
+		switch {
+		case err == nil:
+		case errors.Is(err, fs.ErrNotExist):
+			// The sandbox directory is gone, so the sandbox is gone. Teardown
+			// normally unregisters the entry (see ReleaseTokenState); this keeps a
+			// path that skipped it from refreshing a dead sandbox forever. Release
+			// through the same call teardown uses, so the backstop also clears the
+			// token secret instead of leaving it authorized.
+			c.Log.Debug("dropping token refresh entry for departed sandbox", "sandbox", e.sandboxID)
+			c.ReleaseTokenState(entity.Id(e.sandboxID))
+			dropped++
+		default:
 			c.Log.Warn("failed to write refreshed workload identity token", "sandbox", e.sandboxID, "error", err)
 		}
 	}
 
-	if len(entries) > 0 {
-		c.Log.Debug("refreshed workload identity tokens", "count", len(entries))
+	if refreshed := len(entries) - dropped; refreshed > 0 {
+		c.Log.Debug("refreshed workload identity tokens", "count", refreshed)
+	}
+
+	// A non-zero count means some teardown path skipped ReleaseTokenState — the
+	// self-heal covered for it, but the gap is worth seeing without debug logging.
+	if dropped > 0 {
+		c.Log.Info("dropped stale token refresh entries", "count", dropped)
 	}
 }
 

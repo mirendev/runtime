@@ -440,7 +440,7 @@ func TestSandbox(t *testing.T) {
 		r.NoError(err)
 
 		defer func() {
-			r.NoError(co.StopSandbox(context.WithoutCancel(ctx), id))
+			r.NoError(co.StopSandbox(context.WithoutCancel(ctx), id, nil))
 		}()
 
 		// Create only updates its in-memory copy of the entity; by the time a

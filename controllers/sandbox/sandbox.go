@@ -1048,7 +1048,7 @@ func (c *SandboxController) Create(ctx context.Context, co *compute.Sandbox, met
 		return nil
 	case compute.STOPPED:
 		c.Log.Debug("sandbox is stopped, verifying it is no longer running")
-		return c.StopSandbox(ctx, co.ID)
+		return c.StopSandbox(ctx, co.ID, co)
 	case "", compute.PENDING, compute.RUNNING:
 		searchRes, err := c.CheckSandbox(ctx, co, meta)
 		if err != nil {
@@ -1126,7 +1126,7 @@ func (c *SandboxController) Create(ctx context.Context, co *compute.Sandbox, met
 				}
 
 				// Clean up the unhealthy sandbox
-				err := c.StopSandbox(ctx, co.ID)
+				err := c.StopSandbox(ctx, co.ID, co)
 				if err != nil {
 					c.Log.Error("failed to cleanup unhealthy sandbox", "id", co.ID, "err", err)
 					return fmt.Errorf("failed to cleanup unhealthy sandbox: %w", err)
@@ -1241,6 +1241,12 @@ func (c *SandboxController) createSandbox(ctx context.Context, co *compute.Sandb
 
 			// Clean up the pause container using the common cleanup function
 			c.CleanupContainer(ctx, container)
+
+			// Boot may have gotten far enough to register the sandbox for token
+			// refresh (see buildSubContainerSpec). This path marks the sandbox DEAD
+			// without going through StopSandbox, so release that state here or it
+			// lingers until the entity is swept.
+			c.ReleaseTokenState(co.ID)
 
 			// Update sandbox status to DEAD in entity store
 			co.Status = compute.DEAD
@@ -2739,34 +2745,69 @@ cleanup:
 
 func (c *SandboxController) Delete(ctx context.Context, id entity.Id, sb *compute.Sandbox) error {
 	c.Log.Debug("delete callback received, cleaning up sandbox", "id", id)
-	if c.NetServ != nil {
-		// Drop the address claim here rather than leaving it to the watcher's delete
-		// event, so a recycled address is free the moment the sandbox holding it goes.
-		c.NetServ.RemoveSandboxMapping(id.String())
-	}
-	if c.tokenRefresher != nil {
-		c.tokenRefresher.unregister(id.String())
-	}
-	if c.tokenSecrets != nil {
-		c.tokenSecrets.unregister(id.String())
-		// Best-effort removal of the persisted secret. StopSandbox also wipes the whole
-		// sandbox dir, but removing the sensitive secret here ensures it doesn't linger
-		// if StopSandbox errors out before reaching its dir cleanup.
-		secretPath := filepath.Join(c.Tempdir, "containerd", id.PathSafe(), tokenSecretFilename)
-		if err := os.Remove(secretPath); err != nil && !os.IsNotExist(err) {
-			c.Log.Warn("failed to remove persisted token secret", "sandbox", id, "error", err)
-		}
-	}
-	if sb != nil {
-		c.UnconfigureFirewall(sb)
-	}
-	return c.StopSandbox(ctx, id)
+	return c.StopSandbox(ctx, id, sb)
 }
 
-func (c *SandboxController) StopSandbox(ctx context.Context, id entity.Id) error {
+// entityFallbackIPs returns the addresses recorded on a sandbox entity, for use
+// when the pause container's labels couldn't supply them.
+//
+// A DEAD sandbox yields nothing. DEAD is only reached by way of a teardown that
+// already released the sandbox's addresses, and nothing ever clears Network on
+// the entity, so those addresses are stale by construction. Releasing them again
+// would be a no-op at best; once the netdb cooldown has passed and another
+// sandbox has reserved one of them, ReleaseAddr updates the row by IP with no
+// ownership check and hands a live address back to the pool.
+//
+// The delete callback is the path that makes this reachable, since it carries
+// the prior entity and fires from the periodic sweep an hour after teardown.
+func entityFallbackIPs(sb *compute.Sandbox) map[string]bool {
+	ips := make(map[string]bool)
+	if sb.Status == compute.DEAD {
+		return ips
+	}
+
+	for _, net := range sb.Network {
+		addr := net.Address
+		if strings.Contains(addr, "/") {
+			if prefix, err := netip.ParsePrefix(addr); err == nil {
+				addr = prefix.Addr().String()
+			}
+		}
+		if addr != "" {
+			ips[addr] = true
+		}
+	}
+	return ips
+}
+
+// StopSandbox tears down a sandbox and releases every resource it holds. sb is
+// optional: callers that already have the entity pass it so cleanup still works
+// once the entity has been deleted from the store, and it is fetched here
+// otherwise.
+func (c *SandboxController) StopSandbox(ctx context.Context, id entity.Id, sb *compute.Sandbox) error {
 	ctx = namespaces.WithNamespace(ctx, c.Namespace)
 
 	c.Log.Debug("stopping sandbox", "id", id)
+
+	// Release in-memory token state first. Container teardown below can be slow or
+	// fail partway, and a sandbox left registered keeps getting fresh tokens minted
+	// for a file that is about to disappear.
+	c.ReleaseTokenState(id)
+
+	if c.NetServ != nil {
+		// Drop the address claim here rather than leaving it to the watcher's delete
+		// event, so a recycled address is free the moment the sandbox holding it goes.
+		// Teardown is that moment, and it runs well ahead of the entity delete.
+		c.NetServ.RemoveSandboxMapping(id.String())
+	}
+
+	// Best-effort removal of the persisted secret. The whole sandbox dir is wiped
+	// further down, but removing the sensitive secret up front ensures it doesn't
+	// linger if teardown errors out before reaching that cleanup.
+	secretPath := filepath.Join(c.Tempdir, "containerd", id.PathSafe(), tokenSecretFilename)
+	if err := os.Remove(secretPath); err != nil && !os.IsNotExist(err) {
+		c.Log.Warn("failed to remove persisted token secret", "sandbox", id, "error", err)
+	}
 
 	// Get LogEntity from pause container labels for metrics cleanup
 	var le string
@@ -2797,38 +2838,34 @@ func (c *SandboxController) StopSandbox(ctx context.Context, id entity.Id) error
 		c.Log.Warn("failed to load pause container", "id", id, "err", err)
 	}
 
-	// Fetch sandbox entity for firewall cleanup and as IP fallback
-	resp, entityErr := c.EAC.Get(ctx, id.String())
-	if entityErr == nil {
-		var sb compute.Sandbox
-		sb.Decode(resp.Entity().Entity())
+	// Fetch the sandbox entity for firewall cleanup and as IP fallback, unless the
+	// caller already handed us one. Delete callbacks fire after the entity is gone,
+	// so their copy is the only one we will ever see.
+	if sb == nil {
+		resp, entityErr := c.EAC.Get(ctx, id.String())
+		switch {
+		case entityErr == nil:
+			var fetched compute.Sandbox
+			fetched.Decode(resp.Entity().Entity())
+			sb = &fetched
+		case !errors.Is(entityErr, cond.ErrNotFound{}):
+			c.Log.Warn("failed to get sandbox entity for cleanup", "id", id, "err", entityErr)
+		default:
+			c.Log.Debug("sandbox entity already deleted and no sandbox supplied, skipping firewall cleanup", "id", id)
+		}
+	}
 
+	if sb != nil {
 		// Clean up iptables DNAT rules before destroying containers
-		c.UnconfigureFirewall(&sb)
+		c.UnconfigureFirewall(sb)
 
-		// Use entity store IPs as fallback if container labels didn't have them
+		// Use the entity's IPs as fallback if container labels didn't have them
 		if len(sandboxIPs) == 0 {
-			sandboxIPs = make(map[string]bool)
-			for _, net := range sb.Network {
-				addr := net.Address
-				if strings.Contains(addr, "/") {
-					if prefix, err := netip.ParsePrefix(addr); err == nil {
-						addr = prefix.Addr().String()
-					}
-				}
-				if addr != "" {
-					sandboxIPs[addr] = true
-				}
-			}
-
+			sandboxIPs = entityFallbackIPs(sb)
 			if len(sandboxIPs) > 0 {
-				c.Log.Debug("retrieved IPs from entity store for cleanup", "id", id, "ips", sandboxIPs)
+				c.Log.Debug("retrieved IPs from entity for cleanup", "id", id, "ips", sandboxIPs)
 			}
 		}
-	} else if !errors.Is(entityErr, cond.ErrNotFound{}) {
-		c.Log.Warn("failed to get sandbox entity for cleanup", "id", id, "err", entityErr)
-	} else {
-		c.Log.Debug("sandbox entity already deleted, firewall cleanup handled by DeleteEntity if available", "id", id)
 	}
 
 	// Fallback if we couldn't get LogEntity from labels
