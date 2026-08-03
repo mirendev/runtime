@@ -24,6 +24,14 @@ func testIssuer(t *testing.T) *Issuer {
 	return iss
 }
 
+func testSystemWorkloadSubject(t *testing.T) Subject {
+	t.Helper()
+
+	subject, err := newSystemWorkloadSubject("", "", SystemWorkloadSandboxController)
+	require.NoError(t, err)
+	return subject
+}
+
 func TestIssueSystemWorkloadToken_Claims(t *testing.T) {
 	iss := testIssuer(t)
 
@@ -184,7 +192,7 @@ func TestVerifyToken_RejectsExpiredToken(t *testing.T) {
 
 	// Build an already-expired token directly; IssueSystemWorkloadToken clamps TTL
 	// to MinTTL, so it cannot produce one.
-	claims := iss.baseClaims("system:sandboxcontroller", TokenOptions{
+	claims := iss.baseClaims(testSystemWorkloadSubject(t), TokenOptions{
 		Audience: []string{"miren-registry"},
 	})
 	claims.IdentityType = IdentityTypeSystem
@@ -219,7 +227,7 @@ func TestVerifyToken_RejectsTokenFromAnotherCluster(t *testing.T) {
 func TestVerifyToken_RejectsUnsignedToken(t *testing.T) {
 	iss := testIssuer(t)
 
-	claims := iss.baseClaims("system:sandboxcontroller", TokenOptions{
+	claims := iss.baseClaims(testSystemWorkloadSubject(t), TokenOptions{
 		Audience: []string{"miren-registry"},
 	})
 	claims.IdentityType = IdentityTypeSystem
@@ -237,7 +245,7 @@ func TestVerifyToken_RejectsUnsignedToken(t *testing.T) {
 func TestVerifyToken_RejectsTokenWithoutKID(t *testing.T) {
 	iss := testIssuer(t)
 
-	claims := iss.baseClaims("system:sandboxcontroller", TokenOptions{
+	claims := iss.baseClaims(testSystemWorkloadSubject(t), TokenOptions{
 		Audience: []string{"miren-registry"},
 	})
 	claims.IdentityType = IdentityTypeSystem
