@@ -148,6 +148,37 @@ func (sm *ServiceManager) AddTestDNSServer(t interface{ Helper() }, setup func(*
 	sm.bridges["test"].dns = append(sm.bridges["test"].dns, s)
 }
 
+// AddSandboxMapping registers a sandbox's address with every DNS server, so the mapping
+// is in place before the sandbox's container starts rather than whenever the entity
+// watcher gets to it. Every server watches the whole sandbox index and LookupSandboxByIP
+// searches all of them, so the mappings are cluster-wide on each server either way.
+//
+// The caller here is the controller that allocated the address, which makes it the
+// authority on who owns it — the watcher-derived view remains as reconciliation.
+func (sm *ServiceManager) AddSandboxMapping(sandboxID, ip, appName, service string) {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+
+	for _, bs := range sm.bridges {
+		for _, server := range bs.dns {
+			server.AddSandboxMapping(sandboxID, ip, appName, service)
+		}
+	}
+}
+
+// RemoveSandboxMapping withdraws a sandbox's address claim from every DNS server. If
+// another sandbox has already taken the address (a recycled IP), that sandbox keeps it.
+func (sm *ServiceManager) RemoveSandboxMapping(sandboxID string) {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+
+	for _, bs := range sm.bridges {
+		for _, server := range bs.dns {
+			server.RemoveSandboxMapping(sandboxID)
+		}
+	}
+}
+
 // LookupSandboxByIP searches across all bridge DNS servers for a sandbox matching the given IP.
 func (sm *ServiceManager) LookupSandboxByIP(ip string) (sandboxID, appName string, ok bool) {
 	sm.mu.RLock()
@@ -161,4 +192,23 @@ func (sm *ServiceManager) LookupSandboxByIP(ip string) (sandboxID, appName strin
 		}
 	}
 	return "", "", false
+}
+
+// RefreshSandboxByIP re-derives an address's owner from the entity store on every DNS
+// server, ignoring what they have cached, and returns the corrected answer. Every server
+// is refreshed rather than stopping at the first hit, so a mapping that has gone stale
+// cannot survive on one of them.
+func (sm *ServiceManager) RefreshSandboxByIP(ip string) (sandboxID, appName string, ok bool) {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+
+	for _, bs := range sm.bridges {
+		for _, server := range bs.dns {
+			id, app, found := server.RefreshSandboxByIP(ip)
+			if found && !ok {
+				sandboxID, appName, ok = id, app, true
+			}
+		}
+	}
+	return sandboxID, appName, ok
 }

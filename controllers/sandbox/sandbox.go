@@ -116,6 +116,7 @@ type SandboxController struct {
 
 	tokenRefresher *tokenRefresher
 	tokenSecrets   *tokenSecretRegistry
+	lookupRefresh  refreshLimiter
 
 	topCtx context.Context
 	cancel func()
@@ -2053,6 +2054,8 @@ func (c *SandboxController) BootContainers(
 		}
 	}()
 
+	c.registerSandboxDNS(ctx, sb, ep, meta)
+
 	for _, container := range sb.Spec.Container {
 		opts, err := c.buildSubContainerSpec(ctx, sb, &container, ep, sbPid, meta, volumeMounts)
 		if err != nil {
@@ -2736,6 +2739,11 @@ cleanup:
 
 func (c *SandboxController) Delete(ctx context.Context, id entity.Id, sb *compute.Sandbox) error {
 	c.Log.Debug("delete callback received, cleaning up sandbox", "id", id)
+	if c.NetServ != nil {
+		// Drop the address claim here rather than leaving it to the watcher's delete
+		// event, so a recycled address is free the moment the sandbox holding it goes.
+		c.NetServ.RemoveSandboxMapping(id.String())
+	}
 	if c.tokenRefresher != nil {
 		c.tokenRefresher.unregister(id.String())
 	}
@@ -3021,6 +3029,41 @@ func (c *SandboxController) Periodic(ctx context.Context, timeHorizon time.Durat
 	}
 
 	return nil
+}
+
+// registerSandboxDNS publishes the sandbox's address to the DNS servers from the side
+// that actually knows it: this controller allocated the address, so it can register the
+// mapping before the container starts instead of waiting for the entity watcher to
+// notice. The watcher still reconciles, but it is no longer the only writer.
+//
+// This matters beyond DNS. The workload identity token server resolves a caller's
+// identity by looking its source address up in the same map, so a recycled address that
+// still named its previous owner meant the new sandbox could never present a secret that
+// matched — a permanent 403 for anything deployed onto that address (MIR-1511).
+func (c *SandboxController) registerSandboxDNS(ctx context.Context, sb *compute.Sandbox, ep *network.EndpointConfig, meta *entity.Meta) {
+	if c.NetServ == nil || ep == nil || len(ep.Addresses) == 0 || meta == nil {
+		return
+	}
+
+	var md core_v1alpha.Metadata
+	md.Decode(meta)
+
+	// DNS entries are keyed by app+service; a sandbox without a service label has no
+	// name to answer to, which matches what the watcher does with one.
+	service, _ := md.Labels.Get("service")
+	if service == "" {
+		return
+	}
+
+	appName := c.resolveAppName(ctx, sb)
+	if appName == "" {
+		c.Log.Warn("could not resolve app name for sandbox DNS mapping", "sandbox", sb.ID)
+		return
+	}
+
+	ip := ep.Addresses[0].Addr().String()
+	c.NetServ.AddSandboxMapping(sb.ID.String(), ip, appName, service)
+	c.Log.Debug("registered sandbox DNS mapping", "sandbox", sb.ID, "ip", ip, "app", appName, "service", service)
 }
 
 func (c *SandboxController) resolveAppName(ctx context.Context, sb *compute.Sandbox) string {
