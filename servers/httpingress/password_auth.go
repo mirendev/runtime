@@ -6,6 +6,7 @@ import (
 	"html"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"path"
 	"strings"
 	"time"
@@ -81,17 +82,42 @@ func (h *passwordHandler) clearSession(w http.ResponseWriter) {
 	h.sm.ClearNamedCookie(w, pwSessionCookieName)
 }
 
+// isValidRedirect reports whether p can be handed to http.Redirect without
+// letting the caller pick the origin: it must be a path on this host, not an
+// absolute or scheme-relative URL.
+//
+// The "/\" case is the one that is easy to miss. Browsers normalize backslashes
+// to forward slashes before parsing a URL, so a browser reads "/\evil.com" as
+// "//evil.com" and follows it off-site, even though net/url treats it as an
+// ordinary path.
+//
+// The name is not incidental: CodeQL's open-redirect query treats guards named
+// isValidRedirect (and a handful of variations) as sanitizers, so writing the
+// check as a named predicate keeps the analyzer in agreement with the code.
+func isValidRedirect(p string) bool {
+	if !strings.HasPrefix(p, "/") || strings.HasPrefix(p, "//") || strings.HasPrefix(p, `/\`) {
+		return false
+	}
+
+	u, err := url.Parse(p)
+	return err == nil && u.Scheme == "" && u.Host == ""
+}
+
 func sanitizeReturnPath(raw string) string {
-	if raw == "" {
+	// Reject off-site shapes outright rather than letting Clean fold them into
+	// a local path: "//evil.com" should send the user home, not to "/evil.com".
+	if raw == "" || strings.Contains(raw, "://") || strings.HasPrefix(raw, "//") {
 		return "/"
 	}
-	if strings.Contains(raw, "://") || strings.HasPrefix(raw, "//") {
-		return "/"
-	}
+
+	// Clean collapses the leading "//" that would otherwise make this
+	// scheme-relative, but it leaves "/\" alone, so the guard still has work
+	// to do afterwards.
 	cleaned := path.Clean("/" + raw)
-	if !strings.HasPrefix(cleaned, "/") {
+	if !isValidRedirect(cleaned) {
 		return "/"
 	}
+
 	return cleaned
 }
 
