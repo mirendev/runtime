@@ -11,6 +11,7 @@ import (
 	"time"
 
 	apitypes "github.com/containerd/containerd/api/types"
+	"github.com/containerd/containerd/namespaces"
 	containerd "github.com/containerd/containerd/v2/client"
 	"github.com/containerd/containerd/v2/core/containers"
 	"github.com/containerd/containerd/v2/pkg/cio"
@@ -184,6 +185,12 @@ func (m *mockContainerRuntime) CreateContainer(ctx context.Context, id string, o
 	return id, nil
 }
 
+// ContainerSpec mirrors sandboxOps: the namespace is the adapter's job to
+// supply, not the saga action's.
+func (m *mockContainerRuntime) ContainerSpec(ctx context.Context, cont containerd.Container) (*oci.Spec, error) {
+	return cont.Spec(namespaces.WithNamespace(ctx, "miren-test"))
+}
+
 func (m *mockContainerRuntime) LoadContainer(ctx context.Context, id string) (containerd.Container, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -331,6 +338,10 @@ type sagaMockContainer struct {
 	id     string
 	spec   *oci.Spec
 	taskFn func(context.Context, cio.Attach) (containerd.Task, error)
+
+	// specNamespace records the containerd namespace the last Spec call
+	// arrived with, so tests can assert the caller supplied one.
+	specNamespace string
 }
 
 func (c *sagaMockContainer) ID() string { return c.id }
@@ -341,7 +352,16 @@ func (c *sagaMockContainer) Delete(context.Context, ...containerd.DeleteOpts) er
 func (c *sagaMockContainer) NewTask(context.Context, cio.Creator, ...containerd.NewTaskOpts) (containerd.Task, error) {
 	return nil, nil
 }
+
+// Spec refuses an un-namespaced context the way containerd does, so a caller
+// that goes around sandboxOps fails here instead of silently passing on a
+// client that happens to have a default namespace configured.
 func (c *sagaMockContainer) Spec(ctx context.Context) (*oci.Spec, error) {
+	ns, ok := namespaces.Namespace(ctx)
+	if !ok {
+		return nil, fmt.Errorf("namespace is required: %w", errdefs.ErrFailedPrecondition)
+	}
+	c.specNamespace = ns
 	return c.spec, nil
 }
 func (c *sagaMockContainer) Task(ctx context.Context, attach cio.Attach) (containerd.Task, error) {
