@@ -53,6 +53,26 @@ interfaces:
           - name: setter
             type: SetTemp
 
+  # Readings exists to exercise the REST gateway's request-body binding: name
+  # comes from the path, temperature from the JSON body.
+  - name: Readings
+    http:
+      prefix: /api/v1
+    methods:
+      - name: record
+        index: 0
+        http:
+          post: /meters/{name}/readings
+          body: "*"
+        parameters:
+          - name: name
+            type: string
+          - name: temperature
+            type: float32
+        results:
+          - name: reading
+            type: Reading
+
   - name: SetTemp
     methods:
       - name: setTemp

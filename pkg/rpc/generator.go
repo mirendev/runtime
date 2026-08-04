@@ -2080,6 +2080,10 @@ func (g *Generator) Generate(pkgName string) (string, error) {
 		}
 	}
 
+	if err := g.validateHTTP(); err != nil {
+		return "", err
+	}
+
 	fmt.Println(pkgName)
 	f := j.NewFile(pkgName)
 
@@ -2455,6 +2459,89 @@ func (m *DescHTTPMethod) effectiveBody() string {
 	default:
 		return ""
 	}
+}
+
+// validateHTTP checks every http: annotation in the IDL before any code is
+// generated. Each of these mistakes is otherwise silent: the generator happily
+// emits a binding and the route misbehaves at runtime, which is a much worse
+// place to discover a typo in a path template.
+func (g *Generator) validateHTTP() error {
+	for _, i := range g.Interfaces {
+		for _, m := range i.Method {
+			if m.HTTP == nil {
+				continue
+			}
+
+			if err := g.validateHTTPMethod(m); err != nil {
+				return fmt.Errorf("%s.%s: %w", i.Name, m.Name, err)
+			}
+		}
+	}
+
+	return nil
+}
+
+func (g *Generator) validateHTTPMethod(m *DescMethods) error {
+	var verbs []string
+	for _, v := range []struct{ name, path string }{
+		{"get", m.HTTP.Get},
+		{"post", m.HTTP.Post},
+		{"put", m.HTTP.Put},
+		{"delete", m.HTTP.Delete},
+		{"patch", m.HTTP.Patch},
+	} {
+		if v.path != "" {
+			verbs = append(verbs, v.name)
+		}
+	}
+
+	if len(verbs) == 0 {
+		return fmt.Errorf("http: no verb set")
+	}
+	if len(verbs) > 1 {
+		// verbPath picks the first non-empty field, so the others would be
+		// dropped without a word.
+		return fmt.Errorf("http: only one verb may be set, got %s", strings.Join(verbs, ", "))
+	}
+
+	// The REST gateway binds a request body only when Body is exactly "*". Any
+	// other non-empty value counts as "has a body" for query-param generation
+	// yet is never decoded, leaving the method with no inputs at all.
+	if b := m.HTTP.Body; b != "" && b != "*" {
+		return fmt.Errorf("http: body must be \"\" or \"*\", got %q", b)
+	}
+
+	// A capability is a live object reference scoped to an RPC connection.
+	// There is nothing to hand back over a stateless HTTP request, and restCall
+	// panics if a handler tries to mint one, so reject the annotation here
+	// rather than fail mid-request.
+	for _, p := range m.Parameters {
+		if g.ti(p.Type).isInterface {
+			return fmt.Errorf("http: parameter %q is a capability, which cannot be expressed over REST", p.Name)
+		}
+	}
+	for _, p := range m.Results {
+		if g.ti(p.Type).isInterface {
+			return fmt.Errorf("http: result %q is a capability, which cannot be expressed over REST", p.Name)
+		}
+	}
+
+	// Every {wildcard} must name a declared parameter. Otherwise the generated
+	// args struct has no field to receive it and json.Unmarshal drops the path
+	// value silently.
+	declared := make(map[string]struct{}, len(m.Parameters))
+	for _, p := range m.Parameters {
+		declared[p.Name] = struct{}{}
+	}
+
+	_, bare, _ := m.HTTP.verbPath()
+	for _, name := range httpPathParams(bare) {
+		if _, ok := declared[name]; !ok {
+			return fmt.Errorf("http: path parameter %q in %q has no matching method parameter", name, bare)
+		}
+	}
+
+	return nil
 }
 
 // httpBinding resolves a method's REST binding, returning the HTTP verb and the

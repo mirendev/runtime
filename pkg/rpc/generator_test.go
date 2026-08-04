@@ -152,3 +152,97 @@ func TestGenerator(t *testing.T) {
 		r.Equal(string(data), output)
 	})
 }
+
+func TestGeneratorHTTPValidation(t *testing.T) {
+	// validate runs the http: annotation checks over a single-method interface,
+	// plus any extra interfaces the case needs declared (for capability types).
+	validate := func(t *testing.T, m *DescMethods, extra ...*DescInterface) error {
+		t.Helper()
+
+		g, err := NewGenerator()
+		require.NoError(t, err)
+
+		g.Interfaces = append([]*DescInterface{{
+			Name:   "Widgets",
+			Method: []*DescMethods{m},
+		}}, extra...)
+		require.NoError(t, g.populateTypeInfo())
+
+		return g.validateHTTP()
+	}
+
+	t.Run("accepts a well-formed annotation", func(t *testing.T) {
+		r := require.New(t)
+
+		r.NoError(validate(t, &DescMethods{
+			Name:       "get",
+			HTTP:       &DescHTTPMethod{Get: "/widgets/{id}"},
+			Parameters: []*DescParamater{{Name: "id", Type: "string"}},
+		}))
+	})
+
+	t.Run("rejects more than one verb", func(t *testing.T) {
+		r := require.New(t)
+
+		// verbPath picks the first non-empty field, so the post: would vanish.
+		err := validate(t, &DescMethods{
+			Name: "get",
+			HTTP: &DescHTTPMethod{Get: "/widgets", Post: "/widgets"},
+		})
+		r.ErrorContains(err, "only one verb")
+	})
+
+	t.Run("rejects a body that is not \"*\"", func(t *testing.T) {
+		r := require.New(t)
+
+		err := validate(t, &DescMethods{
+			Name: "create",
+			HTTP: &DescHTTPMethod{Post: "/widgets", Body: "yes"},
+		})
+		r.ErrorContains(err, `body must be "" or "*"`)
+	})
+
+	t.Run("rejects a path wildcard with no matching parameter", func(t *testing.T) {
+		r := require.New(t)
+
+		// {widget} does not name a declared parameter, so the generated args
+		// struct would have no field to receive it.
+		err := validate(t, &DescMethods{
+			Name:       "get",
+			HTTP:       &DescHTTPMethod{Get: "/widgets/{widget}"},
+			Parameters: []*DescParamater{{Name: "id", Type: "string"}},
+		})
+		r.ErrorContains(err, `path parameter "widget"`)
+	})
+
+	t.Run("rejects a capability result", func(t *testing.T) {
+		r := require.New(t)
+
+		err := validate(t, &DescMethods{
+			Name:    "getSetter",
+			HTTP:    &DescHTTPMethod{Get: "/widgets/setter"},
+			Results: []*DescParamater{{Name: "setter", Type: "SetTemp"}},
+		}, &DescInterface{Name: "SetTemp"})
+		r.ErrorContains(err, "capability")
+	})
+
+	t.Run("rejects a capability parameter", func(t *testing.T) {
+		r := require.New(t)
+
+		err := validate(t, &DescMethods{
+			Name:       "adjust",
+			HTTP:       &DescHTTPMethod{Post: "/widgets/adjust"},
+			Parameters: []*DescParamater{{Name: "setter", Type: "SetTemp"}},
+		}, &DescInterface{Name: "SetTemp"})
+		r.ErrorContains(err, "capability")
+	})
+
+	t.Run("ignores methods with no annotation", func(t *testing.T) {
+		r := require.New(t)
+
+		r.NoError(validate(t, &DescMethods{
+			Name:    "internalOnly",
+			Results: []*DescParamater{{Name: "setter", Type: "SetTemp"}},
+		}, &DescInterface{Name: "SetTemp"}))
+	})
+}

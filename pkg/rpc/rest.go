@@ -3,6 +3,8 @@ package rpc
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"net/http"
 	"strconv"
 	"time"
@@ -16,8 +18,13 @@ import (
 // JSON.
 //
 // Only methods carrying an http: annotation in the IDL (i.e. with a non-nil
-// Method.HTTP) are exposed; capability-returning and streaming methods must be
-// left un-annotated.
+// Method.HTTP) are exposed; the generator rejects an annotation on a
+// capability-returning method, which cannot be expressed over REST.
+//
+// Auth matches the RPC transport: a non-public method requires an authenticated
+// identity in the request context. Populating that identity is the job of the
+// http.Handler stack in front of the mux, the same way handleCalls does it for
+// the QUIC transport.
 
 // RegisterREST mounts every HTTP-annotated method of iface onto mux. Route
 // patterns use Go 1.22 method+wildcard syntax ("GET /api/v1/apps/{app}"), so a
@@ -32,14 +39,62 @@ func RegisterREST(mux *http.ServeMux, iface *Interface) {
 	}
 }
 
+// maxRESTBodySize bounds how much of a request body the gateway will read
+// before rejecting it, so an oversized payload cannot be buffered into memory
+// wholesale on its way to the field map.
+const maxRESTBodySize = 4 << 20
+
 func restHandler(m Method) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		defer r.Body.Close()
 
-		call := &restCall{r: r, binding: m.HTTP}
+		// Mirror the auth enforcement handleCalls does for the RPC transport: a
+		// non-public method requires an authenticated identity in the context,
+		// which the surrounding http.Handler stack is responsible for putting
+		// there. Without this a method the QUIC transport would refuse could be
+		// called unauthenticated over REST.
+		if !m.Public && IdentityFromContext(r.Context()) == nil {
+			writeRESTStatus(w, http.StatusUnauthorized, restErrorBody{
+				Error: "authentication required",
+				Code:  "unauthorized",
+			})
+			return
+		}
+
+		r.Body = http.MaxBytesReader(w, r.Body, maxRESTBodySize)
+
+		fields, err := restFields(r, m.HTTP)
+		if err != nil {
+			status := http.StatusBadRequest
+
+			var tooLarge *http.MaxBytesError
+			if errors.As(err, &tooLarge) {
+				status = http.StatusRequestEntityTooLarge
+			}
+
+			writeRESTStatus(w, status, restErrorBody{
+				Error: err.Error(),
+				Code:  "validation-failure",
+			})
+			return
+		}
+
+		call := &restCall{r: r, binding: m.HTTP, fields: fields}
 
 		if err := m.Handler(r.Context(), call); err != nil {
 			writeRESTError(w, err)
+			return
+		}
+
+		// A field whose JSON type does not match the generated args struct is
+		// only discovered when the handler asks for its arguments, by which
+		// point the handler has already run. Reporting the 400 anyway beats
+		// returning a 200 built from silently-empty args.
+		if call.argErr != nil {
+			writeRESTStatus(w, http.StatusBadRequest, restErrorBody{
+				Error: "invalid arguments: " + call.argErr.Error(),
+				Code:  "validation-failure",
+			})
 			return
 		}
 
@@ -61,59 +116,86 @@ func restHandler(m Method) http.HandlerFunc {
 	}
 }
 
+// restFields assembles the JSON object backing a call's arguments from the
+// request body, path wildcards, and query string. Precedence, lowest to
+// highest: request body, query string, path parameters.
+//
+// It runs before the handler is dispatched so that a bad request can be
+// rejected with a 400 — rpc.Call.Args has no error return, so nothing after
+// dispatch can report a parse failure to the caller cleanly.
+func restFields(r *http.Request, binding *HTTPBinding) (map[string]json.RawMessage, error) {
+	fields := map[string]json.RawMessage{}
+
+	if binding.Body == "*" && r.Body != nil {
+		// An empty or absent body just leaves fields unset, matching the "all
+		// optional" shape of generated args. Malformed JSON is different: the
+		// caller sent something, so they should hear that it was rejected
+		// rather than get a confusing empty-args invocation.
+		err := json.NewDecoder(r.Body).Decode(&fields)
+		if err != nil && !errors.Is(err, io.EOF) {
+			return nil, fmt.Errorf("invalid request body: %w", err)
+		}
+	}
+
+	// Query params carry the non-path inputs of a bodyless verb (GET/DELETE).
+	// Each is coerced from its raw string into typed JSON per its declared kind,
+	// so bools, numbers, and timestamps land in their typed fields rather than
+	// as strings. A parameter that is present but does not parse for its kind is
+	// an error: silently dropping it would run the handler with a default value
+	// the caller never asked for.
+	query := r.URL.Query()
+	for _, p := range binding.Query {
+		if !query.Has(p.Name) {
+			continue
+		}
+
+		raw := query.Get(p.Name)
+
+		val, ok := coerceQueryValue(p.Kind, raw)
+		if !ok {
+			return nil, fmt.Errorf("query parameter %q: %q is not a valid %s", p.Name, raw, p.Kind)
+		}
+		fields[p.Name] = val
+	}
+
+	// Path parameters win: they are the canonical addressing of the resource.
+	// Path segments are always strings.
+	for _, name := range binding.PathParams {
+		if val := r.PathValue(name); val != "" {
+			fields[name] = jsonString(val)
+		}
+	}
+
+	return fields, nil
+}
+
 // restCall adapts an HTTP request to the rpc.Call interface. It supports the
 // data-plane of a call (arguments in, results out); the capability operations
 // panic because capabilities cannot be expressed over plain REST.
 type restCall struct {
 	r       *http.Request
 	binding *HTTPBinding
+	fields  map[string]json.RawMessage
+	argErr  error
 	results any
 }
 
 var _ Call = (*restCall)(nil)
 
-// Args assembles a JSON object from the request body, path wildcards, and query
-// string, then unmarshals it into v (a generated *XxxArgs, which implements
-// json.Unmarshaler over its json-tagged data struct). Precedence, lowest to
-// highest: request body, query string, path parameters.
+// Args unmarshals the request fields assembled by restFields into v (a
+// generated *XxxArgs, which implements json.Unmarshaler over its json-tagged
+// data struct). The Call interface gives Args no error return, so a failure is
+// recorded on argErr for restHandler to turn into a 400.
 func (c *restCall) Args(v any) {
-	fields := map[string]json.RawMessage{}
-
-	if c.binding.Body == "*" && c.r.Body != nil {
-		// Ignore decode errors: an empty or absent body just leaves fields
-		// unset, matching the "all optional" shape of generated args.
-		_ = json.NewDecoder(c.r.Body).Decode(&fields)
-	}
-
-	// Query params carry the non-path inputs of a bodyless verb (GET/DELETE).
-	// Each is coerced from its raw string into typed JSON per its declared kind,
-	// so bools, numbers, and timestamps land in their typed fields rather than
-	// as strings. A value that fails to parse for its kind is simply omitted.
-	query := c.r.URL.Query()
-	for _, p := range c.binding.Query {
-		raw := query.Get(p.Name)
-		if raw == "" {
-			continue
-		}
-		if val, ok := coerceQueryValue(p.Kind, raw); ok {
-			fields[p.Name] = val
-		}
-	}
-
-	// Path parameters win: they are the canonical addressing of the resource.
-	// Path segments are always strings.
-	for _, name := range c.binding.PathParams {
-		if val := c.r.PathValue(name); val != "" {
-			fields[name] = jsonString(val)
-		}
-	}
-
-	data, err := json.Marshal(fields)
+	data, err := json.Marshal(c.fields)
 	if err != nil {
+		c.argErr = err
 		return
 	}
 
-	_ = json.Unmarshal(data, v)
+	if err := json.Unmarshal(data, v); err != nil {
+		c.argErr = err
+	}
 }
 
 // coerceQueryValue turns a raw query-string value into typed JSON according to
@@ -219,21 +301,31 @@ type restErrorBody struct {
 func writeRESTError(w http.ResponseWriter, err error) {
 	body := restErrorBody{Error: err.Error()}
 
-	if em, ok := err.(ErrorMessage); ok {
+	// errors.As rather than a bare type assertion: handlers routinely wrap a
+	// cond.* error with fmt.Errorf("...: %w", err), and an assertion on the
+	// outer error would leave the code empty and fall through to a 500.
+	var em ErrorMessage
+	if errors.As(err, &em) {
 		body.Error = em.ErrorMessage()
 	}
-	if ec, ok := err.(ErrorCode); ok {
+	var ec ErrorCode
+	if errors.As(err, &ec) {
 		body.Code = ec.ErrorCode()
 	}
-	if ec, ok := err.(ErrorCategory); ok {
-		body.Category = ec.ErrorCategory()
+	var ecat ErrorCategory
+	if errors.As(err, &ecat) {
+		body.Category = ecat.ErrorCategory()
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(restStatusFor(err, body.Code))
+	writeRESTStatus(w, restStatusFor(err, body.Code), body)
+}
 
-	data, mErr := json.Marshal(body)
-	if mErr != nil {
+func writeRESTStatus(w http.ResponseWriter, status int, body restErrorBody) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+
+	data, err := json.Marshal(body)
+	if err != nil {
 		return
 	}
 	_, _ = w.Write(data)
@@ -247,7 +339,7 @@ func restStatusFor(err error, code string) int {
 		return http.StatusNotFound
 	case "conflict":
 		return http.StatusConflict
-	case "validation":
+	case "validation-failure":
 		return http.StatusBadRequest
 	}
 
