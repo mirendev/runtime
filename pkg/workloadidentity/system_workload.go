@@ -2,7 +2,6 @@ package workloadidentity
 
 import (
 	"fmt"
-	"strings"
 )
 
 // SystemWorkload names a Miren-owned workload that may receive an identity.
@@ -54,24 +53,14 @@ func (iss *Issuer) IssueSystemWorkloadToken(workload SystemWorkload, opts TokenO
 		return "", fmt.Errorf("unknown system workload %q", workload)
 	}
 
-	claims := iss.baseClaims(buildSystemWorkloadSubject(iss.organizationID, iss.clusterID, workload), opts)
+	subject, err := newSystemWorkloadSubject(iss.organizationID, iss.clusterID, workload)
+	if err != nil {
+		return "", fmt.Errorf("building system workload subject: %w", err)
+	}
+
+	claims := iss.baseClaims(subject, opts)
 	claims.SystemWorkload = workload
 	claims.IdentityType = IdentityTypeSystem
 
 	return iss.sign(claims)
-}
-
-// buildSystemWorkloadSubject renders a system workload's subject as
-// org:<org>:cluster:<cluster>:system:<name>, omitting the org and cluster
-// segments when the cluster has no registration to supply them.
-func buildSystemWorkloadSubject(orgID, clusterID string, workload SystemWorkload) string {
-	var parts []string
-	if orgID != "" {
-		parts = append(parts, "org:"+orgID)
-	}
-	if clusterID != "" {
-		parts = append(parts, "cluster:"+clusterID)
-	}
-	parts = append(parts, "system:"+string(workload))
-	return strings.Join(parts, ":")
 }

@@ -92,10 +92,10 @@ var _ TokenIssuer = (*Issuer)(nil)
 // IdentityType names the kind of principal a token represents.
 //
 // The value travels as its own claim rather than being inferred from the
-// subject: buildSubject interpolates a user-controlled app name, so
-// prefix-matching a subject string is a forgery vector. Tokens issued before
-// this claim existed carry no identity_type, which reads as "not a system
-// workload" and so fails closed for system-only resources.
+// subject. This lets verifiers authorize an identity class without reparsing
+// the subject grammar. Tokens issued before this claim existed carry no
+// identity_type, which reads as "not a system workload" and so fails closed for
+// system-only resources.
 //
 // It is a defined type so that switches over it are exhaustiveness-checked,
 // the way rpc.AuthMethod already is. Note that this buys nothing at the trust
@@ -264,7 +264,12 @@ func (iss *Issuer) IssueToken(app, sandboxID string) (string, error) {
 }
 
 func (iss *Issuer) IssueTokenWithOptions(app, sandboxID string, opts TokenOptions) (string, error) {
-	claims := iss.baseClaims(buildSubject(iss.organizationID, app, sandboxID), opts)
+	subject, err := newSandboxSubject(iss.organizationID, app, sandboxID)
+	if err != nil {
+		return "", fmt.Errorf("building sandbox workload subject: %w", err)
+	}
+
+	claims := iss.baseClaims(subject, opts)
 	claims.App = app
 	claims.SandboxID = sandboxID
 	claims.IdentityType = IdentityTypeSandbox
@@ -275,7 +280,7 @@ func (iss *Issuer) IssueTokenWithOptions(app, sandboxID string, opts TokenOption
 // baseClaims fills in everything common to every token the cluster issues:
 // registered claims, the cluster metadata external verifiers federate on, and
 // the normalized audience and lifetime.
-func (iss *Issuer) baseClaims(subject string, opts TokenOptions) WorkloadClaims {
+func (iss *Issuer) baseClaims(subject Subject, opts TokenOptions) WorkloadClaims {
 	now := time.Now()
 
 	aud := opts.Audience
@@ -297,7 +302,7 @@ func (iss *Issuer) baseClaims(subject string, opts TokenOptions) WorkloadClaims 
 	return WorkloadClaims{
 		RegisteredClaims: jwt.RegisteredClaims{
 			Issuer:    iss.issuerURL,
-			Subject:   subject,
+			Subject:   subject.String(),
 			Audience:  jwt.ClaimStrings(aud),
 			IssuedAt:  jwt.NewNumericDate(now),
 			NotBefore: jwt.NewNumericDate(now),
@@ -435,16 +440,4 @@ func generateAndWriteKey(keyPath string) (*signingKey, error) {
 	}
 
 	return kp, nil
-}
-
-func buildSubject(orgID, app, sandboxID string) string {
-	var parts []string
-	if orgID != "" {
-		parts = append(parts, "org:"+orgID)
-	}
-	if app != "" {
-		parts = append(parts, "app:"+app)
-	}
-	parts = append(parts, "sandbox:"+sandboxID)
-	return strings.Join(parts, ":")
 }

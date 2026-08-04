@@ -96,6 +96,19 @@ func TestIssueToken(t *testing.T) {
 	assert.NotNil(t, claims.ExpiresAt)
 }
 
+func TestIssueToken_RejectsAmbiguousSubject(t *testing.T) {
+	iss, err := NewIssuer(IssuerConfig{
+		DataPath:       t.TempDir(),
+		IssuerURL:      "https://example.miren.cloud",
+		OrganizationID: "org-123",
+	})
+	require.NoError(t, err)
+
+	_, err = iss.IssueToken("prod-api:sandbox:x", "sandbox/attacker")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `subject app value "prod-api:sandbox:x" contains reserved delimiter ":"`)
+}
+
 func TestIssueToken_NoOrg(t *testing.T) {
 	dir := t.TempDir()
 
@@ -337,24 +350,6 @@ func TestIssueTokenWithOptions_TTLClamping(t *testing.T) {
 	ttl2 := claims2.ExpiresAt.Sub(claims2.IssuedAt.Time)
 
 	assert.Equal(t, 60*time.Second, ttl2)
-}
-
-func TestBuildSubject(t *testing.T) {
-	tests := []struct {
-		org, app, sandbox string
-		expected          string
-	}{
-		{"org-1", "app-1", "sb-1", "org:org-1:app:app-1:sandbox:sb-1"},
-		{"", "app-1", "sb-1", "app:app-1:sandbox:sb-1"},
-		{"org-1", "", "sb-1", "org:org-1:sandbox:sb-1"},
-		{"", "", "sb-1", "sandbox:sb-1"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.expected, func(t *testing.T) {
-			assert.Equal(t, tt.expected, buildSubject(tt.org, tt.app, tt.sandbox))
-		})
-	}
 }
 
 // writeLegacyEdDSAKey writes a PKCS#8 PEM Ed25519 private key to keyPath,

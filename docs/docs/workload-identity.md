@@ -116,6 +116,12 @@ The `sub` (subject) encodes the workload's identity as a path-like string, omitt
 org:<organization_id>:app:<app>:sandbox:<sandbox_id>
 ```
 
+:::warning[Subject delimiter]
+Each label and value is one colon-delimited segment. Miren refuses to mint a
+token when any segment contains `:`, rather than emit a subject that could be
+decoded as a different identity.
+:::
+
 A decoded token payload looks like:
 
 ```json
