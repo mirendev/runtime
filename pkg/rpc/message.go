@@ -21,7 +21,9 @@ func frameReadLimit(maxFrame int) int64 {
 	if maxFrame <= 0 {
 		maxFrame = defaultMaxFrameData
 	}
-	return int64(maxFrame + frameReadHeadroom)
+	// Widen before adding so a frame cap near the max int can't wrap to a
+	// negative limit.
+	return int64(maxFrame) + frameReadHeadroom
 }
 
 // MessageConn is the pure message interface a message-oriented backend
