@@ -51,6 +51,10 @@ func newTCPConn(conn net.Conn, maxFrame int) *tcpConn {
 // an unresponsive peer would stall every other operation on the client.
 const tcpDialTimeout = 30 * time.Second
 
+// tcpHandshakeTimeout bounds the server-side TLS handshake for an accepted
+// connection, so an idle peer can't pin resources before the session starts.
+const tcpHandshakeTimeout = 10 * time.Second
+
 func (t *tcpConn) Send(b []byte) error {
 	t.wmu.Lock()
 	defer t.wmu.Unlock()
@@ -105,7 +109,7 @@ func (s *State) startTCPListener(ctx context.Context, addr string) error {
 		_ = ln.Close()
 	}()
 
-	s.log.Debug("starting tcp message listener", "addr", ln.Addr().String())
+	s.log.Info("starting tcp message listener", "addr", ln.Addr().String())
 
 	go func() {
 		for {
@@ -118,6 +122,22 @@ func (s *State) startTCPListener(ctx context.Context, addr string) error {
 			}
 
 			go func() {
+				// Bound the TLS handshake before starting the session. The
+				// handshake is otherwise lazy, run inside the first Recv with no
+				// deadline, so a peer that connects and sends nothing would pin a
+				// goroutine and fd indefinitely (slowloris). Clear the deadline
+				// once the handshake completes: msgmux has no per-operation
+				// deadline and the session is long-lived.
+				if tc, ok := conn.(*tls.Conn); ok {
+					_ = tc.SetDeadline(time.Now().Add(tcpHandshakeTimeout))
+					if herr := tc.HandshakeContext(ctx); herr != nil {
+						s.log.Debug("rpc: tcp tls handshake failed", "error", herr)
+						_ = conn.Close()
+						return
+					}
+					_ = tc.SetDeadline(time.Time{})
+				}
+
 				mc := newTCPConn(conn, 0)
 				if serr := s.ServeMessageConn(ctx, mc); serr != nil {
 					s.log.Debug("rpc: tcp session ended", "error", serr)

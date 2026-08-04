@@ -46,7 +46,7 @@ func (s *State) startWSListener(ctx context.Context, addr string) error {
 		_ = srv.Shutdown(context.Background())
 	}()
 
-	s.log.Debug("starting websocket/tcp listener", "addr", tcpLn.Addr().String())
+	s.log.Info("starting websocket/tcp listener", "addr", tcpLn.Addr().String())
 
 	go func() {
 		if serr := srv.ServeTLS(tcpLn, "", ""); serr != nil && serr != http.ErrServerClosed {

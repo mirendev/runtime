@@ -138,6 +138,12 @@ func (s *msgSession) AcceptStream(ctx context.Context) (rpcStream, error) {
 }
 
 func (s *msgSession) Close() error {
+	// Mark the session closed before closing the conn, rather than waiting for
+	// readPump to notice the conn error asynchronously. Otherwise OpenStreamSync
+	// could register a stream after Close, and AcceptStream or blocked readers
+	// could stay parked until the conn error propagates. shutdown is idempotent,
+	// so readPump calling it again on the conn error is harmless.
+	s.shutdown(errSessionClosed)
 	return s.conn.Close()
 }
 
