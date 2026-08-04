@@ -8,10 +8,6 @@ description: "List all registered runners"
 
 List all registered runners
 
-:::note
-This command requires the `distributedrunners` [labs feature](/labs) to be enabled.
-:::
-
 ## Usage
 
 ```bash

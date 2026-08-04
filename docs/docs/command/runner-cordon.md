@@ -8,10 +8,6 @@ description: "Mark a runner unschedulable without stopping its sandboxes"
 
 Mark a runner unschedulable without stopping its sandboxes
 
-:::note
-This command requires the `distributedrunners` [labs feature](/labs) to be enabled.
-:::
-
 ## Usage
 
 ```bash

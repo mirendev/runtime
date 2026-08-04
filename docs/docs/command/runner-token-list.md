@@ -8,10 +8,6 @@ description: "List all join tokens"
 
 List all join tokens
 
-:::note
-This command requires the `distributedrunners` [labs feature](/labs) to be enabled.
-:::
-
 ## Usage
 
 ```bash

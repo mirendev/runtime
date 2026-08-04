@@ -8,10 +8,6 @@ description: "Rollback runner to previous version"
 
 Rollback runner to previous version
 
-:::note
-This command requires the `distributedrunners` [labs feature](/labs) to be enabled.
-:::
-
 ## Usage
 
 ```bash

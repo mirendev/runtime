@@ -8,10 +8,6 @@ description: "Show runner health and configuration"
 
 Show runner health and configuration
 
-:::note
-This command requires the `distributedrunners` [labs feature](/labs) to be enabled.
-:::
-
 ## Usage
 
 ```bash

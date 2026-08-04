@@ -8,10 +8,6 @@ description: "Show miren-runner systemd service status"
 
 Show miren-runner systemd service status
 
-:::note
-This command requires the `distributedrunners` [labs feature](/labs) to be enabled.
-:::
-
 ## Usage
 
 ```bash

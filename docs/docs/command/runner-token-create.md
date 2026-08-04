@@ -8,10 +8,6 @@ description: "Create a join token for a runner"
 
 Create a join token for a runner
 
-:::note
-This command requires the `distributedrunners` [labs feature](/labs) to be enabled.
-:::
-
 ## Usage
 
 ```bash
