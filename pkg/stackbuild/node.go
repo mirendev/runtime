@@ -224,6 +224,15 @@ func (s *NodeStack) GenerateLLB(dir string, opts BuildOptions) (*llb.State, erro
 			llb.Shlex(buildCmd),
 			llb.WithCustomName("[phase] Building Next.js application"),
 		).Root()
+
+		// The build runs as root, so the generated tree would be root-owned while
+		// the image runs as the app user. Next writes its ISR, image, and prerender
+		// caches beneath .next at runtime, so hand the tree over before export or
+		// those writes fail with EACCES.
+		state = state.Dir("/app").Run(
+			llb.Shlex("chown -R app:app /app/.next"),
+			llb.WithCustomName("[phase] Fixing Next.js build permissions"),
+		).Root()
 	}
 
 	state = s.applyOnBuild(state, opts)
@@ -275,16 +284,6 @@ func (s *NodeStack) parsePackageJSON() {
 }
 
 func (s *NodeStack) WebCommand() string {
-	// Next.js is served with `next start`; bind to the platform-provided port.
-	// Resolve the local `next` binary through the detected package manager so a
-	// yarn project doesn't shell out to npm's npx (matches frameworkBuildCommand).
-	if s.hasNext {
-		if s.packageManager == nodePkgYarn {
-			return "yarn next start -p $PORT"
-		}
-		return "npx next start -p $PORT"
-	}
-
 	// Determine the runner based on detected package manager
 	var runner string
 	if s.packageManager == nodePkgYarn {
@@ -293,9 +292,30 @@ func (s *NodeStack) WebCommand() string {
 		runner = "npm run"
 	}
 
-	// Check for common web server scripts in order of preference
+	// An explicit start script always wins, including for Next.js: it may launch
+	// a custom server, do setup work, or pass extra flags that a synthesized
+	// `next start` would silently drop. Next reads PORT from the environment, so
+	// going through the script still binds the platform-provided port.
 	if s.scripts != nil {
-		for _, script := range []string{"start", "serve", "server"} {
+		if _, ok := s.scripts["start"]; ok {
+			return runner + " start"
+		}
+	}
+
+	// No start script: a Next.js app is served with `next start`, bound to the
+	// platform-provided port. Resolve the local `next` binary through the
+	// detected package manager so a yarn project doesn't shell out to npm's npx
+	// (matches frameworkBuildCommand).
+	if s.hasNext {
+		if s.packageManager == nodePkgYarn {
+			return "yarn next start -p $PORT"
+		}
+		return "npx next start -p $PORT"
+	}
+
+	// Check for the remaining web server scripts in order of preference
+	if s.scripts != nil {
+		for _, script := range []string{"serve", "server"} {
 			if _, ok := s.scripts[script]; ok {
 				return runner + " " + script
 			}

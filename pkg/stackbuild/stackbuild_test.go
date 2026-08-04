@@ -421,12 +421,32 @@ func TestNodeNextjs(t *testing.T) {
 			},
 			wantNext:  true,
 			wantBuild: "npm run build",
-			wantWeb:   "npx next start -p $PORT",
+			wantWeb:   "npm run start",
 		},
 		{
 			name: "next with yarn",
 			files: map[string]string{
 				"package.json": `{"name":"app","dependencies":{"next":"14.0.0"},"scripts":{"build":"next build","start":"next start"}}`,
+				"yarn.lock":    "{}",
+			},
+			wantNext:  true,
+			wantBuild: "yarn build",
+			wantWeb:   "yarn start",
+		},
+		{
+			name: "next with a custom start script is left alone",
+			files: map[string]string{
+				"package.json":      `{"name":"app","dependencies":{"next":"14.0.0"},"scripts":{"build":"next build","start":"node server.js"}}`,
+				"package-lock.json": "{}",
+			},
+			wantNext:  true,
+			wantBuild: "npm run build",
+			wantWeb:   "npm run start",
+		},
+		{
+			name: "next with yarn and no start script falls back to next start",
+			files: map[string]string{
+				"package.json": `{"name":"app","dependencies":{"next":"14.0.0"},"scripts":{"build":"next build"}}`,
 				"yarn.lock":    "{}",
 			},
 			wantNext:  true,
