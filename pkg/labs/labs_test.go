@@ -27,7 +27,7 @@ func TestDistributedRunnersEnabledByDefault(t *testing.T) {
 	Reset()
 
 	// GA: distributed runners are on by default with no flags set.
-	Init(nil, nil)
+	Init(quiet(), nil)
 
 	if !DistributedRunners() {
 		t.Error("DistributedRunners should be enabled by default")
