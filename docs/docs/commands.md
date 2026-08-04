@@ -248,6 +248,7 @@ Complete reference for all `miren` CLI commands.
 | [`miren server register status`](/command/server-register-status) | Show cluster registration status |
 | [`miren server status`](/command/server-status) | Show miren service status |
 | [`miren server uninstall`](/command/server-uninstall) | Remove systemd service for miren server |
+| [`miren server unregister`](/command/server-unregister) | Detach this cluster from miren.cloud |
 | [`miren server upgrade`](/command/server-upgrade) | Upgrade miren server |
 | [`miren server upgrade rollback`](/command/server-upgrade-rollback) | Rollback server to previous version |
 

@@ -108,7 +108,8 @@ func Register(ctx *Context, opts RegisterOptions) error {
 
 			return nil
 		} else if existing.Status == "approved" {
-			return fmt.Errorf("cluster already registered as %s (ID: %s)", existing.ClusterName, existing.ClusterID)
+			return fmt.Errorf("cluster already registered as %s (ID: %s); run 'miren server unregister' to detach it first",
+				existing.ClusterName, existing.ClusterID)
 		}
 		// If pending but expired, we'll start fresh
 	}
