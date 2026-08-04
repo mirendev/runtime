@@ -1,5 +1,5 @@
 # Build stage
-FROM golang:1.25 AS builder
+FROM golang:1.26 AS builder
 
 # Install build dependencies
 RUN apt-get update && apt-get install -y \
