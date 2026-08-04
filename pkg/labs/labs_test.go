@@ -23,6 +23,17 @@ func TestDisableFeatureWithPrefix(t *testing.T) {
 	}
 }
 
+func TestDistributedRunnersEnabledByDefault(t *testing.T) {
+	Reset()
+
+	// GA: distributed runners are on by default with no flags set.
+	Init(nil, nil)
+
+	if !DistributedRunners() {
+		t.Error("DistributedRunners should be enabled by default")
+	}
+}
+
 func TestCaseInsensitiveFeatureNames(t *testing.T) {
 	Reset()
 
