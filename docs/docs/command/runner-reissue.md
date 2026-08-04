@@ -8,10 +8,6 @@ description: "Rotate this runner's certificate in place (requires a still-valid 
 
 Rotate this runner's certificate in place (requires a still-valid cert), keeping its identity
 
-:::note
-This command requires the `distributedrunners` [labs feature](/labs) to be enabled.
-:::
-
 ## Usage
 
 ```bash

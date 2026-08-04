@@ -8,10 +8,6 @@ description: "Install systemd service for miren runner"
 
 Install systemd service for miren runner
 
-:::note
-This command requires the `distributedrunners` [labs feature](/labs) to be enabled.
-:::
-
 ## Usage
 
 ```bash

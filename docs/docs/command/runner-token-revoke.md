@@ -8,10 +8,6 @@ description: "Revoke a join token"
 
 Revoke a join token
 
-:::note
-This command requires the `distributedrunners` [labs feature](/labs) to be enabled.
-:::
-
 ## Usage
 
 ```bash

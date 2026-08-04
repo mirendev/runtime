@@ -7,7 +7,7 @@
 #
 # Usage: ./hack/gen-command-docs
 #
-# Requires bin/miren to be built first (make bin/miren).
+# Requires bin/miren to be built first (make bin/miren), plus jq and yq.
 
 set -euo pipefail
 
@@ -35,6 +35,17 @@ jq -c '
     ((.subcommands // [])[] | flatten_with_subs);
   [.commands[] | flatten_with_subs]
 ' "$WORK_DIR/help.json" > "$WORK_DIR/all_commands.json"
+
+# A feature keeps its gating after it ships enabled, so operators retain an
+# escape hatch (`--labs -<name>`). That means the help JSON still reports a
+# requiredFeature for commands nobody has to opt into anymore. What decides
+# whether a reader has anything to do is the default in features.yaml, not the
+# presence of the gate, so that default drives the note and the index badge.
+DEFAULT_ON_FEATURES=$(yq -o=json -I=0 '[.features[] | select(.default) | .name]' "$ROOT_DIR/pkg/labs/features.yaml")
+
+is_default_on() {
+  jq -e --arg f "$1" 'index($f) != null' <<< "$DEFAULT_ON_FEATURES" > /dev/null
+}
 
 # Prepare output directory
 rm -rf "$OUT_DIR"
@@ -150,9 +161,9 @@ generate_command_doc() {
     # --- Required feature flag ---
     local required_feature
     required_feature=$(echo "$cmd_json" | jq -r '.requiredFeature // ""')
-    if [ -n "$required_feature" ]; then
+    if [ -n "$required_feature" ] && ! is_default_on "$required_feature"; then
       echo ""
-      echo ":::note"
+      echo ":::note[Labs feature]"
       echo "This command requires the \`$required_feature\` [labs feature](/labs) to be enabled."
       echo ":::"
     fi
@@ -316,7 +327,7 @@ generate_commands_index() {
   local outfile="$ROOT_DIR/docs/docs/commands.md"
 
   # Build main command sections (excluding internal and debug)
-  jq -r '
+  jq -r --argjson on "$DEFAULT_ON_FEATURES" '
     [.[] | select(
       (.path | startswith("internal") | not) and
       (.path | startswith("debug") | not) and
@@ -330,20 +341,22 @@ generate_commands_index() {
     "| Command | Description |\n|---------|-------------|\n" +
     ([.[] |
       (.path | gsub(" "; "-")) as $filename |
-      (if (.requiredFeature // "") != "" then " _(`\(.requiredFeature)`)_" else "" end) as $badge |
+      (.requiredFeature // "") as $feat |
+      (if $feat != "" and ($on | index($feat)) == null then " _(`\($feat)`)_" else "" end) as $badge |
       "| [`miren \(.path)`](/command/\($filename)) | \(.usage)\($badge) |"
     ] | join("\n")) +
     "\n"
   ' "$WORK_DIR/all_commands.json" > "$WORK_DIR/command_sections.md"
 
   # Build debug command section
-  jq -r '
+  jq -r --argjson on "$DEFAULT_ON_FEATURES" '
     [.[] | select(.path | startswith("debug"))] |
     if length > 0 then
       "| Command | Description |\n|---------|-------------|\n" +
       ([.[] |
         (.path | gsub(" "; "-")) as $filename |
-        (if (.requiredFeature // "") != "" then " _(`\(.requiredFeature)`)_" else "" end) as $badge |
+        (.requiredFeature // "") as $feat |
+        (if $feat != "" and ($on | index($feat)) == null then " _(`\($feat)`)_" else "" end) as $badge |
         "| [`miren \(.path)`](/command/\($filename)) | \(.usage)\($badge) |"
       ] | join("\n")) +
       "\n"

@@ -8,10 +8,6 @@ description: "Remove systemd service for miren runner"
 
 Remove systemd service for miren runner
 
-:::note
-This command requires the `distributedrunners` [labs feature](/labs) to be enabled.
-:::
-
 ## Usage
 
 ```bash

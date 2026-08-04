@@ -8,10 +8,6 @@ description: "Remove a registered runner and clean up resources"
 
 Remove a registered runner and clean up resources
 
-:::note
-This command requires the `distributedrunners` [labs feature](/labs) to be enabled.
-:::
-
 ## Usage
 
 ```bash

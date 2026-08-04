@@ -8,10 +8,6 @@ description: "Cordon a runner and evict its sandboxes onto other nodes"
 
 Cordon a runner and evict its sandboxes onto other nodes
 
-:::note
-This command requires the `distributedrunners` [labs feature](/labs) to be enabled.
-:::
-
 ## Usage
 
 ```bash

@@ -8,10 +8,6 @@ description: "Join this machine to a coordinator as a runner"
 
 Join this machine to a coordinator as a runner
 
-:::note
-This command requires the `distributedrunners` [labs feature](/labs) to be enabled.
-:::
-
 ## Usage
 
 ```bash

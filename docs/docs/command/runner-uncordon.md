@@ -8,10 +8,6 @@ description: "Make a cordoned runner eligible for scheduling again"
 
 Make a cordoned runner eligible for scheduling again
 
-:::note
-This command requires the `distributedrunners` [labs feature](/labs) to be enabled.
-:::
-
 ## Usage
 
 ```bash

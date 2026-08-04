@@ -8,10 +8,6 @@ description: "Start this machine as a distributed runner"
 
 Start this machine as a distributed runner
 
-:::note
-This command requires the `distributedrunners` [labs feature](/labs) to be enabled.
-:::
-
 ## Usage
 
 ```bash
