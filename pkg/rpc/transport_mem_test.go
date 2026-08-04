@@ -96,8 +96,15 @@ func TestMemTransport(t *testing.T) {
 
 		mc := &example.EmitTempsClient{Client: c}
 
-		var vals []float32
+		// The callback runs on the transport goroutine while the assertion reads
+		// from the test's, so the accumulator needs a lock.
+		var (
+			mu   sync.Mutex
+			vals []float32
+		)
 		recv := stream.StreamRecv(func(val float32) error {
+			mu.Lock()
+			defer mu.Unlock()
 			vals = append(vals, val)
 			return nil
 		})
@@ -106,6 +113,9 @@ func TestMemTransport(t *testing.T) {
 		r.NoError(err)
 
 		time.Sleep(time.Second)
+
+		mu.Lock()
+		defer mu.Unlock()
 		r.Equal([]float32{42, 100}, vals)
 	})
 
@@ -136,8 +146,13 @@ func TestMemTransport(t *testing.T) {
 				// Each call advertises its own emitter capability. They all ride
 				// the same session, so the session must route each server-initiated
 				// callback back to the call that advertised it.
-				var vals []float32
+				var (
+					vmu  sync.Mutex
+					vals []float32
+				)
 				recv := stream.StreamRecv(func(val float32) error {
+					vmu.Lock()
+					defer vmu.Unlock()
 					vals = append(vals, val)
 					return nil
 				})
@@ -151,7 +166,10 @@ func TestMemTransport(t *testing.T) {
 				}
 
 				time.Sleep(500 * time.Millisecond)
-				got[i] = vals
+
+				vmu.Lock()
+				got[i] = append([]float32(nil), vals...)
+				vmu.Unlock()
 			}()
 		}
 

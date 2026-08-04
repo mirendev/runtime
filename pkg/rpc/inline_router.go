@@ -95,6 +95,14 @@ func (r *inlineRegistry) lookup(oid OID) (*NetworkClient, *InlineCapability, boo
 	return e.client, e.capa, ok
 }
 
+// discardArgs consumes the one CBOR args value that follows a streamRequest,
+// keeping a pooled stream in sync when a call is rejected before its handler
+// reads them. It returns false if the stream is unusable.
+func discardArgs(dec *cbor.Decoder) bool {
+	var discard cbor.RawMessage
+	return dec.Decode(&discard) == nil
+}
+
 // acceptInlineStreams accepts server-initiated streams on sess and serves the
 // inline-capability calls they carry.
 func (s *State) acceptInlineStreams(ctx context.Context, sess rpcSession, lookup inlineLookup) {
@@ -134,12 +142,21 @@ func (s *State) serveInlineCalls(ctx context.Context, dec *cbor.Decoder, enc *cb
 		case "call":
 			c, iface, ok := lookup(rs.OID)
 			if !ok {
+				// The caller writes the args right after the streamRequest;
+				// leaving them unread would desync the next decode on this
+				// pooled stream, so discard them before replying.
+				if !discardArgs(dec) {
+					return
+				}
 				_ = enc.Encode(refResponse{Status: "error", Error: "unknown capability"})
 				continue
 			}
 
 			mm := iface.methods[rs.Method]
 			if mm.Handler == nil {
+				if !discardArgs(dec) {
+					return
+				}
 				_ = enc.Encode(refResponse{Status: "error", Error: "unknown method"})
 				continue
 			}

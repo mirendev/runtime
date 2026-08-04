@@ -4,6 +4,7 @@ import (
 	"context"
 	"net"
 	"net/http"
+	"time"
 )
 
 // startWSListener starts a TCP listener serving the RPC protocol over TLS.
@@ -30,6 +31,11 @@ func (s *State) startWSListener(ctx context.Context, addr string) error {
 	srv := &http.Server{
 		Handler:   mux,
 		TLSConfig: tlsCfg,
+		// Bound the pre-upgrade phase so idle half-open connections from
+		// untrusted clients can't accumulate (slowloris). ReadTimeout/
+		// WriteTimeout are unsuitable here: the connection is hijacked for a
+		// long-lived WebSocket, and only the handshake needs a deadline.
+		ReadHeaderTimeout: 10 * time.Second,
 	}
 
 	s.httpSrv = srv

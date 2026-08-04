@@ -10,6 +10,20 @@ import (
 // frames. Override it per session with WithMaxFrameSize.
 const defaultMaxFrameData = 1 << 20 // 1 MiB
 
+// frameReadHeadroom is the slack a transport allows over the payload frame cap
+// for msgmux's own CBOR framing when bounding how much it will buffer from an
+// untrusted peer before the length is validated.
+const frameReadHeadroom = 1 << 16
+
+// frameReadLimit is the largest inbound message a transport should accept for a
+// given payload frame cap. A zero cap uses the default.
+func frameReadLimit(maxFrame int) int64 {
+	if maxFrame <= 0 {
+		maxFrame = defaultMaxFrameData
+	}
+	return int64(maxFrame + frameReadHeadroom)
+}
+
 // MessageConn is the pure message interface a message-oriented backend
 // implements: a reliable, ordered, bidirectional, point-to-point pipe of
 // discrete byte messages between two peers. The framework layers a stream

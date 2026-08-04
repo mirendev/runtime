@@ -936,11 +936,17 @@ func (c *NetworkClient) handleCallStream(
 	enc := cbor.NewEncoder(ctrl)
 	// On the message transport the control stream is also the operation stream,
 	// so it must lead with the opRequest the server's router decodes; the HTTP
-	// transports pass a nil prelude.
+	// transports pass a nil prelude. A dropped error here means the server never
+	// gets a dispatchable request, so the caller must see the real cause rather
+	// than an opaque read failure downstream.
 	if prelude != nil {
-		enc.Encode(prelude)
+		if err := enc.Encode(prelude); err != nil {
+			return err
+		}
 	}
-	enc.Encode(args)
+	if err := enc.Encode(args); err != nil {
+		return err
+	}
 
 	dec := cbor.NewDecoder(ctrl)
 

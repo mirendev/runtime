@@ -361,6 +361,36 @@ func TestAdoptedMessageConn(t *testing.T) {
 		r.Equal(rpc.AuthMethodJWT, seen.Method)
 	})
 
+	// A token that is present but fails to authenticate must fail the call, not
+	// silently downgrade to the (weaker) capability identity.
+	t.Run("rejects a present-but-invalid bearer token", func(t *testing.T) {
+		r := require.New(t)
+		ctx := t.Context()
+
+		// identity nil => the token did not authenticate.
+		auth := &recordingAuthenticator{identity: nil}
+
+		ss, err := rpc.NewState(ctx, rpc.WithSkipVerify, rpc.WithAuthenticator(auth))
+		r.NoError(err)
+
+		var seen *rpc.Identity
+		ss.Server().ExposeValue("meter", example.AdaptMeter(&identityMeter{seen: &seen}))
+
+		cs, err := rpc.NewState(ctx, rpc.WithSkipVerify, rpc.WithBearerToken("bad-token"))
+		r.NoError(err)
+
+		serverEnd, clientEnd := newEnvelopePair()
+		go ss.ServeMessageConn(ctx, serverEnd) //nolint:errcheck // ends with ctx
+
+		c, err := cs.ClientFromMessageConn(ctx, clientEnd, "meter")
+		r.NoError(err)
+
+		mc := &example.MeterClient{Client: c}
+		_, err = mc.ReadTemperature(ctx, "test")
+		r.Error(err)
+		r.Nil(seen, "handler must not run on an invalid token")
+	})
+
 	// An authorization denial must reach the caller as a permission error. It
 	// travels as its own opReply status, so without explicit handling it surfaces
 	// as an unrecognised-protocol-status error instead.
@@ -410,6 +440,10 @@ func TestAdoptedMessageConn(t *testing.T) {
 		r.NoError(err)
 		r.Equal(float32(42), res.Reading().Temperature())
 
-		r.NotZero(conn.count())
+		// With a 64-byte cap the request and response payloads each span several
+		// frames, so many more envelopes cross the boundary than the handful an
+		// unsplit exchange (open, opRequest, args, reply, result, close) needs. A
+		// low count would mean the cap was ignored.
+		r.Greater(conn.count(), int64(10))
 	})
 }

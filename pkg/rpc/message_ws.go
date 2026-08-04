@@ -58,9 +58,11 @@ func dialWSMessageConn(ctx context.Context, remote string, tlsCfg *tls.Config) (
 		return nil, err
 	}
 
-	// A single frame may legitimately be as large as the session's frame cap;
-	// the default read limit is far below that.
-	c.SetReadLimit(-1)
+	// A single frame may be as large as the session's frame cap, well above
+	// coder/websocket's default. Bound it to the frame cap plus framing headroom
+	// rather than removing the ceiling, so a peer can't make us buffer without
+	// limit before msgmux validates the frame.
+	c.SetReadLimit(frameReadLimit(0))
 
 	return &wsConn{c: c, ctx: ctx}, nil
 }
@@ -81,7 +83,9 @@ func (s *State) serveWSUpgrade(lifeCtx context.Context, w http.ResponseWriter, r
 		return
 	}
 
-	c.SetReadLimit(-1)
+	// Untrusted clients: bound how much we'll buffer per message rather than
+	// removing the ceiling. See dialWSMessageConn.
+	c.SetReadLimit(frameReadLimit(0))
 
 	go func() {
 		conn := &wsConn{c: c, ctx: lifeCtx}

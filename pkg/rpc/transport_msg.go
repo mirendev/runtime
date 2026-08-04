@@ -92,6 +92,25 @@ func (t *msgOpTransport) roundTrip(ctx context.Context, req opRequest, payload a
 	}
 	done := func() { _ = st.Close() }
 
+	// Honor cancellation for the write/read phase: without this a cancelled
+	// caller blocks in dec.Decode until the peer replies or the session dies.
+	// Mirrors the callstream path's guard. The watcher lives until done().
+	if ctx.Done() != nil {
+		stop := make(chan struct{})
+		go func() {
+			select {
+			case <-ctx.Done():
+				st.CancelRead(cancelReadCode)
+			case <-stop:
+			}
+		}()
+		inner := done
+		done = func() {
+			close(stop)
+			inner()
+		}
+	}
+
 	req.Version = currentProtocolVersion
 
 	enc := cbor.NewEncoder(st)
@@ -317,6 +336,10 @@ func (c *NetworkClient) msgDerefOID(ctx context.Context, oid OID) error {
 }
 
 func (c *NetworkClient) msgUnaryCall(ctx context.Context, method string, args, result any) error {
+	// reresolved bounds the retry to a single re-resolution: without it a server
+	// that keeps answering unknown-capability while re-resolution keeps
+	// succeeding would spin issuing RPCs forever.
+	reresolved := false
 	for {
 		ts := nowStamp()
 		req := opRequest{
@@ -340,7 +363,8 @@ func (c *NetworkClient) msgUnaryCall(ctx context.Context, method string, args, r
 			return err
 		case "unknown-capability":
 			done()
-			if c.capa != nil && c.capa.RestoreState != nil {
+			if !reresolved && c.capa != nil && c.capa.RestoreState != nil {
+				reresolved = true
 				if rerr := c.msgReresolveCapability(c.capa.RestoreState); rerr == nil {
 					continue
 				}

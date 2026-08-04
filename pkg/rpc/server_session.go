@@ -218,20 +218,25 @@ func (s *Server) msgReresolve(dec *cbor.Decoder, enc *cbor.Encoder, req opReques
 		}
 		iface = pi
 	} else {
+		category = rs.Category
 		s.mu.Lock()
 		res, ok := s.resolvers[rs.Category]
 		s.mu.Unlock()
-		if ok {
-			var err error
-			iface, err = res.ReconstructFromState(&rs)
-			if err != nil {
-				writeReply(enc, opReply{Status: "ok"}, lookupResponse{Error: "failed to resolve: " + err.Error()})
-				return
-			}
-			if iface == nil {
-				writeReply(enc, opReply{Status: "ok"}, lookupResponse{Error: "unable to restore capability"})
-				return
-			}
+		if !ok {
+			// No resolver means we can't rebuild the interface; without this
+			// guard iface stays nil and assignCapability dereferences it.
+			writeReply(enc, opReply{Status: "ok"}, lookupResponse{Error: "no resolver for category: " + rs.Category})
+			return
+		}
+		var err error
+		iface, err = res.ReconstructFromState(&rs)
+		if err != nil {
+			writeReply(enc, opReply{Status: "ok"}, lookupResponse{Error: "failed to resolve: " + err.Error()})
+			return
+		}
+		if iface == nil {
+			writeReply(enc, opReply{Status: "ok"}, lookupResponse{Error: "unable to restore capability"})
+			return
 		}
 	}
 
@@ -272,10 +277,15 @@ func (s *Server) msgRef(enc *cbor.Encoder, req opRequest) {
 	}
 
 	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if hc, ok := s.objects[req.OID]; ok {
+	hc, ok := s.objects[req.OID]
+	if ok {
 		hc.refs.Add(1)
+	}
+	s.mu.Unlock()
+
+	// Write after releasing the lock: a slow or backpressured peer must not
+	// block every other operation on this Server.
+	if ok {
 		writeReply(enc, opReply{Status: "ok"}, refResponse{Status: "ok"})
 	} else {
 		writeReply(enc, opReply{Status: "ok"}, refResponse{Error: "unknown capability: " + string(req.OID)})
@@ -354,7 +364,13 @@ func (s *Server) prepareMethodCall(ctx context.Context, req opRequest) (context.
 	// capability does — a user or a workload rather than a key. Fall back to the
 	// verified signature, which is all a message transport otherwise offers:
 	// there is no TLS client certificate to inspect.
-	identity := s.msgIdentity(ctx, req, iface.pub)
+	identity, ok := s.msgIdentity(ctx, req, iface.pub)
+	if !ok {
+		// A token was presented but did not authenticate. Fail closed rather
+		// than silently downgrading to the capability identity, which would let
+		// a forged or expired token still execute.
+		return ctx, nil, Method{}, nil, opReply{Status: "forbidden", Error: "invalid bearer token"}, false
+	}
 	ctx = ContextWithIdentity(ctx, identity)
 
 	if len(req.Trace) > 0 {
@@ -376,11 +392,16 @@ func (s *Server) prepareMethodCall(ctx context.Context, req opRequest) (context.
 
 // msgIdentity resolves the caller's identity for an operation on a message
 // transport. The capability signature has already been verified by the caller.
-func (s *Server) msgIdentity(ctx context.Context, req opRequest, capaPub ed25519.PublicKey) *Identity {
+//
+// With no bearer token the identity is the capability's key. With a token, the
+// authenticator's identity is used; a token that is present but fails to
+// authenticate returns ok=false so the caller can fail closed rather than
+// downgrade to the weaker capability identity.
+func (s *Server) msgIdentity(ctx context.Context, req opRequest, capaPub ed25519.PublicKey) (*Identity, bool) {
 	signed := &Identity{Subject: base58.Encode(capaPub), Method: AuthMethodSigned}
 
 	if req.Bearer == "" || s.state.authenticator == nil {
-		return signed
+		return signed, true
 	}
 
 	identity, err := s.state.authenticator.Authenticate(ctx, &Credentials{
@@ -388,13 +409,13 @@ func (s *Server) msgIdentity(ctx context.Context, req opRequest, capaPub ed25519
 	})
 	if err != nil {
 		s.state.log.Warn("rpc: bearer authentication failed", "error", err)
-		return signed
+		return nil, false
 	}
 	if identity == nil {
-		return signed
+		return nil, false
 	}
 
-	return identity
+	return identity, true
 }
 
 func (s *Server) msgCall(ctx context.Context, dec *cbor.Decoder, enc *cbor.Encoder, req opRequest) {

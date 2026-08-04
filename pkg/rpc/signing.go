@@ -60,8 +60,16 @@ func freshTimestamp(ts string) error {
 	if err != nil {
 		return fmt.Errorf("invalid timestamp: %w", err)
 	}
-	if time.Since(t) > authFreshness {
+	skew := time.Since(t)
+	if skew > authFreshness {
 		return fmt.Errorf("timestamp too old")
+	}
+	// A future timestamp is bounded too: otherwise a request stamped far ahead
+	// would silently extend the replay window (its "age" only starts counting
+	// once real time catches up). The same window in both directions tolerates
+	// modest clock skew.
+	if skew < -authFreshness {
+		return fmt.Errorf("timestamp too far in the future")
 	}
 	return nil
 }

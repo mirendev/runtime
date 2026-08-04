@@ -10,6 +10,7 @@ import (
 	"net"
 	"strings"
 	"sync"
+	"time"
 )
 
 // tcpFrameHeader is the 4-byte big-endian length prefix that turns a TCP byte
@@ -41,9 +42,14 @@ func newTCPConn(conn net.Conn, maxFrame int) *tcpConn {
 		r:    bufio.NewReader(conn),
 		// A frame carries a payload plus msgmux's own CBOR envelope, so allow
 		// headroom over the payload bound rather than rejecting valid frames.
-		maxFrame: maxFrame + (1 << 16),
+		maxFrame: maxFrame + frameReadHeadroom,
 	}
 }
+
+// tcpDialTimeout bounds a TCP message-transport dial (connect plus TLS
+// handshake). The dial runs under the transport mutex, so an unbounded one on
+// an unresponsive peer would stall every other operation on the client.
+const tcpDialTimeout = 30 * time.Second
 
 func (t *tcpConn) Send(b []byte) error {
 	t.wmu.Lock()
@@ -145,10 +151,18 @@ func (c *NetworkClient) setupTCPTransport() {
 	cfg := tlsCfg.Clone()
 	cfg.NextProtos = nil
 
+	dialer := &tls.Dialer{
+		NetDialer: &net.Dialer{Timeout: tcpDialTimeout},
+		Config:    cfg,
+	}
+
 	c.ops = &msgOpTransport{
 		owner: c,
 		dial: func() (MessageConn, error) {
-			conn, err := tls.Dial("tcp", remote, cfg)
+			ctx, cancel := context.WithTimeout(c.State.top, tcpDialTimeout)
+			defer cancel()
+
+			conn, err := dialer.DialContext(ctx, "tcp", remote)
 			if err != nil {
 				return nil, err
 			}

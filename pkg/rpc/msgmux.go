@@ -99,6 +99,13 @@ func (s *msgSession) sendFrame(f msgFrame) error {
 }
 
 func (s *msgSession) OpenStreamSync(ctx context.Context) (rpcStream, error) {
+	// A already-cancelled caller shouldn't open a stream. The subsequent
+	// sendFrame still blocks on an unresponsive conn.Send (a MessageConn has no
+	// context), so this bounds the common case, not a mid-send stall.
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
 	s.mu.Lock()
 	if s.closed {
 		err := s.closeErr
@@ -248,6 +255,10 @@ type msgStream struct {
 	wmu         sync.Mutex
 	synSent     bool
 	localClosed bool
+	// writeErr, once set, fails all further writes. It is set when the stream is
+	// reset or cancelled from either side, so a peer RST or a local CancelRead
+	// stops us writing into a stream the peer has already dropped.
+	writeErr error
 }
 
 func (st *msgStream) feed(data []byte, fin bool) {
@@ -269,6 +280,18 @@ func (st *msgStream) fail(err error) {
 	}
 	st.readCond.Broadcast()
 	st.readMu.Unlock()
+
+	// A reset or a dead session must stop writes too, not just reads: the peer
+	// has dropped the stream, so further frames would be silently discarded.
+	st.failWrite(err)
+}
+
+func (st *msgStream) failWrite(err error) {
+	st.wmu.Lock()
+	if st.writeErr == nil {
+		st.writeErr = err
+	}
+	st.wmu.Unlock()
 }
 
 func (st *msgStream) Read(p []byte) (int, error) {
@@ -294,6 +317,9 @@ func (st *msgStream) Write(p []byte) (int, error) {
 	st.wmu.Lock()
 	defer st.wmu.Unlock()
 
+	if st.writeErr != nil {
+		return 0, st.writeErr
+	}
 	if st.localClosed {
 		return 0, errSessionClosed
 	}
@@ -351,5 +377,12 @@ func (st *msgStream) CancelRead(code uint64) {
 	st.readCond.Broadcast()
 	st.readMu.Unlock()
 
+	st.failWrite(errStreamCancel)
+
 	_ = st.sess.sendFrame(msgFrame{Stream: st.id, Flags: flagRST})
+
+	// A local RST is a hard teardown: the peer drops its side and never sends a
+	// FIN back, so maybeRemove (which waits for both directions) would never
+	// fire. Remove the entry here to avoid leaking it for the session's life.
+	st.sess.removeStream(st.id)
 }

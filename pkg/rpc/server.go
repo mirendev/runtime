@@ -701,21 +701,28 @@ func (s *Server) reresolve(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	} else {
+		category = rs.Category
+
 		s.mu.Lock()
 		res, ok := s.resolvers[rs.Category]
 		s.mu.Unlock()
 
-		if ok {
-			iface, err = res.ReconstructFromState(&rs)
-			if err != nil {
-				cbor.NewEncoder(w).Encode(lookupResponse{Error: "failed to resolve: " + err.Error()})
-				return
-			}
+		if !ok {
+			// No resolver means iface stays nil, and assignCapability below
+			// dereferences it. Fail the lookup instead of panicking.
+			cbor.NewEncoder(w).Encode(lookupResponse{Error: "no resolver for category: " + rs.Category})
+			return
+		}
 
-			if iface == nil {
-				cbor.NewEncoder(w).Encode(lookupResponse{Error: "unable to restore capability"})
-				return
-			}
+		iface, err = res.ReconstructFromState(&rs)
+		if err != nil {
+			cbor.NewEncoder(w).Encode(lookupResponse{Error: "failed to resolve: " + err.Error()})
+			return
+		}
+
+		if iface == nil {
+			cbor.NewEncoder(w).Encode(lookupResponse{Error: "unable to restore capability"})
+			return
 		}
 	}
 
