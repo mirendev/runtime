@@ -279,3 +279,37 @@ See `cli/commands/route_list.go` for a reference implementation.
   - Avoid redundant comments that restate what the code does (e.g., `// Start server` above `server.Start()`)
   - Good comments explain complex logic, document assumptions, or clarify non-obvious behavior
   - Function/method comments should explain the purpose and any important side effects, not just restate the name
+
+### Log Levels
+
+Daemons (`miren server`, `miren runner start`) default to **Info**; one-shot CLI
+commands default to **Warn**. `-v` moves one step louder from there, and
+`SIGTTIN`/`SIGTTOU` retune a running process without a restart. Because Info is
+what an operator actually reads on a live cluster, it has to stay worth reading.
+
+- **Error** — the system failed at something it is responsible for. A user's app
+  failing to bind its own declared port is not this; the platform handled that
+  correctly.
+- **Warn** — degraded, unexpected, or handled-but-suspicious. Denials belong
+  here regardless of source.
+- **Info** — the affirmative record of a healthy daemon: lifecycle events, state
+  transitions, decisions taken, and startup confirmations. If a healthy service
+  says nothing at Info, an operator cannot tell "working" from "never
+  attempted."
+- **Debug** — diagnostic detail for when something is already wrong.
+
+Useful tests when picking one:
+
+- **Would this line be identical the next thousand times it fires?** Then it is
+  Debug. Info is for things that happened, not things that are.
+- **Reconcile entry versus reconcile outcome.** "Processing disk update" on
+  every tick is Debug; the handler saying it mounted something is Info.
+- **Would an operator act on it?** If not, it is not Error or Warn. A retry loop
+  that can never converge must not log at full rate forever — it drowns the tier
+  it is in.
+- **Never log a struct at Info.** `%+v` on an entity renders its whole field
+  tree inline. Name the two or three fields that matter.
+- **Audit records are exempt from `-v`** (`pkg/rpc/audit.go` pins an Info
+  floor), so no verbosity default can reduce their volume. Audit volume has to
+  be solved in the audit code — see `certAuthDeduper` for the pattern of
+  collapsing repeats while keeping a count.

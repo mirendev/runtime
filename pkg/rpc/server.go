@@ -352,7 +352,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// Audit successful cert-method auth. See logCertAuth for why this only
 		// ever records legitimate (internal) mTLS and never an attacker.
 		if identity.Method == AuthMethodCert {
-			logCertAuth(ctx, s.state.audit(), r)
+			logCertAuth(ctx, s.state.audit(), s.state.certAuth, r)
 		}
 	}
 

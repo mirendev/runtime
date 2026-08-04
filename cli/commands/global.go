@@ -76,7 +76,29 @@ func (c *Context) Verbose() bool {
 	return c.verbose > 0
 }
 
-func setup(ctx context.Context, flags *GlobalFlags, opts any, commandName string) *Context {
+// baseLogLevel is where the -v ladder starts before any -v is applied. Each -v
+// moves one step louder from here (slog levels are 4 apart), clamped at Debug.
+//
+// The two answers differ because the two jobs do. A one-shot command like
+// `miren app list` has its result on stdout and should stay quiet on stderr
+// unless something is wrong, so it starts at Warn. A daemon has no result — the
+// log is the only thing it produces — and at Warn a healthy one says nothing
+// about itself at all, so an operator cannot tell "working" from "never
+// attempted". That ambiguity is not hypothetical: during the MIR-1483 telemetry
+// cutover the line confirming the switch was invisible, and verifying it meant
+// pushing a systemd override onto every runner to add -v.
+//
+// Info is the affirmative baseline for a daemon. -v and the SIGTTIN/SIGTTOU
+// handlers below move off it when you actually need Debug, which beats baking a
+// level into a unit file that then outlives the reason for it.
+func baseLogLevel(daemon bool) slog.Level {
+	if daemon {
+		return slog.LevelInfo
+	}
+	return slog.LevelWarn
+}
+
+func setup(ctx context.Context, flags *GlobalFlags, opts any, commandName string, daemon bool) *Context {
 	s := &Context{
 		verbose:     len(flags.Verbose),
 		Stdout:      os.Stdout,
@@ -88,16 +110,8 @@ func setup(ctx context.Context, flags *GlobalFlags, opts any, commandName string
 	// Initialize config from flags
 	s.Config.ServerAddress = flags.ServerAddress
 
-	var level slog.Level
-
-	switch s.verbose {
-	case 0:
-		level = slog.LevelWarn
-	case 1:
-		level = slog.LevelInfo
-	case 2:
-		level = slog.LevelDebug
-	default:
+	level := baseLogLevel(daemon) - slog.Level(4*s.verbose)
+	if level < slog.LevelDebug {
 		level = slog.LevelDebug
 	}
 

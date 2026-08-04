@@ -68,7 +68,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 Environment="NO_COLOR=1"
-ExecStart=/var/lib/miren/release/miren server -vv --address=0.0.0.0:8443
+ExecStart=/var/lib/miren/release/miren server --address=0.0.0.0:8443
 Restart=always
 RestartSec=10
 StandardOutput=journal

@@ -8,6 +8,8 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"sync"
+	"time"
 )
 
 // certFingerprint returns the hex-encoded SHA-256 of a certificate's raw DER,
@@ -30,11 +32,17 @@ func certFingerprint(cert *x509.Certificate) string {
 // sink that re-checks the level in Handle would silently break the floor.
 //
 // The audit trail uses this to hold a fixed Info floor regardless of the
-// process-wide verbosity. Managed servers run at -vv (Debug), so a plain shared
-// logger would never suppress the audit stream's own Debug records (loopback
-// internal traffic); conversely the default is Warn, at which a shared logger
-// would drop audit Info entirely. Pinning the floor at Info decouples the audit
-// trail from the operational -v knob in both directions.
+// process-wide verbosity, which it must do in both directions. Run the process
+// verbosely and a plain shared logger would never suppress the audit stream's
+// own Debug records (loopback internal traffic); run it quietly — a CLI
+// invocation sits at Warn — and a shared logger would drop audit Info entirely.
+// Pinning the floor at Info decouples the audit trail from the operational -v
+// knob either way.
+//
+// The corollary is worth stating because it is easy to forget: the audit stream
+// is immune to -v, so no choice of default verbosity can reduce its volume.
+// Anything about audit volume has to be fixed in the audit code itself, which
+// is what certAuthDeduper does.
 type minLevelHandler struct {
 	slog.Handler
 	min slog.Level
@@ -77,6 +85,143 @@ func isLoopbackAddr(addr string) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
+// remoteHost strips the port from an *http.Request RemoteAddr. Source ports are
+// ephemeral and carry no attribution value, so the audit trail keys on the host.
+func remoteHost(addr string) string {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return addr
+	}
+	return host
+}
+
+// defaultCertAuthInterval is how often a still-active (cert, peer) pair re-emits
+// its certificate detail. Short enough that the trail keeps useful temporal
+// resolution, long enough that a busy peer costs a dozen records an hour rather
+// than several thousand.
+const defaultCertAuthInterval = 5 * time.Minute
+
+// maxCertAuthTracked bounds the dedup table. Real clusters track a handful of
+// pairs (one per runner, plus operators); the cap exists so that a peer churning
+// through source addresses cannot grow the table without limit.
+const maxCertAuthTracked = 1024
+
+type certAuthKey struct {
+	fingerprint string
+	host        string
+}
+
+type certAuthState struct {
+	last       time.Time
+	suppressed int64
+}
+
+// certAuthDeduper collapses repeated cert-auth records for the same certificate
+// and peer host into one record per interval.
+//
+// The per-request cert-auth record is almost entirely redundant. Every field
+// that distinguishes it (subject, issuer, serial, fingerprint) describes the
+// certificate rather than the request, so a long-lived peer re-emits the same
+// ~330 bytes on every single RPC. Measured on a coordinator with two
+// distributed runners, this was 5,958 records/hour and 47% of everything the
+// process wrote, to convey that the same two certs were still the same two
+// certs.
+//
+// Per-request attribution is not lost, because it never lived here: logAccess
+// records the subject and auth method for every non-public call, and that is
+// the trail the audit design leans on (see logCertAuth). What this preserves is
+// the certificate detail, emitted on first sight of a (cert, peer host) pair
+// and again once per interval, carrying the number of authentications absorbed
+// since the last record. One line saying a cert authenticated 5,958 times is
+// strictly more informative than 5,958 identical lines.
+type certAuthDeduper struct {
+	mu       sync.Mutex
+	interval time.Duration
+	max      int
+	seen     map[certAuthKey]*certAuthState
+
+	// now is overridable so tests can drive the interval without sleeping.
+	now func() time.Time
+}
+
+func newCertAuthDeduper() *certAuthDeduper {
+	return &certAuthDeduper{
+		interval: defaultCertAuthInterval,
+		max:      maxCertAuthTracked,
+		seen:     make(map[certAuthKey]*certAuthState),
+	}
+}
+
+func (d *certAuthDeduper) clock() time.Time {
+	if d.now != nil {
+		return d.now()
+	}
+	return time.Now()
+}
+
+// record reports whether this authentication should be logged and, if so, how
+// many authentications for the same pair went unlogged since the previous
+// record. A nil deduper logs everything, which keeps a hand-constructed
+// StateCommon (as in tests) on the pre-dedup behaviour.
+func (d *certAuthDeduper) record(key certAuthKey) (bool, int64) {
+	if d == nil {
+		return true, 0
+	}
+
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	now := d.clock()
+
+	if st, ok := d.seen[key]; ok {
+		if now.Sub(st.last) < d.interval {
+			st.suppressed++
+			return false, 0
+		}
+		suppressed := st.suppressed
+		st.last = now
+		st.suppressed = 0
+		return true, suppressed
+	}
+
+	d.evictLocked(now)
+	d.seen[key] = &certAuthState{last: now}
+	return true, 0
+}
+
+// evictLocked keeps the table under its cap, dropping entries that have gone
+// quiet for longer than an interval first and falling back to the
+// least-recently-recorded entry. An evicted entry loses its pending suppressed
+// count, so the peer simply reads as newly seen next time.
+func (d *certAuthDeduper) evictLocked(now time.Time) {
+	if len(d.seen) < d.max {
+		return
+	}
+
+	for k, st := range d.seen {
+		if now.Sub(st.last) >= d.interval {
+			delete(d.seen, k)
+		}
+	}
+	if len(d.seen) < d.max {
+		return
+	}
+
+	var (
+		oldestKey certAuthKey
+		oldest    time.Time
+		found     bool
+	)
+	for k, st := range d.seen {
+		if !found || st.last.Before(oldest) {
+			oldestKey, oldest, found = k, st.last, true
+		}
+	}
+	if found {
+		delete(d.seen, oldestKey)
+	}
+}
+
 // logCertAuth emits a single durable audit record for a successful cert-method
 // authentication.
 //
@@ -92,26 +237,45 @@ func isLoopbackAddr(addr string) bool {
 // Logged at Info for network peers and Debug for loopback (same-host internal
 // component mTLS), so the Info stream isn't drowned by the coordinator's own
 // services authenticating to each other. See isLoopbackAddr.
-func logCertAuth(ctx context.Context, log *slog.Logger, r *http.Request) {
+//
+// Records are deduplicated per (certificate, peer host) so that a long-lived
+// peer costs one record per interval rather than one per RPC; see
+// certAuthDeduper for why that loses no attribution. A record that stands in
+// for suppressed ones carries a "suppressed" count.
+func logCertAuth(ctx context.Context, log *slog.Logger, dedup *certAuthDeduper, r *http.Request) {
 	if r.TLS == nil || len(r.TLS.PeerCertificates) == 0 {
 		return
 	}
 	cert := r.TLS.PeerCertificates[0]
+
+	fingerprint := certFingerprint(cert)
+	shouldLog, suppressed := dedup.record(certAuthKey{
+		fingerprint: fingerprint,
+		host:        remoteHost(r.RemoteAddr),
+	})
+	if !shouldLog {
+		return
+	}
 
 	level := slog.LevelInfo
 	if isLoopbackAddr(r.RemoteAddr) {
 		level = slog.LevelDebug
 	}
 
-	log.Log(ctx, level, "cert auth",
+	attrs := []any{
 		"remote", r.RemoteAddr,
 		"subject", cert.Subject.String(),
 		"issuer", cert.Issuer.String(),
 		"serial", cert.SerialNumber.String(),
-		"fingerprint", certFingerprint(cert),
+		"fingerprint", fingerprint,
 		"verified", len(r.TLS.VerifiedChains) > 0,
 		"chains", len(r.TLS.VerifiedChains),
-	)
+	}
+	if suppressed > 0 {
+		attrs = append(attrs, "suppressed", suppressed)
+	}
+
+	log.Log(ctx, level, "cert auth", attrs...)
 }
 
 // logAccess emits a per-request RPC access record for a non-public method.

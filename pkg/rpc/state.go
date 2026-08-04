@@ -83,6 +83,11 @@ type StateCommon struct {
 	// server's -v verbosity. See newAuditLogger.
 	auditLog *slog.Logger
 
+	// certAuth collapses repeated cert-auth records for a long-lived peer into
+	// one per interval. Nil is valid and means no deduplication. See
+	// certAuthDeduper.
+	certAuth *certAuthDeduper
+
 	opts *stateOptions
 
 	serverTlsCfg *tls.Config
@@ -368,6 +373,7 @@ func NewState(ctx context.Context, opts ...StateOption) (*State, error) {
 			top:           ctx,
 			log:           so.log,
 			auditLog:      newAuditLogger(so.log),
+			certAuth:      newCertAuthDeduper(),
 			opts:          &so,
 			clientTlsCfg:  tlsCfg,
 			privkey:       priv,

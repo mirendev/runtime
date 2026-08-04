@@ -361,7 +361,13 @@ func (s *ServiceController) addNodePort(tx *knftables.Transaction, nport int, pr
 }
 
 func (s *ServiceController) Create(ctx context.Context, srv *network_v1alpha.Service, meta *entity.Meta) error {
-	s.Log.Info("Creating service", "service", srv)
+	// Named fields rather than the whole struct: %+v on a Service renders its
+	// address list, match rules and full port table inline, which came to ~300
+	// bytes a line for something that is mostly reporting an identifier.
+	s.Log.Info("Creating service",
+		"service", srv.ID,
+		"addrs", len(srv.Ip),
+		"ports", len(srv.Port))
 
 	lr, err := s.EAC.List(ctx, entity.Ref(network_v1alpha.EndpointsServiceId, srv.ID))
 	if err != nil {

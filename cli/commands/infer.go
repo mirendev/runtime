@@ -27,6 +27,7 @@ type Cmd struct {
 	labsFeature string
 	description string
 	group       string
+	daemon      bool
 }
 
 type CommandOption func(*Cmd)
@@ -55,6 +56,21 @@ func WithLabsFeature(feature string) CommandOption {
 func WithGroup(group string) CommandOption {
 	return func(c *Cmd) {
 		c.group = group
+	}
+}
+
+// WithDaemon marks a command as a long-running service rather than a one-shot
+// CLI invocation, which starts its -v ladder at Info instead of Warn. See
+// baseLogLevel.
+//
+// This lives at the registration site rather than in the unit file so the level
+// is right however the daemon was launched — systemd, a container entrypoint,
+// or by hand — instead of depending on every launch path remembering to pass a
+// flag. Not remembering is how a coordinator ended up pinned at Debug forever
+// and a runner at Warn, neither deliberately.
+func WithDaemon() CommandOption {
+	return func(c *Cmd) {
+		c.daemon = true
 	}
 }
 
@@ -336,7 +352,7 @@ func (w *Cmd) Invoke(args ...string) error {
 		w.show(w.opts.Elem())
 	}
 
-	ctx := setup(context.Background(), w.global, w.opts.Interface(), w.name)
+	ctx := setup(context.Background(), w.global, w.opts.Interface(), w.name, w.daemon)
 	defer ctx.Close()
 
 	rets := w.f.Call([]reflect.Value{reflect.ValueOf(ctx), w.opts.Elem()})
@@ -376,7 +392,7 @@ func RunCommand(f any, args ...string) (*CommandOutput, error) {
 		return &out, err
 	}
 
-	ctx := setup(context.Background(), cmd.global, cmd.opts.Interface(), cmd.name)
+	ctx := setup(context.Background(), cmd.global, cmd.opts.Interface(), cmd.name, cmd.daemon)
 	defer ctx.Close()
 
 	ctx.Stdout = &out.Stdout

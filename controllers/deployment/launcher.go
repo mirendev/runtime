@@ -399,7 +399,11 @@ func (l *Launcher) ensurePoolForService(ctx context.Context, app *core_v1alpha.A
 	for _, svc := range spec.Services {
 		if svc.Name == serviceName && svc.Image != "" {
 			image = containerdx.NormalizeImageReference(svc.Image)
-			l.Log.Info("using custom image for service",
+			// Debug rather than Info: this restates configuration on every
+			// deployment reconcile rather than reporting anything happening, and
+			// "original" is usually byte-identical to "image" because
+			// normalization is a no-op for an already-qualified reference.
+			l.Log.Debug("using custom image for service",
 				"service", serviceName,
 				"image", image,
 				"original", svc.Image)
