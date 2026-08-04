@@ -400,3 +400,69 @@ func TestRESTGatewayBodyLimit(t *testing.T) {
 
 	r.Equal(http.StatusRequestEntityTooLarge, resp.StatusCode)
 }
+
+func TestRESTGatewayBodyShape(t *testing.T) {
+	newServer := func() *httptest.Server {
+		mux := http.NewServeMux()
+		rpc.RegisterREST(mux, example.AdaptReadings(restReadings{}))
+		return httptest.NewServer(authenticated(mux))
+	}
+
+	post := func(t *testing.T, srv *httptest.Server, body string) *http.Response {
+		t.Helper()
+		resp, err := http.Post(srv.URL+"/api/v1/meters/room1/readings", "application/json", strings.NewReader(body))
+		require.NoError(t, err)
+		return resp
+	}
+
+	// A literal null decodes into the field map without error but leaves it
+	// nil, which the path binding would panic on.
+	t.Run("rejects a null body", func(t *testing.T) {
+		r := require.New(t)
+
+		srv := newServer()
+		defer srv.Close()
+
+		resp := post(t, srv, "null")
+		defer resp.Body.Close()
+
+		r.Equal(http.StatusBadRequest, resp.StatusCode)
+	})
+
+	t.Run("rejects trailing content after the object", func(t *testing.T) {
+		r := require.New(t)
+
+		srv := newServer()
+		defer srv.Close()
+
+		resp := post(t, srv, `{"temperature": 1} {}`)
+		defer resp.Body.Close()
+
+		r.Equal(http.StatusBadRequest, resp.StatusCode)
+	})
+
+	t.Run("rejects a non-object body", func(t *testing.T) {
+		r := require.New(t)
+
+		srv := newServer()
+		defer srv.Close()
+
+		resp := post(t, srv, `[1, 2, 3]`)
+		defer resp.Body.Close()
+
+		r.Equal(http.StatusBadRequest, resp.StatusCode)
+	})
+
+	t.Run("marks a non-public response no-store", func(t *testing.T) {
+		r := require.New(t)
+
+		srv := newServer()
+		defer srv.Close()
+
+		resp := post(t, srv, `{"temperature": 21.5}`)
+		defer resp.Body.Close()
+
+		r.Equal(http.StatusOK, resp.StatusCode)
+		r.Equal("no-store", resp.Header.Get("Cache-Control"))
+	})
+}

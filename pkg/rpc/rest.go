@@ -48,6 +48,13 @@ func restHandler(m Method) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		defer r.Body.Close()
 
+		// A non-public response is identity-specific. Keep it out of browser and
+		// intermediary caches so it cannot be replayed to a different caller.
+		// Set before the auth check so it covers every response path.
+		if !m.Public {
+			w.Header().Set("Cache-Control", "no-store")
+		}
+
 		// Mirror the auth enforcement handleCalls does for the RPC transport: a
 		// non-public method requires an authenticated identity in the context,
 		// which the surrounding http.Handler stack is responsible for putting
@@ -131,9 +138,27 @@ func restFields(r *http.Request, binding *HTTPBinding) (map[string]json.RawMessa
 		// optional" shape of generated args. Malformed JSON is different: the
 		// caller sent something, so they should hear that it was rejected
 		// rather than get a confusing empty-args invocation.
-		err := json.NewDecoder(r.Body).Decode(&fields)
+		dec := json.NewDecoder(r.Body)
+
+		err := dec.Decode(&fields)
 		if err != nil && !errors.Is(err, io.EOF) {
 			return nil, fmt.Errorf("invalid request body: %w", err)
+		}
+
+		// A literal null decodes into a map without error but leaves it nil,
+		// which the binding below would panic on. Every other non-object body
+		// already fails the decode, so reject it for the same reason.
+		if fields == nil {
+			return nil, fmt.Errorf("invalid request body: expected a JSON object")
+		}
+
+		// The body is one document, not a stream. Anything after the object is
+		// a malformed request rather than something to quietly discard.
+		if err := dec.Decode(new(json.RawMessage)); !errors.Is(err, io.EOF) {
+			if err != nil && !errors.Is(err, io.ErrUnexpectedEOF) {
+				return nil, fmt.Errorf("invalid request body: %w", err)
+			}
+			return nil, fmt.Errorf("invalid request body: expected a single JSON object")
 		}
 	}
 
