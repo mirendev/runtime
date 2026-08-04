@@ -61,6 +61,20 @@ If you're running Miren on a cloud provider, you'll need to configure security g
 
 **NodePorts:** If your app exposes non-HTTP services with `node_port` in the port configuration, those ports must also be open. For example, an IRC server with `node_port = 6667` requires TCP port 6667 to be reachable.
 
+### Between Nodes (Distributed Runners)
+
+If you've grown the cluster with [distributed runners](/distributed-runners), the nodes also talk to each other. These are separate from the inbound ports above, and they only matter when there's a firewall between your machines.
+
+| Port | Protocol | Direction | Purpose |
+|------|----------|-----------|---------|
+| 8443 | UDP | Runner to coordinator | Coordinator API: join, scheduling, and the metrics and logs a runner ships |
+| 12379 | TCP | Runner to coordinator | etcd, for overlay subnet coordination |
+| 51820 | UDP | Every node to every other node | WireGuard overlay carrying sandbox-to-sandbox traffic |
+
+**The overlay port is the one people miss.** Sandboxes on different machines send traffic directly to each other, so 51820/udp has to be open between every pair of nodes, not just from each runner back to the coordinator.
+
+**Telemetry doesn't need its own ports.** VictoriaMetrics and VictoriaLogs stay bound to loopback on the coordinator and are never reachable from a runner. A runner ships its metrics and logs over the coordinator API on 8443 like everything else it sends.
+
 ### Outbound Connectivity
 
 Miren requires outbound internet access for several operations. Most cloud providers allow all outbound traffic by default, but if you have restrictive egress rules, ensure the following destinations are reachable:

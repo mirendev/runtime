@@ -79,9 +79,13 @@ machines it needs to allow rather more than 8443. These are the defaults:
 
 | Port | Protocol | What it carries | Protection |
 |------|----------|-----------------|------------|
-| 8443 | TCP | Coordinator API, including join and the metrics and logs a runner ships | Join token while enrolling, mTLS afterward |
+| 8443 | UDP | Coordinator API, including join and the metrics and logs a runner ships | Join token while enrolling, mTLS afterward |
 | 12379 | TCP | etcd, for Flannel subnet coordination | mTLS |
 | 51820 | UDP | WireGuard overlay | WireGuard encryption |
+
+The coordinator API is QUIC, so 8443 is UDP rather than TCP. Opening the TCP
+port instead is a common way to end up with a runner that can't join. The same
+ports are listed in the [firewall reference](/firewall#between-nodes-distributed-runners).
 
 Metrics and logs travel over 8443 alongside everything else a runner sends the
 coordinator. VictoriaMetrics and VictoriaLogs themselves stay bound to loopback

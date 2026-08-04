@@ -1,7 +1,7 @@
 ---
 title: System Requirements
-description: Minimum and recommended hardware for running a Miren server — OS, architecture, memory, and storage.
-keywords: [system requirements, hardware, linux, memory, disk space, arm64, x86]
+description: Minimum and recommended hardware for running a Miren server or runner — OS, architecture, memory, and storage.
+keywords: [system requirements, hardware, linux, memory, disk space, arm64, x86, runner]
 ---
 
 import CliCommand from '@site/src/components/CliCommand';
@@ -31,9 +31,15 @@ Container images and build caches add up quickly. Base images for languages like
 
 Starting with 50 GB gives you enough room to get going. With 100 GB you'll have space to grow without worrying about "no space left on device" errors during builds.
 
+## Runner nodes
+
+The same numbers apply to every machine you add as a [distributed runner](/distributed-runners). `miren runner install` runs the same check against the same minimums.
+
+The reasoning shifts a little, though. A runner doesn't build your apps or hold cluster state, so it never runs buildkit or etcd, and it won't see the build-time memory spikes that set the server's floor. What it does run is containerd and every sandbox the scheduler places on it, and it pulls and stores the images those sandboxes need. So on a runner, plan memory around how many sandboxes you expect to land there, and storage around the images they pull rather than the build cache.
+
 ## What happens if my system is too small?
 
-The `miren server install` command checks your system against these requirements before installing. If your machine doesn't meet the minimums, the installer will let you know what's short and point you here.
+The `miren server install` and `miren runner install` commands check your system against these requirements before installing. If your machine doesn't meet the minimums, the installer will let you know what's short and point you here.
 
 If you're below the recommended thresholds but above the minimums, you'll see a heads-up but installation will proceed normally.
 
@@ -46,6 +52,8 @@ sudo miren server install --skip-system-check
 ```
 
 </CliCommand>
+
+`miren runner install` takes the same flag, which is worth knowing if you're enrolling runners from a provisioning script that can't answer a prompt.
 
 ## We'd love to hear from you
 

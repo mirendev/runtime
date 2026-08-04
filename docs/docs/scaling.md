@@ -10,6 +10,10 @@ import CliCommand from '@site/src/components/CliCommand';
 
 Miren automatically scales your application instances based on traffic. This page explains how scaling works and how to configure it for your needs.
 
+:::info[Scaling out across machines]
+This page is about how many instances of your app run. When the machine itself runs out of room, you add more machines to the cluster instead: see [Distributed Runners](/distributed-runners).
+:::
+
 ## How Autoscaling Works
 
 By default, Miren uses **autoscaling** for web services. As traffic to your application increases, Miren automatically launches additional instances to handle the load. When traffic decreases, instances are scaled back down.
@@ -231,4 +235,5 @@ miren sandbox list
 
 - [app.toml Reference — Concurrency](/app-toml#concurrency) — Complete field reference for concurrency settings
 - [Services](/services) — Define multiple processes in your app
+- [Distributed Runners](/distributed-runners) — Add machines when one server isn't enough
 - [Getting Started](/getting-started) — Deploy your first app
