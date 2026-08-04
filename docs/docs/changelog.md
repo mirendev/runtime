@@ -11,6 +11,11 @@ All notable changes to Miren Runtime will be documented in this file.
 ## Unreleased
 *main*
 
+---
+
+## v0.13.0
+*2026-08-04*
+
 **Breaking Changes**
 - **VictoriaMetrics and VictoriaLogs now listen on loopback only** - Neither authenticates anybody, so reachability was the entire access control. If you were scraping either directly from another host, that stops working. ([#998](https://github.com/mirendev/runtime/pull/998))
 - **The cluster-local registry now requires authentication** - A cluster with no hostname used to get no workload identity issuer, and ran an open registry as a result. Every cluster gets an issuer now and the registry is authenticated everywhere; Miren mints the tokens itself, so there's nothing to configure. ([#990](https://github.com/mirendev/runtime/pull/990), [#991](https://github.com/mirendev/runtime/pull/991), [#994](https://github.com/mirendev/runtime/pull/994))
