@@ -11,6 +11,9 @@ All notable changes to Miren Runtime will be documented in this file.
 ## Unreleased
 *main*
 
+**Improvements**
+- **Labs features say where they landed, and how to turn one off** - A labs feature that defaults to on used to say nothing at boot, which is exactly the state an operator most wants confirmed, and the docs only covered switching features on. Every boot now logs a `labs features` line reporting where each feature ended up whether or not you named it, and [Miren Labs](/labs) documents the `-` prefix (`--labs -distributedrunners`, `MIREN_LABS=-distributedrunners`) that turns a feature back off. ([#1012](https://github.com/mirendev/runtime/pull/1012))
+
 ---
 
 ## v0.12.1

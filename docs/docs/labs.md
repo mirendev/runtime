@@ -15,9 +15,12 @@ Miren Labs is where we ship experimental features that aren't quite ready for pr
 Labs features are:
 
 - **Experimental** — APIs and behavior may change based on feedback
-- **Opt-in** — Disabled by default, you choose when to try them
+- **Opt-in** — Off by default, you choose when to try them
+- **Reversible** — Anything you turn on you can turn back off
 - **Supported** — We want to hear about bugs and rough edges
 - **On a path** — Most labs features are headed toward stable release
+
+When a feature graduates to stable it flips on by default and stops being opt-in, but we leave its flag in place for a release so you can turn it back off if the new behavior causes trouble. After that release the flag and the old behavior both go away.
 
 ## Enabling Labs Features
 
@@ -38,6 +41,25 @@ MIREN_LABS=distributedrunners miren server
 MIREN_LABS=distributedrunners,sagas miren server
 ```
 </CliCommand>
+
+## Turning a Feature Off
+
+Prefix a feature name with `-` to disable it. This is how you back out of a feature that's on by default, and it takes the same flag and environment variable as enabling.
+
+<CliCommand context="server">
+```miren
+# Turn off a feature that is on by default
+miren server --labs -distributedrunners
+
+# Via environment variable
+MIREN_LABS=-distributedrunners miren server
+
+# Mix and match: sagas on, distributed runners off
+MIREN_LABS=sagas,-distributedrunners miren server
+```
+</CliCommand>
+
+Check the server log to confirm the setting landed. Every boot logs a `labs features` line listing where each feature ended up, whether or not you named it.
 
 ## Giving Feedback
 

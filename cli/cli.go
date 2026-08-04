@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"strings"
 
@@ -23,9 +24,11 @@ func Run(args []string) int {
 		labs.EnableAll()
 	}
 
-	// Initialize labs feature flags from environment before registering commands
+	// Initialize labs feature flags from environment before registering commands.
+	// Discard the log: this only decides which commands get registered, and the
+	// server logs the same thing properly when it starts.
 	if labsEnv := os.Getenv("MIREN_LABS"); labsEnv != "" {
-		labs.Init(nil, strings.Split(labsEnv, ","))
+		labs.Init(slog.New(slog.DiscardHandler), strings.Split(labsEnv, ","))
 	}
 
 	d := mflags.NewDispatcher("miren")
