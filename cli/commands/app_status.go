@@ -91,6 +91,10 @@ func AppStatus(ctx *Context, opts struct {
 		ctx.Printf("%s %s\n", labelStyle.Render("Current Version:"), yellowStyle.Render("No version deployed"))
 	}
 
+	if role := appResult.WorkloadRole(); role != "" {
+		ctx.Printf("%s %s\n", labelStyle.Render("Workload Role:"), role)
+	}
+
 	// Configuration
 	if appConfig != nil {
 		ctx.Printf("\n%s\n", labelStyle.Render("Configuration:"))

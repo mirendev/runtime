@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"miren.dev/runtime/pkg/entity"
+	"miren.dev/runtime/pkg/workloadidentity"
 )
 
 const tokenRefreshInterval = 45 * time.Minute
@@ -18,6 +19,7 @@ const tokenRefreshInterval = 45 * time.Minute
 type tokenEntry struct {
 	filePath  string
 	appName   string
+	role      string
 	sandboxID string
 }
 
@@ -32,12 +34,16 @@ func newTokenRefresher() *tokenRefresher {
 	}
 }
 
-func (tr *tokenRefresher) register(sandboxID, filePath, appName string) {
+// register records a sandbox for periodic token refresh. The role is captured
+// here and preserved across refreshes, so a role change takes effect the next
+// time the sandbox is built (a redeploy or restart), not mid-lifetime.
+func (tr *tokenRefresher) register(sandboxID, filePath, appName, role string) {
 	tr.mu.Lock()
 	defer tr.mu.Unlock()
 	tr.entries[sandboxID] = tokenEntry{
 		filePath:  filePath,
 		appName:   appName,
+		role:      role,
 		sandboxID: sandboxID,
 	}
 }
@@ -94,7 +100,7 @@ func (c *SandboxController) refreshTokens() {
 	entries := c.tokenRefresher.snapshot()
 	var dropped int
 	for _, e := range entries {
-		token, err := c.WorkloadIssuer.IssueToken(e.appName, e.sandboxID)
+		token, err := c.WorkloadIssuer.IssueTokenWithOptions(e.appName, e.sandboxID, workloadidentity.TokenOptions{Role: e.role})
 		if err != nil {
 			c.Log.Warn("failed to refresh workload identity token", "sandbox", e.sandboxID, "error", err)
 			continue

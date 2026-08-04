@@ -80,6 +80,11 @@ type BridgeConfig struct {
 	MTU         int
 	Vlan        int
 	PromiscMode bool
+
+	// APIPort is the port the cluster API listens on, opened to the bridge so
+	// sandboxes can reach it with their workload identity token. Zero leaves the
+	// port closed, which is correct when no API runs on this host.
+	APIPort int
 }
 
 // InUseFunc returns the set of IP addresses currently live on the bridge,

@@ -23,6 +23,7 @@ import (
 	"miren.dev/runtime/pkg/idgen"
 	"miren.dev/runtime/pkg/rpc"
 	"miren.dev/runtime/pkg/ui"
+	"miren.dev/runtime/pkg/workloadroles"
 )
 
 // TODO: Removed broken go:generate directive - no rpc.yml file exists in servers/app/
@@ -270,6 +271,10 @@ func (r *AppInfo) List(ctx context.Context, state *app_v1alpha.CrudList) error {
 
 func (r *AppInfo) SetConfiguration(ctx context.Context, state *app_v1alpha.CrudSetConfiguration) error {
 	name := state.Args().App()
+
+	if !rpc.AllowApp(ctx, name) {
+		return rpc.AppAccessError(ctx, name)
+	}
 
 	// The read-merge-write below is retried under optimistic concurrency
 	// control: the active_version swing is guarded by a CAS on the app revision,
@@ -567,11 +572,21 @@ func (r *AppInfo) GetConfiguration(ctx context.Context, state *app_v1alpha.CrudG
 		state.Results().SetVersionShortId(sid)
 	}
 
+	role := appRec.WorkloadRole
+	if role == "" {
+		role = workloadroles.Default
+	}
+	state.Results().SetWorkloadRole(role)
+
 	return nil
 }
 
 func (r *AppInfo) SetHost(ctx context.Context, state *app_v1alpha.CrudSetHost) error {
 	name := state.Args().App()
+
+	if !rpc.AllowApp(ctx, name) {
+		return rpc.AppAccessError(ctx, name)
+	}
 
 	var appRec core_v1alpha.App
 
@@ -598,6 +613,33 @@ func (r *AppInfo) SetHost(ctx context.Context, state *app_v1alpha.CrudSetHost) e
 	return nil
 }
 
+// SetWorkloadRole sets the app's workload identity role. It has no rpc.AllowApp
+// guard on purpose: this is the operator path, and it is absent from every token
+// role map, so only cert (internal/operator) and JWT-with-RBAC callers reach it
+// — never an app-scoped OIDC or workload identity. That is what lets it grant
+// cluster-scoped roles, which the app.toml path must not.
+func (r *AppInfo) SetWorkloadRole(ctx context.Context, state *app_v1alpha.CrudSetWorkloadRole) error {
+	name := state.Args().App()
+	role := state.Args().Role()
+
+	if _, ok := workloadroles.Lookup(role); !ok {
+		return fmt.Errorf("unknown workload role %q", role)
+	}
+
+	// Resolve the app to its entity ID (and confirm it exists).
+	var appRec core_v1alpha.App
+	if err := r.EC.Get(ctx, name, &appRec); err != nil {
+		return err
+	}
+
+	// Patch only the workload_role attribute rather than Put-ing the whole App
+	// record. A full-entity Update here would clobber a concurrent writer of the
+	// same record — e.g. a deploy setting active_version between our Get and
+	// Put. Patch is a single-attribute merge server-side, so there is no
+	// read-modify-write to lose; revision 0 skips CAS accordingly.
+	return r.EC.Patch(ctx, appRec.ID, 0, entity.String(core_v1alpha.AppWorkloadRoleId, role))
+}
+
 func (r *AppInfo) setEnvVars(ctx context.Context, name string, vars []appclient.EnvVarInput, service string) (string, error) {
 	result, err := appclient.SetEnvVars(ctx, r.EC, name, nil, vars, service)
 	if err != nil {
@@ -608,6 +650,10 @@ func (r *AppInfo) setEnvVars(ctx context.Context, name string, vars []appclient.
 
 func (r *AppInfo) SetEnvVar(ctx context.Context, state *app_v1alpha.CrudSetEnvVar) error {
 	args := state.Args()
+
+	if !rpc.AllowApp(ctx, args.App()) {
+		return rpc.AppAccessError(ctx, args.App())
+	}
 
 	versionId, err := r.setEnvVars(ctx, args.App(), []appclient.EnvVarInput{
 		{Key: args.Key(), Value: args.Value(), Sensitive: args.Sensitive()},
@@ -625,6 +671,11 @@ func (r *AppInfo) SetEnvVar(ctx context.Context, state *app_v1alpha.CrudSetEnvVa
 
 func (r *AppInfo) SetEnvVars(ctx context.Context, state *app_v1alpha.CrudSetEnvVars) error {
 	args := state.Args()
+
+	if !rpc.AllowApp(ctx, args.App()) {
+		return rpc.AppAccessError(ctx, args.App())
+	}
+
 	rpcVars := args.Vars()
 
 	if len(rpcVars) == 0 {
@@ -650,6 +701,11 @@ func (r *AppInfo) SetEnvVars(ctx context.Context, state *app_v1alpha.CrudSetEnvV
 
 func (r *AppInfo) SetInitialEnvVars(ctx context.Context, state *app_v1alpha.CrudSetInitialEnvVars) error {
 	args := state.Args()
+
+	if !rpc.AllowApp(ctx, args.App()) {
+		return rpc.AppAccessError(ctx, args.App())
+	}
+
 	rpcVars := args.Vars()
 
 	if len(rpcVars) == 0 {
@@ -673,6 +729,10 @@ func (r *AppInfo) SetInitialEnvVars(ctx context.Context, state *app_v1alpha.Crud
 func (r *AppInfo) DeleteEnvVar(ctx context.Context, state *app_v1alpha.CrudDeleteEnvVar) error {
 	args := state.Args()
 
+	if !rpc.AllowApp(ctx, args.App()) {
+		return rpc.AppAccessError(ctx, args.App())
+	}
+
 	result, err := appclient.DeleteEnvVars(ctx, r.EC, args.App(), nil, []string{args.Key()}, args.Service())
 	if err != nil {
 		return err
@@ -692,6 +752,10 @@ func (r *AppInfo) Restart(ctx context.Context, state *app_v1alpha.CrudRestart) e
 	args := state.Args()
 	name := args.App()
 	service := args.Service()
+
+	if !rpc.AllowApp(ctx, name) {
+		return rpc.AppAccessError(ctx, name)
+	}
 
 	var appRec core_v1alpha.App
 	if err := r.EC.Get(ctx, name, &appRec); err != nil {

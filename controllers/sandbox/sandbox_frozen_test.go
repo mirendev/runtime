@@ -24,7 +24,13 @@ import (
 //	sha256sum controllers/sandbox/sandbox.go controllers/sandbox/volume.go controllers/sandbox/firewall.go
 func TestSandboxControllerFrozen(t *testing.T) {
 	frozen := map[string]string{
-		"sandbox.go":  "ec5ba5e106c28047a646217a6b8afb4125d55a1e97f6fd9fe183611115cf1dae",
+		// Workload identity: BuildSpec mounts the cluster CA and injects
+		// MIREN_IN_CLUSTER/MIREN_API_ADDRESS/MIREN_CA_CERT_PATH, Init opens the
+		// API port on the bridge, and mint now resolves the app's workload role
+		// (resolveAppAndRole) so the token carries it. The saga path needs no
+		// matching edit: it reaches the same code through sandboxOps.BuildSpec,
+		// which delegates to SandboxController.BuildSpec.
+		"sandbox.go":  "1368416518f6d1a7118ffc0bf5347172899f06766ede94d5f311e384783a3203",
 		"volume.go":   "580062fb8a34f3f7f965689467a4b0f2ed403bc63c1ecdeb44949a7ba7e08dff",
 		"firewall.go": "648cb5d91091d5eb7400152b19695a8045585feae59c5dd36c12d663a27bb91f",
 	}

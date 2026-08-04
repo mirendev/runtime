@@ -43,6 +43,7 @@
       "command/app-list",
       "command/app-restart",
       "command/app-run",
+      "command/app-set-workload-role",
       "command/app-status",
       "command/app-versions"
     ]

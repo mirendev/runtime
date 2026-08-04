@@ -50,6 +50,8 @@ import (
 	"github.com/go-jose/go-jose/v4"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
+
+	"miren.dev/runtime/pkg/workloadroles"
 )
 
 type IssuerConfig struct {
@@ -121,6 +123,10 @@ type WorkloadClaims struct {
 	SandboxID      string         `json:"sandbox_id"`
 	IdentityType   IdentityType   `json:"identity_type,omitempty"`
 	SystemWorkload SystemWorkload `json:"system_workload,omitempty"`
+	// Role is the authorization role the token authenticates as (see
+	// pkg/workloadroles). Resolved server-side from the app the sandbox belongs
+	// to; never supplied by the workload. Only sandbox tokens carry it.
+	Role string `json:"role,omitempty"`
 }
 
 // LocalIssuerURL anchors a cluster that has no hostname to advertise.
@@ -257,6 +263,10 @@ const (
 type TokenOptions struct {
 	Audience []string
 	TTL      time.Duration
+	// Role is the authorization role to embed. Empty means the default
+	// (workloadroles.Default). An unknown role name is embedded as-is and is
+	// denied everything at authorize time, so a misconfiguration fails closed.
+	Role string
 }
 
 func (iss *Issuer) IssueToken(app, sandboxID string) (string, error) {
@@ -269,10 +279,16 @@ func (iss *Issuer) IssueTokenWithOptions(app, sandboxID string, opts TokenOption
 		return "", fmt.Errorf("building sandbox workload subject: %w", err)
 	}
 
+	role := opts.Role
+	if role == "" {
+		role = workloadroles.Default
+	}
+
 	claims := iss.baseClaims(subject, opts)
 	claims.App = app
 	claims.SandboxID = sandboxID
 	claims.IdentityType = IdentityTypeSandbox
+	claims.Role = role
 
 	return iss.sign(claims)
 }
@@ -357,7 +373,14 @@ func (iss *Issuer) supportedAlgs() []string {
 	return algs
 }
 
-func (iss *Issuer) JWKSDocument() ([]byte, error) {
+// VerificationKeys returns every public key that may have signed a live token:
+// the live signing keys plus any advertised verify-only keys (a demoted legacy
+// EdDSA key, or a previous key kept for rotation overlap). Keys are deduplicated
+// by ID, primary first.
+//
+// Callers must not cache the result: it tracks whatever key set the Issuer
+// currently holds, which is what keeps verification correct across a rotation.
+func (iss *Issuer) VerificationKeys() []jose.JSONWebKey {
 	seen := map[string]bool{}
 	var keys []jose.JSONWebKey
 	add := func(jwk jose.JSONWebKey) {
@@ -375,7 +398,11 @@ func (iss *Issuer) JWKSDocument() ([]byte, error) {
 		add(jwk)
 	}
 
-	return json.Marshal(jose.JSONWebKeySet{Keys: keys})
+	return keys
+}
+
+func (iss *Issuer) JWKSDocument() ([]byte, error) {
+	return json.Marshal(jose.JSONWebKeySet{Keys: iss.VerificationKeys()})
 }
 
 func loadOrGenerateKey(keyPath string) (*signingKey, error) {

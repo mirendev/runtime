@@ -969,6 +969,13 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 		deps.WorkloadIssuer = workloadIssuer
 	}
 
+	// Sandboxes on this host reach the API through the bridge router, which is
+	// their gateway and the address the API is reachable at from inside the
+	// subnet. Both are needed for in-cluster access: without the CA a sandbox
+	// could not verify what it connected to.
+	deps.ApiAddress = net.JoinHostPort(routerAddr.String(), strconv.Itoa(serverPort(ctx, srvaddr)))
+	deps.CACert = co.CACertificate()
+
 	rc.DataPath = cfg.Server.GetDataPath()
 	rc.DiskMode = cfg.Server.GetDiskMode()
 
@@ -1181,6 +1188,32 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 }
 
 // writeLocalClusterConfig writes a client config file for the local cluster
+// defaultServerPort mirrors pkg/serverconfig's default for --address.
+const defaultServerPort = 8443
+
+// serverPort returns the port the API listens on, given the server's normalized
+// listen address. Both the bridge firewall rule and the address injected into
+// sandboxes derive from this, so a cluster on a non-default port stays
+// consistent — a hardcoded port would leave the firewall silently dropping the
+// traffic it was supposed to allow.
+func serverPort(ctx *Context, srvaddr string) int {
+	_, portStr, err := net.SplitHostPort(srvaddr)
+	if err != nil {
+		ctx.Log.Warn("could not parse server address, assuming default API port",
+			"address", srvaddr, "port", defaultServerPort, "error", err)
+		return defaultServerPort
+	}
+
+	port, err := strconv.Atoi(portStr)
+	if err != nil || port <= 0 {
+		ctx.Log.Warn("server address has no usable port, assuming default API port",
+			"address", srvaddr, "port", defaultServerPort)
+		return defaultServerPort
+	}
+
+	return port
+}
+
 func writeLocalClusterConfig(ctx *Context, cc *caauth.ClientCertificate, address, clusterName string) error {
 	config, err := clientconfig.LoadConfig()
 	if err != nil {

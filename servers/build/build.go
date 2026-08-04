@@ -45,6 +45,7 @@ import (
 	"miren.dev/runtime/pkg/stackbuild"
 	"miren.dev/runtime/pkg/tarx"
 	"miren.dev/runtime/pkg/workloadidentity"
+	"miren.dev/runtime/pkg/workloadroles"
 )
 
 var buildTracer = otel.Tracer("miren.dev/runtime/build")
@@ -725,6 +726,38 @@ func mergeCliEnvVars(existingVars []core_v1alpha.ConfigSpecVariables, cliVars []
 	}
 
 	return result
+}
+
+// applyWorkloadRole persists a workload_role declared in app.toml onto the app
+// entity. It is the app-owner self-service path, so it accepts ONLY app-scoped
+// roles: app.toml is owner-controlled and applied here with the build server's
+// trusted (cert) authority, so honoring a cluster-scoped value would let an app
+// owner escalate. Cluster roles are the operator's to grant via SetWorkloadRole.
+// A cluster-scoped or unknown value fails the deploy with a clear message rather
+// than being silently ignored.
+func (b *Builder) applyWorkloadRole(ctx context.Context, name string, ac *appconfig.AppConfig) error {
+	if ac == nil || ac.WorkloadRole == "" {
+		return nil
+	}
+	role := ac.WorkloadRole
+
+	if _, ok := workloadroles.Lookup(role); !ok {
+		return fmt.Errorf("unknown workload_role %q in app.toml", role)
+	}
+	if !workloadroles.IsAppScoped(role) {
+		return fmt.Errorf("workload_role %q is cluster-scoped and cannot be set from app.toml; "+
+			"an operator must grant it with `miren app set-workload-role`", role)
+	}
+
+	var appRec core_v1alpha.App
+	if err := b.ec.Get(ctx, name, &appRec); err != nil {
+		return fmt.Errorf("loading app %s to set workload role: %w", name, err)
+	}
+	if appRec.WorkloadRole == role {
+		return nil
+	}
+	appRec.WorkloadRole = role
+	return b.ec.Update(ctx, &appRec)
 }
 
 func (b *Builder) nextVersion(ctx context.Context, name string) (
@@ -1433,6 +1466,14 @@ func (b *Builder) buildFromDir(ctx context.Context, name string, path string,
 			activateSpan.SetStatus(codes.Error, err.Error())
 			activateSpan.End()
 			return nil, fmt.Errorf("error updating app entity: %w", err)
+		}
+
+		// Apply a workload_role declared in app.toml (app-scoped only).
+		if err := b.applyWorkloadRole(activateCtx, name, ac); err != nil {
+			activateSpan.RecordError(err)
+			activateSpan.SetStatus(codes.Error, err.Error())
+			activateSpan.End()
+			return nil, err
 		}
 		activateSpan.End()
 

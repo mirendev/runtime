@@ -509,11 +509,12 @@ func undoProvisionAddons(_ context.Context, _ provisionAddonsIn, _ provisionAddo
 // active version so undo can restore it on failure.
 
 type setActiveVersionIn struct {
-	AppName        string    `json:"app_name" saga:"app_name"`
-	StreamID       string    `json:"stream_id" saga:"stream_id"`
-	AppVersionID   string    `json:"app_version_id" saga:"app_version_id"`
-	EphemeralLabel string    `json:"ephemeral_label,omitempty" saga:"ephemeral_label,optional"`
-	AddonsReady    saga.Edge `saga:"addons_provisioned"`
+	AppName        string               `json:"app_name" saga:"app_name"`
+	StreamID       string               `json:"stream_id" saga:"stream_id"`
+	AppVersionID   string               `json:"app_version_id" saga:"app_version_id"`
+	EphemeralLabel string               `json:"ephemeral_label,omitempty" saga:"ephemeral_label,optional"`
+	AppConfig      *appconfig.AppConfig `json:"app_config,omitempty" saga:"app_config,optional"`
+	AddonsReady    saga.Edge            `saga:"addons_provisioned"`
 	// DeploymentID is empty for an untracked build. Consuming it also anchors
 	// this action after begin-deployment, which is where the record is created.
 	DeploymentID string `json:"deployment_id,omitempty" saga:"deployment_id,optional"`
@@ -543,6 +544,12 @@ func setActiveVersion(ctx context.Context, in setActiveVersionIn) (setActiveVers
 
 	if err := b.appClient.SetActiveVersion(ctx, in.AppName, in.AppVersionID); err != nil {
 		return setActiveVersionOut{}, fmt.Errorf("setting active version on %s: %w", in.AppName, err)
+	}
+
+	// Apply a workload_role declared in app.toml (app-scoped only) so it takes
+	// effect on this deploy. A cluster-scoped value fails the deploy.
+	if err := b.applyWorkloadRole(ctx, in.AppName, in.AppConfig); err != nil {
+		return setActiveVersionOut{}, err
 	}
 	return setActiveVersionOut{PreviousVersionID: previous}, nil
 }
