@@ -137,6 +137,7 @@
       "command/debug-entity-patch",
       "command/debug-entity-put",
       "command/debug-entity-replace",
+      "command/debug-etcdctl",
       "command/debug-netdb",
       "command/debug-netdb-gc",
       "command/debug-netdb-list",

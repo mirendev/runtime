@@ -1014,6 +1014,17 @@ Warning: These commands are intended for advanced users and developers. They may
 	d.Dispatch("debug test load", Infer("debug test load", "Loadtest a URL", TestLoad))
 	d.Dispatch("debug ctr", Infer("debug ctr", "Run ctr with miren defaults", DebugCtr))
 	d.Dispatch("debug ctr nuke", Infer("debug ctr nuke", "Nuke a containerd namespace", CtrNuke))
+	d.Dispatch("debug etcdctl", Infer("debug etcdctl", "Run etcdctl against Miren's embedded etcd", DebugEtcdctl,
+		WithDescription(debugEtcdctlDescription),
+		WithExample(mflags.Example{
+			Name: "Show endpoint status",
+			Body: "miren debug etcdctl endpoint status --write-out=table",
+		}),
+		WithExample(mflags.Example{
+			Name: "List every key",
+			Body: "miren debug etcdctl get / --prefix --keys-only",
+		}),
+	))
 	d.Dispatch("debug colors", Infer("debug colors", "Print some colors", Colors))
 	d.Dispatch("debug bundle", Infer("debug bundle", "Create a support bundle with system debug information", DebugBundle))
 
