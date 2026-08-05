@@ -444,6 +444,16 @@ func TestNodeNextjs(t *testing.T) {
 			wantWeb:   "npm run start",
 		},
 		{
+			name: "next with only a serve script uses it",
+			files: map[string]string{
+				"package.json":      `{"name":"app","dependencies":{"next":"14.0.0"},"scripts":{"build":"next build","serve":"node serve.js"}}`,
+				"package-lock.json": "{}",
+			},
+			wantNext:  true,
+			wantBuild: "npm run build",
+			wantWeb:   "npm run serve",
+		},
+		{
 			name: "next with yarn and no start script falls back to next start",
 			files: map[string]string{
 				"package.json": `{"name":"app","dependencies":{"next":"14.0.0"},"scripts":{"build":"next build"}}`,

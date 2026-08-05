@@ -229,8 +229,13 @@ func (s *NodeStack) GenerateLLB(dir string, opts BuildOptions) (*llb.State, erro
 		// the image runs as the app user. Next writes its ISR, image, and prerender
 		// caches beneath .next at runtime, so hand the tree over before export or
 		// those writes fail with EACCES.
+		//
+		// Guard on the directory existing: an app that sets `distDir` in
+		// next.config.js builds somewhere else entirely, and a bare chown would
+		// fail the build over a path that was never going to be there. Such an app
+		// keeps the ownership it has today rather than regressing to a hard error.
 		state = state.Dir("/app").Run(
-			llb.Shlex("chown -R app:app /app/.next"),
+			llb.Args([]string{"/bin/sh", "-c", "if [ -d /app/.next ]; then chown -R app:app /app/.next; fi"}),
 			llb.WithCustomName("[phase] Fixing Next.js build permissions"),
 		).Root()
 	}
@@ -292,18 +297,20 @@ func (s *NodeStack) WebCommand() string {
 		runner = "npm run"
 	}
 
-	// An explicit start script always wins, including for Next.js: it may launch
-	// a custom server, do setup work, or pass extra flags that a synthesized
-	// `next start` would silently drop. Next reads PORT from the environment, so
-	// going through the script still binds the platform-provided port.
+	// An explicit web server script always wins, including for Next.js: it may
+	// launch a custom server, do setup work, or pass extra flags that a
+	// synthesized `next start` would silently drop. Next reads PORT from the
+	// environment, so going through the script still binds the platform port.
 	if s.scripts != nil {
-		if _, ok := s.scripts["start"]; ok {
-			return runner + " start"
+		for _, script := range []string{"start", "serve", "server"} {
+			if _, ok := s.scripts[script]; ok {
+				return runner + " " + script
+			}
 		}
 	}
 
-	// No start script: a Next.js app is served with `next start`, bound to the
-	// platform-provided port. Resolve the local `next` binary through the
+	// No web server script: a Next.js app is served with `next start`, bound to
+	// the platform-provided port. Resolve the local `next` binary through the
 	// detected package manager so a yarn project doesn't shell out to npm's npx
 	// (matches frameworkBuildCommand).
 	if s.hasNext {
@@ -311,15 +318,6 @@ func (s *NodeStack) WebCommand() string {
 			return "yarn next start -p $PORT"
 		}
 		return "npx next start -p $PORT"
-	}
-
-	// Check for the remaining web server scripts in order of preference
-	if s.scripts != nil {
-		for _, script := range []string{"serve", "server"} {
-			if _, ok := s.scripts[script]; ok {
-				return runner + " " + script
-			}
-		}
 	}
 
 	// Fallback: use detected entry point
