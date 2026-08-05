@@ -93,8 +93,8 @@ func TestCompositeAuthenticator_BindingMismatchBeatsPrimaryError(t *testing.T) {
 		t.Error("expected nil identity when neither authenticator succeeds")
 	}
 
-	var mismatch *BindingMismatchError
-	if !errors.As(err, &mismatch) {
+	mismatch, ok := errors.AsType[*BindingMismatchError](err)
+	if !ok {
 		t.Fatalf("expected the binding mismatch to win, got %v", err)
 	}
 	if mismatch.Repository != "acme/app" {

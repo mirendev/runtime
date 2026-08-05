@@ -84,8 +84,7 @@ func TestHTTPTimeoutProduces503(t *testing.T) {
 				outReq.URL.Host = backend.Listener.Addr().String()
 			},
 			ErrorHandler: func(rw http.ResponseWriter, req *http.Request, err error) {
-				var netErr net.Error
-				if errors.As(err, &netErr) && netErr.Timeout() {
+				if netErr, ok := errors.AsType[net.Error](err); ok && netErr.Timeout() {
 					http.Error(rw, timeoutMessage, http.StatusServiceUnavailable)
 					return
 				}

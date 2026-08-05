@@ -148,7 +148,7 @@ func New(value ...Attribute) *Color {
 	}
 
 	if noColorIsSet() {
-		c.noColor = boolPtr(true)
+		c.noColor = new(true)
 	}
 
 	c.Add(value...)
@@ -447,13 +447,13 @@ func (c *Color) unformat() string {
 // code and still being able to output. Can be used for flags like
 // "--no-color". To enable back use EnableColor() method.
 func (c *Color) DisableColor() {
-	c.noColor = boolPtr(true)
+	c.noColor = new(true)
 }
 
 // EnableColor enables the color output. Use it in conjunction with
 // DisableColor(). Otherwise, this method has no side effects.
 func (c *Color) EnableColor() {
-	c.noColor = boolPtr(false)
+	c.noColor = new(false)
 }
 
 func (c *Color) isNoColorSet() bool {
@@ -495,10 +495,6 @@ func (c *Color) attrExists(a Attribute) bool {
 	}
 
 	return false
-}
-
-func boolPtr(v bool) *bool {
-	return &v
 }
 
 func getCachedColor(p Attribute) *Color {

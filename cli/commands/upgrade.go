@@ -79,8 +79,7 @@ func Upgrade(ctx *Context, opts struct {
 	// Check permissions before downloading (skip if user already requested --user)
 	if !opts.User {
 		if err := checkInstallPermissions(installPath); err != nil {
-			var permErr *permissionError
-			if errors.As(err, &permErr) {
+			if permErr, ok := errors.AsType[*permissionError](err); ok {
 				option, handleErr := handlePermissionError(ctx, installPath, permErr)
 				if handleErr != nil {
 					return handleErr

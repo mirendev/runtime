@@ -46,8 +46,7 @@ func (e *LockHeldError) Is(target error) bool {
 // HolderFrom extracts the blocking holder from an error returned by Acquire or
 // Begin, reporting false for any other error.
 func HolderFrom(err error) (*Holder, bool) {
-	var held *LockHeldError
-	if errors.As(err, &held) {
+	if held, ok := errors.AsType[*LockHeldError](err); ok {
 		return held.Holder, true
 	}
 	return nil, false

@@ -813,8 +813,7 @@ func Deploy(ctx *Context, opts struct {
 			}
 
 			// Check if this was a server panic
-			var panicErr cond.ErrPanic
-			if errors.As(err, &panicErr) {
+			if panicErr, ok := errors.AsType[cond.ErrPanic](err); ok {
 				ctx.Printf("\n\n❌ Build failed due to a server panic.\n")
 				ctx.Printf("The server encountered a panic: %s\n", panicErr.Message)
 				ctx.Printf("Check the server logs for more details.\n")
@@ -917,8 +916,7 @@ func Deploy(ctx *Context, opts struct {
 			}
 
 			// Check if this was a server panic
-			var panicErr cond.ErrPanic
-			if errors.As(err, &panicErr) {
+			if panicErr, ok := errors.AsType[cond.ErrPanic](err); ok {
 				ctx.Printf("\n\n❌ Build failed due to a server panic.\n")
 				ctx.Printf("The server encountered a panic: %s\n", panicErr.Message)
 				ctx.Printf("Check the server logs for more details.\n")

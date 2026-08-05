@@ -367,8 +367,7 @@ func collectEnvTags(t reflect.Type) []string {
 	}
 
 	var out []string
-	for i := 0; i < t.NumField(); i++ {
-		f := t.Field(i)
+	for f := range t.Fields() {
 		if env := f.Tag.Get("env"); env != "" {
 			out = append(out, env)
 		}

@@ -222,7 +222,7 @@ func TestEtcdEndpointsDefault(t *testing.T) {
 			name:          "standalone mode with default port",
 			configContent: `mode = "standalone"`,
 			wantEndpoints: []string{"http://127.0.0.1:12379"},
-			wantEtcdStart: boolPtr(true),
+			wantEtcdStart: new(true),
 		},
 		{
 			name: "standalone mode with custom port",
@@ -230,7 +230,7 @@ func TestEtcdEndpointsDefault(t *testing.T) {
 [etcd]
 client_port = 9999`,
 			wantEndpoints: []string{"http://127.0.0.1:9999"},
-			wantEtcdStart: boolPtr(true),
+			wantEtcdStart: new(true),
 		},
 		{
 			name: "explicit endpoints override default",
@@ -238,7 +238,7 @@ client_port = 9999`,
 [etcd]
 endpoints = ["http://custom:2379"]`,
 			wantEndpoints: []string{"http://custom:2379"},
-			wantEtcdStart: boolPtr(true),
+			wantEtcdStart: new(true),
 		},
 		{
 			name: "distributed mode with no embedded etcd",
@@ -255,7 +255,7 @@ endpoints = ["http://etcd1:2379", "http://etcd2:2379"]`,
 				EtcdConfigEndpoints: []string{"http://cli-etcd:2379"},
 			},
 			wantEndpoints: []string{"http://cli-etcd:2379"},
-			wantEtcdStart: boolPtr(true),
+			wantEtcdStart: new(true),
 		},
 	}
 

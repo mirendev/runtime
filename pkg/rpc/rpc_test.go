@@ -441,8 +441,8 @@ func TestRPC(t *testing.T) {
 		_, err = mc.ReadTemperature(context.Background(), "test")
 		r.Error(err)
 
-		var panicErr cond.ErrPanic
-		r.True(errors.As(err, &panicErr), "expected ErrPanic, got %T: %v", err, err)
+		panicErr, ok := errors.AsType[cond.ErrPanic](err)
+		r.True(ok, "expected ErrPanic, got %T: %v", err, err)
 		r.Contains(panicErr.Message, "test panic message")
 	})
 }
@@ -548,9 +548,7 @@ func BenchmarkRPC(b *testing.B) {
 
 	mc := &example.MeterClient{Client: c}
 
-	b.ResetTimer()
-
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		_, err := mc.ReadTemperature(context.Background(), "test")
 		r.NoError(err)
 	}

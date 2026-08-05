@@ -55,8 +55,8 @@ func TestOIDCBindingMismatchReachesTheClient(t *testing.T) {
 	_, err = cs.Connect(ss.ListenAddr(), "meter")
 	r.Error(err, "expected the connection to be denied")
 
-	var resolveErr *rpc.ResolveError
-	r.True(errors.As(err, &resolveErr), "expected a *rpc.ResolveError, got %T: %v", err, err)
+	resolveErr, ok := errors.AsType[*rpc.ResolveError](err)
+	r.True(ok, "expected a *rpc.ResolveError, got %T: %v", err, err)
 	r.Equal(401, resolveErr.StatusCode)
 
 	// Code is what lets the CLI suppress the 'miren login' hint.
@@ -88,8 +88,8 @@ func TestOrdinaryAuthFailureDisclosesNothingToTheClient(t *testing.T) {
 	_, err = cs.Connect(ss.ListenAddr(), "meter")
 	r.Error(err)
 
-	var resolveErr *rpc.ResolveError
-	r.True(errors.As(err, &resolveErr), "expected a *rpc.ResolveError, got %T: %v", err, err)
+	resolveErr, ok := errors.AsType[*rpc.ResolveError](err)
+	r.True(ok, "expected a *rpc.ResolveError, got %T: %v", err, err)
 	r.Equal(401, resolveErr.StatusCode)
 	r.Empty(resolveErr.Code)
 	r.Empty(resolveErr.Detail)

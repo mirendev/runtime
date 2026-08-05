@@ -79,8 +79,7 @@ func (c *CompositeAuthenticator) Authenticate(ctx context.Context, r *http.Reque
 	// means OIDC got far enough to verify the token's signature and audience, so
 	// it knows exactly why the caller was rejected. The primary, by contrast,
 	// only failed to parse a token that was never meant for it.
-	var mismatch *BindingMismatchError
-	if errors.As(oidcErr, &mismatch) {
+	if _, ok := errors.AsType[*BindingMismatchError](oidcErr); ok {
 		return nil, oidcErr
 	}
 
