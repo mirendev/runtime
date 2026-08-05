@@ -225,3 +225,63 @@ func TestSecretGCWithNoSecrets(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 0, result.TotalScanned)
 }
+
+// The pin snapshot is taken once at the top of the sweep, so a ConfigVersion
+// minted afterwards would otherwise lose its secret to a decision made before
+// it existed. Unlike an app version, a reaped secret version cannot be rebuilt.
+func TestSecretGCRecheckesPinsImmediatelyBeforeDeleting(t *testing.T) {
+	ctx := context.Background()
+	inmem, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	secretID := entity.Id("secret/payments.stripe-key")
+
+	orphan := createSecretVersion(t, inmem.EAC, "sv-orphan",
+		&core_v1alpha.SecretVersion{Secret: secretID, State: core_v1alpha.ENABLED}, aged())
+	current := createSecretVersion(t, inmem.EAC, "sv-current",
+		&core_v1alpha.SecretVersion{Secret: secretID, State: core_v1alpha.ENABLED}, aged())
+
+	_, err := inmem.Client.Create(ctx, "payments.stripe-key", &core_v1alpha.Secret{
+		Path:           "payments/stripe-key",
+		CurrentVersion: current,
+	})
+	require.NoError(t, err)
+
+	gc := newSecretGC(t, inmem.EAC)
+
+	// Nothing references it yet, so this version is squarely a delete candidate.
+	ref := secret.FormatRef("payments/stripe-key", shortIDOf(t, inmem.EAC, orphan))
+	stale, err := gc.pinnedSecretVersions(ctx)
+	require.NoError(t, err)
+	require.False(t, stale[ref], "precondition: the snapshot sees it as unreferenced")
+
+	// A config lands pinning it, exactly as one could between snapshot and
+	// delete.
+	appID, err := inmem.Client.Create(ctx, "gcapp", &core_v1alpha.App{})
+	require.NoError(t, err)
+	_, err = inmem.Client.Create(ctx, "late-cfg", &core_v1alpha.ConfigVersion{
+		App: appID,
+		Spec: core_v1alpha.ConfigSpec{
+			Variables: []core_v1alpha.ConfigSpecVariables{{
+				Key:     "STRIPE_API_KEY",
+				Backend: secret.ClusterBackendName,
+				Value:   ref,
+			}},
+		},
+	})
+	require.NoError(t, err)
+
+	// The re-check sees what the snapshot could not.
+	nowPinned, err := gc.secretVersionPinnedNow(ctx, ref)
+	require.NoError(t, err)
+	assert.True(t, nowPinned, "the pre-delete re-check must see the newly minted pin")
+
+	// And a full sweep now retains it rather than reaping it.
+	result, err := gc.RunSecretGC(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, 0, result.DeletedVersions)
+	assert.Equal(t, 1, result.RetainedPinned)
+
+	_, err = inmem.EAC.Get(ctx, orphan.String())
+	assert.NoError(t, err, "the newly pinned version must still exist")
+}

@@ -98,13 +98,34 @@ func (c *GCController) RunSecretGC(ctx context.Context) (*SecretGCResult, error)
 				continue
 			}
 
-			if pinned[secret.FormatRef(sec.Path, ent.ShortId())] {
+			ref := secret.FormatRef(sec.Path, ent.ShortId())
+			if pinned[ref] {
 				result.RetainedPinned++
 				continue
 			}
 
 			if ent.GetCreatedAt().After(cutoff) {
 				result.RetainedRecent++
+				continue
+			}
+
+			// The pin snapshot was taken at the top of the sweep and can be a
+			// full pass stale, so re-check immediately before deleting. A
+			// ConfigVersion minted in that window pins a version this pass
+			// already decided was unreferenced, and unlike an app version there
+			// is no rebuilding a secret that gets deleted underneath it. Same
+			// pattern as pinnedNow on the app-version sweep.
+			nowPinned, err := c.secretVersionPinnedNow(gcCtx, ref)
+			if err != nil {
+				c.Log.Warn("failed to re-check secret version before delete; retaining",
+					"secret", sec.Path, "version", ent.ShortId(), "error", err)
+				result.FailedVersions++
+				continue
+			}
+			if nowPinned {
+				c.Log.Debug("retaining secret version pinned during sweep",
+					"secret", sec.Path, "version", ent.ShortId())
+				result.RetainedPinned++
 				continue
 			}
 
@@ -147,4 +168,19 @@ func (c *GCController) pinnedSecretVersions(ctx context.Context) (map[string]boo
 	}
 
 	return pinned, nil
+}
+
+// secretVersionPinnedNow re-reads the live ConfigVersions and reports whether
+// any of them pins this reference.
+//
+// It runs only for versions that already cleared every other retention rule,
+// so the extra pass costs nothing on a healthy sweep and buys the guarantee
+// that matters: a version is never deleted on the strength of a snapshot that
+// a newly minted config has since invalidated.
+func (c *GCController) secretVersionPinnedNow(ctx context.Context, ref string) (bool, error) {
+	pinned, err := c.pinnedSecretVersions(ctx)
+	if err != nil {
+		return false, err
+	}
+	return pinned[ref], nil
 }

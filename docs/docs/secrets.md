@@ -33,7 +33,7 @@ miren secret set payments/stripe-key
 
 You are prompted with masking; the value is never echoed, logged, or written to disk by the CLI. Each write mints an immutable version and prints its handle:
 
-```
+```text
 Stored payments/stripe-key@x1A  (cluster, enabled)
 ```
 
@@ -76,7 +76,7 @@ Your app reads `STRIPE_API_KEY` as an ordinary environment variable. Nothing in 
 
 `miren env list` shows the reference rather than a mask, because there is no local value to hide:
 
-```
+```text
 NAME             VALUE                              SOURCE
 STRIPE_API_KEY   → cluster:payments/stripe-key@x1A  manual
 DATABASE_POOL    10                                 manual
@@ -124,9 +124,15 @@ miren secret disable payments/stripe-key@x1A
 
 </CliCommand>
 
-Disabling is reversible with `miren secret enable`; the value itself is untouched. Note that already-running sandboxes keep the value they started with — revoking prevents new resolutions, it does not reach into running processes.
+Disabling is reversible with `miren secret enable`; the value itself is untouched.
 
-`miren secret destroy` goes further and deletes the value for good. Prefer `disable` when responding to a leak: it fails closed just as hard and leaves you able to recover if something still needed the value.
+:::warning[Revoking does not reach running processes]
+Already-running sandboxes keep the value they started with. Disabling a version prevents new resolutions — it does not reach into processes that already hold the secret. Restart or redeploy the affected apps if you need them off the old value.
+:::
+
+:::danger[Destroy cannot be undone]
+`miren secret destroy` deletes the value for good, and anything still referencing that version can never resolve again. Prefer `miren secret disable` when responding to a leak: it fails closed just as hard and leaves you able to recover if something still needed the value.
+:::
 
 ## Seeing what you have
 
@@ -139,7 +145,7 @@ miren secret versions payments/stripe-key
 
 </CliCommand>
 
-```
+```text
 PATH                 BACKEND  CURRENT  VERSIONS
 payments/stripe-key  cluster  @m4Q     @m4Q @x1A(disabled)
 registry/npm-token   cluster  @p7R     @p7R
@@ -155,7 +161,9 @@ Each version is sealed with its own random data key, and only that key is encryp
 - A leaked data key exposes exactly one version rather than every secret.
 - The cluster key only ever performs small fixed-size operations, so it can move behind a KMS later without your stored data changing shape.
 
-The plaintext exists only transiently, in memory, while a deploy resolves it and while the container that needs it is being created. It is never written to the cluster store, a sandbox spec, an image layer, or a log.
+Within Miren, the plaintext exists only transiently and only in memory: while a deploy resolves it, and while the container that needs it is being created. It is never written to the cluster store, a sandbox spec, an image layer, or a log.
+
+Once the container starts, your application holds its own copy for as long as it runs — an environment variable is readable by the process and anything that can inspect it. Miren stops handing the value around; it cannot un-give it to the app you handed it to.
 
 :::warning[Back up the keyring]
 The cluster key lives at `<data-path>/server/secrets.keyring`, alongside the cluster's CA key. **If that file is lost, every stored secret is permanently unrecoverable.** Include it in whatever backs up your data path.

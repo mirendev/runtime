@@ -318,6 +318,18 @@ func (s *Server) RotateKey(ctx context.Context, state *secret_v1alpha.SecretsRot
 // lives, and travel to the runner, which holds them only long enough to hand
 // them to a container.
 //
+// Access control comes from the RPC layer, not from here: the method is not
+// marked Public, so the server rejects it before dispatch unless the caller
+// presented an identity it authenticated (mTLS or OIDC — see the non-public
+// branch in pkg/rpc.Server). Naming that explicitly because this is the one
+// place plaintext leaves the coordinator, and the guarantee is otherwise
+// invisible at the call site.
+//
+// What that does *not* yet give us is per-secret scoping — any authenticated
+// caller can resolve any reference. RFD-90 leaves that open ("Per-secret access
+// scoping"), and it wants deciding before secrets carry anything an operator
+// would not hand every workload in the cluster.
+//
 // It is deliberately not logged at Info. Unlike a write or a revocation, a
 // resolve happens on every sandbox start, so recording each one would drown the
 // audit tier it sits in without telling an operator anything they did not
