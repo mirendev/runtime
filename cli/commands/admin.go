@@ -290,9 +290,9 @@ func parseUnknownFlags(unknown []string, params map[string]any, paramSources map
 		switch {
 		case strings.HasPrefix(arg, "--"):
 			flagStr := arg[2:]
-			if idx := strings.IndexByte(flagStr, '='); idx >= 0 {
-				key = flagStr[:idx]
-				value = flagStr[idx+1:]
+			if before, after, ok := strings.Cut(flagStr, "="); ok {
+				key = before
+				value = after
 			} else {
 				key = flagStr
 				// Next arg is the value unless it looks like another flag.
@@ -312,9 +312,9 @@ func parseUnknownFlags(unknown []string, params map[string]any, paramSources map
 
 		case strings.HasPrefix(arg, "-"):
 			flagStr := arg[1:]
-			if idx := strings.IndexByte(flagStr, '='); idx >= 0 {
-				key = flagStr[:idx]
-				value = flagStr[idx+1:]
+			if before, after, ok := strings.Cut(flagStr, "="); ok {
+				key = before
+				value = after
 			} else {
 				key = flagStr
 				// Next arg is the value unless it looks like another flag.
@@ -334,9 +334,9 @@ func parseUnknownFlags(unknown []string, params map[string]any, paramSources map
 
 		default:
 			// Bare arg — treat as key=value if it contains '='
-			if idx := strings.IndexByte(arg, '='); idx >= 0 {
-				key = arg[:idx]
-				value = arg[idx+1:]
+			if before, after, ok := strings.Cut(arg, "="); ok {
+				key = before
+				value = after
 			} else {
 				return fmt.Errorf("unexpected argument in flags: %s", arg)
 			}

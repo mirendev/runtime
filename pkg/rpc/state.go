@@ -572,8 +572,8 @@ func (s *State) Connect(remote string, name string) (*NetworkClient, error) {
 		client *NetworkClient
 		err    error
 	)
-	if strings.HasPrefix(remote, "unix:") {
-		client, err = s.connectLocal(strings.TrimPrefix(remote, "unix:"))
+	if after, ok := strings.CutPrefix(remote, "unix:"); ok {
+		client, err = s.connectLocal(after)
 		if err != nil {
 			return nil, err
 		}

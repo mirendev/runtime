@@ -36,8 +36,8 @@ func SanitizeIdentifier(name string, maxLen int) string {
 // to an int64 value in gigabytes. Returns 1 if the string cannot be parsed.
 func ParseStorageGb(s string) int64 {
 	s = strings.TrimSpace(s)
-	if strings.HasSuffix(s, "Gi") {
-		n, err := strconv.ParseInt(strings.TrimSuffix(s, "Gi"), 10, 64)
+	if before, ok := strings.CutSuffix(s, "Gi"); ok {
+		n, err := strconv.ParseInt(before, 10, 64)
 		if err == nil && n > 0 {
 			return n
 		}

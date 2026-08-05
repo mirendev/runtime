@@ -243,10 +243,10 @@ func addCluster(ctx *Context, identityName, clusterName, address string, force b
 func normalizeAddress(address string) (normalizedAddr, sniHost string, err error) {
 	// Strip scheme if present
 	addr := address
-	if strings.HasPrefix(addr, "https://") {
-		addr = strings.TrimPrefix(addr, "https://")
-	} else if strings.HasPrefix(addr, "http://") {
-		addr = strings.TrimPrefix(addr, "http://")
+	if after, ok := strings.CutPrefix(addr, "https://"); ok {
+		addr = after
+	} else if after, ok := strings.CutPrefix(addr, "http://"); ok {
+		addr = after
 	}
 
 	// Handle IPv6 literals and port logic
