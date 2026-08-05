@@ -272,17 +272,15 @@ func (c *Context) Warn(format string, args ...interface{}) {
 // printConfigWarning renders a config error to stderr. Uses TerminalError
 // for rich output when available, otherwise falls back to a plain warning.
 //
-// errors.As rather than a type assertion: a rich error that has been wrapped on
-// its way up would otherwise silently fall back to the plain path.
+// errors.AsType rather than a type assertion: a rich error that has been
+// wrapped on its way up would otherwise silently fall back to the plain path.
 func printConfigWarning(err error) {
-	var se ui.SeverityTerminalError
-	if errors.As(err, &se) {
+	if se, ok := errors.AsType[ui.SeverityTerminalError](err); ok {
 		se.WriteWithSeverity(os.Stderr, ui.SeverityWarning)
 		return
 	}
 
-	var te ui.TerminalError
-	if errors.As(err, &te) {
+	if te, ok := errors.AsType[ui.TerminalError](err); ok {
 		fmt.Fprint(os.Stderr, "warning: ")
 		te.WriteForTerminal(os.Stderr)
 		return

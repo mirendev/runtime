@@ -10,16 +10,16 @@ import (
 )
 
 // cond.ErrValidationFailure carries no Is method, so errors.Is would compare it
-// by field equality. errors.As is the assertion that actually means "this kind
-// of error". ErrConflict is matched the same way for symmetry.
+// by field equality. errors.AsType is the assertion that actually means "this
+// kind of error". ErrConflict is matched the same way for symmetry.
 func isValidationFailure(err error) bool {
-	var target cond.ErrValidationFailure
-	return errors.As(err, &target)
+	_, ok := errors.AsType[cond.ErrValidationFailure](err)
+	return ok
 }
 
 func isConflict(err error) bool {
-	var target cond.ErrConflict
-	return errors.As(err, &target)
+	_, ok := errors.AsType[cond.ErrConflict](err)
+	return ok
 }
 
 // allowedTransitions is the expected state machine, written out independently of

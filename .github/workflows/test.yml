@@ -41,7 +41,7 @@ jobs:
   lint:
     runs-on: depot-ubuntu-latest
     steps:
-    - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       with:
         persist-credentials: false
         ref: ${{ inputs.ref }}
@@ -53,7 +53,7 @@ jobs:
       working-directory: docs
 
     - name: Set up Go
-      uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6
+      uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
       with:
         go-version-file: 'go.mod'
         cache: true
@@ -68,7 +68,7 @@ jobs:
 
     - name: Cache Go tools
       id: cache-go-tools
-      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: ~/go/bin
         key: ${{ runner.os }}-go-tools-${{ hashFiles('go.mod') }}
@@ -82,9 +82,9 @@ jobs:
         go install go.uber.org/mock/mockgen@latest
 
     - name: golangci-lint
-      uses: golangci/golangci-lint-action@4afd733a84b1f43292c63897423277bb7f4313a9 # v8
+      uses: golangci/golangci-lint-action@d583c34f0599d37dbac4a198b9c83201be380893 # v9.3.0
       with:
-        version: v2.6.1
+        version: v2.12.2
 
     - name: Check go.mod tidiness
       run: |
@@ -109,7 +109,7 @@ jobs:
     outputs:
       distributed: ${{ steps.filter.outputs.distributed }}
     steps:
-    - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       with:
         persist-credentials: false
         ref: ${{ inputs.ref }}
@@ -151,7 +151,7 @@ jobs:
     outputs:
       matrix: ${{ steps.set-matrix.outputs.matrix }}
     steps:
-    - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       with:
         persist-credentials: false
         ref: ${{ inputs.ref }}
@@ -191,13 +191,13 @@ jobs:
       matrix:
         group: ${{ fromJson(needs.test-groups.outputs.matrix) }}
     steps:
-    - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       with:
         persist-credentials: false
         ref: ${{ inputs.ref }}
 
     - name: Set up Go
-      uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6
+      uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
       with:
         go-version-file: 'go.mod'
         cache: true
@@ -210,7 +210,7 @@ jobs:
 
     - name: Cache iso binary
       id: iso-cache
-      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: ~/go/bin/iso
         key: iso-binary-${{ steps.iso-version.outputs.version }}-${{ runner.os }}-${{ runner.arch }}
@@ -223,7 +223,7 @@ jobs:
       run: echo "$(go env GOPATH)/bin" >> $GITHUB_PATH
 
     - name: Restore iso cache
-      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: /tmp/iso-cache
         key: iso-cache-${{ hashFiles('go.sum') }}
@@ -231,7 +231,7 @@ jobs:
 
     - name: Restore Docker image cache
       id: docker-image-cache
-      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: /tmp/iso-image.tar
         key: iso-image-${{ hashFiles('.iso/Dockerfile', '.iso/.bashrc', 'hack/containerd-config.toml') }}
@@ -254,7 +254,7 @@ jobs:
     outputs:
       matrix: ${{ steps.set-matrix.outputs.matrix }}
     steps:
-    - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       with:
         persist-credentials: false
         ref: ${{ inputs.ref }}
@@ -293,13 +293,13 @@ jobs:
       matrix:
         group: ${{ fromJson(needs.blackbox-groups.outputs.matrix) }}
     steps:
-    - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       with:
         persist-credentials: false
         ref: ${{ inputs.ref }}
 
     - name: Set up Go
-      uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6
+      uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
       with:
         go-version-file: 'go.mod'
         cache: true
@@ -312,7 +312,7 @@ jobs:
 
     - name: Cache iso binary
       id: iso-cache
-      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: ~/go/bin/iso
         key: iso-binary-${{ steps.iso-version.outputs.version }}-${{ runner.os }}-${{ runner.arch }}
@@ -325,7 +325,7 @@ jobs:
       run: echo "$(go env GOPATH)/bin" >> $GITHUB_PATH
 
     - name: Restore iso cache
-      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: /tmp/iso-cache
         key: iso-cache-blackbox-${{ hashFiles('go.sum') }}
@@ -333,7 +333,7 @@ jobs:
 
     - name: Restore Docker image cache
       id: docker-image-cache
-      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: /tmp/iso-image.tar
         key: iso-image-${{ hashFiles('.iso/Dockerfile', '.iso/.bashrc', 'hack/containerd-config.toml') }}
@@ -376,13 +376,13 @@ jobs:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: depot-ubuntu-latest
     steps:
-    - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       with:
         persist-credentials: false
         ref: ${{ inputs.ref }}
 
     - name: Set up Go
-      uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6
+      uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
       with:
         go-version-file: 'go.mod'
         cache: true
@@ -395,7 +395,7 @@ jobs:
 
     - name: Cache iso binary
       id: iso-cache
-      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: ~/go/bin/iso
         key: iso-binary-${{ steps.iso-version.outputs.version }}-${{ runner.os }}-${{ runner.arch }}
@@ -408,7 +408,7 @@ jobs:
       run: echo "$(go env GOPATH)/bin" >> $GITHUB_PATH
 
     - name: Restore iso cache
-      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: /tmp/iso-cache
         key: iso-cache-blackbox-pop-${{ hashFiles('go.sum') }}
@@ -416,7 +416,7 @@ jobs:
 
     - name: Restore Docker image cache
       id: docker-image-cache
-      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: /tmp/iso-image.tar
         key: iso-image-${{ hashFiles('.iso/Dockerfile', '.iso/.bashrc', 'hack/containerd-config.toml') }}
@@ -428,7 +428,7 @@ jobs:
     # POP tests need the cloud repo to build cloud and pop binaries from source.
     # Requires CLOUD_REPO_TOKEN secret — a PAT with read access to mirendev/cloud.
     - name: Checkout cloud repo
-      uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       with:
         persist-credentials: false
         repository: mirendev/cloud
@@ -488,13 +488,13 @@ jobs:
       contains(github.event.pull_request.labels.*.name, 'ci:distributed') )
     runs-on: depot-ubuntu-latest
     steps:
-    - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       with:
         persist-credentials: false
         ref: ${{ inputs.ref }}
 
     - name: Set up Go
-      uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6
+      uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
       with:
         go-version-file: 'go.mod'
         cache: true
@@ -507,7 +507,7 @@ jobs:
 
     - name: Cache iso binary
       id: iso-cache
-      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: ~/go/bin/iso
         key: iso-binary-${{ steps.iso-version.outputs.version }}-${{ runner.os }}-${{ runner.arch }}
@@ -520,7 +520,7 @@ jobs:
       run: echo "$(go env GOPATH)/bin" >> $GITHUB_PATH
 
     - name: Restore iso cache
-      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: /tmp/iso-cache
         key: iso-cache-blackbox-distributed-${{ hashFiles('go.sum') }}
@@ -528,7 +528,7 @@ jobs:
 
     - name: Restore Docker image cache
       id: docker-image-cache
-      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: /tmp/iso-image.tar
         key: iso-image-${{ hashFiles('.iso/Dockerfile', '.iso/.bashrc', 'hack/containerd-config.toml') }}
@@ -614,13 +614,13 @@ jobs:
     if: github.event_name != 'workflow_call'
     runs-on: depot-ubuntu-latest
     steps:
-    - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       with:
         persist-credentials: false
         ref: ${{ inputs.ref }}
 
     - name: Set up Go
-      uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6
+      uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
       with:
         go-version-file: 'go.mod'
         cache: true

@@ -383,8 +383,7 @@ const rpcPathPrefix = "/_rpc/"
 // other failure stays a bare 401: the caller is unauthenticated, and a chatty
 // rejection is a fine oracle for probing how a cluster is configured.
 func writeAuthFailure(w http.ResponseWriter, err error) {
-	var disclosable DisclosableAuthError
-	if errors.As(err, &disclosable) {
+	if disclosable, ok := errors.AsType[DisclosableAuthError](err); ok {
 		w.Header().Add("rpc-status", disclosable.AuthErrorCode())
 		w.Header().Add("rpc-error", disclosable.Error())
 	}

@@ -1,6 +1,6 @@
 # Miren Runtime Build Environment
 
-FROM golang:1.25
+FROM golang:1.26
 
 # Install system dependencies
 RUN apt-get update && apt-get install -y \

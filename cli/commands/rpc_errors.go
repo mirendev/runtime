@@ -19,8 +19,8 @@ import (
 // user actually typed — "miren route list" is a far better thing to put in an
 // error than the capability "entities" it happens to resolve.
 func (c *Context) wrapRPCError(err error) error {
-	var re *rpc.ResolveError
-	if !errors.As(err, &re) {
+	re, ok := errors.AsType[*rpc.ResolveError](err)
+	if !ok {
 		return err
 	}
 

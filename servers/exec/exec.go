@@ -16,6 +16,7 @@ import (
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/api/exec/exec_v1alpha"
 	"miren.dev/runtime/pkg/idgen"
+	"miren.dev/runtime/pkg/rpc"
 	"miren.dev/runtime/pkg/rpc/stream"
 )
 
@@ -93,6 +94,16 @@ func (s *Server) Exec(ctx context.Context, req *exec_v1alpha.SandboxExecExec) er
 
 	if firstContainer == nil {
 		return fmt.Errorf("no non-sandbox container found for %s", id)
+	}
+
+	// Confine an app-scoped caller to its own app. On the normal path this is a
+	// no-op: the exec proxy already enforces it and reaches this server over the
+	// coordinator cert (an unscoped identity). The guard matters only if this
+	// server is ever exposed to clients directly — an unresolvable app denies an
+	// app-scoped caller (rpc.AllowApp fails closed against ""), so the fail-open
+	// gap where verId is empty is covered.
+	if app := s.resolveVersionApp(ctx, verId); !rpc.AllowApp(ctx, app) {
+		return rpc.AppAccessError(ctx, app)
 	}
 
 	s.Log.Debug("found container", "id", firstContainer.ID())
@@ -224,6 +235,35 @@ func (s *Server) Exec(ctx context.Context, req *exec_v1alpha.SandboxExecExec) er
 	}
 
 	return nil
+}
+
+// resolveVersionApp returns the app owning an AppVersion, or "" if verId is
+// empty or resolution fails. "" denies an app-scoped caller (rpc.AllowApp fails
+// closed against an empty app) while leaving unscoped callers unaffected.
+func (s *Server) resolveVersionApp(ctx context.Context, verId string) string {
+	if verId == "" {
+		return ""
+	}
+
+	verResp, err := s.EAC.Get(ctx, verId)
+	if err != nil {
+		return ""
+	}
+
+	var ver core_v1alpha.AppVersion
+	ver.Decode(verResp.Entity().Entity())
+	if ver.App == "" {
+		return ""
+	}
+
+	appResp, err := s.EAC.Get(ctx, ver.App.String())
+	if err != nil {
+		return ""
+	}
+
+	var meta core_v1alpha.Metadata
+	meta.Decode(appResp.Entity().Entity())
+	return meta.Name
 }
 
 func (e *Server) command(cfgSpec *core_v1alpha.ConfigSpec, service string) string {

@@ -205,3 +205,17 @@ On a frequently-deployed cluster this window can pin more image data than the di
 |-------|------|---------|-------------|---------|----------|
 | `retention_count` | int | `10` | Most-recent versions to keep per app, regardless of age | `MIREN_APP_VERSION_RETENTION_COUNT` | `--app-version-retention-count` |
 | `retention_period` | string | `30d` | Keep versions newer than this, regardless of count (e.g. `30d`, `2w`) | `MIREN_APP_VERSION_RETENTION_PERIOD` | `--app-version-retention-period` |
+
+## `[saga]` — Saga Execution Retention {#saga}
+
+Miren records a saga execution for multi-step operations like creating a sandbox or running a build, so that a server crash mid-operation can resume or roll back cleanly instead of leaving things half-done. Each record holds the outputs of every step it ran.
+
+Once an execution finishes, that record is only useful for looking back at what happened, so Miren deletes it after `retention_period`. Successes and failures are treated the same way. Executions still in progress are never deleted regardless of age, including ones stuck retrying a rollback, since those are exactly what the server needs to recover.
+
+:::warning[Indefinite retention grows without bound]
+Setting `retention_period` to `0` keeps finished executions forever. That's useful while investigating an incident, but a cluster where one app repeatedly fails to start can write thousands of executions a day, so it's worth putting back afterward.
+:::
+
+| Field | Type | Default | Description | Env Var | CLI Flag |
+|-------|------|---------|-------------|---------|----------|
+| `retention_period` | string | `7d` | Delete finished saga executions older than this (e.g. `7d`, `24h`). `0` keeps them indefinitely | `MIREN_SAGA_RETENTION_PERIOD` | `--saga-retention-period` |

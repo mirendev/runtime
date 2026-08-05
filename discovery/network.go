@@ -19,7 +19,10 @@ type HTTPEndpoint struct {
 
 func (h *HTTPEndpoint) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	var rp httputil.ReverseProxy
-	rp.Director = h.redirect
+	rp.Rewrite = func(req *httputil.ProxyRequest) {
+		h.redirect(req.Out)
+		req.SetXForwarded()
+	}
 	rp.ServeHTTP(w, req)
 }
 

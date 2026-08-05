@@ -193,9 +193,11 @@ type stateOptions struct {
 	serverLocalAddr string
 	clientLocalAddr string
 
-	authenticator Authenticator
-	authorizer    Authorizer
-	bearerToken   string // JWT or other bearer token for authentication
+	authenticator   Authenticator
+	authorizer      Authorizer
+	bearerToken     string // JWT or other bearer token for authentication
+	bearerTokenFunc func() (string, error)
+	tlsServerName   string
 
 	httpHandlers []httpHandlerMount
 }
@@ -342,6 +344,33 @@ func WithBearerToken(token string) StateOption {
 	}
 }
 
+// WithBearerTokenFunc supplies a bearer token per request, for credentials that
+// are refreshed out of band and so cannot be captured once at dial time. The
+// sandbox workload identity token is the motivating case: it expires hourly and
+// is rewritten on disk by the sandbox controller, so a client that read it once
+// would start failing after an hour.
+//
+// Takes precedence over WithBearerToken.
+func WithBearerTokenFunc(fn func() (string, error)) StateOption {
+	return func(o *stateOptions) {
+		o.bearerTokenFunc = fn
+	}
+}
+
+// WithTLSServerName overrides the name the server certificate is verified
+// against, independent of the address dialed. Needed when the dial address
+// cannot appear in the certificate — a sandbox reaches the API through its
+// bridge router address, which is allocated only after the certificate has been
+// issued, and verifies against the API's stable name instead.
+//
+// This is not a way to skip verification: the certificate must still chain to
+// the configured CA and cover this name.
+func WithTLSServerName(name string) StateOption {
+	return func(o *stateOptions) {
+		o.tlsServerName = name
+	}
+}
+
 func NewState(ctx context.Context, opts ...StateOption) (*State, error) {
 	var so stateOptions
 
@@ -373,6 +402,10 @@ func NewState(ctx context.Context, opts ...StateOption) (*State, error) {
 		VerifyConnection: func(cs tls.ConnectionState) error {
 			return nil
 		},
+	}
+
+	if so.tlsServerName != "" {
+		tlsCfg.ServerName = so.tlsServerName
 	}
 
 	if so.caCert != nil {

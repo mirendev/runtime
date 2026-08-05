@@ -8,6 +8,7 @@ import (
 	"crypto/rand"
 	"crypto/tls"
 	"encoding/json"
+	stderrors "errors"
 	"fmt"
 	"io"
 	"net"
@@ -219,8 +220,8 @@ func (c *NetworkClient) classifyTransportError(name string, elapsed time.Duratio
 // classifyTransportError is the decision itself, split out from the client so
 // it can be tested directly: reached is whether a QUIC handshake ever completed.
 func classifyTransportError(name, remote string, elapsed time.Duration, err error, reached bool) error {
-	var netErr net.Error
-	if !errors.As(err, &netErr) || !netErr.Timeout() {
+	netErr, ok := stderrors.AsType[net.Error](err)
+	if !ok || !netErr.Timeout() {
 		return NewResolveHTTPError(err, "error performing http request to %s for %q: %v", remote, name, err)
 	}
 
@@ -674,7 +675,23 @@ func (c *NetworkClient) Close() error {
 
 // addBearerToken safely adds a bearer token to the request header if configured
 func (c *NetworkClient) addBearerToken(req *http.Request) {
-	if c.State != nil && c.State.opts != nil && c.State.opts.bearerToken != "" {
+	if c.State == nil || c.State.opts == nil {
+		return
+	}
+
+	if fn := c.State.opts.bearerTokenFunc; fn != nil {
+		token, err := fn()
+		if err != nil || token == "" {
+			// Send the request unauthenticated and let the server reject it.
+			// The caller's retry then picks up a token that has since been
+			// refreshed, which a hard failure here would not.
+			return
+		}
+		req.Header.Set("Authorization", "Bearer "+token)
+		return
+	}
+
+	if c.State.opts.bearerToken != "" {
 		req.Header.Set("Authorization", "Bearer "+c.State.opts.bearerToken)
 	}
 }
@@ -779,12 +796,6 @@ request:
 			et, _ := io.ReadAll(hr.Body)
 			err = fmt.Errorf("unexpected status code: %d: %s", hr.StatusCode, et)
 		}
-
-		/*
-			if hr.StatusCode != http.StatusOK {
-				return errors.Errorf("unexpected status code: %d", hr.StatusCode)
-			}
-		*/
 
 		// We perform this draining read because quic/http3 populates the trailers
 		// as part of the body read.

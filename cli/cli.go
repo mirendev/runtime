@@ -96,14 +96,12 @@ func shouldShowTopLevelHelp(args []string) bool {
 func printError(err error) {
 	// Errors that render their own severity label own the whole line, prefix
 	// included, so that the label can be colored to match the block.
-	var se ui.SeverityTerminalError
-	if errors.As(err, &se) {
+	if se, ok := errors.AsType[ui.SeverityTerminalError](err); ok {
 		se.WriteWithSeverity(os.Stderr, ui.SeverityError)
 		return
 	}
 
-	var te ui.TerminalError
-	if errors.As(err, &te) {
+	if te, ok := errors.AsType[ui.TerminalError](err); ok {
 		fmt.Fprintf(os.Stderr, "ERROR: ")
 		te.WriteForTerminal(os.Stderr)
 		return

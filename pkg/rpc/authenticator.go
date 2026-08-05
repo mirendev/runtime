@@ -41,6 +41,7 @@ const (
 	AuthMethodToken     AuthMethod = "token"     // Bearer token (e.g., outboard)
 	AuthMethodOIDC      AuthMethod = "oidc"      // External OIDC token (e.g., GitHub Actions)
 	AuthMethodSystem    AuthMethod = "system"    // Cluster-issued system workload identity
+	AuthMethodWorkload  AuthMethod = "workload"  // Workload identity token from a sandbox
 	AuthMethodSigned    AuthMethod = "signed"    // ed25519-signed request over a message transport
 )
 
@@ -136,32 +137,62 @@ var ErrUnauthorized = errors.New("unauthorized")
 
 // AllowApp checks whether the current caller is permitted to operate on the
 // named app. Callers that are not app-scoped (cert, JWT, anonymous) are always
-// allowed. OIDC callers are restricted to the app their binding is for.
+// allowed; app-scoped callers are restricted to the app they are bound to.
+//
+// This is where per-app scoping is enforced. It cannot live in an Authorizer:
+// Authorize only sees the resource and action, never the arguments naming the
+// app, so it can decide whether a caller may ever call a method but not which
+// app it may call it against.
 func AllowApp(ctx context.Context, appName string) bool {
-	identity := IdentityFromContext(ctx)
-	if identity == nil || identity.Method != AuthMethodOIDC {
+	bound := BoundApp(ctx)
+	if bound == "" {
 		return true
 	}
-	boundApp, _ := identity.Metadata["bound_app"].(string)
-	return boundApp != "" && boundApp == appName
+	return bound == appName
 }
 
-// BoundApp returns the app name that the current OIDC caller is bound to,
-// or empty string if the caller is not app-scoped.
+// BoundApp returns the app the current caller is scoped to, or "" if the caller
+// is not app-scoped.
+//
+// The switch below is the registry of app-scoped auth methods: a method that
+// reports no binding is read by AllowApp as "not app-scoped" and allowed against
+// every app. Every AuthMethod is therefore listed explicitly, and the exhaustive
+// linter keeps it that way — a new method must make its scoping decision here,
+// rather than inheriting cluster-wide access from a default branch.
 func BoundApp(ctx context.Context) string {
 	identity := IdentityFromContext(ctx)
-	if identity == nil || identity.Method != AuthMethodOIDC {
+	if identity == nil {
 		return ""
 	}
-	boundApp, _ := identity.Metadata["bound_app"].(string)
-	return boundApp
+
+	switch identity.Method {
+	case AuthMethodOIDC:
+		boundApp, _ := identity.Metadata["bound_app"].(string)
+		return boundApp
+
+	case AuthMethodWorkload:
+		// The token's app claim. The workload identity validator rejects tokens
+		// without one, so this is non-empty for any workload that authenticated.
+		app, _ := identity.Metadata["app"].(string)
+		return app
+
+	case AuthMethodCert, AuthMethodJWT, AuthMethodAnonymous, AuthMethodToken, AuthMethodSystem, AuthMethodSigned:
+		// Not app-scoped: cert is an internal component, JWT is an operator
+		// whose reach is decided by cloud RBAC, a system workload is a
+		// cluster-issued internal identity, a signed identity is a
+		// message-transport capability key, and anonymous/token callers carry no
+		// app binding to enforce.
+		return ""
+	}
+
+	return ""
 }
 
 // AppAccessError returns a descriptive error for an app-scoping denial.
 func AppAccessError(ctx context.Context, appName string) error {
 	boundApp := BoundApp(ctx)
 	if boundApp == "" {
-		return fmt.Errorf("%w: OIDC identity missing bound app", ErrUnauthorized)
+		return fmt.Errorf("%w: identity missing bound app", ErrUnauthorized)
 	}
 	return fmt.Errorf("%w: bound to app %q, cannot operate on %q", ErrUnauthorized, boundApp, appName)
 }

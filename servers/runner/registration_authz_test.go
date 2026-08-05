@@ -188,6 +188,47 @@ func TestResolveSandboxApp(t *testing.T) {
 	require.Equal(t, "myapp", srv.resolveSandboxApp(ctx, "sandbox/s1"))
 }
 
+// The distributed-runner mint path must derive the role server-side, exactly as
+// it does the app — a runner must not be able to forge the authority its
+// sandboxes' tokens carry.
+func TestResolveSandboxAppAndRole(t *testing.T) {
+	ctx := context.Background()
+	es, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	ca, err := caauth.New(caauth.Options{CommonName: "test-ca", Organization: "test"})
+	require.NoError(t, err)
+
+	srv := NewRegistrationServer(RegistrationServerConfig{
+		Log:       testutils.TestLogger(t),
+		Authority: ca,
+		EAC:       es.EAC,
+	})
+
+	_, err = es.EAC.Create(ctx, entity.New(
+		entity.DBId, entity.Id("app/myapp"),
+		(&core_v1alpha.Metadata{Name: "myapp"}).Encode,
+		(&core_v1alpha.App{WorkloadRole: "app-admin"}).Encode,
+	).Attrs())
+	require.NoError(t, err)
+
+	_, err = es.EAC.Create(ctx, entity.New(
+		entity.DBId, entity.Id("version/v1"),
+		(&core_v1alpha.AppVersion{App: "app/myapp"}).Encode,
+	).Attrs())
+	require.NoError(t, err)
+
+	_, err = es.EAC.Create(ctx, entity.New(
+		entity.DBId, entity.Id("sandbox/s1"),
+		(&compute_v1alpha.Sandbox{Spec: compute_v1alpha.SandboxSpec{Version: "version/v1"}}).Encode,
+	).Attrs())
+	require.NoError(t, err)
+
+	name, role := srv.resolveSandboxAppAndRole(ctx, "sandbox/s1")
+	require.Equal(t, "myapp", name)
+	require.Equal(t, "app-admin", role)
+}
+
 func TestResolveSandboxApp_NoVersionReturnsEmpty(t *testing.T) {
 	ctx := context.Background()
 	es, cleanup := testutils.NewInMemEntityServer(t)

@@ -67,3 +67,33 @@ func (m *MemoryStorage) ListIncomplete(ctx context.Context) ([]*Execution, error
 	}
 	return result, nil
 }
+
+// ListTerminal summarizes the executions that have finished.
+func (m *MemoryStorage) ListTerminal(ctx context.Context) ([]TerminalExecution, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	var result []TerminalExecution
+	for _, exec := range m.executions {
+		switch exec.Status {
+		case StatusCompleted, StatusFailed:
+			result = append(result, TerminalExecution{
+				ID:         exec.ID,
+				FinishedAt: exec.UpdatedAt,
+				ParentID:   exec.ParentExecutionID,
+			})
+		case StatusPending, StatusRunning, StatusUndoing:
+			// Still in flight; retention does not apply.
+		}
+	}
+	return result, nil
+}
+
+// Delete removes an execution. Deleting a missing execution is a no-op.
+func (m *MemoryStorage) Delete(ctx context.Context, id string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	delete(m.executions, id)
+	return nil
+}

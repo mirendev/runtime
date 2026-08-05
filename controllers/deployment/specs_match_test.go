@@ -25,8 +25,7 @@ func structFingerprint(t reflect.Type) string {
 			return "map<" + walk(t.Key()) + "," + walk(t.Elem()) + ">"
 		case reflect.Struct:
 			var parts []string
-			for i := range t.NumField() {
-				f := t.Field(i)
+			for f := range t.Fields() {
 				parts = append(parts, f.Name+":"+walk(f.Type))
 			}
 			return "struct{" + strings.Join(parts, ",") + "}"

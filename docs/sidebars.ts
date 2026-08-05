@@ -51,6 +51,7 @@ const sidebars: SidebarsConfig = {
         'waf',
         'route-protect',
         'workload-identity',
+        'in-cluster-api',
       ],
     },
     {

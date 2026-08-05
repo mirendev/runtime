@@ -32,8 +32,8 @@ func checkServer(env *doctorEnv) checkResult {
 		}
 	}
 
-	var re *rpc.ResolveError
-	if !errors.As(env.connErr, &re) {
+	re, ok := errors.AsType[*rpc.ResolveError](env.connErr)
+	if !ok {
 		return checkResult{
 			Status:  checkFail,
 			Summary: "not connected",

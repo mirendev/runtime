@@ -78,8 +78,8 @@ func TestClassifyTransportError(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			err := classifyTransportError("entities", "localhost:8443", 5*time.Second, tt.err, tt.reached)
 
-			var re *ResolveError
-			if !errors.As(err, &re) {
+			re, ok := errors.AsType[*ResolveError](err)
+			if !ok {
 				t.Fatalf("classify returned %T, want *ResolveError", err)
 			}
 			if re.Kind != tt.wantKind {
@@ -100,8 +100,8 @@ func TestClassifiedErrorsCarryContext(t *testing.T) {
 	for _, reached := range []bool{true, false} {
 		err := classifyTransportError("entities", "localhost:8443", 5*time.Second, &quic.IdleTimeoutError{}, reached)
 
-		var re *ResolveError
-		if !errors.As(err, &re) {
+		re, ok := errors.AsType[*ResolveError](err)
+		if !ok {
 			t.Fatalf("classify returned %T, want *ResolveError", err)
 		}
 		if re.Name != "entities" {

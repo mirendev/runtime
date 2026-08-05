@@ -179,21 +179,13 @@ func RunnerStart(ctx *Context, opts struct {
 	// Create resolver for network operations and map cluster.local to the
 	// coordinator so the runner can pull images from the coordinator's registry.
 	resolver, hostMapper := netresolve.NewLocalResolver()
-	coordinatorHost, _, _ := net.SplitHostPort(cfg.CoordinatorAddress)
-	if addr, err := netip.ParseAddr(coordinatorHost); err == nil {
-		hostMapper.SetHost("cluster.local", addr)
-		ctx.Log.Info("mapped cluster.local to coordinator", "addr", addr)
+	coordinatorHost, coordinatorPort, _ := net.SplitHostPort(cfg.CoordinatorAddress)
+	coordinatorAddr, resolveErr := resolveHost(coordinatorHost)
+	if resolveErr != nil {
+		ctx.Log.Warn("could not resolve coordinator address", "host", coordinatorHost, "error", resolveErr)
 	} else {
-		// Coordinator address is a hostname, resolve it to an IP.
-		addrs, lookupErr := net.LookupHost(coordinatorHost)
-		if lookupErr == nil && len(addrs) > 0 {
-			if resolved, parseErr := netip.ParseAddr(addrs[0]); parseErr == nil {
-				hostMapper.SetHost("cluster.local", resolved)
-				ctx.Log.Info("mapped cluster.local to coordinator (resolved)", "hostname", coordinatorHost, "addr", resolved)
-			}
-		} else {
-			ctx.Log.Warn("could not resolve coordinator hostname for cluster.local mapping", "host", coordinatorHost, "error", lookupErr)
-		}
+		hostMapper.SetHost("cluster.local", coordinatorAddr)
+		ctx.Log.Info("mapped cluster.local to coordinator", "hostname", coordinatorHost, "addr", coordinatorAddr)
 	}
 
 	// Build runner dependencies
@@ -224,6 +216,20 @@ func RunnerStart(ctx *Context, opts struct {
 		// Flannel network configuration
 		EtcdEndpoints: cfg.EtcdEndpoints,
 		EtcdPrefix:    cfg.EtcdPrefix,
+	}
+
+	// Sandboxes here reach the API on the coordinator, not on this host, so
+	// point them at the coordinator rather than the local bridge router (which
+	// fronts only this runner's own services). It must be an IP: sandbox DNS
+	// resolves app.miren names and nothing else, so the coordinator's hostname
+	// would not resolve inside the container.
+	if resolveErr == nil && coordinatorPort != "" {
+		deps.ApiAddress = net.JoinHostPort(coordinatorAddr.String(), coordinatorPort)
+		deps.CACert = []byte(cfg.CACert)
+		ctx.Log.Info("sandboxes will reach the cluster API at", "address", deps.ApiAddress)
+	} else {
+		ctx.Log.Warn("in-cluster API access disabled: no usable coordinator address",
+			"coordinator", cfg.CoordinatorAddress)
 	}
 
 	// Write etcd TLS certs to disk for flannel (which requires file paths)
@@ -590,4 +596,33 @@ func certCoversListenAddr(certPEM, listenAddr string) (bool, error) {
 		}
 	}
 	return false, nil
+}
+
+// resolveHost turns a host that may be either a literal IP or a DNS name into
+// an address. Callers need a literal IP: it feeds the local resolver and the
+// API address handed to sandboxes, and sandbox DNS answers only app.miren
+// names, so a hostname would not resolve inside a container.
+func resolveHost(host string) (netip.Addr, error) {
+	if host == "" {
+		return netip.Addr{}, fmt.Errorf("empty host")
+	}
+
+	if addr, err := netip.ParseAddr(host); err == nil {
+		return addr, nil
+	}
+
+	addrs, err := net.LookupHost(host)
+	if err != nil {
+		return netip.Addr{}, fmt.Errorf("resolving %q: %w", host, err)
+	}
+	if len(addrs) == 0 {
+		return netip.Addr{}, fmt.Errorf("resolving %q: no addresses", host)
+	}
+
+	addr, err := netip.ParseAddr(addrs[0])
+	if err != nil {
+		return netip.Addr{}, fmt.Errorf("parsing resolved address %q for %q: %w", addrs[0], host, err)
+	}
+
+	return addr, nil
 }

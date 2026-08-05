@@ -72,27 +72,27 @@ func Load(configPath string, flags *CLIFlags, log *slog.Logger) (*Config, error)
 
 	if effectiveMode == "standalone" {
 		if cfg.Buildkit.StartEmbedded == nil {
-			cfg.Buildkit.StartEmbedded = boolPtr(true)
+			cfg.Buildkit.StartEmbedded = new(true)
 		}
 	}
 	if effectiveMode == "standalone" {
 		if cfg.Containerd.StartEmbedded == nil {
-			cfg.Containerd.StartEmbedded = boolPtr(true)
+			cfg.Containerd.StartEmbedded = new(true)
 		}
 	}
 	if effectiveMode == "standalone" {
 		if cfg.Etcd.StartEmbedded == nil {
-			cfg.Etcd.StartEmbedded = boolPtr(true)
+			cfg.Etcd.StartEmbedded = new(true)
 		}
 	}
 	if effectiveMode == "standalone" {
 		if cfg.Victorialogs.StartEmbedded == nil {
-			cfg.Victorialogs.StartEmbedded = boolPtr(true)
+			cfg.Victorialogs.StartEmbedded = new(true)
 		}
 	}
 	if effectiveMode == "standalone" {
 		if cfg.Victoriametrics.StartEmbedded == nil {
-			cfg.Victoriametrics.StartEmbedded = boolPtr(true)
+			cfg.Victoriametrics.StartEmbedded = new(true)
 		}
 	}
 
@@ -236,6 +236,10 @@ func applyCLIFlags(cfg *Config, flags *CLIFlags) {
 
 	if flags.IngressConfigMode != nil && *flags.IngressConfigMode != "" {
 		cfg.Ingress.Mode = flags.IngressConfigMode
+	}
+
+	if flags.SagaConfigRetentionPeriod != nil && *flags.SagaConfigRetentionPeriod != "" {
+		cfg.Saga.RetentionPeriod = flags.SagaConfigRetentionPeriod
 	}
 
 	if flags.ServerConfigAddress != nil && *flags.ServerConfigAddress != "" {
