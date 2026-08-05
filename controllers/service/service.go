@@ -135,12 +135,12 @@ func nftProto(p network_v1alpha.PortProtocol) string {
 }
 
 func (s *ServiceController) serviceChain(ip netip.Addr, port uint16, proto string) string {
-	x := blake2b.Sum256([]byte(fmt.Sprintf("%s:%s:%d", ip.String(), proto, port)))
+	x := blake2b.Sum256(fmt.Appendf(nil, "%s:%s:%d", ip.String(), proto, port))
 	return fmt.Sprintf("service_%s", base58.Encode(x[:]))
 }
 
 func (s *ServiceController) endpointChain(ip netip.Addr, port uint16, proto string) string {
-	x := blake2b.Sum256([]byte(fmt.Sprintf("%s:%s:%d", ip.String(), proto, port)))
+	x := blake2b.Sum256(fmt.Appendf(nil, "%s:%s:%d", ip.String(), proto, port))
 	return fmt.Sprintf("endpoint_%s", base58.Encode(x[:]))
 }
 
@@ -148,7 +148,7 @@ func (s *ServiceController) endpointChain(ip netip.Addr, port uint16, proto stri
 // of the cluster-facing port, so the key is (proto, nport) — independent of
 // any service IP, which a service may not yet have when this chain installs.
 func (s *ServiceController) nodeportChain(nport int, proto string) string {
-	x := blake2b.Sum256([]byte(fmt.Sprintf("%s:%d", proto, nport)))
+	x := blake2b.Sum256(fmt.Appendf(nil, "%s:%d", proto, nport))
 	return fmt.Sprintf("nodeport_%s", base58.Encode(x[:]))
 }
 
