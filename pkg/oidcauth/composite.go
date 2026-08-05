@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/http"
 	"reflect"
 
 	"miren.dev/runtime/pkg/rpc"
@@ -89,7 +88,7 @@ func isNilAuthenticator(a rpc.Authenticator) bool {
 	return v.Kind() == reflect.Pointer && v.IsNil()
 }
 
-func (c *CompositeAuthenticator) Authenticate(ctx context.Context, r *http.Request) (*rpc.Identity, error) {
+func (c *CompositeAuthenticator) Authenticate(ctx context.Context, creds *rpc.Credentials) (*rpc.Identity, error) {
 	// Keep the first error rather than the last. An authenticator that fails on
 	// a token meant for a later link in the chain (the cloud JWT validator
 	// handed a GitHub Actions token, say) reports an error that only matters if
@@ -102,7 +101,7 @@ func (c *CompositeAuthenticator) Authenticate(ctx context.Context, r *http.Reque
 	var firstErr, mismatchErr error
 
 	for _, auth := range c.chain {
-		identity, err := auth.Authenticate(ctx, r)
+		identity, err := auth.Authenticate(ctx, creds)
 		if identity != nil {
 			return identity, nil
 		}
@@ -176,6 +175,17 @@ func (c *CompositeAuthorizer) Authorize(ctx context.Context, identity *rpc.Ident
 			return c.primary.Authorize(ctx, identity, resource, action)
 		}
 		return nil
+
+	case rpc.AuthMethodSigned:
+		// A signed identity is the ed25519 capability-signature identity on the
+		// message transport: its subject is base58 of a keypair the caller
+		// generated, so it proves possession of a capability, not who the caller
+		// is. It carries no RPC privilege of its own — a caller that needs one
+		// presents a bearer token and authenticates as a stronger method. Fail
+		// closed here rather than inheriting the delegate arm's nil-primary
+		// allow, which on the local-only path would grant every non-public
+		// method to anyone holding a self-minted key.
+		return fmt.Errorf("access denied: signed identities may not call RPC methods")
 
 	default:
 		// Fail closed on an auth method we don't know about. This used to share

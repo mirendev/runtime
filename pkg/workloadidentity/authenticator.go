@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"net/http"
 	"strings"
 
 	"miren.dev/runtime/pkg/rpc"
@@ -44,8 +43,8 @@ func NewAuthenticator(iss *Issuer, logger *slog.Logger) *Authenticator {
 // It never returns an error: the RPC server treats an authenticator error as
 // terminal and rejects the request, which would break every other credential
 // type the moment a malformed bearer token arrived.
-func (a *Authenticator) Authenticate(ctx context.Context, r *http.Request) (*rpc.Identity, error) {
-	authHeader := r.Header.Get("Authorization")
+func (a *Authenticator) Authenticate(ctx context.Context, creds *rpc.Credentials) (*rpc.Identity, error) {
+	authHeader := creds.Authorization
 	if !strings.HasPrefix(authHeader, "Bearer ") {
 		return nil, nil
 	}

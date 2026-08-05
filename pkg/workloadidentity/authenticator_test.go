@@ -31,7 +31,7 @@ func authenticateBearer(t *testing.T, a *Authenticator, token string) (*rpc.Iden
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
-	return a.Authenticate(context.Background(), req)
+	return a.Authenticate(context.Background(), rpc.CredentialsFromRequest(req))
 }
 
 func TestAuthenticate_ValidToken(t *testing.T) {
@@ -210,7 +210,7 @@ func TestAuthenticate_NoBearerToken(t *testing.T) {
 		req := httptest.NewRequest("POST", "/_rpc/call/test/method", nil)
 		req.Header.Set("Authorization", "Basic dXNlcjpwYXNz")
 
-		identity, err := a.Authenticate(context.Background(), req)
+		identity, err := a.Authenticate(context.Background(), rpc.CredentialsFromRequest(req))
 		require.NoError(t, err)
 		assert.Nil(t, identity)
 	})

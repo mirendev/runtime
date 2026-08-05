@@ -117,7 +117,7 @@ func TestOIDCAuthenticator_NoEAC(t *testing.T) {
 	req := httptest.NewRequest("GET", "/", nil)
 	req.Header.Set("Authorization", "Bearer "+token)
 
-	identity, err := auth.Authenticate(context.Background(), req)
+	identity, err := auth.Authenticate(context.Background(), rpc.CredentialsFromRequest(req))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -130,7 +130,7 @@ func TestOIDCAuthenticator_NoBearerToken(t *testing.T) {
 	auth := NewOIDCAuthenticator(testutils.TestLogger(t))
 
 	req := httptest.NewRequest("GET", "/", nil)
-	identity, err := auth.Authenticate(context.Background(), req)
+	identity, err := auth.Authenticate(context.Background(), rpc.CredentialsFromRequest(req))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -149,7 +149,7 @@ func TestOIDCAuthenticator_NonJWTBearer(t *testing.T) {
 	req := httptest.NewRequest("GET", "/", nil)
 	req.Header.Set("Authorization", "Bearer not-a-jwt-token")
 
-	identity, err := auth.Authenticate(context.Background(), req)
+	identity, err := auth.Authenticate(context.Background(), rpc.CredentialsFromRequest(req))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -179,7 +179,7 @@ func TestOIDCAuthenticator_NoMatchingBindings(t *testing.T) {
 	req.Host = "test-host"
 	req.Header.Set("Authorization", "Bearer "+token)
 
-	identity, err := auth.Authenticate(context.Background(), req)
+	identity, err := auth.Authenticate(context.Background(), rpc.CredentialsFromRequest(req))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -240,7 +240,7 @@ func TestOIDCAuthenticator_MatchingBinding(t *testing.T) {
 	req.Host = "test-host"
 	req.Header.Set("Authorization", "Bearer "+token)
 
-	identity, err := auth.Authenticate(ctx, req)
+	identity, err := auth.Authenticate(ctx, rpc.CredentialsFromRequest(req))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -324,7 +324,7 @@ func TestOIDCAuthenticator_RepositoryClaimBinding(t *testing.T) {
 			req.Host = "test-host"
 			req.Header.Set("Authorization", "Bearer "+token)
 
-			identity, err := auth.Authenticate(ctx, req)
+			identity, err := auth.Authenticate(ctx, rpc.CredentialsFromRequest(req))
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
@@ -388,7 +388,7 @@ func TestOIDCAuthenticator_LegacySubjectPatternRejectsImmutableSubject(t *testin
 	req.Host = "test-host"
 	req.Header.Set("Authorization", "Bearer "+token)
 
-	identity, err := auth.Authenticate(ctx, req)
+	identity, err := auth.Authenticate(ctx, rpc.CredentialsFromRequest(req))
 	if identity != nil {
 		t.Error("expected the immutable-format subject not to match a name-based pattern")
 	}
@@ -458,7 +458,7 @@ func TestOIDCAuthenticator_SubjectMismatch(t *testing.T) {
 	req.Host = "test-host"
 	req.Header.Set("Authorization", "Bearer "+token)
 
-	identity, err := auth.Authenticate(ctx, req)
+	identity, err := auth.Authenticate(ctx, rpc.CredentialsFromRequest(req))
 	if identity != nil {
 		t.Error("expected nil identity when subject doesn't match binding pattern")
 	}
@@ -522,7 +522,7 @@ func TestOIDCAuthenticator_ClaimConditionMismatch(t *testing.T) {
 	req.Host = "test-host"
 	req.Header.Set("Authorization", "Bearer "+token)
 
-	identity, err := auth.Authenticate(ctx, req)
+	identity, err := auth.Authenticate(ctx, rpc.CredentialsFromRequest(req))
 	if identity != nil {
 		t.Error("expected nil identity when claim condition doesn't match")
 	}
@@ -578,7 +578,7 @@ func TestOIDCAuthenticator_ExpiredToken(t *testing.T) {
 	req.Host = "test-host"
 	req.Header.Set("Authorization", "Bearer "+token)
 
-	identity, err := auth.Authenticate(ctx, req)
+	identity, err := auth.Authenticate(ctx, rpc.CredentialsFromRequest(req))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -656,7 +656,7 @@ func TestOIDCAuthenticator_MultipleBindings_FirstMatch(t *testing.T) {
 	req.Host = "test-host"
 	req.Header.Set("Authorization", "Bearer "+token)
 
-	identity, err := auth.Authenticate(ctx, req)
+	identity, err := auth.Authenticate(ctx, rpc.CredentialsFromRequest(req))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -722,7 +722,7 @@ func TestOIDCAuthenticator_AudienceFromHost(t *testing.T) {
 	req.Host = "my-cluster.example.com"
 	req.Header.Set("Authorization", "Bearer "+token)
 
-	identity, err := auth.Authenticate(ctx, req)
+	identity, err := auth.Authenticate(ctx, rpc.CredentialsFromRequest(req))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -778,7 +778,7 @@ func TestOIDCAuthenticator_AudienceFromTLS(t *testing.T) {
 	req.TLS = &tls.ConnectionState{ServerName: "tls-server.example.com"}
 	req.Header.Set("Authorization", "Bearer "+token)
 
-	identity, err := auth.Authenticate(ctx, req)
+	identity, err := auth.Authenticate(ctx, rpc.CredentialsFromRequest(req))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -833,7 +833,7 @@ func TestOIDCAuthenticator_WrongAudience(t *testing.T) {
 	req.Host = "test-host"
 	req.Header.Set("Authorization", "Bearer "+token)
 
-	identity, err := auth.Authenticate(ctx, req)
+	identity, err := auth.Authenticate(ctx, rpc.CredentialsFromRequest(req))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

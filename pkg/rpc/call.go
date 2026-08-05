@@ -7,7 +7,6 @@ import (
 	"net/http"
 
 	"github.com/fxamacker/cbor/v2"
-	"github.com/quic-go/webtransport-go"
 )
 
 type Call interface {
@@ -42,7 +41,11 @@ type NetworkCall struct {
 	local   *localCall
 
 	ctrl      *controlStream
-	wsSession *webtransport.Session
+	wsSession rpcSession
+
+	// msgSession records that wsSession is a message-transport session, whose
+	// streams all open with an opRequest prelude.
+	msgSession bool
 
 	argsConsumed bool
 }
@@ -102,15 +105,23 @@ func (c *NetworkCall) NewClient(capa *Capability) Client {
 		return c.local.NewClient(capa)
 	}
 
-	client := c.s.state.newClientFrom(capa, c.peer)
 	if capa.Inline && c.wsSession != nil {
+		client := c.s.state.newClientFrom(capa, c.peer)
 		client.inlineClient = &inlineClient{
 			log:     c.s.state.log,
 			oid:     capa.OID,
 			ctrl:    c.ctrl,
 			session: c.wsSession,
+			prelude: c.msgSession,
 		}
+
+		return client
 	}
 
-	return client
+	// No address and no session to scope it to: nothing here can be reached.
+	if capa.Address == "" {
+		return unreachableClient{oid: capa.OID}
+	}
+
+	return c.s.state.newClientFrom(capa, c.peer)
 }

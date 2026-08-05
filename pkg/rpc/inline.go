@@ -8,7 +8,6 @@ import (
 	"sync"
 
 	"github.com/fxamacker/cbor/v2"
-	"github.com/quic-go/webtransport-go"
 	"miren.dev/runtime/pkg/cond"
 )
 
@@ -17,7 +16,7 @@ var errInlineClientClosed = errors.New("inline client closed")
 const inlineStreamPoolSize = 10
 
 type streamConn struct {
-	stream *webtransport.Stream
+	stream rpcStream
 	enc    *cbor.Encoder
 	dec    *cbor.Decoder
 }
@@ -26,7 +25,12 @@ type inlineClient struct {
 	log     *slog.Logger
 	oid     OID
 	ctrl    *controlStream
-	session *webtransport.Session
+	session rpcSession
+
+	// prelude reports whether each newly opened stream must lead with an
+	// opRequest, as message-transport sessions require so that one accept loop
+	// can route both operations and callbacks.
+	prelude bool
 
 	// Stream pool
 	poolMu      sync.Mutex
@@ -86,11 +90,30 @@ func (c *inlineClient) getStream(ctx context.Context) (*streamConn, error) {
 				return nil, err
 			}
 
-			return &streamConn{
+			conn := &streamConn{
 				stream: str,
 				enc:    cbor.NewEncoder(str),
 				dec:    cbor.NewDecoder(str),
-			}, nil
+			}
+
+			// The prelude is written once per stream, not once per call: the
+			// stream is pooled and carries many calls against this capability.
+			if c.prelude {
+				prelude := opRequest{
+					Op:      opInlineCall,
+					OID:     c.oid,
+					Version: currentProtocolVersion,
+				}
+				if err := conn.enc.Encode(prelude); err != nil {
+					_ = str.Close()
+					c.poolMu.Lock()
+					c.activeCount--
+					c.poolMu.Unlock()
+					return nil, err
+				}
+			}
+
+			return conn, nil
 		}
 
 		// Pool is at capacity, wait for a stream to become available

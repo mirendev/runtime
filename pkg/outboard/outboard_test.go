@@ -11,6 +11,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"miren.dev/runtime/pkg/rpc"
 )
 
 func TestConfigRoundTrip(t *testing.T) {
@@ -64,7 +65,7 @@ func TestTokenAuthenticatorValid(t *testing.T) {
 	req, _ := http.NewRequest("GET", "/", nil)
 	req.Header.Set("Authorization", "Bearer secret-token")
 
-	identity, err := auth.Authenticate(context.Background(), req)
+	identity, err := auth.Authenticate(context.Background(), rpc.CredentialsFromRequest(req))
 	assert.NoError(t, err)
 	assert.NotNil(t, identity)
 	assert.Equal(t, "outboard", identity.Subject)
@@ -76,7 +77,7 @@ func TestTokenAuthenticatorInvalid(t *testing.T) {
 	req, _ := http.NewRequest("GET", "/", nil)
 	req.Header.Set("Authorization", "Bearer wrong-token")
 
-	identity, err := auth.Authenticate(context.Background(), req)
+	identity, err := auth.Authenticate(context.Background(), rpc.CredentialsFromRequest(req))
 	assert.NoError(t, err)
 	assert.Nil(t, identity, "invalid token should return nil identity")
 }
@@ -86,7 +87,7 @@ func TestTokenAuthenticatorMissing(t *testing.T) {
 
 	req, _ := http.NewRequest("GET", "/", nil)
 
-	identity, err := auth.Authenticate(context.Background(), req)
+	identity, err := auth.Authenticate(context.Background(), rpc.CredentialsFromRequest(req))
 	assert.NoError(t, err)
 	assert.Nil(t, identity, "missing auth header should return nil identity")
 }
@@ -97,7 +98,7 @@ func TestTokenAuthenticatorBadScheme(t *testing.T) {
 	req, _ := http.NewRequest("GET", "/", nil)
 	req.Header.Set("Authorization", "Basic dXNlcjpwYXNz")
 
-	identity, err := auth.Authenticate(context.Background(), req)
+	identity, err := auth.Authenticate(context.Background(), rpc.CredentialsFromRequest(req))
 	assert.NoError(t, err)
 	assert.Nil(t, identity, "non-bearer auth should return nil identity")
 }

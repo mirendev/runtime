@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/http"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -16,7 +15,7 @@ import (
 // stubAuthenticator fails every request with a fixed error.
 type stubAuthenticator struct{ err error }
 
-func (s *stubAuthenticator) Authenticate(ctx context.Context, r *http.Request) (*rpc.Identity, error) {
+func (s *stubAuthenticator) Authenticate(ctx context.Context, creds *rpc.Credentials) (*rpc.Identity, error) {
 	return nil, s.err
 }
 

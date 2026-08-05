@@ -41,7 +41,7 @@ func TestRPCAuthenticator_CertRequiresVerifiedChain(t *testing.T) {
 		req := newReq(t, &tls.ConnectionState{
 			PeerCertificates: []*x509.Certificate{cert},
 		})
-		id, err := auth.Authenticate(t.Context(), req)
+		id, err := auth.Authenticate(t.Context(), rpc.CredentialsFromRequest(req))
 		require.NoError(t, err)
 		require.Nil(t, id, "unverified client cert must not yield an identity")
 	})
@@ -51,7 +51,7 @@ func TestRPCAuthenticator_CertRequiresVerifiedChain(t *testing.T) {
 			PeerCertificates: []*x509.Certificate{cert},
 			VerifiedChains:   [][]*x509.Certificate{{cert}},
 		})
-		id, err := auth.Authenticate(t.Context(), req)
+		id, err := auth.Authenticate(t.Context(), rpc.CredentialsFromRequest(req))
 		require.NoError(t, err)
 		require.NotNil(t, id)
 		require.Equal(t, "test-client", id.Subject)
