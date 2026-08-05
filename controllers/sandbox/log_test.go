@@ -273,8 +273,7 @@ func BenchmarkSandboxLogs(b *testing.B) {
 
 	input := []byte("benchmark log line\n")
 
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		sl.Write(input)
 	}
 }
@@ -332,8 +331,7 @@ func BenchmarkSandboxLogsByLineKind(b *testing.B) {
 			sl := NewSandboxLogs(logger, entityID, map[string]string{}, nopLogWriter{})
 			input := []byte(tc.line)
 			b.ReportAllocs()
-			b.ResetTimer()
-			for i := 0; i < b.N; i++ {
+			for b.Loop() {
 				sl.Write(input)
 			}
 		})
@@ -595,8 +593,7 @@ func BenchmarkSandboxLogsLargeBuffer(b *testing.B) {
 	}
 	input := buf.Bytes()
 
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		sl.Write(input)
 		mock.entries = mock.entries[:0] // Reset
 	}

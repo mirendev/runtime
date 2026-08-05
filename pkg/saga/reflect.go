@@ -33,8 +33,7 @@ func extractMappings(t reflect.Type) ([]fieldMapping, error) {
 	}
 
 	var mappings []fieldMapping
-	for i := 0; i < t.NumField(); i++ {
-		field := t.Field(i)
+	for field := range t.Fields() {
 		tag := field.Tag.Get("saga")
 
 		// Parse tag: "keyname" or "keyname,optional"

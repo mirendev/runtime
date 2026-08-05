@@ -89,8 +89,8 @@ comand = "server"
 	_, err := Parse([]byte(config))
 	require.Error(t, err)
 
-	var ce *ConfigError
-	require.True(t, errors.As(err, &ce), "expected *ConfigError, got %T", err)
+	ce, ok := errors.AsType[*ConfigError](err)
+	require.True(t, ok, "expected *ConfigError, got %T", err)
 	assert.Equal(t, "<input>", ce.FilePath)
 	require.Len(t, ce.Diagnostics, 1)
 	assert.Contains(t, ce.Diagnostics[0].Message, "comand")
@@ -103,8 +103,8 @@ func TestEnrichDecodeError_SyntaxError(t *testing.T) {
 	_, err := Parse([]byte(config))
 	require.Error(t, err)
 
-	var ce *ConfigError
-	require.True(t, errors.As(err, &ce), "expected *ConfigError, got %T", err)
+	ce, ok := errors.AsType[*ConfigError](err)
+	require.True(t, ok, "expected *ConfigError, got %T", err)
 	assert.Greater(t, ce.Diagnostics[0].Line, 0)
 	assert.Contains(t, ce.Diagnostics[0].Context, "unterminated")
 }
@@ -114,8 +114,8 @@ func TestEnrichDecodeError_TypeMismatch(t *testing.T) {
 	_, err := Parse([]byte(config))
 	require.Error(t, err)
 
-	var ce *ConfigError
-	require.True(t, errors.As(err, &ce), "expected *ConfigError, got %T", err)
+	ce, ok := errors.AsType[*ConfigError](err)
+	require.True(t, ok, "expected *ConfigError, got %T", err)
 	assert.Contains(t, ce.Error(), "cannot decode")
 }
 
@@ -129,8 +129,8 @@ mode = "invalid"
 	_, err := Parse([]byte(config))
 	require.Error(t, err)
 
-	var ce *ConfigError
-	require.True(t, errors.As(err, &ce), "expected *ConfigError, got %T", err)
+	ce, ok := errors.AsType[*ConfigError](err)
+	require.True(t, ok, "expected *ConfigError, got %T", err)
 	assert.Contains(t, ce.Error(), `invalid concurrency mode "invalid"`)
 	// Should resolve line number for the mode key
 	require.Len(t, ce.Diagnostics, 1)
@@ -147,8 +147,8 @@ Console = "app exec"
 	_, err := Parse([]byte(config))
 	require.Error(t, err)
 
-	var ce *ConfigError
-	require.True(t, errors.As(err, &ce), "expected *ConfigError, got %T", err)
+	ce, ok := errors.AsType[*ConfigError](err)
+	require.True(t, ok, "expected *ConfigError, got %T", err)
 	assert.Contains(t, ce.Error(), "each word must start with a lowercase letter")
 	// Should have a line number for the alias
 	assert.Greater(t, ce.Diagnostics[0].Line, 0)

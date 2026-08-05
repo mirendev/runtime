@@ -2,11 +2,6 @@
 
 package serverconfig
 
-// Helper functions for creating pointers to literals
-func boolPtr(b bool) *bool    { return &b }
-func intPtr(i int) *int       { return &i }
-func strPtr(s string) *string { return &s }
-
 // DefaultConfig returns the default configuration
 func DefaultConfig() *Config {
 	return &Config{
@@ -16,7 +11,8 @@ func DefaultConfig() *Config {
 		Etcd:            DefaultEtcdConfig(),
 		Ingress:         DefaultIngressConfig(),
 		Labs:            []string{},
-		Mode:            strPtr("standalone"),
+		Mode:            new("standalone"),
+		Saga:            DefaultSagaConfig(),
 		Server:          DefaultServerConfig(),
 		TLS:             DefaultTLSConfig(),
 		Victorialogs:    DefaultVictoriaLogsConfig(),
@@ -27,18 +23,18 @@ func DefaultConfig() *Config {
 // DefaultAppVersionConfig returns default AppVersionConfig
 func DefaultAppVersionConfig() AppVersionConfig {
 	return AppVersionConfig{
-		RetentionCount:  intPtr(10),
-		RetentionPeriod: strPtr("30d"),
+		RetentionCount:  new(10),
+		RetentionPeriod: new("30d"),
 	}
 }
 
 // DefaultBuildkitConfig returns default BuildkitConfig
 func DefaultBuildkitConfig() BuildkitConfig {
 	return BuildkitConfig{
-		GcKeepDuration: strPtr("7d"),
-		GcKeepStorage:  strPtr("10GB"),
-		SocketDir:      strPtr(""),
-		SocketPath:     strPtr(""),
+		GcKeepDuration: new("7d"),
+		GcKeepStorage:  new("10GB"),
+		SocketDir:      new(""),
+		SocketPath:     new(""),
 		StartEmbedded:  nil,
 	}
 }
@@ -46,8 +42,8 @@ func DefaultBuildkitConfig() BuildkitConfig {
 // DefaultContainerdConfig returns default ContainerdConfig
 func DefaultContainerdConfig() ContainerdConfig {
 	return ContainerdConfig{
-		BinaryPath:    strPtr("containerd"),
-		SocketPath:    strPtr(""),
+		BinaryPath:    new("containerd"),
+		SocketPath:    new(""),
 		StartEmbedded: nil,
 	}
 }
@@ -55,12 +51,12 @@ func DefaultContainerdConfig() ContainerdConfig {
 // DefaultEtcdConfig returns default EtcdConfig
 func DefaultEtcdConfig() EtcdConfig {
 	return EtcdConfig{
-		ClientPort:        intPtr(12379),
+		ClientPort:        new(12379),
 		Endpoints:         []string{},
-		HTTPClientPort:    intPtr(12381),
-		PeerPort:          intPtr(12380),
-		Prefix:            strPtr("/miren"),
-		QuotaBackendBytes: intPtr(0),
+		HTTPClientPort:    new(12381),
+		PeerPort:          new(12380),
+		Prefix:            new("/miren"),
+		QuotaBackendBytes: new(0),
 		StartEmbedded:     nil,
 	}
 }
@@ -68,35 +64,42 @@ func DefaultEtcdConfig() EtcdConfig {
 // DefaultIngressConfig returns default IngressConfig
 func DefaultIngressConfig() IngressConfig {
 	return IngressConfig{
-		Address: strPtr(""),
-		Mode:    strPtr("tls-autoprovision"),
+		Address: new(""),
+		Mode:    new("tls-autoprovision"),
+	}
+}
+
+// DefaultSagaConfig returns default SagaConfig
+func DefaultSagaConfig() SagaConfig {
+	return SagaConfig{
+		RetentionPeriod: new("7d"),
 	}
 }
 
 // DefaultServerConfig returns default ServerConfig
 func DefaultServerConfig() ServerConfig {
 	return ServerConfig{
-		Address:                 strPtr(":8443"),
-		ConfigClusterName:       strPtr("local"),
-		DataPath:                strPtr("/var/lib/miren"),
-		DiskMode:                strPtr(""),
-		HTTPRequestTimeout:      intPtr(60),
-		ReleasePath:             strPtr(""),
-		RunnerAddress:           strPtr("localhost:8444"),
-		RunnerID:                strPtr("miren"),
-		SkipClientConfig:        boolPtr(false),
-		StopSandboxesOnShutdown: boolPtr(false),
+		Address:                 new(":8443"),
+		ConfigClusterName:       new("local"),
+		DataPath:                new("/var/lib/miren"),
+		DiskMode:                new(""),
+		HTTPRequestTimeout:      new(60),
+		ReleasePath:             new(""),
+		RunnerAddress:           new("localhost:8444"),
+		RunnerID:                new("miren"),
+		SkipClientConfig:        new(false),
+		StopSandboxesOnShutdown: new(false),
 	}
 }
 
 // DefaultTLSConfig returns default TLSConfig
 func DefaultTLSConfig() TLSConfig {
 	return TLSConfig{
-		AcmeDNSProvider: strPtr(""),
-		AcmeEmail:       strPtr(""),
+		AcmeDNSProvider: new(""),
+		AcmeEmail:       new(""),
 		AdditionalIPs:   []string{},
 		AdditionalNames: []string{},
-		SelfSigned:      boolPtr(false),
+		SelfSigned:      new(false),
 		StandardTLS:     nil,
 	}
 }
@@ -104,9 +107,9 @@ func DefaultTLSConfig() TLSConfig {
 // DefaultVictoriaLogsConfig returns default VictoriaLogsConfig
 func DefaultVictoriaLogsConfig() VictoriaLogsConfig {
 	return VictoriaLogsConfig{
-		Address:         strPtr("victorialogs:9428"),
-		HTTPPort:        intPtr(9428),
-		RetentionPeriod: strPtr("30d"),
+		Address:         new("victorialogs:9428"),
+		HTTPPort:        new(9428),
+		RetentionPeriod: new("30d"),
 		StartEmbedded:   nil,
 	}
 }
@@ -114,9 +117,9 @@ func DefaultVictoriaLogsConfig() VictoriaLogsConfig {
 // DefaultVictoriaMetricsConfig returns default VictoriaMetricsConfig
 func DefaultVictoriaMetricsConfig() VictoriaMetricsConfig {
 	return VictoriaMetricsConfig{
-		Address:         strPtr("victoriametrics:8428"),
-		HTTPPort:        intPtr(8428),
-		RetentionPeriod: strPtr("1"),
+		Address:         new("victoriametrics:8428"),
+		HTTPPort:        new(8428),
+		RetentionPeriod: new("1"),
 		StartEmbedded:   nil,
 	}
 }

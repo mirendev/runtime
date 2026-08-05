@@ -48,8 +48,8 @@ func TestWriteAuthFailure_OrdinaryErrorStaysOpaque(t *testing.T) {
 func TestNewResolveStatusError_CarriesServerDetail(t *testing.T) {
 	err := NewResolveStatusErrorWithReason("entities", "localhost:8443", 401, AuthErrorOIDCBindingMismatch, "OIDC token did not match any CI binding")
 
-	var resolveErr *ResolveError
-	if !errors.As(err, &resolveErr) {
+	resolveErr, ok := errors.AsType[*ResolveError](err)
+	if !ok {
 		t.Fatalf("expected a *ResolveError, got %T", err)
 	}
 	if resolveErr.Code != AuthErrorOIDCBindingMismatch {

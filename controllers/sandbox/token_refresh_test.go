@@ -23,8 +23,8 @@ func TestTokenRefresher_RegisterUnregister(t *testing.T) {
 
 	assert.Empty(t, tr.snapshot())
 
-	tr.register("sandbox/one", "/tmp/one/identity-token", "myapp")
-	tr.register("sandbox/two", "/tmp/two/identity-token", "otherapp")
+	tr.register("sandbox/one", "/tmp/one/identity-token", "myapp", "")
+	tr.register("sandbox/two", "/tmp/two/identity-token", "otherapp", "")
 
 	entries := tr.snapshot()
 	require.Len(t, entries, 2)
@@ -50,7 +50,7 @@ func TestReleaseTokenState_ClearsBothRegistries(t *testing.T) {
 	c.tokenRefresher = newTokenRefresher()
 
 	id := entity.Id(testSandboxID)
-	c.tokenRefresher.register(testSandboxID, "/tmp/identity-token", "myapp")
+	c.tokenRefresher.register(testSandboxID, "/tmp/identity-token", "myapp", "")
 	require.Len(t, c.tokenRefresher.snapshot(), 1)
 	require.True(t, c.tokenSecrets.verify(testSandboxID, testSecret))
 
@@ -77,7 +77,7 @@ func TestRefreshTokens_RewritesLiveTokens(t *testing.T) {
 	tokenPath := filepath.Join(t.TempDir(), "identity-token")
 	require.NoError(t, os.WriteFile(tokenPath, []byte("stale"), 0644))
 
-	c.tokenRefresher.register(testSandboxID, tokenPath, "myapp")
+	c.tokenRefresher.register(testSandboxID, tokenPath, "myapp", "")
 	c.refreshTokens()
 
 	data, err := os.ReadFile(tokenPath)
@@ -103,8 +103,8 @@ func TestRefreshTokens_DropsDepartedSandboxes(t *testing.T) {
 	goneDir := filepath.Join(t.TempDir(), "removed-sandbox")
 	gonePath := filepath.Join(goneDir, "identity-token")
 
-	c.tokenRefresher.register("sandbox/live", livePath, "myapp")
-	c.tokenRefresher.register("sandbox/gone", gonePath, "deadapp")
+	c.tokenRefresher.register("sandbox/live", livePath, "myapp", "")
+	c.tokenRefresher.register("sandbox/gone", gonePath, "deadapp", "")
 
 	// Both sandboxes still hold a token-request secret. The departed one's has to
 	// go with it, or the backstop leaves a dead sandbox authorized.

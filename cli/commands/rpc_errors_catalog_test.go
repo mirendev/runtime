@@ -70,8 +70,8 @@ func TestRPCErrorMessageCatalog(t *testing.T) {
 	for _, tc := range cases {
 		fmt.Fprintf(&buf, "# %s\n\n", tc.scenario)
 
-		var d *ui.Diagnostic
-		if !errors.As(c.wrapRPCError(tc.err), &d) {
+		d, ok := errors.AsType[*ui.Diagnostic](c.wrapRPCError(tc.err))
+		if !ok {
 			t.Fatalf("%s: no diagnostic produced", tc.scenario)
 		}
 		d.WriteForTerminal(&buf)
@@ -80,8 +80,8 @@ func TestRPCErrorMessageCatalog(t *testing.T) {
 
 	// The same failure under -v, which appends the underlying transport error.
 	fmt.Fprintf(&buf, "# with -v (underlying error preserved)\n\n")
-	var verbose *ui.Diagnostic
-	if !errors.As(c.wrapRPCError(cases[0].err), &verbose) {
+	verbose, ok := errors.AsType[*ui.Diagnostic](c.wrapRPCError(cases[0].err))
+	if !ok {
 		t.Fatal("no diagnostic produced for the verbose case")
 	}
 	verbose.ShowCause = true

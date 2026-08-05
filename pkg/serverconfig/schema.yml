@@ -77,6 +77,11 @@ configs:
         toml: app_version
         nested: true
 
+      saga:
+        type: SagaConfig
+        toml: saga
+        nested: true
+
   ServerConfig:
     description: Core server settings
     fields:
@@ -535,4 +540,16 @@ configs:
           long: app-version-retention-period
           description: Retain versions newer than this duration regardless of count (e.g. 30d, 2w)
         env: MIREN_APP_VERSION_RETENTION_PERIOD
+        toml: retention_period
+
+  SagaConfig:
+    description: Saga execution retention garbage collection
+    fields:
+      retention_period:
+        type: string
+        default: "7d"
+        cli:
+          long: saga-retention-period
+          description: Delete finished saga executions older than this duration (e.g. 7d, 24h). Set to 0 to keep them indefinitely.
+        env: MIREN_SAGA_RETENTION_PERIOD
         toml: retention_period

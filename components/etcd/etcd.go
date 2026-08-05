@@ -24,7 +24,8 @@ import (
 )
 
 const (
-	etcdContainerName   = "miren-etcd"
+	// ContainerName is the containerd identity of Miren's embedded etcd.
+	ContainerName       = "miren-etcd"
 	etcdDataDir         = "/etcd-data"
 	defaultEtcdPort     = 12379             // Non-default port to avoid conflicts
 	defaultEtcdHTTPPort = 12381             // Non-default port to avoid conflicts
@@ -231,7 +232,7 @@ func (e *EtcdComponent) Start(ctx context.Context, config EtcdConfig) error {
 	}
 
 	// Check if container already exists
-	existingContainer, err := e.CC.LoadContainer(ctx, etcdContainerName)
+	existingContainer, err := e.CC.LoadContainer(ctx, ContainerName)
 	if err == nil {
 		if configChanged {
 			e.Log.Info("etcd container config changed, recreating container",
@@ -555,9 +556,9 @@ func (e *EtcdComponent) createContainer(ctx context.Context, image containerd.Im
 	// Create container
 	container, err := e.CC.NewContainer(
 		ctx,
-		etcdContainerName,
+		ContainerName,
 		containerd.WithImage(image),
-		containerd.WithNewSnapshot(etcdContainerName+"-snapshot", image),
+		containerd.WithNewSnapshot(ContainerName+"-snapshot", image),
 		containerd.WithNewSpec(opts...),
 	)
 	if err != nil {

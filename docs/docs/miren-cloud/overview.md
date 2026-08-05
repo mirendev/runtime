@@ -44,6 +44,24 @@ miren login
 
 The [Getting Started](/getting-started) guide covers the full install-and-first-deploy flow. For everything the CLI can do with clusters, see the [`miren cluster`](/command/cluster) reference.
 
+## Disconnecting
+
+Connecting is reversible. [`miren server unregister`](/command/server-unregister) is the inverse of registering: it removes the cluster from your organization in Miren Cloud, revokes the credentials it was using, and clears its registration locally.
+
+```bash
+sudo miren server unregister
+```
+
+Your apps and sandboxes keep running throughout. What goes away is everything the cluster got from being part of an organization: its cloud DNS records, Miren Anywhere routing, and cloud-managed access rules, which leaves certificate authentication as the way in. The cluster carries on as a standalone one, exactly as if you had installed it with `--without-cloud`.
+
+This is also how you move a cluster between organizations. Unregister it, `miren login` against the organization you want, then register again. The cluster comes back as a new entry with a fresh identity rather than carrying its old one across, since a cluster record belongs to the organization it was created in.
+
+:::warning[Apps served through Miren Cloud lose their address]
+If your apps are reachable at a [subdomain](/miren-cloud/subdomains) or through [Miren Anywhere](/miren-cloud/miren-anywhere), that traffic stops once the cluster is unregistered. The apps are still running, but nothing routes to them until you give the cluster an address of its own.
+:::
+
+If the cluster entry in Miren Cloud is already gone, or the cluster can't reach the internet to say goodbye, `sudo miren server unregister --local-only` clears the local registration without contacting the cloud.
+
 ## Explore
 
 - [Subdomains](/miren-cloud/subdomains) — Claim a hostname like `mycluster.run.garden` for your apps

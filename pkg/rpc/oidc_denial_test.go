@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/http"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -16,7 +15,7 @@ import (
 // stubAuthenticator fails every request with a fixed error.
 type stubAuthenticator struct{ err error }
 
-func (s *stubAuthenticator) Authenticate(ctx context.Context, r *http.Request) (*rpc.Identity, error) {
+func (s *stubAuthenticator) Authenticate(ctx context.Context, creds *rpc.Credentials) (*rpc.Identity, error) {
 	return nil, s.err
 }
 
@@ -55,8 +54,8 @@ func TestOIDCBindingMismatchReachesTheClient(t *testing.T) {
 	_, err = cs.Connect(ss.ListenAddr(), "meter")
 	r.Error(err, "expected the connection to be denied")
 
-	var resolveErr *rpc.ResolveError
-	r.True(errors.As(err, &resolveErr), "expected a *rpc.ResolveError, got %T: %v", err, err)
+	resolveErr, ok := errors.AsType[*rpc.ResolveError](err)
+	r.True(ok, "expected a *rpc.ResolveError, got %T: %v", err, err)
 	r.Equal(401, resolveErr.StatusCode)
 
 	// Code is what lets the CLI suppress the 'miren login' hint.
@@ -88,8 +87,8 @@ func TestOrdinaryAuthFailureDisclosesNothingToTheClient(t *testing.T) {
 	_, err = cs.Connect(ss.ListenAddr(), "meter")
 	r.Error(err)
 
-	var resolveErr *rpc.ResolveError
-	r.True(errors.As(err, &resolveErr), "expected a *rpc.ResolveError, got %T: %v", err, err)
+	resolveErr, ok := errors.AsType[*rpc.ResolveError](err)
+	r.True(ok, "expected a *rpc.ResolveError, got %T: %v", err, err)
 	r.Equal(401, resolveErr.StatusCode)
 	r.Empty(resolveErr.Code)
 	r.Empty(resolveErr.Detail)

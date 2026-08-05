@@ -129,6 +129,26 @@ func (d *DeploymentServer) CreateDeployment(ctx context.Context, req *deployment
 		return rpc.AppAccessError(ctx, appName)
 	}
 
+	// If the referenced version resolves to a real AppVersion, it must belong to
+	// this app — AllowApp confined the target app, not the source version, so
+	// without this a caller could point a deployment at another app's built
+	// version. The normal flow passes a "pending-build" placeholder here (no
+	// entity yet) and attaches the real version later via
+	// UpdateDeploymentAppVersion, which enforces the same ownership; so a
+	// not-found version is left alone rather than rejected. Any other lookup
+	// error fails closed — skipping the check on a transient store error would
+	// let a cross-app version slip through.
+	var appVersion core_v1alpha.AppVersion
+	switch err := d.EC.Get(ctx, args.AppVersionId(), &appVersion); {
+	case err == nil:
+		if verifyErr := d.verifyVersionOwnedByApp(ctx, &appVersion, appName); verifyErr != nil {
+			return verifyErr
+		}
+	case !errors.Is(err, cond.ErrNotFound{}):
+		d.Log.Error("Failed to look up app version", "app_version_id", args.AppVersionId(), "error", err)
+		return cond.Error("failed to look up app version")
+	}
+
 	var gitInfo core_v1alpha.GitInfo
 	if args.HasGitInfo() {
 		gitInfo = gitInfoFromRPC(args.GitInfo())
@@ -516,6 +536,24 @@ func (d *DeploymentServer) UpdateDeploymentAppVersion(ctx context.Context, req *
 		return rpc.AppAccessError(ctx, deployment.AppName)
 	}
 
+	// If the new version resolves to a real AppVersion, it must belong to the
+	// deployment's app — otherwise a caller authorized for its own app could
+	// repoint a deployment at another app's built version. A version string that
+	// doesn't resolve to an entity is only a recorded label (the deprecated CLI
+	// records one before any build exists), so it is left alone rather than
+	// rejected; the cross-app attack always names a real, existing version. Any
+	// other lookup error fails closed.
+	var appVersion core_v1alpha.AppVersion
+	switch err := d.EC.Get(ctx, appVersionId, &appVersion); {
+	case err == nil:
+		if verifyErr := d.verifyVersionOwnedByApp(ctx, &appVersion, deployment.AppName); verifyErr != nil {
+			return verifyErr
+		}
+	case !errors.Is(err, cond.ErrNotFound{}):
+		d.Log.Error("Failed to look up app version", "app_version_id", appVersionId, "error", err)
+		return cond.Error("failed to look up app version")
+	}
+
 	// Update app version
 	deployment.AppVersion = appVersionId
 
@@ -720,6 +758,12 @@ func (d *DeploymentServer) DeployVersion(ctx context.Context, req *deployment_v1
 		d.Log.Error("Failed to look up app version", "app_version_id", appVersionId, "error", err)
 		results.SetError("failed to look up app version")
 		return nil
+	}
+
+	// The version must belong to the app being deployed — AllowApp only
+	// confined the target app, not the source version.
+	if err := d.verifyVersionOwnedByApp(ctx, &appVersion, appName); err != nil {
+		return err
 	}
 
 	// If env vars are provided, create a derived version with merged variables
@@ -929,6 +973,11 @@ func (d *DeploymentServer) SetEnvVars(ctx context.Context, req *deployment_v1alp
 	}
 
 	appName := args.AppName()
+
+	if !rpc.AllowApp(ctx, appName) {
+		return rpc.AppAccessError(ctx, appName)
+	}
+
 	clusterId := args.ClusterId()
 	service := ""
 	if args.HasService() {
@@ -975,6 +1024,11 @@ func (d *DeploymentServer) DeleteEnvVars(ctx context.Context, req *deployment_v1
 	}
 
 	appName := args.AppName()
+
+	if !rpc.AllowApp(ctx, appName) {
+		return rpc.AppAccessError(ctx, appName)
+	}
+
 	clusterId := args.ClusterId()
 	service := ""
 	if args.HasService() {
@@ -1360,6 +1414,35 @@ func (w *rpcEntityWrapper) Attrs() []entity.Attr {
 
 // createDerivedVersion clones an existing AppVersion with CLI env vars merged
 // into its config, creates the new entity, and returns it.
+// verifyVersionOwnedByApp rejects deploying an AppVersion that belongs to a
+// different app than appName.
+//
+// The rpc.AllowApp guards on the deploy methods confine the *target* app but not
+// the *source version*: a caller authorized for its own app could otherwise name
+// another app's built version and pull that app's image and config — and any
+// secrets baked into them — into its own runtime. The comparison is on the
+// canonical app entity ID, so it is independent of whether appName arrives as a
+// bare name or an "app/<name>" ref.
+func (d *DeploymentServer) verifyVersionOwnedByApp(ctx context.Context, version *core_v1alpha.AppVersion, appName string) error {
+	// An owner-less version (App unset) is not the attack this defends against —
+	// every version the build produces sets App (servers/build/build.go), and a
+	// workload cannot mint entities (entityaccess is cert-only), so the cross-app
+	// case always has a non-empty, mismatched App. Only reject that.
+	if version.App == "" {
+		return nil
+	}
+
+	var appRec core_v1alpha.App
+	if err := d.EC.Get(ctx, appName, &appRec); err != nil {
+		return err
+	}
+	if version.App != appRec.ID {
+		return cond.ValidationFailure("app-version-mismatch",
+			fmt.Sprintf("app version does not belong to app %q", appName))
+	}
+	return nil
+}
+
 func (d *DeploymentServer) createDerivedVersion(ctx context.Context, base *core_v1alpha.AppVersion, envVars []*deployment_v1alpha.EnvironmentVariable) (*core_v1alpha.AppVersion, error) {
 	// Extract app name from the base version's App field (e.g. "app/go-server" -> "go-server")
 	appName := string(base.App)

@@ -1,6 +1,7 @@
 package clientconfig
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -66,6 +67,15 @@ type ClusterConfig struct {
 	ClientKey    string   `yaml:"client_key,omitempty"`    // PEM encoded client key (deprecated, use identity)
 	Insecure     bool     `yaml:"insecure,omitempty"`      // Skip TLS verification
 	CloudAuth    bool     `yaml:"cloud_auth,omitempty"`    // Use cloud authentication (deprecated, use identity)
+
+	// IdentityTokenPath is a workload identity token file to authenticate with,
+	// re-read on each request because the sandbox controller refreshes it in
+	// place. Set by InCluster for code running inside a sandbox.
+	IdentityTokenPath string `yaml:"identity_token_path,omitempty"`
+
+	// TLSServerName overrides the name the server certificate is verified
+	// against, for when the dial address cannot be a certificate SAN.
+	TLSServerName string `yaml:"tls_server_name,omitempty"`
 }
 
 // Config represents the complete client configuration
@@ -429,8 +439,28 @@ func (c *Config) ClearActiveCluster() {
 	c.active = ""
 }
 
-// LoadConfig loads the configuration from disk
+// LoadConfig loads the configuration from disk, falling back to the sandbox's
+// own workload identity when there is no config file and we are running inside
+// one. That ordering keeps an explicit config authoritative, so pointing the
+// CLI at another cluster from inside a sandbox still works.
 func LoadConfig() (*Config, error) {
+	config, err := loadConfigFromDisk()
+	if !errors.Is(err, ErrNoConfig) {
+		return config, err
+	}
+
+	inCluster, icErr := InCluster()
+	if icErr != nil {
+		if errors.Is(icErr, ErrNoConfig) {
+			return nil, err // not in a sandbox either: report the original
+		}
+		return nil, icErr
+	}
+
+	return inCluster, nil
+}
+
+func loadConfigFromDisk() (*Config, error) {
 	configPath, loadConfigD, err := getConfigPath()
 	if err != nil {
 		return nil, fmt.Errorf("failed to determine config path: %w", err)
@@ -439,12 +469,20 @@ func LoadConfig() (*Config, error) {
 	// Load main config file
 	data, err := os.ReadFile(configPath)
 	if err != nil {
-		// If main config doesn't exist, try loading from config.d directory
+		// Only a genuinely absent main config falls through to config.d (and,
+		// via LoadConfig, to the in-cluster fallback). A file that exists but
+		// can't be read — permissions, I/O — is surfaced, so an unreadable
+		// explicit config never silently retargets the CLI at another cluster.
+		if !os.IsNotExist(err) {
+			return nil, fmt.Errorf("reading config file %s: %w", configPath, err)
+		}
+
+		// Main config doesn't exist; try loading from the config.d directory.
 		config := NewConfig()
 
 		if loadConfigD {
 			if err := loadConfigDir(config); err != nil {
-				return nil, ErrNoConfig
+				return nil, fmt.Errorf("loading config directory: %w", err)
 			}
 		}
 

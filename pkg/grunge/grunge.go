@@ -183,8 +183,7 @@ func (n *Network) removeDeviceIfPresent(name string) error {
 		// Absent is the expected case and the whole point. Any other lookup
 		// failure means we cannot tell whether a stale device is there, which
 		// is not a question to answer optimistically.
-		var notFound netlink.LinkNotFoundError
-		if errors.As(err, &notFound) {
+		if _, ok := errors.AsType[netlink.LinkNotFoundError](err); ok {
 			return nil
 		}
 

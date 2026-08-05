@@ -2,7 +2,6 @@ package saga
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -31,39 +30,10 @@ func NewEACStorage(eac *es.EntityAccessClient, log *slog.Logger) *EACStorage {
 
 // Save persists the execution state as an entity via EAC.
 func (s *EACStorage) Save(ctx context.Context, exec *Execution) error {
-	initialInputs, err := json.Marshal(exec.InitialInputs)
+	ent, err := executionToEntity(exec)
 	if err != nil {
-		return fmt.Errorf("marshaling initial inputs: %w", err)
+		return err
 	}
-
-	executedActions, err := json.Marshal(exec.ExecutedActions)
-	if err != nil {
-		return fmt.Errorf("marshaling executed actions: %w", err)
-	}
-
-	executionOrder, err := json.Marshal(exec.ExecutionOrder)
-	if err != nil {
-		return fmt.Errorf("marshaling execution order: %w", err)
-	}
-
-	status := statusToEntity(exec.Status)
-
-	sagaEntity := &saga_v1alpha.Saga{
-		ID:                entity.Id(exec.ID),
-		DefinitionName:    exec.DefinitionName,
-		DefinitionVersion: int64(exec.DefinitionVersion),
-		ParentExecutionId: entity.Id(exec.ParentExecutionID),
-		Status:            status,
-		InitialInputs:     initialInputs,
-		ExecutedActions:   executedActions,
-		ExecutionOrder:    executionOrder,
-		Error:             exec.Error,
-	}
-
-	ent := entity.New(
-		entity.DBId, entity.Id(exec.ID),
-		sagaEntity.Encode(),
-	)
 
 	// Put is an upsert (update-then-create): unlike Ensure, it applies our
 	// attributes even when the entity already exists. Ensure is create-if-absent
@@ -97,6 +67,49 @@ func (s *EACStorage) Get(ctx context.Context, id string) (*Execution, error) {
 	}
 
 	return entityToExecution(sagaEntity)
+}
+
+// ListTerminal summarizes every execution in a terminal state via EAC.
+func (s *EACStorage) ListTerminal(ctx context.Context) ([]TerminalExecution, error) {
+	var result []TerminalExecution
+	seen := make(map[string]struct{})
+
+	for _, status := range []entity.Id{
+		saga_v1alpha.SagaStatusCompletedId,
+		saga_v1alpha.SagaStatusFailedId,
+	} {
+		resp, err := s.eac.List(ctx, entity.Ref(saga_v1alpha.SagaStatusId, status))
+		if err != nil {
+			return nil, fmt.Errorf("listing sagas with status %s: %w", status, err)
+		}
+		for _, v := range resp.Values() {
+			id := v.Id()
+			if _, dup := seen[id]; dup {
+				continue
+			}
+			seen[id] = struct{}{}
+
+			summary, ok := terminalSummary(v.Entity())
+			if !ok {
+				s.log.Warn("terminal saga has no usable timestamp, skipping", "id", id)
+				continue
+			}
+			result = append(result, summary)
+		}
+	}
+
+	return result, nil
+}
+
+// Delete removes a saga execution entity via EAC.
+func (s *EACStorage) Delete(ctx context.Context, id string) error {
+	if _, err := s.eac.Delete(ctx, id); err != nil {
+		if errors.Is(err, cond.ErrNotFound{}) {
+			return nil
+		}
+		return fmt.Errorf("deleting saga entity via EAC: %w", err)
+	}
+	return nil
 }
 
 // ListIncomplete returns all executions that need recovery via EAC.

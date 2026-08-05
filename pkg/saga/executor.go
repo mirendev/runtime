@@ -43,6 +43,17 @@ type Storage interface {
 
 	// ListIncomplete returns all executions that need recovery (Pending, Running, or Undoing).
 	ListIncomplete(ctx context.Context) ([]*Execution, error)
+
+	// ListTerminal returns a summary of every execution that has finished
+	// (Completed or Failed). It deliberately returns summaries rather than
+	// executions: retention only needs an ID and an age, and a backend holding
+	// a six-figure backlog must not have to materialize every action-output
+	// blob to answer.
+	ListTerminal(ctx context.Context) ([]TerminalExecution, error)
+
+	// Delete removes an execution. Deleting one that is already gone is not an
+	// error, so a retried or overlapping sweep converges instead of failing.
+	Delete(ctx context.Context, id string) error
 }
 
 // Executor orchestrates saga execution with durable logging.

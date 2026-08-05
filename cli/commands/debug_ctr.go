@@ -13,7 +13,10 @@ func DebugCtr(ctx *Context, opts struct {
 	Socket    string   `long:"socket" description:"path to containerd socket"`
 	Args      []string `rest:"true"`
 }) error {
-	socket := opts.Socket
+	return execCtr(opts.Socket, opts.Namespace, opts.Args)
+}
+
+func execCtr(socket, namespace string, commandArgs []string) error {
 	if socket == "" {
 		socket = defaultContainerdSocket()
 	}
@@ -23,8 +26,8 @@ func DebugCtr(ctx *Context, opts struct {
 		return err
 	}
 
-	args := []string{"ctr", "-a", socket, "-n", opts.Namespace}
-	args = append(args, opts.Args...)
+	args := []string{"ctr", "-a", socket, "-n", namespace}
+	args = append(args, commandArgs...)
 
 	env := os.Environ()
 

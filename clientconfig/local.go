@@ -100,6 +100,12 @@ func (c *ClusterConfig) RPCOptionsWithName(ctx context.Context, config *Config, 
 	}
 
 foundAddress:
+	// A workload identity token is unambiguous, so it settles the matter before
+	// the identity/cert/insecure paths below get a say.
+	if c.IdentityTokenPath != "" {
+		return c.inClusterOptions(hostname), nil
+	}
+
 	// Check if cluster references an identity
 	if c.Identity != "" {
 		identity, err := config.GetIdentity(c.Identity)

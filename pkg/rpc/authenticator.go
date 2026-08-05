@@ -2,9 +2,12 @@ package rpc
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 )
 
 // contextKey is a private type for context keys to avoid collisions
@@ -38,6 +41,8 @@ const (
 	AuthMethodToken     AuthMethod = "token"     // Bearer token (e.g., outboard)
 	AuthMethodOIDC      AuthMethod = "oidc"      // External OIDC token (e.g., GitHub Actions)
 	AuthMethodSystem    AuthMethod = "system"    // Cluster-issued system workload identity
+	AuthMethodWorkload  AuthMethod = "workload"  // Workload identity token from a sandbox
+	AuthMethodSigned    AuthMethod = "signed"    // ed25519-signed request over a message transport
 )
 
 // Identity represents an authenticated caller
@@ -55,14 +60,66 @@ type Identity struct {
 	Metadata map[string]any
 }
 
+// Credentials carries what an authenticator needs to identify a caller,
+// independent of how the call arrived. The HTTP transports fill it from the
+// request; message transports fill it from the operation frame, where there is
+// no request and no TLS handshake to inspect.
+type Credentials struct {
+	// Authorization is the raw Authorization header value, e.g. "Bearer <jwt>".
+	Authorization string
+
+	// Host is the address the caller addressed, used as the expected audience
+	// when validating a token. Empty on message transports, which are not
+	// addressed by name.
+	Host string
+
+	// TLS is the connection's handshake state, or nil when the transport has no
+	// TLS layer of its own — including any connection supplied by a caller,
+	// whose security is that caller's concern.
+	TLS *tls.ConnectionState
+}
+
+// CredentialsFromRequest extracts credentials from an HTTP request, for the
+// HTTP transports and for anything fronting rpc with an HTTP layer of its own.
+func CredentialsFromRequest(r *http.Request) *Credentials {
+	return &Credentials{
+		Authorization: r.Header.Get("Authorization"),
+		Host:          r.Host,
+		TLS:           r.TLS,
+	}
+}
+
+// BearerToken returns the token from a "Bearer <token>" Authorization value, or
+// an empty string if the credentials carry no bearer token.
+func (c *Credentials) BearerToken() string {
+	if c == nil || !strings.HasPrefix(c.Authorization, "Bearer ") {
+		return ""
+	}
+	return strings.TrimSpace(strings.TrimPrefix(c.Authorization, "Bearer "))
+}
+
+// VerifiedPeerCertificate returns the caller's TLS client certificate, but only
+// when the TLS layer verified it against the cluster CA. A presented but
+// unverified certificate must never yield a cert identity, which grants
+// RBAC-bypassing privileges in Authorize.
+func (c *Credentials) VerifiedPeerCertificate() *x509.Certificate {
+	if c == nil || c.TLS == nil {
+		return nil
+	}
+	if len(c.TLS.VerifiedChains) == 0 || len(c.TLS.PeerCertificates) == 0 {
+		return nil
+	}
+	return c.TLS.PeerCertificates[0]
+}
+
 // Authenticator validates credentials and returns caller identity
 type Authenticator interface {
-	// Authenticate validates the request's credentials and returns the caller's identity.
+	// Authenticate validates the caller's credentials and returns their identity.
 	// Returns:
 	//   - (*Identity, nil) if credentials are valid
 	//   - (nil, nil) if no credentials present or credentials are invalid
 	//   - (nil, error) if an error occurred during authentication
-	Authenticate(ctx context.Context, r *http.Request) (*Identity, error)
+	Authenticate(ctx context.Context, creds *Credentials) (*Identity, error)
 }
 
 // Authorizer checks if an identity is allowed to perform an action on a resource
@@ -80,32 +137,62 @@ var ErrUnauthorized = errors.New("unauthorized")
 
 // AllowApp checks whether the current caller is permitted to operate on the
 // named app. Callers that are not app-scoped (cert, JWT, anonymous) are always
-// allowed. OIDC callers are restricted to the app their binding is for.
+// allowed; app-scoped callers are restricted to the app they are bound to.
+//
+// This is where per-app scoping is enforced. It cannot live in an Authorizer:
+// Authorize only sees the resource and action, never the arguments naming the
+// app, so it can decide whether a caller may ever call a method but not which
+// app it may call it against.
 func AllowApp(ctx context.Context, appName string) bool {
-	identity := IdentityFromContext(ctx)
-	if identity == nil || identity.Method != AuthMethodOIDC {
+	bound := BoundApp(ctx)
+	if bound == "" {
 		return true
 	}
-	boundApp, _ := identity.Metadata["bound_app"].(string)
-	return boundApp != "" && boundApp == appName
+	return bound == appName
 }
 
-// BoundApp returns the app name that the current OIDC caller is bound to,
-// or empty string if the caller is not app-scoped.
+// BoundApp returns the app the current caller is scoped to, or "" if the caller
+// is not app-scoped.
+//
+// The switch below is the registry of app-scoped auth methods: a method that
+// reports no binding is read by AllowApp as "not app-scoped" and allowed against
+// every app. Every AuthMethod is therefore listed explicitly, and the exhaustive
+// linter keeps it that way — a new method must make its scoping decision here,
+// rather than inheriting cluster-wide access from a default branch.
 func BoundApp(ctx context.Context) string {
 	identity := IdentityFromContext(ctx)
-	if identity == nil || identity.Method != AuthMethodOIDC {
+	if identity == nil {
 		return ""
 	}
-	boundApp, _ := identity.Metadata["bound_app"].(string)
-	return boundApp
+
+	switch identity.Method {
+	case AuthMethodOIDC:
+		boundApp, _ := identity.Metadata["bound_app"].(string)
+		return boundApp
+
+	case AuthMethodWorkload:
+		// The token's app claim. The workload identity validator rejects tokens
+		// without one, so this is non-empty for any workload that authenticated.
+		app, _ := identity.Metadata["app"].(string)
+		return app
+
+	case AuthMethodCert, AuthMethodJWT, AuthMethodAnonymous, AuthMethodToken, AuthMethodSystem, AuthMethodSigned:
+		// Not app-scoped: cert is an internal component, JWT is an operator
+		// whose reach is decided by cloud RBAC, a system workload is a
+		// cluster-issued internal identity, a signed identity is a
+		// message-transport capability key, and anonymous/token callers carry no
+		// app binding to enforce.
+		return ""
+	}
+
+	return ""
 }
 
 // AppAccessError returns a descriptive error for an app-scoping denial.
 func AppAccessError(ctx context.Context, appName string) error {
 	boundApp := BoundApp(ctx)
 	if boundApp == "" {
-		return fmt.Errorf("%w: OIDC identity missing bound app", ErrUnauthorized)
+		return fmt.Errorf("%w: identity missing bound app", ErrUnauthorized)
 	}
 	return fmt.Errorf("%w: bound to app %q, cannot operate on %q", ErrUnauthorized, boundApp, appName)
 }
@@ -114,7 +201,7 @@ func AppAccessError(ctx context.Context, appName string) error {
 // Used for testing only.
 type NoOpAuthenticator struct{}
 
-func (n *NoOpAuthenticator) Authenticate(ctx context.Context, r *http.Request) (*Identity, error) {
+func (n *NoOpAuthenticator) Authenticate(ctx context.Context, creds *Credentials) (*Identity, error) {
 	return &Identity{
 		Subject: "anonymous",
 		Method:  AuthMethodAnonymous,
@@ -125,13 +212,8 @@ func (n *NoOpAuthenticator) Authenticate(ctx context.Context, r *http.Request) (
 // Used when cloud authentication is not enabled.
 type LocalOnlyAuthenticator struct{}
 
-func (l *LocalOnlyAuthenticator) Authenticate(ctx context.Context, r *http.Request) (*Identity, error) {
-	// Check for TLS client certificate. Only trust a cert that the TLS layer
-	// verified against the cluster CA (VerifiedChains non-empty); a
-	// presented-but-unverified cert must never yield a cert identity, which
-	// grants RBAC-bypassing privileges in Authorize.
-	if r.TLS != nil && len(r.TLS.VerifiedChains) > 0 && len(r.TLS.PeerCertificates) > 0 {
-		cert := r.TLS.PeerCertificates[0]
+func (l *LocalOnlyAuthenticator) Authenticate(ctx context.Context, creds *Credentials) (*Identity, error) {
+	if cert := creds.VerifiedPeerCertificate(); cert != nil {
 		return &Identity{
 			Subject: cert.Subject.CommonName,
 			Method:  AuthMethodCert,

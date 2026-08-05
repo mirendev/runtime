@@ -8,6 +8,7 @@ import (
 	"crypto/rand"
 	"crypto/tls"
 	"encoding/json"
+	stderrors "errors"
 	"fmt"
 	"io"
 	"net"
@@ -28,6 +29,19 @@ import (
 	"miren.dev/runtime/pkg/cond"
 )
 
+// transportKind selects which wire transport a NetworkClient uses.
+type transportKind int
+
+const (
+	transportH3  transportKind = iota // QUIC/HTTP3 + WebTransport (default)
+	transportMsg                      // msgmux over a MessageConn (mem, WebSocket, TCP, adopted)
+)
+
+// adoptedRemote marks a client whose connection was supplied by the caller
+// (ClientFromMessageConn). There is no address to dial: the connection is
+// reachable only as itself, for as long as it lives.
+const adoptedRemote = "adopted://"
+
 type Client interface {
 	CallWithCaps(ctx context.Context, method string, args, result any, caps map[OID]*InlineCapability) error
 	Call(ctx context.Context, method string, args, result any) error
@@ -36,13 +50,45 @@ type Client interface {
 	Close() error
 }
 
+// unreachableClient stands in for a capability that carries no address and is
+// not inline, so there is nothing to dial and no session it is scoped to. This
+// happens when a peer hands us a capability minted on a connection it does not
+// own — only call-scoped inline capabilities survive that trip. Failing at the
+// call rather than at hand-off keeps the error where it can be reported.
+type unreachableClient struct {
+	oid OID
+}
+
+func (u unreachableClient) err() error {
+	return cond.NotFound("reachable address for capability", u.oid)
+}
+
+func (u unreachableClient) Call(context.Context, string, any, any) error { return u.err() }
+
+func (u unreachableClient) CallWithCaps(
+	context.Context, string, any, any, map[OID]*InlineCapability,
+) error {
+	return u.err()
+}
+
+func (u unreachableClient) NewClient(*Capability) Client { return u }
+
+func (u unreachableClient) NewInlineCapability(*Interface, any) (*InlineCapability, OID, *Capability) {
+	return &InlineCapability{}, "", &Capability{}
+}
+
+func (u unreachableClient) Close() error { return nil }
+
 type NetworkClient struct {
 	State *State
+
+	transportKind transportKind
 
 	transport  *quic.Transport
 	htr        http3.Transport
 	ws         webtransport.Dialer
 	qc         quic.Config
+	ops        *msgOpTransport
 	capa       *Capability
 	remote     string
 	remoteAddr net.Addr
@@ -71,26 +117,16 @@ type NetworkClient struct {
 	localClient  *localClient
 }
 
-func setTLSConfigServerName(tlsConf *tls.Config, addr net.Addr, host string) {
-	// If no ServerName is set, infer the ServerName from the host we're connecting to.
-	if tlsConf.ServerName != "" {
-		return
-	}
-	if host == "" {
-		if udpAddr, ok := addr.(*net.UDPAddr); ok {
-			tlsConf.ServerName = udpAddr.IP.String()
-			return
-		}
-	}
-	h, _, err := net.SplitHostPort(host)
-	if err != nil { // This happens if the host doesn't contain a port number.
-		tlsConf.ServerName = host
-		return
-	}
-	tlsConf.ServerName = h
-}
-
+// setupTransport configures the client's round-tripper and callstream dialer
+// based on the selected transport. The message transports are wired in
+// transport_msg.go; the default QUIC/HTTP3 + WebTransport path is set up inline
+// here.
 func (c *NetworkClient) setupTransport() {
+	if c.transportKind == transportMsg {
+		c.setupMsgTransport()
+		return
+	}
+
 	c.htr.Logger = c.State.log.With("module", "rpc-call")
 	c.htr.TLSClientConfig = c.tlsCfg
 
@@ -119,6 +155,25 @@ func (c *NetworkClient) setupTransport() {
 	c.ws.TLSClientConfig = c.tlsCfg
 	c.ws.QUICConfig = &c.qc
 	c.ws.DialAddr = c.htr.Dial
+}
+
+func setTLSConfigServerName(tlsConf *tls.Config, addr net.Addr, host string) {
+	// If no ServerName is set, infer the ServerName from the host we're connecting to.
+	if tlsConf.ServerName != "" {
+		return
+	}
+	if host == "" {
+		if udpAddr, ok := addr.(*net.UDPAddr); ok {
+			tlsConf.ServerName = udpAddr.IP.String()
+			return
+		}
+	}
+	h, _, err := net.SplitHostPort(host)
+	if err != nil { // This happens if the host doesn't contain a port number.
+		tlsConf.ServerName = host
+		return
+	}
+	tlsConf.ServerName = h
 }
 
 func (c *NetworkClient) trackConn(conn *quic.Conn) {
@@ -165,8 +220,8 @@ func (c *NetworkClient) classifyTransportError(name string, elapsed time.Duratio
 // classifyTransportError is the decision itself, split out from the client so
 // it can be tested directly: reached is whether a QUIC handshake ever completed.
 func classifyTransportError(name, remote string, elapsed time.Duration, err error, reached bool) error {
-	var netErr net.Error
-	if !errors.As(err, &netErr) || !netErr.Timeout() {
+	netErr, ok := stderrors.AsType[net.Error](err)
+	if !ok || !netErr.Timeout() {
 		return NewResolveHTTPError(err, "error performing http request to %s for %q: %v", remote, name, err)
 	}
 
@@ -242,6 +297,10 @@ func (c *NetworkClient) roundTrip(r *http.Request) (*http.Response, error) {
 }
 
 func (c *NetworkClient) sendIdentity(ctx context.Context) error {
+	if c.transportKind == transportMsg {
+		return c.msgSendIdentity(ctx)
+	}
+
 	url := "https://" + c.remote + "/_rpc/identify"
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, nil)
 	if err != nil {
@@ -312,6 +371,10 @@ func (c *NetworkClient) sendIdentity(ctx context.Context) error {
 // lookup handler blocked for two minutes — the client waited the entire time
 // and printed nothing. See lookupTimeoutFor for how the budget is chosen.
 func (c *NetworkClient) resolveCapability(name string) error {
+	if c.transportKind == transportMsg {
+		return c.msgResolveCapability(name)
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), lookupTimeoutFor(c.remote))
 	defer cancel()
 
@@ -370,6 +433,10 @@ func reresolveName(rs *InterfaceState) string {
 }
 
 func (c *NetworkClient) reresolveCapability(rs *InterfaceState) error {
+	if c.transportKind == transportMsg {
+		return c.msgReresolveCapability(rs)
+	}
+
 	// Same unbounded-wait hazard as resolveCapability: a server that holds the
 	// connection open without answering would hang here forever.
 	ctx, cancel := context.WithTimeout(context.Background(), lookupTimeoutFor(c.remote))
@@ -433,6 +500,10 @@ func (c *NetworkClient) reresolveCapability(rs *InterfaceState) error {
 func (c *NetworkClient) fetchMethods(ctx context.Context) (methodsResponse, error) {
 	if c.localClient != nil {
 		return c.localClient.listMethods(), nil
+	}
+
+	if c.transportKind == transportMsg {
+		return c.msgFetchMethods(ctx)
 	}
 
 	url := "https://" + c.remote + "/_rpc/methods/" + string(c.oid)
@@ -509,6 +580,10 @@ func (c *NetworkClient) HasMethodParam(ctx context.Context, method, param string
 }
 
 func (c *NetworkClient) requestReexportCapability(ctx context.Context, capa *Capability, target ed25519.PublicKey) (*Capability, error) {
+	if c.transportKind == transportMsg {
+		return c.msgRequestReexport(ctx, capa, target)
+	}
+
 	url := "https://" + c.remote + "/_rpc/reexport/" + string(capa.OID)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, nil)
 	if err != nil {
@@ -551,6 +626,10 @@ func (c *NetworkClient) requestReexportCapability(ctx context.Context, capa *Cap
 func (c *NetworkClient) derefOID(ctx context.Context, oid OID) error {
 	if c.inlineClient != nil {
 		return c.inlineClient.derefOID(ctx, oid)
+	}
+
+	if c.transportKind == transportMsg {
+		return c.msgDerefOID(ctx, oid)
 	}
 
 	url := "https://" + c.remote + "/_rpc/deref/" + string(oid)
@@ -596,7 +675,23 @@ func (c *NetworkClient) Close() error {
 
 // addBearerToken safely adds a bearer token to the request header if configured
 func (c *NetworkClient) addBearerToken(req *http.Request) {
-	if c.State != nil && c.State.opts != nil && c.State.opts.bearerToken != "" {
+	if c.State == nil || c.State.opts == nil {
+		return
+	}
+
+	if fn := c.State.opts.bearerTokenFunc; fn != nil {
+		token, err := fn()
+		if err != nil || token == "" {
+			// Send the request unauthenticated and let the server reject it.
+			// The caller's retry then picks up a token that has since been
+			// refreshed, which a hard failure here would not.
+			return
+		}
+		req.Header.Set("Authorization", "Bearer "+token)
+		return
+	}
+
+	if c.State.opts.bearerToken != "" {
 		req.Header.Set("Authorization", "Bearer "+c.State.opts.bearerToken)
 	}
 }
@@ -656,6 +751,10 @@ func (c *NetworkClient) Call(ctx context.Context, method string, args, result an
 		return c.inlineClient.Call(ctx, method, args, result)
 	}
 
+	if c.transportKind == transportMsg {
+		return c.msgUnaryCall(ctx, method, args, result)
+	}
+
 	ctx, span := Tracer().Start(ctx, "rpc.call."+method)
 	defer span.End()
 
@@ -681,7 +780,7 @@ request:
 
 		hr, err := c.htr.RoundTrip(req)
 		if err != nil {
-			if _, ok := err.(*quic.ApplicationError); ok {
+			if isRetryableTransportError(err) {
 				c.State.log.Info("rpc.call retrying", "oid", string(c.oid), "error", err)
 				continue request
 			}
@@ -697,12 +796,6 @@ request:
 			et, _ := io.ReadAll(hr.Body)
 			err = fmt.Errorf("unexpected status code: %d: %s", hr.StatusCode, et)
 		}
-
-		/*
-			if hr.StatusCode != http.StatusOK {
-				return errors.Errorf("unexpected status code: %d", hr.StatusCode)
-			}
-		*/
 
 		// We perform this draining read because quic/http3 populates the trailers
 		// as part of the body read.
@@ -749,20 +842,19 @@ func (c *NetworkClient) CallWithCaps(ctx context.Context, method string, args, r
 		return c.localClient.Call(ctx, method, args, result)
 	}
 
+	if c.transportKind == transportMsg {
+		return c.msgCallWithCaps(ctx, method, args, result, caps)
+	}
+
 	ctx, span := Tracer().Start(ctx, "rpc.call."+method)
 	defer span.End()
-
-	data, err := cbor.Marshal(args)
-	if err != nil {
-		return err
-	}
 
 request:
 	for {
 		span.SetAttributes(attribute.String("oid", string(c.oid)))
 
 		url := "https://" + c.remote + "/_rpc/callstream/" + string(c.oid) + "/" + method
-		req, err := http.NewRequestWithContext(ctx, http.MethodConnect, url, bytes.NewReader(data))
+		req, err := http.NewRequestWithContext(ctx, http.MethodConnect, url, nil)
 		if err != nil {
 			return err
 		}
@@ -772,151 +864,109 @@ request:
 			return err
 		}
 
-		hr, sess, err := c.ws.Dial(ctx, url, req.Header)
+		hr, wsSess, err := c.ws.Dial(ctx, url, req.Header)
 		if err != nil {
-			if _, ok := err.(*quic.ApplicationError); ok {
-				c.State.log.Info("rpc.call retrying", "oid", string(c.oid), "error", err)
+			retry, derr := c.handleCallStreamDialError(hr, err)
+			if retry {
 				continue request
 			}
-
-			return fmt.Errorf("error performing http request to %s: %w", url, err)
+			return derr
 		}
 
-		retry, err := c.handleCallStream(ctx, hr, sess, method, args, result, caps)
+		// Adapt the WebTransport session to the transport-neutral rpcSession that
+		// handleCallStream (shared with the message transport) consumes.
+		sess := &wtSession{sess: wsSess}
+		err = c.handleCallStream(ctx, sess, perCallRouter{}, nil, args, result, caps)
+		_ = sess.Close()
 		if err != nil {
 			return err
-		}
-
-		if retry {
-			continue request
 		}
 
 		return nil
 	}
 }
 
-func (c *NetworkClient) handleCallStream(
-	ctx context.Context,
-	hr *http.Response,
-	sess *webtransport.Session,
-	method string,
-	args, result any,
-	caps map[OID]*InlineCapability,
-) (bool, error) {
-	if hr.StatusCode != http.StatusOK {
-		status := hr.Trailer.Get("rpc-status")
-
-		err := cond.Errorf("unexpected status code: %d", hr.StatusCode)
-
-		switch status {
-		case "ok", "":
-			// The remote side thought everything was fine, so use our ability to parse
-			// the response as the error.
-			return false, err
-		case "unknown-capability":
-			if c.capa.RestoreState != nil {
-				// Try to re-resolve and, if successful, signal caller to retry the request.
-				if rerr := c.reresolveCapability(c.capa.RestoreState); rerr == nil {
-					return true, nil
-				}
-			}
-			err = cond.NotFound("capability", c.capa.OID)
-		case "error":
-			errs := hr.Trailer.Get("rpc-error")
-			err = cond.RemoteError("generic", "unknown", errs)
-		case "panic":
-			errs := hr.Trailer.Get("rpc-error")
-			err = cond.Panic(errs)
+// handleCallStreamDialError maps a failed callstream upgrade to the appropriate
+// RPC error, transparently retrying when the capability can be re-resolved. The
+// WebTransport upgrade surfaces the RPC status via response trailers on HTTP/3,
+// with headers as a fallback, so we check both.
+func (c *NetworkClient) handleCallStreamDialError(hr *http.Response, dialErr error) (bool, error) {
+	statusFor := func(key string) string {
+		if hr == nil {
+			return ""
 		}
-
-		return false, err
+		if v := hr.Trailer.Get(key); v != "" {
+			return v
+		}
+		return hr.Header.Get(key)
 	}
 
+	switch statusFor("rpc-status") {
+	case "unknown-capability":
+		if c.capa.RestoreState != nil {
+			if rerr := c.reresolveCapability(c.capa.RestoreState); rerr == nil {
+				return true, nil
+			}
+		}
+		return false, cond.NotFound("capability", c.capa.OID)
+	case "error":
+		return false, cond.RemoteError("generic", "unknown", statusFor("rpc-error"))
+	case "panic":
+		return false, cond.Panic(statusFor("rpc-error"))
+	}
+
+	if isRetryableTransportError(dialErr) {
+		c.State.log.Info("rpc.call retrying", "oid", string(c.oid), "error", dialErr)
+		return true, nil
+	}
+
+	return false, fmt.Errorf("error performing callstream request: %w", dialErr)
+}
+
+func (c *NetworkClient) handleCallStream(
+	ctx context.Context,
+	sess rpcSession,
+	router callbackRouter,
+	prelude any,
+	args, result any,
+	caps map[OID]*InlineCapability,
+) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	go func() {
-		for {
-			str, err := sess.AcceptStream(ctx)
-			if err != nil {
-				break
-			}
-
-			go func() {
-				defer str.Close()
-
-				dec := cbor.NewDecoder(str)
-				enc := cbor.NewEncoder(str)
-
-				// Loop to handle multiple requests on the same stream
-				for {
-					var rs streamRequest
-
-					err = dec.Decode(&rs)
-					if err != nil {
-						if err != io.EOF {
-							c.State.log.Error("rpc.callstream call: error decoding stream request", "error", err)
-						}
-						return
-					}
-
-					switch rs.Kind {
-					case "call":
-						iface, ok := caps[rs.OID]
-						if !ok {
-							_ = enc.Encode(refResponse{
-								Status: "error",
-								Error:  "unknown capability",
-							})
-							continue
-						}
-
-						mm := iface.methods[rs.Method]
-						if mm.Handler == nil {
-							enc.Encode(refResponse{
-								Status: "error",
-								Error:  "unknown method",
-							})
-							continue
-						}
-
-						ctx, cancel := context.WithCancel(ctx)
-						err := c.callInline(ctx, mm, rs.OID, rs.Method, iface.Interface, enc, dec)
-						cancel()
-						if err != nil {
-							if !errors.Is(err, context.Canceled) && !errors.Is(err, cond.ErrClosed{}) {
-								c.State.log.Error("rpc.callstream: error calling inline", "error", err)
-							}
-							return
-						}
-					default:
-						c.State.log.Error("rpc.callstream: unknown call stream request", "kind", rs.Kind)
-					}
-				}
-			}()
-		}
-	}()
+	withdraw := router.register(ctx, c, sess, caps)
+	defer withdraw()
 
 	// Open the control stream
 	ctrl, err := sess.OpenStreamSync(ctx)
 	if err != nil {
 		c.State.log.Error("rpc.callstream ctrl: error opening control stream", "error", err)
-		return false, err
+		return err
 	}
 
 	enc := cbor.NewEncoder(ctrl)
-	enc.Encode(args)
+	// On the message transport the control stream is also the operation stream,
+	// so it must lead with the opRequest the server's router decodes; the HTTP
+	// transports pass a nil prelude. A dropped error here means the server never
+	// gets a dispatchable request, so the caller must see the real cause rather
+	// than an opaque read failure downstream.
+	if prelude != nil {
+		if err := enc.Encode(prelude); err != nil {
+			return err
+		}
+	}
+	if err := enc.Encode(args); err != nil {
+		return err
+	}
 
 	dec := cbor.NewDecoder(ctrl)
 
-	const cancelCode = webtransport.StreamErrorCode(quic.FlowControlError)
-
 	// If the context is canceled, then we bail ASAP on trying to complete the RPC.
-	// Because we have a local ctx with a local cancel also, when this method turns, this
-	// goroutine will automatically get cleaned up.
+	// Because we have a local ctx with a local cancel also, when this method returns,
+	// this goroutine will automatically get cleaned up.
 	go func() {
 		<-ctx.Done()
-		ctrl.CancelRead(cancelCode)
+		ctrl.CancelRead(cancelReadCode)
 	}()
 
 loop:
@@ -925,10 +975,13 @@ loop:
 
 		err = dec.Decode(&rs)
 		if err != nil {
-			if errors.Is(err, io.EOF) {
-				err = nil
-			} else if se, ok := err.(*webtransport.StreamError); ok && se.ErrorCode == cancelCode {
+			// A canceled context means we aborted the read ourselves (via
+			// CancelRead above); report it uniformly across transports rather
+			// than depending on a transport-specific stream-error type.
+			if ctx.Err() != nil {
 				err = cond.Closed("rpc call terminated before getting response")
+			} else if errors.Is(err, io.EOF) {
+				err = nil
 			}
 
 			break
@@ -951,7 +1004,7 @@ loop:
 		}
 	}
 
-	return false, err
+	return err
 }
 
 func (c *NetworkClient) callInline(

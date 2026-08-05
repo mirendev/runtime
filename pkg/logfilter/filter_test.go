@@ -383,7 +383,7 @@ func BenchmarkParse(b *testing.B) {
 
 	for _, input := range inputs {
 		b.Run(input, func(b *testing.B) {
-			for i := 0; i < b.N; i++ {
+			for b.Loop() {
 				_, _ = Parse(input)
 			}
 		})
@@ -402,7 +402,7 @@ func BenchmarkMatch(b *testing.B) {
 	for _, filterStr := range filters {
 		f, _ := Parse(filterStr)
 		b.Run(filterStr, func(b *testing.B) {
-			for i := 0; i < b.N; i++ {
+			for b.Loop() {
 				f.Match(line)
 			}
 		})

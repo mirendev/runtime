@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"errors"
 	"net/http"
 	"testing"
 )
@@ -42,7 +43,7 @@ func TestNoOpAuthenticator(t *testing.T) {
 				req.Header.Set("Authorization", tt.authHeader)
 			}
 
-			identity, err := auth.Authenticate(context.Background(), req)
+			identity, err := auth.Authenticate(context.Background(), CredentialsFromRequest(req))
 			if err != nil {
 				t.Errorf("unexpected error: %v", err)
 			}
@@ -127,7 +128,7 @@ func TestLocalOnlyAuthenticator(t *testing.T) {
 				req.TLS = &tls.ConnectionState{}
 			}
 
-			identity, err := auth.Authenticate(context.Background(), req)
+			identity, err := auth.Authenticate(context.Background(), CredentialsFromRequest(req))
 			if err != nil {
 				t.Errorf("unexpected error: %v", err)
 			}
@@ -193,6 +194,173 @@ func TestIdentityContext(t *testing.T) {
 			t.Errorf("expected nil identity, got %+v", retrieved)
 		}
 	})
+}
+
+func ctxWith(identity *Identity) context.Context {
+	return ContextWithIdentity(context.Background(), identity)
+}
+
+// TestBoundApp covers the registry of app-scoped auth methods. A method that
+// stops reporting its binding here silently disables every AllowApp call site
+// for it.
+func TestBoundApp(t *testing.T) {
+	tests := []struct {
+		name string
+		ctx  context.Context
+		want string
+	}{
+		{
+			name: "oidc reports its binding",
+			ctx:  ctxWith(&Identity{Method: AuthMethodOIDC, Metadata: map[string]any{"bound_app": "myapp"}}),
+			want: "myapp",
+		},
+		{
+			name: "workload reports its app claim",
+			ctx:  ctxWith(&Identity{Method: AuthMethodWorkload, Metadata: map[string]any{"app": "myapp"}}),
+			want: "myapp",
+		},
+		{
+			name: "workload does not read the oidc key",
+			ctx:  ctxWith(&Identity{Method: AuthMethodWorkload, Metadata: map[string]any{"bound_app": "myapp"}}),
+			want: "",
+		},
+		{
+			name: "oidc does not read the workload key",
+			ctx:  ctxWith(&Identity{Method: AuthMethodOIDC, Metadata: map[string]any{"app": "myapp"}}),
+			want: "",
+		},
+		{
+			name: "cert is not app-scoped",
+			ctx:  ctxWith(&Identity{Method: AuthMethodCert, Metadata: map[string]any{"app": "myapp"}}),
+			want: "",
+		},
+		{
+			name: "jwt is not app-scoped",
+			ctx:  ctxWith(&Identity{Method: AuthMethodJWT, Metadata: map[string]any{"app": "myapp"}}),
+			want: "",
+		},
+		{
+			name: "anonymous is not app-scoped",
+			ctx:  ctxWith(&Identity{Method: AuthMethodAnonymous}),
+			want: "",
+		},
+		{
+			name: "token is not app-scoped",
+			ctx:  ctxWith(&Identity{Method: AuthMethodToken}),
+			want: "",
+		},
+		{
+			name: "nil metadata",
+			ctx:  ctxWith(&Identity{Method: AuthMethodWorkload}),
+			want: "",
+		},
+		{
+			name: "non-string metadata",
+			ctx:  ctxWith(&Identity{Method: AuthMethodWorkload, Metadata: map[string]any{"app": 42}}),
+			want: "",
+		},
+		{
+			name: "no identity",
+			ctx:  context.Background(),
+			want: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := BoundApp(tt.ctx); got != tt.want {
+				t.Errorf("BoundApp() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestAllowApp(t *testing.T) {
+	tests := []struct {
+		name string
+		ctx  context.Context
+		app  string
+		want bool
+	}{
+		{
+			name: "workload allowed on its own app",
+			ctx:  ctxWith(&Identity{Method: AuthMethodWorkload, Metadata: map[string]any{"app": "myapp"}}),
+			app:  "myapp",
+			want: true,
+		},
+		{
+			name: "workload denied on another app",
+			ctx:  ctxWith(&Identity{Method: AuthMethodWorkload, Metadata: map[string]any{"app": "myapp"}}),
+			app:  "otherapp",
+			want: false,
+		},
+		{
+			name: "oidc allowed on its bound app",
+			ctx:  ctxWith(&Identity{Method: AuthMethodOIDC, Metadata: map[string]any{"bound_app": "myapp"}}),
+			app:  "myapp",
+			want: true,
+		},
+		{
+			name: "oidc denied on another app",
+			ctx:  ctxWith(&Identity{Method: AuthMethodOIDC, Metadata: map[string]any{"bound_app": "myapp"}}),
+			app:  "otherapp",
+			want: false,
+		},
+		{
+			name: "cert is unscoped",
+			ctx:  ctxWith(&Identity{Method: AuthMethodCert, Subject: "runner-1"}),
+			app:  "anyapp",
+			want: true,
+		},
+		{
+			name: "jwt is unscoped",
+			ctx:  ctxWith(&Identity{Method: AuthMethodJWT}),
+			app:  "anyapp",
+			want: true,
+		},
+		{
+			name: "anonymous is unscoped",
+			ctx:  ctxWith(&Identity{Method: AuthMethodAnonymous}),
+			app:  "anyapp",
+			want: true,
+		},
+		{
+			name: "no identity is unscoped",
+			ctx:  context.Background(),
+			app:  "anyapp",
+			want: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := AllowApp(tt.ctx, tt.app); got != tt.want {
+				t.Errorf("AllowApp(%q) = %v, want %v", tt.app, got, tt.want)
+			}
+		})
+	}
+}
+
+// A workload identity must never reach an app other than its own. This is the
+// regression guard for the default-allow that AllowApp used to apply to every
+// non-OIDC method: before BoundApp became method-driven, a workload token
+// passed every AllowApp call site in the tree.
+func TestAllowApp_WorkloadCannotCrossApps(t *testing.T) {
+	ctx := ctxWith(&Identity{
+		Subject:  "org:org-1:app:foo:sandbox:sb-1",
+		Method:   AuthMethodWorkload,
+		Metadata: map[string]any{"app": "foo"},
+	})
+
+	if !AllowApp(ctx, "foo") {
+		t.Error("workload should reach its own app")
+	}
+	if AllowApp(ctx, "bar") {
+		t.Error("workload reached another app: app scoping is not being enforced")
+	}
+	if err := AppAccessError(ctx, "bar"); err == nil || !errors.Is(err, ErrUnauthorized) {
+		t.Errorf("expected an ErrUnauthorized denial, got %v", err)
+	}
 }
 
 // TestServerTLSVerifiesClientCertsWhenCAConfigured is a configuration tripwire

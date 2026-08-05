@@ -43,6 +43,7 @@ Complete reference for all `miren` CLI commands.
 | [`miren app list`](/command/app-list) | List all applications |
 | [`miren app restart`](/command/app-restart) | Restart an application |
 | [`miren app run`](/command/app-run) | Open interactive shell in a new sandbox |
+| [`miren app set-workload-role`](/command/app-set-workload-role) | Set the API role for an app's sandbox identity tokens |
 | [`miren app status`](/command/app-status) | Show current status of an application |
 | [`miren app versions`](/command/app-versions) | List app versions with status |
 
@@ -248,6 +249,7 @@ Complete reference for all `miren` CLI commands.
 | [`miren server register status`](/command/server-register-status) | Show cluster registration status |
 | [`miren server status`](/command/server-status) | Show miren service status |
 | [`miren server uninstall`](/command/server-uninstall) | Remove systemd service for miren server |
+| [`miren server unregister`](/command/server-unregister) | Detach this cluster from miren.cloud |
 | [`miren server upgrade`](/command/server-upgrade) | Upgrade miren server |
 | [`miren server upgrade rollback`](/command/server-upgrade-rollback) | Rollback server to previous version |
 
@@ -306,6 +308,7 @@ These commands are intended for advanced debugging and troubleshooting. They may
 | [`miren debug entity patch`](/command/debug-entity-patch) | Patch an existing entity |
 | [`miren debug entity put`](/command/debug-entity-put) | Put an entity |
 | [`miren debug entity replace`](/command/debug-entity-replace) | Replace an existing entity |
+| [`miren debug etcdctl`](/command/debug-etcdctl) | Run etcdctl against Miren's embedded etcd |
 | [`miren debug netdb`](/command/debug-netdb) | Network database debug commands |
 | [`miren debug netdb gc`](/command/debug-netdb-gc) | Find and release orphaned IP leases |
 | [`miren debug netdb list`](/command/debug-netdb-list) | List all IP leases from netdb |

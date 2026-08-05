@@ -68,8 +68,22 @@ func (s *Server) Exec(ctx context.Context, req *exec_v1alpha.SandboxExecExec) er
 		found = ret.Entity().Entity()
 		id = found.Id().String()
 
+		// Confine an app-scoped caller (e.g. an app-debugger workload) to its
+		// own app. This is the load-bearing guard: exec is unguarded downstream,
+		// and the proxy forwards to the node's exec server over the coordinator
+		// cert, which would lose the caller's identity. Resolve the target's app
+		// from its own version rather than trusting anything caller-sent; an
+		// unscoped caller (cert/operator) is unaffected.
+		if app := s.resolveSandboxApp(ctx, found); !rpc.AllowApp(ctx, app) {
+			return rpc.AppAccessError(ctx, app)
+		}
+
 	case "app":
 		name := args.Value()
+
+		if !rpc.AllowApp(ctx, name) {
+			return rpc.AppAccessError(ctx, name)
+		}
 
 		ent, err := s.EAC.Get(ctx, "app/"+name)
 		if err != nil {
@@ -169,6 +183,38 @@ func (s *Server) Exec(ctx context.Context, req *exec_v1alpha.SandboxExecExec) er
 
 // createEphemeralSandbox creates a new sandbox for a console session.
 // The sandbox is deleted when the returned cleanup function is called.
+// resolveSandboxApp returns the app a sandbox entity belongs to, or "" if it
+// cannot be determined. A "" result denies an app-scoped caller (rpc.AllowApp
+// fails closed against an empty app), which is the safe outcome — we never let a
+// workload exec into a target whose ownership we can't verify.
+func (s *Server) resolveSandboxApp(ctx context.Context, sandbox *entity.Entity) string {
+	var sb compute_v1alpha.Sandbox
+	sb.Decode(sandbox)
+	if sb.Spec.Version == "" {
+		return ""
+	}
+
+	verResp, err := s.EAC.Get(ctx, sb.Spec.Version.String())
+	if err != nil {
+		return ""
+	}
+
+	var ver core_v1alpha.AppVersion
+	ver.Decode(verResp.Entity().Entity())
+	if ver.App == "" {
+		return ""
+	}
+
+	appResp, err := s.EAC.Get(ctx, ver.App.String())
+	if err != nil {
+		return ""
+	}
+
+	var meta core_v1alpha.Metadata
+	meta.Decode(appResp.Entity().Entity())
+	return meta.Name
+}
+
 func (s *Server) createEphemeralSandbox(
 	ctx context.Context,
 	app *core_v1alpha.App,

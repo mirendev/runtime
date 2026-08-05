@@ -741,6 +741,32 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 			"value", cfg.AppVersion.GetRetentionPeriod(), "error", err)
 	}
 
+	// Saga retention treats 0 as "keep executions forever", which is a real
+	// setting an operator may want while investigating. That makes a malformed
+	// value dangerous in a way the app-version one is not: parsing to 0 would
+	// silently turn retention off and let executions accumulate again. Fall
+	// back to the default instead, and say so.
+	// A negative duration parses cleanly (units.ParseDuration accepts "-1h"),
+	// so it needs rejecting here too. The coordinator already ignores negatives
+	// and keeps its default, but silently: an operator who typo'd "-7d" would
+	// see no sign their setting went nowhere.
+	sagaRetentionPeriod, err := units.ParseDuration(cfg.Saga.GetRetentionPeriod())
+	if err != nil || sagaRetentionPeriod < 0 {
+		defaultSaga := serverconfig.DefaultSagaConfig()
+		invalid := sagaRetentionPeriod
+		sagaRetentionPeriod, _ = units.ParseDuration(defaultSaga.GetRetentionPeriod())
+
+		reason := "negative duration"
+		if err != nil {
+			reason = err.Error()
+		}
+		ctx.Log.Warn("invalid saga.retention_period, falling back to default",
+			"value", cfg.Saga.GetRetentionPeriod(),
+			"parsed", invalid,
+			"default", sagaRetentionPeriod,
+			"error", reason)
+	}
+
 	// Build coordinator config
 	coordConfig := coordinate.CoordinatorConfig{
 		Address:                   srvaddr,
@@ -766,6 +792,7 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 		WorkloadIssuer:            workloadIssuer,
 		AppVersionRetentionCount:  cfg.AppVersion.GetRetentionCount(),
 		AppVersionRetentionPeriod: appVersionRetentionPeriod,
+		SagaRetentionPeriod:       sagaRetentionPeriod,
 	}
 
 	// Pass etcd TLS config when distributed runners is enabled
@@ -941,6 +968,13 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 	if workloadIssuer != nil {
 		deps.WorkloadIssuer = workloadIssuer
 	}
+
+	// Sandboxes on this host reach the API through the bridge router, which is
+	// their gateway and the address the API is reachable at from inside the
+	// subnet. Both are needed for in-cluster access: without the CA a sandbox
+	// could not verify what it connected to.
+	deps.ApiAddress = net.JoinHostPort(routerAddr.String(), strconv.Itoa(serverPort(ctx, srvaddr)))
+	deps.CACert = co.CACertificate()
 
 	rc.DataPath = cfg.Server.GetDataPath()
 	rc.DiskMode = cfg.Server.GetDiskMode()
@@ -1154,6 +1188,32 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 }
 
 // writeLocalClusterConfig writes a client config file for the local cluster
+// defaultServerPort mirrors pkg/serverconfig's default for --address.
+const defaultServerPort = 8443
+
+// serverPort returns the port the API listens on, given the server's normalized
+// listen address. Both the bridge firewall rule and the address injected into
+// sandboxes derive from this, so a cluster on a non-default port stays
+// consistent — a hardcoded port would leave the firewall silently dropping the
+// traffic it was supposed to allow.
+func serverPort(ctx *Context, srvaddr string) int {
+	_, portStr, err := net.SplitHostPort(srvaddr)
+	if err != nil {
+		ctx.Log.Warn("could not parse server address, assuming default API port",
+			"address", srvaddr, "port", defaultServerPort, "error", err)
+		return defaultServerPort
+	}
+
+	port, err := strconv.Atoi(portStr)
+	if err != nil || port < 1 || port > 65535 {
+		ctx.Log.Warn("server address has no usable port, assuming default API port",
+			"address", srvaddr, "port", defaultServerPort)
+		return defaultServerPort
+	}
+
+	return port
+}
+
 func writeLocalClusterConfig(ctx *Context, cc *caauth.ClientCertificate, address, clusterName string) error {
 	config, err := clientconfig.LoadConfig()
 	if err != nil {

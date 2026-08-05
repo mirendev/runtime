@@ -72,6 +72,7 @@ tail = "logs app -f"
 | `name` | string | Application name | Inferred from directory name |
 | `include` | string[] | Extra files or directories to include in the build context | — |
 | `concurrency` | int | **Legacy.** Global concurrency target. Use `[services.<name>.concurrency]` instead. | — |
+| `workload_role` | string | Role for this app's sandbox [in-cluster API access](/in-cluster-api). Only app-scoped roles may be set here; cluster-scoped roles require an operator. | `app-readonly` |
 
 ## `[[env]]` — Environment Variables {#env}
 

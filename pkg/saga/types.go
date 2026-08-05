@@ -87,3 +87,21 @@ type Execution struct {
 	// UpdatedAt is when the execution was last updated.
 	UpdatedAt time.Time `json:"updated_at"`
 }
+
+// TerminalExecution summarizes a finished execution for retention purposes:
+// which one, when it stopped changing, and whose child it is.
+type TerminalExecution struct {
+	// ID identifies the execution.
+	ID string
+
+	// FinishedAt is when the execution last changed state, which for a terminal
+	// execution is when it finished.
+	FinishedAt time.Time
+
+	// ParentID is set when this execution ran as a nested child. Retention
+	// needs it because a finished child is not independently safe to delete:
+	// its parent re-finds it by deterministic ID rather than re-running it, so
+	// deleting one out from under a live parent turns a resumed saga into a
+	// duplicated one.
+	ParentID string
+}

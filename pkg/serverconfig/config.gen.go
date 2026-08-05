@@ -121,6 +121,7 @@ type Config struct {
 	Ingress         IngressConfig         `toml:"ingress"`
 	Labs            []string              `toml:"labs" env:"MIREN_LABS"`
 	Mode            *string               `toml:"mode" env:"MIREN_MODE"`
+	Saga            SagaConfig            `toml:"saga"`
 	Server          ServerConfig          `toml:"server"`
 	TLS             TLSConfig             `toml:"tls"`
 	Victorialogs    VictoriaLogsConfig    `toml:"victorialogs"`
@@ -305,6 +306,24 @@ func (c *IngressConfig) GetMode() string {
 // SetMode sets the value of Mode
 func (c *IngressConfig) SetMode(v string) {
 	c.Mode = &v
+}
+
+// SagaConfig Saga execution retention garbage collection
+type SagaConfig struct {
+	RetentionPeriod *string `toml:"retention_period" env:"MIREN_SAGA_RETENTION_PERIOD"`
+}
+
+// GetRetentionPeriod returns the value of RetentionPeriod or its zero value if nil
+func (c *SagaConfig) GetRetentionPeriod() string {
+	if c.RetentionPeriod != nil {
+		return *c.RetentionPeriod
+	}
+	return ""
+}
+
+// SetRetentionPeriod sets the value of RetentionPeriod
+func (c *SagaConfig) SetRetentionPeriod(v string) {
+	c.RetentionPeriod = &v
 }
 
 // ServerConfig Core server settings

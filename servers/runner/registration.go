@@ -1004,12 +1004,13 @@ func (s *RegistrationServer) IssueWorkloadToken(ctx context.Context, req *runner
 		return nil
 	}
 
-	// Derive the app identity from the sandbox itself rather than trusting the
-	// caller. The app is part of the token subject that external verifiers
-	// federate on, so a runner must not be able to forge it.
-	appName := s.resolveSandboxApp(ctx, sandboxID)
+	// Derive the app identity and role from the sandbox itself rather than
+	// trusting the caller. The app is part of the token subject that external
+	// verifiers federate on, and the role is the authority the token carries —
+	// a runner must be able to forge neither.
+	appName, role := s.resolveSandboxAppAndRole(ctx, sandboxID)
 
-	opts := workloadidentity.TokenOptions{}
+	opts := workloadidentity.TokenOptions{Role: role}
 	if args.HasAudience() {
 		opts.Audience = args.Audience()
 	}
@@ -1216,36 +1217,50 @@ func requireRunnerCertIdentity(ctx context.Context) (*rpc.Identity, error) {
 // token subject, so it must be derived server-side rather than trusted from the
 // calling runner. Returns "" when the app cannot be resolved.
 func (s *RegistrationServer) resolveSandboxApp(ctx context.Context, sandboxID string) string {
+	name, _ := s.resolveSandboxAppAndRole(ctx, sandboxID)
+	return name
+}
+
+// resolveSandboxAppAndRole additionally returns the app's workload role. Like
+// the app name, the role is derived server-side and never trusted from the
+// runner — it is the authority the minted token carries.
+func (s *RegistrationServer) resolveSandboxAppAndRole(ctx context.Context, sandboxID string) (name, role string) {
 	sbResp, err := s.EAC.Get(ctx, sandboxID)
 	if err != nil {
-		return ""
+		return "", ""
 	}
 
 	var sb compute_v1alpha.Sandbox
 	sb.Decode(sbResp.Entity().Entity())
 	if sb.Spec.Version == "" {
-		return ""
+		return "", ""
 	}
 
 	versionResp, err := s.EAC.Get(ctx, sb.Spec.Version.String())
 	if err != nil {
-		return ""
+		return "", ""
 	}
 
 	var version core_v1alpha.AppVersion
 	version.Decode(versionResp.Entity().Entity())
 	if version.App == "" {
-		return ""
+		return "", ""
 	}
 
 	appResp, err := s.EAC.Get(ctx, version.App.String())
 	if err != nil {
-		return ""
+		return "", ""
 	}
 
+	appEnt := appResp.Entity().Entity()
+
 	var appMeta core_v1alpha.Metadata
-	appMeta.Decode(appResp.Entity().Entity())
-	return appMeta.Name
+	appMeta.Decode(appEnt)
+
+	var app core_v1alpha.App
+	app.Decode(appEnt)
+
+	return appMeta.Name, app.WorkloadRole
 }
 
 // runnerIDRegistered reports whether a node is already registered with the

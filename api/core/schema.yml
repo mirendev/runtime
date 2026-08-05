@@ -31,6 +31,14 @@ kinds:
       type: ref
       doc: Reference to the initial ConfigVersion entity created before the first deploy
 
+    workload_role:
+      type: string
+      doc: >-
+        The authorization role that identity tokens minted for this app's
+        sandboxes authenticate as (see pkg/workloadroles). Empty means the
+        default (app-readonly). Cluster-scoped roles may only be set by an
+        operator, never via app.toml.
+
   artifact:
     app:
       type: ref
