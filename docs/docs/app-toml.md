@@ -1,8 +1,8 @@
 ---
 title: app.toml Reference
 sidebar_label: app.toml
-description: Complete reference for .miren/app.toml — services, scaling, disks, environment variables, and build configuration.
-keywords: [app.toml, configuration, reference, services, scaling, environment variables, build]
+description: Complete reference for .miren/app.toml — services, tasks, scaling, disks, environment variables, and build configuration.
+keywords: [app.toml, configuration, reference, services, tasks, scheduled jobs, scaling, environment variables, build]
 ---
 
 # app.toml Reference
@@ -55,6 +55,16 @@ name = "pgdata"
 mount_path = "/var/lib/postgresql/data"
 size_gb = 20
 
+# Task definitions
+[tasks.migrate]
+command = "bin/rails db:migrate"
+trigger = "deploy"
+
+[tasks.cleanup]
+command = "bin/cleanup-sessions"
+trigger = "schedule"
+every = "6h"
+
 # Addons
 [addons.storage]
 variant = "minio"
@@ -73,6 +83,23 @@ tail = "logs app -f"
 | `include` | string[] | Extra files or directories to include in the build context | — |
 | `concurrency` | int | **Legacy.** Global concurrency target. Use `[services.<name>.concurrency]` instead. | — |
 | `workload_role` | string | Role for this app's sandbox [in-cluster API access](/in-cluster-api). Only app-scoped roles may be set here; cluster-scoped roles require an operator. | `app-readonly` |
+| `web` | bool | Whether the app has a long-running web process. Set `web = false` for an app made entirely of [tasks](#tasks). | Unset — a web service is synthesized if nothing declares one |
+
+### `web` and the synthesized web service {#web}
+
+If neither `app.toml` nor your `Procfile` declares a `web` service, Miren
+synthesizes one from the image's entrypoint. That is the historical default and
+it stays the default: leaving `web` unset never changes what your app does.
+
+`web = false` opts out. It's how an app that only declares tasks says it has no
+long-running process at all — no web service, no route, and nothing running (or
+billed for compute) between invocations.
+
+:::note[Validation]
+If an app declares tasks, declares no services, and doesn't set `web`, the build
+fails rather than guessing. Without that, a task-only app would quietly acquire
+a web service built from its image entrypoint and keep it running forever.
+:::
 
 ## `[[env]]` — Environment Variables {#env}
 
@@ -272,6 +299,112 @@ so a non-root image can write to it without a `chown` shim. Read-only mounts and
 containers that run as root are left untouched. See
 [Disks](/disks#configuring-disks) for the ownership rules and the one-time
 migration pass on large existing disks.
+
+## `[tasks.<name>]` — Task Configuration {#tasks}
+
+A **task** is a command the platform knows how to run. A **service** is a
+process the platform keeps up. Migrations, backfills, cleanup jobs, and one-off
+batch work are tasks.
+
+Each run of a task gets a fresh sandbox built from the app's deployed image and
+config, runs one command, records an exit code, and is torn down.
+
+```toml
+# Runs once per deploy, before the new version takes traffic
+[tasks.migrate]
+command = "bin/rails db:migrate"
+trigger = "deploy"
+timeout = "10m"
+
+# Runs on a schedule
+[tasks.cleanup]
+command = "bin/cleanup-sessions"
+trigger = "schedule"
+every = "6h"
+retries = 2
+
+# Runs only when someone asks
+[tasks.reindex]
+command = "bin/reindex"
+timeout = "4h"
+max_concurrent = 4
+
+[[tasks.reindex.env]]
+key = "BATCH_SIZE"
+value = "500"
+```
+
+| Field | Type | Description | Default |
+|-------|------|-------------|---------|
+| `command` | string | The command to run. An invoke can override it. | Required |
+| `trigger` | string | What starts the task: `deploy`, `schedule`, or `manual` | `manual` |
+| `every` | duration | Run this often. Sugar over `schedule` — see below. | — |
+| `schedule` | string | Calendar expression to fire on, in systemd `OnCalendar` syntax | — |
+| `timeout` | duration | Kill the run after this long and mark it timed out. `0` means unbounded. | Platform default |
+| `retries` | int | Retry budget for `deploy` and `schedule` triggers | `0` |
+| `max_concurrent` | int | Cap on simultaneous runs of this task | `1` |
+| `[[tasks.<name>.env]]` | table[] | Environment variables for this task only. Same fields as [`[[env]]`](#env). | — |
+
+A task always runs in the app's image and takes no `image` or `disks` of its
+own. It reaches everything the app's addons expose, since those arrive as
+environment variables.
+
+### Triggers {#triggers}
+
+| `trigger` | Starts when |
+|-----------|-------------|
+| `deploy` | A new version is deployed, before it takes traffic. The deploy fails if the task does. |
+| `schedule` | A calendar expression comes due |
+| `manual` | Only when someone asks |
+
+Any task can be invoked by hand whatever its trigger — that's how you re-run a
+migration without redeploying.
+
+### Scheduling {#scheduling}
+
+Two ways to say when, and they're mutually exclusive. One is required when
+`trigger = "schedule"`.
+
+**`every`** takes a duration:
+
+```toml
+every = "6h"     # 00:00, 06:00, 12:00, 18:00 UTC
+every = "30m"    # on the hour and the half hour
+every = "24h"    # midnight UTC
+```
+
+Intervals are anchored to midnight UTC, not to your deploy. A daily job fires
+daily no matter how often you ship.
+
+That anchoring is why `every` only accepts durations that divide a day evenly:
+values under an hour must divide 60 minutes, and values of an hour or more must
+be a whole number of hours dividing 24. `every = "7h"` is rejected at build time
+because there's no honest day-aligned reading of it — use `schedule` for
+anything that doesn't tile.
+
+**`schedule`** takes a systemd `OnCalendar` expression, which reads left to
+right:
+
+```toml
+schedule = "Mon *-*-* 09:00:00"   # Mondays at 9am
+schedule = "*-*-01 00:00:00"      # the first of every month
+schedule = "Mon..Fri 18:00"       # weekdays at 6pm
+schedule = "daily"                # also: hourly, weekly, monthly
+```
+
+Every numeric field accepts `*`, a value, a comma list (`0,15,30,45`), a range
+(`09..17`), and a repetition (`00/6`). Everything is UTC. Cron syntax is not
+accepted; `man systemd.time` documents the full grammar.
+
+:::note[Validation]
+- `command` is required.
+- `trigger` must be `deploy`, `schedule`, or `manual`.
+- `every` and `schedule` are mutually exclusive, and exactly one is required when `trigger = "schedule"`. Setting either without that trigger is an error rather than a silent no-op.
+- `every` must divide a day evenly.
+- `timeout` must be a valid Go duration and must not be negative.
+- `retries` must be non-negative, and has no effect on a `manual` task — the caller decides whether to retry.
+- `max_concurrent` must be at least 1.
+:::
 
 ## `[addons.<name>]` — Addons {#addons}
 
