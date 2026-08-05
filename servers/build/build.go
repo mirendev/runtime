@@ -209,16 +209,115 @@ func mergeServiceEnvVars(existingEnvs []core_v1alpha.ConfigSpecServicesEnv, newE
 	return result
 }
 
-// errNoServices is returned when a build produces no services
-var errNoServices = errors.New("no services defined: please define at least one service in a Procfile or .miren/app.toml")
+// errNoServices is returned when a build produces neither services nor tasks.
+// An app made entirely of tasks is valid — it just has nothing running between
+// invocations — so this only fires when there is no workload of any kind.
+var errNoServices = errors.New("no services or tasks defined: please define at least one service or task in a Procfile or .miren/app.toml")
 
-// validateServicesExist checks that at least one service is defined in the config.
-// Returns an error if no services are found.
-func validateServicesExist(spec core_v1alpha.ConfigSpec) error {
-	if len(spec.Services) == 0 {
+// validateWorkloadsExist checks that the app declares something to run: either
+// a long-running service or a task the platform can invoke.
+func validateWorkloadsExist(spec core_v1alpha.ConfigSpec) error {
+	if len(spec.Services) == 0 && len(spec.Tasks) == 0 {
 		return errNoServices
 	}
 	return nil
+}
+
+// errAmbiguousWeb is returned when an app declares tasks and no services
+// without saying whether it wants a web process.
+var errAmbiguousWeb = errors.New(`this app declares tasks but no services, so it's unclear whether it
+should have a web service.
+  If it has no long-running process:  set web = false
+  If it should serve traffic:         declare it, e.g. [services.web]`)
+
+// validateWebIntent rejects an app that declares tasks, declares no services,
+// and never says which it meant.
+//
+// This is what makes the preserved ensureWeb behavior safe rather than merely
+// unchanged. Such an app would otherwise fall through to the historical default
+// and get a web service synthesized from the image entrypoint, then kept running
+// forever — exactly the accidental long-running process tasks exist to
+// eliminate, and hard to notice because it costs money quietly rather than
+// failing. It matters most for the readers who aren't reading: an agent
+// generating an app.toml has no way to know the platform will invent a web
+// service it didn't ask for, and this error is the only moment it can act on
+// that. Nothing here is new-user-hostile, since the config shape it fires on
+// cannot exist before tasks.
+func validateWebIntent(ac *appconfig.AppConfig, procfileServices map[string]string) error {
+	if ac == nil || len(ac.Tasks) == 0 {
+		return nil
+	}
+	// A service declared anywhere — app.toml or Procfile — answers the question.
+	if len(ac.Services) > 0 || len(procfileServices) > 0 {
+		return nil
+	}
+	if _, explicit := ac.WantsWeb(); explicit {
+		return nil
+	}
+	return errAmbiguousWeb
+}
+
+// buildTasksConfig turns [tasks.<name>] blocks into their stored form.
+//
+// `every` is desugared here rather than carried through, so ConfigSpec only
+// ever holds a calendar expression and every consumer has exactly one
+// scheduling mechanism to understand. Validation already rejected anything
+// that can't desugar, so a failure at this point is a programming error and
+// the task is dropped rather than silently stored with no schedule.
+func buildTasksConfig(appConfig *appconfig.AppConfig, log *slog.Logger) []core_v1alpha.ConfigSpecTasks {
+	if appConfig == nil || len(appConfig.Tasks) == 0 {
+		return nil
+	}
+
+	names := make([]string, 0, len(appConfig.Tasks))
+	for name := range appConfig.Tasks {
+		names = append(names, name)
+	}
+	// Map iteration order would otherwise make the stored config differ between
+	// builds of identical input, producing spurious version churn.
+	slices.Sort(names)
+
+	tasks := make([]core_v1alpha.ConfigSpecTasks, 0, len(names))
+	for _, name := range names {
+		tc := appConfig.Tasks[name]
+		if tc == nil {
+			continue
+		}
+
+		schedule, err := tc.ResolvedSchedule()
+		if err != nil {
+			if log != nil {
+				log.Error("dropping task with an unresolvable schedule",
+					"task", name, "error", err)
+			}
+			continue
+		}
+
+		task := core_v1alpha.ConfigSpecTasks{
+			Name:          name,
+			Command:       tc.Command,
+			Trigger:       tc.ResolvedTrigger(),
+			Schedule:      schedule,
+			Timeout:       tc.Timeout,
+			Retries:       int64(tc.Retries),
+			MaxConcurrent: int64(tc.ResolvedMaxConcurrent()),
+		}
+
+		for _, ev := range tc.EnvVars {
+			task.Env = append(task.Env, core_v1alpha.ConfigSpecTasksEnv{
+				Key:         ev.Key,
+				Value:       ev.Value,
+				Required:    ev.Required,
+				Sensitive:   ev.Sensitive,
+				Description: ev.Description,
+				Source:      "config",
+			})
+		}
+
+		tasks = append(tasks, task)
+	}
+
+	return tasks
 }
 
 // validateRequiredVars checks that all required environment variables have non-empty values.
@@ -404,7 +503,14 @@ func buildServicesConfig(appConfig *appconfig.AppConfig, procfileServices map[st
 	// Default a web command when nothing above supplied one. srvMap["web"]
 	// existing here is exactly "app.toml or Procfile defined a web command", so
 	// this owns the whole "is there a web command yet?" decision in one place.
-	if ensureWeb {
+	//
+	// `web = false` is the one thing that can veto it. Note the default when
+	// the key is absent is unchanged: an app declaring only [services.worker]
+	// still gets a synthesized web, because narrowing that would drain a
+	// running pool on the next deploy of every app relying on it. Opting out
+	// is opt-in.
+	wantWeb, _ := appConfig.WantsWeb()
+	if ensureWeb && wantWeb {
 		if _, ok := srvMap["web"]; !ok {
 			srvMap["web"] = webDefault
 		}
@@ -559,6 +665,10 @@ type ConfigInputs struct {
 	// CliEnvVars are environment variables passed via CLI flags (e.g., miren deploy -e KEY=VALUE)
 	// These are applied with source="manual" and take precedence over app.toml vars
 	CliEnvVars []*build_v1alpha.EnvironmentVariable
+
+	// Log is optional; it records config that had to be dropped rather than
+	// letting it vanish silently.
+	Log *slog.Logger
 }
 
 // buildVersionConfig builds the app version config from all inputs.
@@ -599,6 +709,7 @@ func buildVersionConfig(inputs ConfigInputs) core_v1alpha.ConfigSpec {
 		}
 	}
 	spec.Services = buildServicesConfig(ac, procfileServices, res != nil, webDefault)
+	spec.Tasks = buildTasksConfig(ac, inputs.Log)
 
 	// Merge env vars: preserve manual vars from existing services
 	for i := range spec.Services {
@@ -1380,11 +1491,19 @@ func (b *Builder) buildFromDir(ctx context.Context, name string, path string,
 		ProcfileServices: procfileServices,
 		ExistingConfig:   existingCfg,
 		CliEnvVars:       envVars,
+		Log:              b.Log,
 	})
 
-	// Fail the deploy if no services are defined - this prevents deploying an app
-	// that can't serve any traffic
-	if err := validateServicesExist(configSpec); err != nil {
+	// Ask about web intent before checking for workloads: an ambiguous app
+	// would pass the workload check on a synthesized web service, which is
+	// exactly the outcome the question exists to prevent.
+	if err := validateWebIntent(ac, procfileServices); err != nil {
+		b.sendErrorStatus(ctx, status, "%s\n\nSee https://miren.md/app-toml#tasks", err)
+		return nil, err
+	}
+
+	// Fail the deploy if the app declares nothing to run at all.
+	if err := validateWorkloadsExist(configSpec); err != nil {
 		b.sendErrorStatus(ctx, status, "%s. See https://miren.md/services", err)
 		return nil, err
 	}
@@ -1402,7 +1521,7 @@ func (b *Builder) buildFromDir(ctx context.Context, name string, path string,
 	// A future optimization could do a partial pre-flight check on global
 	// vars from app.toml + existing config before building, but for now
 	// we keep it simple with a single validation point that has the full
-	// picture, matching how validateServicesExist works just above.
+	// picture, matching how validateWorkloadsExist works just above.
 	if err := validateRequiredVars(configSpec); err != nil {
 		b.sendErrorStatus(ctx, status, "%s", err)
 		return nil, err
@@ -1941,6 +2060,25 @@ func (b *Builder) AnalyzeApp(ctx context.Context, state *build_v1alpha.BuilderAn
 
 	if len(services) > 0 {
 		result.SetServices(&services)
+	}
+
+	// Tasks come straight from spec, which already resolved defaults and
+	// desugared any `every` interval — so analyze reports the schedule the
+	// platform will actually use, not the shorthand the user typed.
+	var tasks []build_v1alpha.TaskInfo
+	for _, tk := range spec.Tasks {
+		var info build_v1alpha.TaskInfo
+		info.SetName(tk.Name)
+		info.SetCommand(tk.Command)
+		info.SetTrigger(tk.Trigger)
+		if tk.Schedule != "" {
+			info.SetSchedule(tk.Schedule)
+		}
+		tasks = append(tasks, info)
+	}
+
+	if len(tasks) > 0 {
+		result.SetTasks(&tasks)
 	}
 
 	// Set all collected events

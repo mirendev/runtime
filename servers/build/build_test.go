@@ -734,6 +734,68 @@ func TestBuildServicesConfig(t *testing.T) {
 			},
 		},
 		{
+			name: "web = false suppresses the synthesized web service",
+			appConfig: &appconfig.AppConfig{
+				Web: ptr(false),
+				Tasks: map[string]*appconfig.TaskConfig{
+					"session": {Command: "/bin/bash"},
+				},
+			},
+			procfileServices: nil,
+			ensureWeb:        true,
+			webDefault:       "would-have-been-synthesized",
+			validateServices: func(t *testing.T, services []core_v1alpha.ConfigSpecServices) {
+				assert.Empty(t, services, "a task-only app runs nothing between invocations")
+			},
+		},
+		{
+			name: "web = false does not remove an explicitly declared web service",
+			appConfig: &appconfig.AppConfig{
+				Web: ptr(false),
+				Services: map[string]*appconfig.ServiceConfig{
+					"web": {Command: "bin/server"},
+				},
+			},
+			ensureWeb:  true,
+			webDefault: "unused",
+			validateServices: func(t *testing.T, services []core_v1alpha.ConfigSpecServices) {
+				require.Len(t, services, 1)
+				assert.Equal(t, "bin/server", services[0].Command,
+					"the opt-out suppresses synthesis, it does not delete config the user wrote")
+			},
+		},
+		{
+			name: "web = true is the same as leaving it unset",
+			appConfig: &appconfig.AppConfig{
+				Web: ptr(true),
+			},
+			ensureWeb:  true,
+			webDefault: "bin/server",
+			validateServices: func(t *testing.T, services []core_v1alpha.ConfigSpecServices) {
+				require.Len(t, services, 1)
+				assert.Equal(t, "web", services[0].Name)
+			},
+		},
+		{
+			// The historical default has to survive: an app declaring only a
+			// worker still gets a web, or its pool would drain on next deploy.
+			name: "unset web still synthesizes alongside a declared worker",
+			appConfig: &appconfig.AppConfig{
+				Services: map[string]*appconfig.ServiceConfig{
+					"worker": {Command: "bin/worker"},
+				},
+			},
+			ensureWeb:  true,
+			webDefault: "bin/server",
+			validateServices: func(t *testing.T, services []core_v1alpha.ConfigSpecServices) {
+				names := make([]string, 0, len(services))
+				for _, s := range services {
+					names = append(names, s.Name)
+				}
+				assert.ElementsMatch(t, []string{"web", "worker"}, names)
+			},
+		},
+		{
 			name: "service with port_timeout copies through to ConfigSpec",
 			appConfig: &appconfig.AppConfig{
 				Services: map[string]*appconfig.ServiceConfig{
@@ -1808,7 +1870,7 @@ func TestComputeBuildEnvVars(t *testing.T) {
 	}
 }
 
-func TestValidateServicesExist(t *testing.T) {
+func TestValidateWorkloadsExist(t *testing.T) {
 	tests := []struct {
 		name    string
 		config  core_v1alpha.ConfigSpec
@@ -1842,7 +1904,7 @@ func TestValidateServicesExist(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := validateServicesExist(tt.config)
+			err := validateWorkloadsExist(tt.config)
 			if tt.wantErr {
 				assert.ErrorIs(t, err, errNoServices)
 			} else {
@@ -2529,4 +2591,160 @@ func TestValidateDiskConfigsAutoCreate(t *testing.T) {
 
 	err := validateDiskConfigs(ctx, server.EAC, spec)
 	assert.NoError(t, err)
+}
+
+func ptr[T any](v T) *T { return &v }
+
+func TestBuildTasksConfig(t *testing.T) {
+	t.Run("nil and empty produce no tasks", func(t *testing.T) {
+		assert.Nil(t, buildTasksConfig(nil, nil))
+		assert.Nil(t, buildTasksConfig(&appconfig.AppConfig{}, nil))
+	})
+
+	t.Run("resolves defaults and desugars every", func(t *testing.T) {
+		ac := &appconfig.AppConfig{
+			Tasks: map[string]*appconfig.TaskConfig{
+				"migrate": {
+					Command: "bin/rails db:migrate",
+					Trigger: appconfig.TriggerDeploy,
+					Timeout: "10m",
+					Retries: 2,
+				},
+				"cleanup": {
+					Command: "bin/cleanup",
+					Trigger: appconfig.TriggerSchedule,
+					Every:   "6h",
+				},
+				"reindex": {
+					Command:       "bin/reindex",
+					MaxConcurrent: 4,
+					EnvVars: []appconfig.AppEnvVar{
+						{Key: "BATCH", Value: "500"},
+					},
+				},
+			},
+		}
+
+		tasks := buildTasksConfig(ac, nil)
+		require.Len(t, tasks, 3)
+
+		byName := make(map[string]core_v1alpha.ConfigSpecTasks, len(tasks))
+		for _, tk := range tasks {
+			byName[tk.Name] = tk
+		}
+
+		migrate := byName["migrate"]
+		assert.Equal(t, "bin/rails db:migrate", migrate.Command)
+		assert.Equal(t, "deploy", migrate.Trigger)
+		assert.Equal(t, "10m", migrate.Timeout)
+		assert.Equal(t, int64(2), migrate.Retries)
+		assert.Equal(t, int64(1), migrate.MaxConcurrent, "max_concurrent defaults to 1")
+		assert.Empty(t, migrate.Schedule)
+
+		// every is sugar: only the calendar form reaches ConfigSpec, so every
+		// consumer has exactly one scheduling mechanism to understand.
+		assert.Equal(t, "*-*-* 00/6:00:00", byName["cleanup"].Schedule)
+		assert.Empty(t, byName["cleanup"].Timeout)
+
+		reindex := byName["reindex"]
+		assert.Equal(t, "manual", reindex.Trigger, "trigger defaults to manual")
+		assert.Equal(t, int64(4), reindex.MaxConcurrent)
+		require.Len(t, reindex.Env, 1)
+		assert.Equal(t, "BATCH", reindex.Env[0].Key)
+		assert.Equal(t, "config", reindex.Env[0].Source)
+	})
+
+	t.Run("output order is stable across builds", func(t *testing.T) {
+		ac := &appconfig.AppConfig{
+			Tasks: map[string]*appconfig.TaskConfig{
+				"zulu": {Command: "z"}, "alpha": {Command: "a"}, "mike": {Command: "m"},
+			},
+		}
+		// Map iteration order varies per run; the stored config must not, or
+		// identical input would produce spurious version churn.
+		want := []string{"alpha", "mike", "zulu"}
+		for range 20 {
+			var got []string
+			for _, tk := range buildTasksConfig(ac, nil) {
+				got = append(got, tk.Name)
+			}
+			require.Equal(t, want, got)
+		}
+	})
+}
+
+func TestValidateWebIntent(t *testing.T) {
+	tasks := map[string]*appconfig.TaskConfig{"t": {Command: "x"}}
+
+	tests := []struct {
+		name     string
+		ac       *appconfig.AppConfig
+		procfile map[string]string
+		wantErr  bool
+	}{
+		{
+			name:    "nil config",
+			ac:      nil,
+			wantErr: false,
+		},
+		{
+			name:    "no tasks is the pre-existing world",
+			ac:      &appconfig.AppConfig{},
+			wantErr: false,
+		},
+		{
+			name:    "tasks and no services without saying which",
+			ac:      &appconfig.AppConfig{Tasks: tasks},
+			wantErr: true,
+		},
+		{
+			name:    "tasks with web = false",
+			ac:      &appconfig.AppConfig{Tasks: tasks, Web: ptr(false)},
+			wantErr: false,
+		},
+		{
+			name:    "tasks with web = true",
+			ac:      &appconfig.AppConfig{Tasks: tasks, Web: ptr(true)},
+			wantErr: false,
+		},
+		{
+			name: "tasks with a declared service",
+			ac: &appconfig.AppConfig{
+				Tasks:    tasks,
+				Services: map[string]*appconfig.ServiceConfig{"web": {Command: "bin/s"}},
+			},
+			wantErr: false,
+		},
+		{
+			// A Procfile answers the question just as well as app.toml does.
+			name:     "tasks with a Procfile service",
+			ac:       &appconfig.AppConfig{Tasks: tasks},
+			procfile: map[string]string{"worker": "bin/worker"},
+			wantErr:  false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateWebIntent(tt.ac, tt.procfile)
+			if tt.wantErr {
+				require.ErrorIs(t, err, errAmbiguousWeb)
+				// The message has to carry the fix, not just the complaint.
+				assert.Contains(t, err.Error(), "web = false")
+				assert.Contains(t, err.Error(), "[services.web]")
+				return
+			}
+			assert.NoError(t, err)
+		})
+	}
+}
+
+func TestValidateWorkloadsExistAcceptsTasksOnly(t *testing.T) {
+	spec := core_v1alpha.ConfigSpec{
+		Tasks: []core_v1alpha.ConfigSpecTasks{{Name: "session", Command: "/bin/bash"}},
+	}
+	assert.NoError(t, validateWorkloadsExist(spec),
+		"an app made entirely of tasks is valid; it just has nothing running between invocations")
+
+	assert.ErrorIs(t, validateWorkloadsExist(core_v1alpha.ConfigSpec{}), errNoServices)
 }

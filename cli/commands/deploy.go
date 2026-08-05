@@ -1767,6 +1767,27 @@ func analyzeApp(ctx *Context, bc *build_v1alpha.BuilderClient, dir string) error
 		}
 	}
 
+	// Tasks
+	if analysisResult.HasTasks() && analysisResult.Tasks() != nil {
+		tasks := *analysisResult.Tasks()
+		if len(tasks) > 0 {
+			ctx.Printf("\n%s\n", analyzeTitleStyle.Render("Tasks"))
+			for _, task := range tasks {
+				// Show the resolved schedule rather than the trigger name alone:
+				// "schedule" on its own doesn't tell you when anything runs.
+				detail := task.Trigger()
+				if task.Schedule() != "" {
+					detail = fmt.Sprintf("%s: %s", task.Trigger(), task.Schedule())
+				}
+
+				ctx.Printf("  %s: %s%s\n",
+					analyzeValueStyle.Render(task.Name()),
+					task.Command(),
+					lipgloss.NewStyle().Foreground(theme.Muted).Render(fmt.Sprintf(" (%s)", detail)))
+			}
+		}
+	}
+
 	// Environment variables with local detection
 	if analysisResult.HasEnvVars() && analysisResult.EnvVars() != nil {
 		envVars := *analysisResult.EnvVars()

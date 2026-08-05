@@ -170,6 +170,26 @@ types:
         index: 2
         doc: Where the command came from (procfile, app_config, image)
 
+  - type: TaskInfo
+    doc: Information about a task declared in the app
+    fields:
+      - name: name
+        type: string
+        index: 0
+        doc: Task name (e.g., migrate, cleanup)
+      - name: command
+        type: string
+        index: 1
+        doc: Command to run for this task
+      - name: trigger
+        type: string
+        index: 2
+        doc: What starts the task (deploy, schedule, manual)
+      - name: schedule
+        type: string
+        index: 3
+        doc: Calendar expression the task fires on, with any 'every' interval already desugared
+
   - type: DetectionEvent
     doc: An event detected during app analysis
     fields:
@@ -221,6 +241,10 @@ types:
         type: '[]DetectionEvent'
         index: 7
         doc: Detection events from stack analysis
+      - name: tasks
+        type: '[]TaskInfo'
+        index: 8
+        doc: Tasks declared in app.toml
 
   - type: EnvironmentVariable
     doc: An environment variable to set on the app during deploy

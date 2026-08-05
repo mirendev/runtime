@@ -662,6 +662,80 @@ components:
                 disk writable by the container's run user; "keep" leaves the raw
                 mount ownership untouched; "uid" or "uid:gid" pins a specific
                 numeric owner.
+    tasks:
+      type: component
+      doc: >-
+        Per-task configuration. A task is a command the platform knows how to
+        run, as opposed to a service, which is a process it keeps up. Tasks
+        carry no ports, concurrency, image, or disks: a task always runs in the
+        app's image, and both per-task image and per-task disks are deliberate
+        v1 cuts tracked in RFD-97.
+      many: true
+      attrs:
+        name:
+          type: string
+          doc: The task name (e.g. migrate, cleanup)
+        command:
+          type: string
+          doc: >-
+            The default command to run. An invoke can override it, which is what
+            makes a manually-triggered task useful for ad-hoc work.
+        trigger:
+          type: string
+          doc: >-
+            What starts the task: "deploy" (a new version is deployed, before it
+            takes traffic), "schedule" (a calendar expression comes due), or
+            "manual" (only when someone asks). Defaults to manual.
+        schedule:
+          type: string
+          doc: >-
+            The systemd OnCalendar expression this task fires on. An `every`
+            interval in app.toml is desugared into this form at parse time, so
+            there is exactly one scheduling mechanism and this is always the
+            stored representation.
+        timeout:
+          type: string
+          doc: >-
+            Bounds the run, after which the sandbox is killed and the run is
+            marked TIMED_OUT. Empty falls back to the platform default; "0"
+            means unbounded.
+        retries:
+          type: int
+          doc: >-
+            Retry budget for deploy- and schedule-triggered runs, where nobody
+            is watching to retry by hand. A manually-triggered run that fails
+            just fails.
+        max_concurrent:
+          type: int
+          doc: >-
+            Caps simultaneous runs of this task. Defaults to 1, where the limit
+            is enforced exactly; above 1 admission is best-effort.
+        env:
+          type: component
+          doc: Environment variables for this task only
+          many: true
+          attrs:
+            key:
+              type: string
+              doc: The name of the variable
+            value:
+              type: string
+              doc: The value of the variable
+            sensitive:
+              type: bool
+              doc: Whether or not the value is sensitive
+            source:
+              type: string
+              doc: The source of the variable (config or manual). Defaults to config for backward compatibility.
+            origin:
+              type: string
+              doc: The provenance of the variable (user, file, generated, detected)
+            required:
+              type: bool
+              doc: Whether this variable must have a non-empty value for deploy to succeed
+            description:
+              type: string
+              doc: Human-readable description of this variable's purpose
     entrypoint:
       type: string
       doc: The container entrypoint command

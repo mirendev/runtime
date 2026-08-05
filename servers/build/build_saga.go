@@ -255,6 +255,7 @@ func prepareConfig(ctx context.Context, in prepareConfigIn) (prepareConfigOut, e
 		ProcfileServices: in.ProcfileServices,
 		ExistingConfig:   existing,
 		CliEnvVars:       in.CLIEnvVars,
+		Log:              b.Log,
 	})
 
 	// Validate the app.toml workload_role here, before the version is created or
@@ -264,7 +265,14 @@ func prepareConfig(ctx context.Context, in prepareConfigIn) (prepareConfigOut, e
 		status.SendError("%s", err)
 		return prepareConfigOut{}, err
 	}
-	if err := validateServicesExist(spec); err != nil {
+	// Ask about web intent before checking for workloads: an ambiguous app
+	// would pass the workload check on a synthesized web service, which is
+	// exactly the outcome the question exists to prevent.
+	if err := validateWebIntent(in.AppConfig, in.ProcfileServices); err != nil {
+		status.SendError("%s\n\nSee https://miren.md/app-toml#tasks", err)
+		return prepareConfigOut{}, err
+	}
+	if err := validateWorkloadsExist(spec); err != nil {
 		status.SendError("%s. See https://miren.md/services", err)
 		return prepareConfigOut{}, err
 	}
