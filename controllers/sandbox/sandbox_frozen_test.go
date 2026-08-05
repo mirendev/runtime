@@ -27,10 +27,12 @@ func TestSandboxControllerFrozen(t *testing.T) {
 		// Workload identity: BuildSpec mounts the cluster CA and injects
 		// MIREN_IN_CLUSTER/MIREN_API_ADDRESS/MIREN_CA_CERT_PATH, Init opens the
 		// API port on the bridge, and mint now resolves the app's workload role
-		// (resolveAppAndRole) so the token carries it. The saga path needs no
-		// matching edit: it reaches the same code through sandboxOps.BuildSpec,
+		// (resolveAppAndRole) so the token carries it. Secret materialization
+		// also lives under BuildSpec, substituting referenced values in memory
+		// just before the container is created. The saga path needs no matching
+		// edit for either: it reaches the same code through sandboxOps.BuildSpec,
 		// which delegates to SandboxController.BuildSpec.
-		"sandbox.go":  "34fc580340814ca612fadb3e14466f1ea2df5ec9b800dffdf30de285c06f4399",
+		"sandbox.go":  "f7191f5775c675318f63c7fae229578cdc59238949a0487193b8545de59aec7e",
 		"volume.go":   "580062fb8a34f3f7f965689467a4b0f2ed403bc63c1ecdeb44949a7ba7e08dff",
 		"firewall.go": "648cb5d91091d5eb7400152b19695a8045585feae59c5dd36c12d663a27bb91f",
 	}
