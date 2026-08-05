@@ -77,8 +77,11 @@ func (r *Registry) Names() []string {
 // ResolveRef resolves a reference against the named backend, so a Registry can
 // serve as a Resolver wherever the key material is local.
 //
-// The error deliberately names the backend and reference but never the value
-// or the store's own error text.
+// A failure names the backend and the reference, and wraps the backend's error
+// so callers can branch on ErrNotFound and friends. That wrapping means a
+// backend's error text reaches the caller: implementations must not put secret
+// material in their errors, which is why the ones here quote only the
+// reference.
 func (r *Registry) ResolveRef(ctx context.Context, backend, ref string) (SecretValue, error) {
 	b, ok := r.Get(backend)
 	if !ok {

@@ -334,3 +334,78 @@ func TestEntityNameIsInjective(t *testing.T) {
 	assert.Equal(t, "payments.stripe-key", entityName("payments/stripe-key"))
 	assert.Equal(t, "token", entityName("token"))
 }
+
+// Destroy is terminal: the payload is gone, so re-enabling would leave a
+// version that reports enabled, passes the state gate in Resolve, and then
+// fails to decrypt — an operator seeing a secret that looks resolvable and is
+// not.
+func TestSetStateRefusesToRessurectADestroyedVersion(t *testing.T) {
+	b, _ := newTestBackend(t)
+	ctx := t.Context()
+
+	version, err := b.Put(ctx, "payments/stripe-key", []byte("sk_live"))
+	require.NoError(t, err)
+	ref := secret.FormatRef("payments/stripe-key", version)
+
+	require.NoError(t, b.SetState(ctx, ref, secret.StateDestroyed))
+
+	for _, target := range []secret.VersionState{secret.StateEnabled, secret.StateDisabled} {
+		err := b.SetState(ctx, ref, target)
+		require.Error(t, err, "expected %s to be refused after destroy", target)
+		assert.Contains(t, err.Error(), "destroyed")
+	}
+
+	// It stays destroyed and stays unresolvable.
+	_, err = b.Resolve(ctx, ref)
+	assert.ErrorIs(t, err, secret.ErrVersionNotEnabled)
+}
+
+// Re-destroying is allowed, so a retry after a partial failure converges rather
+// than tripping the terminal-state guard.
+func TestSetStateDestroyIsIdempotent(t *testing.T) {
+	b, _ := newTestBackend(t)
+	ctx := t.Context()
+
+	version, err := b.Put(ctx, "payments/stripe-key", []byte("sk_live"))
+	require.NoError(t, err)
+	ref := secret.FormatRef("payments/stripe-key", version)
+
+	require.NoError(t, b.SetState(ctx, ref, secret.StateDestroyed))
+	assert.NoError(t, b.SetState(ctx, ref, secret.StateDestroyed))
+}
+
+// The state check and the write have to be one step. Writing against a revision
+// read before someone else's change means the loser is rejected rather than
+// applying a transition that was only legal against state that no longer
+// exists.
+func TestSetStateRejectsAWriteAgainstStaleState(t *testing.T) {
+	b, ec := newTestBackend(t)
+	ctx := t.Context()
+
+	version, err := b.Put(ctx, "payments/stripe-key", []byte("sk_live"))
+	require.NoError(t, err)
+	ref := secret.FormatRef("payments/stripe-key", version)
+
+	var sec core_v1alpha.Secret
+	require.NoError(t, ec.Get(ctx, "payments.stripe-key", &sec))
+
+	// Stand in for the racing writer: bump the version entity so the revision a
+	// concurrent SetState would have read is now stale.
+	require.NoError(t, ec.UpdateAttrs(ctx, sec.CurrentVersion,
+		entity.String(core_v1alpha.SecretVersionKekIdId, "rotated-underneath")))
+
+	// A write guarded on the pre-change revision must lose rather than land.
+	var sv core_v1alpha.SecretVersion
+	ent, err := ec.GetByIdWithEntity(ctx, sec.CurrentVersion, &sv)
+	require.NoError(t, err)
+	staleRev := ent.Revision() - 1
+
+	err = ec.Patch(ctx, sec.CurrentVersion, staleRev,
+		entity.Ref(core_v1alpha.SecretVersionStateId, core_v1alpha.SecretVersionStateDisabledId))
+	require.Error(t, err, "a write against a stale revision must be rejected")
+
+	// The guarded path itself still works against current state.
+	require.NoError(t, b.SetState(ctx, ref, secret.StateDisabled))
+	_, err = b.Resolve(ctx, ref)
+	assert.ErrorIs(t, err, secret.ErrVersionNotEnabled)
+}

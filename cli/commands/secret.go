@@ -26,7 +26,7 @@ func SecretSet(ctx *Context, opts struct {
 	ConfigCentric
 	Path    string `position:"0" usage:"Secret path, e.g. payments/stripe-key" required:"true"`
 	Backend string `short:"b" long:"backend" description:"Backend instance to store into (default: cluster)"`
-	Value   string `long:"value" description:"Secret value; use @file to read from a file. Prompts with masking when omitted"`
+	Value   string `long:"value" description:"Secret value, or @file to read one from a file. Prompts with masking when omitted, which is safer — a literal here is recorded in shell history. A trailing newline is trimmed"`
 }) error {
 	value, err := readSecretValue(opts.Path, opts.Value)
 	if err != nil {

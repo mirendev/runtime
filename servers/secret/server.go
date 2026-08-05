@@ -146,9 +146,14 @@ func (s *Server) SetState(ctx context.Context, state *secret_v1alpha.SecretsSetS
 		return err
 	}
 
-	// A denial or a revocation is what an operator goes looking for after an
-	// incident, so it belongs in the record rather than only in debug output.
-	s.log.Warn("changed secret version state",
+	// A revocation is what an operator goes looking for after an incident, so it
+	// belongs at Warn. Enabling a version is an ordinary healthy transition and
+	// would only dilute that signal.
+	record := s.log.Warn
+	if versionState == secret.StateEnabled {
+		record = s.log.Info
+	}
+	record("changed secret version state",
 		"backend", backendName, "ref", ref, "state", versionState)
 	return nil
 }

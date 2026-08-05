@@ -75,7 +75,7 @@ func (b *Backend) Resolve(ctx context.Context, ref string) (secret.SecretValue, 
 		return secret.SecretValue{}, err
 	}
 
-	sv, shortID, err := b.loadVersion(ctx, sec, version)
+	sv, shortID, _, err := b.loadVersion(ctx, sec, version)
 	if err != nil {
 		return secret.SecretValue{}, err
 	}
@@ -185,9 +185,19 @@ func (b *Backend) SetState(ctx context.Context, ref string, state secret.Version
 		return err
 	}
 
-	sv, shortID, err := b.loadVersion(ctx, sec, version)
+	sv, shortID, rev, err := b.loadVersion(ctx, sec, version)
 	if err != nil {
 		return err
+	}
+
+	// Destroying drops the payload, so there is nothing to come back to.
+	// Without this, destroy-then-enable leaves a version reporting enabled
+	// whose ciphertext is gone: it passes the state gate in Resolve and then
+	// fails to decrypt, so an operator sees a secret that looks resolvable and
+	// is not.
+	if sv.State == core_v1alpha.DESTROYED && state != secret.StateDestroyed {
+		return fmt.Errorf("%s is destroyed; its value is gone and it cannot be %s",
+			secret.FormatRef(path, shortID), state)
 	}
 
 	encoded, err := encodeState(state)
@@ -195,11 +205,13 @@ func (b *Backend) SetState(ctx context.Context, ref string, state secret.Version
 		return err
 	}
 
-	attrs := []any{entity.Ref(core_v1alpha.SecretVersionStateId, encoded)}
+	attrs := []entity.Attr{entity.Ref(core_v1alpha.SecretVersionStateId, encoded)}
 	if state == secret.StateDestroyed {
 		// Overwrite the payload rather than dropping the attributes: a write
 		// here merges, and replacing the whole entity to remove them would take
 		// its short id with it — which is the handle every pin names it by.
+		// Writing an empty byte slice is an explicit zero-length value, not a
+		// skipped attribute, so the stored field really is cleared.
 		//
 		// The MAC goes too. It is keyed, so retaining it would leak nothing, but
 		// an operator who asked for a value to be deleted should not be left
@@ -211,7 +223,17 @@ func (b *Backend) SetState(ctx context.Context, ref string, state secret.Version
 		)
 	}
 
-	if err := b.ec.UpdateAttrs(ctx, sv.ID, attrs...); err != nil {
+	// Guarded on the revision the state above was read at. The check and the
+	// write have to be one step: otherwise a concurrent destroy and enable can
+	// both read the pre-destroy state, and whichever lands second wins on a
+	// decision the other already invalidated. Losing the race fails the call so
+	// the operator can re-read and decide again, rather than silently applying
+	// a transition that was legal only against state that no longer exists.
+	if err := b.ec.Patch(ctx, sv.ID, rev, attrs...); err != nil {
+		if errors.Is(err, cond.ErrConflict{}) {
+			return fmt.Errorf("%s changed while being updated; re-check its state and retry",
+				secret.FormatRef(path, shortID))
+		}
 		return fmt.Errorf("updating state of %s: %w", secret.FormatRef(path, shortID), err)
 	}
 
@@ -263,36 +285,39 @@ func (b *Backend) ensureSecret(ctx context.Context, path string) (*core_v1alpha.
 
 // loadVersion resolves a version handle against a secret, defaulting to the
 // secret's current version when the handle is empty.
-func (b *Backend) loadVersion(ctx context.Context, sec *core_v1alpha.Secret, version string) (*core_v1alpha.SecretVersion, string, error) {
+// It also returns the entity revision at read time, so a caller mutating the
+// version can do so under optimistic concurrency control rather than writing
+// back a decision made on state that may already be stale.
+func (b *Backend) loadVersion(ctx context.Context, sec *core_v1alpha.Secret, version string) (*core_v1alpha.SecretVersion, string, int64, error) {
 	if version == "" {
 		if sec.CurrentVersion == "" {
-			return nil, "", fmt.Errorf("%w: %s has no versions", secret.ErrNotFound, sec.Path)
+			return nil, "", 0, fmt.Errorf("%w: %s has no versions", secret.ErrNotFound, sec.Path)
 		}
 
 		var sv core_v1alpha.SecretVersion
 		ent, err := b.ec.GetByIdWithEntity(ctx, sec.CurrentVersion, &sv)
 		if err != nil {
-			return nil, "", fmt.Errorf("loading current version of %s: %w", sec.Path, err)
+			return nil, "", 0, fmt.Errorf("loading current version of %s: %w", sec.Path, err)
 		}
 		sv.ID = entity.Id(ent.Id())
-		return &sv, shortIdOf(ent), nil
+		return &sv, shortIdOf(ent), ent.Revision(), nil
 	}
 
 	var sv core_v1alpha.SecretVersion
 	ent, err := b.ec.GetByIdWithEntity(ctx, entity.Id(version), &sv)
 	if err != nil {
-		return nil, "", fmt.Errorf("%w: %s", secret.ErrNotFound, secret.FormatRef(sec.Path, version))
+		return nil, "", 0, fmt.Errorf("%w: %s", secret.ErrNotFound, secret.FormatRef(sec.Path, version))
 	}
 
 	// Version handles are globally unique short ids, so a reference could name
 	// a version belonging to some other secret. Refuse rather than hand back
 	// bytes the reference did not ask for.
 	if sv.Secret != sec.ID {
-		return nil, "", fmt.Errorf("%w: %s", secret.ErrNotFound, secret.FormatRef(sec.Path, version))
+		return nil, "", 0, fmt.Errorf("%w: %s", secret.ErrNotFound, secret.FormatRef(sec.Path, version))
 	}
 
 	sv.ID = entity.Id(ent.Id())
-	return &sv, shortIdOf(ent), nil
+	return &sv, shortIdOf(ent), ent.Revision(), nil
 }
 
 // createVersion mints an immutable version row and returns its id along with

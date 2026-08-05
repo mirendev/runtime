@@ -113,6 +113,22 @@ func Save(path string, ring *Keyring) error {
 	if err := os.Rename(tmpPath, path); err != nil {
 		return fmt.Errorf("failed to install keyring: %w", err)
 	}
+
+	// Syncing the file made its contents durable, but the rename that publishes
+	// it lives in the parent directory and is not durable until that directory
+	// is synced too. This matters more here than for most atomic writes: a
+	// crash in the window could drop a newly added key after secrets have
+	// already been sealed under it, leaving those versions permanently
+	// unreadable. Unlike a lost config file, there is nothing to regenerate.
+	dir, err := os.Open(filepath.Dir(path))
+	if err != nil {
+		return fmt.Errorf("failed to open keyring directory for sync: %w", err)
+	}
+	defer dir.Close()
+
+	if err := dir.Sync(); err != nil {
+		return fmt.Errorf("failed to sync keyring directory: %w", err)
+	}
 	return nil
 }
 

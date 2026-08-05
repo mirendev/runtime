@@ -1193,7 +1193,9 @@ const secretSetDescription = `Stores a value in the cluster's secret store. The 
 
 Each write mints a new immutable version and prints its handle, e.g. ` + "`" + `payments/stripe-key@x1A` + "`" + `. Storing a value identical to the current one is reported as unchanged rather than minting a duplicate, so re-running the command is safe.
 
-Rotating a secret does not disturb anything already running. Old versions stay resolvable so that a rollback comes back on the value it originally shipped with.`
+:::note[Rotation does not touch running apps]
+Rotating a secret mints a new version but leaves anything already running on the value it started with. Old versions stay resolvable, so a rollback comes back on the value it originally shipped with.
+:::`
 
 const secretDisableDescription = `Stops a specific version from resolving. Anything still referencing it fails closed on its next resolve rather than falling back to a different value — a revoked secret must never silently become a working one.
 

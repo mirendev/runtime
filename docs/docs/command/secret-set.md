@@ -12,7 +12,9 @@ Stores a value in the cluster's secret store. The value is encrypted at rest and
 
 Each write mints a new immutable version and prints its handle, e.g. `payments/stripe-key@x1A`. Storing a value identical to the current one is reported as unchanged rather than minting a duplicate, so re-running the command is safe.
 
-Rotating a secret does not disturb anything already running. Old versions stay resolvable so that a rollback comes back on the value it originally shipped with.
+:::note[Rotation does not touch running apps]
+Rotating a secret mints a new version but leaves anything already running on the value it started with. Old versions stay resolvable, so a rollback comes back on the value it originally shipped with.
+:::
 
 ## Usage
 
@@ -29,7 +31,7 @@ miren secret set <path> [flags]
 - `--backend, -b` — Backend instance to store into (default: cluster)
 - `--cluster, -C` — Cluster name
 - `--config` — Path to the config file
-- `--value` — Secret value; use @file to read from a file. Prompts with masking when omitted
+- `--value` — Secret value, or @file to read one from a file. Prompts with masking when omitted, which is safer — a literal here is recorded in shell history. A trailing newline is trimmed
 
 ## Global Options
 
