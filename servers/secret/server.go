@@ -309,3 +309,35 @@ func (s *Server) RotateKey(ctx context.Context, state *secret_v1alpha.SecretsRot
 	state.Results().SetToKey(to)
 	return nil
 }
+
+// Resolve returns a reference's value, for a caller that cannot decrypt it
+// itself.
+//
+// A distributed runner holds no key material, so this is how a sandbox on one
+// materializes its secrets: the bytes are decrypted here, where the keyring
+// lives, and travel to the runner, which holds them only long enough to hand
+// them to a container.
+//
+// It is deliberately not logged at Info. Unlike a write or a revocation, a
+// resolve happens on every sandbox start, so recording each one would drown the
+// audit tier it sits in without telling an operator anything they did not
+// already know from the deploy.
+func (s *Server) Resolve(ctx context.Context, state *secret_v1alpha.SecretsResolve) error {
+	args := state.Args()
+
+	ref := args.Ref()
+	if ref == "" {
+		return fmt.Errorf("secret reference is required")
+	}
+
+	backendName := backendOrDefault(args.Backend())
+
+	val, err := s.registry.ResolveRef(ctx, backendName, ref)
+	if err != nil {
+		return err
+	}
+
+	state.Results().SetRef(val.Ref)
+	state.Results().SetValue(val.Bytes)
+	return nil
+}

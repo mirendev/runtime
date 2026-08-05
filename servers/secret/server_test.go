@@ -283,3 +283,58 @@ func TestRotateKeyWithoutRotationWired(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "not enabled")
 }
+
+// Resolve is how a node holding no key material gets a value: the bytes are
+// decrypted where the keyring lives and travel back over RPC.
+func TestResolveReturnsTheValueAndAConcreteRef(t *testing.T) {
+	c := newTestClient(t)
+	ctx := t.Context()
+
+	set, err := c.Set(ctx, "", "payments/stripe-key", []byte("sk_live_abc123"))
+	require.NoError(t, err)
+
+	// A floating reference comes back fully qualified, so the caller learns
+	// which version it actually got.
+	res, err := c.Resolve(ctx, "", "payments/stripe-key")
+	require.NoError(t, err)
+	assert.Equal(t, []byte("sk_live_abc123"), res.Value())
+	assert.Equal(t, secret.FormatRef("payments/stripe-key", set.Version()), res.Ref())
+}
+
+func TestResolveHonoursAPin(t *testing.T) {
+	c := newTestClient(t)
+	ctx := t.Context()
+
+	first, err := c.Set(ctx, "", "payments/stripe-key", []byte("old"))
+	require.NoError(t, err)
+	_, err = c.Set(ctx, "", "payments/stripe-key", []byte("new"))
+	require.NoError(t, err)
+
+	res, err := c.Resolve(ctx, "", secret.FormatRef("payments/stripe-key", first.Version()))
+	require.NoError(t, err)
+	assert.Equal(t, []byte("old"), res.Value())
+}
+
+// A revoked version must not resolve for a remote caller either, or disabling a
+// leaked credential would only take effect on the coordinator.
+func TestResolveFailsClosedOnARevokedVersion(t *testing.T) {
+	c := newTestClient(t)
+	ctx := t.Context()
+
+	set, err := c.Set(ctx, "", "payments/stripe-key", []byte("sk_live"))
+	require.NoError(t, err)
+
+	ref := secret.FormatRef("payments/stripe-key", set.Version())
+	_, err = c.SetState(ctx, "", ref, string(secret.StateDisabled))
+	require.NoError(t, err)
+
+	_, err = c.Resolve(ctx, "", ref)
+	assert.Error(t, err)
+}
+
+func TestResolveRejectsAnEmptyRef(t *testing.T) {
+	c := newTestClient(t)
+
+	_, err := c.Resolve(t.Context(), "", "")
+	assert.Error(t, err)
+}

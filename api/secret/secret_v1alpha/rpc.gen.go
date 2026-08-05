@@ -633,6 +633,89 @@ func (v *SecretsRotateKeyResults) UnmarshalJSON(data []byte) error {
 	return json.Unmarshal(data, &v.data)
 }
 
+type secretsResolveArgsData struct {
+	Backend *string `cbor:"0,keyasint,omitempty" json:"backend,omitempty"`
+	Ref     *string `cbor:"1,keyasint,omitempty" json:"ref,omitempty"`
+}
+
+type SecretsResolveArgs struct {
+	call rpc.Call
+	data secretsResolveArgsData
+}
+
+func (v *SecretsResolveArgs) HasBackend() bool {
+	return v.data.Backend != nil
+}
+
+func (v *SecretsResolveArgs) Backend() string {
+	if v.data.Backend == nil {
+		return ""
+	}
+	return *v.data.Backend
+}
+
+func (v *SecretsResolveArgs) HasRef() bool {
+	return v.data.Ref != nil
+}
+
+func (v *SecretsResolveArgs) Ref() string {
+	if v.data.Ref == nil {
+		return ""
+	}
+	return *v.data.Ref
+}
+
+func (v *SecretsResolveArgs) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *SecretsResolveArgs) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *SecretsResolveArgs) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *SecretsResolveArgs) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type secretsResolveResultsData struct {
+	Ref   *string `cbor:"0,keyasint,omitempty" json:"ref,omitempty"`
+	Value *[]byte `cbor:"1,keyasint,omitempty" json:"value,omitempty"`
+}
+
+type SecretsResolveResults struct {
+	call rpc.Call
+	data secretsResolveResultsData
+}
+
+func (v *SecretsResolveResults) SetRef(ref string) {
+	v.data.Ref = &ref
+}
+
+func (v *SecretsResolveResults) SetValue(value []byte) {
+	x := slices.Clone(value)
+	v.data.Value = &x
+}
+
+func (v *SecretsResolveResults) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *SecretsResolveResults) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *SecretsResolveResults) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *SecretsResolveResults) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
 type secretsSetStateArgsData struct {
 	Backend *string `cbor:"0,keyasint,omitempty" json:"backend,omitempty"`
 	Ref     *string `cbor:"1,keyasint,omitempty" json:"ref,omitempty"`
@@ -846,6 +929,32 @@ func (t *SecretsRotateKey) Results() *SecretsRotateKeyResults {
 	return results
 }
 
+type SecretsResolve struct {
+	rpc.Call
+	args    SecretsResolveArgs
+	results SecretsResolveResults
+}
+
+func (t *SecretsResolve) Args() *SecretsResolveArgs {
+	args := &t.args
+	if args.call != nil {
+		return args
+	}
+	args.call = t.Call
+	t.Call.Args(args)
+	return args
+}
+
+func (t *SecretsResolve) Results() *SecretsResolveResults {
+	results := &t.results
+	if results.call != nil {
+		return results
+	}
+	results.call = t.Call
+	t.Call.Results(results)
+	return results
+}
+
 type SecretsSetState struct {
 	rpc.Call
 	args    SecretsSetStateArgs
@@ -878,6 +987,7 @@ type Secrets interface {
 	ListVersions(ctx context.Context, state *SecretsListVersions) error
 	Keyring(ctx context.Context, state *SecretsKeyring) error
 	RotateKey(ctx context.Context, state *SecretsRotateKey) error
+	Resolve(ctx context.Context, state *SecretsResolve) error
 	SetState(ctx context.Context, state *SecretsSetState) error
 }
 
@@ -902,6 +1012,10 @@ func (reexportSecrets) Keyring(ctx context.Context, state *SecretsKeyring) error
 }
 
 func (reexportSecrets) RotateKey(ctx context.Context, state *SecretsRotateKey) error {
+	panic("not implemented")
+}
+
+func (reexportSecrets) Resolve(ctx context.Context, state *SecretsResolve) error {
 	panic("not implemented")
 }
 
@@ -963,6 +1077,16 @@ func AdaptSecrets(t Secrets) *rpc.Interface {
 			Params:        []string{},
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.RotateKey(ctx, &SecretsRotateKey{Call: call})
+			},
+		},
+		{
+			Name:          "resolve",
+			InterfaceName: "Secrets",
+			Index:         0,
+			Public:        false,
+			Params:        []string{"backend", "ref"},
+			Handler: func(ctx context.Context, call rpc.Call) error {
+				return t.Resolve(ctx, &SecretsResolve{Call: call})
 			},
 		},
 		{
@@ -1193,6 +1317,48 @@ func (v SecretsClient) RotateKey(ctx context.Context) (*SecretsClientRotateKeyRe
 	}
 
 	return &SecretsClientRotateKeyResults{client: v.Client, data: ret}, nil
+}
+
+type SecretsClientResolveResults struct {
+	client rpc.Client
+	data   secretsResolveResultsData
+}
+
+func (v *SecretsClientResolveResults) HasRef() bool {
+	return v.data.Ref != nil
+}
+
+func (v *SecretsClientResolveResults) Ref() string {
+	if v.data.Ref == nil {
+		return ""
+	}
+	return *v.data.Ref
+}
+
+func (v *SecretsClientResolveResults) HasValue() bool {
+	return v.data.Value != nil
+}
+
+func (v *SecretsClientResolveResults) Value() []byte {
+	if v.data.Value == nil {
+		return nil
+	}
+	return *v.data.Value
+}
+
+func (v SecretsClient) Resolve(ctx context.Context, backend string, ref string) (*SecretsClientResolveResults, error) {
+	args := SecretsResolveArgs{}
+	args.data.Backend = &backend
+	args.data.Ref = &ref
+
+	var ret secretsResolveResultsData
+
+	err := v.Call(ctx, "resolve", &args, &ret)
+	if err != nil {
+		return nil, err
+	}
+
+	return &SecretsClientResolveResults{client: v.Client, data: ret}, nil
 }
 
 type SecretsClientSetStateResults struct {
