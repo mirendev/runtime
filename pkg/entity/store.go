@@ -1550,9 +1550,11 @@ type IndexPage struct {
 	Ids []Id
 
 	// Cursor resumes the listing after the last entry in this page, and is
-	// empty once the index is exhausted. It is opaque: it encodes a store key,
-	// not an entity id, because the index is ordered by its own keys and making
-	// an entity-id cursor work would mean sorting the whole index on every page.
+	// empty once the index is exhausted. Treat it as opaque: EtcdStore encodes
+	// a store key in it, because the index is ordered by its own keys and
+	// making an entity-id cursor work would mean sorting the whole index on
+	// every page, while MockStore encodes an id. A cursor is only ever handed
+	// back to the store that issued it.
 	Cursor string
 
 	// Total counts the entries in the index and is filled only when the caller
@@ -1607,32 +1609,41 @@ func (s *EtcdStore) ListIndexPage(ctx context.Context, attr Attr, cursor string,
 	// stops on any error from fn.
 	errPageFull := errors.New("page full")
 
+	var scanRev int64
+
 	seen := make(map[Id]struct{})
-	lastKey := ""
+
+	// resumeKey trails one behind: it is the key of the last id inside the
+	// page, captured only once we know something follows it. Setting a cursor
+	// merely because the scan hit the limit hands back a cursor to nothing
+	// whenever the index ends exactly on a page boundary.
+	resumeKey := ""
+	prevKey := ""
 
 	scanErr := scanPagedFunc(ctx, s.client, prefix, func(kv *mvccpb.KeyValue) error {
-		lastKey = string(kv.Key)
-
 		id := Id(kv.Value)
 		if _, dup := seen[id]; dup {
 			return nil
 		}
-		seen[id] = struct{}{}
-
-		page.Ids = append(page.Ids, id)
 
 		if limit > 0 && int64(len(page.Ids)) >= limit {
+			// One past the end, so the page really does have a successor.
+			resumeKey = prevKey
 			return errPageFull
 		}
 
+		seen[id] = struct{}{}
+		page.Ids = append(page.Ids, id)
+		prevKey = string(kv.Key)
+
 		return nil
-	}, withStartKey(cursor), withPageSize(pageSizeFor(limit)))
+	}, withStartKey(cursor), withPageSize(pageSizeFor(limit)), withRevisionSink(&scanRev))
 
 	switch {
 	case scanErr == nil:
 		// Ran to the end of the index, so there is nothing to resume from.
 	case errors.Is(scanErr, errPageFull):
-		page.Cursor = lastKey + "\x00"
+		page.Cursor = resumeKey + "\x00"
 	default:
 		return nil, fmt.Errorf("failed to list index page: %w", scanErr)
 	}
@@ -1642,17 +1653,26 @@ func (s *EtcdStore) ListIndexPage(ctx context.Context, attr Attr, cursor string,
 		page.Total = int64(len(page.Ids))
 	}
 
+	// Every page reports a revision, not just the counted one. A caller that
+	// resumes a watch from a zero revision restarts from the beginning of
+	// history, which is the opposite of what the field is for.
+	if scanRev > 0 {
+		page.Revision = scanRev
+	}
+
 	return page, nil
 }
 
 // pageSizeFor keeps the etcd page from overshooting a small limit while still
 // using the default for an unbounded read.
 func pageSizeFor(limit int64) int64 {
-	if limit <= 0 || limit > defaultScanPageSize {
+	if limit <= 0 || limit >= defaultScanPageSize {
 		return defaultScanPageSize
 	}
 
-	return limit
+	// One past the page, so a scan can tell "the index ended here" from "there
+	// is more" without a second request.
+	return limit + 1
 }
 
 func (s *EtcdStore) IndexPrefix(ctx context.Context, attr Attr) (string, error) {

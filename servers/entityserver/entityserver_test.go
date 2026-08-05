@@ -2,6 +2,9 @@ package entityserver
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
 	"log/slog"
 	"slices"
 	"testing"
@@ -13,8 +16,11 @@ import (
 	"go.etcd.io/etcd/api/v3/mvccpb"
 	clientv3 "go.etcd.io/etcd/client/v3"
 	v1alpha "miren.dev/runtime/api/entityserver/entityserver_v1alpha"
+	saga "miren.dev/runtime/api/saga/saga_v1alpha"
 	"miren.dev/runtime/pkg/entity"
+	"miren.dev/runtime/pkg/entity/schema"
 	"miren.dev/runtime/pkg/etcdtest"
+	"miren.dev/runtime/pkg/model"
 	"miren.dev/runtime/pkg/rpc"
 	"miren.dev/runtime/pkg/rpc/stream"
 )
@@ -924,4 +930,216 @@ func TestEntityServer_WatchIndex_CreatedResponseNotProgress(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("timed out waiting for op")
 	}
+}
+
+func TestEntityServer_ListDocuments(t *testing.T) {
+	const testKind = "dev.miren.core/kind.project"
+
+	setup := func(t *testing.T, count int) v1alpha.EntityAccessClient {
+		t.Helper()
+		r := require.New(t)
+
+		store := entity.NewMockStore()
+		server, err := NewEntityServer(slog.Default(), store)
+		r.NoError(err)
+
+		r.NoError(schema.Apply(context.TODO(), store))
+
+		for i := range count {
+			_, err := store.CreateEntity(context.TODO(), entity.New([]entity.Attr{
+				{ID: entity.Ident, Value: entity.KeywordValue(fmt.Sprintf("test/entity%02d", i))},
+				{ID: entity.EntityKind, Value: entity.RefValue(testKind)},
+			}))
+			r.NoError(err)
+		}
+
+		return v1alpha.EntityAccessClient{
+			Client: rpc.LocalClient(v1alpha.AdaptEntityAccess(server)),
+		}
+	}
+
+	index := entity.Attr{ID: entity.EntityKind, Value: entity.RefValue(testKind)}
+
+	decode := func(t *testing.T, raw []byte) []*model.Document {
+		t.Helper()
+		var docs []*model.Document
+		require.NoError(t, json.Unmarshal(raw, &docs))
+		return docs
+	}
+
+	t.Run("returns every match when unlimited", func(t *testing.T) {
+		r := require.New(t)
+		sc := setup(t, 5)
+
+		res, err := sc.ListDocuments(context.TODO(), index, "", 0, 0)
+		r.NoError(err)
+
+		docs := decode(t, res.Documents())
+		r.Len(docs, 5)
+		r.Equal("", res.Cursor(), "an exhausted index offers no cursor")
+	})
+
+	t.Run("pages through the index without repeating or dropping", func(t *testing.T) {
+		r := require.New(t)
+		sc := setup(t, 5)
+
+		seen := map[string]bool{}
+		cursor := ""
+
+		for range 10 {
+			res, err := sc.ListDocuments(context.TODO(), index, cursor, 2, 0)
+			r.NoError(err)
+
+			for _, d := range decode(t, res.Documents()) {
+				r.False(seen[d.Id], "paging repeated %s", d.Id)
+				seen[d.Id] = true
+			}
+
+			cursor = res.Cursor()
+			if cursor == "" {
+				break
+			}
+		}
+
+		r.Equal("", cursor, "paging must terminate")
+		r.Len(seen, 5, "the pages together must cover the index")
+	})
+
+	t.Run("reports the total only when starting from the head", func(t *testing.T) {
+		r := require.New(t)
+		sc := setup(t, 5)
+
+		first, err := sc.ListDocuments(context.TODO(), index, "", 2, 0)
+		r.NoError(err)
+		r.Equal(int64(5), first.Total(), "the caller needs the full count to say what it is hiding")
+
+		next, err := sc.ListDocuments(context.TODO(), index, first.Cursor(), 2, 0)
+		r.NoError(err)
+		r.Equal(int64(0), next.Total())
+	})
+
+	t.Run("elides oversized values only when asked", func(t *testing.T) {
+		r := require.New(t)
+
+		store := entity.NewMockStore()
+		server, err := NewEntityServer(slog.Default(), store)
+		r.NoError(err)
+		r.NoError(schema.Apply(context.TODO(), store))
+
+		_, err = store.CreateEntity(context.TODO(), entity.New([]entity.Attr{
+			{ID: entity.Ident, Value: entity.KeywordValue("saga/big")},
+			{ID: entity.EntityKind, Value: entity.RefValue(saga.KindSaga)},
+			{ID: saga.SagaInitialInputsId, Value: entity.BytesValue(make([]byte, 4096))},
+		}))
+		r.NoError(err)
+
+		sc := v1alpha.EntityAccessClient{
+			Client: rpc.LocalClient(v1alpha.AdaptEntityAccess(server)),
+		}
+
+		sagaIndex := entity.Attr{ID: entity.EntityKind, Value: entity.RefValue(saga.KindSaga)}
+
+		// Find the field by name rather than by position, so a change in
+		// ordering fails the assertion instead of panicking on an index.
+		initialInputs := func(t *testing.T, raw []byte) model.Field {
+			t.Helper()
+			docs := decode(t, raw)
+			require.Len(t, docs, 1)
+			for _, f := range docs[0].Facets {
+				for _, fl := range f.Fields {
+					if fl.Name == "initial_inputs" {
+						return fl
+					}
+				}
+			}
+			t.Fatal("initial_inputs missing from the document")
+			return model.Field{}
+		}
+
+		elided, err := sc.ListDocuments(context.TODO(), sagaIndex, "", 0, 32)
+		r.NoError(err)
+		r.True(initialInputs(t, elided.Documents()).Truncated)
+
+		whole, err := sc.ListDocuments(context.TODO(), sagaIndex, "", 0, 0)
+		r.NoError(err)
+		r.False(initialInputs(t, whole.Documents()).Truncated,
+			"the JSON path asks for zero and must get the whole value")
+	})
+
+	t.Run("encodes an empty page as an array rather than null", func(t *testing.T) {
+		r := require.New(t)
+		sc := setup(t, 0)
+
+		res, err := sc.ListDocuments(context.TODO(), index, "", 0, 0)
+		r.NoError(err)
+		r.Equal("[]", string(res.Documents()), "consumers should not have to null-check")
+	})
+}
+
+func TestEntityServer_GetDocument(t *testing.T) {
+	r := require.New(t)
+
+	store := entity.NewMockStore()
+	server, err := NewEntityServer(slog.Default(), store)
+	r.NoError(err)
+	r.NoError(schema.Apply(context.TODO(), store))
+
+	_, err = store.CreateEntity(context.TODO(), entity.New([]entity.Attr{
+		{ID: entity.Ident, Value: entity.KeywordValue("saga/one")},
+		{ID: entity.EntityKind, Value: entity.RefValue(saga.KindSaga)},
+		{ID: saga.SagaDefinitionNameId, Value: entity.StringValue("deploy")},
+	}))
+	r.NoError(err)
+
+	sc := v1alpha.EntityAccessClient{
+		Client: rpc.LocalClient(v1alpha.AdaptEntityAccess(server)),
+	}
+
+	res, err := sc.GetDocument(context.TODO(), "saga/one", 0)
+	r.NoError(err)
+
+	var doc model.Document
+	r.NoError(json.Unmarshal(res.Document(), &doc))
+
+	r.Equal("saga/one", doc.Id)
+	r.Len(doc.Facets, 1)
+	r.Equal("saga/saga", doc.Facets[0].Label)
+}
+
+// A store that cannot answer must not be mistaken for an absent entity. The
+// short-id fallback made every GetEntity error look like a miss, so an etcd
+// outage reported "entity not found" and sent the operator hunting for a
+// deletion that never happened.
+func TestEntityServer_ResolveEntityPropagatesRealErrors(t *testing.T) {
+	boom := errors.New("failed to get entity from etcd: connection refused")
+
+	store := &failingGetStore{MockStore: entity.NewMockStore(), err: boom}
+
+	server, err := NewEntityServer(slog.Default(), store)
+	require.NoError(t, err)
+
+	_, err = server.resolveEntity(context.TODO(), "saga/whatever")
+	require.Error(t, err)
+
+	assert.ErrorIs(t, err, boom, "a transport failure must reach the caller unchanged")
+	assert.False(t, isNotFound(err), "and must not be reported as a missing entity")
+}
+
+func TestEntityServer_ResolveEntityReportsGenuineMiss(t *testing.T) {
+	server, err := NewEntityServer(slog.Default(), entity.NewMockStore())
+	require.NoError(t, err)
+
+	_, err = server.resolveEntity(context.TODO(), "saga/nope")
+	require.Error(t, err)
+	assert.True(t, isNotFound(err))
+}
+
+// failingGetStore fails every read while behaving like a MockStore otherwise.
+type failingGetStore struct {
+	*entity.MockStore
+	err error
+}
+
+func (f *failingGetStore) GetEntity(ctx context.Context, id entity.Id) (*entity.Entity, error) {
+	return nil, f.err
 }

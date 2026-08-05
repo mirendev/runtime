@@ -248,13 +248,51 @@ interfaces:
           - name: file
             type: ParsedFile
 
-      - name: format
+      - name: get_document
+        doc: |
+          Fetch one entity already rendered into a presentation document.
         parameters:
-          - name: entity
-            type: Entity
+          - name: id
+            type: string
+          - name: max_value_len
+            type: int64
+            doc: Elide byte and string values longer than this. Zero keeps them whole, which is what the JSON path asks for.
         results:
-          - name: data
+          - name: document
             type: bytes
+            doc: A JSON-encoded model.Document.
+
+      - name: list_documents
+        doc: |
+          List entities and render them into presentation documents server-side.
+
+          `debug entity list` used to call format once per entity, costing a
+          round trip each, which dominated its runtime against a cluster holding
+          thousands of entities. Paging here rather than in the client also keeps
+          the entities past the limit from being read out of the store at all, so
+          a page costs the same whether the index holds ten entries or a million.
+        parameters:
+          - name: index
+            type: entity.Attr
+          - name: cursor
+            type: string
+            doc: Opaque resume point from a previous page. Empty starts at the head.
+          - name: limit
+            type: int64
+            doc: Maximum entities to fetch and render. Zero or less means no limit.
+          - name: max_value_len
+            type: int64
+            doc: Elide byte and string values longer than this. Zero keeps them whole.
+        results:
+          - name: documents
+            type: bytes
+            doc: A JSON array of model.Document.
+          - name: cursor
+            type: string
+            doc: Resume point for the next page, empty when the index is exhausted.
+          - name: total
+            type: int64
+            doc: Entries in the index, reported only when starting from the head.
 
       - name: create_session
         parameters:

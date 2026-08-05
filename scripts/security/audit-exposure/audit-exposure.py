@@ -25,14 +25,15 @@
 # networks during the window, it's prudent to presume the secrets in
 # Section C may have been read, and rotate them.
 #
-# This is a stopgap: it scrapes the CLI's human-readable output, so it's
-# brittle to changes in that format. Treat it as best-effort incident
-# tooling, not a stable interface.
+# It reads `debug entity list --json`, which is the CLI's complete and
+# unelided output. The human-readable view pages and shortens long values,
+# so an audit must never read that one.
 #
 # USAGE
 #   audit-exposure.py --since 2026-06-01T00:00:00Z [--until ...] [--miren miren]
 """audit-exposure: post-incident review helper for GHSA-8fh7-7q4q-cq52."""
 import argparse
+import json
 import datetime as dt
 import math
 import re
@@ -56,9 +57,6 @@ STANDING_KINDS = [
 # (config_version is still read for the Section C rotation list).
 WORKLOAD_KINDS = ["app", "app_version"]
 
-CREATED = "db/entity.created"
-UPDATED = "db/entity.updated"
-
 # Redact secret-bearing fields when dumping specs so the report is safe to
 # share. Matches keys like client_secret, password_hash, code_hash, api_key,
 # access_key, *_token, *_credential, and anything ending in _key (but not a
@@ -71,44 +69,71 @@ SECRET_KEY_RE = re.compile(
 )
 
 
-def redact_spec(lines):
-    """Redact secret-bearing fields in a spec block for display.
+def redact_fields(doc):
+    """Display lines for a record's facets, with secret-bearing fields redacted.
 
-    Handles multi-line block scalars: when a secret key's value is a `|`
-    block (e.g. a private_key PEM), the header line AND the indented body
-    beneath it are dropped, not just the header. Values are never printed.
-    Returns stripped display lines.
+    A redacted key drops its whole value, nested structure included, so a PEM
+    or a credentials object cannot leak through a child field. Values under a
+    redacted key are never read.
     """
-    out, block_indent = [], None
-    for raw in lines:
-        indent = len(raw) - len(raw.lstrip())
-        stripped = raw.strip()
-        if block_indent is not None:
-            if not stripped:
-                continue  # blank line inside the block scalar; stays dropped
-            if indent > block_indent:
-                continue  # still inside the redacted block scalar
-            block_indent = None
-        if SECRET_KEY_RE.match(stripped):
-            out.append(f"{stripped.split(':', 1)[0]}: <redacted>")
-            block_indent = indent
-            continue
-        out.append(stripped)
+    out = []
+    for facet in doc.get("facets") or []:
+        if facet.get("label", "").endswith("/metadata"):
+            continue  # name/labels add noise here, not evidence
+        for f in facet.get("fields") or []:
+            out.extend(_render_field(f["name"], f.get("value"), 0))
+
+    # Attributes no schema claims are still evidence, and are exactly what a
+    # facets-only dump would hide.
+    for f in doc.get("unclaimed") or []:
+        out.extend(_render_field(f["name"], f.get("value"), 0))
+
     return out
 
 
+def _render_field(name, value, depth):
+    pad = "  " * depth
+
+    if SECRET_KEY_RE.match(f"{name}:"):
+        return [f"{pad}{name}: <redacted>"]
+
+    if isinstance(value, dict):
+        lines = [f"{pad}{name}:"]
+        for k in sorted(value):
+            lines.extend(_render_field(k, value[k], depth + 1))
+        return lines
+
+    if isinstance(value, list):
+        lines = [f"{pad}{name}:"]
+        for item in value:
+            if isinstance(item, dict):
+                lines.append(f"{pad}  -")
+                for k in sorted(item):
+                    lines.extend(_render_field(k, item[k], depth + 2))
+            else:
+                lines.append(f"{pad}  - {item}")
+        return lines
+
+    return [f"{pad}{name}: {value}"]
+
+
 def run_list(miren, kind):
-    """Return the CLI's stdout for a kind, or None if the query failed.
+    """Return the entity documents for a kind, or None if the query failed.
 
     A failed query must NOT be mistaken for an empty result -- otherwise a
     partial scan reads as clean, the exact false-negative this tool exists to
     avoid. Callers surface None as an explicit failure. The timeout keeps a
     hung CLI from stalling the scan mid-incident.
+
+    --json is load-bearing, and not just for parsing convenience. The text view
+    is deliberately bounded for humans (it pages and elides long values), while
+    --json is the complete, unelided contract. An audit reading the human view
+    would silently under-report. --limit 0 says the same thing about rows.
     """
     try:
         r = subprocess.run(
-            [miren, "debug", "entity", "list", "-k", kind],
-            capture_output=True, text=True, timeout=60,
+            [miren, "debug", "entity", "list", "-k", kind, "--limit", "0", "--json"],
+            capture_output=True, text=True, timeout=120,
         )
     except (subprocess.TimeoutExpired, OSError) as e:
         sys.stderr.write(f"  ! list -k {kind} errored: {e}\n")
@@ -116,66 +141,80 @@ def run_list(miren, kind):
     if r.returncode != 0:
         sys.stderr.write(f"  ! list -k {kind} failed: {r.stderr.strip()[:200]}\n")
         return None
-    return r.stdout
+    try:
+        docs = json.loads(r.stdout)
+    except json.JSONDecodeError as e:
+        sys.stderr.write(f"  ! list -k {kind} returned unparseable JSON: {e}\n")
+        return None
+    if not isinstance(docs, list):
+        # Surface it as a failed query rather than crashing partway through the
+        # scan; a half-finished section reads as a clean one.
+        sys.stderr.write(f"  ! list -k {kind} returned {type(docs).__name__}, expected a list\n")
+        return None
+    return docs
 
 
-def split_records(text):
-    """Split `entity list` output into per-entity blocks on the `id: ` marker."""
-    records, cur = [], None
-    for line in text.splitlines():
-        if line.startswith("id: "):
-            if cur is not None:
-                records.append(cur)
-            cur = [line]
-        elif cur is not None:
-            cur.append(line)
-    if cur is not None:
-        records.append(cur)
-    return records
+def facet_fields(doc, suffix):
+    """Fields of the facet whose label ends with suffix, as a name->value dict.
 
+    Entities compose several kinds at once (a config_version also carries
+    core/metadata), so a field has to be looked up under the facet that owns it
+    rather than in one flat namespace.
 
-def attr_map(lines):
-    """Pair `- id: X` with the following `value: Y` into a dict."""
-    attrs = {}
-    for i, l in enumerate(lines):
-        m = re.match(r"\s*- id:\s*(\S+)\s*$", l)
-        if m and i + 1 < len(lines):
-            vm = re.match(r"\s*value:\s*(.*)$", lines[i + 1])
-            if vm:
-                attrs[m.group(1)] = vm.group(1).strip()
-    return attrs
-
-
-def spec_block(lines):
-    """Return the indented lines under `spec:` up to the next top-level key."""
-    out, in_spec = [], False
-    for l in lines:
-        if l.startswith("spec:"):
-            in_spec = True
-            continue
-        if in_spec:
-            if l and not l[0].isspace():   # next top-level key (attrs:, etc.)
-                break
-            out.append(l.rstrip())
-    return [l for l in out if l.strip()]
-
-
-def sensitive_var_keys(lines):
-    """Names of variables flagged sensitive:true in a record (never values).
-
-    Backward-search heuristic: for each `sensitive: true`, take the nearest
-    preceding `key:`. Catches both top-level variables and per-service env
-    without depending on exact nesting. Values are never read or emitted.
+    Anything in `unclaimed` is folded in under its attribute id. That group
+    exists precisely for attributes no schema accounts for, and a scan that
+    only reads facets would step straight past them -- the under-reporting this
+    tool is built to avoid. Facet fields win a name collision, since those are
+    the schema-resolved ones.
     """
-    keys = set()
-    for i, l in enumerate(lines):
-        if re.match(r"\s*sensitive:\s*true\s*$", l):
-            for j in range(i, -1, -1):
-                m = re.match(r"\s*-?\s*key:\s*(\S+)", lines[j])
-                if m:
-                    keys.add(m.group(1))
-                    break
-    return keys
+    fields = {f["name"]: f.get("value") for f in doc.get("unclaimed") or []}
+
+    for facet in doc.get("facets") or []:
+        if facet.get("label", "").endswith(suffix):
+            fields.update({f["name"]: f.get("value") for f in facet.get("fields") or []})
+            break
+
+    return fields
+
+
+def entity_name(doc):
+    return facet_fields(doc, "/metadata").get("name") or ""
+
+
+def iter_vars(spec):
+    """(key, sensitive, values) for every variable in a config_version spec.
+
+    Covers both top-level variables and per-service env, which share a shape. A
+    key can recur across services, so sensitive merges as OR (marked anywhere ->
+    treated sensitive) and every value is kept so all of them get shape-tested.
+    """
+    spec = spec or {}
+
+    groups = [spec.get("variables") or []]
+    for svc in spec.get("services") or []:
+        groups.append((svc or {}).get("env") or [])
+
+    merged = {}
+    for group in groups:
+        for var in group:
+            if not isinstance(var, dict):
+                continue
+            key = var.get("key")
+            if not key:
+                continue
+            m = merged.setdefault(key, {"sensitive": False, "values": []})
+            m["sensitive"] = m["sensitive"] or bool(var.get("sensitive"))
+            value = var.get("value")
+            if value is not None:
+                m["values"].append(str(value))
+
+    return [(k, m["sensitive"], m["values"]) for k, m in merged.items()]
+
+
+def sensitive_var_keys(doc):
+    """Names of variables flagged sensitive in a record (never values)."""
+    spec = facet_fields(doc, "/config_version").get("spec")
+    return {key for key, sensitive, _ in iter_vars(spec) if sensitive}
 
 
 # -- Unmarked-secret heuristics (Section C2) --------------------------------
@@ -264,62 +303,11 @@ def name_signal(key):
     return "name looks secret" if UNMARKED_NAME_RE.search(key) else None
 
 
-def iter_vars(spec_lines):
-    """Yield (key, sensitive_bool, values) for each config variable / service env entry
-    in a config_version spec. `values` is the list of every non-None value seen for that
-    key (a key can recur across services' env with different values, and any one of them
-    could be the secret, so we keep them all rather than collapsing to the first).
-    Line-based like the rest of this scraper; relies on `key:` preceding `sensitive:`/
-    `value:` within an item, which holds in the CLI output. A `value: |` block scalar
-    (e.g. a PEM) is captured (for shape-testing only, never printed)."""
-    items, cur = [], None
-    block_capture, block_indent = False, None
-    for raw in spec_lines:
-        stripped = raw.strip()
-        indent = len(raw) - len(raw.lstrip())
-        if block_capture:
-            if stripped and indent > block_indent:
-                cur["value"] = (cur["value"] or "") + "\n" + stripped
-                continue
-            block_capture = False
-        km = re.match(r"-?\s*key:\s*(\S+)\s*$", stripped)
-        if km:
-            if cur:
-                items.append(cur)
-            cur = {"key": km.group(1), "sensitive": False, "value": None}
-            continue
-        if cur is None:
-            continue
-        sm = re.match(r"sensitive:\s*(true|false)\s*$", stripped)
-        if sm:
-            cur["sensitive"] = sm.group(1) == "true"
-            continue
-        vm = re.match(r"value:\s?(.*)$", stripped)
-        if vm:
-            rest = vm.group(1).strip()
-            if rest in ("|", "|-", "|+", ">", ">-", ">+", ""):
-                cur["value"], block_capture, block_indent = "", True, indent
-            else:
-                cur["value"] = rest
-    if cur:
-        items.append(cur)
-    # A key can recur across services' env; merge sensitive as OR (marked anywhere ->
-    # treated sensitive) and keep every value so all of them get shape-tested.
-    merged = {}
-    for it in items:
-        k = it["key"]
-        m = merged.setdefault(k, {"key": k, "sensitive": False, "values": []})
-        m["sensitive"] = m["sensitive"] or it["sensitive"]
-        if it["value"] is not None:
-            m["values"].append(it["value"])
-    return [(m["key"], m["sensitive"], m["values"]) for m in merged.values()]
-
-
-def unmarked_candidates(record):
+def unmarked_candidates(spec):
     """(key, reasons, strong) for vars NOT flagged sensitive that look secret.
     strong=True means a value-shape signal fired (high confidence)."""
     out = []
-    for key, sensitive, values in iter_vars(spec_block(record)):
+    for key, sensitive, values in iter_vars(spec):
         if sensitive:
             continue
         reasons, strong = [], False
@@ -339,12 +327,8 @@ def unmarked_candidates(record):
     return out
 
 
-def record_app(lines):
-    for l in lines:
-        m = re.match(r"\s+app:\s*(app/\S+)", l)
-        if m:
-            return m.group(1)
-    return "?"
+def record_app(doc):
+    return facet_fields(doc, "/config_version").get("app") or "?"
 
 
 def parse_ts(s):
@@ -362,24 +346,23 @@ def parse_ts(s):
     return ts
 
 
-def entity_id(lines):
-    return lines[0][len("id: "):].strip() if lines else "?"
+def entity_id(doc):
+    return doc.get("id") or "?"
 
 
 def summarize(miren, kind):
     """List of entity dicts for a kind, or None if the query failed."""
-    text = run_list(miren, kind)
-    if text is None:
+    docs = run_list(miren, kind)
+    if docs is None:
         return None
     out = []
-    for r in split_records(text):
-        a = attr_map(r)
+    for doc in docs:
         out.append({
-            "id": entity_id(r),
-            "name": a.get("dev.miren.core/metadata.name", ""),
-            "created": parse_ts(a.get(CREATED)),
-            "updated": parse_ts(a.get(UPDATED)),
-            "spec": spec_block(r),
+            "id": entity_id(doc),
+            "name": entity_name(doc),
+            "created": parse_ts(doc.get("created_at")),
+            "updated": parse_ts(doc.get("updated_at")),
+            "doc": doc,
         })
     return out
 
@@ -436,8 +419,8 @@ def main():
             flag = "  <-- created in window" if in_window(e["created"]) else ""
             c = e["created"].isoformat() if e["created"] else "?"
             print(f"  {e['id']}   created={c}{flag}")
-            for l in redact_spec(e["spec"]):
-                print(f"      {l}")
+            for line in redact_fields(e["doc"]):
+                print(f"      {line}")
 
     # -- Section B: routing + workloads changed during the window --
     print("\n" + "#" * 74)
@@ -473,18 +456,19 @@ def main():
     print("#    read. (variable names only; values are never printed.)")
     print("#" * 74)
     by_app = {}
-    cfg_text = run_list(args.miren, "config_version")
-    if cfg_text is None:
+    cfg_docs = run_list(args.miren, "config_version")
+    if cfg_docs is None:
         failures.append("config_version")
         print("\n  ! FAILED to query config_version -- rotation list is INCOMPLETE")
     else:
         unmarked = {}  # app -> {key: (reasons, strong)}
-        for r in split_records(cfg_text):
-            app = record_app(r)
-            keys = sensitive_var_keys(r)
+        for doc in cfg_docs:
+            app = record_app(doc)
+            keys = sensitive_var_keys(doc)
             if keys:
                 by_app.setdefault(app, set()).update(keys)
-            for key, reasons, strong in unmarked_candidates(r):
+            spec = facet_fields(doc, "/config_version").get("spec")
+            for key, reasons, strong in unmarked_candidates(spec):
                 slot = unmarked.setdefault(app, {})
                 prev_reasons, prev_strong = slot.get(key, ([], False))
                 slot[key] = (sorted(set(prev_reasons + reasons)), prev_strong or strong)

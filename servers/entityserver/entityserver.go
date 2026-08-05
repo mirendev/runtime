@@ -5,6 +5,7 @@ import (
 	"compress/gzip"
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -30,6 +31,7 @@ type EntityServer struct {
 	Store entity.Store
 
 	tf *model.TextFormatter
+	sc *entity.SchemaCache
 }
 
 func NewEntityServer(log *slog.Logger, store entity.Store) (*EntityServer, error) {
@@ -47,6 +49,7 @@ func NewEntityServer(log *slog.Logger, store entity.Store) (*EntityServer, error
 		Log:   log.With("module", "entityserver"),
 		Store: store,
 		tf:    tf,
+		sc:    sc,
 	}, nil
 }
 
@@ -59,27 +62,9 @@ func (e *EntityServer) Get(ctx context.Context, req *entityserver_v1alpha.Entity
 		return cond.ValidationFailure("missing-field", "id")
 	}
 
-	ent, err := e.Store.GetEntity(ctx, entity.Id(args.Id()))
+	ent, err := e.resolveEntity(ctx, args.Id())
 	if err != nil {
-		// Try resolving as a short-id via the db/short-id index
-		if etcdStore, ok := e.Store.(*entity.EtcdStore); ok {
-			if resolvedId, idxErr := etcdStore.GetOneIndex(ctx, entity.String(entity.DBShortId, args.Id())); idxErr == nil {
-				ent, err = e.Store.GetEntity(ctx, resolvedId)
-			}
-			// If that didn't work and the ID has a kind prefix (e.g. "sandbox/3sA"),
-			// strip the prefix and try the bare suffix as a short ID.
-			if err != nil {
-				if idx := strings.LastIndex(args.Id(), "/"); idx >= 0 {
-					bare := args.Id()[idx+1:]
-					if resolvedId, idxErr := etcdStore.GetOneIndex(ctx, entity.String(entity.DBShortId, bare)); idxErr == nil {
-						ent, err = e.Store.GetEntity(ctx, resolvedId)
-					}
-				}
-			}
-		}
-		if err != nil {
-			return cond.NotFound("entity", args.Id())
-		}
+		return err
 	}
 
 	var rpcEntity entityserver_v1alpha.Entity
@@ -92,6 +77,53 @@ func (e *EntityServer) Get(ctx context.Context, req *entityserver_v1alpha.Entity
 	req.Results().SetEntity(&rpcEntity)
 
 	return nil
+}
+
+// isNotFound reports whether err means the entity is absent, as opposed to the
+// store being unable to answer.
+func isNotFound(err error) bool {
+	return errors.Is(err, entity.ErrEntityNotFound) || errors.Is(err, cond.ErrNotFound{})
+}
+
+// resolveEntity looks an entity up by full id, falling back to the short-id
+// index. Operators type the short id the CLI printed at them, so every
+// id-taking read path needs this, not just Get.
+func (e *EntityServer) resolveEntity(ctx context.Context, id string) (*entity.Entity, error) {
+	ent, err := e.Store.GetEntity(ctx, entity.Id(id))
+	if err == nil {
+		return ent, nil
+	}
+
+	// Only a genuine miss is worth a second guess. GetEntity also reports
+	// transport failures and undecodable records, and turning those into
+	// "not found" tells an operator their entity is gone when the truth is
+	// that etcd is unreachable or the record is corrupt.
+	if !isNotFound(err) {
+		return nil, err
+	}
+
+	etcdStore, ok := e.Store.(*entity.EtcdStore)
+	if !ok {
+		return nil, cond.NotFound("entity", id)
+	}
+
+	if resolvedId, idxErr := etcdStore.GetOneIndex(ctx, entity.String(entity.DBShortId, id)); idxErr == nil {
+		if ent, err = e.Store.GetEntity(ctx, resolvedId); err == nil {
+			return ent, nil
+		}
+	}
+
+	// A kind-prefixed short id like "sandbox/3sA": try the bare suffix.
+	if idx := strings.LastIndex(id, "/"); idx >= 0 {
+		bare := id[idx+1:]
+		if resolvedId, idxErr := etcdStore.GetOneIndex(ctx, entity.String(entity.DBShortId, bare)); idxErr == nil {
+			if ent, err = e.Store.GetEntity(ctx, resolvedId); err == nil {
+				return ent, nil
+			}
+		}
+	}
+
+	return nil, cond.NotFound("entity", id)
 }
 
 func (e *EntityServer) WatchEntity(ctx context.Context, req *entityserver_v1alpha.EntityAccessWatchEntity) error {
@@ -589,6 +621,32 @@ func (e *EntityServer) WatchIndex(ctx context.Context, req *entityserver_v1alpha
 	}
 }
 
+// listIds resolves an index to the entity ids it holds. Session indexes are
+// keyed differently from ordinary attribute indexes, so both list paths go
+// through here to keep that distinction in one place.
+func (e *EntityServer) listIds(ctx context.Context, index entity.Attr) ([]entity.Id, int64, error) {
+	if index.ID == entity.AttrSession {
+		data, err := base58.Decode(index.Value.String())
+		if err != nil {
+			return nil, 0, fmt.Errorf("invalid session id: %w", err)
+		}
+
+		ids, err := e.Store.ListSessionEntities(ctx, data)
+		if err != nil {
+			return nil, 0, fmt.Errorf("failed to list entities: %w", err)
+		}
+
+		return ids, 0, nil
+	}
+
+	ids, listRev, err := e.Store.ListIndexRevision(ctx, index)
+	if err != nil {
+		return nil, 0, fmt.Errorf("failed to list entities: %w", err)
+	}
+
+	return ids, listRev, nil
+}
+
 func (e *EntityServer) List(ctx context.Context, req *entityserver_v1alpha.EntityAccessList) error {
 	args := req.Args()
 
@@ -596,29 +654,11 @@ func (e *EntityServer) List(ctx context.Context, req *entityserver_v1alpha.Entit
 		return fmt.Errorf("missing required field: index")
 	}
 
-	var (
-		ids     []entity.Id
-		listRev int64
-		err     error
-	)
-
 	index := args.Index()
 
-	if index.ID == entity.AttrSession {
-		str := index.Value.String()
-
-		data, decodeErr := base58.Decode(str)
-		if decodeErr != nil {
-			return fmt.Errorf("invalid session id: %w", decodeErr)
-		}
-
-		ids, err = e.Store.ListSessionEntities(ctx, data)
-	} else {
-		ids, listRev, err = e.Store.ListIndexRevision(ctx, args.Index())
-	}
-
+	ids, listRev, err := e.listIds(ctx, index)
 	if err != nil {
-		return fmt.Errorf("failed to list entities: %w", err)
+		return err
 	}
 
 	// Use batch retrieval for better performance
@@ -849,18 +889,178 @@ func (e *EntityServer) Parse(ctx context.Context, req *entityserver_v1alpha.Enti
 	return nil
 }
 
-func (e *EntityServer) Format(ctx context.Context, req *entityserver_v1alpha.EntityAccessFormat) error {
+// GetDocument renders a single entity into its presentation form.
+func (e *EntityServer) GetDocument(ctx context.Context, req *entityserver_v1alpha.EntityAccessGetDocument) error {
 	args := req.Args()
 
-	ent := args.Entity().Entity()
-
-	data, err := e.tf.Format(ctx, ent)
-	if err != nil {
-		return fmt.Errorf("failed to format entity: %w", err)
+	if !args.HasId() {
+		return cond.ValidationFailure("missing-field", "id")
 	}
 
-	req.Results().SetData([]byte(data))
+	ent, err := e.resolveEntity(ctx, args.Id())
+	if err != nil {
+		return err
+	}
+
+	doc := model.BuildDocument(ctx, e.sc, ent, model.Options{
+		MaxValueLen: int(args.MaxValueLen()),
+	})
+
+	data, err := json.Marshal(doc)
+	if err != nil {
+		return fmt.Errorf("failed to encode document: %w", err)
+	}
+
+	req.Results().SetDocument(data)
+
 	return nil
+}
+
+// MaxPageLimit bounds one response. Without it a caller asking for everything
+// makes the server hold every entity in the index, its rendered document, and
+// the marshalled array all at once, which is the opposite of the property
+// paging exists to give. A caller that wants the whole index still gets it, one
+// page and one cursor at a time.
+//
+// A var rather than a const so a test can shrink it and exercise multi-page
+// walks without materialising hundreds of entities.
+var MaxPageLimit int64 = 500
+
+// ListDocuments renders a bounded page of entities.
+//
+// Paging happens in the store, so the entities past the limit are never read at
+// all and a page costs the same whether the index holds ten entries or a
+// million.
+func (e *EntityServer) ListDocuments(ctx context.Context, req *entityserver_v1alpha.EntityAccessListDocuments) error {
+	args := req.Args()
+
+	if !args.HasIndex() {
+		return fmt.Errorf("missing required field: index")
+	}
+
+	index := args.Index()
+
+	cursor, err := decodeCursor(args.Cursor())
+	if err != nil {
+		return err
+	}
+
+	// Zero means "everything" to the caller, which the client turns into a walk
+	// over successive pages rather than one enormous response.
+	limit := args.Limit()
+	if limit <= 0 || limit > MaxPageLimit {
+		limit = MaxPageLimit
+	}
+
+	ids, next, total, err := e.pageIds(ctx, index, cursor, limit)
+	if err != nil {
+		return err
+	}
+
+	entities, err := e.Store.GetEntities(ctx, ids)
+	if err != nil {
+		return fmt.Errorf("failed to get entities: %w", err)
+	}
+
+	opts := model.Options{MaxValueLen: int(args.MaxValueLen())}
+
+	// Non-nil so an empty page marshals as [] rather than null, which spares
+	// every JSON consumer a null check.
+	docs := make([]*model.Document, 0, len(entities))
+
+	for i, ent := range entities {
+		if ent == nil {
+			e.Log.Error("entity in index but not in store, skipping",
+				"id", ids[i],
+				"index", index)
+
+			// Keep the reported total honest about what the caller can see.
+			if total > 0 {
+				total--
+			}
+
+			continue
+		}
+
+		docs = append(docs, model.BuildDocument(ctx, e.sc, ent, opts))
+	}
+
+	data, err := json.Marshal(docs)
+	if err != nil {
+		return fmt.Errorf("failed to encode documents: %w", err)
+	}
+
+	req.Results().SetDocuments(data)
+	req.Results().SetCursor(encodeCursor(next))
+	req.Results().SetTotal(total)
+
+	return nil
+}
+
+// encodeCursor hides the store key a cursor is made of. It is a resume point,
+// not an identifier, and nobody should be tempted to construct or parse one.
+func encodeCursor(key string) string {
+	if key == "" {
+		return ""
+	}
+
+	return base58.Encode([]byte(key))
+}
+
+func decodeCursor(cursor string) (string, error) {
+	if cursor == "" {
+		return "", nil
+	}
+
+	key, err := base58.Decode(cursor)
+	if err != nil {
+		return "", cond.ValidationFailure("invalid-field", "cursor")
+	}
+
+	return string(key), nil
+}
+
+// pageIds resolves one page of an index.
+//
+// Session membership is not an attribute index and the store cannot page it, so
+// that case lists and slices. Everything else pages in the store.
+func (e *EntityServer) pageIds(ctx context.Context, index entity.Attr, cursor string, limit int64) ([]entity.Id, string, int64, error) {
+	if index.ID == entity.AttrSession {
+		ids, _, err := e.listIds(ctx, index)
+		if err != nil {
+			return nil, "", 0, err
+		}
+
+		// The only sort on the paging path, and the only place a page costs
+		// O(all matches). Session membership has no keyspace to resume from, so
+		// the cursor has to be an entity id, which needs a total order the
+		// store does not provide. It is bounded by what one session bonded,
+		// which is small; the indexed path below pages in etcd instead.
+		slices.Sort(ids)
+
+		total := int64(len(ids))
+
+		if cursor != "" {
+			for len(ids) > 0 && string(ids[0]) <= cursor {
+				ids = ids[1:]
+			}
+		}
+
+		var next string
+		if limit > 0 && int64(len(ids)) > limit {
+			next = string(ids[limit-1])
+			ids = ids[:limit]
+		}
+
+		return ids, next, total, nil
+	}
+
+	page, err := e.Store.ListIndexPage(ctx, index, cursor, limit)
+	if err != nil {
+		return nil, "", 0, fmt.Errorf("failed to list entities: %w", err)
+	}
+
+	return page.Ids, page.Cursor, page.Total, nil
 }
 
 func (e *EntityServer) CreateSession(ctx context.Context, req *entityserver_v1alpha.EntityAccessCreateSession) error {

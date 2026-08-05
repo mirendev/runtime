@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"miren.dev/runtime/pkg/entity"
-	"miren.dev/runtime/pkg/mapx"
 	"miren.dev/runtime/pkg/multierror"
 )
 
@@ -131,109 +130,6 @@ func naturalDecode(data any, es *entity.EncodedSchema, top bool) ([]entity.Attr,
 	}
 
 	return entity.SortedAttrs(attrs), err
-}
-
-func NaturalEncode(e *entity.Entity, es *entity.EncodedSchema) (*SchemaValue, error) {
-	m, err := naturalEncodeMap(e, es)
-	if err != nil {
-		return nil, err
-	}
-
-	sv := &SchemaValue{
-		Kind:    es.Name,
-		Version: es.Version,
-		Spec:    m,
-	}
-
-	return sv, nil
-}
-
-func naturalEncodeMap(e *entity.Entity, es *entity.EncodedSchema) (map[string]any, error) {
-	m := make(map[string]any)
-
-	// Group attributes by field ID
-	attrsByField := make(map[entity.Id][]entity.Attr)
-	for _, attr := range e.Attrs() {
-		attrsByField[attr.ID] = append(attrsByField[attr.ID], attr)
-	}
-
-	// Process each field in the schema
-	for _, field := range es.Fields {
-		attrs := attrsByField[field.Id]
-		if len(attrs) == 0 {
-			continue
-		}
-
-		if field.Many {
-			// Handle multi-value fields
-			values := make([]any, 0, len(attrs))
-			for _, attr := range attrs {
-				val, err := encodeNaturalValue(field, attr.Value)
-				if err != nil {
-					return nil, fmt.Errorf("failed to encode field %s: %w", field.Name, err)
-				}
-				values = append(values, val)
-			}
-			m[field.Name] = values
-		} else {
-			// Handle single-value fields
-			val, err := encodeNaturalValue(field, attrs[0].Value)
-			if err != nil {
-				return nil, fmt.Errorf("failed to encode field %s: %w", field.Name, err)
-			}
-			m[field.Name] = val
-		}
-	}
-
-	return m, nil
-}
-
-func encodeNaturalValue(f *entity.SchemaField, val entity.Value) (any, error) {
-	switch f.Type {
-	case "string":
-		return val.String(), nil
-	case "int":
-		return val.Int64(), nil
-	case "bool":
-		return val.Bool(), nil
-	case "float":
-		return val.Float64(), nil
-	case "enum":
-		// Reverse lookup enum value
-		id := val.Id()
-		for name, enumId := range f.EnumValues {
-			if enumId == id {
-				return name, nil
-			}
-		}
-		return nil, fmt.Errorf("enum value not found for id %s (possible: %s)", id, mapx.Values(f.EnumValues))
-	case "label":
-		lbl := val.Label()
-		return fmt.Sprintf("%s=%s", lbl.Key, lbl.Value), nil
-	case "bytes":
-		return base64.StdEncoding.EncodeToString(val.Bytes()), nil
-	case "time":
-		return val.Time().Format(time.RFC3339Nano), nil
-	case "duration":
-		return val.Duration().String(), nil
-	case "id":
-		return string(val.Id()), nil
-	case "keyword":
-		return val.Keyword(), nil
-	case "any":
-		return val.Any(), nil
-	case "component":
-		comp := val.Component()
-		if comp == nil {
-			return nil, nil
-		}
-		if f.Component == nil {
-			return nil, fmt.Errorf("component field %s has nil Component schema", f.Name)
-		}
-		return naturalEncodeMap(entity.New(comp.Attrs()), f.Component)
-	default:
-		return nil, fmt.Errorf("unsupported type: %s", f.Type)
-	}
 }
 
 func decodeNaturalValue(f *entity.SchemaField, v any) ([]entity.Attr, error) {

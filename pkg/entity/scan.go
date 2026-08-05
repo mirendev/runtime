@@ -15,6 +15,7 @@ type scanConfig struct {
 	pageSize int64
 	keysOnly bool
 	startKey string
+	revision *int64
 }
 
 type scanOption func(*scanConfig)
@@ -24,6 +25,13 @@ type scanOption func(*scanConfig)
 // doesn't ship values it won't read.
 func withKeysOnly() scanOption {
 	return func(c *scanConfig) { c.keysOnly = true }
+}
+
+// withRevisionSink reports the store revision the scan opened at. Callers that
+// hand a revision back to a watch need it, and the scan already pins to it
+// internally, so there is no reason to pay for a second read to learn it.
+func withRevisionSink(out *int64) scanOption {
+	return func(c *scanConfig) { c.revision = out }
 }
 
 // withPageSize overrides the default per-request page size.
@@ -103,6 +111,9 @@ func scanPagedFunc(ctx context.Context, client *clientv3.Client, prefix string, 
 		// loudly (ErrCompacted) rather than return a torn result.
 		if first {
 			getOpts = append(getOpts, clientv3.WithRev(resp.Header.Revision))
+			if cfg.revision != nil {
+				*cfg.revision = resp.Header.Revision
+			}
 			first = false
 		}
 

@@ -1640,66 +1640,190 @@ func (v *EntityAccessParseResults) UnmarshalJSON(data []byte) error {
 	return json.Unmarshal(data, &v.data)
 }
 
-type entityAccessFormatArgsData struct {
-	Entity *Entity `cbor:"0,keyasint,omitempty" json:"entity,omitempty"`
+type entityAccessGetDocumentArgsData struct {
+	Id          *string `cbor:"0,keyasint,omitempty" json:"id,omitempty"`
+	MaxValueLen *int64  `cbor:"1,keyasint,omitempty" json:"max_value_len,omitempty"`
 }
 
-type EntityAccessFormatArgs struct {
+type EntityAccessGetDocumentArgs struct {
 	call rpc.Call
-	data entityAccessFormatArgsData
+	data entityAccessGetDocumentArgsData
 }
 
-func (v *EntityAccessFormatArgs) HasEntity() bool {
-	return v.data.Entity != nil
+func (v *EntityAccessGetDocumentArgs) HasId() bool {
+	return v.data.Id != nil
 }
 
-func (v *EntityAccessFormatArgs) Entity() *Entity {
-	return v.data.Entity
+func (v *EntityAccessGetDocumentArgs) Id() string {
+	if v.data.Id == nil {
+		return ""
+	}
+	return *v.data.Id
 }
 
-func (v *EntityAccessFormatArgs) MarshalCBOR() ([]byte, error) {
+func (v *EntityAccessGetDocumentArgs) HasMaxValueLen() bool {
+	return v.data.MaxValueLen != nil
+}
+
+func (v *EntityAccessGetDocumentArgs) MaxValueLen() int64 {
+	if v.data.MaxValueLen == nil {
+		return 0
+	}
+	return *v.data.MaxValueLen
+}
+
+func (v *EntityAccessGetDocumentArgs) MarshalCBOR() ([]byte, error) {
 	return cbor.Marshal(v.data)
 }
 
-func (v *EntityAccessFormatArgs) UnmarshalCBOR(data []byte) error {
+func (v *EntityAccessGetDocumentArgs) UnmarshalCBOR(data []byte) error {
 	return cbor.Unmarshal(data, &v.data)
 }
 
-func (v *EntityAccessFormatArgs) MarshalJSON() ([]byte, error) {
+func (v *EntityAccessGetDocumentArgs) MarshalJSON() ([]byte, error) {
 	return json.Marshal(v.data)
 }
 
-func (v *EntityAccessFormatArgs) UnmarshalJSON(data []byte) error {
+func (v *EntityAccessGetDocumentArgs) UnmarshalJSON(data []byte) error {
 	return json.Unmarshal(data, &v.data)
 }
 
-type entityAccessFormatResultsData struct {
-	Data *[]byte `cbor:"0,keyasint,omitempty" json:"data,omitempty"`
+type entityAccessGetDocumentResultsData struct {
+	Document *[]byte `cbor:"0,keyasint,omitempty" json:"document,omitempty"`
 }
 
-type EntityAccessFormatResults struct {
+type EntityAccessGetDocumentResults struct {
 	call rpc.Call
-	data entityAccessFormatResultsData
+	data entityAccessGetDocumentResultsData
 }
 
-func (v *EntityAccessFormatResults) SetData(data []byte) {
-	x := slices.Clone(data)
-	v.data.Data = &x
+func (v *EntityAccessGetDocumentResults) SetDocument(document []byte) {
+	x := slices.Clone(document)
+	v.data.Document = &x
 }
 
-func (v *EntityAccessFormatResults) MarshalCBOR() ([]byte, error) {
+func (v *EntityAccessGetDocumentResults) MarshalCBOR() ([]byte, error) {
 	return cbor.Marshal(v.data)
 }
 
-func (v *EntityAccessFormatResults) UnmarshalCBOR(data []byte) error {
+func (v *EntityAccessGetDocumentResults) UnmarshalCBOR(data []byte) error {
 	return cbor.Unmarshal(data, &v.data)
 }
 
-func (v *EntityAccessFormatResults) MarshalJSON() ([]byte, error) {
+func (v *EntityAccessGetDocumentResults) MarshalJSON() ([]byte, error) {
 	return json.Marshal(v.data)
 }
 
-func (v *EntityAccessFormatResults) UnmarshalJSON(data []byte) error {
+func (v *EntityAccessGetDocumentResults) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type entityAccessListDocumentsArgsData struct {
+	Index       *entity.Attr `cbor:"0,keyasint,omitempty" json:"index,omitempty"`
+	Cursor      *string      `cbor:"1,keyasint,omitempty" json:"cursor,omitempty"`
+	Limit       *int64       `cbor:"2,keyasint,omitempty" json:"limit,omitempty"`
+	MaxValueLen *int64       `cbor:"3,keyasint,omitempty" json:"max_value_len,omitempty"`
+}
+
+type EntityAccessListDocumentsArgs struct {
+	call rpc.Call
+	data entityAccessListDocumentsArgsData
+}
+
+func (v *EntityAccessListDocumentsArgs) HasIndex() bool {
+	return v.data.Index != nil
+}
+
+func (v *EntityAccessListDocumentsArgs) Index() entity.Attr {
+	return *v.data.Index
+}
+
+func (v *EntityAccessListDocumentsArgs) HasCursor() bool {
+	return v.data.Cursor != nil
+}
+
+func (v *EntityAccessListDocumentsArgs) Cursor() string {
+	if v.data.Cursor == nil {
+		return ""
+	}
+	return *v.data.Cursor
+}
+
+func (v *EntityAccessListDocumentsArgs) HasLimit() bool {
+	return v.data.Limit != nil
+}
+
+func (v *EntityAccessListDocumentsArgs) Limit() int64 {
+	if v.data.Limit == nil {
+		return 0
+	}
+	return *v.data.Limit
+}
+
+func (v *EntityAccessListDocumentsArgs) HasMaxValueLen() bool {
+	return v.data.MaxValueLen != nil
+}
+
+func (v *EntityAccessListDocumentsArgs) MaxValueLen() int64 {
+	if v.data.MaxValueLen == nil {
+		return 0
+	}
+	return *v.data.MaxValueLen
+}
+
+func (v *EntityAccessListDocumentsArgs) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *EntityAccessListDocumentsArgs) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *EntityAccessListDocumentsArgs) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *EntityAccessListDocumentsArgs) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type entityAccessListDocumentsResultsData struct {
+	Documents *[]byte `cbor:"0,keyasint,omitempty" json:"documents,omitempty"`
+	Cursor    *string `cbor:"1,keyasint,omitempty" json:"cursor,omitempty"`
+	Total     *int64  `cbor:"2,keyasint,omitempty" json:"total,omitempty"`
+}
+
+type EntityAccessListDocumentsResults struct {
+	call rpc.Call
+	data entityAccessListDocumentsResultsData
+}
+
+func (v *EntityAccessListDocumentsResults) SetDocuments(documents []byte) {
+	x := slices.Clone(documents)
+	v.data.Documents = &x
+}
+
+func (v *EntityAccessListDocumentsResults) SetCursor(cursor string) {
+	v.data.Cursor = &cursor
+}
+
+func (v *EntityAccessListDocumentsResults) SetTotal(total int64) {
+	v.data.Total = &total
+}
+
+func (v *EntityAccessListDocumentsResults) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *EntityAccessListDocumentsResults) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *EntityAccessListDocumentsResults) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *EntityAccessListDocumentsResults) UnmarshalJSON(data []byte) error {
 	return json.Unmarshal(data, &v.data)
 }
 
@@ -2394,13 +2518,13 @@ func (t *EntityAccessParse) Results() *EntityAccessParseResults {
 	return results
 }
 
-type EntityAccessFormat struct {
+type EntityAccessGetDocument struct {
 	rpc.Call
-	args    EntityAccessFormatArgs
-	results EntityAccessFormatResults
+	args    EntityAccessGetDocumentArgs
+	results EntityAccessGetDocumentResults
 }
 
-func (t *EntityAccessFormat) Args() *EntityAccessFormatArgs {
+func (t *EntityAccessGetDocument) Args() *EntityAccessGetDocumentArgs {
 	args := &t.args
 	if args.call != nil {
 		return args
@@ -2410,7 +2534,33 @@ func (t *EntityAccessFormat) Args() *EntityAccessFormatArgs {
 	return args
 }
 
-func (t *EntityAccessFormat) Results() *EntityAccessFormatResults {
+func (t *EntityAccessGetDocument) Results() *EntityAccessGetDocumentResults {
+	results := &t.results
+	if results.call != nil {
+		return results
+	}
+	results.call = t.Call
+	t.Call.Results(results)
+	return results
+}
+
+type EntityAccessListDocuments struct {
+	rpc.Call
+	args    EntityAccessListDocumentsArgs
+	results EntityAccessListDocumentsResults
+}
+
+func (t *EntityAccessListDocuments) Args() *EntityAccessListDocumentsArgs {
+	args := &t.args
+	if args.call != nil {
+		return args
+	}
+	args.call = t.Call
+	t.Call.Args(args)
+	return args
+}
+
+func (t *EntityAccessListDocuments) Results() *EntityAccessListDocumentsResults {
 	results := &t.results
 	if results.call != nil {
 		return results
@@ -2565,7 +2715,8 @@ type EntityAccess interface {
 	MakeAttr(ctx context.Context, state *EntityAccessMakeAttr) error
 	LookupKind(ctx context.Context, state *EntityAccessLookupKind) error
 	Parse(ctx context.Context, state *EntityAccessParse) error
-	Format(ctx context.Context, state *EntityAccessFormat) error
+	GetDocument(ctx context.Context, state *EntityAccessGetDocument) error
+	ListDocuments(ctx context.Context, state *EntityAccessListDocuments) error
 	CreateSession(ctx context.Context, state *EntityAccessCreateSession) error
 	RevokeSession(ctx context.Context, state *EntityAccessRevokeSession) error
 	PingSession(ctx context.Context, state *EntityAccessPingSession) error
@@ -2633,7 +2784,11 @@ func (reexportEntityAccess) Parse(ctx context.Context, state *EntityAccessParse)
 	panic("not implemented")
 }
 
-func (reexportEntityAccess) Format(ctx context.Context, state *EntityAccessFormat) error {
+func (reexportEntityAccess) GetDocument(ctx context.Context, state *EntityAccessGetDocument) error {
+	panic("not implemented")
+}
+
+func (reexportEntityAccess) ListDocuments(ctx context.Context, state *EntityAccessListDocuments) error {
 	panic("not implemented")
 }
 
@@ -2804,13 +2959,23 @@ func AdaptEntityAccess(t EntityAccess) *rpc.Interface {
 			},
 		},
 		{
-			Name:          "format",
+			Name:          "get_document",
 			InterfaceName: "EntityAccess",
 			Index:         0,
 			Public:        false,
-			Params:        []string{"entity"},
+			Params:        []string{"id", "max_value_len"},
 			Handler: func(ctx context.Context, call rpc.Call) error {
-				return t.Format(ctx, &EntityAccessFormat{Call: call})
+				return t.GetDocument(ctx, &EntityAccessGetDocument{Call: call})
+			},
+		},
+		{
+			Name:          "list_documents",
+			InterfaceName: "EntityAccess",
+			Index:         0,
+			Public:        false,
+			Params:        []string{"index", "cursor", "limit", "max_value_len"},
+			Handler: func(ctx context.Context, call rpc.Call) error {
+				return t.ListDocuments(ctx, &EntityAccessListDocuments{Call: call})
 			},
 		},
 		{
@@ -3375,34 +3540,90 @@ func (v EntityAccessClient) Parse(ctx context.Context, data []byte) (*EntityAcce
 	return &EntityAccessClientParseResults{client: v.Client, data: ret}, nil
 }
 
-type EntityAccessClientFormatResults struct {
+type EntityAccessClientGetDocumentResults struct {
 	client rpc.Client
-	data   entityAccessFormatResultsData
+	data   entityAccessGetDocumentResultsData
 }
 
-func (v *EntityAccessClientFormatResults) HasData() bool {
-	return v.data.Data != nil
+func (v *EntityAccessClientGetDocumentResults) HasDocument() bool {
+	return v.data.Document != nil
 }
 
-func (v *EntityAccessClientFormatResults) Data() []byte {
-	if v.data.Data == nil {
+func (v *EntityAccessClientGetDocumentResults) Document() []byte {
+	if v.data.Document == nil {
 		return nil
 	}
-	return *v.data.Data
+	return *v.data.Document
 }
 
-func (v EntityAccessClient) Format(ctx context.Context, entity *Entity) (*EntityAccessClientFormatResults, error) {
-	args := EntityAccessFormatArgs{}
-	args.data.Entity = entity
+func (v EntityAccessClient) GetDocument(ctx context.Context, id string, max_value_len int64) (*EntityAccessClientGetDocumentResults, error) {
+	args := EntityAccessGetDocumentArgs{}
+	args.data.Id = &id
+	args.data.MaxValueLen = &max_value_len
 
-	var ret entityAccessFormatResultsData
+	var ret entityAccessGetDocumentResultsData
 
-	err := v.Call(ctx, "format", &args, &ret)
+	err := v.Call(ctx, "get_document", &args, &ret)
 	if err != nil {
 		return nil, err
 	}
 
-	return &EntityAccessClientFormatResults{client: v.Client, data: ret}, nil
+	return &EntityAccessClientGetDocumentResults{client: v.Client, data: ret}, nil
+}
+
+type EntityAccessClientListDocumentsResults struct {
+	client rpc.Client
+	data   entityAccessListDocumentsResultsData
+}
+
+func (v *EntityAccessClientListDocumentsResults) HasDocuments() bool {
+	return v.data.Documents != nil
+}
+
+func (v *EntityAccessClientListDocumentsResults) Documents() []byte {
+	if v.data.Documents == nil {
+		return nil
+	}
+	return *v.data.Documents
+}
+
+func (v *EntityAccessClientListDocumentsResults) HasCursor() bool {
+	return v.data.Cursor != nil
+}
+
+func (v *EntityAccessClientListDocumentsResults) Cursor() string {
+	if v.data.Cursor == nil {
+		return ""
+	}
+	return *v.data.Cursor
+}
+
+func (v *EntityAccessClientListDocumentsResults) HasTotal() bool {
+	return v.data.Total != nil
+}
+
+func (v *EntityAccessClientListDocumentsResults) Total() int64 {
+	if v.data.Total == nil {
+		return 0
+	}
+	return *v.data.Total
+}
+
+func (v EntityAccessClient) ListDocuments(ctx context.Context, index entity.Attr, cursor string, limit int64, max_value_len int64) (*EntityAccessClientListDocumentsResults, error) {
+	args := EntityAccessListDocumentsArgs{}
+	args.data.Index = &index
+	args.data.Cursor = &cursor
+	args.data.Limit = &limit
+	args.data.MaxValueLen = &max_value_len
+
+	var ret entityAccessListDocumentsResultsData
+
+	err := v.Call(ctx, "list_documents", &args, &ret)
+	if err != nil {
+		return nil, err
+	}
+
+	return &EntityAccessClientListDocumentsResults{client: v.Client, data: ret}, nil
 }
 
 type EntityAccessClientCreateSessionResults struct {

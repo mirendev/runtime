@@ -3,106 +3,111 @@ package model
 import (
 	"context"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/require"
+	saga "miren.dev/runtime/api/saga/saga_v1alpha"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/schema"
-	"miren.dev/runtime/pkg/entity/types"
 )
 
-func testTextFormatter(t *testing.T) (*TextFormatter, *entity.MockStore) {
+func testTextFormatter(t *testing.T) *TextFormatter {
+	t.Helper()
 	r := require.New(t)
+
 	store := entity.NewMockStore()
+	r.NoError(schema.Apply(context.TODO(), store))
+
 	sc, err := entity.NewSchemaCache(store)
 	r.NoError(err)
 
 	tf, err := NewTextFormatter(sc)
 	r.NoError(err)
-	return tf, store
+
+	return tf
 }
 
-func TestTextFormatter_Format(t *testing.T) {
+func TestTextFormatter_Parse(t *testing.T) {
 	ctx := t.Context()
 
-	t.Run("works with simple entity", func(t *testing.T) {
+	t.Run("decodes a document into an entity", func(t *testing.T) {
 		r := require.New(t)
-		tf, store := testTextFormatter(t)
+		tf := testTextFormatter(t)
 
-		ts := time.Unix(1136214245, 0) // 2006-01-02T15:04:05Z
-
-		store.NowFunc = func() time.Time {
-			return ts
-		}
-		testEntity, err := store.CreateEntity(context.Background(), entity.New([]entity.Attr{
-			{ID: entity.Ident, Value: entity.KeywordValue("test/entity")},
-			{ID: entity.Doc, Value: entity.StringValue("Test entity")},
-		}))
+		pf, err := tf.Parse(ctx, []byte(`
+kind: dev.miren.saga/saga
+version: v1alpha
+metadata:
+  name: deploy-app
+spec:
+  definition_name: deploy-app
+  definition_version: 2
+  status: running
+`))
 		r.NoError(err)
+		r.Len(pf.Entities, 1)
 
-		out, err := tf.Format(ctx, testEntity)
-		r.NoError(err)
+		ent := pf.Entities[0]
 
-		expected := `attrs:
-  - id: db/doc
-    value: Test entity
-  - id: db/entity.created
-    value: 2006-01-02T15:04:05Z
-  - id: db/entity.revision
-    value: 1
-  - id: db/entity.updated
-    value: 2006-01-02T15:04:05Z
-  - id: db/id
-    value: test/entity
-`
-		r.Equal(expected, out)
+		name, ok := ent.Get(saga.SagaDefinitionNameId)
+		r.True(ok)
+		r.Equal("deploy-app", name.Value.String())
+
+		r.True(entity.Is(ent, saga.KindSaga))
 	})
 
-	t.Run("works for simple entity with schema", func(t *testing.T) {
+	t.Run("round-trips bytes through base64", func(t *testing.T) {
 		r := require.New(t)
-		tf, store := testTextFormatter(t)
+		tf := testTextFormatter(t)
 
-		ts := time.Unix(1136214245, 0).UTC() // 2006-01-02T15:04:05Z
-
-		store.NowFunc = func() time.Time {
-			return ts
-		}
-
-		// TODO: we're depending on a real schema/kind here, it would be better if we could create isolated schemas and kinds in the context of tests
-		err := schema.Apply(ctx, store)
-		r.NoError(err)
-
-		// Pre-set short-id so the assertion is deterministic; MockStore would
-		// otherwise allocate a random one for any kinded entity.
-		testEntity, err := store.CreateEntity(context.Background(), entity.New(
-			entity.Ident, types.Keyword("test/myproject"),
-			entity.EntityKind, entity.RefValue("dev.miren.core/kind.project"),
-			entity.DBShortId, "fixed",
-		))
-		r.NoError(err)
-
-		out, err := tf.Format(ctx, testEntity)
-		r.NoError(err)
-
-		expected := `id: test/myproject
-kind: dev.miren.core/project
+		// The same encoding the document builder emits, so what the tool prints
+		// can be fed back in.
+		pf, err := tf.Parse(ctx, []byte(`
+kind: dev.miren.saga/saga
 version: v1alpha
-spec: {}
-attrs:
-  - id: db/entity.created
-    value: 2006-01-02T15:04:05Z
-  - id: db/entity.revision
-    value: 1
-  - id: db/entity.updated
-    value: 2006-01-02T15:04:05Z
-  - id: db/id
-    value: test/myproject
-  - id: db/short-id
-    value: fixed
-  - id: entity/kind
-    value: dev.miren.core/kind.project
-`
+metadata:
+  name: round-trip
+spec:
+  execution_order: WyJyZXNvbHZlIiwiYnVpbGQiXQ==
+`))
+		r.NoError(err)
+		r.Len(pf.Entities, 1)
 
-		r.Equal(expected, out)
+		order, ok := pf.Entities[0].Get(saga.SagaExecutionOrderId)
+		r.True(ok)
+		r.Equal(entity.KindBytes, order.Value.Kind())
+		r.Equal(`["resolve","build"]`, string(order.Value.Bytes()))
+	})
+
+	t.Run("reads several documents from one stream", func(t *testing.T) {
+		r := require.New(t)
+		tf := testTextFormatter(t)
+
+		pf, err := tf.Parse(ctx, []byte(`
+kind: dev.miren.saga/saga
+version: v1alpha
+metadata:
+  name: one
+spec:
+  definition_name: one
+---
+kind: dev.miren.saga/saga
+version: v1alpha
+metadata:
+  name: two
+spec:
+  definition_name: two
+`))
+		r.NoError(err)
+		r.Len(pf.Entities, 2)
+
+		// Count alone would pass if the parser returned the same document
+		// twice, which would not prove the separator split anything.
+		var names []string
+		for _, ent := range pf.Entities {
+			name, ok := ent.Get(saga.SagaDefinitionNameId)
+			r.True(ok)
+			names = append(names, name.Value.String())
+		}
+		r.ElementsMatch([]string{"one", "two"}, names)
 	})
 }

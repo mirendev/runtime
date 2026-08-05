@@ -3,6 +3,8 @@
 package blackbox
 
 import (
+	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -10,43 +12,90 @@ import (
 	"miren.dev/runtime/blackbox/harness"
 )
 
-// attrValues extracts every value for a fully-qualified attribute id from the
-// output of `debug entity list -k <kind>`. The output pairs an `- id: <attr>`
-// line with a following `value: <v>` line.
-func attrValues(out, attrID string) []string {
-	lines := strings.Split(out, "\n")
-	var vals []string
-	for i, ln := range lines {
-		if strings.TrimSpace(ln) != "- id: "+attrID {
-			continue
-		}
-		for j := i + 1; j < len(lines) && j <= i+2; j++ {
-			if idx := strings.Index(lines[j], "value:"); idx >= 0 {
-				vals = append(vals, strings.TrimSpace(lines[j][idx+len("value:"):]))
-				break
-			}
-		}
-	}
-	return vals
+// entityDoc mirrors the fields of model.Document these tests read. The blackbox
+// suite talks to the CLI as a user would, so it parses --json rather than
+// importing the type: that keeps it honest about the published contract.
+type entityDoc struct {
+	Id     string `json:"id"`
+	Facets []struct {
+		Label  string `json:"label"`
+		Fields []struct {
+			Name  string `json:"name"`
+			Value any    `json:"value"`
+		} `json:"fields"`
+	} `json:"facets"`
 }
 
-// scopedSpecField returns a spec field's value from the entity block whose
-// header contains headerMatch. Dedicated addons (valkey) create one server per
-// app, so a global list can hold several; this picks the one for a given app.
-func scopedSpecField(t *testing.T, m *harness.Miren, kind, headerMatch, field string) string {
+// listDocs runs a listing and decodes it. --json is complete and unelided,
+// where the text view pages and shortens values; --limit 0 turns off the row
+// cap, so a truncated listing can never make a poll conclude early.
+func listDocs(t *testing.T, m *harness.Miren, kind string) []entityDoc {
 	t.Helper()
-	r := m.MustRun("debug", "entity", "list", "-k", kind)
-	for _, b := range strings.Split(r.Stdout, "\nid: ") {
-		if !strings.Contains(b, headerMatch) {
-			continue
-		}
-		for _, ln := range strings.Split(b, "\n") {
-			ln = strings.TrimSpace(ln)
-			if strings.HasPrefix(ln, field+":") {
-				return strings.TrimSpace(strings.SplitN(ln, ":", 2)[1])
+
+	r := m.MustRun("debug", "entity", "list", "-k", kind, "--limit", "0", "--json")
+
+	var docs []entityDoc
+	if err := json.Unmarshal([]byte(r.Stdout), &docs); err != nil {
+		t.Fatalf("decoding %s listing: %v\n%s", kind, err, r.Stdout)
+	}
+
+	return docs
+}
+
+// fieldValues returns every value of a named field across a kind's entities.
+func fieldValues(t *testing.T, m *harness.Miren, kind, field string) []string {
+	t.Helper()
+
+	var out []string
+	for _, doc := range listDocs(t, m, kind) {
+		for _, f := range doc.Facets {
+			for _, fl := range f.Fields {
+				if fl.Name == field {
+					out = append(out, fmt.Sprintf("%v", fl.Value))
+				}
 			}
 		}
 	}
+
+	return out
+}
+
+// scopedSpecField returns a field's value from the entity whose id or field
+// values mention scope. Dedicated addons (valkey) create one server per app, so
+// a global list can hold several; this picks the one for a given app.
+func scopedSpecField(t *testing.T, m *harness.Miren, kind, scope, field string) string {
+	t.Helper()
+
+	for _, doc := range listDocs(t, m, kind) {
+		var (
+			match bool
+			value string
+			found bool
+		)
+
+		if strings.Contains(doc.Id, scope) {
+			match = true
+		}
+
+		for _, f := range doc.Facets {
+			for _, fl := range f.Fields {
+				rendered := fmt.Sprintf("%v", fl.Value)
+				if strings.Contains(rendered, scope) {
+					match = true
+				}
+				if fl.Name == field && !found {
+					// First match: a name can repeat across facets, and the
+					// callers mean the first one.
+					value, found = rendered, true
+				}
+			}
+		}
+
+		if match && found {
+			return value
+		}
+	}
+
 	return ""
 }
 
@@ -56,8 +105,7 @@ func scopedSpecField(t *testing.T, m *harness.Miren, kind, headerMatch, field st
 func waitForRotationsSettled(t *testing.T, m *harness.Miren, timeout time.Duration) {
 	t.Helper()
 	harness.Poll(t, "rotation requests settled", timeout, 3*time.Second, func() (bool, string) {
-		r := m.MustRun("debug", "entity", "list", "-k", "rotation_request")
-		statuses := attrValues(r.Stdout, "dev.miren.addon/rotation_request.status")
+		statuses := fieldValues(t, m, "rotation_request", "status")
 		for _, s := range statuses {
 			if s == "error" {
 				return false, "a rotation request is in error state"

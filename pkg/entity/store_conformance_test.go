@@ -724,6 +724,76 @@ func TestStoreConformance_ListIndexPage(t *testing.T) {
 		assert.Equal(t, want, got, "the pages together must cover the whole index")
 	})
 
+	t.Run("a page ending exactly on the boundary offers no cursor", func(t *testing.T) {
+		runStoreConformance(t, func(t *testing.T, store Store) {
+			ctx := t.Context()
+			applyConformanceSchema(t, store)
+
+			target := Id("conf-page-exact/v1")
+			_, err := store.CreateEntity(ctx, New(Ref(DBId, target)))
+			require.NoError(t, err)
+
+			// Exactly two pages of two, so the second page consumes the last
+			// entry. A cursor keyed on "we hit the limit" rather than "there is
+			// more" hands back a cursor to nothing here.
+			for i := range 4 {
+				_, err := store.CreateEntity(ctx, New(
+					Any(Ident, fmt.Sprintf("conf-page-exact-%d", i)),
+					Ref(Id("conf/ref"), target),
+				))
+				require.NoError(t, err)
+			}
+
+			index := Ref(Id("conf/ref"), target)
+
+			first, err := store.ListIndexPage(ctx, index, "", 2)
+			require.NoError(t, err)
+			require.Len(t, first.Ids, 2)
+			require.NotEmpty(t, first.Cursor)
+
+			second, err := store.ListIndexPage(ctx, index, first.Cursor, 2)
+			require.NoError(t, err)
+			assert.Len(t, second.Ids, 2)
+			assert.Equal(t, "", second.Cursor,
+				"the index ended here, so there is nothing to resume from")
+		})
+	})
+
+	t.Run("every page reports a revision", func(t *testing.T) {
+		runStoreConformance(t, func(t *testing.T, store Store) {
+			ctx := t.Context()
+			applyConformanceSchema(t, store)
+
+			target := Id("conf-page-rev/v1")
+			_, err := store.CreateEntity(ctx, New(Ref(DBId, target)))
+			require.NoError(t, err)
+
+			for i := range 4 {
+				_, err := store.CreateEntity(ctx, New(
+					Any(Ident, fmt.Sprintf("conf-page-rev-%d", i)),
+					Ref(Id("conf/ref"), target),
+				))
+				require.NoError(t, err)
+			}
+
+			index := Ref(Id("conf/ref"), target)
+
+			// A caller resuming a watch from a zero revision restarts from the
+			// beginning of history, so no page may report zero.
+			first, err := store.ListIndexPage(ctx, index, "", 2)
+			require.NoError(t, err)
+			assert.Greater(t, first.Revision, int64(0))
+
+			next, err := store.ListIndexPage(ctx, index, first.Cursor, 2)
+			require.NoError(t, err)
+			assert.Greater(t, next.Revision, int64(0), "continuation pages report one too")
+
+			all, err := store.ListIndexPage(ctx, index, "", 0)
+			require.NoError(t, err)
+			assert.Greater(t, all.Revision, int64(0), "so does an unlimited read")
+		})
+	})
+
 	t.Run("unlimited reads the whole index", func(t *testing.T) {
 		runStoreConformance(t, func(t *testing.T, store Store) {
 			ctx := t.Context()
