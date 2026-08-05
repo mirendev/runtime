@@ -117,6 +117,24 @@ func TestValidate_FederationTokenRejected(t *testing.T) {
 	require.ErrorIs(t, err, jwt.ErrTokenInvalidAudience)
 }
 
+// A sandbox can request extra audiences from the token server, so a token
+// carrying "miren" alongside an external audience must not be accepted — it
+// would otherwise be replayable against our API by whoever the external token
+// was handed to.
+func TestValidate_ExtraAudienceRejected(t *testing.T) {
+	iss := testIssuer(t)
+	v := NewValidator(iss)
+
+	tokenStr, err := iss.IssueTokenWithOptions("myapp", "sandbox-1", TokenOptions{
+		Audience: []string{APIAudience, "sts.amazonaws.com"},
+	})
+	require.NoError(t, err)
+
+	_, err = v.Validate(tokenStr)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "not exactly")
+}
+
 func TestValidate_ForeignKey(t *testing.T) {
 	iss := testIssuer(t)
 	v := NewValidator(iss)
@@ -331,4 +349,21 @@ func TestVerificationKeys_MatchesJWKS(t *testing.T) {
 	assert.Equal(t, "RS256", keys[0].Algorithm)
 	assert.Equal(t, computeKID(edPub), keys[1].KeyID)
 	assert.Equal(t, "EdDSA", keys[1].Algorithm)
+}
+
+// PeekSandboxClaims recovers app/role from a minted token without verifying it,
+// and reports ok=false for garbage.
+func TestPeekSandboxClaims(t *testing.T) {
+	iss := testIssuer(t)
+
+	tokenStr, err := iss.IssueTokenWithOptions("myapp", "sandbox-1", TokenOptions{Role: "app-admin"})
+	require.NoError(t, err)
+
+	app, role, ok := PeekSandboxClaims(tokenStr)
+	require.True(t, ok)
+	require.Equal(t, "myapp", app)
+	require.Equal(t, "app-admin", role)
+
+	_, _, ok = PeekSandboxClaims("not-a-jwt")
+	require.False(t, ok)
 }

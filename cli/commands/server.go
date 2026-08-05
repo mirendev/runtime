@@ -1205,7 +1205,7 @@ func serverPort(ctx *Context, srvaddr string) int {
 	}
 
 	port, err := strconv.Atoi(portStr)
-	if err != nil || port <= 0 {
+	if err != nil || port < 1 || port > 65535 {
 		ctx.Log.Warn("server address has no usable port, assuming default API port",
 			"address", srvaddr, "port", defaultServerPort)
 		return defaultServerPort

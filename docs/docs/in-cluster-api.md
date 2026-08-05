@@ -90,16 +90,20 @@ name = "my-app"
 workload_role = "app-deploy"
 ```
 
-App owners may only select **app-scoped** roles this way. An app confining a token to its own app isn't an escalation — you already control the app. Declaring a cluster-scoped role here **fails the deploy** with a message pointing you at the operator command.
+:::warning[app.toml can only set app-scoped roles]
+An app confining a token to its own app isn't an escalation — you already control the app. Declaring a cluster-scoped role here fails the deploy, with a message pointing you at the operator command.
+:::
 
-**With the CLI** — the operator path, and the only way to grant a cluster-scoped role:
+**With the CLI** — the operator path:
 
 ```bash
 miren app set-workload-role -a my-app app-admin
 miren app set-workload-role -a tooling cluster-readonly
 ```
 
-This command is not reachable by in-sandbox workloads or app-scoped deploy identities — only a cluster operator can call it. That's what stops an app owner from self-granting cluster-wide access.
+:::warning[Cluster-scoped roles are operator-only]
+`set-workload-role` is not reachable by in-sandbox workloads or app-scoped deploy identities — only a cluster operator can call it. That's what stops an app owner from self-granting cluster-wide access.
+:::
 
 You can see an app's current role in `miren app status`.
 

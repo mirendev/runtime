@@ -383,12 +383,14 @@ func printAppStatusJSON(
 		App               string           `json:"app"`
 		Cluster           string           `json:"cluster"`
 		CurrentVersion    string           `json:"current_version,omitempty"`
+		WorkloadRole      string           `json:"workload_role,omitempty"`
 		Configuration     *configuration   `json:"configuration,omitempty"`
 		ActiveDeployment  *deploymentJSON  `json:"active_deployment,omitempty"`
 		RecentDeployments []deploymentJSON `json:"recent_deployments,omitempty"`
 	}{
-		App:     app,
-		Cluster: cluster,
+		App:          app,
+		Cluster:      cluster,
+		WorkloadRole: appResult.WorkloadRole(),
 	}
 
 	if appResult.HasVersionId() && appResult.VersionId() != "" {

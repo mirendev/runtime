@@ -101,7 +101,9 @@ func TestInCluster_NoCA(t *testing.T) {
 	cluster, err := cfg.GetCluster(InClusterName)
 	require.NoError(t, err)
 	assert.Empty(t, cluster.CACert)
-	assert.Empty(t, cluster.TLSServerName)
+	// The server name is set regardless of the CA: the API is dialed by address
+	// and its cert only carries the api.miren SAN.
+	assert.Equal(t, APIServerName, cluster.TLSServerName)
 }
 
 // The token is read fresh each call rather than cached. It expires hourly and

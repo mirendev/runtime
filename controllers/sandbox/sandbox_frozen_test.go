@@ -30,7 +30,7 @@ func TestSandboxControllerFrozen(t *testing.T) {
 		// (resolveAppAndRole) so the token carries it. The saga path needs no
 		// matching edit: it reaches the same code through sandboxOps.BuildSpec,
 		// which delegates to SandboxController.BuildSpec.
-		"sandbox.go":  "1368416518f6d1a7118ffc0bf5347172899f06766ede94d5f311e384783a3203",
+		"sandbox.go":  "1dab698635c481da6c45e1f4d11a6543b13f5cfd33c69bba509ecc729a398a78",
 		"volume.go":   "580062fb8a34f3f7f965689467a4b0f2ed403bc63c1ecdeb44949a7ba7e08dff",
 		"firewall.go": "648cb5d91091d5eb7400152b19695a8045585feae59c5dd36c12d663a27bb91f",
 	}

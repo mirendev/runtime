@@ -257,6 +257,13 @@ func prepareConfig(ctx context.Context, in prepareConfigIn) (prepareConfigOut, e
 		CliEnvVars:       in.CLIEnvVars,
 	})
 
+	// Validate the app.toml workload_role here, before the version is created or
+	// activated, so a bad role fails the deploy without leaving a new version
+	// live. The write happens later, at activation.
+	if err := validateWorkloadRole(in.AppConfig); err != nil {
+		status.SendError("%s", err)
+		return prepareConfigOut{}, err
+	}
 	if err := validateServicesExist(spec); err != nil {
 		status.SendError("%s. See https://miren.md/services", err)
 		return prepareConfigOut{}, err

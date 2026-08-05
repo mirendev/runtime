@@ -794,10 +794,11 @@ func (c *Coordinator) CACertificate() []byte {
 }
 
 // workloadAuthenticator returns the authenticator for workload identity tokens
-// presented by code running inside a sandbox, or nil when this cluster has no
-// issuer (no cloud registration and no configured TLS name — see the issuer
-// setup in cli/commands/server.go). A nil link is skipped when the chain is
-// built, leaving authentication exactly as it was before workload identity.
+// presented by code running inside a sandbox, or nil when no issuer was wired in
+// — issuer construction failed, or a caller left WorkloadIssuer unset. (Startup
+// now falls back to a cluster-local issuer URL, so a plain unregistered cluster
+// still gets one.) A nil link is skipped when the chain is built, leaving
+// authentication exactly as it was before workload identity.
 //
 // Verification is coordinator-only: this needs the signing key, which only the
 // coordinator holds. Sandboxes on a distributed runner dial the coordinator's

@@ -735,7 +735,14 @@ func mergeCliEnvVars(existingVars []core_v1alpha.ConfigSpecVariables, cliVars []
 // owner escalate. Cluster roles are the operator's to grant via SetWorkloadRole.
 // A cluster-scoped or unknown value fails the deploy with a clear message rather
 // than being silently ignored.
-func (b *Builder) applyWorkloadRole(ctx context.Context, name string, ac *appconfig.AppConfig) error {
+// validateWorkloadRole checks an app.toml workload_role without any I/O: it must
+// be a known, app-scoped role. Cluster-scoped roles are operator-only (via
+// `m app set-workload-role`). It returns nil when no role is declared.
+//
+// This is deliberately separate from persistence and run during config prep, so
+// an invalid role fails the deploy *before* the new version is activated rather
+// than after it is already live and serving.
+func validateWorkloadRole(ac *appconfig.AppConfig) error {
 	if ac == nil || ac.WorkloadRole == "" {
 		return nil
 	}
@@ -748,16 +755,28 @@ func (b *Builder) applyWorkloadRole(ctx context.Context, name string, ac *appcon
 		return fmt.Errorf("workload_role %q is cluster-scoped and cannot be set from app.toml; "+
 			"an operator must grant it with `miren app set-workload-role`", role)
 	}
+	return nil
+}
+
+// applyWorkloadRole validates a declared app.toml workload_role and persists it
+// onto the app entity. It patches only workload_role, so a concurrent
+// active_version write is not clobbered.
+func (b *Builder) applyWorkloadRole(ctx context.Context, name string, ac *appconfig.AppConfig) error {
+	if err := validateWorkloadRole(ac); err != nil {
+		return err
+	}
+	if ac == nil || ac.WorkloadRole == "" {
+		return nil
+	}
 
 	var appRec core_v1alpha.App
 	if err := b.ec.Get(ctx, name, &appRec); err != nil {
 		return fmt.Errorf("loading app %s to set workload role: %w", name, err)
 	}
-	if appRec.WorkloadRole == role {
+	if appRec.WorkloadRole == ac.WorkloadRole {
 		return nil
 	}
-	appRec.WorkloadRole = role
-	return b.ec.Update(ctx, &appRec)
+	return b.ec.Patch(ctx, appRec.ID, 0, entity.String(core_v1alpha.AppWorkloadRoleId, ac.WorkloadRole))
 }
 
 func (b *Builder) nextVersion(ctx context.Context, name string) (
@@ -1253,6 +1272,14 @@ func (b *Builder) buildFromDir(ctx context.Context, name string, path string,
 	}
 	if ac != nil {
 		b.Log.Info("loaded app config", "name", ac.Name, "envVarCount", len(ac.EnvVars), "serviceCount", len(ac.Services))
+	}
+
+	// Validate the app.toml workload_role up front, before any version is built
+	// or activated, so a bad role fails the deploy without leaving a new version
+	// live. applyWorkloadRole persists it after activation.
+	if err := validateWorkloadRole(ac); err != nil {
+		b.sendErrorStatus(ctx, status, "%v", err)
+		return nil, err
 	}
 
 	buildStack, err := b.detectBuildStack(path, ac, name, tr)

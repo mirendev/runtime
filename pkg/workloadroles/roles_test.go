@@ -92,6 +92,11 @@ func TestCarveOutsAbsentFromAllRoles(t *testing.T) {
 		"netdb":              {"releaseip", "releasesubnet", "releaseall", "gc"},
 		"outboardcontrol":    {"checkversion"},
 		"oidcbindings":       {"add", "remove", "list"},
+		// setworkloadrole assigns a role (including cluster-scoped ones) to an
+		// app. It has no rpc.AllowApp guard and is the operator-only path, so it
+		// must never be granted to a token role — otherwise a workload could
+		// escalate its own app to a cluster role.
+		"crud": {"setworkloadrole"},
 	}
 
 	for name, role := range Roles {

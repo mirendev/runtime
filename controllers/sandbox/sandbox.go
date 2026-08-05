@@ -235,7 +235,7 @@ func (c *SandboxController) localAPIPort() int {
 	}
 
 	port, err := strconv.Atoi(portStr)
-	if err != nil || port <= 0 {
+	if err != nil || port < 1 || port > 65535 {
 		c.Log.Warn("ignoring API address with bad port", "address", c.ApiAddress)
 		return 0
 	}
@@ -477,8 +477,16 @@ func (c *SandboxController) reconcileSandboxesOnBoot(ctx context.Context) error 
 			// that predate workload identity.
 			if c.tokenRefresher != nil {
 				tokenPath := c.sandboxPath(&sb, "identity-token")
-				if _, err := os.Stat(tokenPath); err == nil {
-					appName, role := c.resolveAppAndRole(ctx, &sb)
+				if data, err := os.ReadFile(tokenPath); err == nil {
+					// Recover the app and role from the existing token so a
+					// running sandbox keeps what it was built with — a role the
+					// app was reconfigured to since a restart should not take
+					// effect until the sandbox is rebuilt. Fall back to resolving
+					// from the entity graph for an unparseable/legacy token.
+					appName, role, ok := workloadidentity.PeekSandboxClaims(string(data))
+					if !ok {
+						appName, role = c.resolveAppAndRole(ctx, &sb)
+					}
 					c.tokenRefresher.register(sb.ID.String(), tokenPath, appName, role)
 					c.Log.Debug("re-registered sandbox for token refresh",
 						"sandbox_id", sb.ID, "app", appName, "role", role)

@@ -469,12 +469,20 @@ func loadConfigFromDisk() (*Config, error) {
 	// Load main config file
 	data, err := os.ReadFile(configPath)
 	if err != nil {
-		// If main config doesn't exist, try loading from config.d directory
+		// Only a genuinely absent main config falls through to config.d (and,
+		// via LoadConfig, to the in-cluster fallback). A file that exists but
+		// can't be read — permissions, I/O — is surfaced, so an unreadable
+		// explicit config never silently retargets the CLI at another cluster.
+		if !os.IsNotExist(err) {
+			return nil, fmt.Errorf("reading config file %s: %w", configPath, err)
+		}
+
+		// Main config doesn't exist; try loading from the config.d directory.
 		config := NewConfig()
 
 		if loadConfigD {
 			if err := loadConfigDir(config); err != nil {
-				return nil, ErrNoConfig
+				return nil, fmt.Errorf("loading config directory: %w", err)
 			}
 		}
 

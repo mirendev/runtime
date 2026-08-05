@@ -135,12 +135,18 @@ func (d *DeploymentServer) CreateDeployment(ctx context.Context, req *deployment
 	// version. The normal flow passes a "pending-build" placeholder here (no
 	// entity yet) and attaches the real version later via
 	// UpdateDeploymentAppVersion, which enforces the same ownership; so a
-	// not-found version is left alone rather than rejected.
+	// not-found version is left alone rather than rejected. Any other lookup
+	// error fails closed — skipping the check on a transient store error would
+	// let a cross-app version slip through.
 	var appVersion core_v1alpha.AppVersion
-	if err := d.EC.Get(ctx, args.AppVersionId(), &appVersion); err == nil {
+	switch err := d.EC.Get(ctx, args.AppVersionId(), &appVersion); {
+	case err == nil:
 		if verifyErr := d.verifyVersionOwnedByApp(ctx, &appVersion, appName); verifyErr != nil {
 			return verifyErr
 		}
+	case !errors.Is(err, cond.ErrNotFound{}):
+		d.Log.Error("Failed to look up app version", "app_version_id", args.AppVersionId(), "error", err)
+		return cond.Error("failed to look up app version")
 	}
 
 	var gitInfo core_v1alpha.GitInfo
@@ -535,12 +541,17 @@ func (d *DeploymentServer) UpdateDeploymentAppVersion(ctx context.Context, req *
 	// repoint a deployment at another app's built version. A version string that
 	// doesn't resolve to an entity is only a recorded label (the deprecated CLI
 	// records one before any build exists), so it is left alone rather than
-	// rejected; the cross-app attack always names a real, existing version.
+	// rejected; the cross-app attack always names a real, existing version. Any
+	// other lookup error fails closed.
 	var appVersion core_v1alpha.AppVersion
-	if err := d.EC.Get(ctx, appVersionId, &appVersion); err == nil {
+	switch err := d.EC.Get(ctx, appVersionId, &appVersion); {
+	case err == nil:
 		if verifyErr := d.verifyVersionOwnedByApp(ctx, &appVersion, deployment.AppName); verifyErr != nil {
 			return verifyErr
 		}
+	case !errors.Is(err, cond.ErrNotFound{}):
+		d.Log.Error("Failed to look up app version", "app_version_id", appVersionId, "error", err)
+		return cond.Error("failed to look up app version")
 	}
 
 	// Update app version

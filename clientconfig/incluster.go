@@ -65,6 +65,11 @@ func InCluster() (*Config, error) {
 	cluster := &ClusterConfig{
 		Hostname:          address,
 		IdentityTokenPath: tokenPath,
+		// The API is dialed by address (bridge router / coordinator IP), which
+		// is never a cert SAN, so verification is always against this name. Set
+		// it unconditionally — the API cert only carries the api.miren SAN, so a
+		// dial-host server name would be rejected even without a custom CA.
+		TLSServerName: APIServerName,
 	}
 
 	// Verify the API against the cluster CA rather than skipping verification:
@@ -76,7 +81,6 @@ func InCluster() (*Config, error) {
 			return nil, fmt.Errorf("reading cluster CA %s: %w", caPath, err)
 		}
 		cluster.CACert = string(caCert)
-		cluster.TLSServerName = APIServerName
 	}
 
 	cfg := NewConfig()

@@ -3,10 +3,25 @@ package workloadidentity
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
 )
+
+// PeekSandboxClaims reads the app and role from a token WITHOUT verifying its
+// signature. It is only for recovering values from a token this cluster already
+// minted and wrote to local disk — e.g. re-registering a sandbox for token
+// refresh after a controller restart, so it keeps the role it was built with
+// rather than picking up a role the app was reconfigured to since. Never use it
+// to authenticate an inbound token.
+func PeekSandboxClaims(tokenString string) (app, role string, ok bool) {
+	var claims WorkloadClaims
+	if _, _, err := jwt.NewParser().ParseUnverified(strings.TrimSpace(tokenString), &claims); err != nil {
+		return "", "", false
+	}
+	return claims.App, claims.Role, true
+}
 
 // clockSkewLeeway absorbs small clock differences on exp/nbf/iat. Tokens are
 // minted and verified by the same coordinator process today, so this is
@@ -61,6 +76,15 @@ func (v *Validator) Validate(tokenString string) (*WorkloadClaims, error) {
 	)
 	if err != nil {
 		return nil, fmt.Errorf("workloadidentity: verifying token: %w", err)
+	}
+
+	// jwt.WithAudience only checks that APIAudience is *among* the audiences, so
+	// a token minted with aud=["sts.amazonaws.com","miren"] would pass. The token
+	// server lets a sandbox request arbitrary audiences, so require the audience
+	// to be exactly ["miren"] — otherwise a token handed to an external relying
+	// party could be replayed against our API by whoever receives it.
+	if len(claims.Audience) != 1 || claims.Audience[0] != APIAudience {
+		return nil, fmt.Errorf("workloadidentity: token audience %v is not exactly [%q]", claims.Audience, APIAudience)
 	}
 
 	if claims.SandboxID == "" {
