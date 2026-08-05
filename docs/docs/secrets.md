@@ -55,7 +55,7 @@ Storing a value identical to the current version is reported as unchanged rather
 
 Point an environment variable at it. The value does not travel through your shell, your config file, or your terminal — only the reference does.
 
-<CliCommand context="app">
+<CliCommand context="client">
 
 ```miren
 miren env set -e STRIPE_API_KEY --backend cluster --ref payments/stripe-key
