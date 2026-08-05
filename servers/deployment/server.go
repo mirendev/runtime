@@ -21,6 +21,7 @@ import (
 	"miren.dev/runtime/pkg/idgen"
 	"miren.dev/runtime/pkg/rpc"
 	"miren.dev/runtime/pkg/rpc/standard"
+	"miren.dev/runtime/pkg/secret"
 )
 
 type DeploymentServer struct {
@@ -31,6 +32,10 @@ type DeploymentServer struct {
 	IngressClient *ingress.Client
 	DNSHostname   string
 
+	// Secrets resolves backend-sourced variables so a ConfigVersion minted by an
+	// env change records the exact secret version it saw.
+	Secrets secret.Resolver
+
 	// tracker owns the deployment record state machine and the deploy lock. The
 	// build server holds its own Tracker over the same entity store, and both
 	// acquire the same app-scoped lock, so a client that drives a record through
@@ -40,7 +45,7 @@ type DeploymentServer struct {
 
 var _ deployment_v1alpha.Deployment = (*DeploymentServer)(nil)
 
-func NewDeploymentServer(log *slog.Logger, eac *entityserver_v1alpha.EntityAccessClient, ec *aes.Client, appClient *appclient.Client, dnsHostname string) (*DeploymentServer, error) {
+func NewDeploymentServer(log *slog.Logger, eac *entityserver_v1alpha.EntityAccessClient, ec *aes.Client, appClient *appclient.Client, dnsHostname string, secrets secret.Resolver) (*DeploymentServer, error) {
 	return &DeploymentServer{
 		Log:           log.With("module", "deployment"),
 		EAC:           eac,
@@ -48,6 +53,7 @@ func NewDeploymentServer(log *slog.Logger, eac *entityserver_v1alpha.EntityAcces
 		AppClient:     appClient,
 		IngressClient: ingress.NewClient(log, eac),
 		DNSHostname:   dnsHostname,
+		Secrets:       secrets,
 		tracker:       deploylifecycle.NewTracker(log, eac),
 	}, nil
 }
@@ -991,7 +997,7 @@ func (d *DeploymentServer) SetEnvVars(ctx context.Context, req *deployment_v1alp
 	}
 
 	// Call shared helper to create new version
-	mutResult, err := appclient.SetEnvVars(ctx, d.EC, appName, nil, vars, service)
+	mutResult, err := appclient.SetEnvVars(ctx, d.EC, d.Secrets, appName, nil, vars, service)
 	if err != nil {
 		d.Log.Error("Failed to set env vars", "error", err, "app", appName)
 		results.SetError(fmt.Sprintf("failed to set env vars: %v", err))
@@ -1036,7 +1042,7 @@ func (d *DeploymentServer) DeleteEnvVars(ctx context.Context, req *deployment_v1
 	}
 
 	// Call shared helper to create new version
-	delResult, err := appclient.DeleteEnvVars(ctx, d.EC, appName, nil, args.Keys(), service)
+	delResult, err := appclient.DeleteEnvVars(ctx, d.EC, d.Secrets, appName, nil, args.Keys(), service)
 	if err != nil {
 		d.Log.Error("Failed to delete env vars", "error", err, "app", appName)
 		results.SetError(fmt.Sprintf("failed to delete env vars: %v", err))

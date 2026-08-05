@@ -14,6 +14,7 @@ import (
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/types"
 	"miren.dev/runtime/pkg/idgen"
+	"miren.dev/runtime/pkg/secret"
 )
 
 // EnvVarInput represents an env var to set.
@@ -21,6 +22,11 @@ type EnvVarInput struct {
 	Key       string
 	Value     string
 	Sensitive bool
+
+	// Backend names the secret backend the value comes from. Empty means Value
+	// is an inline literal; otherwise Value holds a backend-relative reference
+	// and the real value is never seen here.
+	Backend string
 }
 
 // MutateResult holds the result of an env var mutation.
@@ -64,7 +70,7 @@ var testHookAfterResolve func()
 // When a baseVersion is pinned, each attempt re-derives from that fixed version by
 // design — the caller asked to base off it — so the retry re-applies the same base
 // rather than composing onto the winner.
-func SetEnvVars(ctx context.Context, ec *entityserver.Client, appName string,
+func SetEnvVars(ctx context.Context, ec *entityserver.Client, resolver secret.Resolver, appName string,
 	baseVersion *core_v1alpha.AppVersion, vars []EnvVarInput, service string) (*MutateResult, error) {
 
 	for _, v := range vars {
@@ -87,7 +93,7 @@ func SetEnvVars(ctx context.Context, ec *entityserver.Client, appName string,
 			testHookAfterResolve()
 		}
 
-		result, err := createNewVersion(ctx, ec, appName, appVer, spec, appRec, appRev)
+		result, err := createNewVersion(ctx, ec, resolver, appName, appVer, spec, appRec, appRev)
 		if err == nil {
 			return result, nil
 		}
@@ -109,7 +115,7 @@ func SetEnvVars(ctx context.Context, ec *entityserver.Client, appName string,
 // control so a concurrent active-version swing cannot silently clobber the delete.
 // The same baseVersion caveat applies: the retry composes onto a concurrent winner
 // only when baseVersion is nil; a pinned baseVersion is re-applied as-is.
-func DeleteEnvVars(ctx context.Context, ec *entityserver.Client, appName string,
+func DeleteEnvVars(ctx context.Context, ec *entityserver.Client, resolver secret.Resolver, appName string,
 	baseVersion *core_v1alpha.AppVersion, keys []string, service string) (*DeleteResult, error) {
 
 	for range envMutateMaxAttempts {
@@ -168,7 +174,7 @@ func DeleteEnvVars(ctx context.Context, ec *entityserver.Client, appName string,
 			}
 		}
 
-		result, err := createNewVersion(ctx, ec, appName, appVer, spec, appRec, appRev)
+		result, err := createNewVersion(ctx, ec, resolver, appName, appVer, spec, appRec, appRev)
 		if err == nil {
 			return &DeleteResult{
 				MutateResult:   *result,
@@ -239,7 +245,7 @@ func resolveBaseVersion(ctx context.Context, ec *entityserver.Client, appName st
 // The app update uses optimistic concurrency control via Replace+revision so
 // that two parallel SetInitialEnvVars calls (or a deploy slipping in between
 // the read and the write) cannot silently drop staged vars.
-func SetInitialEnvVars(ctx context.Context, ec *entityserver.Client, appName string,
+func SetInitialEnvVars(ctx context.Context, ec *entityserver.Client, resolver secret.Resolver, appName string,
 	vars []EnvVarInput, service string) (entity.Id, error) {
 
 	for _, v := range vars {
@@ -273,6 +279,10 @@ func SetInitialEnvVars(ctx context.Context, ec *entityserver.Client, appName str
 		}
 
 		if err := mergeIntoSpec(&spec, vars, service); err != nil {
+			return "", err
+		}
+
+		if err := pinSecrets(ctx, resolver, &spec); err != nil {
 			return "", err
 		}
 
@@ -324,6 +334,7 @@ func mergeIntoSpec(spec *core_v1alpha.ConfigSpec, vars []EnvVarInput, service st
 					spec.Variables[i].Value = v.Value
 					spec.Variables[i].Sensitive = v.Sensitive
 					spec.Variables[i].Source = "manual"
+					spec.Variables[i].Backend = v.Backend
 					found = true
 					break
 				}
@@ -334,6 +345,7 @@ func mergeIntoSpec(spec *core_v1alpha.ConfigSpec, vars []EnvVarInput, service st
 					Value:     v.Value,
 					Sensitive: v.Sensitive,
 					Source:    "manual",
+					Backend:   v.Backend,
 				})
 			}
 			continue
@@ -349,6 +361,7 @@ func mergeIntoSpec(spec *core_v1alpha.ConfigSpec, vars []EnvVarInput, service st
 						spec.Services[i].Env[j].Value = v.Value
 						spec.Services[i].Env[j].Sensitive = v.Sensitive
 						spec.Services[i].Env[j].Source = "manual"
+						spec.Services[i].Env[j].Backend = v.Backend
 						envFound = true
 						break
 					}
@@ -359,6 +372,7 @@ func mergeIntoSpec(spec *core_v1alpha.ConfigSpec, vars []EnvVarInput, service st
 						Value:     v.Value,
 						Sensitive: v.Sensitive,
 						Source:    "manual",
+						Backend:   v.Backend,
 					})
 				}
 				break
@@ -375,6 +389,7 @@ func mergeIntoSpec(spec *core_v1alpha.ConfigSpec, vars []EnvVarInput, service st
 					Value:     v.Value,
 					Sensitive: v.Sensitive,
 					Source:    "manual",
+					Backend:   v.Backend,
 				}},
 			})
 		}
@@ -389,8 +404,14 @@ func mergeIntoSpec(spec *core_v1alpha.ConfigSpec, vars []EnvVarInput, service st
 // controller injecting addon vars — is detected and the caller retries against
 // the winner's version instead of silently clobbering it. Returns cond.ErrConflict
 // on a lost race.
-func createNewVersion(ctx context.Context, ec *entityserver.Client, appName string,
+func createNewVersion(ctx context.Context, ec *entityserver.Client, resolver secret.Resolver, appName string,
 	appVer *core_v1alpha.AppVersion, spec *core_v1alpha.ConfigSpec, appRec *core_v1alpha.App, appRev int64) (*MutateResult, error) {
+
+	// Freeze every backend-sourced variable to the version it resolves to right
+	// now, so this ConfigVersion records exactly which secret it was built with.
+	if err := pinSecrets(ctx, resolver, spec); err != nil {
+		return nil, err
+	}
 
 	appVer.Version = appName + "-" + idgen.Gen("v")
 
@@ -435,4 +456,25 @@ func createNewVersion(ctx context.Context, ec *entityserver.Client, appName stri
 		AppVersion: appVer,
 		VersionID:  appVer.Version,
 	}, nil
+}
+
+// pinSecrets rewrites every backend-sourced variable in the spec to the exact
+// version it resolves to, so a ConfigVersion minted from it records which secret
+// it was built with rather than a floating reference.
+//
+// A config with no backend-sourced variables never needs a resolver, which keeps
+// a cluster with no secret backends registered working exactly as before. One
+// that does reference a backend fails the write rather than activating a version
+// whose credential silently never arrived.
+func pinSecrets(ctx context.Context, resolver secret.Resolver, spec *core_v1alpha.ConfigSpec) error {
+	refs := coreutil.SecretReferences(spec)
+	if len(refs) == 0 {
+		return nil
+	}
+
+	if resolver == nil {
+		return fmt.Errorf("config references secret %s but this cluster has no secret backends configured", refs[0])
+	}
+
+	return coreutil.PinSecrets(ctx, resolver, spec)
 }

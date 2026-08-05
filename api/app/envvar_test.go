@@ -69,12 +69,12 @@ func TestCreateNewVersionCASGuardsActiveVersion(t *testing.T) {
 
 	// A competing writer swings active_version in the meantime (e.g. a parallel
 	// env set, or the addon controller injecting DATABASE_URL).
-	_, err = SetEnvVars(ctx, ec, "myapp", nil, []EnvVarInput{{Key: "COMPETITOR", Value: "c"}}, "")
+	_, err = SetEnvVars(ctx, ec, nil, "myapp", nil, []EnvVarInput{{Key: "COMPETITOR", Value: "c"}}, "")
 	require.NoError(t, err)
 
 	// Our write, built from the now-stale revision, must be rejected.
 	require.NoError(t, mergeIntoSpec(spec, []EnvVarInput{{Key: "MINE", Value: "m"}}, ""))
-	_, err = createNewVersion(ctx, ec, "myapp", appVer, spec, appRec, appRev)
+	_, err = createNewVersion(ctx, ec, nil, "myapp", appVer, spec, appRec, appRev)
 	require.Error(t, err)
 	require.True(t, errors.Is(err, cond.ErrConflict{}), "stale write must conflict, got %v", err)
 
@@ -90,9 +90,9 @@ func TestSetEnvVarsComposesSequentially(t *testing.T) {
 	ctx, ec := newEnvTestClient(t)
 	createEnvTestApp(t, ctx, ec, "myapp", []core_v1alpha.Variable{{Key: "BASE", Value: "1", Source: "config"}})
 
-	_, err := SetEnvVars(ctx, ec, "myapp", nil, []EnvVarInput{{Key: "FOO", Value: "a"}}, "")
+	_, err := SetEnvVars(ctx, ec, nil, "myapp", nil, []EnvVarInput{{Key: "FOO", Value: "a"}}, "")
 	require.NoError(t, err)
-	_, err = SetEnvVars(ctx, ec, "myapp", nil, []EnvVarInput{{Key: "BAR", Value: "b"}}, "")
+	_, err = SetEnvVars(ctx, ec, nil, "myapp", nil, []EnvVarInput{{Key: "BAR", Value: "b"}}, "")
 	require.NoError(t, err)
 
 	vars := activeEnvVars(t, ctx, ec, "myapp")
@@ -117,12 +117,12 @@ func TestSetEnvVarsRetriesAndRecoversOnConflict(t *testing.T) {
 		testHookAfterResolve = nil
 		// Competing writer wins the active-version swing while we are mid-flight,
 		// bumping the app revision under us so our Patch conflicts.
-		_, err := SetEnvVars(ctx, ec, "myapp", nil, []EnvVarInput{{Key: "COMPETITOR", Value: "c"}}, "")
+		_, err := SetEnvVars(ctx, ec, nil, "myapp", nil, []EnvVarInput{{Key: "COMPETITOR", Value: "c"}}, "")
 		require.NoError(t, err)
 	}
 	t.Cleanup(func() { testHookAfterResolve = nil })
 
-	_, err := SetEnvVars(ctx, ec, "myapp", nil, []EnvVarInput{{Key: "MINE", Value: "m"}}, "")
+	_, err := SetEnvVars(ctx, ec, nil, "myapp", nil, []EnvVarInput{{Key: "MINE", Value: "m"}}, "")
 	require.NoError(t, err)
 
 	vars := activeEnvVars(t, ctx, ec, "myapp")
@@ -153,10 +153,10 @@ func TestDeleteEnvVarsComposesSequentially(t *testing.T) {
 	ctx, ec := newEnvTestClient(t)
 	createEnvTestApp(t, ctx, ec, "myapp", []core_v1alpha.Variable{{Key: "BASE", Value: "1", Source: "config"}})
 
-	_, err := SetEnvVars(ctx, ec, "myapp", nil, []EnvVarInput{{Key: "FOO", Value: "a"}}, "")
+	_, err := SetEnvVars(ctx, ec, nil, "myapp", nil, []EnvVarInput{{Key: "FOO", Value: "a"}}, "")
 	require.NoError(t, err)
 
-	res, err := DeleteEnvVars(ctx, ec, "myapp", nil, []string{"FOO"}, "")
+	res, err := DeleteEnvVars(ctx, ec, nil, "myapp", nil, []string{"FOO"}, "")
 	require.NoError(t, err)
 	require.NotNil(t, res)
 

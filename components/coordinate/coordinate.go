@@ -1408,7 +1408,7 @@ func (c *Coordinator) Start(ctx context.Context) error {
 	}
 	c.schemaReindex.Start(ctx)
 
-	ai := app.NewAppInfo(c.Log, ec, c.Cpu, c.Mem, c.HTTP)
+	ai := app.NewAppInfo(c.Log, ec, c.Cpu, c.Mem, c.HTTP, secretRegistry)
 	server.ExposeValue("dev.miren.runtime/app", app_v1alpha.AdaptCrud(ai))
 	server.ExposeValue("dev.miren.runtime/app-status", app_v1alpha.AdaptAppStatus(ai))
 
@@ -1430,6 +1430,7 @@ func (c *Coordinator) Start(ctx context.Context) error {
 
 	bs := build.NewBuilder(c.Log, eac, appClient, addonsClient, c.Resolver, c.TempDir, c.LogWriter, c.CloudAuth.DNSHostname, c.BuildKit, c.DataPath)
 	bs.WorkloadIssuer = c.WorkloadIssuer
+	bs.Secrets = secretRegistry
 
 	var buildHandler build_v1alpha.Builder = bs
 	if labs.Sagas() {
@@ -1451,7 +1452,7 @@ func (c *Coordinator) Start(ctx context.Context) error {
 	ls := logs.NewServer(c.Log, ec, c.Logs)
 	server.ExposeValue("dev.miren.runtime/logs", app_v1alpha.AdaptLogs(ls))
 
-	ds, err := deployment.NewDeploymentServer(c.Log, eac, ec, appClient, c.CloudAuth.DNSHostname)
+	ds, err := deployment.NewDeploymentServer(c.Log, eac, ec, appClient, c.CloudAuth.DNSHostname, secretRegistry)
 	if err != nil {
 		c.Log.Error("failed to create deployment server", "error", err)
 		return err
