@@ -75,6 +75,7 @@ type NodeStack struct {
 	packageManager nodePackageManager
 	scripts        map[string]string
 	entryPoint     string
+	hasNext        bool
 
 	// Parsed dependencies from package.json
 	dependencies    map[string]string
@@ -129,6 +130,13 @@ func (s *NodeStack) Init(opts BuildOptions) {
 		if _, ok := s.scripts["build"]; ok {
 			s.Event("script", "build", "npm build script detected")
 		}
+	}
+
+	// Detect Next.js so we can run its production build and serve it with
+	// `next start`, mirroring how the Ruby stack special-cases Rails.
+	if s.hasDependency("next") {
+		s.hasNext = true
+		s.Event("framework", "nextjs", "Next.js framework detected")
 	}
 
 	// Check for common entry points and store the first one found
@@ -203,9 +211,61 @@ func (s *NodeStack) GenerateLLB(dir string, opts BuildOptions) (*llb.State, erro
 
 	state = h.copyApp(state, localCtx)
 
+	// Run the framework build (e.g. `next build`) after the app is copied.
+	// Inject user env vars so build-time values (e.g. NEXT_PUBLIC_* that Next
+	// inlines at build time) are available, mirroring how the Ruby stack
+	// injects env vars for asset precompilation.
+	if buildCmd := s.frameworkBuildCommand(); buildCmd != "" {
+		build := state.Dir("/app")
+		for k, v := range opts.EnvVars {
+			build = build.AddEnv(k, v)
+		}
+		state = build.Run(
+			llb.Shlex(buildCmd),
+			llb.WithCustomName("[phase] Building Next.js application"),
+		).Root()
+
+		// The build runs as root, so the generated tree would be root-owned while
+		// the image runs as the app user. Next writes its ISR, image, and prerender
+		// caches beneath .next at runtime, so hand the tree over before export or
+		// those writes fail with EACCES.
+		//
+		// Guard on the directory existing: an app that sets `distDir` in
+		// next.config.js builds somewhere else entirely, and a bare chown would
+		// fail the build over a path that was never going to be there. Such an app
+		// keeps the ownership it has today rather than regressing to a hard error.
+		state = state.Dir("/app").Run(
+			llb.Args([]string{"/bin/sh", "-c", "if [ -d /app/.next ]; then chown -R app:app /app/.next; fi"}),
+			llb.WithCustomName("[phase] Fixing Next.js build permissions"),
+		).Root()
+	}
+
 	state = s.applyOnBuild(state, opts)
 
 	return &state, nil
+}
+
+// hasDependency reports whether the package.json lists the given package in
+// either dependencies or devDependencies.
+func (s *NodeStack) hasDependency(name string) bool {
+	if _, ok := s.dependencies[name]; ok {
+		return true
+	}
+	_, ok := s.devDependencies[name]
+	return ok
+}
+
+// frameworkBuildCommand returns the in-image build command for a detected
+// framework, or "" when no build step is needed. Next.js must be compiled with
+// `next build` before it can be served; a plain Node app is copied as-is.
+func (s *NodeStack) frameworkBuildCommand() string {
+	if !s.hasNext {
+		return ""
+	}
+	if s.packageManager == nodePkgYarn {
+		return "yarn build"
+	}
+	return "npm run build"
 }
 
 func (s *NodeStack) parsePackageJSON() {
@@ -237,13 +297,27 @@ func (s *NodeStack) WebCommand() string {
 		runner = "npm run"
 	}
 
-	// Check for common web server scripts in order of preference
+	// An explicit web server script always wins, including for Next.js: it may
+	// launch a custom server, do setup work, or pass extra flags that a
+	// synthesized `next start` would silently drop. Next reads PORT from the
+	// environment, so going through the script still binds the platform port.
 	if s.scripts != nil {
 		for _, script := range []string{"start", "serve", "server"} {
 			if _, ok := s.scripts[script]; ok {
 				return runner + " " + script
 			}
 		}
+	}
+
+	// No web server script: a Next.js app is served with `next start`, bound to
+	// the platform-provided port. Resolve the local `next` binary through the
+	// detected package manager so a yarn project doesn't shell out to npm's npx
+	// (matches frameworkBuildCommand).
+	if s.hasNext {
+		if s.packageManager == nodePkgYarn {
+			return "yarn next start -p $PORT"
+		}
+		return "npx next start -p $PORT"
 	}
 
 	// Fallback: use detected entry point

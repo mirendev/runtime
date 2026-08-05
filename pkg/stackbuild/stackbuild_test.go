@@ -405,6 +405,112 @@ func TestNode(t *testing.T) {
 	})
 }
 
+func TestNodeNextjs(t *testing.T) {
+	testCases := []struct {
+		name      string
+		files     map[string]string
+		wantNext  bool
+		wantBuild string
+		wantWeb   string
+	}{
+		{
+			name: "next in dependencies with npm",
+			files: map[string]string{
+				"package.json":      `{"name":"app","dependencies":{"next":"14.0.0","react":"^18.0.0"},"scripts":{"build":"next build","start":"next start"}}`,
+				"package-lock.json": "{}",
+			},
+			wantNext:  true,
+			wantBuild: "npm run build",
+			wantWeb:   "npm run start",
+		},
+		{
+			name: "next with yarn",
+			files: map[string]string{
+				"package.json": `{"name":"app","dependencies":{"next":"14.0.0"},"scripts":{"build":"next build","start":"next start"}}`,
+				"yarn.lock":    "{}",
+			},
+			wantNext:  true,
+			wantBuild: "yarn build",
+			wantWeb:   "yarn start",
+		},
+		{
+			name: "next with a custom start script is left alone",
+			files: map[string]string{
+				"package.json":      `{"name":"app","dependencies":{"next":"14.0.0"},"scripts":{"build":"next build","start":"node server.js"}}`,
+				"package-lock.json": "{}",
+			},
+			wantNext:  true,
+			wantBuild: "npm run build",
+			wantWeb:   "npm run start",
+		},
+		{
+			name: "next with only a serve script uses it",
+			files: map[string]string{
+				"package.json":      `{"name":"app","dependencies":{"next":"14.0.0"},"scripts":{"build":"next build","serve":"node serve.js"}}`,
+				"package-lock.json": "{}",
+			},
+			wantNext:  true,
+			wantBuild: "npm run build",
+			wantWeb:   "npm run serve",
+		},
+		{
+			name: "next with yarn and no start script falls back to next start",
+			files: map[string]string{
+				"package.json": `{"name":"app","dependencies":{"next":"14.0.0"},"scripts":{"build":"next build"}}`,
+				"yarn.lock":    "{}",
+			},
+			wantNext:  true,
+			wantBuild: "yarn build",
+			wantWeb:   "yarn next start -p $PORT",
+		},
+		{
+			name: "next listed under devDependencies",
+			files: map[string]string{
+				"package.json":      `{"name":"app","devDependencies":{"next":"14.0.0"},"scripts":{"build":"next build"}}`,
+				"package-lock.json": "{}",
+			},
+			wantNext:  true,
+			wantBuild: "npm run build",
+			wantWeb:   "npx next start -p $PORT",
+		},
+		{
+			name: "plain express app is not next",
+			files: map[string]string{
+				"package.json":      `{"name":"app","dependencies":{"express":"^4.18.2"},"scripts":{"start":"node index.js"}}`,
+				"package-lock.json": "{}",
+			},
+			wantNext:  false,
+			wantBuild: "",
+			wantWeb:   "npm run start",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			for name, content := range tc.files {
+				require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(content), 0644))
+			}
+
+			stack := &NodeStack{MetaStack: MetaStack{dir: dir}}
+			require.True(t, stack.Detect())
+			stack.Init(BuildOptions{})
+
+			require.Equal(t, tc.wantNext, stack.hasNext)
+			require.Equal(t, tc.wantBuild, stack.frameworkBuildCommand())
+			require.Equal(t, tc.wantWeb, stack.WebCommand())
+
+			// The build graph must construct and marshal cleanly, including the
+			// Next.js build step (the AddEnv loop + build.Run) for the Next
+			// cases. This covers the GenerateLLB wiring without needing Docker.
+			state, err := stack.GenerateLLB(dir, BuildOptions{EnvVars: map[string]string{"NEXT_PUBLIC_FOO": "bar"}})
+			require.NoError(t, err)
+			_, err = state.Marshal(context.Background())
+			require.NoError(t, err)
+		})
+	}
+}
+
 func TestBun(t *testing.T) {
 	if !checkDocker() {
 		t.Skip("Docker not available")
