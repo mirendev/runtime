@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"fmt"
 	"log/slog"
+	"maps"
 	"strconv"
 	"time"
 
@@ -53,9 +54,7 @@ func (m *MemoryUsage) RecordUsage(
 	labels := make(map[string]string)
 	labels["entity"] = entity
 	labels["instance"] = m.instance
-	for k, v := range attrs {
-		labels[k] = v
-	}
+	maps.Copy(labels, attrs)
 
 	// Write memory usage in bytes
 	point := MetricPoint{

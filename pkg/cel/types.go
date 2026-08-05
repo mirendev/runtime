@@ -18,6 +18,7 @@ package cel
 
 import (
 	"fmt"
+	"maps"
 	"math"
 	"time"
 
@@ -325,9 +326,7 @@ func allTypesForDecl(declTypes []*DeclType) map[string]*DeclType {
 	}
 	allTypes := map[string]*DeclType{}
 	for _, declType := range declTypes {
-		for k, t := range FieldTypeMap(declType.TypeName(), declType) {
-			allTypes[k] = t
-		}
+		maps.Copy(allTypes, FieldTypeMap(declType.TypeName(), declType))
 	}
 
 	return allTypes

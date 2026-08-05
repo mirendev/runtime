@@ -3,8 +3,9 @@ package containerdx
 import (
 	"context"
 	"fmt"
+	"maps"
 	"os"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -45,7 +46,7 @@ func mergeGids(gids1, gids2 []uint32) []uint32 {
 	for gid := range gidsMap {
 		gids = append(gids, gid)
 	}
-	sort.Slice(gids, func(i, j int) bool { return gids[i] < gids[j] })
+	slices.Sort(gids)
 	return gids
 }
 
@@ -490,9 +491,7 @@ func WithSysctls(sysctls map[string]string) oci.SpecOpts {
 		if s.Linux.Sysctl == nil {
 			s.Linux.Sysctl = make(map[string]string)
 		}
-		for k, v := range sysctls {
-			s.Linux.Sysctl[k] = v
-		}
+		maps.Copy(s.Linux.Sysctl, sysctls)
 		return nil
 	}
 }

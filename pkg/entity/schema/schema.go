@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"slices"
-	"sort"
 
 	"github.com/mr-tron/base58"
 	"golang.org/x/crypto/blake2b"
@@ -329,9 +328,7 @@ func IndexedAttributeIDs() []entity.Id {
 		}
 	}
 
-	sort.Slice(ids, func(i, j int) bool {
-		return ids[i] < ids[j]
-	})
+	slices.Sort(ids)
 
 	return ids
 }
