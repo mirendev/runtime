@@ -115,6 +115,16 @@ type RunnerDeps struct {
 	// distributed runner it is a remote issuer that proxies minting to the
 	// coordinator over RPC.
 	WorkloadIssuer workloadidentity.TokenIssuer
+
+	// ApiAddress is where sandboxes on this host reach the cluster API, as a
+	// literal IP:port. On the coordinator that is the local bridge router; on a
+	// distributed runner it is the coordinator itself. Empty disables
+	// in-cluster API access.
+	ApiAddress string
+
+	// CACert is the cluster CA in PEM form, mounted into sandboxes so they can
+	// verify the API certificate.
+	CACert []byte
 }
 
 const (
@@ -698,6 +708,8 @@ func (r *Runner) SetupControllers(
 		Resolver:       r.deps.Resolver,
 		Metrics:        r.deps.SandboxMetrics,
 		WorkloadIssuer: r.deps.WorkloadIssuer,
+		ApiAddress:     r.deps.ApiAddress,
+		CACert:         r.deps.CACert,
 	}
 
 	var sbc sandbox.SandboxLifecycle

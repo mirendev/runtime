@@ -5,8 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"reflect"
 
 	"miren.dev/runtime/pkg/rpc"
+	"miren.dev/runtime/pkg/workloadroles"
 )
 
 // oidcDeployRole defines the RPC interfaces and actions allowed for OIDC-authenticated callers.
@@ -44,50 +46,85 @@ var oidcDeployRole = map[string]map[string]bool{
 	},
 }
 
-// CompositeAuthenticator chains a primary authenticator with the OIDC authenticator.
-// It tries the primary first and falls back to OIDC.
+// CompositeAuthenticator tries a chain of authenticators in order and returns
+// the first identity produced.
 type CompositeAuthenticator struct {
-	primary rpc.Authenticator
-	oidc    rpc.Authenticator
+	chain []rpc.Authenticator
 }
 
 // NewCompositeAuthenticator creates a composite authenticator that chains primary and OIDC auth.
 func NewCompositeAuthenticator(primary rpc.Authenticator, oidc *OIDCAuthenticator) *CompositeAuthenticator {
-	return &CompositeAuthenticator{primary: primary, oidc: oidc}
+	return NewCompositeAuthenticatorChain(primary, oidc)
+}
+
+// NewCompositeAuthenticatorChain builds a composite from an ordered chain,
+// skipping any nil authenticator so callers can pass one that is conditionally
+// unavailable (e.g. workload identity on a cluster with no issuer).
+//
+// Order matters. Put the workload identity authenticator ahead of OIDC: it
+// claims tokens by our own issuer URL, which spares OIDC an entity-store lookup
+// per token, and it forecloses an oidc_binding registered against our own
+// issuer from reinterpreting our workload tokens under an attacker-chosen app.
+func NewCompositeAuthenticatorChain(auths ...rpc.Authenticator) *CompositeAuthenticator {
+	c := &CompositeAuthenticator{}
+	for _, a := range auths {
+		if isNilAuthenticator(a) {
+			continue
+		}
+		c.chain = append(c.chain, a)
+	}
+	return c
+}
+
+// isNilAuthenticator reports whether a is unusable, catching a nil pointer
+// stored in a non-nil interface as well as a plain nil interface. Callers build
+// the chain from optional components, and a typed nil would otherwise reach
+// Authenticate with a nil receiver. Every implementation is a pointer, so that
+// is the only typed nil worth handling.
+func isNilAuthenticator(a rpc.Authenticator) bool {
+	if a == nil {
+		return true
+	}
+	v := reflect.ValueOf(a)
+	return v.Kind() == reflect.Pointer && v.IsNil()
 }
 
 func (c *CompositeAuthenticator) Authenticate(ctx context.Context, r *http.Request) (*rpc.Identity, error) {
-	// Try primary authenticator first
-	identity, err := c.primary.Authenticate(ctx, r)
-	if identity != nil {
-		return identity, nil
-	}
+	// Keep the first error rather than the last. An authenticator that fails on
+	// a token meant for a later link in the chain (the cloud JWT validator
+	// handed a GitHub Actions token, say) reports an error that only matters if
+	// nobody else claims the token.
+	//
+	// A binding mismatch is the exception: it means an authenticator got far
+	// enough to verify the token's signature and audience and knows exactly why
+	// the caller was rejected, so it wins over a mere "not my token" parse
+	// failure from another link.
+	var firstErr, mismatchErr error
 
-	// Fall back to OIDC authenticator. The primary may have returned an error
-	// because it couldn't validate a token that's actually meant for OIDC
-	// (e.g., cloud JWT validator failing on a GitHub Actions OIDC token).
-	var oidcIdentity *rpc.Identity
-	var oidcErr error
-	if c.oidc != nil {
-		oidcIdentity, oidcErr = c.oidc.Authenticate(ctx, r)
-		if oidcIdentity != nil {
-			return oidcIdentity, nil
+	for _, auth := range c.chain {
+		identity, err := auth.Authenticate(ctx, r)
+		if identity != nil {
+			return identity, nil
+		}
+		if err == nil {
+			continue
+		}
+		if firstErr == nil {
+			firstErr = err
+		}
+		if _, ok := errors.AsType[*BindingMismatchError](err); mismatchErr == nil && ok {
+			mismatchErr = err
 		}
 	}
 
-	// Neither succeeded. A binding mismatch wins over the primary's error: it
-	// means OIDC got far enough to verify the token's signature and audience, so
-	// it knows exactly why the caller was rejected. The primary, by contrast,
-	// only failed to parse a token that was never meant for it.
-	if _, ok := errors.AsType[*BindingMismatchError](oidcErr); ok {
-		return nil, oidcErr
+	// A binding mismatch wins over another link's error: it means an
+	// authenticator got far enough to verify the token's signature and audience
+	// and knows exactly why the caller was rejected, so it beats a mere "not my
+	// token" parse failure from another link.
+	if mismatchErr != nil {
+		return nil, mismatchErr
 	}
-
-	// Otherwise prefer the primary error if there was one.
-	if err != nil {
-		return nil, err
-	}
-	return nil, oidcErr
+	return nil, firstErr
 }
 
 // CompositeAuthorizer handles authorization for both primary and OIDC auth methods.
@@ -108,7 +145,14 @@ func (c *CompositeAuthorizer) Authorize(ctx context.Context, identity *rpc.Ident
 
 	case rpc.AuthMethodOIDC:
 		// OIDC callers are restricted to the oidc-deploy role
-		return authorizeOIDC(resource, action)
+		return authorizeRole("OIDC", oidcDeployRole, resource, action)
+
+	case rpc.AuthMethodWorkload:
+		// In-sandbox workloads are restricted to the role their token names, and
+		// app-scoped roles are further confined to their own app by rpc.AllowApp
+		// in the handlers. An unknown role name resolves to nothing and is
+		// denied everything (fail closed).
+		return authorizeWorkload(identity, resource, action)
 
 	case rpc.AuthMethodSystem:
 		// System workload identities exist to reach specific cluster-internal
@@ -128,22 +172,40 @@ func (c *CompositeAuthorizer) Authorize(ctx context.Context, identity *rpc.Ident
 
 	case rpc.AuthMethodJWT, rpc.AuthMethodAnonymous, rpc.AuthMethodToken:
 		// Delegate to primary (cloud RBAC).
-		fallthrough
-	default:
 		if c.primary != nil {
 			return c.primary.Authorize(ctx, identity, resource, action)
 		}
 		return nil
+
+	default:
+		// Fail closed on an auth method we don't know about. This used to share
+		// the delegate-to-primary branch above, which meant a newly added
+		// AuthMethod was granted everything wherever primary was nil — i.e. on
+		// the local-only path, the common configuration.
+		return fmt.Errorf("access denied: unknown authentication method %q", identity.Method)
 	}
 }
 
-func authorizeOIDC(resource, action string) error {
-	actions, ok := oidcDeployRole[resource]
+// authorizeRole checks a resource/action pair against a fixed role map.
+func authorizeRole(roleName string, role map[string]map[string]bool, resource, action string) error {
+	actions, ok := role[resource]
 	if !ok {
-		return fmt.Errorf("OIDC access denied: resource %q not permitted", resource)
+		return fmt.Errorf("%s access denied: resource %q not permitted", roleName, resource)
 	}
 	if !actions[action] {
-		return fmt.Errorf("OIDC access denied: action %q on resource %q not permitted", action, resource)
+		return fmt.Errorf("%s access denied: action %q on resource %q not permitted", roleName, action, resource)
 	}
 	return nil
+}
+
+// authorizeWorkload checks a call against the role named in the workload
+// identity's token. The role name is resolved from the catalog; an unknown or
+// missing name grants nothing.
+func authorizeWorkload(identity *rpc.Identity, resource, action string) error {
+	name, _ := identity.Metadata["role"].(string)
+	role, ok := workloadroles.Lookup(name)
+	if !ok {
+		return fmt.Errorf("workload access denied: unknown role %q", name)
+	}
+	return authorizeRole("workload role "+name, role.Perms, resource, action)
 }

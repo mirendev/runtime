@@ -11,6 +11,7 @@ import (
 	"os"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -155,7 +156,7 @@ func SetupBridge(n *BridgeConfig) (*netlink.Bridge, error) {
 		return nil, fmt.Errorf("failed to enable forwarding on bridge %q: %w", n.Name, err)
 	}
 
-	err = enableBridgeInputRules(br)
+	err = enableBridgeInputRules(br, n.APIPort)
 	if err != nil {
 		return nil, fmt.Errorf("failed to enable input rules for bridge %q: %w", n.Name, err)
 	}
@@ -338,49 +339,56 @@ func enableForwarding(br netlink.Link) error {
 	return nil
 }
 
+// bridgeInputPort is a host port reachable from the bridge.
+type bridgeInputPort struct {
+	port  int
+	proto []string
+	why   string
+}
+
+// bridgeInputPorts lists the host ports sandboxes may reach, beyond which the
+// host is closed to them.
+func bridgeInputPorts(apiPort int) []bridgeInputPort {
+	ports := []bridgeInputPort{
+		{53, []string{"udp", "tcp"}, "container DNS resolution"},
+		{5000, []string{"tcp"}, "buildkit pushing images to the registry"},
+	}
+
+	if apiPort > 0 {
+		// Both protocols: the RPC transport is HTTP/3 over QUIC, which is UDP.
+		// A tcp-only rule appears to work wherever the host's INPUT policy is
+		// permissive and fails everywhere it is not.
+		ports = append(ports, bridgeInputPort{apiPort, []string{"udp", "tcp"}, "cluster API access using workload identity"})
+	}
+
+	return ports
+}
+
 // enableBridgeInputRules adds INPUT rules to allow traffic from bridge to host services
-func enableBridgeInputRules(br netlink.Link) error {
+func enableBridgeInputRules(br netlink.Link, apiPort int) error {
 	ipt4, err := iptables.NewWithProtocol(iptables.ProtocolIPv4)
 	if err != nil {
 		return err
 	}
 
-	// Allow DNS traffic from bridge (required for container DNS resolution)
-	err = ipt4.InsertUnique("filter", "INPUT", 1, "-i", br.Attrs().Name, "-p", "udp", "--dport", "53", "-j", "ACCEPT")
-	if err != nil {
-		return err
-	}
-
-	err = ipt4.InsertUnique("filter", "INPUT", 1, "-i", br.Attrs().Name, "-p", "tcp", "--dport", "53", "-j", "ACCEPT")
-	if err != nil {
-		return err
-	}
-
-	// Allow registry traffic from bridge (required for buildkit to push images)
-	err = ipt4.InsertUnique("filter", "INPUT", 1, "-i", br.Attrs().Name, "-p", "tcp", "--dport", "5000", "-j", "ACCEPT")
-	if err != nil {
-		return err
-	}
-
-	// IPv6 rules
 	ipt6, err := iptables.NewWithProtocol(iptables.ProtocolIPv6)
 	if err != nil {
 		return err
 	}
 
-	err = ipt6.InsertUnique("filter", "INPUT", 1, "-i", br.Attrs().Name, "-p", "udp", "--dport", "53", "-j", "ACCEPT")
-	if err != nil {
-		return err
-	}
-
-	err = ipt6.InsertUnique("filter", "INPUT", 1, "-i", br.Attrs().Name, "-p", "tcp", "--dport", "53", "-j", "ACCEPT")
-	if err != nil {
-		return err
-	}
-
-	err = ipt6.InsertUnique("filter", "INPUT", 1, "-i", br.Attrs().Name, "-p", "tcp", "--dport", "5000", "-j", "ACCEPT")
-	if err != nil {
-		return err
+	// The rulespec is what InsertUnique matches on, so it must stay byte-identical
+	// across releases: changing it for an existing rule stops matching the rule
+	// already installed and inserts a duplicate on every restart.
+	for _, ipt := range []*iptables.IPTables{ipt4, ipt6} {
+		for _, p := range bridgeInputPorts(apiPort) {
+			for _, proto := range p.proto {
+				err = ipt.InsertUnique("filter", "INPUT", 1,
+					"-i", br.Attrs().Name, "-p", proto, "--dport", strconv.Itoa(p.port), "-j", "ACCEPT")
+				if err != nil {
+					return fmt.Errorf("allowing %s/%d from bridge (%s): %w", proto, p.port, p.why, err)
+				}
+			}
+		}
 	}
 
 	return nil

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/netip"
 	"os"
@@ -86,6 +87,20 @@ type SandboxControllerDeps struct {
 	Resolver       netresolve.Resolver
 	Metrics        *Metrics
 	WorkloadIssuer workloadidentity.TokenIssuer
+
+	// ApiAddress is where a sandbox reaches the cluster API, as a literal
+	// host:port. It must be an IP: sandbox DNS resolves only app.miren names,
+	// so a hostname here would not resolve inside the container. On a
+	// coordinator this is the local bridge router; on a distributed runner it
+	// is the coordinator, which is a different machine — the local router would
+	// be wrong there, since no API listens on it.
+	//
+	// Empty disables in-cluster API access.
+	ApiAddress string
+
+	// CACert is the cluster CA in PEM form, mounted into sandboxes so they can
+	// verify the API certificate rather than skipping verification.
+	CACert []byte
 }
 
 type SandboxController struct {
@@ -113,6 +128,8 @@ type SandboxController struct {
 	Resolver       netresolve.Resolver
 	Metrics        *Metrics
 	WorkloadIssuer workloadidentity.TokenIssuer
+	ApiAddress     string
+	CACert         []byte
 
 	tokenRefresher *tokenRefresher
 	tokenSecrets   *tokenSecretRegistry
@@ -193,7 +210,47 @@ func NewSandboxController(cfg SandboxControllerDeps) (*SandboxController, error)
 		Resolver:       cfg.Resolver,
 		Metrics:        cfg.Metrics,
 		WorkloadIssuer: cfg.WorkloadIssuer,
+		ApiAddress:     cfg.ApiAddress,
+		CACert:         cfg.CACert,
 	}, nil
+}
+
+// localAPIPort returns the port to open to the bridge so sandboxes can reach
+// the cluster API, or 0 if none should be.
+//
+// The rule is only wanted where the API is on this host and traffic from the
+// bridge is delivered locally. On a distributed runner ApiAddress names the
+// coordinator instead, and packets are forwarded and masqueraded rather than
+// hitting INPUT — opening the port there would grant nothing and would expose
+// whatever happened to be listening on that port on the runner.
+func (c *SandboxController) localAPIPort() int {
+	if c.ApiAddress == "" {
+		return 0
+	}
+
+	host, portStr, err := net.SplitHostPort(c.ApiAddress)
+	if err != nil {
+		c.Log.Warn("ignoring malformed API address", "address", c.ApiAddress, "error", err)
+		return 0
+	}
+
+	port, err := strconv.Atoi(portStr)
+	if err != nil || port < 1 || port > 65535 {
+		c.Log.Warn("ignoring API address with bad port", "address", c.ApiAddress)
+		return 0
+	}
+
+	addr, err := netip.ParseAddr(host)
+	if err != nil {
+		c.Log.Warn("ignoring non-IP API address", "address", c.ApiAddress)
+		return 0
+	}
+
+	if addr != c.Subnet.Router().Addr() {
+		return 0
+	}
+
+	return port
 }
 
 // SetWriteTracker sets the write tracker for recording manual entity writes
@@ -420,11 +477,19 @@ func (c *SandboxController) reconcileSandboxesOnBoot(ctx context.Context) error 
 			// that predate workload identity.
 			if c.tokenRefresher != nil {
 				tokenPath := c.sandboxPath(&sb, "identity-token")
-				if _, err := os.Stat(tokenPath); err == nil {
-					appName := c.resolveAppName(ctx, &sb)
-					c.tokenRefresher.register(sb.ID.String(), tokenPath, appName)
+				if data, err := os.ReadFile(tokenPath); err == nil {
+					// Recover the app and role from the existing token so a
+					// running sandbox keeps what it was built with — a role the
+					// app was reconfigured to since a restart should not take
+					// effect until the sandbox is rebuilt. Fall back to resolving
+					// from the entity graph for an unparseable/legacy token.
+					appName, role, ok := workloadidentity.PeekSandboxClaims(string(data))
+					if !ok {
+						appName, role = c.resolveAppAndRole(ctx, &sb)
+					}
+					c.tokenRefresher.register(sb.ID.String(), tokenPath, appName, role)
 					c.Log.Debug("re-registered sandbox for token refresh",
-						"sandbox_id", sb.ID, "app", appName)
+						"sandbox_id", sb.ID, "app", appName, "role", role)
 				}
 			}
 
@@ -501,6 +566,7 @@ func (c *SandboxController) Init(ctx context.Context) error {
 	bc := &network.BridgeConfig{
 		Name:      c.Bridge,
 		Addresses: []netip.Prefix{c.Subnet.Router()},
+		APIPort:   c.localAPIPort(),
 	}
 
 	link, err := network.SetupBridge(bc)
@@ -2397,8 +2463,8 @@ func (c *SandboxController) buildSubContainerSpec(
 
 	// Inject workload identity token
 	if c.WorkloadIssuer != nil {
-		appName := c.resolveAppName(ctx, sb)
-		token, tokenErr := c.WorkloadIssuer.IssueToken(appName, sb.ID.String())
+		appName, role := c.resolveAppAndRole(ctx, sb)
+		token, tokenErr := c.WorkloadIssuer.IssueTokenWithOptions(appName, sb.ID.String(), workloadidentity.TokenOptions{Role: role})
 		if tokenErr != nil {
 			c.Log.Warn("failed to generate workload identity token", "sandbox", sb.ID, "error", tokenErr)
 		} else {
@@ -2413,8 +2479,26 @@ func (c *SandboxController) buildSubContainerSpec(
 					Options:     []string{"rbind", "ro"},
 				})
 				if c.tokenRefresher != nil {
-					c.tokenRefresher.register(sb.ID.String(), tokenPath, appName)
+					c.tokenRefresher.register(sb.ID.String(), tokenPath, appName, role)
 				}
+			}
+		}
+
+		// Mount the cluster CA so a sandbox dialing the API can verify its
+		// certificate. Without it the only way to connect would be to skip
+		// verification, which on a bridge shared with other sandboxes means
+		// trusting whoever answers.
+		if len(c.CACert) > 0 {
+			caPath := c.sandboxPath(sb, "ca.crt")
+			if writeErr := atomicWriteFile(caPath, c.CACert, 0644); writeErr != nil {
+				c.Log.Warn("failed to write cluster CA for sandbox", "sandbox", sb.ID, "error", writeErr)
+			} else {
+				mounts = append(mounts, specs.Mount{
+					Destination: "/var/run/miren/ca.crt",
+					Type:        "bind",
+					Source:      caPath,
+					Options:     []string{"rbind", "ro"},
+				})
 			}
 		}
 	}
@@ -2436,6 +2520,18 @@ func (c *SandboxController) buildSubContainerSpec(
 			fmt.Sprintf("MIREN_OIDC_ISSUER_URL=%s", c.WorkloadIssuer.IssuerURL()),
 			fmt.Sprintf("MIREN_IDENTITY_TOKEN_URL=http://%s:%d/v1/token", c.Subnet.Router().Addr(), tokenServerPort),
 		)
+
+		// Point the client at the cluster API. MIREN_API_ADDRESS rather than
+		// MIREN_SERVER_ADDRESS: the latter already means the address the server
+		// binds to, so a miren CLI run inside the sandbox would read it as a
+		// listen address.
+		if c.ApiAddress != "" && len(c.CACert) > 0 {
+			envVars = append(envVars,
+				"MIREN_IN_CLUSTER=1",
+				fmt.Sprintf("MIREN_API_ADDRESS=%s", c.ApiAddress),
+				"MIREN_CA_CERT_PATH=/var/run/miren/ca.crt",
+			)
+		}
 		if c.tokenSecrets != nil && len(ep.Addresses) > 0 {
 			secret, secretErr := generateTokenSecret()
 			if secretErr != nil {
@@ -3104,28 +3200,55 @@ func (c *SandboxController) registerSandboxDNS(ctx context.Context, sb *compute.
 }
 
 func (c *SandboxController) resolveAppName(ctx context.Context, sb *compute.Sandbox) string {
+	name, _ := c.resolveAppAndRole(ctx, sb)
+	return name
+}
+
+// resolveAppAndRole derives both the app name and the workload role for a
+// sandbox from the entity graph. The role is a property of the app, resolved
+// here so it is always server-derived and never taken from the workload. An
+// empty role means the default (applied by the issuer at mint time).
+func (c *SandboxController) resolveAppAndRole(ctx context.Context, sb *compute.Sandbox) (name, role string) {
+	// An empty result means the minted token carries no app, which the validator
+	// rejects — so the workload silently loses cluster-API access. The initial
+	// no-version case is a normal shape for a sandbox not backed by an app
+	// version; the rest are genuine failures, logged so an operator can see why
+	// a workload's identity stopped working rather than debugging a token that
+	// simply won't authenticate.
 	if sb.Spec.Version == "" {
-		return ""
+		return "", ""
 	}
 
 	versionResp, err := c.EAC.Get(ctx, sb.Spec.Version.String())
 	if err != nil {
-		return ""
+		c.Log.Warn("workload identity: failed to load app version, sandbox will get no app/role",
+			"sandbox", sb.ID, "version", sb.Spec.Version, "error", err)
+		return "", ""
 	}
 
 	var version core_v1alpha.AppVersion
 	version.Decode(versionResp.Entity().Entity())
 
 	if version.App == "" {
-		return ""
+		c.Log.Warn("workload identity: app version has no app ref, sandbox will get no app/role",
+			"sandbox", sb.ID, "version", sb.Spec.Version)
+		return "", ""
 	}
 
 	appResp, err := c.EAC.Get(ctx, version.App.String())
 	if err != nil {
-		return ""
+		c.Log.Warn("workload identity: failed to load app, sandbox will get no app/role",
+			"sandbox", sb.ID, "app", version.App, "error", err)
+		return "", ""
 	}
 
+	appEnt := appResp.Entity().Entity()
+
 	var appMeta core_v1alpha.Metadata
-	appMeta.Decode(appResp.Entity().Entity())
-	return appMeta.Name
+	appMeta.Decode(appEnt)
+
+	var app core_v1alpha.App
+	app.Decode(appEnt)
+
+	return appMeta.Name, app.WorkloadRole
 }

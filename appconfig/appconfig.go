@@ -87,15 +87,16 @@ type AddonConfig struct {
 }
 
 type AppConfig struct {
-	Name        string                    `toml:"name"`
-	PostImport  string                    `toml:"post_import,omitempty"`
-	EnvVars     []AppEnvVar               `toml:"env,omitempty"`
-	Concurrency *int                      `toml:"concurrency,omitempty"`
-	Services    map[string]*ServiceConfig `toml:"services,omitempty"`
-	Build       *BuildConfig              `toml:"build,omitempty"`
-	Include     []string                  `toml:"include,omitempty"`
-	Addons      map[string]*AddonConfig   `toml:"addons,omitempty"`
-	Aliases     map[string]string         `toml:"aliases,omitempty"`
+	Name         string                    `toml:"name"`
+	PostImport   string                    `toml:"post_import,omitempty"`
+	EnvVars      []AppEnvVar               `toml:"env,omitempty"`
+	Concurrency  *int                      `toml:"concurrency,omitempty"`
+	Services     map[string]*ServiceConfig `toml:"services,omitempty"`
+	Build        *BuildConfig              `toml:"build,omitempty"`
+	Include      []string                  `toml:"include,omitempty"`
+	Addons       map[string]*AddonConfig   `toml:"addons,omitempty"`
+	Aliases      map[string]string         `toml:"aliases,omitempty"`
+	WorkloadRole string                    `toml:"workload_role,omitempty"`
 }
 
 const AppConfigPath = ".miren/app.toml"

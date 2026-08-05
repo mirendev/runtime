@@ -10,8 +10,13 @@ LOGFILE="/tmp/miren-server.log"
 ENV_FILE="${DEV_ENV_FILE:-}"
 EXTRA_FLAGS="${DEV_SERVER_FLAGS:-}"
 
-# Dev environment defaults: use self-signed TLS (ACME/autocert doesn't work with localhost)
-DEFAULT_FLAGS="--self-signed-tls"
+# Dev environment defaults:
+#   --self-signed-tls: ACME/autocert doesn't work with localhost
+#   --dns-names: gives the cluster a workload identity issuer URL. Without a DNS
+#     name (or cloud registration) the issuer is never created, and sandboxes get
+#     no identity token at all -- so workload identity can't be exercised in dev.
+#     The name only has to be stable; nothing resolves it.
+DEFAULT_FLAGS="--self-signed-tls --dns-names dev.miren.local"
 
 case "${1:-}" in
   start)

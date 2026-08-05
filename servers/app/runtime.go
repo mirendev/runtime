@@ -16,6 +16,7 @@ import (
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/rpc"
 	"miren.dev/runtime/pkg/rpc/standard"
+	"miren.dev/runtime/pkg/workloadroles"
 )
 
 var _ app_v1alpha.AppStatus = &AppInfo{}
@@ -42,6 +43,12 @@ func (a *AppInfo) AppInfo(ctx context.Context, state *app_v1alpha.AppStatusAppIn
 
 		return err
 	}
+
+	role := appRec.WorkloadRole
+	if role == "" {
+		role = workloadroles.Default
+	}
+	rai.SetWorkloadRole(role)
 
 	var appVer core_v1alpha.AppVersion
 

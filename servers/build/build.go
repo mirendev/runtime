@@ -45,6 +45,7 @@ import (
 	"miren.dev/runtime/pkg/stackbuild"
 	"miren.dev/runtime/pkg/tarx"
 	"miren.dev/runtime/pkg/workloadidentity"
+	"miren.dev/runtime/pkg/workloadroles"
 )
 
 var buildTracer = otel.Tracer("miren.dev/runtime/build")
@@ -727,6 +728,53 @@ func mergeCliEnvVars(existingVars []core_v1alpha.ConfigSpecVariables, cliVars []
 	return result
 }
 
+// validateWorkloadRole checks an app.toml workload_role without any I/O: it must
+// be a known, app-scoped role. app.toml is owner-controlled and applied by the
+// cert-trusted build server, so honoring a cluster-scoped value here would let
+// an app owner escalate — those are the operator's to grant via SetWorkloadRole.
+// A cluster-scoped or unknown value fails the deploy rather than being ignored.
+// Returns nil when no role is declared.
+//
+// It is deliberately separate from persistence and run during config prep, so an
+// invalid role fails the deploy *before* the new version is activated rather
+// than after it is already live and serving.
+func validateWorkloadRole(ac *appconfig.AppConfig) error {
+	if ac == nil || ac.WorkloadRole == "" {
+		return nil
+	}
+	role := ac.WorkloadRole
+
+	if _, ok := workloadroles.Lookup(role); !ok {
+		return fmt.Errorf("unknown workload_role %q in app.toml", role)
+	}
+	if !workloadroles.IsAppScoped(role) {
+		return fmt.Errorf("workload_role %q is cluster-scoped and cannot be set from app.toml; "+
+			"an operator must grant it with `miren app set-workload-role`", role)
+	}
+	return nil
+}
+
+// applyWorkloadRole validates a declared app.toml workload_role and persists it
+// onto the app entity. It patches only workload_role, so a concurrent
+// active_version write is not clobbered.
+func (b *Builder) applyWorkloadRole(ctx context.Context, name string, ac *appconfig.AppConfig) error {
+	if err := validateWorkloadRole(ac); err != nil {
+		return err
+	}
+	if ac == nil || ac.WorkloadRole == "" {
+		return nil
+	}
+
+	var appRec core_v1alpha.App
+	if err := b.ec.Get(ctx, name, &appRec); err != nil {
+		return fmt.Errorf("loading app %s to set workload role: %w", name, err)
+	}
+	if appRec.WorkloadRole == ac.WorkloadRole {
+		return nil
+	}
+	return b.ec.Patch(ctx, appRec.ID, 0, entity.String(core_v1alpha.AppWorkloadRoleId, ac.WorkloadRole))
+}
+
 func (b *Builder) nextVersion(ctx context.Context, name string) (
 	*core_v1alpha.App,
 	*core_v1alpha.AppVersion,
@@ -1222,6 +1270,14 @@ func (b *Builder) buildFromDir(ctx context.Context, name string, path string,
 		b.Log.Info("loaded app config", "name", ac.Name, "envVarCount", len(ac.EnvVars), "serviceCount", len(ac.Services))
 	}
 
+	// Validate the app.toml workload_role up front, before any version is built
+	// or activated, so a bad role fails the deploy without leaving a new version
+	// live. applyWorkloadRole persists it after activation.
+	if err := validateWorkloadRole(ac); err != nil {
+		b.sendErrorStatus(ctx, status, "%v", err)
+		return nil, err
+	}
+
 	buildStack, err := b.detectBuildStack(path, ac, name, tr)
 	if err != nil {
 		setupSpan.RecordError(err)
@@ -1433,6 +1489,14 @@ func (b *Builder) buildFromDir(ctx context.Context, name string, path string,
 			activateSpan.SetStatus(codes.Error, err.Error())
 			activateSpan.End()
 			return nil, fmt.Errorf("error updating app entity: %w", err)
+		}
+
+		// Apply a workload_role declared in app.toml (app-scoped only).
+		if err := b.applyWorkloadRole(activateCtx, name, ac); err != nil {
+			activateSpan.RecordError(err)
+			activateSpan.SetStatus(codes.Error, err.Error())
+			activateSpan.End()
+			return nil, err
 		}
 		activateSpan.End()
 

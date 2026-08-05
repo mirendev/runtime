@@ -550,9 +550,22 @@ func (c *Coordinator) LoadCA(ctx context.Context) error {
 	return nil
 }
 
+// APIServerName is the stable name in-cluster clients verify the API
+// certificate against.
+//
+// A sandbox reaches the API through its bridge router address, which cannot be
+// a certificate SAN: the subnet is leased after the certificate has been
+// issued, and on a first boot there is no prior lease to anticipate. Clients
+// therefore dial by address and pass this as the TLS server name. Nothing
+// resolves it — no DNS record backs it, and none is needed — but it lets a
+// sandbox verify the certificate against the cluster CA rather than skipping
+// verification, which matters on a bridge shared with other sandboxes.
+const APIServerName = "api.miren"
+
 func (c *Coordinator) LoadAPICert(ctx context.Context) error {
 	names := []string{
 		"localhost",
+		APIServerName,
 	}
 
 	names = append(names, c.AdditionalNames...)
@@ -770,6 +783,37 @@ func (c *Coordinator) ListenAddress() string {
 	return c.state.ListenAddr()
 }
 
+// CACertificate returns the cluster CA in PEM form, or nil before LoadCA has
+// run. Callers hand it to clients that must verify the cluster's certificates —
+// sandboxes reaching the API with a workload identity token, for one.
+func (c *Coordinator) CACertificate() []byte {
+	if c.authority == nil {
+		return nil
+	}
+	return c.authority.GetCACertificate()
+}
+
+// workloadAuthenticator returns the authenticator for workload identity tokens
+// presented by code running inside a sandbox, or nil when no issuer was wired in
+// — issuer construction failed, or a caller left WorkloadIssuer unset. (Startup
+// now falls back to a cluster-local issuer URL, so a plain unregistered cluster
+// still gets one.) A nil link is skipped when the chain is built, leaving
+// authentication exactly as it was before workload identity.
+//
+// Verification is coordinator-only: this needs the signing key, which only the
+// coordinator holds. Sandboxes on a distributed runner dial the coordinator's
+// API, so their tokens are verified here too.
+func (c *Coordinator) workloadAuthenticator() rpc.Authenticator {
+	if c.WorkloadIssuer == nil {
+		c.Log.Info("workload identity authentication disabled (no issuer configured)")
+		return nil
+	}
+
+	c.Log.Info("workload identity authentication enabled",
+		"issuer", c.WorkloadIssuer.IssuerURL())
+	return workloadidentity.NewAuthenticator(c.WorkloadIssuer, c.Log)
+}
+
 func (c *Coordinator) Start(ctx context.Context) error {
 	c.Log.Info("starting coordinator", "address", c.Address, "etcd_endpoints", c.EtcdEndpoints, "prefix", c.Prefix)
 
@@ -861,19 +905,21 @@ func (c *Coordinator) Start(ctx context.Context) error {
 		// Create OIDC authenticator and wrap with composite auth.
 		// EAC is set later after entity store initialization.
 		c.oidcAuthenticator = oidcauth.NewOIDCAuthenticator(c.Log)
-		compositeAuth := oidcauth.NewCompositeAuthenticator(authenticator, c.oidcAuthenticator)
+		compositeAuth := oidcauth.NewCompositeAuthenticatorChain(authenticator, c.workloadAuthenticator(), c.oidcAuthenticator)
 		compositeAuthz := oidcauth.NewCompositeAuthorizer(authenticator)
 
 		rpcOpts = append(rpcOpts, rpc.WithAuthenticator(compositeAuth), rpc.WithAuthorizer(compositeAuthz))
 		c.Log.Info("cloud authentication enabled with OIDC support",
 			"cloud_url", authCloudURL)
 	} else if c.NoAuth {
-		// Use NoOpAuthenticator when explicitly disabled (for testing)
+		// Use NoOpAuthenticator when explicitly disabled (for testing). Every
+		// caller is anonymous and no authorizer is installed, so workload
+		// identity has nothing to add here.
 		rpcOpts = append(rpcOpts, rpc.WithAuthenticator(&rpc.NoOpAuthenticator{}))
 		c.Log.Warn("authentication disabled (NoOpAuthenticator)")
 	} else {
 		c.oidcAuthenticator = oidcauth.NewOIDCAuthenticator(c.Log)
-		compositeAuth := oidcauth.NewCompositeAuthenticator(&rpc.LocalOnlyAuthenticator{}, c.oidcAuthenticator)
+		compositeAuth := oidcauth.NewCompositeAuthenticatorChain(&rpc.LocalOnlyAuthenticator{}, c.workloadAuthenticator(), c.oidcAuthenticator)
 		compositeAuthz := oidcauth.NewCompositeAuthorizer(nil)
 		rpcOpts = append(rpcOpts, rpc.WithAuthenticator(compositeAuth), rpc.WithAuthorizer(compositeAuthz))
 		c.Log.Info("local-only authentication enabled with OIDC support")

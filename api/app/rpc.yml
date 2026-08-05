@@ -345,6 +345,10 @@ types:
         element: '*BoundPort'
         index: 19
         doc: "Ports the active version's instances actually bound that diverge from the configured port"
+      - name: workloadRole
+        type: string
+        index: 20
+        doc: "The role the app's sandbox identity tokens authenticate as (empty means the default, app-readonly)"
 
   - type: LogEntry
     fields:
@@ -440,11 +444,26 @@ interfaces:
             type: string
           - name: versionShortId
             type: string
+          - name: workloadRole
+            type: string
+            doc: "The app's workload identity role (empty means the default, app-readonly)"
       - name: setHost
         parameters:
           - name: app
             type: string
           - name: host
+            type: string
+      - name: setWorkloadRole
+        doc: |
+          Set the authorization role that identity tokens minted for this app's
+          sandboxes authenticate as. This is the operator path: it is absent from
+          every token role map, so in-sandbox workloads and app-scoped OIDC
+          identities cannot call it, and cluster-scoped roles can only be granted
+          here. app.toml offers a self-service path limited to app-scoped roles.
+        parameters:
+          - name: app
+            type: string
+          - name: role
             type: string
       - name: list
         results:

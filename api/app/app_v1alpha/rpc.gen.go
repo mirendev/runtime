@@ -1362,6 +1362,7 @@ type applicationStatusData struct {
 	CrashCount        *int64              `cbor:"17,keyasint,omitempty" json:"crash_count,omitempty"`
 	CooldownSeconds   *int32              `cbor:"18,keyasint,omitempty" json:"cooldown_seconds,omitempty"`
 	BoundPorts        *[]*BoundPort       `cbor:"19,keyasint,omitempty" json:"bound_ports,omitempty"`
+	WorkloadRole      *string             `cbor:"20,keyasint,omitempty" json:"workload_role,omitempty"`
 }
 
 type ApplicationStatus struct {
@@ -1671,6 +1672,21 @@ func (v *ApplicationStatus) BoundPorts() []*BoundPort {
 func (v *ApplicationStatus) SetBoundPorts(boundPorts []*BoundPort) {
 	x := slices.Clone(boundPorts)
 	v.data.BoundPorts = &x
+}
+
+func (v *ApplicationStatus) HasWorkloadRole() bool {
+	return v.data.WorkloadRole != nil
+}
+
+func (v *ApplicationStatus) WorkloadRole() string {
+	if v.data.WorkloadRole == nil {
+		return ""
+	}
+	return *v.data.WorkloadRole
+}
+
+func (v *ApplicationStatus) SetWorkloadRole(workloadRole string) {
+	v.data.WorkloadRole = &workloadRole
 }
 
 func (v *ApplicationStatus) MarshalCBOR() ([]byte, error) {
@@ -2227,6 +2243,7 @@ type crudGetConfigurationResultsData struct {
 	Configuration  *Configuration `cbor:"0,keyasint,omitempty" json:"configuration,omitempty"`
 	VersionId      *string        `cbor:"1,keyasint,omitempty" json:"versionId,omitempty"`
 	VersionShortId *string        `cbor:"2,keyasint,omitempty" json:"versionShortId,omitempty"`
+	WorkloadRole   *string        `cbor:"3,keyasint,omitempty" json:"workloadRole,omitempty"`
 }
 
 type CrudGetConfigurationResults struct {
@@ -2244,6 +2261,10 @@ func (v *CrudGetConfigurationResults) SetVersionId(versionId string) {
 
 func (v *CrudGetConfigurationResults) SetVersionShortId(versionShortId string) {
 	v.data.VersionShortId = &versionShortId
+}
+
+func (v *CrudGetConfigurationResults) SetWorkloadRole(workloadRole string) {
+	v.data.WorkloadRole = &workloadRole
 }
 
 func (v *CrudGetConfigurationResults) MarshalCBOR() ([]byte, error) {
@@ -2330,6 +2351,77 @@ func (v *CrudSetHostResults) MarshalJSON() ([]byte, error) {
 }
 
 func (v *CrudSetHostResults) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type crudSetWorkloadRoleArgsData struct {
+	App  *string `cbor:"0,keyasint,omitempty" json:"app,omitempty"`
+	Role *string `cbor:"1,keyasint,omitempty" json:"role,omitempty"`
+}
+
+type CrudSetWorkloadRoleArgs struct {
+	call rpc.Call
+	data crudSetWorkloadRoleArgsData
+}
+
+func (v *CrudSetWorkloadRoleArgs) HasApp() bool {
+	return v.data.App != nil
+}
+
+func (v *CrudSetWorkloadRoleArgs) App() string {
+	if v.data.App == nil {
+		return ""
+	}
+	return *v.data.App
+}
+
+func (v *CrudSetWorkloadRoleArgs) HasRole() bool {
+	return v.data.Role != nil
+}
+
+func (v *CrudSetWorkloadRoleArgs) Role() string {
+	if v.data.Role == nil {
+		return ""
+	}
+	return *v.data.Role
+}
+
+func (v *CrudSetWorkloadRoleArgs) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *CrudSetWorkloadRoleArgs) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *CrudSetWorkloadRoleArgs) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *CrudSetWorkloadRoleArgs) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type crudSetWorkloadRoleResultsData struct{}
+
+type CrudSetWorkloadRoleResults struct {
+	call rpc.Call
+	data crudSetWorkloadRoleResultsData
+}
+
+func (v *CrudSetWorkloadRoleResults) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *CrudSetWorkloadRoleResults) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *CrudSetWorkloadRoleResults) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *CrudSetWorkloadRoleResults) UnmarshalJSON(data []byte) error {
 	return json.Unmarshal(data, &v.data)
 }
 
@@ -3031,6 +3123,32 @@ func (t *CrudSetHost) Results() *CrudSetHostResults {
 	return results
 }
 
+type CrudSetWorkloadRole struct {
+	rpc.Call
+	args    CrudSetWorkloadRoleArgs
+	results CrudSetWorkloadRoleResults
+}
+
+func (t *CrudSetWorkloadRole) Args() *CrudSetWorkloadRoleArgs {
+	args := &t.args
+	if args.call != nil {
+		return args
+	}
+	args.call = t.Call
+	t.Call.Args(args)
+	return args
+}
+
+func (t *CrudSetWorkloadRole) Results() *CrudSetWorkloadRoleResults {
+	results := &t.results
+	if results.call != nil {
+		return results
+	}
+	results.call = t.Call
+	t.Call.Results(results)
+	return results
+}
+
 type CrudList struct {
 	rpc.Call
 	args    CrudListArgs
@@ -3218,6 +3336,7 @@ type Crud interface {
 	SetConfiguration(ctx context.Context, state *CrudSetConfiguration) error
 	GetConfiguration(ctx context.Context, state *CrudGetConfiguration) error
 	SetHost(ctx context.Context, state *CrudSetHost) error
+	SetWorkloadRole(ctx context.Context, state *CrudSetWorkloadRole) error
 	List(ctx context.Context, state *CrudList) error
 	Destroy(ctx context.Context, state *CrudDestroy) error
 	SetEnvVar(ctx context.Context, state *CrudSetEnvVar) error
@@ -3244,6 +3363,10 @@ func (reexportCrud) GetConfiguration(ctx context.Context, state *CrudGetConfigur
 }
 
 func (reexportCrud) SetHost(ctx context.Context, state *CrudSetHost) error {
+	panic("not implemented")
+}
+
+func (reexportCrud) SetWorkloadRole(ctx context.Context, state *CrudSetWorkloadRole) error {
 	panic("not implemented")
 }
 
@@ -3319,6 +3442,16 @@ func AdaptCrud(t Crud) *rpc.Interface {
 			Params:        []string{"app", "host"},
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.SetHost(ctx, &CrudSetHost{Call: call})
+			},
+		},
+		{
+			Name:          "setWorkloadRole",
+			InterfaceName: "Crud",
+			Index:         0,
+			Public:        false,
+			Params:        []string{"app", "role"},
+			Handler: func(ctx context.Context, call rpc.Call) error {
+				return t.SetWorkloadRole(ctx, &CrudSetWorkloadRole{Call: call})
 			},
 		},
 		{
@@ -3515,6 +3648,17 @@ func (v *CrudClientGetConfigurationResults) VersionShortId() string {
 	return *v.data.VersionShortId
 }
 
+func (v *CrudClientGetConfigurationResults) HasWorkloadRole() bool {
+	return v.data.WorkloadRole != nil
+}
+
+func (v *CrudClientGetConfigurationResults) WorkloadRole() string {
+	if v.data.WorkloadRole == nil {
+		return ""
+	}
+	return *v.data.WorkloadRole
+}
+
 func (v CrudClient) GetConfiguration(ctx context.Context, app string) (*CrudClientGetConfigurationResults, error) {
 	args := CrudGetConfigurationArgs{}
 	args.data.App = &app
@@ -3547,6 +3691,26 @@ func (v CrudClient) SetHost(ctx context.Context, app string, host string) (*Crud
 	}
 
 	return &CrudClientSetHostResults{client: v.Client, data: ret}, nil
+}
+
+type CrudClientSetWorkloadRoleResults struct {
+	client rpc.Client
+	data   crudSetWorkloadRoleResultsData
+}
+
+func (v CrudClient) SetWorkloadRole(ctx context.Context, app string, role string) (*CrudClientSetWorkloadRoleResults, error) {
+	args := CrudSetWorkloadRoleArgs{}
+	args.data.App = &app
+	args.data.Role = &role
+
+	var ret crudSetWorkloadRoleResultsData
+
+	err := v.Call(ctx, "setWorkloadRole", &args, &ret)
+	if err != nil {
+		return nil, err
+	}
+
+	return &CrudClientSetWorkloadRoleResults{client: v.Client, data: ret}, nil
 }
 
 type CrudClientListResults struct {

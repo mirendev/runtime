@@ -270,6 +270,16 @@ miren deploy --analyze
 			Body: "miren app restart -s web",
 		}),
 	))
+	d.Dispatch("app set-workload-role", Infer("app set-workload-role", "Set the API role for an app's sandbox identity tokens", AppSetWorkloadRole,
+		WithExample(mflags.Example{
+			Name: "Let an app's workloads read and deploy their own app",
+			Body: "miren app set-workload-role -a myapp app-deployer",
+		}),
+		WithExample(mflags.Example{
+			Name: "Grant a cluster-wide read role (operator only)",
+			Body: "miren app set-workload-role -a tooling cluster-readonly",
+		}),
+	))
 	d.Dispatch("app delete", Infer("app delete", "Delete an application and all its resources", AppDelete,
 		WithExample(mflags.Example{
 			Name: "Delete an app (with confirmation prompt)",

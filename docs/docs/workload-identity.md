@@ -19,6 +19,10 @@ These are two sides of the same OIDC machinery, pointed in opposite directions:
 Both rely on the cluster's OIDC infrastructure, but the token flows in different directions.
 :::
 
+:::tip[Calling the Miren API from a sandbox]
+The same token can authenticate to your cluster's own API — deploy, read logs, open a shell — scoped by a role you choose per app. See [In-Cluster API Access](/in-cluster-api).
+:::
+
 ## How It Works
 
 1. **Your cluster is an OIDC issuer.** It owns a signing key and publishes a standard discovery document at `/.well-known/openid-configuration` and its public keys (JWKS) at `/.well-known/miren/jwks`.
