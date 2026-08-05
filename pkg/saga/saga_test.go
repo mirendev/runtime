@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -102,56 +101,6 @@ func UndoMultiply(ctx context.Context, in MultiplyIn, out MultiplyOut) error {
 	return nil
 }
 
-// In-memory storage for testing
-type memoryStorage struct {
-	mu         sync.Mutex
-	executions map[string]*Execution
-}
-
-func newMemoryStorage() *memoryStorage {
-	return &memoryStorage{
-		executions: make(map[string]*Execution),
-	}
-}
-
-func (m *memoryStorage) Save(ctx context.Context, exec *Execution) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	// Deep copy to simulate real storage
-	copied := *exec
-	copied.ExecutedActions = make(map[string]*ActionResult)
-	for k, v := range exec.ExecutedActions {
-		copiedResult := *v
-		copied.ExecutedActions[k] = &copiedResult
-	}
-	copied.ExecutionOrder = make([]string, len(exec.ExecutionOrder))
-	copy(copied.ExecutionOrder, exec.ExecutionOrder)
-	m.executions[exec.ID] = &copied
-	return nil
-}
-
-func (m *memoryStorage) Get(ctx context.Context, id string) (*Execution, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	exec, ok := m.executions[id]
-	if !ok {
-		return nil, fmt.Errorf("%w: %s", ErrExecutionNotFound, id)
-	}
-	return exec, nil
-}
-
-func (m *memoryStorage) ListIncomplete(ctx context.Context) ([]*Execution, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	var result []*Execution
-	for _, exec := range m.executions {
-		if exec.Status == StatusPending || exec.Status == StatusRunning || exec.Status == StatusUndoing {
-			result = append(result, exec)
-		}
-	}
-	return result, nil
-}
-
 func TestBuilder_SingleAction(t *testing.T) {
 	registry := NewRegistry()
 
@@ -225,7 +174,7 @@ func TestExecutor_Success(t *testing.T) {
 		RegisterTo(registry)
 	require.NoError(t, err)
 
-	storage := newMemoryStorage()
+	storage := NewMemoryStorage()
 	executor := NewExecutor(storage, WithRegistry(registry))
 
 	ctx := context.Background()
@@ -266,7 +215,7 @@ func TestExecutor_FailureAndUndo(t *testing.T) {
 		RegisterTo(registry)
 	require.NoError(t, err)
 
-	storage := newMemoryStorage()
+	storage := NewMemoryStorage()
 	executor := NewExecutor(storage, WithRegistry(registry))
 
 	ctx := context.Background()
@@ -308,7 +257,7 @@ func TestExecutor_Recovery(t *testing.T) {
 		RegisterTo(registry)
 	require.NoError(t, err)
 
-	storage := newMemoryStorage()
+	storage := NewMemoryStorage()
 
 	// Simulate a crashed execution
 	// Note: Output uses uppercase "Sum" because Go's json.Marshal uses field names as-is
@@ -356,7 +305,7 @@ func TestExecutor_ContextCancellation(t *testing.T) {
 		RegisterTo(registry)
 	require.NoError(t, err)
 
-	storage := newMemoryStorage()
+	storage := NewMemoryStorage()
 	executor := NewExecutor(storage, WithRegistry(registry))
 
 	// Create an already-cancelled context
@@ -525,7 +474,7 @@ func TestExecutor_MissingRequiredInput(t *testing.T) {
 		RegisterTo(registry)
 	require.NoError(t, err)
 
-	storage := newMemoryStorage()
+	storage := NewMemoryStorage()
 	executor := NewExecutor(storage, WithRegistry(registry))
 
 	ctx := context.Background()
@@ -547,7 +496,7 @@ func TestExecutor_OptionalInput(t *testing.T) {
 		RegisterTo(registry)
 	require.NoError(t, err)
 
-	storage := newMemoryStorage()
+	storage := NewMemoryStorage()
 	executor := NewExecutor(storage, WithRegistry(registry))
 
 	ctx := context.Background()
@@ -570,9 +519,9 @@ func TestExecutor_OptionalInput(t *testing.T) {
 	assert.Equal(t, 5, output.Result)
 }
 
-// failingStorage wraps memoryStorage but fails Save after N successful calls.
+// failingStorage wraps MemoryStorage but fails Save after N successful calls.
 type failingStorage struct {
-	*memoryStorage
+	*MemoryStorage
 	failAfter int
 	saveCount int
 	mu        sync.Mutex
@@ -580,7 +529,7 @@ type failingStorage struct {
 
 func newFailingStorage(failAfter int) *failingStorage {
 	return &failingStorage{
-		memoryStorage: newMemoryStorage(),
+		MemoryStorage: NewMemoryStorage(),
 		failAfter:     failAfter,
 	}
 }
@@ -594,7 +543,7 @@ func (f *failingStorage) Save(ctx context.Context, exec *Execution) error {
 	if count > f.failAfter {
 		return errors.New("simulated storage failure")
 	}
-	return f.memoryStorage.Save(ctx, exec)
+	return f.MemoryStorage.Save(ctx, exec)
 }
 
 func TestExecutor_StorageFailureTriggersUndo(t *testing.T) {
@@ -653,7 +602,7 @@ func TestExecutor_FailedUndoNotMarkedAsUndone(t *testing.T) {
 		RegisterTo(registry)
 	require.NoError(t, err)
 
-	storage := newMemoryStorage()
+	storage := NewMemoryStorage()
 	executor := NewExecutor(storage, WithRegistry(registry))
 
 	err = executor.Start("undo-fail-test").
@@ -701,7 +650,7 @@ func TestExecutor_RecoveryAfterActionFailure(t *testing.T) {
 		RegisterTo(registry)
 	require.NoError(t, err)
 
-	storage := newMemoryStorage()
+	storage := NewMemoryStorage()
 
 	// Simulate a crashed execution where multiply failed but undo never started.
 	// This is the state we'd have if we crashed after recording the failure
@@ -786,7 +735,7 @@ func TestExecutor_SerializationFailurePlusUndoFailure(t *testing.T) {
 		RegisterTo(registry)
 	require.NoError(t, err)
 
-	storage := newMemoryStorage()
+	storage := NewMemoryStorage()
 	executor := NewExecutor(storage, WithRegistry(registry))
 
 	err = executor.Start("unserializable-test").
@@ -868,7 +817,7 @@ func TestExecutor_EdgeDependency(t *testing.T) {
 		RegisterTo(registry)
 	require.NoError(t, err)
 
-	storage := newMemoryStorage()
+	storage := NewMemoryStorage()
 	executor := NewExecutor(storage, WithRegistry(registry))
 
 	err = executor.Start("edge-exec").
