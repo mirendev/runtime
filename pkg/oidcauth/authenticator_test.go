@@ -330,6 +330,7 @@ func TestOIDCAuthenticator_RepositoryClaimBinding(t *testing.T) {
 			}
 			if identity == nil {
 				t.Fatal("expected identity, got nil")
+				return
 			}
 			if identity.Subject != subject {
 				t.Errorf("subject = %q, want %q", identity.Subject, subject)
