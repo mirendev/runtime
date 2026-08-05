@@ -11,6 +11,8 @@ import (
 
 	toml "github.com/pelletier/go-toml/v2"
 	tomlast "github.com/pelletier/go-toml/v2/unstable"
+
+	"miren.dev/runtime/pkg/oncalendar"
 )
 
 var aliasWordRegexp = regexp.MustCompile(`^[a-z][a-z0-9_-]*$`)
@@ -100,17 +102,123 @@ type AddonConfig struct {
 	Version string `toml:"version"`
 }
 
+// Task trigger values. A task's trigger says what starts it; the default is
+// TriggerManual, meaning it runs only when someone asks.
+const (
+	TriggerManual   = "manual"
+	TriggerDeploy   = "deploy"
+	TriggerSchedule = "schedule"
+)
+
+// DefaultTaskMaxConcurrent caps simultaneous runs of a task. Runs consume
+// cluster capacity on request, so the default is the conservative one.
+const DefaultTaskMaxConcurrent = 1
+
+// TaskConfig represents a command the app knows how to run: what to run, what
+// starts it, and how it ends.
+//
+// A task deliberately has no ports, concurrency, image, or disks. Those are
+// absent from the schema rather than present-and-rejected, so the grammar never
+// admits a configuration the validator has to refuse. Per-task image and disks
+// are v1 cuts tracked as open questions in RFD-97, not oversights: a per-task
+// image raises version-pinning questions RFD-91 is still settling, and a
+// per-task disk collides with the single-writer lease model.
+type TaskConfig struct {
+	// Command is the default command. An invoke can override it, which is what
+	// makes a manually-triggered task useful for ad-hoc work.
+	Command string `json:"command" toml:"command"`
+
+	// Trigger is one of "manual", "deploy", or "schedule". Empty means manual.
+	Trigger string `json:"trigger,omitempty" toml:"trigger,omitempty"`
+
+	// Every is a Go duration and is pure sugar over Schedule: it is desugared
+	// to a day-aligned calendar expression at parse time, so only the calendar
+	// form is ever stored. Mutually exclusive with Schedule.
+	Every string `json:"every,omitempty" toml:"every,omitempty"`
+
+	// Schedule is a systemd OnCalendar expression. Mutually exclusive with Every.
+	Schedule string `json:"schedule,omitempty" toml:"schedule,omitempty"`
+
+	// Timeout bounds the run, after which the sandbox is killed and the run is
+	// marked TIMED_OUT. Empty means the platform default.
+	Timeout string `json:"timeout,omitempty" toml:"timeout,omitempty"`
+
+	// Retries applies to the deploy and schedule triggers, where nobody is
+	// watching to retry by hand. A manually-triggered run that fails just
+	// fails, and the caller decides.
+	Retries int `json:"retries,omitempty" toml:"retries,omitempty"`
+
+	// MaxConcurrent caps simultaneous runs. Zero means DefaultTaskMaxConcurrent.
+	MaxConcurrent int `json:"max_concurrent,omitempty" toml:"max_concurrent,omitempty"`
+
+	EnvVars []AppEnvVar `json:"env,omitempty" toml:"env,omitempty"`
+}
+
+// ResolvedSchedule returns the calendar expression this task fires on, with
+// Every already desugared. It returns "" for a task that isn't scheduled.
+//
+// Callers can rely on Validate having rejected anything unparseable, so the
+// only error here is a programming one.
+func (tc *TaskConfig) ResolvedSchedule() (string, error) {
+	if tc.Schedule != "" {
+		return tc.Schedule, nil
+	}
+	if tc.Every == "" {
+		return "", nil
+	}
+	d, err := time.ParseDuration(tc.Every)
+	if err != nil {
+		return "", fmt.Errorf("invalid every %q: %w", tc.Every, err)
+	}
+	return oncalendar.DesugarEvery(d)
+}
+
+// ResolvedTrigger returns the task's trigger, defaulting to manual.
+func (tc *TaskConfig) ResolvedTrigger() string {
+	if tc.Trigger == "" {
+		return TriggerManual
+	}
+	return tc.Trigger
+}
+
+// ResolvedMaxConcurrent returns the task's concurrency cap, defaulting to 1.
+func (tc *TaskConfig) ResolvedMaxConcurrent() int {
+	if tc.MaxConcurrent <= 0 {
+		return DefaultTaskMaxConcurrent
+	}
+	return tc.MaxConcurrent
+}
+
 type AppConfig struct {
 	Name         string                    `toml:"name"`
 	PostImport   string                    `toml:"post_import,omitempty"`
 	EnvVars      []AppEnvVar               `toml:"env,omitempty"`
 	Concurrency  *int                      `toml:"concurrency,omitempty"`
 	Services     map[string]*ServiceConfig `toml:"services,omitempty"`
+	Tasks        map[string]*TaskConfig    `toml:"tasks,omitempty"`
 	Build        *BuildConfig              `toml:"build,omitempty"`
 	Include      []string                  `toml:"include,omitempty"`
 	Addons       map[string]*AddonConfig   `toml:"addons,omitempty"`
 	Aliases      map[string]string         `toml:"aliases,omitempty"`
 	WorkloadRole string                    `toml:"workload_role,omitempty"`
+
+	// Web says whether the app has a long-running web process. It is a pointer
+	// because `false` is the zero value and "unset" has to stay distinguishable
+	// from "explicitly false": unset preserves the historical behavior of
+	// synthesizing a web service from the image entrypoint, while `web = false`
+	// is how a task-only app opts out.
+	Web *bool `toml:"web,omitempty"`
+}
+
+// WantsWeb reports whether a web service may be synthesized for this app, and
+// whether the app said so explicitly. An app that has not spoken gets the
+// historical default; changing that would silently drain the pool of every
+// deployed app that relies on it.
+func (ac *AppConfig) WantsWeb() (want bool, explicit bool) {
+	if ac == nil || ac.Web == nil {
+		return true, false
+	}
+	return *ac.Web, true
 }
 
 const AppConfigPath = ".miren/app.toml"
@@ -450,6 +558,10 @@ func (ac *AppConfig) Validate() error {
 		}
 	}
 
+	if err := ac.validateTasks(); err != nil {
+		return err
+	}
+
 	for name, target := range ac.Aliases {
 		words := strings.Fields(name)
 		if len(words) == 0 {
@@ -470,6 +582,140 @@ func (ac *AppConfig) Validate() error {
 			return &ValidationError{
 				KeyPath: "aliases." + name,
 				Message: fmt.Sprintf("alias %q: command must not be empty", name),
+			}
+		}
+	}
+
+	return nil
+}
+
+// validateTasks checks every [tasks.<name>] block.
+func (ac *AppConfig) validateTasks() error {
+	for taskName, task := range ac.Tasks {
+		if task == nil {
+			continue
+		}
+
+		prefix := "tasks." + taskName
+
+		if task.Command == "" {
+			return &ValidationError{
+				KeyPath: prefix + ".command",
+				Message: fmt.Sprintf("task %s: command is required", taskName),
+			}
+		}
+
+		trigger := task.ResolvedTrigger()
+		switch trigger {
+		case TriggerManual, TriggerDeploy, TriggerSchedule:
+		default:
+			return &ValidationError{
+				KeyPath: prefix + ".trigger",
+				Message: fmt.Sprintf("task %s: invalid trigger %q, must be %q, %q, or %q",
+					taskName, task.Trigger, TriggerManual, TriggerDeploy, TriggerSchedule),
+			}
+		}
+
+		// every and schedule are two spellings of one mechanism, so setting
+		// both is ambiguous rather than additive.
+		if task.Every != "" && task.Schedule != "" {
+			return &ValidationError{
+				KeyPath: prefix + ".every",
+				Message: fmt.Sprintf("task %s: cannot set both 'every' and 'schedule'; they are two spellings of the same thing", taskName),
+			}
+		}
+
+		if trigger == TriggerSchedule {
+			if task.Every == "" && task.Schedule == "" {
+				return &ValidationError{
+					KeyPath: prefix + ".trigger",
+					Message: fmt.Sprintf("task %s: trigger = %q requires either 'every' (e.g. \"6h\") or 'schedule' (e.g. \"Mon *-*-* 09:00:00\")", taskName, TriggerSchedule),
+				}
+			}
+		} else if task.Every != "" || task.Schedule != "" {
+			field, set := "every", task.Every
+			if task.Schedule != "" {
+				field, set = "schedule", task.Schedule
+			}
+			return &ValidationError{
+				KeyPath: prefix + "." + field,
+				Message: fmt.Sprintf("task %s: %s = %q has no effect without trigger = %q", taskName, field, set, TriggerSchedule),
+			}
+		}
+
+		if task.Every != "" {
+			d, err := time.ParseDuration(task.Every)
+			if err != nil {
+				return &ValidationError{
+					KeyPath: prefix + ".every",
+					Message: fmt.Sprintf("task %s: invalid every %q: %v", taskName, task.Every, err),
+				}
+			}
+			// Desugaring is where the day-tiling rule is enforced, so failures
+			// surface here rather than at schedule time.
+			if _, err := oncalendar.DesugarEvery(d); err != nil {
+				return &ValidationError{
+					KeyPath: prefix + ".every",
+					Message: fmt.Sprintf("task %s: %v", taskName, err),
+				}
+			}
+		}
+
+		if task.Schedule != "" {
+			if _, err := oncalendar.Parse(task.Schedule); err != nil {
+				return &ValidationError{
+					KeyPath: prefix + ".schedule",
+					Message: fmt.Sprintf("task %s: %v", taskName, err),
+				}
+			}
+		}
+
+		if task.Timeout != "" {
+			d, err := time.ParseDuration(task.Timeout)
+			if err != nil {
+				return &ValidationError{
+					KeyPath: prefix + ".timeout",
+					Message: fmt.Sprintf("task %s: invalid timeout %q: %v", taskName, task.Timeout, err),
+				}
+			}
+			// Zero is the documented way to say "unbounded"; negative is a typo.
+			if d < 0 {
+				return &ValidationError{
+					KeyPath: prefix + ".timeout",
+					Message: fmt.Sprintf("task %s: timeout must not be negative (use 0 for unbounded)", taskName),
+				}
+			}
+		}
+
+		if task.Retries < 0 {
+			return &ValidationError{
+				KeyPath: prefix + ".retries",
+				Message: fmt.Sprintf("task %s: retries must be non-negative", taskName),
+			}
+		}
+
+		// Retries exist for triggers nobody is watching. A manual run that
+		// fails just fails, and the caller decides what to do about it.
+		if task.Retries > 0 && trigger == TriggerManual {
+			return &ValidationError{
+				KeyPath: prefix + ".retries",
+				Message: fmt.Sprintf("task %s: retries has no effect on a manually-triggered task; the caller decides whether to retry", taskName),
+			}
+		}
+
+		if task.MaxConcurrent < 0 {
+			return &ValidationError{
+				KeyPath: prefix + ".max_concurrent",
+				Message: fmt.Sprintf("task %s: max_concurrent must be at least 1", taskName),
+			}
+		}
+
+		for i, ev := range task.EnvVars {
+			if ev.Key == "" {
+				return &ValidationError{
+					KeyPath: prefix + ".env",
+					Message: fmt.Sprintf("task %s: env[%d] key is required", taskName, i),
+				}
 			}
 		}
 	}
