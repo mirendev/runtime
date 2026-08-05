@@ -12,6 +12,7 @@ func DefaultConfig() *Config {
 		Ingress:         DefaultIngressConfig(),
 		Labs:            []string{},
 		Mode:            new("standalone"),
+		Saga:            DefaultSagaConfig(),
 		Server:          DefaultServerConfig(),
 		TLS:             DefaultTLSConfig(),
 		Victorialogs:    DefaultVictoriaLogsConfig(),
@@ -65,6 +66,13 @@ func DefaultIngressConfig() IngressConfig {
 	return IngressConfig{
 		Address: new(""),
 		Mode:    new("tls-autoprovision"),
+	}
+}
+
+// DefaultSagaConfig returns default SagaConfig
+func DefaultSagaConfig() SagaConfig {
+	return SagaConfig{
+		RetentionPeriod: new("7d"),
 	}
 }
 

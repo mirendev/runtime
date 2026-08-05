@@ -238,6 +238,10 @@ func applyCLIFlags(cfg *Config, flags *CLIFlags) {
 		cfg.Ingress.Mode = flags.IngressConfigMode
 	}
 
+	if flags.SagaConfigRetentionPeriod != nil && *flags.SagaConfigRetentionPeriod != "" {
+		cfg.Saga.RetentionPeriod = flags.SagaConfigRetentionPeriod
+	}
+
 	if flags.ServerConfigAddress != nil && *flags.ServerConfigAddress != "" {
 		cfg.Server.Address = flags.ServerConfigAddress
 	}
