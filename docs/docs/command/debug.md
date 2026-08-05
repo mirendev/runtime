@@ -23,6 +23,7 @@ miren debug [flags]
 - [`miren debug ctr`](/command/debug-ctr) — Run ctr with miren defaults
 - [`miren debug disk`](/command/debug-disk) — Disk entity debug commands
 - [`miren debug entity`](/command/debug-entity) — Entity store debug commands
+- [`miren debug etcdctl`](/command/debug-etcdctl) — Run etcdctl against Miren's embedded etcd
 - [`miren debug netdb`](/command/debug-netdb) — Network database debug commands
 - [`miren debug rbac`](/command/debug-rbac) — Fetch and display RBAC rules from miren.cloud
 - [`miren debug reindex`](/command/debug-reindex) — Rebuild all entity indexes from scratch

@@ -307,6 +307,7 @@ These commands are intended for advanced debugging and troubleshooting. They may
 | [`miren debug entity patch`](/command/debug-entity-patch) | Patch an existing entity |
 | [`miren debug entity put`](/command/debug-entity-put) | Put an entity |
 | [`miren debug entity replace`](/command/debug-entity-replace) | Replace an existing entity |
+| [`miren debug etcdctl`](/command/debug-etcdctl) | Run etcdctl against Miren's embedded etcd |
 | [`miren debug netdb`](/command/debug-netdb) | Network database debug commands |
 | [`miren debug netdb gc`](/command/debug-netdb-gc) | Find and release orphaned IP leases |
 | [`miren debug netdb list`](/command/debug-netdb-list) | List all IP leases from netdb |
