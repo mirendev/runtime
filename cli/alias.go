@@ -21,13 +21,11 @@ func expandAlias(d *mflags.Dispatcher, args []string) ([]string, error) {
 
 	ac, err := appconfig.LoadAppConfig()
 	if err != nil {
-		// errors.As, not a type assertion: a wrapped rich error would
+		// errors.AsType, not a type assertion: a wrapped rich error would
 		// otherwise silently degrade to the plain path below.
-		var se ui.SeverityTerminalError
-		var te ui.TerminalError
-		if errors.As(err, &se) {
+		if se, ok := errors.AsType[ui.SeverityTerminalError](err); ok {
 			se.WriteWithSeverity(os.Stderr, ui.SeverityWarning)
-		} else if errors.As(err, &te) {
+		} else if te, ok := errors.AsType[ui.TerminalError](err); ok {
 			fmt.Fprint(os.Stderr, "warning: ")
 			te.WriteForTerminal(os.Stderr)
 		} else {

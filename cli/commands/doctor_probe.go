@@ -83,8 +83,7 @@ func probeTCP(addr string) probe {
 		return probe{Outcome: probeRefused, Detail: "refused"}
 	}
 
-	var netErr net.Error
-	if errors.As(err, &netErr) && netErr.Timeout() {
+	if netErr, ok := errors.AsType[net.Error](err); ok && netErr.Timeout() {
 		return probe{Outcome: probeSilent, Detail: "no response"}
 	}
 
@@ -136,9 +135,9 @@ func probeQUIC(addr string) probe {
 		// Typed errors rather than a substring match on the message. quic-go
 		// reports both a never-started and a stalled handshake as timeouts, and
 		// either way the observable fact is the same: nothing answered.
-		var idle *quic.IdleTimeoutError
-		var handshake *quic.HandshakeTimeoutError
-		if errors.As(err, &idle) || errors.As(err, &handshake) || errors.Is(err, context.DeadlineExceeded) {
+		_, idleTimeout := errors.AsType[*quic.IdleTimeoutError](err)
+		_, handshakeTimeout := errors.AsType[*quic.HandshakeTimeoutError](err)
+		if idleTimeout || handshakeTimeout || errors.Is(err, context.DeadlineExceeded) {
 			return probe{Outcome: probeSilent, Detail: "no response"}
 		}
 

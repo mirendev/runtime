@@ -881,8 +881,7 @@ func (h *Server) proxyToLease(w http.ResponseWriter, req *http.Request, targetUR
 				h.Log.Warn("proxy connection error to sandbox (will retry)", "error", err, "url", targetURL, "app", appName)
 				return
 			}
-			var netErr net.Error
-			if errors.As(err, &netErr) && netErr.Timeout() {
+			if netErr, ok := errors.AsType[net.Error](err); ok && netErr.Timeout() {
 				h.Log.Warn("request timeout", "url", targetURL, "app", appName)
 				http.Error(rw, timeoutMessage, http.StatusServiceUnavailable)
 				return
@@ -976,11 +975,9 @@ func isProxyConnectionError(err error) bool {
 	}
 
 	// Check for net.OpError which wraps most connection failures
-	var opErr *net.OpError
-	if errors.As(err, &opErr) {
+	if opErr, ok := errors.AsType[*net.OpError](err); ok {
 		// Check for syscall errors (connection refused, no route to host, etc.)
-		var syscallErr *os.SyscallError
-		if errors.As(opErr.Err, &syscallErr) {
+		if syscallErr, ok := errors.AsType[*os.SyscallError](opErr.Err); ok {
 			if errno, ok := syscallErr.Err.(syscall.Errno); ok {
 				//exhaustive:ignore syscall.Errno has ~130 members; default handles the rest
 				switch errno {

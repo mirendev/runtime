@@ -330,6 +330,7 @@ func TestOIDCAuthenticator_RepositoryClaimBinding(t *testing.T) {
 			}
 			if identity == nil {
 				t.Fatal("expected identity, got nil")
+				return
 			}
 			if identity.Subject != subject {
 				t.Errorf("subject = %q, want %q", identity.Subject, subject)
@@ -394,8 +395,8 @@ func TestOIDCAuthenticator_LegacySubjectPatternRejectsImmutableSubject(t *testin
 
 	// The rejection has to explain itself: the received subject and repository
 	// are what turn this from a log-spelunking session into an obvious fix.
-	var mismatch *BindingMismatchError
-	if !errors.As(err, &mismatch) {
+	mismatch, ok := errors.AsType[*BindingMismatchError](err)
+	if !ok {
 		t.Fatalf("expected a BindingMismatchError, got %v", err)
 	}
 	if mismatch.Subject != subject {
@@ -462,8 +463,8 @@ func TestOIDCAuthenticator_SubjectMismatch(t *testing.T) {
 		t.Error("expected nil identity when subject doesn't match binding pattern")
 	}
 
-	var mismatch *BindingMismatchError
-	if !errors.As(err, &mismatch) {
+	mismatch, ok := errors.AsType[*BindingMismatchError](err)
+	if !ok {
 		t.Fatalf("expected a BindingMismatchError, got %v", err)
 	}
 	if mismatch.Subject != "repo:acme/app:ref:refs/heads/main" {
@@ -526,8 +527,8 @@ func TestOIDCAuthenticator_ClaimConditionMismatch(t *testing.T) {
 		t.Error("expected nil identity when claim condition doesn't match")
 	}
 
-	var mismatch *BindingMismatchError
-	if !errors.As(err, &mismatch) {
+	_, ok := errors.AsType[*BindingMismatchError](err)
+	if !ok {
 		t.Fatalf("expected a BindingMismatchError, got %v", err)
 	}
 }

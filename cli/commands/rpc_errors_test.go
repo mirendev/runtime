@@ -79,8 +79,8 @@ func TestDiagnoseResolveDistinguishesKinds(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			wrapped := c.wrapRPCError(tt.err)
 
-			var d *ui.Diagnostic
-			if !errors.As(wrapped, &d) {
+			d, ok := errors.AsType[*ui.Diagnostic](wrapped)
+			if !ok {
 				t.Fatalf("wrapRPCError returned %T, want *ui.Diagnostic", wrapped)
 			}
 			if d.Summary != tt.wantSummary {
@@ -98,8 +98,8 @@ func TestDiagnoseResolveDistinguishesKinds(t *testing.T) {
 
 			// Every diagnosis must leave the structured error reachable, since
 			// doctor re-classifies failures handed to it.
-			var re *rpc.ResolveError
-			if !errors.As(wrapped, &re) {
+			_, resolveOK := errors.AsType[*rpc.ResolveError](wrapped)
+			if !resolveOK {
 				t.Error("the underlying rpc.ResolveError is no longer reachable")
 			}
 		})
@@ -123,8 +123,8 @@ func TestDiagnoseResolveFallsBackToCapabilityName(t *testing.T) {
 	c := &Context{ClusterName: "local"}
 	wrapped := c.wrapRPCError(rpc.NewResolveLookupError("entities", "localhost:8443", "unknown object: entities"))
 
-	var d *ui.Diagnostic
-	if !errors.As(wrapped, &d) {
+	d, ok := errors.AsType[*ui.Diagnostic](wrapped)
+	if !ok {
 		t.Fatalf("wrapRPCError returned %T, want *ui.Diagnostic", wrapped)
 	}
 	if !strings.Contains(d.Summary, `"entities"`) {
@@ -137,8 +137,8 @@ func TestDiagnoseResolveHandlesUnnamedCluster(t *testing.T) {
 	c := &Context{CommandName: "route list"}
 	wrapped := c.wrapRPCError(rpc.NewResolveUnreachableError("entities", "localhost:8443", time.Second, errors.New("timeout")))
 
-	var d *ui.Diagnostic
-	if !errors.As(wrapped, &d) {
+	d, ok := errors.AsType[*ui.Diagnostic](wrapped)
+	if !ok {
 		t.Fatalf("wrapRPCError returned %T, want *ui.Diagnostic", wrapped)
 	}
 	if strings.Contains(d.Summary, `cluster ""`) {
@@ -188,8 +188,8 @@ func TestRPCClientRefusesUnknownCluster(t *testing.T) {
 		t.Error("no client should be returned")
 	}
 
-	var d *ui.Diagnostic
-	if !errors.As(err, &d) {
+	d, ok := errors.AsType[*ui.Diagnostic](err)
+	if !ok {
 		t.Fatalf("got %T, want *ui.Diagnostic", err)
 	}
 	if !strings.Contains(d.Summary, "typo") {
@@ -216,8 +216,8 @@ func TestRPCClientRefusesBrokenActiveCluster(t *testing.T) {
 		t.Fatal("expected an error for an unloadable active cluster")
 	}
 
-	var d *ui.Diagnostic
-	if !errors.As(err, &d) {
+	d, ok := errors.AsType[*ui.Diagnostic](err)
+	if !ok {
 		t.Fatalf("got %T, want *ui.Diagnostic", err)
 	}
 	if !strings.Contains(d.Summary, "active cluster") {
@@ -230,8 +230,8 @@ func TestUnusableClusterErrorShowsItsCause(t *testing.T) {
 	c := &Context{ClusterName: "prod"}
 	err := c.unusableClusterError(errors.New("tls: failed to find any PEM data"))
 
-	var d *ui.Diagnostic
-	if !errors.As(err, &d) {
+	d, ok := errors.AsType[*ui.Diagnostic](err)
+	if !ok {
 		t.Fatalf("got %T, want *ui.Diagnostic", err)
 	}
 	if !d.ShowCause {
