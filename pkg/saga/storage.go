@@ -187,6 +187,117 @@ func (s *EntityStorage) ListIncomplete(ctx context.Context) ([]*Execution, error
 	return executions, nil
 }
 
+// terminalFetchBatch is how many entities ListTerminal materializes at a time.
+// Every entity carries its action-output blobs, so a store holding a large
+// backlog must not be pulled into memory all at once just to read timestamps
+// off it.
+//
+// This is not redundant with the batching GetEntities already does internally.
+// That one chunks the etcd transaction ops and then still allocates and returns
+// the full slice, so it bounds request size, not memory. This outer loop is
+// what keeps peak memory flat.
+const terminalFetchBatch = 200
+
+// ListTerminal summarizes every execution in a terminal state.
+//
+// The store's index lookups are equality-only, so there is no range query over
+// a timestamp that would let us ask for expired executions directly. We list
+// the terminal set (IDs only, which stays cheap) and read each one's finish
+// time, fetching in batches and keeping only the summary.
+func (s *EntityStorage) ListTerminal(ctx context.Context) ([]TerminalExecution, error) {
+	var ids []entity.Id
+	seen := make(map[entity.Id]struct{})
+
+	for _, status := range []entity.Id{
+		saga_v1alpha.SagaStatusCompletedId,
+		saga_v1alpha.SagaStatusFailedId,
+	} {
+		statusIds, err := s.store.ListIndex(ctx, entity.Ref(saga_v1alpha.SagaStatusId, status))
+		if err != nil {
+			return nil, fmt.Errorf("listing terminal sagas: %w", err)
+		}
+		// Deduplicate for the same reason recovery does: an execution can
+		// transiently appear under more than one status index.
+		for _, id := range statusIds {
+			if _, dup := seen[id]; dup {
+				continue
+			}
+			seen[id] = struct{}{}
+			ids = append(ids, id)
+		}
+	}
+
+	var result []TerminalExecution
+	for start := 0; start < len(ids); start += terminalFetchBatch {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+
+		end := min(start+terminalFetchBatch, len(ids))
+		entities, err := s.store.GetEntities(ctx, ids[start:end])
+		if err != nil {
+			return nil, fmt.Errorf("fetching terminal sagas: %w", err)
+		}
+
+		for _, ent := range entities {
+			if ent == nil {
+				// Deleted between the listing and the fetch. Nothing to report.
+				continue
+			}
+			summary, ok := terminalSummary(ent)
+			if !ok {
+				s.log.Warn("terminal saga has no usable timestamp, skipping", "id", ent.Id())
+				continue
+			}
+			result = append(result, summary)
+		}
+	}
+
+	return result, nil
+}
+
+// Delete removes a saga execution entity.
+func (s *EntityStorage) Delete(ctx context.Context, id string) error {
+	if err := s.store.DeleteEntity(ctx, entity.Id(id)); err != nil {
+		if errors.Is(err, entity.ErrEntityNotFound) || errors.Is(err, cond.ErrNotFound{}) {
+			return nil
+		}
+		return fmt.Errorf("deleting saga entity: %w", err)
+	}
+	return nil
+}
+
+// terminalSummary reduces a saga entity to what retention needs, reporting
+// false when the entity carries no usable timestamp at all.
+//
+// The finish time prefers the saga's own updated_at but falls back to the
+// entity store's system timestamp, which is what makes retention safe across an
+// upgrade: every execution written before saga timestamps were persisted reads
+// back with a zero updated_at, and treating that as infinitely old would delete
+// a saga a runner on the old binary finished seconds ago.
+func terminalSummary(ent *entity.Entity) (TerminalExecution, bool) {
+	var s saga_v1alpha.Saga
+	s.Decode(ent)
+
+	summary := TerminalExecution{
+		ID:       string(ent.Id()),
+		ParentID: string(s.ParentExecutionId),
+	}
+
+	switch {
+	case !s.UpdatedAt.IsZero():
+		summary.FinishedAt = s.UpdatedAt
+	case !ent.GetUpdatedAt().IsZero():
+		summary.FinishedAt = ent.GetUpdatedAt()
+	case !ent.GetCreatedAt().IsZero():
+		summary.FinishedAt = ent.GetCreatedAt()
+	default:
+		return TerminalExecution{}, false
+	}
+
+	return summary, true
+}
+
 // statusToEntity converts saga.Status to the entity enum value.
 func statusToEntity(s Status) saga_v1alpha.SagaStatus {
 	switch s {

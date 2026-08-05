@@ -47,6 +47,7 @@ import (
 	ephemeralctrl "miren.dev/runtime/controllers/ephemeral"
 	indexgcctrl "miren.dev/runtime/controllers/indexgc"
 	nodehealthctrl "miren.dev/runtime/controllers/nodehealth"
+	sagagcctrl "miren.dev/runtime/controllers/sagagc"
 	"miren.dev/runtime/controllers/sandboxpool"
 	schedulerctrl "miren.dev/runtime/controllers/scheduler"
 	schemareindexctrl "miren.dev/runtime/controllers/schemareindex"
@@ -139,6 +140,13 @@ type CoordinatorConfig struct {
 	// retention GC. Values <= 0 fall back to the controller defaults.
 	AppVersionRetentionCount  int
 	AppVersionRetentionPeriod time.Duration
+
+	// SagaRetentionPeriod is how long a finished saga execution is kept.
+	// Unlike the app-version knobs above, zero is meaningful here: it keeps
+	// executions indefinitely, which is the escape hatch for an operator who
+	// wants saga history frozen during an investigation. A negative value
+	// falls back to the controller default.
+	SagaRetentionPeriod time.Duration
 
 	// WorkloadIssuer signs workload identity tokens for sandbox containers
 	WorkloadIssuer *workloadidentity.Issuer
@@ -355,6 +363,7 @@ type Coordinator struct {
 	ephemeralGC   *ephemeralctrl.GCController
 	versionGC     *versionctrl.GCController
 	indexGC       *indexgcctrl.GCController
+	sagaGC        *sagagcctrl.GCController
 	schemaReindex *schemareindexctrl.Controller
 	hs            *httpingress.Server
 
@@ -425,6 +434,9 @@ func (c *Coordinator) Stop() {
 	}
 	if c.indexGC != nil {
 		c.indexGC.Stop()
+	}
+	if c.sagaGC != nil {
+		c.sagaGC.Stop()
 	}
 	if c.schemaReindex != nil {
 		c.schemaReindex.Stop()
@@ -1274,6 +1286,21 @@ func (c *Coordinator) Start(ctx context.Context) error {
 		Config: indexgcctrl.DefaultGCConfig(),
 	}
 	c.indexGC.Start(ctx)
+
+	// Start the saga retention GC controller. It runs regardless of the sagas
+	// feature flag: a cluster that had the flag on and then turned it off still
+	// has a backlog to drain, and on a cluster that never enabled it the sweep
+	// costs two empty index lookups.
+	sagaGCConfig := sagagcctrl.DefaultGCConfig()
+	if c.SagaRetentionPeriod >= 0 {
+		sagaGCConfig.Retention = c.SagaRetentionPeriod
+	}
+	c.sagaGC = &sagagcctrl.GCController{
+		Log:     c.Log.With("module", "saga-gc"),
+		Storage: saga.NewEntityStorage(etcdStore, c.Log),
+		Config:  sagaGCConfig,
+	}
+	c.sagaGC.Start(ctx)
 
 	// Start the schema reindex controller. It backfills index entries after an
 	// index schema change, checkpointing between bounded passes so a store too

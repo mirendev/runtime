@@ -741,6 +741,32 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 			"value", cfg.AppVersion.GetRetentionPeriod(), "error", err)
 	}
 
+	// Saga retention treats 0 as "keep executions forever", which is a real
+	// setting an operator may want while investigating. That makes a malformed
+	// value dangerous in a way the app-version one is not: parsing to 0 would
+	// silently turn retention off and let executions accumulate again. Fall
+	// back to the default instead, and say so.
+	// A negative duration parses cleanly (units.ParseDuration accepts "-1h"),
+	// so it needs rejecting here too. The coordinator already ignores negatives
+	// and keeps its default, but silently: an operator who typo'd "-7d" would
+	// see no sign their setting went nowhere.
+	sagaRetentionPeriod, err := units.ParseDuration(cfg.Saga.GetRetentionPeriod())
+	if err != nil || sagaRetentionPeriod < 0 {
+		defaultSaga := serverconfig.DefaultSagaConfig()
+		invalid := sagaRetentionPeriod
+		sagaRetentionPeriod, _ = units.ParseDuration(defaultSaga.GetRetentionPeriod())
+
+		reason := "negative duration"
+		if err != nil {
+			reason = err.Error()
+		}
+		ctx.Log.Warn("invalid saga.retention_period, falling back to default",
+			"value", cfg.Saga.GetRetentionPeriod(),
+			"parsed", invalid,
+			"default", sagaRetentionPeriod,
+			"error", reason)
+	}
+
 	// Build coordinator config
 	coordConfig := coordinate.CoordinatorConfig{
 		Address:                   srvaddr,
@@ -766,6 +792,7 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 		WorkloadIssuer:            workloadIssuer,
 		AppVersionRetentionCount:  cfg.AppVersion.GetRetentionCount(),
 		AppVersionRetentionPeriod: appVersionRetentionPeriod,
+		SagaRetentionPeriod:       sagaRetentionPeriod,
 	}
 
 	// Pass etcd TLS config when distributed runners is enabled
