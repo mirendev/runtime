@@ -164,11 +164,26 @@ description = "Third-party API key for payment processing"
 |-------|------|-------------|
 | `key` | string | Variable name (required) |
 | `value` | string | Variable value |
+| `backend` | string | Secret backend to source the value from, instead of `value` — see [Secrets](/secrets) |
+| `ref` | string | Reference to the secret within that backend |
 | `required` | bool | If `true`, deploy will fail when this variable has no value |
 | `sensitive` | bool | If `true`, the value is masked in CLI output and logs |
 | `description` | string | Human-readable explanation of what this variable is for |
 
 The `required` flag is useful for variables whose values differ per environment—declare them in `app.toml` with an empty value and `required = true`, then set the actual value with `miren env set` before deploying. The `sensitive` flag ensures secrets aren't accidentally exposed in terminal output.
+
+#### Referencing a Secret
+
+For a real credential, `sensitive` is not enough: it masks display but the value still sits in your config. Use `backend` and `ref` to point at a [secret](/secrets) instead, so `app.toml` holds only a pointer and stays safe to commit:
+
+```toml
+[[env]]
+key = "STRIPE_API_KEY"
+backend = "cluster"
+ref = "payments/stripe-key"
+```
+
+Set `value` or `ref`, never both. A referenced variable is sensitive automatically.
 
 #### Variables Miren Injects
 
