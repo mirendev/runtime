@@ -24,6 +24,19 @@ func FormatSentinel(backend, ref string) string {
 	return SentinelScheme + backend + "/" + ref
 }
 
+// EnvValue renders what a config variable contributes to a sandbox spec: its
+// literal value, or a reference standing in for one when it is backend-sourced.
+//
+// Every path that builds a sandbox spec from a config goes through this, so
+// there is one answer to "does a secret ever get written into a spec?" rather
+// than one per call site.
+func EnvValue(backend, value string) string {
+	if backend == "" {
+		return value
+	}
+	return FormatSentinel(backend, value)
+}
+
 // ParseSentinel splits a placeholder back into its backend and reference.
 // The second return is false for an ordinary value, which is the common case.
 func ParseSentinel(value string) (backend, ref string, ok bool) {

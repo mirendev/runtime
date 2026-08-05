@@ -19,6 +19,7 @@ import (
 	"miren.dev/runtime/pkg/idgen"
 	"miren.dev/runtime/pkg/rpc"
 	"miren.dev/runtime/pkg/rpc/stream"
+	"miren.dev/runtime/pkg/secret"
 )
 
 type Server struct {
@@ -406,12 +407,16 @@ func (s *Server) buildSandboxSpec(
 	// Add global config env vars, stripping any reserved MIREN_ keys so user
 	// config can't shadow the injected sandbox metadata above (mirrors the
 	// filter in controllers/deployment/launcher.go).
+	//
+	// A backend-sourced variable contributes a reference here too, for the same
+	// reason it does on the deploy path: this spec is persisted, and the sandbox
+	// controller materializes the value in memory at container creation.
 	envMap := make(map[string]string)
 	for _, x := range cfgSpec.Variables {
 		if appclient.IsReservedEnvVar(x.Key) {
 			continue
 		}
-		envMap[x.Key] = x.Value
+		envMap[x.Key] = secret.EnvValue(x.Backend, x.Value)
 	}
 
 	// Convert map to env var slice
