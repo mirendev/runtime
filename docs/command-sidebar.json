@@ -145,6 +145,9 @@
       "command/debug-rbac",
       "command/debug-rbac-test",
       "command/debug-reindex",
+      "command/debug-saga",
+      "command/debug-saga-list",
+      "command/debug-saga-show",
       "command/debug-test",
       "command/debug-test-load"
     ]

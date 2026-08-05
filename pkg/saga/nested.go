@@ -168,5 +168,5 @@ func UndoNested(ctx context.Context, executionID string) error {
 // createChildExecution's idempotency check to find the prior child execution.
 func deriveChildID(parentExecID, sagaName, actionName string) string {
 	h := sha256.Sum256([]byte(parentExecID + "\x00" + sagaName + "\x00" + actionName))
-	return "saga" + base58.Encode(h[:16])
+	return sagaIDKind + "/" + sagaIDName + "-" + base58.Encode(h[:16])
 }
