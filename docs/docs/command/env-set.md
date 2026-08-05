@@ -24,7 +24,9 @@ miren env set [flags]
 
 ## Flags
 
+- `--backend, -b` — Source the value from a secret backend instead of setting it literally (default: cluster, with --ref)
 - `--env, -e` — Set environment variables (use KEY to prompt, KEY=VALUE to set directly, KEY=@file to read from file)
+- `--ref` — Backend-relative reference to the secret, e.g. payments/stripe-key
 - `--sensitive, -s` — Set sensitive environment variables (use KEY to prompt with masking, KEY=VALUE to set directly, KEY=@file to read from file)
 - `--service, -S` — Set env var for specific service only (if not specified, sets for all services)
 
