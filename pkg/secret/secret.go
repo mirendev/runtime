@@ -16,6 +16,7 @@ package secret
 import (
 	"context"
 	"errors"
+	"time"
 )
 
 // Errors callers can branch on. Resolution failures deliberately carry the
@@ -96,6 +97,44 @@ type WritableBackend interface {
 	// destroyed. Anything still pinned to a version that leaves enabled fails
 	// closed on its next resolve.
 	SetState(ctx context.Context, ref string, state VersionState) error
+}
+
+// VersionSummary describes one version of a secret without its payload.
+type VersionSummary struct {
+	// Version is the handle a reference names this version by, after the "@".
+	Version string
+
+	// State is the version's lifecycle state. Only StateEnabled resolves.
+	State VersionState
+
+	// CreatedAt is when the version was stored.
+	CreatedAt time.Time
+
+	// Current reports whether a floating reference resolves to this version.
+	Current bool
+}
+
+// Summary describes a secret and its versions, for operators deciding whether a
+// rotation or a revocation is safe. It never carries a value.
+type Summary struct {
+	Path           string
+	Backend        string
+	CurrentVersion string
+	Versions       []VersionSummary
+}
+
+// A ListableBackend can enumerate what it holds. It is optional: an external
+// manager may not expose enumeration, or may not expose it to the identity
+// Miren reads with, in which case Miren can still resolve known references
+// without being able to list them.
+type ListableBackend interface {
+	SecretBackend
+
+	// List returns every secret the backend holds, without their values.
+	List(ctx context.Context) ([]Summary, error)
+
+	// ListVersions returns one secret's versions, without their values.
+	ListVersions(ctx context.Context, path string) (Summary, error)
 }
 
 // A Resolver resolves a fully-qualified reference that names its own backend,

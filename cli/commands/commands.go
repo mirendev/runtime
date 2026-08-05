@@ -429,6 +429,56 @@ miren deploy --analyze
 		}),
 	))
 
+	// Secret commands
+	d.Dispatch("secret", Section("secret", "Secret store management commands", "", WithSectionGroup(GroupConfiguring)))
+	d.Dispatch("secret set", Infer("secret set", "Store a secret value", SecretSet,
+		WithDescription(secretSetDescription),
+		WithExample(mflags.Example{
+			Name: "Store a secret, prompting with masking",
+			Body: "miren secret set payments/stripe-key",
+		}),
+		WithExample(mflags.Example{
+			Name: "Store a secret read from a file",
+			Body: "miren secret set tls/cert --value @cert.pem",
+		}),
+	))
+	d.Dispatch("secret list", Infer("secret list", "List stored secrets", SecretList,
+		WithExample(mflags.Example{
+			Name: "List all secrets",
+			Body: "miren secret list",
+		}),
+		WithExample(mflags.Example{
+			Name: "List as JSON",
+			Body: "miren secret list --format json",
+		}),
+	))
+	d.Dispatch("secret versions", Infer("secret versions", "Show a secret's versions", SecretVersions,
+		WithExample(mflags.Example{
+			Name: "Show every version of a secret",
+			Body: "miren secret versions payments/stripe-key",
+		}),
+	))
+	d.Dispatch("secret disable", Infer("secret disable", "Stop a version from resolving", SecretDisable,
+		WithDescription(secretDisableDescription),
+		WithExample(mflags.Example{
+			Name: "Revoke a leaked version",
+			Body: "miren secret disable payments/stripe-key@x1A",
+		}),
+	))
+	d.Dispatch("secret enable", Infer("secret enable", "Let a disabled version resolve again", SecretEnable,
+		WithExample(mflags.Example{
+			Name: "Re-enable a version",
+			Body: "miren secret enable payments/stripe-key@x1A",
+		}),
+	))
+	d.Dispatch("secret destroy", Infer("secret destroy", "Permanently delete a version's value", SecretDestroy,
+		WithDescription(secretDestroyDescription),
+		WithExample(mflags.Example{
+			Name: "Destroy a version's value for good",
+			Body: "miren secret destroy payments/stripe-key@x1A",
+		}),
+	))
+
 	// Addon commands
 	d.Dispatch("addon", Section("addon", "Addon management commands", "", WithSectionGroup(GroupConfiguring)))
 	d.Dispatch("addon list-available", Infer("addon list-available", "List available addons", AddonListAvailable,
@@ -1139,9 +1189,23 @@ Use restart to:
 You do not need to restart after ` + "`" + `miren env set` + "`" + `, ` + "`" + `miren env delete` + "`" + `, ` + "`" + `miren addon create` + "`" + `, or ` + "`" + `miren addon destroy` + "`" + `. Each of those already creates a new version and rolls out new sandboxes automatically. A manual restart on top only adds a redundant rollout.
 :::`
 
+const secretSetDescription = `Stores a value in the cluster's secret store. The value is encrypted at rest and is never echoed, logged, or written to disk by this command — it travels to the server, which holds the only key.
+
+Each write mints a new immutable version and prints its handle, e.g. ` + "`" + `payments/stripe-key@x1A` + "`" + `. Storing a value identical to the current one is reported as unchanged rather than minting a duplicate, so re-running the command is safe.
+
+Rotating a secret does not disturb anything already running. Old versions stay resolvable so that a rollback comes back on the value it originally shipped with.`
+
+const secretDisableDescription = `Stops a specific version from resolving. Anything still referencing it fails closed on its next resolve rather than falling back to a different value — a revoked secret must never silently become a working one.
+
+Disabling is reversible with ` + "`" + `miren secret enable` + "`" + `; the value itself is untouched. To delete the value outright, use ` + "`" + `miren secret destroy` + "`" + `.`
+
+const secretDestroyDescription = `Permanently deletes a version's value. Unlike ` + "`" + `miren secret disable` + "`" + `, this cannot be undone: the encrypted payload is dropped, so anything still referencing the version can never resolve again.
+
+Prefer ` + "`" + `miren secret disable` + "`" + ` when revoking a leaked credential — it fails closed just as hard, and leaves you able to recover if something still needed the value.`
+
 const envSetDescription = `Setting an environment variable creates a new app version and rolls it out automatically — you do not need to run ` + "`" + `miren deploy` + "`" + ` or ` + "`" + `miren app restart` + "`" + ` afterward. The new version reuses your existing container image (no rebuild); Miren boots new sandboxes with the updated environment and drains the old ones. The command waits for the new version to become healthy before returning.
 
-Use ` + "`" + `-e` + "`" + ` for plain values and ` + "`" + `-s` + "`" + ` for sensitive values (masked in output and logs). A "secret" is simply an env var set with ` + "`" + `-s` + "`" + ` — there is no separate secret command. Pass ` + "`" + `--service` + "`" + ` to scope the change to a single service instead of all services.
+Use ` + "`" + `-e` + "`" + ` for plain values and ` + "`" + `-s` + "`" + ` for sensitive values (masked in output and logs). Note that ` + "`" + `-s` + "`" + ` affects display only — the value itself is stored in the clear. For a credential that should be encrypted at rest, store it with ` + "`" + `miren secret set` + "`" + ` instead. Pass ` + "`" + `--service` + "`" + ` to scope the change to a single service instead of all services.
 
 :::note[No restart needed]
 Environment variable changes take effect on their own. Running ` + "`" + `miren app restart` + "`" + ` afterward only triggers a redundant second rollout.

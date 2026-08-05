@@ -174,6 +174,31 @@ func TestDestroyRemovesThePayload(t *testing.T) {
 	assert.Equal(t, core_v1alpha.DESTROYED, sv.State)
 	assert.Empty(t, sv.Ciphertext)
 	assert.Empty(t, sv.WrappedDek)
+
+	// Nothing derived from the plaintext survives either — an operator who asked
+	// for a value to be deleted should not be left with a fingerprint of it.
+	assert.Empty(t, sv.ValueMac)
+}
+
+// A destroyed version is current until something replaces it, so storing the
+// same value again has to mint a fresh version rather than being mistaken for a
+// no-op against the version that was just deleted.
+func TestPutAfterDestroyMintsAFreshVersion(t *testing.T) {
+	b, _ := newTestBackend(t)
+	ctx := t.Context()
+
+	first, err := b.Put(ctx, "payments/stripe-key", []byte("sk_live"))
+	require.NoError(t, err)
+
+	require.NoError(t, b.SetState(ctx, secret.FormatRef("payments/stripe-key", first), secret.StateDestroyed))
+
+	second, err := b.Put(ctx, "payments/stripe-key", []byte("sk_live"))
+	require.NoError(t, err)
+	assert.NotEqual(t, first, second)
+
+	got, err := b.Resolve(ctx, "payments/stripe-key")
+	require.NoError(t, err)
+	assert.Equal(t, []byte("sk_live"), got.Bytes)
 }
 
 // Re-enabling a disabled version has to bring back the same bytes, since the

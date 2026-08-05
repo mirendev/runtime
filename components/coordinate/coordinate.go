@@ -34,6 +34,7 @@ import (
 	"miren.dev/runtime/api/ingress/ingress_v1alpha"
 	"miren.dev/runtime/api/oidcbinding/oidcbinding_v1alpha"
 	"miren.dev/runtime/api/runner/runner_v1alpha"
+	"miren.dev/runtime/api/secret/secret_v1alpha"
 	"miren.dev/runtime/api/telemetry/telemetry_v1alpha"
 	"miren.dev/runtime/clientconfig"
 	"miren.dev/runtime/components/activator"
@@ -71,6 +72,9 @@ import (
 	"miren.dev/runtime/pkg/oidcauth"
 	"miren.dev/runtime/pkg/rpc"
 	"miren.dev/runtime/pkg/saga"
+	"miren.dev/runtime/pkg/secret"
+	secretcluster "miren.dev/runtime/pkg/secret/cluster"
+	"miren.dev/runtime/pkg/secret/keyring"
 	"miren.dev/runtime/pkg/sysstats"
 	"miren.dev/runtime/pkg/workloadidentity"
 	"miren.dev/runtime/servers/admin"
@@ -85,6 +89,7 @@ import (
 	oidcbindingsrv "miren.dev/runtime/servers/oidcbinding"
 	runnerserver "miren.dev/runtime/servers/runner"
 	"miren.dev/runtime/servers/runnertelemetry"
+	secretsrv "miren.dev/runtime/servers/secret"
 	telemetrysrv "miren.dev/runtime/servers/telemetry"
 	"miren.dev/runtime/version"
 )
@@ -1061,6 +1066,17 @@ func (c *Coordinator) Start(ctx context.Context) error {
 		return err
 	}
 
+	// Set up the secret backend registry. The built-in in-cluster backend is
+	// always present so a team can hold secrets without standing up an external
+	// manager first; externally configured instances register alongside it.
+	secretKeyring, err := keyring.Ensure(c.Log, c.DataPath)
+	if err != nil {
+		c.Log.Error("failed to open secret keyring", "error", err)
+		return err
+	}
+	secretRegistry := secret.NewRegistry()
+	secretRegistry.Register(secretcluster.NewBackend(c.Log, ec, secretKeyring))
+
 	// Migrate app versions before starting components that depend on them
 	migrationCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
@@ -1372,6 +1388,9 @@ func (c *Coordinator) Start(ctx context.Context) error {
 
 	addonsServer := app.NewAddonsServer(c.Log, ec, addonRegistry, addon.NewRegistryImageChecker())
 	server.ExposeValue("dev.miren.runtime/addons", app_v1alpha.AdaptAddons(addonsServer))
+
+	secretsServer := secretsrv.NewServer(c.Log, secretRegistry)
+	server.ExposeValue("dev.miren.runtime/secrets", secret_v1alpha.AdaptSecrets(secretsServer))
 
 	addonsLoopback, err := rs.Connect(rs.LoopbackAddr(), "dev.miren.runtime/addons")
 	if err != nil {

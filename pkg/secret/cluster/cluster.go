@@ -200,9 +200,14 @@ func (b *Backend) SetState(ctx context.Context, ref string, state secret.Version
 		// Overwrite the payload rather than dropping the attributes: a write
 		// here merges, and replacing the whole entity to remove them would take
 		// its short id with it — which is the handle every pin names it by.
+		//
+		// The MAC goes too. It is keyed, so retaining it would leak nothing, but
+		// an operator who asked for a value to be deleted should not be left
+		// with a fingerprint of it that can still be tested against a guess.
 		attrs = append(attrs,
 			entity.Bytes(core_v1alpha.SecretVersionCiphertextId, []byte{}),
 			entity.Bytes(core_v1alpha.SecretVersionWrappedDekId, []byte{}),
+			entity.String(core_v1alpha.SecretVersionValueMacId, ""),
 		)
 	}
 
