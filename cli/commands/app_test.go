@@ -343,7 +343,7 @@ func TestCLIEnvTagsDoNotReadInjectedVars(t *testing.T) {
 		injected[n] = true
 	}
 
-	tags := collectEnvTags(reflect.TypeOf(AppCentric{}))
+	tags := collectEnvTags(reflect.TypeFor[AppCentric]())
 	if len(tags) == 0 {
 		t.Fatal("no env tags found — the reflection walk is not seeing the CLI flags")
 	}

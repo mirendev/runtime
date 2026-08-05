@@ -89,7 +89,7 @@ func TestListValueAdd(t *testing.T) {
 	if v.Size() != types.Int(2) {
 		t.Errorf("got list size %d, wanted 2", v.Size())
 	}
-	complex, err := v.ConvertToNative(reflect.TypeOf([][]string{}))
+	complex, err := v.ConvertToNative(reflect.TypeFor[[][]string]())
 	complexList := complex.([][]string)
 	if err != nil {
 		t.Fatal(err)
@@ -148,7 +148,7 @@ func TestListValueContainsNestedList(t *testing.T) {
 
 func TestListValueConvertToNative(t *testing.T) {
 	lv := NewListValue()
-	none, err := lv.ConvertToNative(reflect.TypeOf([]interface{}{}))
+	none, err := lv.ConvertToNative(reflect.TypeFor[[]interface{}]())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -156,7 +156,7 @@ func TestListValueConvertToNative(t *testing.T) {
 		t.Errorf("got %v, wanted empty list", none)
 	}
 	lv.Append(testValue(t, 1, "first"))
-	one, err := lv.ConvertToNative(reflect.TypeOf([]string{}))
+	one, err := lv.ConvertToNative(reflect.TypeFor[[]string]())
 	oneList := one.([]string)
 	if err != nil {
 		t.Fatal(err)
@@ -179,7 +179,7 @@ func TestListValueConvertToNative(t *testing.T) {
 	if llv.Size() != types.Int(2) {
 		t.Errorf("got list size %d, wanted 2", llv.Size())
 	}
-	complex, err := llv.ConvertToNative(reflect.TypeOf([][]string{}))
+	complex, err := llv.ConvertToNative(reflect.TypeFor[[][]string]())
 	complexList := complex.([][]string)
 	if err != nil {
 		t.Fatal(err)
@@ -210,14 +210,14 @@ func TestListValueIterator(t *testing.T) {
 
 func TestMapValueConvertToNative(t *testing.T) {
 	mv := NewMapValue()
-	none, err := mv.ConvertToNative(reflect.TypeOf(map[string]interface{}{}))
+	none, err := mv.ConvertToNative(reflect.TypeFor[map[string]interface{}]())
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !reflect.DeepEqual(none, map[string]interface{}{}) {
 		t.Errorf("got %v, wanted empty map", none)
 	}
-	none, err = mv.ConvertToNative(reflect.TypeOf(map[interface{}]interface{}{}))
+	none, err = mv.ConvertToNative(reflect.TypeFor[map[interface{}]interface{}]())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -253,7 +253,7 @@ func TestMapValueConvertToNative(t *testing.T) {
 			t.Errorf("key 'Check' not equal to 34u")
 		}
 	}
-	mpStrUint, err := mv.ConvertToNative(reflect.TypeOf(map[string]uint64{}))
+	mpStrUint, err := mv.ConvertToNative(reflect.TypeFor[map[string]uint64]())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -263,7 +263,7 @@ func TestMapValueConvertToNative(t *testing.T) {
 	}) {
 		t.Errorf("got %v, wanted {'Test': 12u, 'Check': 34u}", mpStrUint)
 	}
-	tstStr, err := mv.ConvertToNative(reflect.TypeOf(&tstStruct{}))
+	tstStr, err := mv.ConvertToNative(reflect.TypeFor[*tstStruct]())
 	if err != nil {
 		t.Fatal(err)
 	}

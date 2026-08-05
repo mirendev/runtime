@@ -9,7 +9,7 @@ import (
 )
 
 // edgeType is the reflect.Type of saga.Edge, used to detect ordering-only fields.
-var edgeType = reflect.TypeOf(Edge{})
+var edgeType = reflect.TypeFor[Edge]()
 
 // fieldMapping maps struct field names to saga keys based on struct tags.
 type fieldMapping struct {
@@ -210,8 +210,8 @@ func wrapTypedAction(name string, executeFunc, undoFunc any) (*typedAction, erro
 	undoVal := reflect.ValueOf(undoFunc)
 
 	// Type references for validation
-	ctxType := reflect.TypeOf((*context.Context)(nil)).Elem()
-	errType := reflect.TypeOf((*error)(nil)).Elem()
+	ctxType := reflect.TypeFor[context.Context]()
+	errType := reflect.TypeFor[error]()
 
 	// Validate execute function signature
 	execType := execVal.Type()

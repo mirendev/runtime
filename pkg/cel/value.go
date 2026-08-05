@@ -611,7 +611,7 @@ func (lv *ListValue) ConvertToNative(typeDesc reflect.Type) (interface{}, error)
 	}
 
 	// If the list is already assignable to the desired type return it.
-	if reflect.TypeOf(lv).AssignableTo(typeDesc) {
+	if reflect.TypeFor[*ListValue]().AssignableTo(typeDesc) {
 		return lv, nil
 	}
 

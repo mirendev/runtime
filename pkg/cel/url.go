@@ -40,10 +40,10 @@ var (
 
 // ConvertToNative implements ref.Val.ConvertToNative.
 func (d URL) ConvertToNative(typeDesc reflect.Type) (interface{}, error) {
-	if reflect.TypeOf(d.URL).AssignableTo(typeDesc) {
+	if reflect.TypeFor[*url.URL]().AssignableTo(typeDesc) {
 		return d.URL, nil
 	}
-	if reflect.TypeOf("").AssignableTo(typeDesc) {
+	if reflect.TypeFor[string]().AssignableTo(typeDesc) {
 		return d.String(), nil
 	}
 	return nil, fmt.Errorf("type conversion error from 'URL' to '%v'", typeDesc)

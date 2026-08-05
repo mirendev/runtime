@@ -674,12 +674,12 @@ func init() {
 	tags.Add(cbor.TagOptions{
 		EncTag: cbor.EncTagRequired,
 		DecTag: cbor.DecTagOptional,
-	}, reflect.TypeOf(Id("")), 50)
+	}, reflect.TypeFor[Id](), 50)
 
 	tags.Add(cbor.TagOptions{
 		EncTag: cbor.EncTagRequired,
 		DecTag: cbor.DecTagOptional,
-	}, reflect.TypeOf(types.Keyword("")), 51)
+	}, reflect.TypeFor[types.Keyword](), 51)
 
 	var err error
 	encoder, err = cbor.EncOptions{
