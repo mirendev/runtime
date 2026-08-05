@@ -31,6 +31,19 @@ func maskURLUserinfo(value string) string {
 	return urlUserinfoRe.ReplaceAllString(value, "${1}"+envRedacted+"@")
 }
 
+// displayEnvValue renders what `env list`/`env get` shows for one variable.
+//
+// A backend-sourced variable has no local value to mask: the bytes never
+// travelled here, only the reference did. Showing the reference — backend,
+// path, and the version this config pinned — is both safe and the only useful
+// thing to show, so --unmask has nothing extra to reveal for one.
+func displayEnvValue(value, backend string, sensitive, unmask bool) string {
+	if backend != "" {
+		return "\u2192 " + backend + ":" + value
+	}
+	return maskEnvValue(value, sensitive, unmask)
+}
+
 // maskEnvValue is the single source of truth for how an env-var value is
 // displayed anywhere in the CLI (env list/get, deploy analysis, and any future
 // surface). Sensitivity is decided by EVIDENCE, in tiers, and this function
@@ -56,19 +69,6 @@ func maskURLUserinfo(value string) string {
 // literal bytes" — no masking, no escaping — for copying or scripting.
 // Without it, the value is rendered display-safe: control/ANSI sequences are
 // escaped so a malicious value can't corrupt terminal or CI output.
-// displayEnvValue renders what `env list`/`env get` shows for one variable.
-//
-// A backend-sourced variable has no local value to mask: the bytes never
-// travelled here, only the reference did. Showing the reference — backend,
-// path, and the version this config pinned — is both safe and the only useful
-// thing to show, so --unmask has nothing extra to reveal for one.
-func displayEnvValue(value, backend string, sensitive, unmask bool) string {
-	if backend != "" {
-		return "\u2192 " + backend + ":" + value
-	}
-	return maskEnvValue(value, sensitive, unmask)
-}
-
 func maskEnvValue(value string, sensitive, unmask bool) string {
 	if unmask {
 		return value

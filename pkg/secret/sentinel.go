@@ -5,6 +5,27 @@ import (
 	"strings"
 )
 
+// ValidateBackendName rejects names that cannot survive a round trip through a
+// sentinel.
+//
+// The backend and the reference share one string, separated by the first "/",
+// so a name containing a slash would parse back as a different backend and a
+// different reference — and if both names happened to be registered, resolve a
+// different secret entirely. Rejecting the character is cheaper than encoding
+// around it, and costs nothing real: a backend name is an operator-chosen
+// instance label, not a path.
+func ValidateBackendName(name string) error {
+	switch {
+	case name == "":
+		return fmt.Errorf("secret backend name is empty")
+	case strings.Contains(name, "/"):
+		return fmt.Errorf("secret backend name %q cannot contain %q", name, "/")
+	case strings.TrimSpace(name) != name:
+		return fmt.Errorf("secret backend name %q cannot have leading or trailing whitespace", name)
+	}
+	return nil
+}
+
 // SentinelScheme prefixes an environment value that names a secret rather than
 // holding one.
 const SentinelScheme = "miren+secret://"

@@ -136,3 +136,30 @@ func TestRegistryResolveRefErrorNamesRefNotValue(t *testing.T) {
 func TestRegistrySatisfiesResolver(t *testing.T) {
 	var _ Resolver = NewRegistry()
 }
+
+// A backend name has to survive a round trip through a sentinel. The backend
+// and the reference share one string separated by the first "/", so a name
+// containing one would parse back as a different backend and reference — and if
+// both were registered, resolve a different secret.
+func TestRegisterRejectsNamesThatCannotRoundTrip(t *testing.T) {
+	r := NewRegistry()
+
+	for _, name := range []string{"", "team/a", " padded", "padded "} {
+		t.Run(name, func(t *testing.T) {
+			err := r.Register(&readOnlyBackend{name: name})
+			assert.Error(t, err)
+
+			_, ok := r.Get(name)
+			assert.False(t, ok, "a refused backend must not be registered")
+		})
+	}
+}
+
+func TestRegisterAcceptsOrdinaryNames(t *testing.T) {
+	r := NewRegistry()
+
+	for _, name := range []string{ClusterBackendName, "prod-vault", "aws_sm", "vault.eu"} {
+		require.NoError(t, r.Register(&readOnlyBackend{name: name}), name)
+	}
+	assert.Len(t, r.Names(), 4)
+}

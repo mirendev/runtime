@@ -159,3 +159,53 @@ func TestPinSecretsFailsClosed(t *testing.T) {
 	assert.Contains(t, err.Error(), "STRIPE_API_KEY")
 	assert.Equal(t, "payments/stripe-key", spec.Variables[0].Value)
 }
+
+// Backend identity travels in-band, so the mapping is breakable from the other
+// side too: a literal whose value starts with the scheme would be materialized
+// as though it named a secret. Refuse it where every config passes through.
+func TestPinSecretsRejectsALiteralPosingAsAReference(t *testing.T) {
+	r := &stubResolver{current: map[string]string{}}
+
+	spec := &core_v1alpha.ConfigSpec{
+		Variables: []core_v1alpha.ConfigSpecVariables{
+			{Key: "SNEAKY", Value: secret.FormatSentinel("cluster", "payments/stripe-key@x1A")},
+		},
+	}
+
+	err := PinSecrets(context.Background(), r, spec)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "SNEAKY")
+	assert.Zero(t, r.calls, "it should be refused before any resolution")
+}
+
+func TestPinSecretsRejectsALiteralPosingAsAReferenceInAService(t *testing.T) {
+	r := &stubResolver{current: map[string]string{}}
+
+	spec := &core_v1alpha.ConfigSpec{
+		Services: []core_v1alpha.ConfigSpecServices{{
+			Name: "worker",
+			Env: []core_v1alpha.ConfigSpecServicesEnv{
+				{Key: "SNEAKY", Value: secret.FormatSentinel("cluster", "payments/stripe-key@x1A")},
+			},
+		}},
+	}
+
+	err := PinSecrets(context.Background(), r, spec)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "worker")
+}
+
+// A genuine reference carries the same value shape but names its backend, so it
+// must still pin normally.
+func TestPinSecretsAllowsARealReference(t *testing.T) {
+	r := &stubResolver{current: map[string]string{"payments/stripe-key": "x1A"}}
+
+	spec := &core_v1alpha.ConfigSpec{
+		Variables: []core_v1alpha.ConfigSpecVariables{
+			{Key: "STRIPE_API_KEY", Value: "payments/stripe-key", Backend: "cluster"},
+		},
+	}
+
+	require.NoError(t, PinSecrets(context.Background(), r, spec))
+	assert.Equal(t, "payments/stripe-key@x1A", spec.Variables[0].Value)
+}

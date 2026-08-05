@@ -32,10 +32,19 @@ func NewRegistry() *Registry {
 
 // Register adds a backend under its own name, replacing any previous
 // registration for that instance.
-func (r *Registry) Register(b SecretBackend) {
+//
+// A name that cannot round-trip through a reference is refused here rather than
+// at resolve time, so a misconfigured instance fails at startup instead of
+// silently resolving the wrong secret later.
+func (r *Registry) Register(b SecretBackend) error {
+	if err := ValidateBackendName(b.Name()); err != nil {
+		return err
+	}
+
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.backends[b.Name()] = b
+	return nil
 }
 
 // Get returns the backend registered under name.

@@ -2,6 +2,8 @@ package compute
 
 import (
 	"context"
+	"fmt"
+	"strings"
 
 	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/pkg/secret"
@@ -58,6 +60,10 @@ func SecretReferences(spec *core_v1alpha.ConfigSpec) []secret.Reference {
 // A config with no backend-sourced variables never touches the resolver, so a
 // cluster with no secrets in play pays nothing and cannot fail here.
 func PinSecrets(ctx context.Context, resolver secret.Resolver, spec *core_v1alpha.ConfigSpec) error {
+	if err := rejectLiteralsPosingAsReferences(spec); err != nil {
+		return err
+	}
+
 	refs := SecretReferences(spec)
 	if len(refs) == 0 {
 		return nil
@@ -86,6 +92,36 @@ func PinSecrets(ctx context.Context, resolver secret.Resolver, spec *core_v1alph
 			}
 			spec.Services[s].Env[e].Value = pinned[next]
 			next++
+		}
+	}
+
+	return nil
+}
+
+// rejectLiteralsPosingAsReferences refuses an inline value that looks like the
+// placeholder a backend-sourced variable contributes to a sandbox spec.
+//
+// Backend identity travels in-band, alongside the reference in a single env
+// string, because the spec's env is a flat []string with nowhere structured to
+// put it. That makes the mapping breakable from the other side: a literal whose
+// value happens to start with the scheme would be materialized as though it
+// named a secret. There is no privilege escalation in it — anyone who can set a
+// literal can set a real reference — but it is confusing behavior that is cheap
+// to refuse at the one point every config passes through.
+func rejectLiteralsPosingAsReferences(spec *core_v1alpha.ConfigSpec) error {
+	for _, v := range spec.Variables {
+		if v.Backend == "" && strings.HasPrefix(v.Value, secret.SentinelScheme) {
+			return fmt.Errorf("variable %s has no backend but its value starts with %s, which is reserved for secret references",
+				v.Key, secret.SentinelScheme)
+		}
+	}
+
+	for _, svc := range spec.Services {
+		for _, e := range svc.Env {
+			if e.Backend == "" && strings.HasPrefix(e.Value, secret.SentinelScheme) {
+				return fmt.Errorf("variable %s of service %s has no backend but its value starts with %s, which is reserved for secret references",
+					e.Key, svc.Name, secret.SentinelScheme)
+			}
 		}
 	}
 

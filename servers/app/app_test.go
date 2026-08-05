@@ -5,13 +5,17 @@ import (
 	"log/slog"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"miren.dev/runtime/api/app/app_v1alpha"
 	coreutil "miren.dev/runtime/api/core"
 	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/api/entityserver"
 	"miren.dev/runtime/metrics"
+	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/testutils"
 	"miren.dev/runtime/pkg/rpc"
+	"miren.dev/runtime/pkg/secret"
 )
 
 func TestSetConfiguration_DuplicateEnvVars(t *testing.T) {
@@ -1315,4 +1319,141 @@ func TestSetInitialEnvVars(t *testing.T) {
 			t.Fatalf("expected WORKER_TOKEN in worker service, got %+v", cv.Spec.Services[0].Env)
 		}
 	})
+}
+
+// pinningResolver resolves any reference to itself, which is all this test
+// needs: it is about the backend field surviving, not about what it resolves to.
+type pinningResolver struct{}
+
+func (pinningResolver) ResolveRef(ctx context.Context, backend, ref string) (secret.SecretValue, error) {
+	return secret.SecretValue{Ref: ref, Bytes: []byte("value")}, nil
+}
+
+// A variable that loses its backend on the way in becomes an ordinary literal
+// holding a reference path, and every guard downstream then reads it as fine:
+// nothing pins it, nothing materializes it, and the app receives the path text
+// where its credential belongs. Silent by construction, so it is worth pinning
+// down at each write path rather than trusting the next caller to notice.
+func TestConfigWritePathsPreserveTheSecretBackend(t *testing.T) {
+	ctx := context.Background()
+
+	inmem, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	ec := entityserver.NewClient(slog.Default(), inmem.EAC)
+
+	appInfo := &AppInfo{
+		Log:     slog.Default(),
+		EC:      ec,
+		CPU:     &metrics.CPUUsage{},
+		Mem:     &metrics.MemoryUsage{},
+		HTTP:    &metrics.HTTPMetrics{},
+		Secrets: pinningResolver{},
+	}
+
+	client := &app_v1alpha.CrudClient{
+		Client: rpc.LocalClient(app_v1alpha.AdaptCrud(appInfo)),
+	}
+
+	appName := "test-backend-passthrough"
+	_, err := inmem.Client.Create(ctx, appName, &core_v1alpha.App{})
+	require.NoError(t, err)
+
+	reference := func(key string) *app_v1alpha.NamedValue {
+		nv := &app_v1alpha.NamedValue{}
+		nv.SetKey(key)
+		nv.SetValue("payments/stripe-key@x1A")
+		nv.SetSensitive(true)
+		nv.SetBackend("cluster")
+		return nv
+	}
+
+	// SetConfiguration rebuilds the variable list wholesale from what the
+	// client sent, for both shared and per-service variables.
+	svc := &app_v1alpha.ServiceConfig{}
+	svc.SetService("worker")
+	svc.SetServiceEnv([]*app_v1alpha.NamedValue{reference("WORKER_SECRET")})
+
+	cfg := &app_v1alpha.Configuration{}
+	cfg.SetEnvVars([]*app_v1alpha.NamedValue{reference("STRIPE_API_KEY")})
+	cfg.SetServices([]*app_v1alpha.ServiceConfig{svc})
+
+	_, err = client.SetConfiguration(ctx, appName, cfg)
+	require.NoError(t, err)
+
+	var appRec core_v1alpha.App
+	require.NoError(t, ec.Get(ctx, appName, &appRec))
+
+	var appVer core_v1alpha.AppVersion
+	require.NoError(t, ec.GetById(ctx, appRec.ActiveVersion, &appVer))
+
+	stored, err := coreutil.ResolveConfig(ctx, ec.EAC(), &appVer)
+	require.NoError(t, err)
+
+	require.Len(t, stored.Variables, 1)
+	assert.Equal(t, "cluster", stored.Variables[0].Backend,
+		"the backend must survive SetConfiguration, or the reference becomes a literal")
+
+	require.Len(t, stored.Services, 1)
+	require.Len(t, stored.Services[0].Env, 1)
+	assert.Equal(t, "cluster", stored.Services[0].Env[0].Backend,
+		"the backend must survive the per-service write path too")
+
+	// And it must come back out again, so a round trip through the API does not
+	// quietly drop it either.
+	read, err := client.GetConfiguration(ctx, appName)
+	require.NoError(t, err)
+
+	var found bool
+	for _, ev := range read.Configuration().EnvVars() {
+		if ev.Key() == "STRIPE_API_KEY" {
+			found = true
+			assert.Equal(t, "cluster", ev.Backend())
+		}
+	}
+	assert.True(t, found, "the referenced variable should be readable back")
+}
+
+// The EnvVarInput adapters are the other way a reference reaches config, and
+// they drop the backend just as silently if it is not carried across.
+func TestSetInitialEnvVarsPreservesTheSecretBackend(t *testing.T) {
+	ctx := context.Background()
+
+	inmem, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	ec := entityserver.NewClient(slog.Default(), inmem.EAC)
+
+	appInfo := &AppInfo{
+		Log:     slog.Default(),
+		EC:      ec,
+		CPU:     &metrics.CPUUsage{},
+		Mem:     &metrics.MemoryUsage{},
+		HTTP:    &metrics.HTTPMetrics{},
+		Secrets: pinningResolver{},
+	}
+
+	client := &app_v1alpha.CrudClient{
+		Client: rpc.LocalClient(app_v1alpha.AdaptCrud(appInfo)),
+	}
+
+	appName := "test-backend-initial"
+	_, err := inmem.Client.Create(ctx, appName, &core_v1alpha.App{})
+	require.NoError(t, err)
+
+	nv := &app_v1alpha.NamedValue{}
+	nv.SetKey("STRIPE_API_KEY")
+	nv.SetValue("payments/stripe-key@x1A")
+	nv.SetSensitive(true)
+	nv.SetBackend("cluster")
+
+	res, err := client.SetInitialEnvVars(ctx, appName, []*app_v1alpha.NamedValue{nv}, "")
+	require.NoError(t, err)
+
+	var cv core_v1alpha.ConfigVersion
+	require.NoError(t, ec.GetById(ctx, entity.Id(res.ConfigVersionId()), &cv))
+
+	require.Len(t, cv.Spec.Variables, 1)
+	assert.Equal(t, "cluster", cv.Spec.Variables[0].Backend)
+	assert.Equal(t, "payments/stripe-key@x1A", cv.Spec.Variables[0].Value)
 }

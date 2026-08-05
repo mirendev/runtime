@@ -367,6 +367,7 @@ func (r *AppInfo) SetConfiguration(ctx context.Context, state *app_v1alpha.CrudS
 					Source:      source,
 					Required:    ev.Required(),
 					Description: ev.Description(),
+					Backend:     ev.Backend(),
 				}
 				spec.Variables = append(spec.Variables, nv)
 			}
@@ -399,6 +400,7 @@ func (r *AppInfo) SetConfiguration(ctx context.Context, state *app_v1alpha.CrudS
 									Source:      source,
 									Required:    ev.Required(),
 									Description: ev.Description(),
+									Backend:     ev.Backend(),
 								}
 								spec.Services[i].Env = append(spec.Services[i].Env, nv)
 							}
@@ -421,6 +423,7 @@ func (r *AppInfo) SetConfiguration(ctx context.Context, state *app_v1alpha.CrudS
 							Source:      source,
 							Required:    ev.Required(),
 							Description: ev.Description(),
+							Backend:     ev.Backend(),
 						}
 						svc.Env = append(svc.Env, nv)
 					}
@@ -702,7 +705,7 @@ func (r *AppInfo) SetEnvVars(ctx context.Context, state *app_v1alpha.CrudSetEnvV
 
 	vars := make([]appclient.EnvVarInput, len(rpcVars))
 	for i, v := range rpcVars {
-		vars[i] = appclient.EnvVarInput{Key: v.Key(), Value: v.Value(), Sensitive: v.Sensitive()}
+		vars[i] = appclient.EnvVarInput{Key: v.Key(), Value: v.Value(), Sensitive: v.Sensitive(), Backend: v.Backend()}
 	}
 
 	versionId, err := r.setEnvVars(ctx, args.App(), vars, args.Service())
@@ -732,7 +735,7 @@ func (r *AppInfo) SetInitialEnvVars(ctx context.Context, state *app_v1alpha.Crud
 
 	vars := make([]appclient.EnvVarInput, len(rpcVars))
 	for i, v := range rpcVars {
-		vars[i] = appclient.EnvVarInput{Key: v.Key(), Value: v.Value(), Sensitive: v.Sensitive()}
+		vars[i] = appclient.EnvVarInput{Key: v.Key(), Value: v.Value(), Sensitive: v.Sensitive(), Backend: v.Backend()}
 	}
 
 	cvid, err := appclient.SetInitialEnvVars(ctx, r.EC, r.Secrets, args.App(), vars, args.Service())

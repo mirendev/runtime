@@ -1094,7 +1094,10 @@ func (c *Coordinator) Start(ctx context.Context) error {
 		return err
 	}
 	secretBackend := secretcluster.NewBackend(c.Log, ec, secretKeyring)
-	secretRegistry.Register(secretBackend)
+	if err := secretRegistry.Register(secretBackend); err != nil {
+		c.Log.Error("failed to register the in-cluster secret backend", "error", err)
+		return err
+	}
 
 	// Rotation owns the keyring from here: it is the only thing that swaps the
 	// backend's ring, and it persists each new ring before the backend seals

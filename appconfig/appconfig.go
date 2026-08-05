@@ -27,9 +27,12 @@ type AppEnvVar struct {
 	// never appears in app.toml, only a pointer to it, so the file stays safe to
 	// commit.
 	//
-	// A reference authored here floats — it re-pins to whatever is current on
-	// every deploy, which is how a rotation reaches the app. Appending @version
-	// to Ref holds it at that exact version instead.
+	// A reference authored here floats: each new ConfigVersion resolves it to
+	// whatever is current, which is how a rotation reaches the app. Note that
+	// this is about minting a config, not running one — deploying or rolling
+	// back to an existing version keeps the reference that version recorded, so
+	// a rotation reaches an app only once a new config is created for it.
+	// Appending @version to Ref holds it at that exact version regardless.
 	Backend string `json:"backend,omitempty" toml:"backend,omitempty"`
 	Ref     string `json:"ref,omitempty" toml:"ref,omitempty"`
 }
