@@ -55,7 +55,6 @@ func TestSplitBatch(t *testing.T) {
 	}
 
 	for _, tc := range testCases {
-		tc := tc
 		t.Run("", func(t *testing.T) {
 			actual, err := shellwords.SplitBatch(tc.String)
 			if err != nil {
@@ -84,7 +83,6 @@ func TestQuoteBatch(t *testing.T) {
 	}
 
 	for _, tc := range testCases {
-		tc := tc
 		t.Run("", func(t *testing.T) {
 			actual := shellwords.QuoteBatch(tc.String)
 

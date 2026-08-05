@@ -34,10 +34,10 @@ func TestSafeStatusChNoPanicOnConcurrentClose(t *testing.T) {
 
 	var senderWG sync.WaitGroup
 	senderWG.Add(senders)
-	for i := 0; i < senders; i++ {
+	for range senders {
 		go func() {
 			defer senderWG.Done()
-			for j := 0; j < sendsPerGoroutine; j++ {
+			for j := range sendsPerGoroutine {
 				if err := s.Send(ctx, &client.SolveStatus{}); err != nil {
 					t.Errorf("Send returned error: %v", err)
 					return
@@ -81,7 +81,7 @@ func TestSafeStatusChCloseUnblocksParkedSend(t *testing.T) {
 
 	<-parked
 	// Give the Send a moment to enter the select.
-	for i := 0; i < 1000; i++ {
+	for i := range 1000 {
 		_ = i
 	}
 

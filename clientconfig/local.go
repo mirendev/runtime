@@ -422,7 +422,7 @@ func findWorkingAddress(ctx context.Context, addresses []string) (string, error)
 
 	// Wait for the first successful probe or all failures
 	var errors []string
-	for i := 0; i < len(addresses); i++ {
+	for range addresses {
 		select {
 		case res := <-resultChan:
 			if res.err == nil {

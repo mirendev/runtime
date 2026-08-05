@@ -61,7 +61,6 @@ func TestSplitPosix(t *testing.T) {
 	}
 
 	for _, tc := range testCases {
-		tc := tc
 		t.Run("", func(t *testing.T) {
 			actual, err := shellwords.SplitPosix(tc.String)
 			if err != nil {
@@ -88,7 +87,6 @@ func TestQuotePosix(t *testing.T) {
 	}
 
 	for _, tc := range testCases {
-		tc := tc
 		t.Run("", func(t *testing.T) {
 			actual := shellwords.QuotePosix(tc.String)
 

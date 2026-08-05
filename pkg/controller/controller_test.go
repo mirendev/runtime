@@ -854,7 +854,7 @@ func TestReconcileController_InFlightQueueing(t *testing.T) {
 	require.NoError(t, err)
 
 	// Wait for all 5 events to be sent
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		select {
 		case <-eventsSent:
 		case <-time.After(1 * time.Second):
@@ -868,7 +868,7 @@ func TestReconcileController_InFlightQueueing(t *testing.T) {
 	// Now unblock the handler one at a time
 	// Since all events are for the same entity, they should be processed sequentially
 	// by the same worker, not concurrently
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		blockChan <- struct{}{}
 		time.Sleep(10 * time.Millisecond) // Small delay between unblocks
 	}
@@ -1061,7 +1061,7 @@ func TestReconcileController_InFlightWithMultipleEntities(t *testing.T) {
 	require.NoError(t, err)
 
 	// Wait for all 6 events to be sent (3 per entity)
-	for i := 0; i < 6; i++ {
+	for range 6 {
 		select {
 		case <-eventsSent:
 		case <-time.After(1 * time.Second):
@@ -1073,7 +1073,7 @@ func TestReconcileController_InFlightWithMultipleEntities(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 
 	// Unblock all handlers
-	for i := 0; i < 6; i++ {
+	for range 6 {
 		blockChan <- struct{}{}
 		time.Sleep(10 * time.Millisecond)
 	}

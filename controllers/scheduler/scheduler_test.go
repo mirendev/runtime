@@ -277,7 +277,7 @@ func TestSchedulerMultipleNodes(t *testing.T) {
 	// three onto the same id (and now conflict, since CreateEntity is
 	// put-if-absent on every backend).
 	nodeIDs := make(map[entity.Id]bool)
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		nodeID := createReadyNode(t, ctx, server.Client, fmt.Sprintf("node-%d", i), &compute_v1alpha.Node{
 			Status: compute_v1alpha.READY,
 		})
@@ -290,7 +290,7 @@ func TestSchedulerMultipleNodes(t *testing.T) {
 	require.NoError(t, err)
 
 	// Create and schedule multiple sandboxes
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		sandbox := &compute_v1alpha.Sandbox{
 			Status: compute_v1alpha.PENDING,
 		}
@@ -386,7 +386,7 @@ func TestSchedulerStatelessSandboxPrefersRunners(t *testing.T) {
 	// three onto the same id (and now conflict, since CreateEntity is
 	// put-if-absent on every backend).
 	runnerIDs := make(map[entity.Id]bool)
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		runnerID := createReadyNode(t, ctx, server.Client, fmt.Sprintf("runner-%d", i), &compute_v1alpha.Node{
 			Status:   compute_v1alpha.READY,
 			RunnerId: "550e8400-e29b-41d4-a716-44665544000" + string(rune('0'+i)),
@@ -400,7 +400,7 @@ func TestSchedulerStatelessSandboxPrefersRunners(t *testing.T) {
 	require.NoError(t, err)
 
 	// Create and schedule multiple stateless sandboxes
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		sandbox := &compute_v1alpha.Sandbox{
 			Status: compute_v1alpha.PENDING,
 			Spec: compute_v1alpha.SandboxSpec{
@@ -579,7 +579,7 @@ func createPreScheduledSandbox(t *testing.T, ctx context.Context, server *testut
 // onto the same node. Repeats enough times to catch the random-collision case
 // that surfaced the bug.
 func TestSchedulerSpreadsReplicasAcrossRunners(t *testing.T) {
-	for trial := 0; trial < 20; trial++ {
+	for trial := range 20 {
 		t.Run(fmt.Sprintf("trial-%d", trial), func(t *testing.T) {
 			ctx := context.Background()
 			log := testutils.TestLogger(t)
@@ -602,7 +602,7 @@ func TestSchedulerSpreadsReplicasAcrossRunners(t *testing.T) {
 			poolID := "pool-spread-test"
 
 			placements := make(map[entity.Id]int)
-			for i := 0; i < 2; i++ {
+			for i := range 2 {
 				sb := &compute_v1alpha.Sandbox{
 					Status: compute_v1alpha.PENDING,
 					Spec: compute_v1alpha.SandboxSpec{
@@ -654,7 +654,7 @@ func TestSchedulerPacksWhenReplicasExceedRunners(t *testing.T) {
 	poolID := "pool-pack-test"
 
 	placements := make(map[entity.Id]int)
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		sb := &compute_v1alpha.Sandbox{
 			Status: compute_v1alpha.PENDING,
 			Spec: compute_v1alpha.SandboxSpec{

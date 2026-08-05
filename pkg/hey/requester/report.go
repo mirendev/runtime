@@ -226,7 +226,7 @@ func (r *report) latencies() []LatencyDistribution {
 		}
 	}
 	res := make([]LatencyDistribution, len(pctls))
-	for i := 0; i < len(pctls); i++ {
+	for i := range pctls {
 		if data[i] > 0 {
 			res[i] = LatencyDistribution{Percentage: pctls[i], Latency: data[i]}
 		}
@@ -239,7 +239,7 @@ func (r *report) histogram() []Bucket {
 	buckets := make([]float64, bc+1)
 	counts := make([]int, bc+1)
 	bs := (r.slowest - r.fastest) / float64(bc)
-	for i := 0; i < bc; i++ {
+	for i := range bc {
 		buckets[i] = r.fastest + bs*float64(i)
 	}
 	buckets[bc] = r.slowest
@@ -257,7 +257,7 @@ func (r *report) histogram() []Bucket {
 		}
 	}
 	res := make([]Bucket, len(buckets))
-	for i := 0; i < len(buckets); i++ {
+	for i := range buckets {
 		res[i] = Bucket{
 			Mark:      buckets[i],
 			Count:     counts[i],

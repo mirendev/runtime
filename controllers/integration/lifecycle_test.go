@@ -521,7 +521,7 @@ func TestPoolScaleDownReleasesDisks(t *testing.T) {
 	}
 
 	var sandboxes []sbInfo
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		sbID := entity.Id(entity.Id("sandbox/scale-" + string(rune('a'+i))))
 		diskName := "scale-disk-" + string(rune('a'+i))
 		diskID, leaseID := bootSandboxWithDisk(t, ctx, h, sbID, diskName, 10)

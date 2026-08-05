@@ -226,7 +226,7 @@ func TestStreamRegistry_RegisterAfterStageDoesNotResetState(t *testing.T) {
 func TestStreamRegistry_ConcurrentStreams(t *testing.T) {
 	reg := NewStreamRegistry(t.TempDir(), nil)
 	const n = 8
-	for i := 0; i < n; i++ {
+	for i := range n {
 		id := streamID(i)
 		reg.Register(id, makeTar(t, map[string]string{id: id}))
 	}
@@ -234,7 +234,7 @@ func TestStreamRegistry_ConcurrentStreams(t *testing.T) {
 	var wg sync.WaitGroup
 	paths := make([]string, n)
 	errs := make([]error, n)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()

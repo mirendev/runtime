@@ -95,7 +95,7 @@ func TestSandboxLogs(t *testing.T) {
 		// Stream ~12.5 MiB with no newline, in 64 KiB chunks the way containerd
 		// pumps a blob — far more than the 1 MiB cap.
 		chunk := bytes.Repeat([]byte("x"), 64*1024)
-		for i := 0; i < 200; i++ {
+		for range 200 {
 			n, err := sl.Write(chunk)
 			r.NoError(err)
 			r.Equal(len(chunk), n) // all bytes are always "consumed"
@@ -586,7 +586,7 @@ func BenchmarkSandboxLogsLargeBuffer(b *testing.B) {
 
 	// Create a large buffer with many lines
 	var buf bytes.Buffer
-	for i := 0; i < 100; i++ {
+	for i := range 100 {
 		buf.WriteString("log line ")
 		buf.WriteString(string('0' + rune(i%10)))
 		buf.WriteByte('\n')

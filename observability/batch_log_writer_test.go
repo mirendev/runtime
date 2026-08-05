@@ -376,7 +376,7 @@ func TestBatchLogWriter_ReportsTransportFailure(t *testing.T) {
 	}))
 	defer bw.Close()
 
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		if err := bw.WriteEntry("test-entity", LogEntry{
 			Timestamp: time.Now(),
 			Stream:    Stdout,

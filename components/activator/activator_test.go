@@ -121,7 +121,7 @@ func TestActivatorConcurrentSafety(t *testing.T) {
 
 	// Goroutine 1: Add versions
 	go func() {
-		for i := 0; i < 100; i++ {
+		for range 100 {
 			activator.mu.Lock()
 			activator.versions[verKey{ver: "ver-1", service: "web"}] = &versionPoolRef{
 				poolID:  poolID,
@@ -134,7 +134,7 @@ func TestActivatorConcurrentSafety(t *testing.T) {
 
 	// Goroutine 2: Read versions
 	go func() {
-		for i := 0; i < 100; i++ {
+		for range 100 {
 			activator.mu.Lock()
 			_ = activator.versions[verKey{ver: "ver-1", service: "web"}]
 			activator.mu.Unlock()
@@ -144,7 +144,7 @@ func TestActivatorConcurrentSafety(t *testing.T) {
 
 	// Goroutine 3: Delete versions
 	go func() {
-		for i := 0; i < 100; i++ {
+		for range 100 {
 			activator.mu.Lock()
 			delete(activator.versions, verKey{ver: "ver-1", service: "web"})
 			activator.mu.Unlock()
@@ -153,7 +153,7 @@ func TestActivatorConcurrentSafety(t *testing.T) {
 	}()
 
 	// Wait for all goroutines
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		<-done
 	}
 
@@ -330,7 +330,7 @@ func TestActivatorRecoveryIntegration(t *testing.T) {
 	pool.ID = poolID
 
 	// Create multiple running sandboxes
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		sb := compute_v1alpha.Sandbox{
 			Status: compute_v1alpha.RUNNING,
 			Spec: compute_v1alpha.SandboxSpec{
@@ -1675,7 +1675,7 @@ func TestConcurrentPoolIncrement(t *testing.T) {
 	errors := make(chan error, numGoroutines)
 	barrier := make(chan struct{})
 
-	for i := 0; i < numGoroutines; i++ {
+	for i := range numGoroutines {
 		go func(id int) {
 			// Wait for all goroutines to be ready
 			<-barrier
@@ -1694,7 +1694,7 @@ func TestConcurrentPoolIncrement(t *testing.T) {
 
 	// Collect all results
 	var returnedPools []*compute_v1alpha.SandboxPool
-	for i := 0; i < numGoroutines; i++ {
+	for range numGoroutines {
 		select {
 		case pool := <-results:
 			returnedPools = append(returnedPools, pool)
@@ -2277,7 +2277,7 @@ func TestActivatorDoesNotFailFastWhenPoolIsReusedByNewVersion(t *testing.T) {
 
 	// 9 DEAD sandboxes in the shared pool, all tagged as v1's.
 	var deadSandboxes []*sandbox
-	for i := 0; i < 9; i++ {
+	for i := range 9 {
 		id := entity.Id("dead-v1-" + string(rune('0'+i)))
 		ent := entity.Blank()
 		ent.SetID(id)
@@ -2971,7 +2971,7 @@ func TestRequestPoolCapacityAtMaxReturnsExistingPool(t *testing.T) {
 		inProgress: false,
 	}
 
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		resultPool, err := activator.requestPoolCapacity(ctx, testVer, "web")
 		require.NoError(t, err, "iteration %d: at-cap pool must not error", i)
 		require.NotNil(t, resultPool)
@@ -3716,7 +3716,7 @@ func TestRequestPoolCapacityRetryRaceNoDoubleUnlock(t *testing.T) {
 	const rounds = 10
 	const numGoroutines = 40
 
-	for round := 0; round < rounds; round++ {
+	for round := range rounds {
 		// A fresh version each round means a fresh cache key and a store with no
 		// pool for it yet, forcing every caller through the store-lookup retry
 		// loop from an empty cache.
@@ -3754,7 +3754,7 @@ func TestRequestPoolCapacityRetryRaceNoDoubleUnlock(t *testing.T) {
 		// they begin backing off.
 		done := make(chan error, numGoroutines)
 		barrier := make(chan struct{})
-		for i := 0; i < numGoroutines; i++ {
+		for range numGoroutines {
 			go func() {
 				<-barrier
 				_, err := activator.requestPoolCapacity(ctx, testVer, "web")
@@ -3782,7 +3782,7 @@ func TestRequestPoolCapacityRetryRaceNoDoubleUnlock(t *testing.T) {
 		// Drain every caller. We don't require success — depending on scheduling a
 		// caller may hit a benign OCC conflict or the not-found terminal path. We
 		// only require the process to survive: no fatal double-unlock.
-		for i := 0; i < numGoroutines; i++ {
+		for range numGoroutines {
 			<-done
 		}
 	}

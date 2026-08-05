@@ -9,7 +9,7 @@ import "testing"
 func TestGetFreePortReturnsDistinctPorts(t *testing.T) {
 	const n = 200
 	seen := make(map[int]bool, n)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		port := GetFreePort(t)
 		if port <= 0 {
 			t.Fatalf("call %d: GetFreePort returned non-positive port %d", i, port)

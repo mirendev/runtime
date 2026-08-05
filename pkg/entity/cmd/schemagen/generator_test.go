@@ -792,7 +792,7 @@ func TestRegisterEncodedSchemaStableWithDifferentFieldOrder(t *testing.T) {
 	const iterations = 5
 	var outputs []string
 
-	for i := 0; i < iterations; i++ {
+	for i := range iterations {
 		code, err := GenerateSchema(sf, "test")
 		if err != nil {
 			t.Fatalf("Failed to generate schema on iteration %d: %v", i, err)

@@ -27,7 +27,7 @@ func NukeNamespace(cl *containerd.Client, ns string) {
 
 	// There is a delay as things are cleaned up async that
 	// we can't see easily, so we just retry it if there is a failure.
-	for i := 0; i < 20; i++ {
+	for range 20 {
 		err = cl.NamespaceService().Delete(context.TODO(), ns)
 		if err != nil {
 			if strings.Contains(err.Error(), "not found") {
@@ -141,7 +141,7 @@ func WaitForContainerReady(ctx context.Context, cl *containerd.Client, ns, id st
 
 	var err error
 
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		cont, err := cl.LoadContainer(ctx, id)
 		if err == nil {
 			task, err := cont.Task(ctx, nil)

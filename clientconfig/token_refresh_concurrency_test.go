@@ -114,7 +114,7 @@ func TestTokenForIdentityConcurrentRefresh(t *testing.T) {
 
 	// In-process goroutines, each with its own freshly-loaded Config (mirrors
 	// separate `m` invocations that share the on-disk config).
-	for i := 0; i < goroutines; i++ {
+	for range goroutines {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -138,7 +138,7 @@ func TestTokenForIdentityConcurrentRefresh(t *testing.T) {
 	}
 
 	// Subprocesses: prove the lock is cross-process, not just cross-goroutine.
-	for i := 0; i < subprocesses; i++ {
+	for range subprocesses {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()

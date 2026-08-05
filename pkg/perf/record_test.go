@@ -74,7 +74,7 @@ func testPollTimeout(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), timeout)
 		defer cancel()
 
-		for i := 0; i < 2; i++ {
+		for range 2 {
 			_, err := getpid.ReadRecord(ctx)
 			errch <- err
 		}
@@ -140,7 +140,7 @@ func testPollCancel(t *testing.T) {
 	errch := make(chan error)
 
 	go func() {
-		for i := 0; i < 2; i++ {
+		for range 2 {
 			_, err := getpid.ReadRecord(ctx)
 			errch <- err
 		}
@@ -379,7 +379,7 @@ func testPollDisabledExplicitly(t *testing.T) {
 	seen := 0
 
 	go func() {
-		for i := 0; i < 2*n; i++ {
+		for range 2 * n {
 			_, err := getpid.ReadRecord(ctx)
 			if err == nil {
 				seen++
@@ -392,7 +392,7 @@ func testPollDisabledExplicitly(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	for i := 0; i < n; i++ {
+	for range n {
 		getpidTrigger()
 	}
 
@@ -400,7 +400,7 @@ func testPollDisabledExplicitly(t *testing.T) {
 		getpidTrigger()
 	}
 
-	for i := 0; i < n; i++ {
+	for range n {
 		getpidTrigger()
 	}
 
@@ -461,7 +461,7 @@ func testPollDisabledByRefresh(t *testing.T) {
 	seen := 0
 
 	go func() {
-		for i := 0; i < 2*n; i++ {
+		for range 2 * n {
 			_, err := getpid.ReadRecord(ctx)
 			if err == nil {
 				seen++
@@ -474,11 +474,11 @@ func testPollDisabledByRefresh(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	for i := 0; i < n; i++ {
+	for range n {
 		getpidTrigger()
 	}
 
-	for i := 0; i < n; i++ {
+	for range n {
 		getpidTrigger()
 	}
 
@@ -801,7 +801,7 @@ func testCPUWideSwitch(t *testing.T) {
 			sendtid = unix.Gettid()
 			ready <- nil
 			<-start
-			for i := 0; i < numpingpongs; i++ {
+			for range numpingpongs {
 				pingpong <- struct{}{}
 				<-pingpong
 			}
@@ -809,7 +809,7 @@ func testCPUWideSwitch(t *testing.T) {
 			recvtid = unix.Gettid()
 			ready <- nil
 			<-start
-			for i := 0; i < numpingpongs; i++ {
+			for range numpingpongs {
 				<-pingpong
 				pingpong <- struct{}{}
 			}
@@ -994,7 +994,7 @@ func testSampleGetpidConcurrent(t *testing.T) {
 	sawSample := make(chan bool)
 
 	go func() {
-		for i := 0; i < n; i++ {
+		for range n {
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
 			defer cancel()
 			rec, err := getpid.ReadRecord(ctx)
@@ -1010,7 +1010,7 @@ func testSampleGetpidConcurrent(t *testing.T) {
 	seen := 0
 
 	c, err := getpid.Measure(func() {
-		for i := 0; i < n; i++ {
+		for range n {
 			getpidTrigger()
 			if ok := <-sawSample; ok {
 				seen++
@@ -1191,7 +1191,7 @@ func testRedirectedOutput(t *testing.T) {
 
 	errch := make(chan error)
 	go func() {
-		for i := 0; i < 2; i++ {
+		for range 2 {
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
 			defer cancel()
 			_, err := leader.ReadRecord(ctx)
@@ -1214,7 +1214,7 @@ func testRedirectedOutput(t *testing.T) {
 		t.Fatalf("got %d hits for %q, want 1 hit", got.Value, got.Label)
 	}
 
-	for i := 0; i < 2; i++ {
+	for range 2 {
 		select {
 		case <-time.After(10 * time.Millisecond):
 			t.Errorf("did not get sample record: timeout")

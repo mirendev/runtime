@@ -1420,7 +1420,7 @@ func (s *RegistrationServer) deleteEntitiesByIndex(ctx context.Context, ref enti
 // incrementEnrollmentCount atomically increments the enrollment count on a
 // reusable invite. It retries on CAS contention.
 func (s *RegistrationServer) incrementEnrollmentCount(ctx context.Context, invite *runner_v1alpha.RunnerInvite, revision int64) error {
-	for attempt := 0; attempt < enrollmentCountRetries; attempt++ {
+	for attempt := range enrollmentCountRetries {
 		if attempt > 0 {
 			// Re-read the invite to get the latest revision and count
 			refreshed, rev, err := s.findInviteByHash(ctx, invite.CodeHash)

@@ -148,7 +148,7 @@ func TestLogWriterConcurrentWrites(t *testing.T) {
 	// Write multiple lines concurrently
 	done := make(chan bool, 10)
 
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		go func(id int) {
 			defer func() { done <- true }()
 			message := fmt.Sprintf("concurrent message %d\n", id)
@@ -160,14 +160,14 @@ func TestLogWriterConcurrentWrites(t *testing.T) {
 	}
 
 	// Wait for all goroutines to complete
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		<-done
 	}
 
 	logOutput := buf.String()
 
 	// Should contain messages from all goroutines
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		expected := fmt.Sprintf("concurrent message %d", i)
 		assert.Contains(t, logOutput, expected)
 	}

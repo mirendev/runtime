@@ -89,7 +89,7 @@ func TestNetDB(t *testing.T) {
 
 		// Reserve and release several IPs
 		ips := make([]string, 3)
-		for i := 0; i < 3; i++ {
+		for i := range 3 {
 			ip, err := subnet.Reserve()
 			r.NoError(err)
 			ips[i] = ip.String()
@@ -146,7 +146,7 @@ func TestNetDB(t *testing.T) {
 		r.NoError(err)
 
 		// Normal Reserve should skip the specifically reserved IP
-		for i := 0; i < 48; i++ {
+		for range 48 {
 			ip, err := subnet.Reserve()
 			r.NoError(err)
 			r.NotEqual("172.16.8.50/24", ip.String(), "should not allocate specifically reserved IP")
@@ -321,7 +321,7 @@ func TestNetDB(t *testing.T) {
 		)
 
 		wg.Add(workers)
-		for i := 0; i < workers; i++ {
+		for range workers {
 			go func() {
 				defer wg.Done()
 
@@ -332,7 +332,7 @@ func TestNetDB(t *testing.T) {
 				// Retry past transient SQLite busy errors; the property under
 				// test is uniqueness of successful reservations, not liveness.
 				var ip netip.Prefix
-				for attempt := 0; attempt < 100; attempt++ {
+				for range 100 {
 					ip, err = subnet.Reserve()
 					if err == nil {
 						break

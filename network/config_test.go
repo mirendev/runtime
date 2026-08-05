@@ -58,7 +58,7 @@ func TestReserveConflictFree(t *testing.T) {
 		// so every reservation the loop makes collides and it gives up.
 		live := make(map[netip.Addr]bool)
 		addr := netip.MustParseAddr("10.8.64.2")
-		for i := 0; i < allocBridgeMaxAttempts; i++ {
+		for range allocBridgeMaxAttempts {
 			live[addr] = true
 			addr = addr.Next()
 		}

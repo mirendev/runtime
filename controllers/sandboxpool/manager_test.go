@@ -102,7 +102,7 @@ func TestManagerScaleUpPartial(t *testing.T) {
 	pool.ID = poolID
 
 	// Create 2 existing sandboxes for this pool
-	for i := 0; i < 2; i++ {
+	for i := range 2 {
 		sb := &compute_v1alpha.Sandbox{
 			Status: compute_v1alpha.RUNNING,
 			Spec:   pool.SandboxSpec,
@@ -235,7 +235,7 @@ func TestManagerVersionFiltering(t *testing.T) {
 
 	// Create 2 sandboxes with old version but correct pool label.
 	// These should be counted as pool members (pool label is authoritative).
-	for i := 0; i < 2; i++ {
+	for i := range 2 {
 		sb := &compute_v1alpha.Sandbox{
 			Status: compute_v1alpha.RUNNING,
 			Spec: compute_v1alpha.SandboxSpec{
@@ -533,7 +533,7 @@ func TestManagerScaleDownFixedModeProactive(t *testing.T) {
 
 	// Create 3 RUNNING sandboxes, all with no activity yet (LastActivity.IsZero())
 	// This simulates a deployment where sandboxes just started
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		sb := &compute_v1alpha.Sandbox{
 			Status: compute_v1alpha.RUNNING,
 			// LastActivity is zero (not set) - simulates fresh sandboxes
@@ -617,7 +617,7 @@ func TestManagerZeroValuePersistence(t *testing.T) {
 	// Test 1: Update DesiredInstances to 0 via checkPoolForScaleDown
 	// Create 5 idle sandboxes so checkPoolForScaleDown will decrement DesiredInstances to 0
 	now := time.Now()
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		sb := &compute_v1alpha.Sandbox{
 			Status:       compute_v1alpha.RUNNING,
 			LastActivity: now.Add(-10 * time.Minute),
@@ -1426,7 +1426,7 @@ func TestManagerCrashResetDoesNotRecount(t *testing.T) {
 	// Create 3 DEAD sandboxes that crashed quickly (lifetime < 60s).
 	// These represent sandboxes from a previous version that crash-looped.
 	crashTime := time.Now().Add(-5 * time.Minute)
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		createdAt := crashTime.Add(time.Duration(i) * 30 * time.Second)
 		server.Store.NowFunc = func() time.Time { return createdAt }
 

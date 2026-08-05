@@ -58,7 +58,7 @@ func TestVictoriaMetricsWriter_WritePoint(t *testing.T) {
 		writer := NewVictoriaMetricsWriter(log, "localhost:8428", 10*time.Second)
 
 		// Fill buffer to maxMetricBufferSize
-		for i := 0; i < maxMetricBufferSize; i++ {
+		for i := range maxMetricBufferSize {
 			err := writer.WritePoint(context.Background(), MetricPoint{
 				Name:      "test_metric",
 				Value:     float64(i),
@@ -122,7 +122,7 @@ func TestVictoriaMetricsWriter_WritePoints(t *testing.T) {
 		writer := NewVictoriaMetricsWriter(log, "localhost:8428", 10*time.Second)
 
 		// Fill buffer to near capacity
-		for i := 0; i < maxMetricBufferSize-100; i++ {
+		for i := range maxMetricBufferSize - 100 {
 			err := writer.WritePoint(context.Background(), MetricPoint{
 				Name:      "test",
 				Value:     float64(i),
@@ -251,7 +251,7 @@ func TestVictoriaMetricsWriter_FlushBehavior(t *testing.T) {
 		defer writer.Close()
 
 		// Write exactly 1000 points
-		for i := 0; i < 1000; i++ {
+		for i := range 1000 {
 			err := writer.WritePoint(context.Background(), MetricPoint{
 				Name:      "test",
 				Value:     float64(i),
@@ -283,7 +283,7 @@ func TestVictoriaMetricsWriter_FlushBehavior(t *testing.T) {
 		defer writer.Close()
 
 		// Write a few points
-		for i := 0; i < 10; i++ {
+		for i := range 10 {
 			err := writer.WritePoint(context.Background(), MetricPoint{
 				Name:      "test",
 				Value:     float64(i),
@@ -314,7 +314,7 @@ func TestVictoriaMetricsWriter_FlushBehavior(t *testing.T) {
 		writer := NewVictoriaMetricsWriter(log, strings.TrimPrefix(server.URL, "http://"), 10*time.Second)
 
 		// Write a few points
-		for i := 0; i < 5; i++ {
+		for i := range 5 {
 			err := writer.WritePoint(context.Background(), MetricPoint{
 				Name:      "test",
 				Value:     float64(i),
@@ -362,7 +362,7 @@ func TestVictoriaMetricsWriter_Close(t *testing.T) {
 		writer.Start()
 
 		// Write some points
-		for i := 0; i < 5; i++ {
+		for i := range 5 {
 			err := writer.WritePoint(context.Background(), MetricPoint{
 				Name:      "test",
 				Value:     float64(i),
@@ -443,11 +443,11 @@ func TestVictoriaMetricsWriter_ConcurrentWrites(t *testing.T) {
 		numGoroutines := 10
 		pointsPerGoroutine := 50
 
-		for i := 0; i < numGoroutines; i++ {
+		for i := range numGoroutines {
 			wg.Add(1)
 			go func(id int) {
 				defer wg.Done()
-				for j := 0; j < pointsPerGoroutine; j++ {
+				for j := range pointsPerGoroutine {
 					err := writer.WritePoint(context.Background(), MetricPoint{
 						Name:      "concurrent_test",
 						Labels:    map[string]string{"goroutine": string(rune(id + '0'))},

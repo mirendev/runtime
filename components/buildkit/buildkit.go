@@ -569,7 +569,7 @@ func (c *Component) monitorTask(monitorCtx context.Context, exitCh <-chan contai
 
 func (c *Component) waitForReady(ctx context.Context) error {
 	// Wait for the Unix socket to be created and connectable
-	for i := 0; i < 30; i++ {
+	for range 30 {
 		// Check if socket file exists
 		if _, err := os.Stat(c.socketPath); err == nil {
 			// Try to connect to it

@@ -143,7 +143,7 @@ func TestUnescapeMalformed(t *testing.T) {
 
 func TestEscapingFuzz(t *testing.T) {
 	fuzzer := fuzz.New()
-	for i := 0; i < 1000; i++ {
+	for i := range 1000 {
 		var unescaped string
 		fuzzer.Fuzz(&unescaped)
 		t.Run(fmt.Sprintf("%d - '%s'", i, unescaped), func(t *testing.T) {

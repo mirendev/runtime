@@ -438,7 +438,7 @@ func chaosReconcileRound(ctx context.Context, h *TestHarness, rng *rand.Rand) {
 
 	for _, c := range controllers {
 		passes := rng.Intn(3) + 1
-		for i := 0; i < passes; i++ {
+		for range passes {
 			h.reconcileByIndex(ctx, c.index, c.rc)
 		}
 	}
@@ -469,7 +469,7 @@ func TestChaosConvergence(t *testing.T) {
 
 	// Phase 1: Boot N sandboxes with individual disks
 	const numSandboxes = 3
-	for i := 0; i < numSandboxes; i++ {
+	for i := range numSandboxes {
 		sbID := entity.Id(fmt.Sprintf("sandbox/chaos-%d", i))
 		diskName := fmt.Sprintf("chaos-disk-%d", i)
 		diskID, leaseID := bootSandboxWithDisk(t, ctx, h, sbID, diskName, 10)
@@ -497,7 +497,7 @@ func TestChaosConvergence(t *testing.T) {
 		report.recordAttempt(fault.name, ok)
 
 		rounds := rng.Intn(5) + 1
-		for r := 0; r < rounds; r++ {
+		for range rounds {
 			chaosReconcileRound(ctx, h, rng)
 		}
 

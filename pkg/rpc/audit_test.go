@@ -355,7 +355,7 @@ func TestCertAuthDeduper(t *testing.T) {
 		if logged, suppressed := d.record(key); !logged || suppressed != 0 {
 			t.Fatalf("first record: got (%v, %d), want (true, 0)", logged, suppressed)
 		}
-		for i := 0; i < 100; i++ {
+		for i := range 100 {
 			if logged, _ := d.record(key); logged {
 				t.Fatalf("repeat %d logged, want suppressed", i)
 			}
@@ -366,7 +366,7 @@ func TestCertAuthDeduper(t *testing.T) {
 		d, now := fakeClockDeduper(5 * time.Minute)
 
 		d.record(key)
-		for i := 0; i < 4999; i++ {
+		for range 4999 {
 			d.record(key)
 		}
 
@@ -417,7 +417,7 @@ func TestCertAuthDeduper(t *testing.T) {
 
 	t.Run("a nil deduper logs everything", func(t *testing.T) {
 		var d *certAuthDeduper
-		for i := 0; i < 3; i++ {
+		for range 3 {
 			if logged, suppressed := d.record(key); !logged || suppressed != 0 {
 				t.Fatalf("nil deduper: got (%v, %d), want (true, 0)", logged, suppressed)
 			}
@@ -428,7 +428,7 @@ func TestCertAuthDeduper(t *testing.T) {
 		d, now := fakeClockDeduper(5 * time.Minute)
 		d.max = 16
 
-		for i := 0; i < 500; i++ {
+		for i := range 500 {
 			d.record(certAuthKey{fingerprint: "fp-a", host: fmt.Sprintf("10.0.%d.%d", i/256, i%256)})
 			// Advance a little so entries age out rather than all looking current.
 			*now = now.Add(time.Second)
@@ -467,7 +467,7 @@ func TestLogCertAuthDeduplicates(t *testing.T) {
 
 	// A burst from one peer, including a reconnect on a fresh source port.
 	logCertAuth(context.Background(), log, d, newReq("10.0.0.1:8444"))
-	for i := 0; i < 999; i++ {
+	for range 999 {
 		logCertAuth(context.Background(), log, d, newReq("10.0.0.1:41857"))
 	}
 

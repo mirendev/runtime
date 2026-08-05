@@ -1135,7 +1135,7 @@ func (disp *ttyDisplay) print(d displayInfo, width, height int, all bool) {
 	}
 	// override previous content
 	if diff := disp.lineCount - lineCount; diff > 0 {
-		for i := 0; i < diff; i++ {
+		for range diff {
 			fmt.Fprintln(disp.c, strings.Repeat(" ", width))
 		}
 		fmt.Fprint(disp.c, aec.EmptyBuilder.Up(uint(diff)).Column(0).ANSI)

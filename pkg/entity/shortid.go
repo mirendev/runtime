@@ -105,7 +105,7 @@ func AllocateShortId(entityId string, exists ExistsCheck) (string, error) {
 
 func allocateRandomShortId(exists ExistsCheck) (string, error) {
 	for length := defaultShortIdLen; length <= maxShortIdLen; length++ {
-		for attempt := 0; attempt < 5; attempt++ {
+		for range 5 {
 			candidate, err := randomBase58(length)
 			if err != nil {
 				return "", err

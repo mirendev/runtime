@@ -437,7 +437,7 @@ func TestConnectorMultipleDetachCalls(t *testing.T) {
 	})
 
 	// Multiple detach calls should all succeed (idempotent)
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		err := c.Detach()
 		assert.NoError(t, err, "detach call %d should succeed", i+1)
 	}

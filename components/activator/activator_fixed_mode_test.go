@@ -134,7 +134,7 @@ func TestActivatorFixedModeRoundRobin(t *testing.T) {
 	sandboxURLs := make(map[string]int)
 
 	// Acquire multiple leases - should round-robin
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		lease, err := activator.AcquireLease(ctx, appVer, "web")
 		require.NoError(t, err)
 		require.NotNil(t, lease)
@@ -259,7 +259,7 @@ func TestActivatorFixedModeNoSlotExhaustion(t *testing.T) {
 	// Acquire many leases simultaneously (without releasing)
 	// For auto mode this would exhaust slots, but fixed mode should handle it fine
 	leases := make([]*Lease, 0)
-	for i := 0; i < 20; i++ {
+	for range 20 {
 		lease, err := activator.AcquireLease(ctx, appVer, "web")
 		require.NoError(t, err)
 		require.NotNil(t, lease)

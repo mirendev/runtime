@@ -43,7 +43,7 @@ func testGroupCount(t *testing.T) {
 
 	sum := int64(0)
 	gc, err := ev.MeasureGroup(func() {
-		for i := int64(0); i < 50000; i++ {
+		for i := range int64(50000) {
 			sum += i
 		}
 	})

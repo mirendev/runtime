@@ -98,7 +98,7 @@ func TestRestoreImage(t *testing.T) {
 	t.Run("round trip data-zeros-data pattern", func(t *testing.T) {
 		// 3 blocks: data, zeros, data
 		srcData := make([]byte, 12288)
-		for i := 0; i < 4096; i++ {
+		for i := range 4096 {
 			srcData[i] = 0xAA
 		}
 		// middle 4096 stays zero
@@ -225,7 +225,7 @@ func TestSparseWrite(t *testing.T) {
 		require.NoError(t, f.Truncate(8192))
 
 		data := make([]byte, 8192)
-		for i := 0; i < 4096; i++ {
+		for i := range 4096 {
 			data[i] = 0xCD
 		}
 

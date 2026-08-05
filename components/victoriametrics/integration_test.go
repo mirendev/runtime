@@ -315,7 +315,7 @@ func TestVictoriaMetricsComponent_MultipleStarts(t *testing.T) {
 
 	// Start, stop, start, stop multiple times
 	client := &http.Client{Timeout: 5 * time.Second}
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		t.Logf("Cycle %d: Starting...", i+1)
 		err = component.Start(ctx, config)
 		if err != nil {

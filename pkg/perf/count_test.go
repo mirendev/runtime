@@ -51,7 +51,7 @@ func testIPC(t *testing.T) {
 
 	var sum int64
 	gc, err := hw.MeasureGroup(func() {
-		for i := int64(0); i < 1000000; i++ {
+		for i := range int64(1000000) {
 			sum += i
 		}
 	})
@@ -152,7 +152,7 @@ func testL1DataMissesBadLocality(t *testing.T) {
 	max := 1000
 
 	var bad []interface{}
-	for i := 0; i < 10000; i++ {
+	for range 10000 {
 		bad = append(bad, rng.Intn(max))
 	}
 
@@ -197,7 +197,7 @@ func testL1DataMissesGoodLocality(t *testing.T) {
 	max := 1000
 
 	var contiguous []int
-	for i := 0; i < 10000; i++ {
+	for range 10000 {
 		contiguous = append(contiguous, rng.Intn(max))
 	}
 
@@ -266,13 +266,13 @@ func testL1Group(t *testing.T) {
 	const n = 100000
 
 	valuers := make([]valuer, 0, n)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		valuers = append(valuers, newValuer(i))
 	}
 
 	sum := 0
 	gc, err := l1.MeasureGroup(func() {
-		for i := 0; i < n; i++ {
+		for i := range n {
 			sum += valuers[i].value()
 		}
 	})

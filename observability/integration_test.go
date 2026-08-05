@@ -184,7 +184,7 @@ func TestVictoriaLogsIntegration(t *testing.T) {
 
 		// Write logs with specific timestamps
 		baseTime := time.Now()
-		for i := 0; i < 5; i++ {
+		for i := range 5 {
 			err := writer.WriteEntry(entityID, observability.LogEntry{
 				Timestamp: baseTime.Add(time.Duration(i) * time.Second),
 				Stream:    observability.Stdout,
@@ -249,7 +249,7 @@ func TestVictoriaLogsIntegration(t *testing.T) {
 
 		// Write 100 logs
 		logCount := 100
-		for i := 0; i < logCount; i++ {
+		for i := range logCount {
 			err := writer.WriteEntry(entityID, observability.LogEntry{
 				Timestamp: time.Now(),
 				Stream:    observability.Stdout,
