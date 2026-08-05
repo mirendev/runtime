@@ -254,7 +254,10 @@ func (m *MockStore) UpdateEntity(ctx context.Context, id Id, entity *Entity, opt
 	// Keep existing attrs except those being replaced (cardinality=one IDs
 	// present in the incoming change). Cardinality=many attrs are preserved
 	// so the new incoming values append to the existing set.
-	combinedAttrs := make([]Attr, 0, len(e.attrs)+len(entity.attrs))
+	// Capacity covers the attrs retained by the loop below; the trailing append
+	// grows once more for the incoming ones. Kept as a single length rather
+	// than the sum so the allocation size is not a computed value.
+	combinedAttrs := make([]Attr, 0, len(e.attrs))
 	for _, existing := range e.attrs {
 		if !replaceIds[existing.ID] {
 			combinedAttrs = append(combinedAttrs, existing)
