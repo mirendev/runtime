@@ -151,14 +151,28 @@ separator is a single space in all three positions; nothing is trimmed.
 The signature is raw bytes in field 8 — not base58, unlike the HTTP transports,
 where it has to survive a header.
 
-A timestamp older than 10 minutes is rejected, so a captured frame cannot be
-replayed indefinitely.
+A timestamp more than 10 minutes old, or more than 10 minutes in the future, is
+rejected, so a captured or pre-signed frame cannot be replayed outside a bounded
+window.
 
-`Bearer` is independent and optional. When present, it is offered to the
-configured `Authenticator` as `"Bearer <token>"`, and the identity it returns
-supersedes the signature identity — that is how a message transport reaches
-per-user authorization. Without one, the identity is the capability's key, with
-method `signed`.
+`Bearer` is independent and optional, and it is the only thing that grants real
+authorization here. When present, it is offered to the configured
+`Authenticator` as `"Bearer <token>"`, and the identity it returns supersedes
+the signature identity. A token that is present but fails to authenticate is
+rejected, not downgraded.
+
+Which tokens authenticate depends on how their authenticator validates them.
+Tokens whose authenticator checks the audience from inside the token — workload
+identity tokens and cloud JWTs — work unchanged over this transport. External
+OIDC tokens (`oidcauth`) do not: that authenticator derives the expected
+audience from the request host, which a message transport does not carry, so it
+returns no identity and the call is rejected.
+
+Without a bearer token the identity is the capability's key, with method
+`signed`. That identity proves possession of the capability, not who the caller
+is — its subject is a self-minted key — so it carries no RPC privilege of its
+own and is denied every non-public method by the authorizer. A caller that needs
+authorization presents a bearer token.
 
 ## Versioning
 
