@@ -45,6 +45,7 @@ import (
 	"miren.dev/runtime/pkg/netdb"
 	"miren.dev/runtime/pkg/rpc"
 	"miren.dev/runtime/pkg/saga"
+	"miren.dev/runtime/pkg/secret"
 	"miren.dev/runtime/pkg/workloadidentity"
 	"miren.dev/runtime/servers/exec"
 	"miren.dev/runtime/version"
@@ -125,6 +126,13 @@ type RunnerDeps struct {
 	// CACert is the cluster CA in PEM form, mounted into sandboxes so they can
 	// verify the API certificate.
 	CACert []byte
+
+	// Secrets materializes the secret references a sandbox spec carries, at
+	// container creation. On the coordinator this is the local backend
+	// registry, where the keyring lives. A distributed runner holds no key
+	// material, so it must resolve over RPC instead; until that exists, a
+	// sandbox on such a runner fails rather than starting without its secret.
+	Secrets secret.Resolver
 }
 
 const (
@@ -710,6 +718,7 @@ func (r *Runner) SetupControllers(
 		WorkloadIssuer: r.deps.WorkloadIssuer,
 		ApiAddress:     r.deps.ApiAddress,
 		CACert:         r.deps.CACert,
+		Secrets:        r.deps.Secrets,
 	}
 
 	var sbc sandbox.SandboxLifecycle

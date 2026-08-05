@@ -162,6 +162,13 @@ type CoordinatorConfig struct {
 
 	// WorkloadIssuer signs workload identity tokens for sandbox containers
 	WorkloadIssuer *workloadidentity.Issuer
+
+	// Secrets holds the registered secret backends. The caller builds it so the
+	// runner sharing this process materializes through the same registry the
+	// coordinator pins and serves with. Nil leaves the cluster without a secret
+	// store, in which case a config referencing one fails rather than deploying
+	// without it.
+	Secrets *secret.Registry
 }
 
 // CloudAuthConfig contains cloud authentication settings
@@ -1074,15 +1081,18 @@ func (c *Coordinator) Start(ctx context.Context) error {
 		return err
 	}
 
-	// Set up the secret backend registry. The built-in in-cluster backend is
-	// always present so a team can hold secrets without standing up an external
-	// manager first; externally configured instances register alongside it.
+	// The in-cluster backend needs the entity store, which only exists here, so
+	// the caller supplies an empty registry and this fills it in. Externally
+	// configured instances would register alongside it.
+	secretRegistry := c.Secrets
+	if secretRegistry == nil {
+		secretRegistry = secret.NewRegistry()
+	}
 	secretKeyring, err := keyring.Ensure(c.Log, c.DataPath)
 	if err != nil {
 		c.Log.Error("failed to open secret keyring", "error", err)
 		return err
 	}
-	secretRegistry := secret.NewRegistry()
 	secretBackend := secretcluster.NewBackend(c.Log, ec, secretKeyring)
 	secretRegistry.Register(secretBackend)
 

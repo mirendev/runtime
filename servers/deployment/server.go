@@ -993,7 +993,7 @@ func (d *DeploymentServer) SetEnvVars(ctx context.Context, req *deployment_v1alp
 	// Convert RPC vars to shared helper input
 	vars := make([]appclient.EnvVarInput, len(args.Vars()))
 	for i, v := range args.Vars() {
-		vars[i] = appclient.EnvVarInput{Key: v.Key(), Value: v.Value(), Sensitive: v.Sensitive()}
+		vars[i] = appclient.EnvVarInput{Key: v.Key(), Value: v.Value(), Sensitive: v.Sensitive(), Backend: v.Backend()}
 	}
 
 	// Call shared helper to create new version

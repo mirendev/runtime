@@ -535,6 +535,7 @@ func (r *AppInfo) GetConfiguration(ctx context.Context, state *app_v1alpha.CrudG
 		env.SetSource(ev.Source)
 		env.SetRequired(ev.Required)
 		env.SetDescription(ev.Description)
+		env.SetBackend(ev.Backend)
 		envVars = append(envVars, &env)
 	}
 
@@ -563,6 +564,7 @@ func (r *AppInfo) GetConfiguration(ctx context.Context, state *app_v1alpha.CrudG
 				env.SetSource(ev.Source)
 				env.SetRequired(ev.Required)
 				env.SetDescription(ev.Description)
+				env.SetBackend(ev.Backend)
 				svcEnvVars = append(svcEnvVars, &env)
 			}
 			sc.SetServiceEnv(svcEnvVars)

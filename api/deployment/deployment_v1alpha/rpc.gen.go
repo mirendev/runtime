@@ -625,6 +625,7 @@ type environmentVariableData struct {
 	Key       *string `cbor:"0,keyasint,omitempty" json:"key,omitempty"`
 	Value     *string `cbor:"1,keyasint,omitempty" json:"value,omitempty"`
 	Sensitive *bool   `cbor:"2,keyasint,omitempty" json:"sensitive,omitempty"`
+	Backend   *string `cbor:"3,keyasint,omitempty" json:"backend,omitempty"`
 }
 
 type EnvironmentVariable struct {
@@ -674,6 +675,21 @@ func (v *EnvironmentVariable) Sensitive() bool {
 
 func (v *EnvironmentVariable) SetSensitive(sensitive bool) {
 	v.data.Sensitive = &sensitive
+}
+
+func (v *EnvironmentVariable) HasBackend() bool {
+	return v.data.Backend != nil
+}
+
+func (v *EnvironmentVariable) Backend() string {
+	if v.data.Backend == nil {
+		return ""
+	}
+	return *v.data.Backend
+}
+
+func (v *EnvironmentVariable) SetBackend(backend string) {
+	v.data.Backend = &backend
 }
 
 func (v *EnvironmentVariable) MarshalCBOR() ([]byte, error) {

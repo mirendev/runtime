@@ -31,6 +31,7 @@ import (
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/types"
 	"miren.dev/runtime/pkg/idgen"
+	"miren.dev/runtime/pkg/secret"
 )
 
 var launcherTracer = otel.Tracer("miren.dev/runtime/deployment/launcher")
@@ -720,11 +721,17 @@ func (l *Launcher) buildSandboxSpec(
 		appCont.Port = containerPorts
 	}
 
-	// Add user-supplied config env vars, stripping any system-managed keys
+	// Add user-supplied config env vars, stripping any system-managed keys.
+	//
+	// A backend-sourced variable contributes a reference, never a value. This
+	// spec is persisted as part of the sandbox pool entity, so materializing
+	// here would put the plaintext in etcd — the exact thing referencing a
+	// secret instead of inlining it is meant to avoid. The value is substituted
+	// in memory when the container is created.
 	envMap := make(map[string]string)
 	for _, x := range cfgSpec.Variables {
 		if !isSystemEnvVar(x.Key) {
-			envMap[x.Key] = x.Value
+			envMap[x.Key] = envValueFor(x.Backend, x.Value)
 		}
 	}
 
@@ -733,7 +740,7 @@ func (l *Launcher) buildSandboxSpec(
 		if svc.Name == serviceName {
 			for _, x := range svc.Env {
 				if !isSystemEnvVar(x.Key) {
-					envMap[x.Key] = x.Value
+					envMap[x.Key] = envValueFor(x.Backend, x.Value)
 				}
 			}
 			break
@@ -1112,6 +1119,20 @@ func envVarsEqual(env1, env2 []string) bool {
 	}
 
 	return true
+}
+
+// envValueFor renders what a variable contributes to a sandbox spec: its
+// literal value, or — when it is sourced from a secret backend — a reference
+// standing in for the value.
+//
+// The reference carries the concrete version its ConfigVersion pinned, so it
+// changes exactly when the bytes behind it would. That keeps pool reuse honest
+// without the pool comparison ever seeing a secret.
+func envValueFor(backend, value string) string {
+	if backend == "" {
+		return value
+	}
+	return secret.FormatSentinel(backend, value)
 }
 
 // isSystemEnvVar returns true if the given key is a system-managed env var

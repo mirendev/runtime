@@ -518,13 +518,19 @@ func buildServicesConfig(appConfig *appconfig.AppConfig, procfileServices map[st
 			if len(serviceConfig.EnvVars) > 0 {
 				svc.Env = make([]core_v1alpha.ConfigSpecServicesEnv, 0, len(serviceConfig.EnvVars))
 				for _, envVar := range serviceConfig.EnvVars {
+					value, backend, sensitive := envVar.Value, envVar.Backend, envVar.Sensitive
+					if backend != "" {
+						value, sensitive = envVar.Ref, true
+					}
+
 					svc.Env = append(svc.Env, core_v1alpha.ConfigSpecServicesEnv{
 						Key:         envVar.Key,
-						Value:       envVar.Value,
-						Sensitive:   envVar.Sensitive,
+						Value:       value,
+						Sensitive:   sensitive,
 						Required:    envVar.Required,
 						Description: envVar.Description,
 						Source:      "config",
+						Backend:     backend,
 					})
 				}
 			}
@@ -625,13 +631,22 @@ func buildVariablesFromAppConfig(appConfig *appconfig.AppConfig) []core_v1alpha.
 
 	variables := make([]core_v1alpha.ConfigSpecVariables, 0, len(appConfig.EnvVars))
 	for _, envVar := range appConfig.EnvVars {
+		value, backend, sensitive := envVar.Value, envVar.Backend, envVar.Sensitive
+		if backend != "" {
+			// A referenced secret carries its reference where an inline value
+			// would go, and is sensitive by construction: it exists precisely
+			// because the real value is not fit to sit in config.
+			value, sensitive = envVar.Ref, true
+		}
+
 		variables = append(variables, core_v1alpha.ConfigSpecVariables{
 			Key:         envVar.Key,
-			Value:       envVar.Value,
-			Sensitive:   envVar.Sensitive,
+			Value:       value,
+			Sensitive:   sensitive,
 			Required:    envVar.Required,
 			Description: envVar.Description,
 			Source:      "config",
+			Backend:     backend,
 		})
 	}
 	return variables
@@ -712,6 +727,10 @@ func mergeCliEnvVars(existingVars []core_v1alpha.ConfigSpecVariables, cliVars []
 
 	// CLI vars always override (marked as user-provided).
 	// Preserve Required/Description metadata from existing vars (e.g. from app.toml).
+	//
+	// Backend is deliberately not preserved: `-e KEY=VALUE` supplies a literal,
+	// so it replaces a secret reference on that key outright rather than being
+	// read as a new reference into whatever backend the old value named.
 	for _, cv := range cliVars {
 		newVar := core_v1alpha.ConfigSpecVariables{
 			Key:       cv.Key(),
