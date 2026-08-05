@@ -85,4 +85,5 @@ miren server --mode standalone
 - [`miren server register`](/command/server-register) — Register this cluster with miren.cloud
 - [`miren server status`](/command/server-status) — Show miren service status
 - [`miren server uninstall`](/command/server-uninstall) — Remove systemd service for miren server
+- [`miren server unregister`](/command/server-unregister) — Detach this cluster from miren.cloud
 - [`miren server upgrade`](/command/server-upgrade) — Upgrade miren server

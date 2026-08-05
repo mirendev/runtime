@@ -335,6 +335,7 @@
       "command/server-register-status",
       "command/server-status",
       "command/server-uninstall",
+      "command/server-unregister",
       "command/server-upgrade",
       "command/server-upgrade-rollback"
     ]

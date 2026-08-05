@@ -26,6 +26,17 @@ func addCommands(d *mflags.Dispatcher) {
 		}),
 	))
 
+	d.Dispatch("server unregister", Infer("server unregister", "Detach this cluster from miren.cloud", Unregister,
+		WithExample(mflags.Example{
+			Name: "Unregister from cloud",
+			Body: "miren server unregister",
+		}),
+		WithExample(mflags.Example{
+			Name: "Clear local registration when the cloud entry is already gone",
+			Body: "miren server unregister --local-only",
+		}),
+	))
+
 	// Server management commands
 	d.Dispatch("server install", Infer("server install", "Install systemd service for miren server", ServerInstall,
 		WithExample(mflags.Example{

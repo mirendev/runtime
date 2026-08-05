@@ -257,6 +257,34 @@ func SaveRegistration(dir string, reg *StoredRegistration) error {
 	return nil
 }
 
+// RegistrationFiles are the files SaveRegistration writes, and the complete
+// set that has to go for a cluster to stop considering itself registered.
+//
+// Nothing else in the server directory belongs to cloud registration, which is
+// easy to get wrong by eye: ca.crt/ca.key and api.crt/api.key secure
+// CLI-to-cluster authentication, oidc-signing.key signs end-user session
+// cookies for OIDC-protected routes, and workload-identity.key anchors the
+// cluster's own service identities. Removing any of those breaks something
+// unrelated to the cloud.
+var RegistrationFiles = []string{
+	"registration.json",
+	"service-account.key",
+}
+
+// ClearRegistration removes the registration data from the specified
+// directory, leaving the rest of the server directory alone. Missing files are
+// not an error, so a partially cleared directory can be finished off by
+// running again.
+func ClearRegistration(dir string) error {
+	for _, name := range RegistrationFiles {
+		if err := os.Remove(filepath.Join(dir, name)); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("failed to remove %s: %w", name, err)
+		}
+	}
+
+	return nil
+}
+
 // LoadRegistration loads the registration data from the specified directory
 func LoadRegistration(dir string) (*StoredRegistration, error) {
 	path := filepath.Join(dir, "registration.json")
