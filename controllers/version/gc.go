@@ -149,6 +149,36 @@ func (c *GCController) runGCWithLogging(ctx context.Context) {
 			"retained", result.RetainedVersions,
 			"total", result.TotalScanned)
 	}
+
+	// Secret versions are reaped on the same tick, after app versions: deleting
+	// an app version drops the ConfigVersion pinning its secrets, so running in
+	// this order lets a secret version become reapable in the same sweep that
+	// released it rather than waiting for the next one.
+	c.runSecretGCWithLogging(ctx)
+}
+
+func (c *GCController) runSecretGCWithLogging(ctx context.Context) {
+	result, err := c.RunSecretGC(ctx)
+	if err != nil {
+		c.Log.Error("secret version GC failed", "error", err)
+		return
+	}
+
+	if result.DeletedVersions > 0 || result.FailedVersions > 0 {
+		c.Log.Info("secret version GC complete",
+			"deleted", result.DeletedVersions,
+			"failed", result.FailedVersions,
+			"retained_pinned", result.RetainedPinned,
+			"retained_current", result.RetainedCurrent,
+			"retained_recent", result.RetainedRecent,
+			"total", result.TotalScanned)
+	} else {
+		c.Log.Debug("secret version GC complete, nothing reaped",
+			"retained_pinned", result.RetainedPinned,
+			"retained_current", result.RetainedCurrent,
+			"retained_recent", result.RetainedRecent,
+			"total", result.TotalScanned)
+	}
 }
 
 type versionInfo struct {
