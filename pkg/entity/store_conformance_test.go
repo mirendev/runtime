@@ -3,6 +3,7 @@ package entity
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -662,6 +663,93 @@ func TestStoreConformance_ListIndexRevision(t *testing.T) {
 		require.NoError(t, err)
 		assert.Contains(t, ids, a.Id())
 		assert.Greater(t, rev, int64(0), "ListIndexRevision must report a positive revision to resume a watch from")
+	})
+}
+
+// TestStoreConformance_ListIndexPage pins bounded index paging. The cursor is
+// opaque and the two backends derive it differently — EtcdStore from the
+// keyspace, MockStore from sorted ids — so what has to match is the behaviour:
+// every entity is visited exactly once across the pages, and the walk ends.
+func TestStoreConformance_ListIndexPage(t *testing.T) {
+	runStoreConformance(t, func(t *testing.T, store Store) {
+		ctx := t.Context()
+		applyConformanceSchema(t, store)
+
+		target := Id("conf-page-target/v1")
+		_, err := store.CreateEntity(ctx, New(Ref(DBId, target)))
+		require.NoError(t, err)
+
+		want := map[Id]bool{}
+		for i := range 7 {
+			e, err := store.CreateEntity(ctx, New(
+				Any(Ident, fmt.Sprintf("conf-page-%d", i)),
+				Ref(Id("conf/ref"), target),
+			))
+			require.NoError(t, err)
+			want[e.Id()] = true
+		}
+
+		index := Ref(Id("conf/ref"), target)
+
+		first, err := store.ListIndexPage(ctx, index, "", 3)
+		require.NoError(t, err)
+		assert.Len(t, first.Ids, 3, "a page must honour its limit")
+		assert.Equal(t, int64(7), first.Total, "the first page must report the full count")
+		assert.NotEmpty(t, first.Cursor, "an unexhausted index must offer a cursor")
+
+		// Walk the rest and prove the pages tile the index exactly.
+		got := map[Id]bool{}
+		for _, id := range first.Ids {
+			got[id] = true
+		}
+
+		cursor := first.Cursor
+		for range 10 {
+			if cursor == "" {
+				break
+			}
+
+			page, err := store.ListIndexPage(ctx, index, cursor, 3)
+			require.NoError(t, err)
+
+			for _, id := range page.Ids {
+				assert.False(t, got[id], "paging must not repeat %s", id)
+				got[id] = true
+			}
+
+			cursor = page.Cursor
+		}
+
+		assert.Equal(t, "", cursor, "paging must terminate")
+		assert.Equal(t, want, got, "the pages together must cover the whole index")
+	})
+
+	t.Run("unlimited reads the whole index", func(t *testing.T) {
+		runStoreConformance(t, func(t *testing.T, store Store) {
+			ctx := t.Context()
+			applyConformanceSchema(t, store)
+
+			target := Id("conf-page-all/v1")
+			_, err := store.CreateEntity(ctx, New(Ref(DBId, target)))
+			require.NoError(t, err)
+
+			for i := range 4 {
+				_, err := store.CreateEntity(ctx, New(
+					Any(Ident, fmt.Sprintf("conf-page-all-%d", i)),
+					Ref(Id("conf/ref"), target),
+				))
+				require.NoError(t, err)
+			}
+
+			page, err := store.ListIndexPage(ctx, Ref(Id("conf/ref"), target), "", 0)
+			require.NoError(t, err)
+
+			assert.Len(t, page.Ids, 4)
+			assert.Equal(t, "", page.Cursor, "an exhausted index offers no cursor")
+			// Counting is the only O(index) step, so an unlimited read must
+			// derive the total from what it already holds rather than pay for it.
+			assert.Equal(t, int64(4), page.Total)
+		})
 	})
 }
 
