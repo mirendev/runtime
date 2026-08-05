@@ -2,7 +2,6 @@ package saga
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -31,39 +30,10 @@ func NewEACStorage(eac *es.EntityAccessClient, log *slog.Logger) *EACStorage {
 
 // Save persists the execution state as an entity via EAC.
 func (s *EACStorage) Save(ctx context.Context, exec *Execution) error {
-	initialInputs, err := json.Marshal(exec.InitialInputs)
+	ent, err := executionToEntity(exec)
 	if err != nil {
-		return fmt.Errorf("marshaling initial inputs: %w", err)
+		return err
 	}
-
-	executedActions, err := json.Marshal(exec.ExecutedActions)
-	if err != nil {
-		return fmt.Errorf("marshaling executed actions: %w", err)
-	}
-
-	executionOrder, err := json.Marshal(exec.ExecutionOrder)
-	if err != nil {
-		return fmt.Errorf("marshaling execution order: %w", err)
-	}
-
-	status := statusToEntity(exec.Status)
-
-	sagaEntity := &saga_v1alpha.Saga{
-		ID:                entity.Id(exec.ID),
-		DefinitionName:    exec.DefinitionName,
-		DefinitionVersion: int64(exec.DefinitionVersion),
-		ParentExecutionId: entity.Id(exec.ParentExecutionID),
-		Status:            status,
-		InitialInputs:     initialInputs,
-		ExecutedActions:   executedActions,
-		ExecutionOrder:    executionOrder,
-		Error:             exec.Error,
-	}
-
-	ent := entity.New(
-		entity.DBId, entity.Id(exec.ID),
-		sagaEntity.Encode(),
-	)
 
 	// Put is an upsert (update-then-create): unlike Ensure, it applies our
 	// attributes even when the entity already exists. Ensure is create-if-absent

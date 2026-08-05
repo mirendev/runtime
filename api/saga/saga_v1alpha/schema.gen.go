@@ -1,11 +1,14 @@
 package saga_v1alpha
 
 import (
+	"time"
+
 	entity "miren.dev/runtime/pkg/entity"
 	schema "miren.dev/runtime/pkg/entity/schema"
 )
 
 const (
+	SagaCreatedAtId         = entity.Id("dev.miren.saga/saga.created_at")
 	SagaDefinitionNameId    = entity.Id("dev.miren.saga/saga.definition_name")
 	SagaDefinitionVersionId = entity.Id("dev.miren.saga/saga.definition_version")
 	SagaErrorId             = entity.Id("dev.miren.saga/saga.error")
@@ -19,10 +22,12 @@ const (
 	SagaStatusUndoingId     = entity.Id("dev.miren.saga/status.undoing")
 	SagaStatusCompletedId   = entity.Id("dev.miren.saga/status.completed")
 	SagaStatusFailedId      = entity.Id("dev.miren.saga/status.failed")
+	SagaUpdatedAtId         = entity.Id("dev.miren.saga/saga.updated_at")
 )
 
 type Saga struct {
 	ID                entity.Id  `json:"id"`
+	CreatedAt         time.Time  `cbor:"created_at,omitempty" json:"created_at,omitempty"`
 	DefinitionName    string     `cbor:"definition_name,omitempty" json:"definition_name,omitempty"`
 	DefinitionVersion int64      `cbor:"definition_version,omitempty" json:"definition_version,omitempty"`
 	Error             string     `cbor:"error,omitempty" json:"error,omitempty"`
@@ -31,6 +36,7 @@ type Saga struct {
 	InitialInputs     []byte     `cbor:"initial_inputs,omitempty" json:"initial_inputs,omitempty"`
 	ParentExecutionId entity.Id  `cbor:"parent_execution_id,omitempty" json:"parent_execution_id,omitempty"`
 	Status            SagaStatus `cbor:"status,omitempty" json:"status,omitempty"`
+	UpdatedAt         time.Time  `cbor:"updated_at,omitempty" json:"updated_at,omitempty"`
 }
 
 type SagaStatus string
@@ -48,6 +54,9 @@ var sagastatusToId = map[SagaStatus]entity.Id{PENDING: SagaStatusPendingId, RUNN
 
 func (o *Saga) Decode(e entity.AttrGetter) {
 	o.ID = entity.MustGet(e, entity.DBId).Value.Id()
+	if a, ok := e.Get(SagaCreatedAtId); ok && a.Value.Kind() == entity.KindTime {
+		o.CreatedAt = a.Value.Time()
+	}
 	if a, ok := e.Get(SagaDefinitionNameId); ok && a.Value.Kind() == entity.KindString {
 		o.DefinitionName = a.Value.String()
 	}
@@ -72,6 +81,9 @@ func (o *Saga) Decode(e entity.AttrGetter) {
 	if a, ok := e.Get(SagaStatusId); ok && a.Value.Kind() == entity.KindId {
 		o.Status = sagastatusFromId[a.Value.Id()]
 	}
+	if a, ok := e.Get(SagaUpdatedAtId); ok && a.Value.Kind() == entity.KindTime {
+		o.UpdatedAt = a.Value.Time()
+	}
 }
 
 func (o *Saga) Is(e entity.AttrGetter) bool {
@@ -91,6 +103,9 @@ func (o *Saga) EntityId() entity.Id {
 }
 
 func (o *Saga) Encode() (attrs []entity.Attr) {
+	if !entity.Empty(o.CreatedAt) {
+		attrs = append(attrs, entity.Time(SagaCreatedAtId, o.CreatedAt))
+	}
 	if !entity.Empty(o.DefinitionName) {
 		attrs = append(attrs, entity.String(SagaDefinitionNameId, o.DefinitionName))
 	}
@@ -115,11 +130,17 @@ func (o *Saga) Encode() (attrs []entity.Attr) {
 	if a, ok := sagastatusToId[o.Status]; ok {
 		attrs = append(attrs, entity.Ref(SagaStatusId, a))
 	}
+	if !entity.Empty(o.UpdatedAt) {
+		attrs = append(attrs, entity.Time(SagaUpdatedAtId, o.UpdatedAt))
+	}
 	attrs = append(attrs, entity.Ref(entity.EntityKind, KindSaga))
 	return
 }
 
 func (o *Saga) Empty() bool {
+	if !entity.Empty(o.CreatedAt) {
+		return false
+	}
 	if !entity.Empty(o.DefinitionName) {
 		return false
 	}
@@ -144,10 +165,14 @@ func (o *Saga) Empty() bool {
 	if o.Status != "" {
 		return false
 	}
+	if !entity.Empty(o.UpdatedAt) {
+		return false
+	}
 	return true
 }
 
 func (o *Saga) InitSchema(sb *schema.SchemaBuilder) {
+	sb.Time("created_at", "dev.miren.saga/saga.created_at", schema.Doc("When the execution was created"))
 	sb.String("definition_name", "dev.miren.saga/saga.definition_name", schema.Doc("The name of the registered saga definition"), schema.Indexed)
 	sb.Int64("definition_version", "dev.miren.saga/saga.definition_version", schema.Doc("The version of the definition when this execution started"))
 	sb.String("error", "dev.miren.saga/saga.error", schema.Doc("Error message if the saga failed"))
@@ -161,6 +186,7 @@ func (o *Saga) InitSchema(sb *schema.SchemaBuilder) {
 	sb.Singleton("dev.miren.saga/status.completed")
 	sb.Singleton("dev.miren.saga/status.failed")
 	sb.Ref("status", "dev.miren.saga/saga.status", schema.Doc("Current execution status"), schema.Indexed, schema.Choices(SagaStatusPendingId, SagaStatusRunningId, SagaStatusUndoingId, SagaStatusCompletedId, SagaStatusFailedId))
+	sb.Time("updated_at", "dev.miren.saga/saga.updated_at", schema.Doc("When the execution last changed state"))
 }
 
 var (
@@ -172,5 +198,5 @@ func init() {
 	schema.Register("dev.miren.saga", "v1alpha", func(sb *schema.SchemaBuilder) {
 		(&Saga{}).InitSchema(sb)
 	})
-	schema.RegisterEncodedSchema("dev.miren.saga", "v1alpha", []byte("\x1f\x8b\b\x00\x00\x00\x00\x00\x00\xff\x84\x93oJ\x031\x10ů\xa1\xa2\b*\xfam\xc5\x13\x85tg\x92\x0e\xcdNB\xfe,\xdb\x1bx\r\xb1zD?K\x92\xc5bL\xeb\x97\x12\u07bc\xf7\xcb\xeb\x929\x00\xcb\t\x19p\x1e&\xf2\xc8C\x90Z\xe2\x8e\x18\xc2\xdbr\xf1[~\xcer9}\x96Th\xc6\xc7\xe8\x97\x02;I↫\x14\xa1\x81\xf0\xfa\xbe!X\xee;\xe9\x01P\x11S$\xcb\"\xdfP\xae\xb1\xad\x18\xf7\x0eU\x88\x9eX\x17\xd2\xe3?\xa4\x19} \xcb\x05\xe6;z\xe6\x8dı\xc0.{0\xf4\xde\xfa\x92\xc7zl+<tS\v\x8e)\"\b9\xe6\xfbB\x01\xb8?jf\xe1f\x1f1\x9c\xfe.5\x94K[\x0fX\xab\xd8Vl@w=P\xf9\xef\xd2\bb\x97bmč\xd6`\x9ez\x18'=r\x14\xc7\x06\x04\xf5I\xf4\x06\x19\xb8!8d\xdaU\x8f\x16\xa2\x8c\xa9\x96Q\xeb9g\x009M\xbb\xfc#fi\x12\x86\x0f\xa5$\x19\x84庥\x94\xd0P\xa7\xda!\x03\xb1^n\xfa\xaeu\xac}b>c[\xc7:1\xd83\xb6uL\xa3\x9d\x9c\xc1\x88\xb0\xdc\xf6\x8d?\x06\xbd\xbe;=\xbfH\xe3\xb6\xd28O\x93\xf4{\x91W\ar\xa4u\xec\xc2\xd6\xfa(\xeaV\x16\xc7\xe9\xd5\xfc\x06\x00\x00\xff\xff\x01\x00\x00\xff\xff\xce\xdck\x92\xd1\x03\x00\x00"))
+	schema.RegisterEncodedSchema("dev.miren.saga", "v1alpha", []byte("\x1f\x8b\b\x00\x00\x00\x00\x00\x00\xff\x84\x94[n\xdb0\x10E\xb7\xd1\x16}\x00m\xd1\xfe)Ȋ\x04Z3\xa4'\x96\x86\x04\x1f\x82\xbc\x85\xec\"\x88\x93%\xe6;\xe0P\xf0\x83\xa1\x9d\x1f\x83\xbas\xef\xe1\xd0\xe0\xf0\x00\xac&d\xc0\xb9\x9b\xc8#wA\x19\x85;b\bO˗K\xf9.˲z\x95T\xa8ʧ\xe8\x9b\x06;)⊫5\xe1\b\xe1\xf1yC\xb0\xfcl\xa4\xbb\xc1\xa3\x8a\b\xbd\x8a\xb2\xc3\xc3\xd9w\xdc;\x84H\x13J\xfaO+\r\xa8\x89)\x92\xe5>\xa7\x05ak1st\x88\x9e\xd8\b\xe9\xdf'\xa4\x19} \xcb\x02\xf3\r=\xf3\x06\xe2(\xb0\xaf-\x18zo\xbd\xe4\xb1,\xeb\x16\xfe6S\v\x0eI\xce>\xe4\xfd\x82\x00\xdc\a5\xb3p\xb3\x8f\x18\xae\xff/%\x94\x9b\xb6\x1e\xb0\xb4bk\xb1\x02\xfdn\x81\xe4\xecj\xec\x89]\x8a\xa5#\xae\xb4\n\xf3\xbf\x85q\xca#\xc7\xfe\xd4\x01A\xb9P\xadB\x06n\b\x0e\x99\xf6\xadE\vQ\xc5T\x9a\xd1\xebZ\xee\nr\x9av\xf9\xa7\x9f\u05580\xbch\xadhDX\xbe\xd7\x14\tu\xa5j\x1c2\x10\x9b\xe5G۵\x96\x8dO\xcc7lk\xd9$\x06{ö\x96i\xb0\x93\x1b1\",\xbf\xdaƣ\xe1\xfa\xec$\a\x17\xb3s\xf6}\x9c\x1d\xb3\xdeZ3߫\xd1m\xd5\xe8<M\xca\xef\xfb<\xb6\x901\xb5c\x17\xb6\xd6Ǿ\xbc\b\xe2\xb8\xfe,\xbc\x03\x00\x00\xff\xff\x01\x00\x00\xff\xff\xb3r?\xd8M\x04\x00\x00"))
 }

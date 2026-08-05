@@ -37,3 +37,11 @@ kinds:
     error:
       type: string
       doc: Error message if the saga failed
+
+    created_at:
+      type: time
+      doc: When the execution was created
+
+    updated_at:
+      type: time
+      doc: When the execution last changed state

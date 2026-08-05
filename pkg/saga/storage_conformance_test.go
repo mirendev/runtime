@@ -159,6 +159,48 @@ func TestStorageConformance_CompletedExecutionLeavesIncompleteList(t *testing.T)
 	}
 }
 
+// TestStorageConformance_TimestampsRoundTrip pins the timestamps to storage.
+// The executor has always maintained Execution.CreatedAt and UpdatedAt in
+// memory, stamping UpdatedAt on every state transition, but the saga schema had
+// no fields to hold them and Save dropped them on the floor. Anything that
+// needs a saga's age — retention GC most of all — reads back zero times without
+// this, so a TTL sweep would either delete everything or nothing.
+func TestStorageConformance_TimestampsRoundTrip(t *testing.T) {
+	for _, backend := range allStorageBackends() {
+		t.Run(backend.name, func(t *testing.T) {
+			ctx := context.Background()
+			storage := backend.make(t)
+
+			created := time.Date(2026, 7, 6, 12, 0, 0, 0, time.UTC)
+			updated := time.Date(2026, 7, 6, 12, 5, 0, 0, time.UTC)
+
+			exec := &Execution{
+				ID:              "saga-timestamps",
+				DefinitionName:  "create-sandbox",
+				Status:          StatusRunning,
+				InitialInputs:   map[string]any{},
+				ExecutedActions: map[string]*ActionResult{},
+				ExecutionOrder:  []string{},
+				CreatedAt:       created,
+				UpdatedAt:       created,
+			}
+			require.NoError(t, storage.Save(ctx, exec))
+
+			exec.Status = StatusCompleted
+			exec.UpdatedAt = updated
+			require.NoError(t, storage.Save(ctx, exec))
+
+			got, err := storage.Get(ctx, exec.ID)
+			require.NoError(t, err)
+
+			assert.True(t, created.Equal(got.CreatedAt),
+				"CreatedAt must survive a round trip, got %v", got.CreatedAt)
+			assert.True(t, updated.Equal(got.UpdatedAt),
+				"UpdatedAt must reflect the latest save, got %v", got.UpdatedAt)
+		})
+	}
+}
+
 func containsExecution(execs []*Execution, id string) bool {
 	for _, e := range execs {
 		if e != nil && e.ID == id {

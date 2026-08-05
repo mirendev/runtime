@@ -26,38 +26,52 @@ func NewEntityStorage(store entity.Store, log *slog.Logger) *EntityStorage {
 	return &EntityStorage{store: store, log: log}
 }
 
-// Save persists the execution state as an entity.
-func (s *EntityStorage) Save(ctx context.Context, exec *Execution) error {
-	// Serialize complex fields to JSON
+// executionToEntity serializes an execution into the entity representation
+// shared by every Storage backend. Both backends encode the identical entity
+// and differ only in how they write it, so the encoding lives here: when the
+// two drifted apart before, one of them silently stopped persisting saves
+// (MIR-441) and only a conformance suite caught it.
+func executionToEntity(exec *Execution) (*entity.Entity, error) {
 	initialInputs, err := json.Marshal(exec.InitialInputs)
 	if err != nil {
-		return fmt.Errorf("marshaling initial inputs: %w", err)
+		return nil, fmt.Errorf("marshaling initial inputs: %w", err)
 	}
 
 	executedActions, err := json.Marshal(exec.ExecutedActions)
 	if err != nil {
-		return fmt.Errorf("marshaling executed actions: %w", err)
+		return nil, fmt.Errorf("marshaling executed actions: %w", err)
 	}
 
 	executionOrder, err := json.Marshal(exec.ExecutionOrder)
 	if err != nil {
-		return fmt.Errorf("marshaling execution order: %w", err)
+		return nil, fmt.Errorf("marshaling execution order: %w", err)
 	}
 
-	// Convert status
-	status := statusToEntity(exec.Status)
-
-	// Build saga entity
 	sagaEntity := &saga_v1alpha.Saga{
 		ID:                entity.Id(exec.ID),
 		DefinitionName:    exec.DefinitionName,
 		DefinitionVersion: int64(exec.DefinitionVersion),
 		ParentExecutionId: entity.Id(exec.ParentExecutionID),
-		Status:            status,
+		Status:            statusToEntity(exec.Status),
 		InitialInputs:     initialInputs,
 		ExecutedActions:   executedActions,
 		ExecutionOrder:    executionOrder,
 		Error:             exec.Error,
+		CreatedAt:         exec.CreatedAt,
+		UpdatedAt:         exec.UpdatedAt,
+	}
+
+	return entity.New(
+		entity.DBId, entity.Id(exec.ID),
+		sagaEntity.Encode(),
+	), nil
+}
+
+// Save persists the execution state as an entity.
+func (s *EntityStorage) Save(ctx context.Context, exec *Execution) error {
+	ent, err := executionToEntity(exec)
+	if err != nil {
+		return err
 	}
 
 	// Create or update the entity. EnsureEntity is create-if-absent and
@@ -65,11 +79,6 @@ func (s *EntityStorage) Save(ctx context.Context, exec *Execution) error {
 	// every save after the first we must explicitly replace. Without this,
 	// the saga record stays frozen at its initial pending state and later
 	// status/action-progress writes are silently dropped.
-	ent := entity.New(
-		entity.DBId, entity.Id(exec.ID),
-		sagaEntity.Encode(),
-	)
-
 	_, created, err := s.store.EnsureEntity(ctx, ent)
 	if err != nil {
 		return fmt.Errorf("saving saga entity: %w", err)
@@ -223,6 +232,8 @@ func entityToExecution(sagaEntity *saga_v1alpha.Saga) (*Execution, error) {
 		ParentExecutionID: string(sagaEntity.ParentExecutionId),
 		Status:            statusFromEntity(sagaEntity.Status),
 		Error:             sagaEntity.Error,
+		CreatedAt:         sagaEntity.CreatedAt,
+		UpdatedAt:         sagaEntity.UpdatedAt,
 	}
 
 	// Deserialize initial inputs
