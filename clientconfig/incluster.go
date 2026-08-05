@@ -1,7 +1,6 @@
 package clientconfig
 
 import (
-	"context"
 	"fmt"
 	"os"
 	"strings"
@@ -88,22 +87,6 @@ func InCluster() (*Config, error) {
 	cfg.SetActiveCluster(InClusterName)
 
 	return cfg, nil
-}
-
-// InClusterState dials the cluster API as the sandbox's own workload identity.
-// Returns ErrNoConfig when not running inside a sandbox.
-//
-//	state, err := clientconfig.InClusterState(ctx)
-//	client, err := state.Client("app")
-//
-// The identity is confined to the app the sandbox belongs to, and to a small
-// read-only set of APIs — see workloadRole in pkg/oidcauth.
-func InClusterState(ctx context.Context, opts ...rpc.StateOption) (*rpc.State, error) {
-	cfg, err := InCluster()
-	if err != nil {
-		return nil, err
-	}
-	return cfg.State(ctx, opts...)
 }
 
 // inClusterOptions returns the dial options for a workload identity token.

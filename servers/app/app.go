@@ -613,14 +613,22 @@ func (r *AppInfo) SetHost(ctx context.Context, state *app_v1alpha.CrudSetHost) e
 	return nil
 }
 
-// SetWorkloadRole sets the app's workload identity role. It has no rpc.AllowApp
-// guard on purpose: this is the operator path, and it is absent from every token
-// role map, so only cert (internal/operator) and JWT-with-RBAC callers reach it
-// — never an app-scoped OIDC or workload identity. That is what lets it grant
-// cluster-scoped roles, which the app.toml path must not.
+// SetWorkloadRole sets the app's workload identity role. This is the operator
+// path: it can grant cluster-scoped roles, which the app.toml path must not.
+//
+// It is reachable only by unscoped callers — cert (internal/operator) and
+// JWT-with-RBAC. The guard below says that affirmatively: an app-scoped identity
+// (OIDC or a workload) has a bound app, and is refused. That does not rely on
+// the method staying absent from every token role map (the carve-out tripwire
+// still enforces that too); it's belt-and-braces, and the shape the eventual
+// cluster-admin gate will take.
 func (r *AppInfo) SetWorkloadRole(ctx context.Context, state *app_v1alpha.CrudSetWorkloadRole) error {
 	name := state.Args().App()
 	role := state.Args().Role()
+
+	if rpc.BoundApp(ctx) != "" {
+		return rpc.AppAccessError(ctx, name)
+	}
 
 	if _, ok := workloadroles.Lookup(role); !ok {
 		return fmt.Errorf("unknown workload role %q", role)

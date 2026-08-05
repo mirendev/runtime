@@ -35,7 +35,7 @@ miren app set-workload-role [args...] [flags]
 **Let an app's workloads read and deploy their own app:**
 
 ```bash
-miren app set-workload-role -a myapp app-deploy
+miren app set-workload-role -a myapp app-deployer
 ```
 
 **Grant a cluster-wide read role (operator only):**

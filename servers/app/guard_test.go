@@ -135,6 +135,19 @@ func TestSetWorkloadRole(t *testing.T) {
 		}
 	})
 
+	// Operator-only, stated affirmatively: an app-scoped identity (OIDC or a
+	// workload) has a bound app and must be refused, so this doesn't rely on the
+	// method staying out of every token role map.
+	t.Run("rejects an app-scoped caller", func(t *testing.T) {
+		scoped := rpc.ContextWithIdentity(ctx, &rpc.Identity{
+			Method:   rpc.AuthMethodWorkload,
+			Metadata: map[string]any{"app": appName},
+		})
+		if _, err := client.SetWorkloadRole(scoped, appName, "app-admin"); !errors.Is(err, rpc.ErrUnauthorized) {
+			t.Fatalf("expected ErrUnauthorized for an app-scoped caller, got %v", err)
+		}
+	})
+
 	t.Run("persists a valid role", func(t *testing.T) {
 		if _, err := client.SetWorkloadRole(ctx, appName, "cluster-readonly"); err != nil {
 			t.Fatalf("set role: %v", err)

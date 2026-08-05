@@ -16,6 +16,14 @@
 //
 // The package has no internal dependencies so both the authorizer (pkg/oidcauth)
 // and the authenticator (pkg/workloadidentity) can import it without a cycle.
+//
+// This map is not the permanent model. RFD-67 (MIR-891) moves authorization to
+// {Resource, Action, Instance} with a Scope on each permission, at which point
+// this catalog becomes a set of policy presets rather than a Go map and the
+// per-handler rpc.AllowApp calls fall away. The token carries the role *name*,
+// not a resolved permission set, so that backend swap needs no token-format
+// change and no reissue — read the map as the current implementation, not the
+// enduring shape.
 package workloadroles
 
 // Role names. These are the values stored on an app and carried in the token's
@@ -23,7 +31,7 @@ package workloadroles
 const (
 	RoleNone            = "none"
 	RoleAppReadonly     = "app-readonly"
-	RoleAppDeploy       = "app-deploy"
+	RoleAppDeployer     = "app-deployer"
 	RoleAppDebugger     = "app-debugger"
 	RoleAppAdmin        = "app-admin"
 	RoleClusterReadonly = "cluster-readonly"
@@ -108,15 +116,17 @@ var Roles = map[string]Role{
 	RoleNone: {Perms: perms{}},
 
 	RoleAppReadonly: {Perms: appRead},
-	RoleAppDeploy:   {Perms: merge(appRead, appDeploy)},
+	RoleAppDeployer: {Perms: merge(appRead, appDeploy)},
 	RoleAppDebugger: {Perms: merge(appRead, execBlock)},
 	RoleAppAdmin:    {Perms: merge(appRead, appDeploy, appConfig, execBlock)},
 
 	RoleClusterReadonly: {Perms: merge(appRead, clusterRead), ClusterScoped: true},
+	// cluster-deployer deploys and configures any app, but does NOT create or
+	// destroy apps — app lifecycle (crud.new/destroy) belongs to cluster-admin.
+	// Otherwise a "deployer" could delete every app while app-admin can't even
+	// delete its own, which nobody predicts from the names.
 	RoleClusterDeployer: {
-		Perms: merge(appRead, clusterRead, appDeploy, appConfig, perms{
-			"crud": set("new", "destroy"),
-		}),
+		Perms:         merge(appRead, clusterRead, appDeploy, appConfig),
 		ClusterScoped: true,
 	},
 	RoleClusterDebugger: {

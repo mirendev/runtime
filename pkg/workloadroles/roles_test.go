@@ -41,7 +41,7 @@ func TestNoneGrantsNothing(t *testing.T) {
 }
 
 func TestScoping(t *testing.T) {
-	appScoped := []string{RoleNone, RoleAppReadonly, RoleAppDeploy, RoleAppDebugger, RoleAppAdmin}
+	appScoped := []string{RoleNone, RoleAppReadonly, RoleAppDeployer, RoleAppDebugger, RoleAppAdmin}
 	clusterScoped := []string{RoleClusterReadonly, RoleClusterDeployer, RoleClusterDebugger, RoleClusterAdmin}
 
 	for _, name := range appScoped {
@@ -139,14 +139,17 @@ func TestRoleMembershipSpotChecks(t *testing.T) {
 	}{
 		{RoleAppReadonly, [2]string{"logs", "applogs"}, [2]string{"crud", "setenvvar"}},
 		{RoleAppReadonly, [2]string{"appstatus", "appinfo"}, [2]string{"sandboxexec", "exec"}},
-		{RoleAppDeploy, [2]string{"deployment", "deployversion"}, [2]string{"sandboxexec", "exec"}},
-		{RoleAppDeploy, [2]string{"builder", "buildfromtar"}, [2]string{"crud", "setenvvar"}},
+		{RoleAppDeployer, [2]string{"deployment", "deployversion"}, [2]string{"sandboxexec", "exec"}},
+		{RoleAppDeployer, [2]string{"builder", "buildfromtar"}, [2]string{"crud", "setenvvar"}},
 		{RoleAppDebugger, [2]string{"sandboxexec", "exec"}, [2]string{"deployment", "deployversion"}},
 		{RoleAppAdmin, [2]string{"crud", "setenvvar"}, [2]string{"crud", "list"}},
 		{RoleAppAdmin, [2]string{"sandboxexec", "exec"}, [2]string{"crud", "destroy"}},
 		{RoleClusterReadonly, [2]string{"crud", "list"}, [2]string{"crud", "setenvvar"}},
 		{RoleClusterReadonly, [2]string{"logs", "sandboxlogs"}, [2]string{"sandboxexec", "exec"}},
-		{RoleClusterDeployer, [2]string{"crud", "destroy"}, [2]string{"sandboxexec", "exec"}},
+		// cluster-deployer deploys/configures any app but does not do app
+		// lifecycle: crud.new/destroy are cluster-admin's.
+		{RoleClusterDeployer, [2]string{"deployment", "deployversion"}, [2]string{"crud", "destroy"}},
+		{RoleClusterDeployer, [2]string{"crud", "setenvvar"}, [2]string{"crud", "new"}},
 		{RoleClusterDebugger, [2]string{"internalhttp", "dorequest"}, [2]string{"crud", "destroy"}},
 	}
 

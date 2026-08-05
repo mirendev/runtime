@@ -27,7 +27,7 @@ miren app status        # your own app
 miren logs              # your own app's logs
 ```
 
-No `miren login`, no config file. If a config file *is* present (for example you ran `miren login` yourself), that wins — so you can still point the CLI at another cluster from inside a sandbox.
+No `miren login`, no config file. This assumes the `miren` binary is in your image — nothing mounts it into the sandbox, so a distroless or slim image needs the CLI installed first. If a config file *is* present (for example you ran `miren login` yourself), that wins — so you can still point the CLI at another cluster from inside a sandbox.
 
 Miren wires this up through environment variables it injects into every sandbox:
 
@@ -40,25 +40,6 @@ Miren wires this up through environment variables it injects into every sandbox:
 
 The connection is verified against the cluster CA — it is *not* insecure. Because sandboxes share a network bridge, skipping verification would let a neighbor impersonate the API, so the CA is mounted and checked.
 
-### From Go
-
-The Go SDK exposes an in-cluster client analogous to Kubernetes' `rest.InClusterConfig()`:
-
-```go
-import "miren.dev/runtime/clientconfig"
-
-state, err := clientconfig.InClusterState(ctx)
-if err != nil {
-    // clientconfig.ErrNoConfig means "not running inside a sandbox"
-    log.Fatal(err)
-}
-
-client, err := state.Client("app")
-// ... use the client
-```
-
-`InClusterState` reads the environment above, re-reads the token per request (it's refreshed on a loop — see [Sharp edges](#sharp-edges)), and returns a ready-to-use RPC state.
-
 ## Roles
 
 A token authenticates as a **role**, and the role decides what it may call. Confinement is per app: an *app-scoped* role can only act on the app the sandbox belongs to, while a *cluster-scoped* role reaches across the whole cluster.
@@ -69,11 +50,11 @@ The default is **`app-readonly`** — a fresh app's workloads can read their own
 | --- | --- | --- |
 | `none` | — | Authenticates but authorizes nothing |
 | `app-readonly` *(default)* | own app | Read own app status, logs, and deployment history |
-| `app-deploy` | own app | `app-readonly` + build and (re)deploy its own app |
+| `app-deployer` | own app | `app-readonly` + build and (re)deploy its own app |
 | `app-debugger` | own app | `app-readonly` + open a shell / run commands in its own sandboxes |
-| `app-admin` | own app | Full control of its own app: read, deploy, edit config/env, exec |
+| `app-admin` | own app | `app-deployer` + edit config/env and exec — everything for its own app except deleting it |
 | `cluster-readonly` | cluster | Read status, logs, and infrastructure state across all apps |
-| `cluster-deployer` | cluster | `cluster-readonly` + build, deploy, and manage any app |
+| `cluster-deployer` | cluster | `cluster-readonly` + build, deploy, and configure any app (but not create or destroy apps) |
 | `cluster-debugger` | cluster | `cluster-readonly` + exec and inspect any app |
 | `cluster-admin` | cluster | Broad control across the cluster (see the limits below) |
 
@@ -87,7 +68,7 @@ There are two ways to set an app's role, and they draw the line between what an 
 
 ```toml
 name = "my-app"
-workload_role = "app-deploy"
+workload_role = "app-deployer"
 ```
 
 :::warning[app.toml can only set app-scoped roles]
@@ -115,6 +96,10 @@ The role is baked into a sandbox's token when the sandbox is created, and the ba
 
 :::warning[Grant cluster roles sparingly]
 A cluster-scoped role is a powerful credential sitting on disk inside a sandbox. Prefer the narrowest role that does the job — an `app-*` role for anything that only touches one app — and reserve cluster roles for genuine cross-app tooling. Tokens are short-lived (refreshed on a fixed loop), which bounds exposure, but that is not a substitute for least privilege.
+:::
+
+:::warning[Removing `workload_role` from app.toml does not revoke it]
+Deleting the line leaves the last value in place — a deploy with no `workload_role` doesn't clear it. To drop back to the minimum, set `workload_role = "none"` explicitly (or `app-readonly`), which revokes on the next build.
 :::
 
 :::note[The API is only reachable from inside the cluster]

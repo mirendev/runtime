@@ -728,19 +728,15 @@ func mergeCliEnvVars(existingVars []core_v1alpha.ConfigSpecVariables, cliVars []
 	return result
 }
 
-// applyWorkloadRole persists a workload_role declared in app.toml onto the app
-// entity. It is the app-owner self-service path, so it accepts ONLY app-scoped
-// roles: app.toml is owner-controlled and applied here with the build server's
-// trusted (cert) authority, so honoring a cluster-scoped value would let an app
-// owner escalate. Cluster roles are the operator's to grant via SetWorkloadRole.
-// A cluster-scoped or unknown value fails the deploy with a clear message rather
-// than being silently ignored.
 // validateWorkloadRole checks an app.toml workload_role without any I/O: it must
-// be a known, app-scoped role. Cluster-scoped roles are operator-only (via
-// `m app set-workload-role`). It returns nil when no role is declared.
+// be a known, app-scoped role. app.toml is owner-controlled and applied by the
+// cert-trusted build server, so honoring a cluster-scoped value here would let
+// an app owner escalate — those are the operator's to grant via SetWorkloadRole.
+// A cluster-scoped or unknown value fails the deploy rather than being ignored.
+// Returns nil when no role is declared.
 //
-// This is deliberately separate from persistence and run during config prep, so
-// an invalid role fails the deploy *before* the new version is activated rather
+// It is deliberately separate from persistence and run during config prep, so an
+// invalid role fails the deploy *before* the new version is activated rather
 // than after it is already live and serving.
 func validateWorkloadRole(ac *appconfig.AppConfig) error {
 	if ac == nil || ac.WorkloadRole == "" {

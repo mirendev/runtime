@@ -273,7 +273,7 @@ miren deploy --analyze
 	d.Dispatch("app set-workload-role", Infer("app set-workload-role", "Set the API role for an app's sandbox identity tokens", AppSetWorkloadRole,
 		WithExample(mflags.Example{
 			Name: "Let an app's workloads read and deploy their own app",
-			Body: "miren app set-workload-role -a myapp app-deploy",
+			Body: "miren app set-workload-role -a myapp app-deployer",
 		}),
 		WithExample(mflags.Example{
 			Name: "Grant a cluster-wide read role (operator only)",
