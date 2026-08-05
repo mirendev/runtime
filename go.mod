@@ -389,8 +389,10 @@ require (
 	tags.cncf.io/container-device-interface/specs-go v0.8.0 // indirect
 )
 
-// Temporary fork carrying the etcd subnet-watch compaction-recovery fix:
-// upstream hot-loops forever once a watch's start revision is compacted
-// away. Drop this once the fix is merged upstream into flannel-io/flannel
-// and released. Tracking: MIR-1274.
-replace github.com/flannel-io/flannel => github.com/mirendev/flannel v0.26.8-0.20260630195747-affa754a04b8
+// Temporary fork carrying the etcd subnet-watch compaction-recovery fixes:
+// upstream hot-loops forever once a watch's start revision is compacted away.
+// Both watches are affected, and both run on every node. Both fixes are merged
+// upstream now (flannel-io/flannel#2471, #2524), but only #2471 has shipped, in
+// v0.28.6. Drop this replace once we move to a flannel release carrying both.
+// Tracking: MIR-1274.
+replace github.com/flannel-io/flannel => github.com/mirendev/flannel v0.26.8-0.20260805213236-ce737c30f40c
