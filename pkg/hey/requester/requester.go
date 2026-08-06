@@ -277,10 +277,3 @@ func cloneRequest(r *http.Request, body []byte) *http.Request {
 	}
 	return r2
 }
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}

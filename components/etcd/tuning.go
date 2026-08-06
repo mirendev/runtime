@@ -98,20 +98,11 @@ func detectSystemRAMBytes() int64 {
 // --quota-backend-bytes explicitly (operator-configured); otherwise the quota is the
 // RAM-scaled value clamped to [quotaFloorBytes, quotaCapBytes].
 func computeTuning(systemRAMBytes int64, quotaOverride int64) etcdTuning {
-	budget := systemRAMBytes / 10
-	if budget < memoryFloorBytes {
-		budget = memoryFloorBytes
-	}
+	budget := max(systemRAMBytes/10, memoryFloorBytes)
 
 	quota := quotaOverride
 	if quota <= 0 {
-		quota = budget * 30 / 100
-		if quota < quotaFloorBytes {
-			quota = quotaFloorBytes
-		}
-		if quota > quotaCapBytes {
-			quota = quotaCapBytes
-		}
+		quota = min(max(budget*30/100, quotaFloorBytes), quotaCapBytes)
 	}
 
 	streams := budget / (2 * mib)

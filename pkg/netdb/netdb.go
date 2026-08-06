@@ -749,9 +749,6 @@ func calculateCapacity(prefix netip.Prefix) int {
 		total := 1 << hostBits
 		return total - 3 // subtract network, broadcast, gateway
 	}
-	hostBits := 128 - bits
-	if hostBits > 16 {
-		hostBits = 16
-	}
+	hostBits := min(128-bits, 16)
 	return (1 << hostBits) - 1
 }

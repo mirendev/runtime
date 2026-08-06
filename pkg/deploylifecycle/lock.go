@@ -122,10 +122,7 @@ const lockRetryBackoffMax = 100 * time.Millisecond
 // waits one base interval. The initial acquire (attempt 0 in Acquire's loop is
 // the first try, which never calls this) pays no delay.
 func (l *Locks) backoff(attempt int) {
-	d := time.Duration(attempt) * lockRetryBackoff
-	if d > lockRetryBackoffMax {
-		d = lockRetryBackoffMax
-	}
+	d := min(time.Duration(attempt)*lockRetryBackoff, lockRetryBackoffMax)
 	if d <= 0 {
 		return
 	}

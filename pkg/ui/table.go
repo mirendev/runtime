@@ -261,10 +261,7 @@ func AutoSizeColumns(headers []string, rows []Row, builder *ColumnBuilder) []Col
 						minWidth = 10 // Default minimum
 					}
 
-					newWidth := int(float64(widths[i]) * scaleFactor)
-					if newWidth < minWidth {
-						newWidth = minWidth
-					}
+					newWidth := max(int(float64(widths[i])*scaleFactor), minWidth)
 					widths[i] = newWidth
 				}
 			}

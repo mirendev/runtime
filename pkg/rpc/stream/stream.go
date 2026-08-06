@@ -128,10 +128,7 @@ func (s *serveReader) Recv(ctx context.Context, state *RecvStreamRecv[[]byte]) e
 	args := state.Args()
 
 	// Limit the maximum read size to prevent excessive memory allocation
-	readSize := int(args.Count())
-	if readSize > streamChunkSize*2 {
-		readSize = streamChunkSize * 2
-	}
+	readSize := min(int(args.Count()), streamChunkSize*2)
 
 	buf := make([]byte, readSize)
 
@@ -140,10 +137,7 @@ func (s *serveReader) Recv(ctx context.Context, state *RecvStreamRecv[[]byte]) e
 		err error
 	)
 	if s.minBatch > 0 {
-		minBatch := s.minBatch
-		if minBatch > readSize {
-			minBatch = readSize
-		}
+		minBatch := min(s.minBatch, readSize)
 		n, err = io.ReadAtLeast(s.r, buf, minBatch)
 	} else {
 		// Streaming mode: ship whatever the underlying reader yields right

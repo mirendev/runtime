@@ -110,10 +110,7 @@ func setup(ctx context.Context, flags *GlobalFlags, opts any, commandName string
 	// Initialize config from flags
 	s.Config.ServerAddress = flags.ServerAddress
 
-	level := baseLogLevel(daemon) - slog.Level(4*s.verbose)
-	if level < slog.LevelDebug {
-		level = slog.LevelDebug
-	}
+	level := max(baseLogLevel(daemon)-slog.Level(4*s.verbose), slog.LevelDebug)
 
 	s.levelVar.Set(level)
 

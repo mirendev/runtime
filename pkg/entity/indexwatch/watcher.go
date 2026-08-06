@@ -455,10 +455,7 @@ func (w *Watcher) sleep(ctx context.Context, backoff *time.Duration) bool {
 	case <-ctx.Done():
 		return false
 	case <-time.After(*backoff):
-		next := *backoff * 2
-		if next > w.opts.MaxBackoff {
-			next = w.opts.MaxBackoff
-		}
+		next := min(*backoff*2, w.opts.MaxBackoff)
 		*backoff = next
 		return true
 	}

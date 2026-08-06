@@ -525,10 +525,7 @@ func (b *BaseComponent) handleRestart(ctx context.Context, stopMonitor <-chan st
 	}
 
 	// Calculate backoff
-	backoff := policy.BackoffBase * time.Duration(1<<(restartCount-1))
-	if backoff > policy.BackoffMax {
-		backoff = policy.BackoffMax
-	}
+	backoff := min(policy.BackoffBase*time.Duration(1<<(restartCount-1)), policy.BackoffMax)
 
 	b.Log.Info("restarting "+b.ComponentName+" after backoff",
 		"restart_count", restartCount,

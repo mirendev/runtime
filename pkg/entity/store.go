@@ -474,10 +474,7 @@ func (s *EtcdStore) GetEntities(ctx context.Context, ids []Id) ([]*Entity, error
 	entities := make([]*Entity, len(ids))
 
 	for start := 0; start < len(ids); start += maxEntitiesPerBatch {
-		end := start + maxEntitiesPerBatch
-		if end > len(ids) {
-			end = len(ids)
-		}
+		end := min(start+maxEntitiesPerBatch, len(ids))
 
 		batchIds := ids[start:end]
 

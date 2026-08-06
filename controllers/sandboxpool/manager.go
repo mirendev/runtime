@@ -659,10 +659,7 @@ func (m *Manager) checkPoolForScaleDown(ctx context.Context, pool *compute_v1alp
 	// If we have idle sandboxes and we're above minimum instances, decrement desired
 	if idleCount > 0 && pool.DesiredInstances > minInstances {
 		// Only decrement by the number of idle sandboxes, but respect minimum
-		newDesired := pool.DesiredInstances - idleCount
-		if newDesired < minInstances {
-			newDesired = minInstances
-		}
+		newDesired := max(pool.DesiredInstances-idleCount, minInstances)
 
 		if newDesired < pool.DesiredInstances {
 			m.log.Info("proactively scaling down pool",
@@ -872,12 +869,8 @@ func (m *Manager) calculateBackoff(crashCount int64) time.Time {
 // to prove stability. The required uptime scales with the crash count.
 func (m *Manager) hasHealthySandbox(sandboxes []*sandboxWithMeta, crashCount int64) bool {
 	// Calculate required uptime based on current backoff
-	requiredUptime := backoffDuration(crashCount)
-
 	// Minimum 2 minutes required uptime
-	if requiredUptime < 2*time.Minute {
-		requiredUptime = 2 * time.Minute
-	}
+	requiredUptime := max(backoffDuration(crashCount), 2*time.Minute)
 
 	now := time.Now()
 	for _, sbm := range sandboxes {
