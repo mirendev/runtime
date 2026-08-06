@@ -820,7 +820,7 @@ func autoConfigureCluster(ctx *Context, identityName, cloudURL string, identity 
 
 	// Try to connect to the cluster and extract TLS certificate
 	// Don't try localhost for auto-configuration - only try advertised addresses
-	workingAddress, caCert, err := tryConnectToCluster(ctx, &cluster, false)
+	workingAddress, clusterCert, err := tryConnectToCluster(ctx, &cluster, false)
 	if err != nil {
 		ctx.Warn("Could not automatically connect to cluster: %v", err)
 		ctx.Info("Run 'miren cluster add' manually to configure the cluster connection")
@@ -833,8 +833,10 @@ func autoConfigureCluster(ctx *Context, identityName, cloudURL string, identity 
 		AllAddresses: cluster.APIAddresses,
 		Identity:     identityName,
 		XID:          cluster.XID,
-		CACert:       caCert,
+		CACert:       clusterCert.CAPEM,
 	}
+
+	applyVerificationName(ctx, clusterConfig, workingAddress, clusterCert)
 
 	// Reload config to get latest state
 	mainConfig, err = clientconfig.LoadConfig()

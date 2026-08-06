@@ -112,7 +112,7 @@ advertised:
 
 ```toml
 [tls]
-additional_ips = ["100.91.121.48"]
+additional_ips = ["100.64.0.10"]
 ```
 
 Advertisement is worked out at startup, so restart the server after changing

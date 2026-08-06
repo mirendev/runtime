@@ -91,9 +91,7 @@ func InCluster() (*Config, error) {
 
 // inClusterOptions returns the dial options for a workload identity token.
 func (c *ClusterConfig) inClusterOptions(hostname string) []rpc.StateOption {
-	opts := []rpc.StateOption{
-		rpc.WithEndpoint(hostname),
-		rpc.WithBindAddr("[::]:0"),
+	return append(c.dialOptions(hostname),
 		// Read the token per request rather than once: it expires hourly and the
 		// sandbox controller rewrites this file in place (a rename would leave
 		// the container's bind mount pinned to the old inode), so the current
@@ -101,16 +99,7 @@ func (c *ClusterConfig) inClusterOptions(hostname string) []rpc.StateOption {
 		rpc.WithBearerTokenFunc(func() (string, error) {
 			return readIdentityToken(c.IdentityTokenPath)
 		}),
-	}
-
-	if c.CACert != "" {
-		opts = append(opts, rpc.WithCertificateVerification([]byte(c.CACert)))
-	}
-	if c.TLSServerName != "" {
-		opts = append(opts, rpc.WithTLSServerName(c.TLSServerName))
-	}
-
-	return opts
+	)
 }
 
 func readIdentityToken(path string) (string, error) {

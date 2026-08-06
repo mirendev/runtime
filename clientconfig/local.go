@@ -46,6 +46,31 @@ func Local(cc *caauth.ClientCertificate, listenAddr string) *Config {
 	return cfg
 }
 
+// dialOptions are the options every authentication path shares: where to
+// connect, and how to verify whatever answers. Auth material is layered on top
+// by the caller.
+//
+// Both verification options are conditional on purpose. An empty CACert is not
+// "verify against an empty pool", it means we were never given a cluster CA and
+// should fall back to the system roots — a cluster fronted by a publicly
+// trusted certificate has no CACert to store.
+func (c *ClusterConfig) dialOptions(hostname string) []rpc.StateOption {
+	opts := []rpc.StateOption{
+		rpc.WithEndpoint(hostname),
+		rpc.WithBindAddr("[::]:0"),
+	}
+
+	if c.CACert != "" {
+		opts = append(opts, rpc.WithCertificateVerification([]byte(c.CACert)))
+	}
+
+	if c.TLSServerName != "" {
+		opts = append(opts, rpc.WithTLSServerName(c.TLSServerName))
+	}
+
+	return opts
+}
+
 func (c *Config) RPCOptions(ctx context.Context) ([]rpc.StateOption, error) {
 	if c.ActiveCluster() == "" {
 		return nil, nil
@@ -125,30 +150,14 @@ foundAddress:
 				return nil, fmt.Errorf("failed to authenticate with cloud: %w", err)
 			}
 
-			// Return options with bearer token
-			base := []rpc.StateOption{
-				rpc.WithEndpoint(hostname),
-				rpc.WithBindAddr("[::]:0"),
-				rpc.WithBearerToken(token),
-			}
-
-			if c.CACert != "" {
-				base = append(base, rpc.WithCertificateVerification([]byte(c.CACert)))
-			}
-
-			return base, nil
+			return append(c.dialOptions(hostname), rpc.WithBearerToken(token)), nil
 
 		case IdentityCertificate:
 			// Handle certificate-based authentication from identity
-			return []rpc.StateOption{
-				rpc.WithCertPEMs(
-					[]byte(identity.ClientCert),
-					[]byte(identity.ClientKey),
-				),
-				rpc.WithCertificateVerification([]byte(c.CACert)),
-				rpc.WithEndpoint(hostname),
-				rpc.WithBindAddr("[::]:0"),
-			}, nil
+			return append(c.dialOptions(hostname), rpc.WithCertPEMs(
+				[]byte(identity.ClientCert),
+				[]byte(identity.ClientKey),
+			)), nil
 
 		default:
 			return nil, fmt.Errorf("unknown identity type: %s", identity.Type)
@@ -161,15 +170,7 @@ foundAddress:
 		if oidcauth.IsGitHubActions() {
 			token, err := oidcauth.RequestGitHubToken(ctx, hostname)
 			if err == nil {
-				base := []rpc.StateOption{
-					rpc.WithEndpoint(hostname),
-					rpc.WithBindAddr("[::]:0"),
-					rpc.WithBearerToken(token),
-				}
-				if c.CACert != "" {
-					base = append(base, rpc.WithCertificateVerification([]byte(c.CACert)))
-				}
-				return base, nil
+				return append(c.dialOptions(hostname), rpc.WithBearerToken(token)), nil
 			}
 			// If token request fails, fall through to other auth methods
 		}
@@ -206,16 +207,35 @@ foundAddress:
 		}, nil
 	}
 
-	// Backward compatibility: Handle certificate-based authentication (deprecated)
-	return []rpc.StateOption{
-		rpc.WithCertPEMs(
+	// Backward compatibility: certificate-based authentication (deprecated).
+	//
+	// The pair is only attached when it's actually there. An empty ClientCert is
+	// not "no client certificate" to X509KeyPair — []byte("") is non-nil, so it
+	// parses two empty inputs and fails with "tls: failed to find any PEM data in
+	// certificate input". That reads as a corrupt certificate, when what actually
+	// happened is that this cluster entry has no credentials on it at all.
+	//
+	// Reaching here with nothing is legitimate: `miren cluster add --cluster X
+	// --address Y` and MIREN_CLUSTER=addr;sha1:fp both write an entry whose auth
+	// is meant to come from the ambient environment. When that environment turns
+	// out not to supply any, the honest answer comes from the server as a 401,
+	// which diagnoses as "access denied, try miren login" — a far better place to
+	// land than a PEM parse error.
+	opts := c.dialOptions(hostname)
+
+	switch {
+	case c.ClientCert != "" && c.ClientKey != "":
+		opts = append(opts, rpc.WithCertPEMs(
 			[]byte(c.ClientCert),
 			[]byte(c.ClientKey),
-		),
-		rpc.WithCertificateVerification([]byte(c.CACert)),
-		rpc.WithEndpoint(hostname),
-		rpc.WithBindAddr("[::]:0"),
-	}, nil
+		))
+	case c.ClientCert != "":
+		return nil, fmt.Errorf("cluster has a client certificate but no client key")
+	case c.ClientKey != "":
+		return nil, fmt.Errorf("cluster has a client key but no client certificate")
+	}
+
+	return opts, nil
 }
 
 func (c *ClusterConfig) State(ctx context.Context, config *Config, opts ...rpc.StateOption) (*rpc.State, error) {
