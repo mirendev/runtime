@@ -72,6 +72,17 @@ interfaces:
         results:
           - name: reading
             type: Reading
+      # Public so the REST gateway's unauthenticated path has something to
+      # exercise: a public method must answer without an identity, the same way
+      # it does over RPC.
+      - name: ping
+        index: 1
+        public: true
+        http:
+          get: /meters/ping
+        results:
+          - name: ok
+            type: bool
 
   - name: SetTemp
     methods:

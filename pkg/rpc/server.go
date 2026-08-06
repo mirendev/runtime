@@ -281,9 +281,72 @@ func (s *Server) mountREST(name string, iface *Interface) {
 			continue
 		}
 
+		if err := s.handleREST(pattern, m); err != nil {
+			if s.state != nil {
+				s.state.log.Error("rest route rejected by mux, skipping",
+					"pattern", pattern, "interface", name, "error", err)
+			}
+			continue
+		}
+
 		s.restRoutes[pattern] = name
-		s.mux.HandleFunc(pattern, restHandler(m, s.state))
 	}
+}
+
+// isRESTRoute reports whether r matches a REST route this server mounted.
+//
+// Those handlers run restAuthorize, which applies the same gate handleCalls
+// does — identity required unless the method is public, then the authorizer —
+// so exempting them from the blanket non-RPC requirement is parity with the RPC
+// transport rather than a loosening. Without the exemption that requirement
+// overrides a decision the method already made, and a method marked public: in
+// the IDL answers 401 over REST while answering fine over QUIC.
+//
+// Handlers mounted through WithHTTPHandler are deliberately not covered: they
+// do not enforce anything themselves, which is exactly what that option's
+// documentation warns about.
+func (s *Server) isRESTRoute(r *http.Request) bool {
+	_, pattern := s.mux.Handler(r)
+	if pattern == "" {
+		return false
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	_, ok := s.restRoutes[pattern]
+
+	return ok
+}
+
+// hasRESTRoutes reports whether any REST route has been mounted, which the
+// listener uses to tell "still starting" apart from "no such route".
+func (s *Server) hasRESTRoutes() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return len(s.restRoutes) > 0
+}
+
+// handleREST mounts one route, converting a ServeMux rejection into an error.
+//
+// The map check above catches a pattern mounted twice, but ServeMux rejects
+// more than exact duplicates: two annotations that differ only in wildcard name
+// ("/apps/{app}" and "/apps/{name}") are distinct strings that still conflict,
+// and ServeMux reports that by panicking. Mounting runs from ExposeValue during
+// startup, so left alone that is a coordinator that will not boot. Skipping the
+// offending route loses one endpoint and logs why, which beats losing the
+// process.
+func (s *Server) handleREST(pattern string, m Method) (err error) {
+	defer func() {
+		if rec := recover(); rec != nil {
+			err = fmt.Errorf("%v", rec)
+		}
+	}()
+
+	s.mux.HandleFunc(pattern, restHandler(m, s.state))
+
+	return nil
 }
 
 const BootstrapOID = "!bootstrap"
@@ -454,8 +517,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// For RPC paths, let the method-level check in handleCalls decide based on public flag
-	// For non-RPC paths, require authentication
-	if identity == nil && !isRPCPath(r.URL.Path) {
+	// A mounted REST route decides the same way, in restAuthorize
+	// For every other non-RPC path, require authentication
+	if identity == nil && !isRPCPath(r.URL.Path) && !s.isRESTRoute(r) {
 		s.state.log.Warn("request requires authentication", "path", r.URL.Path)
 		http.Error(w, "authentication required", http.StatusUnauthorized)
 		return

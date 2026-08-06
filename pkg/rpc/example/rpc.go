@@ -532,6 +532,58 @@ func (v *ReadingsRecordResults) UnmarshalJSON(data []byte) error {
 	return json.Unmarshal(data, &v.data)
 }
 
+type readingsPingArgsData struct{}
+
+type ReadingsPingArgs struct {
+	call rpc.Call
+	data readingsPingArgsData
+}
+
+func (v *ReadingsPingArgs) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *ReadingsPingArgs) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *ReadingsPingArgs) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *ReadingsPingArgs) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type readingsPingResultsData struct {
+	Ok *bool `cbor:"0,keyasint,omitempty" json:"ok,omitempty"`
+}
+
+type ReadingsPingResults struct {
+	call rpc.Call
+	data readingsPingResultsData
+}
+
+func (v *ReadingsPingResults) SetOk(ok bool) {
+	v.data.Ok = &ok
+}
+
+func (v *ReadingsPingResults) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *ReadingsPingResults) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *ReadingsPingResults) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *ReadingsPingResults) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
 type ReadingsRecord struct {
 	rpc.Call
 	args    ReadingsRecordArgs
@@ -558,8 +610,35 @@ func (t *ReadingsRecord) Results() *ReadingsRecordResults {
 	return results
 }
 
+type ReadingsPing struct {
+	rpc.Call
+	args    ReadingsPingArgs
+	results ReadingsPingResults
+}
+
+func (t *ReadingsPing) Args() *ReadingsPingArgs {
+	args := &t.args
+	if args.call != nil {
+		return args
+	}
+	args.call = t.Call
+	t.Call.Args(args)
+	return args
+}
+
+func (t *ReadingsPing) Results() *ReadingsPingResults {
+	results := &t.results
+	if results.call != nil {
+		return results
+	}
+	results.call = t.Call
+	t.Call.Results(results)
+	return results
+}
+
 type Readings interface {
 	Record(ctx context.Context, state *ReadingsRecord) error
+	Ping(ctx context.Context, state *ReadingsPing) error
 }
 
 type reexportReadings struct {
@@ -567,6 +646,10 @@ type reexportReadings struct {
 }
 
 func (reexportReadings) Record(ctx context.Context, state *ReadingsRecord) error {
+	panic("not implemented")
+}
+
+func (reexportReadings) Ping(ctx context.Context, state *ReadingsPing) error {
 	panic("not implemented")
 }
 
@@ -590,6 +673,22 @@ func AdaptReadings(t Readings) *rpc.Interface {
 			},
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.Record(ctx, &ReadingsRecord{Call: call})
+			},
+		},
+		{
+			Name:          "ping",
+			InterfaceName: "Readings",
+			Index:         1,
+			Public:        true,
+			Params:        []string{},
+			HTTP: &rpc.HTTPBinding{
+				Verb:       "GET",
+				Path:       "/api/v1/meters/ping",
+				Body:       "",
+				PathParams: []string{},
+			},
+			Handler: func(ctx context.Context, call rpc.Call) error {
+				return t.Ping(ctx, &ReadingsPing{Call: call})
 			},
 		},
 	}
@@ -635,6 +734,35 @@ func (v ReadingsClient) Record(ctx context.Context, name string, temperature flo
 	}
 
 	return &ReadingsClientRecordResults{client: v.Client, data: ret}, nil
+}
+
+type ReadingsClientPingResults struct {
+	client rpc.Client
+	data   readingsPingResultsData
+}
+
+func (v *ReadingsClientPingResults) HasOk() bool {
+	return v.data.Ok != nil
+}
+
+func (v *ReadingsClientPingResults) Ok() bool {
+	if v.data.Ok == nil {
+		return false
+	}
+	return *v.data.Ok
+}
+
+func (v ReadingsClient) Ping(ctx context.Context) (*ReadingsClientPingResults, error) {
+	args := ReadingsPingArgs{}
+
+	var ret readingsPingResultsData
+
+	err := v.Call(ctx, "ping", &args, &ret)
+	if err != nil {
+		return nil, err
+	}
+
+	return &ReadingsClientPingResults{client: v.Client, data: ret}, nil
 }
 
 type setTempSetTempArgsData struct {

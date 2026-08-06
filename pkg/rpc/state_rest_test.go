@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -317,4 +318,149 @@ func TestRESTAndRPCAgreeOnAuthorization(t *testing.T) {
 			}
 		})
 	}
+}
+
+// ServeMux rejects more than exact duplicates: two annotations differing only
+// in wildcard name are distinct strings that still conflict, and it reports
+// that by panicking. Mounting runs from ExposeValue during startup, so an
+// unguarded conflict is a coordinator that will not boot.
+func TestRESTConflictingRouteDoesNotPanic(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	r := require.New(t)
+
+	ss, err := rpc.NewState(ctx,
+		rpc.WithSkipVerify,
+		rpc.WithRESTBindAddr("localhost:0"),
+		rpc.WithAuthenticator(&rpc.NoOpAuthenticator{}),
+	)
+	r.NoError(err)
+
+	route := func(iface, wildcard string) *rpc.Interface {
+		return rpc.NewInterface([]rpc.Method{{
+			Name:          "get",
+			InterfaceName: iface,
+			Params:        []string{wildcard},
+			HTTP: &rpc.HTTPBinding{
+				Verb:       "GET",
+				Path:       "/api/v1/things/{" + wildcard + "}",
+				PathParams: []string{wildcard},
+			},
+			Handler: func(ctx context.Context, call rpc.Call) error { return nil },
+		}}, nil)
+	}
+
+	ss.Server().ExposeValue("first", route("First", "id"))
+
+	// Same shape, different wildcard name: a conflict ServeMux would panic on.
+	r.NotPanics(func() {
+		ss.Server().ExposeValue("second", route("Second", "name"))
+	})
+
+	// The first route survives; only the conflicting one was dropped.
+	resp := restGet(t, "https://"+ss.RESTListenAddr()+"/api/v1/things/abc")
+	defer resp.Body.Close()
+	r.Equal(http.StatusOK, resp.StatusCode)
+}
+
+// Routes mount from ExposeValue, which a caller reaches only after NewState
+// returns, so the listener is briefly up with nothing on it. A 404 there would
+// read as "no such route" rather than "not ready yet".
+func TestRESTListenerReportsNotReadyBeforeRoutesMount(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	r := require.New(t)
+
+	ss, err := rpc.NewState(ctx,
+		rpc.WithSkipVerify,
+		rpc.WithRESTBindAddr("localhost:0"),
+		rpc.WithAuthenticator(&rpc.NoOpAuthenticator{}),
+	)
+	r.NoError(err)
+
+	base := "https://" + ss.RESTListenAddr()
+
+	resp := restGet(t, base+"/api/v1/meters/room1/temperature")
+	r.Equal(http.StatusServiceUnavailable, resp.StatusCode)
+	r.Equal("1", resp.Header.Get("Retry-After"))
+
+	var out struct {
+		Code string `json:"code"`
+	}
+	r.NoError(json.NewDecoder(resp.Body).Decode(&out))
+	resp.Body.Close()
+	r.Equal("unavailable", out.Code)
+
+	// Once an interface is exposed the gate opens and dispatch is normal.
+	ss.Server().ExposeValue("dev.miren.runtime/meter", example.AdaptMeter(&restMeter{}))
+
+	resp2 := restGet(t, base+"/api/v1/meters/room1/temperature")
+	defer resp2.Body.Close()
+	r.Equal(http.StatusOK, resp2.StatusCode)
+}
+
+// A method marked public: in the IDL must answer without an identity over REST,
+// the same way it does over RPC. ServeHTTP's blanket requirement for non-RPC
+// paths would otherwise override the method's own decision and 401 it.
+func TestRESTPublicMethodNeedsNoIdentity(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	r := require.New(t)
+
+	// LocalOnlyAuthenticator returns no identity without a client certificate,
+	// so these requests genuinely arrive unauthenticated.
+	ss, err := rpc.NewState(ctx,
+		rpc.WithSkipVerify,
+		rpc.WithRESTBindAddr("localhost:0"),
+		rpc.WithAuthenticator(&rpc.LocalOnlyAuthenticator{}),
+	)
+	r.NoError(err)
+
+	ss.Server().ExposeValue("dev.miren.runtime/readings", example.AdaptReadings(restReadings{}))
+
+	base := "https://" + ss.RESTListenAddr()
+
+	t.Run("public method answers anonymously", func(t *testing.T) {
+		r := require.New(t)
+
+		resp := restGet(t, base+"/api/v1/meters/ping")
+		defer resp.Body.Close()
+
+		r.Equal(http.StatusOK, resp.StatusCode)
+
+		var out struct {
+			Ok bool `json:"ok"`
+		}
+		r.NoError(json.NewDecoder(resp.Body).Decode(&out))
+		r.True(out.Ok)
+	})
+
+	t.Run("a non-public method still refuses the same caller", func(t *testing.T) {
+		r := require.New(t)
+
+		// Same connection shape, no identity: the exemption must not have
+		// opened up anything that was not marked public.
+		client := &http.Client{Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		}}
+
+		resp, err := client.Post(base+"/api/v1/meters/room1/readings",
+			"application/json", strings.NewReader(`{"temperature": 1}`))
+		r.NoError(err)
+		defer resp.Body.Close()
+
+		r.Equal(http.StatusUnauthorized, resp.StatusCode)
+
+		// The JSON body proves the refusal came from restAuthorize, i.e. the
+		// request was exempted from the upstream check and then refused on its
+		// own merits. ServeHTTP's blanket refusal writes plain text.
+		var out struct {
+			Code string `json:"code"`
+		}
+		r.NoError(json.NewDecoder(resp.Body).Decode(&out))
+		r.Equal("unauthorized", out.Code)
+	})
 }

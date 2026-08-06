@@ -191,6 +191,11 @@ func (restReadings) Record(ctx context.Context, call *example.ReadingsRecord) er
 	return nil
 }
 
+func (restReadings) Ping(ctx context.Context, call *example.ReadingsPing) error {
+	call.Results().SetOk(true)
+	return nil
+}
+
 func TestRESTGatewayRequestBody(t *testing.T) {
 	newServer := func() *httptest.Server {
 		mux := http.NewServeMux()
