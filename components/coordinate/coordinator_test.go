@@ -1,7 +1,6 @@
 package coordinate_test
 
 import (
-	"context"
 	"fmt"
 	"log/slog"
 	"os"
@@ -44,8 +43,7 @@ func TestCoordinatorParse(t *testing.T) {
 	}
 
 	// Create contexts
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	// Start coordinator in background
 	coord := coordinate.NewCoordinator(log, coordCfg)

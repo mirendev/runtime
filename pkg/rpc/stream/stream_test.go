@@ -19,8 +19,7 @@ func TestStream(t *testing.T) {
 	t.Run("can send a stream of values", func(t *testing.T) {
 		r := require.New(t)
 
-		ctx, cancel := context.WithCancel(context.Background())
-		defer cancel()
+		ctx := t.Context()
 
 		ss, err := rpc.NewState(ctx, rpc.WithSkipVerify)
 		r.NoError(err)
@@ -64,8 +63,7 @@ func TestStream(t *testing.T) {
 	t.Run("can send a stream of structs", func(t *testing.T) {
 		r := require.New(t)
 
-		ctx, cancel := context.WithCancel(context.Background())
-		defer cancel()
+		ctx := t.Context()
 
 		ss, err := rpc.NewState(ctx, rpc.WithSkipVerify)
 		r.NoError(err)
@@ -110,8 +108,7 @@ func TestStream(t *testing.T) {
 	t.Run("ChanWriter closes output channel when stream ends", func(t *testing.T) {
 		r := require.New(t)
 
-		ctx, cancel := context.WithCancel(context.Background())
-		defer cancel()
+		ctx := t.Context()
 
 		// Server side: expose a RecvStream backed by a channel
 		sourceCh := make(chan int)

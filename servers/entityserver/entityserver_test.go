@@ -816,8 +816,7 @@ func TestEntityServer_WatchIndex_LegacyClientIgnoresProgress(t *testing.T) {
 
 	store, sc, watchCh := watchIndexServer(t)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	index := entity.Keyword(entity.Ident, "test/index")
 
@@ -856,8 +855,7 @@ func TestEntityServer_WatchIndex_ProgressForwardedWhenResuming(t *testing.T) {
 
 	_, sc, watchCh := watchIndexServer(t)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	index := entity.Keyword(entity.Ident, "test/index")
 
@@ -893,8 +891,7 @@ func TestEntityServer_WatchIndex_CreatedResponseNotProgress(t *testing.T) {
 
 	store, sc, watchCh := watchIndexServer(t)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	index := entity.Keyword(entity.Ident, "test/index")
 

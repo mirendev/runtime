@@ -1,7 +1,6 @@
 package io
 
 import (
-	"context"
 	"io"
 	"testing"
 
@@ -12,8 +11,7 @@ import (
 func TestReader(t *testing.T) {
 	r := require.New(t)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	pr, pw := io.Pipe()
 
@@ -51,8 +49,7 @@ func TestReader(t *testing.T) {
 func TestWriter(t *testing.T) {
 	r := require.New(t)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	pr, pw := io.Pipe()
 
