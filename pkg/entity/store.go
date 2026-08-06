@@ -500,7 +500,7 @@ func (s *EtcdStore) GetEntities(ctx context.Context, ids []Id) ([]*Entity, error
 		}
 
 		// Process results for this batch
-		for i := 0; i < len(batchIds); i++ {
+		for i := range batchIds {
 			// Each entity has 2 responses: primary and session
 			primaryIdx := i * 2
 			sessionIdx := i*2 + 1

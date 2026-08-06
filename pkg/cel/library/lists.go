@@ -281,7 +281,7 @@ func indexOf(list ref.Val, item ref.Val) ref.Val {
 		return types.MaybeNoSuchOverloadErr(list)
 	}
 	sz := lister.Size().(types.Int)
-	for i := types.Int(0); i < sz; i++ {
+	for i := range sz {
 		if lister.Get(types.Int(i)).Equal(item) == types.True {
 			return types.Int(i)
 		}

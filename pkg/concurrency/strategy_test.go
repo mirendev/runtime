@@ -181,7 +181,7 @@ func TestAutoStrategy_CapacityBoundary(t *testing.T) {
 	// Lease size is 2 (20% of 10)
 	// Max is 10
 	// Acquire 4 leases to get to 8 used
-	for i := 0; i < 4; i++ {
+	for range 4 {
 		tracker.AcquireLease()
 	}
 	assert.Equal(t, 8, tracker.Used())
@@ -272,7 +272,7 @@ func TestEphemeralStrategy_AlwaysHasCapacity(t *testing.T) {
 	eph := &EphemeralStrategy{scaleDownDelay: 5 * time.Minute}
 	tracker := eph.InitializeTracker()
 
-	for i := 0; i < 50; i++ {
+	for i := range 50 {
 		assert.True(t, tracker.HasCapacity(), "iteration %d should still have capacity", i)
 		tracker.AcquireLease()
 	}

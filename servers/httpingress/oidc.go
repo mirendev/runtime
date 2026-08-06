@@ -294,8 +294,8 @@ func requestScheme(r *http.Request) string {
 	if fwd := r.Header.Get("Forwarded"); fwd != "" {
 		for _, part := range strings.Split(fwd, ";") {
 			part = strings.TrimSpace(part)
-			if strings.HasPrefix(part, "proto=") {
-				return strings.TrimPrefix(part, "proto=")
+			if after, ok := strings.CutPrefix(part, "proto="); ok {
+				return after
 			}
 		}
 	}

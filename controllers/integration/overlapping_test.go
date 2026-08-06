@@ -145,7 +145,7 @@ func TestStopDuringMountCreation(t *testing.T) {
 
 	// Drive disk to PROVISIONED without processing the mount
 	nodeId := compute.NewNodeId(testNodeId).Id()
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		h.reconcileKind(ctx, storage.KindDisk, h.DiskRC)
 		h.reconcileByIndex(ctx, entity.Ref(storage.DiskVolumeNodeIdId, nodeId), h.DiskVolRC)
 	}
@@ -157,7 +157,7 @@ func TestStopDuringMountCreation(t *testing.T) {
 	mount := getMountForLease(t, ctx, h, leaseID)
 	// If mount wasn't created (disk still provisioning), drive more reconciliation
 	if mount == nil {
-		for i := 0; i < 3; i++ {
+		for range 3 {
 			h.reconcileKind(ctx, storage.KindDisk, h.DiskRC)
 			h.reconcileByIndex(ctx, entity.Ref(storage.DiskVolumeNodeIdId, nodeId), h.DiskVolRC)
 			h.reconcileKind(ctx, storage.KindDiskLease, h.DiskLeaseRC)
@@ -255,7 +255,7 @@ func TestReplacementMountPathCollision(t *testing.T) {
 
 	// KEY INTERLEAVING: Process mount-B first (attach+mount), then mount-A (unmount).
 	// This is the worst case ordering that exposes the path collision bug.
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		err = h.ReconcileEntity(ctx, mountBID)
 		require.NoError(t, err, "ReconcileEntity for mount-B should not fail")
 		bState := getMountByID(t, ctx, h, mountBID)

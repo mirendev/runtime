@@ -99,7 +99,7 @@ func sortAddresses(addresses []string) []string {
 	copy(sorted, addresses)
 
 	// Sort with custom logic
-	for i := 0; i < len(sorted); i++ {
+	for i := range sorted {
 		for j := i + 1; j < len(sorted); j++ {
 			// Check if addresses should be swapped
 			if shouldSwapAddresses(sorted[i], sorted[j]) {

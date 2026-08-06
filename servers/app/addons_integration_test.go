@@ -55,7 +55,7 @@ func TestRotateCredentialConcurrentAdmissionEtcd(t *testing.T) {
 	errs := make([]error, n)
 	start := make(chan struct{})
 
-	for i := 0; i < n; i++ {
+	for i := range n {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
@@ -73,7 +73,7 @@ func TestRotateCredentialConcurrentAdmissionEtcd(t *testing.T) {
 
 	var admitted, rejected int
 	var admittedID string
-	for i := 0; i < n; i++ {
+	for i := range n {
 		if errs[i] == nil {
 			admitted++
 			admittedID = ids[i]

@@ -52,7 +52,7 @@ func concurrentReconcileEntities(ctx context.Context, h *TestHarness, index enti
 	close(ch)
 
 	var wg sync.WaitGroup
-	for i := 0; i < workers; i++ {
+	for range workers {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -428,7 +428,7 @@ func TestRapidRedeployWithDisk(t *testing.T) {
 		// Run 0-2 concurrent disk controller reconciliation rounds per iteration
 		// to create varying interleaving patterns
 		reconcileRounds := v % 3
-		for r := 0; r < reconcileRounds; r++ {
+		for range reconcileRounds {
 			concurrentReconcileRound(ctx, h, concWorkers)
 		}
 
@@ -445,7 +445,7 @@ func TestRapidRedeployWithDisk(t *testing.T) {
 	finalizeStoppedSandboxes(t, ctx, h)
 
 	// Concurrent disk controller rounds
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		concurrentReconcileRound(ctx, h, concWorkers)
 	}
 	h.ReconcileAll(ctx, 30)

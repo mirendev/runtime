@@ -139,7 +139,7 @@ func generateRandomIPInSubnet(r *mrand.Rand, prefix netip.Prefix) (netip.Addr, e
 	copy(paddedOffset[len(paddedOffset)-len(offsetBytes):], offsetBytes)
 
 	// Apply the offset
-	for i := 0; i < len(ipBytes); i++ {
+	for i := range ipBytes {
 		ipBytes[i] += paddedOffset[i]
 	}
 

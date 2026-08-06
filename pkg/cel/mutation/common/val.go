@@ -50,7 +50,7 @@ var _ traits.Zeroer = (*ObjectVal)(nil)
 // or any recursive conversion fails.
 func (v *ObjectVal) ConvertToNative(typeDesc reflect.Type) (any, error) {
 	var result map[string]any
-	if typeDesc != reflect.TypeOf(result) {
+	if typeDesc != reflect.TypeFor[map[string]any]() {
 		return nil, fmt.Errorf("unable to convert to %v", typeDesc)
 	}
 	result = make(map[string]any, len(v.fields))
@@ -91,8 +91,7 @@ func (v *ObjectVal) Type() ref.Type {
 // Value returns its value as a map[string]any.
 func (v *ObjectVal) Value() any {
 	var result any
-	var object map[string]any
-	result, err := v.ConvertToNative(reflect.TypeOf(object))
+	result, err := v.ConvertToNative(reflect.TypeFor[map[string]any]())
 	if err != nil {
 		return types.WrapErr(err)
 	}

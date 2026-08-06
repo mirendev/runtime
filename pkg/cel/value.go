@@ -548,10 +548,10 @@ func (lv *ListValue) Add(other ref.Val) ref.Val {
 	szLeft := int(oArr.Size().(types.Int))
 	sz := szRight + szLeft
 	combo := make([]ref.Val, sz)
-	for i := 0; i < szRight; i++ {
+	for i := range szRight {
 		combo[i] = lv.Entries[i].ExprValue()
 	}
-	for i := 0; i < szLeft; i++ {
+	for i := range szLeft {
 		combo[i+szRight] = oArr.Get(types.Int(i))
 	}
 	return types.DefaultTypeAdapter.NativeToValue(combo)
@@ -583,7 +583,7 @@ func (lv *ListValue) Contains(val ref.Val) ref.Val {
 	}
 	var err ref.Val
 	sz := len(lv.Entries)
-	for i := 0; i < sz; i++ {
+	for i := range sz {
 		elem := lv.Entries[i]
 		cmp := elem.Equal(val)
 		b, ok := cmp.(types.Bool)
@@ -611,7 +611,7 @@ func (lv *ListValue) ConvertToNative(typeDesc reflect.Type) (interface{}, error)
 	}
 
 	// If the list is already assignable to the desired type return it.
-	if reflect.TypeOf(lv).AssignableTo(typeDesc) {
+	if reflect.TypeFor[*ListValue]().AssignableTo(typeDesc) {
 		return lv, nil
 	}
 
@@ -621,7 +621,7 @@ func (lv *ListValue) ConvertToNative(typeDesc reflect.Type) (interface{}, error)
 	// Allow the element ConvertToNative() function to determine whether conversion is possible.
 	sz := len(lv.Entries)
 	nativeList := reflect.MakeSlice(typeDesc, int(sz), int(sz))
-	for i := 0; i < sz; i++ {
+	for i := range sz {
 		elem := lv.Entries[i]
 		nativeElemVal, err := elem.ConvertToNative(otherElem)
 		if err != nil {
@@ -654,7 +654,7 @@ func (lv *ListValue) Equal(other ref.Val) ref.Val {
 	if sz != oArr.Size() {
 		return types.False
 	}
-	for i := types.Int(0); i < sz; i++ {
+	for i := range sz {
 		cmp := lv.Get(i).Equal(oArr.Get(i))
 		if cmp != types.True {
 			return cmp

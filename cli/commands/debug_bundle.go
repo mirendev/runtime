@@ -85,7 +85,7 @@ func DebugBundle(ctx *Context, opts struct {
 	processData, err := gatherProcesses()
 	if err != nil {
 		ctx.Warn("Failed to gather processes: %v", err)
-		processData = []byte(fmt.Sprintf("Error gathering processes: %v\n", err))
+		processData = fmt.Appendf(nil, "Error gathering processes: %v\n", err)
 	}
 	if err := writeToArchive(tw, "miren-debug/processes.txt", processData); err != nil {
 		return fmt.Errorf("writing processes.txt: %w", err)
@@ -112,7 +112,7 @@ func DebugBundle(ctx *Context, opts struct {
 	containerData, err := gatherContainers(ctx, opts.Socket, opts.Namespace)
 	if err != nil {
 		ctx.Warn("Failed to gather containers: %v", err)
-		containerData = []byte(fmt.Sprintf("Error gathering containers: %v\n", err))
+		containerData = fmt.Appendf(nil, "Error gathering containers: %v\n", err)
 	}
 	if err := writeToArchive(tw, "miren-debug/containers.txt", containerData); err != nil {
 		return fmt.Errorf("writing containers.txt: %w", err)
@@ -123,7 +123,7 @@ func DebugBundle(ctx *Context, opts struct {
 	logData, err := gatherServerLogs(opts.Since, opts.DockerContainer)
 	if err != nil {
 		ctx.Warn("Failed to gather server logs: %v", err)
-		logData = []byte(fmt.Sprintf("Error gathering server logs: %v\n", err))
+		logData = fmt.Appendf(nil, "Error gathering server logs: %v\n", err)
 	}
 	if err := writeToArchive(tw, "miren-debug/server-logs.txt", logData); err != nil {
 		return fmt.Errorf("writing server-logs.txt: %w", err)

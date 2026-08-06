@@ -322,7 +322,7 @@ func (t *Tracker) update(ctx context.Context, deploymentID string, mutate func(*
 		return cond.ValidationFailure("missing-field", "deployment_id is required")
 	}
 
-	for attempt := 0; attempt < updateRetryLimit; attempt++ {
+	for attempt := range updateRetryLimit {
 		rec, err := t.store.Get(ctx, deploymentID)
 		if err != nil {
 			return err

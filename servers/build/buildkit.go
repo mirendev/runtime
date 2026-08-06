@@ -451,8 +451,8 @@ func (b *Buildkit) BuildImage(
 								continue
 							}
 
-							if strings.HasPrefix(s.Name, "[phase] ") {
-								phase := strings.TrimPrefix(s.Name, "[phase] ")
+							if after, ok0 := strings.CutPrefix(s.Name, "[phase] "); ok0 {
+								phase := after
 								b.Log.Debug("phase update", "phase", phase)
 								opts.phaseUpdates(phase)
 							}

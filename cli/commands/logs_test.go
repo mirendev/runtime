@@ -197,7 +197,7 @@ func TestPrintLogEntryJSON(t *testing.T) {
 		var buf bytes.Buffer
 		ctx := &Context{Context: context.Background(), Stdout: &buf}
 
-		for i := 0; i < 3; i++ {
+		for range 3 {
 			entry := &app_v1alpha.LogEntry{}
 			entry.SetTimestamp(standard.ToTimestamp(ts))
 			entry.SetStream("stdout")
@@ -463,7 +463,7 @@ func TestLogCoalescer(t *testing.T) {
 	t.Run("repeated lines collapse to one live counter", func(t *testing.T) {
 		var buf bytes.Buffer
 		c := newCoalescer(&buf)
-		for i := 0; i < 4; i++ {
+		for i := range 4 {
 			c.print(mk(11+i, "ping"))
 		}
 		c.flush()
@@ -577,7 +577,7 @@ func TestLogPrinterNonTTYNeverCoalesces(t *testing.T) {
 	printer, flush := logPrinter(ctx, false, true)
 
 	ts := time.Date(2026, 3, 13, 16, 30, 0, 0, time.UTC)
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		e := &app_v1alpha.LogEntry{}
 		e.SetTimestamp(standard.ToTimestamp(ts))
 		e.SetStream("stdout")

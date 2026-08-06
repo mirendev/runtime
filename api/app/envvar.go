@@ -73,7 +73,7 @@ func SetEnvVars(ctx context.Context, ec *entityserver.Client, appName string,
 		}
 	}
 
-	for attempt := 0; attempt < envMutateMaxAttempts; attempt++ {
+	for range envMutateMaxAttempts {
 		appVer, spec, appRec, appRev, err := resolveBaseVersion(ctx, ec, appName, baseVersion)
 		if err != nil {
 			return nil, err
@@ -112,7 +112,7 @@ func SetEnvVars(ctx context.Context, ec *entityserver.Client, appName string,
 func DeleteEnvVars(ctx context.Context, ec *entityserver.Client, appName string,
 	baseVersion *core_v1alpha.AppVersion, keys []string, service string) (*DeleteResult, error) {
 
-	for attempt := 0; attempt < envMutateMaxAttempts; attempt++ {
+	for range envMutateMaxAttempts {
 		appVer, spec, appRec, appRev, err := resolveBaseVersion(ctx, ec, appName, baseVersion)
 		if err != nil {
 			return nil, err
@@ -249,7 +249,7 @@ func SetInitialEnvVars(ctx context.Context, ec *entityserver.Client, appName str
 	}
 
 	const maxAttempts = 5
-	for attempt := 0; attempt < maxAttempts; attempt++ {
+	for range maxAttempts {
 		appEnt, err := ec.EAC().Get(ctx, "app/"+appName)
 		if err != nil {
 			return "", err

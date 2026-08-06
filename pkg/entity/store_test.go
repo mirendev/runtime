@@ -504,7 +504,7 @@ func TestEtcdStore_GetEntities_Batching(t *testing.T) {
 	numEntities := 150 // This will require 3 batches (64 + 64 + 22)
 	var entityIds []Id
 
-	for i := 0; i < numEntities; i++ {
+	for i := range numEntities {
 		entity, err := store.CreateEntity(t.Context(), New(
 			Any(Ident, KeywordValue(fmt.Sprintf("test-entity-%d", i))),
 			Any(Doc, fmt.Sprintf("Test entity %d", i)),
@@ -1273,7 +1273,7 @@ func TestEtcdStore_GetEntities(t *testing.T) {
 		// Create a larger batch of entities
 		var ids []Id
 		numEntities := 50
-		for i := 0; i < numEntities; i++ {
+		for i := range numEntities {
 			entity, err := store.CreateEntity(t.Context(), New(
 				Any(Ident, fmt.Sprintf("batch-entity-%d", i)),
 				Any(Doc, fmt.Sprintf("Batch document %d", i)),
@@ -1300,7 +1300,7 @@ func TestEtcdStore_GetEntities(t *testing.T) {
 		r.Equal(numEntities, validCount)
 
 		// Verify order is preserved
-		for i := 0; i < numEntities; i++ {
+		for i := range numEntities {
 			r.NotNil(entities[i])
 			r.Equal(ids[i], entities[i].Id())
 		}

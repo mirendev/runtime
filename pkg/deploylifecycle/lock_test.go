@@ -357,7 +357,7 @@ func TestConcurrentAcquireYieldsExactlyOneWinner(t *testing.T) {
 	)
 
 	start := make(chan struct{})
-	for i := 0; i < contenders; i++ {
+	for i := range contenders {
 		id := "dep-" + string(rune('a'+i))
 		wg.Add(1)
 		go func() {

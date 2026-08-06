@@ -66,22 +66,22 @@ func TestRingSet_Concurrent(t *testing.T) {
 	var wg sync.WaitGroup
 
 	// Spawn multiple goroutines adding values
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		wg.Add(1)
 		go func(start int) {
 			defer wg.Done()
-			for j := 0; j < 50; j++ {
+			for j := range 50 {
 				rs.Add(int64(start*50 + j))
 			}
 		}(i)
 	}
 
 	// Spawn multiple goroutines checking values
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		wg.Add(1)
 		go func(start int) {
 			defer wg.Done()
-			for j := 0; j < 50; j++ {
+			for j := range 50 {
 				_ = rs.Contains(int64(start*50 + j))
 			}
 		}(i)

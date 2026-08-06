@@ -42,7 +42,7 @@ func structFingerprint(t reflect.Type) string {
 // fails, update specsMatch to handle the new field (or explicitly skip it),
 // then update the expected hash here.
 func TestSpecsMatchCoversAllFields(t *testing.T) {
-	assert.Equal(t, "df3e94413eb036c1", structFingerprint(reflect.TypeOf(compute_v1alpha.SandboxSpec{})),
+	assert.Equal(t, "df3e94413eb036c1", structFingerprint(reflect.TypeFor[compute_v1alpha.SandboxSpec]()),
 		"SandboxSpec struct tree changed — update specsMatch and this hash")
 }
 

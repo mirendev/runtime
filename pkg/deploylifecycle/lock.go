@@ -184,7 +184,7 @@ func (l *Locks) Acquire(ctx context.Context, appName, deploymentID string) (*Hol
 
 	id := LockID(appName)
 
-	for attempt := 0; attempt < lockAcquireLimit; attempt++ {
+	for attempt := range lockAcquireLimit {
 		mine := l.holderFor(appName, deploymentID)
 
 		res, err := l.eac.Ensure(ctx, l.encode(id, mine))

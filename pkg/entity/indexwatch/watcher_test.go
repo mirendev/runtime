@@ -139,7 +139,7 @@ func TestWatcher_InitialSyncSnapshot(t *testing.T) {
 	r := require.New(t)
 
 	store := entity.NewMockStore()
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		_, err := store.CreateEntity(context.Background(), makeEntity(fmt.Sprintf("widget-%d", i)))
 		r.NoError(err)
 	}
@@ -399,7 +399,7 @@ func TestWatcher_BlockingBackpressure(t *testing.T) {
 	ch := nextChan(t, chans, 5*time.Second)
 
 	// Pre-create the entities so the server can read them on put events.
-	for i := 0; i < n; i++ {
+	for i := range n {
 		_, err := store.CreateEntity(ctx, makeEntity(fmt.Sprintf("widget-%d", i)))
 		r.NoError(err)
 	}
@@ -407,7 +407,7 @@ func TestWatcher_BlockingBackpressure(t *testing.T) {
 	// Push events faster than they are consumed; the unbuffered channel + buffer
 	// of 1 force backpressure all the way to this goroutine.
 	go func() {
-		for i := 0; i < n; i++ {
+		for i := range n {
 			ch <- putEvent(fmt.Sprintf("widget-%d", i), int64(i+10), true)
 		}
 	}()

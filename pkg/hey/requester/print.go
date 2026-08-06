@@ -81,7 +81,7 @@ func histogram(buckets []Bucket) string {
 		}
 	}
 	res := new(bytes.Buffer)
-	for i := 0; i < len(buckets); i++ {
+	for i := range buckets {
 		// Normalize bar lengths.
 		var barLen int
 		if max > 0 {

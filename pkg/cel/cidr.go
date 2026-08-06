@@ -38,10 +38,10 @@ var (
 
 // ConvertToNative implements ref.Val.ConvertToNative.
 func (d CIDR) ConvertToNative(typeDesc reflect.Type) (any, error) {
-	if reflect.TypeOf(d.Prefix).AssignableTo(typeDesc) {
+	if reflect.TypeFor[netip.Prefix]().AssignableTo(typeDesc) {
 		return d.Prefix, nil
 	}
-	if reflect.TypeOf("").AssignableTo(typeDesc) {
+	if reflect.TypeFor[string]().AssignableTo(typeDesc) {
 		return d.String(), nil
 	}
 	return nil, fmt.Errorf("type conversion error from 'CIDR' to '%v'", typeDesc)

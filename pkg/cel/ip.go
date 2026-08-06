@@ -38,10 +38,10 @@ var (
 
 // ConvertToNative implements ref.Val.ConvertToNative.
 func (d IP) ConvertToNative(typeDesc reflect.Type) (any, error) {
-	if reflect.TypeOf(d.Addr).AssignableTo(typeDesc) {
+	if reflect.TypeFor[netip.Addr]().AssignableTo(typeDesc) {
 		return d.Addr, nil
 	}
-	if reflect.TypeOf("").AssignableTo(typeDesc) {
+	if reflect.TypeFor[string]().AssignableTo(typeDesc) {
 		return d.String(), nil
 	}
 	return nil, fmt.Errorf("type conversion error from 'IP' to '%v'", typeDesc)

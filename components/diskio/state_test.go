@@ -210,9 +210,9 @@ func TestStateConcurrentAccess(t *testing.T) {
 	// Simulate concurrent access
 	done := make(chan bool, 10)
 
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		go func(idx int) {
-			for j := 0; j < 100; j++ {
+			for range 100 {
 				state.SetVolume("vol-1", &VolumeState{EntityId: "vol-1"})
 				_ = state.GetVolume("vol-1")
 			}
@@ -220,9 +220,9 @@ func TestStateConcurrentAccess(t *testing.T) {
 		}(i)
 	}
 
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		go func(idx int) {
-			for j := 0; j < 100; j++ {
+			for range 100 {
 				state.SetMount("mount-1", &MountState{EntityId: "mount-1"})
 				_ = state.GetMount("mount-1")
 			}
@@ -231,7 +231,7 @@ func TestStateConcurrentAccess(t *testing.T) {
 	}
 
 	// Wait for all goroutines
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		<-done
 	}
 

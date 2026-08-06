@@ -676,7 +676,7 @@ poolLoop:
 
 			const maxRetries = 3
 			poolDeleted := false
-			for attempt := 0; attempt < maxRetries; attempt++ {
+			for attempt := range maxRetries {
 				a.mu.Lock()
 				if state.pool.DesiredInstances >= maxInstances {
 					poolIDForMaxCheck := state.pool.ID
@@ -859,7 +859,7 @@ poolLoop:
 		const baseRetryDelay = 100 * time.Millisecond
 
 		var foundPoolWithRev *poolWithRevision
-		for attempt := 0; attempt < maxRetries; attempt++ {
+		for attempt := range maxRetries {
 			if attempt > 0 {
 				// Release lock during retry delay
 				a.mu.Unlock()

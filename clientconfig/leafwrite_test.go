@@ -49,7 +49,7 @@ func TestAtomicWriteFileNoTornRead(t *testing.T) {
 	big, err := yaml.Marshal(&ConfigData{
 		Identities: func() map[string]*IdentityConfig {
 			m := make(map[string]*IdentityConfig)
-			for i := 0; i < 200; i++ {
+			for i := range 200 {
 				m[string(rune('a'+i%26))+string(rune('0'+i%10))+"-"+itoa(i)] = &IdentityConfig{
 					Type:         "token",
 					Token:        "eyJhbGciOiJFZERTQSJ9." + itoa(i),
@@ -84,7 +84,7 @@ func TestAtomicWriteFileNoTornRead(t *testing.T) {
 	}()
 
 	// Writer: alternate payloads so length changes each time.
-	for i := 0; i < 300; i++ {
+	for i := range 300 {
 		payload := big
 		if i%2 == 0 {
 			payload = small

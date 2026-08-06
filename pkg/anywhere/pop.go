@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"net"
 	"net/http"
 	"strings"
@@ -567,9 +568,7 @@ func (m *POPManager) RemovePOP(popXID string) {
 func (m *POPManager) Close() {
 	m.mu.Lock()
 	conns := make(map[string]*popConnection, len(m.conns))
-	for k, v := range m.conns {
-		conns[k] = v
-	}
+	maps.Copy(conns, m.conns)
 	m.conns = make(map[string]*popConnection)
 	m.mu.Unlock()
 

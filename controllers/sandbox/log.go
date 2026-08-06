@@ -107,11 +107,11 @@ func (s *SandboxLogs) processLine(line string) {
 
 	stream := s.stream
 
-	if strings.HasPrefix(line, "!USER ") {
-		line = strings.TrimPrefix(line, "!USER ")
+	if after, ok := strings.CutPrefix(line, "!USER "); ok {
+		line = after
 		stream = observability.UserOOB
-	} else if strings.HasPrefix(line, "!ERROR ") {
-		line = strings.TrimPrefix(line, "!ERROR ")
+	} else if after, ok := strings.CutPrefix(line, "!ERROR "); ok {
+		line = after
 		stream = observability.Error
 	}
 

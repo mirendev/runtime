@@ -36,7 +36,7 @@ func ExampleHardwareCounter_iPC() {
 
 	sum := 0
 	gc, err := ipc.MeasureGroup(func() {
-		for i := 0; i < 100000; i++ {
+		for i := range 100000 {
 			sum += i
 		}
 	})

@@ -287,7 +287,7 @@ func (r *AppInfo) SetConfiguration(ctx context.Context, state *app_v1alpha.CrudS
 	// enough that genuine contention never spuriously fails, while still
 	// guaranteeing termination rather than looping forever.
 	const maxAttempts = 100
-	for attempt := 0; attempt < maxAttempts; attempt++ {
+	for range maxAttempts {
 		appEnt, err := r.EC.EAC().Get(ctx, "app/"+name)
 		if err != nil {
 			if errors.Is(err, cond.ErrNotFound{}) {

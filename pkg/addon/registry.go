@@ -3,6 +3,7 @@ package addon
 import (
 	"context"
 	"fmt"
+	"maps"
 	"strings"
 
 	"miren.dev/runtime/api/addon/addon_v1alpha"
@@ -132,9 +133,7 @@ func (r *Registry) GetVariantConfig(addonName, variantName, version string) (map
 		if v.Name == variantName {
 			// Clone the config so we don't mutate the definition.
 			cfg := make(map[string]string, len(v.Config)+1)
-			for k, val := range v.Config {
-				cfg[k] = val
-			}
+			maps.Copy(cfg, v.Config)
 			cfg[ConfigImage] = ResolveImage(def.BaseImage, def.DefaultVersion, version)
 			return cfg, nil
 		}
