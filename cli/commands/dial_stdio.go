@@ -31,21 +31,17 @@ func DialStdio(ctx *Context, opts struct {
 		c.Close()
 	}()
 
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		defer cancel()
 
 		io.Copy(c, os.Stdin)
-	}()
+	})
 
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		defer cancel()
 
 		io.Copy(os.Stdout, c)
-	}()
+	})
 
 	wg.Wait()
 

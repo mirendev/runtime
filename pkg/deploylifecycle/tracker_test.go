@@ -417,22 +417,18 @@ func TestConcurrentUpdatesConverge(t *testing.T) {
 	start := make(chan struct{})
 
 	for _, phase := range []Phase{PhaseBuilding, PhasePushing, PhaseActivating} {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			<-start
 			// Either it applies or it conflicts with the cancel; both are fine,
 			// a lost update is not.
 			_ = tr.SetPhase(ctx, id, phase)
-		}()
+		})
 	}
 
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		<-start
 		_ = tr.Cancel(ctx, id, "raced")
-	}()
+	})
 
 	close(start)
 	wg.Wait()

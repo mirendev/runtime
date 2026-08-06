@@ -286,11 +286,9 @@ func (n *Network) Start(ctx context.Context, eg *errgroup.Group) error {
 		defer cancel()
 		// Start "Running" the backend network. This will block until the context is done so run in another goroutine.
 		n.log.Info("Running backend.")
-		wg.Add(1)
-		go func() {
+		wg.Go(func() {
 			bn.Run(ctx)
-			wg.Done()
-		}()
+		})
 
 		err = sm.CompleteLease(ctx, bn.Lease(), &wg)
 		if err != nil {

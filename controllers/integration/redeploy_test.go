@@ -53,15 +53,13 @@ func concurrentReconcileEntities(ctx context.Context, h *TestHarness, index enti
 
 	var wg sync.WaitGroup
 	for range workers {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			for event := range ch {
 				if err := rc.ProcessEventForTest(ctx, event); err != nil {
 					h.T.Errorf("concurrentReconcileEntities: ProcessEventForTest(%s) failed: %v", event.Id, err)
 				}
 			}
-		}()
+		})
 	}
 	wg.Wait()
 }

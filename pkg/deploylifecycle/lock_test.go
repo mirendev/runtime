@@ -359,9 +359,7 @@ func TestConcurrentAcquireYieldsExactlyOneWinner(t *testing.T) {
 	start := make(chan struct{})
 	for i := range contenders {
 		id := "dep-" + string(rune('a'+i))
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			<-start
 
 			holder, err := locks.Acquire(ctx, "web", id)
@@ -372,7 +370,7 @@ func TestConcurrentAcquireYieldsExactlyOneWinner(t *testing.T) {
 			mu.Lock()
 			winners = append(winners, holder.DeploymentID)
 			mu.Unlock()
-		}()
+		})
 	}
 
 	close(start)
