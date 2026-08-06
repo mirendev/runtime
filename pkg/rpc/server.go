@@ -58,6 +58,17 @@ type Server struct {
 
 	mux *http.ServeMux
 	ws  *webtransport.Server
+
+	// restEnabled gates mounting REST routes when an interface is exposed. It
+	// tracks WithRESTBindAddr, so a deployment that has not asked for the REST
+	// surface does not grow one on its HTTP/3 listener either.
+	restEnabled bool
+
+	// restRoutes maps a mounted REST pattern to the interface that claimed it.
+	// Exposing the same interface twice is legitimate (ExposeValue overwrites),
+	// and ServeMux panics on a duplicate pattern, so re-registration is skipped
+	// rather than allowed to take the process down.
+	restRoutes map[string]string
 }
 
 type heldInterface struct {
@@ -101,6 +112,7 @@ func newServer() *Server {
 		persistent:     make(map[string]*Interface),
 		knownAddresses: make(map[string]string),
 		resolvers:      make(map[string]HasReconstructFromState),
+		restRoutes:     make(map[string]string),
 	}
 
 	s.setupMux()
@@ -128,6 +140,39 @@ type Method struct {
 	// understands a specific parameter (e.g. one added after the method first
 	// shipped) instead of only whether the method exists. See HasMethodParam.
 	Params []string
+	// HTTP describes how to expose this method over a plain HTTP/JSON REST API.
+	// It is nil unless the method carries an http: annotation in the IDL. The
+	// REST gateway (RegisterREST) only mounts routes for methods with a binding.
+	HTTP *HTTPBinding
+}
+
+// HTTPBinding maps an RPC method onto an HTTP route for the REST gateway. It is
+// populated by generated AdaptXxx code from the method's IDL http: annotation.
+type HTTPBinding struct {
+	// Verb is the HTTP method (GET, POST, PUT, DELETE, PATCH).
+	Verb string
+	// Path is the fully-resolved route template, including any interface
+	// prefix, using Go 1.22 ServeMux wildcards (e.g. /api/v1/apps/{app}/config).
+	Path string
+	// Body designates where the request body maps: "*" binds the whole JSON
+	// body onto the args, "" means no body (params come from path/query).
+	Body string
+	// PathParams lists the wildcard names embedded in Path, in order.
+	PathParams []string
+	// Query lists the parameters bound from the URL query string, with the type
+	// info needed to coerce their string values into typed JSON. It is only
+	// populated for bodyless bindings (Body == ""); when a body is present the
+	// non-path params ride in the JSON body instead.
+	Query []HTTPParam
+}
+
+// HTTPParam describes a single query-bound parameter for the REST gateway.
+type HTTPParam struct {
+	// Name is the parameter (and query key) name.
+	Name string
+	// Kind selects how the raw string value is coerced into JSON: one of
+	// "string", "bool", "int", "uint", "float", or "timestamp".
+	Kind string
 }
 
 type HasRestoreState interface {
@@ -149,6 +194,22 @@ type Interface struct {
 
 func (i *Interface) Value() any {
 	return i.value
+}
+
+// Name returns the schema name of the interface (e.g. "Crud").
+func (i *Interface) Name() string {
+	return i.name
+}
+
+// Methods returns the interface's methods. The order is unspecified. It exists
+// so external packages (notably the REST gateway) can enumerate methods without
+// access to the private method map.
+func (i *Interface) Methods() []Method {
+	methods := make([]Method, 0, len(i.methods))
+	for _, m := range i.methods {
+		methods = append(methods, m)
+	}
+	return methods
 }
 
 func (i *Interface) SetAroundContext(fn func(ctx context.Context, call Call) (context.Context, func())) {
@@ -195,6 +256,97 @@ func (s *Server) ExposeValue(name string, iface *Interface) {
 	if iface.constructor != nil {
 		s.resolvers[name] = iface.constructor
 	}
+
+	if s.restEnabled {
+		s.mountREST(name, iface)
+	}
+}
+
+// mountREST adds a route for each HTTP-annotated method of iface to the server
+// mux, so the REST gateway dispatches through the same handler the RPC
+// transport does. Callers hold s.mu.
+func (s *Server) mountREST(name string, iface *Interface) {
+	for _, m := range iface.Methods() {
+		if m.HTTP == nil {
+			continue
+		}
+
+		pattern := m.HTTP.Verb + " " + m.HTTP.Path
+
+		if owner, ok := s.restRoutes[pattern]; ok {
+			if s.state != nil {
+				s.state.log.Warn("rest route already mounted, skipping",
+					"pattern", pattern, "mounted-by", owner, "skipped", name)
+			}
+			continue
+		}
+
+		if err := s.handleREST(pattern, m); err != nil {
+			if s.state != nil {
+				s.state.log.Error("rest route rejected by mux, skipping",
+					"pattern", pattern, "interface", name, "error", err)
+			}
+			continue
+		}
+
+		s.restRoutes[pattern] = name
+	}
+}
+
+// isRESTRoute reports whether r matches a REST route this server mounted.
+//
+// Those handlers run restAuthorize, which applies the same gate handleCalls
+// does — identity required unless the method is public, then the authorizer —
+// so exempting them from the blanket non-RPC requirement is parity with the RPC
+// transport rather than a loosening. Without the exemption that requirement
+// overrides a decision the method already made, and a method marked public: in
+// the IDL answers 401 over REST while answering fine over QUIC.
+//
+// Handlers mounted through WithHTTPHandler are deliberately not covered: they
+// do not enforce anything themselves, which is exactly what that option's
+// documentation warns about.
+func (s *Server) isRESTRoute(r *http.Request) bool {
+	_, pattern := s.mux.Handler(r)
+	if pattern == "" {
+		return false
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	_, ok := s.restRoutes[pattern]
+
+	return ok
+}
+
+// hasRESTRoutes reports whether any REST route has been mounted, which the
+// listener uses to tell "still starting" apart from "no such route".
+func (s *Server) hasRESTRoutes() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return len(s.restRoutes) > 0
+}
+
+// handleREST mounts one route, converting a ServeMux rejection into an error.
+//
+// The map check above catches a pattern mounted twice, but ServeMux rejects
+// more than exact duplicates: two annotations that differ only in wildcard name
+// ("/apps/{app}" and "/apps/{name}") are distinct strings that still conflict,
+// and ServeMux reports that by panicking. Mounting runs from ExposeValue during
+// startup, so left alone that is a coordinator that will not boot. Skipping the
+// offending route loses one endpoint and logs why, which beats losing the
+// process.
+func (s *Server) handleREST(pattern string, m Method) (err error) {
+	defer func() {
+		if rec := recover(); rec != nil {
+			err = fmt.Errorf("%v", rec)
+		}
+	}()
+
+	s.mux.HandleFunc(pattern, restHandler(m, s.state))
+
+	return nil
 }
 
 const BootstrapOID = "!bootstrap"
@@ -365,8 +517,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// For RPC paths, let the method-level check in handleCalls decide based on public flag
-	// For non-RPC paths, require authentication
-	if identity == nil && !isRPCPath(r.URL.Path) {
+	// A mounted REST route decides the same way, in restAuthorize
+	// For every other non-RPC path, require authentication
+	if identity == nil && !isRPCPath(r.URL.Path) && !s.isRESTRoute(r) {
 		s.state.log.Warn("request requires authentication", "path", r.URL.Path)
 		http.Error(w, "authentication required", http.StatusUnauthorized)
 		return

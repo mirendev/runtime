@@ -31,9 +31,13 @@ types:
 
 interfaces:
   - name: Meter
+    http:
+      prefix: /api/v1
     methods:
       - name: readTemperature
         index: 0
+        http:
+          get: /meters/{name}/temperature
         parameters:
           - name: name
             type: string
@@ -48,6 +52,37 @@ interfaces:
         results:
           - name: setter
             type: SetTemp
+
+  # Readings exists to exercise the REST gateway's request-body binding: name
+  # comes from the path, temperature from the JSON body.
+  - name: Readings
+    http:
+      prefix: /api/v1
+    methods:
+      - name: record
+        index: 0
+        http:
+          post: /meters/{name}/readings
+          body: "*"
+        parameters:
+          - name: name
+            type: string
+          - name: temperature
+            type: float32
+        results:
+          - name: reading
+            type: Reading
+      # Public so the REST gateway's unauthenticated path has something to
+      # exercise: a public method must answer without an identity, the same way
+      # it does over RPC.
+      - name: ping
+        index: 1
+        public: true
+        http:
+          get: /meters/ping
+        results:
+          - name: ok
+            type: bool
 
   - name: SetTemp
     methods:

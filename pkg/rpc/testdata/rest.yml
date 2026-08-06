@@ -1,0 +1,70 @@
+apiVersion: miren.dev/rpc/v1
+kind: IDL
+types:
+  - type: Widget
+    fields:
+      - name: id
+        type: string
+        index: 0
+      - name: size
+        type: int32
+        index: 1
+
+interfaces:
+  - name: Widgets
+    http:
+      prefix: /api/v1
+    methods:
+      - name: get
+        index: 0
+        http:
+          get: /widgets/{id}
+        parameters:
+          - name: id
+            type: string
+        results:
+          - name: widget
+            type: Widget
+      - name: create
+        index: 1
+        http:
+          post: /widgets
+          body: "*"
+        parameters:
+          - name: id
+            type: string
+          - name: size
+            type: int32
+        results:
+          - name: widget
+            type: Widget
+      - name: delete
+        index: 2
+        http:
+          delete: /widgets/{id}
+        parameters:
+          - name: id
+            type: string
+      - name: search
+        index: 4
+        http:
+          get: /widgets
+        parameters:
+          - name: prefix
+            type: string
+          - name: limit
+            type: int32
+          - name: active
+            type: bool
+        results:
+          - name: widgets
+            type: list
+            element: Widget
+      - name: internalOnly
+        index: 3
+        parameters:
+          - name: id
+            type: string
+        results:
+          - name: ok
+            type: bool

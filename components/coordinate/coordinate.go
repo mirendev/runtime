@@ -834,6 +834,10 @@ func (c *Coordinator) Start(ctx context.Context) error {
 		rpc.WithCertPEMs(c.apiCert, c.apiKey),
 		rpc.WithCertificateVerification(c.authority.GetCACertificate()),
 		rpc.WithBindAddr(c.Address),
+		// Same address, other protocol: QUIC owns udp/<port> and the REST
+		// gateway owns tcp/<port>, so an ordinary HTTP client reaches the API
+		// on the port the cluster already advertises.
+		rpc.WithRESTBindAddr(c.Address),
 		rpc.WithLogger(c.Log),
 	}
 

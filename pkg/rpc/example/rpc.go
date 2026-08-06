@@ -366,6 +366,12 @@ func AdaptMeter(t Meter) *rpc.Interface {
 			Index:         0,
 			Public:        false,
 			Params:        []string{"name"},
+			HTTP: &rpc.HTTPBinding{
+				Verb:       "GET",
+				Path:       "/api/v1/meters/{name}/temperature",
+				Body:       "",
+				PathParams: []string{"name"},
+			},
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.ReadTemperature(ctx, &MeterReadTemperature{Call: call})
 			},
@@ -447,6 +453,316 @@ func (v MeterClient) GetSetter(ctx context.Context, name string) (*MeterClientGe
 	}
 
 	return &MeterClientGetSetterResults{client: v.Client, data: ret}, nil
+}
+
+type readingsRecordArgsData struct {
+	Name        *string  `cbor:"0,keyasint,omitempty" json:"name,omitempty"`
+	Temperature *float32 `cbor:"1,keyasint,omitempty" json:"temperature,omitempty"`
+}
+
+type ReadingsRecordArgs struct {
+	call rpc.Call
+	data readingsRecordArgsData
+}
+
+func (v *ReadingsRecordArgs) HasName() bool {
+	return v.data.Name != nil
+}
+
+func (v *ReadingsRecordArgs) Name() string {
+	if v.data.Name == nil {
+		return ""
+	}
+	return *v.data.Name
+}
+
+func (v *ReadingsRecordArgs) HasTemperature() bool {
+	return v.data.Temperature != nil
+}
+
+func (v *ReadingsRecordArgs) Temperature() float32 {
+	if v.data.Temperature == nil {
+		return 0
+	}
+	return *v.data.Temperature
+}
+
+func (v *ReadingsRecordArgs) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *ReadingsRecordArgs) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *ReadingsRecordArgs) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *ReadingsRecordArgs) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type readingsRecordResultsData struct {
+	Reading *Reading `cbor:"0,keyasint,omitempty" json:"reading,omitempty"`
+}
+
+type ReadingsRecordResults struct {
+	call rpc.Call
+	data readingsRecordResultsData
+}
+
+func (v *ReadingsRecordResults) SetReading(reading *Reading) {
+	v.data.Reading = reading
+}
+
+func (v *ReadingsRecordResults) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *ReadingsRecordResults) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *ReadingsRecordResults) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *ReadingsRecordResults) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type readingsPingArgsData struct{}
+
+type ReadingsPingArgs struct {
+	call rpc.Call
+	data readingsPingArgsData
+}
+
+func (v *ReadingsPingArgs) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *ReadingsPingArgs) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *ReadingsPingArgs) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *ReadingsPingArgs) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type readingsPingResultsData struct {
+	Ok *bool `cbor:"0,keyasint,omitempty" json:"ok,omitempty"`
+}
+
+type ReadingsPingResults struct {
+	call rpc.Call
+	data readingsPingResultsData
+}
+
+func (v *ReadingsPingResults) SetOk(ok bool) {
+	v.data.Ok = &ok
+}
+
+func (v *ReadingsPingResults) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *ReadingsPingResults) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *ReadingsPingResults) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *ReadingsPingResults) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type ReadingsRecord struct {
+	rpc.Call
+	args    ReadingsRecordArgs
+	results ReadingsRecordResults
+}
+
+func (t *ReadingsRecord) Args() *ReadingsRecordArgs {
+	args := &t.args
+	if args.call != nil {
+		return args
+	}
+	args.call = t.Call
+	t.Call.Args(args)
+	return args
+}
+
+func (t *ReadingsRecord) Results() *ReadingsRecordResults {
+	results := &t.results
+	if results.call != nil {
+		return results
+	}
+	results.call = t.Call
+	t.Call.Results(results)
+	return results
+}
+
+type ReadingsPing struct {
+	rpc.Call
+	args    ReadingsPingArgs
+	results ReadingsPingResults
+}
+
+func (t *ReadingsPing) Args() *ReadingsPingArgs {
+	args := &t.args
+	if args.call != nil {
+		return args
+	}
+	args.call = t.Call
+	t.Call.Args(args)
+	return args
+}
+
+func (t *ReadingsPing) Results() *ReadingsPingResults {
+	results := &t.results
+	if results.call != nil {
+		return results
+	}
+	results.call = t.Call
+	t.Call.Results(results)
+	return results
+}
+
+type Readings interface {
+	Record(ctx context.Context, state *ReadingsRecord) error
+	Ping(ctx context.Context, state *ReadingsPing) error
+}
+
+type reexportReadings struct {
+	client rpc.Client
+}
+
+func (reexportReadings) Record(ctx context.Context, state *ReadingsRecord) error {
+	panic("not implemented")
+}
+
+func (reexportReadings) Ping(ctx context.Context, state *ReadingsPing) error {
+	panic("not implemented")
+}
+
+func (t reexportReadings) CapabilityClient() rpc.Client {
+	return t.client
+}
+
+func AdaptReadings(t Readings) *rpc.Interface {
+	methods := []rpc.Method{
+		{
+			Name:          "record",
+			InterfaceName: "Readings",
+			Index:         0,
+			Public:        false,
+			Params:        []string{"name", "temperature"},
+			HTTP: &rpc.HTTPBinding{
+				Verb:       "POST",
+				Path:       "/api/v1/meters/{name}/readings",
+				Body:       "*",
+				PathParams: []string{"name"},
+			},
+			Handler: func(ctx context.Context, call rpc.Call) error {
+				return t.Record(ctx, &ReadingsRecord{Call: call})
+			},
+		},
+		{
+			Name:          "ping",
+			InterfaceName: "Readings",
+			Index:         1,
+			Public:        true,
+			Params:        []string{},
+			HTTP: &rpc.HTTPBinding{
+				Verb:       "GET",
+				Path:       "/api/v1/meters/ping",
+				Body:       "",
+				PathParams: []string{},
+			},
+			Handler: func(ctx context.Context, call rpc.Call) error {
+				return t.Ping(ctx, &ReadingsPing{Call: call})
+			},
+		},
+	}
+
+	return rpc.NewInterface(methods, t)
+}
+
+type ReadingsClient struct {
+	rpc.Client
+}
+
+func NewReadingsClient(client rpc.Client) *ReadingsClient {
+	return &ReadingsClient{Client: client}
+}
+
+func (c ReadingsClient) Export() Readings {
+	return reexportReadings{client: c.Client}
+}
+
+type ReadingsClientRecordResults struct {
+	client rpc.Client
+	data   readingsRecordResultsData
+}
+
+func (v *ReadingsClientRecordResults) HasReading() bool {
+	return v.data.Reading != nil
+}
+
+func (v *ReadingsClientRecordResults) Reading() *Reading {
+	return v.data.Reading
+}
+
+func (v ReadingsClient) Record(ctx context.Context, name string, temperature float32) (*ReadingsClientRecordResults, error) {
+	args := ReadingsRecordArgs{}
+	args.data.Name = &name
+	args.data.Temperature = &temperature
+
+	var ret readingsRecordResultsData
+
+	err := v.Call(ctx, "record", &args, &ret)
+	if err != nil {
+		return nil, err
+	}
+
+	return &ReadingsClientRecordResults{client: v.Client, data: ret}, nil
+}
+
+type ReadingsClientPingResults struct {
+	client rpc.Client
+	data   readingsPingResultsData
+}
+
+func (v *ReadingsClientPingResults) HasOk() bool {
+	return v.data.Ok != nil
+}
+
+func (v *ReadingsClientPingResults) Ok() bool {
+	if v.data.Ok == nil {
+		return false
+	}
+	return *v.data.Ok
+}
+
+func (v ReadingsClient) Ping(ctx context.Context) (*ReadingsClientPingResults, error) {
+	args := ReadingsPingArgs{}
+
+	var ret readingsPingResultsData
+
+	err := v.Call(ctx, "ping", &args, &ret)
+	if err != nil {
+		return nil, err
+	}
+
+	return &ReadingsClientPingResults{client: v.Client, data: ret}, nil
 }
 
 type setTempSetTempArgsData struct {

@@ -128,6 +128,8 @@ type State struct {
 	httpSrv *http.Server
 	tcpLn   net.Listener
 	msgLn   net.Listener
+	restSrv *http.Server
+	restLn  net.Listener
 
 	// msgContact is the address peers use to reach this State over a message
 	// transport, e.g. "mem://name" for an in-process server. It is empty when
@@ -174,9 +176,10 @@ type stateOptions struct {
 	certData []byte
 	keyData  []byte
 
-	bindAddr    string
-	wsBindAddr  string
-	tcpBindAddr string
+	bindAddr     string
+	wsBindAddr   string
+	tcpBindAddr  string
+	restBindAddr string
 
 	memServerName string
 
@@ -247,6 +250,22 @@ func WithWSBindAddr(addr string) StateOption {
 func WithTCPBindAddr(addr string) StateOption {
 	return func(o *stateOptions) {
 		o.tcpBindAddr = addr
+	}
+}
+
+// WithRESTBindAddr enables a TCP listener serving the REST/JSON gateway over
+// TLS, bound to addr. It answers HTTP/2 and HTTP/1.1 (negotiated by ALPN), so
+// an ordinary HTTP client reaches the same handlers the QUIC transport serves.
+// Use "host:0" to bind an ephemeral port; the chosen address is available via
+// State.RESTListenAddr after NewState returns.
+//
+// Setting this also mounts REST routes for every HTTP-annotated method of the
+// interfaces passed to Server.ExposeValue. Without it no REST route is mounted
+// at all, so a deployment that has not opted in keeps exactly the surface it
+// had before.
+func WithRESTBindAddr(addr string) StateOption {
+	return func(o *stateOptions) {
+		o.restBindAddr = addr
 	}
 }
 
@@ -512,6 +531,13 @@ func NewState(ctx context.Context, opts ...StateOption) (*State, error) {
 		}
 	}
 
+	if so.restBindAddr != "" {
+		err := s.startRESTListener(ctx, so.restBindAddr)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	if so.memServerName != "" {
 		s.msgContact = "mem://" + so.memServerName
 		defaultMemRegistry.register(ctx, so.memServerName, s)
@@ -589,6 +615,7 @@ func (s *State) setupServer(so *stateOptions) error {
 
 	s.li = ec
 	s.server.state = s
+	s.server.restEnabled = so.restBindAddr != ""
 
 	return nil
 }
@@ -677,6 +704,14 @@ func (s *State) Close() error {
 
 	if s.msgLn != nil {
 		s.msgLn.Close()
+	}
+
+	if s.restSrv != nil {
+		s.restSrv.Close()
+	}
+
+	if s.restLn != nil {
+		s.restLn.Close()
 	}
 
 	return s.transport.Conn.Close()
