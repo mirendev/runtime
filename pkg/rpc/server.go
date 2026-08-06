@@ -282,7 +282,7 @@ func (s *Server) mountREST(name string, iface *Interface) {
 		}
 
 		s.restRoutes[pattern] = name
-		s.mux.HandleFunc(pattern, restHandler(m))
+		s.mux.HandleFunc(pattern, restHandler(m, s.state))
 	}
 }
 

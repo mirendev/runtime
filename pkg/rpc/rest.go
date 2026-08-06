@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -21,21 +22,31 @@ import (
 // Method.HTTP) are exposed; the generator rejects an annotation on a
 // capability-returning method, which cannot be expressed over REST.
 //
-// Auth matches the RPC transport: a non-public method requires an authenticated
-// identity in the request context. Populating that identity is the job of the
-// http.Handler stack in front of the mux, the same way handleCalls does it for
-// the QUIC transport.
+// Auth matches the RPC transport, both halves of it. A non-public method
+// requires an authenticated identity in the request context, and the server's
+// authorizer must then allow that identity to call this method on this
+// interface — the same gate handleCalls applies, on the same resource/action
+// pair. See restAuthorize. Populating the identity is the job of the
+// http.Handler stack in front of the mux, which Server.ServeHTTP does for the
+// listener started by WithRESTBindAddr.
 
 // RegisterREST mounts every HTTP-annotated method of iface onto mux. Route
 // patterns use Go 1.22 method+wildcard syntax ("GET /api/v1/apps/{app}"), so a
 // single mux can host multiple interfaces as long as their paths do not
 // conflict.
+//
+// Routes mounted this way enforce authentication but consult no authorizer,
+// because a bare mux has no server to take one from. That is the same position
+// as an RPC server with no authorizer configured, and it is why the production
+// path is WithRESTBindAddr, which mounts through the server and applies the
+// full chain. Prefer that unless you are deliberately hosting the gateway on a
+// mux of your own.
 func RegisterREST(mux *http.ServeMux, iface *Interface) {
 	for _, m := range iface.Methods() {
 		if m.HTTP == nil {
 			continue
 		}
-		mux.HandleFunc(m.HTTP.Verb+" "+m.HTTP.Path, restHandler(m))
+		mux.HandleFunc(m.HTTP.Verb+" "+m.HTTP.Path, restHandler(m, nil))
 	}
 }
 
@@ -44,7 +55,7 @@ func RegisterREST(mux *http.ServeMux, iface *Interface) {
 // wholesale on its way to the field map.
 const maxRESTBodySize = 4 << 20
 
-func restHandler(m Method) http.HandlerFunc {
+func restHandler(m Method, st *State) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		defer r.Body.Close()
 
@@ -55,16 +66,7 @@ func restHandler(m Method) http.HandlerFunc {
 			w.Header().Set("Cache-Control", "no-store")
 		}
 
-		// Mirror the auth enforcement handleCalls does for the RPC transport: a
-		// non-public method requires an authenticated identity in the context,
-		// which the surrounding http.Handler stack is responsible for putting
-		// there. Without this a method the QUIC transport would refuse could be
-		// called unauthenticated over REST.
-		if !m.Public && IdentityFromContext(r.Context()) == nil {
-			writeRESTStatus(w, http.StatusUnauthorized, restErrorBody{
-				Error: "authentication required",
-				Code:  "unauthorized",
-			})
+		if !restAuthorize(w, r, m, st) {
 			return
 		}
 
@@ -121,6 +123,63 @@ func restHandler(m Method) http.HandlerFunc {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write(body)
 	}
+}
+
+// restAuthorize applies to a REST request the same gate handleCalls applies to
+// an RPC call: a non-public method requires an authenticated identity, and then
+// the configured authorizer must allow this identity to perform this method on
+// this interface. It reports whether the request may proceed, having already
+// written the response when it may not.
+//
+// Both halves matter. Authentication alone is not the RPC contract — a workload
+// token is a valid identity that a role may still forbid from a given method, so
+// a gateway that stopped at "is anyone there?" would answer calls the QUIC
+// transport refuses. The outer Server.ServeHTTP check does not cover this: it
+// establishes an identity, and its own documentation notes that authorization
+// runs only on method dispatch, which is here.
+//
+// st is nil when routes were mounted by the exported RegisterREST onto a
+// caller's mux, where there is no server to consult. That matches the RPC path
+// with no authorizer configured: authentication is still enforced, and
+// authorization is a no-op because nothing was configured to enforce.
+func restAuthorize(w http.ResponseWriter, r *http.Request, m Method, st *State) bool {
+	if m.Public {
+		return true
+	}
+
+	ctx := r.Context()
+
+	identity := IdentityFromContext(ctx)
+	if identity == nil {
+		if st != nil {
+			logAccess(ctx, st.audit(), r, m, "unauthorized")
+		}
+		writeRESTStatus(w, http.StatusUnauthorized, restErrorBody{
+			Error: "authentication required",
+			Code:  "unauthorized",
+		})
+		return false
+	}
+
+	if st != nil && st.authorizer != nil {
+		resource := strings.ToLower(m.InterfaceName)
+		action := strings.ToLower(m.Name)
+
+		if err := st.authorizer.Authorize(ctx, identity, resource, action); err != nil {
+			logAccess(ctx, st.audit(), r, m, "forbidden", "error", err)
+			writeRESTStatus(w, http.StatusForbidden, restErrorBody{
+				Error: err.Error(),
+				Code:  "forbidden",
+			})
+			return false
+		}
+	}
+
+	if st != nil {
+		logAccess(ctx, st.audit(), r, m, "ok")
+	}
+
+	return true
 }
 
 // restFields assembles the JSON object backing a call's arguments from the

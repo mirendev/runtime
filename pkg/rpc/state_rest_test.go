@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -169,4 +170,151 @@ func TestRESTMountsAppAPI(t *testing.T) {
 	r.NotPanics(func() {
 		ss.Server().ExposeValue("dev.miren.runtime/app", app_v1alpha.AdaptCrud(nil))
 	})
+}
+
+// recordingAuthorizer captures what it was asked and can refuse, so a test can
+// assert both that the gateway consults the authorizer at all and that it asks
+// the same question the RPC path asks.
+type recordingAuthorizer struct {
+	deny     error
+	resource string
+	action   string
+	calls    int
+}
+
+func (a *recordingAuthorizer) Authorize(ctx context.Context, identity *rpc.Identity, resource, action string) error {
+	a.calls++
+	a.resource = resource
+	a.action = action
+	return a.deny
+}
+
+func restListenerWithAuthz(t *testing.T, ctx context.Context, authz rpc.Authorizer) string {
+	t.Helper()
+	r := require.New(t)
+
+	ss, err := rpc.NewState(ctx,
+		rpc.WithSkipVerify,
+		rpc.WithRESTBindAddr("localhost:0"),
+		rpc.WithAuthenticator(&rpc.NoOpAuthenticator{}),
+		rpc.WithAuthorizer(authz),
+	)
+	r.NoError(err)
+
+	ss.Server().ExposeValue("dev.miren.runtime/meter", example.AdaptMeter(&restMeter{}))
+
+	return "https://" + ss.RESTListenAddr()
+}
+
+func restGet(t *testing.T, url string) *http.Response {
+	t.Helper()
+
+	client := &http.Client{Transport: &http.Transport{
+		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+	}}
+
+	resp, err := client.Get(url)
+	require.NoError(t, err)
+	return resp
+}
+
+// The REST surface must refuse what the RPC surface refuses. Authentication
+// alone is not the contract: an identity the authorizer rejects has to be
+// rejected here too, or REST becomes a way around per-app roles.
+func TestRESTEnforcesAuthorizer(t *testing.T) {
+	t.Run("a denied identity gets 403", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		r := require.New(t)
+
+		authz := &recordingAuthorizer{deny: errors.New("role forbids this")}
+		base := restListenerWithAuthz(t, ctx, authz)
+
+		resp := restGet(t, base+"/api/v1/meters/room1/temperature")
+		defer resp.Body.Close()
+
+		r.Equal(http.StatusForbidden, resp.StatusCode)
+
+		var out struct {
+			Error string `json:"error"`
+			Code  string `json:"code"`
+		}
+		r.NoError(json.NewDecoder(resp.Body).Decode(&out))
+		r.Equal("forbidden", out.Code)
+		r.Contains(out.Error, "role forbids this")
+	})
+
+	t.Run("asks the same resource/action the RPC path asks", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		r := require.New(t)
+
+		authz := &recordingAuthorizer{}
+		base := restListenerWithAuthz(t, ctx, authz)
+
+		resp := restGet(t, base+"/api/v1/meters/room1/temperature")
+		defer resp.Body.Close()
+
+		r.Equal(http.StatusOK, resp.StatusCode)
+
+		// handleCalls lowercases the interface and method names; anything else
+		// here would silently miss policies written against the RPC surface.
+		r.Equal(1, authz.calls)
+		r.Equal("meter", authz.resource)
+		r.Equal("readtemperature", authz.action)
+	})
+}
+
+// The point of the gateway is that REST and RPC dispatch the same handlers, so
+// they must also apply the same gate. This runs both transports against one
+// server and asserts they agree on allow and on deny — a REST surface that
+// answered what QUIC refuses would be a way around per-app roles.
+func TestRESTAndRPCAgreeOnAuthorization(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		deny     error
+		wantREST int
+		wantRPC  bool // expect the RPC call to fail
+	}{
+		{name: "allowed", deny: nil, wantREST: http.StatusOK, wantRPC: false},
+		{name: "denied", deny: errors.New("role forbids this"), wantREST: http.StatusForbidden, wantRPC: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+
+			r := require.New(t)
+
+			ss, err := rpc.NewState(ctx,
+				rpc.WithSkipVerify,
+				rpc.WithRESTBindAddr("localhost:0"),
+				rpc.WithAuthenticator(&rpc.NoOpAuthenticator{}),
+				rpc.WithAuthorizer(&recordingAuthorizer{deny: tc.deny}),
+			)
+			r.NoError(err)
+
+			ss.Server().ExposeValue("meter", example.AdaptMeter(&restMeter{}))
+
+			resp := restGet(t, "https://"+ss.RESTListenAddr()+"/api/v1/meters/room1/temperature")
+			defer resp.Body.Close()
+			r.Equal(tc.wantREST, resp.StatusCode, "REST status")
+
+			cs, err := rpc.NewState(ctx, rpc.WithSkipVerify)
+			r.NoError(err)
+
+			client, err := cs.Connect(ss.ListenAddr(), "meter")
+			r.NoError(err)
+
+			meter := example.NewMeterClient(client)
+			_, rpcErr := meter.ReadTemperature(ctx, "room1")
+
+			if tc.wantRPC {
+				r.Error(rpcErr, "RPC should refuse what REST refused")
+			} else {
+				r.NoError(rpcErr, "RPC should allow what REST allowed")
+			}
+		})
+	}
 }
