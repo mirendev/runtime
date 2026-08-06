@@ -21,14 +21,14 @@ import (
 
 // ClusterResponse represents a cluster returned from the API
 type ClusterResponse struct {
-	XID               string                 `json:"xid"`
-	Name              string                 `json:"name"`
-	Description       string                 `json:"description,omitempty"`
-	Tags              map[string]interface{} `json:"tags"`
-	APIAddresses      []string               `json:"api_addresses,omitempty"`
-	CACertFingerprint string                 `json:"ca_cert_fingerprint,omitempty"`
-	OrganizationXID   string                 `json:"organization_xid"`
-	OrganizationName  string                 `json:"organization_name"`
+	XID               string         `json:"xid"`
+	Name              string         `json:"name"`
+	Description       string         `json:"description,omitempty"`
+	Tags              map[string]any `json:"tags"`
+	APIAddresses      []string       `json:"api_addresses,omitempty"`
+	CACertFingerprint string         `json:"ca_cert_fingerprint,omitempty"`
+	OrganizationXID   string         `json:"organization_xid"`
+	OrganizationName  string         `json:"organization_name"`
 }
 
 // hasReachableAddress reports whether the cloud advertised at least one API

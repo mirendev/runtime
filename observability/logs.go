@@ -491,7 +491,7 @@ func (l *LogReader) parseLogStream(ctx context.Context, body io.Reader, logCh ch
 }
 
 func (l *LogReader) parseLogLine(line []byte) (LogEntry, error) {
-	var logData map[string]interface{}
+	var logData map[string]any
 	if err := json.Unmarshal(line, &logData); err != nil {
 		return LogEntry{}, err
 	}

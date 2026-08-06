@@ -151,7 +151,7 @@ func testL1DataMissesBadLocality(t *testing.T) {
 
 	max := 1000
 
-	var bad []interface{}
+	var bad []any
 	for range 10000 {
 		bad = append(bad, rng.Intn(max))
 	}

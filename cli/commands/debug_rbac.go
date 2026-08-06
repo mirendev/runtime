@@ -209,7 +209,7 @@ func DebugRBACTest(ctx *Context, opts struct {
 	evaluator := rbac.NewEvaluator(ctx, fetcher, logger)
 
 	// Clean up tags
-	cleanTags := make(map[string]interface{})
+	cleanTags := make(map[string]any)
 	for k, v := range opts.Tags {
 		cleanTags[k] = v
 	}

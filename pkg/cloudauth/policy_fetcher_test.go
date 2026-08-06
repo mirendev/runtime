@@ -185,7 +185,7 @@ func TestPolicyFetcherIntegration(t *testing.T) {
 	config := Config{
 		CloudURL: server.URL,
 		Logger:   slog.Default(),
-		Tags: map[string]interface{}{
+		Tags: map[string]any{
 			"cluster": "test",
 		},
 	}
@@ -205,7 +205,7 @@ func TestPolicyFetcherIntegration(t *testing.T) {
 		Groups:   []string{"test-services"},
 		Resource: "apps/test",
 		Action:   "execute",
-		Tags: map[string]interface{}{
+		Tags: map[string]any{
 			"cluster": "test",
 		},
 	}

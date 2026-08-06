@@ -17,7 +17,7 @@ func TestConfigValidate(t *testing.T) {
 			config: Config{
 				CloudURL: "https://miren.cloud",
 				Logger:   slog.Default(),
-				Tags: map[string]interface{}{
+				Tags: map[string]any{
 					"environment": "production",
 					"cluster":     "us-west-1",
 				},
@@ -29,7 +29,7 @@ func TestConfigValidate(t *testing.T) {
 			config: Config{
 				CloudURL: "https://miren.cloud",
 				Logger:   slog.Default(),
-				Tags: map[string]interface{}{
+				Tags: map[string]any{
 					"": "value",
 				},
 			},
@@ -41,7 +41,7 @@ func TestConfigValidate(t *testing.T) {
 			config: Config{
 				CloudURL: "https://miren.cloud",
 				Logger:   slog.Default(),
-				Tags: map[string]interface{}{
+				Tags: map[string]any{
 					"invalid": []string{"a", "b"},
 				},
 			},
@@ -53,7 +53,7 @@ func TestConfigValidate(t *testing.T) {
 			config: Config{
 				CloudURL: "https://miren.cloud",
 				Logger:   slog.Default(),
-				Tags: map[string]interface{}{
+				Tags: map[string]any{
 					"invalid": map[string]string{"nested": "value"},
 				},
 			},
@@ -65,7 +65,7 @@ func TestConfigValidate(t *testing.T) {
 			config: Config{
 				CloudURL: "https://miren.cloud",
 				Logger:   slog.Default(),
-				Tags: map[string]interface{}{
+				Tags: map[string]any{
 					"string_tag": "value",
 					"int_tag":    42,
 					"float_tag":  3.14,

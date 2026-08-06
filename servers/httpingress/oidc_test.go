@@ -14,7 +14,7 @@ func TestInjectClaims(t *testing.T) {
 	tests := []struct {
 		name            string
 		claimMappings   []ingress_v1alpha.ClaimMappings
-		claims          map[string]interface{}
+		claims          map[string]any
 		existingHeaders map[string]string
 		wantHeaders     map[string]string
 		wantAbsent      []string
@@ -25,7 +25,7 @@ func TestInjectClaims(t *testing.T) {
 				{Claim: "email", Header: "X-User-Email"},
 				{Claim: "sub", Header: "X-User-ID"},
 			},
-			claims: map[string]interface{}{
+			claims: map[string]any{
 				"email": "alice@example.com",
 				"sub":   "user-123",
 			},
@@ -40,7 +40,7 @@ func TestInjectClaims(t *testing.T) {
 				{Claim: "email", Header: "X-User-Email"},
 				{Claim: "groups", Header: "X-User-Groups"},
 			},
-			claims: map[string]interface{}{
+			claims: map[string]any{
 				"email": "alice@example.com",
 			},
 			wantHeaders: map[string]string{
@@ -54,7 +54,7 @@ func TestInjectClaims(t *testing.T) {
 				{Claim: "email", Header: "X-User-Email"},
 				{Claim: "groups", Header: "X-User-Groups"},
 			},
-			claims: map[string]interface{}{
+			claims: map[string]any{
 				"email": "alice@example.com",
 				// no "groups" claim
 			},
@@ -71,7 +71,7 @@ func TestInjectClaims(t *testing.T) {
 			claimMappings: []ingress_v1alpha.ClaimMappings{
 				{Claim: "email", Header: "X-User-Email"},
 			},
-			claims: map[string]interface{}{
+			claims: map[string]any{
 				"email": "alice@example.com",
 			},
 			existingHeaders: map[string]string{
@@ -86,7 +86,7 @@ func TestInjectClaims(t *testing.T) {
 			claimMappings: []ingress_v1alpha.ClaimMappings{
 				{Claim: "iat", Header: "X-Token-Issued"},
 			},
-			claims: map[string]interface{}{
+			claims: map[string]any{
 				"iat": float64(1700000000),
 			},
 			wantHeaders: map[string]string{
@@ -98,7 +98,7 @@ func TestInjectClaims(t *testing.T) {
 			claimMappings: []ingress_v1alpha.ClaimMappings{
 				{Claim: "email_verified", Header: "X-Email-Verified"},
 			},
-			claims: map[string]interface{}{
+			claims: map[string]any{
 				"email_verified": true,
 			},
 			wantHeaders: map[string]string{
@@ -110,8 +110,8 @@ func TestInjectClaims(t *testing.T) {
 			claimMappings: []ingress_v1alpha.ClaimMappings{
 				{Claim: "groups", Header: "X-User-Groups"},
 			},
-			claims: map[string]interface{}{
-				"groups": []interface{}{"engineering", "platform"},
+			claims: map[string]any{
+				"groups": []any{"engineering", "platform"},
 			},
 			wantHeaders: map[string]string{
 				"X-User-Groups": `["engineering","platform"]`,
@@ -122,8 +122,8 @@ func TestInjectClaims(t *testing.T) {
 			claimMappings: []ingress_v1alpha.ClaimMappings{
 				{Claim: "address", Header: "X-User-Address"},
 			},
-			claims: map[string]interface{}{
-				"address": map[string]interface{}{"city": "Portland"},
+			claims: map[string]any{
+				"address": map[string]any{"city": "Portland"},
 			},
 			wantHeaders: map[string]string{
 				"X-User-Address": `{"city":"Portland"}`,
@@ -136,7 +136,7 @@ func TestInjectClaims(t *testing.T) {
 				{Claim: "email", Header: ""},
 				{Claim: "sub", Header: "X-User-ID"},
 			},
-			claims: map[string]interface{}{
+			claims: map[string]any{
 				"email": "alice@example.com",
 				"sub":   "user-123",
 			},

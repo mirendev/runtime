@@ -60,7 +60,7 @@ var tmplFuncMap = template.FuncMap{
 	"jsonify":         jsonify,
 }
 
-func jsonify(v interface{}) string {
+func jsonify(v any) string {
 	d, _ := json.Marshal(v)
 	return string(d)
 }

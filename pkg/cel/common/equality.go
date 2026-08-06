@@ -34,10 +34,10 @@ import (
 // to handle concurrency, if any.
 type CorrelatedObject struct {
 	// Currently correlated old value during traversal of the schema/object
-	OldValue interface{}
+	OldValue any
 
 	// Value being validated
-	Value interface{}
+	Value any
 
 	// Schema used for validation of this value. The schema is also used
 	// to determine how to correlate the old object.
@@ -65,10 +65,10 @@ type CorrelatedObject struct {
 	//
 	// It should be expected to have an entry for either all of the children, or
 	// none of them.
-	children map[interface{}]*CorrelatedObject
+	children map[any]*CorrelatedObject
 }
 
-func NewCorrelatedObject(new, old interface{}, schema Schema) *CorrelatedObject {
+func NewCorrelatedObject(new, old any, schema Schema) *CorrelatedObject {
 	d := time.Duration(0)
 	return &CorrelatedObject{
 		OldValue: old,
@@ -88,13 +88,13 @@ func NewCorrelatedObject(new, old interface{}, schema Schema) *CorrelatedObject 
 // the correlated key is not in the old map
 //
 // Otherwise, if the list type is not correlatable this funcion returns nil.
-func (r *CorrelatedObject) correlateOldValueForChildAtNewIndex(index int) interface{} {
-	oldAsList, ok := r.OldValue.([]interface{})
+func (r *CorrelatedObject) correlateOldValueForChildAtNewIndex(index int) any {
+	oldAsList, ok := r.OldValue.([]any)
 	if !ok {
 		return nil
 	}
 
-	asList, ok := r.Value.([]interface{})
+	asList, ok := r.Value.([]any)
 	if !ok {
 		return nil
 	} else if len(asList) <= index {
@@ -167,11 +167,11 @@ func (r *CorrelatedObject) CachedDeepEqual() (res bool) {
 		return false
 	}
 
-	oldAsArray, oldIsArray := r.OldValue.([]interface{})
-	newAsArray, newIsArray := r.Value.([]interface{})
+	oldAsArray, oldIsArray := r.OldValue.([]any)
+	newAsArray, newIsArray := r.Value.([]any)
 
-	oldAsMap, oldIsMap := r.OldValue.(map[string]interface{})
-	newAsMap, newIsMap := r.Value.(map[string]interface{})
+	oldAsMap, oldIsMap := r.OldValue.(map[string]any)
+	newAsMap, newIsMap := r.Value.(map[string]any)
 
 	// If old and new are not the same type, they are not equal
 	if (oldIsArray != newIsArray) || oldIsMap != newIsMap {
@@ -250,8 +250,8 @@ func (r *CorrelatedObject) Key(field string) *CorrelatedObject {
 	}
 
 	// Find correlated old value
-	oldAsMap, okOld := r.OldValue.(map[string]interface{})
-	newAsMap, okNew := r.Value.(map[string]interface{})
+	oldAsMap, okOld := r.OldValue.(map[string]any)
+	newAsMap, okNew := r.Value.(map[string]any)
 	if !okOld || !okNew {
 		return nil
 	}
@@ -272,7 +272,7 @@ func (r *CorrelatedObject) Key(field string) *CorrelatedObject {
 	}
 
 	if r.children == nil {
-		r.children = make(map[interface{}]*CorrelatedObject, len(newAsMap))
+		r.children = make(map[any]*CorrelatedObject, len(newAsMap))
 	}
 
 	res := &CorrelatedObject{
@@ -303,7 +303,7 @@ func (r *CorrelatedObject) Index(i int) *CorrelatedObject {
 		return existing
 	}
 
-	asList, ok := r.Value.([]interface{})
+	asList, ok := r.Value.([]any)
 	if !ok || len(asList) <= i {
 		return nil
 	}
@@ -320,7 +320,7 @@ func (r *CorrelatedObject) Index(i int) *CorrelatedObject {
 	}
 
 	if r.children == nil {
-		r.children = make(map[interface{}]*CorrelatedObject, len(asList))
+		r.children = make(map[any]*CorrelatedObject, len(asList))
 	}
 
 	res := &CorrelatedObject{

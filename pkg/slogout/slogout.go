@@ -166,7 +166,7 @@ var jsonIgnoreKeys = map[string]struct{}{
 
 // processJSONLine parses a JSON line and extracts key/value pairs
 func (w *logWriter) processJSONLine(line string) {
-	var jsonData map[string]interface{}
+	var jsonData map[string]any
 	if err := json.Unmarshal([]byte(line), &jsonData); err != nil {
 		// If JSON parsing fails, log as plain text
 		w.logger.Log(context.TODO(), w.level, line,

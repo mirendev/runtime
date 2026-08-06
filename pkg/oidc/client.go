@@ -105,7 +105,7 @@ func (c *Client) ExchangeCode(ctx context.Context, code, pkceVerifier string) (*
 
 // ParseIDToken validates an ID token's signature via the provider's JWKS
 // and checks standard claims (issuer, audience).
-func (c *Client) ParseIDToken(ctx context.Context, idToken string) (map[string]interface{}, error) {
+func (c *Client) ParseIDToken(ctx context.Context, idToken string) (map[string]any, error) {
 	discovery, err := c.getDiscovery(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get discovery data: %w", err)
@@ -154,7 +154,7 @@ func (c *Client) validateAudience(claims jwt.MapClaims) error {
 		if v == c.clientID {
 			return nil
 		}
-	case []interface{}:
+	case []any:
 		for _, a := range v {
 			if s, ok := a.(string); ok && s == c.clientID {
 				return nil
@@ -291,7 +291,7 @@ func (c *Client) getJWKSKeyFunc(ctx context.Context, jwksURI string) (jwt.Keyfun
 		return nil, fmt.Errorf("failed to parse JWKS: %w", err)
 	}
 
-	return func(token *jwt.Token) (interface{}, error) {
+	return func(token *jwt.Token) (any, error) {
 		kid, ok := token.Header["kid"].(string)
 		if !ok {
 			return nil, fmt.Errorf("token missing kid header")
@@ -313,6 +313,6 @@ func generatePKCEChallenge(verifier string) string {
 }
 
 // parseJSON is a helper to parse JSON from an io.Reader
-func parseJSON(r io.Reader, v interface{}) error {
+func parseJSON(r io.Reader, v any) error {
 	return json.NewDecoder(r).Decode(v)
 }

@@ -1367,7 +1367,7 @@ func (d *DeploymentServer) markPreviousActiveAs(ctx context.Context, appName, cu
 }
 
 // decodeEntity is a helper to decode RPC entity to struct
-func decodeEntity(rpcEntity *entityserver_v1alpha.Entity, target interface{}) {
+func decodeEntity(rpcEntity *entityserver_v1alpha.Entity, target any) {
 	type decoder interface {
 		Decode(entity.AttrGetter)
 	}

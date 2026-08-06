@@ -12,7 +12,7 @@ func TestSessionManager_SetAndGetSession(t *testing.T) {
 	// Create test session
 	session := &SessionData{
 		IDToken: "test-id-token",
-		Claims: map[string]interface{}{
+		Claims: map[string]any{
 			"sub":   "test-user",
 			"email": "test@example.com",
 		},

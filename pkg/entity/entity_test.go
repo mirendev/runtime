@@ -23,7 +23,7 @@ func setupTestStore(t *testing.T) (*FileStore, func()) {
 	return store, cleanup
 }
 
-func assertEntityEqual(t *testing.T, expected, actual *Entity, msgAndArgs ...interface{}) bool {
+func assertEntityEqual(t *testing.T, expected, actual *Entity, msgAndArgs ...any) bool {
 	t.Helper()
 
 	// Make copies to avoid modifying the original entities

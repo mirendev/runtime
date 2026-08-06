@@ -43,7 +43,7 @@ type SessionData struct {
 	RefreshToken string `json:"refresh_token,omitempty"`
 
 	// Claims are the parsed JWT claims
-	Claims map[string]interface{} `json:"claims"`
+	Claims map[string]any `json:"claims"`
 
 	// ExpiresAt is when this session expires
 	ExpiresAt time.Time `json:"expires_at"`

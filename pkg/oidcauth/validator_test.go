@@ -39,7 +39,7 @@ func newTestOIDCServer(t *testing.T) *testOIDCServer {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/.well-known/openid-configuration", func(w http.ResponseWriter, r *http.Request) {
 		// Use the actual server URL once set
-		json.NewEncoder(w).Encode(map[string]interface{}{
+		json.NewEncoder(w).Encode(map[string]any{
 			"issuer":   ts.server.URL,
 			"jwks_uri": ts.server.URL + "/jwks",
 		})
@@ -175,7 +175,7 @@ func TestValidateToken_JWKSRefresh(t *testing.T) {
 	var server *httptest.Server
 
 	mux.HandleFunc("/.well-known/openid-configuration", func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(map[string]interface{}{
+		json.NewEncoder(w).Encode(map[string]any{
 			"issuer":   server.URL,
 			"jwks_uri": server.URL + "/jwks",
 		})

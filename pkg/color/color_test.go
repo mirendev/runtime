@@ -388,9 +388,9 @@ func TestNoFormat(t *testing.T) {
 
 func TestNoFormatString(t *testing.T) {
 	tests := []struct {
-		f      func(string, ...interface{}) string
+		f      func(string, ...any) string
 		format string
-		args   []interface{}
+		args   []any
 		want   string
 	}{
 		{BlackString, "%s", nil, "\x1b[30m%s\x1b[0m"},
@@ -507,7 +507,7 @@ func TestIssue206_2(t *testing.T) {
 
 func TestIssue218(t *testing.T) {
 	// Adds a newline to the end of the last string to make sure it isn't trimmed.
-	params := []interface{}{"word1", "word2", "word3", "word4\n"}
+	params := []any{"word1", "word2", "word3", "word4\n"}
 
 	c := New(FgCyan)
 	c.Println(params...)

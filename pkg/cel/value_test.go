@@ -30,7 +30,7 @@ import (
 func TestConvertToType(t *testing.T) {
 	objType := NewObjectType("TestObject", map[string]*DeclField{})
 	tests := []struct {
-		val interface{}
+		val any
 		typ ref.Type
 	}{
 		{true, types.BoolType},
@@ -62,7 +62,7 @@ func TestConvertToType(t *testing.T) {
 }
 
 func TestEqual(t *testing.T) {
-	vals := []interface{}{
+	vals := []any{
 		true, []byte("bytes"), float64(1.2), int64(-42), uint64(63), time.Duration(300),
 		time.Now().UTC(), types.NullValue, NewListValue(), NewMapValue(),
 		NewObjectValue(NewObjectType("TestObject", map[string]*DeclField{})),
@@ -148,11 +148,11 @@ func TestListValueContainsNestedList(t *testing.T) {
 
 func TestListValueConvertToNative(t *testing.T) {
 	lv := NewListValue()
-	none, err := lv.ConvertToNative(reflect.TypeFor[[]interface{}]())
+	none, err := lv.ConvertToNative(reflect.TypeFor[[]any]())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(none, []interface{}{}) {
+	if !reflect.DeepEqual(none, []any{}) {
 		t.Errorf("got %v, wanted empty list", none)
 	}
 	lv.Append(testValue(t, 1, "first"))
@@ -210,18 +210,18 @@ func TestListValueIterator(t *testing.T) {
 
 func TestMapValueConvertToNative(t *testing.T) {
 	mv := NewMapValue()
-	none, err := mv.ConvertToNative(reflect.TypeFor[map[string]interface{}]())
+	none, err := mv.ConvertToNative(reflect.TypeFor[map[string]any]())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(none, map[string]interface{}{}) {
+	if !reflect.DeepEqual(none, map[string]any{}) {
 		t.Errorf("got %v, wanted empty map", none)
 	}
-	none, err = mv.ConvertToNative(reflect.TypeFor[map[interface{}]interface{}]())
+	none, err = mv.ConvertToNative(reflect.TypeFor[map[any]any]())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(none, map[interface{}]interface{}{}) {
+	if !reflect.DeepEqual(none, map[any]any{}) {
 		t.Errorf("got %v, wanted empty map", none)
 	}
 	mv.AddField(NewField(1, "Test"))

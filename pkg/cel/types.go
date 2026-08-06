@@ -281,11 +281,11 @@ type DeclField struct {
 	Name         string
 	Type         *DeclType
 	Required     bool
-	enumValues   []interface{}
-	defaultValue interface{}
+	enumValues   []any
+	defaultValue any
 }
 
-func NewDeclField(name string, declType *DeclType, required bool, enumValues []interface{}, defaultValue interface{}) *DeclField {
+func NewDeclField(name string, declType *DeclType, required bool, enumValues []any, defaultValue any) *DeclField {
 	return &DeclField{
 		Name:         name,
 		Type:         declType,
@@ -477,7 +477,7 @@ func (rt *DeclTypeProvider) FindFieldType(typeName, fieldName string) (*ref.Fiel
 
 // NativeToValue is an implementation of the ref.TypeAdapater interface which supports conversion
 // of rule values to CEL ref.Val instances.
-func (rt *DeclTypeProvider) NativeToValue(val interface{}) ref.Val {
+func (rt *DeclTypeProvider) NativeToValue(val any) ref.Val {
 	return rt.typeAdapter.NativeToValue(val)
 }
 

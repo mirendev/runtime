@@ -246,8 +246,8 @@ type CompleteAuthRequest struct {
 
 // CompleteAuthResponse is the response from complete authentication
 type CompleteAuthResponse struct {
-	User  interface{} `json:"user"`
-	Token string      `json:"token"`
+	User  any    `json:"user"`
+	Token string `json:"token"`
 }
 
 // getCacheDir returns the path to the miren cache directory

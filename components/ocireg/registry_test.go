@@ -36,9 +36,9 @@ func TestPutManifest_PreventsDuplicateArtifacts(t *testing.T) {
 	handler := NewRegistryHandler(tmpDir, log, entServer.Client)
 
 	// Create a test manifest
-	manifest := map[string]interface{}{
+	manifest := map[string]any{
 		"schemaVersion": 2,
-		"config": map[string]interface{}{
+		"config": map[string]any{
 			"digest": "sha256:abcd1234",
 			"size":   1024,
 		},
@@ -105,9 +105,9 @@ func TestPutManifest_DifferentManifestsCreateSeparateArtifacts(t *testing.T) {
 	handler := NewRegistryHandler(tmpDir, log, entServer.Client)
 
 	// Create two different manifests
-	manifest1 := map[string]interface{}{
+	manifest1 := map[string]any{
 		"schemaVersion": 2,
-		"config": map[string]interface{}{
+		"config": map[string]any{
 			"digest": "sha256:abcd1234",
 			"size":   1024,
 		},
@@ -115,9 +115,9 @@ func TestPutManifest_DifferentManifestsCreateSeparateArtifacts(t *testing.T) {
 	manifestData1, err := json.Marshal(manifest1)
 	require.NoError(t, err)
 
-	manifest2 := map[string]interface{}{
+	manifest2 := map[string]any{
 		"schemaVersion": 2,
-		"config": map[string]interface{}{
+		"config": map[string]any{
 			"digest": "sha256:efgh5678",
 			"size":   2048,
 		},
@@ -162,9 +162,9 @@ func TestGetManifest_ByDigest(t *testing.T) {
 	handler := NewRegistryHandler(tmpDir, log, entServer.Client)
 
 	// Create a test manifest
-	manifest := map[string]interface{}{
+	manifest := map[string]any{
 		"schemaVersion": 2,
-		"config": map[string]interface{}{
+		"config": map[string]any{
 			"digest": "sha256:test1234",
 			"size":   1024,
 		},
@@ -211,9 +211,9 @@ func TestGetManifest_ByReference(t *testing.T) {
 	handler := NewRegistryHandler(tmpDir, log, entServer.Client)
 
 	// Create a test manifest
-	manifest := map[string]interface{}{
+	manifest := map[string]any{
 		"schemaVersion": 2,
-		"config": map[string]interface{}{
+		"config": map[string]any{
 			"digest": "sha256:ref1234",
 			"size":   512,
 		},

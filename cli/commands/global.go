@@ -250,19 +250,19 @@ func (c *Context) SetExitCode(code int) {
 	c.exitCode = code
 }
 
-func (c *Context) Printf(format string, args ...interface{}) {
+func (c *Context) Printf(format string, args ...any) {
 	fmt.Fprintf(c.Stdout, format, args...)
 }
 
-func (c *Context) Completed(format string, args ...interface{}) {
+func (c *Context) Completed(format string, args ...any) {
 	fmt.Fprintf(c.Stdout, ui.Checkmark+" "+format+"\n", args...)
 }
 
-func (c *Context) Info(format string, args ...interface{}) {
+func (c *Context) Info(format string, args ...any) {
 	fmt.Fprintf(c.Stdout, "  "+format+"\n", args...)
 }
 
-func (c *Context) Warn(format string, args ...interface{}) {
+func (c *Context) Warn(format string, args ...any) {
 	fmt.Fprintf(c.Stdout, "W "+format+"\n", args...)
 }
 
@@ -286,7 +286,7 @@ func printConfigWarning(err error) {
 	fmt.Fprintf(os.Stderr, "warning: %v\n", err)
 }
 
-func (c *Context) Begin(format string, args ...interface{}) {
+func (c *Context) Begin(format string, args ...any) {
 	fmt.Fprintf(c.Stderr, ui.Play+" "+format+"\n", args...)
 }
 

@@ -50,8 +50,8 @@ type Data struct {
 
 type Result struct {
 	Metric map[string]string `json:"metric"`
-	Value  []interface{}     `json:"value,omitempty"`  // For instant queries: [timestamp, value_string]
-	Values [][]interface{}   `json:"values,omitempty"` // For range queries: [[timestamp, value_string], ...]
+	Value  []any             `json:"value,omitempty"`  // For instant queries: [timestamp, value_string]
+	Values [][]any           `json:"values,omitempty"` // For range queries: [[timestamp, value_string], ...]
 }
 
 // InstantQuery executes an instant MetricsQL query (point-in-time)

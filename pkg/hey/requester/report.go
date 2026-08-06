@@ -136,7 +136,7 @@ func (r *report) print() {
 	r.printf("\n")
 }
 
-func (r *report) printf(s string, v ...interface{}) {
+func (r *report) printf(s string, v ...any) {
 	fmt.Fprintf(r.w, s, v...)
 }
 

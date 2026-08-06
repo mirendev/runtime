@@ -39,7 +39,7 @@ var (
 )
 
 // ConvertToNative implements ref.Val.ConvertToNative.
-func (d URL) ConvertToNative(typeDesc reflect.Type) (interface{}, error) {
+func (d URL) ConvertToNative(typeDesc reflect.Type) (any, error) {
 	if reflect.TypeFor[*url.URL]().AssignableTo(typeDesc) {
 		return d.URL, nil
 	}
@@ -75,6 +75,6 @@ func (d URL) Type() ref.Type {
 }
 
 // Value implements ref.Val.Value.
-func (d URL) Value() interface{} {
+func (d URL) Value() any {
 	return d.URL
 }
