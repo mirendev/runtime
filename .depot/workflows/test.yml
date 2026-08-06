@@ -1,0 +1,562 @@
+# Depot CI Migration
+# Source: .github/workflows/test.yml
+#
+# Changes made:
+# - Changed GitHub runs-on labels to their Depot equivalents
+
+name: Test
+on:
+  pull_request:
+    # Explicit list because naming `types` replaces the default set. `labeled`
+    # is what lets the ci:distributed opt-in below take effect on an open PR;
+    # the other three are the defaults we'd otherwise lose.
+    #
+    # A label change restarts the whole workflow, which looks wasteful enough
+    # to want gating the other jobs on `github.event.action != 'labeled'`.
+    # Don't. The concurrency group above cancels the run in flight, and a
+    # required status check resolves to the newest run of that name. A run
+    # that skipped lint/build/test would therefore replace real results with
+    # skipped ones, and a skipped check is generally treated as satisfying a
+    # required check. That trades one spare CI run for a PR that can merge
+    # without having been tested. Labels land on roughly 1 PR in 60 here, so
+    # the waste is theoretical and the hazard is not.
+    types: [opened, synchronize, reopened, labeled]
+  merge_group:
+  workflow_call:
+    # Called by release.yml for main/tag builds
+    inputs:
+      ref:
+        description: 'Git ref to test'
+        required: false
+        type: string
+        default: ''
+# Cancel in-progress runs when a new run is triggered on the same branch/PR.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+permissions:
+  # Used by golangci-lint to emit annotations that are picked up by github
+  contents: read
+  # Used by golangci-lint for only-new-issues
+  pull-requests: read
+jobs:
+  lint:
+    runs-on: depot-ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.ref }}
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+      - name: Docs lint
+        run: bun run lint
+        working-directory: docs
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: 'go.mod'
+          cache: true
+      - name: Install system dependencies
+        run: |
+          # Disable expensive operations on throwaway CI runners
+          sudo sed -i 's/^DPkg::Post-Invoke.*//' /etc/apt/apt.conf.d/90_man-db || true
+          # Install packages (depot runners have persistent images, so this is usually cached)
+          sudo DEBIAN_FRONTEND=noninteractive apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends clang llvm
+      - name: Cache Go tools
+        id: cache-go-tools
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/go/bin
+          key: ${{ runner.os }}-go-tools-${{ hashFiles('go.mod') }}
+          restore-keys: |
+            ${{ runner.os }}-go-tools-
+      - name: Install Go tools
+        if: steps.cache-go-tools.outputs.cache-hit != 'true'
+        run: |
+          go install golang.org/x/tools/cmd/goimports@latest
+          go install go.uber.org/mock/mockgen@latest
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@d583c34f0599d37dbac4a198b9c83201be380893 # v9.3.0
+        with:
+          version: v2.12.2
+      - name: Check go.mod tidiness
+        run: |
+          # Run go mod tidy and check if there are any changes
+          go mod tidy -diff
+          if [ $? -ne 0 ]; then
+            echo ""
+            echo "Error: go.mod or go.sum is not tidy."
+            echo "Please run 'go mod tidy' to fix module dependencies."
+            exit 1
+          fi
+          echo "go.mod and go.sum are tidy."
+      - name: Check go generate
+        run: make generate-check
+  # Which parts of the tree a PR touches, for jobs that are too expensive to
+  # run on every PR but too important to leave to someone remembering a label.
+  # Only consulted for pull_request; other events don't gate on it at all.
+  changes:
+    runs-on: depot-ubuntu-latest # was: ubuntu-latest. Mapped standard GitHub runner to Depot equivalent.
+    outputs:
+      distributed: ${{ steps.filter.outputs.distributed }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.ref }}
+          # Full history only when we actually diff against a base. Quoted so the
+          # false branch survives: 0 is falsy in a GitHub expression, so an
+          # unquoted `&& 0 ||` would always fall through to the other side.
+          fetch-depth: ${{ github.event_name == 'pull_request' && '0' || '1' }}
+      - name: Detect distributed-relevant changes
+        id: filter
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+
+          # Non-PR events don't consult this output, so don't spend a diff on them.
+          if [ "${{ github.event_name }}" != "pull_request" ]; then
+            echo "distributed=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          changed=$(git diff --name-only "$BASE_SHA" HEAD)
+          echo "Changed files:"
+          echo "$changed"
+
+          # The code paths that can break the multi-node topology, plus this
+          # workflow itself so a change to the gating is exercised by the PR
+          # that makes it.
+          if echo "$changed" | grep -qE '^(controllers/disk/|components/diskio/|components/runner/|blackbox/|hack/dev-distributed|\.iso/peers\.yml|\.github/workflows/test\.yml)'; then
+            echo "distributed-relevant changes found"
+            echo "distributed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "no distributed-relevant changes"
+            echo "distributed=false" >> "$GITHUB_OUTPUT"
+          fi
+  test-groups:
+    runs-on: depot-ubuntu-latest # was: ubuntu-latest. Mapped standard GitHub runner to Depot equivalent.
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.ref }}
+      - name: Set test matrix
+        id: set-matrix
+        run: |
+          MODULE=$(head -1 go.mod | awk '{print $2}')
+
+          # Find all packages with test files via filesystem scan
+          ALL_TEST_PKGS=$(find . -name '*_test.go' -not -path './vendor/*' -not -path './blackbox/*' \
+            | xargs -I{} dirname {} | sort -u \
+            | sed "s|^\./|${MODULE}/|" | sed "s|^\.$$|${MODULE}|")
+
+          # Get packages already assigned to groups
+          GROUPED_PKGS=$(jq -r '.groups[].packages[]' hack/test-groups.json | sort)
+
+          # Find packages with tests that aren't in any group
+          UNGROUPED=$(comm -23 <(echo "$ALL_TEST_PKGS") <(echo "$GROUPED_PKGS"))
+
+          MATRIX=$(jq -c '.groups' hack/test-groups.json)
+
+          if [ -n "$UNGROUPED" ]; then
+            echo "::warning::Packages not in test-groups.json (will run in extra group): $(echo $UNGROUPED | tr '\n' ' ')"
+            EXTRA_PKGS=$(echo "$UNGROUPED" | jq -R -s 'split("\n") | map(select(. != ""))')
+            MATRIX=$(echo "$MATRIX" | jq -c --argjson pkgs "$EXTRA_PKGS" '. + [{"runner": (length + 1), "estimated_s": 0, "packages": $pkgs}]')
+          fi
+
+          echo "matrix=$MATRIX" >> $GITHUB_OUTPUT
+  test-runner:
+    name: test (runner ${{ matrix.group.runner }})
+    needs: test-groups
+    runs-on: depot-ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        group: ${{ fromJson(needs.test-groups.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.ref }}
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: 'go.mod'
+          cache: true
+      - name: Resolve iso version
+        id: iso-version
+        run: |
+          ISO_VERSION=$(go list -m -f '{{.Version}}' miren.dev/iso@latest)
+          echo "version=$ISO_VERSION" >> $GITHUB_OUTPUT
+      - name: Cache iso binary
+        id: iso-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/go/bin/iso
+          key: iso-binary-${{ steps.iso-version.outputs.version }}-${{ runner.os }}-${{ runner.arch }}
+      - name: Install iso
+        if: steps.iso-cache.outputs.cache-hit != 'true'
+        run: go install miren.dev/iso/cmd/iso@latest
+      - name: Add Go bin to PATH
+        run: echo "$(go env GOPATH)/bin" >> $GITHUB_PATH
+      - name: Restore iso cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: /tmp/iso-cache
+          key: iso-cache-${{ hashFiles('go.sum') }}
+          restore-keys: iso-cache-
+      - name: Restore Docker image cache
+        id: docker-image-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: /tmp/iso-image.tar
+          key: iso-image-${{ hashFiles('.iso/Dockerfile', '.iso/.bashrc', 'hack/containerd-config.toml') }}
+      - name: Load cached Docker image
+        if: steps.docker-image-cache.outputs.cache-hit == 'true'
+        run: docker load < /tmp/iso-image.tar
+      - name: Test (runner ${{ matrix.group.runner }})
+        run: |
+          PACKAGES=$(echo '${{ toJson(matrix.group.packages) }}' | jq -r '.[]' | tr '\n' ' ')
+          ISO_CACHE_DIR=/tmp/iso-cache go run ./hack/cmd/testfmt DISABLE_NBD_TEST=1 $PACKAGES -count=1 -failfast
+      - name: Save Docker image to cache
+        if: steps.docker-image-cache.outputs.cache-hit != 'true'
+        run: docker save runtime-shell -o /tmp/iso-image.tar
+  blackbox-groups:
+    runs-on: depot-ubuntu-latest # was: ubuntu-latest. Mapped standard GitHub runner to Depot equivalent.
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.ref }}
+      - name: Set blackbox shard matrix
+        id: set-matrix
+        run: |
+          # Discover all blackbox test functions by scanning source (no compile,
+          # no cluster) so a newly added test is never silently left unrun.
+          ALL_TESTS=$(grep -rhoE '^func Test[A-Za-z0-9_]+' blackbox --include='*_test.go' \
+            | sed -E 's/^func //' | sort -u)
+
+          # Tests already assigned to a shard in the checked-in manifest.
+          GROUPED=$(jq -r '.groups[].tests[]' hack/blackbox-groups.json | sort -u)
+
+          # TestPOP runs in its own job (test-blackbox-pop); never shard it here.
+          UNGROUPED=$(comm -23 <(echo "$ALL_TESTS") <(echo "$GROUPED") | grep -vx 'TestPOP' || true)
+
+          MATRIX=$(jq -c '.groups' hack/blackbox-groups.json)
+
+          if [ -n "$UNGROUPED" ]; then
+            echo "::warning::Blackbox tests not in blackbox-groups.json (running in extra shard, regenerate with 'make blackbox-groups'): $(echo $UNGROUPED | tr '\n' ' ')"
+            EXTRA=$(echo "$UNGROUPED" | jq -R -s 'split("\n") | map(select(. != ""))')
+            MATRIX=$(echo "$MATRIX" | jq -c --argjson tests "$EXTRA" '. + [{"shard": (length + 1), "estimated_s": 0, "tests": $tests}]')
+          fi
+
+          echo "matrix=$MATRIX" >> $GITHUB_OUTPUT
+  test-blackbox:
+    name: test-blackbox (shard ${{ matrix.group.shard }})
+    needs: blackbox-groups
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: depot-ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        group: ${{ fromJson(needs.blackbox-groups.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.ref }}
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: 'go.mod'
+          cache: true
+      - name: Resolve iso version
+        id: iso-version
+        run: |
+          ISO_VERSION=$(go list -m -f '{{.Version}}' miren.dev/iso@latest)
+          echo "version=$ISO_VERSION" >> $GITHUB_OUTPUT
+      - name: Cache iso binary
+        id: iso-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/go/bin/iso
+          key: iso-binary-${{ steps.iso-version.outputs.version }}-${{ runner.os }}-${{ runner.arch }}
+      - name: Install iso
+        if: steps.iso-cache.outputs.cache-hit != 'true'
+        run: go install miren.dev/iso/cmd/iso@latest
+      - name: Add Go bin to PATH
+        run: echo "$(go env GOPATH)/bin" >> $GITHUB_PATH
+      - name: Restore iso cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: /tmp/iso-cache
+          key: iso-cache-blackbox-${{ hashFiles('go.sum') }}
+          restore-keys: iso-cache-blackbox-
+      - name: Restore Docker image cache
+        id: docker-image-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: /tmp/iso-image.tar
+          key: iso-image-${{ hashFiles('.iso/Dockerfile', '.iso/.bashrc', 'hack/containerd-config.toml') }}
+      - name: Load cached Docker image
+        if: steps.docker-image-cache.outputs.cache-hit == 'true'
+        run: docker load < /tmp/iso-image.tar
+      - name: Start dev environment
+        run: ISO_CACHE_DIR=/tmp/iso-cache make dev-start
+      - name: Start miren server
+        run: make dev-server-start
+      - name: Run blackbox tests (shard ${{ matrix.group.shard }})
+        # Each shard runs only its assigned subset, built into a -run regex from
+        # the matrix. TestPOP runs in its own job (test-blackbox-pop) because its
+        # server restart interferes with subsequent deploys; -skip guards against
+        # it ever slipping into a shard. Per-shard runtime is ~3 min, so 10m
+        # restores fast failure on a genuine hang.
+        run: |
+          RUN=$(echo '${{ toJson(matrix.group.tests) }}' | jq -r 'join("|")')
+          go test -tags blackbox -timeout 10m -v -count=1 -p 1 -run "^(${RUN})$" -skip '^TestPOP$' ./blackbox/...
+      - name: Server logs on failure
+        if: failure()
+        run: |
+          echo "=== Miren server logs ==="
+          ./hack/dev-exec --root cat /tmp/miren-server.log 2>&1 | tail -200 || true
+      - name: Save Docker image to cache
+        if: steps.docker-image-cache.outputs.cache-hit != 'true'
+        run: docker save runtime-shell -o /tmp/iso-image.tar
+      - name: Cleanup
+        if: always()
+        run: make dev-stop || true
+  test-blackbox-pop:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: depot-ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.ref }}
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: 'go.mod'
+          cache: true
+      - name: Resolve iso version
+        id: iso-version
+        run: |
+          ISO_VERSION=$(go list -m -f '{{.Version}}' miren.dev/iso@latest)
+          echo "version=$ISO_VERSION" >> $GITHUB_OUTPUT
+      - name: Cache iso binary
+        id: iso-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/go/bin/iso
+          key: iso-binary-${{ steps.iso-version.outputs.version }}-${{ runner.os }}-${{ runner.arch }}
+      - name: Install iso
+        if: steps.iso-cache.outputs.cache-hit != 'true'
+        run: go install miren.dev/iso/cmd/iso@latest
+      - name: Add Go bin to PATH
+        run: echo "$(go env GOPATH)/bin" >> $GITHUB_PATH
+      - name: Restore iso cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: /tmp/iso-cache
+          key: iso-cache-blackbox-pop-${{ hashFiles('go.sum') }}
+          restore-keys: iso-cache-blackbox-pop-
+      - name: Restore Docker image cache
+        id: docker-image-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: /tmp/iso-image.tar
+          key: iso-image-${{ hashFiles('.iso/Dockerfile', '.iso/.bashrc', 'hack/containerd-config.toml') }}
+      - name: Load cached Docker image
+        if: steps.docker-image-cache.outputs.cache-hit == 'true'
+        run: docker load < /tmp/iso-image.tar
+      # POP tests need the cloud repo to build cloud and pop binaries from source.
+      # Requires CLOUD_REPO_TOKEN secret — a PAT with read access to mirendev/cloud.
+      - name: Checkout cloud repo
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          repository: mirendev/cloud
+          path: cloud
+          token: ${{ secrets.CLOUD_REPO_TOKEN }}
+      - name: Start dev environment
+        run: ISO_CACHE_DIR=/tmp/iso-cache make dev-start
+      - name: Start miren server
+        run: make dev-server-start
+      - name: Run POP blackbox tests
+        env:
+          BLACKBOX_CLOUD_REPO: ${{ github.workspace }}/cloud
+        run: go test -tags blackbox -timeout 15m -v -count=1 -p 1 -run '^TestPOP$' ./blackbox/...
+      - name: Server logs on failure
+        if: failure()
+        run: |
+          echo "=== Miren server logs ==="
+          ./hack/dev-exec --root cat /tmp/miren-server.log 2>&1 | tail -200 || true
+          echo "=== Cloud server logs ==="
+          ./hack/dev-exec --root bash -c 'cat /tmp/bb-bb-cloud-*.log 2>/dev/null | tail -100' || true
+          echo "=== POP server logs ==="
+          ./hack/dev-exec --root bash -c 'cat /tmp/bb-bb-pop-*.log 2>/dev/null | tail -100' || true
+      - name: Cleanup
+        if: always()
+        run: make dev-stop || true
+  test-blackbox-distributed:
+    # Exercises the multi-node distributed runner topology (a coordinator plus a
+    # separate runner peer) with distributedrunners enabled, running the whole
+    # blackbox suite against it. Setup is heavy (iso peers, a binary build on
+    # each peer, the join dance), so it runs on main/release builds rather than
+    # every PR push: release.yml (push to main and tags) calls this workflow via
+    # workflow_call, where github.event_name is the caller's event ('push'), so
+    # excluding 'pull_request' runs it there while skipping PRs. It would also
+    # run in a merge queue if one were enabled ('merge_group').
+    #
+    # On a PR it runs when the diff touches code that can break the multi-node
+    # topology, or when someone labels the PR `ci:distributed` to ask for it
+    # explicitly. This job is the only place a second node exists, so a bug
+    # there is invisible until it is already on main blocking a release, which
+    # is exactly how MIR-1469 got in.
+    #
+    # `!cancelled()` rather than a plain condition: it keeps the non-PR clause
+    # authoritative even if the `changes` job fails. A failed dependency would
+    # otherwise skip this job on main and tags, quietly dropping the release
+    # coverage this whole gate exists to protect.
+    needs: [changes]
+    if: >-
+      !cancelled() && ( github.event_name != 'pull_request' || needs.changes.outputs.distributed == 'true' || contains(github.event.pull_request.labels.*.name, 'ci:distributed') )
+    runs-on: depot-ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.ref }}
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: 'go.mod'
+          cache: true
+      - name: Resolve iso version
+        id: iso-version
+        run: |
+          ISO_VERSION=$(go list -m -f '{{.Version}}' miren.dev/iso@latest)
+          echo "version=$ISO_VERSION" >> $GITHUB_OUTPUT
+      - name: Cache iso binary
+        id: iso-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/go/bin/iso
+          key: iso-binary-${{ steps.iso-version.outputs.version }}-${{ runner.os }}-${{ runner.arch }}
+      - name: Install iso
+        if: steps.iso-cache.outputs.cache-hit != 'true'
+        run: go install miren.dev/iso/cmd/iso@latest
+      - name: Add Go bin to PATH
+        run: echo "$(go env GOPATH)/bin" >> $GITHUB_PATH
+      - name: Restore iso cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: /tmp/iso-cache
+          key: iso-cache-blackbox-distributed-${{ hashFiles('go.sum') }}
+          restore-keys: iso-cache-blackbox-distributed-
+      - name: Restore Docker image cache
+        id: docker-image-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: /tmp/iso-image.tar
+          key: iso-image-${{ hashFiles('.iso/Dockerfile', '.iso/.bashrc', 'hack/containerd-config.toml') }}
+      - name: Load cached Docker image
+        if: steps.docker-image-cache.outputs.cache-hit == 'true'
+        run: docker load < /tmp/iso-image.tar
+      - name: Start distributed environment
+        run: ISO_CACHE_DIR=/tmp/iso-cache make dev-distributed
+      - name: Run distributed blackbox tests
+        run: make test-blackbox-distributed
+      - name: Peer logs on failure
+        if: failure()
+        run: |
+          # The whole suite runs serially against one cluster, so a failure early
+          # on is thousands of lines from the end by the time we get here. A tail
+          # window reliably misses it (MIR-1469 was diagnosed twice from logs that
+          # started five minutes after the failure), so dump the logs whole.
+          echo "=== Coordinator server logs ==="
+          iso peers exec coordinator -- cat /tmp/miren-server.log 2>&1 || true
+          echo "=== Runner logs ==="
+          iso peers exec runner1 -- cat /tmp/miren-runner.log 2>&1 || true
+      - name: Save Docker image to cache
+        if: steps.docker-image-cache.outputs.cache-hit != 'true'
+        run: docker save runtime-shell -o /tmp/iso-image.tar
+      - name: Cleanup
+        if: always()
+        run: make dev-distributed-down || true
+  # Summary job for branch protection — provides a single "test-all" check
+  # that passes only when every matrix runner and blackbox tests succeed.
+  test:
+    if: always()
+    needs: [changes, test-runner, blackbox-groups, test-blackbox, test-blackbox-pop, test-blackbox-distributed]
+    runs-on: depot-ubuntu-latest # was: ubuntu-latest. Mapped standard GitHub runner to Depot equivalent.
+    steps:
+      - name: Check results
+        run: |
+          echo "test-runner result: ${{ needs.test-runner.result }}"
+          echo "blackbox-groups result: ${{ needs.blackbox-groups.result }}"
+          echo "test-blackbox result: ${{ needs.test-blackbox.result }}"
+          echo "test-blackbox-pop result: ${{ needs.test-blackbox-pop.result }}"
+          echo "test-blackbox-distributed result: ${{ needs.test-blackbox-distributed.result }}"
+          echo "changes result: ${{ needs.changes.result }}"
+
+          if [[ "${{ needs.test-runner.result }}" != "success" ]]; then
+            exit 1
+          fi
+          # changes decides whether the distributed job runs on a PR. If it
+          # fails, that job skips, and "skipped" is accepted below — so without
+          # this the gate could silently stop covering the very changes it
+          # exists to catch.
+          if [[ "${{ needs.changes.result }}" != "success" ]]; then
+            exit 1
+          fi
+          # blackbox-groups builds the shard matrix. If it fails, the sharded
+          # test-blackbox job is skipped, which would otherwise look benign below,
+          # so require it to succeed outright.
+          if [[ "${{ needs.blackbox-groups.result }}" != "success" ]]; then
+            exit 1
+          fi
+          # Blackbox tests are skipped for external (fork) PRs. A matrix job's
+          # aggregate result is success only when every shard passes.
+          if [[ "${{ needs.test-blackbox.result }}" != "success" && "${{ needs.test-blackbox.result }}" != "skipped" ]]; then
+            exit 1
+          fi
+          if [[ "${{ needs.test-blackbox-pop.result }}" != "success" && "${{ needs.test-blackbox-pop.result }}" != "skipped" ]]; then
+            exit 1
+          fi
+          # Distributed suite is skipped on PRs (merge-queue / main only), so
+          # skipped is acceptable here; a real run must pass.
+          if [[ "${{ needs.test-blackbox-distributed.result }}" != "success" && "${{ needs.test-blackbox-distributed.result }}" != "skipped" ]]; then
+            exit 1
+          fi
+  build:
+    # Skip when called from release.yml - it has its own build jobs with signing
+    if: github.event_name != 'workflow_call'
+    runs-on: depot-ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.ref }}
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: 'go.mod'
+          cache: true
+      - name: Download modules
+        run: go mod download
+      - name: Cross-compile all targets
+        run: |
+          for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do
+            GOOS="${target%/*}" GOARCH="${target#*/}"
+            echo "Building $GOOS/$GOARCH..."
+            GOOS=$GOOS GOARCH=$GOARCH go build -v -o /dev/null ./cmd/miren
+          done
