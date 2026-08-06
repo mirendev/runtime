@@ -55,24 +55,21 @@ func (s *Server) Set(ctx context.Context, state *secret_v1alpha.SecretsSet) erro
 		return err
 	}
 
-	// Read the current version first so the caller can be told whether their
-	// write actually moved anything. Put is idempotent for an unchanged value,
-	// but only the comparison here can distinguish the two outcomes.
-	var before string
-	if existing, err := backend.Resolve(ctx, path); err == nil {
-		_, before, _ = secret.ParseRef(existing.Ref)
-	}
-
-	version, err := backend.Put(ctx, path, value)
+	// Whether the write moved anything comes from the write itself. Reading the
+	// current version beforehand and comparing handles looks equivalent and is
+	// not: the read can be stale by the time the write lands, and it decrypts
+	// where the reuse check does not — so an enabled version this server cannot
+	// decrypt would be reused by Put and reported as a fresh one here.
+	version, reused, err := backend.Put(ctx, path, value)
 	if err != nil {
 		return err
 	}
 
 	s.log.Info("stored secret version",
-		"backend", backendName, "path", path, "version", version, "unchanged", version == before)
+		"backend", backendName, "path", path, "version", version, "unchanged", reused)
 
 	state.Results().SetVersion(version)
-	state.Results().SetUnchanged(version == before)
+	state.Results().SetUnchanged(reused)
 	return nil
 }
 

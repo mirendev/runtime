@@ -7,6 +7,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/api/entityserver"
 	esv1 "miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/api/secret/secret_v1alpha"
@@ -204,4 +205,49 @@ func TestListVersionsOnAnUnknownSecret(t *testing.T) {
 
 	_, err := c.ListVersions(t.Context(), "", "nothing/here")
 	assert.Error(t, err)
+}
+
+// The unchanged flag has to come from the write. Deriving it from a read taken
+// beforehand looks equivalent and is not: that read decrypts where the reuse
+// check does not, so an enabled version this server cannot decrypt would be
+// reused by the backend and reported as a fresh one.
+func TestSetReportsUnchangedForAnUndecryptableCurrentVersion(t *testing.T) {
+	log := slog.New(slog.DiscardHandler)
+	ctx := t.Context()
+
+	client, prefix := etcdtest.TestEtcdClient(t)
+	store, err := entity.NewEtcdStore(ctx, log, client, prefix)
+	require.NoError(t, err)
+	require.NoError(t, schema.Apply(ctx, store))
+
+	eac := esv1.NewEntityAccessClient(rpc.LocalClient(
+		esv1.AdaptEntityAccess(&entityserversrv.EntityServer{Log: log, Store: store}),
+	))
+	ec := entityserver.NewClient(log, eac)
+
+	ring, err := keyring.Generate()
+	require.NoError(t, err)
+
+	registry := secret.NewRegistry()
+	registry.Register(cluster.NewBackend(log, ec, ring))
+
+	c := secret_v1alpha.NewSecretsClient(rpc.LocalClient(
+		secret_v1alpha.AdaptSecrets(NewServer(log, registry)),
+	))
+
+	const path = "payments/stripe-key"
+	first, err := c.Set(ctx, "", path, []byte("sk_live"))
+	require.NoError(t, err)
+
+	// Leave the current version enabled but unreadable, as an incomplete KEK
+	// rotation would.
+	var sec core_v1alpha.Secret
+	require.NoError(t, ec.Get(ctx, "payments.stripe-key", &sec))
+	require.NoError(t, ec.UpdateAttrs(ctx, sec.CurrentVersion,
+		entity.String(core_v1alpha.SecretVersionKekIdId, "a-key-we-do-not-have")))
+
+	second, err := c.Set(ctx, "", path, []byte("sk_live"))
+	require.NoError(t, err)
+	assert.True(t, second.Unchanged(), "an identical value reuses, readable or not")
+	assert.Equal(t, first.Version(), second.Version())
 }

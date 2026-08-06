@@ -8,9 +8,11 @@
 //
 // The backend interface is deliberately small so that the in-cluster store and
 // external managers (Vault, AWS Secrets Manager, GCP Secret Manager) look the
-// same to every consumer. Only backends Miren itself manages implement
-// WritableBackend; an external manager stays the source of truth for its own
-// secrets, which is a type-level guarantee that Miren never writes into one.
+// same to every consumer. Writes are gated on the separate WritableBackend
+// interface, which an external manager is expected to leave unimplemented so it
+// stays the source of truth for its own secrets — the shape RFD-81 asks for.
+// That gate is a convention an adapter opts into, not something the type system
+// can prove; see WritableBackend.
 package secret
 
 import (
@@ -19,9 +21,11 @@ import (
 	"time"
 )
 
-// Errors callers can branch on. Resolution failures deliberately carry the
-// reference but never the value, and never the underlying store's error text,
-// which can quote surrounding context.
+// Errors callers can branch on. A failure names the reference it was for and
+// never the value. It does wrap the backend's own error, so callers can test
+// these sentinels with errors.Is — which means a backend must not put secret
+// material in the errors it returns. The backends here quote only the
+// reference; an adapter for an external manager has to hold to the same rule.
 var (
 	// ErrUnknownBackend means no backend instance is registered under the name
 	// a reference asked for.
@@ -81,17 +85,32 @@ type SecretBackend interface {
 }
 
 // A WritableBackend additionally supports storing and managing secrets.
-// External read-only backends do not implement this: their source of truth is
-// managed outside Miren, so Miren has no code path that writes into one.
+// External backends are expected to leave it unimplemented: their source of
+// truth is managed outside Miren, per RFD-81's "reference, don't copy".
+//
+// Registry.Writable gates writes on this, so nothing writes to a backend that
+// did not opt in. Note what that is not: Go interfaces are structural, so an
+// adapter that happens to define Put and SetState satisfies it whether or not
+// Miren owns the store behind it. The split keeps a generic write path from
+// reaching a read-only backend; it does not police what an adapter author
+// chooses to implement.
 type WritableBackend interface {
 	SecretBackend
 
-	// Put stores a new version of the secret at path and returns its version
-	// handle. It is compare-and-set on the secret's current version, so
-	// concurrent writers cannot silently lose an update. Storing a value
-	// identical to the current version is a no-op that returns the existing
-	// handle rather than minting a duplicate.
-	Put(ctx context.Context, path string, value []byte) (version string, err error)
+	// Put stores a new version of the secret at path.
+	//
+	// Concurrent writers are serialized internally: the pointer to the current
+	// version moves under a compare-and-set on the state the write was prepared
+	// against, and a loser re-reads and retries rather than clobbering. This is
+	// not a caller-visible precondition — there is no way to ask for "only if
+	// current is still @x1A", so two racing writes both land and the later one
+	// wins.
+	//
+	// Storing a value identical to the current version reuses it rather than
+	// minting a duplicate, which is what reused reports. Callers should take
+	// that from here rather than comparing versions around the call, since
+	// anything read beforehand can be stale by the time the write lands.
+	Put(ctx context.Context, path string, value []byte) (version string, reused bool, err error)
 
 	// SetState transitions a specific version between enabled, disabled and
 	// destroyed. Anything still pinned to a version that leaves enabled fails

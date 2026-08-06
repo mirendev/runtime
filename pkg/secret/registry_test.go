@@ -38,9 +38,10 @@ type writableBackend struct {
 	readOnlyBackend
 }
 
-func (b *writableBackend) Put(ctx context.Context, path string, value []byte) (string, error) {
+func (b *writableBackend) Put(ctx context.Context, path string, value []byte) (string, bool, error) {
+	_, reused := b.values[path]
 	b.values[path] = value
-	return "v1", nil
+	return "v1", reused, nil
 }
 
 func (b *writableBackend) SetState(ctx context.Context, ref string, state VersionState) error {
@@ -87,9 +88,10 @@ func TestRegistryWritableReturnsManagedBackend(t *testing.T) {
 	w, err := r.Writable(ClusterBackendName)
 	require.NoError(t, err)
 
-	version, err := w.Put(context.Background(), "payments/stripe-key", []byte("sk_live"))
+	version, reused, err := w.Put(context.Background(), "payments/stripe-key", []byte("sk_live"))
 	require.NoError(t, err)
 	assert.Equal(t, "v1", version)
+	assert.False(t, reused)
 }
 
 func TestRegistryWritableUnknownBackend(t *testing.T) {

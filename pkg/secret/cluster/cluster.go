@@ -103,53 +103,54 @@ func (b *Backend) Resolve(ctx context.Context, ref string) (secret.SecretValue, 
 	}, nil
 }
 
-// Put stores a new version of the secret at path and returns its version
-// handle.
+// Put stores a new version of the secret at path, reporting whether it reused
+// the current version instead of minting a new one.
 //
-// Writing a value identical to the current version is a no-op that returns the
-// existing handle: the indexed keyed hash makes "is this value already stored?"
-// a lookup rather than a decrypt-and-compare, so a re-run of the same
-// `secret set` does not churn a new version and invalidate every pin.
-func (b *Backend) Put(ctx context.Context, path string, value []byte) (string, error) {
+// The reuse check is a keyed-hash comparison, not a decrypt-and-compare, so a
+// re-run of the same `secret set` does not churn a new version and invalidate
+// every pin — and does not need the value to be readable to notice. Reporting
+// it from here rather than leaving the caller to compare handles is what keeps
+// the answer honest under a concurrent rotation.
+func (b *Backend) Put(ctx context.Context, path string, value []byte) (string, bool, error) {
 	if err := ValidatePath(path); err != nil {
-		return "", err
+		return "", false, err
 	}
 
 	mac, err := b.ring.MAC(value)
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
 
 	for attempt := 0; attempt < maxCASAttempts; attempt++ {
 		sec, rev, err := b.ensureSecret(ctx, path)
 		if err != nil {
-			return "", err
+			return "", false, err
 		}
 
 		if sec.CurrentVersion != "" {
 			var current core_v1alpha.SecretVersion
 			ent, err := b.ec.GetByIdWithEntity(ctx, sec.CurrentVersion, &current)
 			if err == nil && current.State == core_v1alpha.ENABLED && current.ValueMac == mac {
-				return shortIdOf(ent), nil
+				return shortIdOf(ent), true, nil
 			}
 		}
 
 		sealed, err := b.ring.Seal(value)
 		if err != nil {
-			return "", err
+			return "", false, err
 		}
 
 		versionID, shortID, err := b.createVersion(ctx, sec.ID, sealed)
 		if err != nil {
-			return "", err
+			return "", false, err
 		}
 
 		err = b.ec.Patch(ctx, sec.ID, rev, entity.Ref(core_v1alpha.SecretCurrentVersionId, versionID))
 		if err == nil {
-			return shortID, nil
+			return shortID, false, nil
 		}
 		if !errors.Is(err, cond.ErrConflict{}) {
-			return "", fmt.Errorf("storing secret %s: %w", path, err)
+			return "", false, fmt.Errorf("storing secret %s: %w", path, err)
 		}
 
 		// Another writer rotated this secret first, so the version just minted
@@ -161,7 +162,7 @@ func (b *Backend) Put(ctx context.Context, path string, value []byte) (string, e
 		}
 	}
 
-	return "", fmt.Errorf("failed to store secret %s after %d attempts due to concurrent writes", path, maxCASAttempts)
+	return "", false, fmt.Errorf("failed to store secret %s after %d attempts due to concurrent writes", path, maxCASAttempts)
 }
 
 // SetState transitions a specific version between enabled, disabled and

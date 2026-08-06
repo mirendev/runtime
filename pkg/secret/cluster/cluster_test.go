@@ -49,7 +49,7 @@ func TestPutThenResolveRoundTrip(t *testing.T) {
 	ctx := t.Context()
 
 	value := []byte("sk_live_abc123")
-	version, err := b.Put(ctx, "payments/stripe-key", value)
+	version, _, err := b.Put(ctx, "payments/stripe-key", value)
 	require.NoError(t, err)
 	require.NotEmpty(t, version)
 
@@ -66,10 +66,10 @@ func TestResolvePinnedVersionSurvivesRotation(t *testing.T) {
 	b, _ := newTestBackend(t)
 	ctx := t.Context()
 
-	first, err := b.Put(ctx, "payments/stripe-key", []byte("old"))
+	first, _, err := b.Put(ctx, "payments/stripe-key", []byte("old"))
 	require.NoError(t, err)
 
-	second, err := b.Put(ctx, "payments/stripe-key", []byte("new"))
+	second, _, err := b.Put(ctx, "payments/stripe-key", []byte("new"))
 	require.NoError(t, err)
 	require.NotEqual(t, first, second)
 
@@ -87,16 +87,48 @@ func TestResolvePinnedVersionSurvivesRotation(t *testing.T) {
 
 // Re-running the same `secret set` must not churn a version and invalidate
 // every pin, so an identical value is recognized without decrypting anything.
+//
+// The reuse flag has to come from the write: a caller comparing handles around
+// the call would be reading state that a concurrent rotation can invalidate.
 func TestPutIsANoOpForAnIdenticalValue(t *testing.T) {
 	b, _ := newTestBackend(t)
 	ctx := t.Context()
 
-	first, err := b.Put(ctx, "payments/stripe-key", []byte("same"))
+	first, reused, err := b.Put(ctx, "payments/stripe-key", []byte("same"))
+	require.NoError(t, err)
+	assert.False(t, reused, "the first write mints a version")
+
+	second, reused, err := b.Put(ctx, "payments/stripe-key", []byte("same"))
+	require.NoError(t, err)
+	assert.True(t, reused, "an identical value reuses rather than minting")
+
+	assert.Equal(t, first, second)
+}
+
+// Reuse is decided by the keyed hash, so it holds even when the stored version
+// cannot be decrypted. That is exactly the case a pre-write Resolve got wrong:
+// the read failed, so the write was reported as fresh when it had reused.
+func TestPutReportsReuseWithoutNeedingToDecrypt(t *testing.T) {
+	b, ec := newTestBackend(t)
+	ctx := t.Context()
+
+	value := []byte("sk_live")
+	first, _, err := b.Put(ctx, "payments/stripe-key", value)
 	require.NoError(t, err)
 
-	second, err := b.Put(ctx, "payments/stripe-key", []byte("same"))
-	require.NoError(t, err)
+	// Point the stored version at a key this cluster does not hold, which is
+	// what an incomplete KEK rotation would leave behind.
+	var sec core_v1alpha.Secret
+	require.NoError(t, ec.Get(ctx, "payments.stripe-key", &sec))
+	require.NoError(t, ec.UpdateAttrs(ctx, sec.CurrentVersion,
+		entity.String(core_v1alpha.SecretVersionKekIdId, "a-key-we-do-not-have")))
 
+	_, err = b.Resolve(ctx, "payments/stripe-key")
+	require.Error(t, err, "precondition: the current version is no longer readable")
+
+	second, reused, err := b.Put(ctx, "payments/stripe-key", value)
+	require.NoError(t, err)
+	assert.True(t, reused, "reuse is a hash comparison, not a decrypt-and-compare")
 	assert.Equal(t, first, second)
 }
 
@@ -104,10 +136,10 @@ func TestPutMintsANewVersionForAChangedValue(t *testing.T) {
 	b, _ := newTestBackend(t)
 	ctx := t.Context()
 
-	first, err := b.Put(ctx, "payments/stripe-key", []byte("old"))
+	first, _, err := b.Put(ctx, "payments/stripe-key", []byte("old"))
 	require.NoError(t, err)
 
-	second, err := b.Put(ctx, "payments/stripe-key", []byte("new"))
+	second, _, err := b.Put(ctx, "payments/stripe-key", []byte("new"))
 	require.NoError(t, err)
 
 	assert.NotEqual(t, first, second)
@@ -120,7 +152,7 @@ func TestStoredVersionHoldsNoPlaintext(t *testing.T) {
 	ctx := t.Context()
 
 	value := []byte("sk_live_abc123")
-	_, err := b.Put(ctx, "payments/stripe-key", value)
+	_, _, err := b.Put(ctx, "payments/stripe-key", value)
 	require.NoError(t, err)
 
 	var sec core_v1alpha.Secret
@@ -140,7 +172,7 @@ func TestResolveFailsClosedOnADisabledVersion(t *testing.T) {
 	b, _ := newTestBackend(t)
 	ctx := t.Context()
 
-	version, err := b.Put(ctx, "payments/stripe-key", []byte("sk_live"))
+	version, _, err := b.Put(ctx, "payments/stripe-key", []byte("sk_live"))
 	require.NoError(t, err)
 
 	ref := secret.FormatRef("payments/stripe-key", version)
@@ -159,7 +191,7 @@ func TestDestroyRemovesThePayload(t *testing.T) {
 	b, ec := newTestBackend(t)
 	ctx := t.Context()
 
-	version, err := b.Put(ctx, "payments/stripe-key", []byte("sk_live"))
+	version, _, err := b.Put(ctx, "payments/stripe-key", []byte("sk_live"))
 	require.NoError(t, err)
 
 	ref := secret.FormatRef("payments/stripe-key", version)
@@ -187,12 +219,12 @@ func TestPutAfterDestroyMintsAFreshVersion(t *testing.T) {
 	b, _ := newTestBackend(t)
 	ctx := t.Context()
 
-	first, err := b.Put(ctx, "payments/stripe-key", []byte("sk_live"))
+	first, _, err := b.Put(ctx, "payments/stripe-key", []byte("sk_live"))
 	require.NoError(t, err)
 
 	require.NoError(t, b.SetState(ctx, secret.FormatRef("payments/stripe-key", first), secret.StateDestroyed))
 
-	second, err := b.Put(ctx, "payments/stripe-key", []byte("sk_live"))
+	second, _, err := b.Put(ctx, "payments/stripe-key", []byte("sk_live"))
 	require.NoError(t, err)
 	assert.NotEqual(t, first, second)
 
@@ -207,7 +239,7 @@ func TestSetStateCanReEnableADisabledVersion(t *testing.T) {
 	b, _ := newTestBackend(t)
 	ctx := t.Context()
 
-	version, err := b.Put(ctx, "payments/stripe-key", []byte("sk_live"))
+	version, _, err := b.Put(ctx, "payments/stripe-key", []byte("sk_live"))
 	require.NoError(t, err)
 	ref := secret.FormatRef("payments/stripe-key", version)
 
@@ -223,7 +255,7 @@ func TestSetStateNeedsAConcreteVersion(t *testing.T) {
 	b, _ := newTestBackend(t)
 	ctx := t.Context()
 
-	_, err := b.Put(ctx, "payments/stripe-key", []byte("sk_live"))
+	_, _, err := b.Put(ctx, "payments/stripe-key", []byte("sk_live"))
 	require.NoError(t, err)
 
 	err = b.SetState(ctx, "payments/stripe-key", secret.StateDisabled)
@@ -236,10 +268,10 @@ func TestResolveRejectsAVersionFromAnotherSecret(t *testing.T) {
 	b, _ := newTestBackend(t)
 	ctx := t.Context()
 
-	_, err := b.Put(ctx, "payments/stripe-key", []byte("stripe"))
+	_, _, err := b.Put(ctx, "payments/stripe-key", []byte("stripe"))
 	require.NoError(t, err)
 
-	otherVersion, err := b.Put(ctx, "registry/npm-token", []byte("npm"))
+	otherVersion, _, err := b.Put(ctx, "registry/npm-token", []byte("npm"))
 	require.NoError(t, err)
 
 	_, err = b.Resolve(ctx, secret.FormatRef("payments/stripe-key", otherVersion))
@@ -257,7 +289,7 @@ func TestResolveUnknownVersion(t *testing.T) {
 	b, _ := newTestBackend(t)
 	ctx := t.Context()
 
-	_, err := b.Put(ctx, "payments/stripe-key", []byte("sk_live"))
+	_, _, err := b.Put(ctx, "payments/stripe-key", []byte("sk_live"))
 	require.NoError(t, err)
 
 	_, err = b.Resolve(ctx, "payments/stripe-key@nope")
@@ -267,7 +299,7 @@ func TestResolveUnknownVersion(t *testing.T) {
 func TestPutRejectsAnInvalidPath(t *testing.T) {
 	b, _ := newTestBackend(t)
 
-	_, err := b.Put(t.Context(), "payments/../etc", []byte("x"))
+	_, _, err := b.Put(t.Context(), "payments/../etc", []byte("x"))
 	assert.Error(t, err)
 }
 
@@ -277,11 +309,11 @@ func TestPathsDifferingBySeparatorStaySeparate(t *testing.T) {
 	b, _ := newTestBackend(t)
 	ctx := t.Context()
 
-	_, err := b.Put(ctx, "a/b", []byte("slash"))
+	_, _, err := b.Put(ctx, "a/b", []byte("slash"))
 	require.NoError(t, err)
 
 	// "a.b" is not an addressable path, so it cannot alias "a/b".
-	_, err = b.Put(ctx, "a.b", []byte("dot"))
+	_, _, err = b.Put(ctx, "a.b", []byte("dot"))
 	assert.Error(t, err)
 
 	got, err := b.Resolve(ctx, "a/b")
@@ -343,7 +375,7 @@ func TestSetStateRefusesToRessurectADestroyedVersion(t *testing.T) {
 	b, _ := newTestBackend(t)
 	ctx := t.Context()
 
-	version, err := b.Put(ctx, "payments/stripe-key", []byte("sk_live"))
+	version, _, err := b.Put(ctx, "payments/stripe-key", []byte("sk_live"))
 	require.NoError(t, err)
 	ref := secret.FormatRef("payments/stripe-key", version)
 
@@ -366,7 +398,7 @@ func TestSetStateDestroyIsIdempotent(t *testing.T) {
 	b, _ := newTestBackend(t)
 	ctx := t.Context()
 
-	version, err := b.Put(ctx, "payments/stripe-key", []byte("sk_live"))
+	version, _, err := b.Put(ctx, "payments/stripe-key", []byte("sk_live"))
 	require.NoError(t, err)
 	ref := secret.FormatRef("payments/stripe-key", version)
 
@@ -382,7 +414,7 @@ func TestSetStateRejectsAWriteAgainstStaleState(t *testing.T) {
 	b, ec := newTestBackend(t)
 	ctx := t.Context()
 
-	version, err := b.Put(ctx, "payments/stripe-key", []byte("sk_live"))
+	version, _, err := b.Put(ctx, "payments/stripe-key", []byte("sk_live"))
 	require.NoError(t, err)
 	ref := secret.FormatRef("payments/stripe-key", version)
 
