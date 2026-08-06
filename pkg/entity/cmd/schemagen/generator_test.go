@@ -196,6 +196,40 @@ func TestBoolFieldOptional(t *testing.T) {
 	}
 }
 
+func TestOptionalValueStructJSONTags(t *testing.T) {
+	sf := &schemaFile{
+		Domain:  "test",
+		Version: "v1",
+		Kinds: map[string]schemaAttrs{
+			"lease": {
+				"expires_at": {
+					Type: "time",
+				},
+				"mount": {
+					Type: "component",
+					Attrs: map[string]*schemaAttr{
+						"path": {Type: "string"},
+					},
+				},
+			},
+		},
+	}
+
+	code, err := GenerateSchema(sf, "test")
+	if err != nil {
+		t.Fatalf("Failed to generate schema: %v", err)
+	}
+
+	for _, tag := range []string{
+		`cbor:"expires_at,omitempty" json:"expires_at"`,
+		`cbor:"mount,omitempty" json:"mount"`,
+	} {
+		if !strings.Contains(code, tag) {
+			t.Errorf("Expected generated field tag %q", tag)
+		}
+	}
+}
+
 func TestEntityEmptyConsidersAllFields(t *testing.T) {
 	// Test that Entity.Empty() method considers bool fields along with other fields
 	sf := &schemaFile{

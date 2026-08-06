@@ -315,8 +315,17 @@ func (g *gen) attr(name string, attr *schemaAttr) {
 		g.ensureAttrs = append(g.ensureAttrs, j.Id(g.local+fname+"Id"))
 	}
 
+	jsonTag := tn
+	if !attr.Required && !attr.Many &&
+		(attr.Type == "time" || attr.Type == "component" || attr.Type == "label" ||
+			(attr.Type != "" && g.sf.Components[attr.Type] != nil)) {
+		// encoding/json's omitempty option never omits value structs. Keep
+		// the generated tag honest without changing the existing output.
+		jsonTag = name
+	}
+
 	tag := map[string]string{
-		"json": tn,
+		"json": jsonTag,
 		"cbor": tn,
 	}
 

@@ -26,7 +26,7 @@ type StatusReport struct {
 	State             string            `json:"state"` // required: active, degraded, inactive, unknown
 	NodeCount         int               `json:"node_count,omitempty"`
 	WorkloadCount     int               `json:"workload_count,omitempty"`
-	ResourceUsage     ResourceUsage     `json:"resource_usage,omitempty"`
+	ResourceUsage     ResourceUsage     `json:"resource_usage"`
 	HealthChecks      map[string]string `json:"health_checks,omitempty"`
 	RBACRulesVersion  string            `json:"rbac_rules_version,omitempty"`
 	LastRBACSync      *time.Time        `json:"last_rbac_sync,omitempty"`

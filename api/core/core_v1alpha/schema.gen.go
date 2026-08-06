@@ -102,7 +102,7 @@ const (
 
 type ConfigSpecServices struct {
 	Command     string                        `cbor:"command,omitempty" json:"command,omitempty"`
-	Concurrency ConfigSpecServicesConcurrency `cbor:"concurrency,omitempty" json:"concurrency,omitempty"`
+	Concurrency ConfigSpecServicesConcurrency `cbor:"concurrency,omitempty" json:"concurrency"`
 	Disks       []ConfigSpecServicesDisks     `cbor:"disks,omitempty" json:"disks,omitempty"`
 	Env         []ConfigSpecServicesEnv       `cbor:"env,omitempty" json:"env,omitempty"`
 	Image       string                        `cbor:"image,omitempty" json:"image,omitempty"`
@@ -861,9 +861,9 @@ type AppVersion struct {
 	AdminToken         string    `cbor:"admin_token,omitempty" json:"admin_token,omitempty"`
 	App                entity.Id `cbor:"app,omitempty" json:"app,omitempty"`
 	Artifact           entity.Id `cbor:"artifact,omitempty" json:"artifact,omitempty"`
-	Config             Config    `cbor:"config,omitempty" json:"config,omitempty"`
+	Config             Config    `cbor:"config,omitempty" json:"config"`
 	ConfigVersion      entity.Id `cbor:"config_version,omitempty" json:"config_version,omitempty"`
-	EphemeralExpiresAt time.Time `cbor:"ephemeral_expires_at,omitempty" json:"ephemeral_expires_at,omitempty"`
+	EphemeralExpiresAt time.Time `cbor:"ephemeral_expires_at,omitempty" json:"ephemeral_expires_at"`
 	EphemeralLabel     string    `cbor:"ephemeral_label,omitempty" json:"ephemeral_label,omitempty"`
 	EphemeralTtl       string    `cbor:"ephemeral_ttl,omitempty" json:"ephemeral_ttl,omitempty"`
 	ImageUrl           string    `cbor:"image_url,omitempty" json:"image_url,omitempty"`
@@ -1197,7 +1197,7 @@ type Services struct {
 	PortName           string             `cbor:"port_name,omitempty" json:"port_name,omitempty"`
 	PortType           string             `cbor:"port_type,omitempty" json:"port_type,omitempty"`
 	Ports              []Ports            `cbor:"ports,omitempty" json:"ports,omitempty"`
-	ServiceConcurrency ServiceConcurrency `cbor:"service_concurrency,omitempty" json:"service_concurrency,omitempty"`
+	ServiceConcurrency ServiceConcurrency `cbor:"service_concurrency,omitempty" json:"service_concurrency"`
 }
 
 func (o *Services) Decode(e entity.AttrGetter) {
@@ -1929,7 +1929,7 @@ const (
 type ConfigVersion struct {
 	ID   entity.Id  `json:"id"`
 	App  entity.Id  `cbor:"app,omitempty" json:"app,omitempty"`
-	Spec ConfigSpec `cbor:"spec,omitempty" json:"spec,omitempty"`
+	Spec ConfigSpec `cbor:"spec,omitempty" json:"spec"`
 }
 
 func (o *ConfigVersion) Decode(e entity.AttrGetter) {
@@ -2005,9 +2005,9 @@ type Deployment struct {
 	BuildLogs          string     `cbor:"build_logs,omitempty" json:"build_logs,omitempty"`
 	ClusterId          string     `cbor:"cluster_id,omitempty" json:"cluster_id,omitempty"`
 	CompletedAt        string     `cbor:"completed_at,omitempty" json:"completed_at,omitempty"`
-	DeployedBy         DeployedBy `cbor:"deployed_by,omitempty" json:"deployed_by,omitempty"`
+	DeployedBy         DeployedBy `cbor:"deployed_by,omitempty" json:"deployed_by"`
 	ErrorMessage       string     `cbor:"error_message,omitempty" json:"error_message,omitempty"`
-	GitInfo            GitInfo    `cbor:"git_info,omitempty" json:"git_info,omitempty"`
+	GitInfo            GitInfo    `cbor:"git_info,omitempty" json:"git_info"`
 	Phase              string     `cbor:"phase,omitempty" json:"phase,omitempty"`
 	SourceDeploymentId string     `cbor:"source_deployment_id,omitempty" json:"source_deployment_id,omitempty"`
 	Status             string     `cbor:"status,omitempty" json:"status,omitempty"`
@@ -2360,10 +2360,10 @@ const (
 
 type DeploymentLock struct {
 	ID           entity.Id `json:"id"`
-	AcquiredAt   time.Time `cbor:"acquired_at,omitempty" json:"acquired_at,omitempty"`
+	AcquiredAt   time.Time `cbor:"acquired_at,omitempty" json:"acquired_at"`
 	AppName      string    `cbor:"app_name,omitempty" json:"app_name,omitempty"`
 	DeploymentId string    `cbor:"deployment_id,omitempty" json:"deployment_id,omitempty"`
-	ExpiresAt    time.Time `cbor:"expires_at,omitempty" json:"expires_at,omitempty"`
+	ExpiresAt    time.Time `cbor:"expires_at,omitempty" json:"expires_at"`
 }
 
 func (o *DeploymentLock) Decode(e entity.AttrGetter) {
