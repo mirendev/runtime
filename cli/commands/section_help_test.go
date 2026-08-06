@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"io"
 	"os"
+	"strings"
 	"testing"
 
 	"miren.dev/mflags"
@@ -42,14 +43,14 @@ func TestSectionHelpWithGlobalFlag(t *testing.T) {
 }
 
 func argsName(args []string) string {
-	name := ""
+	var name strings.Builder
 	for i, a := range args {
 		if i > 0 {
-			name += "_"
+			name.WriteString("_")
 		}
-		name += a
+		name.WriteString(a)
 	}
-	return name
+	return name.String()
 }
 
 // captureDispatch builds the full dispatcher and runs Execute with the given

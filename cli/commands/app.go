@@ -413,7 +413,8 @@ func (m Model) View() string {
 			))
 	}
 
-	hdr := fmt.Sprintf("       name: %s\nlast update: %s %s\n",
+	var hdr strings.Builder
+	fmt.Fprintf(&hdr, "       name: %s\nlast update: %s %s\n",
 		bold.Render(m.status.Name()),
 		bold.Render(lastUpdate),
 		laExtra,
@@ -441,7 +442,7 @@ func (m Model) View() string {
 			instanceInfo = fmt.Sprintf("instances=%d (auto)", instanceCount)
 		}
 
-		hdr += fmt.Sprintf("       pool: %s %s\n", bold.Render(ps.Name()), instanceInfo)
+		fmt.Fprintf(&hdr, "       pool: %s %s\n", bold.Render(ps.Name()), instanceInfo)
 	}
 
 	var (
@@ -637,7 +638,7 @@ func (m Model) View() string {
 			)
 	}
 
-	frame := lipgloss.JoinVertical(lipgloss.Top, hdr, body, footer)
+	frame := lipgloss.JoinVertical(lipgloss.Top, hdr.String(), body, footer)
 	if m.quitting {
 		frame += "\n"
 	}

@@ -399,32 +399,32 @@ func (c *Context) DisplayTable(headers []string, rows [][]string) {
 	}
 
 	// Render headers
-	headerRow := ""
+	var headerRow strings.Builder
 	for i, header := range headers {
-		headerRow += headerStyle.
+		headerRow.WriteString(headerStyle.
 			Width(colWidths[i] + 2).
-			Render(header)
+			Render(header))
 	}
-	fmt.Fprintln(c.Stdout, headerRow)
+	fmt.Fprintln(c.Stdout, headerRow.String())
 
 	// Render separator
-	sep := ""
+	var sep strings.Builder
 	for _, width := range colWidths {
-		sep += strings.Repeat("─", width+2)
+		sep.WriteString(strings.Repeat("─", width+2))
 	}
 	fmt.Fprintln(c.Stdout, lipgloss.NewStyle().
 		Foreground(theme.Muted). // Gray
-		Render(sep))
+		Render(sep.String()))
 
 	// Render data rows
 	for _, row := range rows {
-		renderedRow := ""
+		var renderedRow strings.Builder
 		for i, cell := range row {
-			renderedRow += cellStyle.
+			renderedRow.WriteString(cellStyle.
 				Width(colWidths[i] + 2).
-				Render(cell)
+				Render(cell))
 		}
-		fmt.Fprintln(c.Stdout, renderedRow)
+		fmt.Fprintln(c.Stdout, renderedRow.String())
 	}
 }
 
