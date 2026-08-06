@@ -76,7 +76,7 @@ func detectSystemRAMBytes() int64 {
 	if err != nil {
 		return 0
 	}
-	for _, line := range strings.Split(string(data), "\n") {
+	for line := range strings.SplitSeq(string(data), "\n") {
 		if !strings.HasPrefix(line, "MemTotal:") {
 			continue
 		}

@@ -292,7 +292,7 @@ func requestScheme(r *http.Request) string {
 	}
 
 	if fwd := r.Header.Get("Forwarded"); fwd != "" {
-		for _, part := range strings.Split(fwd, ";") {
+		for part := range strings.SplitSeq(fwd, ";") {
 			part = strings.TrimSpace(part)
 			if after, ok := strings.CutPrefix(part, "proto="); ok {
 				return after

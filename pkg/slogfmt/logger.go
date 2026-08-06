@@ -990,9 +990,9 @@ func (b *testHandler) Handle(ctx context.Context, rec slog.Record) error {
 	output = bytes.TrimSuffix(output, []byte("\n"))
 
 	if bytes.ContainsRune(output, '\n') {
-		parts := bytes.Split(output, []byte{'\n'})
+		parts := bytes.SplitSeq(output, []byte{'\n'})
 
-		for _, x := range parts {
+		for x := range parts {
 			b.t.Log(string(x))
 		}
 	} else {

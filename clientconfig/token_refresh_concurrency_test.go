@@ -155,7 +155,7 @@ func TestTokenForIdentityConcurrentRefresh(t *testing.T) {
 				return
 			}
 			// Child prints the token on a line prefixed with TOKEN=.
-			for _, line := range strings.Split(string(out), "\n") {
+			for line := range strings.SplitSeq(string(out), "\n") {
 				if after, ok := strings.CutPrefix(line, "TOKEN="); ok {
 					tokens <- after
 				}

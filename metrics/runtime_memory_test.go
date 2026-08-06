@@ -54,7 +54,7 @@ func TestRuntimeMemory_Collect(t *testing.T) {
 	}
 
 	// Every series carries the control-process entity label.
-	for _, line := range strings.Split(strings.TrimSpace(receivedData), "\n") {
+	for line := range strings.SplitSeq(strings.TrimSpace(receivedData), "\n") {
 		if line == "" {
 			continue
 		}

@@ -57,7 +57,7 @@ func checkSystemRequirements() systemRequirements {
 	if err != nil {
 		reqs.memoryCheckFailed = true
 	} else {
-		for _, line := range strings.Split(string(meminfoBytes), "\n") {
+		for line := range strings.SplitSeq(string(meminfoBytes), "\n") {
 			if strings.HasPrefix(line, "MemTotal:") {
 				fields := strings.Fields(line)
 				if len(fields) >= 2 {

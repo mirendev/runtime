@@ -187,8 +187,8 @@ func getChangedLineRanges(baseBranch string) ([]ChangedLineRange, error) {
 	diffFilePattern := regexp.MustCompile(`^diff --git a/(.*) b/(.*)$`)
 	chunkPattern := regexp.MustCompile(`^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@`)
 
-	lines := strings.Split(string(output), "\n")
-	for _, line := range lines {
+	lines := strings.SplitSeq(string(output), "\n")
+	for line := range lines {
 		// Track current file (use the "b/" path - new version)
 		if matches := diffFilePattern.FindStringSubmatch(line); matches != nil {
 			currentFile = matches[2]
