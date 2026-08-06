@@ -27,4 +27,5 @@ miren debug [flags]
 - [`miren debug netdb`](/command/debug-netdb) — Network database debug commands
 - [`miren debug rbac`](/command/debug-rbac) — Fetch and display RBAC rules from miren.cloud
 - [`miren debug reindex`](/command/debug-reindex) — Rebuild all entity indexes from scratch
+- [`miren debug saga`](/command/debug-saga) — Saga execution debug commands
 - [`miren debug test`](/command/debug-test) — Debug test commands

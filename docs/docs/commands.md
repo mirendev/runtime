@@ -317,6 +317,9 @@ These commands are intended for advanced debugging and troubleshooting. They may
 | [`miren debug rbac`](/command/debug-rbac) | Fetch and display RBAC rules from miren.cloud |
 | [`miren debug rbac test`](/command/debug-rbac-test) | Test RBAC evaluation with fetched rules |
 | [`miren debug reindex`](/command/debug-reindex) | Rebuild all entity indexes from scratch |
+| [`miren debug saga`](/command/debug-saga) | Saga execution debug commands |
+| [`miren debug saga list`](/command/debug-saga-list) | List saga executions |
+| [`miren debug saga show`](/command/debug-saga-show) | Show a saga execution in detail |
 | [`miren debug test`](/command/debug-test) | Debug test commands |
 | [`miren debug test load`](/command/debug-test-load) | Loadtest a URL |
 

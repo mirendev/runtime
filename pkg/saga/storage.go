@@ -334,6 +334,44 @@ func statusFromEntity(s saga_v1alpha.SagaStatus) Status {
 	}
 }
 
+// StatusIndexAttr returns the entity index attribute that selects executions in
+// the given status, for callers querying the entity store directly rather than
+// through a Storage (the CLI's `debug saga` commands). It reports false for an
+// unrecognized status rather than guessing, since a wrong index silently
+// returns the wrong sagas.
+func StatusIndexAttr(s Status) (entity.Attr, bool) {
+	var id entity.Id
+
+	switch s {
+	case StatusPending:
+		id = saga_v1alpha.SagaStatusPendingId
+	case StatusRunning:
+		id = saga_v1alpha.SagaStatusRunningId
+	case StatusUndoing:
+		id = saga_v1alpha.SagaStatusUndoingId
+	case StatusCompleted:
+		id = saga_v1alpha.SagaStatusCompletedId
+	case StatusFailed:
+		id = saga_v1alpha.SagaStatusFailedId
+	default:
+		return entity.Attr{}, false
+	}
+
+	return entity.Ref(saga_v1alpha.SagaStatusId, id), true
+}
+
+// ExecutionFromEntity converts a decoded saga entity into an Execution,
+// deserializing the JSON-encoded inputs, action results, and execution order.
+// Exposed so tools that read saga entities directly (the CLI's `debug saga`
+// commands) decode them the same way the executor does.
+//
+// Note that CreatedAt and UpdatedAt are not persisted on the entity and so are
+// left zero here; callers that need them should read the entity store's own
+// creation and update metadata.
+func ExecutionFromEntity(sagaEntity *saga_v1alpha.Saga) (*Execution, error) {
+	return entityToExecution(sagaEntity)
+}
+
 // entityToExecution converts a saga entity to an Execution.
 func entityToExecution(sagaEntity *saga_v1alpha.Saga) (*Execution, error) {
 	exec := &Execution{
