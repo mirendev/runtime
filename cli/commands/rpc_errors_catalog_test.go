@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"miren.dev/runtime/clientconfig"
 	"miren.dev/runtime/pkg/rpc"
 	"miren.dev/runtime/pkg/ui"
 )
@@ -78,6 +79,15 @@ func TestRPCErrorMessageCatalog(t *testing.T) {
 		buf.WriteString("\n")
 	}
 
+	// The failures that happen before anything is dialed. These come from the
+	// configuration rather than the transport, so they don't go through
+	// wrapRPCError, but they're the same product and deserve the same review.
+	for _, tc := range configDiagnosticCases() {
+		fmt.Fprintf(&buf, "# %s\n\n", tc.scenario)
+		tc.diagnostic.WriteForTerminal(&buf)
+		buf.WriteString("\n")
+	}
+
 	// The same failure under -v, which appends the underlying transport error.
 	fmt.Fprintf(&buf, "# with -v (underlying error preserved)\n\n")
 	verbose, ok := errors.AsType[*ui.Diagnostic](c.wrapRPCError(cases[0].err))
@@ -105,5 +115,57 @@ func TestRPCErrorMessageCatalog(t *testing.T) {
 	}
 	if !bytes.Equal(want, buf.Bytes()) {
 		t.Errorf("messages changed. Run `go test ./cli/commands -run Catalog -update` and review the diff.\n\n--- got ---\n%s", buf.String())
+	}
+}
+
+// configDiagnosticCases are the failures raised from the client configuration,
+// before any connection is attempted.
+func configDiagnosticCases() []struct {
+	scenario   string
+	diagnostic *ui.Diagnostic
+} {
+	populated := clientconfig.NewConfig()
+	populated.SetCluster("cloud", &clientconfig.ClusterConfig{Hostname: "cloud.example.com:8443"})
+	populated.SetCluster("homelab", &clientconfig.ClusterConfig{Hostname: "homelab:8443"})
+
+	named := &Context{
+		ClusterName:      "homelab",
+		requestedCluster: "homelb",
+		clusterErr:       errors.New(`cluster "homelb": failed to connect to "homelb": failed to establish QUIC connection`),
+	}
+	active := &Context{
+		clusterErr: errors.New("cluster \"homelab\" not found in configuration"),
+	}
+	unusable := &Context{ClusterName: "homelab"}
+	inactive := &Context{ClientConfig: populated}
+
+	asDiagnostic := func(err error) *ui.Diagnostic {
+		d, ok := errors.AsType[*ui.Diagnostic](err)
+		if !ok {
+			panic(fmt.Sprintf("expected a diagnostic, got %T", err))
+		}
+		return d
+	}
+
+	return []struct {
+		scenario   string
+		diagnostic *ui.Diagnostic
+	}{
+		{
+			scenario:   "-C names something that is neither a configured cluster nor an address",
+			diagnostic: asDiagnostic(named.unknownClusterError()),
+		},
+		{
+			scenario:   "the configured active cluster couldn't be loaded",
+			diagnostic: asDiagnostic(active.unknownClusterError()),
+		},
+		{
+			scenario:   "the cluster is configured but its entry can't produce a connection",
+			diagnostic: asDiagnostic(unusable.unusableClusterError("homelab", errors.New("cluster has a client certificate but no client key"))),
+		},
+		{
+			scenario:   "clusters are configured but none is active",
+			diagnostic: asDiagnostic(inactive.noActiveClusterError()),
+		},
 	}
 }

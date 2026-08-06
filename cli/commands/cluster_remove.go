@@ -37,14 +37,9 @@ func ClusterRemove(ctx *Context, opts struct {
 			}
 		}
 
-		// Run the picker with disabled check for active cluster
 		selected, err := ui.RunPicker(items,
 			ui.WithTitle("Select a cluster to remove:"),
 			ui.WithHeaders([]string{"CLUSTER"}),
-			ui.WithDisabledCheck(func(item ui.PickerItem) bool {
-				return item.ID() == activeCluster
-			}, "Cannot remove the active cluster"),
-			ui.WithFooter("Note: You cannot remove the active cluster"),
 		)
 
 		if err != nil {
@@ -75,15 +70,52 @@ func ClusterRemove(ctx *Context, opts struct {
 		return fmt.Errorf("cluster %q not found. Available clusters: %v", clusterName, availableClusters)
 	}
 
-	// Check if this is the active cluster
-	if cfg.ActiveCluster() == clusterName {
-		return fmt.Errorf("cannot remove active cluster %q. Please switch to another cluster first using 'miren cluster switch'", clusterName)
-	}
+	wasActive := cfg.ActiveCluster() == clusterName
 
 	// Remove the cluster
 	err = cfg.RemoveCluster(clusterName)
 	if err != nil {
 		return fmt.Errorf("failed to remove cluster: %w", err)
+	}
+
+	// Removing the active cluster leaves none active, and a command run in
+	// that state can't do anything useful. Resolve it here rather than sending
+	// the user off to another command.
+	//
+	// With one cluster left there's no ambiguity about what they meant, so take
+	// it. With several, ask, because silently pointing someone at a cluster they
+	// didn't choose is how you end up reading production while believing you're
+	// looking at staging.
+	var promoted string
+	if wasActive {
+		remaining := cfg.GetClusterNames()
+
+		switch {
+		case len(remaining) == 1:
+			promoted = remaining[0]
+		case len(remaining) > 1 && ui.IsInteractive():
+			items := make([]ui.PickerItem, len(remaining))
+			for i, name := range remaining {
+				items[i] = ui.SimplePickerItem{Text: name}
+			}
+
+			selected, err := ui.RunPicker(items,
+				ui.WithTitle(fmt.Sprintf("Removed %q, which was active. Select the new active cluster:", clusterName)),
+				ui.WithHeaders([]string{"CLUSTER"}),
+			)
+			// A picker that won't run, or that the user escapes out of, is not a
+			// failure to remove the cluster. That already happened; fall through
+			// to the advice below.
+			if err == nil && selected != nil {
+				promoted = selected.ID()
+			}
+		}
+
+		if promoted != "" {
+			if err := cfg.SetActiveCluster(promoted); err != nil {
+				return fmt.Errorf("failed to select remaining cluster: %w", err)
+			}
+		}
 	}
 
 	// Save the configuration
@@ -93,5 +125,16 @@ func ClusterRemove(ctx *Context, opts struct {
 	}
 
 	ctx.Printf("Removed cluster: %s\n", clusterName)
+
+	switch {
+	case promoted != "":
+		ctx.Printf("Active cluster is now: %s\n", promoted)
+	case wasActive && cfg.GetClusterCount() > 0:
+		ctx.Printf("\nThat was the active cluster, so no cluster is active now.\n")
+		ctx.Printf("Pick one with: miren cluster switch <name>\n")
+	case wasActive:
+		ctx.Printf("\nNo clusters are configured now. Add one with: miren cluster add\n")
+	}
+
 	return nil
 }

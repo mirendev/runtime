@@ -21,7 +21,7 @@ func ConfigSetActive(ctx *Context, opts struct {
 		clusterNames := cfg.GetClusterNames()
 
 		// Use the shared cluster selection
-		selected, err := SelectCluster(ctx, "Select a cluster to set as active:", clusterNames, cfg.ActiveCluster(), false)
+		selected, err := SelectCluster(ctx, "Select a cluster to set as active:", clusterNames, cfg.ActiveCluster())
 		if err != nil {
 			// If we can't run interactive mode (no TTY), show available clusters
 			ctx.Printf("Cannot run interactive mode. Available clusters:\n")

@@ -901,8 +901,9 @@ func copyClientConfig(ctx *Context, rt containerRuntime, containerName string) e
 	// wrote a "docker" cluster (50-docker.yaml) and made it active. Point an
 	// unset-or-"docker" active cluster at "local", then drop the stale "docker"
 	// cluster so `-C docker` and its leaf don't linger. A user's own active
-	// cluster (e.g. a cloud cluster) is left untouched. Order matters:
-	// RemoveCluster refuses to remove the active cluster, so we re-point first.
+	// cluster (e.g. a cloud cluster) is left untouched. Order matters: removing
+	// the active cluster clears the active pointer, so re-pointing afterwards
+	// would land on an empty selection instead of "local".
 	if active := config.ActiveCluster(); active == "" || active == "docker" {
 		config.SetActiveCluster("local")
 	}
@@ -926,8 +927,8 @@ func copyClientConfig(ctx *Context, rt containerRuntime, containerName string) e
 // removeInstalledClusters drops the client-config cluster a container install
 // created, so uninstall is symmetric with install and doesn't leave a dead
 // cluster pointing at a server that's gone. It removes the current "local" name
-// and the legacy "docker" name (from pre-rename installs). If one is the active
-// cluster, RemoveCluster would refuse it, so we clear the active pointer first.
+// and the legacy "docker" name (from pre-rename installs). Removing the active
+// cluster clears the active pointer, which we note so uninstall can say so.
 // Best-effort: client-config problems are warned, never fatal, so the container
 // uninstall itself still succeeds.
 func removeInstalledClusters(ctx *Context) {
@@ -943,7 +944,6 @@ func removeInstalledClusters(ctx *Context) {
 			continue
 		}
 		if config.ActiveCluster() == name {
-			config.ClearActiveCluster()
 			activeCleared = true
 		}
 		if err := config.RemoveCluster(name); err != nil {

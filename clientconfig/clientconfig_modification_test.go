@@ -322,22 +322,17 @@ clusters:
 	assert.False(t, config.HasCluster("leaf-cluster"), "Cluster should be removed")
 	assert.Equal(t, 2, config.GetClusterCount())
 
-	// Test 3: Try to remove the active cluster (should fail)
-	err = config.RemoveCluster("main-cluster")
-	assert.Error(t, err, "Should fail to remove active cluster")
-	assert.Contains(t, err.Error(), "active cluster", "Error should mention active cluster")
-	assert.True(t, config.HasCluster("main-cluster"), "Active cluster should still exist")
-
-	// Test 4: Try to remove non-existent cluster (should fail)
+	// Test 3: Try to remove non-existent cluster (should fail)
 	err = config.RemoveCluster("does-not-exist")
 	assert.Error(t, err, "Should fail to remove non-existent cluster")
 	assert.Contains(t, err.Error(), "not found", "Error should mention not found")
 
-	// Test 5: Make inactive and then remove
-	config.SetActiveCluster("another-leaf") // Set active to a different cluster
+	// Test 4: Remove the active cluster, which takes the active pointer with it
+	require.Equal(t, "main-cluster", config.ActiveCluster())
 	err = config.RemoveCluster("main-cluster")
-	assert.NoError(t, err, "Should successfully remove cluster after it's no longer active")
+	assert.NoError(t, err, "Should successfully remove the active cluster")
 	assert.False(t, config.HasCluster("main-cluster"))
+	assert.Equal(t, "", config.ActiveCluster(), "active must not name a removed cluster")
 	assert.Equal(t, 1, config.GetClusterCount())
 
 	// Test 6: Verify the leaf config removal persists after save
@@ -351,6 +346,7 @@ clusters:
 	assert.True(t, config2.HasCluster("another-leaf"), "Other leaf cluster should still exist")
 	assert.False(t, config2.HasCluster("main-cluster"), "Removed main cluster should not reappear")
 	assert.False(t, config2.HasCluster("other-main"), "Removed main cluster should not reappear")
+	assert.Equal(t, "", config2.ActiveCluster(), "active must not be restored to a removed cluster")
 }
 
 // TestRemoveClusterDeletesEmptiedLeafFile verifies that removing the last
@@ -386,21 +382,116 @@ func TestRemoveClusterDeletesEmptiedLeafFile(t *testing.T) {
 }
 
 // TestClearActiveClusterAllowsRemovingIt verifies that clearing the active
-// cluster unsets it and lets the formerly-active cluster be removed (which
-// RemoveCluster otherwise refuses). This is the sequence uninstall relies on.
+// cluster unsets it and leaves the rest of the config alone. This is the
+// sequence uninstall relies on.
 func TestClearActiveClusterAllowsRemovingIt(t *testing.T) {
 	config := NewConfig()
 	config.SetCluster("local", &ClusterConfig{Hostname: "localhost:8443"})
 	config.SetCluster("cloud", &ClusterConfig{Hostname: "cloud.example.com"})
 	require.NoError(t, config.SetActiveCluster("local"))
 
-	// RemoveCluster refuses to drop the active cluster.
-	require.Error(t, config.RemoveCluster("local"))
-
-	// After clearing active, it can be removed and no cluster is active.
 	config.ClearActiveCluster()
 	assert.Equal(t, "", config.ActiveCluster())
 	require.NoError(t, config.RemoveCluster("local"))
 	assert.False(t, config.HasCluster("local"))
 	assert.True(t, config.HasCluster("cloud"), "other clusters are untouched")
+}
+
+// TestRemoveActiveCluster covers the case that used to be a dead end: with one
+// cluster configured there is nowhere to switch to first, so refusing to remove
+// the active cluster meant it could never be removed at all.
+func TestRemoveActiveCluster(t *testing.T) {
+	t.Run("the only cluster can be removed", func(t *testing.T) {
+		config := NewConfig()
+		config.SetCluster("homelab", &ClusterConfig{Hostname: "homelab:8443"})
+		require.NoError(t, config.SetActiveCluster("homelab"))
+
+		require.NoError(t, config.RemoveCluster("homelab"))
+		assert.False(t, config.HasCluster("homelab"))
+		assert.Equal(t, "", config.ActiveCluster(), "active must not name a removed cluster")
+	})
+
+	t.Run("removing the active one leaves the others alone", func(t *testing.T) {
+		config := NewConfig()
+		config.SetCluster("homelab", &ClusterConfig{Hostname: "homelab:8443"})
+		config.SetCluster("cloud", &ClusterConfig{Hostname: "cloud.example.com"})
+		require.NoError(t, config.SetActiveCluster("homelab"))
+
+		require.NoError(t, config.RemoveCluster("homelab"))
+		assert.Equal(t, "", config.ActiveCluster())
+		assert.True(t, config.HasCluster("cloud"))
+	})
+
+	t.Run("a failed removal leaves the active pointer intact", func(t *testing.T) {
+		config := NewConfig()
+		config.SetCluster("homelab", &ClusterConfig{Hostname: "homelab:8443"})
+		require.NoError(t, config.SetActiveCluster("homelab"))
+
+		require.Error(t, config.RemoveCluster("nonexistent"))
+		assert.Equal(t, "homelab", config.ActiveCluster())
+	})
+}
+
+// A leaf config carries its own active_cluster and it wins over the main file's,
+// so removing the cluster it names has to clear both. Missing the leaf wrote it
+// back naming a cluster that no longer existed, and the next load refused the
+// entire configuration. The earlier leaf test passed only because its fixture
+// happened not to set active_cluster.
+func TestRemoveActiveClusterDefinedInLeaf(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "clientconfig.yaml"),
+		[]byte("clusters:\n  other:\n    hostname: other.example.com\n"), 0644))
+
+	leafDir := filepath.Join(dir, "clientconfig.d")
+	require.NoError(t, os.MkdirAll(leafDir, 0755))
+	leafPath := filepath.Join(leafDir, "homelab.yaml")
+	require.NoError(t, os.WriteFile(leafPath,
+		[]byte("active_cluster: homelab\nclusters:\n  homelab:\n    hostname: homelab:8443\n"), 0644))
+
+	t.Setenv(EnvConfigPath, dir)
+
+	config, err := LoadConfig()
+	require.NoError(t, err)
+	require.Equal(t, "homelab", config.ActiveCluster(), "the leaf's active_cluster should be in force")
+
+	require.NoError(t, config.RemoveCluster("homelab"))
+	assert.Equal(t, "", config.ActiveCluster())
+	require.NoError(t, config.Save())
+
+	// The reload is the real assertion: a leaf still naming the removed cluster
+	// fails Validate and takes the whole configuration down with it.
+	reloaded, err := LoadConfig()
+	require.NoError(t, err, "configuration must still load after removing the active cluster")
+	assert.Equal(t, "", reloaded.ActiveCluster(), "active must not name a removed cluster")
+	assert.False(t, reloaded.HasCluster("homelab"))
+	assert.True(t, reloaded.HasCluster("other"), "other clusters are untouched")
+}
+
+// The leaf holding the active pointer isn't necessarily the leaf that owns the
+// cluster. Here the main config owns it and a separate leaf carries only
+// active_cluster, so clearing in memory reached the right struct but nothing
+// queued that leaf for save and the stale pointer survived on disk.
+func TestRemoveActiveClusterPointedAtByAnotherLeaf(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "clientconfig.yaml"),
+		[]byte("clusters:\n  homelab:\n    hostname: homelab:8443\n"), 0644))
+
+	leafDir := filepath.Join(dir, "clientconfig.d")
+	require.NoError(t, os.MkdirAll(leafDir, 0755))
+	pointer := filepath.Join(leafDir, "pointer.yaml")
+	require.NoError(t, os.WriteFile(pointer, []byte("active_cluster: homelab\n"), 0644))
+
+	t.Setenv(EnvConfigPath, dir)
+
+	config, err := LoadConfig()
+	require.NoError(t, err)
+	require.Equal(t, "homelab", config.ActiveCluster())
+
+	require.NoError(t, config.RemoveCluster("homelab"))
+	require.NoError(t, config.Save())
+
+	reloaded, err := LoadConfig()
+	require.NoError(t, err, "a stale pointer in an unrelated leaf must not survive the save")
+	assert.Equal(t, "", reloaded.ActiveCluster())
+	assert.False(t, reloaded.HasCluster("homelab"))
 }

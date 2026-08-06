@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"strings"
 	"time"
 
 	"miren.dev/runtime/pkg/rpc"
@@ -41,12 +42,16 @@ func (c *Context) unknownClusterError() error {
 		// No -C, so the broken name came from the config's active cluster.
 		return &ui.Diagnostic{
 			Summary: "the active cluster couldn't be loaded",
-			Detail: "Your configuration selects a cluster that can't be resolved. Nothing " +
-				"was contacted, because connecting to a different cluster would " +
-				"answer with the wrong cluster's data.",
+			// "We didn't contact anything" earns its place here and in the -C case
+			// below, and nowhere else in this file: both are situations where
+			// another perfectly good cluster was sitting there, so saying we didn't
+			// quietly use it is information. Where no substitution was ever on the
+			// table, the sentence is filler.
+			Detail: "Your configuration names an active cluster we can't resolve. " +
+				"We didn't contact anything.",
 			Actions: []ui.Action{
-				{Command: "miren cluster list", Note: "see configured clusters"},
 				{Command: "miren cluster switch <name>", Note: "pick a different one"},
+				{Command: "miren cluster list", Note: "see configured clusters"},
 			},
 			Cause:     c.clusterErr,
 			ShowCause: true,
@@ -55,9 +60,12 @@ func (c *Context) unknownClusterError() error {
 
 	return &ui.Diagnostic{
 		Summary: fmt.Sprintf("no cluster named %q", named),
+		// Not "we didn't contact anything", which is what this said and which is
+		// false here: -C takes an ad-hoc address too, so LoadCluster dials the
+		// name before giving up on it. What's actually true, and what the reader
+		// needs, is that we didn't quietly answer from some other cluster.
 		Detail: fmt.Sprintf("%q didn't match a configured cluster, and it isn't a reachable "+
-			"address either. Nothing was contacted, because falling back to your "+
-			"active cluster would answer with the wrong cluster's data.", named),
+			"address either. We didn't fall back to another cluster.", named),
 		Actions: []ui.Action{
 			{Command: "miren cluster list", Note: "see configured clusters"},
 		},
@@ -66,19 +74,44 @@ func (c *Context) unknownClusterError() error {
 	}
 }
 
-// unusableClusterError reports that the selected cluster's configuration can't
-// be turned into a connection.
+// noActiveClusterError reports that clusters are configured but none of them is
+// active.
+//
+// Distinct from an active cluster that couldn't be loaded: nothing here is
+// broken, the configuration just doesn't say which cluster to use. You land in
+// this state by removing the cluster that was active, or by uninstalling the
+// server a local cluster pointed at. Without this the dial falls through to the
+// default address and fails as "no remote address specified", which names
+// neither the problem nor the fix.
+func (c *Context) noActiveClusterError() error {
+	d := &ui.Diagnostic{
+		Summary: "no active cluster",
+		Detail:  "Clusters are configured, but none of them is active.",
+		Actions: []ui.Action{
+			{Command: "miren cluster switch <name>", Note: "pick one"},
+			{Command: "miren cluster list", Note: "see what's configured"},
+		},
+	}
+
+	if c.ClientConfig != nil {
+		if names := c.ClientConfig.GetClusterNames(); len(names) > 0 {
+			d.Facts = []ui.Fact{{Label: "Configured", Value: strings.Join(names, ", ")}}
+		}
+	}
+
+	return d
+}
+
+// unusableClusterError reports that the named cluster's configuration can't be
+// turned into a connection.
 //
 // Naming the file it came from matters here: these entries are spread across
 // clientconfig.yaml and clientconfig.d/*.yaml, and "which file is this cluster
 // even defined in" is the first thing you need in order to fix it.
-func (c *Context) unusableClusterError(err error) error {
+func (c *Context) unusableClusterError(name string, err error) error {
 	d := &ui.Diagnostic{
-		Summary: fmt.Sprintf("can't connect using the configuration for %s", c.clusterLabel()),
-		Detail: "The cluster is configured, but its entry couldn't be turned into a " +
-			"connection. Nothing was contacted, because falling back to a " +
-			"different cluster would answer your question with the wrong " +
-			"cluster's data.",
+		Summary: fmt.Sprintf("can't connect using the configuration for %s", clusterLabel(name)),
+		Detail:  "The cluster is configured, but we couldn't turn its entry into a connection.",
 		Actions: []ui.Action{
 			{Command: "miren cluster list", Note: "see how it's configured"},
 			{Command: "miren login", Note: "if its credentials have expired"},
@@ -87,8 +120,8 @@ func (c *Context) unusableClusterError(err error) error {
 		ShowCause: true,
 	}
 
-	if c.ClientConfig != nil && c.ClusterName != "" {
-		if src := c.ClientConfig.GetClusterSource(c.ClusterName); src != "" {
+	if c.ClientConfig != nil && name != "" {
+		if src := c.ClientConfig.GetClusterSource(name); src != "" {
 			d.Facts = []ui.Fact{{Label: "Defined in", Value: src}}
 		}
 	}
@@ -97,11 +130,11 @@ func (c *Context) unusableClusterError(err error) error {
 }
 
 // clusterLabel names the cluster the way the user refers to it.
-func (c *Context) clusterLabel() string {
-	if c.ClusterName == "" {
+func clusterLabel(name string) string {
+	if name == "" {
 		return "the cluster"
 	}
-	return fmt.Sprintf("cluster %q", c.ClusterName)
+	return fmt.Sprintf("cluster %q", name)
 }
 
 // commandLabel names what the user typed, falling back to the capability when
@@ -114,7 +147,7 @@ func (c *Context) commandLabel(capability string) string {
 }
 
 func (c *Context) diagnoseResolve(re *rpc.ResolveError) *ui.Diagnostic {
-	cluster := c.clusterLabel()
+	cluster := clusterLabel(c.ClusterName)
 	waited := re.Elapsed.Round(time.Second)
 
 	switch re.Kind {

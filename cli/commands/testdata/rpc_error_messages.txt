@@ -114,6 +114,55 @@ ERROR: couldn't understand the response from cluster "local"
   Try
     miren cluster list    confirm the address
 
+# -C names something that is neither a configured cluster nor an address
+
+ERROR: no cluster named "homelb"
+
+  "homelb" didn't match a configured cluster, and it isn't a reachable address
+  either. We didn't fall back to another cluster.
+
+  Try
+    miren cluster list    see configured clusters
+
+  Cause: cluster "homelb": failed to connect to "homelb": failed to establish QUIC connection
+
+# the configured active cluster couldn't be loaded
+
+ERROR: the active cluster couldn't be loaded
+
+  Your configuration names an active cluster we can't resolve. We didn't contact
+  anything.
+
+  Try
+    miren cluster switch <name>    pick a different one
+    miren cluster list             see configured clusters
+
+  Cause: cluster "homelab" not found in configuration
+
+# the cluster is configured but its entry can't produce a connection
+
+ERROR: can't connect using the configuration for cluster "homelab"
+
+  The cluster is configured, but we couldn't turn its entry into a connection.
+
+  Try
+    miren cluster list    see how it's configured
+    miren login           if its credentials have expired
+
+  Cause: cluster has a client certificate but no client key
+
+# clusters are configured but none is active
+
+ERROR: no active cluster
+
+  Clusters are configured, but none of them is active.
+
+  Configured  cloud, homelab
+
+  Try
+    miren cluster switch <name>    pick one
+    miren cluster list             see what's configured
+
 # with -v (underlying error preserved)
 
 ERROR: couldn't reach cluster "local" at localhost:8443
