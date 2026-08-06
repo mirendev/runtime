@@ -58,6 +58,17 @@ type Server struct {
 
 	mux *http.ServeMux
 	ws  *webtransport.Server
+
+	// restEnabled gates mounting REST routes when an interface is exposed. It
+	// tracks WithRESTBindAddr, so a deployment that has not asked for the REST
+	// surface does not grow one on its HTTP/3 listener either.
+	restEnabled bool
+
+	// restRoutes maps a mounted REST pattern to the interface that claimed it.
+	// Exposing the same interface twice is legitimate (ExposeValue overwrites),
+	// and ServeMux panics on a duplicate pattern, so re-registration is skipped
+	// rather than allowed to take the process down.
+	restRoutes map[string]string
 }
 
 type heldInterface struct {
@@ -101,6 +112,7 @@ func newServer() *Server {
 		persistent:     make(map[string]*Interface),
 		knownAddresses: make(map[string]string),
 		resolvers:      make(map[string]HasReconstructFromState),
+		restRoutes:     make(map[string]string),
 	}
 
 	s.setupMux()
@@ -243,6 +255,34 @@ func (s *Server) ExposeValue(name string, iface *Interface) {
 
 	if iface.constructor != nil {
 		s.resolvers[name] = iface.constructor
+	}
+
+	if s.restEnabled {
+		s.mountREST(name, iface)
+	}
+}
+
+// mountREST adds a route for each HTTP-annotated method of iface to the server
+// mux, so the REST gateway dispatches through the same handler the RPC
+// transport does. Callers hold s.mu.
+func (s *Server) mountREST(name string, iface *Interface) {
+	for _, m := range iface.Methods() {
+		if m.HTTP == nil {
+			continue
+		}
+
+		pattern := m.HTTP.Verb + " " + m.HTTP.Path
+
+		if owner, ok := s.restRoutes[pattern]; ok {
+			if s.state != nil {
+				s.state.log.Warn("rest route already mounted, skipping",
+					"pattern", pattern, "mounted-by", owner, "skipped", name)
+			}
+			continue
+		}
+
+		s.restRoutes[pattern] = name
+		s.mux.HandleFunc(pattern, restHandler(m))
 	}
 }
 
