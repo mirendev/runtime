@@ -601,7 +601,17 @@ func collectOutputs(def *Definition, exec *Execution) *NestedResult {
 	}
 }
 
+// Execution IDs follow the same shape as every other entity ID in the system:
+// a kind namespace, then a name carrying a short mnemonic prefix and a
+// separator before the base58 body, as in sandbox/sb-… and pool/…. Sagas used
+// to mint a bare idgen.Gen("saga"), which produced sagaCdjkwhnn… with the word
+// running straight into lowercase base58 and no kind namespace at all.
+const (
+	sagaIDKind = "saga"
+	sagaIDName = "sg"
+)
+
 // generateID creates a unique execution ID.
 func generateID() string {
-	return idgen.Gen("saga")
+	return sagaIDKind + "/" + idgen.GenNS(sagaIDName)
 }

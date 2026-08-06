@@ -1079,6 +1079,15 @@ Warning: These commands are intended for advanced users and developers. They may
 	d.Dispatch("debug disk lease-status", Infer("debug disk lease-status", "Show detailed status of a disk lease", DebugDiskLeaseStatus))
 	d.Dispatch("debug disk mounts", Infer("debug disk mounts", "List all mounted disks from /proc/mounts", DebugDiskMounts))
 
+	// Debug saga commands
+	d.Dispatch("debug saga", Section("debug saga", "Saga execution debug commands", "", WithSectionDescription(sagaSectionDescription)))
+	d.Dispatch("debug saga list", Infer("debug saga list", "List saga executions", DebugSagaList,
+		WithDescription(sagaListDescription),
+	))
+	d.Dispatch("debug saga show", Infer("debug saga show", "Show a saga execution in detail", DebugSagaShow,
+		WithDescription(sagaShowDescription),
+	))
+
 	// Debug netdb commands
 	d.Dispatch("debug netdb", Section("debug netdb", "Network database debug commands", ""))
 	d.Dispatch("debug netdb list", Infer("debug netdb list", "List all IP leases from netdb", DebugNetDBList))

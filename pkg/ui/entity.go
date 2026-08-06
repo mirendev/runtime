@@ -16,6 +16,7 @@ func CleanEntityID(id string) string {
 		"app_version/",
 		"app/",
 		"pool/",
+		"saga/",
 	}
 
 	cleaned := id
