@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"miren.dev/runtime/api/ingress/ingress_v1alpha"
@@ -66,13 +67,7 @@ func newOIDCHandler(route *ingress_v1alpha.HttpRoute, provider *ingress_v1alpha.
 
 	// Parse scopes, ensuring "openid" is always included
 	scopes := strings.Fields(provider.Scopes)
-	hasOpenID := false
-	for _, s := range scopes {
-		if s == "openid" {
-			hasOpenID = true
-			break
-		}
-	}
+	hasOpenID := slices.Contains(scopes, "openid")
 	if !hasOpenID {
 		scopes = append([]string{"openid"}, scopes...)
 	}

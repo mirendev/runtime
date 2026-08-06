@@ -1173,12 +1173,7 @@ func portsEqual(ports1, ports2 []compute_v1alpha.SandboxSpecContainerPort) bool 
 
 // containsRef checks if a slice of refs contains a specific ref
 func containsRef(refs []entity.Id, ref entity.Id) bool {
-	for _, r := range refs {
-		if r == ref {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(refs, ref)
 }
 
 // updatePool updates a pool entity in the store

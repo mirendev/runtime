@@ -7,6 +7,7 @@ package deploylifecycle
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	"miren.dev/runtime/pkg/cond"
@@ -157,10 +158,8 @@ func Transition(from, to Status) error {
 			"status must be one of: "+joinStatuses(allStatuses))
 	}
 
-	for _, allowed := range validTransitions[from] {
-		if allowed == to {
-			return nil
-		}
+	if slices.Contains(validTransitions[from], to) {
+		return nil
 	}
 
 	return cond.Conflict("deployment-status",

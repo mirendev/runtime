@@ -2,6 +2,7 @@ package shellwords
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"unicode/utf8"
 )
@@ -120,12 +121,7 @@ func (p *parser) scanQuote(delim rune) (string, error) {
 }
 
 func (p *parser) isQuote(r rune) bool {
-	for _, qr := range p.QuoteChars {
-		if qr == r {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(p.QuoteChars, r)
 }
 
 func (p *parser) isQuoteEscape(r rune) (rune, bool) {
@@ -138,12 +134,7 @@ func (p *parser) isQuoteEscape(r rune) (rune, bool) {
 }
 
 func (p *parser) isFieldSeperator(r rune) bool {
-	for _, qr := range p.FieldSeperators {
-		if qr == r {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(p.FieldSeperators, r)
 }
 
 func (p *parser) scanUntil(f func(rune) bool) string {

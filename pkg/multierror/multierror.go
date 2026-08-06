@@ -27,12 +27,7 @@ func (m *MultiError) Errors() []error {
 }
 
 func (m *MultiError) Is(err error) bool {
-	for _, e := range m.errors {
-		if e == err {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(m.errors, err)
 }
 
 func (m *MultiError) As(target any) bool {

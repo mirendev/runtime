@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -974,24 +975,12 @@ func TestPerServiceEnvVarsDoNotRestartOtherServices(t *testing.T) {
 
 	// Verify env vars are in the web pool spec
 	require.Len(t, webV2Pool.SandboxSpec.Container, 1, "web pool should have one container")
-	foundAPIKey := false
-	for _, envVar := range webV2Pool.SandboxSpec.Container[0].Env {
-		if envVar == "API_KEY=secret123" {
-			foundAPIKey = true
-			break
-		}
-	}
+	foundAPIKey := slices.Contains(webV2Pool.SandboxSpec.Container[0].Env, "API_KEY=secret123")
 	assert.True(t, foundAPIKey, "web pool should have API_KEY env var")
 
 	// Verify postgres pool spec does NOT have the API_KEY env var
 	require.Len(t, postgresPoolAfter.SandboxSpec.Container, 1, "postgres pool should have one container")
-	foundAPIKeyInPostgres := false
-	for _, envVar := range postgresPoolAfter.SandboxSpec.Container[0].Env {
-		if envVar == "API_KEY=secret123" {
-			foundAPIKeyInPostgres = true
-			break
-		}
-	}
+	foundAPIKeyInPostgres := slices.Contains(postgresPoolAfter.SandboxSpec.Container[0].Env, "API_KEY=secret123")
 	assert.False(t, foundAPIKeyInPostgres, "postgres pool should NOT have API_KEY env var")
 }
 

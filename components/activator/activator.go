@@ -1110,18 +1110,16 @@ func (a *localActivator) findPoolInStore(ctx context.Context, versionID entity.I
 		}
 
 		// Check if this pool references our version (pool reuse mechanism)
-		for _, refVersion := range pool.ReferencedByVersions {
-			if refVersion == versionID {
-				a.log.Debug("found pool in store via referenced_by_versions",
-					"pool", pool.ID,
-					"service", service,
-					"version", versionID,
-					"num_refs", len(pool.ReferencedByVersions))
-				return &poolWithRevision{
-					pool:     &pool,
-					revision: ent.Revision(),
-				}, nil
-			}
+		if slices.Contains(pool.ReferencedByVersions, versionID) {
+			a.log.Debug("found pool in store via referenced_by_versions",
+				"pool", pool.ID,
+				"service", service,
+				"version", versionID,
+				"num_refs", len(pool.ReferencedByVersions))
+			return &poolWithRevision{
+				pool:     &pool,
+				revision: ent.Revision(),
+			}, nil
 		}
 	}
 

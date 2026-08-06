@@ -2,6 +2,7 @@ package commands
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	"miren.dev/runtime/api/ingress"
@@ -33,13 +34,7 @@ func AuthProviderAddOIDC(ctx *Context, opts struct {
 
 	// "openid" must be in the scope list for the OIDC handshake to succeed.
 	// Users frequently forget it, so prepend it if it's missing.
-	hasOpenID := false
-	for _, s := range opts.Scopes {
-		if s == "openid" {
-			hasOpenID = true
-			break
-		}
-	}
+	hasOpenID := slices.Contains(opts.Scopes, "openid")
 	scopeList := opts.Scopes
 	if !hasOpenID {
 		scopeList = append([]string{"openid"}, scopeList...)

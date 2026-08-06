@@ -7,6 +7,7 @@ import (
 	"net/http/httputil"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	containerd "github.com/containerd/containerd/v2/client"
@@ -105,12 +106,7 @@ func containsDotDot(v string) bool {
 	if !strings.Contains(v, "..") {
 		return false
 	}
-	for _, ent := range strings.FieldsFunc(v, isSlashRune) {
-		if ent == ".." {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(strings.FieldsFunc(v, isSlashRune), "..")
 }
 
 func (h *LocalContainerEndpoint) ServeHTTP(w http.ResponseWriter, req *http.Request) {

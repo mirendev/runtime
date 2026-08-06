@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -127,13 +128,7 @@ func TestEtcdStore_CreateEntity(t *testing.T) {
 				expected = tt.attrs
 			}
 			for _, expectedAttr := range expected {
-				found := false
-				for _, actualAttr := range entity.Attrs() {
-					if expectedAttr.Equal(actualAttr) {
-						found = true
-						break
-					}
-				}
+				found := slices.ContainsFunc(entity.Attrs(), expectedAttr.Equal)
 				assert.True(t, found, "expected attribute %s not found in entity %s", expectedAttr.ID, entity.Id())
 			}
 			assert.Greater(t, entity.GetRevision(), int64(0))
@@ -236,13 +231,7 @@ func TestEtcdStore_AttrPred(t *testing.T) {
 			tt.attrs = append(tt.attrs, Ref(DBId, entity.Id()))
 			// Check that each expected attribute is present (entity will have additional system attributes)
 			for _, expectedAttr := range tt.attrs {
-				found := false
-				for _, actualAttr := range entity.Attrs() {
-					if expectedAttr.Equal(actualAttr) {
-						found = true
-						break
-					}
-				}
+				found := slices.ContainsFunc(entity.Attrs(), expectedAttr.Equal)
 				assert.True(t, found, "expected attribute %s not found in entity", expectedAttr.ID)
 			}
 			assert.Greater(t, entity.GetRevision(), int64(0))
