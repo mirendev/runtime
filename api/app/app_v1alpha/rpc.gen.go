@@ -2075,6 +2075,205 @@ func (v *AddonInstance) UnmarshalJSON(data []byte) error {
 	return json.Unmarshal(data, &v.data)
 }
 
+type runInfoData struct {
+	Id        *string `cbor:"0,keyasint,omitempty" json:"id,omitempty"`
+	Task      *string `cbor:"1,keyasint,omitempty" json:"task,omitempty"`
+	Trigger   *string `cbor:"2,keyasint,omitempty" json:"trigger,omitempty"`
+	Status    *string `cbor:"3,keyasint,omitempty" json:"status,omitempty"`
+	Command   *string `cbor:"4,keyasint,omitempty" json:"command,omitempty"`
+	ExitCode  *int32  `cbor:"5,keyasint,omitempty" json:"exit_code,omitempty"`
+	Attempt   *int32  `cbor:"7,keyasint,omitempty" json:"attempt,omitempty"`
+	StartedAt *int64  `cbor:"8,keyasint,omitempty" json:"started_at,omitempty"`
+	EndedAt   *int64  `cbor:"9,keyasint,omitempty" json:"ended_at,omitempty"`
+	Sandbox   *string `cbor:"10,keyasint,omitempty" json:"sandbox,omitempty"`
+	Version   *string `cbor:"11,keyasint,omitempty" json:"version,omitempty"`
+}
+
+type RunInfo struct {
+	data runInfoData
+}
+
+func (v *RunInfo) HasId() bool {
+	return v.data.Id != nil
+}
+
+func (v *RunInfo) Id() string {
+	if v.data.Id == nil {
+		return ""
+	}
+	return *v.data.Id
+}
+
+func (v *RunInfo) SetId(id string) {
+	v.data.Id = &id
+}
+
+func (v *RunInfo) HasTask() bool {
+	return v.data.Task != nil
+}
+
+func (v *RunInfo) Task() string {
+	if v.data.Task == nil {
+		return ""
+	}
+	return *v.data.Task
+}
+
+func (v *RunInfo) SetTask(task string) {
+	v.data.Task = &task
+}
+
+func (v *RunInfo) HasTrigger() bool {
+	return v.data.Trigger != nil
+}
+
+func (v *RunInfo) Trigger() string {
+	if v.data.Trigger == nil {
+		return ""
+	}
+	return *v.data.Trigger
+}
+
+func (v *RunInfo) SetTrigger(trigger string) {
+	v.data.Trigger = &trigger
+}
+
+func (v *RunInfo) HasStatus() bool {
+	return v.data.Status != nil
+}
+
+func (v *RunInfo) Status() string {
+	if v.data.Status == nil {
+		return ""
+	}
+	return *v.data.Status
+}
+
+func (v *RunInfo) SetStatus(status string) {
+	v.data.Status = &status
+}
+
+func (v *RunInfo) HasCommand() bool {
+	return v.data.Command != nil
+}
+
+func (v *RunInfo) Command() string {
+	if v.data.Command == nil {
+		return ""
+	}
+	return *v.data.Command
+}
+
+func (v *RunInfo) SetCommand(command string) {
+	v.data.Command = &command
+}
+
+func (v *RunInfo) HasExitCode() bool {
+	return v.data.ExitCode != nil
+}
+
+func (v *RunInfo) ExitCode() int32 {
+	if v.data.ExitCode == nil {
+		return 0
+	}
+	return *v.data.ExitCode
+}
+
+func (v *RunInfo) SetExitCode(exit_code int32) {
+	v.data.ExitCode = &exit_code
+}
+
+func (v *RunInfo) HasAttempt() bool {
+	return v.data.Attempt != nil
+}
+
+func (v *RunInfo) Attempt() int32 {
+	if v.data.Attempt == nil {
+		return 0
+	}
+	return *v.data.Attempt
+}
+
+func (v *RunInfo) SetAttempt(attempt int32) {
+	v.data.Attempt = &attempt
+}
+
+func (v *RunInfo) HasStartedAt() bool {
+	return v.data.StartedAt != nil
+}
+
+func (v *RunInfo) StartedAt() int64 {
+	if v.data.StartedAt == nil {
+		return 0
+	}
+	return *v.data.StartedAt
+}
+
+func (v *RunInfo) SetStartedAt(started_at int64) {
+	v.data.StartedAt = &started_at
+}
+
+func (v *RunInfo) HasEndedAt() bool {
+	return v.data.EndedAt != nil
+}
+
+func (v *RunInfo) EndedAt() int64 {
+	if v.data.EndedAt == nil {
+		return 0
+	}
+	return *v.data.EndedAt
+}
+
+func (v *RunInfo) SetEndedAt(ended_at int64) {
+	v.data.EndedAt = &ended_at
+}
+
+func (v *RunInfo) HasSandbox() bool {
+	return v.data.Sandbox != nil
+}
+
+func (v *RunInfo) Sandbox() string {
+	if v.data.Sandbox == nil {
+		return ""
+	}
+	return *v.data.Sandbox
+}
+
+func (v *RunInfo) SetSandbox(sandbox string) {
+	v.data.Sandbox = &sandbox
+}
+
+func (v *RunInfo) HasVersion() bool {
+	return v.data.Version != nil
+}
+
+func (v *RunInfo) Version() string {
+	if v.data.Version == nil {
+		return ""
+	}
+	return *v.data.Version
+}
+
+func (v *RunInfo) SetVersion(version string) {
+	v.data.Version = &version
+}
+
+func (v *RunInfo) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *RunInfo) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *RunInfo) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *RunInfo) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
 type crudNewArgsData struct {
 	Name *string `cbor:"0,keyasint,omitempty" json:"name,omitempty"`
 }
@@ -6477,4 +6676,645 @@ func (v AddonsClient) DeleteInstance(ctx context.Context, app string, name strin
 	}
 
 	return &AddonsClientDeleteInstanceResults{client: v.Client, data: ret}, nil
+}
+
+type runsCreateRunArgsData struct {
+	App     *string   `cbor:"0,keyasint,omitempty" json:"app,omitempty"`
+	Task    *string   `cbor:"1,keyasint,omitempty" json:"task,omitempty"`
+	Command *[]string `cbor:"2,keyasint,omitempty" json:"command,omitempty"`
+}
+
+type RunsCreateRunArgs struct {
+	call rpc.Call
+	data runsCreateRunArgsData
+}
+
+func (v *RunsCreateRunArgs) HasApp() bool {
+	return v.data.App != nil
+}
+
+func (v *RunsCreateRunArgs) App() string {
+	if v.data.App == nil {
+		return ""
+	}
+	return *v.data.App
+}
+
+func (v *RunsCreateRunArgs) HasTask() bool {
+	return v.data.Task != nil
+}
+
+func (v *RunsCreateRunArgs) Task() string {
+	if v.data.Task == nil {
+		return ""
+	}
+	return *v.data.Task
+}
+
+func (v *RunsCreateRunArgs) HasCommand() bool {
+	return v.data.Command != nil
+}
+
+func (v *RunsCreateRunArgs) Command() []string {
+	if v.data.Command == nil {
+		return nil
+	}
+	return *v.data.Command
+}
+
+func (v *RunsCreateRunArgs) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *RunsCreateRunArgs) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *RunsCreateRunArgs) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *RunsCreateRunArgs) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type runsCreateRunResultsData struct {
+	Id          *string `cbor:"0,keyasint,omitempty" json:"id,omitempty"`
+	SandboxName *string `cbor:"1,keyasint,omitempty" json:"sandbox_name,omitempty"`
+}
+
+type RunsCreateRunResults struct {
+	call rpc.Call
+	data runsCreateRunResultsData
+}
+
+func (v *RunsCreateRunResults) SetId(id string) {
+	v.data.Id = &id
+}
+
+func (v *RunsCreateRunResults) SetSandboxName(sandbox_name string) {
+	v.data.SandboxName = &sandbox_name
+}
+
+func (v *RunsCreateRunResults) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *RunsCreateRunResults) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *RunsCreateRunResults) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *RunsCreateRunResults) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type runsListRunsArgsData struct {
+	App   *string `cbor:"0,keyasint,omitempty" json:"app,omitempty"`
+	Task  *string `cbor:"1,keyasint,omitempty" json:"task,omitempty"`
+	Limit *int32  `cbor:"2,keyasint,omitempty" json:"limit,omitempty"`
+}
+
+type RunsListRunsArgs struct {
+	call rpc.Call
+	data runsListRunsArgsData
+}
+
+func (v *RunsListRunsArgs) HasApp() bool {
+	return v.data.App != nil
+}
+
+func (v *RunsListRunsArgs) App() string {
+	if v.data.App == nil {
+		return ""
+	}
+	return *v.data.App
+}
+
+func (v *RunsListRunsArgs) HasTask() bool {
+	return v.data.Task != nil
+}
+
+func (v *RunsListRunsArgs) Task() string {
+	if v.data.Task == nil {
+		return ""
+	}
+	return *v.data.Task
+}
+
+func (v *RunsListRunsArgs) HasLimit() bool {
+	return v.data.Limit != nil
+}
+
+func (v *RunsListRunsArgs) Limit() int32 {
+	if v.data.Limit == nil {
+		return 0
+	}
+	return *v.data.Limit
+}
+
+func (v *RunsListRunsArgs) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *RunsListRunsArgs) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *RunsListRunsArgs) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *RunsListRunsArgs) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type runsListRunsResultsData struct {
+	Runs *[]*RunInfo `cbor:"0,keyasint,omitempty" json:"runs,omitempty"`
+}
+
+type RunsListRunsResults struct {
+	call rpc.Call
+	data runsListRunsResultsData
+}
+
+func (v *RunsListRunsResults) SetRuns(runs []*RunInfo) {
+	x := slices.Clone(runs)
+	v.data.Runs = &x
+}
+
+func (v *RunsListRunsResults) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *RunsListRunsResults) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *RunsListRunsResults) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *RunsListRunsResults) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type runsGetRunArgsData struct {
+	Id *string `cbor:"0,keyasint,omitempty" json:"id,omitempty"`
+}
+
+type RunsGetRunArgs struct {
+	call rpc.Call
+	data runsGetRunArgsData
+}
+
+func (v *RunsGetRunArgs) HasId() bool {
+	return v.data.Id != nil
+}
+
+func (v *RunsGetRunArgs) Id() string {
+	if v.data.Id == nil {
+		return ""
+	}
+	return *v.data.Id
+}
+
+func (v *RunsGetRunArgs) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *RunsGetRunArgs) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *RunsGetRunArgs) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *RunsGetRunArgs) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type runsGetRunResultsData struct {
+	Run *RunInfo `cbor:"0,keyasint,omitempty" json:"run,omitempty"`
+}
+
+type RunsGetRunResults struct {
+	call rpc.Call
+	data runsGetRunResultsData
+}
+
+func (v *RunsGetRunResults) SetRun(run *RunInfo) {
+	v.data.Run = run
+}
+
+func (v *RunsGetRunResults) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *RunsGetRunResults) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *RunsGetRunResults) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *RunsGetRunResults) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type runsCancelRunArgsData struct {
+	Id *string `cbor:"0,keyasint,omitempty" json:"id,omitempty"`
+}
+
+type RunsCancelRunArgs struct {
+	call rpc.Call
+	data runsCancelRunArgsData
+}
+
+func (v *RunsCancelRunArgs) HasId() bool {
+	return v.data.Id != nil
+}
+
+func (v *RunsCancelRunArgs) Id() string {
+	if v.data.Id == nil {
+		return ""
+	}
+	return *v.data.Id
+}
+
+func (v *RunsCancelRunArgs) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *RunsCancelRunArgs) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *RunsCancelRunArgs) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *RunsCancelRunArgs) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type runsCancelRunResultsData struct {
+	Canceled *bool `cbor:"0,keyasint,omitempty" json:"canceled,omitempty"`
+}
+
+type RunsCancelRunResults struct {
+	call rpc.Call
+	data runsCancelRunResultsData
+}
+
+func (v *RunsCancelRunResults) SetCanceled(canceled bool) {
+	v.data.Canceled = &canceled
+}
+
+func (v *RunsCancelRunResults) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *RunsCancelRunResults) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *RunsCancelRunResults) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *RunsCancelRunResults) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type RunsCreateRun struct {
+	rpc.Call
+	args    RunsCreateRunArgs
+	results RunsCreateRunResults
+}
+
+func (t *RunsCreateRun) Args() *RunsCreateRunArgs {
+	args := &t.args
+	if args.call != nil {
+		return args
+	}
+	args.call = t.Call
+	t.Call.Args(args)
+	return args
+}
+
+func (t *RunsCreateRun) Results() *RunsCreateRunResults {
+	results := &t.results
+	if results.call != nil {
+		return results
+	}
+	results.call = t.Call
+	t.Call.Results(results)
+	return results
+}
+
+type RunsListRuns struct {
+	rpc.Call
+	args    RunsListRunsArgs
+	results RunsListRunsResults
+}
+
+func (t *RunsListRuns) Args() *RunsListRunsArgs {
+	args := &t.args
+	if args.call != nil {
+		return args
+	}
+	args.call = t.Call
+	t.Call.Args(args)
+	return args
+}
+
+func (t *RunsListRuns) Results() *RunsListRunsResults {
+	results := &t.results
+	if results.call != nil {
+		return results
+	}
+	results.call = t.Call
+	t.Call.Results(results)
+	return results
+}
+
+type RunsGetRun struct {
+	rpc.Call
+	args    RunsGetRunArgs
+	results RunsGetRunResults
+}
+
+func (t *RunsGetRun) Args() *RunsGetRunArgs {
+	args := &t.args
+	if args.call != nil {
+		return args
+	}
+	args.call = t.Call
+	t.Call.Args(args)
+	return args
+}
+
+func (t *RunsGetRun) Results() *RunsGetRunResults {
+	results := &t.results
+	if results.call != nil {
+		return results
+	}
+	results.call = t.Call
+	t.Call.Results(results)
+	return results
+}
+
+type RunsCancelRun struct {
+	rpc.Call
+	args    RunsCancelRunArgs
+	results RunsCancelRunResults
+}
+
+func (t *RunsCancelRun) Args() *RunsCancelRunArgs {
+	args := &t.args
+	if args.call != nil {
+		return args
+	}
+	args.call = t.Call
+	t.Call.Args(args)
+	return args
+}
+
+func (t *RunsCancelRun) Results() *RunsCancelRunResults {
+	results := &t.results
+	if results.call != nil {
+		return results
+	}
+	results.call = t.Call
+	t.Call.Results(results)
+	return results
+}
+
+type Runs interface {
+	CreateRun(ctx context.Context, state *RunsCreateRun) error
+	ListRuns(ctx context.Context, state *RunsListRuns) error
+	GetRun(ctx context.Context, state *RunsGetRun) error
+	CancelRun(ctx context.Context, state *RunsCancelRun) error
+}
+
+type reexportRuns struct {
+	client rpc.Client
+}
+
+func (reexportRuns) CreateRun(ctx context.Context, state *RunsCreateRun) error {
+	panic("not implemented")
+}
+
+func (reexportRuns) ListRuns(ctx context.Context, state *RunsListRuns) error {
+	panic("not implemented")
+}
+
+func (reexportRuns) GetRun(ctx context.Context, state *RunsGetRun) error {
+	panic("not implemented")
+}
+
+func (reexportRuns) CancelRun(ctx context.Context, state *RunsCancelRun) error {
+	panic("not implemented")
+}
+
+func (t reexportRuns) CapabilityClient() rpc.Client {
+	return t.client
+}
+
+func AdaptRuns(t Runs) *rpc.Interface {
+	methods := []rpc.Method{
+		{
+			Name:          "createRun",
+			InterfaceName: "Runs",
+			Index:         0,
+			Public:        false,
+			Params:        []string{"app", "task", "command"},
+			Handler: func(ctx context.Context, call rpc.Call) error {
+				return t.CreateRun(ctx, &RunsCreateRun{Call: call})
+			},
+		},
+		{
+			Name:          "listRuns",
+			InterfaceName: "Runs",
+			Index:         0,
+			Public:        false,
+			Params:        []string{"app", "task", "limit"},
+			Handler: func(ctx context.Context, call rpc.Call) error {
+				return t.ListRuns(ctx, &RunsListRuns{Call: call})
+			},
+		},
+		{
+			Name:          "getRun",
+			InterfaceName: "Runs",
+			Index:         0,
+			Public:        false,
+			Params:        []string{"id"},
+			Handler: func(ctx context.Context, call rpc.Call) error {
+				return t.GetRun(ctx, &RunsGetRun{Call: call})
+			},
+		},
+		{
+			Name:          "cancelRun",
+			InterfaceName: "Runs",
+			Index:         0,
+			Public:        false,
+			Params:        []string{"id"},
+			Handler: func(ctx context.Context, call rpc.Call) error {
+				return t.CancelRun(ctx, &RunsCancelRun{Call: call})
+			},
+		},
+	}
+
+	return rpc.NewInterface(methods, t)
+}
+
+type RunsClient struct {
+	rpc.Client
+}
+
+func NewRunsClient(client rpc.Client) *RunsClient {
+	return &RunsClient{Client: client}
+}
+
+func (c RunsClient) Export() Runs {
+	return reexportRuns{client: c.Client}
+}
+
+type RunsClientCreateRunResults struct {
+	client rpc.Client
+	data   runsCreateRunResultsData
+}
+
+func (v *RunsClientCreateRunResults) HasId() bool {
+	return v.data.Id != nil
+}
+
+func (v *RunsClientCreateRunResults) Id() string {
+	if v.data.Id == nil {
+		return ""
+	}
+	return *v.data.Id
+}
+
+func (v *RunsClientCreateRunResults) HasSandboxName() bool {
+	return v.data.SandboxName != nil
+}
+
+func (v *RunsClientCreateRunResults) SandboxName() string {
+	if v.data.SandboxName == nil {
+		return ""
+	}
+	return *v.data.SandboxName
+}
+
+func (v RunsClient) CreateRun(ctx context.Context, app string, task string, command []string) (*RunsClientCreateRunResults, error) {
+	args := RunsCreateRunArgs{}
+	args.data.App = &app
+	args.data.Task = &task
+	x := slices.Clone(command)
+	args.data.Command = &x
+
+	var ret runsCreateRunResultsData
+
+	err := v.Call(ctx, "createRun", &args, &ret)
+	if err != nil {
+		return nil, err
+	}
+
+	return &RunsClientCreateRunResults{client: v.Client, data: ret}, nil
+}
+
+type RunsClientListRunsResults struct {
+	client rpc.Client
+	data   runsListRunsResultsData
+}
+
+func (v *RunsClientListRunsResults) HasRuns() bool {
+	return v.data.Runs != nil
+}
+
+func (v *RunsClientListRunsResults) Runs() []*RunInfo {
+	if v.data.Runs == nil {
+		return nil
+	}
+	return *v.data.Runs
+}
+
+func (v RunsClient) ListRuns(ctx context.Context, app string, task string, limit int32) (*RunsClientListRunsResults, error) {
+	args := RunsListRunsArgs{}
+	args.data.App = &app
+	args.data.Task = &task
+	args.data.Limit = &limit
+
+	var ret runsListRunsResultsData
+
+	err := v.Call(ctx, "listRuns", &args, &ret)
+	if err != nil {
+		return nil, err
+	}
+
+	return &RunsClientListRunsResults{client: v.Client, data: ret}, nil
+}
+
+type RunsClientGetRunResults struct {
+	client rpc.Client
+	data   runsGetRunResultsData
+}
+
+func (v *RunsClientGetRunResults) HasRun() bool {
+	return v.data.Run != nil
+}
+
+func (v *RunsClientGetRunResults) Run() *RunInfo {
+	return v.data.Run
+}
+
+func (v RunsClient) GetRun(ctx context.Context, id string) (*RunsClientGetRunResults, error) {
+	args := RunsGetRunArgs{}
+	args.data.Id = &id
+
+	var ret runsGetRunResultsData
+
+	err := v.Call(ctx, "getRun", &args, &ret)
+	if err != nil {
+		return nil, err
+	}
+
+	return &RunsClientGetRunResults{client: v.Client, data: ret}, nil
+}
+
+type RunsClientCancelRunResults struct {
+	client rpc.Client
+	data   runsCancelRunResultsData
+}
+
+func (v *RunsClientCancelRunResults) HasCanceled() bool {
+	return v.data.Canceled != nil
+}
+
+func (v *RunsClientCancelRunResults) Canceled() bool {
+	if v.data.Canceled == nil {
+		return false
+	}
+	return *v.data.Canceled
+}
+
+func (v RunsClient) CancelRun(ctx context.Context, id string) (*RunsClientCancelRunResults, error) {
+	args := RunsCancelRunArgs{}
+	args.data.Id = &id
+
+	var ret runsCancelRunResultsData
+
+	err := v.Call(ctx, "cancelRun", &args, &ret)
+	if err != nil {
+		return nil, err
+	}
+
+	return &RunsClientCancelRunResults{client: v.Client, data: ret}, nil
 }

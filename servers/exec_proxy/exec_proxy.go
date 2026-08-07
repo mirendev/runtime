@@ -5,18 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"time"
 
-	appclient "miren.dev/runtime/api/app"
 	"miren.dev/runtime/api/compute/compute_v1alpha"
-	coreutil "miren.dev/runtime/api/core"
-	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/api/exec/exec_v1alpha"
 	"miren.dev/runtime/pkg/cond"
 	"miren.dev/runtime/pkg/entity"
-	"miren.dev/runtime/pkg/entity/types"
-	"miren.dev/runtime/pkg/idgen"
 	"miren.dev/runtime/pkg/rpc"
 	"miren.dev/runtime/pkg/rpc/stream"
 	"miren.dev/runtime/pkg/secret"
@@ -46,11 +40,14 @@ func (s *Server) Exec(ctx context.Context, req *exec_v1alpha.SandboxExecExec) er
 	args := req.Args()
 
 	var (
-		id      string
-		found   *entity.Entity
-		cleanup func()
+		id    string
+		found *entity.Entity
 	)
 
+	// Only the "id" category remains. Reaching an app by name used to mean
+	// creating an ephemeral sandbox here, in a request handler whose death
+	// leaked it -- that is now a Run, owned by the run controller, and reached
+	// with Attach rather than Exec.
 	switch args.Category() {
 	case "id":
 		id = args.Value()
@@ -126,6 +123,7 @@ func (s *Server) Exec(ctx context.Context, req *exec_v1alpha.SandboxExecExec) er
 	// Ensure cleanup runs when we're done
 	if cleanup != nil {
 		defer cleanup()
+		return fmt.Errorf("exec by app name is no longer supported; use `miren app run` (which creates a run) or `miren sandbox exec` for an existing sandbox")
 	}
 
 	if found == nil {

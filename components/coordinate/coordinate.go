@@ -1475,6 +1475,7 @@ func (c *Coordinator) Start(ctx context.Context) error {
 	c.appInfo = ai
 	server.ExposeValue("dev.miren.runtime/app", app_v1alpha.AdaptCrud(ai))
 	server.ExposeValue("dev.miren.runtime/app-status", app_v1alpha.AdaptAppStatus(ai))
+	server.ExposeValue("dev.miren.runtime/app-runs", app_v1alpha.AdaptRuns(ai))
 
 	addonsServer := app.NewAddonsServer(c.Log, ec, addonRegistry, addon.NewRegistryImageChecker())
 	server.ExposeValue("dev.miren.runtime/addons", app_v1alpha.AdaptAddons(addonsServer))

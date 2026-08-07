@@ -38,12 +38,15 @@ Complete reference for all `miren` CLI commands.
 | Command | Description |
 |---------|-------------|
 | [`miren app`](/command/app) | Get information about an application |
+| [`miren app attach`](/command/app-attach) | Attach to a running task |
 | [`miren app delete`](/command/app-delete) | Delete an application and all its resources |
 | [`miren app history`](/command/app-history) | Show deployment history for an application |
 | [`miren app list`](/command/app-list) | List all applications |
 | [`miren app restart`](/command/app-restart) | Restart an application |
 | [`miren app run`](/command/app-run) | Open interactive shell in a new sandbox |
 | [`miren app set-workload-role`](/command/app-set-workload-role) | Set the API role for an app's sandbox identity tokens |
+| [`miren app runs`](/command/app-runs) | List recent task runs |
+| [`miren app runs cancel`](/command/app-runs-cancel) | End a run early |
 | [`miren app status`](/command/app-status) | Show current status of an application |
 | [`miren app versions`](/command/app-versions) | List app versions with status |
 
@@ -166,6 +169,7 @@ Complete reference for all `miren` CLI commands.
 | [`miren logs`](/command/logs) | View logs (defaults to app logs) |
 | [`miren logs app`](/command/logs-app) | View application logs |
 | [`miren logs build`](/command/logs-build) | View build logs |
+| [`miren logs run`](/command/logs-run) | View logs for a task run |
 | [`miren logs sandbox`](/command/logs-sandbox) | View sandbox logs |
 | [`miren logs system`](/command/logs-system) | View system logs |
 

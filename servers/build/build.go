@@ -257,6 +257,43 @@ func validateWebIntent(ac *appconfig.AppConfig, procfileServices map[string]stri
 	return errAmbiguousWeb
 }
 
+// migrateConsoleService moves a legacy [services.console] block to [tasks.console].
+//
+// Declaring [services.console] used to get you two things: a long-running
+// service the launcher deploys and keeps up, and the command `miren app run`
+// executes. Only the second was ever the point -- a console service being kept
+// up was never useful -- so under tasks it becomes only that.
+//
+// It gets a shim rather than a hard break because the name exists in the wild,
+// undocumented but real. If both blocks exist the task wins and the service is
+// treated as an ordinary service, since an author who wrote both meant both.
+//
+// Returns true when it migrated, so the caller can warn.
+func migrateConsoleService(ac *appconfig.AppConfig) bool {
+	if ac == nil {
+		return false
+	}
+	svc, ok := ac.Services[appconfig.ConsoleName]
+	if !ok || svc == nil {
+		return false
+	}
+	if _, declared := ac.Tasks[appconfig.ConsoleName]; declared {
+		return false
+	}
+
+	if ac.Tasks == nil {
+		ac.Tasks = map[string]*appconfig.TaskConfig{}
+	}
+	ac.Tasks[appconfig.ConsoleName] = &appconfig.TaskConfig{
+		Command: svc.Command,
+		Trigger: appconfig.TriggerManual,
+		EnvVars: svc.EnvVars,
+	}
+	delete(ac.Services, appconfig.ConsoleName)
+
+	return true
+}
+
 // buildTasksConfig turns [tasks.<name>] blocks into their stored form.
 //
 // `every` is desugared here rather than carried through, so ConfigSpec only
@@ -721,6 +758,13 @@ func buildVersionConfig(inputs ConfigInputs) core_v1alpha.ConfigSpec {
 			webDefault = res.Entrypoint
 		}
 	}
+	// Runs before both builders so the console block lands in exactly one of
+	// them, whichever way it was written.
+	if migrateConsoleService(ac) && inputs.Log != nil {
+		inputs.Log.Warn("[services.console] is deprecated; rename it to [tasks.console]",
+			"file", appconfig.AppConfigPath)
+	}
+
 	spec.Services = buildServicesConfig(ac, procfileServices, res != nil, webDefault)
 	spec.Tasks = buildTasksConfig(ac, inputs.Log)
 

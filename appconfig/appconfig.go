@@ -110,6 +110,11 @@ const (
 	TriggerSchedule = "schedule"
 )
 
+// ConsoleName is the task `miren app run` resolves when none is named. The
+// convention predates tasks -- the exec server already looked for a service
+// with this name -- so it is shared rather than spelled out in both places.
+const ConsoleName = "console"
+
 // DefaultTaskMaxConcurrent caps simultaneous runs of a task. Runs consume
 // cluster capacity on request, so the default is the conservative one.
 const DefaultTaskMaxConcurrent = 1

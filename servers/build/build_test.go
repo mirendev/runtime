@@ -2846,3 +2846,57 @@ func TestValidateWebIntentDrivesWhatAnalyzeCanClaim(t *testing.T) {
 	// real service behind, which is why the docs call that out.
 	assert.NoError(t, validateWebIntent(taskOnly, map[string]string{"web": "bin/server"}))
 }
+
+// [services.console] is a real name in the wild, undocumented but used. It gets
+// a shim rather than a hard break: it becomes a task, which is the only thing
+// anyone declaring it ever wanted, since a console service being kept running
+// was never useful.
+func TestMigrateConsoleService(t *testing.T) {
+	t.Run("moves the block to tasks", func(t *testing.T) {
+		ac := &appconfig.AppConfig{
+			Services: map[string]*appconfig.ServiceConfig{
+				"web":     {Command: "bin/server"},
+				"console": {Command: "bin/rails console"},
+			},
+		}
+
+		assert.True(t, migrateConsoleService(ac))
+		assert.NotContains(t, ac.Services, "console",
+			"a console service must stop being deployed as a long-running process")
+		require.Contains(t, ac.Tasks, "console")
+		assert.Equal(t, "bin/rails console", ac.Tasks["console"].Command)
+		assert.Equal(t, appconfig.TriggerManual, ac.Tasks["console"].Trigger)
+		assert.Contains(t, ac.Services, "web", "other services are untouched")
+	})
+
+	t.Run("an author who wrote both meant both", func(t *testing.T) {
+		ac := &appconfig.AppConfig{
+			Services: map[string]*appconfig.ServiceConfig{"console": {Command: "svc"}},
+			Tasks:    map[string]*appconfig.TaskConfig{"console": {Command: "task"}},
+		}
+
+		assert.False(t, migrateConsoleService(ac))
+		assert.Contains(t, ac.Services, "console", "the service stays an ordinary service")
+		assert.Equal(t, "task", ac.Tasks["console"].Command, "the task wins")
+	})
+
+	t.Run("nothing to do", func(t *testing.T) {
+		assert.False(t, migrateConsoleService(nil))
+		assert.False(t, migrateConsoleService(&appconfig.AppConfig{}))
+	})
+
+	t.Run("carries the service env across", func(t *testing.T) {
+		ac := &appconfig.AppConfig{
+			Services: map[string]*appconfig.ServiceConfig{
+				"console": {
+					Command: "bin/console",
+					EnvVars: []appconfig.AppEnvVar{{Key: "RAILS_ENV", Value: "production"}},
+				},
+			},
+		}
+
+		require.True(t, migrateConsoleService(ac))
+		require.Len(t, ac.Tasks["console"].EnvVars, 1)
+		assert.Equal(t, "RAILS_ENV", ac.Tasks["console"].EnvVars[0].Key)
+	})
+}
