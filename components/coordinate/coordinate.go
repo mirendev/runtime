@@ -382,6 +382,7 @@ type Coordinator struct {
 	certProvider  autotls.CertificateProvider
 	autocertReady func() // nil when DNS-01 path is used
 	artifactGC    *artifactctrl.GCController
+	runScheduler  *runctrl.Scheduler
 	ephemeralGC   *ephemeralctrl.GCController
 	versionGC     *versionctrl.GCController
 	indexGC       *indexgcctrl.GCController
@@ -460,6 +461,9 @@ func (c *Coordinator) Stop() {
 	}
 	if c.ephemeralGC != nil {
 		c.ephemeralGC.Stop()
+	}
+	if c.runScheduler != nil {
+		c.runScheduler.Stop()
 	}
 	if c.versionGC != nil {
 		c.versionGC.Stop()
@@ -1356,6 +1360,12 @@ func (c *Coordinator) Start(ctx context.Context) error {
 	runController.RC = runReconciler
 	runReconciler.SetPeriodic(runctrl.SweepInterval, runController.SweepDeadlines)
 	c.cm.AddController(runReconciler)
+
+	// Scheduled tasks. Deliberately not a reconcile controller: ticks are
+	// derived from config on a timer, not from an entity changing, and dedup is
+	// the create-if-absent on the tick-derived name rather than any lock.
+	c.runScheduler = runctrl.NewScheduler(c.Log, ec, eac)
+	c.runScheduler.Start(ctx)
 
 	// A sandbox reaching STOPPED produces no event on the run index, so without
 	// this bridge a finished run would wait for the sweep to notice it.
