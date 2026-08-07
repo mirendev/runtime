@@ -6,6 +6,7 @@ import (
 
 	"miren.dev/runtime/api/compute/compute_v1alpha"
 	"miren.dev/runtime/api/exec/exec_v1alpha"
+	"miren.dev/runtime/pkg/rpc"
 	"miren.dev/runtime/pkg/rpc/stream"
 )
 
@@ -36,6 +37,15 @@ func (s *Server) Attach(ctx context.Context, req *exec_v1alpha.SandboxExecAttach
 	}
 
 	found := ent.Entity().Entity()
+
+	// Confine an app-scoped caller to its own app, exactly as Exec does.
+	// Attaching hands the caller the container's stdio, so it needs the same
+	// guard: the proxy forwards to the node over the coordinator cert, which
+	// loses the caller's identity, and nothing downstream re-checks. The app is
+	// resolved from the sandbox's own version rather than anything caller-sent.
+	if app := s.resolveSandboxApp(ctx, found); !rpc.AllowApp(ctx, app) {
+		return rpc.AppAccessError(ctx, app)
+	}
 
 	var sch compute_v1alpha.Schedule
 	sch.Decode(found)

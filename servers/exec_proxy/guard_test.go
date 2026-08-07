@@ -7,6 +7,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"miren.dev/runtime/api/compute/compute_v1alpha"
 	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/testutils"
@@ -54,9 +55,24 @@ func TestResolveSandboxApp(t *testing.T) {
 	).Attrs())
 	require.NoError(t, err)
 
-	sbEnt, cleanupFn, err := server.createEphemeralSandbox(ctx, app, ver, &core_v1alpha.ConfigSpec{StartDirectory: "/app"})
+	// Build the sandbox directly. The proxy no longer creates one -- that moved
+	// to the run controller -- and all resolveSandboxApp reads is the spec's
+	// version reference, so this is the entity shape that matters here.
+	sbID := entity.Id("sandbox/victim-exec")
+	var sb compute_v1alpha.Sandbox
+	sb.Status = compute_v1alpha.PENDING
+	sb.Spec.Version = ver.ID
+
+	_, err = inmem.EAC.Create(ctx, entity.New(
+		(&core_v1alpha.Metadata{Name: "victim-exec"}).Encode,
+		entity.DBId, sbID,
+		sb.Encode,
+	).Attrs())
 	require.NoError(t, err)
-	defer cleanupFn()
+
+	sbResp, err := inmem.EAC.Get(ctx, sbID.String())
+	require.NoError(t, err)
+	sbEnt := sbResp.Entity().Entity()
 
 	t.Run("resolves the owning app", func(t *testing.T) {
 		assert.Equal(t, "victim", server.resolveSandboxApp(ctx, sbEnt))

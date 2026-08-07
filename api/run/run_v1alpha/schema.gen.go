@@ -41,13 +41,13 @@ type Run struct {
 	App               entity.Id       `cbor:"app,omitempty" json:"app,omitempty"`
 	Attempt           int64           `cbor:"attempt,omitempty" json:"attempt,omitempty"`
 	AttemptRecord     []AttemptRecord `cbor:"attempt_record,omitempty" json:"attempt_record,omitempty"`
-	CancelRequestedAt time.Time       `cbor:"cancel_requested_at,omitempty" json:"cancel_requested_at,omitempty"`
+	CancelRequestedAt time.Time       `cbor:"cancel_requested_at,omitempty" json:"cancel_requested_at"`
 	Command           string          `cbor:"command,omitempty" json:"command,omitempty"`
-	EndedAt           time.Time       `cbor:"ended_at,omitempty" json:"ended_at,omitempty"`
+	EndedAt           time.Time       `cbor:"ended_at,omitempty" json:"ended_at"`
 	MaxAttempts       int64           `cbor:"max_attempts,omitempty" json:"max_attempts,omitempty"`
-	Result            Result          `cbor:"result,omitempty" json:"result,omitempty"`
+	Result            Result          `cbor:"result,omitempty" json:"result"`
 	Sandbox           entity.Id       `cbor:"sandbox,omitempty" json:"sandbox,omitempty"`
-	StartedAt         time.Time       `cbor:"started_at,omitempty" json:"started_at,omitempty"`
+	StartedAt         time.Time       `cbor:"started_at,omitempty" json:"started_at"`
 	Status            RunStatus       `cbor:"status,omitempty" json:"status,omitempty"`
 	Task              string          `cbor:"task,omitempty" json:"task,omitempty"`
 	Tick              string          `cbor:"tick,omitempty" json:"tick,omitempty"`
@@ -301,10 +301,10 @@ const (
 
 type AttemptRecord struct {
 	Attempt   int64     `cbor:"attempt" json:"attempt"`
-	EndedAt   time.Time `cbor:"ended_at,omitempty" json:"ended_at,omitempty"`
+	EndedAt   time.Time `cbor:"ended_at,omitempty" json:"ended_at"`
 	ExitCode  int64     `cbor:"exit_code" json:"exit_code"`
 	Sandbox   entity.Id `cbor:"sandbox,omitempty" json:"sandbox,omitempty"`
-	StartedAt time.Time `cbor:"started_at,omitempty" json:"started_at,omitempty"`
+	StartedAt time.Time `cbor:"started_at,omitempty" json:"started_at"`
 	Status    string    `cbor:"status,omitempty" json:"status,omitempty"`
 }
 
@@ -384,7 +384,7 @@ const (
 )
 
 type Result struct {
-	At   time.Time `cbor:"at,omitempty" json:"at,omitempty"`
+	At   time.Time `cbor:"at,omitempty" json:"at"`
 	Code int64     `cbor:"code" json:"code"`
 }
 
@@ -429,7 +429,7 @@ const (
 
 type RunSlot struct {
 	ID         entity.Id `json:"id"`
-	AcquiredAt time.Time `cbor:"acquired_at,omitempty" json:"acquired_at,omitempty"`
+	AcquiredAt time.Time `cbor:"acquired_at,omitempty" json:"acquired_at"`
 	App        entity.Id `cbor:"app,omitempty" json:"app,omitempty"`
 	Run        entity.Id `cbor:"run,omitempty" json:"run,omitempty"`
 	Task       string    `cbor:"task,omitempty" json:"task,omitempty"`

@@ -1061,7 +1061,7 @@ type Sandbox struct {
 	ID           entity.Id     `json:"id"`
 	BoundPort    []BoundPort   `cbor:"bound_port,omitempty" json:"bound_port,omitempty"`
 	Container    []Container   `cbor:"container" json:"container"`
-	Exit         Exit          `cbor:"exit,omitempty" json:"exit,omitempty"`
+	Exit         Exit          `cbor:"exit,omitempty" json:"exit"`
 	HostNetwork  bool          `cbor:"hostNetwork,omitempty" json:"hostNetwork,omitempty"`
 	Labels       []string      `cbor:"labels,omitempty" json:"labels,omitempty"`
 	LastActivity time.Time     `cbor:"last_activity,omitempty" json:"last_activity"`
@@ -1728,7 +1728,7 @@ const (
 )
 
 type Exit struct {
-	At        time.Time `cbor:"at,omitempty" json:"at,omitempty"`
+	At        time.Time `cbor:"at,omitempty" json:"at"`
 	Code      int64     `cbor:"code" json:"code"`
 	Container string    `cbor:"container,omitempty" json:"container,omitempty"`
 }
