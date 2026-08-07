@@ -173,6 +173,37 @@ Once the container starts, your application holds its own copy for as long as it
 The cluster key lives at `<data-path>/server/secrets.keyring`, alongside the cluster's CA key. **If that file is lost, every stored secret is permanently unrecoverable.** Include it in whatever backs up your data path.
 :::
 
+## The cluster key
+
+Everything above rotates *secrets*. The key that encrypts them rotates too, and Miren handles it.
+
+Each stored version is sealed with its own data key, and only that data key is encrypted by the cluster key. Rotating the cluster key therefore rewrites a few dozen bytes per version and never touches the values themselves, so the work does not grow with how large your secrets are.
+
+A cluster rotates its key automatically once it passes 90 days old (`secrets.key_rotation_period`; set it to `0` to rotate only on request). To rotate now, which is what an incident calls for:
+
+<CliCommand context="client">
+
+```miren
+miren secret rotate-key
+miren secret keyring
+```
+
+</CliCommand>
+
+```text
+KEY          CURRENT  AGE       VERSIONS
+Qa1gSJKRrOU  -        3 months  12
+p9XmK2vNbQs  ✓        just now  4
+
+Rotating off Qa1gSJKRrOU — 4 versions rewrapped so far.
+```
+
+A key other than the current one with versions still on it is a rotation part-way through. Nothing is unreadable while that runs — every key in the ring can still decrypt what it wrapped — and the old key is retired only once its count reaches zero. An interrupted rotation resumes on its own, because the work left is "versions still on the old key", which the cluster can always re-ask.
+
+:::note[Rotating the key does not touch your secrets]
+This changes how values are encrypted at rest. It does not change any secret's value or mint new versions, so nothing referencing a secret needs redeploying.
+:::
+
 ## Backends
 
 `cluster` is Miren's own store, and is always available. It is one *backend instance* among what a cluster may register — the model is designed so that external managers (Vault, AWS Secrets Manager, GCP Secret Manager) can be registered alongside it under their own names, with references written the same way:
