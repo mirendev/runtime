@@ -19,7 +19,11 @@ miren debug entity get [flags]
 - `--address, -a` — Address to listen on (default: `localhost:8443`)
 - `--cluster, -C` — Cluster name
 - `--config` — Path to the config file
+- `--expand` — Show nested components in full
+- `--format` — Output format (text, json) (default: `text`)
 - `--id, -i` — Entity ID
+- `--json` — Shorthand for --format json
+- `--max-value-len` — Elide values longer than this, 0 for no limit (default: `512`)
 
 ## Global Options
 

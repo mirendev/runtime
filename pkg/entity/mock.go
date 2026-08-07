@@ -601,6 +601,40 @@ func (m *MockStore) ListIndexRevision(ctx context.Context, attr Attr) ([]Id, int
 	return ids, rev, nil
 }
 
+// ListIndexPage pages the mock's index by sorting the ids and slicing. The real
+// store gets its ordering from etcd's keyspace; the mock has no keyspace, so it
+// imposes id order and its cursor is an entity id rather than a store key.
+// Cursors are opaque and never cross between backends, so the difference is
+// invisible to callers, but it is why IndexPage.Cursor promises only that a
+// cursor is opaque and resumable.
+func (m *MockStore) ListIndexPage(ctx context.Context, attr Attr, cursor string, limit int64) (*IndexPage, error) {
+	ids, rev, err := m.ListIndexRevision(ctx, attr)
+	if err != nil {
+		return nil, err
+	}
+
+	slices.Sort(ids)
+
+	page := &IndexPage{Revision: rev}
+
+	if cursor == "" {
+		page.Total = int64(len(ids))
+	} else {
+		for len(ids) > 0 && string(ids[0]) <= cursor {
+			ids = ids[1:]
+		}
+	}
+
+	if limit > 0 && int64(len(ids)) > limit {
+		page.Cursor = string(ids[limit-1])
+		ids = ids[:limit]
+	}
+
+	page.Ids = ids
+
+	return page, nil
+}
+
 func (m *MockStore) ListCollection(ctx context.Context, collection string) ([]Id, error) {
 	// For the mock store, we use the same logic as ListIndex
 	// since we don't have a separate collection index structure.
