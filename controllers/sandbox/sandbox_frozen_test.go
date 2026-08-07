@@ -38,12 +38,15 @@ func TestSandboxControllerFrozen(t *testing.T) {
 		// SandboxSpec.RestartPolicy == never rather than rebooting a sandbox
 		// whose command must execute at most once.
 		//
+		// Also adds the stdio fan-out Hub: attachable containers get a stdin
+		// FIFO at boot and their output teed to attached clients.
+		//
 		// Saga path audited per the instructions below. BootContainers and
 		// monitorTaskExit are not duplicated there -- create_saga.go reaches
 		// them through sandbox_ops.go, so it inherits the exit recording. The
 		// Create dispatch *is* duplicated, so both restart-policy guards were
 		// mirrored into SagaSandboxController.Create.
-		"sandbox.go":  "11240e246f83a99910ef7319e0a44a2f42ec99841cab5dcf1e23981ce5027e14",
+		"sandbox.go":  "413ff3108708b05a4a2e93f08b0aca63cbe0e67e3b6e6e5c0988ac9766388725",
 		"volume.go":   "580062fb8a34f3f7f965689467a4b0f2ed403bc63c1ecdeb44949a7ba7e08dff",
 		"firewall.go": "648cb5d91091d5eb7400152b19695a8045585feae59c5dd36c12d663a27bb91f",
 	}

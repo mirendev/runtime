@@ -198,6 +198,12 @@ type Runner struct {
 
 	sbController sandbox.SandboxLifecycle
 
+	// hubs is the stdio fan-out for attachable containers, shared between the
+	// sandbox controller that creates them and the exec server that joins
+	// clients to them. Both live in this process, which is what makes an
+	// in-memory registry the right shape.
+	hubs *sandbox.HubRegistry
+
 	// Disk controllers, stored for SetRestartMode propagation
 	dvc    *diskio.DiskVolumeController
 	dmc    *diskio.DiskMountController
@@ -398,7 +404,7 @@ func (r *Runner) Start(ctx context.Context, eg ...*errgroup.Group) error {
 	}
 
 	// Create exec server with explicit dependencies
-	execServer := exec.NewServer(r.Log, r.deps.CC, eas, r.deps.Namespace)
+	execServer := exec.NewServer(r.Log, r.deps.CC, eas, r.deps.Namespace, r.hubs)
 
 	rs.Server().ExposeValue("dev.miren.runtime/exec", exec_v1alpha.AdaptSandboxExec(execServer))
 
@@ -730,7 +736,10 @@ func (r *Runner) SetupControllers(
 	}
 
 	// Create sandbox controller with explicit dependencies
+	r.hubs = sandbox.NewHubRegistry()
+
 	sbcDeps := sandbox.SandboxControllerDeps{
+		Hubs:           r.hubs,
 		Log:            r.Log,
 		CC:             r.deps.CC,
 		EAC:            eas,

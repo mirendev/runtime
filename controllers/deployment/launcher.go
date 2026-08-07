@@ -1007,6 +1007,16 @@ func specsMatch(spec1, spec2 *compute_v1alpha.SandboxSpec) (string, bool) {
 		if c1.ShutdownTimeout != c2.ShutdownTimeout {
 			return fmt.Sprintf("container[%d] shutdown timeout mismatch: %s vs %s", i, c1.ShutdownTimeout, c2.ShutdownTimeout), false
 		}
+		// Stdin and Tty decide whether the container gets a stdin FIFO and a
+		// pty, both of which containerd fixes at task creation and cannot add
+		// later. A pool whose spec differs here cannot be reused by adjusting
+		// it; the containers have to be recreated.
+		if c1.Stdin != c2.Stdin {
+			return fmt.Sprintf("container[%d] stdin mismatch: %v vs %v", i, c1.Stdin, c2.Stdin), false
+		}
+		if c1.Tty != c2.Tty {
+			return fmt.Sprintf("container[%d] tty mismatch: %v vs %v", i, c1.Tty, c2.Tty), false
+		}
 
 		// Compare env vars (order-independent)
 		if !envVarsEqual(c1.Env, c2.Env) {
@@ -1031,6 +1041,10 @@ func specsMatch(spec1, spec2 *compute_v1alpha.SandboxSpec) (string, bool) {
 
 	if spec1.PortWaitTimeout != spec2.PortWaitTimeout {
 		return fmt.Sprintf("port wait timeout mismatch: %s vs %s", spec1.PortWaitTimeout, spec2.PortWaitTimeout), false
+	}
+
+	if spec1.RestartPolicy != spec2.RestartPolicy {
+		return fmt.Sprintf("restart policy mismatch: %s vs %s", spec1.RestartPolicy, spec2.RestartPolicy), false
 	}
 
 	// All fields match (excluding version)

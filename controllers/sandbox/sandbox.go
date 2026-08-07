@@ -3,6 +3,7 @@ package sandbox
 import (
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -108,6 +109,10 @@ type SandboxControllerDeps struct {
 	// case a spec that references one fails rather than starting the container
 	// with the reference in place of the value.
 	Secrets secret.Resolver
+
+	// Hubs is the stdio fan-out registry shared with the runner's exec server.
+	// Optional; one is created if absent, which is what tests want.
+	Hubs *HubRegistry
 }
 
 type SandboxController struct {
@@ -168,7 +173,16 @@ type SandboxController struct {
 
 	// writeTracker tracks entity write revisions to skip self-generated watch events
 	writeTracker controller.WriteTracker
+
+	// hubs holds the stdio fan-out for attachable containers on this node. The
+	// exec server reads from the same registry, which is why it is shared
+	// rather than owned outright.
+	hubs *HubRegistry
 }
+
+// Hubs exposes the registry of attachable containers so the runner's exec
+// server can join a client to a running container's terminal.
+func (c *SandboxController) Hubs() *HubRegistry { return c.hubs }
 
 // NewSandboxController creates a new SandboxController with validated dependencies.
 func NewSandboxController(cfg SandboxControllerDeps) (*SandboxController, error) {
@@ -206,7 +220,13 @@ func NewSandboxController(cfg SandboxControllerDeps) (*SandboxController, error)
 		return nil, fmt.Errorf("sandbox: Resolver is required")
 	}
 
+	hubs := cfg.Hubs
+	if hubs == nil {
+		hubs = NewHubRegistry()
+	}
+
 	return &SandboxController{
+		hubs:           hubs,
 		Log:            cfg.Log.With("module", "sandbox"),
 		CC:             cfg.CC,
 		EAC:            cfg.EAC,
@@ -1089,11 +1109,34 @@ func (c *SandboxController) reattachLogs(ctx context.Context, sb *compute.Sandbo
 	// Create log consumer for this container
 	sl := c.logConsumer(sb, containerName, shortID)
 
+	// Rebuild the Hub for an attachable container so clients can rejoin after
+	// the runner restarts. cio.NewAttach reopens whichever FIFOs the task was
+	// created with and skips any stream we pass as nil, so supplying a stdin
+	// reader here restores input for a task that was created with one — and is
+	// harmlessly ignored for a task that was not.
+	var hub *Hub
+	if containerIsAttachable(sb, containerName) {
+		hub = c.hubs.GetOrCreate(sb.ID, containerName)
+	}
+
+	streams := cio.WithStreams(nil, sl, sl.Stderr())
+	if hub != nil {
+		streams = cio.WithStreams(
+			hub.Stdin(),
+			io.MultiWriter(sl, hub),
+			io.MultiWriter(sl.Stderr(), hub),
+		)
+	}
+
 	// Reattach to the existing task with our log consumer
 	// This drains stdout/stderr and prevents the process from blocking on writes
-	task, err := container.Task(ctx, cio.NewAttach(cio.WithStreams(nil, sl, sl.Stderr())))
+	task, err := container.Task(ctx, cio.NewAttach(streams))
 	if err != nil {
 		return fmt.Errorf("failed to attach to task: %w", err)
+	}
+
+	if hub != nil {
+		hub.SetResizer(task)
 	}
 
 	if task == nil {
@@ -2229,7 +2272,24 @@ func (c *SandboxController) BootContainers(
 		if container.Tty {
 			cioOpts = append(cioOpts, cio.WithTerminal)
 		}
-		cioOpts = append(cioOpts, cio.WithStreams(nil, sl, sl.Stderr()))
+
+		// An attachable container gets a Hub: its stdin FIFO exists from the
+		// start (containerd only wires one up when a reader is supplied here,
+		// and it cannot be added later), and its output is teed to whoever is
+		// attached as well as to the logs.
+		var hub *Hub
+		if container.Stdin {
+			hub = c.hubs.GetOrCreate(sb.ID, container.Name)
+		}
+		if hub != nil {
+			cioOpts = append(cioOpts, cio.WithStreams(
+				hub.Stdin(),
+				io.MultiWriter(sl, hub),
+				io.MultiWriter(sl.Stderr(), hub),
+			))
+		} else {
+			cioOpts = append(cioOpts, cio.WithStreams(nil, sl, sl.Stderr()))
+		}
 
 		task, err := cc.NewTask(ctx, cio.NewCreator(cioOpts...))
 		if err != nil {
@@ -2246,6 +2306,10 @@ func (c *SandboxController) BootContainers(
 		}
 
 		c.Log.Info("container started", "id", cc.ID())
+
+		if hub != nil {
+			hub.SetResizer(task)
+		}
 
 		// Monitor task for process exit to update sandbox status
 		exitCh, err := task.Wait(ctx)
@@ -2977,6 +3041,12 @@ func (c *SandboxController) StopSandbox(ctx context.Context, id entity.Id, sb *c
 	ctx = namespaces.WithNamespace(ctx, c.Namespace)
 
 	c.Log.Debug("stopping sandbox", "id", id)
+
+	// Drop any stdio fan-out for this sandbox. This is the one place allowed to
+	// close a Hub's stdin: the container is going away, so there is no longer a
+	// shell for an EOF to kill. Attached clients see their stream end, which is
+	// what "the run finished" should look like from a terminal.
+	c.hubs.RemoveAll(id)
 
 	// Release in-memory token state first. Container teardown below can be slow or
 	// fail partway, and a sandbox left registered keeps getting fresh tokens minted

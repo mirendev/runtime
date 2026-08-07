@@ -15,6 +15,7 @@ import (
 	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/api/exec/exec_v1alpha"
+	"miren.dev/runtime/controllers/sandbox"
 	"miren.dev/runtime/pkg/idgen"
 	"miren.dev/runtime/pkg/rpc"
 	"miren.dev/runtime/pkg/rpc/stream"
@@ -27,15 +28,21 @@ type Server struct {
 	EAC *entityserver_v1alpha.EntityAccessClient
 
 	Namespace string
+
+	// Hubs lets Attach join a client to a container's existing primary process
+	// rather than executing a second one beside it. The sandbox controller on
+	// this node populates it.
+	Hubs *sandbox.HubRegistry
 }
 
 // NewServer creates a new exec Server.
-func NewServer(log *slog.Logger, cc *containerd.Client, eac *entityserver_v1alpha.EntityAccessClient, namespace string) *Server {
+func NewServer(log *slog.Logger, cc *containerd.Client, eac *entityserver_v1alpha.EntityAccessClient, namespace string, hubs *sandbox.HubRegistry) *Server {
 	return &Server{
 		Log:       log,
 		CC:        cc,
 		EAC:       eac,
 		Namespace: namespace,
+		Hubs:      hubs,
 	}
 }
 
@@ -226,9 +233,12 @@ func (s *Server) Exec(ctx context.Context, req *exec_v1alpha.SandboxExecExec) er
 	case status := <-es:
 		proc.IO().Wait()
 
-		err = status.Error()
-		if err != nil {
-			return nil
+		// containerd documents ExitCode() as meaningful only when Error() is
+		// nil. Returning success here would leave the result code at its zero
+		// value, reporting a containerd failure as a clean exit 0 -- so surface
+		// it as the error it is rather than inventing an exit status.
+		if err := status.Error(); err != nil {
+			return fmt.Errorf("waiting for process: %w", err)
 		}
 
 		req.Results().SetCode(int32(status.ExitCode()))
