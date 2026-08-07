@@ -1496,7 +1496,7 @@ func (s *RegistrationServer) findInviteByHash(ctx context.Context, codeHash stri
 	return nil, 0, nil
 }
 
-func decodeEntity(rpcEntity *entityserver_v1alpha.Entity, target interface{}) {
+func decodeEntity(rpcEntity *entityserver_v1alpha.Entity, target any) {
 	type decoder interface {
 		Decode(entity.AttrGetter)
 	}

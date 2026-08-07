@@ -110,10 +110,7 @@ func setup(ctx context.Context, flags *GlobalFlags, opts any, commandName string
 	// Initialize config from flags
 	s.Config.ServerAddress = flags.ServerAddress
 
-	level := baseLogLevel(daemon) - slog.Level(4*s.verbose)
-	if level < slog.LevelDebug {
-		level = slog.LevelDebug
-	}
+	level := max(baseLogLevel(daemon)-slog.Level(4*s.verbose), slog.LevelDebug)
 
 	s.levelVar.Set(level)
 
@@ -253,19 +250,19 @@ func (c *Context) SetExitCode(code int) {
 	c.exitCode = code
 }
 
-func (c *Context) Printf(format string, args ...interface{}) {
+func (c *Context) Printf(format string, args ...any) {
 	fmt.Fprintf(c.Stdout, format, args...)
 }
 
-func (c *Context) Completed(format string, args ...interface{}) {
+func (c *Context) Completed(format string, args ...any) {
 	fmt.Fprintf(c.Stdout, ui.Checkmark+" "+format+"\n", args...)
 }
 
-func (c *Context) Info(format string, args ...interface{}) {
+func (c *Context) Info(format string, args ...any) {
 	fmt.Fprintf(c.Stdout, "  "+format+"\n", args...)
 }
 
-func (c *Context) Warn(format string, args ...interface{}) {
+func (c *Context) Warn(format string, args ...any) {
 	fmt.Fprintf(c.Stdout, "W "+format+"\n", args...)
 }
 
@@ -289,7 +286,7 @@ func printConfigWarning(err error) {
 	fmt.Fprintf(os.Stderr, "warning: %v\n", err)
 }
 
-func (c *Context) Begin(format string, args ...interface{}) {
+func (c *Context) Begin(format string, args ...any) {
 	fmt.Fprintf(c.Stderr, ui.Play+" "+format+"\n", args...)
 }
 
@@ -402,32 +399,32 @@ func (c *Context) DisplayTable(headers []string, rows [][]string) {
 	}
 
 	// Render headers
-	headerRow := ""
+	var headerRow strings.Builder
 	for i, header := range headers {
-		headerRow += headerStyle.
+		headerRow.WriteString(headerStyle.
 			Width(colWidths[i] + 2).
-			Render(header)
+			Render(header))
 	}
-	fmt.Fprintln(c.Stdout, headerRow)
+	fmt.Fprintln(c.Stdout, headerRow.String())
 
 	// Render separator
-	sep := ""
+	var sep strings.Builder
 	for _, width := range colWidths {
-		sep += strings.Repeat("─", width+2)
+		sep.WriteString(strings.Repeat("─", width+2))
 	}
 	fmt.Fprintln(c.Stdout, lipgloss.NewStyle().
 		Foreground(theme.Muted). // Gray
-		Render(sep))
+		Render(sep.String()))
 
 	// Render data rows
 	for _, row := range rows {
-		renderedRow := ""
+		var renderedRow strings.Builder
 		for i, cell := range row {
-			renderedRow += cellStyle.
+			renderedRow.WriteString(cellStyle.
 				Width(colWidths[i] + 2).
-				Render(cell)
+				Render(cell))
 		}
-		fmt.Fprintln(c.Stdout, renderedRow)
+		fmt.Fprintln(c.Stdout, renderedRow.String())
 	}
 }
 

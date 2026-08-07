@@ -1,5 +1,7 @@
 package entity
 
+import "slices"
+
 func (e *Entity) Clone() *Entity {
 	clonedAttrs := make([]Attr, len(e.attrs))
 	for i, attr := range e.attrs {
@@ -17,13 +19,7 @@ func Diff(a, b *Entity) []Attr {
 	var diff []Attr
 
 	for _, aAttr := range a.attrs {
-		found := false
-		for _, bAttr := range b.attrs {
-			if aAttr.Equal(bAttr) {
-				found = true
-				break
-			}
-		}
+		found := slices.ContainsFunc(b.attrs, aAttr.Equal)
 		if !found {
 			diff = append(diff, aAttr)
 		}

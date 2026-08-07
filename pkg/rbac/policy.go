@@ -2,6 +2,7 @@ package rbac
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 )
 
@@ -173,10 +174,8 @@ func (r *Rule) HasPermission(resource, action string) bool {
 func (r *Rule) AppliesTo(groups []string) bool {
 	// Check if any of the user's groups match the rule's groups
 	for _, ruleGroup := range r.Groups {
-		for _, userGroup := range groups {
-			if ruleGroup == userGroup {
-				return true
-			}
+		if slices.Contains(groups, ruleGroup) {
+			return true
 		}
 	}
 	return false

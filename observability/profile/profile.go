@@ -179,7 +179,7 @@ func getCPUs() ([]uint, error) {
 func ReadCPURange(cpuRangeStr string) ([]uint, error) {
 	var cpus []uint
 	cpuRangeStr = strings.Trim(cpuRangeStr, "\n ")
-	for _, cpuRange := range strings.Split(cpuRangeStr, ",") {
+	for cpuRange := range strings.SplitSeq(cpuRangeStr, ",") {
 		rangeOp := strings.SplitN(cpuRange, "-", 2)
 		first, err := strconv.ParseUint(rangeOp[0], 10, 32)
 		if err != nil {

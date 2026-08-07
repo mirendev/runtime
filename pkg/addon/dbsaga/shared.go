@@ -143,10 +143,7 @@ func UndoIncrementAssociationCount(ctx context.Context, in IncrementAssociationC
 		return err
 	}
 
-	newCount := count - 1
-	if newCount < 0 {
-		newCount = 0
-	}
+	newCount := max(count-1, 0)
 	return sc.PatchAssociationCount(ctx, in.ServerID, rev, newCount)
 }
 

@@ -102,7 +102,7 @@ func buildGitHubConfigJSON(orgs []string) (string, error) {
 		}
 		org := connectors.GitHubOrg{Name: name}
 		if hasTeams {
-			for _, t := range strings.Split(teamsPart, ",") {
+			for t := range strings.SplitSeq(teamsPart, ",") {
 				t = strings.TrimSpace(t)
 				if t != "" {
 					org.Teams = append(org.Teams, t)

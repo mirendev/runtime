@@ -26,13 +26,13 @@ type MapList interface {
 	// Get returns the first element having given key, for all
 	// x-kubernetes-list-map-keys, to the provided object. If the provided object isn't itself a valid MapList element,
 	// get returns nil.
-	Get(interface{}) interface{}
+	Get(any) any
 }
 
 type keyStrategy interface {
 	// CompositeKeyFor returns a composite key for the provided object, if possible, and a
 	// boolean that indicates whether or not a key could be generated for the provided object.
-	CompositeKeyFor(map[string]interface{}) (interface{}, bool)
+	CompositeKeyFor(map[string]any) (any, bool)
 }
 
 // singleKeyStrategy is a cheaper strategy for associative lists that have exactly one key.
@@ -42,7 +42,7 @@ type singleKeyStrategy struct {
 
 // CompositeKeyFor directly returns the value of the single key  to
 // use as a composite key.
-func (ks *singleKeyStrategy) CompositeKeyFor(obj map[string]interface{}) (interface{}, bool) {
+func (ks *singleKeyStrategy) CompositeKeyFor(obj map[string]any) (any, bool) {
 	v, ok := obj[ks.key]
 	if !ok {
 		return nil, false
@@ -63,7 +63,7 @@ type multiKeyStrategy struct {
 
 // CompositeKeyFor returns a composite key computed from the values of all
 // keys.
-func (ks *multiKeyStrategy) CompositeKeyFor(obj map[string]interface{}) (interface{}, bool) {
+func (ks *multiKeyStrategy) CompositeKeyFor(obj map[string]any) (any, bool) {
 	const keyDelimiter = "\x00" // 0 byte should never appear in the composite key except as delimiter
 
 	var delimited strings.Builder
@@ -92,7 +92,7 @@ func (ks *multiKeyStrategy) CompositeKeyFor(obj map[string]interface{}) (interfa
 // emptyMapList is a MapList containing no elements.
 type emptyMapList struct{}
 
-func (emptyMapList) Get(interface{}) interface{} {
+func (emptyMapList) Get(any) any {
 	return nil
 }
 
@@ -100,13 +100,13 @@ type mapListImpl struct {
 	sts Schema
 	ks  keyStrategy
 	// keyedItems contains all lazily keyed map items
-	keyedItems map[interface{}]interface{}
+	keyedItems map[any]any
 	// unkeyedItems contains all map items that have not yet been keyed
-	unkeyedItems []interface{}
+	unkeyedItems []any
 }
 
-func (a *mapListImpl) Get(obj interface{}) interface{} {
-	mobj, ok := obj.(map[string]interface{})
+func (a *mapListImpl) Get(obj any) any {
+	mobj, ok := obj.(map[string]any)
 	if !ok {
 		return nil
 	}
@@ -125,7 +125,7 @@ func (a *mapListImpl) Get(obj interface{}) interface{} {
 		a.unkeyedItems = a.unkeyedItems[1:]
 
 		// key the item
-		mitem, ok := item.(map[string]interface{})
+		mitem, ok := item.(map[string]any)
 		if !ok {
 			continue
 		}
@@ -163,7 +163,7 @@ func makeKeyStrategy(sts Schema) keyStrategy {
 // MakeMapList returns a queryable interface over the provided x-kubernetes-list-type=map
 // keyedItems. If the provided schema is _not_ an array with x-kubernetes-list-type=map, returns an
 // empty mapList.
-func MakeMapList(sts Schema, items []interface{}) (rv MapList) {
+func MakeMapList(sts Schema, items []any) (rv MapList) {
 	if sts.Type() != "array" || sts.XListType() != "map" || len(sts.XListMapKeys()) == 0 || len(items) == 0 {
 		return emptyMapList{}
 	}
@@ -171,7 +171,7 @@ func MakeMapList(sts Schema, items []interface{}) (rv MapList) {
 	return &mapListImpl{
 		sts:          sts,
 		ks:           ks,
-		keyedItems:   map[interface{}]interface{}{},
+		keyedItems:   map[any]any{},
 		unkeyedItems: items,
 	}
 }

@@ -92,7 +92,7 @@ type StoredRegistration struct {
 	Status         string    `json:"status,omitempty"` // "pending" or "approved"
 	RegistrationID string    `json:"registration_id,omitempty"`
 	PollURL        string    `json:"poll_url,omitempty"`
-	ExpiresAt      time.Time `json:"expires_at,omitempty"`
+	ExpiresAt      time.Time `json:"expires_at"`
 }
 
 // Client handles the cluster registration flow

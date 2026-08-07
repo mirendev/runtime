@@ -7,6 +7,7 @@ package containerenv
 
 import (
 	"os"
+	"slices"
 	"strings"
 	"sync"
 )
@@ -47,12 +48,7 @@ func detect() bool {
 	if fileExists(dockerEnvPath) || fileExists(podmanEnvPath) {
 		return true
 	}
-	for _, p := range cgroupPaths {
-		if cgroupIndicatesContainer(p) {
-			return true
-		}
-	}
-	return false
+	return slices.ContainsFunc(cgroupPaths, cgroupIndicatesContainer)
 }
 
 func fileExists(path string) bool {

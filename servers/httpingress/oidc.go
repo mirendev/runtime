@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"miren.dev/runtime/api/ingress/ingress_v1alpha"
@@ -66,13 +67,7 @@ func newOIDCHandler(route *ingress_v1alpha.HttpRoute, provider *ingress_v1alpha.
 
 	// Parse scopes, ensuring "openid" is always included
 	scopes := strings.Fields(provider.Scopes)
-	hasOpenID := false
-	for _, s := range scopes {
-		if s == "openid" {
-			hasOpenID = true
-			break
-		}
-	}
+	hasOpenID := slices.Contains(scopes, "openid")
 	if !hasOpenID {
 		scopes = append([]string{"openid"}, scopes...)
 	}
@@ -100,7 +95,7 @@ func newOIDCHandler(route *ingress_v1alpha.HttpRoute, provider *ingress_v1alpha.
 
 // checkAuth verifies if the request has a valid OIDC session.
 // Returns true if authenticated, false if redirect to OIDC provider is needed.
-func (h *oidcHandler) checkAuth(w http.ResponseWriter, r *http.Request) (authenticated bool, claims map[string]interface{}) {
+func (h *oidcHandler) checkAuth(w http.ResponseWriter, r *http.Request) (authenticated bool, claims map[string]any) {
 	session, err := h.sessionManager.GetSession(r)
 	if err != nil {
 		h.logger.Error("failed to get session", "error", err)
@@ -242,7 +237,7 @@ func (h *oidcHandler) handleCallback(w http.ResponseWriter, r *http.Request) {
 // injectClaims adds JWT claims as HTTP headers based on the route configuration.
 // All configured claim headers are first stripped from the request to prevent
 // clients from spoofing identity headers.
-func (h *oidcHandler) injectClaims(r *http.Request, claims map[string]interface{}) {
+func (h *oidcHandler) injectClaims(r *http.Request, claims map[string]any) {
 	// Strip all configured claim headers to prevent spoofing.
 	// This is important for claims not present in the JWT — without stripping,
 	// a client-provided header would pass through to the app.
@@ -292,7 +287,7 @@ func requestScheme(r *http.Request) string {
 	}
 
 	if fwd := r.Header.Get("Forwarded"); fwd != "" {
-		for _, part := range strings.Split(fwd, ";") {
+		for part := range strings.SplitSeq(fwd, ";") {
 			part = strings.TrimSpace(part)
 			if after, ok := strings.CutPrefix(part, "proto="); ok {
 				return after

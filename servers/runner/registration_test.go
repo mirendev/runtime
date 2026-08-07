@@ -5,6 +5,7 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"net"
+	"slices"
 	"testing"
 	"time"
 
@@ -237,13 +238,7 @@ func TestJoinCreatesNodeEntity(t *testing.T) {
 		}
 	}
 
-	foundLocalhost := false
-	for _, name := range cert.DNSNames {
-		if name == "localhost" {
-			foundLocalhost = true
-			break
-		}
-	}
+	foundLocalhost := slices.Contains(cert.DNSNames, "localhost")
 	if !foundLocalhost {
 		t.Errorf("certificate missing DNS SAN 'localhost', got %v", cert.DNSNames)
 	}
@@ -989,12 +984,7 @@ func containsIP(ips []net.IP, want string) bool {
 }
 
 func containsStr(ss []string, want string) bool {
-	for _, s := range ss {
-		if s == want {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(ss, want)
 }
 
 // TestAuthorizeSystemWorkloadRequest covers the authorization guarding system

@@ -48,8 +48,7 @@ func TestCancellationPoller_DetectsCancellation(t *testing.T) {
 
 	poller := newCancellationPoller("test-deployment", mock, 10*time.Millisecond)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	var cancelCalled atomic.Bool
 
@@ -135,8 +134,7 @@ func TestCancellationPoller_ContinuesOnError(t *testing.T) {
 
 	poller := newCancellationPoller("test-deployment", mock, 10*time.Millisecond)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	var cancelCalled atomic.Bool
 
@@ -176,8 +174,7 @@ func TestCancellationPoller_ImmediateCancellation(t *testing.T) {
 
 	poller := newCancellationPoller("test-deployment", mock, 10*time.Millisecond)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	var cancelCalled atomic.Bool
 

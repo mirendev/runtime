@@ -868,7 +868,7 @@ func (b *Builder) loadAppConfig(dfs fsutil.FS) (*appconfig.AppConfig, error) {
 }
 
 // sendErrorStatus sends an error status update if status is not nil, logging any send errors
-func (b *Builder) sendErrorStatus(ctx context.Context, status *stream.SendStreamClient[*build_v1alpha.Status], format string, args ...interface{}) {
+func (b *Builder) sendErrorStatus(ctx context.Context, status *stream.SendStreamClient[*build_v1alpha.Status], format string, args ...any) {
 	if status != nil {
 		so := new(build_v1alpha.Status)
 		so.Update().SetError(fmt.Sprintf(format, args...))

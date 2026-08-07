@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -229,26 +230,27 @@ func (dc *decisionCache) clear() {
 
 func (dc *decisionCache) requestKey(req *Request) string {
 	// Include all relevant fields in cache key
-	key := fmt.Sprintf("%s:%s:%s", req.Subject, req.Resource, req.Action)
+	var key strings.Builder
+	fmt.Fprintf(&key, "%s:%s:%s", req.Subject, req.Resource, req.Action)
 
 	sort.Strings(req.Groups)
 
 	// Add groups to key
 	for _, g := range req.Groups {
-		key += ":" + g
+		key.WriteString(":" + g)
 	}
 
 	// Add tags to key
 	for k, v := range mapx.StableOrder(req.Tags) {
-		key += fmt.Sprintf(":%s=%v", k, v)
+		fmt.Fprintf(&key, ":%s=%v", k, v)
 	}
 
 	// Add context to key
 	for k, v := range mapx.StableOrder(req.Context) {
-		key += fmt.Sprintf(":%s=%v", k, v)
+		fmt.Fprintf(&key, ":%s=%v", k, v)
 	}
 
-	return key
+	return key.String()
 }
 
 func (dc *decisionCache) cleanup(ctx context.Context) {

@@ -55,7 +55,7 @@ func newTestProvider(t *testing.T, key *rsa.PrivateKey) (*httptest.Server, strin
 		// We need the server URL but don't have it yet during setup,
 		// so we read it from the request host.
 		baseURL := fmt.Sprintf("http://%s", r.Host)
-		json.NewEncoder(w).Encode(map[string]interface{}{
+		json.NewEncoder(w).Encode(map[string]any{
 			"issuer":                 baseURL,
 			"authorization_endpoint": baseURL + "/authorize",
 			"token_endpoint":         baseURL + "/token",

@@ -65,9 +65,7 @@ func TestAtomicWriteFileNoTornRead(t *testing.T) {
 	stop := make(chan struct{})
 
 	// Reader goroutine.
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		for {
 			select {
 			case <-stop:
@@ -81,7 +79,7 @@ func TestAtomicWriteFileNoTornRead(t *testing.T) {
 			var cd ConfigData
 			require.NoError(t, yaml.Unmarshal(data, &cd), "reader observed a torn/partial write")
 		}
-	}()
+	})
 
 	// Writer: alternate payloads so length changes each time.
 	for i := range 300 {

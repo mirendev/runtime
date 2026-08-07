@@ -470,9 +470,7 @@ func (s *Server) Watch(ctx context.Context) error {
 		return s.watchCtx.Err()
 	}
 
-	s.watchWg.Add(1)
-	go func() {
-		defer s.watchWg.Done()
+	s.watchWg.Go(func() {
 		for {
 			select {
 			case <-s.watchCtx.Done():
@@ -484,7 +482,7 @@ func (s *Server) Watch(ctx context.Context) error {
 				s.dispatchSandboxEvent(s.watchCtx, ev)
 			}
 		}
-	}()
+	})
 
 	return nil
 }

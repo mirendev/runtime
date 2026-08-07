@@ -315,14 +315,14 @@ func goTypeForCLI(fieldType string) string {
 	}
 }
 
-func formatDefault(val interface{}, fieldType string) string {
+func formatDefault(val any, fieldType string) string {
 	// Arrays don't need pointers, they have nil as a zero value
 	if fieldType == "[]string" {
 		if val == nil {
 			return "[]string{}"
 		}
 		switch v := val.(type) {
-		case []interface{}:
+		case []any:
 			if len(v) == 0 {
 				return "[]string{}"
 			}

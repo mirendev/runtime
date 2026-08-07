@@ -28,7 +28,7 @@ func TestVictoriaMetricsReader_InstantQuery(t *testing.T) {
 					Result: []Result{
 						{
 							Metric: map[string]string{"job": "prometheus"},
-							Value:  []interface{}{float64(1609459200), "1"},
+							Value:  []any{float64(1609459200), "1"},
 						},
 					},
 				},
@@ -131,7 +131,7 @@ func TestVictoriaMetricsReader_RangeQuery(t *testing.T) {
 					Result: []Result{
 						{
 							Metric: map[string]string{"job": "prometheus"},
-							Values: [][]interface{}{
+							Values: [][]any{
 								{float64(1609459200), "1"},
 								{float64(1609459260), "1"},
 								{float64(1609459320), "1"},
@@ -208,7 +208,7 @@ func TestVictoriaMetricsReader_GetLatestValue(t *testing.T) {
 					Result: []Result{
 						{
 							Metric: map[string]string{"__name__": "test_metric", "app": "test"},
-							Value:  []interface{}{float64(1609459200), "42.5"},
+							Value:  []any{float64(1609459200), "42.5"},
 						},
 					},
 				},
@@ -252,7 +252,7 @@ func TestVictoriaMetricsReader_GetLatestValue(t *testing.T) {
 					Result: []Result{
 						{
 							Metric: map[string]string{"__name__": "test"},
-							Value:  []interface{}{float64(1609459200), 12345}, // int instead of string
+							Value:  []any{float64(1609459200), 12345}, // int instead of string
 						},
 					},
 				},
@@ -280,7 +280,7 @@ func TestVictoriaMetricsReader_GetTimeSeries(t *testing.T) {
 					Result: []Result{
 						{
 							Metric: map[string]string{"__name__": "test_metric"},
-							Values: [][]interface{}{
+							Values: [][]any{
 								{float64(1000), "10.5"},
 								{float64(2000), "20.5"},
 								{float64(3000), "30.5"},
@@ -341,7 +341,7 @@ func TestVictoriaMetricsReader_GetTimeSeries(t *testing.T) {
 					Result: []Result{
 						{
 							Metric: map[string]string{"__name__": "test"},
-							Values: [][]interface{}{
+							Values: [][]any{
 								{float64(1000), "10.5"},
 								{"invalid", "20.5"},        // invalid timestamp
 								{float64(3000), 30.5},      // invalid value (int)
@@ -383,7 +383,7 @@ func TestVictoriaMetricsReader_GetRate(t *testing.T) {
 					Result: []Result{
 						{
 							Metric: map[string]string{},
-							Value:  []interface{}{float64(1609459200), "15.5"},
+							Value:  []any{float64(1609459200), "15.5"},
 						},
 					},
 				},
@@ -415,7 +415,7 @@ func TestVictoriaMetricsReader_GetQuantile(t *testing.T) {
 					Result: []Result{
 						{
 							Metric: map[string]string{},
-							Value:  []interface{}{float64(1609459200), "123.45"},
+							Value:  []any{float64(1609459200), "123.45"},
 						},
 					},
 				},
@@ -447,7 +447,7 @@ func TestVictoriaMetricsReader_GetAverage(t *testing.T) {
 					Result: []Result{
 						{
 							Metric: map[string]string{},
-							Value:  []interface{}{float64(1609459200), "78.9"},
+							Value:  []any{float64(1609459200), "78.9"},
 						},
 					},
 				},

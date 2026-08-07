@@ -49,7 +49,7 @@ func TestHTTPMetrics_Integration(t *testing.T) {
 				result.Data.Result = []Result{
 					{
 						Metric: map[string]string{"app": "testapp"},
-						Value:  []interface{}{float64(time.Now().Unix()), "10.5"},
+						Value:  []any{float64(time.Now().Unix()), "10.5"},
 					},
 				}
 			} else if strings.Contains(query, "topk") {
@@ -57,11 +57,11 @@ func TestHTTPMetrics_Integration(t *testing.T) {
 				result.Data.Result = []Result{
 					{
 						Metric: map[string]string{"path": "/api/users"},
-						Value:  []interface{}{float64(time.Now().Unix()), "150"},
+						Value:  []any{float64(time.Now().Unix()), "150"},
 					},
 					{
 						Metric: map[string]string{"path": "/api/posts"},
-						Value:  []interface{}{float64(time.Now().Unix()), "100"},
+						Value:  []any{float64(time.Now().Unix()), "100"},
 					},
 				}
 			} else if strings.Contains(query, "sum by(status)") {
@@ -69,11 +69,11 @@ func TestHTTPMetrics_Integration(t *testing.T) {
 				result.Data.Result = []Result{
 					{
 						Metric: map[string]string{"status": "404"},
-						Value:  []interface{}{float64(time.Now().Unix()), "25"},
+						Value:  []any{float64(time.Now().Unix()), "25"},
 					},
 					{
 						Metric: map[string]string{"status": "500"},
-						Value:  []interface{}{float64(time.Now().Unix()), "5"},
+						Value:  []any{float64(time.Now().Unix()), "5"},
 					},
 				}
 			} else {
@@ -81,7 +81,7 @@ func TestHTTPMetrics_Integration(t *testing.T) {
 				result.Data.Result = []Result{
 					{
 						Metric: map[string]string{"path": "/api/users"},
-						Value:  []interface{}{float64(time.Now().Unix()), "125.5"},
+						Value:  []any{float64(time.Now().Unix()), "125.5"},
 					},
 				}
 			}
@@ -102,7 +102,7 @@ func TestHTTPMetrics_Integration(t *testing.T) {
 				result.Data.Result = []Result{
 					{
 						Metric: map[string]string{},
-						Values: [][]interface{}{
+						Values: [][]any{
 							{float64(baseTime), "100"},
 							{float64(baseTime + 60), "120"},
 							{float64(baseTime + 120), "110"},
@@ -114,7 +114,7 @@ func TestHTTPMetrics_Integration(t *testing.T) {
 				result.Data.Result = []Result{
 					{
 						Metric: map[string]string{},
-						Values: [][]interface{}{
+						Values: [][]any{
 							{float64(baseTime), "45.5"},
 							{float64(baseTime + 60), "50.2"},
 							{float64(baseTime + 120), "48.3"},
@@ -126,7 +126,7 @@ func TestHTTPMetrics_Integration(t *testing.T) {
 				result.Data.Result = []Result{
 					{
 						Metric: map[string]string{},
-						Values: [][]interface{}{
+						Values: [][]any{
 							{float64(baseTime), "95.5"},
 							{float64(baseTime + 60), "98.2"},
 							{float64(baseTime + 120), "96.7"},
@@ -138,7 +138,7 @@ func TestHTTPMetrics_Integration(t *testing.T) {
 				result.Data.Result = []Result{
 					{
 						Metric: map[string]string{},
-						Values: [][]interface{}{
+						Values: [][]any{
 							{float64(baseTime), "150.3"},
 							{float64(baseTime + 60), "155.8"},
 							{float64(baseTime + 120), "152.1"},
@@ -150,7 +150,7 @@ func TestHTTPMetrics_Integration(t *testing.T) {
 				result.Data.Result = []Result{
 					{
 						Metric: map[string]string{},
-						Values: [][]interface{}{
+						Values: [][]any{
 							{float64(baseTime), "0.05"},
 							{float64(baseTime + 60), "0.03"},
 							{float64(baseTime + 120), "0.04"},
@@ -290,7 +290,7 @@ func TestCPUUsage_Integration(t *testing.T) {
 			result.Data.Result = []Result{
 				{
 					Metric: map[string]string{"entity": "test-app"},
-					Values: [][]interface{}{
+					Values: [][]any{
 						{float64(baseTime), "0.5"},
 						{float64(baseTime + 60), "0.75"},
 						{float64(baseTime + 120), "1.0"},
@@ -462,7 +462,7 @@ func TestMemoryUsage_Integration(t *testing.T) {
 			result.Data.Result = []Result{
 				{
 					Metric: map[string]string{"entity": "test-app"},
-					Values: [][]interface{}{
+					Values: [][]any{
 						{float64(baseTime), "134217728"},       // 128 MB
 						{float64(baseTime + 60), "268435456"},  // 256 MB
 						{float64(baseTime + 120), "536870912"}, // 512 MB

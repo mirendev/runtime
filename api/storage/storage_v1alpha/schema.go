@@ -215,11 +215,11 @@ const (
 
 type DiskLease struct {
 	ID           entity.Id       `json:"id"`
-	AcquiredAt   time.Time       `cbor:"acquired_at,omitempty" json:"acquired_at,omitempty"`
+	AcquiredAt   time.Time       `cbor:"acquired_at,omitempty" json:"acquired_at"`
 	AppId        entity.Id       `cbor:"app_id,omitempty" json:"app_id,omitempty"`
 	DiskId       entity.Id       `cbor:"disk_id" json:"disk_id"`
 	ErrorMessage string          `cbor:"error_message,omitempty" json:"error_message,omitempty"`
-	Mount        Mount           `cbor:"mount,omitempty" json:"mount,omitempty"`
+	Mount        Mount           `cbor:"mount,omitempty" json:"mount"`
 	NodeId       entity.Id       `cbor:"node_id" json:"node_id"`
 	SandboxId    entity.Id       `cbor:"sandbox_id,omitempty" json:"sandbox_id,omitempty"`
 	Status       DiskLeaseStatus `cbor:"status,omitempty" json:"status,omitempty"`

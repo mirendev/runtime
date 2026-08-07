@@ -893,11 +893,8 @@ func (c *SandboxController) checkNetworkHealth(ctx context.Context, sb *compute.
 
 	hasTCPPorts := false
 	for _, container := range sb.Spec.Container {
-		for _, p := range container.Port {
-			if portIsTCP(p) {
-				hasTCPPorts = true
-				break
-			}
+		if slices.ContainsFunc(container.Port, portIsTCP) {
+			hasTCPPorts = true
 		}
 		if hasTCPPorts {
 			break

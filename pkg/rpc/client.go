@@ -553,12 +553,7 @@ func (c *NetworkClient) HasMethod(ctx context.Context, method string) bool {
 	if err != nil {
 		return false
 	}
-	for _, m := range methods {
-		if m == method {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(methods, method)
 }
 
 // HasMethodParam reports whether the remote interface's method accepts a given
@@ -571,12 +566,7 @@ func (c *NetworkClient) HasMethodParam(ctx context.Context, method, param string
 	if err != nil {
 		return false
 	}
-	for _, p := range result.Params[method] {
-		if p == param {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(result.Params[method], param)
 }
 
 func (c *NetworkClient) requestReexportCapability(ctx context.Context, capa *Capability, target ed25519.PublicKey) (*Capability, error) {

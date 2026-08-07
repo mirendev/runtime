@@ -27,7 +27,7 @@ const (
 
 type Saga struct {
 	ID                entity.Id  `json:"id"`
-	CreatedAt         time.Time  `cbor:"created_at,omitempty" json:"created_at,omitempty"`
+	CreatedAt         time.Time  `cbor:"created_at,omitempty" json:"created_at"`
 	DefinitionName    string     `cbor:"definition_name,omitempty" json:"definition_name,omitempty"`
 	DefinitionVersion int64      `cbor:"definition_version,omitempty" json:"definition_version,omitempty"`
 	Error             string     `cbor:"error,omitempty" json:"error,omitempty"`
@@ -36,7 +36,7 @@ type Saga struct {
 	InitialInputs     []byte     `cbor:"initial_inputs,omitempty" json:"initial_inputs,omitempty"`
 	ParentExecutionId entity.Id  `cbor:"parent_execution_id,omitempty" json:"parent_execution_id,omitempty"`
 	Status            SagaStatus `cbor:"status,omitempty" json:"status,omitempty"`
-	UpdatedAt         time.Time  `cbor:"updated_at,omitempty" json:"updated_at,omitempty"`
+	UpdatedAt         time.Time  `cbor:"updated_at,omitempty" json:"updated_at"`
 }
 
 type SagaStatus string

@@ -425,7 +425,7 @@ func SafeWritePath(root, name string) (string, error) {
 	}
 
 	current := root
-	for _, part := range strings.Split(rel, string(filepath.Separator)) {
+	for part := range strings.SplitSeq(rel, string(filepath.Separator)) {
 		if part == "." || part == "" {
 			continue
 		}

@@ -54,7 +54,7 @@ func TestRuntimeMemory_Collect(t *testing.T) {
 	}
 
 	// Every series carries the control-process entity label.
-	for _, line := range strings.Split(strings.TrimSpace(receivedData), "\n") {
+	for line := range strings.SplitSeq(strings.TrimSpace(receivedData), "\n") {
 		if line == "" {
 			continue
 		}
@@ -65,8 +65,7 @@ func TestRuntimeMemory_Collect(t *testing.T) {
 func TestRuntimeMemory_MonitorNilWriterIsNoop(t *testing.T) {
 	rm := NewRuntimeMemory(testLogger(), nil)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	// With a nil Writer, Monitor must return immediately rather than block on
 	// its ticker, so this completes well within the timeout.

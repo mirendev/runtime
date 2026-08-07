@@ -237,10 +237,7 @@ func (c *ReconcileController) Start(top context.Context) error {
 					return
 				case <-time.After(retryDelay):
 					// Exponential backoff with max delay
-					retryDelay = retryDelay * 2
-					if retryDelay > maxRetryDelay {
-						retryDelay = maxRetryDelay
-					}
+					retryDelay = min(retryDelay*2, maxRetryDelay)
 				}
 			} else {
 				// Watch completed normally (shouldn't happen unless context cancelled)

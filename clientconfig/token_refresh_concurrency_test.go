@@ -115,9 +115,7 @@ func TestTokenForIdentityConcurrentRefresh(t *testing.T) {
 	// In-process goroutines, each with its own freshly-loaded Config (mirrors
 	// separate `m` invocations that share the on-disk config).
 	for range goroutines {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			cfg, err := LoadConfig()
 			if err != nil {
 				goroutineFailures.Add(1)
@@ -134,14 +132,12 @@ func TestTokenForIdentityConcurrentRefresh(t *testing.T) {
 				return
 			}
 			tokens <- tok
-		}()
+		})
 	}
 
 	// Subprocesses: prove the lock is cross-process, not just cross-goroutine.
 	for range subprocesses {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			cmd := exec.Command(os.Args[0], "-test.run=TestTokenForIdentityChildProcess")
 			cmd.Env = append(os.Environ(),
 				"MIREN_TEST_REFRESH_CHILD=1",
@@ -155,12 +151,12 @@ func TestTokenForIdentityConcurrentRefresh(t *testing.T) {
 				return
 			}
 			// Child prints the token on a line prefixed with TOKEN=.
-			for _, line := range strings.Split(string(out), "\n") {
+			for line := range strings.SplitSeq(string(out), "\n") {
 				if after, ok := strings.CutPrefix(line, "TOKEN="); ok {
 					tokens <- after
 				}
 			}
-		}()
+		})
 	}
 
 	wg.Wait()

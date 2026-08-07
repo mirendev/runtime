@@ -17,12 +17,10 @@ func TestSafeStatusChNoPanicOnConcurrentClose(t *testing.T) {
 
 	// Drain the channel so senders don't block forever.
 	var drainerWG sync.WaitGroup
-	drainerWG.Add(1)
-	go func() {
-		defer drainerWG.Done()
+	drainerWG.Go(func() {
 		for range s.ch {
 		}
-	}()
+	})
 
 	ctx := context.Background()
 

@@ -2,6 +2,7 @@ package commands
 
 import (
 	"os"
+	"slices"
 	"sort"
 	"strings"
 )
@@ -283,13 +284,7 @@ func looksLikeAppEnvVar(key string) bool {
 		"APPLICATION_SECRET",
 		"APP_SECRET",
 	}
-	for _, name := range standaloneNames {
-		if upperKey == name {
-			return true
-		}
-	}
-
-	return false
+	return slices.Contains(standaloneNames, upperKey)
 }
 
 // looksLikeSensitive guesses, from a key NAME alone, whether a var is likely a

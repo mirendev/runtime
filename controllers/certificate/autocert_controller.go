@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -413,10 +414,8 @@ func (c *AutocertController) dnsPointsToUs(domain string) bool {
 		if resolved == nil {
 			continue
 		}
-		for _, pub := range ips {
-			if resolved.Equal(pub) {
-				return true
-			}
+		if slices.ContainsFunc(ips, resolved.Equal) {
+			return true
 		}
 	}
 	return false

@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -49,8 +50,8 @@ type Data struct {
 
 type Result struct {
 	Metric map[string]string `json:"metric"`
-	Value  []interface{}     `json:"value,omitempty"`  // For instant queries: [timestamp, value_string]
-	Values [][]interface{}   `json:"values,omitempty"` // For range queries: [[timestamp, value_string], ...]
+	Value  []any             `json:"value,omitempty"`  // For instant queries: [timestamp, value_string]
+	Values [][]any           `json:"values,omitempty"` // For range queries: [[timestamp, value_string], ...]
 }
 
 // InstantQuery executes an instant MetricsQL query (point-in-time)
@@ -231,16 +232,17 @@ func buildMetricSelector(metricName string, labels map[string]string) string {
 		return metricName
 	}
 
-	selector := metricName + "{"
+	var selector strings.Builder
+	selector.WriteString(metricName + "{")
 	first := true
 	for k, v := range labels {
 		if !first {
-			selector += ","
+			selector.WriteString(",")
 		}
 		first = false
-		selector += fmt.Sprintf(`%s="%s"`, k, v)
+		fmt.Fprintf(&selector, `%s="%s"`, k, v)
 	}
-	selector += "}"
+	selector.WriteString("}")
 
-	return selector
+	return selector.String()
 }

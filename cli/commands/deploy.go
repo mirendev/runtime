@@ -865,9 +865,7 @@ func Deploy(ctx *Context, opts struct {
 		buildModel = initialModel(updateCh, buildCh, uploadProgressCh, cachedFiles, totalFiles, cachedBytes)
 		buildProg = tea.NewProgram(buildModel)
 
-		buildWG.Add(1)
-		go func() {
-			defer buildWG.Done()
+		buildWG.Go(func() {
 			fm, runErr := buildProg.Run()
 			buildFinalModel = fm
 			if runErr == nil {
@@ -878,7 +876,7 @@ func Deploy(ctx *Context, opts struct {
 				// UI died; ensure we don't keep uploading/building
 				cancelDeploy()
 			}
-		}()
+		})
 
 		// Progress handler for interactive mode
 		progressHandler := func(status *client.SolveStatus) error {

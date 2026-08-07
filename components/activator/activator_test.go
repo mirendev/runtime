@@ -1736,8 +1736,7 @@ func TestConcurrentPoolIncrement(t *testing.T) {
 // This prevents stale pool references from causing "pool has reached maximum size" errors.
 // Run with: ./hack/dev-exec go test -v -run TestWatchPoolsCleansUpCacheOnDeletion ./components/activator
 func TestWatchPoolsCleansUpCacheOnDeletion(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	// Use in-memory server with realistic WatchIndex implementation
 	server, cleanup := testutils.NewInMemEntityServer(t)
@@ -2509,8 +2508,7 @@ func TestEvictStaleVersionBindingsOnDereference(t *testing.T) {
 // the Update op this exercises (the same reason TestConcurrentPoolIncrement uses
 // the etcd server for real OCC semantics).
 func TestWatchPoolsEvictsStaleBindingOnDereference(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	server, cleanup := testutils.NewEtcdEntityServer(t)
 	defer cleanup()
@@ -2734,8 +2732,7 @@ func TestActivatorRefreshesStaleMaxPoolSizeCache(t *testing.T) {
 // TestWatchPoolsUpdatesDesiredInstances verifies that the watchPools goroutine
 // updates the in-memory cache when a pool's DesiredInstances changes externally.
 func TestWatchPoolsUpdatesDesiredInstances(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	server, cleanup := testutils.NewInMemEntityServer(t)
 	defer cleanup()

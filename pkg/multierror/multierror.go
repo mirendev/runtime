@@ -3,6 +3,7 @@ package multierror
 import (
 	"errors"
 	"slices"
+	"strings"
 )
 
 type MultiError struct {
@@ -10,11 +11,11 @@ type MultiError struct {
 }
 
 func (m *MultiError) Error() string {
-	var s string
+	var s strings.Builder
 	for _, err := range m.errors {
-		s += err.Error() + "\n"
+		s.WriteString(err.Error() + "\n")
 	}
-	return s
+	return s.String()
 }
 
 func (m *MultiError) Unwrap() []error {
@@ -26,12 +27,7 @@ func (m *MultiError) Errors() []error {
 }
 
 func (m *MultiError) Is(err error) bool {
-	for _, e := range m.errors {
-		if e == err {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(m.errors, err)
 }
 
 func (m *MultiError) As(target any) bool {

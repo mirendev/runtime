@@ -120,7 +120,7 @@ func audienceContains(claims jwt.MapClaims, expected string) bool {
 	switch v := aud.(type) {
 	case string:
 		return v == expected
-	case []interface{}:
+	case []any:
 		for _, a := range v {
 			if s, ok := a.(string); ok && s == expected {
 				return true
@@ -146,7 +146,7 @@ func mapClaimsToClaims(mc jwt.MapClaims) *Claims {
 	switch v := mc["aud"].(type) {
 	case string:
 		c.Audience = []string{v}
-	case []interface{}:
+	case []any:
 		for _, a := range v {
 			if s, ok := a.(string); ok {
 				c.Audience = append(c.Audience, s)
@@ -304,7 +304,7 @@ func (v *Validator) fetchJWKS(ctx context.Context, jwksURI string) (*jose.JSONWe
 }
 
 func makeKeyFunc(jwks *jose.JSONWebKeySet) jwt.Keyfunc {
-	return func(token *jwt.Token) (interface{}, error) {
+	return func(token *jwt.Token) (any, error) {
 		kid, ok := token.Header["kid"].(string)
 		if ok {
 			keys := jwks.Key(kid)

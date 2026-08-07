@@ -85,7 +85,7 @@ func (s *Server) ReportSpans(ctx context.Context, state *telemetry_v1alpha.Telem
 // key1=value1,key2=value2
 func parseOTLPHeaders(raw string) map[string]string {
 	headers := make(map[string]string)
-	for _, pair := range strings.Split(raw, ",") {
+	for pair := range strings.SplitSeq(raw, ",") {
 		k, v, ok := strings.Cut(strings.TrimSpace(pair), "=")
 		if ok {
 			headers[strings.TrimSpace(k)] = strings.TrimSpace(v)

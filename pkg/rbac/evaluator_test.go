@@ -112,7 +112,7 @@ func TestEvaluatorWithTags(t *testing.T) {
 				Groups:   []string{"admins"},
 				Resource: "secrets/private",
 				Action:   "delete",
-				Tags: map[string]interface{}{
+				Tags: map[string]any{
 					"environment": "production",
 					"cluster":     "prod-1",
 				},
@@ -126,7 +126,7 @@ func TestEvaluatorWithTags(t *testing.T) {
 				Groups:   []string{"admins"},
 				Resource: "secrets/private",
 				Action:   "delete",
-				Tags: map[string]interface{}{
+				Tags: map[string]any{
 					"environment": "development",
 					"cluster":     "dev-1",
 				},
@@ -140,7 +140,7 @@ func TestEvaluatorWithTags(t *testing.T) {
 				Groups:   []string{"developers"},
 				Resource: "apps/myapp",
 				Action:   "write",
-				Tags: map[string]interface{}{
+				Tags: map[string]any{
 					"environment": "development",
 					"cluster":     "dev-1",
 				},
@@ -154,7 +154,7 @@ func TestEvaluatorWithTags(t *testing.T) {
 				Groups:   []string{"developers"},
 				Resource: "apps/myapp",
 				Action:   "write",
-				Tags: map[string]interface{}{
+				Tags: map[string]any{
 					"environment": "production",
 					"cluster":     "prod-1",
 				},
@@ -168,7 +168,7 @@ func TestEvaluatorWithTags(t *testing.T) {
 				Groups:   []string{"viewers"},
 				Resource: "apps/myapp",
 				Action:   "read",
-				Tags: map[string]interface{}{
+				Tags: map[string]any{
 					"environment": "production",
 					"cluster":     "prod-1",
 				},
@@ -182,7 +182,7 @@ func TestEvaluatorWithTags(t *testing.T) {
 				Groups:   []string{"viewers"},
 				Resource: "apps/myapp",
 				Action:   "write",
-				Tags: map[string]interface{}{
+				Tags: map[string]any{
 					"environment": "development",
 					"cluster":     "dev-1",
 				},
@@ -196,7 +196,7 @@ func TestEvaluatorWithTags(t *testing.T) {
 				Groups:   []string{"unknown-group"},
 				Resource: "apps/myapp",
 				Action:   "read",
-				Tags: map[string]interface{}{
+				Tags: map[string]any{
 					"environment": "development",
 					"cluster":     "dev-1",
 				},
@@ -219,7 +219,7 @@ func TestRuleTagMatching(t *testing.T) {
 	tests := []struct {
 		name        string
 		rule        Rule
-		tags        map[string]interface{}
+		tags        map[string]any
 		shouldMatch bool
 	}{
 		{
@@ -232,7 +232,7 @@ func TestRuleTagMatching(t *testing.T) {
 					},
 				},
 			},
-			tags: map[string]interface{}{
+			tags: map[string]any{
 				"env":     "prod",
 				"cluster": "us-west",
 			},
@@ -247,7 +247,7 @@ func TestRuleTagMatching(t *testing.T) {
 					},
 				},
 			},
-			tags: map[string]interface{}{
+			tags: map[string]any{
 				"env": "prod",
 			},
 			shouldMatch: true,
@@ -261,7 +261,7 @@ func TestRuleTagMatching(t *testing.T) {
 					},
 				},
 			},
-			tags: map[string]interface{}{
+			tags: map[string]any{
 				"cluster": "any-value",
 			},
 			shouldMatch: true,
@@ -275,7 +275,7 @@ func TestRuleTagMatching(t *testing.T) {
 					},
 				},
 			},
-			tags: map[string]interface{}{
+			tags: map[string]any{
 				"env": "prod",
 			},
 			shouldMatch: true,
@@ -289,7 +289,7 @@ func TestRuleTagMatching(t *testing.T) {
 					},
 				},
 			},
-			tags: map[string]interface{}{
+			tags: map[string]any{
 				"env": "staging",
 			},
 			shouldMatch: true,
@@ -303,7 +303,7 @@ func TestRuleTagMatching(t *testing.T) {
 					},
 				},
 			},
-			tags: map[string]interface{}{
+			tags: map[string]any{
 				"env": "staging",
 			},
 			shouldMatch: true,
@@ -317,7 +317,7 @@ func TestRuleTagMatching(t *testing.T) {
 					},
 				},
 			},
-			tags: map[string]interface{}{
+			tags: map[string]any{
 				"env": "prod",
 			},
 			shouldMatch: true,
@@ -331,7 +331,7 @@ func TestRuleTagMatching(t *testing.T) {
 					},
 				},
 			},
-			tags:        map[string]interface{}{},
+			tags:        map[string]any{},
 			shouldMatch: false,
 		},
 		{
@@ -343,7 +343,7 @@ func TestRuleTagMatching(t *testing.T) {
 					},
 				},
 			},
-			tags: map[string]interface{}{
+			tags: map[string]any{
 				"env":     "prod",
 				"cluster": "us-west",
 				"extra":   "value",
@@ -359,7 +359,7 @@ func TestRuleTagMatching(t *testing.T) {
 					},
 				},
 			},
-			tags: map[string]interface{}{
+			tags: map[string]any{
 				"env": "dev",
 			},
 			shouldMatch: false,
@@ -369,7 +369,7 @@ func TestRuleTagMatching(t *testing.T) {
 			rule: Rule{
 				TagSelector: TagSelector{},
 			},
-			tags: map[string]interface{}{
+			tags: map[string]any{
 				"any": "value",
 			},
 			shouldMatch: true,
@@ -385,7 +385,7 @@ func TestRuleTagMatching(t *testing.T) {
 					},
 				},
 			},
-			tags: map[string]interface{}{
+			tags: map[string]any{
 				"env":    "prod",
 				"region": "us-west",
 			},
@@ -396,11 +396,11 @@ func TestRuleTagMatching(t *testing.T) {
 			rule: Rule{
 				TagSelector: TagSelector{
 					Expressions: []TagExpression{
-						{Tag: "port", Value: []interface{}{80, 443, 8080}, Operator: "in"},
+						{Tag: "port", Value: []any{80, 443, 8080}, Operator: "in"},
 					},
 				},
 			},
-			tags: map[string]interface{}{
+			tags: map[string]any{
 				"port": 443,
 			},
 			shouldMatch: true,
@@ -512,7 +512,7 @@ func TestEvaluatorCache(t *testing.T) {
 		Groups:   []string{"test-group"},
 		Resource: "test/resource",
 		Action:   "read",
-		Tags:     map[string]interface{}{},
+		Tags:     map[string]any{},
 	}
 
 	// First evaluation
@@ -546,7 +546,7 @@ func TestEvaluatorWithNoPolicy(t *testing.T) {
 		Groups:   []string{"test-group"},
 		Resource: "test/resource",
 		Action:   "read",
-		Tags:     map[string]interface{}{},
+		Tags:     map[string]any{},
 	}
 
 	decision := eval.Evaluate(req)

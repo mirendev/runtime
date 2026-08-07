@@ -209,12 +209,10 @@ func (w *Watcher) Start(ctx context.Context) error {
 		runCtx, cancel := context.WithCancel(ctx)
 		w.cancel = cancel
 
-		w.wg.Add(1)
-		go func() {
-			defer w.wg.Done()
+		w.wg.Go(func() {
 			defer w.closeUpdates()
 			w.run(runCtx)
-		}()
+		})
 	})
 
 	return nil
@@ -455,10 +453,7 @@ func (w *Watcher) sleep(ctx context.Context, backoff *time.Duration) bool {
 	case <-ctx.Done():
 		return false
 	case <-time.After(*backoff):
-		next := *backoff * 2
-		if next > w.opts.MaxBackoff {
-			next = w.opts.MaxBackoff
-		}
+		next := min(*backoff*2, w.opts.MaxBackoff)
 		*backoff = next
 		return true
 	}

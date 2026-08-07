@@ -76,7 +76,7 @@ func WithDaemon() CommandOption {
 
 // Infer creates a command from a function with the signature:
 // func(ctx *Context, opts StructType) error
-func Infer(name, syn string, f interface{}, opts ...CommandOption) *Cmd {
+func Infer(name, syn string, f any, opts ...CommandOption) *Cmd {
 	rv := reflect.ValueOf(f)
 
 	if rv.Kind() != reflect.Func {

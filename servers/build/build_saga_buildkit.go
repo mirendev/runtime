@@ -211,8 +211,8 @@ func (b *Builder) runBuildkitBuild(
 		}
 		for _, log := range ss.Logs {
 			if log.Data != nil {
-				lines := strings.Split(string(log.Data), "\n")
-				for _, line := range lines {
+				lines := strings.SplitSeq(string(log.Data), "\n")
+				for line := range lines {
 					line = strings.TrimRight(line, " \t\r\n")
 					if strings.TrimSpace(line) != "" {
 						buildLog.write(line)

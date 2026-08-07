@@ -771,7 +771,7 @@ const (
 
 type Lease struct {
 	ID            entity.Id `json:"id"`
-	LastHeartbeat time.Time `cbor:"last_heartbeat,omitempty" json:"last_heartbeat,omitempty"`
+	LastHeartbeat time.Time `cbor:"last_heartbeat,omitempty" json:"last_heartbeat"`
 	Project       entity.Id `cbor:"project,omitempty" json:"project,omitempty"`
 	Sandbox       entity.Id `cbor:"sandbox,omitempty" json:"sandbox,omitempty"`
 }
@@ -860,7 +860,7 @@ type Node struct {
 	ApiAddress   string         `cbor:"api_address,omitempty" json:"api_address,omitempty"`
 	Constraints  types.Labels   `cbor:"constraints,omitempty" json:"constraints,omitempty"`
 	Name         string         `cbor:"name,omitempty" json:"name,omitempty"`
-	RegisteredAt time.Time      `cbor:"registered_at,omitempty" json:"registered_at,omitempty"`
+	RegisteredAt time.Time      `cbor:"registered_at,omitempty" json:"registered_at"`
 	RunnerId     string         `cbor:"runner_id,omitempty" json:"runner_id,omitempty"`
 	Scheduling   NodeScheduling `cbor:"scheduling,omitempty" json:"scheduling,omitempty"`
 	Status       NodeStatus     `cbor:"status,omitempty" json:"status,omitempty"`
@@ -1036,12 +1036,12 @@ type Sandbox struct {
 	Container    []Container   `cbor:"container" json:"container"`
 	HostNetwork  bool          `cbor:"hostNetwork,omitempty" json:"hostNetwork,omitempty"`
 	Labels       []string      `cbor:"labels,omitempty" json:"labels,omitempty"`
-	LastActivity time.Time     `cbor:"last_activity,omitempty" json:"last_activity,omitempty"`
+	LastActivity time.Time     `cbor:"last_activity,omitempty" json:"last_activity"`
 	LogAttribute types.Labels  `cbor:"logAttribute,omitempty" json:"logAttribute,omitempty"`
 	LogEntity    string        `cbor:"logEntity,omitempty" json:"logEntity,omitempty"`
 	Network      []Network     `cbor:"network,omitempty" json:"network,omitempty"`
 	Route        []Route       `cbor:"route,omitempty" json:"route,omitempty"`
-	Spec         SandboxSpec   `cbor:"spec,omitempty" json:"spec,omitempty"`
+	Spec         SandboxSpec   `cbor:"spec,omitempty" json:"spec"`
 	StaticHost   []StaticHost  `cbor:"static_host,omitempty" json:"static_host,omitempty"`
 	Status       SandboxStatus `cbor:"status,omitempty" json:"status,omitempty"`
 	Volume       []Volume      `cbor:"volume,omitempty" json:"volume,omitempty"`
@@ -1892,16 +1892,16 @@ type SandboxPool struct {
 	ID                    entity.Id    `json:"id"`
 	App                   entity.Id    `cbor:"app,omitempty" json:"app,omitempty"`
 	ConsecutiveCrashCount int64        `cbor:"consecutive_crash_count,omitempty" json:"consecutive_crash_count,omitempty"`
-	CooldownUntil         time.Time    `cbor:"cooldown_until,omitempty" json:"cooldown_until,omitempty"`
+	CooldownUntil         time.Time    `cbor:"cooldown_until,omitempty" json:"cooldown_until"`
 	CurrentInstances      int64        `cbor:"current_instances,omitempty" json:"current_instances,omitempty"`
 	DesiredInstances      int64        `cbor:"desired_instances,omitempty" json:"desired_instances,omitempty"`
 	Ephemeral             bool         `cbor:"ephemeral,omitempty" json:"ephemeral,omitempty"`
-	LastCrashTime         time.Time    `cbor:"last_crash_time,omitempty" json:"last_crash_time,omitempty"`
+	LastCrashTime         time.Time    `cbor:"last_crash_time,omitempty" json:"last_crash_time"`
 	ReadyInstances        int64        `cbor:"ready_instances,omitempty" json:"ready_instances,omitempty"`
 	ReferencedByVersions  []entity.Id  `cbor:"referenced_by_versions,omitempty" json:"referenced_by_versions,omitempty"`
 	SandboxLabels         types.Labels `cbor:"sandbox_labels,omitempty" json:"sandbox_labels,omitempty"`
 	SandboxPrefix         string       `cbor:"sandbox_prefix,omitempty" json:"sandbox_prefix,omitempty"`
-	SandboxSpec           SandboxSpec  `cbor:"sandbox_spec,omitempty" json:"sandbox_spec,omitempty"`
+	SandboxSpec           SandboxSpec  `cbor:"sandbox_spec,omitempty" json:"sandbox_spec"`
 	Service               string       `cbor:"service,omitempty" json:"service,omitempty"`
 }
 
@@ -2075,7 +2075,7 @@ const (
 
 type Schedule struct {
 	ID  entity.Id `json:"id"`
-	Key Key       `cbor:"key,omitempty" json:"key,omitempty"`
+	Key Key       `cbor:"key,omitempty" json:"key"`
 }
 
 func (o *Schedule) Decode(e entity.AttrGetter) {

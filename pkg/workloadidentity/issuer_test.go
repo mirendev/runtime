@@ -76,7 +76,7 @@ func TestIssueToken(t *testing.T) {
 	require.NotEmpty(t, tokenStr)
 
 	// Parse and verify the token
-	token, err := jwt.ParseWithClaims(tokenStr, &WorkloadClaims{}, func(tok *jwt.Token) (interface{}, error) {
+	token, err := jwt.ParseWithClaims(tokenStr, &WorkloadClaims{}, func(tok *jwt.Token) (any, error) {
 		assert.Equal(t, jwt.SigningMethodRS256, tok.Method)
 		assert.Equal(t, iss.primary.kid, tok.Header["kid"])
 		return iss.primary.public, nil
@@ -121,7 +121,7 @@ func TestIssueToken_NoOrg(t *testing.T) {
 	tokenStr, err := iss.IssueToken("myapp", "sandbox-789")
 	require.NoError(t, err)
 
-	token, err := jwt.ParseWithClaims(tokenStr, &WorkloadClaims{}, func(tok *jwt.Token) (interface{}, error) {
+	token, err := jwt.ParseWithClaims(tokenStr, &WorkloadClaims{}, func(tok *jwt.Token) (any, error) {
 		return iss.primary.public, nil
 	})
 	require.NoError(t, err)
@@ -144,7 +144,7 @@ func TestIssueToken_NoApp(t *testing.T) {
 	tokenStr, err := iss.IssueToken("", "sandbox-789")
 	require.NoError(t, err)
 
-	token, err := jwt.ParseWithClaims(tokenStr, &WorkloadClaims{}, func(tok *jwt.Token) (interface{}, error) {
+	token, err := jwt.ParseWithClaims(tokenStr, &WorkloadClaims{}, func(tok *jwt.Token) (any, error) {
 		return iss.primary.public, nil
 	})
 	require.NoError(t, err)
@@ -241,7 +241,7 @@ func TestJWKSDocument_WithPreviousKey(t *testing.T) {
 	tokenStr, err := iss2.IssueToken("myapp", "sb-1")
 	require.NoError(t, err)
 
-	_, err = jwt.Parse(tokenStr, func(tok *jwt.Token) (interface{}, error) {
+	_, err = jwt.Parse(tokenStr, func(tok *jwt.Token) (any, error) {
 		kid := tok.Header["kid"].(string)
 		keys := jwks.Key(kid)
 		require.NotEmpty(t, keys)
@@ -253,7 +253,7 @@ func TestJWKSDocument_WithPreviousKey(t *testing.T) {
 	oldTokenStr, err := iss1.IssueToken("myapp", "sb-2")
 	require.NoError(t, err)
 
-	_, err = jwt.Parse(oldTokenStr, func(tok *jwt.Token) (interface{}, error) {
+	_, err = jwt.Parse(oldTokenStr, func(tok *jwt.Token) (any, error) {
 		kid := tok.Header["kid"].(string)
 		keys := jwks.Key(kid)
 		require.NotEmpty(t, keys)
@@ -276,7 +276,7 @@ func TestIssueTokenWithOptions_CustomAudience(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	token, err := jwt.ParseWithClaims(tokenStr, &WorkloadClaims{}, func(tok *jwt.Token) (interface{}, error) {
+	token, err := jwt.ParseWithClaims(tokenStr, &WorkloadClaims{}, func(tok *jwt.Token) (any, error) {
 		return iss.primary.public, nil
 	})
 	require.NoError(t, err)
@@ -299,7 +299,7 @@ func TestIssueTokenWithOptions_CustomTTL(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	token, err := jwt.ParseWithClaims(tokenStr, &WorkloadClaims{}, func(tok *jwt.Token) (interface{}, error) {
+	token, err := jwt.ParseWithClaims(tokenStr, &WorkloadClaims{}, func(tok *jwt.Token) (any, error) {
 		return iss.primary.public, nil
 	})
 	require.NoError(t, err)
@@ -325,7 +325,7 @@ func TestIssueTokenWithOptions_TTLClamping(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	token, err := jwt.ParseWithClaims(tokenStr, &WorkloadClaims{}, func(tok *jwt.Token) (interface{}, error) {
+	token, err := jwt.ParseWithClaims(tokenStr, &WorkloadClaims{}, func(tok *jwt.Token) (any, error) {
 		return iss.primary.public, nil
 	})
 	require.NoError(t, err)
@@ -341,7 +341,7 @@ func TestIssueTokenWithOptions_TTLClamping(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	token2, err := jwt.ParseWithClaims(tokenStr2, &WorkloadClaims{}, func(tok *jwt.Token) (interface{}, error) {
+	token2, err := jwt.ParseWithClaims(tokenStr2, &WorkloadClaims{}, func(tok *jwt.Token) (any, error) {
 		return iss.primary.public, nil
 	})
 	require.NoError(t, err)
@@ -424,7 +424,7 @@ func TestNewIssuer_MigratesLegacyEdDSAKey(t *testing.T) {
 	assert.Equal(t, []any{"RS256", "EdDSA"}, doc["id_token_signing_alg_values_supported"])
 
 	// The freshly minted token verifies under the active RS256 JWK.
-	_, err = jwt.Parse(tokenStr, func(tok *jwt.Token) (interface{}, error) {
+	_, err = jwt.Parse(tokenStr, func(tok *jwt.Token) (any, error) {
 		return jwks.Key(tok.Header["kid"].(string))[0].Key, nil
 	})
 	require.NoError(t, err)
@@ -499,7 +499,7 @@ func TestNewIssuer_LoadsDirectoryKeys(t *testing.T) {
 	assert.Equal(t, iss.primary.kid, parsed.Header["kid"])
 
 	// The token verifies under the primary JWK from JWKS.
-	_, err = jwt.Parse(tokenStr, func(tok *jwt.Token) (interface{}, error) {
+	_, err = jwt.Parse(tokenStr, func(tok *jwt.Token) (any, error) {
 		return jwks.Key(tok.Header["kid"].(string))[0].Key, nil
 	})
 	require.NoError(t, err)

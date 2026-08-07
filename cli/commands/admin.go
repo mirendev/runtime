@@ -179,7 +179,7 @@ func Admin(ctx *Context, opts struct {
 
 	// Print result
 	if result.Result().HasResult() && result.Result().Result() != "" {
-		var prettyResult interface{}
+		var prettyResult any
 		if err := json.Unmarshal([]byte(result.Result().Result()), &prettyResult); err == nil {
 			if usePretty {
 				ctx.Printf("%s", renderPretty(prettyResult))
@@ -411,7 +411,7 @@ func looksLikeNumber(s string) bool {
 }
 
 // validateAdminCall fetches method introspection and validates the method and parameters
-func validateAdminCall(ctx *Context, client *admin_v1alpha.AdminClient, app, method string, params map[string]interface{}) error {
+func validateAdminCall(ctx *Context, client *admin_v1alpha.AdminClient, app, method string, params map[string]any) error {
 	// Fetch available methods
 	result, err := client.ListMethods(ctx, app)
 	if err != nil {
@@ -633,7 +633,7 @@ var (
 )
 
 // highlightJSON recursively renders a JSON value with syntax highlighting
-func highlightJSON(v interface{}, indent int) string {
+func highlightJSON(v any, indent int) string {
 	indentStr := strings.Repeat("  ", indent)
 	nextIndent := strings.Repeat("  ", indent+1)
 
@@ -658,7 +658,7 @@ func highlightJSON(v interface{}, indent int) string {
 		escaped, _ := json.Marshal(val)
 		return jsonStringStyle.Render(string(escaped))
 
-	case []interface{}:
+	case []any:
 		if len(val) == 0 {
 			return jsonBracket.Render("[]")
 		}
@@ -680,7 +680,7 @@ func highlightJSON(v interface{}, indent int) string {
 		sb.WriteString(jsonBracket.Render("]"))
 		return sb.String()
 
-	case map[string]interface{}:
+	case map[string]any:
 		if len(val) == 0 {
 			return jsonBracket.Render("{}")
 		}
@@ -720,25 +720,25 @@ func highlightJSON(v interface{}, indent int) string {
 }
 
 // renderPretty renders data in a human-friendly format
-func renderPretty(v interface{}) string {
+func renderPretty(v any) string {
 	var sb strings.Builder
 
 	switch val := v.(type) {
-	case map[string]interface{}:
+	case map[string]any:
 		// Separate simple values from tables
 		var simpleKeys []string
 		var tableKeys []string
 		tableData := make(map[string]struct {
-			arr  []interface{}
+			arr  []any
 			keys []string
 		})
 
 		for key, value := range val {
-			if arr, ok := value.([]interface{}); ok {
+			if arr, ok := value.([]any); ok {
 				if keys := getUniformObjectKeys(arr); keys != nil {
 					tableKeys = append(tableKeys, key)
 					tableData[key] = struct {
-						arr  []interface{}
+						arr  []any
 						keys []string
 					}{arr, keys}
 					continue
@@ -778,7 +778,7 @@ func renderPretty(v interface{}) string {
 			}
 		}
 
-	case []interface{}:
+	case []any:
 		// Check if it's an array of uniform objects
 		if keys := getUniformObjectKeys(val); keys != nil {
 			sb.WriteString(renderTable(val, keys))
@@ -801,7 +801,7 @@ func renderPretty(v interface{}) string {
 
 // getUniformObjectKeys checks if all items in an array are objects with the same keys
 // Returns the sorted keys if uniform, nil otherwise
-func getUniformObjectKeys(arr []interface{}) []string {
+func getUniformObjectKeys(arr []any) []string {
 	if len(arr) == 0 {
 		return nil
 	}
@@ -809,7 +809,7 @@ func getUniformObjectKeys(arr []interface{}) []string {
 	var referenceKeys []string
 
 	for i, item := range arr {
-		obj, ok := item.(map[string]interface{})
+		obj, ok := item.(map[string]any)
 		if !ok {
 			return nil // Not an object
 		}
@@ -839,7 +839,7 @@ func getUniformObjectKeys(arr []interface{}) []string {
 }
 
 // renderTable renders an array of uniform objects as a table using ui.Table
-func renderTable(arr []interface{}, keys []string) string {
+func renderTable(arr []any, keys []string) string {
 	if len(arr) == 0 || len(keys) == 0 {
 		return ""
 	}
@@ -853,7 +853,7 @@ func renderTable(arr []interface{}, keys []string) string {
 	// Build rows
 	rows := make([]ui.Row, len(arr))
 	for i, item := range arr {
-		obj := item.(map[string]interface{})
+		obj := item.(map[string]any)
 		row := make(ui.Row, len(keys))
 		for j, key := range keys {
 			row[j] = formatCellValue(obj[key])
@@ -893,7 +893,7 @@ func formatKeyAsTitle(key string) string {
 }
 
 // formatCellValue formats a value for display in a table cell
-func formatCellValue(v interface{}) string {
+func formatCellValue(v any) string {
 	switch val := v.(type) {
 	case nil:
 		return "-"
@@ -916,7 +916,7 @@ func formatCellValue(v interface{}) string {
 }
 
 // renderPrettyValue renders a single value for pretty output with styling
-func renderPrettyValue(v interface{}) string {
+func renderPrettyValue(v any) string {
 	switch val := v.(type) {
 	case nil:
 		return jsonNullStyle.Render("-")
@@ -932,13 +932,13 @@ func renderPrettyValue(v interface{}) string {
 		return jsonNumberStyle.Render(fmt.Sprintf("%g", val))
 	case string:
 		return jsonStringStyle.Render(val)
-	case []interface{}:
+	case []any:
 		if len(val) == 0 {
 			return jsonNullStyle.Render("(empty)")
 		}
 		// For arrays, show count
 		return fmt.Sprintf("(%d items)", len(val))
-	case map[string]interface{}:
+	case map[string]any:
 		// For nested objects, show inline
 		parts := make([]string, 0, len(val))
 		for k, v := range val {

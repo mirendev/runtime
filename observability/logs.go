@@ -491,7 +491,7 @@ func (l *LogReader) parseLogStream(ctx context.Context, body io.Reader, logCh ch
 }
 
 func (l *LogReader) parseLogLine(line []byte) (LogEntry, error) {
-	var logData map[string]interface{}
+	var logData map[string]any
 	if err := json.Unmarshal(line, &logData); err != nil {
 		return LogEntry{}, err
 	}
@@ -576,8 +576,8 @@ func (l *LogReader) executeQuery(ctx context.Context, query string, limit int, s
 	}
 
 	// Split by newlines and parse each line
-	lines := bytes.Split(body, []byte("\n"))
-	for _, line := range lines {
+	lines := bytes.SplitSeq(body, []byte("\n"))
+	for line := range lines {
 		line = bytes.TrimSpace(line)
 		if len(line) == 0 {
 			continue

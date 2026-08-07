@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"time"
 
@@ -860,13 +861,7 @@ func (r *AppInfo) Restart(ctx context.Context, state *app_v1alpha.CrudRestart) e
 		// during crash cooldown. Only do this for pools that reference the
 		// active version — stale pools from old deployments were intentionally
 		// scaled to 0 and should not be resurrected.
-		isActivePool := false
-		for _, ref := range pool.ReferencedByVersions {
-			if ref == appRec.ActiveVersion {
-				isActivePool = true
-				break
-			}
-		}
+		isActivePool := slices.Contains(pool.ReferencedByVersions, appRec.ActiveVersion)
 		if isActivePool && configSpec != nil {
 			svcConc, err := coreutil.GetServiceConcurrency(configSpec, pool.Service)
 			if err == nil && svcConc.Mode == "fixed" && svcConc.NumInstances > 0 {

@@ -145,8 +145,7 @@ func TestWatcher_InitialSyncSnapshot(t *testing.T) {
 	}
 
 	sc := newTestClient(store)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	w := indexwatch.New(sc, testIndex(), fastOpts())
 	r.NoError(w.Start(ctx))
@@ -175,8 +174,7 @@ func TestWatcher_LiveEvents(t *testing.T) {
 	chans := gatedWatch(store)
 	sc := newTestClient(store)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	w := indexwatch.New(sc, testIndex(), fastOpts())
 	r.NoError(w.Start(ctx))
@@ -221,8 +219,7 @@ func TestWatcher_ResumeFromCursorNoResnapshot(t *testing.T) {
 	chans := gatedWatch(store)
 	sc := newTestClient(store)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	w := indexwatch.New(sc, testIndex(), fastOpts())
 	r.NoError(w.Start(ctx))
@@ -265,8 +262,7 @@ func TestWatcher_CompactionResnapshot(t *testing.T) {
 	r.NoError(err)
 
 	sc := newTestClient(store)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	w := indexwatch.New(sc, testIndex(), fastOpts())
 	r.NoError(w.Start(ctx))
@@ -301,8 +297,7 @@ func TestWatcher_ProgressAdvancesCursor(t *testing.T) {
 	chans := gatedWatch(store)
 	sc := newTestClient(store)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	w := indexwatch.New(sc, testIndex(), fastOpts())
 	r.NoError(w.Start(ctx))
@@ -343,8 +338,7 @@ func TestWatcher_CreatedResponseDoesNotAdvanceCursor(t *testing.T) {
 	chans := gatedWatch(store)
 	sc := newTestClient(store)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	w := indexwatch.New(sc, testIndex(), fastOpts())
 	r.NoError(w.Start(ctx))
@@ -384,8 +378,7 @@ func TestWatcher_BlockingBackpressure(t *testing.T) {
 	chans := gatedWatch(store)
 	sc := newTestClient(store)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	opts := fastOpts()
 	opts.BufferSize = 1

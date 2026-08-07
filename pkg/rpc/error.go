@@ -158,7 +158,7 @@ func NewResolveError(kind ResolveErrorKind, err error, msg string) error {
 }
 
 // NewResolveHTTPError creates an HTTP request error
-func NewResolveHTTPError(err error, format string, args ...interface{}) error {
+func NewResolveHTTPError(err error, format string, args ...any) error {
 	return &ResolveError{
 		Kind: ResolveHTTPError,
 		Err:  err,

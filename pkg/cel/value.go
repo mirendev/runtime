@@ -55,7 +55,7 @@ func NewEmptyDynValue() *DynValue {
 }
 
 // NewDynValue returns a DynValue that corresponds to a parse node id and value.
-func NewDynValue(id int64, val interface{}) (*DynValue, error) {
+func NewDynValue(id int64, val any) (*DynValue, error) {
 	dv := &DynValue{ID: id}
 	err := dv.SetValue(val)
 	return dv, err
@@ -67,7 +67,7 @@ func NewDynValue(id int64, val interface{}) (*DynValue, error) {
 type DynValue struct {
 	ID          int64
 	EncodeStyle EncodeStyle
-	value       interface{}
+	value       any
 	exprValue   ref.Val
 	declType    *DeclType
 }
@@ -82,7 +82,7 @@ func (dv *DynValue) DeclType() *DeclType {
 //
 // The default behavior of this method is to first convert to a CEL type which has a well-defined
 // set of conversion behaviors and proxy to the CEL ConvertToNative method for the type.
-func (dv *DynValue) ConvertToNative(typeDesc reflect.Type) (interface{}, error) {
+func (dv *DynValue) ConvertToNative(typeDesc reflect.Type) (any, error) {
 	ev := dv.ExprValue()
 	if types.IsError(ev) {
 		return nil, ev.(*types.Err)
@@ -122,12 +122,12 @@ func (dv *DynValue) ExprValue() ref.Val {
 }
 
 // Value returns the underlying value held by this reference.
-func (dv *DynValue) Value() interface{} {
+func (dv *DynValue) Value() any {
 	return dv.value
 }
 
 // SetValue updates the underlying value held by this reference.
-func (dv *DynValue) SetValue(value interface{}) error {
+func (dv *DynValue) SetValue(value any) error {
 	dv.value = value
 	var err error
 	dv.exprValue, dv.declType, err = exprValue(value)
@@ -139,7 +139,7 @@ func (dv *DynValue) Type() ref.Type {
 	return dv.ExprValue().Type()
 }
 
-func exprValue(value interface{}) (ref.Val, *DeclType, error) {
+func exprValue(value any) (ref.Val, *DeclType, error) {
 	switch v := value.(type) {
 	case bool:
 		return types.Bool(v), BoolType, nil
@@ -199,7 +199,7 @@ func (sv *structValue) AddField(field *Field) {
 }
 
 // ConvertToNative converts the MapValue type to a native go types.
-func (sv *structValue) ConvertToNative(typeDesc reflect.Type) (interface{}, error) {
+func (sv *structValue) ConvertToNative(typeDesc reflect.Type) (any, error) {
 	if typeDesc.Kind() != reflect.Map &&
 		typeDesc.Kind() != reflect.Struct &&
 		typeDesc.Kind() != reflect.Pointer &&
@@ -353,7 +353,7 @@ func (o *ObjectValue) Type() ref.Type {
 }
 
 // Value returns the Go-native representation of the object.
-func (o *ObjectValue) Value() interface{} {
+func (o *ObjectValue) Value() any {
 	return o
 }
 
@@ -477,7 +477,7 @@ func (m *MapValue) Type() ref.Type {
 }
 
 // Value returns the Go-native representation of the MapValue.
-func (m *MapValue) Value() interface{} {
+func (m *MapValue) Value() any {
 	return m
 }
 
@@ -602,7 +602,7 @@ func (lv *ListValue) Contains(val ref.Val) ref.Val {
 
 // ConvertToNative is an implementation of the CEL ref.Val method used to adapt between CEL types
 // and Go-native array-like types.
-func (lv *ListValue) ConvertToNative(typeDesc reflect.Type) (interface{}, error) {
+func (lv *ListValue) ConvertToNative(typeDesc reflect.Type) (any, error) {
 	// Non-list conversion.
 	if typeDesc.Kind() != reflect.Slice &&
 		typeDesc.Kind() != reflect.Array &&
@@ -697,7 +697,7 @@ func (lv *ListValue) Type() ref.Type {
 }
 
 // Value returns the Go-native value.
-func (lv *ListValue) Value() interface{} {
+func (lv *ListValue) Value() any {
 	return lv
 }
 
@@ -719,7 +719,7 @@ func (lv *ListValue) finalizeValueSet() {
 
 type baseVal struct{}
 
-func (*baseVal) ConvertToNative(typeDesc reflect.Type) (interface{}, error) {
+func (*baseVal) ConvertToNative(typeDesc reflect.Type) (any, error) {
 	return nil, fmt.Errorf("unsupported native conversion to: %v", typeDesc)
 }
 
@@ -731,7 +731,7 @@ func (*baseVal) Equal(other ref.Val) ref.Val {
 	return types.NewErr("unsupported equality test between instances")
 }
 
-func (v *baseVal) Value() interface{} {
+func (v *baseVal) Value() any {
 	return nil
 }
 

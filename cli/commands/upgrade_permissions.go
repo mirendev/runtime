@@ -122,8 +122,8 @@ func ensureUserInstallDir(installPath string) (needsPathUpdate bool, err error) 
 
 	// Check if the directory is in PATH
 	pathEnv := os.Getenv("PATH")
-	paths := strings.Split(pathEnv, ":")
-	for _, p := range paths {
+	paths := strings.SplitSeq(pathEnv, ":")
+	for p := range paths {
 		if p == dir {
 			return false, nil
 		}

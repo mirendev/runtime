@@ -36,8 +36,8 @@ func CollectSystemStats(dataPath string) ResourceUsage {
 	meminfoBytes, err := os.ReadFile("/proc/meminfo")
 	if err == nil {
 		var memTotal, memAvailable int64
-		lines := strings.Split(string(meminfoBytes), "\n")
-		for _, line := range lines {
+		lines := strings.SplitSeq(string(meminfoBytes), "\n")
+		for line := range lines {
 			fields := strings.Fields(line)
 			if len(fields) < 2 {
 				continue
@@ -89,8 +89,8 @@ func getCPUCount() int {
 	}
 
 	count := 0
-	lines := strings.Split(string(cpuinfoBytes), "\n")
-	for _, line := range lines {
+	lines := strings.SplitSeq(string(cpuinfoBytes), "\n")
+	for line := range lines {
 		if strings.HasPrefix(line, "processor") {
 			count++
 		}

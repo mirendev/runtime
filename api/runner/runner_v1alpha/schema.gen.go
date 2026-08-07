@@ -27,12 +27,12 @@ const (
 
 type RunnerInvite struct {
 	ID              entity.Id          `json:"id"`
-	ClaimedAt       time.Time          `cbor:"claimed_at,omitempty" json:"claimed_at,omitempty"`
+	ClaimedAt       time.Time          `cbor:"claimed_at,omitempty" json:"claimed_at"`
 	ClaimedBy       string             `cbor:"claimed_by,omitempty" json:"claimed_by,omitempty"`
 	CodeHash        string             `cbor:"code_hash,omitempty" json:"code_hash,omitempty"`
-	CreatedAt       time.Time          `cbor:"created_at,omitempty" json:"created_at,omitempty"`
+	CreatedAt       time.Time          `cbor:"created_at,omitempty" json:"created_at"`
 	EnrollmentCount int64              `cbor:"enrollment_count,omitempty" json:"enrollment_count,omitempty"`
-	ExpiresAt       time.Time          `cbor:"expires_at,omitempty" json:"expires_at,omitempty"`
+	ExpiresAt       time.Time          `cbor:"expires_at,omitempty" json:"expires_at"`
 	Labels          types.Labels       `cbor:"labels,omitempty" json:"labels,omitempty"`
 	Name            string             `cbor:"name,omitempty" json:"name,omitempty"`
 	Reusable        bool               `cbor:"reusable,omitempty" json:"reusable,omitempty"`

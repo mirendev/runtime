@@ -113,10 +113,8 @@ func (g *Generator) ti(name string) typeInfo {
 		if !ok {
 			x, ok := g.importedPackages[name[:dot]]
 			if ok {
-				for _, t := range x {
-					if t == name[dot+1:] {
-						return typeInfo{}
-					}
+				if slices.Contains(x, name[dot+1:]) {
+					return typeInfo{}
 				}
 			}
 

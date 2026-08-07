@@ -74,7 +74,7 @@ func TestTokenServer_DefaultToken(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEmpty(t, resp.Value)
 
-	token, err := jwt.ParseWithClaims(resp.Value, &workloadidentity.WorkloadClaims{}, func(tok *jwt.Token) (interface{}, error) {
+	token, err := jwt.ParseWithClaims(resp.Value, &workloadidentity.WorkloadClaims{}, func(tok *jwt.Token) (any, error) {
 		assert.Equal(t, "RS256", tok.Method.Alg())
 		return c.WorkloadIssuer.(*workloadidentity.Issuer).PublicKey(), nil
 	})
@@ -99,7 +99,7 @@ func TestTokenServer_CustomAudience(t *testing.T) {
 	err := json.Unmarshal(w.Body.Bytes(), &resp)
 	require.NoError(t, err)
 
-	token, err := jwt.ParseWithClaims(resp.Value, &workloadidentity.WorkloadClaims{}, func(tok *jwt.Token) (interface{}, error) {
+	token, err := jwt.ParseWithClaims(resp.Value, &workloadidentity.WorkloadClaims{}, func(tok *jwt.Token) (any, error) {
 		assert.Equal(t, "RS256", tok.Method.Alg())
 		return c.WorkloadIssuer.(*workloadidentity.Issuer).PublicKey(), nil
 	}, jwt.WithAudience("sts.amazonaws.com"))
@@ -121,7 +121,7 @@ func TestTokenServer_CustomTTL(t *testing.T) {
 	err := json.Unmarshal(w.Body.Bytes(), &resp)
 	require.NoError(t, err)
 
-	token, err := jwt.ParseWithClaims(resp.Value, &workloadidentity.WorkloadClaims{}, func(tok *jwt.Token) (interface{}, error) {
+	token, err := jwt.ParseWithClaims(resp.Value, &workloadidentity.WorkloadClaims{}, func(tok *jwt.Token) (any, error) {
 		assert.Equal(t, "RS256", tok.Method.Alg())
 		return c.WorkloadIssuer.(*workloadidentity.Issuer).PublicKey(), nil
 	})
@@ -239,7 +239,7 @@ func TestTokenServer_RecycledIPResolvesToCurrentSandbox(t *testing.T) {
 	var resp tokenResponse
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 
-	token, err := jwt.ParseWithClaims(resp.Value, &workloadidentity.WorkloadClaims{}, func(tok *jwt.Token) (interface{}, error) {
+	token, err := jwt.ParseWithClaims(resp.Value, &workloadidentity.WorkloadClaims{}, func(tok *jwt.Token) (any, error) {
 		return c.WorkloadIssuer.(*workloadidentity.Issuer).PublicKey(), nil
 	})
 	require.NoError(t, err)

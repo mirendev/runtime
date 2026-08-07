@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"syscall"
 	"time"
 
@@ -590,10 +591,8 @@ func certCoversListenAddr(certPEM, listenAddr string) (bool, error) {
 		return false, nil
 	}
 
-	for _, name := range cert.DNSNames {
-		if name == host {
-			return true, nil
-		}
+	if slices.Contains(cert.DNSNames, host) {
+		return true, nil
 	}
 	return false, nil
 }
