@@ -1226,10 +1226,13 @@ func (c *SandboxController) Create(ctx context.Context, co *compute.Sandbox, met
 				c.Log.Info("sandbox container exists but is unhealthy", "id", co.ID)
 
 				// A sandbox that must not re-run its command is finished the
-				// moment its containers stop being healthy, whatever the reason.
-				// Fall through to the recreate path below and we would execute
-				// it a second time.
-				if co.Spec.RestartPolicy == compute.SandboxSpecNEVER {
+				// moment its containers stop being healthy. Fall through to the
+				// recreate path below and we would execute it a second time.
+				//
+				// Gated on RUNNING because that is what distinguishes "it ran
+				// and its containers are gone" from "it has not started yet":
+				// only the former would be a re-execution.
+				if shouldRetireInsteadOfRestart(co) {
 					return c.markDeadNoRestart(ctx, co, "unhealthy")
 				}
 
@@ -1270,7 +1273,11 @@ func (c *SandboxController) Create(ctx context.Context, co *compute.Sandbox, met
 		// once it is the end of the road: the realistic case is a runner
 		// restarting mid-run, where re-running a migration is not a recoverable
 		// mistake.
-		if co.Spec.RestartPolicy == compute.SandboxSpecNEVER {
+		//
+		// Only once it has actually been RUNNING, though. A PENDING sandbox has
+		// no containers because none have been created yet, and refusing to
+		// create them would retire every no-restart sandbox before it ever ran.
+		if shouldRetireInsteadOfRestart(co) {
 			return c.markDeadNoRestart(ctx, co, "containers missing")
 		}
 
@@ -1282,6 +1289,17 @@ func (c *SandboxController) Create(ctx context.Context, co *compute.Sandbox, met
 		c.Log.Warn("ignoring sandbox status", "status", co.Status)
 		return nil
 	}
+}
+
+// shouldRetireInsteadOfRestart reports whether a sandbox whose containers are
+// missing or unhealthy must be retired rather than (re)created.
+//
+// The RUNNING check is what separates "it ran and its containers are gone" from
+// "it has not started yet". Only the first is a re-execution; without the
+// distinction every no-restart sandbox is retired on its first reconcile,
+// before it has run anything at all.
+func shouldRetireInsteadOfRestart(co *compute.Sandbox) bool {
+	return co.Status == compute.RUNNING && co.Spec.RestartPolicy == compute.SandboxSpecNEVER
 }
 
 // markDeadNoRestart retires a sandbox whose spec forbids restarting it, then

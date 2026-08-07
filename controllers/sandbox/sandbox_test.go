@@ -1964,3 +1964,28 @@ func TestRestartPolicyNeverRetiresInsteadOfRebooting(t *testing.T) {
 	r.Equal(compute.DEAD, got.Status, "a no-restart sandbox retires rather than rebooting")
 	r.True(got.Exit.Empty(), "no exit was observed, so none should be invented")
 }
+
+// The RUNNING check in the retire guard is load-bearing. Without it every
+// no-restart sandbox is retired on its first reconcile -- its containers are
+// legitimately absent because none have been created yet -- so every task run
+// would die before executing anything.
+func TestShouldRetireInsteadOfRestart(t *testing.T) {
+	never := func(status compute.SandboxStatus) *compute.Sandbox {
+		sb := &compute.Sandbox{Status: status}
+		sb.Spec.RestartPolicy = compute.SandboxSpecNEVER
+		return sb
+	}
+
+	r := require.New(t)
+
+	r.True(shouldRetireInsteadOfRestart(never(compute.RUNNING)),
+		"a running sandbox that lost its containers already executed its command")
+
+	r.False(shouldRetireInsteadOfRestart(never(compute.PENDING)),
+		"a pending sandbox has never started; creating it is the first execution")
+	r.False(shouldRetireInsteadOfRestart(never("")),
+		"a sandbox with no status yet has never started either")
+
+	// The default policy never retires; services depend on being rebooted.
+	r.False(shouldRetireInsteadOfRestart(&compute.Sandbox{Status: compute.RUNNING}))
+}

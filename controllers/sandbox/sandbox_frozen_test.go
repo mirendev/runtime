@@ -46,7 +46,8 @@ func TestSandboxControllerFrozen(t *testing.T) {
 		// them through sandbox_ops.go, so it inherits the exit recording. The
 		// Create dispatch *is* duplicated, so both restart-policy guards were
 		// mirrored into SagaSandboxController.Create.
-		"sandbox.go":  "413ff3108708b05a4a2e93f08b0aca63cbe0e67e3b6e6e5c0988ac9766388725",
+		"sandbox.go":  "d5781dddae14a3564a1c4a2f2270ec2f93fb3ee9d3a4721f5b30f81dc05bf4ce",
+		"sandbox.go":  "d5781dddae14a3564a1c4a2f2270ec2f93fb3ee9d3a4721f5b30f81dc05bf4ce",
 		"volume.go":   "580062fb8a34f3f7f965689467a4b0f2ed403bc63c1ecdeb44949a7ba7e08dff",
 		"firewall.go": "648cb5d91091d5eb7400152b19695a8045585feae59c5dd36c12d663a27bb91f",
 	}

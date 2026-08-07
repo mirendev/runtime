@@ -167,19 +167,24 @@ func (c *Controller) observe(ctx context.Context, r *run_v1alpha.Run) error {
 		return fmt.Errorf("reading run sandbox: %w", err)
 	}
 
+	// A reported exit is authoritative, whatever the status says. Status is a
+	// lifecycle flag several components write -- the boot path marks a sandbox
+	// RUNNING once it finishes its own bookkeeping, which for a command that
+	// exits in milliseconds can land after the exit was already recorded. The
+	// exit component has exactly one writer and is only ever set once.
+	if !sb.Exit.Empty() {
+		return c.finishWithCode(ctx, r, sb.Exit.Code)
+	}
+
 	switch sb.Status {
 	case compute.PENDING, compute.NOT_READY, compute.RUNNING:
 		// Still going; nothing to decide until it stops.
 		return nil
 	case compute.STOPPED, compute.DEAD:
-		if sb.Exit.Empty() {
-			// Stopped without an observed exit: the runner went away mid-run, or
-			// the sandbox was retired by policy. That is a failed attempt, but
-			// not an exit code.
-			c.Log.Info("run sandbox ended without reporting an exit", "run", r.ID, "sandbox", sb.ID)
-			return c.finish(ctx, r, run_v1alpha.FAILED, nil)
-		}
-		return c.finishWithCode(ctx, r, sb.Exit.Code)
+		// Stopped with no exit recorded: the runner went away mid-run, or the
+		// sandbox was retired by policy. A failed attempt, but not an exit code.
+		c.Log.Info("run sandbox ended without reporting an exit", "run", r.ID, "sandbox", sb.ID)
+		return c.finish(ctx, r, run_v1alpha.FAILED, nil)
 	default:
 		return nil
 	}

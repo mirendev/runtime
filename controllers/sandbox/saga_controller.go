@@ -122,7 +122,7 @@ func (s *SagaSandboxController) Create(ctx context.Context, co *compute.Sandbox,
 				// Mirrors SandboxController.Create: a sandbox whose command
 				// must execute at most once is finished the moment its
 				// containers stop being healthy.
-				if co.Spec.RestartPolicy == compute.SandboxSpecNEVER {
+				if shouldRetireInsteadOfRestart(co) {
 					return s.inner.markDeadNoRestart(ctx, co, "unhealthy")
 				}
 
@@ -148,7 +148,7 @@ func (s *SagaSandboxController) Create(ctx context.Context, co *compute.Sandbox,
 		// Mirrors SandboxController.Create: the containers are gone, and for a
 		// sandbox that must not re-run its command that is the end of the road
 		// rather than a reboot.
-		if co.Spec.RestartPolicy == compute.SandboxSpecNEVER {
+		if shouldRetireInsteadOfRestart(co) {
 			return s.inner.markDeadNoRestart(ctx, co, "containers missing")
 		}
 
