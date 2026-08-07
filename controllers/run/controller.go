@@ -299,7 +299,8 @@ func (c *Controller) finish(ctx context.Context, r *run_v1alpha.Run, status run_
 	c.release(ctx, r)
 
 	c.Log.Info("run finished",
-		"run", r.ID, "app", r.App, "task", r.Task, "trigger", r.Trigger, "status", status)
+		"run", r.ID, "app", r.App, "task", r.Task, "trigger", r.Trigger, "status", status,
+		"has_exit_code", code != nil)
 	return nil
 }
 

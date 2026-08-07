@@ -2418,20 +2418,12 @@ func (c *SandboxController) monitorTaskExit(
 			//
 			// The DEAD patch that follows leaves Exit intact: it is a struct
 			// literal with an empty Exit, which the generated encoder skips.
-			patchAttrs := entity.New(
-				entity.Ref(entity.DBId, sb.ID),
-				(&compute.Sandbox{
-					Status: compute.STOPPED,
-					Exit: compute.Exit{
-						Code:      int64(exitStatus.ExitCode()),
-						At:        exitAt,
-						Container: containerName,
-					},
-				}).Encode,
-			)
-
 			ctx := context.Background()
-			result, err := c.EAC.Patch(ctx, patchAttrs.Attrs(), 0)
+			result, err := c.recordExit(ctx, sb.ID, compute.Exit{
+				Code:      int64(exitStatus.ExitCode()),
+				At:        exitAt,
+				Container: containerName,
+			})
 			if err != nil {
 				if !errors.Is(err, cond.ErrNotFound{}) {
 					c.Log.Error("failed to update sandbox status to STOPPED",
@@ -2441,7 +2433,7 @@ func (c *SandboxController) monitorTaskExit(
 				}
 				return
 			}
-			if c.writeTracker != nil && result.HasRevision() {
+			if c.writeTracker != nil && result != nil && result.HasRevision() {
 				c.writeTracker.RecordWrite(result.Revision())
 			}
 
@@ -2453,6 +2445,57 @@ func (c *SandboxController) monitorTaskExit(
 			return
 		}
 	}
+}
+
+// recordExit writes a container's exit alongside the STOPPED transition, under
+// optimistic concurrency.
+//
+// The revision guard is the whole point. PatchEntity is read-modify-write, and
+// the rest of the controller patches with revision 0, so two writers computed
+// from the same snapshot do not merge -- the second simply overwrites the first
+// wholesale. The boot path is exactly such a writer: it decides to mark a
+// sandbox RUNNING from a snapshot taken before the task started, and for a
+// command that exits in milliseconds that write can land after the exit. The
+// result is not a clobbered field but a lost update, taking the exit code with
+// it and restoring RUNNING on a sandbox whose process is already gone.
+//
+// Retrying against the current revision makes the exit the last write instead.
+// The cap is high rather than small: losing a task's exit code is not something
+// to give up on after a couple of attempts, and contention here is bounded by
+// the handful of writers a single sandbox has.
+func (c *SandboxController) recordExit(
+	ctx context.Context,
+	id entity.Id,
+	exit compute.Exit,
+) (*entityserver_v1alpha.EntityAccessClientPatchResults, error) {
+	const maxAttempts = 100
+
+	var lastErr error
+	for attempt := range maxAttempts {
+		resp, err := c.EAC.Get(ctx, id.String())
+		if err != nil {
+			return nil, err
+		}
+
+		patchAttrs := entity.New(
+			entity.Ref(entity.DBId, id),
+			(&compute.Sandbox{Status: compute.STOPPED, Exit: exit}).Encode,
+		)
+
+		result, err := c.EAC.Patch(ctx, patchAttrs.Attrs(), resp.Entity().Revision())
+		if err == nil {
+			return result, nil
+		}
+		if !errors.Is(err, cond.ErrConflict{}) {
+			return nil, err
+		}
+
+		lastErr = err
+		c.Log.Debug("retrying exit record after a concurrent sandbox write",
+			"sandbox", id, "attempt", attempt+1)
+	}
+
+	return nil, fmt.Errorf("recording exit for %s: %w", id, lastErr)
 }
 
 func (c *SandboxController) sandboxPath(sb *compute.Sandbox, sub ...string) string {

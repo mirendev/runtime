@@ -46,8 +46,17 @@ func TestSandboxControllerFrozen(t *testing.T) {
 		// them through sandbox_ops.go, so it inherits the exit recording. The
 		// Create dispatch *is* duplicated, so both restart-policy guards were
 		// mirrored into SagaSandboxController.Create.
+<<<<<<< HEAD
 		"sandbox.go":  "d5781dddae14a3564a1c4a2f2270ec2f93fb3ee9d3a4721f5b30f81dc05bf4ce",
 		"sandbox.go":  "d5781dddae14a3564a1c4a2f2270ec2f93fb3ee9d3a4721f5b30f81dc05bf4ce",
+||||||| parent of 3a2aa997 (sandbox: guard the exit write against concurrent lost updates)
+		"sandbox.go":  "c34c30e19bdf8d9b20b97a03fc0fb86b7eb26b2b1820c75bffb350f54bc79a59",
+		"sandbox.go":  "c34c30e19bdf8d9b20b97a03fc0fb86b7eb26b2b1820c75bffb350f54bc79a59",
+=======
+		"sandbox.go":  "6895b8b040b8723aa2129b6ec7e450b8abece94130a309777db82eed4b44668c",
+		"sandbox.go":  "6895b8b040b8723aa2129b6ec7e450b8abece94130a309777db82eed4b44668c",
+		"sandbox.go":  "6895b8b040b8723aa2129b6ec7e450b8abece94130a309777db82eed4b44668c",
+>>>>>>> 3a2aa997 (sandbox: guard the exit write against concurrent lost updates)
 		"volume.go":   "580062fb8a34f3f7f965689467a4b0f2ed403bc63c1ecdeb44949a7ba7e08dff",
 		"firewall.go": "648cb5d91091d5eb7400152b19695a8045585feae59c5dd36c12d663a27bb91f",
 	}
