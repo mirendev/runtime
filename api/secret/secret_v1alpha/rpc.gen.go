@@ -96,6 +96,93 @@ func (v *SecretVersionInfo) UnmarshalJSON(data []byte) error {
 	return json.Unmarshal(data, &v.data)
 }
 
+type keyInfoData struct {
+	Id        *string `cbor:"0,keyasint,omitempty" json:"id,omitempty"`
+	Current   *bool   `cbor:"1,keyasint,omitempty" json:"current,omitempty"`
+	CreatedAt *int64  `cbor:"2,keyasint,omitempty" json:"created_at,omitempty"`
+	Versions  *int64  `cbor:"3,keyasint,omitempty" json:"versions,omitempty"`
+}
+
+type KeyInfo struct {
+	data keyInfoData
+}
+
+func (v *KeyInfo) HasId() bool {
+	return v.data.Id != nil
+}
+
+func (v *KeyInfo) Id() string {
+	if v.data.Id == nil {
+		return ""
+	}
+	return *v.data.Id
+}
+
+func (v *KeyInfo) SetId(id string) {
+	v.data.Id = &id
+}
+
+func (v *KeyInfo) HasCurrent() bool {
+	return v.data.Current != nil
+}
+
+func (v *KeyInfo) Current() bool {
+	if v.data.Current == nil {
+		return false
+	}
+	return *v.data.Current
+}
+
+func (v *KeyInfo) SetCurrent(current bool) {
+	v.data.Current = &current
+}
+
+func (v *KeyInfo) HasCreatedAt() bool {
+	return v.data.CreatedAt != nil
+}
+
+func (v *KeyInfo) CreatedAt() int64 {
+	if v.data.CreatedAt == nil {
+		return 0
+	}
+	return *v.data.CreatedAt
+}
+
+func (v *KeyInfo) SetCreatedAt(created_at int64) {
+	v.data.CreatedAt = &created_at
+}
+
+func (v *KeyInfo) HasVersions() bool {
+	return v.data.Versions != nil
+}
+
+func (v *KeyInfo) Versions() int64 {
+	if v.data.Versions == nil {
+		return 0
+	}
+	return *v.data.Versions
+}
+
+func (v *KeyInfo) SetVersions(versions int64) {
+	v.data.Versions = &versions
+}
+
+func (v *KeyInfo) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *KeyInfo) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *KeyInfo) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *KeyInfo) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
 type secretInfoData struct {
 	Path           *string               `cbor:"0,keyasint,omitempty" json:"path,omitempty"`
 	Backend        *string               `cbor:"1,keyasint,omitempty" json:"backend,omitempty"`
@@ -421,6 +508,131 @@ func (v *SecretsListVersionsResults) UnmarshalJSON(data []byte) error {
 	return json.Unmarshal(data, &v.data)
 }
 
+type secretsKeyringArgsData struct{}
+
+type SecretsKeyringArgs struct {
+	call rpc.Call
+	data secretsKeyringArgsData
+}
+
+func (v *SecretsKeyringArgs) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *SecretsKeyringArgs) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *SecretsKeyringArgs) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *SecretsKeyringArgs) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type secretsKeyringResultsData struct {
+	Keys         *[]*KeyInfo `cbor:"0,keyasint,omitempty" json:"keys,omitempty"`
+	Rotating     *bool       `cbor:"1,keyasint,omitempty" json:"rotating,omitempty"`
+	RotatingFrom *string     `cbor:"2,keyasint,omitempty" json:"rotating_from,omitempty"`
+	Rewrapped    *int64      `cbor:"3,keyasint,omitempty" json:"rewrapped,omitempty"`
+}
+
+type SecretsKeyringResults struct {
+	call rpc.Call
+	data secretsKeyringResultsData
+}
+
+func (v *SecretsKeyringResults) SetKeys(keys []*KeyInfo) {
+	x := slices.Clone(keys)
+	v.data.Keys = &x
+}
+
+func (v *SecretsKeyringResults) SetRotating(rotating bool) {
+	v.data.Rotating = &rotating
+}
+
+func (v *SecretsKeyringResults) SetRotatingFrom(rotating_from string) {
+	v.data.RotatingFrom = &rotating_from
+}
+
+func (v *SecretsKeyringResults) SetRewrapped(rewrapped int64) {
+	v.data.Rewrapped = &rewrapped
+}
+
+func (v *SecretsKeyringResults) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *SecretsKeyringResults) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *SecretsKeyringResults) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *SecretsKeyringResults) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type secretsRotateKeyArgsData struct{}
+
+type SecretsRotateKeyArgs struct {
+	call rpc.Call
+	data secretsRotateKeyArgsData
+}
+
+func (v *SecretsRotateKeyArgs) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *SecretsRotateKeyArgs) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *SecretsRotateKeyArgs) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *SecretsRotateKeyArgs) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type secretsRotateKeyResultsData struct {
+	FromKey *string `cbor:"0,keyasint,omitempty" json:"from_key,omitempty"`
+	ToKey   *string `cbor:"1,keyasint,omitempty" json:"to_key,omitempty"`
+}
+
+type SecretsRotateKeyResults struct {
+	call rpc.Call
+	data secretsRotateKeyResultsData
+}
+
+func (v *SecretsRotateKeyResults) SetFromKey(from_key string) {
+	v.data.FromKey = &from_key
+}
+
+func (v *SecretsRotateKeyResults) SetToKey(to_key string) {
+	v.data.ToKey = &to_key
+}
+
+func (v *SecretsRotateKeyResults) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *SecretsRotateKeyResults) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *SecretsRotateKeyResults) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *SecretsRotateKeyResults) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
 type secretsSetStateArgsData struct {
 	Backend *string `cbor:"0,keyasint,omitempty" json:"backend,omitempty"`
 	Ref     *string `cbor:"1,keyasint,omitempty" json:"ref,omitempty"`
@@ -582,6 +794,58 @@ func (t *SecretsListVersions) Results() *SecretsListVersionsResults {
 	return results
 }
 
+type SecretsKeyring struct {
+	rpc.Call
+	args    SecretsKeyringArgs
+	results SecretsKeyringResults
+}
+
+func (t *SecretsKeyring) Args() *SecretsKeyringArgs {
+	args := &t.args
+	if args.call != nil {
+		return args
+	}
+	args.call = t.Call
+	t.Call.Args(args)
+	return args
+}
+
+func (t *SecretsKeyring) Results() *SecretsKeyringResults {
+	results := &t.results
+	if results.call != nil {
+		return results
+	}
+	results.call = t.Call
+	t.Call.Results(results)
+	return results
+}
+
+type SecretsRotateKey struct {
+	rpc.Call
+	args    SecretsRotateKeyArgs
+	results SecretsRotateKeyResults
+}
+
+func (t *SecretsRotateKey) Args() *SecretsRotateKeyArgs {
+	args := &t.args
+	if args.call != nil {
+		return args
+	}
+	args.call = t.Call
+	t.Call.Args(args)
+	return args
+}
+
+func (t *SecretsRotateKey) Results() *SecretsRotateKeyResults {
+	results := &t.results
+	if results.call != nil {
+		return results
+	}
+	results.call = t.Call
+	t.Call.Results(results)
+	return results
+}
+
 type SecretsSetState struct {
 	rpc.Call
 	args    SecretsSetStateArgs
@@ -612,6 +876,8 @@ type Secrets interface {
 	Set(ctx context.Context, state *SecretsSet) error
 	List(ctx context.Context, state *SecretsList) error
 	ListVersions(ctx context.Context, state *SecretsListVersions) error
+	Keyring(ctx context.Context, state *SecretsKeyring) error
+	RotateKey(ctx context.Context, state *SecretsRotateKey) error
 	SetState(ctx context.Context, state *SecretsSetState) error
 }
 
@@ -628,6 +894,14 @@ func (reexportSecrets) List(ctx context.Context, state *SecretsList) error {
 }
 
 func (reexportSecrets) ListVersions(ctx context.Context, state *SecretsListVersions) error {
+	panic("not implemented")
+}
+
+func (reexportSecrets) Keyring(ctx context.Context, state *SecretsKeyring) error {
+	panic("not implemented")
+}
+
+func (reexportSecrets) RotateKey(ctx context.Context, state *SecretsRotateKey) error {
 	panic("not implemented")
 }
 
@@ -669,6 +943,26 @@ func AdaptSecrets(t Secrets) *rpc.Interface {
 			Params:        []string{"backend", "path"},
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.ListVersions(ctx, &SecretsListVersions{Call: call})
+			},
+		},
+		{
+			Name:          "keyring",
+			InterfaceName: "Secrets",
+			Index:         0,
+			Public:        false,
+			Params:        []string{},
+			Handler: func(ctx context.Context, call rpc.Call) error {
+				return t.Keyring(ctx, &SecretsKeyring{Call: call})
+			},
+		},
+		{
+			Name:          "rotateKey",
+			InterfaceName: "Secrets",
+			Index:         0,
+			Public:        false,
+			Params:        []string{},
+			Handler: func(ctx context.Context, call rpc.Call) error {
+				return t.RotateKey(ctx, &SecretsRotateKey{Call: call})
 			},
 		},
 		{
@@ -797,6 +1091,108 @@ func (v SecretsClient) ListVersions(ctx context.Context, backend string, path st
 	}
 
 	return &SecretsClientListVersionsResults{client: v.Client, data: ret}, nil
+}
+
+type SecretsClientKeyringResults struct {
+	client rpc.Client
+	data   secretsKeyringResultsData
+}
+
+func (v *SecretsClientKeyringResults) HasKeys() bool {
+	return v.data.Keys != nil
+}
+
+func (v *SecretsClientKeyringResults) Keys() []*KeyInfo {
+	if v.data.Keys == nil {
+		return nil
+	}
+	return *v.data.Keys
+}
+
+func (v *SecretsClientKeyringResults) HasRotating() bool {
+	return v.data.Rotating != nil
+}
+
+func (v *SecretsClientKeyringResults) Rotating() bool {
+	if v.data.Rotating == nil {
+		return false
+	}
+	return *v.data.Rotating
+}
+
+func (v *SecretsClientKeyringResults) HasRotatingFrom() bool {
+	return v.data.RotatingFrom != nil
+}
+
+func (v *SecretsClientKeyringResults) RotatingFrom() string {
+	if v.data.RotatingFrom == nil {
+		return ""
+	}
+	return *v.data.RotatingFrom
+}
+
+func (v *SecretsClientKeyringResults) HasRewrapped() bool {
+	return v.data.Rewrapped != nil
+}
+
+func (v *SecretsClientKeyringResults) Rewrapped() int64 {
+	if v.data.Rewrapped == nil {
+		return 0
+	}
+	return *v.data.Rewrapped
+}
+
+func (v SecretsClient) Keyring(ctx context.Context) (*SecretsClientKeyringResults, error) {
+	args := SecretsKeyringArgs{}
+
+	var ret secretsKeyringResultsData
+
+	err := v.Call(ctx, "keyring", &args, &ret)
+	if err != nil {
+		return nil, err
+	}
+
+	return &SecretsClientKeyringResults{client: v.Client, data: ret}, nil
+}
+
+type SecretsClientRotateKeyResults struct {
+	client rpc.Client
+	data   secretsRotateKeyResultsData
+}
+
+func (v *SecretsClientRotateKeyResults) HasFromKey() bool {
+	return v.data.FromKey != nil
+}
+
+func (v *SecretsClientRotateKeyResults) FromKey() string {
+	if v.data.FromKey == nil {
+		return ""
+	}
+	return *v.data.FromKey
+}
+
+func (v *SecretsClientRotateKeyResults) HasToKey() bool {
+	return v.data.ToKey != nil
+}
+
+func (v *SecretsClientRotateKeyResults) ToKey() string {
+	if v.data.ToKey == nil {
+		return ""
+	}
+	return *v.data.ToKey
+}
+
+func (v SecretsClient) RotateKey(ctx context.Context) (*SecretsClientRotateKeyResults, error) {
+	args := SecretsRotateKeyArgs{}
+
+	var ret secretsRotateKeyResultsData
+
+	err := v.Call(ctx, "rotateKey", &args, &ret)
+	if err != nil {
+		return nil, err
+	}
+
+	return &SecretsClientRotateKeyResults{client: v.Client, data: ret}, nil
 }
 
 type SecretsClientSetStateResults struct {

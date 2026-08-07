@@ -479,6 +479,21 @@ miren deploy --analyze
 		}),
 	))
 
+	d.Dispatch("secret keyring", Infer("secret keyring", "Show the cluster keyring and any rotation in flight", SecretKeyring,
+		WithDescription(secretKeyringDescription),
+		WithExample(mflags.Example{
+			Name: "Show the cluster keys",
+			Body: "miren secret keyring",
+		}),
+	))
+	d.Dispatch("secret rotate-key", Infer("secret rotate-key", "Rotate the cluster key that encrypts stored secrets", SecretRotateKey,
+		WithDescription(secretRotateKeyDescription),
+		WithExample(mflags.Example{
+			Name: "Rotate now, without waiting for the age policy",
+			Body: "miren secret rotate-key",
+		}),
+	))
+
 	// Addon commands
 	d.Dispatch("addon", Section("addon", "Addon management commands", "", WithSectionGroup(GroupConfiguring)))
 	d.Dispatch("addon list-available", Infer("addon list-available", "List available addons", AddonListAvailable,
@@ -1195,6 +1210,20 @@ Each write mints a new immutable version and prints its handle, e.g. ` + "`" + `
 
 :::note[Rotation does not touch running apps]
 Rotating a secret mints a new version but leaves anything already running on the value it started with. Old versions stay resolvable, so a rollback comes back on the value it originally shipped with.
+:::`
+
+const secretKeyringDescription = `Shows the keys that encrypt this cluster's stored secrets: which one new writes use, how old each is, and how many stored versions are still wrapped by each.
+
+A key other than the current one with versions still on it means a rotation is part-way through. That is normal and safe — every key in the ring can still decrypt what it wrapped, so nothing is unreadable while the backfill runs. The old key is retired only once its count reaches zero.`
+
+const secretRotateKeyDescription = `Rotates the cluster key that encrypts stored secrets, without waiting for the automatic age policy. This is what an incident calls for.
+
+Rotation is not disruptive. A new key is minted and new writes use it immediately, then existing versions are re-wrapped onto it in the background — only the small wrapped data key is rewritten, never the secret values themselves, so the cost does not depend on how large your secrets are. Every version stays readable throughout, and the old key is retired only once nothing references it.
+
+Watch progress with ` + "`" + `miren secret keyring` + "`" + `.
+
+:::note[Your secrets do not change]
+Rotating the cluster key re-encrypts how values are stored. It does not change any secret's value or mint new versions, so nothing referencing a secret needs redeploying.
 :::`
 
 const secretDisableDescription = `Stops a specific version from resolving. Anything still referencing it fails closed on its next resolve rather than falling back to a different value — a revoked secret must never silently become a working one.

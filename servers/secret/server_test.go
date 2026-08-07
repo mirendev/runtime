@@ -47,7 +47,7 @@ func newTestClient(t *testing.T) *secret_v1alpha.SecretsClient {
 	registry.Register(cluster.NewBackend(log, ec, ring))
 
 	return secret_v1alpha.NewSecretsClient(rpc.LocalClient(
-		secret_v1alpha.AdaptSecrets(NewServer(log, registry)),
+		secret_v1alpha.AdaptSecrets(NewServer(log, registry, nil)),
 	))
 }
 
@@ -232,7 +232,7 @@ func TestSetReportsUnchangedForAnUndecryptableCurrentVersion(t *testing.T) {
 	registry.Register(cluster.NewBackend(log, ec, ring))
 
 	c := secret_v1alpha.NewSecretsClient(rpc.LocalClient(
-		secret_v1alpha.AdaptSecrets(NewServer(log, registry)),
+		secret_v1alpha.AdaptSecrets(NewServer(log, registry, nil)),
 	))
 
 	const path = "payments/stripe-key"
@@ -250,4 +250,36 @@ func TestSetReportsUnchangedForAnUndecryptableCurrentVersion(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, second.Unchanged(), "an identical value reuses, readable or not")
 	assert.Equal(t, first.Version(), second.Version())
+}
+
+// The keyring view is the only window an operator has into rotation. Without
+// the per-key counts, a stalled backfill and a finished one look identical.
+func TestKeyringReportsKeysAndCounts(t *testing.T) {
+	c := newTestClient(t)
+	ctx := t.Context()
+
+	for _, path := range []string{"payments/stripe-key", "registry/npm-token"} {
+		_, err := c.Set(ctx, "", path, []byte("value-"+path))
+		require.NoError(t, err)
+	}
+
+	res, err := c.Keyring(ctx)
+	require.NoError(t, err)
+
+	require.Len(t, res.Keys(), 1, "a fresh cluster holds exactly one key")
+	k := res.Keys()[0]
+	assert.True(t, k.Current())
+	assert.Equal(t, int64(2), k.Versions(), "both stored versions sit on the current key")
+	assert.NotZero(t, k.CreatedAt(), "a freshly minted key records when it was made")
+	assert.False(t, res.Rotating())
+}
+
+// Rotation is optional wiring, so a cluster without it must say so plainly
+// rather than failing in a way that reads like the request was malformed.
+func TestRotateKeyWithoutRotationWired(t *testing.T) {
+	c := newTestClient(t)
+
+	_, err := c.RotateKey(t.Context())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not enabled")
 }

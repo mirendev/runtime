@@ -48,6 +48,7 @@ miren server [flags]
 - `--runner-address` — Runner address (host:port). For IPv6 use brackets, e.g. "[::1]:8444".
 - `--runner-id, -r` — Runner ID
 - `--saga-retention-period` — Delete finished saga executions older than this duration (e.g. 7d, 24h). Set to 0 to keep them indefinitely.
+- `--secret-key-rotation-period` — Rotate the cluster key that encrypts stored secrets once it reaches this age (e.g. 90d, 1y). Set to 0 to rotate only on request.
 - `--self-signed-tls` — Use self-signed certificates for TLS (for development/testing only)
 - `--serve-tls` — Deprecated and ignored. Retained as a no-op so existing systemd unit files, env vars, and config files from pre-RFD-84 installs still parse. Use ingress.mode to pick the deployment shape.
 - `--skip-client-config` — Skip writing client config file to clientconfig.d

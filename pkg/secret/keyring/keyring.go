@@ -26,6 +26,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
+	"time"
 )
 
 // MaxKeys caps how many KEKs the ring holds at once. Rotation needs the
@@ -59,6 +61,22 @@ type Key struct {
 
 	// Material is the raw AES-256 key.
 	Material []byte
+
+	// CreatedAt is when the key was minted. Rotation is driven off the current
+	// key's age, so this is what decides when a cluster rotates on its own.
+	// Zero for a ring written before keys carried a time — treated as "old
+	// enough to rotate", which is the safe direction for a key of unknown age.
+	CreatedAt time.Time
+}
+
+// Age reports how long ago the key was minted. A key with no recorded time
+// reports the largest possible age, so an unknown-age key rotates rather than
+// lingering.
+func (k Key) Age(now time.Time) time.Duration {
+	if k.CreatedAt.IsZero() {
+		return time.Duration(math.MaxInt64)
+	}
+	return now.Sub(k.CreatedAt)
 }
 
 // Keyring is the cluster's set of KEKs. The current key is what new writes wrap
@@ -121,6 +139,16 @@ func Generate() (*Keyring, error) {
 
 // CurrentID returns the id of the key new writes wrap with.
 func (r *Keyring) CurrentID() string { return r.current }
+
+// Current returns the key new writes wrap with.
+func (r *Keyring) Current() (Key, error) {
+	for _, k := range r.keys {
+		if k.ID == r.current {
+			return k, nil
+		}
+	}
+	return Key{}, ErrNoCurrentKey
+}
 
 // Keys returns the ring's keys. The slice is a copy, but the key material is
 // shared — callers must not mutate it.
@@ -347,8 +375,9 @@ func generateKey() (Key, error) {
 	}
 
 	return Key{
-		ID:       base64.RawURLEncoding.EncodeToString(idBytes),
-		Material: material,
+		ID:        base64.RawURLEncoding.EncodeToString(idBytes),
+		Material:  material,
+		CreatedAt: time.Now().UTC(),
 	}, nil
 }
 

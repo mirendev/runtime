@@ -316,3 +316,95 @@ func secretsToJSON(secrets []*secret_v1alpha.SecretInfo) []secretJSON {
 	}
 	return out
 }
+
+func SecretKeyring(ctx *Context, opts struct {
+	ConfigCentric
+	FormatOptions
+}) error {
+	client, err := secretsClient(ctx)
+	if err != nil {
+		return err
+	}
+
+	res, err := client.Keyring(ctx)
+	if err != nil {
+		return err
+	}
+
+	if opts.IsJSON() {
+		type keyJSON struct {
+			ID        string `json:"id"`
+			Current   bool   `json:"current"`
+			CreatedAt string `json:"created_at,omitempty"`
+			Versions  int64  `json:"versions"`
+		}
+		type out struct {
+			Keys         []keyJSON `json:"keys"`
+			Rotating     bool      `json:"rotating"`
+			RotatingFrom string    `json:"rotating_from,omitempty"`
+			Rewrapped    int64     `json:"rewrapped"`
+		}
+
+		o := out{
+			Keys:         []keyJSON{},
+			Rotating:     res.Rotating(),
+			RotatingFrom: res.RotatingFrom(),
+			Rewrapped:    res.Rewrapped(),
+		}
+		for _, k := range res.Keys() {
+			kj := keyJSON{ID: k.Id(), Current: k.Current(), Versions: k.Versions()}
+			if k.CreatedAt() != 0 {
+				kj.CreatedAt = time.UnixMilli(k.CreatedAt()).UTC().Format(time.RFC3339)
+			}
+			o.Keys = append(o.Keys, kj)
+		}
+		return PrintJSON(o)
+	}
+
+	headers := []string{"KEY", "CURRENT", "AGE", "VERSIONS"}
+	var rows []ui.Row
+	for _, k := range res.Keys() {
+		current := "-"
+		if k.Current() {
+			current = "✓"
+		}
+		age := "unknown"
+		if k.CreatedAt() != 0 {
+			age = humanFriendlyTimestamp(time.UnixMilli(k.CreatedAt()))
+		}
+		rows = append(rows, ui.Row{k.Id(), current, age, fmt.Sprintf("%d", k.Versions())})
+	}
+
+	columns := ui.AutoSizeColumns(headers, rows, ui.Columns())
+	table := ui.NewTable(ui.WithColumns(columns), ui.WithRows(rows))
+	ctx.Printf("%s\n", table.Render())
+
+	if res.Rotating() {
+		// A non-current key with versions still on it is the backfill in
+		// progress, so say so rather than leaving the reader to infer it from
+		// the counts above.
+		ctx.Printf("\nRotating off %s — %d versions rewrapped so far.\n", res.RotatingFrom(), res.Rewrapped())
+		ctx.Printf("The old key stays until nothing references it; everything remains readable meanwhile.\n")
+	}
+	return nil
+}
+
+func SecretRotateKey(ctx *Context, opts struct {
+	ConfigCentric
+}) error {
+	client, err := secretsClient(ctx)
+	if err != nil {
+		return err
+	}
+
+	res, err := client.RotateKey(ctx)
+	if err != nil {
+		return err
+	}
+
+	ctx.Printf("Rotating cluster key %s → %s\n", res.FromKey(), res.ToKey())
+	ctx.Printf("New writes use the new key immediately. Existing versions are re-wrapped in the\n")
+	ctx.Printf("background and stay readable throughout; the old key is retired once nothing\n")
+	ctx.Printf("references it. Watch it with: miren secret keyring\n")
+	return nil
+}

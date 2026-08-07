@@ -163,3 +163,36 @@ type ListableBackend interface {
 type Resolver interface {
 	ResolveRef(ctx context.Context, backend, ref string) (SecretValue, error)
 }
+
+// KeyState describes one key in a backend's keyring.
+type KeyState struct {
+	ID        string
+	Current   bool
+	CreatedAt time.Time
+
+	// Versions is how many stored values are still wrapped by this key. A
+	// non-current key with a non-zero count is a rotation that has not finished
+	// — and the reason the key cannot be dropped yet.
+	Versions int
+}
+
+// KeyringReport is the operator's view of a backend's key hierarchy.
+type KeyringReport struct {
+	Keys []KeyState
+
+	// Rotating reports whether a rotation is in flight, with RotatingFrom
+	// naming the key being retired and Rewrapped counting progress so far.
+	// Without this a stalled backfill and a finished one look the same.
+	Rotating     bool
+	RotatingFrom string
+	Rewrapped    int
+}
+
+// A KeyringReporter can describe the keys it holds. Only backends that own
+// their key material implement it: an external manager's keys are its own
+// business, and Miren has nothing to report about them.
+type KeyringReporter interface {
+	SecretBackend
+
+	KeyringReport(ctx context.Context) (KeyringReport, error)
+}

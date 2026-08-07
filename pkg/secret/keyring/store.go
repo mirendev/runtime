@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"time"
 )
 
 // Filename is the keyring's name under the server's data directory.
@@ -28,6 +29,11 @@ type storedKeyring struct {
 type storedKey struct {
 	ID       string `json:"id"`
 	Material string `json:"material"`
+
+	// CreatedAt is omitted by rings written before keys carried a time. It
+	// decodes to the zero value there, which Key.Age reads as "unknown, so old
+	// enough to rotate" rather than "brand new".
+	CreatedAt time.Time `json:"created_at,omitzero"`
 }
 
 // storeVersion lets the format change later without silently misreading an old
@@ -139,8 +145,9 @@ func encode(ring *Keyring) ([]byte, error) {
 	}
 	for _, k := range ring.Keys() {
 		sk.Keys = append(sk.Keys, storedKey{
-			ID:       k.ID,
-			Material: base64.StdEncoding.EncodeToString(k.Material),
+			ID:        k.ID,
+			Material:  base64.StdEncoding.EncodeToString(k.Material),
+			CreatedAt: k.CreatedAt,
 		})
 	}
 
@@ -166,7 +173,7 @@ func decode(data []byte) (*Keyring, error) {
 		if err != nil {
 			return nil, fmt.Errorf("key %q has malformed material", k.ID)
 		}
-		keys = append(keys, Key{ID: k.ID, Material: material})
+		keys = append(keys, Key{ID: k.ID, Material: material, CreatedAt: k.CreatedAt})
 	}
 
 	return New(keys, sk.Current)

@@ -45,6 +45,10 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("saga: %w", err)
 	}
 
+	if err := c.Secrets.Validate(); err != nil {
+		return fmt.Errorf("secrets: %w", err)
+	}
+
 	if err := c.Server.Validate(); err != nil {
 		return fmt.Errorf("server: %w", err)
 	}
@@ -163,6 +167,14 @@ func (c *IngressConfig) Validate() error {
 func (c *SagaConfig) Validate() error {
 
 	// Check for port conflicts in SagaConfig
+
+	return nil
+}
+
+// Validate validates SecretsConfig
+func (c *SecretsConfig) Validate() error {
+
+	// Check for port conflicts in SecretsConfig
 
 	return nil
 }

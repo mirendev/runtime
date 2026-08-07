@@ -18,6 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sync/atomic"
 
 	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/api/entityserver"
@@ -37,20 +38,37 @@ const maxCASAttempts = 100
 
 // Backend stores secret values inside the cluster's entity store.
 type Backend struct {
-	log  *slog.Logger
-	ec   *entityserver.Client
-	ring *keyring.Keyring
+	log *slog.Logger
+	ec  *entityserver.Client
+
+	// ring is swapped wholesale when the cluster key rotates, so it is read
+	// through an atomic pointer rather than as a plain field. A Keyring is
+	// immutable, so a reader either sees the ring before the rotation or the
+	// one after — never a half-applied ring — and both can open anything
+	// sealed so far, because a rotation only ever adds a key.
+	ring atomic.Pointer[keyring.Keyring]
 }
 
 // NewBackend builds the in-cluster backend over an entity store and the
 // cluster's keyring.
 func NewBackend(log *slog.Logger, ec *entityserver.Client, ring *keyring.Keyring) *Backend {
-	return &Backend{
-		log:  log.With("module", "secret-cluster"),
-		ec:   ec,
-		ring: ring,
+	b := &Backend{
+		log: log.With("module", "secret-cluster"),
+		ec:  ec,
 	}
+	b.ring.Store(ring)
+	return b
 }
+
+// Keyring returns the ring currently in use.
+func (b *Backend) Keyring() *keyring.Keyring { return b.ring.Load() }
+
+// UseKeyring swaps in a new ring, after which writes seal with its current key.
+//
+// The caller must have persisted the ring before calling this. Sealing with a
+// key that is not yet on disk means a crash leaves rows naming a key the
+// cluster no longer has, and there is nothing to recover them from.
+func (b *Backend) UseKeyring(ring *keyring.Keyring) { b.ring.Store(ring) }
 
 var _ secret.WritableBackend = (*Backend)(nil)
 
@@ -88,7 +106,7 @@ func (b *Backend) Resolve(ctx context.Context, ref string) (secret.SecretValue, 
 			secret.ErrVersionNotEnabled, secret.FormatRef(path, shortID), stateName(sv.State))
 	}
 
-	value, err := b.ring.Open(keyring.Sealed{
+	value, err := b.ring.Load().Open(keyring.Sealed{
 		Ciphertext: sv.Ciphertext,
 		WrappedDEK: sv.WrappedDek,
 		KEKID:      sv.KekId,
@@ -116,7 +134,7 @@ func (b *Backend) Put(ctx context.Context, path string, value []byte) (string, b
 		return "", false, err
 	}
 
-	mac, err := b.ring.MAC(value)
+	mac, err := b.ring.Load().MAC(value)
 	if err != nil {
 		return "", false, err
 	}
@@ -135,7 +153,7 @@ func (b *Backend) Put(ctx context.Context, path string, value []byte) (string, b
 			}
 		}
 
-		sealed, err := b.ring.Seal(value)
+		sealed, err := b.ring.Load().Seal(value)
 		if err != nil {
 			return "", false, err
 		}

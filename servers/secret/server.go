@@ -20,15 +20,17 @@ import (
 type Server struct {
 	log      *slog.Logger
 	registry *secret.Registry
+	rotator  KeyRotator
 }
 
 var _ secret_v1alpha.Secrets = (*Server)(nil)
 
 // NewServer builds the secrets RPC server.
-func NewServer(log *slog.Logger, registry *secret.Registry) *Server {
+func NewServer(log *slog.Logger, registry *secret.Registry, rotator KeyRotator) *Server {
 	return &Server{
 		log:      log.With("module", "secrets-rpc"),
 		registry: registry,
+		rotator:  rotator,
 	}
 }
 
@@ -208,4 +210,102 @@ func encodeSummary(summary secret.Summary) *secret_v1alpha.SecretInfo {
 	info.SetVersions(versions)
 
 	return info
+}
+
+// KeyRotator starts and reports on cluster-key rotations. The server holds it
+// as an interface so the secrets service does not depend on the controller
+// package, and so a cluster without rotation wired up simply has none.
+type KeyRotator interface {
+	// Begin starts a rotation now, failing if one is already in flight.
+	Begin(ctx context.Context) error
+}
+
+// Keyring reports the cluster keyring and any rotation in flight.
+//
+// This is the only view an operator has of rotation. Without it a stalled
+// backfill and a finished one look identical, and there is no way to tell
+// whether retiring the old key is safe yet.
+func (s *Server) Keyring(ctx context.Context, state *secret_v1alpha.SecretsKeyring) error {
+	backend, ok := s.registry.Get(secret.ClusterBackendName)
+	if !ok {
+		return fmt.Errorf("%w: %q", secret.ErrUnknownBackend, secret.ClusterBackendName)
+	}
+
+	reporter, ok := backend.(secret.KeyringReporter)
+	if !ok {
+		return fmt.Errorf("backend %q does not hold a keyring", secret.ClusterBackendName)
+	}
+
+	report, err := reporter.KeyringReport(ctx)
+	if err != nil {
+		return err
+	}
+
+	keys := make([]*secret_v1alpha.KeyInfo, 0, len(report.Keys))
+	for _, k := range report.Keys {
+		ki := &secret_v1alpha.KeyInfo{}
+		ki.SetId(k.ID)
+		ki.SetCurrent(k.Current)
+		if !k.CreatedAt.IsZero() {
+			ki.SetCreatedAt(k.CreatedAt.UnixMilli())
+		}
+		ki.SetVersions(int64(k.Versions))
+		keys = append(keys, ki)
+	}
+
+	state.Results().SetKeys(keys)
+	state.Results().SetRotating(report.Rotating)
+	state.Results().SetRotatingFrom(report.RotatingFrom)
+	state.Results().SetRewrapped(int64(report.Rewrapped))
+	return nil
+}
+
+// RotateKey starts a rotation now.
+func (s *Server) RotateKey(ctx context.Context, state *secret_v1alpha.SecretsRotateKey) error {
+	if s.rotator == nil {
+		return fmt.Errorf("key rotation is not enabled on this cluster")
+	}
+
+	backend, ok := s.registry.Get(secret.ClusterBackendName)
+	if !ok {
+		return fmt.Errorf("%w: %q", secret.ErrUnknownBackend, secret.ClusterBackendName)
+	}
+	reporter, ok := backend.(secret.KeyringReporter)
+	if !ok {
+		return fmt.Errorf("backend %q does not hold a keyring", secret.ClusterBackendName)
+	}
+
+	before, err := reporter.KeyringReport(ctx)
+	if err != nil {
+		return err
+	}
+	var from string
+	for _, k := range before.Keys {
+		if k.Current {
+			from = k.ID
+		}
+	}
+
+	if err := s.rotator.Begin(ctx); err != nil {
+		return err
+	}
+
+	after, err := reporter.KeyringReport(ctx)
+	if err != nil {
+		return err
+	}
+	var to string
+	for _, k := range after.Keys {
+		if k.Current {
+			to = k.ID
+		}
+	}
+
+	// Rotation is exactly the kind of thing an operator goes looking for
+	// afterwards, so it belongs in the record.
+	s.log.Warn("started cluster key rotation", "from_key", from, "to_key", to)
+
+	state.Results().SetFromKey(from)
+	state.Results().SetToKey(to)
+	return nil
 }

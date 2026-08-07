@@ -484,6 +484,33 @@ kinds:
       doc: Keyed hash (HMAC) of the plaintext under the cluster key, so a write can recognize an identical existing version without decrypting. Keyed rather than a bare digest so storing it never hands an attacker a rainbow-table oracle for the plaintext.
       indexed: true
 
+  # A cluster-key rotation in flight. Modeled as an entity rather than an
+  # in-process routine so it survives a coordinator restart, and so the
+  # automatic trigger and the operator command drive one code path.
+  key_rotation:
+    from_key:
+      type: string
+      doc: The key being retired. Versions still wrapped by it are what the backfill moves.
+      indexed: true
+
+    to_key:
+      type: string
+      doc: The key being rotated to, already persisted and current before this record exists
+
+    status:
+      type: enum
+      doc: rewrapping | retiring | done | failed
+      choices: [rewrapping, retiring, done, failed]
+      indexed: true
+
+    rewrapped:
+      type: int
+      doc: Versions moved so far, for progress reporting only — the backfill's real state is the kek_id query
+
+    error_message:
+      type: string
+      doc: Why the rotation stopped, when status is failed
+
 components:
   config_spec:
     variables:

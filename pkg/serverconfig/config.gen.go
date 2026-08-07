@@ -122,6 +122,7 @@ type Config struct {
 	Labs            []string              `toml:"labs" env:"MIREN_LABS"`
 	Mode            *string               `toml:"mode" env:"MIREN_MODE"`
 	Saga            SagaConfig            `toml:"saga"`
+	Secrets         SecretsConfig         `toml:"secrets"`
 	Server          ServerConfig          `toml:"server"`
 	TLS             TLSConfig             `toml:"tls"`
 	Victorialogs    VictoriaLogsConfig    `toml:"victorialogs"`
@@ -324,6 +325,24 @@ func (c *SagaConfig) GetRetentionPeriod() string {
 // SetRetentionPeriod sets the value of RetentionPeriod
 func (c *SagaConfig) SetRetentionPeriod(v string) {
 	c.RetentionPeriod = &v
+}
+
+// SecretsConfig Secret storage and cluster key rotation
+type SecretsConfig struct {
+	KeyRotationPeriod *string `toml:"key_rotation_period" env:"MIREN_SECRET_KEY_ROTATION_PERIOD"`
+}
+
+// GetKeyRotationPeriod returns the value of KeyRotationPeriod or its zero value if nil
+func (c *SecretsConfig) GetKeyRotationPeriod() string {
+	if c.KeyRotationPeriod != nil {
+		return *c.KeyRotationPeriod
+	}
+	return ""
+}
+
+// SetKeyRotationPeriod sets the value of KeyRotationPeriod
+func (c *SecretsConfig) SetKeyRotationPeriod(v string) {
+	c.KeyRotationPeriod = &v
 }
 
 // ServerConfig Core server settings

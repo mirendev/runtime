@@ -47,6 +47,7 @@ import (
 	deploymentctrl "miren.dev/runtime/controllers/deployment"
 	ephemeralctrl "miren.dev/runtime/controllers/ephemeral"
 	indexgcctrl "miren.dev/runtime/controllers/indexgc"
+	keyrotationctrl "miren.dev/runtime/controllers/keyrotation"
 	nodehealthctrl "miren.dev/runtime/controllers/nodehealth"
 	sagagcctrl "miren.dev/runtime/controllers/sagagc"
 	"miren.dev/runtime/controllers/sandboxpool"
@@ -145,6 +146,12 @@ type CoordinatorConfig struct {
 	// retention GC. Values <= 0 fall back to the controller defaults.
 	AppVersionRetentionCount  int
 	AppVersionRetentionPeriod time.Duration
+
+	// SecretKeyRotationPeriod is how old the cluster key may get before it
+	// rotates on its own. Zero means rotate only when asked; negative means the
+	// operator's value did not parse, so fall back to the default rather than
+	// reading a typo as "never rotate".
+	SecretKeyRotationPeriod time.Duration
 
 	// SagaRetentionPeriod is how long a finished saga execution is kept.
 	// Unlike the app-version knobs above, zero is meaningful here: it keeps
@@ -370,6 +377,7 @@ type Coordinator struct {
 	indexGC       *indexgcctrl.GCController
 	sagaGC        *sagagcctrl.GCController
 	schemaReindex *schemareindexctrl.Controller
+	keyRotation   *keyrotationctrl.Controller
 	hs            *httpingress.Server
 
 	authority *caauth.Authority
@@ -1075,7 +1083,25 @@ func (c *Coordinator) Start(ctx context.Context) error {
 		return err
 	}
 	secretRegistry := secret.NewRegistry()
-	secretRegistry.Register(secretcluster.NewBackend(c.Log, ec, secretKeyring))
+	secretBackend := secretcluster.NewBackend(c.Log, ec, secretKeyring)
+	secretRegistry.Register(secretBackend)
+
+	// Rotation owns the keyring from here: it is the only thing that swaps the
+	// backend's ring, and it persists each new ring before the backend seals
+	// anything with it.
+	keyRotationConfig := keyrotationctrl.DefaultConfig()
+	if c.SecretKeyRotationPeriod >= 0 {
+		keyRotationConfig.MaxKeyAge = c.SecretKeyRotationPeriod
+	}
+	keyRotation := &keyrotationctrl.Controller{
+		Log:      c.Log.With("module", "key-rotation"),
+		EC:       ec,
+		Backend:  secretBackend,
+		DataPath: c.DataPath,
+		Config:   keyRotationConfig,
+	}
+	keyRotation.Start(ctx)
+	c.keyRotation = keyRotation
 
 	// Migrate app versions before starting components that depend on them
 	migrationCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
@@ -1389,7 +1415,7 @@ func (c *Coordinator) Start(ctx context.Context) error {
 	addonsServer := app.NewAddonsServer(c.Log, ec, addonRegistry, addon.NewRegistryImageChecker())
 	server.ExposeValue("dev.miren.runtime/addons", app_v1alpha.AdaptAddons(addonsServer))
 
-	secretsServer := secretsrv.NewServer(c.Log, secretRegistry)
+	secretsServer := secretsrv.NewServer(c.Log, secretRegistry, keyRotation)
 	server.ExposeValue("dev.miren.runtime/secrets", secret_v1alpha.AdaptSecrets(secretsServer))
 
 	addonsLoopback, err := rs.Connect(rs.LoopbackAddr(), "dev.miren.runtime/addons")
