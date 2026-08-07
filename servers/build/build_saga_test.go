@@ -365,3 +365,45 @@ func TestBuildSaga_FailsWhenStreamUnavailable(t *testing.T) {
 	}
 
 }
+
+// The saga orders actions by data dependency, not by registration order, so the
+// gate's position has to be asserted rather than assumed. Everything about
+// deploy tasks depends on landing in exactly one place: after addons exist,
+// because a migration needs its database, and before ActiveVersion flips,
+// because that placement is what makes a failed task a failed deploy rather
+// than a half-promoted one.
+func TestBuildSaga_DeployTasksGateSitsBetweenAddonsAndActivation(t *testing.T) {
+	registry := saga.NewRegistry()
+	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	if err := registerBuildSaga(registry, nil, nil, nil, log); err != nil {
+		t.Fatalf("registering build saga: %v", err)
+	}
+
+	def, ok := registry.Get(sagaBuildFromTar)
+	if !ok {
+		t.Fatal("build saga not registered")
+	}
+
+	order := def.ExecutionOrder()
+
+	pos := func(action string) int {
+		for i, name := range order {
+			if name == action {
+				return i
+			}
+		}
+		t.Fatalf("action %q not in execution order: %v", action, order)
+		return -1
+	}
+
+	addons := pos(actionProvisionAddons)
+	tasks := pos(actionRunDeployTasks)
+	activate := pos(actionSetActiveVer)
+
+	if addons >= tasks {
+		t.Errorf("deploy tasks must run after addons are provisioned (a migration needs its database); order: %v", order)
+	}
+	if tasks >= activate {
+		t.Errorf("deploy tasks must gate the version flip, or a failed task leaves a half-promoted deploy; order: %v", order)
+	}
+}

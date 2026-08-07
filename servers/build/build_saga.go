@@ -36,6 +36,7 @@ const (
 	actionCreateConfigVer = "create-config-version"
 	actionCreateVersion   = "create-version"
 	actionProvisionAddons = "provision-addons"
+	actionRunDeployTasks  = "run-deploy-tasks"
 	actionSetActiveVer    = "set-active-version"
 	actionFinalize        = "finalize"
 	actionBeginDeploy     = "begin-deployment"
@@ -538,6 +539,71 @@ func undoProvisionAddons(_ context.Context, _ provisionAddonsIn, _ provisionAddo
 // with the active version, not replace it). Records the previous
 // active version so undo can restore it on failure.
 
+// runDeployTasksIn gates the version flip on every deploy-triggered task.
+//
+// It consumes addons_provisioned so it runs only once the app's backing
+// services exist -- a migration needs its database -- and produces an edge
+// setActiveVersion consumes, which is what puts it strictly before any traffic
+// moves.
+type runDeployTasksIn struct {
+	AppName        string    `json:"app_name" saga:"app_name"`
+	StreamID       string    `json:"stream_id" saga:"stream_id"`
+	AppVersionID   string    `json:"app_version_id" saga:"app_version_id"`
+	ConfigSpec     string    `json:"config_spec_json" saga:"config_spec_json"`
+	EphemeralLabel string    `json:"ephemeral_label,omitempty" saga:"ephemeral_label,optional"`
+	AddonsReady    saga.Edge `saga:"addons_provisioned"`
+}
+
+type runDeployTasksOut struct {
+	Done saga.Edge `saga:"deploy_tasks_ran"`
+}
+
+func runDeployTasks(ctx context.Context, in runDeployTasksIn) (runDeployTasksOut, error) {
+	// An ephemeral preview shares the app's addons and is torn down on its own
+	// schedule; running its migrations again would be at best redundant and at
+	// worst a second writer against the same database.
+	if in.EphemeralLabel != "" {
+		return runDeployTasksOut{}, nil
+	}
+
+	deps := saga.Get[*buildSagaDeps](ctx)
+	b := deps.builder
+	status := deps.statuses.SenderFor(in.StreamID)
+
+	spec, err := unmarshalConfigSpec(in.ConfigSpec)
+	if err != nil {
+		return runDeployTasksOut{}, fmt.Errorf("deserializing config: %w", err)
+	}
+
+	if len(deployTriggeredTasks(&spec)) == 0 {
+		return runDeployTasksOut{}, nil
+	}
+
+	appRec, err := b.appClient.GetByName(ctx, in.AppName)
+	if err != nil {
+		return runDeployTasksOut{}, fmt.Errorf("reading app: %w", err)
+	}
+
+	err = b.runDeployTasks(ctx, in.AppName, appRec.ID, entity.Id(in.AppVersionID), &spec,
+		func(format string, args ...any) {
+			status.SendMessage(fmt.Sprintf(format, args...))
+		})
+	if err != nil {
+		status.SendError("%s", err)
+		return runDeployTasksOut{}, err
+	}
+
+	return runDeployTasksOut{}, nil
+}
+
+// undoRunDeployTasks deliberately does nothing. The runs happened; a deploy
+// task's effects are the app's to reverse, and the platform does not run
+// down-migrations. Nothing was brought up to tear down either, since this gate
+// sits ahead of the rollout.
+func undoRunDeployTasks(_ context.Context, _ runDeployTasksIn, _ runDeployTasksOut) error {
+	return nil
+}
+
 type setActiveVersionIn struct {
 	AppName        string               `json:"app_name" saga:"app_name"`
 	StreamID       string               `json:"stream_id" saga:"stream_id"`
@@ -545,6 +611,10 @@ type setActiveVersionIn struct {
 	EphemeralLabel string               `json:"ephemeral_label,omitempty" saga:"ephemeral_label,optional"`
 	AppConfig      *appconfig.AppConfig `json:"app_config,omitempty" saga:"app_config,optional"`
 	AddonsReady    saga.Edge            `saga:"addons_provisioned"`
+	// DeployTasksRan puts the version flip strictly after every
+	// deploy-triggered task has succeeded, so a failed task means a failed
+	// deploy rather than a half-promoted one.
+	DeployTasksRan saga.Edge `saga:"deploy_tasks_ran"`
 	// DeploymentID is empty for an untracked build. Consuming it also anchors
 	// this action after begin-deployment, which is where the record is created.
 	DeploymentID string `json:"deployment_id,omitempty" saga:"deployment_id,optional"`
@@ -873,6 +943,7 @@ func registerBuildSaga(
 		Action(actionCreateConfigVer, createConfigVersion).Undo(undoCreateConfigVersion).
 		Action(actionCreateVersion, createVersion).Undo(undoCreateVersion).
 		Action(actionProvisionAddons, provisionAddons).Undo(undoProvisionAddons).
+		Action(actionRunDeployTasks, runDeployTasks).Undo(undoRunDeployTasks).
 		Action(actionSetActiveVer, setActiveVersion).Undo(undoSetActiveVersion).
 		Action(actionFinalize, finalize).Undo(undoFinalize).
 		Action(actionBeginDeploy, beginDeployment).Undo(undoBeginDeployment).
