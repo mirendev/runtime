@@ -3,6 +3,7 @@ package version
 import (
 	"context"
 	"fmt"
+	"sort"
 	"time"
 
 	coreutil "miren.dev/runtime/api/core"
@@ -75,6 +76,17 @@ func (c *GCController) RunSecretGC(ctx context.Context) (*SecretGCResult, error)
 
 	cutoff := time.Now().Add(-secretVersionRetention)
 
+	// Candidates cleared every retention rule on the snapshot. They are
+	// collected rather than deleted inline so the pre-delete re-check below can
+	// be one fresh read for the whole sweep instead of one per candidate.
+	type candidate struct {
+		id      entity.Id
+		path    string
+		version string
+		ref     string
+	}
+	var candidates []candidate
+
 	for _, e := range secretsResp.Values() {
 		var sec core_v1alpha.Secret
 		sec.Decode(e.Entity())
@@ -85,11 +97,21 @@ func (c *GCController) RunSecretGC(ctx context.Context) (*SecretGCResult, error)
 			return result, fmt.Errorf("failed to list versions of secret %s: %w", sec.ID, err)
 		}
 
+		versions := make([]*entity.Entity, 0, len(versionsResp.Values()))
 		for _, ve := range versionsResp.Values() {
-			result.TotalScanned++
+			versions = append(versions, ve.Entity())
+		}
+		result.TotalScanned += len(versions)
 
-			ent := ve.Entity()
-			versionID := ent.Id()
+		// Newest first, so each version's successor is the one before it. A
+		// version stopped being usable when its successor was created, which is
+		// what the retention window is actually measured from.
+		sort.Slice(versions, func(i, j int) bool {
+			return versions[i].GetCreatedAt().After(versions[j].GetCreatedAt())
+		})
+
+		for i, ve := range versions {
+			versionID := ve.Id()
 
 			// The version a floating reference resolves to is never reapable,
 			// whatever else is true of it.
@@ -98,48 +120,75 @@ func (c *GCController) RunSecretGC(ctx context.Context) (*SecretGCResult, error)
 				continue
 			}
 
-			ref := secret.FormatRef(sec.Path, ent.ShortId())
+			ref := secret.FormatRef(sec.Path, ve.ShortId())
 			if pinned[ref] {
 				result.RetainedPinned++
 				continue
 			}
 
-			if ent.GetCreatedAt().After(cutoff) {
+			// Measuring from creation would give the case this window exists
+			// for no window at all: a credential that sat current for a year
+			// and rotated this morning is already long past the cutoff on the
+			// day it is superseded. What matters is how long ago it stopped
+			// being current, which is when the next version appeared.
+			supersededAt := ve.GetCreatedAt()
+			if i > 0 {
+				supersededAt = versions[i-1].GetCreatedAt()
+			}
+			if supersededAt.After(cutoff) {
 				result.RetainedRecent++
 				continue
 			}
 
-			// The pin snapshot was taken at the top of the sweep and can be a
-			// full pass stale, so re-check immediately before deleting. A
-			// ConfigVersion minted in that window pins a version this pass
-			// already decided was unreferenced, and unlike an app version there
-			// is no rebuilding a secret that gets deleted underneath it. Same
-			// pattern as pinnedNow on the app-version sweep.
-			nowPinned, err := c.secretVersionPinnedNow(gcCtx, ref)
-			if err != nil {
-				c.Log.Warn("failed to re-check secret version before delete; retaining",
-					"secret", sec.Path, "version", ent.ShortId(), "error", err)
-				result.FailedVersions++
-				continue
-			}
-			if nowPinned {
-				c.Log.Debug("retaining secret version pinned during sweep",
-					"secret", sec.Path, "version", ent.ShortId())
-				result.RetainedPinned++
-				continue
-			}
-
-			if _, err := c.EAC.Delete(gcCtx, versionID.String()); err != nil {
-				c.Log.Warn("failed to delete secret version",
-					"secret", sec.Path, "version", ent.ShortId(), "error", err)
-				result.FailedVersions++
-				continue
-			}
-
-			c.Log.Info("reaped unreferenced secret version",
-				"secret", sec.Path, "version", ent.ShortId())
-			result.DeletedVersions++
+			candidates = append(candidates, candidate{
+				id:      versionID,
+				path:    sec.Path,
+				version: ve.ShortId(),
+				ref:     ref,
+			})
 		}
+	}
+
+	if len(candidates) == 0 {
+		return result, nil
+	}
+
+	// The snapshot above can be a full pass stale by now, and a ConfigVersion
+	// minted in that window pins a version this sweep already judged
+	// unreferenced. Unlike an app version there is no rebuilding a secret that
+	// gets deleted underneath it, so re-read the pins once here and drop
+	// anything that has since been claimed.
+	//
+	// Once for the sweep, not once per candidate: this walks every
+	// ConfigVersion in the cluster, so per-candidate it would be K x N and a
+	// first sweep on a cluster with history could exhaust the time budget and
+	// abort partway.
+	fresh, err := c.pinnedSecretVersions(gcCtx)
+	if err != nil {
+		c.Log.Warn("failed to re-check secret pins before deleting; retaining this sweep",
+			"candidates", len(candidates), "error", err)
+		result.FailedVersions += len(candidates)
+		return result, nil
+	}
+
+	for _, cand := range candidates {
+		if fresh[cand.ref] {
+			c.Log.Debug("retaining secret version pinned during sweep",
+				"secret", cand.path, "version", cand.version)
+			result.RetainedPinned++
+			continue
+		}
+
+		if _, err := c.EAC.Delete(gcCtx, cand.id.String()); err != nil {
+			c.Log.Warn("failed to delete secret version",
+				"secret", cand.path, "version", cand.version, "error", err)
+			result.FailedVersions++
+			continue
+		}
+
+		c.Log.Info("reaped unreferenced secret version",
+			"secret", cand.path, "version", cand.version)
+		result.DeletedVersions++
 	}
 
 	return result, nil
@@ -168,19 +217,4 @@ func (c *GCController) pinnedSecretVersions(ctx context.Context) (map[string]boo
 	}
 
 	return pinned, nil
-}
-
-// secretVersionPinnedNow re-reads the live ConfigVersions and reports whether
-// any of them pins this reference.
-//
-// It runs only for versions that already cleared every other retention rule,
-// so the extra pass costs nothing on a healthy sweep and buys the guarantee
-// that matters: a version is never deleted on the strength of a snapshot that
-// a newly minted config has since invalidated.
-func (c *GCController) secretVersionPinnedNow(ctx context.Context, ref string) (bool, error) {
-	pinned, err := c.pinnedSecretVersions(ctx)
-	if err != nil {
-		return false, err
-	}
-	return pinned[ref], nil
 }

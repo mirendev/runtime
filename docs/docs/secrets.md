@@ -1,6 +1,6 @@
 ---
 title: Secrets
-description: Store credentials encrypted in your cluster and reference them from app config, so the value never sits in plaintext and every deploy records exactly which version it used.
+description: Store credentials encrypted in your cluster and reference them from app config, so the value is never stored in the clear and every deploy records exactly which version it used.
 keywords: [secrets, credentials, encryption, rotation, env vars, secret backend]
 ---
 
@@ -8,9 +8,7 @@ import CliCommand from '@site/src/components/CliCommand';
 
 # Secrets
 
-A secret is a credential Miren holds **encrypted**, that your app config **points at** rather than contains. The value is decrypted only in memory, at the moment a container starts.
-
-This is different from marking an env var sensitive:
+For a real credential, `miren env set -s` is not enough: it masks the value in output, but the value itself still sits in your config. A secret is the alternative — a credential Miren holds **encrypted**, that your app config **points at** rather than contains.
 
 | | `miren env set -s KEY` | `miren secret set` |
 |---|---|---|
@@ -20,6 +18,8 @@ This is different from marking an env var sensitive:
 | History | none | immutable versions you can roll back to |
 
 Use `-s` for values that are merely noisy in a terminal. Use a secret for anything that would matter if it leaked.
+
+Miren decrypts a secret at two points and holds the result only in memory: when a deploy resolves your reference to a concrete version, and when the container that needs the value is created. It is never written back to the cluster store in the clear.
 
 ## Storing a secret
 
@@ -58,10 +58,12 @@ Point an environment variable at it. The value does not travel through your shel
 <CliCommand context="client">
 
 ```miren
-miren env set -e STRIPE_API_KEY --backend cluster --ref payments/stripe-key
+miren env set -e STRIPE_API_KEY --ref payments/stripe-key
 ```
 
 </CliCommand>
+
+`--backend` defaults to `cluster`, so it is only needed when you have another backend registered.
 
 Or declare it in `app.toml`, which is safe to commit:
 
@@ -82,7 +84,7 @@ STRIPE_API_KEY   → cluster:payments/stripe-key@x1A  manual
 DATABASE_POOL    10                                 manual
 ```
 
-A reference cannot be combined with a value — set one or the other.
+Note the asymmetry: `backend` is optional on the command line but **required** in `app.toml`, where a `ref` without one is rejected rather than assumed. A reference cannot be combined with a value — set one or the other.
 
 ## Pinning: which version a deploy used
 
@@ -162,6 +164,8 @@ Each version is sealed with its own random data key, and only that key is encryp
 - The cluster key only ever performs small fixed-size operations, so it can move behind a KMS later without your stored data changing shape.
 
 Within Miren, the plaintext exists only transiently and only in memory: while a deploy resolves it, and while the container that needs it is being created. It is never written to the cluster store, a sandbox spec, an image layer, or a log.
+
+On a multi-node cluster the value does cross the network once. A runner holds no key material, so the coordinator decrypts and returns the value over the cluster's authenticated connection, where it lives only long enough to be handed to the container.
 
 Once the container starts, your application holds its own copy for as long as it runs — an environment variable is readable by the process and anything that can inspect it. Miren stops handing the value around; it cannot un-give it to the app you handed it to.
 

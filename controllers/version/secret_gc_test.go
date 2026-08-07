@@ -271,12 +271,7 @@ func TestSecretGCRecheckesPinsImmediatelyBeforeDeleting(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	// The re-check sees what the snapshot could not.
-	nowPinned, err := gc.secretVersionPinnedNow(ctx, ref)
-	require.NoError(t, err)
-	assert.True(t, nowPinned, "the pre-delete re-check must see the newly minted pin")
-
-	// And a full sweep now retains it rather than reaping it.
+	// The sweep's pre-delete re-check sees what its own snapshot could not.
 	result, err := gc.RunSecretGC(ctx)
 	require.NoError(t, err)
 	assert.Equal(t, 0, result.DeletedVersions)
@@ -284,4 +279,70 @@ func TestSecretGCRecheckesPinsImmediatelyBeforeDeleting(t *testing.T) {
 
 	_, err = inmem.EAC.Get(ctx, orphan.String())
 	assert.NoError(t, err, "the newly pinned version must still exist")
+}
+
+// The window has to run from when a version stopped being current, not from
+// when it was created. Measuring from creation gives the case it exists for no
+// protection at all: a credential that sat current for a year and rotated this
+// morning is already long past the cutoff on the day it is superseded.
+func TestSecretGCMeasuresRetentionFromSupersessionNotCreation(t *testing.T) {
+	ctx := context.Background()
+	inmem, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	secretID := entity.Id("secret/payments.stripe-key")
+
+	// Created long ago, and current right up until moments ago.
+	longLived := createSecretVersion(t, inmem.EAC, "sv-long-lived",
+		&core_v1alpha.SecretVersion{Secret: secretID, State: core_v1alpha.ENABLED}, aged())
+
+	// The rotation that superseded it just happened.
+	current := createSecretVersion(t, inmem.EAC, "sv-current",
+		&core_v1alpha.SecretVersion{Secret: secretID, State: core_v1alpha.ENABLED}, time.Now())
+
+	_, err := inmem.Client.Create(ctx, "payments.stripe-key", &core_v1alpha.Secret{
+		Path:           "payments/stripe-key",
+		CurrentVersion: current,
+	})
+	require.NoError(t, err)
+
+	result, err := newSecretGC(t, inmem.EAC).RunSecretGC(ctx)
+	require.NoError(t, err)
+
+	assert.Equal(t, 0, result.DeletedVersions,
+		"a just-superseded version must be retained however old it is")
+	assert.Equal(t, 1, result.RetainedRecent)
+
+	_, err = inmem.EAC.Get(ctx, longLived.String())
+	assert.NoError(t, err, "the old value must still be recoverable right after a rotation")
+}
+
+// The flip side: once the window has actually elapsed since supersession, an
+// unreferenced version does go.
+func TestSecretGCReapsOnceTheWindowHasElapsedSinceSupersession(t *testing.T) {
+	ctx := context.Background()
+	inmem, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	secretID := entity.Id("secret/payments.stripe-key")
+
+	// Superseded long ago: both it and its successor predate the window.
+	old := createSecretVersion(t, inmem.EAC, "sv-old",
+		&core_v1alpha.SecretVersion{Secret: secretID, State: core_v1alpha.ENABLED},
+		aged().Add(-time.Hour))
+	current := createSecretVersion(t, inmem.EAC, "sv-current",
+		&core_v1alpha.SecretVersion{Secret: secretID, State: core_v1alpha.ENABLED}, aged())
+
+	_, err := inmem.Client.Create(ctx, "payments.stripe-key", &core_v1alpha.Secret{
+		Path:           "payments/stripe-key",
+		CurrentVersion: current,
+	})
+	require.NoError(t, err)
+
+	result, err := newSecretGC(t, inmem.EAC).RunSecretGC(ctx)
+	require.NoError(t, err)
+
+	assert.Equal(t, 1, result.DeletedVersions)
+	_, err = inmem.EAC.Get(ctx, old.String())
+	assert.Error(t, err)
 }
