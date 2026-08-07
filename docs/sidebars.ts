@@ -25,6 +25,7 @@ const sidebars: SidebarsConfig = {
         'deployment',
         'app-configuration',
         'services',
+        'tasks',
         'ci-deploy',
         'pr-environments',
       ],

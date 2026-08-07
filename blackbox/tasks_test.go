@@ -303,3 +303,42 @@ func TestAttachedRunWaitsForTheCommand(t *testing.T) {
 		t.Fatalf("attached run missed output written before the command exited; got:\n%s", r.Stdout)
 	}
 }
+
+// A failing deploy task must fail the deploy. The gate sits before any rollout
+// begins, so the app should end up with no active version at all rather than a
+// half-promoted one.
+func TestDeployTaskGatesTheDeploy(t *testing.T) {
+	c := harness.NewCluster(t)
+	m := harness.NewMiren(t, c)
+
+	name := harness.UniqueAppName(t, "deploy-gate")
+	t.Cleanup(func() {
+		m.Run("app", "delete", name, "-f")
+	})
+
+	dir := m.ContainerPath(fmt.Sprintf("%s/task-deploy-gate", c.TestdataDir))
+	r := m.Run("deploy", "-a", name, "-d", dir, "-f")
+
+	if r.Success() {
+		t.Fatal("deploy succeeded despite its deploy task failing; the gate did not hold")
+	}
+	if !strings.Contains(r.Stdout+r.Stderr, "migrate") {
+		t.Fatalf("deploy failure should name the task that failed:\nstdout: %s\nstderr: %s", r.Stdout, r.Stderr)
+	}
+
+	// The run is recorded even though the deploy failed -- that is where its
+	// logs live and how you find out why.
+	runs := listRuns(t, m, name)
+	var found bool
+	for _, run := range runs {
+		if run.Task == "migrate" && run.Trigger == "deploy" {
+			found = true
+			if run.Status != "failed" {
+				t.Errorf("deploy-triggered run status %q, want failed", run.Status)
+			}
+		}
+	}
+	if !found {
+		t.Errorf("expected a deploy-triggered run for migrate, got %+v", runs)
+	}
+}

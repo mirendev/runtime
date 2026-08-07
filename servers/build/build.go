@@ -1696,6 +1696,31 @@ func (b *Builder) buildFromDir(ctx context.Context, name string, path string,
 			}
 		}
 
+		// Gate the flip on deploy-triggered tasks. This mirrors the saga's
+		// runDeployTasks action and has to exist here too: the saga builder is
+		// behind a labs flag, so this is the path that actually runs today.
+		if len(deployTriggeredTasks(&configSpec)) > 0 {
+			appRec, appErr := b.appClient.GetByName(ctx, name)
+			if appErr != nil {
+				return nil, fmt.Errorf("reading app for deploy tasks: %w", appErr)
+			}
+
+			if taskErr := b.runDeployTasks(ctx, name, appRec.ID, id, &configSpec,
+				func(format string, args ...any) {
+					if status == nil {
+						return
+					}
+					so := new(build_v1alpha.Status)
+					so.Update().SetMessage(fmt.Sprintf(format, args...))
+					if _, sendErr := status.Send(ctx, so); sendErr != nil {
+						b.Log.Warn("error sending deploy task status", "error", sendErr)
+					}
+				}); taskErr != nil {
+				b.sendErrorStatus(ctx, status, "%s", taskErr)
+				return nil, taskErr
+			}
+		}
+
 		b.Log.Info("updating app entity with new version", "app", name, "version", mrv.Version)
 		err = b.appClient.SetActiveVersion(activateCtx, name, string(id))
 		if err != nil {
