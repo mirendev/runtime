@@ -24,6 +24,7 @@ import (
 	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/api/network/network_v1alpha"
+	"miren.dev/runtime/pkg/appspec"
 	"miren.dev/runtime/pkg/concurrency"
 	"miren.dev/runtime/pkg/cond"
 	"miren.dev/runtime/pkg/containerdx"
@@ -31,7 +32,6 @@ import (
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/types"
 	"miren.dev/runtime/pkg/idgen"
-	"miren.dev/runtime/pkg/secret"
 )
 
 var launcherTracer = otel.Tracer("miren.dev/runtime/deployment/launcher")
@@ -590,7 +590,10 @@ func (l *Launcher) buildSandboxSpec(
 	*compute_v1alpha.SandboxSpec,
 	error,
 ) {
-	// Get app metadata
+	// Resolving the app's name is the only thing this needs the store for, and
+	// hoisting it here is what lets the spec builder be a plain function that
+	// anything can call -- which is why there is no longer a second, drifted
+	// copy of it in the exec proxy.
 	appResp, err := l.EAC.Get(ctx, app.ID.String())
 	if err != nil {
 		return nil, fmt.Errorf("failed to get app: %w", err)
@@ -599,248 +602,14 @@ func (l *Launcher) buildSandboxSpec(
 	var appMD core_v1alpha.Metadata
 	appMD.Decode(appResp.Entity().Entity())
 
-	sbSpec := &compute_v1alpha.SandboxSpec{
-		Version:      ver.ID,
-		LogEntity:    app.ID.String(),
-		LogAttribute: types.LabelSet("miren.stage", "app-run", "miren.service", serviceName),
-	}
-
-	startDir := cfgSpec.StartDirectory
-	if startDir == "" {
-		startDir = "/app"
-	}
-
-	appEnv := appclient.RuntimeEnvWithAlias(appclient.EnvRuntimeApp, appMD.Name)
-	appEnv = append(appEnv, appclient.RuntimeEnvWithAlias(appclient.EnvRuntimeVersion, ver.Version)...)
-
-	appCont := compute_v1alpha.SandboxSpecContainer{
-		Name:      "app",
-		Image:     image,
-		Env:       appEnv,
-		Directory: startDir,
-	}
-
-	// Determine port configuration from service config
-	var containerPorts []compute_v1alpha.SandboxSpecContainerPort
-	portEnvValue := int64(0)
-	shutdownTimeout := ""
-
-	for _, svc := range cfgSpec.Services {
-		if svc.Name == serviceName {
-			if svc.Concurrency.ShutdownTimeout != "" {
-				shutdownTimeout = svc.Concurrency.ShutdownTimeout
-			}
-			if svc.PortTimeout != "" {
-				sbSpec.PortWaitTimeout = svc.PortTimeout
-			}
-
-			if len(svc.Ports) > 0 {
-				// Multi-port path: map each port entry
-				for _, p := range svc.Ports {
-					portType := p.Type
-					if portType == "" {
-						portType = "http"
-					}
-					cp := compute_v1alpha.SandboxSpecContainerPort{
-						Port:     p.Port,
-						Name:     p.Name,
-						Type:     portType,
-						NodePort: p.NodePort,
-					}
-					switch p.Protocol {
-					case core_v1alpha.ConfigSpecServicesPortsTCP:
-						cp.Protocol = compute_v1alpha.SandboxSpecContainerPortTCP
-					case core_v1alpha.ConfigSpecServicesPortsUDP:
-						cp.Protocol = compute_v1alpha.SandboxSpecContainerPortUDP
-					}
-					containerPorts = append(containerPorts, cp)
-				}
-
-				// PORT env var: first HTTP-typed port, or first port if none is HTTP
-				for _, cp := range containerPorts {
-					if cp.Type == "http" {
-						portEnvValue = cp.Port
-						break
-					}
-				}
-				if portEnvValue == 0 {
-					portEnvValue = containerPorts[0].Port
-				}
-
-				if serviceName == "web" {
-					hasHTTP := false
-					for _, cp := range containerPorts {
-						if cp.Type == "http" {
-							hasHTTP = true
-							break
-						}
-					}
-					if !hasHTTP {
-						containerPorts = append(containerPorts, compute_v1alpha.SandboxSpecContainerPort{
-							Port: 3000, Name: "http", Type: "http",
-						})
-						portEnvValue = 3000
-					}
-				}
-			} else {
-				// Scalar port path (backward compat)
-				port := svc.Port
-				portName := svc.PortName
-				portType := svc.PortType
-
-				if port == 0 && serviceName == "web" {
-					port = 3000
-				}
-
-				if port > 0 {
-					if portName == "" {
-						portName = "http"
-					}
-					if portType == "" {
-						portType = "http"
-					}
-					containerPorts = []compute_v1alpha.SandboxSpecContainerPort{
-						{Port: port, Name: portName, Type: portType},
-					}
-					portEnvValue = port
-				}
-			}
-			break
-		}
-	}
-
-	// Default to 3000 for web service if no service config matched at all
-	if len(containerPorts) == 0 && serviceName == "web" {
-		containerPorts = []compute_v1alpha.SandboxSpecContainerPort{
-			{Port: 3000, Name: "http", Type: "http"},
-		}
-		portEnvValue = 3000
-	}
-
-	if len(containerPorts) > 0 {
-		appCont.Port = containerPorts
-	}
-
-	// Add user-supplied config env vars, stripping any system-managed keys.
-	//
-	// A backend-sourced variable contributes a reference, never a value. This
-	// spec is persisted as part of the sandbox pool entity, so materializing
-	// here would put the plaintext in etcd — the exact thing referencing a
-	// secret instead of inlining it is meant to avoid. The value is substituted
-	// in memory when the container is created.
-	envMap := make(map[string]string)
-	for _, x := range cfgSpec.Variables {
-		if !isSystemEnvVar(x.Key) {
-			envMap[x.Key] = secret.EnvValue(x.Backend, x.Value)
-		}
-	}
-
-	// Find and merge per-service env vars (these override global vars)
-	for _, svc := range cfgSpec.Services {
-		if svc.Name == serviceName {
-			for _, x := range svc.Env {
-				if !isSystemEnvVar(x.Key) {
-					envMap[x.Key] = secret.EnvValue(x.Backend, x.Value)
-				}
-			}
-			break
-		}
-	}
-
-	// Convert map to env var slice
-	for k, v := range envMap {
-		appCont.Env = append(appCont.Env, k+"="+v)
-	}
-
-	// Append system-managed env vars last so they cannot be overridden
-	if portEnvValue > 0 {
-		appCont.Env = append(appCont.Env, fmt.Sprintf("PORT=%d", portEnvValue))
-	}
-	if ver.AdminToken != "" {
-		appCont.Env = append(appCont.Env, "ADMIN_TOKEN="+ver.AdminToken)
-	}
-
-	// Find service command
-	for _, svc := range cfgSpec.Services {
-		if svc.Name == serviceName && svc.Command != "" {
-			if cfgSpec.Entrypoint != "" {
-				appCont.Command = cfgSpec.Entrypoint + " " + svc.Command
-			} else {
-				appCont.Command = svc.Command
-			}
-			break
-		}
-	}
-
-	// Add disk volumes and mounts for this service
-	for _, svc := range cfgSpec.Services {
-		if svc.Name == serviceName {
-			// Pre-compute concurrency mode for miren disk eligibility check
-			var skipMirenDisks bool
-			hasMirenDisks := false
-			for _, disk := range svc.Disks {
-				if disk.Provider == "" || disk.Provider == core_v1alpha.ConfigSpecServicesDisksMIREN {
-					hasMirenDisks = true
-					break
-				}
-			}
-			if hasMirenDisks {
-				svcConcurrency, err := coreutil.GetServiceConcurrency(cfgSpec, serviceName)
-				if err != nil {
-					return nil, fmt.Errorf("failed to get service concurrency: %w", err)
-				}
-
-				if svcConcurrency.Mode != "fixed" {
-					l.Log.Warn("skipping miren disk attachment for non-fixed service",
-						"service", serviceName,
-						"mode", svcConcurrency.Mode)
-					skipMirenDisks = true
-				}
-			}
-
-			for _, disk := range svc.Disks {
-				var provider string
-				switch disk.Provider {
-				case core_v1alpha.ConfigSpecServicesDisksLOCAL:
-					provider = "local"
-				case core_v1alpha.ConfigSpecServicesDisksMIREN:
-					provider = "miren"
-				default:
-					provider = "miren"
-				}
-
-				if skipMirenDisks && provider != "local" {
-					continue
-				}
-
-				sbSpec.Volume = append(sbSpec.Volume, compute_v1alpha.SandboxSpecVolume{
-					Name:         disk.Name,
-					Provider:     provider,
-					DiskName:     disk.Name,
-					MountPath:    disk.MountPath,
-					ReadOnly:     disk.ReadOnly,
-					SizeGb:       disk.SizeGb,
-					Filesystem:   disk.Filesystem,
-					LeaseTimeout: disk.LeaseTimeout,
-					Owner:        disk.Owner,
-				})
-
-				appCont.Mount = append(appCont.Mount, compute_v1alpha.SandboxSpecContainerMount{
-					Source:      disk.Name,
-					Destination: disk.MountPath,
-				})
-			}
-			break
-		}
-	}
-
-	if shutdownTimeout != "" {
-		appCont.ShutdownTimeout = shutdownTimeout
-	}
-
-	sbSpec.Container = []compute_v1alpha.SandboxSpecContainer{appCont}
-
-	return sbSpec, nil
+	return appspec.Build(l.Log, appspec.Options{
+		AppID:   app.ID,
+		AppName: appMD.Name,
+		Version: ver,
+		Config:  cfgSpec,
+		Service: serviceName,
+		Image:   image,
+	})
 }
 
 // dirHasData returns true if the directory exists and contains at least one entry.
@@ -1133,18 +902,6 @@ func envVarsEqual(env1, env2 []string) bool {
 	}
 
 	return true
-}
-
-// isSystemEnvVar returns true if the given key is a system-managed env var
-// that user config must not override. The whole MIREN_ namespace is reserved
-// (the injected MIREN_RUNTIME_* vars are enumerated in api/app/runtimeenv.go),
-// so only the unprefixed names need explicit cases here.
-func isSystemEnvVar(key string) bool {
-	switch key {
-	case "PORT", "ADMIN_TOKEN":
-		return true
-	}
-	return appclient.IsReservedEnvVar(key)
 }
 
 // filterSystemEnvVars filters out system-managed env vars that shouldn't affect pool reuse.
