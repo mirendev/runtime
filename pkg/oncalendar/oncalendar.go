@@ -18,9 +18,17 @@ import (
 	"time"
 )
 
-// searchHorizon bounds Next's forward scan. An expression that matches nothing
-// within five years is treated as unsatisfiable rather than scanned forever.
-const searchHorizon = 5
+// searchHorizon bounds Next's forward scan, in years. An expression matching
+// nothing within it is treated as unsatisfiable rather than scanned forever.
+//
+// It has to clear the longest gap between two firings of a satisfiable
+// expression, and that is not four years. A bare "*-02-29" recurs every four,
+// but intersecting a leap day with a weekday stretches much further: "Mon
+// *-02-29" can go 40 years between hits, because the Gregorian century rule
+// drops leap days that would otherwise land mid-cycle. Fifty leaves room and
+// costs nothing -- an unsatisfiable expression is rejected after a day-level
+// scan, which is tens of thousands of cheap iterations, once, at parse time.
+const searchHorizon = 50
 
 // Expr is a parsed calendar expression.
 type Expr struct {

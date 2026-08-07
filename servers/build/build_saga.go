@@ -117,6 +117,9 @@ func undoReceiveTar(ctx context.Context, in receiveTarIn, _ receiveTarOut) error
 type loadSourceIn struct {
 	AppName   string `json:"app_name" saga:"app_name"`
 	SourceDir string `json:"source_dir" saga:"source_dir"`
+	// StreamID is consumed so a config error found here can be reported to the
+	// deploying client, which is the whole value of failing fast.
+	StreamID string `json:"stream_id" saga:"stream_id"`
 }
 
 type loadSourceOut struct {
@@ -147,6 +150,16 @@ func loadSource(ctx context.Context, in loadSourceIn) (loadSourceOut, error) {
 	procfile, err := b.readProcFile(tr)
 	if err != nil {
 		return loadSourceOut{}, fmt.Errorf("reading procfile: %w", err)
+	}
+
+	// Ask about web intent here rather than in prepareConfig. Everything it
+	// reads is source-derived and already in hand, so this is the fail-fast this
+	// action exists for -- and prepareConfig is too late anyway, since
+	// buildVersionConfig stages a synthesized web service into ac.Services and
+	// the question can no longer be asked afterwards.
+	if err := validateWebIntent(ac, procfile); err != nil {
+		deps.statuses.SenderFor(in.StreamID).SendError("%s\n\nSee https://miren.md/app-toml#tasks", err)
+		return loadSourceOut{}, err
 	}
 
 	return loadSourceOut{
@@ -263,13 +276,6 @@ func prepareConfig(ctx context.Context, in prepareConfigIn) (prepareConfigOut, e
 	// live. The write happens later, at activation.
 	if err := validateWorkloadRole(in.AppConfig); err != nil {
 		status.SendError("%s", err)
-		return prepareConfigOut{}, err
-	}
-	// Ask about web intent before checking for workloads: an ambiguous app
-	// would pass the workload check on a synthesized web service, which is
-	// exactly the outcome the question exists to prevent.
-	if err := validateWebIntent(in.AppConfig, in.ProcfileServices); err != nil {
-		status.SendError("%s\n\nSee https://miren.md/app-toml#tasks", err)
 		return prepareConfigOut{}, err
 	}
 	if err := validateWorkloadsExist(spec); err != nil {

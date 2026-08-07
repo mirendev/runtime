@@ -2748,3 +2748,59 @@ func TestValidateWorkloadsExistAcceptsTasksOnly(t *testing.T) {
 
 	assert.ErrorIs(t, validateWorkloadsExist(core_v1alpha.ConfigSpec{}), errNoServices)
 }
+
+// The check has to survive being run in the order the build actually runs
+// things. buildServicesConfig calls ResolveDefaults, which mutates ac.Services
+// in place to stage the synthesized web service -- so once the config has been
+// assembled, every app looks like it declares a service and the question can no
+// longer be asked. A test with a fresh struct is exactly where that aliasing is
+// invisible, which is why this one goes through buildVersionConfig first.
+func TestValidateWebIntentSurvivesConfigAssembly(t *testing.T) {
+	ac := &appconfig.AppConfig{
+		Tasks: map[string]*appconfig.TaskConfig{
+			"session": {Command: "/bin/bash"},
+		},
+	}
+
+	// Asked before assembly -- the order the build uses -- the ambiguity is caught.
+	require.ErrorIs(t, validateWebIntent(ac, nil), errAmbiguousWeb)
+
+	spec := buildVersionConfig(ConfigInputs{
+		BuildResult: &BuildResult{Command: "bin/server"},
+		AppConfig:   ac,
+	})
+	require.NotEmpty(t, spec.Services, "assembly stages a synthesized web service")
+
+	// And this is the trap: after assembly the app claims a service it never
+	// declared, so asking now can never fail.
+	assert.Contains(t, ac.Services, "web",
+		"ResolveDefaults mutates the caller's config, which is what makes the ordering load-bearing")
+	assert.NoError(t, validateWebIntent(ac, nil),
+		"asking after assembly always passes; if this ever starts failing the ordering constraint has changed")
+}
+
+// A task's env is declared the same way a service's is, so a required-but-empty
+// task variable must fail the deploy too -- otherwise the run starts and falls
+// over on a value the platform already knew was missing.
+func TestValidateRequiredVarsCoversTaskEnv(t *testing.T) {
+	spec := core_v1alpha.ConfigSpec{
+		Tasks: []core_v1alpha.ConfigSpecTasks{
+			{
+				Name: "migrate",
+				Env: []core_v1alpha.ConfigSpecTasksEnv{
+					{Key: "DATABASE_URL", Required: true},
+					{Key: "OPTIONAL", Required: false},
+				},
+			},
+		},
+	}
+
+	err := validateRequiredVars(spec)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "DATABASE_URL")
+	assert.Contains(t, err.Error(), "task: migrate", "the message should say where to look")
+	assert.NotContains(t, err.Error(), "OPTIONAL")
+
+	spec.Tasks[0].Env[0].Value = "postgres://..."
+	assert.NoError(t, validateRequiredVars(spec))
+}

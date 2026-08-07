@@ -287,7 +287,7 @@ func buildTasksConfig(appConfig *appconfig.AppConfig, log *slog.Logger) []core_v
 		schedule, err := tc.ResolvedSchedule()
 		if err != nil {
 			if log != nil {
-				log.Error("dropping task with an unresolvable schedule",
+				log.Warn("dropping task with an unresolvable schedule",
 					"task", name, "error", err)
 			}
 			continue
@@ -326,7 +326,10 @@ func validateRequiredVars(spec core_v1alpha.ConfigSpec) error {
 	type missingVar struct {
 		key         string
 		description string
-		service     string
+		// owner names the service or task the variable belongs to, and kind
+		// says which, so the message can tell a user where to look.
+		owner string
+		kind  string
 	}
 	var missing []missingVar
 
@@ -338,7 +341,17 @@ func validateRequiredVars(spec core_v1alpha.ConfigSpec) error {
 	for _, svc := range spec.Services {
 		for _, e := range svc.Env {
 			if e.Required && strings.TrimSpace(e.Value) == "" {
-				missing = append(missing, missingVar{key: e.Key, description: e.Description, service: svc.Name})
+				missing = append(missing, missingVar{key: e.Key, description: e.Description, owner: svc.Name, kind: "service"})
+			}
+		}
+	}
+	// Tasks declare env the same way services do, so a required-but-empty task
+	// variable has to fail the deploy for the same reason: the run would start
+	// and then fall over on a value the platform already knew was missing.
+	for _, task := range spec.Tasks {
+		for _, e := range task.Env {
+			if e.Required && strings.TrimSpace(e.Value) == "" {
+				missing = append(missing, missingVar{key: e.Key, description: e.Description, owner: task.Name, kind: "task"})
 			}
 		}
 	}
@@ -350,8 +363,8 @@ func validateRequiredVars(spec core_v1alpha.ConfigSpec) error {
 	var b strings.Builder
 	b.WriteString("missing required environment variables:\n")
 	for _, m := range missing {
-		if m.service != "" {
-			fmt.Fprintf(&b, "  - %s (service: %s)", m.key, m.service)
+		if m.owner != "" {
+			fmt.Fprintf(&b, "  - %s (%s: %s)", m.key, m.kind, m.owner)
 		} else {
 			fmt.Fprintf(&b, "  - %s", m.key)
 		}
@@ -1484,6 +1497,17 @@ func (b *Builder) buildFromDir(ctx context.Context, name string, path string,
 		b.Log.Debug("using procfile", "services", maps.Keys(procfileServices))
 	}
 
+	// Ask about web intent before assembling the config, not after.
+	// buildServicesConfig calls ResolveDefaults, which mutates ac.Services in
+	// place to stage the synthesized web service -- so afterwards the app always
+	// looks like it declares a service and the question can never be asked.
+	// Nothing this reads comes from build output, so asking here also fails fast
+	// instead of after a full image build.
+	if err := validateWebIntent(ac, procfileServices); err != nil {
+		b.sendErrorStatus(ctx, status, "%s\n\nSee https://miren.md/app-toml#tasks", err)
+		return nil, err
+	}
+
 	// Build the version config from all inputs
 	configSpec := buildVersionConfig(ConfigInputs{
 		BuildResult:      res,
@@ -1493,14 +1517,6 @@ func (b *Builder) buildFromDir(ctx context.Context, name string, path string,
 		CliEnvVars:       envVars,
 		Log:              b.Log,
 	})
-
-	// Ask about web intent before checking for workloads: an ambiguous app
-	// would pass the workload check on a synthesized web service, which is
-	// exactly the outcome the question exists to prevent.
-	if err := validateWebIntent(ac, procfileServices); err != nil {
-		b.sendErrorStatus(ctx, status, "%s\n\nSee https://miren.md/app-toml#tasks", err)
-		return nil, err
-	}
 
 	// Fail the deploy if the app declares nothing to run at all.
 	if err := validateWorkloadsExist(configSpec); err != nil {

@@ -402,7 +402,7 @@ accepted; `man systemd.time` documents the full grammar.
 - `every` and `schedule` are mutually exclusive, and exactly one is required when `trigger = "schedule"`. Setting either without that trigger is an error rather than a silent no-op.
 - `every` must divide a day evenly.
 - `timeout` must be a valid Go duration and must not be negative.
-- `retries` must be non-negative, and has no effect on a `manual` task — the caller decides whether to retry.
+- `retries` must be non-negative, and is rejected on a `manual` task — the caller decides whether to retry.
 - `max_concurrent` must be at least 1.
 :::
 

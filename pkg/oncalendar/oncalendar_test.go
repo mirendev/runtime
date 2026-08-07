@@ -301,3 +301,45 @@ func TestDesugarEveryRejectsNonPositive(t *testing.T) {
 		assert.Error(t, err, "duration %s", d)
 	}
 }
+
+// Intersecting a leap day with a weekday stretches far past the four-year leap
+// cycle: the Gregorian century rule drops leap days that would otherwise land
+// mid-cycle, so consecutive hits can be decades apart. A horizon sized for leap
+// years alone rejects these as "never fires".
+func TestParseAcceptsWeekdayOnLeapDay(t *testing.T) {
+	for _, expr := range []string{
+		"Mon *-02-29 00:00:00",
+		"Sun *-02-29 12:00:00",
+		"Thu *-02-29 09:30:00",
+	} {
+		t.Run(expr, func(t *testing.T) {
+			e, err := Parse(expr)
+			require.NoError(t, err, "a satisfiable expression must not be rejected")
+
+			next, ok := e.Next(at("2026-08-04T00:00:00Z"))
+			require.True(t, ok)
+			assert.Equal(t, 29, next.Day())
+			assert.Equal(t, time.February, next.Month())
+		})
+	}
+}
+
+func TestNextFindsADistantWeekdayLeapDay(t *testing.T) {
+	e, err := Parse("Mon *-02-29 00:00:00")
+	require.NoError(t, err)
+
+	// 2044-02-29 is a Monday; the preceding Monday leap day is 2016.
+	next, ok := e.Next(at("2026-08-04T00:00:00Z"))
+	require.True(t, ok)
+	assert.Equal(t, at("2044-02-29T00:00:00Z"), next)
+	assert.Equal(t, time.Monday, next.Weekday())
+}
+
+// Genuinely impossible dates must still be rejected, or the wider horizon would
+// just be trading one wrong answer for a slower one.
+func TestParseStillRejectsImpossibleDates(t *testing.T) {
+	for _, expr := range []string{"*-02-30 00:00:00", "*-04-31 00:00:00", "*-06-31 12:00:00"} {
+		_, err := Parse(expr)
+		assert.Error(t, err, "%s can never occur", expr)
+	}
+}
