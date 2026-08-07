@@ -383,6 +383,7 @@ type Coordinator struct {
 	autocertReady func() // nil when DNS-01 path is used
 	artifactGC    *artifactctrl.GCController
 	runScheduler  *runctrl.Scheduler
+	runGC         *runctrl.GCController
 	ephemeralGC   *ephemeralctrl.GCController
 	versionGC     *versionctrl.GCController
 	indexGC       *indexgcctrl.GCController
@@ -464,6 +465,9 @@ func (c *Coordinator) Stop() {
 	}
 	if c.runScheduler != nil {
 		c.runScheduler.Stop()
+	}
+	if c.runGC != nil {
+		c.runGC.Stop()
 	}
 	if c.versionGC != nil {
 		c.versionGC.Stop()
@@ -1366,6 +1370,11 @@ func (c *Coordinator) Start(ctx context.Context) error {
 	// the create-if-absent on the tick-derived name rather than any lock.
 	c.runScheduler = runctrl.NewScheduler(c.Log, ec, eac)
 	c.runScheduler.Start(ctx)
+
+	// Run retention. Not a reconcile controller: it deletes rather than
+	// transitions, on a cadence of minutes.
+	c.runGC = runctrl.NewGCController(c.Log, ec, eac)
+	c.runGC.Start(ctx)
 
 	// A sandbox reaching STOPPED produces no event on the run index, so without
 	// this bridge a finished run would wait for the sweep to notice it.
