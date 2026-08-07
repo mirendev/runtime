@@ -1,0 +1,160 @@
+domain: dev.miren.run
+version: v1alpha
+
+kinds:
+  # A Run is one execution of a task: one sandbox built from the app's deployed
+  # image and config, one command, one exit code, then teardown.
+  #
+  # One kind covers every trigger. A deploy-gated migration, a scheduled
+  # cleanup, and someone typing `miren app run` differ only in what created the
+  # Run and what the platform does with the result; the execution is identical,
+  # so splitting them would mean three copies of the same controller.
+  run:
+    app:
+      type: ref
+      doc: The app this run belongs to
+      indexed: true
+      tags: [dev.miren.app_ref]
+
+    version:
+      type: ref
+      doc: The app version whose image and config this run executes
+
+    task:
+      type: string
+      doc: Task name from app.toml
+
+    trigger:
+      type: enum
+      choices: [deploy, schedule, manual]
+      doc: What started this run
+
+    command:
+      type: string
+      doc: The resolved command, after any invoke override
+
+    sandbox:
+      type: ref
+      doc: |
+        The sandbox executing the current attempt, once one has been created.
+        Earlier attempts' sandboxes are recorded in attempt_record rather than
+        being overwritten here.
+
+    status:
+      type: enum
+      choices: [pending, running, succeeded, failed, timed_out, canceled, skipped]
+      indexed: true
+      doc: |
+        Indexed because the deadline sweep lists non-terminal runs on a short
+        interval; scanning every run of every app to find them would not hold up.
+
+        "skipped" is a scheduled run that never executed because its predecessor
+        was still going. It exists so a skipped tick is visible rather than
+        looking like a gap, since "my job stopped running" and "my job got
+        slower than its interval" are otherwise indistinguishable from outside.
+
+    attempt:
+      type: int
+      doc: |
+        1-based, incremented in place on retry. Retries deliberately reuse this
+        entity rather than creating a second one: for a scheduled run the entity
+        id is derived from the tick, and that derivation is the dedup guarantee.
+
+    tick:
+      type: string
+      doc: |
+        Scheduled runs only: the RFC 3339 instant this run claims. Every replica
+        derives the same ticks from the stored calendar expression, so creating
+        the run is a create-if-absent on an id derived from this, and etcd picks
+        the single winner.
+
+    timeout:
+      type: string
+      doc: Go duration bounding the run; empty means the platform default, "0" unbounded
+
+    max_attempts:
+      type: int
+      doc: Total attempts allowed, resolved from the task's retries at creation
+
+    started_at:
+      type: time
+      doc: When the current attempt entered running
+
+    ended_at:
+      type: time
+      doc: When the run reached a terminal status
+
+    cancel_requested_at:
+      type: time
+      doc: |
+        Set by `miren app runs cancel`. Cancellation is a request rather than a
+        status write because the controller owns every status transition; a
+        second writer would race it.
+
+    # Reported result, as an input to the controller rather than a state it
+    # owns. Absent for a run that timed out or was canceled: no exit was
+    # observed, and inventing a code would be indistinguishable from the process
+    # having returned one.
+    result:
+      type: component
+      doc: The exit reported for the current attempt
+      attrs:
+        code:
+          type: int
+          required: true
+          doc: Exit code. Required so a legitimate 0 survives encoding.
+        at:
+          type: time
+          doc: When the exit was observed. Always set, or a zero-code result encodes to nothing.
+
+    # One record per attempt, kept because a retried run's earlier sandbox is
+    # the only place its logs live -- and the failed attempt is the reason
+    # anyone opens a retried run in the first place.
+    attempt_record:
+      type: component
+      doc: History of attempts made for this run
+      many: true
+      attrs:
+        attempt:
+          type: int
+          required: true
+        sandbox:
+          type: ref
+        exit_code:
+          type: int
+          required: true
+        status:
+          type: string
+        started_at:
+          type: time
+        ended_at:
+          type: time
+
+  # A run_slot is the admission gate for a task capped at one concurrent run.
+  #
+  # It is a separate pointer entity rather than the Run itself because the
+  # obvious alternative -- deriving a name from app and task and letting
+  # put-if-absent Create gate it -- would mean reclaiming that one entity for
+  # every run, destroying the history the Run exists to keep.
+  run_slot:
+    app:
+      type: ref
+      doc: The app whose task this slot guards
+      indexed: true
+      tags: [dev.miren.app_ref]
+
+    task:
+      type: string
+      doc: The task name this slot guards
+
+    run:
+      type: ref
+      doc: |
+        The run currently holding the slot. Validity is decided by reading this
+        run rather than by a lease: a crashed controller leaves the pointer
+        aimed at a terminal or missing run, which the next admission reclaims.
+        A timeout would have to be tuned, and would deny service if set wrong.
+
+    acquired_at:
+      type: time
+      doc: When the current holder took the slot
