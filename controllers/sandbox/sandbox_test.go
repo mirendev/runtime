@@ -1660,7 +1660,7 @@ func TestMonitorTaskExitIgnoresErrorStatus(t *testing.T) {
 	}
 
 	// Call monitorTaskExit - it should ignore the error status and fail to re-establish
-	co.monitorTaskExit(&sb, "test-container", task, exitCh)
+	co.monitorTaskExit(&sb, "test-container", "app", task, exitCh)
 
 	// Verify the sandbox status was NOT changed to STOPPED
 	r.Eventually(func() bool {
@@ -1714,7 +1714,7 @@ func TestMonitorTaskExitHandlesValidExit(t *testing.T) {
 	task := &mockTask{waitCh: exitCh}
 
 	// Call monitorTaskExit - it should process the valid exit and mark as STOPPED
-	co.monitorTaskExit(&sb, "test-container", task, exitCh)
+	co.monitorTaskExit(&sb, "test-container", "app", task, exitCh)
 
 	// Verify the sandbox status was changed to STOPPED
 	r.Eventually(func() bool {
@@ -1726,4 +1726,241 @@ func TestMonitorTaskExitHandlesValidExit(t *testing.T) {
 		checkSb.Decode(result.Entity().Entity())
 		return checkSb.Status == compute.STOPPED
 	}, 5*time.Second, 50*time.Millisecond, "sandbox should be STOPPED after valid exit event")
+}
+
+// A legitimate exit code of 0 has to survive encoding. It is the single most
+// likely value for a successful task run, and the one a naive schema drops:
+// entity.Empty() skips zero-valued attributes, so the exit code lives inside a
+// component whose inner code field is marked required.
+func TestMonitorTaskExitRecordsZeroExitCode(t *testing.T) {
+	r := require.New(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	testDeps, cleanup := testutils.NewTestDeps()
+	defer cleanup()
+
+	co, err := newSandboxController(testDeps)
+	r.NoError(err)
+	defer co.Close()
+	r.NoError(co.Init(ctx))
+
+	id := entity.Id(idgen.GenNS("sb"))
+	var sb compute.Sandbox
+	sb.ID = id
+	sb.Status = compute.RUNNING
+
+	var rpcE entityserver_v1alpha.Entity
+	rpcE.SetId(id.String())
+	rpcE.SetAttrs(entity.New(entity.DBId, id, sb.Encode).Attrs())
+	_, err = co.EAC.Put(ctx, &rpcE)
+	r.NoError(err)
+
+	exitedAt := time.Now().Truncate(time.Second)
+	exitCh := make(chan containerd.ExitStatus, 1)
+	exitCh <- *containerd.NewExitStatus(0, exitedAt, nil)
+
+	co.monitorTaskExit(&sb, "test-container", "app", &mockTask{waitCh: exitCh}, exitCh)
+
+	var got compute.Sandbox
+	r.Eventually(func() bool {
+		result, err := co.EAC.Get(ctx, id.String())
+		if err != nil {
+			return false
+		}
+		got = compute.Sandbox{}
+		got.Decode(result.Entity().Entity())
+		return got.Status == compute.STOPPED
+	}, 5*time.Second, 50*time.Millisecond, "sandbox should be STOPPED after exit")
+
+	// The exit must land in the same write as the stop, so anything woken by
+	// the stop already has the code.
+	r.False(got.Exit.Empty(), "exit must be recorded, including a zero code")
+	r.Equal(int64(0), got.Exit.Code)
+	r.Equal("app", got.Exit.Container)
+	r.False(got.Exit.At.IsZero())
+}
+
+func TestMonitorTaskExitRecordsNonZeroExitCode(t *testing.T) {
+	r := require.New(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	testDeps, cleanup := testutils.NewTestDeps()
+	defer cleanup()
+
+	co, err := newSandboxController(testDeps)
+	r.NoError(err)
+	defer co.Close()
+	r.NoError(co.Init(ctx))
+
+	id := entity.Id(idgen.GenNS("sb"))
+	var sb compute.Sandbox
+	sb.ID = id
+	sb.Status = compute.RUNNING
+
+	var rpcE entityserver_v1alpha.Entity
+	rpcE.SetId(id.String())
+	rpcE.SetAttrs(entity.New(entity.DBId, id, sb.Encode).Attrs())
+	_, err = co.EAC.Put(ctx, &rpcE)
+	r.NoError(err)
+
+	exitCh := make(chan containerd.ExitStatus, 1)
+	exitCh <- *containerd.NewExitStatus(137, time.Now(), nil)
+
+	co.monitorTaskExit(&sb, "test-container", "app", &mockTask{waitCh: exitCh}, exitCh)
+
+	var got compute.Sandbox
+	r.Eventually(func() bool {
+		result, err := co.EAC.Get(ctx, id.String())
+		if err != nil {
+			return false
+		}
+		got = compute.Sandbox{}
+		got.Decode(result.Entity().Entity())
+		return got.Status == compute.STOPPED
+	}, 5*time.Second, 50*time.Millisecond)
+
+	r.Equal(int64(137), got.Exit.Code)
+}
+
+// containerd can report a clean exit with a zero ExitTime. An Exit carrying a
+// zero code and a zero time is Empty() and would encode to nothing, taking the
+// code with it, so the write site substitutes now.
+func TestMonitorTaskExitSubstitutesMissingExitTime(t *testing.T) {
+	r := require.New(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	testDeps, cleanup := testutils.NewTestDeps()
+	defer cleanup()
+
+	co, err := newSandboxController(testDeps)
+	r.NoError(err)
+	defer co.Close()
+	r.NoError(co.Init(ctx))
+
+	id := entity.Id(idgen.GenNS("sb"))
+	var sb compute.Sandbox
+	sb.ID = id
+	sb.Status = compute.RUNNING
+
+	var rpcE entityserver_v1alpha.Entity
+	rpcE.SetId(id.String())
+	rpcE.SetAttrs(entity.New(entity.DBId, id, sb.Encode).Attrs())
+	_, err = co.EAC.Put(ctx, &rpcE)
+	r.NoError(err)
+
+	// Zero exit code AND zero exit time: the combination that vanishes.
+	exitCh := make(chan containerd.ExitStatus, 1)
+	exitCh <- *containerd.NewExitStatus(0, time.Time{}, nil)
+
+	co.monitorTaskExit(&sb, "test-container", "app", &mockTask{waitCh: exitCh}, exitCh)
+
+	var got compute.Sandbox
+	r.Eventually(func() bool {
+		result, err := co.EAC.Get(ctx, id.String())
+		if err != nil {
+			return false
+		}
+		got = compute.Sandbox{}
+		got.Decode(result.Entity().Entity())
+		return got.Status == compute.STOPPED
+	}, 5*time.Second, 50*time.Millisecond)
+
+	r.False(got.Exit.Empty(), "a zero code with no reported time must still be recorded")
+	r.False(got.Exit.At.IsZero(), "exit time falls back to now rather than encoding to nothing")
+}
+
+// The DEAD transition that follows cleanup patches Sandbox by struct literal
+// with an empty Exit. The generated encoder must skip it, leaving the recorded
+// exit intact -- otherwise the code is destroyed moments after being written.
+func TestDeadPatchPreservesRecordedExit(t *testing.T) {
+	r := require.New(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	testDeps, cleanup := testutils.NewTestDeps()
+	defer cleanup()
+
+	co, err := newSandboxController(testDeps)
+	r.NoError(err)
+	defer co.Close()
+	r.NoError(co.Init(ctx))
+
+	id := entity.Id(idgen.GenNS("sb"))
+	var sb compute.Sandbox
+	sb.ID = id
+	sb.Status = compute.STOPPED
+	sb.Exit = compute.Exit{Code: 0, At: time.Now(), Container: "app"}
+
+	var rpcE entityserver_v1alpha.Entity
+	rpcE.SetId(id.String())
+	rpcE.SetAttrs(entity.New(entity.DBId, id, sb.Encode).Attrs())
+	_, err = co.EAC.Put(ctx, &rpcE)
+	r.NoError(err)
+
+	// Exactly the patch StopSandbox issues once cleanup finishes.
+	_, err = co.EAC.Patch(ctx, entity.New(
+		entity.Ref(entity.DBId, id),
+		(&compute.Sandbox{Status: compute.DEAD}).Encode,
+	).Attrs(), 0)
+	r.NoError(err)
+
+	result, err := co.EAC.Get(ctx, id.String())
+	r.NoError(err)
+	var got compute.Sandbox
+	got.Decode(result.Entity().Entity())
+
+	r.Equal(compute.DEAD, got.Status)
+	r.False(got.Exit.Empty(), "the DEAD patch must not clobber the recorded exit")
+	r.Equal("app", got.Exit.Container)
+}
+
+// A sandbox whose command must execute at most once is finished when its
+// containers vanish. Rebooting it would re-run the command -- for a migration,
+// not a recoverable mistake.
+func TestRestartPolicyNeverRetiresInsteadOfRebooting(t *testing.T) {
+	r := require.New(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	testDeps, cleanup := testutils.NewTestDeps()
+	defer cleanup()
+
+	co, err := newSandboxController(testDeps)
+	r.NoError(err)
+	defer co.Close()
+	r.NoError(co.Init(ctx))
+
+	id := entity.Id(idgen.GenNS("sb"))
+	var sb compute.Sandbox
+	sb.ID = id
+	sb.Status = compute.RUNNING
+	sb.Spec.RestartPolicy = compute.SandboxSpecNEVER
+
+	var rpcE entityserver_v1alpha.Entity
+	rpcE.SetId(id.String())
+	rpcE.SetAttrs(entity.New(entity.DBId, id, sb.Encode).Attrs())
+	_, err = co.EAC.Put(ctx, &rpcE)
+	r.NoError(err)
+
+	meta := &entity.Meta{}
+
+	// No containers exist for this sandbox, so CheckSandbox reports it gone --
+	// the state a runner restart mid-run leaves behind.
+	r.NoError(co.Create(ctx, &sb, meta))
+
+	result, err := co.EAC.Get(ctx, id.String())
+	r.NoError(err)
+	var got compute.Sandbox
+	got.Decode(result.Entity().Entity())
+
+	r.Equal(compute.DEAD, got.Status, "a no-restart sandbox retires rather than rebooting")
+	r.True(got.Exit.Empty(), "no exit was observed, so none should be invented")
 }

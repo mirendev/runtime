@@ -1112,7 +1112,7 @@ func (c *SandboxController) reattachLogs(ctx context.Context, sb *compute.Sandbo
 		c.Log.Warn("failed to set up task wait during reattach", "id", containerID, "error", err)
 	} else {
 		// Launch goroutine to monitor process exit
-		go c.monitorTaskExit(sb, containerID, task, exitCh)
+		go c.monitorTaskExit(sb, containerID, containerName, task, exitCh)
 		c.Log.Debug("re-established task exit monitoring", "sandbox", sb.ID, "container", containerID)
 	}
 
@@ -1182,6 +1182,14 @@ func (c *SandboxController) Create(ctx context.Context, co *compute.Sandbox, met
 			case unhealthy:
 				c.Log.Info("sandbox container exists but is unhealthy", "id", co.ID)
 
+				// A sandbox that must not re-run its command is finished the
+				// moment its containers stop being healthy, whatever the reason.
+				// Fall through to the recreate path below and we would execute
+				// it a second time.
+				if co.Spec.RestartPolicy == compute.SandboxSpecNEVER {
+					return c.markDeadNoRestart(ctx, co, "unhealthy")
+				}
+
 				// Mark sandbox as DEAD first if it was RUNNING
 				// This prevents infinite recreation loops
 				if co.Status == compute.RUNNING {
@@ -1213,6 +1221,16 @@ func (c *SandboxController) Create(ctx context.Context, co *compute.Sandbox, met
 			}
 		}
 
+		// Reaching here means the containers are gone (CheckSandbox returned
+		// notFound, or erred and we're proceeding optimistically). For a normal
+		// sandbox that's a reboot. For one whose command must execute at most
+		// once it is the end of the road: the realistic case is a runner
+		// restarting mid-run, where re-running a migration is not a recoverable
+		// mistake.
+		if co.Spec.RestartPolicy == compute.SandboxSpecNEVER {
+			return c.markDeadNoRestart(ctx, co, "containers missing")
+		}
+
 		return c.createSandbox(ctx, co, meta, false)
 	case compute.NOT_READY:
 		// Transient boot state; nothing to reconcile until it resolves.
@@ -1221,6 +1239,36 @@ func (c *SandboxController) Create(ctx context.Context, co *compute.Sandbox, met
 		c.Log.Warn("ignoring sandbox status", "status", co.Status)
 		return nil
 	}
+}
+
+// markDeadNoRestart retires a sandbox whose spec forbids restarting it, then
+// runs the ordinary teardown so nothing is left behind.
+//
+// It deliberately records no Exit: the command's own exit was never observed,
+// and inventing a code here would be indistinguishable from the process
+// actually having returned one.
+func (c *SandboxController) markDeadNoRestart(ctx context.Context, co *compute.Sandbox, reason string) error {
+	c.Log.Info("retiring sandbox rather than restarting it",
+		"id", co.ID, "reason", reason, "restart_policy", "never")
+
+	if co.Status != compute.DEAD {
+		patchAttrs := entity.New(
+			entity.Ref(entity.DBId, co.ID),
+			(&compute.Sandbox{Status: compute.DEAD}).Encode,
+		)
+		result, err := c.EAC.Patch(ctx, patchAttrs.Attrs(), 0)
+		if err != nil {
+			return fmt.Errorf("failed to mark no-restart sandbox as DEAD: %w", err)
+		}
+		if c.writeTracker != nil && result.HasRevision() {
+			c.writeTracker.RecordWrite(result.Revision())
+		}
+	}
+
+	if err := c.StopSandbox(ctx, co.ID, co); err != nil {
+		return fmt.Errorf("failed to clean up no-restart sandbox: %w", err)
+	}
+	return nil
 }
 
 func (c *SandboxController) createSandbox(ctx context.Context, co *compute.Sandbox, meta *entity.Meta, recreate bool) (err error) {
@@ -2205,7 +2253,7 @@ func (c *SandboxController) BootContainers(
 			c.Log.Warn("failed to set up task wait", "id", cc.ID(), "error", err)
 		} else {
 			// Launch goroutine to monitor process exit
-			go c.monitorTaskExit(sb, cc.ID(), task, exitCh)
+			go c.monitorTaskExit(sb, cc.ID(), container.Name, task, exitCh)
 		}
 
 		// Start port monitoring for this container if it has ports
@@ -2221,6 +2269,7 @@ func (c *SandboxController) BootContainers(
 func (c *SandboxController) monitorTaskExit(
 	sb *compute.Sandbox,
 	containerID string,
+	containerName string,
 	task containerd.Task,
 	exitCh <-chan containerd.ExitStatus,
 ) {
@@ -2265,16 +2314,37 @@ func (c *SandboxController) monitorTaskExit(
 			// We don't delete the task here so that our destroySubContainers function
 			// has a consistent view of the state of containers and tasks.
 
-			// Update sandbox status to STOPPED using Patch (only updating Status field)
-			// We use Patch instead of Put since we're only changing one field
-			// STOPPED status triggers cleanup in reconciliation (stopSandbox), which:
+			// Record the exit in the same patch as the STOPPED transition, so
+			// anything woken by the stop already has the code. Splitting them
+			// would leave a window where a run's sandbox reads stopped with no
+			// result to report.
+			//
+			// ExitTime can be zero even on a clean exit, and an Exit carrying a
+			// zero code and a zero time is Empty() -- it would encode to nothing
+			// and the code would silently vanish. Fall back to now.
+			exitAt := exitStatus.ExitTime()
+			if exitAt.IsZero() {
+				exitAt = time.Now()
+			}
+
+			// Update sandbox status to STOPPED using Patch (only updating the
+			// fields set here). STOPPED triggers cleanup in reconciliation
+			// (stopSandbox), which:
 			// - Releases IPs immediately
 			// - Cleans up containers
 			// - Marks as DEAD afterward
+			//
+			// The DEAD patch that follows leaves Exit intact: it is a struct
+			// literal with an empty Exit, which the generated encoder skips.
 			patchAttrs := entity.New(
 				entity.Ref(entity.DBId, sb.ID),
 				(&compute.Sandbox{
 					Status: compute.STOPPED,
+					Exit: compute.Exit{
+						Code:      int64(exitStatus.ExitCode()),
+						At:        exitAt,
+						Container: containerName,
+					},
 				}).Encode,
 			)
 

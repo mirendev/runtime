@@ -32,7 +32,18 @@ func TestSandboxControllerFrozen(t *testing.T) {
 		// just before the container is created. The saga path needs no matching
 		// edit for either: it reaches the same code through sandboxOps.BuildSpec,
 		// which delegates to SandboxController.BuildSpec.
-		"sandbox.go":  "f7191f5775c675318f63c7fae229578cdc59238949a0487193b8545de59aec7e",
+		//
+		// RFD-97 app tasks (MIR-853): monitorTaskExit records the exit code
+		// alongside the STOPPED transition, and Create honors
+		// SandboxSpec.RestartPolicy == never rather than rebooting a sandbox
+		// whose command must execute at most once.
+		//
+		// Saga path audited per the instructions below. BootContainers and
+		// monitorTaskExit are not duplicated there -- create_saga.go reaches
+		// them through sandbox_ops.go, so it inherits the exit recording. The
+		// Create dispatch *is* duplicated, so both restart-policy guards were
+		// mirrored into SagaSandboxController.Create.
+		"sandbox.go":  "11240e246f83a99910ef7319e0a44a2f42ec99841cab5dcf1e23981ce5027e14",
 		"volume.go":   "580062fb8a34f3f7f965689467a4b0f2ed403bc63c1ecdeb44949a7ba7e08dff",
 		"firewall.go": "648cb5d91091d5eb7400152b19695a8045585feae59c5dd36c12d663a27bb91f",
 	}
