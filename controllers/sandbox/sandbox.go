@@ -47,6 +47,7 @@ import (
 	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/api/network/network_v1alpha"
+	run_v1alpha "miren.dev/runtime/api/run/run_v1alpha"
 	storage "miren.dev/runtime/api/storage/storage_v1alpha"
 	"miren.dev/runtime/components/ocireg"
 )
@@ -2437,6 +2438,13 @@ func (c *SandboxController) monitorTaskExit(
 				c.writeTracker.RecordWrite(result.Revision())
 			}
 
+			// If this sandbox belongs to a task run, report the exit to the run
+			// as well. That is not redundancy: the sandbox entity has several
+			// writers, so the exit recorded there can lose a write to a
+			// concurrent stale patch, while the run has exactly one writer plus
+			// this input and nothing to contend with.
+			c.reportRunExit(ctx, sb, exitStatus.ExitCode(), exitAt)
+
 			c.Log.Info("marked sandbox as STOPPED due to process exit, cleanup will be triggered by reconciliation", "sandbox", sb.ID)
 			return
 
@@ -2496,6 +2504,55 @@ func (c *SandboxController) recordExit(
 	}
 
 	return nil, fmt.Errorf("recording exit for %s: %w", id, lastErr)
+}
+
+// reportRunExit records a container's exit against the task run that owns it.
+//
+// RFD-97 models the reported exit as an *input* to the run controller rather
+// than a state the reporter owns, with a source saying where it came from. This
+// is that input for the ordinary case where the command is the container's own
+// process; the exec path supplies the same field when a client is attached.
+//
+// Reporting here rather than leaving the run to read it off the sandbox is what
+// makes the exit code reliable. The sandbox entity is written by the boot path,
+// the exit monitor, and teardown, all with revision 0 -- so a read-modify-write
+// computed from a pre-exit snapshot can land afterwards and take the exit with
+// it. The run entity has one writer and this input, so there is no race to lose.
+func (c *SandboxController) reportRunExit(
+	ctx context.Context,
+	sb *compute.Sandbox,
+	code uint32,
+	at time.Time,
+) {
+	var runID entity.Id
+	for _, l := range sb.Spec.LogAttribute {
+		if l.Key == "miren.run" {
+			runID = entity.Id(l.Value)
+			break
+		}
+	}
+	if runID == "" {
+		return
+	}
+
+	_, err := c.EAC.Patch(ctx, entity.New(
+		entity.Ref(entity.DBId, runID),
+		(&run_v1alpha.Run{
+			Result: run_v1alpha.Result{
+				Code:   int64(code),
+				At:     at,
+				Source: run_v1alpha.TASK,
+			},
+		}).Encode,
+	).Attrs(), 0)
+	if err != nil {
+		if !errors.Is(err, cond.ErrNotFound{}) {
+			c.Log.Warn("failed to report exit to run", "run", runID, "sandbox", sb.ID, "error", err)
+		}
+		return
+	}
+
+	c.Log.Debug("reported exit to run", "run", runID, "sandbox", sb.ID, "exit_code", code)
 }
 
 func (c *SandboxController) sandboxPath(sb *compute.Sandbox, sub ...string) string {

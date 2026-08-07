@@ -281,9 +281,16 @@ func runInfo(run *run_v1alpha.Run) *app_v1alpha.RunInfo {
 	info.SetSandbox(run.Sandbox.String())
 	info.SetVersion(run.Version.String())
 
-	// Left unset when no exit was observed. A run that timed out or was canceled
-	// has no exit code, and reporting a bare 0 would read as a clean exit.
-	if !run.Result.At.IsZero() {
+	// An exit code is reported only when the command's own exit is what ended
+	// the run.
+	//
+	// A canceled or timed-out run does produce an observed code -- the platform
+	// killed the process and the kernel reported something -- but that number is
+	// teardown noise, not the task's outcome, and showing it beside a "canceled"
+	// status invites reading it as an application error. The observation stays
+	// on the entity; it just isn't the run's result. The status carries the
+	// meaning in those cases.
+	if reportsExitCode(run.Status) && !run.Result.At.IsZero() {
 		info.SetExitCode(int32(run.Result.Code))
 	}
 
@@ -295,6 +302,19 @@ func runInfo(run *run_v1alpha.Run) *app_v1alpha.RunInfo {
 	}
 
 	return &info
+}
+
+// reportsExitCode says whether a run ended by its command exiting, which is the
+// only case where an exit code describes the task rather than its teardown.
+func reportsExitCode(s run_v1alpha.RunStatus) bool {
+	switch s {
+	case run_v1alpha.SUCCEEDED, run_v1alpha.FAILED:
+		return true
+	case run_v1alpha.PENDING, run_v1alpha.RUNNING, run_v1alpha.TIMED_OUT,
+		run_v1alpha.CANCELED, run_v1alpha.SKIPPED:
+		return false
+	}
+	return false
 }
 
 func isFailure(status string) bool {

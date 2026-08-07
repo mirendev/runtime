@@ -106,6 +106,15 @@ kinds:
         at:
           type: time
           doc: When the exit was observed. Always set, or a zero-code result encodes to nothing.
+        source:
+          type: enum
+          choices: [task, exec]
+          doc: >-
+            Which reporter observed the exit: "task" is the container's own
+            primary process, "exec" is a process run for an attached client.
+            Recorded because the two have different failure modes -- a task exit
+            is observed whether or not anyone is watching, while an exec exit is
+            only seen while a client is connected.
 
     # One record per attempt, kept because a retried run's earlier sandbox is
     # the only place its logs live -- and the failed attempt is the reason

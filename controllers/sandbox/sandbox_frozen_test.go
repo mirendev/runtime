@@ -27,10 +27,8 @@ func TestSandboxControllerFrozen(t *testing.T) {
 		// Workload identity: BuildSpec mounts the cluster CA and injects
 		// MIREN_IN_CLUSTER/MIREN_API_ADDRESS/MIREN_CA_CERT_PATH, Init opens the
 		// API port on the bridge, and mint now resolves the app's workload role
-		// (resolveAppAndRole) so the token carries it. Secret materialization
-		// also lives under BuildSpec, substituting referenced values in memory
-		// just before the container is created. The saga path needs no matching
-		// edit for either: it reaches the same code through sandboxOps.BuildSpec,
+		// (resolveAppAndRole) so the token carries it. The saga path needs no
+		// matching edit: it reaches the same code through sandboxOps.BuildSpec,
 		// which delegates to SandboxController.BuildSpec.
 		//
 		// RFD-97 app tasks (MIR-853): monitorTaskExit records the exit code
@@ -46,15 +44,7 @@ func TestSandboxControllerFrozen(t *testing.T) {
 		// them through sandbox_ops.go, so it inherits the exit recording. The
 		// Create dispatch *is* duplicated, so both restart-policy guards were
 		// mirrored into SagaSandboxController.Create.
-		"sandbox.go":  "776fce127309648f598f0fee66c9502749b218ab72c97ad96cc772497393dcfc",
-<<<<<<< HEAD
-		"sandbox.go":  "776fce127309648f598f0fee66c9502749b218ab72c97ad96cc772497393dcfc",
-		"sandbox.go":  "776fce127309648f598f0fee66c9502749b218ab72c97ad96cc772497393dcfc",
-||||||| parent of 40c98e0d (exec_proxy: keep the app-scoping guard on the attach path)
-		"sandbox.go":  "6895b8b040b8723aa2129b6ec7e450b8abece94130a309777db82eed4b44668c",
-		"sandbox.go":  "6895b8b040b8723aa2129b6ec7e450b8abece94130a309777db82eed4b44668c",
-=======
->>>>>>> 40c98e0d (exec_proxy: keep the app-scoping guard on the attach path)
+		"sandbox.go":  "e6914f47ea49813dfd8c05007197a06bd6a20ad55ff80f1242dcd44ef52c9320",
 		"volume.go":   "580062fb8a34f3f7f965689467a4b0f2ed403bc63c1ecdeb44949a7ba7e08dff",
 		"firewall.go": "648cb5d91091d5eb7400152b19695a8045585feae59c5dd36c12d663a27bb91f",
 	}
