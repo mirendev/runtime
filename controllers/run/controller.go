@@ -99,6 +99,17 @@ func (c *Controller) Reconcile(ctx context.Context, r *run_v1alpha.Run, meta *en
 
 // start admits a pending run and creates its sandbox.
 func (c *Controller) start(ctx context.Context, r *run_v1alpha.Run) error {
+	// Stamp the queue time on first sight. The start deadline measures from
+	// here: a run held back by admission never reaches RUNNING, so measuring
+	// from StartedAt would leave it queued with no bound -- behind a
+	// max_concurrent = 1 holder that runs to DefaultTimeout, for hours.
+	if r.QueuedAt.IsZero() {
+		r.QueuedAt = time.Now()
+		if err := c.patchRun(ctx, r.ID, &run_v1alpha.Run{QueuedAt: r.QueuedAt}); err != nil {
+			return fmt.Errorf("stamping queue time: %w", err)
+		}
+	}
+
 	if deadline := c.startDeadline(r); !deadline.IsZero() && time.Now().After(deadline) {
 		c.Log.Info("run timed out before it started", "run", r.ID, "task", r.Task)
 		return c.finish(ctx, r, run_v1alpha.TIMED_OUT, nil)
@@ -118,8 +129,14 @@ func (c *Controller) start(ctx context.Context, r *run_v1alpha.Run) error {
 
 	sandboxID, err := c.ensureSandbox(ctx, r)
 	if err != nil {
-		c.Log.Error("failed to create sandbox for run", "run", r.ID, "error", err)
-		return c.finish(ctx, r, run_v1alpha.FAILED, nil)
+		// Stay pending rather than failing outright. A read failure, a config
+		// resolution failure, or a transient create failure is not the task's
+		// fault, and failing here would spend a run's whole retry budget on a
+		// blip in the store -- with no exit code to explain it. The sweep
+		// retries, and the start deadline bounds how long that can go on.
+		c.Log.Warn("failed to create sandbox for run, staying pending",
+			"run", r.ID, "task", r.Task, "error", err)
+		return nil
 	}
 
 	attempt := r.Attempt
@@ -247,9 +264,11 @@ func (c *Controller) retry(ctx context.Context, r *run_v1alpha.Run, code int64) 
 			StartedAt: r.StartedAt,
 			EndedAt:   time.Now(),
 		}},
-		Attempt:   attempt + 1,
-		StartedAt: time.Now(),
-		Status:    run_v1alpha.PENDING,
+		Attempt: attempt + 1,
+		// A retry re-enters the queue, so it gets a fresh start window rather
+		// than inheriting the previous attempt's expired one.
+		QueuedAt: time.Now(),
+		Status:   run_v1alpha.PENDING,
 	})
 }
 
@@ -520,18 +539,20 @@ func (c *Controller) pastDeadline(r *run_v1alpha.Run) bool {
 	return false
 }
 
-// startDeadline bounds how long a run may stay pending. It is measured from the
-// current attempt's start where there is one, so a retry gets a fresh window
-// rather than inheriting an already-expired one.
+// startDeadline bounds how long a run may stay pending before its sandbox is
+// running, whether it is waiting on admission or on a sandbox that will not
+// come up.
 func (c *Controller) startDeadline(r *run_v1alpha.Run) time.Time {
 	if r.Status != run_v1alpha.PENDING && r.Status != "" {
 		return time.Time{}
 	}
-	from := r.StartedAt
-	if from.IsZero() {
+	// Measured from when the run was queued, not from StartedAt: StartedAt is
+	// only written once a run is running, so a run that never gets admitted has
+	// none and would never time out.
+	if r.QueuedAt.IsZero() {
 		return time.Time{}
 	}
-	return from.Add(StartDeadline)
+	return r.QueuedAt.Add(StartDeadline)
 }
 
 func (c *Controller) runDeadline(r *run_v1alpha.Run) time.Time {

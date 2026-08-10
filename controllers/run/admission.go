@@ -171,7 +171,11 @@ func (c *Controller) release(ctx context.Context, r *run_v1alpha.Run) {
 // admitByCount is the best-effort gate above one. See admit's comment for why
 // it cannot be exact on this store.
 func (c *Controller) admitByCount(ctx context.Context, r *run_v1alpha.Run, maxConcurrent int64) (bool, error) {
-	ids, err := c.EAC.List(ctx, entity.Ref(run_v1alpha.RunAppId, r.App))
+	// List by status rather than by app. Runs are durable history, so the app
+	// index grows without bound -- a task on a one-minute schedule would have
+	// every admission decode a year of runs to count a handful. The running
+	// index is bounded by what is executing cluster-wide.
+	ids, err := c.EAC.List(ctx, entity.Ref(run_v1alpha.RunStatusId, run_v1alpha.RunStatusRunningId))
 	if err != nil {
 		return false, fmt.Errorf("listing runs for admission: %w", err)
 	}
@@ -187,7 +191,7 @@ func (c *Controller) admitByCount(ctx context.Context, r *run_v1alpha.Run, maxCo
 		// Count only what is actually executing. Pending runs are queued
 		// behind this same gate, so counting them would have every run in a
 		// batch see the others and deny them all.
-		if other.Task == r.Task && other.Status == run_v1alpha.RUNNING {
+		if other.App == r.App && other.Task == r.Task && other.Status == run_v1alpha.RUNNING {
 			live++
 		}
 	}

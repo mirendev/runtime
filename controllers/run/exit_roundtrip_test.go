@@ -132,60 +132,14 @@ func TestRunResultRoundTripsThroughEtcd(t *testing.T) {
 	require.Len(t, got.AttemptRecord, 1)
 }
 
-// Two writers, no OCC: PatchEntity is read-modify-write, and both the sandbox
-// boot path and monitorTaskExit patch with revision 0. When boot's write lands
-// second it was computed from a snapshot taken before the exit, so it restores
-// RUNNING *and* takes the exit with it -- a lost update, not a clobbered field.
+// Guarding a write with the revision it observed turns a lost update into a
+// conflict the caller can retry.
 //
-// This is why a task that exits before boot finishes its bookkeeping loses its
-// exit code, and why the sandbox reads RUNNING again afterwards.
-func TestConcurrentPatchLosesTheExit(t *testing.T) {
-	ctx := context.Background()
-
-	es, cleanup := testutils.NewEtcdEntityServer(t)
-	defer cleanup()
-
-	id := entity.Id("sandbox/lost-update")
-
-	_, err := es.EAC.Put(ctx, wrap(entity.New(
-		entity.DBId, id,
-		(&compute.Sandbox{Status: compute.PENDING}).Encode,
-	), id))
-	require.NoError(t, err)
-
-	// Both writers computed their patch from the PENDING snapshot. Sequencing
-	// them deterministically models the interleaving that loses the exit.
-	exitPatch := entity.New(
-		entity.Ref(entity.DBId, id),
-		(&compute.Sandbox{
-			Status: compute.STOPPED,
-			Exit:   compute.Exit{Code: 3, At: time.Now(), Container: "app"},
-		}).Encode,
-	).Attrs()
-
-	bootPatch := entity.New(
-		entity.Ref(entity.DBId, id),
-		(&compute.Sandbox{Status: compute.RUNNING}).Encode,
-	).Attrs()
-
-	_, err = es.EAC.Patch(ctx, exitPatch, 0)
-	require.NoError(t, err)
-	_, err = es.EAC.Patch(ctx, bootPatch, 0)
-	require.NoError(t, err)
-
-	resp, err := es.EAC.Get(ctx, id.String())
-	require.NoError(t, err)
-	var got compute.Sandbox
-	got.Decode(resp.Entity().Entity())
-
-	// Documents current behavior. A sequential patch preserves the exit; the
-	// loss needs genuinely concurrent read-modify-write, which is what the
-	// revision guard below prevents.
-	t.Logf("after sequential patches: status=%s exit_empty=%v", got.Status, got.Exit.Empty())
-}
-
-// Guarding monitorTaskExit's write with the revision it observed turns the lost
-// update into a conflict the caller can retry, which is the fix.
+// The loss it prevents needs genuinely concurrent read-modify-write, which is
+// why there is no test reproducing it directly: PatchEntity reads, merges, and
+// writes the whole entity, so two writers computed from the same revision do
+// not merge -- the second simply wins. Sequential patches preserve each other,
+// so a sequential test would assert nothing. This asserts the guard instead.
 func TestRevisionGuardedPatchDetectsTheConflict(t *testing.T) {
 	ctx := context.Background()
 

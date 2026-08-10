@@ -15,6 +15,7 @@ import (
 	"miren.dev/runtime/pkg/cond"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/idgen"
+	"miren.dev/runtime/pkg/rpc"
 )
 
 // ConsoleTask is the task name `miren app run` resolves when none is given.
@@ -43,6 +44,12 @@ var _ app_v1alpha.Runs = &AppInfo{}
 // with a manual invoke without any of them polling.
 func (r *AppInfo) CreateRun(ctx context.Context, state *app_v1alpha.RunsCreateRun) error {
 	args := state.Args()
+
+	// CreateRun executes a command inside the app's image with its credentials,
+	// so this is the gate that matters most of the four.
+	if !rpc.AllowApp(ctx, args.App()) {
+		return rpc.AppAccessError(ctx, args.App())
+	}
 
 	var appRec core_v1alpha.App
 	if err := r.EC.Get(ctx, args.App(), &appRec); err != nil {
@@ -82,27 +89,26 @@ func (r *AppInfo) CreateRun(ctx context.Context, state *app_v1alpha.RunsCreateRu
 	}
 
 	timeout := ""
-	maxAttempts := int64(1)
 	if task != nil {
 		timeout = task.Timeout
-		if task.Retries > 0 {
-			maxAttempts = task.Retries + 1
-		}
 	}
+
+	// One attempt, whatever the task declares. Retries exist for triggers
+	// nobody is watching; a manual run that fails just fails and the caller
+	// decides. The controller enforces this too, so setting it here keeps the
+	// stored run honest rather than carrying a budget that is never spent.
+	const manualMaxAttempts = 1
 
 	name := fmt.Sprintf("%s-%s-%s", appName, taskName, idgen.Gen(""))
 	run := &run_v1alpha.Run{
-		App:     appRec.ID,
-		Version: appRec.ActiveVersion,
-		Task:    taskName,
-		Trigger: run_v1alpha.MANUAL,
-		Command: command,
-		Status:  run_v1alpha.PENDING,
-		Timeout: timeout,
-		// Retries apply to triggers nobody is watching. A manual run that fails
-		// just fails, and the caller decides -- so this stays at one whatever
-		// the task declares.
-		MaxAttempts: maxAttempts,
+		App:         appRec.ID,
+		Version:     appRec.ActiveVersion,
+		Task:        taskName,
+		Trigger:     run_v1alpha.MANUAL,
+		Command:     command,
+		Status:      run_v1alpha.PENDING,
+		Timeout:     timeout,
+		MaxAttempts: manualMaxAttempts,
 	}
 
 	id, err := r.EC.Create(ctx, name, run)
@@ -122,6 +128,10 @@ func (r *AppInfo) CreateRun(ctx context.Context, state *app_v1alpha.RunsCreateRu
 
 func (r *AppInfo) ListRuns(ctx context.Context, state *app_v1alpha.RunsListRuns) error {
 	args := state.Args()
+
+	if !rpc.AllowApp(ctx, args.App()) {
+		return rpc.AppAccessError(ctx, args.App())
+	}
 
 	var appRec core_v1alpha.App
 	if err := r.EC.Get(ctx, args.App(), &appRec); err != nil {
@@ -170,6 +180,9 @@ func (r *AppInfo) GetRun(ctx context.Context, state *app_v1alpha.RunsGetRun) err
 	if err != nil {
 		return err
 	}
+	if err := r.authorizeRun(ctx, run); err != nil {
+		return err
+	}
 
 	state.Results().SetRun(runInfo(run))
 	return nil
@@ -181,6 +194,9 @@ func (r *AppInfo) GetRun(ctx context.Context, state *app_v1alpha.RunsGetRun) err
 func (r *AppInfo) CancelRun(ctx context.Context, state *app_v1alpha.RunsCancelRun) error {
 	run, _, err := r.lookupRun(ctx, state.Args().Id())
 	if err != nil {
+		return err
+	}
+	if err := r.authorizeRun(ctx, run); err != nil {
 		return err
 	}
 
@@ -197,6 +213,26 @@ func (r *AppInfo) CancelRun(ctx context.Context, state *app_v1alpha.RunsCancelRu
 
 	r.Log.Info("cancellation requested for run", "run", run.ID, "task", run.Task)
 	state.Results().SetCanceled(true)
+	return nil
+}
+
+// authorizeRun resolves the app a run belongs to and applies the same guard the
+// app-named methods use.
+//
+// GetRun and CancelRun take a bare run id, so without this an app-scoped caller
+// could read or cancel any run in the cluster. The app is resolved from the run
+// itself rather than anything caller-supplied.
+func (r *AppInfo) authorizeRun(ctx context.Context, run *run_v1alpha.Run) error {
+	var md core_v1alpha.Metadata
+	if err := r.EC.GetById(ctx, run.App, &md); err != nil {
+		// The owning app can't be resolved, so the guard can't be evaluated.
+		// Refuse rather than defaulting open.
+		return rpc.AppAccessError(ctx, run.App.String())
+	}
+
+	if !rpc.AllowApp(ctx, md.Name) {
+		return rpc.AppAccessError(ctx, md.Name)
+	}
 	return nil
 }
 

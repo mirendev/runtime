@@ -44,7 +44,12 @@ func TestSandboxControllerFrozen(t *testing.T) {
 		// them through sandbox_ops.go, so it inherits the exit recording. The
 		// Create dispatch *is* duplicated, so both restart-policy guards were
 		// mirrored into SagaSandboxController.Create.
-		"sandbox.go":  "e6914f47ea49813dfd8c05007197a06bd6a20ad55ff80f1242dcd44ef52c9320",
+		//
+		// monitorTaskExit also reports the exit to the task run that owns the
+		// sandbox, which is what makes an exit code reliable: the sandbox entity
+		// has several writers and a stale read-modify-write can lose one, while
+		// the run has a single writer plus that input.
+		"sandbox.go":  "2d01b2c913efa7781d41433c3aba33ec00647c70ff5b3cd45913a923d968159b",
 		"volume.go":   "580062fb8a34f3f7f965689467a4b0f2ed403bc63c1ecdeb44949a7ba7e08dff",
 		"firewall.go": "648cb5d91091d5eb7400152b19695a8045585feae59c5dd36c12d663a27bb91f",
 	}

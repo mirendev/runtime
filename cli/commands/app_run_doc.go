@@ -23,11 +23,11 @@ Disconnecting is not cancelling. If your connection drops, the command keeps goi
 
 ` + "`" + `--detach` + "`" + ` therefore means exactly one thing: don't attach my terminal right now. Use ` + "`" + `miren app runs cancel` + "`" + ` to actually stop a run.
 
-:::tip
+:::tip[Sandboxes are per-invocation]
 The sandbox is per-invocation. Any changes you make (files created, packages installed) are discarded when it ends.
 :::
 
-:::note
+:::note[Reaching an existing sandbox]
 Runs are recorded, so ` + "`" + `miren app runs` + "`" + ` shows what has been executed against an app and how it ended. To reach into an already-running production sandbox instead, use ` + "`" + `miren sandbox exec` + "`" + `.
 :::`
 
@@ -37,6 +37,6 @@ Attaching and detaching are invisible to the run itself: it is started by the pl
 
 Several clients can attach to one run at once; they share the same terminal.
 
-:::note
+:::note[Attaching to a finished run]
 Only runs whose command is still executing can be attached. For one that has finished, read its output back with ` + "`" + `miren logs run` + "`" + `.
 :::`

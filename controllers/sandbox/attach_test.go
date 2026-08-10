@@ -387,3 +387,49 @@ type writerFunc func([]byte) (int, error)
 func (f writerFunc) Write(p []byte) (int, error) { return f(p) }
 
 var _ io.Writer = writerFunc(nil)
+
+// Teardown can close a Hub while a client is still attached, and that client's
+// deferred unsubscribe runs afterwards. Both paths close the subscriber's done
+// channel, so without a shared guard the second close panics and takes the
+// runner process with it.
+func TestHubCloseThenUnsubscribeDoesNotPanic(t *testing.T) {
+	h := NewHub()
+
+	stop := h.Subscribe(&syncBuffer{})
+
+	// The sandbox goes away first...
+	h.Close()
+
+	// ...then the attach handler's deferred cleanup runs.
+	assert.NotPanics(t, stop, "unsubscribing after Close must be safe")
+	assert.NotPanics(t, stop, "and must stay safe when repeated")
+}
+
+// The reverse order has to be safe too: a client detaches, then the sandbox is
+// torn down.
+func TestHubUnsubscribeThenCloseDoesNotPanic(t *testing.T) {
+	h := NewHub()
+
+	stop := h.Subscribe(&syncBuffer{})
+	stop()
+
+	assert.NotPanics(t, h.Close)
+}
+
+// Several attached clients, torn down underneath all of them at once.
+func TestHubCloseWithManySubscribersThenUnsubscribeAll(t *testing.T) {
+	h := NewHub()
+
+	var stops []func()
+	for range 5 {
+		stops = append(stops, h.Subscribe(&syncBuffer{}))
+	}
+
+	h.Close()
+
+	assert.NotPanics(t, func() {
+		for _, stop := range stops {
+			stop()
+		}
+	})
+}

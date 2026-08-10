@@ -1,11 +1,14 @@
 package commands
 
 import (
+	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"miren.dev/runtime/api/app/app_v1alpha"
 	"miren.dev/runtime/api/exec/exec_v1alpha"
+	"miren.dev/runtime/pkg/cond"
 	"miren.dev/runtime/pkg/rpc/stream"
 )
 
@@ -109,7 +112,10 @@ func attachToRun(ctx *Context, runID, sandboxName string) error {
 	sec := exec_v1alpha.NewSandboxExecClient(cl)
 
 	// The sandbox exists only once the controller has admitted the run, so retry
-	// briefly rather than failing on a race the user cannot see.
+	// while it is simply absent. Anything else -- a denial, a transport failure,
+	// a container that was never made attachable -- is reported immediately:
+	// waiting out two minutes and then printing one generic message would lose
+	// the distinction between "not ready yet" and "not allowed".
 	deadline := time.Now().Add(2 * time.Minute)
 	for {
 		_, err = sec.Attach(
@@ -122,22 +128,40 @@ func attachToRun(ctx *Context, runID, sandboxName string) error {
 		if err == nil {
 			return nil
 		}
-		if time.Now().After(deadline) {
+		if !attachTargetMissing(err) {
 			return fmt.Errorf("attaching to run %s: %w", runID, err)
+		}
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("run %s did not start within 2m: %w", runID, err)
 		}
 		time.Sleep(runAttachPoll)
 	}
 }
 
+// attachTargetMissing reports whether an attach failed because the sandbox is
+// not there yet, as opposed to a reason waiting will not fix.
+func attachTargetMissing(err error) bool {
+	if errors.Is(err, cond.ErrNotFound{}) {
+		return true
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "failed to find sandbox") ||
+		strings.Contains(msg, "not scheduled to a node yet")
+}
+
 // reportRunExit propagates the run's exit code to the caller's shell.
 //
-// The run may still be going -- detaching is not cancelling -- in which case
-// there is no code to report and the command exits successfully, having done
-// what it was asked.
+// A run still going -- detaching is not cancelling -- simply has no code to
+// report, and the command exits 0 having done what it was asked. A *failure* to
+// read the run is different: the task's outcome is unknown, and exiting 0 would
+// tell a script it succeeded.
 func reportRunExit(ctx *Context, runs *app_v1alpha.RunsClient, runID string) error {
 	got, err := runs.GetRun(ctx, runID)
 	if err != nil {
-		return nil
+		return fmt.Errorf("reading run %s to report its exit code: %w", runID, err)
 	}
 
 	info := got.Run()

@@ -54,6 +54,19 @@ type subscriber struct {
 	ch      chan []byte
 	done    chan struct{}
 	dropped atomic.Uint64
+
+	// closeOnce guards done, which both Close and the subscriber's own
+	// unsubscribe need to close. They do not otherwise coordinate: teardown can
+	// close a Hub while a client is still attached, and that client's deferred
+	// unsubscribe then runs afterwards. Without a shared guard the second close
+	// panics and takes the runner process with it.
+	closeOnce sync.Once
+}
+
+// stop releases the subscriber's goroutine. Safe to call from either path, and
+// safe to call repeatedly.
+func (s *subscriber) stop() {
+	s.closeOnce.Do(func() { close(s.done) })
 }
 
 func NewHub() *Hub {
@@ -132,14 +145,11 @@ func (h *Hub) Subscribe(w io.Writer) (unsubscribe func()) {
 		}
 	}()
 
-	var once sync.Once
 	return func() {
-		once.Do(func() {
-			h.mu.Lock()
-			delete(h.subs, id)
-			h.mu.Unlock()
-			close(s.done)
-		})
+		h.mu.Lock()
+		delete(h.subs, id)
+		h.mu.Unlock()
+		s.stop()
 	}
 }
 
@@ -214,7 +224,7 @@ func (h *Hub) Close() {
 	h.mu.Unlock()
 
 	for _, s := range subs {
-		close(s.done)
+		s.stop()
 	}
 
 	_ = h.stdinW.Close()

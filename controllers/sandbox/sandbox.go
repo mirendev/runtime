@@ -2420,7 +2420,7 @@ func (c *SandboxController) monitorTaskExit(
 			// The DEAD patch that follows leaves Exit intact: it is a struct
 			// literal with an empty Exit, which the generated encoder skips.
 			ctx := context.Background()
-			result, err := c.recordExit(ctx, sb.ID, compute.Exit{
+			result, err := c.recordExit(c.topCtx, sb.ID, compute.Exit{
 				Code:      int64(exitStatus.ExitCode()),
 				At:        exitAt,
 				Container: containerName,
@@ -2480,6 +2480,17 @@ func (c *SandboxController) recordExit(
 
 	var lastErr error
 	for attempt := range maxAttempts {
+		if attempt > 0 {
+			// Back off rather than hammering the store. Without this a
+			// contended sandbox issues up to 200 immediate round trips, and a
+			// shutdown could not interrupt them.
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(min(time.Duration(attempt)*10*time.Millisecond, 500*time.Millisecond)):
+			}
+		}
+
 		resp, err := c.EAC.Get(ctx, id.String())
 		if err != nil {
 			return nil, err

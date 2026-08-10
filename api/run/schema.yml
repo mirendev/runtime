@@ -76,6 +76,14 @@ kinds:
       type: int
       doc: Total attempts allowed, resolved from the task's retries at creation
 
+    queued_at:
+      type: time
+      doc: |
+        When the run was first seen by the controller. The start deadline is
+        measured from here rather than from started_at, which is only written
+        once a run is already running -- so a run held back by admission would
+        otherwise queue with no bound at all.
+
     started_at:
       type: time
       doc: When the current attempt entered running

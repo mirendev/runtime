@@ -14,7 +14,7 @@ Attaching and detaching are invisible to the run itself: it is started by the pl
 
 Several clients can attach to one run at once; they share the same terminal.
 
-:::note
+:::note[Attaching to a finished run]
 Only runs whose command is still executing can be attached. For one that has finished, read its output back with `miren logs run`.
 :::
 
