@@ -100,9 +100,12 @@ kinds:
         second writer would race it.
 
     # Reported result, as an input to the controller rather than a state it
-    # owns. Absent for a run that timed out or was canceled: no exit was
-    # observed, and inventing a code would be indistinguishable from the process
-    # having returned one.
+    # owns.
+    #
+    # A canceled or timed-out run can still carry one: the platform kills the
+    # process and the kernel reports something. That number describes the
+    # teardown, not the task, so callers must not present it as the outcome --
+    # the status carries the meaning for a run that was killed.
     result:
       type: component
       doc: The exit reported for the current attempt

@@ -1,6 +1,7 @@
 package app
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -167,7 +168,9 @@ func (r *AppInfo) ListRuns(ctx context.Context, state *app_v1alpha.RunsListRuns)
 			}
 			return 1
 		}
-		return int(b.StartedAt() - a.StartedAt())
+		// cmp.Compare rather than subtraction: these are Unix milliseconds, and
+		// their difference does not fit an int on a 32-bit build.
+		return cmp.Compare(b.StartedAt(), a.StartedAt())
 	})
 
 	if limit := int(args.Limit()); limit > 0 && len(runs) > limit {

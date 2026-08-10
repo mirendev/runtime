@@ -2898,5 +2898,9 @@ func TestMigrateConsoleService(t *testing.T) {
 		require.True(t, migrateConsoleService(ac))
 		require.Len(t, ac.Tasks["console"].EnvVars, 1)
 		assert.Equal(t, "RAILS_ENV", ac.Tasks["console"].EnvVars[0].Key)
+		// The value matters as much as the key: a migration that carried the
+		// name across but dropped the setting would pass a key-only assertion
+		// and leave the console running with the wrong environment.
+		assert.Equal(t, "production", ac.Tasks["console"].EnvVars[0].Value)
 	})
 }
